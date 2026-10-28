@@ -19,13 +19,12 @@ import {
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
 import { isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
-import { armLiveStart, decideLiveStart } from './hlsStart';
+import { armStart, createSwapPause, trackLoadFrom } from './hlsStart';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import {
   endStalled,
   loadedList,
   sessionAxis,
-  startLoadPosition,
   type LoadedList,
   type SessionAxis,
 } from './playbackEdge';
@@ -168,10 +167,8 @@ export function useHlsPlayback(
   const pausedAtMsRef = useRef<number | null>(null);
   /** 멈춘 자리가 창 하한에 닿아 세션에 넘겼다(멈춤 하나에 한 번) */
   const pausedHandledRef = useRef(false);
-  /** 사람이 멈췄다 — pause · play 사건으로만 바꾼다. 해체의 media.load() 는 pause 사건 없이 video.paused 를 돌린다 */
-  const userPausedRef = useRef(false);
-  /** 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다. 값은 건 때의 세대 — 그보다 새 재생기만 먹는다(옛 재생기가 먼저 먹지 않게) */
-  const keepPausedFromRef = useRef<number | null>(null);
+  /** 멈춘 채 갈아 끼우기 표(hlsStart) — 재생기를 갈아 끼워도 남는다 */
+  const [swap] = useState(createSwapPause);
   /**
    * 세션 모드인가 — 세션 고리가 있고 hls.js 재생기가 섰다. hls.js 가 없는 브라우저(네이티브 HLS)는 조각 목록 · 시각 축이 없어
    * 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(seekable 축)
@@ -334,9 +331,10 @@ export function useHlsPlayback(
     [videoRef, readAxis, onSeek],
   );
 
-  const keepPausedOnSwap = useCallback(() => {
-    if (userPausedRef.current) keepPausedFromRef.current = sourceRef.current.generation;
-  }, []);
+  const keepPausedOnSwap = useCallback(
+    () => swap.keepIfUserPaused(sourceRef.current.generation),
+    [swap],
+  );
 
   const seekToLiveEdge = useCallback(() => {
     const video = videoRef.current;
@@ -406,17 +404,14 @@ export function useHlsPlayback(
 
     // StrictMode 이중 이펙트·동적 import 경합 방어 — 클린업 후 도착한 인스턴스를 버린다
     let disposed = false;
-    // 재생기 하나의 사건 상태: 시작 위치를 한 번 정했나 · ENDLIST 를 올렸나 · 목록이 마지막으로 자란 때 · 끝 도달을 올렸나
-    let startPlaced = false;
+    // 재생기 하나의 사건 상태: ENDLIST 를 올렸나 · 목록이 마지막으로 자란 때 · 끝 도달을 올렸나
     let endlistSent = false;
     let lastEndMs: number | null = null;
     let lastGrowAt = Date.now();
     let endSent = false;
     let waiting = false;
-    // 되감기 창 하한 지키기(5.3.1절)의 상태: 기동 전 받기 위치(startLoad 에 준 자리 · 기동 전 시크 자리 · 떼기 전 마지막
-    // 재생점 — 기동이 끝나면 버린다) · 재생 중 마지막 0 아닌 재생점 · 옮겨 알린 때
-    let loadFrom: number | null = null;
-    let lastPlayhead: number | null = null;
+    // 되감기 창 하한 지키기(5.3.1절)의 상태: 기동 전 받기 위치 장부(hlsStart) · 옮겨 알린 때
+    const load = trackLoadFrom(video);
     let floorNoticeAt: number | null = null;
     const reachEnd = () => {
       if (endSent) return;
@@ -462,8 +457,7 @@ export function useHlsPlayback(
       const pausedAtMs = pausedAtMsRef.current;
       pausedAtMsRef.current = null;
       // 사용자가 다시 틀었다 — 멈춘 채 넘긴 것이 교체로 이어지지 않았어도 다음 재생기의 자동 재생을 막지 않는다
-      keepPausedFromRef.current = null;
-      userPausedRef.current = false;
+      swap.userPlayed();
       const axis = sessionActive() ? readAxis() : null;
       if (pausedAtMs !== null && axis !== null && pausedAtMs < axis.view.lowerMs) {
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
@@ -481,7 +475,7 @@ export function useHlsPlayback(
       hooksRef.current.onPlaying?.();
     };
     const onPause = () => {
-      userPausedRef.current = true;
+      swap.userPaused();
       setPlaying(false);
       if (!sessionActive()) return;
       pausedAtMsRef.current = readAxis()?.atMs ?? null;
@@ -492,44 +486,15 @@ export function useHlsPlayback(
     };
     const onSeeking = () => {
       rearmEnd();
-      // 시크 중에는 currentTime 이 이미 목표다. seeked 전에 복구가 오면 hls.js 는 그 목표에서 받으므로 같이 적는다(cx M1)
-      notePlayhead();
-      // 기동 전 시크는 받기 위치를 그 자리로 옮긴다 — hls.js 의 seeking 처리(base-stream-controller 472-476)와 같게
-      if (hlsRef.current?.hasEnoughToStart === false) loadFrom = video.currentTime;
-    };
-    // 0 은 재생점으로 치지 않는다. 떼기의 load() 가 만든 0 이 앞서 적은 값을 덮지 않게, 그리고 실제로 0 이면 hls.js 가
-    // 제 자리를 고른다(hls.ts 708-711 — 자동 시작이면 base-stream-controller.ts 339-341 이 스스로 · 아니면
-    // startLoad()). 그때는 앞서 적은 것을 두고(기동 뒤라 버렸으면 null 이라 옮기지 않는다) 낡은 시작 자리로 되돌리지
-    // 않는다(cc H1)
-    const isPlayhead = (time: number) => Number.isFinite(time) && time > 0;
-    // 떼기에서 쓴다. 떼기의 첫 처리기(buffer-controller)가 src 를 지우고 load() 해 재생점이 0 이 된 뒤라 그때의 currentTime 은
-    // 쓸 수 없다(buffer-controller.ts 575-579 — hls.ts 703 이 떼기 전에 재생점을 잡는 까닭)
-    const notePlayhead = () => {
-      if (isPlayhead(video.currentTime)) lastPlayhead = video.currentTime;
-    };
-    // 네트워크 오류로 다시 받기 직전 — 떼지 않으니 재생점이 그대로다. hls.js 는 0 이 아니면 그 자리에서 받는다
-    // (stream-controller.ts 168-180)
-    const rememberPlayhead = () => {
-      if (isPlayhead(video.currentTime)) loadFrom = video.currentTime;
-    };
-    // hls.js 가 떼고 붙여 기동 전으로 돌아간다(앱의 복구와 hls.js 가 스스로 부르는 복구 — error-controller.ts 498-500).
-    // hls.js 는 떼기 전에 잡은 재생점에서 다시 받으므로(hls.ts 703 · 708-709) 그 값을 앞서 적어 둔 마지막 재생점으로 본다
-    const rememberLastPlayhead = () => {
-      if (lastPlayhead !== null) loadFrom = lastPlayhead;
-    };
-    // 기동이 끝났다 — 시작 때 받기 위치는 낡는다(뒤의 시크로 갱신되지 않는다). hls.js 가 첫 조각이 붙은 FRAG_BUFFERED 처리기에서
-    // hasEnoughToStart 를 켜고(stream-controller.ts 997-999) 그 처리기는 앱보다 먼저 등록돼 있다. 목록 갱신을 기다리지 않는다 —
-    // 그 전에 복구가 오면 낡은 시작 자리가 남는다(cx H). hls.js 가 다시 기동 전으로 돌아가면 그때 적는다
-    const dropStartPosition = (hls: Hls) => {
-      if (hls.hasEnoughToStart) loadFrom = null;
+      load.noteSeeking(hlsRef.current?.hasEnoughToStart === false);
     };
     // 되감기 재생점이 창 밖으로 떨어지기 전에 옮긴다 — LEVEL_UPDATED 처리기 안에서 동기로(hls.js 가 옮기기 전, 5.3.1절)
     const keepRewindFloor = (hls: Hls, details: LevelDetails) => {
-      const moved = guardRewindFloor({ hls, video, details, loadFrom });
+      const moved = guardRewindFloor({ hls, video, details, loadFrom: load.current() });
       if (moved === null) return;
       // 알림은 조용한 구간에 묶이므로 옮길 때마다 남겨 둔다(cc L5)
       console.info('[player] 되감기 재생점을 창 하한으로 옮겼어요:', moved.kind, moved.to);
-      if (moved.kind === 'reload') loadFrom = moved.to;
+      if (moved.kind === 'reload') load.set(moved.to);
       // 멈춘 채 옮겼으면 재개 판정도 옮긴 자리로 한다 — 옛 자리로 세션에 다시 넘겨 알림이 겹치지 않게
       if (video.paused && pausedAtMsRef.current !== null) {
         pausedAtMsRef.current = programDateAt(details.fragments, moved.to);
@@ -562,7 +527,7 @@ export function useHlsPlayback(
         pausedAtMs < axis.view.lowerMs
       ) {
         pausedHandledRef.current = true;
-        keepPausedFromRef.current = generation;
+        swap.keep(generation);
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
       }
       if (video.readyState < HAVE_CURRENT_DATA || axis.atMs === null) return;
@@ -619,8 +584,8 @@ export function useHlsPlayback(
     video.addEventListener('timeupdate', paint);
     video.addEventListener('waiting', onWaiting);
     video.addEventListener('seeking', onSeeking);
-    video.addEventListener('timeupdate', notePlayhead);
-    video.addEventListener('seeked', notePlayhead);
+    video.addEventListener('timeupdate', load.notePlayhead);
+    video.addEventListener('seeked', load.notePlayhead);
     video.addEventListener('ended', reachEnd);
     // 일시정지 중엔 timeupdate가 멎지만 라이브 엣지는 계속 흐른다 — 시차 표시용 보조 틱
     const paintTimer = window.setInterval(paint, 1000);
@@ -644,23 +609,11 @@ export function useHlsPlayback(
         // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
         const hls = new HlsCtor(startAtMs === null ? base : { ...base, autoStartLoad: false });
         hlsRef.current = hls;
-        if (startAtMs !== null && kind === 'live') {
-          const decide = (details: LevelDetails) =>
-            decideLiveStart(details, startAtMs, strictStart);
-          armLiveStart(hls, HlsCtor.Events, decide, () => {
-            if (disposed) return;
-            hls.destroy();
-            hlsRef.current = null;
-            hooksRef.current.onStartTruncated?.();
-          });
-        }
-        hls.on(HlsCtor.Events.LEVEL_LOADED, (_event, data) => {
-          if (startAtMs === null || kind === 'live' || startPlaced) return;
-          startPlaced = true;
-          const { fragments, targetduration } = data.details;
-          const position = startLoadPosition(fragments, startAtMs, kind, targetduration);
-          loadFrom = position;
-          hls.startLoad(position ?? -1);
+        armStart(hls, HlsCtor.Events, { kind, startAtMs, strictStart }, load, () => {
+          if (disposed) return;
+          hls.destroy();
+          hlsRef.current = null;
+          hooksRef.current.onStartTruncated?.();
         });
         hls.on(HlsCtor.Events.LEVEL_UPDATED, (_event, data) => {
           if (kind === 'rewind') keepRewindFloor(hls, data.details);
@@ -721,7 +674,7 @@ export function useHlsPlayback(
           // 최소 복구: 각 1회만 시도, 재발 시 정리하고 영상 위에 알린다
           if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && !recoveredNetwork) {
             recoveredNetwork = true;
-            rememberPlayhead();
+            load.rememberPlayhead();
             hls.startLoad();
             return;
           }
@@ -736,16 +689,12 @@ export function useHlsPlayback(
           hls.destroy();
           hlsRef.current = null;
         });
-        hls.on(HlsCtor.Events.MEDIA_DETACHING, rememberLastPlayhead);
-        hls.on(HlsCtor.Events.FRAG_BUFFERED, () => dropStartPosition(hls));
+        hls.on(HlsCtor.Events.MEDIA_DETACHING, load.rememberLastPlayhead);
+        hls.on(HlsCtor.Events.FRAG_BUFFERED, () => load.dropIfStarted(hls.hasEnoughToStart));
         hls.on(HlsCtor.Events.FRAG_LOADED, onHealed);
         hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
-          // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번). 표는 건 뒤 세대의 재생기만 지운다
-          const keepFrom = keepPausedFromRef.current;
-          if (keepFrom !== null) {
-            if (generation > keepFrom) keepPausedFromRef.current = null;
-            return;
-          }
+          // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번)
+          if (swap.holds(generation)) return;
           // 자동재생 거부는 reject로 온다 — playing=false로 남아 재생 버튼이 노출된다
           video.play().catch(() => {});
         });
@@ -791,8 +740,8 @@ export function useHlsPlayback(
       video.removeEventListener('timeupdate', paint);
       video.removeEventListener('waiting', onWaiting);
       video.removeEventListener('seeking', onSeeking);
-      video.removeEventListener('timeupdate', notePlayhead);
-      video.removeEventListener('seeked', notePlayhead);
+      video.removeEventListener('timeupdate', load.notePlayhead);
+      video.removeEventListener('seeked', load.notePlayhead);
       video.removeEventListener('ended', reachEnd);
       if (onNativeError !== null) video.removeEventListener('error', onNativeError);
       video.removeEventListener('loadeddata', onHealed);
@@ -802,7 +751,7 @@ export function useHlsPlayback(
       video.removeAttribute('src');
       video.load();
     };
-  }, [videoRef, source.kind, src, source.generation, readAxis, sessionActive]);
+  }, [videoRef, source.kind, src, source.generation, readAxis, sessionActive, swap]);
 
   return {
     playing,
