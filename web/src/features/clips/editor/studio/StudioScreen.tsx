@@ -1082,8 +1082,9 @@ function WiredStudio({
         endSeconds: (seg.endAtMs - base) / 1000,
       }));
   }, [saved, base]);
-  // 영상 상태 알약(POK-492)은 보내는 동안 비킨다: 저장 · 요청을 보내는 동안은 누른 버튼이 돌고, 새 요청이면 곧 다른 영상이다
-  const latest = save.busy === null ? save.clip : null;
+  // 영상 상태 알약(POK-492)은 영상 만들기 요청을 보내는 동안만 비킨다 — 새 요청이면 곧 다른 영상이다. 저장 중에도 비키면 「편집본
+  // 저장」마다 알약이 깜빡이고 열어 둔 작은 창이 닫혔다(PR #454 1차 리뷰)
+  const latest = save.busy === 'render' ? null : save.clip;
   const clipStatus = useMemo(
     () =>
       latest === null
