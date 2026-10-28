@@ -16,9 +16,13 @@ const player = vi.hoisted(() => ({
   keepPausedOnSwap: () => {},
 }));
 
+/** 실재생 훅의 인자 — 흉내가 고리(hooks) 자리를 타입으로 집는다 */
+type HlsPlaybackArgs = Parameters<typeof import('./useHlsPlayback').useHlsPlayback>;
+
 vi.mock('./useHlsPlayback', () => ({
-  useHlsPlayback: (...args: unknown[]) => {
-    player.hooks = args[7] as PlaybackHooks;
+  // 여덟째 인자가 세션 고리다. 자리가 바뀌면 타입이 어긋나 tsc 가 잡는다
+  useHlsPlayback: (...[, , , , , , , hooks]: HlsPlaybackArgs) => {
+    player.hooks = hooks ?? null;
     return {
       livePosition: player.livePosition,
       seekToMs: () => {},

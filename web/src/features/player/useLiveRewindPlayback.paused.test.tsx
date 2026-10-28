@@ -195,6 +195,26 @@ describe('멈춘 채 넘김 확인이 깨진다 — 영상이 붙기 전의 멈�
     expect(await playsAfterRevert()).toBe(0);
   });
 
+  it('연속 검사가 깨져(H1a · 건너뜀) 되돌려도 되감기 재생기는 스스로 틀지 않는다', async () => {
+    pauseBeforeMedia(await handedOffScreen());
+    const jumped = { type: 'position', atMs: P + 5_000, playing: false, runMs: 0 } as const;
+    act(() => session?.dispatch(jumped));
+    expect(await playsAfterRevert()).toBe(0);
+  });
+
+  it('라이브 첫 목록이 시작을 잘라(H2t) 되돌려도 되감기 재생기는 스스로 틀지 않는다', async () => {
+    pauseBeforeMedia(await handedOffScreen());
+    // P 뒤에서 시작하는 라이브 목록 — 시작 하한(첫 조각 + 3 × TD)이 P 보다 뒤라 잘린다
+    const fragments = [...Array(4).keys()].map((i) => ({
+      start: i * 4,
+      duration: 4,
+      programDateTime: E + i * 4_000,
+    }));
+    const details = { fragments, targetduration: 4, live: true };
+    act(() => lastHls().trigger(FakeHls.Events.LEVEL_UPDATED, { details }));
+    expect(await playsAfterRevert()).toBe(0);
+  });
+
   it('멈추지 않았으면 되돌린 되감기 재생기가 현행대로 스스로 튼다', async () => {
     await handedOffScreen();
     await act(async () => vi.advanceTimersByTime(DEADLINE_AFTER_MS));
