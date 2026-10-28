@@ -3333,6 +3333,15 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     });
     await settle();
   }
+  /** 이 방송 차트에 물은 주소(창 · 칸까지) */
+  const chartUrls = () =>
+    fetchSpy.mock.calls
+      .map(([url]) => String(url))
+      .filter(
+        (url) =>
+          new URL(url, 'http://localhost').pathname ===
+          `/api/clip/broadcasts/${STREAM_ID}/chat-chart`,
+      );
 
   it('잠긴 방송이 끝나 풀릴 때는 「연동돼」라고 알리지 않는다: 연동한 것이 아니다(PR #453 2차 리뷰)', async () => {
     await endLockedPinnedLive();
@@ -3345,6 +3354,22 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
     expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
     expect(screen.queryByText('방송 채널이 연동돼 채팅과 통계를 다시 보여요')).toBeNull();
+  });
+
+  it('잠긴 방송이 끝나면 차트의 같은 창을 한 번만 읽는다: 상태와 잠금이 함께 바뀌어도 두 벌 읽지 않는다(PR #453 2차 리뷰)', async () => {
+    await endLockedPinnedLive();
+    const before = chartUrls().length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await settle();
+
+    const asked = chartUrls().slice(before);
+    expect(
+      asked.length,
+      '끝난 방송의 차트를 읽지 않았다: 이 시험은 아무것도 안 잰다',
+    ).toBeGreaterThan(0);
+    expect(new Set(asked).size).toBe(asked.length);
   });
 
   it('SOOP 하나만 연동돼 있어도 잠그지 않는다', async () => {
