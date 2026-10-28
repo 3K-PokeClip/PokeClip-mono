@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { markPlaybackCookiesIssued, mediaCredentials } from '@/api/mediaPlayback';
 import { stubFetch } from '@/test/mockFetch';
 import {
   firstVariantUri,
@@ -48,8 +47,9 @@ function mediaPlaylist(
     '#EXT-X-MEDIA-SEQUENCE:40',
   ];
   for (let i = 0; i < n; i += 1) {
-    if (pdt && i >= pdtFrom)
+    if (pdt && i >= pdtFrom) {
       lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(PDT0 + i * 4_000).toISOString()}`);
+    }
     lines.push('#EXT-X-PART:DURATION=0.5,URI="part0.mp4",INDEPENDENT=YES');
     lines.push('#EXTINF:4.000,', `seg${40 + i}.mp4`);
   }
@@ -282,17 +282,22 @@ describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
   });
 
   it('credentials 는 hls.js 와 같은 mediaCredentials() 를 따른다 — 출입증 전 · 뒤', async () => {
+    // 출입증 표시는 모듈 상태다 — 새로 읽은 모듈에서만 켜서 이 파일의 다른 시험에 남기지 않는다
+    vi.resetModules();
+    const playback = await import('@/api/mediaPlayback');
+    const fresh = await import('./liveWindowProbe');
+    const freshProbe = () => fresh.probeLiveWindow(LIVE_URL, new AbortController().signal);
     const spy = stubLive(mediaPlaylist());
-    await probe();
+    await freshProbe();
     expect(spy.mock.calls.map(([, init]) => init?.credentials)).toEqual([
       'same-origin',
       'same-origin',
     ]);
 
-    markPlaybackCookiesIssued();
+    playback.markPlaybackCookiesIssued();
     spy.mockClear();
-    await probe();
-    expect(mediaCredentials()).toBe('include');
+    await freshProbe();
+    expect(playback.mediaCredentials()).toBe('include');
     expect(spy.mock.calls.map(([, init]) => init?.credentials)).toEqual(['include', 'include']);
   });
 });
