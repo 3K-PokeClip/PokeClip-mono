@@ -1,9 +1,9 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import Link from 'next/link';
 import { Lock, MessageSquare, PanelRightClose } from 'lucide-react';
-import { Badge, IconButton, LinkButton } from '@/ui';
+import { Badge, IconButton, LinkButton, VisuallyHidden } from '@/ui';
 import { LINK_LOCK_WORD, type LinkLock } from './linkLock';
 import liveStyles from './LiveScreen.module.css';
 import statsStyles from './LiveStatsPanel.module.css';
@@ -95,6 +95,29 @@ function LockNotice({ reason, title, text }: { reason: LockReason; title: string
     </div>
   );
 }
+
+/**
+ * 잠금이 걸리고 풀리는 것을 화면 낭독기에 알린다. 실제 채팅 패널은 배지를 늘 서 있는 status 안에 두어 수집 상태가 바뀌면 읽히는데,
+ * 잠금은 채팅 · 통계 패널을 통째로 바꿔 끼운다: 새로 들어온 리전은 처음 그려질 때 읽히지 않아 잠기고 풀리는 순간을 듣는 사람은
+ * 몰랐다(PR #453 리뷰). 그래서 잠금과 상관없이 늘 서 있는 칸 하나에서 글만 바꾼다. 처음 그린 상태는 알리지 않는다(화면을 열면
+ * 어차피 읽는다). 앱에는 공용 알림 장치(LiveRegionProvider)가 붙어 있지 않다
+ */
+export function LinkLockAnnouncer({ lock }: { lock: LinkLock }) {
+  const [seen, setSeen] = useState(lock);
+  const [message, setMessage] = useState('');
+  // 바뀐 그리기에서 바로 글을 바꾼다(렌더 중 상태 고침: React의 「이전 값에 맞춰 상태 고치기」 방식)
+  if (seen !== lock) {
+    setSeen(lock);
+    setMessage(lock !== null ? ANNOUNCE[lock] : seen !== null ? UNLOCKED_ANNOUNCE : '');
+  }
+  return <VisuallyHidden role="status">{message}</VisuallyHidden>;
+}
+
+const ANNOUNCE: Record<LockReason, string> = {
+  unlinked: '방송 채널 연동이 없어 채팅과 통계를 잠갔어요',
+  broken: '방송 채널 연동이 끊겨 채팅과 통계를 잠갔어요',
+};
+const UNLOCKED_ANNOUNCE = '방송 채널이 연동돼 채팅과 통계를 다시 보여요';
 
 /**
  * 잠근 실시간 채팅. 머리줄(이름 · 배지 · 접기)은 실제 패널과 같다: 접으면 플레이어의 「채팅 열기」로 되살린다. memo인 까닭은 실제

@@ -3268,6 +3268,8 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
     expect(liveChatReads()).toBeGreaterThan(chatBefore);
     expect(reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`)).toBeGreaterThan(chartBefore);
+    // 듣는 사람에게도 풀린 것을 알린다
+    expect(screen.getByText('방송 채널이 연동돼 채팅과 통계를 다시 보여요')).toBeInTheDocument();
   });
 
   it('잠긴 동안에는 차트를 읽지 않는다: 그리는 곳도 쓰는 곳도 없다(PR #453 리뷰)', async () => {
@@ -3309,6 +3311,7 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
 
     const chat = screen.getByRole('complementary', { name: '실시간 채팅' });
     expect(within(chat).getByText('방송 채널을 연동해야 채팅이 보여요')).toBeInTheDocument();
+    expect(screen.getByText('방송 채널 연동이 없어 채팅과 통계를 잠갔어요')).toBeInTheDocument();
     const before = liveChatReads();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
