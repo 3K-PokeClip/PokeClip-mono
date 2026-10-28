@@ -607,11 +607,11 @@ describe('라이브 창 탐침 — probe-live 효과(설계 r9 2절 · c13g 휴�
     answer = liveAnswer(() => new Response(LIVE_MEDIA));
     const view = await probingSession();
     await settle();
-    const calls = vi.mocked(transition).mock.calls;
-    const at = calls.findIndex(([, event]) => event.type === 'live-probe');
+    const transitionCalls = vi.mocked(transition).mock.calls;
+    const at = transitionCalls.findIndex(([, event]) => event.type === 'live-probe');
     expect(at).toBeGreaterThanOrEqual(0);
     const out = vi.mocked(transition).mock.results[at]?.value;
-    expect(out?.state).toBe(calls[at]![0]);
+    expect(out?.state).toBe(transitionCalls[at]![0]);
     expect(out?.effects).toEqual([]);
     expect(view.result.current?.state.phase.kind).toBe('rewind');
   });
@@ -633,5 +633,43 @@ describe('라이브 창 탐침 — probe-live 효과(설계 r9 2절 · c13g 휴�
     release();
     await settle();
     expect(probeEvents()).toEqual([]);
+  });
+
+  /** 라이브 목록 받기를 붙잡아 두고 그 signal 을 모은다 */
+  function holdLiveFetches(): AbortSignal[] {
+    const signals: AbortSignal[] = [];
+    stubFetch((url, init) => {
+      if (url !== LIVE) return liveAnswer(() => jsonResponse(404))(url);
+      signals.push(init?.signal as AbortSignal);
+      return new Promise<Response>(() => {});
+    });
+    return signals;
+  }
+
+  it('다음 탐침은 나가 있는 앞 탐침을 끊는다', async () => {
+    const signals = holdLiveFetches();
+    const view = await probingSession();
+    await flush();
+    expect(signals).toHaveLength(1);
+    vi.mocked(transition).mockImplementationOnce((s) => ({
+      state: s,
+      effects: [{ kind: 'probe-live', seq: 2, url: LIVE }],
+    }));
+    act(() => view.result.current?.dispatch({ type: 'playing' }));
+    await flush();
+
+    expect(signals).toHaveLength(2);
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+  });
+
+  it('화면을 떠나면 나가 있는 탐침을 끊는다', async () => {
+    const signals = holdLiveFetches();
+    const view = await probingSession();
+    await flush();
+    expect(signals.map((signal) => signal.aborted)).toEqual([false]);
+
+    view.unmount();
+
+    expect(signals.map((signal) => signal.aborted)).toEqual([true]);
   });
 });
