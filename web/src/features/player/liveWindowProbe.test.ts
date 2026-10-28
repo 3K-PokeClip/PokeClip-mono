@@ -225,13 +225,13 @@ describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
     await expect(probe()).resolves.toEqual({ kind: 'unavailable' });
   });
 
-  it('이미 끊긴 signal 이면 받지 않고 unavailable', async () => {
+  it('이미 끊긴 signal 이면 받지 않고 AbortError 를 던진다 — 받는 사이 끊김과 같은 계약', async () => {
     const spy = stubLive(mediaPlaylist());
     const controller = new AbortController();
     controller.abort();
 
-    await expect(probeLiveWindow(LIVE_URL, controller.signal)).resolves.toEqual({
-      kind: 'unavailable',
+    await expect(probeLiveWindow(LIVE_URL, controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
     });
     expect(spy).not.toHaveBeenCalled();
   });
