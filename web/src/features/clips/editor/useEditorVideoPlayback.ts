@@ -208,9 +208,12 @@ export function useEditorVideoPlayback(options: {
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     // 경계 틱보다 영상 끝이 먼저 왔다(영상 끝 바로 앞의 틱을 놓침): 「구간 반복」이면 구간 시작으로 되감아 이어 튼다.
-    // 전에는 멈추기만 해서, 받은 영상이 구간 끝보다 짧으면 반복을 켜 둬도 끝에서 섰다(POK-490)
+    // 전에는 멈추기만 해서, 받은 영상이 구간 끝보다 짧으면 반복을 켜 둬도 끝에서 섰다(POK-490).
+    // 받은 영상이 구간 시작에도 못 닿으면 되감을 자리가 영상 밖이라 멈춘다 — 되감기가 영상 길이로 잘리고 play()가 끝난 영상을
+    // 0초부터 다시 틀어 구간 밖을 끝없이 돌았다(PR #454 1차 리뷰)
     const onEnded = () => {
-      if (!boundsRef.current.loop) {
+      const mediaEnd = loadedRef.current.startSeconds + video.duration;
+      if (!boundsRef.current.loop || !(mediaEnd > boundsRef.current.startSeconds)) {
         setPlaying(false);
         return;
       }
