@@ -17,6 +17,7 @@ import { useMediaSource } from '@/features/player/mediaSource';
 import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
+import { LockedChatPanel, LockedStatsPanel } from './LinkLockedPanels';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { NewBroadcastBand } from './NewBroadcastBand';
 import { LiveScreenSkeleton } from './LiveScreenSkeleton';
@@ -47,6 +48,7 @@ import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection, type Reselect } from './useLiveStreamSelection';
 import { useLiveSession } from './useLiveSession';
+import { useLinkLock } from './linkLock';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
 
@@ -503,9 +505,15 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     playheadFromRecording.current = false;
     publishLiveData({ playheadMs: null });
   }, [recordingLookup]);
+  // 방송 채널 연동이 없으면 채팅 · 통계는 올 곳이 없다: 두 패널을 잠그고 채널 연동 화면으로 가는 길을 준다(linkLock)
+  const linkLock = useLinkLock(viewStatus);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
-  // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
-  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, ended, awaitPlayhead);
+  // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다). 잠근 채팅도 묻지 않는다
+  const chat = useChatPanelMockState(
+    chatPanelOpen && !chatWarning && linkLock === null,
+    ended,
+    awaitPlayhead,
+  );
   const stats = useLiveStatsMockState(viewStatus);
 
   // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
@@ -769,32 +777,40 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             접으면 칸째 빠진다(.gridSolo가 트랙도 걷는다). */}
         {chatPanelOpen ? (
           <div className={styles.chatCol}>
-            <ChatPanel
-              surges={chat.surges}
-              messages={chat.messages}
-              ratePerMinute={chat.ratePerMinute}
-              mode={viewStatus}
-              replayClock={chat.replayClock}
-              replayWaiting={chat.replayWaiting}
-              statusNote={chat.statusNote}
-              followJump={chatJump}
-              collectionWarning={chatWarning}
-              onCollapse={toggleChatPanel}
-            />
+            {linkLock !== null ? (
+              <LockedChatPanel reason={linkLock} onCollapse={toggleChatPanel} />
+            ) : (
+              <ChatPanel
+                surges={chat.surges}
+                messages={chat.messages}
+                ratePerMinute={chat.ratePerMinute}
+                mode={viewStatus}
+                replayClock={chat.replayClock}
+                replayWaiting={chat.replayWaiting}
+                statusNote={chat.statusNote}
+                followJump={chatJump}
+                collectionWarning={chatWarning}
+                onCollapse={toggleChatPanel}
+              />
+            )}
           </div>
         ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}
       {/* 방송이 바뀌면 처음부터 다시 그린다 — 스크롤 위치·끝 따라가기를 앞 방송에서 이어받지 않는다 */}
-      <LiveStatsPanel
-        key={streamId}
-        stats={stats}
-        cards={timelineCards}
-        highlightSummary={highlightSummary}
-        live={viewStatus === 'live'}
-        ended={ended}
-        onSeekCard={handlePinSeek}
-      />
+      {linkLock !== null ? (
+        <LockedStatsPanel reason={linkLock} />
+      ) : (
+        <LiveStatsPanel
+          key={streamId}
+          stats={stats}
+          cards={timelineCards}
+          highlightSummary={highlightSummary}
+          live={viewStatus === 'live'}
+          ended={ended}
+          onSeekCard={handlePinSeek}
+        />
+      )}
     </main>
   );
 }
