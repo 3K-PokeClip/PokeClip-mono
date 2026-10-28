@@ -721,7 +721,10 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   return (
     <main className={styles.container}>
       {/* 잠금이 걸리고 풀리는 것을 듣는 사람에게도 알린다 — 패널은 통째로 바뀌어 낭독되지 않는다 */}
-      <LinkLockAnnouncer lock={linkLock} />
+      <LinkLockAnnouncer
+        lock={linkLock}
+        liveOwner={liveData.status === 'live' && liveData.relation === 'OWNER'}
+      />
       <div className={clsx(styles.grid, !chatPanelOpen && styles.gridSolo)}>
         <div className={styles.mainCol}>
           <div className={styles.playerFrame}>

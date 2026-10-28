@@ -3320,6 +3320,33 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     expect(liveChatReads()).toBe(before);
   });
 
+  /** 고정한 라이브 화면(?stream=)을 잠긴 채로 열고, 방송을 끝낸다. 명부는 30초마다 묻는다: 그 바로 앞까지 먼저 돌린다 */
+  async function endLockedPinnedLive() {
+    server.chzzkLink = { linked: false };
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    await renderLive();
+    expect(screen.getAllByRole('link', { name: '채널 연동하기' })).toHaveLength(2);
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_000);
+    });
+    await settle();
+  }
+
+  it('잠긴 방송이 끝나 풀릴 때는 「연동돼」라고 알리지 않는다: 연동한 것이 아니다(PR #453 2차 리뷰)', async () => {
+    await endLockedPinnedLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await settle();
+
+    // 끝난 방송은 잠그지 않는다
+    expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
+    expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
+    expect(screen.queryByText('방송 채널이 연동돼 채팅과 통계를 다시 보여요')).toBeNull();
+  });
+
   it('SOOP 하나만 연동돼 있어도 잠그지 않는다', async () => {
     server.chzzkLink = { linked: false };
     server.soopNickname = '숲너구리';

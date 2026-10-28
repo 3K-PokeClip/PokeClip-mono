@@ -102,13 +102,23 @@ function LockNotice({ reason, title, text }: { reason: LockReason; title: string
  * 몰랐다(PR #453 리뷰). 그래서 잠금과 상관없이 늘 서 있는 칸 하나에서 글만 바꾼다. 처음 그린 상태는 알리지 않는다(화면을 열면
  * 어차피 읽는다). 앱에는 공용 알림 장치(LiveRegionProvider)가 붙어 있지 않다
  */
-export function LinkLockAnnouncer({ lock }: { lock: LinkLock }) {
+export function LinkLockAnnouncer({
+  lock,
+  liveOwner,
+}: {
+  lock: LinkLock;
+  /** 지금도 방송 중인 내 방송인가. 이때 풀렸으면 까닭은 연동뿐이다 */
+  liveOwner: boolean;
+}) {
   const [seen, setSeen] = useState(lock);
   const [message, setMessage] = useState('');
-  // 바뀐 그리기에서 바로 글을 바꾼다(렌더 중 상태 고침: React의 「이전 값에 맞춰 상태 고치기」 방식)
+  // 바뀐 그리기에서 바로 글을 바꾼다(렌더 중 상태 고침: React의 「이전 값에 맞춰 상태 고치기」 방식). 잠금은 방송이 끝나거나 다른
+  // 방송으로 넘어가 저장소가 비어도 풀린다: 그때 「연동돼」라고 하면 거짓이라 알리지 않는다(PR #453 2차 리뷰)
   if (seen !== lock) {
     setSeen(lock);
-    setMessage(lock !== null ? ANNOUNCE[lock] : seen !== null ? UNLOCKED_ANNOUNCE : '');
+    setMessage(
+      lock !== null ? ANNOUNCE[lock] : seen !== null && liveOwner ? UNLOCKED_ANNOUNCE : '',
+    );
   }
   return <VisuallyHidden role="status">{message}</VisuallyHidden>;
 }
