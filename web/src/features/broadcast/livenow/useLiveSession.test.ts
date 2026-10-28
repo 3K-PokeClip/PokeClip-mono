@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinnedXResolver, unpinnedX } from './useLiveSession';
+import type { XAnswer } from '@/features/player/rewindSwitch';
 
 // 고정 안 한 화면의 지금 방송 번호 X(cx H4 · R58 확장) — 다시 고르기가 실패하면 보던 방송이라고 단정하지 않는다
 
@@ -82,15 +83,19 @@ describe('createPinnedXResolver', () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
-  it('합류: 먼저 시작한 물음은 늦게 시작한 물음의 답을 돌려준다 — 옛 답이 새 답을 덮지 않게(설계 r4)', async () => {
+  // 합류 없음(kty 결정 3): 새 물음이 시한을 넘겨도 옛 물음은 자기 답을 받는다
+  it('합류 없음 — 먼저 시작한 물음은 늦게 시작한 물음과 따로 자기 답을 돌려준다', async () => {
     const { query, pending } = queue();
     const resolveX = createPinnedXResolver(query);
-    const older = resolveX(true, 'r-A|k');
+    const settled: XAnswer[] = [];
+    void resolveX(true, 'r-A|k').then((answer) => settled.push(answer));
     const newer = resolveX(true, 'r-A|k');
-    pending[1]!('r-B');
-    await expect(newer).resolves.toEqual({ kind: 'known', id: 'r-B' });
     pending[0]!('r-A');
-    await expect(older).resolves.toEqual({ kind: 'known', id: 'r-B' });
+    await vi.advanceTimersByTimeAsync(0);
+    // 새 물음이 아직 답하지 않았어도 옛 물음은 기다리지 않는다
+    expect(settled).toEqual([{ kind: 'known', id: 'r-A' }]);
+    pending[1]!(null);
+    await expect(newer).resolves.toEqual({ kind: 'unknown' });
   });
 
   it('조회가 답하지 못하면(null) 모름이다', async () => {
