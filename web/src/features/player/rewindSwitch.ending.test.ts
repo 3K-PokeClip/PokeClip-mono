@@ -138,6 +138,27 @@ describe('ending-wait 국면', () => {
     expect(state.phase).toEqual({ kind: 'rewind', pendingNext: null });
   });
 
+  it('목록 사건 없는 길(네이티브 HLS)의 끝남 대기는 같은 방송 새 url 에 lastAtMs 로 잇는다 — E 이하 · 건너뜀 0', () => {
+    // 네이티브 <video> 는 list-loaded 를 안 낸다 — list 가 null 이라 E 대신 lastAtMs(계획 1절)
+    const stopAt = NOW - 5_000;
+    const native = run(liveWithEntry(), [
+      [{ type: 'seek', targetMs: stopAt - 20_000, view: { lowerMs: stopAt, endMs: NOW + 28_000 } }],
+      [pos(stopAt - 20_000)],
+      [pos(stopAt)],
+      [{ type: 'end-reached' }],
+    ]).state;
+    expect(native.list).toBeNull();
+    expect(native.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: true });
+    const poll = streamPoll(liveReady(A2, T0, NOW + 30_000), X_A);
+    const { state, effects } = run(native, [[poll, NOW + 30_000]]);
+    expect(state.phase).toEqual({ kind: 'rewind', pendingNext: null });
+    expect(state.source).toMatchObject({ kind: 'rewind', url: A2, startAtMs: native.lastAtMs });
+    // 멈춘 자리에서 잇는다 — A1 이 알린 끝(NOW) 이하라 못 본 녹화를 건너뛰지 않는다
+    expect(state.source.startAtMs).toBe(stopAt);
+    expect(stopAt).toBeLessThanOrEqual(NOW);
+    expect(kinds(effects)).not.toContain('close');
+  });
+
   it('라이브 닫힘 직후 낡은 A url(③) 은 이어짐이 아니다 — 교체 0(R43)', () => {
     const start = endingFromLiveClosed();
     const { state, effects } = run(start, [[streamPoll(liveReady(A1, T0, NOW)), NOW + 2_000]]);
