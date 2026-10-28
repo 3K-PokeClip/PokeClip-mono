@@ -1,4 +1,5 @@
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
+import { loadedList, openHandoffFields, withHandoffRules, type HandoffFields } from './liveHandoff';
 import { EDGE_MARGIN_TD } from './playbackEdge';
 
 // 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 사이의 전환을 정하는 순수 함수다.
@@ -58,7 +59,7 @@ export type XAnswer = { kind: 'known'; id: string } | { kind: 'unknown' };
 /** 끝남 대기에서 이어짐을 증명하지 못한 새 url 을 봤을 때 내미는 버튼(버튼 규칙) */
 type Offer = { kind: 'go-live' } | { kind: 'new-broadcast'; goTo: string };
 
-export interface PlaybackSessionState {
+export interface PlaybackSessionState extends HandoffFields {
   /** 열 때의 방송 번호(= 계약9 streamId = 회차 ID) — 회차별 경로의 키 */
   roundId: string;
   /** 방송|영상 키 — recorded 닫힘 기록의 키 */
@@ -87,8 +88,6 @@ export interface PlaybackSessionState {
    * 허용 · 시크바 넓힘 같은 되감기 노출은 이 값으로만 한다 — 「ready:false 동안 되감기 UI 를 노출하지 않는다」(계약3 7-2)
    */
   rewindOpen: boolean;
-  /** 지금 소스 목록의 마지막 조각 끝(E) */
-  listEndMs: number | null;
   /** 창 하한 여유(3 × TD) */
   edgeMarginMs: number;
   /** 끝남 대기의 버튼 규칙 결과 */
@@ -178,7 +177,6 @@ export function openSession(init: {
     endingSince: null,
     entry: null,
     rewindOpen: false,
-    listEndMs: null,
     edgeMarginMs: DEFAULT_EDGE_MARGIN_MS,
     offer: null,
     liveChecking: false,
@@ -186,6 +184,7 @@ export function openSession(init: {
     foreignLive: null,
     rosterEnded: false,
     closed: null,
+    ...openHandoffFields(),
   };
 }
 
@@ -430,11 +429,12 @@ function onRewind(
         : enterEnding(session, false, now);
     case 'end-reached': {
       const next = phase.pendingNext;
-      if (next !== null && within(session.listEndMs, next.firstPdtMs, next.headPdtMs)) {
+      const endMs = session.list?.endMs ?? null;
+      if (next !== null && within(endMs, next.firstPdtMs, next.headPdtMs)) {
         return stateOnly({
           ...session,
           phase: { kind: 'rewind', pendingNext: null },
-          source: replace(session, 'rewind', next.url, session.listEndMs),
+          source: replace(session, 'rewind', next.url, endMs),
           roundRewindUrls: withUrl(session.roundRewindUrls, next.url),
         });
       }
@@ -512,9 +512,9 @@ function onEnding(
   }
 }
 
-/** 이음 지점 — rewind 기원이면 atEnd ? E : P, live 기원이면 lastAtMs */
+/** 이음 지점 — rewind 기원이면 atEnd ? E : P, live 기원이면 lastAtMs. url 이 바뀌어 list 가 비었으면 E 대신 lastAtMs(T12) */
 function joinPoint(session: PlaybackSessionState, phase: EndingPhase): number | null {
-  if (phase.origin === 'rewind') return phase.atEnd ? session.listEndMs : session.lastAtMs;
+  if (phase.origin === 'rewind' && phase.atEnd) return session.list?.endMs ?? session.lastAtMs;
   return session.lastAtMs;
 }
 
@@ -710,7 +710,7 @@ function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transit
         observedEndMs: frozen
           ? session.observedEndMs
           : maxOrSelf(session.observedEndMs, event.lastEndMs),
-        listEndMs: own ? event.lastEndMs : session.listEndMs,
+        list: own ? loadedList(session, event) : session.list,
         edgeMarginMs:
           event.targetDurationS > 0
             ? EDGE_MARGIN_TD * event.targetDurationS * 1000
@@ -721,6 +721,7 @@ function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transit
       return stateOnly({
         ...session,
         lastAtMs: event.atMs,
+        playing: event.playing,
         watchedFromMs:
           session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
       });
@@ -738,13 +739,21 @@ function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transit
   }
 }
 
-/** 사건 하나를 먹인다. 닫힌 세션은 무엇도 바꾸지 않는다 */
+/** 사건 하나를 먹인다. 닫힌 세션은 무엇도 바꾸지 않는다. 넘김 칸의 전처리 · 후처리(A0 · A3 · A6)가 국면 표를 감싼다 */
 export function transition(
   session: PlaybackSessionState,
   event: SessionEvent,
   now: number,
 ): Transition {
   if (session.closed !== null) return stateOnly(session);
+  return withHandoffRules(session, event, (ready) => phaseTransition(ready, event, now));
+}
+
+function phaseTransition(
+  session: PlaybackSessionState,
+  event: SessionEvent,
+  now: number,
+): Transition {
   const any = onAnyPhase(session, event);
   if (any !== null) return any;
   const phase = session.phase;
