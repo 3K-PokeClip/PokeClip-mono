@@ -554,8 +554,10 @@ export function useHlsPlayback(
       }
       if (video.readyState < HAVE_CURRENT_DATA || axis.atMs === null) return;
       const { atMs, edgeMs, behindSeconds: behind } = axis;
+      // 재생 여부도 연속 길이와 같은 순간에 잰다 — 갱신 함수는 나중에 돌아 그때의 paused 를 읽는다
       const run = playedRunMs(video.played, video.currentTime);
-      setLivePosition((prev) => nextLivePosition(prev, atMs, edgeMs, behind, !video.paused, run));
+      const playing = !video.paused;
+      setLivePosition((prev) => nextLivePosition(prev, atMs, edgeMs, behind, playing, run));
     };
     // 목록 끝 정체(D9) — ENDLIST 없는 목록의 회차 경계를 맡는 「끝 도달」이다. 재생기 하나에 한 번(목록이 자라면 다시 센다)
     const checkStall = () => {
@@ -590,10 +592,11 @@ export function useHlsPlayback(
       const at = programDateAt(fragments, video.currentTime);
       const edge = programDateAt(fragments, liveEdgePosition(range, sync));
       const run = playedRunMs(video.played, video.currentTime);
+      const playing = !video.paused;
       setLivePosition((prev) =>
         at === null || edge === null
           ? null
-          : nextLivePosition(prev, at, edge, behind, !video.paused, run),
+          : nextLivePosition(prev, at, edge, behind, playing, run),
       );
     };
     video.addEventListener('play', onPlay);
