@@ -28,7 +28,7 @@ import {
   type LoadedList,
   type SessionAxis,
 } from './playbackEdge';
-import { nextLivePosition, type LivePosition } from './livePosition';
+import { nextLivePosition, playedRunMs, type LivePosition } from './livePosition';
 import { trackPlaybackStartOnce } from './playbackStarts';
 import { guardRewindFloor } from './rewindFloor';
 import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
@@ -554,7 +554,8 @@ export function useHlsPlayback(
       }
       if (video.readyState < HAVE_CURRENT_DATA || axis.atMs === null) return;
       const { atMs, edgeMs, behindSeconds: behind } = axis;
-      setLivePosition((prev) => nextLivePosition(prev, atMs, edgeMs, behind));
+      const run = playedRunMs(video.played, video.currentTime);
+      setLivePosition((prev) => nextLivePosition(prev, atMs, edgeMs, behind, !video.paused, run));
     };
     // 목록 끝 정체(D9) — ENDLIST 없는 목록의 회차 경계를 맡는 「끝 도달」이다. 재생기 하나에 한 번(목록이 자라면 다시 센다)
     const checkStall = () => {
@@ -588,8 +589,11 @@ export function useHlsPlayback(
       const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
       const at = programDateAt(fragments, video.currentTime);
       const edge = programDateAt(fragments, liveEdgePosition(range, sync));
+      const run = playedRunMs(video.played, video.currentTime);
       setLivePosition((prev) =>
-        at === null || edge === null ? null : nextLivePosition(prev, at, edge, behind),
+        at === null || edge === null
+          ? null
+          : nextLivePosition(prev, at, edge, behind, !video.paused, run),
       );
     };
     video.addEventListener('play', onPlay);

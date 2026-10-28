@@ -68,6 +68,32 @@ export function startLoadPosition(
 }
 
 /**
+ * 라이브 시작 하한(epoch ms, POK-200 c13 · S10) — 라이브 목록에서 시작해도 창 밖으로 밀리지 않는 가장 이른 시각이다. 창
+ * 하한(windowLowerMs)과 같은 식 하나라, 탐침과 첫 목록 재검사가 같은 하한을 쓴다. 시각 표시가 없으면 null
+ */
+export function liveStartFloorMs(
+  fragments: readonly DatedFragment[],
+  targetDurationS: number,
+): number | null {
+  const list = loadedList(fragments, targetDurationS);
+  return list === null ? null : windowLowerMs(list, 'live');
+}
+
+/**
+ * 시작 위치 startAtMs 가 창 하한보다 앞이라 startLoadPosition 이 하한으로 자를 것인가 — 못 본 녹화가 잘린다. 하한과 같으면
+ * 잘리지 않는다. 시각 표시가 없으면 판정할 수 없어 false 다(startLoadPosition 도 null 이라 기본 시작으로 둔다)
+ */
+export function startIsTruncated(
+  fragments: readonly DatedFragment[],
+  startAtMs: number,
+  kind: PlaybackSource['kind'],
+  targetDurationS: number,
+): boolean {
+  const list = loadedList(fragments, targetDurationS);
+  return list !== null && startAtMs < windowLowerMs(list, kind);
+}
+
+/**
  * 목록 끝 정체(D9) — 재생 위치가 E 1초 안 ∧ waiting ∧ 목록이 3 × TD 넘게 자라지 않음. `ended` 이벤트와 함께 「끝 도달」이다.
  * ENDLIST 없는 목록의 회차 경계를 이것이 맡는다
  */
