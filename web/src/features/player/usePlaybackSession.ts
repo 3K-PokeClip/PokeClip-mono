@@ -82,25 +82,6 @@ function needsX(s: PlaybackSessionState): boolean {
   return (kind === 'live' && s.boundLive) || kind === 'ending-wait' || kind === 'rewind';
 }
 
-/**
- * 넘김 확인이 깨져 rewind 로 되돌렸나(H0 · H1a · H2 · H2t). 멈췄는지는 재생기가 사람의 pause · play
- * 사건으로 가린다 — 영상이 붙기 전에는 위치 사건이 막혀 세션 칸이 멈춤을 모른다. 사람의 시크(H6)는 현행대로 둔다(멈춘 채 옮겨도
- * 되감기가 스스로 튼다)
- */
-function revertedHandoff(
-  before: PlaybackSessionState,
-  after: PlaybackSessionState,
-  event: SessionEvent,
-): boolean {
-  return (
-    before.phase.kind === 'live' &&
-    before.handoff !== null &&
-    event.type !== 'seek' &&
-    after.source.kind === 'rewind' &&
-    after.source.generation !== before.source.generation
-  );
-}
-
 function canStart(o: SessionOptions): boolean {
   return (
     o.canOpen &&
@@ -228,7 +209,10 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       const current = stateRef.current;
       if (current === null) return;
       const next = transition(current, event, Date.now());
-      if (revertedHandoff(current, next.state, event)) playerRef.current?.keepPausedOnSwap();
+      // 멈춤 유지는 새 소스를 커밋하기 전에 건다 — 재생기가 지금 세대를 표에 적는다
+      if (next.effects.some((e) => e.kind === 'keep-paused-on-swap')) {
+        playerRef.current?.keepPausedOnSwap();
+      }
       if (next.state !== current) commit(next.state);
       applyEffects(next.effects, next.state);
     },

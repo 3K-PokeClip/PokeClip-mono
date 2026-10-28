@@ -177,6 +177,37 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('끝에 닿아 넘긴 뒤 확인이 깨진다 — ended 의 pause(c13f cc 한계 5)', () => {
+  // 명세: 재생이 끝에 닿으면 paused 를 세우고 pause 사건을 낸 뒤 ended 를 낸다. 재생기는 사람의
+  // 멈춤과 가리지 못한다. 라이브가 틀기 전에 확인이 깨지면 되돌린 되감기가 멈춘 채 선다 — 지금
+  // 동작을 고정한다(사람 멈춤으로 볼지는 결정 사항)
+  it('끝 도달 → 끝 넘김(E1) → 시한(H0) 되돌림이면 되감기 재생기가 스스로 틀지 않는다', async () => {
+    render(<Screen options={options()} />);
+    await settle();
+    const view = { lowerMs: NOW - 5_000, endMs: NOW };
+    act(() => session?.dispatch({ type: 'seek', targetMs: P, view }));
+    await settle();
+    const list = { url: A1, firstMs: NOW - 3_600_000, lastEndMs: E, targetDurationS: 4 };
+    act(() => session?.dispatch({ type: 'list-loaded', ...list }));
+    act(() => session?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }));
+    const video = document.querySelector('video')!;
+    media.paused = true;
+    act(() => video.dispatchEvent(new Event('pause')));
+    act(() => video.dispatchEvent(new Event('ended')));
+    expect(session?.state.phase).toMatchObject({ kind: 'ending-wait', atEnd: true });
+    // E1 의 탐침 결과(P1) 모양만 끼운다 — 탐침 받기는 이 시험 밖이다
+    vi.mocked(transition).mockImplementationOnce((...[state, , now]) => ({
+      state: handedOff(state, now),
+      effects: [],
+    }));
+    act(() => session?.dispatch({ type: 'playing' }));
+    await settle();
+    expect(session?.state.source).toMatchObject({ kind: 'live', strictStart: true });
+    await act(async () => vi.advanceTimersByTime(DEADLINE_AFTER_MS));
+    expect(await playsAfterRevert()).toBe(0);
+  });
+});
+
 describe('멈춘 채 넘김 확인이 깨진다 — 영상이 붙기 전의 멈춤(c13f cx H1)', () => {
   it('확인 시한(H0)이 되돌려도 되감기 재생기는 스스로 틀지 않는다', async () => {
     pauseBeforeMedia(await handedOffScreen());

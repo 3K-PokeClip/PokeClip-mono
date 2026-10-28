@@ -427,6 +427,8 @@ describe('물음 순번 — 스트림 폴링 응답마다 순번과 수신 시�
       await Promise.resolve();
     });
     await flush();
+    // 마지막 사건이 X 갈래 사건이다(첫 live 폴링도 receivedAt 이 같아 헛통과하지 않게)
+    expect(streamPolls().at(-1)?.x).toEqual({ kind: 'known', id: 'r-A' });
     expect(streamPolls().at(-1)?.ask?.receivedAtMs).toBe(receivedAt);
   });
 });

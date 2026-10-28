@@ -2,6 +2,7 @@ import type { RewindStatusResult } from '@/api/rewindStatus';
 import type { LiveProbeResult } from './liveWindowProbe';
 import type {
   PlaybackSessionState,
+  SessionEffect,
   SessionEvent,
   StreamAsk,
   StreamPollEvent,
@@ -32,6 +33,9 @@ const HANDOFF_RUN_TOL_MS = 250;
  * 늦어도 닫히지 않는다(T14 가 대조한다)
  */
 export const HANDOFF_DOOR_FRESH_MS = 12_000;
+
+/** 되돌림의 멈춤 유지 효과(H0 · H1a · H2 · H2t 공통) */
+const KEEP_PAUSED: SessionEffect = { kind: 'keep-paused-on-swap' };
 
 /** 지금 소스 목록 — endMs = 마지막 조각 끝(E) · tdMs = 목표 길이 · sealed = ENDLIST 를 봤다 */
 export interface SourceList {
@@ -405,7 +409,7 @@ function revertToRewind(
   const block = reason === 'truncated' ? 'truncated' : 'reverted';
   const state = revertedState(session, handoff, block);
   const phase = { kind: 'rewind' as const, pendingNext: null };
-  return { state: { ...state, phase }, effects: [] };
+  return { state: { ...state, phase }, effects: [KEEP_PAUSED] };
 }
 
 /**
@@ -426,7 +430,7 @@ function revertEndedHandoff(
       endingSince: session.endingSince ?? now,
       offer: null,
     },
-    effects: [{ kind: 'refresh', retryWhileUrl: handoff.fromUrl }],
+    effects: [KEEP_PAUSED, { kind: 'refresh', retryWhileUrl: handoff.fromUrl }],
   };
 }
 
@@ -450,7 +454,9 @@ function revertTruncated(session: PlaybackSessionState, handoff: Handoff): Trans
   const reverted = revertToRewind(session, handoff, 'truncated');
   // url 은 싣지 않는다 — 경로에 스트림 키 · 세션 값이 든다(P2 로그와 같은 규칙)
   console.info('[player] handoff_skipped_truncated', { stage: 'start' });
-  return hintLiveOnce(reverted.state, handoff.fromUrl);
+  const hinted = hintLiveOnce(reverted.state, handoff.fromUrl);
+  const effects = [...reverted.effects, ...hinted.effects];
+  return { state: hinted.state, effects };
 }
 
 /** H1a · H1 · H1c — 위치 하나로 연속 검사를 한다(A1 을 반영한 상태로) */
