@@ -286,6 +286,24 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('button', { name: '일시정지' })).toBeInTheDocument();
   });
 
+  it('다른 위젯을 누른 뒤 「재생」을 눌러도 Space는 일시정지다: 앞 위젯이 포커스를 쥔 채 Space를 가져가지 않는다(PR #454 1차 리뷰)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const mic = screen.getByRole('button', { name: '마이크 넣기' });
+    const before = mic.getAttribute('aria-pressed');
+    await user.click(mic);
+    const toggled = mic.getAttribute('aria-pressed');
+    expect(toggled).not.toBe(before);
+
+    await user.click(screen.getByRole('button', { name: '재생' }));
+    expect(screen.getByRole('button', { name: '일시정지' })).toBeInTheDocument();
+    expect(mic).not.toHaveFocus();
+
+    await user.keyboard(' ');
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+    expect(mic).toHaveAttribute('aria-pressed', toggled!);
+  });
+
   it('Tab으로 「반복」에 온 키보드 사용자는 Space로 켜고 끈다', async () => {
     const user = userEvent.setup();
     renderStudio();
