@@ -74,14 +74,13 @@ export function unpinnedX(latest: string | null): XAnswer {
 /**
  * 고정 화면의 지금 방송 번호 묻기 — 10초 안의 폴링은 같은 방송|영상 키의 마지막 답을 다시 쓴다. 기억에는 가장 늦게 시작한 물음의
  * 답만 쓴다: 늦게 온 옛 물음(A)이 새 답(B)을 덮으면 다음 폴링이 A 를 다시 써 다른 방송 띠가 굳는다(cx H3). `query` 의 답이 null 이면 모름.
- * 합류(POK-200 c13): 끝난 물음보다 늦게 시작한 물음이 있으면 자기 답 대신 가장 늦게 시작한 물음의 답을 돌려준다
+ * 물음은 서로 기다리지 않는다 — 각 물음은 자기 답을 돌려준다(합류 없음 · kty 결정 3)
  */
 export function createPinnedXResolver(
   query: () => Promise<string | null>,
 ): (fresh: boolean, key: string | null) => Promise<XAnswer> {
   let memory: { at: number; key: string | null; answer: XAnswer } | null = null;
   let latestAsk = 0;
-  let latestAnswer: Promise<XAnswer> | null = null;
   return async (fresh, key) => {
     if (
       !fresh &&
@@ -93,13 +92,9 @@ export function createPinnedXResolver(
     }
     latestAsk += 1;
     const ask = latestAsk;
-    const pending = query().then((id): XAnswer =>
-      id === null ? { kind: 'unknown' } : { kind: 'known', id },
-    );
-    latestAnswer = pending;
-    const answer = await pending;
-    if (ask !== latestAsk) return latestAnswer ?? answer;
-    memory = { at: Date.now(), key, answer };
+    const id = await query();
+    const answer: XAnswer = id === null ? { kind: 'unknown' } : { kind: 'known', id };
+    if (ask === latestAsk) memory = { at: Date.now(), key, answer };
     return answer;
   };
 }
