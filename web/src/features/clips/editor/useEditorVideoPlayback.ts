@@ -6,6 +6,7 @@ import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
 import {
   boundaryAction,
+  effectiveBounds,
   type EditorPlayback,
   type PlaybackBounds,
   type PlaybackError,
@@ -173,6 +174,13 @@ export function useEditorVideoPlayback(options: {
     return Math.min(w.endSeconds - 0.05, Math.max(w.startSeconds, seconds));
   }, []);
 
+  /** 경계 판정에 쓸 구간 — 받은 영상이 구간 끝보다 먼저 끝나면 영상 끝이 구간 끝이다(POK-490) */
+  const boundsNow = useCallback(
+    (node: HTMLVideoElement) =>
+      effectiveBounds(boundsRef.current, loadedRef.current.startSeconds + node.duration),
+    [],
+  );
+
   useEffect(() => {
     if (video === null) return undefined;
     const position = () => loadedRef.current.startSeconds + video.currentTime;
@@ -186,7 +194,7 @@ export function useEditorVideoPlayback(options: {
     };
     const onTime = () => {
       const now = position();
-      const action = boundaryAction(now, boundsRef.current);
+      const action = boundaryAction(now, boundsNow(video));
       if (action.kind === 'seek') {
         video.currentTime = Math.max(
           0,
@@ -199,6 +207,21 @@ export function useEditorVideoPlayback(options: {
     };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
+    // 경계 틱보다 영상 끝이 먼저 왔다(영상 끝 바로 앞의 틱을 놓침): 「구간 반복」이면 구간 시작으로 되감아 이어 튼다.
+    // 전에는 멈추기만 해서, 받은 영상이 구간 끝보다 짧으면 반복을 켜 둬도 끝에서 섰다(POK-490)
+    const onEnded = () => {
+      if (!boundsRef.current.loop) {
+        setPlaying(false);
+        return;
+      }
+      video.currentTime = Math.max(
+        0,
+        clampToWindow(boundsRef.current.startSeconds) - loadedRef.current.startSeconds,
+      );
+      video.play().catch((e: unknown) => {
+        if (!(e instanceof DOMException && e.name === 'AbortError')) setFailure('fatal');
+      });
+    };
     const onError = () => setFailure('fatal');
     video.addEventListener('loadedmetadata', onLoaded);
     // 리스너를 달기 전에 이미 메타데이터가 와 있을 수 있다(캐시된 영상) — 그러면 처음 자리로 못 간다.
@@ -207,7 +230,7 @@ export function useEditorVideoPlayback(options: {
     video.addEventListener('seeked', onTime);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
-    video.addEventListener('ended', onPause);
+    video.addEventListener('ended', onEnded);
     video.addEventListener('error', onError);
     return () => {
       video.removeEventListener('loadedmetadata', onLoaded);
@@ -215,10 +238,10 @@ export function useEditorVideoPlayback(options: {
       video.removeEventListener('seeked', onTime);
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
-      video.removeEventListener('ended', onPause);
+      video.removeEventListener('ended', onEnded);
       video.removeEventListener('error', onError);
     };
-  }, [video, clampToWindow]);
+  }, [video, clampToWindow, boundsNow]);
 
   // timeupdate 는 초당 4번쯤이라 구간 끝을 0.25초까지 넘긴다 — 재생 중에는 프레임마다 경계를 본다.
   useEffect(() => {
@@ -227,7 +250,7 @@ export function useEditorVideoPlayback(options: {
     const tick = () => {
       raf = requestAnimationFrame(tick);
       const now = loadedRef.current.startSeconds + video.currentTime;
-      const action = boundaryAction(now, boundsRef.current);
+      const action = boundaryAction(now, boundsNow(video));
       if (action.kind === 'seek') {
         video.currentTime = Math.max(
           0,
@@ -240,12 +263,12 @@ export function useEditorVideoPlayback(options: {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [video, playing, clampToWindow]);
+  }, [video, playing, clampToWindow, boundsNow]);
 
   const togglePlay = useCallback(() => {
     if (video === null) return;
     if (video.paused) {
-      const bounds = boundsRef.current;
+      const bounds = boundsNow(video);
       const now = loadedRef.current.startSeconds + video.currentTime;
       // 구간 끝에 서 있으면 처음부터 다시 — 끝에서 재생을 누르면 곧바로 멈춰 아무 일도 없는 것처럼 보인다
       if (now >= bounds.endSeconds - 0.05 || now < bounds.startSeconds) {
@@ -261,7 +284,7 @@ export function useEditorVideoPlayback(options: {
     } else {
       video.pause();
     }
-  }, [video, clampToWindow]);
+  }, [video, clampToWindow, boundsNow]);
 
   const seekTo = useCallback(
     (seconds: number) => {
