@@ -17,11 +17,11 @@ export const HANDOFF_NOTICE = '라이브로 이어서 볼게요';
 /** 무잘림 게이트가 닫혔을 때의 안내 — url 하나에 한 번(문구 확정은 설계 16절 2 · PR 머지 조건) */
 export const HANDOFF_SKIP_NOTICE = '라이브로 가려면 LIVE 를 눌러 주세요';
 /** 띠 = 목록 끝 E 앞 이 값 × TD_되감기 — 이 안의 재생 위치만 넘김을 청한다 */
-export const HANDOFF_BAND_TD = 1;
+const HANDOFF_BAND_TD = 1;
 /** 확인 시한의 여유 = 이 값 × TD_되감기(넘긴 시각 + (E − P) + 여유) */
-export const HANDOFF_CONFIRM_SLACK_TD = 2;
+const HANDOFF_CONFIRM_SLACK_TD = 2;
 /** 연속 시작이 P 보다 늦어도 되는 폭 = hls.js 시작 맞춤 폭 max(maxBufferHole 0.1, maxFragLookUpTolerance 0.25) 기본값 */
-export const HANDOFF_RUN_TOL_MS = 250;
+const HANDOFF_RUN_TOL_MS = 250;
 
 /** 문이 열려 있는 폭 = REWIND_POLL_MS + REWIND_RETRY_MS — 폴링 한 번이 재시도로 늦어도 닫히지 않는다(T14 가 대조한다) */
 export const HANDOFF_DOOR_FRESH_MS = 12_000;
@@ -117,7 +117,7 @@ export function doorOpen(s: PlaybackSessionState, now: number): boolean {
  * D 표 — 이번 응답 뒤의 문. 지금 url 의 live ∧ ready 가 근거다. x 가 보던 방송이면 받은 시각으로 세우고(D1) · 모르면 그대로(D3) ·
  * 잠시 불가도 그대로(D5) · 그 밖의 응답(ending · vod · ended · ready:false · 다른 url · 404 · 다른 방송)은 지운다(D4)
  */
-export function nextDoor(s: PlaybackSessionState, event: StreamPollEvent): HandoffDoor | null {
+function nextDoor(s: PlaybackSessionState, event: StreamPollEvent): HandoffDoor | null {
   const { result, x, ask } = event;
   if (result.kind === 'unavailable') return s.handoffDoor;
   const status = result.kind === 'ok' ? result.status : null;
@@ -162,7 +162,7 @@ export function loadedList(
 }
 
 /** A3 — ENDLIST 면 list 가 있을 때 봉인한다 */
-export function sealList(s: PlaybackSessionState): PlaybackSessionState {
+function sealList(s: PlaybackSessionState): PlaybackSessionState {
   return s.list === null ? s : { ...s, list: { ...s.list, sealed: true } };
 }
 
@@ -205,7 +205,7 @@ export function withHandoffRules(
 }
 
 /** 띠 안인가 — 마지막 위치가 지금 목록 끝 E 앞 1 × TD_되감기 안이다 */
-export function inHandoffBand(s: PlaybackSessionState): boolean {
+function inHandoffBand(s: PlaybackSessionState): boolean {
   const { list, lastAtMs } = s;
   return list !== null && lastAtMs !== null && lastAtMs >= list.endMs - HANDOFF_BAND_TD * list.tdMs;
 }
@@ -217,12 +217,12 @@ function tailOpen(s: PlaybackSessionState, now: number): boolean {
 }
 
 /** R6 · R11 의 넘김 조건 — rewind ∧ 다음 url 대기(pendingNext) 없음 ∧ 공통 몫 */
-export function canHandOffFromRewind(s: PlaybackSessionState, now: number): boolean {
+function canHandOffFromRewind(s: PlaybackSessionState, now: number): boolean {
   return s.phase.kind === 'rewind' && s.phase.pendingNext === null && tailOpen(s, now);
 }
 
 /** E1 의 넘김 조건 — 되감기로 끝에 닿은 끝남 대기(녹화로 가기로 정하기 전) ∧ 공통 몫. 이번 응답 대신 문을 본다 */
-export function canHandOffFromEnding(s: PlaybackSessionState, now: number): boolean {
+function canHandOffFromEnding(s: PlaybackSessionState, now: number): boolean {
   const { phase } = s;
   if (phase.kind !== 'ending-wait' || s.source.kind !== 'rewind') return false;
   return phase.origin === 'rewind' && phase.atEnd && !phase.recordOnEnd && tailOpen(s, now);
@@ -302,7 +302,7 @@ export function onLiveProbe(
 }
 
 /** 확인이 깨졌을 때 이어 볼 자리 = 넘긴 P 와 연속 검사를 통과한 마지막 위치 가운데 늦은 쪽 */
-export function handoffResumeMs(handoff: Handoff): number {
+function handoffResumeMs(handoff: Handoff): number {
   return Math.max(handoff.atMs, handoff.seenAtMs ?? handoff.atMs);
 }
 
@@ -321,7 +321,7 @@ function revertedState(
 }
 
 /** H0 · H1a · H2t — 라이브는 살아 있다. 마지막 검증 위치에서 rewind 로 돌아간다 */
-export function revertToRewind(
+function revertToRewind(
   s: PlaybackSessionState,
   handoff: Handoff,
   reason: 'start' | 'jump' | 'deadline' | 'truncated',
@@ -333,11 +333,7 @@ export function revertToRewind(
 }
 
 /** H2 — 라이브가 끝났다는 증거(라이브 404 · ENDLIST · 끝 도달). 되감기 기원 끝남 대기로 간다 */
-export function revertEndedHandoff(
-  s: PlaybackSessionState,
-  handoff: Handoff,
-  now: number,
-): Transition {
+function revertEndedHandoff(s: PlaybackSessionState, handoff: Handoff, now: number): Transition {
   const state = revertedState(s, handoff, 'reverted');
   return {
     state: {
