@@ -4,8 +4,10 @@ import {
   loadedList,
   movedDoor,
   onHandoffConfirming,
+  onLiveProbe,
   openHandoffFields,
   releaseBlock,
+  requestProbe,
   withHandoffRules,
   withNextDoor,
   type HandoffFields,
@@ -464,7 +466,7 @@ function onRewind(
     case 'live-button':
       return liveFromAway(session, event.x, event.attempt);
     case 'stream-poll':
-      return onRewindStreamPoll(session, event);
+      return onRewindStreamPoll(session, event, now);
     case 'endlist':
       return phase.pendingNext !== null
         ? { state: session, effects: [{ kind: 'refresh', retryWhileUrl: session.source.url }] }
@@ -489,19 +491,27 @@ function onRewind(
   }
 }
 
-/** 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 응답 앞의 문을 새 url 로 넘긴다 */
-function onRewindStreamPoll(before: PlaybackSessionState, event: StreamPollEvent): Transition {
+/**
+ * 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 응답 앞의 문을 새 url 로 넘긴다. R11 은 갱신한 뒤 넘김 조건이면
+ * 탐침을 청한다
+ */
+function onRewindStreamPoll(
+  before: PlaybackSessionState,
+  event: StreamPollEvent,
+  now: number,
+): Transition {
   const session = withNextDoor(before, event);
   const live = readyLive(event.result);
   if (live === null) return stateOnly(session);
   const range = { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs };
   if (live.url === session.source.url) {
-    return stateOnly({
+    const seen = {
       ...session,
       entry: range,
       rewindOpen: true,
       observedEndMs: maxOrSelf(session.observedEndMs, live.headPdtMs),
-    });
+    };
+    return requestProbe(seen, now) ?? stateOnly(seen);
   }
   if (within(session.lastAtMs, live.firstPdtMs, live.headPdtMs)) {
     return stateOnly({
@@ -622,8 +632,12 @@ function onAnyPhase(
         watchedFromMs:
           session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
       };
-      return onHandoffConfirming(moved, event, now) ?? stateOnly(moved);
+      // A1 — 확인 중인 live 는 H 행, rewind 는 R6(넘김 조건이면 탐침)
+      const probed = moved.phase.kind === 'rewind' ? requestProbe(moved, now) : null;
+      return onHandoffConfirming(moved, event, now) ?? probed ?? stateOnly(moved);
     }
+    case 'live-probe':
+      return onLiveProbe(session, event.seq, event.result, now);
     case 'remount': {
       const confirming = onHandoffConfirming(session, event, now);
       if (confirming !== null) return confirming;
