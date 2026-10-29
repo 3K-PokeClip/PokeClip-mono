@@ -7,7 +7,7 @@ import type { PlaybackHooks } from './useHlsPlayback';
 import type { PlaybackSession, SessionPlayer } from './usePlaybackSession';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
 
-// 재생 세션 + 실재생 훅의 위치 사건(POK-200 c13 · 설계 r9 2절). 재생기 자리의 재생 여부 · 연속 길이 · 잰 시각을
+// 재생 세션 + 실재생 훅의 위치 사건(POK-200 c13 · 설계 r9 2절). 재생기 자리의 재생 여부 · 연속 길이 · 위치 시대를
 // position 사건에 싣는다. 재생기(useHlsPlayback)는 자리만 시험이 쥐는 흉내로 바꾼다.
 
 const player = vi.hoisted(() => ({
@@ -25,7 +25,7 @@ vi.mock('./useHlsPlayback', () => ({
     player.hooks = hooks ?? null;
     return {
       livePosition: player.livePosition,
-      positionMeasuredAtMs: player.livePosition === null ? null : MEASURED_AT,
+      positionEpoch: player.livePosition === null ? null : EPOCH,
       seekToMs: () => {},
       seekToLiveEdge: () => {},
       keepPausedOnSwap: player.keepPausedOnSwap,
@@ -34,8 +34,8 @@ vi.mock('./useHlsPlayback', () => ({
 }));
 
 const NOW = Date.parse('2026-10-25T06:00:00.000Z');
-/** 재생기가 자리를 잰 시각 */
-const MEASURED_AT = NOW - 500;
+/** 재생기가 자리를 잰 때의 위치 시대 */
+const EPOCH = 4;
 
 function at(patch: Partial<LivePosition>): LivePosition {
   return {
@@ -57,6 +57,7 @@ function fakeSession(patch: Partial<PlaybackSession> = {}): PlaybackSession {
     liveButton: () => {},
     bindPlayer: () => {},
     notice: () => {},
+    positionEpoch: () => 0,
     ...patch,
   };
 }
@@ -78,7 +79,7 @@ function positionsFor(...steps: LivePosition[]): SessionEvent[] {
 describe('position 사건 — 재생 여부 · 연속 길이(설계 r9 2절)', () => {
   it('재생기 자리의 연속 길이와 재생 여부를 싣는다', () => {
     expect(positionsFor(at({ runMs: 4_000 }))).toEqual([
-      { type: 'position', atMs: NOW, playing: true, runMs: 4_000, measuredAtMs: MEASURED_AT },
+      { type: 'position', atMs: NOW, playing: true, runMs: 4_000, epoch: EPOCH },
     ]);
   });
 
@@ -86,8 +87,8 @@ describe('position 사건 — 재생 여부 · 연속 길이(설계 r9 2절)', (
     const playing = at({ runMs: 4_000 });
     const paused = { ...playing, playing: false };
     expect(positionsFor(playing, paused, paused)).toEqual([
-      { type: 'position', atMs: NOW, playing: true, runMs: 4_000, measuredAtMs: MEASURED_AT },
-      { type: 'position', atMs: NOW, playing: false, runMs: 4_000, measuredAtMs: MEASURED_AT },
+      { type: 'position', atMs: NOW, playing: true, runMs: 4_000, epoch: EPOCH },
+      { type: 'position', atMs: NOW, playing: false, runMs: 4_000, epoch: EPOCH },
     ]);
   });
 });

@@ -86,10 +86,10 @@ export interface HandoffFields {
    */
   positionGeneration: number | null;
   /**
-   * 받을 위치의 하한 시각 — 재생기를 바꾸거나(세대 상승) 안에서 옮긴 전이의
-   * 시각이다. 이 시각 이전에 잰 위치는 버린다
+   * 위치 시대 — 재생기를 바꾸거나(세대 상승) 안에서 옮길 때마다 1 오른다. 이
+   * 시대에 잰 위치만 받는다(재생기가 잴 때 찍는다)
    */
-  positionFloorMs: number;
+  positionEpoch: number;
   list: SourceList | null;
   handoffDoor: HandoffDoor | null;
   handoff: Handoff | null;
@@ -107,7 +107,7 @@ export function openHandoffFields(): HandoffFields {
   return {
     playing: false,
     positionGeneration: null,
-    positionFloorMs: 0,
+    positionEpoch: 0,
     list: null,
     handoffDoor: null,
     handoff: null,
@@ -245,19 +245,16 @@ export function withHandoffRules(
 }
 
 /**
- * 재생기를 바꾸거나(세대 상승) 안에서 옮긴(seek-within) 전이 뒤 — 받을 위치의
- * 하한을 now 로 올린다. 옮겼으면 옮긴 자리의 위치가 올 때까지 위치 칸을 비운다
+ * 재생기를 바꾸거나(세대 상승) 안에서 옮긴(seek-within) 전이 뒤 — 위치 시대를
+ * 1 올린다. 옮겼으면 옮긴 자리의 위치가 올 때까지 위치 칸을 비운다
  */
-export function withPositionFloor(
-  prev: PlaybackSessionState,
-  step: Transition,
-  now: number,
-): Transition {
+export function withPositionEpoch(prev: PlaybackSessionState, step: Transition): Transition {
   const swapped = step.state.source.generation !== prev.source.generation;
   const moved = step.effects.some((effect) => effect.kind === 'seek-within');
   if (!swapped && !moved) return step;
   const positionGeneration = moved ? null : step.state.positionGeneration;
-  const state = { ...step.state, positionGeneration, positionFloorMs: now };
+  const positionEpoch = step.state.positionEpoch + 1;
+  const state = { ...step.state, positionGeneration, positionEpoch };
   return { state, effects: step.effects };
 }
 

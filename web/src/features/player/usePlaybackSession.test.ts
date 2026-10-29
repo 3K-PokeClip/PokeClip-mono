@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { MEASURED_LAST, handedOff } from './handoffTestKit';
+import { handedOff } from './handoffTestKit';
 import { transition, type SessionEvent, type XAnswer } from './rewindSwitch';
 import { usePlaybackSession, type SessionPlayer, type SessionOptions } from './usePlaybackSession';
 
@@ -201,7 +201,7 @@ describe('리마운트 잇기(R36 — 세션은 GlassPlayer key 바깥에 산다
         atMs: t + 5_000,
         playing: true,
         runMs: 5_000,
-        measuredAtMs: MEASURED_LAST,
+        epoch: result.current!.positionEpoch(),
       }),
     );
     const before = result.current!.state.source;
@@ -479,7 +479,7 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
         atMs: P,
         playing: true,
         runMs: 0,
-        measuredAtMs: MEASURED_LAST,
+        epoch: view.result.current!.positionEpoch(),
       }),
     );
     vi.mocked(transition).mockImplementationOnce((...[s, , now]) => ({
@@ -498,7 +498,7 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
         atMs: P,
         playing: false,
         runMs: 0,
-        measuredAtMs: MEASURED_LAST,
+        epoch: view.result.current!.positionEpoch(),
       }),
     );
   }

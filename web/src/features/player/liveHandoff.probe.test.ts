@@ -9,7 +9,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { pos, resetEventKit, settleProbe, startRun, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, settleProbe, stamped, startRun, streamPoll } from './handoffTestKit';
 
 // 꼬리 넘김 시험(POK-200 c13h — 설계 r9 4절 R3 · R6 · R6′ · R7 · R11 · P0–P4 · E1 ·
 // 11절 T1–T9 · T18 · T21 · T27). 「→ 1」 = 탐침 요청 1 → 무잘림 결과 → 넘김 1 ·
@@ -54,7 +54,7 @@ function feed(start: PlaybackSessionState, events: SessionEvent[], now = R) {
   let state = start;
   const effects: SessionEffect[] = [];
   for (const event of events) {
-    const next = transition(state, event, now);
+    const next = transition(state, stamped(state, event), now);
     state = next.state;
     effects.push(...next.effects);
   }
@@ -366,10 +366,10 @@ describe('새 소스의 첫 위치 전에는 넘기지 않는다(조기 넘김 �
   it('되감기로 바꾸기 전에 잰 라이브 위치가 늦게 와도 버린다 — 새 재생기의 첫 위치 전에는 0', () => {
     const liveAt = NOW + 20_000;
     const entered = enteredFromLive(liveAt);
-    const stale = pos(liveAt + 500, { measuredAtMs: R - 1 });
+    const stale = pos(liveAt + 500, { epoch: entered.positionEpoch - 1 });
     const early = feed(entered, [stale, loaded(A1, T0, NOW), doorPoll()]);
     expect([early.state.phase.kind, probes(early.effects)]).toEqual(['rewind', 0]);
-    const asked = feed(early.state, [pos(P, { measuredAtMs: R + 1 })]);
+    const asked = feed(early.state, [pos(P)]);
     expect(probes(asked.effects)).toBe(1);
   });
 
@@ -377,10 +377,17 @@ describe('새 소스의 첫 위치 전에는 넘기지 않는다(조기 넘김 �
     const view = { lowerMs: T0, endMs: E };
     const back: SessionEvent = { type: 'seek', targetMs: E - MIN, view };
     const stalled = feed(rewindNear(), [pos(P), back]).state;
-    const stale = pos(P + 500, { measuredAtMs: R - 1 });
+    const stale = pos(P + 500, { epoch: stalled.positionEpoch - 1 });
     const polled = feed(stalled, [stale, doorPoll()]);
     expect([polled.state.lastAtMs, probes(polled.effects)]).toEqual([P, 0]);
-    const landed = feed(polled.state, [pos(E - MIN, { measuredAtMs: R + 1 })]).state;
+    const landed = feed(polled.state, [pos(E - MIN)]).state;
     expect(landed.lastAtMs).toBe(E - MIN);
+  });
+
+  it('앞 세션에서 더 높은 시대로 잰 위치는 다시 연 세션에 들지 않는다 — 같은 시대만 받는다', () => {
+    const reopened = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
+    const late = feed(reopened, [pos(P, { epoch: reopened.positionEpoch + 3 })]).state;
+    expect([late.lastAtMs, late.positionGeneration]).toEqual([null, null]);
+    expect(feed(late, [pos(P)]).state.lastAtMs).toBe(P);
   });
 });

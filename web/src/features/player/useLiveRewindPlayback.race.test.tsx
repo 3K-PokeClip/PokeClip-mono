@@ -19,13 +19,13 @@ import { REWIND_POLL_MS } from './useRewindStatus';
 
 const player = vi.hoisted(() => ({
   livePosition: null as LivePosition | null,
-  measuredAtMs: null as number | null,
+  epoch: null as number | null,
 }));
 
 vi.mock('./useHlsPlayback', () => ({
   useHlsPlayback: () => ({
     livePosition: player.livePosition,
-    positionMeasuredAtMs: player.measuredAtMs,
+    positionEpoch: player.epoch,
     seekToMs: () => {},
     seekToLiveEdge: () => {},
     keepPausedOnSwap: () => {},
@@ -82,10 +82,15 @@ async function settle() {
   });
 }
 
-/** 재생기가 atMs 를 잰 그리기를 커밋한다. 시각을 주지 않으면 지금 잰 것이다 */
-function measure(view: ReturnType<typeof render>, atMs: number, measuredAtMs = Date.now()) {
+/**
+ * 재생기가 atMs 를 잰 그리기를 커밋한다 — 잴 때 세션의 위치 시대를 찍는다.
+ * clockBackMs 만큼 시스템 시계가 잰 뒤 커밋 전에 뒤로 간다(시계 역행 — 잰
+ * 순서는 시계와 무관해야 한다)
+ */
+function measure(view: ReturnType<typeof render>, atMs: number, clockBackMs = 0) {
   player.livePosition = { atMs, edgeAtMs: NOW, behindSeconds: 1, playing: true, runMs: 0 };
-  player.measuredAtMs = measuredAtMs;
+  player.epoch = session!.positionEpoch();
+  vi.setSystemTime(Date.now() - clockBackMs);
   act(() => view.rerender(<Screen options={options()} />));
 }
 
@@ -111,7 +116,7 @@ beforeEach(() => {
   session = null;
   interlude = null;
   player.livePosition = null;
-  player.measuredAtMs = null;
+  player.epoch = null;
   fetchSpy = stubFetch((url) =>
     url === STREAM
       ? jsonResponse(200, {
@@ -130,37 +135,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('커밋과 위치 효과 사이의 시크 — 시크 전에 잰 자리를 버린다(cx H1)', () => {
-  it('라이브 자리를 잰 커밋 뒤 되감으면, 새 재생기의 첫 위치 전에는 탐침을 청하지 않는다', async () => {
-    const view = render(<Screen options={options()} />);
-    await settle();
-    expect(session?.state.rewindOpen).toBe(true);
-    // 라이브 재생기가 띠 안 자리를 잰 커밋 — 그 위치 효과 전에 되감는다(세대 0 → 1)
-    const target = { lowerMs: NOW - 5_000, endMs: NOW };
-    interlude = { type: 'seek', targetMs: NOW - 30_000, view: target };
-    measure(view, IN_BAND, Date.now() - 1);
-    expect(session?.state.source).toMatchObject({ kind: 'rewind', generation: 1 });
-    act(() => session?.dispatch(list));
-    expect(await probesAfterPoll()).toBe(0);
-    // 새 재생기가 띠 안 자리를 재면 현행대로 청한다
-    vi.advanceTimersByTime(1);
-    measure(view, IN_BAND + 500);
-    expect(await probesAfterPoll()).toBe(1);
-  });
+describe.each([
+  ['시계 그대로', 0],
+  ['잰 뒤 시계 60초 역행', 60_000],
+] as const)(
+  '커밋과 위치 효과 사이의 시크 — 시크 전에 잰 자리를 버린다(cx H1) · %s',
+  (...[, clockBackMs]) => {
+    it('라이브 자리를 잰 커밋 뒤 되감으면, 새 재생기의 첫 위치 전에는 탐침을 청하지 않는다', async () => {
+      const view = render(<Screen options={options()} />);
+      await settle();
+      expect(session?.state.rewindOpen).toBe(true);
+      // 라이브 재생기가 띠 안 자리를 잰 커밋 — 그 위치 효과 전에 되감는다(세대 0 → 1)
+      const target = { lowerMs: NOW - 5_000, endMs: NOW };
+      interlude = { type: 'seek', targetMs: NOW - 30_000, view: target };
+      measure(view, IN_BAND, clockBackMs);
+      expect(session?.state.source).toMatchObject({ kind: 'rewind', generation: 1 });
+      act(() => session?.dispatch(list));
+      expect(await probesAfterPoll()).toBe(0);
+      // 새 재생기가 띠 안 자리를 재면 현행대로 청한다
+      vi.advanceTimersByTime(1);
+      measure(view, IN_BAND + 500);
+      expect(await probesAfterPoll()).toBe(1);
+    });
 
-  it('되감기 띠 안 자리를 잰 커밋 뒤 안에서 뒤로 시크하면, 시크 전 자리로 탐침을 청하지 않는다', async () => {
-    const view = render(<Screen options={options()} />);
-    await settle();
-    const enter = { lowerMs: NOW - 5_000, endMs: NOW };
-    act(() => session?.dispatch({ type: 'seek', targetMs: NOW - 30_000, view: enter }));
-    act(() => session?.dispatch(list));
-    vi.advanceTimersByTime(1);
-    measure(view, E - 20_000);
-    // 띠 안 자리를 잰 커밋 — 그 위치 효과 전에 같은 소스 안에서 뒤로 시크한다
-    const within = { lowerMs: NOW - 3_600_000, endMs: E };
-    interlude = { type: 'seek', targetMs: E - 60_000, view: within };
-    measure(view, IN_BAND, Date.now() - 1);
-    expect(session?.state.lastAtMs).toBe(E - 20_000);
-    expect(await probesAfterPoll()).toBe(0);
-  });
-});
+    it('되감기 띠 안 자리를 잰 커밋 뒤 안에서 뒤로 시크하면, 시크 전 자리로 탐침을 청하지 않는다', async () => {
+      const view = render(<Screen options={options()} />);
+      await settle();
+      const enter = { lowerMs: NOW - 5_000, endMs: NOW };
+      act(() => session?.dispatch({ type: 'seek', targetMs: NOW - 30_000, view: enter }));
+      act(() => session?.dispatch(list));
+      vi.advanceTimersByTime(1);
+      measure(view, E - 20_000);
+      // 띠 안 자리를 잰 커밋 — 그 위치 효과 전에 같은 소스 안에서 뒤로 시크한다
+      const within = { lowerMs: NOW - 3_600_000, endMs: E };
+      interlude = { type: 'seek', targetMs: E - 60_000, view: within };
+      measure(view, IN_BAND, clockBackMs);
+      expect(session?.state.lastAtMs).toBe(E - 20_000);
+      expect(await probesAfterPoll()).toBe(0);
+    });
+  },
+);

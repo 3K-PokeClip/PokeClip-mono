@@ -9,10 +9,11 @@ import {
   type SessionEvent,
 } from './rewindSwitch';
 import {
-  MEASURED_LAST,
+  UNSTAMPED,
   handedOff,
   pos,
   resetEventKit,
+  stamped,
   startRun,
   streamPoll,
 } from './handoffTestKit';
@@ -39,14 +40,14 @@ function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindSt
 
 /** 라이브 재생기의 위치 사건 — runMs 는 그 재생기의 played 연속 길이다 */
 function at(atMs: number, runMs: number): SessionEvent {
-  return { type: 'position', atMs, playing: true, runMs, measuredAtMs: MEASURED_LAST };
+  return { type: 'position', atMs, playing: true, runMs, epoch: UNSTAMPED };
 }
 
 function run(start: PlaybackSessionState, events: SessionEvent[], now = NOW + 1_000) {
   let state = start;
   const effects: SessionEffect[] = [];
   for (const event of events) {
-    const next = transition(state, event, now);
+    const next = transition(state, stamped(state, event), now);
     state = next.state;
     effects.push(...next.effects);
   }

@@ -8,7 +8,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { handedOff, pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
+import { handedOff, pos, resetEventKit, stamped, startRun, streamPoll } from './handoffTestKit';
 
 // 꼬리 넘김의 바탕 칸 시험(POK-200 c13c2 — 설계 r9 4절 A0 · A1 · A3 · A6 · 11절 T13 · T15).
 // 시각은 epoch ms 다. 방송 A(회차 r-A)를 보던 세션이 기준이다.
@@ -30,7 +30,10 @@ function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindSt
 }
 
 function run(start: PlaybackSessionState, events: SessionEvent[]): PlaybackSessionState {
-  return events.reduce((state, event) => transition(state, event, NOW).state, start);
+  return events.reduce(
+    (state, event) => transition(state, stamped(state, event), NOW).state,
+    start,
+  );
 }
 
 function listLoaded(url: string, lastEndMs: number): SessionEvent {

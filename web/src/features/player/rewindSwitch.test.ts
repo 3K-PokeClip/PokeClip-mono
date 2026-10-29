@@ -10,7 +10,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, stamped, startRun, streamPoll } from './handoffTestKit';
 import { sessionView } from './sessionView';
 
 // 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 ·
@@ -53,7 +53,7 @@ function run(
   let state = start;
   const effects: SessionEffect[] = [];
   for (const [event, at] of steps) {
-    const next = transition(state, event, at ?? NOW);
+    const next = transition(state, stamped(state, event), at ?? NOW);
     state = next.state;
     effects.push(...next.effects);
   }

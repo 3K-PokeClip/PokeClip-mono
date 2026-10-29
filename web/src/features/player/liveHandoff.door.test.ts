@@ -9,7 +9,7 @@ import {
   type XAnswer,
 } from './rewindSwitch';
 import { REWIND_POLL_MS, REWIND_RETRY_MS } from './useRewindStatus';
-import { pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, stamped, startRun, streamPoll } from './handoffTestKit';
 
 // 넘김 문 시험(POK-200 c13d — 설계 r9 1절 넘김 문 · 4절 D 표 · R9 · R10 · 11절 T3 ·
 // T4 · T14 · T16 · T21 · T27).
@@ -45,7 +45,7 @@ function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindSt
 }
 
 function run(start: PlaybackSessionState, events: SessionEvent[], at = R): PlaybackSessionState {
-  return events.reduce((state, event) => transition(state, event, at).state, start);
+  return events.reduce((state, event) => transition(state, stamped(state, event), at).state, start);
 }
 
 /** A1 을 P 에서 트는 되감기 세션(목록 끝 E = NOW) */
