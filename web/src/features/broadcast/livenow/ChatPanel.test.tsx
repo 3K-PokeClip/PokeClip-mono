@@ -281,7 +281,7 @@ describe('ChatPanel — 줄이 없을 때의 안내', () => {
     act(() => {
       vi.advanceTimersByTime(300);
     });
-    expect(screen.getByText('열심히 불러오는 중..')).toBeInTheDocument();
+    expect(screen.getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
   });
 
   it('라이브 첫 응답 전에는 「채팅에 연결하는 중..」이다', () => {
@@ -290,7 +290,32 @@ describe('ChatPanel — 줄이 없을 때의 안내', () => {
     act(() => {
       vi.advanceTimersByTime(300);
     });
-    expect(screen.getByText('채팅에 연결하는 중..')).toBeInTheDocument();
+    expect(screen.getByText('채팅에 연결하는 중..', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('라이브의 안내도 알림 자리에 싣는다 — 기다리는 안내는 화면처럼 0.3초 뒤, 채팅 없음은 바로(PR #459 리뷰 1차)', () => {
+    vi.useFakeTimers();
+    const view = render(<ChatPanel {...PROPS} messages={[]} placeholder="connecting" />);
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('채팅에 연결하는 중..');
+
+    view.rerender(<ChatPanel {...PROPS} messages={[]} placeholder="empty" />);
+    expect(screen.getByRole('status')).toHaveTextContent('아직 채팅이 없어요');
+
+    // 훅이 정한 말(지난 방송 · 되감기)이 있으면 그것을 싣는다
+    view.rerender(
+      <ChatPanel
+        {...PROPS}
+        messages={[]}
+        mode="ended"
+        placeholder="loading"
+        statusNote="채팅을 불러오고 있어요"
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('채팅을 불러오고 있어요');
   });
 
   it('읽지 못함 · 채팅 없음은 기다리지 않고 바로 말한다', () => {
@@ -299,7 +324,7 @@ describe('ChatPanel — 줄이 없을 때의 안내', () => {
     expect(screen.getByText('잠시 뒤 다시 불러와요')).toBeInTheDocument();
 
     view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="empty" />);
-    expect(screen.getByText('아직 채팅이 없어요')).toBeInTheDocument();
+    expect(screen.getByText('아직 채팅이 없어요', { selector: 'p' })).toBeInTheDocument();
   });
 
   it('안내가 서 있거나 방송 전이면 빈 「급증」 줄을 남기지 않는다', () => {
@@ -362,7 +387,7 @@ describe('ChatPanel — 줄이 없을 때의 안내', () => {
     act(() => {
       vi.advanceTimersByTime(300);
     });
-    expect(screen.getByText('열심히 불러오는 중..')).toBeInTheDocument();
+    expect(screen.getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
   });
 });
 

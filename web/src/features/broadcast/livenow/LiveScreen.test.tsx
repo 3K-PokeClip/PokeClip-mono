@@ -2981,8 +2981,10 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(within(panel).getByText('채팅에 연결하는 중..')).toBeInTheDocument();
+    expect(within(panel).getByText('채팅에 연결하는 중..', { selector: 'p' })).toBeInTheDocument();
     expect(within(panel).queryByRole('list', { name: '채팅 메시지' })).toBeNull();
+    // 화면 낭독에도 알린다(PR #459 리뷰 1차)
+    expect(within(panel).getByRole('status')).toHaveTextContent('채팅에 연결하는 중..');
 
     await act(async () => {
       release();
@@ -2990,7 +2992,7 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     await settle();
     // 빈 응답도 응답이다: 영영 「연결하는 중」에 머물지 않는다
     expect(within(panel).queryByText('채팅에 연결하는 중..')).toBeNull();
-    expect(within(panel).getByText('아직 채팅이 없어요')).toBeInTheDocument();
+    expect(within(panel).getByText('아직 채팅이 없어요', { selector: 'p' })).toBeInTheDocument();
   });
 
   it('창을 접었다 다시 열면 새 응답 전까지 「아직 채팅이 없어요」가 아니라 「연결하는 중」이다(PR #459 리뷰 1차)', async () => {
@@ -3009,14 +3011,14 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(within(panel).getByText('채팅에 연결하는 중..')).toBeInTheDocument();
+    expect(within(panel).getByText('채팅에 연결하는 중..', { selector: 'p' })).toBeInTheDocument();
 
     // 새 판의 응답(여기서는 빈 쪽)을 받은 뒤에야 「아직 채팅이 없어요」다
     await act(async () => {
       release();
     });
     await settle();
-    expect(within(panel).getByText('아직 채팅이 없어요')).toBeInTheDocument();
+    expect(within(panel).getByText('아직 채팅이 없어요', { selector: 'p' })).toBeInTheDocument();
   });
 });
 
@@ -4029,7 +4031,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(within(panel).getByText('열심히 불러오는 중..')).toBeInTheDocument();
+    expect(within(panel).getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
     expect(within(panel).queryByRole('list', { name: '채팅 메시지' })).toBeNull();
     // 듣는 사람에게도 알린다: 눈에 보이는 안내는 목록을 훑기 전에는 모른다
     expect(within(panel).getByRole('status')).toHaveTextContent('채팅을 불러오고 있어요');
@@ -4227,7 +4229,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(screen.getByText('열심히 불러오는 중..')).toBeInTheDocument();
+    expect(screen.getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
     expect(chatFroms()).toEqual([]);
     // 바닥은 시점을 아직 모른다고 한다: 목록은 「불러오고 있어요」인데 바닥만 끝까지 본 것처럼 말했다(리뷰 2라운드)
     expect(screen.queryByText(/마지막 메시지까지 보는 중/)).toBeNull();
@@ -4440,7 +4442,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(within(panel).getByText('열심히 불러오는 중..')).toBeInTheDocument();
+    expect(within(panel).getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
     expect(within(panel).queryByText('아직 채팅이 없어요')).toBeNull();
     expect(within(panel).getByRole('status')).toHaveTextContent('이전 채팅을 불러오고 있어요');
 
@@ -4904,7 +4906,9 @@ describe('LiveScreen — 지난 방송 상세', () => {
       await vi.advanceTimersByTimeAsync(300);
     });
     const chatAside = screen.getByRole('complementary', { name: '지난 채팅' });
-    expect(within(chatAside).getByText('열심히 불러오는 중..')).toBeInTheDocument();
+    expect(
+      within(chatAside).getByText('열심히 불러오는 중..', { selector: 'p' }),
+    ).toBeInTheDocument();
     expect(within(chatAside).getByRole('status')).toHaveTextContent('채팅을 불러오고 있어요');
     // 채팅 바닥도 그 동안은 분당 수를 적지 않는다: 라이브의 최근 1분 수(0)는 이 방송의 수가 아니다(리뷰 5라운드)
     expect(screen.queryByText(/· 분당/)).toBeNull();
