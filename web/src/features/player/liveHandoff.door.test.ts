@@ -131,14 +131,15 @@ describe('url 교체 · 이어짐의 문(R9 · 끝남 대기 이어짐 · T3 · 
   const covering = (x: XAnswer) =>
     streamPoll(liveReady(A2, T0 + 30 * MIN, NOW + MIN), x, R + 3_000);
 
-  it('T16: 같은 P 로 url 을 바꾸면 x A 는 새 url 의 문 · x 모름은 옛 문 그대로(닫힘) · x B 는 비움', () => {
+  it('T16: 같은 P 로 url 을 바꾸는 것은 x A 일 때만 — 새 url 의 문 · x 모름 · x B 는 바꾸지 않고 문을 비운다(D4)', () => {
     const known = run(doored(), [covering(X_A)]);
     expect(known.source.url).toBe(A2);
     expect(known.handoffDoor).toEqual({ url: A2, atMs: R + 3_000 });
-    const unknown = run(doored(), [covering(X_UNKNOWN)]);
-    expect(unknown.handoffDoor).toEqual({ url: A1, atMs: R });
-    expect(doorOpen(unknown, R + 4_000)).toBe(false);
-    expect(run(doored(), [covering(X_B)]).handoffDoor).toBeNull();
+    for (const x of [X_UNKNOWN, X_B]) {
+      const kept = run(doored(), [covering(x)]);
+      expect(kept.source.url).toBe(A1);
+      expect(kept.handoffDoor).toBeNull();
+    }
   });
 
   it('T16 신선도 기준: 받은 시각이 기준이다 — X 를 기다려 2초 뒤 들어와도', () => {

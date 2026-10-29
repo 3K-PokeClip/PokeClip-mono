@@ -7,7 +7,6 @@ import type {
   StreamAsk,
   StreamPollEvent,
   Transition,
-  XAnswer,
 } from './rewindSwitch';
 import { replace } from './sessionShared';
 
@@ -169,18 +168,12 @@ export function withNextDoor(
 }
 
 /**
- * R9 · 끝남 대기 이어짐 — 새 url 로 갈아 끼울 때의 문. x 가 보던 방송이면 새
- * url 의 문을 세우고, 다른 방송이면 비우고, 모르면 세션의 문 그대로다(R9 는
- * 응답 앞의 문을 넘긴다)
+ * R9 · 끝남 대기 이어짐 — 새 url 로 갈아 끼울 때의 문. 갈아 끼우기는 X 가 이
+ * 회차일 때만 오므로(isThisRound) 새 url 의 문을 받은 시각으로 세운다. 다른
+ * 회차 · X 모름은 갈아 끼우지 않아 문을 D 표가 정한다
  */
-export function movedDoor(
-  session: PlaybackSessionState,
-  url: string,
-  x: XAnswer | undefined,
-  ask: StreamAsk,
-): HandoffDoor | null {
-  if (x === undefined || x.kind === 'unknown') return session.handoffDoor;
-  return x.id === session.roundId ? { url, atMs: ask.receivedAtMs } : null;
+export function movedDoor(url: string, ask: StreamAsk): HandoffDoor {
+  return { url, atMs: ask.receivedAtMs };
 }
 
 /**
