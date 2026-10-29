@@ -368,6 +368,62 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
     expect(video.el!.currentTime).toBe(36);
   });
 
+  it('카드 시각이 지금 목록보다 이르고 되감기가 준비되지 않았으면 세션에 넘기지 않고 범위 밖이다(POK-498)', async () => {
+    const onSeekRequest = vi.fn();
+    const view = await sessionLive({ onSeekRequest });
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 5)) }));
+    let result: string | undefined;
+    act(() => {
+      result = view.result.current.seekToDate?.(PDT0 + 2_000);
+    });
+    expect(result).toBe('outside');
+    expect(onSeekRequest).not.toHaveBeenCalled();
+    expect(video.el!.currentTime).toBe(36);
+  });
+
+  it('되감기가 준비됐으면 그 하한까지는 세션에 넘긴다 · 그보다 이르면 범위 밖이다(POK-498)', async () => {
+    const onSeekRequest = vi.fn();
+    const view = await sessionLive({ onSeekRequest, axisLowerMs: PDT0 + 1_000 });
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 5)) }));
+    let result: string | undefined;
+    act(() => {
+      result = view.result.current.seekToDate?.(PDT0 + 2_000);
+    });
+    expect(result).toBe('moved');
+    expect(onSeekRequest).toHaveBeenCalledWith(PDT0 + 2_000, expect.anything());
+    act(() => {
+      result = view.result.current.seekToDate?.(PDT0 - 500);
+    });
+    expect(result).toBe('outside');
+    expect(onSeekRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('세션 없는 라이브도 되감기 창(seekable)보다 이른 시각은 옮기지 않고 범위 밖이다(POK-498)', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'seekable', 'get').mockImplementation(
+      () => ({ length: 1, start: () => 20, end: () => 40 }) as unknown as TimeRanges,
+    );
+    const view = mount(src());
+    await settle();
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(5, 5)) }));
+    video.el!.currentTime = 36;
+    let result: string | undefined;
+    act(() => {
+      result = view.result.current.seekToDate?.(PDT0 + 2_000);
+    });
+    expect(result).toBe('outside');
+    expect(video.el!.currentTime).toBe(36);
+    act(() => {
+      result = view.result.current.seekToDate?.(PDT0 + 24_000);
+    });
+    expect(result).toBe('moved');
+    expect(video.el!.currentTime).toBeCloseTo(24, 0);
+    // 카드 초는 정각 초로 내린 값이라 창 처음보다 1초 안쪽 이른 것은 창 안으로 친다
+    act(() => {
+      result = view.result.current.seekToDate?.(PDT0 + 19_500);
+    });
+    expect(result).toBe('moved');
+  });
+
   it('seekToMs 는 실제 시각을 영상 초로 바꿔 옮긴다', async () => {
     const view = await sessionLive({ onSeekRequest: vi.fn() });
     act(() => view.result.current.seekToMs(PDT0 + 20_000));

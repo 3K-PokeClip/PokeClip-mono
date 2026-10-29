@@ -21,6 +21,9 @@ export interface PlayerSimulationOptions {
   initialUptimeSeconds?: number;
 }
 
+/** 실제 시각으로 옮긴 결과: 옮김 · 되감을 수 있는 범위 밖이라 안 옮김 · 그 시각의 영상 자리를 모름 */
+export type DateSeekResult = 'moved' | 'outside' | 'unknown';
+
 export interface PlayerSimulation {
   playing: boolean;
   muted: boolean;
@@ -73,9 +76,10 @@ export interface PlayerSimulation {
   currentPositionSeconds?: () => number;
   /**
    * 라이브 실재생만: 그 실제 시각(epoch ms)으로 옮긴다. 조각마다 그 조각의 시각 표시(PDT)로 영상 시각을 센다(계약3, POK-326).
-   * 목록에 시각 표시가 없으면 false다(부르는 쪽이 방송 경과로 옮긴다). 없으면 그 길이 없는 재생기다
+   * 목록에 시각 표시가 없으면 'unknown'이다(부르는 쪽이 방송 경과로 옮긴다). 되감을 수 있는 범위보다 이르면 옮기지 않고
+   * 'outside'다(POK-498). 없으면 그 길이 없는 재생기다
    */
-  seekToDate?: (epochMs: number) => boolean;
+  seekToDate?: (epochMs: number) => DateSeekResult;
   /** 명시적 LIVE 복귀 (계약3 4절) */
   returnToLive: () => void;
   setQuality: (quality: PlayerQuality) => void;

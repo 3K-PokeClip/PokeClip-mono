@@ -36,6 +36,7 @@ import { useControlsAutoHide } from './useControlsAutoHide';
 import {
   CLIP_MARK_MS,
   PLAYER_QUALITIES,
+  type DateSeekResult,
   type PlayerQuality,
   type PlayerSimulation,
   type PlayerSimulationOptions,
@@ -109,6 +110,9 @@ export type { LivePosition } from './livePosition';
  * @param source 재생할 목록(종류 · 주소 · 시작 시각 · 세대). 세대가 오르면 같은 주소여도 재생기를 새로 세운다(설계 5.4절)
  * @param hooks 재생 세션의 고리(PlaybackHooks). 없으면 지금 동작이다
  */
+/** 카드 초는 정각 초로 내린 값이다: 카드의 실제 시각은 그보다 1초 안쪽 뒤라, 범위 밖 판정에서 그만큼 봐준다(POK-498) */
+const CARD_SECOND_SLACK_MS = 1_000;
+
 export function useHlsPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
   source: PlaybackSource,
@@ -288,20 +292,33 @@ export function useHlsPlayback(
 
   // 실제 시각으로 옮긴다(라이브 카드, POK-326). 그 시각을 품은 조각의 시각 표시로 영상 시각을 셈하고, 시크는 같은 한 길
   // (seekToBehind)을 탄다: 되감기 창 밖은 가장 오래된 지점으로 자른다. 방송 경과 시계로 옮기면 숨은 탭에서 그 시계의 타이머가
-  // 늦춰져 카드보다 몇 분 늦은 자리(심하면 실시간 끝)로 갔다(리뷰 1라운드). 시각 표시가 없으면 false: 부르는 쪽이 경과 시계로 옮긴다
+  // 늦춰져 카드보다 몇 분 늦은 자리(심하면 실시간 끝)로 갔다(리뷰 1라운드). 시각 표시가 없으면 'unknown': 부르는 쪽이 경과 시계로 옮긴다.
+  // 되감을 수 있는 범위(라이브 창 · 준비된 되감기 목록)보다 이르면 옮기지 않고 'outside'다(POK-498): 전에는 창 맨 앞으로 잘라
+  // 옮겨, 라이브 창이 28초뿐인 방송에서 몇 분 전 카드를 누르면 재생바가 오른쪽 끝에 그대로였다
   const seekToDate = useCallback(
-    (epochMs: number): boolean => {
+    (epochMs: number): DateSeekResult => {
       const video = videoRef.current;
-      if (!video) return false;
-      if (sessionActive()) return requestSeek(epochMs);
+      if (!video) return 'unknown';
+      if (sessionActive()) {
+        const axis = readAxis();
+        const ask = hooksRef.current.onSeekRequest;
+        if (axis === null || ask === undefined) return 'unknown';
+        // 되감기가 준비됐으면 그 목록의 첫 시각까지다. 아니면 지금 목록의 첫 조각까지만(시크바 왼쪽 끝과 같은 하한). 창 하한 여유
+        // 안쪽은 세션이 하한으로 옮기고 알린다. 카드 초는 정각 초로 내린 값이라 1초까지는 봐준다(경계의 카드가 실제로는 창 안이다)
+        const lowerMs = Math.min(hooksRef.current.axisLowerMs ?? Infinity, axis.list.firstMs);
+        if (epochMs + CARD_SECOND_SLACK_MS < lowerMs) return 'outside';
+        ask(epochMs, axis.view);
+        return 'moved';
+      }
       const range = dvrRange(video.seekable);
       const target = mediaTimeAt(hlsRef.current?.latestLevelDetails?.fragments ?? [], epochMs);
-      if (!range || target === null) return false;
+      if (!range || target === null) return 'unknown';
+      if (target + CARD_SECOND_SLACK_MS / 1000 < range.start) return 'outside';
       const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
       seekToBehind(live - target);
-      return true;
+      return 'moved';
     },
-    [videoRef, seekToBehind, requestSeek, sessionActive],
+    [videoRef, seekToBehind, readAxis, sessionActive],
   );
 
   const seekToMs = useCallback(

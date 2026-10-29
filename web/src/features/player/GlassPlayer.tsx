@@ -28,6 +28,7 @@ import type { PlaybackSession } from './usePlaybackSession';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 import {
   usePlayerSimulation,
+  type DateSeekResult,
   type PlayerSimulation,
   type PlayerSimulationOptions,
 } from './usePlayerSimulation';
@@ -54,10 +55,11 @@ export interface GlassPlayerController {
    */
   seekToUptime: (uptimeSeconds: number) => boolean;
   /**
-   * 실제 시각(epoch ms)으로 이동: 라이브 실재생만 있다(조각의 시각 표시(PDT)로 셈한다, POK-326). 목록에 시각 표시가 없으면 false라
-   * 부른 쪽이 seekToUptime으로 옮긴다. 방송 경과 시계로 옮기면 숨은 탭에서 그 시계가 밀려 카드보다 늦은 자리로 갔다
+   * 실제 시각(epoch ms)으로 이동: 라이브 실재생만 있다(조각의 시각 표시(PDT)로 셈한다, POK-326). 목록에 시각 표시가 없으면 'unknown'이라
+   * 부른 쪽이 seekToUptime으로 옮긴다. 방송 경과 시계로 옮기면 숨은 탭에서 그 시계가 밀려 카드보다 늦은 자리로 갔다. 되감을 수 있는
+   * 범위보다 이르면 옮기지 않고 'outside'다: 부른 쪽이 갈 수 없다고 알린다(POK-498)
    */
-  seekToTime?: (epochMs: number) => boolean;
+  seekToTime?: (epochMs: number) => DateSeekResult;
   /**
    * 녹화의 지금 자리(서버 기준점 축 ms, 반올림)(POK-392). 녹화가 없거나 그 축이 아니면(기준점을 몰라 녹화 시작에 세웠다) null이다:
    * 수동 마킹이 이 값 하나로 보낼지를 정한다. 초를 ms로 바꿀 때 내리지 않고 반올림한다(8.11초 → 8110, 곱이 8109.999…라 내리면 1ms 앞이다)
@@ -413,9 +415,10 @@ function GlassPlayerBody({
       },
       seekToTime: (epochMs: number) => {
         // seekToUptime과 같은 막이: 되감을 구간이 없으면 옮길 곳이 없다(리뷰 2라운드)
-        if (sim.windowSeconds <= 0 || !sim.seekToDate?.(epochMs)) return false;
-        sim.wake();
-        return true;
+        if (sim.windowSeconds <= 0 || !sim.seekToDate) return 'unknown';
+        const result = sim.seekToDate(epochMs);
+        if (result === 'moved') sim.wake();
+        return result;
       },
       currentPositionMs: () =>
         recorded?.originAxis === true && sim.currentPositionSeconds
