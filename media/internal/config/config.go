@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -44,6 +45,10 @@ type Config struct {
 	// 절대 URL 이다(https — http 는 루프백 IP 리터럴만). S3 와 같은 블록에서만 읽는다 — S3.Bucket 이 비면 읽지 않아
 	// 빈 값이고, 버킷이 있는데 비었으면 기동을 거부한다. 발행 조립이 publish.DefaultOptions 로 넘긴다(커밋 7).
 	RewindPublicBaseURL string
+	// RewindPublishPoolMaxConns 는 되감기 발행자 풀의 연결 상한이다(REWIND_PUBLISH_POOL_MAX_CONNS — kty 결정 C2 · 기본 4). pgx
+	// 기본값(max(4, CPU 수))이면 상자가 커질수록 교체 창의 두 사이드카 합이 media_indexer 역할 상한을 넘는다. S3 와 같은
+	// 블록에서만 읽는다 — 버킷이 비면 발행자 풀이 없어 0 이다.
+	RewindPublishPoolMaxConns int32
 	// RewindWatchEvery 는 되감기 30초 감시(설계 4.1 (a) (c))의 주기다 — 발행 루프가 이 값 ÷ 보류 틱(Indexer.HoldTick)
 	// 마다 감시 작업을 낸다(판단 J85 ⑴). 설계값이라 env 가 없고 값의 집은 여기 하나다(ReconnectWindow 와 같은 규칙).
 	RewindWatchEvery time.Duration
@@ -105,11 +110,16 @@ type Config struct {
 	// 검사했고 열지 않았다 — 읽기는 main 이 한다(MTXAPIPassFile 과 같은 규칙).
 	ResolveURL       string
 	ResolveTokenFile string
+	// Lifecycle 은 계약9 발행기의 설정이다(BROADCAST_TOPIC_ARN · LIFECYCLE_PUBLISH_STREAMS — POK-196 M6-8).
+	Lifecycle LifecycleOptions
 }
 
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
 // 리터럴을 그쪽에 또 적지 않는다 — 값의 집이 둘이면 언젠가 어긋난다.
 // 폴러 자신의 두 값(OBS_POLL·OBS_BOOT_WAIT)은 mtxstate 가 집이라 여기서 다시 적지 않는다.
+// defaultRewindPublishPoolMaxConns 는 되감기 발행자 풀 상한의 기본값이다(kty 결정 C2 — 2 vCPU 상자의 pgx 기본값과 같은 4).
+const defaultRewindPublishPoolMaxConns = 4
+
 const (
 	defaultObsFresh          = 30 * time.Second
 	defaultObsBackfill       = 60 * time.Second
@@ -209,6 +219,7 @@ func Load(env func(string) string) (Config, error) {
 	up := upload.DefaultOptions(nil, watch.Root)
 	s3 := upload.S3Options{Region: withDefault(env, "AWS_REGION", "ap-northeast-2")}
 	var rewindBaseURL string
+	var publishPoolMaxConns int32
 
 	// ★ 버킷 판정이 **제일 앞**이다. 비면 나머지 S3·업로드 설정은 읽지도 검증하지도 않는다.
 	//   그 값들은 전부 꺼진 부품의 것이라 쓰이지 않는데, 여기서 파싱에 실패하면 오타 하나가
@@ -239,6 +250,9 @@ func Load(env func(string) string) (Config, error) {
 		// 버킷이 있으면 되감기 목록도 발행하므로 URI 앞머리가 있어야 한다(계획 B-9 — 비면 기동 거부).
 		// **TrimSpace 를 쓰지 않는다** — 끝의 CR · U+2028 을 조용히 떼면 제어 문자 · 비ASCII 거부가 무력해진다.
 		if rewindBaseURL, err = validateRewindPublicBaseURL(env("REWIND_PUBLIC_BASE_URL")); err != nil {
+			return Config{}, err
+		}
+		if publishPoolMaxConns, err = poolMaxConns(env, "REWIND_PUBLISH_POOL_MAX_CONNS", defaultRewindPublishPoolMaxConns); err != nil {
 			return Config{}, err
 		}
 	}
@@ -370,6 +384,10 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	lifecycle, err := loadLifecycle(env)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		PG:               pg,
@@ -396,11 +414,13 @@ func Load(env func(string) string) (Config, error) {
 		RewindStallSeal:       stallSeal,
 		RewindPlaybackReadMax: playbackReadMax,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
-		RewindPublicBaseURL: rewindBaseURL,
-		Control:             control,
-		Expiry:              expiryOpt,
-		ResolveURL:          resolve.url,
-		ResolveTokenFile:    resolve.tokenFile,
+		RewindPublicBaseURL:       rewindBaseURL,
+		RewindPublishPoolMaxConns: publishPoolMaxConns,
+		Control:                   control,
+		Expiry:                    expiryOpt,
+		ResolveURL:                resolve.url,
+		ResolveTokenFile:          resolve.tokenFile,
+		Lifecycle:                 lifecycle,
 	}, nil
 }
 
@@ -546,6 +566,18 @@ func positiveInt(env func(string) string, key string, fallback int) (int, error)
 		return 0, fmt.Errorf("%s 는 양의 정수여야 한다: %q", key, raw)
 	}
 	return v, nil
+}
+
+// poolMaxConns 는 풀 연결 상한이다 — 양의 정수이고 pgx 의 int32 칸에 들어가야 한다.
+func poolMaxConns(env func(string) string, key string, fallback int32) (int32, error) {
+	v, err := positiveInt(env, key, int(fallback))
+	if err != nil {
+		return 0, err
+	}
+	if v > math.MaxInt32 {
+		return 0, fmt.Errorf("%s 는 %d 이하여야 한다: %d", key, math.MaxInt32, v)
+	}
+	return int32(v), nil
 }
 
 func positiveInt64(env func(string) string, key string, fallback int64) (int64, error) {

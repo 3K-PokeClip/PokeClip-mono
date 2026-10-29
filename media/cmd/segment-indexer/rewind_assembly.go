@@ -101,8 +101,11 @@ func newPublisher(ctx context.Context, cfg config.Config, db *pgxpool.Config, op
 		return nil, nil, endpoint, err
 	}
 	// 발행자 풀은 인덱서 풀과 따로다(판단 J76) — 문장마다 락을 최대 10초 기다리는 동안 연결을 잡으므로 인덱싱 · 4.1 전이와 연결을
-	// 다투지 않게 한다. pgx 기본값(MaxConns · Deadline 처리기 · CancelRequest)은 그대로다 — 되돌림 뒤 잠금 해제가 거기에 기댄다.
-	pool, err := pgxpool.NewWithConfig(ctx, db)
+	// 다투지 않게 한다. 상한은 설정값이다(kty 결정 C2 — 기본 4). pgx 의 나머지 기본값(Deadline 처리기 · CancelRequest)은 그대로다
+	// — 되돌림 뒤 잠금 해제가 거기에 기댄다. 원본 db 는 고치지 않는다.
+	pc := db.Copy()
+	pc.MaxConns = cfg.RewindPublishPoolMaxConns
+	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, nil, endpoint, fmt.Errorf("발행자 DB 연결 풀 생성 실패: %w", err)
 	}

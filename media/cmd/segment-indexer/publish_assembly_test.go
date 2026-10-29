@@ -120,10 +120,11 @@ func assemblyCfg(t *testing.T, endpoint string) config.Config {
 		S3: upload.S3Options{
 			Bucket: assemblyBucket, Region: "ap-northeast-2", Endpoint: endpoint, ForcePathStyle: true,
 		},
-		Upload:              up,
-		RewindPublicBaseURL: "https://media.example.com/base",
-		RewindWatchEvery:    17 * time.Second,
-		ReconnectWindow:     123 * time.Second,
+		Upload:                    up,
+		RewindPublicBaseURL:       "https://media.example.com/base",
+		RewindPublishPoolMaxConns: 4, // config.Load 가 버킷 블록에서 채우는 기본값
+		RewindWatchEvery:          17 * time.Second,
+		ReconnectWindow:           123 * time.Second,
 	}
 }
 

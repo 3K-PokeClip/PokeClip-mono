@@ -39,10 +39,9 @@ const dbStepTimeout = 20 * time.Second
 // 예: 회차 조회 2 · 4D 1 · 만료 1 이 모두 연결을 쥐고 있으면 핫 경로 셋이 나눠 쓸 수 있는 것은 2 다. 정산 걸음 2 와 정산 스캔
 // 1 까지 겹치면 핫 경로 몫은 0 이라 핫 경로도 획득을 기다린다(최악).
 //
-// 발행자 풀은 따로이고 pgx 기본값 그대로다 — 둘의 합이 media_indexer 역할의 CONNECTION LIMIT 20 안이어야 한다
-// (infra/terraform/prod/runtime/sql/10_roles.sql). 상한을 30 으로 올리는 것(kty 결정 C1)은 M6-6b 의 10_roles.sql 몫이고,
-// 발행자 풀을 4 로 고정하고 env 로 조정하게 하는 것(kty 결정 C2)은 M6-8 배선 ④ 몫이다(media/README.md 「사이드카 DB
-// 연결 풀」).
+// 발행자 풀은 따로이고 상한은 설정값이다(REWIND_PUBLISH_POOL_MAX_CONNS — kty 결정 C2 · 기본 4). 둘의 합이 media_indexer
+// 역할의 CONNECTION LIMIT 20 안이어야 한다(infra/terraform/prod/runtime/sql/10_roles.sql). 상한을 30 으로 올리는 것(kty
+// 결정 C1)은 M6-6b 의 10_roles.sql 몫이다(media/README.md 「사이드카 DB 연결 풀」).
 const indexerPoolMaxConns = 6
 
 // openIndexerPool 은 인덱서 풀을 만들고 연결 하나로 Ping 해 db_connected 한 줄을 남긴다(배포 확인의 판정 줄). 풀 설정
