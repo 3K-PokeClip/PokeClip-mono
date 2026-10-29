@@ -209,7 +209,7 @@ func TestFakeStoreGetLimitsBodyByAxis(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newFakeStore(t)
-	plant(f, putCall{key: testKey, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)})
+	plant(f, putCall{key: testKey, body: bytes.Repeat([]byte{'x'}, dvrGetBodyLimit+1)})
 	plant(f, putCall{key: vod, body: bytes.Repeat([]byte{'x'}, rewind.MaxVODBodyBytes+1)})
 	for _, key := range []string{testKey, vod} {
 		if _, _, err := f.Get(context.Background(), key); !errors.Is(err, errBodyOverLimit) {

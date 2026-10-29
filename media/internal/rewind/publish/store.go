@@ -48,7 +48,8 @@ type Store interface {
 	Head(ctx context.Context, key string) (Stat, error)
 
 	// Get 은 key 의 현재 본문과 같은 응답에 실린 그 판의 ETag 를 돌려준다. 객체가 없으면 ErrNotFound 다. 본문이 그
-	// 키 축의 상한(VOD 문서 rewind.MaxVODBodyBytes · 되감기 목록 rewind.MaxBodyBytes)을 넘으면 errBodyOverLimit 다.
+	// 키 축의 상한(VOD 문서 rewind.MaxVODBodyBytes · 되감기 목록 rewind.MaxBodyBytes + rewind.SealLineBytes)을 넘으면
+	// errBodyOverLimit 다.
 	//
 	// 읽은 본문을 보고 그 판을 갈아 끼울 때는 이 ETag 로 IfMatch 한다. 앞서 본 Head 의 ETag 로 걸면 Head 와 Get
 	// 사이에 판이 바뀌었다가 되돌아온 경우(A → B → A) 읽지 않은 판 A 를 덮는다.
@@ -103,6 +104,6 @@ var (
 // 쓰기로 읽히면 남의 판을 덮으므로 보내기 전에 막는다.
 var errEmptyETag = errors.New("publish: IfMatch 의 ETag 가 비었다")
 
-// errBodyOverLimit 는 Get 한 본문이 그 키 축의 상한을 넘는다는 뜻이다 — 발행한 문서는 발행 전 검사 S5 의 종류별 상한을
-// 지나므로 우리가 쓴 판이 아니다. 구현이 이 패키지의 둘뿐이라(Store 설명) 내보내지 않는다.
+// errBodyOverLimit 는 Get 한 본문이 그 키 축의 상한을 넘는다는 뜻이다 — 우리가 쓴 판은 발행 전 검사 S5 의 종류별 상한
+// 안이거나, 그 안의 열린 본문에 봉인 줄 하나를 더한 판이므로(dvrGetBodyLimit) 상한을 넘는 본문은 우리가 쓴 판이 아니다. 구현이 이 패키지의 둘뿐이라(Store 설명) 내보내지 않는다.
 var errBodyOverLimit = errors.New("publish: 본문이 키 축의 상한을 넘는다(우리가 쓴 판이 아니다)")

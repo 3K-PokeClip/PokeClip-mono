@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -162,7 +163,7 @@ func TestAuditFrozenReportsOversizedDocumentAsMismatch(t *testing.T) {
 	})
 	t.Run("DVR", func(t *testing.T) {
 		l, store, logs := auditSetup(t)
-		plant(store, putCall{key: soloKey, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)})
+		plant(store, putCall{key: soloKey, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+rewind.SealLineBytes+1)})
 		puts := len(store.putCalls())
 
 		out := NewFrozenAuditor(l.pub).Audit(t.Context())
@@ -173,7 +174,32 @@ func TestAuditFrozenReportsOversizedDocumentAsMismatch(t *testing.T) {
 		if got := auditFailures(logs); len(got) != 1 || got[0] != auditMismatch {
 			t.Errorf("감사 ERROR %v, want [mismatch]", got)
 		}
+		if e := logs.records(freezeAuditLog)[0].attrs["err"]; !strings.Contains(e, "상한") {
+			t.Errorf("감사 err = %q, want 상한 초과(봉인 줄 여유보다 큰 본문)", e)
+		}
 	})
+}
+
+// 발행 전 검사 S5 상한(512KiB)을 꽉 채운 열린 본문을 봉인한 판은 상한을 봉인 줄(15바이트)만큼 넘지만 우리가 쓴 판이다 —
+// 감사가 2차 본문 대조로 통과시킨다(보안 ML2 L-C 오탐 · kty 2026-10-29). 그보다 한 바이트 큰 본문은 여전히 상한 초과
+// mismatch 다(TestAuditFrozenReportsOversizedDocumentAsMismatch). 변이 = DVR Get 상한에서 봉인 줄을 뺌 → FAIL.
+func TestAuditFrozenPassesSealedDVRAtBodyLimit(t *testing.T) {
+	l, store, logs := auditSetup(t)
+	head := []byte("#EXTM3U\n")
+	open := slices.Concat(head, bytes.Repeat([]byte{'#'}, rewind.MaxBodyBytes-len(head)-1), []byte("\n"))
+	sealed, err := rewind.SealEndlist(open)
+	if err != nil || len(open) != rewind.MaxBodyBytes || len(sealed) <= rewind.MaxBodyBytes {
+		t.Fatalf("봉인 판 %d바이트(열린 본문 %d) · %v, want S5 상한을 꽉 채운 열린 본문의 봉인 판", len(sealed), len(open), err)
+	}
+	plant(store, putCall{key: soloKey, body: sealed})
+	sum := sha256Of(sealed)
+	exec(t, l.pub.pool, `UPDATE stream_sessions SET dvr_sha256 = $1, dvr_etag = '"다른-etag"' WHERE session_id = 'S'`, sum[:])
+
+	out := NewFrozenAuditor(l.pub).Audit(t.Context())
+
+	if out.Checked != 1 || out.Failed != 0 || len(auditFailures(logs)) != 0 {
+		t.Errorf("감사 = %+v · ERROR %v, want 봉인 판 통과", out, auditFailures(logs))
+	}
 }
 
 // plantFrozenDVRs 는 손대지 않은 DVR 동결 문서 n 개(키 사전순 = 만든 순)를 장부와 저장소에 둔다. 키 목록을 돌려준다.
