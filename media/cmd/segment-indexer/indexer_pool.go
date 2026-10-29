@@ -25,6 +25,8 @@ const dbStepTimeout = 20 * time.Second
 //
 //   - 60일 만료(M6-4) — 장부 걸음(MarkExpired · ExpiryRows · ExpiryDocuments · ExpiryCutoffValid · DeleteExpired)을 차례로
 //     돌아 동시 1 이다.
+//   - 계약9 발행기(M6-8) — outbox 문장(대상 읽기 · 기록 · 적체 · 정리)을 하나씩 차례로 돌아 동시 1 이다. resolve · SNS 호출
+//     동안에는 연결을 쥐지 않는다.
 //   - 정산 차선(M6-3b) — 정산 스캔 1, 회차 정산 걸음(finalize.DefaultLimits — 전체 2 · 같은 스트림 1 · VOD 동결 1), 상태
 //     전달 읽기(전체 2 — REWIND_PLAYBACK_READ_MAX · kty 2026-10-29)가 차선 고루틴에서 돈다. 정산 걸음 전체 2 는 kty
 //     2026-10-27 결정 (가)다 — 상한 6 을 두고 걸음 쪽을 줄였다. 같은 스트림 걸음끼리 잠금을 다투면 진 쪽이 연결을 쥔

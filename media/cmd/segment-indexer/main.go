@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/control"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
@@ -87,7 +86,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// 4C resolve 클라이언트(POK-472 — 4D 수신부가 쓴다). 토큰 파일 읽기 실패는 같은 이유로 여기서 기동 실패다.
+	// 4C resolve 클라이언트(POK-472 — 4D 수신부와 계약9 발행기의 streamerId 가 쓴다). 토큰 파일 읽기 실패는 같은 이유로 여기서
+	// 기동 실패다.
 	resolver, err := newResolveClient(cfg)
 	if err != nil {
 		return err
@@ -122,10 +122,15 @@ func run() error {
 	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
 	defer stopIndexerStats()
 
+	// 계약9 발행(M6-8) — 게이트 하나를 결정자(새 회차 started) · 정산 조립(완결 평가 ended) · 4D 칸이 함께 쓴다. 꺼지면
+	// 영값 게이트라 outbox 문장이 0 이다. ★ pool.Close 보다 뒤에 등록해 발행기가 먼저 멈춘다(D47).
+	lifecycle, stopLifecycle := startLifecycle(ctx, cfg, pool, resolver, log)
+	defer stopLifecycle()
+
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
 	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
 	store := index.NewPGStore(pool,
-		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, broadcast.Gate{}, log), playback.SegKey)
+		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log), playback.SegKey)
 
 	// 업로더가 파일을 여는 유일한 손잡이다. 루트를 못 열면 기동 실패다 —
 	// 그 상태로 진행하면 모든 PUT 이 열기 단계에서 실패한다.
@@ -218,7 +223,7 @@ func run() error {
 	// 돈다(체크리스트 474 판단 J69 · J77). 강등도 사망이 아니다: 업로드 · 인덱싱은 그대로 돈다(ADR-063 결정 1).
 	// 종료 문장의 옵션 · 완결 평가 칸은 한 벌이다 — 4.1 전이 · 4D 회차 닫힘 칸 · 정산 걸음이 같은 값을 쓴다(finalize_wire.go).
 	// 차선은 조립 밖에서 채운다 — 발행 꺼짐 · 강등에서도 정산 · 상태 전달 차선이 돈다(M6 3.2).
-	fa := newFinalizeAssembly(cfg, log)
+	fa := newFinalizeAssembly(cfg, lifecycle, log)
 	rewind := &rewindLoop{ix: ix, root: cfg.SegmentRoot, log: log, endLive: fa.endLive(pool), lanes: publish.NewLanes()}
 	// L3(연속 GAP 셋 → ending)는 스위치가 켜졌을 때만 손잡이를 끼운다 — 기본 끔(kty K5 · REWIND_GAP_RUN_END).
 	rewind.endGapRun = fa.gapRunEnd(cfg.RewindGapRunEnd, pool)
@@ -273,7 +278,7 @@ func run() error {
 	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 인덱서 풀로 읽는다(동시 2 — M6 11절). 4D 수신부(POK-472)는
 	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 루프가 비운다(fa.wire).
 	intents := session.NewIntentInbox()
-	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound(), nil)), inbox.Changed, intents.Post, log)
+	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound(), startedEnqueuer(lifecycle))), inbox.Changed, intents.Post, log)
 	if err != nil {
 		return err
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
@@ -142,7 +143,7 @@ func TestRoundWithSplitAndReconnectEnqueuesOneStartedOneEndedD49(t *testing.T) {
 		end_reason=COALESCE(end_reason, 'offline') WHERE stream_id=$1`, s); err != nil {
 		t.Fatalf("phase 4 흉내 실패: %v", err)
 	}
-	fa := finalizeAssembly{close: outboxClose, enqueue: newEndedEnqueuer(gate)}
+	fa := newFinalizeAssembly(config.Config{ReconnectWindow: 300 * time.Second}, gate, slog.New(slog.DiscardHandler))
 	if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fa.closeRound()(ctx, tx, first) }); err != nil {
 		t.Fatalf("회차 닫힘 실패: %v", err)
 	}

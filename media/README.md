@@ -363,7 +363,30 @@ auth 의 4C resolve(`/internal/stream-keys/resolve`)로 키를 풀어 대조한�
 | `STREAM_KEY_RESOLVE_URL` | (빈값 = 4D 끔) | auth 의 주소 `http(s)://host[:port]`. http · https 절대 URL 이어야 하고 호스트가 있어야 한다. 사용자 정보 · 질의 · 조각이 있으면 기동 거부. 경로 `/internal/stream-keys/resolve` 는 코드가 붙인다 — 주소에 경로가 있으면 그 뒤에 이어 붙는다. 3xx 는 따라가지 않고 실패로 본다. 프록시 env(`HTTP_PROXY` 등)를 타지 않고 auth 에 바로 붙는다. `STREAM_KEY_RESOLVE_TOKEN_FILE` 과 짝이다 |
 | `STREAM_KEY_RESOLVE_TOKEN_FILE` | (빈값 = 4D 끔) | resolve 토큰 한 줄이 든 파일의 **컨테이너 안 절대 경로**. 상대 경로는 기동 거부. 토큰은 `X-Stream-Key-Resolve-Token` 머리로 실린다. 파일 규칙은 `MTX_API_PASS_FILE` 과 같다(위 「관측 자격 파일 규칙」 — 일반 파일 · other 비트와 group 쓰기 비트 거부 · 권장 소유 10001 `0400` 또는 `root:10001` `0440` · 4 KiB 이하 · 끝 줄바꿈 하나만 걷음). 앞뒤 공백 · 제어 문자가 남으면 기동 거부. 오류 문구에는 env 이름만 싣고 경로 · 내용은 싣지 않는다. 읽기 실패는 **기동 실패**다(만료 토큰과 다르다). 토큰 값을 env 로 받는 칸은 없다 |
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 58개 —
+**계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
+`broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
+outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만
+2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 운영 권한(`30_grants.sql` 의
+outbox 네 권한)이다. 하나라도 빠지면 `lifecycle_disabled` 한 줄(`reason` =
+`no_topic` · `no_streams` 는 INFO, `privilege` · `privilege_check` ·
+`sns_client` · `assembly` 는 ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도
+넣지 않는다. 켜지면 `lifecycle_started` 가 나온다(`resolve` 칸 = 4C resolve
+배선 여부).
+
+*   **streamerId:** started 의 `streamerId` 는 위 4C resolve 설정으로 얻는다.
+    resolve 설정이 비면 그 회차를 내지 않고 `lifecycle_abandoned
+    reason=resolve_unwired` 로 버린다. 그래서 응답기 모드 뒤에 켠다.
+*   **완전히 끌 때는 진행 중 회차가 없을 때 끈다.** 주제나 허용 목록을 비우면
+    ended 판정 문장도 보내지 않는다. 그러면 started 만 나간 회차의 ended 는
+    영영 적재되지 않는다. 허용 목록을 좁히기만 하면 생기지 않는다.
+*   **기동 때만 읽는다.** 바꾸려면 사이드카를 재기동한다.
+
+| 이름 | 기본값 | 의미 |
+|---|---|---|
+| `BROADCAST_TOPIC_ARN` | (빈값 = 발행 끔) | 계약9 SNS FIFO 주제 ARN `arn:aws:sns:<지역>:<12자리 계정>:<이름>.fifo`. 꼴이 틀리면 기동 거부. SNS 클라이언트는 이 ARN 의 지역으로 붙고 자격증명은 SDK 기본 체인이다. **빈 값이 롤백 스위치다** |
+| `LIFECYCLE_PUBLISH_STREAMS` | (빈값 = 발행 끔) | outbox 에 넣을 stream_id 허용 목록(쉼표로 가름 · 앞뒤 공백 · 빈 항목 버림). `*` 는 전부다. 목록 밖 회차는 outbox 를 만들지 않는다 — 첫 배포는 kty 계정 하나로 드라이런한다 |
+
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 60개 —
 `POSTGRES_*` · DB 몫 `AWS_REGION` 은 `internal/pgconf` 가 janitor 와 같은
 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자, 음수, 파싱 불가한 기간)은
 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
@@ -438,13 +461,13 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 
 | 풀 | 연결 상한 | 쓰는 곳 |
 |---|---|---|
-| 인덱서 풀 | 6 고정(`indexerPoolMaxConns`) | 핫 경로(메인 루프 · 업로드 워커 · 스위퍼) · 회차 조회 · 4D 종료 신호 적용 · 60일 만료 · 정산 차선 · 기동 걸음(스키마 확인 · 상태판 적재) |
+| 인덱서 풀 | 6 고정(`indexerPoolMaxConns`) | 핫 경로(메인 루프 · 업로드 워커 · 스위퍼) · 회차 조회 · 4D 종료 신호 적용 · 60일 만료 · 계약9 발행기 · 정산 차선 · 기동 걸음(스키마 확인 · 상태판 적재) |
 | 발행자 풀 | 4(`REWIND_PUBLISH_POOL_MAX_CONNS` 로 조정 — kty 결정 C2) | 되감기 발행 · 정산 걸음의 DVR · VOD 동결 |
 
 *   **인덱서 풀 6 은 몫별 예약이 아니라 합의 상한이다.** 산식은 핫 경로 3
     (메인 루프 · 업로드 워커 · 스위퍼) · 회차 조회 동시 2 · 4D 1 이다. 산식
-    밖의 소비자도 같은 6 을 나눠 쓴다 — 60일 만료(동시 1)와 정산 차선(정산
-    스캔 1 · 회차 정산 걸음 · 상태 전달 읽기)이다. 기동 걸음(스키마 확인 ·
+    밖의 소비자도 같은 6 을 나눠 쓴다 — 60일 만료(동시 1) · 계약9 발행기(동시
+    1)와 정산 차선(정산 스캔 1 · 회차 정산 걸음 · 상태 전달 읽기)이다. 기동 걸음(스키마 확인 ·
     상태판 적재)은 업로더 · 만료 · 제어면이 뜨기 전에 끝나 겹치지 않는다.
 *   **정산 걸음은 전체 2 · 같은 스트림 1 이다(kty 결정 2026-10-27).** 상한
     6 은 그대로 두고 걸음 쪽을 줄였다. 같은 스트림 걸음끼리 잠금을 다투면 진

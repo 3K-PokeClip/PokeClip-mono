@@ -3,8 +3,8 @@ package main
 // 정산 몫 조립(POK-196 M6-3b 커밋 ③ — 설계 M6 3.2 차선 · 주기 배선 · 10절 함수 칸). 종료 문장의 옵션(회차 닫힘 시한 · 신호)과
 // 완결 평가 칸(계약9 ended outbox)은 run 이 여기서 한 번 만들고, EndLive · 4D 회차 닫힘 칸 · 정산 걸음이 같은 값을 쓴다.
 //
-// 완결 평가 칸은 broadcast.EnqueueEndedIfComplete 를 게이트와 묶은 것이다. 게이트는 M6-8 커밋 ④ 가 설정에서 채운다 — 그 전의
-// 영값 게이트는 꺼짐이라 outbox 문장을 보내지 않는다(D45 — 켜기 전 회차는 발행하지 않는다).
+// 완결 평가 칸은 broadcast.EnqueueEndedIfComplete 를 게이트와 묶은 것이다. 게이트는 기동 조립(startLifecycle)이 설정에서
+// 만든다 — 꺼진 영값 게이트는 outbox 문장을 보내지 않는다(D45 — 켜기 전 회차는 발행하지 않는다).
 
 import (
 	"context"
@@ -34,11 +34,11 @@ type finalizeAssembly struct {
 	enqueue index.EndedEnqueuer
 }
 
-// newFinalizeAssembly 는 설정의 재접속 창과 영값 게이트(꺼짐 — M6-8 이 채운다)로 조립한다.
-func newFinalizeAssembly(cfg config.Config, log *slog.Logger) finalizeAssembly {
+// newFinalizeAssembly 는 설정의 재접속 창과 계약9 발행 게이트(startLifecycle)로 조립한다.
+func newFinalizeAssembly(cfg config.Config, gate broadcast.Gate, log *slog.Logger) finalizeAssembly {
 	return finalizeAssembly{
 		close:   index.CloseOptions{Window: cfg.ReconnectWindow, Slack: closeSlack, Log: log},
-		enqueue: newEndedEnqueuer(broadcast.Gate{}),
+		enqueue: newEndedEnqueuer(gate),
 	}
 }
 

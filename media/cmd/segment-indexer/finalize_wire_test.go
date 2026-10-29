@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
@@ -50,7 +51,7 @@ func TestFinalizeLaneKeysCannotBeStreamIDs(t *testing.T) {
 func TestFinalizeWirePassesPlaybackReadMax(t *testing.T) {
 	r := &rewindLoop{}
 	cfg := config.Config{RewindPlaybackReadMax: 3}
-	newFinalizeAssembly(cfg, slog.Default()).wire(r, cfg, nil, session.NewPlaybackInbox(), session.NewIntentInbox())
+	newFinalizeAssembly(cfg, broadcast.Gate{}, slog.Default()).wire(r, cfg, nil, session.NewPlaybackInbox(), session.NewIntentInbox())
 	if r.fin.readMax != 3 {
 		t.Fatalf("readMax = %d, want 3(설정값)", r.fin.readMax)
 	}
