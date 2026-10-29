@@ -5,8 +5,11 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,6 +111,84 @@ func TestStartLifecycleStartsPublisher(t *testing.T) {
 	started := logLines(t, buf, "lifecycle_started")
 	if !gate.Enabled() || len(started) != 1 || started[0]["topic"] != lifecycleTopic {
 		t.Fatalf("게이트 켬 %v · lifecycle_started %v · 전체 %s", gate.Enabled(), started, buf.String())
+	}
+}
+
+// snsDouble 은 SNS Publish 를 받는 로컬 대역이다 — 받은 Message 를 모으고 FIFO 주제의 성공 응답을 돌려준다.
+type snsDouble struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (d *snsDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil || r.PostForm.Get("Action") != "Publish" {
+		http.Error(w, "unexpected request", http.StatusBadRequest)
+		return
+	}
+	d.mu.Lock()
+	d.messages = append(d.messages, r.PostForm.Get("Message"))
+	d.mu.Unlock()
+	w.Header().Set("Content-Type", "text/xml")
+	_, _ = w.Write([]byte(`<PublishResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/"><PublishResult>` +
+		`<MessageId>m-1</MessageId><SequenceNumber>1</SequenceNumber></PublishResult>` +
+		`<ResponseMetadata><RequestId>r-1</RequestId></ResponseMetadata></PublishResponse>`))
+}
+
+func (d *snsDouble) got() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.messages...)
+}
+
+// 켜짐 조립의 끝까지 — streamerId 가 빈 started 행을 실제 조립이 resolve(로컬 4C 대역)로 채워 SNS(로컬 대역)에 내고 행을
+// published 로 둔다(cx 계약9 c3). 변이 = 조립에서 Resolve 칸 제거 → resolve_unwired 로 버려져 SNS 에 닿지 않아 FAIL.
+func TestStartLifecycleResolvesStreamerThenPublishesToSNS(t *testing.T) {
+	base := newWireTestPool(t)
+	role := pgtest.NewMediaIndexerRole(t, base)
+	assemblyCredentialsEnv(t)
+	if _, err := base.Exec(context.Background(), `
+INSERT INTO broadcast_lifecycle_outbox (event_id, round_id, event_type, sequence, occurred_at, ingest_stream_id)
+VALUES ('S-9.started', 'S-9', $1, 1, $2, $3)`, broadcast.EventStarted, wireBase, wireToken); err != nil {
+		t.Fatalf("outbox 픽스처 실패: %v", err)
+	}
+	var resolves atomic.Int32
+	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resolves.Add(1)
+		_, _ = w.Write([]byte(`{"valid":true,"userId":42,"passphrase":"` + wirePassphrase + `"}`))
+	}))
+	t.Cleanup(auth.Close)
+	sns := &snsDouble{}
+	snsSrv := httptest.NewServer(sns)
+	t.Cleanup(snsSrv.Close)
+	t.Setenv("AWS_ENDPOINT_URL_SNS", snsSrv.URL)
+	resolver, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: auth.URL, Token: keyresolve.NewSecret("lifecycle-test")})
+	if err != nil {
+		t.Fatalf("resolve 클라이언트 조립 실패: %v", err)
+	}
+	log, buf := expiryLog()
+
+	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, resolver, log)
+	defer stop()
+
+	if !gate.Enabled() {
+		t.Fatalf("게이트가 꺼졌다: %s", buf.String())
+	}
+	var state, streamer string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if err := base.QueryRow(context.Background(), `
+SELECT state, COALESCE(streamer_id, '') FROM broadcast_lifecycle_outbox WHERE event_id = 'S-9.started'`).
+			Scan(&state, &streamer); err != nil {
+			t.Fatal(err)
+		}
+		if state != "pending" {
+			break
+		}
+	}
+	msgs := sns.got()
+	if state != "published" || streamer != "42" || resolves.Load() != 1 || len(msgs) != 1 ||
+		!strings.Contains(msgs[0], `"streamerId":"42"`) {
+		t.Fatalf("행 (%q, %q) · resolve %d번 · SNS 편지 %q, want published · 42 · 1번 · streamerId 42 한 통 — 전체 %s",
+			state, streamer, resolves.Load(), msgs, buf.String())
 	}
 }
 
