@@ -10,8 +10,8 @@ import {
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { History, PanelRightClose } from 'lucide-react';
-import { Badge, IconButton, Tag, VisuallyHidden } from '@/ui';
+import { History, MessageSquareX } from 'lucide-react';
+import { Badge, IconButton, Tag, Tooltip, VisuallyHidden } from '@/ui';
 import { platformLabel } from '@/api/clipEditor';
 import { BrandLogoDraw } from '@/components/app-shell/BrandLogoDraw';
 import { BrandSymbol } from '@/components/app-shell/BrandSymbol';
@@ -284,15 +284,19 @@ export const ChatPanel = memo(function ChatPanel({
           {/* 배지 글과 붙어 「지난 채팅채팅을…」으로 읽히지 않게 띄운다 */}
           {statusNote ? <VisuallyHidden>{` ${statusNote}`}</VisuallyHidden> : null}
         </span>
-        <IconButton
-          variant="ghost"
-          size="sm"
-          aria-label="채팅 패널 접기"
-          className={styles.chatCollapse}
-          onClick={onCollapse}
-        >
-          <PanelRightClose size={14} aria-hidden />
-        </IconButton>
+        {/* 말풍선 X — 「채팅을 숨긴다」가 아이콘 하나로 읽히고, 접은 뒤 플레이어에 남는 여는 버튼(말풍선)과 짝이다(2026-10-29
+            시안 D). 옛 패널+화살표 아이콘은 눌러 봐야 알았다. 이름은 올리면 뜨고 화면 낭독도 같은 이름이다 */}
+        <Tooltip content="채팅 숨기기">
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="채팅 숨기기"
+            className={styles.chatCollapse}
+            onClick={onCollapse}
+          >
+            <MessageSquareX size={16} aria-hidden />
+          </IconButton>
+        </Tooltip>
       </div>
       {/* 보일 줄이 없을 때(안내가 섰을 때 · 방송 전)는 급증 줄도 걷는다: 빈 「급증」만 남아 안내 위에 떠 있었다(시안 D).
           흐르는 동안에는 키워드가 없어도 둔다 — 줄이 오가며 목록 높이가 흔들리지 않는다 */}

@@ -2,8 +2,8 @@
 
 import { memo, useState } from 'react';
 import Link from 'next/link';
-import { Lock, MessageSquare, PanelRightClose } from 'lucide-react';
-import { Badge, IconButton, LinkButton, VisuallyHidden } from '@/ui';
+import { Lock, MessageSquare, MessageSquareX } from 'lucide-react';
+import { Badge, IconButton, LinkButton, Tooltip, VisuallyHidden } from '@/ui';
 import { LINK_LOCK_WORD, type LinkLock } from './linkLock';
 import liveStyles from './LiveScreen.module.css';
 import statsStyles from './LiveStatsPanel.module.css';
@@ -148,15 +148,18 @@ export const LockedChatPanel = memo(function LockedChatPanel({
         <Badge tone={reason === 'broken' ? 'warning' : 'neutral'} variant="soft" size="sm">
           {LINK_LOCK_WORD[reason]}
         </Badge>
-        <IconButton
-          variant="ghost"
-          size="sm"
-          aria-label="채팅 패널 접기"
-          className={liveStyles.chatCollapse}
-          onClick={onCollapse}
-        >
-          <PanelRightClose size={14} aria-hidden />
-        </IconButton>
+        {/* 접기 버튼은 채팅 창(ChatPanel)과 같은 말풍선 X다 */}
+        <Tooltip content="채팅 숨기기">
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="채팅 숨기기"
+            className={liveStyles.chatCollapse}
+            onClick={onCollapse}
+          >
+            <MessageSquareX size={16} aria-hidden />
+          </IconButton>
+        </Tooltip>
       </div>
       <div className={styles.chatBody}>
         <ul className={styles.chatPreview} aria-hidden>

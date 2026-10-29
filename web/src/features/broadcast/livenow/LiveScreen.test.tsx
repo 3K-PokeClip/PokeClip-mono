@@ -2925,7 +2925,7 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     // 열려 있는 동안엔 여는 버튼이 자리를 차지하지 않는다
     expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).not.toBeInTheDocument();
 
     // 패널이 사라져도 복귀 통로는 플레이어 안에 남는다
@@ -3443,7 +3443,7 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     server.chzzkLink = { linked: false };
     await renderLive();
 
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     await settle();
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
   });
@@ -4150,7 +4150,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     // 접었다 펴면 열쇠가 같은 글자라 치운 로더의 옛 줄(그 사이 옮기기 전 시점)을 한 번 그렸다(리뷰 1라운드)
     const { container } = await openWithRecording();
     await playTo(container, 600);
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
     await settle();
     chatTexts.length = 0;
@@ -4247,7 +4247,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     await settle();
     expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     fireEvent.click(screen.getByRole('button', { name: '채팅 열기' }));
     await settle();
     expect(screen.getByText('2835초 채팅')).toBeInTheDocument();

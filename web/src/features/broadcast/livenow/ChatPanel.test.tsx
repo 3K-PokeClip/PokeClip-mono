@@ -253,6 +253,13 @@ describe('ChatPanel — 머리 상태(2026-10-29 시안 B)', () => {
     expect(screen.getByText('방송이 시작되면 채팅이 보여요')).toBeInTheDocument();
   });
 
+  it('접기 버튼은 이름이 「채팅 숨기기」이고 누르면 창을 접는다(시안 D 말풍선 X)', () => {
+    const onCollapse = vi.fn();
+    render(<ChatPanel {...PROPS} onCollapse={onCollapse} />);
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+  });
+
   it('바닥에 「키워드 설정」 자리를 두지 않는다(키워드 기능이 없다)', () => {
     renderPanel();
     expect(screen.queryByRole('button', { name: '키워드 설정' })).toBeNull();
