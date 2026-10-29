@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureMediaAccess, reportPlaybackForbidden } from '@/api/playbackAccess';
 import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
+import { windowBlobs } from './editorMedia';
 import {
   boundaryAction,
   effectiveBounds,
@@ -24,20 +25,21 @@ import {
 // 🔴 창은 녹화 구간 하나 안에 둔다(POK-253). 재생 서버는 틈 안에서 시작하는 요청에 404, 틈을 건너는 요청은 틈 앞에서
 // 끊는다(실측). 재접속 직후 카드는 앞 여유 10초가 틈에 걸려 미리보기가 통째로 실패했다. 구간이 틈을 건너면 틈 앞까지만 보인다.
 
-const PAD_SECONDS = 10;
+/** 구간 앞뒤로 더 받는 여유. 카드의 미리 받기(POK-499)는 녹화가 구간 끝 + 이 여유까지 올라와야 창이 굳는다고 본다 */
+export const PAD_SECONDS = 10;
 const REWINDOW_DELAY_MS = 500;
 
 /** 출입증을 새로 받고도 녹화가 403이다 */
 class PlaybackForbiddenError extends Error {}
 
-interface Window {
+export interface Window {
   startSeconds: number;
   endSeconds: number;
   /** 구간에 녹화가 하나도 없다(틈 안이거나 녹화 끝 뒤) — 받지 않고 미리보기 실패로 알린다 */
   empty?: true;
 }
 
-function windowFor(
+export function windowFor(
   range: { startSeconds: number; endSeconds: number },
   totalSeconds: number,
   pieces: RecordingPiece[] | undefined,
@@ -59,6 +61,31 @@ function windowFor(
     startSeconds: Math.max(wide.startSeconds, containing.fromSeconds),
     endSeconds: Math.min(wide.endSeconds, containing.toSeconds),
   };
+}
+
+/**
+ * 녹화 재생 서버에서 창 하나를 mp4 한 덩어리로 받는다. 편집기와 카드의 미리 받기(POK-499)가 함께 쓴다.
+ * 출입증을 새로 받고도 403이면 PlaybackForbiddenError다
+ */
+export async function fetchRecordingWindow(
+  streamId: string,
+  url: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  // 출입증이 곧 만료되면 새로 받은 뒤 부른다(POK-317). 받아 둔 것이 쓸 만하면 기다리지 않는다
+  const load = () => fetch(url, { signal, credentials: mediaCredentials() });
+  const access = ensureMediaAccess(streamId);
+  let res = await (access === null ? load() : access.then(load));
+  // 403이면 쿠키가 지워졌다(다른 탭 · 쿠키 한도 · 사용자가 지움): 출입증을 버리고 다시 받아 한 번 더 부른다(PR #332 codex)
+  if (res.status === 403) {
+    reportPlaybackForbidden(streamId);
+    await ensureMediaAccess(streamId);
+    res = await load();
+  }
+  // 출입증을 새로 받고도 403이면 다시 받을 길이 없다: 화면이 「출입증 거절」로 알린다
+  if (res.status === 403) throw new PlaybackForbiddenError();
+  if (!res.ok) throw new Error(String(res.status));
+  return new Blob([await res.blob()], { type: 'video/mp4' });
 }
 
 export interface EditorVideoPlayback {
@@ -133,27 +160,18 @@ export function useEditorVideoPlayback(options: {
       return undefined;
     }
     const target = win;
-    const abort = new AbortController();
     setFailure(null);
-    // 출입증이 곧 만료되면 새로 받은 뒤 부른다(POK-317). 받아 둔 것이 쓸 만하면 기다리지 않는다
-    const load = () => fetch(remoteUrl, { signal: abort.signal, credentials: mediaCredentials() });
-    const access = ensureMediaAccess(streamId);
-    (access === null ? load() : access.then(load))
-      .then(async (res) => {
-        // 403이면 쿠키가 지워졌다(다른 탭 · 쿠키 한도 · 사용자가 지움): 출입증을 버리고 다시 받아 한 번 더 부른다(PR #332 codex)
-        if (res.status !== 403) return res;
-        reportPlaybackForbidden(streamId);
-        await ensureMediaAccess(streamId);
-        return load();
-      })
-      .then((res) => {
-        // 출입증을 새로 받고도 403이면 다시 받을 길이 없다: 화면이 「출입증 거절」로 알린다
-        if (res.status === 403) throw new PlaybackForbiddenError();
-        if (!res.ok) throw new Error(String(res.status));
-        return res.blob();
-      })
+    // 카드가 미리 받아 둔 창이면 다시 받지 않는다(POK-499)
+    const prefetched = windowBlobs.get(remoteUrl);
+    if (prefetched !== undefined) {
+      setSrc(URL.createObjectURL(prefetched));
+      setSrcWindow(target);
+      return undefined;
+    }
+    const abort = new AbortController();
+    fetchRecordingWindow(streamId, remoteUrl, abort.signal)
       .then((blob) => {
-        setSrc(URL.createObjectURL(new Blob([blob], { type: 'video/mp4' })));
+        setSrc(URL.createObjectURL(blob));
         setSrcWindow(target);
       })
       .catch((e: unknown) => {

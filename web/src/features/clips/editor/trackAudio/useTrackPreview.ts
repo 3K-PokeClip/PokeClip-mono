@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestSegmentAudioAccess } from '@/api/clipEditor';
-import { loadTrackAudio, SegmentUrlExpiredError } from './loadTrackAudio';
+import { segmentTrackKey, segmentTracks } from '../editorMedia';
+import { loadTrackAudio, SegmentUrlExpiredError, type TrackPiece } from './loadTrackAudio';
 import { measureLevels, type TrackLevels } from './trackLevels';
 import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAudioPlayer';
 
@@ -31,7 +32,8 @@ type DecodingContext = AudioContextLike & Pick<AudioContext, 'decodeAudioData' |
  * 풀어 둔 소리를 24kHz로 둔다: 구간 3분 20초 × 트랙 여섯이면 48kHz는 수백 MB다. 미리 듣기에는 24kHz(12kHz까지의 소리)로 충분하다.
  * 브라우저에 소리 문맥이 없으면(시험 환경 등) 던지고, 훅은 그것을 「못 부름」으로 받는다.
  */
-const defaultContext = (): DecodingContext => new AudioContext({ sampleRate: 24_000 });
+export const PREVIEW_SAMPLE_RATE = 24_000;
+const defaultContext = (): DecodingContext => new AudioContext({ sampleRate: PREVIEW_SAMPLE_RATE });
 
 /**
  * 받기가 이만큼 아무 진척 없이 멈추면 「못 부름」이다. 불러오는 동안 영상 소리를 꺼 둘 수 있어(음량을 바꿔 둔 편집본),
@@ -46,6 +48,70 @@ export const TRACK_LOAD_TIMEOUT_MS = 60_000;
  */
 export function sameAsVideo(gains: readonly number[]): boolean {
   return gains.every((gain, i) => gain === (i === 0 ? 1 : 0));
+}
+
+/**
+ * 받을 창(절대 ms)의 녹화 조각을 받아 소리 트랙마다 푼다. 편집기의 미리 듣기와 카드의 미리 받기(POK-499)가 함께 쓴다.
+ * 받기가 TRACK_LOAD_TIMEOUT_MS 동안 아무 진척이 없거나 signal이 멈추면 던진다. 하나가 실패하면 받는 중인 나머지도 멈춘다
+ */
+export function loadSegmentTracks(options: {
+  /** clip 방송 번호(편집본과 같은 번호) */
+  streamId: string;
+  /** 편집기 시간축 0초의 절대 ms */
+  baseMs: number;
+  fromMs: number;
+  toMs: number;
+  decode: (adts: Uint8Array) => Promise<AudioBuffer>;
+  signal?: AbortSignal;
+}): Promise<TrackPiece[][]> {
+  const { streamId, baseMs, fromMs, toMs, decode, signal } = options;
+  const abort = new AbortController();
+  const stopOuter = () => abort.abort();
+  signal?.addEventListener('abort', stopOuter);
+  let settled = false;
+  let timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
+  /** 받기가 한 걸음 나아갔다(주소 · 조각 하나): 멈춤 시한을 처음부터 다시 잰다 */
+  const progressed = () => {
+    if (settled) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
+  };
+  const stopped = new Promise<never>((_, reject) => {
+    abort.signal.addEventListener('abort', () => reject(new Error('track audio load stopped')));
+  });
+  return Promise.race([
+    loadTrackAudio(
+      {
+        fetchAccess: async () => {
+          const access = await requestSegmentAudioAccess(streamId, fromMs, toMs);
+          progressed();
+          return access;
+        },
+        fetchBytes: async (url) => {
+          const res = await fetch(url, { signal: abort.signal });
+          // 서명 주소 만료(S3는 403): 주소를 새로 받아 다시 받는다(loadTrackAudio)
+          if (res.status === 403) throw new SegmentUrlExpiredError();
+          if (!res.ok) throw new Error(`segment ${res.status}`);
+          const bytes = await res.arrayBuffer();
+          progressed();
+          return bytes;
+        },
+        decode,
+      },
+      baseMs,
+    ),
+    stopped,
+  ])
+    .catch((error: unknown) => {
+      // 받는 중인 다른 조각도 멈춘다: 하나가 실패하면 결과를 버린다(PR #341 claude)
+      abort.abort();
+      throw error;
+    })
+    .finally(() => {
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stopOuter);
+    });
 }
 
 export function useTrackPreview(options: {
@@ -104,45 +170,24 @@ export function useTrackPreview(options: {
     let cancelled = false;
     // 창이 바뀌거나 화면이 떠나면 앞 창의 받기를 멈춘다: 안 멈추면 버릴 조각 수십 개를 끝까지 받는다(로컬 리뷰 2라운드)
     const abort = new AbortController();
-    let settled = false;
-    let timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
-    /** 받기가 한 걸음 나아갔다(주소 · 조각 하나): 멈춤 시한을 처음부터 다시 잰다 */
-    const progressed = () => {
-      if (settled) return;
-      clearTimeout(timer);
-      timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
-    };
-    const stopped = new Promise<never>((_, reject) => {
-      abort.signal.addEventListener('abort', () => reject(new Error('track audio load stopped')));
-    });
     // 앞 창의 재생기·파형은 새 것이 준비될 때까지 둔다. 조각 받기는 영상까지 든 파일이라 수십 초가 걸리는데(3분 구간 ≈ 150MB),
     // 그동안 앞 창과 겹치는 자리는 그대로 들린다. 재생기는 편집기 초로 소리를 들고 있어 새 창 영상을 따라가도 제자리다(PR #341 claude)
     setStatus('loading');
     const fromMs = baseMs + Math.round(startSeconds * 1000);
     const toMs = baseMs + Math.round(endSeconds * 1000);
-    Promise.race([
-      loadTrackAudio(
-        {
-          fetchAccess: async () => {
-            const access = await requestSegmentAudioAccess(streamId, fromMs, toMs);
-            progressed();
-            return access;
-          },
-          fetchBytes: async (url) => {
-            const res = await fetch(url, { signal: abort.signal });
-            // 서명 주소 만료(S3는 403): 주소를 새로 받아 다시 받는다(loadTrackAudio)
-            if (res.status === 403) throw new SegmentUrlExpiredError();
-            if (!res.ok) throw new Error(`segment ${res.status}`);
-            const bytes = await res.arrayBuffer();
-            progressed();
-            return bytes;
-          },
+    // 카드가 미리 받아 풀어 둔 창이면 다시 받지 않는다(POK-499)
+    const prefetched = segmentTracks.get(segmentTrackKey(streamId, fromMs, toMs));
+    (prefetched !== undefined
+      ? Promise.resolve(prefetched)
+      : loadSegmentTracks({
+          streamId,
+          baseMs,
+          fromMs,
+          toMs,
           decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
-        },
-        baseMs,
-      ),
-      stopped,
-    ])
+          signal: abort.signal,
+        })
+    )
       .then((tracks) => {
         if (cancelled) return;
         // 파형은 트랙이 하나뿐이어도 그린다(소리 크기는 보여 줄 수 있다)
@@ -165,22 +210,14 @@ export function useTrackPreview(options: {
         setStatus('ready');
       })
       .catch(() => {
-        // 받는 중인 다른 조각도 멈춘다: 하나가 실패하면 결과를 버린다(PR #341 claude)
-        abort.abort();
         if (cancelled) return;
         setPlayer(null);
         setLevels(null);
         setStatus('unavailable');
-      })
-      .finally(() => {
-        settled = true;
-        clearTimeout(timer);
       });
     return () => {
       cancelled = true;
-      settled = true;
       abort.abort();
-      clearTimeout(timer);
     };
   }, [streamId, baseMs, startSeconds, endSeconds]);
 
