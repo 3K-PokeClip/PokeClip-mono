@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/finalize"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
 // gapRunCalls 는 L3 종료 문장의 가짜다 — 부른 (스트림, 회차)를 적고 errs 를 앞에서부터 하나씩 돌려준다.
@@ -143,6 +145,31 @@ func TestGapRunEndFailureRetriesAfterBackoffL3(t *testing.T) {
 	f.settle(loopBase.Add(30 * time.Second))
 	if len(g.calls) != 2 {
 		t.Fatalf("30초 뒤 시도 = %v, want 두 번째", g.calls)
+	}
+}
+
+// 종료가 실패해 셈이 남은 동안 그 회차에 실제 ③ 이 GAP 뒤 seq 로 오면 업로드가 회복한 것이다 — 셈을 비워 30초 뒤 재시도가
+// 회복한 회차를 끝내지 않는다(설계 「③ 이 오면 0」 · cx ④ M1). GAP 앞 seq 의 늦은 ③ 은 셈을 비우지 않는다. 변이 = ③ 반영의
+// 셈 비우기 삭제 → FAIL.
+func TestGapRunResetsWhenPlaybackUploadArrivesAfterFailedEndL3(t *testing.T) {
+	f, g := newGapRunLoop(t)
+	g.errs = []error{errors.New("lock_timeout")}
+	for k := int64(10); k < 13; k++ {
+		stoodGap(f.rewind, "demo", "S1", k)
+	}
+	f.hold(loopBase)
+	f.settle(loopBase)
+	f.rewind.reflectDirty([]upload.DirtyEvent{{StreamID: "demo", Axis: index.AxisPlayback, Seq: 9, SessionID: "S1"}})
+	if f.rewind.stream("demo").gapRun.n != gapRunLength {
+		t.Fatalf("GAP 앞 seq 9 의 ③ 뒤 셈 = %+v, want 그대로 %d", f.rewind.stream("demo").gapRun, gapRunLength)
+	}
+	f.rewind.reflectDirty([]upload.DirtyEvent{{StreamID: "demo", Axis: index.AxisPlayback, Seq: 13, SessionID: "S1"}})
+
+	f.hold(loopBase.Add(30 * time.Second))
+	f.settle(loopBase.Add(30 * time.Second))
+
+	if len(g.calls) != 1 {
+		t.Fatalf("③ 회복 뒤 재시도 = %v, want 첫 시도 한 번뿐", g.calls)
 	}
 }
 

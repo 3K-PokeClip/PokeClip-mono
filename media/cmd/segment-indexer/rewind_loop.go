@@ -350,7 +350,7 @@ func (r *rewindLoop) ack(events []upload.DirtyEvent) {
 // reflectDirty 는 Dirty 원소를 캐시에 반영하고 원소가 닿은 스트림을 돌려준다(체크리스트 474 A-4 2 · 계획 4.5 A2 결정 8 · 판단
 // J80 ⑴). 적재 중인 스트림이면 push 는 캐시 로그에 적히고 그것을 반영으로 본다(A3 결정 2).
 //
-//	③ 업로드     ApplyPlaybackUploaded
+//	③ 업로드     ApplyPlaybackUploaded · 그 회차 L3 셈 비우기(GAP 뒤 seq 면 — gap_run.go)
 //	init 업로드  ApplyInitUploaded(해제 칸 그대로) — 해제 참이면 WARN session_inherit_declined(confirmed — CAS 가 실제로 푼
 //	             확정 · 회차마다 많아야 한 번 · 판단 J83)
 //	분리         ApplySessionEnding · 업로더의 그 회차 메모리를 지운다(판단 J86)
@@ -368,6 +368,9 @@ func (r *rewindLoop) reflectDirty(events []upload.DirtyEvent) map[string]bool {
 			}
 		case e.Axis == index.AxisPlayback:
 			r.cache.ApplyPlaybackUploaded(e.StreamID, e.Seq)
+			if rec := r.streams[e.StreamID]; rec != nil {
+				rec.gapRun = rec.gapRun.uploaded(e.SessionID, e.Seq)
+			}
 		}
 		touched[e.StreamID] = true
 	}

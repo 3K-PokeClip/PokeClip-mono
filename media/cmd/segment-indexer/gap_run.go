@@ -5,7 +5,8 @@ package main
 // 종료 손잡이(rewindLoop.endGapRun)를 끼우지 않아 셈만 하고 끝내지 않는다.
 //
 //	셈    GAP 틱 결과가 GAP 이 섰다고 하면(settleGap) 그 회차 · seq 로 센다. 같은 회차에서 seq 가 바로 앞 GAP 의 다음이면
-//	      하나 늘고, 아니면 1 로 돌아간다 — 사이에 실제 ③ 이 와서 머리가 나아가면 다음 GAP 은 seq 를 건너뛴다
+//	      하나 늘고, 아니면 1 로 돌아간다 — 사이에 실제 ③ 이 와서 머리가 나아가면 다음 GAP 은 seq 를 건너뛴다. 센 GAP 뒤
+//	      seq 의 ③ 이 반영되면(reflectDirty) 셈을 비운다 — 종료 실패 뒤 재시도 대기 중에도
 //	발동  셋이 되면 다음 holdTick 의 4.1 전이 바로 뒤에서 EndLive 처럼 동기로 index.EndGapRun 을 부른다 — 그 회차가 아직
 //	      live 일 때만 끝낸다(회차 술어). 끝낸 뒤 · 실패 처치는 오프라인 전이 · L2′ 와 같다(live_end.go). 재접속 창 안의 다음
 //	      조각은 새 회차를 열어 계승 · 합류한다(registry inheritable — gap_run 은 막지 않는다)
@@ -34,6 +35,16 @@ func (g gapRun) after(session string, seq int64) gapRun {
 		return gapRun{session: session, last: seq, n: g.n + 1}
 	}
 	return gapRun{session: session, last: seq, n: 1}
+}
+
+// uploaded 는 회차 session 의 seq 에 실제 ③ 이 확정된 뒤의 셈이다 — 센 GAP 뒤 seq 면 업로드가 회복한 것이라 비운다(설계 「③
+// 이 오면 0」). 종료가 실패해 셈이 남은 동안에도 비워, 재시도가 회복한 회차를 끝내지 않게 한다(cx ④ M1). GAP 앞 seq 의 늦은
+// ③ 이나 다른 회차의 ③ 은 셈을 두고 간다.
+func (g gapRun) uploaded(session string, seq int64) gapRun {
+	if g.n > 0 && g.session == session && seq > g.last {
+		return gapRun{}
+	}
+	return g
 }
 
 // endGapRuns 는 holdTick 의 L3 걸음이다 — 셈이 문턱에 닿은 스트림마다 그 회차를 끝낸다. 손잡이가 없으면(스위치 끔) · 루프가
