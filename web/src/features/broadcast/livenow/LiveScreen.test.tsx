@@ -2900,12 +2900,12 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(screen.getByText('승급 기원!! 가즈아')).toBeInTheDocument();
   });
 
-  it('수집 상태를 채팅 헤더의 라이브 리전이 말한다', async () => {
+  it('수집 상태를 채팅 헤더의 라이브 리전이 말한다: 평소엔 비어 있고 제목이 상태를 말한다(시안 B)', async () => {
     await renderLive();
 
-    // 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바뀌어야 알림이 닿는다
+    // 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바뀌어야 알림이 닿는다. 잘 들어오는 동안엔 배지가 없다
     const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
-    expect(within(panel).getByRole('status')).toHaveTextContent('수집 중');
+    expect(within(panel).getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('접으면 패널이 사라지고, 플레이어 상단의 여는 버튼으로 되살아난다', async () => {
@@ -2955,9 +2955,9 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     }
   });
 
-  it('키워드 설정은 라우트가 설 때까지 잠겨 있다', async () => {
+  it('채팅 창에 「키워드 설정」 자리를 두지 않는다(키워드 기능이 없다 — 사용자 결정)', async () => {
     await renderLive();
-    expect(screen.getByRole('button', { name: '키워드 설정' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '키워드 설정' })).toBeNull();
   });
 });
 
@@ -3401,7 +3401,7 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
   });
@@ -3922,7 +3922,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     server.vodChat = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -3965,7 +3965,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     });
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     expect(within(list).getByText('채팅을 불러오고 있어요')).toBeInTheDocument();
     // 듣는 사람에게도 알린다: 목록 안의 줄은 목록을 훑기 전에는 모른다
@@ -3984,7 +3984,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     server.vodChatFail = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     expect(
       within(within(panel).getByRole('list', { name: '채팅 메시지' })).getByText(
         /^채팅을 불러오지 못했어요/,
@@ -4008,7 +4008,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
       { startMs: VOD_STARTED + 160_000, durationSeconds: 8_840 },
     ]);
     await playTo(container, 95);
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     list.focus();
     // 위로 올려 옛 줄을 읽는다
@@ -4038,7 +4038,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     // 카드를 누르면 그 시점을 따라간다. 다시 세우지 않아 목록 포커스도 남는다
     fireEvent.click(screen.getByRole('button', { name: '0:01:00 시점으로 이동' }));
     await settle();
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBe(panel);
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBe(panel);
     expect(within(panel).getByText(/^0:01:00 시점까지 보는 중/)).toBeInTheDocument();
     expect(setScrollTop).toHaveBeenCalledWith(1000);
     expect(document.activeElement).toBe(list);
@@ -4048,7 +4048,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     // 카드는 화면이 따로 알려 이 길이 끊겨도 카드 시험은 초록이었다(리뷰 2라운드)
     const { container } = await openWithRecording();
     await playTo(container, 600);
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -4167,9 +4167,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(chatFroms()).toEqual([]);
     // 바닥은 시점을 아직 모른다고 한다: 목록은 「불러오고 있어요」인데 바닥만 끝까지 본 것처럼 말했다(리뷰 2라운드)
     expect(screen.queryByText(/마지막 메시지까지 보는 중/)).toBeNull();
-    expect(screen.getByRole('button', { name: '키워드 설정' }).parentElement).toHaveTextContent(
-      /^시점을 확인하는 중/,
-    );
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
 
     await act(async () => {
       answer([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
@@ -4373,7 +4371,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     for (let i = 0; i < 3; i += 1) await settle();
     // 앞을 더 읽는 동안은 빈 창을 다 읽은 것처럼 두지 않는다: 목록 맨 위에 이른 쪽을 읽는 중이라고 쓴다
     expect(server.vodChatHeld.length).toBeGreaterThan(0);
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const items = within(within(panel).getByRole('list', { name: '채팅 메시지' })).getAllByRole(
       'listitem',
     );
@@ -4435,7 +4433,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     });
     fireEvent.keyDown(container.querySelector('[data-controls]')!, { key: 'ArrowLeft' });
     await settle();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const items = within(within(panel).getByRole('list', { name: '채팅 메시지' })).getAllByRole(
       'listitem',
     );
@@ -4462,7 +4460,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -4720,7 +4718,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     // 채팅은 영상 시각을 따르지 않아 카드를 눌러도 그대로다: 위로 올려 읽던 자리도 그대로 둔다(리뷰 2라운드)
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -4906,7 +4904,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
     expect(screen.queryByText(/자동 감지 중/)).toBeNull();
   });
@@ -4947,13 +4945,13 @@ describe('LiveScreen — 지난 방송 상세', () => {
       expect(from).toBeGreaterThanOrEqual(VOD_ENDED - 12 * 3_600_000 - 60_000);
   });
 
-  it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
+  it('지난 방송은 라이브 문구를 쓰지 않는다: 지난 채팅·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
     graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
 
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
     expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: '실시간 통계' })).toBeNull();

@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { MessageSquare, PanelRightClose } from 'lucide-react';
+import { History, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag, VisuallyHidden } from '@/ui';
 import { platformLabel } from '@/api/clipEditor';
 import { ChzzkMark, SoopMark } from '@/features/settings/channels/ChannelMarks';
@@ -24,8 +24,10 @@ import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
 // 접으면 패널이 사라지고 플레이어 상단의 「채팅 열기」가 되살린다(시안의 세로 레일은 사용자
 // 결정으로 쓰지 않는다).
 //
-// 수집 상태는 이 헤더의 배지가 말한다(옛 본문 경고 배너에서 옮겨 왔다) — 티켓이 정한 자리이고,
-// 채팅이 흐르는 곳 바로 위라 "지금 안 들어오고 있다"가 눈에 들어온다.
+// 머리는 평소에 제목이 상태를 말한다(2026-10-29 시안 B): 라이브는 맥동하는 초록 점 + 「실시간 채팅」, 지난 방송은 시계 +
+// 「지난 채팅」. 배지는 끊김 · 방송 전 · 확인 중처럼 평소와 다를 때만 선다 — 「채팅 기록」 옆 「지난 채팅」처럼 같은 말을 두 번
+// 하지 않고, 배지가 서면 그것이 곧 알릴 일이다. 끊김 배지는 채팅이 흐르는 곳 바로 위라 "지금 안 들어오고 있다"가 눈에 들어온다.
+// 바닥의 「키워드 설정」 자리는 뺐다(사용자 결정 — 키워드 기능이 없다).
 // ADR-048에 따라 「다시 하면 복구」 같은 문구는 두지 않는다 — 실연동 뒤 거짓이 된다.
 
 /** 바닥에서 이만큼 안이면 「끝에 있다」로 본다 — 서브픽셀 스크롤·줌 잔차 흡수 */
@@ -186,40 +188,50 @@ export const ChatPanel = memo(function ChatPanel({
         ? '시점을 확인하는 중'
         : '마지막 메시지까지 보는 중'
       : '최신 메시지 따라가는 중';
-  // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11)
-  const heading = mode === 'ended' ? '채팅 기록' : '실시간 채팅';
+  // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11). 이름은 배지 자리에 있던 「지난 채팅」을 제목으로 올렸다
+  const heading = mode === 'ended' ? '지난 채팅' : '실시간 채팅';
+  // 모드를 안 주면 수집 중(라이브)이다
+  const isLive = mode === undefined || mode === 'live';
 
   return (
     // 시청자 채팅·후원은 제3자 개인정보라 세션 녹화에서 통째로 뺀다 (POK-358)
     <aside className={`${styles.chatPanel} ${REPLAY_BLOCK_CLASS}`} aria-label={heading}>
       <div className={styles.chatHeader}>
-        <MessageSquare size={15} aria-hidden className={styles.chatHeaderIcon} />
+        {mode === 'ended' ? (
+          <History size={15} aria-hidden className={styles.chatHeaderIcon} />
+        ) : (
+          // 라이브면 맥동하는 초록, 끊기면 앰버, 방송 전 · 확인 중이면 회색으로 멎는다
+          <span
+            aria-hidden
+            className={clsx(
+              styles.chatDot,
+              collectionWarning
+                ? styles.chatDotWarning
+                : isLive
+                  ? styles.chatDotLive
+                  : styles.chatDotIdle,
+            )}
+          />
+        )}
         <span className={styles.chatHeading}>{heading}</span>
         {/* 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바꾼다 —
-            지운 경고 배너가 갖고 있던 role="status"를 여기가 승계한다. 없으면 수집이
-            끊기는 순간을 눈으로 보는 사람만 알고, 듣는 사람은 헤더로 돌아와야 안다. */}
+            지운 경고 배너가 갖고 있던 role="status"를 여기가 승계한다. 평소엔 비어 있다가 끊기는
+            순간 「끊김」이 들어와 읽힌다. 없으면 그 순간을 눈으로 보는 사람만 알고, 듣는 사람은
+            헤더로 돌아와야 안다. */}
         <span role="status">
           {collectionWarning ? (
             <Badge tone="warning" variant="soft" size="sm">
-              수집 끊김
-            </Badge>
-          ) : mode === 'ended' ? (
-            <Badge tone="neutral" variant="soft" size="sm">
-              지난 채팅
+              끊김
             </Badge>
           ) : mode === 'offline' ? (
             <Badge tone="neutral" variant="soft" size="sm">
-              방송 대기
+              방송 전
             </Badge>
           ) : mode === 'unknown' ? (
             <Badge tone="neutral" variant="soft" size="sm">
               확인 중
             </Badge>
-          ) : (
-            <Badge tone="success" variant="soft" size="sm">
-              수집 중
-            </Badge>
-          )}
+          ) : null}
           {/* 배지 글과 붙어 「지난 채팅채팅을…」으로 읽히지 않게 띄운다 */}
           {statusNote ? <VisuallyHidden>{` ${statusNote}`}</VisuallyHidden> : null}
         </span>
@@ -254,21 +266,16 @@ export const ChatPanel = memo(function ChatPanel({
           <ChatLine key={message.id} message={message} />
         ))}
       </ul>
-      {/* 끊겼는데 「따라가는 중」이라 하면 헤더 배지와 한 화면에서 모순된다 — 문구도 같이 바꾼다 */}
+      {/* 끊겼는데 「따라가는 중」이라 하면 헤더 배지와 한 화면에서 모순된다 — 문구도 같이 바꾼다.
+          방송 전이면 따라갈 채팅이 없다. 상태 점은 머리 제목 앞으로 옮겼다(같은 점을 두 번 두지 않는다) */}
       <div className={styles.chatFooter}>
-        <span
-          className={clsx(styles.chatDot, collectionWarning && styles.chatDotWarning)}
-          aria-hidden
-        />
         <span>
           {collectionWarning
-            ? '수집 끊김 · 새 메시지 없음'
-            : `${following ? followNote : '지난 메시지 보는 중'}${rateLabel}`}
+            ? '새 메시지가 안 들어오고 있어요'
+            : mode === 'offline'
+              ? '방송이 시작되면 채팅이 보여요'
+              : `${following ? followNote : '지난 메시지 보는 중'}${rateLabel}`}
         </span>
-        {/* 키워드 설정 화면은 라우트가 없다 — 「제목 수정」(StreamInfoBar)처럼 자리만 지킨다 */}
-        <button type="button" className={styles.chatFooterLink} disabled>
-          키워드 설정
-        </button>
       </div>
     </aside>
   );

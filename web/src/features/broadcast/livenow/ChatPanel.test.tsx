@@ -84,12 +84,15 @@ describe('ChatPanel — 하단 상태줄', () => {
     renderPanel();
     // 통계 지표('2,310' 식)와 같은 서식 — 한 화면에서 같은 값이 두 서식으로 갈리지 않는다
     expect(screen.getByText('최신 메시지 따라가는 중 · 분당 1,200')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('수집 중');
+    // 평소엔 배지가 없다 — 제목이 상태를 말하고(시안 B), 알림 자리는 비어 있다가 끊길 때 읽힌다
+    expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('수집이 끊기면 분당 건수 대신 끊김을 말한다', () => {
     renderPanel({ collectionWarning: true });
-    expect(screen.getByText('수집 끊김 · 새 메시지 없음')).toBeInTheDocument();
+    expect(screen.getByText('새 메시지가 안 들어오고 있어요')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('끊김');
     expect(screen.queryByText(/분당/)).not.toBeInTheDocument();
   });
 
@@ -193,9 +196,15 @@ describe('ChatPanel: 지난 방송 다시 보기(POK-324)', () => {
   });
 
   it('채팅을 읽는 중·읽지 못함은 머리의 알림 자리에도 싣는다: 목록 안의 줄은 듣는 사람이 훑기 전에는 모른다', () => {
-    render(<ChatPanel {...PROPS} mode="ended" statusNote="채팅을 불러오지 못했어요" />);
-    // 배지 글과 띄어 싣는다: 붙으면 「지난 채팅채팅을…」으로 읽혔다(리뷰 2라운드)
-    expect(screen.getByRole('status').textContent).toBe('지난 채팅 채팅을 불러오지 못했어요');
+    const view = render(
+      <ChatPanel {...PROPS} mode="ended" statusNote="채팅을 불러오지 못했어요" />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('채팅을 불러오지 못했어요');
+    // 배지가 설 때는 배지 글과 띄어 싣는다: 붙으면 「끊김채팅을…」으로 읽혔다(리뷰 2라운드 — 그때는 「지난 채팅」 배지)
+    view.rerender(
+      <ChatPanel {...PROPS} mode="ended" collectionWarning statusNote="채팅을 불러오지 못했어요" />,
+    );
+    expect(screen.getByRole('status').textContent).toBe('끊김 채팅을 불러오지 못했어요');
   });
 
   it('어느 시점을 보일지 아직 모르면 바닥은 「시점을 확인하는 중」이다: 끝까지 본 것처럼 말하지 않는다', () => {
@@ -210,9 +219,8 @@ describe('ChatPanel: 지난 방송 다시 보기(POK-324)', () => {
       />,
     );
     expect(screen.queryByText(/마지막 메시지까지 보는 중/)).toBeNull();
-    // 바닥 줄은 「키워드 설정」 단추와 같은 칸이다
-    const footer = screen.getByRole('button', { name: '키워드 설정' }).parentElement!;
-    expect(footer).toHaveTextContent(/^시점을 확인하는 중/);
+    // 바닥 줄의 글은 한 덩어리다 — 그 글이 「시점을 확인하는 중」으로 시작한다
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
   });
 
   it('바닥은 어디까지 보는지만 말한다: 읽는 중·실패 문장은 목록의 상태 줄과 낭독에만 있다', () => {
@@ -226,9 +234,28 @@ describe('ChatPanel: 지난 방송 다시 보기(POK-324)', () => {
         statusNote="채팅을 불러오지 못했어요. 잠시 뒤 다시 불러와요"
       />,
     );
-    const footer = screen.getByRole('button', { name: '키워드 설정' }).parentElement!;
-    expect(footer).toHaveTextContent(/^마지막 메시지까지 보는 중/);
+    // 바닥 줄의 글(한 덩어리)
+    const footer = screen.getByText(/^마지막 메시지까지 보는 중/);
     expect(footer).not.toHaveTextContent('불러오지 못했어요');
+  });
+});
+
+describe('ChatPanel — 머리 상태(2026-10-29 시안 B)', () => {
+  it('지난 방송은 제목이 「지난 채팅」이고 배지를 따로 달지 않는다', () => {
+    render(<ChatPanel {...PROPS} mode="ended" replayClock="0:10:00" />);
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  });
+
+  it('방송 전이면 배지가 서고 바닥은 채팅이 언제 보이는지 말한다', () => {
+    render(<ChatPanel {...PROPS} messages={[]} ratePerMinute={null} mode="offline" />);
+    expect(screen.getByRole('status')).toHaveTextContent('방송 전');
+    expect(screen.getByText('방송이 시작되면 채팅이 보여요')).toBeInTheDocument();
+  });
+
+  it('바닥에 「키워드 설정」 자리를 두지 않는다(키워드 기능이 없다)', () => {
+    renderPanel();
+    expect(screen.queryByRole('button', { name: '키워드 설정' })).toBeNull();
   });
 });
 
