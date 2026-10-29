@@ -322,14 +322,14 @@ describe('LiveStatsPanel: 그래프', () => {
         },
       ],
     });
-    const pin = screen.getByRole('button', { name: /^하이라이트 #12 — .* 외 1개/ });
+    const pin = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
     fireEvent.pointerMove(pin, { clientX: 0 });
     const tip = container.querySelector(`.${styles.tip}`)!;
     expect(tip).toHaveTextContent('#12');
     // 다른 칸의 카드는 시점을 붙인다
     expect(tip).toHaveTextContent('#13');
     expect(tip).toHaveTextContent('0:22:30');
-    expect(tip).toHaveTextContent('누르면 #12 시점으로 가요');
+    expect(tip).toHaveTextContent('누르면 목록에서 골라요');
   });
 
   it('Alt·Ctrl·Cmd 조합 키는 그래프가 가로채지 않는다(브라우저 뒤로 가기·문서 처음)', () => {
@@ -412,10 +412,122 @@ describe('LiveStatsPanel: 열쇠', () => {
     const { rerender, props } = panel({ cards: near(0) });
     rerender(<LiveStatsPanel {...props} cards={near(10_000)} />);
     rerender(<LiveStatsPanel {...props} cards={near(20_000)} />);
-    // 붙은 둘은 핀 하나(+1)로, 떨어진 하나는 따로
+    // 붙은 둘은 묶음 하나(개수 2)로, 떨어진 하나는 따로
     expect(screen.getAllByRole('button', { name: /^하이라이트 / })).toHaveLength(2);
-    expect(screen.getByRole('button', { name: /^하이라이트 #12 — .* 외 1개/ })).toHaveTextContent(
-      '#12+1',
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+  });
+});
+
+describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
+  const twelve = CARDS[0]!;
+  /** #12와 #13이 붙어 있고 수동은 멀리 떨어진 카드 셋 */
+  const near: TimelineCard[] = [
+    twelve,
+    { ...twelve, id: 'card-13', label: '#13', atMs: twelve.atMs + 60_000, timestamp: '0:21:00' },
+    CARDS[1]!,
+  ];
+
+  it('겹치는 핀은 개수 하나로 묶고, 떨어진 핀은 하나짜리 그대로다', () => {
+    panel({ cards: near });
+    const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
+    expect(group).toHaveTextContent(/^2$/);
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    // 묶인 카드는 따로 핀이 없다
+    expect(screen.queryByRole('button', { name: /^하이라이트 #12/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^하이라이트 #13/ })).toBeNull();
+    // 떨어진 수동 핀은 하나짜리 그대로다(글자 · 누르면 바로 이동)
+    const manual = screen.getByRole('button', { name: /^하이라이트 수동 — 수동 마킹/ });
+    expect(manual).toHaveTextContent('수동');
+    expect(manual).not.toHaveAttribute('aria-expanded');
+  });
+
+  it('묶음을 누르면 바로 옮기지 않고 그 안의 카드 목록을 띄운다', () => {
+    const { onSeekCard } = panel({ cards: near });
+    const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
+    fireEvent.click(group);
+    expect(onSeekCard).not.toHaveBeenCalled();
+    expect(group).toHaveAttribute('aria-expanded', 'true');
+    const list = screen.getByRole('group', { name: '묶인 하이라이트 2개' });
+    const items = within(list).getAllByRole('button');
+    expect(items.map((b) => b.textContent)).toEqual([
+      expect.stringContaining('#12'),
+      expect.stringContaining('#13'),
+    ]);
+    expect(items[1]).toHaveTextContent('0:21:00');
+    // 열면 첫 카드에 초점이 간다(키보드로도 고를 수 있다)
+    expect(items[0]).toHaveFocus();
+    // 목록이 떠 있는 동안 툴팁은 목록을 가리지 않는다
+    fireEvent.pointerMove(group, { clientX: 0 });
+    expect(document.querySelector(`.${styles.tip}`)).toBeNull();
+  });
+
+  it('목록에서 고르면 하나짜리 핀을 누른 것처럼 그 시점으로 가고 목록을 닫는다', () => {
+    const { onSeekCard } = panel({ cards: near });
+    const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
+    fireEvent.click(group);
+    const list = screen.getByRole('group', { name: '묶인 하이라이트 2개' });
+    fireEvent.click(within(list).getByRole('button', { name: /^하이라이트 #13 — / }));
+    expect(onSeekCard).toHaveBeenCalledTimes(1);
+    expect(onSeekCard).toHaveBeenCalledWith('0:21:00');
+    expect(screen.queryByRole('group', { name: '묶인 하이라이트 2개' })).toBeNull();
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('Esc · 바깥 누르기 · 묶음 다시 누르기로 목록을 닫는다', () => {
+    panel({ cards: near });
+    const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
+    const name = '묶인 하이라이트 2개';
+
+    fireEvent.click(group);
+    fireEvent.keyDown(screen.getByRole('group', { name }), { key: 'Escape' });
+    expect(screen.queryByRole('group', { name })).toBeNull();
+    expect(group).toHaveFocus();
+
+    fireEvent.click(group);
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('group', { name })).toBeNull();
+
+    fireEvent.click(group);
+    fireEvent.pointerDown(group);
+    fireEvent.click(group);
+    expect(screen.queryByRole('group', { name })).toBeNull();
+  });
+
+  it('목록 안에서 ←/→는 그래프 칸을 옮기지 않는다', () => {
+    panel({ cards: near });
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ }));
+    const list = screen.getByRole('group', { name: '묶인 하이라이트 2개' });
+    expect(fireEvent.keyDown(within(list).getAllByRole('button')[0]!, { key: 'ArrowRight' })).toBe(
+      true,
     );
+    expect(document.querySelector(`.${styles.tip}`)).toBeNull();
+  });
+
+  it('그래프 폭이 바뀌면 화면 위 거리로 다시 묶는다', () => {
+    // 268칸(2시간 14분) 그래프에서 6분 떨어진 두 카드: 폭 1092면 약 47px(따로), 1000이면 약 42px(묶음)
+    let resize: ResizeObserverCallback = () => undefined;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          resize = cb;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    panel({
+      cards: [twelve, { ...twelve, id: 'card-13', label: '#13', atMs: twelve.atMs + 360_000 }],
+    });
+    expect(screen.getByRole('button', { name: /^하이라이트 #12 — / })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^하이라이트 #13 — / })).toBeInTheDocument();
+    act(() =>
+      resize([{ contentRect: { width: 1000 } } as ResizeObserverEntry], {} as ResizeObserver),
+    );
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+    act(() =>
+      resize([{ contentRect: { width: 1092 } } as ResizeObserverEntry], {} as ResizeObserver),
+    );
+    expect(screen.queryByRole('button', { name: /^하이라이트 2개 묶음/ })).toBeNull();
   });
 });
