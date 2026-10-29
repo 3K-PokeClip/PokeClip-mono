@@ -361,6 +361,18 @@ describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
     expect(result.current.playback.playing).toBe(false);
   });
 
+  it('받은 영상이 구간 시작 바로 뒤(경계 여유 안)에서 끝나도 멈춘다: 그 몇십 ms를 끝없이 되감지 않는다(PR #454 2차 리뷰)', async () => {
+    // 영상은 10.03초(방송 10~20.03초) — 구간 시작 20초를 30ms 넘는다. 경계 틱은 이 구간을 그대로 둬 끝을 못 잡는다
+    const { node, play, result } = await loaded(10.03);
+    act(() => {
+      node.dispatchEvent(new Event('play'));
+      node.currentTime = 10.03;
+      node.dispatchEvent(new Event('ended'));
+    });
+    expect(play).not.toHaveBeenCalled();
+    expect(result.current.playback.playing).toBe(false);
+  });
+
   it('반복이 꺼져 있으면 영상 끝에서 멈춘다', async () => {
     const { node, play, result } = await loaded(15);
     act(() => result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: false }));

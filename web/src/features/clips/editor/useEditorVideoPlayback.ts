@@ -7,6 +7,7 @@ import { playableFrom, type RecordingPiece } from '@/features/player/recordingTi
 import {
   boundaryAction,
   effectiveBounds,
+  MEDIA_END_MARGIN_SECONDS,
   type EditorPlayback,
   type PlaybackBounds,
   type PlaybackError,
@@ -210,10 +211,12 @@ export function useEditorVideoPlayback(options: {
     // 경계 틱보다 영상 끝이 먼저 왔다(영상 끝 바로 앞의 틱을 놓침): 「구간 반복」이면 구간 시작으로 되감아 이어 튼다.
     // 전에는 멈추기만 해서, 받은 영상이 구간 끝보다 짧으면 반복을 켜 둬도 끝에서 섰다(POK-490).
     // 받은 영상이 구간 시작에도 못 닿으면 되감을 자리가 영상 밖이라 멈춘다 — 되감기가 영상 길이로 잘리고 play()가 끝난 영상을
-    // 0초부터 다시 틀어 구간 밖을 끝없이 돌았다(PR #454 1차 리뷰)
+    // 0초부터 다시 틀어 구간 밖을 끝없이 돌았다(PR #454 1차 리뷰). 「못 닿음」은 effectiveBounds와 같은 여유로 본다 — 영상이 구간
+    // 시작 뒤 여유 안에서 끝나면 경계 틱은 구간을 그대로 둬 끝을 못 잡는데, 여기서 되감으면 그 몇십 ms를 끝없이 돌았다(2차 리뷰)
     const onEnded = () => {
       const mediaEnd = loadedRef.current.startSeconds + video.duration;
-      if (!boundsRef.current.loop || !(mediaEnd > boundsRef.current.startSeconds)) {
+      const loopable = mediaEnd - MEDIA_END_MARGIN_SECONDS > boundsRef.current.startSeconds;
+      if (!boundsRef.current.loop || !loopable) {
         setPlaying(false);
         return;
       }
