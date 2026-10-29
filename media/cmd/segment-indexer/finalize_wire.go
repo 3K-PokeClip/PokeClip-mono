@@ -79,6 +79,12 @@ func (a finalizeAssembly) stallSealEnd(on bool, pool *pgxpool.Pool) func(ctx con
 	}
 }
 
+// logRewindEndSwitches 는 L3 · L2′ 스위치(REWIND_GAP_RUN_END · REWIND_STALL_SEAL)의 켬 여부를 기동 INFO 한 줄로 낸다 —
+// 둘 다 기본 끔이라(kty K5) 운영자가 켠 판인지 기동 로그로 가른다(보안 사후 검수 LOW-2).
+func logRewindEndSwitches(log *slog.Logger, gapRunEnd, stallSeal bool) {
+	log.Info("rewind_end_switches", "gap_run_end", gapRunEnd, "stall_seal", stallSeal)
+}
+
 // closeRound 는 4D 적용의 회차 닫힘 칸이다(session.IntentOptions.CloseRound — 설계 10절 「M6-3b 가 CloseRound 칸을 채운다」).
 // upgraded 는 그 트랜잭션에서 회차를 닫고 완결을 평가하고, round_split 은 R 을 직접 닫은 뒤라 완결만 평가된다.
 func (a finalizeAssembly) closeRound() func(ctx context.Context, tx pgx.Tx, round string) error {
