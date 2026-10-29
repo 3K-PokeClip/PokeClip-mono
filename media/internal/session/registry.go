@@ -196,7 +196,11 @@ type Options struct {
 	// StopSlack 은 의도적 종료 표식의 대조 여유다(M6 3.3 결정 1 · 15.2 표 1 · 2행 · K8 8초) — 「표식 + 이 값」 이상에
 	// 시작한 조각부터 새 회차다. 영값이면 표식으로 가르지 않는다(「확실하지 않으면 적용하지 않는다」 — 안전 방향).
 	StopSlack time.Duration
-	Log       *slog.Logger
+	// EnqueueStarted 는 계약9 started outbox 칸이다(broadcast.EnqueueStarted 를 게이트와 묶은 것 — 설계 M6 15.4 · 15.6).
+	// 새 회차를 여는 개시(round_id = 새 session_id)에서만 세션 INSERT 와 같은 트랜잭션으로 부른다 — 같은 회차에 붙는
+	// 개시는 부르지 않는다(D49). nil 이면 부르지 않는다 — 조립(cmd)이 끼운다.
+	EnqueueStarted func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error
+	Log            *slog.Logger
 }
 
 // Registry 는 세션 결정자다. 상태를 갖지 않으며 트랜잭션마다 같은 값으로 답한다.
@@ -607,7 +611,8 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 		}
 	}
 	id := sessionID(p.streamID, p.startedAt, p.seq)
-	if roundID == "" {
+	newRound := roundID == ""
+	if newRound {
 		roundID = id // 15.2 표 「자기 → 새 회차」 — round_id 는 그 회차 머리 세션의 session_id 다
 	}
 	// 계승이 아니면 NULL 이다 — "" 를 쓰면 inherits_session 의 FK(자기 표 참조)가 23503 으로 막는다.
@@ -619,6 +624,12 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 		id, p.streamID, p.startedAt.UTC(), firstPDT.UTC(), p.targetDuration, p.discontinuityBase, inherits,
 		roundID, marked); err != nil {
 		return "", fmt.Errorf("세션 개시 INSERT 실패 session_id=%q stream_id=%q: %w", id, p.streamID, err)
+	}
+	if newRound && r.opt.EnqueueStarted != nil {
+		// 계약9 started 는 회차 머리 세션의 started_at 이다(15.3). 같은 트랜잭션이라 롤백되면 outbox 행도 없다(K9 ㈎).
+		if err := r.opt.EnqueueStarted(ctx, tx, id, p.streamID, p.startedAt.UTC()); err != nil {
+			return "", fmt.Errorf("세션 개시의 계약9 started 넣기 실패 session_id=%q: %w", id, err)
+		}
 	}
 	return id, nil
 }

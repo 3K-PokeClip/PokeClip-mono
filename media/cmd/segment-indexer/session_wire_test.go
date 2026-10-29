@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
@@ -103,7 +104,7 @@ func TestSessionDeciderCarriesBaseSessionAndPlanEndToEnd(t *testing.T) {
 		t.Fatalf("직전 세션 픽스처 실패: %v", err)
 	}
 
-	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	wall := wireBase.Add(time.Minute)
 	firstPDT := wall.Add(500 * time.Millisecond)
 
@@ -200,7 +201,7 @@ func TestSessionDeciderCopiesObservationFields(t *testing.T) {
 			pool := newWireTestPool(t)
 			ctx := context.Background()
 			var logs bytes.Buffer
-			d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+			d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, slog.New(slog.NewTextHandler(&logs, nil)))
 
 			obs := fresh()
 			c.mutate(&obs)
@@ -236,7 +237,7 @@ func TestSessionDeciderCarriesOpeningResultsEndToEnd(t *testing.T) {
 	const stream = "wireopen"
 	decide := func(t *testing.T, pool *pgxpool.Pool, wall time.Time, durationMS int32) index.SessionDecision {
 		t.Helper()
-		d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		tx, err := pool.Begin(t.Context())
 		if err != nil {
 			t.Fatalf("트랜잭션 시작 실패: %v", err)

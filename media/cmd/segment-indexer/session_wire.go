@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
@@ -31,15 +32,25 @@ type sessionDecider struct{ reg *session.Registry }
 const intentStopSlack = 8 * time.Second
 
 // newSessionDecider 는 정책값을 config 에서 받아 결정자를 만든다.
-// 값의 집은 config 하나다 — 여기에 기본값을 또 적지 않는다(표식 여유만 위 상수).
-func newSessionDecider(floorSlack, obsFresh, reconnectWindow time.Duration, log *slog.Logger) index.SessionDecider {
+// 값의 집은 config 하나다 — 여기에 기본값을 또 적지 않는다(표식 여유만 위 상수). gate 는 계약9 발행 게이트다 — 새 회차
+// 개시가 같은 트랜잭션에서 started outbox 를 넣는다(영값 게이트 = 꺼짐이면 문장을 보내지 않는다 — D45).
+func newSessionDecider(floorSlack, obsFresh, reconnectWindow time.Duration, gate broadcast.Gate, log *slog.Logger) index.SessionDecider {
 	return sessionDecider{reg: session.New(session.Options{
 		FloorSlack:      floorSlack,
 		ObsFresh:        obsFresh,
 		ReconnectWindow: reconnectWindow,
 		StopSlack:       intentStopSlack,
+		EnqueueStarted:  startedEnqueuer(gate),
 		Log:             log,
 	})}
+}
+
+// startedEnqueuer 는 게이트 g 의 started outbox 칸이다(설계 M6 15.4 · 15.6) — 레지스트리 개시와 4D round_split 이 같은
+// 것을 쓴다. session 은 broadcast 를 임포트하지 않으므로 여기서 묶는다.
+func startedEnqueuer(g broadcast.Gate) func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error {
+	return func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error {
+		return broadcast.EnqueueStarted(ctx, tx, g, round, ingestStreamID, at)
+	}
 }
 
 func (d sessionDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInput, now time.Time) (index.SessionDecision, error) {
