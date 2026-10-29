@@ -26,7 +26,26 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
   const busyRef = useRef(false);
   const capturingRef = useRef(false); // 상자가 사라질 때도 blur가 온다 — 이미 끝난 받기를 「다른 곳을 눌러 끝남」으로 덮지 않게
   const restoreFocus = useRef(false);
+  // 막기 켜기·끄기·저장을 한 줄로 잇는다 — 브리지 요청은 동시에 돌아 늦게 닿은 켜기가 저장 뒤 막기를 다시 30초 켤 수 있다.
+  // 켜기 응답을 받은 뒤(armed)에야 키를 받는다 — 그 전에 누른 지금 키는 아직 안 막혀 마크로 나간다(2차 리뷰).
+  const chain = useRef<Promise<void>>(Promise.resolve());
+  const captureSeq = useRef(0);
+  const armedRef = useRef(false);
+  const [armed, setArmed] = useState(false);
   const mac = isMacPlatform();
+
+  const queue = <T,>(run: () => Promise<T>): Promise<T> => {
+    const next = chain.current.then(run);
+    chain.current = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+  const disarm = () => {
+    armedRef.current = false;
+    setArmed(false);
+  };
 
   useEffect(() => {
     if (capturing) {
@@ -42,9 +61,10 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
   const stop = (focusBack: boolean) => {
     capturingRef.current = false;
     restoreFocus.current = focusBack;
+    disarm();
     setCapturing(false);
     setPreview('');
-    void bridge.hotkeyCapture(false);
+    void queue(() => bridge.hotkeyCapture(false));
   };
 
   useEffect(() => {
@@ -61,8 +81,14 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
     setMessage(null);
     setPreview('');
     capturingRef.current = true;
+    disarm();
     setCapturing(true);
-    void bridge.hotkeyCapture(true);
+    const seq = ++captureSeq.current;
+    void queue(() => bridge.hotkeyCapture(true)).then(() => {
+      if (captureSeq.current !== seq || !capturingRef.current) return; // 그사이 끝났거나 새로 시작했다
+      armedRef.current = true;
+      setArmed(true);
+    });
   };
 
   const onKeyDown = async (e: KeyboardEvent) => {
@@ -79,6 +105,7 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
       stop(true);
       return;
     }
+    if (!armedRef.current) return; // 막기가 아직 안 켜졌다 — 「준비 중…」
     if (step.kind === 'reject') {
       setMessage({ tone: 'error', text: reasonText(step.reason) });
       return;
@@ -86,10 +113,11 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
     setPreview(step.label);
     setBusy(true);
     busyRef.current = true;
-    const r = await bridge.setHotkey(step.combo);
+    const r = await queue(() => bridge.setHotkey(step.combo));
     setBusy(false);
     busyRef.current = false;
     capturingRef.current = false;
+    disarm();
     restoreFocus.current = true;
     setCapturing(false);
     setPreview('');
@@ -99,7 +127,7 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
         text: r.conflict ? `바꿨어요. OBS 「${r.conflict}」 단축키와 같은 키라 둘 다 눌려요.` : '바꿨어요',
       });
     } else {
-      void bridge.hotkeyCapture(false);
+      void queue(() => bridge.hotkeyCapture(false));
       setMessage({ tone: 'error', text: reasonText(r.reason) });
     }
   };
@@ -122,7 +150,7 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
           }}
         >
           <Keyboard size={14} aria-hidden="true" />
-          <span>{preview || '새 단축키를 누르세요'}</span>
+          <span>{armed ? preview || '새 단축키를 누르세요' : '준비 중…'}</span>
           <span class={styles.hotkeyEsc}>Esc 취소</span>
         </div>
       ) : (
