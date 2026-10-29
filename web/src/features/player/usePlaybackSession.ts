@@ -63,6 +63,8 @@ export interface SessionOptions {
   resolveX: (fresh: boolean) => Promise<XAnswer>;
   onClose: (closed: SessionClosed) => void;
   onNotice?: (text: string) => void;
+  /** 앞서 onNotice 로 올린 안내 text 를 거둔다(떠 있으면) */
+  onWithdrawNotice?: (text: string) => void;
 }
 
 export interface PlaybackSession {
@@ -162,6 +164,9 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
           break;
         case 'notice':
           optionsRef.current.onNotice?.(effect.text);
+          break;
+        case 'withdraw-notice':
+          optionsRef.current.onWithdrawNotice?.(effect.text);
           break;
         case 'recheck-x': {
           // 순번은 예약 때 잡는다 — 그사이 같은 키로 다시 연 세션에 옛 재조회가 들지 않게(cx M)

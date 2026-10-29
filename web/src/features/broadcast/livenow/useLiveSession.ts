@@ -117,7 +117,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const streamParam = useSearchParams().get('stream');
   const pinned = vodStreamIdFromPathname(pathname ?? '') !== null || Boolean(streamParam);
   const streamerId = useChannelStreamerId();
-  const { toast } = useToast();
+  const { toast, dismiss } = useToast();
   // recorded 로 닫힌 방송|영상 키 — 같은 키로는 세션을 다시 열지 않는다(cc H1 ②). 키 비교라 지울 필요가 없다
   const [closedRecordedFor, setClosedRecordedFor] = useState<string | null>(null);
   const [recordedReq, setRecordedReq] = useState<(RecordedRequest & { key: string }) | null>(null);
@@ -161,7 +161,23 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     },
     [startedAt, endedAt, pinned, router],
   );
-  const onNotice = useCallback((text: string) => toast({ tone: 'info', title: text }), [toast]);
+  // 안내 문구마다 마지막으로 띄운 토스트 — 거두기(넘김 되돌림)가 그 토스트를 닫는다
+  const noticeToasts = useRef(new Map<string, string>());
+  const onNotice = useCallback(
+    (text: string) => {
+      noticeToasts.current.set(text, toast({ tone: 'info', title: text }));
+    },
+    [toast],
+  );
+  const onWithdrawNotice = useCallback(
+    (text: string) => {
+      const id = noticeToasts.current.get(text);
+      if (id === undefined) return;
+      noticeToasts.current.delete(text);
+      dismiss(id);
+    },
+    [dismiss],
+  );
 
   const session = usePlaybackSession({
     canOpen:
@@ -178,6 +194,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     resolveX,
     onClose,
     onNotice,
+    onWithdrawNotice,
   });
 
   const opened = session !== null;
