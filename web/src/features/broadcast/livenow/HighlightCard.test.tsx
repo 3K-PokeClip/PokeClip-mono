@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { prefetchCardEditor } from '@/features/clips/editor/prefetchCardEditor';
 import { HighlightCard } from './HighlightCard';
-import { PENDING_RECHECK_MS } from './useCardEditorReady';
+import { PENDING_MAX_RECHECKS, PENDING_RECHECK_MS } from './useCardEditorReady';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 
 vi.mock('@/features/clips/editor/prefetchCardEditor', () => ({ prefetchCardEditor: vi.fn() }));
@@ -62,16 +62,19 @@ describe('HighlightCard: 편집 준비', () => {
   });
 
   it('실패하면 영원히 막지 않는다: 「편집」을 열고 다시 시도 단추를 둔다', async () => {
+    let finish: (value: 'ready') => void = () => undefined;
     vi.mocked(prefetchCardEditor)
       .mockRejectedValueOnce(new Error('500'))
-      .mockReturnValueOnce(new Promise(() => undefined));
+      .mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
     renderCard();
     expect(await screen.findByRole('link', { name: '편집' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /다시 시도/ }));
-    // 다시 받는 동안은 다시 막는다
-    await waitFor(() => expect(pendingButton()).toBeDisabled());
-    expect(prefetchCardEditor).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(prefetchCardEditor).toHaveBeenCalledTimes(2));
+    // 다시 받는 동안에도 이미 열린 「편집」을 다시 잠그지 않는다
+    expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
+    await act(async () => finish('ready'));
     expect(screen.queryByRole('button', { name: /다시 시도/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
   });
 
   it('녹화가 덜 올라왔으면 막아 두고 조금 뒤 다시 묻는다', async () => {
@@ -85,6 +88,26 @@ describe('HighlightCard: 편집 준비', () => {
     });
     expect(prefetchCardEditor).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
+  });
+
+  it(`녹화가 ${PENDING_MAX_RECHECKS}번 다시 물어도 안 올라오면 실패로 넘겨 「편집」을 연다: 영원히 막지 않는다`, async () => {
+    vi.useFakeTimers();
+    vi.mocked(prefetchCardEditor).mockResolvedValue('pending');
+    renderCard();
+    await act(async () => undefined);
+    for (let i = 0; i < PENDING_MAX_RECHECKS; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(PENDING_RECHECK_MS);
+      });
+    }
+    expect(prefetchCardEditor).toHaveBeenCalledTimes(PENDING_MAX_RECHECKS + 1);
+    expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /다시 시도/ })).toBeInTheDocument();
+    // 더는 저절로 다시 묻지 않는다
+    await act(async () => {
+      vi.advanceTimersByTime(PENDING_RECHECK_MS * 3);
+    });
+    expect(prefetchCardEditor).toHaveBeenCalledTimes(PENDING_MAX_RECHECKS + 1);
   });
 
   it('가린 카드 · 만료 카드는 받지 않는다(편집 단추가 없다)', () => {
