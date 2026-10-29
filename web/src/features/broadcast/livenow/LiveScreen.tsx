@@ -815,6 +815,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
                 statusNote={chat.statusNote}
                 followJump={chatJump}
                 collectionWarning={chatWarning}
+                placeholder={chat.placeholder}
                 onCollapse={toggleChatPanel}
               />
             )}

@@ -717,6 +717,43 @@
   margin-top: auto;
 }
 
+/* 안내(.chatPlaceholder)가 서 있는 동안 — display: flex가 hidden 속성의 기본 숨김을 이기므로 따로 끈다 */
+.chatList[hidden] {
+  display: none;
+}
+
+/* 보일 줄이 없을 때 목록 자리의 안내 — 가운데에 로고(읽는 중이면 그리기) + 흐린 글 */
+.chatPlaceholder {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(6 * var(--pc-u));
+  padding: calc(16 * var(--pc-u));
+  text-align: center;
+}
+
+.chatPlaceholderTitle {
+  margin: calc(14 * var(--pc-u)) 0 0;
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-muted);
+}
+
+.chatPlaceholderSub {
+  margin: 0;
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 멎은 안내(실패 · 채팅 없음)의 심볼 — 색을 빼고 흐리게 */
+.chatPlaceholderQuiet {
+  filter: grayscale(1);
+  opacity: 0.4;
+}
+
 /* 하단 상태줄 — 따라가는 중인지 · 분당 몇 건인지 */
 .chatFooter {
   display: flex;

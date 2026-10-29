@@ -259,6 +259,76 @@ describe('ChatPanel — 머리 상태(2026-10-29 시안 B)', () => {
   });
 });
 
+describe('ChatPanel — 줄이 없을 때의 안내', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('읽는 중이면 0.3초 뒤에 로고 그리기와 함께 「열심히 불러오는 중..」을 띄우고, 그동안 목록은 숨긴다', () => {
+    vi.useFakeTimers();
+    render(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="loading" />);
+    // 금방 끝나는 읽기에 그리다 만 고리만 스치지 않게 바로는 띄우지 않는다
+    expect(screen.queryByText('열심히 불러오는 중..')).toBeNull();
+    expect(screen.queryByRole('list', { name: '채팅 메시지' })).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByText('열심히 불러오는 중..')).toBeInTheDocument();
+  });
+
+  it('라이브 첫 응답 전에는 「채팅에 연결하는 중..」이다', () => {
+    vi.useFakeTimers();
+    render(<ChatPanel {...PROPS} messages={[]} placeholder="connecting" />);
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByText('채팅에 연결하는 중..')).toBeInTheDocument();
+  });
+
+  it('읽지 못함 · 채팅 없음은 기다리지 않고 바로 말한다', () => {
+    const view = render(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="failed" />);
+    expect(screen.getByText('채팅을 불러오지 못했어요')).toBeInTheDocument();
+    expect(screen.getByText('잠시 뒤 다시 불러와요')).toBeInTheDocument();
+
+    view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="empty" />);
+    expect(screen.getByText('아직 채팅이 없어요')).toBeInTheDocument();
+  });
+
+  it('안내가 서 있거나 방송 전이면 빈 「급증」 줄을 남기지 않는다', () => {
+    const view = render(<ChatPanel {...PROPS} messages={[]} surges={[]} placeholder="empty" />);
+    expect(screen.queryByText('급증')).toBeNull();
+    view.rerender(<ChatPanel {...PROPS} messages={[]} surges={[]} mode="offline" />);
+    expect(screen.queryByText('급증')).toBeNull();
+    // 흐르는 동안에는 키워드가 없어도 둔다(줄이 오가며 목록 높이가 흔들리지 않게)
+    view.rerender(<ChatPanel {...PROPS} surges={[]} />);
+    expect(screen.getByText('급증')).toBeInTheDocument();
+  });
+
+  it('줄이 오면 안내를 걷고 같은 목록을 다시 보인다', () => {
+    const view = render(<ChatPanel {...PROPS} messages={[]} placeholder="empty" />);
+    view.rerender(<ChatPanel {...PROPS} placeholder={null} />);
+    expect(screen.queryByText('아직 채팅이 없어요')).toBeNull();
+    expect(within(chatList()).getByText('한타 각')).toBeInTheDocument();
+  });
+
+  it('다시 기다리기 시작하면 0.3초를 처음부터 잰다', () => {
+    vi.useFakeTimers();
+    const view = render(<ChatPanel {...PROPS} messages={[]} placeholder="connecting" />);
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    view.rerender(<ChatPanel {...PROPS} placeholder={null} />);
+    view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="loading" />);
+    // 앞서 다 잰 시계가 남아 바로 띄우지 않는다
+    expect(screen.queryByText('열심히 불러오는 중..')).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByText('열심히 불러오는 중..')).toBeInTheDocument();
+  });
+});
+
 describe('ChatPanel — 크기 변화', () => {
   it('따라가던 중 목록이 줄어들면 다시 재지 않고 바닥에 붙인다', () => {
     // 회귀: 크기 변화에서 무조건 다시 재면, 창을 줄인 것만으로 바닥을 따라가던 사용자가 이탈했다.
