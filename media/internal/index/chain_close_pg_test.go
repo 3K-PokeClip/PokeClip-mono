@@ -56,19 +56,33 @@ SELECT state, vod_state, dvr_state, COALESCE(inherits_session, ''), COALESCE(rou
 	return c
 }
 
-// holdSession 은 다른 연결에서 세션 행을 FOR NO KEY UPDATE 로 쥔 채 둔다. 돌려준 함수가 커밋한다.
+// holdSession 은 다른 연결에서 세션 행을 FOR NO KEY UPDATE 로 쥔 채 둔다. 돌려준 함수가 커밋하고 연결을 닫는다.
+//
+// 연결은 시험 풀 밖에서 단독으로 연다. 풀에서 빌리면 쥔 만큼 풀이 줄어, 상한이 작은 러너(pgx 기본 max(4, CPU) —
+// CI 는 4)에서 잠금을 기다려야 할 호출이 풀 획득에서 먼저 시한을 다 쓴다.
 func holdSession(t *testing.T, pool *pgxpool.Pool, id string) (release func()) {
 	t.Helper()
 	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
+	conn, err := pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
 	if err != nil {
 		t.Fatal(err)
 	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		_ = conn.Close(ctx)
+		t.Fatal(err)
+	}
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM stream_sessions WHERE session_id = $1 FOR NO KEY UPDATE`, id); err != nil {
+		_ = conn.Close(ctx)
 		t.Fatal(err)
 	}
 	var once sync.Once
-	release = func() { once.Do(func() { _ = tx.Commit(ctx) }) }
+	release = func() {
+		once.Do(func() {
+			_ = tx.Commit(ctx)
+			_ = conn.Close(ctx)
+		})
+	}
 	t.Cleanup(release)
 	return release
 }

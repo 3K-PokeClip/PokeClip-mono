@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // warnOps 는 topology_lock_timeout 줄의 op 와 그 줄의 session_id 를 모으는 로그 처리기다.
@@ -50,6 +52,9 @@ func (w *warnOps) Handle(_ context.Context, r slog.Record) error {
 // 다른 연결이 세션 행을 쥐고 있으면 셋 모두 lock_timeout(5초)에 끊겨 ErrTopologyContended 로 접힌다 — ctx 시한(10초)을
 // 다 쓰지 않는다. WARN 줄은 session_id 칸에 그 세션(VOD 는 사슬 꼬리)을 싣는다 — 같은 메시지의 다른 줄과 같은 키라
 // session_id 로 거르는 질의가 놓치지 않는다(db ④c L5). 변이 = 상한 설정 제거 · 접기 제거 · 키 이름 → 각각 FAIL.
+//
+// 세 호출은 호출 수만큼 연결을 가진 풀에서 함께 돈다 — 시험 풀은 DSN · 러너 CPU 수(pgx 기본 max(4, CPU))에 따라 작을 수
+// 있고, 그러면 풀 획득 대기가 함수의 10초 시한을 먹어 잠금 상한이 아니라 시한으로 끝난다(PR 461 r1 cc H1 — CI 풀 4).
 func TestAuxEndingStatementsFoldLockTimeout(t *testing.T) {
 	pool := newTestPool(t)
 	old := time.Now().Add(-time.Hour)
@@ -60,17 +65,24 @@ func TestAuxEndingStatementsFoldLockTimeout(t *testing.T) {
 	for _, id := range []string{"D", "V", "F"} {
 		holdSession(t, pool, id)
 	}
+	cfg := pool.Config()
+	cfg.MaxConns = 3 // 아래 호출 셋
+	callPool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(callPool.Close)
 	w := &warnOps{}
 	o := testClose
 	o.Log = slog.New(w)
 	calls := map[string]func(ctx context.Context) error{
-		"freeze_empty_dvr": func(ctx context.Context) error { _, err := FreezeEmptyDVR(ctx, pool, "D", o); return err },
+		"freeze_empty_dvr": func(ctx context.Context) error { _, err := FreezeEmptyDVR(ctx, callPool, "D", o); return err },
 		"freeze_empty_vod": func(ctx context.Context) error {
-			_, err := FreezeEmptyVOD(ctx, pool, Chain{StreamID: s, RoundID: "RV", Head: "V", Tail: "V", SessionIDs: []string{"V"}}, o)
+			_, err := FreezeEmptyVOD(ctx, callPool, Chain{StreamID: s, RoundID: "RV", Head: "V", Tail: "V", SessionIDs: []string{"V"}}, o)
 			return err
 		},
 		"fail_chain_vod": func(ctx context.Context) error {
-			_, err := FailChainVOD(ctx, pool, Chain{StreamID: s, RoundID: "RF", Head: "F", Tail: "F", SessionIDs: []string{"F"}}, o)
+			_, err := FailChainVOD(ctx, callPool, Chain{StreamID: s, RoundID: "RF", Head: "F", Tail: "F", SessionIDs: []string{"F"}}, o)
 			return err
 		},
 	}
