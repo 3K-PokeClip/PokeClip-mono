@@ -26,6 +26,15 @@ export interface AudioRouting {
   monitorOnly: { name: string }[];
 }
 
+// POK-494 — 독에서 고른 「순간 표시」 단축키. key는 OBS 키 이름(OBS_KEY_M), 나머지는 조합 키(command = macOS ⌘ · Windows Win).
+export interface HotkeyCombo {
+  key: string;
+  control: boolean;
+  alt: boolean;
+  shift: boolean;
+  command: boolean;
+}
+
 // A4 — 핫키 마킹. seq가 오를 때마다 결과 토스트를 한 번 띄운다 (src/app-state.hpp MarkStats).
 export type MarkResult = '' | 'sent' | 'retrying' | 'failed' | 'rejected';
 export interface MarkStats {

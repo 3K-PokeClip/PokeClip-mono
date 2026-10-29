@@ -59,7 +59,7 @@ function MarkButton({ hotkey, live, onMark }: { hotkey: string; live: boolean; o
         class={styles.markButton}
         data-tone={live ? undefined : 'neutral'}
         disabled={cooling}
-        title={hotkey ? '다른 앱 단축키와 겹치면 OBS 설정 › 단축키에서 바꾸세요 — OBS가 뒤에 있어도 받아요.' : undefined}
+        title={hotkey ? '다른 앱 단축키와 겹치면 아래 「순간 표시 단축키」에서 바꾸세요 — OBS가 뒤에 있어도 받아요.' : undefined}
         onClick={() => {
           setCooling(true);
           onMark();
@@ -71,7 +71,7 @@ function MarkButton({ hotkey, live, onMark }: { hotkey: string; live: boolean; o
         </span>
         {hotkey ? <kbd class={styles.markKbd}>{hotkey}</kbd> : null}
       </button>
-      {hotkey ? null : <p class={styles.markHint}>단축키 없음 · OBS 설정 › 단축키</p>}
+      {hotkey ? null : <p class={styles.markHint}>단축키 없음 · 아래 「순간 표시 단축키」에서 정해요</p>}
     </>
   );
 }

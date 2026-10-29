@@ -5,6 +5,7 @@ import { AudioTracks } from './components/AudioTracks';
 import { Checks } from './components/Checks';
 import styles from './components/dock.module.css';
 import { Logo } from './components/Logo';
+import { HotkeySection } from './components/HotkeySection';
 import { PairCard } from './components/PairCard';
 import { Settings } from './components/Settings';
 import { StatusCard } from './components/StatusCard';
@@ -186,6 +187,8 @@ export function App({ bridge }: { bridge: Bridge }) {
       {state.paired && state.audio.prompt ? <AudioAssignPrompt state={state} bridge={bridge} /> : null}
 
       {state.paired ? <Checks state={state} /> : null}
+
+      {state.paired ? <HotkeySection hotkey={state.marks.hotkey} bridge={bridge} /> : null}
 
       {state.paired ? <AudioTracks state={state} bridge={bridge} /> : null}
 

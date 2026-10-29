@@ -1,5 +1,5 @@
 import { takeSseFrames } from './format';
-import type { ActionResult, BridgeState, Hello, MarkReply, PluginSettings } from './types';
+import type { ActionResult, BridgeState, Hello, HotkeyCombo, MarkReply, PluginSettings } from './types';
 
 // 플러그인 루프백 브리지 클라이언트. 토큰은 URL 조각(#token=)으로 받아 sessionStorage 에만 둔다.
 export interface Bridge {
@@ -18,6 +18,10 @@ export interface Bridge {
   assignAudio(key: string, track: number | null): Promise<ActionResult>;
   // POK-495 — OS 클립보드에서 연결 코드만 받아 온다(독의 ⌘V가 OBS 메뉴에 먹히므로). code는 XXXX-XXXX
   pasteCode(): Promise<ActionResult & { code?: string }>;
+  // POK-494 — 「순간 표시」 단축키 바꾸기. label = 바꾼 뒤 표기, conflict = 같은 키를 쓰는 다른 OBS 단축키 이름
+  setHotkey(combo: HotkeyCombo): Promise<ActionResult & { label?: string; conflict?: string }>;
+  // 새 키를 받는 동안 지금 키로 마크가 나가지 않게(플러그인이 30초 뒤 저절로 푼다)
+  hotkeyCapture(on: boolean): Promise<void>;
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -165,6 +169,20 @@ export function createHttpBridge(token: string): Bridge {
       if (!res) return UNREACHABLE;
       if (res.ok) return { ok: true, code: String(((await res.json()) as { code?: string }).code ?? '') };
       return readResult(res);
+    },
+
+    async setHotkey(combo) {
+      const res = await send('/api/hotkey', { method: 'PUT', headers: json, body: JSON.stringify(combo) });
+      if (!res) return UNREACHABLE;
+      if (res.ok) {
+        const body = (await res.json()) as { label?: string; conflict?: string };
+        return { ok: true, label: body.label ?? '', conflict: body.conflict ?? '' };
+      }
+      return readResult(res);
+    },
+
+    async hotkeyCapture(on) {
+      await send('/api/hotkey/capture', { method: 'POST', headers: json, body: JSON.stringify({ on }) });
     },
   };
 }

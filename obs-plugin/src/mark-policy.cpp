@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <set>
 
 namespace pokeclip {
 
@@ -227,6 +228,31 @@ bool MarkDebouncer::Accept(int64_t nowSteadyMs)
 	hasLast_ = true;
 	lastMs_ = nowSteadyMs;
 	return true;
+}
+
+std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabelParts &mods)
+{
+	static const std::string kPrefix = "OBS_KEY_";
+	if (obsKeyName.rfind(kPrefix, 0) != 0)
+		return "hotkey_bad_key";
+	std::string k = obsKeyName.substr(kPrefix.size());
+	static const std::set<std::string> kTyping = {"SPACE",     "MINUS",      "EQUAL",        "BRACKETLEFT",
+						      "BRACKETRIGHT", "SEMICOLON", "APOSTROPHE", "COMMA",
+						      "PERIOD",    "SLASH",      "BACKSLASH",    "QUOTELEFT"};
+	static const std::set<std::string> kStandalone = {"INSERT", "HOME", "END", "PAGEUP", "PAGEDOWN", "PAUSE"};
+	auto allDigits = [](const std::string &v) {
+		return !v.empty() && std::all_of(v.begin(), v.end(), [](char c) { return c >= '0' && c <= '9'; });
+	};
+	bool letterOrDigit = k.size() == 1 && ((k[0] >= 'A' && k[0] <= 'Z') || (k[0] >= '0' && k[0] <= '9'));
+	bool typing = letterOrDigit || kTyping.count(k) > 0;
+	bool fkey = k.size() >= 2 && k[0] == 'F' && allDigits(k.substr(1)) && std::stoi(k.substr(1)) >= 1 &&
+		    std::stoi(k.substr(1)) <= 24;
+	bool numpad = k.size() == 4 && k.rfind("NUM", 0) == 0 && allDigits(k.substr(3));
+	if (!typing && !fkey && !numpad && !kStandalone.count(k))
+		return "hotkey_bad_key";
+	if (typing && !mods.control && !mods.alt && !mods.command)
+		return "hotkey_needs_modifier";
+	return "";
 }
 
 } // namespace pokeclip

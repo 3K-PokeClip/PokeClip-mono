@@ -336,6 +336,42 @@ BridgeCallbacks MakeBridgeCallbacks()
 		obs_data_release(d);
 		return {200, json};
 	};
+	// POK-494 — 독에서 「순간 표시」 단축키 바꾸기. {"key":"OBS_KEY_M","control":true,"alt":false,"shift":true,"command":false}
+	cb.setHotkey = [](const std::string &body) -> BridgeCallbacks::Reply {
+		obs_data_t *d = obs_data_create_from_json(body.c_str());
+		if (!d)
+			return {400, JsonReason(false, "invalid_json")};
+		std::string key = obs_data_get_string(d, "key");
+		HotkeyLabelParts mods;
+		mods.control = obs_data_get_bool(d, "control");
+		mods.alt = obs_data_get_bool(d, "alt");
+		mods.shift = obs_data_get_bool(d, "shift");
+		mods.command = obs_data_get_bool(d, "command");
+		obs_data_release(d);
+		std::optional<MarkHotkeyChange> r =
+			RunInUiThreadAndWait<MarkHotkeyChange>([key, mods]() { return SetMarkHotkey(key, mods); });
+		SetMarkHotkeyCapture(false);
+		if (!r)
+			return {503, JsonReason(false, "busy")};
+		if (!r->ok)
+			return {r->reason == "hotkey_unavailable" ? 409 : 400, JsonReason(false, r->reason)};
+		obs_data_t *out = obs_data_create();
+		obs_data_set_bool(out, "ok", true);
+		obs_data_set_string(out, "label", r->label.c_str());
+		obs_data_set_string(out, "conflict", r->conflict.c_str());
+		std::string json = obs_data_get_json(out);
+		obs_data_release(out);
+		return {200, json};
+	};
+	// 새 키를 받는 동안 지금 키로 마크가 나가지 않게 — {"on":true|false}. 30초 뒤 저절로 풀린다.
+	cb.hotkeyCapture = [](const std::string &body) -> BridgeCallbacks::Reply {
+		obs_data_t *d = obs_data_create_from_json(body.c_str());
+		if (!d)
+			return {400, JsonReason(false, "invalid_json")};
+		SetMarkHotkeyCapture(obs_data_get_bool(d, "on"));
+		obs_data_release(d);
+		return {200, JsonReason(true, "")};
+	};
 	// A5 — 워커 스레드라 상태로 미리 거르기만 하고, 출력은 UI 스레드에서 만진다. 결과는 상태(phase·errorCode)로 간다.
 	cb.sendNow = []() -> BridgeCallbacks::Reply {
 		std::string reason = SendNowRejection(AppState::Instance().Snapshot());

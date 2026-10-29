@@ -79,6 +79,12 @@ struct HotkeyLabelParts {
 };
 std::string FormatHotkeyLabel(const HotkeyLabelParts &parts, bool mac);
 
+// POK-494 — 독·폴백에서 새로 고른 단축키 검사(OBS 키 이름 + 조합 키, keyName·keyText는 안 쓴다). 받아들이면 빈 문자열.
+//   hotkey_bad_key — 독이 보내는 키(글자·숫자·F1~F24·숫자패드·기호·스페이스·Insert/Home/End/PageUp/PageDown/Pause)가 아니다
+//   hotkey_needs_modifier — 글자·숫자·기호·스페이스를 혼자(또는 Shift만) 쓰면 다른 앱에서 칠 때마다 마크가 간다.
+//                           Ctrl·Alt·⌘ 중 하나와 함께. F 키·숫자패드·이동 키는 혼자 써도 된다.
+std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabelParts &mods);
+
 // 연타 거르기. 단조 시계 ms로 부른다. 받아들이면 true(그 시각을 기억한다).
 class MarkDebouncer {
 public:

@@ -2331,6 +2331,41 @@ TEST(mark_hotkey_label_ignores_keyboard_layout)
 	CHECK_EQ(FormatHotkeyLabel(modsOnly, false), "Ctrl+Shift");
 }
 
+// POK-494 — 독·폴백에서 고른 새 단축키. 글자·숫자·기호·스페이스는 Ctrl·Alt·⌘와 함께여야 한다(Shift만으로는 안 된다).
+TEST(mark_hotkey_combo_rejection)
+{
+	HotkeyLabelParts none;
+	HotkeyLabelParts shift;
+	shift.shift = true;
+	HotkeyLabelParts ctrlShift;
+	ctrlShift.control = true;
+	ctrlShift.shift = true;
+	HotkeyLabelParts cmd;
+	cmd.command = true;
+	HotkeyLabelParts alt;
+	alt.alt = true;
+
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", ctrlShift), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_K", cmd), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_1", alt), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_SPACE", ctrlShift), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F9", none), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F24", shift), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_NUM5", none), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_PAUSE", none), "");
+
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", none), "hotkey_needs_modifier");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", shift), "hotkey_needs_modifier");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_SLASH", shift), "hotkey_needs_modifier");
+
+	CHECK_EQ(HotkeyComboRejection("", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("M", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_SHIFT", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_MOUSE1", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F25", none), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F0", none), "hotkey_bad_key");
+}
+
 TEST(mark_debounce_two_seconds)
 {
 	MarkDebouncer d;

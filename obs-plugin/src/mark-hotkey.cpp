@@ -13,6 +13,7 @@
 #include <util/dstr.h>
 
 #include <atomic>
+#include <chrono>
 #include <string>
 
 namespace pokeclip {
@@ -23,11 +24,17 @@ namespace {
 constexpr const char *kHotkeyName = "PokeClip.MarkMoment";
 
 std::atomic<obs_hotkey_id> g_hotkey{OBS_INVALID_HOTKEY_ID};
+std::atomic<int64_t> g_captureUntilMs{0}; // 독이 새 키를 받는 중 — 이 시각(단조 ms)까지 마크를 막는다
+int64_t NowSteadyMs()
+{
+	using namespace std::chrono;
+	return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 
-// OBS Studio는 핫키를 UI 스레드로 넘겨 핫키 락을 쥔 채 부른다 — 막지 않고 대기열에 넣기만 한다.
+// 핫키 락을 쥔 채 불린다(핫키 스레드 또는 OBS가 앞일 때 UI 스레드) — 막지 않고 대기열에 넣기만 한다.
 void OnHotkey(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
+	if (!pressed || MarkHotkeyCapturing())
 		return; // 뗄 때도 불린다
 	MarkSender::Instance().Mark(MarkVia::Hotkey);
 }
@@ -154,6 +161,48 @@ void LoadBindings()
 	obs_log(LOG_INFO, "mark hotkey from %s: %s", source, label.empty() ? "(none)" : label.c_str());
 }
 
+// OBS 설정 창이 쓰는 자리 — 설정 창을 열면 이 값이 보이고, 다음 실행·프로필 전환 때 ResolveBindings가 먼저 읽는다.
+void SaveToProfile()
+{
+	obs_hotkey_id id = g_hotkey;
+	config_t *profile = obs_frontend_get_profile_config();
+	if (id == OBS_INVALID_HOTKEY_ID || !profile)
+		return;
+	obs_data_array_t *bindings = obs_hotkey_save(id);
+	if (!bindings)
+		return;
+	obs_data_t *data = obs_data_create();
+	obs_data_set_array(data, "bindings", bindings);
+	config_set_string(profile, "Hotkeys", kHotkeyName, obs_data_get_json(data));
+	obs_data_release(data);
+	obs_data_array_release(bindings);
+	if (config_save_safe(profile, "tmp", nullptr) != CONFIG_SUCCESS)
+		obs_log(LOG_WARNING, "mark hotkey: profile save failed");
+}
+
+// 같은 조합을 쓰는 다른 OBS 단축키 — 그쪽도 같이 눌리니 독이 알린다.
+std::string FindConflict(obs_hotkey_id self, obs_key_combination_t want)
+{
+	struct Ctx {
+		obs_hotkey_id self;
+		obs_key_combination_t want;
+		std::string out;
+	} ctx{self, want, {}};
+	obs_enum_hotkey_bindings(
+		[](void *data, size_t, obs_hotkey_binding_t *binding) {
+			auto *c = static_cast<Ctx *>(data);
+			obs_key_combination_t combo = obs_hotkey_binding_get_key_combination(binding);
+			if (obs_hotkey_binding_get_hotkey_id(binding) == c->self || combo.key != c->want.key ||
+			    combo.modifiers != c->want.modifiers)
+				return true;
+			const char *desc = obs_hotkey_get_description(obs_hotkey_binding_get_hotkey(binding));
+			c->out = desc && *desc ? desc : "?";
+			return false;
+		},
+		&ctx);
+	return ctx.out;
+}
+
 // OBS 설정 창에서 키를 바꿨다. 핫키 락 안에서 오므로 여기서 바인딩을 읽지 않고 UI 스레드로 미룬다.
 void OnBindingsChanged(void *, calldata_t *cd)
 {
@@ -202,6 +251,56 @@ void UnregisterMarkHotkey()
 	signal_handler_disconnect(obs_get_signal_handler(), "hotkey_bindings_changed", OnBindingsChanged, nullptr);
 	g_hotkey = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_unregister(id);
+}
+
+MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelParts &mods)
+{
+	MarkHotkeyChange r;
+	obs_hotkey_id id = g_hotkey;
+	if (id == OBS_INVALID_HOTKEY_ID) {
+		r.reason = "hotkey_unavailable";
+		return r;
+	}
+	r.reason = HotkeyComboRejection(obsKeyName, mods);
+	obs_key_t key = obs_key_from_name(obsKeyName.c_str());
+	if (r.reason.empty() && key == OBS_KEY_NONE)
+		r.reason = "hotkey_bad_key";
+	if (!r.reason.empty())
+		return r;
+
+	obs_data_array_t *bindings = obs_data_array_create();
+	obs_data_t *combo = obs_data_create();
+	obs_data_set_bool(combo, "control", mods.control);
+	obs_data_set_bool(combo, "alt", mods.alt);
+	obs_data_set_bool(combo, "shift", mods.shift);
+	obs_data_set_bool(combo, "command", mods.command);
+	obs_data_set_string(combo, "key", obsKeyName.c_str());
+	obs_data_array_push_back(bindings, combo);
+	obs_data_release(combo);
+	obs_hotkey_load(id, bindings); // 지금 바인딩을 갈아 끼운다(여럿이었어도 하나로)
+	obs_data_array_release(bindings);
+
+	SaveToProfile();
+	SaveCopy();
+	r.label = RefreshLabel();
+	uint32_t modifiers = (mods.control ? INTERACT_CONTROL_KEY : 0) | (mods.alt ? INTERACT_ALT_KEY : 0) |
+			     (mods.shift ? INTERACT_SHIFT_KEY : 0) | (mods.command ? INTERACT_COMMAND_KEY : 0);
+	r.conflict = FindConflict(id, {modifiers, key});
+	r.ok = true;
+	obs_log(LOG_INFO, "mark hotkey set from dock: %s%s", r.label.c_str(), r.conflict.empty() ? "" : " (shared)");
+	return r;
+}
+
+void SetMarkHotkeyCapture(bool on)
+{
+	constexpr int64_t kCaptureMaxMs = 30000;
+	g_captureUntilMs = on ? NowSteadyMs() + kCaptureMaxMs : 0;
+}
+
+bool MarkHotkeyCapturing()
+{
+	int64_t until = g_captureUntilMs.load();
+	return until != 0 && NowSteadyMs() < until;
 }
 
 } // namespace pokeclip

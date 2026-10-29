@@ -375,6 +375,20 @@ export function createMockBridge(scenario: string): Bridge {
       return { ok: true, code: 'KQ4M-7X2P' };
     },
 
+    async setHotkey(combo) {
+      await new Promise((r) => setTimeout(r, 250));
+      const mac = /Mac/i.test(navigator.platform);
+      const key = combo.key.replace('OBS_KEY_', '');
+      const label = mac
+        ? `${combo.control ? '⌃' : ''}${combo.alt ? '⌥' : ''}${combo.shift ? '⇧' : ''}${combo.command ? '⌘' : ''}${key}`
+        : [combo.control && 'Ctrl', combo.alt && 'Alt', combo.shift && 'Shift', combo.command && 'Win', key].filter(Boolean).join('+');
+      emit({ marks: { ...state.marks, hotkey: label } });
+      // OBS 기본 단축키와 겹치는 흉내 — ⌃⇧S는 「방송 시작」에 묶여 있다고 친다
+      return { ok: true, label, conflict: combo.key === 'OBS_KEY_S' && combo.control && combo.shift ? '방송 시작' : '' };
+    },
+
+    async hotkeyCapture() {},
+
     async assignAudio(key, track) {
       if (!state.audio.applied) return { ok: false, reason: 'audio_off' };
       const all = [...state.audio.tracks.flatMap((t) => t.sources), ...state.audio.mixOnly];

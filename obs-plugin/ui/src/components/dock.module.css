@@ -933,3 +933,47 @@
   font-size: var(--pc-font-size-2xs);
   color: var(--pc-color-text-disabled);
 }
+
+/* POK-494 — 「순간 표시 단축키」 */
+.hotkeyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hotkeyKbd {
+  padding: 2px 8px;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: 6px;
+  background: var(--pc-color-bg-inset);
+  font-family: inherit;
+  font-size: var(--pc-font-size-xs, 12px);
+  color: var(--pc-color-text-primary);
+}
+.hotkeyNone {
+  font-size: var(--pc-font-size-2xs);
+  color: var(--pc-color-text-muted);
+}
+.hotkeyCapture {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px dashed var(--pc-color-border-strong, var(--pc-color-border-subtle));
+  border-radius: 8px;
+  background: var(--pc-color-bg-inset);
+  font-size: var(--pc-font-size-xs, 12px);
+  color: var(--pc-color-text-primary);
+  outline: none;
+}
+.hotkeyCapture:focus-visible,
+.hotkeyCapture:focus {
+  border-style: solid;
+  border-color: var(--pc-color-accent, var(--pc-color-border-subtle));
+}
+.hotkeyEsc {
+  margin-left: auto;
+  font-size: var(--pc-font-size-2xs);
+  color: var(--pc-color-text-muted);
+}
