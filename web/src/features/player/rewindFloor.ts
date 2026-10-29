@@ -49,8 +49,9 @@ export interface RewindFloorMove {
 }
 
 /**
- * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 조각 + 맨 앞 조각 셋)으로 옮기고 그 자리를,
- * 아니면 null 을 낸다. ENDLIST 목록은 hls.js 가 옮기지 않으므로(stream-controller.ts 688 `newDetails.live`) 그대로 둔다.
+ * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 조각 + 맨 앞 조각 셋 · 적어도 옮김
+ * 문턱)으로 옮기고 그 자리를, 아니면 null 을 낸다. ENDLIST 목록은 hls.js 가 옮기지 않으므로(stream-controller.ts 688
+ * `newDetails.live`) 그대로 둔다.
  * 기동 전(조각이 아직 붙지 않음)에는 hls.js 가 currentTime 이 아니라 받기 위치를 보고 그것을 라이브 끝으로 바꾸므로
  * (base-stream-controller.ts playhead · stream-controller.ts 731), 받기 위치를 startLoad 로 다시 잡는다
  */
@@ -64,8 +65,10 @@ export function guardRewindFloor({
   const td = details.targetduration;
   const beforeStart = isBeforeStart(hls, video);
   const position = beforeStart ? loadFrom : video.currentTime;
-  if (position === null || position >= details.fragmentStart + FLOOR_TRIGGER_TD * td) return null;
-  const floor = details.fragmentStart + headSpanS(details);
+  const trigger = FLOOR_TRIGGER_TD * td;
+  if (position === null || position >= details.fragmentStart + trigger) return null;
+  // 조각 셋이 문턱보다 짧아도 문턱 앞으로는 옮기지 않는다 — 문턱 안의 재생점을 뒤로 당기는 역방향 시크가 된다
+  const floor = details.fragmentStart + Math.max(headSpanS(details), trigger);
   if (beforeStart) {
     hls.startLoad(floor);
     return { kind: 'reload', to: floor };

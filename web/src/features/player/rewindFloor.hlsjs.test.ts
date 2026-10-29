@@ -263,10 +263,10 @@ describe('guardRewindFloor — 창 하한 = 첫 조각 + 맨 앞 조각 셋의 �
     return M3U8Parser.parseLevelPlaylist(lines.join('\n'), URL, 0, PlaylistLevelType.MAIN, 0, null);
   }
 
-  /** 재생 중인 재생기의 첫 조각 0.5초 뒤 재생점을 옮긴 자리 */
-  function seekTo(details: LevelDetails): number | undefined {
+  /** 재생 중인 재생기의 첫 조각 afterS 초 뒤 재생점을 옮긴 자리 */
+  function seekTo(details: LevelDetails, afterS = 0.5): number | undefined {
     const hls = { hasEnoughToStart: true, startLoad: () => {} };
-    const { media } = fakeMedia(details.fragmentStart + 0.5, 4);
+    const { media } = fakeMedia(details.fragmentStart + afterS, 4);
     return guardRewindFloor({ hls, video: media, details, loadFrom: null })?.to;
   }
 
@@ -281,5 +281,12 @@ describe('guardRewindFloor — 창 하한 = 첫 조각 + 맨 앞 조각 셋의 �
   it('조각이 셋 미만이면 있는 만큼 · 하나도 없으면 3 × TD 다', () => {
     expect(seekTo(listOf(6, [4, 4]))).toBe(8);
     expect(seekTo(listOf(6, []))).toBe(18);
+  });
+
+  it('맨 앞 조각 셋이 1 TD 보다 짧으면 하한은 첫 조각 + 1 TD 다 — 옮김 문턱 안의 재생점을 뒤로 당기지 않는다', () => {
+    // 조각 셋 합 3초 < 문턱 6초(1 × TD) — 첫 조각 + 4초의 재생점을 + 3초로 되돌리면 역방향 시크다
+    const short = listOf(6, [1, 1, 1, 1]);
+    expect(seekTo(short, 4)).toBe(6);
+    expect(seekTo(short, 0.5)).toBe(6);
   });
 });
