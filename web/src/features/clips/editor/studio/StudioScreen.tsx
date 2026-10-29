@@ -1,9 +1,8 @@
 'use client';
 
-import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Scissors } from 'lucide-react';
+import { Scissors } from 'lucide-react';
 import { EmptyState, useToast } from '@/ui';
 import {
   ClipApiError,
@@ -15,6 +14,7 @@ import {
   fetchMeLoose,
   openJumpCard,
   requestRender,
+  retryUpload,
   mediaStreamId,
   timelineBaseMs,
   updateRecipe,
@@ -28,6 +28,7 @@ import {
   type UploadRequestSummary,
 } from '@/api/clipEditor';
 import { ensurePlaybackAccess, isPlaybackExpired } from '@/api/playbackAccess';
+import { EditorBackLink } from '../EditorBackLink';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -82,7 +83,8 @@ import {
   withPickedScene,
 } from '../uploadInfo';
 import type { SceneFrameSource } from '../useSceneFrames';
-import { clipLabel, clipProgressBar, clipSettled } from './clipProgress';
+import { clipSettled, clipStatusView } from './clipProgress';
+import { useClipStatusClock } from './useClipStatusClock';
 import { StudioSkeleton } from './StudioSkeleton';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
@@ -354,6 +356,9 @@ function messageOf(e: unknown): string {
       return '스트리머의 유튜브 채널이 연결돼 있지 않아요';
     if (e.status === 503 && e.code === 'upload_unavailable')
       return '지금은 유튜브 업로드를 받을 수 없어요. 잠시 뒤 다시 해 주세요';
+    // 상태 창의 「다시 올리기」(POK-492): 올린 적도 업로드 정보도 없다
+    if (e.status === 409 && e.code === 'nothing_to_retry')
+      return '다시 올릴 업로드가 없어요. 「영상 만들기」로 다시 올려 주세요';
     if (e.status === 503 && e.code === 'thumbnail_store_unavailable')
       return '썸네일 이미지를 저장하지 못했어요. 잠시 뒤 다시 해 주세요';
     if (e.status === 400 && e.field) return `저장할 수 없는 값이 있어요 (${e.field})`;
@@ -575,9 +580,7 @@ export function StudioScreen() {
   return (
     <div className={styles.screen}>
       <header className={shared.header}>
-        <Link href="/clips/library" className={shared.backLink} aria-label="보관함으로">
-          <ChevronLeft size={17} aria-hidden />
-        </Link>
+        <EditorBackLink />
         <div className={shared.headerTitleBlock}>
           <h1 className={shared.headerTitle}>클립 편집</h1>
           <div className={shared.headerMeta}>
@@ -641,7 +644,6 @@ function WiredStudio({
   onRecipeCreated: (recipeId: number) => void;
 }) {
   const { toast } = useToast();
-  const router = useRouter();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
 
@@ -930,7 +932,7 @@ function WiredStudio({
       setSave((s) => ({
         ...s,
         busy: 'render',
-        label: dirty ? '저장하고 영상 주문하는 중…' : '영상 주문하는 중…',
+        label: dirty ? '저장하고 영상 만들기 요청하는 중…' : '영상 만들기 요청하는 중…',
       }));
       // 어느 단계에서 거절됐나. 저장 문의 400(field)은 업로드 정보 칸이 아니다
       let stage: 'save' | 'render' = 'save';
@@ -947,7 +949,7 @@ function WiredStudio({
             draft.thumbnailSource === 'file' ? draft.file : null,
           );
         })
-        .then(({ created, clip }) => {
+        .then(({ clip }) => {
           setSave((s) => ({
             ...s,
             busy: null,
@@ -955,7 +957,8 @@ function WiredStudio({
             uploadRequest: clip.uploadRequest
               ? { version: clip.recipeVersion, summary: clip.uploadRequest }
               : s.uploadRequest,
-            label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
+            // 영상의 상태는 「영상 만들기」 옆 알약이 말한다(POK-492). 문구는 저장 상태로 돌아간다
+            label: `편집본 #${s.recipeId} v${s.version} 저장됨`,
           }));
           setPending(null);
           // 서버가 주문을 받은 뒤에 센다 — 거절된 제출은 세지 않아 DB 숫자와 맞는다. 제목·설명·태그는 싣지 않는다 (POK-357)
@@ -966,21 +969,13 @@ function WiredStudio({
             category_id: toYoutubeCategoryId(upload.categoryId),
             scheduled: upload.publishAt !== undefined,
           });
-          // 200은 새 주문이 아니다: 같은 판이 만드는 중이면 끝난 뒤 이 정보로, 이미 만들어져 있으면 지금 올린다
-          toast({
-            tone: 'success',
-            title: created
-              ? '영상을 만들고 유튜브에 올릴게요'
-              : clip.status === 'rendered'
-                ? '만들어 둔 영상을 바로 유튜브에 올릴게요'
-                : '이 판은 이미 만드는 중이에요. 다 만들어지면 고른 정보로 올려요',
-            description: `${clipLabel(clip)}. 진행은 보관함에서 볼 수 있어요.`,
-            action: { label: '보관함 보기', onClick: () => router.push('/clips/library') },
-          });
+          // 받았다는 토스트는 띄우지 않는다: 상태가 「영상 만들기」 옆 알약에 바로 서고 끝날 때까지 남는다(POK-492). 200(같은
+          // 판이 만드는 중이거나 이미 완성)도 알약이 지금 상태(만드는 중 · 올리는 중)를 그대로 말한다. 화면 낭독기에는 헤더의
+          // ClipStatusAnnouncer가 새 상태를 읽어 준다(토스트가 하던 일, PR #454 3차 리뷰)
         })
         .catch((e: unknown) => {
           const message = messageOf(e);
-          setSave((s) => ({ ...s, busy: null, label: `주문 실패 · ${message}` }));
+          setSave((s) => ({ ...s, busy: null, label: `영상 만들기 요청 실패 · ${message}` }));
           const fieldErrors = stage === 'render' ? uploadFieldErrorOf(e) : null;
           // 칸을 짚은 거절은 창 안 그 칸에. 고쳐서 다시 보내는 자리가 창이다
           if (fieldErrors !== null) {
@@ -991,31 +986,52 @@ function WiredStudio({
           toast({ tone: 'error', title: '영상 만들기 실패', description: message });
         });
     },
-    [documentFor, pending, persist, router, streamId, toast],
+    [documentFor, pending, persist, streamId, toast],
   );
 
   // 주문한 영상이 끝날 때까지(업로드 정보가 있으면 업로드가 끝날 때까지) 5초마다 상태를 다시 읽는다. 일꾼의 보고가
   // clips·업로드 표를 바꾼다.
   const clipId = save.clip?.id ?? null;
   const clipDone = save.clip === null || clipSettled(save.clip);
+  // 「다시 올리기」가 올리는 세대. 그 전에 떠난 상태 확인의 답은 버린다 — 응답이 느려 확인이 겹쳤을 때 늦게 온 옛 답(실패)이 새
+  // 업로드를 덮고, 끝남으로 보여 상태 확인까지 멈췄다(PR #454 1차 리뷰)
+  const pollEra = useRef(0);
   useEffect(() => {
     if (clipId === null || clipDone) return undefined;
     const t = globalThis.setInterval(() => {
+      const era = pollEra.current;
       fetchClip(streamId, clipId)
-        .then((clip) =>
+        .then((clip) => {
+          if (era !== pollEra.current) return;
           // 묻는 사이 새 주문이 다른 영상을 받았으면 이 답은 옛 영상 것이다. 얹으면 새 영상을 옛 것으로 덮는다
-          setSave((s) =>
-            s.clip?.id === clip.id
-              ? { ...s, clip, label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}` }
-              : s,
-          ),
-        )
+          setSave((s) => (s.clip?.id === clip.id ? { ...s, clip } : s));
+        })
         .catch(() => {
           /* 다음 틱에 다시 */
         });
     }, 5_000);
     return () => globalThis.clearInterval(t);
   }, [streamId, clipId, clipDone]);
+
+  // 상태 창의 「다시 올리기」(POK-492, 보관함의 다시 시도와 같은 문): 저장된 업로드 정보 그대로 다시 올린다. 새 업로드 줄을 얹으면
+  // 끝나지 않은 상태가 되어 위 상태 확인이 다시 돈다
+  const [retrying, setRetrying] = useState(false);
+  const retryClipUpload = useCallback(() => {
+    const clip = saveRef.current.clip;
+    if (clip === null) return;
+    setRetrying(true);
+    // 보내는 순간과 답을 얹는 순간 둘 다 세대를 넘긴다: 그 사이에 떠난 확인도 서버가 새 업로드를 만들기 전의 답일 수 있다
+    pollEra.current += 1;
+    retryUpload(streamId, clip.id)
+      .then(({ upload }) => {
+        pollEra.current += 1;
+        setSave((s) => (s.clip?.id === clip.id ? { ...s, clip: { ...s.clip, upload } } : s));
+      })
+      .catch((e: unknown) => {
+        toast({ tone: 'error', title: '다시 올리지 못했어요', description: messageOf(e) });
+      })
+      .finally(() => setRetrying(false));
+  }, [streamId, toast]);
 
   // 오디오 탭의 트랙 여섯 — 이름은 스트리머 설정에서, 켜짐·볼륨은 저장된 편집본에서(없으면 최종 믹스만 켬).
   const trackSetup = useMemo(() => {
@@ -1068,12 +1084,26 @@ function WiredStudio({
         endSeconds: (seg.endAtMs - base) / 1000,
       }));
   }, [saved, base]);
-  const label =
-    save.clip && save.busy === null && !save.label.includes('영상 #')
-      ? `${save.label} · ${clipLabel(save.clip)}`
-      : save.label;
-  // 진행 막대는 문구가 그 영상을 말할 때만 선다: 저장 · 주문을 보내는 동안 문구는 「…하는 중」이고 누른 버튼이 돈다(POK-444)
-  const clipProgress = save.clip !== null && save.busy === null ? clipProgressBar(save.clip) : null;
+  // 영상 상태 알약(POK-492)은 영상 만들기 요청을 보내는 동안만 비킨다 — 새 요청이면 곧 다른 영상이다. 저장 중에도 비키면 「편집본
+  // 저장」마다 알약이 깜빡이고 열어 둔 작은 창이 닫혔다(PR #454 1차 리뷰)
+  const latest = save.busy === 'render' ? null : save.clip;
+  // 예약 공개 시각이 지나거나 날이 바뀌면 상태 확인 답 없이도 다시 그린다(useClipStatusClock, PR #454 3차 리뷰)
+  const statusNow = useClipStatusClock(
+    latest !== null,
+    latest?.upload?.publishAt ?? latest?.uploadRequest?.publishAt ?? null,
+  );
+  const clipStatus = useMemo(
+    () =>
+      latest === null
+        ? null
+        : {
+            view: clipStatusView(latest, statusNow),
+            versionLabel: `편집본 v${latest.recipeVersion}`,
+            retrying,
+            onRetryUpload: retryClipUpload,
+          },
+    [latest, statusNow, retrying, retryClipUpload],
+  );
 
   return (
     <>
@@ -1092,10 +1122,10 @@ function WiredStudio({
         previewVideo={recording ? video.video : null}
         source={source}
         actions={actions}
-        autosaveLabel={label}
+        autosaveLabel={save.label}
         uploadLabel="영상 만들기"
         busyAction={save.busy}
-        clipProgress={clipProgress}
+        clipStatus={clipStatus}
         reloading={reloading}
         mixTrackId={trackId(0)}
         trackPreview={recording ? trackPreview : undefined}

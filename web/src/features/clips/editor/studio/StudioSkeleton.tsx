@@ -1,7 +1,7 @@
-import Link from 'next/link';
-import { ChevronLeft, Redo2, Undo2 } from 'lucide-react';
+import { Redo2, Undo2 } from 'lucide-react';
 import { Button, IconButton, LoadingRegion, Skeleton } from '@/ui';
 import { TRACK_COUNT } from '@/api/audioTracks';
+import { EditorBackLink } from '../EditorBackLink';
 import shared from '../editorShared.module.css';
 import sections from '../sections/sections.module.css';
 import styles from './StudioScreen.module.css';
@@ -28,15 +28,13 @@ function ToolSlot() {
 // 편집기 첫 읽기(POK-444). 카드·방송·녹화를 다 읽기 전의 편집기 모양이다 — 로드 뒤와 같은 클래스(.toolRail · .toolPanel ·
 // .previewColumn · .stage · .timeline · .trackRow · .lane)를 그대로 써서, 다 읽어도 칸 배치가 바뀌지 않는다. 처음 여는 도구가
 // 레이아웃이라 가운데는 원본(16:9) · 결과(9:16) 두 판이다.
-// 헤더는 실물이다: 보관함으로는 나갈 수 있고, 고치는 버튼은 꺼져 있다. 방송 · 저장 상태 문구 자리만 막대다.
+// 헤더는 실물이다: 이전 화면으로는 나갈 수 있고, 고치는 버튼은 꺼져 있다. 방송 · 저장 상태 문구 자리만 막대다.
 // 자막 줄은 저장된 자막이 있어야 서므로 미리 그리지 않는다(없는 편집본에서 거짓이 된다).
 export function StudioSkeleton() {
   return (
     <div className={styles.screen}>
       <header className={shared.header}>
-        <Link href="/clips/library" className={shared.backLink} aria-label="보관함으로">
-          <ChevronLeft size={17} aria-hidden />
-        </Link>
+        <EditorBackLink />
         <div className={shared.headerTitleBlock}>
           <h1 className={shared.headerTitle}>클립 편집</h1>
           <div className={shared.headerMeta}>

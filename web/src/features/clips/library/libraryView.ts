@@ -12,6 +12,7 @@ import {
   PRIVACY_LABEL,
   PRIVACY_VIEWERS,
   PUBLIC_NOTIFY_NOTE,
+  uploadFailureReason,
 } from '@/features/clips/editor/uploadInfo';
 import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 
@@ -489,12 +490,6 @@ export function uploadErrorMessage(e: unknown): string {
 }
 
 /**
- * 연동 문제로 끝난 업로드 코드(업로드 일꾼이 `YOUTUBE_` + auth 사유로 적는다). 일시 실패(REFRESH_UNAVAILABLE)는
- * 일꾼이 다시 시도해 실패로 남지 않는다.
- */
-const LINK_FAILURES = new Set(['YOUTUBE_NOT_LINKED', 'YOUTUBE_UNLINKED', 'YOUTUBE_BROKEN']);
-
-/**
  * 지난 업로드가 실패한 편집본의 안내. 실패하면 서버가 편집본을 「완성」으로 돌려 다시 올릴 수 있게 하고, 사유는
  * 가장 최근 업로드에 남는다. 다시 올리는 중이거나 실패가 없으면 null.
  */
@@ -502,23 +497,11 @@ export function uploadFailureText(clip: LibraryClip): string | null {
   const entry = clip.entry;
   const upload = entry?.latestClip?.upload;
   if (entry?.status !== 'rendered' || upload?.status !== 'failed') return null;
-  const code = upload.error?.code ?? 'UNKNOWN';
-  if (LINK_FAILURES.has(code)) {
-    return '스트리머의 유튜브 채널 연동이 없거나 끊겨 올리지 못했어요. 스트리머가 설정 › 채널 연동에서 다시 연결한 뒤 올려 주세요.';
-  }
-  if (code === 'SWEPT') {
-    // 주문줄에서 거듭 실패해 닫혔다. 이 실패는 주소를 받기 전에만 생긴다(주소가 있으면 SWEPT_AFTER_SESSION 확인 필요): 영상은 없다
-    return '올리는 중에 문제가 거듭 생겨 유튜브에 올리지 못했어요. 영상은 올라가지 않았으니 다시 올려 주세요.';
-  }
-  if (code === 'QUOTA_EXCEEDED') {
-    return '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요. 내일 다시 올려 주세요.';
-  }
-  if (code === 'YOUTUBE_REJECTED') {
-    const why = upload.error?.message ? `(${upload.error.message})` : '';
-    // 「다시 시도」는 실패한 줄의 제목·설명·태그를 그대로 다시 보내고 보관함 제목은 잠겨 있다. 고칠 곳은 편집기 창이다
-    return `유튜브가 영상을 받지 않았어요${why}. 같은 정보로 다시 시도하면 또 거절될 수 있어요. 「이어서 편집」에서 영상 만들기 창을 열어 제목·태그를 고친 뒤 다시 올려 주세요.`;
-  }
-  return `유튜브에 올리지 못했어요(${code}). 다시 올려 주세요.`;
+  // 보관함 제목은 잠겨 있다: 거절된 제목·태그를 고칠 곳은 편집기의 영상 만들기 창이다
+  return uploadFailureReason(
+    upload.error,
+    '「이어서 편집」에서 영상 만들기 창을 열어 제목·태그를 고친 뒤 다시 올려 주세요.',
+  );
 }
 
 /** 썸네일만 못 붙인 까닭(업로드 일꾼의 썸네일 오류 코드, POK-291). 모르는 코드는 그대로 보인다 */

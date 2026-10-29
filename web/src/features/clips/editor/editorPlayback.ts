@@ -1,11 +1,11 @@
 // 편집기 재생의 계약과 구간 경계 판정 (POK-238).
 //
-// 재생은 두 갈래다 — 목업 시뮬레이션(미디어 없음)과 hls.js VOD(로컬 소스). 화면과 상태 허브는
-// 어느 쪽인지 모르고 이 계약만 본다 (usePlayerSimulation ↔ useHlsPlayback 이 라이브에서 하는 것과
+// 재생은 두 갈래다 — 목업 시뮬레이션(미디어 없음)과 녹화 재생 서버에서 받은 mp4 한 덩어리(useEditorVideoPlayback, POK-251).
+// 화면과 상태 허브는 어느 쪽인지 모르고 이 계약만 본다 (usePlayerSimulation ↔ useHlsPlayback 이 라이브에서 하는 것과
 // 같은 구조).
 //
 // 경계 판정을 여기 순수 함수로 둔 이유: 두 갈래가 같은 규칙을 두 번 적으면 언젠가 갈라진다.
-// 게다가 hls 쪽은 jsdom 에서 못 돌려 렌더 테스트로 못 잡는다 — 규칙만 떼어내면 표로 검증할 수 있다
+// 게다가 실재생 쪽은 jsdom 에서 영상을 못 틀어 렌더 테스트로 못 잡는다 — 규칙만 떼어내면 표로 검증할 수 있다
 // (timelineMath·playerMath 와 같은 이유).
 
 /** 재생이 갇히는 구간. 화면의 「구간 반복」 스위치가 loop 를 정한다 */
@@ -33,6 +33,21 @@ export function boundaryAction(currentSeconds: number, bounds: PlaybackBounds): 
       : { kind: 'stop', atSeconds: endSeconds };
   }
   return { kind: 'continue' };
+}
+
+/** 영상 끝 바로 앞에서 경계를 잡는 여유(초). 끝에 딱 닿으면 브라우저가 먼저 멈춰(ended) 되감을 틱이 없다 */
+export const MEDIA_END_MARGIN_SECONDS = 0.05;
+
+/**
+ * 받은 영상이 구간 끝보다 먼저 끝나면 영상 끝을 구간 끝으로 본다(POK-490). 녹화 끝·녹화 조각 끝에서 창이 잘리면
+ * 재생 위치가 구간 끝에 영영 닿지 않아, 「구간 반복」을 켜 둬도 영상 끝에서 그냥 멈췄다.
+ * 영상 길이를 아직 모르거나(NaN · Infinity) 영상이 구간 시작 앞에서 끝나면 그대로 둔다 — 시작과 끝이 겹치면 매 틱 되감는다.
+ */
+export function effectiveBounds(bounds: PlaybackBounds, mediaEndSeconds: number): PlaybackBounds {
+  const end = mediaEndSeconds - MEDIA_END_MARGIN_SECONDS;
+  if (!Number.isFinite(end) || end >= bounds.endSeconds || end <= bounds.startSeconds)
+    return bounds;
+  return { ...bounds, endSeconds: end };
 }
 
 /** 재생을 못 하는 이유 — 화면이 안내 문구를 고르는 데 쓴다 */

@@ -7,6 +7,7 @@ import { renderWithProviders } from '@/test/testProviders';
 import { Dialog, RadioGroup } from '@/ui';
 import { StudioEditor } from './StudioScreen';
 import type { ClipEditorOptions } from '../useClipEditorMockState';
+import type { ClipStatusView } from './clipProgress';
 
 function renderStudio(options?: ClipEditorOptions) {
   return renderWithProviders(<StudioEditor {...options} />);
@@ -34,7 +35,7 @@ describe('StudioScreen', () => {
 
     expect(screen.getByRole('heading', { name: '승급전 마지막 한타 역전' })).toBeInTheDocument();
     expect(screen.getByText('라이브 카드 1:24:03 · 방금 자동 저장됨')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '이전 화면으로' })).toHaveAttribute(
       'href',
       '/clips/library',
     );
@@ -268,6 +269,49 @@ describe('StudioScreen', () => {
     expect(startHandle).toHaveAttribute('aria-valuetext', expect.stringContaining('5.4초'));
     // 규칙은 범례가 미리 말해 둔다
     expect(screen.getByText('5초 미만, 3분 초과로는 핸들이 움직이지 않아요')).toBeInTheDocument();
+  });
+
+  it('「반복」을 마우스로 눌러 켠 뒤 Space는 재생이다: 반복이 다시 꺼지지 않는다(POK-490)', async () => {
+    // 칩이 포커스를 쥐면 편집기가 Space를 그 칩에 양보해, 재생 대신 반복이 꺼지고 포커스 테두리로 켜진 것처럼 보였다(로컬 실측)
+    const user = userEvent.setup();
+    renderStudio();
+    const loop = screen.getByRole('button', { name: '구간 반복' });
+    await user.click(loop); // 끔
+    await user.click(loop); // 다시 켬
+    expect(loop).toHaveAttribute('aria-pressed', 'true');
+    expect(loop).not.toHaveFocus();
+
+    await user.keyboard(' ');
+    expect(loop).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '일시정지' })).toBeInTheDocument();
+  });
+
+  it('다른 위젯을 누른 뒤 「재생」을 눌러도 Space는 일시정지다: 앞 위젯이 포커스를 쥔 채 Space를 가져가지 않는다(PR #454 1차 리뷰)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const mic = screen.getByRole('button', { name: '마이크 넣기' });
+    const before = mic.getAttribute('aria-pressed');
+    await user.click(mic);
+    const toggled = mic.getAttribute('aria-pressed');
+    expect(toggled).not.toBe(before);
+
+    await user.click(screen.getByRole('button', { name: '재생' }));
+    expect(screen.getByRole('button', { name: '일시정지' })).toBeInTheDocument();
+    expect(mic).not.toHaveFocus();
+
+    await user.keyboard(' ');
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+    expect(mic).toHaveAttribute('aria-pressed', toggled!);
+  });
+
+  it('Tab으로 「반복」에 온 키보드 사용자는 Space로 켜고 끈다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const loop = screen.getByRole('button', { name: '구간 반복' });
+    loop.focus();
+    await user.keyboard(' ');
+    expect(loop).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
   });
 
   it('재생 조작은 미리보기 아래 막대에 있다: 되감기·감기·재생·쇼츠 안 시각 · 반복·배속·썸네일 칩', async () => {
@@ -1139,23 +1183,148 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     }
   });
 
-  it('헤더 문구 아래 영상 진행 막대: 퍼센트가 있으면 그 값, 없으면 불확정이다(0%로 지어내지 않는다)', () => {
-    const { unmount } = renderStudio({ clipProgress: { value: 42 } });
-    expect(screen.getByRole('progressbar', { name: '영상 진행' })).toHaveAttribute(
+  /** 컨테이너가 넘기는 영상 상태(POK-492) — 판정은 clipStatusView 표 테스트가 맡는다 */
+  function clipStatus(view: Partial<ClipStatusView> = {}, onRetryUpload = vi.fn()) {
+    return {
+      view: {
+        tone: 'progress',
+        title: '영상 만드는 중 42%',
+        detail: '영상을 만들고 있어요.',
+        steps: [
+          { label: '대기', state: 'done', note: '20:00' },
+          { label: '영상 만들기', state: 'now', note: '42%' },
+          { label: '유튜브 올리기', state: 'todo', note: null },
+        ],
+        progress: { value: 42 },
+        actions: ['library'],
+        youtubeUrl: null,
+        retryNote: null,
+        ...view,
+      } satisfies ClipStatusView,
+      versionLabel: '편집본 v3',
+      retrying: false,
+      onRetryUpload,
+    };
+  }
+
+  it('「영상 만들기」 옆 상태 알약 안 진행 막대: 퍼센트가 있으면 그 값, 없으면 불확정이다(0%로 지어내지 않는다)', () => {
+    const { unmount } = renderStudio({ clipStatus: clipStatus() });
+    expect(
+      screen.getByRole('button', { name: '영상 상태: 영상 만드는 중 42%. 자세히 보기' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: '영상 진행', hidden: true })).toHaveAttribute(
       'aria-valuenow',
       '42',
     );
     unmount();
 
-    renderStudio({ clipProgress: { value: null } });
-    expect(screen.getByRole('progressbar', { name: '영상 진행' })).not.toHaveAttribute(
-      'aria-valuenow',
-    );
+    renderStudio({
+      clipStatus: clipStatus({ title: '영상 만드는 중', progress: { value: null } }),
+    });
+    expect(
+      screen.getByRole('progressbar', { name: '영상 진행', hidden: true }),
+    ).not.toHaveAttribute('aria-valuenow');
   });
 
-  it('기다릴 영상이 없으면 진행 막대가 없다', () => {
+  it('기다릴 영상이 없으면 알약도 진행 막대도 없다', () => {
     renderStudio();
+    expect(screen.queryByRole('button', { name: /^영상 상태/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('알약을 누르면 작은 창에 단계·설명·할 일이 펼쳐진다: 실패면 다시 올리기, 올라갔으면 유튜브에서 보기', async () => {
+    const user = userEvent.setup();
+    const onRetryUpload = vi.fn();
+    const { unmount } = renderStudio({
+      clipStatus: clipStatus(
+        {
+          tone: 'danger',
+          title: '업로드 실패',
+          detail: '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요.',
+          steps: [
+            { label: '대기', state: 'done', note: '20:00' },
+            { label: '영상 만들기', state: 'done', note: '20:02' },
+            { label: '유튜브 올리기', state: 'danger', note: '20:03 실패' },
+          ],
+          progress: null,
+          actions: ['retryUpload', 'library'],
+        },
+        onRetryUpload,
+      ),
+    });
+    await user.click(screen.getByRole('button', { name: '영상 상태: 업로드 실패. 자세히 보기' }));
+    const panel = screen.getByRole('dialog', { name: '영상 상태' });
+    expect(
+      within(panel).getByText('오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요.'),
+    ).toBeVisible();
+    expect(within(panel).getByText('편집본 v3')).toBeVisible();
+    // 지금 단계(유튜브 올리기)가 표시되고, 단계마다 시각이 붙는다
+    expect(within(panel).getByText('유튜브 올리기').closest('li')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+    expect(within(panel).getByText('20:03 실패')).toBeVisible();
+    expect(within(panel).getByText('20:02')).toBeVisible();
+    expect(within(panel).getByRole('link', { name: '보관함에서 보기' })).toHaveAttribute(
+      'href',
+      '/clips/library',
+    );
+    await user.click(within(panel).getByRole('button', { name: '다시 올리기' }));
+    expect(onRetryUpload).toHaveBeenCalledTimes(1);
+    unmount();
+
+    renderStudio({
+      clipStatus: clipStatus({
+        tone: 'success',
+        title: '유튜브에 올라갔어요',
+        steps: [
+          { label: '대기', state: 'done', note: '20:00' },
+          { label: '영상 만들기', state: 'done', note: '20:02' },
+          { label: '유튜브 올리기', state: 'done', note: '20:04' },
+        ],
+        progress: null,
+        actions: ['youtube', 'library'],
+        youtubeUrl: 'https://youtu.be/abc123',
+      }),
+    });
+    await user.click(
+      screen.getByRole('button', { name: '영상 상태: 유튜브에 올라갔어요. 자세히 보기' }),
+    );
+    const youtube = within(screen.getByRole('dialog', { name: '영상 상태' })).getByRole('link', {
+      name: '유튜브에서 보기',
+    });
+    expect(youtube).toHaveAttribute('href', 'https://youtu.be/abc123');
+    expect(youtube).toHaveAttribute('target', '_blank');
+  });
+
+  it('영상 만들기 실패의 「다시 만들기」는 작은 창을 닫고 영상 만들기 창을 연다', async () => {
+    const user = userEvent.setup();
+    const requestUpload = vi.fn();
+    renderStudio({
+      actions: { saveDraft: vi.fn(), requestUpload },
+      clipStatus: clipStatus({
+        tone: 'danger',
+        title: '영상 만들기 실패',
+        detail: '영상을 만들지 못했어요(FFMPEG_FAILED). 다시 만들어 주세요.',
+        steps: [
+          { label: '대기', state: 'done', note: '20:00' },
+          { label: '영상 만들기', state: 'danger', note: '20:01 실패' },
+          { label: '유튜브 올리기', state: 'todo', note: null },
+        ],
+        progress: null,
+        actions: ['remake', 'library'],
+      }),
+    });
+    await user.click(
+      screen.getByRole('button', { name: '영상 상태: 영상 만들기 실패. 자세히 보기' }),
+    );
+    await user.click(
+      within(screen.getByRole('dialog', { name: '영상 상태' })).getByRole('button', {
+        name: '다시 만들기',
+      }),
+    );
+    expect(requestUpload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: '영상 상태' })).not.toBeInTheDocument();
   });
 
   it('트랙 소리를 받는 중이면 소리 줄마다 줄 높이 스켈레톤이고, 못 불렀으면 빈 줄과 안내 그대로다', () => {
@@ -1190,7 +1359,7 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     expect(idle.container.querySelectorAll('[data-wave-loading]')).toHaveLength(0);
   });
 
-  it('다른 편집 대상을 읽는 동안 옛 화면은 보이기만 한다: 헤더 아래 불확정 막대 한 줄, 보관함으로는 나갈 수 있다', async () => {
+  it('다른 편집 대상을 읽는 동안 옛 화면은 보이기만 한다: 헤더 아래 불확정 막대 한 줄, 이전 화면으로는 나갈 수 있다', async () => {
     const user = userEvent.setup();
     const { container } = renderStudio({ reloading: true });
 
@@ -1201,7 +1370,7 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     for (const name of ['편집본 저장', '업로드', '작업 이전으로', '작업 앞으로']) {
       expect(screen.getByRole('button', { name })).toBeDisabled();
     }
-    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '이전 화면으로' })).toHaveAttribute(
       'href',
       '/clips/library',
     );

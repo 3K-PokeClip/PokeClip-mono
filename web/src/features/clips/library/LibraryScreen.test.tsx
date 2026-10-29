@@ -1008,7 +1008,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
 
   it('주문만 되고 차례를 기다리는 영상은 막대가 없다 — 만드는 중이 아니다(POK-443)', () => {
     show(serverClip('rendering', { ...rendered, status: 'queued', progress: null }));
-    expect(within(panel()).getByText('영상 주문됨 · 차례 기다리는 중')).toBeInTheDocument();
+    expect(within(panel()).getByText('영상 만들 차례 기다리는 중')).toBeInTheDocument();
     expect(within(panel()).queryByRole('progressbar')).toBeNull();
   });
 
@@ -1208,7 +1208,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     );
     // 잠금이 풀린 사이 「렌더 재시도」로 돌아오지 않는다: 받은 영상으로 곧장 만드는 중이다
     expect(await within(panel()).findByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
-    expect(within(panel()).getByText('영상 주문됨 · 차례 기다리는 중')).toBeInTheDocument();
+    expect(within(panel()).getByText('영상 만들 차례 기다리는 중')).toBeInTheDocument();
   });
 
   it('렌더 재시도가 거절되면 돌기를 멈추고 다시 누를 수 있다', async () => {
@@ -1226,7 +1226,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     await user.click(within(panel()).getByRole('button', { name: '렌더 재시도' }));
     await act(async () => answer(jsonResponse(409, { error: 'source_not_ready' })));
 
-    expect(await screen.findByText('다시 주문 실패')).toBeInTheDocument();
+    expect(await screen.findByText('다시 만들기 실패')).toBeInTheDocument();
     const again = within(panel()).getByRole('button', { name: '렌더 재시도' });
     expect(again).toBeEnabled();
     expect(again).not.toHaveAttribute('aria-busy');

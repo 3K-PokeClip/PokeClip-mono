@@ -124,7 +124,7 @@ describe('toLibraryClip', () => {
       entry('rendering', { latestClip: { ...rendering, status: 'queued' } }),
       '9',
     );
-    expect(queued.progressLabel).toBe('영상 주문됨 · 차례 기다리는 중');
+    expect(queued.progressLabel).toBe('영상 만들 차례 기다리는 중');
     expect(queued.renderPercent).toBeUndefined();
     // 만드는 중이 아닌 상태는 막대가 없다
     expect(toLibraryClip(entry('uploading'), '9').renderPercent).toBeUndefined();

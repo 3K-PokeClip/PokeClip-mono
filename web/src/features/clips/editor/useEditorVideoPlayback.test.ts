@@ -276,6 +276,117 @@ describe('useEditorVideoPlayback: 새 창을 받는 동안의 시각 (POK-389)',
   });
 });
 
+describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** 구간 20~30초, 창 10~40초를 받아 둔 영상 노드. duration은 받은 영상의 실제 길이(초) */
+  async function loaded(duration: number) {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response('mp4', { status: 200 }))),
+    );
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => 'blob:1', revokeObjectURL: () => {} }),
+    );
+    const play = vi.fn(() => Promise.resolve());
+    const node = Object.assign(new EventTarget(), {
+      currentTime: 0,
+      duration,
+      paused: true,
+      readyState: 0,
+      playbackRate: 1,
+      play,
+      pause: vi.fn(),
+    }) as unknown as HTMLVideoElement;
+    const hook = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      }),
+    );
+    act(() => hook.result.current.videoRef(node));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(hook.result.current.window).toEqual({ startSeconds: 10, endSeconds: 40 });
+    return { ...hook, node, play };
+  }
+
+  const tick = (node: HTMLVideoElement, videoSeconds: number) =>
+    act(() => {
+      node.currentTime = videoSeconds;
+      node.dispatchEvent(new Event('timeupdate'));
+    });
+
+  it('반복이 켜져 있으면 구간 끝에 닿을 때 구간 시작으로 되감는다', async () => {
+    const { node } = await loaded(30);
+    tick(node, 20.1); // 방송 30.1초 — 구간 끝을 지났다
+    expect(node.currentTime).toBe(10); // 방송 20초 = 창 시작 10초 + 10
+  });
+
+  it('받은 영상이 구간 끝보다 짧으면 영상 끝에서 되감는다: 전에는 영상 끝에서 멈춰 반복이 안 걸렸다', async () => {
+    // 영상은 15초(방송 10~25초)뿐이다 — 구간 끝 30초에 영영 닿지 않는다(녹화 끝·조각 끝에서 잘린 창)
+    const { node } = await loaded(15);
+    tick(node, 14.97); // 방송 24.97초 — 영상 끝 바로 앞
+    expect(node.currentTime).toBe(10);
+  });
+
+  it('영상 끝(ended)이 먼저 와도 반복이면 구간 시작으로 되감아 이어 튼다', async () => {
+    const { node, play, result } = await loaded(15);
+    act(() => {
+      node.currentTime = 15;
+      node.dispatchEvent(new Event('ended'));
+    });
+    expect(node.currentTime).toBe(10);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(result.current.playback.error).toBeNull();
+  });
+
+  it('받은 영상이 구간 시작에도 못 닿으면 영상 끝에서 반복하지 않고 멈춘다: 구간 밖을 끝없이 돌지 않는다(PR #454 1차 리뷰)', async () => {
+    // 영상은 8초(방송 10~18초)뿐 — 구간 20~30초가 통째로 영상 밖이다
+    const { node, play, result } = await loaded(8);
+    act(() => {
+      node.dispatchEvent(new Event('play'));
+      node.currentTime = 8;
+      node.dispatchEvent(new Event('ended'));
+    });
+    expect(play).not.toHaveBeenCalled();
+    expect(result.current.playback.playing).toBe(false);
+  });
+
+  it('받은 영상이 구간 시작 바로 뒤(경계 여유 안)에서 끝나도 멈춘다: 그 몇십 ms를 끝없이 되감지 않는다(PR #454 2차 리뷰)', async () => {
+    // 영상은 10.03초(방송 10~20.03초) — 구간 시작 20초를 30ms 넘는다. 경계 틱은 이 구간을 그대로 둬 끝을 못 잡는다
+    const { node, play, result } = await loaded(10.03);
+    act(() => {
+      node.dispatchEvent(new Event('play'));
+      node.currentTime = 10.03;
+      node.dispatchEvent(new Event('ended'));
+    });
+    expect(play).not.toHaveBeenCalled();
+    expect(result.current.playback.playing).toBe(false);
+  });
+
+  it('반복이 꺼져 있으면 영상 끝에서 멈춘다', async () => {
+    const { node, play, result } = await loaded(15);
+    act(() => result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: false }));
+    act(() => {
+      node.dispatchEvent(new Event('play'));
+      node.currentTime = 15;
+      node.dispatchEvent(new Event('ended'));
+    });
+    expect(play).not.toHaveBeenCalled();
+    expect(result.current.playback.playing).toBe(false);
+    expect(node.currentTime).toBe(15);
+  });
+});
+
 describe('useEditorVideoPlayback: 재생 거절 (POK-389)', () => {
   afterEach(() => vi.unstubAllGlobals());
 

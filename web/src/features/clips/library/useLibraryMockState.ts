@@ -134,7 +134,7 @@ function progressLabelOf(entry: LibraryEntry): string | null {
       const percent = renderPercentOf(entry);
       const step =
         percent === undefined
-          ? '영상 주문됨 · 차례 기다리는 중'
+          ? '영상 만들 차례 기다리는 중'
           : percent === null
             ? '영상 만드는 중'
             : `영상 만드는 중 ${percent}%`;
@@ -442,13 +442,13 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                   }
                 : {
                     tone: 'info',
-                    title: '이미 주문된 업로드가 있어요',
-                    description: `같은 영상이 「${snap.title}」 제목으로 먼저 주문돼 있어요.`,
+                    title: '이미 올리고 있는 업로드가 있어요',
+                    description: `같은 영상이 「${snap.title}」 제목으로 먼저 올리고 있어요.`,
                   },
             );
           })
           .catch((e: unknown) => {
-            toast({ tone: 'error', title: '업로드 주문 실패', description: uploadErrorMessage(e) });
+            toast({ tone: 'error', title: '업로드 요청 실패', description: uploadErrorMessage(e) });
           })
           .finally(() => setSendingFlag(id, null));
         return;
@@ -589,7 +589,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                 : c,
             ),
           );
-          toast({ tone: 'success', title: `영상 #${snap.id} 다시 주문됨` });
+          toast({ tone: 'success', title: `영상 #${snap.id} 다시 만들기를 시작했어요` });
           refresh();
         })
         .catch((e: unknown) => {
@@ -599,7 +599,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
               : e instanceof Error
                 ? e.message
                 : String(e);
-          toast({ tone: 'error', title: '다시 주문 실패', description: message });
+          toast({ tone: 'error', title: '다시 만들기 실패', description: message });
         })
         .finally(() => setSendingFlag(id, null));
     },
