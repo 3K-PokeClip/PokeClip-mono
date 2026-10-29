@@ -49,6 +49,10 @@ void RegisterAll()
 	for (const SystemHotkeyCombo &c : g_combos) {
 		if (c.virtualKey < 0 || c.virtualKey > 0x7F)
 			continue;
+		// 조합 키 없는 단독 키(F9·숫자패드·Home 등)는 걸지 않는다 — 전역 단축키는 독점이라 방송 중 그 키가 모든 앱에서
+		// 막힌다. 그런 키는 OBS 경로(키를 가로채지 않는 이벤트 탭)만 쓴다(보안 입력 중 OBS가 뒤에 있으면 안 될 수 있다).
+		if (!c.control && !c.alt && !c.shift && !c.command)
+			continue;
 		UInt32 mods = (c.control ? controlKey : 0) | (c.alt ? optionKey : 0) | (c.shift ? shiftKey : 0) |
 			      (c.command ? cmdKey : 0);
 		EventHotKeyRef ref = nullptr;
