@@ -2408,16 +2408,20 @@ TEST(post_and_wait_runs_abandons_and_contains)
 	// 일이 던진 예외는 삼키고 nullopt — UI 스레드 밖으로 나가면 OBS가 꺼진다
 	CHECK(!PostAndWait<int>(inline_post, []() -> int { throw std::out_of_range("x"); }, 100).has_value());
 
-	// 다른 스레드가 늦게(시간 초과 뒤) 실행하더라도 시작 전이면 거둔다
+	// 다른 스레드가 늦게(시간 초과 뒤) 실행하더라도 시작 전이면 거둔다 — 일꾼은 PostAndWait가 돌아온 뒤에야 풀어
+	// 시간 여유에 기대지 않는다(부하 큰 CI에서 간헐 실패하지 않게, 2차 리뷰)
+	std::promise<void> release;
+	std::shared_future<void> released = release.get_future().share();
 	std::thread late;
 	bool lateRan = false;
 	auto late_post = [&](std::function<void()> f) {
-		late = std::thread([f = std::move(f)]() {
-			std::this_thread::sleep_for(std::chrono::milliseconds(60));
+		late = std::thread([f = std::move(f), released]() {
+			released.wait();
 			f();
 		});
 	};
 	CHECK(!PostAndWait<int>(late_post, [&]() { lateRan = true; return 1; }, 10).has_value());
+	release.set_value();
 	late.join();
 	CHECK(!lateRan);
 }
