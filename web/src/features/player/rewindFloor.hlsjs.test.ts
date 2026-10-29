@@ -127,7 +127,7 @@ describe('hls.js 1.7.3 의 목록 갱신 순서(진단 재현 9 · 10)', () => {
     expect(writes).toEqual([LIVE_SYNC]);
   });
 
-  it('LEVEL_UPDATED 에서 창 하한(첫 조각 + 3 TD)으로 옮기면 hls.js 는 옮기지 않는다 — 쓰기 한 번', () => {
+  it('LEVEL_UPDATED 에서 창 하한(첫 조각 + 맨 앞 4초 조각 셋)으로 옮기면 hls.js 는 옮기지 않는다 — 쓰기 한 번', () => {
     const { media, writes } = fakeMedia(10, 3);
     const { hls, slide } = started(media, true);
     hls.on(Events.LEVEL_UPDATED, (_event, data) =>
@@ -278,7 +278,7 @@ describe('guardRewindFloor — 창 하한 = 첫 조각 + 맨 앞 조각 셋의 �
     expect(seekTo(listOf(6, [4, 4, 4, 4]))).toBe(12);
   });
 
-  it('조각이 셋 미만이면 있는 만큼 · 하나도 없으면 3 × TD 다', () => {
+  it('조각이 셋 미만이면 있는 만큼 · 하나도 없어 길이를 모를 때만 3 × TD 다', () => {
     expect(seekTo(listOf(6, [4, 4]))).toBe(8);
     expect(seekTo(listOf(6, []))).toBe(18);
   });

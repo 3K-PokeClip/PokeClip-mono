@@ -173,7 +173,7 @@ describe('되돌림의 멈춤 유지(c13f cc M1 — 효과로 건다)', () => {
     effects.filter((e) => e.kind === 'keep-paused-on-swap').length;
 
   it('되돌림 넷(H0 시한 · H1a · H2 · H2t)은 멈춤 유지 효과를 한 번 낸다', () => {
-    const reverts: [SessionEvent, number][] = [
+    const reverts: Array<[SessionEvent, number]> = [
       [{ type: 'tick' }, DEADLINE],
       [at(E + 3_000, 0), NOW + 1_000],
       [{ type: 'live-closed' }, NOW + 1_000],

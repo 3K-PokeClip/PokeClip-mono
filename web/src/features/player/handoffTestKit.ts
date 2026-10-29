@@ -9,8 +9,9 @@ type PositionEvent = Extract<SessionEvent, { type: 'position' }>;
 type LiveProbeEvent = Extract<SessionEvent, { type: 'live-probe' }>;
 
 /**
- * 라이브 창 28초(4초 × 7) 가운데 하한(첫 조각 + 3 × TD) 뒤의 폭 — 탐침 결과의
- * 라이브 끝 = 하한 + 이 값
+ * 라이브 창 28초(4초 × 7) 가운데 하한(첫 조각 + 맨 앞 조각 셋의 실제 길이 12초) 뒤의
+ * 폭 — 탐침 결과의 라이브 끝 = 하한 + 이 값. 하한은 TD 가 아니라 조각 길이로 센다 —
+ * 3 × TD 는 조각 길이를 모를 때(조각이 하나도 없을 때)만 쓴다(rewindFloor)
  */
 const LIVE_END_AFTER_FLOOR_MS = 16_000;
 

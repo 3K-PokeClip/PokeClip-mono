@@ -270,7 +270,7 @@ describe('멈춘 채 넘김 확인이 깨진다 — 영상이 붙기 전의 멈�
 
   it('라이브 첫 목록이 시작을 잘라(H2t) 되돌려도 되감기 재생기는 스스로 틀지 않는다', async () => {
     pauseBeforeMedia(await handedOffScreen());
-    // P 뒤에서 시작하는 라이브 목록 — 시작 하한(첫 조각 + 3 × TD)이 P 보다 뒤라 잘린다
+    // P 뒤에서 시작하는 라이브 목록 — 시작 하한(첫 조각 + 맨 앞 조각 셋의 길이)이 P 보다 뒤라 잘린다
     const fragments = [...Array(4).keys()].map((i) => ({
       start: i * 4,
       duration: 4,

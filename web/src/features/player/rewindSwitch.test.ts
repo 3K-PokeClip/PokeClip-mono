@@ -437,7 +437,7 @@ describe('vod-offered · vod 국면', () => {
     expect(kinds(effects)).not.toContain('notice');
   });
 
-  it('「다시보기 보기」 — P 가 VOD 끝 여유 안이면 끝 − EDGE_MARGIN 으로 · 알림', () => {
+  it('「다시보기 보기」 — P 가 VOD 끝 여유(맨 앞 조각 셋의 길이) 안이면 끝 − 여유로 · 알림', () => {
     const p = NOW - 2_000;
     const { state, effects } = run(offered(false, p), [[{ type: 'button', which: 'vod' }]]);
     expect(state.source).toMatchObject({ startAtMs: NOW - 12_000 });
@@ -460,7 +460,7 @@ describe('vod-offered · vod 국면', () => {
     expect(run(state, [[loaded(0)]]).state.edgeMarginMs).toBe(14_000);
   });
 
-  it('「다시보기 보기」 — 3 TD 보다 짧은 VOD 는 첫 조각에서 연다(하한 우선 · R47)', () => {
+  it('「다시보기 보기」 — 여유(맨 앞 조각 셋의 길이 · 여기 12초)보다 짧은 VOD 는 첫 조각에서 연다(하한 우선 · R47)', () => {
     const short = status({
       ready: true,
       mode: 'vod',

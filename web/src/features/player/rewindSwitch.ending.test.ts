@@ -50,7 +50,7 @@ beforeEach(resetEventKit);
 /** 사건을 차례로 먹이고 마지막 상태와 모든 효과를 돌려준다 */
 function run(
   start: PlaybackSessionState,
-  steps: [SessionEvent, number?][],
+  steps: Array<[SessionEvent, number?]>,
 ): { state: PlaybackSessionState; effects: SessionEffect[] } {
   let state = start;
   const effects: SessionEffect[] = [];
@@ -140,7 +140,7 @@ describe('ending-wait 국면', () => {
   it('회차별 404 + 13초 · 60초 · 290초 뒤 이어짐 증거 → 라이브 재세움 1회 · recorded 0(R21 · R53)', () => {
     for (const gapMs of [13_000, 60_000, 290_000]) {
       const start = endingFromLiveClosed();
-      const steps: [SessionEvent, number][] = [];
+      const steps: Array<[SessionEvent, number]> = [];
       for (let t = 10_000; t < gapMs; t += 10_000) {
         steps.push([{ type: 'round-poll', result: NONE }, NOW + t]);
       }

@@ -583,7 +583,7 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
 describe('라이브 창 탐침 — probe-live 효과(설계 r9 2절 · c13g 휴면)', () => {
   const LIVE = `${BASE}/live/key-1/index.m3u8`;
   const PDT0 = NOW - 28_000;
-  /** 4초 조각 일곱(첫 조각에만 PDT) — 하한 = 첫 PDT + 3 × TD · 끝 = 첫 PDT + 28초 */
+  /** 4초 조각 일곱(첫 조각에만 PDT) — 하한 = 첫 PDT + 맨 앞 조각 셋의 길이(12초) · 끝 = 첫 PDT + 28초 */
   const LIVE_MEDIA = [
     '#EXTM3U',
     '#EXT-X-TARGETDURATION:4',
