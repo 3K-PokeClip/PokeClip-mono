@@ -464,7 +464,7 @@ func vodKey(streamID, head string) (string, error) {
 	if _, err := manifestKey(streamID, head); err != nil {
 		return "", err
 	}
-	return "vod/" + streamID + "/" + head + "/index.m3u8", nil
+	return vodKeyPrefix + streamID + "/" + head + "/index.m3u8", nil
 }
 
 // msDuration 은 ms 정수 길이다.
