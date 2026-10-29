@@ -32,9 +32,15 @@ const MODIFIER_CODES = /^(Shift|Control|Alt|Meta|OS)(Left|Right)?$|^CapsLock$|^F
 
 type KeyInfo = { name: string; text: string; typing: boolean };
 
-function keyInfo(code: string, mac: boolean): KeyInfo | null {
+// 글자 키 — macOS libobs는 물리 위치(kVK_ANSI_*)로 묶어 code가 맞다. Windows libobs는 자판 배치를 따르는 가상 키(VK)로
+// 묶어, QWERTZ에서 Z라고 적힌 키(물리 KeyY)는 VK_Z다 — Windows는 배치가 반영된 key 글자를 쓴다(2차 리뷰).
+// key가 영문 글자가 아니면(한글 입력 「ㅡ」·IME 「Process」 등) code로 — 한국어 두벌식은 QWERTY 배치라 같다.
+function keyInfo(code: string, mac: boolean, key?: string): KeyInfo | null {
   let m = /^Key([A-Z])$/.exec(code);
-  if (m) return { name: m[1], text: m[1], typing: true };
+  if (m) {
+    const letter = !mac && key && /^[a-zA-Z]$/.test(key) ? key.toUpperCase() : m[1];
+    return { name: letter, text: letter, typing: true };
+  }
   m = /^Digit([0-9])$/.exec(code);
   if (m) return { name: m[1], text: m[1], typing: true };
   m = /^F([0-9]{1,2})$/.exec(code);
@@ -55,6 +61,7 @@ export type CaptureStep =
 
 export interface KeyLike {
   code: string;
+  key?: string; // 배치가 반영된 글자(Windows 글자 키에만 쓴다)
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
@@ -64,7 +71,7 @@ export interface KeyLike {
 export function captureStep(e: KeyLike, mac: boolean): CaptureStep {
   if (e.code === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return { kind: 'cancel' };
   if (MODIFIER_CODES.test(e.code)) return { kind: 'modifiers' };
-  const info = keyInfo(e.code, mac);
+  const info = keyInfo(e.code, mac, e.key);
   if (!info || (mac && MAC_MISSING.has(info.name))) return { kind: 'reject', reason: 'hotkey_bad_key' };
   const combo: HotkeyCombo = {
     key: `OBS_KEY_${info.name}`,
