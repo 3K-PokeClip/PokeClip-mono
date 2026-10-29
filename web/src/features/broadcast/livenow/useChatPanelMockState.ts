@@ -230,7 +230,8 @@ export function useChatPanelMockState(
   const lastSeq = useRef<{ seq: number; epoch: number } | null>(null);
   const refillTimer = useRef<number | null>(null);
   const pollRef = useRef<(() => Promise<void>) | null>(null);
-  // 라이브 폴링이 첫 응답을 받은 방송 번호. 받기 전에는 빈 목록이 「연결하는 중」이고, 받은 뒤에는 「아직 채팅이 없어요」다
+  // 라이브 폴링이 첫 응답을 받은 방송 번호. 받기 전에는 빈 목록이 「연결하는 중」이고, 받은 뒤에는 「아직 채팅이 없어요」다.
+  // 폴링 판이 끝나면(정리) 지운다 — 다음 판은 줄을 비우고 처음부터 다시 묻는다
   const [liveReadFor, setLiveReadFor] = useState<string | null>(null);
   const live = useLiveData();
   const streamId = live.streamId;
@@ -441,6 +442,10 @@ export function useChatPanelMockState(
     return () => {
       stopped = true;
       window.clearInterval(t);
+      // 「첫 응답 받음」은 이 폴링 판의 것이다. 다음 판은 줄을 비우고(setRaw({})) 처음부터 다시 묻는데, 방송 번호만 남겨 두면
+      // 같은 방송에서 판이 다시 설 때(창 접었다 펴기 · 연동 잠금 해제 · 확인 중→라이브) 새 응답 전에 「아직 채팅이 없어요」가
+      // 섰고, 그 요청이 실패하면 내내 그대로였다(PR #459 리뷰 1차)
+      setLiveReadFor(null);
     };
   }, [enabled, streamId, ended, live.status]);
 

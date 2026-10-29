@@ -2992,6 +2992,32 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(within(panel).queryByText('채팅에 연결하는 중..')).toBeNull();
     expect(within(panel).getByText('아직 채팅이 없어요')).toBeInTheDocument();
   });
+
+  it('창을 접었다 다시 열면 새 응답 전까지 「아직 채팅이 없어요」가 아니라 「연결하는 중」이다(PR #459 리뷰 1차)', async () => {
+    // 다시 열면 폴링이 줄을 비우고 처음부터 묻는다. 「첫 응답 받음」이 앞 판의 것으로 남으면 채팅이 흐르던 방송인데 새 응답 전에
+    // 「아직 채팅이 없어요」가 섰다
+    await renderLive();
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
+    let release: () => void = () => undefined;
+    server.liveChatGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    fireEvent.click(screen.getByRole('button', { name: '채팅 열기' }));
+    await settle();
+    const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(within(panel).queryByText('아직 채팅이 없어요')).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(within(panel).getByText('채팅에 연결하는 중..')).toBeInTheDocument();
+
+    // 새 판의 응답(여기서는 빈 쪽)을 받은 뒤에야 「아직 채팅이 없어요」다
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(within(panel).getByText('아직 채팅이 없어요')).toBeInTheDocument();
+  });
 });
 
 describe('LiveScreen — 점프카드 목록 요청(POK-254 확인 필요)', () => {
