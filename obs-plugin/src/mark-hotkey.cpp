@@ -4,6 +4,7 @@
 #include "config.hpp"
 #include "mark-policy.hpp"
 #include "mark-sender.hpp"
+#include "system-hotkey.hpp"
 #include "ui-thread.hpp"
 
 #include <obs-frontend-api.h>
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <string>
+#include <vector>
 
 namespace pokeclip {
 
@@ -25,6 +27,9 @@ constexpr const char *kHotkeyName = "PokeClip.MarkMoment";
 
 std::atomic<obs_hotkey_id> g_hotkey{OBS_INVALID_HOTKEY_ID};
 std::atomic<int64_t> g_captureUntilMs{0}; // 독이 새 키를 받는 중 — 이 시각(단조 ms)까지 마크를 막는다
+std::atomic<bool> g_sending{false};        // 우리 송출이 전송 중·재연결 중 — 시스템 전역 단축키를 건다(POK-496)
+uint64_t g_stateListener = 0;
+
 int64_t NowSteadyMs()
 {
 	using namespace std::chrono;
@@ -37,6 +42,38 @@ void OnHotkey(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 	if (!pressed || MarkHotkeyCapturing())
 		return; // 뗄 때도 불린다
 	MarkSender::Instance().Mark(MarkVia::Hotkey);
+}
+
+// 지금 바인딩을 시스템 전역 단축키(macOS)로 옮긴다. UI 스레드.
+void SyncSystemHotkeys()
+{
+	std::vector<SystemHotkeyCombo> combos;
+	obs_hotkey_id id = g_hotkey;
+	if (id != OBS_INVALID_HOTKEY_ID) {
+		struct Ctx {
+			obs_hotkey_id id;
+			std::vector<SystemHotkeyCombo> *out;
+		} ctx{id, &combos};
+		obs_enum_hotkey_bindings(
+			[](void *data, size_t, obs_hotkey_binding_t *binding) {
+				auto *c = static_cast<Ctx *>(data);
+				if (obs_hotkey_binding_get_hotkey_id(binding) != c->id)
+					return true;
+				obs_key_combination_t combo = obs_hotkey_binding_get_key_combination(binding);
+				if (combo.key == OBS_KEY_NONE)
+					return true;
+				SystemHotkeyCombo h;
+				h.virtualKey = obs_key_to_virtual_key(combo.key);
+				h.control = (combo.modifiers & INTERACT_CONTROL_KEY) != 0;
+				h.alt = (combo.modifiers & INTERACT_ALT_KEY) != 0;
+				h.shift = (combo.modifiers & INTERACT_SHIFT_KEY) != 0;
+				h.command = (combo.modifiers & INTERACT_COMMAND_KEY) != 0;
+				c->out->push_back(h);
+				return true;
+			},
+			&ctx);
+	}
+	SetSystemMarkHotkeys(combos);
 }
 
 obs_data_array_t *DefaultBindings()
@@ -158,6 +195,7 @@ void LoadBindings()
 	obs_hotkey_load(g_hotkey, bindings);
 	obs_data_array_release(bindings);
 	std::string label = RefreshLabel();
+	SyncSystemHotkeys();
 	obs_log(LOG_INFO, "mark hotkey from %s: %s", source, label.empty() ? "(none)" : label.c_str());
 }
 
@@ -212,6 +250,7 @@ void OnBindingsChanged(void *, calldata_t *cd)
 	RunInUiThread([]() {
 		RefreshLabel();
 		SaveCopy();
+		SyncSystemHotkeys();
 	});
 }
 
@@ -229,6 +268,12 @@ void RegisterMarkHotkey()
 	g_hotkey = id;
 	signal_handler_connect(obs_get_signal_handler(), "hotkey_bindings_changed", OnBindingsChanged, nullptr);
 	LoadBindings();
+	// 송출 단계는 여러 스레드에서 바뀐다 — 바뀐 것만 UI 스레드로 넘기고, 거기서 지금 값을 다시 읽는다(순서가 뒤집혀도 맞다).
+	g_stateListener = AppState::Instance().AddListener([](const StateSnapshot &s) {
+		bool sending = s.phase == StreamPhase::Live || s.phase == StreamPhase::Reconnecting;
+		if (g_sending.exchange(sending) != sending)
+			RunInUiThread([]() { SetSystemMarkHotkeysActive(g_sending.load()); });
+	});
 }
 
 void SaveMarkHotkeyCopy()
@@ -248,6 +293,11 @@ void UnregisterMarkHotkey()
 	if (id == OBS_INVALID_HOTKEY_ID)
 		return;
 	SaveCopy();
+	if (g_stateListener) {
+		AppState::Instance().RemoveListener(g_stateListener);
+		g_stateListener = 0;
+	}
+	ShutdownSystemMarkHotkeys();
 	signal_handler_disconnect(obs_get_signal_handler(), "hotkey_bindings_changed", OnBindingsChanged, nullptr);
 	g_hotkey = OBS_INVALID_HOTKEY_ID;
 	obs_hotkey_unregister(id);
@@ -283,6 +333,7 @@ MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelP
 	SaveToProfile();
 	SaveCopy();
 	r.label = RefreshLabel();
+	SyncSystemHotkeys();
 	uint32_t modifiers = (mods.control ? INTERACT_CONTROL_KEY : 0) | (mods.alt ? INTERACT_ALT_KEY : 0) |
 			     (mods.shift ? INTERACT_SHIFT_KEY : 0) | (mods.command ? INTERACT_COMMAND_KEY : 0);
 	r.conflict = FindConflict(id, {modifiers, key});

@@ -55,6 +55,7 @@ target_sources(
     src/gop-guard.hpp
     src/mark-hotkey.cpp
     src/mark-hotkey.hpp
+    src/system-hotkey.hpp
     src/mark-policy.cpp
     src/mark-policy.hpp
     src/mark-sender.cpp
@@ -89,6 +90,12 @@ set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES AUTOMOC ON AUTOUIC OFF AU
 if(WIN32)
   # cpp-httplib는 Windows 10 이상 API를 요구한다. min/max 매크로는 std와 충돌한다.
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE _WIN32_WINNT=0x0A00 NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
+if(APPLE)
+  # POK-496 — 「순간 표시」 시스템 전역 단축키(RegisterEventHotKey)
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/system-hotkey-mac.cpp)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "$<LINK_LIBRARY:FRAMEWORK,Carbon>")
 endif()
 
 find_package(CURL REQUIRED)
