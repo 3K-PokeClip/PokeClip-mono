@@ -43,16 +43,43 @@ describe('captureStep', () => {
     expect(captureStep(key('Equal', ctrl), false)).toMatchObject({ combo: { key: 'OBS_KEY_PLUS' }, label: 'Ctrl+=' });
   });
 
-  it('Windows 글자 키는 자판 배치(key)를 따르고, macOS는 물리 위치(code)를 따른다', () => {
+  it('Windows 글자 키는 가상 키(keyCode)를 따르고, macOS는 물리 위치(code)를 따른다', () => {
     // 독일어 QWERTZ — Z라고 적힌 키는 물리 KeyY. Windows libobs는 VK_Z로 묶으니 OBS_KEY_Z
-    const qwertzZ = { ...key('KeyY', { ctrlKey: true }), key: 'z' };
+    const qwertzZ = { ...key('KeyY', { ctrlKey: true }), key: 'z', keyCode: 90 };
     expect(captureStep(qwertzZ, false)).toMatchObject({ combo: { key: 'OBS_KEY_Z' }, label: 'Ctrl+Z' });
     expect(captureStep(qwertzZ, true)).toMatchObject({ combo: { key: 'OBS_KEY_Y' } });
-    // 한글 입력 중이면 key가 한글 — code(QWERTY 자리)로
-    expect(captureStep({ ...key('KeyM', { ctrlKey: true, shiftKey: true }), key: 'ㅡ' }, false)).toMatchObject({
+    // 프랑스어 AZERTY — M은 물리 Semicolon 자리지만 VK_M
+    const azertyM = { ...key('Semicolon', { ctrlKey: true }), key: 'm', keyCode: 77 };
+    expect(captureStep(azertyM, false)).toMatchObject({ combo: { key: 'OBS_KEY_M' }, label: 'Ctrl+M' });
+    expect(captureStep(azertyM, true)).toMatchObject({ combo: { key: 'OBS_KEY_SEMICOLON' } });
+    // 한글 IME가 키를 쥐면 keyCode 229 — code(QWERTY 자리)로
+    expect(captureStep({ ...key('KeyM', { ctrlKey: true, shiftKey: true }), key: 'ㅡ', keyCode: 229 }, false)).toMatchObject({
       combo: { key: 'OBS_KEY_M' },
     });
-    expect(captureStep({ ...key('KeyM', { ctrlKey: true }), key: 'Process' }, false)).toMatchObject({ combo: { key: 'OBS_KEY_M' } });
+    expect(captureStep({ ...key('KeyM', { ctrlKey: true }), key: 'Process', keyCode: 229 }, false)).toMatchObject({
+      combo: { key: 'OBS_KEY_M' },
+    });
+  });
+
+  it('Windows 기호 키는 가상 키(VK_OEM_*)로 이름을 고른다 — 물리 자리로 고르면 다른 배치에서 다른 키에 걸린다', () => {
+    // 독일어 — ß 키는 물리 Minus 자리지만 VK_OEM_4, 「-」 키는 물리 Slash 자리지만 VK_OEM_MINUS
+    const sharpS = { ...key('Minus', { ctrlKey: true }), key: 'ß', keyCode: 219 };
+    expect(captureStep(sharpS, false)).toMatchObject({ combo: { key: 'OBS_KEY_BRACKETLEFT' }, label: 'Ctrl+ß' });
+    expect(captureStep(sharpS, true)).toMatchObject({ combo: { key: 'OBS_KEY_MINUS' } });
+    expect(captureStep({ ...key('Slash', { ctrlKey: true }), key: '-', keyCode: 189 }, false)).toMatchObject({
+      combo: { key: 'OBS_KEY_MINUS' },
+      label: 'Ctrl+-',
+    });
+    // US — 배치와 자리가 같다. 표기는 US 글자
+    expect(captureStep({ ...key('Equal', { ctrlKey: true }), key: '=', keyCode: 187 }, false)).toMatchObject({
+      combo: { key: 'OBS_KEY_PLUS' },
+      label: 'Ctrl+=',
+    });
+    // 기호도 Shift만으로는 거절
+    expect(captureStep({ ...key('Minus', { shiftKey: true }), key: '?', keyCode: 219 }, false)).toEqual({
+      kind: 'reject',
+      reason: 'hotkey_needs_modifier',
+    });
   });
 
   it('macOS libobs에 없는 키(Insert·Pause·F21~F24)는 macOS에서만 거절한다', () => {
