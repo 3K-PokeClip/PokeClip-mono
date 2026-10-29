@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LivePosition } from './livePosition';
 import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
@@ -53,6 +54,8 @@ function details(n: number): Details {
 }
 
 const video = { el: null as HTMLVideoElement | null, paused: false, played: [] as number[][] };
+/** 그릴 때마다 그 소스 세대와 재생기 자리를 적는다 */
+const drawn: Array<[number, LivePosition | null]> = [];
 
 function lastHls(): FakeHls {
   const h = fake.instances[fake.instances.length - 1];
@@ -73,16 +76,26 @@ async function mountLive(hooks: PlaybackHooks) {
   const el = document.createElement('video');
   video.el = el;
   const ref = { current: el };
-  const view = renderHook(() =>
-    useHlsPlayback(ref, SOURCE, {}, undefined, undefined, false, undefined, hooks),
+  const view = renderHook(
+    ({ source }) => {
+      const sim = useHlsPlayback(ref, source, {}, undefined, undefined, false, undefined, hooks);
+      drawn.push([source.generation, sim.livePosition]);
+      return sim;
+    },
+    { initialProps: { source: SOURCE } },
   );
+  await startPlayer();
+  el.currentTime = 36;
+  return view;
+}
+
+/** 막 선 재생기에 목록 10조각 · 라이브 끝 38초를 준다 */
+async function startPlayer() {
   await act(async () => {
     await vi.dynamicImportSettled();
   });
   lastHls().liveSyncPosition = 38;
   act(() => lastHls().trigger('hlsLevelUpdated', { details: details(10) }));
-  el.currentTime = 36;
-  return view;
 }
 
 function timeupdate() {
@@ -92,6 +105,7 @@ function timeupdate() {
 beforeEach(() => {
   vi.useFakeTimers({ now: PDT0 + 40_000 });
   fake.instances.length = 0;
+  drawn.length = 0;
   video.paused = false;
   video.played = [];
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
@@ -157,5 +171,23 @@ describe.each([
       video.paused = false;
     });
     expect(view.result.current.livePosition).toMatchObject({ playing: false, runMs: 6_200 });
+  });
+
+  it('세대가 오른 그리기에는 갈아 끼우기 직전 옛 재생기가 잰 자리를 싣지 않는다', async () => {
+    const view = await mountLive(hooks);
+    timeupdate();
+    expect(view.result.current.livePosition).not.toBeNull();
+    act(() => {
+      // 세션이 소스를 바꾼 같은 반영 안에서 옛 재생기가 한 번 더 잰다
+      video.el!.currentTime = 37.5;
+      video.el!.dispatchEvent(new Event('timeupdate'));
+      view.rerender({ source: { ...SOURCE, generation: 1 } });
+    });
+    const swapped = drawn.filter(([generation]) => generation === 1);
+    expect(swapped.length).toBeGreaterThan(0);
+    expect(swapped.map(([, at]) => at)).toEqual(swapped.map(() => null));
+    await startPlayer();
+    timeupdate();
+    expect(view.result.current.livePosition).toMatchObject({ atMs: PDT0 + 37_500 });
   });
 });

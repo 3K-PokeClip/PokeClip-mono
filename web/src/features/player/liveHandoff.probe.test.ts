@@ -307,3 +307,59 @@ describe('무잘림 게이트(P0–P4 · T18)', () => {
     expect([done.phase.kind, done.source.startAtMs]).toEqual(['live', E - 500]);
   });
 });
+
+describe('새 소스의 첫 위치 전에는 넘기지 않는다(조기 넘김 실측 2/70)', () => {
+  /** 라이브를 liveAt 에서 보다가 p 로 되감은 세션 — 되감기 재생기는 아직 위치를 내지 않았다 */
+  function enteredFromLive(liveAt: number, p = P): PlaybackSessionState {
+    startRun();
+    const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
+    const seek: SessionEvent = { type: 'seek', targetMs: p, view: { lowerMs: p + 1, endMs: E } };
+    const entered = feed(fresh, [streamPoll(liveReady(A1, T0, NOW)), pos(liveAt), seek]).state;
+    startRun();
+    return entered;
+  }
+
+  it('진입 직후 목록 · 문 응답이 첫 위치보다 먼저 와도 라이브 위치로 넘기지 않는다 — 두 순서', () => {
+    const liveAt = NOW + 20_000;
+    const orders = [
+      () => [loaded(A1, T0, NOW), doorPoll()],
+      () => [doorPoll(), loaded(A1, T0, NOW), doorPoll(X_A, R + 2_000)],
+    ];
+    for (const order of orders) {
+      const entered = enteredFromLive(liveAt);
+      const early = feed(entered, order());
+      expect([early.state.phase.kind, probes(early.effects)]).toEqual(['rewind', 0]);
+      const asked = feed(early.state, [pos(P)]);
+      expect(probes(asked.effects)).toBe(1);
+      const done = feed(asked.state, [settleProbe(asked.state)]).state;
+      expect([done.phase.kind, done.source.startAtMs]).toEqual(['live', P]);
+    }
+  });
+
+  it('나가 있던 탐침의 결과도 새 재생기(리마운트)의 첫 위치 전이면 탐침만 비운다(P4)', () => {
+    const asked = feed(watching(), [pos(P)]).state;
+    const remounted = feed(asked, [{ type: 'remount' }]).state;
+    const { state, effects } = feed(remounted, [settleProbe(remounted)]);
+    expect(state).toMatchObject({
+      phase: { kind: 'rewind' },
+      handoffProbe: null,
+      handoffBlock: null,
+    });
+    expect(effects).toEqual([]);
+    startRun();
+    expect(handOffs(state, [pos(P + 500)])).toBe(1);
+  });
+
+  it('되감기 안 뒤로 시크하면 옮긴 자리의 위치가 오기 전에는 시크 전 위치로 넘기지 않는다', () => {
+    const view = { lowerMs: T0, endMs: E };
+    const back: SessionEvent = { type: 'seek', targetMs: E - MIN, view };
+    const stalled = feed(rewindNear(), [pos(P), back]).state;
+    const polled = feed(stalled, [doorPoll()]);
+    expect([polled.state.phase.kind, probes(polled.effects)]).toEqual(['rewind', 0]);
+    const asked = feed(watching(), [pos(P)]).state;
+    const moved = feed(asked, [back]).state;
+    const settled = feed(moved, [settleProbe(moved)]);
+    const outcome = [settled.state.phase.kind, settled.state.handoffProbe, settled.effects];
+    expect(outcome).toEqual(['rewind', null, []]);
+  });
+});

@@ -120,15 +120,19 @@ export function seekLive(
   };
 }
 
-/** 로드한 목록 안 시크(되감기 · vod) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로 */
+/**
+ * 로드한 목록 안 시크(되감기 · vod) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로.
+ * 옮긴 자리의 위치가 오기 전에는 시크 전 위치로 넘기지 않는다(positionGeneration)
+ */
 export function seekInList(
   session: PlaybackSessionState,
   targetMs: number,
   view: SeekView,
 ): Transition {
+  const state = { ...session, positionGeneration: null };
   if (targetMs < view.lowerMs) {
     return {
-      state: session,
+      state,
       effects: [
         { kind: 'seek-within', atMs: view.lowerMs },
         { kind: 'notice', text: SESSION_NOTICES.oldest },
@@ -136,7 +140,7 @@ export function seekInList(
     };
   }
   return {
-    state: session,
+    state,
     effects: [{ kind: 'seek-within', atMs: Math.min(targetMs, view.endMs) }],
   };
 }

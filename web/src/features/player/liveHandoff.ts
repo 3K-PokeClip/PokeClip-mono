@@ -76,10 +76,15 @@ export interface HandoffBlock {
   reason: 'reverted' | 'truncated' | 'unknown';
 }
 
-/** 재생 세션에 더하는 넘김 칸 아홉 */
+/** 재생 세션에 더하는 넘김 칸 열 */
 export interface HandoffFields {
   /** 마지막 위치 사건의 재생 여부 */
   playing: boolean;
+  /**
+   * 마지막 위치(lastAtMs)를 낸 소스 세대. 안에서 시크를 청하면 옮긴 자리의
+   * 위치가 올 때까지 null 이다. 지금 세대와 같을 때만 넘김을 본다
+   */
+  positionGeneration: number | null;
   list: SourceList | null;
   handoffDoor: HandoffDoor | null;
   handoff: Handoff | null;
@@ -96,6 +101,7 @@ export interface HandoffFields {
 export function openHandoffFields(): HandoffFields {
   return {
     playing: false,
+    positionGeneration: null,
     list: null,
     handoffDoor: null,
     handoff: null,
@@ -232,10 +238,14 @@ export function withHandoffRules(
   return state === next.state ? next : { state, effects: next.effects };
 }
 
-/** 띠 안인가 — 마지막 위치가 지금 목록 끝 E 앞 1 × TD_되감기 안이다 */
+/**
+ * 띠 안인가 — 지금 소스가 낸 마지막 위치가 지금 목록 끝 E 앞 1 × TD_되감기
+ * 안이다. 새 소스가 첫 위치를 내기 전의 lastAtMs 는 앞 소스의 자리라 보지 않는다
+ */
 function inHandoffBand(session: PlaybackSessionState): boolean {
   const { list, lastAtMs } = session;
   if (list === null || lastAtMs === null) return false;
+  if (session.positionGeneration !== session.source.generation) return false;
   return lastAtMs >= list.endMs - HANDOFF_BAND_TD * list.tdMs;
 }
 
