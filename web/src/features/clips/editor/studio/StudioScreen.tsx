@@ -84,6 +84,7 @@ import {
 } from '../uploadInfo';
 import type { SceneFrameSource } from '../useSceneFrames';
 import { clipSettled, clipStatusView } from './clipProgress';
+import { useClipStatusClock } from './useClipStatusClock';
 import { StudioSkeleton } from './StudioSkeleton';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
@@ -1085,17 +1086,22 @@ function WiredStudio({
   // 영상 상태 알약(POK-492)은 영상 만들기 요청을 보내는 동안만 비킨다 — 새 요청이면 곧 다른 영상이다. 저장 중에도 비키면 「편집본
   // 저장」마다 알약이 깜빡이고 열어 둔 작은 창이 닫혔다(PR #454 1차 리뷰)
   const latest = save.busy === 'render' ? null : save.clip;
+  // 예약 공개 시각이 지나거나 날이 바뀌면 상태 확인 답 없이도 다시 그린다(useClipStatusClock, PR #454 3차 리뷰)
+  const statusNow = useClipStatusClock(
+    latest !== null,
+    latest?.upload?.publishAt ?? latest?.uploadRequest?.publishAt ?? null,
+  );
   const clipStatus = useMemo(
     () =>
       latest === null
         ? null
         : {
-            view: clipStatusView(latest),
+            view: clipStatusView(latest, statusNow),
             versionLabel: `편집본 v${latest.recipeVersion}`,
             retrying,
             onRetryUpload: retryClipUpload,
           },
-    [latest, retrying, retryClipUpload],
+    [latest, statusNow, retrying, retryClipUpload],
   );
 
   return (
