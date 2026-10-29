@@ -72,6 +72,15 @@ export type ChatPanelMessage =
   /** 하이라이트 감지처럼 서비스가 끼워 넣는 줄 */
   | { id: number; kind: 'system'; text: string };
 
+/**
+ * 채팅 목록 자리에 줄 대신 서는 안내. 보일 줄이 하나도 없을 때만이다: 줄이 있으면 읽는 중 · 실패는 지금처럼 목록 안 한 줄이다
+ * - loading: 지난 방송(되감은 라이브 포함) 채팅을 읽는 중이거나, 아직 어느 시점을 보일지 모른다
+ * - connecting: 라이브 채팅의 첫 응답을 기다린다
+ * - failed: 읽지 못했다(잠시 뒤 다시 묻는다)
+ * - empty: 다 읽었는데 그 시점까지 채팅이 없다
+ */
+export type ChatPlaceholder = 'loading' | 'connecting' | 'failed' | 'empty';
+
 export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
@@ -98,6 +107,8 @@ export interface ChatPanelMockState {
    * 듣는 사람이 목록을 훑기 전에는 모른다(리뷰 1라운드). 다 읽었으면 null
    */
   statusNote: string | null;
+  /** 보일 줄이 하나도 없을 때 목록 자리에 세울 안내(ChatPlaceholder). 줄이 있거나 방송 대기 · 읽기를 멈췄으면 null */
+  placeholder: ChatPlaceholder | null;
 }
 
 // ── clip 창구 배선: chat-messages(메우기·지난 방송) + 카드 통로 중계(라이브) ──
@@ -219,6 +230,9 @@ export function useChatPanelMockState(
   const lastSeq = useRef<{ seq: number; epoch: number } | null>(null);
   const refillTimer = useRef<number | null>(null);
   const pollRef = useRef<(() => Promise<void>) | null>(null);
+  // 라이브 폴링이 첫 응답을 받은 방송 번호. 받기 전에는 빈 목록이 「연결하는 중」이고, 받은 뒤에는 「아직 채팅이 없어요」다.
+  // 폴링 판이 끝나면(정리) 지운다 — 다음 판은 줄을 비우고 처음부터 다시 묻는다
+  const [liveReadFor, setLiveReadFor] = useState<string | null>(null);
   const live = useLiveData();
   const streamId = live.streamId;
 
@@ -401,7 +415,10 @@ export function useChatPanelMockState(
         } while (cursor !== null && pages < LIVE_POLL_PAGE_BUDGET);
         // 본문을 받는 사이 효과가 멈췄으면(방송이 끝나 지난 방송 읽기로 바뀜) 싣지 않는다: 덮지 않고 합치게 된 뒤로는 끝난 뒤의
         // 줄이 「채팅 기록」에 남았다(리뷰 6라운드)
-        if (stopped || items.length === 0) return;
+        if (stopped) return;
+        // 첫 응답을 받았다: 채팅이 하나도 없어도 이제 「연결하는 중」이 아니다
+        setLiveReadFor(streamId);
+        if (items.length === 0) return;
         const page = { items, appliedOffsetMs };
         setRaw((prev) => {
           const next = { ...prev };
@@ -425,6 +442,10 @@ export function useChatPanelMockState(
     return () => {
       stopped = true;
       window.clearInterval(t);
+      // 「첫 응답 받음」은 이 폴링 판의 것이다. 다음 판은 줄을 비우고(setRaw({})) 처음부터 다시 묻는데, 방송 번호만 남겨 두면
+      // 같은 방송에서 판이 다시 설 때(창 접었다 펴기 · 연동 잠금 해제 · 확인 중→라이브) 새 응답 전에 「아직 채팅이 없어요」가
+      // 섰고, 그 요청이 실패하면 내내 그대로였다(PR #459 리뷰 1차)
+      setLiveReadFor(null);
     };
   }, [enabled, streamId, ended, live.status]);
 
@@ -506,6 +527,29 @@ export function useChatPanelMockState(
       .map(([keyword, count]) => ({ keyword, count }));
   }, [items, replay, replayCursor, ended]);
 
+  // 보일 줄이 하나도 없을 때 목록 자리에 세울 안내. 읽기를 멈췄으면(창을 접음 · 수집 끊김 · 연동 잠금) 세우지 않는다: 끊김은 머리
+  // 배지와 바닥 줄이 말하고, 영영 오지 않을 응답을 「연결하는 중」으로 기다리게 하지 않는다. 방송 대기도 바닥 줄이 말한다
+  const placeholder = useMemo<ChatPlaceholder | null>(() => {
+    if (!enabled) return null;
+    if (replay === null) {
+      // 지난 방송인데 아직 어느 시점을 보일지 모른다(명부 답 전, 녹화가 자리를 알리기 전) — 목록의 「불러오고 있어요」와 같은 때다
+      if (ended) return 'loading';
+      if (live.status === 'offline' || items.length > 0) return null;
+      // liveReadFor에는 응답을 받은 방송 번호만 들어가므로 빈 번호(방송 없음)는 같아질 수 없고 「연결하는 중」으로 남는다
+      return liveReadFor === streamId ? 'empty' : 'connecting';
+    }
+    if (replay.lines.length > 0) return null;
+    switch (replay.status) {
+      case 'ready':
+        return 'empty';
+      case 'loading':
+      case 'earlierLoading':
+        return 'loading';
+      default:
+        return 'failed';
+    }
+  }, [enabled, replay, ended, live.status, items.length, streamId, liveReadFor]);
+
   // 채팅이 고른 시점을 따라가려면 그 시점을 절대 시각으로 바꿀 기준점이 있어야 한다(시작 시각을 모르는 방송은 없을 수 있다).
   // 지난 방송만이다: 라이브는 고른 시점이 아니라 재생기가 알린 자리(되감은 영상의 시각)를 따른다
   const followsPlayhead = live.status === 'ended' && replayUpper !== null && vodBase !== null;
@@ -523,5 +567,6 @@ export function useChatPanelMockState(
           : null,
     replayWaiting,
     statusNote,
+    placeholder,
   };
 }

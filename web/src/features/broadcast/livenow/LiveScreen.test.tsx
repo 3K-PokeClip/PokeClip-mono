@@ -469,6 +469,10 @@ const server = vi.hoisted(() => ({
   chatPaged: false,
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
+  /** 라이브 채팅을 빈 쪽으로 준다 — 받은 뒤 줄이 없으면 목록 자리에 「아직 채팅이 없어요」 */
+  liveChatEmpty: false,
+  /** 라이브 채팅 응답을 이것이 풀릴 때까지 붙든다 — 첫 응답 전의 「채팅에 연결하는 중..」을 본다 */
+  liveChatGate: null as Promise<void> | null,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail' | 'expired',
   /** 'grant' 출입증이 끝날 때까지의 시간. 갱신은 만료 5분 전이라, 갱신을 재는 시험은 짧게 주어 가짜 시계를 몇 분씩 돌리지 않는다(POK-415) */
@@ -906,6 +910,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   if (path.endsWith('/chat-messages')) {
     if (server.vodChat && path.includes(`/${VOD_ID}/`)) return vodChatResponse(u, init?.signal);
     if (server.liveChatTimeline && path.includes(`/${STREAM_ID}/`)) return liveTimelineResponse(u);
+    if (path.includes(`/${STREAM_ID}/`) && (server.liveChatEmpty || server.liveChatGate)) {
+      const page = () => jsonResponse(200, { items: [], nextCursor: null, appliedOffsetMs: 0 });
+      return server.liveChatGate ? server.liveChatGate.then(page) : page();
+    }
     // 200건이 넘으면 서버는 오래된 쪽부터 주고 커서를 단다 — chatPaged면 두 쪽으로 나눠 준다
     if (server.chatPaged && u.searchParams.get('cursor') === null)
       return jsonResponse(200, { items: CHAT.slice(0, 3), nextCursor: 'p2', appliedOffsetMs: 0 });
@@ -1115,6 +1123,8 @@ beforeEach(() => {
   server.hideGate = null;
   server.chatPaged = false;
   server.chatIdClash = false;
+  server.liveChatEmpty = false;
+  server.liveChatGate = null;
   server.playback = 'off';
   server.playbackTtlMs = 10 * 60_000;
   server.playbackGate = null;
@@ -2900,12 +2910,12 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(screen.getByText('승급 기원!! 가즈아')).toBeInTheDocument();
   });
 
-  it('수집 상태를 채팅 헤더의 라이브 리전이 말한다', async () => {
+  it('수집 상태를 채팅 헤더의 라이브 리전이 말한다: 평소엔 비어 있고 제목이 상태를 말한다(시안 B)', async () => {
     await renderLive();
 
-    // 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바뀌어야 알림이 닿는다
+    // 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바뀌어야 알림이 닿는다. 잘 들어오는 동안엔 배지가 없다
     const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
-    expect(within(panel).getByRole('status')).toHaveTextContent('수집 중');
+    expect(within(panel).getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('접으면 패널이 사라지고, 플레이어 상단의 여는 버튼으로 되살아난다', async () => {
@@ -2915,7 +2925,7 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     // 열려 있는 동안엔 여는 버튼이 자리를 차지하지 않는다
     expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).not.toBeInTheDocument();
 
     // 패널이 사라져도 복귀 통로는 플레이어 안에 남는다
@@ -2955,9 +2965,60 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     }
   });
 
-  it('키워드 설정은 라우트가 설 때까지 잠겨 있다', async () => {
+  it('채팅 창에 「키워드 설정」 자리를 두지 않는다(키워드 기능이 없다 — 사용자 결정)', async () => {
     await renderLive();
-    expect(screen.getByRole('button', { name: '키워드 설정' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '키워드 설정' })).toBeNull();
+  });
+
+  it('첫 응답 전에는 목록 자리에 「채팅에 연결하는 중..」이고, 받았는데 채팅이 없으면 「아직 채팅이 없어요」다', async () => {
+    let release: () => void = () => undefined;
+    server.liveChatEmpty = true;
+    server.liveChatGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    await renderLive();
+    const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(within(panel).getByText('채팅에 연결하는 중..', { selector: 'p' })).toBeInTheDocument();
+    expect(within(panel).queryByRole('list', { name: '채팅 메시지' })).toBeNull();
+    // 화면 낭독에도 알린다(PR #459 리뷰 1차)
+    expect(within(panel).getByRole('status')).toHaveTextContent('채팅에 연결하는 중..');
+
+    await act(async () => {
+      release();
+    });
+    await settle();
+    // 빈 응답도 응답이다: 영영 「연결하는 중」에 머물지 않는다
+    expect(within(panel).queryByText('채팅에 연결하는 중..')).toBeNull();
+    expect(within(panel).getByText('아직 채팅이 없어요', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('창을 접었다 다시 열면 새 응답 전까지 「아직 채팅이 없어요」가 아니라 「연결하는 중」이다(PR #459 리뷰 1차)', async () => {
+    // 다시 열면 폴링이 줄을 비우고 처음부터 묻는다. 「첫 응답 받음」이 앞 판의 것으로 남으면 채팅이 흐르던 방송인데 새 응답 전에
+    // 「아직 채팅이 없어요」가 섰다
+    await renderLive();
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
+    let release: () => void = () => undefined;
+    server.liveChatGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    fireEvent.click(screen.getByRole('button', { name: '채팅 열기' }));
+    await settle();
+    const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(within(panel).queryByText('아직 채팅이 없어요')).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(within(panel).getByText('채팅에 연결하는 중..', { selector: 'p' })).toBeInTheDocument();
+
+    // 새 판의 응답(여기서는 빈 쪽)을 받은 뒤에야 「아직 채팅이 없어요」다
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(within(panel).getByText('아직 채팅이 없어요', { selector: 'p' })).toBeInTheDocument();
   });
 });
 
@@ -3401,7 +3462,7 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
   });
@@ -3410,7 +3471,7 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     server.chzzkLink = { linked: false };
     await renderLive();
 
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     await settle();
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
   });
@@ -3922,7 +3983,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     server.vodChat = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -3957,7 +4018,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(screen.queryByText('5005초 채팅')).toBeNull();
   });
 
-  it('그 시각까지 다 읽기 전에는 「채팅을 불러오고 있어요」다: 빈 창을 채팅이 없는 것처럼 보이지 않는다', async () => {
+  it('그 시각까지 다 읽기 전에는 목록 자리에 「열심히 불러오는 중..」이다: 빈 창을 채팅이 없는 것처럼 보이지 않는다', async () => {
     let release: () => void = () => undefined;
     server.vodChat = true;
     server.vodChatGate = new Promise((resolve) => {
@@ -3965,16 +4026,21 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     });
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
-    const list = within(panel).getByRole('list', { name: '채팅 메시지' });
-    expect(within(list).getByText('채팅을 불러오고 있어요')).toBeInTheDocument();
-    // 듣는 사람에게도 알린다: 목록 안의 줄은 목록을 훑기 전에는 모른다
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
+    // 보일 줄이 없으면 목록 대신 안내가 선다(0.3초 뒤 — 금방 끝나는 읽기에는 안 띄운다)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(within(panel).getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
+    expect(within(panel).queryByRole('list', { name: '채팅 메시지' })).toBeNull();
+    // 듣는 사람에게도 알린다: 눈에 보이는 안내는 목록을 훑기 전에는 모른다
     expect(within(panel).getByRole('status')).toHaveTextContent('채팅을 불러오고 있어요');
 
     await act(async () => {
       release();
     });
     await settle();
+    expect(screen.queryByText('열심히 불러오는 중..')).toBeNull();
     expect(screen.queryByText('채팅을 불러오고 있어요')).toBeNull();
     expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
   });
@@ -3984,12 +4050,10 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     server.vodChatFail = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
-    expect(
-      within(within(panel).getByRole('list', { name: '채팅 메시지' })).getByText(
-        /^채팅을 불러오지 못했어요/,
-      ),
-    ).toBeInTheDocument();
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
+    // 보일 줄이 없으니 목록 자리의 안내가 말한다(실패는 기다리지 않고 바로)
+    expect(within(panel).getByText('채팅을 불러오지 못했어요')).toBeInTheDocument();
+    expect(within(panel).getByText('잠시 뒤 다시 불러와요')).toBeInTheDocument();
     expect(within(panel).getByRole('status')).toHaveTextContent('채팅을 불러오지 못했어요');
 
     server.vodChatFail = false;
@@ -4008,7 +4072,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
       { startMs: VOD_STARTED + 160_000, durationSeconds: 8_840 },
     ]);
     await playTo(container, 95);
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     list.focus();
     // 위로 올려 옛 줄을 읽는다
@@ -4038,7 +4102,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     // 카드를 누르면 그 시점을 따라간다. 다시 세우지 않아 목록 포커스도 남는다
     fireEvent.click(screen.getByRole('button', { name: '0:01:00 시점으로 이동' }));
     await settle();
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBe(panel);
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBe(panel);
     expect(within(panel).getByText(/^0:01:00 시점까지 보는 중/)).toBeInTheDocument();
     expect(setScrollTop).toHaveBeenCalledWith(1000);
     expect(document.activeElement).toBe(list);
@@ -4048,7 +4112,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     // 카드는 화면이 따로 알려 이 길이 끊겨도 카드 시험은 초록이었다(리뷰 2라운드)
     const { container } = await openWithRecording();
     await playTo(container, 600);
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -4114,7 +4178,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     // 접었다 펴면 열쇠가 같은 글자라 치운 로더의 옛 줄(그 사이 옮기기 전 시점)을 한 번 그렸다(리뷰 1라운드)
     const { container } = await openWithRecording();
     await playTo(container, 600);
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
     await settle();
     chatTexts.length = 0;
@@ -4161,15 +4225,15 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     });
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    expect(
-      within(screen.getByRole('list', { name: '채팅 메시지' })).getByText('채팅을 불러오고 있어요'),
-    ).toBeInTheDocument();
+    // 보일 줄이 없으니 목록 자리에 읽는 중 안내가 선다(0.3초 뒤)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(screen.getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
     expect(chatFroms()).toEqual([]);
     // 바닥은 시점을 아직 모른다고 한다: 목록은 「불러오고 있어요」인데 바닥만 끝까지 본 것처럼 말했다(리뷰 2라운드)
     expect(screen.queryByText(/마지막 메시지까지 보는 중/)).toBeNull();
-    expect(screen.getByRole('button', { name: '키워드 설정' }).parentElement).toHaveTextContent(
-      /^시점을 확인하는 중/,
-    );
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
 
     await act(async () => {
       answer([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
@@ -4211,7 +4275,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     await settle();
     expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 숨기기' }));
     fireEvent.click(screen.getByRole('button', { name: '채팅 열기' }));
     await settle();
     expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
@@ -4371,13 +4435,16 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     for (let i = 0; i < 3; i += 1) await settle();
-    // 앞을 더 읽는 동안은 빈 창을 다 읽은 것처럼 두지 않는다: 목록 맨 위에 이른 쪽을 읽는 중이라고 쓴다
+    // 앞을 더 읽는 동안은 빈 창을 다 읽은 것처럼 두지 않는다: 영상 시각 쪽에 보일 줄이 아직 없으니 목록 자리에 읽는 중 안내가
+    // 서고(「아직 채팅이 없어요」가 아니다), 듣는 사람에게는 이른 쪽을 읽는 중이라고 알린다
     expect(server.vodChatHeld.length).toBeGreaterThan(0);
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
-    const items = within(within(panel).getByRole('list', { name: '채팅 메시지' })).getAllByRole(
-      'listitem',
-    );
-    expect(items[0]).toHaveTextContent('이전 채팅을 불러오고 있어요');
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(within(panel).getByText('열심히 불러오는 중..', { selector: 'p' })).toBeInTheDocument();
+    expect(within(panel).queryByText('아직 채팅이 없어요')).toBeNull();
+    expect(within(panel).getByRole('status')).toHaveTextContent('이전 채팅을 불러오고 있어요');
 
     server.vodChatHoldBefore = null;
     server.vodChatHeld.splice(0).forEach((release) => release());
@@ -4435,7 +4502,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     });
     fireEvent.keyDown(container.querySelector('[data-controls]')!, { key: 'ArrowLeft' });
     await settle();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const items = within(within(panel).getByRole('list', { name: '채팅 메시지' })).getAllByRole(
       'listitem',
     );
@@ -4462,7 +4529,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -4717,10 +4784,12 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
   it('시작 시각도 기준점도 모르는 지난 방송에서 카드를 누르면 채팅을 옮겼다고 하지 않는다: 그 시점을 절대 시각으로 못 바꾼다', async () => {
     server.vodStartUnknown = true;
+    // 줄이 있어야 목록이 선다(없으면 목록 자리에 「아직 채팅이 없어요」 안내가 선다)
+    server.vodChat = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     // 채팅은 영상 시각을 따르지 않아 카드를 눌러도 그대로다: 위로 올려 읽던 자리도 그대로 둔다(리뷰 2라운드)
-    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const panel = screen.getByRole('complementary', { name: '지난 채팅' });
     const list = within(panel).getByRole('list', { name: '채팅 메시지' });
     const setScrollTop = fakeScrollMetrics(list, {
       scrollHeight: 1000,
@@ -4831,10 +4900,16 @@ describe('LiveScreen — 지난 방송 상세', () => {
         .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`);
     expect(vodCalls('chat-chart')).toEqual([]);
     expect(vodCalls('chat-messages')).toEqual([]);
-    // 채팅 창은 빈 창이 아니라 읽는 중이다: 채팅이 없는 방송처럼 보이지 않는다(POK-324 리뷰 1라운드)
+    // 채팅 창은 빈 창이 아니라 읽는 중이다: 채팅이 없는 방송처럼 보이지 않는다(POK-324 리뷰 1라운드). 목록 자리에 읽는 중
+    // 안내가 서고(0.3초 뒤), 듣는 사람에게도 알린다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    const chatAside = screen.getByRole('complementary', { name: '지난 채팅' });
     expect(
-      within(screen.getByRole('list', { name: '채팅 메시지' })).getByText('채팅을 불러오고 있어요'),
+      within(chatAside).getByText('열심히 불러오는 중..', { selector: 'p' }),
     ).toBeInTheDocument();
+    expect(within(chatAside).getByRole('status')).toHaveTextContent('채팅을 불러오고 있어요');
     // 채팅 바닥도 그 동안은 분당 수를 적지 않는다: 라이브의 최근 1분 수(0)는 이 방송의 수가 아니다(리뷰 5라운드)
     expect(screen.queryByText(/· 분당/)).toBeNull();
 
@@ -4906,7 +4981,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
     expect(screen.queryByText(/자동 감지 중/)).toBeNull();
   });
@@ -4947,13 +5022,13 @@ describe('LiveScreen — 지난 방송 상세', () => {
       expect(from).toBeGreaterThanOrEqual(VOD_ENDED - 12 * 3_600_000 - 60_000);
   });
 
-  it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
+  it('지난 방송은 라이브 문구를 쓰지 않는다: 지난 채팅·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
     graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
 
-    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '지난 채팅' })).toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
     expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: '실시간 통계' })).toBeNull();

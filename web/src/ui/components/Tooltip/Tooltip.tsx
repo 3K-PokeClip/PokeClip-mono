@@ -18,6 +18,12 @@ export interface TooltipProps {
   align?: Align;
   /** Open delay in ms. Default 300. */
   delay?: number;
+  /**
+   * Link the tooltip to its trigger via aria-describedby. Default true. Set false when the content only
+   * repeats the trigger's accessible name (e.g. an icon button's aria-label) — otherwise screen readers
+   * read the same words twice, as name and as description. The tooltip is then hidden from them.
+   */
+  describe?: boolean;
 }
 
 /** Text hint shown on hover/focus of its trigger. Non-modal; no focus trap. */
@@ -27,6 +33,7 @@ export function Tooltip({
   side = 'top',
   align = 'center',
   delay = 300,
+  describe = true,
 }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLElement>(null);
@@ -54,7 +61,7 @@ export function Tooltip({
         onMouseLeave={hide}
         onFocus={show}
         onBlur={hide}
-        aria-describedby={open ? id : undefined}
+        aria-describedby={open && describe ? id : undefined}
       >
         {children}
       </Slot>
@@ -64,6 +71,7 @@ export function Tooltip({
             ref={contentAttachRef}
             role="tooltip"
             id={id}
+            aria-hidden={describe ? undefined : true}
             className={styles.tooltip}
             style={{ position: 'fixed', top: coords.top, left: coords.left }}
           >
