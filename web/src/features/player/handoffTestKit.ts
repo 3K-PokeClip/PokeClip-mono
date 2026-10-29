@@ -33,12 +33,18 @@ export function startRun(): void {
 }
 
 /**
+ * 잰 시각을 다루지 않는 시험의 위치는 모든 표식(소스 교체 · 안에서 시크) 뒤에 잰
+ * 것이다
+ */
+export const MEASURED_LAST = Number.MAX_SAFE_INTEGER;
+
+/**
  * 위치 사건. 기본은 재생 중이고, runMs 는 앞 위치에서 이어 센다 — 앞으로 간 만큼
  * 늘고, 뒤로 가거나 처음이면 0 이다
  */
 export function pos(
   atMs: number,
-  patch: { runMs?: number; playing?: boolean } = {},
+  patch: { runMs?: number; playing?: boolean; measuredAtMs?: number } = {},
 ): PositionEvent {
   const prev = lastPosition;
   const onward = prev !== null && atMs >= prev.atMs;
@@ -48,6 +54,7 @@ export function pos(
     atMs,
     playing: patch.playing ?? true,
     runMs: patch.runMs ?? carried,
+    measuredAtMs: patch.measuredAtMs ?? MEASURED_LAST,
   };
   lastPosition = event;
   return event;

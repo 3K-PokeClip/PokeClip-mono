@@ -71,9 +71,13 @@ export function useLiveRewindPlayback(
   const atMs = sim.livePosition?.atMs ?? null;
   const playing = sim.livePosition?.playing ?? false;
   const runMs = sim.livePosition?.runMs ?? 0;
+  // 잰 시각도 싣는다 — 이 효과는 커밋 뒤에 돌아, 그사이 세션이 재생기를 바꾸거나 옮겼으면 세션이 이 위치를 버린다(POK-200 c13)
+  const measuredAtMs = sim.positionMeasuredAtMs;
   useEffect(() => {
-    if (atMs !== null) dispatch({ type: 'position', atMs, playing, runMs });
-  }, [atMs, playing, runMs, dispatch]);
+    if (atMs !== null && measuredAtMs !== null) {
+      dispatch({ type: 'position', atMs, playing, runMs, measuredAtMs });
+    }
+  }, [atMs, playing, runMs, measuredAtMs, dispatch]);
 
   // 다시보기(VOD)는 끝난 방송이라 오른쪽 끝이 「실시간」이 아니라 녹화 끝이다(시크바 문구 · LIVE 숨김)
   return { ...sim, replay: state.source.kind === 'vod' };

@@ -8,7 +8,14 @@ import {
   type SessionEffect,
   type SessionEvent,
 } from './rewindSwitch';
-import { handedOff, pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
+import {
+  MEASURED_LAST,
+  handedOff,
+  pos,
+  resetEventKit,
+  startRun,
+  streamPoll,
+} from './handoffTestKit';
 
 // 넘김 확인 시험(POK-200 c13e — 설계 r9 4절 H0–H7 · A2 · A4 · 11절 T10 · T11 · T17 ·
 // T19 · T23). 넘김 행(P1)은 c13h 몫이라 시작 상태는 handedOff 가 P1 결과 모양으로
@@ -32,7 +39,7 @@ function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindSt
 
 /** 라이브 재생기의 위치 사건 — runMs 는 그 재생기의 played 연속 길이다 */
 function at(atMs: number, runMs: number): SessionEvent {
-  return { type: 'position', atMs, playing: true, runMs };
+  return { type: 'position', atMs, playing: true, runMs, measuredAtMs: MEASURED_LAST };
 }
 
 function run(start: PlaybackSessionState, events: SessionEvent[], now = NOW + 1_000) {

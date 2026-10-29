@@ -76,7 +76,7 @@ export interface HandoffBlock {
   reason: 'reverted' | 'truncated' | 'unknown';
 }
 
-/** 재생 세션에 더하는 넘김 칸 열 */
+/** 재생 세션에 더하는 넘김 칸 열하나 */
 export interface HandoffFields {
   /** 마지막 위치 사건의 재생 여부 */
   playing: boolean;
@@ -85,6 +85,11 @@ export interface HandoffFields {
    * 위치가 올 때까지 null 이다. 지금 세대와 같을 때만 넘김을 본다
    */
   positionGeneration: number | null;
+  /**
+   * 받을 위치의 하한 시각 — 재생기를 바꾸거나(세대 상승) 안에서 옮긴 전이의
+   * 시각이다. 이 시각 이전에 잰 위치는 버린다
+   */
+  positionFloorMs: number;
   list: SourceList | null;
   handoffDoor: HandoffDoor | null;
   handoff: Handoff | null;
@@ -102,6 +107,7 @@ export function openHandoffFields(): HandoffFields {
   return {
     playing: false,
     positionGeneration: null,
+    positionFloorMs: 0,
     list: null,
     handoffDoor: null,
     handoff: null,
@@ -236,6 +242,23 @@ export function withHandoffRules(
   const next = step(ready);
   const state = settleHandoffFields(session, next.state);
   return state === next.state ? next : { state, effects: next.effects };
+}
+
+/**
+ * 재생기를 바꾸거나(세대 상승) 안에서 옮긴(seek-within) 전이 뒤 — 받을 위치의
+ * 하한을 now 로 올린다. 옮겼으면 옮긴 자리의 위치가 올 때까지 위치 칸을 비운다
+ */
+export function withPositionFloor(
+  prev: PlaybackSessionState,
+  step: Transition,
+  now: number,
+): Transition {
+  const swapped = step.state.source.generation !== prev.source.generation;
+  const moved = step.effects.some((effect) => effect.kind === 'seek-within');
+  if (!swapped && !moved) return step;
+  const positionGeneration = moved ? null : step.state.positionGeneration;
+  const state = { ...step.state, positionGeneration, positionFloorMs: now };
+  return { state, effects: step.effects };
 }
 
 /**
