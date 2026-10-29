@@ -236,9 +236,11 @@ std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabe
 	if (obsKeyName.rfind(kPrefix, 0) != 0)
 		return "hotkey_bad_key";
 	std::string k = obsKeyName.substr(kPrefix.size());
-	static const std::set<std::string> kTyping = {"SPACE",     "MINUS",      "EQUAL",        "BRACKETLEFT",
-						      "BRACKETRIGHT", "SEMICOLON", "APOSTROPHE", "COMMA",
-						      "PERIOD",    "SLASH",      "BACKSLASH",    "QUOTELEFT"};
+	// 기호 키는 플랫폼마다 libobs 이름이 다르다 — macOS EQUAL·QUOTE·DEAD_GRAVE, Windows PLUS·APOSTROPHE·ASCIITILDE.
+	// 이 플랫폼에 실제로 있는 키인지(가상 키)는 SetMarkHotkey가 마지막에 본다.
+	static const std::set<std::string> kTyping = {"SPACE",      "MINUS",     "EQUAL", "PLUS",      "BRACKETLEFT",
+						      "BRACKETRIGHT", "SEMICOLON", "QUOTE", "APOSTROPHE", "COMMA",
+						      "PERIOD",     "SLASH",     "BACKSLASH", "DEAD_GRAVE", "ASCIITILDE"};
 	static const std::set<std::string> kStandalone = {"INSERT", "HOME", "END", "PAGEUP", "PAGEDOWN", "PAUSE"};
 	auto allDigits = [](const std::string &v) {
 		return !v.empty() && std::all_of(v.begin(), v.end(), [](char c) { return c >= '0' && c <= '9'; });

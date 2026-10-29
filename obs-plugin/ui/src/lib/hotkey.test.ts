@@ -33,6 +33,23 @@ describe('captureStep', () => {
     expect(captureStep(key('Space'), false)).toEqual({ kind: 'reject', reason: 'hotkey_needs_modifier' });
   });
 
+  it('기호 키는 플랫폼별 OBS 이름으로 보낸다 — 이름이 틀리면 저장돼도 안 눌린다', () => {
+    const ctrl = { ctrlKey: true };
+    expect(captureStep(key('Quote', ctrl), true)).toMatchObject({ combo: { key: 'OBS_KEY_QUOTE' }, label: "⌃'" });
+    expect(captureStep(key('Quote', ctrl), false)).toMatchObject({ combo: { key: 'OBS_KEY_APOSTROPHE' }, label: "Ctrl+'" });
+    expect(captureStep(key('Backquote', ctrl), true)).toMatchObject({ combo: { key: 'OBS_KEY_DEAD_GRAVE' } });
+    expect(captureStep(key('Backquote', ctrl), false)).toMatchObject({ combo: { key: 'OBS_KEY_ASCIITILDE' } });
+    expect(captureStep(key('Equal', ctrl), true)).toMatchObject({ combo: { key: 'OBS_KEY_EQUAL' } });
+    expect(captureStep(key('Equal', ctrl), false)).toMatchObject({ combo: { key: 'OBS_KEY_PLUS' }, label: 'Ctrl+=' });
+  });
+
+  it('macOS libobs에 없는 키(Insert·Pause·F21~F24)는 macOS에서만 거절한다', () => {
+    for (const code of ['Insert', 'Pause', 'F21', 'F24']) {
+      expect(captureStep(key(code), true)).toEqual({ kind: 'reject', reason: 'hotkey_bad_key' });
+      expect(captureStep(key(code), false)).toMatchObject({ kind: 'combo' });
+    }
+  });
+
   it('조합 키만 누르는 동안은 기다리고, Esc는 취소, 모르는 키는 거절', () => {
     expect(captureStep(key('ShiftLeft', { shiftKey: true }), true)).toEqual({ kind: 'modifiers' });
     expect(captureStep(key('MetaRight', { metaKey: true }), true)).toEqual({ kind: 'modifiers' });

@@ -2353,6 +2353,13 @@ TEST(mark_hotkey_combo_rejection)
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F24", shift), "");
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_NUM5", none), "");
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_PAUSE", none), "");
+	// 기호 키는 플랫폼별 libobs 이름 — macOS QUOTE·DEAD_GRAVE·EQUAL, Windows APOSTROPHE·ASCIITILDE·PLUS (PR #455 리뷰)
+	for (const char *name : {"OBS_KEY_QUOTE", "OBS_KEY_DEAD_GRAVE", "OBS_KEY_EQUAL", "OBS_KEY_APOSTROPHE",
+				 "OBS_KEY_ASCIITILDE", "OBS_KEY_PLUS"}) {
+		CHECK_EQ(HotkeyComboRejection(name, ctrlShift), "");
+		CHECK_EQ(HotkeyComboRejection(name, shift), "hotkey_needs_modifier");
+	}
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_QUOTELEFT", ctrlShift), "hotkey_bad_key"); // 어느 플랫폼 표에도 없다
 
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", none), "hotkey_needs_modifier");
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", shift), "hotkey_needs_modifier");

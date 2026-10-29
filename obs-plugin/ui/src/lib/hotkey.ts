@@ -2,33 +2,21 @@ import type { HotkeyCombo } from './types';
 
 // POK-494 — 독에서 누른 키를 OBS 단축키로 옮긴다. 자판 배치와 무관한 물리 키(KeyboardEvent.code)로 읽는다 —
 // 한글 입력 중이어도 M 자리는 OBS_KEY_M이다. 플러그인 mark-policy HotkeyComboRejection과 같은 규칙으로 미리 거른다.
-const TYPING: Record<string, string> = {
-  Space: 'SPACE',
-  Minus: 'MINUS',
-  Equal: 'EQUAL',
-  BracketLeft: 'BRACKETLEFT',
-  BracketRight: 'BRACKETRIGHT',
-  Semicolon: 'SEMICOLON',
-  Quote: 'APOSTROPHE',
-  Comma: 'COMMA',
-  Period: 'PERIOD',
-  Slash: 'SLASH',
-  Backslash: 'BACKSLASH',
-  Backquote: 'QUOTELEFT',
-};
-const TYPING_TEXT: Record<string, string> = {
-  SPACE: 'Space',
-  MINUS: '-',
-  EQUAL: '=',
-  BRACKETLEFT: '[',
-  BRACKETRIGHT: ']',
-  SEMICOLON: ';',
-  APOSTROPHE: "'",
-  COMMA: ',',
-  PERIOD: '.',
-  SLASH: '/',
-  BACKSLASH: '\\',
-  QUOTELEFT: '`',
+// 기호 키는 libobs 키 이름이 플랫폼마다 다르다(OBS 32.2.1 obs-cocoa.m · obs-windows.c 대조) — 엉뚱한 이름을 걸면
+// 「바꿨어요」 뒤에도 가상 키가 없어 영영 안 눌린다. [macOS, Windows] 순.
+const TYPING: Record<string, [string, string, string]> = {
+  Space: ['SPACE', 'SPACE', 'Space'],
+  Minus: ['MINUS', 'MINUS', '-'],
+  Equal: ['EQUAL', 'PLUS', '='],
+  BracketLeft: ['BRACKETLEFT', 'BRACKETLEFT', '['],
+  BracketRight: ['BRACKETRIGHT', 'BRACKETRIGHT', ']'],
+  Semicolon: ['SEMICOLON', 'SEMICOLON', ';'],
+  Quote: ['QUOTE', 'APOSTROPHE', "'"],
+  Comma: ['COMMA', 'COMMA', ','],
+  Period: ['PERIOD', 'PERIOD', '.'],
+  Slash: ['SLASH', 'SLASH', '/'],
+  Backslash: ['BACKSLASH', 'BACKSLASH', '\\'],
+  Backquote: ['DEAD_GRAVE', 'ASCIITILDE', '`'],
 };
 const STANDALONE: Record<string, [string, string]> = {
   Insert: ['INSERT', 'Insert'],
@@ -38,11 +26,13 @@ const STANDALONE: Record<string, [string, string]> = {
   PageDown: ['PAGEDOWN', 'Page Down'],
   Pause: ['PAUSE', 'Pause'],
 };
+// macOS libobs 표에 없는 키 — 걸어도 안 눌리니 미리 거절한다(플러그인도 가상 키가 없으면 거절한다)
+const MAC_MISSING = new Set(['INSERT', 'PAUSE', 'F21', 'F22', 'F23', 'F24']);
 const MODIFIER_CODES = /^(Shift|Control|Alt|Meta|OS)(Left|Right)?$|^CapsLock$|^Fn/;
 
 type KeyInfo = { name: string; text: string; typing: boolean };
 
-function keyInfo(code: string): KeyInfo | null {
+function keyInfo(code: string, mac: boolean): KeyInfo | null {
   let m = /^Key([A-Z])$/.exec(code);
   if (m) return { name: m[1], text: m[1], typing: true };
   m = /^Digit([0-9])$/.exec(code);
@@ -51,7 +41,8 @@ function keyInfo(code: string): KeyInfo | null {
   if (m && Number(m[1]) >= 1 && Number(m[1]) <= 24) return { name: `F${m[1]}`, text: `F${m[1]}`, typing: false };
   m = /^Numpad([0-9])$/.exec(code);
   if (m) return { name: `NUM${m[1]}`, text: `Num ${m[1]}`, typing: false };
-  if (TYPING[code]) return { name: TYPING[code], text: TYPING_TEXT[TYPING[code]], typing: true };
+  const typing = TYPING[code];
+  if (typing) return { name: mac ? typing[0] : typing[1], text: typing[2], typing: true };
   if (STANDALONE[code]) return { name: STANDALONE[code][0], text: STANDALONE[code][1], typing: false };
   return null;
 }
@@ -73,8 +64,8 @@ export interface KeyLike {
 export function captureStep(e: KeyLike, mac: boolean): CaptureStep {
   if (e.code === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return { kind: 'cancel' };
   if (MODIFIER_CODES.test(e.code)) return { kind: 'modifiers' };
-  const info = keyInfo(e.code);
-  if (!info) return { kind: 'reject', reason: 'hotkey_bad_key' };
+  const info = keyInfo(e.code, mac);
+  if (!info || (mac && MAC_MISSING.has(info.name))) return { kind: 'reject', reason: 'hotkey_bad_key' };
   const combo: HotkeyCombo = {
     key: `OBS_KEY_${info.name}`,
     control: e.ctrlKey,

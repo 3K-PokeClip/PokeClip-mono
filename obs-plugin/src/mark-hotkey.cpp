@@ -315,6 +315,17 @@ MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelP
 	obs_key_t key = obs_key_from_name(obsKeyName.c_str());
 	if (r.reason.empty() && key == OBS_KEY_NONE)
 		r.reason = "hotkey_bad_key";
+	// 이 플랫폼 libobs 표에 없는 키(가상 키 없음)는 걸어 봐야 영영 안 눌린다 — macOS는 0xFF, 그 밖은 0이 「없음」이다
+	// (macOS A키의 가상 키가 0이라 0으로 가를 수 없다).
+	if (r.reason.empty()) {
+		int vk = obs_key_to_virtual_key(key);
+#ifdef __APPLE__
+		if (vk == 0xFF)
+#else
+		if (vk == 0)
+#endif
+			r.reason = "hotkey_bad_key";
+	}
 	if (!r.reason.empty())
 		return r;
 
