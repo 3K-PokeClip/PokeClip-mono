@@ -54,7 +54,7 @@ describe('nextLivePosition', () => {
 });
 
 /** [시작, 끝] 쌍들로 만든 played 흉내 */
-function played(...ranges: [number, number][]): SeekableLike {
+function played(...ranges: Array<[number, number]>): SeekableLike {
   return {
     length: ranges.length,
     start: (i) => ranges[i]![0],

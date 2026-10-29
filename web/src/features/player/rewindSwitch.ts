@@ -504,7 +504,8 @@ function onAnyPhase(
       });
     }
     case 'position': {
-      // 다른 시대(재생기를 바꾸거나 옮기기 전 · 앞 세션)에 잰 위치다 — 커밋된 위치가 효과로 늦게 올라왔다
+      // 다른 시대(재생기를 바꾸거나 옮기기 전)에 잰 위치다 — 커밋된 위치가 효과로 늦게 올라왔다. 세션을 다시 열면 시대가
+      // 0 부터 다시 서므로, 닫힌 앞 세션의 값은 이 대조로 가르지 못한다
       if (event.epoch !== session.positionEpoch) return stateOnly(session);
       const moved = {
         ...session,
