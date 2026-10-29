@@ -12,6 +12,7 @@
 #include "end-signal-policy.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
+#include "post-and-wait.hpp"
 #include "retry-policy.hpp"
 #include "server-env.hpp"
 #include "srt-url.hpp"
@@ -22,6 +23,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <chrono>
 #include <cstdio>
@@ -2384,6 +2386,37 @@ TEST(mark_hotkey_capture_deadline)
 	CHECK_EQ(HotkeyCaptureDeadlineMs(false, 1000), 1000 + kHotkeyCaptureReleaseMs);
 	CHECK(kHotkeyCaptureReleaseMs >= 100);              // libobs 폴링(25ms) 두 번보다 넉넉히
 	CHECK(kHotkeyCaptureReleaseMs < kMarkDebounceMs);   // 일부러 다시 누르는 것까지 오래 막지는 않는다
+}
+
+// 브리지 워커 → UI 스레드 일 기다리기(PR #455 리뷰) — 늦으면 거둔 일은 나중에도 안 돌고, 예외는 밖으로 안 나간다
+TEST(post_and_wait_runs_abandons_and_contains)
+{
+	auto inline_post = [](std::function<void()> f) { f(); };
+	CHECK_EQ(PostAndWait<int>(inline_post, []() { return 7; }, 100).value_or(-1), 7);
+
+	// 큐가 막혀 시간 안에 못 돌았다 → nullopt, 그 뒤 큐가 풀려도 일은 돌지 않는다
+	std::function<void()> queued;
+	bool ran = false;
+	auto stuck_post = [&](std::function<void()> f) { queued = std::move(f); };
+	CHECK(!PostAndWait<int>(stuck_post, [&]() { ran = true; return 1; }, 20).has_value());
+	queued();
+	CHECK(!ran);
+
+	// 일이 던진 예외는 삼키고 nullopt — UI 스레드 밖으로 나가면 OBS가 꺼진다
+	CHECK(!PostAndWait<int>(inline_post, []() -> int { throw std::out_of_range("x"); }, 100).has_value());
+
+	// 다른 스레드가 늦게(시간 초과 뒤) 실행하더라도 시작 전이면 거둔다
+	std::thread late;
+	bool lateRan = false;
+	auto late_post = [&](std::function<void()> f) {
+		late = std::thread([f = std::move(f)]() {
+			std::this_thread::sleep_for(std::chrono::milliseconds(60));
+			f();
+		});
+	};
+	CHECK(!PostAndWait<int>(late_post, [&]() { lateRan = true; return 1; }, 10).has_value());
+	late.join();
+	CHECK(!lateRan);
 }
 
 TEST(mark_debounce_two_seconds)

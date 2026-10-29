@@ -30,6 +30,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "mark-sender.hpp"
 #include "pairing-code.hpp"
 #include "pairing.hpp"
+#include "post-and-wait.hpp"
 #include "server-env.hpp"
 #include "srt-target.hpp"
 #include "stream-control.hpp"
@@ -85,19 +86,10 @@ std::string JsonReason(bool ok, const std::string &reason)
 	return json;
 }
 
-// UI 스레드 일을 잠깐 기다려 그 결과로 답한다. 바쁘거나(시간 초과) 종료 중이라 안 돌면 nullopt.
+// UI 스레드 일을 잠깐 기다려 그 결과로 답한다 — 늦으면 거두고, 예외는 삼킨다(post-and-wait.hpp).
 template<typename T> std::optional<T> RunInUiThreadAndWait(std::function<T()> task, int timeoutMs = 1500)
 {
-	auto done = std::make_shared<std::promise<T>>();
-	std::future<T> result = done->get_future();
-	RunInUiThread([task = std::move(task), done]() { done->set_value(task()); });
-	if (result.wait_for(std::chrono::milliseconds(timeoutMs)) != std::future_status::ready)
-		return std::nullopt;
-	try {
-		return result.get();
-	} catch (const std::future_error &) {
-		return std::nullopt;
-	}
+	return PostAndWait<T>([](std::function<void()> f) { RunInUiThread(std::move(f)); }, std::move(task), timeoutMs);
 }
 
 int StatusForPairingReason(const std::string &reason)

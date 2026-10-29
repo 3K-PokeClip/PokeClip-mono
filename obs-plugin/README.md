@@ -325,7 +325,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | `POST /api/send-now` | Bearer | 독 「다시 연결」·「다시 시도」 — 202 받음(붙었는지는 상태로 온다) / 409 main_not_live·no_key·send_unavailable |
 | `POST /api/stop-retry` | Bearer | 독 「재시도 중지」 — 202 / 409 not_retrying |
 | `POST /api/paste-code` | Bearer | 독 연결 코드 붙여넣기(POK-495) — UI 스레드에서 OS 클립보드를 읽어 **코드만** 돌려준다: 200 `{code:"XXXX-XXXX"}` / 404 no_code_in_clipboard(코드가 아닌 글은 보내지 않는다) / 503 busy. 앞 4096바이트만 본다 |
-| `PUT /api/hotkey` `{key, control, alt, shift, command}` | Bearer | 「순간 표시」 단축키 바꾸기(POK-494) — `key`는 OBS 키 이름(`OBS_KEY_M`). 200 `{label, conflict}` / 400 hotkey_bad_key·hotkey_needs_modifier·invalid_json / 409 hotkey_unavailable / 503 busy |
+| `PUT /api/hotkey` `{key, control, alt, shift, command}` | Bearer | 「순간 표시」 단축키 바꾸기(POK-494) — `key`는 OBS 키 이름(`OBS_KEY_M`). 200 `{label, conflict}` / 400 hotkey_bad_key·hotkey_needs_modifier·invalid_json / 409 hotkey_unavailable / 503 busy(UI 스레드가 1.5초 안에 시작하지 못해 거뒀다 — **적용되지 않았다**) |
 | `POST /api/hotkey/capture` `{on}` | Bearer | 독이 새 키를 받는 동안 마크 막기 — 30초 뒤 저절로 풀린다 |
 
 상태(`/api/hello`·`/api/events`)에는 A5용으로 `retry{attempt, nextAt, gaveUp, keySuspect}` · `canSendNow` · `syncStart`가, POK-267용으로 `serverEnv`(`prod`·`dev`)가 실린다. `attempt`가 0이면 재시도 중이 아니고, `nextAt`은 다음 시도 시각(UTC epoch ms)이며 0이면 지금 접속 중이다.

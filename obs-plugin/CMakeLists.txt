@@ -56,6 +56,7 @@ target_sources(
     src/mark-hotkey.cpp
     src/mark-hotkey.hpp
     src/system-hotkey.hpp
+    src/post-and-wait.hpp
     src/mark-policy.cpp
     src/mark-policy.hpp
     src/mark-sender.cpp
