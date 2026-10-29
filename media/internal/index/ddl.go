@@ -350,7 +350,8 @@ END $do$;
 
 -- 정산 스캔의 발행 흔적 판독 인덱스(M6-3b). 스캔은 30초마다 ending 세션마다 그 세션 조각에 ③ uploaded 가 하나라도 있는지
 -- 본다. (stream_id, session_id, seq) 인덱스로는 uploaded 가 없는 세션의 조각을 모두 읽는다 — uploaded 행만 담는 부분
--- 인덱스로 탐색 한 번이 된다.
+-- 인덱스로 탐색 한 번이 된다. 대가: 술어 열 playback_upload_state 를 담아 ③ 확정 갱신이 HOT 를 잃는다(PG17 실측
+-- HOT 62.7% → 15.4% · 정확성 영향 없음 — db ④c M1). 이 열을 담는 인덱스면 어느 꼴이든 같다.
 DO $do$
 BEGIN
     IF pg_catalog.to_regclass('stream_segments_uploaded_session_idx') IS NULL THEN

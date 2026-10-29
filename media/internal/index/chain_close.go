@@ -280,7 +280,7 @@ func limitedTx(ctx context.Context, pool *pgxpool.Pool, op, id string, log *slog
 		return body(qctx, tx)
 	})
 	if err != nil && isContention(err) {
-		logger(log).Warn("topology_lock_timeout", "op", op, "id", id, "err", err)
+		logger(log).Warn("topology_lock_timeout", "op", op, "session_id", id, "err", err)
 		if !errors.Is(err, ErrTopologyContended) {
 			err = fmt.Errorf("%w: %w", ErrTopologyContended, err)
 		}

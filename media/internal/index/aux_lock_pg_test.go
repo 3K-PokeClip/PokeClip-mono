@@ -13,10 +13,11 @@ import (
 	"time"
 )
 
-// warnOps 는 topology_lock_timeout 줄의 op 를 모으는 로그 처리기다.
+// warnOps 는 topology_lock_timeout 줄의 op 와 그 줄의 session_id 를 모으는 로그 처리기다.
 type warnOps struct {
-	mu  sync.Mutex
-	ops []string
+	mu       sync.Mutex
+	ops      []string
+	sessions map[string]string // op → session_id
 }
 
 func (w *warnOps) Enabled(context.Context, slog.Level) bool { return true }
@@ -26,19 +27,29 @@ func (w *warnOps) Handle(_ context.Context, r slog.Record) error {
 	if r.Message != "topology_lock_timeout" || r.Level != slog.LevelWarn {
 		return nil
 	}
+	var op, session string
 	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == "op" {
-			w.mu.Lock()
-			w.ops = append(w.ops, a.Value.String())
-			w.mu.Unlock()
+		switch a.Key {
+		case "op":
+			op = a.Value.String()
+		case "session_id":
+			session = a.Value.String()
 		}
 		return true
 	})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ops = append(w.ops, op)
+	if w.sessions == nil {
+		w.sessions = map[string]string{}
+	}
+	w.sessions[op] = session
 	return nil
 }
 
 // 다른 연결이 세션 행을 쥐고 있으면 셋 모두 lock_timeout(5초)에 끊겨 ErrTopologyContended 로 접힌다 — ctx 시한(10초)을
-// 다 쓰지 않는다. 변이 = 상한 설정 제거 · 접기 제거 → 각각 FAIL.
+// 다 쓰지 않는다. WARN 줄은 session_id 칸에 그 세션(VOD 는 사슬 꼬리)을 싣는다 — 같은 메시지의 다른 줄과 같은 키라
+// session_id 로 거르는 질의가 놓치지 않는다(db ④c L5). 변이 = 상한 설정 제거 · 접기 제거 · 키 이름 → 각각 FAIL.
 func TestAuxEndingStatementsFoldLockTimeout(t *testing.T) {
 	pool := newTestPool(t)
 	old := time.Now().Add(-time.Hour)
@@ -78,5 +89,10 @@ func TestAuxEndingStatementsFoldLockTimeout(t *testing.T) {
 	defer w.mu.Unlock()
 	if len(w.ops) != len(calls) {
 		t.Errorf("topology_lock_timeout op = %v, want 셋 각 한 줄", w.ops)
+	}
+	for op, want := range map[string]string{"freeze_empty_dvr": "D", "freeze_empty_vod": "V", "fail_chain_vod": "F"} {
+		if got := w.sessions[op]; got != want {
+			t.Errorf("topology_lock_timeout op=%s 의 session_id = %q, want %q", op, got, want)
+		}
 	}
 }

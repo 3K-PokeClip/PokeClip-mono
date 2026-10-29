@@ -71,8 +71,8 @@ type ScanCursor struct {
 // endingRowSelectSQL 은 판독식이다($1 정산 창). 별칭 p 가 그 세션 행이고, 후속 판정은 사슬 간선 상수를 그대로 끼운다
 // (c = 후속 · p = 이 행 — chainEdgeSQL 의 별칭 그대로). 뒤에 WHERE 를 붙여 쓴다.
 //
-// LastEnd 와 ③ 흔적은 LIMIT 1 LATERAL 로 그 세션 조각만 본다(stream_segments_session_idx — 마지막 seq 한 행 · uploaded
-// 한 행). EXISTS 로 쓰면 플래너가 OR 갈래의 EXISTS 를 해시 부분 계획(조각 표 순차 스캔)으로 바꿀 수 있다(D26 실측).
+// LastEnd 와 ③ 흔적은 LIMIT 1 LATERAL 로 그 세션 조각만 본다(LastEnd 는 stream_segments_session_idx 의 마지막 seq 한
+// 행 · ③ 흔적은 부분 인덱스 stream_segments_uploaded_session_idx 의 uploaded 한 행). EXISTS 로 쓰면 플래너가 OR 갈래의 EXISTS 를 해시 부분 계획(조각 표 순차 스캔)으로 바꿀 수 있다(D26 실측).
 // 조각이 없으면 LastEnd 는 ending_at 이다. duration_ms 는 registry previousSessionSQL 과 같은 까닭으로 ::double precision
 // 으로 맞춘다. now 는 pg_catalog 로 한정하고 COALESCE 는 구문이라 한정하지 않는다.
 const endingRowSelectSQL = `
