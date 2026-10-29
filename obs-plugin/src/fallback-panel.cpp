@@ -171,9 +171,15 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	row->addWidget(code_, 1);
 	row->addWidget(pair_);
 
-	auto *note = new QLabel(Text("Fallback.Note") + (reason.isEmpty() ? QString() : " [" + reason + "]"), this);
+	// 스트리머가 「기본 패널로 표시」를 켠 것(force_fallback)이면 「쓸 수 없어」가 아니라 그 설정 때문이라고 말하고,
+	// 브라우저 패널로 돌아갈 버튼을 둔다 — 그 스위치는 브라우저 독 「고급 설정」에만 있어 여기서 못 돌아왔다.
+	const bool forced = reason == "force_fallback";
+	auto *note = new QLabel(forced ? Text("Fallback.NoteForced")
+				       : Text("Fallback.Note") + (reason.isEmpty() ? QString() : " [" + reason + "]"),
+				this);
 	note->setWordWrap(true);
 	note->setStyleSheet("color: gray; font-size: 11px;");
+	QPushButton *useBrowser = forced ? new QPushButton(Text("Fallback.UseBrowser"), this) : nullptr;
 
 	auto *retryRow = new QHBoxLayout();
 	retryRow->addWidget(sendNow_);
@@ -197,6 +203,15 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	layout->addWidget(message_);
 	layout->addStretch(1);
 	layout->addWidget(note);
+	if (useBrowser) {
+		layout->addWidget(useBrowser);
+		// 독 표시 방식은 OBS를 켤 때만 고른다 — 바로 바꾸지 않고 다음 실행부터(브라우저 독 스위치와 같다).
+		connect(useBrowser, &QPushButton::clicked, this, [note, useBrowser]() {
+			bool saved = ConfigStore::Instance().Update([](PluginConfig &c) { c.forceFallback = false; });
+			note->setText(saved ? Text("Fallback.UseBrowserDone") : LocalizedReason("save_failed"));
+			useBrowser->setEnabled(!saved);
+		});
+	}
 
 	connect(pair_, &QPushButton::clicked, this, [this]() { OnPairClicked(); });
 	connect(code_, &QLineEdit::returnPressed, this, [this]() { OnPairClicked(); });

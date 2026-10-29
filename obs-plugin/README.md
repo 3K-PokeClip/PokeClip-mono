@@ -172,7 +172,7 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 | `send_passphrase` | `true` | 로컬 compose MediaMTX는 passphrase 미설정이라 `false`여야 붙는다 (암호가 서로 안 맞으면 서버가 거절하고, 독에는 `connect_failed`로 보인다) |
 | `latency_ms` | `1000` | SRT latency. URL에는 마이크로초로 들어간다 |
 | `sync_start` | `true` | **본 방송과 송출 동기화** — 본방 시작·정지에 맞춰 함께 전송·정지한다. 본방이 잠시 끊겨 재연결 중일 땐 우리 송출을 유지한다(녹화 구멍 방지). 본방 송출 중에 켜면 그 자리에서 시작한다(이미 돌던 인코더는 keyint를 못 바꿔 `encoder_active`로 거절 — 본방을 다시 켠다) |
-| `force_fallback` | `false` | 브라우저 독 대신 Qt 폴백 패널 |
+| `force_fallback` | `false` | 브라우저 독 대신 Qt 폴백 패널(다음 실행부터). 독 「고급 설정 › 기본 패널로 표시」로 켜고, 켜진 폴백 패널은 「이 설정 때문」이라고 알리며 「다음 실행부터 브라우저 패널 쓰기」로 끈다 |
 | `dock_intro_shown` | `false` | 첫 실행 독 펼치기 여부 (내부용) |
 | `audio_auto_assign` | `false` | 오디오 소스를 트랙 2~6에 자동 배정. 끄면 OBS 고급 오디오 설정의 트랙 체크를 그대로 보낸다. 기본은 꺼짐 — 스트리머가 짜 둔 트랙을 동의 없이 바꾸지 않는다(2026-10-01 결정) |
 | `audio_assign_prompted` | `false` | 페어링 뒤 「오디오 트랙을 소스별로 나눌까요?」에 답했는지(켜기·나중에, 또는 스위치를 직접 바꿈) — 다시 묻지 않는다 |
