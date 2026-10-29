@@ -180,7 +180,7 @@ export function App({ bridge }: { bridge: Bridge }) {
           onStopRetry={stopRetry}
         />
       ) : (
-        <PairCard onPair={(code) => bridge.pair(code)} />
+        <PairCard onPair={(code) => bridge.pair(code)} onPasteCode={() => bridge.pasteCode()} />
       )}
 
       {state.paired && state.audio.prompt ? <AudioAssignPrompt state={state} bridge={bridge} /> : null}

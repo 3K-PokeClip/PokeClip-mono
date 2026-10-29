@@ -370,6 +370,11 @@ export function createMockBridge(scenario: string): Bridge {
       return { ok: true };
     },
     // 플러그인처럼: 적용 중일 때만, 본방 트랙은 거절, 찬 트랙을 골라도 밀어내지 않고 묶는다. null은 트랙에서 뺀다(트랙 없음).
+    async pasteCode() {
+      await new Promise((r) => setTimeout(r, 150));
+      return { ok: true, code: 'KQ4M-7X2P' };
+    },
+
     async assignAudio(key, track) {
       if (!state.audio.applied) return { ok: false, reason: 'audio_off' };
       const all = [...state.audio.tracks.flatMap((t) => t.sources), ...state.audio.mixOnly];

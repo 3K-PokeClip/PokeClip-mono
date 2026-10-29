@@ -15,7 +15,7 @@
 | 손 배정 (POK-266) | 독·폴백 패널에서 소스를 트랙 2~6 사이로 옮기거나(찬 트랙이면 묶인다) 트랙에서 뺀다. 플러그인은 새 소스만 자동으로 앉히고 그 뒤는 고친 대로 둔다. 트랙에 없는 소스는 경고. 방송 중에도 즉시 반영 — 아래 「오디오 트랙」 10번 |
 | GOP 2s 강제 | 시작 직전 방송 비디오 인코더 `keyint_sec`를 2로 바꾸고 `x264opts`/`opts`의 keyint 계열 토큰을 걷는다 (ADR-020). 동기화가 켜져 있으면 페어링 전이어도 적용한다 — 인코더가 돌기 시작한 뒤에는 못 바꾸므로, 방송 중에 페어링해도 이어 보낼 수 있게 미리 해 둔다. 이때 독은 「연결되지 않아…」 토스트에 「키프레임 간격은 2초로 맞춰 뒀어요.」를 붙여 알린다 |
 | 해상도 점검 | 방송 인코더 출력이 1920×1080이 아니면 독 「송출 점검」·Qt 폴백 패널에 경고와 「1080p를 권장해요. 다른 해상도여도 전송을 막지 않아요.」를 띄우고 **그대로 보낸다**(점검값은 다음 본방 시작까지 남으므로 전송 중을 단정하는 말은 쓰지 않는다). 1080p는 권장값이다(ADR-020, POK-268) — 인코더를 본방과 공유해 우리 출력만 다른 해상도로 보낼 수 없으므로 막지 않는다. 송출 중 해상도·FPS 변경은 OBS가 막는다(출력이 도는 동안 `obs_reset_video`가 거절하고 설정 창 비디오 탭이 잠긴다) |
-| 페어링 | 독에 8자리 코드 → `POST /api/stream-keys/pairing-codes/exchange` → streamid·passphrase 저장 (ADR-019) |
+| 페어링 | 독에 8자리 코드 → `POST /api/stream-keys/pairing-codes/exchange` → streamid·passphrase 저장 (ADR-019). 독 입력칸의 ⌘V·Ctrl+V와 「복사한 코드 붙여넣기」는 플러그인이 OS 클립보드에서 **코드만** 골라 채운다(POK-495 — 독은 OBS 안의 CEF라 macOS ⌘V가 OBS 「편집 › 붙여넣기(소스)」에 먹힌다) |
 | 서버 환경 (POK-267) | 배포 빌드는 운영(`api.pokeclip.com` · `media.pokeclip.com`), 개발 빌드는 개발(`dev.pokeclip.com` · `media-dev.pokeclip.com`)을 기본으로 쓴다. 페어링·마크 주소와 SRT 수신은 늘 같은 환경 짝이다(종료 신호는 짝 밖 — 운영 고정). 독 숨은 스위치로 바꾸면 연결이 해제된다 — 아래 「2. 배포 빌드」·「설정 파일」 |
 | 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태·전송 시간·비트레이트·송출 점검·연결 해제 확인·고급 설정. 화면은 claude.ai/design 시안 「PokeClip Plugin UI」 기준이고, web 디자인 토큰·브랜드 심볼을 그대로 쓴다 |
 | Qt 폴백 | obs-browser가 없거나(일부 Linux·Wayland) 페이지가 붙지 않으면 최소 Qt 패널 — 기능은 같다 |
@@ -323,6 +323,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | `POST /api/mark` | Bearer | 독 「순간 표시」 — 202 받음 / 409 mark_not_live·no_key·invalid_key·mark_insecure(거절도 상태 `marks`로 온다) / 429 mark_too_soon. 보낸 결과는 상태 `marks`로 온다 |
 | `POST /api/send-now` | Bearer | 독 「다시 연결」·「다시 시도」 — 202 받음(붙었는지는 상태로 온다) / 409 main_not_live·no_key·send_unavailable |
 | `POST /api/stop-retry` | Bearer | 독 「재시도 중지」 — 202 / 409 not_retrying |
+| `POST /api/paste-code` | Bearer | 독 연결 코드 붙여넣기(POK-495) — UI 스레드에서 OS 클립보드를 읽어 **코드만** 돌려준다: 200 `{code:"XXXX-XXXX"}` / 404 no_code_in_clipboard(코드가 아닌 글은 보내지 않는다) / 503 busy. 앞 4096바이트만 본다 |
 
 상태(`/api/hello`·`/api/events`)에는 A5용으로 `retry{attempt, nextAt, gaveUp, keySuspect}` · `canSendNow` · `syncStart`가, POK-267용으로 `serverEnv`(`prod`·`dev`)가 실린다. `attempt`가 0이면 재시도 중이 아니고, `nextAt`은 다음 시도 시각(UTC epoch ms)이며 0이면 지금 접속 중이다.
 
@@ -394,6 +395,7 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 | `audio_track_attach_failed` | 6트랙 중 일부가 출력에 안 붙음 — 반쯤 붙은 채 보내지 않고 시작을 멈춘다 |
 | `audio_off` · `main_stream_track` · `unknown_source` | 손 배정 거절 — 자동 배정이 적용 중이 아님(켜거나 방송·녹화가 끝나길 기다린다) · 본방 트랙(OBS에서 고른다) · 그 소스가 지금 없음 |
 | `mark_not_live` · `mark_too_soon` | 우리 송출 중이 아님 · 2초 안에 또 누름 |
+| `no_code_in_clipboard` | 붙여넣기 — 클립보드에 연결 코드가 없다(웹에서 다시 복사) |
 | `mark_unsupported` | 서버에 마크 창구가 없다(사유 없는 401·404, POK-391 전 판 Clip): 위 「서버 선행 조건」 |
 | `mark_unauthorized` · `mark_rejected` | 서버가 스트림 키를 거절(다시 페어링) · 본문을 거절 |
 | `mark_no_broadcast` · `mark_not_ready` · `mark_rate_limited` | 서버가 아직 이 방송을 모름 · 첫 조각 전 · 서버가 잠시 거절(429) — 자동으로 다시 보낸다 |

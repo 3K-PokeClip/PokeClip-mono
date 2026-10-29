@@ -16,6 +16,8 @@ export interface Bridge {
   // POK-266 — 손 배정. track 2~6 = 그 트랙으로 옮긴다(찬 트랙이면 묶인다), null = 트랙에서 뺀다(본방 믹스에만).
   // 받아들이면 202이고 결과는 state.audio로 온다.
   assignAudio(key: string, track: number | null): Promise<ActionResult>;
+  // POK-495 — OS 클립보드에서 연결 코드만 받아 온다(독의 ⌘V가 OBS 메뉴에 먹히므로). code는 XXXX-XXXX
+  pasteCode(): Promise<ActionResult & { code?: string }>;
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -156,6 +158,13 @@ export function createHttpBridge(token: string): Bridge {
       const body = track === null ? { key } : { key, track };
       const res = await send('/api/audio/assign', { method: 'POST', headers: json, body: JSON.stringify(body) });
       return res ? readResult(res) : UNREACHABLE;
+    },
+
+    async pasteCode() {
+      const res = await send('/api/paste-code', { method: 'POST', headers });
+      if (!res) return UNREACHABLE;
+      if (res.ok) return { ok: true, code: String(((await res.json()) as { code?: string }).code ?? '') };
+      return readResult(res);
     },
   };
 }

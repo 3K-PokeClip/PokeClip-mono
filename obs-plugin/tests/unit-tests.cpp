@@ -93,6 +93,28 @@ TEST(pairing_code_rejects_bad_input)
 	CHECK_EQ(NormalizePairingCode("ABCD_EFGH"), "");
 }
 
+// POK-495 — 클립보드 글에서 코드만 고른다(독 format.test.ts extractPairingCode와 같은 경우). 코드가 아니면 빈 문자열.
+TEST(pairing_code_extracts_from_clipboard_text)
+{
+	CHECK_EQ(ExtractPairingCode("KQ4M-7X2P"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("  kq4m-7x2p\n"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("코드: KQ4M – 7X2P (10분 안에 입력)"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("PokeClip 연결 코드 KQ4M7X2P"), "KQ4M7X2P"); // 낱말 PokeClip(8자)보다 숫자가 든 것
+	CHECK_EQ(ExtractPairingCode("KQ4M 7X2P"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("ABCDEFGH WXYZWXYZ"), "WXYZWXYZ"); // 숫자가 든 것이 없으면 맨 뒤
+	CHECK_EQ(ExtractPairingCode("ILO0-ab12"), "1100AB12");
+}
+
+TEST(pairing_code_extract_leaks_nothing_else)
+{
+	CHECK_EQ(ExtractPairingCode(""), "");
+	CHECK_EQ(ExtractPairingCode("안녕하세요 비밀번호는 hunter2"), "");
+	CHECK_EQ(ExtractPairingCode("ABCD-EFGU"), ""); // U는 알파벳 밖
+	CHECK_EQ(ExtractPairingCode("KQ4M7X2PZ"), ""); // 9자 토막
+	CHECK_EQ(ExtractPairingCode("설정 › 플러그인에서 코드를 받으세요"), "");
+	CHECK_EQ(ExtractPairingCode(std::string(5000, ' ') + "KQ4M-7X2P"), ""); // 앞 4096바이트만 본다
+}
+
 // ---------------------------------------------------------------- keyint 옵션
 
 TEST(strip_keyint_overrides_keeps_other_options)

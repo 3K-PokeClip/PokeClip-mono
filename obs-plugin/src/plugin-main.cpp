@@ -28,6 +28,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "end-signal-sender.hpp"
 #include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
+#include "pairing-code.hpp"
 #include "pairing.hpp"
 #include "server-env.hpp"
 #include "srt-target.hpp"
@@ -40,6 +41,8 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <obs-module.h>
 #include <plugin-support.h>
 
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QMainWindow>
 #include <QTimer>
 
@@ -47,6 +50,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <chrono>
 #include <future>
 #include <memory>
+#include <optional>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("pokeclip-obs", "en-US")
@@ -79,6 +83,21 @@ std::string JsonReason(bool ok, const std::string &reason)
 	std::string json = obs_data_get_json(d);
 	obs_data_release(d);
 	return json;
+}
+
+// UI 스레드 일을 잠깐 기다려 그 결과로 답한다. 바쁘거나(시간 초과) 종료 중이라 안 돌면 nullopt.
+template<typename T> std::optional<T> RunInUiThreadAndWait(std::function<T()> task, int timeoutMs = 1500)
+{
+	auto done = std::make_shared<std::promise<T>>();
+	std::future<T> result = done->get_future();
+	RunInUiThread([task = std::move(task), done]() { done->set_value(task()); });
+	if (result.wait_for(std::chrono::milliseconds(timeoutMs)) != std::future_status::ready)
+		return std::nullopt;
+	try {
+		return result.get();
+	} catch (const std::future_error &) {
+		return std::nullopt;
+	}
 }
 
 int StatusForPairingReason(const std::string &reason)
@@ -297,6 +316,25 @@ BridgeCallbacks MakeBridgeCallbacks()
 		MarkAccept a = MarkSender::Instance().Mark(MarkVia::Dock);
 		int status = a.ok ? 202 : (a.reason == "mark_too_soon" ? 429 : 409);
 		return {status, JsonReason(a.ok, a.reason)};
+	};
+	// POK-495 — 독(CEF)의 ⌘V는 OBS 「편집 › 붙여넣기」와 겹쳐 입력칸에 안 붙는다. OS 클립보드를 UI 스레드에서 읽어
+	// 연결 코드만 골라 돌려준다 — 코드가 아닌 클립보드 글은 독으로 보내지 않는다.
+	cb.pasteCode = []() -> BridgeCallbacks::Reply {
+		std::optional<std::string> code = RunInUiThreadAndWait<std::string>([]() {
+			QClipboard *clipboard = QGuiApplication::clipboard();
+			return clipboard ? ExtractPairingCode(clipboard->text().toStdString()) : std::string{};
+		});
+		if (!code)
+			return {503, JsonReason(false, "busy")};
+		obs_log(LOG_INFO, "pairing: paste from clipboard (%s)", code->empty() ? "no code" : "code found");
+		if (code->empty())
+			return {404, JsonReason(false, "no_code_in_clipboard")};
+		obs_data_t *d = obs_data_create();
+		obs_data_set_bool(d, "ok", true);
+		obs_data_set_string(d, "code", (code->substr(0, 4) + "-" + code->substr(4)).c_str());
+		std::string json = obs_data_get_json(d);
+		obs_data_release(d);
+		return {200, json};
 	};
 	// A5 — 워커 스레드라 상태로 미리 거르기만 하고, 출력은 UI 스레드에서 만진다. 결과는 상태(phase·errorCode)로 간다.
 	cb.sendNow = []() -> BridgeCallbacks::Reply {
