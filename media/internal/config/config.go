@@ -117,9 +117,6 @@ type Config struct {
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
 // 리터럴을 그쪽에 또 적지 않는다 — 값의 집이 둘이면 언젠가 어긋난다.
 // 폴러 자신의 두 값(OBS_POLL·OBS_BOOT_WAIT)은 mtxstate 가 집이라 여기서 다시 적지 않는다.
-// defaultRewindPublishPoolMaxConns 는 되감기 발행자 풀 상한의 기본값이다(kty 결정 C2 — 2 vCPU 상자의 pgx 기본값과 같은 4).
-const defaultRewindPublishPoolMaxConns = 4
-
 const (
 	defaultObsFresh          = 30 * time.Second
 	defaultObsBackfill       = 60 * time.Second
@@ -128,6 +125,9 @@ const (
 
 // defaultRewindPlaybackReadMax 는 상태 읽기 차선의 전체 동시 상한 기본값이다(kty 2026-10-29 — 정산 걸음 전체 2 와 같다).
 const defaultRewindPlaybackReadMax = 2
+
+// defaultRewindPublishPoolMaxConns 는 되감기 발행자 풀 상한의 기본값이다(kty 결정 C2 — 2 vCPU 상자의 pgx 기본값과 같은 4).
+const defaultRewindPublishPoolMaxConns = 4
 
 // Load 는 환경변수를 읽어 설정을 만든다. env 는 os.Getenv 를 그대로 넘기면 된다.
 //
