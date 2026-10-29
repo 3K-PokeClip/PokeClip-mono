@@ -12,7 +12,8 @@ import styles from './dock.module.css';
 // 자동 배정이 적용 중일 때만 고칠 수 있다 — 꺼져 있으면 OBS 설정 그대로라 플러그인이 트랙을 맡지 않는다.
 type Request = { key: string; name: string; track: number; action: 'add' | 'remove' };
 
-export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bridge }) {
+// bare — 독 탭 안(카드 테두리 없이)
+export function AudioTracks({ state, bridge, bare }: { state: BridgeState; bridge: Bridge; bare?: boolean }) {
   const { audio } = state;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -55,7 +56,7 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
   };
 
   return (
-    <section class={styles.section} aria-labelledby="audio-title">
+    <section class={bare ? styles.bareSection : styles.section} aria-labelledby="audio-title">
       <h3 id="audio-title" class={styles.sectionTitle}>
         {title}
       </h3>
@@ -166,7 +167,7 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
           {error}
         </p>
       ) : null}
-      {!audio.autoAssign ? <p class={styles.note}>자동 배정을 켜면 여기서 트랙을 고를 수 있어요.</p> : null}
+      {!audio.autoAssign ? <p class={styles.note}>설정 탭에서 자동 배정을 켜면 여기서 트랙을 고를 수 있어요.</p> : null}
       {audio.deferred ? (
         <p class={styles.note}>방송·녹화 중에 켜서 끝나면 자동 배정을 시작해요. 지금 나가는 트랙은 그대로예요.</p>
       ) : null}

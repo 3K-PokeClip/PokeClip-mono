@@ -8,7 +8,7 @@ import { Button } from './ui';
 
 // A2 — 오디오 트랙 자동 배정은 기본으로 꺼져 있다(사용자 결정 2026-10-01). 페어링 뒤 한 번만 묻는다:
 // 왜 나누는지(웹 편집기에서 소리를 따로 켜고 끔)와, 직접 짜 둔 트랙이 있으면 덮어쓴다는 것.
-// 답(켜기·나중에)은 플러그인이 기억해 다시 묻지 않는다. 고급 설정 스위치로 언제든 바꿀 수 있다.
+// 답(켜기·나중에)은 플러그인이 기억해 다시 묻지 않는다. 설정 탭 스위치로 언제든 바꿀 수 있다.
 export function AudioAssignPrompt({ state, bridge }: { state: BridgeState; bridge: Bridge }) {
   const [busy, setBusy] = useState<'on' | 'later' | null>(null);
   const [error, setError] = useState('');
@@ -51,7 +51,7 @@ export function AudioAssignPrompt({ state, bridge }: { state: BridgeState; bridg
           {state.audio.customRouting ? '덮어쓰고 켜기' : '켜기'}
         </Button>
       </div>
-      <p class={styles.cardDesc}>고급 설정 › 오디오 트랙 자동 배정에서 언제든 바꿀 수 있어요.</p>
+      <p class={styles.cardDesc}>설정 탭 › 오디오 트랙 자동 배정에서 언제든 바꿀 수 있어요.</p>
     </section>
   );
 }

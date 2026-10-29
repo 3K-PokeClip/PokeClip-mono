@@ -9,7 +9,8 @@ import { Button } from './ui';
 // POK-494 — 「순간 표시」 단축키를 OBS 설정에 들어가지 않고 여기서 바로 바꾼다. 「바꾸기」를 누르고 새 조합을 누르면
 // 저장한다(Esc 취소). 플러그인이 OBS 설정 창과 같은 자리에 적어 설정 창·다음 실행도 같은 키를 쓴다.
 // 받는 동안은 지금 키를 눌러도 마크가 나가지 않는다(플러그인이 막는다).
-export function HotkeySection({ hotkey, bridge }: { hotkey: string; bridge: Bridge }) {
+// bare — 독 설정 탭 맨 위(카드 테두리 없이)
+export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge: Bridge; bare?: boolean }) {
   const [capturing, setCapturing] = useState(false);
   const [preview, setPreview] = useState('');
   const [busy, setBusy] = useState(false);
@@ -70,7 +71,7 @@ export function HotkeySection({ hotkey, bridge }: { hotkey: string; bridge: Brid
   };
 
   return (
-    <section class={styles.section} aria-labelledby="hotkey-title">
+    <section class={bare ? styles.bareSection : styles.section} aria-labelledby="hotkey-title">
       <h3 id="hotkey-title" class={styles.sectionTitle}>
         순간 표시 단축키
       </h3>

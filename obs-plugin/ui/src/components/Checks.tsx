@@ -19,8 +19,8 @@ function CheckIcon({ state }: { state: CheckState }) {
   );
 }
 
-// 송출 규약(ADR-020) 점검 — 방송 시작 시점에 플러그인이 채운다.
-export function Checks({ state }: { state: BridgeState }) {
+// 송출 규약(ADR-020) 점검 — 방송 시작 시점에 플러그인이 채운다. bare — 독 탭 안(카드 테두리 없이).
+export function Checks({ state, bare }: { state: BridgeState; bare?: boolean }) {
   const { checks } = state;
   const res = checks.width > 0 ? `${checks.width}×${checks.height}` : '—';
   const fps = checks.fps > 0 ? ` · ${Number.isInteger(checks.fps) ? checks.fps : checks.fps.toFixed(2)}fps` : '';
@@ -52,7 +52,7 @@ export function Checks({ state }: { state: BridgeState }) {
   ];
 
   return (
-    <section class={styles.section} aria-labelledby="checks-title">
+    <section class={bare ? styles.bareSection : styles.section} aria-labelledby="checks-title">
       <h3 id="checks-title" class={styles.sectionTitle}>
         {state.phase === 'live' || state.phase === 'reconnecting' || (state.phase === 'error' && state.errorCode)
           ? '송출 점검'

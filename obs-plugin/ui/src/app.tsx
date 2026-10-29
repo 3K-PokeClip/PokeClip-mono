@@ -1,11 +1,9 @@
 import { CircleCheck, CircleDashed, CircleX, type LucideIcon, Radio, RefreshCw, WifiOff } from 'lucide-preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { AudioAssignPrompt } from './components/AudioAssignPrompt';
-import { AudioTracks } from './components/AudioTracks';
-import { Checks } from './components/Checks';
 import styles from './components/dock.module.css';
+import { DockTabs } from './components/DockTabs';
 import { Logo } from './components/Logo';
-import { HotkeySection } from './components/HotkeySection';
 import { PairCard } from './components/PairCard';
 import { Settings } from './components/Settings';
 import { StatusCard } from './components/StatusCard';
@@ -17,7 +15,8 @@ import type { BridgeState } from './lib/types';
 
 type BadgeTone = 'neutral' | 'success' | 'point' | 'warning' | 'danger';
 
-// POK-267 「개발 서버」 숨은 스위치 — 로고를 이 시간 안에 이만큼 누르면 고급 설정에 스위치가 보인다(이번 독 세션만).
+// POK-267 「개발 서버」 숨은 스위치 — 로고를 이 시간 안에 이만큼 누르면 설정 탭(연결 전엔 고급 설정)이 열리며 스위치가 보인다
+// (이번 독 세션만).
 const DEV_UNLOCK_TAPS = 5;
 const DEV_UNLOCK_WINDOW_MS = 3000;
 
@@ -186,19 +185,25 @@ export function App({ bridge }: { bridge: Bridge }) {
 
       {state.paired && state.audio.prompt ? <AudioAssignPrompt state={state} bridge={bridge} /> : null}
 
-      {state.paired ? <Checks state={state} /> : null}
-
-      {state.paired ? <HotkeySection hotkey={state.marks.hotkey} bridge={bridge} /> : null}
-
-      {state.paired ? <AudioTracks state={state} bridge={bridge} /> : null}
-
-      <Settings
-        bridge={bridge}
-        locked={locked}
-        autoAssign={state.audio.autoAssign}
-        serverEnv={state.serverEnv}
-        devUnlocked={devUnlocked || state.serverEnv === 'dev'}
-      />
+      {/* 연결되면 송출 점검·오디오 트랙·설정(맨 위에 순간 표시 단축키)을 탭 하나씩 — 연결 전엔 접는 고급 설정 칸 하나 */}
+      {state.paired ? (
+        <DockTabs
+          state={state}
+          bridge={bridge}
+          locked={locked}
+          devVisible={devUnlocked || state.serverEnv === 'dev'}
+          focusDev={devUnlocked}
+        />
+      ) : (
+        <Settings
+          bridge={bridge}
+          locked={locked}
+          autoAssign={state.audio.autoAssign}
+          serverEnv={state.serverEnv}
+          devVisible={devUnlocked || state.serverEnv === 'dev'}
+          focusDev={devUnlocked}
+        />
+      )}
 
       <footer class={styles.footer}>
         <span>PokeClip for OBS {version && `v${version}`}</span>
