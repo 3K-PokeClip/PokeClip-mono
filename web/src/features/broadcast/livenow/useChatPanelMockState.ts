@@ -535,7 +535,8 @@ export function useChatPanelMockState(
       // 지난 방송인데 아직 어느 시점을 보일지 모른다(명부 답 전, 녹화가 자리를 알리기 전) — 목록의 「불러오고 있어요」와 같은 때다
       if (ended) return 'loading';
       if (live.status === 'offline' || items.length > 0) return null;
-      return streamId !== null && liveReadFor === streamId ? 'empty' : 'connecting';
+      // liveReadFor에는 응답을 받은 방송 번호만 들어가므로 빈 번호(방송 없음)는 같아질 수 없고 「연결하는 중」으로 남는다
+      return liveReadFor === streamId ? 'empty' : 'connecting';
     }
     if (replay.lines.length > 0) return null;
     switch (replay.status) {
