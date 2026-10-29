@@ -1005,6 +1005,30 @@ TEST(audio_routing_view_lists_keys_and_sources_off_tracks)
 	CHECK(BuildRoutingView(sources, options) == v);
 }
 
+// POK-450 — 지금 화면에 없는 소스도 트랙 칩에 남고 「다른 장면」 표시용으로 showing=false가 실린다. 배정은 그대로다.
+TEST(audio_routing_view_carries_showing_for_other_scene_sources)
+{
+	std::vector<AudioSourceInfo> sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x03),
+						Src("uuid:intro", "인트로 BGM", AudioKind::Media, 100, 0x05, true, false, false),
+						Src("uuid:off", "효과음", AudioKind::Media, 101, 0x01, true, false, false)};
+	RoutingViewOptions options;
+	options.autoAssign = true;
+	options.applied = true;
+	options.offTrack = {"uuid:off"};
+	AudioRoutingView v = BuildRoutingView(sources, options);
+	CHECK(v.tracks[0].sources[0].showing);
+	CHECK_EQ(v.tracks[1].sources.size(), 1u);
+	CHECK_EQ(v.tracks[1].sources[0].key, std::string("uuid:intro"));
+	CHECK(!v.tracks[1].sources[0].showing);
+	CHECK_EQ(v.mixOnly.size(), 1u);
+	CHECK(!v.mixOnly[0].showing);
+	sources[1].showing = true; // 그 장면으로 넘어갔다 — 자리는 그대로, 표시만 돌아온다
+	AudioRoutingView shown = BuildRoutingView(sources, options);
+	CHECK(shown.tracks[1].sources[0].showing);
+	CHECK_EQ(shown.tracks[1].sources[0].key, std::string("uuid:intro"));
+	CHECK(!(shown == v));
+}
+
 TEST(audio_prunes_absent_memories_beyond_cap)
 {
 	AssignmentInput in;

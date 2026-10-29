@@ -9,6 +9,8 @@ export interface AudioSource {
   key: string;
   name: string;
   kind: AudioKind;
+  // POK-450 — 지금 방송 화면(프로그램)에 나온다. false면 다른 장면에만 있어 독이 흐리게 보인다(배정은 그대로, 전역 장치는 늘 true)
+  showing: boolean;
 }
 export interface AudioRouting {
   known: boolean;

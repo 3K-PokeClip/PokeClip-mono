@@ -131,6 +131,7 @@ static obs_data_array_t *SourceArray(const std::vector<AudioSourceView> &sources
 		obs_data_set_string(item, "key", src.key.c_str());
 		obs_data_set_string(item, "name", src.name.c_str());
 		obs_data_set_string(item, "kind", AudioKindName(src.kind));
+		obs_data_set_bool(item, "showing", src.showing);
 		obs_data_array_push_back(array, item);
 		obs_data_release(item);
 	}

@@ -14,10 +14,10 @@ import type {
 // 개발 전용 — `pnpm dev` 에서 토큰 없이 열면 쓴다.
 // ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_grouped|audio_live|audio_manual|
 //       audio_main_stream|audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
-//       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream
+//       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream|audio_other_scene
 // &env=dev — 개발 서버로 붙은 상태(머리 「개발 서버」 표시·고급 설정 스위치). 기본은 운영(POK-267).
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
-const src = (key: string, name: string, kind: AudioKind): AudioSource => ({ key, name, kind });
+const src = (key: string, name: string, kind: AudioKind, showing = true): AudioSource => ({ key, name, kind, showing });
 const MIC = src('ch:3', '마이크/보조', 'mic');
 const MIC2 = src('uuid:mic2', '마이크 2', 'mic');
 const DESK = src('ch:1', '데스크탑 오디오', 'desktop');
@@ -164,6 +164,13 @@ export function createMockBridge(scenario: string): Bridge {
       obsStreaming: true,
       checks: { ...liveChecks },
       audio: { ...routing([[MIC], [DESK], [BGM], [], []]), mixOnly: [ALERT], locked: true },
+    },
+    // POK-450 — 인트로 장면의 BGM·알림, 게임 장면의 게임은 지금 화면에 없다. 자리는 그대로, 독에서만 흐리게.
+    audio_other_scene: {
+      audio: {
+        ...routing([[MIC], [DESK], [{ ...BGM, showing: false }, ALERT], [{ ...GAME, showing: false }], []]),
+        mixOnly: [src('uuid:intro', '인트로 영상', 'media', false)],
+      },
     },
     audio_manual: {
       audio: {

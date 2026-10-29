@@ -710,6 +710,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* POK-450 — 지금 화면에 없는 소스(다른 장면). 자리는 그대로라 점선으로만 구분한다. */
+.chip[data-showing='false'] {
+  border-style: dashed;
+  background: transparent;
+  color: var(--pc-color-text-muted);
+}
 .chipX {
   display: grid;
   flex: none;

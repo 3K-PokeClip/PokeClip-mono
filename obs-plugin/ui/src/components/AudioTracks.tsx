@@ -19,7 +19,10 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
   const [confirm, setConfirm] = useState<Request | null>(null);
   if (!audio.known) return null;
 
-  const names = (list: { name: string }[]) => list.map((s) => s.name).join(', ');
+  // POK-450 — 지금 화면에 없는 소스는 점선 칩으로(「다른 장면」). 자리는 그대로라 그 장면이 아닐 때 조용할 뿐이다(규칙 1).
+  const label = (s: { name: string; showing?: boolean }) => (s.showing === false ? `${s.name} (다른 장면)` : s.name);
+  const names = (list: { name: string; showing?: boolean }[]) => list.map(label).join(', ');
+  const otherScene = audio.tracks.some((t) => !t.mainStream && t.sources.some((s) => !s.showing));
   const mainStreamTracks = audio.tracks.filter((t) => t.mainStream).map((t) => t.track);
   const title = !audio.autoAssign
     ? '오디오 트랙 · OBS 설정 그대로'
@@ -98,8 +101,13 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
               ) : (
                 <span class={styles.chips}>
                   {t.sources.map((s) => (
-                    <span class={styles.chip} key={s.key}>
-                      <span title={s.name}>{s.name}</span>
+                    <span
+                      class={styles.chip}
+                      key={s.key}
+                      data-showing={s.showing ? undefined : 'false'}
+                      title={s.showing ? s.name : `${s.name} — 다른 장면에 있어 지금은 조용해요`}
+                    >
+                      <span>{s.name}</span>
                       {canEdit ? (
                         <button
                           type="button"
@@ -140,7 +148,7 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
                 </option>
                 {candidates.map((s) => (
                   <option value={s.key} key={s.key}>
-                    {s.name}
+                    {label(s)}
                   </option>
                 ))}
               </select>
@@ -148,6 +156,11 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
           );
         })}
       </ul>
+      {otherScene ? (
+        <p class={styles.note}>
+          점선 소스는 다른 장면에 있어 지금은 조용해요. 트랙 자리는 그대로예요.
+        </p>
+      ) : null}
       {error ? (
         <p class={styles.inlineError} role="alert">
           {error}

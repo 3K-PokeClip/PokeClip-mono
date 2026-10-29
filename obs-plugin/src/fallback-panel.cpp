@@ -203,10 +203,15 @@ void FallbackPanel::Render(const StateSnapshot &s)
 			line += " " + Text("Audio.Deferred");
 		else if (!s.audio.autoAssign)
 			line += " " + Text("Audio.Manual");
+		// 지금 방송 화면에 없는 소스는 이름 뒤에 「(다른 장면)」(POK-450) — 자리는 그대로라 그 장면이 아닐 때 조용할 뿐이다.
+		auto shown = [](const AudioSourceView &src) {
+			QString name = QString::fromStdString(src.name);
+			return src.showing ? name : name + " " + Text("Audio.OtherScene");
+		};
 		if (!s.audio.mixOnly.empty()) {
 			QStringList gone;
 			for (const AudioSourceView &src : s.audio.mixOnly)
-				gone << QString::fromStdString(src.name);
+				gone << shown(src);
 			line += "\n⚠ " + Text("Audio.NoTrack").arg(gone.join(", "));
 		}
 		audio_->setText(line);
@@ -229,7 +234,7 @@ void FallbackPanel::Render(const StateSnapshot &s)
 			const AudioTrackView &t = s.audio.tracks[i];
 			QStringList names;
 			for (const AudioSourceView &src : t.sources)
-				names << QString::fromStdString(src.name);
+				names << shown(src);
 			QString label = t.mainStream ? QString("T%1(%2)").arg(t.track).arg(Text("Audio.MainStream"))
 						     : QString("T%1").arg(t.track);
 			trackLabel_[i]->setText(label + " " + (names.isEmpty() ? QString("–") : names.join(", ")));
