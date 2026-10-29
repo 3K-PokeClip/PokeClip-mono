@@ -64,6 +64,7 @@ export function ClipStatusPill({
   retrying,
   onRetryUpload,
   onRemake,
+  remakeLocked,
 }: {
   view: ClipStatusView;
   /** 이 영상을 만든 판(「편집본 v3」). 지금 화면이 더 새 판일 수 있다 */
@@ -72,6 +73,11 @@ export function ClipStatusPill({
   onRetryUpload: () => void;
   /** 영상 만들기 실패 뒤 「다시 만들기」 — 영상 만들기 창을 연다 */
   onRemake: () => void;
+  /**
+   * 헤더 「영상 만들기」가 꺼져 있는 동안(편집본 저장 중) 「다시 만들기」도 끈다 — 알약은 저장 중에도 남는데, 누르면 창만 닫히고
+   * 영상 만들기 창은 저장이 끝날 때까지 안 열려 아무 일도 없는 것처럼 보였다(PR #454 2차 리뷰)
+   */
+  remakeLocked: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const retryNoteId = useId();
@@ -130,6 +136,7 @@ export function ClipStatusPill({
             variant={variant}
             size="sm"
             fullWidth
+            disabled={remakeLocked}
             iconStart={<RotateCw size={13} aria-hidden />}
             onClick={() => {
               // 영상 만들기 창(모달)이 이 작은 창 위에 뜨므로 먼저 닫는다

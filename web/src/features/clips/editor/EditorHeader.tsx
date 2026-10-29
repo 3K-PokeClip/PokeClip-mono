@@ -50,6 +50,7 @@ export function EditorHeader({ state }: { state: ClipEditorMockState }) {
             retrying={state.clipStatus.retrying}
             onRetryUpload={state.clipStatus.onRetryUpload}
             onRemake={state.requestUpload}
+            remakeLocked={locked}
           />
         ) : null}
         {/* 도는 동안 라벨은 자리만 지켜 폭이 튀지 않는다(.busyButton). 라벨이 시각으로 숨으므로 이름은 aria-label이 댄다 */}

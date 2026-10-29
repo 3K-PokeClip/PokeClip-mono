@@ -40,6 +40,7 @@ const props = {
   retrying: false,
   onRetryUpload: vi.fn(),
   onRemake: vi.fn(),
+  remakeLocked: false,
 };
 
 describe('ClipStatusPill', () => {
@@ -76,5 +77,27 @@ describe('ClipStatusPill', () => {
     await user.click(screen.getByRole('button', { name: '영상 상태: 업로드 실패. 자세히 보기' }));
     expect(screen.getByText(note)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '다시 올리기' })).toHaveAccessibleDescription(note);
+  });
+
+  it('편집본 저장 중(헤더 「영상 만들기」가 꺼진 동안)에는 「다시 만들기」도 꺼진다: 눌러도 아무 일 없던 버튼(PR #454 2차 리뷰)', async () => {
+    const user = userEvent.setup();
+    const onRemake = vi.fn();
+    const renderFailed: ClipStatusView = {
+      ...failed,
+      title: '영상 만들기 실패',
+      actions: ['remake', 'library'],
+    };
+    const { rerender } = render(
+      <ClipStatusPill view={renderFailed} {...props} onRemake={onRemake} remakeLocked />,
+    );
+    await user.click(
+      screen.getByRole('button', { name: '영상 상태: 영상 만들기 실패. 자세히 보기' }),
+    );
+    expect(screen.getByRole('button', { name: '다시 만들기' })).toBeDisabled();
+
+    // 저장이 끝나면 다시 눌린다
+    rerender(<ClipStatusPill view={renderFailed} {...props} onRemake={onRemake} />);
+    await user.click(screen.getByRole('button', { name: '다시 만들기' }));
+    expect(onRemake).toHaveBeenCalledTimes(1);
   });
 });
