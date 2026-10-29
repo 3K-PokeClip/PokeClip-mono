@@ -332,6 +332,22 @@ BEGIN
     END IF;
 END $do$;
 
+-- FK 열 인덱스 셋(승인 표면 아님 — 통보에 병기). 세션 행을 지우는 쪽(만료 · 후속 계승 끊기)의 FK 검사가 참조 표를
+-- session_id · inherits_session 으로 찾는다. 앞의 (stream_id, session_id, seq) 인덱스는 session_id 로 시작하지 않아 그
+-- 검사가 탈 수 없다 — 없으면 세션마다 참조 표를 처음부터 훑는다.
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('stream_segments_session_id_idx') IS NULL THEN
+        CREATE INDEX stream_segments_session_id_idx ON stream_segments (session_id) WHERE session_id IS NOT NULL;
+    END IF;
+    IF pg_catalog.to_regclass('stream_published_gaps_session_idx') IS NULL THEN
+        CREATE INDEX stream_published_gaps_session_idx ON stream_published_gaps (session_id);
+    END IF;
+    IF pg_catalog.to_regclass('stream_sessions_inherits_idx') IS NULL THEN
+        CREATE INDEX stream_sessions_inherits_idx ON stream_sessions (inherits_session) WHERE inherits_session IS NOT NULL;
+    END IF;
+END $do$;
+
 -- 하한 갱신 — 지워진 행의 스트림별 max(seq)+1 로 올린다(내리지 않는다). 지우는 쪽이 누구든(만료 · clip 탈퇴 정리 ·
 -- 수동) 같은 트랜잭션에서 돈다. 실패하면 그 DELETE 도 롤백된다. 하한 행을 잠그므로 같은 스트림의 동시 DELETE 는
 -- 서로 직렬화된다. 한 문장 안에서는 스트림 순으로 잠가 여러 스트림을 지우는 두 DELETE 문장이 교착하지 않는다 —

@@ -42,6 +42,9 @@ type fakeStore struct {
 	// 그대로다(409 · 네트워크 오류). 적용된 뒤 응답만 잃은 경우(결과 모름)는 훅이 applyPut 을 먼저 부르고
 	// 오류를 돌려준다. Put 이 다른 고루틴에서 도는 동안 바꿀 때는 setOnPut 을 쓴다.
 	onPut func(putCall) error
+	// onGet 이 nil 이 아니면 Get 이 판을 읽기 직전에 잠금 밖에서 부른다 — Head 와 Get 사이에 다른 작성자가 끼어드는
+	// 국면이다. 바꿀 때는 setOnGet 을 쓴다.
+	onGet func()
 	puts  []putCall
 	heads []headCall
 	gets  []string
@@ -139,19 +142,29 @@ func (f *fakeStore) Head(ctx context.Context, key string) (Stat, error) {
 	return Stat{Exists: true, ETag: obj.etag, Meta: maps.Clone(obj.meta)}, nil
 }
 
-// Get 은 Store.Get 이다.
-func (f *fakeStore) Get(ctx context.Context, key string) ([]byte, error) {
+// Get 은 Store.Get 이다 — 본문과 그 판의 ETag 를 같은 잠금 아래에서 읽는다(한 응답). 본문 상한은 S3Store 와 같다
+// (checkBodyLimit).
+func (f *fakeStore) Get(ctx context.Context, key string) ([]byte, string, error) {
+	f.mu.Lock()
+	f.gets = append(f.gets, key)
+	hook := f.onGet
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.gets = append(f.gets, key)
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	obj, ok := f.objects[key]
 	if !ok {
-		return nil, fmt.Errorf("%w: GET key=%q", ErrNotFound, key)
+		return nil, "", fmt.Errorf("%w: GET key=%q", ErrNotFound, key)
 	}
-	return bytes.Clone(obj.body), nil
+	if err := checkBodyLimit(key, obj.body); err != nil {
+		return nil, "", err
+	}
+	return bytes.Clone(obj.body), obj.etag, nil
 }
 
 // ListObjectsV2 를 비롯한 아래 List… 메서드 열둘은 S3 LIST 금지(프로필 4절)의 동적 그물이다 — 계획
@@ -226,6 +239,13 @@ func (f *fakeStore) setOnPut(hook func(putCall) error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.onPut = hook
+}
+
+// setOnGet 은 onGet 을 잠금 아래에서 갈아 끼운다.
+func (f *fakeStore) setOnGet(hook func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onGet = hook
 }
 
 // headKeys 는 Head 호출 기록(키)이다.

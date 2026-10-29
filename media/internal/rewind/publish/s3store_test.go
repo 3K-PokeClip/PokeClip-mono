@@ -204,6 +204,46 @@ func TestS3StorePutSendsConditionAndMeta(t *testing.T) {
 	}
 }
 
+// 목록 객체의 Cache-Control 은 키 축으로 갈린다(kty A1 2026-10-27). 라이브 · 동결 DVR 목록(dvr/)은 조각마다 판이
+// 바뀌어 1초, VOD 문서(vod/)는 IfAbsent 로 한 번만 쓰고 바뀌지 않아 1시간이다. 키는 발행 경로가 쓰는 생성 함수
+// 그대로 만든다 — vodKey 의 접두가 바뀌면 이 시험이 먼저 깨진다. 잡는 결함: VOD 가 1초로 남아 엣지 질의가 늘거나,
+// 라이브 목록이 1시간을 받아 시청자가 낡은 판에 묶인다.
+func TestS3StorePutCacheControlByAxis(t *testing.T) {
+	dvr, err := manifestKey("demo", "sess-1")
+	if err != nil {
+		t.Fatalf("manifestKey: %v", err)
+	}
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatalf("vodKey: %v", err)
+	}
+	cases := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{name: "DVR", key: dvr, want: "public, max-age=1"},
+		{name: "VOD", key: vod, want: "public, max-age=3600"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, stub := newStubbedStore(t, respondObject(`"new-etag"`, nil, nil))
+
+			if _, err := store.Put(context.Background(), tc.key, IfAbsent(), bodyA, nil); err != nil {
+				t.Fatalf("Put(%q) 실패: %v", tc.key, err)
+			}
+
+			req := stub.only(t)
+			if got := req.header.Values("Cache-Control"); !slices.Equal(got, []string{tc.want}) {
+				t.Errorf("Put(%q) 의 Cache-Control = %q, want [%s]", tc.key, got, tc.want)
+			}
+			if got := req.header.Values("Content-Type"); !slices.Equal(got, []string{"application/vnd.apple.mpegurl"}) {
+				t.Errorf("Put(%q) 의 Content-Type = %q, want [application/vnd.apple.mpegurl](축과 무관)", tc.key, got)
+			}
+		})
+	}
+}
+
 // 4.4 [B-1] 응답 분기의 매핑 — 412 · 409 · 404(키 부재)는 센티널로, 나머지는 센티널이 아닌 오류로 온다.
 // 버킷이 없다는 404(NoSuchBucket)는 키 부재가 아니라 설정 결함이다. 어느 분기든 시도는 한 번이다 — 기본
 // 재시도가 3회인 클라이언트로도 503 에 요청이 하나만 나간다(재시도는 호출자 몫 — RC-19 시도 상한).
@@ -344,9 +384,9 @@ func TestS3StoreHead(t *testing.T) {
 	}
 }
 
-// Get 은 GET 요청 하나로 본문을 읽는다. 키 부재(404 NoSuchKey)는 ErrNotFound, 버킷 부재는 설정 결함이라
-// ErrNotFound 가 아니다. 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 상한)까지 받는다 — 상한 크기는 읽고,
-// 한 바이트라도 넘으면 센티널이 아닌 오류다.
+// Get 은 GET 요청 하나로 본문과 그 응답의 ETag 를 읽는다. 키 부재(404 NoSuchKey)는 ErrNotFound, 버킷 부재는 설정
+// 결함이라 ErrNotFound 가 아니다. 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 상한)까지 받는다 — 상한 크기는 읽고,
+// 한 바이트라도 넘으면 센티널이 아닌 오류다. 200 인데 ETag 가 없으면 오류다 — 읽은 본문에 조건을 걸 수 없다.
 func TestS3StoreGet(t *testing.T) {
 	atLimit := bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes)
 	overLimit := bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)
@@ -354,12 +394,14 @@ func TestS3StoreGet(t *testing.T) {
 		name         string
 		respond      http.HandlerFunc
 		want         []byte
+		wantETag     string
 		wantNotFound bool
 		wantErr      bool
 	}{
-		{name: "200_body", respond: respondObject(`"e1"`, nil, bodyA), want: bodyA},
-		{name: "200_body_at_limit", respond: respondObject(`"e1"`, nil, atLimit), want: atLimit},
+		{name: "200_body", respond: respondObject(`"e1"`, nil, bodyA), want: bodyA, wantETag: `"e1"`},
+		{name: "200_body_at_limit", respond: respondObject(`"e1"`, nil, atLimit), want: atLimit, wantETag: `"e1"`},
 		{name: "200_body_over_limit", respond: respondObject(`"e1"`, nil, overLimit), wantErr: true},
+		{name: "200_no_etag", respond: respondObject("", nil, bodyA), wantErr: true},
 		{name: "404_NoSuchKey", respond: respondError(http.StatusNotFound, "NoSuchKey"), wantNotFound: true, wantErr: true},
 		{name: "404_NoSuchBucket", respond: respondError(http.StatusNotFound, "NoSuchBucket"), wantErr: true},
 		{name: "503_error", respond: respondError(http.StatusServiceUnavailable, "SlowDown"), wantErr: true},
@@ -368,7 +410,7 @@ func TestS3StoreGet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store, stub := newStubbedStore(t, tc.respond)
 
-			body, err := store.Get(context.Background(), testKey)
+			body, etag, err := store.Get(context.Background(), testKey)
 			if gotErr := err != nil; gotErr != tc.wantErr {
 				t.Fatalf("Get 오류 = %v, want 오류 있음 = %t", err, tc.wantErr)
 			}
@@ -378,6 +420,9 @@ func TestS3StoreGet(t *testing.T) {
 			if !bytes.Equal(body, tc.want) {
 				// 상한 크기 본문을 통째로 찍지 않게 앞부분만 싣는다.
 				t.Errorf("Get 본문 = %.64q(%d바이트), want %.64q(%d바이트)", body, len(body), tc.want, len(tc.want))
+			}
+			if etag != tc.wantETag {
+				t.Errorf("Get ETag = %q, want %q", etag, tc.wantETag)
 			}
 			req := stub.only(t)
 			if req.method != http.MethodGet || req.path != "/"+testBucket+"/"+testKey {
@@ -402,7 +447,7 @@ func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := store.Get(context.Background(), testKey)
+		_, _, err := store.Get(context.Background(), testKey)
 		done <- err
 	}()
 
@@ -413,6 +458,49 @@ func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("상한을 넘겼는데 Get 이 본문 끝을 기다린다 — 상한에서 읽기를 멈추지 않는다")
+	}
+}
+
+// Get 의 본문 상한은 키 축으로 갈린다 — VOD 문서 키는 rewind.MaxVODBodyBytes(설계 D29), 그 밖(되감기 목록)은
+// rewind.MaxBodyBytes 다. 상한 초과는 errBodyOverLimit 다 — 우리가 쓴 판일 수 없어 감사가 mismatch 로 가른다
+// (보안 M-1). 목록 상한을 VOD 에 쓰면 512KiB 넘는 VOD 의 변조가 읽기 실패로 묻힌다.
+func TestS3StoreGetLimitByAxis(t *testing.T) {
+	dvr, err := manifestKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		key     string
+		size    int
+		wantErr bool
+	}{
+		{name: "DVR_상한", key: dvr, size: rewind.MaxBodyBytes},
+		{name: "DVR_초과", key: dvr, size: rewind.MaxBodyBytes + 1, wantErr: true},
+		{name: "VOD_목록_상한_초과", key: vod, size: rewind.MaxBodyBytes + 1},
+		{name: "VOD_상한", key: vod, size: rewind.MaxVODBodyBytes},
+		{name: "VOD_초과", key: vod, size: rewind.MaxVODBodyBytes + 1, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := newStubbedStore(t, respondObject(`"e1"`, nil, bytes.Repeat([]byte{'x'}, tc.size)))
+
+			body, _, err := store.Get(context.Background(), tc.key)
+
+			if tc.wantErr {
+				if !errors.Is(err, errBodyOverLimit) {
+					t.Errorf("Get(%q) %d바이트 오류 = %v, want errBodyOverLimit", tc.key, tc.size, err)
+				}
+				return
+			}
+			if err != nil || len(body) != tc.size {
+				t.Errorf("Get(%q) = %d바이트 · %v, want %d바이트 · nil", tc.key, len(body), err, tc.size)
+			}
+		})
 	}
 }
 
@@ -494,7 +582,7 @@ func TestS3StoreKeepsClassOnHugeErrorBody(t *testing.T) {
 
 			var err error
 			if tc.get {
-				_, err = store.Get(context.Background(), testKey)
+				_, _, err = store.Get(context.Background(), testKey)
 			} else {
 				_, err = store.Put(context.Background(), testKey, IfMatch(`"prev-etag"`), bodyA, nil)
 			}
@@ -527,7 +615,7 @@ func TestS3StoreWithLimitKeepsSmallErrorsAndSuccessBodies(t *testing.T) {
 	t.Run("GET_404_NoSuchBucket", func(t *testing.T) {
 		store, stub := newStubbedStore(t, respondError(http.StatusNotFound, "NoSuchBucket"), s3errbody.Limit)
 
-		_, err := store.Get(context.Background(), testKey)
+		_, _, err := store.Get(context.Background(), testKey)
 
 		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, s3errbody.ErrTooLarge) {
 			t.Errorf("Get(404 NoSuchBucket) 오류 = %v, want ErrNotFound · ErrTooLarge 아닌 오류", err)
@@ -549,7 +637,7 @@ func TestS3StoreWithLimitKeepsSmallErrorsAndSuccessBodies(t *testing.T) {
 		want := bytes.Repeat([]byte("0123456789abcdef"), 100<<10/16)
 		store, stub := newStubbedStore(t, respondObject(`"e1"`, nil, want), s3errbody.Limit)
 
-		got, err := store.Get(context.Background(), testKey)
+		got, _, err := store.Get(context.Background(), testKey)
 
 		if err != nil || !bytes.Equal(got, want) {
 			t.Errorf("Get(200) = %d바이트 · %v, want %d바이트 그대로 · nil", len(got), err, len(want))

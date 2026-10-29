@@ -1,6 +1,6 @@
 package janitor
 
-// 관측 신호 — 게이지 7종 · 시작 덤프 · 오류 분기 표(설계 3-3 · 8절).
+// 관측 신호 — 게이지 8종 · 시작 덤프 · 오류 분기 표(설계 3-3 · 8절).
 
 import (
 	"context"
@@ -52,7 +52,7 @@ func assertToggled(t *testing.T, sink *logSink, name string) {
 	}
 }
 
-// D32 — 게이지 7종 모두 set 과 clear 가 WARN 수준 수집에서 보인다.
+// D32 — 게이지 8종 모두 set 과 clear 가 WARN 수준 수집에서 보인다.
 func TestEveryGaugeSetAndClearAreVisibleAtWarn(t *testing.T) {
 	t.Run("delete_failing", func(t *testing.T) {
 		r, warn := warnRig(t, nil)
@@ -130,7 +130,7 @@ func TestEveryGaugeSetAndClearAreVisibleAtWarn(t *testing.T) {
 	})
 }
 
-// 시작 덤프 소비 계약 — 다른 어떤 게이지 줄보다 먼저 7종이 value=0 reason=startup 이고,
+// 시작 덤프 소비 계약 — 다른 어떤 게이지 줄보다 먼저 8종이 value=0 reason=startup 이고,
 // cutoff_invalid 는 stream_id="*" 다. 현재 무효 스트림의 value=1 은 그 뒤에 온다.
 func TestStartDumpPrecedesEveryOtherGaugeLine(t *testing.T) {
 	r, warn := warnRig(t, nil)
@@ -138,12 +138,13 @@ func TestStartDumpPrecedesEveryOtherGaugeLine(t *testing.T) {
 	r.cycle(t)
 
 	recs := warn.all("")
-	if len(recs) < 8 {
-		t.Fatalf("줄 = %d, want ≥ 8", len(recs))
+	if len(recs) < 9 {
+		t.Fatalf("줄 = %d, want ≥ 9", len(recs))
 	}
 	want := map[string]bool{"janitor_delete_failing": true, "janitor_cycle_failing": true, "janitor_cutoff_invalid": true,
-		"janitor_backlog_capped": true, "janitor_volume_suspect": true, "janitor_fs_suspended": true, "janitor_reclaim_blocked": true}
-	for i, rec := range recs[:7] {
+		"janitor_backlog_capped": true, "janitor_volume_suspect": true, "janitor_fs_suspended": true, "janitor_reclaim_blocked": true,
+		abandonedRetainedName: true}
+	for i, rec := range recs[:8] {
 		if !want[rec.msg] || rec.attrs["value"] != "0" || rec.attrs["reason"] != "startup" || rec.attrs["run_id"] != "run-1" {
 			t.Errorf("덤프 %d = %s %v, want 게이지 value=0 reason=startup run_id", i, rec.msg, rec.attrs)
 		}
@@ -155,7 +156,7 @@ func TestStartDumpPrecedesEveryOtherGaugeLine(t *testing.T) {
 	if len(want) != 0 {
 		t.Errorf("덤프에 빠진 게이지: %v", want)
 	}
-	if rec := recs[7]; rec.msg != cutoffInvalidName || rec.attrs["value"] != "1" || rec.attrs["stream_id"] != "s9" {
+	if rec := recs[8]; rec.msg != cutoffInvalidName || rec.attrs["value"] != "1" || rec.attrs["stream_id"] != "s9" {
 		t.Errorf("덤프 다음 줄 = %s %v, want cutoff_invalid value=1 stream_id=s9", rec.msg, rec.attrs)
 	}
 	r.cycle(t)

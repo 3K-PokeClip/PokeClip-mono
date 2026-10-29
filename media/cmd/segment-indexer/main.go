@@ -25,6 +25,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/secretfile"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -80,6 +81,11 @@ func run() error {
 	// 관측 폴러의 비밀번호 파일을 여기서 읽는다 — DB 연결보다 먼저라 설정 오류가 DB 상태와 무관하게
 	// 드러난다. 실패는 기동 실패다(OpenRoot 와 같은 꼴 · ADR-063 강등의 예외 — startObserver 주석).
 	obsOpt, err := observerOptions(cfg)
+	if err != nil {
+		return err
+	}
+	// 4C resolve 클라이언트(POK-472 — 4D 수신부가 쓴다). 토큰 파일 읽기 실패는 같은 이유로 여기서 기동 실패다.
+	resolver, err := newResolveClient(cfg)
 	if err != nil {
 		return err
 	}
@@ -214,14 +220,20 @@ func run() error {
 		},
 	}
 	// 제어면 상태 몫(Board · 받은편지함 · 재기동 적재)은 발행 조립 앞이다 — 꺼짐 · 강등 · 정상 모두 받은편지함이 있다(M5 3.3).
-	board := assembleStatus(ctx, cfg, rewind, nil)
-	if pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind); pubPool != nil {
+	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
+	// 상태 표지 받은편지함은 기동 때 하나다 — 만료(아래)와 4D 수신부가 Changed 로 넣고, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
+	inbox := session.NewPlaybackInbox()
+	pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind)
+	if pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
 		defer pubPool.Close()
 		stopPublisherStats := poolstat.Start(ctx, pubPool, "publisher", log)
 		defer stopPublisherStats() // 위 인덱서 풀 관측과 같은 원리 — pubPool.Close 보다 먼저 멈춘다
 	}
+	// 60일 만료(M6-4) — 발행 몫이 강등이면 켜지 않는다(startExpiry). ★ pool.Close 보다 뒤에 등록해 먼저 멈춘다(D24).
+	stopExpiry := startExpiry(ctx, cfg, pool, pubPool != nil, inbox.Changed, log)
+	defer stopExpiry()
 	// 루프의 ctx 가 곧 차선 ctx 다(rewindLoop 문서). run ctx 에서 떼어 두어, 루프가 오류로 끝나 run ctx 가 살아 있어도
 	// rewind.stop 이 작업을 끊고 기다린 뒤 fence 를 반납한다(판단 J74).
 	laneCtx, cancelLanes := context.WithCancel(ctx)
@@ -251,8 +263,14 @@ func run() error {
 	defer holdTicker.Stop()
 
 	// 되감기 제어면 서버(M5 3.7). ★ 위 rewind.stop · 풀 Close · up.Shutdown 보다 뒤에 등록해 먼저 멈춘다(LIFO) — 처리 중
-	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 M6 가 채운다.
-	stopControl := startControl(cfg, board, log, nil)
+	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 M6 가 채운다. 4D 수신부(POK-472)는 stopControl 안에서 서버보다
+	// 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 M6-3b 의 루프가 비운다.
+	intents := session.NewIntentInbox()
+	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, nil, nil)), inbox.Changed, intents.Post, log)
+	if err != nil {
+		return err
+	}
+	stopControl := startControlWithEndSignal(cfg, board, log, nil, recv)
 	defer stopControl()
 
 	// --- 5. 메인 루프 ---

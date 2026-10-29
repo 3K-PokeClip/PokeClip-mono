@@ -32,6 +32,7 @@ type Ledger interface {
 	SchemaReady(ctx context.Context) (bool, error)
 	DeletableSegments(ctx context.Context, p index.LocalCleanupPolicy, limit int, after index.LocalCursor) ([]index.LocalSegment, index.LocalCursor, error)
 	InvalidCutoffs(ctx context.Context) ([]index.InvalidCutoff, error)
+	AbandonedLocalRetained(ctx context.Context) (int64, error)
 	RemoveUnderRowLock(ctx context.Context, streamID string, seq int64, path string, remove func() (clear bool)) (index.RowLockResult, error)
 	ClearLocalPath(ctx context.Context, streamID string, seq int64, deletedPath string) (bool, error)
 }
@@ -161,6 +162,7 @@ func (j *Janitor) runCycle(ctx context.Context) {
 	if !j.signalInvalidCutoffs(ctx, st) {
 		return
 	}
+	j.signalAbandonedRetained(ctx)
 	if len(j.debt) > 0 {
 		j.reclaim(ctx, st)
 		if st.aborted() || len(j.debt) > 0 {
@@ -238,6 +240,24 @@ func (j *Janitor) signalInvalidCutoffs(ctx context.Context, st *cycleStats) bool
 	}
 	j.gauges.cutoffs(cuts)
 	return true
+}
+
+// signalAbandonedRetained 는 ③ 포기 보존 기간이 지났는데 ② 가 안 올라 지울 수 없는 행이 있는지로 게이지를
+// 맞춘다(설계 M6 7절 X5). ② 먼저 삭제는 금지라 정리기는 기다릴 뿐이고 사람이 ② 정체를 볼 일이다. 신호일 뿐이라
+// 집계가 실패해도 주기를 접지 않는다 — WARN 한 줄을 내고 게이지는 마지막 값을 둔다(db m64 M1).
+func (j *Janitor) signalAbandonedRetained(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(ctx, j.limits.query)
+	defer cancel()
+	n, err := j.ledger.AbandonedLocalRetained(cctx)
+	if err != nil {
+		j.log.Warn(abandonedRetainedCheckFailedName, "err", err, "note", "잔존 집계 실패 — 게이지는 마지막 값 그대로 · 삭제는 계속한다")
+		return
+	}
+	if n > 0 {
+		j.gauges.abandonedRetained.set("rows", n)
+		return
+	}
+	j.gauges.abandonedRetained.clear()
 }
 
 // deletePhase 는 커서에서 이어 후보를 살펴본다(5단계). 살펴본 행 수가 MaxPerCycle 에 닿거나, 끝에

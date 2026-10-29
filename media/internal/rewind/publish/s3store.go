@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -16,13 +17,39 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
-// 되감기 목록 객체의 머리다(M5 설계 4.5 표). Store 에 쓰는 객체는 목록 하나뿐이라 구현이 상수로 고정한다 —
-// 호출자가 넘길 값이 아니다. Cache-Control 은 엣지 · 브라우저가 목록을 1초만 들고 있게 한다(매 조각마다 판이
-// 바뀐다). 이 머리가 없으면 S3 가 application/octet-stream 을 돌려주고 캐시 지시가 없다.
+// Store 가 쓰는 객체의 머리다 — 되감기 목록(/dvr · M5 설계 4.5 표)과 VOD 문서(/vod · M6 FreezeVOD)가 받는다. 구현이
+// 상수로 고정한다 — 호출자가 넘길 값이 아니다. 이 머리가 없으면 S3 가 application/octet-stream 을 돌려주고 캐시
+// 지시가 없다. Content-Type 은 둘이 같고 Cache-Control 은 키 축으로 갈린다(cacheControl).
+//
+// Cache-Control 1초는 되감기 목록의 값이다 — 매 조각마다 판이 바뀌어 엣지 · 브라우저가 1초만 들고 있게 한다. 동결된
+// DVR 도 같은 키라 1초다(감사 복구가 같은 키를 다시 쓴다). VOD 문서는 1시간이다(kty A1 2026-10-27) — IfAbsent 로 한
+// 번만 쓰고 덮어쓰지 않는다(설계 「VOD 불변」 · RFC 8216 4.3.3.5). 감사는 VOD 를 다시 쓰지 않는다.
 const (
 	manifestContentType  = "application/vnd.apple.mpegurl"
 	manifestCacheControl = "public, max-age=1"
+	vodCacheControl      = "public, max-age=3600"
+
+	// vodKeyPrefix 는 VOD 문서 키의 접두다 — vodKey 가 만드는 키(vod/{streamID}/{head}/index.m3u8)의 첫 성분이다.
+	vodKeyPrefix = "vod/"
 )
+
+// cacheControl 은 key 에 쓰는 객체의 Cache-Control 이다 — VOD 문서 키면 vodCacheControl, 그 밖(되감기 목록)은
+// manifestCacheControl 이다.
+func cacheControl(key string) string {
+	if strings.HasPrefix(key, vodKeyPrefix) {
+		return vodCacheControl
+	}
+	return manifestCacheControl
+}
+
+// getBodyLimit 은 key 에서 읽는 본문의 크기 상한이다 — VOD 문서 키면 rewind.MaxVODBodyBytes(설계 D29), 그 밖(되감기
+// 목록)은 rewind.MaxBodyBytes 다. 발행 전 검사 S5 가 종류마다 거는 상한과 같다.
+func getBodyLimit(key string) int {
+	if strings.HasPrefix(key, vodKeyPrefix) {
+		return rewind.MaxVODBodyBytes
+	}
+	return rewind.MaxBodyBytes
+}
 
 // S3Store 는 Store 의 S3 구현이다 — 버킷 하나에 쓰고 읽는다. upload.Putter(세그먼트 PUT — 조건 · 메타
 // 없음)와는 다른 경계다.
@@ -38,7 +65,7 @@ func NewS3Store(client *s3.Client, bucket string) *S3Store {
 }
 
 // Put 은 Store.Put 이다 — cond 를 조건 헤더 하나(If-None-Match: * 또는 If-Match)로, meta 를
-// x-amz-meta-* 헤더로, 목록 머리(manifestContentType · manifestCacheControl)를 같은 요청에 싣는다. 200 인데
+// x-amz-meta-* 헤더로, 목록 머리(manifestContentType · cacheControl(key))를 같은 요청에 싣는다. 200 인데
 // ETag 가 없으면 성공으로 보고하지 않는다 — 다음 IfMatch 를 만들 수 없다. 그 오류는 센티널이 아니다: 쓰기는
 // 적용됐으나 새 판의 ETag 를 모르므로 호출자는 결과 모름과 같이 Head 로 확인한다.
 func (s *S3Store) Put(ctx context.Context, key string, cond Precondition, body []byte, meta map[string]string) (string, error) {
@@ -51,7 +78,7 @@ func (s *S3Store) Put(ctx context.Context, key string, cond Precondition, body [
 		Body:         bytes.NewReader(body),
 		Metadata:     meta,
 		ContentType:  aws.String(manifestContentType),
-		CacheControl: aws.String(manifestCacheControl),
+		CacheControl: aws.String(cacheControl(key)),
 	}
 	if cond.ifMatch {
 		in.IfMatch = aws.String(cond.etag)
@@ -91,27 +118,44 @@ func (s *S3Store) Head(ctx context.Context, key string) (Stat, error) {
 	return Stat{Exists: true, ETag: *out.ETag, Meta: out.Metadata}, nil
 }
 
-// Get 은 Store.Get 이다. 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 목록 본문 상한)까지만 읽는다 — 발행한
-// 목록은 S5 를 통과했으므로 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼
-// 메모리를 잡는다. 넘으면 센티널이 아닌 오류다.
-func (s *S3Store) Get(ctx context.Context, key string) ([]byte, error) {
+// Get 은 Store.Get 이다 — ETag 는 본문과 같은 GET 응답의 ETag 머리다. 200 인데 ETag 가 없으면 성공으로 보고하지
+// 않는다 — 읽은 본문에 조건을 걸 수 없다.
+//
+// 본문은 그 키 축의 상한(getBodyLimit — 발행 전 검사 S5 의 종류별 상한)까지만 읽는다 — 발행한 문서는 S5 를
+// 통과했으므로 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼 메모리를 잡는다. 넘으면
+// errBodyOverLimit 를 감싼 오류다(감사가 바뀐 문서로 가른다).
+func (s *S3Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	}, requestOptions)
 	if err != nil {
-		return nil, storeError("GET", key, err)
+		return nil, "", storeError("GET", key, err)
 	}
 	defer out.Body.Close()
+	etag := aws.ToString(out.ETag)
+	if etag == "" {
+		return nil, "", fmt.Errorf("publish: GET key=%q: 응답에 ETag 가 없다", key)
+	}
 	// 한 바이트 더 읽어야 상한 크기와 초과를 가른다.
-	body, err := io.ReadAll(io.LimitReader(out.Body, rewind.MaxBodyBytes+1))
+	limit := getBodyLimit(key)
+	body, err := io.ReadAll(io.LimitReader(out.Body, int64(limit)+1))
 	if err != nil {
-		return nil, fmt.Errorf("publish: GET key=%q: 본문 읽기: %w", key, err)
+		return nil, "", fmt.Errorf("publish: GET key=%q: 본문 읽기: %w", key, err)
 	}
-	if len(body) > rewind.MaxBodyBytes {
-		return nil, fmt.Errorf("publish: GET key=%q: 본문이 상한 %d바이트를 넘는다", key, rewind.MaxBodyBytes)
+	if err := checkBodyLimit(key, body); err != nil {
+		return nil, "", err
 	}
-	return body, nil
+	return body, etag, nil
+}
+
+// checkBodyLimit 은 key 에서 읽은 body 가 그 축의 상한(getBodyLimit) 안인가다 — 넘으면 errBodyOverLimit 를 감싼
+// 오류다.
+func checkBodyLimit(key string, body []byte) error {
+	if limit := getBodyLimit(key); len(body) > limit {
+		return fmt.Errorf("%w: GET key=%q: 상한 %d바이트", errBodyOverLimit, key, limit)
+	}
+	return nil
 }
 
 // requestOptions 는 S3Store 의 모든 요청에 붙이는 SDK 설정이다. client 를 어떻게 만들었든 두 가지를

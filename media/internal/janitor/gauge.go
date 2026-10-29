@@ -38,7 +38,7 @@ func (g *gauge) clear(attrs ...any) {
 	g.emit(0, attrs)
 }
 
-// gauges 는 janitor 게이지 7종이다(설계 8절). cutoff_invalid 만 스트림별이다.
+// gauges 는 janitor 게이지 8종이다(설계 8절 · abandoned_local_retained 는 M6 7절 X5). cutoff_invalid 만 스트림별이다.
 type gauges struct {
 	log            *slog.Logger
 	deleteFailing  *gauge
@@ -47,10 +47,19 @@ type gauges struct {
 	volumeSuspect  *gauge
 	fsSuspended    *gauge
 	reclaimBlocked *gauge
-	cutoffInvalid  map[string]bool // 켜진 스트림
+	// abandonedRetained 는 ③ 포기 보존 기간이 지났는데 ② 가 안 올라 지울 수 없는 행이 있다는 신호다.
+	abandonedRetained *gauge
+	cutoffInvalid     map[string]bool // 켜진 스트림
 }
 
-const cutoffInvalidName = "janitor_cutoff_invalid"
+const (
+	cutoffInvalidName = "janitor_cutoff_invalid"
+	// abandonedRetainedName · abandonedReclaimedName 은 설계 M6 7절 X5 의 신호 이름 그대로다(janitor_ 접두 없음).
+	abandonedRetainedName  = "abandoned_local_retained"
+	abandonedReclaimedName = "local_abandoned_reclaimed"
+	// abandonedRetainedCheckFailedName 은 잔존 집계 실패 WARN 이다 — 게이지는 마지막 값을 유지한다.
+	abandonedRetainedCheckFailedName = "abandoned_local_retained_check_failed"
+)
 
 func newGauges(log *slog.Logger) *gauges {
 	mk := func(name string, level slog.Level) *gauge { return &gauge{log: log, name: name, level: level} }
@@ -62,16 +71,18 @@ func newGauges(log *slog.Logger) *gauges {
 		volumeSuspect:  mk("janitor_volume_suspect", slog.LevelError),
 		fsSuspended:    mk("janitor_fs_suspended", slog.LevelError),
 		reclaimBlocked: mk("janitor_reclaim_blocked", slog.LevelError),
-		cutoffInvalid:  make(map[string]bool),
+		// WARN — 정리기는 기다릴 뿐 장애는 아니고, ② 정체 자체는 업로더 신호가 ERROR 로 낸다.
+		abandonedRetained: mk(abandonedRetainedName, slog.LevelWarn),
+		cutoffInvalid:     make(map[string]bool),
 	}
 }
 
-// startDump 는 시작 덤프다(시작 덤프 소비 계약 — 설계 8절). 다른 어떤 게이지 줄보다 먼저 7종을
+// startDump 는 시작 덤프다(시작 덤프 소비 계약 — 설계 8절). 다른 어떤 게이지 줄보다 먼저 8종을
 // value=0 reason=startup 으로 낸다. cutoff_invalid 는 stream_id="*" 하나로 낸다 — 「이 run_id 이전의
 // 모든 스트림 값을 0으로」라는 뜻이다. 현재 무효 스트림의 value=1 은 첫 주기의 무효 컷오프 신호가
 // 낸다. 모든 줄의 run_id 는 로거가 싣는다.
 func (g *gauges) startDump() {
-	for _, x := range []*gauge{g.deleteFailing, g.cycleFailing, g.backlogCapped, g.volumeSuspect, g.fsSuspended, g.reclaimBlocked} {
+	for _, x := range []*gauge{g.deleteFailing, g.cycleFailing, g.backlogCapped, g.volumeSuspect, g.fsSuspended, g.reclaimBlocked, g.abandonedRetained} {
 		x.emit(0, []any{"reason", "startup"})
 	}
 	g.log.Error(cutoffInvalidName, "value", 0, "reason", "startup", "stream_id", "*")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,11 +47,26 @@ const (
 const cutoffRowExists = `EXISTS (SELECT 1 FROM stream_segments c
          WHERE c.stream_id = cut.stream_id AND c.seq = cut.cutoff_seq)`
 
-// deletableSegmentsSQL ($1 그레이스 초 · $2 재접속 창 초 · $3 limit · $4,$5 커서 · $6 외부 삭제 나이 초)
+// AbandonedLocalRetention 은 ③ 포기 조각의 로컬 원본을 세션 ended 뒤 지키는 기간이다(설계 M6 7절 X5 · 인덱스
+// 불변식 2 ③ 포기 갈래). 이 기간이 재추출 기회다 — 지나면 ② uploaded 일 때 ③ 없이도 지운다.
+const AbandonedLocalRetention = 24 * time.Hour
+
+// abandonedPastRetention 은 조각 t 가 ③ 포기(vod_abandoned)로 등재됐고 그 GAP 의 세션이 ended 뒤
+// AbandonedLocalRetention($7 초)이 지났는가다. 판정 SQL(③ 항의 포기 갈래)과 잔존 집계가 이 조각 하나를 함께
+// 쓴다. ended_at 이 NULL 이면 거짓이다(지우지 않는 쪽).
+const abandonedPastRetention = `EXISTS (SELECT 1 FROM stream_published_gaps ag
+                  JOIN stream_sessions asn ON asn.session_id = ag.session_id
+                 WHERE ag.stream_id = t.stream_id AND ag.seq = t.seq AND ag.published_state = 'vod_abandoned'
+                   AND asn.state = 'ended'
+                   AND asn.ended_at < pg_catalog.now() - pg_catalog.make_interval(secs => $7::double precision))`
+
+// deletableSegmentsSQL ($1 그레이스 초 · $2 재접속 창 초 · $3 limit · $4,$5 커서 · $6 외부 삭제 나이 초 · $7 포기 보존 초)
 //
 // 술어별 근거는 설계 4절이다. 요점만:
 //   - ③ 항은 컷오프 인지 술어다 — 기록 없음 OR seq < cutoff 면 면제, 아니면 ③ uploaded 필수.
 //     「기록 없음」은 PK 열(cut.stream_id IS NULL)로 판정한다(cutoff_seq 는 NOT NULL).
+//     예외는 ③ 포기 갈래 하나다 — vod_abandoned 등재 ∧ 그 세션 ended + 24시간(abandonedPastRetention · D52).
+//     abandoned 열이 이 갈래로만 고른 행을 표시한다(신호 local_abandoned_reclaimed).
 //   - 무효 컷오프가 있는 스트림은 통째로 멈춘다(fail-closed).
 //   - 그레이스 기준은 셋(② 확정 · ③ 확정 · 조각 끝)의 최댓값이다 — 늘 안전 쪽이고 NULL 이 없다.
 //     시각은 전부 DB 의 now() 한 곳에서 잰다(janitor 시계는 판정에 쓰지 않는다).
@@ -67,7 +83,8 @@ const cutoffRowExists = `EXISTS (SELECT 1 FROM stream_segments c
 // public 의 integer 판 연산자(앱 사용자가 만들 수 있다)가 먼저 골린다. 값은 암묵 변환과 같다.
 const deletableSegmentsSQL = `
 SELECT t.stream_id, t.seq, t.local_path, b.grace_basis,
-       t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $6::double precision) AS external_delete_due
+       t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $6::double precision) AS external_delete_due,
+       cut.stream_id IS NOT NULL AND t.seq >= cut.cutoff_seq AND t.playback_upload_state <> 'uploaded' AS abandoned
   FROM stream_segments t
   LEFT JOIN stream_cutoffs cut ON cut.stream_id = t.stream_id
   CROSS JOIN LATERAL (
@@ -76,7 +93,8 @@ SELECT t.stream_id, t.seq, t.local_path, b.grace_basis,
  WHERE t.local_path IS NOT NULL
    AND t.upload_state = 'uploaded'
    AND ( cut.stream_id IS NULL OR t.seq < cut.cutoff_seq
-         OR t.playback_upload_state = 'uploaded' )
+         OR t.playback_upload_state = 'uploaded'
+         OR ` + abandonedPastRetention + ` )
    AND ( cut.stream_id IS NULL OR ` + cutoffRowExists + ` )
    AND b.grace_basis < pg_catalog.now() - pg_catalog.make_interval(secs => $1::double precision)
    AND NOT EXISTS (
@@ -108,6 +126,14 @@ SELECT t.stream_id, t.seq, t.local_path, b.grace_basis,
    AND (t.stream_id, t.seq) > ($4::text, $5::bigint)
  ORDER BY t.stream_id, t.seq
  LIMIT $3`
+
+// abandonedLocalRetainedSQL ($1 포기 보존 초) 은 ③ 포기 보존 기간이 지났는데 ② 가 안 올라 지울 수 없는 로컬 행
+// 수다(신호 abandoned_local_retained — ② 먼저 삭제 금지라 사람이 볼 일). 판정 조각을 그대로 쓰고 자리 번호만
+// 이 문장의 $1 로 옮긴다.
+var abandonedLocalRetainedSQL = `
+SELECT pg_catalog.count(*) FROM stream_segments t
+ WHERE t.local_path IS NOT NULL AND t.upload_state <> 'uploaded'
+   AND ` + strings.Replace(abandonedPastRetention, "$7", "$1", 1)
 
 // invalidCutoffsSQL 은 무효 컷오프(가리키는 행이 없는 컷오프)다 — 삭제 정지와 같은 조각의 부정.
 const invalidCutoffsSQL = `
@@ -168,6 +194,8 @@ type LocalSegment struct {
 	// ExternalDeleteDue 는 조각 시작이 ExternalDeleteAge 를 넘겼는가다 — 참이면 ENOENT 를
 	// 「MediaMTX 가 먼저 지움」으로 인정해도 된다(K7).
 	ExternalDeleteDue bool
+	// Abandoned 는 ③ 포기 갈래(vod_abandoned ∧ ended + AbandonedLocalRetention)로만 고른 행이다 — ③ 없이 지운다.
+	Abandoned bool
 }
 
 // LocalCursor 는 삭제 후보 키셋 페이징의 위치다(마지막으로 받은 행). 영값 = 처음부터.
@@ -258,13 +286,13 @@ func (s *LocalCleanupStore) DeletableSegments(ctx context.Context, p LocalCleanu
 	}
 	rows, err := s.pool.Query(ctx, deletableSegmentsSQL,
 		p.Grace.Seconds(), p.ReconnectWindow.Seconds(), limit,
-		after.StreamID, after.Seq, p.ExternalDeleteAge.Seconds())
+		after.StreamID, after.Seq, p.ExternalDeleteAge.Seconds(), AbandonedLocalRetention.Seconds())
 	if err != nil {
 		return nil, after, fmt.Errorf("삭제 후보 조회 실패: %w", err)
 	}
 	segs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (LocalSegment, error) {
 		var seg LocalSegment
-		err := row.Scan(&seg.StreamID, &seg.Seq, &seg.LocalPath, &seg.GraceBasis, &seg.ExternalDeleteDue)
+		err := row.Scan(&seg.StreamID, &seg.Seq, &seg.LocalPath, &seg.GraceBasis, &seg.ExternalDeleteDue, &seg.Abandoned)
 		seg.GraceBasis = seg.GraceBasis.UTC()
 		return seg, err
 	})
@@ -276,6 +304,15 @@ func (s *LocalCleanupStore) DeletableSegments(ctx context.Context, p LocalCleanu
 	}
 	last := segs[len(segs)-1]
 	return segs, LocalCursor{StreamID: last.StreamID, Seq: last.Seq}, nil
+}
+
+// AbandonedLocalRetained 는 ③ 포기 보존 기간이 지났는데 ② 가 안 올라 지울 수 없는 로컬 행 수다.
+func (s *LocalCleanupStore) AbandonedLocalRetained(ctx context.Context) (int64, error) {
+	var n int64
+	if err := s.pool.QueryRow(ctx, abandonedLocalRetainedSQL, AbandonedLocalRetention.Seconds()).Scan(&n); err != nil {
+		return 0, fmt.Errorf("포기 조각 잔존 집계 실패: %w", err)
+	}
+	return n, nil
 }
 
 // InvalidCutoffs 는 무효 컷오프 전부다(스트림 순).

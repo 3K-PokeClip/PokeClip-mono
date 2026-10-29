@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"strings"
 )
 
 // tokenPattern 은 MediaMTX 설정의 정규식 경로(설계 2-8)와 같은 식이다. MediaMTX 도 Go regexp 로
@@ -19,6 +20,28 @@ var passphrasePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{10,64}$`)
 // 토큰은 MediaMTX 의 경로 이름이기도 하다.
 func IsToken(s string) bool {
 	return tokenPattern.MatchString(s)
+}
+
+// 정규형 streamid 의 앞뒤 고정 글자다(계약4 2절 — #!::r=<토큰>,m=publish).
+const (
+	streamIDPrefix = "#!::r="
+	streamIDSuffix = ",m=publish"
+)
+
+// ParseStreamID 는 계약4 2절 정규형 streamid(#!::r=<26자 토큰>,m=publish) 하나만 받아 토큰을 꺼낸다.
+// auth StreamId.parse 보다 엄격하다 — auth 는 필드 순서를 허용하고 r 이 둘이면 마지막 값을 읽는다
+// (services/auth/.../StreamId.java:29 · keyresolve/client.go:204-205). 플러그인은 정규형만 보내므로(계약4 3-1)
+// 정상 요청은 두 쪽을 다 지난다. 비정규형을 여기서 거부해 auth 가 다른 r 을 읽는 길을 닫는다.
+func ParseStreamID(s string) (token string, ok bool) {
+	rest, found := strings.CutPrefix(s, streamIDPrefix)
+	if !found {
+		return "", false
+	}
+	token, found = strings.CutSuffix(rest, streamIDSuffix)
+	if !found || !IsToken(token) {
+		return "", false
+	}
+	return token, true
 }
 
 // redacted 는 Passphrase 를 어떤 길로 찍어도 원문 대신 나오는 문자열이다(설계 6절 누설 규칙 1).

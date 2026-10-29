@@ -9,19 +9,43 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
 // r3ReconcileSQL 은 R3 DB 화해다(설계 4.4.3 R3 · 계획 4.5 A1 결정 2 · G8 증명 ③) — fence 를 쥐었을 때만 쓴다.
 // 세대와 마지막 seq 는 max 로만 올리고(DB 세대는 줄지 않는다), ETag 와 DISC-SEQ(base — 파생값)는 Head 가 본
-// 판의 값으로 둔다. terminal 승격(frozen)은 M6 이다. 돌려받는 세대가 다음 P0 의 $genSeen 이다.
+// 판의 값으로 둔다. 돌려받는 세대가 다음 P0 의 $genSeen 이다.
+//
+// terminal 승격(M6 설계 5절 reconcile.go 행 · D17 4.4.3 R3): Head 의 판이 닫혔고($7 — 메타 pc-terminal) 장부가 아직
+// 닫히지 않았으면(open · freezing) 그 판으로 동결을 확정한다 — 봉인 PUT 뒤 확정(F4 · E5) 전에 멈춘 회차의 탈출이다
+// (D17 교착 탈출 「E5 실패 → R3 승격」). 동결 열은 Head 메타에서 온다 — 키 $8 · sha $9(pc-body-sha256) · 범위
+// [$10 pc-msn, $4 pc-pub-seq] · base $6. 본문을 읽지 않는다. 열린 판이나 이미 닫힌 장부면 동결 열을 건드리지 않는다.
+// SET 의 열 참조는 갱신 전 값이라 승격 술어는 모든 열에서 같은 값이다.
 const r3ReconcileSQL = `
 UPDATE stream_sessions
    SET manifest_gen       = GREATEST(manifest_gen, $3),
        published_seq      = GREATEST(published_seq, $4),
        manifest_etag      = $5,
-       discontinuity_base = $6
+       discontinuity_base = $6,
+       dvr_state       = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN 'frozen' ELSE dvr_state END,
+       dvr_freezing_at = CASE WHEN $7 AND dvr_state IN ('open', 'freezing')
+                              THEN COALESCE(dvr_freezing_at, pg_catalog.now()) ELSE dvr_freezing_at END,
+       dvr_frozen_at   = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN pg_catalog.now() ELSE dvr_frozen_at END,
+       dvr_s3_key      = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN $8 ELSE dvr_s3_key END,
+       dvr_etag        = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN $5 ELSE dvr_etag END,
+       dvr_sha256      = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN $9 ELSE dvr_sha256 END,
+       dvr_first_seq   = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN $10 ELSE dvr_first_seq END,
+       dvr_last_seq    = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN $4 ELSE dvr_last_seq END,
+       dvr_disc_base   = CASE WHEN $7 AND dvr_state IN ('open', 'freezing') THEN $6 ELSE dvr_disc_base END
  WHERE session_id = $1 AND writer_fence = $2 AND fence_expires_at > pg_catalog.now()
 RETURNING manifest_gen`
+
+// r3Args 는 Head 의 판 desc(ETag etag · 목록 키 key)로 R3 를 보낼 인자다 — 회차 sessionID · writer 다음 여덟이다.
+func r3Args(sessionID, writer, key string, desc rewind.Published, etag string) []any {
+	return []any{sessionID, writer, desc.Gen, desc.PublishedSeq, etag, desc.DiscontinuitySequence,
+		desc.Terminal, key, desc.BodySHA256[:], desc.MediaSequence}
+}
 
 // r4ClearETagSQL 은 R4 다(설계 4.4.3 R4 「최초 생성 경로로 표시」 · 체크리스트 J15) — 객체가 없으면 DB
 // manifest_etag 를 비워 다음 P0 이 최초 생성 경로(IfAbsent)를 돌려주게 한다. 표시가 메모리에만 남으면 다음 P0
@@ -77,8 +101,7 @@ func (t *tick) reconcileStat(ctx context.Context, stat Stat) bool {
 		return false
 	}
 	st.Prev = &Manifest{Published: desc, ETag: stat.ETag}
-	return t.reconcileDB(ctx, r3ReconcileSQL, t.session, t.p.opt.Writer,
-		desc.Gen, desc.PublishedSeq, stat.ETag, desc.DiscontinuitySequence)
+	return t.reconcileDB(ctx, r3ReconcileSQL, r3Args(t.session, t.p.opt.Writer, t.key, desc, stat.ETag)...)
 }
 
 // reconcileDB 는 R3 · R4 한 문장을 보내고 돌려받은 세대를 상태에 적는다. 0행이면 fence 를 잃었다고 적는다. 표에

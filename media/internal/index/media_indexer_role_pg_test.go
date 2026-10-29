@@ -32,10 +32,25 @@ package index
 //	rewind_read.go
 //	  rewindCutoffSQL · rewindFloorSQL · rewindRowsSQL · rewindSessionsSQL  LoadRewindLedger(읽기 전용 RR)  cutoffs · segments · gaps · sessions SELECT
 //	  rewindWatchSQL                          LoadRewindWatch                      sessions · cutoffs · segments · gaps SELECT
+//	round_playback.go(M6-3a — 역할 시험은 round_playback_role_pg_test.go TestRoundPlaybackReadsRunUnderMediaIndexerRole)
+//	  lookupRoundPlaybackSQL                  LookupRoundPlayback                  sessions · segments SELECT
+//	  loadStreamPlaybackSQL                   LoadStreamPlayback                   sessions · segments SELECT
+//	  loadPlaybackStatesSQL                   LoadPlaybackStates                   sessions · segments SELECT
 //
-// M6-4 · M6-8 몫 선부여(ADR-0006 개정 2026-10-26): segments · sessions · gaps · outbox DELETE · cutoffs UPDATE ·
-// DELETE · outbox SELECT · INSERT · UPDATE 는 목록에 있지만 이 패키지의 비시험 SQL 은 아직 쓰지 않는다 — 쓰는 문장과
-// 그 역할 시험은 그 PR 이 들인다. stream_seq_floors SELECT 는 LoadCursor(하한 GREATEST)와 하한 검사 트리거
+//	expiry_store.go(M6-4 — 역할 시험은 expiry_store_pg_test.go TestExpiryStatementsRunUnderMediaIndexerRole)
+//	  markExpiredSQL                          MarkExpired                          sessions UPDATE(+ segments SELECT)
+//	  expiryCutoffValidSQL                    ExpiryCutoffValid                    cutoffs · segments SELECT
+//	  expiryRowsSQL · expiryDocumentsSQL      ExpiryRows · ExpiryDocuments         segments · sessions SELECT
+//	  expiryLockCutoffSQL                     DeleteExpired                        cutoffs SELECT FOR UPDATE
+//	  expiryDeleteSQL                         DeleteExpired                        segments DELETE(+ 하한 트리거 — 정의자 권한)
+//	  expiryEmptiedSessionsSQL                DeleteExpired                        sessions SELECT FOR UPDATE
+//	  expiryDeleteGapsSQL                     DeleteExpired                        gaps DELETE
+//	  expiryAdvanceCutoffSQL · expiryRemoveCutoffSQL  DeleteExpired                cutoffs UPDATE · DELETE
+//	  expiryUnlinkSuccessorsSQL · expiryDeleteSessionsSQL  DeleteExpired           sessions UPDATE · DELETE
+//	  expiryDeleteOutboxSQL                   DeleteExpired                        outbox DELETE
+//
+// M6-8 몫 선부여(ADR-0006 개정 2026-10-26): outbox SELECT · INSERT · UPDATE 는 목록에 있지만 이 패키지의 비시험 SQL 은
+// 아직 쓰지 않는다 — 쓰는 문장과 그 역할 시험은 그 PR 이 들인다. stream_seq_floors SELECT 는 LoadCursor(하한 GREATEST)와 하한 검사 트리거
 // (stream_segments BEFORE INSERT — 부른 쪽 권한)가 읽는다.
 //
 // 세션 결정 문장(currentLive · previousSession · endSession · openSession)은 session 패키지 역할 시험이, 발행자

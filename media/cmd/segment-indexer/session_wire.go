@@ -10,11 +10,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
@@ -23,13 +25,19 @@ import (
 // sessionDecider 는 session.Registry 를 index.SessionDecider 로 입힌다. 상태는 없다.
 type sessionDecider struct{ reg *session.Registry }
 
+// intentStopSlack 은 의도적 종료 표식의 대조 여유다(K8 확정 8초 — M6 3.3 · 3.4). 레지스트리의 표식 분할 ·
+// 표식 개시와 4D 적용(IntentOptions.Slack)이 같은 값을 쓴다. config 에 두지 않는 것은 운영에서 바꾸는 값이 아니라
+// 계약4 3-2 판정 규칙의 일부이기 때문이다 — 집을 이 조립 한 자리로 둔다.
+const intentStopSlack = 8 * time.Second
+
 // newSessionDecider 는 정책값을 config 에서 받아 결정자를 만든다.
-// 값의 집은 config 하나다 — 여기에 기본값을 또 적지 않는다.
+// 값의 집은 config 하나다 — 여기에 기본값을 또 적지 않는다(표식 여유만 위 상수).
 func newSessionDecider(floorSlack, obsFresh, reconnectWindow time.Duration, log *slog.Logger) index.SessionDecider {
 	return sessionDecider{reg: session.New(session.Options{
 		FloorSlack:      floorSlack,
 		ObsFresh:        obsFresh,
 		ReconnectWindow: reconnectWindow,
+		StopSlack:       intentStopSlack,
 		Log:             log,
 	})}
 }
@@ -74,7 +82,12 @@ func (d sessionDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDe
 	if !ok {
 		return "", fmt.Errorf("세션 개시 계획이 이 결정자의 것이 아니다(%T) — Decide 가 준 값을 그대로 넘겨야 한다", dec.Plan)
 	}
-	return d.reg.Open(ctx, tx, plan, firstPDT)
+	id, err := d.reg.Open(ctx, tx, plan, firstPDT)
+	if errors.Is(err, session.ErrLiveLost) {
+		// 끝내려던 live 를 잃은 개시는 경합이다 — 되돌리고 다음 시도가 다시 판정한다(M6 3.3). 장부의 재시도 갈래로 옮긴다.
+		return "", fmt.Errorf("%w: %w", index.ErrSessionContended, err)
+	}
+	return id, err
 }
 
 // sessionOpOf 는 장부 쪽 연산을 판정 쪽 연산으로 옮긴다.
@@ -92,4 +105,48 @@ func sessionOpOf(op index.SessionOp) (session.Op, error) {
 		return session.CurrentOnly, nil
 	}
 	return 0, fmt.Errorf("세션 결정 연산이 지정되지 않았다(%d)", op)
+}
+
+// intentShortConn 은 4D 의 짧은 연결 문턱이다(K8 확정 4초) — 이보다 짧은 연결의 신호는 적용하지 않는다(short_conn).
+const intentShortConn = 4 * time.Second
+
+// newIntentOptions 는 4D 적용(session.ApplyIntentionalEnd)의 수치와 함수 칸을 묶는다(설계 M6 10절 · 계획 4.12 커밋 ②).
+//
+// 칸이 nil 이면 무동작 + WARN intentional_round_close_unwired 기본값을 끼운다 — 그래서 M6-3a 만 들어간 판에서도
+// 4D 적용이 돈다. 그 판에서 upgraded 는 사유 · 표식만 쓰고 회차 닫힘은 M6-3b 의 회차 스캔이 거두며(사유 intentional 이
+// 닫힘 조건이다), round_split 은 R 닫힘 · round_id 를 직접 쓰고 완결 평가만 건너뛴다. 계약9 outbox 는 M6-8 전까지
+// Gate 꺼짐과 같아 건너뛴 started 가 이벤트 누락이 되지 않는다(D45). M6-3b 가 closeRound 를, M6-8 이 enqueueStarted
+// 를 채운다. POK-472 수신부는 이 조립을 부르기만 한다.
+func newIntentOptions(log *slog.Logger,
+	closeRound func(ctx context.Context, tx pgx.Tx, round string) error,
+	enqueueStarted func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error,
+) session.IntentOptions {
+	if closeRound == nil {
+		closeRound = func(_ context.Context, _ pgx.Tx, round string) error {
+			log.Warn("intentional_round_close_unwired", "slot", "close_round", "round", round)
+			return nil
+		}
+	}
+	if enqueueStarted == nil {
+		enqueueStarted = func(_ context.Context, _ pgx.Tx, round, ingestStreamID string, _ time.Time) error {
+			log.Warn("intentional_round_close_unwired", "slot", "enqueue_started", "round", round, "stream_id", ingestStreamID)
+			return nil
+		}
+	}
+	return session.IntentOptions{
+		ShortConn: intentShortConn, Slack: intentStopSlack,
+		CloseRound: closeRound, EnqueueStarted: enqueueStarted, Log: log,
+	}
+}
+
+// playbackSeedWithin 은 기동 적재의 완결 값 상한이다(경계 확정 3 — 30분 · 집은 M6-3a). 완결 안 된 회차의 Ending 에는 걸지
+// 않는다(index.LoadPlaybackStates 의 계약).
+const playbackSeedWithin = 30 * time.Minute
+
+// newPlaybackSeed 는 제어면 상태 몫의 재기동 적재 칸(statusSeed)이다 — 스트림마다 최신 회차의 종료 국면을 읽는다
+// (계획 4.2 seed 칸 · ②a 의 nil 을 채움).
+func newPlaybackSeed(pool *pgxpool.Pool) statusSeed {
+	return func(ctx context.Context) (map[string]index.PlaybackState, error) {
+		return index.LoadPlaybackStates(ctx, pool, playbackSeedWithin)
+	}
 }

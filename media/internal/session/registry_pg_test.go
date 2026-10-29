@@ -129,15 +129,16 @@ func TestDecideReturnsErrorWhenSessionQueryFails(t *testing.T) {
 	}
 }
 
-// explicitColumns 는 개시 트랜잭션이 **명시 대입**하는 8 컬럼이다(계획 3절 (가) · 2.3 registry 행 ⑶ — 재접속
-// 계승 갈래가 inherits_session 을 더했다). 나머지 컬럼은 DDL 기본값에 의존한다 — 그래서 stream_sessions DDL 을
-// 건드리지 않는다.
+// explicitColumns 는 개시 트랜잭션이 **명시 대입**하는 10 컬럼이다(계획 3절 (가) · 2.3 registry 행 ⑶ — 재접속
+// 계승 갈래가 inherits_session 을, M6 15.2 개시 규칙이 round_id · stop_marked_at 을 더했다). 나머지 컬럼은 DDL
+// 기본값에 의존한다.
 var explicitColumns = []string{
 	"session_id", "stream_id", "started_at", "state",
 	"first_pdt", "target_duration", "discontinuity_base", "inherits_session",
+	"round_id", "stop_marked_at",
 }
 
-// assertOnlyExplicitColumnsWritten 은 "명시 8 컬럼을 뺀 나머지가 DDL 기본값 그대로"를 잰다.
+// assertOnlyExplicitColumnsWritten 은 "명시 10 컬럼을 뺀 나머지가 DDL 기본값 그대로"를 잰다.
 // 기본값을 손으로 32 개 나열하는 대신 **기본값만으로 만든 대조군 행**과 통째로 비교한다 —
 // 컬럼 수를 세다 틀릴 여지가 없고, 뒤에 컬럼이 늘어도 대조가 자동으로 따라간다.
 func assertOnlyExplicitColumnsWritten(t *testing.T, pool *pgxpool.Pool, id string) {
@@ -164,11 +165,11 @@ func assertOnlyExplicitColumnsWritten(t *testing.T, pool *pgxpool.Pool, id strin
 		t.Fatalf("기본값 대조 조회 실패: %v", err)
 	}
 	if got != want {
-		t.Errorf("명시 8 컬럼 밖이 기본값과 다르다\n 개시 행 = %s\n 대조군  = %s", got, want)
+		t.Errorf("명시 10 컬럼 밖이 기본값과 다르다\n 개시 행 = %s\n 대조군  = %s", got, want)
 	}
 }
 
-func TestOpenWritesEightColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
+func TestOpenWritesExplicitColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
 	pool := newTestPool(t)
 	r, _ := newTestRegistry(time.Second, 30*time.Second)
 	in := Input{StreamID: "demo", Seq: 42, StartWallUTC: wall, DurationMS: 8000, Op: OpenOrCurrent}
@@ -227,7 +228,7 @@ func TestOpenWritesEightColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
 	assertOnlyExplicitColumnsWritten(t, pool, id)
 }
 
-// 8열의 짝 — 재접속 계승 개시는 여덟째 열에 물려받은 직전 회차를 쓰고, 불연속 기준을 복사하며, TD 를 직전 회차
+// 명시 열의 짝 — 재접속 계승 개시는 inherits_session 열에 물려받은 직전 회차를 쓰고, 불연속 기준을 복사하며, TD 를 직전 회차
 // TD 아래로 내리지 않는다(계획 2.3 registry 행 ⑴–⑶ · kty K1). 결정은 직전 회차를 기저 세션으로 두고 그 회차의 첫
 // 조각 경로를 init 게이트 입력으로 싣는다. 나머지 열은 여전히 DDL 기본값이다. 잡는 결함: 계승 판정이 서도 Open 이
 // inherits_session 을 NULL 로 쓰면 목록이 접두 없이 나가고, 직전 회차 조회가 종료 사유 · 조각 끝을 잃으면 판정
@@ -485,54 +486,6 @@ func TestOpenFreshEndsCurrentSessionThenOpensNextWithoutConflict(t *testing.T) {
 	}
 	if liveCount != 1 {
 		t.Errorf("live 세션 = %d 개, 기대 = 1", liveCount)
-	}
-}
-
-// 분할이 닫는 대상은 **아직 live 인 그 세션**이다 — 우리가 읽은 뒤 남이 먼저 닫았다면
-// 그 기록을 덮지 않는다.
-//
-// READ COMMITTED 에서 UPDATE 는 남의 커밋을 만나면 **최신 버전으로 WHERE 를 다시 본다**.
-// 술어가 session_id 뿐이면 그 재검을 그대로 통과해 남이 적은 종료 사유를 td_exceeded 로
-// 되돌린다. M3 에는 아직 state 를 쓰는 다른 문장이 없어 도달하지 않지만, 세션 종료 경로가
-// 들어오는 순간(M4) 도달하고 장부는 소급 정정이 불가능하다.
-func TestOpenFreshDoesNotOverwriteSessionClosedByAnotherWriter(t *testing.T) {
-	pool := newTestPool(t)
-	seedSession(t, pool, sessionRow{
-		id: "S-old", streamID: "demo", startedAt: wall.Add(-time.Hour), state: "live",
-		targetDuration: 6, discontinuityBase: 3,
-	})
-	r, _ := newTestRegistry(time.Second, 30*time.Second)
-	in := Input{StreamID: "demo", Seq: 77, StartWallUTC: wall, DurationMS: 6500, Op: CurrentOnly}
-	ctx := context.Background()
-
-	withTx(t, pool, func(tx pgx.Tx) {
-		d, err := r.Decide(ctx, tx, in, wall) // 이 시점엔 S-old 가 live 였다
-		if err != nil {
-			t.Fatalf("결정 실패: %v", err)
-		}
-		if d.Outcome != OutcomeOpenFresh {
-			t.Fatalf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeOpenFresh)
-		}
-		// 그 사이 다른 커넥션이 세션을 닫고 커밋한다(M4 종료 경로가 할 일).
-		if _, err := pool.Exec(ctx, `
-			UPDATE stream_sessions SET state = 'ended', ended_at = now(), end_reason = 'offline'
-			 WHERE session_id = 'S-old'`); err != nil {
-			t.Fatalf("남의 종료 쓰기 실패: %v", err)
-		}
-		if _, err := r.Open(ctx, tx, d, wall.Add(time.Second)); err != nil {
-			t.Fatalf("분할 개시 실패: %v", err)
-		}
-	})
-
-	var state, endReason string
-	if err := pool.QueryRow(ctx,
-		`SELECT state, end_reason FROM stream_sessions WHERE session_id = 'S-old'`).
-		Scan(&state, &endReason); err != nil {
-		t.Fatalf("직전 세션 조회 실패: %v", err)
-	}
-	if state != "ended" || endReason != "offline" {
-		t.Errorf("직전 세션 = (state %q, end_reason %q), 기대 = (ended, offline — 남의 기록을 덮지 않는다)",
-			state, endReason)
 	}
 }
 

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
 const testKey = "dvr/demo/sess-1/index.m3u8"
@@ -38,7 +40,7 @@ func mustPut(t *testing.T, s Store, cond Precondition, body []byte, meta map[str
 // storedBody 는 지금 저장된 본문이다. 객체가 없으면 nil 이다.
 func storedBody(t *testing.T, s Store) []byte {
 	t.Helper()
-	got, err := s.Get(context.Background(), testKey)
+	got, _, err := s.Get(context.Background(), testKey)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -179,6 +181,44 @@ func TestFakeStoreHeadReturnsETagAndMetaOnly(t *testing.T) {
 	}
 	if heads := f.headKeys(); !slices.Equal(heads, []string{testKey, testKey}) {
 		t.Errorf("Head 기록 = %v, want [%s %s]", heads, testKey, testKey)
+	}
+}
+
+// Get 은 본문과 그 판의 ETag 를 함께 돌려준다 — 읽은 본문에 거는 조건이 Put 이 돌려준 ETag 와 같다. 판이 바뀌면
+// 둘이 같이 바뀐다.
+func TestFakeStoreGetReturnsBodyWithItsETag(t *testing.T) {
+	f := newFakeStore(t)
+	ctx := context.Background()
+	e1 := mustPut(t, f, IfAbsent(), bodyA, nil)
+	body, etag, err := f.Get(ctx, testKey)
+	if err != nil || !bytes.Equal(body, bodyA) || etag != e1 {
+		t.Errorf("Get = %q · %q · %v, want %q · %q · nil", body, etag, err, bodyA, e1)
+	}
+
+	e2 := mustPut(t, f, IfMatch(e1), bodyB, nil)
+	body, etag, err = f.Get(ctx, testKey)
+	if err != nil || !bytes.Equal(body, bodyB) || etag != e2 {
+		t.Errorf("새 판 Get = %q · %q · %v, want %q · %q · nil", body, etag, err, bodyB, e2)
+	}
+}
+
+// 가짜의 Get 도 S3Store 와 같은 축별 본문 상한을 낸다 — 감사 시험이 상한 초과 갈래를 가짜 위에서 잰다.
+func TestFakeStoreGetLimitsBodyByAxis(t *testing.T) {
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeStore(t)
+	plant(f, putCall{key: testKey, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)})
+	plant(f, putCall{key: vod, body: bytes.Repeat([]byte{'x'}, rewind.MaxVODBodyBytes+1)})
+	for _, key := range []string{testKey, vod} {
+		if _, _, err := f.Get(context.Background(), key); !errors.Is(err, errBodyOverLimit) {
+			t.Errorf("가짜 Get(%q) 상한 초과 오류 = %v, want errBodyOverLimit", key, err)
+		}
+	}
+	plant(f, putCall{key: vod, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)})
+	if body, _, err := f.Get(context.Background(), vod); err != nil || len(body) != rewind.MaxBodyBytes+1 {
+		t.Errorf("가짜 Get(%q) = %d바이트 · %v, want VOD 는 목록 상한을 넘어도 읽는다", vod, len(body), err)
 	}
 }
 
@@ -355,7 +395,7 @@ func TestFakeStoreHonorsDoneContext(t *testing.T) {
 	if _, err := f.Head(ctx, testKey); !errors.Is(err, context.Canceled) {
 		t.Errorf("Head 오류 = %v, want context.Canceled", err)
 	}
-	if _, err := f.Get(ctx, testKey); !errors.Is(err, context.Canceled) {
+	if _, _, err := f.Get(ctx, testKey); !errors.Is(err, context.Canceled) {
 		t.Errorf("Get 오류 = %v, want context.Canceled", err)
 	}
 	if got := storedBody(t, f); got != nil {
