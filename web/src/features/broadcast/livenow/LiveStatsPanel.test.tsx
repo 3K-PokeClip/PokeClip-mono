@@ -493,6 +493,17 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     expect(screen.queryByRole('group', { name })).toBeNull();
   });
 
+  it('목록을 보는 중에 카드가 다시 와도 초점이 첫 카드로 튀지 않는다', () => {
+    // 초점을 묶음 객체에 걸면 갱신마다 새 객체라 다시 돌아 초점이 첫 카드로 갔다(로컬 리뷰)
+    const { rerender, props } = panel({ cards: near });
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ }));
+    const second = () =>
+      within(screen.getByRole('group', { name: '묶인 하이라이트 2개' })).getAllByRole('button')[1]!;
+    act(() => second().focus());
+    rerender(<LiveStatsPanel {...props} cards={near.map((c) => ({ ...c }))} />);
+    expect(second()).toHaveFocus();
+  });
+
   it('목록 안에서 ←/→는 그래프 칸을 옮기지 않는다', () => {
     panel({ cards: near });
     fireEvent.click(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ }));

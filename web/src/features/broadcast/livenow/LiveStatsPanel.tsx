@@ -1,8 +1,8 @@
 'use client';
 
 // 실시간 통계 — 위쪽 숫자 줄 + 한 상자 두 층 그래프(위 시청자 선 · 아래 채팅 막대) + 카테고리 띠 + 시간축.
-// 하이라이트는 그래프 위 핀(누르면 그 카드 시점으로 간다. 겹치는 핀은 개수 묶음이고 누르면 카드 목록을 띄운다)과 막대 색(포인트색)으로, 후원은 숫자 줄과 툴팁에만 둔다(막대 아래 후원
-// 줄은 사용자 결정으로 뺐다). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
+// 하이라이트는 그래프 위 핀(누르면 그 카드 시점으로 간다)과 막대 색(포인트색)으로, 후원은 숫자 줄과 툴팁에만 둔다(막대 아래 후원
+// 줄은 사용자 결정으로 뺐다). 겹치는 핀은 개수 묶음이고, 누르면 카드 목록을 띄운다(POK-500). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
 // 오른쪽 눈금과 층 이름은 제자리다. 방송 중이면 처음에 오른쪽 끝(지금)을 보여 주고, 끝에 붙어 있으면 새 칸이 와도 끝을 따라간다.
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import {
@@ -193,7 +193,9 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
           {headMeta(chart, scope, live)}
         </span>
         {cards.length > 0 ? (
-          <span className={styles.headHint}>핀을 누르면 그 카드로 가요</span>
+          <span className={styles.headHint}>
+            핀을 누르면 그 카드로, 숫자 묶음은 목록에서 골라요
+          </span>
         ) : null}
       </div>
       <dl className={styles.strip}>
@@ -369,9 +371,10 @@ function Timeline({
     setOpenPin(null);
     if (refocus) pinOpenerRef.current?.focus();
   }, []);
-  // 열리면 첫 카드에 초점을 두고(키보드로도 고른다), 목록·묶음 밖을 누르면 닫는다. 묶음을 다시 누르는 것은 그 onClick이 닫는다
+  // 열리면 첫 카드에 초점을 두고(키보드로도 고른다), 목록·묶음 밖을 누르면 닫는다. 묶음을 다시 누르는 것은 그 onClick이 닫는다.
+  // 묶음 객체가 아니라 번호에 건다 — 객체는 카드·차트가 갱신될 때마다 새로 생겨, 목록을 보는 중에 초점이 첫 카드로 튀었다
   useEffect(() => {
-    if (!openGroup) return undefined;
+    if (openPin === null) return undefined;
     pinListRef.current?.querySelector('button')?.focus();
     const onDown = (e: globalThis.PointerEvent) => {
       const t = e.target as Node;
@@ -380,7 +383,7 @@ function Timeline({
     };
     document.addEventListener('pointerdown', onDown);
     return () => document.removeEventListener('pointerdown', onDown);
-  }, [openGroup]);
+  }, [openPin]);
 
   // 위층 — 시청자. 눈금은 방송 전체 기록으로 잡는다(넘길 때마다 눈금이 바뀌면 선이 출렁인다)
   const viewer = useMemo(() => {
@@ -576,14 +579,10 @@ function Timeline({
           tipMin,
           Math.min(crossX + 12 <= tipMax ? crossX + 12 : crossX - 12 - tipWidth, tipMax),
         );
-  // 카드 목록은 묶음 아래 가운데에 서되, 툴팁처럼 보이는 구간 안으로 맞춘다
+  // 카드 목록은 묶음 아래 가운데에 서되 그래프 안으로만 맞춘다. 툴팁처럼 보이는 구간에 맞추면, 열어 둔 채 넘기거나 방송 끝을
+  // 따라가 묶음이 화면 밖으로 빠져도 목록만 가장자리에 남아 어느 묶음의 목록인지 알 수 없었다(로컬 리뷰)
   const listW = PIN_LIST_W * u;
-  const listLeft = openGroup
-    ? Math.max(
-        pos.left + 4 * u,
-        Math.min(openGroup.x - listW / 2, pos.left + visibleW - listW - 4 * u),
-      )
-    : 0;
+  const listLeft = openGroup ? Math.max(0, Math.min(openGroup.x - listW / 2, contentW - listW)) : 0;
   useLayoutEffect(() => {
     const w = tipRef.current?.offsetWidth ?? 0;
     if (w > 0 && w !== tipW) setTipW(w);
