@@ -118,7 +118,9 @@ func LoadChainLedger(ctx context.Context, pool *pgxpool.Pool, c Chain) (ChainLed
 
 // ReadChainLedger 는 LoadChainLedger 의 읽기를 부른 쪽 트랜잭션 tx 안에서 한다 — 행 잠금을 쥔 트랜잭션이 풀에서 연결을
 // 하나 더 받지 않고 같은 연결로 다시 읽는다(VOD 등재 · 풀이 차면 서로 막힌다). 다섯 문장이 한 스냅숏인지는 tx 의 격리
-// 수준을 따른다. 오류는 LoadChainLedger 와 같다.
+// 수준을 따른다. READ COMMITTED 면 회차 최소 seq(Sessions 의 MinSeq)는 범위 문장 뒤 따로 읽혀, 그 사이 범위보다 낮은
+// seq 의 늦은 조각이 들면 끊김 표시가 Rows 와 어긋날 수 있다(우리 송출에선 사실상 없다 — db 78acee38 M1). 오류는
+// LoadChainLedger 와 같다.
 func ReadChainLedger(ctx context.Context, tx pgx.Tx, c Chain) (ChainLedger, error) {
 	return readChainLedger(ctx, tx, c)
 }
