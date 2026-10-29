@@ -138,6 +138,21 @@ func TestFinalizeRetriesAfterBackoffAndCountsAttempts(t *testing.T) {
 	}
 }
 
+// 발행 층이 종국 실패로 돌려준 걸음(FreezeVOD too_large 등)은 session_freeze 줄에 사유를 싣는다 — 다음 걸음(StepFailVOD)의
+// session_freeze_failed 는 장부 문장이라 원래 사유가 없어, 운영 로그에서 사유를 볼 곳이 이 줄뿐이다(cx 78acee38 L1). 변이 =
+// reason 칸 삭제 → FAIL.
+func TestNoteStepLogsReasonOfFailedFreeze(t *testing.T) {
+	f := newFinalLoop(t, finalize.ModePublishing)
+	f.rewind.noteStep(finalStep{
+		row: endingRow("S1", nil), d: finalize.Decision{Step: finalize.StepFreezeVOD}, out: finalize.OutcomeFailed,
+		freeze: publish.FreezeOutcome{Axis: publish.AxisVOD, Result: publish.ResultFailed, Reason: "too_large"},
+	}, finalize.Attempts{})
+	rec := f.logs.last("session_freeze")
+	if rec == nil || rec.attrs["result"] != publish.ResultFailed || rec.attrs["reason"] != "too_large" {
+		t.Fatalf("session_freeze = %+v, want result=failed · reason=too_large", rec)
+	}
+}
+
 // D66 — 감시와 정산 스캔이 같은 틱에 나도 둘 다 돈다(스캔은 예약 키 "scan:finalize" 의 스트림 차선 · 감시는 프로세스 차선).
 // 같은 차선이면 병합 표지가 키당 하나라 한쪽이 버려진다. 변이 = 스캔을 StartProcess 로 → 스캔 결과 수 FAIL.
 func TestFinalizeScanAndWatchBothRunEachCycleD66(t *testing.T) {

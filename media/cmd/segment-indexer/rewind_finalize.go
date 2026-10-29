@@ -400,6 +400,10 @@ func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 	case out.d.Step == finalize.StepFailDVR || out.d.Step == finalize.StepFailVOD ||
 		(out.d.Step == finalize.StepRecoverOrphan && out.freeze.Result == publish.ResultFailed):
 		r.log.Error("session_freeze_failed", "axis", axis, "step", step, "session_id", id, "reason", out.freeze.Reason)
+	case out.freeze.Result == publish.ResultFailed:
+		// 다음 단(StepFailVOD 등)의 session_freeze_failed 는 장부 문장이라 이 사유를 모른다 — 사유는 이 줄에만 남는다.
+		r.log.Info("session_freeze", "axis", axis, "step", step, "session_id", id, "result", out.freeze.Result,
+			"reason", out.freeze.Reason)
 	case out.freeze.Result != "":
 		r.log.Info("session_freeze", "axis", axis, "step", step, "session_id", id, "result", out.freeze.Result)
 	}
