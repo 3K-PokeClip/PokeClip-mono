@@ -47,6 +47,8 @@ type finalizerOptions struct {
 	Intents    *session.IntentInbox
 	// Sink 는 M5 상태 받은편지함(finalsInbox.Post)이다. nil 이면 보내지 않는다.
 	Sink index.PlaybackSink
+	// PlaybackReadMax 는 상태 읽기의 전체 동시 상한이다(REWIND_PLAYBACK_READ_MAX — 1 이상 · config 가 검사한다).
+	PlaybackReadMax int
 }
 
 // finalizer 는 루프 고루틴의 정산 몫 상태다.
@@ -75,6 +77,7 @@ type finalizer struct {
 	held     map[string]string        // 보류 회차 → 사유
 	gauge    map[string]int           // 사유 → 마지막으로 낸 게이지 값
 	reading  map[string]bool          // 도는 상태 읽기(스트림)
+	readMax  int                      // 도는 상태 읽기의 전체 상한
 	revokes  map[session.RevokeIntent]bool
 	// seen 은 이번 스캔 한 바퀴에서 본 회차다 — 바퀴가 끝나면 보지 않은 회차의 메모리를 지운다.
 	seen map[string]bool
@@ -93,7 +96,7 @@ func newFinalizer(o finalizerOptions) *finalizer {
 		attempts: map[string]finalize.Attempts{}, retryAt: map[string]time.Time{}, fast: map[string]fastEntry{},
 		running: map[string]finalize.Step{}, loading: map[string]bool{}, streamOf: map[string]string{},
 		held: map[string]string{}, gauge: map[string]int{},
-		reading: map[string]bool{}, revokes: map[session.RevokeIntent]bool{}, seen: map[string]bool{},
+		reading: map[string]bool{}, readMax: o.PlaybackReadMax, revokes: map[session.RevokeIntent]bool{}, seen: map[string]bool{},
 	}
 }
 
@@ -443,8 +446,13 @@ func (r *rewindLoop) publishHeld() {
 }
 
 // startPlayback 은 스트림 s 의 상태 읽기를 낸다. 돌고 있으면 Lanes 가 병합하고 결과를 받은 뒤 다시 읽는다(D65 — 커밋 X 뒤의
-// 표지는 X 를 본 읽기를 적어도 한 번 낳는다).
+// 표지는 X 를 본 읽기를 적어도 한 번 낳는다). 새 스트림의 읽기는 전체 동시 상한(readMax) 안에서만 내고, 넘치면 표지를
+// 되돌려 다음 holdTick 에 다시 본다.
 func (r *rewindLoop) startPlayback(ctx context.Context, s string) {
+	if !r.fin.reading[s] && len(r.fin.reading) >= r.fin.readMax {
+		r.fin.inbox.Changed(s)
+		return
+	}
 	read := r.fin.work.playback
 	if r.lanes.Start(ctx, playbackLanePrefix+s, func(ctx context.Context) publish.Result {
 		return publish.Result{Kind: publish.KindPlayback, Value: read(ctx, s)}

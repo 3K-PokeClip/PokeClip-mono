@@ -27,7 +27,8 @@ func newLedgerFinalLoop(t *testing.T, pool *pgxpool.Pool, mode finalize.Mode) *f
 	r := f.rewind
 	r.lanes = f.lanes
 	r.fin = newFinalizer(finalizerOptions{Mode: mode, Every: time.Second, CloseAfter: 360 * time.Second,
-		Work: newFinalizeWork(pool, nil, co, noEndedEnqueue), Inbox: f.inbox, Intents: f.intents, Sink: f.sunk.sink})
+		Work: newFinalizeWork(pool, nil, co, noEndedEnqueue), Inbox: f.inbox, Intents: f.intents, Sink: f.sunk.sink,
+		PlaybackReadMax: 2})
 	return f
 }
 

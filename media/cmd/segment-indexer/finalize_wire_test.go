@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
 // 두 스위치(REWIND_GAP_RUN_END · REWIND_STALL_SEAL)의 값을 INFO rewind_end_switches 한 줄로 낸다 — 운영자가 켬 여부를
@@ -40,5 +42,16 @@ func TestFinalizeLaneKeysCannotBeStreamIDs(t *testing.T) {
 			t.Errorf("차선 키 %q 가 stream_id 로 읽힐 수 있다(「:」 있음 %t · 화이트리스트 통과 %t)",
 				k, strings.Contains(k, ":"), recording.ValidStreamID(k))
 		}
+	}
+}
+
+// 조립은 설정의 상태 읽기 상한(REWIND_PLAYBACK_READ_MAX)을 정산 몫에 넘긴다. 변이 = 넘기지 않음(0 — 읽기가 하나도 안 나감)
+// 또는 상수 고정 → FAIL.
+func TestFinalizeWirePassesPlaybackReadMax(t *testing.T) {
+	r := &rewindLoop{}
+	cfg := config.Config{RewindPlaybackReadMax: 3}
+	newFinalizeAssembly(cfg, slog.Default()).wire(r, cfg, nil, session.NewPlaybackInbox(), session.NewIntentInbox())
+	if r.fin.readMax != 3 {
+		t.Fatalf("readMax = %d, want 3(설정값)", r.fin.readMax)
 	}
 }

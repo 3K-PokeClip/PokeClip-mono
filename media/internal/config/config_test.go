@@ -1038,3 +1038,33 @@ func TestLoadStallSealSwitchDefaultsOff(t *testing.T) {
 		}
 	}
 }
+
+// 상태 읽기 차선의 전체 동시 상한은 기본 2 다(kty 2026-10-29 — 정산 걸음 전체 2 와 같은 꼴). 양의 정수만 받고 0 · 음수 ·
+// 문자는 기동 거부다.
+func TestLoadPlaybackReadMax(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    int
+		wantErr bool
+	}{
+		{"", 2, false},
+		{"3", 3, false},
+		{"0", 0, true},
+		{"-1", 0, true},
+		{"둘", 0, true},
+	}
+	for _, tt := range tests {
+		env := minimalEnv()
+		if tt.raw != "" {
+			env["REWIND_PLAYBACK_READ_MAX"] = tt.raw
+		}
+		cfg, err := Load(envOf(env))
+		if (err != nil) != tt.wantErr {
+			t.Errorf("REWIND_PLAYBACK_READ_MAX=%q: 오류 %v, want 오류 %v", tt.raw, err, tt.wantErr)
+			continue
+		}
+		if err == nil && cfg.RewindPlaybackReadMax != tt.want {
+			t.Errorf("REWIND_PLAYBACK_READ_MAX=%q: RewindPlaybackReadMax = %d, want %d", tt.raw, cfg.RewindPlaybackReadMax, tt.want)
+		}
+	}
+}

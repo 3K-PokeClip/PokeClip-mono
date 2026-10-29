@@ -116,5 +116,6 @@ func (a finalizeAssembly) wire(r *rewindLoop, cfg config.Config, pool *pgxpool.P
 	r.fin = newFinalizer(finalizerOptions{
 		Mode: finalizeMode(cfg.S3.Bucket, r.pub != nil), Every: finalizeScanEvery, CloseAfter: a.close.Window + a.close.Slack,
 		Work: newFinalizeWork(pool, r.pub, a.close, a.enqueue), Inbox: inbox, Intents: intents, Sink: sink,
+		PlaybackReadMax: cfg.RewindPlaybackReadMax,
 	})
 }

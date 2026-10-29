@@ -5,6 +5,7 @@ package main
 // 고루틴 자리는 시험 고루틴이다 — hold 가 holdTicks case 의 되감기 몫을, settle 이 완료 case 를 부른다.
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"sync"
@@ -37,9 +38,11 @@ type fakeFinalWork struct {
 	steps             []finalize.Step
 	inFlight, maxFly  int
 	vodFly, maxVODFly int
-	// playback 은 상태 읽기 결과다. readGate 가 nil 이 아니면 첫 읽기가 그 채널이 닫힐 때까지 선다.
+	// playback 은 상태 읽기 결과다. readGate 가 nil 이 아니면 첫 읽기가 그 채널이 닫힐 때까지 선다. readsGate 가 nil 이
+	// 아니면 모든 읽기가 그 채널이 닫힐 때까지 선다.
 	playback  func(stream string) (index.PlaybackState, bool, error)
 	readGate  chan struct{}
+	readsGate chan struct{}
 	reads     int
 	revokeOut publish.RevokeOutcome
 	revokes   []string
@@ -92,7 +95,7 @@ func (w *fakeFinalWork) work() finalizeWork {
 		playback: func(ctx context.Context, stream string) playbackRead {
 			w.mu.Lock()
 			w.reads++
-			gate := w.readGate
+			gate := cmp.Or(w.readGate, w.readsGate)
 			w.readGate = nil
 			read := w.playback
 			w.mu.Unlock()
@@ -165,7 +168,7 @@ func newFinalLoop(t *testing.T, mode finalize.Mode) *finalLoop {
 	r.lanes, r.holdEvery = f.lanes, time.Second
 	r.fin = newFinalizer(finalizerOptions{
 		Mode: mode, Every: time.Second, CloseAfter: 360 * time.Second, Work: f.work.work(),
-		Inbox: f.inbox, Intents: f.intents, Sink: f.sunk.sink,
+		Inbox: f.inbox, Intents: f.intents, Sink: f.sunk.sink, PlaybackReadMax: 2,
 	})
 	return f
 }

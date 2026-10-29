@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -242,6 +243,63 @@ func TestPlaybackDeliverySkipsLiveAndRetriesFailuresD33(t *testing.T) {
 	}
 	if sent := f.sunk.all(); len(sent) != 0 {
 		t.Fatalf("live 회차인데 보냈다: %+v", sent)
+	}
+}
+
+// 상태 읽기 차선의 전체 동시 상한(kty 2026-10-29 — 기본 2). 셋째 스트림의 읽기는 앞 둘이 도는 동안 나가지 않고, 표지가
+// 남아 앞 읽기가 끝난 뒤의 holdTick 에 나간다. 변이 = 상한 무시 → 셋이 함께 돈다 · 넘친 표지 버림 → c 를 보내지 않아 FAIL.
+func TestPlaybackReadsCappedAcrossStreams(t *testing.T) {
+	f := newFinalLoop(t, finalize.ModeOff)
+	f.work.playback = func(s string) (index.PlaybackState, bool, error) {
+		return index.PlaybackState{Phase: index.PhaseEnding, RoundID: "R-" + s}, true, nil
+	}
+	gate := make(chan struct{})
+	f.work.readsGate = gate
+	for _, s := range []string{"a", "b", "c"} {
+		f.inbox.Changed(s)
+	}
+	f.hold(loopBase)
+	if got := slices.Sorted(maps.Keys(f.rewind.fin.reading)); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("도는 읽기 = %v, want [a b](상한 2)", got)
+	}
+	close(gate)
+	f.settle(loopBase)
+	f.hold(loopBase.Add(time.Second))
+	f.settle(loopBase.Add(time.Second))
+	var sent []string
+	for _, st := range f.sunk.all() {
+		sent = append(sent, st.stream)
+	}
+	// a · b 는 함께 돌아 끝나는 차례가 정해지지 않는다 — 넘친 c 가 마지막이면 된다.
+	if len(sent) != 3 || sent[2] != "c" || !slices.Equal(slices.Sorted(slices.Values(sent)), []string{"a", "b", "c"}) {
+		t.Fatalf("보낸 스트림 = %v, want a · b 다음 c(넘친 c 는 다음 틱에)", sent)
+	}
+}
+
+// 상한은 새 스트림의 읽기만 센다 — 이미 읽는 스트림의 표지는 상한이 차 있어도 그 차선에 병합되고, 결과를 받은 뒤 곧바로
+// 다시 읽는다(D65). 변이 = 도는 스트림도 상한에 걸어 표지를 되돌림 → 병합 재읽기가 없어 FAIL.
+func TestPlaybackReadCapKeepsSameStreamMergeD65(t *testing.T) {
+	f := newFinalLoop(t, finalize.ModeOff)
+	f.rewind.fin.readMax = 1
+	f.work.playback = func(string) (index.PlaybackState, bool, error) {
+		return index.PlaybackState{Phase: index.PhaseEnding, RoundID: "R"}, true, nil
+	}
+	gate := make(chan struct{})
+	f.work.readGate = gate
+	f.inbox.Changed("demo")
+	f.hold(loopBase)
+	f.inbox.Changed("demo")
+	f.hold(loopBase.Add(time.Second))
+	if left := f.inbox.Drain(); len(left) != 0 {
+		t.Fatalf("받은편지함에 남은 표지 = %v, want 없음(도는 차선에 병합)", left)
+	}
+	close(gate)
+	f.settle(loopBase.Add(time.Second))
+	f.work.mu.Lock()
+	reads := f.work.reads
+	f.work.mu.Unlock()
+	if reads != 2 {
+		t.Fatalf("읽기 %d 번, want 2(병합된 표지의 재읽기)", reads)
 	}
 }
 

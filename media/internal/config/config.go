@@ -55,6 +55,10 @@ type Config struct {
 	// 회차의 stallAge 가 D_act 에 닿았는데 L2 가 설 수 없을 때 목록을 봉인하고 그 회차를 ending(사유 stall_seal)으로 보낸다.
 	// 기본 끔이고 기동 때만 읽는다 — 켜는 조건은 L3 와 같다(M6 10절).
 	RewindStallSeal bool
+	// RewindPlaybackReadMax 는 상태 읽기 차선의 전체 동시 상한이다(REWIND_PLAYBACK_READ_MAX — kty 2026-10-29 · 정산 걸음 상한
+	// finalize.DefaultLimits 의 전체 2 와 같은 꼴). 읽기 하나가 인덱서 풀 연결 하나를 쥐어, 일제 종료 때 스트림 수만큼 읽기가
+	// 겹쳐 핫 경로와 풀을 다투지 않게 한다. 넘친 표지는 다음 holdTick 에 다시 낸다.
+	RewindPlaybackReadMax int
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -111,6 +115,9 @@ const (
 	defaultObsBackfill       = 60 * time.Second
 	defaultSessionFloorSlack = 1 * time.Second
 )
+
+// defaultRewindPlaybackReadMax 는 상태 읽기 차선의 전체 동시 상한 기본값이다(kty 2026-10-29 — 정산 걸음 전체 2 와 같다).
+const defaultRewindPlaybackReadMax = 2
 
 // Load 는 환경변수를 읽어 설정을 만든다. env 는 os.Getenv 를 그대로 넘기면 된다.
 //
@@ -281,6 +288,10 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	playbackReadMax, err := positiveInt(env, "REWIND_PLAYBACK_READ_MAX", defaultRewindPlaybackReadMax)
+	if err != nil {
+		return Config{}, err
+	}
 	if idx.ScanCollectBudget, err = duration(env, "SCAN_COLLECT_BUDGET", idx.ScanCollectBudget); err != nil {
 		return Config{}, err
 	}
@@ -380,9 +391,10 @@ func Load(env func(string) string) (Config, error) {
 		// 설계값(ADR-044 결정 3 — IVS 300초 선례)이라 const 로 선언하지 않고 여기 한 자리에 적는다(계획 5절).
 		ReconnectWindow: 300 * time.Second,
 		// 설계값(계획 5절 「30 tick 감시」 · 판단 J85 ⑴)이라 같은 규칙으로 여기 한 자리에 적는다.
-		RewindWatchEvery: 30 * time.Second,
-		RewindGapRunEnd:  gapRunEnd,
-		RewindStallSeal:  stallSeal,
+		RewindWatchEvery:      30 * time.Second,
+		RewindGapRunEnd:       gapRunEnd,
+		RewindStallSeal:       stallSeal,
+		RewindPlaybackReadMax: playbackReadMax,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
 		RewindPublicBaseURL: rewindBaseURL,
 		Control:             control,

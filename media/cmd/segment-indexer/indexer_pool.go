@@ -26,10 +26,11 @@ const dbStepTimeout = 20 * time.Second
 //   - 60일 만료(M6-4) — 장부 걸음(MarkExpired · ExpiryRows · ExpiryDocuments · ExpiryCutoffValid · DeleteExpired)을 차례로
 //     돌아 동시 1 이다.
 //   - 정산 차선(M6-3b) — 정산 스캔 1, 회차 정산 걸음(finalize.DefaultLimits — 전체 2 · 같은 스트림 1 · VOD 동결 1), 상태
-//     전달 읽기(스트림마다 하나)가 차선 고루틴에서 돈다. 정산 걸음 전체 2 는 kty 2026-10-27 결정 (가)다 — 상한 6 을 두고
-//     걸음 쪽을 줄였다. 같은 스트림 걸음끼리 잠금을 다투면 진 쪽이 연결을 쥔 채 기다려 핫 경로가 굶었다(M6-3b c3 db M3
-//     실측 — 핫 INSERT 4.71초 대기). 이 풀을 쓰는 걸음은 빈 동결 · 사슬 닫힘 · VOD 실패 확정 · ended 표시라 정산 걸음의
-//     연결은 많아야 둘이다. DVR · VOD 동결(publish.FreezeDVR · FreezeVOD 등)은 발행자 풀에서 연결을 쥔다.
+//     전달 읽기(전체 2 — REWIND_PLAYBACK_READ_MAX · kty 2026-10-29)가 차선 고루틴에서 돈다. 정산 걸음 전체 2 는 kty
+//     2026-10-27 결정 (가)다 — 상한 6 을 두고 걸음 쪽을 줄였다. 같은 스트림 걸음끼리 잠금을 다투면 진 쪽이 연결을 쥔
+//     채 기다려 핫 경로가 굶었다(M6-3b c3 db M3 실측 — 핫 INSERT 4.71초 대기). 이 풀을 쓰는 걸음은 빈 동결 ·
+//     사슬 닫힘 · VOD 실패 확정 · ended 표시라 정산 걸음의 연결은 많아야 둘이다. DVR · VOD 동결(publish.FreezeDVR ·
+//     FreezeVOD 등)은 발행자 풀에서 연결을 쥔다.
 //   - 기동 걸음 — 스키마 보장 · 확인(EnsureSchema · requireLedgerSchema · MissingExpiryPrivileges)과 상태판 적재
 //     (newPlaybackSeed)는 업로더 · 만료 · 제어면이 뜨기 전에 동기로 끝나 수요가 겹치지 않는다.
 //
