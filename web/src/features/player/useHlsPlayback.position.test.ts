@@ -190,4 +190,20 @@ describe.each([
     timeupdate();
     expect(view.result.current.livePosition).toMatchObject({ atMs: PDT0 + 37_500 });
   });
+
+  it('잰 시각은 잰 순간의 시각이다 — 반영(갱신 함수)이 늦게 돌아도 그때의 시각이다', async () => {
+    const view = await mountLive(hooks);
+    const first = Date.now();
+    act(() => {
+      video.el!.currentTime = 37.5;
+      video.el!.dispatchEvent(new Event('timeupdate'));
+      vi.setSystemTime(first + 1_000);
+      // 앞 갱신이 걸려 있어 이 갱신 함수는 그리기 때 돈다
+      video.el!.currentTime = 38.6;
+      video.el!.dispatchEvent(new Event('timeupdate'));
+      vi.setSystemTime(first + 5_000);
+    });
+    expect(view.result.current.livePosition).toMatchObject({ atMs: PDT0 + 38_600 });
+    expect(view.result.current.positionMeasuredAtMs).toBe(first + 1_000);
+  });
 });

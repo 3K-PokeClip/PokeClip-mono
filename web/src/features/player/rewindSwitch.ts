@@ -10,6 +10,7 @@ import {
   requestProbe,
   withHandoffRules,
   withNextDoor,
+  withPositionFloor,
   type HandoffFields,
 } from './liveHandoff';
 import { onEnding } from './endingWait';
@@ -158,8 +159,11 @@ export type SessionEvent =
       /** 맨 앞 조각 셋의 길이 합(ms) — 창 하한 여유(LoadedList.headSpanMs) */
       headSpanMs: number;
     }
-  /** playing = 재생 중인가 · runMs = 지금 위치를 담은 played 범위의 길이(연속 시작 = atMs − runMs) */
-  | { type: 'position'; atMs: number; playing: boolean; runMs: number }
+  /**
+   * playing = 재생 중인가 · runMs = 지금 위치를 담은 played 범위의 길이(연속 시작 = atMs − runMs) · measuredAtMs = 재생기가 이
+   * 자리를 잰 시각(epoch ms)
+   */
+  | { type: 'position'; atMs: number; playing: boolean; runMs: number; measuredAtMs: number }
   | { type: 'remount' }
   /** strictStart 재생기의 첫 목록 재검사가 시작 잘림을 봤다 */
   | { type: 'live-start-truncated' }
@@ -500,6 +504,8 @@ function onAnyPhase(
       });
     }
     case 'position': {
+      // 재생기를 바꾸거나 옮기기 전에 잰 위치다 — 커밋된 위치가 효과로 늦게 올라왔다
+      if (event.measuredAtMs <= session.positionFloorMs) return stateOnly(session);
       const moved = {
         ...session,
         lastAtMs: event.atMs,
@@ -539,7 +545,8 @@ export function transition(
   now: number,
 ): Transition {
   if (session.closed !== null) return stateOnly(session);
-  return withHandoffRules(session, event, (ready) => phaseTransition(ready, event, now));
+  const next = withHandoffRules(session, event, (ready) => phaseTransition(ready, event, now));
+  return withPositionFloor(session, next, now);
 }
 
 function phaseTransition(

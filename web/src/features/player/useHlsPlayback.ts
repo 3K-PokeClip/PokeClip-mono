@@ -126,6 +126,7 @@ export function useHlsPlayback(
   hooks: PlaybackHooks = {},
 ): PlayerSimulation & {
   livePosition: LivePosition | null;
+  positionMeasuredAtMs: number | null;
   /** 그 실제 시각으로 옮긴다(세션의 「안에서 시크」) */
   seekToMs: (atMs: number) => void;
   /** 라이브 끝으로 옮긴다(세션의 라이브 국면 LIVE) */
@@ -145,7 +146,7 @@ export function useHlsPlayback(
   // 재생기의 자리(재생 위치·실시간 끝의 실제 시각, 시차). 라이브 채팅이 되감은 영상의 시각을 따른다(POK-326). 목록에 시각
   // 표시가 없거나 아직 모르면 null. 셋을 한 순간에 같이 잰다(paint): 시크는 시차를 바로 바꾸는데 시각은 다음 paint에 바뀌어,
   // 따로 알리면 새 시차에 옛 시각이 붙어 실시간 끝을 시크 폭만큼 늦게 셈했다(채팅이 아직 표에 없는 구간까지 「다 읽음」으로 뒀다)
-  const { livePosition, measure } = useSourcePosition(source.generation);
+  const { measure, ...position } = useSourcePosition(source.generation);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const [lowLatency, setLowLatency] = useState(true);
   const [clipMarked, setClipMarked] = useState(false);
@@ -766,7 +767,7 @@ export function useHlsPlayback(
     muted,
     volume,
     behindSeconds,
-    livePosition,
+    ...position,
     atEdge: isAtEdge(behindSeconds),
     windowSeconds,
     uptimeSeconds,

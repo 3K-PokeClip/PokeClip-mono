@@ -2,7 +2,7 @@ import { act, render } from '@testing-library/react';
 import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { handedOff } from './handoffTestKit';
+import { MEASURED_LAST, handedOff } from './handoffTestKit';
 import { transition, type XAnswer } from './rewindSwitch';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
 import {
@@ -123,7 +123,15 @@ async function handedOffScreen() {
     headSpanMs: 12_000,
   };
   act(() => session?.dispatch({ type: 'list-loaded', ...list }));
-  act(() => session?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }));
+  act(() =>
+    session?.dispatch({
+      type: 'position',
+      atMs: P,
+      playing: true,
+      runMs: 0,
+      measuredAtMs: MEASURED_LAST,
+    }),
+  );
   vi.mocked(transition).mockImplementationOnce((...[s, , now]) => ({
     state: handedOff(s, now),
     effects: [],
@@ -201,7 +209,15 @@ describe('끝에 닿아 넘긴 뒤 확인이 깨진다 — ended 의 pause(c13f 
       headSpanMs: 12_000,
     };
     act(() => session?.dispatch({ type: 'list-loaded', ...list }));
-    act(() => session?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }));
+    act(() =>
+      session?.dispatch({
+        type: 'position',
+        atMs: P,
+        playing: true,
+        runMs: 0,
+        measuredAtMs: MEASURED_LAST,
+      }),
+    );
     const video = document.querySelector('video')!;
     media.paused = true;
     act(() => video.dispatchEvent(new Event('pause')));
@@ -241,7 +257,13 @@ describe('멈춘 채 넘김 확인이 깨진다 — 영상이 붙기 전의 멈�
 
   it('연속 검사가 깨져(H1a · 건너뜀) 되돌려도 되감기 재생기는 스스로 틀지 않는다', async () => {
     pauseBeforeMedia(await handedOffScreen());
-    const jumped = { type: 'position', atMs: P + 5_000, playing: false, runMs: 0 } as const;
+    const jumped = {
+      type: 'position',
+      atMs: P + 5_000,
+      playing: false,
+      runMs: 0,
+      measuredAtMs: MEASURED_LAST,
+    } as const;
     act(() => session?.dispatch(jumped));
     expect(await playsAfterRevert()).toBe(0);
   });

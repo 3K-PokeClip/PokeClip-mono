@@ -362,4 +362,25 @@ describe('새 소스의 첫 위치 전에는 넘기지 않는다(조기 넘김 �
     const outcome = [settled.state.phase.kind, settled.state.handoffProbe, settled.effects];
     expect(outcome).toEqual(['rewind', null, []]);
   });
+
+  it('되감기로 바꾸기 전에 잰 라이브 위치가 늦게 와도 버린다 — 새 재생기의 첫 위치 전에는 0', () => {
+    const liveAt = NOW + 20_000;
+    const entered = enteredFromLive(liveAt);
+    const stale = pos(liveAt + 500, { measuredAtMs: R - 1 });
+    const early = feed(entered, [stale, loaded(A1, T0, NOW), doorPoll()]);
+    expect([early.state.phase.kind, probes(early.effects)]).toEqual(['rewind', 0]);
+    const asked = feed(early.state, [pos(P, { measuredAtMs: R + 1 })]);
+    expect(probes(asked.effects)).toBe(1);
+  });
+
+  it('안에서 시크하기 전에 잰 위치가 늦게 와도 버린다 — 시크 전 자리로 넘기지 않는다', () => {
+    const view = { lowerMs: T0, endMs: E };
+    const back: SessionEvent = { type: 'seek', targetMs: E - MIN, view };
+    const stalled = feed(rewindNear(), [pos(P), back]).state;
+    const stale = pos(P + 500, { measuredAtMs: R - 1 });
+    const polled = feed(stalled, [stale, doorPoll()]);
+    expect([polled.state.lastAtMs, probes(polled.effects)]).toEqual([P, 0]);
+    const landed = feed(polled.state, [pos(E - MIN, { measuredAtMs: R + 1 })]).state;
+    expect(landed.lastAtMs).toBe(E - MIN);
+  });
 });
