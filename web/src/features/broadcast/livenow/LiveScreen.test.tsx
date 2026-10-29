@@ -225,7 +225,7 @@ vi.mock('hls.js', () => {
             duration: 4,
             programDateTime: hlsFake.pdt ? MEDIA_ZERO + start * 1000 : null,
           });
-        return { fragments };
+        return { fragments, targetduration: 4 };
       }
       return {
         fragments: [
@@ -235,6 +235,7 @@ vi.mock('hls.js', () => {
             programDateTime: hlsFake.pdt ? MEDIA_ZERO : null,
           },
         ],
+        targetduration: 4,
       };
     }
   }
@@ -6213,5 +6214,48 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     fireEvent.click(screen.getByRole('button', { name: '보러 가기' }));
     await settle();
     expect(playerBroadcastIds.at(-1)).toBe('live-2');
+  });
+
+  // POK-498: 라이브 재생기의 창은 마지막 28초다. 그보다 오래된 카드는 되감기 목록이 있어야 갈 수 있다. 전에는 창 맨 앞으로 잘라
+  // 옮겨(되감기 준비 전) 재생바가 오른쪽 끝에 그대로였고, 제어면이 없으면 알림조차 없었다(10-25 QA)
+  const OUT_OF_RANGE = '되감을 수 있는 범위 밖이라 그 시점으로 갈 수 없어요';
+
+  it.each([
+    ['되감기가 아직 준비되지 않았으면', 'http://control.test'],
+    ['제어면이 없으면(되감기 없음)', ''],
+  ])(
+    '%s 라이브 창(28초) 밖 카드를 눌러도 옮기지 않고 범위 밖이라고 알린다(POK-498)',
+    async (_, controlBase) => {
+      vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', controlBase);
+      // 재생기가 읽는 목록도 운영처럼 마지막 28초다(seekable 과 같은 창)
+      hlsFake.sliding = true;
+      const { container } = await renderLive();
+      await liveListLoaded();
+      const video = container.querySelector('video')!;
+      video.currentTime = liveEndSeconds() - 2;
+      const loadsBefore = hlsFake.loads;
+
+      fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+      await settle();
+
+      expect(screen.getByText(OUT_OF_RANGE)).toBeInTheDocument();
+      expect(screen.queryByText('가장 오래된 지점으로 옮겼어요')).toBeNull();
+      expect(video.currentTime).toBeCloseTo(liveEndSeconds() - 2, 0);
+      expect(hlsFake.loads).toBe(loadsBefore);
+    },
+  );
+
+  it('되감기가 준비됐으면 라이브 창 밖 카드는 되감기 재생기로 그 시점에 간다(POK-498)', async () => {
+    control.stream = readyLive(DVR_A, MEDIA_ZERO, NOW);
+    hlsFake.sliding = true;
+    await renderLive();
+    await liveListLoaded();
+    const loadsBefore = hlsFake.loads;
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+
+    expect(hlsFake.loads).toBeGreaterThan(loadsBefore);
+    expect(screen.queryByText(OUT_OF_RANGE)).toBeNull();
   });
 });

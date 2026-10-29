@@ -602,17 +602,23 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 명부 답 전(상태를 모름)에 고른 시점은 남긴다: 끝난 방송으로 밝혀지면 녹화가 그 시점부터 선다(리뷰 3라운드)
   const live = clock.status === 'live';
   const followsPlayhead = chat.followsPlayhead;
-  /** @returns 플레이어가 그 자리로 옮겼나(영상이 없으면 false) */
+  /**
+   * @returns 'moved' 플레이어가 그 자리로 옮겼다 · 'outside' 라이브에서 되감을 수 있는 범위 밖이라 안 옮겼다 · 'none' 영상이 없다
+   */
   const seekTo = useCallback(
-    (seconds: number) => {
+    (seconds: number): 'moved' | 'outside' | 'none' => {
       // 라이브는 카드의 실제 시각(기준점 + 카드 초)으로 옮긴다: 재생기가 조각의 시각 표시로 영상 시각을 센다(POK-326). 방송 경과
       // 시계로 옮기면 숨은 탭에서 그 시계의 타이머가 늦춰져 카드보다 몇 분 늦은 자리(심하면 실시간 끝)로 갔고, 채팅도 그 자리를
-      // 따랐다(리뷰 1라운드). 시각 표시가 없으면 경과 시계로 옮긴다
+      // 따랐다(리뷰 1라운드). 시각 표시가 없으면 경과 시계로 옮긴다. 범위 밖이면 경과 시계로도 옮기지 않는다: 그 길은 창 맨 앞으로
+      // 잘라 옮겨 「옮겼다」고 답한다(POK-498)
       const player = playerRef.current;
-      const moved =
-        (live && cardBase !== null && (player?.seekToTime?.(cardBase + seconds * 1000) ?? false)) ||
-        (player?.seekToUptime(seconds) ?? false);
-      if (live) return moved;
+      const byTime =
+        live && cardBase !== null
+          ? (player?.seekToTime?.(cardBase + seconds * 1000) ?? 'unknown')
+          : 'unknown';
+      if (byTime === 'outside') return 'outside';
+      const moved = byTime === 'moved' || (player?.seekToUptime(seconds) ?? false);
+      if (live) return moved ? 'moved' : 'none';
       // 녹화가 옮겼으면 재생기가 옮긴 자리와 옮겼다는 것을 알린다(handlePlaybackPosition·onSeek: 틈 안 카드면 다음 구간 시작이다).
       // 여기서도 카드 시각을 쓰면 재생기가 같은 초에 머물 때 바로잡히지 않아 채팅만 카드 시각에 남았다(리뷰 1라운드). 영상이 없으면
       // 채팅이 그 시점까지에서 멈추고 그 시점(맨 아래)을 따라간다(지난 방송, POK-324). 채팅이 영상 시각을 따르지 않는 방송(기준점이
@@ -623,7 +629,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
         if (followsPlayhead) bumpChatJump();
       }
       setPendingStart(moved ? null : seconds);
-      return moved;
+      return moved ? 'moved' : 'none';
     },
     [live, cardBase, followsPlayhead, bumpChatJump],
   );
@@ -695,7 +701,16 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰).
       // 영상 없이 채팅만 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 옮긴 영상의 시각을 따르므로(POK-326) 영상이 못 옮기면
       // 최신 그대로라 옮겼다고 하면 거짓이다(리뷰 2라운드)
-      if (!seekTo(seconds))
+      const result = seekTo(seconds);
+      // 라이브 영상은 있지만 그 시점까지 되감을 수 없다(라이브 창 28초 · 되감기 목록 준비 전이거나 그보다 오래된 카드). 되감기가
+      // 준비되면(10초 폴링) 1시간 안 카드는 갈 수 있고, 끝나면 녹화로 간다(POK-498)
+      if (result === 'outside')
+        toast({
+          tone: 'info',
+          title: '되감을 수 있는 범위 밖이라 그 시점으로 갈 수 없어요',
+          description: '되감기가 준비되거나 방송이 끝나면 다시 눌러 보세요.',
+        });
+      else if (result === 'none')
         toast({
           tone: 'info',
           // 녹화가 없다고 확인된 방송은 플레이어처럼 없다고 말한다: 「아직 없어요」는 기다리면 나올 것처럼 읽혀 플레이어의 「찾지
