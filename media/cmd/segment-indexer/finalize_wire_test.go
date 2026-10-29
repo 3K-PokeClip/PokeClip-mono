@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // 두 스위치(REWIND_GAP_RUN_END · REWIND_STALL_SEAL)의 값을 INFO rewind_end_switches 한 줄로 낸다 — 운영자가 켬 여부를
@@ -26,6 +28,17 @@ func TestLogRewindEndSwitchesReportsBothSwitches(t *testing.T) {
 		if !strings.Contains(got, "level=INFO") || !strings.Contains(got, "msg=rewind_end_switches") ||
 			!strings.Contains(got, tc.want) {
 			t.Errorf("(%t, %t) 기동 줄 = %q, want INFO rewind_end_switches · %s", tc.gapRun, tc.stallSeal, got, tc.want)
+		}
+	}
+}
+
+// 정산 차선 키(scan:finalize · final: · playback:)는 스트림 차선 키와 겹치지 않는다 — 셋 다 「:」 를 담고 stream_id
+// 화이트리스트는 「:」 를 받지 않는다(보안 LOW-1). 변이 = 앞머리에서 「:」 를 뺌 · 화이트리스트에 「:」 를 더함 → FAIL.
+func TestFinalizeLaneKeysCannotBeStreamIDs(t *testing.T) {
+	for _, k := range []string{scanLaneKey, finalLanePrefix + "S-1", playbackLanePrefix + "demo"} {
+		if !strings.Contains(k, ":") || recording.ValidStreamID(k) {
+			t.Errorf("차선 키 %q 가 stream_id 로 읽힐 수 있다(「:」 있음 %t · 화이트리스트 통과 %t)",
+				k, strings.Contains(k, ":"), recording.ValidStreamID(k))
 		}
 	}
 }

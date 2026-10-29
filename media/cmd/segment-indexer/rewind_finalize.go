@@ -22,6 +22,8 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
+// 차선 키 셋은 스트림 차선 키(stream_id 그대로)와 겹치지 않는다 — 셋 다 「:」 를 담고, stream_id 는 녹화 경로 화이트리스트
+// (recording.ValidStreamID — [A-Za-z0-9_-]{1,64})를 지난 값이라 「:」 가 없다(M6-3b 사후 보안 검수 LOW-1 의 전제).
 const (
 	// scanLaneKey 는 정산 · 회차 스캔의 예약 차선 키다 — 감시(프로세스 차선)와 다른 키라 같은 틱의 둘이 병합되지 않는다(D66).
 	scanLaneKey = "scan:finalize"
