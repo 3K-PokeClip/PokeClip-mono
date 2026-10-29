@@ -112,9 +112,12 @@ func LookupRoundPlayback(ctx context.Context, pool *pgxpool.Pool, ingestStreamID
 }
 
 // LoadStreamPlayback 은 스트림 하나의 지금 상태다 — 상태 전달 차선 전용(평시 경로 아님). ok=false 면 보낼 값이 없다(최신
-// 회차가 live). 장부에 없는 스트림은 PhaseUnknown(회차 빈 값)이다.
+// 회차가 live). 장부에 없는 스트림은 PhaseUnknown(회차 빈 값)이다. 시한은 풀 획득부터 읽기까지 TxnDeadline 하나다 — 차선이
+// 주는 ctx 는 루프 수명이라, 시한이 없으면 멎은 읽기가 동시 상한의 칸을 계속 쥔다.
 func LoadStreamPlayback(ctx context.Context, pool *pgxpool.Pool, streamID string) (st PlaybackState, ok bool, err error) {
-	vs, err := queryVerdicts(ctx, pool, loadStreamPlaybackSQL, streamID)
+	qctx, cancel := context.WithTimeout(ctx, TxnDeadline)
+	defer cancel()
+	vs, err := queryVerdicts(qctx, pool, loadStreamPlaybackSQL, streamID)
 	if err != nil {
 		return PlaybackState{}, false, fmt.Errorf("스트림 상태 조회 실패 stream_id=%q: %w", streamID, err)
 	}
