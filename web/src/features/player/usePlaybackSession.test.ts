@@ -459,7 +459,13 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
     // 라이브 창 하한(NOW − 5초)보다 앞인 P 로 옮겨 되감기에 든다
     const seek = { lowerMs: NOW - 5_000, endMs: NOW };
     act(() => view.result.current?.dispatch({ type: 'seek', targetMs: P, view: seek }));
-    const list = { url: A1, firstMs: NOW - 3_600_000, lastEndMs: E, targetDurationS: 4 };
+    const list = {
+      url: A1,
+      firstMs: NOW - 3_600_000,
+      lastEndMs: E,
+      targetDurationS: 4,
+      headSpanMs: 12_000,
+    };
     act(() => view.result.current?.dispatch({ type: 'list-loaded', ...list }));
     act(() =>
       view.result.current?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }),

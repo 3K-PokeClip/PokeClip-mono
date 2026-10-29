@@ -247,3 +247,39 @@ describe('hls.js 1.7.3 의 떼기 · 첫 조각 처리기 순서(c12d)', () => {
     expect(seen).toEqual([true]);
   });
 });
+
+// 창 하한 여유는 TD 가 아니라 맨 앞 조각 셋의 실제 길이다(POK-200 c13 — gohlslib 은 TD 를 지금까지 본 조각 최대값으로
+// 올리기만 해, 첫 조각이 6초면 방송 끝까지 TD 6 · 실제 조각은 4초다). 목록은 진짜 파서로 읽는다
+describe('guardRewindFloor — 창 하한 = 첫 조각 + 맨 앞 조각 셋의 길이', () => {
+  /** TARGETDURATION td · 조각 길이 durations(초) · ENDLIST 없음 */
+  function listOf(td: number, durations: readonly number[]): LevelDetails {
+    const lines = ['#EXTM3U', '#EXT-X-VERSION:9', `#EXT-X-TARGETDURATION:${td}`];
+    let at = PDT0;
+    durations.forEach((duration, i) => {
+      lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(at).toISOString()}`);
+      lines.push(`#EXTINF:${duration.toFixed(3)},`, `seg${i}.mp4`);
+      at += duration * 1000;
+    });
+    return M3U8Parser.parseLevelPlaylist(lines.join('\n'), URL, 0, PlaylistLevelType.MAIN, 0, null);
+  }
+
+  /** 재생 중인 재생기의 첫 조각 0.5초 뒤 재생점을 옮긴 자리 */
+  function seekTo(details: LevelDetails): number | undefined {
+    const hls = { hasEnoughToStart: true, startLoad: () => {} };
+    const { media } = fakeMedia(details.fragmentStart + 0.5, 4);
+    return guardRewindFloor({ hls, video: media, details, loadFrom: null })?.to;
+  }
+
+  it('TD 6 에 첫 조각 6초 · 나머지 4초면 첫 조각 + 14초로 옮긴다', () => {
+    expect(seekTo(listOf(6, [6, 4, 4, 4, 4]))).toBe(14);
+  });
+
+  it('6초 조각이 빠진 뒤(4초 조각만)는 첫 조각 + 12초다', () => {
+    expect(seekTo(listOf(6, [4, 4, 4, 4]))).toBe(12);
+  });
+
+  it('조각이 셋 미만이면 있는 만큼 · 하나도 없으면 3 × TD 다', () => {
+    expect(seekTo(listOf(6, [4, 4]))).toBe(8);
+    expect(seekTo(listOf(6, []))).toBe(18);
+  });
+});

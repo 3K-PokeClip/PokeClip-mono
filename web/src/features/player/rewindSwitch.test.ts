@@ -78,7 +78,16 @@ function liveWithEntry(): PlaybackSessionState {
 function rewindAt(t: number): PlaybackSessionState {
   return run(liveWithEntry(), [
     [{ type: 'seek', targetMs: t, view: { lowerMs: t + 1, endMs: NOW + 28_000 } }],
-    [{ type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 4 }],
+    [
+      {
+        type: 'list-loaded',
+        url: A1,
+        firstMs: T0,
+        lastEndMs: NOW,
+        targetDurationS: 4,
+        headSpanMs: 12_000,
+      },
+    ],
     [pos(t)],
   ]).state;
 }
@@ -374,6 +383,7 @@ describe('rewind 국면', () => {
           firstMs: NOW,
           lastEndMs: NOW + 2 * MIN,
           targetDurationS: 4,
+          headSpanMs: 12_000,
         },
       ],
     ]);
@@ -434,6 +444,21 @@ describe('vod-offered · vod 국면', () => {
     expect(kinds(effects)).toContain('notice');
   });
 
+  it('창 하한 여유는 목록의 맨 앞 조각 셋 길이다 — TD 6 · 4초 조각이면 18초가 아니라 12초', () => {
+    const loaded = (headSpanMs: number) => ({
+      type: 'list-loaded' as const,
+      url: A1,
+      firstMs: T0,
+      lastEndMs: NOW,
+      targetDurationS: 6,
+      headSpanMs,
+    });
+    const state = run(liveWithEntry(), [[loaded(12_000)]]).state;
+    expect(state.edgeMarginMs).toBe(12_000);
+    // 길이를 모르면(0) 앞서 안 여유를 그대로 둔다
+    expect(run(state, [[loaded(0)]]).state.edgeMarginMs).toBe(12_000);
+  });
+
   it('「다시보기 보기」 — 3 TD 보다 짧은 VOD 는 첫 조각에서 연다(하한 우선 · R47)', () => {
     const short = status({
       ready: true,
@@ -464,6 +489,7 @@ describe('vod-offered · vod 국면', () => {
           firstMs: NOW - 28_000,
           lastEndMs: NOW,
           targetDurationS: 4,
+          headSpanMs: 12_000,
         },
       ],
       [pos(NOW - 5_000)],

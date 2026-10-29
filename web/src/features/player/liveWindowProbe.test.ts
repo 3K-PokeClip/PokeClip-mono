@@ -162,7 +162,7 @@ describe('parseMediaPlaylist — 완성 조각 · TARGETDURATION · ENDLIST', ()
 });
 
 describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
-  it('302 뒤 response.url 로 상대 변형을 풀고 floorMs = 첫 PDT + 3 × TD 다', async () => {
+  it('302 뒤 response.url 로 상대 변형을 풀고 floorMs = 첫 PDT + 맨 앞 조각 셋 길이다', async () => {
     const spy = stubLive(mediaPlaylist());
 
     await expect(probe()).resolves.toEqual({
@@ -180,6 +180,12 @@ describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
       floorMs: PDT0 + 12_000,
       endMs: PDT0 + 28_000,
     });
+  });
+
+  it('TD 가 6 으로 올라가 있어도 4초 조각이면 하한은 첫 PDT + 12초다(gohlslib TD 상향)', async () => {
+    const td6 = mediaPlaylist().replace('#EXT-X-TARGETDURATION:4', '#EXT-X-TARGETDURATION:6');
+    stubLive(td6);
+    await expect(probe()).resolves.toMatchObject({ kind: 'ok', floorMs: PDT0 + 12_000 });
   });
 
   it('매체 목록을 바로 주면 받기 한 번으로 잰다', async () => {

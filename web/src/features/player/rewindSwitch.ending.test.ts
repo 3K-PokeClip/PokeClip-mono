@@ -80,7 +80,16 @@ function liveWithEntry(): PlaybackSessionState {
 function rewindAt(t: number): PlaybackSessionState {
   return run(liveWithEntry(), [
     [{ type: 'seek', targetMs: t, view: { lowerMs: t + 1, endMs: NOW + 28_000 } }],
-    [{ type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 4 }],
+    [
+      {
+        type: 'list-loaded',
+        url: A1,
+        firstMs: T0,
+        lastEndMs: NOW,
+        targetDurationS: 4,
+        headSpanMs: 12_000,
+      },
+    ],
     [pos(t)],
   ]).state;
 }
@@ -95,6 +104,7 @@ function endingFromLiveClosed(at = NOW): PlaybackSessionState {
         firstMs: NOW - 28_000,
         lastEndMs: NOW,
         targetDurationS: 4,
+        headSpanMs: 12_000,
       },
     ],
     [pos(NOW)],

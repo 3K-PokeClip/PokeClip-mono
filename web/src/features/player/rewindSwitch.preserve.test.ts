@@ -48,7 +48,14 @@ function sealedEnd(): PlaybackSessionState {
   return run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),
     { type: 'seek', targetMs: p, view: { lowerMs: p + 1, endMs: NOW + 28_000 } },
-    { type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 6 },
+    {
+      type: 'list-loaded',
+      url: A1,
+      firstMs: T0,
+      lastEndMs: NOW,
+      targetDurationS: 6,
+      headSpanMs: 18_000,
+    },
     pos(p),
     { type: 'endlist' },
     pos(NOW),
@@ -72,7 +79,14 @@ describe('끝남 대기의 이음 지점(현행 보존)', () => {
     const joined = run(fresh, [
       streamPoll(liveReady(A1, T0, NOW)),
       { type: 'seek', targetMs: p, view: { lowerMs: p + 1, endMs: NOW + 28_000 } },
-      { type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 6 },
+      {
+        type: 'list-loaded',
+        url: A1,
+        firstMs: T0,
+        lastEndMs: NOW,
+        targetDurationS: 6,
+        headSpanMs: 18_000,
+      },
       pos(p),
       streamPoll(liveReady(A2, NOW - 2_000, NOW + MIN), X_A),
       pos(NOW),
@@ -98,7 +112,14 @@ describe('봉인된 끝 — 넘김 0 · 현행 제안 경로(T27)', () => {
     const sealedRewind = run(fresh, [
       streamPoll(liveReady(A1, T0, NOW)),
       { type: 'seek', targetMs: p, view: { lowerMs: p + 1, endMs: NOW + 28_000 } },
-      { type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 6 },
+      {
+        type: 'list-loaded',
+        url: A1,
+        firstMs: T0,
+        lastEndMs: NOW,
+        targetDurationS: 6,
+        headSpanMs: 18_000,
+      },
       streamPoll(liveReady(A2, NOW + MIN, NOW + 2 * MIN), X_A),
       { type: 'endlist' },
       pos(NOW - 1_000),
@@ -161,7 +182,14 @@ function rewindNear(): PlaybackSessionState {
   return run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),
     { type: 'seek', targetMs: P, view: { lowerMs: P + 1, endMs: NOW + 28_000 } },
-    { type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 6 },
+    {
+      type: 'list-loaded',
+      url: A1,
+      firstMs: T0,
+      lastEndMs: NOW,
+      targetDurationS: 6,
+      headSpanMs: 18_000,
+    },
   ]);
 }
 

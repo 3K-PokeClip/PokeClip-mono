@@ -20,11 +20,35 @@ const FRAGS: DatedFragment[] = [0, 1, 2, 3, 4].map((i) => ({
   duration: 4,
   programDateTime: PDT0 + i * 4_000,
 }));
-const LIST: LoadedList = { firstMs: PDT0, lastEndMs: PDT0 + 20_000, targetDurationS: 4 };
+const LIST: LoadedList = {
+  firstMs: PDT0,
+  lastEndMs: PDT0 + 20_000,
+  targetDurationS: 4,
+  headSpanMs: 12_000,
+};
+
+/**
+ * gohlslib 모양 — TD 는 지금까지 본 조각 최대값으로 올라가기만 해 6 에 머물고 실제 조각은 4초다.
+ * durations 는 맨 앞부터 조각 길이(초)다(영상 0초 · PDT0 부터 이어 붙음)
+ */
+function fragsOf(durations: readonly number[]): DatedFragment[] {
+  let start = 0;
+  return durations.map((duration) => {
+    const frag = { start, duration, programDateTime: PDT0 + start * 1000 };
+    start += duration;
+    return frag;
+  });
+}
 
 describe('loadedList', () => {
-  it('첫 조각 시각 · 마지막 조각 끝 · TD 를 낸다', () => {
+  it('첫 조각 시각 · 마지막 조각 끝 · TD · 맨 앞 조각 셋의 길이 합을 낸다', () => {
     expect(loadedList(FRAGS, 4)).toEqual(LIST);
+  });
+
+  it('맨 앞 조각 길이 합은 조각이 셋 미만이면 있는 만큼이다 — TD 와 무관하다', () => {
+    expect(loadedList(fragsOf([6, 4, 4, 4]), 6)?.headSpanMs).toBe(14_000);
+    expect(loadedList(fragsOf([6, 4]), 6)?.headSpanMs).toBe(10_000);
+    expect(loadedList(fragsOf([6]), 6)?.headSpanMs).toBe(6_000);
   });
 
   it('조각이 없거나 시각 표시가 없으면 null', () => {
@@ -33,14 +57,26 @@ describe('loadedList', () => {
   });
 });
 
-describe('windowLowerMs — 창 하한 = 첫 조각 + 3 × TD(vod 는 여유 0)', () => {
-  it('live · rewind 는 12초(TD 4) 여유를 둔다', () => {
+describe('windowLowerMs — 창 하한 = 첫 조각 + 맨 앞 조각 셋의 길이(vod 는 여유 0)', () => {
+  it('live · rewind 는 4초 조각 셋인 12초 여유를 둔다', () => {
     expect(windowLowerMs(LIST, 'live')).toBe(PDT0 + 12_000);
     expect(windowLowerMs(LIST, 'rewind')).toBe(PDT0 + 12_000);
   });
 
   it('vod 는 ENDLIST 문서라 창이 밀리지 않아 여유가 없다(R47)', () => {
     expect(windowLowerMs(LIST, 'vod')).toBe(PDT0);
+  });
+
+  it('TD 6 에 첫 조각 6초 · 나머지 4초면 여유는 TD 가 아니라 실제 조각 길이다', () => {
+    const withFirst = loadedList(fragsOf([6, 4, 4, 4, 4]), 6)!;
+    expect(windowLowerMs(withFirst, 'live')).toBe(PDT0 + 14_000);
+    // 첫 6초 조각이 창에서 빠진 다음 목록
+    const afterFirst = loadedList(fragsOf([6, 4, 4, 4, 4, 4]).slice(1), 6)!;
+    expect(windowLowerMs(afterFirst, 'live')).toBe(PDT0 + 6_000 + 12_000);
+  });
+
+  it('조각 하나뿐이면 그 조각 길이만큼 둔다', () => {
+    expect(windowLowerMs(loadedList(fragsOf([6]), 6)!, 'rewind')).toBe(PDT0 + 6_000);
   });
 });
 
@@ -72,9 +108,19 @@ describe('startLoadPosition — 첫 목록에서 시작 위치(영상 초)를 �
 describe('liveStartFloorMs · startIsTruncated — 라이브 시작 하한 S_live(POK-200 c13 · S10)', () => {
   const NO_PDT: DatedFragment[] = [{ start: 0, duration: 4, programDateTime: null }];
 
-  it('하한 = 첫 조각 + 3 × TD 의 실제 시각 — 창 하한(windowLowerMs)과 같은 식이다', () => {
+  it('하한 = 첫 조각 + 맨 앞 조각 셋 길이의 실제 시각 — 창 하한(windowLowerMs)과 같은 식이다', () => {
     expect(liveStartFloorMs(FRAGS, 4)).toBe(PDT0 + 12_000);
-    expect(liveStartFloorMs(FRAGS, 6)).toBe(PDT0 + 18_000);
+    // 목록 TD 가 6 이어도 창이 밀리는 단위는 4초 조각이다
+    expect(liveStartFloorMs(FRAGS, 6)).toBe(PDT0 + 12_000);
+  });
+
+  it('M5c 실측 모양 — TD 6 · 4초 조각에서 라이브 끝 8초 앞 P 는 하한 뒤라 잘리지 않는다', () => {
+    // 2026-10-28 M5c: 하한 = 끝 − 6.2초(3 × TD) 로 P = 끝 − 8.0초를 1.8초 잘랐다
+    const frags = fragsOf([4.2, 4, 4, 4, 4, 4]);
+    const endMs = PDT0 + 24_200;
+    const p = endMs - 8_000;
+    expect(liveStartFloorMs(frags, 6)).toBe(endMs - 12_000);
+    expect(startIsTruncated(frags, p, 'live', 6)).toBe(false);
   });
 
   it('시각 표시가 없으면 하한을 모른다(null)', () => {
@@ -84,7 +130,7 @@ describe('liveStartFloorMs · startIsTruncated — 라이브 시작 하한 S_liv
   it('시작이 하한 이상이면 잘리지 않고 하한보다 1ms 라도 앞이면 잘린다', () => {
     expect(startIsTruncated(FRAGS, PDT0 + 12_000, 'live', 4)).toBe(false);
     expect(startIsTruncated(FRAGS, PDT0 + 11_999, 'live', 4)).toBe(true);
-    expect(startIsTruncated(FRAGS, PDT0 + 17_999, 'live', 6)).toBe(true);
+    expect(startIsTruncated(FRAGS, PDT0 + 11_999, 'live', 6)).toBe(true);
   });
 
   it('vod 는 여유가 없어 첫 조각부터 잘리지 않는다', () => {

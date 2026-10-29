@@ -14,7 +14,7 @@ import {
 } from './liveHandoff';
 import { onEnding } from './endingWait';
 import type { LiveProbeResult } from './liveWindowProbe';
-import { EDGE_MARGIN_TD } from './playbackEdge';
+import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
 import {
   SESSION_NOTICES,
   close,
@@ -39,8 +39,8 @@ export { ENDING_WAIT_MS, RESUME_WAIT_MS, SESSION_NOTICES } from './sessionShared
 // 닫힘)로만 들어간다. 🔴 ENDLIST 는 「이 목록에 조각이 더 붙지 않는다」이지 재생 완료가 아니다(RFC 8216 4.3.3.4) — atEnd 를
 // 참으로 만드는 것은 끝 도달 사건뿐이다.
 
-/** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — TD 4초 기준(설계 5.3.1절) */
-const DEFAULT_EDGE_MARGIN_MS = EDGE_MARGIN_TD * 4_000;
+/** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — 4초 조각 기준(설계 5.3.1절) */
+const DEFAULT_EDGE_MARGIN_MS = EDGE_MARGIN_SEGMENTS * 4_000;
 
 export interface PlaybackSource {
   kind: 'live' | 'rewind' | 'vod';
@@ -108,7 +108,7 @@ export interface PlaybackSessionState extends HandoffFields {
    * 허용 · 시크바 넓힘 같은 되감기 노출은 이 값으로만 한다 — 「ready:false 동안 되감기 UI 를 노출하지 않는다」(계약3 7-2)
    */
   rewindOpen: boolean;
-  /** 창 하한 여유(3 × TD) */
+  /** 창 하한 여유(목록 맨 앞 조각 셋의 길이) */
   edgeMarginMs: number;
   /** 끝남 대기의 버튼 규칙 결과 */
   offer: Offer | null;
@@ -155,6 +155,8 @@ export type SessionEvent =
       firstMs: number;
       lastEndMs: number;
       targetDurationS: number;
+      /** 맨 앞 조각 셋의 길이 합(ms) — 창 하한 여유(LoadedList.headSpanMs) */
+      headSpanMs: number;
     }
   /** playing = 재생 중인가 · runMs = 지금 위치를 담은 played 범위의 길이(연속 시작 = atMs − runMs) */
   | { type: 'position'; atMs: number; playing: boolean; runMs: number }
@@ -494,10 +496,7 @@ function onAnyPhase(
           : maxOrSelf(session.observedEndMs, event.lastEndMs),
         list: own ? loadedList(session, event) : session.list,
         handoffBlock: releaseBlock(session, event.url, event.lastEndMs),
-        edgeMarginMs:
-          event.targetDurationS > 0
-            ? EDGE_MARGIN_TD * event.targetDurationS * 1000
-            : session.edgeMarginMs,
+        edgeMarginMs: event.headSpanMs > 0 ? event.headSpanMs : session.edgeMarginMs,
       });
     }
     case 'position': {
