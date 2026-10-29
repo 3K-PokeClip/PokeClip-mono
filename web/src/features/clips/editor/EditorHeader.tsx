@@ -1,6 +1,6 @@
 import { Redo2, Undo2 } from 'lucide-react';
 import { Button, IconButton, Progress } from '@/ui';
-import { ClipStatusPill } from './ClipStatusPill';
+import { ClipStatusAnnouncer, ClipStatusPill } from './ClipStatusPill';
 import { EditorBackLink } from './EditorBackLink';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
@@ -53,6 +53,8 @@ export function EditorHeader({ state }: { state: ClipEditorMockState }) {
             remakeLocked={locked}
           />
         ) : null}
+        {/* 요청을 받았거나 단계가 바뀌면 읽어 준다 — 알약이 붙고 떨어져도 영역은 늘 떠 있다 */}
+        <ClipStatusAnnouncer view={state.clipStatus?.view ?? null} />
         {/* 도는 동안 라벨은 자리만 지켜 폭이 튀지 않는다(.busyButton). 라벨이 시각으로 숨으므로 이름은 aria-label이 댄다 */}
         <Button
           variant="soft"

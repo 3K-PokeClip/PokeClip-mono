@@ -10,7 +10,7 @@ import {
   FolderOpen,
   RotateCw,
 } from 'lucide-react';
-import { Button, LinkButton, Popover, Progress, Spinner } from '@/ui';
+import { Button, LinkButton, Popover, Progress, Spinner, VisuallyHidden } from '@/ui';
 import type {
   ClipStatusAction,
   ClipStatusTone,
@@ -57,6 +57,31 @@ function StepMark({ state }: { state: ClipStepState }) {
 }
 
 const isCurrent = (state: ClipStepState) => state !== 'done' && state !== 'todo';
+
+/**
+ * 영상 상태가 바뀌면 화면 낭독기에 알린다. 요청 직후 토스트(role="status")를 뺀 뒤로 「받았다」가 아무 데서도 읽히지 않았다
+ * (PR #454 3차 리뷰). 알약은 상태가 생길 때 함께 붙어 그 안의 영역은 첫 글을 못 읽히므로, 이 영역은 헤더에 늘 떠 있다.
+ * 단계가 바뀔 때만 말한다(만드는 중 퍼센트마다 말하지 않는다). 편집기를 열 때 이미 있던 상태는 말하지 않는다.
+ */
+export function ClipStatusAnnouncer({ view }: { view: ClipStatusView | null }) {
+  const key = view === null ? null : `${view.tone}|${view.steps.map((step) => step.state).join()}`;
+  const title = view?.title ?? null;
+  const lastKey = useRef(key);
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    if (key === lastKey.current) return;
+    lastKey.current = key;
+    if (title === null) return;
+    // 같은 글이 다시 와도 읽히게 비웠다가 다음 프레임에 채운다(LiveRegionProvider와 같은 방식)
+    setMessage('');
+    requestAnimationFrame(() => setMessage(`영상 상태: ${title}`));
+  }, [key, title]);
+  return (
+    <VisuallyHidden role="status" aria-live="polite" aria-atomic="true">
+      {message}
+    </VisuallyHidden>
+  );
+}
 
 export function ClipStatusPill({
   view,

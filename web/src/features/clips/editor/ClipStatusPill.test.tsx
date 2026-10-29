@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { ClipStatusPill } from './ClipStatusPill';
+import { ClipStatusAnnouncer, ClipStatusPill } from './ClipStatusPill';
 import type { ClipStatusView } from './studio/clipProgress';
 
 // 「영상 만들기」 옆 영상 상태 알약과 작은 창(POK-492)의 접근성. 판정·문구는 clipProgress.test, 화면 흐름은 StudioScreen 테스트가 맡는다.
@@ -77,6 +77,24 @@ describe('ClipStatusPill', () => {
     await user.click(screen.getByRole('button', { name: '영상 상태: 업로드 실패. 자세히 보기' }));
     expect(screen.getByText(note)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '다시 올리기' })).toHaveAccessibleDescription(note);
+  });
+
+  it('요청을 받거나 단계가 바뀌면 화면 낭독기에 읽어 준다: 편집기를 열 때 이미 있던 상태와 퍼센트만 바뀐 것은 말하지 않는다(PR #454 3차 리뷰)', async () => {
+    const { rerender } = render(<ClipStatusAnnouncer view={failed} />);
+    expect(screen.getByRole('status')).toHaveTextContent('');
+
+    // 영상 만들기 요청을 보내는 동안은 상태가 비고(알약이 비킨다), 받으면 새 상태가 선다
+    rerender(<ClipStatusAnnouncer view={null} />);
+    rerender(<ClipStatusAnnouncer view={uploading} />);
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('영상 상태: 유튜브에 올리는 중'),
+    );
+
+    // 같은 단계에서 제목만 바뀌면(만드는 중 퍼센트) 다시 읽지 않는다
+    rerender(<ClipStatusAnnouncer view={{ ...uploading, title: '유튜브에 올리는 중 50%' }} />);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByRole('status')).toHaveTextContent('영상 상태: 유튜브에 올리는 중');
+    expect(screen.getByRole('status')).not.toHaveTextContent('50%');
   });
 
   it('편집본 저장 중(헤더 「영상 만들기」가 꺼진 동안)에는 「다시 만들기」도 꺼진다: 눌러도 아무 일 없던 버튼(PR #454 2차 리뷰)', async () => {

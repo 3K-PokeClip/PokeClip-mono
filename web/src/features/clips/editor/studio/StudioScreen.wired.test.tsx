@@ -574,6 +574,14 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     expect(
       await screen.findByRole('button', { name: '영상 상태: 차례 기다리는 중. 자세히 보기' }),
     ).toBeInTheDocument();
+    // 토스트 대신 화면 낭독기에는 헤더의 늘 떠 있는 영역이 받았다고 읽어 준다(PR #454 3차 리뷰)
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('status')
+          .some((el) => el.textContent === '영상 상태: 차례 기다리는 중'),
+      ).toBe(true),
+    );
     // 사용 통계 — 진입은 한 번(첫 저장으로 주소가 ?recipe= 로 바뀌어도 다시 세지 않는다), 주문은 서버가 받은 뒤
     // 한 번이고 열거형 속성만 싣는다(제목·설명·태그 없음)
     expect(tracked('clip_editor_opened')).toEqual([{ source: 'card' }]);

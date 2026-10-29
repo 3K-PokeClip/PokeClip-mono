@@ -970,7 +970,8 @@ function WiredStudio({
             scheduled: upload.publishAt !== undefined,
           });
           // 받았다는 토스트는 띄우지 않는다: 상태가 「영상 만들기」 옆 알약에 바로 서고 끝날 때까지 남는다(POK-492). 200(같은
-          // 판이 만드는 중이거나 이미 완성)도 알약이 지금 상태(만드는 중 · 올리는 중)를 그대로 말한다
+          // 판이 만드는 중이거나 이미 완성)도 알약이 지금 상태(만드는 중 · 올리는 중)를 그대로 말한다. 화면 낭독기에는 헤더의
+          // ClipStatusAnnouncer가 새 상태를 읽어 준다(토스트가 하던 일, PR #454 3차 리뷰)
         })
         .catch((e: unknown) => {
           const message = messageOf(e);
