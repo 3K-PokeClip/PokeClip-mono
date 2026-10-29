@@ -188,24 +188,34 @@ export const ChatPanel = memo(function ChatPanel({
   // DOM은 시간순으로 두고 바닥 고정은 여기서 한다: 끝에 있을 때만 새 줄이 오면 따라 내려가고,
   // 위로 올라가 옛 줄을 읽는 동안엔 자리를 지킨다 — 하단 상태줄의 「따라가는 중」도 이 값이 말한다.
   const listRef = useRef<HTMLUListElement>(null);
-  const placeholderRef = useRef<HTMLDivElement>(null);
-  // 목록에서 안내 칸으로 포커스를 넘겼는가 — 줄이 돌아오면 목록으로 돌려줄지 가른다
-  const focusBackToList = useRef(false);
+  const placeholderRef = useRef<HTMLDivElement | null>(null);
+  // 안내 칸이 DOM에서 빠지는 순간 포커스가 그 안에 있었는가 — 그때만 목록으로 돌려준다
+  const focusLeftWithPlaceholder = useRef(false);
+  // React 19의 ref 정리는 노드를 DOM에서 빼기 직전에 돈다(react-dom commitDeletionEffectsOnFiber: safelyDetachRef → removeChild).
+  // 그때의 activeElement로 「안내 칸과 함께 포커스를 잃는가」를 잰다. 빠진 뒤 body인지로 재면, 그새 사용자가 포커스할 수 없는
+  // 곳을 클릭해 떠난 경우(이때도 body)까지 목록으로 끌어왔다(PR #459 리뷰 2차). 같은 칸이 안내의 속만 바꿀 때는 정리가 돌지
+  // 않게 콜백을 고정한다
+  const attachPlaceholder = useCallback((node: HTMLDivElement | null) => {
+    placeholderRef.current = node;
+    if (!node) return;
+    return () => {
+      focusLeftWithPlaceholder.current = node.contains(document.activeElement);
+      placeholderRef.current = null;
+    };
+  }, []);
   const showingPlaceholder = placeholder !== null;
   // 안내가 서면 목록을 숨기는데(display: none), 목록이 포커스를 쥐고 있었으면 포커스가 문서 처음으로 떨어져 줄이 돌아와도 Tab이
-  // 처음부터였다(PR #459 리뷰 1차). 같은 자리의 안내 칸으로 옮기고, 안내가 걷힐 때 포커스가 갈 곳을 잃었으면 목록으로 돌려준다.
-  // 그새 다른 곳으로 옮겼으면 건드리지 않는다. 그린 직후(그리기 전)에 해야 브라우저가 포커스를 문서로 돌리기 전이다
+  // 처음부터였다(PR #459 리뷰 1차). 같은 자리의 안내 칸으로 옮기고, 안내 칸이 포커스를 쥔 채 걷히면 목록으로 돌려준다. 같은
+  // 자리를 오가는 이동이라 스크롤은 하지 않는다: 목록이 화면 밖(1단 배치)이면 페이지가 그쪽으로 튀었다(리뷰 2차). 그린 직후
+  // (그리기 전)에 해야 브라우저가 포커스를 문서로 돌리기 전이다
   useLayoutEffect(() => {
     const list = listRef.current;
     if (showingPlaceholder) {
-      if (list?.contains(document.activeElement)) {
-        placeholderRef.current?.focus();
-        focusBackToList.current = true;
-      }
-    } else if (focusBackToList.current) {
-      focusBackToList.current = false;
-      const active = document.activeElement;
-      if (!active || active === document.body || !active.isConnected) list?.focus();
+      if (list?.contains(document.activeElement))
+        placeholderRef.current?.focus({ preventScroll: true });
+    } else if (focusLeftWithPlaceholder.current) {
+      focusLeftWithPlaceholder.current = false;
+      list?.focus({ preventScroll: true });
     }
   }, [showingPlaceholder]);
   const [following, setFollowing] = useState(true);
@@ -351,7 +361,7 @@ export const ChatPanel = memo(function ChatPanel({
       ) : null}
       {placeholder !== null ? (
         // 목록이 숨을 때 포커스를 넘겨받는 칸이라 프로그램으로만 포커스한다(tabIndex -1 — Tab 차례에는 없다)
-        <div ref={placeholderRef} tabIndex={-1} className={styles.chatPlaceholder}>
+        <div ref={attachPlaceholder} tabIndex={-1} className={styles.chatPlaceholder}>
           <ChatPlaceholderContent kind={placeholder} loaderDue={loaderDue} />
         </div>
       ) : null}

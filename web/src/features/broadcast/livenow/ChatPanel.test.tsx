@@ -374,6 +374,36 @@ describe('ChatPanel — 줄이 없을 때의 안내', () => {
     expect(document.activeElement).toBe(chatList());
   });
 
+  it('안내 칸으로 넘어간 포커스를 사용자가 떠났으면 안내가 걷혀도 목록이 도로 가져가지 않는다(PR #459 리뷰 2차)', () => {
+    // 포커스할 수 없는 곳을 클릭해 떠나면 포커스는 body다. 빠진 뒤 body인지로 재면 이때도 목록이 포커스를 끌어갔다
+    const view = render(<ChatPanel {...PROPS} mode="ended" />);
+    chatList().focus();
+    view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="loading" />);
+    expect(document.activeElement).toHaveAttribute('tabindex', '-1');
+    act(() => {
+      (document.activeElement as HTMLElement).blur();
+    });
+    expect(document.activeElement).toBe(document.body);
+
+    view.rerender(<ChatPanel {...PROPS} mode="ended" />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('포커스를 안내 칸으로 넘기고 돌려줄 때 스크롤하지 않는다(PR #459 리뷰 2차)', () => {
+    // 같은 자리를 오가는 이동이다 — 목록이 화면 밖(1단 배치)이면 페이지가 그쪽으로 튀었다
+    const view = render(<ChatPanel {...PROPS} mode="ended" />);
+    chatList().focus();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="loading" />);
+      view.rerender(<ChatPanel {...PROPS} mode="ended" />);
+      expect(focus).toHaveBeenCalledTimes(2);
+      for (const call of focus.mock.calls) expect(call[0]).toEqual({ preventScroll: true });
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
   it('목록 밖에 포커스가 있으면 안내가 서고 걷혀도 포커스를 건드리지 않는다', () => {
     vi.useFakeTimers();
     const view = render(<ChatPanel {...PROPS} mode="ended" />);
