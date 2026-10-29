@@ -4,12 +4,16 @@ package publish
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
@@ -107,6 +111,32 @@ func TestAuditFrozenChecksVODOncePerDocument(t *testing.T) {
 
 	if out.Checked != 1 || out.Failed != 1 {
 		t.Errorf("감사 = %+v, want VOD 문서 1건 · 실패 1", out)
+	}
+}
+
+// VOD 문서의 감사 창 기준 시각은 phase 4 의 ended_at 이다 — ended_at 은 사슬 전원의 VOD 가 종국일 때만 쓰이므로
+// (index.MarkChainEnded) 창이 VOD 확정 뒤에 열린다. 사슬의 DVR 이 창보다 오래전에 닫혔어도 phase 4 가 오면 VOD 를
+// 감사한다 — 동결이 늦어 영영 감사하지 않는 일이 없다(PR ① 이연 · 보안 m62 미확인 재검).
+func TestAuditFrozenWindowsVODFromChainEnd(t *testing.T) {
+	p, _, chain := newVODChain(t, chainRows())
+	ctx := t.Context()
+	wantOutcome(t, p.FreezeVOD(ctx, chain, false), AxisVOD, ResultFrozen, false)
+	exec(t, p.pool, `UPDATE stream_sessions SET dvr_frozen_at = now() - interval '2 hours' WHERE session_id IN ('P', 'S')`)
+	a := NewFrozenAuditor(p)
+
+	before := a.Audit(ctx)
+	ended, err := index.MarkChainEnded(ctx, p.pool, chain, index.CloseOptions{Log: slog.New(&logRecorder{})},
+		func(context.Context, pgx.Tx, string) error { return nil })
+	if err != nil || ended != 2 {
+		t.Fatalf("phase 4 = %d행 · %v, want 사슬 2행", ended, err)
+	}
+	after := a.Audit(ctx)
+
+	if before.Checked != 0 {
+		t.Errorf("phase 4 전 감사 = %+v, want 0건(기준 시각이 2시간 전 DVR 동결)", before)
+	}
+	if after.Checked != 1 || after.Failed != 0 || after.Err != nil {
+		t.Errorf("phase 4 뒤 감사 = %+v, want VOD 문서 1건 통과", after)
 	}
 }
 

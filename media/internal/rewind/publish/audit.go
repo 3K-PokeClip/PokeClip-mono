@@ -37,6 +37,9 @@ const (
 // frozenDocsSQL 은 감사 대상이다 — 문서가 있는 동결(DVR frozen · VOD frozen · frozen_with_gaps) 가운데 장부 시각
 // COALESCE(ended_at, dvr_frozen_at) 이 감사 창 $1 안이고 키가 진행 커서 $3 뒤인 것(키 순 · 상한 $2). VOD 는 사슬 세션마다
 // 같은 키라 키로 한 번만 고른다. DVR 은 재렌더 입력(동결 범위 · base)도 읽는다.
+//
+// VOD 의 기준 시각은 phase 4 의 ended_at 이다 — ended_at 은 사슬 전원의 VOD 가 종국일 때만 쓰이므로(index.MarkChainEnded)
+// 창은 VOD 확정 뒤에 열린다. phase 4 전에는 행의 dvr_frozen_at 이라 창 밖일 수 있지만 phase 4 가 오면 다시 창 안이다.
 const frozenDocsSQL = `
 SELECT DISTINCT ON (key) axis, key, stream_id, session_id, etag, sha, first_seq, last_seq, disc_base
   FROM (SELECT 'dvr' AS axis, dvr_s3_key AS key, stream_id, session_id,
