@@ -2364,6 +2364,10 @@ TEST(mark_hotkey_combo_rejection)
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_MOUSE1", ctrlShift), "hotkey_bad_key");
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F25", none), "hotkey_bad_key");
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F0", none), "hotkey_bad_key");
+	// 긴 숫자는 파싱 전에 거른다 — 전에는 std::stoi가 out_of_range를 던져 UI 스레드에서 OBS가 꺼졌다(PR #455 리뷰)
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F100", none), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F2147483648", none), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F99999999999999999999", ctrlShift), "hotkey_bad_key");
 }
 
 // 새 키 받기를 꺼도 1초 더 막는다 — 새 바인딩을 건 직후 아직 눌린 새 키가 마크로 잡히지 않게(PR #455 리뷰)

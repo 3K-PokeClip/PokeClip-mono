@@ -245,8 +245,13 @@ std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabe
 	};
 	bool letterOrDigit = k.size() == 1 && ((k[0] >= 'A' && k[0] <= 'Z') || (k[0] >= '0' && k[0] <= '9'));
 	bool typing = letterOrDigit || kTyping.count(k) > 0;
-	bool fkey = k.size() >= 2 && k[0] == 'F' && allDigits(k.substr(1)) && std::stoi(k.substr(1)) >= 1 &&
-		    std::stoi(k.substr(1)) <= 24;
+	// F1~F24 — 숫자는 두 자리까지만 파싱한다. 더 길면 std::stoi가 범위 밖 예외를 던지고, 이 검사는 UI 스레드 큐에서 돌아
+	// 잡는 곳이 없어 OBS가 꺼진다(브리지 PUT /api/hotkey는 독 말고도 토큰만 있으면 아무 이름이나 보낼 수 있다).
+	bool fkey = k.size() >= 2 && k.size() <= 3 && k[0] == 'F' && allDigits(k.substr(1));
+	if (fkey) {
+		int n = std::stoi(k.substr(1));
+		fkey = n >= 1 && n <= 24;
+	}
 	bool numpad = k.size() == 4 && k.rfind("NUM", 0) == 0 && allDigits(k.substr(3));
 	if (!typing && !fkey && !numpad && !kStandalone.count(k))
 		return "hotkey_bad_key";
