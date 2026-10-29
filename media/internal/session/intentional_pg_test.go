@@ -573,6 +573,55 @@ func TestIntentionalEndTDSplitAndEndLiveDoNotOverwriteEachOther(t *testing.T) {
 	}
 }
 
+// 보안 사후 검수 미확인 1 — 4D 표식 뒤 송출이 이어져도 표식이 그 뒤의 평범한 종료를 intentional 로 만들지 않는다. 표식
+// + 여유(8초) 이상에 시작한 조각은 표식 있는 live 를 intentional 로 끝내고 표식 없는 새 세션을 열므로(표식 분할), 그 뒤
+// 오프라인 전이(EndLive)는 offline 이다. 여유 안의 조각은 표식 있는 live 에 붙어 그 live 의 오프라인 전이가 intentional 이다
+// (D54 기록 — 남는 송출 8초 이하). 변이 = 결정자의 표식 분할 제거 → 뒤 송출의 종료가 intentional 로 FAIL.
+func TestStopMarkDoesNotTurnLaterOfflineEndIntentional(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name        string
+		after       time.Duration
+		wantSplit   bool
+		wantEndedAs string
+	}{
+		{"여유_밖_송출은_새_세션의_offline", 12 * time.Second, true, "offline"},
+		{"여유_안_송출은_표식_live_의_intentional", 3 * time.Second, false, endReasonIntentional},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			seedLedger(t, pool, ledgerRow{id: "S-X", streamID: "demo", state: "live", roundID: "S-X", startedAt: stopAt.Add(-time.Hour)})
+			seedSegment(t, pool, "demo", "S-X", 1, stopAt.Add(-5*time.Second))
+			slots := &intentSlots{}
+			if res := apply(t, pool, endAt("demo"), slots.options()); res.Effect != effectMarked {
+				t.Fatalf("4D = %+v, want marked", res)
+			}
+			r, _ := newRoundRegistry()
+			opened := openOne(t, pool, r, Input{StreamID: "demo", Seq: 2, StartWallUTC: stopAt.Add(c.after), DurationMS: 4000, Op: OpenOrCurrent})
+			if (opened != "") != c.wantSplit {
+				t.Fatalf("표식 + %v 조각이 연 세션 = %q, want 분할 %t", c.after, opened, c.wantSplit)
+			}
+
+			ended, err := index.EndLive(ctx, pool, "demo", crossClose, noEnqueue)
+			if err != nil {
+				t.Fatalf("EndLive 실패: %v", err)
+			}
+			got := roundOf(t, pool, ended)
+			if strOf(got.endReason) != c.wantEndedAs {
+				t.Errorf("오프라인 전이로 끝난 %s 의 사유 = %s, want %s", ended, strOf(got.endReason), c.wantEndedAs)
+			}
+			if c.wantSplit {
+				if got.stopMarkedAt != nil {
+					t.Errorf("분할로 연 세션 %s 에 표식 %v — 표식은 승계되지 않아야 한다", ended, got.stopMarkedAt)
+				}
+				if x := roundOf(t, pool, "S-X"); x.state != "ending" || strOf(x.endReason) != endReasonIntentional {
+					t.Errorf("표식 live S-X = (%s, %s), want (ending, intentional)", x.state, strOf(x.endReason))
+				}
+			}
+		})
+	}
+}
+
 // contended(D74 의 4D 갈래) — 위상 잠금을 남이 쥐고 있으면 lock_timeout(5초) 뒤 미적용 contended 로 돌아온다(오류가 아니다).
 // 위상 잠금이 상한 설정 다음 문장이라 잠금 대기가 5초에 끊긴다. 변이 = 위상 잠금을 상한 설정 앞에 둠 → lock_timeout 이
 // 걸리지 않아 트랜잭션 시한(10초)까지 기다리다 오류로 FAIL.
