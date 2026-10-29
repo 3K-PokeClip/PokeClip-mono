@@ -16,15 +16,19 @@ type ServerDraft = Pick<PluginSettings, 'ingest_host' | 'ingest_port' | 'latency
 
 const SAVED_MS = 1500;
 
+// waiting — 어느 스위치든 저장 중이라 잠깐 못 누른다. disabled로 잠그면 키보드로 누른 그 스위치의 포커스가 body로
+// 빠져(Chromium) 처음부터 다시 Tab해야 한다 — aria-disabled로 흐리게만 하고 누름은 버린다(3차 리뷰).
 function Switch({
   id,
   checked,
   disabled,
+  waiting,
   onChange,
 }: {
   id: string;
   checked: boolean;
   disabled?: boolean;
+  waiting?: boolean;
   onChange: () => void;
 }) {
   return (
@@ -35,9 +39,10 @@ function Switch({
       aria-checked={checked}
       aria-labelledby={`${id}-label`}
       aria-describedby={`${id}-hint`}
+      aria-disabled={waiting && !disabled ? 'true' : undefined}
       class={styles.switch}
       disabled={disabled}
-      onClick={onChange}
+      onClick={waiting ? undefined : onChange}
     />
   );
 }
@@ -195,8 +200,8 @@ export function SettingsPanel({
             {opts.savedText ?? '저장됨'}
           </span>
         ) : null}
-        {/* 하나가 저장되는 동안은 모든 스위치를 잠근다 — 다른 줄 클릭을 조용히 버리면 눌렀는데 아무 일도 없어 보인다 */}
-        <Switch id={id} checked={opts.checked} disabled={opts.lockedRow || busy !== ''} onChange={opts.onChange} />
+        {/* 하나가 저장되는 동안은 모든 스위치를 흐리게 잠근다(포커스는 둔다) — 다른 줄 클릭을 조용히 버리면 눌렀는데 아무 일도 없어 보인다 */}
+        <Switch id={id} checked={opts.checked} disabled={opts.lockedRow} waiting={busy !== ''} onChange={opts.onChange} />
       </div>
     );
   };
