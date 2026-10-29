@@ -57,7 +57,8 @@ func assemblePublishing(ctx context.Context, cfg config.Config, db *pgxpool.Conf
 	up.AttachDirty()
 	dirty := up.Dirty()
 	r.cache, r.pub = c, pub // 차선은 run 이 조립 밖에서 채운다(M6 3.2 — 꺼짐 · 강등에서도 정산 차선이 돈다)
-	r.work = laneWork{tick: pub.Tick, renew: pub.RenewFence, load: pub.LoadLedger, watch: pub.Watch, seal: pub.Endlist}
+	r.work = laneWork{tick: pub.Tick, renew: pub.RenewFence, load: pub.LoadLedger, watch: pub.Watch, seal: pub.Endlist,
+		audit: publish.NewFrozenAuditor(pub).Audit}
 	r.peekDirty, r.ackDirty = dirty.Peek, dirty.Ack
 	r.expedite, r.forgetSession = up.Expedite, up.ForgetSession
 	r.reconnectWindow, r.watchEvery, r.holdEvery = cfg.ReconnectWindow, cfg.RewindWatchEvery, cfg.Indexer.HoldTick

@@ -524,6 +524,9 @@ const (
 	KindRevoke
 	// KindSeal 은 정체 마감(L2′)의 봉인(Endlist)이다 — 스트림 차선(POK-196 M6-3b 커밋 ④b).
 	KindSeal
+	// KindAudit 은 동결 감사(FrozenAuditor.Audit)다 — 예약 차선 "audit:frozen"(감시의 프로세스 차선과 따로 · D66 과 같은
+	// 까닭). 결과는 Value 의 AuditOutcome 이다.
+	KindAudit
 )
 
 // Job 은 차선에서 도는 작업 하나다. ctx 가 끝나면 서둘러 돌아와야 한다 — 워커 고루틴은 작업이 돌아와야
@@ -541,8 +544,8 @@ type Result struct {
 	Load LoadOutcome
 	// Watch 는 감시 작업(KindWatch)의 결과다(판단 J40).
 	Watch WatchOutcome
-	// Value 는 발행 밖 작업(KindFinalizeScan · KindFinalizeLoad · KindFinalize · KindPlayback · KindRevoke · KindSeal)의 결과다 — 형은
-	// 작업을 낸 쪽이 정하고 받는 쪽이 단언한다.
+	// Value 는 발행 밖 작업(KindFinalizeScan · KindFinalizeLoad · KindFinalize · KindPlayback · KindRevoke · KindSeal)과 동결
+	// 감사(KindAudit)의 결과다 — 형은 작업을 낸 쪽이 정하고 받는 쪽이 단언한다.
 	Value any
 
 	// lane 은 이 작업이 돈 차선이다 — Finish 가 비울 자리다. 차선이 채운다.

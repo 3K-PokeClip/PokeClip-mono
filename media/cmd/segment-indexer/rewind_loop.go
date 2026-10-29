@@ -107,6 +107,9 @@ type laneWork struct {
 	watch func(ctx context.Context, probes []index.WatchProbe) publish.WatchOutcome
 	// seal 은 L2′ 의 봉인이다(운영은 Publisher.Endlist — stall_seal.go).
 	seal func(ctx context.Context, streamID, sessionID string) publish.FreezeOutcome
+	// audit 은 동결 감사다(운영은 프로세스에 하나인 FrozenAuditor 의 Audit — 문서당 복구 1회를 그 감사기가 기억한다). nil 이면
+	// 감사를 내지 않는다.
+	audit func(ctx context.Context) publish.AuditOutcome
 }
 
 // rewindStream 은 루프가 스트림 하나에 드는 발행 몫의 상태다(판단 J89).
@@ -218,6 +221,7 @@ func (r *rewindLoop) done() <-chan publish.Result {
 //	발행  publishDone — 발행 상태 · 캐시 반영 · 재발행 표지 · 오류 줄 · 결과 모름의 요구 발사 · 미룬 적재나 재실행 틱
 //	적재  loadDone — CompleteLoad 또는 재요구 · 적재 뒤 틱
 //	감시  watchDone — 대조 · 화해 · (c) · 부팅 목록 · Forget(재실행이면 새 입력으로 다시 감시)
+//	감사  auditDone — 대상 조회 실패 줄(재실행이면 다시 감사)
 func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.Time) {
 	rerun := r.lanes.Finish(res)
 	switch res.Kind {
@@ -230,6 +234,8 @@ func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.
 		if rerun {
 			r.startWatch(ctx)
 		}
+	case publish.KindAudit:
+		r.auditDone(ctx, res, rerun)
 	case publish.KindFinalizeScan:
 		r.scanDone(ctx, res, rerun, now)
 	case publish.KindFinalizeLoad:
@@ -432,7 +438,8 @@ func (r *rewindLoop) renewFences(ctx context.Context, now time.Time) {
 }
 
 // watch 는 30초 감시를 낸다(체크리스트 474 A-4 7 · 판단 J85 ⑴) — 발행 갈래를 도는 첫 holdTick(부팅 첫 감시 — 계획 4.5 A3 결정 6)과
-// 그 뒤 watchEvery ÷ holdEvery 번째마다 한 번이다. 조립이 주기를 넘기지 않았으면 아무것도 하지 않는다.
+// 그 뒤 watchEvery ÷ holdEvery 번째마다 한 번이다. 동결 감사(D17 4.1(b))도 같은 차례에 낸다. 조립이 주기를 넘기지 않았으면
+// 아무것도 하지 않는다.
 func (r *rewindLoop) watch(ctx context.Context) {
 	if r.holdEvery <= 0 {
 		return
@@ -443,6 +450,7 @@ func (r *rewindLoop) watch(ctx context.Context) {
 	}
 	if r.ticks%n == 0 {
 		r.startWatch(ctx)
+		r.startAudit(ctx)
 	}
 	r.ticks++
 }
@@ -454,4 +462,34 @@ func (r *rewindLoop) startWatch(ctx context.Context) {
 	r.lanes.StartProcess(ctx, func(ctx context.Context) publish.Result {
 		return publish.Result{Kind: publish.KindWatch, Watch: watch(ctx, probes)}
 	})
+}
+
+// auditLaneKey 는 동결 감사의 예약 차선 키다 — 감시(프로세스 차선)와 다른 키라 오래 걸리는 감사(문서 100개 × 저장소 요청)가
+// 감시를 굶기지 않는다(D66 과 같은 처분). 「:」 를 담아 스트림 차선 키(stream_id — 「:」 없음)와 겹치지 않는다.
+const auditLaneKey = "audit:frozen"
+
+// startAudit 는 동결 감사를 그 예약 차선에 낸다. 감사가 돌고 있으면 Lanes 가 병합하고 결과를 받은 뒤 한 번 더 낸다(complete).
+//
+// 한 번에 100개를 보고 다음 감사가 그 뒤부터 보므로 한 바퀴는 ceil(문서 수 ÷ 100) × 감시 주기다. 감시 주기 30초 · 창 30분이면
+// 감사 한 번이 30초 안에 끝나는 한 창 안의 문서 6,000개까지 적어도 한 번 본다. 진행 커서는 감사기 메모리라 재기동하면
+// 처음부터다 — 30초보다 짧은 간격의 재기동이 되풀이될 때만 뒤 문서가 밀린다(한계).
+func (r *rewindLoop) startAudit(ctx context.Context) {
+	audit := r.work.audit
+	if audit == nil {
+		return
+	}
+	r.lanes.Start(ctx, auditLaneKey, func(ctx context.Context) publish.Result {
+		return publish.Result{Kind: publish.KindAudit, Value: audit(ctx)}
+	})
+}
+
+// auditDone 은 감사 결과를 반영한다 — 문서마다의 신호는 감사기가 이미 남겼고, 여기서는 대상 조회 실패를 ERROR
+// rewind_job_failed(job=audit) 한 줄로 남긴다. 재실행이면 다시 낸다.
+func (r *rewindLoop) auditDone(ctx context.Context, res publish.Result, rerun bool) {
+	if out, _ := res.Value.(publish.AuditOutcome); out.Err != nil {
+		r.pub.ReportJobError(ctx, out.Err, "job", "audit")
+	}
+	if rerun {
+		r.startAudit(ctx)
+	}
 }

@@ -1,6 +1,7 @@
 package publish
 
-// 동결 감사 — D17 4.1(b) · M6 설계 6절 동결 행(POK-196 M6-2 커밋 ③). 30초 감시 주기(판정부 · M6-3b 배선)에 부른다.
+// 동결 감사 — D17 4.1(b) · M6 설계 6절 동결 행(POK-196 M6-2 커밋 ③). 되감기 루프가 30초 감시 주기마다 예약 차선
+// "audit:frozen" 에 낸다(cmd/segment-indexer rewind_loop.go startAudit).
 // DVR 의 앞부분 갈래만 조건부로 다시 쓴다(kty 결정 ⑨ — D17 「재렌더 → 재PUT」 을 조건부로 개정 · 커밋 ⑥).
 
 import (
