@@ -31,6 +31,7 @@ import {
 import { nextLivePosition, playedRunMs, type LivePosition } from './livePosition';
 import { trackPlaybackStartOnce } from './playbackStarts';
 import { guardRewindFloor } from './rewindFloor';
+import { useSourcePosition } from './sourcePosition';
 import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
@@ -144,7 +145,7 @@ export function useHlsPlayback(
   // 재생기의 자리(재생 위치·실시간 끝의 실제 시각, 시차). 라이브 채팅이 되감은 영상의 시각을 따른다(POK-326). 목록에 시각
   // 표시가 없거나 아직 모르면 null. 셋을 한 순간에 같이 잰다(paint): 시크는 시차를 바로 바꾸는데 시각은 다음 paint에 바뀌어,
   // 따로 알리면 새 시차에 옛 시각이 붙어 실시간 끝을 시크 폭만큼 늦게 셈했다(채팅이 아직 표에 없는 구간까지 「다 읽음」으로 뒀다)
-  const [livePosition, setLivePosition] = useState<LivePosition | null>(null);
+  const { livePosition, measure } = useSourcePosition(source.generation);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const [lowLatency, setLowLatency] = useState(true);
   const [clipMarked, setClipMarked] = useState(false);
@@ -452,7 +453,7 @@ export function useHlsPlayback(
     // 이전 스트림의 창 폭이 새 스트림 시크바에 남으면 안 된다
     setWindowSeconds(0);
     // 이전 스트림의 자리도 남기지 않는다: 새 스트림 채팅이 앞 방송 시각을 따른다
-    setLivePosition(null);
+    measure(generation, () => null);
 
     const onPlay = () => {
       setPlaying(true);
@@ -540,7 +541,7 @@ export function useHlsPlayback(
       // 재생 여부도 연속 길이와 같은 순간에 잰다 — 갱신 함수는 나중에 돌아 그때의 paused 를 읽는다
       const run = playedRunMs(video.played, video.currentTime);
       const playing = !video.paused;
-      setLivePosition((prev) => nextLivePosition(prev, atMs, edgeMs, behind, playing, run));
+      measure(generation, (prev) => nextLivePosition(prev, atMs, edgeMs, behind, playing, run));
     };
     // 목록 끝 정체(D9) — ENDLIST 없는 목록의 회차 경계를 맡는 「끝 도달」이다. 재생기 하나에 한 번(목록이 자라면 다시
     // 센다)
@@ -578,7 +579,7 @@ export function useHlsPlayback(
       const edge = programDateAt(fragments, liveEdgePosition(range, sync));
       const run = playedRunMs(video.played, video.currentTime);
       const playing = !video.paused;
-      setLivePosition((prev) =>
+      measure(generation, (prev) =>
         at === null || edge === null
           ? null
           : nextLivePosition(prev, at, edge, behind, playing, run),
@@ -758,7 +759,7 @@ export function useHlsPlayback(
       video.removeAttribute('src');
       video.load();
     };
-  }, [videoRef, source.kind, src, source.generation, readAxis, sessionActive, swap]);
+  }, [videoRef, source.kind, src, source.generation, readAxis, sessionActive, swap, measure]);
 
   return {
     playing,

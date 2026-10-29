@@ -504,6 +504,7 @@ function onAnyPhase(
         ...session,
         lastAtMs: event.atMs,
         playing: event.playing,
+        positionGeneration: session.source.generation,
         watchedFromMs:
           session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
       };
