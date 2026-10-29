@@ -42,6 +42,7 @@ const UNAVAILABLE: RewindStatusResult = { kind: 'unavailable' };
 const X_A: XAnswer = { kind: 'known', id: 'r-A' };
 const X_B: XAnswer = { kind: 'known', id: 'r-B' };
 const X_UNKNOWN: XAnswer = { kind: 'unknown' };
+const X_EMPTY: XAnswer = { kind: 'known', id: '' };
 
 beforeEach(resetEventKit);
 
@@ -281,20 +282,52 @@ describe('rewind 국면', () => {
     expect(late.state.source.kind).toBe('rewind');
   });
 
-  it('새 url ∧ P 가 새 범위 안이면 같은 P 로 갈아 끼운다(계승) · ② 에 넣는다', () => {
-    const { state } = run(rewindAt(T), [[streamPoll(liveReady(A2, T0, NOW + 10_000))]]);
+  it('같은 회차(X = 이 회차)의 새 url ∧ P 가 새 범위 안이면 같은 P 로 갈아 끼운다(계승) · ② 에 넣는다', () => {
+    const { state } = run(rewindAt(T), [[streamPoll(liveReady(A2, T0, NOW + 10_000), X_A)]]);
     expect(state.source).toMatchObject({ kind: 'rewind', url: A2, startAtMs: T, generation: 2 });
     expect(state.roundRewindUrls.has(A2)).toBe(true);
   });
 
-  it('새 url 인데 P 가 범위 밖이면 pendingNext 로만 적는다 · roundRewindUrls 에 넣지 않는다', () => {
-    const { state } = run(rewindAt(T), [[streamPoll(liveReady(B1, NOW + MIN, NOW + 2 * MIN))]]);
+  it('같은 회차의 새 url 인데 P 가 범위 밖이면 pendingNext 로만 적는다 · roundRewindUrls 에 넣지 않는다', () => {
+    const later = liveReady(A2, NOW + MIN, NOW + 2 * MIN);
+    const { state } = run(rewindAt(T), [[streamPoll(later, X_A)]]);
     expect(state.phase).toEqual({
       kind: 'rewind',
-      pendingNext: { url: B1, firstPdtMs: NOW + MIN, headPdtMs: NOW + 2 * MIN },
+      pendingNext: { url: A2, firstPdtMs: NOW + MIN, headPdtMs: NOW + 2 * MIN },
     });
     expect(state.source.url).toBe(A1);
-    expect(state.roundRewindUrls.has(B1)).toBe(false);
+    expect(state.roundRewindUrls.has(A2)).toBe(false);
+  });
+
+  it('다른 회차(X ≠ 이 회차)의 새 url 은 P 를 덮어도 갈아 끼우지 않고, 덮지 않아도 pendingNext 로 적지 않는다', () => {
+    // 되감기의 자동 이음은 같은 방송이 끊겼다 돌아온 경우뿐이다(kty 결정 · K1 확장)
+    const start = rewindAt(T);
+    for (const range of [
+      liveReady(B1, T0, NOW + 10_000),
+      liveReady(B1, NOW + MIN, NOW + 2 * MIN),
+    ]) {
+      const { state, effects } = run(start, [[streamPoll(range, X_B)]]);
+      expect(state.source).toEqual(start.source);
+      expect(state.phase).toEqual({ kind: 'rewind', pendingNext: null });
+      expect(state.roundRewindUrls.has(B1)).toBe(false);
+      expect(effects).toEqual([]);
+    }
+  });
+
+  it('X 를 모르면(모름 · 빈 값 · 답 없음) 새 url 로 갈아 끼우지도 pendingNext 로 적지도 않고, 이 회차라는 답이 오면 잇는다', () => {
+    const start = rewindAt(T);
+    const covering = liveReady(A2, T0, NOW + 10_000);
+    const later = liveReady(A2, NOW + MIN, NOW + 2 * MIN);
+    for (const x of [X_UNKNOWN, X_EMPTY, undefined]) {
+      for (const range of [covering, later]) {
+        const { state } = run(start, [[streamPoll(range, x)]]);
+        expect(state.source).toEqual(start.source);
+        expect(state.phase).toEqual({ kind: 'rewind', pendingNext: null });
+      }
+      const waited = run(start, [[streamPoll(covering, x)]]).state;
+      const joined = run(waited, [[streamPoll(covering, X_A)]]).state;
+      expect(joined.source).toMatchObject({ kind: 'rewind', url: A2, startAtMs: T });
+    }
   });
 
   it('ready 깜박임(false · null · 503 · 404)은 도는 되감기를 끊지 않는다(W3 · R5)', () => {
@@ -323,15 +356,16 @@ describe('rewind 국면', () => {
 
   it('ENDLIST ∧ pendingNext 면 재조회 한 번 · 국면 그대로', () => {
     const { state, effects } = run(rewindAt(T), [
-      [streamPoll(liveReady(B1, NOW + MIN, NOW + 2 * MIN))],
+      [streamPoll(liveReady(A2, NOW + MIN, NOW + 2 * MIN), X_A)],
       [{ type: 'endlist' }],
     ]);
     expect(state.phase.kind).toBe('rewind');
     expect(effects).toEqual([{ kind: 'refresh', retryWhileUrl: A1 }]);
   });
 
-  it('끝 도달에 pendingNext 가 E 를 덮으면 E 에서 잇는다(계승)', () => {
-    const { state } = run(rewindAt(T), [[streamPoll(liveReady(A2, NOW - 10_000, NOW + MIN))]]);
+  it('끝 도달에 같은 회차의 pendingNext 가 E 를 덮으면 E 에서 잇는다(계승)', () => {
+    const next = liveReady(A2, NOW - 10_000, NOW + MIN);
+    const { state } = run(rewindAt(T), [[streamPoll(next, X_A)]]);
     // P(T) 가 A2 범위 밖이라 보류
     expect(state.phase).toMatchObject({ kind: 'rewind', pendingNext: { url: A2 } });
     const after = run(state, [[{ type: 'end-reached' }]]).state;
@@ -339,14 +373,35 @@ describe('rewind 국면', () => {
     expect(after.roundRewindUrls.has(A2)).toBe(true);
   });
 
-  it('끝 도달에 pendingNext 가 E 를 덮지 않으면(다른 방송) 교체 없이 끝남 대기 · 덮개', () => {
+  it('끝 도달에 pendingNext 가 E 를 덮지 않으면 교체 없이 끝남 대기 · 덮개', () => {
     const { state, effects } = run(rewindAt(T), [
-      [streamPoll(liveReady(B1, NOW + MIN, NOW + 2 * MIN))],
+      [streamPoll(liveReady(A2, NOW + MIN, NOW + 2 * MIN), X_A)],
       [{ type: 'end-reached' }],
     ]);
     expect(state.source.url).toBe(A1);
     expect(state.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: true });
     expect(kinds(effects)).toEqual(['refresh']);
+  });
+
+  it('다른 회차 · X 모름의 새 url 이 E 를 덮어도 끝 도달은 잇지 않고 끝남 대기로 간다(pendingNext 없음)', () => {
+    const coversEnd = liveReady(B1, NOW - 10_000, NOW + MIN);
+    for (const x of [X_B, X_UNKNOWN]) {
+      const { state } = run(rewindAt(T), [[streamPoll(coversEnd, x)], [{ type: 'end-reached' }]]);
+      expect(state.source.url).toBe(A1);
+      expect(state.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: true });
+    }
+  });
+
+  it('다른 회차의 제안은 끝에 닿은 끝남 대기의 버튼 규칙이 낸다 — 「새 방송 보기」(교체 0)', () => {
+    const other = liveReady(B1, NOW - 10_000, NOW + MIN);
+    const { state } = run(rewindAt(T), [
+      [streamPoll(other, X_B)],
+      [{ type: 'end-reached' }],
+      [streamPoll(other, X_B)],
+    ]);
+    expect(state.source.url).toBe(A1);
+    expect(state.offer).toEqual({ kind: 'new-broadcast', goTo: 'r-B' });
+    expect(sessionView(state, NOW).actions).toEqual(['record', 'new-broadcast']);
   });
 
   it('LIVE 버튼 — X 가 보던 방송이면 라이브로, 다른 방송이면 세션을 닫고 그 방송으로(R58)', () => {

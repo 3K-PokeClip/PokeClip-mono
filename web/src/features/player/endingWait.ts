@@ -14,6 +14,7 @@ import {
   ENDING_WAIT_MS,
   RESUME_WAIT_MS,
   close,
+  isThisRound,
   liveFromAway,
   readyLive,
   replace,
@@ -90,7 +91,7 @@ function onEndingStreamPoll(
   const currentX = event.x;
   const live = readyLive(event.result);
   if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
-  const sameRound = currentX?.kind === 'known' && currentX.id === session.roundId;
+  const sameRound = isThisRound(session, currentX);
   // 되감기의 자동 이음은 같은 방송(X = 이 회차)이 끊겼다 돌아온 경우뿐이다 — 다른 방송 · 모름은 버튼 규칙으로
   const joinable = phase.origin === 'live' || sameRound;
   const join = joinPoint(session, phase);
@@ -108,7 +109,7 @@ function onEndingStreamPoll(
         ...resumed,
         phase: { kind: 'rewind', pendingNext: null },
         source: replace(session, 'rewind', live.url, join),
-        handoffDoor: movedDoor(session, live.url, currentX, event.ask),
+        handoffDoor: movedDoor(live.url, event.ask),
       });
     }
     return stateOnly({

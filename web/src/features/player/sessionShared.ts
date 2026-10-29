@@ -56,6 +56,14 @@ export function within(atMs: number | null, first: number, head: number): atMs i
   return atMs !== null && first <= atMs && atMs <= head;
 }
 
+/**
+ * 지금 방송 번호 X 가 이 세션의 회차인가 — 되감기의 새 url 은 이때만 잇는다(같은 방송이
+ * 끊겼다 돌아온 경우 · kty 결정). 모름 · 빈 값 · 답 없음은 확인되지 않은 것이다
+ */
+export function isThisRound(session: PlaybackSessionState, x: XAnswer | undefined): boolean {
+  return x?.kind === 'known' && x.id === session.roundId;
+}
+
 export function replace(
   session: PlaybackSessionState,
   kind: PlaybackSource['kind'],

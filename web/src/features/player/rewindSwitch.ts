@@ -19,6 +19,7 @@ import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
 import {
   SESSION_NOTICES,
   close,
+  isThisRound,
   liveFromAway,
   readyLive,
   replace,
@@ -376,8 +377,10 @@ function onRewind(
 }
 
 /**
- * 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 응답 앞의
- * 문을 새 url 로 넘긴다. R11 은 갱신한 뒤 넘김 조건이면 탐침을 청한다
+ * 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 새 url 의 문을
+ * 세운다. R11 은 갱신한 뒤 넘김 조건이면 탐침을 청한다. R9 · R10 은 X 가 이 회차일
+ * 때만이다 — 설계 r9 R9 행은 X 모름 · 다른 방송에도 갈아 끼우고 문만 달리했지만,
+ * kty 결정(K1 확장)으로 갈아 끼우지도 보류하지도 않는다
  */
 function onRewindStreamPoll(
   before: PlaybackSessionState,
@@ -397,6 +400,8 @@ function onRewindStreamPoll(
     };
     return requestProbe(seen, now) ?? stateOnly(seen);
   }
+  // 새 url 은 같은 회차일 때만 갈아 끼우거나 보류한다 — 다른 회차 · X 모름은 그대로 둔다(문은 D 표가 비웠다)
+  if (!isThisRound(session, event.x)) return stateOnly(session);
   if (within(session.lastAtMs, live.firstPdtMs, live.headPdtMs)) {
     return stateOnly({
       ...session,
@@ -405,7 +410,7 @@ function onRewindStreamPoll(
       phase: { kind: 'rewind', pendingNext: null },
       source: replace(session, 'rewind', live.url, session.lastAtMs),
       roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
-      handoffDoor: movedDoor(before, live.url, event.x, event.ask),
+      handoffDoor: movedDoor(live.url, event.ask),
     });
   }
   return stateOnly({ ...session, phase: { kind: 'rewind', pendingNext: range } });
