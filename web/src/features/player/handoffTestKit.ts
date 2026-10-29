@@ -33,10 +33,16 @@ export function startRun(): void {
 }
 
 /**
- * 잰 시각을 다루지 않는 시험의 위치는 모든 표식(소스 교체 · 안에서 시크) 뒤에 잰
- * 것이다
+ * 아직 찍지 않은 위치 시대 — 먹일 때 stamped 가 그때 세션의 시대를 찍는다(지금
+ * 재생기가 잰 위치). 찍지 않고 먹이면 어느 시대와도 달라 버려진다
  */
-export const MEASURED_LAST = Number.MAX_SAFE_INTEGER;
+export const UNSTAMPED = -1;
+
+/** 시대를 찍지 않은 위치 사건에 지금 세션의 위치 시대를 찍는다 — 그 밖의 사건은 그대로 */
+export function stamped(state: PlaybackSessionState, event: SessionEvent): SessionEvent {
+  if (event.type !== 'position' || event.epoch !== UNSTAMPED) return event;
+  return { ...event, epoch: state.positionEpoch };
+}
 
 /**
  * 위치 사건. 기본은 재생 중이고, runMs 는 앞 위치에서 이어 센다 — 앞으로 간 만큼
@@ -44,7 +50,7 @@ export const MEASURED_LAST = Number.MAX_SAFE_INTEGER;
  */
 export function pos(
   atMs: number,
-  patch: { runMs?: number; playing?: boolean; measuredAtMs?: number } = {},
+  patch: { runMs?: number; playing?: boolean; epoch?: number } = {},
 ): PositionEvent {
   const prev = lastPosition;
   const onward = prev !== null && atMs >= prev.atMs;
@@ -54,7 +60,7 @@ export function pos(
     atMs,
     playing: patch.playing ?? true,
     runMs: patch.runMs ?? carried,
-    measuredAtMs: patch.measuredAtMs ?? MEASURED_LAST,
+    epoch: patch.epoch ?? UNSTAMPED,
   };
   lastPosition = event;
   return event;

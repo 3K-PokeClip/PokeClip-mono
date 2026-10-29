@@ -9,7 +9,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { pos, resetEventKit, settleProbe, startRun, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, settleProbe, stamped, startRun, streamPoll } from './handoffTestKit';
 import { sessionView } from './sessionView';
 
 // 꼬리 넘김이 들어와도 현행 그대로여야 하는 행의 시험(POK-200 c13 — 설계 r9 11절
@@ -34,7 +34,10 @@ function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindSt
 }
 
 function run(start: PlaybackSessionState, events: SessionEvent[]): PlaybackSessionState {
-  return events.reduce((state, event) => transition(state, event, NOW).state, start);
+  return events.reduce(
+    (state, event) => transition(state, stamped(state, event), NOW).state,
+    start,
+  );
 }
 
 /**
@@ -65,7 +68,7 @@ function sealedEnd(): PlaybackSessionState {
 
 /** 사건 하나의 상태와 효과 종류 */
 function step(s: PlaybackSessionState, event: SessionEvent) {
-  const { state, effects } = transition(s, event, NOW);
+  const { state, effects } = transition(s, stamped(s, event), NOW);
   return { state, kinds: effects.map((e: SessionEffect) => e.kind) };
 }
 
@@ -204,7 +207,7 @@ function settled(start: PlaybackSessionState, events: SessionEvent[]) {
   let state = start;
   const kinds: string[] = [];
   for (const event of [...events, null]) {
-    const next = transition(state, event ?? settleProbe(state), R);
+    const next = transition(state, stamped(state, event ?? settleProbe(state)), R);
     state = next.state;
     kinds.push(...next.effects.map((e: SessionEffect) => e.kind));
   }

@@ -31,7 +31,7 @@ import {
 import { nextLivePosition, playedRunMs, type LivePosition } from './livePosition';
 import { trackPlaybackStartOnce } from './playbackStarts';
 import { guardRewindFloor } from './rewindFloor';
-import { useSourcePosition } from './sourcePosition';
+import { useSourcePosition, type PositionHooks } from './sourcePosition';
 import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
@@ -73,7 +73,7 @@ export interface LoadedPlaylist extends LoadedList {
  * 재생 세션(POK-200 M5)이 재생기에 거는 고리. 없으면 현행이다(라이브 창 안 시크만). onSeekRequest 가 있으면 「세션
  * 모드」다: 사람이 옮긴 목표를 재생기가 스스로 쓰지 않고 세션에 넘긴다 — 창 밖이면 세션이 되감기로 갈아 끼운다(설계 5.3.1절)
  */
-export interface PlaybackHooks {
+export interface PlaybackHooks extends PositionHooks {
   /**
    * LEVEL_UPDATED 의 live:false — 「이 목록에 조각이 더 붙지 않는다」일 뿐 재생 완료가 아니다(RFC 8216
    * 4.3.3.4)
@@ -126,7 +126,7 @@ export function useHlsPlayback(
   hooks: PlaybackHooks = {},
 ): PlayerSimulation & {
   livePosition: LivePosition | null;
-  positionMeasuredAtMs: number | null;
+  positionEpoch: number | null;
   /** 그 실제 시각으로 옮긴다(세션의 「안에서 시크」) */
   seekToMs: (atMs: number) => void;
   /** 라이브 끝으로 옮긴다(세션의 라이브 국면 LIVE) */
@@ -146,7 +146,7 @@ export function useHlsPlayback(
   // 재생기의 자리(재생 위치·실시간 끝의 실제 시각, 시차). 라이브 채팅이 되감은 영상의 시각을 따른다(POK-326). 목록에 시각
   // 표시가 없거나 아직 모르면 null. 셋을 한 순간에 같이 잰다(paint): 시크는 시차를 바로 바꾸는데 시각은 다음 paint에 바뀌어,
   // 따로 알리면 새 시차에 옛 시각이 붙어 실시간 끝을 시크 폭만큼 늦게 셈했다(채팅이 아직 표에 없는 구간까지 「다 읽음」으로 뒀다)
-  const { measure, ...position } = useSourcePosition(source.generation);
+  const { measure, ...position } = useSourcePosition(source.generation, hooks);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const [lowLatency, setLowLatency] = useState(true);
   const [clipMarked, setClipMarked] = useState(false);

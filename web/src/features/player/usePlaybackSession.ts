@@ -74,6 +74,8 @@ export interface PlaybackSession {
   bindPlayer: (player: SessionPlayer | null) => void;
   /** 재생기가 내는 알림(되감기 재생 중 라이브러리가 자리를 또 옮김 등) */
   notice: (text: string) => void;
+  /** 지금 위치 시대(상태기계에 이미 반영된 값) — 재생기가 자리를 잴 때 찍는다 */
+  positionEpoch: () => number;
 }
 
 /** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
@@ -235,6 +237,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   }, [dispatch]);
 
   const notice = useCallback((text: string) => optionsRef.current.onNotice?.(text), []);
+  const positionEpoch = useCallback(() => stateRef.current?.positionEpoch ?? 0, []);
 
   const bindPlayer = useCallback(
     (player: SessionPlayer | null) => {
@@ -345,5 +348,5 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [state, now],
   );
   if (state === null || view === null || state.closed !== null) return null;
-  return { state, view, dispatch, liveButton, bindPlayer, notice };
+  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch };
 }
