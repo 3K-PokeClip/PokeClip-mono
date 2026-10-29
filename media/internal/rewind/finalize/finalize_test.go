@@ -48,6 +48,12 @@ func TestNextDecidesStepByLedgerRow(t *testing.T) {
 		{"남이 동결 중(freezing 60초 안)", row(func(s *index.EndingSession) {
 			s.DVRState, s.DVRFreezingAt = "freezing", now.Add(-30*time.Second)
 		}), Attempts{}, ModePublishing, Decision{Step: StepWait}},
+		{"남이 동결 중(freezing 정확히 60초) → 기다림", row(func(s *index.EndingSession) {
+			s.DVRState, s.DVRFreezingAt = "freezing", now.Add(-index.FreezeOrphanAfter)
+		}), Attempts{}, ModePublishing, Decision{Step: StepWait}},
+		{"좌초(freezing 60초 하고 1ns) → 좌초 회수", row(func(s *index.EndingSession) {
+			s.DVRState, s.DVRFreezingAt = "freezing", now.Add(-index.FreezeOrphanAfter-time.Nanosecond)
+		}), Attempts{}, ModePublishing, Decision{Step: StepRecoverOrphan}},
 		{"좌초(freezing 60초 초과) → 좌초 회수", row(func(s *index.EndingSession) {
 			s.DVRState, s.DVRFreezingAt = "freezing", now.Add(-90*time.Second)
 		}), Attempts{}, ModePublishing, Decision{Step: StepRecoverOrphan}},
@@ -110,6 +116,14 @@ func TestNextDecidesStepByLedgerRow(t *testing.T) {
 			frozen(s)
 			s.VODState, s.EndingAt = "freezing", now.Add(-16*time.Minute)
 		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, Abandon: true}},
+		{"VOD 창 끝 1ns 전 → 포기 없이", row(func(s *index.EndingSession) {
+			frozen(s)
+			s.VODState, s.EndingAt = "freezing", now.Add(-index.SettleWindow+time.Nanosecond)
+		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD}},
+		{"VOD 창 정확히 15분 → 포기", row(func(s *index.EndingSession) {
+			frozen(s)
+			s.VODState, s.EndingAt = "freezing", now.Add(-index.SettleWindow)
+		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, Abandon: true}},
 		{"VOD 3회 실패 → freeze_failed", row(func(s *index.EndingSession) { frozen(s); s.VODState = "freezing" }),
 			Attempts{VOD: 3}, ModePublishing, Decision{Step: StepFailVOD}},
 
@@ -118,6 +132,10 @@ func TestNextDecidesStepByLedgerRow(t *testing.T) {
 			ModeDegraded, Decision{Step: StepMarkEnded}},
 		{"vod freeze_failed → phase 4", row(func(s *index.EndingSession) { frozen(s); s.VODState = "freeze_failed" }),
 			Attempts{}, ModeOff, Decision{Step: StepMarkEnded}},
+		{"vod frozen_with_gaps · 후속 없음 → phase 4", row(func(s *index.EndingSession) {
+			frozen(s)
+			s.VODState = "frozen_with_gaps"
+		}), Attempts{}, ModePublishing, Decision{Step: StepMarkEnded}},
 		{"vod 종국이어도 후속 있으면 기다림", row(func(s *index.EndingSession) {
 			frozen(s)
 			s.VODState, s.HasSuccessor = "frozen_with_gaps", true
