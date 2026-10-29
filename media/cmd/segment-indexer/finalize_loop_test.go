@@ -276,6 +276,42 @@ func TestPlaybackReadsCappedAcrossStreams(t *testing.T) {
 	}
 }
 
+// env 로 바꾼 상한(1 · 3)도 서로 다른 스트림의 동시 읽기를 그 수로 묶고, 넘친 하나는 표지를 남겨 다음 틱에 읽는다(PR 461
+// r1 cx M5). 변이 = 배차 조건을 상수 2 로 → 1 이면 둘 · 3 이면 둘이 돌아 FAIL.
+func TestPlaybackReadsCappedByConfiguredMax(t *testing.T) {
+	for _, readMax := range []int{1, 3} {
+		t.Run(fmt.Sprint(readMax), func(t *testing.T) {
+			f := newFinalLoop(t, finalize.ModeOff)
+			f.rewind.fin.readMax = readMax
+			f.work.playback = func(s string) (index.PlaybackState, bool, error) {
+				return index.PlaybackState{Phase: index.PhaseEnding, RoundID: "R-" + s}, true, nil
+			}
+			gate := make(chan struct{})
+			f.work.readsGate = gate
+			streams := []string{"a", "b", "c", "d"}[:readMax+1]
+			for _, s := range streams {
+				f.inbox.Changed(s)
+			}
+			f.hold(loopBase)
+			if got := slices.Sorted(maps.Keys(f.rewind.fin.reading)); !slices.Equal(got, streams[:readMax]) {
+				t.Fatalf("도는 읽기 = %v, want %v(상한 %d)", got, streams[:readMax], readMax)
+			}
+			close(gate)
+			f.settle(loopBase)
+			f.hold(loopBase.Add(time.Second))
+			f.settle(loopBase.Add(time.Second))
+			var sent []string
+			for _, st := range f.sunk.all() {
+				sent = append(sent, st.stream)
+			}
+			overflow := streams[readMax]
+			if len(sent) != len(streams) || sent[len(sent)-1] != overflow {
+				t.Fatalf("보낸 스트림 = %v, want %d개 모두 · 넘친 %s 가 마지막", sent, len(streams), overflow)
+			}
+		})
+	}
+}
+
 // 상한은 새 스트림의 읽기만 센다 — 이미 읽는 스트림의 표지는 상한이 차 있어도 그 차선에 병합되고, 결과를 받은 뒤 곧바로
 // 다시 읽는다(D65). 변이 = 도는 스트림도 상한에 걸어 표지를 되돌림 → 병합 재읽기가 없어 FAIL.
 func TestPlaybackReadCapKeepsSameStreamMergeD65(t *testing.T) {
