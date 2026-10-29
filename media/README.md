@@ -462,7 +462,7 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 | 풀 | 연결 상한 | 쓰는 곳 |
 |---|---|---|
 | 인덱서 풀 | 6 고정(`indexerPoolMaxConns`) | 핫 경로(메인 루프 · 업로드 워커 · 스위퍼) · 회차 조회 · 4D 종료 신호 적용 · 60일 만료 · 계약9 발행기 · 정산 차선 · 기동 걸음(스키마 확인 · 상태판 적재) |
-| 발행자 풀 | 4(`REWIND_PUBLISH_POOL_MAX_CONNS` 로 조정 — kty 결정 C2) | 되감기 발행 · 정산 걸음의 DVR · VOD 동결 · 동결 감사(동시 1) |
+| 발행자 풀 | 기본 4(`REWIND_PUBLISH_POOL_MAX_CONNS` 로 조정 — kty 결정 C2) | 되감기 발행 · 정산 걸음의 DVR · VOD 동결 · 동결 감사(동시 1) |
 
 *   **인덱서 풀 6 은 몫별 예약이 아니라 합의 상한이다.** 산식은 핫 경로 3
     (메인 루프 · 업로드 워커 · 스위퍼) · 회차 조회 동시 2 · 4D 1 이다. 산식
@@ -491,8 +491,8 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 *   **예고 — 역할 상한 30(kty 결정 C1).** 고치는 곳은 M6-6b 의
     `10_roles.sql` 이다. 그 전까지 상한은 20 이다. 올린 뒤 교체 창의 여유는
     10 이다.
-*   **발행자 풀은 4 로 고정한다(kty 결정 C2).** 상자 CPU 수를 따르는 pgx
-    기본값이면 큰 상자에서 교체 창 합이 역할 상한을 넘는다. 늘릴 때는
+*   **발행자 풀은 기본 4 로 못 박는다(kty 결정 C2).** pgx 기본값(상자 CPU
+    수를 따른다)을 쓰면 큰 상자에서 교체 창 합이 역할 상한을 넘는다. 늘릴 때는
     `REWIND_PUBLISH_POOL_MAX_CONNS` 를 바꾸고, 두 상자 합 2 × (6 + 이 값)이
     역할 상한 안인지 본다.
 
@@ -1844,7 +1844,7 @@ docker compose up -d --build segment-indexer
 | `SeedAlarmAfter` · `SeedAlarmErrorTicks` | 10분 · 40 | 같은 곳 | 컷오프 부재 후보 창(조립이 `SEGMENT_RESCAN_EVERY` 의 두 배 이상으로 올린다) · ERROR 로 오르는 연속 감시 수 |
 | `LedgerLookback` · `LedgerRowCap` · `LoadPushBuffer` | 2시간 · 10,000 · 1,024 | `cache.Options` 기본값(조립은 영값을 넘긴다) | 적재 되짚기 · 적재 행 상한 · 적재 중 push 로그 상한(넘으면 적재를 다시 연다) |
 | `clipErr` 상한 | 1,024바이트 | `internal/rewind/publish/tick.go` | 로그 `err` 속성에 남기는 접두 길이 — 넘으면 접두 뒤에 잘림 표식(원래 길이)이 붙는다 |
-| `MaxBodyBytes` | 512KiB | `internal/rewind/validate.go` | 목록 본문 상한 — `S3Store.Get` 이 같은 상한까지만 읽으려고 ⓑ 의 비공개 상수를 공개로 바꿨다 |
+| `MaxBodyBytes` | 512KiB | `internal/rewind/validate.go` | 목록 본문 상한(발행 전 검사 S5) — `S3Store.Get` 이 이 값을 쓰려고 ⓑ 의 비공개 상수를 공개로 바꿨다. 되감기 목록 Get 의 상한은 여기에 봉인 줄 15바이트(`SealLineBytes`)를 더한 값이다 — 봉인은 S5 를 지난 열린 본문 끝에 줄을 붙여 검사 없이 올리므로, 동결 감사가 우리가 쓴 봉인 판을 상한 초과로 잘못 보지 않게 한다(kty A4 Q2 (가)) |
 
 #### ⓒ 로그 변화
 
@@ -1870,7 +1870,7 @@ docker compose up -d --build segment-indexer
 | `cache_drift_repaired` | 드리프트 까닭 적재가 적용됨(`kind=head`) · 잃은 init 결과를 감시가 되살림(`kind=init_uploaded`) | WARN | head: stream · cutoff · floor / init_uploaded: stream · session · revoked |
 | `rewind_cutoff_absent` | 30초 감시 (c) — 최근 10분 안에 조각이 있는데 컷오프가 없는 스트림. 전이만 남긴다 | 들어올 때 WARN(value 1) · 연속 40번째 감시에 ERROR(value 1) · 사라질 때 WARN(value 0 — 들어올 때와 같은 등급이라 `LOG_LEVEL=warn` 으로 걸러도 해소가 보인다) | stream · ticks · last_wall · value |
 | `rewind_ledger_load_degraded` | 적재 실패(`load_failed`) · 행 상한 도달(`row_cap`) · 다시 뽑은 P 의 행이 P 의 자기기술과 다름(`prev_mismatch`) | ERROR | load_failed: stream · err / row_cap: stream · floor · rows / prev_mismatch: stream · hint · mismatch |
-| `rewind_job_failed` | 차선 작업이 중단 · 포기 표 밖의 실패로 끝남 — 발행 작업은 같은 스트림의 이어지는 같은 오류에 한 줄, 감시 작업은 감시마다 한 줄 | ERROR | publish: job · stream · session · err / watch: job · first(부팅 첫 감시인가) · err |
+| `rewind_job_failed` | 차선 작업이 중단 · 포기 표 밖의 실패로 끝남 — 발행 작업은 같은 스트림의 이어지는 같은 오류에 한 줄, 감시 작업은 감시마다 한 줄, 동결 감사는 대상 조회가 실패한 감사마다 한 줄 | ERROR | publish: job · stream · session · err / watch: job · first(부팅 첫 감시인가) · err / audit: job · err |
 | `session_offline` | 종료 판정이 점검 수집을 기다림(`result=awaiting_check` — 기다림 한 번에 한 줄) · 전이 실패(`result=failed` — 결과 모름, 30초 쉼) | INFO · ERROR | awaiting_check: stream_id · seq · wait_started_at / failed: stream_id · err(**꼬리 seq 없음**) |
 | `session_inherit_declined` | 워커 — 계승 후보의 stsd 를 견줄 수 없어 비호환으로 판정(시도마다). 루프 — CAS 가 실제로 계승을 풂(회차마다 많아야 한 번). 지문이 달라 푸는 갈래는 워커 줄이 없고 루프 줄만 있다 | WARN | 워커: session_id · inherits_session · reason · prev_path(· err) / 루프: stream_id · session_id · confirmed |
 
