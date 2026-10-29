@@ -149,7 +149,7 @@ export const LockedChatPanel = memo(function LockedChatPanel({
           {LINK_LOCK_WORD[reason]}
         </Badge>
         {/* 접기 버튼은 채팅 창(ChatPanel)과 같은 말풍선 X다 */}
-        <Tooltip content="채팅 숨기기">
+        <Tooltip content="채팅 숨기기" describe={false}>
           <IconButton
             variant="ghost"
             size="sm"

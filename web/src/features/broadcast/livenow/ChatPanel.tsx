@@ -323,8 +323,9 @@ export const ChatPanel = memo(function ChatPanel({
           {spokenNote ? <VisuallyHidden>{` ${spokenNote}`}</VisuallyHidden> : null}
         </span>
         {/* 말풍선 X — 「채팅을 숨긴다」가 아이콘 하나로 읽히고, 접은 뒤 플레이어에 남는 여는 버튼(말풍선)과 짝이다(2026-10-29
-            시안 D). 옛 패널+화살표 아이콘은 눌러 봐야 알았다. 이름은 올리면 뜨고 화면 낭독도 같은 이름이다 */}
-        <Tooltip content="채팅 숨기기">
+            시안 D). 옛 패널+화살표 아이콘은 눌러 봐야 알았다. 이름은 올리면 뜨고 화면 낭독도 같은 이름이다.
+            툴팁은 이름을 보여 주기만 해 설명으로 잇지 않는다 — 이으면 같은 말이 두 번 읽혔다(PR #459 리뷰 1차) */}
+        <Tooltip content="채팅 숨기기" describe={false}>
           <IconButton
             variant="ghost"
             size="sm"

@@ -260,6 +260,24 @@ describe('ChatPanel — 머리 상태(2026-10-29 시안 B)', () => {
     expect(onCollapse).toHaveBeenCalledTimes(1);
   });
 
+  it('접기 버튼에 초점을 두면 툴팁이 이름을 보여 주되, 같은 말을 설명으로 한 번 더 읽히지 않는다(PR #459 리뷰 1차)', () => {
+    vi.useFakeTimers();
+    try {
+      render(<ChatPanel {...PROPS} />);
+      const button = screen.getByRole('button', { name: '채팅 숨기기' });
+      act(() => {
+        button.focus();
+      });
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(screen.getByRole('tooltip', { hidden: true })).toHaveTextContent('채팅 숨기기');
+      expect(button).not.toHaveAttribute('aria-describedby');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('바닥에 「키워드 설정」 자리를 두지 않는다(키워드 기능이 없다)', () => {
     renderPanel();
     expect(screen.queryByRole('button', { name: '키워드 설정' })).toBeNull();
