@@ -90,8 +90,11 @@ function onEndingStreamPoll(
   const currentX = event.x;
   const live = readyLive(event.result);
   if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
+  const sameRound = currentX?.kind === 'known' && currentX.id === session.roundId;
+  // 되감기의 자동 이음은 같은 방송(X = 이 회차)이 끊겼다 돌아온 경우뿐이다 — 다른 방송 · 모름은 버튼 규칙으로
+  const joinable = phase.origin === 'live' || sameRound;
   const join = joinPoint(session, phase);
-  if (within(join, live.firstPdtMs, live.headPdtMs)) {
+  if (joinable && within(join, live.firstPdtMs, live.headPdtMs)) {
     const resumed = {
       ...session,
       roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
@@ -115,7 +118,7 @@ function onEndingStreamPoll(
     });
   }
   let offer: Offer | null = null;
-  if (currentX?.kind === 'known' && currentX.id === session.roundId) offer = { kind: 'go-live' };
+  if (sameRound) offer = { kind: 'go-live' };
   else if (currentX?.kind === 'known' && currentX.id !== '') {
     offer = { kind: 'new-broadcast', goTo: currentX.id };
   }
