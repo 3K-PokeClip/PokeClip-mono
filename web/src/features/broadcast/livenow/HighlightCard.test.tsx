@@ -110,6 +110,28 @@ describe('HighlightCard: 편집 준비', () => {
     expect(prefetchCardEditor).toHaveBeenCalledTimes(PENDING_MAX_RECHECKS + 1);
   });
 
+  it('실패 뒤 다시 시도가 녹화 기다림으로 돌아와도 「편집」을 다시 잠그지 않는다', async () => {
+    vi.useFakeTimers();
+    vi.mocked(prefetchCardEditor).mockResolvedValue('pending');
+    renderCard();
+    await act(async () => undefined);
+    for (let i = 0; i < PENDING_MAX_RECHECKS; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(PENDING_RECHECK_MS);
+      });
+    }
+    fireEvent.click(screen.getByRole('button', { name: /다시 시도/ }));
+    await act(async () => undefined);
+    expect(prefetchCardEditor).toHaveBeenCalledTimes(PENDING_MAX_RECHECKS + 2);
+    expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
+    // 녹화가 올라오면 준비된다
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    await act(async () => {
+      vi.advanceTimersByTime(PENDING_RECHECK_MS);
+    });
+    expect(screen.queryByRole('button', { name: /다시 시도/ })).not.toBeInTheDocument();
+  });
+
   it('가린 카드 · 만료 카드는 받지 않는다(편집 단추가 없다)', () => {
     renderCard({ ...HIGHLIGHT, hidden: true });
     renderCard({ ...HIGHLIGHT, id: 'card-24', status: 'expired' });

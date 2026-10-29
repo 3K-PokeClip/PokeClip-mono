@@ -68,7 +68,8 @@ export function useCardEditorReady(
           setState('failed');
           return;
         }
-        setState('pending');
+        // 실패로 연 「편집」은 다시 시도가 녹화 기다림으로 돌아와도 잠그지 않는다(PR #458 codex). 확인은 그대로 이어 간다
+        setState((previous) => (previous === 'failed' ? 'failed' : 'pending'));
         recheck = setTimeout(() => setRechecks((n) => n + 1), PENDING_RECHECK_MS);
       },
       () => {

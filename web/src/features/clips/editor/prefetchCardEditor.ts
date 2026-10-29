@@ -15,6 +15,7 @@ import {
   windowBlobs,
 } from './editorMedia';
 import { fetchRecordingWindow, PAD_SECONDS, windowFor } from './useEditorVideoPlayback';
+import type { TrackPiece } from './trackAudio/loadTrackAudio';
 import { loadSegmentTracks, PREVIEW_SAMPLE_RATE } from './trackAudio/useTrackPreview';
 
 // 카드에서 편집기를 미리 받아 둔다(POK-499). 편집기가 처음 받는 영상 창과 소리 조각(파형도 여기서 나온다)을 같은 셈 · 같은
@@ -30,7 +31,7 @@ export interface PrefetchDeps {
   fetchJumpCard: (streamId: string, cardId: string) => Promise<JumpCard | null>;
   fetchBroadcast: (streamId: string) => Promise<BroadcastRow | null>;
   loadRecording: (broadcast: BroadcastRow) => Promise<RecordingTimeline | null>;
-  fetchRecordingWindow: (streamId: string, url: string) => Promise<Blob>;
+  fetchRecordingWindow: (streamId: string, url: string, signal?: AbortSignal) => Promise<Blob>;
   loadSegmentTracks: typeof loadSegmentTracks;
   /** 소리를 풀 문맥. 편집기의 미리 듣기와 같은 표본율이라야 같은 소리다 */
   createDecoder: () => Pick<BaseAudioContext, 'decodeAudioData'>;
@@ -44,6 +45,27 @@ const defaultDeps: PrefetchDeps = {
   loadSegmentTracks,
   createDecoder: () => new OfflineAudioContext(1, 1, PREVIEW_SAMPLE_RATE),
 };
+
+/**
+ * 영상 창 받기의 시한. 재생 서버가 요청을 받고 본문을 보내다 멈추면 미리 받기가 끝나지 않아 「편집」이 실패로도 못 넘어가고,
+ * 받기 자리(PREFETCH_PARALLEL)도 계속 쥐고 있었다(PR #458 codex). 창 하나가 수십 MB라 느린 망도 넉넉히 기다린다
+ */
+export const PREFETCH_VIDEO_TIMEOUT_MS = 120_000;
+
+/** 받은 소리가 창을 다 덮었다고 보는 여유(초). 조각은 4초 단위라 처음 · 끝 조각이 창보다 조금 넓다 */
+const COVER_TOLERANCE_SECONDS = 1;
+
+/** 첫 트랙이 창을 한 덩어리로 빈틈없이 덮나. 덜 올라온 조각이 있으면 그 자리에서 덩어리가 끊긴다(loadTrackAudio) */
+function coversWindow(tracks: TrackPiece[][], fromSeconds: number, toSeconds: number): boolean {
+  const pieces = tracks[0] ?? [];
+  const only = pieces[0];
+  return (
+    pieces.length === 1 &&
+    only !== undefined &&
+    only.startSeconds <= fromSeconds + COVER_TOLERANCE_SECONDS &&
+    only.startSeconds + only.buffer.duration >= toSeconds - COVER_TOLERANCE_SECONDS
+  );
+}
 
 async function prefetchOnce(
   streamId: string,
@@ -81,10 +103,20 @@ async function prefetchOnce(
 
   const loadVideo = async () => {
     if (windowBlobs.get(videoUrl) !== undefined) return;
-    windowBlobs.set(videoUrl, await deps.fetchRecordingWindow(mediaStreamId(broadcast), videoUrl));
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), PREFETCH_VIDEO_TIMEOUT_MS);
+    try {
+      windowBlobs.set(
+        videoUrl,
+        await deps.fetchRecordingWindow(mediaStreamId(broadcast), videoUrl, abort.signal),
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   };
-  const loadAudio = async () => {
-    if (segmentTracks.get(trackKey) !== undefined) return;
+  /** 다 덮은 소리를 받았나. 방송 중에 조각이 덜 올라왔으면 맡기지 않고 false다 */
+  const loadAudio = async (): Promise<boolean> => {
+    if (segmentTracks.get(trackKey) !== undefined) return true;
     const decoder = deps.createDecoder();
     const tracks = await deps.loadSegmentTracks({
       streamId,
@@ -95,10 +127,14 @@ async function prefetchOnce(
     });
     // 소리 트랙을 하나도 못 꺼냈으면 편집기도 「소리 못 부름」이다: 준비됐다고 하지 않는다
     if (tracks.length === 0) throw new Error('no audio tracks');
+    // 녹화는 올라왔어도 소리 조각은 아직 올라가는 중일 수 있다(서버는 다 올라간 조각만 준다). 덜 덮은 소리를 맡기면 편집기가
+    // 그것을 그대로 꺼내 빈 자리를 무음으로 튼다(PR #458 codex). 끝난 방송이면 더 올라올 것이 없어 그대로 맡긴다
+    if (live && !coversWindow(tracks, win.startSeconds, win.endSeconds)) return false;
     segmentTracks.set(trackKey, tracks);
+    return true;
   };
-  await Promise.all([loadVideo(), loadAudio()]);
-  return 'ready';
+  const [, audioComplete] = await Promise.all([loadVideo(), loadAudio()]);
+  return audioComplete ? 'ready' : 'pending';
 }
 
 /** 동시에 받는 카드 수. 한 화면에 카드가 많아도 받기가 한꺼번에 몰리지 않게 줄 세운다 */
