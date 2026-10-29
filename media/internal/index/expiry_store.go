@@ -33,8 +33,9 @@ const (
 )
 
 // ExpiryCeiling 은 now 기준으로 지울 수 있는 가장 늦은 상한이다(now − 보존 기간 + 여유). 만료 루프는 이보다 늦은
-// segmentsUntil 을 받지 않고(fail-closed), 0단계 문장도 같은 상한을 다시 건다(보안 H1 — clip 응답 한 줄이 보존
-// 기간 안 조각을 비가역으로 지우지 않게).
+// segmentsUntil 을 받지 않는다(fail-closed · 보안 H1 — clip 응답 한 줄이 보존 기간 안 조각을 비가역으로 지우지
+// 않게). 0단계 문장이 DB 시계로 거는 같은 상한은 expired_at 표시만 막는다 — 뒤 단계(대상 · 문서 조회 · 객체 · 행
+// 삭제)는 expired_at 을 보지 않으므로, 비가역 삭제를 막는 것은 이 Go 쪽 응답 거부 하나다.
 func ExpiryCeiling(now time.Time) time.Time { return now.Add(-ExpiryRetention + ExpiryUntilSlack) }
 
 // ErrCutoffInvalid 는 그 스트림의 컷오프가 장부에 없는 행을 가리킨다는 뜻이다(e1 — fail-closed). 그 스트림은
