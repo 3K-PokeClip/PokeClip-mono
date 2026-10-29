@@ -96,6 +96,10 @@ std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabe
 // kHotkeyCaptureReleaseMs 더 막는다 — 저장은 키를 누른 순간(keydown) 끝나는데 손은 아직 키 위에 있다.
 int64_t HotkeyCaptureDeadlineMs(bool on, int64_t nowMs);
 
+// 받는 동안 멈춘 OBS 단축키 입력을 받기가 끝나 되살릴 값 — OBS 프런트엔드 OBSApp::ResetHotkeyState와 같은 규칙.
+// focusType = 사용자 설정 [General] HotkeyFocusType(대소문자 무시), inFocus = OBS가 앞에 있다.
+bool HotkeysEnabledForFocus(const std::string &focusType, bool inFocus);
+
 // 연타 거르기. 단조 시계 ms로 부른다. 받아들이면 true(그 시각을 기억한다).
 class MarkDebouncer {
 public:

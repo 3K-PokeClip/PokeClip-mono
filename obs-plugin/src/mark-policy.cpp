@@ -267,4 +267,16 @@ int64_t HotkeyCaptureDeadlineMs(bool on, int64_t nowMs)
 	return nowMs + (on ? kHotkeyCaptureMaxMs : kHotkeyCaptureReleaseMs);
 }
 
+bool HotkeysEnabledForFocus(const std::string &focusType, bool inFocus)
+{
+	auto is = [&](const char *lower) {
+		return focusType.size() == std::char_traits<char>::length(lower) && StartsWithNoCase(focusType, lower);
+	};
+	if (is("disablehotkeysinfocus"))
+		return !inFocus;
+	if (is("disablehotkeysoutoffocus"))
+		return inFocus;
+	return true; // NeverDisableHotkeys · 없음 · 모르는 값
+}
+
 } // namespace pokeclip

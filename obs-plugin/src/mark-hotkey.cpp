@@ -13,6 +13,8 @@
 #include <util/config-file.h>
 #include <util/dstr.h>
 
+#include <QGuiApplication>
+
 #include <atomic>
 #include <chrono>
 #include <string>
@@ -42,6 +44,38 @@ void OnHotkey(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 	if (!pressed || MarkHotkeyCapturing())
 		return; // 뗄 때도 불린다
 	MarkSender::Instance().Mark(MarkVia::Hotkey);
+}
+
+bool g_pausedOthers = false; // UI 스레드만 — 받는 동안 OBS 단축키 입력 전체를 멈춰 뒀다
+
+// OBS 설정의 단축키 포커스 동작대로 — 프런트엔드가 앱 전환 때 거는 값과 같다. UI 스레드.
+bool FrontendHotkeysEnabled()
+{
+	config_t *user = obs_frontend_get_user_config();
+	const char *type = user ? config_get_string(user, "General", "HotkeyFocusType") : nullptr;
+	return HotkeysEnabledForFocus(type ? type : "", QGuiApplication::applicationState() == Qt::ApplicationActive);
+}
+
+// 받는 동안은 우리 콜백만이 아니라 OBS 단축키 입력 전체를 멈춘다 — 새 키로 고른 조합이 「녹화 시작」 같은 다른 OBS
+// 단축키에 묶여 있으면 받는 순간 그 동작이 실행된다(3차 리뷰). 키보드 단축키는 libobs 폴링으로만 눌리고(OBS 32
+// 프런트엔드는 Qt 키 이벤트를 넣지 않는다), 이 스위치는 프런트엔드 「포커스 중 단축키 끄기」가 쓰는 것과 같다.
+// 막기 마감까지 기다렸다가 프런트엔드 규칙대로 되돌린다 — 독이 끄지 못하고 사라져도 30초 뒤 풀린다. UI 스레드.
+void ApplyCapturePause()
+{
+	int64_t until = g_captureUntilMs.load();
+	int64_t left = until == 0 ? 0 : until - NowSteadyMs();
+	if (left > 0) {
+		if (!g_pausedOthers) {
+			obs_hotkey_enable_background_press(false);
+			g_pausedOthers = true;
+		}
+		RunInUiThreadAfter(static_cast<int>(left) + 10, ApplyCapturePause);
+		return;
+	}
+	if (g_pausedOthers) {
+		g_pausedOthers = false;
+		obs_hotkey_enable_background_press(FrontendHotkeysEnabled());
+	}
 }
 
 // 지금 바인딩을 시스템 전역 단축키(macOS)로 옮긴다. UI 스레드.
@@ -367,6 +401,7 @@ MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelP
 void SetMarkHotkeyCapture(bool on)
 {
 	g_captureUntilMs = HotkeyCaptureDeadlineMs(on, NowSteadyMs());
+	RunInUiThread(ApplyCapturePause);
 }
 
 bool MarkHotkeyCapturing()

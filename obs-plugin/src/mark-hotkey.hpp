@@ -27,6 +27,7 @@ MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelP
 
 // 독이 새 키를 받는 동안 지금 키로 마크가 나가지 않게 막는다(아무 스레드). 끄지 않아도 30초 뒤 풀린다.
 // 꺼도 1초 더 막는다 — 새 키로 바꾼 직후 아직 누르고 있는 그 키가 마크로 잡히지 않게(kHotkeyCaptureReleaseMs).
+// 막는 동안은 다른 OBS 단축키 입력도 멈춘다(UI 스레드에서 건다).
 void SetMarkHotkeyCapture(bool on);
 bool MarkHotkeyCapturing();
 

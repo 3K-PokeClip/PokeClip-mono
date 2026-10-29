@@ -2391,6 +2391,22 @@ TEST(mark_hotkey_capture_deadline)
 	CHECK(kHotkeyCaptureMaxMs - kHotkeyCaptureUiMs >= 1000);
 }
 
+// 받는 동안 멈춘 OBS 단축키 입력은 OBS 「단축키 포커스 동작」대로 되살린다(3차 리뷰) — 프런트엔드 ResetHotkeyState와 같은 규칙
+TEST(hotkeys_enabled_for_focus)
+{
+	CHECK(HotkeysEnabledForFocus("NeverDisableHotkeys", true));
+	CHECK(HotkeysEnabledForFocus("NeverDisableHotkeys", false));
+	CHECK(!HotkeysEnabledForFocus("DisableHotkeysInFocus", true));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeysInFocus", false));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeysOutOfFocus", true));
+	CHECK(!HotkeysEnabledForFocus("DisableHotkeysOutOfFocus", false));
+	CHECK(!HotkeysEnabledForFocus("disablehotkeysinfocus", true)); // astrcmpi — 대소문자 무시
+	// 없거나 모르는 값은 프런트엔드처럼 켠다 — 앞부분만 같은 값도 다른 값이다
+	CHECK(HotkeysEnabledForFocus("", true));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeysInFocusX", true));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeys", false));
+}
+
 // 브리지 워커 → UI 스레드 일 기다리기(PR #455 리뷰) — 늦으면 거둔 일은 나중에도 안 돌고, 예외는 밖으로 안 나간다
 TEST(post_and_wait_runs_abandons_and_contains)
 {
