@@ -1,0 +1,150 @@
+/* 로고 그리기 되풀이(BrandLogoDraw). 원본 choreography는 public/brand/motion/motion.css — 1.6초 한 번.
+   여기서는 한 바퀴 1.95초 = 그리기 1.2초(원본의 3/4, 바퀴의 0~61.54%) + 다 그린 모양 붙듦 + 흐려짐(84~96%) + 빈 틈.
+   원본 키프레임 %는 ×0.6154로 줄였고(괄호 안이 원본 %), 원본 100% 모양은 바퀴 끝(100%)까지 붙든다.
+   timing function은 원본처럼 키프레임 안에 글자 그대로 둔다 — 키프레임 안의 var()는 크로뮴이 버리고 linear로 떨어진다.
+   움직임을 줄이라는 설정이면 아무것도 돌지 않고 다 그린 로고(BrandSymbol과 같은 모양)로 선다. */
+
+.logo,
+.play {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .spineAccent {
+    animation: draw-accent 1950ms linear both infinite;
+  }
+
+  .spineMain {
+    animation: draw-main 1950ms linear both infinite;
+  }
+
+  .play {
+    animation:
+      play-pop 1950ms linear both infinite,
+      play-fade 1950ms linear both infinite;
+  }
+
+  /* 미세 정착 + 바퀴 끝 흐려짐. 경계 뒤 0~4%도 투명으로 붙든다: 바퀴가 돌아 획이 0으로 튀는 순간 크롬이 마스크를 한 프레임 늦게
+     다시 그려, 투명이 풀린 첫 프레임에 다 그린 고리가 한 장 비쳤다(재생 마크는 마스크가 아니라 안 비쳤다 — CPU 6배 감속 녹화에서
+     바퀴마다 1장 실측, 가린 뒤 0장). 고리는 4.92%부터 그려지므로 그 앞을 가려도 보이는 움직임은 같다 */
+  .logo {
+    animation:
+      logo-settle 1950ms linear both infinite,
+      loop-fade 1950ms linear both infinite;
+  }
+}
+
+/* 마젠타 획(원본 8% → 20.15%) */
+@keyframes draw-accent {
+  0% {
+    stroke-dashoffset: 1;
+    stroke-dasharray: 1 1;
+  }
+  4.92% {
+    stroke-dashoffset: 1;
+    stroke-dasharray: 1 1;
+    animation-timing-function: cubic-bezier(0.4451, 0.0731, 0.7597, 0.4418);
+  }
+  12.4% {
+    stroke-dashoffset: 0;
+    stroke-dasharray: 1 1;
+  }
+  61.54%,
+  100% {
+    stroke-dashoffset: 0;
+    stroke-dasharray: 1 1;
+  }
+}
+
+/* 인디고 획 — 마젠타가 끝나는 자리에서 이어 받는다(원본 20.15% → 72%) */
+@keyframes draw-main {
+  0% {
+    stroke-dashoffset: 1;
+    stroke-dasharray: 1 1;
+  }
+  12.4% {
+    stroke-dashoffset: 1;
+    stroke-dasharray: 1 1;
+    animation-timing-function: cubic-bezier(0.2635, 0.2787, 0.1457, 1);
+  }
+  44.31% {
+    stroke-dashoffset: 0;
+    stroke-dasharray: 1 1;
+  }
+  61.54%,
+  100% {
+    stroke-dashoffset: 0;
+    stroke-dasharray: 1 1;
+  }
+}
+
+/* 재생 마크 튀어나오기(원본 66% → 82% 넘침 → 91% → 100%) */
+@keyframes play-pop {
+  0% {
+    transform: scale(0.3);
+  }
+  40.62% {
+    transform: scale(0.3);
+    animation-timing-function: cubic-bezier(0.34, 1.36, 0.5, 1);
+  }
+  50.46% {
+    transform: scale(1.06);
+    animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1);
+  }
+  56% {
+    transform: scale(0.988);
+    animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1);
+  }
+  61.54%,
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 재생 마크 나타나기(원본 66% → 76%) */
+@keyframes play-fade {
+  0% {
+    opacity: 0;
+  }
+  40.62% {
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  46.77%,
+  61.54%,
+  100% {
+    opacity: 1;
+  }
+}
+
+/* 로고 전체 미세 정착(원본 70% → 100%) */
+@keyframes logo-settle {
+  0% {
+    transform: scale(0.992);
+  }
+  43.08% {
+    transform: scale(0.992);
+    animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  61.54%,
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes loop-fade {
+  0%,
+  4% {
+    opacity: 0;
+  }
+  4.5%,
+  84% {
+    opacity: 1;
+    animation-timing-function: ease-in;
+  }
+  96%,
+  100% {
+    opacity: 0;
+  }
+}
