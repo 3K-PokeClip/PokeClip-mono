@@ -18,6 +18,7 @@ const failed: ClipStatusView = {
   progress: null,
   actions: ['retryUpload', 'library'],
   youtubeUrl: null,
+  retryNote: null,
 };
 
 const uploading: ClipStatusView = {
@@ -65,5 +66,15 @@ describe('ClipStatusPill', () => {
       screen.getByRole('button', { name: '영상 상태: 유튜브에 올리는 중. 자세히 보기' }),
     );
     expect(screen.getAllByRole('progressbar', { name: '영상 진행' })).toHaveLength(1);
+  });
+
+  it('「다시 올리기」 위에 공개 범위 경고가 붙고, 버튼의 설명으로도 읽힌다(PR #454 2차 리뷰)', async () => {
+    const user = userEvent.setup();
+    const note =
+      '다시 올리면 「공개」로 올라가 누구나 볼 수 있어요. 구독자에게 새 영상 알림이 갈 수 있어요.';
+    render(<ClipStatusPill view={{ ...failed, retryNote: note }} {...props} />);
+    await user.click(screen.getByRole('button', { name: '영상 상태: 업로드 실패. 자세히 보기' }));
+    expect(screen.getByText(note)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '다시 올리기' })).toHaveAccessibleDescription(note);
   });
 });

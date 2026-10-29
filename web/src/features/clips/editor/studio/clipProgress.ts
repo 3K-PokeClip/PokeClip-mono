@@ -1,5 +1,5 @@
 import type { ClipSnapshot, PrivacyStatus } from '@/api/clipEditor';
-import { PRIVACY_LABEL, uploadFailureReason } from '../uploadInfo';
+import { instantLabel, PRIVACY_LABEL, retryPrivacyNote, uploadFailureReason } from '../uploadInfo';
 
 // 편집기 헤더가 말하는 영상의 진행(POK-291): 만드는 중 N% → 올리는 중 → 업로드됨 / 업로드 실패.
 // 「영상 만들기」 옆 상태 알약과 누르면 여는 작은 창(POK-492)이 이 판정 하나로 그린다 — 막대(POK-444)도 여기서 정한다.
@@ -70,13 +70,26 @@ export interface ClipStatusView {
   actions: ClipStatusAction[];
   /** 올라간 영상 주소. youtube 행동이 있을 때만 */
   youtubeUrl: string | null;
+  /** 「다시 올리기」를 누르면 어떤 범위로 올라가나(버튼 바로 위). 다시 올리기가 없거나 비공개면 null */
+  retryNote: string | null;
 }
 
 /** 편집기에서 거절된 제목·태그를 고칠 곳 — 같은 판이 이미 완성돼 있으면 다시 만들지 않고 고친 정보로 올린다 */
 const EDITOR_FIX_HINT = '「영상 만들기」를 다시 눌러 제목·태그를 고친 뒤 올려 주세요.';
 
-function uploadedDetail(privacy: PrivacyStatus | undefined, publishAt: string | null | undefined) {
-  if (publishAt) return '비공개로 올렸고, 정한 시각에 공개로 바뀌어요.';
+function uploadedDetail(
+  privacy: PrivacyStatus | undefined,
+  publishAt: string | null | undefined,
+  now: Date,
+) {
+  if (publishAt) {
+    // 시각이 지났으면 「바뀌어요」라고 하지 않는다 — 이미 공개됐을 영상이다(보관함 privacyNoteText와 같은 말, PR #454 2차 리뷰)
+    const at = new Date(publishAt);
+    const when = instantLabel(at);
+    return at.getTime() <= now.getTime()
+      ? `「예약」 ${when}에 공개되도록 올렸어요.`
+      : `「예약」 ${when}에 공개되도록 올렸어요. 그 전까지는 비공개예요.`;
+  }
   // 옛 서버는 공개 범위를 안 준다. 그때는 늘 비공개였다
   return `${PRIVACY_LABEL[privacy ?? 'private']}로 올라갔어요.`;
 }
@@ -110,10 +123,10 @@ function steps(
   ];
 }
 
-/** 영상 하나의 상태를 알약·작은 창 모양으로(POK-492). now는 단계 시각의 날짜 비교에만 쓴다 */
+/** 영상 하나의 상태를 알약·작은 창 모양으로(POK-492). now는 단계 시각의 날짜와 예약 공개 시각이 지났는지 볼 때 쓴다 */
 export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): ClipStatusView {
   const progress = clipProgressBar(clip);
-  const base = { progress, youtubeUrl: null };
+  const base = { progress, youtubeUrl: null, retryNote: null };
   const waiting = clip.uploadRequest ? '다 만들면 유튜브에 올려요.' : '';
   // 요청한 때 = 영상 줄이 생긴 때. 완성한 때 = 영상 줄의 마지막 변경(clip은 영상 줄을 만드는 중 · 완성 · 실패로 바꿀 때만 고친다).
   // 업로드 줄이 생긴 때로 잡으면 「다시 올리기」로 새 줄이 생길 때마다 완성 시각이 다시 올린 시각으로 바뀌었다(PR #454 1차 리뷰)
@@ -163,6 +176,12 @@ export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): Clip
       const uploadEnd = stepClock(upload?.updatedAt, now);
       const made = (state: ClipStepState, note: string | null) =>
         steps(['done', requested], ['done', renderedAt], [state, note]);
+      // 다시 올리기는 실패한 줄의 범위·예약 시각을, 줄이 없으면 업로드 정보의 것을 그대로 쓴다
+      const retryNote = retryPrivacyNote(
+        upload != null ? upload.privacyStatus : clip.uploadRequest?.privacyStatus,
+        upload != null ? upload.publishAt : clip.uploadRequest?.publishAt,
+        now,
+      );
       switch (upload?.status) {
         case undefined:
           // clip은 완성과 업로드 줄을 한 트랜잭션에서 만든다. 정보가 있는데 줄이 없으면 자동 업로드를 건너뛴 것이다
@@ -175,6 +194,7 @@ export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): Clip
                 detail: '영상은 다 만들었는데 유튜브 업로드가 시작되지 않았어요. 다시 올려 주세요.',
                 steps: made('warning', '시작 안 됨'),
                 actions: ['retryUpload', 'library'],
+                retryNote,
               }
             : {
                 ...base,
@@ -189,7 +209,7 @@ export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): Clip
             ...base,
             tone: 'success',
             title: '유튜브에 올라갔어요',
-            detail: uploadedDetail(upload.privacyStatus, upload.publishAt),
+            detail: uploadedDetail(upload.privacyStatus, upload.publishAt, now),
             steps: made('done', uploadEnd),
             actions: upload.videoId ? ['youtube', 'library'] : ['library'],
             youtubeUrl: upload.videoId ? `https://youtu.be/${upload.videoId}` : null,
@@ -202,6 +222,7 @@ export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): Clip
             detail: uploadFailureReason(upload.error, EDITOR_FIX_HINT),
             steps: made('danger', failedAt(uploadEnd)),
             actions: ['retryUpload', 'library'],
+            retryNote,
           };
         case 'checking':
           // 올라갔는지 모르는 업로드는 사람이 채널을 보고 푼다 — 푸는 곳은 보관함이다(POK-333)

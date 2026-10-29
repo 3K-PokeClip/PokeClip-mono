@@ -311,6 +311,14 @@
   margin: 0 0 calc(12 * var(--pc-u));
 }
 
+/* 「다시 올리기」의 공개 범위 경고: 버튼 바로 위 작은 글. 상태색은 머리에만 쓰므로 무채색이다 */
+.statusRetryNote {
+  margin: 0 0 calc(8 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
 /* 버튼 가로 둘 — 같은 크기로 폭을 나눠 채운다(하나면 꽉 찬다) */
 .statusActions {
   display: grid;

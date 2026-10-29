@@ -204,6 +204,63 @@ describe('clipStatusView: 영상 상태 알약과 작은 창(POK-492)', () => {
     expect(view.actions).toEqual(['retryUpload', 'library']);
   });
 
+  // 예약 시각: NOW(한국 21:00) 기준 앞 22:00(13:00Z) · 지난 20:30(11:30Z). 2026-09-20은 일요일이다
+  const LATER = '2026-09-20T13:00:00Z';
+  const EARLIER = '2026-09-20T11:30:00Z';
+  const NOTIFY = '구독자에게 새 영상 알림이 갈 수 있어요.';
+
+  it.each([
+    [
+      '공개',
+      { privacyStatus: 'public' },
+      `다시 올리면 「공개」로 올라가 누구나 볼 수 있어요. ${NOTIFY}`,
+    ],
+    [
+      '일부 공개',
+      { privacyStatus: 'unlisted' },
+      '다시 올리면 「일부 공개」로 올라가 주소를 아는 사람만 볼 수 있어요.',
+    ],
+    [
+      '예약 전',
+      { privacyStatus: 'private', publishAt: LATER },
+      `다시 올리면 「예약」 9월 20일 (일) 22:00에 공개로 바뀌어요. ${NOTIFY}`,
+    ],
+    [
+      '예약 시각 지남',
+      { privacyStatus: 'private', publishAt: EARLIER },
+      `「예약」 시각(9월 20일 (일) 20:30)이 지나 다시 올리면 바로 공개돼요. ${NOTIFY}`,
+    ],
+    ['비공개', { privacyStatus: 'private' }, null],
+    ['옛 서버(범위 없음 = 비공개)', {}, null],
+  ] as const)(
+    '업로드 실패의 「다시 올리기」는 그 줄의 공개 범위를 미리 말한다 — %s(보관함 「다시 시도」와 같은 경고, PR #454 2차 리뷰)',
+    (_, privacy, note) => {
+      const v = view(clip({ upload: { ...upload('failed', 'QUOTA_EXCEEDED'), ...privacy } }));
+      expect(v.actions).toContain('retryUpload');
+      expect(v.retryNote).toBe(note);
+    },
+  );
+
+  it('업로드 줄이 없을 때의 「다시 올리기」는 업로드 정보의 범위로 말하고, 다시 올리기가 없으면 말하지 않는다', () => {
+    const notStarted = view(
+      clip({ uploadRequest: { ...intent, privacyStatus: 'public' }, upload: null }),
+    );
+    expect(notStarted.retryNote).toBe(
+      `다시 올리면 「공개」로 올라가 누구나 볼 수 있어요. ${NOTIFY}`,
+    );
+    const uploaded = view(clip({ upload: { ...upload('uploaded'), privacyStatus: 'public' } }));
+    expect(uploaded.retryNote).toBeNull();
+  });
+
+  it('예약 공개로 올라간 영상은 그 시각이 지났는지에 따라 말한다: 지났으면 「바뀌어요」라 하지 않는다(PR #454 2차 리뷰)', () => {
+    const scheduled = (publishAt: string) =>
+      view(clip({ upload: { ...upload('uploaded'), privacyStatus: 'private', publishAt } })).detail;
+    expect(scheduled(LATER)).toBe(
+      '「예약」 9월 20일 (일) 22:00에 공개되도록 올렸어요. 그 전까지는 비공개예요.',
+    );
+    expect(scheduled(EARLIER)).toBe('「예약」 9월 20일 (일) 20:30에 공개되도록 올렸어요.');
+  });
+
   it('완성됐는데 업로드가 시작되지 않았으면(정보는 있는데 줄이 없음) 기다리지 않고 다시 올리기를 준다', () => {
     // 완성과 업로드 줄은 한 트랜잭션이라, 정보가 있는데 줄이 없으면 자동 업로드를 건너뛴 것이다
     const view = clipStatusView(clip({ uploadRequest: intent, upload: null }));

@@ -1198,6 +1198,7 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
         progress: { value: 42 },
         actions: ['library'],
         youtubeUrl: null,
+        retryNote: null,
         ...view,
       } satisfies ClipStatusView,
       versionLabel: '편집본 v3',

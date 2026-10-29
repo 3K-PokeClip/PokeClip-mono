@@ -27,6 +27,29 @@ export const PUBLIC_NOTIFY_NOTE = '구독자에게 새 영상 알림이 갈 수 
 export const PRIVACY_CHANGE_NOTE =
   '올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.';
 
+/**
+ * 「다시 올리기」가 어떤 범위로 올라가나 — 편집기 영상 상태 창(POK-492)이 버튼 위에 붙인다. 다시 올리기는 실패한 줄(줄이
+ * 없으면 업로드 정보)의 범위와 예약 시각을 그대로 쓰고, 그 시각이 지났으면 유튜브가 올리자마자 공개한다. 보관함
+ * privacyNoteText의 「다시 시도」 안내와 같은 경고다 — 창을 거치지 않는 단추도 미리 듣는다(PR #454 2차 리뷰). 비공개면 null.
+ */
+export function retryPrivacyNote(
+  privacy: PrivacyStatus | undefined,
+  publishAt: string | null | undefined,
+  now: Date,
+): string | null {
+  if (privacy === 'private' && publishAt) {
+    const at = new Date(publishAt);
+    const when = instantLabel(at);
+    return at.getTime() <= now.getTime()
+      ? `「예약」 시각(${when})이 지나 다시 올리면 바로 공개돼요. ${PUBLIC_NOTIFY_NOTE}`
+      : `다시 올리면 「예약」 ${when}에 공개로 바뀌어요. ${PUBLIC_NOTIFY_NOTE}`;
+  }
+  // 옛 서버는 범위를 안 준다. 그때는 늘 비공개였다
+  if (privacy === undefined || privacy === 'private') return null;
+  const notify = privacy === 'public' ? ` ${PUBLIC_NOTIFY_NOTE}` : '';
+  return `다시 올리면 「${PRIVACY_LABEL[privacy]}」로 올라가 ${PRIVACY_VIEWERS[privacy]} 볼 수 있어요.${notify}`;
+}
+
 /** 창의 공개 범위 안내: 고른 범위에 맞춘다. 편집자도 고를 수 있고 경고만 보인다(2026-10-11 사용자 결정) */
 export function privacyNote(privacy: PrivacyStatus): string {
   if (privacy === 'private') return PRIVACY_CHANGE_NOTE;

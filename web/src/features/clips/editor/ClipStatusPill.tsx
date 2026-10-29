@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertCircle,
@@ -74,6 +74,7 @@ export function ClipStatusPill({
   onRemake: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const retryNoteId = useId();
   const settledAll = !view.steps.some((step) => isCurrent(step.state));
 
   // 할 일이 바뀌거나(다시 올리기 성공) 다시 올리기 단추가 돌기 시작하면 포커스를 쥔 단추가 사라지거나 꺼져 포커스가 body로
@@ -116,6 +117,7 @@ export function ClipStatusPill({
             fullWidth
             loading={retrying}
             iconStart={<RotateCw size={13} aria-hidden />}
+            aria-describedby={view.retryNote !== null ? retryNoteId : undefined}
             onClick={onRetryUpload}
           >
             다시 올리기
@@ -227,6 +229,12 @@ export function ClipStatusPill({
           {settledAll ? (
             <p className={styles.statusDetail} data-standalone="">
               {view.detail}
+            </p>
+          ) : null}
+          {/* 다시 올리면 남이 보게 되거나 바로 공개되는 경우의 경고 — 누르기 전에 버튼 바로 위에서 읽힌다 */}
+          {view.retryNote !== null ? (
+            <p id={retryNoteId} className={styles.statusRetryNote}>
+              {view.retryNote}
             </p>
           ) : null}
           <div className={styles.statusActions}>{view.actions.map(actionButton)}</div>
