@@ -247,7 +247,7 @@ export function SettingsPanel({
         type="button"
         class={styles.subFold}
         aria-expanded={serverOpen}
-        aria-controls="server-fields"
+        aria-controls={serverOpen ? 'server-fields' : undefined}
         onClick={() => {
           setServerOpen((o) => !o);
           setServer(null);
@@ -369,7 +369,7 @@ export function Settings({
         type="button"
         class={styles.settingsToggle}
         aria-expanded={open}
-        aria-controls="settings-body"
+        aria-controls={open ? 'settings-body' : undefined}
         onClick={() => setOpen((v) => !v)}
       >
         <SlidersHorizontal size={13} strokeWidth={2} aria-hidden="true" />
