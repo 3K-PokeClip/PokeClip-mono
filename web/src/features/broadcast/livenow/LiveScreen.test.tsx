@@ -37,6 +37,10 @@ vi.mock('@/lib/analytics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/analytics')>()),
   track,
 }));
+// 카드의 편집기 미리 받기(POK-499)는 HighlightCard.test가 잰다. 여기서는 다 받은 것으로 두어 「편집」이 열려 있다
+vi.mock('@/features/clips/editor/prefetchCardEditor', () => ({
+  prefetchCardEditor: () => Promise.resolve('ready'),
+}));
 
 // useSearchParams 대체 — ?stream=(useMediaSource)은 비워 두고 아래 env 고정과 함께 소스를 null로 만들어
 // 플레이어가 「영상 신호 없음」 자리로 결정적으로 선다. ?mock=(오프라인 목업 토글)은 케이스가 nav.search로 정한다.
