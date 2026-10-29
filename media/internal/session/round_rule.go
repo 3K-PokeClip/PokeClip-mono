@@ -16,7 +16,7 @@ import (
 )
 
 // endReasonIntentional 은 의도적 종료(4D)로 끝난 세션의 사유다 — 표식 분할 · 4D 승격이 쓰는 글자다(M6 3.4).
-// 오프라인 전이(표식 있음)가 이 글자를 쓰는 것은 M6-3b 에서 더해진다 — M6-3b 전의 오프라인 전이는 늘 offline 이다.
+// live 회차 종료 문장(오프라인 전이 · L3 · L2′ — index 의 liveEndingSet)도 표식이 있으면 이 글자를 쓴다.
 // 회차 닫힘 조건이고, 계승 · 합류를 막는다.
 const endReasonIntentional = "intentional"
 
