@@ -62,7 +62,7 @@ class FakeHls {
 
 const PDT0 = Date.parse('2026-10-25T05:00:00.000Z');
 /**
- * 영상 0초부터 4초 조각 n 개(PDT0 부터). 라이브 시작 하한 = 첫 조각 + 3 × TD = PDT0 + 12초(영상 12초)
+ * 영상 0초부터 4초 조각 n 개(PDT0 부터). 라이브 시작 하한 = 첫 조각 + 맨 앞 조각 셋의 길이 = PDT0 + 12초(영상 12초)
  */
 function details(n: number): Details {
   const fragments = [...Array(n).keys()].map((i) => ({
