@@ -341,7 +341,8 @@
 }
 
 .pin,
-.pinManual {
+.pinManual,
+.pinGroup {
   position: absolute;
   top: 50%;
   z-index: 1;
@@ -375,21 +376,107 @@
 }
 
 .pin:hover,
-.pinManual:hover {
+.pinManual:hover,
+.pinGroup:hover {
   box-shadow:
     0 0 0 2px var(--sp-surface),
     0 0 0 4px var(--pc-color-point-subtle);
 }
 
 .pin:focus-visible,
-.pinManual:focus-visible {
+.pinManual:focus-visible,
+.pinGroup:focus-visible {
   outline: 2px solid var(--pc-color-focus-ring);
   outline-offset: 2px;
 }
 
-.pinMore {
-  font-weight: 600;
-  opacity: 0.8;
+/* 겹친 핀 묶음 — 개수만 쓰고, 뒤에 카드가 한 장 더 비치게 그려 하나짜리 핀과 가른다(POK-500) */
+.pinGroup {
+  justify-content: center;
+  min-width: calc(18 * var(--pc-u));
+  border: 0;
+  background: var(--sp-hl);
+  color: var(--pc-color-text-on-accent, #fff); /* 테마 고정 */
+  box-shadow:
+    0 0 0 2px var(--sp-surface),
+    calc(2 * var(--pc-u)) calc(-2 * var(--pc-u)) 0 0 var(--sp-surface),
+    calc(3 * var(--pc-u)) calc(-3 * var(--pc-u)) 0 0 var(--sp-hl);
+}
+
+.pinGroup[aria-expanded='true'] {
+  outline: 2px solid var(--pc-color-point-subtle);
+  outline-offset: 2px;
+}
+
+/* 묶음을 누르면 뜨는 카드 목록 — 툴팁 위에 선다 */
+.pinList {
+  position: absolute;
+  z-index: 4;
+  display: grid;
+  align-content: start;
+  gap: calc(2 * var(--pc-u));
+  padding: calc(4 * var(--pc-u));
+  overflow-y: auto;
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-surface-raised);
+  border: 1px solid var(--pc-color-border-default);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); /* 테마 고정 */
+}
+
+.pinListItem {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(6 * var(--pc-u)) calc(8 * var(--pc-u));
+  border: 0;
+  border-radius: calc(6 * var(--pc-u));
+  background: transparent;
+  color: var(--pc-color-text-primary);
+  font: inherit;
+  font-size: calc(12 * var(--pc-u));
+  text-align: left;
+  cursor: pointer;
+}
+
+.pinListItem:hover {
+  background: var(--pc-color-point-subtle);
+}
+
+.pinListItem:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.pinListAuto,
+.pinListManual {
+  padding: 0 calc(6 * var(--pc-u));
+  border-radius: calc(8 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  line-height: calc(16 * var(--pc-u));
+}
+
+.pinListAuto {
+  background: var(--sp-hl);
+  color: var(--pc-color-text-on-accent, #fff); /* 테마 고정 */
+}
+
+.pinListManual {
+  border: 1.5px solid var(--sp-hl);
+  color: var(--pc-color-text-primary);
+}
+
+.pinListReason {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pc-color-text-secondary);
+}
+
+.pinListTime {
+  font-variant-numeric: tabular-nums;
+  color: var(--pc-color-text-muted);
 }
 
 /* ---------- 카테고리 띠 ---------- */

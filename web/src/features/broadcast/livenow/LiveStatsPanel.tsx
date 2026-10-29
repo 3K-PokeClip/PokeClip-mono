@@ -2,12 +2,13 @@
 
 // 실시간 통계 — 위쪽 숫자 줄 + 한 상자 두 층 그래프(위 시청자 선 · 아래 채팅 막대) + 카테고리 띠 + 시간축.
 // 하이라이트는 그래프 위 핀(누르면 그 카드 시점으로 간다)과 막대 색(포인트색)으로, 후원은 숫자 줄과 툴팁에만 둔다(막대 아래 후원
-// 줄은 사용자 결정으로 뺐다). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
+// 줄은 사용자 결정으로 뺐다). 겹치는 핀은 개수 묶음이고, 누르면 카드 목록을 띄운다(POK-500). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
 // 오른쪽 눈금과 층 이름은 제자리다. 방송 중이면 처음에 오른쪽 끝(지금)을 보여 주고, 끝에 붙어 있으면 새 칸이 와도 끝을 따라간다.
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import {
   memo,
   useCallback,
+  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -69,6 +70,8 @@ const CAT_GAP = 8;
 const CAT_ROW = 24;
 /** 핀 둘이 이보다 가까우면 앞 핀 하나로 묶는다(핀 폭) */
 const PIN_GAP = 44;
+/** 묶음을 누르면 뜨는 카드 목록의 폭 */
+const PIN_LIST_W = 220;
 
 /** --pc-u 한 칸의 px. 테스트(jsdom)처럼 글꼴 크기를 못 읽으면 1이다 */
 function usePcUnit() {
@@ -101,6 +104,11 @@ function useWidth<T extends HTMLElement>() {
     return () => ro.disconnect();
   }, []);
   return [ref, width] as const;
+}
+
+/** 핀과 묶음 목록의 카드가 같이 쓰는 이름 — 어디서 고르든 같은 카드는 같게 읽힌다 */
+function pinLabel(card: TimelineCard) {
+  return `하이라이트 ${card.label} — ${card.reason} · ${card.timestamp}로 이동`;
 }
 
 function Cell({ cell, keyClass }: { cell: StatsCell; keyClass: string | undefined }) {
@@ -185,7 +193,9 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
           {headMeta(chart, scope, live)}
         </span>
         {cards.length > 0 ? (
-          <span className={styles.headHint}>핀을 누르면 그 카드로 가요</span>
+          <span className={styles.headHint}>
+            핀을 누르면 그 카드로, 숫자 묶음은 목록에서 골라요
+          </span>
         ) : null}
       </div>
       <dl className={styles.strip}>
@@ -332,6 +342,11 @@ function Timeline({
   const [pinGroup, setPinGroup] = useState<readonly TimelineCard[] | null>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const [tipW, setTipW] = useState(0);
+  // 열린 묶음은 첫 카드 번호로 기억한다. 폭이 바뀌어 그 묶음이 풀리거나 모양이 바뀌면 찾지 못하니 목록도 닫힌다(POK-500)
+  const [openPin, setOpenPin] = useState<string | null>(null);
+  const pinListId = useId();
+  const pinListRef = useRef<HTMLDivElement>(null);
+  const pinOpenerRef = useRef<HTMLButtonElement | null>(null);
 
   const { inView, hot, pins } = useMemo(() => {
     const cardsIn = cards.filter((c) => c.atMs >= view.t0 && c.atMs <= view.t1);
@@ -344,6 +359,31 @@ function Timeline({
       ),
     };
   }, [cards, view, contentW, u]);
+
+  const openGroup =
+    openPin === null
+      ? null
+      : (pins.find((p) => p.items.length > 1 && p.first.card.id === openPin) ?? null);
+  useEffect(() => {
+    if (openPin !== null && !openGroup) setOpenPin(null);
+  }, [openPin, openGroup]);
+  const closePinList = useCallback((refocus: boolean) => {
+    setOpenPin(null);
+    if (refocus) pinOpenerRef.current?.focus();
+  }, []);
+  // 열리면 첫 카드에 초점을 두고(키보드로도 고른다), 목록·묶음 밖을 누르면 닫는다. 묶음을 다시 누르는 것은 그 onClick이 닫는다.
+  // 묶음 객체가 아니라 번호에 건다 — 객체는 카드·차트가 갱신될 때마다 새로 생겨, 목록을 보는 중에 초점이 첫 카드로 튀었다
+  useEffect(() => {
+    if (openPin === null) return undefined;
+    pinListRef.current?.querySelector('button')?.focus();
+    const onDown = (e: globalThis.PointerEvent) => {
+      const t = e.target as Node;
+      if (pinListRef.current?.contains(t) || pinOpenerRef.current?.contains(t)) return;
+      setOpenPin(null);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [openPin]);
 
   // 위층 — 시청자. 눈금은 방송 전체 기록으로 잡는다(넘길 때마다 눈금이 바뀌면 선이 출렁인다)
   const viewer = useMemo(() => {
@@ -470,6 +510,11 @@ function Timeline({
     // 수정자 조합은 브라우저·OS 단축키다(Alt+← 뒤로 가기, Ctrl/Cmd+Home 문서 처음). 플레이어(seekIntentForKey)처럼 그대로 둔다
     // — 가로채면 preventDefault까지 걸려 뒤로 가기가 막혔다(리뷰 3라운드)
     if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === 'Escape' && openGroup) {
+      e.preventDefault();
+      closePinList(true);
+      return;
+    }
     const next =
       e.key === 'ArrowLeft'
         ? Math.max(0, (shown ?? n) - 1)
@@ -534,6 +579,10 @@ function Timeline({
           tipMin,
           Math.min(crossX + 12 <= tipMax ? crossX + 12 : crossX - 12 - tipWidth, tipMax),
         );
+  // 카드 목록은 묶음 아래 가운데에 서되 그래프 안으로만 맞춘다. 툴팁처럼 보이는 구간에 맞추면, 열어 둔 채 넘기거나 방송 끝을
+  // 따라가 묶음이 화면 밖으로 빠져도 목록만 가장자리에 남아 어느 묶음의 목록인지 알 수 없었다(로컬 리뷰)
+  const listW = PIN_LIST_W * u;
+  const listLeft = openGroup ? Math.max(0, Math.min(openGroup.x - listW / 2, contentW - listW)) : 0;
   useLayoutEffect(() => {
     const w = tipRef.current?.offsetWidth ?? 0;
     if (w > 0 && w !== tipW) setTipW(w);
@@ -570,30 +619,51 @@ function Timeline({
           onPointerCancel={endDrag}
         >
           <div className={styles.pinRow} style={{ height: pinRow }}>
-            {pins.map(({ first, x, more, items }) => (
-              <button
-                key={first.card.id}
-                type="button"
-                className={first.card.manual ? styles.pinManual : styles.pin}
-                style={{ left: x }}
-                onPointerMove={(e) =>
-                  onPinPointerMove(
-                    e,
-                    items.map((p) => p.card),
-                  )
-                }
-                onClick={() => {
-                  if (drag.current?.moved) return;
-                  onSeekCard(first.card.timestamp);
-                }}
-                aria-label={`하이라이트 ${first.card.label} — ${first.card.reason}${
-                  more ? ` 외 ${more}개` : ''
-                } · ${first.card.timestamp}로 이동`}
-              >
-                {first.card.label}
-                {more ? <span className={styles.pinMore}>+{more}</span> : null}
-              </button>
-            ))}
+            {pins.map(({ first, x, items }) => {
+              if (items.length > 1) {
+                const open = openGroup?.first.card.id === first.card.id;
+                return (
+                  <button
+                    key={first.card.id}
+                    type="button"
+                    className={styles.pinGroup}
+                    style={{ left: x }}
+                    aria-expanded={open}
+                    aria-controls={open ? pinListId : undefined}
+                    onPointerMove={(e) =>
+                      onPinPointerMove(
+                        e,
+                        items.map((p) => p.card),
+                      )
+                    }
+                    onClick={(e) => {
+                      if (drag.current?.moved) return;
+                      pinOpenerRef.current = e.currentTarget;
+                      setOpenPin(open ? null : first.card.id);
+                    }}
+                    aria-label={`하이라이트 ${items.length}개 묶음 · ${first.card.timestamp}부터 · 눌러서 고르기`}
+                  >
+                    {items.length}
+                  </button>
+                );
+              }
+              return (
+                <button
+                  key={first.card.id}
+                  type="button"
+                  className={first.card.manual ? styles.pinManual : styles.pin}
+                  style={{ left: x }}
+                  onPointerMove={(e) => onPinPointerMove(e, [first.card])}
+                  onClick={() => {
+                    if (drag.current?.moved) return;
+                    onSeekCard(first.card.timestamp);
+                  }}
+                  aria-label={pinLabel(first.card)}
+                >
+                  {first.card.label}
+                </button>
+              );
+            })}
           </div>
           <svg
             className={styles.svg}
@@ -748,6 +818,41 @@ function Timeline({
               </span>
             ))}
           </div>
+          {openGroup ? (
+            // 목록 안의 누르기·이동·키는 그래프로 올려 보내지 않는다 — 올라가면 끌기·칸 고르기·←/→가 같이 돌았다. Esc만 올려 닫는다
+            <div
+              ref={pinListRef}
+              id={pinListId}
+              className={styles.pinList}
+              style={{ left: listLeft, top: pinRow, width: listW, maxHeight: svgH }}
+              role="group"
+              aria-label={`묶인 하이라이트 ${openGroup.items.length}개`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerMove={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape') e.stopPropagation();
+              }}
+            >
+              {openGroup.items.map(({ card }) => (
+                <button
+                  key={card.id}
+                  type="button"
+                  className={styles.pinListItem}
+                  onClick={() => {
+                    onSeekCard(card.timestamp);
+                    closePinList(true);
+                  }}
+                  aria-label={pinLabel(card)}
+                >
+                  <span className={card.manual ? styles.pinListManual : styles.pinListAuto}>
+                    {card.label}
+                  </span>
+                  <span className={styles.pinListReason}>{card.reason}</span>
+                  <span className={styles.pinListTime}>{card.timestamp}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           {crossX !== null ? (
             <span
               className={styles.cross}
@@ -755,7 +860,7 @@ function Timeline({
               aria-hidden
             />
           ) : null}
-          {shown !== null && shownBucket && crossX !== null && !dragging ? (
+          {shown !== null && shownBucket && crossX !== null && !dragging && !openGroup ? (
             <div
               ref={tipRef}
               className={styles.tip}
@@ -775,7 +880,7 @@ function Timeline({
                 </div>
               ))}
               {pinGroup && pinGroup.length > 1 ? (
-                <div className={styles.tipHint}>누르면 {pinGroup[0]!.label} 시점으로 가요</div>
+                <div className={styles.tipHint}>누르면 목록에서 골라요</div>
               ) : null}
             </div>
           ) : null}
