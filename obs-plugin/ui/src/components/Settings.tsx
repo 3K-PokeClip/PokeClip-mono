@@ -195,7 +195,8 @@ export function SettingsPanel({
             {opts.savedText ?? '저장됨'}
           </span>
         ) : null}
-        <Switch id={id} checked={opts.checked} disabled={opts.lockedRow || busy === key} onChange={opts.onChange} />
+        {/* 하나가 저장되는 동안은 모든 스위치를 잠근다 — 다른 줄 클릭을 조용히 버리면 눌렀는데 아무 일도 없어 보인다 */}
+        <Switch id={id} checked={opts.checked} disabled={opts.lockedRow || busy !== ''} onChange={opts.onChange} />
       </div>
     );
   };
