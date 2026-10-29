@@ -312,6 +312,36 @@ describe('ChatPanel — 줄이 없을 때의 안내', () => {
     expect(screen.getByText('급증')).toBeInTheDocument();
   });
 
+  it('목록에 포커스가 있는 채 안내가 서면 포커스를 안내 칸으로 옮기고, 줄이 돌아오면 목록으로 돌려준다(PR #459 리뷰 1차)', () => {
+    // 안내가 서면 목록을 숨긴다(display: none). 그대로 두면 포커스가 문서 처음으로 떨어져 줄이 돌아와도 Tab이 처음부터였다
+    const view = render(<ChatPanel {...PROPS} mode="ended" />);
+    const list = chatList();
+    list.focus();
+    view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="loading" />);
+    expect(document.activeElement).not.toBe(list);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toHaveAttribute('tabindex', '-1');
+
+    // 안내의 속이 바뀌어도(읽는 중 → 실패) 같은 칸이라 포커스가 남는다
+    const note = document.activeElement;
+    view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="failed" />);
+    expect(document.activeElement).toBe(note);
+
+    view.rerender(<ChatPanel {...PROPS} mode="ended" />);
+    expect(document.activeElement).toBe(chatList());
+  });
+
+  it('목록 밖에 포커스가 있으면 안내가 서고 걷혀도 포커스를 건드리지 않는다', () => {
+    vi.useFakeTimers();
+    const view = render(<ChatPanel {...PROPS} mode="ended" />);
+    const collapse = screen.getByRole('button', { name: '채팅 숨기기' });
+    collapse.focus();
+    view.rerender(<ChatPanel {...PROPS} messages={[]} mode="ended" placeholder="loading" />);
+    expect(document.activeElement).toBe(collapse);
+    view.rerender(<ChatPanel {...PROPS} mode="ended" />);
+    expect(document.activeElement).toBe(collapse);
+  });
+
   it('줄이 오면 안내를 걷고 같은 목록을 다시 보인다', () => {
     const view = render(<ChatPanel {...PROPS} messages={[]} placeholder="empty" />);
     view.rerender(<ChatPanel {...PROPS} placeholder={null} />);

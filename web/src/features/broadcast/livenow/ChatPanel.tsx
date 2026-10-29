@@ -46,14 +46,23 @@ const PLACEHOLDER_TEXT: Record<ChatPlaceholder, { title: string; sub?: string }>
   empty: { title: '아직 채팅이 없어요' },
 };
 
-/** 목록 자리의 안내. 기다리는 중이면 로고 그리기, 멎은 상태(실패 · 채팅 없음)면 흐린 심볼이다 */
-function ChatPlaceholderView({ kind, loaderDue }: { kind: ChatPlaceholder; loaderDue: boolean }) {
+/**
+ * 목록 자리 안내의 속. 기다리는 중이면 로고 그리기, 멎은 상태(실패 · 채팅 없음)면 흐린 심볼이다. 틀(.chatPlaceholder)은 ChatPanel이
+ * 그린다: 상태가 바뀌어도 같은 칸이어야 넘겨받은 포커스가 남는다
+ */
+function ChatPlaceholderContent({
+  kind,
+  loaderDue,
+}: {
+  kind: ChatPlaceholder;
+  loaderDue: boolean;
+}) {
   const waiting = kind === 'loading' || kind === 'connecting';
   // 기다린 지 얼마 안 됐으면 빈 칸으로 둔다(LOADER_DELAY_MS)
-  if (waiting && !loaderDue) return <div className={styles.chatPlaceholder} />;
+  if (waiting && !loaderDue) return null;
   const text = PLACEHOLDER_TEXT[kind];
   return (
-    <div className={styles.chatPlaceholder}>
+    <>
       {waiting ? (
         <BrandLogoDraw size={48} />
       ) : (
@@ -61,7 +70,7 @@ function ChatPlaceholderView({ kind, loaderDue }: { kind: ChatPlaceholder; loade
       )}
       <p className={styles.chatPlaceholderTitle}>{text.title}</p>
       {text.sub ? <p className={styles.chatPlaceholderSub}>{text.sub}</p> : null}
-    </div>
+    </>
   );
 }
 
@@ -179,6 +188,26 @@ export const ChatPanel = memo(function ChatPanel({
   // DOM은 시간순으로 두고 바닥 고정은 여기서 한다: 끝에 있을 때만 새 줄이 오면 따라 내려가고,
   // 위로 올라가 옛 줄을 읽는 동안엔 자리를 지킨다 — 하단 상태줄의 「따라가는 중」도 이 값이 말한다.
   const listRef = useRef<HTMLUListElement>(null);
+  const placeholderRef = useRef<HTMLDivElement>(null);
+  // 목록에서 안내 칸으로 포커스를 넘겼는가 — 줄이 돌아오면 목록으로 돌려줄지 가른다
+  const focusBackToList = useRef(false);
+  const showingPlaceholder = placeholder !== null;
+  // 안내가 서면 목록을 숨기는데(display: none), 목록이 포커스를 쥐고 있었으면 포커스가 문서 처음으로 떨어져 줄이 돌아와도 Tab이
+  // 처음부터였다(PR #459 리뷰 1차). 같은 자리의 안내 칸으로 옮기고, 안내가 걷힐 때 포커스가 갈 곳을 잃었으면 목록으로 돌려준다.
+  // 그새 다른 곳으로 옮겼으면 건드리지 않는다. 그린 직후(그리기 전)에 해야 브라우저가 포커스를 문서로 돌리기 전이다
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (showingPlaceholder) {
+      if (list?.contains(document.activeElement)) {
+        placeholderRef.current?.focus();
+        focusBackToList.current = true;
+      }
+    } else if (focusBackToList.current) {
+      focusBackToList.current = false;
+      const active = document.activeElement;
+      if (!active || active === document.body || !active.isConnected) list?.focus();
+    }
+  }, [showingPlaceholder]);
   const [following, setFollowing] = useState(true);
   // 옮긴 횟수가 바뀐 그리기에서 바로 따라가기로 돌린다(그린 뒤 효과로 돌리면 옛 자리를 한 번 칠한다)
   const [seenJump, setSeenJump] = useState(followJump);
@@ -311,7 +340,10 @@ export const ChatPanel = memo(function ChatPanel({
         </div>
       ) : null}
       {placeholder !== null ? (
-        <ChatPlaceholderView kind={placeholder} loaderDue={loaderDue} />
+        // 목록이 숨을 때 포커스를 넘겨받는 칸이라 프로그램으로만 포커스한다(tabIndex -1 — Tab 차례에는 없다)
+        <div ref={placeholderRef} tabIndex={-1} className={styles.chatPlaceholder}>
+          <ChatPlaceholderContent kind={placeholder} loaderDue={loaderDue} />
+        </div>
       ) : null}
       {/* 스크롤 영역은 키보드로도 훑을 수 있어야 한다 (axe scrollable-region-focusable) —
           카드 레일(HighlightCardPanel)과 같은 처리. 안내가 서 있는 동안은 숨기기만 한다: 빼면 줄이 처음
