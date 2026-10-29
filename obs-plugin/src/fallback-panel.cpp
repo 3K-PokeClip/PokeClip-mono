@@ -51,8 +51,14 @@ public:
 		label_->setMinimumWidth(260);
 		auto *layout = new QVBoxLayout(this);
 		layout->addWidget(label_);
+		// 플러그인 막기는 30초에 풀린다 — 그 전에 스스로 닫아, 막기가 풀린 채 창만 열려 지금 키로 마크가 나가지 않게
+		QTimer::singleShot(static_cast<int>(kHotkeyCaptureUiMs), this, [this]() {
+			timedOut_ = true;
+			reject();
+		});
 	}
 	QString Result() const { return result_; }
+	bool TimedOut() const { return timedOut_; }
 
 protected:
 	void keyPressEvent(QKeyEvent *e) override
@@ -99,6 +105,7 @@ protected:
 private:
 	QLabel *label_ = nullptr;
 	QString result_;
+	bool timedOut_ = false;
 };
 
 QString LocalizedReason(const std::string &code)
@@ -442,6 +449,8 @@ void FallbackPanel::OnHotkeyClicked()
 	SetMarkHotkeyCapture(false); // 1초 유예 뒤 풀린다 — 창은 keyPress에 닫혀 손은 아직 새 키 위에 있다
 	if (changed)
 		message_->setText(dialog.Result());
+	else if (dialog.TimedOut())
+		message_->setText(Text("Mark.CaptureTimedOut"));
 }
 
 void FallbackPanel::OnAssignClicked()

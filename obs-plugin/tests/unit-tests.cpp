@@ -2386,6 +2386,9 @@ TEST(mark_hotkey_capture_deadline)
 	CHECK_EQ(HotkeyCaptureDeadlineMs(false, 1000), 1000 + kHotkeyCaptureReleaseMs);
 	CHECK(kHotkeyCaptureReleaseMs >= 100);              // libobs 폴링(25ms) 두 번보다 넉넉히
 	CHECK(kHotkeyCaptureReleaseMs < kMarkDebounceMs);   // 일부러 다시 누르는 것까지 오래 막지는 않는다
+	// 받기 창(독·폴백)은 막기보다 먼저 닫힌다 — 막기가 풀린 채 창만 열려 있지 않게(2차 리뷰)
+	CHECK(kHotkeyCaptureUiMs < kHotkeyCaptureMaxMs);
+	CHECK(kHotkeyCaptureMaxMs - kHotkeyCaptureUiMs >= 1000);
 }
 
 // 브리지 워커 → UI 스레드 일 기다리기(PR #455 리뷰) — 늦으면 거둔 일은 나중에도 안 돌고, 예외는 밖으로 안 나간다

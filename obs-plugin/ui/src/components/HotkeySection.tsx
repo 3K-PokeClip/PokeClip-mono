@@ -13,7 +13,7 @@ import { Button } from './ui';
 // 받기는 CAPTURE_MAX_MS 뒤 저절로 끝난다 — 플러그인 막기(kHotkeyCaptureMaxMs 30초)보다 먼저 닫아, 막기가 풀린 채
 // 상자만 열려 지금 키가 마크로 나가는 일이 없게. 저장·Esc·시간 초과로 끝나면 「바꾸기」로 포커스를 돌려준다
 // (다른 곳을 눌러 끝났으면 그 자리를 존중해 돌려주지 않는다).
-const CAPTURE_MAX_MS = 25_000;
+const CAPTURE_MAX_MS = 25_000; // 플러그인 mark-policy.hpp kHotkeyCaptureUiMs와 같은 값 — 막기 30초보다 먼저
 const CHANGE_BUTTON_ID = 'hotkey-change';
 type Message = { tone: 'ok' | 'error' | 'info'; text: string };
 

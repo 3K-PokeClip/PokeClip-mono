@@ -21,6 +21,10 @@ inline constexpr int64_t kMarkGiveUpMs = 10 * 60 * 1000; // 누른 지 10분이 
 inline constexpr int64_t kHotkeyCaptureMaxMs = 30000;    // 독·폴백이 새 단축키를 받는 동안 마크를 막는 상한
 // 받기를 끝낸 뒤에도 이만큼 더 막는다 — libobs는 새 바인딩을 걸자마자 다음 폴링(25ms 두 번)에 아직 눌린 새 키를 누름으로 센다
 inline constexpr int64_t kHotkeyCaptureReleaseMs = 1000;
+// 독·폴백 받기 창이 스스로 닫히는 시간 — 막기(kHotkeyCaptureMaxMs)보다 먼저 닫아야, 막기가 풀린 채 창만 열려
+// 지금 키가 마크로 나가는 일이 없다. 독 HotkeySection.tsx CAPTURE_MAX_MS도 같은 값이다.
+inline constexpr int64_t kHotkeyCaptureUiMs = 25000;
+static_assert(kHotkeyCaptureUiMs < kHotkeyCaptureMaxMs, "받기 창은 막기보다 먼저 닫혀야 한다");
 inline constexpr size_t kMarkQueueCap = 100;             // 대기열이 이보다 길면 가장 오래된 것부터 버린다
 inline constexpr const char *kMarkPath = "/api/clip/marks";
 // 파생 값의 메시지. 4D(kEndSignalHmacMessage)와 함수는 같고 이 값만 다르다 — 한쪽 값으로 다른 쪽 요청을 못 만든다.
