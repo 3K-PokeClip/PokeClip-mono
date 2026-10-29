@@ -366,16 +366,16 @@ auth 의 4C resolve(`/internal/stream-keys/resolve`)로 키를 풀어 대조한�
 **계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
 `broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
 outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만
-2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 운영 권한(`30_grants.sql` 의
-outbox 네 권한)이다. 하나라도 빠지면 `lifecycle_disabled` 한 줄(`reason` =
-`no_topic` · `no_streams` 는 INFO, `privilege` · `privilege_check` ·
-`sns_client` · `assembly` 는 ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도
-넣지 않는다. 켜지면 `lifecycle_started` 가 나온다(`resolve` 칸 = 4C resolve
-배선 여부).
+2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 4C resolve 설정 · 운영
+권한(`30_grants.sql` 의 outbox 네 권한)이다. 하나라도 빠지면
+`lifecycle_disabled` 한 줄(`reason` = `no_topic` · `no_streams` 는 INFO,
+`no_resolver` · `privilege` · `privilege_check` · `sns_client` · `assembly` 는
+ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도 넣지 않는다. 켜지면
+`lifecycle_started` 가 나온다.
 
 *   **streamerId:** started 의 `streamerId` 는 위 4C resolve 설정으로 얻는다.
-    resolve 설정이 비면 그 회차를 내지 않고 `lifecycle_abandoned
-    reason=resolve_unwired` 로 버린다. 그래서 응답기 모드 뒤에 켠다.
+    resolve 설정이 비면 모든 회차를 버리게 되므로 발행을 켜지 않는다(`reason`
+    = `no_resolver`). 그래서 응답기 모드 뒤에 켠다.
 *   **완전히 끌 때는 진행 중 회차가 없을 때 끈다.** 주제나 허용 목록을 비우면
     ended 판정 문장도 보내지 않는다. 그러면 started 만 나간 회차의 ended 는
     영영 적재되지 않는다. 허용 목록을 좁히기만 하면 생기지 않는다.

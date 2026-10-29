@@ -21,13 +21,13 @@ import (
 )
 
 // startLifecycle 은 발행 게이트를 만들고, 켜지면 발행기를 띄운 뒤 (게이트, 정지 함수)를 돌려준다. 게이트가 켜지는 것은
-// 주제 ARN ∧ 허용 목록 ∧ outbox 권한 ∧ 발행기 조립이 다 될 때뿐이고, 하나라도 빠지면 lifecycle_disabled 한 줄을 남기고
+// 주제 ARN ∧ 허용 목록 ∧ resolver ∧ outbox 권한 ∧ 발행기 조립이 다 될 때뿐이고, 하나라도 빠지면 lifecycle_disabled 한 줄을 남기고
 // 영값 게이트(꺼짐 — outbox 문장 0 · D45)다. 실패는 강등이다 — 발행만 꺼지고 인덱싱 · 업로드는 그대로 돈다(ADR-063
 // 결정 1).
 //
 // 발행기는 인덱서 풀(pool)을 쓴다 — 문장 하나씩 차례로 돌아 연결은 많아야 하나다(풀 산식 밖 소비자 · indexer_pool.go).
-// resolver 는 POK-472 조립의 4C 클라이언트 하나다(계획 4.18 커밋 ④). nil 이면 started 를 낼 수 없어 발행기가 그 회차를
-// 미발행 + ERROR 로 버린다(K10) — 그래서 게이트를 켜는 것은 응답기 모드 뒤다(D42).
+// resolver 는 POK-472 조립의 4C 클라이언트 하나다(계획 4.18 커밋 ④). nil 이면 started 를 낼 수 없어 발행기가 모든 새
+// 회차를 미발행 + ERROR 로 버리고(K10) 같은 회차 ended 도 막히므로, 게이트를 켜지 않는다(보안 A3-2).
 //
 // 돌려준 정지 함수는 발행기의 ctx 를 끝내고 Run 이 돌아오기를 기다린다. run 은 이것을 풀 Close 보다 뒤에 defer 해 먼저
 // 부른다 — 끊긴 발행의 기록 문장이 닫힌 풀을 쓰지 않는다(D47).
@@ -41,6 +41,11 @@ func startLifecycle(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, 
 	gate := broadcast.NewGate(lc.Streams, log)
 	if !gate.Enabled() {
 		log.Info("lifecycle_disabled", "reason", "no_streams")
+		return broadcast.Gate{}, off
+	}
+	if resolver == nil {
+		log.Error("lifecycle_disabled", "reason", "no_resolver",
+			"note", "STREAM_KEY_RESOLVE_URL · STREAM_KEY_RESOLVE_TOKEN_FILE 이 있어야 started 의 streamerId 를 얻는다")
 		return broadcast.Gate{}, off
 	}
 	cctx, cancel := context.WithTimeout(ctx, dbStepTimeout) // 기동 DB 단계 하나 — 답하지 않는 DB 에 기동이 걸리지 않는다
@@ -60,16 +65,13 @@ func startLifecycle(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, 
 		log.Error("lifecycle_disabled", "reason", "sns_client", "err", err)
 		return broadcast.Gate{}, off
 	}
-	o := broadcast.PublisherOptions{Publish: publish, Log: log}
-	if resolver != nil {
-		o.Resolve = resolver.Resolve // nil 포인터의 메서드 값은 nil 이 아니라서 갈라 넣는다
-	}
+	o := broadcast.PublisherOptions{Publish: publish, Resolve: resolver.Resolve, Log: log}
 	stop, err := runLifecyclePublisher(ctx, pool, o)
 	if err != nil {
 		log.Error("lifecycle_disabled", "reason", "assembly", "err", err)
 		return broadcast.Gate{}, off
 	}
-	log.Info("lifecycle_started", "topic", lc.TopicARN, "streams", len(lc.Streams), "resolve", resolver != nil)
+	log.Info("lifecycle_started", "topic", lc.TopicARN, "streams", len(lc.Streams))
 	return gate, stop
 }
 

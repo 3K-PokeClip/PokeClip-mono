@@ -13,6 +13,7 @@ import (
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/keyresolve"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
@@ -21,6 +22,16 @@ const lifecycleTopic = "arn:aws:sns:ap-northeast-2:123456789012:pokeclip-test-br
 // lifecycleCfg 는 주제 · 허용 목록만 채운 설정이다.
 func lifecycleCfg(topic string, streams ...string) config.Config {
 	return config.Config{Lifecycle: config.LifecycleOptions{TopicARN: topic, TopicRegion: "ap-northeast-2", Streams: streams}}
+}
+
+// lifecycleResolver 는 조립 게이트만 지나는 4C 클라이언트다 — 이 파일의 시험은 resolve 를 부르지 않는다.
+func lifecycleResolver(t *testing.T) *keyresolve.Client {
+	t.Helper()
+	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: "http://127.0.0.1:1", Token: keyresolve.NewSecret("lifecycle-test")})
+	if err != nil {
+		t.Fatalf("resolve 클라이언트 조립 실패: %v", err)
+	}
+	return c
 }
 
 // 주제가 비면(롤백 스위치) 허용 목록이 비면 꺼짐이다 — INFO 한 줄만 내고 DB 를 보지 않으며 게이트는 영값이다(D45).
@@ -42,6 +53,26 @@ func TestStartLifecycleOffWithoutTopicOrStreams(t *testing.T) {
 	}
 }
 
+// 주제 · 허용 목록 · 권한이 다 있어도 4C resolve 설정이 없으면 꺼짐이다 — 켜면 새 회차 started 가 모두 resolve_unwired 로
+// 버려지고 같은 회차 ended 도 막힌다(보안 A3-2). ERROR lifecycle_disabled reason=no_resolver 한 줄이고 게이트는 영값이다.
+// 변이 = resolver 확인 제거 → 게이트가 켜져 FAIL.
+func TestStartLifecycleOffWithoutResolver(t *testing.T) {
+	role := pgtest.NewMediaIndexerRole(t, newWireTestPool(t))
+	assemblyCredentialsEnv(t)
+	log, buf := expiryLog()
+
+	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, nil, log)
+	stop()
+
+	lines := logLines(t, buf, "lifecycle_disabled")
+	if gate.Enabled() || len(lines) != 1 || lines[0]["reason"] != "no_resolver" || lines[0]["level"] != "ERROR" {
+		t.Fatalf("게이트 켬 %v · lifecycle_disabled %v · 전체 %s", gate.Enabled(), lines, buf.String())
+	}
+	if started := logLines(t, buf, "lifecycle_started"); len(started) != 0 {
+		t.Fatalf("lifecycle_started %v, want 없음", started)
+	}
+}
+
 // D50 — outbox INSERT 권한이 없는 계정이면 ERROR lifecycle_disabled reason=privilege 이고 게이트는 꺼진다. 그 게이트로
 // 조립한 결정자의 개시는 outbox 문장을 보내지 않아 42501 없이 통과한다. 변이 = 권한 확인 제거 → 개시가 42501 로 FAIL.
 func TestStartLifecycleOffWhenOutboxPrivilegeMissingD50(t *testing.T) {
@@ -50,7 +81,7 @@ func TestStartLifecycleOffWhenOutboxPrivilegeMissingD50(t *testing.T) {
 	t.Cleanup(func() { role.RequireNoneDenied(t) })
 	log, buf := expiryLog()
 
-	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, nil, log)
+	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, lifecycleResolver(t), log)
 	defer stop()
 
 	lines := logLines(t, buf, "lifecycle_disabled")
@@ -64,17 +95,18 @@ func TestStartLifecycleOffWhenOutboxPrivilegeMissingD50(t *testing.T) {
 	}
 }
 
-// 켜짐 — 주제 · 허용 목록 · 권한이 다 있으면 게이트가 켜지고 발행기가 뜬다(INFO lifecycle_started). 정지 함수가 돌아온다.
+// 켜짐 — 주제 · 허용 목록 · resolver · 권한이 다 있으면 게이트가 켜지고 발행기가 뜬다(INFO lifecycle_started). 정지 함수가
+// 돌아온다.
 func TestStartLifecycleStartsPublisher(t *testing.T) {
 	role := pgtest.NewMediaIndexerRole(t, newWireTestPool(t))
 	assemblyCredentialsEnv(t)
 	log, buf := expiryLog()
 
-	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, nil, log)
+	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, lifecycleResolver(t), log)
 	stop()
 
 	started := logLines(t, buf, "lifecycle_started")
-	if !gate.Enabled() || len(started) != 1 || started[0]["topic"] != lifecycleTopic || started[0]["resolve"] != false {
+	if !gate.Enabled() || len(started) != 1 || started[0]["topic"] != lifecycleTopic {
 		t.Fatalf("게이트 켬 %v · lifecycle_started %v · 전체 %s", gate.Enabled(), started, buf.String())
 	}
 }
