@@ -290,6 +290,31 @@ func TestFastPathFreezesEndedSessionWithoutScan(t *testing.T) {
 	}
 }
 
+// 빠른 길은 같은 스트림이 차 있는 회차를 건너뛰고 다음 회차를 본다(같은 스트림 1 — kty 2026-10-27 결정 (가)). 앞 회차가
+// 막혔다고 순회를 멈추면 다른 스트림의 회차가 다음 틱까지 밀린다. 변이 = 상한에 걸린 갈래의 continue 를 return 으로 → FAIL
+// (cc ④c 설계 M).
+func TestFastPathSkipsBusyStreamAndLoadsNext(t *testing.T) {
+	f := newFinalLoop(t, finalize.ModePublishing)
+	fin := f.rewind.fin
+	fin.loading["A0"], fin.streamOf["A0"] = true, "one" // 스트림 one 은 행 읽기 하나가 돈다 — 같은 스트림 상한이 찼다
+	fin.queueFast("one", "A1", loopBase)                // 정렬 순서가 앞이라 먼저 걸린다
+	fin.queueFast("two", "B1", loopBase)
+	f.work.rows["B1"] = endingRow("B1", func(r *index.EndingSession) { r.StreamID = "two" })
+
+	f.rewind.dispatchFast(t.Context(), loopBase)
+
+	if !fin.loading["B1"] {
+		t.Errorf("다른 스트림 회차 B1 을 읽지 않았다 — 막힌 A1 에서 순회가 멈췄다")
+	}
+	if _, waiting := fin.fast["A1"]; !waiting || fin.loading["A1"] {
+		t.Errorf("A1 = (대기 %t · 읽기 %t), want 대기에 남음 · 읽지 않음(같은 스트림 상한)", waiting, fin.loading["A1"])
+	}
+	delete(fin.loading, "A0")
+	delete(fin.streamOf, "A0")
+	delete(fin.fast, "A1")
+	f.settle(loopBase)
+}
+
 // D24 — 종료 신호 중 정산 걸음이 돌고 있으면, 종료 순서(stop)는 차선 ctx 를 끊고 걸음이 돌아오기를 기다린 뒤 끝난다 — 풀이
 // 닫히기 전에 작업이 끝난다(main.go 의 defer LIFO). 발행 몫이 없어도(반납할 fence 가 없어도) 기다린다. 변이 = 반납 칸이
 // 없을 때 기다리지 않음 → FAIL.
