@@ -11,6 +11,8 @@ const hoisted = vi.hoisted(() => ({
   options: null as SessionOptions | null,
   session: null as PlaybackSession | null,
   query: vi.fn(async () => 'r-A' as string | null),
+  toast: vi.fn((options: { title: string }) => `toast:${options.title}`),
+  dismiss: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -29,7 +31,7 @@ vi.mock('@/features/player/usePlaybackSession', () => ({
     return hoisted.session;
   },
 }));
-vi.mock('@/ui', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock('@/ui', () => ({ useToast: () => ({ toast: hoisted.toast, dismiss: hoisted.dismiss }) }));
 
 function input(patch: Partial<LiveSessionInput> = {}): LiveSessionInput {
   return {
@@ -58,6 +60,8 @@ beforeEach(() => {
   hoisted.options = null;
   hoisted.session = null;
   hoisted.query.mockClear();
+  hoisted.toast.mockClear();
+  hoisted.dismiss.mockClear();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,6 +85,24 @@ describe('useLiveSession: 고정 화면의 지금 방송 번호 묻기 배선(cc
     rerender(input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1' }));
     await resolveX(false);
     expect(hoisted.query).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('useLiveSession: 안내 거두기(넘김 되돌림 — 실측 M4)', () => {
+  it('거둘 안내가 떠 있으면 그 토스트를 닫고, 띄운 적 없거나 이미 거둔 안내는 닫지 않는다', () => {
+    renderHook(() => useLiveSession(input()));
+    const options = hoisted.options!;
+    options.onWithdrawNotice?.('라이브로 이어서 볼게요');
+    expect(hoisted.dismiss).not.toHaveBeenCalled();
+
+    options.onNotice?.('라이브로 이어서 볼게요');
+    options.onNotice?.('다른 안내');
+    options.onWithdrawNotice?.('라이브로 이어서 볼게요');
+    expect(hoisted.dismiss).toHaveBeenCalledTimes(1);
+    expect(hoisted.dismiss).toHaveBeenCalledWith('toast:라이브로 이어서 볼게요');
+
+    options.onWithdrawNotice?.('라이브로 이어서 볼게요');
+    expect(hoisted.dismiss).toHaveBeenCalledTimes(1);
   });
 });
 

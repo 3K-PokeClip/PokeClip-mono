@@ -36,6 +36,8 @@ export const HANDOFF_DOOR_FRESH_MS = 12_000;
 
 /** 되돌림의 멈춤 유지 효과(H0 · H1a · H2 · H2t 공통) */
 const KEEP_PAUSED: SessionEffect = { kind: 'keep-paused-on-swap' };
+/** 되돌림이 넘김 안내를 거둔다 — 되돌린 뒤에도 「라이브로 이어서 볼게요」 가 남았다(실측 M4 약 3초) */
+const WITHDRAW_HANDOFF_NOTICE: SessionEffect = { kind: 'withdraw-notice', text: HANDOFF_NOTICE };
 
 /** 지금 소스 목록 — endMs = 마지막 조각 끝(E) · tdMs = 목표 길이 · sealed = ENDLIST 를 봤다 */
 export interface SourceList {
@@ -439,7 +441,7 @@ function revertToRewind(
   const block = reason === 'truncated' ? 'truncated' : 'reverted';
   const state = revertedState(session, handoff, block);
   const phase = { kind: 'rewind' as const, pendingNext: null };
-  return { state: { ...state, phase }, effects: [KEEP_PAUSED] };
+  return { state: { ...state, phase }, effects: [KEEP_PAUSED, WITHDRAW_HANDOFF_NOTICE] };
 }
 
 /**
@@ -460,7 +462,11 @@ function revertEndedHandoff(
       endingSince: session.endingSince ?? now,
       offer: null,
     },
-    effects: [KEEP_PAUSED, { kind: 'refresh', retryWhileUrl: handoff.fromUrl }],
+    effects: [
+      KEEP_PAUSED,
+      WITHDRAW_HANDOFF_NOTICE,
+      { kind: 'refresh', retryWhileUrl: handoff.fromUrl },
+    ],
   };
 }
 

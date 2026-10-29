@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { handedOff } from './handoffTestKit';
+import { HANDOFF_NOTICE } from './liveHandoff';
 import { transition, type SessionEvent, type XAnswer } from './rewindSwitch';
 import { usePlaybackSession, type SessionPlayer, type SessionOptions } from './usePlaybackSession';
 
@@ -457,8 +458,8 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
   });
 
   /** 되감기에서 P 를 보다가 라이브로 넘긴 세션. 넘김 행(c13h)이 들기 전이라 결과 모양만 끼운다 */
-  async function handedOffSession() {
-    const view = renderHook(() => usePlaybackSession(options()));
+  async function handedOffSession(patch: Partial<SessionOptions> = {}) {
+    const view = renderHook(() => usePlaybackSession(options(patch)));
     await flush();
     const player = fakePlayer();
     act(() => view.result.current?.bindPlayer(player));
@@ -566,6 +567,14 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
     act(() => view.result.current?.dispatch({ type: 'live-closed' }));
     expect(view.result.current?.state.playing).toBe(true);
     expect(view.player.keepPausedOnSwap).toHaveBeenCalledTimes(1);
+  });
+
+  it('되돌리면 넘김 안내를 거두라고 onWithdrawNotice 로 올린다', async () => {
+    const onWithdrawNotice = vi.fn();
+    const view = await handedOffSession({ onWithdrawNotice });
+    act(() => view.result.current?.dispatch({ type: 'live-closed' }));
+    expect(onWithdrawNotice).toHaveBeenCalledTimes(1);
+    expect(onWithdrawNotice).toHaveBeenCalledWith(HANDOFF_NOTICE);
   });
 
   it('멈춘 채 사람이 창 밖으로 옮긴 시크(H6)는 멈춤 유지를 걸지 않는다(현행)', async () => {

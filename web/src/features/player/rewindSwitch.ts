@@ -177,6 +177,8 @@ export type SessionEffect =
   | { kind: 'seek-within'; atMs: number }
   | { kind: 'seek-live-edge' }
   | { kind: 'notice'; text: string }
+  /** 앞서 낸 안내 text 가 아직 떠 있으면 거둔다 — 넘김을 되돌린 뒤 넘김 안내가 남지 않게 */
+  | { kind: 'withdraw-notice'; text: string }
   /** LIVE 의 X 를 2초 뒤 다시 묻는다 */
   | { kind: 'recheck-x'; attempt: number }
   /** goTo = 「새 방송 보기」의 방송 번호 */
