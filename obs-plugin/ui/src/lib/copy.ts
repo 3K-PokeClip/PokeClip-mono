@@ -47,6 +47,12 @@ export const REASON: Record<string, string> = {
   audio_track_attach_failed: '오디오 트랙을 출력에 붙이지 못했어요.',
   mark_not_live: 'PokeClip으로 전송 중일 때만 표시할 수 있어요.',
   mark_too_soon: '방금 표시했어요. 2초 뒤에 다시 누를 수 있어요.',
+  // POK-494·495
+  busy: 'OBS가 바빠요. 잠시 뒤 다시 해 주세요.',
+  hotkey_needs_modifier: '글자·숫자 키는 Ctrl이나 Alt(맥은 ⌃·⌥·⌘)와 함께 눌러 주세요. 혼자 쓰면 다른 앱에서 칠 때마다 표시돼요.',
+  hotkey_bad_key: '이 키는 단축키로 쓸 수 없어요. 글자·숫자·F 키 중에서 골라 주세요.',
+  hotkey_unavailable: 'OBS 단축키를 아직 쓸 수 없어요. OBS를 다시 켠 뒤 해 주세요.',
+  no_code_in_clipboard: '복사한 내용에 연결 코드가 없어요. PokeClip 설정 › 플러그인에서 코드를 다시 복사하세요.',
   mark_unsupported: 'PokeClip 서버가 아직 순간 표시를 받지 않아요.',
   mark_unauthorized: '서버가 스트림 키를 거절해 표시하지 못했어요. 연결을 해제한 뒤 새 코드를 입력하세요.',
   mark_rejected: '서버가 표시 요청을 거절했어요.',
@@ -57,6 +63,8 @@ export const REASON: Record<string, string> = {
   mark_insecure: 'API 주소가 https가 아니라 표시를 보내지 않았어요. 설정 파일의 api_base를 https로 바꾸세요.',
   // 독 전용 — 브리지 요청 자체가 실패했다(플러그인이 멈췄거나 연결이 끊겼다)
   bridge_unreachable: '플러그인과 연결이 끊겼어요. OBS를 다시 시작하세요.',
+  // 독 전용 — 새 단축키를 받는 동안 지금 키를 막아 달라는 요청을 플러그인이 받지 않았다
+  hotkey_capture_failed: '새 단축키를 받을 준비를 하지 못했어요. 잠시 뒤 다시 해 주세요.',
   // 독 전용 — 「다시 연결」·「재시도 중지」를 플러그인이 받지 않았다(누르는 사이 상태가 바뀌었다)
   main_not_live: '본 방송이 나가는 동안에만 보낼 수 있어요.',
   send_unavailable: '지금은 전송을 시작할 수 없어요.',

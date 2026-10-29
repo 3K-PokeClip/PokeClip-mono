@@ -590,7 +590,7 @@ AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, c
 				v.monitorOnly.push_back(s.name);
 			continue;
 		}
-		AudioSourceView view{s.name, s.kind, s.key, s.appId};
+		AudioSourceView view{s.name, s.kind, s.key, s.appId, s.showing};
 		bool onStem = false; // 본방 트랙은 스템이 아니다 — 거기에만 있으면 스템에는 없는 것
 		for (int m = 1; m <= kStemSlots; m++) {
 			uint32_t bit = 1u << m;

@@ -28,6 +28,7 @@ private:
 	void OnPairClicked();
 	void OnUnpairClicked();
 	void OnMarkClicked();
+	void OnHotkeyClicked(); // POK-494
 	void OnAssignClicked();
 	void OnTrackPicked(size_t index);
 
@@ -57,6 +58,7 @@ private:
 	bool audioLocked_ = false; // 마지막 상태: 방송·녹화 중 — 넣기 전에 한 번 묻는다
 	QLabel *marks_ = nullptr;
 	QPushButton *mark_ = nullptr;
+	QPushButton *hotkey_ = nullptr;
 	QLabel *message_ = nullptr;
 	QLineEdit *code_ = nullptr;
 	QPushButton *pair_ = nullptr;

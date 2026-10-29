@@ -14,10 +14,10 @@ import type {
 // 개발 전용 — `pnpm dev` 에서 토큰 없이 열면 쓴다.
 // ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_grouped|audio_live|audio_manual|
 //       audio_main_stream|audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
-//       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream
+//       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream|audio_other_scene
 // &env=dev — 개발 서버로 붙은 상태(머리 「개발 서버」 표시·고급 설정 스위치). 기본은 운영(POK-267).
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
-const src = (key: string, name: string, kind: AudioKind): AudioSource => ({ key, name, kind });
+const src = (key: string, name: string, kind: AudioKind, showing = true): AudioSource => ({ key, name, kind, showing });
 const MIC = src('ch:3', '마이크/보조', 'mic');
 const MIC2 = src('uuid:mic2', '마이크 2', 'mic');
 const DESK = src('ch:1', '데스크탑 오디오', 'desktop');
@@ -164,6 +164,13 @@ export function createMockBridge(scenario: string): Bridge {
       obsStreaming: true,
       checks: { ...liveChecks },
       audio: { ...routing([[MIC], [DESK], [BGM], [], []]), mixOnly: [ALERT], locked: true },
+    },
+    // POK-450 — 인트로 장면의 BGM·알림, 게임 장면의 게임은 지금 화면에 없다. 자리는 그대로, 독에서만 흐리게.
+    audio_other_scene: {
+      audio: {
+        ...routing([[MIC], [DESK], [{ ...BGM, showing: false }, ALERT], [{ ...GAME, showing: false }], []]),
+        mixOnly: [src('uuid:intro', '인트로 영상', 'media', false)],
+      },
     },
     audio_manual: {
       audio: {
@@ -363,6 +370,27 @@ export function createMockBridge(scenario: string): Bridge {
       return { ok: true };
     },
     // 플러그인처럼: 적용 중일 때만, 본방 트랙은 거절, 찬 트랙을 골라도 밀어내지 않고 묶는다. null은 트랙에서 뺀다(트랙 없음).
+    async pasteCode() {
+      await new Promise((r) => setTimeout(r, 150));
+      return { ok: true, code: 'KQ4M-7X2P' };
+    },
+
+    async setHotkey(combo) {
+      await new Promise((r) => setTimeout(r, 250));
+      const mac = /Mac/i.test(navigator.platform);
+      const key = combo.key.replace('OBS_KEY_', '');
+      const label = mac
+        ? `${combo.control ? '⌃' : ''}${combo.alt ? '⌥' : ''}${combo.shift ? '⇧' : ''}${combo.command ? '⌘' : ''}${key}`
+        : [combo.control && 'Ctrl', combo.alt && 'Alt', combo.shift && 'Shift', combo.command && 'Win', key].filter(Boolean).join('+');
+      emit({ marks: { ...state.marks, hotkey: label } });
+      // OBS 기본 단축키와 겹치는 흉내 — ⌃⇧S는 「방송 시작」에 묶여 있다고 친다
+      return { ok: true, label, conflict: combo.key === 'OBS_KEY_S' && combo.control && combo.shift ? '방송 시작' : '' };
+    },
+
+    async hotkeyCapture() {
+      return true;
+    },
+
     async assignAudio(key, track) {
       if (!state.audio.applied) return { ok: false, reason: 'audio_off' };
       const all = [...state.audio.tracks.flatMap((t) => t.sources), ...state.audio.mixOnly];

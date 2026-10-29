@@ -164,6 +164,7 @@ struct AudioSourceView {
 	AudioKind kind = AudioKind::Other;
 	std::string key; // 독이 넣기·빼기를 보낼 때 쓰는 열쇠 ("ch:N" · "uuid:…")
 	std::string appId; // 로그에만 보인다(독 상태에는 싣지 않는다)
+	bool showing = true; // 지금 방송 화면에 나온다 — 아니면 독이 「다른 장면」으로 흐리게 보인다(POK-450, 배정은 그대로)
 
 	bool operator==(const AudioSourceView &) const = default;
 };

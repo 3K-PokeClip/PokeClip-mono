@@ -12,6 +12,7 @@
 #include "end-signal-policy.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
+#include "post-and-wait.hpp"
 #include "retry-policy.hpp"
 #include "server-env.hpp"
 #include "srt-url.hpp"
@@ -22,6 +23,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <chrono>
 #include <cstdio>
@@ -91,6 +93,28 @@ TEST(pairing_code_rejects_bad_input)
 	CHECK_EQ(NormalizePairingCode("ABCDEFGHJ"), ""); // 9자
 	CHECK_EQ(NormalizePairingCode("ABCD-EFGU"), ""); // U는 Crockford 알파벳 밖
 	CHECK_EQ(NormalizePairingCode("ABCD_EFGH"), "");
+}
+
+// POK-495 — 클립보드 글에서 코드만 고른다(독 format.test.ts extractPairingCode와 같은 경우). 코드가 아니면 빈 문자열.
+TEST(pairing_code_extracts_from_clipboard_text)
+{
+	CHECK_EQ(ExtractPairingCode("KQ4M-7X2P"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("  kq4m-7x2p\n"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("코드: KQ4M – 7X2P (10분 안에 입력)"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("PokeClip 연결 코드 KQ4M7X2P"), "KQ4M7X2P"); // 낱말 PokeClip(8자)보다 숫자가 든 것
+	CHECK_EQ(ExtractPairingCode("KQ4M 7X2P"), "KQ4M7X2P");
+	CHECK_EQ(ExtractPairingCode("ABCDEFGH WXYZWXYZ"), "WXYZWXYZ"); // 숫자가 든 것이 없으면 맨 뒤
+	CHECK_EQ(ExtractPairingCode("ILO0-ab12"), "1100AB12");
+}
+
+TEST(pairing_code_extract_leaks_nothing_else)
+{
+	CHECK_EQ(ExtractPairingCode(""), "");
+	CHECK_EQ(ExtractPairingCode("안녕하세요 비밀번호는 hunter2"), "");
+	CHECK_EQ(ExtractPairingCode("ABCD-EFGU"), ""); // U는 알파벳 밖
+	CHECK_EQ(ExtractPairingCode("KQ4M7X2PZ"), ""); // 9자 토막
+	CHECK_EQ(ExtractPairingCode("설정 › 플러그인에서 코드를 받으세요"), "");
+	CHECK_EQ(ExtractPairingCode(std::string(5000, ' ') + "KQ4M-7X2P"), ""); // 앞 4096바이트만 본다
 }
 
 // ---------------------------------------------------------------- keyint 옵션
@@ -1003,6 +1027,30 @@ TEST(audio_routing_view_lists_keys_and_sources_off_tracks)
 	CHECK(line.find("BGM(media), 알림(browser)") != std::string::npos);
 	CHECK(line.find("no-track 1") != std::string::npos);
 	CHECK(BuildRoutingView(sources, options) == v);
+}
+
+// POK-450 — 지금 화면에 없는 소스도 트랙 칩에 남고 「다른 장면」 표시용으로 showing=false가 실린다. 배정은 그대로다.
+TEST(audio_routing_view_carries_showing_for_other_scene_sources)
+{
+	std::vector<AudioSourceInfo> sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x03),
+						Src("uuid:intro", "인트로 BGM", AudioKind::Media, 100, 0x05, true, false, false),
+						Src("uuid:off", "효과음", AudioKind::Media, 101, 0x01, true, false, false)};
+	RoutingViewOptions options;
+	options.autoAssign = true;
+	options.applied = true;
+	options.offTrack = {"uuid:off"};
+	AudioRoutingView v = BuildRoutingView(sources, options);
+	CHECK(v.tracks[0].sources[0].showing);
+	CHECK_EQ(v.tracks[1].sources.size(), 1u);
+	CHECK_EQ(v.tracks[1].sources[0].key, std::string("uuid:intro"));
+	CHECK(!v.tracks[1].sources[0].showing);
+	CHECK_EQ(v.mixOnly.size(), 1u);
+	CHECK(!v.mixOnly[0].showing);
+	sources[1].showing = true; // 그 장면으로 넘어갔다 — 자리는 그대로, 표시만 돌아온다
+	AudioRoutingView shown = BuildRoutingView(sources, options);
+	CHECK(shown.tracks[1].sources[0].showing);
+	CHECK_EQ(shown.tracks[1].sources[0].key, std::string("uuid:intro"));
+	CHECK(!(shown == v));
 }
 
 TEST(audio_prunes_absent_memories_beyond_cap)
@@ -2283,6 +2331,115 @@ TEST(mark_hotkey_label_ignores_keyboard_layout)
 	modsOnly.control = true;
 	modsOnly.shift = true;
 	CHECK_EQ(FormatHotkeyLabel(modsOnly, false), "Ctrl+Shift");
+}
+
+// POK-494 — 독·폴백에서 고른 새 단축키. 글자·숫자·기호·스페이스는 Ctrl·Alt·⌘와 함께여야 한다(Shift만으로는 안 된다).
+TEST(mark_hotkey_combo_rejection)
+{
+	HotkeyLabelParts none;
+	HotkeyLabelParts shift;
+	shift.shift = true;
+	HotkeyLabelParts ctrlShift;
+	ctrlShift.control = true;
+	ctrlShift.shift = true;
+	HotkeyLabelParts cmd;
+	cmd.command = true;
+	HotkeyLabelParts alt;
+	alt.alt = true;
+
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", ctrlShift), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_K", cmd), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_1", alt), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_SPACE", ctrlShift), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F9", none), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F24", shift), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_NUM5", none), "");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_PAUSE", none), "");
+	// 기호 키는 플랫폼별 libobs 이름 — macOS QUOTE·DEAD_GRAVE·EQUAL, Windows APOSTROPHE·ASCIITILDE·PLUS (PR #455 리뷰)
+	for (const char *name : {"OBS_KEY_QUOTE", "OBS_KEY_DEAD_GRAVE", "OBS_KEY_EQUAL", "OBS_KEY_APOSTROPHE",
+				 "OBS_KEY_ASCIITILDE", "OBS_KEY_PLUS"}) {
+		CHECK_EQ(HotkeyComboRejection(name, ctrlShift), "");
+		CHECK_EQ(HotkeyComboRejection(name, shift), "hotkey_needs_modifier");
+	}
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_QUOTELEFT", ctrlShift), "hotkey_bad_key"); // 어느 플랫폼 표에도 없다
+
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", none), "hotkey_needs_modifier");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_M", shift), "hotkey_needs_modifier");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_SLASH", shift), "hotkey_needs_modifier");
+
+	CHECK_EQ(HotkeyComboRejection("", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("M", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_SHIFT", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_MOUSE1", ctrlShift), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F25", none), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F0", none), "hotkey_bad_key");
+	// 긴 숫자는 파싱 전에 거른다 — 전에는 std::stoi가 out_of_range를 던져 UI 스레드에서 OBS가 꺼졌다(PR #455 리뷰)
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F100", none), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F2147483648", none), "hotkey_bad_key");
+	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F99999999999999999999", ctrlShift), "hotkey_bad_key");
+}
+
+// 새 키 받기를 꺼도 1초 더 막는다 — 새 바인딩을 건 직후 아직 눌린 새 키가 마크로 잡히지 않게(PR #455 리뷰)
+TEST(mark_hotkey_capture_deadline)
+{
+	CHECK_EQ(HotkeyCaptureDeadlineMs(true, 1000), 1000 + kHotkeyCaptureMaxMs);
+	CHECK_EQ(HotkeyCaptureDeadlineMs(false, 1000), 1000 + kHotkeyCaptureReleaseMs);
+	CHECK(kHotkeyCaptureReleaseMs >= 100);              // libobs 폴링(25ms) 두 번보다 넉넉히
+	CHECK(kHotkeyCaptureReleaseMs < kMarkDebounceMs);   // 일부러 다시 누르는 것까지 오래 막지는 않는다
+	// 받기 창(독·폴백)은 막기보다 먼저 닫힌다 — 막기가 풀린 채 창만 열려 있지 않게(2차 리뷰)
+	CHECK(kHotkeyCaptureUiMs < kHotkeyCaptureMaxMs);
+	CHECK(kHotkeyCaptureMaxMs - kHotkeyCaptureUiMs >= 1000);
+}
+
+// 받는 동안 멈춘 OBS 단축키 입력은 OBS 「단축키 포커스 동작」대로 되살린다(3차 리뷰) — 프런트엔드 ResetHotkeyState와 같은 규칙
+TEST(hotkeys_enabled_for_focus)
+{
+	CHECK(HotkeysEnabledForFocus("NeverDisableHotkeys", true));
+	CHECK(HotkeysEnabledForFocus("NeverDisableHotkeys", false));
+	CHECK(!HotkeysEnabledForFocus("DisableHotkeysInFocus", true));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeysInFocus", false));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeysOutOfFocus", true));
+	CHECK(!HotkeysEnabledForFocus("DisableHotkeysOutOfFocus", false));
+	CHECK(!HotkeysEnabledForFocus("disablehotkeysinfocus", true)); // astrcmpi — 대소문자 무시
+	// 없거나 모르는 값은 프런트엔드처럼 켠다 — 앞부분만 같은 값도 다른 값이다
+	CHECK(HotkeysEnabledForFocus("", true));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeysInFocusX", true));
+	CHECK(HotkeysEnabledForFocus("DisableHotkeys", false));
+}
+
+// 브리지 워커 → UI 스레드 일 기다리기(PR #455 리뷰) — 늦으면 거둔 일은 나중에도 안 돌고, 예외는 밖으로 안 나간다
+TEST(post_and_wait_runs_abandons_and_contains)
+{
+	auto inline_post = [](std::function<void()> f) { f(); };
+	CHECK_EQ(PostAndWait<int>(inline_post, []() { return 7; }, 100).value_or(-1), 7);
+
+	// 큐가 막혀 시간 안에 못 돌았다 → nullopt, 그 뒤 큐가 풀려도 일은 돌지 않는다
+	std::function<void()> queued;
+	bool ran = false;
+	auto stuck_post = [&](std::function<void()> f) { queued = std::move(f); };
+	CHECK(!PostAndWait<int>(stuck_post, [&]() { ran = true; return 1; }, 20).has_value());
+	queued();
+	CHECK(!ran);
+
+	// 일이 던진 예외는 삼키고 nullopt — UI 스레드 밖으로 나가면 OBS가 꺼진다
+	CHECK(!PostAndWait<int>(inline_post, []() -> int { throw std::out_of_range("x"); }, 100).has_value());
+
+	// 다른 스레드가 늦게(시간 초과 뒤) 실행하더라도 시작 전이면 거둔다 — 일꾼은 PostAndWait가 돌아온 뒤에야 풀어
+	// 시간 여유에 기대지 않는다(부하 큰 CI에서 간헐 실패하지 않게, 2차 리뷰)
+	std::promise<void> release;
+	std::shared_future<void> released = release.get_future().share();
+	std::thread late;
+	bool lateRan = false;
+	auto late_post = [&](std::function<void()> f) {
+		late = std::thread([f = std::move(f), released]() {
+			released.wait();
+			f();
+		});
+	};
+	CHECK(!PostAndWait<int>(late_post, [&]() { lateRan = true; return 1; }, 10).has_value());
+	release.set_value();
+	late.join();
+	CHECK(!lateRan);
 }
 
 TEST(mark_debounce_two_seconds)

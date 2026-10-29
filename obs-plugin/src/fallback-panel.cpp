@@ -3,6 +3,7 @@
 #include "app-state.hpp"
 #include "audio-router.hpp"
 #include "config.hpp"
+#include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
 #include "pairing.hpp"
 #include "stream-control.hpp"
@@ -11,6 +12,8 @@
 #include <obs-module.h>
 
 #include <QComboBox>
+#include <QDialog>
+#include <QKeyEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -35,6 +38,77 @@ QString Text(const char *key)
 	return QString::fromUtf8(obs_module_text(key));
 }
 } // namespace
+
+// POK-494 — 폴백 패널의 「단축키 바꾸기」. 새 조합을 누르면 독과 같은 SetMarkHotkey로 저장한다(Esc 취소).
+// 키는 자판 배치와 무관한 가상 키 코드로 읽는다. macOS Qt는 ⌘를 Control, ⌃를 Meta로 준다.
+class HotkeyCaptureDialog : public QDialog {
+public:
+	explicit HotkeyCaptureDialog(QWidget *parent) : QDialog(parent)
+	{
+		setWindowTitle(Text("Mark.CaptureTitle"));
+		label_ = new QLabel(Text("Mark.CapturePrompt"), this);
+		label_->setWordWrap(true);
+		label_->setMinimumWidth(260);
+		auto *layout = new QVBoxLayout(this);
+		layout->addWidget(label_);
+		// 플러그인 막기는 30초에 풀린다 — 그 전에 스스로 닫아, 막기가 풀린 채 창만 열려 지금 키로 마크가 나가지 않게
+		QTimer::singleShot(static_cast<int>(kHotkeyCaptureUiMs), this, [this]() {
+			timedOut_ = true;
+			reject();
+		});
+	}
+	QString Result() const { return result_; }
+	bool TimedOut() const { return timedOut_; }
+
+protected:
+	void keyPressEvent(QKeyEvent *e) override
+	{
+		switch (e->key()) {
+		case Qt::Key_Shift:
+		case Qt::Key_Control:
+		case Qt::Key_Alt:
+		case Qt::Key_Meta:
+			return;
+		case Qt::Key_Escape:
+			if (e->modifiers() == Qt::NoModifier) {
+				reject();
+				return;
+			}
+			break;
+		default:
+			break;
+		}
+		obs_key_t key = obs_key_from_virtual_key(static_cast<int>(e->nativeVirtualKey()));
+		const char *name = key == OBS_KEY_NONE ? nullptr : obs_key_to_name(key);
+		Qt::KeyboardModifiers m = e->modifiers();
+		HotkeyLabelParts mods;
+#ifdef __APPLE__
+		mods.control = m & Qt::MetaModifier;
+		mods.command = m & Qt::ControlModifier;
+#else
+		mods.control = m & Qt::ControlModifier;
+		mods.command = m & Qt::MetaModifier;
+#endif
+		mods.alt = m & Qt::AltModifier;
+		mods.shift = m & Qt::ShiftModifier;
+		MarkHotkeyChange r = SetMarkHotkey(name ? name : "", mods);
+		if (!r.ok) {
+			label_->setText(LocalizedReason(r.reason) + "\n\n" + Text("Mark.CapturePrompt"));
+			return;
+		}
+		result_ = Text("Mark.HotkeyChanged").arg(QString::fromStdString(r.label));
+		if (!r.conflict.empty())
+			result_ += " " + Text("Mark.HotkeyShared").arg(QString::fromStdString(r.conflict));
+		if (!r.saved)
+			result_ += " " + Text("Mark.HotkeyNotSaved");
+		accept();
+	}
+
+private:
+	QLabel *label_ = nullptr;
+	QString result_;
+	bool timedOut_ = false;
+};
 
 QString LocalizedReason(const std::string &code)
 {
@@ -106,9 +180,15 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	row->addWidget(code_, 1);
 	row->addWidget(pair_);
 
-	auto *note = new QLabel(Text("Fallback.Note") + (reason.isEmpty() ? QString() : " [" + reason + "]"), this);
+	// 스트리머가 「기본 패널로 표시」를 켠 것(force_fallback)이면 「쓸 수 없어」가 아니라 그 설정 때문이라고 말하고,
+	// 브라우저 패널로 돌아갈 버튼을 둔다 — 그 스위치는 브라우저 독 「고급 설정」에만 있어 여기서 못 돌아왔다.
+	const bool forced = reason == "force_fallback";
+	auto *note = new QLabel(forced ? Text("Fallback.NoteForced")
+				       : Text("Fallback.Note") + (reason.isEmpty() ? QString() : " [" + reason + "]"),
+				this);
 	note->setWordWrap(true);
 	note->setStyleSheet("color: gray; font-size: 11px;");
+	QPushButton *useBrowser = forced ? new QPushButton(Text("Fallback.UseBrowser"), this) : nullptr;
 
 	auto *retryRow = new QHBoxLayout();
 	retryRow->addWidget(sendNow_);
@@ -125,16 +205,28 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	layout->addWidget(assign_);
 	layout->addWidget(mark_);
 	layout->addWidget(marks_);
+	hotkey_ = new QPushButton(Text("Mark.ChangeHotkey"), this);
+	layout->addWidget(hotkey_);
 	layout->addLayout(row);
 	layout->addWidget(unpair_);
 	layout->addWidget(message_);
 	layout->addStretch(1);
 	layout->addWidget(note);
+	if (useBrowser) {
+		layout->addWidget(useBrowser);
+		// 독 표시 방식은 OBS를 켤 때만 고른다 — 바로 바꾸지 않고 다음 실행부터(브라우저 독 스위치와 같다).
+		connect(useBrowser, &QPushButton::clicked, this, [note, useBrowser]() {
+			bool saved = ConfigStore::Instance().Update([](PluginConfig &c) { c.forceFallback = false; });
+			note->setText(saved ? Text("Fallback.UseBrowserDone") : LocalizedReason("save_failed"));
+			useBrowser->setEnabled(!saved);
+		});
+	}
 
 	connect(pair_, &QPushButton::clicked, this, [this]() { OnPairClicked(); });
 	connect(code_, &QLineEdit::returnPressed, this, [this]() { OnPairClicked(); });
 	connect(unpair_, &QPushButton::clicked, this, [this]() { OnUnpairClicked(); });
 	connect(mark_, &QPushButton::clicked, this, [this]() { OnMarkClicked(); });
+	connect(hotkey_, &QPushButton::clicked, this, [this]() { OnHotkeyClicked(); });
 	connect(assign_, &QPushButton::clicked, this, [this]() { OnAssignClicked(); });
 	// 버튼은 UI 스레드에서 눌린다 — 독(브리지 워커)과 달리 그대로 부른다. 결과는 상태로 돌아와 Render가 그린다.
 	connect(sendNow_, &QPushButton::clicked, this, []() { SendNow(); });
@@ -203,10 +295,15 @@ void FallbackPanel::Render(const StateSnapshot &s)
 			line += " " + Text("Audio.Deferred");
 		else if (!s.audio.autoAssign)
 			line += " " + Text("Audio.Manual");
+		// 지금 방송 화면에 없는 소스는 이름 뒤에 「(다른 장면)」(POK-450) — 자리는 그대로라 그 장면이 아닐 때 조용할 뿐이다.
+		auto shown = [](const AudioSourceView &src) {
+			QString name = QString::fromStdString(src.name);
+			return src.showing ? name : name + " " + Text("Audio.OtherScene");
+		};
 		if (!s.audio.mixOnly.empty()) {
 			QStringList gone;
 			for (const AudioSourceView &src : s.audio.mixOnly)
-				gone << QString::fromStdString(src.name);
+				gone << shown(src);
 			line += "\n⚠ " + Text("Audio.NoTrack").arg(gone.join(", "));
 		}
 		audio_->setText(line);
@@ -229,7 +326,7 @@ void FallbackPanel::Render(const StateSnapshot &s)
 			const AudioTrackView &t = s.audio.tracks[i];
 			QStringList names;
 			for (const AudioSourceView &src : t.sources)
-				names << QString::fromStdString(src.name);
+				names << shown(src);
 			QString label = t.mainStream ? QString("T%1(%2)").arg(t.track).arg(Text("Audio.MainStream"))
 						     : QString("T%1").arg(t.track);
 			trackLabel_[i]->setText(label + " " + (names.isEmpty() ? QString("–") : names.join(", ")));
@@ -271,6 +368,7 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	// A4 — 우리 송출 중에만 누를 수 있다. 개수 줄은 지난 방송 것이 남아 있어도 보여준다.
 	bool sending = s.phase == StreamPhase::Live || s.phase == StreamPhase::Reconnecting;
 	mark_->setVisible(s.paired && sending);
+	hotkey_->setVisible(s.paired);
 	if (s.paired && (sending || s.marks.sent || s.marks.pending || s.marks.failed)) {
 		QString hotkey = s.marks.hotkey.empty() ? Text("Mark.NoHotkey") : QString::fromStdString(s.marks.hotkey);
 		QString line = Text("Mark.Line").arg(s.marks.sent).arg(s.marks.pending).arg(s.marks.failed).arg(hotkey);
@@ -342,6 +440,19 @@ void FallbackPanel::OnMarkClicked()
 	MarkAccept a = MarkSender::Instance().Mark(MarkVia::Panel);
 	if (!a.ok && a.reason == "mark_too_soon")
 		message_->setText(LocalizedReason(a.reason));
+}
+
+void FallbackPanel::OnHotkeyClicked()
+{
+	// 받는 동안 지금 키를 눌러도 마크가 나가지 않게 한다.
+	SetMarkHotkeyCapture(true);
+	HotkeyCaptureDialog dialog(this);
+	bool changed = dialog.exec() == QDialog::Accepted;
+	SetMarkHotkeyCapture(false); // 1초 유예 뒤 풀린다 — 창은 keyPress에 닫혀 손은 아직 새 키 위에 있다
+	if (changed)
+		message_->setText(dialog.Result());
+	else if (dialog.TimedOut())
+		message_->setText(Text("Mark.CaptureTimedOut"));
 }
 
 void FallbackPanel::OnAssignClicked()

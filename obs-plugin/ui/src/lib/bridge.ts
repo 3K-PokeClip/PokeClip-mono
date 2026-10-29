@@ -1,5 +1,5 @@
 import { takeSseFrames } from './format';
-import type { ActionResult, BridgeState, Hello, MarkReply, PluginSettings } from './types';
+import type { ActionResult, BridgeState, Hello, HotkeyCombo, MarkReply, PluginSettings } from './types';
 
 // 플러그인 루프백 브리지 클라이언트. 토큰은 URL 조각(#token=)으로 받아 sessionStorage 에만 둔다.
 export interface Bridge {
@@ -16,6 +16,14 @@ export interface Bridge {
   // POK-266 — 손 배정. track 2~6 = 그 트랙으로 옮긴다(찬 트랙이면 묶인다), null = 트랙에서 뺀다(본방 믹스에만).
   // 받아들이면 202이고 결과는 state.audio로 온다.
   assignAudio(key: string, track: number | null): Promise<ActionResult>;
+  // POK-495 — OS 클립보드에서 연결 코드만 받아 온다(독의 ⌘V가 OBS 메뉴에 먹히므로). code는 XXXX-XXXX
+  pasteCode(): Promise<ActionResult & { code?: string }>;
+  // POK-494 — 「순간 표시」 단축키 바꾸기. label = 바꾼 뒤 표기, conflict = 같은 키를 쓰는 다른 OBS 단축키 이름,
+  // saved = OBS 프로필에 적었다(false면 다음 실행 때 예전 키로 돌아갈 수 있다)
+  setHotkey(combo: HotkeyCombo): Promise<ActionResult & { label?: string; conflict?: string; saved?: boolean }>;
+  // 새 키를 받는 동안 지금 키로 마크가 나가지 않게(플러그인이 30초 뒤 저절로 푼다). 플러그인이 받아들였으면 true —
+  // 켜기가 실패했는데 키를 받으면 막기 없이 지금 키가 마크로 나간다(3차 리뷰)
+  hotkeyCapture(on: boolean): Promise<boolean>;
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -156,6 +164,28 @@ export function createHttpBridge(token: string): Bridge {
       const body = track === null ? { key } : { key, track };
       const res = await send('/api/audio/assign', { method: 'POST', headers: json, body: JSON.stringify(body) });
       return res ? readResult(res) : UNREACHABLE;
+    },
+
+    async pasteCode() {
+      const res = await send('/api/paste-code', { method: 'POST', headers });
+      if (!res) return UNREACHABLE;
+      if (res.ok) return { ok: true, code: String(((await res.json()) as { code?: string }).code ?? '') };
+      return readResult(res);
+    },
+
+    async setHotkey(combo) {
+      const res = await send('/api/hotkey', { method: 'PUT', headers: json, body: JSON.stringify(combo) });
+      if (!res) return UNREACHABLE;
+      if (res.ok) {
+        const body = (await res.json()) as { label?: string; conflict?: string; saved?: boolean };
+        return { ok: true, label: body.label ?? '', conflict: body.conflict ?? '', saved: body.saved !== false };
+      }
+      return readResult(res);
+    },
+
+    async hotkeyCapture(on) {
+      const res = await send('/api/hotkey/capture', { method: 'POST', headers: json, body: JSON.stringify({ on }) });
+      return res?.ok ?? false;
     },
   };
 }

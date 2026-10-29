@@ -12,14 +12,18 @@ import styles from './dock.module.css';
 // 자동 배정이 적용 중일 때만 고칠 수 있다 — 꺼져 있으면 OBS 설정 그대로라 플러그인이 트랙을 맡지 않는다.
 type Request = { key: string; name: string; track: number; action: 'add' | 'remove' };
 
-export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bridge }) {
+// bare — 독 탭 안(카드 테두리 없이)
+export function AudioTracks({ state, bridge, bare }: { state: BridgeState; bridge: Bridge; bare?: boolean }) {
   const { audio } = state;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirm, setConfirm] = useState<Request | null>(null);
   if (!audio.known) return null;
 
-  const names = (list: { name: string }[]) => list.map((s) => s.name).join(', ');
+  // POK-450 — 지금 화면에 없는 소스는 점선 칩으로(「다른 장면」). 자리는 그대로라 그 장면이 아닐 때 조용할 뿐이다(규칙 1).
+  const label = (s: { name: string; showing?: boolean }) => (s.showing === false ? `${s.name} (다른 장면)` : s.name);
+  const names = (list: { name: string; showing?: boolean }[]) => list.map(label).join(', ');
+  const otherScene = audio.tracks.some((t) => !t.mainStream && t.sources.some((s) => !s.showing));
   const mainStreamTracks = audio.tracks.filter((t) => t.mainStream).map((t) => t.track);
   const title = !audio.autoAssign
     ? '오디오 트랙 · OBS 설정 그대로'
@@ -52,7 +56,7 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
   };
 
   return (
-    <section class={styles.section} aria-labelledby="audio-title">
+    <section class={bare ? styles.bareSection : styles.section} aria-labelledby="audio-title">
       <h3 id="audio-title" class={styles.sectionTitle}>
         {title}
       </h3>
@@ -98,8 +102,13 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
               ) : (
                 <span class={styles.chips}>
                   {t.sources.map((s) => (
-                    <span class={styles.chip} key={s.key}>
-                      <span title={s.name}>{s.name}</span>
+                    <span
+                      class={styles.chip}
+                      key={s.key}
+                      data-showing={s.showing ? undefined : 'false'}
+                      title={s.showing ? s.name : `${s.name} — 다른 장면에 있어 지금은 조용해요`}
+                    >
+                      <span>{s.name}</span>
                       {canEdit ? (
                         <button
                           type="button"
@@ -140,7 +149,7 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
                 </option>
                 {candidates.map((s) => (
                   <option value={s.key} key={s.key}>
-                    {s.name}
+                    {label(s)}
                   </option>
                 ))}
               </select>
@@ -148,12 +157,17 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
           );
         })}
       </ul>
+      {otherScene ? (
+        <p class={styles.note}>
+          점선 소스는 다른 장면에 있어 지금은 조용해요. 트랙 자리는 그대로예요.
+        </p>
+      ) : null}
       {error ? (
         <p class={styles.inlineError} role="alert">
           {error}
         </p>
       ) : null}
-      {!audio.autoAssign ? <p class={styles.note}>자동 배정을 켜면 여기서 트랙을 고를 수 있어요.</p> : null}
+      {!audio.autoAssign ? <p class={styles.note}>설정 탭에서 자동 배정을 켜면 여기서 트랙을 고를 수 있어요.</p> : null}
       {audio.deferred ? (
         <p class={styles.note}>방송·녹화 중에 켜서 끝나면 자동 배정을 시작해요. 지금 나가는 트랙은 그대로예요.</p>
       ) : null}

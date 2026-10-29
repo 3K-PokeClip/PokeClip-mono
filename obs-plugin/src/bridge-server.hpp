@@ -34,6 +34,12 @@ struct BridgeCallbacks {
 	std::function<Reply()> stopRetry;
 	// POK-266: 독의 손 배정 — {"key", "track"(2~6 = 그 트랙으로, 없거나 null = 트랙에서 뺀다)}. 결과는 상태(audio)로 간다.
 	std::function<Reply(const std::string &body)> assignAudio;
+	// POK-495: OS 클립보드에서 연결 코드만 골라 돌려준다 — 200 {"code"} · 404 no_code_in_clipboard
+	std::function<Reply()> pasteCode;
+	// POK-494: 「순간 표시」 단축키 바꾸기 {"key","control","alt","shift","command"} → 200 {"label","conflict"}
+	std::function<Reply(const std::string &body)> setHotkey;
+	// POK-494: 새 키를 받는 동안 마크 막기 {"on"}
+	std::function<Reply(const std::string &body)> hotkeyCapture;
 };
 
 class BridgeServer {

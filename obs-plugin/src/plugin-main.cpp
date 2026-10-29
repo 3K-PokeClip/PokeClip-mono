@@ -28,7 +28,9 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "end-signal-sender.hpp"
 #include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
+#include "pairing-code.hpp"
 #include "pairing.hpp"
+#include "post-and-wait.hpp"
 #include "server-env.hpp"
 #include "srt-target.hpp"
 #include "stream-control.hpp"
@@ -40,6 +42,8 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <obs-module.h>
 #include <plugin-support.h>
 
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QMainWindow>
 #include <QTimer>
 
@@ -47,6 +51,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <chrono>
 #include <future>
 #include <memory>
+#include <optional>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("pokeclip-obs", "en-US")
@@ -79,6 +84,12 @@ std::string JsonReason(bool ok, const std::string &reason)
 	std::string json = obs_data_get_json(d);
 	obs_data_release(d);
 	return json;
+}
+
+// UI 스레드 일을 잠깐 기다려 그 결과로 답한다 — 늦으면 거두고, 예외는 삼킨다(post-and-wait.hpp).
+template<typename T> std::optional<T> RunInUiThreadAndWait(std::function<T()> task, int timeoutMs = 1500)
+{
+	return PostAndWait<T>([](std::function<void()> f) { RunInUiThread(std::move(f)); }, std::move(task), timeoutMs);
 }
 
 int StatusForPairingReason(const std::string &reason)
@@ -297,6 +308,63 @@ BridgeCallbacks MakeBridgeCallbacks()
 		MarkAccept a = MarkSender::Instance().Mark(MarkVia::Dock);
 		int status = a.ok ? 202 : (a.reason == "mark_too_soon" ? 429 : 409);
 		return {status, JsonReason(a.ok, a.reason)};
+	};
+	// POK-495 — 독(CEF)의 ⌘V는 OBS 「편집 › 붙여넣기」와 겹쳐 입력칸에 안 붙는다. OS 클립보드를 UI 스레드에서 읽어
+	// 연결 코드만 골라 돌려준다 — 코드가 아닌 클립보드 글은 독으로 보내지 않는다.
+	cb.pasteCode = []() -> BridgeCallbacks::Reply {
+		std::optional<std::string> code = RunInUiThreadAndWait<std::string>([]() {
+			QClipboard *clipboard = QGuiApplication::clipboard();
+			return clipboard ? ExtractPairingCode(clipboard->text().toStdString()) : std::string{};
+		});
+		if (!code)
+			return {503, JsonReason(false, "busy")};
+		obs_log(LOG_INFO, "pairing: paste from clipboard (%s)", code->empty() ? "no code" : "code found");
+		if (code->empty())
+			return {404, JsonReason(false, "no_code_in_clipboard")};
+		obs_data_t *d = obs_data_create();
+		obs_data_set_bool(d, "ok", true);
+		obs_data_set_string(d, "code", (code->substr(0, 4) + "-" + code->substr(4)).c_str());
+		std::string json = obs_data_get_json(d);
+		obs_data_release(d);
+		return {200, json};
+	};
+	// POK-494 — 독에서 「순간 표시」 단축키 바꾸기. {"key":"OBS_KEY_M","control":true,"alt":false,"shift":true,"command":false}
+	cb.setHotkey = [](const std::string &body) -> BridgeCallbacks::Reply {
+		obs_data_t *d = obs_data_create_from_json(body.c_str());
+		if (!d)
+			return {400, JsonReason(false, "invalid_json")};
+		std::string key = obs_data_get_string(d, "key");
+		HotkeyLabelParts mods;
+		mods.control = obs_data_get_bool(d, "control");
+		mods.alt = obs_data_get_bool(d, "alt");
+		mods.shift = obs_data_get_bool(d, "shift");
+		mods.command = obs_data_get_bool(d, "command");
+		obs_data_release(d);
+		std::optional<MarkHotkeyChange> r =
+			RunInUiThreadAndWait<MarkHotkeyChange>([key, mods]() { return SetMarkHotkey(key, mods); });
+		// 끄기는 1초 유예 뒤 풀린다 — 독은 keydown에 저장하므로 지금 손은 아직 새 키 위에 있다(mark-policy.hpp)
+		SetMarkHotkeyCapture(false);
+		if (!r)
+			return {503, JsonReason(false, "busy")};
+		if (!r->ok)
+			return {r->reason == "hotkey_unavailable" ? 409 : 400, JsonReason(false, r->reason)};
+		obs_data_t *out = obs_data_create();
+		obs_data_set_bool(out, "ok", true);
+		obs_data_set_string(out, "label", r->label.c_str());
+		obs_data_set_string(out, "conflict", r->conflict.c_str());
+		obs_data_set_bool(out, "saved", r->saved);
+		std::string json = obs_data_get_json(out);
+		obs_data_release(out);
+		return {200, json};
+	};
+	// 새 키를 받는 동안 지금 키로 마크가 나가지 않게 — {"on":true|false}. 30초 뒤 저절로 풀린다.
+	cb.hotkeyCapture = [](const std::string &body) -> BridgeCallbacks::Reply {
+		obs_data_t *d = obs_data_create_from_json(body.c_str());
+		if (!d)
+			return {400, JsonReason(false, "invalid_json")};
+		SetMarkHotkeyCapture(obs_data_get_bool(d, "on"));
+		obs_data_release(d);
+		return {200, JsonReason(true, "")};
 	};
 	// A5 — 워커 스레드라 상태로 미리 거르기만 하고, 출력은 UI 스레드에서 만진다. 결과는 상태(phase·errorCode)로 간다.
 	cb.sendNow = []() -> BridgeCallbacks::Reply {

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <set>
 
 namespace pokeclip {
 
@@ -227,6 +228,55 @@ bool MarkDebouncer::Accept(int64_t nowSteadyMs)
 	hasLast_ = true;
 	lastMs_ = nowSteadyMs;
 	return true;
+}
+
+std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabelParts &mods)
+{
+	static const std::string kPrefix = "OBS_KEY_";
+	if (obsKeyName.rfind(kPrefix, 0) != 0)
+		return "hotkey_bad_key";
+	std::string k = obsKeyName.substr(kPrefix.size());
+	// 기호 키는 플랫폼마다 libobs 이름이 다르다 — macOS EQUAL·QUOTE·DEAD_GRAVE, Windows PLUS·APOSTROPHE·ASCIITILDE.
+	// 이 플랫폼에 실제로 있는 키인지(가상 키)는 SetMarkHotkey가 마지막에 본다.
+	static const std::set<std::string> kTyping = {"SPACE",      "MINUS",     "EQUAL", "PLUS",      "BRACKETLEFT",
+						      "BRACKETRIGHT", "SEMICOLON", "QUOTE", "APOSTROPHE", "COMMA",
+						      "PERIOD",     "SLASH",     "BACKSLASH", "DEAD_GRAVE", "ASCIITILDE"};
+	static const std::set<std::string> kStandalone = {"INSERT", "HOME", "END", "PAGEUP", "PAGEDOWN", "PAUSE"};
+	auto allDigits = [](const std::string &v) {
+		return !v.empty() && std::all_of(v.begin(), v.end(), [](char c) { return c >= '0' && c <= '9'; });
+	};
+	bool letterOrDigit = k.size() == 1 && ((k[0] >= 'A' && k[0] <= 'Z') || (k[0] >= '0' && k[0] <= '9'));
+	bool typing = letterOrDigit || kTyping.count(k) > 0;
+	// F1~F24 — 숫자는 두 자리까지만 파싱한다. 더 길면 std::stoi가 범위 밖 예외를 던지고, 이 검사는 UI 스레드 큐에서 돌아
+	// 잡는 곳이 없어 OBS가 꺼진다(브리지 PUT /api/hotkey는 독 말고도 토큰만 있으면 아무 이름이나 보낼 수 있다).
+	bool fkey = k.size() >= 2 && k.size() <= 3 && k[0] == 'F' && allDigits(k.substr(1));
+	if (fkey) {
+		int n = std::stoi(k.substr(1));
+		fkey = n >= 1 && n <= 24;
+	}
+	bool numpad = k.size() == 4 && k.rfind("NUM", 0) == 0 && allDigits(k.substr(3));
+	if (!typing && !fkey && !numpad && !kStandalone.count(k))
+		return "hotkey_bad_key";
+	if (typing && !mods.control && !mods.alt && !mods.command)
+		return "hotkey_needs_modifier";
+	return "";
+}
+
+int64_t HotkeyCaptureDeadlineMs(bool on, int64_t nowMs)
+{
+	return nowMs + (on ? kHotkeyCaptureMaxMs : kHotkeyCaptureReleaseMs);
+}
+
+bool HotkeysEnabledForFocus(const std::string &focusType, bool inFocus)
+{
+	auto is = [&](const char *lower) {
+		return focusType.size() == std::char_traits<char>::length(lower) && StartsWithNoCase(focusType, lower);
+	};
+	if (is("disablehotkeysinfocus"))
+		return !inFocus;
+	if (is("disablehotkeysoutoffocus"))
+		return inFocus;
+	return true; // NeverDisableHotkeys · 없음 · 모르는 값
 }
 
 } // namespace pokeclip

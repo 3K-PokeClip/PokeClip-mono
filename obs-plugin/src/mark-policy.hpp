@@ -18,6 +18,13 @@ inline constexpr int64_t kMarkRetryFirstMs = 1000;       // 1·2·4·8…초
 inline constexpr int64_t kMarkRetryMaxMs = 30000;        // 재시도 간격 상한
 inline constexpr int64_t kMarkRetryAfterMaxMs = 60000;   // 서버 Retry-After도 이 이상은 기다리지 않는다
 inline constexpr int64_t kMarkGiveUpMs = 10 * 60 * 1000; // 누른 지 10분이 지나도 못 보냈으면 버린다
+inline constexpr int64_t kHotkeyCaptureMaxMs = 30000;    // 독·폴백이 새 단축키를 받는 동안 마크를 막는 상한
+// 받기를 끝낸 뒤에도 이만큼 더 막는다 — libobs는 새 바인딩을 걸자마자 다음 폴링(25ms 두 번)에 아직 눌린 새 키를 누름으로 센다
+inline constexpr int64_t kHotkeyCaptureReleaseMs = 1000;
+// 독·폴백 받기 창이 스스로 닫히는 시간 — 막기(kHotkeyCaptureMaxMs)보다 먼저 닫아야, 막기가 풀린 채 창만 열려
+// 지금 키가 마크로 나가는 일이 없다. 독 HotkeySection.tsx CAPTURE_MAX_MS도 같은 값이다.
+inline constexpr int64_t kHotkeyCaptureUiMs = 25000;
+static_assert(kHotkeyCaptureUiMs < kHotkeyCaptureMaxMs, "받기 창은 막기보다 먼저 닫혀야 한다");
 inline constexpr size_t kMarkQueueCap = 100;             // 대기열이 이보다 길면 가장 오래된 것부터 버린다
 inline constexpr const char *kMarkPath = "/api/clip/marks";
 // 파생 값의 메시지. 4D(kEndSignalHmacMessage)와 함수는 같고 이 값만 다르다 — 한쪽 값으로 다른 쪽 요청을 못 만든다.
@@ -78,6 +85,20 @@ struct HotkeyLabelParts {
 	std::string keyText;  // obs_key_to_str — 자판 배열을 따른 표기
 };
 std::string FormatHotkeyLabel(const HotkeyLabelParts &parts, bool mac);
+
+// POK-494 — 독·폴백에서 새로 고른 단축키 검사(OBS 키 이름 + 조합 키, keyName·keyText는 안 쓴다). 받아들이면 빈 문자열.
+//   hotkey_bad_key — 독이 보내는 키(글자·숫자·F1~F24·숫자패드·기호·스페이스·Insert/Home/End/PageUp/PageDown/Pause)가 아니다
+//   hotkey_needs_modifier — 글자·숫자·기호·스페이스를 혼자(또는 Shift만) 쓰면 다른 앱에서 칠 때마다 마크가 간다.
+//                           Ctrl·Alt·⌘ 중 하나와 함께. F 키·숫자패드·이동 키는 혼자 써도 된다.
+std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabelParts &mods);
+
+// POK-494 — 새 단축키 받기를 켜고(on) 끈(off) 시각 → 마크를 막는 마감(단조 ms). 끄기도 바로 풀지 않고
+// kHotkeyCaptureReleaseMs 더 막는다 — 저장은 키를 누른 순간(keydown) 끝나는데 손은 아직 키 위에 있다.
+int64_t HotkeyCaptureDeadlineMs(bool on, int64_t nowMs);
+
+// 받는 동안 멈춘 OBS 단축키 입력을 받기가 끝나 되살릴 값 — OBS 프런트엔드 OBSApp::ResetHotkeyState와 같은 규칙.
+// focusType = 사용자 설정 [General] HotkeyFocusType(대소문자 무시), inFocus = OBS가 앞에 있다.
+bool HotkeysEnabledForFocus(const std::string &focusType, bool inFocus);
 
 // 연타 거르기. 단조 시계 ms로 부른다. 받아들이면 true(그 시각을 기억한다).
 class MarkDebouncer {
