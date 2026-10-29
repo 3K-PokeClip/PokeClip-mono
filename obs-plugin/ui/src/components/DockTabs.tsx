@@ -8,6 +8,8 @@ import styles from './dock.module.css';
 import { SettingsPanel } from './Settings';
 
 type Tab = 'checks' | 'audio' | 'settings';
+// 패널은 고른 탭 하나만 그린다 — aria-controls는 그 탭에만 달아 없는 id를 가리키지 않게 한다
+const PANEL_ID = 'dock-tab-panel';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'checks', label: '점검' },
   { id: 'audio', label: '오디오' },
@@ -72,7 +74,7 @@ export function DockTabs({
             role="tab"
             class={styles.tab}
             aria-selected={tab === t.id}
-            aria-controls={`dock-panel-${t.id}`}
+            aria-controls={tab === t.id ? PANEL_ID : undefined}
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => setTab(t.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
@@ -87,7 +89,7 @@ export function DockTabs({
           </button>
         ))}
       </div>
-      <div id={`dock-panel-${tab}`} class={styles.tabPanel} role="tabpanel" aria-labelledby={`dock-tab-${tab}`}>
+      <div id={PANEL_ID} class={styles.tabPanel} role="tabpanel" aria-labelledby={`dock-tab-${tab}`}>
         {tab === 'checks' ? <Checks state={state} bare /> : null}
         {tab === 'audio' ? (
           state.audio.known ? (
