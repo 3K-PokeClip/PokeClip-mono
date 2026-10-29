@@ -200,22 +200,27 @@ void LoadBindings()
 }
 
 // OBS 설정 창이 쓰는 자리 — 설정 창을 열면 이 값이 보이고, 다음 실행·프로필 전환 때 ResolveBindings가 먼저 읽는다.
-void SaveToProfile()
+// 디스크에 못 적었으면 false — 다음 실행은 프로필의 예전 키를 사본보다 먼저 읽어 바꾼 키가 되돌아간다(3차 리뷰).
+// 프로필이 없으면 ResolveBindings도 사본을 읽으니 true.
+bool SaveToProfile()
 {
 	obs_hotkey_id id = g_hotkey;
 	config_t *profile = obs_frontend_get_profile_config();
 	if (id == OBS_INVALID_HOTKEY_ID || !profile)
-		return;
+		return true;
 	obs_data_array_t *bindings = obs_hotkey_save(id);
 	if (!bindings)
-		return;
+		return false;
 	obs_data_t *data = obs_data_create();
 	obs_data_set_array(data, "bindings", bindings);
 	config_set_string(profile, "Hotkeys", kHotkeyName, obs_data_get_json(data));
 	obs_data_release(data);
 	obs_data_array_release(bindings);
-	if (config_save_safe(profile, "tmp", nullptr) != CONFIG_SUCCESS)
+	if (config_save_safe(profile, "tmp", nullptr) != CONFIG_SUCCESS) {
 		obs_log(LOG_WARNING, "mark hotkey: profile save failed");
+		return false;
+	}
+	return true;
 }
 
 // 같은 조합을 쓰는 다른 OBS 단축키 — 그쪽도 같이 눌리니 독이 알린다.
@@ -347,7 +352,7 @@ MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelP
 	obs_hotkey_load(id, bindings); // 지금 바인딩을 갈아 끼운다(여럿이었어도 하나로)
 	obs_data_array_release(bindings);
 
-	SaveToProfile();
+	r.saved = SaveToProfile();
 	SaveCopy();
 	r.label = RefreshLabel();
 	SyncSystemHotkeys();

@@ -352,6 +352,7 @@ BridgeCallbacks MakeBridgeCallbacks()
 		obs_data_set_bool(out, "ok", true);
 		obs_data_set_string(out, "label", r->label.c_str());
 		obs_data_set_string(out, "conflict", r->conflict.c_str());
+		obs_data_set_bool(out, "saved", r->saved);
 		std::string json = obs_data_get_json(out);
 		obs_data_release(out);
 		return {200, json};

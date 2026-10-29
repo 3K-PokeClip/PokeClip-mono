@@ -128,10 +128,10 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
     setCapturing(false);
     setPreview('');
     if (r.ok) {
-      setMessage({
-        tone: 'ok',
-        text: r.conflict ? `바꿨어요. OBS 「${r.conflict}」 단축키와 같은 키라 둘 다 눌려요.` : '바꿨어요',
-      });
+      const shared = r.conflict ? ` OBS 「${r.conflict}」 단축키와 같은 키라 둘 다 눌려요.` : '';
+      // 프로필에 못 적었다 — 지금은 바뀌었지만 다음 실행은 프로필의 예전 키를 먼저 읽는다
+      const unsaved = r.saved === false ? ' 다만 OBS 설정 파일에 저장하지 못해, OBS를 다시 켜면 예전 키로 돌아갈 수 있어요.' : '';
+      setMessage({ tone: unsaved ? 'error' : 'ok', text: shared || unsaved ? `바꿨어요.${shared}${unsaved}` : '바꿨어요' });
     } else {
       void queue(() => bridge.hotkeyCapture(false));
       setMessage({ tone: 'error', text: reasonText(r.reason) });

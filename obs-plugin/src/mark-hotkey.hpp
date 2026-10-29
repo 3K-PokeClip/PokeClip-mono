@@ -21,6 +21,7 @@ struct MarkHotkeyChange {
 	std::string reason;   // hotkey_bad_key · hotkey_needs_modifier · hotkey_unavailable
 	std::string label;    // 바꾼 뒤 독 표기
 	std::string conflict; // 같은 조합을 쓰는 다른 OBS 단축키 이름(그쪽도 같이 눌린다) — 없으면 빈 문자열
+	bool saved = true;    // 프로필에 적었다 — false면 지금은 바뀌었지만 다음 실행 때 예전 키로 돌아갈 수 있다
 };
 MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelParts &mods);
 

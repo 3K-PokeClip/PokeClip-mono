@@ -99,6 +99,8 @@ protected:
 		result_ = Text("Mark.HotkeyChanged").arg(QString::fromStdString(r.label));
 		if (!r.conflict.empty())
 			result_ += " " + Text("Mark.HotkeyShared").arg(QString::fromStdString(r.conflict));
+		if (!r.saved)
+			result_ += " " + Text("Mark.HotkeyNotSaved");
 		accept();
 	}
 
