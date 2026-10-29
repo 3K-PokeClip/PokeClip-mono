@@ -79,31 +79,25 @@ async function prefetchOnce(
   const toMs = base + Math.round(win.endSeconds * 1000);
   const trackKey = segmentTrackKey(streamId, fromMs, toMs);
 
-  await Promise.all([
-    windowBlobs.get(videoUrl) !== undefined
-      ? null
-      : deps
-          .fetchRecordingWindow(mediaStreamId(broadcast), videoUrl)
-          .then((blob) => windowBlobs.set(videoUrl, blob)),
-    segmentTracks.get(trackKey) !== undefined
-      ? null
-      : (() => {
-          const decoder = deps.createDecoder();
-          return deps
-            .loadSegmentTracks({
-              streamId,
-              baseMs: base,
-              fromMs,
-              toMs,
-              decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
-            })
-            .then((tracks) => {
-              // 소리 트랙을 하나도 못 꺼냈으면 편집기도 「소리 못 부름」이다: 준비됐다고 하지 않는다
-              if (tracks.length === 0) throw new Error('no audio tracks');
-              segmentTracks.set(trackKey, tracks);
-            });
-        })(),
-  ]);
+  const loadVideo = async () => {
+    if (windowBlobs.get(videoUrl) !== undefined) return;
+    windowBlobs.set(videoUrl, await deps.fetchRecordingWindow(mediaStreamId(broadcast), videoUrl));
+  };
+  const loadAudio = async () => {
+    if (segmentTracks.get(trackKey) !== undefined) return;
+    const decoder = deps.createDecoder();
+    const tracks = await deps.loadSegmentTracks({
+      streamId,
+      baseMs: base,
+      fromMs,
+      toMs,
+      decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
+    });
+    // 소리 트랙을 하나도 못 꺼냈으면 편집기도 「소리 못 부름」이다: 준비됐다고 하지 않는다
+    if (tracks.length === 0) throw new Error('no audio tracks');
+    segmentTracks.set(trackKey, tracks);
+  };
+  await Promise.all([loadVideo(), loadAudio()]);
   return 'ready';
 }
 
