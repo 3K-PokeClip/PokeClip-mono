@@ -26,8 +26,8 @@ import (
 )
 
 // assemblePublishing 은 r 에 되감기 발행 몫을 채우고 발행자 풀을 돌려준다 — run 이 업로더 기동(up.Start) 앞에서 한 번 부르고 풀을
-// 닫는다(종료 순서의 「발행자 풀 Close」). 발행 몫이 없으면 nil 이고 r 은 4.1 종료 전이만 돈다(캐시 nil · 차선 nil · 완료 case nil
-// 채널 — 루프 보조 타입의 「발행 몫 없음」).
+// 닫는다(종료 순서의 「발행자 풀 Close」). 발행 몫이 없으면 nil 이고 r 의 발행 몫(캐시 · 발행자 · 작업 몸체)은 비어 있다. 차선은
+// run 이 조립 밖에서 채우므로 그때도 정산 · 상태 전달 차선과 완료 case 는 돈다(M6 3.2 — 루프 보조 타입의 「발행 몫 없음」).
 //
 //	S3_BUCKET 이 빔  조립하지 않는다 · INFO rewind_publish_disabled(판단 J69 — 팀 공용 compose 의 기본 형상)
 //	조립 실패        발행 몫 전체를 버린다 · ERROR rewind_publish_degraded(판단 J77 · ADR-063 결정 1 — 업로드 · 인덱싱은 그대로).
@@ -202,7 +202,8 @@ func newWriterToken() string {
 
 // stop 은 루프가 돌아온 뒤 발행 몫을 멈춘다 — run 이 발행자 풀 Close 보다 뒤에 defer 로 등록한다(LIFO 라 먼저 돈다). 차선 ctx 를
 // 끊고 · 떠 있는 작업을 기다린 뒤 · fence 를 반납한다(stopPublishing). 반납이 실패하면 ERROR rewind_fence_release_failed 한 줄을
-// 남긴다 — 후임 writer 는 lease 가 끝날 때까지 그 회차 목록을 쓰지 못한다. 발행 몫이 없으면 끊기만 한다.
+// 남긴다 — 후임 writer 는 lease 가 끝날 때까지 그 회차 목록을 쓰지 못한다. 발행 몫이 없으면 반납할 fence 가 없어 차선을 끊고
+// 떠 있는 정산 작업이 끝나기를 기다리기만 한다(D24 — 풀이 닫히기 전에 정산 문장이 끝난다).
 func (r *rewindLoop) stop(ctx context.Context, cancelLanes context.CancelFunc) {
 	var release func(context.Context) error
 	if r.publishing() {
