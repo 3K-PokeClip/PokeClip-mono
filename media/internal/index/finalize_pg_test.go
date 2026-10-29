@@ -20,6 +20,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// chainTestMaxRows 는 상한을 재지 않는 시험의 사슬 적재 상한이다 — 픽스처 행 수보다 넉넉하다.
+const chainTestMaxRows = 1000
+
 // setRound 는 픽스처 회차의 round_id 를 정한다("" = NULL — M6 전 세션).
 func setRound(t *testing.T, pool *pgxpool.Pool, sessionID, roundID string) {
 	t.Helper()
@@ -53,7 +56,7 @@ func putChainSessions(t *testing.T, pool *pgxpool.Pool, stream string, sessions 
 // chainIDs 는 꼬리 tail 의 사슬을 읽어 세션 순서(개시 순)를 돌려준다.
 func chainIDs(t *testing.T, pool *pgxpool.Pool, stream, tail string) []string {
 	t.Helper()
-	l, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: stream, Tail: tail})
+	l, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: stream, Tail: tail}, chainTestMaxRows)
 	if err != nil {
 		t.Fatalf("LoadChainLedger(%s) 실패: %v", tail, err)
 	}
@@ -100,7 +103,7 @@ func TestLoadChainLedgerRejectsTailOfAnotherStream(t *testing.T) {
 	pool := newTestPool(t)
 	putChainSessions(t, pool, "chain-a", chainSession{id: "X0", round: "RX", at: 0})
 
-	_, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: "chain-b", Tail: "X0"})
+	_, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: "chain-b", Tail: "X0"}, chainTestMaxRows)
 	if !errors.Is(err, ErrChainNotFound) {
 		t.Fatalf("다른 스트림 꼬리의 LoadChainLedger 오류 = %v, want ErrChainNotFound", err)
 	}
@@ -117,7 +120,7 @@ func TestLoadChainLedgerRereadsChainAndRejectsDrift(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	l, err := LoadChainLedger(ctx, pool, Chain{StreamID: stream, Tail: "V1", SessionIDs: []string{"V0", "V1"}})
+	l, err := LoadChainLedger(ctx, pool, Chain{StreamID: stream, Tail: "V1", SessionIDs: []string{"V0", "V1"}}, chainTestMaxRows)
 	if err != nil {
 		t.Fatalf("LoadChainLedger 실패: %v", err)
 	}
@@ -126,7 +129,7 @@ func TestLoadChainLedgerRereadsChainAndRejectsDrift(t *testing.T) {
 		t.Errorf("사슬 = %+v, want %+v", l.Chain, want)
 	}
 
-	_, err = LoadChainLedger(ctx, pool, Chain{StreamID: stream, Tail: "V1", SessionIDs: []string{"V1"}})
+	_, err = LoadChainLedger(ctx, pool, Chain{StreamID: stream, Tail: "V1", SessionIDs: []string{"V1"}}, chainTestMaxRows)
 	if !errors.Is(err, ErrChainChanged) {
 		t.Fatalf("다른 세션 목록의 LoadChainLedger 오류 = %v, want ErrChainChanged", err)
 	}
@@ -166,7 +169,7 @@ func TestLoadChainLedgerReadsRowsInChainRange(t *testing.T) {
 	cutoffAt(t, pool, stream, 1)
 	putRewindRow(t, pool, "chain-rows-other", 3, at(104), 4000, "", false)
 
-	l, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: stream, Tail: "C1"})
+	l, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: stream, Tail: "C1"}, chainTestMaxRows)
 	if err != nil {
 		t.Fatalf("LoadChainLedger 실패: %v", err)
 	}
@@ -203,12 +206,41 @@ func TestLoadChainLedgerWithoutRows(t *testing.T) {
 	const stream = "chain-empty"
 	putChainSessions(t, pool, stream, chainSession{id: "E0", round: "RE", at: 0})
 
-	l, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: stream, Tail: "E0"})
+	l, err := LoadChainLedger(context.Background(), pool, Chain{StreamID: stream, Tail: "E0"}, chainTestMaxRows)
 	if err != nil {
 		t.Fatalf("LoadChainLedger 실패: %v", err)
 	}
 	if len(l.Rows) != 0 || len(l.Sessions) != 1 || l.HasCutoff {
 		t.Errorf("행 없는 사슬 = (행 %d · 회차 %d · 컷오프 %v), want (0 · 1 · 거짓)", len(l.Rows), len(l.Sessions), l.HasCutoff)
+	}
+}
+
+// 적재 상한(보안 78acee38 L-1 · db L1) — 사슬 범위의 행 읽기는 컷오프 이상만 maxRows 까지 싣는다. 컷오프 아래 행은
+// 렌더하지 않으므로 세지 않고, 상한을 넘는 사슬은 행을 다 쌓기 전에 ErrChainTooLarge 다.
+func TestLoadChainLedgerCapsRowsAtOrAboveCutoff(t *testing.T) {
+	pool := newTestPool(t)
+	const stream = "chain-cap"
+	putChainSessions(t, pool, stream, chainSession{id: "K0", round: "RK", at: 0})
+	at := func(s int) time.Time { return rewindT0.Add(time.Duration(s) * time.Second) }
+	for seq := int64(1); seq <= 5; seq++ {
+		putRewindRow(t, pool, stream, seq, at(int(seq)*4), 4000, "K0", true)
+	}
+	cutoffAt(t, pool, stream, 3)
+	ctx := context.Background()
+
+	l, err := LoadChainLedger(ctx, pool, Chain{StreamID: stream, Tail: "K0"}, 3)
+	if err != nil {
+		t.Fatalf("상한 3 · 컷오프 이상 3행의 LoadChainLedger 실패: %v", err)
+	}
+	var seqs []int64
+	for _, r := range l.Rows {
+		seqs = append(seqs, r.Seq)
+	}
+	if !slices.Equal(seqs, []int64{3, 4, 5}) {
+		t.Errorf("행 seq = %v, want [3 4 5](컷오프 아래는 싣지 않는다)", seqs)
+	}
+	if _, err := LoadChainLedger(ctx, pool, Chain{StreamID: stream, Tail: "K0"}, 2); !errors.Is(err, ErrChainTooLarge) {
+		t.Errorf("상한 2 의 LoadChainLedger 오류 = %v, want ErrChainTooLarge", err)
 	}
 }
 

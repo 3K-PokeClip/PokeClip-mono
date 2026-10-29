@@ -54,7 +54,7 @@ const ReasonUnsettled = vodUnsettled
 const vodMinRowBytes = 69
 
 // vodMaxRows 는 렌더 전 적재 상한이다(보안 sec-m61-c4 M1) — 이보다 많은 행은 렌더해도 반드시 MaxVODBodyBytes 를 넘으므로
-// 렌더 · 등재 전에 too_large 로 끝낸다. 적재(index.LoadChainLedger) 자체의 상한은 아니다.
+// 렌더 · 등재 전에 too_large 로 끝낸다. 적재(index.LoadChainLedger · ReadChainLedger)도 이 상한까지만 행을 싣는다.
 const vodMaxRows = rewind.MaxVODBodyBytes / vodMinRowBytes
 
 // vodTxnLimitsSQL 은 등재 트랜잭션의 지역 상한이다(index.setTxnLimitsSQL 과 같은 값) — lock_timeout 5초가 꼬리 잠금
@@ -250,7 +250,7 @@ func (v *vodJob) markGaps(ctx context.Context, abandon bool) (index.ChainLedger,
 		if _, err := tx.Exec(dctx, vodLockTailSQL, v.chain.Tail, v.chain.StreamID); err != nil {
 			return err
 		}
-		reread, err := index.ReadChainLedger(dctx, tx, v.chain)
+		reread, err := index.ReadChainLedger(dctx, tx, v.chain, vodMaxRows)
 		if l, plan, out, ok = v.judge(reread, err, abandon); !ok || len(plan.rows) == 0 {
 			return nil // 적을 것이 없다 — 커밋이 잠금만 푼다(재독 오류로 깨진 트랜잭션이면 되돌린다)
 		}
@@ -269,7 +269,7 @@ func (v *vodJob) markGaps(ctx context.Context, abandon bool) (index.ChainLedger,
 
 // load 는 사슬 장부를 풀의 읽기 전용 스냅숏으로 읽어 plan 을 세운다(judge).
 func (v *vodJob) load(ctx context.Context, abandon bool) (index.ChainLedger, vodPlan, FreezeOutcome, bool) {
-	l, err := index.LoadChainLedger(ctx, v.p.pool, v.chain)
+	l, err := index.LoadChainLedger(ctx, v.p.pool, v.chain, vodMaxRows)
 	return v.judge(l, err, abandon)
 }
 
@@ -278,6 +278,8 @@ func (v *vodJob) judge(l index.ChainLedger, err error, abandon bool) (index.Chai
 	switch {
 	case errors.Is(err, index.ErrChainChanged), errors.Is(err, index.ErrChainNotFound):
 		return l, vodPlan{}, vodFailed(vodChainChanged, err), false
+	case errors.Is(err, index.ErrChainTooLarge):
+		return l, vodPlan{}, vodFailed(vodTooLarge, err), false
 	case err != nil:
 		return l, vodPlan{}, vodRetry(freezeLedger, err), false
 	}

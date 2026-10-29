@@ -3,6 +3,7 @@ package publish
 // VOD plan 의 적재 상한 시험이다(POK-196 M6-2 · 보안 sec-m61-c4 M1 — 사슬 행 적재 상한 · too_large 조기 판정).
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -32,6 +33,17 @@ func TestVODPlanRejectsRowsBeyondBodyLimit(t *testing.T) {
 	_, out, ok := v.plan(vodLedgerOf(vodMaxRows+1), false)
 	if ok || out.Result != ResultFailed || out.Reason != vodTooLarge {
 		t.Errorf("행 %d 개 plan = (%+v, %t), want too_large 실패", vodMaxRows+1, out, ok)
+	}
+}
+
+// vod_chain_too_large(보안 78acee38 L-1) — 적재가 상한에서 끊은 사슬(index.ErrChainTooLarge)은 재시도가 아니라
+// too_large 실패다. 변이 = 갈래 삭제 → 장부 읽기 재시도(freezeLedger)로 FAIL.
+func TestVODJudgeFailsChainTooLarge(t *testing.T) {
+	v := &vodJob{chain: index.Chain{StreamID: fxStream, Head: "S", Tail: "S", SessionIDs: []string{"S"}}}
+
+	_, _, out, ok := v.judge(index.ChainLedger{}, fmt.Errorf("적재: %w", index.ErrChainTooLarge), false)
+	if ok || out.Result != ResultFailed || out.Reason != vodTooLarge {
+		t.Errorf("judge(ErrChainTooLarge) = (%+v, %t), want too_large 실패", out, ok)
 	}
 }
 

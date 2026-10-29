@@ -29,6 +29,10 @@ var ErrChainNotFound = errors.New("index: 사슬 꼬리가 장부에 없다")
 // 이어졌다. 닫힌 사슬의 VOD 는 닫은 집합 그대로여야 하므로 다른 집합을 렌더하지 않는다.
 var ErrChainChanged = errors.New("index: 사슬이 바뀌었다")
 
+// ErrChainTooLarge 는 사슬 범위의 컷오프 이상 행이 부른 쪽이 준 상한(maxRows)을 넘는다는 뜻이다 — 행을 다 싣기 전에
+// 끊는다(보안 78acee38 L-1). 발행 층은 이를 too_large 로 가른다.
+var ErrChainTooLarge = errors.New("index: 사슬 행이 적재 상한을 넘는다")
+
 // Chain 은 사슬 하나다 — 같은 회차 안에서 inherits_session 으로 이어진 세션들이다(설계 0절 사슬 행). VOD 문서 단위이고
 // 키는 머리 세션으로 정한다(K1 — vod/{stream}/{Head}/index.m3u8).
 type Chain struct {
@@ -48,7 +52,7 @@ type ChainLedger struct {
 	// CutoffSeq 는 stream_cutoffs.cutoff_seq 다. HasCutoff 가 거짓이면 그 스트림에 컷오프가 없다.
 	CutoffSeq int64
 	HasCutoff bool
-	// Rows 는 사슬의 [첫 seq, 끝 seq] 안의 그 스트림 행 전부다(seq 오름차순) — 사슬 세션 행이 아닌 것(세션 NULL 인
+	// Rows 는 사슬의 [첫 seq, 끝 seq] 안에서 컷오프 이상인 그 스트림 행 전부다(seq 오름차순) — 사슬 세션 행이 아닌 것(세션 NULL 인
 	// 비귀속 행 · 구조상 없어야 할 다른 세션 행)도 그 자리에 온다. 무엇으로 채울지는 발행 층이 정한다(D57 — GAP 줄 ·
 	// foreign_session). 사슬에 행이 없으면 비어 있다.
 	Rows []RewindRow
@@ -85,7 +89,8 @@ SELECT pg_catalog.min(seq), pg_catalog.max(seq)
   FROM stream_segments
  WHERE stream_id = $1 AND session_id = ANY($2)`
 
-// chainRowsSQL 은 사슬 범위 [$2, $3] 의 행 전부다 — 조각 축 열은 되감기 적재(rewindRowsSQL)와 같다.
+// chainRowsSQL 은 사슬 범위 [$2, $3] 의 행을 $4 개까지 싣는다 — 조각 축 열은 되감기 적재(rewindRowsSQL)와 같다. 부른
+// 쪽은 상한보다 하나 더 받아 넘침을 가른다.
 const chainRowsSQL = `
 SELECT s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
        (s.playback_upload_state = 'uploaded') AS pb_uploaded,
@@ -93,7 +98,8 @@ SELECT s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
   FROM stream_segments s
   LEFT JOIN stream_published_gaps g ON g.stream_id = s.stream_id AND g.seq = s.seq
  WHERE s.stream_id = $1 AND s.seq >= $2 AND s.seq <= $3
- ORDER BY s.seq`
+ ORDER BY s.seq
+ LIMIT $4`
 
 // sessionHeadSQL 은 회차 $2 의 마지막 조각 seq 다 — 행이 없으면 NULL 이다.
 const sessionHeadSQL = `
@@ -101,13 +107,14 @@ SELECT pg_catalog.max(seq) FROM stream_segments WHERE stream_id = $1 AND session
 
 // LoadChainLedger 는 사슬 c 의 VOD 렌더 입력을 읽는다. c 에서 쓰는 것은 StreamID · Tail 이고 사슬은 장부에서 다시
 // 읽는다(사슬 간선 규칙). c.SessionIDs 를 주면 다시 읽은 사슬과 같아야 한다 — 다르면 ErrChainChanged 다. 꼬리가 그
-// 스트림 장부에 없으면 ErrChainNotFound 다. 다섯 문장(사슬 · 컷오프 · 범위 · 행 · 회차)이 한 스냅숏이다.
+// 스트림 장부에 없으면 ErrChainNotFound 다. 행은 컷오프 이상만 maxRows 까지 싣고, 넘으면 ErrChainTooLarge 다. 다섯
+// 문장(사슬 · 컷오프 · 범위 · 행 · 회차)이 한 스냅숏이다.
 // 동결 호출자(FreezeVOD)는 c.SessionIDs 를 반드시 준다 — 비우면 대조를 건너뛰어 ErrChainChanged 가 나지 않는다.
-func LoadChainLedger(ctx context.Context, pool *pgxpool.Pool, c Chain) (ChainLedger, error) {
+func LoadChainLedger(ctx context.Context, pool *pgxpool.Pool, c Chain, maxRows int) (ChainLedger, error) {
 	var l ChainLedger
 	err := inLedgerSnapshot(ctx, pool, "사슬 장부", c.StreamID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
-		l, err = readChainLedger(ctx, tx, c)
+		l, err = readChainLedger(ctx, tx, c, maxRows)
 		return err
 	})
 	if err != nil {
@@ -121,12 +128,12 @@ func LoadChainLedger(ctx context.Context, pool *pgxpool.Pool, c Chain) (ChainLed
 // 수준을 따른다. READ COMMITTED 면 회차 최소 seq(Sessions 의 MinSeq)는 범위 문장 뒤 따로 읽혀, 그 사이 범위보다 낮은
 // seq 의 늦은 조각이 들면 끊김 표시가 Rows 와 어긋날 수 있다(우리 송출에선 사실상 없다 — db 78acee38 M1). 오류는
 // LoadChainLedger 와 같다.
-func ReadChainLedger(ctx context.Context, tx pgx.Tx, c Chain) (ChainLedger, error) {
-	return readChainLedger(ctx, tx, c)
+func ReadChainLedger(ctx context.Context, tx pgx.Tx, c Chain, maxRows int) (ChainLedger, error) {
+	return readChainLedger(ctx, tx, c, maxRows)
 }
 
 // readChainLedger 는 사슬 장부 트랜잭션 tx 안의 다섯 문장이다.
-func readChainLedger(ctx context.Context, tx pgx.Tx, want Chain) (ChainLedger, error) {
+func readChainLedger(ctx context.Context, tx pgx.Tx, want Chain, maxRows int) (ChainLedger, error) {
 	chain, err := readChain(ctx, tx, want.StreamID, want.Tail)
 	if err != nil {
 		return ChainLedger{}, err
@@ -144,8 +151,16 @@ func readChainLedger(ctx context.Context, tx pgx.Tx, want Chain) (ChainLedger, e
 		return ChainLedger{}, fmt.Errorf("사슬 장부 범위 조회 실패 stream_id=%q tail=%q: %w", chain.StreamID, chain.Tail, err)
 	}
 	if first != nil {
-		if l.Rows, err = queryRewindRows(ctx, tx, chain.StreamID, chainRowsSQL, chain.StreamID, *first, *last); err != nil {
+		// 컷오프 아래 행은 렌더하지 않으므로 싣지도 세지도 않는다.
+		start := *first
+		if l.HasCutoff && l.CutoffSeq > start {
+			start = l.CutoffSeq
+		}
+		if l.Rows, err = queryRewindRows(ctx, tx, chain.StreamID, chainRowsSQL, chain.StreamID, start, *last, maxRows+1); err != nil {
 			return ChainLedger{}, err
+		}
+		if len(l.Rows) > maxRows {
+			return ChainLedger{}, fmt.Errorf("%w — stream_id=%q tail=%q 상한 %d", ErrChainTooLarge, chain.StreamID, chain.Tail, maxRows)
 		}
 	}
 	if l.Sessions, err = loadRewindSessions(ctx, tx, chain.StreamID, chain.SessionIDs); err != nil {
