@@ -27,7 +27,7 @@ constexpr const char *kHotkeyName = "PokeClip.MarkMoment";
 
 std::atomic<obs_hotkey_id> g_hotkey{OBS_INVALID_HOTKEY_ID};
 std::atomic<int64_t> g_captureUntilMs{0}; // 독이 새 키를 받는 중 — 이 시각(단조 ms)까지 마크를 막는다
-std::atomic<bool> g_sending{false};        // 우리 송출이 전송 중·재연결 중 — 시스템 전역 단축키를 건다(POK-496)
+std::atomic<bool> g_recheckQueued{false};  // 전역 단축키 켜고 끄기 다시 보기를 UI 스레드에 이미 넣었다(하나만 둔다)
 uint64_t g_stateListener = 0;
 
 int64_t NowSteadyMs()
@@ -268,11 +268,17 @@ void RegisterMarkHotkey()
 	g_hotkey = id;
 	signal_handler_connect(obs_get_signal_handler(), "hotkey_bindings_changed", OnBindingsChanged, nullptr);
 	LoadBindings();
-	// 송출 단계는 여러 스레드에서 바뀐다 — 바뀐 것만 UI 스레드로 넘기고, 거기서 지금 값을 다시 읽는다(순서가 뒤집혀도 맞다).
-	g_stateListener = AppState::Instance().AddListener([](const StateSnapshot &s) {
-		bool sending = s.phase == StreamPhase::Live || s.phase == StreamPhase::Reconnecting;
-		if (g_sending.exchange(sending) != sending)
-			RunInUiThread([]() { SetSystemMarkHotkeysActive(g_sending.load()); });
+	// 송출 단계는 여러 스레드에서 바뀌고 리스너는 AppState 잠금 밖에서 불려, 알림 순서가 뒤집힐 수 있다(늦게 온 Live가
+	// Idle을 덮는다). 그래서 알림 값은 믿지 않고 「다시 볼 때가 됐다」로만 쓴다 — UI 스레드에 다시 보기를 하나만 넣어 두고
+	// 거기서 지금 단계를 읽어 건다. 다시 보기는 단계를 읽기 전에 표지를 내려, 그 뒤 바뀐 단계는 다음 다시 보기가 본다.
+	g_stateListener = AppState::Instance().AddListener([](const StateSnapshot &) {
+		if (g_recheckQueued.exchange(true))
+			return;
+		RunInUiThread([]() {
+			g_recheckQueued = false;
+			StreamPhase phase = AppState::Instance().Snapshot().phase;
+			SetSystemMarkHotkeysActive(phase == StreamPhase::Live || phase == StreamPhase::Reconnecting);
+		});
 	});
 }
 
