@@ -444,7 +444,7 @@ describe('vod-offered · vod 국면', () => {
     expect(kinds(effects)).toContain('notice');
   });
 
-  it('창 하한 여유는 목록의 맨 앞 조각 셋 길이다 — TD 6 · 4초 조각이면 18초가 아니라 12초', () => {
+  it('창 하한 여유는 목록의 맨 앞 조각 셋 길이다 — TD 6 · 6초 + 4초 + 4초면 18초가 아니라 14초', () => {
     const loaded = (headSpanMs: number) => ({
       type: 'list-loaded' as const,
       url: A1,
@@ -453,10 +453,11 @@ describe('vod-offered · vod 국면', () => {
       targetDurationS: 6,
       headSpanMs,
     });
-    const state = run(liveWithEntry(), [[loaded(12_000)]]).state;
-    expect(state.edgeMarginMs).toBe(12_000);
+    // 기본 여유(12초)와 다른 값이라야 받은 길이를 쓰는지 가른다
+    const state = run(liveWithEntry(), [[loaded(14_000)]]).state;
+    expect(state.edgeMarginMs).toBe(14_000);
     // 길이를 모르면(0) 앞서 안 여유를 그대로 둔다
-    expect(run(state, [[loaded(0)]]).state.edgeMarginMs).toBe(12_000);
+    expect(run(state, [[loaded(0)]]).state.edgeMarginMs).toBe(14_000);
   });
 
   it('「다시보기 보기」 — 3 TD 보다 짧은 VOD 는 첫 조각에서 연다(하한 우선 · R47)', () => {
