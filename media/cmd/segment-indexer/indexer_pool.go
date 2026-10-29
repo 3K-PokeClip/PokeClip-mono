@@ -28,13 +28,15 @@ const dbStepTimeout = 20 * time.Second
 //   - 정산 차선(M6-3b) — 정산 스캔 1, 회차 정산 걸음(finalize.DefaultLimits — 전체 2 · 같은 스트림 1 · VOD 동결 1), 상태
 //     전달 읽기(스트림마다 하나)가 차선 고루틴에서 돈다. 정산 걸음 전체 2 는 kty 2026-10-27 결정 (가)다 — 상한 6 을 두고
 //     걸음 쪽을 줄였다. 같은 스트림 걸음끼리 잠금을 다투면 진 쪽이 연결을 쥔 채 기다려 핫 경로가 굶었다(M6-3b c3 db M3
-//     실측 — 핫 INSERT 4.71초 대기). VOD 동결 하나가 연결 둘을 쥐므로 정산 걸음의 연결은 많아야 셋이다.
+//     실측 — 핫 INSERT 4.71초 대기). 이 풀을 쓰는 걸음은 빈 동결 · 사슬 닫힘 · VOD 실패 확정 · ended 표시라 정산 걸음의
+//     연결은 많아야 둘이다. DVR · VOD 동결(publish.FreezeDVR · FreezeVOD 등)은 발행자 풀에서 연결을 쥔다.
 //   - 기동 걸음 — 스키마 보장 · 확인(EnsureSchema · requireLedgerSchema · MissingExpiryPrivileges)과 상태판 적재
 //     (newPlaybackSeed)는 업로더 · 만료 · 제어면이 뜨기 전에 동기로 끝나 수요가 겹치지 않는다.
 //
 // 그래서 동시 수요가 6 을 넘을 수 있다. 넘친 요청은 풀 획득을 기다린다 — 교착은 아니다(잡은 연결은 각자 끝나면 돌려준다).
 // 회차 조회는 획득 대기와 질의를 합친 2초 시한(control.DefaultRoundLimits)을, 4D 는 Apply 시한 1.5초를 다 쓰면 503 이다.
-// 최악 기준 예: 회차 조회 2 · 4D 1 · 만료 1 이 모두 연결을 쥐고 있으면 핫 경로 셋이 나눠 쓸 수 있는 것은 2 다.
+// 예: 회차 조회 2 · 4D 1 · 만료 1 이 모두 연결을 쥐고 있으면 핫 경로 셋이 나눠 쓸 수 있는 것은 2 다. 정산 걸음 2 와 정산 스캔
+// 1 까지 겹치면 핫 경로 몫은 0 이라 핫 경로도 획득을 기다린다(최악).
 //
 // 발행자 풀은 따로이고 pgx 기본값 그대로다 — 둘의 합이 media_indexer 역할의 CONNECTION LIMIT 20 안이어야 한다
 // (infra/terraform/prod/runtime/sql/10_roles.sql). 상한을 30 으로 올리는 것(kty 결정 C1)은 M6-6b 의 10_roles.sql 몫이고,
