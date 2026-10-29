@@ -570,6 +570,12 @@
   background: rgb(214 63 159 / 0.06); /* 테마 고정 */
 }
 
+/* 편집 준비 전의 「편집」 버튼(POK-499): 만드는 중인 카드 자리와 같은 점선 · 틴트 */
+.cardEditPending {
+  border: calc(1.5 * var(--pc-u)) dashed var(--pc-color-point);
+  background: rgb(214 63 159 / 0.06); /* 테마 고정 */
+}
+
 .pendingLabel {
   font-size: calc(12.5 * var(--pc-u));
   font-weight: 700;
