@@ -493,7 +493,11 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
 |---|---|
 | 200 | 그 회차에 송출 중인 세션이 있다(`mode:"live"` · `url` null) · 끝남 대기(`ending`) · 다시보기 있음(`vod` — url 과 범위는 그 회차 VOD 목록) · 다시보기 없음(`ended`) |
 | 404 | DB 도 그 회차를 모른다 — 없는 회차 · 다른 스트림의 회차 · 60일 만료 |
-| 503 | DB 읽기 실패 · 2초 시한 초과 · 전역 예산(동시 2 · 초당 20) 초과 · 장부 값을 응답으로 옮기지 못함(아래 `control_round_lookup_invalid`) — 캐시하지 않아 다음 요청이 다시 읽는다 |
+| 503 | DB 읽기 실패 · 2초 시한 초과 · 전역 예산(동시 2 · 초당 20) 초과 · 장부 값을 응답으로 옮기지 못함(아래 `control_round_lookup_invalid`) — 같은 회차 키로 동시에 온 요청은 lookup 하나의 답을 함께 받는다(singleflight). 503 은 내부 1초 캐시에 저장하지 않으며, 예산이 허용된 다음 miss 에서 다시 읽는다 |
+
+전역 예산은 인증 없는 공개 경로에 걸려 있어, 무작위 회차 id 를 쏟는 한 클라이언트가 예산을 다 쓰면 다른
+시청자의 DB 조회 갈래(Board 가 모르는 회차)도 503 이 된다(설계 R54 절충 · 보안 c5 L1). 완화는 엣지의
+IP 속도 제한(WAF 후속)이다.
 
 머리는 상태와 무관하게 `Cache-Control: public, max-age=1` · `Content-Type: application/json` 이다.
 `CONTROL_CORS_ORIGIN` 이 설정돼 있으면 `Vary: Origin` 을 Origin 과 무관하게 늘 싣고, 요청
@@ -513,7 +517,8 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
     `control_round_lookup_failed`(회차 lookup 실패 · `reason` 은 `error` · `timeout`
     · `panic` · 사유마다 10초에 한 줄로 묶고 `count` 로 센다) ·
     `control_round_lookup_invalid`(ERROR — 회차 장부 값을 응답으로 옮기지 못했다 ·
-    `stream_id` · `round_id` · `reason` 은 `vod_incomplete` · `out_of_range` · 그
+    `stream_id` · `round_id` · `reason` 은 `vod_incomplete` · `out_of_range` · 같은
+    회차 키 동시 요청은 lookup 하나라 한 줄이다(singleflight) · 그
     요청은 503 이고 `control_round_lookup_failed reason=error` 에도 센다. 장부가
     뒤틀린 결함 표지라 묶지 않는다 — 줄 수는 전역 예산 초당 20 이 묶는다). 요청마다의
     접근 로그는 없다.
