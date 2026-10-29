@@ -350,6 +350,7 @@ BridgeCallbacks MakeBridgeCallbacks()
 		obs_data_release(d);
 		std::optional<MarkHotkeyChange> r =
 			RunInUiThreadAndWait<MarkHotkeyChange>([key, mods]() { return SetMarkHotkey(key, mods); });
+		// 끄기는 1초 유예 뒤 풀린다 — 독은 keydown에 저장하므로 지금 손은 아직 새 키 위에 있다(mark-policy.hpp)
 		SetMarkHotkeyCapture(false);
 		if (!r)
 			return {503, JsonReason(false, "busy")};

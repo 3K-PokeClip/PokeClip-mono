@@ -344,8 +344,7 @@ MarkHotkeyChange SetMarkHotkey(const std::string &obsKeyName, const HotkeyLabelP
 
 void SetMarkHotkeyCapture(bool on)
 {
-	constexpr int64_t kCaptureMaxMs = 30000;
-	g_captureUntilMs = on ? NowSteadyMs() + kCaptureMaxMs : 0;
+	g_captureUntilMs = HotkeyCaptureDeadlineMs(on, NowSteadyMs());
 }
 
 bool MarkHotkeyCapturing()

@@ -255,4 +255,9 @@ std::string HotkeyComboRejection(const std::string &obsKeyName, const HotkeyLabe
 	return "";
 }
 
+int64_t HotkeyCaptureDeadlineMs(bool on, int64_t nowMs)
+{
+	return nowMs + (on ? kHotkeyCaptureMaxMs : kHotkeyCaptureReleaseMs);
+}
+
 } // namespace pokeclip

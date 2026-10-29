@@ -439,7 +439,7 @@ void FallbackPanel::OnHotkeyClicked()
 	SetMarkHotkeyCapture(true);
 	HotkeyCaptureDialog dialog(this);
 	bool changed = dialog.exec() == QDialog::Accepted;
-	SetMarkHotkeyCapture(false);
+	SetMarkHotkeyCapture(false); // 1초 유예 뒤 풀린다 — 창은 keyPress에 닫혀 손은 아직 새 키 위에 있다
 	if (changed)
 		message_->setText(dialog.Result());
 }

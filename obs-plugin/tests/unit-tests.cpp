@@ -2366,6 +2366,15 @@ TEST(mark_hotkey_combo_rejection)
 	CHECK_EQ(HotkeyComboRejection("OBS_KEY_F0", none), "hotkey_bad_key");
 }
 
+// 새 키 받기를 꺼도 1초 더 막는다 — 새 바인딩을 건 직후 아직 눌린 새 키가 마크로 잡히지 않게(PR #455 리뷰)
+TEST(mark_hotkey_capture_deadline)
+{
+	CHECK_EQ(HotkeyCaptureDeadlineMs(true, 1000), 1000 + kHotkeyCaptureMaxMs);
+	CHECK_EQ(HotkeyCaptureDeadlineMs(false, 1000), 1000 + kHotkeyCaptureReleaseMs);
+	CHECK(kHotkeyCaptureReleaseMs >= 100);              // libobs 폴링(25ms) 두 번보다 넉넉히
+	CHECK(kHotkeyCaptureReleaseMs < kMarkDebounceMs);   // 일부러 다시 누르는 것까지 오래 막지는 않는다
+}
+
 TEST(mark_debounce_two_seconds)
 {
 	MarkDebouncer d;
