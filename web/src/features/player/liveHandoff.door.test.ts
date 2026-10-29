@@ -55,7 +55,14 @@ function rewindAt(): PlaybackSessionState {
   return run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),
     { type: 'seek', targetMs: P, view: { lowerMs: P + 1, endMs: NOW + 28_000 } },
-    { type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 6 },
+    {
+      type: 'list-loaded',
+      url: A1,
+      firstMs: T0,
+      lastEndMs: NOW,
+      targetDurationS: 6,
+      headSpanMs: 18_000,
+    },
     pos(P),
   ]);
 }

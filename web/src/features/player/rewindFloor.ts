@@ -1,6 +1,6 @@
 import type Hls from 'hls.js';
 import type { LevelDetails } from 'hls.js';
-import { EDGE_MARGIN_TD } from './playbackEdge';
+import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
 
 // 되감기 재생기의 창 하한 지키기(설계 5.3.1절 · 진단 28_). 되감기 목록은 ENDLIST 없는 미닫이 live 목록이라, 목록이 갱신될 때
 // 재생점이 첫 조각 앞이면 hls.js 1.7.3 의 synchronizeToLiveEdge 가 재생점을 라이브 끝으로 옮긴다(stream-controller.ts
@@ -16,7 +16,7 @@ const FLOOR_TRIGGER_TD = 1;
 export interface RewindFloorInput {
   hls: Pick<Hls, 'hasEnoughToStart' | 'startLoad'>;
   video: Pick<HTMLVideoElement, 'currentTime' | 'readyState'>;
-  details: Pick<LevelDetails, 'fragmentStart' | 'targetduration' | 'live'>;
+  details: Pick<LevelDetails, 'fragmentStart' | 'targetduration' | 'live' | 'fragments'>;
   /**
    * 기동 전 받기 위치(앱이 startLoad 에 준 자리 · 기동 전 시크 자리 · 떼기 전 마지막 재생점 · 네트워크로 다시 받기 직전
    * 재생점). 모르면 null — 그때는 hls.js 가 제 받기 위치로 기동하게 두고 옮기지 않는다
@@ -32,6 +32,16 @@ function isBeforeStart(
   return !hls.hasEnoughToStart || video.readyState === 0;
 }
 
+/**
+ * 창 하한 여유(초) — 맨 앞 조각 EDGE_MARGIN_SEGMENTS 개의 EXTINF 합이다(LoadedList.headSpanMs 와 같은 식). 조각이
+ * 하나도 없으면 그 개수 × TD 로 둔다
+ */
+function headSpanS(details: Pick<LevelDetails, 'targetduration' | 'fragments'>): number {
+  const head = details.fragments.slice(0, EDGE_MARGIN_SEGMENTS);
+  if (head.length === 0) return EDGE_MARGIN_SEGMENTS * details.targetduration;
+  return head.reduce((sum, frag) => sum + frag.duration, 0);
+}
+
 /** 옮긴 갈래와 자리(영상 초). seek = currentTime 을 옮김 · reload = 기동 전이라 받기 위치를 다시 잡음 */
 export interface RewindFloorMove {
   kind: 'seek' | 'reload';
@@ -39,7 +49,7 @@ export interface RewindFloorMove {
 }
 
 /**
- * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 조각 + EDGE_MARGIN)으로 옮기고 그 자리를,
+ * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 조각 + 맨 앞 조각 셋)으로 옮기고 그 자리를,
  * 아니면 null 을 낸다. ENDLIST 목록은 hls.js 가 옮기지 않으므로(stream-controller.ts 688 `newDetails.live`) 그대로 둔다.
  * 기동 전(조각이 아직 붙지 않음)에는 hls.js 가 currentTime 이 아니라 받기 위치를 보고 그것을 라이브 끝으로 바꾸므로
  * (base-stream-controller.ts playhead · stream-controller.ts 731), 받기 위치를 startLoad 로 다시 잡는다
@@ -55,7 +65,7 @@ export function guardRewindFloor({
   const beforeStart = isBeforeStart(hls, video);
   const position = beforeStart ? loadFrom : video.currentTime;
   if (position === null || position >= details.fragmentStart + FLOOR_TRIGGER_TD * td) return null;
-  const floor = details.fragmentStart + EDGE_MARGIN_TD * td;
+  const floor = details.fragmentStart + headSpanS(details);
   if (beforeStart) {
     hls.startLoad(floor);
     return { kind: 'reload', to: floor };

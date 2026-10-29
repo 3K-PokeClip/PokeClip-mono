@@ -115,7 +115,13 @@ async function handedOffScreen() {
     session?.dispatch({ type: 'seek', targetMs: P, view: { lowerMs: NOW - 5_000, endMs: NOW } }),
   );
   await settle();
-  const list = { url: A1, firstMs: NOW - 3_600_000, lastEndMs: E, targetDurationS: 4 };
+  const list = {
+    url: A1,
+    firstMs: NOW - 3_600_000,
+    lastEndMs: E,
+    targetDurationS: 4,
+    headSpanMs: 12_000,
+  };
   act(() => session?.dispatch({ type: 'list-loaded', ...list }));
   act(() => session?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }));
   vi.mocked(transition).mockImplementationOnce((...[s, , now]) => ({
@@ -187,7 +193,13 @@ describe('끝에 닿아 넘긴 뒤 확인이 깨진다 — ended 의 pause(c13f 
     const view = { lowerMs: NOW - 5_000, endMs: NOW };
     act(() => session?.dispatch({ type: 'seek', targetMs: P, view }));
     await settle();
-    const list = { url: A1, firstMs: NOW - 3_600_000, lastEndMs: E, targetDurationS: 4 };
+    const list = {
+      url: A1,
+      firstMs: NOW - 3_600_000,
+      lastEndMs: E,
+      targetDurationS: 4,
+      headSpanMs: 12_000,
+    };
     act(() => session?.dispatch({ type: 'list-loaded', ...list }));
     act(() => session?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }));
     const video = document.querySelector('video')!;

@@ -4,11 +4,15 @@ import type { PlaybackSource, SeekView } from './rewindSwitch';
 
 // 재생기가 로드한 목록의 가장자리 판정(설계 5.3.1 · 5.4절, POK-200 M5). 순수 함수라 jsdom 없이 시험한다.
 // hls.js synchronizeToLiveEdge 는 ENDLIST 없는 목록이 갱신될 때마다 돌아, 재생점이 창 밖이면 목록 끝으로 옮긴다. 되감기 목록도
-// ENDLIST 없는 미닫이 목록이라 같은 일이 생긴다. 그래서 창 하한에 여유(3 × TARGETDURATION)를 둔다: 시동은 목록 받기 · 조각
-// 받기 · 디코더 시동이고 창은 조각 하나마다 밀리므로, 1 조각 여유로는 시동 한 번에 창 밖이 될 수 있다.
+// ENDLIST 없는 미닫이 목록이라 같은 일이 생긴다. 그래서 창 하한에 여유(맨 앞 조각 셋)를 둔다: 시동은 목록 받기 · 조각
+// 받기 · 디코더 시동이고 창은 조각 하나마다 밀리므로, 1 조각 여유로는 시동 한 번에 창 밖이 될 수 있다. 여유는 TD 가 아니라
+// 그 조각들의 실제 길이로 센다 — gohlslib 은 TD 를 지금까지 본 조각 최대값으로 올리기만 해(첫 조각 5.9초면 방송 끝까지 TD 6)
+// 실제 조각(4초)보다 클 수 있다.
 
-/** 창 하한 여유 = 이 값 × TARGETDURATION */
-export const EDGE_MARGIN_TD = 3;
+/** 창 하한 여유 = 목록 맨 앞 조각 이 개수의 길이 합 */
+export const EDGE_MARGIN_SEGMENTS = 3;
+/** 끝 정체 판정의 「목록이 이 값 × TD 넘게 자라지 않음」 — 목록 갱신 주기라 TD 로 센다 */
+const END_STALL_TD = 3;
 /** 끝 정체 판정의 「끝 1초 안」 */
 const END_SLACK_MS = 1_000;
 
@@ -19,6 +23,8 @@ export interface LoadedList {
   /** 마지막 조각의 끝(epoch ms) — E */
   lastEndMs: number;
   targetDurationS: number;
+  /** 맨 앞 조각 EDGE_MARGIN_SEGMENTS 개(모자라면 있는 만큼)의 EXTINF 합(ms) — 창 하한 여유 */
+  headSpanMs: number;
 }
 
 export function loadedList(
@@ -33,12 +39,15 @@ export function loadedList(
     firstMs: first.programDateTime,
     lastEndMs: last.programDateTime + last.duration * 1000,
     targetDurationS,
+    headSpanMs: fragments
+      .slice(0, EDGE_MARGIN_SEGMENTS)
+      .reduce((sum, frag) => sum + frag.duration * 1000, 0),
   };
 }
 
 /** 창 하한 여유(ms) — vod 는 ENDLIST 문서라 창이 밀리지 않아 0 이다 */
 export function edgeMarginMs(list: LoadedList, kind: PlaybackSource['kind']): number {
-  return kind === 'vod' ? 0 : EDGE_MARGIN_TD * list.targetDurationS * 1000;
+  return kind === 'vod' ? 0 : list.headSpanMs;
 }
 
 /** 창 하한(epoch ms) = 첫 조각 시작 + 여유 */
@@ -108,7 +117,7 @@ export function endStalled(input: {
   return (
     waiting &&
     atMs >= list.lastEndMs - END_SLACK_MS &&
-    sinceGrowMs > EDGE_MARGIN_TD * list.targetDurationS * 1000
+    sinceGrowMs > END_STALL_TD * list.targetDurationS * 1000
   );
 }
 

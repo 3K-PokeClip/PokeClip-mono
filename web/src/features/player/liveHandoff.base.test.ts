@@ -34,7 +34,14 @@ function run(start: PlaybackSessionState, events: SessionEvent[]): PlaybackSessi
 }
 
 function listLoaded(url: string, lastEndMs: number): SessionEvent {
-  return { type: 'list-loaded', url, firstMs: T0, lastEndMs, targetDurationS: 6 };
+  return {
+    type: 'list-loaded',
+    url,
+    firstMs: T0,
+    lastEndMs,
+    targetDurationS: 6,
+    headSpanMs: 18_000,
+  };
 }
 
 /** A1 을 P 에서 트는 되감기 세션. 목록 끝 E = NOW */

@@ -53,7 +53,14 @@ function confirming(): PlaybackSessionState {
   const watching = run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),
     { type: 'seek', targetMs: P, view: { lowerMs: P + 1, endMs: NOW + 28_000 } },
-    { type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: E, targetDurationS: 6 },
+    {
+      type: 'list-loaded',
+      url: A1,
+      firstMs: T0,
+      lastEndMs: E,
+      targetDurationS: 6,
+      headSpanMs: 18_000,
+    },
     pos(P),
   ]).state;
   return handedOff(watching, NOW);
@@ -251,6 +258,7 @@ describe('다시 세움 · 이탈 · 잘림(T11 · T17 · T19 · T23)', () => {
       firstMs: T0,
       lastEndMs,
       targetDurationS: 6,
+      headSpanMs: 18_000,
     });
     expect(run(blocked, [loaded(A1, E)]).state.handoffBlock).not.toBeNull();
     expect(run(blocked, [loaded(LIVE_URL, E + 4_000)]).state.handoffBlock).not.toBeNull();

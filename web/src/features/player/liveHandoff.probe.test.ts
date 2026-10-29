@@ -34,7 +34,14 @@ function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindSt
 }
 
 function loaded(url: string, firstMs: number, lastEndMs: number, td = 6): SessionEvent {
-  return { type: 'list-loaded', url, firstMs, lastEndMs, targetDurationS: td };
+  return {
+    type: 'list-loaded',
+    url,
+    firstMs,
+    lastEndMs,
+    targetDurationS: td,
+    headSpanMs: td * 3_000,
+  };
 }
 
 const ENDLIST: SessionEvent = { type: 'endlist' };
