@@ -63,6 +63,8 @@ export const REASON: Record<string, string> = {
   mark_insecure: 'API 주소가 https가 아니라 표시를 보내지 않았어요. 설정 파일의 api_base를 https로 바꾸세요.',
   // 독 전용 — 브리지 요청 자체가 실패했다(플러그인이 멈췄거나 연결이 끊겼다)
   bridge_unreachable: '플러그인과 연결이 끊겼어요. OBS를 다시 시작하세요.',
+  // 독 전용 — 새 단축키를 받는 동안 지금 키를 막아 달라는 요청을 플러그인이 받지 않았다
+  hotkey_capture_failed: '새 단축키를 받을 준비를 하지 못했어요. 잠시 뒤 다시 해 주세요.',
   // 독 전용 — 「다시 연결」·「재시도 중지」를 플러그인이 받지 않았다(누르는 사이 상태가 바뀌었다)
   main_not_live: '본 방송이 나가는 동안에만 보낼 수 있어요.',
   send_unavailable: '지금은 전송을 시작할 수 없어요.',

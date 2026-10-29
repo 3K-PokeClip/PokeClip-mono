@@ -20,8 +20,9 @@ export interface Bridge {
   pasteCode(): Promise<ActionResult & { code?: string }>;
   // POK-494 — 「순간 표시」 단축키 바꾸기. label = 바꾼 뒤 표기, conflict = 같은 키를 쓰는 다른 OBS 단축키 이름
   setHotkey(combo: HotkeyCombo): Promise<ActionResult & { label?: string; conflict?: string }>;
-  // 새 키를 받는 동안 지금 키로 마크가 나가지 않게(플러그인이 30초 뒤 저절로 푼다)
-  hotkeyCapture(on: boolean): Promise<void>;
+  // 새 키를 받는 동안 지금 키로 마크가 나가지 않게(플러그인이 30초 뒤 저절로 푼다). 플러그인이 받아들였으면 true —
+  // 켜기가 실패했는데 키를 받으면 막기 없이 지금 키가 마크로 나간다(3차 리뷰)
+  hotkeyCapture(on: boolean): Promise<boolean>;
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -182,7 +183,8 @@ export function createHttpBridge(token: string): Bridge {
     },
 
     async hotkeyCapture(on) {
-      await send('/api/hotkey/capture', { method: 'POST', headers: json, body: JSON.stringify({ on }) });
+      const res = await send('/api/hotkey/capture', { method: 'POST', headers: json, body: JSON.stringify({ on }) });
+      return res?.ok ?? false;
     },
   };
 }

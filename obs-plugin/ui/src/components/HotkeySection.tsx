@@ -84,8 +84,14 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
     disarm();
     setCapturing(true);
     const seq = ++captureSeq.current;
-    void queue(() => bridge.hotkeyCapture(true)).then(() => {
+    void queue(() => bridge.hotkeyCapture(true)).then((ok) => {
       if (captureSeq.current !== seq || !capturingRef.current) return; // 그사이 끝났거나 새로 시작했다
+      if (!ok) {
+        // 막기가 안 켜졌다 — 키를 받으면 지금 키가 마크로 나간다
+        setMessage({ tone: 'error', text: reasonText('hotkey_capture_failed') });
+        stop(true);
+        return;
+      }
       armedRef.current = true;
       setArmed(true);
     });

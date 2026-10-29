@@ -387,7 +387,9 @@ export function createMockBridge(scenario: string): Bridge {
       return { ok: true, label, conflict: combo.key === 'OBS_KEY_S' && combo.control && combo.shift ? '방송 시작' : '' };
     },
 
-    async hotkeyCapture() {},
+    async hotkeyCapture() {
+      return true;
+    },
 
     async assignAudio(key, track) {
       if (!state.audio.applied) return { ok: false, reason: 'audio_off' };
