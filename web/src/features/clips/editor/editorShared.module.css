@@ -69,30 +69,35 @@
 /* ---------- 영상 상태 알약 · 작은 창(POK-492 시안 A) ---------- */
 
 /* 상태색 하나(카드당 하나) — 기다리는 중은 강조색, 끝은 성공, 실패는 위험, 사람이 봐야 하면 경고.
-   글자는 -text(라이트에서 진한 쪽), 바탕은 -subtle이다 */
+   글자는 -text(라이트에서 진한 쪽), 바탕은 -subtle이다. 단계 목록(ClipStepList)도 제 색을 스스로 정한다 — 보관함 진행
+   카드(POK-510)가 작은 창 없이 목록만 쓴다 */
 .statusPill[data-tone='progress'],
-.statusPopover[data-tone='progress'] {
+.statusPopover[data-tone='progress'],
+.statusSteps[data-tone='progress'] {
   --status-fg: var(--pc-color-accent-text);
   --status-bg: var(--pc-color-accent-subtle);
   --status-line: color-mix(in srgb, var(--pc-color-accent) 45%, transparent);
 }
 
 .statusPill[data-tone='success'],
-.statusPopover[data-tone='success'] {
+.statusPopover[data-tone='success'],
+.statusSteps[data-tone='success'] {
   --status-fg: var(--pc-color-success-text);
   --status-bg: var(--pc-color-success-subtle);
   --status-line: color-mix(in srgb, var(--pc-color-success) 45%, transparent);
 }
 
 .statusPill[data-tone='danger'],
-.statusPopover[data-tone='danger'] {
+.statusPopover[data-tone='danger'],
+.statusSteps[data-tone='danger'] {
   --status-fg: var(--pc-color-danger-text);
   --status-bg: var(--pc-color-danger-subtle);
   --status-line: color-mix(in srgb, var(--pc-color-danger) 45%, transparent);
 }
 
 .statusPill[data-tone='warning'],
-.statusPopover[data-tone='warning'] {
+.statusPopover[data-tone='warning'],
+.statusSteps[data-tone='warning'] {
   --status-fg: var(--pc-color-warning-text);
   --status-bg: var(--pc-color-warning-subtle);
   --status-line: color-mix(in srgb, var(--pc-color-warning) 55%, transparent);
