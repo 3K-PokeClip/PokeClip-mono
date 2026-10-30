@@ -1598,6 +1598,30 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
   });
 
+  it('방송 줄을 찾으면 목록을 더 넘기지 않는다 — 한 줄 때문에 목록 전부를 읽지 않는다(PR #462 1차 리뷰)', async () => {
+    const spy = stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(
+          200,
+          url.includes('cursor=')
+            ? { broadcasts: [], nextCursor: null }
+            : { broadcasts: [broadcastRow], nextCursor: 'next' },
+        );
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    const pages = spy.mock.calls.map(([url]) => String(url));
+    expect(pages.filter((url) => url.startsWith('/api/clip/broadcasts?'))).toHaveLength(2);
+    expect(pages.some((url) => url.includes('cursor='))).toBe(false);
+  });
+
   it('방송 중이면 시점별 기록을 다시 읽어, 패널을 연 뒤 바꾼 제목 · 카테고리가 뒤 장면에 보인다(PR #462 1차 리뷰)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const live = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
