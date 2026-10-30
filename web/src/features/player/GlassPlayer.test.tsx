@@ -62,6 +62,68 @@ describe('GlassPlayer', () => {
     expect(livePill).not.toHaveTextContent('실시간으로');
   });
 
+  describe('음량(POK-517)', () => {
+    const slider = () => screen.getByRole('slider', { name: '볼륨' });
+    /** 슬라이더를 잡아 그 값들을 지나 놓는다 — 끌면 지나는 값마다 change가 온다 */
+    function drag(...values: number[]) {
+      fireEvent.pointerDown(slider());
+      for (const value of values) fireEvent.change(slider(), { target: { value } });
+      fireEvent.pointerUp(slider());
+    }
+
+    it('음량이 0이면 X 아이콘과 「음소거 해제」를 보인다', () => {
+      const { container } = renderPlayer();
+      expect(container.querySelector('.lucide-volume-2')).not.toBeNull();
+
+      drag(0);
+
+      expect(screen.getByRole('button', { name: '음소거 해제' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '음소거' })).toBeNull();
+      expect(container.querySelector('.lucide-volume-x')).not.toBeNull();
+      expect(container.querySelector('.lucide-volume-2')).toBeNull();
+    });
+
+    it('끌어내려 0을 만든 뒤 단추를 누르면 끌기 전 음량으로 돌아온다 — 0 바로 앞 값(1)이 아니다', () => {
+      renderPlayer();
+
+      drag(40, 1, 0);
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+
+      expect(slider()).toHaveValue('70');
+      expect(screen.getByRole('button', { name: '음소거' })).toBeInTheDocument();
+    });
+
+    it('이미 낮춰 둔 음량이면 그 음량으로 돌아온다', () => {
+      renderPlayer();
+      drag(40);
+
+      drag(1, 0);
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+
+      expect(slider()).toHaveValue('40');
+    });
+
+    it('끌기 전 음량이 너무 작으면 기본 음량으로 돌아온다 — 켜도 안 들리면 죽은 단추다', () => {
+      renderPlayer();
+      drag(5);
+
+      drag(0);
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+
+      expect(slider()).toHaveValue('70');
+    });
+
+    it('소리가 나는 동안의 단추는 음소거이고, 음량은 그대로 남는다', () => {
+      renderPlayer();
+
+      fireEvent.click(screen.getByRole('button', { name: '음소거' }));
+      expect(slider()).toHaveValue('0');
+
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+      expect(slider()).toHaveValue('70');
+    });
+  });
+
   it('시크바는 시차를 slider 값으로 노출한다', () => {
     renderPlayer({ initialBehindSeconds: 83 });
     const slider = screen.getByRole('slider', { name: '라이브 탐색' });

@@ -33,8 +33,24 @@ export const SEEK_PAGE_SECONDS = 60;
 /** 재생 중 컨트롤 자동 숨김 지연 (디자인 시안 값) */
 export const AUTO_HIDE_MS = 2800;
 
+/** 플레이어가 처음 서는 음량(%). 되살릴 음량이 너무 작을 때도 이 값이다 */
+export const DEFAULT_VOLUME = 70;
+
+/** 이보다 작은 음량은 되살려도 안 들린다 */
+const MIN_RESTORED_VOLUME = 10;
+
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
+}
+
+/** 소리가 안 나는가 — 음소거이거나 음량이 0이다. 스피커 아이콘과 단추 이름이 이 값 하나로 갈린다(POK-517) */
+export function isSilent(muted: boolean, volume: number): boolean {
+  return muted || volume === 0;
+}
+
+/** 음량 0에서 소리를 켤 때 되살릴 음량. 너무 작으면 켜도 안 들려 죽은 단추처럼 보이므로 기본 음량이다(POK-517) */
+export function restoredVolume(lastVolume: number): number {
+  return lastVolume >= MIN_RESTORED_VOLUME ? lastVolume : DEFAULT_VOLUME;
 }
 
 /**

@@ -10,10 +10,10 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import type { Ref } from 'react';
+import { useRef, type Ref } from 'react';
 import clsx from 'clsx';
 import styles from './GlassPlayer.module.css';
-import { edgeWords, formatBehind } from './playerMath';
+import { DEFAULT_VOLUME, edgeWords, formatBehind, isSilent, restoredVolume } from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import type { PlayerSimulation } from './usePlayerSimulation';
 
@@ -49,6 +49,17 @@ export function PlayerControls({
   onSettingsOpenChange?: (open: boolean) => void;
 }) {
   const edge = edgeWords(sim.replay);
+  const silent = isSilent(sim.muted, sim.volume);
+  // 슬라이더를 만지기 직전 음량. 끄는 값을 따라가며 기억하면 0 바로 앞 값(1)이 남아 되살려도 안 들린다(POK-517)
+  const lastVolumeRef = useRef(DEFAULT_VOLUME);
+  const rememberVolume = () => {
+    if (sim.volume > 0) lastVolumeRef.current = sim.volume;
+  };
+  const toggleSound = () => {
+    // 음량 0에서 음소거만 뒤집으면 아이콘도 소리도 그대로라 죽은 단추다
+    if (sim.volume === 0) sim.setVolume(restoredVolume(lastVolumeRef.current));
+    else sim.toggleMute();
+  };
   return (
     <div className={styles.buttonRow}>
       <div className={styles.buttonGroup}>
@@ -68,10 +79,10 @@ export function PlayerControls({
           <button
             type="button"
             className={styles.volumeBtn}
-            aria-label={sim.muted ? '음소거 해제' : '음소거'}
-            onClick={sim.toggleMute}
+            aria-label={silent ? '음소거 해제' : '음소거'}
+            onClick={toggleSound}
           >
-            {sim.muted ? <VolumeX size={19} aria-hidden /> : <Volume2 size={19} aria-hidden />}
+            {silent ? <VolumeX size={19} aria-hidden /> : <Volume2 size={19} aria-hidden />}
           </button>
           <input
             type="range"
@@ -80,6 +91,8 @@ export function PlayerControls({
             min={0}
             max={100}
             value={sim.muted ? 0 : sim.volume}
+            onPointerDown={rememberVolume}
+            onKeyDown={rememberVolume}
             onChange={(event) => sim.setVolume(Number(event.target.value))}
           />
         </div>

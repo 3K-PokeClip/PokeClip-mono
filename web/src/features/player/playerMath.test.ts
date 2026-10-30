@@ -3,14 +3,39 @@ import {
   AT_EDGE_THRESHOLD_SECONDS,
   LIVE_EDGE_BACKOFF_SECONDS,
   REWIND_UI_MAX_SECONDS,
+  DEFAULT_VOLUME,
   behindFromSeekFraction,
   formatBehind,
   formatUptime,
   isAtEdge,
+  isSilent,
   parseClockLabel,
   progressFraction,
+  restoredVolume,
   seekFractionFromPointer,
 } from './playerMath';
+
+describe('isSilent — 스피커 아이콘이 X인가(POK-517)', () => {
+  it('음소거이거나 음량이 0이면 소리가 안 난다', () => {
+    expect(isSilent(true, 70)).toBe(true);
+    expect(isSilent(false, 0)).toBe(true);
+    expect(isSilent(true, 0)).toBe(true);
+    expect(isSilent(false, 1)).toBe(false);
+  });
+});
+
+describe('restoredVolume — 음량 0에서 소리를 켤 때(POK-517)', () => {
+  it('마지막 음량으로 되살린다', () => {
+    expect(restoredVolume(40)).toBe(40);
+    expect(restoredVolume(10)).toBe(10);
+  });
+
+  it('너무 작으면 켜도 안 들리므로 기본 음량이다', () => {
+    expect(restoredVolume(9)).toBe(DEFAULT_VOLUME);
+    expect(restoredVolume(1)).toBe(DEFAULT_VOLUME);
+    expect(restoredVolume(0)).toBe(DEFAULT_VOLUME);
+  });
+});
 
 describe('formatBehind — 계약3 4절 시차 표기', () => {
   it('분을 2자리로 패딩한다 (-01:23)', () => {
