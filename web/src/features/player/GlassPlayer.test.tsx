@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
+import type { PlayerMark } from '@/features/player/PlayerControls';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
 import { openSession } from '@/features/player/rewindSwitch';
@@ -144,7 +145,6 @@ describe('GlassPlayer', () => {
     it('단축키가 없는 버튼은 이름만 뜬다', () => {
       renderPlayer();
 
-      expect(screen.getByText('클립 만들기')).toBeInTheDocument();
       expect(screen.getByText('미니 플레이어')).toBeInTheDocument();
     });
 
@@ -492,14 +492,76 @@ describe('GlassPlayer', () => {
     expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
   });
 
-  it('클립 만들기를 누르면 토스트가 뜬다', async () => {
-    const user = userEvent.setup();
-    renderPlayer();
+  describe('전체 화면 수동 마킹', () => {
+    function renderMarking(mark: Partial<PlayerMark> = {}) {
+      const onMark = vi.fn();
+      const view = render(
+        <ToastProvider>
+          <GlassPlayer
+            channelName="게임하는너구리"
+            viewersNote="1,842명 시청 중"
+            embed
+            simulate
+            mark={{ mode: 'live', disabled: false, status: null, onMark, ...mark }}
+          />
+        </ToastProvider>,
+      );
+      const enterFullscreen = () =>
+        act(() => setFullscreenElement(view.container.querySelector('[data-controls]')));
+      return { onMark, enterFullscreen };
+    }
 
-    await user.click(screen.getByRole('button', { name: '클립 만들기' }));
-    // 서버로 보내는 길이 없어 저장되었다고 하지 않는다(POK-253)
-    expect(screen.getByText('클립 만들기는 준비 중이에요')).toBeInTheDocument();
-    expect(screen.queryByText(/저장되었습니다/)).toBeNull();
+    it('전체 화면이 아니면 버튼이 없다 — 영상 아래 줄에 같은 버튼이 있다', () => {
+      renderMarking();
+
+      expect(screen.queryByRole('button', { name: '수동 마킹' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '클립 만들기' })).toBeNull();
+    });
+
+    it('전체 화면이면 수동 마킹 버튼이 서고 누르면 마킹한다', () => {
+      const { onMark, enterFullscreen } = renderMarking();
+
+      enterFullscreen();
+      fireEvent.click(screen.getByRole('button', { name: '수동 마킹' }));
+
+      expect(onMark).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('수동 마킹 (F8)')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '클립 만들기' })).toBeNull();
+    });
+
+    it('지난 방송은 그 화면의 이름을 쓴다', () => {
+      const { enterFullscreen } = renderMarking({ mode: 'past' });
+
+      enterFullscreen();
+
+      expect(screen.getByRole('button', { name: '이 시점 카드 추가' })).toBeInTheDocument();
+      expect(screen.getByText('이 시점 카드 추가 (F8)')).toBeInTheDocument();
+    });
+
+    it('아직 마킹할 수 없으면 버튼이 잠긴다', () => {
+      const { enterFullscreen } = renderMarking({ disabled: true });
+
+      enterFullscreen();
+
+      expect(screen.getByRole('button', { name: '수동 마킹' })).toBeDisabled();
+    });
+
+    it('마킹 결과는 전체 화면에서만 플레이어 안에 뜬다 — 영상 아래 줄과 토스트가 안 보이는 자리다', () => {
+      const { enterFullscreen } = renderMarking({ status: '0:12 마킹됨 · 카드 생성 중' });
+      expect(screen.queryByRole('status')).toBeNull();
+
+      enterFullscreen();
+
+      expect(screen.getByRole('status')).toHaveTextContent('0:12 마킹됨 · 카드 생성 중');
+    });
+
+    it('마킹을 못 주는 화면이면 전체 화면에도 버튼이 없다', () => {
+      const { container } = renderPlayer();
+
+      act(() => setFullscreenElement(container.querySelector('[data-controls]')));
+
+      expect(screen.queryByRole('button', { name: '수동 마킹' })).toBeNull();
+    });
   });
 
   it('설정 팝오버에서 화질 4개를 고를 수 있다', async () => {

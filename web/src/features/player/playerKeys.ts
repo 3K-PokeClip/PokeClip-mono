@@ -1,4 +1,4 @@
-import { isTypingTarget } from '@/features/broadcast/livenow/markKey';
+import { MARK_HOTKEY, isTypingTarget } from '@/features/broadcast/livenow/markKey';
 import { SEEK_PAGE_SECONDS, SEEK_STEP_SECONDS } from './playerMath';
 
 // 시킹 키맵 — 시크바(포커스 시)와 플레이어 전역 단축키가 공유한다 (POK-32).
@@ -67,6 +67,7 @@ export const PLAYER_KEY_LABELS = {
   sound: 'm',
   fullscreen: 'f',
   live: 'End',
+  mark: MARK_HOTKEY,
 } as const;
 
 export type PlayerShortcut = 'togglePlay' | 'toggleSound' | 'fullscreen';

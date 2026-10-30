@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { isMarkHotkey, isTypingTarget } from './markKey';
+import { blocksMarkHotkey, isMarkHotkey, isTypingTarget } from './markKey';
+
+describe('blocksMarkHotkey — 그 자리에서 F8을 양보하나', () => {
+  const inside = (html: string, wrapper: string) => {
+    const host = document.createElement('div');
+    host.innerHTML = wrapper;
+    (host.firstElementChild as Element).innerHTML = html;
+    return host.querySelector('input, [role="slider"]');
+  };
+
+  it('글자를 입력하는 곳이면 양보한다', () => {
+    expect(blocksMarkHotkey(inside('<input />', '<div></div>'))).toBe(true);
+  });
+
+  it('플레이어 밖 슬라이더도 양보한다', () => {
+    expect(blocksMarkHotkey(inside('<div role="slider"></div>', '<div></div>'))).toBe(true);
+  });
+
+  it('플레이어 안 슬라이더는 양보하지 않는다 — 시크바를 누르고 바로 F8을 누르는 흐름이다', () => {
+    const player = '<div data-controls="visible"></div>';
+    expect(blocksMarkHotkey(inside('<div role="slider"></div>', player))).toBe(false);
+    expect(blocksMarkHotkey(inside('<input type="range" />', player))).toBe(false);
+  });
+
+  it('입력하는 곳이 아니면 양보하지 않는다', () => {
+    expect(blocksMarkHotkey(null)).toBe(false);
+    expect(blocksMarkHotkey(document.body)).toBe(false);
+  });
+});
 
 describe('isMarkHotkey — 수동 마킹 핫키', () => {
   it('맨 F8이면 마킹이다', () => {

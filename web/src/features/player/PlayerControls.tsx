@@ -1,16 +1,17 @@
 'use client';
 
 import {
+  CirclePlus,
   Maximize,
   MessageSquare,
   Pause,
   PictureInPicture2,
   Play,
   RotateCcw,
-  Scissors,
   Volume1,
   Volume2,
   VolumeX,
+  Zap,
 } from 'lucide-react';
 import type { MouseEvent, Ref } from 'react';
 import clsx from 'clsx';
@@ -23,6 +24,19 @@ import { ReplayTimeButton } from './ReplayTimeButton';
 import type { PlayerSimulation } from './usePlayerSimulation';
 
 const VOLUME_ICONS = { silent: VolumeX, low: Volume1, high: Volume2 } as const;
+
+/**
+ * 전체 화면의 수동 마킹. 평소엔 영상 아래 줄의 버튼이 맡아 재생 막대에 두지 않고, 그 줄이 안 보이는 전체 화면에서만 세운다.
+ * 없으면(마킹을 못 주는 화면) 전체 화면에도 버튼이 없다
+ */
+export interface PlayerMark {
+  /** 영상 아래 줄과 같은 이름이다: 라이브는 「수동 마킹」, 지난 방송은 「이 시점 카드 추가」 */
+  mode: 'live' | 'past';
+  disabled: boolean;
+  /** 마킹 진행 · 결과 한 줄. 토스트도 안 보이는 자리라 플레이어 안에 띄운다 */
+  status: string | null;
+  onMark: () => void;
+}
 
 /**
  * 마우스로 누른 단추에 포커스가 남으면 다음 Space가 재생 대신 그 단추를 또 누른다. 편집기 재생 막대와 같은 처리다(POK-490).
@@ -41,7 +55,7 @@ export function PlayerControls({
   chatToggle,
   fullscreen = false,
   fullscreenButtonRef,
-  onClip,
+  mark,
   onPip,
   onFullscreen,
   onToggleSound,
@@ -67,7 +81,7 @@ export function PlayerControls({
   fullscreen?: boolean;
   /** 사라지는 채팅 토글의 포커스를 받아 줄 자리 — GlassPlayer가 여기로 되돌린다 */
   fullscreenButtonRef?: Ref<HTMLButtonElement>;
-  onClip: () => void;
+  mark?: PlayerMark;
   onPip: () => void;
   onFullscreen: () => void;
   /** 소리 켜고 끄기 — m 단축키와 같은 동작이다(useSoundToggle) */
@@ -82,6 +96,7 @@ export function PlayerControls({
   const VolumeIcon = VOLUME_ICONS[level];
   const soundName = level === 'silent' ? '음소거 해제' : '음소거';
   const fullscreenName = fullscreen ? '전체 화면 종료' : '전체 화면';
+  const markName = mark?.mode === 'past' ? '이 시점 카드 추가' : '수동 마킹';
   return (
     <div className={styles.buttonRow} onMouseDown={keepFocus}>
       <div className={styles.buttonGroup}>
@@ -151,16 +166,24 @@ export function PlayerControls({
         )}
       </div>
       <div className={styles.buttonGroup}>
-        <PlayerControlHint label="클립 만들기">
-          <button
-            type="button"
-            className={styles.glassBtn}
-            aria-label="클립 만들기"
-            onClick={onClip}
-          >
-            <Scissors size={19} aria-hidden />
-          </button>
-        </PlayerControlHint>
+        {fullscreen && mark ? (
+          <PlayerControlHint label={markName} keys={PLAYER_KEY_LABELS.mark}>
+            <button
+              type="button"
+              className={styles.glassBtn}
+              aria-label={markName}
+              aria-keyshortcuts={PLAYER_KEY_LABELS.mark}
+              disabled={mark.disabled}
+              onClick={mark.onMark}
+            >
+              {mark.mode === 'past' ? (
+                <CirclePlus size={19} aria-hidden />
+              ) : (
+                <Zap size={19} aria-hidden />
+              )}
+            </button>
+          </PlayerControlHint>
+        ) : null}
         {chatToggle ? (
           <PlayerControlHint label="채팅 오버레이">
             <button

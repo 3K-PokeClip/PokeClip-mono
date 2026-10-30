@@ -47,3 +47,12 @@ export function isTypingTarget(target: EventTarget | null): boolean {
     ) !== null
   );
 }
+
+/**
+ * 그 자리에서 누른 마킹 핫키를 양보하나. 플레이어 안 슬라이더(시크바 · 음량)는 글자를 치는 곳이 아니다: 시크바를 누르고 바로 F8을
+ * 누르면 포커스가 거기 남아 있다. 전체 화면 말풍선이 F8을 알려 주니 그 흐름에서 키가 죽으면 안 된다
+ */
+export function blocksMarkHotkey(target: EventTarget | null): boolean {
+  if (!isTypingTarget(target)) return false;
+  return (target as Element).closest('[data-controls]') === null;
+}

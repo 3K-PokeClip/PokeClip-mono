@@ -17,7 +17,7 @@ import { useToast } from '@/ui';
 import { BufferingOverlay } from './BufferingOverlay';
 import styles from './GlassPlayer.module.css';
 import { PlayerChatOverlay } from './PlayerChatOverlay';
-import { PlayerControls } from './PlayerControls';
+import { PlayerControls, type PlayerMark } from './PlayerControls';
 import { PlayerSeekBar } from './PlayerSeekBar';
 import { PlayerTopOverlay, type PlayerBroadcastStatus } from './PlayerTopOverlay';
 import { seekIntentForKey } from './playerKeys';
@@ -132,6 +132,8 @@ export interface GlassPlayerProps {
    */
   chatPanelOpen?: boolean;
   onToggleChatPanel?: () => void;
+  /** 전체 화면의 수동 마킹 — 없으면 버튼을 세우지 않는다 */
+  mark?: PlayerMark;
   /** 카드 클릭 → 시점 이동 같은 바깥 명령의 통로 */
   controllerRef?: Ref<GlassPlayerController>;
   /**
@@ -321,6 +323,7 @@ function GlassPlayerBody({
   embed = false,
   chatPanelOpen,
   onToggleChatPanel,
+  mark,
   controllerRef,
   onUptimeChange,
   recorded,
@@ -391,17 +394,6 @@ function GlassPlayerBody({
 
   const controlsShown =
     sim.controlsVisible || (!sim.playing && hovering) || settingsOpen || seeking;
-
-  // 🔴 서버로 보내는 길이 아직 없다 — 전에는 시크바에 표시만 찍고 「저장되었습니다」를 띄워 거짓 성공이었다(POK-253).
-  // 수동 마킹이 서버로 가기 전까지(POK-257) 준비 중이라고만 알린다. 자동 하이라이트 카드는 채팅 급증으로 따로 생긴다
-  const handleClip = useCallback(() => {
-    track('pending_feature_clicked', { feature: 'player_clip' }); // 수요를 본다 (POK-357)
-    toast({
-      tone: 'info',
-      title: '클립 만들기는 준비 중이에요',
-      description: '채팅이 터진 순간은 하이라이트 카드로 자동으로 잡혀요.',
-    });
-  }, [toast]);
 
   const handlePip = useCallback(() => {
     track('pending_feature_clicked', { feature: 'mini_player' });
@@ -565,6 +557,12 @@ function GlassPlayerBody({
         onToggleChatPanel={fullscreen ? undefined : onToggleChatPanel}
       />
       {overlayChat && fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
+      {/* 평소엔 영상 아래 줄이 알린다. 전체 화면엔 그 줄도 토스트도 안 보인다 */}
+      {fullscreen && mark?.status ? (
+        <div className={styles.markStatus} role="status">
+          {mark.status}
+        </div>
+      ) : null}
       {overlay}
       <div className={styles.controls}>
         {seekHidden ? null : (
@@ -589,7 +587,7 @@ function GlassPlayerBody({
           }
           fullscreen={fullscreen}
           fullscreenButtonRef={fullscreenButtonRef}
-          onClip={handleClip}
+          mark={mark}
           onPip={handlePip}
           onFullscreen={handleFullscreen}
           onToggleSound={toggleSound}
