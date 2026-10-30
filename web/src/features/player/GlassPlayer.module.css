@@ -495,8 +495,11 @@
   margin: 0;
 }
 
+/* :focus-within이 아니다: 마우스로 만진 슬라이더는 포커스가 남아 마우스를 빼도 안 닫혔다. 키보드로 온 포커스만 연다.
+   끄는 동안(:active)은 포인터가 밖으로 나가도 열어 둔다 */
 .volumeGroup:hover .volumeSlider,
-.volumeGroup:focus-within .volumeSlider {
+.volumeGroup:has(:focus-visible) .volumeSlider,
+.volumeGroup:has(.volumeSlider:active) .volumeSlider {
   width: calc(76 * var(--pc-u));
   opacity: 1;
   margin: 0 calc(12 * var(--pc-u)) 0 calc(6 * var(--pc-u));
