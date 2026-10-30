@@ -1598,6 +1598,48 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
   });
 
+  it('두 답이 다 오기 전에는 카테고리 · 포스터를 그리지 않는다 — 동시 송출에서 다른 플랫폼 값이 잠깐 뜨지 않는다(PR #462 1차 리뷰)', async () => {
+    const simulcast = {
+      segments: [
+        {
+          platform: 'SOOP',
+          from: '2026-10-17T19:52:00+09:00',
+          until: null,
+          title: 'SOOP 제목',
+          category: '스타크래프트',
+          categoryImageUrl: 'https://p/sc.png',
+          tags: [],
+        },
+        ...timeline.segments,
+      ],
+      truncated: false,
+    };
+    let releaseRow: (r: Response) => void = () => {};
+    const spy = stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return new Promise<Response>((resolve) => (releaseRow = resolve));
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, simulcast);
+      return new Promise<Response>(() => {});
+    });
+    const { container } = show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    // 시점별 기록은 왔는데 방송 줄은 아직이다: 대표 플랫폼을 몰라 고를 수 없다
+    await waitFor(() =>
+      expect(spy.mock.calls.some(([url]) => String(url).endsWith('/timeline'))).toBe(true),
+    );
+    await act(async () => {});
+    expect(card.queryByText(/SOOP|치지직/)).toBeNull();
+    expect(container.querySelector('img[src^="https://p/"]')).toBeNull();
+
+    await act(async () => releaseRow(jsonResponse(200, { broadcasts: [], nextCursor: null })));
+    expect(await card.findByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+    expect(container.querySelector('img[src="https://p/lol.png"]')).not.toBeNull();
+  });
+
   it('방송 줄을 찾으면 목록을 더 넘기지 않는다 — 한 줄 때문에 목록 전부를 읽지 않는다(PR #462 1차 리뷰)', async () => {
     const spy = stubFetch((url) => {
       if (url.startsWith('/api/clip/broadcasts?state=past'))

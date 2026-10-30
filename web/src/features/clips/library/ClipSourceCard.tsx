@@ -53,7 +53,11 @@ export function ClipSourceCard({ clip, now }: { clip: LibraryClip; now: Date }) 
           ) : (
             <p className={styles.sourceTitle}>{source?.title ?? clip.sourceLabel}</p>
           )}
-          {kind ? <p className={styles.sourceLine}>{kind}</p> : null}
+          {pending ? (
+            <Skeleton height={12} width="55%" />
+          ) : kind ? (
+            <p className={styles.sourceLine}>{kind}</p>
+          ) : null}
           {when ? <p className={styles.sourceLine}>{when}</p> : null}
         </div>
       </div>
