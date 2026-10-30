@@ -39,13 +39,19 @@ export const DEFAULT_VOLUME = 70;
 /** 이보다 작은 음량은 되살려도 안 들린다 */
 const MIN_RESTORED_VOLUME = 10;
 
+/** 이 음량부터 스피커 아이콘의 소리 줄기가 둘이다 */
+const LOUD_VOLUME = 50;
+
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-/** 소리가 안 나는가 — 음소거이거나 음량이 0이다. 스피커 아이콘과 단추 이름이 이 값 하나로 갈린다(POK-517) */
-export function isSilent(muted: boolean, volume: number): boolean {
-  return muted || volume === 0;
+/**
+ * 스피커 아이콘의 단계(POK-517). 음소거이거나 음량이 0이면 X, 작으면 소리 줄기 하나, 크면 둘이다. 단추 이름도 silent로 갈린다
+ */
+export function volumeLevel(muted: boolean, volume: number): 'silent' | 'low' | 'high' {
+  if (muted || volume === 0) return 'silent';
+  return volume < LOUD_VOLUME ? 'low' : 'high';
 }
 
 /** 음량 0에서 소리를 켤 때 되살릴 음량. 너무 작으면 켜도 안 들려 죽은 단추처럼 보이므로 기본 음량이다(POK-517) */

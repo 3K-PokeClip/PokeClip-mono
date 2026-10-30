@@ -257,6 +257,18 @@ describe('GlassPlayer', () => {
       fireEvent.pointerUp(slider());
     }
 
+    it('스피커 아이콘의 소리 줄기가 음량을 따라 바뀐다 — 끄는 동안 바로 바뀐다', () => {
+      const { container } = renderPlayer();
+
+      fireEvent.change(slider(), { target: { value: 30 } });
+      expect(container.querySelector('.lucide-volume-1')).not.toBeNull();
+      expect(container.querySelector('.lucide-volume-2')).toBeNull();
+
+      fireEvent.change(slider(), { target: { value: 80 } });
+      expect(container.querySelector('.lucide-volume-2')).not.toBeNull();
+      expect(container.querySelector('.lucide-volume-1')).toBeNull();
+    });
+
     it('음량이 0이면 X 아이콘과 「음소거 해제」를 보인다', () => {
       const { container } = renderPlayer();
       expect(container.querySelector('.lucide-volume-2')).not.toBeNull();

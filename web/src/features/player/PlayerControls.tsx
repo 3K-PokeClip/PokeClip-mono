@@ -8,6 +8,7 @@ import {
   Play,
   RotateCcw,
   Scissors,
+  Volume1,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -16,10 +17,12 @@ import clsx from 'clsx';
 import styles from './GlassPlayer.module.css';
 import { PlayerControlHint } from './PlayerControlHint';
 import { PLAYER_KEY_LABELS } from './playerKeys';
-import { LIVE_EDGE_WORDS, formatBehind, isSilent } from './playerMath';
+import { LIVE_EDGE_WORDS, formatBehind, volumeLevel } from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import { ReplayTimeButton } from './ReplayTimeButton';
 import type { PlayerSimulation } from './usePlayerSimulation';
+
+const VOLUME_ICONS = { silent: VolumeX, low: Volume1, high: Volume2 } as const;
 
 /**
  * 마우스로 누른 단추에 포커스가 남으면 다음 Space가 재생 대신 그 단추를 또 누른다. 편집기 재생 막대와 같은 처리다(POK-490).
@@ -75,8 +78,9 @@ export function PlayerControls({
   onSettingsOpenChange?: (open: boolean) => void;
 }) {
   const playName = sim.ended ? '처음부터' : sim.playing ? '일시정지' : '재생';
-  const silent = isSilent(sim.muted, sim.volume);
-  const soundName = silent ? '음소거 해제' : '음소거';
+  const level = volumeLevel(sim.muted, sim.volume);
+  const VolumeIcon = VOLUME_ICONS[level];
+  const soundName = level === 'silent' ? '음소거 해제' : '음소거';
   const fullscreenName = fullscreen ? '전체 화면 종료' : '전체 화면';
   return (
     <div className={styles.buttonRow} onMouseDown={keepFocus}>
@@ -107,7 +111,7 @@ export function PlayerControls({
               aria-keyshortcuts="m"
               onClick={onToggleSound}
             >
-              {silent ? <VolumeX size={19} aria-hidden /> : <Volume2 size={19} aria-hidden />}
+              <VolumeIcon size={19} aria-hidden />
             </button>
           </PlayerControlHint>
           <input

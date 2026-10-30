@@ -8,19 +8,25 @@ import {
   formatBehind,
   formatUptime,
   isAtEdge,
-  isSilent,
   parseClockLabel,
   progressFraction,
   restoredVolume,
   seekFractionFromPointer,
+  volumeLevel,
 } from './playerMath';
 
-describe('isSilent — 스피커 아이콘이 X인가(POK-517)', () => {
+describe('volumeLevel — 스피커 아이콘의 단계(POK-517)', () => {
   it('음소거이거나 음량이 0이면 소리가 안 난다', () => {
-    expect(isSilent(true, 70)).toBe(true);
-    expect(isSilent(false, 0)).toBe(true);
-    expect(isSilent(true, 0)).toBe(true);
-    expect(isSilent(false, 1)).toBe(false);
+    expect(volumeLevel(true, 70)).toBe('silent');
+    expect(volumeLevel(false, 0)).toBe('silent');
+    expect(volumeLevel(true, 0)).toBe('silent');
+  });
+
+  it('절반 아래는 작은 소리, 절반부터는 큰 소리다', () => {
+    expect(volumeLevel(false, 1)).toBe('low');
+    expect(volumeLevel(false, 49)).toBe('low');
+    expect(volumeLevel(false, 50)).toBe('high');
+    expect(volumeLevel(false, 100)).toBe('high');
   });
 });
 
