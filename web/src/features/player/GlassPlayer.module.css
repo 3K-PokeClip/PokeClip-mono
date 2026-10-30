@@ -561,11 +561,18 @@
   display: flex;
 }
 
-/* 버튼 이름과 단축키(POK-518). 공용 Tooltip과 같은 모양. 컨트롤 안에 두어 전체 화면에서도 보이고 컨트롤과 함께 숨는다 */
+/* 음량 버튼은 묶음보다 작다: 말풍선 높이가 다른 버튼과 같게 묶음 높이에 맞춘다 */
+.volumeGroup .hintAnchor {
+  align-self: stretch;
+  align-items: center;
+}
+
+/* 버튼 이름과 단축키(POK-518). 공용 Tooltip과 같은 모양. 컨트롤 안에 두어 전체 화면에서도 보이고 컨트롤과 함께 숨는다.
+   시크바를 가리지 않게 그 위에 띄운다: 시크바 높이 18 + 아래 여백 6 + 간격 8 */
 .hint {
   position: absolute;
   left: 50%;
-  bottom: calc(100% + 8 * var(--pc-u));
+  bottom: calc(100% + (18 + 6 + 8) * var(--pc-u));
   transform: translateX(-50%);
   width: max-content;
   padding: var(--pc-space-1) var(--pc-space-2);
