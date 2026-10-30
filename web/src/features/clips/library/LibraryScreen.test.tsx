@@ -770,6 +770,114 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(inside.queryByRole('button', { name: /다시 시도/ })).toBeNull();
   });
 
+  describe('다 끝난 진행 카드는 접힌다(POK-510)', () => {
+    const done = {
+      ...rendered,
+      upload: { ...checkingUpload, status: 'uploaded' as const, videoId: 'abc', error: null },
+    };
+    const card = () => within(screen.getByRole('region', { name: '진행 상황' }));
+    const toggle = () => card().getByRole('button', { name: /진행 상황/ });
+    const stepList = () => card().queryByRole('list', { name: '진행 단계' });
+
+    it('올라간 편집본은 머리 한 줄만 보이고, 눌러서 단계와 공개 범위 안내를 폈다 접는다', async () => {
+      const user = userEvent.setup();
+      show(serverClip('uploaded', done));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+      expect(stepList()).toBeNull();
+      expect(card().queryByText(/올라갔어요/)).toBeNull();
+      await user.click(toggle());
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+      expect(stepList()).toBeInTheDocument();
+      expect(card().getByText(/올라갔어요/)).toBeInTheDocument();
+      await user.click(toggle());
+      expect(stepList()).toBeNull();
+      expect(card().queryByText(/올라갔어요/)).toBeNull();
+    });
+
+    it('유튜브에 안 올린 완성본도 끝난 것이라 접혀 있고, 펴면 안 올렸다고 말한다', async () => {
+      const user = userEvent.setup();
+      show(serverClip('rendered'));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+      expect(card().queryByText(/유튜브에는 올리지 않았어요/)).toBeNull();
+      await user.click(toggle());
+      expect(card().getByText('영상을 다 만들었어요. 유튜브에는 올리지 않았어요.')).toBeVisible();
+    });
+
+    it('돌고 있거나 사람이 봐야 하면 접는 단추 없이 단계가 다 보인다', () => {
+      const noToggle = () => card().queryByRole('button', { name: /진행 상황/ });
+      show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+      expect(noToggle()).toBeNull();
+      expect(stepList()).toBeInTheDocument();
+      cleanup();
+      show(serverClip('rendered', { ...rendered, upload: failedUpload }));
+      expect(noToggle()).toBeNull();
+      expect(stepList()).toBeInTheDocument();
+      cleanup();
+      show(serverClip('rendering', { ...rendered, status: 'rendering', progress: null }));
+      expect(noToggle()).toBeNull();
+      expect(stepList()).toBeInTheDocument();
+    });
+
+    /** 목록 새로 읽기가 열린 패널의 편집본을 바꾸는 것을 흉내 낸다 */
+    function showSwappable(first: ReturnType<typeof serverClip>) {
+      let swap: (next: ReturnType<typeof serverClip>) => void = () => {};
+      function Harness() {
+        const [clip, setClip] = useState(first);
+        swap = setClip;
+        return (
+          <ClipDetailPanel
+            clip={clip}
+            status={clip.status}
+            now={NOW}
+            onDeselect={() => {}}
+            onTitleChange={() => {}}
+            onUpload={() => {}}
+            onRetryRender={() => {}}
+            onRetryUpload={() => {}}
+            onDownload={() => {}}
+            onDelete={() => {}}
+          />
+        );
+      }
+      renderWithProviders(<Harness />);
+      return (next: ReturnType<typeof serverClip>) => act(() => swap(next));
+    }
+    const uploading = serverClip('uploading', {
+      ...rendered,
+      upload: { ...checkingUpload, status: 'uploading', error: null },
+    });
+
+    it('보던 중에 끝나면 끝나는 순간 줄어들지 않고 펼친 채 남는다', async () => {
+      const user = userEvent.setup();
+      const swap = showSwappable(uploading);
+      expect(stepList()).toBeInTheDocument();
+      swap(serverClip('uploaded', done));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+      expect(stepList()).toBeInTheDocument();
+      await user.click(toggle());
+      expect(stepList()).toBeNull();
+    });
+
+    it('접어 둔 편집본이 다시 돌면 펴지고, 또 끝나도 도로 접히지 않는다', () => {
+      const swap = showSwappable(serverClip('uploaded', done));
+      expect(stepList()).toBeNull();
+      swap(uploading);
+      expect(stepList()).toBeInTheDocument();
+      swap(serverClip('uploaded', done));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('다른 편집본으로 옮기면 접힘은 처음부터다', async () => {
+      const user = userEvent.setup();
+      const first = serverClip('uploaded', done);
+      const swap = showSwappable(first);
+      await user.click(toggle());
+      expect(stepList()).toBeInTheDocument();
+      swap({ ...first, id: '13' });
+      expect(stepList()).toBeNull();
+    });
+  });
+
   it('지금 누를 단추와 이어서 편집 · 다운로드 · 삭제는 진행 카드 · 원본 방송보다 뒤, 패널 맨 끝에 모여 있다(바닥 고정 줄, POK-509)', () => {
     show(serverClip('rendered', { ...rendered, upload: failedUpload }));
     const inside = within(panel());
@@ -1057,7 +1165,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     ).toBeInTheDocument();
   });
 
-  it('공개로 올린 편집본은 패널에 누가 보는지와 바꾸는 곳을 말한다(POK-291)', () => {
+  it('공개로 올린 편집본은 진행 카드를 펴면 누가 보는지와 바꾸는 곳을 말한다(POK-291)', async () => {
+    const user = userEvent.setup();
     show(
       serverClip('uploaded', {
         ...rendered,
@@ -1070,6 +1179,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
         },
       }),
     );
+    await user.click(within(panel()).getByRole('button', { name: /진행 상황/ }));
     expect(
       within(panel()).getByText(
         '「공개」(누구나 볼 수 있는 범위)로 올렸어요. 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',

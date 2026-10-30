@@ -198,7 +198,8 @@ export function ClipDetailPanel({
         )}
       </div>
 
-      {step ? <ClipProgressCard step={step} privacyNote={privacyNote} /> : null}
+      {/* 패널은 편집본을 바꿔도 내려가지 않는다: 접힘은 편집본마다 처음부터라 편집본 번호를 열쇠로 쓴다 */}
+      {step ? <ClipProgressCard key={clip.id} step={step} privacyNote={privacyNote} /> : null}
       {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만. 진행 카드가 「아래 단추로 알려 주세요」라고 하는
           바로 그 아래에 둔다(2026-10-30 사용자 선택) — 바닥 줄에 두면 설명과 단추가 멀어진다. 확인 필요면 진행 카드가 늘 선다.
           업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다(PR #261 codex) */}
