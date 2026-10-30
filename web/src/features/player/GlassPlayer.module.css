@@ -601,6 +601,11 @@
   transform: none;
 }
 
+.hint[data-side='bottom'] {
+  top: calc(100% + 8 * var(--pc-u));
+  bottom: auto;
+}
+
 .hintAnchor:hover .hint,
 .hintAnchor:has(:focus-visible) .hint {
   opacity: 1;

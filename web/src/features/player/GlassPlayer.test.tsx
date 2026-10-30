@@ -76,6 +76,14 @@ describe('GlassPlayer', () => {
       }
     });
 
+    it('채팅을 숨겼을 때의 채팅 열기 버튼도 말풍선이 뜬다 — 플레이어 맨 위라 아래쪽으로 뜬다', () => {
+      renderPlayer(undefined, { chatPanelOpen: false, onToggleChatPanel: vi.fn() });
+
+      const hint = screen.getByText('채팅 열기');
+      expect(hint).toHaveAttribute('aria-hidden', 'true');
+      expect(hint).toHaveAttribute('data-side', 'bottom');
+    });
+
     it('단축키가 없는 버튼은 이름만 뜬다', () => {
       renderPlayer();
 

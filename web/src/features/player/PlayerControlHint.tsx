@@ -7,22 +7,31 @@ import styles from './GlassPlayer.module.css';
  * 컨트롤 안에 두면 둘 다 저절로 맞는다. 낭독은 버튼 이름이 맡는다(말풍선은 aria-hidden)
  *
  * @param align 플레이어가 넘친 곳을 자르므로 줄 맨 앞 · 맨 뒤 버튼은 말풍선을 버튼 끝에 맞춘다
+ * @param side 재생 막대는 시크바 위(top), 플레이어 맨 위 버튼은 잘리지 않게 아래(bottom)다
  */
 export function PlayerControlHint({
   label,
   keys,
   align = 'center',
+  side = 'top',
   children,
 }: {
   label: string;
   keys?: string;
   align?: 'start' | 'center' | 'end';
+  side?: 'top' | 'bottom';
   children: ReactNode;
 }) {
   return (
     <span className={styles.hintAnchor}>
       {children}
-      <span className={styles.hint} data-align={align} data-theme="dark" aria-hidden="true">
+      <span
+        className={styles.hint}
+        data-align={align}
+        data-side={side}
+        data-theme="dark"
+        aria-hidden="true"
+      >
         {keys ? `${label} (${keys})` : label}
       </span>
     </span>

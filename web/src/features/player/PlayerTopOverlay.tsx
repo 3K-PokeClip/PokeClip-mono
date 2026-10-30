@@ -1,6 +1,7 @@
 import { MessageSquare } from 'lucide-react';
 import { Avatar, Skeleton } from '@/ui';
 import styles from './GlassPlayer.module.css';
+import { PlayerControlHint } from './PlayerControlHint';
 
 // 플레이어 상단 오버레이 — 채널 필 + 채팅 열기 (시안 영상 플레이어 글래스).
 // 뒤로가기는 1b에서 페이지 헤더가 사라진 뒤 사이드 메뉴가 담당하므로 여기엔 없다.
@@ -67,14 +68,16 @@ export function PlayerTopOverlay({
       </div>
       {/* 패널은 플레이어 밖이라 접으면 되살릴 곳이 없다 — 닫혔을 때만 이 자리에 통로가 선다 */}
       {onToggleChatPanel && chatPanelOpen === false ? (
-        <button
-          type="button"
-          className={styles.chatOpenBtn}
-          aria-label="채팅 열기"
-          onClick={onToggleChatPanel}
-        >
-          <MessageSquare size={17} aria-hidden />
-        </button>
+        <PlayerControlHint label="채팅 열기" align="end" side="bottom">
+          <button
+            type="button"
+            className={styles.chatOpenBtn}
+            aria-label="채팅 열기"
+            onClick={onToggleChatPanel}
+          >
+            <MessageSquare size={17} aria-hidden />
+          </button>
+        </PlayerControlHint>
       ) : null}
     </div>
   );
