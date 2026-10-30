@@ -1542,6 +1542,7 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function show() {
@@ -1595,5 +1596,42 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     expect(card.getByText('10월 17일 (토) 19:52 · 2시간 14분')).toBeInTheDocument();
     expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+  });
+
+  it('방송 중이면 시점별 기록을 다시 읽어, 패널을 연 뒤 바꾼 제목 · 카테고리가 뒤 장면에 보인다(PR #462 1차 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const live = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let reads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, {
+          broadcasts: [{ ...broadcastRow, status: 'live', endedAt: null }],
+          nextCursor: null,
+        });
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline') {
+        reads += 1;
+        // 처음 읽을 때는 카테고리를 바꾸기 전이라 첫 구간이 아직 끝나지 않았다
+        return jsonResponse(
+          200,
+          reads === 1
+            ? { segments: [{ ...timeline.segments[0], until: null }], truncated: false }
+            : timeline,
+        );
+      }
+      return new Promise<Response>(() => {});
+    });
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(live, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+    expect(await card.findByText('인사 방송')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    expect(card.getByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
   });
 });

@@ -18,6 +18,11 @@ export function useBroadcastTimeline(
   streamId: string,
   status: LiveBroadcastStatus,
 ): BroadcastTimeline | undefined {
+  return useBroadcastTimelineQuery(streamId, status).data;
+}
+
+/** 같은 기록의 쿼리 전체 — 첫 답을 기다리는 중인지까지 봐야 하는 화면(보관함 원본 방송 카드)이 쓴다 */
+export function useBroadcastTimelineQuery(streamId: string, status: LiveBroadcastStatus) {
   const live = status === 'live';
   return useQuery({
     queryKey: ['broadcast-timeline', streamId, status],
@@ -25,5 +30,5 @@ export function useBroadcastTimeline(
     enabled: streamId !== '' && (live || status === 'ended'),
     staleTime: live ? TIMELINE_LIVE_MS : Infinity,
     refetchInterval: live ? TIMELINE_LIVE_MS : false,
-  }).data;
+  });
 }

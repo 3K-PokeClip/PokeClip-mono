@@ -1,7 +1,8 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { fetchAllBroadcasts, fetchBroadcastTimeline, type LibraryEntry } from '@/api/clipEditor';
+import { fetchAllBroadcasts, type LibraryEntry } from '@/api/clipEditor';
+import { useBroadcastTimelineQuery } from '@/features/broadcast/livenow/useBroadcastTimeline';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 import { clipSourceOf, type ClipSource } from './libraryView';
 
@@ -11,8 +12,6 @@ import { clipSourceOf, type ClipSource } from './libraryView';
 
 /** 방송 목록을 다시 읽는 간격. 끝난 방송의 제목은 안 바뀌고, 지금 방송의 제목은 장면 때 값이 시점별 기록에서 온다 */
 const ROWS_STALE_MS = 5 * 60_000;
-/** 방송 중인 방송의 시점별 기록. 장면은 지난 시각이라 그 구간은 거의 안 바뀐다 — 정보 바(30초)처럼 자주 읽을 까닭이 없다 */
-const LIVE_TIMELINE_STALE_MS = 60_000;
 
 export function useClipSource(entry: LibraryEntry | undefined): {
   /** 목업 줄(서버 줄이 없다)이면 null */
@@ -37,23 +36,16 @@ export function useClipSource(entry: LibraryEntry | undefined): {
     enabled: entry !== undefined,
     staleTime: ROWS_STALE_MS,
   });
-  // 방송 목록과 나란히 읽는다(목록을 기다렸다 읽으면 카드가 두 번 늦다). 끝난 방송의 기록은 더 안 바뀐다
-  const timeline = useQuery({
-    queryKey: ['library-broadcast-timeline', streamId],
-    queryFn: async () => {
-      const answer = await fetchBroadcastTimeline(streamId);
-      // 구간 목록이 없는 답은 못 읽은 것으로 본다 — 그대로 넘기면 구간을 고르다 패널이 통째로 깨진다
-      if (!Array.isArray(answer?.segments)) throw new Error('시점별 기록 모양이 아니에요');
-      return answer;
-    },
-    enabled: streamId !== '',
-    staleTime: live ? LIVE_TIMELINE_STALE_MS : Infinity,
-  });
+  // 방송 목록과 나란히 읽는다(목록을 기다렸다 읽으면 카드가 두 번 늦다). 정보 바와 같은 기록이다: 방송 중이면 주기적으로 다시 읽어, 패널을
+  // 연 채 뒤에 만든 편집본을 골라도 옛 끝 구간의 제목 · 카테고리를 쓰지 않고, 끝나면 끝까지 담긴 기록을 한 번 더 읽는다
+  const timeline = useBroadcastTimelineQuery(streamId, live ? 'live' : 'ended');
 
   if (entry === undefined) return { source: null, pending: false };
   const row = rows.data?.find((r) => r.streamId === streamId) ?? null;
+  // 구간 목록이 없는 답은 못 읽은 것으로 본다 — 그대로 넘기면 구간을 고르다 패널이 통째로 깨진다
+  const segmented = Array.isArray(timeline.data?.segments) ? timeline.data : undefined;
   return {
-    source: clipSourceOf(entry, row, timeline.data),
+    source: clipSourceOf(entry, row, segmented),
     pending: rows.isPending || timeline.isPending,
   };
 }
