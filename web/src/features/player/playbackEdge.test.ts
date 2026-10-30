@@ -127,6 +127,34 @@ describe('liveStartFloorMs · startIsTruncated — 라이브 시작 하한 S_liv
     expect(liveStartFloorMs(NO_PDT, 4)).toBeNull();
   });
 
+  /** durations 조각 가운데 gapAt 자리는 EXT-X-GAP 조각이다(PDT 는 이어 센다) */
+  function withGaps(durations: readonly number[], gapAt: readonly number[]): DatedFragment[] {
+    return fragsOf(durations).map((frag, i) => (gapAt.includes(i) ? { ...frag, gap: true } : frag));
+  }
+
+  it('맨 앞 GAP 조각은 내용이 아니다 — 하한은 첫 내용 조각 + 내용 조각 셋 길이다(M5b 실측 모양)', () => {
+    // GAP 여섯(5.933초) 뒤 내용 4초 조각 셋 — GAP 을 세면 하한이 첫 GAP + 17.8초로 내용 앞에 선다
+    const frags = withGaps([5.933, 5.933, 5.933, 5.933, 5.933, 5.933, 4, 4, 4], [0, 1, 2, 3, 4, 5]);
+    const contentFirst = PDT0 + 35_598;
+    expect(liveStartFloorMs(frags, 6)).toBe(contentFirst + 12_000);
+    expect(startIsTruncated(frags, contentFirst + 11_999, 'live', 6)).toBe(true);
+    expect(startIsTruncated(frags, contentFirst + 12_000, 'live', 6)).toBe(false);
+  });
+
+  it('가운데 GAP 은 창이 밀리는 조각이라 여유에 그대로 센다 — 빼는 것은 맨 앞 GAP 뿐이다', () => {
+    // 세 번 밀린 창은 GAP 을 지나 c3(첫 조각 + 14초)에서 시작한다 — GAP 을 빼 12초로 재면 그 앞에 선다
+    const frags = withGaps([4, 6, 4, 4, 4], [1]);
+    expect(liveStartFloorMs(frags, 6)).toBe(PDT0 + 14_000);
+    expect(startIsTruncated(frags, PDT0 + 13_999, 'live', 6)).toBe(true);
+  });
+
+  it('내용 조각이 셋보다 적으면 있는 만큼 · 모두 GAP 이면 하한이 없다(넘기지 않는다)', () => {
+    expect(liveStartFloorMs(withGaps([6, 6, 4], [0, 1]), 6)).toBe(PDT0 + 16_000);
+    const allGap = withGaps([6, 6, 6], [0, 1, 2]);
+    expect(liveStartFloorMs(allGap, 6)).toBeNull();
+    expect(startIsTruncated(allGap, PDT0, 'live', 6)).toBe(false);
+  });
+
   it('시작이 하한 이상이면 잘리지 않고 하한보다 1ms 라도 앞이면 잘린다', () => {
     expect(startIsTruncated(FRAGS, PDT0 + 12_000, 'live', 4)).toBe(false);
     expect(startIsTruncated(FRAGS, PDT0 + 11_999, 'live', 4)).toBe(true);

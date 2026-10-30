@@ -78,19 +78,31 @@ export function startLoadPosition(
 
 /**
  * 라이브 시작 하한(epoch ms, POK-200 c13 · S10) — 라이브 목록에서 시작해도 창 밖으로 밀리지 않는 가장 이른 시각이다. 창
- * 하한(windowLowerMs)과 같은 식 하나라, 탐침과 첫 목록 재검사가 같은 하한을 쓴다. 시각 표시가 없으면 null
+ * 하한(windowLowerMs)과 같은 식을 맨 앞 GAP 을 뺀 조각에 건다(liveContent). 탐침과 첫 목록 재검사가 이 하한 하나를
+ * 쓴다. 시각 표시가 없거나 모두 GAP 이면 null
  */
 export function liveStartFloorMs(
   fragments: readonly DatedFragment[],
   targetDurationS: number,
 ): number | null {
-  const list = loadedList(fragments, targetDurationS);
+  const list = loadedList(liveContent(fragments), targetDurationS);
   return list === null ? null : windowLowerMs(list, 'live');
 }
 
 /**
+ * 맨 앞 EXT-X-GAP 조각을 뺀 조각 — 재송출 직후 MediaMTX 라이브 목록은 앞이 GAP 으로 차 있어(M5b 2026-10-30 · 약
+ * 36초), 그것을 세면 하한이 내용 앞에 선다. 가운데 GAP 은 창이 밀리는 조각이라 그대로 둔다
+ */
+function liveContent(fragments: readonly DatedFragment[]): readonly DatedFragment[] {
+  const first = fragments.findIndex((frag) => !frag.gap);
+  if (first < 0) return [];
+  return first === 0 ? fragments : fragments.slice(first);
+}
+
+/**
  * 시작 위치 startAtMs 가 창 하한보다 앞이라 startLoadPosition 이 하한으로 자를 것인가 — 못 본 녹화가 잘린다. 하한과 같으면
- * 잘리지 않는다. 시각 표시가 없으면 판정할 수 없어 false 다(startLoadPosition 도 null 이라 기본 시작으로 둔다)
+ * 잘리지 않는다. live 는 라이브 시작 하한(liveStartFloorMs — 맨 앞 GAP 을 뺀다)으로 잰다. 시각 표시가 없거나 모두 GAP
+ * 이면 판정할 수 없어 false 다(startLoadPosition 도 null 이거나 기본 시작으로 둔다)
  */
 export function startIsTruncated(
   fragments: readonly DatedFragment[],
@@ -98,6 +110,10 @@ export function startIsTruncated(
   kind: PlaybackSource['kind'],
   targetDurationS: number,
 ): boolean {
+  if (kind === 'live') {
+    const floor = liveStartFloorMs(fragments, targetDurationS);
+    return floor !== null && startAtMs < floor;
+  }
   const list = loadedList(fragments, targetDurationS);
   return list !== null && startAtMs < windowLowerMs(list, kind);
 }
