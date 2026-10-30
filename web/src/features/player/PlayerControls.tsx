@@ -6,6 +6,7 @@ import {
   Pause,
   PictureInPicture2,
   Play,
+  RotateCcw,
   Scissors,
   Volume2,
   VolumeX,
@@ -66,10 +67,12 @@ export function PlayerControls({
         <button
           type="button"
           className={styles.glassBtn}
-          aria-label={sim.playing ? '일시정지' : '재생'}
+          aria-label={sim.ended ? '처음부터' : sim.playing ? '일시정지' : '재생'}
           onClick={sim.togglePlay}
         >
-          {sim.playing ? (
+          {sim.ended ? (
+            <RotateCcw size={19} aria-hidden />
+          ) : sim.playing ? (
             <Pause size={19} aria-hidden fill="currentColor" strokeWidth={0} />
           ) : (
             <Play size={19} aria-hidden fill="currentColor" strokeWidth={0} />

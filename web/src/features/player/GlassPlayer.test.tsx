@@ -585,6 +585,21 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     expect(pill).not.toHaveTextContent('끝으로');
   });
 
+  it('끝까지 보면 재생 단추가 「처음부터」다: 눌렀을 때 일을 미리 말한다(POK-518)', () => {
+    const { container } = renderRecorded();
+    const video = container.querySelector('video')!;
+    expect(screen.queryByRole('button', { name: '처음부터' })).toBeNull();
+
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    expect(screen.getByRole('button', { name: '처음부터' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '재생' })).toBeNull();
+  });
+
   it('시크바도 다시보기라고 읽는다: 화면 낭독기가 「실시간에서」라고 하지 않는다', () => {
     renderRecorded();
 

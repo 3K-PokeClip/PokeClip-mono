@@ -40,9 +40,20 @@ function pieceOffsetMs(seconds: number): number {
   return Math.round(seconds * 1000);
 }
 
-/** 앞으로 가는 이동의 도착점: 녹화 안으로 자르고, 틈 안이면 다음 구간 시작이다(재생 서버는 틈을 건너 주지 않는다) */
+/**
+ * 녹화 끝으로 갈 때 틀 자리: 마지막 구간의 끝 1초 앞이다. 그 구간이 1초보다 짧으면 구간 시작이다(앞 구간에 떨어지지 않는다).
+ * 줄기는 건너뛸 수 없어(파일 머리 주석) 끝으로 가는 것도 이 꼬리를 틀어 끝에 닿는 것이다
+ */
+function tailStart(recorded: RecordingTimeline): number {
+  const last = recorded.pieces[recorded.pieces.length - 1]!;
+  return Math.max(0, last.fromSeconds, last.toSeconds - 1);
+}
+
+/** 앞으로 가는 이동의 도착점: 끝은 꼬리로 모으고, 틈 안이면 다음 구간 시작이다(재생 서버는 틈을 건너 주지 않는다) */
 function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
-  const wanted = clampToRecording(recorded.durationSeconds, seconds);
+  const tail = tailStart(recorded);
+  if (seconds >= tail) return tail;
+  const wanted = Math.max(0, seconds);
   return playableFrom(recorded, wanted)?.fromSeconds ?? wanted;
 }
 
@@ -80,13 +91,17 @@ export function useRecordedPlayback(
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   /** 다시 붙이지 못한 줄기의 주소. 줄기가 바뀌면(옮김·다음 구간) 알림이 저절로 사라진다 */
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  /** 마지막 구간까지 다 봤다(POK-518). 재생 단추가 「처음부터」가 된다 */
+  const [ended, setEnded] = useState(false);
+  const endedRef = useRef(false);
+  endedRef.current = ended;
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
   // 틈 안이면 다음 구간 시작, 녹화 끝을 지났으면 마지막 구간 끝 1초 앞(끝까지 본 뒤 다시 누른 경우)
   const piece = useMemo(() => {
     const last = recorded.pieces[recorded.pieces.length - 1]!;
     return (
       playableFrom(recorded, offset) ?? {
-        fromSeconds: Math.max(last.fromSeconds, last.toSeconds - 1),
+        fromSeconds: tailStart(recorded),
         toSeconds: last.toSeconds,
       }
     );
@@ -149,6 +164,7 @@ export function useRecordedPlayback(
     };
     const onPlay = () => {
       wantPlayRef.current = true;
+      setEnded(false);
       setPlaying(true);
     };
     // 그 방송을 처음 틀었을 때 한 번만 센다 — 줄기를 갈아 끼우는 구간 넘김·옮김은 세지 않는다 (POK-357).
@@ -170,6 +186,9 @@ export function useRecordedPlayback(
       const next = playableFrom(recordedRef.current, pieceEndRef.current);
       if (next === null) {
         wantPlayRef.current = false;
+        // 받은 줄기가 목록보다 조금 짧아도 끝은 녹화 끝이다: 시크바와 시간 표기가 끝에 맞게 선다
+        setPosition(recordedRef.current.durationSeconds);
+        setEnded(true);
         return;
       }
       setPosition(next.fromSeconds);
@@ -226,6 +245,13 @@ export function useRecordedPlayback(
       const target = backward
         ? playableBackFrom(recordedRef.current, clampToRecording(total, seconds))
         : forwardTarget(recordedRef.current, seconds);
+      // 이미 끝에 있으면 옮길 것이 없다: 꼬리를 되감거나 끝난 영상의 꼬리를 새로 받으면 끝에서 1초가 또 돈다(POK-518)
+      const tail = pieceOffsetMs(tailStart(recordedRef.current));
+      const atTail = endedRef.current || pieceOffsetMs(offsetRef.current) === tail;
+      if (!backward && pendingRef.current === null && pieceOffsetMs(target) === tail && atTail) {
+        return;
+      }
+      setEnded(false);
       pendingRef.current = target;
       setPosition(target);
       onSeekRef.current?.();
@@ -274,6 +300,7 @@ export function useRecordedPlayback(
     currentPositionSeconds: now,
     behindSeconds,
     atEdge: behindSeconds < AT_EDGE_THRESHOLD_SECONDS,
+    ended,
     windowSeconds: span,
     uptimeSeconds: total,
     quality,
