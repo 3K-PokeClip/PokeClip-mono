@@ -498,9 +498,10 @@ export function sceneAtMs(entry: LibraryEntry, row: BroadcastRow | null): number
 }
 
 /**
- * 제목 · 카테고리는 그 장면 때의 값이다: 방송 중에 게임을 바꿨으면 바꾸기 전 장면은 바꾸기 전 카테고리다. 그 시각 구간이 없으면
- * 방송 줄의 값(마지막 관측)으로 물러선다 — 빈칸보다 가까운 값이 낫다(broadcastInfoAt과 같은 규칙). 포스터만은 더 좁게
- * 대표 플랫폼 구간에서만 고른다(categoryAt)
+ * 제목 · 카테고리는 그 장면 때의 값이다: 방송 중에 게임을 바꿨으면 바꾸기 전 장면은 바꾸기 전 카테고리다. 그 시각 구간이 없을 때만
+ * 방송 줄의 값(마지막 관측)으로 물러선다 — 빈칸보다 가까운 값이 낫다(broadcastInfoAt과 같은 규칙). 구간을 찾았는데 비어 있으면 빈
+ * 그대로다: 카테고리 없이 시작한 장면에 나중 카테고리를 붙이지 않는다(정보 바와 같다). 포스터는 더 좁게 대표 플랫폼 구간에서만
+ * 고른다(categoryAt). 대표 플랫폼을 모르면 글자와 같은 구간의 플랫폼으로 고른다 — 따로 고르면 글자와 포스터의 플랫폼이 갈린다
  */
 export function clipSourceOf(
   entry: LibraryEntry,
@@ -511,10 +512,14 @@ export function clipSourceOf(
   const at = sceneAtMs(entry, row);
   const segment =
     at !== null && timeline ? segmentAt(timeline.segments, platform, at, timeline.truncated) : null;
-  const span = at !== null ? categoryAt(categorySpansOf(timeline), at, platform) : null;
+  const span =
+    at !== null
+      ? categoryAt(categorySpansOf(timeline), at, platform ?? segment?.platform ?? null)
+      : null;
+  const shown = segment ?? row;
   return {
-    title: segment?.title?.trim() || row?.title?.trim() || null,
-    category: segment?.category?.trim() || row?.category?.trim() || null,
+    title: shown?.title?.trim() || null,
+    category: shown?.category?.trim() || null,
     categoryImageUrl: span?.imageUrl ?? null,
     platform: platformLabel(segment?.platform ?? platform),
   };

@@ -265,6 +265,35 @@ describe('clipSourceOf — 원본 방송의 제목 · 카테고리는 그 장면
     });
   });
 
+  it('그 시각 구간의 제목 · 카테고리가 비어 있으면 빈 그대로다 — 나중 값을 앞 장면에 붙이지 않는다(PR #462 2차 리뷰)', () => {
+    const blank: BroadcastTimeline = {
+      segments: [segment('CHZZK', STARTED, null, null, null)],
+      truncated: false,
+    };
+    expect(clipSourceOf(entry('rendered'), row(), blank)).toEqual({
+      title: null,
+      category: null,
+      categoryImageUrl: null,
+      platform: '치지직',
+    });
+  });
+
+  it('대표 플랫폼을 모르면 글자와 포스터를 같은 플랫폼 구간에서 고른다(PR #462 2차 리뷰)', () => {
+    const simulcast: BroadcastTimeline = {
+      segments: [
+        segment('SOOP', STARTED, null, 'SOOP 제목', '스타크래프트', 'https://p/sc.png'),
+        segment('CHZZK', STARTED, null, '치지직 제목', '리그 오브 레전드', 'https://p/lol.png'),
+      ],
+      truncated: false,
+    };
+    expect(clipSourceOf(entry('rendered'), null, simulcast)).toEqual({
+      title: 'SOOP 제목',
+      category: '스타크래프트',
+      categoryImageUrl: 'https://p/sc.png',
+      platform: 'SOOP',
+    });
+  });
+
   it('아무것도 못 읽었으면 지어내지 않는다', () => {
     expect(clipSourceOf(entry('rendered'), null, undefined)).toEqual({
       title: null,
