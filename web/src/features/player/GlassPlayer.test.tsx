@@ -958,7 +958,8 @@ describe('GlassPlayer: 녹화 다시보기', () => {
       act(() => {
         vi.advanceTimersByTime(1);
       });
-      expect(spinner(container)).not.toBeNull();
+      // 채팅 창 불러오기와 같은 로고 그리기다
+      expect(spinner(container)?.querySelector('svg mask')).not.toBeNull();
       // 버퍼링은 낭독하지 않는다(소음)
       expect(screen.queryByRole('status')).toBeNull();
 
