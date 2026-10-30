@@ -1062,12 +1062,12 @@ function WiredStudio({
       latest === null
         ? null
         : {
-            view: clipStatusView(latest, statusNow),
+            view: clipStatusView(latest, statusNow, save.version),
             versionLabel: `편집본 v${latest.recipeVersion}`,
             retrying,
             onRetryUpload: retryClipUpload,
           },
-    [latest, statusNow, retrying, retryClipUpload],
+    [latest, statusNow, save.version, retrying, retryClipUpload],
   );
 
   return (

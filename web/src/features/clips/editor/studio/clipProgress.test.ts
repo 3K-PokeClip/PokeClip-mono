@@ -276,6 +276,21 @@ describe('clipStatusView: 영상 상태 알약과 작은 창(POK-492)', () => {
 
   it('확인 필요는 푸는 곳(보관함)으로만 보낸다', () => {
     expect(view(clip({ upload: upload('checking') })).actions).toEqual(['libraryCheck']);
+    // 영상이 지금 판이면 판 번호를 알아도 같다
+    expect(clipStatusView(clip({ upload: upload('checking') }), NOW, 1).actions).toEqual([
+      'libraryCheck',
+    ]);
+  });
+
+  it('확인 필요 영상이 옛 판이면 보관함에 풀 곳이 없어 보내지 않고, 지금 판으로 다시 올릴 길을 말한다', () => {
+    const v = clipStatusView(clip({ upload: upload('checking') }), NOW, 2);
+    expect(v.actions).toEqual(['library']);
+    expect(v.detail).toBe(
+      '이 판은 올라갔는지 확인하지 못했어요. 지금 판으로 영상을 만들면 다시 올릴 수 있어요.',
+    );
+    // 올라갔는지 모르는 것은 그대로다: 상태를 지어내지 않는다
+    expect(v).toMatchObject({ tone: 'warning', title: '확인 필요' });
+    expect(v.steps[2]).toEqual({ label: '유튜브 올리기', state: 'warning', note: '확인 필요' });
   });
 });
 

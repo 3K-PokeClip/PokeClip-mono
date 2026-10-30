@@ -93,6 +93,8 @@ const server = vi.hoisted(() => ({
   renderError: null as null | { status: number; body: Record<string, unknown> },
   /** 저장된 편집본 지금 판의 업로드 정보(POK-291) */
   savedUploadRequest: null as unknown,
+  /** 저장된 편집본에 이미 있는 영상 */
+  savedLatestClip: null as unknown,
   /** 영상 상태 묻기(폴링)의 답. 시험이 준 약속이 풀릴 때 답한다 */
   clipPoll: null as null | ((clipId: number) => Promise<Response>),
   /** 카드 열기 기록(POK-393)의 답 */
@@ -161,7 +163,7 @@ function handle(url: string, init?: RequestInit) {
       cut: { inAtMs: STARTED_AT + 120_000, outAtMs: STARTED_AT + 150_000 },
       status: 'editing',
       broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
-      latestClip: null,
+      latestClip: server.savedLatestClip,
       createdAt: '2026-09-20T11:00:00Z',
       updatedAt: '2026-09-20T11:00:00Z',
       uploadRequest: server.savedUploadRequest,
@@ -266,6 +268,7 @@ beforeEach(() => {
   server.render = { status: 201, clip: {} };
   server.renderError = null;
   server.savedUploadRequest = null;
+  server.savedLatestClip = null;
   server.clipPoll = null;
   server.openStatus = 204;
   spansAsked.length = 0;
@@ -1544,6 +1547,53 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
     expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '영상 만들기' })).toBeEnabled();
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1);
+  });
+
+  it('확인 필요 영상이 있는 편집본을 새 판으로 저장하면 보관함으로 보내지 않는다: 보관함에 풀 곳이 없다', async () => {
+    server.savedLatestClip = {
+      id: 77,
+      streamId: STREAM_ID,
+      recipeId: 31,
+      recipeVersion: 2,
+      requestedBy: '9',
+      status: 'rendered',
+      progress: null,
+      outputs: [{ outputId: 'o1', kind: 'video', s3Key: 'k' }],
+      error: null,
+      createdAt: '2026-09-20T11:00:00Z',
+      updatedAt: '2026-09-20T11:00:00Z',
+      upload: {
+        id: 5,
+        clipId: 77,
+        outputId: 'o1',
+        title: '보스 막타',
+        status: 'checking',
+        videoId: null,
+        error: null,
+        requestedBy: '9',
+        createdAt: '2026-09-20T11:00:00Z',
+        updatedAt: '2026-09-20T11:00:00Z',
+      },
+    };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    const pill = { name: '영상 상태: 확인 필요. 자세히 보기' };
+
+    await user.click(await screen.findByRole('button', pill));
+    const before = within(screen.getByRole('dialog', { name: '영상 상태' }));
+    expect(before.getByRole('link', { name: '보관함에서 확인' })).toBeInTheDocument();
+    expect(before.getByText(/보관함에서 채널을 확인하고 결과를 알려/)).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    await screen.findAllByText(/편집본 #31 v3 저장됨/);
+
+    await user.click(screen.getByRole('button', pill));
+    const after = within(screen.getByRole('dialog', { name: '영상 상태' }));
+    expect(after.getByRole('link', { name: '보관함에서 보기' })).toBeInTheDocument();
+    expect(after.queryByRole('link', { name: '보관함에서 확인' })).not.toBeInTheDocument();
+    expect(after.getByText(/지금 판으로 영상을 만들면 다시 올릴 수 있어요/)).toBeInTheDocument();
+    expect(after.queryByText(/결과를 알려/)).not.toBeInTheDocument();
   });
 
   it('요청한 영상이 대기열에 있으면 알약 안에 불확정 막대가 선다: 퍼센트를 지어내지 않는다', async () => {

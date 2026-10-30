@@ -41,8 +41,8 @@ export function clipProgressBar(clip: ClipSnapshot): { value: number | null } | 
 export type ClipStatusTone = 'progress' | 'success' | 'danger' | 'warning';
 
 /**
- * 작은 창에서 할 수 있는 일. 앞의 것이 주 버튼이다. 확인 필요는 푸는 곳이 보관함이라 「보관함에서 확인」이고,
- * 영상 만들기 실패는 영상 만들기 창을 다시 연다(같은 판이면 저장 없이 다시 요청한다)
+ * 작은 창에서 할 수 있는 일. 앞의 것이 주 버튼이다. 확인 필요는 푸는 곳이 보관함이라 「보관함에서 확인」이고(새 판을 저장했으면
+ * 풀 곳이 없어 「보관함에서 보기」), 영상 만들기 실패는 영상 만들기 창을 다시 연다(같은 판이면 저장 없이 다시 요청한다)
  */
 export type ClipStatusAction = 'youtube' | 'retryUpload' | 'remake' | 'library' | 'libraryCheck';
 
@@ -123,8 +123,16 @@ function steps(
   ];
 }
 
-/** 영상 하나의 상태를 알약·작은 창 모양으로(POK-492). now는 단계 시각의 날짜와 예약 공개 시각이 지났는지 볼 때 쓴다 */
-export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): ClipStatusView {
+/**
+ * 영상 하나의 상태를 알약·작은 창 모양으로(POK-492). now는 단계 시각의 날짜와 예약 공개 시각이 지났는지 볼 때 쓴다.
+ * currentVersion은 지금 편집본의 판이다: 편집기는 저장한 뒤에도 옛 판 영상의 알약을 그대로 보인다. 영상이 지금 판일 때만 부르는
+ * 보관함은 안 넘긴다
+ */
+export function clipStatusView(
+  clip: ClipSnapshot,
+  now: Date = new Date(),
+  currentVersion?: number | null,
+): ClipStatusView {
   const progress = clipProgressBar(clip);
   const base = { progress, youtubeUrl: null, retryNote: null };
   const waiting = clip.uploadRequest ? '다 만들면 유튜브에 올려요.' : '';
@@ -224,17 +232,22 @@ export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): Clip
             actions: ['retryUpload', 'library'],
             retryNote,
           };
-        case 'checking':
-          // 올라갔는지 모르는 업로드는 사람이 채널을 보고 푼다 — 푸는 곳은 보관함이다(POK-333)
+        case 'checking': {
+          // 올라갔는지 모르는 업로드는 사람이 채널을 보고 푼다 — 푸는 곳은 보관함이다(POK-333). 새 판을 저장하면 보관함은 이 업로드를
+          // 이전 판 줄에 글자로만 보여 풀 곳이 없으니(2026-10-30 사용자 결정) 보내지 않고 할 수 있는 일을 말한다. 서버의 겹침 검사는
+          // 판마다라 옛 판이 확인 필요여도 새 판은 올릴 수 있다
+          const superseded = currentVersion != null && currentVersion !== clip.recipeVersion;
           return {
             ...base,
             tone: 'warning',
             title: '확인 필요',
-            detail:
-              '유튜브에 올라갔는지 알 수 없어요. 보관함에서 채널을 확인하고 결과를 알려 주세요.',
+            detail: superseded
+              ? '이 판은 올라갔는지 확인하지 못했어요. 지금 판으로 영상을 만들면 다시 올릴 수 있어요.'
+              : '유튜브에 올라갔는지 알 수 없어요. 보관함에서 채널을 확인하고 결과를 알려 주세요.',
             steps: made('warning', '확인 필요'),
-            actions: ['libraryCheck'],
+            actions: [superseded ? 'library' : 'libraryCheck'],
           };
+        }
         default:
           return {
             ...base,
