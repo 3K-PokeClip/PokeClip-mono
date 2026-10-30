@@ -469,7 +469,7 @@ function GlassPlayerBody({
       ) {
         return;
       }
-      const intent = seekIntentForKey(event);
+      const intent = seekIntentForKey(event, sim.replay);
       if (!intent) return;
       if (intent.kind === 'by') sim.seekBy(intent.seconds);
       else if (intent.kind === 'toFraction') sim.seekToFraction(intent.fraction);

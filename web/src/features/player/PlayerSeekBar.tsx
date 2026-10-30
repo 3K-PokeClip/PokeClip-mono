@@ -108,7 +108,7 @@ export function PlayerSeekBar({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const intent = seekIntentForKey(event);
+    const intent = seekIntentForKey(event, replay);
     if (!intent) return;
     if (intent.kind === 'by') onSeekBy(intent.seconds);
     else if (intent.kind === 'toFraction') onSeekToFraction(intent.fraction);

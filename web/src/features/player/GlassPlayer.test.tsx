@@ -585,6 +585,16 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     expect(pill).not.toHaveTextContent('끝으로');
   });
 
+  it('End 키는 플레이어 어디서든 녹화 끝으로 간다(POK-518)', () => {
+    const heard = vi.fn();
+    renderRecorded({ onPlaybackPosition: heard });
+
+    fireEvent.keyDown(screen.getByRole('button', { name: '재생' }), { key: 'End' });
+
+    // 끝은 마지막 1초 앞이다
+    expect(heard).toHaveBeenLastCalledWith(443);
+  });
+
   it('끝까지 보면 재생 단추가 「처음부터」다: 눌렀을 때 일을 미리 말한다(POK-518)', () => {
     const { container } = renderRecorded();
     const video = container.querySelector('video')!;

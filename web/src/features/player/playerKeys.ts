@@ -30,8 +30,9 @@ export type SeekKeyEvent = {
  *
  * WAI-ARIA slider 패턴을 따른다 — Up/Down도 값 조정 키이고, Up = 값 증가 = 라이브 엣지 쪽이다.
  * Home은 "창의 가장 오래된 지점"이라 창 크기와 무관한 toFraction(0)으로 표현한다.
+ * 다시보기(replay)의 End는 시크바 오른쪽 끝이다: 라이브 복귀로 보내면 재생 세션의 다시보기가 무시해 키가 죽는다(POK-518).
  */
-export function seekIntentForKey(event: SeekKeyEvent): SeekIntent | null {
+export function seekIntentForKey(event: SeekKeyEvent, replay = false): SeekIntent | null {
   // 수정자 조합은 OS·브라우저 단축키다 — Cmd+←/Alt+←(뒤로 가기), Ctrl+Home(문서 처음).
   // 가로채면 시킹으로 처리한 뒤 preventDefault까지 걸어 뒤로 가기를 무력화한다.
   // Shift는 막지 않는다 — 플레이어에서 충돌하는 기본 동작이 없다.
@@ -53,7 +54,7 @@ export function seekIntentForKey(event: SeekKeyEvent): SeekIntent | null {
     case 'Home':
       return { kind: 'toFraction', fraction: 0 };
     case 'End':
-      return { kind: 'live' };
+      return replay ? { kind: 'toFraction', fraction: 1 } : { kind: 'live' };
     default:
       return null;
   }

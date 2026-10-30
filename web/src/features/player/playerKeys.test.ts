@@ -12,6 +12,10 @@ describe('seekIntentForKey — 시크바와 전역 단축키가 공유하는 키
     expect(seekIntentForKey({ key: 'ArrowUp' })).toEqual(forward);
   });
 
+  it('다시보기의 End는 시크바 오른쪽 끝(녹화 끝)이다 — 라이브 복귀는 세션 다시보기가 무시해 키가 죽었다(POK-518)', () => {
+    expect(seekIntentForKey({ key: 'End' }, true)).toEqual({ kind: 'toFraction', fraction: 1 });
+  });
+
   it('PageUp/PageDown은 큰 걸음이다', () => {
     expect(seekIntentForKey({ key: 'PageDown' })).toEqual({
       kind: 'by',
