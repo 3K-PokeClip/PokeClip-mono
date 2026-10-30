@@ -551,6 +551,50 @@
   animation: pc-player-pulse 2s ease infinite;
 }
 
+/* 지난 방송의 시간 표기(POK-518). 숫자 폭을 고정해 초가 바뀌어도 글자가 흔들리지 않게 한다 */
+.replayTime {
+  position: relative;
+  display: flex;
+}
+
+.replayTimeDigits {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 공용 Tooltip과 같은 모양. 컨트롤 안에 두어 전체 화면에서도 보이고 컨트롤과 함께 숨는다 */
+.replayTimeHint {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8 * var(--pc-u));
+  width: max-content;
+  max-width: calc(260 * var(--pc-u));
+  padding: var(--pc-space-1) var(--pc-space-2);
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-md);
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+  font-size: var(--pc-font-size-sm);
+  line-height: var(--pc-line-snug);
+  box-shadow: var(--pc-shadow-md);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.replayTime:hover .replayTimeHint,
+.replayTime:has(:focus-visible) .replayTimeHint {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 300ms; /* 공용 Tooltip과 같은 지연 */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .replayTimeHint {
+    transition: none;
+  }
+}
+
 /* ---------- 설정 팝오버 ---------- */
 
 .settingsPanel {

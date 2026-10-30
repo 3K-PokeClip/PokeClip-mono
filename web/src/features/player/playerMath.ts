@@ -67,27 +67,24 @@ function usableWindow(windowSeconds: number): number {
 
 /**
  * 오른쪽 끝을 부르는 말. 라이브는 실시간이고, 녹화 다시보기는 녹화 끝이다(QA 2026-10-11). 버튼 글자·이름과 시크바 낭독이
- * 이 표 하나를 쓴다: 따로 적으면 한쪽만 바뀌어 화면과 화면 낭독기가 다른 말을 한다
+ * 이 표를 쓴다: 따로 적으면 한쪽만 바뀌어 화면과 화면 낭독기가 다른 말을 한다. 끝으로 가는 버튼은 라이브에만 있다(POK-518)
  */
-const EDGE_WORDS = {
-  live: {
-    atEdge: '실시간',
-    goTo: '실시간으로',
-    goToLabel: '실시간으로 이동',
-    seekLabel: '라이브 탐색',
-    fromEdge: '실시간에서',
-  },
-  replay: {
-    atEdge: '녹화 끝',
-    goTo: '끝으로',
-    goToLabel: '녹화 끝으로 이동',
-    seekLabel: '다시보기 탐색',
-    fromEdge: '녹화 끝에서',
-  },
+export const LIVE_EDGE_WORDS = {
+  atEdge: '실시간',
+  goTo: '실시간으로',
+  goToLabel: '실시간으로 이동',
+  seekLabel: '라이브 탐색',
+  fromEdge: '실시간에서',
 } as const;
 
-export function edgeWords(replay: boolean): (typeof EDGE_WORDS)[keyof typeof EDGE_WORDS] {
-  return replay ? EDGE_WORDS.replay : EDGE_WORDS.live;
+const REPLAY_EDGE_WORDS = {
+  atEdge: '녹화 끝',
+  seekLabel: '다시보기 탐색',
+  fromEdge: '녹화 끝에서',
+} as const;
+
+export function edgeWords(replay: boolean): typeof LIVE_EDGE_WORDS | typeof REPLAY_EDGE_WORDS {
+  return replay ? REPLAY_EDGE_WORDS : LIVE_EDGE_WORDS;
 }
 
 /**

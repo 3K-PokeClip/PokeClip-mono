@@ -555,7 +555,7 @@ describe('GlassPlayer: 녹화 다시보기', () => {
       playTo(container, 30);
       heard.mockClear();
 
-      fireEvent.click(screen.getByRole('button', { name: '녹화 끝으로 이동' }));
+      fireEvent.keyDown(screen.getByRole('button', { name: '재생' }), { key: 'End' });
       // 끝은 마지막 1초 앞이다
       expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([443]);
       playTo(container, 30.3);
@@ -571,18 +571,49 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     }
   });
 
-  it('오른쪽 끝은 「실시간」이 아니라 녹화 끝이다: 이름만 바뀌고 누르면 녹화 끝으로 간다(ADR-081)', () => {
-    renderRecorded();
+  it('왼쪽 아래는 「지금 / 전체」 시간이다: 누르면 남은 시간, 다시 누르면 원래대로다(POK-518)', () => {
+    const { container } = renderRecorded();
+    playTo(container, 30);
 
     expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
-    const pill = screen.getByRole('button', { name: '녹화 끝으로 이동' });
-    // 처음은 녹화 맨 앞이라 끝까지 7분 24초다
-    expect(pill).toHaveTextContent('-07:24 · 끝으로');
-    expect(pill).not.toHaveTextContent('실시간');
+    const button = screen.getByRole('button', { name: '남은 시간 보기' });
+    expect(button).toHaveTextContent('0:30 / 7:24');
 
-    fireEvent.click(pill);
-    expect(pill).toHaveTextContent('녹화 끝');
-    expect(pill).not.toHaveTextContent('끝으로');
+    fireEvent.click(button);
+    const remaining = screen.getByRole('button', { name: '재생 시간 보기' });
+    expect(remaining).toHaveTextContent('-6:54 / 7:24');
+
+    fireEvent.click(remaining);
+    expect(screen.getByRole('button', { name: '남은 시간 보기' })).toHaveTextContent('0:30 / 7:24');
+  });
+
+  it('시간 버튼 말풍선은 지금 표기를 따라 설명이 바뀐다 — 영상 위 낭독은 버튼 이름이 맡는다(POK-518)', () => {
+    renderRecorded();
+
+    const hint = screen.getByText('재생 시간이에요. 누르면 남은 시간을 보여 줘요');
+    expect(hint).toHaveAttribute('aria-hidden', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: '남은 시간 보기' }));
+
+    expect(screen.getByText('남은 시간이에요. 누르면 재생 시간을 보여 줘요')).toBeInTheDocument();
+  });
+
+  it('녹화 끝에 닿으면 지금과 전체가 같고 남은 시간은 0이다(POK-518)', () => {
+    const { container } = renderRecorded();
+    const video = container.querySelector('video')!;
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    const button = screen.getByRole('button', { name: '남은 시간 보기' });
+    expect(button).toHaveTextContent('7:24 / 7:24');
+
+    fireEvent.click(button);
+    expect(screen.getByRole('button', { name: '재생 시간 보기' })).toHaveTextContent(
+      '-0:00 / 7:24',
+    );
   });
 
   it('End 키는 플레이어 어디서든 녹화 끝으로 간다(POK-518)', () => {
@@ -818,7 +849,15 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     shown.unmount();
     renderWith({ session: fakeSession({ liveHidden: true }) });
     expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '녹화 끝으로 이동' })).toBeNull();
+  });
+
+  it('세션 다시보기엔 시간 표기를 세우지 않는다 — 세션 축은 1시간에서 잘려 총 시간이 틀린다(POK-518)', () => {
+    const session = fakeSession({ liveHidden: true });
+    const source = { ...session.state.source, kind: 'vod' as const };
+    renderWith({ session: { ...session, state: { ...session.state, source } } });
+
+    expect(screen.getByRole('slider', { name: '다시보기 탐색' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '남은 시간 보기' })).toBeNull();
   });
 
   it('덮개가 선 동안은 끊겨도 스피너를 겹치지 않는다 — 덮개가 없으면 띄운다(POK-439)', () => {

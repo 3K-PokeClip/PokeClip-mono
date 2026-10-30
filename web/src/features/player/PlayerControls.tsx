@@ -14,11 +14,18 @@ import {
 import { useRef, type Ref } from 'react';
 import clsx from 'clsx';
 import styles from './GlassPlayer.module.css';
-import { DEFAULT_VOLUME, edgeWords, formatBehind, isSilent, restoredVolume } from './playerMath';
+import {
+  DEFAULT_VOLUME,
+  LIVE_EDGE_WORDS,
+  formatBehind,
+  isSilent,
+  restoredVolume,
+} from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
+import { ReplayTimeButton } from './ReplayTimeButton';
 import type { PlayerSimulation } from './usePlayerSimulation';
 
-// 하단 버튼줄 — 재생·볼륨·LIVE 복귀(계약3 4절) / 클립·(채팅)·미니·설정·전체 화면.
+// 하단 버튼줄 — 재생·볼륨·LIVE 복귀(계약3 4절, 지난 방송은 시간 표기) / 클립·(채팅)·미니·설정·전체 화면.
 export function PlayerControls({
   sim,
   liveHidden = false,
@@ -30,7 +37,10 @@ export function PlayerControls({
   onSettingsOpenChange,
 }: {
   sim: PlayerSimulation;
-  /** LIVE 복귀 버튼을 숨긴다(재생 세션의 끝난 방송 다시보기) */
+  /**
+   * LIVE 복귀 버튼을 숨긴다(재생 세션의 끝난 방송 다시보기). 시간 표기도 세우지 않는다: 세션 축은 1시간에서 잘려 1시간 넘는
+   * 방송의 총 시간이 틀린다(playbackEdge)
+   */
   liveHidden?: boolean;
   /**
    * 플레이어 안 채팅 오버레이 토글 — 없으면 버튼을 그리지 않는다.
@@ -49,7 +59,6 @@ export function PlayerControls({
   /** 설정 팝오버 열림 알림 — 열려 있는 동안 GlassPlayer가 컨트롤 숨김을 유보한다 */
   onSettingsOpenChange?: (open: boolean) => void;
 }) {
-  const edge = edgeWords(sim.replay);
   const silent = isSilent(sim.muted, sim.volume);
   // 슬라이더를 만지기 직전 음량. 끄는 값을 따라가며 기억하면 0 바로 앞 값(1)이 남아 되살려도 안 들린다(POK-517)
   const lastVolumeRef = useRef(DEFAULT_VOLUME);
@@ -99,12 +108,14 @@ export function PlayerControls({
             onChange={(event) => sim.setVolume(Number(event.target.value))}
           />
         </div>
-        {/* 명시적 LIVE 복귀 버튼 — 계약3 4절: 시차는 -MM:SS, 상한 1:00:00 */}
-        {liveHidden ? null : (
+        {/* 명시적 LIVE 복귀 버튼 — 계약3 4절: 시차는 -MM:SS, 상한 1:00:00. 지난 방송은 끝으로 갈 일이 없어 시간을 적는다(POK-518) */}
+        {liveHidden ? null : sim.replay ? (
+          <ReplayTimeButton behindSeconds={sim.behindSeconds} windowSeconds={sim.windowSeconds} />
+        ) : (
           <button
             type="button"
             className={styles.livePillBtn}
-            aria-label={edge.goToLabel}
+            aria-label={LIVE_EDGE_WORDS.goToLabel}
             onClick={sim.returnToLive}
           >
             <span
@@ -112,7 +123,9 @@ export function PlayerControls({
               data-at-edge={sim.atEdge || undefined}
               aria-hidden
             />
-            {sim.atEdge ? edge.atEdge : `${formatBehind(sim.behindSeconds)} · ${edge.goTo}`}
+            {sim.atEdge
+              ? LIVE_EDGE_WORDS.atEdge
+              : `${formatBehind(sim.behindSeconds)} · ${LIVE_EDGE_WORDS.goTo}`}
           </button>
         )}
       </div>
