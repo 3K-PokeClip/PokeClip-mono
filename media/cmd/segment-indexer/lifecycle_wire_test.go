@@ -27,7 +27,7 @@ func lifecycleCfg(topic string, streams ...string) config.Config {
 	return config.Config{Lifecycle: config.LifecycleOptions{TopicARN: topic, TopicRegion: "ap-northeast-2", Streams: streams}}
 }
 
-// lifecycleResolver 는 조립 게이트만 지나는 4C 클라이언트다 — 이 파일의 시험은 resolve 를 부르지 않는다.
+// lifecycleResolver 는 조립 게이트만 지나는 4C 클라이언트다 — 이 도우미를 쓰는 게이트 시험은 resolve 를 부르지 않는다.
 func lifecycleResolver(t *testing.T) *keyresolve.Client {
 	t.Helper()
 	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: "http://127.0.0.1:1", Token: keyresolve.NewSecret("lifecycle-test")})
