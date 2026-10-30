@@ -1732,6 +1732,40 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     expect(await card.findByText('스타크래프트 · SOOP')).toBeInTheDocument();
   });
 
+  it('방송이 끝나면 방송 줄을 한 번 더 읽어, 끝난 줄의 대표 플랫폼으로 고른다(PR #462 3차 리뷰)', async () => {
+    const base = timeline.segments[0]!;
+    const simulcast = {
+      segments: [
+        { ...base, platform: 'SOOP', until: null, title: 'SOOP 제목', category: '스타크래프트' },
+        { ...base, until: null, title: '치지직 제목', category: '리그 오브 레전드' },
+      ],
+      truncated: false,
+    };
+    let rowReads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live')) {
+        rowReads += 1;
+        const platform = rowReads === 1 ? 'CHZZK' : 'SOOP';
+        return jsonResponse(200, { broadcasts: [{ ...broadcastRow, platform }], nextCursor: null });
+      }
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, simulcast);
+      return new Promise<Response>(() => {});
+    });
+    const onAir = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let swap: () => void = () => {};
+    function Harness() {
+      const [clip, setClip] = useState(toLibraryClip(onAir, '9'));
+      swap = () => setClip(toLibraryClip(entry, '9'));
+      return <ClipSourceCard clip={clip} now={NOW} />;
+    }
+    renderWithProviders(<Harness />);
+    expect(await screen.findByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+
+    act(() => swap());
+    expect(await screen.findByText('스타크래프트 · SOOP')).toBeInTheDocument();
+  });
+
   it('방송이 끝나 다시 읽는 동안 보이던 값을 비우지 않는다(PR #462 2차 리뷰)', async () => {
     let reads = 0;
     stubFetch((url) => {

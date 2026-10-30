@@ -28,13 +28,16 @@ export function useClipSource(
   const streamId = entry?.streamId ?? '';
   const live = entry?.broadcast.status === 'live';
 
-  // 방송 번호로 그 한 줄만 찾는다(찾으면 목록 넘기기를 멈추고, 다른 편집본으로 옮기면 취소한다)
+  // 방송 번호로 그 한 줄만 찾는다(찾으면 목록 넘기기를 멈추고, 다른 편집본으로 옮기면 취소한다). 방송이 끝나면 끝난 줄을 한 번 더 읽고,
+  // 그 답이 올 때까지 같은 방송의 옛 줄을 둔다: 그사이 비면 보이던 값이 사라졌다가 돌아온다
   const row = useQuery({
-    queryKey: ['library-broadcast-row', streamId],
+    queryKey: ['library-broadcast-row', streamId, live],
     queryFn: ({ signal }) => fetchBroadcast(streamId, signal),
     enabled: active && streamId !== '',
     staleTime: live ? LIVE_ROW_MS : Infinity,
     refetchInterval: live ? LIVE_ROW_MS : false,
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === streamId ? previous : undefined,
   });
   // 방송 줄과 나란히 읽는다(줄을 기다렸다 읽으면 카드가 두 번 늦다). 정보 바와 같은 기록이다: 방송 중이면 주기적으로 다시 읽어, 패널을
   // 연 채 뒤에 만든 편집본을 골라도 옛 끝 구간의 제목 · 카테고리를 쓰지 않고, 끝나면 끝까지 담긴 기록을 한 번 더 읽는다
