@@ -27,6 +27,8 @@ import { useHlsPlayback, type LivePosition } from './useHlsPlayback';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
 import { useMediaBuffering } from './useMediaBuffering';
 import type { PlaybackSession } from './usePlaybackSession';
+import { usePlayerShortcuts } from './usePlayerShortcuts';
+import { useSoundToggle } from './useSoundToggle';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 import {
   usePlayerSimulation,
@@ -504,6 +506,19 @@ function GlassPlayerBody({
     transition?.catch(() => {});
   }, []);
 
+  const { rememberVolume, toggleSound } = useSoundToggle(sim);
+  usePlayerShortcuts(containerRef, {
+    togglePlay: () => {
+      sim.togglePlay();
+      sim.wake();
+    },
+    toggleSound: () => {
+      toggleSound();
+      sim.wake();
+    },
+    fullscreen: handleFullscreen,
+  });
+
   return (
     <div
       ref={containerRef}
@@ -562,10 +577,13 @@ function GlassPlayerBody({
               ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }
               : undefined
           }
+          fullscreen={fullscreen}
           fullscreenButtonRef={fullscreenButtonRef}
           onClip={handleClip}
           onPip={handlePip}
           onFullscreen={handleFullscreen}
+          onToggleSound={toggleSound}
+          onVolumeTouch={rememberVolume}
           onSettingsOpenChange={setSettingsOpen}
         />
       </div>

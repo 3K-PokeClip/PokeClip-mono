@@ -552,22 +552,22 @@
 }
 
 /* 지난 방송의 시간 표기(POK-518). 숫자 폭을 고정해 초가 바뀌어도 글자가 흔들리지 않게 한다 */
-.replayTime {
-  position: relative;
-  display: flex;
-}
-
 .replayTimeDigits {
   font-variant-numeric: tabular-nums;
 }
 
-/* 공용 Tooltip과 같은 모양. 컨트롤 안에 두어 전체 화면에서도 보이고 컨트롤과 함께 숨는다 */
-.replayTimeHint {
+.hintAnchor {
+  position: relative;
+  display: flex;
+}
+
+/* 버튼 이름과 단축키(POK-518). 공용 Tooltip과 같은 모양. 컨트롤 안에 두어 전체 화면에서도 보이고 컨트롤과 함께 숨는다 */
+.hint {
   position: absolute;
-  left: 0;
+  left: 50%;
   bottom: calc(100% + 8 * var(--pc-u));
+  transform: translateX(-50%);
   width: max-content;
-  max-width: calc(260 * var(--pc-u));
   padding: var(--pc-space-1) var(--pc-space-2);
   border: 1px solid var(--pc-color-border-default);
   border-radius: var(--pc-radius-md);
@@ -582,15 +582,27 @@
   transition: opacity var(--pc-duration-fast) var(--pc-ease-standard);
 }
 
-.replayTime:hover .replayTimeHint,
-.replayTime:has(:focus-visible) .replayTimeHint {
+/* 플레이어가 넘친 곳을 자르므로 줄 맨 앞 · 맨 뒤 버튼은 버튼 끝에 맞춘다 */
+.hint[data-align='start'] {
+  left: 0;
+  transform: none;
+}
+
+.hint[data-align='end'] {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.hintAnchor:hover .hint,
+.hintAnchor:has(:focus-visible) .hint {
   opacity: 1;
   visibility: visible;
   transition-delay: 300ms; /* 공용 Tooltip과 같은 지연 */
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .replayTimeHint {
+  .hint {
     transition: none;
   }
 }

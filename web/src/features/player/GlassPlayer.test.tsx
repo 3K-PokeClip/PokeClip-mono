@@ -1,5 +1,5 @@
 import { act, createRef, type ComponentProps } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
@@ -60,6 +60,184 @@ describe('GlassPlayer', () => {
     await user.click(livePill);
     expect(livePill).toHaveTextContent('실시간');
     expect(livePill).not.toHaveTextContent('실시간으로');
+  });
+
+  describe('재생 막대 말풍선(POK-518)', () => {
+    it('호버하면 위쪽에 버튼 이름과 단축키가 뜬다 — 낭독은 버튼 이름이 맡는다', () => {
+      renderPlayer();
+
+      for (const text of [
+        '일시정지 (Space / k)',
+        '음소거 (m)',
+        '실시간으로 이동 (End)',
+        '전체 화면 (f)',
+      ]) {
+        expect(screen.getByText(text)).toHaveAttribute('aria-hidden', 'true');
+      }
+    });
+
+    it('단축키가 없는 버튼은 이름만 뜬다', () => {
+      renderPlayer();
+
+      expect(screen.getByText('클립 만들기')).toBeInTheDocument();
+      expect(screen.getByText('미니 플레이어')).toBeInTheDocument();
+    });
+
+    it('말풍선은 지금 상태의 이름을 따른다', () => {
+      renderPlayer();
+
+      fireEvent.click(screen.getByRole('button', { name: '음소거' }));
+      expect(screen.getByText('음소거 해제 (m)')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '일시정지' }));
+      expect(screen.getByText('재생 (Space / k)')).toBeInTheDocument();
+    });
+
+    it('전체 화면이면 「전체 화면 종료」다', () => {
+      const { container } = renderPlayer();
+
+      act(() => setFullscreenElement(container.querySelector('[data-controls]')));
+
+      expect(screen.getByRole('button', { name: '전체 화면 종료' })).toBeInTheDocument();
+      expect(screen.getByText('전체 화면 종료 (f)')).toBeInTheDocument();
+    });
+  });
+
+  describe('단축키(POK-518)', () => {
+    /** 플레이어 밖에서 눌렀다 — 마우스만 올리고 누르면 포커스는 페이지에 있다 */
+    const press = (code: string, init: KeyboardEventInit = {}, target: Element = document.body) =>
+      fireEvent.keyDown(target, { code, ...init });
+    const button = (name: string) => screen.getByRole('button', { name });
+
+    /** 테스트가 끝나면 지워지는 플레이어 밖 요소 */
+    function outside(html: string) {
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      document.body.append(host);
+      return { el: host.firstElementChild!, remove: () => host.remove() };
+    }
+
+    it('m은 음소거를 뒤집는다 — 플레이어를 누르지 않아도 듣는다', () => {
+      renderPlayer();
+
+      press('KeyM');
+      expect(button('음소거 해제')).toBeInTheDocument();
+
+      press('KeyM');
+      expect(button('음소거')).toBeInTheDocument();
+    });
+
+    it('음량 0에서 m은 음량을 되살린다 — 단추를 누른 것과 같다', () => {
+      renderPlayer();
+      const slider = screen.getByRole('slider', { name: '볼륨' });
+      fireEvent.pointerDown(slider);
+      fireEvent.change(slider, { target: { value: 0 } });
+
+      press('KeyM');
+
+      expect(slider).toHaveValue('70');
+    });
+
+    it.each(['Space', 'KeyK'])('%s는 재생을 뒤집고 페이지를 내리지 않는다', (code) => {
+      renderPlayer();
+
+      const notPrevented = press(code);
+
+      expect(notPrevented).toBe(false);
+      expect(button('재생')).toBeInTheDocument();
+    });
+
+    it('f는 전체 화면을 요청한다', () => {
+      const requestFullscreen = vi.fn(() => Promise.resolve());
+      Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+        value: requestFullscreen,
+        configurable: true,
+      });
+      try {
+        renderPlayer();
+
+        press('KeyF');
+
+        expect(requestFullscreen).toHaveBeenCalledTimes(1);
+      } finally {
+        Reflect.deleteProperty(HTMLElement.prototype, 'requestFullscreen');
+      }
+    });
+
+    it('플레이어 슬라이더를 만진 뒤에도 듣는다 — 시크바를 누르고 바로 Space를 누르는 흐름이다', () => {
+      renderPlayer();
+
+      press('Space', {}, screen.getByRole('slider', { name: '라이브 탐색' }));
+      expect(button('재생')).toBeInTheDocument();
+
+      press('KeyM', {}, screen.getByRole('slider', { name: '볼륨' }));
+      expect(button('음소거 해제')).toBeInTheDocument();
+    });
+
+    it.each([
+      ['입력창', '<input />'],
+      ['글상자', '<textarea></textarea>'],
+      ['편집 영역', '<div contenteditable="true"></div>'],
+      ['바깥 슬라이더', '<div role="slider" tabindex="0"></div>'],
+      ['대화상자', '<div role="dialog"><button type="button">확인</button></div>'],
+      ['메뉴', '<div role="menu"><button type="button">항목</button></div>'],
+    ])('%s 안에서 누른 키는 그쪽 것이다', (_name, html) => {
+      renderPlayer();
+      const { el, remove } = outside(html);
+      try {
+        const target = el.querySelector('button') ?? el;
+        expect(press('KeyM', {}, target)).toBe(true);
+        expect(press('Space', {}, target)).toBe(true);
+        expect(button('음소거')).toBeInTheDocument();
+        expect(button('일시정지')).toBeInTheDocument();
+      } finally {
+        remove();
+      }
+    });
+
+    it('포커스가 있는 버튼 위 Space는 그 버튼 몫이다 — 키보드로 고른 버튼을 눌러야 한다', () => {
+      renderPlayer();
+      const { el, remove } = outside('<button type="button">카드</button>');
+      try {
+        expect(press('Space', {}, el)).toBe(true);
+        expect(press('Space', {}, button('음소거'))).toBe(true);
+        expect(button('일시정지')).toBeInTheDocument();
+      } finally {
+        remove();
+      }
+    });
+
+    it('포커스가 있는 버튼 위에서도 글자 단축키는 듣는다 — 버튼에 기본 동작이 없다', () => {
+      renderPlayer();
+
+      press('KeyM', {}, button('일시정지'));
+
+      expect(button('음소거 해제')).toBeInTheDocument();
+    });
+
+    it('이미 누가 처리한 키는 건드리지 않는다', () => {
+      renderPlayer();
+      const handled = createEvent.keyDown(document.body, { code: 'KeyM' });
+      handled.preventDefault();
+
+      fireEvent(document.body, handled);
+
+      expect(button('음소거')).toBeInTheDocument();
+    });
+
+    it('마우스로 누른 버튼에 포커스가 남지 않는다 — 남으면 다음 Space가 그 버튼을 또 누른다. 슬라이더는 끌어야 해서 뺀다', () => {
+      renderPlayer();
+
+      expect(fireEvent.mouseDown(button('음소거'))).toBe(false);
+      expect(fireEvent.mouseDown(screen.getByRole('slider', { name: '볼륨' }))).toBe(true);
+    });
+
+    it('플레이어가 내려가면 듣지 않는다', () => {
+      const { unmount } = renderPlayer();
+      unmount();
+
+      expect(press('KeyM')).toBe(true);
+    });
   });
 
   describe('음량(POK-517)', () => {
@@ -340,6 +518,8 @@ describe('GlassPlayer', () => {
       await user.click(toggle);
       expect(toggle).toHaveAttribute('aria-pressed', 'false');
       expect(container.querySelector('[class*="chatOverlay"]')).toBeNull();
+      // 키보드로 토글에 와 있는 경우다: 마우스로 누른 버튼엔 포커스가 남지 않는다(POK-518)
+      act(() => toggle.focus());
       expect(toggle).toHaveFocus();
 
       // ESC·브라우저 UI로 나가도 같은 이벤트가 온다 — 요청이 아니라 결과를 듣는다
@@ -587,15 +767,14 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     expect(screen.getByRole('button', { name: '남은 시간 보기' })).toHaveTextContent('0:30 / 7:24');
   });
 
-  it('시간 버튼 말풍선은 지금 표기를 따라 설명이 바뀐다 — 영상 위 낭독은 버튼 이름이 맡는다(POK-518)', () => {
+  it('시간 버튼 말풍선은 버튼 이름이다 — 단축키가 없어 이름만 뜬다(POK-518)', () => {
     renderRecorded();
 
-    const hint = screen.getByText('재생 시간이에요. 누르면 남은 시간을 보여 줘요');
-    expect(hint).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('남은 시간 보기')).toHaveAttribute('aria-hidden', 'true');
 
     fireEvent.click(screen.getByRole('button', { name: '남은 시간 보기' }));
 
-    expect(screen.getByText('남은 시간이에요. 누르면 재생 시간을 보여 줘요')).toBeInTheDocument();
+    expect(screen.getByText('재생 시간 보기')).toBeInTheDocument();
   });
 
   it('녹화 끝에 닿으면 지금과 전체가 같고 남은 시간은 0이다(POK-518)', () => {

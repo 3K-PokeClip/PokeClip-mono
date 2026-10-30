@@ -1,3 +1,4 @@
+import { isTypingTarget } from '@/features/broadcast/livenow/markKey';
 import { SEEK_PAGE_SECONDS, SEEK_STEP_SECONDS } from './playerMath';
 
 // 시킹 키맵 — 시크바(포커스 시)와 플레이어 전역 단축키가 공유한다 (POK-32).
@@ -58,4 +59,57 @@ export function seekIntentForKey(event: SeekKeyEvent, replay = false): SeekInten
     default:
       return null;
   }
+}
+
+/** 재생 막대 말풍선에 적는 단축키. 키맵과 한곳에 둔다: 따로 적으면 말풍선과 실제 키가 어긋난다(POK-518) */
+export const PLAYER_KEY_LABELS = {
+  play: 'Space / k',
+  sound: 'm',
+  fullscreen: 'f',
+  live: 'End',
+} as const;
+
+export type PlayerShortcut = 'togglePlay' | 'toggleSound' | 'fullscreen';
+
+/**
+ * 키 이벤트 → 재생 막대 단축키. 글자(key)가 아니라 키 자리(code)를 본다: 한글 입력 상태면 m이 「ㅡ」로 와서 글자로 비교하면 듣지
+ * 못한다. 페이지 전체에서 듣는 키라 Shift 조합까지 놓아준다(isMarkHotkey와 같은 이유).
+ */
+export function playerShortcutForKey(
+  event: SeekKeyEvent & { code: string; shiftKey?: boolean },
+): PlayerShortcut | null {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null;
+  if (event.repeat) return null;
+  switch (event.code) {
+    case 'Space':
+    case 'KeyK':
+      return 'togglePlay';
+    case 'KeyM':
+      return 'toggleSound';
+    case 'KeyF':
+      return 'fullscreen';
+    default:
+      return null;
+  }
+}
+
+/** 안에서 누른 키가 그쪽 것인 겹창 */
+const OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
+/** Space로 누르는 것들 */
+const SPACE_ACTIVATES =
+  'a[href], button, summary, [role="button"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"], [role="option"], [role="menuitem"]';
+
+/**
+ * 그 자리에서 누른 키가 플레이어 것이 아닌가. 플레이어 안 슬라이더는 입력 칸이 아니라서 듣는다: 시크바를 누르고 바로 Space를 누르거나
+ * 음량을 끈 뒤 m을 누르는 흐름이다. 포커스가 있는 버튼의 Space는 그 버튼을 누르는 키다.
+ */
+export function isForeignKeyTarget(
+  target: EventTarget | null,
+  code: string,
+  player: Element | null,
+): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest(OVERLAY) !== null) return true;
+  if (isTypingTarget(target) && !player?.contains(target)) return true;
+  return code === 'Space' && target.closest(SPACE_ACTIVATES) !== null;
 }

@@ -1,6 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { seekIntentForKey } from './playerKeys';
+import { playerShortcutForKey, seekIntentForKey } from './playerKeys';
 import { SEEK_PAGE_SECONDS, SEEK_STEP_SECONDS } from './playerMath';
+
+describe('playerShortcutForKey — 재생 막대 말풍선에 적힌 단축키(POK-518)', () => {
+  it('Space · k는 재생, m은 음소거, f는 전체 화면이다', () => {
+    expect(playerShortcutForKey({ key: ' ', code: 'Space' })).toBe('togglePlay');
+    expect(playerShortcutForKey({ key: 'k', code: 'KeyK' })).toBe('togglePlay');
+    expect(playerShortcutForKey({ key: 'm', code: 'KeyM' })).toBe('toggleSound');
+    expect(playerShortcutForKey({ key: 'f', code: 'KeyF' })).toBe('fullscreen');
+  });
+
+  it('한글 입력 상태여도 같은 키다 — 글자가 아니라 키 자리를 본다', () => {
+    expect(playerShortcutForKey({ key: 'ㅡ', code: 'KeyM' })).toBe('toggleSound');
+    expect(playerShortcutForKey({ key: 'ㅏ', code: 'KeyK' })).toBe('togglePlay');
+    expect(playerShortcutForKey({ key: 'ㄹ', code: 'KeyF' })).toBe('fullscreen');
+  });
+
+  it('수정자 조합과 자동반복은 안 듣는다 — 브라우저 단축키이고, 누르고 있으면 재생이 뒤집히기를 반복한다', () => {
+    expect(playerShortcutForKey({ key: 'f', code: 'KeyF', metaKey: true })).toBeNull();
+    expect(playerShortcutForKey({ key: 'k', code: 'KeyK', ctrlKey: true })).toBeNull();
+    expect(playerShortcutForKey({ key: 'm', code: 'KeyM', altKey: true })).toBeNull();
+    expect(playerShortcutForKey({ key: 'M', code: 'KeyM', shiftKey: true })).toBeNull();
+    expect(playerShortcutForKey({ key: ' ', code: 'Space', repeat: true })).toBeNull();
+  });
+
+  it('다른 키는 처리하지 않는다', () => {
+    expect(playerShortcutForKey({ key: 'j', code: 'KeyJ' })).toBeNull();
+    expect(playerShortcutForKey({ key: 'Enter', code: 'Enter' })).toBeNull();
+  });
+});
 
 describe('seekIntentForKey — 시크바와 전역 단축키가 공유하는 키맵', () => {
   it('화살표는 한 걸음 이동하고, 왼쪽/아래가 과거 방향이다', () => {
