@@ -595,14 +595,8 @@ describe('previousUploadsOf: 패널 위쪽이 말하지 않는 살아 있는 업
       ],
     };
     expect(previousUploadsOf(e)).toEqual([
-      { id: 6, versionLabel: 'v1', text: '제목6 · 올리는 중', href: null, checking: false },
-      {
-        id: 5,
-        versionLabel: 'v1',
-        text: '제목5 · 업로드됨',
-        href: 'https://youtu.be/old',
-        checking: false,
-      },
+      { id: 6, versionLabel: 'v1', text: '제목6 · 올리는 중', href: null },
+      { id: 5, versionLabel: 'v1', text: '제목5 · 업로드됨', href: 'https://youtu.be/old' },
     ]);
   });
 
@@ -614,13 +608,7 @@ describe('previousUploadsOf: 패널 위쪽이 말하지 않는 살아 있는 업
     };
     expect(toLibraryClip(e, '9').youtubeUrl).toBeUndefined();
     expect(previousUploadsOf(e)).toEqual([
-      {
-        id: 5,
-        versionLabel: 'v1',
-        text: '제목5 · 업로드됨',
-        href: 'https://youtu.be/old',
-        checking: false,
-      },
+      { id: 5, versionLabel: 'v1', text: '제목5 · 업로드됨', href: 'https://youtu.be/old' },
     ]);
   });
 

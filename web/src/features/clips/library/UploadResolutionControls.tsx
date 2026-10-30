@@ -15,19 +15,15 @@ const NOT_UPLOADED_CONSEQUENCES = [
 ];
 
 export function UploadResolutionControls({
-  label,
   busy,
   onResolve,
 }: {
-  /** 단추 이름에 붙일 대상(「이전 판 v1」 등). 한 패널에 단추 묶음이 여럿일 때 낭독기가 가른다 */
-  label?: string;
   /** 보내는 중: 단추를 잠근다 */
   busy: boolean;
   /** 결과를 보낸다. 받아들여졌으면 true(창을 닫는다). 거절 사유는 부른 쪽이 토스트로 알린다 */
   onResolve: (resolution: UploadResolution) => Promise<boolean>;
 }) {
   const [asking, setAsking] = useState<'uploaded' | 'not_uploaded' | null>(null);
-  const suffix = label ? ` (${label})` : '';
 
   const send = (resolution: UploadResolution) => {
     void onResolve(resolution).then((ok) => {
@@ -43,7 +39,6 @@ export function UploadResolutionControls({
           size="sm"
           fullWidth
           disabled={busy}
-          aria-label={`채널에 올라갔어요${suffix}`}
           onClick={() => setAsking('uploaded')}
         >
           채널에 올라갔어요
@@ -53,7 +48,6 @@ export function UploadResolutionControls({
           size="sm"
           fullWidth
           disabled={busy}
-          aria-label={`안 올라갔어요${suffix}`}
           onClick={() => setAsking('not_uploaded')}
         >
           안 올라갔어요

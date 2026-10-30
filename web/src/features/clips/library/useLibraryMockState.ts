@@ -502,8 +502,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     [clips, setSendingFlag, toast],
   );
 
-  // 「확인 필요」 풀기(POK-333). 답을 줄에 직접 얹지 않고 목록을 다시 읽는다: 푼 업로드가 latestClip의 것일 수도 옛 판의 것일
-  // 수도 있고, 편집본 상태(STATUS_CASE)는 서버가 정한다. 읽기 세대를 올려 그 전에 떠난 읽기(아직 확인 필요)가 덮지 않게 한다.
+  // 「확인 필요」 풀기(POK-333). 답을 줄에 직접 얹지 않고 목록을 다시 읽는다: 편집본 상태(STATUS_CASE)는 서버가 정한다.
+  // 읽기 세대를 올려 그 전에 떠난 읽기(아직 확인 필요)가 덮지 않게 한다. 푸는 단추는 패널 위쪽이 보이는 지금 판 업로드에만 있다.
   const resolveUpload = useCallback(
     async (id: string, uploadId: number, resolution: UploadResolution): Promise<boolean> => {
       const entry = clips.find((c) => c.id === id)?.entry;
@@ -514,17 +514,13 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       try {
         await requestUploadResolution(entry.streamId, target.clipId, uploadId, resolution);
         track('video_upload_resolved', { result: resolution.result });
-        // 다시 시도 단추는 지금 영상(latestClip)에만 있다: 옛 판 업로드를 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
-        const current = target.clipId === entry.latestClip?.id;
         toast(
           resolution.result === 'uploaded'
             ? { tone: 'success', title: '발행됨으로 바꿨어요' }
             : {
                 tone: 'success',
                 title: '안 올라간 것으로 닫았어요',
-                description: current
-                  ? '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.'
-                  : '이전 판 업로드라 이 화면에서 다시 올리지는 않아요.',
+                description: '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.',
               },
         );
         return true;

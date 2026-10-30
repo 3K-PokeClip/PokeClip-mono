@@ -249,16 +249,7 @@ export function ClipDetailPanel({
           <section aria-label="이전 판으로 올린 영상">
             <dl className={styles.meta}>
               {previousUploads.map((u) => (
-                <PreviousUploadRow
-                  key={u.id}
-                  upload={u}
-                  busy={sending}
-                  onResolve={
-                    u.checking && onResolveUpload
-                      ? (resolution) => onResolveUpload(u.id, resolution)
-                      : undefined
-                  }
-                />
+                <PreviousUploadRow key={u.id} upload={u} />
               ))}
             </dl>
           </section>
@@ -495,18 +486,10 @@ function PreviewPlayer({
 }
 
 /**
- * 이전 판 업로드 한 줄. 올린 것만 유튜브로 가는 링크이고, 올리는 중·확인 필요는 글자만이다. 확인 필요면 결과를 적는 단추를 붙인다
- * (POK-333: 새 판을 주문해 위쪽이 새 판을 보여도 옛 판의 확인 필요를 풀 수 있게)
+ * 이전 판 업로드 한 줄. 올린 것만 유튜브로 가는 링크이고, 올리는 중·확인 필요는 글자만이다. 결과를 적는 단추는 달지 않는다:
+ * 올라간 카드에서 옛 판의 올라갔는지를 묻는 게 어색하다(2026-10-30 사용자 결정). 옛 판 확인 필요는 그 판만 묶어 새 판은 막지 않는다
  */
-function PreviousUploadRow({
-  upload,
-  busy,
-  onResolve,
-}: {
-  upload: PreviousUpload;
-  busy: boolean;
-  onResolve?: (resolution: UploadResolution) => Promise<boolean>;
-}) {
+function PreviousUploadRow({ upload }: { upload: PreviousUpload }) {
   return (
     <>
       <dt>{`이전 판 ${upload.versionLabel}`}</dt>
@@ -519,13 +502,6 @@ function PreviousUploadRow({
         ) : (
           upload.text
         )}
-        {onResolve ? (
-          <UploadResolutionControls
-            label={`이전 판 ${upload.versionLabel}`}
-            busy={busy}
-            onResolve={onResolve}
-          />
-        ) : null}
       </dd>
     </>
   );

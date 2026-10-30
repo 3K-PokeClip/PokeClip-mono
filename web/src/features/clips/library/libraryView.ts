@@ -269,8 +269,6 @@ export interface PreviousUpload {
   versionLabel: string;
   text: string;
   href: string | null;
-  /** 확인 필요라 사람이 결과를 적을 수 있다(POK-333) */
-  checking: boolean;
 }
 
 const LIVE_UPLOAD_TEXT: Record<string, string> = {
@@ -309,7 +307,6 @@ export function previousUploadsOf(entry: LibraryEntry | undefined): PreviousUplo
         u.status === 'uploaded' && u.videoId
           ? safeExternalUrl(`https://youtu.be/${encodeURIComponent(u.videoId)}`)
           : null,
-      checking: u.status === 'checking',
     }));
 }
 

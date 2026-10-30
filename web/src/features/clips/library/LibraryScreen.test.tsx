@@ -824,6 +824,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     );
     expect(inside.getByText('두 번째 올림 · 확인 필요')).toBeInTheDocument();
     expect(inside.queryByRole('link', { name: /두 번째 올림/ })).toBeNull();
+    // 결과를 적는 단추는 지금 판에만 있다: 옛 판 줄에 달면 다 끝난 카드가 또 무언가를 묻는 것처럼 보였다(2026-10-30 사용자 결정)
+    expect(inside.queryByRole('button', { name: /올라갔어요/ })).toBeNull();
     expect(await axe(panel())).toHaveNoViolations();
   });
 
@@ -901,45 +903,6 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
       }),
     );
     expect(within(panel()).queryByRole('button', { name: '채널에 올라갔어요' })).toBeNull();
-  });
-
-  it('새 판을 주문해도 옛 판의 확인 필요 줄에 푸는 단추가 붙고 그 업로드 번호로 보낸다(POK-333)', async () => {
-    const calls = resolutionStub(() =>
-      jsonResponse(200, { ...checkingUpload, id: 3, clipId: 2, status: 'failed' }),
-    );
-    const user = userEvent.setup();
-    const clip = toLibraryClip(
-      {
-        ...serverClip('rendering').entry!,
-        latestClip: { ...rendered, status: 'rendering' },
-        liveUploads: [
-          {
-            id: 3,
-            clipId: 2,
-            recipeVersion: 1,
-            outputId: 'o1',
-            title: '첫 판',
-            status: 'checking',
-            videoId: null,
-            createdAt: '2026-09-20T12:00:00Z',
-            updatedAt: '2026-09-20T12:00:00Z',
-          },
-        ],
-      },
-      '9',
-    );
-    show(clip);
-    const previous = within(within(panel()).getByRole('region', { name: '이전 판으로 올린 영상' }));
-
-    await user.click(previous.getByRole('button', { name: '안 올라갔어요 (이전 판 v1)' }));
-    await user.click(
-      within(await screen.findByRole('dialog')).getByRole('button', { name: '안 올라갔어요' }),
-    );
-    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
-    // 다시 시도 단추는 지금 영상에만 있다: 옛 판을 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
-    expect(
-      await screen.findByText('이전 판 업로드라 이 화면에서 다시 올리지는 않아요.'),
-    ).toBeInTheDocument();
   });
 
   it('창이 열린 사이 확인 필요 업로드가 바뀌면 적던 입력을 버린다(PR #261 codex)', async () => {
