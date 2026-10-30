@@ -496,6 +496,18 @@ button.preview:focus-visible {
   background: var(--pc-color-bg-surface);
 }
 
+/* 창이 좁으면 화면 가운데 떠 있는 탐색 막대(셸 Dock)가 패널까지 닿는다(폭 약 912px 아래). 이 줄은 스크롤로 비켜 갈 수 없으니 단추를
+   막대 위로 올린다 */
+@media (max-width: 920px) {
+  .panelInner {
+    scroll-padding-bottom: calc(200 * var(--pc-u));
+  }
+
+  .dock {
+    padding-bottom: var(--pc-shell-body-pad-bottom);
+  }
+}
+
 /* 진행 카드 밖의 안내(편집 중 진행 한 줄 · 원본 만료 · 썸네일 실패). 없으면 자리도 비우지 않는다 */
 .notes {
   display: flex;
