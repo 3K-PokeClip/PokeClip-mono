@@ -508,6 +508,15 @@ button.preview:focus-visible {
   }
 }
 
+/* 진행 카드 · 안내 · 원본 방송 묶음. 사이에 구분선을 두면 비슷한 상자 둘이 33px 벌어져 따로 노는 것처럼 보였다.
+   패널 안쪽은 넘치면 자식이 줄어드는 세로 flex라 줄어들지 않게 못 박는다(.sourceCard와 같은 이유) */
+.panelCards {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+}
+
 /* 진행 카드 밖의 안내(영상 줄이 없을 때의 진행 한 줄 · 원본 만료 · 썸네일 실패). 없으면 자리도 비우지 않는다 */
 .notes {
   display: flex;

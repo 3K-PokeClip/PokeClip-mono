@@ -198,38 +198,41 @@ export function ClipDetailPanel({
         )}
       </div>
 
-      {/* 패널은 편집본을 바꿔도 내려가지 않는다: 접힘은 편집본마다 처음부터라 편집본 번호를 열쇠로 쓴다 */}
-      {step ? (
-        <ClipProgressCard key={clip.id} step={step} privacyNote={privacyNote}>
-          {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만. 진행 카드가 「아래 단추로 알려 주세요」라고
-              하는 바로 그 아래, 카드 안에 둔다(2026-10-30 사용자 요청) — 바닥 줄에 두면 설명과 단추가 멀어진다. 확인 필요면 진행
-              카드가 늘 선다. 업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다
-              (PR #261 codex) */}
-          {checkingUpload && onResolveUpload ? (
-            <UploadResolutionControls
-              key={checkingUpload.id}
-              busy={sending}
-              onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
-            />
-          ) : null}
-        </ClipProgressCard>
-      ) : null}
-
-      <div className={styles.notes}>
-        {/* 진행 카드가 없을 때의 진행 한 줄(영상 줄이 아직 없을 때). 카드가 서면 카드가 진행을 말한다 */}
-        {!step && clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
-        {/* 확인 필요 안내는 진행 카드의 지금 단계 설명이다. 원본 만료 안내는 진행과 따로라 여기 남는다 */}
-        {view.note && !(step && view.note === 'checking') ? (
-          <p className={styles.note}>{noteText(view.note)}</p>
+      {/* 진행 카드와 원본 방송을 한 묶음으로 붙인다(2026-10-30 사용자 선택). 구분선은 묶음과 아래 표 사이에 둔다 */}
+      <div className={styles.panelCards}>
+        {/* 패널은 편집본을 바꿔도 내려가지 않는다: 접힘은 편집본마다 처음부터라 편집본 번호를 열쇠로 쓴다 */}
+        {step ? (
+          <ClipProgressCard key={clip.id} step={step} privacyNote={privacyNote}>
+            {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만. 진행 카드가 「아래 단추로 알려 주세요」라고
+                하는 바로 그 아래, 카드 안에 둔다(2026-10-30 사용자 요청) — 바닥 줄에 두면 설명과 단추가 멀어진다. 확인 필요면 진행
+                카드가 늘 선다. 업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다
+                (PR #261 codex) */}
+            {checkingUpload && onResolveUpload ? (
+              <UploadResolutionControls
+                key={checkingUpload.id}
+                busy={sending}
+                onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
+              />
+            ) : null}
+          </ClipProgressCard>
         ) : null}
-        {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
-        {!step && privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
+
+        <div className={styles.notes}>
+          {/* 진행 카드가 없을 때의 진행 한 줄(영상 줄이 아직 없을 때). 카드가 서면 카드가 진행을 말한다 */}
+          {!step && clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
+          {/* 확인 필요 안내는 진행 카드의 지금 단계 설명이다. 원본 만료 안내는 진행과 따로라 여기 남는다 */}
+          {view.note && !(step && view.note === 'checking') ? (
+            <p className={styles.note}>{noteText(view.note)}</p>
+          ) : null}
+          {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
+          {!step && privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
+        </div>
+
+        {/* 원본 방송 카드(POK-511): 방송 제목 · 카테고리 · 방송일 · 장면 위치. 늘 같은 값이던 「템플릿」 · 「자막」 칸은 걷었다 */}
+        <ClipSourceCard clip={clip} now={now} active={active} />
       </div>
 
       <hr className={styles.divider} />
-
-      {/* 원본 방송 카드(POK-511): 방송 제목 · 카테고리 · 방송일 · 장면 위치. 늘 같은 값이던 「템플릿」 · 「자막」 칸은 걷었다 */}
-      <ClipSourceCard clip={clip} now={now} active={active} />
 
       <dl className={styles.meta}>
         <dt>원본 보존</dt>
