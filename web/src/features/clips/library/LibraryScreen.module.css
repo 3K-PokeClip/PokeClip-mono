@@ -508,7 +508,7 @@ button.preview:focus-visible {
   }
 }
 
-/* 진행 카드 밖의 안내(편집 중 진행 한 줄 · 원본 만료 · 썸네일 실패). 없으면 자리도 비우지 않는다 */
+/* 진행 카드 밖의 안내(영상 줄이 없을 때의 진행 한 줄 · 원본 만료 · 썸네일 실패). 없으면 자리도 비우지 않는다 */
 .notes {
   display: flex;
   flex-direction: column;

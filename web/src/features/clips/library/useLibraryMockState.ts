@@ -117,15 +117,11 @@ function renderPercentOf(entry: LibraryEntry): number | null | undefined {
 
 /**
  * 진행 한 줄(POK-291). 예전에는 패널의 「자막」 칸에 들어갔는데 그 칸은 자막 정보 자리라 떼어 냈다. 배지가 이미 말하는
- * 상태(완성·확인 필요·업로드됨)는 되풀이하지 않는다: 확인 필요는 안내문이, 업로드 실패는 사유 문구가 말한다.
+ * 상태(편집 중·완성·확인 필요·업로드됨)는 되풀이하지 않는다: 확인 필요는 안내문이, 업로드 실패는 사유 문구가 말한다.
  */
 function progressLabelOf(entry: LibraryEntry): string | null {
   const clip = entry.latestClip;
   switch (entry.status) {
-    case 'editing':
-      return clip === null
-        ? null
-        : `v${clip.recipeVersion} 영상 있음 · 지금은 v${entry.recipeVersion}`;
     case 'rendering': {
       const percent = renderPercentOf(entry);
       const step =
@@ -140,6 +136,7 @@ function progressLabelOf(entry: LibraryEntry): string | null {
       return `렌더 실패 · ${clip?.error?.code ?? '?'}`;
     case 'uploading':
       return '유튜브에 올리는 중';
+    case 'editing':
     case 'rendered':
     case 'checking':
     case 'uploaded':

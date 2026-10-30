@@ -211,7 +211,7 @@ export function ClipDetailPanel({
       ) : null}
 
       <div className={styles.notes}>
-        {/* 진행 카드가 없을 때의 진행 한 줄(편집 중이면 「v1 영상 있음 · 지금은 v2」). 카드가 서면 카드가 진행을 말한다 */}
+        {/* 진행 카드가 없을 때의 진행 한 줄(영상 줄이 아직 없을 때). 카드가 서면 카드가 진행을 말한다 */}
         {!step && clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
         {/* 확인 필요 안내는 진행 카드의 지금 단계 설명이다. 원본 만료 안내는 진행과 따로라 여기 남는다 */}
         {view.note && !(step && view.note === 'checking') ? (

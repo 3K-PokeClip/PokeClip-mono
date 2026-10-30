@@ -458,7 +458,7 @@ export interface LibraryStepView {
 
 /**
  * 진행 카드에 그릴 것. 서버 영상이 있을 때만이다: 목업 줄은 영상이 없고, 편집 중이면 latestClip이 옛 판 영상이라 그 진행을
- * 지금 것처럼 보이면 거짓이다(편집기도 같은 판정). 그때는 null이고 패널은 예전처럼 진행 한 줄(progressLabel)을 그린다.
+ * 지금 것처럼 보이면 거짓이다(편집기도 같은 판정). 그때는 null이고 카드를 세우지 않는다.
  * 업로드 실패 사유가 있으면 반드시 이 카드가 선다(사유는 완성 + 최근 업로드 실패에서만 생긴다) — 패널은 그 사유를 따로 그리지 않는다
  */
 export function stepViewForClip(clip: LibraryClip, now: Date): LibraryStepView | null {

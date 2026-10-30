@@ -86,6 +86,11 @@ describe('toLibraryClip', () => {
     expect(clip.progressLabel).toBe('유튜브에 올리는 중');
   });
 
+  it('편집 중은 옛 판 영상이 있어도 진행 줄이 없다: 배지가 말하는 상태에 판 번호를 덧붙이지 않는다', () => {
+    const clip = toLibraryClip(entry('editing', { latestClip: clipWithUpload('abc123') }), '9');
+    expect(clip.progressLabel).toBeNull();
+  });
+
   it('만드는 중은 퍼센트를, 업로드 정보가 있으면 끝나고 올린다는 것까지 말한다', () => {
     const rendering = {
       ...clipWithUpload(null),
