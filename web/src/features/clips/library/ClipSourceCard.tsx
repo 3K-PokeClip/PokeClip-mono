@@ -13,9 +13,18 @@ import styles from './LibraryScreen.module.css';
 // 어느 장면인지 몰랐다. 카테고리 포스터 + 방송 제목 + 카테고리 · 플랫폼 + 방송일 · 길이를 한 장으로 모으고, 아래에 장면 위치와 원본
 // 방송으로 가는 길을 둔다. 제목 · 카테고리는 그 장면 때의 값이다(libraryView.clipSourceOf).
 
-export function ClipSourceCard({ clip, now }: { clip: LibraryClip; now: Date }) {
+export function ClipSourceCard({
+  clip,
+  now,
+  active = true,
+}: {
+  clip: LibraryClip;
+  now: Date;
+  /** 패널이 열려 있는가(useClipSource). 닫히는 동안에도 내용은 남는다 */
+  active?: boolean;
+}) {
   const entry = clip.entry;
-  const { source, pending } = useClipSource(entry);
+  const { source, pending } = useClipSource(entry, active);
   const headId = useId();
   // 못 읽은 포스터 주소 — 그 주소인 동안은 자리표시 그림이다(정보 바 카테고리 사진과 같은 처리)
   const [failedImage, setFailedImage] = useState<string | null>(null);

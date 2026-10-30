@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ClipDetailPanel } from './ClipDetailPanel';
+import { ClipSourceCard } from './ClipSourceCard';
 import { LibraryScreen } from './LibraryScreen';
 import { LibrarySkeleton } from './LibrarySkeleton';
 import { LIBRARY_FIXTURE } from './libraryFixture';
@@ -1662,6 +1663,99 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     const pages = spy.mock.calls.map(([url]) => String(url));
     expect(pages.filter((url) => url.startsWith('/api/clip/broadcasts?'))).toHaveLength(2);
     expect(pages.some((url) => url.includes('cursor='))).toBe(false);
+    // 다른 편집본으로 옮기면 찾던 것을 취소할 수 있게 신호를 넘긴다
+    const first = spy.mock.calls.find(([url]) => String(url).startsWith('/api/clip/broadcasts?'));
+    expect(first?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('패널을 닫으면 시점별 기록을 더 읽지 않고, 다시 열면 새로 읽는다(PR #462 2차 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const live = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let reads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline') {
+        reads += 1;
+        return jsonResponse(200, timeline);
+      }
+      return new Promise<Response>(() => {});
+    });
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(live, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    const whileOpen = reads;
+
+    fireEvent.click(within(panel()).getByRole('button', { name: '선택 해제' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+    expect(reads).toBe(whileOpen);
+
+    fireEvent.click(cards()[0]!);
+    await waitFor(() => expect(reads).toBeGreaterThan(whileOpen));
+  });
+
+  it('방송 중이면 방송 줄도 다시 읽어, 바뀐 대표 플랫폼으로 고른다(PR #462 2차 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const live = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    const base = timeline.segments[0]!;
+    const simulcast = {
+      segments: [
+        { ...base, platform: 'SOOP', until: null, title: 'SOOP 제목', category: '스타크래프트' },
+        { ...base, until: null, title: '치지직 제목', category: '리그 오브 레전드' },
+      ],
+      truncated: false,
+    };
+    let rowReads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live')) {
+        rowReads += 1;
+        const platform = rowReads === 1 ? 'CHZZK' : 'SOOP';
+        return jsonResponse(200, { broadcasts: [{ ...broadcastRow, platform }], nextCursor: null });
+      }
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, simulcast);
+      return new Promise<Response>(() => {});
+    });
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(live, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+    expect(await card.findByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(await card.findByText('스타크래프트 · SOOP')).toBeInTheDocument();
+  });
+
+  it('방송이 끝나 다시 읽는 동안 보이던 값을 비우지 않는다(PR #462 2차 리뷰)', async () => {
+    let reads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline') {
+        reads += 1;
+        return reads === 1 ? jsonResponse(200, timeline) : new Promise<Response>(() => {});
+      }
+      return new Promise<Response>(() => {});
+    });
+    const onAir = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let swap: () => void = () => {};
+    function Harness() {
+      const [clip, setClip] = useState(toLibraryClip(onAir, '9'));
+      swap = () => setClip(toLibraryClip(entry, '9'));
+      return <ClipSourceCard clip={clip} now={NOW} />;
+    }
+    renderWithProviders(<Harness />);
+    expect(await screen.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+
+    act(() => swap());
+    await waitFor(() => expect(reads).toBe(2));
+    expect(screen.getByText('[롤] 다이아 승급전')).toBeInTheDocument();
   });
 
   it('방송 중이면 시점별 기록을 다시 읽어, 패널을 연 뒤 바꾼 제목 · 카테고리가 뒤 장면에 보인다(PR #462 1차 리뷰)', async () => {

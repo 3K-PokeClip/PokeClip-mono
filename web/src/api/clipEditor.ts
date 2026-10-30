@@ -226,13 +226,21 @@ export function fetchAllBroadcasts(
 }
 
 /** 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. */
-export async function fetchBroadcast(streamId: string): Promise<BroadcastRow | null> {
+export async function fetchBroadcast(
+  streamId: string,
+  signal?: AbortSignal,
+): Promise<BroadcastRow | null> {
   for (const state of ['live', 'past'] as const) {
     let found: BroadcastRow | undefined;
-    await walkBroadcasts(state, (rows) => {
-      found = rows.find((b) => b.streamId === streamId);
-      return found !== undefined;
-    });
+    await walkBroadcasts(
+      state,
+      (rows) => {
+        found = rows.find((b) => b.streamId === streamId);
+        return found !== undefined;
+      },
+      null,
+      signal,
+    );
     if (found !== undefined) return found;
   }
   return null;

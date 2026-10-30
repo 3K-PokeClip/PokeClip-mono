@@ -51,6 +51,7 @@ export function ClipDetailPanel({
   downloading = false,
   loadPreview,
   loadAspect,
+  active = true,
 }: {
   clip: LibraryClip;
   status: ClipStatus;
@@ -75,6 +76,8 @@ export function ClipDetailPanel({
   loadPreview?: () => Promise<string | null>;
   /** 레시피 출력의 비율(「9:16」). 없으면(목업 줄) 비율을 모른다 */
   loadAspect?: () => Promise<string | null>;
+  /** 패널이 열려 있는가. 껍데기가 닫혀도 내용은 남아 있어(LibraryScreen) 원본 방송을 더 읽지 않게 알린다 */
+  active?: boolean;
 }) {
   const view = detailViewForClip(clip, status);
   // 서버 영상이 있으면 진행 카드(POK-510)가 진행 · 업로드 실패 사유 · 공개 범위 · 확인 필요 풀기를 맡는다
@@ -221,7 +224,7 @@ export function ClipDetailPanel({
       <hr className={styles.divider} />
 
       {/* 원본 방송 카드(POK-511): 방송 제목 · 카테고리 · 방송일 · 장면 위치. 늘 같은 값이던 「템플릿」 · 「자막」 칸은 걷었다 */}
-      <ClipSourceCard clip={clip} now={now} />
+      <ClipSourceCard clip={clip} now={now} active={active} />
 
       <dl className={styles.meta}>
         <dt>원본 보존</dt>
