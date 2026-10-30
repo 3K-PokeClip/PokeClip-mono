@@ -594,6 +594,74 @@ describe('GlassPlayer: 녹화 다시보기', () => {
       '녹화 끝에서 -07:24',
     );
   });
+
+  describe('끊겨 기다릴 때(POK-439)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const spinner = (container: HTMLElement) => container.querySelector('[data-buffering]');
+
+    /** 재생 중인 영상 노드 — jsdom의 영상은 늘 멈춰 있다 */
+    function playingVideo(container: HTMLElement) {
+      const video = container.querySelector('video')!;
+      Object.defineProperty(video, 'paused', { value: false, configurable: true });
+      return video;
+    }
+
+    function wait(video: HTMLVideoElement, ms: number) {
+      act(() => {
+        video.dispatchEvent(new Event('waiting'));
+        vi.advanceTimersByTime(ms);
+      });
+    }
+
+    it('waiting 뒤 400ms 전엔 없고, 그 뒤 생기고, playing에 사라진다', () => {
+      const { container } = renderRecorded();
+      const video = playingVideo(container);
+
+      wait(video, 399);
+      expect(spinner(container)).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(spinner(container)).not.toBeNull();
+      // 버퍼링은 낭독하지 않는다(소음)
+      expect(screen.queryByRole('status')).toBeNull();
+
+      act(() => {
+        video.dispatchEvent(new Event('playing'));
+      });
+      expect(spinner(container)).toBeNull();
+    });
+
+    it('일시정지 중엔 안 뜬다', () => {
+      const { container } = renderRecorded();
+      const video = container.querySelector('video')!;
+
+      wait(video, 400);
+
+      expect(spinner(container)).toBeNull();
+    });
+
+    it('재생이 멎어 안내가 서면 안 뜬다', async () => {
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('network'));
+      const { container } = renderRecorded();
+      const video = playingVideo(container);
+      await act(async () => {
+        video.dispatchEvent(new Event('error'));
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('녹화 영상을 불러오지 못했어요');
+
+      wait(video, 400);
+
+      expect(spinner(container)).toBeNull();
+    });
+  });
 });
 
 describe('GlassPlayer: 바깥 이동 명령의 결과', () => {
@@ -726,6 +794,33 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     renderWith({ session: fakeSession({ liveHidden: true }) });
     expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
     expect(screen.queryByRole('button', { name: '녹화 끝으로 이동' })).toBeNull();
+  });
+
+  it('덮개가 선 동안은 끊겨도 스피너를 겹치지 않는다 — 덮개가 없으면 띄운다(POK-439)', () => {
+    vi.useFakeTimers();
+    try {
+      const waitOn = (container: HTMLElement) => {
+        const video = container.querySelector('video')!;
+        Object.defineProperty(video, 'paused', { value: false, configurable: true });
+        act(() => {
+          video.dispatchEvent(new Event('waiting'));
+          vi.advanceTimersByTime(400);
+        });
+      };
+
+      const covered = renderWith({
+        session: fakeSession({ cover: 'checking', actions: ['record'] }),
+      });
+      waitOn(covered.container);
+      expect(covered.container.querySelector('[data-buffering]')).toBeNull();
+      covered.unmount();
+
+      const { container } = renderWith({ session: fakeSession() });
+      waitOn(container);
+      expect(container.querySelector('[data-buffering]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('세션이 없으면 지금 순서(src)다', () => {

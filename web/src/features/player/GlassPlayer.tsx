@@ -14,6 +14,7 @@ import {
 import clsx from 'clsx';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
+import { BufferingOverlay } from './BufferingOverlay';
 import styles from './GlassPlayer.module.css';
 import { PlayerChatOverlay } from './PlayerChatOverlay';
 import { PlayerControls } from './PlayerControls';
@@ -24,6 +25,7 @@ import { progressFraction } from './playerMath';
 import { PlayerSessionOverlay } from './PlayerSessionOverlay';
 import { useHlsPlayback, type LivePosition } from './useHlsPlayback';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
+import { useMediaBuffering } from './useMediaBuffering';
 import type { PlaybackSession } from './usePlaybackSession';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 import {
@@ -205,6 +207,7 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
     props.onSeek,
     props.broadcastId,
   );
+  const buffering = useMediaBuffering(videoRef);
   // 초가 바뀔 때만 알린다: timeupdate는 1초에 네 번쯤 온다. 내린다: 영상 시각을 넘는 줄은 보이지 않는다. 카드는 그 시각에
   // 정확히 서므로(seekToPosition) 카드와 같은 초다
   const second = Math.floor(sim.positionSeconds);
@@ -216,6 +219,7 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
     <GlassPlayerBody
       {...props}
       sim={sim}
+      buffering={buffering}
       videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}
     />
   );
@@ -232,6 +236,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
     props.afterForbidden,
     props.broadcastId,
   );
+  const buffering = useMediaBuffering(videoRef);
   // 초가 바뀌거나 시차가 바뀔 때만 알린다(재생기가 초로 내리고, 같은 값이면 같은 객체를 둔다)
   const { onLivePosition } = props;
   const { livePosition } = sim;
@@ -245,6 +250,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
     <GlassPlayerBody
       {...props}
       sim={sim}
+      buffering={buffering}
       // muted 초기값은 훅과 짝 — 자동재생 정책상 소리는 사용자가 켠다
       videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}
     />
@@ -264,6 +270,7 @@ function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession
     props.afterForbidden,
     props.broadcastId,
   );
+  const buffering = useMediaBuffering(videoRef);
   const { onLivePosition } = props;
   const { livePosition } = sim;
   useEffect(() => {
@@ -275,6 +282,8 @@ function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession
     <GlassPlayerBody
       {...props}
       sim={sim}
+      // 덮개가 선 동안은 영상이 끝에서 멎은 것이다: 덮개가 까닭을 말하니 스피너를 겹치지 않는다
+      buffering={buffering && view.cover === null}
       seekHidden={view.seekHidden}
       liveHidden={view.liveHidden}
       overlay={
@@ -291,6 +300,8 @@ function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession
 interface GlassPlayerBodyProps extends GlassPlayerProps {
   sim: PlayerSimulation;
   videoNode: ReactNode;
+  /** 영상이 끊겨 기다리는 중 — 가운데에 스피너를 세운다(POK-439) */
+  buffering?: boolean;
   /** 영상 위 덮개 · 띠(재생 세션) */
   overlay?: ReactNode;
   /** 받을 목록이 없어 시크바를 숨긴다(재생 세션의 끝남 대기 덮개) */
@@ -313,6 +324,7 @@ function GlassPlayerBody({
   recorded,
   sim,
   videoNode,
+  buffering = false,
   overlay,
   seekHidden = false,
   liveHidden = false,
@@ -510,6 +522,8 @@ function GlassPlayerBody({
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
       </div>
+      {/* 안내가 섰으면 기다리는 것이 아니라 멎은 것이다 */}
+      {buffering && !sim.playbackError ? <BufferingOverlay /> : null}
       {/* 재생이 멎은 까닭(POK-337). 컨트롤과 따로 서서 자동 숨김에 안 가려진다 */}
       {sim.playbackError ? (
         <div className={styles.playbackError} role="status">
