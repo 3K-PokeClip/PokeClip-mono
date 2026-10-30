@@ -342,6 +342,8 @@ function GlassPlayerBody({
   // 마우스 드래그는 :focus-visible이 아니라 CSS의 포커스 예외절도 안 걸린다 — 팝오버(settingsOpen)와
   // 같은 방식으로 드래그 동안 숨김을 유보한다.
   const [seeking, setSeeking] = useState(false);
+  // 멈춰 있으면 움직임이 없어도 호버하는 동안은 컨트롤을 둔다. 호버하지 않으면 멈춰 있어도 영상을 가리지 않는다(POK-518)
+  const [hovering, setHovering] = useState(false);
   // 안 보일 땐 시뮬레이션 티커도 돌리지 않는다
   // 오버레이 채팅은 흉내뿐이라 목업 모드에서만 돈다(파일 머리 주석)
   const overlayChat = simulate;
@@ -387,7 +389,8 @@ function GlassPlayerBody({
     sim.wake();
   }, [fullscreen, sim]);
 
-  const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
+  const controlsShown =
+    sim.controlsVisible || (!sim.playing && hovering) || settingsOpen || seeking;
 
   // 🔴 서버로 보내는 길이 아직 없다 — 전에는 시크바에 표시만 찍고 「저장되었습니다」를 띄워 거짓 성공이었다(POK-253).
   // 수동 마킹이 서버로 가기 전까지(POK-257) 준비 중이라고만 알린다. 자동 하이라이트 카드는 채팅 급증으로 따로 생긴다
@@ -524,8 +527,15 @@ function GlassPlayerBody({
       ref={containerRef}
       className={clsx(styles.player, embed && styles.embed)}
       data-controls={controlsShown ? 'visible' : 'hidden'}
-      onMouseMove={sim.wake}
-      onMouseLeave={sim.sleep}
+      // 들어올 때가 아니라 움직일 때 안다: 마우스가 이미 위에 있는 채로 화면이 열리면 들어오는 사건이 없다
+      onMouseMove={() => {
+        setHovering(true);
+        sim.wake();
+      }}
+      onMouseLeave={() => {
+        setHovering(false);
+        sim.sleep();
+      }}
       // 키보드 사용자도 컨트롤을 깨울 수 있어야 한다 — CSS의 :has(:focus-visible) 유지와 짝
       onFocus={sim.wake}
       // 탭에 mousemove를 합성하지 않는 터치 환경의 복구 경로 — 숨은 컨트롤은 pointer-events가 없다

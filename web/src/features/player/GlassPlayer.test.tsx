@@ -62,6 +62,63 @@ describe('GlassPlayer', () => {
     expect(livePill).not.toHaveTextContent('실시간으로');
   });
 
+  describe('멈춰 있을 때의 컨트롤(POK-518)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function pausedPlayer() {
+      const { container } = renderPlayer();
+      fireEvent.click(screen.getByRole('button', { name: '일시정지' }));
+      return container.querySelector('[data-controls]')!;
+    }
+    const wait = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+
+    it('마우스가 플레이어 밖으로 나가면 숨는다 — 멈춰 있어도 영상을 가리지 않는다', () => {
+      const player = pausedPlayer();
+      fireEvent.mouseMove(player);
+
+      fireEvent.mouseLeave(player);
+
+      expect(player).toHaveAttribute('data-controls', 'hidden');
+    });
+
+    it('마우스가 위에 있는 동안은 움직이지 않아도 계속 보인다', () => {
+      const player = pausedPlayer();
+      fireEvent.mouseMove(player);
+
+      wait(10_000);
+
+      expect(player).toHaveAttribute('data-controls', 'visible');
+    });
+
+    it('호버 없이 깨우면(키 · 터치) 잠깐 보였다가 숨는다 — 안 그러면 다음 호버까지 남는다', () => {
+      const player = pausedPlayer();
+      fireEvent.pointerDown(player);
+      expect(player).toHaveAttribute('data-controls', 'visible');
+
+      wait(3000);
+
+      expect(player).toHaveAttribute('data-controls', 'hidden');
+    });
+
+    it('재생 중에는 마우스가 위에 있어도 움직임이 없으면 숨는다 — 지금과 같다', () => {
+      const { container } = renderPlayer();
+      const player = container.querySelector('[data-controls]')!;
+      fireEvent.mouseMove(player);
+
+      wait(3000);
+
+      expect(player).toHaveAttribute('data-controls', 'hidden');
+    });
+  });
+
   describe('재생 막대 말풍선(POK-518)', () => {
     it('호버하면 위쪽에 버튼 이름과 단축키가 뜬다 — 낭독은 버튼 이름이 맡는다', () => {
       renderPlayer();
@@ -813,6 +870,23 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     expect(screen.getByRole('button', { name: '재생 시간 보기' })).toHaveTextContent(
       '-0:00 / 7:24',
     );
+  });
+
+  it('멈춘 채로 뜬 화면도 호버하지 않으면 컨트롤이 숨는다 — 자동재생이 막혀도 영상을 가리지 않는다(POK-518)', () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = renderRecorded();
+      const player = container.querySelector('[data-controls]')!;
+      expect(player).toHaveAttribute('data-controls', 'visible');
+
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      expect(player).toHaveAttribute('data-controls', 'hidden');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('End 키는 플레이어 어디서든 녹화 끝으로 간다(POK-518)', () => {

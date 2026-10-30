@@ -58,7 +58,7 @@ export interface PlayerSimulation {
    */
   playbackError?: string | null;
   clipMarked: boolean;
-  /** 자동 숨김 상태 — 일시정지 중엔 이 값과 무관하게 컨트롤을 보여준다 */
+  /** 자동 숨김 상태 — 멈춰 있는 동안 마우스가 플레이어 위에 있으면 이 값과 무관하게 컨트롤을 보여준다 */
   controlsVisible: boolean;
   togglePlay: () => void;
   toggleMute: () => void;

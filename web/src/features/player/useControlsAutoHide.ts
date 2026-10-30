@@ -21,11 +21,10 @@ export function useControlsAutoHide(playing: boolean): ControlsAutoHide {
     hideTimer.current = window.setTimeout(() => setControlsVisible(false), AUTO_HIDE_MS);
   }, []);
 
-  // 마우스를 움직이지 않아도 재생이 시작되면 자동 숨김이 걸려야 한다 (마운트 직후 포함).
-  // 일시정지 중엔 어차피 컨트롤을 강제 표시하므로 타이머만 풀어 둔다.
+  // 마우스를 움직이지 않아도 자동 숨김이 걸려야 한다 (마운트 직후 포함). 재생을 시작하거나 멈출 때마다 다시 잰다.
+  // 멈춰 있어도 건다: 호버 없이 깨운 컨트롤(키 · 터치)이 영상을 가린 채 남지 않게 한다. 호버 중 유지는 GlassPlayer가 맡는다(POK-518)
   useEffect(() => {
-    if (playing) armHide();
-    else window.clearTimeout(hideTimer.current);
+    armHide();
   }, [playing, armHide]);
 
   useEffect(() => () => window.clearTimeout(hideTimer.current), []);
