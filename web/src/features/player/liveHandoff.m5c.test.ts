@@ -4,6 +4,7 @@ import type { RewindStatusResult } from '@/api/rewindStatus';
 import { stubFetch } from '@/test/mockFetch';
 import { pos, resetEventKit, stamped, startRun, streamPoll } from './handoffTestKit';
 import { decideLiveStart } from './hlsStart';
+import { HANDOFF_SKIP_NOTICE } from './liveHandoff';
 import { probeLiveWindow } from './liveWindowProbe';
 import {
   openSession,
@@ -77,13 +78,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('M5c 모양 라이브 목록 — 탐침 하한은 맨 앞 조각 셋 길이라 P 에서 넘기고, 재생기 기동도 P 에서 시작한다', async () => {
-  const text = livePlaylist();
-  stubFetch(() => new Response(text, { status: 200 }));
+/** A1 을 P 에서 보는 되감기 세션 — 목록 끝 E · 문이 섰고 위치 사건 전이다 */
+function watchingAtP(now: number): PlaybackSessionState {
   startRun();
   const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
-  const now = E + 1_000;
-  const watching = feed(
+  return feed(
     fresh,
     [
       streamPoll(liveReady(A1, T0, E)),
@@ -100,9 +99,15 @@ it('M5c 모양 라이브 목록 — 탐침 하한은 맨 앞 조각 셋 길이�
     ],
     now,
   ).state;
+}
+
+it('M5c 모양 라이브 목록 — 탐침 하한은 맨 앞 조각 셋 길이라 P 에서 넘기고, 재생기 기동도 P 에서 시작한다', async () => {
+  const text = livePlaylist();
+  stubFetch(() => new Response(text, { status: 200 }));
+  const now = E + 1_000;
 
   // 탐침 요청 → 진짜 탐침(목록 받기 · 해석 · 하한)
-  const asked = feed(watching, [pos(P)], now);
+  const asked = feed(watchingAtP(now), [pos(P)], now);
   expect(asked.effects).toEqual([{ kind: 'probe-live', seq: 1, url: LIVE_URL }]);
   const result = await probeLiveWindow(LIVE_URL, new AbortController().signal);
   expect(result).toEqual({ kind: 'ok', floorMs: LIVE_FIRST + 12_200, endMs: LIVE_END });
@@ -119,4 +124,51 @@ it('M5c 모양 라이브 목록 — 탐침 하한은 맨 앞 조각 셋 길이�
     kind: 'load',
     position: (P - LIVE_FIRST) / 1000,
   });
+});
+
+/**
+ * M5b 실측 모양(2026-10-30) — 재송출 직후 MediaMTX 라이브 목록은 맨 앞이 EXT-X-GAP 조각 여섯(5.933초씩)이고, 첫 내용
+ * 조각이 P 보다 3.4초 뒤다. PDT 는 내용 조각 끝 둘에만 단다
+ */
+function gapLedPlaylist(contentFirstMs: number): string {
+  const lines = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:10',
+    '#EXT-X-TARGETDURATION:6',
+    '#EXT-X-MEDIA-SEQUENCE:1',
+  ];
+  for (let i = 0; i < 6; i += 1) lines.push('#EXT-X-GAP', '#EXTINF:5.93333,', 'gap.mp4');
+  [0, 1, 2].forEach((i) => {
+    if (i >= 1) {
+      lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(contentFirstMs + i * 4_000).toISOString()}`);
+    }
+    lines.push('#EXTINF:4.000,', `seg${7 + i}.mp4`);
+  });
+  return lines.join('\n');
+}
+
+it('M5b 모양(맨 앞 GAP 여섯) — 하한은 첫 내용 조각부터라 P 를 자르는 것으로 보고 넘기지 않고, 재생기 기동도 잘림이다', async () => {
+  const contentFirst = P + 3_400;
+  const text = gapLedPlaylist(contentFirst);
+  stubFetch(() => new Response(text, { status: 200 }));
+  const now = E + 1_000;
+  const asked = feed(watchingAtP(now), [pos(P)], now);
+  const result = await probeLiveWindow(LIVE_URL, new AbortController().signal);
+  // GAP 을 세면 하한 = 첫 GAP + 앞 셋(17.8초)이라 P 앞에 선다(실측 599754 < P 614156)
+  expect(result).toEqual({
+    kind: 'ok',
+    floorMs: contentFirst + 12_000,
+    endMs: contentFirst + 12_000,
+  });
+
+  // P2 — 하한이 P 뒤라 넘기지 않고 LIVE 안내를 한 번 한다
+  const done = feed(asked.state, [{ type: 'live-probe', seq: 1, result }], now + 300);
+  expect(done.state.phase.kind).toBe('rewind');
+  expect(done.state.source.url).toBe(A1);
+  expect(done.effects).toContainEqual({ kind: 'notice', text: HANDOFF_SKIP_NOTICE });
+
+  // 재생기의 첫 목록 재검사도 같은 하한이다 — hls.js 가 GAP 으로 읽은 조각을 빼고 잰다
+  const details = M3U8Parser.parseLevelPlaylist(text, LIVE_URL, 0, PlaylistLevelType.MAIN, 0, null);
+  expect(details.fragments.filter((f) => f.gap)).toHaveLength(6);
+  expect(decideLiveStart(details, P, true)).toEqual({ kind: 'truncated' });
 });

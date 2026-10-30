@@ -128,16 +128,14 @@ describe('parseMediaPlaylist — 완성 조각 · TARGETDURATION · ENDLIST', ()
     );
   });
 
-  it('EXT-X-GAP 조각도 조각으로 센다 — hls.js 가 세는 수와 같아야 하한이 같다', () => {
+  it('EXT-X-GAP 조각도 조각으로 센다 — hls.js 가 세는 수와 같아야 영상 시각이 같다 · GAP 표시를 단다', () => {
     const text = mediaPlaylist({ pdtFrom: 1 })
       .replace('seg40.mp4', 'gap.mp4')
       .replace('#EXTINF:4.000,\ngap.mp4', '#EXT-X-GAP\n#EXTINF:4.000,\ngap.mp4');
     expect(text).toContain('#EXT-X-GAP');
-    expect(parseMediaPlaylist(text)?.fragments[0]).toEqual({
-      start: 0,
-      duration: 4,
-      programDateTime: PDT0,
-    });
+    const fragments = parseMediaPlaylist(text)?.fragments;
+    expect(fragments?.[0]).toEqual({ start: 0, duration: 4, programDateTime: PDT0, gap: true });
+    expect(fragments?.[1]?.gap).toBeUndefined();
   });
 
   it('PDT 가 한 줄도 없으면 조각의 시각은 null 이다', () => {

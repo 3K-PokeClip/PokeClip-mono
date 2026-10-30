@@ -31,8 +31,8 @@ export function firstVariantUri(text: string): string | null {
 
 /**
  * 매체 목록 → 완성 조각(EXTINF 누적 · PDT) · TARGETDURATION · ENDLIST. EXT-X-PART ·
- * PRELOAD-HINT 는 세지 않는다(hls.js 의 fragments 도 완성 조각만이다). EXT-X-GAP 조각은 센다. 형식
- * 오류는 null
+ * PRELOAD-HINT 는 세지 않는다(hls.js 의 fragments 도 완성 조각만이다). EXT-X-GAP 조각은 센다 —
+ * 영상 시각이 hls.js 와 같게 — 그리고 gap 표시를 단다(하한은 맨 앞 GAP 을 뺀다). 형식 오류는 null
  */
 export function parseMediaPlaylist(text: string): MediaPlaylist | null {
   const lines = text.split(/\r?\n/);
@@ -41,6 +41,7 @@ export function parseMediaPlaylist(text: string): MediaPlaylist | null {
   let endlist = false;
   let pendingPdt: number | null = null;
   let pendingDuration: number | null = null;
+  let pendingGap = false;
   const fragments: DatedFragment[] = [];
   for (const raw of lines) {
     const line = raw.trim();
@@ -52,12 +53,15 @@ export function parseMediaPlaylist(text: string): MediaPlaylist | null {
     } else if (line.startsWith('#EXTINF:')) {
       pendingDuration = Number(line.slice('#EXTINF:'.length).split(',')[0]);
       if (!Number.isFinite(pendingDuration) || pendingDuration <= 0) return null;
+    } else if (line === '#EXT-X-GAP') {
+      pendingGap = true;
     } else if (line === '#EXT-X-ENDLIST') {
       endlist = true;
     } else if (line !== '' && !line.startsWith('#') && pendingDuration !== null) {
-      fragments.push(nextFragment(fragments, pendingDuration, pendingPdt));
+      fragments.push(nextFragment(fragments, pendingDuration, pendingPdt, pendingGap));
       pendingDuration = null;
       pendingPdt = null;
+      pendingGap = false;
     }
   }
   if (targetDurationS === null || !Number.isFinite(targetDurationS) || targetDurationS <= 0) {
@@ -71,12 +75,14 @@ function nextFragment(
   fragments: readonly DatedFragment[],
   duration: number,
   pdt: number | null,
+  gap: boolean,
 ): DatedFragment {
   const prev = fragments[fragments.length - 1];
   const start = prev === undefined ? 0 : prev.start + prev.duration;
   const carried =
     prev?.programDateTime == null ? null : prev.programDateTime + prev.duration * 1000;
-  return { start, duration, programDateTime: pdt ?? carried };
+  const frag = { start, duration, programDateTime: pdt ?? carried };
+  return gap ? { ...frag, gap } : frag;
 }
 
 /**
