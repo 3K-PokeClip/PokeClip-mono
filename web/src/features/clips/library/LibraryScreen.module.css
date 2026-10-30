@@ -476,10 +476,32 @@ button.preview:focus-visible {
   color: #fff; /* 테마 고정 */
 }
 
-.actions {
+/* 패널 바닥에 붙는 단추 줄(POK-509) — 지금 누를 단추 · 이어서 편집 · 다운로드 · 삭제. 위 내용만 스크롤되어 내용이 길어도 할 일이 화면
+   밖으로 밀리지 않는다. 패널 안쪽 좌우 · 아래 여백을 덮고 가장자리까지 닿도록 그만큼 내밀고, 내용이 짧으면 margin-top: auto로 바닥에
+   내려앉는다. 그림자 대신 위 테두리 한 줄로 내용과 가른다 */
+.dock {
+  position: sticky;
+  bottom: calc(-1 * var(--pc-shell-body-pad-bottom));
+  z-index: 2;
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: calc(6 * var(--pc-u));
+  margin: auto calc(-22 * var(--pc-u)) calc(-1 * var(--pc-shell-body-pad-bottom));
+  padding: calc(12 * var(--pc-u)) calc(22 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+/* 진행 카드 밖의 안내(편집 중 진행 한 줄 · 원본 만료 · 썸네일 실패). 없으면 자리도 비우지 않는다 */
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+}
+
+.notes:empty {
+  display: none;
 }
 
 .actionRow {

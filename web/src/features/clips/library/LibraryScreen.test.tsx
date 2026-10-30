@@ -745,7 +745,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(inside.getByRole('textbox')).toHaveAttribute('readonly');
   });
 
-  it('확인 필요는 다시 올리기를 막고, 진행 카드가 채널을 보라고 하며 결과 단추는 그 카드 바로 아래에 선다(POK-510)', () => {
+  it('확인 필요는 다시 올리기를 막고, 진행 카드가 채널을 보라고 하며 결과 단추는 그 카드 바로 아래에 선다(POK-509)', () => {
     show(serverClip('checking', { ...rendered, upload: checkingUpload }));
     const inside = within(panel());
     const card = inside.getByRole('region', { name: '진행 상황' });
@@ -753,7 +753,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(
       within(card).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
     ).toBeInTheDocument();
-    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 밖, 카드 바로 뒤 · 원본 방송 앞
+    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 밖, 카드 바로 뒤 · 원본 방송 앞(바닥 단추 줄이 아니다)
     const resolved = inside.getByRole('button', { name: '채널에 올라갔어요' });
     expect(resolved).toBeEnabled();
     expect(card.contains(resolved)).toBe(false);
@@ -762,9 +762,25 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(
       resolved.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    const edit = inside.getByRole('link', { name: '이어서 편집' });
+    expect(edit.parentElement?.parentElement?.contains(resolved)).toBe(false);
     expect(inside.getByRole('button', { name: '안 올라갔어요' })).toBeEnabled();
     expect(inside.queryByRole('button', { name: '업로드 확인 필요' })).toBeNull();
     expect(inside.queryByRole('button', { name: /다시 시도/ })).toBeNull();
+  });
+
+  it('지금 누를 단추와 이어서 편집 · 다운로드 · 삭제는 진행 카드 · 원본 방송보다 뒤, 패널 맨 끝에 모여 있다(바닥 고정 줄, POK-509)', () => {
+    show(serverClip('rendered', { ...rendered, upload: failedUpload }));
+    const inside = within(panel());
+    const retry = inside.getByRole('button', { name: '다시 시도' });
+    const dock = retry.parentElement!;
+    // 한 줄(같은 부모 아래)에 주 동작과 보조 단추 줄이 함께 있다
+    expect(within(dock).getByRole('link', { name: '이어서 편집' })).toBeInTheDocument();
+    expect(within(dock).getByRole('button', { name: '다운로드' })).toBeInTheDocument();
+    expect(within(dock).getByRole('button', { name: '삭제' })).toBeInTheDocument();
+    // 문서 순서상 원본 방송 카드 뒤 — 스크롤되는 내용 아래에 붙는다
+    const source = inside.getByRole('region', { name: '원본 방송' });
+    expect(source.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('새 판 영상을 주문해도 이전 판으로 올린 영상이 패널에 남는다: 올림은 유튜브 링크, 확인 필요는 글자(POK-334)', async () => {

@@ -207,7 +207,65 @@ export function ClipDetailPanel({
         />
       ) : null}
 
-      <div className={styles.actions} ref={actionsRef}>
+      <div className={styles.notes}>
+        {/* 진행 카드가 없을 때의 진행 한 줄(편집 중이면 「v1 영상 있음 · 지금은 v2」). 카드가 서면 카드가 진행을 말한다 */}
+        {!step && clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
+        {/* 확인 필요 안내는 진행 카드의 지금 단계 설명이다. 원본 만료 안내는 진행과 따로라 여기 남는다 */}
+        {view.note && !(step && view.note === 'checking') ? (
+          <p className={styles.note}>{noteText(view.note)}</p>
+        ) : null}
+        {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
+        {!step && privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
+      </div>
+
+      <hr className={styles.divider} />
+
+      {/* 원본 방송 카드(POK-511): 방송 제목 · 카테고리 · 방송일 · 장면 위치. 늘 같은 값이던 「템플릿」 · 「자막」 칸은 걷었다 */}
+      <ClipSourceCard clip={clip} now={now} />
+
+      <dl className={styles.meta}>
+        <dt>원본 보존</dt>
+        <dd data-urgent={retention.kind === 'active' && retention.urgent ? 'true' : undefined}>
+          {retentionLabel(retention)}
+        </dd>
+        <dt>만든 사람</dt>
+        <dd>
+          {clip.owner.name}
+          {created ? <span className={styles.metaDim}> · {created}</span> : null}
+        </dd>
+        <dt>마지막 편집</dt>
+        <dd>{instantText(clip.editedAt, now) ?? '—'}</dd>
+        <dt>비율</dt>
+        <dd>{aspectLabel ?? '—'}</dd>
+      </dl>
+
+      {/* 이전 판으로 올린 영상(POK-334): 새 판을 만들어도 옛 판 업로드가 유튜브에 남아 있다. 모양은 위 칸을 줄마다 반복 */}
+      {previousUploads.length > 0 ? (
+        <>
+          <hr className={styles.divider} />
+          <section aria-label="이전 판으로 올린 영상">
+            <dl className={styles.meta}>
+              {previousUploads.map((u) => (
+                <PreviousUploadRow
+                  key={u.id}
+                  upload={u}
+                  busy={sending}
+                  onResolve={
+                    u.checking && onResolveUpload
+                      ? (resolution) => onResolveUpload(u.id, resolution)
+                      : undefined
+                  }
+                />
+              ))}
+            </dl>
+          </section>
+        </>
+      ) : null}
+
+      {/* 바닥에 붙는 단추 줄(POK-509, 2026-10-30 사용자 선택) — 주 동작(업로드 · 다시 시도 · 렌더 재시도 · 유튜브 보기)과 이어서 편집 ·
+          다운로드 · 삭제. 위 내용만 스크롤되어 진행 카드 · 원본 방송이 길어도 할 일이 화면 밖으로 밀리지 않는다. 확인 필요 결과 단추는
+          설명 바로 아래(진행 카드 밑)에 따로 선다 */}
+      <div className={styles.dock} ref={actionsRef}>
         {/* 서버 일이 도는 동안의 꺼진 단추(「유튜브에 올리는 중」)는 진행 카드가 같은 말을 하므로 그리지 않는다(POK-510).
             진행 카드가 없는 목업 줄은 예전처럼 꺼진 단추로 상태를 말한다 */}
         {step && view.primary.kind === 'busy' ? null : (
@@ -262,59 +320,7 @@ export function ClipDetailPanel({
             <Trash2 size={14} aria-hidden />
           </IconButton>
         </div>
-        {/* 진행 카드가 없을 때의 진행 한 줄(편집 중이면 「v1 영상 있음 · 지금은 v2」). 카드가 서면 카드가 진행을 말한다 */}
-        {!step && clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
-        {/* 확인 필요 안내는 진행 카드의 지금 단계 설명이다. 원본 만료 안내는 진행과 따로라 여기 남는다 */}
-        {view.note && !(step && view.note === 'checking') ? (
-          <p className={styles.note}>{noteText(view.note)}</p>
-        ) : null}
-        {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
-        {!step && privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
       </div>
-
-      <hr className={styles.divider} />
-
-      {/* 원본 방송 카드(POK-511): 방송 제목 · 카테고리 · 방송일 · 장면 위치. 늘 같은 값이던 「템플릿」 · 「자막」 칸은 걷었다 */}
-      <ClipSourceCard clip={clip} now={now} />
-
-      <dl className={styles.meta}>
-        <dt>원본 보존</dt>
-        <dd data-urgent={retention.kind === 'active' && retention.urgent ? 'true' : undefined}>
-          {retentionLabel(retention)}
-        </dd>
-        <dt>만든 사람</dt>
-        <dd>
-          {clip.owner.name}
-          {created ? <span className={styles.metaDim}> · {created}</span> : null}
-        </dd>
-        <dt>마지막 편집</dt>
-        <dd>{instantText(clip.editedAt, now) ?? '—'}</dd>
-        <dt>비율</dt>
-        <dd>{aspectLabel ?? '—'}</dd>
-      </dl>
-
-      {/* 이전 판으로 올린 영상(POK-334): 새 판을 만들어도 옛 판 업로드가 유튜브에 남아 있다. 모양은 위 칸을 줄마다 반복 */}
-      {previousUploads.length > 0 ? (
-        <>
-          <hr className={styles.divider} />
-          <section aria-label="이전 판으로 올린 영상">
-            <dl className={styles.meta}>
-              {previousUploads.map((u) => (
-                <PreviousUploadRow
-                  key={u.id}
-                  upload={u}
-                  busy={sending}
-                  onResolve={
-                    u.checking && onResolveUpload
-                      ? (resolution) => onResolveUpload(u.id, resolution)
-                      : undefined
-                  }
-                />
-              ))}
-            </dl>
-          </section>
-        </>
-      ) : null}
     </>
   );
 }
