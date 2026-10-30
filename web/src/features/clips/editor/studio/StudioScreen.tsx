@@ -1085,6 +1085,7 @@ function WiredStudio({
       <StudioEditor
         playback={recording ? video.playback : undefined}
         previewVideo={recording ? video.video : null}
+        previewBuffering={recording ? video.buffering : false}
         source={source}
         actions={actions}
         autosaveLabel={save.label}

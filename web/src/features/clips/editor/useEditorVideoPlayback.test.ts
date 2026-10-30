@@ -387,6 +387,51 @@ describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
   });
 });
 
+describe('useEditorVideoPlayback: 끊겨 기다릴 때 (POK-439)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('재생 중 waiting 뒤 400ms가 지나면 알리고 playing에 내린다', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 38,
+        pieces: PIECES,
+        initialRange: { startSeconds: 5, endSeconds: 10 },
+      }),
+    );
+    const node = document.createElement('video');
+    Object.defineProperty(node, 'paused', { value: false, configurable: true });
+    act(() => result.current.videoRef(node));
+
+    act(() => {
+      node.dispatchEvent(new Event('waiting'));
+      vi.advanceTimersByTime(399);
+    });
+    expect(result.current.buffering).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.buffering).toBe(true);
+
+    act(() => {
+      node.dispatchEvent(new Event('playing'));
+    });
+    expect(result.current.buffering).toBe(false);
+  });
+});
+
 describe('useEditorVideoPlayback: 재생 거절 (POK-389)', () => {
   afterEach(() => vi.unstubAllGlobals());
 

@@ -387,6 +387,8 @@ export interface ClipEditorOptions {
   source?: EditorSource;
   /** 미리보기에 그릴 실제 영상 노드(재생 어댑터가 쥔 것). 없으면 자리 표시 문구를 그린다 */
   previewVideo?: HTMLVideoElement | null;
+  /** 그 영상이 끊겨 기다리는 중(POK-439) */
+  previewBuffering?: boolean;
   /** 오디오 트랙(스트리머가 적어 둔 트랙 이름, POK-240). 없으면 목업 트랙(실제 모드면 빈 목록) */
   tracks?: readonly EditorTrack[];
   /**
@@ -464,6 +466,7 @@ export interface ClipEditorMockState {
   /** 다른 편집 대상을 읽는 중이라 이 화면을 만질 수 없다(POK-444) */
   reloading: boolean;
   previewVideo: HTMLVideoElement | null;
+  previewBuffering: boolean;
   /** 트랙별 미리 듣기 상태. 실제 영상이 없으면 null */
   trackPreviewStatus: TrackPreviewStatus | null;
   /** 미리보기 영상을 못 트는 이유(안내 문구). 틀 수 있으면 null */
@@ -970,6 +973,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     clipStatus: options.clipStatus ?? null,
     reloading: options.reloading ?? false,
     previewVideo: options.previewVideo ?? null,
+    previewBuffering: options.previewBuffering ?? false,
     trackPreviewStatus: options.trackPreview?.status ?? null,
     previewError: playback.error === null ? null : playbackErrorMessage(playback.error),
     trackLevels: real ? (options.trackPreview?.levels ?? null) : undefined,

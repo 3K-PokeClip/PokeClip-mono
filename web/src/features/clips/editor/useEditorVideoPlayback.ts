@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureMediaAccess, reportPlaybackForbidden } from '@/api/playbackAccess';
 import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
+import { useMediaBuffering } from '@/features/player/useMediaBuffering';
 import { windowBlobs } from './editorMedia';
 import {
   boundaryAction,
@@ -103,6 +104,8 @@ export interface EditorVideoPlayback {
   targetWindow: { startSeconds: number; endSeconds: number } | null;
   /** 받아 둔 조각(src)의 첫 장면이 이 훅의 시간축으로 몇 초인가. 조각 안 초 = 시간축 초 − 이 값 */
   windowStartSeconds: number;
+  /** 영상이 끊겨 기다리는 중(POK-439). 첫 mp4를 내려받는 동안은 영상 노드에 소스가 없어 거짓이다 */
+  buffering: boolean;
 }
 
 export function useEditorVideoPlayback(options: {
@@ -117,6 +120,7 @@ export function useEditorVideoPlayback(options: {
 }): EditorVideoPlayback {
   const { streamId, recordingStartMs, recordingSeconds, pieces, initialRange } = options;
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const buffering = useMediaBuffering(useMemo(() => ({ current: video }), [video]));
   const [win, setWin] = useState<Window>(() => windowFor(initialRange, recordingSeconds, pieces));
   const piecesRef = useRef(pieces);
   piecesRef.current = pieces;
@@ -425,5 +429,6 @@ export function useEditorVideoPlayback(options: {
     window: loadedWindow,
     targetWindow,
     windowStartSeconds: srcWindow?.startSeconds ?? win.startSeconds,
+    buffering,
   };
 }
