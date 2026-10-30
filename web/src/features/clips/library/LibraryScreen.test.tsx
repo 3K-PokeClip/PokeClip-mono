@@ -222,18 +222,20 @@ describe('LibraryScreen — 선택·상세 패널', () => {
     );
   });
 
-  it('메타에 원본 방송·원본 보존·템플릿·자막·비율이 선다', () => {
+  it('원본 방송 카드와 원본 보존·만든 사람·마지막 편집·비율이 서고, 늘 같은 값이던 템플릿·자막 칸은 없다(POK-511)', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
     const inside = within(panel());
 
-    expect(inside.getByText('원본 방송').nextElementSibling).toHaveTextContent('8월 31일 라이브');
+    // 목업 줄은 서버 방송이 없어 방송 제목 대신 원본 방송 표기가 선다
+    expect(inside.getByRole('region', { name: '원본 방송' })).toHaveTextContent('8월 31일 라이브');
     expect(inside.getByText('원본 보존').nextElementSibling).toHaveTextContent('원본 만료 D-58');
-    expect(inside.getByText('템플릿').nextElementSibling).toHaveTextContent('기본 쇼츠');
-    expect(inside.getByText('자막').nextElementSibling).toHaveTextContent(
-      '자동 자막 12줄 · 수정 중',
-    );
+    expect(inside.getByText('만든 사람').nextElementSibling).toHaveTextContent('게임하는너구리');
+    // 목업 시계(9월 2일 20:00)와 같은 날이라 「오늘」이다
+    expect(inside.getByText('마지막 편집').nextElementSibling).toHaveTextContent('오늘 14:20');
     // 목업 줄은 레시피가 없어 비율을 지어내지 않는다(POK-254)
     expect(inside.getByText('비율').nextElementSibling).toHaveTextContent('—');
+    expect(inside.queryByText('템플릿')).toBeNull();
+    expect(inside.queryByText('자막')).toBeNull();
   });
 });
 
@@ -751,11 +753,15 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(
       within(card).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
     ).toBeInTheDocument();
-    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 밖, 카드 바로 뒤
+    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 밖, 카드 바로 뒤 · 원본 방송 앞
     const resolved = inside.getByRole('button', { name: '채널에 올라갔어요' });
     expect(resolved).toBeEnabled();
     expect(card.contains(resolved)).toBe(false);
     expect(card.compareDocumentPosition(resolved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const source = inside.getByRole('region', { name: '원본 방송' });
+    expect(
+      resolved.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(inside.getByRole('button', { name: '안 올라갔어요' })).toBeEnabled();
     expect(inside.queryByRole('button', { name: '업로드 확인 필요' })).toBeNull();
     expect(inside.queryByRole('button', { name: /다시 시도/ })).toBeNull();
@@ -1460,5 +1466,118 @@ describe('LibraryScreen — 목록 로딩·실패 (POK-443)', () => {
     });
     expect(cards()).toHaveLength(1);
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
+  const NOW = new Date('2026-10-30T14:30:00+09:00');
+  const entry = {
+    recipeId: 12,
+    streamId: 's1',
+    creatorId: '9',
+    recipeVersion: 2,
+    // 1:23:45 ~ 1:24:30 — 기준점 19:52 + 1:23:45 = 21:15:45, 카테고리를 바꾼 뒤 장면이다
+    cut: { inAtMs: 5_025_000, outAtMs: 5_070_000 },
+    status: 'rendered' as const,
+    broadcast: {
+      status: 'ended',
+      startedAt: '2026-10-17T19:52:00+09:00',
+      endedAt: '2026-10-17T22:06:00+09:00',
+      vodExpiresAt: '2026-12-16T22:06:00+09:00',
+    },
+    latestClip: null,
+    createdAt: '2026-10-30T14:05:00+09:00',
+    updatedAt: '2026-10-30T14:20:00+09:00',
+  };
+  const broadcastRow = {
+    streamId: 's1',
+    status: 'ended',
+    relation: 'OWNER',
+    startedAt: entry.broadcast.startedAt,
+    endedAt: entry.broadcast.endedAt,
+    vodExpiresAt: entry.broadcast.vodExpiresAt,
+    title: '마지막 제목',
+    category: '마지막 카테고리',
+    platform: 'CHZZK',
+  };
+  const timeline = {
+    segments: [
+      {
+        platform: 'CHZZK',
+        from: '2026-10-17T19:52:00+09:00',
+        until: '2026-10-17T20:30:00+09:00',
+        title: '인사 방송',
+        category: '저스트 채팅',
+        categoryImageUrl: 'https://p/talk.png',
+        tags: [],
+      },
+      {
+        platform: 'CHZZK',
+        from: '2026-10-17T20:30:00+09:00',
+        until: null,
+        title: '[롤] 다이아 승급전',
+        category: '리그 오브 레전드',
+        categoryImageUrl: 'https://p/lol.png',
+        tags: [],
+      },
+    ],
+    truncated: false,
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function show() {
+    return renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(entry, '9')]} selectedId="12" now={NOW} />,
+    );
+  }
+
+  it('그 장면 때의 방송 제목 · 카테고리 · 플랫폼 · 방송일 · 길이 · 장면 위치와 지난 방송으로 가는 길이 선다', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    const { container } = show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    expect(card.getByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+    expect(card.getByText('10월 17일 (토) 19:52 · 2시간 14분')).toBeInTheDocument();
+    expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+    expect(card.getByRole('link', { name: '지난 방송 열기' })).toHaveAttribute(
+      'href',
+      '/broadcast/vod/s1',
+    );
+    // 포스터는 그 장면 때 카테고리의 것이다(방송 끝 카테고리가 아니다)
+    expect(container.querySelector('img[src="https://p/lol.png"]')).not.toBeNull();
+    // 늘 같은 값이던 칸은 없다
+    expect(within(panel()).queryByText('템플릿')).toBeNull();
+    await act(async () => {
+      expect(await axe(panel())).toHaveNoViolations();
+    });
+  });
+
+  it('방송 정보를 못 읽어도 지어내지 않고 원본 방송 날짜로 물러서며, 패널의 나머지는 그대로다', async () => {
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts')
+        ? jsonResponse(503, { error: 'x' })
+        : new Promise<Response>(() => {}),
+    );
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('10월 17일 방송')).toBeInTheDocument();
+    expect(card.queryByText(/치지직|SOOP/)).toBeNull();
+    // 보관함 줄에 있는 방송일 · 장면은 그대로 보인다
+    expect(card.getByText('10월 17일 (토) 19:52 · 2시간 14분')).toBeInTheDocument();
+    expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
   });
 });

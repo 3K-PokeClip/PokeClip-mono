@@ -78,8 +78,6 @@ export interface LibraryClip {
   sourceLabel: string;
   /** 원본 VOD 보관 만료 ISO(종료 + 60일). 지났으면 ddayFor가 expired를 준다 */
   sourceExpiresAt: string | null;
-  templateLabel: string;
-  subtitleLabel: string;
   /**
    * 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널은 진행 카드(POK-510)가 없을 때만(편집 중) 그린다 —
    * 카드가 서면 단계 · 막대가 같은 말을 한다. 목업 줄에는 없다
@@ -191,9 +189,6 @@ export function toLibraryClip(entry: LibraryEntry, meId: string | null): Library
     owner: { name: mine ? '나' : `편집자 ${entry.creatorId}`, me: mine },
     sourceLabel: sourceLabelOf(entry),
     sourceExpiresAt: entry.broadcast.vodExpiresAt,
-    templateLabel: '세로 쇼츠 1벌',
-    // 자막 정보는 목록에 없다: 지어내지 않는다
-    subtitleLabel: '—',
     progressLabel: progressLabelOf(entry),
     createdAt: entry.createdAt,
     editedAt: entry.updatedAt,

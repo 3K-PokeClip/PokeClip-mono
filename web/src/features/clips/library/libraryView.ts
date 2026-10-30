@@ -1,8 +1,14 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
+import { segmentAt } from '@/features/broadcast/livenow/broadcastInfoAt';
+import { categoryAt, categorySpansOf } from '@/features/broadcast/livenow/categoryThumb';
 import { formatUptime } from '@/features/player/playerMath';
 import {
   ClipApiError,
   liveUploadsOf,
+  platformLabel,
+  timelineBaseMs,
+  type BroadcastRow,
+  type BroadcastTimeline,
   type LibraryEntry,
   type UploadSnapshot,
 } from '@/api/clipEditor';
@@ -465,6 +471,88 @@ export function stepViewForClip(clip: LibraryClip, now: Date): LibraryStepView |
   return { view, detail, versionLabel: `편집본 v${latest.recipeVersion}` };
 }
 
+// ---------- 원본 방송 카드 (POK-511) ----------
+
+/**
+ * 편집본이 나온 방송의 제목 · 카테고리. 보관함 목록에는 이 칸이 없어 방송 목록 줄(POK-259)과 시점별 기록(POK-462)을 방송 번호로
+ * 이어 붙인다. 모르는 칸은 null이다 — 지어내지 않는다
+ */
+export interface ClipSource {
+  /** 그 장면 때의 방송 제목. 모르면 null(화면은 sourceLabel 「10월 17일 방송」으로 물러선다) */
+  title: string | null;
+  category: string | null;
+  /** 그 장면 때의 카테고리 포스터. 대표 플랫폼 구간이 아니면 null — 다른 플랫폼 포스터는 엉뚱하다(POK-467) */
+  categoryImageUrl: string | null;
+  /** 「치지직」 · 「SOOP」. 모르면 null */
+  platform: string | null;
+}
+
+/**
+ * 편집 구간 시작의 실제 시각(epoch ms). 구간 ms는 방송 기준점에서 잰 값이라 기준점(방송 줄의 timelineOriginAt, 없으면 시작 시각)에
+ * 더한다. 방송 줄을 아직 못 읽었으면 보관함 줄의 시작 시각으로 대신한다(수십 초 어긋날 수 있다). 모르면 null
+ */
+export function sceneAtMs(entry: LibraryEntry, row: BroadcastRow | null): number | null {
+  if (entry.cut === null) return null;
+  const base = row !== null ? timelineBaseMs(row) : Date.parse(entry.broadcast.startedAt ?? '');
+  return Number.isFinite(base) ? base + entry.cut.inAtMs : null;
+}
+
+/**
+ * 제목 · 카테고리는 그 장면 때의 값이다: 방송 중에 게임을 바꿨으면 바꾸기 전 장면은 바꾸기 전 카테고리다. 그 시각 구간이 없으면
+ * 방송 줄의 값(마지막 관측)으로 물러선다 — 빈칸보다 가까운 값이 낫다(broadcastInfoAt과 같은 규칙). 포스터만은 더 좁게
+ * 대표 플랫폼 구간에서만 고른다(categoryAt)
+ */
+export function clipSourceOf(
+  entry: LibraryEntry,
+  row: BroadcastRow | null,
+  timeline: BroadcastTimeline | undefined,
+): ClipSource {
+  const platform = row?.platform ?? null;
+  const at = sceneAtMs(entry, row);
+  const segment =
+    at !== null && timeline ? segmentAt(timeline.segments, platform, at, timeline.truncated) : null;
+  const span = at !== null ? categoryAt(categorySpansOf(timeline), at, platform) : null;
+  return {
+    title: segment?.title?.trim() || row?.title?.trim() || null,
+    category: segment?.category?.trim() || row?.category?.trim() || null,
+    categoryImageUrl: span?.imageUrl ?? null,
+    platform: platformLabel(segment?.platform ?? platform),
+  };
+}
+
+/** 원본 방송의 길이 — 「2시간 14분」 · 「48분」, 방송 중이면 「방송 중」. 시작 · 끝을 모르면 null */
+export function broadcastLengthLabel(broadcast: LibraryEntry['broadcast']): string | null {
+  if (broadcast.status === 'live') return '방송 중';
+  if (!broadcast.startedAt || !broadcast.endedAt) return null;
+  const minutes = Math.round(
+    (Date.parse(broadcast.endedAt) - Date.parse(broadcast.startedAt)) / 60_000,
+  );
+  if (!Number.isFinite(minutes) || minutes < 0) return null;
+  const hours = Math.floor(minutes / 60);
+  return hours > 0 ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
+}
+
+/** 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」(방송 기준점에서 잰 시계) */
+export function sceneLabel(cut: NonNullable<LibraryEntry['cut']>): string {
+  return `${formatUptime(cut.inAtMs / 1000)} ~ ${formatUptime(cut.outAtMs / 1000)}`;
+}
+
+/**
+ * 원본 방송으로 가는 길. 방송 중이면 라이브 화면, 끝났으면 지난 방송이다. 원본 보관이 지났으면 null — 열어도 다시 볼 것이
+ * 없다(홈 지난 방송 칸과 같은 규칙)
+ */
+export function sourceLinkOf(
+  entry: LibraryEntry,
+  now: Date,
+): { href: string; label: '라이브 열기' | '지난 방송 열기' } | null {
+  const streamId = encodeURIComponent(entry.streamId);
+  if (entry.broadcast.status === 'live') {
+    return { href: `/broadcast/livenow?stream=${streamId}`, label: '라이브 열기' };
+  }
+  if (ddayFor(entry.broadcast.vodExpiresAt, now).kind === 'expired') return null;
+  return { href: `/broadcast/vod/${streamId}`, label: '지난 방송 열기' };
+}
+
 // ---------- 유튜브 업로드 (POK-111) ----------
 
 /**
@@ -656,6 +744,21 @@ export function retentionLabel(dday: VodDday): string {
     case 'unknown':
       return '—';
   }
+}
+
+/**
+ * 시각 한 칸 — 「10월 17일 (토) 19:52」(예약 공개 시각과 같은 표기), 오늘이면 「오늘 14:20」. 서버 값이 없거나 못 읽으면 null.
+ * withToday가 거짓이면(방송 시작) 오늘이어도 날짜를 쓴다: 방송일은 날짜가 곧 그 칸의 뜻이다
+ */
+export function instantText(iso: string | null, now: Date, withToday = true): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  if (withToday && at.toDateString() === now.toDateString()) {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `오늘 ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  }
+  return instantLabel(at);
 }
 
 /**

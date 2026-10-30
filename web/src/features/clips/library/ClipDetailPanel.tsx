@@ -6,11 +6,13 @@ import { ExternalLink, Play, Trash2, X } from 'lucide-react';
 import { Badge, Button, IconButton, LinkButton, Spinner, VisuallyHidden, useToast } from '@/ui';
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
 import { ClipProgressCard } from './ClipProgressCard';
+import { ClipSourceCard } from './ClipSourceCard';
 import { InlineTitleInput } from './InlineTitleInput';
 import { UploadResolutionControls } from './UploadResolutionControls';
 import {
   detailViewForClip,
   durationLabel,
+  instantText,
   noteText,
   previousUploadsOf,
   shownUploadOf,
@@ -85,6 +87,7 @@ export function ClipDetailPanel({
   const playable = loadPreview !== undefined && clip.entry?.latestClip?.status === 'rendered';
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
+  const created = instantText(clip.createdAt, now);
 
   // 비율은 레시피에 있어 패널을 열 때 상세를 읽는다(POK-254). 판이 바뀌면 다시 읽고, 다른 편집본의 늦은 답은 버린다.
   // 못 읽으면 「—」로 굳히지 않고 10초 뒤 다시 읽는다: 패널은 닫아도 내려가지 않아 다시 열어도 새로 읽지 않는다(PR #256 codex)
@@ -271,17 +274,21 @@ export function ClipDetailPanel({
 
       <hr className={styles.divider} />
 
+      {/* 원본 방송 카드(POK-511): 방송 제목 · 카테고리 · 방송일 · 장면 위치. 늘 같은 값이던 「템플릿」 · 「자막」 칸은 걷었다 */}
+      <ClipSourceCard clip={clip} now={now} />
+
       <dl className={styles.meta}>
-        <dt>원본 방송</dt>
-        <dd>{clip.sourceLabel}</dd>
         <dt>원본 보존</dt>
         <dd data-urgent={retention.kind === 'active' && retention.urgent ? 'true' : undefined}>
           {retentionLabel(retention)}
         </dd>
-        <dt>템플릿</dt>
-        <dd>{clip.templateLabel}</dd>
-        <dt>자막</dt>
-        <dd>{clip.subtitleLabel}</dd>
+        <dt>만든 사람</dt>
+        <dd>
+          {clip.owner.name}
+          {created ? <span className={styles.metaDim}> · {created}</span> : null}
+        </dd>
+        <dt>마지막 편집</dt>
+        <dd>{instantText(clip.editedAt, now) ?? '—'}</dd>
         <dt>비율</dt>
         <dd>{aspectLabel ?? '—'}</dd>
       </dl>
