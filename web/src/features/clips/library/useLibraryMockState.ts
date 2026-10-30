@@ -80,13 +80,11 @@ export interface LibraryClip {
   sourceExpiresAt: string | null;
   templateLabel: string;
   subtitleLabel: string;
-  /** 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널이 배지 아래 안내 자리에 그린다. 목업 줄에는 없다 */
-  progressLabel?: string | null;
   /**
-   * 만드는 중인 영상의 진행률 0~100(POK-443). 일꾼이 퍼센트를 아직 안 보냈으면 null(모른다 — 0%가 아니다), 만드는 중이
-   * 아니면(주문만 된 것 포함) 없다. 패널이 진행 줄 아래 막대로 그린다. 목업 줄에는 없다
+   * 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널은 진행 카드(POK-510)가 없을 때만(편집 중) 그린다 —
+   * 카드가 서면 단계 · 막대가 같은 말을 한다. 목업 줄에는 없다
    */
-  renderPercent?: number | null;
+  progressLabel?: string | null;
   /** ISO — 생성순 */
   createdAt: string;
   /** ISO — 최근 편집순 */
@@ -197,7 +195,6 @@ export function toLibraryClip(entry: LibraryEntry, meId: string | null): Library
     // 자막 정보는 목록에 없다: 지어내지 않는다
     subtitleLabel: '—',
     progressLabel: progressLabelOf(entry),
-    renderPercent: renderPercentOf(entry),
     createdAt: entry.createdAt,
     editedAt: entry.updatedAt,
     youtubeUrl: youtubeUrlOf(entry),

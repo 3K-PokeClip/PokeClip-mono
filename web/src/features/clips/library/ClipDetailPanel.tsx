@@ -3,17 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Play, Trash2, X } from 'lucide-react';
-import {
-  Badge,
-  Button,
-  IconButton,
-  LinkButton,
-  Progress,
-  Spinner,
-  VisuallyHidden,
-  useToast,
-} from '@/ui';
+import { Badge, Button, IconButton, LinkButton, Spinner, VisuallyHidden, useToast } from '@/ui';
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
+import { ClipProgressCard } from './ClipProgressCard';
 import { InlineTitleInput } from './InlineTitleInput';
 import { UploadResolutionControls } from './UploadResolutionControls';
 import {
@@ -25,8 +17,8 @@ import {
   privacyNoteText,
   retentionLabel,
   safeExternalUrl,
+  stepViewForClip,
   thumbnailFailureText,
-  uploadFailureText,
   type DetailView,
   type PreviousUpload,
 } from './libraryView';
@@ -83,7 +75,8 @@ export function ClipDetailPanel({
   loadAspect?: () => Promise<string | null>;
 }) {
   const view = detailViewForClip(clip, status);
-  const uploadFailure = uploadFailureText(clip);
+  // 서버 영상이 있으면 진행 카드(POK-510)가 진행 · 업로드 실패 사유 · 공개 범위 · 확인 필요 풀기를 맡는다
+  const step = stepViewForClip(clip, now);
   const thumbnailFailure = thumbnailFailureText(clip);
   const privacyNote = privacyNoteText(clip, now);
   const previousUploads = previousUploadsOf(clip.entry);
@@ -199,17 +192,33 @@ export function ClipDetailPanel({
         )}
       </div>
 
-      <div className={styles.actions} ref={actionsRef}>
-        <PrimaryControl
-          editHref={clip.editHref ?? '/clips/editor'}
-          primary={view.primary}
-          youtubeUrl={clip.youtubeUrl}
-          sending={sending}
-          sendingAction={sendingAction}
-          onUpload={() => runTransition(onUpload)}
-          onRetryRender={() => runTransition(onRetryRender)}
-          onRetryUpload={() => runTransition(onRetryUpload)}
+      {step ? <ClipProgressCard step={step} privacyNote={privacyNote} /> : null}
+      {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만. 진행 카드가 「아래 단추로 알려 주세요」라고 하는
+          바로 그 아래에 둔다(2026-10-30 사용자 선택) — 바닥 줄에 두면 설명과 단추가 멀어진다. 확인 필요면 진행 카드가 늘 선다.
+          업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다(PR #261 codex) */}
+      {checkingUpload && onResolveUpload ? (
+        <UploadResolutionControls
+          key={checkingUpload.id}
+          busy={sending}
+          onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
         />
+      ) : null}
+
+      <div className={styles.actions} ref={actionsRef}>
+        {/* 서버 일이 도는 동안의 꺼진 단추(「유튜브에 올리는 중」)는 진행 카드가 같은 말을 하므로 그리지 않는다(POK-510).
+            진행 카드가 없는 목업 줄은 예전처럼 꺼진 단추로 상태를 말한다 */}
+        {step && view.primary.kind === 'busy' ? null : (
+          <PrimaryControl
+            editHref={clip.editHref ?? '/clips/editor'}
+            primary={view.primary}
+            youtubeUrl={clip.youtubeUrl}
+            sending={sending}
+            sendingAction={sendingAction}
+            onUpload={() => runTransition(onUpload)}
+            onRetryRender={() => runTransition(onRetryRender)}
+            onRetryUpload={() => runTransition(onRetryUpload)}
+          />
+        )}
         <div className={styles.actionRow}>
           {view.edit ? (
             <div className={styles.grow}>
@@ -250,35 +259,14 @@ export function ClipDetailPanel({
             <Trash2 size={14} aria-hidden />
           </IconButton>
         </div>
-        {/* 진행 한 줄(만드는 중 N% · 올리는 중)은 원래 안내 자리에 둔다: 「자막」 칸은 자막 정보 자리다(POK-291) */}
-        {clip.progressLabel ? (
-          <div className={styles.note}>
-            {clip.progressLabel}
-            {/* 만드는 중이면 글자 아래 막대(POK-443). 퍼센트가 아직 없으면 불확정 — 없는 값을 0%로 그리지 않는다.
-                이름을 「영상 만들기」로 못 박아 꽉 찬 막대가 업로드 끝으로 읽히지 않게 한다(업로드는 그 뒤에 따로 선다) */}
-            {clip.renderPercent !== undefined ? (
-              <Progress
-                size="sm"
-                value={clip.renderPercent}
-                label="영상 만들기 진행률"
-                className={styles.noteProgress}
-              />
-            ) : null}
-          </div>
+        {/* 진행 카드가 없을 때의 진행 한 줄(편집 중이면 「v1 영상 있음 · 지금은 v2」). 카드가 서면 카드가 진행을 말한다 */}
+        {!step && clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
+        {/* 확인 필요 안내는 진행 카드의 지금 단계 설명이다. 원본 만료 안내는 진행과 따로라 여기 남는다 */}
+        {view.note && !(step && view.note === 'checking') ? (
+          <p className={styles.note}>{noteText(view.note)}</p>
         ) : null}
-        {view.note ? <p className={styles.note}>{noteText(view.note)}</p> : null}
-        {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만 */}
-        {checkingUpload && onResolveUpload ? (
-          // 업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다(PR #261 codex)
-          <UploadResolutionControls
-            key={checkingUpload.id}
-            busy={sending}
-            onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
-          />
-        ) : null}
-        {uploadFailure ? <p className={styles.note}>{uploadFailure}</p> : null}
         {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
-        {privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
+        {!step && privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
       </div>
 
       <hr className={styles.divider} />

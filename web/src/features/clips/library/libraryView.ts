@@ -6,6 +6,7 @@ import {
   type LibraryEntry,
   type UploadSnapshot,
 } from '@/api/clipEditor';
+import { clipStatusView, type ClipStatusView } from '@/features/clips/editor/studio/clipProgress';
 import {
   instantLabel,
   PRIVACY_CHANGE_NOTE,
@@ -433,6 +434,35 @@ export function noteText(note: PanelNote): string {
     return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인한 뒤 아래 단추로 결과를 알려 주세요.';
   }
   return '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.';
+}
+
+// ---------- 진행 카드 (POK-510) ----------
+
+/** 상세 패널 미리보기 아래의 진행 카드 — 편집기 작은 창과 같은 단계(clipStatusView)에 보관함 말을 얹는다 */
+export interface LibraryStepView {
+  view: ClipStatusView;
+  /**
+   * 지금 단계 아래 설명. 편집기 말은 「보관함에서 확인」 · 「영상 만들기를 다시 눌러」처럼 편집기에서 할 일이라, 그 일을 여기서
+   * 하는 두 경우(확인 필요 풀기 · 업로드 실패 다시 시도)는 지금까지 보관함이 하던 안내로 바꾼다
+   */
+  detail: string;
+  /** 「편집본 v3」 — 이 영상을 만든 판. 편집본이 더 새 판일 수 있다 */
+  versionLabel: string;
+}
+
+/**
+ * 진행 카드에 그릴 것. 서버 영상이 있을 때만이다: 목업 줄은 영상이 없고, 편집 중이면 latestClip이 옛 판 영상이라 그 진행을
+ * 지금 것처럼 보이면 거짓이다(편집기도 같은 판정). 그때는 null이고 패널은 예전처럼 진행 한 줄(progressLabel)을 그린다.
+ * 업로드 실패 사유가 있으면 반드시 이 카드가 선다(사유는 완성 + 최근 업로드 실패에서만 생긴다) — 패널은 그 사유를 따로 그리지 않는다
+ */
+export function stepViewForClip(clip: LibraryClip, now: Date): LibraryStepView | null {
+  const entry = clip.entry;
+  const latest = entry?.latestClip;
+  if (entry === undefined || latest == null || entry.status === 'editing') return null;
+  const view = clipStatusView(latest, now);
+  const detail =
+    uploadFailureText(clip) ?? (entry.status === 'checking' ? noteText('checking') : view.detail);
+  return { view, detail, versionLabel: `편집본 v${latest.recipeVersion}` };
 }
 
 // ---------- 유튜브 업로드 (POK-111) ----------

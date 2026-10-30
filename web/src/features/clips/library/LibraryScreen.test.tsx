@@ -21,6 +21,26 @@ function panel() {
   return screen.getByRole('complementary', { name: '편집본 상세', hidden: true });
 }
 
+/** 진행 카드(POK-510)의 지금 단계 줄 — 진행 · 실패 · 확인 필요 중 하나다 */
+function currentStep() {
+  const card = within(panel()).getByRole('region', { name: '진행 상황' });
+  const now = card.querySelector('li[aria-current="step"]');
+  if (!(now instanceof HTMLElement)) throw new Error('지금 단계가 없다');
+  return now;
+}
+
+/**
+ * 패널을 열면 저절로 나가는 읽기 — 비율을 읽는 상세(POK-254)와 원본 방송 카드의 방송 목록 · 시점별 기록(POK-511).
+ * 시험이 세거나 붙잡는 요청(업로드 · 렌더 · 파일 주소)이 아니다
+ */
+function isPanelRead(url: string) {
+  return (
+    url.startsWith('/api/clip/library/') ||
+    url.startsWith('/api/clip/broadcasts?') ||
+    url.endsWith('/broadcast-info/timeline')
+  );
+}
+
 function chipGroup() {
   return within(screen.getByRole('group', { name: '상태 필터' }));
 }
@@ -283,7 +303,6 @@ describe('LibraryScreen — 상태별 액션', () => {
     expect(inside.getByRole('button', { name: '렌더 재시도' })).toBeInTheDocument();
     expect(inside.queryByRole('button', { name: '다운로드' })).toBeNull();
     expect(inside.getByRole('link', { name: '이어서 편집' })).toBeInTheDocument();
-    expect(inside.getByText('자막').nextElementSibling).toHaveTextContent('—');
   });
 });
 
@@ -708,19 +727,38 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(within(panel()).queryByText(/올릴 때 쓰는 제목이에요/)).toBeNull();
   });
 
-  it('올리는 중에는 누를 수 없고 제목도 잠긴다', () => {
-    show(serverClip('uploading'));
-    expect(within(panel()).getByRole('button', { name: '유튜브에 올리는 중' })).toBeDisabled();
-    expect(within(panel()).queryByRole('button', { name: '업로드' })).toBeNull();
-    expect(within(panel()).getByRole('textbox')).toHaveAttribute('readonly');
+  it('올리는 중에는 진행 카드가 「유튜브 올리기」 단계를 말하고, 같은 말을 하던 꺼진 단추는 없다(POK-510)', () => {
+    show(
+      serverClip('uploading', {
+        ...rendered,
+        upload: { ...checkingUpload, status: 'uploading', error: null },
+      }),
+    );
+    const inside = within(panel());
+    expect(currentStep()).toHaveTextContent('유튜브 올리기');
+    expect(currentStep()).toHaveTextContent(/스트리머 채널에 올리고 있어요/);
+    // 배지 · 꺼진 단추 · 회색 상자가 같은 말을 세 번 하던 것을 걷었다
+    expect(inside.queryByRole('button', { name: '유튜브에 올리는 중' })).toBeNull();
+    expect(inside.queryByRole('button', { name: '업로드' })).toBeNull();
+    expect(inside.getByRole('textbox')).toHaveAttribute('readonly');
   });
 
-  it('확인 필요는 다시 올리기를 막고 채널을 보라고 한다', () => {
-    show(serverClip('checking'));
-    expect(within(panel()).getByRole('button', { name: '업로드 확인 필요' })).toBeDisabled();
+  it('확인 필요는 다시 올리기를 막고, 진행 카드가 채널을 보라고 하며 결과 단추는 그 카드 바로 아래에 선다(POK-510)', () => {
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+    const inside = within(panel());
+    const card = inside.getByRole('region', { name: '진행 상황' });
+    expect(currentStep()).toHaveTextContent('확인 필요');
     expect(
-      within(panel()).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
+      within(card).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
     ).toBeInTheDocument();
+    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 밖, 카드 바로 뒤
+    const resolved = inside.getByRole('button', { name: '채널에 올라갔어요' });
+    expect(resolved).toBeEnabled();
+    expect(card.contains(resolved)).toBe(false);
+    expect(card.compareDocumentPosition(resolved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(inside.getByRole('button', { name: '안 올라갔어요' })).toBeEnabled();
+    expect(inside.queryByRole('button', { name: '업로드 확인 필요' })).toBeNull();
+    expect(inside.queryByRole('button', { name: /다시 시도/ })).toBeNull();
   });
 
   it('새 판 영상을 주문해도 이전 판으로 올린 영상이 패널에 남는다: 올림은 유튜브 링크, 확인 필요는 글자(POK-334)', async () => {
@@ -781,9 +819,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
 
   /** 패널을 열면 비율을 읽으러 상세를 부른다(POK-254). 이 시험들이 세는 것은 「푸는 문」 호출이다 */
   const resolutionStub = (answer: () => Response) => {
-    const spy = stubFetch((url) =>
-      url.startsWith('/api/clip/library/') ? new Promise<Response>(() => {}) : answer(),
-    );
+    const spy = stubFetch((url) => (isPanelRead(url) ? new Promise<Response>(() => {}) : answer()));
     return () => spy.mock.calls.filter(([url]) => String(url).endsWith('/resolution'));
   };
 
@@ -947,13 +983,13 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   it('「다시 시도」는 저장된 정보로 다시 올리고, 보내는 동안 단추가 잠긴다(POK-291)', async () => {
     let answer: (r: Response) => void = () => {};
     const spy = stubFetch((url) =>
-      // 패널을 열면 비율을 읽으러 상세를 부른다(POK-254): 이 시험이 세는 것은 업로드 주문이다
-      url.startsWith('/api/clip/library/')
+      // 패널을 열면 저절로 나가는 읽기(isPanelRead)는 붙잡지 않는다: 이 시험이 세는 것은 업로드 주문이다
+      isPanelRead(url)
         ? new Promise<Response>(() => {})
         : new Promise<Response>((resolve) => (answer = resolve)),
     );
-    const orders = () =>
-      spy.mock.calls.filter(([url]) => !String(url).startsWith('/api/clip/library/'));
+    // 패널을 열면 원본 방송 카드(POK-511)가 방송 목록 · 시점별 기록도 읽는다 — 세는 것은 보낸 요청(POST)뿐이다
+    const orders = () => spy.mock.calls.filter(([, init]) => init?.method === 'POST');
     const user = userEvent.setup();
     show(serverClip('rendered', { ...rendered, upload: failedUpload }));
 
@@ -969,13 +1005,12 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     await act(async () =>
       answer(jsonResponse(201, { ...failedUpload, id: 8, status: 'queued', error: null })),
     );
-    expect(
-      await within(panel()).findByRole('button', { name: '유튜브에 올리는 중' }),
-    ).toBeDisabled();
-    expect(within(panel()).getByText('올리는 중')).toBeInTheDocument();
+    expect(await within(panel()).findByText('올리는 중')).toBeInTheDocument();
+    expect(currentStep()).toHaveTextContent('유튜브 올리기');
+    expect(within(panel()).queryByRole('button', { name: /다시 시도/ })).toBeNull();
   });
 
-  it('만드는 중은 진행 줄이 안내 자리에 서고 「자막」 칸은 진행을 말하지 않는다(POK-291)', () => {
+  it('만드는 중은 진행 카드의 「영상 만들기」 단계에 퍼센트와 막대가 선다(POK-510)', () => {
     show(
       serverClip('rendering', {
         ...rendered,
@@ -985,31 +1020,36 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     );
     const inside = within(panel());
     expect(inside.getByText('만드는 중')).toBeInTheDocument();
-    expect(inside.getByText('영상 만드는 중 42%')).toBeInTheDocument();
-    expect(inside.getByText('자막').nextElementSibling).toHaveTextContent('—');
-    expect(inside.getByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
-    // 글자 아래 막대가 같은 퍼센트를 그린다(POK-443). 이름이 「영상 만들기」라 꽉 차도 업로드 끝으로 읽히지 않는다
-    const bar = inside.getByRole('progressbar', { name: '영상 만들기 진행률' });
+    expect(currentStep()).toHaveTextContent('영상 만들기');
+    expect(currentStep()).toHaveTextContent('42%');
+    // 막대는 지금 단계 아래에 하나뿐이다(편집기 작은 창과 같은 이름)
+    const bar = within(currentStep()).getByRole('progressbar', { name: '영상 진행' });
     expect(bar).toHaveAttribute('aria-valuenow', '42');
+    expect(inside.getAllByRole('progressbar')).toHaveLength(1);
+    // 지난 단계(대기)에는 요청한 시각이 붙는다 — 어디까지 왔는지 · 언제 시작했는지가 보인다
+    expect(inside.getByRole('region', { name: '진행 상황' })).toHaveTextContent('편집본 v2');
+    expect(inside.queryByRole('button', { name: '영상 만드는 중' })).toBeNull();
   });
 
   it('만드는 중인데 퍼센트가 아직 없으면 0%라고 하지 않고 불확정 막대를 그린다(POK-443)', async () => {
     show(serverClip('rendering', { ...rendered, status: 'rendering', progress: null }));
     const inside = within(panel());
-    const bar = inside.getByRole('progressbar', { name: '영상 만들기 진행률' });
+    const bar = within(currentStep()).getByRole('progressbar', { name: '영상 진행' });
     expect(bar).not.toHaveAttribute('aria-valuenow');
-    // 막대 위 진행 줄(주 동작 단추도 「영상 만드는 중」이라 막대가 선 안내 자리로 본다)
-    expect(bar.parentElement).toHaveTextContent(/^영상 만드는 중$/);
+    expect(currentStep()).toHaveTextContent('영상 만들기');
     expect(inside.queryByText(/0%/)).toBeNull();
     await act(async () => {
       expect(await axe(panel())).toHaveNoViolations();
     });
   });
 
-  it('주문만 되고 차례를 기다리는 영상은 막대가 없다 — 만드는 중이 아니다(POK-443)', () => {
+  it('요청만 되고 차례를 기다리는 영상은 「대기」 단계가 지금이고 퍼센트를 지어내지 않는다(POK-510)', () => {
     show(serverClip('rendering', { ...rendered, status: 'queued', progress: null }));
-    expect(within(panel()).getByText('영상 만들 차례 기다리는 중')).toBeInTheDocument();
-    expect(within(panel()).queryByRole('progressbar')).toBeNull();
+    expect(currentStep()).toHaveTextContent('대기');
+    expect(currentStep()).toHaveTextContent(/영상을 만들 차례를 기다리고 있어요/);
+    // 편집기와 같은 규칙: 서버가 퍼센트를 안 주는 단계는 불확정 막대다(없는 값을 0%로 그리지 않는다)
+    expect(within(currentStep()).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+    expect(within(panel()).queryByText(/0%/)).toBeNull();
   });
 
   it('영상은 올라갔는데 썸네일만 실패하면 그렇게 말한다(POK-291)', () => {
@@ -1083,8 +1123,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     const user = userEvent.setup();
     let n = 0;
     stubFetch((url) => {
-      // 비율을 읽는 상세 요청(POK-254)은 주소 번호를 세지 않는다
-      if (url.startsWith('/api/clip/library/')) return new Promise<Response>(() => {});
+      // 패널이 저절로 읽는 것(비율 · 원본 방송 카드)은 주소 번호를 세지 않는다
+      if (isPanelRead(url)) return new Promise<Response>(() => {});
       n += 1;
       return jsonResponse(200, {
         clipId: 5,
@@ -1170,7 +1210,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   function holdRequests() {
     const pending: ((r: Response) => void)[] = [];
     const spy = stubFetch((url) =>
-      url.startsWith('/api/clip/library/')
+      isPanelRead(url)
         ? new Promise<Response>(() => {})
         : new Promise<Response>((resolve) => pending.push(resolve)),
     );
@@ -1207,8 +1247,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
       answer(jsonResponse(201, { ...rendered, id: 6, status: 'queued', outputs: null })),
     );
     // 잠금이 풀린 사이 「렌더 재시도」로 돌아오지 않는다: 받은 영상으로 곧장 만드는 중이다
-    expect(await within(panel()).findByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
-    expect(within(panel()).getByText('영상 만들 차례 기다리는 중')).toBeInTheDocument();
+    await waitFor(() => expect(currentStep()).toHaveTextContent('대기'));
+    expect(within(panel()).queryByRole('button', { name: /렌더 재시도/ })).toBeNull();
   });
 
   it('렌더 재시도가 거절되면 돌기를 멈추고 다시 누를 수 있다', async () => {
