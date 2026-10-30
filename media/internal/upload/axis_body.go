@@ -325,7 +325,7 @@ func (u *Uploader) afterUploaded(j job, p payload, im index.InitMark) {
 		// 풀었는지 모르므로 표시하지 않는다(그 회차의 캐시 반영은 30초 감시 화해 몫 — 결정 11). 해제 거짓으로
 		// 표시하면 캐시가 「init 확정 ∧ 낡은 계승」을 얻는다.
 		switch im {
-		case index.InitMarkSuccess:
+		case index.InitMarkSuccess, index.InitMarkRevokeSkipped:
 			u.dirty.markInitConfirmed(t.StreamID, t.SessionID, false)
 		case index.InitMarkRevoked:
 			u.dirty.markInitConfirmed(t.StreamID, t.SessionID, true)
@@ -353,6 +353,11 @@ func (u *Uploader) markInitUploaded(ctx context.Context, j job, p payload, lg *s
 		mark = 0 // 오류와 함께 온 값은 판정이 아니다
 	case mark == index.InitMarkSuccess || mark == index.InitMarkRevoked || mark == index.InitMarkAlreadySame:
 		// Revoked 도 확정이다 — default(거부)로 떨어지면 해제된 회차의 init 이 영영 확정되지 않는다(뮤테이션 115).
+		return true, mark
+	case mark == index.InitMarkRevokeSkipped:
+		// 확정이되 사슬이 이미 닫혀 계승 해제를 건너뛰었다(POK-196 M6 D75) — 계승은 그대로다. 닫힌 사슬에 정산 창이 지난
+		// 늦은 첫 init 이 왔다는 표지라 WARN 한 줄을 남긴다(설계 8절).
+		lg.Warn("init_revoke_skipped", "session_id", t.SessionID, "reason", "chain_closed")
 		return true, mark
 	case mark == index.InitMarkMismatch:
 		// 그 세션의 MAP 은 이미 다른 바이트로 굳었다 — 바꿀 수 없으므로 작업을 끝낸다. 분리하지

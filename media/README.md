@@ -194,6 +194,9 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `FS_OP_TIMEOUT` | `5s` | 개별 파일시스템 호출(stat·프로브) 하나의 상한. 멈춘 파일시스템에서 메인 루프가 이 시간 이상 붙잡히지 않게 한다 — 넘긴 파일은 건너뛰고 다음 재스캔이 회수한다 |
 | `SCAN_COLLECT_BUDGET` | `45s` | 전수 수집(디렉토리 순회)의 soft 예산. 넘기면 걷은 데까지만 처리하고 절단한다. 정지 판정(`scan_collect_stalled`)은 이 값의 배수로 따로 본다 |
 | `REWIND_SEED_ENABLED` | `true` | 되감기 컷오프 **주조** 스위치(계약 6항 2단계). 켜져 있으면 각 스트림의 첫 자격 유입이 컷오프 하나를 만든다. M4 ⓒ 부터 기본 켜짐이다(kty 결정 2026-09-02 — 발행 층과 함께 켠다). **명시 `false` 가 롤백 손잡이다** — 컷오프를 새로 만들지 않는다. 빈 값은 기본값(켜짐)으로 읽힌다. 되돌려 꺼도 **이미 기록된 컷오프는 유효하고 그 스트림은 계속 발행된다** — 판정은 이 플래그가 아니라 장부를 읽는다 |
+| `REWIND_GAP_RUN_END` | `false` | 정체 사다리 L3 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차에서 업로드 정체 GAP 이 조각 번호로 이어서 셋 서면(약 12초) 그 회차를 `ending`(사유 `gap_run`)으로 끝낸다. 재접속 창 안의 다음 조각은 새 회차를 열어 이어받는다. **켜는 조건**: 운영 송출의 종단 지연 실측(F-7)과 S3 짧은 장애 주입 실측이 둘 다 참이고 kty 가 승인한 뒤다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값(Go `strconv.ParseBool` 규칙)은 기동 거부다 |
+| `REWIND_STALL_SEAL` | `false` | 정체 사다리 L2′(정체 마감) 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차의 되감기 목록이 5.5초(D_act = 갱신 의무 9초 − 엣지 1.5초 − 발행 예산 2초) 넘게 자라지 못했는데 GAP 도 설 수 없을 때(다음 조각이 없음 · 부적격 · 직전 GAP 실패) 목록 끝에 `#EXT-X-ENDLIST` 를 붙여 봉인하고, 봉인이 서면 그 회차를 `ending`(사유 `stall_seal`)으로 끝낸다(kty 결정 2026-10-27). 재접속 창 안의 다음 조각은 새 세션을 열어(같은 `round_id` — 봉인한 세션을 계승 · 4D 표식이 있어 사유가 `intentional` 이면 계승 · 합류하지 않는다) 그 새 세션의 목록으로 이어받는다. **켜는 조건**은 `REWIND_GAP_RUN_END` 와 같다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
+| `REWIND_PLAYBACK_READ_MAX` | `2` | 상태 전달 읽기(되감기 상태판에 넘길 스트림 상태를 장부에서 읽는 일)의 전체 동시 상한(POK-196 M6 · kty 결정 2026-10-29). 읽기 하나가 인덱서 풀 연결 하나를 쥐므로, 일제 종료 때 스트림 수만큼 읽기가 겹쳐 핫 경로와 풀을 다투지 않게 묶는다. 넘친 스트림은 버리지 않고 다음 보류 틱에 다시 읽는다. 이미 읽고 있는 스트림의 새 표지는 상한과 무관하게 그 읽기에 합쳐진다. 양의 정수만 받는다(0 · 음수 · 문자는 기동 거부) |
 
 **되감기 상태 관측(POK-195) — MediaMTX Control API 폴링.**
 용어: **관측**은 "지금 이 스트림이 실제로 송출 중인가"를 Control API(MediaMTX가 자기 상태를
@@ -301,6 +304,7 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 | `SEGMENT_UPLOAD_CIRCUIT_MAX` | `3` | 연속 실패가 이 값에 닿으면 브레이커가 열려 PUT을 멈추고 다음 회차 탐침으로 복구를 살핀다. `0`이면 브레이커 없음 |
 | `SEGMENT_UPLOAD_TAIL_HOLD` | `5s` | 꼬리(마지막) 조각을 이만큼 보류해 교정 창과의 충돌을 피한다. 꼬리 유예(2m)보다 짧고 `SEGMENT_SETTLE_WAIT` 이상이어야 기동한다. **예외: 이 값만은 버킷이 비어 있어도 항상 읽고 검증한다** — 보류 시계는 업로더가 아니라 인덱서 소유라 비활성에서도 돈다. 잘못된 값이면 버킷과 무관하게 기동이 거부된다 |
 | `REWIND_PUBLIC_BASE_URL` | (빈값) | 되감기 목록(M4 ⓒ)의 조각 · MAP URI 앞머리 — 목록 줄은 앞머리 + `/` + S3 키다. **`S3_BUCKET` 이 있으면 필수다 — 비거나 틀리면 기동을 거부해 인덱싱 · 업로드도 함께 멈춘다**(종료 코드 1). 버킷이 비면 읽지 않는다. https 만 받고 http 는 호스트가 루프백 IP 리터럴(127.0.0.0/8 · `::1`)일 때만 받는다(`localhost` 는 예외가 아니다). 호스트가 있어야 하고 userinfo · query · fragment · 공백 · 제어 문자 · 따옴표 · 역슬래시 · 비ASCII · 범위 밖 포트(1–65535 아님) · 경로의 dot 세그먼트(`.` · `..` · `%2e` 꼴)를 거부한다(역슬래시 · 범위 밖 포트 · dot 세그먼트 셋은 PR ⓒ 종결 라운드에서 더한 것 — 이런 값을 두고 있던 사본은 다음 기동에서 거부된다). 거부 문구는 URL 원문 · userinfo · query 를 싣지 않는다(위반 종류와 포트 숫자 · scheme · 금지 바이트의 위치와 값만 싣는다). 끝 `/` 하나는 떼고 둘 이상이면 거부한다. 다른 env 와 달리 앞뒤 공백을 떼지 않는다. 켜짐 로그 `rewind_publish_started` 의 `base_url` 로 확인한다. live 목록이 있는 동안에는 바꾸지 않는다(아래 「되감기 M4 ⓒ 이관 기록」) |
+| `REWIND_PUBLISH_POOL_MAX_CONNS` | `4` | 되감기 발행자 풀의 연결 상한(kty 결정 C2 — 아래 「사이드카 DB 연결 풀」). 양의 정수만 받고 틀리면 기동 거부. `S3_BUCKET` 이 비면 읽지 않는다 |
 | `CONTROL_LISTEN` | (빈값) | 되감기 상태 제어면(M5)의 듣기 주소 `host:port`. **빈 값이면 서버를 띄우지 않는다** = 롤백 스위치(`HOOK_SPOOL_PATH` 와 같은 꼴). 로컬 compose 는 `0.0.0.0:8086`(호스트 게시 `127.0.0.1:8086`) · prod 는 `127.0.0.1:8086`. 포트 0 · 범위 밖 포트는 기동 거부다. 듣기에 실패하면(점유 포트) 기동은 잇고 ERROR `control_server_failed stage=bind` 한 줄이다 — 아래 「되감기 상태 제어면」 |
 | `CONTROL_CORS_ORIGIN` | (빈값) | 제어면 응답에 CORS 를 여는 Origin 하나(`http(s)://호스트[:포트]` — 경로 · 끝 `/` · 질의 없음 · 글자 그대로 비교). 로컬 전용이다(compose 는 `http://localhost:3000`). prod 는 엣지 응답 머리 정책이 덮어 비워 둔다. 빈 값이면 CORS 머리를 싣지 않는다 |
 | `CONTROL_STREAM_RPS` | `10` | 스트림 하나에 초당 답하는 상태 요청 수. 스트림 경로와 회차 경로가 한 칸을 나눠 센다 — 넘으면 503 · `Retry-After: 1` · `control_rate_limited` 게이지. 양의 정수만 받는다 |
@@ -349,20 +353,43 @@ auth 의 4C resolve(`/internal/stream-keys/resolve`)로 키를 풀어 대조한�
     있으면 토큰 파일은 기동 때 읽고, 읽기 실패는 기동 실패다.
 *   **수신부 상한:** 키당 초당 1(429) · 전체 초당 10(503)은 고정값이고 env 가
     없다. 이 상한은 `control_rate_limited` 게이지를 세우지 않는다. 키당 초과는
-    `end_signal reason=rate_key` 줄이, 전체 초과는 묶음 줄
-    `end_signal_shed reason=rate_global count=…` 이 센다.
+    요청마다 `end_signal reason=rate_key` 줄이 센다. 전체 초과는 0 단계에서
+    끊겨 묶음 줄 `end_signal_shed reason=rate_global count=…` 이 센다.
 *   **회전 = 재기동:** 토큰은 기동 때 한 번 읽는다. 파일을 바꾼 뒤 사이드카를
     재기동해야 새 토큰이 쓰인다(보안 검수 L2).
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
-| `STREAM_KEY_RESOLVE_URL` | (빈값 = 4D 끔) | auth 의 주소 `http(s)://host[:port]`. http · https 절대 URL 이어야 하고 호스트가 있어야 한다. 사용자 정보 · 질의 · 조각이 있으면 기동 거부. 경로 `/internal/stream-keys/resolve` 는 코드가 붙인다. 프록시 env(`HTTP_PROXY` 등)를 타지 않고 auth 에 바로 붙는다. `STREAM_KEY_RESOLVE_TOKEN_FILE` 과 짝이다 |
+| `STREAM_KEY_RESOLVE_URL` | (빈값 = 4D 끔) | auth 의 주소 `http(s)://host[:port]`. http · https 절대 URL 이어야 하고 호스트가 있어야 한다. 사용자 정보 · 질의 · 조각이 있으면 기동 거부. 경로 `/internal/stream-keys/resolve` 는 코드가 붙인다 — 주소에 경로가 있으면 그 뒤에 이어 붙는다. 3xx 는 따라가지 않고 실패로 본다. 프록시 env(`HTTP_PROXY` 등)를 타지 않고 auth 에 바로 붙는다. `STREAM_KEY_RESOLVE_TOKEN_FILE` 과 짝이다 |
 | `STREAM_KEY_RESOLVE_TOKEN_FILE` | (빈값 = 4D 끔) | resolve 토큰 한 줄이 든 파일의 **컨테이너 안 절대 경로**. 상대 경로는 기동 거부. 토큰은 `X-Stream-Key-Resolve-Token` 머리로 실린다. 파일 규칙은 `MTX_API_PASS_FILE` 과 같다(위 「관측 자격 파일 규칙」 — 일반 파일 · other 비트와 group 쓰기 비트 거부 · 권장 소유 10001 `0400` 또는 `root:10001` `0440` · 4 KiB 이하 · 끝 줄바꿈 하나만 걷음). 앞뒤 공백 · 제어 문자가 남으면 기동 거부. 오류 문구에는 env 이름만 싣고 경로 · 내용은 싣지 않는다. 읽기 실패는 **기동 실패**다(만료 토큰과 다르다). 토큰 값을 env 로 받는 칸은 없다 |
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 54개 —
-`POSTGRES_*` · DB 몫 `AWS_REGION` 은 `internal/pgconf` 가 janitor 와 같은 규칙으로
-읽는다). 잘못된 값(숫자 자리에 문자,
-음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
+**계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
+`broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
+outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만
+2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 4C resolve 설정 · 운영
+권한(`30_grants.sql` 의 outbox 네 권한)이다. 하나라도 빠지면
+`lifecycle_disabled` 한 줄(`reason` = `no_topic` · `no_streams` 는 INFO,
+`no_resolver` · `privilege` · `privilege_check` · `sns_client` · `assembly` 는
+ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도 넣지 않는다. 켜지면
+`lifecycle_started` 가 나온다.
+
+*   **streamerId:** started 의 `streamerId` 는 위 4C resolve 설정으로 얻는다.
+    resolve 설정이 비면 모든 회차를 버리게 되므로 발행을 켜지 않는다(`reason`
+    = `no_resolver`). 그래서 응답기 모드 뒤에 켠다.
+*   **완전히 끌 때는 진행 중 회차가 없을 때 끈다.** 주제나 허용 목록을 비우면
+    ended 판정 문장도 보내지 않는다. 그러면 started 만 나간 회차의 ended 는
+    영영 적재되지 않는다. 허용 목록을 좁히기만 하면 생기지 않는다.
+*   **기동 때만 읽는다.** 바꾸려면 사이드카를 재기동한다.
+
+| 이름 | 기본값 | 의미 |
+|---|---|---|
+| `BROADCAST_TOPIC_ARN` | (빈값 = 발행 끔) | 계약9 SNS FIFO 주제 ARN `arn:aws:sns:<지역>:<12자리 계정>:<이름>.fifo`. 꼴이 틀리면 기동 거부. SNS 클라이언트는 이 ARN 의 지역으로 붙고 자격증명은 SDK 기본 체인이다. **빈 값이 롤백 스위치다** |
+| `LIFECYCLE_PUBLISH_STREAMS` | (빈값 = 발행 끔) | outbox 에 넣을 stream_id 허용 목록(쉼표로 가름 · 앞뒤 공백 · 빈 항목 버림). `*` 는 전부다. 목록 밖 회차는 outbox 를 만들지 않는다 — 첫 배포는 kty 계정 하나로 드라이런한다 |
+
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 60개 —
+`POSTGRES_*` · DB 몫 `AWS_REGION` 은 `internal/pgconf` 가 janitor 와 같은
+규칙으로 읽는다). 잘못된 값(숫자 자리에 문자, 음수, 파싱 불가한 기간)은
+조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
 
 ### DB 연결 성공 줄 `db_connected` (POK-311)
@@ -426,17 +453,60 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
   가리키면 기동이 상한 뒤에도 멈춰 있다. 운영에서는 이 변수를 두지 않거나
   일반 파일을 가리킨다.
 
+### 사이드카 DB 연결 풀 (POK-472)
+
+사이드카는 같은 `media_indexer` 계정으로 풀 둘을 연다. 두 풀의 최대 연결 수
+합이 그 역할의 `CONNECTION LIMIT` 안이어야 한다(지금 20 —
+[10_roles.sql](../infra/terraform/prod/runtime/sql/10_roles.sql)).
+
+| 풀 | 연결 상한 | 쓰는 곳 |
+|---|---|---|
+| 인덱서 풀 | 6 고정(`indexerPoolMaxConns`) | 핫 경로(메인 루프 · 업로드 워커 · 스위퍼) · 회차 조회 · 4D 종료 신호 적용 · 60일 만료 · 계약9 발행기 · 정산 차선 · 기동 걸음(스키마 확인 · 상태판 적재) |
+| 발행자 풀 | 기본 4(`REWIND_PUBLISH_POOL_MAX_CONNS` 로 조정 — kty 결정 C2) | 되감기 발행 · 정산 걸음의 DVR · VOD 동결 · 동결 감사(동시 1) |
+
+*   **인덱서 풀 6 은 몫별 예약이 아니라 합의 상한이다.** 산식은 핫 경로 3
+    (메인 루프 · 업로드 워커 · 스위퍼) · 회차 조회 동시 2 · 4D 1 이다. 산식
+    밖의 소비자도 같은 6 을 나눠 쓴다 — 60일 만료(동시 1) · 계약9 발행기(동시
+    1)와 정산 차선(정산 스캔 1 · 회차 정산 걸음 · 상태 전달 읽기)이다. 기동 걸음(스키마 확인 ·
+    상태판 적재)은 업로더 · 만료 · 제어면이 뜨기 전에 끝나 겹치지 않는다.
+*   **정산 걸음은 전체 2 · 같은 스트림 1 이다(kty 결정 2026-10-27).** 상한
+    6 은 그대로 두고 걸음 쪽을 줄였다. 같은 스트림 걸음끼리 잠금을 다투면 진
+    쪽이 연결을 쥔 채 기다려 핫 경로가 굶었다. 이 풀을 쓰는 걸음(빈 동결 ·
+    사슬 닫힘 · VOD 실패 확정 · ended 표시)의 연결은 많아야 둘이다. DVR ·
+    VOD 동결은 발행자 풀에서 연결을 쥔다.
+*   **상태 전달 읽기는 전체 2 다(kty 결정 2026-10-29 ·
+    `REWIND_PLAYBACK_READ_MAX`).** 읽기 하나가 연결 하나를 쥐어, 일제 종료
+    때 스트림 수만큼 읽기가 겹치지 않게 한다. 넘친 스트림의 표지는 남아 다음
+    보류 틱(1초)에 다시 나간다. 이미 읽는 스트림의 표지는 상한과 무관하게 그
+    읽기에 합쳐져 결과 뒤 곧바로 다시 읽는다.
+*   **동시 수요가 6 을 넘을 수 있다.** 넘친 요청은 풀 획득을 기다린다.
+    회차 조회는 획득 대기와 질의를 합친 2초 시한을, 4D 는 적용 시한 1.5초를
+    다 쓰면 503 이다. 교착은 아니다 — 잡은 연결은 일이 끝나면 돌아온다. 예로,
+    회차 조회 2 · 4D 1 · 만료 1 이 모두 연결을 쥐고 있으면 핫 경로 셋이 나눠
+    쓸 수 있는 것은 2 다. 정산 걸음 2 와 정산 스캔 1 까지 겹치면 핫 경로
+    몫은 0 이라 핫 경로도 획득을 기다린다(최악).
+*   **교체 창의 여유는 0 이다.** 사이드카 한 대는 6 + 4 = 10 이다.
+    [Media 교체](../infra/terraform/runbooks/media-swap.md) 동안 A · B 두
+    상자의 사이드카가 겹치면 합이 20 으로 역할 상한과 같다.
+*   **예고 — 역할 상한 30(kty 결정 C1).** 고치는 곳은 M6-6b 의
+    `10_roles.sql` 이다. 그 전까지 상한은 20 이다. 올린 뒤 교체 창의 여유는
+    10 이다.
+*   **발행자 풀은 기본 4 로 못 박는다(kty 결정 C2).** pgx 기본값(상자 CPU
+    수를 따른다)을 쓰면 큰 상자에서 교체 창 합이 역할 상한을 넘는다. 늘릴 때는
+    `REWIND_PUBLISH_POOL_MAX_CONNS` 를 바꾸고, 두 상자 합 2 × (6 + 이 값)이
+    역할 상한 안인지 본다.
+
 ## 되감기 상태 제어면 (POK-200 M5)
 
 사이드카가 띄우는 작은 HTTP 서버다. 웹이 「지금 되감기를 볼 수 있나 · 어느 목록을 보나」를
 묻는다. 답은 루프가 1초 holdTick 마다 만드는 불변 스냅숏(Board)에서 나온다 — 요청마다
-DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회차를 DB 에서 한 번 읽을 수
-있고, 그 길은 M6 가 채운다(지금은 미등록).
+DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회차를 DB 에서 한 번 읽는다
+(POK-196 M6 — 인덱서 풀 · 동시 2 · 초당 20 · 2초 시한 · 1초 캐시).
 
 | 경로 | 지금 | 답 |
 |---|---|---|
 | `GET /api/streams/{streamId}/rewind` | 켜짐 | 그 스트림 키의 지금 국면 |
-| `GET /api/streams/{streamId}/rounds/{roundId}/rewind` | **미등록(404)** — M6 가 회차 조회를 채우면 등록 | 그 회차의 종국 |
+| `GET /api/streams/{streamId}/rounds/{roundId}/rewind` | 켜짐(M6) | 그 회차의 국면 — 웹이 끝남 대기의 종국 판정에 쓴다 |
 
 본문은 키 다섯이다 — `{"ready":bool,"mode":"live"|"ending"|"vod"|"ended"|null,"url":…,"firstPdt":…,"headPdt":…}`
 (값이 없으면 `null` · 계약3 7-2절). 미준비도 200 본문으로 낸다(엣지 오류 캐시에 기대지 않게).
@@ -446,6 +516,19 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
 | 200 | 캐시나 종료 항목이 그 스트림을 안다 — `ready:true` 는 소유 회차가 live · init 확정 · 발행 판이 있을 때뿐이라 url 은 늘 S3 에 있다 |
 | 404 `{"error":"not_found"}` | 캐시 · 종료 항목 둘 다 모른다(부팅 감시 뒤) · 발행 꺼짐(`S3_BUCKET` 빈 값 — 모든 스트림) · id 가 `[A-Za-z0-9._-]{1,128}` 밖 · 퍼센트 인코딩한 경로(`%61bc` 처럼 `RawPath` 가 생기는 요청 — 풀린 글자가 규칙 안이어도) |
 | 503 `{"error":"unavailable"}` · `Retry-After: 1` | 첫 스냅숏 전 · 부팅 감시 전의 모르는 스트림 · 스냅숏이 30초 넘게 낡음 · 스트림별 한도 초과 |
+
+회차 경로는 Board 의 종료 항목이 그 회차를 알면 그 값을, 모르면 DB 의 그 회차 하나를 답한다(계약3 7-2절
+회차별 조회 — 같은 키의 다른 회차 값을 섞지 않는다). 위 표에 더해지는 갈래는 아래다.
+
+| 상태 | 회차 경로에서 언제 |
+|---|---|
+| 200 | 그 회차에 송출 중인 세션이 있다(`mode:"live"` · `url` null) · 끝남 대기(`ending`) · 다시보기 있음(`vod` — url 과 범위는 그 회차 VOD 목록) · 다시보기 없음(`ended`) |
+| 404 | DB 도 그 회차를 모른다 — 없는 회차 · 다른 스트림의 회차 · 60일 만료 |
+| 503 | DB 읽기 실패 · 2초 시한 초과 · 전역 예산(동시 2 · 초당 20) 초과 · 장부 값을 응답으로 옮기지 못함(아래 `control_round_lookup_invalid`) — 같은 회차 키로 동시에 온 요청은 lookup 하나의 답을 함께 받는다(singleflight). 503 은 내부 1초 캐시에 저장하지 않으며, 예산이 허용된 다음 miss 에서 다시 읽는다 |
+
+전역 예산은 인증 없는 공개 경로에 걸려 있어, 무작위 회차 id 를 쏟는 한 클라이언트가 예산을 다 쓰면 다른
+시청자의 DB 조회 갈래(Board 가 모르는 회차)도 503 이 된다(설계 R54 절충 · 보안 c5 L1). 완화는 엣지의
+IP 속도 제한(WAF 후속)이다.
 
 머리는 상태와 무관하게 `Cache-Control: public, max-age=1` · `Content-Type: application/json` 이다.
 `CONTROL_CORS_ORIGIN` 이 설정돼 있으면 `Vary: Origin` 을 Origin 과 무관하게 늘 싣고, 요청
@@ -463,8 +546,13 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
     준비 안 됨 · `reason` 하나) · `rewind_status_range_missing` · `rewind_final_applied` ·
     `rewind_final_invalid` · `rewind_final_seeded` · `_seed_failed` ·
     `control_round_lookup_failed`(회차 lookup 실패 · `reason` 은 `error` · `timeout`
-    · `panic` · 사유마다 10초에 한 줄로 묶고 `count` 로 센다 — M6 가 회차 경로를
-    등록하기 전에는 나오지 않는다). 요청마다의 접근 로그는 없다.
+    · `panic` · 사유마다 10초에 한 줄로 묶고 `count` 로 센다) ·
+    `control_round_lookup_invalid`(ERROR — 회차 장부 값을 응답으로 옮기지 못했다 ·
+    `stream_id` · `round_id` · `reason` 은 `vod_incomplete` · `out_of_range` · 같은
+    회차 키 동시 요청은 lookup 하나라 한 줄이다(singleflight) · 그
+    요청은 503 이고 `control_round_lookup_failed reason=error` 에도 센다. 장부가
+    뒤틀린 결함 표지라 묶지 않는다 — 줄 수는 전역 예산 초당 20 이 묶는다). 요청마다의
+    접근 로그는 없다.
     게이지(`control_status_stale` · `control_rate_limited` · `control_round_shed` ·
     `rewind_ready_delayed`)는 세움(value 1)과 내림(value 0)이 둘 다 WARN 이다.
     내림 뒤에는 다시 쓰지 않으므로 `LOG_LEVEL=warn` 으로 걸러도 해소가 보여야
@@ -1756,7 +1844,7 @@ docker compose up -d --build segment-indexer
 | `SeedAlarmAfter` · `SeedAlarmErrorTicks` | 10분 · 40 | 같은 곳 | 컷오프 부재 후보 창(조립이 `SEGMENT_RESCAN_EVERY` 의 두 배 이상으로 올린다) · ERROR 로 오르는 연속 감시 수 |
 | `LedgerLookback` · `LedgerRowCap` · `LoadPushBuffer` | 2시간 · 10,000 · 1,024 | `cache.Options` 기본값(조립은 영값을 넘긴다) | 적재 되짚기 · 적재 행 상한 · 적재 중 push 로그 상한(넘으면 적재를 다시 연다) |
 | `clipErr` 상한 | 1,024바이트 | `internal/rewind/publish/tick.go` | 로그 `err` 속성에 남기는 접두 길이 — 넘으면 접두 뒤에 잘림 표식(원래 길이)이 붙는다 |
-| `MaxBodyBytes` | 512KiB | `internal/rewind/validate.go` | 목록 본문 상한 — `S3Store.Get` 이 같은 상한까지만 읽으려고 ⓑ 의 비공개 상수를 공개로 바꿨다 |
+| `MaxBodyBytes` | 512KiB | `internal/rewind/validate.go` | 목록 본문 상한(발행 전 검사 S5) — `S3Store.Get` 이 이 값을 쓰려고 ⓑ 의 비공개 상수를 공개로 바꿨다. 되감기 목록 Get 의 상한은 여기에 봉인 줄 15바이트(`SealLineBytes`)를 더한 값이다 — 봉인은 S5 를 지난 열린 본문 끝에 줄을 붙여 검사 없이 올리므로, 동결 감사가 우리가 쓴 봉인 판을 상한 초과로 잘못 보지 않게 한다(kty A4 Q2 (가)) |
 
 #### ⓒ 로그 변화
 
@@ -1782,7 +1870,7 @@ docker compose up -d --build segment-indexer
 | `cache_drift_repaired` | 드리프트 까닭 적재가 적용됨(`kind=head`) · 잃은 init 결과를 감시가 되살림(`kind=init_uploaded`) | WARN | head: stream · cutoff · floor / init_uploaded: stream · session · revoked |
 | `rewind_cutoff_absent` | 30초 감시 (c) — 최근 10분 안에 조각이 있는데 컷오프가 없는 스트림. 전이만 남긴다 | 들어올 때 WARN(value 1) · 연속 40번째 감시에 ERROR(value 1) · 사라질 때 WARN(value 0 — 들어올 때와 같은 등급이라 `LOG_LEVEL=warn` 으로 걸러도 해소가 보인다) | stream · ticks · last_wall · value |
 | `rewind_ledger_load_degraded` | 적재 실패(`load_failed`) · 행 상한 도달(`row_cap`) · 다시 뽑은 P 의 행이 P 의 자기기술과 다름(`prev_mismatch`) | ERROR | load_failed: stream · err / row_cap: stream · floor · rows / prev_mismatch: stream · hint · mismatch |
-| `rewind_job_failed` | 차선 작업이 중단 · 포기 표 밖의 실패로 끝남 — 발행 작업은 같은 스트림의 이어지는 같은 오류에 한 줄, 감시 작업은 감시마다 한 줄 | ERROR | publish: job · stream · session · err / watch: job · first(부팅 첫 감시인가) · err |
+| `rewind_job_failed` | 차선 작업이 중단 · 포기 표 밖의 실패로 끝남 — 발행 작업은 같은 스트림의 이어지는 같은 오류에 한 줄, 감시 작업은 감시마다 한 줄, 동결 감사는 대상 조회가 실패한 감사마다 한 줄 | ERROR | publish: job · stream · session · err / watch: job · first(부팅 첫 감시인가) · err / audit: job · err |
 | `session_offline` | 종료 판정이 점검 수집을 기다림(`result=awaiting_check` — 기다림 한 번에 한 줄) · 전이 실패(`result=failed` — 결과 모름, 30초 쉼) | INFO · ERROR | awaiting_check: stream_id · seq · wait_started_at / failed: stream_id · err(**꼬리 seq 없음**) |
 | `session_inherit_declined` | 워커 — 계승 후보의 stsd 를 견줄 수 없어 비호환으로 판정(시도마다). 루프 — CAS 가 실제로 계승을 풂(회차마다 많아야 한 번). 지문이 달라 푸는 갈래는 워커 줄이 없고 루프 줄만 있다 | WARN | 워커: session_id · inherits_session · reason · prev_path(· err) / 루프: stream_id · session_id · confirmed |
 
@@ -1918,17 +2006,17 @@ docker compose up -d --build segment-indexer
 | 넘긴 것 | 어디로 | 까닭 · 자리 |
 |---|---|---|
 | 시청 경로 — 되감기 URL 서빙 · CDN · 제어면의 라이브 전환 | M5 | M4 는 S3 발행까지다(부기 34 의 전제) 〔추기 2026-10-26 — M5 ②a 가 제어면 서버 · 상태 스냅숏을 넣었다(위 「되감기 상태 제어면」). CDN · 웹 전환은 M5 의 다른 PR 몫이다.〕 |
-| `ended` 전이 · ENDLIST 봉인 호출 · 동결 · VOD 전환 · 만료 | M6 | 종결 축이다(부기 34). `rewind.SealEndlist` 는 있지만 운영 코드에서 부르는 곳이 없다 |
-| L3(연속 GAP 셋 → ending) · 정산 창 만료 포기 · L2′ | M6 | 부기 10 |
-| G8-F · G8-E | M6 | 부기 7 |
+| `ended` 전이 · ENDLIST 봉인 호출 · 동결 · VOD 전환 · 만료 | M6 | 종결 축이다(부기 34). `rewind.SealEndlist` 는 있지만 운영 코드에서 부르는 곳이 없다 〔추기 2026-10-27 — M6(POK-196)에서 닫혔다: 동결이 DVR 목록을 봉인하고(`publish` 의 `FreezeDVR` · `Endlist` — 여기서 `SealEndlist` 를 부른다) 꼬리 사슬 VOD 를 한 번 만든다(`FreezeVOD`). 회차가 닫히고 정산이 거두면 세션이 `ended` 가 된다. 제어면은 `vod` · `ended` 를 스트림 경로와 회차 경로로 낸다(위 「되감기 상태 제어면」). 만료는 위 환경 변수 절의 「60일 만료」 문단이다.〕 |
+| L3(연속 GAP 셋 → ending) · 정산 창 만료 포기 · L2′ | M6 | 부기 10 〔추기 2026-10-27 — M6 에서 셋 다 닫혔다: L3(사유 `gap_run`)는 스위치 `REWIND_GAP_RUN_END` 로, L2′ 는 스위치 `REWIND_STALL_SEAL` 로 들어왔고 둘 다 기본은 끔이다(kty K5 — 위 환경 변수 표). L2′ 는 목록을 봉인하고 그 회차를 `ending`(사유 `stall_seal`)으로 끝낸다(kty 결정 2026-10-27). 정산 창 안에 거두지 못한 사슬은 포기 등재(`vod_abandoned`)로 닫는다.〕 |
+| G8-F · G8-E | M6 | 부기 7 〔추기 2026-10-26 — M6 에서 닫혔다: 동결 · 봉인 경로의 두 writer 시험이다(`internal/rewind/publish` 의 `freeze_pg_test.go` G8-F · `audit_pg_test.go` G8-E).〕 |
 | 의도적 종료와 끊김의 구분(계약4 4D 종료 신호 수신) | PR ⓒ 머지 뒤 별도 티켓 | kty 결정. `internal/session/registry.go` 의 `inheritable` 에 의도적 종료 갈래가 없다 |
-| 검문 빈틈 셋(코덱 지문 · 게이트 공백 · 일시 오류) | M6 에서 다시 본다 | kty 결정(2026-09-30 — 코드 그대로). 아래 한계 표 |
-| init 잔량 영구 잔존의 보정 | M6 | kty K3 — 한계 유지(위 ⓐ 절 알려진 한계 여섯째 행) |
-| ③ 잔량의 `ended` 동기 · M6 만료 뒤 컷오프 재주조 | M6 | ⓒ 에는 `ended` 가 없다 |
+| 검문 빈틈 셋(코덱 지문 · 게이트 공백 · 일시 오류) | M6 에서 다시 본다 | kty 결정(2026-09-30 — 코드 그대로). 아래 한계 표 〔추기 2026-10-26 — M6 에서 다시 봤고 코드 그대로다. M6 가 이어받기 조건에 더한 것은 닫힘 거부 둘(`inherit_declined reason=round_closed` · `chain_closed`)과 의도적 종료 제외뿐이다. 검문 입력 · 순서는 그대로고 플러그인 고정 설정 전제도 그대로다.〕 |
+| init 잔량 영구 잔존의 보정 | M6 | kty K3 — 한계 유지(위 ⓐ 절 알려진 한계 여섯째 행) 〔추기 2026-10-27 — M6 에서 해소됐다: `ended` 전이가 생겨 init 조회 · 잔량 조건의 `state <> 'ended'` 가 실제로 거른다. 옛 ending 세션은 정산이 거둔다(빈 동결 → `ended`).〕 |
+| ③ 잔량의 `ended` 동기 · M6 만료 뒤 컷오프 재주조 | M6 | ⓒ 에는 `ended` 가 없다 〔추기 2026-10-27 — M6 에서 닫혔다: ③ 잔량은 위 행과 같이 `ended` 로 거른다. 만료 뒤의 컷오프는 만료가 전진하거나 지운다(kty K2 — 위 「사이드카 DB 계정 media_indexer 권한」 의 `stream_cutoffs` UPDATE · DELETE).〕 |
 | 첫 목록 지연 경보(`rewind_ready_delayed`) | M5 | 재기동 ② 뒤 비계승 회차의 무경보(아래 한계 표) 〔추기 2026-10-26 — M5 ②a 에서 닫혔다: 송출 중(4.1 종료 판정과 같은 술어)인데 60초 넘게 준비 안 되면 WARN 이다.〕 |
 | 목록 객체의 Content-Type 값 | M5 회부 | 계획 7절 13 · 위 실측 기록 |
 | 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 〔추기 2026-10-26 — M5 ②c 에서 닫혔다: `SeedResult` → `InsertCommit`(INSERT 트랜잭션의 커밋 사실), `MarkPlaybackFailed` → `SettlePlaybackFailure`(사유에 따라 조각만 또는 조각과 회차를 함께 정리). 동작은 그대로다. 이 문서의 이관 기록 · 부기 표는 그때 이름 그대로 둔다.〕 |
-| 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 |
+| 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 〔추기 2026-10-26 — M6 몫은 일부 닫혔다: VOD 는 사슬 전체를 덮는다. DVR 다단 접두의 1시간 상계는 한계 그대로다.〕 |
 | 슬레이트 운영 프로비저닝 · 관측 등급 tier 상수 | 별도 마일스톤 | 계획 8절 kty 확정 (가) |
 | 라이브 창 설정(ADR-056 ③ 대체 예정) 28초 적용 | PR ⓒ 뒤 설정 소PR | 되감기 URL 가동 뒤 · 적용 게이트 셋을 통과한 뒤. 라이브 창은 28초(4초 × 7)로 확정됐다(kty 2026-10-19 — ADR-056 의 14초는 대체 예정). 바뀌는 값은 `hlsSegmentCount` 900 → 7 하나다 |
 | SDK 오류 본문 상한(S-1) · 운영 빌드 그래프 정적 단언(S-2) · HTTP 응답 헤더 상한 | PR ⓒ 밖 — kty 회부 | 계획 커밋 순서 7 — 선재 결함 · 범위 확장 |

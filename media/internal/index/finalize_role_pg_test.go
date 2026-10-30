@@ -28,7 +28,7 @@ func TestMediaIndexerRoleReadsFreezeLedgers(t *testing.T) {
 	session := roleInsertSeries(t, newSessionStore(role.Pool), stream, roleBase(), 3)
 	ctx := context.Background()
 
-	c, err := LoadChainLedger(ctx, role.Pool, Chain{StreamID: stream, Tail: session})
+	c, err := LoadChainLedger(ctx, role.Pool, Chain{StreamID: stream, Tail: session}, chainTestMaxRows)
 	if err != nil || len(c.Rows) != 3 || len(c.Sessions) != 1 || !c.HasCutoff {
 		t.Fatalf("LoadChainLedger = (행 %d · 회차 %d · 컷오프 %v, %v), want (3 · 1 · 참, nil)", len(c.Rows), len(c.Sessions), c.HasCutoff, err)
 	}

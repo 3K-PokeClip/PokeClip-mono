@@ -9,14 +9,17 @@ package publish
 //
 //	L1  holdAge ≥ 0.5초                                  k 의 ③ 백오프를 당긴다(upload.Uploader.Expedite)
 //	L2  holdAge ≥ GAP_HOLD ∧ 적격 ①②⑤(캐시 행)             k 로 GAP 틱(③ fence · ④ 미uploaded 는 GAP 트랜잭션이 본다)
+//	L2′ stallAge ≥ D_act ∧ L2 가 설 수 없음(holding 제외)   봉인(Endlist)을 낸다 — 루프가 봉인 뒤 회차를 ending(stall_seal)
+//	                                                     으로 보낸다. 스위치(Options.StallSealAfter)가 0 이면 꺼짐(M6 K5)
 //	L4  stallAge ≥ 갱신 의무 − T_edge ∧ L2 가 서지 못함     rewind_publish_stall_seconds ERROR(정체 한 번에 한 줄) —
 //	                                                     서지 못한 까닭이 no_row(유입이 멈춘 방송 종료 구간의 모양)면 WARN
 //
 // L2 를 결정한 행의 「L2 가 서지 못함」은 사실로 받는다 — L2 를 결정한 평가는 GAP 틱에 차례를 주고 L4 를 누르고, 결과가
 // 돌아온 그 행의 GAP 틱이 서지 않았다는 사실(LadderInput.UnstoodGapSeq)이 있을 때만 누르지 않는다(gap=unstood).
 //
-// 1단계라 L2 는 holdAge 단독이다(설계 4.6.5 — stallAge ≥ D_act 갈래와 L2′ 는 2단계, L3 는 M6). 사다리는 live 소유
-// 회차에서만 돈다(부기 9) — 소유 회차가 ending 이 되면 꺼지고, 발행을 멈춘 사실을 회차마다 한 번 WARN 으로 남긴다(C3).
+// 1단계라 L2 는 holdAge 단독이다(설계 4.6.5 — stallAge ≥ D_act 갈래는 2단계). L2′ · L3 는 M6 에서 스위치로 들어왔고 기본
+// 끔이다(kty K5 — L3 는 루프 몫 · cmd/segment-indexer/gap_run.go). 사다리는 live 소유 회차에서만 돈다(부기 9) — 소유
+// 회차가 ending 이 되면 꺼지고, 발행을 멈춘 사실을 회차마다 한 번 WARN 으로 남긴다(C3).
 
 import (
 	"context"
@@ -96,6 +99,9 @@ type LadderStep struct {
 	Seq int64
 	// Expedite 는 L1 이다 — 루프가 k 의 ③ 백오프를 당긴다(upload.Uploader.Expedite).
 	Expedite bool
+	// Seal 은 L2′ 다 — 루프가 소유 회차의 목록을 봉인하고(Endlist) 봉인이 서면 그 회차를 ending 으로 보낸다(kty 2026-10-27
+	// 결정 (나)). Seal 이면 Gap 은 거짓이다 — 서지 않는 GAP 틱을 되풀이하지 않고 봉인으로 의무를 끝낸다.
+	Seal bool
 	// Gap 은 L2 다 — 루프가 k 를 GAP 후보로 GAP 틱을 낸다(TickInput.GapCandidate · 창은 WithGap 위에서 잰다). 틱이므로
 	// 발행 억제 게이트(ShouldTick)를 지나야 낸다.
 	Gap bool
@@ -146,8 +152,22 @@ func evaluateLadder(opt Options, st LadderState, in LadderInput) (LadderState, L
 		}
 		blocked = l2Unstood
 	}
+	if sealDue(opt, in, blocked) {
+		step.Gap, step.Seal = false, true
+	}
 	next, sig := alarm(opt, st, in, blocked)
 	return next, step, sig
+}
+
+// sealDue 는 L2′ 다(M4 r17 4.6.3) — 스위치가 켜졌고(StallSealAfter > 0) 발행 이력이 있는 회차의 stallAge 가 문턱에 닿았는데
+// L2 가 설 수 없으면(blocked — 머리 다음 행 없음 · 부적격 · 컷오프 아래 · 직전 GAP 틱이 서지 않음) 참이다. holding(적격인데
+// holdAge 가 GAP_HOLD 전)은 L2 가 곧 서므로 기다린다. fence 유효는 봉인 경로(Endlist E0)가 본다.
+func sealDue(opt Options, in LadderInput, blocked string) bool {
+	if opt.StallSealAfter <= 0 || blocked == "" || blocked == l2Holding {
+		return false
+	}
+	since, ok := stallSince(in)
+	return ok && in.Now.Sub(since) >= opt.StallSealAfter
 }
 
 // rowAt 은 경계 입력에서 seq 행이다. 없으면 거짓이다.

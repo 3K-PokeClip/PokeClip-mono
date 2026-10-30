@@ -581,36 +581,96 @@ func (s *pgStore) UpdateTail(ctx context.Context, streamID string, seq int64, du
 	return tag.RowsAffected() == 1, nil
 }
 
-// endLiveSQL 은 4.1 종료 전이다 — 스트림의 live 회차를 ending 으로 보내고 사유 offline 을 남긴다(계획 4.1 전이 · 사유는
-// 문장의 글자다). 술어가 회차가 아니라 스트림인 것이 계약이다: stream_sessions_one_live_uq 가 스트림당 live 1행을
-// 보증하고, 부르는 쪽(루프 — D10)이 판정과 이 문장 사이에 INSERT 를 끼우지 않으므로 판정한 그 회차를 닫는다.
-// state='live' 술어는 이미 끝난 회차의 사유 · 시각을 덮지 않게 한다 — session 의 endSessionSQL · 이 패키지의 init
-// 불일치 결속 CTE 와 같은 술어이고, 세 문장은 session/end_session_pg_test.go 가 대조한다(계획 부기 21).
-const endLiveSQL = `
-UPDATE stream_sessions
-   SET state = 'ending', ending_at = pg_catalog.now(), end_reason = 'offline'
- WHERE stream_id = $1 AND state = 'live'
-RETURNING session_id`
+// endLiveSQL 은 4.1 종료 전이다 — 스트림의 live 회차를 ending 으로 보낸다(계획 4.1 전이 · 사유는 문장의 글자다). 술어가 회차가
+// 아니라 스트림인 것이 계약이다: stream_sessions_one_live_uq 가 스트림당 live 1행을 보증하고, 부르는 쪽(루프 — D10)이 판정과
+// 이 문장 사이에 INSERT 를 끼우지 않으므로 판정한 그 회차를 닫는다. state='live' 술어는 이미 끝난 회차의 사유 · 시각을 덮지
+// 않게 한다 — session 의 endSessionSQL · 이 패키지의 init 불일치 결속 CTE 와 같은 술어이고, 세 문장은
+// session/end_session_pg_test.go 가 대조한다(계획 부기 21).
+//
+// 사유는 멈춘 시각 표식(4D marked)이 있으면 intentional, 없으면 offline 이다(POK-196 M6 3.4 「오프라인 전이와의 결속」 — 송출이
+// 돌아오지 않은 의도적 종료). 표식 여부와 회차를 함께 돌려받아 같은 트랜잭션에서 회차 닫힘을 평가한다.
+const endLiveSQL = liveEndingSet + `'offline' END
+ WHERE stream_id = $1 AND state = 'live'` + liveEndingReturning
 
-// EndLive 는 streamID 의 live 회차를 ending(사유 offline)으로 보내고 그 회차 ID 를 돌려준다(계획 4.1 전이). live
-// 회차가 없으면 "" 이고 오류가 아니다.
+// endGapRunSQL 은 L3 종료다(POK-196 M6 3.1 · 6절 L3 행) — 소유 회차에서 L2 GAP 이 seq 로 이어서 셋 선 회차 $2 를, 그 회차가
+// 아직 스트림 $1 의 live 일 때만 ending(사유 gap_run)으로 보낸다. 회차 술어를 더한 것은 루프의 셈과 이 문장 사이에 live 가
+// 바뀌었을 수 있어서다(TD 분할 · init 불일치 분리) — 그때 새 live 를 끝내면 셈과 무관한 회차가 끊긴다. 표식 · 반환 열은
+// endLiveSQL 과 같은 조각이다.
+const endGapRunSQL = liveEndingSet + `'gap_run' END
+ WHERE stream_id = $1 AND state = 'live' AND session_id = $2` + liveEndingReturning
+
+// endStallSealSQL 은 L2′ 종료다(POK-196 M6-3b 커밋 ④b · kty 2026-10-27 결정 (나)) — 루프가 목록을 봉인한(Endlist) 회차
+// $2 를, 그 회차가 아직 스트림 $1 의 live 일 때만 ending(사유 stall_seal)으로 보낸다. 회차 술어의 까닭은 endGapRunSQL 과
+// 같다(봉인과 이 문장 사이에 live 가 바뀌었을 수 있다). 표식 · 반환 열은 endLiveSQL 과 같은 조각이다.
+const endStallSealSQL = liveEndingSet + `'stall_seal' END
+ WHERE stream_id = $1 AND state = 'live' AND session_id = $2` + liveEndingReturning
+
+// liveEndingSet · liveEndingReturning 은 live 회차 종료 문장 셋(4.1 · L3 · L2′)이 함께 쓰는 SET 머리와 RETURNING 이다 — 표식이
+// 있으면 사유 intentional 이고(3.4), 회차 · 표식 여부를 돌려받아 같은 트랜잭션에서 회차 닫힘을 평가한다. 사유 글자는 각
+// 문장이 ELSE 자리에 잇는다.
+const (
+	liveEndingSet = `
+UPDATE stream_sessions
+   SET state = 'ending', ending_at = pg_catalog.now(),
+       end_reason = CASE WHEN stop_marked_at IS NOT NULL THEN 'intentional' ELSE `
+	liveEndingReturning = `
+RETURNING session_id, COALESCE(round_id, ''), stop_marked_at IS NOT NULL`
+)
+
+// EndLive 는 streamID 의 live 회차를 ending 으로 보내고 그 회차 ID 를 돌려준다(계획 4.1 전이). live 회차가 없으면 "" 이고
+// 오류가 아니다. 표식이 있었으면 사유 intentional 이고 같은 트랜잭션 끝에서 TryCloseRound(o · enqueue — 닫힘 조건 평가 + 완결
+// 평가)를 부른다.
 //
 // 트랜잭션은 이 함수가 BEGIN 부터 끝까지 소유한다. 첫 문장이 트랜잭션 지역 상한(lock_timeout 5초 · statement_timeout
-// 10초 — setTxnLimitsSQL)이고 ctx 시한은 트랜잭션 하나에 TxnDeadline 하나다. 실패 갈래의 되돌림은 새 시한(같은
-// 길이)을 받으므로, 루프가 부르는 전이 한 번의 루프 점유는 되돌림 포함 최대 약 2 × TxnDeadline 이다. 오류면 서버가
-// 커밋했는지 모른다(부르는 쪽이 결과 모름으로 다룬다).
-func EndLive(ctx context.Context, pool *pgxpool.Pool, streamID string) (sessionID string, err error) {
-	return endLive(ctx, pool, streamID, TxnDeadline)
+// 10초 — setTxnLimitsSQL)이고 **바로 다음 문장이 위상 잠금**이다(POK-196 M6 3.3 · D70 · D74) — 4D · 사슬 · 회차 닫힘과 같은
+// 순서(위상 → 행)라 교착하지 않고, 위상 잠금 대기도 lock_timeout 에서 끊긴다. ctx 시한은 트랜잭션 하나에 TxnDeadline 하나다.
+// 실패 갈래의 되돌림은 새 시한(같은 길이)을 받으므로, 루프가 부르는 전이 한 번의 루프 점유는 되돌림 포함 최대 약
+// 2 × TxnDeadline 이다. 오류면 서버가 커밋했는지 모른다(부르는 쪽이 결과 모름으로 다룬다). 잠금 경합이면 WARN
+// topology_lock_timeout op=end_live 를 남긴다.
+func EndLive(ctx context.Context, pool *pgxpool.Pool, streamID string, o CloseOptions, enqueue EndedEnqueuer) (sessionID string, err error) {
+	sessionID, err = endLive(ctx, pool, streamID, TxnDeadline, o, enqueue)
+	if err != nil && isContention(err) {
+		logger(o.Log).Warn("topology_lock_timeout", "op", "end_live", "stream_id", streamID, "err", err)
+	}
+	return sessionID, err
+}
+
+// EndGapRun 은 L3 다 — 회차 sessionID 가 아직 streamID 의 live 면 ending(사유 gap_run · 표식이 있으면 intentional)으로 보내고
+// 그 ID 를 돌려준다. 그 회차가 live 가 아니면 "" 이고 오류가 아니다. 트랜잭션 · 시한 · 잠금 순서 · 표식 갈래의 회차 닫힘은
+// EndLive 와 같다(같은 몸체). 잠금 경합이면 WARN topology_lock_timeout op=end_gap_run 을 남긴다.
+func EndGapRun(ctx context.Context, pool *pgxpool.Pool, streamID, sessionID string, o CloseOptions, enqueue EndedEnqueuer) (string, error) {
+	ended, err := endLiveWith(ctx, pool, streamID, TxnDeadline, o, enqueue, endGapRunSQL, streamID, sessionID)
+	if err != nil && isContention(err) {
+		logger(o.Log).Warn("topology_lock_timeout", "op", "end_gap_run", "stream_id", streamID, "session_id", sessionID, "err", err)
+	}
+	return ended, err
+}
+
+// EndStallSeal 은 L2′ 다 — 목록을 봉인한 회차 sessionID 가 아직 streamID 의 live 면 ending(사유 stall_seal · 표식이 있으면
+// intentional)으로 보내고 그 ID 를 돌려준다. 그 회차가 live 가 아니면 "" 이고 오류가 아니다. 트랜잭션 · 시한 · 잠금 순서 ·
+// 표식 갈래의 회차 닫힘은 EndLive 와 같다(같은 몸체). 잠금 경합이면 WARN topology_lock_timeout op=end_stall_seal 을 남긴다.
+func EndStallSeal(ctx context.Context, pool *pgxpool.Pool, streamID, sessionID string, o CloseOptions, enqueue EndedEnqueuer) (string, error) {
+	ended, err := endLiveWith(ctx, pool, streamID, TxnDeadline, o, enqueue, endStallSealSQL, streamID, sessionID)
+	if err != nil && isContention(err) {
+		logger(o.Log).Warn("topology_lock_timeout", "op", "end_stall_seal", "stream_id", streamID, "session_id", sessionID, "err", err)
+	}
+	return ended, err
 }
 
 // endLive 는 EndLive 의 몸체다 — 시한 deadline 을 받는 것은 같은 패키지의 시험이 문장 시한과 되돌림 시한을 함께
 // 줄이기 위해서다(loadRewindLedger 와 같은 형).
+func endLive(ctx context.Context, pool *pgxpool.Pool, streamID string, deadline time.Duration, o CloseOptions, enqueue EndedEnqueuer) (string, error) {
+	return endLiveWith(ctx, pool, streamID, deadline, o, enqueue, endLiveSQL, streamID)
+}
+
+// endLiveWith 는 live 회차 종료 문장 sql(인자 args — endLiveSQL · endGapRunSQL · endStallSealSQL)을 EndLive 의 트랜잭션 규약으로 보낸다.
 //
 // 실패하면 되돌린다. 되돌림 ctx 는 되돌리는 순간에 부른 쪽 ctx 에서 취소를 떼고 같은 시한을 새로 씌워 만든다 — 끝난
 // ctx 로 되돌리면 pgx 가 연결을 닫아 풀 연결이 버려지고, 미리 만들어 두면 시한을 다 쓴 갈래에서 그 ctx 도 끝나 있다.
 // COMMIT 오류 뒤에는 되돌리지 않는다 — pgx 의 Commit 은 결과와 상관없이 트랜잭션을 닫는다(미뤄 둔 되돌림은 문장
 // 없이 끝난다).
-func endLive(ctx context.Context, pool *pgxpool.Pool, streamID string, deadline time.Duration) (string, error) {
+func endLiveWith(ctx context.Context, pool *pgxpool.Pool, streamID string, deadline time.Duration, o CloseOptions,
+	enqueue EndedEnqueuer, sql string, args ...any) (string, error) {
 	tctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	tx, err := pool.Begin(tctx)
@@ -625,13 +685,24 @@ func endLive(ctx context.Context, pool *pgxpool.Pool, streamID string, deadline 
 	if _, err := tx.Exec(tctx, setTxnLimitsSQL); err != nil {
 		return "", fmt.Errorf("종료 전이 상한 설정 실패 stream_id=%q: %w", streamID, err)
 	}
-	var sessionID string
-	err = tx.QueryRow(tctx, endLiveSQL, streamID).Scan(&sessionID)
+	if _, err := tx.Exec(tctx, topologyLockSQL, streamID); err != nil {
+		return "", fmt.Errorf("종료 전이 위상 잠금 실패 stream_id=%q: %w", streamID, err)
+	}
+	var (
+		sessionID, round string
+		marked           bool
+	)
+	err = tx.QueryRow(tctx, sql, args...).Scan(&sessionID, &round, &marked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil // live 회차가 없다 — 바꾼 것이 없으니 미뤄 둔 되돌림으로 끝낸다
 	}
 	if err != nil {
 		return "", fmt.Errorf("종료 전이 실패 stream_id=%q: %w", streamID, err)
+	}
+	if marked && round != "" {
+		if _, err := TryCloseRound(tctx, tx, round, o, enqueue); err != nil {
+			return "", fmt.Errorf("종료 전이의 회차 닫힘 실패 stream_id=%q round_id=%q: %w", streamID, round, err)
+		}
 	}
 	if err := tx.Commit(tctx); err != nil {
 		return "", fmt.Errorf("종료 전이 확정 실패 stream_id=%q: %w", streamID, err)

@@ -22,7 +22,7 @@ package publish
 //	confirmEmptySQL     빈 동결 확정                                        sessions UPDATE
 //	failDVRSQL          RecoverOrphan · FailDVR(freeze_failed)              sessions UPDATE … RETURNING
 //	vodTxnLimitsSQL     FreezeVOD 등재 트랜잭션 첫 문장(지역 상한)          set_config 만(표 없음)
-//	vodLockTailSQL      FreezeVOD 등재(꼬리 행 잠금)                        sessions SELECT FOR UPDATE
+//	vodLockTailSQL      FreezeVOD 등재(꼬리 행 잠금)                        sessions SELECT FOR NO KEY UPDATE
 //	vodMarkGapSQL       FreezeVOD 등재(GAP 원장)                            gaps INSERT(ON CONFLICT DO NOTHING)
 //	vodAbandonGapsSQL   FreezeVOD 등재(미착지 GAP 포기)                     gaps UPDATE · segments SELECT
 //	vodLockChainSQL     FreezeVOD 확정 첫 문장(사슬 행 잠금)                sessions SELECT FOR NO KEY UPDATE
@@ -33,8 +33,9 @@ package publish
 //	repairConfirmSQL    감사 복구 ETag 확정                                 sessions UPDATE
 //
 // 장부 적재 · 감시(LoadLedger · Watch)는 index.LoadRewindLedger · index.LoadRewindWatch 를, 동결 · 감사 재렌더는
-// index.LoadSessionLedger 를, VOD 는 index.LoadChainLedger 를 부른다 — 그 문장은 index 역할 시험이 잰다. 이 시험이
-// 역할로 실제 보내는 문장은 위 표 앞 아홉이다(RequireSent) — 동결 · VOD · 감사 문장은 표에만 있다.
+// index.LoadSessionLedger 를, VOD 는 index.LoadChainLedger(첫 읽기) · index.ReadChainLedger(등재 트랜잭션 안 재독 — 같은
+// 문장)를 부른다 — 그 문장은 index 역할 시험이 잰다. 이 시험이 역할로 보냈음을 단언하는(RequireSent) 문장은 위 표
+// 앞 아홉과 감사 셋(frozenDocsSQL · repairClaimSQL · repairConfirmSQL)이다 — 나머지 동결 · VOD 문장은 표에만 있다.
 
 import (
 	"testing"
@@ -132,6 +133,38 @@ func TestMediaIndexerRoleRevokesInheritance(t *testing.T) {
 		t.Errorf("DB 계승 %s · base %d, want NULL · 0", strOrNil(row.inherits), row.base)
 	}
 	role.RequireSent(t, map[string]string{"p2RevokeSQL": p2RevokeSQL})
+	rf.traps.RequireNotCalled(t)
+}
+
+// 동결 감사 경로 — 감사 대상 조회 · 복구 장부 CAS · 복구 ETag 확정이 media_indexer 권한만으로 돈다(보안 ML2 L-D). 꼬리
+// 조각이 빠진 DVR 판을 감사가 고쳐 장부 ETag 가 새 판이 된다.
+func TestMediaIndexerRoleAuditRepairs(t *testing.T) {
+	rf := newRoleLoop(t, soloFixture(9))
+	l, role, store, admin := rf.l, rf.role, rf.store, rf.admin
+	t.Cleanup(func() { role.RequireNoneDenied(t) })
+	ctx := t.Context()
+	for _, r := range l.fx.rows {
+		insertLedgerRow(t, admin, r, "uploaded")
+	}
+	insertCutoff(t, admin, 0)
+	l.mustPublish(ctx, 0, 5)
+	wantOutcome(t, l.pub.FreezeDVR(ctx, fxStream, "S"), AxisDVR, ResultFrozen, false)
+	// 장부 ETag 를 본문 MD5 가 아닌 값으로 둔다 — 가짜 저장소의 ETag 는 본문 MD5 라 고친 판이 동결 때와 같은 ETag 다.
+	exec(t, admin, `UPDATE stream_sessions SET dvr_etag = '"불투명"', manifest_etag = '"불투명"' WHERE session_id = 'S'`)
+	closed, _ := stored(store, soloKey)
+	truncateDVR(t, store, closed, 2)
+
+	out := NewFrozenAuditor(l.pub).Audit(ctx)
+
+	if out.Checked != 1 || out.Repaired != 1 || out.Err != nil {
+		t.Fatalf("감사 = %+v, want 1건 확인 · 복구 1", out)
+	}
+	if _, etag := stored(store, soloKey); strOrNil(readSession(t, admin, "S").etag) != etag {
+		t.Errorf("장부 manifest_etag 가 고친 판 %s 이 아니다", etag)
+	}
+	role.RequireSent(t, map[string]string{
+		"frozenDocsSQL": frozenDocsSQL, "repairClaimSQL": repairClaimSQL, "repairConfirmSQL": repairConfirmSQL,
+	})
 	rf.traps.RequireNotCalled(t)
 }
 

@@ -22,8 +22,8 @@ const (
 	lookupFailedBatch = 10 * time.Second // control_round_lookup_failed 를 묶는 시간
 )
 
-// RoundLookup 은 Board 가 모르는 회차를 DB 에서 한 번 읽는다. M6 가 구현한다 — index.LookupRoundPlayback 을 부르고
-// status.FromPlaybackState 로 옮긴다(Drain 과 같은 함수). Found · NotFound 만 캐시하고, Unavailable · 오류는 503 이다.
+// RoundLookup 은 Board 가 모르는 회차를 DB 에서 한 번 읽는다. 운영 구현은 NewRoundLookup 이다 — index.LookupRoundPlayback 을
+// 부르고 status.FromPlaybackState 로 옮긴다(Drain 과 같은 함수). Found · NotFound 만 캐시하고, Unavailable · 오류는 503 이다.
 type RoundLookup func(ctx context.Context, streamID, roundID string) (status.Status, status.Answer, error)
 
 // RoundLimits 는 회차 경로 lookup 의 자원 상한이다(보완 2 ㉡ · 정정 ㉡ · R54).
@@ -34,9 +34,12 @@ type RoundLimits struct {
 	CacheCells  int           // 1초 캐시 칸 상한(넘으면 가장 오래 쓰지 않은 칸 축출)
 }
 
-// DefaultRoundLimits 는 운영 상한이다 — 동시 2 · 초당 20 · 2초 · 4096 칸. 동시 2 는 인덱서 풀(pgx 기본 max(4, CPU) —
-// 2 vCPU 상자에서 4)의 절반이라 조각 INSERT · 틱 장부에 둘을 남긴다. 초당 20 은 회차 닫힘 전 끝남 대기 회차 수의
-// 위다. 값을 바꾸려면 R54 근거를 함께 바꾼다.
+// DefaultRoundLimits 는 운영 상한이다 — 동시 2 · 초당 20 · 2초 · 4096 칸. 동시 2 는 인덱서 풀(연결 6 — 핫 경로 3 · 회차
+// 조회 2 · 4D 1, cmd/segment-indexer indexerPoolMaxConns)의 회차 조회 몫이라 조각 INSERT · 틱 장부 몫을 남긴다. 이 몫은
+// 예약이 아니라 합의 상한이다 — 같은 풀을 쓰는 60일 만료 · 정산 차선까지 겹치면 동시 수요가 상한 6 을 넘는다. 넘친
+// lookup 은 풀 획득을 기다리고, 획득 대기와 질의를 합친 시한(2초)을 다 쓰면 503 이다(그 안에 연결을 얻으면 조회는
+// 그대로 간다 · 교착 아님). 초당 20 은 회차 닫힘 전 끝남 대기 회차 수의 위다. 값을 바꾸려면 R54 근거와 인덱서 풀 산식을
+// 함께 바꾼다.
 func DefaultRoundLimits() RoundLimits {
 	return RoundLimits{MaxInFlight: 2, PerSecond: 20, Timeout: 2 * time.Second, CacheCells: 4096}
 }

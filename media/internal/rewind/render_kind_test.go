@@ -8,6 +8,7 @@ package rewind_test
 // 같은 바이트여야 정상 동결(F)과 2단 봉인(E)이 같은 목록을 낸다.
 
 import (
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,6 +74,34 @@ func TestRenderEndedEqualsSealedOpenBody(t *testing.T) {
 		}
 		if got := mustRender(t, ended); got != string(sealed) {
 			t.Errorf("kind=%d Render(Ended) 가 봉인한 열린 본문과 다르다 — %s", kind, firstDiff(got, string(sealed)))
+		}
+	}
+}
+
+// TestSealedBodyValidatesOnlyAsEndedPlaylist 는 봉인 경로(Endlist)의 Validate 짝이다(M6-1 인계). Endlist 는
+// 장부를 렌더하지 않아 Validate 를 부르지 않는다 — 대신 봉인 본문이 같은 행의 Ended 목록으로 Validate 를
+// 통과하고(직전 발행 = 그 열린 본문), 열린 목록과 짝지으면 걸리는지 본다. 그래서 정상 동결(F)이 Validate 를
+// 거쳐 내는 목록과 봉인(E)이 내는 목록이 같은 검사를 통과한다.
+func TestSealedBodyValidatesOnlyAsEndedPlaylist(t *testing.T) {
+	n := rewind.Session{ID: "N", TargetDuration: 6, DiscontinuityBase: 4, MinSeq: 100, InitUploaded: true}
+	for _, kind := range []rewind.Kind{rewind.KindSliding, rewind.KindVOD} {
+		open := playlist("N", []rewind.Session{n}, run("N", 100, 109, day.Add(time.Minute)))
+		open.Kind = kind
+		ended := open
+		ended.Ended = true
+		body := []byte(mustRender(t, open))
+		prev := &rewind.Published{Gen: 1, MediaSequence: 100, PublishedSeq: 109, SegmentCount: 10,
+			DiscontinuitySequence: 4, BodySHA256: sha256.Sum256(body)}
+
+		sealed, err := rewind.SealEndlist(body)
+		if err != nil {
+			t.Fatalf("kind=%d SealEndlist 오류: %v", kind, err)
+		}
+		if err := rewind.Validate(ended, sealed, 2, prev); err != nil {
+			t.Errorf("kind=%d Validate(Ended 목록, 봉인 본문) = %v, want nil", kind, err)
+		}
+		if err := rewind.Validate(open, sealed, 2, prev); err == nil {
+			t.Errorf("kind=%d Validate(열린 목록, 봉인 본문) = nil, want 위반(ENDLIST 줄이 목록의 Ended 와 다르다)", kind)
 		}
 	}
 }

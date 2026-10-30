@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -44,9 +45,25 @@ type Config struct {
 	// 절대 URL 이다(https — http 는 루프백 IP 리터럴만). S3 와 같은 블록에서만 읽는다 — S3.Bucket 이 비면 읽지 않아
 	// 빈 값이고, 버킷이 있는데 비었으면 기동을 거부한다. 발행 조립이 publish.DefaultOptions 로 넘긴다(커밋 7).
 	RewindPublicBaseURL string
+	// RewindPublishPoolMaxConns 는 되감기 발행자 풀의 연결 상한이다(REWIND_PUBLISH_POOL_MAX_CONNS — kty 결정 C2 · 기본 4). pgx
+	// 기본값(max(4, CPU 수))이면 상자가 커질수록 교체 창의 두 사이드카 합이 media_indexer 역할 상한을 넘는다. S3 와 같은
+	// 블록에서만 읽는다 — 버킷이 비면 발행자 풀이 없어 0 이다.
+	RewindPublishPoolMaxConns int32
 	// RewindWatchEvery 는 되감기 30초 감시(설계 4.1 (a) (c))의 주기다 — 발행 루프가 이 값 ÷ 보류 틱(Indexer.HoldTick)
 	// 마다 감시 작업을 낸다(판단 J85 ⑴). 설계값이라 env 가 없고 값의 집은 여기 하나다(ReconnectWindow 와 같은 규칙).
 	RewindWatchEvery time.Duration
+	// RewindGapRunEnd 는 L3 스위치다(REWIND_GAP_RUN_END — POK-196 M6 6절 · kty K5). 켜면 소유 회차에서 L2 GAP 이 seq 로
+	// 이어서 셋 서면 그 회차를 ending(사유 gap_run)으로 보낸다. 기본 끔이고 기동 때만 읽는다 — 켜는 조건은 F-7 실측과 S3
+	// 짧은 장애 주입 실측이 둘 다 참이고 kty 가 승인한 뒤다(M6 10절).
+	RewindGapRunEnd bool
+	// RewindStallSeal 은 L2′ 스위치다(REWIND_STALL_SEAL — POK-196 M6 6절 · kty K5 · 2026-10-27 결정 (나)). 켜면 live 소유
+	// 회차의 stallAge 가 D_act 에 닿았는데 L2 가 설 수 없을 때 목록을 봉인하고 그 회차를 ending(사유 stall_seal)으로 보낸다.
+	// 기본 끔이고 기동 때만 읽는다 — 켜는 조건은 L3 와 같다(M6 10절).
+	RewindStallSeal bool
+	// RewindPlaybackReadMax 는 상태 읽기 차선의 전체 동시 상한이다(REWIND_PLAYBACK_READ_MAX — kty 2026-10-29 · 정산 걸음 상한
+	// finalize.DefaultLimits 의 전체 2 와 같은 꼴). 읽기 하나가 인덱서 풀 연결 하나를 쥐어, 일제 종료 때 스트림 수만큼 읽기가
+	// 겹쳐 핫 경로와 풀을 다투지 않게 한다. 넘친 표지는 다음 holdTick 에 다시 낸다.
+	RewindPlaybackReadMax int
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -93,6 +110,8 @@ type Config struct {
 	// 검사했고 열지 않았다 — 읽기는 main 이 한다(MTXAPIPassFile 과 같은 규칙).
 	ResolveURL       string
 	ResolveTokenFile string
+	// Lifecycle 은 계약9 발행기의 설정이다(BROADCAST_TOPIC_ARN · LIFECYCLE_PUBLISH_STREAMS — POK-196 M6-8).
+	Lifecycle LifecycleOptions
 }
 
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
@@ -103,6 +122,12 @@ const (
 	defaultObsBackfill       = 60 * time.Second
 	defaultSessionFloorSlack = 1 * time.Second
 )
+
+// defaultRewindPlaybackReadMax 는 상태 읽기 차선의 전체 동시 상한 기본값이다(kty 2026-10-29 — 정산 걸음 전체 2 와 같다).
+const defaultRewindPlaybackReadMax = 2
+
+// defaultRewindPublishPoolMaxConns 는 되감기 발행자 풀 상한의 기본값이다(kty 결정 C2 — 2 vCPU 상자의 pgx 기본값과 같은 4).
+const defaultRewindPublishPoolMaxConns = 4
 
 // Load 는 환경변수를 읽어 설정을 만든다. env 는 os.Getenv 를 그대로 넘기면 된다.
 //
@@ -194,6 +219,7 @@ func Load(env func(string) string) (Config, error) {
 	up := upload.DefaultOptions(nil, watch.Root)
 	s3 := upload.S3Options{Region: withDefault(env, "AWS_REGION", "ap-northeast-2")}
 	var rewindBaseURL string
+	var publishPoolMaxConns int32
 
 	// ★ 버킷 판정이 **제일 앞**이다. 비면 나머지 S3·업로드 설정은 읽지도 검증하지도 않는다.
 	//   그 값들은 전부 꺼진 부품의 것이라 쓰이지 않는데, 여기서 파싱에 실패하면 오타 하나가
@@ -224,6 +250,9 @@ func Load(env func(string) string) (Config, error) {
 		// 버킷이 있으면 되감기 목록도 발행하므로 URI 앞머리가 있어야 한다(계획 B-9 — 비면 기동 거부).
 		// **TrimSpace 를 쓰지 않는다** — 끝의 CR · U+2028 을 조용히 떼면 제어 문자 · 비ASCII 거부가 무력해진다.
 		if rewindBaseURL, err = validateRewindPublicBaseURL(env("REWIND_PUBLIC_BASE_URL")); err != nil {
+			return Config{}, err
+		}
+		if publishPoolMaxConns, err = poolMaxConns(env, "REWIND_PUBLISH_POOL_MAX_CONNS", defaultRewindPublishPoolMaxConns); err != nil {
 			return Config{}, err
 		}
 	}
@@ -263,6 +292,18 @@ func Load(env func(string) string) (Config, error) {
 	// (kty 결정 2026-09-02): 각 스트림의 첫 주조 자격 유입이 컷오프를 만든다. 명시 false 는 그대로 받는다 —
 	// 롤백 손잡이다(끄면 새 컷오프 주조만 멈추고 이미 기록된 컷오프는 유효하다).
 	if idx.SeedEnabled, err = boolean(env, "REWIND_SEED_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	gapRunEnd, err := boolean(env, "REWIND_GAP_RUN_END", false)
+	if err != nil {
+		return Config{}, err
+	}
+	stallSeal, err := boolean(env, "REWIND_STALL_SEAL", false)
+	if err != nil {
+		return Config{}, err
+	}
+	playbackReadMax, err := positiveInt(env, "REWIND_PLAYBACK_READ_MAX", defaultRewindPlaybackReadMax)
+	if err != nil {
 		return Config{}, err
 	}
 	if idx.ScanCollectBudget, err = duration(env, "SCAN_COLLECT_BUDGET", idx.ScanCollectBudget); err != nil {
@@ -343,6 +384,10 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	lifecycle, err := loadLifecycle(env)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		PG:               pg,
@@ -364,13 +409,18 @@ func Load(env func(string) string) (Config, error) {
 		// 설계값(ADR-044 결정 3 — IVS 300초 선례)이라 const 로 선언하지 않고 여기 한 자리에 적는다(계획 5절).
 		ReconnectWindow: 300 * time.Second,
 		// 설계값(계획 5절 「30 tick 감시」 · 판단 J85 ⑴)이라 같은 규칙으로 여기 한 자리에 적는다.
-		RewindWatchEvery: 30 * time.Second,
+		RewindWatchEvery:      30 * time.Second,
+		RewindGapRunEnd:       gapRunEnd,
+		RewindStallSeal:       stallSeal,
+		RewindPlaybackReadMax: playbackReadMax,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
-		RewindPublicBaseURL: rewindBaseURL,
-		Control:             control,
-		Expiry:              expiryOpt,
-		ResolveURL:          resolve.url,
-		ResolveTokenFile:    resolve.tokenFile,
+		RewindPublicBaseURL:       rewindBaseURL,
+		RewindPublishPoolMaxConns: publishPoolMaxConns,
+		Control:                   control,
+		Expiry:                    expiryOpt,
+		ResolveURL:                resolve.url,
+		ResolveTokenFile:          resolve.tokenFile,
+		Lifecycle:                 lifecycle,
 	}, nil
 }
 
@@ -516,6 +566,18 @@ func positiveInt(env func(string) string, key string, fallback int) (int, error)
 		return 0, fmt.Errorf("%s 는 양의 정수여야 한다: %q", key, raw)
 	}
 	return v, nil
+}
+
+// poolMaxConns 는 풀 연결 상한이다 — 양의 정수이고 pgx 의 int32 칸에 들어가야 한다.
+func poolMaxConns(env func(string) string, key string, fallback int32) (int32, error) {
+	v, err := positiveInt(env, key, int(fallback))
+	if err != nil {
+		return 0, err
+	}
+	if v > math.MaxInt32 {
+		return 0, fmt.Errorf("%s 는 %d 이하여야 한다: %d", key, math.MaxInt32, v)
+	}
+	return int32(v), nil
 }
 
 func positiveInt64(env func(string) string, key string, fallback int64) (int64, error) {

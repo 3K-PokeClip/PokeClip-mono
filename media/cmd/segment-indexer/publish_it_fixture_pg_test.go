@@ -26,6 +26,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
@@ -150,7 +151,7 @@ func (h *itHarness) start(o itOptions) {
 	}
 	h.t.Cleanup(pubPool.Close)
 
-	store := index.NewPGStore(h.pool, newSessionDecider(time.Second, 30*time.Second, 300*time.Second, log), playback.SegKey)
+	store := index.NewPGStore(h.pool, newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, log), playback.SegKey)
 	opt := indexer.DefaultOptions()
 	opt.SegmentRoot = h.root
 	h.ix = indexer.New(store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, nil, opt, log)
@@ -171,7 +172,7 @@ func (h *itHarness) start(o itOptions) {
 	h.rewind = &rewindLoop{
 		ix: h.ix, root: h.root, cache: h.cache, log: log,
 		endLive: func(ctx context.Context, streamID string) (string, error) {
-			return index.EndLive(ctx, h.pool, streamID)
+			return index.EndLive(ctx, h.pool, streamID, index.CloseOptions{Window: 300 * time.Second, Slack: 60 * time.Second}, noEndedEnqueue)
 		},
 		pub: pub, lanes: h.lanes,
 		work: laneWork{

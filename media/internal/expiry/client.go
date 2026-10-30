@@ -58,6 +58,9 @@ func newClipClient(base string, token Token, timeout time.Duration, bodyLimit in
 		token: token,
 		http: &http.Client{
 			Timeout: timeout,
+			// 기본 전송은 HTTP_PROXY 같은 환경변수의 프록시를 탄다. 이 전송은 Proxy 가 nil 이라 clip 에 바로 붙는다 —
+			// 전용 토큰 머리가 프록시를 거치지 않는다(보안 LOW-1).
+			Transport: &http.Transport{},
 			// 토큰을 다른 곳으로 옮겨 싣지 않는다 — 3xx 는 그대로 받아 실패로 다룬다.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},

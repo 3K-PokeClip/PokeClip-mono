@@ -44,7 +44,7 @@ func TestEndLiveBoundedByLockTimeout(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		id, err := EndLive(ctx, pool, stream)
+		id, err := EndLive(ctx, pool, stream, testClose, noopEnqueue)
 		done <- result{id, err}
 	}()
 	var got result
@@ -124,7 +124,7 @@ func TestEndLiveRollsBackWithLiveContext(t *testing.T) {
 			}
 			conns := pool.Stat().NewConnsCount()
 
-			id, err := endLive(ctx, pool, stream, 200*time.Millisecond)
+			id, err := endLive(ctx, pool, stream, 200*time.Millisecond, testClose, noopEnqueue)
 
 			if err == nil || id != "" {
 				t.Errorf("endLive = (%q, %v), want (\"\", 오류) — 전이 문장이 실패했다", id, err)
@@ -183,7 +183,7 @@ func TestEndLiveReportsFailureAtEveryStatement(t *testing.T) {
 				},
 			})
 
-			id, err := EndLive(ctx, pool, stream)
+			id, err := EndLive(ctx, pool, stream, testClose, noopEnqueue)
 
 			if err == nil || id != "" {
 				t.Errorf("EndLive = (%q, %v), want (\"\", 오류) — %s 에서 실패했다", id, err, tc.name)

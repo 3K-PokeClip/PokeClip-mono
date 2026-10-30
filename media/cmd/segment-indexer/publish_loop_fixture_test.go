@@ -33,8 +33,9 @@ type publishLoop struct {
 	work  *fakeWork
 	dirty *fakeDirty
 	ups   *fakeUploader
-	// watched 는 지금까지 반영한 감시 결과 수다(settleWatch).
+	// watched 는 지금까지 반영한 감시 결과 수다(settleWatch). audited 는 동결 감사 결과 수다(settleAudit).
 	watched int
+	audited int
 }
 
 // newPublishLoop 은 발행 몫을 얹은 루프 픽스처다 — 감시는 꺼져 있다(holdEvery 0 — 조립이 주기를 넘기지 않은 모양). 감시를 보는
@@ -86,14 +87,25 @@ func (f *publishLoop) settleWatch(now time.Time, total int) {
 	}
 }
 
+// settleAudit 는 반영한 동결 감사 결과가 모두 total 개가 될 때까지 결과를 반영한다(settleWatch 와 같은 꼴).
+func (f *publishLoop) settleAudit(now time.Time, total int) {
+	f.t.Helper()
+	for f.audited < total {
+		f.next(now)
+	}
+}
+
 // next 는 결과 하나를 받아 반영하고 그 종류를 돌려준다.
 func (f *publishLoop) next(now time.Time) publish.Kind {
 	f.t.Helper()
 	select {
 	case res := <-f.rewind.done():
 		f.rewind.complete(f.t.Context(), res, now)
-		if res.Kind == publish.KindWatch {
+		switch res.Kind {
+		case publish.KindWatch:
 			f.watched++
+		case publish.KindAudit:
+			f.audited++
 		}
 		return res.Kind
 	case <-time.After(5 * time.Second):
@@ -176,6 +188,7 @@ type fakeWork struct {
 	renews  []publish.State
 	loads   []publish.LoadInput
 	watches [][]index.WatchProbe
+	audits  int
 	// tickFn · renewFn 이 nil 이면 발행 성공 · 갱신 성공이다(publishedOutcome · renewedOutcome). loadFn 이 nil 이면 ledgers 의
 	// 그 스트림 장부를 돌려준다. watchFn 이 nil 이면 빈 감시다.
 	tickFn  func(st publish.State, in publish.TickInput) publish.Outcome
@@ -183,11 +196,14 @@ type fakeWork struct {
 	loadFn  func(in publish.LoadInput) publish.LoadOutcome
 	watchFn func(probes []index.WatchProbe) publish.WatchOutcome
 	ledgers map[string]index.RewindLedger
-	// gate 가 nil 이 아니면 틱 몸체가 그 채널을 받을 때까지 멈춘다(도는 틱을 만든다). loadGate · watchGate 는 적재 · 감시 몸체의 같은
-	// 문이다.
+	// auditFn 이 nil 이면 빈 감사다.
+	auditFn func() publish.AuditOutcome
+	// gate 가 nil 이 아니면 틱 몸체가 그 채널을 받을 때까지 멈춘다(도는 틱을 만든다). loadGate · watchGate · auditGate 는 적재 ·
+	// 감시 · 동결 감사 몸체의 같은 문이다.
 	gate      chan struct{}
 	loadGate  chan struct{}
 	watchGate chan struct{}
+	auditGate chan struct{}
 }
 
 func (w *fakeWork) laneWork() laneWork {
@@ -254,7 +270,29 @@ func (w *fakeWork) watch(_ context.Context, probes []index.WatchProbe) publish.W
 	return publish.WatchOutcome{}
 }
 
-// open 은 문(gate · loadGate · watchGate 가운데 하나를 가리키는 자리)을 비우고 그 문에서 멈춘 몸체를 풀어 준다.
+// audit 은 동결 감사 몸체다 — laneWork 에는 넣지 않는다(감사를 보는 시험만 rewind.work.audit 에 끼운다).
+func (w *fakeWork) audit(context.Context) publish.AuditOutcome {
+	w.mu.Lock()
+	w.audits++
+	fn, gate := w.auditFn, w.auditGate
+	w.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	if fn != nil {
+		return fn()
+	}
+	return publish.AuditOutcome{}
+}
+
+// auditCalls 는 지금까지 낸 동결 감사 수다.
+func (w *fakeWork) auditCalls() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.audits
+}
+
+// open 은 문(gate · loadGate · watchGate · auditGate 가운데 하나를 가리키는 자리)을 비우고 그 문에서 멈춘 몸체를 풀어 준다.
 func (w *fakeWork) open(gate *chan struct{}) {
 	w.mu.Lock()
 	ch := *gate

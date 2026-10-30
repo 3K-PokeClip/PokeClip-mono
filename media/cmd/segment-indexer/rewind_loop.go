@@ -84,6 +84,18 @@ type rewindLoop struct {
 	invalid     map[string]index.PlaybackState
 	rangeWarned map[string]string
 	alarms      map[string]*readyAlarm
+
+	// endGapRun 은 L3 종료 손잡이다(gap_run.go — 운영은 index.EndGapRun). nil 이면 스위치 끔이라 셈만 하고 끝내지 않는다.
+	endGapRun func(ctx context.Context, streamID, sessionID string) (string, error)
+	// endStallSeal 은 L2′ 종료 손잡이다(stall_seal.go — 운영은 index.EndStallSeal). nil 이면 스위치 끔이라 봉인도 내지 않는다.
+	endStallSeal func(ctx context.Context, streamID, sessionID string) (string, error)
+	// liveEndRetryAt 은 L3 · L2′ 종료 문장이 실패한 뒤 다시 부를 시각이다(영값 = 바로). 스트림 · 회차를 가리지 않는다 — DB 가
+	// 멈추면 한 틱에 스트림마다 시한이 쌓이지 않게 루프 전체가 쉰다(오프라인 전이의 쉼과 같은 처분 · live_end.go).
+	liveEndRetryAt time.Time
+
+	// fin 은 정산 몫이다(M6-3b — rewind_finalize.go). run 이 조립 밖에서 채워 발행 꺼짐 · 강등에서도 돈다. nil 이면 정산 ·
+	// 상태 전달 · 계승 해제를 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
+	fin *finalizer
 }
 
 // laneWork 는 차선 작업의 몸체다 — 입력 값만 받아 차선 고루틴에서 돌고 결과를 값으로 돌려준다(캐시 · Dirty 를 만지지 않는다).
@@ -93,6 +105,11 @@ type laneWork struct {
 	renew func(ctx context.Context, st publish.State, sessionID string) publish.Outcome
 	load  func(ctx context.Context, in publish.LoadInput) publish.LoadOutcome
 	watch func(ctx context.Context, probes []index.WatchProbe) publish.WatchOutcome
+	// seal 은 L2′ 의 봉인이다(운영은 Publisher.Endlist — stall_seal.go).
+	seal func(ctx context.Context, streamID, sessionID string) publish.FreezeOutcome
+	// audit 은 동결 감사다(운영은 프로세스에 하나인 FrozenAuditor 의 Audit — 문서당 복구 1회를 그 감사기가 기억한다). nil 이면
+	// 감사를 내지 않는다.
+	audit func(ctx context.Context) publish.AuditOutcome
 }
 
 // rewindStream 은 루프가 스트림 하나에 드는 발행 몫의 상태다(판단 J89).
@@ -108,6 +125,10 @@ type rewindStream struct {
 	ladder publish.LadderState
 	// unstoodGap 은 결과가 돌아왔는데 서지 않은 직전 GAP 틱의 후보다(사다리 UnstoodGapSeq — ⓐ).
 	unstoodGap *int64
+	// gapRun 은 L3 셈이다 — GAP 이 선 결과만 센다(settleGap · gap_run.go).
+	gapRun gapRun
+	// stallSeal 은 L2′ 의 봉인 · 종료 대기다(stall_seal.go).
+	stallSeal stallSeal
 	// prevTail 은 다음 boundary.Compute 의 prevTail 이다 — 평시 틱은 계산한 틱의 꼬리, GAP 틱은 GAP 이 선 뒤에만 겹침 꼬리다(J26).
 	prevTail int64
 	// running 은 이 스트림 차선에서 도는 작업이다(nil = 차선이 비었다 — 판단 J80 ⑷ 의 in-flight 표). pendingLoad 는 차선이 돌아
@@ -141,9 +162,11 @@ type laneJob struct {
 type laneJobKind int
 
 const (
-	jobTick  laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
-	jobRenew                        // lazy 갱신(RenewFence)
-	jobLoad                         // 캐시 적재(LoadLedger)
+	jobTick   laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
+	jobRenew                         // lazy 갱신(RenewFence)
+	jobLoad                          // 캐시 적재(LoadLedger)
+	jobRevoke                        // 4D round_split 의 계승 해제(RevokeInheritance — M6-3b)
+	jobSeal                          // L2′ 봉인(Endlist — M6-3b 커밋 ④b)
 )
 
 // holdTick 은 holdTicks case 의 되감기 몫이다 — 그 case 의 현재 시각 now 로 4.1 종료 전이를 돌리고, 발행 몫이 있으면 차례대로
@@ -154,8 +177,17 @@ const (
 // 제어면 상태 몫은 그 앞뒤다(설계 M5 3.3 holdTick 순서 · 보완 2 ㉢ ㉤): 4.1 전이 뒤 받은편지함을 종료 항목에 반영하고(Drain),
 // 발행 몫은 발행 몫이 있을 때만 돌며, 끝에서 Board 를 새로 만든다(publishStatus — 강등에서도 돈다 · 꺼짐 제외). 그래서 그 틱
 // 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
+//
+// 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → endGapRuns(L3) → endStallSeals(L2′ —
+// 둘 다 스위치 켬일 때만) → 받은편지함 비우기(계승 해제 · 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5
+// Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식 EndLive · L3 · L2′ 가 남긴 표지는 같은 틱의
+// 받은편지함 비우기에서 읽힌다. L2′ 의 봉인은 발행 몫의 사다리가 스트림 차선에 낸다(stall_seal.go).
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 	r.endOfflineSessions(ctx, now)
+	r.endGapRuns(ctx, now)
+	r.endStallSeals(ctx, now)
+	r.drainInboxes(ctx)
+	r.finalizeTick(ctx, now)
 	r.drainFinals()
 	if r.publishing() {
 		events := r.peek()
@@ -173,9 +205,11 @@ func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 // publishing 은 발행 몫이 있는가다.
 func (r *rewindLoop) publishing() bool { return r.pub != nil && r.lanes != nil }
 
-// done 은 완료 case 의 채널이다 — 발행 몫이 없으면 nil 이라 그 case 는 영구 비활성이다(판단 J69 — 훅 채널과 같은 규약).
+// done 은 완료 case 의 채널이다 — 차선이 없으면 nil 이라 그 case 는 영구 비활성이다(판단 J69 — 훅 채널과 같은 규약). 조건은
+// 발행 몫이 아니라 차선이다(M6 3.2) — 차선은 run 이 조립 밖에서 채우므로 발행 꺼짐 · 강등에서도 정산 · 상태 전달 결과를 받는다.
+// 발행 결과(KindPublish · KindLoad · KindWatch)는 발행 몫이 있을 때만 온다.
 func (r *rewindLoop) done() <-chan publish.Result {
-	if !r.publishing() {
+	if r.lanes == nil {
 		return nil
 	}
 	return r.lanes.Done()
@@ -187,6 +221,7 @@ func (r *rewindLoop) done() <-chan publish.Result {
 //	발행  publishDone — 발행 상태 · 캐시 반영 · 재발행 표지 · 오류 줄 · 결과 모름의 요구 발사 · 미룬 적재나 재실행 틱
 //	적재  loadDone — CompleteLoad 또는 재요구 · 적재 뒤 틱
 //	감시  watchDone — 대조 · 화해 · (c) · 부팅 목록 · Forget(재실행이면 새 입력으로 다시 감시)
+//	감사  auditDone — 대상 조회 실패 줄(재실행이면 다시 감사)
 func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.Time) {
 	rerun := r.lanes.Finish(res)
 	switch res.Kind {
@@ -199,6 +234,20 @@ func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.
 		if rerun {
 			r.startWatch(ctx)
 		}
+	case publish.KindAudit:
+		r.auditDone(ctx, res, rerun)
+	case publish.KindFinalizeScan:
+		r.scanDone(ctx, res, rerun, now)
+	case publish.KindFinalizeLoad:
+		r.finalLoadDone(ctx, res, now)
+	case publish.KindFinalize:
+		r.finalStepDone(ctx, res, now)
+	case publish.KindPlayback:
+		r.playbackDone(ctx, res, rerun)
+	case publish.KindRevoke:
+		r.revokeDone(ctx, res, rerun, now)
+	case publish.KindSeal:
+		r.sealDone(ctx, res, now)
 	}
 }
 
@@ -248,11 +297,20 @@ func (r *rewindLoop) endOfflineSessions(ctx context.Context, now time.Time) {
 			return
 		}
 		if sessionID != "" {
-			r.cache.ApplySessionEnding(streamID, sessionID)
-			r.forgetUploaderSession(sessionID)
+			r.liveEnded(streamID, sessionID, now)
 		}
 		r.ix.OfflineTried(streamID, true, now)
 	}
+}
+
+// queueEnded 는 오프라인 전이가 끝낸 회차를 정산 몫에 넘긴다 — 빠른 길(다음 holdTick 부터 꼬리 정착 + 10초 상한)과 상태 표지
+// (회차가 ending 으로 갔다 — 표식이 있었으면 같은 트랜잭션에서 회차도 닫혔다). 정산 몫이 없으면 아무것도 하지 않는다.
+func (r *rewindLoop) queueEnded(streamID, sessionID string, now time.Time) {
+	if r.fin == nil {
+		return
+	}
+	r.fin.queueFast(streamID, sessionID, now)
+	r.fin.inbox.Changed(streamID)
 }
 
 // offlineFailed 는 결과를 모르는 전이 실패다(시한 · lock_timeout · DB 오류 — 서버가 커밋했을 수 있다). ERROR 한
@@ -267,9 +325,7 @@ func (r *rewindLoop) offlineFailed(ctx context.Context, streamID string, err err
 		return
 	}
 	r.log.Error("session_offline", "stream_id", streamID, "result", "failed", "err", err)
-	if _, hasView := r.cache.Snapshot(streamID).Cutoff(); hasView || r.cache.Loading(streamID) {
-		r.cache.DemandLoad(streamID, nil)
-	}
+	r.demandAfterUnknown(streamID)
 	r.ix.OfflineTried(streamID, false, now)
 }
 
@@ -300,7 +356,7 @@ func (r *rewindLoop) ack(events []upload.DirtyEvent) {
 // reflectDirty 는 Dirty 원소를 캐시에 반영하고 원소가 닿은 스트림을 돌려준다(체크리스트 474 A-4 2 · 계획 4.5 A2 결정 8 · 판단
 // J80 ⑴). 적재 중인 스트림이면 push 는 캐시 로그에 적히고 그것을 반영으로 본다(A3 결정 2).
 //
-//	③ 업로드     ApplyPlaybackUploaded
+//	③ 업로드     ApplyPlaybackUploaded · 그 회차 L3 셈 비우기(GAP 뒤 seq 면 — gap_run.go)
 //	init 업로드  ApplyInitUploaded(해제 칸 그대로) — 해제 참이면 WARN session_inherit_declined(confirmed — CAS 가 실제로 푼
 //	             확정 · 회차마다 많아야 한 번 · 판단 J83)
 //	분리         ApplySessionEnding · 업로더의 그 회차 메모리를 지운다(판단 J86)
@@ -318,6 +374,9 @@ func (r *rewindLoop) reflectDirty(events []upload.DirtyEvent) map[string]bool {
 			}
 		case e.Axis == index.AxisPlayback:
 			r.cache.ApplyPlaybackUploaded(e.StreamID, e.Seq)
+			if rec := r.streams[e.StreamID]; rec != nil {
+				rec.gapRun = rec.gapRun.uploaded(e.SessionID, e.Seq)
+			}
 		}
 		touched[e.StreamID] = true
 	}
@@ -327,7 +386,7 @@ func (r *rewindLoop) reflectDirty(events []upload.DirtyEvent) map[string]bool {
 // evaluateLadders 는 소유 회차가 있는 스트림마다 정체 사다리를 한 번 평가해 돌려준 상태로 갈아 끼운다(체크리스트 474 A-4 3 ·
 // 계획 4.5 A0 결정 6 · 판단 J29 · J34) — 소유 회차가 live 가 아니어도 평가한다(C3 WARN 이 거기서 남는다 — ⓘ). 입력의 창은 겹침이
 // 아닌 캐시 스냅숏으로 잰다(ⓑ). L1 이면 그 행의 ③ 백오프를 당기고, L2 면 그 행을 GAP 후보로 돌려준다 — 틱 발사가 그 스트림에
-// 평시 틱 대신 GAP 틱을 낸다(판단 J80 ⑵).
+// 평시 틱 대신 GAP 틱을 낸다(판단 J80 ⑵). L2′ 면 그 스트림 차선에 봉인을 낸다(startSeal).
 func (r *rewindLoop) evaluateLadders(ctx context.Context, now time.Time) map[string]int64 {
 	gaps := map[string]int64{}
 	for _, s := range r.cache.Streams() {
@@ -349,6 +408,9 @@ func (r *rewindLoop) evaluateLadders(ctx context.Context, now time.Time) map[str
 		}
 		if step.Gap {
 			gaps[s] = step.Seq
+		}
+		if step.Seal {
+			r.startSeal(ctx, s, owner.SessionID, now)
 		}
 	}
 	return gaps
@@ -376,7 +438,8 @@ func (r *rewindLoop) renewFences(ctx context.Context, now time.Time) {
 }
 
 // watch 는 30초 감시를 낸다(체크리스트 474 A-4 7 · 판단 J85 ⑴) — 발행 갈래를 도는 첫 holdTick(부팅 첫 감시 — 계획 4.5 A3 결정 6)과
-// 그 뒤 watchEvery ÷ holdEvery 번째마다 한 번이다. 조립이 주기를 넘기지 않았으면 아무것도 하지 않는다.
+// 그 뒤 watchEvery ÷ holdEvery 번째마다 한 번이다. 동결 감사(D17 4.1(b))도 같은 차례에 낸다. 조립이 주기를 넘기지 않았으면
+// 아무것도 하지 않는다.
 func (r *rewindLoop) watch(ctx context.Context) {
 	if r.holdEvery <= 0 {
 		return
@@ -387,6 +450,7 @@ func (r *rewindLoop) watch(ctx context.Context) {
 	}
 	if r.ticks%n == 0 {
 		r.startWatch(ctx)
+		r.startAudit(ctx)
 	}
 	r.ticks++
 }
@@ -398,4 +462,36 @@ func (r *rewindLoop) startWatch(ctx context.Context) {
 	r.lanes.StartProcess(ctx, func(ctx context.Context) publish.Result {
 		return publish.Result{Kind: publish.KindWatch, Watch: watch(ctx, probes)}
 	})
+}
+
+// auditLaneKey 는 동결 감사의 예약 차선 키다 — 감시(프로세스 차선)와 다른 키라 오래 걸리는 감사(문서 100개 × 저장소 요청)가
+// 감시를 굶기지 않는다(D66 과 같은 처분). 「:」 를 담아 스트림 차선 키(stream_id — 「:」 없음)와 겹치지 않는다.
+const auditLaneKey = "audit:frozen"
+
+// startAudit 는 동결 감사를 그 예약 차선에 낸다. 감사가 돌고 있으면 Lanes 가 병합하고 결과를 받은 뒤 한 번 더 낸다(complete).
+//
+// 한 번에 키 순 100개를 보고 다음 감사가 그 뒤부터 본다. 100개를 못 채운 감사(0개 포함)가 커서를 처음으로 되돌리므로 한
+// 바퀴는 감사 ⌊문서 수 ÷ 100⌋ + 1 번이다(감사 한 번이 감시 주기 30초 안에 끝날 때 그 수 × 30초). 바퀴 도중 커서 앞 키로
+// 들어온 문서는 다음 바퀴에 처음 보므로, 창 30분 안에 적어도 한 번 보는 것은 두 바퀴가 창 안일 때 — 문서 약 3,000개까지다.
+// 진행 커서는 감사기 메모리라 재기동하면 처음부터다 — 키 순 k 번째 문서는 기동 뒤 ⌈k ÷ 100⌉ 번째 감사에서 보므로, 재기동
+// 간격이 그보다 짧게 되풀이되면 그 문서는 밀린다(한계).
+func (r *rewindLoop) startAudit(ctx context.Context) {
+	audit := r.work.audit
+	if audit == nil {
+		return
+	}
+	r.lanes.Start(ctx, auditLaneKey, func(ctx context.Context) publish.Result {
+		return publish.Result{Kind: publish.KindAudit, Value: audit(ctx)}
+	})
+}
+
+// auditDone 은 감사 결과를 반영한다 — 문서마다의 신호는 감사기가 이미 남겼고, 여기서는 대상 조회 실패를 ERROR
+// rewind_job_failed(job=audit) 한 줄로 남긴다. 재실행이면 다시 낸다.
+func (r *rewindLoop) auditDone(ctx context.Context, res publish.Result, rerun bool) {
+	if out, _ := res.Value.(publish.AuditOutcome); out.Err != nil {
+		r.pub.ReportJobError(ctx, out.Err, "job", "audit")
+	}
+	if rerun {
+		r.startAudit(ctx)
+	}
 }

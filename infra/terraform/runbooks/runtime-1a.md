@@ -814,7 +814,13 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     않습니다(`ledger_schema_pg_test` 의 재실행 무잠금 · 무교착 시험 — M6-0
     c5). 처음 적용이나 인덱스 · 열 · 제약 · 트리거가 빠진 DB 에서는 그것을
     만드는 동안 그 표를 잠그고, 그 표의 사이드카 · 앱 서버 질의는 파일
-    끝까지 기다립니다. 그래도 표준 오류에 `deadlock detected`(SQLSTATE
+    끝까지 기다립니다. 새 인덱스가 든 SHA 의 첫 재실행도 빠진 DB 와
+    같습니다. 예로 M6-3b 의 `stream_segments_uploaded_session_idx` 는
+    비동시 `CREATE INDEX` 라 `stream_segments` 를 SHARE 로 잡고 힙 전체를
+    훑는 동안 사이드카 INSERT · ③ 갱신을 막습니다(실측 300만 행 7.8초).
+    사이드카는 잠금 대기 5초 뒤 백오프로 넘어가 유실은 없습니다. 그런
+    재실행은 적용 직전 `stream_segments` 행 수를 기록에 한 줄 남깁니다.
+    그래도 표준 오류에 `deadlock detected`(SQLSTATE
     40P01) 줄이 있으면 그 파일만 롤백되므로(`psql -1`) 아래 「재실행
     걸음」 의 `lock timeout` 과 같이 끄고 다음 흐름을 4 부터 다시 합니다.
     다만 그런 DB 에서는 교착의 희생자가 사이드카 쪽일 수도 있고, 그때

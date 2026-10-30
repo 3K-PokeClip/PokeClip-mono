@@ -233,12 +233,13 @@ func (r *rewindLoop) reflectOutcome(s, session string, out publish.Outcome) {
 // settleGap 은 GAP 틱 job 의 결과 out 으로 사다리 사실을 갈아 끼운다(363 ⓐ · J26 · kty 결정 2026-09-29 — 「L2 가 서지
 // 못함」은 루프가 싣는 사실이다) — GAP 이 섰으면 겹침 창의 꼬리를 다음 계산의 prevTail 로 쓰고, DB 가 후보를 이미
 // uploaded 로 봤으면 비우며, 둘 다 없으면(서지 않음 — 준비 단계에서 끝난 틱도 든다 · 판단 J82) 그 후보를 다음 평가의
-// UnstoodGapSeq 로 싣는다.
+// UnstoodGapSeq 로 싣는다. GAP 이 선 결과는 L3 셈에도 넣는다(gap_run.go).
 func (r *rewindLoop) settleGap(rec *rewindStream, job *laneJob, out publish.Outcome) {
 	rec.unstoodGap = nil
 	switch {
 	case out.GapSeq != nil:
 		rec.prevTail = job.window.TailSeq
+		rec.gapRun = rec.gapRun.after(job.session, *out.GapSeq)
 	case out.UploadedSeq == nil:
 		k := *job.gap
 		rec.unstoodGap = &k
@@ -350,13 +351,17 @@ func (r *rewindLoop) forgetIdle(now time.Time) {
 // 부른다(조립의 run 이 defer 로). 차선 ctx 를 끊고(cancelLanes) → 떠 있는 작업 고루틴이 모두 끝나기를 기다린 뒤(Lanes.Wait) →
 // fence 를 반납한다(release — 운영은 publish.Publisher.Release). 순서가 계약이다: 기다리기 전에 반납하면 늦게 돈 작업의 문장이
 // 반납 뒤에 나간다. 반납은 ctx 의 취소를 떼어 낸 ctx 로 한다 — 종료 신호로 끝난 ctx 로 부르면 반납 문장이 나가지 않아 후임이
-// lease 끝까지 기다린다(시한은 Release 가 안에서 건다). 반납 오류를 돌려준다. lanes 와 release 는 함께 있거나 함께 없다 —
-// 발행 몫이 없으면(lanes nil) 끊기만 한다.
+// lease 끝까지 기다린다(시한은 Release 가 안에서 건다). 반납 오류를 돌려준다. 차선이 없으면 끊기만 한다. 발행 몫이 없으면
+// (release nil — 꺼짐 · 강등) 반납할 fence 가 없지만 차선은 있으므로(정산 몫 — M6-3b) 작업이 끝나기를 기다린다 — 풀이 닫히기
+// 전에 정산 문장이 끝나야 한다(D24).
 func stopPublishing(ctx context.Context, cancelLanes context.CancelFunc, lanes *publish.Lanes, release func(context.Context) error) error {
 	cancelLanes()
 	if lanes == nil {
 		return nil
 	}
 	lanes.Wait()
+	if release == nil {
+		return nil
+	}
 	return release(context.WithoutCancel(ctx))
 }

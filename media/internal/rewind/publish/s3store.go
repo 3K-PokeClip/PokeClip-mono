@@ -29,7 +29,7 @@ const (
 	manifestCacheControl = "public, max-age=1"
 	vodCacheControl      = "public, max-age=3600"
 
-	// vodKeyPrefix 는 VOD 문서 키의 접두다 — vodKey 가 만드는 키(vod/{streamID}/{head}/index.m3u8)의 첫 성분이다.
+	// vodKeyPrefix 는 VOD 문서 키의 접두다 — vodKey 가 이 접두로 키(vod/{streamID}/{head}/index.m3u8)를 만든다.
 	vodKeyPrefix = "vod/"
 )
 
@@ -42,13 +42,19 @@ func cacheControl(key string) string {
 	return manifestCacheControl
 }
 
-// getBodyLimit 은 key 에서 읽는 본문의 크기 상한이다 — VOD 문서 키면 rewind.MaxVODBodyBytes(설계 D29), 그 밖(되감기
-// 목록)은 rewind.MaxBodyBytes 다. 발행 전 검사 S5 가 종류마다 거는 상한과 같다.
+// dvrGetBodyLimit 는 되감기 목록 키에서 읽는 본문의 상한이다 — 발행 전 검사 S5 의 상한(rewind.MaxBodyBytes)보다 봉인 줄
+// (rewind.SealLineBytes — 15바이트)만큼 크다. 봉인(Endlist)은 S5 를 지난 열린 본문 끝에 ENDLIST 줄을 붙여 Validate 없이
+// 올리므로, 우리가 쓴 판이 S5 상한을 그만큼 넘을 수 있다(보안 ML2 L-C · kty 2026-10-29). 두 상한이 15바이트 다른 것은 이
+// 때문이다.
+const dvrGetBodyLimit = rewind.MaxBodyBytes + rewind.SealLineBytes
+
+// getBodyLimit 은 key 에서 읽는 본문의 크기 상한이다 — VOD 문서 키면 rewind.MaxVODBodyBytes(설계 D29 — 발행 전 검사 S5 의
+// VOD 상한과 같다), 그 밖(되감기 목록)은 dvrGetBodyLimit 다.
 func getBodyLimit(key string) int {
 	if strings.HasPrefix(key, vodKeyPrefix) {
 		return rewind.MaxVODBodyBytes
 	}
-	return rewind.MaxBodyBytes
+	return dvrGetBodyLimit
 }
 
 // S3Store 는 Store 의 S3 구현이다 — 버킷 하나에 쓰고 읽는다. upload.Putter(세그먼트 PUT — 조건 · 메타
@@ -121,8 +127,8 @@ func (s *S3Store) Head(ctx context.Context, key string) (Stat, error) {
 // Get 은 Store.Get 이다 — ETag 는 본문과 같은 GET 응답의 ETag 머리다. 200 인데 ETag 가 없으면 성공으로 보고하지
 // 않는다 — 읽은 본문에 조건을 걸 수 없다.
 //
-// 본문은 그 키 축의 상한(getBodyLimit — 발행 전 검사 S5 의 종류별 상한)까지만 읽는다 — 발행한 문서는 S5 를
-// 통과했으므로 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼 메모리를 잡는다. 넘으면
+// 본문은 그 키 축의 상한(getBodyLimit — 발행 전 검사 S5 의 종류별 상한 · 되감기 목록은 봉인 줄만큼 더)까지만 읽는다 —
+// 우리가 쓴 판은 그 안이므로 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼 메모리를 잡는다. 넘으면
 // errBodyOverLimit 를 감싼 오류다(감사가 바뀐 문서로 가른다).
 func (s *S3Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{

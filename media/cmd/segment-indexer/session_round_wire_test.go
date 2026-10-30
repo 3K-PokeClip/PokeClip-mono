@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
@@ -31,7 +32,7 @@ func TestSessionDeciderSplitsAtStopMarkPlusEightSeconds(t *testing.T) {
 		VALUES ('S-live', 'marked', $1, 'live', $1, 'S-live', $2)`, mark.Add(-time.Hour), mark); err != nil {
 		t.Fatalf("표식 live 픽스처 실패: %v", err)
 	}
-	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, c := range []struct {
 		off       time.Duration
 		wantOpens bool
@@ -63,7 +64,7 @@ func TestSessionDeciderOpenMapsLiveLostToContended(t *testing.T) {
 		VALUES ('S-x', 'lost', $1, 'live', $1, 'S-x')`, wireBase.Add(-time.Hour)); err != nil {
 		t.Fatalf("live 픽스처 실패: %v", err)
 	}
-	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("트랜잭션 시작 실패: %v", err)

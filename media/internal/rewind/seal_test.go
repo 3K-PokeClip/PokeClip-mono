@@ -43,6 +43,18 @@ func TestSealEndlistAppendsOneEndlistLine(t *testing.T) {
 	}
 }
 
+// SealLineBytes 는 봉인이 본문에 더하는 바이트 수 그대로다 — 봉인 판을 읽는 쪽(publish 의 Get 상한)이 이 값만큼 여유를
+// 둔다. 변이 = 상수를 14 로(줄바꿈 빠뜨림) → FAIL.
+func TestSealLineBytesIsWhatSealAppends(t *testing.T) {
+	golden := readGolden(t)
+
+	got, err := rewind.SealEndlist(golden)
+
+	if err != nil || len(got)-len(golden) != rewind.SealLineBytes {
+		t.Errorf("봉인이 더한 바이트 = %d(오류 %v), want SealLineBytes %d", len(got)-len(golden), err, rewind.SealLineBytes)
+	}
+}
+
 // 이미 닫힌 본문은 ErrAlreadySealed 다 — 호출자(설계 4.6.4 E2)가 「이미 닫힘 = 멱등 성공」으로 읽는다.
 // 두 번째 ENDLIST 를 붙이면 RFC 8216bis-22 4.4.3(Media Playlist 태그는 종류마다 하나)을 어긴다.
 // ENDLIST 는 본문 어디에나 올 수 있으므로(4.4.3.4) 끝 줄이 아니어도 닫힌 본문이다.

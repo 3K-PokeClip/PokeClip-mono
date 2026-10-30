@@ -220,3 +220,37 @@ func TestRoundPlaybackReadsSurfaceErrors(t *testing.T) {
 		t.Error("LoadPlaybackStates 가 끝난 ctx 에서 오류 없이 돌아왔다")
 	}
 }
+
+// 상태 전달 차선의 읽기는 시한을 스스로 건다(PR 461 r1 cx H1) — 차선이 주는 ctx 는 루프 수명이라, 풀 획득이나 응답이
+// 멎으면 동시 상한의 칸을 계속 쥐어 다른 스트림의 상태 전달이 멎는다. 풀을 한 연결로 줄여 그 연결을 쥔 채 부르면
+// TxnDeadline 근처에 오류로 돌아와야 한다. 변이 = 시한 제거 → 기한 안에 돌아오지 않아 FAIL.
+func TestLoadStreamPlaybackBoundsStalledPoolByTxnDeadline(t *testing.T) {
+	base := newTestPool(t)
+	cfg := base.Config()
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	held, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(held.Release)
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, _, err := LoadStreamPlayback(context.Background(), pool, "stalled")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if took := time.Since(start); err == nil || took < TxnDeadline-time.Second {
+			t.Errorf("LoadStreamPlayback = %v (%v), want TxnDeadline(%v) 근처의 오류", err, took, TxnDeadline)
+		}
+	case <-time.After(TxnDeadline + 3*time.Second):
+		t.Fatalf("LoadStreamPlayback 이 %v 안에 돌아오지 않았다 — 풀 획득에 시한이 없다", TxnDeadline+3*time.Second)
+	}
+}

@@ -385,11 +385,11 @@ func TestS3StoreHead(t *testing.T) {
 }
 
 // Get 은 GET 요청 하나로 본문과 그 응답의 ETag 를 읽는다. 키 부재(404 NoSuchKey)는 ErrNotFound, 버킷 부재는 설정
-// 결함이라 ErrNotFound 가 아니다. 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 상한)까지 받는다 — 상한 크기는 읽고,
-// 한 바이트라도 넘으면 센티널이 아닌 오류다. 200 인데 ETag 가 없으면 오류다 — 읽은 본문에 조건을 걸 수 없다.
+// 결함이라 ErrNotFound 가 아니다. 되감기 목록 본문은 dvrGetBodyLimit(발행 전 검사 S5 의 상한 + 봉인 줄)까지 받는다 —
+// 상한 크기는 읽고, 한 바이트라도 넘으면 센티널이 아닌 오류다. 200 인데 ETag 가 없으면 오류다 — 읽은 본문에 조건을 걸 수 없다.
 func TestS3StoreGet(t *testing.T) {
-	atLimit := bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes)
-	overLimit := bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)
+	atLimit := bytes.Repeat([]byte{'x'}, dvrGetBodyLimit)
+	overLimit := bytes.Repeat([]byte{'x'}, dvrGetBodyLimit+1)
 	cases := []struct {
 		name         string
 		respond      http.HandlerFunc
@@ -439,7 +439,7 @@ func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
 	release := make(chan struct{})
 	store, _ := newStubbedStore(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("ETag", `"e1"`)
-		_, _ = w.Write(bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1))
+		_, _ = w.Write(bytes.Repeat([]byte{'x'}, dvrGetBodyLimit+1))
 		w.(http.Flusher).Flush()
 		<-release
 	})
@@ -462,7 +462,7 @@ func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
 }
 
 // Get 의 본문 상한은 키 축으로 갈린다 — VOD 문서 키는 rewind.MaxVODBodyBytes(설계 D29), 그 밖(되감기 목록)은
-// rewind.MaxBodyBytes 다. 상한 초과는 errBodyOverLimit 다 — 우리가 쓴 판일 수 없어 감사가 mismatch 로 가른다
+// rewind.MaxBodyBytes 에 봉인 줄(rewind.SealLineBytes)을 더한 값이다 — S5 를 지난 열린 본문을 봉인한 판까지 읽는다. 상한 초과는 errBodyOverLimit 다 — 우리가 쓴 판일 수 없어 감사가 mismatch 로 가른다
 // (보안 M-1). 목록 상한을 VOD 에 쓰면 512KiB 넘는 VOD 의 변조가 읽기 실패로 묻힌다.
 func TestS3StoreGetLimitByAxis(t *testing.T) {
 	dvr, err := manifestKey("demo", "sess-1")
@@ -479,8 +479,9 @@ func TestS3StoreGetLimitByAxis(t *testing.T) {
 		size    int
 		wantErr bool
 	}{
-		{name: "DVR_상한", key: dvr, size: rewind.MaxBodyBytes},
-		{name: "DVR_초과", key: dvr, size: rewind.MaxBodyBytes + 1, wantErr: true},
+		{name: "DVR_S5_상한", key: dvr, size: rewind.MaxBodyBytes},
+		{name: "DVR_봉인판_상한", key: dvr, size: rewind.MaxBodyBytes + rewind.SealLineBytes},
+		{name: "DVR_초과", key: dvr, size: rewind.MaxBodyBytes + rewind.SealLineBytes + 1, wantErr: true},
 		{name: "VOD_목록_상한_초과", key: vod, size: rewind.MaxBodyBytes + 1},
 		{name: "VOD_상한", key: vod, size: rewind.MaxVODBodyBytes},
 		{name: "VOD_초과", key: vod, size: rewind.MaxVODBodyBytes + 1, wantErr: true},

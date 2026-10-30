@@ -60,7 +60,8 @@ type endSignalDeps struct {
 // newEndSignalReceiver 는 운영 수치와 자기 계수기 둘로 수신부를 만든다. 계수기는 이 수신부만의 것이라 청소 고루틴 없이
 // 칸 상한(DefaultLimiterCells)으로만 묶인다. 같은 까닭으로 계수기의 log 는 nil 이다(cc M1) — control_rate_limited
 // 게이지의 내림 줄은 청소 · 칸 축출만 쓰는데 여기엔 청소가 없고 전체 계수기는 칸 하나라 축출도 없어, 한 번 세우면 1 로
-// 남는다. 초과는 수신부의 end_signal 줄(rate_key · rate_global)이 센다.
+// 남는다. 초과는 수신부 자신의 줄이 센다 — 키당은 요청마다 end_signal reason=rate_key, 전체는 0 단계라 묶음 줄
+// end_signal_shed reason=rate_global count=… 이다.
 func newEndSignalReceiver(d endSignalDeps) (*endsignal.Receiver, error) {
 	now := d.now
 	if now == nil {

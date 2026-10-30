@@ -10,6 +10,11 @@ import (
 // 조각이 붙지 않고, 갱신 의무(1.5 × TARGETDURATION 안에 새 조각)도 사라진다.
 const endlistLine = "#EXT-X-ENDLIST"
 
+// SealLineBytes 는 SealEndlist 가 본문 끝에 더하는 바이트 수다(ENDLIST 줄과 줄바꿈 — 15). 봉인은 Validate 를 타지 않으므로
+// 발행 전 검사 S5 상한(MaxBodyBytes)을 지난 열린 본문의 봉인 판은 상한을 이만큼 넘을 수 있다 — 저장소에서 목록을 읽는
+// 쪽(publish 의 Get 상한)이 이만큼 여유를 둔다.
+const SealLineBytes = len(endlistLine) + 1
+
 // ErrAlreadySealed 는 SealEndlist 에 이미 닫힌 본문이 왔다는 뜻이다. 호출자(설계 4.6.4 E2)는 이를
 // 「이미 닫힘 — 멱등 성공(메타 terminal 만 맞춘다)」으로 읽는다.
 var ErrAlreadySealed = errors.New("rewind: 이미 닫힌 목록이다")

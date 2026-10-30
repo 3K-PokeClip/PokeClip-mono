@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -25,8 +26,8 @@ import (
 )
 
 // assemblePublishing 은 r 에 되감기 발행 몫을 채우고 발행자 풀을 돌려준다 — run 이 업로더 기동(up.Start) 앞에서 한 번 부르고 풀을
-// 닫는다(종료 순서의 「발행자 풀 Close」). 발행 몫이 없으면 nil 이고 r 은 4.1 종료 전이만 돈다(캐시 nil · 차선 nil · 완료 case nil
-// 채널 — 루프 보조 타입의 「발행 몫 없음」).
+// 닫는다(종료 순서의 「발행자 풀 Close」). 발행 몫이 없으면 nil 이고 r 의 발행 몫(캐시 · 발행자 · 작업 몸체)은 비어 있다. 차선은
+// run 이 조립 밖에서 채우므로 그때도 정산 · 상태 전달 차선과 완료 case 는 돈다(M6 3.2 — 루프 보조 타입의 「발행 몫 없음」).
 //
 //	S3_BUCKET 이 빔  조립하지 않는다 · INFO rewind_publish_disabled(판단 J69 — 팀 공용 compose 의 기본 형상)
 //	조립 실패        발행 몫 전체를 버린다 · ERROR rewind_publish_degraded(판단 J77 · ADR-063 결정 1 — 업로드 · 인덱싱은 그대로).
@@ -43,11 +44,7 @@ func assemblePublishing(ctx context.Context, cfg config.Config, db *pgxpool.Conf
 		r.log.Info("rewind_publish_disabled", "note", "S3_BUCKET 미설정 — 되감기 목록을 발행하지 않는다. 4.1 종료 전이는 그대로 돈다")
 		return nil
 	}
-	opt := publish.DefaultOptions(newWriterToken(), cfg.RewindPublicBaseURL)
-	opt.Log = r.log
-	// SEED_ALARM_AFTER 는 재스캔 주기의 두 배 이상이어야 한다(점멸 방지 — 판단 J85 ⑵ · ArmFallback 산식 선례). 재스캔 주기는 env 로
-	// 바뀌고 설계값(10분)은 기본 재스캔 5분의 두 배다.
-	opt.SeedAlarmAfter = max(opt.SeedAlarmAfter, 2*cfg.Watcher.RescanEvery)
+	opt := publishOptions(cfg, r.log)
 	pub, pool, endpoint, err := newPublisher(ctx, cfg, db, opt)
 	if err != nil {
 		r.log.Error("rewind_publish_degraded", "bucket", cfg.S3.Bucket, "region", cfg.S3.Region,
@@ -59,13 +56,28 @@ func assemblePublishing(ctx context.Context, cfg config.Config, db *pgxpool.Conf
 	r.ix.SetRewindCache(c)
 	up.AttachDirty()
 	dirty := up.Dirty()
-	r.cache, r.pub, r.lanes = c, pub, publish.NewLanes()
-	r.work = laneWork{tick: pub.Tick, renew: pub.RenewFence, load: pub.LoadLedger, watch: pub.Watch}
+	r.cache, r.pub = c, pub // 차선은 run 이 조립 밖에서 채운다(M6 3.2 — 꺼짐 · 강등에서도 정산 차선이 돈다)
+	r.work = laneWork{tick: pub.Tick, renew: pub.RenewFence, load: pub.LoadLedger, watch: pub.Watch, seal: pub.Endlist,
+		audit: publish.NewFrozenAuditor(pub).Audit}
 	r.peekDirty, r.ackDirty = dirty.Peek, dirty.Ack
 	r.expedite, r.forgetSession = up.Expedite, up.ForgetSession
 	r.reconnectWindow, r.watchEvery, r.holdEvery = cfg.ReconnectWindow, cfg.RewindWatchEvery, cfg.Indexer.HoldTick
 	r.lazyRenewAfter = opt.LazyRenewAfter
 	return pool
+}
+
+// publishOptions 는 발행자 설정이다 — 설계값(publish.DefaultOptions)에 설정에서 오는 것을 얹는다.
+func publishOptions(cfg config.Config, log *slog.Logger) publish.Options {
+	opt := publish.DefaultOptions(newWriterToken(), cfg.RewindPublicBaseURL)
+	opt.Log = log
+	// SEED_ALARM_AFTER 는 재스캔 주기의 두 배 이상이어야 한다(점멸 방지 — 판단 J85 ⑵ · ArmFallback 산식 선례). 재스캔 주기는 env 로
+	// 바뀌고 설계값(10분)은 기본 재스캔 5분의 두 배다.
+	opt.SeedAlarmAfter = max(opt.SeedAlarmAfter, 2*cfg.Watcher.RescanEvery)
+	// L2′ 봉인 문턱은 스위치가 켜질 때만 D_act 다(REWIND_STALL_SEAL — kty K5 기본 끔). 0 이면 사다리가 봉인을 내지 않는다.
+	if cfg.RewindStallSeal {
+		opt.StallSealAfter = opt.DAct()
+	}
+	return opt
 }
 
 // newPublisher 는 opt 로 도는 발행자와 그 풀을 만든다(판단 J76 · J77) — S3 클라이언트(업로더와 따로) → https 검사(실효
@@ -90,8 +102,11 @@ func newPublisher(ctx context.Context, cfg config.Config, db *pgxpool.Config, op
 		return nil, nil, endpoint, err
 	}
 	// 발행자 풀은 인덱서 풀과 따로다(판단 J76) — 문장마다 락을 최대 10초 기다리는 동안 연결을 잡으므로 인덱싱 · 4.1 전이와 연결을
-	// 다투지 않게 한다. pgx 기본값(MaxConns · Deadline 처리기 · CancelRequest)은 그대로다 — 되돌림 뒤 잠금 해제가 거기에 기댄다.
-	pool, err := pgxpool.NewWithConfig(ctx, db)
+	// 다투지 않게 한다. 상한은 설정값이다(kty 결정 C2 — 기본 4). pgx 의 나머지 기본값(Deadline 처리기 · CancelRequest)은 그대로다
+	// — 되돌림 뒤 잠금 해제가 거기에 기댄다. 원본 db 는 고치지 않는다.
+	pc := db.Copy()
+	pc.MaxConns = cfg.RewindPublishPoolMaxConns
+	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, nil, endpoint, fmt.Errorf("발행자 DB 연결 풀 생성 실패: %w", err)
 	}
@@ -191,7 +206,8 @@ func newWriterToken() string {
 
 // stop 은 루프가 돌아온 뒤 발행 몫을 멈춘다 — run 이 발행자 풀 Close 보다 뒤에 defer 로 등록한다(LIFO 라 먼저 돈다). 차선 ctx 를
 // 끊고 · 떠 있는 작업을 기다린 뒤 · fence 를 반납한다(stopPublishing). 반납이 실패하면 ERROR rewind_fence_release_failed 한 줄을
-// 남긴다 — 후임 writer 는 lease 가 끝날 때까지 그 회차 목록을 쓰지 못한다. 발행 몫이 없으면 끊기만 한다.
+// 남긴다 — 후임 writer 는 lease 가 끝날 때까지 그 회차 목록을 쓰지 못한다. 발행 몫이 없으면 반납할 fence 가 없어 차선을 끊고
+// 떠 있는 정산 작업이 끝나기를 기다리기만 한다(D24 — 풀이 닫히기 전에 정산 문장이 끝난다).
 func (r *rewindLoop) stop(ctx context.Context, cancelLanes context.CancelFunc) {
 	var release func(context.Context) error
 	if r.publishing() {

@@ -20,10 +20,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
+
+// offlineClose 는 종료 전이의 회차 닫힘 시한이다(운영 값 — 재접속 창 300초 · 닫힘 여유 60초). 이 시험의 회차에는 표식이 없어
+// 회차 닫힘을 평가하지 않는다.
+var offlineClose = index.CloseOptions{Window: 300 * time.Second, Slack: 60 * time.Second}
 
 // offlinePG 는 4.1 전이의 PG 픽스처다 — 국면 픽스처(실물 세션 결정자 · 장부 · 키 파생) 위에 여유(IdleTimeout)만 운영
 // 기본값 10초로 되돌린 인덱서를 세운다(판정 경계를 판정 층 시험과 같은 수치로 읽으려고).
@@ -127,7 +133,7 @@ func (f *offlinePG) step(now time.Time) (ended []string) {
 		fired = &res
 	}
 	for _, s := range due {
-		id, err := index.EndLive(context.Background(), f.pool, s)
+		id, err := index.EndLive(context.Background(), f.pool, s, offlineClose, func(context.Context, pgx.Tx, string) error { return nil })
 		if err != nil {
 			f.t.Fatalf("EndLive(%s) 실패: %v", s, err)
 		}

@@ -600,7 +600,7 @@ func TestConsecutiveBroadcastsOpenSeparateSessionsAfterEndLive(t *testing.T) {
 	if first.SessionID == nil {
 		t.Fatal("첫 방송이 회차에 귀속되지 않았다 — 준비가 어긋났다")
 	}
-	ended, err := EndLive(ctx, pool, stream)
+	ended, err := EndLive(ctx, pool, stream, testClose, noopEnqueue)
 	if err != nil || ended != *first.SessionID {
 		t.Fatalf("EndLive = (%q, %v), want (%q, nil)", ended, err, *first.SessionID)
 	}
