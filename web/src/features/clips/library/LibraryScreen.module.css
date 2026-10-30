@@ -303,6 +303,8 @@
   gap: calc(16 * var(--pc-u));
   overflow-x: hidden;
   overflow-y: auto;
+  /* 바닥 단추 줄(.dock)이 가장 높을 때만큼 비워 둔다 — 브라우저는 sticky 줄을 몰라 포커스 받은 요소를 줄 뒤에 세운다 */
+  scroll-padding-bottom: calc(120 * var(--pc-u));
   transform: translateX(calc(40 * var(--pc-u)));
   opacity: 0;
   transition:
