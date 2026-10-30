@@ -746,19 +746,19 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(inside.getByRole('textbox')).toHaveAttribute('readonly');
   });
 
-  it('확인 필요는 다시 올리기를 막고, 진행 카드가 채널을 보라고 하며 결과 단추는 그 카드 바로 아래에 선다(POK-509)', () => {
+  it('확인 필요는 다시 올리기를 막고, 진행 카드가 채널을 보라고 하며 결과 단추는 그 카드 안 설명 바로 아래에 선다(POK-509)', () => {
     show(serverClip('checking', { ...rendered, upload: checkingUpload }));
     const inside = within(panel());
     const card = inside.getByRole('region', { name: '진행 상황' });
     expect(currentStep()).toHaveTextContent('확인 필요');
-    expect(
-      within(card).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
-    ).toBeInTheDocument();
-    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 밖, 카드 바로 뒤 · 원본 방송 앞(바닥 단추 줄이 아니다)
+    const explained = within(card).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/);
+    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 안, 설명 뒤 · 원본 방송 앞(바닥 단추 줄이 아니다)
     const resolved = inside.getByRole('button', { name: '채널에 올라갔어요' });
     expect(resolved).toBeEnabled();
-    expect(card.contains(resolved)).toBe(false);
-    expect(card.compareDocumentPosition(resolved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(card.contains(resolved)).toBe(true);
+    expect(
+      explained.compareDocumentPosition(resolved) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     const source = inside.getByRole('region', { name: '원본 방송' });
     expect(
       resolved.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING,

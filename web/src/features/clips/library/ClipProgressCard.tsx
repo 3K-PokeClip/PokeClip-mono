@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { ClipStepList, stepsSettled } from '@/features/clips/editor/ClipStepList';
 import type { LibraryStepView } from './libraryView';
@@ -8,17 +8,20 @@ import styles from './LibraryScreen.module.css';
 
 // 상세 패널 진행 카드(POK-510 시안 A, 2026-10-30 사용자 선택) — 미리보기 바로 아래. 예전에는 배지 · 꺼진 단추 · 회색 상자가
 // 「유튜브에 올리는 중」을 세 번 말하고, 어디까지 왔는지 · 언제 시작했는지가 없었다. 편집기 작은 창과 같은 세로 단계(대기 → 영상
-// 만들기 → 유튜브 올리기)에 시각을 달고, 진행에 딸린 말(공개 범위 안내)을 이 카드 하나에 모은다. 할 일 단추는 카드
-// 밖이다: 확인 필요 풀기는 카드 바로 아래, 그 밖의 주 동작은 패널 단추 줄.
+// 만들기 → 유튜브 올리기)에 시각을 달고, 진행에 딸린 말(공개 범위 안내)을 이 카드 하나에 모은다. 확인 필요 풀기 단추는 그
+// 설명 바로 아래, 카드 안에 선다(2026-10-30 사용자 요청). 그 밖의 주 동작은 패널 단추 줄이다.
 // 다 끝나면(2026-10-30 사용자 요청) 단계와 설명을 접어 두고 머리 한 줄만 남긴다. 실패 · 확인 필요는 볼 일이 있어 접지 않는다.
 
 export function ClipProgressCard({
   step,
   privacyNote,
+  children,
 }: {
   step: LibraryStepView;
   /** 공개 범위 안내(privacyNoteText). 다 끝났으면(업로드됨) 이것이 곧 설명이다 */
   privacyNote: string | null;
+  /** 지금 단계에서 사람이 할 일(확인 필요 풀기). 단계 설명 바로 아래에 선다 */
+  children?: ReactNode;
 }) {
   const headId = useId();
   const stepsId = useId();
@@ -59,6 +62,7 @@ export function ClipProgressCard({
           {settled ? <p className={styles.progressDetail}>{privacyNote ?? step.detail}</p> : null}
         </div>
       ) : null}
+      {children ? <div className={styles.progressActions}>{children}</div> : null}
       {!settled && privacyNote ? <p className={styles.progressFoot}>{privacyNote}</p> : null}
     </section>
   );

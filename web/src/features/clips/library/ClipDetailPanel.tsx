@@ -199,16 +199,20 @@ export function ClipDetailPanel({
       </div>
 
       {/* 패널은 편집본을 바꿔도 내려가지 않는다: 접힘은 편집본마다 처음부터라 편집본 번호를 열쇠로 쓴다 */}
-      {step ? <ClipProgressCard key={clip.id} step={step} privacyNote={privacyNote} /> : null}
-      {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만. 진행 카드가 「아래 단추로 알려 주세요」라고 하는
-          바로 그 아래에 둔다(2026-10-30 사용자 선택) — 바닥 줄에 두면 설명과 단추가 멀어진다. 확인 필요면 진행 카드가 늘 선다.
-          업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다(PR #261 codex) */}
-      {checkingUpload && onResolveUpload ? (
-        <UploadResolutionControls
-          key={checkingUpload.id}
-          busy={sending}
-          onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
-        />
+      {step ? (
+        <ClipProgressCard key={clip.id} step={step} privacyNote={privacyNote}>
+          {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만. 진행 카드가 「아래 단추로 알려 주세요」라고
+              하는 바로 그 아래, 카드 안에 둔다(2026-10-30 사용자 요청) — 바닥 줄에 두면 설명과 단추가 멀어진다. 확인 필요면 진행
+              카드가 늘 선다. 업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다
+              (PR #261 codex) */}
+          {checkingUpload && onResolveUpload ? (
+            <UploadResolutionControls
+              key={checkingUpload.id}
+              busy={sending}
+              onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
+            />
+          ) : null}
+        </ClipProgressCard>
       ) : null}
 
       <div className={styles.notes}>
@@ -259,7 +263,7 @@ export function ClipDetailPanel({
 
       {/* 바닥에 붙는 단추 줄(POK-509, 2026-10-30 사용자 선택) — 주 동작(업로드 · 다시 시도 · 렌더 재시도 · 유튜브 보기)과 이어서 편집 ·
           다운로드 · 삭제. 위 내용만 스크롤되어 진행 카드 · 원본 방송이 길어도 할 일이 화면 밖으로 밀리지 않는다. 확인 필요 결과 단추는
-          설명 바로 아래(진행 카드 밑)에 따로 선다 */}
+          설명 바로 아래(진행 카드 안)에 따로 선다 */}
       <div className={styles.dock} ref={actionsRef}>
         {/* 서버 일이 도는 동안의 꺼진 단추(「유튜브에 올리는 중」)는 진행 카드가 같은 말을 하므로 그리지 않는다(POK-510).
             진행 카드가 없는 목업 줄은 예전처럼 꺼진 단추로 상태를 말한다 */}
