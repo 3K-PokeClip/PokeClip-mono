@@ -321,8 +321,15 @@ export function useRecordedPlayback(
     }, [videoRef]),
     setVolume: useCallback(
       (value: number) => {
-        setVolumeState(value);
-        if (videoRef.current) videoRef.current.volume = Math.min(1, Math.max(0, value / 100));
+        const video = videoRef.current;
+        const v = Math.min(100, Math.max(0, Math.round(value)));
+        setVolumeState(v);
+        if (video) video.volume = v / 100;
+        // 음량을 올리면 음소거도 푼다: 슬라이더는 음소거 중 늘 0이라 안 풀면 끌어도 0으로 되돌아가고 소리도 안 난다(POK-516)
+        if (v > 0) {
+          setMuted(false);
+          if (video) video.muted = false;
+        }
       },
       [videoRef],
     ),

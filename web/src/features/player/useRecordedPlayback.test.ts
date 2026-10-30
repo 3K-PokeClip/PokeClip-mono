@@ -316,6 +316,58 @@ describe('useRecordedPlayback — 남은 재생기 결함(POK-253)', () => {
     expect(video.volume).toBeCloseTo(0.7);
   });
 
+  it('음소거 뒤 음량을 올리면 소리가 돌아온다 — 전에는 끌어도 0으로 되돌아갔다. 영상은 다시 받지 않는다(POK-516)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    const before = video.src;
+    expect(result.current.muted).toBe(true);
+
+    act(() => result.current.setVolume(30));
+
+    expect(result.current.muted).toBe(false);
+    expect(video.muted).toBe(false);
+    expect(result.current.volume).toBe(30);
+    expect(video.volume).toBeCloseTo(0.3);
+    expect(video.src).toBe(before);
+  });
+
+  it('음량을 0으로 내리면 음소거를 풀지 않는다(POK-516)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+
+    act(() => result.current.setVolume(0));
+
+    expect(result.current.muted).toBe(true);
+    expect(video.muted).toBe(true);
+    expect(result.current.volume).toBe(0);
+  });
+
+  it('음소거를 푼 음량은 다음 구간 줄기에도 이어진다(POK-516)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([
+      [0, 14],
+      [24, 14],
+    ]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    act(() => result.current.setVolume(30));
+    const before = video.src;
+
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    expect(video.src).not.toBe(before);
+    expect(video.muted).toBe(false);
+    expect(video.volume).toBeCloseTo(0.3);
+  });
+
   it('화질·저지연 설정 메뉴를 안 보인다 — 렌디션이 하나라 거짓 선택지다', () => {
     const { video } = fakeVideo();
     // 화면처럼 같은 ref를 넘긴다: 다시 그릴 때마다 새 ref면 줄기를 다시 붙여(효과 의존성) 한 번만 다시 붙이는지를 못 잰다
