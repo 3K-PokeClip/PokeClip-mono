@@ -41,6 +41,7 @@ export function UploadResolutionControls({
         <Button
           variant="outline"
           size="sm"
+          fullWidth
           disabled={busy}
           aria-label={`채널에 올라갔어요${suffix}`}
           onClick={() => setAsking('uploaded')}
@@ -50,6 +51,7 @@ export function UploadResolutionControls({
         <Button
           variant="ghost"
           size="sm"
+          fullWidth
           disabled={busy}
           aria-label={`안 올라갔어요${suffix}`}
           onClick={() => setAsking('not_uploaded')}
