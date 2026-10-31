@@ -176,6 +176,30 @@ describe('ending-wait 국면', () => {
     }
   });
 
+  it('rewind 기원은 끝에 닿기 전에 다른 방송을 봐도 「새 방송 보기」를 내밀지 않는다 — 끝 도달 뒤 폴링이 낸다(live 기원은 그대로)', () => {
+    // 되감기 중 다른 회차는 끝까지 두고, 끝에 닿은 뒤 버튼 규칙이 제안한다(kty K1
+    // 확장 (가)). ENDLIST 가 끝 도달보다 먼저 와 끝남 대기(atEnd:false)에 든 두
+    // 순서 — 다른 방송을 먼저 봄 · ENDLIST 를 먼저 봄
+    const other = () => streamPoll(liveReady(B1, NOW + MIN, NOW + 2 * MIN), X_B);
+    const orders: Array<() => Array<[SessionEvent, number?]>> = [
+      () => [[other()], [{ type: 'endlist' }], [other()]],
+      () => [[{ type: 'endlist' }], [other()]],
+    ];
+    for (const order of orders) {
+      const watching = run(rewindAt(T0 + 20 * MIN), order()).state;
+      expect(watching.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: false });
+      expect(watching.offer).toBeNull();
+      expect(sessionView(watching, NOW).actions).toEqual(['record']);
+      const ended = run(watching, [[{ type: 'end-reached' }], [other()]]).state;
+      expect(ended.offer).toEqual({ kind: 'new-broadcast', goTo: 'r-B' });
+      expect(sessionView(ended, NOW).actions).toEqual(['record', 'new-broadcast']);
+    }
+    // live 기원은 develop 그대로 — 끝에 닿기 전(ENDLIST)에도 띠에 낸다
+    const live = run(liveWithEntry(), [[{ type: 'endlist' }], [other()]]).state;
+    expect(live.phase).toMatchObject({ kind: 'ending-wait', origin: 'live', atEnd: false });
+    expect(live.offer).toEqual({ kind: 'new-broadcast', goTo: 'r-B' });
+  });
+
   it('rewind 기원: X 를 모르면(모름 · 빈 값 · 답 없음) 잇지 않고 제안 없이 기다린다 — 이 회차라는 답이 오면 잇는다', () => {
     const atEnd = run(rewindAt(NOW - 5_000), [[{ type: 'end-reached' }]]).state;
     const covering = liveReady(A2, T0, NOW + 30_000);
