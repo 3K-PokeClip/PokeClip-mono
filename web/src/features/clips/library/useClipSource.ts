@@ -22,9 +22,11 @@ export function useClipSource(
 ): {
   /** 목업 줄(서버 줄이 없다)이거나 첫 답을 기다리는 중이면 null */
   source: ClipSource | null;
-  /** 장면 위치를 재는 기준점(sceneBaseMs). source와 같이 null이다 — 방송 줄의 기준점이 오면 장면 위치가 바뀌어 튄다 */
+  /** 장면 위치를 재는 기준점(sceneBaseMs). 방송 줄에만 달려 있어 시점별 기록을 기다리지 않는다 */
   baseMs: number | null;
-  /** 첫 답을 기다리는 중 — 그동안 제목 · 카테고리 · 장면 위치 자리는 자리표시다(대신 쓴 값이 바뀌며 튀지 않게) */
+  /** 방송 줄의 첫 답을 기다리는 중 — 그동안 장면 위치 자리는 자리표시다 */
+  basePending: boolean;
+  /** 첫 답을 기다리는 중 — 그동안 제목 · 카테고리 자리는 자리표시다(대신 쓴 값이 바뀌며 튀지 않게) */
   pending: boolean;
 } {
   const streamId = entry?.streamId ?? '';
@@ -45,15 +47,13 @@ export function useClipSource(
   // 연 채 뒤에 만든 편집본을 골라도 옛 끝 구간의 제목 · 카테고리를 쓰지 않고, 끝나면 끝까지 담긴 기록을 한 번 더 읽는다
   const timeline = useBroadcastTimelineQuery(streamId, live ? 'live' : 'ended', active);
 
-  if (entry === undefined) return { source: null, baseMs: null, pending: false };
+  if (entry === undefined)
+    return { source: null, baseMs: null, basePending: false, pending: false };
+  const broadcastRow = row.data ?? null;
+  const base = { baseMs: sceneBaseMs(broadcastRow), basePending: row.isPending };
   // 둘 다 올 때까지 값을 내지 않는다: 방송 줄이 없으면 대표 플랫폼을 몰라, 동시 송출 방송에서 다른 플랫폼 값이 잠깐 떴다가 바뀐다
-  if (row.isPending || timeline.isPending) return { source: null, baseMs: null, pending: true };
+  if (row.isPending || timeline.isPending) return { source: null, ...base, pending: true };
   // 구간 목록이 없는 답은 못 읽은 것으로 본다 — 그대로 넘기면 구간을 고르다 패널이 통째로 깨진다
   const segmented = Array.isArray(timeline.data?.segments) ? timeline.data : undefined;
-  const broadcastRow = row.data ?? null;
-  return {
-    source: clipSourceOf(entry, broadcastRow, segmented),
-    baseMs: sceneBaseMs(entry, broadcastRow),
-    pending: false,
-  };
+  return { source: clipSourceOf(entry, broadcastRow, segmented), ...base, pending: false };
 }

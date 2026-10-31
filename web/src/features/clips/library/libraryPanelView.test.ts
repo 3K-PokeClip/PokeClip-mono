@@ -312,20 +312,16 @@ describe('clipSourceOf — 원본 방송의 제목 · 카테고리는 그 장면
 });
 
 describe('sceneBaseMs — 장면 위치를 재는 기준점', () => {
-  it('방송 줄의 기준점, 없으면 시작 시각, 방송 줄을 못 읽었으면 보관함 줄의 시작 시각', () => {
-    expect(
-      sceneBaseMs(entry('rendered'), row({ timelineOriginAt: '2026-10-17T19:53:00+09:00' })),
-    ).toBe(Date.parse('2026-10-17T19:53:00+09:00'));
-    expect(sceneBaseMs(entry('rendered'), row())).toBe(BASE);
-    expect(sceneBaseMs(entry('rendered'), null)).toBe(BASE);
+  it('서버의 시각 기준점이다', () => {
+    expect(sceneBaseMs(row({ timelineOriginAt: '2026-10-17T19:53:00+09:00' }))).toBe(
+      Date.parse('2026-10-17T19:53:00+09:00'),
+    );
   });
 
-  it('시각을 모르면 null', () => {
-    const noStart = entry('rendered', video(), {
-      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
-    });
-    expect(sceneBaseMs(noStart, null)).toBeNull();
-    expect(sceneBaseMs(noStart, row({ startedAt: null, timelineOriginAt: null }))).toBeNull();
+  it('기준점이 없으면 방송 시작 시각으로 대신 재지 않고 null이다 — 수십 초 어긋난 값을 지어내지 않는다(PR #462 6차 리뷰)', () => {
+    expect(sceneBaseMs(row({ timelineOriginAt: null }))).toBeNull();
+    expect(sceneBaseMs(row())).toBeNull();
+    expect(sceneBaseMs(null)).toBeNull();
   });
 });
 
@@ -342,6 +338,13 @@ describe('원본 방송 카드 표기', () => {
   it('장면 위치 — 절대 시각인 구간에서 기준점을 뺀 시계(PR #462 5차 리뷰)', () => {
     expect(sceneLabel(CUT, BASE)).toBe('1:23:45 ~ 1:24:30');
     expect(sceneLabel(EARLY_CUT, BASE)).toBe('10:00 ~ 10:30');
+  });
+
+  it('구간이 기준점보다 앞서면 「0:00 ~ 0:00」을 지어내지 않고 null이다(PR #462 6차 리뷰)', () => {
+    expect(sceneLabel(EARLY_CUT, EARLY_CUT.outAtMs + 1_000)).toBeNull();
+    expect(sceneLabel(EARLY_CUT, EARLY_CUT.inAtMs + 1)).toBeNull();
+    // 기준점과 딱 맞게 시작한 장면은 0초다
+    expect(sceneLabel(EARLY_CUT, EARLY_CUT.inAtMs)).toBe('0:00 ~ 0:30');
   });
 
   it('원본 방송으로 가는 길 — 방송 중이면 라이브, 끝났으면 지난 방송, 원본이 만료됐으면 없다', () => {

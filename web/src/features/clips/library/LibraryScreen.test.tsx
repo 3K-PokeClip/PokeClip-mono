@@ -1589,6 +1589,7 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     startedAt: entry.broadcast.startedAt,
     endedAt: entry.broadcast.endedAt,
     vodExpiresAt: entry.broadcast.vodExpiresAt,
+    timelineOriginAt: entry.broadcast.startedAt,
     title: '마지막 제목',
     category: '마지막 카테고리',
     platform: 'CHZZK',
@@ -1669,10 +1670,46 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
 
     expect(await card.findByText('10월 17일 방송')).toBeInTheDocument();
     expect(card.queryByText(/치지직|SOOP/)).toBeNull();
-    // 보관함 줄에 있는 방송일 · 장면은 그대로 보인다
+    // 보관함 줄에 있는 방송일은 그대로 보인다. 장면 위치는 기준점을 몰라 안 보인다
     expect(card.getByText('10월 17일 (토) 19:52 · 2시간 14분')).toBeInTheDocument();
-    expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+    expect(card.queryByText(/~/)).toBeNull();
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+  });
+
+  it('방송 줄에 기준점이 없으면 장면 위치를 안 보이고 나머지 카드는 그대로다(PR #462 6차 리뷰)', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, {
+          broadcasts: [{ ...broadcastRow, timelineOriginAt: null }],
+          nextCursor: null,
+        });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    expect(card.queryByText(/장면/)).toBeNull();
+    expect(card.getByRole('link', { name: '지난 방송 열기' })).toBeInTheDocument();
+  });
+
+  it('방송 줄만 왔으면 시점별 기록을 기다리지 않고 장면 위치를 보인다(PR #462 6차 리뷰)', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      return new Promise<Response>(() => {});
+    });
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+    expect(card.queryByText('[롤] 다이아 승급전')).toBeNull();
   });
 
   it('두 답이 다 오기 전에는 카테고리 · 포스터를 그리지 않는다 — 동시 송출에서 다른 플랫폼 값이 잠깐 뜨지 않는다(PR #462 1차 리뷰)', async () => {

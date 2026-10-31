@@ -6,7 +6,6 @@ import {
   ClipApiError,
   liveUploadsOf,
   platformLabel,
-  timelineBaseMs,
   type BroadcastRow,
   type BroadcastTimeline,
   type LibraryEntry,
@@ -485,12 +484,12 @@ export interface ClipSource {
 }
 
 /**
- * 장면 위치를 재는 기준점(epoch ms). 편집 구간은 방송 절대축 시각이라(계약6) 이 값을 빼야 「방송에서 몇 분」이 된다. 편집기가 화면 축을
- * 잡는 것과 같은 기준점(방송 줄의 timelineOriginAt, 없으면 시작 시각)이고, 방송 줄을 못 읽었으면 보관함 줄의 시작 시각으로
- * 대신한다(수십 초 어긋날 수 있다). 모르면 null
+ * 장면 위치를 재는 기준점(epoch ms). 편집 구간은 방송 절대축 시각이라(계약6) 서버의 시각 기준점(timelineOriginAt)을 빼야 「방송에서 몇
+ * 분」이 된다. 없으면(조각이 지워진 60일 지난 방송 · 장부를 못 읽음 · 방송 줄을 못 읽음) null이고 장면 위치를 안 보인다: 방송 시작
+ * 시각으로 대신 재면 수십 초 어긋난 값이 정확한 값처럼 보인다(2026-10-31 사용자 결정)
  */
-export function sceneBaseMs(entry: LibraryEntry, row: BroadcastRow | null): number | null {
-  const base = row !== null ? timelineBaseMs(row) : Date.parse(entry.broadcast.startedAt ?? '');
+export function sceneBaseMs(row: BroadcastRow | null): number | null {
+  const base = Date.parse(row?.timelineOriginAt ?? '');
   return Number.isFinite(base) ? base : null;
 }
 
@@ -535,8 +534,12 @@ export function broadcastLengthLabel(broadcast: LibraryEntry['broadcast']): stri
   return hours > 0 ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
 }
 
-/** 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」. 구간이 절대 시각이라 기준점(sceneBaseMs)을 빼서 잰다 */
-export function sceneLabel(cut: NonNullable<LibraryEntry['cut']>, baseMs: number): string {
+/**
+ * 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」. 구간이 절대 시각이라 기준점(sceneBaseMs)을 빼서 잰다. 구간이 기준점보다 앞서면
+ * 위치를 모르는 것이라 null이다: 0으로 깎으면 「0:00 ~ 0:00」을 지어낸다
+ */
+export function sceneLabel(cut: NonNullable<LibraryEntry['cut']>, baseMs: number): string | null {
+  if (cut.inAtMs < baseMs) return null;
   const position = (ms: number) => formatUptime((ms - baseMs) / 1000);
   return `${position(cut.inAtMs)} ~ ${position(cut.outAtMs)}`;
 }
