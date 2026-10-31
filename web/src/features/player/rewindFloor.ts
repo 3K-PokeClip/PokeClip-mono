@@ -33,13 +33,17 @@ function isBeforeStart(
 }
 
 /**
- * 창 하한 여유(초) — 맨 앞 조각 EDGE_MARGIN_SEGMENTS 개의 EXTINF 합이다(LoadedList.headSpanMs 와 같은 식). 조각이
- * 하나도 없으면 그 개수 × TD 로 둔다
+ * 창 하한(영상 초) — 맨 앞 GAP 을 뺀 첫 내용 조각 + 그 조각부터 EDGE_MARGIN_SEGMENTS 개의 EXTINF 합이다
+ * (liveStartFloorMs 와 같은 까닭 — 맨 앞 GAP 은 내용이 아니고, 가운데 GAP 은 창이 밀리는 조각이라 센다). 조각이
+ * 하나도 없거나 모두 GAP 이면 첫 조각 + 그 개수 × TD 로 둔다
  */
-function headSpanS(details: Pick<LevelDetails, 'targetduration' | 'fragments'>): number {
-  const head = details.fragments.slice(0, EDGE_MARGIN_SEGMENTS);
-  if (head.length === 0) return EDGE_MARGIN_SEGMENTS * details.targetduration;
-  return head.reduce((sum, frag) => sum + frag.duration, 0);
+function windowFloorS(
+  details: Pick<LevelDetails, 'fragmentStart' | 'targetduration' | 'fragments'>,
+): number {
+  const first = details.fragments.findIndex((frag) => !frag.gap);
+  if (first < 0) return details.fragmentStart + EDGE_MARGIN_SEGMENTS * details.targetduration;
+  const head = details.fragments.slice(first, first + EDGE_MARGIN_SEGMENTS);
+  return head[0]!.start + head.reduce((sum, frag) => sum + frag.duration, 0);
 }
 
 /** 옮긴 갈래와 자리(영상 초). seek = currentTime 을 옮김 · reload = 기동 전이라 받기 위치를 다시 잡음 */
@@ -49,8 +53,8 @@ export interface RewindFloorMove {
 }
 
 /**
- * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 조각 + 맨 앞 조각 셋 · 적어도 옮김
- * 문턱)으로 옮기고 그 자리를, 아니면 null 을 낸다. ENDLIST 목록은 hls.js 가 옮기지 않으므로(stream-controller.ts 688
+ * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 내용 조각 + 그 뒤 조각 셋 · 적어도
+ * 옮김 문턱)으로 옮기고 그 자리를, 아니면 null 을 낸다. ENDLIST 목록은 hls.js 가 옮기지 않으므로(stream-controller.ts 688
  * `newDetails.live`) 그대로 둔다.
  * 기동 전(조각이 아직 붙지 않음)에는 hls.js 가 currentTime 이 아니라 받기 위치를 보고 그것을 라이브 끝으로 바꾸므로
  * (base-stream-controller.ts playhead · stream-controller.ts 731), 받기 위치를 startLoad 로 다시 잡는다
@@ -68,7 +72,7 @@ export function guardRewindFloor({
   const trigger = FLOOR_TRIGGER_TD * td;
   if (position === null || position >= details.fragmentStart + trigger) return null;
   // 조각 셋이 문턱보다 짧아도 문턱 앞으로는 옮기지 않는다 — 문턱 안의 재생점을 뒤로 당기는 역방향 시크가 된다
-  const floor = details.fragmentStart + Math.max(headSpanS(details), trigger);
+  const floor = Math.max(windowFloorS(details), details.fragmentStart + trigger);
   if (beforeStart) {
     hls.startLoad(floor);
     return { kind: 'reload', to: floor };

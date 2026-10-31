@@ -250,12 +250,17 @@ describe('hls.js 1.7.3 의 떼기 · 첫 조각 처리기 순서(c12d)', () => {
 
 // 창 하한 여유는 TD 가 아니라 맨 앞 조각 셋의 실제 길이다(POK-200 c13 — gohlslib 은 TD 를 지금까지 본 조각 최대값으로
 // 올리기만 해, 첫 조각이 6초면 방송 끝까지 TD 6 · 실제 조각은 4초다). 목록은 진짜 파서로 읽는다
-describe('guardRewindFloor — 창 하한 = 첫 조각 + 맨 앞 조각 셋의 길이', () => {
+describe('guardRewindFloor — 창 하한 = 첫 내용 조각 + 그 뒤 조각 셋의 길이', () => {
   /** TARGETDURATION td · 조각 길이 durations(초) · ENDLIST 없음 */
-  function listOf(td: number, durations: readonly number[]): LevelDetails {
+  function listOf(
+    td: number,
+    durations: readonly number[],
+    gapAt: readonly number[] = [],
+  ): LevelDetails {
     const lines = ['#EXTM3U', '#EXT-X-VERSION:9', `#EXT-X-TARGETDURATION:${td}`];
     let at = PDT0;
     durations.forEach((duration, i) => {
+      if (gapAt.includes(i)) lines.push('#EXT-X-GAP');
       lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(at).toISOString()}`);
       lines.push(`#EXTINF:${duration.toFixed(3)},`, `seg${i}.mp4`);
       at += duration * 1000;
@@ -288,5 +293,22 @@ describe('guardRewindFloor — 창 하한 = 첫 조각 + 맨 앞 조각 셋의 �
     const short = listOf(6, [1, 1, 1, 1]);
     expect(seekTo(short, 4)).toBe(6);
     expect(seekTo(short, 0.5)).toBe(6);
+  });
+
+  it('맨 앞 GAP 조각은 내용이 아니다 — 하한은 첫 내용 조각 + 그 뒤 조각 셋이다(옮김 문턱은 첫 조각 기준 그대로)', () => {
+    // GAP 둘(6초씩) 뒤 내용 4초 — GAP 을 세면 하한이 첫 조각 + 16초로 내용(12초) 바로 뒤에 선다
+    const details = listOf(6, [6, 6, 4, 4, 4], [0, 1]);
+    expect(details.fragments.filter((f) => f.gap)).toHaveLength(2);
+    expect(seekTo(details)).toBe(24);
+    // 문턱은 첫 조각(GAP) + 1 TD 다 — 그 뒤 재생점은 옮기지 않는다
+    expect(seekTo(details, 6)).toBeUndefined();
+  });
+
+  it('가운데 GAP 은 창이 밀리는 조각이라 여유에 그대로 센다 — 빼는 것은 맨 앞 GAP 뿐이다', () => {
+    expect(seekTo(listOf(6, [4, 6, 4, 4], [1]))).toBe(14);
+  });
+
+  it('모두 GAP 이면 조각이 없을 때처럼 첫 조각 + 3 × TD 다', () => {
+    expect(seekTo(listOf(6, [2, 2, 2], [0, 1, 2]))).toBe(18);
   });
 });
