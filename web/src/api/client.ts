@@ -192,7 +192,47 @@ async function doRefresh(sent: string): Promise<RefreshOutcome> {
   return 'rotated';
 }
 
-function send(path: string, init: RequestInit): Promise<Response> {
+/**
+ * 읽기가 응답 헤더를 기다리는 한도. 서버가 멈추면 주기 읽기가 끝나지 않은 채 쌓인다. 쓰기(POST 등)에는 걸지 않는다: 서버가
+ * 처리 중일 수 있어 끊고 다시 누르면 두 번 일어난다.
+ */
+export const READ_TIMEOUT_MS = 30_000;
+
+export interface ApiFetchInit extends RequestInit {
+  /** 응답 헤더를 기다리는 한도. null이면 걸지 않는다(SSE). 없으면 읽기는 READ_TIMEOUT_MS, 쓰기는 없음 */
+  timeoutMs?: number | null;
+}
+
+function timeoutOf({ method, timeoutMs }: ApiFetchInit): number | null {
+  if (timeoutMs !== undefined) return timeoutMs;
+  const verb = (method ?? 'GET').toUpperCase();
+  return verb === 'GET' || verb === 'HEAD' ? READ_TIMEOUT_MS : null;
+}
+
+/**
+ * 시한을 건 fetch. 헤더가 오면 시계를 끈다: 본문은 긴 응답일 수 있어 재지 않는다. 부른 쪽의 signal은 본문을 받는 동안에도 듣는다.
+ * 시간 초과는 ApiError(504)로 던진다: AbortError로 두면 부른 쪽이 「사람이 취소했다」로 읽고 실패를 알리지 않는다.
+ */
+async function fetchWithin(path: string, init: RequestInit, ms: number): Promise<Response> {
+  const stop = new AbortController();
+  const expired = new Error('timeout');
+  const outer = init.signal;
+  const timer = setTimeout(() => stop.abort(expired), ms);
+  if (outer?.aborted) stop.abort(outer.reason);
+  else outer?.addEventListener('abort', () => stop.abort(outer.reason), { once: true });
+  try {
+    return await fetch(path, { ...init, signal: stop.signal });
+  } catch (e) {
+    if (stop.signal.reason === expired) throw new ApiError(504, '서버 응답이 늦어요');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function send(path: string, init: ApiFetchInit): Promise<Response> {
+  const { timeoutMs: _timeoutMs, ...rest } = init;
+  const limit = timeoutOf(init);
   const { accessToken } = useAuthStore.getState();
   const headers = new Headers(init.headers);
   if (accessToken !== null) headers.set('Authorization', `Bearer ${accessToken}`);
@@ -202,7 +242,9 @@ function send(path: string, init: RequestInit): Promise<Response> {
   // 문자열만 화이트리스트로 둔다 — 현행 호출부는 전부 JSON.stringify 문자열이다.
   if (typeof init.body === 'string' && !headers.has('Content-Type'))
     headers.set('Content-Type', 'application/json');
-  return fetch(path, { ...init, headers });
+  return limit === null
+    ? fetch(path, { ...rest, headers })
+    : fetchWithin(path, { ...rest, headers }, limit);
 }
 
 /**
@@ -218,7 +260,7 @@ const activityListeners = new Set<(event: ApiActivity) => void>();
 let lastActivityId = 0;
 
 /**
- * 요청 활동을 듣는다. 채널 전환 화면이 「새 채널 화면이 부른 요청이 다 끝났나」를 보는 데 쓴다: 홈·지난 방송처럼
+ * 요청 활동을 듣는다. 채널 전환 화면이 「새 채널 화면이 부른 요청이 다 끝났나」를 보는 데 쓴다: 라이브처럼
  * react-query 밖에서 부르는 화면 훅도 이 진입점은 지나므로 쿼리 캐시가 아니라 여기서 센다(apiFetch 밖 요청은
  * trackApiActivity로 감싼다).
  */
@@ -251,11 +293,11 @@ export async function trackApiActivity<T>(work: () => Promise<T>): Promise<T> {
  * 보호 API 호출 진입점. 2xx가 아니면 ApiError를 던진다 — 호출부는 status로 분기한다
  * (예: 429 발급 제한 안내). 401은 여기서 refresh 회전 후 딱 한 번 재시도한다.
  */
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function apiFetch(path: string, init: ApiFetchInit = {}): Promise<Response> {
   return trackApiActivity(() => request(path, init));
 }
 
-async function request(path: string, init: RequestInit): Promise<Response> {
+async function request(path: string, init: ApiFetchInit): Promise<Response> {
   const res = await send(path, init);
   if (res.status !== 401) {
     if (!res.ok) throw await errorFrom(res);

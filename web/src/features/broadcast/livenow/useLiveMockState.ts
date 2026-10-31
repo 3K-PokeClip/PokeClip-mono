@@ -550,6 +550,8 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
           r = await apiFetch(`/api/clip/broadcasts/${encodeURIComponent(streamId)}/events`, {
             headers: { Accept: 'text/event-stream' },
             signal: ctrl.signal,
+            // 통로는 첫 이벤트까지 헤더가 늦을 수 있고 끊기면 어차피 다시 붙는다
+            timeoutMs: null,
           });
         } catch (e) {
           // 503은 용량 초과라 길게 쉰다 — 폴링이 카드를 메운다. 404는 방송 편지가 아직 안 온 것

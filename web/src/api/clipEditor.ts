@@ -1,6 +1,6 @@
 'use client';
 
-import { ApiError, apiFetch } from './client';
+import { ApiError, apiFetch, type ApiFetchInit } from './client';
 import { markPlaybackCookiesIssued } from './mediaPlayback';
 import { notifyChannelGone } from '@/stores/channel';
 
@@ -326,7 +326,7 @@ export class ClipApiError extends Error {
  * clip 창구 공통 호출. apiFetch의 ApiError를 ClipApiError로 옮겨 사유 코드(409 source_not_ready 등)를
  * 화면이 가를 수 있게 한다. 네트워크 오류는 그대로 던진다.
  */
-export async function clipFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function clipFetch(path: string, init?: ApiFetchInit): Promise<Response> {
   try {
     return await apiFetch(path, init);
   } catch (e) {
