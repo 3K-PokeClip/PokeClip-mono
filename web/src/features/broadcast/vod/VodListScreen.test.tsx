@@ -3,6 +3,7 @@ import { fireEvent, renderHook, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { READ_TIMEOUT_MS } from '@/api/client';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders, withToastProvider } from '@/test/testProviders';
 import { VodListScreen } from './VodListScreen';
@@ -439,16 +440,19 @@ describe('VodListScreen — 서버 목록', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('읽기가 멈춰도 다음 주기에 새로 읽어 회복한다: 겹친 읽기를 하나로 묶지 않는다(PR #377 리뷰)', async () => {
+  it('읽기가 멈춰도 시한에 끊겨 다음 주기에 회복한다(PR #377 리뷰)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let calls = 0;
-    stubFetch((url) => {
+    stubFetch((url, init) => {
       if (!url.startsWith('/api/clip/broadcasts?'))
         return jsonResponse(200, { cards: [], nextCursor: null });
       calls += 1;
-      // 첫 읽기는 영영 답하지 않는다(시한 없는 요청이 멈춘 꼴)
+      // 첫 읽기는 답하지 않는다(서버가 멈춘 꼴). 진짜 fetch처럼 끊기면 끝난다
+      const signal = init?.signal;
       return calls === 1
-        ? new Promise<Response>(() => undefined)
+        ? new Promise<Response>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason));
+          })
         : jsonResponse(200, { broadcasts: [], nextCursor: null });
     });
 
@@ -458,8 +462,9 @@ describe('VodListScreen — 서버 목록', () => {
     });
     expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
 
+    // 30초에 시한으로 끊기고, 주기는 끝난 때부터 다시 잰다(react-query)
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS + 60_000);
     });
     expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
   });

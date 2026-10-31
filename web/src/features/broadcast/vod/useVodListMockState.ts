@@ -10,7 +10,9 @@ import { ensurePlaybackAccessForList } from '@/api/playbackAccess';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
-/** 「다시 시도」가 도는 표시의 상한. 읽기에 시한이 없어, 멈춘 요청에 버튼이 영영 묶이지 않게 한다(PR #377 리뷰) */
+/** 이 안에 다시 들어오거나 탭으로 돌아오면 받아 둔 값을 그대로 쓴다 */
+const REVISIT_FRESH_MS = 20_000;
+/** 「다시 시도」가 도는 표시의 상한. 쪽이 많으면 읽기가 길어져 버튼이 오래 묶이지 않게 한다(PR #377 리뷰) */
 const RETRY_SPINNER_MAX_MS = 15_000;
 /**
  * 기억한 카드 수를 다시 세는 간격(POK-254). 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 방금 끝난 방송은 주기마다,
@@ -22,8 +24,12 @@ const CARD_COUNT_TTL_MS = 10 * 60_000;
  * 카드 목록을 한꺼번에 불렀다(리뷰 1라운드). 남은 것은 다음 주기로 넘어가 흩어진다
  */
 const CARD_RECOUNT_PER_POLL = 20;
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+/** 방송마다 묻는 읽기의 동시 수. 방송이 많은 계정이 처음 들어올 때 전체 이력을 한꺼번에 묻지 않게 한다 */
+const ROW_READ_PARALLEL = 6;
+import { useCallback, useMemo, useState } from 'react';
+import { queryOptions, useQuery } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
+import { runLimited } from '@/lib/runLimited';
 import { useToast } from '@/ui';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
@@ -157,6 +163,8 @@ export interface VodListMockState {
 // 흩어 뒀다 — 7일 이내 4개 · 30일 이내 9개 · 전체 12개.
 
 const EMPTY_RANGE: VodCustomRange = { from: null, to: null };
+const NO_ROWS: VodBroadcast[] = [];
+const NO_VISUALS: Record<string, VodRowVisual> = {};
 
 // ── clip 창구 배선(POK-251): `GET /api/clip/broadcasts?state=past|live` + 방송마다 카드 수 ──
 
@@ -181,6 +189,163 @@ function isoMs(iso: string | null): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+/** 방송마다 재 둔 값. 쿼리 데이터에 함께 두어 화면을 떠났다 돌아와도 남는다: 안 그러면 들어올 때마다 전체 이력의 카드를 다시 센다 */
+interface RowMemory {
+  /** 아직 한 번도 못 셌으면 null */
+  cardCount: number | null;
+  /** 마지막으로 세려고 한 시각(실패해도 넘긴다: 늘 실패하는 방송이 다시 세는 차례를 독차지하지 않게) */
+  countedAt: number;
+  recorded: boolean;
+  /** 재생 서버에 물어 녹화가 없다고 들었다(묻지 못했으면 앞 답을 둔다) */
+  missing: boolean;
+}
+
+interface VodListData {
+  rows: VodBroadcast[];
+  visuals: Record<string, VodRowVisual>;
+  memory: Record<string, RowMemory>;
+}
+
+/** 목록 한 벌. 목록을 못 읽으면 던진다: react-query가 지난 목록을 그대로 두고 다음 주기에 다시 읽는다 */
+async function loadVodList(
+  streamerId: number | null,
+  memory: Record<string, RowMemory>,
+  signal: AbortSignal,
+): Promise<VodListData> {
+  // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰)
+  const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId, signal);
+  const cache = new Map(Object.entries(memory));
+  // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
+  const nowMs = Date.now();
+  const countStale = (b: WireBroadcast) => {
+    const known = cache.get(b.streamId);
+    return (
+      known === undefined ||
+      known.cardCount === null ||
+      isJustEnded(b.endedAt, new Date(nowMs)) ||
+      nowMs - known.countedAt >= CARD_COUNT_TTL_MS
+    );
+  };
+  // 다시 셀 방송. 처음 보는 방송·못 센 방송·방금 끝난 방송은 다 세고, 오래된 방송은 가장 오래전에 센 것부터 한 주기에
+  // CARD_RECOUNT_PER_POLL개까지만. 고정 순서로 고르면 방송이 많을 때 앞쪽이 다시 낡아 뒤쪽은 영영 차례가 안 왔다(PR #256 codex)
+  const recountIds = new Set<string>();
+  const oldStale: { id: string; countedAt: number }[] = [];
+  for (const b of all) {
+    if (!countStale(b)) continue;
+    const known = cache.get(b.streamId);
+    if (known !== undefined && known.cardCount !== null && !isJustEnded(b.endedAt, new Date(nowMs)))
+      oldStale.push({ id: b.streamId, countedAt: known.countedAt });
+    else recountIds.add(b.streamId);
+  }
+  oldStale
+    .sort((x, y) => x.countedAt - y.countedAt)
+    .slice(0, CARD_RECOUNT_PER_POLL)
+    .forEach(({ id }) => recountIds.add(id));
+  const checkRecording = (b: WireBroadcast) =>
+    b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
+  // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
+  // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
+  // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
+  const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
+  // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317). 한 탭에 든 키는 12개까지라 차례가 안 온 키는 쿠키 없이 묻고
+  // 다음 주기에 다시 온다
+  const access = ensurePlaybackAccessForList(
+    all.filter(checkRecording).map((b) => ({ streamId: b.streamId, mediaKey: mediaStreamId(b) })),
+  );
+  const spansOf = (key: string) => {
+    let found = spansByKey.get(key);
+    if (found === undefined) {
+      found = Promise.resolve(access.get(key)).then(() => lookupRecordingSpans(key));
+      spansByKey.set(key, found);
+    }
+    return found;
+  };
+  await runLimited(
+    all.filter((b) => recountIds.has(b.streamId) || checkRecording(b)),
+    ROW_READ_PARALLEL,
+    async (b) => {
+      if (signal.aborted) return;
+      const known = cache.get(b.streamId);
+      const recount = known === undefined || recountIds.has(b.streamId);
+      const [fetched, spans] = await Promise.all([
+        known !== undefined && !recount
+          ? Promise.resolve(known.cardCount)
+          : fetchAllJumpCards(b.streamId, signal).then(
+              (cards) => cards.length,
+              () => null,
+            ),
+        // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
+        checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
+      ]);
+      // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
+      // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
+      // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
+      // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
+      const recorded =
+        known?.recorded === true ||
+        (spans !== null &&
+          recordingTimeline(
+            spans,
+            recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
+            isoMs(b.endedAt),
+          ) !== null);
+      cache.set(b.streamId, {
+        cardCount: fetched ?? known?.cardCount ?? null,
+        countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
+        // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
+        // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
+        // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
+        recorded,
+        missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
+      });
+    },
+  );
+  const rows: VodBroadcast[] = all.map((b) => ({
+    streamId: b.streamId,
+    // 서버 상태가 정본이다. 녹화 재생 서버가 있고 그 방송의 녹화가 실제로 있을 때만 「다시 보기 가능」으로 올린다
+    status:
+      b.status === 'ended' && cache.get(b.streamId)?.recorded
+        ? 'vod_ready'
+        : ((b.status as VodBroadcastStatus) ?? 'ended'),
+    relation: b.relation === 'EDITOR' ? 'EDITOR' : 'OWNER',
+    startedAt: b.startedAt,
+    endedAt: b.endedAt,
+    vodExpiresAt: b.vodExpiresAt,
+    thumbnailUrl: b.thumbnailUrl ?? null,
+  }));
+  const titles = new Map(all.map((b) => [b.streamId, broadcastTitle(b)]));
+  const visuals: Record<string, VodRowVisual> = {};
+  for (const b of rows) {
+    const dur =
+      b.startedAt && b.endedAt
+        ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
+        : null;
+    visuals[b.streamId] = {
+      title: titles.get(b.streamId) ?? b.streamId,
+      durationSec: dur,
+      cardCount: cache.get(b.streamId)?.cardCount ?? 0,
+      recordingMissing: b.status === 'ended' && cache.get(b.streamId)?.missing === true,
+    };
+  }
+  return { rows, visuals, memory: Object.fromEntries(cache) };
+}
+
+export function vodListQueryOptions(streamerId: number | null) {
+  const queryKey = ['vod-list', streamerId] as const;
+  return queryOptions({
+    queryKey,
+    queryFn: ({ client, signal }) =>
+      loadVodList(streamerId, client.getQueryData<VodListData>(queryKey)?.memory ?? {}, signal),
+    // 받아 둔 목록을 바로 보여 주고 뒤에서 다시 읽는다. 금방 돌아오면 읽지 않는다: 탭을 오갈 때마다 전체 목록을 읽지 않게
+    staleTime: REVISIT_FRESH_MS,
+    // 카드 수를 다시 세는 간격보다 길게 둔다: 금방 돌아오면 다시 세지 않는다
+    gcTime: 3 * CARD_COUNT_TTL_MS,
+    refetchInterval: LIST_POLL_MS,
+    // 다음 주기가 곧 다시 읽고, 첫 읽기 실패는 바로 말해야 한다(POK-441)
+    retry: false,
+  });
+}
+
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
   // 고른 채널(POK-390). ChannelScope가 채널이 바뀌면 화면을 다시 세운다
   const streamerId = useChannelStreamerId();
@@ -190,185 +355,19 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   const [downloads, setDownloads] = useState<Record<string, VodDownloadState>>(
     () => options.downloads ?? {},
   );
-  const [fetched, setFetched] = useState<VodBroadcast[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [failCount, setFailCount] = useState(0);
+  const injected = options.broadcasts !== undefined;
+  const list = useQuery({ ...vodListQueryOptions(streamerId), enabled: !injected });
+  const { refetch, dataUpdatedAt } = list;
+  const fetched = list.data?.rows ?? NO_ROWS;
+  const fetchedVisuals = list.data?.visuals ?? NO_VISUALS;
+  // 한 번도 못 읽었을 때만 실패로 친다. 한 번이라도 읽었으면 실패해도 옛 목록을 두고 다음 주기를 기다린다
+  const failCount = list.data === undefined ? list.errorUpdateCount : 0;
   const [retrying, setRetrying] = useState(false);
-  // 읽기 효과가 세운 「한 번 읽기」. 「다시 시도」가 효과 밖에서 부른다(내려가면 비운다)
-  const runRef = useRef<(() => Promise<void>) | null>(null);
-  const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
-  const [now, setNow] = useState(() => new Date());
-  const rowCache = useRef(
-    new Map<
-      string,
-      {
-        /** 아직 한 번도 못 셌으면 null */
-        cardCount: number | null;
-        /** 마지막으로 세려고 한 시각(실패해도 넘긴다: 늘 실패하는 방송이 다시 세는 차례를 독차지하지 않게) */
-        countedAt: number;
-        recorded: boolean;
-        /** 재생 서버에 물어 녹화가 없다고 들었다(묻지 못했으면 앞 답을 둔다) */
-        missing: boolean;
-      }
-    >(),
+  const [openedAt] = useState(() => new Date());
+  const now = useMemo(
+    () => (dataUpdatedAt === 0 ? openedAt : new Date(dataUpdatedAt)),
+    [dataUpdatedAt, openedAt],
   );
-
-  useEffect(() => {
-    if (options.broadcasts) return;
-    let stopped = false;
-    // 한 번이라도 읽었으면 그 뒤의 실패는 옛 목록을 둔 채 다음 주기에 다시 한다
-    let everLoaded = false;
-    // 내려가면(채널 전환 등) 넘기던 쪽·카드 읽기를 끊는다: 이어 가면 채널 전환 화면이 옛 채널 요청까지 기다린다(PR #342 2차 리뷰)
-    const abort = new AbortController();
-    const load = async () => {
-      try {
-        // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰).
-        // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
-        const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId, abort.signal);
-        if (stopped) return;
-        // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
-        const cache = rowCache.current;
-        const nowMs = Date.now();
-        const countStale = (b: WireBroadcast) => {
-          const known = cache.get(b.streamId);
-          return (
-            known === undefined ||
-            known.cardCount === null ||
-            isJustEnded(b.endedAt, new Date(nowMs)) ||
-            nowMs - known.countedAt >= CARD_COUNT_TTL_MS
-          );
-        };
-        // 다시 셀 방송. 처음 보는 방송·못 센 방송·방금 끝난 방송은 다 세고, 오래된 방송은 가장 오래전에 센 것부터 한 주기에
-        // CARD_RECOUNT_PER_POLL개까지만. 고정 순서로 고르면 방송이 많을 때 앞쪽이 다시 낡아 뒤쪽은 영영 차례가 안 왔다(PR #256 codex)
-        const recountIds = new Set<string>();
-        const oldStale: { id: string; countedAt: number }[] = [];
-        for (const b of all) {
-          if (!countStale(b)) continue;
-          const known = cache.get(b.streamId);
-          if (
-            known !== undefined &&
-            known.cardCount !== null &&
-            !isJustEnded(b.endedAt, new Date(nowMs))
-          )
-            oldStale.push({ id: b.streamId, countedAt: known.countedAt });
-          else recountIds.add(b.streamId);
-        }
-        oldStale
-          .sort((x, y) => x.countedAt - y.countedAt)
-          .slice(0, CARD_RECOUNT_PER_POLL)
-          .forEach(({ id }) => recountIds.add(id));
-        const checkRecording = (b: WireBroadcast) =>
-          b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
-        // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
-        // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
-        // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
-        const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
-        // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317). 한 탭에 든 키는 12개까지라 차례가 안 온 키는 쿠키 없이 묻고
-        // 다음 주기에 다시 온다
-        const access = ensurePlaybackAccessForList(
-          all
-            .filter(checkRecording)
-            .map((b) => ({ streamId: b.streamId, mediaKey: mediaStreamId(b) })),
-        );
-        const spansOf = (key: string) => {
-          let found = spansByKey.get(key);
-          if (found === undefined) {
-            found = Promise.resolve(access.get(key)).then(() => lookupRecordingSpans(key));
-            spansByKey.set(key, found);
-          }
-          return found;
-        };
-        await Promise.all(
-          all
-            .filter((b) => recountIds.has(b.streamId) || checkRecording(b))
-            .map(async (b) => {
-              const known = cache.get(b.streamId);
-              const recount = known === undefined || recountIds.has(b.streamId);
-              const [fetched, spans] = await Promise.all([
-                known !== undefined && !recount
-                  ? Promise.resolve(known.cardCount)
-                  : fetchAllJumpCards(b.streamId, abort.signal).then(
-                      (cards) => cards.length,
-                      () => null,
-                    ),
-                // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-                checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
-              ]);
-              // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
-              // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
-              // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
-              // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
-              const recorded =
-                known?.recorded === true ||
-                (spans !== null &&
-                  recordingTimeline(
-                    spans,
-                    recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
-                    isoMs(b.endedAt),
-                  ) !== null);
-              cache.set(b.streamId, {
-                cardCount: fetched ?? known?.cardCount ?? null,
-                countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
-                // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
-                // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
-                // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
-                recorded,
-                missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
-              });
-            }),
-        );
-        const rows: VodBroadcast[] = all.map((b) => ({
-          streamId: b.streamId,
-          // 서버 상태가 정본이다. 녹화 재생 서버가 있고 그 방송의 녹화가 실제로 있을 때만 「다시 보기 가능」으로 올린다
-          status:
-            b.status === 'ended' && cache.get(b.streamId)?.recorded
-              ? 'vod_ready'
-              : ((b.status as VodBroadcastStatus) ?? 'ended'),
-          relation: b.relation === 'EDITOR' ? 'EDITOR' : 'OWNER',
-          startedAt: b.startedAt,
-          endedAt: b.endedAt,
-          vodExpiresAt: b.vodExpiresAt,
-          thumbnailUrl: b.thumbnailUrl ?? null,
-        }));
-        const titles = new Map(all.map((b) => [b.streamId, broadcastTitle(b)]));
-        const visuals: Record<string, VodRowVisual> = {};
-        for (const b of rows) {
-          const dur =
-            b.startedAt && b.endedAt
-              ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
-              : null;
-          visuals[b.streamId] = {
-            title: titles.get(b.streamId) ?? b.streamId,
-            durationSec: dur,
-            cardCount: cache.get(b.streamId)?.cardCount ?? 0,
-            recordingMissing: b.status === 'ended' && cache.get(b.streamId)?.missing === true,
-          };
-        }
-        if (stopped) return;
-        setFetched(rows);
-        setFetchedVisuals(visuals);
-        setNow(new Date());
-        setLoaded(true);
-        everLoaded = true;
-        setFailCount(0);
-      } catch {
-        // 다음 주기에 다시 한다. 한 번도 못 읽었으면 실패를 「불러오는 중」으로 가리지 않는다(POK-441). 한 번이라도 읽었으면
-        // 세지 않는다 — 옛 목록을 둔 채 다음 주기를 기다린다(이 가드 하나가 그 규칙을 지킨다)
-        if (!stopped && !everLoaded) setFailCount((n) => n + 1);
-      }
-    };
-    // 주기마다 새로 읽는다(겹쳐도 묶지 않는다): 요청에 시한이 없어, 묶으면 멈춘 요청 하나가 그 뒤 주기·「다시 시도」를 모두
-    // 붙잡는다(PR #377 리뷰). 늦게 온 답이 앞 답을 덮을 수 있는 것은 원래 주기 읽기와 같다
-    runRef.current = load;
-    void load();
-    const t = window.setInterval(load, LIST_POLL_MS);
-    return () => {
-      stopped = true;
-      runRef.current = null;
-      abort.abort();
-      window.clearInterval(t);
-    };
-  }, [options.broadcasts, streamerId]);
 
   const source = options.broadcasts ?? fetched;
   const visuals = options.visuals ?? fetchedVisuals;
@@ -393,16 +392,14 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     [setDownload],
   );
   const retry = useCallback(() => {
-    const run = runRef.current;
-    if (run === null) return;
+    if (injected) return;
     setRetrying(true);
-    // 읽기에는 시한이 없다: 요청이 멈춰도 버튼이 영영 돌지 않게 도는 표시에만 상한을 둔다. 멈춘 읽기는 그대로 두고 다음 주기나
-    // 다음 클릭이 새로 읽는다
+    // 목록은 쪽마다 시한을 받아 다 합치면 길어진다: 도는 표시에만 상한을 둔다. 다음 주기나 다음 클릭이 다시 읽는다
     void Promise.race([
-      run(),
+      refetch(),
       new Promise<void>((resolve) => window.setTimeout(resolve, RETRY_SPINNER_MAX_MS)),
     ]).finally(() => setRetrying(false));
-  }, []);
+  }, [injected, refetch]);
 
   const past = useMemo(() => excludeLive(source), [source]);
   const baseNow = options.now ?? now;
@@ -415,8 +412,8 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     now: baseNow,
     broadcasts,
     totalCount: past.length,
-    loading: options.broadcasts === undefined && !loaded,
-    failed: options.broadcasts === undefined && failCount > 0,
+    loading: !injected && list.data === undefined,
+    failed: !injected && failCount > 0,
     failCount,
     retrying,
     retry,
