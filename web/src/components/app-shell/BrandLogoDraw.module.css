@@ -1,5 +1,5 @@
 /* 로고 그리기 되풀이(BrandLogoDraw). 원본 choreography는 public/brand/motion/motion.css — 1.6초 한 번.
-   여기서는 한 바퀴 1.95초 = 그리기 1.2초(원본의 3/4, 바퀴의 0~61.54%) + 다 그린 모양 붙듦 + 흐려짐(84~96%) + 빈 틈.
+   여기서는 한 바퀴 1초 = 그리기 0.62초(바퀴의 0~61.54%) + 다 그린 모양 붙듦 + 흐려짐(84~96%) + 빈 틈.
    원본 키프레임 %는 ×0.6154로 줄였고(괄호 안이 원본 %), 원본 100% 모양은 바퀴 끝(100%)까지 붙든다.
    timing function은 원본처럼 키프레임 안에 글자 그대로 둔다 — 키프레임 안의 var()는 크로뮴이 버리고 linear로 떨어진다.
    움직임을 줄이라는 설정이면 아무것도 돌지 않고 다 그린 로고(BrandSymbol과 같은 모양)로 선다. */
@@ -12,17 +12,17 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .spineAccent {
-    animation: draw-accent 1950ms linear both infinite;
+    animation: draw-accent 1000ms linear both infinite;
   }
 
   .spineMain {
-    animation: draw-main 1950ms linear both infinite;
+    animation: draw-main 1000ms linear both infinite;
   }
 
   .play {
     animation:
-      play-pop 1950ms linear both infinite,
-      play-fade 1950ms linear both infinite;
+      play-pop 1000ms linear both infinite,
+      play-fade 1000ms linear both infinite;
   }
 
   /* 미세 정착 + 바퀴 끝 흐려짐. 경계 뒤 0~4%도 투명으로 붙든다: 바퀴가 돌아 획이 0으로 튀는 순간 크롬이 마스크를 한 프레임 늦게
@@ -30,8 +30,8 @@
      바퀴마다 1장 실측, 가린 뒤 0장). 고리는 4.92%부터 그려지므로 그 앞을 가려도 보이는 움직임은 같다 */
   .logo {
     animation:
-      logo-settle 1950ms linear both infinite,
-      loop-fade 1950ms linear both infinite;
+      logo-settle 1000ms linear both infinite,
+      loop-fade 1000ms linear both infinite;
   }
 }
 

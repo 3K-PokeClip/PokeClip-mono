@@ -146,7 +146,7 @@ export interface AnalyticsEvents {
   onboarding_tour_started: { entry: 'welcome' | 'chip' | 'help' };
   /** 「준비 중」 기능을 누름 — 수요를 본다 */
   pending_feature_clicked: {
-    feature: 'ai_subtitle' | 'vod_download' | 'player_clip' | 'mini_player';
+    feature: 'ai_subtitle' | 'vod_download' | 'mini_player';
   };
   /** 하이라이트 카드·통계 핀을 눌러 그 자리로 옮김. 카드 번호·시각은 싣지 않는다 */
   highlight_card_seeked: { from: 'card' | 'stats_pin'; mode: 'live' | 'past' };

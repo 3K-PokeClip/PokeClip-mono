@@ -3,14 +3,45 @@ import {
   AT_EDGE_THRESHOLD_SECONDS,
   LIVE_EDGE_BACKOFF_SECONDS,
   REWIND_UI_MAX_SECONDS,
+  DEFAULT_VOLUME,
   behindFromSeekFraction,
   formatBehind,
   formatUptime,
   isAtEdge,
   parseClockLabel,
   progressFraction,
+  restoredVolume,
   seekFractionFromPointer,
+  volumeLevel,
 } from './playerMath';
+
+describe('volumeLevel — 스피커 아이콘의 단계(POK-517)', () => {
+  it('음소거이거나 음량이 0이면 소리가 안 난다', () => {
+    expect(volumeLevel(true, 70)).toBe('silent');
+    expect(volumeLevel(false, 0)).toBe('silent');
+    expect(volumeLevel(true, 0)).toBe('silent');
+  });
+
+  it('절반 아래는 작은 소리, 절반부터는 큰 소리다', () => {
+    expect(volumeLevel(false, 1)).toBe('low');
+    expect(volumeLevel(false, 49)).toBe('low');
+    expect(volumeLevel(false, 50)).toBe('high');
+    expect(volumeLevel(false, 100)).toBe('high');
+  });
+});
+
+describe('restoredVolume — 음량 0에서 소리를 켤 때(POK-517)', () => {
+  it('마지막 음량으로 되살린다', () => {
+    expect(restoredVolume(40)).toBe(40);
+    expect(restoredVolume(10)).toBe(10);
+  });
+
+  it('너무 작으면 켜도 안 들리므로 기본 음량이다', () => {
+    expect(restoredVolume(9)).toBe(DEFAULT_VOLUME);
+    expect(restoredVolume(1)).toBe(DEFAULT_VOLUME);
+    expect(restoredVolume(0)).toBe(DEFAULT_VOLUME);
+  });
+});
 
 describe('formatBehind — 계약3 4절 시차 표기', () => {
   it('분을 2자리로 패딩한다 (-01:23)', () => {

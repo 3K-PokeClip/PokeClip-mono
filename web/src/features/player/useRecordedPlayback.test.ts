@@ -306,6 +306,147 @@ describe('useRecordedPlayback — 남은 재생기 결함(POK-253)', () => {
     expect(result.current.atEdge).toBe(true);
   });
 
+  it('시크바 오른쪽 끝도 같은 자리로 간다(POK-518)', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, source([[0, 14]])));
+    act(() => result.current.seekToFraction(1));
+    act(() => vi.advanceTimersByTime(300));
+    expect(requested(video)).toEqual({ fromSeconds: 13, duration: 1 });
+  });
+
+  it('마지막 구간이 1초보다 짧아도 끝 이동이 앞 구간에 떨어지지 않는다(POK-518)', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 10],
+          [10.5, 0.3],
+        ]),
+      ),
+    );
+    act(() => result.current.returnToLive());
+    act(() => vi.advanceTimersByTime(300));
+    expect(requested(video).fromSeconds).toBe(10.5);
+  });
+
+  it('이미 끝 줄기면 다시 가도 아무 일도 없다 — 전에는 꼬리를 되감았다(POK-518)', () => {
+    const { video, play } = fakeVideo();
+    const onSeek = vi.fn();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 0, onSeek));
+    act(() => result.current.returnToLive());
+    act(() => vi.advanceTimersByTime(300));
+    const before = video.src;
+    video.currentTime = 0.5;
+    onSeek.mockClear();
+    play.mockClear();
+
+    act(() => result.current.returnToLive());
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(video.currentTime).toBe(0.5);
+    expect(video.src).toBe(before);
+    expect(onSeek).not.toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it('끝까지 본 뒤 다시 끝으로 가도 아무 일도 없다 — 긴 줄기로 끝났어도 꼬리를 새로 받지 않는다(POK-518)', () => {
+    const { video } = fakeVideo();
+    const onSeek = vi.fn();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 0, onSeek));
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    const before = video.src;
+
+    act(() => result.current.seekToFraction(1));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(video.src).toBe(before);
+    expect(onSeek).not.toHaveBeenCalled();
+    expect(result.current.ended).toBe(true);
+  });
+
+  it('끝까지 본 뒤에도 마지막 1초 안의 카드로는 간다 — 끝으로 가는 요청만 무시한다(POK-518)', () => {
+    const { video } = fakeVideo();
+    const onSeek = vi.fn();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 0, onSeek));
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    act(() => result.current.seekToPosition!(13.4));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(onSeek).toHaveBeenCalledTimes(1);
+    expect(result.current.ended).toBe(false);
+    expect(requested(video).fromSeconds).toBe(13);
+  });
+
+  it('마지막 구간이 끝나야 끝 상태다 — 다음 구간이 있으면 아니다. 자리는 녹화 끝으로 확정한다(POK-518)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([
+      [0, 14],
+      [24, 14],
+    ]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    const finish = () => {
+      Object.defineProperty(video, 'ended', { value: true, configurable: true });
+      act(() => {
+        video.dispatchEvent(new Event('pause'));
+        video.dispatchEvent(new Event('ended'));
+      });
+      Object.defineProperty(video, 'ended', { value: false, configurable: true });
+    };
+
+    finish();
+    expect(result.current.ended).toBe(false);
+
+    finish();
+    expect(result.current.ended).toBe(true);
+    expect(result.current.positionSeconds).toBe(38);
+    expect(result.current.behindSeconds).toBe(0);
+  });
+
+  it('끝 상태는 옮기거나 다시 틀면 풀린다(POK-518)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    const finish = () => {
+      act(() => {
+        video.dispatchEvent(new Event('pause'));
+        video.dispatchEvent(new Event('ended'));
+      });
+    };
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+
+    finish();
+    expect(result.current.ended).toBe(true);
+    act(() => result.current.seekBy(5));
+    expect(result.current.ended).toBe(false);
+
+    // 옮기는 중엔 옛 줄기의 ended를 안 듣는다: 새 줄기가 붙은 뒤에 끝난다
+    act(() => vi.advanceTimersByTime(300));
+    finish();
+    expect(result.current.ended).toBe(true);
+    act(() => {
+      video.dispatchEvent(new Event('play'));
+    });
+    expect(result.current.ended).toBe(false);
+  });
+
   it('보이는 볼륨(70%)을 영상에 싣는다 — 전에는 노드가 100%였다', () => {
     const { video } = fakeVideo();
     // 화면처럼 같은 ref를 넘긴다: 다시 그릴 때마다 새 ref면 줄기를 다시 붙여(효과 의존성) 한 번만 다시 붙이는지를 못 잰다
@@ -314,6 +455,58 @@ describe('useRecordedPlayback — 남은 재생기 결함(POK-253)', () => {
     const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
     expect(result.current.volume).toBe(70);
     expect(video.volume).toBeCloseTo(0.7);
+  });
+
+  it('음소거 뒤 음량을 올리면 소리가 돌아온다 — 전에는 끌어도 0으로 되돌아갔다. 영상은 다시 받지 않는다(POK-516)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    const before = video.src;
+    expect(result.current.muted).toBe(true);
+
+    act(() => result.current.setVolume(30));
+
+    expect(result.current.muted).toBe(false);
+    expect(video.muted).toBe(false);
+    expect(result.current.volume).toBe(30);
+    expect(video.volume).toBeCloseTo(0.3);
+    expect(video.src).toBe(before);
+  });
+
+  it('음량을 0으로 내리면 음소거를 풀지 않는다(POK-516)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+
+    act(() => result.current.setVolume(0));
+
+    expect(result.current.muted).toBe(true);
+    expect(video.muted).toBe(true);
+    expect(result.current.volume).toBe(0);
+  });
+
+  it('음소거를 푼 음량은 다음 구간 줄기에도 이어진다(POK-516)', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([
+      [0, 14],
+      [24, 14],
+    ]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    act(() => result.current.setVolume(30));
+    const before = video.src;
+
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    expect(video.src).not.toBe(before);
+    expect(video.muted).toBe(false);
+    expect(video.volume).toBeCloseTo(0.3);
   });
 
   it('화질·저지연 설정 메뉴를 안 보인다 — 렌디션이 하나라 거짓 선택지다', () => {

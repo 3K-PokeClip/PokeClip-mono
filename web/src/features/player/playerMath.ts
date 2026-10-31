@@ -33,8 +33,30 @@ export const SEEK_PAGE_SECONDS = 60;
 /** 재생 중 컨트롤 자동 숨김 지연 (디자인 시안 값) */
 export const AUTO_HIDE_MS = 2800;
 
+/** 플레이어가 처음 서는 음량(%). 되살릴 음량이 너무 작을 때도 이 값이다 */
+export const DEFAULT_VOLUME = 70;
+
+/** 이보다 작은 음량은 되살려도 안 들린다 */
+const MIN_RESTORED_VOLUME = 10;
+
+/** 이 음량부터 스피커 아이콘의 소리 줄기가 둘이다 */
+const LOUD_VOLUME = 50;
+
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
+}
+
+/**
+ * 스피커 아이콘의 단계(POK-517). 음소거이거나 음량이 0이면 X, 작으면 소리 줄기 하나, 크면 둘이다. 단추 이름도 silent로 갈린다
+ */
+export function volumeLevel(muted: boolean, volume: number): 'silent' | 'low' | 'high' {
+  if (muted || volume === 0) return 'silent';
+  return volume < LOUD_VOLUME ? 'low' : 'high';
+}
+
+/** 음량 0에서 소리를 켤 때 되살릴 음량. 너무 작으면 켜도 안 들려 죽은 단추처럼 보이므로 기본 음량이다(POK-517) */
+export function restoredVolume(lastVolume: number): number {
+  return lastVolume >= MIN_RESTORED_VOLUME ? lastVolume : DEFAULT_VOLUME;
 }
 
 /**
@@ -51,27 +73,24 @@ function usableWindow(windowSeconds: number): number {
 
 /**
  * 오른쪽 끝을 부르는 말. 라이브는 실시간이고, 녹화 다시보기는 녹화 끝이다(QA 2026-10-11). 버튼 글자·이름과 시크바 낭독이
- * 이 표 하나를 쓴다: 따로 적으면 한쪽만 바뀌어 화면과 화면 낭독기가 다른 말을 한다
+ * 이 표를 쓴다: 따로 적으면 한쪽만 바뀌어 화면과 화면 낭독기가 다른 말을 한다. 끝으로 가는 버튼은 라이브에만 있다(POK-518)
  */
-const EDGE_WORDS = {
-  live: {
-    atEdge: '실시간',
-    goTo: '실시간으로',
-    goToLabel: '실시간으로 이동',
-    seekLabel: '라이브 탐색',
-    fromEdge: '실시간에서',
-  },
-  replay: {
-    atEdge: '녹화 끝',
-    goTo: '끝으로',
-    goToLabel: '녹화 끝으로 이동',
-    seekLabel: '다시보기 탐색',
-    fromEdge: '녹화 끝에서',
-  },
+export const LIVE_EDGE_WORDS = {
+  atEdge: '실시간',
+  goTo: '실시간으로',
+  goToLabel: '실시간으로 이동',
+  seekLabel: '라이브 탐색',
+  fromEdge: '실시간에서',
 } as const;
 
-export function edgeWords(replay: boolean): (typeof EDGE_WORDS)[keyof typeof EDGE_WORDS] {
-  return replay ? EDGE_WORDS.replay : EDGE_WORDS.live;
+const REPLAY_EDGE_WORDS = {
+  atEdge: '녹화 끝',
+  seekLabel: '다시보기 탐색',
+  fromEdge: '녹화 끝에서',
+} as const;
+
+export function edgeWords(replay: boolean): typeof LIVE_EDGE_WORDS | typeof REPLAY_EDGE_WORDS {
+  return replay ? REPLAY_EDGE_WORDS : LIVE_EDGE_WORDS;
 }
 
 /**

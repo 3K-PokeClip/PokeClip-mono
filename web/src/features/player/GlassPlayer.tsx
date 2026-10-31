@@ -14,17 +14,21 @@ import {
 import clsx from 'clsx';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
+import { BufferingOverlay } from './BufferingOverlay';
 import styles from './GlassPlayer.module.css';
 import { PlayerChatOverlay } from './PlayerChatOverlay';
-import { PlayerControls } from './PlayerControls';
+import { PlayerControls, type PlayerMark } from './PlayerControls';
 import { PlayerSeekBar } from './PlayerSeekBar';
 import { PlayerTopOverlay, type PlayerBroadcastStatus } from './PlayerTopOverlay';
-import { seekIntentForKey } from './playerKeys';
+import { edgeIntent, seekIntentForKey, type SeekIntent } from './playerKeys';
 import { progressFraction } from './playerMath';
 import { PlayerSessionOverlay } from './PlayerSessionOverlay';
 import { useHlsPlayback, type LivePosition } from './useHlsPlayback';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
+import { useMediaBuffering } from './useMediaBuffering';
 import type { PlaybackSession } from './usePlaybackSession';
+import { usePlayerShortcuts } from './usePlayerShortcuts';
+import { useSoundToggle } from './useSoundToggle';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 import {
   usePlayerSimulation,
@@ -128,6 +132,8 @@ export interface GlassPlayerProps {
    */
   chatPanelOpen?: boolean;
   onToggleChatPanel?: () => void;
+  /** 전체 화면의 수동 마킹 — 없으면 버튼을 세우지 않는다 */
+  mark?: PlayerMark;
   /** 카드 클릭 → 시점 이동 같은 바깥 명령의 통로 */
   controllerRef?: Ref<GlassPlayerController>;
   /**
@@ -205,6 +211,7 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
     props.onSeek,
     props.broadcastId,
   );
+  const buffering = useMediaBuffering(videoRef);
   // 초가 바뀔 때만 알린다: timeupdate는 1초에 네 번쯤 온다. 내린다: 영상 시각을 넘는 줄은 보이지 않는다. 카드는 그 시각에
   // 정확히 서므로(seekToPosition) 카드와 같은 초다
   const second = Math.floor(sim.positionSeconds);
@@ -216,6 +223,7 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
     <GlassPlayerBody
       {...props}
       sim={sim}
+      buffering={buffering}
       videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}
     />
   );
@@ -232,6 +240,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
     props.afterForbidden,
     props.broadcastId,
   );
+  const buffering = useMediaBuffering(videoRef);
   // 초가 바뀌거나 시차가 바뀔 때만 알린다(재생기가 초로 내리고, 같은 값이면 같은 객체를 둔다)
   const { onLivePosition } = props;
   const { livePosition } = sim;
@@ -245,6 +254,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
     <GlassPlayerBody
       {...props}
       sim={sim}
+      buffering={buffering}
       // muted 초기값은 훅과 짝 — 자동재생 정책상 소리는 사용자가 켠다
       videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}
     />
@@ -264,6 +274,7 @@ function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession
     props.afterForbidden,
     props.broadcastId,
   );
+  const buffering = useMediaBuffering(videoRef);
   const { onLivePosition } = props;
   const { livePosition } = sim;
   useEffect(() => {
@@ -275,6 +286,8 @@ function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession
     <GlassPlayerBody
       {...props}
       sim={sim}
+      // 덮개가 선 동안은 영상이 끝에서 멎은 것이다: 덮개가 까닭을 말하니 스피너를 겹치지 않는다
+      buffering={buffering && view.cover === null}
       seekHidden={view.seekHidden}
       liveHidden={view.liveHidden}
       overlay={
@@ -291,6 +304,8 @@ function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession
 interface GlassPlayerBodyProps extends GlassPlayerProps {
   sim: PlayerSimulation;
   videoNode: ReactNode;
+  /** 영상이 끊겨 기다리는 중 — 가운데에 스피너를 세운다(POK-439) */
+  buffering?: boolean;
   /** 영상 위 덮개 · 띠(재생 세션) */
   overlay?: ReactNode;
   /** 받을 목록이 없어 시크바를 숨긴다(재생 세션의 끝남 대기 덮개) */
@@ -308,11 +323,13 @@ function GlassPlayerBody({
   embed = false,
   chatPanelOpen,
   onToggleChatPanel,
+  mark,
   controllerRef,
   onUptimeChange,
   recorded,
   sim,
   videoNode,
+  buffering = false,
   overlay,
   seekHidden = false,
   liveHidden = false,
@@ -328,6 +345,8 @@ function GlassPlayerBody({
   // 마우스 드래그는 :focus-visible이 아니라 CSS의 포커스 예외절도 안 걸린다 — 팝오버(settingsOpen)와
   // 같은 방식으로 드래그 동안 숨김을 유보한다.
   const [seeking, setSeeking] = useState(false);
+  // 멈춰 있으면 움직임이 없어도 호버하는 동안은 컨트롤을 둔다. 호버하지 않으면 멈춰 있어도 영상을 가리지 않는다(POK-518)
+  const [hovering, setHovering] = useState(false);
   // 안 보일 땐 시뮬레이션 티커도 돌리지 않는다
   // 오버레이 채팅은 흉내뿐이라 목업 모드에서만 돈다(파일 머리 주석)
   const overlayChat = simulate;
@@ -335,9 +354,10 @@ function GlassPlayerBody({
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
   const chatToggleRef = useRef<HTMLButtonElement>(null);
+  const markButtonRef = useRef<HTMLButtonElement>(null);
   const fullscreenButtonRef = useRef<HTMLButtonElement>(null);
-  /** 전체 화면을 나가는 순간, 곧 사라질 채팅 토글이 포커스를 들고 있었나 */
-  const chatToggleHadFocusRef = useRef(false);
+  /** 전체 화면을 나가는 순간, 곧 사라질 버튼(채팅 토글 · 수동 마킹)이 포커스를 들고 있었나 */
+  const leavingButtonHadFocusRef = useRef(false);
 
   // 전체 화면 여부는 요청이 아니라 결과로 안다 — ESC·브라우저 UI로 나가도 fullscreenchange가 온다.
   // 이 플레이어가 전체 화면 요소일 때만 참이다(다른 요소의 전체 화면은 남의 일).
@@ -347,8 +367,12 @@ function GlassPlayerBody({
       // el을 먼저 따지는 이유 — 언마운트 때 ref 분리가 이 리스너 해제보다 먼저다. 그 사이에 이벤트가
       // 오면 fullscreenElement도 null이라, 그냥 비교하면 null === null로 「전체 화면」이 돼 버린다.
       const next = el !== null && document.fullscreenElement === el;
-      // 나가는 이 순간이 마지막 기회다 — 리렌더 전이라 사라질 토글이 아직 포커스를 들고 있다
-      if (!next) chatToggleHadFocusRef.current = document.activeElement === chatToggleRef.current;
+      // 나가는 이 순간이 마지막 기회다 — 리렌더 전이라 사라질 버튼이 아직 포커스를 들고 있다
+      if (!next) {
+        const active = document.activeElement;
+        leavingButtonHadFocusRef.current =
+          active === chatToggleRef.current || active === markButtonRef.current;
+      }
       setFullscreen(next);
     };
     // 리스너가 없던 사이(예: Suspense 재서스펜드)에 바뀐 것은 이벤트로 안 온다 — 붙을 때 한 번 읽는다
@@ -357,14 +381,14 @@ function GlassPlayerBody({
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
-  // 전체 화면을 나가며 채팅 토글이 사라지면 그 포커스가 갈 곳이 없다 — 컨테이너 안 포커스를 전제로
-  // 하는 화살표 시킹(POK-32)이 죽는다. 이름 없는 컨테이너(tabIndex −1)로 옮기면 낭독이 끊기므로
+  // 전체 화면을 나가며 채팅 토글 · 수동 마킹이 사라지면 그 포커스가 갈 곳이 없다 — 컨테이너 안 포커스를
+  // 전제로 하는 화살표 시킹(POK-32)이 죽는다. 이름 없는 컨테이너(tabIndex −1)로 옮기면 낭독이 끊기므로
   // 바로 옆에 남아 있는 「전체 화면」 버튼으로 되돌린다(버튼 위에서도 화살표 시킹은 먹는다 —
-  // handleKeyDown이 button을 일부러 예외에서 뺐다). 토글에 포커스가 없었다면 손대지 않는다:
+  // handleKeyDown이 button을 일부러 예외에서 뺐다). 그 버튼들에 포커스가 없었다면 손대지 않는다:
   // 그때 가져오면 남의 포커스를 뺏어 Tab 순서가 페이지 처음이 아니라 플레이어 다음부터 흐른다.
   useEffect(() => {
-    const hadFocus = chatToggleHadFocusRef.current;
-    chatToggleHadFocusRef.current = false;
+    const hadFocus = leavingButtonHadFocusRef.current;
+    leavingButtonHadFocusRef.current = false;
     if (fullscreen || !hadFocus) return;
     fullscreenButtonRef.current?.focus({ preventScroll: true });
     // 재생 중이면 컨트롤이 이미 숨어 있을 수 있다(opacity 0 · pointer-events none). 프로그램적
@@ -373,18 +397,8 @@ function GlassPlayerBody({
     sim.wake();
   }, [fullscreen, sim]);
 
-  const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
-
-  // 🔴 서버로 보내는 길이 아직 없다 — 전에는 시크바에 표시만 찍고 「저장되었습니다」를 띄워 거짓 성공이었다(POK-253).
-  // 수동 마킹이 서버로 가기 전까지(POK-257) 준비 중이라고만 알린다. 자동 하이라이트 카드는 채팅 급증으로 따로 생긴다
-  const handleClip = useCallback(() => {
-    track('pending_feature_clicked', { feature: 'player_clip' }); // 수요를 본다 (POK-357)
-    toast({
-      tone: 'info',
-      title: '클립 만들기는 준비 중이에요',
-      description: '채팅이 터진 순간은 하이라이트 카드로 자동으로 잡혀요.',
-    });
-  }, [toast]);
+  const controlsShown =
+    sim.controlsVisible || (!sim.playing && hovering) || settingsOpen || seeking;
 
   const handlePip = useCallback(() => {
     track('pending_feature_clicked', { feature: 'mini_player' });
@@ -435,6 +449,15 @@ function GlassPlayerBody({
   const isInsidePlayer = (target: EventTarget | null) =>
     target instanceof Node && containerRef.current?.contains(target) === true;
 
+  const applySeek = useCallback(
+    (intent: SeekIntent) => {
+      if (intent.kind === 'by') sim.seekBy(intent.seconds);
+      else if (intent.kind === 'toFraction') sim.seekToFraction(intent.fraction);
+      else sim.returnToLive();
+    },
+    [sim],
+  );
+
   // 시킹 단축키를 플레이어 전역으로 — 시크바에 Tab 포커스를 넣지 않아도 화살표가 먹는다 (POK-32).
   // 키맵은 시크바와 같은 seekIntentForKey를 쓰므로 둘이 어긋날 수 없다.
   const handleKeyDown = useCallback(
@@ -457,24 +480,26 @@ function GlassPlayerBody({
       ) {
         return;
       }
-      const intent = seekIntentForKey(event);
+      const intent = seekIntentForKey(event, sim.replay);
       if (!intent) return;
-      if (intent.kind === 'by') sim.seekBy(intent.seconds);
-      else if (intent.kind === 'toFraction') sim.seekToFraction(intent.fraction);
-      else sim.returnToLive();
+      applySeek(intent);
       event.preventDefault();
     },
-    [sim],
+    [sim, applySeek],
   );
 
-  // 화면을 클릭하면 컨테이너가 포커스를 받아 전역 단축키가 먹는다. 버튼·슬라이더를 눌렀을 땐
-  // 그쪽 포커스를 뺏지 않는다 — Tab 이동 중 포커스가 튀면 접근성 회귀다.
+  // 플레이어를 누르면 컨테이너가 포커스를 받아 전역 단축키가 먹는다. 버튼도 그렇다: 재생 막대 버튼은
+  // 마우스로 눌러도 포커스를 받지 않아서(keepFocus), 여기서 받지 않으면 포커스가 플레이어 밖에 남아
+  // 화살표 시킹이 죽고 Space가 바깥 버튼을 누른다. 슬라이더와 메뉴를 여는 버튼은 자기 포커스가 필요하다.
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       sim.wake();
       // 팝오버 안을 눌렀는데 여기로 포커스를 가져오면 그쪽 포커스 트랩이 깨진다
       if (!isInsidePlayer(event.target)) return;
-      if (event.target instanceof Element && event.target.closest('button, input, [role="slider"]'))
+      if (
+        event.target instanceof Element &&
+        event.target.closest('input, [role="slider"], button[aria-haspopup]')
+      )
         return;
       containerRef.current?.focus({ preventScroll: true });
     },
@@ -492,13 +517,38 @@ function GlassPlayerBody({
     transition?.catch(() => {});
   }, []);
 
+  const { rememberVolume, toggleSound } = useSoundToggle(sim);
+  usePlayerShortcuts(containerRef, {
+    togglePlay: () => {
+      sim.togglePlay();
+      sim.wake();
+    },
+    toggleSound: () => {
+      toggleSound();
+      sim.wake();
+    },
+    fullscreen: handleFullscreen,
+    // 플레이어 안에서 누른 End는 handleKeyDown이 먼저 처리한다(defaultPrevented)
+    toEdge: () => {
+      applySeek(edgeIntent(sim.replay));
+      sim.wake();
+    },
+  });
+
   return (
     <div
       ref={containerRef}
       className={clsx(styles.player, embed && styles.embed)}
       data-controls={controlsShown ? 'visible' : 'hidden'}
-      onMouseMove={sim.wake}
-      onMouseLeave={sim.sleep}
+      // 들어올 때가 아니라 움직일 때 안다: 마우스가 이미 위에 있는 채로 화면이 열리면 들어오는 사건이 없다
+      onMouseMove={() => {
+        setHovering(true);
+        sim.wake();
+      }}
+      onMouseLeave={() => {
+        setHovering(false);
+        sim.sleep();
+      }}
       // 키보드 사용자도 컨트롤을 깨울 수 있어야 한다 — CSS의 :has(:focus-visible) 유지와 짝
       onFocus={sim.wake}
       // 탭에 mousemove를 합성하지 않는 터치 환경의 복구 경로 — 숨은 컨트롤은 pointer-events가 없다
@@ -510,6 +560,8 @@ function GlassPlayerBody({
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
       </div>
+      {/* 안내가 섰으면 기다리는 것이 아니라 멎은 것이다 */}
+      {buffering && !sim.playbackError ? <BufferingOverlay /> : null}
       {/* 재생이 멎은 까닭(POK-337). 컨트롤과 따로 서서 자동 숨김에 안 가려진다 */}
       {sim.playbackError ? (
         <div className={styles.playbackError} role="status">
@@ -526,6 +578,12 @@ function GlassPlayerBody({
         onToggleChatPanel={fullscreen ? undefined : onToggleChatPanel}
       />
       {overlayChat && fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
+      {/* 평소엔 영상 아래 줄이 알린다. 전체 화면엔 그 줄도 토스트도 안 보인다 */}
+      {fullscreen && mark?.status ? (
+        <div className={styles.markStatus} role="status">
+          {mark.status}
+        </div>
+      ) : null}
       {overlay}
       <div className={styles.controls}>
         {seekHidden ? null : (
@@ -548,10 +606,14 @@ function GlassPlayerBody({
               ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }
               : undefined
           }
+          fullscreen={fullscreen}
           fullscreenButtonRef={fullscreenButtonRef}
-          onClip={handleClip}
+          mark={mark}
+          markButtonRef={markButtonRef}
           onPip={handlePip}
           onFullscreen={handleFullscreen}
+          onToggleSound={toggleSound}
+          onVolumeTouch={rememberVolume}
           onSettingsOpenChange={setSettingsOpen}
         />
       </div>

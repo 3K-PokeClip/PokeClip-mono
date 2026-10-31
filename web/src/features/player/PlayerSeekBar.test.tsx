@@ -37,6 +37,30 @@ function renderSeekBar(overrides: Partial<Parameters<typeof PlayerSeekBar>[0]> =
   return { slider, props };
 }
 
+describe('PlayerSeekBar 다시보기(POK-518)', () => {
+  it('End는 라이브 복귀가 아니라 오른쪽 끝으로 간다', () => {
+    const onSeekToFraction = vi.fn();
+    const onReturnToLive = vi.fn();
+    render(
+      <PlayerSeekBar
+        behindSeconds={60}
+        windowSeconds={600}
+        clipMarked={false}
+        onSeekToFraction={onSeekToFraction}
+        onSeekBy={vi.fn()}
+        onReturnToLive={onReturnToLive}
+        onSeekingChange={vi.fn()}
+        replay
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole('slider', { name: '다시보기 탐색' }), { key: 'End' });
+
+    expect(onSeekToFraction).toHaveBeenCalledWith(1);
+    expect(onReturnToLive).not.toHaveBeenCalled();
+  });
+});
+
 describe('PlayerSeekBar 드래그', () => {
   it('드래그 중엔 시킹하지 않고 놓을 때 한 번만 시킹한다', () => {
     const { slider, props } = renderSeekBar();

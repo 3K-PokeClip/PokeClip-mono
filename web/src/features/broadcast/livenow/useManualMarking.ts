@@ -4,8 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ClipApiError, postWebMark, type WebMarkBody } from '@/api/clipEditor';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
-import { isMarkHotkey, isTypingTarget } from './markKey';
+import { blocksMarkHotkey, isMarkHotkey } from './markKey';
 import { msToClock, type LiveCardSnapshot } from './useLiveMockState';
+
+/** 마킹 결과 한 줄을 두는 시간 */
+const NOTICE_MS = 3000;
 
 // 수동 마킹(시안 1b·1c, POK-392). 갈래가 둘이다.
 // - 라이브: 누른 때·보낸 때를 보내고 서버가 시각을 정한다. 브라우저 시계가 틀려도 그 차(받은 시각 − 보낸 때)가 빠진다.
@@ -16,7 +19,7 @@ import { msToClock, type LiveCardSnapshot } from './useLiveMockState';
 //
 // 리스너를 document에 다는 이유: 핫키의 쓸모가 "어디를 보고 있든 눌리는 것"이라
 // 화면 컨테이너에 달면 포커스가 밖에 있을 때 죽는다. 대신 가드가 둘 붙는다 —
-// 입력 중인 곳(isTypingTarget)과 이미 누군가 처리한 키(defaultPrevented).
+// 입력 중인 곳(blocksMarkHotkey)과 이미 누군가 처리한 키(defaultPrevented).
 
 /** live·past는 명부가 답한 방송 상태다. 모르면 unknown이고 어느 갈래도 보내지 않는다 */
 export type MarkMode = 'live' | 'past' | 'unknown';
@@ -39,9 +42,26 @@ export function useManualMarking(options: ManualMarkingOptions): {
   mark: () => void;
   /** 만드는 중인 카드의 시각. 보내는 동안만 있다 */
   pendingLabel: string | null;
+  /** 마킹 결과 한 줄. 토스트와 영상 아래 줄이 안 보이는 전체 화면에서 플레이어가 띄운다. 잠깐 있다 사라진다 */
+  notice: string | null;
 } {
   const { toast } = useToast();
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
+  const showNotice = useCallback((text: string) => {
+    setNotice(text);
+    window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), NOTICE_MS);
+  }, []);
+  const say = useCallback(
+    (tone: 'info' | 'warning', title: string) => {
+      toast({ tone, title });
+      showNotice(title);
+    },
+    [toast, showNotice],
+  );
   // 보내는 중이면 또 누른 것은 버린다(자리는 하나). 상태가 아니라 ref다: 같은 그리기 안에서 두 번 눌러도 막는다
   const sending = useRef(false);
   // 그리기마다 바뀌는 값(방송 시계·콜백)을 ref로 읽는다: mark가 매초 새로 만들어지면 document 리스너도 매초 다시 붙는다
@@ -62,7 +82,7 @@ export function useManualMarking(options: ManualMarkingOptions): {
     const { streamId, mode, clockLabel, positionMs, onCard, onExistingCard } = latest.current;
     if (!streamId || sending.current) return;
     if (mode === 'unknown') {
-      toast({ tone: 'info', title: '방송 정보를 확인하고 있어요. 잠시 뒤 다시 눌러 주세요' });
+      say('info', '방송 정보를 확인하고 있어요. 잠시 뒤 다시 눌러 주세요');
       return;
     }
     let body: WebMarkBody;
@@ -71,7 +91,7 @@ export function useManualMarking(options: ManualMarkingOptions): {
     if (mode === 'past') {
       const position = positionMs();
       if (position === null) {
-        toast({ tone: 'info', title: '재생 위치를 알 수 없어 카드를 만들 수 없어요' });
+        say('info', '재생 위치를 알 수 없어 카드를 만들 수 없어요');
         return;
       }
       body = { eventId, positionMs: position };
@@ -98,35 +118,35 @@ export function useManualMarking(options: ManualMarkingOptions): {
         if (!stillHere()) return;
         if (status === 200) {
           // 앞 카드가 가린 카드면(POK-463) 보이는 칸에는 없다: 「이미 있다」만 말하면 마킹이 실패한 것처럼 읽힌다
-          toast({
-            tone: 'info',
-            title: card.hidden ? '가까운 카드가 숨김 칸에 있어요' : '가까운 카드가 이미 있어요',
-          });
+          say('info', card.hidden ? '가까운 카드가 숨김 칸에 있어요' : '가까운 카드가 이미 있어요');
           if (mode === 'past') onExistingCard(card);
+        } else {
+          // 성공은 토스트를 안 띄운다: 평소엔 카드가 목록에 서는 것이 답이고, 전체 화면엔 그 목록이 없다
+          showNotice(`${label} 카드를 만들었어요`);
         }
       } catch (e) {
         if (!stillHere()) return;
         const notReady =
           e instanceof ClipApiError && e.status === 503 && e.code === 'timeline_not_ready';
-        toast({
-          tone: 'warning',
-          title: notReady
+        say(
+          'warning',
+          notReady
             ? '아직 영상 기준을 못 정했어요. 잠시 뒤 다시 눌러 주세요'
             : '카드를 만들지 못했어요',
-        });
+        );
       } finally {
         sending.current = false;
         setPendingLabel(null);
       }
     })();
-  }, [toast]);
+  }, [say, showNotice]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // 플레이어 단축키 등 이미 누군가 처리한 키는 건드리지 않는다
       if (event.defaultPrevented) return;
       if (!isMarkHotkey(event)) return;
-      if (isTypingTarget(event.target)) return;
+      if (blocksMarkHotkey(event.target)) return;
       event.preventDefault();
       mark();
     };
@@ -134,5 +154,5 @@ export function useManualMarking(options: ManualMarkingOptions): {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [mark]);
 
-  return { mark, pendingLabel };
+  return { mark, pendingLabel, notice };
 }

@@ -47,16 +47,18 @@ export interface PlayerSimulation {
   settingsMenu: boolean;
   /**
    * 끝난 방송의 녹화 다시보기인가. 오른쪽 끝이 「실시간」이 아니라 녹화 끝이고 그 끝으로 가는 동작도 녹화 재생이 정한다
-   * (ADR-081 8). 버튼·시크바 문구가 이 값으로 갈린다(QA 2026-10-11)
+   * (ADR-081 8). 시크바 문구와 End 키, 버튼 자리의 시간 표기가 이 값으로 갈린다(QA 2026-10-11, POK-518)
    */
   replay: boolean;
+  /** 녹화를 끝까지 봤다(POK-518). 재생 단추가 「처음부터」가 된다. 끝이 없는 라이브 · 목업엔 없다 */
+  ended?: boolean;
   /**
    * 실재생이 멎은 까닭을 영상 위에 한 줄로 알린다(POK-337). 없으면(null·목업) 덮개가 없다. 영상 서버를 아직 못 부른
    * 자리(출입증·녹화 목록)는 이 칸이 아니라 영상 자리 아랫줄이 알린다
    */
   playbackError?: string | null;
   clipMarked: boolean;
-  /** 자동 숨김 상태 — 일시정지 중엔 이 값과 무관하게 컨트롤을 보여준다 */
+  /** 자동 숨김 상태 — 멈춰 있는 동안 마우스가 플레이어 위에 있으면 이 값과 무관하게 컨트롤을 보여준다 */
   controlsVisible: boolean;
   togglePlay: () => void;
   toggleMute: () => void;

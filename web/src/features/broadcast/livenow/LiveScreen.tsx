@@ -13,6 +13,7 @@ import {
 import clsx from 'clsx';
 import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
+import type { PlayerMark } from '@/features/player/PlayerControls';
 import { useMediaSource } from '@/features/player/mediaSource';
 import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
@@ -22,6 +23,7 @@ import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { NewBroadcastBand } from './NewBroadcastBand';
 import { LiveScreenSkeleton } from './LiveScreenSkeleton';
 import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
+import { MARK_HOTKEY } from './markKey';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { ensureLiveAccess, takePlaybackDrop } from '@/api/playbackAccess';
@@ -125,6 +127,7 @@ function LivePlayer({
   controllerRef,
   chatPanelOpen,
   onToggleChatPanel,
+  mark,
   startAtSeconds,
   onRecordedReady,
   onRecordingLookup,
@@ -155,6 +158,8 @@ function LivePlayer({
   controllerRef: Ref<GlassPlayerController>;
   chatPanelOpen: boolean;
   onToggleChatPanel: () => void;
+  /** 전체 화면의 수동 마킹. 영상 아래 줄이 안 보이는 자리라 재생 막대가 받는다 */
+  mark: PlayerMark;
   /** 녹화가 서면 이 자리(방송 기준 초)부터 튼다. 녹화가 서기 전에 고른 시점이다 */
   startAtSeconds: number | null;
   /** 녹화 플레이어가 섰다. 시작 위치를 받았으니 부른 쪽이 비운다 */
@@ -383,6 +388,7 @@ function LivePlayer({
         controllerRef={controllerRef}
         chatPanelOpen={chatPanelOpen}
         onToggleChatPanel={onToggleChatPanel}
+        mark={mark}
       />
     </>
   );
@@ -467,6 +473,14 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       seekTo(card.streamTimestampMs / 1000);
     },
   });
+  const markDisabled = markMode === 'unknown' || (markMode === 'past' && !pastMarkable);
+  const playerMark: PlayerMark = {
+    mode: ended ? 'past' : 'live',
+    disabled: markDisabled,
+    status: marking.pendingLabel ? `${marking.pendingLabel} 마킹됨 · 카드 생성 중` : marking.notice,
+    hotkey: MARK_HOTKEY,
+    onMark: marking.mark,
+  };
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
@@ -758,6 +772,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
                 controllerRef={playerRef}
                 chatPanelOpen={chatPanelOpen}
                 onToggleChatPanel={toggleChatPanel}
+                mark={playerMark}
                 startAtSeconds={pendingStart}
                 onRecordedReady={handleRecordedReady}
                 onRecordingLookup={setRecordingLookup}
@@ -781,7 +796,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             metaNote={`방송 정보 ${lockWord ?? missingWord(viewStatus, info !== null)}`}
             pendingLabel={marking.pendingLabel}
             markMode={ended ? 'past' : 'live'}
-            markDisabled={markMode === 'unknown' || (markMode === 'past' && !pastMarkable)}
+            markDisabled={markDisabled}
             onMark={marking.mark}
           />
           <HighlightCardPanel

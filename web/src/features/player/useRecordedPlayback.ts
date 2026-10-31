@@ -40,9 +40,20 @@ function pieceOffsetMs(seconds: number): number {
   return Math.round(seconds * 1000);
 }
 
-/** 앞으로 가는 이동의 도착점: 녹화 안으로 자르고, 틈 안이면 다음 구간 시작이다(재생 서버는 틈을 건너 주지 않는다) */
+/**
+ * 녹화 끝으로 갈 때 틀 자리: 마지막 구간의 끝 1초 앞이다. 그 구간이 1초보다 짧으면 구간 시작이다(앞 구간에 떨어지지 않는다).
+ * 줄기는 건너뛸 수 없어(파일 머리 주석) 끝으로 가는 것도 이 꼬리를 틀어 끝에 닿는 것이다
+ */
+function tailStart(recorded: RecordingTimeline): number {
+  const last = recorded.pieces[recorded.pieces.length - 1]!;
+  return Math.max(0, last.fromSeconds, last.toSeconds - 1);
+}
+
+/** 앞으로 가는 이동의 도착점: 끝은 꼬리로 모으고, 틈 안이면 다음 구간 시작이다(재생 서버는 틈을 건너 주지 않는다) */
 function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
-  const wanted = clampToRecording(recorded.durationSeconds, seconds);
+  const tail = tailStart(recorded);
+  if (seconds >= tail) return tail;
+  const wanted = Math.max(0, seconds);
   return playableFrom(recorded, wanted)?.fromSeconds ?? wanted;
 }
 
@@ -80,13 +91,17 @@ export function useRecordedPlayback(
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   /** 다시 붙이지 못한 줄기의 주소. 줄기가 바뀌면(옮김·다음 구간) 알림이 저절로 사라진다 */
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  /** 마지막 구간까지 다 봤다(POK-518). 재생 단추가 「처음부터」가 된다 */
+  const [ended, setEnded] = useState(false);
+  const endedRef = useRef(false);
+  endedRef.current = ended;
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
   // 틈 안이면 다음 구간 시작, 녹화 끝을 지났으면 마지막 구간 끝 1초 앞(끝까지 본 뒤 다시 누른 경우)
   const piece = useMemo(() => {
     const last = recorded.pieces[recorded.pieces.length - 1]!;
     return (
       playableFrom(recorded, offset) ?? {
-        fromSeconds: Math.max(last.fromSeconds, last.toSeconds - 1),
+        fromSeconds: tailStart(recorded),
         toSeconds: last.toSeconds,
       }
     );
@@ -149,6 +164,7 @@ export function useRecordedPlayback(
     };
     const onPlay = () => {
       wantPlayRef.current = true;
+      setEnded(false);
       setPlaying(true);
     };
     // 그 방송을 처음 틀었을 때 한 번만 센다 — 줄기를 갈아 끼우는 구간 넘김·옮김은 세지 않는다 (POK-357).
@@ -170,6 +186,9 @@ export function useRecordedPlayback(
       const next = playableFrom(recordedRef.current, pieceEndRef.current);
       if (next === null) {
         wantPlayRef.current = false;
+        // 받은 줄기가 목록보다 조금 짧아도 끝은 녹화 끝이다: 시크바와 시간 표기가 끝에 맞게 선다
+        setPosition(recordedRef.current.durationSeconds);
+        setEnded(true);
         return;
       }
       setPosition(next.fromSeconds);
@@ -221,11 +240,18 @@ export function useRecordedPlayback(
   }, [src, videoRef]);
 
   const jumpTo = useCallback(
-    (seconds: number, backward = false) => {
+    (seconds: number, { backward = false, card = false } = {}) => {
       // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
       const target = backward
         ? playableBackFrom(recordedRef.current, clampToRecording(total, seconds))
         : forwardTarget(recordedRef.current, seconds);
+      // 이미 끝에 있으면 옮길 것이 없다: 꼬리를 되감거나 끝난 영상의 꼬리를 새로 받으면 끝에서 1초가 또 돈다(POK-518).
+      // 카드는 뺀다: 마지막 1초 안의 카드도 그 장면을 보러 가는 것이고, 고른 쪽은 옮겼다고 여긴다(seekToUptime)
+      const tail = pieceOffsetMs(tailStart(recordedRef.current));
+      const atTail = endedRef.current || pieceOffsetMs(offsetRef.current) === tail;
+      const toTail = !backward && !card && pieceOffsetMs(target) === tail;
+      if (toTail && pendingRef.current === null && atTail) return;
+      setEnded(false);
       pendingRef.current = target;
       setPosition(target);
       onSeekRef.current?.();
@@ -274,6 +300,7 @@ export function useRecordedPlayback(
     currentPositionSeconds: now,
     behindSeconds,
     atEdge: behindSeconds < AT_EDGE_THRESHOLD_SECONDS,
+    ended,
     windowSeconds: span,
     uptimeSeconds: total,
     quality,
@@ -321,8 +348,15 @@ export function useRecordedPlayback(
     }, [videoRef]),
     setVolume: useCallback(
       (value: number) => {
-        setVolumeState(value);
-        if (videoRef.current) videoRef.current.volume = Math.min(1, Math.max(0, value / 100));
+        const video = videoRef.current;
+        const v = Math.min(100, Math.max(0, Math.round(value)));
+        setVolumeState(v);
+        if (video) video.volume = v / 100;
+        // 음량을 올리면 음소거도 푼다: 슬라이더는 음소거 중 늘 0이라 안 풀면 끌어도 0으로 되돌아가고 소리도 안 난다(POK-516)
+        if (v > 0) {
+          setMuted(false);
+          if (video) video.muted = false;
+        }
       },
       [videoRef],
     ),
@@ -331,9 +365,12 @@ export function useRecordedPlayback(
       [jumpTo, total, span],
     ),
     // 음수는 엣지(끝) 방향 — 라이브 플레이어와 같은 부호
-    seekBy: useCallback((delta: number) => jumpTo(now() - delta, delta > 0), [jumpTo, now]),
+    seekBy: useCallback(
+      (delta: number) => jumpTo(now() - delta, { backward: delta > 0 }),
+      [jumpTo, now],
+    ),
     // 카드는 그 자리로 바로 간다: 시크바 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(리뷰 1라운드)
-    seekToPosition: useCallback((seconds: number) => jumpTo(seconds), [jumpTo]),
+    seekToPosition: useCallback((seconds: number) => jumpTo(seconds, { card: true }), [jumpTo]),
     // 지난 방송의 「실시간」 쪽 끝은 녹화 끝이다 — 시크바 오른쪽 끝·「실시간」 표기와 같은 자리(POK-253). 전에는 처음으로 갔다
     returnToLive: useCallback(() => jumpTo(total), [jumpTo, total]),
     setQuality,

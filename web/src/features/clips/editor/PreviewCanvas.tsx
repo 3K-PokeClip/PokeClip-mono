@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
+import { BufferingOverlay } from '@/features/player/BufferingOverlay';
 import { CropOverlay } from './CropOverlay';
 import { CropResult } from './CropResult';
 import { VideoSurface } from './VideoSurface';
@@ -25,6 +26,8 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const editingLayout = state.activeTool === 'layout';
+  // 판마다 하나다: 분할 · PIP의 칸마다 세우지 않는다. 못 트는 이유가 떠 있으면 기다리는 것이 아니다(POK-439)
+  const buffering = state.previewBuffering && state.previewError === null;
 
   // CC만 고르면 영상에 글자가 타지 않는다 — 번인 미리보기도 그리지 않는다(렌더와 같다)
   const subtitleText =
@@ -59,6 +62,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
           “{subtitleText}”
         </span>
       ) : null}
+      {buffering ? <BufferingOverlay /> : null}
     </div>
   );
 
@@ -83,6 +87,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
               ) : (
                 <span className={styles.sourcePlaceholder}>원본 방송 화면 16:9</span>
               )}
+              {buffering ? <BufferingOverlay /> : null}
               {state.regions.map((region, index) => (
                 <CropOverlay
                   key={region.id}
