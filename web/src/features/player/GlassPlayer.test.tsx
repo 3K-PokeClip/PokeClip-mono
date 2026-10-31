@@ -297,6 +297,38 @@ describe('GlassPlayer', () => {
       expect(fireEvent.mouseDown(screen.getByRole('slider', { name: '볼륨' }))).toBe(true);
     });
 
+    it('마우스로 버튼을 누르면 포커스가 플레이어로 온다 — 바깥에 남으면 화살표 시킹이 죽고 Space가 바깥 버튼을 누른다', () => {
+      const { container } = renderPlayer();
+      const { el, remove } = outside('<button type="button">카드</button>');
+      try {
+        (el as HTMLElement).focus();
+
+        fireEvent.pointerDown(button('일시정지'));
+        fireEvent.mouseDown(button('일시정지'));
+
+        expect(container.querySelector('[data-controls]')).toHaveFocus();
+        fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+        expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+          'aria-valuenow',
+          '-10',
+        );
+      } finally {
+        remove();
+      }
+    });
+
+    it('슬라이더와 메뉴를 여는 버튼은 포커스를 자기가 받는다', () => {
+      const { container } = renderPlayer();
+      const player = container.querySelector('[data-controls]');
+
+      fireEvent.pointerDown(screen.getByRole('slider', { name: '볼륨' }));
+      expect(player).not.toHaveFocus();
+
+      fireEvent.pointerDown(button('설정'));
+      expect(player).not.toHaveFocus();
+      expect(fireEvent.mouseDown(button('설정'))).toBe(true);
+    });
+
     it('플레이어가 내려가면 듣지 않는다', () => {
       const { unmount } = renderPlayer();
       unmount();

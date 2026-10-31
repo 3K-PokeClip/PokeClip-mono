@@ -476,14 +476,18 @@ function GlassPlayerBody({
     [sim],
   );
 
-  // 화면을 클릭하면 컨테이너가 포커스를 받아 전역 단축키가 먹는다. 버튼·슬라이더를 눌렀을 땐
-  // 그쪽 포커스를 뺏지 않는다 — Tab 이동 중 포커스가 튀면 접근성 회귀다.
+  // 플레이어를 누르면 컨테이너가 포커스를 받아 전역 단축키가 먹는다. 버튼도 그렇다: 재생 막대 버튼은
+  // 마우스로 눌러도 포커스를 받지 않아서(keepFocus), 여기서 받지 않으면 포커스가 플레이어 밖에 남아
+  // 화살표 시킹이 죽고 Space가 바깥 버튼을 누른다. 슬라이더와 메뉴를 여는 버튼은 자기 포커스가 필요하다.
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       sim.wake();
       // 팝오버 안을 눌렀는데 여기로 포커스를 가져오면 그쪽 포커스 트랩이 깨진다
       if (!isInsidePlayer(event.target)) return;
-      if (event.target instanceof Element && event.target.closest('button, input, [role="slider"]'))
+      if (
+        event.target instanceof Element &&
+        event.target.closest('input, [role="slider"], button[aria-haspopup]')
+      )
         return;
       containerRef.current?.focus({ preventScroll: true });
     },

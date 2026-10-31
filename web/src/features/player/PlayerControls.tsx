@@ -40,7 +40,7 @@ export interface PlayerMark {
 
 /**
  * 마우스로 누른 단추에 포커스가 남으면 다음 Space가 재생 대신 그 단추를 또 누른다. 편집기 재생 막대와 같은 처리다(POK-490).
- * 슬라이더는 끌어야 해서, 메뉴를 여는 단추는 포커스를 넘겨야 해서 뺀다
+ * 슬라이더는 끌어야 해서, 메뉴를 여는 단추는 포커스를 넘겨야 해서 뺀다. 포커스는 GlassPlayer가 컨테이너로 옮긴다(handlePointerDown)
  */
 function keepFocus(event: MouseEvent<HTMLDivElement>) {
   if (event.target instanceof Element && event.target.closest('button:not([aria-haspopup])')) {
