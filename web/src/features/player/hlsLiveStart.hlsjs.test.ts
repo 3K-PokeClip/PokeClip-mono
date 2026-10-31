@@ -144,8 +144,8 @@ describe('hls.js 라이브 기동 — 기동 문지기가 기대는 순서(진�
     expect(frags).toEqual([LIVE_START_SN]);
   });
 
-  it('보존: 창 하한(첫 + 3 TD) + 1 초에서 시작하면 목록이 두 번 밀려도 시작 위치를 두고 재생점을 옮기지 않는다', async () => {
-    const position = 3 * TD + 1;
+  it('보존: 창 하한(첫 조각 + 맨 앞 4초 조각 셋 길이 합) + 1 초에서 시작하면 목록이 두 번 밀려도 시작 위치를 두고 재생점을 옮기지 않는다', async () => {
+    const position = 4 + 4 + 4 + 1;
     const { sc, frags, writes, updates } = player(position);
     await run(2);
     expect(updates()).toBe(3);
