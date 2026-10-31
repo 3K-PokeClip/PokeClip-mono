@@ -240,17 +240,17 @@ export function useRecordedPlayback(
   }, [src, videoRef]);
 
   const jumpTo = useCallback(
-    (seconds: number, backward = false) => {
+    (seconds: number, { backward = false, card = false } = {}) => {
       // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
       const target = backward
         ? playableBackFrom(recordedRef.current, clampToRecording(total, seconds))
         : forwardTarget(recordedRef.current, seconds);
-      // 이미 끝에 있으면 옮길 것이 없다: 꼬리를 되감거나 끝난 영상의 꼬리를 새로 받으면 끝에서 1초가 또 돈다(POK-518)
+      // 이미 끝에 있으면 옮길 것이 없다: 꼬리를 되감거나 끝난 영상의 꼬리를 새로 받으면 끝에서 1초가 또 돈다(POK-518).
+      // 카드는 뺀다: 마지막 1초 안의 카드도 그 장면을 보러 가는 것이고, 고른 쪽은 옮겼다고 여긴다(seekToUptime)
       const tail = pieceOffsetMs(tailStart(recordedRef.current));
       const atTail = endedRef.current || pieceOffsetMs(offsetRef.current) === tail;
-      if (!backward && pendingRef.current === null && pieceOffsetMs(target) === tail && atTail) {
-        return;
-      }
+      const toTail = !backward && !card && pieceOffsetMs(target) === tail;
+      if (toTail && pendingRef.current === null && atTail) return;
       setEnded(false);
       pendingRef.current = target;
       setPosition(target);
@@ -365,9 +365,12 @@ export function useRecordedPlayback(
       [jumpTo, total, span],
     ),
     // 음수는 엣지(끝) 방향 — 라이브 플레이어와 같은 부호
-    seekBy: useCallback((delta: number) => jumpTo(now() - delta, delta > 0), [jumpTo, now]),
+    seekBy: useCallback(
+      (delta: number) => jumpTo(now() - delta, { backward: delta > 0 }),
+      [jumpTo, now],
+    ),
     // 카드는 그 자리로 바로 간다: 시크바 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(리뷰 1라운드)
-    seekToPosition: useCallback((seconds: number) => jumpTo(seconds), [jumpTo]),
+    seekToPosition: useCallback((seconds: number) => jumpTo(seconds, { card: true }), [jumpTo]),
     // 지난 방송의 「실시간」 쪽 끝은 녹화 끝이다 — 시크바 오른쪽 끝·「실시간」 표기와 같은 자리(POK-253). 전에는 처음으로 갔다
     returnToLive: useCallback(() => jumpTo(total), [jumpTo, total]),
     setQuality,

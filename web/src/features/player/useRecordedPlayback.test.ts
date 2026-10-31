@@ -373,6 +373,26 @@ describe('useRecordedPlayback — 남은 재생기 결함(POK-253)', () => {
     expect(result.current.ended).toBe(true);
   });
 
+  it('끝까지 본 뒤에도 마지막 1초 안의 카드로는 간다 — 끝으로 가는 요청만 무시한다(POK-518)', () => {
+    const { video } = fakeVideo();
+    const onSeek = vi.fn();
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 0, onSeek));
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    act(() => result.current.seekToPosition!(13.4));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(onSeek).toHaveBeenCalledTimes(1);
+    expect(result.current.ended).toBe(false);
+    expect(requested(video).fromSeconds).toBe(13);
+  });
+
   it('마지막 구간이 끝나야 끝 상태다 — 다음 구간이 있으면 아니다. 자리는 녹화 끝으로 확정한다(POK-518)', () => {
     const { video } = fakeVideo();
     const ref = { current: video };
