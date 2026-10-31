@@ -64,6 +64,14 @@ export function isThisRound(session: PlaybackSessionState, x: XAnswer | undefine
   return x?.kind === 'known' && x.id === session.roundId;
 }
 
+/**
+ * 지금 방송 번호 X 가 이 세션의 회차가 아니라고 답했나 — 다른 방송 · 빈 값(방송 없음). 모름 · 답 없음은 아니다.
+ * 스트림 응답이 잠시 불가여도 넘김 근거를 지우는 부정 근거다
+ */
+export function deniesRound(session: PlaybackSessionState, x: XAnswer | undefined): boolean {
+  return x?.kind === 'known' && x.id !== session.roundId;
+}
+
 export function replace(
   session: PlaybackSessionState,
   kind: PlaybackSource['kind'],

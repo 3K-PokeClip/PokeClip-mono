@@ -1,4 +1,3 @@
-import type { RewindStatusResult } from '@/api/rewindStatus';
 import type { LiveProbeResult } from './liveWindowProbe';
 import type {
   PlaybackSessionState,
@@ -8,7 +7,7 @@ import type {
   StreamPollEvent,
   Transition,
 } from './rewindSwitch';
-import { replace } from './sessionShared';
+import { deniesRound, replace } from './sessionShared';
 
 // 되감기 → 라이브 꼬리 넘김의 칸과 행 몸통(POK-200 c13 · 설계 r9 2절 · 4절).
 // rewindSwitch 는 여기 함수를 한 줄로 부르고, 여기는 rewindSwitch 의 타입만 읽는다.
@@ -122,15 +121,17 @@ export function openHandoffFields(): HandoffFields {
 
 /**
  * A0 · A0′ · A0″ — 반영할 물음 순번. 이미 반영한 순번 이하면 null(버림)이고,
- * 근거 응답(ok · none)만 순번을 올린다
+ * 근거 응답(ok · none)과 x 가 이 회차를 부정한 잠시 불가만 순번을 올린다 — 그
+ * 앞 물음의 ok 가 늦게 와 지운 문을 다시 세우지 않게
  */
 export function nextStreamAsk(
   session: PlaybackSessionState,
-  ask: StreamAsk,
-  result: RewindStatusResult,
+  event: StreamPollEvent,
 ): number | null {
+  const { ask, result, x } = event;
   if (ask.seq <= session.streamAsk) return null;
-  return result.kind === 'unavailable' ? session.streamAsk : ask.seq;
+  if (result.kind !== 'unavailable' || deniesRound(session, x)) return ask.seq;
+  return session.streamAsk;
 }
 
 /** 문이 열렸나 — 지금 소스 url 의 문이고, 받은 시각부터 12초 안이다 */
@@ -144,17 +145,19 @@ export function doorOpen(session: PlaybackSessionState, now: number): boolean {
  * D 표 — 이번 응답 뒤의 문. 지금 url 의 live ∧ ready 가 근거다. x 가 보던
  * 방송이면 받은 시각으로 세우고(D1) · 모르면 그대로(D3) · 잠시 불가도
  * 그대로(D5) · 그 밖의 응답(ending · vod · ended · ready:false · 다른 url · 404 ·
- * 다른 방송)은 지운다(D4)
+ * 다른 방송)은 지운다(D4). x 가 다른 방송 · 빈 값이면 응답이 잠시 불가여도
+ * 지운다(계약3 「보던 방송과 다르면 근거를 지운다」)
  */
 function nextDoor(session: PlaybackSessionState, event: StreamPollEvent): HandoffDoor | null {
   const { result, x, ask } = event;
   const url = session.source.url;
+  if (deniesRound(session, x)) return null;
   if (result.kind === 'unavailable') return session.handoffDoor;
   const status = result.kind === 'ok' ? result.status : null;
   if (status?.mode !== 'live' || !status.ready) return null;
   if (status.url !== url) return null;
   if (x === undefined || x.kind === 'unknown') return session.handoffDoor;
-  return x.id === session.roundId ? { url, atMs: ask.receivedAtMs } : null;
+  return { url, atMs: ask.receivedAtMs };
 }
 
 /** D 표를 상태에 적는다 — 문이 그대로면 같은 객체 */
@@ -229,7 +232,7 @@ export function withHandoffRules(
 ): Transition {
   let ready = session;
   if (event.type === 'stream-poll') {
-    const streamAsk = nextStreamAsk(session, event.ask, event.result);
+    const streamAsk = nextStreamAsk(session, event);
     if (streamAsk === null) return { state: session, effects: [] };
     if (streamAsk !== session.streamAsk) ready = { ...session, streamAsk };
   }

@@ -25,6 +25,7 @@ const A1 = 'https://media.pokeclip.com/dvr/key-1/a1/index.m3u8';
 const A2 = 'https://media.pokeclip.com/dvr/key-1/a2/index.m3u8';
 const X_A: XAnswer = { kind: 'known', id: 'r-A' };
 const X_B: XAnswer = { kind: 'known', id: 'r-B' };
+const X_EMPTY: XAnswer = { kind: 'known', id: '' };
 const X_UNKNOWN: XAnswer = { kind: 'unknown' };
 const NONE: RewindStatusResult = { kind: 'none' };
 const UNAVAILABLE: RewindStatusResult = { kind: 'unavailable' };
@@ -176,6 +177,15 @@ describe('끝남 대기의 문(D 표 · D4 · D5 · T21 · T27)', () => {
     const unknown = streamPoll(liveReady(A1, T0, NOW), X_UNKNOWN, R + 5_000);
     expect(run(s, [unknown]).handoffDoor).toBe(s.handoffDoor);
     expect(run(s, [streamPoll(UNAVAILABLE, X_A, R + 5_000)]).handoffDoor).toBe(s.handoffDoor);
+  });
+
+  it('T21: 잠시 불가에 실려 온 x B · 빈 값도 부정 근거다 — 문을 지운다(rewind · 끝남 대기)', () => {
+    for (const s of [doored(), endingDoored()]) {
+      expect(s.handoffDoor).toEqual({ url: A1, atMs: R });
+      for (const x of [X_B, X_EMPTY]) {
+        expect(run(s, [streamPoll(UNAVAILABLE, x, R + 5_000)]).handoffDoor).toBeNull();
+      }
+    }
   });
 
   it('T27a: 봉인된 목록에서도 문은 선다 — 끝남 대기 · rewind(ENDLIST ∧ pendingNext) 둘 다', () => {
