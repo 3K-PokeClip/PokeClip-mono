@@ -460,7 +460,11 @@ async function loadFromRecipe(recipeId: number): Promise<LoadResult> {
       message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
     };
   }
-  const recording = await loadRecording(broadcast);
+  // 트랙 이름 읽기는 녹화와 서로 기다릴 이유가 없다: 편집본을 열 때만 둘이 줄을 섰다(카드로 열 때는 이미 함께 간다)
+  const [trackLabels, recording] = await Promise.all([
+    loadTrackLabels(broadcast),
+    loadRecording(broadcast),
+  ]);
   // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
   //    저장할 때와 같은 기준이어야 제자리로 온다.
   const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
@@ -473,7 +477,7 @@ async function loadFromRecipe(recipeId: number): Promise<LoadResult> {
       window: { startMs: cut.inAtMs - base, endMs: cut.outAtMs - base },
       saved: { id: detail.recipeId, version: detail.recipeVersion, document: detail.recipe },
       latestClip: detail.latestClip,
-      trackLabels: await loadTrackLabels(broadcast),
+      trackLabels,
       recording,
       uploadRequest: detail.uploadRequest ?? null,
     },
