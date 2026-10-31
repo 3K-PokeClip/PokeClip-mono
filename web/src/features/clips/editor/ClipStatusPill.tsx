@@ -3,7 +3,6 @@ import Link from 'next/link';
 import {
   AlertCircle,
   AlertTriangle,
-  Check,
   CheckCircle2,
   ChevronDown,
   ExternalLink,
@@ -11,12 +10,8 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { Button, LinkButton, Popover, Progress, Spinner, VisuallyHidden } from '@/ui';
-import type {
-  ClipStatusAction,
-  ClipStatusTone,
-  ClipStatusView,
-  ClipStepState,
-} from './studio/clipProgress';
+import type { ClipStatusAction, ClipStatusTone, ClipStatusView } from './studio/clipProgress';
+import { ClipStepList, stepsSettled } from './ClipStepList';
 import styles from './editorShared.module.css';
 
 // 「영상 만들기」 옆 영상 상태 알약(POK-492 시안 A, 2026-10-28 사용자 선택) — 회색 글 끝에 붙던 상태가 안 보이고 할 일이
@@ -39,24 +34,6 @@ function ToneIcon({ tone }: { tone: ClipStatusTone }) {
       return <AlertCircle size={14} aria-hidden />;
   }
 }
-
-function StepMark({ state }: { state: ClipStepState }) {
-  switch (state) {
-    case 'done':
-      return <Check size={11} strokeWidth={3} aria-hidden />;
-    case 'now':
-      // 도는 고리는 동그라미 테두리가 맡는다(CSS) — 안에 스피너를 또 넣으면 원이 두 겹으로 겹쳐 보였다
-      return <span className={styles.statusStepDot} aria-hidden />;
-    case 'danger':
-      return <AlertTriangle size={11} strokeWidth={2.5} aria-hidden />;
-    case 'warning':
-      return <AlertCircle size={11} strokeWidth={2.5} aria-hidden />;
-    case 'todo':
-      return null;
-  }
-}
-
-const isCurrent = (state: ClipStepState) => state !== 'done' && state !== 'todo';
 
 /**
  * 영상 상태가 바뀌면 화면 낭독기에 알린다. 요청 직후 토스트(role="status")를 뺀 뒤로 「받았다」가 아무 데서도 읽히지 않았다
@@ -106,7 +83,7 @@ export function ClipStatusPill({
 }) {
   const [open, setOpen] = useState(false);
   const retryNoteId = useId();
-  const settledAll = !view.steps.some((step) => isCurrent(step.state));
+  const settledAll = stepsSettled(view);
 
   // 할 일이 바뀌거나(다시 올리기 성공) 다시 올리기 단추가 돌기 시작하면 포커스를 쥔 단추가 사라지거나 꺼져 포커스가 body로
   // 떨어졌다 — 창으로 되돌려 키보드·스크린리더가 창 문맥을 잃지 않게 한다(PR #454 1차 리뷰)
@@ -219,44 +196,7 @@ export function ClipStatusPill({
             <span className={styles.statusTitle}>{view.title}</span>
             <span className={styles.statusVersion}>{versionLabel}</span>
           </div>
-          <ol className={styles.statusSteps} aria-label="진행 단계">
-            {view.steps.map((step, i) => {
-              const current = isCurrent(step.state);
-              return (
-                <li
-                  key={step.label}
-                  className={styles.statusStep}
-                  data-state={step.state}
-                  aria-current={current ? 'step' : undefined}
-                >
-                  <span className={styles.statusStepMark}>
-                    <StepMark state={step.state} />
-                  </span>
-                  {i < view.steps.length - 1 ? (
-                    <span className={styles.statusStepLine} aria-hidden />
-                  ) : null}
-                  <div className={styles.statusStepBody}>
-                    <div className={styles.statusStepRow}>
-                      <span className={styles.statusStepLabel}>{step.label}</span>
-                      {step.note !== null ? (
-                        <span className={styles.statusStepNote}>{step.note}</span>
-                      ) : null}
-                    </div>
-                    {current ? (
-                      <>
-                        {view.progress !== null && step.state === 'now' ? (
-                          <div className={styles.statusStepBar}>
-                            <Progress size="sm" value={view.progress.value} label="영상 진행" />
-                          </div>
-                        ) : null}
-                        <p className={styles.statusDetail}>{view.detail}</p>
-                      </>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          <ClipStepList view={view} />
           {/* 지금 단계가 없으면(다 끝남 · 안 올림) 설명은 단계 아래에 따로 둔다 */}
           {settledAll ? (
             <p className={styles.statusDetail} data-standalone="">

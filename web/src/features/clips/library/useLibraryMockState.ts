@@ -78,15 +78,11 @@ export interface LibraryClip {
   sourceLabel: string;
   /** 원본 VOD 보관 만료 ISO(종료 + 60일). 지났으면 ddayFor가 expired를 준다 */
   sourceExpiresAt: string | null;
-  templateLabel: string;
-  subtitleLabel: string;
-  /** 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널이 배지 아래 안내 자리에 그린다. 목업 줄에는 없다 */
-  progressLabel?: string | null;
   /**
-   * 만드는 중인 영상의 진행률 0~100(POK-443). 일꾼이 퍼센트를 아직 안 보냈으면 null(모른다 — 0%가 아니다), 만드는 중이
-   * 아니면(주문만 된 것 포함) 없다. 패널이 진행 줄 아래 막대로 그린다. 목업 줄에는 없다
+   * 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널은 진행 카드(POK-510)가 없을 때만(편집 중) 그린다 —
+   * 카드가 서면 단계 · 막대가 같은 말을 한다. 목업 줄에는 없다
    */
-  renderPercent?: number | null;
+  progressLabel?: string | null;
   /** ISO — 생성순 */
   createdAt: string;
   /** ISO — 최근 편집순 */
@@ -121,15 +117,11 @@ function renderPercentOf(entry: LibraryEntry): number | null | undefined {
 
 /**
  * 진행 한 줄(POK-291). 예전에는 패널의 「자막」 칸에 들어갔는데 그 칸은 자막 정보 자리라 떼어 냈다. 배지가 이미 말하는
- * 상태(완성·확인 필요·업로드됨)는 되풀이하지 않는다: 확인 필요는 안내문이, 업로드 실패는 사유 문구가 말한다.
+ * 상태(편집 중·완성·확인 필요·업로드됨)는 되풀이하지 않는다: 확인 필요는 안내문이, 업로드 실패는 사유 문구가 말한다.
  */
 function progressLabelOf(entry: LibraryEntry): string | null {
   const clip = entry.latestClip;
   switch (entry.status) {
-    case 'editing':
-      return clip === null
-        ? null
-        : `v${clip.recipeVersion} 영상 있음 · 지금은 v${entry.recipeVersion}`;
     case 'rendering': {
       const percent = renderPercentOf(entry);
       const step =
@@ -144,6 +136,7 @@ function progressLabelOf(entry: LibraryEntry): string | null {
       return `렌더 실패 · ${clip?.error?.code ?? '?'}`;
     case 'uploading':
       return '유튜브에 올리는 중';
+    case 'editing':
     case 'rendered':
     case 'checking':
     case 'uploaded':
@@ -193,11 +186,7 @@ export function toLibraryClip(entry: LibraryEntry, meId: string | null): Library
     owner: { name: mine ? '나' : `편집자 ${entry.creatorId}`, me: mine },
     sourceLabel: sourceLabelOf(entry),
     sourceExpiresAt: entry.broadcast.vodExpiresAt,
-    templateLabel: '세로 쇼츠 1벌',
-    // 자막 정보는 목록에 없다: 지어내지 않는다
-    subtitleLabel: '—',
     progressLabel: progressLabelOf(entry),
-    renderPercent: renderPercentOf(entry),
     createdAt: entry.createdAt,
     editedAt: entry.updatedAt,
     youtubeUrl: youtubeUrlOf(entry),
@@ -513,8 +502,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     [clips, setSendingFlag, toast],
   );
 
-  // 「확인 필요」 풀기(POK-333). 답을 줄에 직접 얹지 않고 목록을 다시 읽는다: 푼 업로드가 latestClip의 것일 수도 옛 판의 것일
-  // 수도 있고, 편집본 상태(STATUS_CASE)는 서버가 정한다. 읽기 세대를 올려 그 전에 떠난 읽기(아직 확인 필요)가 덮지 않게 한다.
+  // 「확인 필요」 풀기(POK-333). 답을 줄에 직접 얹지 않고 목록을 다시 읽는다: 편집본 상태(STATUS_CASE)는 서버가 정한다.
+  // 읽기 세대를 올려 그 전에 떠난 읽기(아직 확인 필요)가 덮지 않게 한다. 푸는 단추는 패널 위쪽이 보이는 지금 판 업로드에만 있다.
   const resolveUpload = useCallback(
     async (id: string, uploadId: number, resolution: UploadResolution): Promise<boolean> => {
       const entry = clips.find((c) => c.id === id)?.entry;
@@ -525,17 +514,13 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       try {
         await requestUploadResolution(entry.streamId, target.clipId, uploadId, resolution);
         track('video_upload_resolved', { result: resolution.result });
-        // 다시 시도 단추는 지금 영상(latestClip)에만 있다: 옛 판 업로드를 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
-        const current = target.clipId === entry.latestClip?.id;
         toast(
           resolution.result === 'uploaded'
             ? { tone: 'success', title: '발행됨으로 바꿨어요' }
             : {
                 tone: 'success',
                 title: '안 올라간 것으로 닫았어요',
-                description: current
-                  ? '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.'
-                  : '이전 판 업로드라 이 화면에서 다시 올리지는 않아요.',
+                description: '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.',
               },
         );
         return true;

@@ -193,6 +193,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
         <div className={styles.panelInner}>
           {panelClip ? (
             <ClipDetailPanel
+              active={open}
               clip={panelClip}
               status={statusFor(panelClip, now)}
               now={now}

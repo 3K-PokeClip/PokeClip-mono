@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ClipDetailPanel } from './ClipDetailPanel';
+import { ClipSourceCard } from './ClipSourceCard';
 import { LibraryScreen } from './LibraryScreen';
 import { LibrarySkeleton } from './LibrarySkeleton';
 import { LIBRARY_FIXTURE } from './libraryFixture';
@@ -19,6 +20,26 @@ function cards() {
 function panel() {
   // 닫힌 패널은 inert라 접근 트리에서 빠질 수 있다 — hidden까지 찾는다
   return screen.getByRole('complementary', { name: '편집본 상세', hidden: true });
+}
+
+/** 진행 카드(POK-510)의 지금 단계 줄 — 진행 · 실패 · 확인 필요 중 하나다 */
+function currentStep() {
+  const card = within(panel()).getByRole('region', { name: '진행 상황' });
+  const now = card.querySelector('li[aria-current="step"]');
+  if (!(now instanceof HTMLElement)) throw new Error('지금 단계가 없다');
+  return now;
+}
+
+/**
+ * 패널을 열면 저절로 나가는 읽기 — 비율을 읽는 상세(POK-254)와 원본 방송 카드의 방송 목록 · 시점별 기록(POK-511).
+ * 시험이 세거나 붙잡는 요청(업로드 · 렌더 · 파일 주소)이 아니다
+ */
+function isPanelRead(url: string) {
+  return (
+    url.startsWith('/api/clip/library/') ||
+    url.startsWith('/api/clip/broadcasts?') ||
+    url.endsWith('/broadcast-info/timeline')
+  );
 }
 
 function chipGroup() {
@@ -202,18 +223,20 @@ describe('LibraryScreen — 선택·상세 패널', () => {
     );
   });
 
-  it('메타에 원본 방송·원본 보존·템플릿·자막·비율이 선다', () => {
+  it('원본 방송 카드와 원본 보존·만든 사람·마지막 편집·비율이 서고, 늘 같은 값이던 템플릿·자막 칸은 없다(POK-511)', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
     const inside = within(panel());
 
-    expect(inside.getByText('원본 방송').nextElementSibling).toHaveTextContent('8월 31일 라이브');
+    // 목업 줄은 서버 방송이 없어 방송 제목 대신 원본 방송 표기가 선다
+    expect(inside.getByRole('region', { name: '원본 방송' })).toHaveTextContent('8월 31일 라이브');
     expect(inside.getByText('원본 보존').nextElementSibling).toHaveTextContent('원본 만료 D-58');
-    expect(inside.getByText('템플릿').nextElementSibling).toHaveTextContent('기본 쇼츠');
-    expect(inside.getByText('자막').nextElementSibling).toHaveTextContent(
-      '자동 자막 12줄 · 수정 중',
-    );
+    expect(inside.getByText('만든 사람').nextElementSibling).toHaveTextContent('게임하는너구리');
+    // 목업 시계(9월 2일 20:00)와 같은 날이라 「오늘」이다
+    expect(inside.getByText('마지막 편집').nextElementSibling).toHaveTextContent('오늘 14:20');
     // 목업 줄은 레시피가 없어 비율을 지어내지 않는다(POK-254)
     expect(inside.getByText('비율').nextElementSibling).toHaveTextContent('—');
+    expect(inside.queryByText('템플릿')).toBeNull();
+    expect(inside.queryByText('자막')).toBeNull();
   });
 });
 
@@ -283,7 +306,6 @@ describe('LibraryScreen — 상태별 액션', () => {
     expect(inside.getByRole('button', { name: '렌더 재시도' })).toBeInTheDocument();
     expect(inside.queryByRole('button', { name: '다운로드' })).toBeNull();
     expect(inside.getByRole('link', { name: '이어서 편집' })).toBeInTheDocument();
-    expect(inside.getByText('자막').nextElementSibling).toHaveTextContent('—');
   });
 });
 
@@ -708,19 +730,166 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(within(panel()).queryByText(/올릴 때 쓰는 제목이에요/)).toBeNull();
   });
 
-  it('올리는 중에는 누를 수 없고 제목도 잠긴다', () => {
-    show(serverClip('uploading'));
-    expect(within(panel()).getByRole('button', { name: '유튜브에 올리는 중' })).toBeDisabled();
-    expect(within(panel()).queryByRole('button', { name: '업로드' })).toBeNull();
-    expect(within(panel()).getByRole('textbox')).toHaveAttribute('readonly');
+  it('올리는 중에는 진행 카드가 「유튜브 올리기」 단계를 말하고, 같은 말을 하던 꺼진 단추는 없다(POK-510)', () => {
+    show(
+      serverClip('uploading', {
+        ...rendered,
+        upload: { ...checkingUpload, status: 'uploading', error: null },
+      }),
+    );
+    const inside = within(panel());
+    expect(currentStep()).toHaveTextContent('유튜브 올리기');
+    expect(currentStep()).toHaveTextContent(/스트리머 채널에 올리고 있어요/);
+    // 배지 · 꺼진 단추 · 회색 상자가 같은 말을 세 번 하던 것을 걷었다
+    expect(inside.queryByRole('button', { name: '유튜브에 올리는 중' })).toBeNull();
+    expect(inside.queryByRole('button', { name: '업로드' })).toBeNull();
+    expect(inside.getByRole('textbox')).toHaveAttribute('readonly');
   });
 
-  it('확인 필요는 다시 올리기를 막고 채널을 보라고 한다', () => {
-    show(serverClip('checking'));
-    expect(within(panel()).getByRole('button', { name: '업로드 확인 필요' })).toBeDisabled();
+  it('확인 필요는 다시 올리기를 막고, 진행 카드가 채널을 보라고 하며 결과 단추는 그 카드 안 설명 바로 아래에 선다(POK-509)', () => {
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+    const inside = within(panel());
+    const card = inside.getByRole('region', { name: '진행 상황' });
+    expect(currentStep()).toHaveTextContent('확인 필요');
+    const explained = within(card).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/);
+    // 카드의 「아래 단추로 알려 주세요」가 가리키는 자리: 카드 안, 설명 뒤 · 원본 방송 앞(바닥 단추 줄이 아니다)
+    const resolved = inside.getByRole('button', { name: '채널에 올라갔어요' });
+    expect(resolved).toBeEnabled();
+    expect(card.contains(resolved)).toBe(true);
     expect(
-      within(panel()).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
-    ).toBeInTheDocument();
+      explained.compareDocumentPosition(resolved) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const source = inside.getByRole('region', { name: '원본 방송' });
+    expect(
+      resolved.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const edit = inside.getByRole('link', { name: '이어서 편집' });
+    expect(edit.parentElement?.parentElement?.contains(resolved)).toBe(false);
+    expect(inside.getByRole('button', { name: '안 올라갔어요' })).toBeEnabled();
+    expect(inside.queryByRole('button', { name: '업로드 확인 필요' })).toBeNull();
+    expect(inside.queryByRole('button', { name: /다시 시도/ })).toBeNull();
+  });
+
+  describe('다 끝난 진행 카드는 접힌다(POK-510)', () => {
+    const done = {
+      ...rendered,
+      upload: { ...checkingUpload, status: 'uploaded' as const, videoId: 'abc', error: null },
+    };
+    const card = () => within(screen.getByRole('region', { name: '진행 상황' }));
+    const toggle = () => card().getByRole('button', { name: /진행 상황/ });
+    const stepList = () => card().queryByRole('list', { name: '진행 단계' });
+
+    it('올라간 편집본은 머리 한 줄만 보이고, 눌러서 단계와 공개 범위 안내를 폈다 접는다', async () => {
+      const user = userEvent.setup();
+      show(serverClip('uploaded', done));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+      expect(stepList()).toBeNull();
+      expect(card().queryByText(/올라갔어요/)).toBeNull();
+      await user.click(toggle());
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+      expect(stepList()).toBeInTheDocument();
+      expect(card().getByText(/올라갔어요/)).toBeInTheDocument();
+      await user.click(toggle());
+      expect(stepList()).toBeNull();
+      expect(card().queryByText(/올라갔어요/)).toBeNull();
+    });
+
+    it('유튜브에 안 올린 완성본도 끝난 것이라 접혀 있고, 펴면 안 올렸다고 말한다', async () => {
+      const user = userEvent.setup();
+      show(serverClip('rendered'));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+      expect(card().queryByText(/유튜브에는 올리지 않았어요/)).toBeNull();
+      await user.click(toggle());
+      expect(card().getByText('영상을 다 만들었어요. 유튜브에는 올리지 않았어요.')).toBeVisible();
+    });
+
+    it('돌고 있거나 사람이 봐야 하면 접는 단추 없이 단계가 다 보인다', () => {
+      const noToggle = () => card().queryByRole('button', { name: /진행 상황/ });
+      show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+      expect(noToggle()).toBeNull();
+      expect(stepList()).toBeInTheDocument();
+      cleanup();
+      show(serverClip('rendered', { ...rendered, upload: failedUpload }));
+      expect(noToggle()).toBeNull();
+      expect(stepList()).toBeInTheDocument();
+      cleanup();
+      show(serverClip('rendering', { ...rendered, status: 'rendering', progress: null }));
+      expect(noToggle()).toBeNull();
+      expect(stepList()).toBeInTheDocument();
+    });
+
+    /** 목록 새로 읽기가 열린 패널의 편집본을 바꾸는 것을 흉내 낸다 */
+    function showSwappable(first: ReturnType<typeof serverClip>) {
+      let swap: (next: ReturnType<typeof serverClip>) => void = () => {};
+      function Harness() {
+        const [clip, setClip] = useState(first);
+        swap = setClip;
+        return (
+          <ClipDetailPanel
+            clip={clip}
+            status={clip.status}
+            now={NOW}
+            onDeselect={() => {}}
+            onTitleChange={() => {}}
+            onUpload={() => {}}
+            onRetryRender={() => {}}
+            onRetryUpload={() => {}}
+            onDownload={() => {}}
+            onDelete={() => {}}
+          />
+        );
+      }
+      renderWithProviders(<Harness />);
+      return (next: ReturnType<typeof serverClip>) => act(() => swap(next));
+    }
+    const uploading = serverClip('uploading', {
+      ...rendered,
+      upload: { ...checkingUpload, status: 'uploading', error: null },
+    });
+
+    it('보던 중에 끝나면 끝나는 순간 줄어들지 않고 펼친 채 남는다', async () => {
+      const user = userEvent.setup();
+      const swap = showSwappable(uploading);
+      expect(stepList()).toBeInTheDocument();
+      swap(serverClip('uploaded', done));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+      expect(stepList()).toBeInTheDocument();
+      await user.click(toggle());
+      expect(stepList()).toBeNull();
+    });
+
+    it('접어 둔 편집본이 다시 돌면 펴지고, 또 끝나도 도로 접히지 않는다', () => {
+      const swap = showSwappable(serverClip('uploaded', done));
+      expect(stepList()).toBeNull();
+      swap(uploading);
+      expect(stepList()).toBeInTheDocument();
+      swap(serverClip('uploaded', done));
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('다른 편집본으로 옮기면 접힘은 처음부터다', async () => {
+      const user = userEvent.setup();
+      const first = serverClip('uploaded', done);
+      const swap = showSwappable(first);
+      await user.click(toggle());
+      expect(stepList()).toBeInTheDocument();
+      swap({ ...first, id: '13' });
+      expect(stepList()).toBeNull();
+    });
+  });
+
+  it('지금 누를 단추와 이어서 편집 · 다운로드 · 삭제는 진행 카드 · 원본 방송보다 뒤, 패널 맨 끝에 모여 있다(바닥 고정 줄, POK-509)', () => {
+    show(serverClip('rendered', { ...rendered, upload: failedUpload }));
+    const inside = within(panel());
+    const retry = inside.getByRole('button', { name: '다시 시도' });
+    const dock = retry.parentElement!;
+    // 한 줄(같은 부모 아래)에 주 동작과 보조 단추 줄이 함께 있다
+    expect(within(dock).getByRole('link', { name: '이어서 편집' })).toBeInTheDocument();
+    expect(within(dock).getByRole('button', { name: '다운로드' })).toBeInTheDocument();
+    expect(within(dock).getByRole('button', { name: '삭제' })).toBeInTheDocument();
+    // 문서 순서상 원본 방송 카드 뒤 — 스크롤되는 내용 아래에 붙는다
+    const source = inside.getByRole('region', { name: '원본 방송' });
+    expect(source.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('새 판 영상을 주문해도 이전 판으로 올린 영상이 패널에 남는다: 올림은 유튜브 링크, 확인 필요는 글자(POK-334)', async () => {
@@ -763,6 +932,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     );
     expect(inside.getByText('두 번째 올림 · 확인 필요')).toBeInTheDocument();
     expect(inside.queryByRole('link', { name: /두 번째 올림/ })).toBeNull();
+    // 결과를 적는 단추는 지금 판에만 있다: 옛 판 줄에 달면 다 끝난 카드가 또 무언가를 묻는 것처럼 보였다(2026-10-30 사용자 결정)
+    expect(inside.queryByRole('button', { name: /올라갔어요/ })).toBeNull();
     expect(await axe(panel())).toHaveNoViolations();
   });
 
@@ -781,9 +952,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
 
   /** 패널을 열면 비율을 읽으러 상세를 부른다(POK-254). 이 시험들이 세는 것은 「푸는 문」 호출이다 */
   const resolutionStub = (answer: () => Response) => {
-    const spy = stubFetch((url) =>
-      url.startsWith('/api/clip/library/') ? new Promise<Response>(() => {}) : answer(),
-    );
+    const spy = stubFetch((url) => (isPanelRead(url) ? new Promise<Response>(() => {}) : answer()));
     return () => spy.mock.calls.filter(([url]) => String(url).endsWith('/resolution'));
   };
 
@@ -842,45 +1011,6 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
       }),
     );
     expect(within(panel()).queryByRole('button', { name: '채널에 올라갔어요' })).toBeNull();
-  });
-
-  it('새 판을 주문해도 옛 판의 확인 필요 줄에 푸는 단추가 붙고 그 업로드 번호로 보낸다(POK-333)', async () => {
-    const calls = resolutionStub(() =>
-      jsonResponse(200, { ...checkingUpload, id: 3, clipId: 2, status: 'failed' }),
-    );
-    const user = userEvent.setup();
-    const clip = toLibraryClip(
-      {
-        ...serverClip('rendering').entry!,
-        latestClip: { ...rendered, status: 'rendering' },
-        liveUploads: [
-          {
-            id: 3,
-            clipId: 2,
-            recipeVersion: 1,
-            outputId: 'o1',
-            title: '첫 판',
-            status: 'checking',
-            videoId: null,
-            createdAt: '2026-09-20T12:00:00Z',
-            updatedAt: '2026-09-20T12:00:00Z',
-          },
-        ],
-      },
-      '9',
-    );
-    show(clip);
-    const previous = within(within(panel()).getByRole('region', { name: '이전 판으로 올린 영상' }));
-
-    await user.click(previous.getByRole('button', { name: '안 올라갔어요 (이전 판 v1)' }));
-    await user.click(
-      within(await screen.findByRole('dialog')).getByRole('button', { name: '안 올라갔어요' }),
-    );
-    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
-    // 다시 시도 단추는 지금 영상에만 있다: 옛 판을 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
-    expect(
-      await screen.findByText('이전 판 업로드라 이 화면에서 다시 올리지는 않아요.'),
-    ).toBeInTheDocument();
   });
 
   it('창이 열린 사이 확인 필요 업로드가 바뀌면 적던 입력을 버린다(PR #261 codex)', async () => {
@@ -947,13 +1077,13 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   it('「다시 시도」는 저장된 정보로 다시 올리고, 보내는 동안 단추가 잠긴다(POK-291)', async () => {
     let answer: (r: Response) => void = () => {};
     const spy = stubFetch((url) =>
-      // 패널을 열면 비율을 읽으러 상세를 부른다(POK-254): 이 시험이 세는 것은 업로드 주문이다
-      url.startsWith('/api/clip/library/')
+      // 패널을 열면 저절로 나가는 읽기(isPanelRead)는 붙잡지 않는다: 이 시험이 세는 것은 업로드 주문이다
+      isPanelRead(url)
         ? new Promise<Response>(() => {})
         : new Promise<Response>((resolve) => (answer = resolve)),
     );
-    const orders = () =>
-      spy.mock.calls.filter(([url]) => !String(url).startsWith('/api/clip/library/'));
+    // 패널을 열면 원본 방송 카드(POK-511)가 방송 목록 · 시점별 기록도 읽는다 — 세는 것은 보낸 요청(POST)뿐이다
+    const orders = () => spy.mock.calls.filter(([, init]) => init?.method === 'POST');
     const user = userEvent.setup();
     show(serverClip('rendered', { ...rendered, upload: failedUpload }));
 
@@ -969,13 +1099,12 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     await act(async () =>
       answer(jsonResponse(201, { ...failedUpload, id: 8, status: 'queued', error: null })),
     );
-    expect(
-      await within(panel()).findByRole('button', { name: '유튜브에 올리는 중' }),
-    ).toBeDisabled();
-    expect(within(panel()).getByText('올리는 중')).toBeInTheDocument();
+    expect(await within(panel()).findByText('올리는 중')).toBeInTheDocument();
+    expect(currentStep()).toHaveTextContent('유튜브 올리기');
+    expect(within(panel()).queryByRole('button', { name: /다시 시도/ })).toBeNull();
   });
 
-  it('만드는 중은 진행 줄이 안내 자리에 서고 「자막」 칸은 진행을 말하지 않는다(POK-291)', () => {
+  it('만드는 중은 진행 카드의 「영상 만들기」 단계에 퍼센트와 막대가 선다(POK-510)', () => {
     show(
       serverClip('rendering', {
         ...rendered,
@@ -985,31 +1114,36 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     );
     const inside = within(panel());
     expect(inside.getByText('만드는 중')).toBeInTheDocument();
-    expect(inside.getByText('영상 만드는 중 42%')).toBeInTheDocument();
-    expect(inside.getByText('자막').nextElementSibling).toHaveTextContent('—');
-    expect(inside.getByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
-    // 글자 아래 막대가 같은 퍼센트를 그린다(POK-443). 이름이 「영상 만들기」라 꽉 차도 업로드 끝으로 읽히지 않는다
-    const bar = inside.getByRole('progressbar', { name: '영상 만들기 진행률' });
+    expect(currentStep()).toHaveTextContent('영상 만들기');
+    expect(currentStep()).toHaveTextContent('42%');
+    // 막대는 지금 단계 아래에 하나뿐이다(편집기 작은 창과 같은 이름)
+    const bar = within(currentStep()).getByRole('progressbar', { name: '영상 진행' });
     expect(bar).toHaveAttribute('aria-valuenow', '42');
+    expect(inside.getAllByRole('progressbar')).toHaveLength(1);
+    // 지난 단계(대기)에는 요청한 시각이 붙는다 — 어디까지 왔는지 · 언제 시작했는지가 보인다
+    expect(inside.getByRole('region', { name: '진행 상황' })).toHaveTextContent('편집본 v2');
+    expect(inside.queryByRole('button', { name: '영상 만드는 중' })).toBeNull();
   });
 
   it('만드는 중인데 퍼센트가 아직 없으면 0%라고 하지 않고 불확정 막대를 그린다(POK-443)', async () => {
     show(serverClip('rendering', { ...rendered, status: 'rendering', progress: null }));
     const inside = within(panel());
-    const bar = inside.getByRole('progressbar', { name: '영상 만들기 진행률' });
+    const bar = within(currentStep()).getByRole('progressbar', { name: '영상 진행' });
     expect(bar).not.toHaveAttribute('aria-valuenow');
-    // 막대 위 진행 줄(주 동작 단추도 「영상 만드는 중」이라 막대가 선 안내 자리로 본다)
-    expect(bar.parentElement).toHaveTextContent(/^영상 만드는 중$/);
+    expect(currentStep()).toHaveTextContent('영상 만들기');
     expect(inside.queryByText(/0%/)).toBeNull();
     await act(async () => {
       expect(await axe(panel())).toHaveNoViolations();
     });
   });
 
-  it('주문만 되고 차례를 기다리는 영상은 막대가 없다 — 만드는 중이 아니다(POK-443)', () => {
+  it('요청만 되고 차례를 기다리는 영상은 「대기」 단계가 지금이고 퍼센트를 지어내지 않는다(POK-510)', () => {
     show(serverClip('rendering', { ...rendered, status: 'queued', progress: null }));
-    expect(within(panel()).getByText('영상 만들 차례 기다리는 중')).toBeInTheDocument();
-    expect(within(panel()).queryByRole('progressbar')).toBeNull();
+    expect(currentStep()).toHaveTextContent('대기');
+    expect(currentStep()).toHaveTextContent(/영상을 만들 차례를 기다리고 있어요/);
+    // 편집기와 같은 규칙: 서버가 퍼센트를 안 주는 단계는 불확정 막대다(없는 값을 0%로 그리지 않는다)
+    expect(within(currentStep()).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+    expect(within(panel()).queryByText(/0%/)).toBeNull();
   });
 
   it('영상은 올라갔는데 썸네일만 실패하면 그렇게 말한다(POK-291)', () => {
@@ -1031,7 +1165,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     ).toBeInTheDocument();
   });
 
-  it('공개로 올린 편집본은 패널에 누가 보는지와 바꾸는 곳을 말한다(POK-291)', () => {
+  it('공개로 올린 편집본은 진행 카드를 펴면 누가 보는지와 바꾸는 곳을 말한다(POK-291)', async () => {
+    const user = userEvent.setup();
     show(
       serverClip('uploaded', {
         ...rendered,
@@ -1044,6 +1179,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
         },
       }),
     );
+    await user.click(within(panel()).getByRole('button', { name: /진행 상황/ }));
     expect(
       within(panel()).getByText(
         '「공개」(누구나 볼 수 있는 범위)로 올렸어요. 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',
@@ -1083,8 +1219,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     const user = userEvent.setup();
     let n = 0;
     stubFetch((url) => {
-      // 비율을 읽는 상세 요청(POK-254)은 주소 번호를 세지 않는다
-      if (url.startsWith('/api/clip/library/')) return new Promise<Response>(() => {});
+      // 패널이 저절로 읽는 것(비율 · 원본 방송 카드)은 주소 번호를 세지 않는다
+      if (isPanelRead(url)) return new Promise<Response>(() => {});
       n += 1;
       return jsonResponse(200, {
         clipId: 5,
@@ -1170,7 +1306,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   function holdRequests() {
     const pending: ((r: Response) => void)[] = [];
     const spy = stubFetch((url) =>
-      url.startsWith('/api/clip/library/')
+      isPanelRead(url)
         ? new Promise<Response>(() => {})
         : new Promise<Response>((resolve) => pending.push(resolve)),
     );
@@ -1207,8 +1343,8 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
       answer(jsonResponse(201, { ...rendered, id: 6, status: 'queued', outputs: null })),
     );
     // 잠금이 풀린 사이 「렌더 재시도」로 돌아오지 않는다: 받은 영상으로 곧장 만드는 중이다
-    expect(await within(panel()).findByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
-    expect(within(panel()).getByText('영상 만들 차례 기다리는 중')).toBeInTheDocument();
+    await waitFor(() => expect(currentStep()).toHaveTextContent('대기'));
+    expect(within(panel()).queryByRole('button', { name: /렌더 재시도/ })).toBeNull();
   });
 
   it('렌더 재시도가 거절되면 돌기를 멈추고 다시 누를 수 있다', async () => {
@@ -1420,5 +1556,420 @@ describe('LibraryScreen — 목록 로딩·실패 (POK-443)', () => {
     });
     expect(cards()).toHaveLength(1);
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
+  const NOW = new Date('2026-10-30T14:30:00+09:00');
+  const entry = {
+    recipeId: 12,
+    streamId: 's1',
+    creatorId: '9',
+    recipeVersion: 2,
+    // 서버가 주는 그대로 방송 절대축 시각이다(계약6). 시작 19:52 + 1:23:45 = 21:15:45, 카테고리를 바꾼 뒤 장면이다
+    cut: {
+      inAtMs: Date.parse('2026-10-17T19:52:00+09:00') + 5_025_000,
+      outAtMs: Date.parse('2026-10-17T19:52:00+09:00') + 5_070_000,
+    },
+    status: 'rendered' as const,
+    broadcast: {
+      status: 'ended',
+      startedAt: '2026-10-17T19:52:00+09:00',
+      endedAt: '2026-10-17T22:06:00+09:00',
+      vodExpiresAt: '2026-12-16T22:06:00+09:00',
+    },
+    latestClip: null,
+    createdAt: '2026-10-30T14:05:00+09:00',
+    updatedAt: '2026-10-30T14:20:00+09:00',
+  };
+  const broadcastRow = {
+    streamId: 's1',
+    status: 'ended',
+    relation: 'OWNER',
+    startedAt: entry.broadcast.startedAt,
+    endedAt: entry.broadcast.endedAt,
+    vodExpiresAt: entry.broadcast.vodExpiresAt,
+    timelineOriginAt: entry.broadcast.startedAt,
+    title: '마지막 제목',
+    category: '마지막 카테고리',
+    platform: 'CHZZK',
+  };
+  const timeline = {
+    segments: [
+      {
+        platform: 'CHZZK',
+        from: '2026-10-17T19:52:00+09:00',
+        until: '2026-10-17T20:30:00+09:00',
+        title: '인사 방송',
+        category: '저스트 채팅',
+        categoryImageUrl: 'https://p/talk.png',
+        tags: [],
+      },
+      {
+        platform: 'CHZZK',
+        from: '2026-10-17T20:30:00+09:00',
+        until: null,
+        title: '[롤] 다이아 승급전',
+        category: '리그 오브 레전드',
+        categoryImageUrl: 'https://p/lol.png',
+        tags: [],
+      },
+    ],
+    truncated: false,
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function show() {
+    return renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(entry, '9')]} selectedId="12" now={NOW} />,
+    );
+  }
+
+  it('그 장면 때의 방송 제목 · 카테고리 · 플랫폼 · 방송일 · 길이 · 장면 위치와 지난 방송으로 가는 길이 선다', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    const { container } = show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    expect(card.getByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+    expect(card.getByText('10월 17일 (토) 19:52 · 2시간 14분')).toBeInTheDocument();
+    expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+    expect(card.getByRole('link', { name: '지난 방송 열기' })).toHaveAttribute(
+      'href',
+      '/broadcast/vod/s1',
+    );
+    // 포스터는 그 장면 때 카테고리의 것이다(방송 끝 카테고리가 아니다)
+    expect(container.querySelector('img[src="https://p/lol.png"]')).not.toBeNull();
+    // 늘 같은 값이던 칸은 없다
+    expect(within(panel()).queryByText('템플릿')).toBeNull();
+    await act(async () => {
+      expect(await axe(panel())).toHaveNoViolations();
+    });
+  });
+
+  it('방송 정보를 못 읽어도 지어내지 않고 원본 방송 날짜로 물러서며, 패널의 나머지는 그대로다', async () => {
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts')
+        ? jsonResponse(503, { error: 'x' })
+        : new Promise<Response>(() => {}),
+    );
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('10월 17일 방송')).toBeInTheDocument();
+    expect(card.queryByText(/치지직|SOOP/)).toBeNull();
+    // 보관함 줄에 있는 방송일은 그대로 보인다. 장면 위치는 기준점을 몰라 안 보인다
+    expect(card.getByText('10월 17일 (토) 19:52 · 2시간 14분')).toBeInTheDocument();
+    expect(card.queryByText(/~/)).toBeNull();
+    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+  });
+
+  it('방송 줄에 기준점이 없으면 장면 위치를 안 보이고 나머지 카드는 그대로다(PR #462 6차 리뷰)', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, {
+          broadcasts: [{ ...broadcastRow, timelineOriginAt: null }],
+          nextCursor: null,
+        });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    expect(card.queryByText(/장면/)).toBeNull();
+    expect(card.getByRole('link', { name: '지난 방송 열기' })).toBeInTheDocument();
+  });
+
+  it('방송 줄만 왔으면 시점별 기록을 기다리지 않고 장면 위치를 보인다(PR #462 6차 리뷰)', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      return new Promise<Response>(() => {});
+    });
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+    expect(card.queryByText('[롤] 다이아 승급전')).toBeNull();
+  });
+
+  it('두 답이 다 오기 전에는 카테고리 · 포스터를 그리지 않는다 — 동시 송출에서 다른 플랫폼 값이 잠깐 뜨지 않는다(PR #462 1차 리뷰)', async () => {
+    const simulcast = {
+      segments: [
+        {
+          platform: 'SOOP',
+          from: '2026-10-17T19:52:00+09:00',
+          until: null,
+          title: 'SOOP 제목',
+          category: '스타크래프트',
+          categoryImageUrl: 'https://p/sc.png',
+          tags: [],
+        },
+        ...timeline.segments,
+      ],
+      truncated: false,
+    };
+    let releaseRow: (r: Response) => void = () => {};
+    const spy = stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return new Promise<Response>((resolve) => (releaseRow = resolve));
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, simulcast);
+      return new Promise<Response>(() => {});
+    });
+    const { container } = show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    // 시점별 기록은 왔는데 방송 줄은 아직이다: 대표 플랫폼을 몰라 고를 수 없다
+    await waitFor(() =>
+      expect(spy.mock.calls.some(([url]) => String(url).endsWith('/timeline'))).toBe(true),
+    );
+    await act(async () => {});
+    expect(card.queryByText(/SOOP|치지직/)).toBeNull();
+    expect(container.querySelector('img[src^="https://p/"]')).toBeNull();
+    // 장면 위치는 방송 줄의 기준점으로 잰다: 그 전에 그리면 기준점이 오면서 숫자가 바뀐다
+    expect(card.queryByText(/~/)).toBeNull();
+
+    await act(async () => releaseRow(jsonResponse(200, { broadcasts: [], nextCursor: null })));
+    expect(await card.findByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+    expect(container.querySelector('img[src="https://p/lol.png"]')).not.toBeNull();
+    expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+  });
+
+  it('구간은 절대 시각이다: 방송 앞쪽 장면은 그때의 제목 · 카테고리와 방송 기준점에서 잰 위치를 보인다(PR #462 5차 리뷰)', async () => {
+    const origin = '2026-10-17T19:52:30+09:00';
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, {
+          broadcasts: [{ ...broadcastRow, timelineOriginAt: origin }],
+          nextCursor: null,
+        });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    const early = {
+      ...entry,
+      cut: { inAtMs: Date.parse(origin) + 600_000, outAtMs: Date.parse(origin) + 645_000 },
+    };
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(early, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('인사 방송')).toBeInTheDocument();
+    expect(card.getByText('저스트 채팅 · 치지직')).toBeInTheDocument();
+    expect(card.getByText('10:00 ~ 10:45')).toBeInTheDocument();
+  });
+
+  it('방송 줄을 찾으면 목록을 더 넘기지 않는다 — 한 줄 때문에 목록 전부를 읽지 않는다(PR #462 1차 리뷰)', async () => {
+    const spy = stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(
+          200,
+          url.includes('cursor=')
+            ? { broadcasts: [], nextCursor: null }
+            : { broadcasts: [broadcastRow], nextCursor: 'next' },
+        );
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    show();
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    const pages = spy.mock.calls.map(([url]) => String(url));
+    expect(pages.filter((url) => url.startsWith('/api/clip/broadcasts?'))).toHaveLength(2);
+    expect(pages.some((url) => url.includes('cursor='))).toBe(false);
+    // 다른 편집본으로 옮기면 찾던 것을 취소할 수 있게 신호를 넘긴다
+    const first = spy.mock.calls.find(([url]) => String(url).startsWith('/api/clip/broadcasts?'));
+    expect(first?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('패널을 닫으면 시점별 기록을 더 읽지 않고, 다시 열면 새로 읽는다(PR #462 2차 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const live = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let reads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline') {
+        reads += 1;
+        return jsonResponse(200, timeline);
+      }
+      return new Promise<Response>(() => {});
+    });
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(live, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    const whileOpen = reads;
+
+    fireEvent.click(within(panel()).getByRole('button', { name: '선택 해제' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+    expect(reads).toBe(whileOpen);
+
+    fireEvent.click(cards()[0]!);
+    await waitFor(() => expect(reads).toBeGreaterThan(whileOpen));
+  });
+
+  it('방송 중이면 방송 줄도 다시 읽어, 바뀐 대표 플랫폼으로 고른다(PR #462 2차 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const live = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    const base = timeline.segments[0]!;
+    const simulcast = {
+      segments: [
+        { ...base, platform: 'SOOP', until: null, title: 'SOOP 제목', category: '스타크래프트' },
+        { ...base, until: null, title: '치지직 제목', category: '리그 오브 레전드' },
+      ],
+      truncated: false,
+    };
+    let rowReads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live')) {
+        rowReads += 1;
+        const platform = rowReads === 1 ? 'CHZZK' : 'SOOP';
+        return jsonResponse(200, { broadcasts: [{ ...broadcastRow, platform }], nextCursor: null });
+      }
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, simulcast);
+      return new Promise<Response>(() => {});
+    });
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(live, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+    expect(await card.findByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(await card.findByText('스타크래프트 · SOOP')).toBeInTheDocument();
+  });
+
+  it('방송이 끝나면 방송 줄을 한 번 더 읽어, 끝난 줄의 대표 플랫폼으로 고른다(PR #462 3차 리뷰)', async () => {
+    const base = timeline.segments[0]!;
+    const simulcast = {
+      segments: [
+        { ...base, platform: 'SOOP', until: null, title: 'SOOP 제목', category: '스타크래프트' },
+        { ...base, until: null, title: '치지직 제목', category: '리그 오브 레전드' },
+      ],
+      truncated: false,
+    };
+    let rowReads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live')) {
+        rowReads += 1;
+        const platform = rowReads === 1 ? 'CHZZK' : 'SOOP';
+        return jsonResponse(200, { broadcasts: [{ ...broadcastRow, platform }], nextCursor: null });
+      }
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, simulcast);
+      return new Promise<Response>(() => {});
+    });
+    const onAir = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let swap: () => void = () => {};
+    function Harness() {
+      const [clip, setClip] = useState(toLibraryClip(onAir, '9'));
+      swap = () => setClip(toLibraryClip(entry, '9'));
+      return <ClipSourceCard clip={clip} now={NOW} />;
+    }
+    renderWithProviders(<Harness />);
+    expect(await screen.findByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
+
+    act(() => swap());
+    expect(await screen.findByText('스타크래프트 · SOOP')).toBeInTheDocument();
+  });
+
+  it('방송이 끝나 다시 읽는 동안 보이던 값을 비우지 않는다(PR #462 2차 리뷰)', async () => {
+    let reads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [broadcastRow], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline') {
+        reads += 1;
+        return reads === 1 ? jsonResponse(200, timeline) : new Promise<Response>(() => {});
+      }
+      return new Promise<Response>(() => {});
+    });
+    const onAir = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let swap: () => void = () => {};
+    function Harness() {
+      const [clip, setClip] = useState(toLibraryClip(onAir, '9'));
+      swap = () => setClip(toLibraryClip(entry, '9'));
+      return <ClipSourceCard clip={clip} now={NOW} />;
+    }
+    renderWithProviders(<Harness />);
+    expect(await screen.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+
+    act(() => swap());
+    await waitFor(() => expect(reads).toBe(2));
+    expect(screen.getByText('[롤] 다이아 승급전')).toBeInTheDocument();
+  });
+
+  it('방송 중이면 시점별 기록을 다시 읽어, 패널을 연 뒤 바꾼 제목 · 카테고리가 뒤 장면에 보인다(PR #462 1차 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const live = { ...entry, broadcast: { ...entry.broadcast, status: 'live', endedAt: null } };
+    let reads = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, {
+          broadcasts: [{ ...broadcastRow, status: 'live', endedAt: null }],
+          nextCursor: null,
+        });
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline') {
+        reads += 1;
+        // 처음 읽을 때는 카테고리를 바꾸기 전이라 첫 구간이 아직 끝나지 않았다
+        return jsonResponse(
+          200,
+          reads === 1
+            ? { segments: [{ ...timeline.segments[0], until: null }], truncated: false }
+            : timeline,
+        );
+      }
+      return new Promise<Response>(() => {});
+    });
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(live, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+    expect(await card.findByText('인사 방송')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(await card.findByText('[롤] 다이아 승급전')).toBeInTheDocument();
+    expect(card.getByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
   });
 });

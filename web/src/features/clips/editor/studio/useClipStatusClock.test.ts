@@ -18,6 +18,15 @@ describe('nextClockChange: 말이 다음에 바뀌는 순간', () => {
   ] as const)('%s', (_, publishAt, expected) => {
     expect(nextClockChange(NOW, publishAt)).toBe(expected);
   });
+
+  it('시각이 여럿이면 아직 안 온 것 가운데 가장 이른 쪽이다', () => {
+    const publishAt = '2026-09-20T14:00:00Z';
+    const expiresAt = '2026-09-20T13:00:00Z';
+    expect(nextClockChange(NOW, publishAt, expiresAt)).toBe(Date.parse(expiresAt));
+    expect(nextClockChange(NOW, expiresAt, publishAt)).toBe(Date.parse(expiresAt));
+    expect(nextClockChange(NOW, publishAt, '2026-09-20T11:00:00Z')).toBe(Date.parse(publishAt));
+    expect(nextClockChange(NOW, null, null)).toBe(MIDNIGHT);
+  });
 });
 
 describe('useClipStatusClock', () => {
@@ -33,6 +42,18 @@ describe('useClipStatusClock', () => {
     expect(result.current.getTime()).toBe(NOW.getTime());
     act(() => vi.advanceTimersByTime(20));
     expect(result.current.getTime()).toBeGreaterThan(Date.parse('2026-09-20T13:00:00Z'));
+  });
+
+  it('원본이 만료되는 순간 「지금」을 새로 준다 — 만료된 뒤에도 다시 올릴 수 있다고 하지 않게(PR #462 6차 리뷰)', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const expiresAt = '2026-09-20T13:00:00Z';
+    const { result } = renderHook(() => useClipStatusClock(true, null, expiresAt));
+
+    act(() => vi.advanceTimersByTime(60 * 60 * 1000 - 10));
+    expect(result.current.getTime()).toBe(NOW.getTime());
+    act(() => vi.advanceTimersByTime(20));
+    expect(result.current.getTime()).toBeGreaterThan(Date.parse(expiresAt));
   });
 
   it('쥔 「지금」이 낡았으면(그 사이 예약 시각이 지났으면) 곧바로 새로 준다', () => {

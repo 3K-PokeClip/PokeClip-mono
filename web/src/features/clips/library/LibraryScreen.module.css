@@ -297,12 +297,14 @@
   width: calc(344 * var(--pc-u));
   height: 100%;
   box-sizing: border-box;
-  padding: calc(22 * var(--pc-u)) calc(22 * var(--pc-u)) var(--pc-shell-body-pad-bottom);
+  padding: calc(22 * var(--pc-u)) calc(22 * var(--pc-u)) 0;
   display: flex;
   flex-direction: column;
   gap: calc(16 * var(--pc-u));
   overflow-x: hidden;
   overflow-y: auto;
+  /* 바닥 단추 줄(.dock)이 가장 높을 때만큼 비워 둔다 — 브라우저는 sticky 줄을 몰라 포커스 받은 요소를 줄 뒤에 세운다 */
+  scroll-padding-bottom: calc(120 * var(--pc-u));
   transform: translateX(calc(40 * var(--pc-u)));
   opacity: 0;
   transition:
@@ -476,10 +478,54 @@ button.preview:focus-visible {
   color: #fff; /* 테마 고정 */
 }
 
-.actions {
+/* 패널 바닥에 붙는 단추 줄(POK-509) — 지금 누를 단추 · 이어서 편집 · 다운로드 · 삭제. 위 내용만 스크롤되어 내용이 길어도 할 일이 화면
+   밖으로 밀리지 않는다. 패널 안쪽 좌우 여백을 덮고 가장자리까지 닿도록 그만큼 내밀고, 내용이 짧으면 margin-top: auto로 바닥에 내려앉는다.
+   그림자 대신 위 테두리 한 줄로 내용과 가른다. 패널 아래 여백은 이 줄이 맡는다 — 패널에 여백을 두고 음수로 덮으면 줄이 여백보다 낮을 때
+   스크롤 끝에서 그 차이만큼 떠올랐다 */
+.dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: calc(6 * var(--pc-u));
+  margin: auto calc(-22 * var(--pc-u)) 0;
+  padding: calc(12 * var(--pc-u)) calc(22 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+/* 창이 좁으면 화면 가운데 떠 있는 탐색 막대(셸 Dock)가 패널까지 닿는다(폭 약 912px 아래). 이 줄은 스크롤로 비켜 갈 수 없으니 단추를
+   막대 위로 올린다 */
+@media (max-width: 920px) {
+  .panelInner {
+    scroll-padding-bottom: calc(200 * var(--pc-u));
+  }
+
+  .dock {
+    padding-bottom: var(--pc-shell-body-pad-bottom);
+  }
+}
+
+/* 진행 카드 · 안내 · 원본 방송 묶음. 사이에 구분선을 두면 비슷한 상자 둘이 33px 벌어져 따로 노는 것처럼 보였다.
+   패널 안쪽은 넘치면 자식이 줄어드는 세로 flex라 줄어들지 않게 못 박는다(.sourceCard와 같은 이유) */
+.panelCards {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+}
+
+/* 진행 카드 밖의 안내(영상 줄이 없을 때의 진행 한 줄 · 원본 만료 · 썸네일 실패). 없으면 자리도 비우지 않는다 */
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+}
+
+.notes:empty {
+  display: none;
 }
 
 .actionRow {
@@ -552,7 +598,209 @@ button.preview:focus-visible {
   color: var(--pc-color-text-muted);
 }
 
-/* 진행 줄(만드는 중 N%) 아래의 막대(POK-443) */
-.noteProgress {
-  margin-top: calc(6 * var(--pc-u));
+.metaDim {
+  font-weight: 500;
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 진행 카드 (POK-510 시안 A) ---------- */
+
+/* 미리보기 아래 카드 하나: 머리 한 줄 → 세로 단계(ClipStepList, 편집기 작은 창과 같은 CSS) → 할 일 → 공개 범위 안내.
+   상태색은 단계 목록이 스스로 정한다 — 카드 테두리 · 바탕은 무채색(카드당 상태색 하나) */
+.progressCard {
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u)) calc(2 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(12 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  font-size: calc(12 * var(--pc-u));
+}
+
+/* 머리 한 줄: 왼쪽 「진행 상황」 · 오른쪽 판 */
+.progressHead {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  margin-bottom: calc(12 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.progressHead > :first-child,
+.progressToggle > :first-child {
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 다 끝나면 머리 한 줄이 접기 단추다. 글자만으로는 누를 자리가 얇아 카드 여백까지 단추로 쓴다 */
+.progressToggle {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  width: calc(100% + 28 * var(--pc-u));
+  margin: calc(-12 * var(--pc-u)) calc(-14 * var(--pc-u)) 0;
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u));
+  border: 0;
+  border-radius: calc(11 * var(--pc-u));
+  background: transparent;
+  font-family: inherit;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  cursor: pointer;
+}
+
+.progressToggle > :first-child {
+  margin-right: auto;
+}
+
+.progressToggle:hover {
+  color: var(--pc-color-text-secondary);
+}
+
+.progressToggle:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.progressChevron {
+  flex: none;
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+  transition: transform 0.15s;
+}
+
+.progressToggle[aria-expanded='true'] .progressChevron {
+  transform: rotate(180deg);
+}
+
+/* 접으면 카드에 이 줄만 남는다: 카드 아래 여백 2u까지 먹어 글자가 위아래 한가운데에 선다 */
+.progressToggle[aria-expanded='false'] {
+  margin-bottom: calc(-2 * var(--pc-u));
+}
+
+/* 지금 단계에서 사람이 할 일(확인 필요 풀기) — 단계 설명 바로 아래. 카드 아래 여백은 단계 줄이 맡아 2u뿐이라 여기서 채운다 */
+.progressActions {
+  margin-bottom: calc(12 * var(--pc-u));
+}
+
+/* 지금 단계가 없을 때(다 끝남 · 안 올림)의 설명 — 단계 아래 */
+.progressDetail {
+  margin: 0 0 calc(12 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 공개 범위 안내 — 단계와 가는 줄로 갈라 둔 작은 글 */
+.progressFoot {
+  margin: 0 0 calc(10 * var(--pc-u));
+  padding-top: calc(10 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(11 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 원본 방송 카드 (POK-511 시안 B) ---------- */
+
+/* 패널 안쪽은 높이가 화면에 묶인 세로 flex라, 넘치면 자식이 줄어든다. 둥근 모서리용 overflow: hidden이 있으면 최소 높이가 0이 되어
+   내용이 화면보다 길 때 카드가 테두리 2px로 눌렸다 — 줄어들지 않게 못 박는다 */
+.sourceCard {
+  flex: none;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(12 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  overflow: hidden;
+}
+
+.sourceTop {
+  display: flex;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(12 * var(--pc-u));
+}
+
+/* 카테고리 포스터(치지직 · SOOP처럼 세로 3:4). 없거나 못 읽으면 같은 칸에 자리표시 그림 */
+.sourcePoster {
+  flex: none;
+  width: calc(46 * var(--pc-u));
+  height: calc(61 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pc-color-bg-surface-hover);
+  color: var(--pc-color-text-muted);
+}
+
+.sourcePoster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sourceBody {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: calc(3 * var(--pc-u));
+}
+
+.sourceKicker {
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+}
+
+/* 방송 제목은 길다 — 두 줄에서 자른다 */
+.sourceTitle {
+  margin: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 700;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.sourceLine {
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+/* 아래 한 줄: 왼쪽 장면 위치 · 오른쪽 원본 방송으로 가는 길 */
+.sourceFoot {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) calc(12 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.sourceScene {
+  font-variant-numeric: tabular-nums;
+}
+
+.sourceLink {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-accent-text);
+  text-decoration: none;
+}
+
+.sourceLink:hover {
+  text-decoration: underline;
+}
+
+.sourceLink:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: calc(4 * var(--pc-u));
 }

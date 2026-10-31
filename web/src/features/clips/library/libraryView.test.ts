@@ -34,8 +34,6 @@ function clip(overrides: Partial<LibraryClip> & { id: string }): LibraryClip {
     owner: { name: '게임하는너구리', me: true },
     sourceLabel: '8월 31일 라이브',
     sourceExpiresAt: expiresIn(58),
-    templateLabel: '기본 쇼츠',
-    subtitleLabel: '자동 자막 12줄',
     createdAt: '2026-08-31T22:40:00+09:00',
     editedAt: '2026-09-02T14:20:00+09:00',
     ...overrides,

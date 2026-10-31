@@ -1,11 +1,17 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
+import { segmentAt } from '@/features/broadcast/livenow/broadcastInfoAt';
+import { categoryAt, categorySpansOf } from '@/features/broadcast/livenow/categoryThumb';
 import { formatUptime } from '@/features/player/playerMath';
 import {
   ClipApiError,
   liveUploadsOf,
+  platformLabel,
+  type BroadcastRow,
+  type BroadcastTimeline,
   type LibraryEntry,
   type UploadSnapshot,
 } from '@/api/clipEditor';
+import { clipStatusView, type ClipStatusView } from '@/features/clips/editor/studio/clipProgress';
 import {
   instantLabel,
   PRIVACY_CHANGE_NOTE,
@@ -262,8 +268,6 @@ export interface PreviousUpload {
   versionLabel: string;
   text: string;
   href: string | null;
-  /** 확인 필요라 사람이 결과를 적을 수 있다(POK-333) */
-  checking: boolean;
 }
 
 const LIVE_UPLOAD_TEXT: Record<string, string> = {
@@ -302,7 +306,6 @@ export function previousUploadsOf(entry: LibraryEntry | undefined): PreviousUplo
         u.status === 'uploaded' && u.videoId
           ? safeExternalUrl(`https://youtu.be/${encodeURIComponent(u.videoId)}`)
           : null,
-      checking: u.status === 'checking',
     }));
 }
 
@@ -433,6 +436,128 @@ export function noteText(note: PanelNote): string {
     return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인한 뒤 아래 단추로 결과를 알려 주세요.';
   }
   return '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.';
+}
+
+// ---------- 진행 카드 (POK-510) ----------
+
+/** 상세 패널 미리보기 아래의 진행 카드 — 편집기 작은 창과 같은 단계(clipStatusView)에 보관함 말을 얹는다 */
+export interface LibraryStepView {
+  view: ClipStatusView;
+  /**
+   * 지금 단계 아래 설명. 편집기 말은 「보관함에서 확인」 · 「영상 만들기를 다시 눌러」처럼 편집기에서 할 일이라, 그 일을 여기서
+   * 하는 두 경우(확인 필요 풀기 · 업로드 실패 다시 시도)는 지금까지 보관함이 하던 안내로 바꾼다
+   */
+  detail: string;
+  /** 「편집본 v3」 — 이 영상을 만든 판. 편집본이 더 새 판일 수 있다 */
+  versionLabel: string;
+}
+
+/**
+ * 진행 카드에 그릴 것. 서버 영상이 있을 때만이다: 목업 줄은 영상이 없고, 편집 중이면 latestClip이 옛 판 영상이라 그 진행을
+ * 지금 것처럼 보이면 거짓이다(편집기도 같은 판정). 그때는 null이고 카드를 세우지 않는다.
+ * 업로드 실패 사유가 있으면 반드시 이 카드가 선다(사유는 완성 + 최근 업로드 실패에서만 생긴다) — 패널은 그 사유를 따로 그리지 않는다
+ */
+export function stepViewForClip(clip: LibraryClip, now: Date): LibraryStepView | null {
+  const entry = clip.entry;
+  const latest = entry?.latestClip;
+  if (entry === undefined || latest == null || entry.status === 'editing') return null;
+  const view = clipStatusView(latest, now);
+  const detail =
+    uploadFailureText(clip) ?? (entry.status === 'checking' ? noteText('checking') : view.detail);
+  return { view, detail, versionLabel: `편집본 v${latest.recipeVersion}` };
+}
+
+// ---------- 원본 방송 카드 (POK-511) ----------
+
+/**
+ * 편집본이 나온 방송의 제목 · 카테고리. 보관함 목록에는 이 칸이 없어 방송 목록 줄(POK-259)과 시점별 기록(POK-462)을 방송 번호로
+ * 이어 붙인다. 모르는 칸은 null이다 — 지어내지 않는다
+ */
+export interface ClipSource {
+  /** 그 장면 때의 방송 제목. 모르면 null(화면은 sourceLabel 「10월 17일 방송」으로 물러선다) */
+  title: string | null;
+  category: string | null;
+  /** 그 장면 때의 카테고리 포스터. 대표 플랫폼 구간이 아니면 null — 다른 플랫폼 포스터는 엉뚱하다(POK-467) */
+  categoryImageUrl: string | null;
+  /** 「치지직」 · 「SOOP」. 모르면 null */
+  platform: string | null;
+}
+
+/**
+ * 장면 위치를 재는 기준점(epoch ms). 편집 구간은 방송 절대축 시각이라(계약6) 서버의 시각 기준점(timelineOriginAt)을 빼야 「방송에서 몇
+ * 분」이 된다. 없으면(조각이 지워진 60일 지난 방송 · 장부를 못 읽음 · 방송 줄을 못 읽음) null이고 장면 위치를 안 보인다: 방송 시작
+ * 시각으로 대신 재면 수십 초 어긋난 값이 정확한 값처럼 보인다(2026-10-31 사용자 결정)
+ */
+export function sceneBaseMs(row: BroadcastRow | null): number | null {
+  const base = Date.parse(row?.timelineOriginAt ?? '');
+  return Number.isFinite(base) ? base : null;
+}
+
+/**
+ * 제목 · 카테고리는 그 장면 때의 값이다: 방송 중에 게임을 바꿨으면 바꾸기 전 장면은 바꾸기 전 카테고리다. 그 시각 구간이 없을 때만
+ * 방송 줄의 값(마지막 관측)으로 물러선다 — 빈칸보다 가까운 값이 낫다(broadcastInfoAt과 같은 규칙). 구간을 찾았는데 비어 있으면 빈
+ * 그대로다: 카테고리 없이 시작한 장면에 나중 카테고리를 붙이지 않는다(정보 바와 같다). 포스터는 더 좁게 대표 플랫폼 구간에서만
+ * 고른다(categoryAt). 대표 플랫폼을 모르면 글자와 같은 구간의 플랫폼으로 고른다 — 따로 고르면 글자와 포스터의 플랫폼이 갈린다
+ */
+export function clipSourceOf(
+  entry: LibraryEntry,
+  row: BroadcastRow | null,
+  timeline: BroadcastTimeline | undefined,
+): ClipSource {
+  const platform = row?.platform ?? null;
+  // 구간과 시점별 기록은 같은 절대축이라 구간 시작이 곧 장면 시각이다
+  const at = entry.cut?.inAtMs ?? null;
+  const segment =
+    at !== null && timeline ? segmentAt(timeline.segments, platform, at, timeline.truncated) : null;
+  const span =
+    at !== null
+      ? categoryAt(categorySpansOf(timeline), at, platform ?? segment?.platform ?? null)
+      : null;
+  const shown = segment ?? row;
+  return {
+    title: shown?.title?.trim() || null,
+    category: shown?.category?.trim() || null,
+    categoryImageUrl: span?.imageUrl ?? null,
+    platform: platformLabel(segment?.platform ?? platform),
+  };
+}
+
+/** 원본 방송의 길이 — 「2시간 14분」 · 「48분」, 방송 중이면 「방송 중」. 시작 · 끝을 모르면 null */
+export function broadcastLengthLabel(broadcast: LibraryEntry['broadcast']): string | null {
+  if (broadcast.status === 'live') return '방송 중';
+  if (!broadcast.startedAt || !broadcast.endedAt) return null;
+  const minutes = Math.round(
+    (Date.parse(broadcast.endedAt) - Date.parse(broadcast.startedAt)) / 60_000,
+  );
+  if (!Number.isFinite(minutes) || minutes < 0) return null;
+  const hours = Math.floor(minutes / 60);
+  return hours > 0 ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
+}
+
+/**
+ * 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」. 구간이 절대 시각이라 기준점(sceneBaseMs)을 빼서 잰다. 구간이 기준점보다 앞서면
+ * 위치를 모르는 것이라 null이다: 0으로 깎으면 「0:00 ~ 0:00」을 지어낸다
+ */
+export function sceneLabel(cut: NonNullable<LibraryEntry['cut']>, baseMs: number): string | null {
+  if (cut.inAtMs < baseMs) return null;
+  const position = (ms: number) => formatUptime((ms - baseMs) / 1000);
+  return `${position(cut.inAtMs)} ~ ${position(cut.outAtMs)}`;
+}
+
+/**
+ * 원본 방송으로 가는 길. 방송 중이면 라이브 화면, 끝났으면 지난 방송이다. 원본 보관이 지났으면 null — 열어도 다시 볼 것이
+ * 없다(홈 지난 방송 칸과 같은 규칙)
+ */
+export function sourceLinkOf(
+  entry: LibraryEntry,
+  now: Date,
+): { href: string; label: '라이브 열기' | '지난 방송 열기' } | null {
+  const streamId = encodeURIComponent(entry.streamId);
+  if (entry.broadcast.status === 'live') {
+    return { href: `/broadcast/livenow?stream=${streamId}`, label: '라이브 열기' };
+  }
+  if (ddayFor(entry.broadcast.vodExpiresAt, now).kind === 'expired') return null;
+  return { href: `/broadcast/vod/${streamId}`, label: '지난 방송 열기' };
 }
 
 // ---------- 유튜브 업로드 (POK-111) ----------
@@ -626,6 +751,21 @@ export function retentionLabel(dday: VodDday): string {
     case 'unknown':
       return '—';
   }
+}
+
+/**
+ * 시각 한 칸 — 「10월 17일 (토) 19:52」(예약 공개 시각과 같은 표기), 오늘이면 「오늘 14:20」. 서버 값이 없거나 못 읽으면 null.
+ * withToday가 거짓이면(방송 시작) 오늘이어도 날짜를 쓴다: 방송일은 날짜가 곧 그 칸의 뜻이다
+ */
+export function instantText(iso: string | null, now: Date, withToday = true): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  if (withToday && at.toDateString() === now.toDateString()) {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `오늘 ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  }
+  return instantLabel(at);
 }
 
 /**

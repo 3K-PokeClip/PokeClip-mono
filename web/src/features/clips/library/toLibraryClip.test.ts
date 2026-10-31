@@ -80,11 +80,15 @@ describe('toLibraryClip', () => {
     expect(clip.youtubeUrl).toBe('https://youtu.be/abc123');
   });
 
-  it('올리는 중에는 주소가 없고 진행 줄이 그렇다고 말한다: 「자막」 칸은 진행을 말하지 않는다', () => {
+  it('올리는 중에는 주소가 없고 진행 줄이 그렇다고 말한다', () => {
     const clip = toLibraryClip(entry('uploading', { latestClip: clipWithUpload(null) }), '9');
     expect(clip.youtubeUrl).toBeUndefined();
     expect(clip.progressLabel).toBe('유튜브에 올리는 중');
-    expect(clip.subtitleLabel).toBe('—');
+  });
+
+  it('편집 중은 옛 판 영상이 있어도 진행 줄이 없다: 배지가 말하는 상태에 판 번호를 덧붙이지 않는다', () => {
+    const clip = toLibraryClip(entry('editing', { latestClip: clipWithUpload('abc123') }), '9');
+    expect(clip.progressLabel).toBeNull();
   });
 
   it('만드는 중은 퍼센트를, 업로드 정보가 있으면 끝나고 올린다는 것까지 말한다', () => {
@@ -97,9 +101,6 @@ describe('toLibraryClip', () => {
     expect(toLibraryClip(entry('rendering', { latestClip: rendering }), '9').progressLabel).toBe(
       '영상 만드는 중 42%',
     );
-    expect(toLibraryClip(entry('rendering', { latestClip: rendering }), '9').renderPercent).toBe(
-      42,
-    );
     const withIntent = entry('rendering', {
       latestClip: rendering,
       uploadRequest: { title: '창 제목', privacyStatus: 'private', thumbnailSource: 'none' },
@@ -109,7 +110,7 @@ describe('toLibraryClip', () => {
     );
   });
 
-  it('만드는 중인데 퍼센트가 아직 없으면 0%라고 하지 않는다 — 막대는 불확정(null)이고, 주문만 된 영상은 막대가 없다(POK-443)', () => {
+  it('만드는 중인데 퍼센트가 아직 없으면 0%라고 하지 않고, 주문만 된 영상은 차례를 기다린다고 말한다(POK-443)', () => {
     const rendering = {
       ...clipWithUpload(null),
       status: 'rendering' as const,
@@ -118,16 +119,12 @@ describe('toLibraryClip', () => {
     };
     const noPercent = toLibraryClip(entry('rendering', { latestClip: rendering }), '9');
     expect(noPercent.progressLabel).toBe('영상 만드는 중');
-    expect(noPercent.renderPercent).toBeNull();
 
     const queued = toLibraryClip(
       entry('rendering', { latestClip: { ...rendering, status: 'queued' } }),
       '9',
     );
     expect(queued.progressLabel).toBe('영상 만들 차례 기다리는 중');
-    expect(queued.renderPercent).toBeUndefined();
-    // 만드는 중이 아닌 상태는 막대가 없다
-    expect(toLibraryClip(entry('uploading'), '9').renderPercent).toBeUndefined();
   });
 
   it('업로드 줄이 없으면 제목은 창에서 적은 업로드 정보의 제목, 그것도 없으면 「편집본 #번호」', () => {

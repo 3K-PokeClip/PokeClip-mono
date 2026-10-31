@@ -18,12 +18,26 @@ export function useBroadcastTimeline(
   streamId: string,
   status: LiveBroadcastStatus,
 ): BroadcastTimeline | undefined {
+  return useBroadcastTimelineQuery(streamId, status).data;
+}
+
+/**
+ * 같은 기록의 쿼리 전체 — 첫 답을 기다리는 중인지까지 봐야 하는 화면(보관함 원본 방송 카드)이 쓴다. active가 거짓이면 읽지 않는다.
+ * 방송이 끝나 열쇠가 바뀌는 동안은 같은 방송의 옛 기록을 그대로 둔다: 그사이 비면 보이던 값이 사라졌다가 돌아온다
+ */
+export function useBroadcastTimelineQuery(
+  streamId: string,
+  status: LiveBroadcastStatus,
+  active = true,
+) {
   const live = status === 'live';
   return useQuery({
     queryKey: ['broadcast-timeline', streamId, status],
     queryFn: () => fetchBroadcastTimeline(streamId),
-    enabled: streamId !== '' && (live || status === 'ended'),
+    enabled: active && streamId !== '' && (live || status === 'ended'),
     staleTime: live ? TIMELINE_LIVE_MS : Infinity,
     refetchInterval: live ? TIMELINE_LIVE_MS : false,
-  }).data;
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === streamId ? previous : undefined,
+  });
 }

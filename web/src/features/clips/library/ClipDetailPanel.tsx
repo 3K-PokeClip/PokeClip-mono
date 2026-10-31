@@ -3,30 +3,24 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Play, Trash2, X } from 'lucide-react';
-import {
-  Badge,
-  Button,
-  IconButton,
-  LinkButton,
-  Progress,
-  Spinner,
-  VisuallyHidden,
-  useToast,
-} from '@/ui';
+import { Badge, Button, IconButton, LinkButton, Spinner, VisuallyHidden, useToast } from '@/ui';
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
+import { ClipProgressCard } from './ClipProgressCard';
+import { ClipSourceCard } from './ClipSourceCard';
 import { InlineTitleInput } from './InlineTitleInput';
 import { UploadResolutionControls } from './UploadResolutionControls';
 import {
   detailViewForClip,
   durationLabel,
+  instantText,
   noteText,
   previousUploadsOf,
   shownUploadOf,
   privacyNoteText,
   retentionLabel,
   safeExternalUrl,
+  stepViewForClip,
   thumbnailFailureText,
-  uploadFailureText,
   type DetailView,
   type PreviousUpload,
 } from './libraryView';
@@ -57,6 +51,7 @@ export function ClipDetailPanel({
   downloading = false,
   loadPreview,
   loadAspect,
+  active = true,
 }: {
   clip: LibraryClip;
   status: ClipStatus;
@@ -81,9 +76,12 @@ export function ClipDetailPanel({
   loadPreview?: () => Promise<string | null>;
   /** 레시피 출력의 비율(「9:16」). 없으면(목업 줄) 비율을 모른다 */
   loadAspect?: () => Promise<string | null>;
+  /** 패널이 열려 있는가. 껍데기가 닫혀도 내용은 남아 있어(LibraryScreen) 원본 방송을 더 읽지 않게 알린다 */
+  active?: boolean;
 }) {
   const view = detailViewForClip(clip, status);
-  const uploadFailure = uploadFailureText(clip);
+  // 서버 영상이 있으면 진행 카드(POK-510)가 진행 · 업로드 실패 사유 · 공개 범위 · 확인 필요 풀기를 맡는다
+  const step = stepViewForClip(clip, now);
   const thumbnailFailure = thumbnailFailureText(clip);
   const privacyNote = privacyNoteText(clip, now);
   const previousUploads = previousUploadsOf(clip.entry);
@@ -92,6 +90,7 @@ export function ClipDetailPanel({
   const playable = loadPreview !== undefined && clip.entry?.latestClip?.status === 'rendered';
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
+  const created = instantText(clip.createdAt, now);
 
   // 비율은 레시피에 있어 패널을 열 때 상세를 읽는다(POK-254). 판이 바뀌면 다시 읽고, 다른 편집본의 늦은 답은 버린다.
   // 못 읽으면 「—」로 굳히지 않고 10초 뒤 다시 읽는다: 패널은 닫아도 내려가지 않아 다시 열어도 새로 읽지 않는다(PR #256 codex)
@@ -199,17 +198,90 @@ export function ClipDetailPanel({
         )}
       </div>
 
-      <div className={styles.actions} ref={actionsRef}>
-        <PrimaryControl
-          editHref={clip.editHref ?? '/clips/editor'}
-          primary={view.primary}
-          youtubeUrl={clip.youtubeUrl}
-          sending={sending}
-          sendingAction={sendingAction}
-          onUpload={() => runTransition(onUpload)}
-          onRetryRender={() => runTransition(onRetryRender)}
-          onRetryUpload={() => runTransition(onRetryUpload)}
-        />
+      {/* 진행 카드와 원본 방송을 한 묶음으로 붙인다(2026-10-30 사용자 선택). 구분선은 묶음과 아래 표 사이에 둔다 */}
+      <div className={styles.panelCards}>
+        {/* 패널은 편집본을 바꿔도 내려가지 않는다: 접힘은 편집본마다 처음부터라 편집본 번호를 열쇠로 쓴다 */}
+        {step ? (
+          <ClipProgressCard key={clip.id} step={step} privacyNote={privacyNote}>
+            {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만. 진행 카드가 「아래 단추로 알려 주세요」라고
+                하는 바로 그 아래, 카드 안에 둔다(2026-10-30 사용자 요청) — 바닥 줄에 두면 설명과 단추가 멀어진다. 확인 필요면 진행
+                카드가 늘 선다. 업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다
+                (PR #261 codex) */}
+            {checkingUpload && onResolveUpload ? (
+              <UploadResolutionControls
+                key={checkingUpload.id}
+                busy={sending}
+                onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
+              />
+            ) : null}
+          </ClipProgressCard>
+        ) : null}
+
+        <div className={styles.notes}>
+          {/* 진행 카드가 없을 때의 진행 한 줄(영상 줄이 아직 없을 때). 카드가 서면 카드가 진행을 말한다 */}
+          {!step && clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
+          {/* 확인 필요 안내는 진행 카드의 지금 단계 설명이다. 원본 만료 안내는 진행과 따로라 여기 남는다 */}
+          {view.note && !(step && view.note === 'checking') ? (
+            <p className={styles.note}>{noteText(view.note)}</p>
+          ) : null}
+          {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
+          {!step && privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
+        </div>
+
+        {/* 원본 방송 카드(POK-511): 방송 제목 · 카테고리 · 방송일 · 장면 위치. 늘 같은 값이던 「템플릿」 · 「자막」 칸은 걷었다 */}
+        <ClipSourceCard clip={clip} now={now} active={active} />
+      </div>
+
+      <hr className={styles.divider} />
+
+      <dl className={styles.meta}>
+        <dt>원본 보존</dt>
+        <dd data-urgent={retention.kind === 'active' && retention.urgent ? 'true' : undefined}>
+          {retentionLabel(retention)}
+        </dd>
+        <dt>만든 사람</dt>
+        <dd>
+          {clip.owner.name}
+          {created ? <span className={styles.metaDim}> · {created}</span> : null}
+        </dd>
+        <dt>마지막 편집</dt>
+        <dd>{instantText(clip.editedAt, now) ?? '—'}</dd>
+        <dt>비율</dt>
+        <dd>{aspectLabel ?? '—'}</dd>
+      </dl>
+
+      {/* 이전 판으로 올린 영상(POK-334): 새 판을 만들어도 옛 판 업로드가 유튜브에 남아 있다. 모양은 위 칸을 줄마다 반복 */}
+      {previousUploads.length > 0 ? (
+        <>
+          <hr className={styles.divider} />
+          <section aria-label="이전 판으로 올린 영상">
+            <dl className={styles.meta}>
+              {previousUploads.map((u) => (
+                <PreviousUploadRow key={u.id} upload={u} />
+              ))}
+            </dl>
+          </section>
+        </>
+      ) : null}
+
+      {/* 바닥에 붙는 단추 줄(POK-509, 2026-10-30 사용자 선택) — 주 동작(업로드 · 다시 시도 · 렌더 재시도 · 유튜브 보기)과 이어서 편집 ·
+          다운로드 · 삭제. 위 내용만 스크롤되어 진행 카드 · 원본 방송이 길어도 할 일이 화면 밖으로 밀리지 않는다. 확인 필요 결과 단추는
+          설명 바로 아래(진행 카드 안)에 따로 선다 */}
+      <div className={styles.dock} ref={actionsRef}>
+        {/* 서버 일이 도는 동안의 꺼진 단추(「유튜브에 올리는 중」)는 진행 카드가 같은 말을 하므로 그리지 않는다(POK-510).
+            진행 카드가 없는 목업 줄은 예전처럼 꺼진 단추로 상태를 말한다 */}
+        {step && view.primary.kind === 'busy' ? null : (
+          <PrimaryControl
+            editHref={clip.editHref ?? '/clips/editor'}
+            primary={view.primary}
+            youtubeUrl={clip.youtubeUrl}
+            sending={sending}
+            sendingAction={sendingAction}
+            onUpload={() => runTransition(onUpload)}
+            onRetryRender={() => runTransition(onRetryRender)}
+            onRetryUpload={() => runTransition(onRetryUpload)}
+          />
+        )}
         <div className={styles.actionRow}>
           {view.edit ? (
             <div className={styles.grow}>
@@ -250,76 +322,7 @@ export function ClipDetailPanel({
             <Trash2 size={14} aria-hidden />
           </IconButton>
         </div>
-        {/* 진행 한 줄(만드는 중 N% · 올리는 중)은 원래 안내 자리에 둔다: 「자막」 칸은 자막 정보 자리다(POK-291) */}
-        {clip.progressLabel ? (
-          <div className={styles.note}>
-            {clip.progressLabel}
-            {/* 만드는 중이면 글자 아래 막대(POK-443). 퍼센트가 아직 없으면 불확정 — 없는 값을 0%로 그리지 않는다.
-                이름을 「영상 만들기」로 못 박아 꽉 찬 막대가 업로드 끝으로 읽히지 않게 한다(업로드는 그 뒤에 따로 선다) */}
-            {clip.renderPercent !== undefined ? (
-              <Progress
-                size="sm"
-                value={clip.renderPercent}
-                label="영상 만들기 진행률"
-                className={styles.noteProgress}
-              />
-            ) : null}
-          </div>
-        ) : null}
-        {view.note ? <p className={styles.note}>{noteText(view.note)}</p> : null}
-        {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만 */}
-        {checkingUpload && onResolveUpload ? (
-          // 업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다(PR #261 codex)
-          <UploadResolutionControls
-            key={checkingUpload.id}
-            busy={sending}
-            onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
-          />
-        ) : null}
-        {uploadFailure ? <p className={styles.note}>{uploadFailure}</p> : null}
-        {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
-        {privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
       </div>
-
-      <hr className={styles.divider} />
-
-      <dl className={styles.meta}>
-        <dt>원본 방송</dt>
-        <dd>{clip.sourceLabel}</dd>
-        <dt>원본 보존</dt>
-        <dd data-urgent={retention.kind === 'active' && retention.urgent ? 'true' : undefined}>
-          {retentionLabel(retention)}
-        </dd>
-        <dt>템플릿</dt>
-        <dd>{clip.templateLabel}</dd>
-        <dt>자막</dt>
-        <dd>{clip.subtitleLabel}</dd>
-        <dt>비율</dt>
-        <dd>{aspectLabel ?? '—'}</dd>
-      </dl>
-
-      {/* 이전 판으로 올린 영상(POK-334): 새 판을 만들어도 옛 판 업로드가 유튜브에 남아 있다. 모양은 위 칸을 줄마다 반복 */}
-      {previousUploads.length > 0 ? (
-        <>
-          <hr className={styles.divider} />
-          <section aria-label="이전 판으로 올린 영상">
-            <dl className={styles.meta}>
-              {previousUploads.map((u) => (
-                <PreviousUploadRow
-                  key={u.id}
-                  upload={u}
-                  busy={sending}
-                  onResolve={
-                    u.checking && onResolveUpload
-                      ? (resolution) => onResolveUpload(u.id, resolution)
-                      : undefined
-                  }
-                />
-              ))}
-            </dl>
-          </section>
-        </>
-      ) : null}
     </>
   );
 }
@@ -491,18 +494,10 @@ function PreviewPlayer({
 }
 
 /**
- * 이전 판 업로드 한 줄. 올린 것만 유튜브로 가는 링크이고, 올리는 중·확인 필요는 글자만이다. 확인 필요면 결과를 적는 단추를 붙인다
- * (POK-333: 새 판을 주문해 위쪽이 새 판을 보여도 옛 판의 확인 필요를 풀 수 있게)
+ * 이전 판 업로드 한 줄. 올린 것만 유튜브로 가는 링크이고, 올리는 중·확인 필요는 글자만이다. 결과를 적는 단추는 달지 않는다:
+ * 올라간 카드에서 옛 판의 올라갔는지를 묻는 게 어색하다(2026-10-30 사용자 결정). 옛 판 확인 필요는 그 판만 묶어 새 판은 막지 않는다
  */
-function PreviousUploadRow({
-  upload,
-  busy,
-  onResolve,
-}: {
-  upload: PreviousUpload;
-  busy: boolean;
-  onResolve?: (resolution: UploadResolution) => Promise<boolean>;
-}) {
+function PreviousUploadRow({ upload }: { upload: PreviousUpload }) {
   return (
     <>
       <dt>{`이전 판 ${upload.versionLabel}`}</dt>
@@ -515,13 +510,6 @@ function PreviousUploadRow({
         ) : (
           upload.text
         )}
-        {onResolve ? (
-          <UploadResolutionControls
-            label={`이전 판 ${upload.versionLabel}`}
-            busy={busy}
-            onResolve={onResolve}
-          />
-        ) : null}
       </dd>
     </>
   );
