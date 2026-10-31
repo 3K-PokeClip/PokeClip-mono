@@ -985,10 +985,12 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
     const button = screen.getByRole('button', { name: '남은 시간 보기' });
     expect(button).toHaveTextContent('0:30 / 7:24');
+    expect(button).toHaveAccessibleDescription('0:30 / 7:24');
 
     fireEvent.click(button);
     const remaining = screen.getByRole('button', { name: '재생 시간 보기' });
     expect(remaining).toHaveTextContent('-6:54 / 7:24');
+    expect(remaining).toHaveAccessibleDescription('-6:54 / 7:24');
 
     fireEvent.click(remaining);
     expect(screen.getByRole('button', { name: '남은 시간 보기' })).toHaveTextContent('0:30 / 7:24');
