@@ -27,13 +27,11 @@ import {
   useFieldControlProps,
   VisuallyHidden,
 } from '@/ui';
-import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
+import type { PrivacyStatus } from '@/api/clipEditor';
 import { uploadTitleProblem } from '@/features/clips/library/libraryView';
 import {
   addTags,
   CATEGORIES,
-  DEFAULT_CATEGORY,
-  defaultSchedule,
   DESCRIPTION_MAX_BYTES,
   descriptionBytes,
   descriptionProblem,
@@ -44,6 +42,8 @@ import {
   scenePicks,
   scheduleLabel,
   scheduleProblem,
+  type UploadDraft,
+  type UploadFieldErrors,
 } from './uploadInfo';
 import { stripTileTimes, UploadThumbnailPane } from './UploadThumbnailPane';
 import { useSceneFrames, type SceneFrameSource } from './useSceneFrames';
@@ -54,53 +54,11 @@ import styles from './UploadInfoDialog.module.css';
 //
 // 틀은 시안 C3(2026-10-22 사용자 결정): 왼쪽은 쇼츠에서 보일 모습(세로 썸네일 + 제목), 오른쪽은 탭 「정보 · 썸네일 · 공개」.
 // 탭은 아무 때나 오가지만 「업로드」는 공개 탭에만 있다(정보·썸네일 탭은 「다음」). 썸네일 탭은 시안 T2(펼치는 목록).
+//
+// 🔴 이 파일은 편집기 첫 로드에서 빠져 있다(uploadDialogChunk.ts). 편집기가 여기서 값을 가져오면 다시 묶이므로, 창을 열기 전에
+// 쓰는 값은 uploadInfo.ts에 둔다.
 
-/** 창 안의 값. 썸네일 파일은 서버에 다시 받을 수 없어(정보에는 「이미지」라는 표시만 남는다) 이 화면이 쥐고 있다 */
-export interface UploadDraft {
-  title: string;
-  description: string;
-  tags: string[];
-  /** 유튜브 분류 번호(POK-381) */
-  categoryId: string;
-  privacyStatus: PrivacyStatus;
-  /** 예약 공개(POK-381). 켜면 비공개로 올리고 그 시각에 공개로 바뀐다(privacyStatus는 보낼 때 private) */
-  scheduled: boolean;
-  /** 예약 날짜·시각(로컬, 2026-10-23 · 18:00). 예약을 꺼도 값은 남는다(다시 켜면 그대로) */
-  scheduleDate: string;
-  scheduleTime: string;
-  madeForKids: boolean;
-  thumbnailSource: ThumbnailSource;
-  /** 장면 고르기의 시각(완성 영상 첫 장면 기준 ms) */
-  sceneOffsetMs: number;
-  file: File | null;
-}
-
-/** 서버(또는 창)가 짚은 칸별 사유 */
-export type UploadFieldErrors = Partial<
-  Record<
-    'title' | 'description' | 'tags' | 'categoryId' | 'privacyStatus' | 'publishAt' | 'thumbnail',
-    string
-  >
->;
-
-/** 처음 값. 썸네일은 처음부터 장면 하나를 골라 둔다(POK-381 사용자 결정, 전에는 「자동」) */
-export function emptyUploadDraft(sceneOffsetMs: number, now: number = Date.now()): UploadDraft {
-  const schedule = defaultSchedule(now);
-  return {
-    title: '',
-    description: '',
-    tags: [],
-    categoryId: DEFAULT_CATEGORY,
-    privacyStatus: 'private',
-    scheduled: false,
-    scheduleDate: schedule.date,
-    scheduleTime: schedule.time,
-    madeForKids: false,
-    thumbnailSource: 'scene',
-    sceneOffsetMs,
-    file: null,
-  };
-}
+export { emptyUploadDraft, type UploadDraft, type UploadFieldErrors } from './uploadInfo';
 
 type UploadTab = 'info' | 'thumbnail' | 'publish';
 const TABS: { value: UploadTab; label: string }[] = [

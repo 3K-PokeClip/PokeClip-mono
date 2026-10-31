@@ -389,6 +389,11 @@ export interface EditorActions {
   saveDraft?: (recipe: EditorRecipe) => void;
   /** thumbnailSeconds: 편집기에서 고른 썸네일 장면(소스 축 초). 안 골랐으면 null(POK-389) */
   requestUpload?: (recipe: EditorRecipe, thumbnailSeconds: number | null) => void;
+  /**
+   * 창 코드를 따로 받을 때 그 사이를 기다리는 문: 준비되면 `open`을 부른다. 허브는 `open` 안에서 레시피를 읽는다 — 누른 순간에
+   * 읽으면 받는 사이 고친 것이 창에 안 실려 화면과 다른 영상이 나온다. 없으면 바로 연다
+   */
+  whenUploadReady?: (open: () => void) => void;
 }
 
 export interface ClipEditorOptions {
@@ -1018,13 +1023,18 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       else toast({ tone: 'success', title: '편집본을 저장했어요' });
     }, [actions, toast]),
     requestUpload: useCallback(() => {
-      if (actions?.requestUpload) actions.requestUpload(presentRef.current, thumbnailRef.current);
-      else
+      const request = actions?.requestUpload;
+      if (request === undefined) {
         toast({
           tone: 'info',
           title: '업로드는 아직 준비 중이에요',
           description: '지금은 화면만 있는 목업이에요.',
         });
+        return;
+      }
+      const open = () => request(presentRef.current, thumbnailRef.current);
+      if (actions?.whenUploadReady) actions.whenUploadReady(open);
+      else open();
     }, [actions, toast]),
 
     playing,

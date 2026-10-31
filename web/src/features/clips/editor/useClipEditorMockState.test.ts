@@ -563,6 +563,27 @@ describe('useClipEditorMockState — 재생 위치 구독', () => {
     expect(renders()).toBe(settled);
   });
 
+  it('창이 준비될 때까지 기다리는 동안 고친 것도 창에 실린다: 누른 순간의 레시피로 열면 화면과 다른 영상이 나온다', () => {
+    let open: () => void = () => {};
+    const requestUpload = vi.fn();
+    const { result } = renderEditor({
+      actions: {
+        requestUpload,
+        whenUploadReady: (next) => {
+          open = next;
+        },
+      },
+    });
+
+    act(() => result.current.requestUpload());
+    expect(requestUpload).not.toHaveBeenCalled();
+
+    act(() => result.current.setSplitRatio(70));
+    act(() => open());
+
+    expect(requestUpload).toHaveBeenCalledOnce();
+    expect(requestUpload.mock.calls[0]![0]).toMatchObject({ splitRatio: 70 });
+  });
 });
 
 describe('useClipEditorMockState — 크롭 영역 (E5)', () => {

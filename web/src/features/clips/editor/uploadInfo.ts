@@ -1,4 +1,4 @@
-import type { PrivacyStatus, UploadSnapshot } from '@/api/clipEditor';
+import type { PrivacyStatus, ThumbnailSource, UploadSnapshot } from '@/api/clipEditor';
 import type { YoutubeCategoryId } from '@/lib/analytics';
 
 // 업로드 정보 창(POK-291)의 규칙: 렌더와 떼어 순수 함수로 둔다. clip 렌더 주문 문이 같은 규칙으로 400을 주지만,
@@ -301,6 +301,56 @@ export function descriptionProblem(text: string): string | null {
   if (descriptionBytes(text) > DESCRIPTION_MAX_BYTES) return '설명은 5000바이트까지예요.';
   if (/[<>]/.test(text)) return '설명에는 < 와 > 를 쓸 수 없어요.';
   return null;
+}
+
+// ---------- 창의 값 ----------
+// 창 파일 밖에 둔다: 편집기는 창을 열기 전에 이 값을 만드는데, 창 파일에서 가져오면 창 코드가 편집기 첫 로드에 다시 묶인다
+
+/** 창 안의 값. 썸네일 파일은 서버에 다시 받을 수 없어(정보에는 「이미지」라는 표시만 남는다) 이 화면이 쥐고 있다 */
+export interface UploadDraft {
+  title: string;
+  description: string;
+  tags: string[];
+  /** 유튜브 분류 번호(POK-381) */
+  categoryId: string;
+  privacyStatus: PrivacyStatus;
+  /** 예약 공개(POK-381). 켜면 비공개로 올리고 그 시각에 공개로 바뀐다(privacyStatus는 보낼 때 private) */
+  scheduled: boolean;
+  /** 예약 날짜·시각(로컬, 2026-10-23 · 18:00). 예약을 꺼도 값은 남는다(다시 켜면 그대로) */
+  scheduleDate: string;
+  scheduleTime: string;
+  madeForKids: boolean;
+  thumbnailSource: ThumbnailSource;
+  /** 장면 고르기의 시각(완성 영상 첫 장면 기준 ms) */
+  sceneOffsetMs: number;
+  file: File | null;
+}
+
+/** 서버(또는 창)가 짚은 칸별 사유 */
+export type UploadFieldErrors = Partial<
+  Record<
+    'title' | 'description' | 'tags' | 'categoryId' | 'privacyStatus' | 'publishAt' | 'thumbnail',
+    string
+  >
+>;
+
+/** 처음 값. 썸네일은 처음부터 장면 하나를 골라 둔다(POK-381 사용자 결정, 전에는 「자동」) */
+export function emptyUploadDraft(sceneOffsetMs: number, now: number = Date.now()): UploadDraft {
+  const schedule = defaultSchedule(now);
+  return {
+    title: '',
+    description: '',
+    tags: [],
+    categoryId: DEFAULT_CATEGORY,
+    privacyStatus: 'private',
+    scheduled: false,
+    scheduleDate: schedule.date,
+    scheduleTime: schedule.time,
+    madeForKids: false,
+    thumbnailSource: 'scene',
+    sceneOffsetMs,
+    file: null,
+  };
 }
 
 // ---------- 썸네일 이미지 ----------

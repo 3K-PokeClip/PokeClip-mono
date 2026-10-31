@@ -1,5 +1,6 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -66,23 +67,26 @@ import {
   sameRecipe,
   subtitlesFor,
 } from '../recipeLook';
-import {
-  emptyUploadDraft,
-  UploadInfoDialog,
-  type UploadDraft,
-  type UploadFieldErrors,
-} from '../UploadInfoDialog';
+import { loadUploadDialog } from '../uploadDialogChunk';
 import {
   defaultSceneOffsetMs,
+  emptyUploadDraft,
   sceneOffsetFromPlayhead,
   scheduleInstant,
   scheduleOf,
   withPickedScene,
+  type UploadDraft,
+  type UploadFieldErrors,
 } from '../uploadInfo';
 import type { SceneFrameSource } from '../useSceneFrames';
 import { clipSettled, clipStatusView } from './clipProgress';
 import { useClipStatusClock } from './useClipStatusClock';
 import { StudioSkeleton } from './StudioSkeleton';
+
+/** 열어야 쓰는 창이라 편집기 첫 로드에서 뺀다. 그리는 쪽은 조각을 받은 뒤에만 그린다(uploadDialogChunk.ts) */
+const UploadInfoDialog = dynamic(() => loadUploadDialog().then((chunk) => chunk.UploadInfoDialog), {
+  ssr: false,
+});
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
@@ -820,6 +824,30 @@ function WiredStudio({
   }, [reloading, previewVideo]);
   // 이 화면에서 마지막으로 보낸 창의 값. 다시 열면 그대로 채운다(고른 이미지 파일까지)
   const lastDraft = useRef<UploadDraft | null>(null);
+  // 창 코드는 첫 로드에서 뺐다: 화면이 선 뒤에 미리 받아 두어 처음 누를 때 기다리지 않게 한다. 못 받아도 누를 때 다시 묻는다
+  useEffect(() => {
+    loadUploadDialog().catch(() => undefined);
+  }, []);
+  const reloadingRef = useRef(reloading);
+  reloadingRef.current = reloading;
+  // 조각을 받은 뒤에만 연다(uploadDialogChunk.ts). 못 받으면 편집기는 그대로 두고 알린다: 고친 것을 저장할 길이 남는다.
+  // 받는 사이 다른 편집 대상으로 넘어갔으면 열지 않는다(위 효과가 닫는 창이다)
+  const whenUploadReady = useCallback(
+    (open: () => void) => {
+      loadUploadDialog().then(
+        () => {
+          if (!reloadingRef.current) open();
+        },
+        () =>
+          toast({
+            tone: 'error',
+            title: '업로드 창을 불러오지 못했어요',
+            description: '편집본을 저장한 뒤 새로고침해 주세요',
+          }),
+      );
+    },
+    [toast],
+  );
   // 재생 위치 저장소. 업로드 창은 재생 중에도 열리므로 허브의 값(멈춤 · 시크 때만 바뀐다)이 아니라 여는 순간의 위치를 읽는다
   const playbackClock = video.playback.clock;
   // 받아 둔 녹화 조각과 그 시작 초. 창을 여는 순간에 읽는다(장면 그림 재료)
@@ -1029,8 +1057,8 @@ function WiredStudio({
   }, [saved, trackLabels]);
 
   const actions = useMemo(
-    () => ({ saveDraft, requestUpload: openUploadDialog }),
-    [saveDraft, openUploadDialog],
+    () => ({ saveDraft, requestUpload: openUploadDialog, whenUploadReady }),
+    [saveDraft, openUploadDialog, whenUploadReady],
   );
   // 저장된 편집본을 열면 그 모양(레이아웃·자르는 자리·자막 방식)으로 연다 — 다시 저장해도 제자리다
   const initialLook = useMemo(
