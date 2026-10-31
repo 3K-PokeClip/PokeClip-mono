@@ -9,7 +9,7 @@ import {
   PREFETCH_VIDEO_TIMEOUT_MS,
   type PrefetchDeps,
 } from './prefetchCardEditor';
-import type { TrackPiece } from './trackAudio/loadTrackAudio';
+import { SegmentsNotReadyError, type TrackPiece } from './trackAudio/loadTrackAudio';
 import { useTrackPreview } from './trackAudio/useTrackPreview';
 import { useEditorVideoPlayback } from './useEditorVideoPlayback';
 
@@ -263,5 +263,68 @@ describe('미리 받은 카드를 편집기가 열면 다시 받지 않는다', 
     expect(result.current.levels).not.toBeNull();
     expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('조각 목록만 보고 판정하기', () => {
+  beforeEach(() => {
+    clearEditorMedia();
+  });
+
+  /** 40~90초 창을 4초 조각으로: 앞의 count개만 올라왔다 */
+  const segmentsUpTo = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      seq: i + 1,
+      startAtMs: STARTED + 40_000 + i * 4_000,
+      durationMs: 4_000,
+      url: `https://s3/${i + 1}`,
+    }));
+
+  function depsAskingList(segments: ReturnType<typeof segmentsUpTo>) {
+    const body = vi.fn();
+    const loadSegmentTracks = vi.fn(
+      async (options: Parameters<PrefetchDeps['loadSegmentTracks']>[0]) => {
+        if (options.precheck && !options.precheck(segments)) throw new SegmentsNotReadyError();
+        body();
+        return TRACKS;
+      },
+    );
+    return { body, deps: depsWith({ loadSegmentTracks }) };
+  }
+
+  it('방송 중에 목록이 구간을 덜 덮으면 본문을 받지 않고 pending이다', async () => {
+    const { body, deps } = depsAskingList(segmentsUpTo(5));
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
+
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it('조각 사이가 비면 덜 덮은 것이다', async () => {
+    const gappy = segmentsUpTo(13).filter((segment) => segment.seq !== 6);
+    const { body, deps } = depsAskingList(gappy);
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it('목록이 구간을 다 덮으면 본문을 받아 ready다', async () => {
+    const { body, deps } = depsAskingList(segmentsUpTo(13));
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
+  it('끝난 방송은 미리 판정하지 않는다: 덜 덮어도 예전처럼 받는다', async () => {
+    const { body, deps } = depsAskingList(segmentsUpTo(5));
+    vi.mocked(deps.fetchBroadcast).mockResolvedValue({
+      ...BROADCAST,
+      endedAt: new Date(STARTED + 600_000).toISOString(),
+    });
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+    expect(body).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.loadSegmentTracks).mock.calls[0]![0].precheck).toBeUndefined();
   });
 });

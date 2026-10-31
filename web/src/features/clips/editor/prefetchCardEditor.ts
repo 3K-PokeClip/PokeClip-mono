@@ -15,7 +15,11 @@ import {
   windowBlobs,
 } from './editorMedia';
 import { fetchRecordingWindow, PAD_SECONDS, windowFor } from './useEditorVideoPlayback';
-import type { TrackPiece } from './trackAudio/loadTrackAudio';
+import {
+  GAP_TOLERANCE_MS,
+  SegmentsNotReadyError,
+  type TrackPiece,
+} from './trackAudio/loadTrackAudio';
 import { loadSegmentTracks, PREVIEW_SAMPLE_RATE } from './trackAudio/useTrackPreview';
 
 // 카드에서 편집기를 미리 받아 둔다(POK-499). 편집기가 처음 받는 영상 창과 소리 조각(파형도 여기서 나온다)을 같은 셈 · 같은
@@ -65,6 +69,27 @@ function coversWindow(tracks: TrackPiece[][], fromSeconds: number, toSeconds: nu
     only.startSeconds <= fromSeconds + COVER_TOLERANCE_SECONDS &&
     only.startSeconds + only.buffer.duration >= toSeconds - COVER_TOLERANCE_SECONDS
   );
+}
+
+/**
+ * 조각 목록만 보고 구간을 한 덩어리로 빈틈없이 덮나(coversWindow의 목록판). 덜 올라온 조각이 있으면 거기서 틈이 난다.
+ * 목록이 비었으면 true다: 그때는 받을 것이 없어 아래의 「소리 트랙 없음」 판정이 맡는다
+ */
+function segmentsCover(
+  segments: { seq: number; startAtMs: number; durationMs: number }[],
+  fromMs: number,
+  toMs: number,
+): boolean {
+  const ordered = [...segments].sort((a, b) => a.seq - b.seq);
+  const first = ordered[0];
+  if (first === undefined) return true;
+  if (first.startAtMs > fromMs + COVER_TOLERANCE_SECONDS * 1000) return false;
+  let end = first.startAtMs + first.durationMs;
+  for (const segment of ordered.slice(1)) {
+    if (Math.abs(segment.startAtMs - end) > GAP_TOLERANCE_MS) return false;
+    end = segment.startAtMs + segment.durationMs;
+  }
+  return end >= toMs - COVER_TOLERANCE_SECONDS * 1000;
 }
 
 async function prefetchOnce(
@@ -118,13 +143,22 @@ async function prefetchOnce(
   const loadAudio = async (): Promise<boolean> => {
     if (segmentTracks.get(trackKey) !== undefined) return true;
     const decoder = deps.createDecoder();
-    const tracks = await deps.loadSegmentTracks({
-      streamId,
-      baseMs: base,
-      fromMs,
-      toMs,
-      decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
-    });
+    let tracks: TrackPiece[][];
+    try {
+      tracks = await deps.loadSegmentTracks({
+        streamId,
+        baseMs: base,
+        fromMs,
+        toMs,
+        decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
+        // 방송 중에 조각 목록이 구간을 덮지 못하면 본문을 받지 않는다: 어차피 덜 덮은 소리는 맡기지 않고, 다시 확인할 때마다
+        // 같은 구간을 통째로 받아 풀었다(10초마다 최대 6번)
+        precheck: live ? (segments) => segmentsCover(segments, fromMs, toMs) : undefined,
+      });
+    } catch (error) {
+      if (error instanceof SegmentsNotReadyError) return false;
+      throw error;
+    }
     // 소리 트랙을 하나도 못 꺼냈으면 편집기도 「소리 못 부름」이다: 준비됐다고 하지 않는다
     if (tracks.length === 0) throw new Error('no audio tracks');
     // 녹화는 올라왔어도 소리 조각은 아직 올라가는 중일 수 있다(서버는 다 올라간 조각만 준다). 덜 덮은 소리를 맡기면 편집기가

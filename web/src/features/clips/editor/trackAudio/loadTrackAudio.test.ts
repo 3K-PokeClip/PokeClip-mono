@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { SegmentAudioAccess } from '@/api/clipEditor';
-import { loadTrackAudio, SegmentUrlExpiredError } from './loadTrackAudio';
+import { loadTrackAudio, SegmentsNotReadyError, SegmentUrlExpiredError } from './loadTrackAudio';
 
 // 조각 셋을 받아 트랙마다 「이어진 조각끼리 한 덩어리」로 푼다. 풀기(decodeAudioData)는 가짜다: ADTS 머리에서 표본 빈도
 // 번호와 프레임 수를 읽어 돌려준다: 어느 트랙의 무엇을 넘겼는지가 값으로 드러난다.
@@ -138,5 +138,52 @@ describe('loadTrackAudio', () => {
   it('받을 조각이 없으면 빈 목록이다', async () => {
     const src = source(access());
     expect(await loadTrackAudio(src, BASE)).toEqual([]);
+  });
+});
+
+describe('loadTrackAudio — 미리 판정과 풀기 동시 수', () => {
+  it('precheck가 false면 본문을 하나도 받지 않고 SegmentsNotReadyError로 던진다', async () => {
+    const src = source(access(BASE + 2000));
+
+    await expect(loadTrackAudio(src, BASE, () => false)).rejects.toBeInstanceOf(
+      SegmentsNotReadyError,
+    );
+    expect(src.fetchBytes).not.toHaveBeenCalled();
+    expect(src.decode).not.toHaveBeenCalled();
+  });
+
+  it('precheck는 주소 응답의 조각 목록을 받고, true면 그대로 받아 푼다', async () => {
+    const src = source(access(BASE + 2000));
+    const seen = vi.fn((segments: SegmentAudioAccess['segments']) => segments.length === 1);
+
+    await expect(loadTrackAudio(src, BASE, seen)).resolves.toHaveLength(3);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(src.fetchBytes).toHaveBeenCalledTimes(1);
+  });
+
+  it('트랙을 동시에 두 개까지만 풀고, 결과는 끝나는 순서가 아니라 트랙 순서다', async () => {
+    let running = 0;
+    let peak = 0;
+    let started = 0;
+    const src = {
+      ...source(access(BASE + 2000)),
+      // 앞 트랙일수록 늦게 끝나게 한다: 순서가 끝난 차례를 따르면 뒤집힌다
+      decode: vi.fn(async (adts: Uint8Array) => {
+        const id = started++;
+        running += 1;
+        peak = Math.max(peak, running);
+        const buffer = await fakeDecode(adts);
+        await new Promise((resolve) => setTimeout(resolve, 30 - id * 10));
+        running -= 1;
+        return Object.assign(buffer, { id });
+      }),
+    };
+
+    const tracks = await loadTrackAudio(src, BASE);
+
+    expect(peak).toBe(2);
+    expect(tracks.map((track) => (track[0]!.buffer as unknown as { id: number }).id)).toEqual([
+      0, 1, 2,
+    ]);
   });
 });
