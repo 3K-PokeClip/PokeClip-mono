@@ -58,7 +58,12 @@ describe('HighlightCard: 편집 준비', () => {
     renderCard();
     const link = await screen.findByRole('link', { name: '편집' });
     expect(link.getAttribute('href')).toMatch(/card=23$/);
-    expect(prefetchCardEditor).toHaveBeenCalledWith(expect.any(String), '23');
+    expect(prefetchCardEditor).toHaveBeenCalledWith(
+      expect.any(String),
+      '23',
+      undefined,
+      expect.anything(),
+    );
   });
 
   it('실패하면 영원히 막지 않는다: 「편집」을 열고 다시 시도 단추를 둔다', async () => {

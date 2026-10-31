@@ -199,6 +199,68 @@ describe('prefetchCardEditor', () => {
     expect(deps.fetchJumpCard).toHaveBeenCalledTimes(1);
   });
 
+  describe('줄에서 빠지기', () => {
+    function depsHeldBack() {
+      let release = () => {};
+      const held = new Promise<JumpCard>((resolve) => {
+        release = () => resolve(CARD);
+      });
+      const fetchJumpCard = vi.fn((_streamId: string, _cardId: string) => held);
+      const asked = () => fetchJumpCard.mock.calls.map(([, cardId]) => cardId);
+      return { deps: depsWith({ fetchJumpCard }), fetchJumpCard, asked, release: () => release() };
+    }
+
+    it('차례를 기다리다 끊기면 받지 않고, 뒤 카드가 그 차례를 받는다', async () => {
+      const { deps, fetchJumpCard, asked, release } = depsHeldBack();
+      const running = Array.from({ length: PREFETCH_PARALLEL }, (_, i) =>
+        prefetchCardEditor('7', `run-${i}`, deps),
+      );
+      const abandon = new AbortController();
+      const leaving = prefetchCardEditor('7', 'leaving', deps, abandon.signal);
+      const staying = prefetchCardEditor('7', 'staying', deps);
+      await waitFor(() => expect(fetchJumpCard).toHaveBeenCalledTimes(PREFETCH_PARALLEL));
+
+      abandon.abort();
+      await expect(leaving).rejects.toMatchObject({ name: 'AbortError' });
+      release();
+      await Promise.all([...running, staying]);
+
+      expect(asked()).toContain('staying');
+      expect(asked()).not.toContain('leaving');
+    });
+
+    it('같이 기다리는 쪽이 남아 있으면 줄에서 빠지지 않는다', async () => {
+      const { deps, fetchJumpCard, asked, release } = depsHeldBack();
+      const running = Array.from({ length: PREFETCH_PARALLEL }, (_, i) =>
+        prefetchCardEditor('7', `run-${i}`, deps),
+      );
+      const first = new AbortController();
+      const second = new AbortController();
+      void prefetchCardEditor('7', 'shared', deps, first.signal);
+      const shared = prefetchCardEditor('7', 'shared', deps, second.signal);
+      await waitFor(() => expect(fetchJumpCard).toHaveBeenCalledTimes(PREFETCH_PARALLEL));
+
+      first.abort();
+      release();
+
+      await expect(shared).resolves.toBe('ready');
+      await Promise.all(running);
+      expect(asked()).toContain('shared');
+    });
+
+    it('이미 받기 시작했으면 끊어도 끝까지 받는다: 지금까지 받은 것을 버리지 않는다', async () => {
+      const { deps, fetchJumpCard, release } = depsHeldBack();
+      const abandon = new AbortController();
+      const started = prefetchCardEditor('7', 'started', deps, abandon.signal);
+      await waitFor(() => expect(fetchJumpCard).toHaveBeenCalled());
+
+      abandon.abort();
+      release();
+
+      await expect(started).resolves.toBe('ready');
+    });
+  });
+
   it(`한 번에 ${PREFETCH_PARALLEL}장까지만 받고 나머지는 줄을 선다`, async () => {
     const hold: (() => void)[] = [];
     const deps = depsWith({

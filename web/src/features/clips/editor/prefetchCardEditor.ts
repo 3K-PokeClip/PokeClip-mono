@@ -255,10 +255,33 @@ export const PREFETCH_PARALLEL = 2;
 
 let running = 0;
 const waiting: (() => void)[] = [];
-const inFlight = new Map<string, Promise<CardEditorPrefetch>>();
 
-async function inTurn<T>(work: () => Promise<T>): Promise<T> {
-  if (running >= PREFETCH_PARALLEL) await new Promise<void>((resolve) => waiting.push(resolve));
+interface Prefetching {
+  result: Promise<CardEditorPrefetch>;
+  /** 이 받기를 기다리는 쪽 수. 0이 되면 줄에서 빠진다 */
+  interest: number;
+  abandon: AbortController;
+}
+const inFlight = new Map<string, Prefetching>();
+
+/** 차례를 기다린다. 기다리는 동안 끊기면 줄에서 빠지고 던진다 */
+function awaitTurn(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const turn = () => {
+      signal.removeEventListener('abort', leave);
+      resolve();
+    };
+    const leave = () => {
+      waiting.splice(waiting.indexOf(turn), 1);
+      reject(new DOMException('prefetch abandoned', 'AbortError'));
+    };
+    waiting.push(turn);
+    signal.addEventListener('abort', leave, { once: true });
+  });
+}
+
+async function inTurn<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  if (running >= PREFETCH_PARALLEL) await awaitTurn(signal);
   running += 1;
   try {
     return await work();
@@ -270,19 +293,36 @@ async function inTurn<T>(work: () => Promise<T>): Promise<T> {
 
 /**
  * 카드 하나의 편집기 미디어를 미리 받는다. 같은 카드를 받는 중이면 그 받기를 같이 기다린다(카드가 다시 그려져도 두 번 받지
- * 않는다). 실패하면 던지고, 다시 부르면 처음부터 다시 받는다
+ * 않는다). 실패하면 던지고, 다시 부르면 처음부터 다시 받는다.
+ *
+ * @param signal 끊으면 이 카드를 더 기다리지 않는다는 뜻이다. 기다리는 쪽이 모두 끊었고 아직 줄에 있으면 받지 않는다(카드가 화면을
+ *   벗어났거나 화면을 떠났다: 맡겨 둘 자리는 넷뿐이라 받아도 버린다). 이미 받기 시작했으면 끝까지 간다: 지금까지 받은 것을 버리지 않게
  */
 export function prefetchCardEditor(
   streamId: string,
   cardId: string,
   deps: PrefetchDeps = defaultDeps,
+  signal?: AbortSignal,
 ): Promise<CardEditorPrefetch> {
   const key = `${streamId}:${cardId}`;
-  const existing = inFlight.get(key);
-  if (existing) return existing;
-  const started = inTurn(() => prefetchOnce(streamId, cardId, deps)).finally(() =>
-    inFlight.delete(key),
+  let job = inFlight.get(key);
+  if (job === undefined) {
+    const abandon = new AbortController();
+    const result = inTurn(() => prefetchOnce(streamId, cardId, deps), abandon.signal).finally(() =>
+      inFlight.delete(key),
+    );
+    job = { result, interest: 0, abandon };
+    inFlight.set(key, job);
+  }
+  const shared = job;
+  shared.interest += 1;
+  signal?.addEventListener(
+    'abort',
+    () => {
+      shared.interest -= 1;
+      if (shared.interest === 0) shared.abandon.abort();
+    },
+    { once: true },
   );
-  inFlight.set(key, started);
-  return started;
+  return shared.result;
 }
