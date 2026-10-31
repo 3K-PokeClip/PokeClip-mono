@@ -54,7 +54,7 @@ describe('watchBuffering', () => {
     expect(onChange.mock.calls).toEqual([[true]]);
   });
 
-  it.each(['playing', 'canplay', 'loadeddata', 'pause', 'ended', 'emptied', 'error'])(
+  it.each(['playing', 'canplay', 'pause', 'ended', 'emptied', 'error'])(
     '%s가 오면 바로 내린다',
     (event) => {
       const video = fakeVideo();
@@ -69,6 +69,19 @@ describe('watchBuffering', () => {
       expect(onChange.mock.calls).toEqual([[false]]);
     },
   );
+
+  it('loadeddata는 표시를 건드리지 않는다 — 첫 프레임만 왔을 뿐 재생은 아직 멎어 있다', () => {
+    const video = fakeVideo();
+    const onChange = vi.fn();
+    watchBuffering(video, onChange);
+
+    video.dispatchEvent(new Event('waiting'));
+    video.dispatchEvent(new Event('loadeddata'));
+    vi.advanceTimersByTime(BUFFERING_DELAY_MS);
+    video.dispatchEvent(new Event('loadeddata'));
+
+    expect(onChange.mock.calls).toEqual([[true]]);
+  });
 
   it('일시정지 중엔 띄우지 않는다 — 자동재생을 거절당하면 멈춘 채로 있다', () => {
     const video = fakeVideo({ paused: true });

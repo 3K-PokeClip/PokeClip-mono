@@ -8,15 +8,8 @@ export const BUFFERING_DELAY_MS = 400;
 const CAN_KEEP_PLAYING = 3;
 
 const WAIT_EVENTS = ['waiting', 'stalled'] as const;
-const CLEAR_EVENTS = [
-  'playing',
-  'canplay',
-  'loadeddata',
-  'pause',
-  'ended',
-  'emptied',
-  'error',
-] as const;
+// loadeddata는 넣지 않는다: 첫 프레임만 받아도 와서 재생은 아직 멎어 있다. 재생이 이어지면 canplay · playing이 온다
+const CLEAR_EVENTS = ['playing', 'canplay', 'pause', 'ended', 'emptied', 'error'] as const;
 
 /** 끊긴 상태가 바뀔 때만 알린다. 돌려주는 함수로 멈춘다 */
 export function watchBuffering(
