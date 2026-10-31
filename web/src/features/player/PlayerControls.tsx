@@ -140,7 +140,10 @@ export function PlayerControls({
             max={100}
             value={sim.muted ? 0 : sim.volume}
             onPointerDown={onVolumeTouch}
-            onKeyDown={onVolumeTouch}
+            onFocus={(event) => {
+              // 키보드는 들어올 때 한 번만 기억한다: 누를 때마다 기억하면 0 바로 앞 값이 남는다. 마우스로 들어온 포커스는 누른 값이 들어간 뒤에 온다
+              if (event.target.matches(':focus-visible')) onVolumeTouch();
+            }}
             onChange={(event) => sim.setVolume(Number(event.target.value))}
           />
         </div>

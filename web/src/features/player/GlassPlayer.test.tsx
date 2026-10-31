@@ -370,6 +370,41 @@ describe('GlassPlayer', () => {
       expect(container.querySelector('.lucide-volume-2')).toBeNull();
     });
 
+    /** 키보드로 들어온 포커스인가(:focus-visible). jsdom의 판정은 앞 시험의 사건까지 따라가 순서를 탄다 */
+    const focusVisible = (input: HTMLElement, visible: boolean) =>
+      vi.spyOn(input, 'matches').mockReturnValue(visible);
+
+    it('키보드로 0까지 내린 뒤 되살리면 들어올 때의 음량이다 — 끌기와 같다', () => {
+      renderPlayer();
+      const input = slider();
+      fireEvent.change(input, { target: { value: 40 } });
+      focusVisible(input, true);
+
+      act(() => input.focus());
+      for (const value of [39, 1, 0]) {
+        fireEvent.keyDown(input, { key: 'ArrowDown' });
+        fireEvent.change(input, { target: { value } });
+      }
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+
+      expect(input).toHaveValue('40');
+    });
+
+    it('마우스로 처음 누른 값은 기억하지 않는다 — 크롬은 값을 바꾼 뒤에 포커스를 준다', () => {
+      renderPlayer();
+      const input = slider();
+      fireEvent.change(input, { target: { value: 40 } });
+      focusVisible(input, false);
+
+      fireEvent.pointerDown(input);
+      fireEvent.change(input, { target: { value: 20 } });
+      act(() => input.focus());
+      fireEvent.change(input, { target: { value: 0 } });
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+
+      expect(input).toHaveValue('40');
+    });
+
     it('끌어내려 0을 만든 뒤 단추를 누르면 끌기 전 음량으로 돌아온다 — 0 바로 앞 값(1)이 아니다', () => {
       renderPlayer();
 
