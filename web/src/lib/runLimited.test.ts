@@ -36,4 +36,22 @@ describe('runLimited', () => {
 
     expect(work).toHaveBeenCalledTimes(1);
   });
+
+  it('limit이 둘 이상이어도 던진 뒤에는 남은 항목을 시작하지 않는다: 돌고 있던 것만 끝까지 간다', async () => {
+    const started: number[] = [];
+    const finished: number[] = [];
+
+    await expect(
+      runLimited([1, 2, 3, 4, 5], 2, async (item) => {
+        started.push(item);
+        if (item === 1) throw new Error('boom');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        finished.push(item);
+      }),
+    ).rejects.toThrow('boom');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(started).toEqual([1, 2]);
+    expect(finished).toEqual([2]);
+  });
 });
