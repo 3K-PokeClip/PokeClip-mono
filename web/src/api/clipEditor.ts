@@ -3,6 +3,7 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { ApiError, apiFetch, type ApiFetchInit } from './client';
 import { markPlaybackCookiesIssued } from './mediaPlayback';
+import { onSessionAdvance } from '@/stores/auth';
 import { notifyChannelGone } from '@/stores/channel';
 
 // clip 서버 창구(POK-251). 전부 로그인 세션의 apiFetch로 간다(Bearer 부착·401 회전).
@@ -196,6 +197,7 @@ async function walkBroadcasts(
   signal?: AbortSignal,
 ): Promise<BroadcastRow[]> {
   const all: BroadcastRow[] = [];
+  const generation = rowGeneration;
   let cursor: string | null = null;
   do {
     const qs = new URLSearchParams({ state, limit: String(BROADCAST_PAGE) });
@@ -207,6 +209,8 @@ async function walkBroadcasts(
       signal,
     );
     all.push(...page.broadcasts);
+    // 읽은 줄은 방송 한 줄을 묻는 다른 화면이 다시 쓴다(fetchBroadcast)
+    rememberRows(page.broadcasts, generation);
     if (stop(page.broadcasts)) break;
     cursor = page.nextCursor;
   } while (cursor !== null);
@@ -226,25 +230,113 @@ export function fetchAllBroadcasts(
   return walkBroadcasts(state, undefined, streamerId, signal);
 }
 
-/** 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. */
-export async function fetchBroadcast(
-  streamId: string,
-  signal?: AbortSignal,
-): Promise<BroadcastRow | null> {
+/**
+ * 끝난 방송 줄을 다시 쓰는 시간. 시작·끝 시각과 시각 기준점이 다 찼으면 더 바뀔 것이 없다(제목·사진은 몇 분 낡아도 된다).
+ * 서버에 방송 한 줄만 묻는 문이 없어 한 줄을 알려면 목록을 끝까지 넘겨야 하므로, 한 번 읽은 줄을 화면들이 나눠 쓴다
+ */
+const FINISHED_ROW_REUSE_MS = 5 * 60_000;
+/**
+ * 방송 중인 줄 · 끝났어도 시각이 덜 찬 줄을 다시 쓰는 시간. 라이브 줄은 시청자 수·제목·기준점이 계속 바뀌고, 방송 시계가 30초마다
+ * 상태(라이브→끝남)를 본다. 그 주기보다 짧게 둔다
+ */
+const OPEN_ROW_REUSE_MS = 20_000;
+
+/** 방송 번호 → 목록을 걷다 읽은 줄과 읽은 때. 세션이 바뀌면 비운다(앞 계정이 볼 수 있던 방송을 다음 계정에 안 준다) */
+const rowMemory = new Map<string, { row: BroadcastRow; at: number }>();
+/** 방송 번호 → 지금 찾는 중인 읽기. 같은 방송을 동시에 묻는 화면들이 목록 걷기 하나를 나눈다 */
+const rowLookups = new Map<string, Promise<BroadcastRow | null>>();
+/** 세션이 바뀌면 오른다: 바뀌기 전에 시작한 걷기가 늦게 끝나 앞 계정의 줄을 되살리지 않게 */
+let rowGeneration = 0;
+
+function isFinishedRow(row: BroadcastRow): boolean {
+  return (
+    row.endedAt !== null &&
+    row.startedAt !== null &&
+    row.status.toLowerCase() !== 'live' &&
+    Boolean(row.timelineOriginAt)
+  );
+}
+
+function rememberRows(rows: BroadcastRow[], generation: number): void {
+  if (generation !== rowGeneration) return;
+  const at = Date.now();
+  for (const row of rows) rowMemory.set(row.streamId, { row, at });
+}
+
+function rememberedRow(streamId: string): BroadcastRow | null {
+  const known = rowMemory.get(streamId);
+  if (known === undefined) return null;
+  const reuseMs = isFinishedRow(known.row) ? FINISHED_ROW_REUSE_MS : OPEN_ROW_REUSE_MS;
+  if (Date.now() - known.at >= reuseMs) {
+    rowMemory.delete(streamId);
+    return null;
+  }
+  return known.row;
+}
+
+/** 기억해 둔 방송 줄과 찾는 중인 읽기를 비운다. 계정이 바뀔 때 · 화면 시험 사이에 부른다 */
+export function forgetBroadcastRows(): void {
+  rowGeneration += 1;
+  rowMemory.clear();
+  rowLookups.clear();
+}
+onSessionAdvance(forgetBroadcastRows);
+
+function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  const reason = () => signal.reason ?? new DOMException('aborted', 'AbortError');
+  if (signal.aborted) return Promise.reject(reason());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(reason());
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function findBroadcast(streamId: string): Promise<BroadcastRow | null> {
   for (const state of ['live', 'past'] as const) {
     let found: BroadcastRow | undefined;
-    await walkBroadcasts(
-      state,
-      (rows) => {
-        found = rows.find((b) => b.streamId === streamId);
-        return found !== undefined;
-      },
-      null,
-      signal,
-    );
+    await walkBroadcasts(state, (rows) => {
+      found = rows.find((b) => b.streamId === streamId);
+      return found !== undefined;
+    });
     if (found !== undefined) return found;
   }
   return null;
+}
+
+/**
+ * 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. 다른 화면이 이미 읽은 줄이면 네트워크 없이
+ * 답한다(끝난 줄 5분 · 그 밖 20초). 같은 방송을 동시에 물으면 목록 걷기는 하나다.
+ * @param signal 이 호출만 기다림을 접는다. 걷기 자체는 같이 기다리는 쪽이 있어 끝까지 가고 읽은 줄은 기억된다
+ * @param fresh 기억해 둔 줄을 건너뛰고 다시 읽는다: 상태가 바뀌었는지 보는 호출(방송 시계의 주기)
+ */
+export function fetchBroadcast(
+  streamId: string,
+  signal?: AbortSignal,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<BroadcastRow | null> {
+  if (!fresh) {
+    const known = rememberedRow(streamId);
+    if (known !== null) return Promise.resolve(known);
+  }
+  let lookup = rowLookups.get(streamId);
+  if (lookup === undefined) {
+    const mine: Promise<BroadcastRow | null> = findBroadcast(streamId).finally(() => {
+      if (rowLookups.get(streamId) === mine) rowLookups.delete(streamId);
+    });
+    rowLookups.set(streamId, mine);
+    lookup = mine;
+  }
+  return signal === undefined ? lookup : abortable(lookup, signal);
 }
 
 /**

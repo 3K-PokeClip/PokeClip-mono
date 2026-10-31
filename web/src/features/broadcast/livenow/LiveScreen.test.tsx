@@ -10,6 +10,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { forgetBroadcastRows } from '@/api/clipEditor';
 import { reportPlaybackForbidden, forgetPlaybackAccess } from '@/api/playbackAccess';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
@@ -1130,6 +1131,7 @@ beforeEach(() => {
   server.playbackGate = null;
   server.liveStatus = 200;
   forgetPlaybackAccess();
+  forgetBroadcastRows();
   hlsFake.loads = 0;
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.

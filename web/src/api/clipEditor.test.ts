@@ -5,6 +5,7 @@ import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
   fetchBroadcast,
+  forgetBroadcastRows,
   fetchJumpCard,
   fetchLibraryAll,
   mediaStreamId,
@@ -15,6 +16,7 @@ import {
   setJumpCardHidden,
   type UploadInfo,
 } from '@/api/clipEditor';
+import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
@@ -22,6 +24,8 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  forgetBroadcastRows();
+  vi.useRealTimers();
 });
 
 describe('clip 창구 호출', () => {
@@ -353,5 +357,144 @@ describe('고른 채널로 좁히기 (POK-390)', () => {
     await fetchAllBroadcasts('past', 3).catch(() => null);
 
     expect(goneSignal()).toBe(before);
+  });
+});
+
+describe('방송 한 줄 기억', () => {
+  const finishedRow = (streamId: string) => ({
+    ...row(streamId),
+    endedAt: '2026-09-01T12:00:00Z',
+    timelineOriginAt: '2026-09-01T10:00:01Z',
+  });
+  const liveRow = (streamId: string) => ({ ...row(streamId), status: 'live' });
+  const listOf = (...rows: object[]) => jsonResponse(200, { broadcasts: rows, nextCursor: null });
+
+  it('한 번 읽은 줄은 다시 묻지 않는다: 목록을 다시 걷지 않고 같은 줄을 준다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('state=live') ? listOf() : listOf(finishedRow('a'), finishedRow('b')),
+    );
+
+    await fetchBroadcast('a');
+    const calls = spy.mock.calls.length;
+    // 같은 목록에서 읽힌 다른 방송도 네트워크 없이 답한다
+    expect(await fetchBroadcast('b')).toMatchObject({ streamId: 'b' });
+    expect(await fetchBroadcast('a')).toMatchObject({ streamId: 'a' });
+
+    expect(spy).toHaveBeenCalledTimes(calls);
+  });
+
+  it('같은 방송을 동시에 물으면 목록 걷기는 하나다', async () => {
+    const spy = stubFetch((url) => (url.includes('state=live') ? listOf(liveRow('x')) : listOf()));
+
+    const [first, second] = await Promise.all([fetchBroadcast('x'), fetchBroadcast('x')]);
+
+    expect(first).toBe(second);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('목록 전체 읽기가 읽은 줄도 나눠 쓴다', async () => {
+    const spy = stubFetch(() => listOf(finishedRow('z')));
+
+    await fetchAllBroadcasts('past');
+    const calls = spy.mock.calls.length;
+    await fetchBroadcast('z');
+
+    expect(spy).toHaveBeenCalledTimes(calls);
+  });
+
+  it('방송 중인 줄은 20초만 쓴다: 그 뒤에는 라이브가 끝났는지 다시 읽는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const spy = stubFetch((url) => (url.includes('state=live') ? listOf(liveRow('x')) : listOf()));
+
+    await fetchBroadcast('x');
+    vi.advanceTimersByTime(19_000);
+    await fetchBroadcast('x');
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2_000);
+    await fetchBroadcast('x');
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('끝난 줄은 몇 분 쓴다: 5분이 지나면 다시 읽는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const spy = stubFetch((url) =>
+      url.includes('state=live') ? listOf() : listOf(finishedRow('a')),
+    );
+
+    await fetchBroadcast('a');
+    const calls = spy.mock.calls.length;
+    vi.advanceTimersByTime(4 * 60_000);
+    await fetchBroadcast('a');
+    expect(spy).toHaveBeenCalledTimes(calls);
+
+    vi.advanceTimersByTime(60_000);
+    await fetchBroadcast('a');
+    expect(spy.mock.calls.length).toBeGreaterThan(calls);
+  });
+
+  it('끝났어도 기준점이 아직 없는 줄은 짧게만 쓴다: 늦게 채워지는 값을 오래 가리지 않는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const spy = stubFetch((url) =>
+      url.includes('state=live')
+        ? listOf()
+        : listOf({ ...finishedRow('a'), timelineOriginAt: null }),
+    );
+
+    await fetchBroadcast('a');
+    const calls = spy.mock.calls.length;
+    vi.advanceTimersByTime(21_000);
+    await fetchBroadcast('a');
+
+    expect(spy.mock.calls.length).toBeGreaterThan(calls);
+  });
+
+  it('fresh면 기억을 건너뛰고 다시 읽는다: 방송 시계가 상태를 보는 길', async () => {
+    let ended = false;
+    stubFetch((url) =>
+      url.includes('state=live')
+        ? listOf(...(ended ? [] : [liveRow('x')]))
+        : listOf(...(ended ? [finishedRow('x')] : [])),
+    );
+
+    expect((await fetchBroadcast('x'))?.status).toBe('live');
+    ended = true;
+    expect((await fetchBroadcast('x'))?.status).toBe('live');
+    expect((await fetchBroadcast('x', undefined, { fresh: true }))?.status).toBe('ended');
+  });
+
+  it('기다리는 쪽이 끊어도 같이 기다리던 다른 쪽은 답을 받는다', async () => {
+    stubFetch((url) => (url.includes('state=live') ? listOf(liveRow('x')) : listOf()));
+    const abort = new AbortController();
+
+    const cancelled = fetchBroadcast('x', abort.signal);
+    const patient = fetchBroadcast('x');
+    abort.abort();
+
+    await expect(cancelled).rejects.toBeDefined();
+    expect(await patient).toMatchObject({ streamId: 'x' });
+  });
+
+  it('계정이 바뀌면 기억을 비운다: 앞 계정이 읽은 줄을 다음 계정에 주지 않는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('state=live') ? listOf() : listOf(finishedRow('a')),
+    );
+
+    await fetchBroadcast('a');
+    const calls = spy.mock.calls.length;
+    useAuthStore.getState().clearTokens();
+    await fetchBroadcast('a');
+
+    expect(spy.mock.calls.length).toBeGreaterThan(calls);
+  });
+
+  it('없는 방송(null)은 기억하지 않는다', async () => {
+    const spy = stubFetch(() => listOf());
+
+    expect(await fetchBroadcast('none')).toBeNull();
+    const calls = spy.mock.calls.length;
+    await fetchBroadcast('none');
+
+    expect(spy.mock.calls.length).toBeGreaterThan(calls);
   });
 });

@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { libraryQueryOptions } from '@/api/clipEditor';
+import { forgetBroadcastRows, libraryQueryOptions } from '@/api/clipEditor';
 import { forgetPlaybackAccess } from '@/api/playbackAccess';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -292,6 +292,8 @@ afterEach(() => {
   playbackOn.value = false;
   // 출입증 기억(만료 · 필요 없음)이 다음 시험으로 새지 않게
   forgetPlaybackAccess();
+  // 방송 한 줄 기억(api/clipEditor)도 시험마다 비운다
+  forgetBroadcastRows();
 });
 
 function bodiesOf(method: string, path: string) {

@@ -10,8 +10,11 @@ import { ClipSourceCard } from './ClipSourceCard';
 import { LibraryScreen } from './LibraryScreen';
 import { LibrarySkeleton } from './LibrarySkeleton';
 import { LIBRARY_FIXTURE } from './libraryFixture';
-import type { ClipSnapshot, LibraryStatus } from '@/api/clipEditor';
+import { forgetBroadcastRows, type ClipSnapshot, type LibraryStatus } from '@/api/clipEditor';
 import { toLibraryClip } from './useLibraryMockState';
+
+// 방송 한 줄 기억(api/clipEditor)이 시험 사이로 새지 않게
+afterEach(() => forgetBroadcastRows());
 
 function cards() {
   return within(screen.getByRole('list', { name: '편집본 목록' })).getAllByRole('button');

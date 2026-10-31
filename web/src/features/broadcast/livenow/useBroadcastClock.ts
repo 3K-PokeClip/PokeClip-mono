@@ -5,6 +5,7 @@
 // 방송 번호가 없으면 오프라인이다. 결과는 liveDataStore에도 흘려 채팅·통계가 같은 기준을 쓴다.
 import { useEffect, useState } from 'react';
 import { fetchBroadcast } from '@/api/clipEditor';
+import { setVisibleInterval } from '@/lib/visibleInterval';
 import { publishLiveData } from './liveDataStore';
 
 export type BroadcastStatus = 'live' | 'ended' | 'offline' | 'unknown';
@@ -69,10 +70,13 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
       listTitle: null,
     });
     let alive = true;
-    const load = async () => {
+    const polling: { stop?: () => void } = {};
+    let settled = false;
+    const load = async (fresh: boolean) => {
       try {
-        // 목록을 끝까지 넘기며 찾는다 — 한 쪽만 보면 오래된 지난 방송이 「없다」가 된다
-        const row = await fetchBroadcast(streamId);
+        // 목록을 끝까지 넘기며 찾는다 — 한 쪽만 보면 오래된 지난 방송이 「없다」가 된다. 첫 읽기는 다른 화면이 읽어 둔 줄을
+        // 쓰고, 주기는 건너뛴다: 라이브가 끝났는지 보는 것이 주기의 일이다
+        const row = await fetchBroadcast(streamId, undefined, { fresh });
         if (!alive) return;
         if (!row) {
           setMissingStreamId(streamId);
@@ -110,15 +114,27 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
           listTitle: row.title?.trim() || null,
           channelNames: row.channelNames ?? null,
         });
+        // 끝난 방송이고 시작·끝 시각과 기준점이 다 왔으면 더 바뀔 것이 없다: 주기를 멈춘다. 기준점(POK-255)은 끝난 뒤에도
+        // 조각이 올라가는 동안 늦게 채워질 수 있어, 비어 있으면 올 때까지 계속 묻는다
+        if (
+          st === 'ended' &&
+          s !== null &&
+          e !== null &&
+          ms(row.timelineOriginAt ?? null) !== null
+        ) {
+          settled = true;
+          polling.stop?.();
+        }
       } catch {
         /* 다음 주기에 다시 */
       }
     };
-    void load();
-    const t = setInterval(load, POLL_MS);
+    void load(false);
+    polling.stop = setVisibleInterval(() => void load(true), POLL_MS);
+    if (settled) polling.stop();
     return () => {
       alive = false;
-      clearInterval(t);
+      polling.stop?.();
     };
   }, [streamId]);
 
