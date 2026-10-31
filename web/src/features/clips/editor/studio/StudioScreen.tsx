@@ -2,6 +2,7 @@
 
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Scissors } from 'lucide-react';
 import { EmptyState, useToast } from '@/ui';
 import {
@@ -12,6 +13,7 @@ import {
   fetchJumpCard,
   fetchLibraryDetail,
   fetchMeLoose,
+  forgetLibraryList,
   openJumpCard,
   requestRender,
   retryUpload,
@@ -618,6 +620,7 @@ function WiredStudio({
   onRecipeCreated: (recipeId: number) => void;
 }) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
 
@@ -757,6 +760,7 @@ function WiredStudio({
       const snap = await (recipeId === null
         ? createRecipe(streamId, doc, card?.id ?? null)
         : updateRecipe(streamId, recipeId, doc));
+      forgetLibraryList(queryClient);
       setSave((s) => ({
         ...s,
         recipeId: snap.id,
@@ -766,7 +770,7 @@ function WiredStudio({
       if (recipeId === null) onRecipeCreated(snap.id);
       return snap;
     },
-    [streamId, card, onRecipeCreated],
+    [streamId, card, onRecipeCreated, queryClient],
   );
 
   const saveDraft = useCallback(
@@ -915,6 +919,7 @@ function WiredStudio({
           );
         })
         .then(({ clip }) => {
+          forgetLibraryList(queryClient);
           setSave((s) => ({
             ...s,
             busy: null,
@@ -951,7 +956,7 @@ function WiredStudio({
           toast({ tone: 'error', title: '영상 만들기 실패', description: message });
         });
     },
-    [documentFor, pending, persist, streamId, toast],
+    [documentFor, pending, persist, queryClient, streamId, toast],
   );
 
   // 주문한 영상이 끝날 때까지(업로드 정보가 있으면 업로드가 끝날 때까지) 5초마다 상태를 다시 읽는다. 일꾼의 보고가

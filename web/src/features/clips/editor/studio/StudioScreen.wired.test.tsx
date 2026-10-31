@@ -1,3 +1,5 @@
+import type { QueryClient } from '@tanstack/react-query';
+import { libraryQueryOptions } from '@/api/clipEditor';
 import { forgetPlaybackAccess } from '@/api/playbackAccess';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -5,7 +7,7 @@ import { axe } from 'jest-axe';
 import { act, StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { renderWithProviders } from '@/test/testProviders';
+import { createTestQueryClient, renderWithProviders } from '@/test/testProviders';
 import { StudioScreen } from './StudioScreen';
 
 // 실제 모드 편집기(POK-251) — 주소(?stream=&card= · ?recipe=)로 열어 clip에 저장·주문하는 길을 잰다.
@@ -315,9 +317,9 @@ async function editorReady() {
   return screen.getByRole('button', { name: '편집본 저장' });
 }
 
-async function openFrom(search: string) {
+async function openFrom(search: string, client?: QueryClient) {
   nav.search = search;
-  renderWithProviders(<StudioScreen />);
+  renderWithProviders(<StudioScreen />, client);
   return editorReady();
 }
 
@@ -450,6 +452,18 @@ describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
 });
 
 describe('StudioScreen — 카드로 연 실제 편집기', () => {
+  it('저장하면 받아 둔 보관함 목록을 버린다: 돌아갔을 때 방금 만든 편집본이 없는 옛 목록이 먼저 보이면 안 된다', async () => {
+    const user = userEvent.setup();
+    const client = createTestQueryClient();
+    const listKey = libraryQueryOptions(null).queryKey;
+    client.setQueryData(listKey, []);
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`, client);
+
+    await user.click(save);
+
+    await waitFor(() => expect(client.getQueryData(listKey)).toBeUndefined());
+  });
+
   it('저장하면 카드 창을 방송 절대 시각의 컷으로 옮겨 새 편집본을 만든다', async () => {
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
