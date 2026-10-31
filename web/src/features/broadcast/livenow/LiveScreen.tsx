@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -40,7 +41,7 @@ import {
   publishLiveData,
   resetLiveData,
   timeBaseOf,
-  useLiveData,
+  useLiveField,
 } from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
@@ -117,7 +118,8 @@ function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
  */
 const PLAYBACK_ACCESS_CHECK_MS = 60_000;
 
-function LivePlayer({
+// memo: 대시보드는 경과 표기 때문에 매초 다시 그려진다. 받는 값이 그대로면(대시보드가 붙잡아 둔 mark · 콜백) 플레이어까지 내려가지 않는다
+const LivePlayer = memo(function LivePlayer({
   stream,
   viewersNote,
   infoPending,
@@ -196,7 +198,8 @@ function LivePlayer({
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
-  const { streamId: liveStreamId, originMs } = useLiveData();
+  const liveStreamId = useLiveField('streamId');
+  const originMs = useLiveField('originMs');
   // 라이브·녹화 주소는 영상 경로의 키로 만든다(POK-233) — 방송 번호가 회차 번호면 그 이름의 경로가 없다. 출입증·채팅은 방송 번호
   const mediaKey = ingestStreamId ?? liveStreamId;
   const src = useMediaSource(mediaKey);
@@ -225,6 +228,11 @@ function LivePlayer({
   });
   const request = live.recordedRequest;
   const playerStatus: BroadcastStatus = live.closedRecorded ? 'ended' : displayStatus;
+  // 재생기 훅이 이 값의 정체성을 의존성으로 본다: 매 그리기 새 객체면 그때마다 다른 값으로 읽는다
+  const simulationOptions = useMemo(
+    () => ({ initialUptimeSeconds: uptimeSeconds ?? 0 }),
+    [uptimeSeconds],
+  );
   useEffect(() => {
     setLookup({ kind: 'pending' });
     publishLiveData({ timeBaseMs: null });
@@ -387,7 +395,7 @@ function LivePlayer({
         onLivePosition={onLivePosition}
         onSeek={onSeek}
         embed
-        simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
+        simulationOptions={simulationOptions}
         controllerRef={controllerRef}
         chatPanelOpen={chatPanelOpen}
         onToggleChatPanel={onToggleChatPanel}
@@ -395,7 +403,7 @@ function LivePlayer({
       />
     </>
   );
-}
+});
 
 // 방송 상태로 먼저 가른다 — 오프라인에서는 대시보드 훅(F8 수동 마킹 리스너·채팅 타이머)이
 // 아예 돌지 않아야 하므로, 분기를 그 훅들보다 위인 컴포넌트 경계에서 한다.
@@ -418,7 +426,7 @@ function LiveScreenBody() {
   const { status } = useLiveStatusMockState();
   const selection = useLiveStreamSelection();
   // 대시보드의 훅들이 보는 방송 번호. 고른 번호는 효과에서 저장소에 오르므로(useLiveStreamSelection) 정한 직후 한 그리기는 비어 있다
-  const { streamId } = useLiveData();
+  const streamId = useLiveField('streamId');
   const offline = status === 'offline' || (selection.resolved && selection.streamId === '');
   if (offline) return <LiveOfflineScreen />;
   // 방송을 정하기 전, 그리고 정한 번호가 저장소에 오르기 전에는 대시보드를 세우지 않고 같은 모양의 스켈레톤을 둔다(POK-445). 빈
@@ -440,10 +448,17 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning, mergeCard } =
     useLiveMockState(pastRoute, linkLock !== null);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
-  const liveData = useLiveData();
-  const { streamId, info } = liveData;
+  // 쓰는 칸만 듣는다: 저장소 전체를 들으면 재생 위치(playheadMs, 초당 몇 번)가 바뀔 때마다 이 대시보드가 통째로 다시 그려졌다.
+  // 기준점(timeBaseOf)이 읽는 세 칸(timeBaseMs · originMs · startedAt)도 따로 듣는다
+  const streamId = useLiveField('streamId');
+  const info = useLiveField('info');
+  const storeStatus = useLiveField('status');
+  const relation = useLiveField('relation');
+  const timeBaseMs = useLiveField('timeBaseMs');
+  const originMs = useLiveField('originMs');
+  const startedAtMs = useLiveField('startedAt');
   /** 카드 시각의 0초(카드 목록과 같은 기준점, timeBaseOf). 라이브 카드를 그 실제 시각으로 옮길 때 쓴다(POK-326) */
-  const cardBase = timeBaseOf(liveData);
+  const cardBase = timeBaseOf({ timeBaseMs, originMs, startedAt: startedAtMs });
   const clock = useBroadcastClock(streamId);
   // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
   // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
@@ -477,13 +492,20 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     },
   });
   const markDisabled = markMode === 'unknown' || (markMode === 'past' && !pastMarkable);
-  const playerMark: PlayerMark = {
-    mode: ended ? 'past' : 'live',
-    disabled: markDisabled,
-    status: marking.pendingLabel ? `${marking.pendingLabel} 마킹됨 · 카드 생성 중` : marking.notice,
-    hotkey: MARK_HOTKEY,
-    onMark: marking.mark,
-  };
+  // 같은 값이면 같은 객체: 플레이어(memo)가 대시보드가 다시 그려질 때마다 새 mark를 받아 같이 다시 그려지지 않는다
+  const markStatus = marking.pendingLabel
+    ? `${marking.pendingLabel} 마킹됨 · 카드 생성 중`
+    : marking.notice;
+  const playerMark = useMemo<PlayerMark>(
+    () => ({
+      mode: ended ? 'past' : 'live',
+      disabled: markDisabled,
+      status: markStatus,
+      hotkey: MARK_HOTKEY,
+      onMark: marking.mark,
+    }),
+    [ended, markDisabled, markStatus, marking.mark],
+  );
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
@@ -762,7 +784,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       {/* 잠금이 걸리고 풀리는 것을 듣는 사람에게도 알린다 — 패널은 통째로 바뀌어 낭독되지 않는다 */}
       <LinkLockAnnouncer
         lock={linkLock}
-        liveOwner={liveData.status === 'live' && liveData.relation === 'OWNER'}
+        liveOwner={storeStatus === 'live' && relation === 'OWNER'}
       />
       <div className={clsx(styles.grid, !chatPanelOpen && styles.gridSolo)}>
         <div className={styles.mainCol}>

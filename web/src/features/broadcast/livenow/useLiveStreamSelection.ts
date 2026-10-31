@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { setVisibleInterval } from '@/lib/visibleInterval';
-import { publishLiveData, useLiveData } from './liveDataStore';
+import { publishLiveData, useLiveField } from './liveDataStore';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 // 라이브 화면이 볼 방송 번호를 정한다(POK-251). 정한 번호는 liveDataStore에 올려 대시보드 훅들이 같이 쓴다.
@@ -37,7 +37,8 @@ export type Reselect = Pick<LiveStreamSelection, 'deferred' | 'latest'>;
 export const LIVE_RESELECT_MS = 10_000;
 
 export function useLiveStreamSelection(): LiveStreamSelection {
-  const { status, playbackHold } = useLiveData();
+  const status = useLiveField('status');
+  const playbackHold = useLiveField('playbackHold');
   // 주소가 못 박은 방송. Next 값으로 읽는다: 같은 화면에서 ?stream=만 바뀌면(사이드바 「라이브 대시보드」, 뒤로·앞으로) 화면이
   // 다시 서지 않아, 처음 한 번 주소창에서 읽던 값이 남았다(POK-254)
   const pathname = usePathname();
