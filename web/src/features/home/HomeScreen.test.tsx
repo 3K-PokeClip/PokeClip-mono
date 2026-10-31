@@ -8,6 +8,7 @@ import { LiveNowBand } from '@/features/home/LiveNowBand';
 import { TipCard, TIPS } from '@/features/home/TipCard';
 import { daysAgoLabel, weekStarts, type LiveNow } from '@/features/home/useHomeMockState';
 import { useOnboardingStore } from '@/stores/onboarding';
+import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
 const LIVE: LiveNow = {
@@ -180,7 +181,7 @@ describe('HomeScreen', () => {
       return gate.then(() => route(url, s));
     });
     vi.stubGlobal('fetch', fetchSpy);
-    const { unmount } = render(<HomeScreen />);
+    const { unmount } = renderWithProviders(<HomeScreen />);
     await waitFor(() => expect(signals).toHaveLength(1));
 
     unmount();
@@ -199,7 +200,7 @@ describe('HomeScreen', () => {
       'fetch',
       vi.fn(() => new Promise<Response>(() => {})),
     );
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     expect(screen.getByRole('region', { name: '불러오는 중' })).toHaveAttribute(
       'aria-busy',
@@ -219,7 +220,7 @@ describe('HomeScreen', () => {
     });
 
     it('방송 기록이 없으면 첫 클립까지 가는 길과 「포키가 해 주는 일」을 보인다', async () => {
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       expect(
         await screen.findByRole('heading', { level: 1, name: '첫 클립까지 4단계 남았어요' }),
@@ -246,7 +247,7 @@ describe('HomeScreen', () => {
         chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
         streamKey: { issued: true, createdAt: '2026-10-20T00:00:00Z' },
       });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       expect(
         await screen.findByRole('heading', { level: 1, name: '이제 방송만 켜면 돼요' }),
@@ -271,7 +272,7 @@ describe('HomeScreen', () => {
         soop: { linked: true, status: 'ACTIVE', nickname: '숲너구리' },
         streamKey: { issued: true },
       });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       expect(
         await screen.findByRole('heading', { level: 1, name: '이제 방송만 켜면 돼요' }),
@@ -307,7 +308,7 @@ describe('HomeScreen', () => {
           ),
         ],
       });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       const hero = await screen.findByRole('region', { name: '이번 주' });
       expect(
@@ -323,7 +324,7 @@ describe('HomeScreen', () => {
         past: [pastRow('sunday', at(10, 18)), pastRow('earlier', at(10, 13))],
         cards: { sunday: [card(1)], earlier: [card(2), card(3)] },
       });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       const hero = await screen.findByRole('region', { name: '이번 주' });
       expect(
@@ -337,7 +338,7 @@ describe('HomeScreen', () => {
 
     it('지난주에도 방송이 없었으면 숫자 줄 없이 마지막 방송만 말한다', async () => {
       serve({ past: [pastRow('old', at(10, 1))] });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       const hero = await screen.findByRole('region', { name: '이번 주' });
       expect(within(hero).getByRole('heading', { level: 1 })).toHaveTextContent(
@@ -348,7 +349,7 @@ describe('HomeScreen', () => {
 
     it('보관함을 못 읽었으면 만든 클립·유튜브 발행은 0이 아니라 「–」다', async () => {
       serve({ past: [pastRow('this-week', at(10, 20))], library: 'fail' });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       const hero = await screen.findByRole('region', { name: '이번 주' });
       expect(hero).toHaveTextContent('만든 클립–');
@@ -369,39 +370,88 @@ describe('HomeScreen', () => {
         live: [liveRow('live-a'), liveRow('live-b')],
         cards: { 'live-a': [card(1), card(2)], 'live-b': [card(3), card(4), card(5)] },
       });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       expect(
         await screen.findByRole('heading', { level: 1, name: '방송 2번에서 카드 5장을 찾았어요' }),
       ).toBeInTheDocument();
     });
 
-    it('상위 8개 밖의 지난 방송 카드는 매 주기 다시 읽지 않고 기억해 둔다(리뷰 #299)', async () => {
+    it('끝난 방송의 카드는 매 주기 다시 읽지 않고 기억해 둔다: 방금 끝난 방송만 다시 읽는다(리뷰 #299)', async () => {
       // 위 beforeEach는 Date만 가짜다 — 주기(setInterval)까지 돌리려면 갈아 끼운다
       vi.useRealTimers();
       vi.useFakeTimers({ shouldAdvanceTime: true });
       vi.setSystemTime(NOW);
-      // 이번 주·지난주에 9번 방송 — 가장 오래된 하나(10월 12일)가 상위 8개 밖이다
-      const rows = [20, 19, 18, 17, 16, 15, 14, 13, 12].map((day) =>
-        pastRow(`b-${day}`, at(10, day)),
-      );
+      // 30분 전에 끝난 방송 하나 + 이번 주·지난주에 9번 방송
+      const rows = [
+        pastRow('just', new Date(NOW.getTime() - 2.5 * 3_600_000)),
+        ...[20, 19, 18, 17, 16, 15, 14, 13, 12].map((day) => pastRow(`b-${day}`, at(10, day))),
+      ];
       const spy = vi.fn((input: RequestInfo | URL) =>
         Promise.resolve(route(String(input), { past: rows })),
       );
       vi.stubGlobal('fetch', spy);
       const cardCalls = (streamId: string) =>
         spy.mock.calls.filter(([u]) => String(u).includes(`/${streamId}/jump-cards`)).length;
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
       await screen.findByRole('region', { name: '이번 주' });
-      expect(cardCalls('b-12')).toBe(1);
+      expect(cardCalls('just')).toBe(1);
       expect(cardCalls('b-20')).toBe(1);
+      expect(cardCalls('b-12')).toBe(1);
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(10_100);
       });
-      // 상위 8개는 매 주기 다시, 그 밖은 기억해 둔 값을 쓴다
-      expect(cardCalls('b-20')).toBe(2);
+      expect(cardCalls('just')).toBe(2);
+      expect(cardCalls('b-20')).toBe(1);
       expect(cardCalls('b-12')).toBe(1);
+    });
+
+    it('지난 방송 목록은 매 주기 읽지 않고, 라이브가 끝나면 바로 다시 읽는다', async () => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(NOW);
+      let live: unknown[] = [
+        {
+          streamId: 'on-air',
+          status: 'live',
+          relation: 'OWNER',
+          startedAt: at(10, 21, 10).toISOString(),
+          endedAt: null,
+          vodExpiresAt: null,
+        },
+      ];
+      const spy = vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(route(String(input), { past: [pastRow('b', at(10, 20))], live })),
+      );
+      vi.stubGlobal('fetch', spy);
+      const pastReads = () =>
+        spy.mock.calls.filter(([u]) => String(u).includes('state=past')).length;
+      renderWithProviders(<HomeScreen />);
+      await screen.findByRole('region', { name: '이번 주' });
+      expect(pastReads()).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_100);
+      });
+      expect(pastReads()).toBe(1);
+
+      live = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_100);
+      });
+      expect(pastReads()).toBe(2);
+    });
+
+    it('홈을 떠났다 돌아오면 받아 둔 화면을 바로 그린다: 뼈대를 다시 보이지 않는다', async () => {
+      serve({ past: [pastRow('b', at(10, 20))] });
+      const { unmount, queryClient } = renderWithProviders(<HomeScreen />);
+      await screen.findByRole('region', { name: '이번 주' });
+
+      unmount();
+      renderWithProviders(<HomeScreen />, queryClient);
+
+      expect(screen.getByRole('region', { name: '이번 주' })).toBeInTheDocument();
     });
 
     it('상위 8개 밖 방송의 카드를 못 읽었으면 빈 값을 기억하지 않고 다음 주기에 다시 읽는다(리뷰 #299 2차)', async () => {
@@ -431,7 +481,7 @@ describe('HomeScreen', () => {
         return Promise.resolve(route(url, { past: rows, cards: { old: [card(1), card(2)] } }));
       });
       vi.stubGlobal('fetch', spy);
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       const hero = await screen.findByRole('region', { name: '이번 주' });
       expect(hero).toHaveTextContent('찾은 카드0장');
@@ -451,7 +501,7 @@ describe('HomeScreen', () => {
         past: [row],
         cards: { 'just-ended': [card(1), card(2)] },
       });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       expect(
         await screen.findByRole('heading', { level: 1, name: '방송 1번에서 카드 2장을 찾았어요' }),
@@ -474,7 +524,7 @@ describe('HomeScreen', () => {
         ],
         past: [pastRow('past-1', at(10, 10))],
       });
-      render(<HomeScreen />);
+      renderWithProviders(<HomeScreen />);
 
       expect(
         await screen.findByRole('heading', { level: 1, name: '방송 1번에서 카드 0장을 찾았어요' }),
@@ -490,7 +540,7 @@ describe('HomeScreen', () => {
       past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
       library: [entry(1, null)],
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     await screen.findByRole('region', { name: '지난 방송 · VOD' });
     expect(screen.queryByRole('region', { name: '이어서 편집' })).not.toBeInTheDocument();
@@ -505,7 +555,7 @@ describe('HomeScreen', () => {
       youtube: { linked: false, channelName: '재환 클립', status: 'BROKEN' },
       streamKey: { issued: false },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
     const rows = within(aside).getAllByRole('listitem');
@@ -528,7 +578,7 @@ describe('HomeScreen', () => {
       past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
       youtube: { linked: false, status: 'BROKEN' },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
     const youtube = within(aside).getAllByRole('listitem')[2]!;
@@ -543,7 +593,7 @@ describe('HomeScreen', () => {
       youtube: { linked: true, channelName: '재환 클립', status: 'ACTIVE' },
       streamKey: { issued: true },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
     const plugin = within(aside).getAllByRole('listitem')[1]!;
@@ -569,7 +619,7 @@ describe('HomeScreen', () => {
         return Promise.resolve(route(url, server));
       }),
     );
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
     const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
     expect(within(aside).getAllByRole('listitem')[0]).toHaveTextContent('치지직 · 재환의 방송');
 
@@ -591,7 +641,7 @@ describe('HomeScreen', () => {
         return Promise.resolve(route(url, {}));
       }),
     );
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const hero = await screen.findByRole('region', { name: '지금 할 일' });
     // 못 읽은 단계가 있으면 남은 수를 단정하지 않는다(리뷰 #299 2차)
@@ -620,7 +670,7 @@ describe('HomeScreen', () => {
         );
       }),
     );
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
     const chzzk = within(aside).getAllByRole('listitem')[0]!;
@@ -632,7 +682,7 @@ describe('HomeScreen', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     serve({ past: [pastRow('past-1', new Date(Date.now() - 86_400_000))] });
     const user = userEvent.setup();
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const tips = await screen.findByRole('region', { name: '포키의 팁' });
     expect(await within(tips).findByText(TIPS[0]!.text)).toBeInTheDocument();
@@ -689,7 +739,7 @@ describe('HomeScreen', () => {
       // 방송 정보 관측은 있는데 그 회차에 제목을 못 얻었다 — 목록 제목으로 대신한다
       info: { latest: { title: null, tags: [], category: null, viewers: 12 }, series: [] },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     expect(await screen.findByText('롤 마스터 승급전')).toBeInTheDocument();
     expect(await screen.findAllByText('새벽 랭크')).not.toHaveLength(0);
@@ -717,7 +767,7 @@ describe('HomeScreen', () => {
         },
       ],
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const band = await screen.findByRole('region', { name: '라이브' });
     expect(within(band).getByText('치지직')).toBeInTheDocument();
@@ -744,7 +794,7 @@ describe('HomeScreen', () => {
         },
       ],
     });
-    const { unmount } = render(<HomeScreen />);
+    const { unmount } = renderWithProviders(<HomeScreen />);
     let band = await screen.findByRole('region', { name: '라이브' });
     expect(await within(band).findByText('영 명')).toBeInTheDocument();
     expect(within(band).getByText('SOOP')).toBeInTheDocument();
@@ -753,7 +803,7 @@ describe('HomeScreen', () => {
 
     // 이 칸을 모르는 옛 서버
     serve({ live: [{ ...row, streamId: 'S-old', title: '옛 서버' }] });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
     band = await screen.findByRole('region', { name: '라이브' });
     expect(await within(band).findByText('옛 서버')).toBeInTheDocument();
     expect(within(band).queryByText('치지직')).toBeNull();
@@ -779,7 +829,7 @@ describe('HomeScreen', () => {
       ],
       info: { latest: null, platforms: [], series: [] },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const band = await screen.findByRole('region', { name: '라이브' });
     expect(await within(band).findByText('방송 정보를 받아 오고 있어요')).toBeInTheDocument();
@@ -803,7 +853,7 @@ describe('HomeScreen', () => {
         },
       ],
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const band = await screen.findByRole('region', { name: '라이브' });
     expect(await within(band).findByText('방송 정보를 아직 받지 못했어요')).toBeInTheDocument();
@@ -825,7 +875,7 @@ describe('HomeScreen', () => {
         },
       ],
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const band = await screen.findByRole('region', { name: '라이브' });
     expect(await within(band).findByText('방송 정보를 아직 받지 못했어요')).toBeInTheDocument();
@@ -875,7 +925,7 @@ describe('HomeScreen', () => {
         series: [],
       },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const band = await screen.findByRole('region', { name: '라이브' });
     expect(await within(band).findByText('숲 방송 제목')).toBeInTheDocument();
@@ -913,7 +963,7 @@ describe('HomeScreen', () => {
         series: [],
       },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const band = await screen.findByRole('region', { name: '라이브' });
     expect(await within(band).findByText('숲 제목')).toBeInTheDocument();
@@ -944,7 +994,7 @@ describe('HomeScreen', () => {
         { ...entry(16, rendered), streamId: 'other' },
       ],
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     expect(
       await screen.findByText((_, el) => el?.textContent === '감지된 카드 0 · 클립 완료 3'),
@@ -956,7 +1006,7 @@ describe('HomeScreen', () => {
       past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))],
       cards: { 'past-1': [card(35)] },
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     expect(await screen.findByText(/10월 8일 · 카드 1개/)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
@@ -986,7 +1036,7 @@ describe('HomeScreen', () => {
         row('gone', 'vod_ready', at(-61 * 24 * HOUR), at(-HOUR)),
       ],
     });
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     const grid = await screen.findByRole('region', { name: '지난 방송 · VOD' });
     await within(grid).findByText('gone');
@@ -1026,7 +1076,7 @@ describe('HomeScreen', () => {
         return Promise.resolve(route(url, server));
       }),
     );
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
     expect(await screen.findByRole('link', { name: '대시보드 열기' })).toBeInTheDocument();
 
     failing = true;
@@ -1069,7 +1119,7 @@ describe('HomeScreen', () => {
         );
       }),
     );
-    render(<HomeScreen />);
+    renderWithProviders(<HomeScreen />);
 
     expect(await screen.findByText('시청자 1,842')).toBeInTheDocument();
     const live = screen.getByRole('region', { name: '라이브' });
@@ -1077,7 +1127,7 @@ describe('HomeScreen', () => {
   });
 
   it('접근성 위반이 없다 — 방송 기록 없음', async () => {
-    const { container } = render(<HomeScreen />);
+    const { container } = renderWithProviders(<HomeScreen />);
     await screen.findByRole('region', { name: '포키가 해 주는 일' });
     // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수
     await act(async () => {
@@ -1087,7 +1137,7 @@ describe('HomeScreen', () => {
 
   it('접근성 위반이 없다 — 방송 기록 있음', async () => {
     serve({ past: [pastRow('past-1', new Date(Date.now() - 86_400_000))] });
-    const { container } = render(<HomeScreen />);
+    const { container } = renderWithProviders(<HomeScreen />);
     await screen.findByRole('region', { name: '포키의 팁' });
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
@@ -1104,7 +1154,7 @@ describe('HomeScreen: 남의 채널(POK-390)', () => {
   });
 
   function asEditor() {
-    return render(
+    return renderWithProviders(
       <ChannelRelationContext.Provider value="EDITOR">
         <HomeScreen />
       </ChannelRelationContext.Provider>,
@@ -1153,7 +1203,7 @@ describe('포키의 팁: 남의 채널(POK-390)', () => {
     check: (tip: (typeof TIPS)[number]) => void,
   ) {
     const user = userEvent.setup();
-    render(
+    renderWithProviders(
       <ChannelRelationContext.Provider value={relation}>
         <TipCard />
       </ChannelRelationContext.Provider>,
