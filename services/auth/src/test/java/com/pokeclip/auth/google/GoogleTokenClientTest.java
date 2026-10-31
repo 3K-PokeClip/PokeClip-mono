@@ -68,8 +68,8 @@ class GoogleTokenClientTest {
     }
 
     /**
-     * 과도기(POK-483 1단계)에는 verifier 없는 요청도 받는다. 빈 code_verifier가 실려 구글이
-     * 거부하지 않도록, null이면 아예 싣지 않는다.
+     * 요청 DTO가 verifier를 필수로 걸러 지금은 null이 오지 않는다. 선택값으로 되돌릴 때 빈
+     * code_verifier가 실려 구글이 거부하지 않도록, null이면 아예 싣지 않는다.
      */
     @Test
     void verifier가_null이면_code_verifier를_싣지_않는다() {
