@@ -578,6 +578,17 @@ describe('GlassPlayer', () => {
       expect(screen.getByRole('button', { name: '수동 마킹' })).toBeDisabled();
     });
 
+    it('버튼에 포커스를 둔 채 전체 화면을 나가면 「전체 화면」 버튼이 받는다 — 문서로 떨어지면 화살표 시킹이 죽는다', () => {
+      const { enterFullscreen } = renderMarking();
+      enterFullscreen();
+      act(() => screen.getByRole('button', { name: '수동 마킹' }).focus());
+
+      act(() => setFullscreenElement(null));
+
+      expect(screen.queryByRole('button', { name: '수동 마킹' })).toBeNull();
+      expect(screen.getByRole('button', { name: '전체 화면' })).toHaveFocus();
+    });
+
     it('마킹 결과는 전체 화면에서만 플레이어 안에 뜬다 — 영상 아래 줄과 토스트가 안 보이는 자리다', () => {
       const { enterFullscreen } = renderMarking({ status: '0:12 마킹됨 · 카드 생성 중' });
       expect(screen.queryByRole('status')).toBeNull();

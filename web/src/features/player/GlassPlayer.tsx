@@ -354,9 +354,10 @@ function GlassPlayerBody({
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
   const chatToggleRef = useRef<HTMLButtonElement>(null);
+  const markButtonRef = useRef<HTMLButtonElement>(null);
   const fullscreenButtonRef = useRef<HTMLButtonElement>(null);
-  /** 전체 화면을 나가는 순간, 곧 사라질 채팅 토글이 포커스를 들고 있었나 */
-  const chatToggleHadFocusRef = useRef(false);
+  /** 전체 화면을 나가는 순간, 곧 사라질 버튼(채팅 토글 · 수동 마킹)이 포커스를 들고 있었나 */
+  const leavingButtonHadFocusRef = useRef(false);
 
   // 전체 화면 여부는 요청이 아니라 결과로 안다 — ESC·브라우저 UI로 나가도 fullscreenchange가 온다.
   // 이 플레이어가 전체 화면 요소일 때만 참이다(다른 요소의 전체 화면은 남의 일).
@@ -366,8 +367,12 @@ function GlassPlayerBody({
       // el을 먼저 따지는 이유 — 언마운트 때 ref 분리가 이 리스너 해제보다 먼저다. 그 사이에 이벤트가
       // 오면 fullscreenElement도 null이라, 그냥 비교하면 null === null로 「전체 화면」이 돼 버린다.
       const next = el !== null && document.fullscreenElement === el;
-      // 나가는 이 순간이 마지막 기회다 — 리렌더 전이라 사라질 토글이 아직 포커스를 들고 있다
-      if (!next) chatToggleHadFocusRef.current = document.activeElement === chatToggleRef.current;
+      // 나가는 이 순간이 마지막 기회다 — 리렌더 전이라 사라질 버튼이 아직 포커스를 들고 있다
+      if (!next) {
+        const active = document.activeElement;
+        leavingButtonHadFocusRef.current =
+          active === chatToggleRef.current || active === markButtonRef.current;
+      }
       setFullscreen(next);
     };
     // 리스너가 없던 사이(예: Suspense 재서스펜드)에 바뀐 것은 이벤트로 안 온다 — 붙을 때 한 번 읽는다
@@ -376,14 +381,14 @@ function GlassPlayerBody({
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
-  // 전체 화면을 나가며 채팅 토글이 사라지면 그 포커스가 갈 곳이 없다 — 컨테이너 안 포커스를 전제로
-  // 하는 화살표 시킹(POK-32)이 죽는다. 이름 없는 컨테이너(tabIndex −1)로 옮기면 낭독이 끊기므로
+  // 전체 화면을 나가며 채팅 토글 · 수동 마킹이 사라지면 그 포커스가 갈 곳이 없다 — 컨테이너 안 포커스를
+  // 전제로 하는 화살표 시킹(POK-32)이 죽는다. 이름 없는 컨테이너(tabIndex −1)로 옮기면 낭독이 끊기므로
   // 바로 옆에 남아 있는 「전체 화면」 버튼으로 되돌린다(버튼 위에서도 화살표 시킹은 먹는다 —
-  // handleKeyDown이 button을 일부러 예외에서 뺐다). 토글에 포커스가 없었다면 손대지 않는다:
+  // handleKeyDown이 button을 일부러 예외에서 뺐다). 그 버튼들에 포커스가 없었다면 손대지 않는다:
   // 그때 가져오면 남의 포커스를 뺏어 Tab 순서가 페이지 처음이 아니라 플레이어 다음부터 흐른다.
   useEffect(() => {
-    const hadFocus = chatToggleHadFocusRef.current;
-    chatToggleHadFocusRef.current = false;
+    const hadFocus = leavingButtonHadFocusRef.current;
+    leavingButtonHadFocusRef.current = false;
     if (fullscreen || !hadFocus) return;
     fullscreenButtonRef.current?.focus({ preventScroll: true });
     // 재생 중이면 컨트롤이 이미 숨어 있을 수 있다(opacity 0 · pointer-events none). 프로그램적
@@ -592,6 +597,7 @@ function GlassPlayerBody({
           fullscreen={fullscreen}
           fullscreenButtonRef={fullscreenButtonRef}
           mark={mark}
+          markButtonRef={markButtonRef}
           onPip={handlePip}
           onFullscreen={handleFullscreen}
           onToggleSound={toggleSound}

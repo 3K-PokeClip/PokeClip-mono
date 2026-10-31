@@ -56,6 +56,7 @@ export function PlayerControls({
   fullscreen = false,
   fullscreenButtonRef,
   mark,
+  markButtonRef,
   onPip,
   onFullscreen,
   onToggleSound,
@@ -79,9 +80,11 @@ export function PlayerControls({
   chatToggle?: { on: boolean; onToggle: () => void; ref?: Ref<HTMLButtonElement> };
   /** 플레이어가 전체 화면인가 — 버튼 이름이 갈린다 */
   fullscreen?: boolean;
-  /** 사라지는 채팅 토글의 포커스를 받아 줄 자리 — GlassPlayer가 여기로 되돌린다 */
+  /** 전체 화면을 나가며 사라지는 버튼의 포커스를 받아 줄 자리 — GlassPlayer가 여기로 되돌린다 */
   fullscreenButtonRef?: Ref<HTMLButtonElement>;
   mark?: PlayerMark;
+  /** chatToggle.ref와 같은 까닭이다 — 이 버튼도 전체 화면을 나가면 사라진다 */
+  markButtonRef?: Ref<HTMLButtonElement>;
   onPip: () => void;
   onFullscreen: () => void;
   /** 소리 켜고 끄기 — m 단축키와 같은 동작이다(useSoundToggle) */
@@ -169,6 +172,7 @@ export function PlayerControls({
         {fullscreen && mark ? (
           <PlayerControlHint label={markName} keys={PLAYER_KEY_LABELS.mark}>
             <button
+              ref={markButtonRef}
               type="button"
               className={styles.glassBtn}
               aria-label={markName}
