@@ -1,9 +1,17 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { requestSegmentAudioAccess, type BroadcastRow, type JumpCard } from '@/api/clipEditor';
-import type { RecordingTimeline } from '@/features/player/recordingTimeline';
-import { clearEditorMedia, editorTimelineOf } from './editorMedia';
 import {
+  fetchAllJumpCards,
+  fetchBroadcast,
+  requestSegmentAudioAccess,
+  type BroadcastRow,
+  type JumpCard,
+} from '@/api/clipEditor';
+import { useAuthStore } from '@/stores/auth';
+import type { RecordingTimeline } from '@/features/player/recordingTimeline';
+import { clearEditorMedia, editorTimelineOf, loadRecording } from './editorMedia';
+import {
+  forgetPrefetchLists,
   prefetchCardEditor,
   PREFETCH_PARALLEL,
   PREFETCH_VIDEO_TIMEOUT_MS,
@@ -16,6 +24,12 @@ import { useEditorVideoPlayback } from './useEditorVideoPlayback';
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/clipEditor')>()),
   requestSegmentAudioAccess: vi.fn(),
+  fetchAllJumpCards: vi.fn(),
+  fetchBroadcast: vi.fn(),
+}));
+vi.mock('./editorMedia', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./editorMedia')>()),
+  loadRecording: vi.fn(),
 }));
 
 // 카드의 미리 받기(POK-499): 편집기가 처음 받는 영상 창 · 소리 조각을 같은 주소로 받아 두고, 편집기는 그것을 다시 받지 않는다
@@ -68,7 +82,10 @@ function depsWith(overrides: Partial<PrefetchDeps> = {}): PrefetchDeps {
 }
 
 describe('prefetchCardEditor', () => {
-  beforeEach(() => clearEditorMedia());
+  beforeEach(() => {
+    clearEditorMedia();
+    forgetPrefetchLists();
+  });
 
   it('녹화가 구간 끝 + 여유까지 올라왔으면 영상 창과 소리 조각을 받아 ready다', async () => {
     const deps = depsWith();
@@ -269,6 +286,7 @@ describe('미리 받은 카드를 편집기가 열면 다시 받지 않는다', 
 describe('조각 목록만 보고 판정하기', () => {
   beforeEach(() => {
     clearEditorMedia();
+    forgetPrefetchLists();
   });
 
   /** 40~90초 창을 4초 조각으로: 앞의 count개만 올라왔다 */
@@ -326,5 +344,90 @@ describe('조각 목록만 보고 판정하기', () => {
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
     expect(body).toHaveBeenCalledTimes(1);
     expect(vi.mocked(deps.loadSegmentTracks).mock.calls[0]![0].precheck).toBeUndefined();
+  });
+});
+
+describe('카드 목록 · 녹화 목록 나눠 쓰기', () => {
+  const CARD_B: JumpCard = { ...CARD, id: '24' };
+  const CARD_NEW: JumpCard = { ...CARD, id: '99' };
+
+  beforeEach(() => {
+    clearEditorMedia();
+    forgetPrefetchLists();
+    vi.mocked(fetchAllJumpCards).mockReset().mockResolvedValue([CARD, CARD_B]);
+    vi.mocked(fetchBroadcast).mockReset().mockResolvedValue(BROADCAST);
+    // 녹화가 구간 끝에 못 미쳐 pending에서 멈춘다: 영상 · 소리는 받지 않고 목록 읽기만 본다
+    vi.mocked(loadRecording).mockReset().mockResolvedValue(recordingOf(85));
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('같은 방송의 카드 여럿이 카드 목록과 녹화 목록을 한 번씩만 읽는다', async () => {
+    await Promise.all([prefetchCardEditor('7', '23'), prefetchCardEditor('7', '24')]);
+
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(1);
+    expect(loadRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('목록에 없는 카드는 낡은 목록일 수 있어 한 번 다시 읽고 찾는다: 방송 중 새로 생긴 카드', async () => {
+    await prefetchCardEditor('7', '23');
+    vi.mocked(fetchAllJumpCards).mockResolvedValue([CARD, CARD_B, CARD_NEW]);
+
+    await expect(prefetchCardEditor('7', '99')).resolves.toBe('pending');
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(2);
+  });
+
+  it('다시 읽어도 없는 카드는 없는 카드다: 읽기는 한 번만 더 간다', async () => {
+    await prefetchCardEditor('7', '23');
+
+    await expect(prefetchCardEditor('7', 'nope')).rejects.toThrow('not found');
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(2);
+  });
+
+  it('방금 읽은 목록에 없는 카드는 곧바로 없다고 한다: 같은 순간에 두 번 읽지 않는다', async () => {
+    await expect(prefetchCardEditor('7', 'nope')).rejects.toThrow('not found');
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(1);
+  });
+
+  it('카드 목록은 30초 뒤 다시 읽는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await prefetchCardEditor('7', '23');
+    vi.advanceTimersByTime(29_000);
+    await prefetchCardEditor('7', '24');
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2_000);
+    await prefetchCardEditor('7', '23');
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(2);
+  });
+
+  it('방송 중 녹화 목록은 8초만 쓴다: 녹화 기다림의 다시 확인(10초)이 새 녹화 끝을 본다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await prefetchCardEditor('7', '23');
+    vi.advanceTimersByTime(7_000);
+    await prefetchCardEditor('7', '24');
+    expect(loadRecording).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2_000);
+    await prefetchCardEditor('7', '23');
+    expect(loadRecording).toHaveBeenCalledTimes(2);
+  });
+
+  it('읽기가 실패하면 기억하지 않는다: 다음 부름이 다시 읽는다', async () => {
+    vi.mocked(fetchAllJumpCards).mockRejectedValueOnce(new Error('500'));
+
+    await expect(prefetchCardEditor('7', '23')).rejects.toThrow('500');
+    await expect(prefetchCardEditor('7', '23')).resolves.toBe('pending');
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(2);
+  });
+
+  it('계정이 바뀌면 비운다', async () => {
+    await prefetchCardEditor('7', '23');
+    useAuthStore.getState().clearTokens();
+
+    await prefetchCardEditor('7', '24');
+
+    expect(fetchAllJumpCards).toHaveBeenCalledTimes(2);
+    expect(loadRecording).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,11 +1,12 @@
 import {
+  fetchAllJumpCards,
   fetchBroadcast,
-  fetchJumpCard,
   mediaStreamId,
   type BroadcastRow,
   type JumpCard,
 } from '@/api/clipEditor';
 import { recordingClipUrl } from '@/api/mediaPlayback';
+import { onSessionAdvance } from '@/stores/auth';
 import type { RecordingTimeline } from '@/features/player/recordingTimeline';
 import {
   editorTimelineOf,
@@ -41,10 +42,88 @@ export interface PrefetchDeps {
   createDecoder: () => Pick<BaseAudioContext, 'decodeAudioData'>;
 }
 
+/** 카드 목록 · 끝난 방송의 녹화 목록을 다시 쓰는 시간 */
+const LIST_REUSE_MS = 30_000;
+/**
+ * 방송 중 녹화 목록을 다시 쓰는 시간. 녹화 기다림의 재확인(useCardEditorReady, 10초)이 새 녹화 끝을 봐야 하므로 그보다 짧게 둔다.
+ * 같은 방송의 카드 여럿이 한꺼번에 묻는 것만 나눈다
+ */
+const LIVE_RECORDING_REUSE_MS = 8_000;
+
+/**
+ * 키마다 읽기 하나를 잠깐 기억한다. 읽는 중이면 그 읽기를 같이 기다리고(동시 요청 합침), 실패는 기억하지 않는다.
+ * 세션이 바뀌면 비운다: 비운 뒤에는 비우기 전에 시작한 읽기가 늦게 끝나도 다시 들어오지 않는다
+ */
+function shortLived<T>() {
+  const entries = new Map<string, { settledAt: number | null; value: Promise<T> }>();
+  return {
+    read(
+      key: string,
+      reuseMs: number,
+      load: () => Promise<T>,
+    ): { value: Promise<T>; reused: boolean } {
+      const known = entries.get(key);
+      if (
+        known !== undefined &&
+        (known.settledAt === null || Date.now() - known.settledAt < reuseMs)
+      )
+        return { value: known.value, reused: true };
+      const entry = { settledAt: null as number | null, value: load() };
+      entries.set(key, entry);
+      entry.value.then(
+        () => {
+          entry.settledAt = Date.now();
+        },
+        () => {
+          if (entries.get(key) === entry) entries.delete(key);
+        },
+      );
+      return { value: entry.value, reused: false };
+    },
+    drop: (key: string) => entries.delete(key),
+    clear: () => entries.clear(),
+  };
+}
+
+/** 방송 → 가린 카드까지 전체 카드 목록. 카드 하나를 찾으려고 목록 전체를 읽으므로(fetchJumpCard) 카드마다 읽지 않게 나눈다 */
+const cardLists = shortLived<JumpCard[]>();
+/** 방송(과 끝남 여부) → 녹화 */
+const recordings = shortLived<RecordingTimeline | null>();
+
+/** 기억해 둔 카드 목록 · 녹화를 비운다. 계정이 바뀔 때 · 화면 시험 사이에 부른다 */
+export function forgetPrefetchLists(): void {
+  cardLists.clear();
+  recordings.clear();
+}
+onSessionAdvance(forgetPrefetchLists);
+
+/**
+ * 카드 하나. 기억한 목록에 없으면 낡은 목록일 수 있다(방송 중 새로 생긴 카드)고 보고 한 번 다시 읽는다 — 방금 읽은 목록에도 없으면
+ * 정말 없는 카드다
+ */
+async function cardFromList(streamId: string, cardId: string): Promise<JumpCard | null> {
+  const load = () => fetchAllJumpCards(streamId, undefined, { includeHidden: true });
+  const find = (cards: JumpCard[]) => cards.find((card) => String(card.id) === cardId) ?? null;
+  const first = cardLists.read(streamId, LIST_REUSE_MS, load);
+  const card = find(await first.value);
+  if (card !== null || !first.reused) return card;
+  cardLists.drop(streamId);
+  return find(await cardLists.read(streamId, LIST_REUSE_MS, load).value);
+}
+
+function recordingOf(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
+  const live = broadcast.endedAt === null;
+  return recordings.read(
+    `${broadcast.streamId}:${broadcast.endedAt ?? 'live'}`,
+    live ? LIVE_RECORDING_REUSE_MS : LIST_REUSE_MS,
+    () => loadRecording(broadcast),
+  ).value;
+}
+
 const defaultDeps: PrefetchDeps = {
-  fetchJumpCard,
+  fetchJumpCard: cardFromList,
   fetchBroadcast,
-  loadRecording,
+  loadRecording: recordingOf,
   fetchRecordingWindow,
   loadSegmentTracks,
   createDecoder: () => new OfflineAudioContext(1, 1, PREVIEW_SAMPLE_RATE),
