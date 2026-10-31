@@ -168,6 +168,16 @@ describe('끝 증거 · 연속 검사 · 시한(T10)', () => {
     const { state } = run(s, [{ type: 'playing' }]);
     expect([state.endingSince, state.handoff]).toEqual([null, s.handoff]);
   });
+
+  it('H2: playing 전에 끝 증거가 오면 앞 끝남 대기의 시각을 이어 쓴다 — 재접속 대기 · 20분 시한을 처음부터 세지 않는다', () => {
+    // 끝남 대기(E1)에서 넘긴 세션은 앞 대기의 endingSince 를 들고 온다(H1′ playing 만 비운다)
+    const since = NOW - MIN;
+    const carried = run({ ...confirming(), endingSince: since }, [{ type: 'live-closed' }]);
+    expect(carried.state.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind' });
+    expect(carried.state.endingSince).toBe(since);
+    // 앞 대기가 없으면(rewind 에서 넘김) 되돌린 그 시각부터 센다
+    expect(run(confirming(), [{ type: 'live-closed' }]).state.endingSince).toBe(NOW + 1_000);
+  });
 });
 
 describe('되돌림의 멈춤 유지(c13f cc M1 — 효과로 건다) · 넘김 안내 거둠', () => {
