@@ -1,5 +1,6 @@
 'use client';
 
+import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { ApiError, apiFetch, type ApiFetchInit } from './client';
 import { markPlaybackCookiesIssued } from './mediaPlayback';
 import { notifyChannelGone } from '@/stores/channel';
@@ -794,6 +795,28 @@ export async function fetchLibraryAll(
     cursor = page.nextCursor;
   } while (cursor !== null);
   return items;
+}
+
+/**
+ * 보관함 목록. 홈과 보관함 화면이 같은 캐시를 나눠 쓴다: 주기는 화면마다 다르고(refetchInterval), 들어올 때마다 다시 읽되 그동안은
+ * 받아 둔 목록을 바로 보여 준다.
+ */
+export function libraryQueryOptions(streamerId: number | null) {
+  return queryOptions({
+    queryKey: ['library', streamerId] as const,
+    queryFn: ({ signal }) => fetchLibraryAll(streamerId, signal),
+    staleTime: 0,
+    // 주기가 곧 다시 읽고, 첫 읽기 실패는 화면이 바로 말해야 한다
+    retry: false,
+  });
+}
+
+/**
+ * 받아 둔 보관함 목록을 버린다. 편집기는 보관함과 같이 서 있지 않아 저장 · 영상 요청의 답을 목록에 얹을 수 없다: 남겨 두면 보관함으로
+ * 돌아갈 때 방금 만든 편집본이 없는 옛 목록이 먼저 보인다.
+ */
+export function forgetLibraryList(queryClient: QueryClient): void {
+  queryClient.removeQueries({ queryKey: ['library'] });
 }
 
 export function fetchLibraryDetail(recipeId: number): Promise<LibraryDetail> {
