@@ -24,6 +24,8 @@ async function load(key: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal('BroadcastChannel', undefined);
+  // jsdom에는 없어 시험마다 Safari 폴백(500ms)을 기다리게 된다
+  vi.stubGlobal('requestIdleCallback', (run: () => void) => run());
 });
 
 afterEach(() => {
