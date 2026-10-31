@@ -55,7 +55,7 @@ import {
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { setActiveRole, toYoutubeCategoryId, track } from '@/lib/analytics';
 import type { RecordingTimeline } from '@/features/player/recordingTimeline';
-import { editorTimelineOf, loadRecording } from '../editorMedia';
+import { editorTimelineOf, holdEditorMedia, loadRecording } from '../editorMedia';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { useTrackPreview } from '../trackAudio/useTrackPreview';
 import type { FilmstripSource } from './VideoFilmstrip';
@@ -487,6 +487,8 @@ export function StudioScreen() {
       ? { kind: 'loading', previous: null }
       : { kind: 'no-card' },
   );
+  // 라이브 카드가 미리 받은 영상 · 소리를 이 화면이 서 있는 동안 둔다
+  useEffect(() => holdEditorMedia(), []);
   /** 다 읽을 때마다 하나씩 — 편집기 마운트 열쇠(Opened.mount) */
   const mounts = useRef(0);
   const reloadingRef = useRef(false);

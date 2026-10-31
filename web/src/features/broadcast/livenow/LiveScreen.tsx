@@ -37,6 +37,7 @@ import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
+import { holdEditorMedia } from '@/features/clips/editor/editorMedia';
 import { nextLiveFollow } from './chatReplay';
 import {
   missingWord,
@@ -443,6 +444,8 @@ export function LiveScreen() {
     resetLiveData();
     setStoreCleared(true);
   }, []);
+  // 카드가 미리 받은 영상 · 소리는 이 화면과 편집기가 서 있는 동안만 둔다
+  useEffect(() => holdEditorMedia(), []);
   return storeCleared ? <LiveScreenBody /> : <div />;
 }
 
