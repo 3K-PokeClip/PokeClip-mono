@@ -24,7 +24,7 @@ export function ClipSourceCard({
   active?: boolean;
 }) {
   const entry = clip.entry;
-  const { source, pending } = useClipSource(entry, active);
+  const { source, baseMs, pending } = useClipSource(entry, active);
   const headId = useId();
   // 못 읽은 포스터 주소 — 그 주소인 동안은 자리표시 그림이다(정보 바 카테고리 사진과 같은 처리)
   const [failedImage, setFailedImage] = useState<string | null>(null);
@@ -38,7 +38,8 @@ export function ClipSourceCard({
         .join(' · ')
     : '';
   const kind = [source?.category, source?.platform].filter(Boolean).join(' · ');
-  const scene = entry?.cut ? sceneLabel(entry.cut) : null;
+  const scene = entry?.cut && baseMs !== null ? sceneLabel(entry.cut, baseMs) : null;
+  const sceneWaiting = pending && entry?.cut != null;
   const link = entry ? sourceLinkOf(entry, now) : null;
 
   return (
@@ -70,9 +71,11 @@ export function ClipSourceCard({
           {when ? <p className={styles.sourceLine}>{when}</p> : null}
         </div>
       </div>
-      {scene || link ? (
+      {scene || sceneWaiting || link ? (
         <div className={styles.sourceFoot}>
-          {scene ? (
+          {sceneWaiting ? (
+            <Skeleton height={12} width="45%" />
+          ) : scene ? (
             <span>
               장면 <span className={styles.sourceScene}>{scene}</span>
             </span>

@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchBroadcast, type LibraryEntry } from '@/api/clipEditor';
 import { useBroadcastTimelineQuery } from '@/features/broadcast/livenow/useBroadcastTimeline';
-import { clipSourceOf, type ClipSource } from './libraryView';
+import { clipSourceOf, sceneBaseMs, type ClipSource } from './libraryView';
 
 // 상세 패널 원본 방송 카드(POK-511)의 재료. 보관함 목록에는 방송 제목 · 카테고리가 없어(서버 변경 없이 가기로 했다) 패널을 열 때
 // 두 창구를 읽는다: 방송 한 줄(제목 · 카테고리 · 플랫폼 · 기준점)과 그 방송의 시점별 기록(장면 때의 제목 · 카테고리 · 포스터).
@@ -22,7 +22,9 @@ export function useClipSource(
 ): {
   /** 목업 줄(서버 줄이 없다)이거나 첫 답을 기다리는 중이면 null */
   source: ClipSource | null;
-  /** 첫 답을 기다리는 중 — 그동안 제목 · 카테고리 자리는 자리표시다(대신 쓴 값이 바뀌며 튀지 않게) */
+  /** 장면 위치를 재는 기준점(sceneBaseMs). source와 같이 null이다 — 방송 줄의 기준점이 오면 장면 위치가 바뀌어 튄다 */
+  baseMs: number | null;
+  /** 첫 답을 기다리는 중 — 그동안 제목 · 카테고리 · 장면 위치 자리는 자리표시다(대신 쓴 값이 바뀌며 튀지 않게) */
   pending: boolean;
 } {
   const streamId = entry?.streamId ?? '';
@@ -43,10 +45,15 @@ export function useClipSource(
   // 연 채 뒤에 만든 편집본을 골라도 옛 끝 구간의 제목 · 카테고리를 쓰지 않고, 끝나면 끝까지 담긴 기록을 한 번 더 읽는다
   const timeline = useBroadcastTimelineQuery(streamId, live ? 'live' : 'ended', active);
 
-  if (entry === undefined) return { source: null, pending: false };
+  if (entry === undefined) return { source: null, baseMs: null, pending: false };
   // 둘 다 올 때까지 값을 내지 않는다: 방송 줄이 없으면 대표 플랫폼을 몰라, 동시 송출 방송에서 다른 플랫폼 값이 잠깐 떴다가 바뀐다
-  if (row.isPending || timeline.isPending) return { source: null, pending: true };
+  if (row.isPending || timeline.isPending) return { source: null, baseMs: null, pending: true };
   // 구간 목록이 없는 답은 못 읽은 것으로 본다 — 그대로 넘기면 구간을 고르다 패널이 통째로 깨진다
   const segmented = Array.isArray(timeline.data?.segments) ? timeline.data : undefined;
-  return { source: clipSourceOf(entry, row.data ?? null, segmented), pending: false };
+  const broadcastRow = row.data ?? null;
+  return {
+    source: clipSourceOf(entry, broadcastRow, segmented),
+    baseMs: sceneBaseMs(entry, broadcastRow),
+    pending: false,
+  };
 }

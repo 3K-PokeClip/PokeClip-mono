@@ -1566,8 +1566,11 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     streamId: 's1',
     creatorId: '9',
     recipeVersion: 2,
-    // 1:23:45 ~ 1:24:30 — 기준점 19:52 + 1:23:45 = 21:15:45, 카테고리를 바꾼 뒤 장면이다
-    cut: { inAtMs: 5_025_000, outAtMs: 5_070_000 },
+    // 서버가 주는 그대로 방송 절대축 시각이다(계약6). 시작 19:52 + 1:23:45 = 21:15:45, 카테고리를 바꾼 뒤 장면이다
+    cut: {
+      inAtMs: Date.parse('2026-10-17T19:52:00+09:00') + 5_025_000,
+      outAtMs: Date.parse('2026-10-17T19:52:00+09:00') + 5_070_000,
+    },
     status: 'rendered' as const,
     broadcast: {
       status: 'ended',
@@ -1708,10 +1711,41 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     await act(async () => {});
     expect(card.queryByText(/SOOP|치지직/)).toBeNull();
     expect(container.querySelector('img[src^="https://p/"]')).toBeNull();
+    // 장면 위치는 방송 줄의 기준점으로 잰다: 그 전에 그리면 기준점이 오면서 숫자가 바뀐다
+    expect(card.queryByText(/~/)).toBeNull();
 
     await act(async () => releaseRow(jsonResponse(200, { broadcasts: [], nextCursor: null })));
     expect(await card.findByText('리그 오브 레전드 · 치지직')).toBeInTheDocument();
     expect(container.querySelector('img[src="https://p/lol.png"]')).not.toBeNull();
+    expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
+  });
+
+  it('구간은 절대 시각이다: 방송 앞쪽 장면은 그때의 제목 · 카테고리와 방송 기준점에서 잰 위치를 보인다(PR #462 5차 리뷰)', async () => {
+    const origin = '2026-10-17T19:52:30+09:00';
+    stubFetch((url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past'))
+        return jsonResponse(200, {
+          broadcasts: [{ ...broadcastRow, timelineOriginAt: origin }],
+          nextCursor: null,
+        });
+      if (url.startsWith('/api/clip/broadcasts?state=live'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      if (url === '/api/clip/broadcasts/s1/broadcast-info/timeline')
+        return jsonResponse(200, timeline);
+      return new Promise<Response>(() => {});
+    });
+    const early = {
+      ...entry,
+      cut: { inAtMs: Date.parse(origin) + 600_000, outAtMs: Date.parse(origin) + 645_000 },
+    };
+    renderWithProviders(
+      <LibraryScreen clips={[toLibraryClip(early, '9')]} selectedId="12" now={NOW} />,
+    );
+    const card = within(within(panel()).getByRole('region', { name: '원본 방송' }));
+
+    expect(await card.findByText('인사 방송')).toBeInTheDocument();
+    expect(card.getByText('저스트 채팅 · 치지직')).toBeInTheDocument();
+    expect(card.getByText('10:00 ~ 10:45')).toBeInTheDocument();
   });
 
   it('방송 줄을 찾으면 목록을 더 넘기지 않는다 — 한 줄 때문에 목록 전부를 읽지 않는다(PR #462 1차 리뷰)', async () => {

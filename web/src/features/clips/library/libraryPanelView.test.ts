@@ -13,7 +13,7 @@ import {
   clipSourceOf,
   instantText,
   noteText,
-  sceneAtMs,
+  sceneBaseMs,
   sceneLabel,
   sourceLinkOf,
   stepViewForClip,
@@ -27,8 +27,11 @@ import { toLibraryClip } from './useLibraryMockState';
 const NOW = new Date('2026-10-30T14:30:00+09:00');
 const STARTED = '2026-10-17T19:52:00+09:00';
 const ENDED = '2026-10-17T22:06:00+09:00';
-/** 편집 구간 1:23:45 ~ 1:24:30 */
-const CUT = { inAtMs: 5_025_000, outAtMs: 5_070_000 };
+const BASE = Date.parse(STARTED);
+/** 편집 구간 1:23:45 ~ 1:24:30. 서버가 주는 그대로 방송 절대축 시각이다(계약6) */
+const CUT = { inAtMs: BASE + 5_025_000, outAtMs: BASE + 5_070_000 };
+/** 방송 시작 10분 뒤 장면 — 카테고리를 바꾸기 전이다 */
+const EARLY_CUT = { inAtMs: BASE + 600_000, outAtMs: BASE + 630_000 };
 
 function video(over: Partial<ClipSnapshot> = {}): ClipSnapshot {
   return {
@@ -218,8 +221,8 @@ describe('stepViewForClip — 진행 카드는 서버 영상의 지금 판에만
 });
 
 describe('clipSourceOf — 원본 방송의 제목 · 카테고리는 그 장면 때의 값이다(POK-511)', () => {
-  it('장면 시각(기준점 + 구간 시작)의 구간에서 제목 · 카테고리 · 포스터를 고른다', () => {
-    // 기준점 19:52:30 + 1:23:45 = 21:16:15 → 바꾼 뒤 구간
+  it('장면 시각(구간 시작 그대로)의 구간에서 제목 · 카테고리 · 포스터를 고른다', () => {
+    // 구간 시작 21:15:45 → 바꾼 뒤 구간. 기준점은 장면 시각에 끼지 않는다
     const source = clipSourceOf(
       entry('rendered'),
       row({ timelineOriginAt: '2026-10-17T19:52:30+09:00' }),
@@ -234,7 +237,7 @@ describe('clipSourceOf — 원본 방송의 제목 · 카테고리는 그 장면
   });
 
   it('카테고리를 바꾸기 전 장면은 바꾸기 전 카테고리다 — 방송 줄의 마지막 값이 아니다', () => {
-    const early = entry('rendered', video(), { cut: { inAtMs: 600_000, outAtMs: 630_000 } });
+    const early = entry('rendered', video(), { cut: EARLY_CUT });
     const source = clipSourceOf(early, row(), TIMELINE);
     expect(source.title).toBe('인사 방송');
     expect(source.category).toBe('저스트 채팅');
@@ -243,7 +246,7 @@ describe('clipSourceOf — 원본 방송의 제목 · 카테고리는 그 장면
 
   it('그 시각 구간이 없으면 방송 줄의 값으로 물러서고 포스터는 비운다', () => {
     const truncated: BroadcastTimeline = { segments: TIMELINE.segments.slice(1), truncated: true };
-    const early = entry('rendered', video(), { cut: { inAtMs: 600_000, outAtMs: 630_000 } });
+    const early = entry('rendered', video(), { cut: EARLY_CUT });
     expect(clipSourceOf(early, row(), truncated)).toEqual({
       title: '방송 끝 제목',
       category: '방송 끝 카테고리',
@@ -308,22 +311,21 @@ describe('clipSourceOf — 원본 방송의 제목 · 카테고리는 그 장면
   });
 });
 
-describe('sceneAtMs — 편집 구간 시작의 실제 시각', () => {
-  it('방송 줄의 기준점, 없으면 보관함 줄의 시작 시각에 구간 시작을 더한다', () => {
-    const base = Date.parse(STARTED);
+describe('sceneBaseMs — 장면 위치를 재는 기준점', () => {
+  it('방송 줄의 기준점, 없으면 시작 시각, 방송 줄을 못 읽었으면 보관함 줄의 시작 시각', () => {
     expect(
-      sceneAtMs(entry('rendered'), row({ timelineOriginAt: '2026-10-17T19:53:00+09:00' })),
-    ).toBe(Date.parse('2026-10-17T19:53:00+09:00') + CUT.inAtMs);
-    expect(sceneAtMs(entry('rendered'), null)).toBe(base + CUT.inAtMs);
+      sceneBaseMs(entry('rendered'), row({ timelineOriginAt: '2026-10-17T19:53:00+09:00' })),
+    ).toBe(Date.parse('2026-10-17T19:53:00+09:00'));
+    expect(sceneBaseMs(entry('rendered'), row())).toBe(BASE);
+    expect(sceneBaseMs(entry('rendered'), null)).toBe(BASE);
   });
 
-  it('구간이 없거나 시각을 모르면 null', () => {
-    expect(sceneAtMs(entry('rendered', video(), { cut: null }), row())).toBeNull();
+  it('시각을 모르면 null', () => {
     const noStart = entry('rendered', video(), {
       broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
     });
-    expect(sceneAtMs(noStart, null)).toBeNull();
-    expect(sceneAtMs(noStart, row({ startedAt: null, timelineOriginAt: null }))).toBeNull();
+    expect(sceneBaseMs(noStart, null)).toBeNull();
+    expect(sceneBaseMs(noStart, row({ startedAt: null, timelineOriginAt: null }))).toBeNull();
   });
 });
 
@@ -337,9 +339,9 @@ describe('원본 방송 카드 표기', () => {
     expect(broadcastLengthLabel({ ...b, endedAt: 'x' })).toBeNull();
   });
 
-  it('장면 위치 — 방송 기준점에서 잰 시계', () => {
-    expect(sceneLabel(CUT)).toBe('1:23:45 ~ 1:24:30');
-    expect(sceneLabel({ inAtMs: 65_000, outAtMs: 95_000 })).toBe('1:05 ~ 1:35');
+  it('장면 위치 — 절대 시각인 구간에서 기준점을 뺀 시계(PR #462 5차 리뷰)', () => {
+    expect(sceneLabel(CUT, BASE)).toBe('1:23:45 ~ 1:24:30');
+    expect(sceneLabel(EARLY_CUT, BASE)).toBe('10:00 ~ 10:30');
   });
 
   it('원본 방송으로 가는 길 — 방송 중이면 라이브, 끝났으면 지난 방송, 원본이 만료됐으면 없다', () => {

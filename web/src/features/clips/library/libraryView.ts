@@ -485,13 +485,13 @@ export interface ClipSource {
 }
 
 /**
- * 편집 구간 시작의 실제 시각(epoch ms). 구간 ms는 방송 기준점에서 잰 값이라 기준점(방송 줄의 timelineOriginAt, 없으면 시작 시각)에
- * 더한다. 방송 줄을 아직 못 읽었으면 보관함 줄의 시작 시각으로 대신한다(수십 초 어긋날 수 있다). 모르면 null
+ * 장면 위치를 재는 기준점(epoch ms). 편집 구간은 방송 절대축 시각이라(계약6) 이 값을 빼야 「방송에서 몇 분」이 된다. 편집기가 화면 축을
+ * 잡는 것과 같은 기준점(방송 줄의 timelineOriginAt, 없으면 시작 시각)이고, 방송 줄을 못 읽었으면 보관함 줄의 시작 시각으로
+ * 대신한다(수십 초 어긋날 수 있다). 모르면 null
  */
-export function sceneAtMs(entry: LibraryEntry, row: BroadcastRow | null): number | null {
-  if (entry.cut === null) return null;
+export function sceneBaseMs(entry: LibraryEntry, row: BroadcastRow | null): number | null {
   const base = row !== null ? timelineBaseMs(row) : Date.parse(entry.broadcast.startedAt ?? '');
-  return Number.isFinite(base) ? base + entry.cut.inAtMs : null;
+  return Number.isFinite(base) ? base : null;
 }
 
 /**
@@ -506,7 +506,8 @@ export function clipSourceOf(
   timeline: BroadcastTimeline | undefined,
 ): ClipSource {
   const platform = row?.platform ?? null;
-  const at = sceneAtMs(entry, row);
+  // 구간과 시점별 기록은 같은 절대축이라 구간 시작이 곧 장면 시각이다
+  const at = entry.cut?.inAtMs ?? null;
   const segment =
     at !== null && timeline ? segmentAt(timeline.segments, platform, at, timeline.truncated) : null;
   const span =
@@ -534,9 +535,10 @@ export function broadcastLengthLabel(broadcast: LibraryEntry['broadcast']): stri
   return hours > 0 ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
 }
 
-/** 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」(방송 기준점에서 잰 시계) */
-export function sceneLabel(cut: NonNullable<LibraryEntry['cut']>): string {
-  return `${formatUptime(cut.inAtMs / 1000)} ~ ${formatUptime(cut.outAtMs / 1000)}`;
+/** 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」. 구간이 절대 시각이라 기준점(sceneBaseMs)을 빼서 잰다 */
+export function sceneLabel(cut: NonNullable<LibraryEntry['cut']>, baseMs: number): string {
+  const position = (ms: number) => formatUptime((ms - baseMs) / 1000);
+  return `${position(cut.inAtMs)} ~ ${position(cut.outAtMs)}`;
 }
 
 /**
