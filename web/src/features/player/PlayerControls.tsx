@@ -35,6 +35,8 @@ export interface PlayerMark {
   disabled: boolean;
   /** 마킹 진행 · 결과 한 줄. 토스트도 안 보이는 자리라 플레이어 안에 띄운다 */
   status: string | null;
+  /** 말풍선에 적는 단축키. 키를 듣는 화면이 정한다 */
+  hotkey: string;
   onMark: () => void;
 }
 
@@ -103,12 +105,12 @@ export function PlayerControls({
   return (
     <div className={styles.buttonRow} onMouseDown={keepFocus}>
       <div className={styles.buttonGroup}>
-        <PlayerControlHint label={playName} keys={PLAYER_KEY_LABELS.play} align="start">
+        <PlayerControlHint label={playName} keys={PLAYER_KEY_LABELS.play.hint} align="start">
           <button
             type="button"
             className={styles.glassBtn}
             aria-label={playName}
-            aria-keyshortcuts="Space k"
+            aria-keyshortcuts={PLAYER_KEY_LABELS.play.aria}
             onClick={sim.togglePlay}
           >
             {sim.ended ? (
@@ -121,12 +123,12 @@ export function PlayerControls({
           </button>
         </PlayerControlHint>
         <div className={styles.volumeGroup}>
-          <PlayerControlHint label={soundName} keys={PLAYER_KEY_LABELS.sound}>
+          <PlayerControlHint label={soundName} keys={PLAYER_KEY_LABELS.sound.hint}>
             <button
               type="button"
               className={styles.volumeBtn}
               aria-label={soundName}
-              aria-keyshortcuts="m"
+              aria-keyshortcuts={PLAYER_KEY_LABELS.sound.aria}
               onClick={onToggleSound}
             >
               <VolumeIcon size={19} aria-hidden />
@@ -151,12 +153,12 @@ export function PlayerControls({
         {liveHidden ? null : sim.replay ? (
           <ReplayTimeButton behindSeconds={sim.behindSeconds} windowSeconds={sim.windowSeconds} />
         ) : (
-          <PlayerControlHint label={LIVE_EDGE_WORDS.goToLabel} keys={PLAYER_KEY_LABELS.live}>
+          <PlayerControlHint label={LIVE_EDGE_WORDS.goToLabel} keys={PLAYER_KEY_LABELS.live.hint}>
             <button
               type="button"
               className={styles.livePillBtn}
               aria-label={LIVE_EDGE_WORDS.goToLabel}
-              aria-keyshortcuts="End"
+              aria-keyshortcuts={PLAYER_KEY_LABELS.live.aria}
               onClick={sim.returnToLive}
             >
               <span
@@ -173,13 +175,13 @@ export function PlayerControls({
       </div>
       <div className={styles.buttonGroup}>
         {fullscreen && mark ? (
-          <PlayerControlHint label={markName} keys={PLAYER_KEY_LABELS.mark}>
+          <PlayerControlHint label={markName} keys={mark.hotkey}>
             <button
               ref={markButtonRef}
               type="button"
               className={styles.glassBtn}
               aria-label={markName}
-              aria-keyshortcuts={PLAYER_KEY_LABELS.mark}
+              aria-keyshortcuts={mark.hotkey}
               disabled={mark.disabled}
               onClick={mark.onMark}
             >
@@ -227,13 +229,17 @@ export function PlayerControls({
             />
           </PlayerControlHint>
         )}
-        <PlayerControlHint label={fullscreenName} keys={PLAYER_KEY_LABELS.fullscreen} align="end">
+        <PlayerControlHint
+          label={fullscreenName}
+          keys={PLAYER_KEY_LABELS.fullscreen.hint}
+          align="end"
+        >
           <button
             ref={fullscreenButtonRef}
             type="button"
             className={styles.glassBtn}
             aria-label={fullscreenName}
-            aria-keyshortcuts="f"
+            aria-keyshortcuts={PLAYER_KEY_LABELS.fullscreen.aria}
             onClick={onFullscreen}
           >
             <Maximize size={19} aria-hidden />

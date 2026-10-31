@@ -1,3 +1,5 @@
+import { isTypingTarget } from '@/features/player/playerKeys';
+
 // 수동 마킹 핫키(F8) 판정 — ADR-011이 「자동 탐지 신뢰도가 미달인 채널은 핫키 모드」로
 // 정해 두어 이 키가 소형 채널의 유일한 하이라이트 경로다.
 //
@@ -29,23 +31,6 @@ export function isMarkHotkey(event: MarkKeyEvent): boolean {
   // 자동반복은 버린다 — 누르고 있으면 초당 수십 장의 카드가 생긴다
   if (event.repeat) return false;
   return event.key === MARK_HOTKEY;
-}
-
-/**
- * 글자를 입력하는 중인 곳인가 — 전역 리스너라 제목 수정·검색창까지 닿는다.
- * GlassPlayer의 컨테이너 가드에 textbox를 더한 것이다.
- *
- * contenteditable을 값으로 좁히지 않는 이유 — `<div contenteditable>`(빈 값)과
- * `plaintext-only`도 편집 영역이라 `="true"`로 받으면 그 안에서 누른 키가 가드를 통과한다.
- * 대신 명시적 false만 뺀다.
- */
-export function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  return (
-    target.closest(
-      'input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="slider"], [role="textbox"]',
-    ) !== null
-  );
 }
 
 /**

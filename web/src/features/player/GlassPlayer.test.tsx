@@ -158,6 +158,16 @@ describe('GlassPlayer', () => {
       expect(screen.getByText('재생 (Space / k)')).toBeInTheDocument();
     });
 
+    it('낭독 속성의 단축키도 말풍선과 같은 값에서 나온다', () => {
+      renderPlayer();
+      const shortcuts = (name: string) =>
+        screen.getByRole('button', { name }).getAttribute('aria-keyshortcuts');
+
+      expect(shortcuts('일시정지')).toBe('Space k');
+      expect(shortcuts('음소거')).toBe('m');
+      expect(shortcuts('전체 화면')).toBe('f');
+    });
+
     it('전체 화면이면 「전체 화면 종료」다', () => {
       const { container } = renderPlayer();
 
@@ -569,7 +579,7 @@ describe('GlassPlayer', () => {
             viewersNote="1,842명 시청 중"
             embed
             simulate
-            mark={{ mode: 'live', disabled: false, status: null, onMark, ...mark }}
+            mark={{ mode: 'live', disabled: false, status: null, hotkey: 'F8', onMark, ...mark }}
           />
         </ToastProvider>,
       );

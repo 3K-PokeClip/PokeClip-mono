@@ -23,6 +23,7 @@ import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { NewBroadcastBand } from './NewBroadcastBand';
 import { LiveScreenSkeleton } from './LiveScreenSkeleton';
 import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
+import { MARK_HOTKEY } from './markKey';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { ensureLiveAccess, takePlaybackDrop } from '@/api/playbackAccess';
@@ -477,6 +478,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     mode: ended ? 'past' : 'live',
     disabled: markDisabled,
     status: marking.pendingLabel ? `${marking.pendingLabel} 마킹됨 · 카드 생성 중` : marking.notice,
+    hotkey: MARK_HOTKEY,
     onMark: marking.mark,
   };
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
