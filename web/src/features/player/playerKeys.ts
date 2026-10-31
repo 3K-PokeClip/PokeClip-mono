@@ -23,6 +23,14 @@ export type SeekKeyEvent = {
 };
 
 /**
+ * 오른쪽 끝으로 가는 의도(End). 다시보기(replay)의 끝은 시크바 오른쪽 끝이다: 라이브 복귀로 보내면 재생 세션의 다시보기가 무시해
+ * 키가 죽는다(POK-518).
+ */
+export function edgeIntent(replay = false): SeekIntent {
+  return replay ? { kind: 'toFraction', fraction: 1 } : { kind: 'live' };
+}
+
+/**
  * 키 이벤트 → 시크 의도. 처리하지 않으면 null (호출부가 preventDefault를 걸지 않게).
  *
  * 키 문자열이 아니라 이벤트를 받는다 — 수정자·자동반복 판정이 키맵 안에 있어야
@@ -30,7 +38,6 @@ export type SeekKeyEvent = {
  *
  * WAI-ARIA slider 패턴을 따른다 — Up/Down도 값 조정 키이고, Up = 값 증가 = 라이브 엣지 쪽이다.
  * Home은 "창의 가장 오래된 지점"이라 창 크기와 무관한 toFraction(0)으로 표현한다.
- * 다시보기(replay)의 End는 시크바 오른쪽 끝이다: 라이브 복귀로 보내면 재생 세션의 다시보기가 무시해 키가 죽는다(POK-518).
  */
 export function seekIntentForKey(event: SeekKeyEvent, replay = false): SeekIntent | null {
   // 수정자 조합은 OS·브라우저 단축키다 — Cmd+←/Alt+←(뒤로 가기), Ctrl+Home(문서 처음).
@@ -54,7 +61,7 @@ export function seekIntentForKey(event: SeekKeyEvent, replay = false): SeekInten
     case 'Home':
       return { kind: 'toFraction', fraction: 0 };
     case 'End':
-      return replay ? { kind: 'toFraction', fraction: 1 } : { kind: 'live' };
+      return edgeIntent(replay);
     default:
       return null;
   }
@@ -71,17 +78,18 @@ export const PLAYER_KEY_LABELS = {
   live: keyLabel('End'),
 };
 
-export type PlayerShortcut = 'togglePlay' | 'toggleSound' | 'fullscreen';
+export type PlayerShortcut = 'togglePlay' | 'toggleSound' | 'fullscreen' | 'toEdge';
 
 /**
  * 키 이벤트 → 재생 막대 단축키. 글자(key)가 아니라 키 자리(code)를 본다: 한글 입력 상태면 m이 「ㅡ」로 와서 글자로 비교하면 듣지
- * 못한다. 페이지 전체에서 듣는 키라 Shift 조합까지 놓아준다(isMarkHotkey와 같은 이유).
+ * 못한다. End는 글자가 아니라 입력 상태를 타지 않으니 시킹 키맵과 같이 key로 본다. 페이지 전체에서 듣는 키라 Shift 조합까지
+ * 놓아준다(isMarkHotkey와 같은 이유). 자동반복은 거르지 않는다: Space를 누르고 있으면 막아야 페이지가 안 내려간다(usePlayerShortcuts).
  */
 export function playerShortcutForKey(
   event: SeekKeyEvent & { code: string; shiftKey?: boolean },
 ): PlayerShortcut | null {
   if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null;
-  if (event.repeat) return null;
+  if (event.key === 'End') return 'toEdge';
   switch (event.code) {
     case 'Space':
     case 'KeyK':
@@ -120,15 +128,16 @@ const SPACE_ACTIVATES =
 
 /**
  * 그 자리에서 누른 키가 플레이어 것이 아닌가. 플레이어 안 슬라이더는 입력 칸이 아니라서 듣는다: 시크바를 누르고 바로 Space를 누르거나
- * 음량을 끈 뒤 m을 누르는 흐름이다. 포커스가 있는 버튼의 Space는 그 버튼을 누르는 키다.
+ * 음량을 끈 뒤 m을 누르는 흐름이다. End만은 슬라이더의 끝값 키라 그쪽 것이다: 시크바는 스스로 듣고 음량은 최대가 된다.
+ * 포커스가 있는 버튼의 Space는 그 버튼을 누르는 키다.
  */
 export function isForeignKeyTarget(
   target: EventTarget | null,
-  code: string,
+  { code, key }: { code: string; key: string },
   player: Element | null,
 ): boolean {
   if (!(target instanceof Element)) return false;
   if (target.closest(OVERLAY) !== null) return true;
-  if (isTypingTarget(target) && !player?.contains(target)) return true;
+  if (isTypingTarget(target) && (key === 'End' || !player?.contains(target))) return true;
   return code === 'Space' && target.closest(SPACE_ACTIVATES) !== null;
 }

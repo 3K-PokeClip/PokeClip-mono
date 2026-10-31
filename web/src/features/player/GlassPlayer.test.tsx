@@ -222,6 +222,38 @@ describe('GlassPlayer', () => {
       expect(button('재생')).toBeInTheDocument();
     });
 
+    it('Space를 누르고 있어도 한 번만 뒤집고 페이지를 내리지 않는다', () => {
+      renderPlayer();
+
+      press('Space');
+      const notPrevented = press('Space', { repeat: true });
+
+      expect(notPrevented).toBe(false);
+      expect(button('재생')).toBeInTheDocument();
+    });
+
+    it('End는 플레이어를 누르지 않아도 실시간으로 간다 — 말풍선이 알리는 키다. 누르고 있어도 페이지를 내리지 않는다', () => {
+      renderPlayer();
+      const seekbar = screen.getByRole('slider', { name: '라이브 탐색' });
+      fireEvent.keyDown(seekbar, { key: 'ArrowLeft' });
+      expect(seekbar).toHaveAttribute('aria-valuenow', '-10');
+
+      expect(press('End', { key: 'End' })).toBe(false);
+      expect(seekbar).toHaveAttribute('aria-valuenow', '0');
+
+      expect(press('End', { key: 'End', repeat: true })).toBe(false);
+    });
+
+    it('슬라이더 위 End는 슬라이더 몫이다 — 음량 슬라이더의 End는 최대 음량이다', () => {
+      renderPlayer();
+      const seekbar = screen.getByRole('slider', { name: '라이브 탐색' });
+      fireEvent.keyDown(seekbar, { key: 'ArrowLeft' });
+
+      expect(press('End', { key: 'End' }, screen.getByRole('slider', { name: '볼륨' }))).toBe(true);
+
+      expect(seekbar).toHaveAttribute('aria-valuenow', '-10');
+    });
+
     it('f는 전체 화면을 요청한다', () => {
       const requestFullscreen = vi.fn(() => Promise.resolve());
       Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
@@ -1048,6 +1080,16 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: '재생' }), { key: 'End' });
 
     // 끝은 마지막 1초 앞이다
+    expect(heard).toHaveBeenLastCalledWith(443);
+  });
+
+  it('End는 포커스가 플레이어 밖에 있어도 녹화 끝으로 간다 — 라이브와 같은 키다', () => {
+    const heard = vi.fn();
+    renderRecorded({ onPlaybackPosition: heard });
+
+    const notPrevented = fireEvent.keyDown(document.body, { key: 'End' });
+
+    expect(notPrevented).toBe(false);
     expect(heard).toHaveBeenLastCalledWith(443);
   });
 

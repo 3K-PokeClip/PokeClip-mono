@@ -48,12 +48,20 @@ describe('playerShortcutForKey — 재생 막대 말풍선에 적힌 단축키(P
     expect(playerShortcutForKey({ key: 'ㄹ', code: 'KeyF' })).toBe('fullscreen');
   });
 
-  it('수정자 조합과 자동반복은 안 듣는다 — 브라우저 단축키이고, 누르고 있으면 재생이 뒤집히기를 반복한다', () => {
+  it('End는 끝으로 가는 단축키다 — 라이브 말풍선이 알리는 키라 페이지 전체에서 듣는다', () => {
+    expect(playerShortcutForKey({ key: 'End', code: 'End' })).toBe('toEdge');
+    expect(playerShortcutForKey({ key: 'End', code: 'End', metaKey: true })).toBeNull();
+  });
+
+  it('자동반복도 같은 단축키로 본다 — 페이지가 내려가지 않게 막아야 한다. 한 번만 실행하는 일은 usePlayerShortcuts가 맡는다', () => {
+    expect(playerShortcutForKey({ key: ' ', code: 'Space', repeat: true })).toBe('togglePlay');
+  });
+
+  it('수정자 조합은 안 듣는다 — 브라우저 단축키다', () => {
     expect(playerShortcutForKey({ key: 'f', code: 'KeyF', metaKey: true })).toBeNull();
     expect(playerShortcutForKey({ key: 'k', code: 'KeyK', ctrlKey: true })).toBeNull();
     expect(playerShortcutForKey({ key: 'm', code: 'KeyM', altKey: true })).toBeNull();
     expect(playerShortcutForKey({ key: 'M', code: 'KeyM', shiftKey: true })).toBeNull();
-    expect(playerShortcutForKey({ key: ' ', code: 'Space', repeat: true })).toBeNull();
   });
 
   it('다른 키는 처리하지 않는다', () => {

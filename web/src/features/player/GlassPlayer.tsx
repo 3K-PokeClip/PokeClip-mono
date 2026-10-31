@@ -20,7 +20,7 @@ import { PlayerChatOverlay } from './PlayerChatOverlay';
 import { PlayerControls, type PlayerMark } from './PlayerControls';
 import { PlayerSeekBar } from './PlayerSeekBar';
 import { PlayerTopOverlay, type PlayerBroadcastStatus } from './PlayerTopOverlay';
-import { seekIntentForKey } from './playerKeys';
+import { edgeIntent, seekIntentForKey, type SeekIntent } from './playerKeys';
 import { progressFraction } from './playerMath';
 import { PlayerSessionOverlay } from './PlayerSessionOverlay';
 import { useHlsPlayback, type LivePosition } from './useHlsPlayback';
@@ -449,6 +449,15 @@ function GlassPlayerBody({
   const isInsidePlayer = (target: EventTarget | null) =>
     target instanceof Node && containerRef.current?.contains(target) === true;
 
+  const applySeek = useCallback(
+    (intent: SeekIntent) => {
+      if (intent.kind === 'by') sim.seekBy(intent.seconds);
+      else if (intent.kind === 'toFraction') sim.seekToFraction(intent.fraction);
+      else sim.returnToLive();
+    },
+    [sim],
+  );
+
   // 시킹 단축키를 플레이어 전역으로 — 시크바에 Tab 포커스를 넣지 않아도 화살표가 먹는다 (POK-32).
   // 키맵은 시크바와 같은 seekIntentForKey를 쓰므로 둘이 어긋날 수 없다.
   const handleKeyDown = useCallback(
@@ -473,12 +482,10 @@ function GlassPlayerBody({
       }
       const intent = seekIntentForKey(event, sim.replay);
       if (!intent) return;
-      if (intent.kind === 'by') sim.seekBy(intent.seconds);
-      else if (intent.kind === 'toFraction') sim.seekToFraction(intent.fraction);
-      else sim.returnToLive();
+      applySeek(intent);
       event.preventDefault();
     },
-    [sim],
+    [sim, applySeek],
   );
 
   // 플레이어를 누르면 컨테이너가 포커스를 받아 전역 단축키가 먹는다. 버튼도 그렇다: 재생 막대 버튼은
@@ -521,6 +528,11 @@ function GlassPlayerBody({
       sim.wake();
     },
     fullscreen: handleFullscreen,
+    // 플레이어 안에서 누른 End는 handleKeyDown이 먼저 처리한다(defaultPrevented)
+    toEdge: () => {
+      applySeek(edgeIntent(sim.replay));
+      sim.wake();
+    },
   });
 
   return (
