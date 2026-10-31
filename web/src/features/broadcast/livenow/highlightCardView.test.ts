@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cardViewFor, cardVisualFor } from './highlightCardView';
+import { STILL_REFRESH_MS } from '@/features/thumbnail/thumbnailUrl';
+import { cardViewFor, cardVisualFor, reuseHighlights } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { HighlightStatus, LiveHighlight, LiveStream } from './useLiveMockState';
 
@@ -108,5 +109,78 @@ describe('cardVisualFor — 모르는 카드는 계약 필드에서 세운다', 
     expect(resolved.spark).toBeNull();
     expect(resolved.timeAgo).toBeNull();
     expect(resolved.progress).toBeNull();
+  });
+});
+
+describe('reuseHighlights', () => {
+  const NOW = Date.parse('2026-10-31T01:00:00Z');
+  /** 카드 사진 주소. 서명 시각만 달라도 글자가 다르다(서버가 목록마다 새로 서명한다) */
+  const photo = (signed: string) =>
+    `https://bucket.s3.amazonaws.com/cards/23.jpg?X-Amz-Date=${signed}&X-Amz-Signature=sig-${signed}`;
+
+  it('내용이 그대로면 앞 배열을 그대로 돌려준다: 매초 새 배열이면 카드 패널의 memo가 무력해진다', () => {
+    const prev = [highlight({ id: 'a' }), highlight({ id: 'b' })];
+
+    const next = reuseHighlights(prev, [highlight({ id: 'a' }), highlight({ id: 'b' })], NOW);
+
+    expect(next).toBe(prev);
+  });
+
+  it('표기가 바뀐 카드만 새 객체다: 나머지 카드는 다시 그리지 않는다', () => {
+    const prev = [highlight({ id: 'a', meta: '5초 전' }), highlight({ id: 'b', meta: '3분 전' })];
+
+    const next = reuseHighlights(
+      prev,
+      [highlight({ id: 'a', meta: '6초 전' }), highlight({ id: 'b', meta: '3분 전' })],
+      NOW,
+    );
+
+    expect(next).not.toBe(prev);
+    expect(next[0]?.meta).toBe('6초 전');
+    expect(next[1]).toBe(prev[1]);
+  });
+
+  it('카드가 늘거나 순서가 바뀌면 새 배열이다', () => {
+    const a = highlight({ id: 'a' });
+    const b = highlight({ id: 'b' });
+
+    expect(reuseHighlights([a], [a, b], NOW)).toEqual([a, b]);
+    const swapped = reuseHighlights([a, b], [highlight({ id: 'b' }), highlight({ id: 'a' })], NOW);
+    expect(swapped[0]).toBe(b);
+    expect(swapped[1]).toBe(a);
+  });
+
+  it('같은 사진을 새로 서명한 주소는 바뀐 것이 아니다: 3초마다 온 카드가 전부 다시 그려진다', () => {
+    const prev = [highlight({ id: 'a', thumbnailUrl: photo('20261031T005900Z') })];
+
+    const next = reuseHighlights(
+      prev,
+      [highlight({ id: 'a', thumbnailUrl: photo('20261031T010000Z') })],
+      NOW,
+    );
+
+    expect(next).toBe(prev);
+  });
+
+  it('서명이 오래됐으면 새 주소로 바꾼다: 보던 주소를 쥐고 있으면 만료된다', () => {
+    const oldUrl = photo('20261031T000000Z');
+    const newUrl = photo('20261031T010000Z');
+    const prev = [highlight({ id: 'a', thumbnailUrl: oldUrl })];
+
+    const next = reuseHighlights(
+      prev,
+      [highlight({ id: 'a', thumbnailUrl: newUrl })],
+      Date.parse('2026-10-31T00:00:00Z') + STILL_REFRESH_MS,
+    );
+
+    expect(next[0]?.thumbnailUrl).toBe(newUrl);
+  });
+
+  it('사진이 생기거나 사라지면 바뀐 것이다', () => {
+    const none = highlight({ id: 'a', thumbnailUrl: null });
+    const shown = highlight({ id: 'a', thumbnailUrl: photo('20261031T010000Z') });
+
+    expect(reuseHighlights([none], [shown], NOW)[0]).toBe(shown);
+    expect(reuseHighlights([shown], [none], NOW)[0]).toBe(none);
   });
 });

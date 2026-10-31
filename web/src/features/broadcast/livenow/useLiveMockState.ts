@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { forgetCardCount } from '@/features/broadcast/cardCountMemory';
 import { ApiError, apiFetch } from '@/api/client';
 import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { soopLinkQueryOptions } from '@/api/soopLink';
@@ -10,6 +11,7 @@ import { useMe } from '@/features/auth/useSession';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
 import { setVisibleInterval } from '@/lib/visibleInterval';
+import { reuseHighlights } from './highlightCardView';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
   onAirLabel,
@@ -275,6 +277,29 @@ function isStale(prev: Snapshot | undefined, next: Snapshot): boolean {
   return prev !== undefined && next.eventSeq < prev.eventSeq;
 }
 
+/**
+ * 같은 내용의 카드인가(없던 카드면 다르다). 서버가 보내는 칸을 전부 본다: 순번(eventSeq)이 같아도 목록만 싣는 사진·가림 같은 칸이
+ * 다를 수 있다. 증거(evidence)는 모양이 열려 있어 글자로 비교한다
+ */
+function sameSnapshot(prev: Snapshot | undefined, next: Snapshot): boolean {
+  if (prev === undefined) return false;
+  if (prev === next) return true;
+  return (
+    prev.id === next.id &&
+    prev.streamId === next.streamId &&
+    prev.source === next.source &&
+    prev.streamTimestampMs === next.streamTimestampMs &&
+    prev.window.startMs === next.window.startMs &&
+    prev.window.endMs === next.window.endMs &&
+    prev.score === next.score &&
+    (prev.hidden ?? false) === (next.hidden ?? false) &&
+    prev.eventSeq === next.eventSeq &&
+    prev.createdAt === next.createdAt &&
+    (prev.thumbnailUrl ?? null) === (next.thumbnailUrl ?? null) &&
+    JSON.stringify(prev.evidence) === JSON.stringify(next.evidence)
+  );
+}
+
 function parseSseBlock(block: string): { event: string; data: string } | null {
   let event = 'message';
   const data: string[] = [];
@@ -298,6 +323,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
   const [now, setNow] = useState(() => Date.now());
   const [sseOk, setSseOk] = useState(false);
   const [info, setInfo] = useState<LoadedInfo | null>(null);
+  const queryClient = useQueryClient();
   const live = useLiveData();
   // 카드 ms의 0초(서버 기준점 → 녹화 재생 서버 → 방송 시작, POK-255)
   const base = timeBaseOf(live);
@@ -356,13 +382,18 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     const merge = (list: Snapshot[], fromStream = false) => {
       if (stopped) return;
       setCards((prev) => {
-        const next = { ...prev };
+        let next: Record<number, Snapshot> | null = null;
         // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
         for (const c of list) {
           if (isStale(prev[c.id], c)) continue;
-          next[c.id] = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+          const value = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+          // 내용이 같으면 앞 객체를 그대로 둔다: 3초마다 오는 목록 답은 늘 새 객체라, 그대로 덮으면 바뀐 카드가 없어도 화면 전체가
+          // 다시 계산됐다. 바뀐 카드가 하나도 없으면 상태 자체를 그대로 돌려줘 다시 그리지 않는다
+          if (sameSnapshot(prev[c.id], value)) continue;
+          next ??= { ...prev };
+          next[c.id] = value;
         }
-        return next;
+        return next ?? prev;
       });
     };
 
@@ -678,28 +709,50 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     };
   }, [streamId, pastRoute]);
 
+  // 카드 시각은 값이 같으면 다시 싣지 않는다: 새 배열은 늘 다른 값이라 저장소가 구독자를 깨웠다. 방송이 바뀌면 위 효과가 저장소를 비우므로
+  // 기억도 비운다(앞 방송과 같은 시각의 카드가 와도 싣는다)
+  const lastCardTimes = useRef<number[] | null>(null);
   useEffect(() => {
-    publishLiveData({
-      cardTimes: Object.values(cards)
-        .filter((c) => !c.hidden)
-        .map((c) => cardAt(c, base)),
-    });
+    lastCardTimes.current = null;
+  }, [streamId]);
+  useEffect(() => {
+    const times = Object.values(cards)
+      .filter((c) => !c.hidden)
+      .map((c) => cardAt(c, base));
+    const last = lastCardTimes.current;
+    if (last !== null && last.length === times.length && last.every((t, i) => t === times[i]))
+      return;
+    lastCardTimes.current = times;
+    publishLiveData({ cardTimes: times });
   }, [cards, base]);
 
+  // 「n분 전」 때문에 매초 다시 세우지만 내용이 같은 카드는 앞 객체를 그대로 쓴다: 매초 새 배열이면 카드 패널(memo)이 무력해진다
+  const shownHighlights = useRef<LiveHighlight[]>([]);
+  const shownHiddenHighlights = useRef<LiveHighlight[]>([]);
   const highlights = useMemo(() => {
     // 방송 시각이 늦은 것부터, 같으면 번호가 큰 것부터: 둘 다 저장 뒤 안 바뀐다. 순번(eventSeq)은 행이 바뀔 때마다 올라
     // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에서 「방금」 강조를 받았다(PR #326 codex)
     const list = Object.values(cards)
       .filter((c) => !c.hidden)
       .sort(byLatest);
-    return list.map((c, i) => toHighlight(c, i, now, base));
+    shownHighlights.current = reuseHighlights(
+      shownHighlights.current,
+      list.map((c, i) => toHighlight(c, i, now, base)),
+      now,
+    );
+    return shownHighlights.current;
   }, [cards, now, base]);
   const hiddenHighlights = useMemo(() => {
     const list = Object.values(cards)
       .filter((c) => c.hidden)
       .sort(byLatest);
     // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 가린 카드에는 주지 않는다
-    return list.map((c) => toHighlight(c, -1, now, base));
+    shownHiddenHighlights.current = reuseHighlights(
+      shownHiddenHighlights.current,
+      list.map((c) => toHighlight(c, -1, now, base)),
+      now,
+    );
+    return shownHiddenHighlights.current;
   }, [cards, now, base]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
@@ -775,14 +828,21 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     ],
   );
 
-  const mergeCard = useCallback((card: Snapshot) => {
-    if (!card || card.streamId !== streamIdRef.current) return;
-    setCards((prev) =>
-      isStale(prev[card.id], card)
-        ? prev
-        : { ...prev, [card.id]: keepKnownThumbnail(prev[card.id], card) },
-    );
-  }, []);
+  const mergeCard = useCallback(
+    (card: Snapshot) => {
+      if (!card) return;
+      // 카드가 늘거나 가려졌다: 홈 · 지난 방송 목록이 기억한 그 방송의 카드 수를 버린다
+      forgetCardCount(queryClient, card.streamId);
+      if (card.streamId !== streamIdRef.current) return;
+      setCards((prev) => {
+        if (isStale(prev[card.id], card)) return prev;
+        const known = keepKnownThumbnail(prev[card.id], card);
+        // 내용이 같으면 앞 객체를 그대로 둔다(merge와 같은 이유)
+        return sameSnapshot(prev[card.id], known) ? prev : { ...prev, [card.id]: known };
+      });
+    },
+    [queryClient],
+  );
 
   return {
     stream,

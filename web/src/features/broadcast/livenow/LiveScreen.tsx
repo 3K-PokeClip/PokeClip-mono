@@ -54,6 +54,9 @@ import { LINK_LOCK_WORD, useLinkLock } from './linkLock';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
 
+/** 카드 눈금에 넘기는 라이브 경과의 단위(초) */
+const CARD_UPTIME_STEP_S = 15;
+
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
 // 높이를 뷰포트에 맞추지 않는다 — 채팅만 예외로 화면 높이에 sticky(시안 갱신, POK-239).
@@ -560,10 +563,17 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
         ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
         : `${v.toLocaleString('ko-KR')}명 시청 중`;
 
-  // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다
+  // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다. 라이브는 경과가 매초 늘어 그대로 넘기면
+  // 카드 전부가 매초 다시 그려진다. 눈금은 1% 단위라 CARD_UPTIME_STEP_S로 올려 묶어도 보이는 차이가 없다
+  const cardUptime =
+    uptimeSeconds === null
+      ? 0
+      : ended
+        ? uptimeSeconds
+        : Math.ceil(uptimeSeconds / CARD_UPTIME_STEP_S) * CARD_UPTIME_STEP_S;
   const streamForCards = useMemo<LiveStream>(
-    () => ({ ...stream, uptimeSeconds: uptimeSeconds ?? 0 }),
-    [stream, uptimeSeconds],
+    () => ({ ...stream, uptimeSeconds: cardUptime }),
+    [stream, cardUptime],
   );
 
   // 필터 개수도 통계의 하이라이트 줄도 같은 카드 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.

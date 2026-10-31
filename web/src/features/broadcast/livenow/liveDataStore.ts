@@ -182,6 +182,15 @@ export function useLiveData(): LiveData {
   );
 }
 
+/**
+ * 한 칸만 듣는다: 그 칸이 안 바뀌면 다시 그리지 않는다. 재생 위치(playheadMs)는 매초 바뀌어 저장소 전체를 들으면 그 칸을 안 쓰는
+ * 자리까지 매초 다시 그린다. 칸 몇 개만 쓰면 이것을 쓴다
+ */
+export function useLiveField<K extends keyof LiveData>(key: K): LiveData[K] {
+  const read = () => state[key];
+  return useSyncExternalStore(subscribe, read, read);
+}
+
 // ── 라이브 채팅 중계(POK-234 PR-B): 카드 통로(SSE)로 오는 chat·donation 이벤트를 채팅 패널에 넘긴다 ──
 export interface RelayEvent {
   seq: number;
