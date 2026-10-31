@@ -181,6 +181,8 @@ const ENDED_LIST_MS = 60_000;
 const ENDED_SETTLE_MS = 2 * 60_000;
 /** 라이브 시청자 기록을 이어 받을 때 받아 둔 마지막 점보다 이만큼 앞부터 다시 묻는다(수집기의 늦은 적재를 놓치지 않게) */
 const INFO_OVERLAP_MS = 2 * 60_000;
+/** 끝난 방송의 굳은 차트 쪽·방송 정보를 캐시에 두는 시간. 다시 들어올 때마다 12시간 방송의 차트를 처음부터 읽지 않게 한다 */
+const ENDED_CACHE_GC_MS = 30 * 60_000;
 
 /**
  * 라이브 그래프·시청자 기록을 읽기 시작할 시각(epoch ms) — 방송 시작이다. 12시간이 넘으면 끝 12시간인데(끝난 방송과 같은 상한,
@@ -424,20 +426,42 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       }
     };
     /**
-     * 라이브 그래프의 다 지난 1시간 창(열쇠 = 창 시작|끝|칸). 방송 중에도 처음부터 지금까지 그리므로, 길어진 방송을 10초마다
-     * 처음부터 다시 읽지 않게 끝난 지 ENDED_SETTLE_MS가 지난 창은 한 번 받은 답을 쓴다(그 안은 수집기가 아직 쓰고 있을 수 있다)
+     * 굳은 답은 React Query 캐시에 둔다(열쇠에 방송 번호 · 끝 시각 · 창 · 칸). 효과 안 변수에 두면 같은 방송에 다시 들어올 때마다
+     * 12시간 방송의 차트를 창 수만큼 처음부터 읽었다. 굳지 않은 답은 캐시하지 않고 그대로 읽는다(그 안은 수집기가 아직 쓰고 있을
+     * 수 있다). 읽기 실패는 던져 캐시에 남기지 않는다: null이 굳으면 다음에도 구멍 난 차트다
      */
-    const settledPages = new Map<string, ChartPage>();
+    const readSettled = async <T>(
+      key: readonly unknown[],
+      path: string,
+      settled: boolean,
+    ): Promise<T | null> => {
+      if (!settled) return getJsonOrNull<T>(path);
+      try {
+        return await queryClient.fetchQuery({
+          queryKey: key,
+          queryFn: async () => {
+            const value = await getJsonOrNull<T>(path);
+            if (value === null) throw new Error('read failed');
+            return value;
+          },
+          staleTime: Infinity,
+          gcTime: ENDED_CACHE_GC_MS,
+          retry: false,
+        });
+      } catch {
+        return null;
+      }
+    };
     /** 지금 보이는 그래프를 라이브 때 읽었나. 끝난 방송으로 바뀌면 그 그래프는 끝 몇 초가 빠졌을 수 있어 버린다 */
     let chartReadLive = false;
+    const chartPath = (a: number, b: number, bucket: number) =>
+      `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${new URLSearchParams({
+        from: new Date(a).toISOString(),
+        to: new Date(b).toISOString(),
+        bucket: String(bucket),
+      })}`;
     const chartPage = (a: number, b: number, bucket: number) =>
-      getJsonOrNull<ChartPage>(
-        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${new URLSearchParams({
-          from: new Date(a).toISOString(),
-          to: new Date(b).toISOString(),
-          bucket: String(bucket),
-        })}`,
-      );
+      getJsonOrNull<ChartPage>(chartPath(a, b, bucket));
     const loadChart = async () => {
       try {
         if (chartPausedRef.current) return;
@@ -465,19 +489,18 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
             publishLiveData({ chart: null });
           }
           const windows = chartWindows(start, end);
-          const keys = new Set(windows.map(([a, b]) => `${a}|${b}|${bucket}`));
-          // 지금 창에 없는 기억은 버린다: 6시간째에 칸이 30→60초로 바뀐 옛 열쇠, 12시간 꼬리에서 밀려난 창. 남겨 두면 탭을 닫을
-          // 때까지 쌓인다(PR #316 리뷰). 칸이 바뀐 순간 한 번은 창을 전부 다시 읽는다
-          for (const key of settledPages.keys()) if (!keys.has(key)) settledPages.delete(key);
+          // 옛 열쇠(6시간째에 칸이 30→60초로 바뀐 것, 12시간 꼬리에서 밀려난 창)는 따로 치우지 않는다: 캐시가 ENDED_CACHE_GC_MS 뒤
+          // 스스로 버린다(PR #316 리뷰의 「탭을 닫을 때까지 쌓인다」는 효과 안 표를 두던 때의 걱정이다)
           const pages = await Promise.all(
-            windows.map(async ([a, b]) => {
-              const key = `${a}|${b}|${bucket}`;
-              const kept = settledPages.get(key);
-              if (kept) return kept;
-              const page = await chartPage(a, b, bucket);
-              if (page && liveWhole && askedAt - b >= ENDED_SETTLE_MS) settledPages.set(key, page);
-              return page;
-            }),
+            windows.map(([a, b]) =>
+              // 끝난 방송은 끝난 지 ENDED_SETTLE_MS가 지났으면 모든 창이 굳었고, 방송 중은 창이 끝난 지 그만큼 지난 것만 굳었다.
+              // 끝 시각은 열쇠에 넣는다: 방송 중 읽은 창(끝 시각 null)은 끝난 방송의 창과 섞이지 않는다
+              readSettled<ChartPage>(
+                ['chat-chart-page', streamId, ended ? rg.endedAt : null, a, b, bucket],
+                chartPath(a, b, bucket),
+                ended ? askedAt - rg.endedAt! >= ENDED_SETTLE_MS : askedAt - b >= ENDED_SETTLE_MS,
+              ),
+            ),
           );
           if (!stillCurrent(rg)) return;
           const first = pages[0];
@@ -545,8 +568,14 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
         sinceMs === null
           ? ''
           : `?${new URLSearchParams({ since: new Date(sinceMs).toISOString() })}`;
-      const page = await getJsonOrNull<BroadcastInfoResponse>(
-        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`,
+      // 끝난 방송의 굳은 답(끝난 지 ENDED_SETTLE_MS 뒤 읽은 것)은 캐시에서 쓴다. 라이브 · 굳기 전은 그대로 읽는다
+      const infoPath = `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`;
+      const infoSettled =
+        rg.status === 'ended' && sinceMs !== null && settledKey(rg, askedAt) !== null;
+      const page = await readSettled<BroadcastInfoResponse>(
+        ['broadcast-info-page', streamId, rg.endedAt, sinceMs],
+        infoPath,
+        infoSettled,
       );
       if (page && stillCurrent(rg)) {
         let series = page.series;
@@ -707,7 +736,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       stopPolling.forEach((stop) => stop());
       if (reloadRangeRef.current === reloadRange) reloadRangeRef.current = null;
     };
-  }, [streamId, pastRoute]);
+  }, [streamId, pastRoute, queryClient]);
 
   // 카드 시각은 값이 같으면 다시 싣지 않는다: 새 배열은 늘 다른 값이라 저장소가 구독자를 깨웠다. 방송이 바뀌면 위 효과가 저장소를 비우므로
   // 기억도 비운다(앞 방송과 같은 시각의 카드가 와도 싣는다)
