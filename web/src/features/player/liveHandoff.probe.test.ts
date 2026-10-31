@@ -25,6 +25,7 @@ const LIVE_URL = 'https://media.pokeclip.com/live/key-1/index.m3u8';
 const A1 = 'https://media.pokeclip.com/dvr/key-1/a1/index.m3u8';
 const A2 = 'https://media.pokeclip.com/dvr/key-1/a2/index.m3u8';
 const X_A: XAnswer = { kind: 'known', id: 'r-A' };
+const X_B: XAnswer = { kind: 'known', id: 'r-B' };
 const X_UNKNOWN: XAnswer = { kind: 'unknown' };
 const UNAVAILABLE: RewindStatusResult = { kind: 'unavailable' };
 
@@ -206,6 +207,20 @@ describe('끝남 대기의 탐침과 넘김(E1 · T6 · T21 · T27)', () => {
     const late = feed(asked, [settleProbe(asked)], R + 12_001);
     expect(late.state).toMatchObject({ phase: { kind: 'ending-wait' }, handoffProbe: null });
     expect(late.effects).toEqual([]);
+  });
+
+  it('T21e: 탐침이 나가 있는 동안 잠시 불가 · x B 가 오면 결과가 무잘림이어도 넘기지 않는다(다른 방송 · P4)', () => {
+    for (const start of [watching(), endingAt()]) {
+      const opened = start.handoffDoor === null ? [doorPoll()] : [];
+      const asked = feed(start, [...opened, pos(start.lastAtMs ?? P)]).state;
+      expect(asked.handoffProbe).not.toBeNull();
+      const denied = feed(asked, [streamPoll(UNAVAILABLE, X_B)]).state;
+      expect(denied.handoffDoor).toBeNull();
+      const done = feed(denied, [settleProbe(denied)]);
+      expect(done.state.phase.kind).toBe(start.phase.kind);
+      expect(done.state).toMatchObject({ handoff: null, handoffProbe: null });
+      expect(done.effects).toEqual([]);
+    }
   });
 
   it('A1 음성: 끝남 대기의 위치 사건은 넘김 조건이어도 탐침을 청하지 않는다 — E1 은 폴링만', () => {

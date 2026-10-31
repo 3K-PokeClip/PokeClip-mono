@@ -84,6 +84,17 @@ describe('물음 순서 — 늦게 온 옛 응답은 버린다(T15 · A0)', () =
     expect(after1.observedEndMs).toBe(NOW + 8_000);
   });
 
+  it('b′: 잠시 불가라도 x 가 다른 방송이면 순번을 올린다 — 그 앞 물음의 ok · x A 가 늦게 와도 문을 다시 세우지 않는다', () => {
+    const start = rewindAt(NOW - 6_000);
+    const ask1 = streamPoll(liveReady(A1, T0, NOW), X_A);
+    const ask2 = streamPoll(UNAVAILABLE, X_B);
+    const after2 = run(start, [ask2]);
+    expect(after2.streamAsk).toBe(ask2.ask.seq);
+    const late = transition(after2, ask1, NOW);
+    expect(late.state).toBe(after2);
+    expect(late.state.handoffDoor).toBeNull();
+  });
+
   it('c: 반영된 ok 뒤에 온 옛 unavailable(x B)은 묶인 live 의 띠를 세우지 않는다', () => {
     const bound = run(rewindAt(T0 + 20 * MIN), [{ type: 'live-button', x: X_A, attempt: 0 }]);
     expect(bound.boundLive).toBe(true);
