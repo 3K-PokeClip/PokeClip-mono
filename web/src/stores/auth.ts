@@ -151,8 +151,22 @@ function notifySessionChanged() {
 // 결과를 잃는다. 폴백은 회전이었을 수도 있지만 구분할 수 없어 캐시 비움과 같은 쪽에 선다.
 let sessionGeneration = 0;
 
+const sessionAdvanceListeners = new Set<() => void>();
+
+/**
+ * 계정이 바뀌었을 수 있는 순간마다 불린다(로그인·로그아웃·다른 탭 동기화, 회전에는 안 불린다). 모듈에 들고 있는 앞 계정의 것(재생
+ * 출입증·방송 번호·편집기 미디어)을 비우는 자리다. 쿼리 캐시는 Providers와 로그아웃이 따로 비운다: 스토어는 queryClient를 모른다
+ */
+export function onSessionAdvance(listener: () => void): () => void {
+  sessionAdvanceListeners.add(listener);
+  return () => {
+    sessionAdvanceListeners.delete(listener);
+  };
+}
+
 function advanceSession() {
   sessionGeneration += 1;
+  sessionAdvanceListeners.forEach((listener) => listener());
 }
 
 /** 지금 세션을 적어 두고, 나중에 「아직 같은 세션인가」를 답하는 함수를 돌려준다. */

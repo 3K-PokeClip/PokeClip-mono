@@ -1,4 +1,4 @@
-import { resetPlaybackAccessForTests } from '@/api/playbackAccess';
+import { forgetPlaybackAccess } from '@/api/playbackAccess';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
@@ -289,7 +289,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   playbackOn.value = false;
   // 출입증 기억(만료 · 필요 없음)이 다음 시험으로 새지 않게
-  resetPlaybackAccessForTests();
+  forgetPlaybackAccess();
 });
 
 function bodiesOf(method: string, path: string) {
