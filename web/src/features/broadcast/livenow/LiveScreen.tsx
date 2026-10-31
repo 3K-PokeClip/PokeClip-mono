@@ -44,14 +44,14 @@ import {
   useLiveField,
 } from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
-import { useChatPanelMockState } from './useChatPanelMockState';
+import { chatFollowsPlayhead, useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection, type Reselect } from './useLiveStreamSelection';
 import { useLiveSession } from './useLiveSession';
-import { LINK_LOCK_WORD, useLinkLock } from './linkLock';
+import { LINK_LOCK_WORD, useLinkLock, type LinkLock } from './linkLock';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
 
@@ -436,6 +436,48 @@ function LiveScreenBody() {
   return <LiveDashboard reselect={selection} />;
 }
 
+/**
+ * 채팅 칸. 채팅 훅의 줄 상태(중계 조각마다 바뀐다)와 재생 위치 구독을 이 칸 안에 가둔다: 대시보드(영상 · 정보 바 · 카드 · 통계)는
+ * 채팅 줄이 늘어도 다시 그려지지 않는다. 훅은 칸이 서 있는 동안만 돈다(접으면 칸째 빠지므로 읽기도 멈춘다 — 전에는 enabled 거짓이었다).
+ * 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를
+ * 정직하게 비활성화한다). 잠근 채팅도 묻지 않는다
+ */
+function LiveChatColumn({
+  linkLock,
+  chatWarning,
+  ended,
+  awaitPlayhead,
+  mode,
+  followJump,
+  onCollapse,
+}: {
+  linkLock: LinkLock;
+  chatWarning: boolean;
+  ended: boolean;
+  awaitPlayhead: boolean;
+  mode: BroadcastStatus;
+  followJump: number;
+  onCollapse: () => void;
+}) {
+  const chat = useChatPanelMockState(!chatWarning && linkLock === null, ended, awaitPlayhead);
+  if (linkLock !== null) return <LockedChatPanel reason={linkLock} onCollapse={onCollapse} />;
+  return (
+    <ChatPanel
+      surges={chat.surges}
+      messages={chat.messages}
+      ratePerMinute={chat.ratePerMinute}
+      mode={mode}
+      replayClock={chat.replayClock}
+      replayWaiting={chat.replayWaiting}
+      statusNote={chat.statusNote}
+      followJump={followJump}
+      collectionWarning={chatWarning}
+      placeholder={chat.placeholder}
+      onCollapse={onCollapse}
+    />
+  );
+}
+
 function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
@@ -453,6 +495,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const streamId = useLiveField('streamId');
   const info = useLiveField('info');
   const storeStatus = useLiveField('status');
+  const storeEndedAt = useLiveField('endedAt');
   const relation = useLiveField('relation');
   const timeBaseMs = useLiveField('timeBaseMs');
   const originMs = useLiveField('originMs');
@@ -549,13 +592,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     playheadFromRecording.current = false;
     publishLiveData({ playheadMs: null });
   }, [recordingLookup]);
-  // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
-  // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다). 잠근 채팅도 묻지 않는다
-  const chat = useChatPanelMockState(
-    chatPanelOpen && !chatWarning && linkLock === null,
-    ended,
-    awaitPlayhead,
-  );
+  // 채팅 훅(useChatPanelMockState)은 채팅 칸(LiveChatColumn)이 부른다: 훅의 줄 상태가 이 대시보드에 있으면 중계 조각이 올 때마다 영상 ·
+  // 카드 · 통계까지 통째로 다시 그려졌다
   const stats = useLiveStatsMockState(viewStatus);
 
   // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
@@ -647,7 +685,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 오래전 카드로 튄다(리뷰 2·3라운드).
   // 명부 답 전(상태를 모름)에 고른 시점은 남긴다: 끝난 방송으로 밝혀지면 녹화가 그 시점부터 선다(리뷰 3라운드)
   const live = clock.status === 'live';
-  const followsPlayhead = chat.followsPlayhead;
+  // 채팅이 고른 시점을 따라가나: 채팅 훅(useChatPanelMockState)과 같은 함수로 센다
+  const followsPlayhead = chatFollowsPlayhead(storeStatus, storeEndedAt, cardBase);
   /**
    * @returns 'moved' 플레이어가 그 자리로 옮겼다 · 'outside' 라이브에서 되감을 수 있는 범위 밖이라 안 옮겼다 · 'none' 영상이 없다
    */
@@ -762,11 +801,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
           // 녹화가 없다고 확인된 방송은 플레이어처럼 없다고 말한다: 「아직 없어요」는 기다리면 나올 것처럼 읽혀 플레이어의 「찾지
           // 못했어요」와 한 화면에서 어긋났다(리뷰 6라운드)
           title: `${recordingMissing ? '녹화 영상이 없어요' : '영상은 아직 없어요'}${
-            chat.followsPlayhead ? ' · 채팅을 그 시점으로 옮겼어요' : ''
+            followsPlayhead ? ' · 채팅을 그 시점으로 옮겼어요' : ''
           }`,
         });
     },
-    [linkedCardId, seekTo, toast, chat.followsPlayhead, recordingMissing, live],
+    [linkedCardId, seekTo, toast, followsPlayhead, recordingMissing, live],
   );
   /** 하이라이트 카드 목록에서 누른 이동 */
   const handleCardSeek = useCallback(
@@ -849,23 +888,15 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             접으면 칸째 빠진다(.gridSolo가 트랙도 걷는다). */}
         {chatPanelOpen ? (
           <div className={styles.chatCol}>
-            {linkLock !== null ? (
-              <LockedChatPanel reason={linkLock} onCollapse={toggleChatPanel} />
-            ) : (
-              <ChatPanel
-                surges={chat.surges}
-                messages={chat.messages}
-                ratePerMinute={chat.ratePerMinute}
-                mode={viewStatus}
-                replayClock={chat.replayClock}
-                replayWaiting={chat.replayWaiting}
-                statusNote={chat.statusNote}
-                followJump={chatJump}
-                collectionWarning={chatWarning}
-                placeholder={chat.placeholder}
-                onCollapse={toggleChatPanel}
-              />
-            )}
+            <LiveChatColumn
+              linkLock={linkLock}
+              chatWarning={chatWarning}
+              ended={ended}
+              awaitPlayhead={awaitPlayhead}
+              mode={viewStatus}
+              followJump={chatJump}
+              onCollapse={toggleChatPanel}
+            />
           </div>
         ) : null}
       </div>

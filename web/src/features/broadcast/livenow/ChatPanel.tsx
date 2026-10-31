@@ -96,7 +96,8 @@ function PlatformMark({ platform }: { platform?: string | null }) {
   );
 }
 
-function ChatLine({ message }: { message: ChatPanelMessage }) {
+// memo: 훅이 바뀌지 않은 줄의 객체를 그대로 돌려주므로(useChatPanelMockState의 panelOf) 새 줄이 올 때 300줄 전부를 다시 그리지 않는다
+const ChatLine = memo(function ChatLine({ message }: { message: ChatPanelMessage }) {
   if (message.kind === 'donation') {
     return (
       <li className={styles.chatDonation}>
@@ -123,7 +124,7 @@ function ChatLine({ message }: { message: ChatPanelMessage }) {
       <span className={styles.chatText}>{message.text}</span>
     </li>
   );
-}
+});
 
 export const ChatPanel = memo(function ChatPanel({
   surges,
