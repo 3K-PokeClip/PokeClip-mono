@@ -96,7 +96,8 @@ function rewindAt(t: number): PlaybackSessionState {
 
 /**
  * 목록 사건 없는 길(네이티브 HLS)로 stopAt 에서 끝에 닿은 끝남 대기(rewind 기원 · atEnd:true).
- * 네이티브 <video> 는 list-loaded 를 안 낸다 — list 가 null 이라 이음 지점은 E 대신 lastAtMs(계획 1절)
+ * 네이티브 <video> 는 list-loaded 를 안 낸다 — list 가 null 이라 이음 지점은 E 대신
+ * lastAtMs(계획 1절)
  */
 function nativeAtEnd(stopAt: number): PlaybackSessionState {
   return run(liveWithEntry(), [

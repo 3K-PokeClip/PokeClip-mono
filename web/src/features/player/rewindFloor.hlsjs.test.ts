@@ -134,7 +134,7 @@ describe('hls.js 1.7.3 의 목록 갱신 순서(진단 재현 9 · 10)', () => {
       guardRewindFloor({ hls, video: media, details: data.details, loadFrom: null }),
     );
     slide();
-    expect(writes).toEqual([12 + 3 * TD]);
+    expect(writes).toEqual([12 + 4 + 4 + 4]);
     expect(media.currentTime).toBe(24);
   });
 
