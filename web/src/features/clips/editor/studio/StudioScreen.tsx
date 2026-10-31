@@ -1052,10 +1052,11 @@ function WiredStudio({
   // 영상 상태 알약(POK-492)은 영상 만들기 요청을 보내는 동안만 비킨다 — 새 요청이면 곧 다른 영상이다. 저장 중에도 비키면 「편집본
   // 저장」마다 알약이 깜빡이고 열어 둔 작은 창이 닫혔다(PR #454 1차 리뷰)
   const latest = save.busy === 'render' ? null : save.clip;
-  // 예약 공개 시각이 지나거나 날이 바뀌면 상태 확인 답 없이도 다시 그린다(useClipStatusClock, PR #454 3차 리뷰)
+  // 예약 공개 시각이 지나거나 원본이 만료되거나 날이 바뀌면 상태 확인 답 없이도 다시 그린다(useClipStatusClock, PR #454 3차 리뷰)
   const statusNow = useClipStatusClock(
     latest !== null,
     latest?.upload?.publishAt ?? latest?.uploadRequest?.publishAt ?? null,
+    broadcast.vodExpiresAt,
   );
   const clipStatus = useMemo(
     () =>
