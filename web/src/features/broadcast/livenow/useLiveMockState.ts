@@ -8,7 +8,11 @@ import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { soopLinkQueryOptions } from '@/api/soopLink';
 import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
-import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
+import {
+  keepKnownThumbnail,
+  pickThumbnailUrl,
+  STILL_REFRESH_MS,
+} from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
 import { setVisibleInterval } from '@/lib/visibleInterval';
 import { reuseHighlights } from './highlightCardView';
@@ -281,11 +285,13 @@ function isStale(prev: Snapshot | undefined, next: Snapshot): boolean {
 
 /**
  * 같은 내용의 카드인가(없던 카드면 다르다). 서버가 보내는 칸을 전부 본다: 순번(eventSeq)이 같아도 목록만 싣는 사진·가림 같은 칸이
- * 다를 수 있다. 증거(evidence)는 모양이 열려 있어 글자로 비교한다
+ * 다를 수 있다. 증거(evidence)는 모양이 열려 있어 글자로 비교한다. 사진 주소는 서버가 목록마다 새로 서명하므로 글자가 아니라
+ * 카드 표시(sameHighlight)와 같은 규칙으로 본다: 글자로 비교하면 사진 있는 카드는 늘 바뀐 카드가 된다
  */
-function sameSnapshot(prev: Snapshot | undefined, next: Snapshot): boolean {
+export function sameSnapshot(prev: Snapshot | undefined, next: Snapshot, now: number): boolean {
   if (prev === undefined) return false;
   if (prev === next) return true;
+  const shownThumbnail = prev.thumbnailUrl ?? null;
   return (
     prev.id === next.id &&
     prev.streamId === next.streamId &&
@@ -297,7 +303,8 @@ function sameSnapshot(prev: Snapshot | undefined, next: Snapshot): boolean {
     (prev.hidden ?? false) === (next.hidden ?? false) &&
     prev.eventSeq === next.eventSeq &&
     prev.createdAt === next.createdAt &&
-    (prev.thumbnailUrl ?? null) === (next.thumbnailUrl ?? null) &&
+    pickThumbnailUrl(shownThumbnail, next.thumbnailUrl ?? null, now, STILL_REFRESH_MS) ===
+      shownThumbnail &&
     JSON.stringify(prev.evidence) === JSON.stringify(next.evidence)
   );
 }
@@ -391,7 +398,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
           const value = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
           // 내용이 같으면 앞 객체를 그대로 둔다: 3초마다 오는 목록 답은 늘 새 객체라, 그대로 덮으면 바뀐 카드가 없어도 화면 전체가
           // 다시 계산됐다. 바뀐 카드가 하나도 없으면 상태 자체를 그대로 돌려줘 다시 그리지 않는다
-          if (sameSnapshot(prev[c.id], value)) continue;
+          if (sameSnapshot(prev[c.id], value, Date.now())) continue;
           next ??= { ...prev };
           next[c.id] = value;
         }
@@ -867,7 +874,9 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
         if (isStale(prev[card.id], card)) return prev;
         const known = keepKnownThumbnail(prev[card.id], card);
         // 내용이 같으면 앞 객체를 그대로 둔다(merge와 같은 이유)
-        return sameSnapshot(prev[card.id], known) ? prev : { ...prev, [card.id]: known };
+        return sameSnapshot(prev[card.id], known, Date.now())
+          ? prev
+          : { ...prev, [card.id]: known };
       });
     },
     [queryClient],

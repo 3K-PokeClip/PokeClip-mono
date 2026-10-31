@@ -36,7 +36,7 @@ import {
   resetLiveData,
   useLiveField,
 } from '@/features/broadcast/livenow/liveDataStore';
-import { useLiveMockState, type LiveCardSnapshot } from './useLiveMockState';
+import { sameSnapshot, useLiveMockState, type LiveCardSnapshot } from './useLiveMockState';
 
 const count = (suffix: string) =>
   api.calls.filter((p) => new URL(p, 'http://localhost').pathname.endsWith(suffix)).length;
@@ -147,5 +147,27 @@ describe('useLiveMockState: 카드 시각', () => {
     // 시각이 바뀐 카드는 새 값이다
     act(() => result.current.state.mergeCard(card({ streamTimestampMs: 8_000, eventSeq: 3 })));
     await waitFor(() => expect(result.current.times).not.toBe(first));
+  });
+
+  it('서명만 바뀐 사진은 같은 카드다: 서버가 목록마다 새로 서명해 글자로 비교하면 사진 있는 카드는 늘 바뀐 카드가 된다', () => {
+    const signed = (photo: string, at: string) =>
+      `https://s3.example/${photo}.jpg?X-Amz-Date=${at}&X-Amz-Signature=sig`;
+    const now = Date.parse('2026-10-31T00:10:00Z');
+    const shown = card({ thumbnailUrl: signed('a', '20261031T000000Z') });
+
+    expect(sameSnapshot(shown, card({ thumbnailUrl: signed('a', '20261031T000900Z') }), now)).toBe(
+      true,
+    );
+    // 다른 사진 · 사진이 없어진 카드는 다른 카드다
+    expect(sameSnapshot(shown, card({ thumbnailUrl: signed('b', '20261031T000900Z') }), now)).toBe(
+      false,
+    );
+    expect(sameSnapshot(shown, card({ thumbnailUrl: null }), now)).toBe(false);
+    // 쥐고 있는 주소가 만료에 가까워지면 새 주소로 바꾼다
+    const late = Date.parse('2026-10-31T00:50:00Z');
+    expect(sameSnapshot(shown, card({ thumbnailUrl: signed('a', '20261031T004900Z') }), late)).toBe(
+      false,
+    );
+    expect(sameSnapshot(card(), card(), now)).toBe(true);
   });
 });
