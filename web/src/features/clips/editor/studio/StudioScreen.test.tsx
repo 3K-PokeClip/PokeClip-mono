@@ -6,11 +6,44 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { Dialog, RadioGroup } from '@/ui';
 import { StudioEditor } from './StudioScreen';
+import { createPlaybackClock, type ClockedPlayback } from '../playbackClock';
 import type { ClipEditorOptions } from '../useClipEditorMockState';
 import type { ClipStatusView } from './clipProgress';
 
 function renderStudio(options?: ClipEditorOptions) {
   return renderWithProviders(<StudioEditor {...options} />);
+}
+
+/** 재생 어댑터에 위치 저장소를 붙인다. 위치를 옮기지 않는 가짜라 끌기도 시크와 같다 */
+function clocked(
+  playback: Omit<ClockedPlayback, 'clock' | 'scrubTo' | 'endScrub'>,
+): ClockedPlayback {
+  return {
+    clock: createPlaybackClock(playback.currentSeconds),
+    scrubTo: playback.seekTo,
+    endScrub: () => {},
+    ...playback,
+  };
+}
+
+/** 실제 재생기처럼 시크가 저장소의 위치를 옮기는 어댑터. 시험은 clock.publish로 재생을 흉내 낸다 */
+function movingPlayback(seconds: number, durationSeconds: number) {
+  const clock = createPlaybackClock(seconds);
+  const playback: ClockedPlayback = {
+    playing: false,
+    currentSeconds: seconds,
+    clock,
+    durationSeconds,
+    error: null,
+    togglePlay: vi.fn(),
+    seekTo: clock.publish,
+    seekBy: vi.fn(),
+    scrubTo: clock.publish,
+    endScrub: vi.fn(),
+    setRate: vi.fn(),
+    setBounds: vi.fn(),
+  };
+  return { clock, playback };
 }
 
 /** 미리보기 아래 재생 막대의 글자 — 타임코드 박스·눈금에도 비슷한 시각이 있어 막대 안만 본다 */
@@ -433,12 +466,15 @@ describe('StudioScreen', () => {
       durationSeconds: 60,
       range: { startSeconds: 10, endSeconds: 20 },
     };
-    const { unmount } = renderStudio({ source, playback: { ...playback, error: 'access' } });
+    const { unmount } = renderStudio({
+      source,
+      playback: clocked({ ...playback, error: 'access' }),
+    });
     expect(
       screen.getByText('영상 출입증이 거절됐어요. 잠시 뒤 다시 열어 주세요'),
     ).toBeInTheDocument();
     unmount();
-    renderStudio({ source, playback: { ...playback, error: 'no-recording' } });
+    renderStudio({ source, playback: clocked({ ...playback, error: 'no-recording' }) });
     expect(screen.getByText('이 구간의 녹화가 없어 미리보기를 못 틀어요')).toBeInTheDocument();
   });
 
@@ -453,7 +489,7 @@ describe('StudioScreen', () => {
         durationSeconds: 119,
         range: { startSeconds: 107, endSeconds: 112 },
       },
-      playback: {
+      playback: clocked({
         playing: false,
         currentSeconds: 107,
         durationSeconds: 119,
@@ -463,7 +499,7 @@ describe('StudioScreen', () => {
         seekBy: vi.fn(),
         setRate: vi.fn(),
         setBounds: vi.fn(),
-      },
+      }),
     });
     // 범위보다 넓힐 수 없으니 축소 단추는 꺼져 있고 100%에 머문다: 25%·50%는 같은 폭이라 표시만 바뀐다(PR #341 codex)
     expect(screen.getByRole('button', { name: '타임라인 축소' })).toBeDisabled();
@@ -494,33 +530,16 @@ describe('StudioScreen', () => {
   it('키운 채 끄는 동안은 창을 붙잡는다: 재생 위치가 창 밖으로 가도 끄던 자리 밑에서 창이 안 넘어간다(로컬 리뷰 2라운드)', async () => {
     const user = userEvent.setup();
     // 재생 위치를 바깥에서 바꾸는 재생기(실제 재생기처럼 seekTo가 위치를 옮긴다)
-    let setPosition: (seconds: number) => void = () => {};
-    function Harness() {
-      const [position, setPos] = useState(130);
-      setPosition = setPos;
-      return (
-        <StudioEditor
-          source={{
-            clipTitle: '카드',
-            sourceLabel: '방송',
-            durationSeconds: 400,
-            range: { startSeconds: 100, endSeconds: 160 },
-          }}
-          playback={{
-            playing: false,
-            currentSeconds: position,
-            durationSeconds: 400,
-            error: null,
-            togglePlay: vi.fn(),
-            seekTo: setPos,
-            seekBy: vi.fn(),
-            setRate: vi.fn(),
-            setBounds: vi.fn(),
-          }}
-        />
-      );
-    }
-    renderWithProviders(<Harness />);
+    const { clock, playback } = movingPlayback(130, 400);
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        durationSeconds: 400,
+        range: { startSeconds: 100, endSeconds: 160 },
+      },
+      playback,
+    });
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     const ticks = () =>
@@ -533,7 +552,7 @@ describe('StudioScreen', () => {
     scrub.hasPointerCapture = () => true;
     fireEvent.pointerDown(scrub, { clientX: 500, pointerId: 1 });
     // 끄는 중에 재생 위치가 창 밖(150초)으로 가도 창은 그대로다
-    act(() => setPosition(150));
+    act(() => clock.publish(150));
     expect(ticks()).toEqual(before);
     // 놓으면 그때 재생 위치를 따라 넘어간다
     fireEvent.pointerUp(scrub, { pointerId: 1 });
@@ -542,33 +561,16 @@ describe('StudioScreen', () => {
 
   it('키운 창 밖으로 나간 썸네일 표시는 그리지 않는다: 가장자리에 붙으면 그 시각에 고른 것처럼 읽힌다(봇 리뷰)', async () => {
     const user = userEvent.setup();
-    let setPosition: (seconds: number) => void = () => {};
-    function Harness() {
-      const [position, setPos] = useState(105);
-      setPosition = setPos;
-      return (
-        <StudioEditor
-          source={{
-            clipTitle: '카드',
-            sourceLabel: '방송',
-            durationSeconds: 400,
-            range: { startSeconds: 100, endSeconds: 160 },
-          }}
-          playback={{
-            playing: false,
-            currentSeconds: position,
-            durationSeconds: 400,
-            error: null,
-            togglePlay: vi.fn(),
-            seekTo: setPos,
-            seekBy: vi.fn(),
-            setRate: vi.fn(),
-            setBounds: vi.fn(),
-          }}
-        />
-      );
-    }
-    renderWithProviders(<Harness />);
+    const { clock, playback } = movingPlayback(105, 400);
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        durationSeconds: 400,
+        range: { startSeconds: 100, endSeconds: 160 },
+      },
+      playback,
+    });
     await user.click(screen.getByRole('button', { name: '이 장면을 썸네일로' }));
     const marker = () => document.querySelector('[data-thumbnail-marker]');
     expect(marker()).not.toBeNull();
@@ -576,8 +578,69 @@ describe('StudioScreen', () => {
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     // 재생 위치가 멀리 가면 창이 따라가고, 105초에 고른 썸네일은 창 밖이다
-    act(() => setPosition(155));
+    act(() => clock.publish(155));
     expect(marker()).toBeNull();
+  });
+
+  it('재생 중에는 재생선과 시간 표기가 저장소를 따라 움직인다: 허브의 위치는 멈춰 있어도 끊기지 않는다', () => {
+    const { clock, playback } = movingPlayback(110, 400);
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        durationSeconds: 400,
+        range: { startSeconds: 100, endSeconds: 160 },
+      },
+      // 재생 중이라 허브의 값은 110초에 머문다
+      playback: { ...playback, playing: true },
+    });
+    const playhead = () => document.querySelector<HTMLElement>('[class*="_playhead_"]');
+    const before = parseFloat(playhead()!.style.left);
+    expect(transportSeconds()).toBeCloseTo(10);
+
+    act(() => clock.publish(112.3));
+    expect(transportSeconds()).toBeCloseTo(12.3);
+    expect(parseFloat(playhead()!.style.left)).toBeGreaterThan(before);
+
+    // 쇼츠 구간을 넘은 위치는 쇼츠 길이로 잘라 적는다
+    act(() => clock.publish(170));
+    expect(transportSeconds()).toBeCloseTo(60);
+    expect(screen.getByRole('button', { name: '이 장면을 썸네일로' })).toBeDisabled();
+
+    // 창 밖으로 나가면 재생선을 그리지 않는다: 가장자리에 붙으면 다른 시각으로 읽힌다
+    act(() => clock.publish(0));
+    expect(playhead()).toBeNull();
+  });
+
+  it('누른 채 끄는 동안은 scrubTo로만 옮기고, 놓을 때 endScrub을 한 번 부른다: 누를 때의 한 번만 시크다', () => {
+    const { clock, playback } = movingPlayback(110, 400);
+    const seekTo = vi.fn(clock.publish);
+    const scrubTo = vi.fn(clock.publish);
+    const endScrub = vi.fn();
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        durationSeconds: 400,
+        range: { startSeconds: 100, endSeconds: 160 },
+      },
+      playback: { ...playback, seekTo, scrubTo, endScrub },
+    });
+    const scrub = document.querySelector<HTMLElement>('[data-scrub]')!;
+    scrub.parentElement!.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
+    scrub.setPointerCapture = () => {};
+    scrub.hasPointerCapture = () => true;
+
+    fireEvent.pointerDown(scrub, { clientX: 400, pointerId: 1 });
+    fireEvent.pointerMove(scrub, { clientX: 500, pointerId: 1 });
+    fireEvent.pointerMove(scrub, { clientX: 600, pointerId: 1 });
+
+    expect(seekTo).toHaveBeenCalledOnce();
+    expect(scrubTo).toHaveBeenCalledTimes(2);
+    expect(endScrub).not.toHaveBeenCalled();
+
+    fireEvent.pointerUp(scrub, { pointerId: 1 });
+    expect(endScrub).toHaveBeenCalledOnce();
   });
 
   it('키우면 구간보다 좁게 재생 위치 둘레만 보이고, 밖으로 나간 끝은 가장자리 표시가 대신한다(POK-389)', async () => {
@@ -590,7 +653,7 @@ describe('StudioScreen', () => {
         durationSeconds: 400,
         range: { startSeconds: 100, endSeconds: 160 },
       },
-      playback: {
+      playback: clocked({
         playing: false,
         currentSeconds: 130,
         durationSeconds: 400,
@@ -600,7 +663,7 @@ describe('StudioScreen', () => {
         seekBy: vi.fn(),
         setRate: vi.fn(),
         setBounds: vi.fn(),
-      },
+      }),
     });
     // 100%: 1분 구간 전체가 보이고 손잡이 둘이 다 있다(Tab으로 간다)
     const handles = () => screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ });
@@ -634,7 +697,7 @@ describe('StudioScreen', () => {
         durationSeconds: 400,
         range: { startSeconds: 125, endSeconds: 135 },
       },
-      playback: {
+      playback: clocked({
         playing: false,
         currentSeconds: 130,
         durationSeconds: 400,
@@ -644,7 +707,7 @@ describe('StudioScreen', () => {
         seekBy: vi.fn(),
         setRate: vi.fn(),
         setBounds: vi.fn(),
-      },
+      }),
     });
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));

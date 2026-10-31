@@ -23,12 +23,14 @@ import {
   secondsFromPointer,
   secondsToFraction,
   secondsToViewOffset,
+  type TimelineView,
 } from '../timelineMath';
 import {
   EDITOR_SEEK_SHIFT_STEP_SECONDS,
   EDITOR_SEEK_STEP_SECONDS,
   SHORTCUT_LEGEND,
 } from '../editorKeys';
+import { usePlaybackValue, type PlaybackClock } from '../playbackClock';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
 
 // 시안 1d-a 하단 — 멀티트랙 타임라인. 도구를 바꿔도 이 줄들은 그대로 남는다.
@@ -49,6 +51,24 @@ function shortClock(seconds: number): string {
 /** 보이는 창 기준 자리(secondsToViewOffset)가 창 밖이라 덮개에 잘렸는가 */
 function offView(offset: number): boolean {
   return offset < 0 || offset > 1;
+}
+
+/**
+ * 재생선. 타임라인에서 프레임마다 움직이는 것은 이것뿐이라 따로 구독한다: 타임라인 전체가 재생 위치를 구독하면 트랙 줄 · 필름띠까지
+ * 프레임마다 다시 돈다.
+ */
+function TimelinePlayhead({ clock, view }: { clock: PlaybackClock; view: TimelineView }) {
+  const fraction = usePlaybackValue(clock, (seconds) =>
+    seconds >= view.startSeconds && seconds <= view.endSeconds
+      ? secondsToFraction(seconds, view)
+      : null,
+  );
+  if (fraction === null) return null;
+  return (
+    <div className={styles.playhead} style={{ left: `${fraction * 100}%` }}>
+      <span className={styles.playheadTip} aria-hidden />
+    </div>
+  );
 }
 
 export function MultitrackTimeline({
@@ -102,14 +122,10 @@ export function MultitrackTimeline({
       else handle.blur();
     }
   }, [boxStart, boxEnd]);
-  const playheadFraction = secondsToFraction(state.playheadSeconds, state.view);
   // 필름띠와 썸네일 칸은 장면 그림 훅 하나(숨은 영상 노드 하나)를 같이 쓴다
   const thumbnailMs =
     state.thumbnailSeconds === null ? null : Math.round(state.thumbnailSeconds * 1000);
   const filmstrip = useFilmstripFrames(state.filmstripSource, state.view, thumbnailMs);
-  const playheadVisible =
-    state.playheadSeconds >= state.view.startSeconds &&
-    state.playheadSeconds <= state.view.endSeconds;
 
   const moveEdgeFromPointer = (edge: 'start' | 'end', clientX: number) => {
     const overlay = overlayRef.current;
@@ -121,11 +137,11 @@ export function MultitrackTimeline({
 
   // 재생 위치 옮기기(POK-389): 타임라인·윗줄 눈금을 누르면 그 시점으로, 누른 채 끌면 따라간다. 눈금과 덮개는 가로 범위가
   // 같다(둘 다 이름 칸 뒤부터 끝까지). 덮개 좌표 하나로 잰다
-  const seekFromPointer = (clientX: number) => {
+  const seekFromPointer = (clientX: number, seek: (seconds: number) => void) => {
     const overlay = overlayRef.current;
     if (overlay === null) return;
     const seconds = secondsFromPointer(overlay.getBoundingClientRect(), clientX, state.view);
-    if (seconds !== null) state.seekTo(seconds);
+    if (seconds !== null) seek(seconds);
   };
 
   // 끄는 동안은 창을 붙잡는다: 키운 창은 재생 위치를 따라 넘어가므로, 안 붙잡으면 끌던 자리 밑에서 창이 움직인다
@@ -134,17 +150,21 @@ export function MultitrackTimeline({
     // 왼쪽 단추(터치·펜은 0)만: 오른쪽 클릭이면 메뉴가 뜨면서 재생 위치까지 튀었다(PR #341 claude)
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    seekFromPointer(event.clientX);
+    seekFromPointer(event.clientX, state.seekTo);
     scrubGesture.current = state.beginGesture();
   };
 
+  // 포인터가 움직일 때마다 허브를 다시 돌리지 않는다: 재생선과 시간 표기만 따라오고, 허브에는 놓을 때 한 번 올린다
   const onScrubPointerMove = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    seekFromPointer(event.clientX);
+    seekFromPointer(event.clientX, state.scrubTo);
   };
 
   const onScrubPointerUp = () => {
-    if (scrubGesture.current !== null) state.endGesture(scrubGesture.current);
+    if (scrubGesture.current !== null) {
+      state.endGesture(scrubGesture.current);
+      state.endScrub();
+    }
     scrubGesture.current = null;
   };
 
@@ -538,11 +558,7 @@ export function MultitrackTimeline({
                     <Camera size={9} />
                   </span>
                 ) : null}
-                {playheadVisible ? (
-                  <div className={styles.playhead} style={{ left: `${playheadFraction * 100}%` }}>
-                    <span className={styles.playheadTip} aria-hidden />
-                  </div>
-                ) : null}
+                <TimelinePlayhead clock={state.clock} view={state.view} />
               </div>
             </div>
           </div>

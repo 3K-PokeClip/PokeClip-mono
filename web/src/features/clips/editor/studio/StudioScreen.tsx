@@ -820,10 +820,8 @@ function WiredStudio({
   }, [reloading, previewVideo]);
   // 이 화면에서 마지막으로 보낸 창의 값. 다시 열면 그대로 채운다(고른 이미지 파일까지)
   const lastDraft = useRef<UploadDraft | null>(null);
-  // 지금 재생 위치(기준점 축의 초). 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다. 재생 중에는 프레임마다
-  // 바뀌므로 ref로 읽는다(동작 콜백이 매 프레임 새로 만들어지지 않게)
-  const playheadRef = useRef<number | null>(null);
-  playheadRef.current = recording ? video.playback.currentSeconds : null;
+  // 재생 위치 저장소. 업로드 창은 재생 중에도 열리므로 허브의 값(멈춤 · 시크 때만 바뀐다)이 아니라 여는 순간의 위치를 읽는다
+  const playbackClock = video.playback.clock;
   // 받아 둔 녹화 조각과 그 시작 초. 창을 여는 순간에 읽는다(장면 그림 재료)
   const videoRef = useRef({ src: video.src, windowStartSeconds: video.windowStartSeconds });
   videoRef.current = { src: video.src, windowStartSeconds: video.windowStartSeconds };
@@ -833,7 +831,8 @@ function WiredStudio({
     (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
-      const playheadSeconds = playheadRef.current;
+      // 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
+      const playheadSeconds = recording ? playbackClock.getSeconds() : null;
       const cut = documentFor(recipe).cut!;
       const cutLengthMs = cut.outAtMs - cut.inAtMs;
       const rangeStart = recipe.range.startSeconds;
@@ -879,7 +878,7 @@ function WiredStudio({
         frameSource,
       });
     },
-    [documentFor, card, recording],
+    [documentFor, card, recording, playbackClock],
   );
 
   /**

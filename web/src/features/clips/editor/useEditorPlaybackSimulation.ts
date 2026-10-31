@@ -9,12 +9,8 @@
 // 하는데 vitest 는 기본으로 rAF 를 가짜로 만들지 않는다.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  boundaryAction,
-  type EditorPlayback,
-  type EditorPlaybackOptions,
-  type PlaybackBounds,
-} from './editorPlayback';
+import { boundaryAction, type EditorPlaybackOptions, type PlaybackBounds } from './editorPlayback';
+import { createPlaybackClock, type ClockedPlayback } from './playbackClock';
 
 const TICK_MS = 100;
 const TICK_SECONDS = TICK_MS / 1000;
@@ -23,15 +19,15 @@ function clamp(seconds: number, durationSeconds: number): number {
   return Math.min(durationSeconds, Math.max(0, seconds));
 }
 
-export function useEditorPlaybackSimulation(options: EditorPlaybackOptions): EditorPlayback {
+export function useEditorPlaybackSimulation(options: EditorPlaybackOptions): ClockedPlayback {
   const { durationSeconds, initialSeconds } = options;
 
   const [playing, setPlaying] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(initialSeconds);
 
-  // 위치의 정본은 ref 다. 상태는 그리기 위한 사본이다 —
+  // 위치의 정본은 저장소다. 상태는 멈춤 · 시크 · 구간 경계에서만 올리는 사본이다(실재생과 같은 규칙) —
   // 틱 안에서 setState 업데이터에 부수효과(정지)를 섞으면 StrictMode 의 이중 호출에서 갈라진다.
-  const positionRef = useRef(initialSeconds);
+  const [clock] = useState(() => createPlaybackClock(initialSeconds));
   const durationRef = useRef(durationSeconds);
   durationRef.current = durationSeconds;
   const rateRef = useRef(1);
@@ -39,60 +35,75 @@ export function useEditorPlaybackSimulation(options: EditorPlaybackOptions): Edi
   // 배속·구간을 바꿀 때마다 인터벌을 다시 걸면 그 순간의 100ms 가 통째로 밀린다.
   const boundsRef = useRef<PlaybackBounds | null>(null);
 
-  const commit = useCallback((seconds: number) => {
-    positionRef.current = seconds;
-    setCurrentSeconds(seconds);
-  }, []);
+  /** 위치를 허브까지 올린다: 멈춤 · 시크 · 구간 경계에서만. 재생 틱은 clock.publish만 부른다 */
+  const settle = useCallback(
+    (seconds: number) => {
+      clock.publish(seconds);
+      setCurrentSeconds(seconds);
+    },
+    [clock],
+  );
 
   useEffect(() => {
     if (!playing) return undefined;
     const timer = setInterval(() => {
       const bounds = boundsRef.current;
       const step = TICK_SECONDS * rateRef.current;
+      const position = clock.getSeconds();
       if (bounds === null) {
-        commit(clamp(positionRef.current + step, durationRef.current));
+        clock.publish(clamp(position + step, durationRef.current));
         return;
       }
       // 지금 위치가 이미 구간 밖인지 먼저 본다 (구간 앞에서 재생을 시작한 경우)
-      const now = boundaryAction(positionRef.current, bounds);
+      const now = boundaryAction(position, bounds);
       if (now.kind === 'seek') {
-        commit(now.toSeconds);
+        settle(now.toSeconds);
         return;
       }
       if (now.kind === 'stop') {
         setPlaying(false);
-        commit(now.atSeconds);
+        settle(now.atSeconds);
         return;
       }
       // 한 걸음 간 뒤 끝을 넘는지 본다 — 넘어간 뒤에 되돌리면 한 틱만큼 구간 밖이 재생된다
-      const next = positionRef.current + step;
+      const next = position + step;
       const after = boundaryAction(next, bounds);
       if (after.kind === 'seek') {
-        commit(after.toSeconds);
+        settle(after.toSeconds);
         return;
       }
       if (after.kind === 'stop') {
         setPlaying(false);
-        commit(after.atSeconds);
+        settle(after.atSeconds);
         return;
       }
-      commit(clamp(next, durationRef.current));
+      clock.publish(clamp(next, durationRef.current));
     }, TICK_MS);
     return () => clearInterval(timer);
-  }, [playing, commit]);
+  }, [playing, clock, settle]);
 
   return {
     playing,
     currentSeconds,
+    clock,
     durationSeconds,
     // 목업에는 실패할 미디어가 없다
     error: null,
-    togglePlay: useCallback(() => setPlaying((value) => !value), []),
-    seekTo: useCallback((seconds: number) => commit(clamp(seconds, durationRef.current)), [commit]),
+    togglePlay: useCallback(() => {
+      setPlaying((value) => !value);
+      // 멈추면 흐르던 위치가 허브에 닿아야 한다. 틱 안의 정지처럼 업데이터 밖에서 올린다
+      setCurrentSeconds(clock.getSeconds());
+    }, [clock]),
+    seekTo: useCallback((seconds: number) => settle(clamp(seconds, durationRef.current)), [settle]),
     seekBy: useCallback(
-      (delta: number) => commit(clamp(positionRef.current + delta, durationRef.current)),
-      [commit],
+      (delta: number) => settle(clamp(clock.getSeconds() + delta, durationRef.current)),
+      [clock, settle],
     ),
+    scrubTo: useCallback(
+      (seconds: number) => clock.publish(clamp(seconds, durationRef.current)),
+      [clock],
+    ),
+    endScrub: useCallback(() => setCurrentSeconds(clock.getSeconds()), [clock]),
     setRate: useCallback((rate: number) => {
       rateRef.current = rate;
     }, []),

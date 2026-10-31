@@ -232,6 +232,9 @@ describe('useEditorVideoPlayback: 새 창을 받는 동안의 시각 (POK-389)',
       paused: true,
       readyState: 0,
       playbackRate: 1,
+      pause: () => undefined,
+      removeAttribute: () => undefined,
+      load: () => undefined,
     }) as unknown as HTMLVideoElement;
     const { result } = renderHook(() =>
       useEditorVideoPlayback({
@@ -302,6 +305,8 @@ describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
       playbackRate: 1,
       play,
       pause: vi.fn(),
+      removeAttribute: vi.fn(),
+      load: vi.fn(),
     }) as unknown as HTMLVideoElement;
     const hook = renderHook(() =>
       useEditorVideoPlayback({
@@ -384,6 +389,196 @@ describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
     expect(play).not.toHaveBeenCalled();
     expect(result.current.playback.playing).toBe(false);
     expect(node.currentTime).toBe(15);
+  });
+});
+
+describe('useEditorVideoPlayback: 재생 위치 저장소', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** 구간 20~30초, 창 10~40초를 받아 둔 영상 노드. 프레임은 손으로 돌리고 훅이 몇 번 돌았는지 센다 */
+  async function opened() {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response('mp4', { status: 200 }))),
+    );
+    const order: string[] = [];
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, {
+        createObjectURL: () => 'blob:1',
+        revokeObjectURL: () => order.push('revoke'),
+      }),
+    );
+    let frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb));
+    vi.stubGlobal('cancelAnimationFrame', () => {
+      frames = [];
+    });
+    const frame = () => {
+      const due = frames;
+      frames = [];
+      for (const cb of due) cb(0);
+    };
+    const node = Object.assign(new EventTarget(), {
+      currentTime: 0,
+      duration: 30,
+      paused: true,
+      readyState: 0,
+      playbackRate: 1,
+      play: vi.fn(() => Promise.resolve()),
+      pause: vi.fn(() => order.push('pause')),
+      removeAttribute: vi.fn((name: string) => order.push(`remove ${name}`)),
+      load: vi.fn(() => order.push('load')),
+    }) as unknown as HTMLVideoElement & { paused: boolean };
+    let renders = 0;
+    const hook = renderHook(() => {
+      renders += 1;
+      return useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      });
+    });
+    act(() => hook.result.current.videoRef(node));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    return { ...hook, node, frame, order, renders: () => renders };
+  }
+
+  const playing = (node: HTMLVideoElement & { paused: boolean }) =>
+    act(() => {
+      node.paused = false;
+      node.dispatchEvent(new Event('play'));
+    });
+
+  it('재생 중 프레임마다 위치는 저장소로만 간다: 훅이 다시 돌면 편집기 전체가 초당 60번 다시 그려진다', async () => {
+    const { node, frame, result, renders } = await opened();
+    playing(node);
+    const before = renders();
+
+    act(() => {
+      for (let i = 1; i <= 30; i += 1) {
+        node.currentTime = 10 + i / 60;
+        frame();
+      }
+    });
+
+    expect(renders()).toBe(before);
+    expect(result.current.playback.clock.getSeconds()).toBeCloseTo(20.5);
+  });
+
+  it('재생 중 timeupdate도 허브를 깨우지 않는다: 초당 4번이어도 편집기 전체가 다시 돈다', async () => {
+    const { node, result, renders } = await opened();
+    playing(node);
+    const before = renders();
+
+    act(() => {
+      node.currentTime = 12;
+      node.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(renders()).toBe(before);
+    expect(result.current.playback.clock.getSeconds()).toBe(22);
+  });
+
+  it('구간 경계는 프레임마다 본다: 끝을 넘긴 그 프레임에 되감고 허브에도 올린다', async () => {
+    const { node, frame, result } = await opened();
+    // 허브가 구간 시작이 아닌 자리에 서 있어야 되감기가 올라왔는지 가려진다
+    act(() => result.current.playback.seekTo(25));
+    expect(result.current.playback.currentSeconds).toBe(25);
+    playing(node);
+
+    act(() => {
+      node.currentTime = 20.01; // 방송 30.01초 — timeupdate를 기다리면 0.25초까지 넘긴다
+      frame();
+    });
+
+    expect(node.currentTime).toBe(10);
+    expect(result.current.playback.clock.getSeconds()).toBe(20);
+    expect(result.current.playback.currentSeconds).toBe(20);
+  });
+
+  it('반복이 꺼져 있으면 끝을 넘긴 프레임에 멈추고, 멈춘 자리가 허브까지 올라온다', async () => {
+    const { node, frame, result } = await opened();
+    act(() => result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: false }));
+    playing(node);
+
+    act(() => {
+      node.currentTime = 20.01;
+      frame();
+    });
+    expect(node.pause).toHaveBeenCalledOnce();
+
+    act(() => {
+      node.paused = true;
+      node.dispatchEvent(new Event('pause'));
+    });
+    expect(result.current.playback.currentSeconds).toBeCloseTo(30.01);
+  });
+
+  it('멈추면 그 자리가 허브까지 올라온다', async () => {
+    const { node, frame, result } = await opened();
+    playing(node);
+    act(() => {
+      node.currentTime = 15;
+      frame();
+    });
+    expect(result.current.playback.currentSeconds).toBe(20);
+
+    act(() => {
+      node.paused = true;
+      node.dispatchEvent(new Event('pause'));
+    });
+
+    expect(result.current.playback.currentSeconds).toBe(25);
+  });
+
+  it('끄는 동안은 멈춘 영상의 seeked도 허브를 깨우지 않고, 놓으면 마지막 자리가 올라온다', async () => {
+    const { node, result, renders } = await opened();
+    const before = renders();
+
+    act(() => {
+      for (const seconds of [22, 24, 26]) {
+        result.current.playback.scrubTo(seconds);
+        node.dispatchEvent(new Event('timeupdate'));
+        node.dispatchEvent(new Event('seeked'));
+      }
+    });
+
+    expect(renders()).toBe(before);
+    expect(node.currentTime).toBe(16);
+    expect(result.current.playback.clock.getSeconds()).toBe(26);
+
+    act(() => result.current.playback.endScrub());
+    expect(result.current.playback.currentSeconds).toBe(26);
+  });
+
+  it('끌기가 끝난 뒤의 멈춘 영상은 다시 허브까지 올린다', async () => {
+    const { node, result } = await opened();
+    act(() => result.current.playback.scrubTo(22));
+    act(() => result.current.playback.endScrub());
+
+    act(() => {
+      node.currentTime = 15;
+      node.dispatchEvent(new Event('seeked'));
+    });
+
+    expect(result.current.playback.currentSeconds).toBe(25);
+  });
+
+  it('편집기가 내려가면 영상 노드의 자원을 푼다: src를 지우고 load()까지 해야 디코더가 풀리고, 주소는 그 뒤에 지운다', async () => {
+    const { node, order, unmount } = await opened();
+    expect(node.load).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(order).toEqual(['pause', 'remove src', 'load', 'revoke']);
   });
 });
 
