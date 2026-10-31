@@ -290,9 +290,19 @@ describe('guardRewindFloor — 창 하한 = 첫 내용 조각 + 그 뒤 조각 �
 
   it('맨 앞 조각 셋이 1 TD 보다 짧으면 하한은 첫 조각 + 1 TD 다 — 옮김 문턱 안의 재생점을 뒤로 당기지 않는다', () => {
     // 조각 셋 합 3초 < 문턱 6초(1 × TD) — 첫 조각 + 4초의 재생점을 + 3초로 되돌리면 역방향 시크다
-    const short = listOf(6, [1, 1, 1, 1]);
+    const short = listOf(6, [1, 1, 1, 1, 1, 1, 1, 1]);
     expect(seekTo(short, 4)).toBe(6);
     expect(seekTo(short, 0.5)).toBe(6);
+  });
+
+  it('하한이 목록 끝을 넘으면 목록 끝으로 옮긴다 — 끝 뒤 자리는 hls.js 가 창 밖으로 보고 다시 옮긴다', () => {
+    // 목록 끝 4초 < 문턱 6초(1 × TD) · 모두 GAP 의 3 × TD(18초) 도 끝(6초) 뒤다
+    const short = listOf(6, [1, 1, 1, 1]);
+    expect(short.edge).toBe(4);
+    expect(seekTo(short, 0.5)).toBe(4);
+    expect(seekTo(listOf(6, [2, 2, 2], [0, 1, 2]))).toBe(6);
+    // 이미 끝에 선 재생점은 옮기지 않는다 — 같은 자리 쓰기 · 역방향 시크가 없다
+    expect(seekTo(short, 4)).toBeUndefined();
   });
 
   it('맨 앞 GAP 조각은 내용이 아니다 — 하한은 첫 내용 조각 + 그 뒤 조각 셋이다(옮김 문턱은 첫 조각 기준 그대로)', () => {
@@ -309,6 +319,6 @@ describe('guardRewindFloor — 창 하한 = 첫 내용 조각 + 그 뒤 조각 �
   });
 
   it('모두 GAP 이면 조각이 없을 때처럼 첫 조각 + 3 × TD 다', () => {
-    expect(seekTo(listOf(6, [2, 2, 2], [0, 1, 2]))).toBe(18);
+    expect(seekTo(listOf(6, [6, 6, 6, 6], [0, 1, 2, 3]))).toBe(18);
   });
 });
