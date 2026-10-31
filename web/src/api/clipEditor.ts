@@ -889,6 +889,9 @@ export async function fetchLibraryAll(
   return items;
 }
 
+/** 보관함을 읽은 뒤 탭으로 돌아와도 다시 읽지 않는 시간. 쪽을 끝까지 넘겨 무겁고, 숨어 있는 동안 멈춘 주기는 이 시간이 지나면 메운다 */
+const LIBRARY_FOCUS_FRESH_MS = 20_000;
+
 /**
  * 보관함 목록. 홈과 보관함 화면이 같은 캐시를 나눠 쓴다: 주기는 화면마다 다르고(refetchInterval), 들어올 때마다 다시 읽되 그동안은
  * 받아 둔 목록을 바로 보여 준다.
@@ -898,6 +901,8 @@ export function libraryQueryOptions(streamerId: number | null) {
     queryKey: ['library', streamerId] as const,
     queryFn: ({ signal }) => fetchLibraryAll(streamerId, signal),
     staleTime: 0,
+    refetchOnWindowFocus: (query) =>
+      Date.now() - query.state.dataUpdatedAt >= LIBRARY_FOCUS_FRESH_MS,
     // 주기가 곧 다시 읽고, 첫 읽기 실패는 화면이 바로 말해야 한다
     retry: false,
   });

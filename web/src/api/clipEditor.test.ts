@@ -1,3 +1,4 @@
+import { focusManager, QueryClient, QueryObserver } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { READ_TIMEOUT_MS } from '@/api/client';
 import {
@@ -9,6 +10,7 @@ import {
   forgetBroadcastRows,
   fetchJumpCard,
   fetchLibraryAll,
+  libraryQueryOptions,
   mediaStreamId,
   openJumpCard,
   platformLabel,
@@ -516,5 +518,39 @@ describe('requestPlaybackAccess', () => {
     await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
 
     await expect(pending).resolves.toEqual({ kind: 'failed' });
+  });
+});
+
+describe('보관함 목록 쿼리: 탭으로 돌아올 때', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const returnToTab = async () => {
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await flush();
+  };
+
+  afterEach(() => focusManager.setFocused(undefined));
+
+  it('방금 읽었으면 다시 읽지 않고, 20초가 지났으면 읽는다: 쪽을 끝까지 넘겨 무겁다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const spy = stubFetch(() => jsonResponse(200, { items: [], nextCursor: null }));
+    const client = new QueryClient();
+    client.mount();
+    const observer = new QueryObserver(client, libraryQueryOptions(null));
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(observer.getCurrentResult().isSuccess).toBe(true));
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() + 19_000);
+    await returnToTab();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() + 1_000);
+    await returnToTab();
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+
+    unsubscribe();
+    client.unmount();
+    client.clear();
   });
 });
