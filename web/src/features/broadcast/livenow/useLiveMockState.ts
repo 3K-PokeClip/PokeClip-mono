@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { forgetCardCount } from '@/features/broadcast/cardCountMemory';
 import { ApiError, apiFetch } from '@/api/client';
 import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { soopLinkQueryOptions } from '@/api/soopLink';
@@ -9,6 +10,8 @@ import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
+import { setVisibleInterval } from '@/lib/visibleInterval';
+import { reuseHighlights } from './highlightCardView';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
   onAirLabel,
@@ -178,6 +181,8 @@ const ENDED_LIST_MS = 60_000;
 const ENDED_SETTLE_MS = 2 * 60_000;
 /** 라이브 시청자 기록을 이어 받을 때 받아 둔 마지막 점보다 이만큼 앞부터 다시 묻는다(수집기의 늦은 적재를 놓치지 않게) */
 const INFO_OVERLAP_MS = 2 * 60_000;
+/** 끝난 방송의 굳은 차트 쪽·방송 정보를 캐시에 두는 시간. 다시 들어올 때마다 12시간 방송의 차트를 처음부터 읽지 않게 한다 */
+const ENDED_CACHE_GC_MS = 30 * 60_000;
 
 /**
  * 라이브 그래프·시청자 기록을 읽기 시작할 시각(epoch ms) — 방송 시작이다. 12시간이 넘으면 끝 12시간인데(끝난 방송과 같은 상한,
@@ -274,6 +279,29 @@ function isStale(prev: Snapshot | undefined, next: Snapshot): boolean {
   return prev !== undefined && next.eventSeq < prev.eventSeq;
 }
 
+/**
+ * 같은 내용의 카드인가(없던 카드면 다르다). 서버가 보내는 칸을 전부 본다: 순번(eventSeq)이 같아도 목록만 싣는 사진·가림 같은 칸이
+ * 다를 수 있다. 증거(evidence)는 모양이 열려 있어 글자로 비교한다
+ */
+function sameSnapshot(prev: Snapshot | undefined, next: Snapshot): boolean {
+  if (prev === undefined) return false;
+  if (prev === next) return true;
+  return (
+    prev.id === next.id &&
+    prev.streamId === next.streamId &&
+    prev.source === next.source &&
+    prev.streamTimestampMs === next.streamTimestampMs &&
+    prev.window.startMs === next.window.startMs &&
+    prev.window.endMs === next.window.endMs &&
+    prev.score === next.score &&
+    (prev.hidden ?? false) === (next.hidden ?? false) &&
+    prev.eventSeq === next.eventSeq &&
+    prev.createdAt === next.createdAt &&
+    (prev.thumbnailUrl ?? null) === (next.thumbnailUrl ?? null) &&
+    JSON.stringify(prev.evidence) === JSON.stringify(next.evidence)
+  );
+}
+
 function parseSseBlock(block: string): { event: string; data: string } | null {
   let event = 'message';
   const data: string[] = [];
@@ -297,6 +325,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
   const [now, setNow] = useState(() => Date.now());
   const [sseOk, setSseOk] = useState(false);
   const [info, setInfo] = useState<LoadedInfo | null>(null);
+  const queryClient = useQueryClient();
   const live = useLiveData();
   // 카드 ms의 0초(서버 기준점 → 녹화 재생 서버 → 방송 시작, POK-255)
   const base = timeBaseOf(live);
@@ -355,13 +384,18 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     const merge = (list: Snapshot[], fromStream = false) => {
       if (stopped) return;
       setCards((prev) => {
-        const next = { ...prev };
+        let next: Record<number, Snapshot> | null = null;
         // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
         for (const c of list) {
           if (isStale(prev[c.id], c)) continue;
-          next[c.id] = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+          const value = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+          // 내용이 같으면 앞 객체를 그대로 둔다: 3초마다 오는 목록 답은 늘 새 객체라, 그대로 덮으면 바뀐 카드가 없어도 화면 전체가
+          // 다시 계산됐다. 바뀐 카드가 하나도 없으면 상태 자체를 그대로 돌려줘 다시 그리지 않는다
+          if (sameSnapshot(prev[c.id], value)) continue;
+          next ??= { ...prev };
+          next[c.id] = value;
         }
-        return next;
+        return next ?? prev;
       });
     };
 
@@ -392,20 +426,42 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       }
     };
     /**
-     * 라이브 그래프의 다 지난 1시간 창(열쇠 = 창 시작|끝|칸). 방송 중에도 처음부터 지금까지 그리므로, 길어진 방송을 10초마다
-     * 처음부터 다시 읽지 않게 끝난 지 ENDED_SETTLE_MS가 지난 창은 한 번 받은 답을 쓴다(그 안은 수집기가 아직 쓰고 있을 수 있다)
+     * 굳은 답은 React Query 캐시에 둔다(열쇠에 방송 번호 · 끝 시각 · 창 · 칸). 효과 안 변수에 두면 같은 방송에 다시 들어올 때마다
+     * 12시간 방송의 차트를 창 수만큼 처음부터 읽었다. 굳지 않은 답은 캐시하지 않고 그대로 읽는다(그 안은 수집기가 아직 쓰고 있을
+     * 수 있다). 읽기 실패는 던져 캐시에 남기지 않는다: null이 굳으면 다음에도 구멍 난 차트다
      */
-    const settledPages = new Map<string, ChartPage>();
+    const readSettled = async <T>(
+      key: readonly unknown[],
+      path: string,
+      settled: boolean,
+    ): Promise<T | null> => {
+      if (!settled) return getJsonOrNull<T>(path);
+      try {
+        return await queryClient.fetchQuery({
+          queryKey: key,
+          queryFn: async () => {
+            const value = await getJsonOrNull<T>(path);
+            if (value === null) throw new Error('read failed');
+            return value;
+          },
+          staleTime: Infinity,
+          gcTime: ENDED_CACHE_GC_MS,
+          retry: false,
+        });
+      } catch {
+        return null;
+      }
+    };
     /** 지금 보이는 그래프를 라이브 때 읽었나. 끝난 방송으로 바뀌면 그 그래프는 끝 몇 초가 빠졌을 수 있어 버린다 */
     let chartReadLive = false;
+    const chartPath = (a: number, b: number, bucket: number) =>
+      `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${new URLSearchParams({
+        from: new Date(a).toISOString(),
+        to: new Date(b).toISOString(),
+        bucket: String(bucket),
+      })}`;
     const chartPage = (a: number, b: number, bucket: number) =>
-      getJsonOrNull<ChartPage>(
-        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${new URLSearchParams({
-          from: new Date(a).toISOString(),
-          to: new Date(b).toISOString(),
-          bucket: String(bucket),
-        })}`,
-      );
+      getJsonOrNull<ChartPage>(chartPath(a, b, bucket));
     const loadChart = async () => {
       try {
         if (chartPausedRef.current) return;
@@ -433,19 +489,18 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
             publishLiveData({ chart: null });
           }
           const windows = chartWindows(start, end);
-          const keys = new Set(windows.map(([a, b]) => `${a}|${b}|${bucket}`));
-          // 지금 창에 없는 기억은 버린다: 6시간째에 칸이 30→60초로 바뀐 옛 열쇠, 12시간 꼬리에서 밀려난 창. 남겨 두면 탭을 닫을
-          // 때까지 쌓인다(PR #316 리뷰). 칸이 바뀐 순간 한 번은 창을 전부 다시 읽는다
-          for (const key of settledPages.keys()) if (!keys.has(key)) settledPages.delete(key);
+          // 옛 열쇠(6시간째에 칸이 30→60초로 바뀐 것, 12시간 꼬리에서 밀려난 창)는 따로 치우지 않는다: 캐시가 ENDED_CACHE_GC_MS 뒤
+          // 스스로 버린다(PR #316 리뷰의 「탭을 닫을 때까지 쌓인다」는 효과 안 표를 두던 때의 걱정이다)
           const pages = await Promise.all(
-            windows.map(async ([a, b]) => {
-              const key = `${a}|${b}|${bucket}`;
-              const kept = settledPages.get(key);
-              if (kept) return kept;
-              const page = await chartPage(a, b, bucket);
-              if (page && liveWhole && askedAt - b >= ENDED_SETTLE_MS) settledPages.set(key, page);
-              return page;
-            }),
+            windows.map(([a, b]) =>
+              // 끝난 방송은 끝난 지 ENDED_SETTLE_MS가 지났으면 모든 창이 굳었고, 방송 중은 창이 끝난 지 그만큼 지난 것만 굳었다.
+              // 끝 시각은 열쇠에 넣는다: 방송 중 읽은 창(끝 시각 null)은 끝난 방송의 창과 섞이지 않는다
+              readSettled<ChartPage>(
+                ['chat-chart-page', streamId, ended ? rg.endedAt : null, a, b, bucket],
+                chartPath(a, b, bucket),
+                ended ? askedAt - rg.endedAt! >= ENDED_SETTLE_MS : askedAt - b >= ENDED_SETTLE_MS,
+              ),
+            ),
           );
           if (!stillCurrent(rg)) return;
           const first = pages[0];
@@ -513,8 +568,14 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
         sinceMs === null
           ? ''
           : `?${new URLSearchParams({ since: new Date(sinceMs).toISOString() })}`;
-      const page = await getJsonOrNull<BroadcastInfoResponse>(
-        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`,
+      // 끝난 방송의 굳은 답(끝난 지 ENDED_SETTLE_MS 뒤 읽은 것)은 캐시에서 쓴다. 라이브 · 굳기 전은 그대로 읽는다
+      const infoPath = `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`;
+      const infoSettled =
+        rg.status === 'ended' && sinceMs !== null && settledKey(rg, askedAt) !== null;
+      const page = await readSettled<BroadcastInfoResponse>(
+        ['broadcast-info-page', streamId, rg.endedAt, sinceMs],
+        infoPath,
+        infoSettled,
       );
       if (page && stillCurrent(rg)) {
         let series = page.series;
@@ -550,6 +611,8 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
           r = await apiFetch(`/api/clip/broadcasts/${encodeURIComponent(streamId)}/events`, {
             headers: { Accept: 'text/event-stream' },
             signal: ctrl.signal,
+            // 통로는 첫 이벤트까지 헤더가 늦을 수 있고 끊기면 어차피 다시 붙는다
+            timeoutMs: null,
           });
         } catch (e) {
           // 503은 용량 초과라 길게 쉰다 — 폴링이 카드를 메운다. 404는 방송 편지가 아직 안 온 것
@@ -659,44 +722,66 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     void loadInfo();
     void sseLoop();
     // 끝난 방송이면 주기 읽기만 1분에 한 번이다
-    const t1 = setInterval(() => {
-      if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
-      void loadList();
-    }, 3000);
-    const t2 = setInterval(loadChart, 10_000);
-    const t3 = setInterval(loadInfo, 10_000);
+    const stopPolling = [
+      setVisibleInterval(() => {
+        if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
+        void loadList();
+      }, 3000),
+      setVisibleInterval(() => void loadChart(), 10_000),
+      setVisibleInterval(() => void loadInfo(), 10_000),
+    ];
     return () => {
       stopped = true;
       ctrl.abort();
-      clearInterval(t1);
-      clearInterval(t2);
-      clearInterval(t3);
+      stopPolling.forEach((stop) => stop());
       if (reloadRangeRef.current === reloadRange) reloadRangeRef.current = null;
     };
-  }, [streamId, pastRoute]);
+  }, [streamId, pastRoute, queryClient]);
 
+  // 카드 시각은 값이 같으면 다시 싣지 않는다: 새 배열은 늘 다른 값이라 저장소가 구독자를 깨웠다. 방송이 바뀌면 위 효과가 저장소를 비우므로
+  // 기억도 비운다(앞 방송과 같은 시각의 카드가 와도 싣는다)
+  const lastCardTimes = useRef<number[] | null>(null);
   useEffect(() => {
-    publishLiveData({
-      cardTimes: Object.values(cards)
-        .filter((c) => !c.hidden)
-        .map((c) => cardAt(c, base)),
-    });
+    lastCardTimes.current = null;
+  }, [streamId]);
+  useEffect(() => {
+    const times = Object.values(cards)
+      .filter((c) => !c.hidden)
+      .map((c) => cardAt(c, base));
+    const last = lastCardTimes.current;
+    if (last !== null && last.length === times.length && last.every((t, i) => t === times[i]))
+      return;
+    lastCardTimes.current = times;
+    publishLiveData({ cardTimes: times });
   }, [cards, base]);
 
+  // 「n분 전」 때문에 매초 다시 세우지만 내용이 같은 카드는 앞 객체를 그대로 쓴다: 매초 새 배열이면 카드 패널(memo)이 무력해진다
+  const shownHighlights = useRef<LiveHighlight[]>([]);
+  const shownHiddenHighlights = useRef<LiveHighlight[]>([]);
   const highlights = useMemo(() => {
     // 방송 시각이 늦은 것부터, 같으면 번호가 큰 것부터: 둘 다 저장 뒤 안 바뀐다. 순번(eventSeq)은 행이 바뀔 때마다 올라
     // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에서 「방금」 강조를 받았다(PR #326 codex)
     const list = Object.values(cards)
       .filter((c) => !c.hidden)
       .sort(byLatest);
-    return list.map((c, i) => toHighlight(c, i, now, base));
+    shownHighlights.current = reuseHighlights(
+      shownHighlights.current,
+      list.map((c, i) => toHighlight(c, i, now, base)),
+      now,
+    );
+    return shownHighlights.current;
   }, [cards, now, base]);
   const hiddenHighlights = useMemo(() => {
     const list = Object.values(cards)
       .filter((c) => c.hidden)
       .sort(byLatest);
     // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 가린 카드에는 주지 않는다
-    return list.map((c) => toHighlight(c, -1, now, base));
+    shownHiddenHighlights.current = reuseHighlights(
+      shownHiddenHighlights.current,
+      list.map((c) => toHighlight(c, -1, now, base)),
+      now,
+    );
+    return shownHiddenHighlights.current;
   }, [cards, now, base]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
@@ -772,14 +857,21 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     ],
   );
 
-  const mergeCard = useCallback((card: Snapshot) => {
-    if (!card || card.streamId !== streamIdRef.current) return;
-    setCards((prev) =>
-      isStale(prev[card.id], card)
-        ? prev
-        : { ...prev, [card.id]: keepKnownThumbnail(prev[card.id], card) },
-    );
-  }, []);
+  const mergeCard = useCallback(
+    (card: Snapshot) => {
+      if (!card) return;
+      // 카드가 늘거나 가려졌다: 홈 · 지난 방송 목록이 기억한 그 방송의 카드 수를 버린다
+      forgetCardCount(queryClient, card.streamId);
+      if (card.streamId !== streamIdRef.current) return;
+      setCards((prev) => {
+        if (isStale(prev[card.id], card)) return prev;
+        const known = keepKnownThumbnail(prev[card.id], card);
+        // 내용이 같으면 앞 객체를 그대로 둔다(merge와 같은 이유)
+        return sameSnapshot(prev[card.id], known) ? prev : { ...prev, [card.id]: known };
+      });
+    },
+    [queryClient],
+  );
 
   return {
     stream,

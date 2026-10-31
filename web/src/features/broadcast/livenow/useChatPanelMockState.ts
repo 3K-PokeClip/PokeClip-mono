@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { apiFetch } from '@/api/client';
+import { setVisibleInterval } from '@/lib/visibleInterval';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import {
   CHAT_PAGE_MAX,
@@ -142,12 +143,30 @@ const REPLAY_NOTE: Record<ReplayStatus, string | null> = {
  */
 const CHAT_LEAD_MS = 3900;
 
+/**
+ * 줄의 시각(epoch ms). 줄 객체마다 한 번만 읽는다: 정렬 비교마다 문자열을 다시 읽으면 줄 300개 정렬이 비교 수천 번의 Date.parse였다.
+ * 줄 객체는 받은 뒤 바뀌지 않으므로(새로 만들어 넣는다) 객체를 열쇠로 둔 약한 표가 안전하다
+ */
+const timeCache = new WeakMap<WireItem, number>();
+function timeOf(it: WireItem): number {
+  let t = timeCache.get(it);
+  if (t === undefined) {
+    t = Date.parse(it.time);
+    timeCache.set(it, t);
+  }
+  return t;
+}
+
+/**
+ * 실시간 중계를 이 간격으로 모아 한 번에 화면에 싣는다. 조각이 올 때마다 싣던 때는 한 방송의 채팅이 초당 수십 줄이면 그만큼 목록
+ * 정렬과 다시 그리기가 돌았다. 구멍 감지(lastSeq)는 이벤트마다 그대로 돈다
+ */
+const RELAY_FLUSH_MS = 150;
+
 function trim(map: Record<string, WireItem>): Record<string, WireItem> {
   const keys = Object.keys(map);
   if (keys.length <= CHAT_KEEP) return map;
-  const sorted = keys.sort(
-    (a, b) => Date.parse((map[a] as WireItem).time) - Date.parse((map[b] as WireItem).time),
-  );
+  const sorted = keys.sort((a, b) => timeOf(map[a] as WireItem) - timeOf(map[b] as WireItem));
   const next: Record<string, WireItem> = {};
   for (const k of sorted.slice(-CHAT_KEEP)) next[k] = map[k] as WireItem;
   return next;
@@ -209,6 +228,38 @@ function toPanel(it: WireItem): ChatPanelMessage {
     colorIndex: colorOf(it.senderChannelId),
     platform: it.platform ?? null,
   };
+}
+
+/** 줄 객체 재사용 표의 한 칸: 만든 원본 줄(src)과 그 결과. 원본 줄 객체가 그대로일 때만 결과를 다시 쓴다 */
+interface PanelEntry {
+  src: WireItem;
+  panel: ChatPanelMessage;
+}
+
+/** 열쇠(줄 번호)의 줄 객체. 앞 표(cache)에 같은 원본 줄의 결과가 있으면 그것을, 아니면 새로 만든다. 쓴 칸은 kept에 담는다 */
+function panelOf(
+  cache: Map<number, PanelEntry>,
+  kept: Map<number, PanelEntry>,
+  id: number,
+  src: WireItem,
+): ChatPanelMessage {
+  const hit = cache.get(id);
+  const entry: PanelEntry =
+    hit !== undefined && hit.src === src ? hit : { src, panel: { ...toPanel(src), id } };
+  kept.set(id, entry);
+  return entry.panel;
+}
+
+/**
+ * 채팅이 고른 시점을 따라가나(지난 방송이고 그 시점을 절대 시각으로 바꿀 기준점이 있다). 화면(LiveScreen)도 같은 값을 쓴다:
+ * 훅 밖에서 따로 세면 둘이 갈린다
+ */
+export function chatFollowsPlayhead(
+  status: string,
+  endedAt: number | null,
+  timeBase: number | null,
+): boolean {
+  return status === 'ended' && endedAt !== null && timeBase !== null;
 }
 
 /**
@@ -347,7 +398,28 @@ export function useChatPanelMockState(
   useEffect(() => {
     if (!enabled || !streamId || ended || live.status === 'offline') return;
     lastSeq.current = null;
-    return subscribeRelay((ev: RelayEvent) => {
+    // 받은 줄은 버퍼에 모아 RELAY_FLUSH_MS에 한 번만 싣는다. 이 판이 끝나면(방송 바뀜·접힘·언마운트) 버퍼와 타이머를 비운다:
+    // 남기면 다음 판(줄을 비우고 처음부터 읽는다)에 옛 방송의 줄이 늦게 섞인다
+    let buffer: WireItem[] = [];
+    let flushTimer: number | null = null;
+    const flush = () => {
+      flushTimer = null;
+      const batch = buffer;
+      buffer = [];
+      if (batch.length === 0) return;
+      setRaw((prev) => {
+        const next = { ...prev };
+        let added = false;
+        for (const item of batch) {
+          const k = chatFingerprint(item);
+          if (next[k]) continue;
+          next[k] = { ...item, id: nextId.current++ };
+          added = true;
+        }
+        return added ? trim(next) : prev;
+      });
+    };
+    const unsubscribe = subscribeRelay((ev: RelayEvent) => {
       const item: WireItem = {
         kind: ev.kind,
         id: 0,
@@ -359,12 +431,8 @@ export function useChatPanelMockState(
         donationType: ev.donationType,
         platform: ev.platform,
       };
-      setRaw((prev) => {
-        const k = chatFingerprint(item);
-        if (prev[k]) return prev;
-        const withId = { ...item, id: nextId.current++ };
-        return trim({ ...prev, [k]: withId });
-      });
+      buffer.push(item);
+      if (flushTimer === null) flushTimer = window.setTimeout(flush, RELAY_FLUSH_MS);
       const prevSeq = lastSeq.current;
       const gap = prevSeq !== null && (ev.seqEpoch !== prevSeq.epoch || ev.seq > prevSeq.seq + 1);
       if (!prevSeq || ev.seqEpoch !== prevSeq.epoch || ev.seq > prevSeq.seq)
@@ -377,6 +445,12 @@ export function useChatPanelMockState(
         }, 2000);
       }
     });
+    return () => {
+      unsubscribe();
+      if (flushTimer !== null) window.clearTimeout(flushTimer);
+      flushTimer = null;
+      buffer = [];
+    };
   }, [enabled, streamId, ended, live.status]);
 
   useEffect(() => {
@@ -438,10 +512,10 @@ export function useChatPanelMockState(
     };
     pollRef.current = poll;
     void poll();
-    const t = window.setInterval(poll, POLL_MS);
+    const stopPolling = setVisibleInterval(() => void poll(), POLL_MS);
     return () => {
       stopped = true;
-      window.clearInterval(t);
+      stopPolling();
       // 「첫 응답 받음」은 이 폴링 판의 것이다. 다음 판은 줄을 비우고(setRaw({})) 처음부터 다시 묻는데, 방송 번호만 남겨 두면
       // 같은 방송에서 판이 다시 설 때(창 접었다 펴기 · 연동 잠금 해제 · 확인 중→라이브) 새 응답 전에 「아직 채팅이 없어요」가
       // 섰고, 그 요청이 실패하면 내내 그대로였다(PR #459 리뷰 1차)
@@ -450,9 +524,14 @@ export function useChatPanelMockState(
   }, [enabled, streamId, ended, live.status]);
 
   const items = useMemo(
-    () => Object.values(raw).sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id - b.id),
+    () => Object.values(raw).sort((a, b) => timeOf(a) - timeOf(b) || a.id - b.id),
     [raw],
   );
+  // 줄 객체 재사용: 바뀌지 않은 줄은 앞 그리기의 객체를 그대로 돌려줘 줄 컴포넌트(memo)가 다시 그리지 않는다. 라이브는 줄 번호(로컬
+  // 번호)가, 지난 방송은 로더의 일련번호가 열쇠다. 열쇠가 같아도 원본 줄이 다르면(로더가 처음부터 다시 읽음) 새로 만든다
+  const livePanels = useRef(new Map<number, PanelEntry>());
+  const replayPanels = useRef(new Map<number, PanelEntry>());
+  const noteLine = useRef<ChatPanelMessage | null>(null);
   const replay = useMemo(
     () =>
       replayCursor === null || replayUpper === null || readFloor === null
@@ -466,14 +545,26 @@ export function useChatPanelMockState(
   const replayWaiting = ended && replay === null;
   const statusNote = replay === null ? (ended ? REPLAY_LOADING : null) : REPLAY_NOTE[replay.status];
   const messages = useMemo<ChatPanelMessage[]>(() => {
-    if (replay === null && !ended) return items.map(toPanel);
+    if (replay === null && !ended) {
+      const kept = new Map<number, PanelEntry>();
+      const panels = items.map((it) => panelOf(livePanels.current, kept, it.id, it));
+      livePanels.current = kept;
+      return panels;
+    }
     // 줄 번호는 로더가 매긴 일련번호다: 채팅과 후원은 표가 달라 id가 겹친다
-    const lines: ChatPanelMessage[] = (replay?.lines ?? []).map((line) => ({
-      ...toPanel(line.item),
-      id: line.seq,
-    }));
+    const kept = new Map<number, PanelEntry>();
+    const lines: ChatPanelMessage[] = (replay?.lines ?? []).map((line) =>
+      panelOf(replayPanels.current, kept, line.seq, line.item),
+    );
+    replayPanels.current = kept;
     if (statusNote === null) return lines;
-    const note: ChatPanelMessage = { id: -1, kind: 'system', text: statusNote };
+    // 안내 줄도 말이 같으면 같은 객체다
+    const prevNote = noteLine.current;
+    const note: ChatPanelMessage =
+      prevNote !== null && prevNote.kind === 'system' && prevNote.text === statusNote
+        ? prevNote
+        : { id: -1, kind: 'system', text: statusNote };
+    noteLine.current = note;
     // 그 시각까지 다 읽지 못했으면 맨 아래(그 시각 쪽)에 쓴다: 빈 창을 채팅이 없는 것처럼 보이지 않는다. 그 앞만 모자라면 맨 위에
     // 쓴다: 맨 아래에 쓰면 카드 뒤 ←마다 영상 시각 쪽에 「불러오고 있어요」가 끼었다 빠졌다(리뷰 3라운드)
     const earlier = replay?.status === 'earlierLoading' || replay?.status === 'earlierFailed';
@@ -496,7 +587,7 @@ export function useChatPanelMockState(
         ? null
         : replay.lines.filter((line) => line.at >= replayCursor - 60_000).length;
     const cut = Date.now() - 60_000 + CHAT_LEAD_MS;
-    return items.filter((it) => Date.parse(it.time) >= cut).length;
+    return items.filter((it) => timeOf(it) >= cut).length;
   }, [items, ended, live.chart, replay, replayCursor]);
 
   const surges = useMemo<ChatSurge[]>(() => {
@@ -510,7 +601,7 @@ export function useChatPanelMockState(
             .map((line) => line.item)
         : ended
           ? []
-          : items.filter((it) => Date.parse(it.time) >= Date.now() - 2 * 60_000 + CHAT_LEAD_MS);
+          : items.filter((it) => timeOf(it) >= Date.now() - 2 * 60_000 + CHAT_LEAD_MS);
     const freq = new Map<string, number>();
     for (const it of recent) {
       if (it.kind !== 'chat') continue;
@@ -552,7 +643,8 @@ export function useChatPanelMockState(
 
   // 채팅이 고른 시점을 따라가려면 그 시점을 절대 시각으로 바꿀 기준점이 있어야 한다(시작 시각을 모르는 방송은 없을 수 있다).
   // 지난 방송만이다: 라이브는 고른 시점이 아니라 재생기가 알린 자리(되감은 영상의 시각)를 따른다
-  const followsPlayhead = live.status === 'ended' && replayUpper !== null && vodBase !== null;
+  const followsPlayhead =
+    replayUpper !== null && chatFollowsPlayhead(live.status, live.endedAt, vodBase);
   return {
     surges,
     messages,

@@ -53,7 +53,13 @@ import {
   type PipBorder,
   type PipBox,
 } from './editorLayout';
-import { playbackErrorMessage, type EditorPlayback } from './editorPlayback';
+import { playbackErrorMessage } from './editorPlayback';
+import {
+  createPlaybackClock,
+  usePlaybackValue,
+  type ClockedPlayback,
+  type PlaybackClock,
+} from './playbackClock';
 import type { ClipStatusView } from './studio/clipProgress';
 import type { FilmstripSource } from './studio/VideoFilmstrip';
 import type { TrackLevels } from './trackAudio/trackLevels';
@@ -92,14 +98,17 @@ const NOT_AVAILABLE = '준비 중';
 function noop() {}
 
 /** 실제 모드인데 재생 어댑터가 없을 때의 자리 — 아무것도 흐르지 않는다(가짜 시계를 쓰지 않는다) */
-const NO_PLAYBACK: EditorPlayback = {
+const NO_PLAYBACK: ClockedPlayback = {
   playing: false,
   currentSeconds: 0,
+  clock: createPlaybackClock(0),
   durationSeconds: 0,
   error: null,
   togglePlay: noop,
   seekTo: noop,
   seekBy: noop,
+  scrubTo: noop,
+  endScrub: noop,
   setRate: noop,
   setBounds: noop,
 };
@@ -380,6 +389,11 @@ export interface EditorActions {
   saveDraft?: (recipe: EditorRecipe) => void;
   /** thumbnailSeconds: 편집기에서 고른 썸네일 장면(소스 축 초). 안 골랐으면 null(POK-389) */
   requestUpload?: (recipe: EditorRecipe, thumbnailSeconds: number | null) => void;
+  /**
+   * 창 코드를 따로 받을 때 그 사이를 기다리는 문: 준비되면 `open`을 부른다. 허브는 `open` 안에서 레시피를 읽는다 — 누른 순간에
+   * 읽으면 받는 사이 고친 것이 창에 안 실려 화면과 다른 영상이 나온다. 없으면 바로 연다
+   */
+  whenUploadReady?: (open: () => void) => void;
 }
 
 export interface ClipEditorOptions {
@@ -439,7 +453,7 @@ export interface ClipEditorOptions {
    * 주인이 바뀌어 위치가 튄다. 실재생을 이을 때 화면 쪽에서 어댑터가 준비된 뒤에만 이 훅을 마운트하는
    * 식으로(예: 컴포넌트를 갈라서) 보장해야 한다 — 지금 StudioScreen 은 옵션을 그대로 넘길 뿐 그 분기가 없다.
    */
-  playback?: EditorPlayback;
+  playback?: ClockedPlayback;
   /**
    * 시작 비율. 시안 1d-a는 상하분할을 보여주므로 기본값이 그것이다 —
    * 단일 화면의 크롭 동작은 이 문으로 들어가 확인한다.
@@ -480,15 +494,25 @@ export interface ClipEditorMockState {
   // 트랜스포트
   playing: boolean;
   togglePlay: () => void;
+  /**
+   * 재생 위치 저장소. 재생선 · 시간 표기처럼 프레임마다 달라져야 하는 자리는 이것을 구독한다(playbackClock.ts).
+   * 허브는 재생 중에 다시 돌지 않는다
+   */
+  clock: PlaybackClock;
+  /** 멈춤 · 시크 · 구간 경계에서만 바뀌는 재생 위치. 재생 중에는 낡았다: 그리거나 판정하려면 clock을 읽는다 */
   playheadSeconds: number;
   /** 편집기에서 고른 썸네일 장면(소스 축 초): 쇼츠 구간 밖으로 밀려나면 null(POK-389) */
   thumbnailSeconds: number | null;
   /** 지금 재생 위치가 쇼츠 구간 안이라 썸네일로 고를 수 있는가 */
   canPickThumbnail: boolean;
   pickThumbnail: () => void;
+  /** playheadSeconds의 표기. 같은 이유로 재생 중에는 낡았다 */
   playheadLabel: string;
   seekBy: (deltaSeconds: number) => void;
   seekTo: (seconds: number) => void;
+  /** 끄는 동안 재생 위치를 옮긴다: 허브를 다시 돌리지 않는다. 다 끌면 endScrub을 부른다 */
+  scrubTo: (seconds: number) => void;
+  endScrub: () => void;
   speed: number;
   speedOptions: readonly number[];
   setSpeed: (speed: number) => void;
@@ -691,7 +715,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     initialSeconds: MOCK_SOURCE.playheadSeconds,
   });
   const playback = options.playback ?? (real ? NO_PLAYBACK : simulation);
-  const { playing, currentSeconds: playheadSeconds } = playback;
+  const { playing, currentSeconds: playheadSeconds, clock } = playback;
   const [speed, setSpeed] = useState<number>(1);
   const [loop, setLoop] = useState(true);
 
@@ -856,11 +880,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     [commit, recipe.range, source.minSeconds, source.durationSeconds],
   );
 
-  // 플레이헤드를 ref로 읽는다 — 의존성에 걸면 재생 중 100ms마다 콜백 신원이 바뀌어
-  // 전역 키 리스너가 해제·재등록을 반복한다.
-  const playheadRef = useRef(playheadSeconds);
-  playheadRef.current = playheadSeconds;
-
   // 썸네일 장면은 업로드 정보라 편집 기록(실행취소)에 넣지 않는다. 구간이 줄어 밖으로 나가면 고른 것이 없는 셈이다
   const [pickedThumbnail, setPickedThumbnail] = useState<number | null>(null);
   const thumbnailSeconds =
@@ -871,12 +890,19 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       : null;
   const thumbnailRef = useRef(thumbnailSeconds);
   thumbnailRef.current = thumbnailSeconds;
-  const canPickThumbnail =
-    playheadSeconds >= recipe.range.startSeconds && playheadSeconds < recipe.range.endSeconds;
-  const pickThumbnail = useCallback(() => setPickedThumbnail(playheadRef.current), []);
+  // 구간 판정은 재생 위치를 그대로 봐야 한다: 허브의 값은 재생 중에 낡아 구간 밖에서도 고를 수 있게 된다. 구간을 넘나들 때만 깨어난다
+  const canPickThumbnail = usePlaybackValue(
+    clock,
+    (seconds) => seconds >= recipe.range.startSeconds && seconds < recipe.range.endSeconds,
+  );
+  // 재생 위치는 누른 순간에 읽는다: 콜백이 위치에 묶이면 전역 키 리스너가 해제·재등록을 반복한다
+  const pickThumbnail = useCallback(() => setPickedThumbnail(clock.getSeconds()), [clock]);
 
-  const markIn = useCallback(() => setRangeEdge('start', playheadRef.current), [setRangeEdge]);
-  const markOut = useCallback(() => setRangeEdge('end', playheadRef.current), [setRangeEdge]);
+  const markIn = useCallback(
+    () => setRangeEdge('start', clock.getSeconds()),
+    [clock, setRangeEdge],
+  );
+  const markOut = useCallback(() => setRangeEdge('end', clock.getSeconds()), [clock, setRangeEdge]);
 
   const generateSubtitles = useCallback(() => {
     // 실제 모드는 만들어 줄 백엔드(AI 자막, 2번 몫)가 아직 없다 — 상태를 바꾸지 않고 안내만 한다
@@ -930,21 +956,29 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
 
   // 바로 앞에 그린 창: 키운 상태에서 재생 위치가 그 안에 있으면 창을 그대로 둔다(zoomedView)
   const previousViewRef = useRef<TimelineView | null>(null);
-  // 100% 이하에서는 재생 위치가 창을 안 바꾼다: 그때는 재생할 때마다 다시 셀 필요가 없다
-  const followedPlayhead = zoom > 100 ? playheadSeconds : null;
-  const liveView = useMemo(
-    () =>
-      zoomedView({
-        range: recipe.range,
-        playheadSeconds: followedPlayhead ?? recipe.range.startSeconds,
-        zoom,
-        // 잡을 수 없는 왼쪽(하이라이트 범위 밖)은 눈금자에도 안 보인다
-        minSeconds: source.minSeconds ?? 0,
-        maxSeconds: source.durationSeconds,
-        previous: previousViewRef.current,
-      }),
-    [recipe.range, followedPlayhead, zoom, source.durationSeconds, source.minSeconds],
-  );
+  // 값이 같으면 앞서 준 창 객체를 그대로 돌려준다: 창을 재생 위치로 셈해도 창이 실제로 넘어갈 때만 허브가 다시 돈다
+  const stableViewRef = useRef<TimelineView | null>(null);
+  const liveView = usePlaybackValue(clock, (seconds) => {
+    const next = zoomedView({
+      range: recipe.range,
+      // 100% 이하에서는 재생 위치가 창을 안 바꾼다
+      playheadSeconds: zoom > 100 ? seconds : recipe.range.startSeconds,
+      zoom,
+      // 잡을 수 없는 왼쪽(하이라이트 범위 밖)은 눈금자에도 안 보인다
+      minSeconds: source.minSeconds ?? 0,
+      maxSeconds: source.durationSeconds,
+      previous: previousViewRef.current,
+    });
+    const stable = stableViewRef.current;
+    if (
+      stable !== null &&
+      stable.startSeconds === next.startSeconds &&
+      stable.endSeconds === next.endSeconds
+    )
+      return stable;
+    stableViewRef.current = next;
+    return next;
+  });
   // 커밋된 창만 다음 계산에 쓴다: 그리는 중에 바꾸면 버려진 그리기(개발 모드 두 번 그리기 등)의 창이 남는다
   useLayoutEffect(() => {
     previousViewRef.current = liveView;
@@ -989,21 +1023,29 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       else toast({ tone: 'success', title: '편집본을 저장했어요' });
     }, [actions, toast]),
     requestUpload: useCallback(() => {
-      if (actions?.requestUpload) actions.requestUpload(presentRef.current, thumbnailRef.current);
-      else
+      const request = actions?.requestUpload;
+      if (request === undefined) {
         toast({
           tone: 'info',
           title: '업로드는 아직 준비 중이에요',
           description: '지금은 화면만 있는 목업이에요.',
         });
+        return;
+      }
+      const open = () => request(presentRef.current, thumbnailRef.current);
+      if (actions?.whenUploadReady) actions.whenUploadReady(open);
+      else open();
     }, [actions, toast]),
 
     playing,
     togglePlay: playback.togglePlay,
+    clock,
     playheadSeconds,
     playheadLabel: formatTimecodeTenths(playheadSeconds),
     seekBy: playback.seekBy,
     seekTo: playback.seekTo,
+    scrubTo: playback.scrubTo,
+    endScrub: playback.endScrub,
     speed,
     speedOptions: SPEED_OPTIONS,
     setSpeed,

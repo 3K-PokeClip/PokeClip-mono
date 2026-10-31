@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -11,7 +12,9 @@ import {
   type Ref,
 } from 'react';
 import clsx from 'clsx';
+import dynamic from 'next/dynamic';
 import styles from './LiveScreen.module.css';
+import statsStyles from './LiveStatsPanel.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerMark } from '@/features/player/PlayerControls';
 import { useMediaSource } from '@/features/player/mediaSource';
@@ -22,7 +25,7 @@ import { LinkLockAnnouncer, LockedChatPanel, LockedStatsPanel } from './LinkLock
 import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { NewBroadcastBand } from './NewBroadcastBand';
 import { LiveScreenSkeleton } from './LiveScreenSkeleton';
-import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
+import type { TimelineCard } from './LiveStatsPanel';
 import { MARK_HOTKEY } from './markKey';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
@@ -34,25 +37,51 @@ import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
+import { holdEditorMedia } from '@/features/clips/editor/editorMedia';
 import { nextLiveFollow } from './chatReplay';
 import {
   missingWord,
   publishLiveData,
   resetLiveData,
   timeBaseOf,
-  useLiveData,
+  useLiveField,
 } from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
-import { useChatPanelMockState } from './useChatPanelMockState';
+import { chatFollowsPlayhead, useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection, type Reselect } from './useLiveStreamSelection';
 import { useLiveSession } from './useLiveSession';
-import { LINK_LOCK_WORD, useLinkLock } from './linkLock';
+import { LINK_LOCK_WORD, useLinkLock, type LinkLock } from './linkLock';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
+
+/** 카드 눈금에 넘기는 라이브 경과의 단위(초) */
+const CARD_UPTIME_STEP_S = 15;
+
+// 코드 분할: 스크롤로 내려와 만나는 통계 패널(그래프 계산 · 그리기 코드가 크다, 967줄)은 처음 번들에서 뺀다. 채팅 패널은 첫 화면에
+// 서므로 나누지 않는다. 통계 패널은 화면 맨 아래라 불러오는 동안의 자리(아래 StatsPanelFallback)가 위 요소의 위치를 흔들지 않는다.
+// 꺼짐 화면(LiveOfflineScreen, 64줄)은 나누지 않는다: 줄 수가 작아 얻는 것이 없고, 방송이 없을 때의 기본 화면이라 나누면 스켈레톤이
+// 먼저 서고 다른 틀로 바뀌는 깜빡임이 늘 생긴다
+const LiveStatsPanel = dynamic(() => import('./LiveStatsPanel').then((m) => m.LiveStatsPanel), {
+  loading: () => <StatsPanelFallback />,
+});
+
+/**
+ * 통계 패널을 불러오는 동안의 자리. 패널과 같은 틀(.panel)에 높이만 잡는다: 머리 · 요약 줄 · 그래프를 합친 값(약 380u)이라 실제
+ * 높이와 몇 u 어긋날 수 있으나 패널은 화면 맨 아래라 그 위의 요소는 움직이지 않는다
+ */
+function StatsPanelFallback() {
+  return (
+    <section
+      className={statsStyles.panel}
+      aria-hidden
+      style={{ minHeight: 'calc(380 * var(--pc-u))' }}
+    />
+  );
+}
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
@@ -114,7 +143,8 @@ function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
  */
 const PLAYBACK_ACCESS_CHECK_MS = 60_000;
 
-function LivePlayer({
+// memo: 대시보드는 경과 표기 때문에 매초 다시 그려진다. 받는 값이 그대로면(대시보드가 붙잡아 둔 mark · 콜백) 플레이어까지 내려가지 않는다
+const LivePlayer = memo(function LivePlayer({
   stream,
   viewersNote,
   infoPending,
@@ -193,7 +223,8 @@ function LivePlayer({
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
-  const { streamId: liveStreamId, originMs } = useLiveData();
+  const liveStreamId = useLiveField('streamId');
+  const originMs = useLiveField('originMs');
   // 라이브·녹화 주소는 영상 경로의 키로 만든다(POK-233) — 방송 번호가 회차 번호면 그 이름의 경로가 없다. 출입증·채팅은 방송 번호
   const mediaKey = ingestStreamId ?? liveStreamId;
   const src = useMediaSource(mediaKey);
@@ -222,6 +253,11 @@ function LivePlayer({
   });
   const request = live.recordedRequest;
   const playerStatus: BroadcastStatus = live.closedRecorded ? 'ended' : displayStatus;
+  // 재생기 훅이 이 값의 정체성을 의존성으로 본다: 매 그리기 새 객체면 그때마다 다른 값으로 읽는다
+  const simulationOptions = useMemo(
+    () => ({ initialUptimeSeconds: uptimeSeconds ?? 0 }),
+    [uptimeSeconds],
+  );
   useEffect(() => {
     setLookup({ kind: 'pending' });
     publishLiveData({ timeBaseMs: null });
@@ -384,7 +420,7 @@ function LivePlayer({
         onLivePosition={onLivePosition}
         onSeek={onSeek}
         embed
-        simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
+        simulationOptions={simulationOptions}
         controllerRef={controllerRef}
         chatPanelOpen={chatPanelOpen}
         onToggleChatPanel={onToggleChatPanel}
@@ -392,7 +428,7 @@ function LivePlayer({
       />
     </>
   );
-}
+});
 
 // 방송 상태로 먼저 가른다 — 오프라인에서는 대시보드 훅(F8 수동 마킹 리스너·채팅 타이머)이
 // 아예 돌지 않아야 하므로, 분기를 그 훅들보다 위인 컴포넌트 경계에서 한다.
@@ -408,6 +444,8 @@ export function LiveScreen() {
     resetLiveData();
     setStoreCleared(true);
   }, []);
+  // 카드가 미리 받은 영상 · 소리는 이 화면과 편집기가 서 있는 동안만 둔다
+  useEffect(() => holdEditorMedia(), []);
   return storeCleared ? <LiveScreenBody /> : <div />;
 }
 
@@ -415,7 +453,7 @@ function LiveScreenBody() {
   const { status } = useLiveStatusMockState();
   const selection = useLiveStreamSelection();
   // 대시보드의 훅들이 보는 방송 번호. 고른 번호는 효과에서 저장소에 오르므로(useLiveStreamSelection) 정한 직후 한 그리기는 비어 있다
-  const { streamId } = useLiveData();
+  const streamId = useLiveField('streamId');
   const offline = status === 'offline' || (selection.resolved && selection.streamId === '');
   if (offline) return <LiveOfflineScreen />;
   // 방송을 정하기 전, 그리고 정한 번호가 저장소에 오르기 전에는 대시보드를 세우지 않고 같은 모양의 스켈레톤을 둔다(POK-445). 빈
@@ -423,6 +461,48 @@ function LiveScreenBody() {
   // 못 읽으면 10초마다 다시 묻고(LIVE_RESELECT_MS) 답이 오면 선다. 한 번 선 뒤 방송이 바뀌면(A → B) 저장소가 비지 않으니 내리지 않는다
   if (!selection.resolved || streamId === '') return <LiveScreenSkeleton />;
   return <LiveDashboard reselect={selection} />;
+}
+
+/**
+ * 채팅 칸. 채팅 훅의 줄 상태(중계 조각마다 바뀐다)와 재생 위치 구독을 이 칸 안에 가둔다: 대시보드(영상 · 정보 바 · 카드 · 통계)는
+ * 채팅 줄이 늘어도 다시 그려지지 않는다. 훅은 칸이 서 있는 동안만 돈다(접으면 칸째 빠지므로 읽기도 멈춘다 — 전에는 enabled 거짓이었다).
+ * 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를
+ * 정직하게 비활성화한다). 잠근 채팅도 묻지 않는다
+ */
+function LiveChatColumn({
+  linkLock,
+  chatWarning,
+  ended,
+  awaitPlayhead,
+  mode,
+  followJump,
+  onCollapse,
+}: {
+  linkLock: LinkLock;
+  chatWarning: boolean;
+  ended: boolean;
+  awaitPlayhead: boolean;
+  mode: BroadcastStatus;
+  followJump: number;
+  onCollapse: () => void;
+}) {
+  const chat = useChatPanelMockState(!chatWarning && linkLock === null, ended, awaitPlayhead);
+  if (linkLock !== null) return <LockedChatPanel reason={linkLock} onCollapse={onCollapse} />;
+  return (
+    <ChatPanel
+      surges={chat.surges}
+      messages={chat.messages}
+      ratePerMinute={chat.ratePerMinute}
+      mode={mode}
+      replayClock={chat.replayClock}
+      replayWaiting={chat.replayWaiting}
+      statusNote={chat.statusNote}
+      followJump={followJump}
+      collectionWarning={chatWarning}
+      placeholder={chat.placeholder}
+      onCollapse={onCollapse}
+    />
+  );
 }
 
 function LiveDashboard({ reselect }: { reselect: Reselect }) {
@@ -437,10 +517,18 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning, mergeCard } =
     useLiveMockState(pastRoute, linkLock !== null);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
-  const liveData = useLiveData();
-  const { streamId, info } = liveData;
+  // 쓰는 칸만 듣는다: 저장소 전체를 들으면 재생 위치(playheadMs, 초당 몇 번)가 바뀔 때마다 이 대시보드가 통째로 다시 그려졌다.
+  // 기준점(timeBaseOf)이 읽는 세 칸(timeBaseMs · originMs · startedAt)도 따로 듣는다
+  const streamId = useLiveField('streamId');
+  const info = useLiveField('info');
+  const storeStatus = useLiveField('status');
+  const storeEndedAt = useLiveField('endedAt');
+  const relation = useLiveField('relation');
+  const timeBaseMs = useLiveField('timeBaseMs');
+  const originMs = useLiveField('originMs');
+  const startedAtMs = useLiveField('startedAt');
   /** 카드 시각의 0초(카드 목록과 같은 기준점, timeBaseOf). 라이브 카드를 그 실제 시각으로 옮길 때 쓴다(POK-326) */
-  const cardBase = timeBaseOf(liveData);
+  const cardBase = timeBaseOf({ timeBaseMs, originMs, startedAt: startedAtMs });
   const clock = useBroadcastClock(streamId);
   // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
   // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
@@ -474,13 +562,20 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     },
   });
   const markDisabled = markMode === 'unknown' || (markMode === 'past' && !pastMarkable);
-  const playerMark: PlayerMark = {
-    mode: ended ? 'past' : 'live',
-    disabled: markDisabled,
-    status: marking.pendingLabel ? `${marking.pendingLabel} 마킹됨 · 카드 생성 중` : marking.notice,
-    hotkey: MARK_HOTKEY,
-    onMark: marking.mark,
-  };
+  // 같은 값이면 같은 객체: 플레이어(memo)가 대시보드가 다시 그려질 때마다 새 mark를 받아 같이 다시 그려지지 않는다
+  const markStatus = marking.pendingLabel
+    ? `${marking.pendingLabel} 마킹됨 · 카드 생성 중`
+    : marking.notice;
+  const playerMark = useMemo<PlayerMark>(
+    () => ({
+      mode: ended ? 'past' : 'live',
+      disabled: markDisabled,
+      status: markStatus,
+      hotkey: MARK_HOTKEY,
+      onMark: marking.mark,
+    }),
+    [ended, markDisabled, markStatus, marking.mark],
+  );
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
@@ -524,13 +619,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     playheadFromRecording.current = false;
     publishLiveData({ playheadMs: null });
   }, [recordingLookup]);
-  // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
-  // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다). 잠근 채팅도 묻지 않는다
-  const chat = useChatPanelMockState(
-    chatPanelOpen && !chatWarning && linkLock === null,
-    ended,
-    awaitPlayhead,
-  );
+  // 채팅 훅(useChatPanelMockState)은 채팅 칸(LiveChatColumn)이 부른다: 훅의 줄 상태가 이 대시보드에 있으면 중계 조각이 올 때마다 영상 ·
+  // 카드 · 통계까지 통째로 다시 그려졌다
   const stats = useLiveStatsMockState(viewStatus);
 
   // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
@@ -560,10 +650,17 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
         ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
         : `${v.toLocaleString('ko-KR')}명 시청 중`;
 
-  // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다
+  // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다. 라이브는 경과가 매초 늘어 그대로 넘기면
+  // 카드 전부가 매초 다시 그려진다. 눈금은 1% 단위라 CARD_UPTIME_STEP_S로 올려 묶어도 보이는 차이가 없다
+  const cardUptime =
+    uptimeSeconds === null
+      ? 0
+      : ended
+        ? uptimeSeconds
+        : Math.ceil(uptimeSeconds / CARD_UPTIME_STEP_S) * CARD_UPTIME_STEP_S;
   const streamForCards = useMemo<LiveStream>(
-    () => ({ ...stream, uptimeSeconds: uptimeSeconds ?? 0 }),
-    [stream, uptimeSeconds],
+    () => ({ ...stream, uptimeSeconds: cardUptime }),
+    [stream, cardUptime],
   );
 
   // 필터 개수도 통계의 하이라이트 줄도 같은 카드 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
@@ -615,7 +712,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 오래전 카드로 튄다(리뷰 2·3라운드).
   // 명부 답 전(상태를 모름)에 고른 시점은 남긴다: 끝난 방송으로 밝혀지면 녹화가 그 시점부터 선다(리뷰 3라운드)
   const live = clock.status === 'live';
-  const followsPlayhead = chat.followsPlayhead;
+  // 채팅이 고른 시점을 따라가나: 채팅 훅(useChatPanelMockState)과 같은 함수로 센다
+  const followsPlayhead = chatFollowsPlayhead(storeStatus, storeEndedAt, cardBase);
   /**
    * @returns 'moved' 플레이어가 그 자리로 옮겼다 · 'outside' 라이브에서 되감을 수 있는 범위 밖이라 안 옮겼다 · 'none' 영상이 없다
    */
@@ -730,11 +828,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
           // 녹화가 없다고 확인된 방송은 플레이어처럼 없다고 말한다: 「아직 없어요」는 기다리면 나올 것처럼 읽혀 플레이어의 「찾지
           // 못했어요」와 한 화면에서 어긋났다(리뷰 6라운드)
           title: `${recordingMissing ? '녹화 영상이 없어요' : '영상은 아직 없어요'}${
-            chat.followsPlayhead ? ' · 채팅을 그 시점으로 옮겼어요' : ''
+            followsPlayhead ? ' · 채팅을 그 시점으로 옮겼어요' : ''
           }`,
         });
     },
-    [linkedCardId, seekTo, toast, chat.followsPlayhead, recordingMissing, live],
+    [linkedCardId, seekTo, toast, followsPlayhead, recordingMissing, live],
   );
   /** 하이라이트 카드 목록에서 누른 이동 */
   const handleCardSeek = useCallback(
@@ -752,7 +850,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       {/* 잠금이 걸리고 풀리는 것을 듣는 사람에게도 알린다 — 패널은 통째로 바뀌어 낭독되지 않는다 */}
       <LinkLockAnnouncer
         lock={linkLock}
-        liveOwner={liveData.status === 'live' && liveData.relation === 'OWNER'}
+        liveOwner={storeStatus === 'live' && relation === 'OWNER'}
       />
       <div className={clsx(styles.grid, !chatPanelOpen && styles.gridSolo)}>
         <div className={styles.mainCol}>
@@ -817,23 +915,15 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             접으면 칸째 빠진다(.gridSolo가 트랙도 걷는다). */}
         {chatPanelOpen ? (
           <div className={styles.chatCol}>
-            {linkLock !== null ? (
-              <LockedChatPanel reason={linkLock} onCollapse={toggleChatPanel} />
-            ) : (
-              <ChatPanel
-                surges={chat.surges}
-                messages={chat.messages}
-                ratePerMinute={chat.ratePerMinute}
-                mode={viewStatus}
-                replayClock={chat.replayClock}
-                replayWaiting={chat.replayWaiting}
-                statusNote={chat.statusNote}
-                followJump={chatJump}
-                collectionWarning={chatWarning}
-                placeholder={chat.placeholder}
-                onCollapse={toggleChatPanel}
-              />
-            )}
+            <LiveChatColumn
+              linkLock={linkLock}
+              chatWarning={chatWarning}
+              ended={ended}
+              awaitPlayhead={awaitPlayhead}
+              mode={viewStatus}
+              followJump={chatJump}
+              onCollapse={toggleChatPanel}
+            />
           </div>
         ) : null}
       </div>

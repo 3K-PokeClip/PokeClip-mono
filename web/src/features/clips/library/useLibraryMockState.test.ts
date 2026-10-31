@@ -192,7 +192,7 @@ describe('useLibraryMockState — 서버 줄', () => {
 
     status = 'uploaded';
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(10_100);
     });
     expect(result.current.clips[0]?.status).toBe('published');
     vi.useRealTimers();
@@ -236,7 +236,7 @@ describe('useLibraryMockState — 썸네일 주소 갱신 (POK-277)', () => {
     expect(result.current.clips[0]?.thumbnailUrl).toBe('http://s3/thumbnails/clip/3.jpg?sig=0');
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(60_100);
     });
     expect(result.current.clips[0]?.thumbnailUrl).toBe('http://s3/thumbnails/clip/3.jpg?sig=1');
     vi.useRealTimers();
@@ -324,6 +324,51 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     expect(result.current.clips[0]?.title).toBe('보스 막타');
     // 새 주문만 센다 — 제목은 싣지 않는다 (POK-357)
     expect(tracked('video_upload_requested')).toEqual([{ via: 'title' }]);
+  });
+
+  it('답을 얹으면 다시 읽는 주기도 10초로 바뀐다: 목록이 「올리는 중」을 알아야 결과를 따라간다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const spy = serve(() => jsonResponse(201, uploadReply));
+    const reads = () =>
+      spy.mock.calls.filter(([url]) => String(url).startsWith('/api/clip/library')).length;
+    const { result } = await mount();
+
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.sendingIds.has('12')).toBe(false));
+    const before = reads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_100);
+    });
+
+    expect(reads()).toBe(before + 1);
+    vi.useRealTimers();
+  });
+
+  it('답이 오기 전에 떠난 읽기는 끊겨서 「올리는 중」을 옛 줄로 덮지 못한다', async () => {
+    let held: AbortSignal | null | undefined = null;
+    let holding = false;
+    const spy = stubFetch((url, init) => {
+      if (init?.method === 'POST') {
+        holding = true;
+        void result.current.refresh();
+        return jsonResponse(201, uploadReply);
+      }
+      if (url.startsWith('/api/clip/library') && holding) {
+        held = init?.signal;
+        return new Promise<Response>(() => {});
+      }
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, { items: [libraryEntry], nextCursor: null })
+        : jsonResponse(200, { id: 9 });
+    });
+    const { result } = await mount();
+
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.sendingIds.has('12')).toBe(false));
+
+    expect(posts(spy)).toHaveLength(1);
+    expect((held as AbortSignal | null)?.aborted).toBe(true);
+    expect(result.current.clips[0]?.entry?.status).toBe('uploading');
   });
 
   it('답을 기다리는 동안 다시 눌러도 한 번만 보낸다', async () => {

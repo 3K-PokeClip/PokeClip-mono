@@ -1,7 +1,8 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withToastProvider } from '@/test/testProviders';
-import type { EditorPlayback, PlaybackBounds } from './editorPlayback';
+import type { PlaybackBounds } from './editorPlayback';
+import { createPlaybackClock, type ClockedPlayback } from './playbackClock';
 import { MAX_RANGE_SECONDS } from './timelineMath';
 import {
   useClipEditorMockState,
@@ -372,16 +373,19 @@ describe('useClipEditorMockState', () => {
 // --- 재생 어댑터 주입 ----------------------------------------------------------
 // 허브는 재생이 목업 시뮬레이션인지 실재생인지 모른다. 그 경계를 가짜 어댑터로 확인한다.
 
-function fakePlayback(overrides: Partial<EditorPlayback> = {}) {
+function fakePlayback(overrides: Partial<ClockedPlayback> = {}) {
   const calls = { bounds: [] as PlaybackBounds[], rates: [] as number[], seeks: [] as number[] };
-  const playback: EditorPlayback = {
+  const playback: ClockedPlayback = {
     playing: false,
     currentSeconds: 60,
+    clock: createPlaybackClock(overrides.currentSeconds ?? 60),
     durationSeconds: 600,
     error: null,
     togglePlay: vi.fn(),
     seekTo: vi.fn((seconds: number) => calls.seeks.push(seconds)),
     seekBy: vi.fn(),
+    scrubTo: vi.fn(),
+    endScrub: vi.fn(),
     setRate: (rate: number) => calls.rates.push(rate),
     setBounds: (bounds: PlaybackBounds) => calls.bounds.push(bounds),
     ...overrides,
@@ -454,6 +458,131 @@ describe('useClipEditorMockState — 재생 어댑터 주입', () => {
 
     expect(calls.bounds.length).toBeGreaterThan(before);
     expect(calls.bounds.at(-1)?.endSeconds).toBe(result.current.range.endSeconds);
+  });
+});
+
+// 재생 중 위치는 저장소에만 흐른다. 허브의 currentSeconds는 일부러 110초에 묶어 둔다: 재생 중에는 낡은 값이라, 판정이 그 값을
+// 읽으면 아래 시험이 깨진다
+describe('useClipEditorMockState — 재생 위치 구독', () => {
+  const SOURCE = {
+    clipTitle: '카드',
+    sourceLabel: '방송',
+    durationSeconds: 400,
+    range: { startSeconds: 100, endSeconds: 160 },
+  };
+
+  function renderPlaying() {
+    const clock = createPlaybackClock(110);
+    const { playback } = fakePlayback({ playing: true, currentSeconds: 110, clock });
+    let renders = 0;
+    const hook = renderHook(
+      () => {
+        renders += 1;
+        return useClipEditorMockState({ playback, source: SOURCE });
+      },
+      { wrapper: withToastProvider },
+    );
+    return { ...hook, clock, renders: () => renders, playback };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('재생 위치가 프레임마다 흘러도 허브는 다시 돌지 않는다: 편집기 전체가 초당 60번 다시 그려졌다', () => {
+    const { clock, renders } = renderPlaying();
+    const before = renders();
+
+    act(() => {
+      for (let frame = 1; frame <= 120; frame += 1) clock.publish(110 + frame / 60);
+    });
+
+    expect(renders()).toBe(before);
+  });
+
+  it('썸네일을 고를 수 있는지는 구간을 넘나드는 프레임에 바로 바뀌고, 그때만 허브가 깨어난다', () => {
+    const { clock, renders, result } = renderPlaying();
+    expect(result.current.canPickThumbnail).toBe(true);
+    const before = renders();
+
+    act(() => clock.publish(170));
+    expect(result.current.canPickThumbnail).toBe(false);
+    const afterLeaving = renders();
+    expect(afterLeaving).toBeGreaterThan(before);
+
+    act(() => clock.publish(171));
+    expect(renders()).toBe(afterLeaving);
+
+    act(() => clock.publish(120));
+    expect(result.current.canPickThumbnail).toBe(true);
+  });
+
+  it('썸네일 고르기와 구간 끝 찍기는 누른 순간의 위치를 쓴다: 허브의 낡은 값으로 찍으면 엉뚱한 장면이 된다', () => {
+    const { clock, result } = renderPlaying();
+
+    act(() => clock.publish(125.5));
+    act(() => result.current.pickThumbnail());
+    expect(result.current.thumbnailSeconds).toBe(125.5);
+
+    act(() => clock.publish(140));
+    act(() => result.current.markOut());
+    expect(result.current.range.endSeconds).toBe(140);
+
+    act(() => clock.publish(105));
+    act(() => result.current.markIn());
+    expect(result.current.range.startSeconds).toBe(105);
+  });
+
+  it('키운 창은 재생 위치가 창 밖으로 나갈 때만 넘어가고, 창 안에서는 허브가 다시 돌지 않는다', () => {
+    const { clock, renders, result } = renderPlaying();
+    act(() => result.current.setZoom(400));
+    const view = result.current.view;
+    const before = renders();
+
+    // 창 안을 흐르는 동안은 같은 창 객체다
+    act(() => {
+      for (let frame = 1; frame <= 60; frame += 1) {
+        clock.publish(view.startSeconds + ((view.endSeconds - view.startSeconds) * frame) / 61);
+      }
+    });
+    expect(renders()).toBe(before);
+    expect(result.current.view).toBe(view);
+
+    // 창 끝을 넘으면 그 자리가 창의 10%에 오게 넘어간다(zoomedView)
+    const beyond = view.endSeconds + 1;
+    act(() => clock.publish(beyond));
+    const span = view.endSeconds - view.startSeconds;
+    expect(result.current.view.startSeconds).toBeCloseTo(beyond - span * 0.1, 1);
+
+    // 넘어간 뒤로는 다시 조용하다
+    const settled = renders();
+    act(() => clock.publish(beyond + 0.1));
+    expect(renders()).toBe(settled);
+  });
+
+  it('창이 준비될 때까지 기다리는 동안 고친 것도 창에 실린다: 누른 순간의 레시피로 열면 화면과 다른 영상이 나온다', () => {
+    let open: () => void = () => {};
+    const requestUpload = vi.fn();
+    const { result } = renderEditor({
+      actions: {
+        requestUpload,
+        whenUploadReady: (next) => {
+          open = next;
+        },
+      },
+    });
+
+    act(() => result.current.requestUpload());
+    expect(requestUpload).not.toHaveBeenCalled();
+
+    act(() => result.current.setSplitRatio(70));
+    act(() => open());
+
+    expect(requestUpload).toHaveBeenCalledOnce();
+    expect(requestUpload.mock.calls[0]![0]).toMatchObject({ splitRatio: 70 });
   });
 });
 

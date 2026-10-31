@@ -5,6 +5,7 @@ import { HomeScreen } from '@/features/home/HomeScreen';
 import { OnboardingController } from '@/features/onboarding/OnboardingController';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
+import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
 const push = vi.fn();
@@ -62,7 +63,7 @@ const homeServer = homeServerWith(true);
 
 /** 홈과 함께 렌더 — 스포트라이트 타깃(data-tour-id)이 실제로 존재하는 환경. */
 function renderWithHome() {
-  return render(
+  return renderWithProviders(
     <>
       <HomeScreen />
       <OnboardingController />
@@ -126,7 +127,7 @@ describe('OnboardingController', () => {
   });
 
   it('남의 채널이면 채널 연동·코드 발급 CTA가 비활성이다(POK-390): 그 화면은 그 채널에서 막혀 있다', async () => {
-    render(
+    renderWithProviders(
       <ChannelRelationContext.Provider value="EDITOR">
         <HomeScreen />
         <OnboardingController />

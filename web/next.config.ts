@@ -44,6 +44,10 @@ const OAUTH_CALLBACK_PATHS = [
   '/oauth/youtube/callback',
 ];
 
+const BRAND_ASSET_CACHE = [
+  { key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' },
+];
+
 const nextConfig: NextConfig = {
   // 운영 이미지(Dockerfile)는 .next/standalone 의 server.js 만 싣는다 — node_modules 전체 없이 뜬다.
   // pnpm dev·pnpm build 는 그대로 동작하고, 빌드 산출물에 standalone 폴더가 하나 더 생길 뿐이다.
@@ -51,6 +55,10 @@ const nextConfig: NextConfig = {
   // 라이브 카드 통로(SSE, text/event-stream)를 이 서버의 rewrite 프록시가 gzip으로 묶으면 조각이 버퍼에
   // 갇혀 브라우저에 한 바이트도 안 온다(2026-09-17 실측: 2초 동안 gzip 헤더 10바이트). 압축을 끈다(POK-251).
   compress: false,
+  experimental: {
+    // 기본값은 CSS를 라우트를 가로질러 묶어 로그인 화면까지 라이브 · 편집기 CSS(렌더 차단)를 받는다
+    cssChunking: 'graph',
+  },
   async rewrites() {
     return (
       proxies
@@ -64,6 +72,8 @@ const nextConfig: NextConfig = {
     return [
       { source: '/:path*', headers: referrerPolicy('strict-origin-when-cross-origin') },
       ...OAUTH_CALLBACK_PATHS.map((source) => ({ source, headers: referrerPolicy('no-referrer') })),
+      // public 파일은 이름에 해시가 없어 immutable로 두면 교체가 안 보인다. 하루 쓰고 일주일은 뒤에서 새로 받는다
+      { source: '/brand/:path*', headers: BRAND_ASSET_CACHE },
     ];
   },
 };

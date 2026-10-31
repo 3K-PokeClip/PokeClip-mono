@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -142,6 +143,10 @@ export interface GlassPlayerProps {
    */
   onUptimeChange?: (uptimeSeconds: number) => void;
 }
+
+// 상단 필은 재생 위치와 무관하다(채널 이름 · 시청자 줄 · 배지 · 채팅 열기). 재생기 몸통은 위치가 바뀔 때마다 다시 그려지므로 같은
+// 속성이면 건너뛰게 한다
+const TopOverlay = memo(PlayerTopOverlay);
 
 export function GlassPlayer(props: GlassPlayerProps) {
   if (props.session) return <SessionGlassPlayer {...props} session={props.session} />;
@@ -569,7 +574,7 @@ function GlassPlayerBody({
         </div>
       ) : null}
       {/* 전체 화면에선 바깥 패널이 안 보인다 — 여는 버튼을 눌러도 아무 변화가 없으니 그때는 뺀다 */}
-      <PlayerTopOverlay
+      <TopOverlay
         channelName={channelName}
         viewersNote={viewersNote}
         infoPending={infoPending}

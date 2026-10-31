@@ -1,7 +1,9 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Scissors } from 'lucide-react';
 import { EmptyState, useToast } from '@/ui';
 import {
@@ -12,6 +14,7 @@ import {
   fetchJumpCard,
   fetchLibraryDetail,
   fetchMeLoose,
+  forgetLibraryList,
   openJumpCard,
   requestRender,
   retryUpload,
@@ -53,7 +56,7 @@ import {
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { setActiveRole, toYoutubeCategoryId, track } from '@/lib/analytics';
 import type { RecordingTimeline } from '@/features/player/recordingTimeline';
-import { editorTimelineOf, loadRecording } from '../editorMedia';
+import { editorTimelineOf, holdEditorMedia, loadRecording } from '../editorMedia';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { useTrackPreview } from '../trackAudio/useTrackPreview';
 import type { FilmstripSource } from './VideoFilmstrip';
@@ -64,23 +67,26 @@ import {
   sameRecipe,
   subtitlesFor,
 } from '../recipeLook';
-import {
-  emptyUploadDraft,
-  UploadInfoDialog,
-  type UploadDraft,
-  type UploadFieldErrors,
-} from '../UploadInfoDialog';
+import { loadUploadDialog } from '../uploadDialogChunk';
 import {
   defaultSceneOffsetMs,
+  emptyUploadDraft,
   sceneOffsetFromPlayhead,
   scheduleInstant,
   scheduleOf,
   withPickedScene,
+  type UploadDraft,
+  type UploadFieldErrors,
 } from '../uploadInfo';
 import type { SceneFrameSource } from '../useSceneFrames';
 import { clipSettled, clipStatusView } from './clipProgress';
 import { useClipStatusClock } from './useClipStatusClock';
 import { StudioSkeleton } from './StudioSkeleton';
+
+/** 열어야 쓰는 창이라 편집기 첫 로드에서 뺀다. 그리는 쪽은 조각을 받은 뒤에만 그린다(uploadDialogChunk.ts) */
+const UploadInfoDialog = dynamic(() => loadUploadDialog().then((chunk) => chunk.UploadInfoDialog), {
+  ssr: false,
+});
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
@@ -454,7 +460,11 @@ async function loadFromRecipe(recipeId: number): Promise<LoadResult> {
       message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
     };
   }
-  const recording = await loadRecording(broadcast);
+  // 트랙 이름 읽기는 녹화와 서로 기다릴 이유가 없다: 편집본을 열 때만 둘이 줄을 섰다(카드로 열 때는 이미 함께 간다)
+  const [trackLabels, recording] = await Promise.all([
+    loadTrackLabels(broadcast),
+    loadRecording(broadcast),
+  ]);
   // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
   //    저장할 때와 같은 기준이어야 제자리로 온다.
   const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
@@ -467,7 +477,7 @@ async function loadFromRecipe(recipeId: number): Promise<LoadResult> {
       window: { startMs: cut.inAtMs - base, endMs: cut.outAtMs - base },
       saved: { id: detail.recipeId, version: detail.recipeVersion, document: detail.recipe },
       latestClip: detail.latestClip,
-      trackLabels: await loadTrackLabels(broadcast),
+      trackLabels,
       recording,
       uploadRequest: detail.uploadRequest ?? null,
     },
@@ -485,6 +495,8 @@ export function StudioScreen() {
       ? { kind: 'loading', previous: null }
       : { kind: 'no-card' },
   );
+  // 라이브 카드가 미리 받은 영상 · 소리를 이 화면이 서 있는 동안 둔다
+  useEffect(() => holdEditorMedia(), []);
   /** 다 읽을 때마다 하나씩 — 편집기 마운트 열쇠(Opened.mount) */
   const mounts = useRef(0);
   const reloadingRef = useRef(false);
@@ -618,6 +630,7 @@ function WiredStudio({
   onRecipeCreated: (recipeId: number) => void;
 }) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
 
@@ -757,6 +770,7 @@ function WiredStudio({
       const snap = await (recipeId === null
         ? createRecipe(streamId, doc, card?.id ?? null)
         : updateRecipe(streamId, recipeId, doc));
+      forgetLibraryList(queryClient);
       setSave((s) => ({
         ...s,
         recipeId: snap.id,
@@ -766,7 +780,7 @@ function WiredStudio({
       if (recipeId === null) onRecipeCreated(snap.id);
       return snap;
     },
-    [streamId, card, onRecipeCreated],
+    [streamId, card, onRecipeCreated, queryClient],
   );
 
   const saveDraft = useCallback(
@@ -814,10 +828,32 @@ function WiredStudio({
   }, [reloading, previewVideo]);
   // 이 화면에서 마지막으로 보낸 창의 값. 다시 열면 그대로 채운다(고른 이미지 파일까지)
   const lastDraft = useRef<UploadDraft | null>(null);
-  // 지금 재생 위치(기준점 축의 초). 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다. 재생 중에는 프레임마다
-  // 바뀌므로 ref로 읽는다(동작 콜백이 매 프레임 새로 만들어지지 않게)
-  const playheadRef = useRef<number | null>(null);
-  playheadRef.current = recording ? video.playback.currentSeconds : null;
+  // 창 코드는 첫 로드에서 뺐다: 화면이 선 뒤에 미리 받아 두어 처음 누를 때 기다리지 않게 한다. 못 받아도 누를 때 다시 묻는다
+  useEffect(() => {
+    loadUploadDialog().catch(() => undefined);
+  }, []);
+  const reloadingRef = useRef(reloading);
+  reloadingRef.current = reloading;
+  // 조각을 받은 뒤에만 연다(uploadDialogChunk.ts). 못 받으면 편집기는 그대로 두고 알린다: 고친 것을 저장할 길이 남는다.
+  // 받는 사이 다른 편집 대상으로 넘어갔으면 열지 않는다(위 효과가 닫는 창이다)
+  const whenUploadReady = useCallback(
+    (open: () => void) => {
+      loadUploadDialog().then(
+        () => {
+          if (!reloadingRef.current) open();
+        },
+        () =>
+          toast({
+            tone: 'error',
+            title: '업로드 창을 불러오지 못했어요',
+            description: '편집본을 저장한 뒤 새로고침해 주세요',
+          }),
+      );
+    },
+    [toast],
+  );
+  // 재생 위치 저장소. 업로드 창은 재생 중에도 열리므로 허브의 값(멈춤 · 시크 때만 바뀐다)이 아니라 여는 순간의 위치를 읽는다
+  const playbackClock = video.playback.clock;
   // 받아 둔 녹화 조각과 그 시작 초. 창을 여는 순간에 읽는다(장면 그림 재료)
   const videoRef = useRef({ src: video.src, windowStartSeconds: video.windowStartSeconds });
   videoRef.current = { src: video.src, windowStartSeconds: video.windowStartSeconds };
@@ -827,7 +863,8 @@ function WiredStudio({
     (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
-      const playheadSeconds = playheadRef.current;
+      // 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
+      const playheadSeconds = recording ? playbackClock.getSeconds() : null;
       const cut = documentFor(recipe).cut!;
       const cutLengthMs = cut.outAtMs - cut.inAtMs;
       const rangeStart = recipe.range.startSeconds;
@@ -873,7 +910,7 @@ function WiredStudio({
         frameSource,
       });
     },
-    [documentFor, card, recording],
+    [documentFor, card, recording, playbackClock],
   );
 
   /**
@@ -915,6 +952,7 @@ function WiredStudio({
           );
         })
         .then(({ clip }) => {
+          forgetLibraryList(queryClient);
           setSave((s) => ({
             ...s,
             busy: null,
@@ -951,7 +989,7 @@ function WiredStudio({
           toast({ tone: 'error', title: '영상 만들기 실패', description: message });
         });
     },
-    [documentFor, pending, persist, streamId, toast],
+    [documentFor, pending, persist, queryClient, streamId, toast],
   );
 
   // 주문한 영상이 끝날 때까지(업로드 정보가 있으면 업로드가 끝날 때까지) 5초마다 상태를 다시 읽는다. 일꾼의 보고가
@@ -1023,8 +1061,8 @@ function WiredStudio({
   }, [saved, trackLabels]);
 
   const actions = useMemo(
-    () => ({ saveDraft, requestUpload: openUploadDialog }),
-    [saveDraft, openUploadDialog],
+    () => ({ saveDraft, requestUpload: openUploadDialog, whenUploadReady }),
+    [saveDraft, openUploadDialog, whenUploadReady],
   );
   // 저장된 편집본을 열면 그 모양(레이아웃·자르는 자리·자막 방식)으로 연다 — 다시 저장해도 제자리다
   const initialLook = useMemo(

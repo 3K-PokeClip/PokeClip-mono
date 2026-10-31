@@ -5,6 +5,7 @@
 // 화면이 조용히 빈 배지를 그리는 대신 빌드가 멈춘다.
 
 import { parseClockLabel } from '@/features/player/playerMath';
+import { STILL_REFRESH_MS, pickThumbnailUrl } from '@/features/thumbnail/thumbnailUrl';
 import type { BadgeTone } from '@/ui';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
@@ -92,6 +93,33 @@ function fallbackPosPercent(timestamp: string, uptimeSeconds: number): number {
   const seconds = parseClockLabel(timestamp);
   if (seconds === null || uptimeSeconds <= 0) return 100;
   return Math.min(100, Math.max(0, Math.round((seconds / uptimeSeconds) * 100)));
+}
+
+/** 그려진 내용이 같은가. 사진은 글자가 아니라 같은 사진인지 본다: 서버가 목록마다 새로 서명해 주소가 3초마다 바뀐다(POK-277) */
+function sameHighlight(a: LiveHighlight, b: LiveHighlight, now: number): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof LiveHighlight>;
+  for (const key of keys) {
+    if (key !== 'thumbnailUrl' && !Object.is(a[key], b[key])) return false;
+  }
+  const shown = a.thumbnailUrl ?? null;
+  return pickThumbnailUrl(shown, b.thumbnailUrl ?? null, now, STILL_REFRESH_MS) === shown;
+}
+
+/**
+ * 새로 만든 카드 목록에서 내용이 같은 카드는 앞 객체를 쓰고, 전부 같으면 앞 배열을 그대로 돌려준다. 경과 표기 때문에 목록을 매초 다시
+ * 만들어도 표기가 바뀐 카드만 다시 그린다.
+ */
+export function reuseHighlights(
+  prev: LiveHighlight[],
+  next: LiveHighlight[],
+  now: number,
+): LiveHighlight[] {
+  const known = new Map(prev.map((highlight) => [highlight.id, highlight]));
+  const merged = next.map((highlight) => {
+    const old = known.get(highlight.id);
+    return old !== undefined && sameHighlight(old, highlight, now) ? old : highlight;
+  });
+  return merged.length === prev.length && merged.every((h, i) => h === prev[i]) ? prev : merged;
 }
 
 export function cardVisualFor(
