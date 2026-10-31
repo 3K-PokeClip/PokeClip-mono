@@ -9,6 +9,7 @@ import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
+import { setVisibleInterval } from '@/lib/visibleInterval';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
   onAirLabel,
@@ -661,18 +662,18 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     void loadInfo();
     void sseLoop();
     // 끝난 방송이면 주기 읽기만 1분에 한 번이다
-    const t1 = setInterval(() => {
-      if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
-      void loadList();
-    }, 3000);
-    const t2 = setInterval(loadChart, 10_000);
-    const t3 = setInterval(loadInfo, 10_000);
+    const stopPolling = [
+      setVisibleInterval(() => {
+        if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
+        void loadList();
+      }, 3000),
+      setVisibleInterval(() => void loadChart(), 10_000),
+      setVisibleInterval(() => void loadInfo(), 10_000),
+    ];
     return () => {
       stopped = true;
       ctrl.abort();
-      clearInterval(t1);
-      clearInterval(t2);
-      clearInterval(t3);
+      stopPolling.forEach((stop) => stop());
       if (reloadRangeRef.current === reloadRange) reloadRangeRef.current = null;
     };
   }, [streamId, pastRoute]);

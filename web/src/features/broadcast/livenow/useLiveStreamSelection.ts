@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
+import { setVisibleInterval } from '@/lib/visibleInterval';
 import { publishLiveData, useLiveData } from './liveDataStore';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
@@ -91,10 +92,10 @@ export function useLiveStreamSelection(): LiveStreamSelection {
       });
     // 이 효과는 주소(pinned) · 채널이 바뀔 때만 다시 돈다 — 그 뒤 첫 답은 사람이 고른 이동이라 보유를 넘는다(cx M)
     resolve(false, true);
-    const t = window.setInterval(() => resolve(true), LIVE_RESELECT_MS);
+    const stopPolling = setVisibleInterval(() => resolve(true), LIVE_RESELECT_MS);
     return () => {
       alive = false;
-      window.clearInterval(t);
+      stopPolling();
     };
   }, [pinned, streamerId]);
 
