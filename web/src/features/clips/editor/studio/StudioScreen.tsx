@@ -1062,12 +1062,15 @@ function WiredStudio({
       latest === null
         ? null
         : {
-            view: clipStatusView(latest, statusNow, save.version),
+            view: clipStatusView(latest, statusNow, {
+              version: save.version,
+              vodExpiresAt: broadcast.vodExpiresAt,
+            }),
             versionLabel: `편집본 v${latest.recipeVersion}`,
             retrying,
             onRetryUpload: retryClipUpload,
           },
-    [latest, statusNow, save.version, retrying, retryClipUpload],
+    [latest, statusNow, save.version, broadcast.vodExpiresAt, retrying, retryClipUpload],
   );
 
   return (
