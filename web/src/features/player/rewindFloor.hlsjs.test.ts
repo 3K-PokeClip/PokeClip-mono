@@ -127,14 +127,14 @@ describe('hls.js 1.7.3 의 목록 갱신 순서(진단 재현 9 · 10)', () => {
     expect(writes).toEqual([LIVE_SYNC]);
   });
 
-  it('LEVEL_UPDATED 에서 창 하한(첫 조각 + 3 TD)으로 옮기면 hls.js 는 옮기지 않는다 — 쓰기 한 번', () => {
+  it('LEVEL_UPDATED 에서 창 하한(첫 조각 + 맨 앞 4초 조각 셋)으로 옮기면 hls.js 는 옮기지 않는다 — 쓰기 한 번', () => {
     const { media, writes } = fakeMedia(10, 3);
     const { hls, slide } = started(media, true);
     hls.on(Events.LEVEL_UPDATED, (_event, data) =>
       guardRewindFloor({ hls, video: media, details: data.details, loadFrom: null }),
     );
     slide();
-    expect(writes).toEqual([12 + 3 * TD]);
+    expect(writes).toEqual([12 + 4 + 4 + 4]);
     expect(media.currentTime).toBe(24);
   });
 
@@ -245,5 +245,80 @@ describe('hls.js 1.7.3 의 떼기 · 첫 조각 처리기 순서(c12d)', () => {
     } as never);
     expect(sc._hasEnoughToStart).toBe(true);
     expect(seen).toEqual([true]);
+  });
+});
+
+// 창 하한 여유는 TD 가 아니라 맨 앞 조각 셋의 실제 길이다(POK-200 c13 — gohlslib 은 TD 를 지금까지 본 조각 최대값으로
+// 올리기만 해, 첫 조각이 6초면 방송 끝까지 TD 6 · 실제 조각은 4초다). 목록은 진짜 파서로 읽는다
+describe('guardRewindFloor — 창 하한 = 첫 내용 조각 + 그 뒤 조각 셋의 길이', () => {
+  /** TARGETDURATION td · 조각 길이 durations(초) · ENDLIST 없음 */
+  function listOf(
+    td: number,
+    durations: readonly number[],
+    gapAt: readonly number[] = [],
+  ): LevelDetails {
+    const lines = ['#EXTM3U', '#EXT-X-VERSION:9', `#EXT-X-TARGETDURATION:${td}`];
+    let at = PDT0;
+    durations.forEach((duration, i) => {
+      if (gapAt.includes(i)) lines.push('#EXT-X-GAP');
+      lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(at).toISOString()}`);
+      lines.push(`#EXTINF:${duration.toFixed(3)},`, `seg${i}.mp4`);
+      at += duration * 1000;
+    });
+    return M3U8Parser.parseLevelPlaylist(lines.join('\n'), URL, 0, PlaylistLevelType.MAIN, 0, null);
+  }
+
+  /** 재생 중인 재생기의 첫 조각 afterS 초 뒤 재생점을 옮긴 자리 */
+  function seekTo(details: LevelDetails, afterS = 0.5): number | undefined {
+    const hls = { hasEnoughToStart: true, startLoad: () => {} };
+    const { media } = fakeMedia(details.fragmentStart + afterS, 4);
+    return guardRewindFloor({ hls, video: media, details, loadFrom: null })?.to;
+  }
+
+  it('TD 6 에 첫 조각 6초 · 나머지 4초면 첫 조각 + 14초로 옮긴다', () => {
+    expect(seekTo(listOf(6, [6, 4, 4, 4, 4]))).toBe(14);
+  });
+
+  it('6초 조각이 빠진 뒤(4초 조각만)는 첫 조각 + 12초다', () => {
+    expect(seekTo(listOf(6, [4, 4, 4, 4]))).toBe(12);
+  });
+
+  it('조각이 셋 미만이면 있는 만큼 · 하나도 없어 길이를 모를 때만 3 × TD 다', () => {
+    expect(seekTo(listOf(6, [4, 4]))).toBe(8);
+    expect(seekTo(listOf(6, []))).toBe(18);
+  });
+
+  it('맨 앞 조각 셋이 1 TD 보다 짧으면 하한은 첫 조각 + 1 TD 다 — 옮김 문턱 안의 재생점을 뒤로 당기지 않는다', () => {
+    // 조각 셋 합 3초 < 문턱 6초(1 × TD) — 첫 조각 + 4초의 재생점을 + 3초로 되돌리면 역방향 시크다
+    const short = listOf(6, [1, 1, 1, 1, 1, 1, 1, 1]);
+    expect(seekTo(short, 4)).toBe(6);
+    expect(seekTo(short, 0.5)).toBe(6);
+  });
+
+  it('하한이 목록 끝을 넘으면 목록 끝으로 옮긴다 — 끝 뒤 자리는 hls.js 가 창 밖으로 보고 다시 옮긴다', () => {
+    // 목록 끝 4초 < 문턱 6초(1 × TD) · 모두 GAP 의 3 × TD(18초) 도 끝(6초) 뒤다
+    const short = listOf(6, [1, 1, 1, 1]);
+    expect(short.edge).toBe(4);
+    expect(seekTo(short, 0.5)).toBe(4);
+    expect(seekTo(listOf(6, [2, 2, 2], [0, 1, 2]))).toBe(6);
+    // 이미 끝에 선 재생점은 옮기지 않는다 — 같은 자리 쓰기 · 역방향 시크가 없다
+    expect(seekTo(short, 4)).toBeUndefined();
+  });
+
+  it('맨 앞 GAP 조각은 내용이 아니다 — 하한은 첫 내용 조각 + 그 뒤 조각 셋이다(옮김 문턱은 첫 조각 기준 그대로)', () => {
+    // GAP 둘(6초씩) 뒤 내용 4초 — GAP 을 세면 하한이 첫 조각 + 16초로 내용(12초) 바로 뒤에 선다
+    const details = listOf(6, [6, 6, 4, 4, 4], [0, 1]);
+    expect(details.fragments.filter((f) => f.gap)).toHaveLength(2);
+    expect(seekTo(details)).toBe(24);
+    // 문턱은 첫 조각(GAP) + 1 TD 다 — 그 뒤 재생점은 옮기지 않는다
+    expect(seekTo(details, 6)).toBeUndefined();
+  });
+
+  it('가운데 GAP 은 창이 밀리는 조각이라 여유에 그대로 센다 — 빼는 것은 맨 앞 GAP 뿐이다', () => {
+    expect(seekTo(listOf(6, [4, 6, 4, 4], [1]))).toBe(14);
+  });
+
+  it('모두 GAP 이면 조각이 없을 때처럼 첫 조각 + 3 × TD 다', () => {
+    expect(seekTo(listOf(6, [6, 6, 6, 6], [0, 1, 2, 3]))).toBe(18);
   });
 });

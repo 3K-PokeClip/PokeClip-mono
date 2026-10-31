@@ -14,12 +14,14 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
+import { probeLiveWindow } from './liveWindowProbe';
 import { sessionView, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
-// 재생 세션의 수명 소유자(설계 5.5절, POK-200 M5). LiveScreen 층 — GlassPlayer 의 key 바깥 — 에 산다: 출입증 회복 · 시계 key 로
-// 재생기가 다시 마운트돼도 세션은 남아 같은 자리에서 잇는다(R36). 명부 상태 · 재생기 마운트 · 자동 방송 선택과 따로 산다.
-// 상태기계(rewindSwitch)에 사건을 먹이고, 나온 효과를 건다: 재조회 · 재생기 시크 · 알림 · 닫기 · 지금 방송 번호 다시 묻기.
+// 재생 세션의 수명 소유자(설계 5.5절, POK-200 M5). LiveScreen 층 — GlassPlayer 의 key 바깥 — 에
+// 산다: 출입증 회복 · 시계 key 로 재생기가 다시 마운트돼도 세션은 남아 같은 자리에서 잇는다(R36). 명부 상태 · 재생기 마운트
+// · 자동 방송 선택과 따로 산다. 상태기계(rewindSwitch)에 사건을 먹이고, 나온 효과를 건다: 재조회 · 재생기 시크 · 알림
+// · 닫기 · 지금 방송 번호 다시 묻기.
 
 /** LIVE 의 「지금 방송 번호」 다시 묻기 간격(설계 5.3절) */
 const X_RECHECK_MS = 2_000;
@@ -28,6 +30,8 @@ const X_RECHECK_MS = 2_000;
 export interface SessionPlayer {
   seekToMs: (atMs: number) => void;
   seekToLiveEdge: () => void;
+  /** 사람이 멈춰 있으면 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다 */
+  keepPausedOnSwap: () => void;
 }
 
 export interface SessionClosed {
@@ -40,7 +44,10 @@ export interface SessionClosed {
 }
 
 export interface SessionOptions {
-  /** 여는 조건(명부 live ∧ 출입증 준비 ∧ recorded 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는 조건이 아니다 */
+  /**
+   * 여는 조건(명부 live ∧ 출입증 준비 ∧ recorded 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는
+   * 조건이 아니다
+   */
   canOpen: boolean;
   /** 방송 번호(= 회차 ID) */
   roundId: string | null;
@@ -56,6 +63,8 @@ export interface SessionOptions {
   resolveX: (fresh: boolean) => Promise<XAnswer>;
   onClose: (closed: SessionClosed) => void;
   onNotice?: (text: string) => void;
+  /** 앞서 onNotice 로 올린 안내 text 를 거둔다(떠 있으면) */
+  onWithdrawNotice?: (text: string) => void;
 }
 
 export interface PlaybackSession {
@@ -67,11 +76,14 @@ export interface PlaybackSession {
   bindPlayer: (player: SessionPlayer | null) => void;
   /** 재생기가 내는 알림(되감기 재생 중 라이브러리가 자리를 또 옮김 등) */
   notice: (text: string) => void;
+  /** 지금 위치 시대(상태기계에 이미 반영된 값) — 재생기가 자리를 잴 때 찍는다 */
+  positionEpoch: () => number;
 }
 
-/** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙) */
+/** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
 function needsX(s: PlaybackSessionState): boolean {
-  return (s.phase.kind === 'live' && s.boundLive) || s.phase.kind === 'ending-wait';
+  const { kind } = s.phase;
+  return (kind === 'live' && s.boundLive) || kind === 'ending-wait' || kind === 'rewind';
 }
 
 function canStart(o: SessionOptions): boolean {
@@ -97,10 +109,12 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   const [now, setNow] = useState(() => Date.now());
 
   /**
-   * 세션 순번 — 세션을 열거나 비울 때 · 화면을 떠날 때 오른다. 비동기 작업(지금 방송 번호 묻기 · 재조회 타이머)은 시작(예약) 때의 순번을 들고 가서,
-   * 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
+   * 세션 순번 — 세션을 열거나 비울 때 · 화면을 떠날 때 오른다. 비동기 작업(지금 방송 번호 묻기 · 재조회 타이머)은 시작(예약)
+   * 때의 순번을 들고 가서, 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
    */
   const sessionIdRef = useRef(0);
+  /** 스트림 폴링 응답의 물음 순번 — 응답마다 1씩 오른다(세션 표가 늦은 응답을 버리는 기준) */
+  const streamAskRef = useRef(0);
   const commit = useCallback((next: PlaybackSessionState | null) => {
     stateRef.current = next;
     setState(next);
@@ -131,6 +145,8 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     round: () => {},
   });
   const recheckTimer = useRef<number | undefined>(undefined);
+  /** 나가 있는 라이브 창 탐침 — 다음 탐침 · 화면 이탈이 끊는다 */
+  const probeAbort = useRef<AbortController | null>(null);
 
   const dispatchRef = useRef<(event: SessionEvent) => void>(() => {});
   const applyEffects = useCallback((effects: SessionEffect[], session: PlaybackSessionState) => {
@@ -149,6 +165,9 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
         case 'notice':
           optionsRef.current.onNotice?.(effect.text);
           break;
+        case 'withdraw-notice':
+          optionsRef.current.onWithdrawNotice?.(effect.text);
+          break;
         case 'recheck-x': {
           // 순번은 예약 때 잡는다 — 그사이 같은 키로 다시 연 세션에 옛 재조회가 들지 않게(cx M)
           const id = sessionIdRef.current;
@@ -161,6 +180,22 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
               }
             });
           }, X_RECHECK_MS);
+          break;
+        }
+        case 'probe-live': {
+          // 순번은 보낼 때 잡는다 — 받는 사이 세션이 바뀌면 결과를 버린다(앞 세션의 탐침이 새 세션에 들지 않게)
+          const id = sessionIdRef.current;
+          probeAbort.current?.abort();
+          const controller = new AbortController();
+          probeAbort.current = controller;
+          probeLiveWindow(effect.url, controller.signal).then(
+            (result) => {
+              if (id !== sessionIdRef.current) return;
+              dispatchRef.current({ type: 'live-probe', seq: effect.seq, result });
+            },
+            // 끊긴 탐침만 여기로 온다(그 밖의 실패는 unavailable 로 돌아온다) — 끊은 쪽이 결과를 바라지 않는다
+            () => {},
+          );
           break;
         }
         case 'close':
@@ -181,6 +216,10 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       const current = stateRef.current;
       if (current === null) return;
       const next = transition(current, event, Date.now());
+      // 멈춤 유지는 새 소스를 커밋하기 전에 건다 — 재생기가 지금 세대를 표에 적는다
+      if (next.effects.some((e) => e.kind === 'keep-paused-on-swap')) {
+        playerRef.current?.keepPausedOnSwap();
+      }
       if (next.state !== current) commit(next.state);
       applyEffects(next.effects, next.state);
     },
@@ -203,6 +242,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   }, [dispatch]);
 
   const notice = useCallback((text: string) => optionsRef.current.onNotice?.(text), []);
+  const positionEpoch = useCallback(() => stateRef.current?.positionEpoch ?? 0, []);
 
   const bindPlayer = useCallback(
     (player: SessionPlayer | null) => {
@@ -228,13 +268,16 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     (result: RewindStatusResult) => {
       const current = stateRef.current;
       if (current === null) return;
+      // 받은 즉시 찍는다 — 지금 방송 번호를 기다리는 동안 흐른 시간이 응답의 신선도에 들지 않게
+      streamAskRef.current += 1;
+      const ask = { seq: streamAskRef.current, receivedAtMs: Date.now() };
       if (!needsX(current)) {
-        dispatch({ type: 'stream-poll', result });
+        dispatch({ type: 'stream-poll', result, ask });
         return;
       }
       const id = sessionIdRef.current;
       void optionsRef.current.resolveX(false).then((x) => {
-        if (id === sessionIdRef.current) dispatch({ type: 'stream-poll', result, x });
+        if (id === sessionIdRef.current) dispatch({ type: 'stream-poll', result, x, ask });
       });
     },
     [dispatch],
@@ -276,11 +319,31 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [endingSince]);
 
+  // 넘김 확인 시한(H0) — 확인 중이면 시한에 깨운다. 확인이 끝나면(handoff 해제) 지운다. H3 · H4 는 시한을 그대로
+  // 둔다
+  const confirmDeadlineMs = state?.handoff?.deadlineMs ?? null;
+  useEffect(() => {
+    if (confirmDeadlineMs === null) return undefined;
+    let timer: number | undefined;
+    // 타이머는 시계 단위만큼 일찍 깰 수 있다 — 시한 전이면 tick 하지 않고 남은 만큼 다시 건다
+    const wake = () => {
+      const left = confirmDeadlineMs - Date.now();
+      if (left > 0) {
+        timer = window.setTimeout(wake, left);
+        return;
+      }
+      dispatchRef.current({ type: 'tick' });
+    };
+    timer = window.setTimeout(wake, Math.max(0, confirmDeadlineMs - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [confirmDeadlineMs]);
+
   // 화면을 떠나면 순번을 올린다 — 늦게 온 답이 떠난 화면에서 닫기(router.push)를 부르지 않게(cx H2)
   useEffect(
     () => () => {
       sessionIdRef.current += 1;
       window.clearTimeout(recheckTimer.current);
+      probeAbort.current?.abort();
     },
     [],
   );
@@ -290,5 +353,5 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [state, now],
   );
   if (state === null || view === null || state.closed !== null) return null;
-  return { state, view, dispatch, liveButton, bindPlayer, notice };
+  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch };
 }

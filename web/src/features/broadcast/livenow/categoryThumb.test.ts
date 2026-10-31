@@ -139,7 +139,13 @@ describe('focusAtMs — 화면이 보고 있는 시각(채팅과 같은 축)', (
     expect(
       focusAtMs({
         ...base,
-        liveRewind: { atMs: min(5), edgeAtMs: min(12), behindSeconds: 420 },
+        liveRewind: {
+          atMs: min(5),
+          edgeAtMs: min(12),
+          behindSeconds: 420,
+          playing: true,
+          runMs: 0,
+        },
       }),
     ).toBe(min(5));
   });

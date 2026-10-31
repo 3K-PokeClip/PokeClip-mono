@@ -1,5 +1,37 @@
-import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
-import { EDGE_MARGIN_TD } from './playbackEdge';
+import type { RewindStatusResult } from '@/api/rewindStatus';
+import {
+  endConfirm,
+  loadedList,
+  movedDoor,
+  onHandoffConfirming,
+  onLiveProbe,
+  openHandoffFields,
+  releaseBlock,
+  requestProbe,
+  withHandoffRules,
+  withNextDoor,
+  withPositionEpoch,
+  type HandoffFields,
+} from './liveHandoff';
+import { onEnding } from './endingWait';
+import type { LiveProbeResult } from './liveWindowProbe';
+import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
+import {
+  SESSION_NOTICES,
+  close,
+  isThisRound,
+  liveFromAway,
+  readyLive,
+  replace,
+  seekInList,
+  seekLive,
+  stateOnly,
+  within,
+  withUrl,
+  type RewindRange,
+} from './sessionShared';
+
+export { ENDING_WAIT_MS, RESUME_WAIT_MS, SESSION_NOTICES } from './sessionShared';
 
 // 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 사이의 전환을 정하는 순수 함수다.
 // 사건 하나를 받아 다음 상태와 효과(재조회 · 안에서 시크 · 알림 · 닫기)를 돌려준다. 시각은 모두 실제 시각(epoch ms)이다.
@@ -9,26 +41,25 @@ import { EDGE_MARGIN_TD } from './playbackEdge';
 // 닫힘)로만 들어간다. 🔴 ENDLIST 는 「이 목록에 조각이 더 붙지 않는다」이지 재생 완료가 아니다(RFC 8216 4.3.3.4) — atEnd 를
 // 참으로 만드는 것은 끝 도달 사건뿐이다.
 
-/** 재접속 대기 = 재접속 창 300초 + 판정 여유 60초(M6 회차 닫힘 조건과 같다). 이 동안 회차별 404 는 「아직 모름」이다 */
-export const RESUME_WAIT_MS = 360_000;
-/** 끝남 대기 시한(20분). 끝에 닿은 시청자는 녹화로, 아직 보는 시청자는 묻기를 멈추고 끝까지 본 뒤 녹화로 간다 */
-export const ENDING_WAIT_MS = 1_200_000;
-/** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — TD 4초 기준(설계 5.3.1절) */
-const DEFAULT_EDGE_MARGIN_MS = EDGE_MARGIN_TD * 4_000;
-/** LIVE 버튼의 「지금 방송 번호」 다시 묻기 상한(2초 간격) */
-const X_RECHECK_LIMIT = 3;
+/** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — 4초 조각 기준(설계 5.3.1절) */
+const DEFAULT_EDGE_MARGIN_MS = EDGE_MARGIN_SEGMENTS * 4_000;
 
 export interface PlaybackSource {
   kind: 'live' | 'rewind' | 'vod';
   url: string;
   startAtMs: number | null;
   generation: number;
+  /**
+   * 시작이 잘리면(startIsTruncated) 틀지 말라는 계약(POK-200 c13). 꼬리 넘김(P1)과
+   * 확인 중 다시 세움(H3 · H4)만 세우고 그 밖의 소스는 false 다
+   */
+  strictStart: boolean;
 }
 
-interface RewindRange {
-  url: string;
-  firstPdtMs: number;
-  headPdtMs: number;
+/** 스트림 폴링 응답 하나의 물음 순번과 수신 시각 — 받은 즉시 훅이 찍는다(늦은 응답 버림의 정본) */
+export interface StreamAsk {
+  seq: number;
+  receivedAtMs: number;
 }
 
 /** 재생 세션의 국면 — 명부 상태(broadcastStatus)와 따로 움직인다 */
@@ -48,9 +79,9 @@ export type SessionClose = 'recorded' | 'go-live' | 'left';
 export type XAnswer = { kind: 'known'; id: string } | { kind: 'unknown' };
 
 /** 끝남 대기에서 이어짐을 증명하지 못한 새 url 을 봤을 때 내미는 버튼(버튼 규칙) */
-type Offer = { kind: 'go-live' } | { kind: 'new-broadcast'; goTo: string };
+export type Offer = { kind: 'go-live' } | { kind: 'new-broadcast'; goTo: string };
 
-export interface PlaybackSessionState {
+export interface PlaybackSessionState extends HandoffFields {
   /** 열 때의 방송 번호(= 계약9 streamId = 회차 ID) — 회차별 경로의 키 */
   roundId: string;
   /** 방송|영상 키 — recorded 닫힘 기록의 키 */
@@ -79,9 +110,7 @@ export interface PlaybackSessionState {
    * 허용 · 시크바 넓힘 같은 되감기 노출은 이 값으로만 한다 — 「ready:false 동안 되감기 UI 를 노출하지 않는다」(계약3 7-2)
    */
   rewindOpen: boolean;
-  /** 지금 소스 목록의 마지막 조각 끝(E) */
-  listEndMs: number | null;
-  /** 창 하한 여유(3 × TD) */
+  /** 창 하한 여유(목록 맨 앞 조각 셋의 길이) */
   edgeMarginMs: number;
   /** 끝남 대기의 버튼 규칙 결과 */
   offer: Offer | null;
@@ -104,13 +133,15 @@ export interface SeekView {
   endMs: number;
 }
 
+export type StreamPollEvent = Extract<SessionEvent, { type: 'stream-poll' }>;
+
 export type SessionEvent =
   | { type: 'seek'; targetMs: number; view: SeekView }
   /** attempt = 이번이 몇 번째 물음 뒤인가(0 = 누름) */
   | { type: 'live-button'; x: XAnswer; attempt: number }
   | { type: 'playing' }
   /** x = 이번 폴링과 함께 물은 지금 방송 번호(세션에 묶인 live · 끝남 대기 버튼 규칙). 없으면 모름 */
-  | { type: 'stream-poll'; result: RewindStatusResult; x?: XAnswer }
+  | { type: 'stream-poll'; result: RewindStatusResult; x?: XAnswer; ask: StreamAsk }
   | { type: 'round-poll'; result: RewindStatusResult }
   | { type: 'endlist' }
   | { type: 'end-reached' }
@@ -126,9 +157,19 @@ export type SessionEvent =
       firstMs: number;
       lastEndMs: number;
       targetDurationS: number;
+      /** 맨 앞 조각 셋의 길이 합(ms) — 창 하한 여유(LoadedList.headSpanMs) */
+      headSpanMs: number;
     }
-  | { type: 'position'; atMs: number }
+  /**
+   * playing = 재생 중인가 · runMs = 지금 위치를 담은 played 범위의 길이(연속 시작 = atMs − runMs) · epoch = 재생기가 이 자리를
+   * 잰 때의 위치 시대(positionEpoch)
+   */
+  | { type: 'position'; atMs: number; playing: boolean; runMs: number; epoch: number }
   | { type: 'remount' }
+  /** strictStart 재생기의 첫 목록 재검사가 시작 잘림을 봤다 */
+  | { type: 'live-start-truncated' }
+  /** 라이브 창 탐침의 결과 — seq 는 probe-live 효과의 순번 */
+  | { type: 'live-probe'; seq: number; result: LiveProbeResult }
   | { type: 'leave' };
 
 export type SessionEffect =
@@ -137,21 +178,27 @@ export type SessionEffect =
   | { kind: 'seek-within'; atMs: number }
   | { kind: 'seek-live-edge' }
   | { kind: 'notice'; text: string }
+  /** 앞서 낸 안내 text 가 아직 떠 있으면 거둔다 — 넘김을 되돌린 뒤 넘김 안내가 남지 않게 */
+  | { kind: 'withdraw-notice'; text: string }
   /** LIVE 의 X 를 2초 뒤 다시 묻는다 */
   | { kind: 'recheck-x'; attempt: number }
   /** goTo = 「새 방송 보기」의 방송 번호 */
-  | { kind: 'close'; reason: SessionClose; goTo?: string };
+  | { kind: 'close'; reason: SessionClose; goTo?: string }
+  /**
+   * 라이브 목록 url 의 창 하한을 잰다(liveWindowProbe) — 결과는 같은 seq 의
+   * live-probe 사건으로 돌아온다
+   */
+  | { kind: 'probe-live'; seq: number; url: string }
+  /**
+   * 넘김 확인이 깨져 되감기로 되돌렸다(H0 · H1a · H2 · H2t) — 사람이 멈춰 있었으면
+   * 새 재생기를 멈춘 채 세운다. 멈췄는지는 재생기가 사람의 pause · play 로 안다
+   */
+  | { kind: 'keep-paused-on-swap' };
 
 export interface Transition {
   state: PlaybackSessionState;
   effects: SessionEffect[];
 }
-
-export const SESSION_NOTICES = {
-  oldest: '가장 오래된 지점으로 옮겼어요',
-  gap: '방송이 끊긴 구간이라 이어지는 자리로 옮겼어요',
-  vodStart: '다시보기는 이 시각부터 볼 수 있어요',
-} as const;
 
 export function openSession(init: {
   roundId: string;
@@ -161,7 +208,7 @@ export function openSession(init: {
   return {
     ...init,
     phase: { kind: 'live' },
-    source: { kind: 'live', url: init.liveUrl, startAtMs: null, generation: 0 },
+    source: { kind: 'live', url: init.liveUrl, startAtMs: null, generation: 0, strictStart: false },
     lastAtMs: null,
     watchedFromMs: null,
     observedEndMs: null,
@@ -169,7 +216,6 @@ export function openSession(init: {
     endingSince: null,
     entry: null,
     rewindOpen: false,
-    listEndMs: null,
     edgeMarginMs: DEFAULT_EDGE_MARGIN_MS,
     offer: null,
     liveChecking: false,
@@ -177,6 +223,7 @@ export function openSession(init: {
     foreignLive: null,
     rosterEnded: false,
     closed: null,
+    ...openHandoffFields(),
   };
 }
 
@@ -203,42 +250,8 @@ export function pollTargets(session: PlaybackSessionState): { stream: boolean; r
 
 // ── 작은 도구 ──
 
-/** 효과 없는 전이 — 상태를 그대로 두거나 바꾼 상태만 돌려준다 */
-const stateOnly = (state: PlaybackSessionState): Transition => ({ state, effects: [] });
-
-function withUrl(set: ReadonlySet<string>, url: string): ReadonlySet<string> {
-  return set.has(url) ? set : new Set([...set, url]);
-}
-
 function maxOrSelf(a: number | null, b: number): number {
   return a === null ? b : Math.max(a, b);
-}
-
-function readyLive(result: RewindStatusResult): (RewindStatus & RewindRange) | null {
-  if (result.kind !== 'ok') return null;
-  const { status } = result;
-  if (status.mode !== 'live' || !status.ready) return null;
-  if (status.url === null || status.firstPdtMs === null || status.headPdtMs === null) return null;
-  return { ...status, url: status.url, firstPdtMs: status.firstPdtMs, headPdtMs: status.headPdtMs };
-}
-
-function within(atMs: number | null, first: number, head: number): atMs is number {
-  return atMs !== null && first <= atMs && atMs <= head;
-}
-
-function replace(
-  session: PlaybackSessionState,
-  kind: PlaybackSource['kind'],
-  url: string,
-  startAtMs: number | null,
-): PlaybackSource {
-  return { kind, url, startAtMs, generation: session.source.generation + 1 };
-}
-
-function close(session: PlaybackSessionState, reason: SessionClose, goTo?: string): Transition {
-  const effect: SessionEffect =
-    goTo === undefined ? { kind: 'close', reason } : { kind: 'close', reason, goTo };
-  return { state: { ...session, closed: reason }, effects: [effect] };
 }
 
 function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number): Transition {
@@ -255,102 +268,18 @@ function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number)
   };
 }
 
-// ── 시크 ──
-
-function seekLive(session: PlaybackSessionState, targetMs: number, view: SeekView): Transition {
-  if (targetMs >= view.lowerMs) {
-    return {
-      state: session,
-      effects: [{ kind: 'seek-within', atMs: Math.min(targetMs, view.endMs) }],
-    };
-  }
-  const entry = session.rewindOpen ? session.entry : null;
-  if (entry === null) {
-    return {
-      state: session,
-      effects: [
-        { kind: 'seek-within', atMs: view.lowerMs },
-        { kind: 'notice', text: SESSION_NOTICES.oldest },
-      ],
-    };
-  }
-  let start = targetMs;
-  const effects: SessionEffect[] = [];
-  if (targetMs < entry.firstPdtMs) {
-    start = entry.firstPdtMs;
-    effects.push({ kind: 'notice', text: SESSION_NOTICES.oldest });
-  } else if (targetMs > entry.headPdtMs) {
-    start = entry.headPdtMs;
-    effects.push({ kind: 'notice', text: SESSION_NOTICES.gap });
-  }
-  return {
-    state: {
-      ...session,
-      phase: { kind: 'rewind', pendingNext: null },
-      source: replace(session, 'rewind', entry.url, start),
-      boundLive: false,
-      foreignLive: null,
-      liveChecking: false,
-    },
-    effects,
-  };
-}
-
-/** 로드한 목록 안 시크(되감기 · vod) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로 */
-function seekInList(session: PlaybackSessionState, targetMs: number, view: SeekView): Transition {
-  if (targetMs < view.lowerMs) {
-    return {
-      state: session,
-      effects: [
-        { kind: 'seek-within', atMs: view.lowerMs },
-        { kind: 'notice', text: SESSION_NOTICES.oldest },
-      ],
-    };
-  }
-  return {
-    state: session,
-    effects: [{ kind: 'seek-within', atMs: Math.min(targetMs, view.endMs) }],
-  };
-}
-
-// ── LIVE 버튼 ──
-
-/** rewind · 끝남 대기(atEnd:false) · vod-offered(atEnd:false) 의 LIVE — X 로 가른다(R58) */
-function liveFromAway(
-  session: PlaybackSessionState,
-  currentX: XAnswer,
-  attempt: number,
-): Transition {
-  if (currentX.kind === 'known' && currentX.id !== '' && currentX.id !== session.roundId) {
-    return close(session, 'left', currentX.id);
-  }
-  if (currentX.kind === 'unknown' && attempt < X_RECHECK_LIMIT) {
-    return {
-      state: { ...session, liveChecking: true },
-      effects: [{ kind: 'recheck-x', attempt: attempt + 1 }],
-    };
-  }
-  return {
-    state: {
-      ...session,
-      phase: { kind: 'live' },
-      source: replace(session, 'live', session.liveUrl, null),
-      liveChecking: false,
-      boundLive: true,
-      offer: null,
-    },
-    effects: [],
-  };
-}
-
 // ── 국면별 표 ──
 
 function onLive(session: PlaybackSessionState, event: SessionEvent, now: number): Transition {
+  const confirming = onHandoffConfirming(session, event, now);
+  if (confirming !== null) return confirming;
   switch (event.type) {
     case 'seek':
-      return seekLive(session, event.targetMs, event.view);
-    case 'live-button':
-      return { state: session, effects: [{ kind: 'seek-live-edge' }] };
+      return endConfirm(seekLive(session, event.targetMs, event.view));
+    case 'live-button': {
+      const edge: SessionEffect = { kind: 'seek-live-edge' };
+      return endConfirm({ state: session, effects: [edge] });
+    }
     case 'playing':
       return session.endingSince === null
         ? stateOnly(session)
@@ -364,6 +293,14 @@ function onLive(session: PlaybackSessionState, event: SessionEvent, now: number)
       return enterEnding(session, true, now);
     case 'live-400':
       return stateOnly({ ...session, source: replace(session, 'live', session.liveUrl, null) });
+    case 'live-start-truncated': {
+      // H7 — 확인 밖의 잘림(늦은 재생기)은 같은 라이브를 현행 clamp 시작으로 다시 세운다
+      const generation = session.source.generation + 1;
+      return stateOnly({
+        ...session,
+        source: { ...session.source, strictStart: false, generation },
+      });
+    }
     case 'roster-ended':
       return { state: session, effects: [{ kind: 'refresh' }] };
     case 'button':
@@ -414,18 +351,19 @@ function onRewind(
     case 'live-button':
       return liveFromAway(session, event.x, event.attempt);
     case 'stream-poll':
-      return onRewindStreamPoll(session, event.result);
+      return onRewindStreamPoll(session, event, now);
     case 'endlist':
       return phase.pendingNext !== null
         ? { state: session, effects: [{ kind: 'refresh', retryWhileUrl: session.source.url }] }
         : enterEnding(session, false, now);
     case 'end-reached': {
       const next = phase.pendingNext;
-      if (next !== null && within(session.listEndMs, next.firstPdtMs, next.headPdtMs)) {
+      const endMs = session.list?.endMs ?? null;
+      if (next !== null && within(endMs, next.firstPdtMs, next.headPdtMs)) {
         return stateOnly({
           ...session,
           phase: { kind: 'rewind', pendingNext: null },
-          source: replace(session, 'rewind', next.url, session.listEndMs),
+          source: replace(session, 'rewind', next.url, endMs),
           roundRewindUrls: withUrl(session.roundRewindUrls, next.url),
         });
       }
@@ -438,18 +376,32 @@ function onRewind(
   }
 }
 
-function onRewindStreamPoll(session: PlaybackSessionState, result: RewindStatusResult): Transition {
-  const live = readyLive(result);
+/**
+ * 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 새 url 의 문을
+ * 세운다. R11 은 갱신한 뒤 넘김 조건이면 탐침을 청한다. R9 · R10 은 X 가 이 회차일
+ * 때만이다 — 설계 r9 R9 행은 X 모름 · 다른 방송에도 갈아 끼우고 문만 달리했지만,
+ * kty 결정(K1 확장)으로 갈아 끼우지도 보류하지도 않는다
+ */
+function onRewindStreamPoll(
+  before: PlaybackSessionState,
+  event: StreamPollEvent,
+  now: number,
+): Transition {
+  const session = withNextDoor(before, event);
+  const live = readyLive(event.result);
   if (live === null) return stateOnly(session);
   const range = { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs };
   if (live.url === session.source.url) {
-    return stateOnly({
+    const seen = {
       ...session,
       entry: range,
       rewindOpen: true,
       observedEndMs: maxOrSelf(session.observedEndMs, live.headPdtMs),
-    });
+    };
+    return requestProbe(seen, now) ?? stateOnly(seen);
   }
+  // 새 url 은 같은 회차일 때만 갈아 끼우거나 보류한다 — 다른 회차 · X 모름은 그대로 둔다(문은 D 표가 비웠다)
+  if (!isThisRound(session, event.x)) return stateOnly(session);
   if (within(session.lastAtMs, live.firstPdtMs, live.headPdtMs)) {
     return stateOnly({
       ...session,
@@ -458,162 +410,10 @@ function onRewindStreamPoll(session: PlaybackSessionState, result: RewindStatusR
       phase: { kind: 'rewind', pendingNext: null },
       source: replace(session, 'rewind', live.url, session.lastAtMs),
       roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
+      handoffDoor: movedDoor(live.url, event.ask),
     });
   }
   return stateOnly({ ...session, phase: { kind: 'rewind', pendingNext: range } });
-}
-
-type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
-
-function onEnding(
-  session: PlaybackSessionState,
-  phase: EndingPhase,
-  event: SessionEvent,
-  now: number,
-): Transition {
-  switch (event.type) {
-    case 'stream-poll':
-      return phase.recordOnEnd
-        ? stateOnly(session)
-        : onEndingStreamPoll(session, phase, event.result, event.x);
-    case 'round-poll':
-      return phase.recordOnEnd
-        ? stateOnly(session)
-        : onEndingRoundPoll(session, phase, event.result, now);
-    case 'end-reached':
-    case 'live-closed':
-      if (phase.atEnd) return stateOnly(session);
-      if (phase.recordOnEnd) return close(session, 'recorded');
-      return stateOnly({ ...session, phase: { ...phase, atEnd: true } });
-    case 'tick':
-      if (session.endingSince === null || now - session.endingSince < ENDING_WAIT_MS) {
-        return stateOnly(session);
-      }
-      return roundFinal(session, phase);
-    case 'roster-ended':
-      return stateOnly({ ...session, rosterEnded: true });
-    case 'button':
-      return onEndingButton(session, event.which);
-    case 'seek':
-      return onEndingSeek(session, phase, event.targetMs, event.view);
-    case 'live-button':
-      return phase.atEnd ? stateOnly(session) : liveFromAway(session, event.x, event.attempt);
-    default:
-      return stateOnly(session);
-  }
-}
-
-/** 이음 지점 — rewind 기원이면 atEnd ? E : P, live 기원이면 lastAtMs */
-function joinPoint(session: PlaybackSessionState, phase: EndingPhase): number | null {
-  if (phase.origin === 'rewind') return phase.atEnd ? session.listEndMs : session.lastAtMs;
-  return session.lastAtMs;
-}
-
-function onEndingStreamPoll(
-  session: PlaybackSessionState,
-  phase: EndingPhase,
-  result: RewindStatusResult,
-  currentX: XAnswer | undefined,
-): Transition {
-  const live = readyLive(result);
-  if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
-  const join = joinPoint(session, phase);
-  if (within(join, live.firstPdtMs, live.headPdtMs)) {
-    const resumed = {
-      ...session,
-      roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
-      endingSince: null,
-      offer: null,
-      rosterEnded: false,
-      entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
-    };
-    if (phase.origin === 'rewind') {
-      return stateOnly({
-        ...resumed,
-        phase: { kind: 'rewind', pendingNext: null },
-        source: replace(session, 'rewind', live.url, join),
-      });
-    }
-    return stateOnly({
-      ...resumed,
-      phase: { kind: 'live' },
-      source: replace(session, 'live', session.liveUrl, null),
-    });
-  }
-  let offer: Offer | null = null;
-  if (currentX?.kind === 'known' && currentX.id === session.roundId) offer = { kind: 'go-live' };
-  else if (currentX?.kind === 'known' && currentX.id !== '') {
-    offer = { kind: 'new-broadcast', goTo: currentX.id };
-  }
-  return stateOnly({ ...session, offer });
-}
-
-function onEndingRoundPoll(
-  session: PlaybackSessionState,
-  phase: EndingPhase,
-  result: RewindStatusResult,
-  now: number,
-): Transition {
-  if (result.kind === 'none') {
-    const waited = session.endingSince !== null && now - session.endingSince >= RESUME_WAIT_MS;
-    return waited ? roundFinal(session, phase) : stateOnly(session);
-  }
-  if (result.kind !== 'ok') return stateOnly(session);
-  const { status } = result;
-  if (status.mode === 'ended') return roundFinal(session, phase);
-  if (status.mode !== 'vod' || status.url === null) return stateOnly(session);
-  if (status.firstPdtMs === null || status.headPdtMs === null) return stateOnly(session);
-  // 세션이 본 구간 [watchedFromMs, observedEndMs] 과 겹쳐야 그 회차의 문서다(다른 회차 문서 방어 · R46)
-  const seenFrom = session.watchedFromMs;
-  const seenEnd = session.observedEndMs;
-  if (seenFrom === null || seenEnd === null) return stateOnly(session);
-  if (status.firstPdtMs > seenEnd || status.headPdtMs < seenFrom) return stateOnly(session);
-  return stateOnly({
-    ...session,
-    phase: {
-      kind: 'vod-offered',
-      url: status.url,
-      firstPdtMs: status.firstPdtMs,
-      headPdtMs: status.headPdtMs,
-      atEnd: phase.atEnd,
-    },
-    offer: null,
-  });
-}
-
-/** 회차 종국(회차별 ended · 재접속 대기 뒤 404 · 20분 시한) — 끝에 닿았으면 녹화로, 아니면 끝까지 본 뒤 녹화로 */
-function roundFinal(session: PlaybackSessionState, phase: EndingPhase): Transition {
-  if (phase.atEnd) return close(session, 'recorded');
-  if (phase.recordOnEnd) return stateOnly(session);
-  return stateOnly({ ...session, phase: { ...phase, recordOnEnd: true } });
-}
-
-function onEndingButton(session: PlaybackSessionState, which: SessionButton): Transition {
-  if (which === 'record') return close(session, 'recorded');
-  if (which === 'go-live' && session.offer?.kind === 'go-live') return close(session, 'go-live');
-  if (which === 'new-broadcast' && session.offer?.kind === 'new-broadcast') {
-    return close(session, 'left', session.offer.goTo);
-  }
-  // 세션에 묶인 live 가 띠(다른 방송)를 세운 채 끝남 대기로 왔다 — 띠의 단추도 그 방송으로 닫는다
-  if (which === 'new-broadcast' && session.foreignLive !== null) {
-    return close(session, 'left', session.foreignLive);
-  }
-  return stateOnly(session);
-}
-
-function onEndingSeek(
-  session: PlaybackSessionState,
-  phase: EndingPhase,
-  targetMs: number,
-  view: SeekView,
-): Transition {
-  if (phase.origin === 'live') {
-    if (phase.atEnd) return stateOnly(session);
-    return seekLive(session, targetMs, view);
-  }
-  const moved = seekInList(session, targetMs, view);
-  if (!phase.atEnd) return moved;
-  return { state: { ...moved.state, phase: { ...phase, atEnd: false } }, effects: moved.effects };
 }
 
 type OfferedPhase = Extract<SessionPhase, { kind: 'vod-offered' }>;
@@ -687,7 +487,11 @@ function onVod(session: PlaybackSessionState, event: SessionEvent): Transition {
 
 // ── 아무 국면 ──
 
-function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transition | null {
+function onAnyPhase(
+  session: PlaybackSessionState,
+  event: SessionEvent,
+  now: number,
+): Transition | null {
   switch (event.type) {
     case 'list-loaded': {
       const own = event.url === session.source.url;
@@ -701,21 +505,34 @@ function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transit
         observedEndMs: frozen
           ? session.observedEndMs
           : maxOrSelf(session.observedEndMs, event.lastEndMs),
-        listEndMs: own ? event.lastEndMs : session.listEndMs,
-        edgeMarginMs:
-          event.targetDurationS > 0
-            ? EDGE_MARGIN_TD * event.targetDurationS * 1000
-            : session.edgeMarginMs,
+        list: own ? loadedList(session, event) : session.list,
+        handoffBlock: releaseBlock(session, event.url, event.lastEndMs),
+        edgeMarginMs: event.headSpanMs > 0 ? event.headSpanMs : session.edgeMarginMs,
       });
     }
-    case 'position':
-      return stateOnly({
+    case 'position': {
+      // 다른 시대(재생기를 바꾸거나 옮기기 전)에 잰 위치다 — 커밋된 위치가 효과로 늦게 올라왔다. 세션을 다시 열면 시대가
+      // 0 부터 다시 서므로, 닫힌 앞 세션의 값은 이 대조로 가르지 못한다
+      if (event.epoch !== session.positionEpoch) return stateOnly(session);
+      const moved = {
         ...session,
         lastAtMs: event.atMs,
+        playing: event.playing,
+        positionGeneration: session.source.generation,
         watchedFromMs:
           session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
-      });
+      };
+      // A1 — 확인 중인 live 는 H 행, rewind 는 R6(넘김 조건이면 탐침)
+      const rewinding = moved.phase.kind === 'rewind';
+      const probed = rewinding ? requestProbe(moved, now) : null;
+      const confirming = onHandoffConfirming(moved, event, now);
+      return confirming ?? probed ?? stateOnly(moved);
+    }
+    case 'live-probe':
+      return onLiveProbe(session, event.seq, event.result, now);
     case 'remount': {
+      const confirming = onHandoffConfirming(session, event, now);
+      if (confirming !== null) return confirming;
       const startAtMs = session.source.kind === 'live' ? null : session.lastAtMs;
       return stateOnly({
         ...session,
@@ -729,14 +546,23 @@ function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transit
   }
 }
 
-/** 사건 하나를 먹인다. 닫힌 세션은 무엇도 바꾸지 않는다 */
+/** 사건 하나를 먹인다. 닫힌 세션은 무엇도 바꾸지 않는다. 넘김 칸의 전처리 · 후처리(A0 · A3 · A6)가 국면 표를 감싼다 */
 export function transition(
   session: PlaybackSessionState,
   event: SessionEvent,
   now: number,
 ): Transition {
   if (session.closed !== null) return stateOnly(session);
-  const any = onAnyPhase(session, event);
+  const next = withHandoffRules(session, event, (ready) => phaseTransition(ready, event, now));
+  return withPositionEpoch(session, next);
+}
+
+function phaseTransition(
+  session: PlaybackSessionState,
+  event: SessionEvent,
+  now: number,
+): Transition {
+  const any = onAnyPhase(session, event, now);
   if (any !== null) return any;
   const phase = session.phase;
   switch (phase.kind) {

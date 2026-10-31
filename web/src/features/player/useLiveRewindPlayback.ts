@@ -22,13 +22,14 @@ export function useLiveRewindPlayback(
   afterForbidden = false,
   broadcastId?: string,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
-  const { state, view, dispatch, liveButton, bindPlayer, notice } = session;
+  const { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch } = session;
   // 되감기 노출은 최신 폴링의 ready 로만 — 재료(entry)가 남아도 ready:false 면 시크바를 넓히지 않는다(계약3 7-2)
   const axisLowerMs = rewindAxisLowerMs(state);
   const hooks = useMemo<PlaybackHooks>(
     () => ({
       onEndlist: () => dispatch({ type: 'endlist' }),
       onEndReached: () => dispatch({ type: 'end-reached' }),
+      onStartTruncated: () => dispatch({ type: 'live-start-truncated' }),
       onLiveClosed: () => dispatch({ type: 'live-closed' }),
       onLive400: () => dispatch({ type: 'live-400' }),
       onListLoaded: (list) => dispatch({ type: 'list-loaded', ...list }),
@@ -36,11 +37,12 @@ export function useLiveRewindPlayback(
       onSeekRequest: (targetMs, view) => dispatch({ type: 'seek', targetMs, view }),
       onLiveButton: liveButton,
       onNotice: notice,
+      positionEpoch,
       axisLowerMs,
       // 끝에 닿아 덮개가 선 동안 재생 단추를 막는다(끝난 목록이 처음부터 돌지 않게)
       holdPlay: view.cover !== null,
     }),
-    [dispatch, liveButton, notice, axisLowerMs, view.cover],
+    [dispatch, liveButton, notice, positionEpoch, axisLowerMs, view.cover],
   );
   const sim = useHlsPlayback(
     videoRef,
@@ -60,15 +62,24 @@ export function useLiveRewindPlayback(
     bindPlayer({
       seekToMs: (atMs) => simRef.current.seekToMs(atMs),
       seekToLiveEdge: () => simRef.current.seekToLiveEdge(),
+      keepPausedOnSwap: () => simRef.current.keepPausedOnSwap(),
     });
     return () => bindPlayer(null);
   }, [bindPlayer]);
 
   // 마지막으로 본 자리(P) — 리마운트 잇기 · 계승 판정 · 이음 지점의 재료
+  // 재생 여부 · 연속 길이도 싣는다 — 같은 자리여도 일시정지만 하면 사건이 한 번 난다(POK-200 c13)
   const atMs = sim.livePosition?.atMs ?? null;
+  const playing = sim.livePosition?.playing ?? false;
+  const runMs = sim.livePosition?.runMs ?? 0;
+  // 잰 때의 위치 시대도 싣는다 — 이 효과는 커밋 뒤에 돌아, 그사이 세션이 재생기를 바꾸거나 옮겼으면 세션이 이 위치를
+  // 버린다(POK-200 c13)
+  const epoch = sim.positionEpoch;
   useEffect(() => {
-    if (atMs !== null) dispatch({ type: 'position', atMs });
-  }, [atMs, dispatch]);
+    if (atMs !== null && epoch !== null) {
+      dispatch({ type: 'position', atMs, playing, runMs, epoch });
+    }
+  }, [atMs, playing, runMs, epoch, dispatch]);
 
   // 다시보기(VOD)는 끝난 방송이라 오른쪽 끝이 「실시간」이 아니라 녹화 끝이다(시크바 문구 · LIVE 숨김)
   return { ...sim, replay: state.source.kind === 'vod' };

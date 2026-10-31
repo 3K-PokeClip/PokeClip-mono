@@ -89,6 +89,8 @@ export interface DatedFragment {
   duration: number;
   /** 그 조각 첫 화면의 실제 시각(epoch ms, EXT-X-PROGRAM-DATE-TIME). 목록에 없으면 null */
   programDateTime: number | null;
+  /** EXT-X-GAP 조각 — 영상 시각은 차지하지만 내용이 없다(hls.js Fragment.gap 과 같다) */
+  gap?: boolean;
 }
 
 /**

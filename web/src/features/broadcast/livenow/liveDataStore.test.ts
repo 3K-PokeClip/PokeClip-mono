@@ -26,9 +26,17 @@ describe('publishLiveData', () => {
     expect(renders).toBe(before);
 
     act(() =>
-      publishLiveData({ liveRewind: { atMs: 1_000, edgeAtMs: 11_000, behindSeconds: 10 } }),
+      publishLiveData({
+        liveRewind: { atMs: 1_000, edgeAtMs: 11_000, behindSeconds: 10, playing: true, runMs: 0 },
+      }),
     );
-    expect(result.current.liveRewind).toEqual({ atMs: 1_000, edgeAtMs: 11_000, behindSeconds: 10 });
+    expect(result.current.liveRewind).toEqual({
+      atMs: 1_000,
+      edgeAtMs: 11_000,
+      behindSeconds: 10,
+      playing: true,
+      runMs: 0,
+    });
     expect(renders).toBe(before + 1);
   });
 

@@ -73,7 +73,8 @@ export function unpinnedX(latest: string | null): XAnswer {
 
 /**
  * 고정 화면의 지금 방송 번호 묻기 — 10초 안의 폴링은 같은 방송|영상 키의 마지막 답을 다시 쓴다. 기억에는 가장 늦게 시작한 물음의
- * 답만 쓴다: 늦게 온 옛 물음(A)이 새 답(B)을 덮으면 다음 폴링이 A 를 다시 써 다른 방송 띠가 굳는다(cx H3). `query` 의 답이 null 이면 모름
+ * 답만 쓴다: 늦게 온 옛 물음(A)이 새 답(B)을 덮으면 다음 폴링이 A 를 다시 써 다른 방송 띠가 굳는다(cx H3). `query` 의 답이 null 이면 모름.
+ * 물음은 서로 기다리지 않는다 — 각 물음은 자기 답을 돌려준다(합류 없음 · kty 결정 3)
  */
 export function createPinnedXResolver(
   query: () => Promise<string | null>,
@@ -116,7 +117,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const streamParam = useSearchParams().get('stream');
   const pinned = vodStreamIdFromPathname(pathname ?? '') !== null || Boolean(streamParam);
   const streamerId = useChannelStreamerId();
-  const { toast } = useToast();
+  const { toast, dismiss } = useToast();
   // recorded 로 닫힌 방송|영상 키 — 같은 키로는 세션을 다시 열지 않는다(cc H1 ②). 키 비교라 지울 필요가 없다
   const [closedRecordedFor, setClosedRecordedFor] = useState<string | null>(null);
   const [recordedReq, setRecordedReq] = useState<(RecordedRequest & { key: string }) | null>(null);
@@ -160,7 +161,23 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     },
     [startedAt, endedAt, pinned, router],
   );
-  const onNotice = useCallback((text: string) => toast({ tone: 'info', title: text }), [toast]);
+  // 안내 문구마다 마지막으로 띄운 토스트 — 거두기(넘김 되돌림)가 그 토스트를 닫는다
+  const noticeToasts = useRef(new Map<string, string>());
+  const onNotice = useCallback(
+    (text: string) => {
+      noticeToasts.current.set(text, toast({ tone: 'info', title: text }));
+    },
+    [toast],
+  );
+  const onWithdrawNotice = useCallback(
+    (text: string) => {
+      const id = noticeToasts.current.get(text);
+      if (id === undefined) return;
+      noticeToasts.current.delete(text);
+      dismiss(id);
+    },
+    [dismiss],
+  );
 
   const session = usePlaybackSession({
     canOpen:
@@ -177,6 +194,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     resolveX,
     onClose,
     onNotice,
+    onWithdrawNotice,
   });
 
   const opened = session !== null;

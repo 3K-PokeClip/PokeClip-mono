@@ -134,6 +134,7 @@ function src(patch: Partial<PlaybackSource> = {}): PlaybackSource {
     url: 'https://m/live/k/index.m3u8',
     startAtMs: null,
     generation: 0,
+    strictStart: false,
     ...patch,
   };
 }
@@ -205,7 +206,7 @@ describe('재생기 소스와 세대(5.4절)', () => {
     expect(hls.startLoads).toEqual([20]);
   });
 
-  it('startAtMs 가 창 하한 앞이면 하한(첫 조각 + 3 TD)으로 자른다 · vod 는 첫 조각 그대로(R47)', async () => {
+  it('startAtMs 가 창 하한 앞이면 하한(첫 조각 + 맨 앞 조각 셋의 길이)으로 자른다 · vod 는 첫 조각 그대로(R47)', async () => {
     mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8', startAtMs: PDT0 }));
     await settle();
     act(() => lastHls().trigger('hlsLevelLoaded', { details: details(frags(10)) }));
@@ -250,6 +251,7 @@ describe('사건 올림 — ENDLIST 와 끝 도달을 따로(cx H1)', () => {
       firstMs: PDT0,
       lastEndMs: PDT0 + 40_000,
       targetDurationS: 4,
+      headSpanMs: 12_000,
     });
   });
 
@@ -634,7 +636,7 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(13, n)) }));
 
   it.each([1, 2, 3])(
-    '재생점이 첫 조각 + 1 TD 앞이면(readyState %s) 처리기 안에서 바로 창 하한(첫 조각 + 3 TD)으로 옮기고 한 번 알린다',
+    '재생점이 첫 조각 + 1 TD 앞이면(readyState %s) 처리기 안에서 바로 창 하한(첫 조각 + 맨 앞 조각 셋의 길이)으로 옮기고 한 번 알린다',
     async (readyState) => {
       vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(readyState);
       const { onNotice, onSeekRequest } = await rewindAt(15);
