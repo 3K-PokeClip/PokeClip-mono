@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { READ_TIMEOUT_MS } from '@/api/client';
 import {
   broadcastTitle,
   ClipApiError,
@@ -11,6 +12,7 @@ import {
   mediaStreamId,
   openJumpCard,
   platformLabel,
+  requestPlaybackAccess,
   requestRender,
   retryUpload,
   setJumpCardHidden,
@@ -496,5 +498,23 @@ describe('방송 한 줄 기억', () => {
     await fetchBroadcast('none');
 
     expect(spy.mock.calls.length).toBeGreaterThan(calls);
+  });
+});
+
+describe('requestPlaybackAccess', () => {
+  it('답이 멈추면 시한에 끊겨 「못 받음」이다: 지난 방송 목록이 이 답을 기다린다', async () => {
+    vi.useFakeTimers();
+    stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+
+    const pending = requestPlaybackAccess('7');
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+
+    await expect(pending).resolves.toEqual({ kind: 'failed' });
   });
 });

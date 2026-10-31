@@ -1,7 +1,7 @@
 'use client';
 
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
-import { ApiError, apiFetch, type ApiFetchInit } from './client';
+import { ApiError, apiFetch, READ_TIMEOUT_MS, type ApiFetchInit } from './client';
 import { markPlaybackCookiesIssued } from './mediaPlayback';
 import { onSessionAdvance } from '@/stores/auth';
 import { notifyChannelGone } from '@/stores/channel';
@@ -970,6 +970,8 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
       {
         method: 'POST',
         credentials: 'include',
+        // 지난 방송 목록이 이 답을 기다린다: 멈추면 목록 읽기가 끝나지 않는다. 쿠키를 다시 받는 것은 두 번 해도 안전하다
+        timeoutMs: READ_TIMEOUT_MS,
       },
     );
     let expiresAtMs: number | null = null;

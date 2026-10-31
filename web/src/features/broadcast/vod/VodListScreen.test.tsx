@@ -469,6 +469,32 @@ describe('VodListScreen — 서버 목록', () => {
     expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
   });
 
+  it('헤더만 오고 본문이 멈춰도 시한에 끊겨 다음 주기에 회복한다: 쿼리는 끝나지 않는 읽기를 주기마다 그대로 잇는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    stubFetch((url) => {
+      if (!url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, { cards: [], nextCursor: null });
+      calls += 1;
+      if (calls > 1) return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      const stalled = new ReadableStream<Uint8Array>({
+        start: (controller) => controller.enqueue(new TextEncoder().encode('{"broadcasts":')),
+      });
+      return new Response(stalled);
+    });
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS + 60_000);
+    });
+    expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
+  });
+
   it('「다시 시도」가 도는 표시는 요청이 멈춰도 15초 뒤 풀린다: 버튼이 멈춘 요청에 묶이지 않는다', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let calls = 0;

@@ -193,13 +193,14 @@ async function doRefresh(sent: string): Promise<RefreshOutcome> {
 }
 
 /**
- * 읽기가 응답 헤더를 기다리는 한도. 서버가 멈추면 주기 읽기가 끝나지 않은 채 쌓인다. 쓰기(POST 등)에는 걸지 않는다: 서버가
- * 처리 중일 수 있어 끊고 다시 누르면 두 번 일어난다.
+ * 읽기가 서버를 기다리는 한도: 응답 헤더까지, 그 뒤에는 본문 조각 사이마다. 쿼리는 진행 중인 읽기를 다음 주기에 그대로 잇기 때문에
+ * 끝나지 않는 읽기 하나가 그 화면의 갱신을 통째로 붙잡는다. 쓰기(POST 등)에는 걸지 않는다: 서버가 처리 중일 수 있어 끊고 다시
+ * 누르면 두 번 일어난다.
  */
 export const READ_TIMEOUT_MS = 30_000;
 
 export interface ApiFetchInit extends RequestInit {
-  /** 응답 헤더를 기다리는 한도. null이면 걸지 않는다(SSE). 없으면 읽기는 READ_TIMEOUT_MS, 쓰기는 없음 */
+  /** 서버를 기다리는 한도(READ_TIMEOUT_MS). null이면 걸지 않는다(SSE). 없으면 읽기는 READ_TIMEOUT_MS, 쓰기는 없음 */
   timeoutMs?: number | null;
 }
 
@@ -209,8 +210,47 @@ function timeoutOf({ method, timeoutMs }: ApiFetchInit): number | null {
   return verb === 'GET' || verb === 'HEAD' ? READ_TIMEOUT_MS : null;
 }
 
+const timedOut = () => new ApiError(504, '서버 응답이 늦어요');
+
 /**
- * 시한을 건 fetch. 헤더가 오면 시계를 끈다: 본문은 긴 응답일 수 있어 재지 않는다. 부른 쪽의 signal은 본문을 받는 동안에도 듣는다.
+ * 본문을 같은 한도로 지킨다. 조각마다 시계를 새로 재므로 큰 응답이 느리게 오는 것은 끊지 않고 멈춘 응답만 끊는다. 읽는 쪽이 조각을
+ * 달라고 할 때만 잰다(highWaterMark 0): 본문을 읽지 않고 버린 응답에는 타이머가 없다.
+ */
+function guardBody(response: Response, ms: number, stop: () => void): Response {
+  const source = response.body;
+  if (!source) return response;
+  const reader = source.getReader();
+  const guarded = new ReadableStream(
+    {
+      async pull(controller) {
+        const timer = setTimeout(() => {
+          controller.error(timedOut());
+          stop();
+        }, ms);
+        try {
+          const { done, value } = await reader.read();
+          if (done) controller.close();
+          else controller.enqueue(value);
+        } catch (e) {
+          // 시간 초과로 이미 닫힌 뒤라면 아무 일도 하지 않는다
+          controller.error(e);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      cancel: (reason) => reader.cancel(reason),
+    },
+    { highWaterMark: 0 },
+  );
+  return new Response(guarded, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+/**
+ * 시한을 건 fetch. 부른 쪽의 signal은 본문을 받는 동안에도 듣는다.
  * 시간 초과는 ApiError(504)로 던진다: AbortError로 두면 부른 쪽이 「사람이 취소했다」로 읽고 실패를 알리지 않는다.
  */
 async function fetchWithin(path: string, init: RequestInit, ms: number): Promise<Response> {
@@ -221,9 +261,10 @@ async function fetchWithin(path: string, init: RequestInit, ms: number): Promise
   if (outer?.aborted) stop.abort(outer.reason);
   else outer?.addEventListener('abort', () => stop.abort(outer.reason), { once: true });
   try {
-    return await fetch(path, { ...init, signal: stop.signal });
+    const response = await fetch(path, { ...init, signal: stop.signal });
+    return guardBody(response, ms, () => stop.abort(expired));
   } catch (e) {
-    if (stop.signal.reason === expired) throw new ApiError(504, '서버 응답이 늦어요');
+    if (stop.signal.reason === expired) throw timedOut();
     throw e;
   } finally {
     clearTimeout(timer);

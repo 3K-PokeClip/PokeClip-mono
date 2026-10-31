@@ -534,6 +534,73 @@ describe('apiFetch 읽기 시한', () => {
 
     expect(spy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
+
+  /** 첫 조각 뒤로 멈추는 본문 — 헤더는 왔는데 서버가 멈춘 상황 */
+  function stalledBody(signal?: AbortSignal | null) {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"a":'));
+        signal?.addEventListener('abort', () => controller.error(signal.reason));
+      },
+    });
+  }
+
+  it('본문이 멈춰도 시한에 504로 끊는다: 쿼리는 끝나지 않는 읽기를 다음 주기에 그대로 잇는다', async () => {
+    vi.useFakeTimers();
+    const spy = stubFetch(() => new Response(stalledBody()));
+
+    const res = await apiFetch('/api/stalled-body');
+    const reading = res.json().catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+
+    const error = await reading;
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(504);
+    expect(spy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
+
+  it('본문 조각이 이어지면 합쳐서 시한을 넘겨도 끊지 않는다: 큰 응답이 느리게 오는 경우', async () => {
+    vi.useFakeTimers();
+    const chunks = ['{"a"', ':', '1}'];
+    const encoder = new TextEncoder();
+    const slowBody = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise((resolve) => setTimeout(resolve, READ_TIMEOUT_MS - 1));
+        const next = chunks.shift();
+        if (next === undefined) controller.close();
+        else controller.enqueue(encoder.encode(next));
+      },
+    });
+    stubFetch(() => new Response(slowBody, { headers: { 'X-Mark': 'kept' } }));
+
+    const res = await apiFetch('/api/slow-body');
+    const reading = res.json();
+    await vi.advanceTimersByTimeAsync((READ_TIMEOUT_MS - 1) * 5);
+
+    await expect(reading).resolves.toEqual({ a: 1 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('X-Mark')).toBe('kept');
+  });
+
+  it('본문을 읽지 않고 버린 응답에는 시계가 돌지 않는다', async () => {
+    vi.useFakeTimers();
+    stubFetch(() => jsonResponse(200, { ok: true }));
+
+    await apiFetch('/api/unread');
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('본문을 받는 중에 부른 쪽이 끊은 것은 시한과 가른다: 그대로 AbortError다', async () => {
+    stubFetch((_url, init) => new Response(stalledBody(init?.signal)));
+    const abort = new AbortController();
+
+    const res = await apiFetch('/api/stalled-body', { signal: abort.signal });
+    const reading = res.text().catch((e: unknown) => e);
+    abort.abort();
+
+    expect(await reading).toMatchObject({ name: 'AbortError' });
+  });
 });
 
 describe('subscribeApiActivity: 요청 활동(채널 전환 화면이 센다)', () => {
