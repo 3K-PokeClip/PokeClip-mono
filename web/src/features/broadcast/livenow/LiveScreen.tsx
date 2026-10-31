@@ -12,7 +12,9 @@ import {
   type Ref,
 } from 'react';
 import clsx from 'clsx';
+import dynamic from 'next/dynamic';
 import styles from './LiveScreen.module.css';
+import statsStyles from './LiveStatsPanel.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerMark } from '@/features/player/PlayerControls';
 import { useMediaSource } from '@/features/player/mediaSource';
@@ -23,7 +25,7 @@ import { LinkLockAnnouncer, LockedChatPanel, LockedStatsPanel } from './LinkLock
 import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { NewBroadcastBand } from './NewBroadcastBand';
 import { LiveScreenSkeleton } from './LiveScreenSkeleton';
-import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
+import type { TimelineCard } from './LiveStatsPanel';
 import { MARK_HOTKEY } from './markKey';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
@@ -57,6 +59,28 @@ import { infoWaitOver } from '../infoWait';
 
 /** 카드 눈금에 넘기는 라이브 경과의 단위(초) */
 const CARD_UPTIME_STEP_S = 15;
+
+// 코드 분할: 스크롤로 내려와 만나는 통계 패널(그래프 계산 · 그리기 코드가 크다, 967줄)은 처음 번들에서 뺀다. 채팅 패널은 첫 화면에
+// 서므로 나누지 않는다. 통계 패널은 화면 맨 아래라 불러오는 동안의 자리(아래 StatsPanelFallback)가 위 요소의 위치를 흔들지 않는다.
+// 꺼짐 화면(LiveOfflineScreen, 64줄)은 나누지 않는다: 줄 수가 작아 얻는 것이 없고, 방송이 없을 때의 기본 화면이라 나누면 스켈레톤이
+// 먼저 서고 다른 틀로 바뀌는 깜빡임이 늘 생긴다
+const LiveStatsPanel = dynamic(() => import('./LiveStatsPanel').then((m) => m.LiveStatsPanel), {
+  loading: () => <StatsPanelFallback />,
+});
+
+/**
+ * 통계 패널을 불러오는 동안의 자리. 패널과 같은 틀(.panel)에 높이만 잡는다: 머리 · 요약 줄 · 그래프를 합친 값(약 380u)이라 실제
+ * 높이와 몇 u 어긋날 수 있으나 패널은 화면 맨 아래라 그 위의 요소는 움직이지 않는다
+ */
+function StatsPanelFallback() {
+  return (
+    <section
+      className={statsStyles.panel}
+      aria-hidden
+      style={{ minHeight: 'calc(380 * var(--pc-u))' }}
+    />
+  );
+}
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
