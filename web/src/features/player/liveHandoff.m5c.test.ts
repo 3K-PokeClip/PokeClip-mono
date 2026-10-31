@@ -172,3 +172,26 @@ it('M5b 모양(맨 앞 GAP 여섯) — 하한은 첫 내용 조각부터라 P �
   expect(details.fragments.filter((f) => f.gap)).toHaveLength(6);
   expect(decideLiveStart(details, P, true)).toEqual({ kind: 'truncated' });
 });
+
+it('모두 GAP 인 첫 목록 — 하한을 정하지 못하므로 엄격 시작이어도 재생기의 기본 시작 위치(-1)에서 받는다(계약3)', () => {
+  const lines = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:10',
+    '#EXT-X-TARGETDURATION:6',
+    '#EXT-X-MEDIA-SEQUENCE:1',
+  ];
+  lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(P - 6_000).toISOString()}`);
+  for (let i = 0; i < 5; i += 1) lines.push('#EXT-X-GAP', '#EXTINF:6.000,', 'gap.mp4');
+  const details = M3U8Parser.parseLevelPlaylist(
+    lines.join('\n'),
+    LIVE_URL,
+    0,
+    PlaylistLevelType.MAIN,
+    0,
+    null,
+  );
+  expect(details.fragments.every((f) => f.gap)).toBe(true);
+  for (const strictStart of [true, false]) {
+    expect(decideLiveStart(details, P, strictStart)).toEqual({ kind: 'load', position: -1 });
+  }
+});

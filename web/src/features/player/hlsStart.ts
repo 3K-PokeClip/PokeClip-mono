@@ -1,6 +1,6 @@
 import type Hls from 'hls.js';
 import type { Events, LevelDetails } from 'hls.js';
-import { startIsTruncated, startLoadPosition } from './playbackEdge';
+import { liveStartFloorMs, startIsTruncated, startLoadPosition } from './playbackEdge';
 import type { PlaybackSource } from './rewindSwitch';
 
 // 라이브 기동 문지기(POK-200 c13 · 설계 r9 2절 기동 · 6절 다변 목록 표). 다변 목록(index.m3u8)은 매체 목록을
@@ -15,9 +15,9 @@ import type { PlaybackSource } from './rewindSwitch';
 export type LiveStart = { kind: 'load'; position: number } | { kind: 'truncated' };
 
 /**
- * 라이브 첫 목록에서 startAtMs 자리를 정한다. strictStart 면 그 자리가 라이브 시작 하한보다 앞일
- * 때(startIsTruncated) 잘림이다. 아니면 startLoadPosition 이 하한으로 자른 자리이고, 시각 표시가 없어 모르면
- * -1(hls.js 가 고른다)이다
+ * 라이브 첫 목록에서 startAtMs 자리를 정한다. 라이브 시작 하한을 정하지 못하면(시각 표시 없음 · 모두 GAP)
+ * strictStart 여도 -1(재생기의 기본 시작 위치 — hls.js 가 고른다 · 계약3 7-3절)이다. strictStart 면 그 자리가
+ * 하한보다 앞일 때(startIsTruncated) 잘림이다. 아니면 startLoadPosition 이 하한으로 자른 자리다
  */
 export function decideLiveStart(
   details: LevelDetails,
@@ -25,6 +25,7 @@ export function decideLiveStart(
   strictStart: boolean,
 ): LiveStart {
   const { fragments, targetduration } = details;
+  if (liveStartFloorMs(fragments, targetduration) === null) return { kind: 'load', position: -1 };
   if (strictStart && startIsTruncated(fragments, startAtMs, 'live', targetduration)) {
     return { kind: 'truncated' };
   }
