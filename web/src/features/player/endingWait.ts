@@ -118,9 +118,11 @@ function onEndingStreamPoll(
       source: replace(session, 'live', session.liveUrl, null),
     });
   }
+  // 되감기 기원의 「새 방송 보기」는 끝에 닿은 뒤에만 — 다른 방송은 끝까지 두고 끝 도달 뒤 제안한다(kty K1 확장 (가))
+  const offersNew = phase.origin === 'live' || phase.atEnd;
   let offer: Offer | null = null;
   if (sameRound) offer = { kind: 'go-live' };
-  else if (currentX?.kind === 'known' && currentX.id !== '') {
+  else if (offersNew && currentX?.kind === 'known' && currentX.id !== '') {
     offer = { kind: 'new-broadcast', goTo: currentX.id };
   }
   return stateOnly({ ...session, offer });
