@@ -29,6 +29,11 @@ export interface BroadcastClock {
 }
 
 const POLL_MS = 30_000;
+/**
+ * 끝난 방송의 시각이 다 찬 뒤 명부를 다시 보는 간격(끝난 방송의 카드 목록 주기와 같다). 멈추지는 않는다: 종료 편지가 늦게 오면 서버가
+ * 끝 시각을 고치고(무음 종료 뒤 applyEnded), 권한이 회수되면 이 주기가 줄이 없다고 알려야 상세 화면이 404로 간다
+ */
+const SETTLED_POLL_MS = 60_000;
 
 function ms(iso: string | null): number | null {
   if (!iso) return null;
@@ -70,8 +75,12 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
       listTitle: null,
     });
     let alive = true;
-    const polling: { stop?: () => void } = {};
+    let stopPolling = () => {};
     let settled = false;
+    const poll = (ms: number) => {
+      stopPolling();
+      stopPolling = setVisibleInterval(() => void load(true), ms);
+    };
     const load = async (fresh: boolean) => {
       try {
         // 목록을 끝까지 넘기며 찾는다 — 한 쪽만 보면 오래된 지난 방송이 「없다」가 된다. 첫 읽기는 다른 화면이 읽어 둔 줄을
@@ -114,27 +123,27 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
           listTitle: row.title?.trim() || null,
           channelNames: row.channelNames ?? null,
         });
-        // 끝난 방송이고 시작·끝 시각과 기준점이 다 왔으면 더 바뀔 것이 없다: 주기를 멈춘다. 기준점(POK-255)은 끝난 뒤에도
-        // 조각이 올라가는 동안 늦게 채워질 수 있어, 비어 있으면 올 때까지 계속 묻는다
+        // 끝난 방송이고 시작·끝 시각과 기준점이 다 왔으면 주기를 늦춘다. 기준점(POK-255)은 끝난 뒤에도 조각이 올라가는 동안
+        // 늦게 채워질 수 있어, 비어 있으면 올 때까지 빠른 주기로 묻는다
         if (
+          !settled &&
           st === 'ended' &&
           s !== null &&
           e !== null &&
           ms(row.timelineOriginAt ?? null) !== null
         ) {
           settled = true;
-          polling.stop?.();
+          poll(SETTLED_POLL_MS);
         }
       } catch {
         /* 다음 주기에 다시 */
       }
     };
     void load(false);
-    polling.stop = setVisibleInterval(() => void load(true), POLL_MS);
-    if (settled) polling.stop();
+    poll(POLL_MS);
     return () => {
       alive = false;
-      polling.stop?.();
+      stopPolling();
     };
   }, [streamId]);
 
