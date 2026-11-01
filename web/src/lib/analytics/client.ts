@@ -118,6 +118,25 @@ export function withAnalytics(task: Task): void {
   else if (status === 'loading' && pending.length < MAX_PENDING) pending.push(task);
 }
 
+/** SDK를 받기 시작할 때까지 기다리는 상한. 브라우저가 계속 바빠도 이만큼 뒤에는 받는다 */
+const IDLE_TIMEOUT_MS = 3000;
+/** requestIdleCallback이 없는 브라우저(Safari)가 기다리는 시간 */
+const IDLE_FALLBACK_MS = 500;
+
+/**
+ * 브라우저가 한가해질 때까지 기다린다. SDK는 약 300KB라 첫 화면의 하이드레이션과 겹쳐 받으면 조작 가능해지는 때가 밀린다.
+ * 그 사이의 일은 pending에 쌓였다가 로딩이 끝나면 돈다.
+ */
+function whenBrowserIdle(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(() => resolve(), { timeout: IDLE_TIMEOUT_MS });
+      return;
+    }
+    window.setTimeout(resolve, IDLE_FALLBACK_MS);
+  });
+}
+
 /** instrumentation-client가 hydration 전에 한 번 부른다. 키가 없으면 SDK를 불러오지 않는다. */
 export function initAnalytics(): void {
   if (status !== 'idle') return;
@@ -127,7 +146,8 @@ export function initAnalytics(): void {
   }
   status = 'loading';
   bindIdentityToAuthStore();
-  loading = import('posthog-js')
+  loading = whenBrowserIdle()
+    .then(() => import('posthog-js'))
     .then(({ default: posthog }) => {
       posthog.init(KEY, { ...ANALYTICS_CONFIG, api_host: HOST });
       client = posthog;

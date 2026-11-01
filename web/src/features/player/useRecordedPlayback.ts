@@ -41,6 +41,18 @@ function pieceOffsetMs(seconds: number): number {
 }
 
 /**
+ * timeupdate가 알린 새 자리를 상태에 실을지 정한다. 밖으로 나가는 값은 초로 내린 자리(floor)와 끝까지 남은 초(round)뿐이라, 둘이 안
+ * 바뀌면 앞 값을 그대로 돌려줘 다시 그리지 않는다: timeupdate는 1초에 네 번쯤 오는데 그때마다 재생기 전체(컨트롤 · 시크바)를 다시
+ * 그렸다. 정확한 자리가 필요한 곳은 영상 노드(currentPositionSeconds)에서 읽는다
+ */
+function settledPosition(prev: number, next: number, total: number): number {
+  return Math.floor(prev) === Math.floor(next) &&
+    Math.round(total - prev) === Math.round(total - next)
+    ? prev
+    : next;
+}
+
+/**
  * 녹화 끝으로 갈 때 틀 자리: 마지막 구간의 끝 1초 앞이다. 그 구간이 1초보다 짧으면 구간 시작이다(앞 구간에 떨어지지 않는다).
  * 줄기는 건너뛸 수 없어(파일 머리 주석) 끝으로 가는 것도 이 꼬리를 틀어 끝에 닿는 것이다
  */
@@ -160,7 +172,10 @@ export function useRecordedPlayback(
       });
     }
     const onTime = () => {
-      if (pendingRef.current === null) setPosition(base + video.currentTime);
+      if (pendingRef.current === null)
+        setPosition((prev) =>
+          settledPosition(prev, base + video.currentTime, recordedRef.current.durationSeconds),
+        );
     };
     const onPlay = () => {
       wantPlayRef.current = true;
@@ -239,6 +254,19 @@ export function useRecordedPlayback(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, videoRef]);
 
+  // 영상 노드의 자원은 언마운트 때만 푼다(useHlsPlayback과 같다). 위 효과의 정리에서 풀면 줄기를 갈아 끼울 때(옮김·다음 구간)마다
+  // 멈췄다가 다시 붙어, 옮긴 자리가 붙기 전에 한 번 더 끊긴다. 노드는 마운트 때 잡아 둔다: React가 언마운트에서 ref를 효과 정리보다
+  // 먼저 떼므로 정리 시점의 videoRef.current는 null이다. src만 지워서는 네트워크 · 디코더가 붙어 있어 load()까지 한다
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video === null) return undefined;
+    return () => {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
+  }, [videoRef]);
+
   const jumpTo = useCallback(
     (seconds: number, { backward = false, card = false } = {}) => {
       // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
@@ -289,94 +317,138 @@ export function useRecordedPlayback(
   );
 
   const behindSeconds = Math.max(0, Math.round(total - position));
+  const positionSeconds = Math.floor(position);
+  const playbackError = failedSrc === src ? '녹화 영상을 불러오지 못했어요' : null;
 
-  return {
-    playing,
-    muted,
-    volume,
-    /** 지금 자리(방송 기준 초). 옮기면 줄기가 붙기 전부터 옮긴 자리다 */
-    positionSeconds: position,
-    // 초로 내린 positionSeconds가 아니라 영상 노드의 정확한 자리다(수동 마킹이 ms로 보낸다, POK-392)
-    currentPositionSeconds: now,
-    behindSeconds,
-    atEdge: behindSeconds < AT_EDGE_THRESHOLD_SECONDS,
-    ended,
-    windowSeconds: span,
-    uptimeSeconds: total,
-    quality,
-    lowLatency: false,
-    settingsMenu: false,
-    replay: true,
-    playbackError: failedSrc === src ? '녹화 영상을 불러오지 못했어요' : null,
-    clipMarked: false,
-    controlsVisible,
-    togglePlay: useCallback(() => {
-      const video = videoRef.current;
-      if (video === null) return;
-      // 옮기는 중이면 옮긴 자리의 줄기를 틀지 말지만 정한다(줄기를 붙이는 효과가 그대로 따른다). 끝난 옛 줄기의 ended를 보고
-      // 처음부터로 덮으면 걸린 이동이 옮긴 자리로 다시 돌려 두 번 옮겼다(리뷰 3라운드)
-      if (pendingRef.current !== null) {
-        if (video.paused) wantPlayRef.current = true;
-        else {
-          wantPlayRef.current = false;
-          video.pause();
-        }
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (video === null) return;
+    // 옮기는 중이면 옮긴 자리의 줄기를 틀지 말지만 정한다(줄기를 붙이는 효과가 그대로 따른다). 끝난 옛 줄기의 ended를 보고
+    // 처음부터로 덮으면 걸린 이동이 옮긴 자리로 다시 돌려 두 번 옮겼다(리뷰 3라운드)
+    if (pendingRef.current !== null) {
+      if (video.paused) wantPlayRef.current = true;
+      else {
+        wantPlayRef.current = false;
+        video.pause();
+      }
+      return;
+    }
+    // 다 본 뒤 다시 누르면 처음부터다: 그대로 틀면 브라우저가 지금 줄기(마지막 구간)만 다시 튼다(PR #205 codex).
+    // 「처음」은 0초가 아니라 첫 구간 시작이다(서버 기준점 축이면 녹화가 몇 초 뒤에 선다). 이미 첫 구간이면 브라우저가 다시 튼다.
+    // 어느 쪽이든 사람이 처음으로 옮긴 것이다: 구간이 하나면 알리지 않아 지난 방송 채팅이 처음을 따라가지 않았다(리뷰 2라운드)
+    if (video.ended) {
+      onSeekRef.current?.();
+      const first = playableFrom(recordedRef.current, 0)?.fromSeconds ?? 0;
+      if (offsetRef.current > first) {
+        wantPlayRef.current = true;
+        setPosition(first);
+        setOffset(first);
         return;
       }
-      // 다 본 뒤 다시 누르면 처음부터다: 그대로 틀면 브라우저가 지금 줄기(마지막 구간)만 다시 튼다(PR #205 codex).
-      // 「처음」은 0초가 아니라 첫 구간 시작이다(서버 기준점 축이면 녹화가 몇 초 뒤에 선다). 이미 첫 구간이면 브라우저가 다시 튼다.
-      // 어느 쪽이든 사람이 처음으로 옮긴 것이다: 구간이 하나면 알리지 않아 지난 방송 채팅이 처음을 따라가지 않았다(리뷰 2라운드)
-      if (video.ended) {
-        onSeekRef.current?.();
-        const first = playableFrom(recordedRef.current, 0)?.fromSeconds ?? 0;
-        if (offsetRef.current > first) {
-          wantPlayRef.current = true;
-          setPosition(first);
-          setOffset(first);
-          return;
-        }
+    }
+    if (video.paused) void video.play().catch(() => undefined);
+    else video.pause();
+  }, [videoRef]);
+  const toggleMute = useCallback(() => {
+    setMuted((prev) => {
+      const next = !prev;
+      if (videoRef.current) videoRef.current.muted = next;
+      return next;
+    });
+  }, [videoRef]);
+  const setVolume = useCallback(
+    (value: number) => {
+      const video = videoRef.current;
+      const v = Math.min(100, Math.max(0, Math.round(value)));
+      setVolumeState(v);
+      if (video) video.volume = v / 100;
+      // 음량을 올리면 음소거도 푼다: 슬라이더는 음소거 중 늘 0이라 안 풀면 끌어도 0으로 되돌아가고 소리도 안 난다(POK-516)
+      if (v > 0) {
+        setMuted(false);
+        if (video) video.muted = false;
       }
-      if (video.paused) void video.play().catch(() => undefined);
-      else video.pause();
-    }, [videoRef]),
-    toggleMute: useCallback(() => {
-      setMuted((prev) => {
-        const next = !prev;
-        if (videoRef.current) videoRef.current.muted = next;
-        return next;
-      });
-    }, [videoRef]),
-    setVolume: useCallback(
-      (value: number) => {
-        const video = videoRef.current;
-        const v = Math.min(100, Math.max(0, Math.round(value)));
-        setVolumeState(v);
-        if (video) video.volume = v / 100;
-        // 음량을 올리면 음소거도 푼다: 슬라이더는 음소거 중 늘 0이라 안 풀면 끌어도 0으로 되돌아가고 소리도 안 난다(POK-516)
-        if (v > 0) {
-          setMuted(false);
-          if (video) video.muted = false;
-        }
-      },
-      [videoRef],
-    ),
-    seekToFraction: useCallback(
-      (fraction: number) => jumpTo(total - behindFromSeekFraction(fraction, span)),
-      [jumpTo, total, span],
-    ),
-    // 음수는 엣지(끝) 방향 — 라이브 플레이어와 같은 부호
-    seekBy: useCallback(
-      (delta: number) => jumpTo(now() - delta, { backward: delta > 0 }),
-      [jumpTo, now],
-    ),
-    // 카드는 그 자리로 바로 간다: 시크바 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(리뷰 1라운드)
-    seekToPosition: useCallback((seconds: number) => jumpTo(seconds, { card: true }), [jumpTo]),
-    // 지난 방송의 「실시간」 쪽 끝은 녹화 끝이다 — 시크바 오른쪽 끝·「실시간」 표기와 같은 자리(POK-253). 전에는 처음으로 갔다
-    returnToLive: useCallback(() => jumpTo(total), [jumpTo, total]),
-    setQuality,
-    toggleLowLatency: useCallback(() => undefined, []),
-    markClip: useCallback(() => undefined, []),
-    wake,
-    sleep,
-  };
+    },
+    [videoRef],
+  );
+  const seekToFraction = useCallback(
+    (fraction: number) => jumpTo(total - behindFromSeekFraction(fraction, span)),
+    [jumpTo, total, span],
+  );
+  // 음수는 엣지(끝) 방향 — 라이브 플레이어와 같은 부호
+  const seekBy = useCallback(
+    (delta: number) => jumpTo(now() - delta, { backward: delta > 0 }),
+    [jumpTo, now],
+  );
+  // 카드는 그 자리로 바로 간다: 시크바 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(리뷰 1라운드)
+  const seekToPosition = useCallback(
+    (seconds: number) => jumpTo(seconds, { card: true }),
+    [jumpTo],
+  );
+  // 지난 방송의 「실시간」 쪽 끝은 녹화 끝이다 — 시크바 오른쪽 끝·「실시간」 표기와 같은 자리(POK-253). 전에는 처음으로 갔다
+  const returnToLive = useCallback(() => jumpTo(total), [jumpTo, total]);
+  const toggleLowLatency = useCallback(() => undefined, []);
+  const markClip = useCallback(() => undefined, []);
+
+  // 반환 객체는 값이 바뀔 때만 새로 만든다: 매 그리기 새로 만들면 받는 쪽(GlassPlayer의 훅 · 효과)이 매번 다른 값으로 본다.
+  // 자리는 초로 내린 값(positionSeconds · behindSeconds)만 들어가 timeupdate 사이에는 같은 객체다
+  return useMemo(
+    () => ({
+      playing,
+      muted,
+      volume,
+      /** 지금 자리(방송 기준 초, 초로 내림). 옮기면 줄기가 붙기 전부터 옮긴 자리다 */
+      positionSeconds,
+      // 초로 내린 positionSeconds가 아니라 영상 노드의 정확한 자리다(수동 마킹이 ms로 보낸다, POK-392)
+      currentPositionSeconds: now,
+      behindSeconds,
+      atEdge: behindSeconds < AT_EDGE_THRESHOLD_SECONDS,
+      ended,
+      windowSeconds: span,
+      uptimeSeconds: total,
+      quality,
+      lowLatency: false,
+      settingsMenu: false,
+      replay: true,
+      playbackError,
+      clipMarked: false,
+      controlsVisible,
+      togglePlay,
+      toggleMute,
+      setVolume,
+      seekToFraction,
+      seekBy,
+      seekToPosition,
+      returnToLive,
+      setQuality,
+      toggleLowLatency,
+      markClip,
+      wake,
+      sleep,
+    }),
+    [
+      playing,
+      muted,
+      volume,
+      positionSeconds,
+      now,
+      behindSeconds,
+      ended,
+      span,
+      total,
+      quality,
+      playbackError,
+      controlsVisible,
+      togglePlay,
+      toggleMute,
+      setVolume,
+      seekToFraction,
+      seekBy,
+      seekToPosition,
+      returnToLive,
+      toggleLowLatency,
+      markClip,
+      wake,
+      sleep,
+    ],
+  );
 }

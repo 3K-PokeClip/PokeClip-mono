@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiFetch, subscribeApiActivity, type ApiActivity } from '@/api/client';
+import {
+  ApiError,
+  READ_TIMEOUT_MS,
+  apiFetch,
+  subscribeApiActivity,
+  type ApiActivity,
+} from '@/api/client';
 import { onCrossTabSessionChange, useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
@@ -460,6 +466,140 @@ describe('apiFetch', () => {
     expect(uploads).toHaveLength(2);
     expect(uploads.every(([, init]) => init?.body === form)).toBe(true);
     expect(bearerOf(uploads[1]?.[1])).toBe('Bearer new-access');
+  });
+});
+
+describe('apiFetch 읽기 시한', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** signal이 끊겨야 끝나는 요청 — 서버가 멈춘 상황 */
+  function stubStalledFetch() {
+    return stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+  }
+
+  it('읽기가 시한을 넘기면 504로 끊는다: AbortError면 부른 쪽이 취소로 읽어 실패를 숨긴다', async () => {
+    vi.useFakeTimers();
+    stubStalledFetch();
+
+    const pending = apiFetch('/api/slow').catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+
+    const error = await pending;
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(504);
+  });
+
+  it('쓰기에는 시한을 걸지 않는다: 끊고 다시 누르면 두 번 일어난다', async () => {
+    vi.useFakeTimers();
+    const spy = stubFetch(() => jsonResponse(200, { ok: true }));
+
+    await apiFetch('/api/write', { method: 'POST', body: '{}' });
+
+    expect(spy.mock.calls[0]?.[1]?.signal).toBeUndefined();
+  });
+
+  it('timeoutMs: null이면 읽기라도 시한을 걸지 않는다(SSE)', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { ok: true }));
+
+    await apiFetch('/api/stream', { timeoutMs: null });
+
+    expect(spy.mock.calls[0]?.[1]?.signal).toBeUndefined();
+    expect(spy.mock.calls[0]?.[1]).not.toHaveProperty('timeoutMs');
+  });
+
+  it('부른 쪽이 끊은 것은 시한과 가른다: 그대로 AbortError다', async () => {
+    stubStalledFetch();
+    const abort = new AbortController();
+
+    const pending = apiFetch('/api/slow', { signal: abort.signal }).catch((e: unknown) => e);
+    abort.abort();
+
+    expect(await pending).toMatchObject({ name: 'AbortError' });
+  });
+
+  it('헤더를 받은 뒤 부른 쪽이 끊어도 fetch에 전해진다: 본문을 받는 중에 내려가는 화면', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { ok: true }));
+    const abort = new AbortController();
+
+    await apiFetch('/api/body', { signal: abort.signal });
+    abort.abort();
+
+    expect(spy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
+
+  /** 첫 조각 뒤로 멈추는 본문 — 헤더는 왔는데 서버가 멈춘 상황 */
+  function stalledBody(signal?: AbortSignal | null) {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"a":'));
+        signal?.addEventListener('abort', () => controller.error(signal.reason));
+      },
+    });
+  }
+
+  it('본문이 멈춰도 시한에 504로 끊는다: 쿼리는 끝나지 않는 읽기를 다음 주기에 그대로 잇는다', async () => {
+    vi.useFakeTimers();
+    const spy = stubFetch(() => new Response(stalledBody()));
+
+    const res = await apiFetch('/api/stalled-body');
+    const reading = res.json().catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+
+    const error = await reading;
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(504);
+    expect(spy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
+
+  it('본문 조각이 이어지면 합쳐서 시한을 넘겨도 끊지 않는다: 큰 응답이 느리게 오는 경우', async () => {
+    vi.useFakeTimers();
+    const chunks = ['{"a"', ':', '1}'];
+    const encoder = new TextEncoder();
+    const slowBody = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise((resolve) => setTimeout(resolve, READ_TIMEOUT_MS - 1));
+        const next = chunks.shift();
+        if (next === undefined) controller.close();
+        else controller.enqueue(encoder.encode(next));
+      },
+    });
+    stubFetch(() => new Response(slowBody, { headers: { 'X-Mark': 'kept' } }));
+
+    const res = await apiFetch('/api/slow-body');
+    const reading = res.json();
+    await vi.advanceTimersByTimeAsync((READ_TIMEOUT_MS - 1) * 5);
+
+    await expect(reading).resolves.toEqual({ a: 1 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('X-Mark')).toBe('kept');
+  });
+
+  it('본문을 읽지 않고 버린 응답에는 시계가 돌지 않는다', async () => {
+    vi.useFakeTimers();
+    stubFetch(() => jsonResponse(200, { ok: true }));
+
+    await apiFetch('/api/unread');
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('본문을 받는 중에 부른 쪽이 끊은 것은 시한과 가른다: 그대로 AbortError다', async () => {
+    stubFetch((_url, init) => new Response(stalledBody(init?.signal)));
+    const abort = new AbortController();
+
+    const res = await apiFetch('/api/stalled-body', { signal: abort.signal });
+    const reading = res.text().catch((e: unknown) => e);
+    abort.abort();
+
+    expect(await reading).toMatchObject({ name: 'AbortError' });
   });
 });
 

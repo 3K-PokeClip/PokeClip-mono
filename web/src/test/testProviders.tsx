@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider, ToastProvider } from '@/ui';
@@ -34,9 +34,21 @@ export function renderWithProviders(
   return { ...result, queryClient };
 }
 
-/** 훅 테스트용 래퍼 — 토스트만 필요한 훅을 renderHook에 걸 때 쓴다. */
+/**
+ * 훅 테스트용 래퍼 — 토스트가 필요한 훅을 renderHook에 걸 때 쓴다. 쿼리 클라이언트도 마운트마다 새로 준다: 목록 훅이 react-query를
+ * 쓰므로 주입한 값으로 띄우는 시험도 클라이언트가 있어야 선다.
+ */
 export function withToastProvider({ children }: { children: ReactNode }) {
-  return <ToastProvider>{children}</ToastProvider>;
+  return <HookProviders>{children}</HookProviders>;
+}
+
+function HookProviders({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(createTestQueryClient);
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ToastProvider>{children}</ToastProvider>
+    </QueryClientProvider>
+  );
 }
 
 /**

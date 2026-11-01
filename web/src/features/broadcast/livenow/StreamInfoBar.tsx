@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { CirclePlus, Pencil, Zap } from 'lucide-react';
 import { Avatar, Button, IconButton, Skeleton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
@@ -11,7 +11,8 @@ import type { LiveStream } from './useLiveMockState';
 // 방송 정보 바 — 시안 1b는 이 줄을 영상 "아래"에 둔다. 화면 위쪽은 영상이 차지하고,
 // 제목·카테고리·시청자·수동 마킹이 한 줄에 모인다(옛 전폭 헤더가 하던 일을 여기가 받는다).
 
-export function StreamInfoBar({
+// memo: 대시보드는 경과 표기와 재생 위치 때문에 자주 다시 그려진다. 받는 값(문구 · 메타 · 콜백)이 그대로면 정보 바는 건너뛴다
+export const StreamInfoBar = memo(function StreamInfoBar({
   stream,
   meta,
   viewersLabel,
@@ -177,4 +178,4 @@ export function StreamInfoBar({
       </div>
     </section>
   );
-}
+});

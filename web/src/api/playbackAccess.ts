@@ -1,5 +1,6 @@
 'use client';
 
+import { onSessionAdvance } from '@/stores/auth';
 import { requestPlaybackAccess, type PlaybackAccessResult } from './clipEditor';
 import { mediaCredentials, onPlaybackForbidden, playbackConfigured } from './mediaPlayback';
 
@@ -201,6 +202,7 @@ export function reportPlaybackForbidden(mediaKey: string): void {
     }
 }
 onPlaybackForbidden(reportPlaybackForbidden);
+onSessionAdvance(forgetPlaybackAccess);
 
 /** 그 방송의 출입증을 403으로 버린 적이 있나(한 번 읽으면 지운다). 라이브 화면이 다시 받은 뒤 재생기를 새로 세울지 정한다 */
 export function takePlaybackDrop(streamId: string): boolean {
@@ -235,10 +237,10 @@ export async function recoverForbiddenRecording(url: string, mediaKey: string): 
 }
 
 /**
- * 시험 전용: 받아 둔 것을 다 비운다. 화면 시험은 모듈을 새로 읽지 않아 앞 시험이 받은 출입증을 다음 시험이 그대로 썼다.
- * 쿠키 표시(mediaPlayback의 실음 여부)는 그대로 둔다
+ * 받아 둔 것을 다 비운다: 계정이 바뀌면 앞 계정이 받은 출입증을 다음 계정 몫으로 세지 않는다. 화면 시험은 모듈을 새로 읽지 않아 시험
+ * 사이에도 부른다. 쿠키 표시(mediaPlayback의 실음 여부)는 그대로 둔다
  */
-export function resetPlaybackAccessForTests(): void {
+export function forgetPlaybackAccess(): void {
   cache.clear();
   streamIdByMediaKey.clear();
   notNeeded.clear();

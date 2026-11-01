@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import Link from 'next/link';
 
 import { Bookmark, EyeOff, RotateCw } from 'lucide-react';
@@ -20,7 +21,7 @@ import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveCardSnapshot, LiveHighlight, LiveStream } from './useLiveMockState';
 import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
-import { useLiveData } from './liveDataStore';
+import { useLiveField } from './liveDataStore';
 import { useCardEditorReady } from './useCardEditorReady';
 
 // 하이라이트 카드(시안 1b) — 세로 목록의 한 행이던 것을 가로로 넘기는 카드로 바꿨다.
@@ -41,7 +42,9 @@ function sparkPoints(spark: readonly number[]): string {
     .join(' ');
 }
 
-export function HighlightCard({
+// memo인 이유 — 카드 목록이 바뀌어도(방금 생긴 카드의 「n초 전」은 매초다) 내용이 같은 카드는 객체가 그대로다(reuseHighlights).
+// 긴 방송은 카드가 수백 장이라 전부 다시 그리면 매초 그만큼의 썸네일·파형을 다시 맞춘다
+export const HighlightCard = memo(function HighlightCard({
   highlight,
   stream,
   visuals,
@@ -60,7 +63,7 @@ export function HighlightCard({
   const visual = cardVisualFor(highlight, stream, visuals);
   const processing = view.state === 'processing';
   // 편집기는 방송 번호와 카드 번호(`card-23` → 23)로 클립을 연다
-  const { streamId } = useLiveData();
+  const streamId = useLiveField('streamId');
   const cardId = highlight.id.replace(/^card-/, '');
   const editorHref = `/clips/editor?stream=${encodeURIComponent(streamId)}&card=${cardId}`;
   // 편집기가 쓰는 영상 · 소리 · 파형을 미리 받아, 다 와야 「편집」을 연다(POK-499). 버튼줄이 있는 카드만 받는다
@@ -223,4 +226,4 @@ export function HighlightCard({
       </div>
     </article>
   );
-}
+});

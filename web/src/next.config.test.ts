@@ -86,6 +86,12 @@ describe('next.config headers: Referrer-Policy (POK-482)', () => {
       { source: CHZZK_CALLBACK_PATH, headers: policy('no-referrer') },
       { source: SOOP_CALLBACK_PATH, headers: policy('no-referrer') },
       { source: YOUTUBE_CALLBACK_PATH, headers: policy('no-referrer') },
+      {
+        source: '/brand/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' },
+        ],
+      },
     ]);
   });
 

@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { meQueryOptions } from '@/api/auth';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import {
-  fetchLibraryAll,
   fetchLibraryDetail,
-  fetchMeLoose,
+  libraryQueryOptions,
   requestFileAccess,
   requestRender,
   requestUpload,
@@ -50,6 +51,9 @@ import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 /** 만드는 중·올리는 중이 없을 때 목록을 다시 읽는 간격. 썸네일 서명(60분)이 만료되기 전에 새 주소를 받으려고 */
 const STABLE_REFRESH_MS = 5 * 60_000;
+/** 만드는 중·올리는 중인 편집본이 있을 때의 간격 */
+const BUSY_REFRESH_MS = 10_000;
+const NO_CLIPS: LibraryClip[] = [];
 
 /**
  * 시안 1g ④에서 승인 대기·반려를 뺀 다섯 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
@@ -280,17 +284,49 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   // 고른 채널(POK-390). ChannelScope가 채널이 바뀌면 화면을 다시 세운다
   const streamerId = useChannelStreamerId();
   const { toast } = useToast();
-  const [clips, setClips] = useState<LibraryClip[]>(() => options.clips ?? []);
-  const [loading, setLoading] = useState(options.clips === undefined);
-  const [loaded, setLoaded] = useState(options.clips !== undefined);
-  const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  const queryClient = useQueryClient();
+  const injected = options.clips !== undefined;
+  // 시험·스토리북이 주입한 목업 줄. 서버 줄의 주인은 쿼리 캐시다: 홈과 같은 목록을 나눠 쓰고, 다시 들어오면 받아 둔 것을 바로 그린다
+  const [mockClips, setMockClips] = useState<LibraryClip[]>(() => options.clips ?? []);
+  const listOptions = useMemo(() => libraryQueryOptions(streamerId), [streamerId]);
+  const listKey = listOptions.queryKey;
+  const me = useQuery({ ...meQueryOptions, enabled: !injected });
+  // 만드는 중·올리는 중인 편집본이 있으면 10초마다 다시 읽는다 — 일꾼의 보고가 상태를 바꾼다.
+  // 확인 중(checking)은 사람이 채널을 봐야 풀리므로 기다리지 않는다.
+  // 만드는 중이 없어도 5분마다는 다시 읽는다. 썸네일 주소(POK-277)가 60분짜리 서명이라, 처음 받은 주소만 쥐고 있으면
+  // 만료 뒤 늦게 보이는 사진(lazy)이나 한 번 실패한 사진이 새 주소를 못 받는다(PR #213 codex). 화면은 50분이 지나야
+  // 새 주소로 바꾸므로 5분 간격이면 만료 전에 바뀐다
+  const list = useQuery({
+    ...listOptions,
+    enabled: !injected,
+    refetchInterval: (query) =>
+      query.state.data?.some((e) => e.status === 'rendering' || e.status === 'uploading')
+        ? BUSY_REFRESH_MS
+        : STABLE_REFRESH_MS,
+  });
+  const { refetch, dataUpdatedAt } = list;
+  const refresh = useCallback(() => {
+    if (!injected) void refetch();
+  }, [injected, refetch]);
+  const ready = list.data !== undefined && me.isFetched;
+  const loading = !injected && !ready && !list.isError;
+  const loaded = injected || ready;
+  const error =
+    list.error === null
+      ? null
+      : list.error instanceof Error
+        ? list.error.message
+        : String(list.error);
   // 「지금」은 마운트 뒤 클라이언트 시계 — 서버 렌더와 어긋나지 않게 초기값은 고정.
   const [clock, setClock] = useState(() => new Date(0));
+  useEffect(() => {
+    setClock(new Date());
+  }, [dataUpdatedAt]);
   const now = options.now ?? clock;
   const [chip, setChip] = useState<LibraryChip>('all');
   const [query, setQuery] = useState('');
+  // 격자는 늦게 따라온다: 편집본이 많아도 검색 칸의 입력이 끊기지 않게
+  const deferredQuery = useDeferredValue(query);
   const [sort, setSort] = useState<LibrarySort>('edited');
   const [selectedId, setSelectedId] = useState<string | null>(options.selectedId ?? null);
   const [sendingIds, setSendingIds] = useState<ReadonlyMap<string, SendingAction>>(() => new Map());
@@ -299,51 +335,61 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   const [downloadingIds, setDownloadingIds] = useState<ReadonlySet<string>>(() => new Set());
   const downloading = useRef(new Set<string>());
   // 패널에서 고친 제목(업로드 제목의 초안). 다시 읽기(10초 폴링)가 서버 줄로 덮어도 남아야 한다
-  const titleDrafts = useRef(new Map<string, string>());
-  const meIdRef = useRef<string | null>(null);
-  // 목록 읽기 세대. 업로드 답을 반영할 때 올려서, 그 전에 떠난 읽기가 늦게 와 「올리는 중」을 옛 줄로 덮지 못하게 한다
-  const listGeneration = useRef(0);
+  const [titleDrafts, setTitleDrafts] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const meId = me.data === undefined ? null : String(me.data.id);
+  // 바뀌지 않은 서버 줄은 화면 줄도 그대로 쓴다: react-query가 줄 객체를 지켜 주므로 다시 읽어도 카드(memo)가 다시 그려지지 않는다
+  const converted = useRef({ meId, clips: new WeakMap<LibraryEntry, LibraryClip>() });
+  const serverClips = useMemo(() => {
+    if (converted.current.meId !== meId) converted.current = { meId, clips: new WeakMap() };
+    const known = converted.current.clips;
+    return (
+      list.data?.map((entry) => {
+        const clip = known.get(entry) ?? toLibraryClip(entry, meId);
+        known.set(entry, clip);
+        return withDraft(clip, titleDrafts);
+      }) ?? NO_CLIPS
+    );
+  }, [list.data, meId, titleDrafts]);
+  const clips = injected ? mockClips : serverClips;
 
+  // 제목이 잠긴 줄(다른 기기에서 올리기 시작했다)의 초안은 버린다: 나중에 완성으로 돌아와도 옛 초안이 되살아나지 않게
   useEffect(() => {
-    setClock(new Date());
-    if (options.clips !== undefined) return undefined;
-    let alive = true;
-    const generation = listGeneration.current;
-    (async () => {
-      try {
-        const [entries, me] = await Promise.all([fetchLibraryAll(streamerId), fetchMeLoose()]);
-        if (!alive || generation !== listGeneration.current) return;
-        const meId = me === null ? null : String(me.id);
-        meIdRef.current = meId;
-        setClips(
-          entries.map((entry) => withDraft(toLibraryClip(entry, meId), titleDrafts.current)),
-        );
-        setLoaded(true);
-        setError(null);
-      } catch (e) {
-        if (!alive) return;
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [options.clips, tick, streamerId]);
+    setTitleDrafts((prev) => {
+      const kept = new Map(prev);
+      for (const clip of serverClips) if (clip.entry?.status !== 'rendered') kept.delete(clip.id);
+      return kept.size === prev.size ? prev : kept;
+    });
+  }, [serverClips]);
 
-  // 만드는 중·올리는 중인 편집본이 있으면 10초마다 다시 읽는다 — 일꾼의 보고가 상태를 바꾼다.
-  // 확인 중(checking)은 사람이 채널을 봐야 풀리므로 기다리지 않는다
-  const anyInProgress = clips.some(
-    (clip) => clip.entry?.status === 'rendering' || clip.entry?.status === 'uploading',
+  const forgetDraft = useCallback((id: string) => {
+    setTitleDrafts((prev) => {
+      const kept = new Map(prev);
+      kept.delete(id);
+      return kept;
+    });
+  }, []);
+
+  /**
+   * 받은 답을 그 서버 줄에 얹는다. 다음 읽기를 기다리지 않고 바로 옮겨 그사이 단추가 되돌아가지 않게 한다. 먼저 읽던 것을 끊는다:
+   * 답이 오기 전에 떠난 읽기가 늦게 와 「올리는 중」을 옛 줄로 덮지 못하게. 캐시에 얹어야 다시 읽는 주기도 그 상태를 본다
+   */
+  const patchEntry = useCallback(
+    async (recipeId: number, update: (entry: LibraryEntry) => LibraryEntry) => {
+      await queryClient.cancelQueries({ queryKey: listKey });
+      queryClient.setQueryData<LibraryEntry[]>(listKey, (entries) =>
+        entries?.map((entry) => (entry.recipeId === recipeId ? update(entry) : entry)),
+      );
+      // 주입한 줄도 서버 모양이면 같은 답을 받는다(시험 · 스토리북)
+      setMockClips((prev) =>
+        prev.map((clip) => {
+          if (clip.entry?.recipeId !== recipeId) return clip;
+          const next = update(clip.entry);
+          return next === clip.entry ? clip : toLibraryClip(next, meId);
+        }),
+      );
+    },
+    [queryClient, listKey, meId],
   );
-  // 만드는 중이 없어도 5분마다는 다시 읽는다. 썸네일 주소(POK-277)가 60분짜리 서명이라, 처음 받은 주소만 쥐고 있으면
-  // 만료 뒤 늦게 보이는 사진(lazy)이나 한 번 실패한 사진이 새 주소를 못 받는다(PR #213 codex). 화면은 50분이 지나야
-  // 새 주소로 바꾸므로 5분 간격이면 만료 전에 바뀐다
-  useEffect(() => {
-    const t = window.setInterval(refresh, anyInProgress ? 10_000 : STABLE_REFRESH_MS);
-    return () => window.clearInterval(t);
-  }, [anyInProgress, refresh]);
 
   const select = useCallback((id: string) => {
     setSelectedId((prev) => (prev === id ? null : id));
@@ -353,12 +399,12 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   // 편집본에는 제목 칸이 없다(계약6). 여기서 고친 제목은 업로드 제목의 초안이고, 올리면 업로드 줄(POK-220)에 남는다.
   // 올리기 전에 새로고침하면 돌아온다.
   const renameClip = useCallback((id: string, title: string) => {
-    titleDrafts.current.set(id, title);
-    setClips((prev) => prev.map((clip) => (clip.id === id ? { ...clip, title } : clip)));
+    setTitleDrafts((prev) => new Map(prev).set(id, title));
+    setMockClips((prev) => prev.map((clip) => (clip.id === id ? { ...clip, title } : clip)));
   }, []);
 
   const patch = useCallback((id: string, update: (clip: LibraryClip) => LibraryClip) => {
-    setClips((prev) => prev.map((clip) => (clip.id === id ? update(clip) : clip)));
+    setMockClips((prev) => prev.map((clip) => (clip.id === id ? update(clip) : clip)));
   }, []);
 
   /** 보내는 동작을 적는다(null이면 지운다). 무엇을 보내는지까지 적어 패널이 누른 단추만 돌린다(POK-443) */
@@ -404,21 +450,14 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
               requestUpload(entry.streamId, clipId, outputId ? { title, outputId } : { title }),
             )
         )
-          .then(({ created, upload: snap }) => {
-            titleDrafts.current.delete(id);
-            listGeneration.current += 1;
-            // 다음 읽기(폴링)를 기다리지 않고 받은 업로드로 바로 옮긴다 — 그사이 단추가 다시 「업로드」로 돌아오지 않게.
+          .then(async ({ created, upload: snap }) => {
+            forgetDraft(id);
             // 🔴 그사이 읽은 것이 더 새로우면 그대로 둔다(PR #203 codex): 이미 올리는 중·올림이면 답의 queued가 되돌리고,
             // 다른 영상이 최신이 됐으면 옛 영상의 업로드가 새 영상에 붙는다. 「아직 올릴 수 있는 같은 영상」일 때만 얹는다
-            setClips((prev) =>
-              prev.map((c) =>
-                c.id === id &&
-                c.entry !== undefined &&
-                c.entry.status === 'rendered' &&
-                c.entry.latestClip?.id === snap.clipId
-                  ? toLibraryClip(withUpload(c.entry, snap), meIdRef.current)
-                  : c,
-              ),
+            await patchEntry(entry.recipeId, (current) =>
+              current.status === 'rendered' && current.latestClip?.id === snap.clipId
+                ? withUpload(current, snap)
+                : current,
             );
             // 새 주문만 센다 — 같은 영상의 먼저 들어온 주문(created=false)은 DB 숫자와 어긋난다 (POK-357)
             if (created) track('video_upload_requested', { via: fromIntent ? 'intent' : 'title' });
@@ -444,12 +483,12 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       }
       patch(id, (clip) => (clip.status === 'ready' ? { ...clip, status: 'published' } : clip));
     },
-    [clips, patch, setSendingFlag, toast],
+    [clips, forgetDraft, patch, patchEntry, setSendingFlag, toast],
   );
 
   // 업로드 다시 시도(POK-291) = 실패한 업로드의 칸(제목·설명·태그·공개 범위·썸네일·출력)을 서버가 복사해 새로 올린다.
   // 웹은 그 칸들을 들고 있지 않아(목록이 무거워진다) 본문 없이 부른다. 늦은 답 막기는 업로드 주문과 같은 두 장치다
-  // (ADR-080 6번): 목록 읽기 세대를 올려 그 전에 떠난 읽기를 버리고, 답은 「아직 실패한 같은 영상」일 때만 얹는다.
+  // (ADR-080 6번): 읽던 것을 끊어 그 전에 떠난 읽기를 버리고, 답은 「아직 실패한 같은 영상」일 때만 얹는다.
   const retryUpload = useCallback(
     (id: string) => {
       const entry = clips.find((c) => c.id === id)?.entry;
@@ -464,20 +503,15 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       if (sending.current.has(id)) return;
       setSendingFlag(id, 'retryUpload');
       requestUploadRetry(entry.streamId, clipId)
-        .then(({ created, upload: snap }) => {
-          listGeneration.current += 1;
+        .then(async ({ created, upload: snap }) => {
           // 🔴 그사이 읽은 것이 더 새로우면 그대로 둔다: 다른 탭에서 다시 시도해 올리는 중·올림이 됐거나 다른 영상이 최신이
           // 됐으면 이 답(queued)이 그것을 되돌린다. 「아직 실패한 같은 영상」일 때만 얹는다
-          setClips((prev) =>
-            prev.map((c) =>
-              c.id === id &&
-              c.entry !== undefined &&
-              c.entry.status === 'rendered' &&
-              c.entry.latestClip?.id === snap.clipId &&
-              c.entry.latestClip?.upload?.status === 'failed'
-                ? toLibraryClip(withUpload(c.entry, snap), meIdRef.current)
-                : c,
-            ),
+          await patchEntry(entry.recipeId, (current) =>
+            current.status === 'rendered' &&
+            current.latestClip?.id === snap.clipId &&
+            current.latestClip?.upload?.status === 'failed'
+              ? withUpload(current, snap)
+              : current,
           );
           if (created) track('video_upload_retried', {});
           toast(
@@ -499,11 +533,11 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         })
         .finally(() => setSendingFlag(id, null));
     },
-    [clips, setSendingFlag, toast],
+    [clips, patchEntry, setSendingFlag, toast],
   );
 
   // 「확인 필요」 풀기(POK-333). 답을 줄에 직접 얹지 않고 목록을 다시 읽는다: 편집본 상태(STATUS_CASE)는 서버가 정한다.
-  // 읽기 세대를 올려 그 전에 떠난 읽기(아직 확인 필요)가 덮지 않게 한다. 푸는 단추는 패널 위쪽이 보이는 지금 판 업로드에만 있다.
+  // 다시 읽기가 그 전에 떠난 읽기(아직 확인 필요)를 끊는다. 푸는 단추는 패널 위쪽이 보이는 지금 판 업로드에만 있다.
   const resolveUpload = useCallback(
     async (id: string, uploadId: number, resolution: UploadResolution): Promise<boolean> => {
       const entry = clips.find((c) => c.id === id)?.entry;
@@ -532,7 +566,6 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         });
         return false;
       } finally {
-        listGeneration.current += 1;
         refresh();
         setSendingFlag(id, null);
       }
@@ -554,25 +587,16 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       if (sending.current.has(id)) return;
       setSendingFlag(id, 'retryRender');
       requestRender(entry.streamId, entry.recipeId)
-        .then(({ created, clip: snap }) => {
+        .then(async ({ created, clip: snap }) => {
           // 새 주문만 센다 — 연타·두 탭의 같은 재주문(200, created=false)은 DB 숫자와 어긋난다 (POK-357)
           if (created) track('video_render_retried', {});
-          listGeneration.current += 1;
-          // 다음 읽기를 기다리지 않고 받은 영상으로 바로 옮긴다 — 잠금이 풀린 사이 단추가 다시 「렌더 재시도」로 돌아오지 않게
-          // (업로드 주문과 같다). 그사이 읽은 것이 더 새로우면(이미 실패가 아니면) 그대로 두고, 주문됨·만드는 중이 아닌 답은
-          // 보관함 상태를 웹이 정할 수 없어(업로드가 붙었을 수 있다) 다시 읽기에 맡긴다
-          setClips((prev) =>
-            prev.map((c) =>
-              c.id === id &&
-              c.entry !== undefined &&
-              c.entry.status === 'failed' &&
-              (snap.status === 'queued' || snap.status === 'rendering')
-                ? toLibraryClip(
-                    { ...c.entry, status: 'rendering', latestClip: snap },
-                    meIdRef.current,
-                  )
-                : c,
-            ),
+          // 잠금이 풀린 사이 단추가 다시 「렌더 재시도」로 돌아오지 않게 바로 옮긴다(업로드 주문과 같다). 그사이 읽은 것이 더
+          // 새로우면(이미 실패가 아니면) 그대로 두고, 주문됨·만드는 중이 아닌 답은 보관함 상태를 웹이 정할 수 없어(업로드가 붙었을 수
+          // 있다) 다시 읽기에 맡긴다
+          await patchEntry(entry.recipeId, (current) =>
+            current.status === 'failed' && (snap.status === 'queued' || snap.status === 'rendering')
+              ? { ...current, status: 'rendering', latestClip: snap }
+              : current,
           );
           toast({ tone: 'success', title: `영상 #${snap.id} 다시 만들기를 시작했어요` });
           refresh();
@@ -588,7 +612,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         })
         .finally(() => setSendingFlag(id, null));
     },
-    [clips, patch, refresh, setSendingFlag, toast],
+    [clips, patch, patchEntry, refresh, setSendingFlag, toast],
   );
 
   // 완성 영상의 서명 주소를 그때그때 받는다(60분이라 목록에 싣지 않는다). 영상이 없는 편집본은 받는 척하지 않는다.
@@ -667,7 +691,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   const remove = useCallback(
     (id: string) => {
       if (clips.find((c) => c.id === id)?.entry !== undefined) return;
-      setClips((prev) => prev.filter((clip) => clip.id !== id));
+      setMockClips((prev) => prev.filter((clip) => clip.id !== id));
       setSelectedId((prev) => (prev === id ? null : prev));
     },
     [clips],
@@ -675,8 +699,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
 
   const counts = useMemo(() => countByChip(clips, now), [clips, now]);
   const visible = useMemo(
-    () => sortClips(filterByChip(filterByQuery(clips, query), chip, now), sort, now),
-    [clips, query, chip, sort, now],
+    () => sortClips(filterByChip(filterByQuery(clips, deferredQuery), chip, now), sort, now),
+    [clips, deferredQuery, chip, sort, now],
   );
   const selectedClip = useMemo(
     () => clips.find((clip) => clip.id === selectedId) ?? null,
@@ -719,13 +743,11 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
  * 고친 제목(초안)을 다시 읽은 줄에 얹는다. 올릴 수 있는(완성) 편집본에만 — 그 밖의 상태는 제목이 잠겨 있고, 다른 기기에서
  * 올렸으면 서버의 업로드 제목이 정본이다(초안을 얹으면 유튜브에 없는 제목이 보인다).
  */
-function withDraft(clip: LibraryClip, drafts: Map<string, string>): LibraryClip {
+function withDraft(clip: LibraryClip, drafts: ReadonlyMap<string, string>): LibraryClip {
   const draft = drafts.get(clip.id);
-  if (draft !== undefined && clip.entry?.status !== 'rendered') {
-    drafts.delete(clip.id);
-    return clip;
-  }
-  return draft === undefined ? clip : { ...clip, title: draft };
+  return draft === undefined || clip.entry?.status !== 'rendered'
+    ? clip
+    : { ...clip, title: draft };
 }
 
 /** 업로드 주문의 답을 서버 줄에 얹는다 — 보관함 상태는 clip이 업로드 상태로 정하는 규칙(POK-220)을 그대로 따른다 */

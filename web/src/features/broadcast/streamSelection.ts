@@ -1,6 +1,7 @@
 'use client';
 
 import { ApiError, apiFetch } from '@/api/client';
+import { onSessionAdvance } from '@/stores/auth';
 import { notifyChannelGone } from '@/stores/channel';
 
 // 지금 볼 방송 번호를 정한다(POK-251).
@@ -21,10 +22,11 @@ export function vodStreamIdFromPathname(pathname: string): string | null {
   return m?.[1] ? decodeURIComponent(m[1]) : null;
 }
 
-/** 기억해 둔 답을 전부 버린다: 시험 사이에 앞 시험의 방송이 남지 않게 */
+/** 기억해 둔 답을 전부 버린다: 계정이 바뀌면 앞 계정의 방송을 고르지 않게(시험 사이에도 부른다) */
 export function forgetLiveStreamId() {
   cached.clear();
 }
+onSessionAdvance(forgetLiveStreamId);
 
 async function askLiveStreamId(streamerId: number | null): Promise<string | null> {
   try {

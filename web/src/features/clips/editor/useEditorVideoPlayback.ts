@@ -10,10 +10,10 @@ import {
   boundaryAction,
   effectiveBounds,
   MEDIA_END_MARGIN_SECONDS,
-  type EditorPlayback,
   type PlaybackBounds,
   type PlaybackError,
 } from './editorPlayback';
+import { createPlaybackClock, type ClockedPlayback } from './playbackClock';
 
 // 편집기의 실재생 어댑터(POK-251) — 녹화 재생 서버에서 「구간 앞뒤로 조금 넉넉한 창」을 mp4 한 덩어리로 받아
 // <video> 하나로 튼다. 방송 중이든 끝난 뒤든 같은 길이다(녹화 파일에서 읽는다).
@@ -90,7 +90,7 @@ export async function fetchRecordingWindow(
 }
 
 export interface EditorVideoPlayback {
-  playback: EditorPlayback;
+  playback: ClockedPlayback;
   /** 화면이 <video ref=…> 로 받는다. 노드는 보이지 않게 두고 프레임은 VideoSurface 가 그린다 */
   videoRef: (element: HTMLVideoElement | null) => void;
   video: HTMLVideoElement | null;
@@ -126,7 +126,20 @@ export function useEditorVideoPlayback(options: {
   piecesRef.current = pieces;
   const [playing, setPlaying] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(initialRange.startSeconds);
+  // 재생 중 위치는 저장소에만 흐른다: 상태로 들면 이 훅을 부르는 화면부터 전부가 프레임마다 다시 돈다
+  const [clock] = useState(() => createPlaybackClock(initialRange.startSeconds));
   const [failure, setFailure] = useState<PlaybackError | null>(null);
+  /** 재생 위치를 끄는 중. 멈춘 영상도 seeked마다 허브를 깨우지 않게 끌기가 끝날 때 한 번만 올린다 */
+  const scrubbingRef = useRef(false);
+
+  /** 위치를 허브까지 올린다: 멈춤 · 시크 · 구간 경계에서만. 재생 틱은 clock.publish만 부른다 */
+  const settle = useCallback(
+    (seconds: number) => {
+      clock.publish(seconds);
+      setCurrentSeconds(seconds);
+    },
+    [clock],
+  );
 
   const winRef = useRef(win);
   winRef.current = win;
@@ -185,6 +198,17 @@ export function useEditorVideoPlayback(options: {
     return () => abort.abort();
   }, [remoteUrl, streamId, recordingSeconds, win]);
 
+  // 편집기가 내려가면 영상 노드가 쥔 디코더 · 버퍼를 놓는다. 노드를 문서에서 떼는 것만으로는 GC될 때까지 남는다: src 제거만으로도
+  // 모자라 load()까지 해야 풀린다(useHlsPlayback과 같다). 아래 주소 지우기보다 먼저 돌도록 그 앞에 둔다
+  useEffect(() => {
+    if (video === null) return undefined;
+    return () => {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
+  }, [video]);
+
   // 옛 영상 주소는 새 영상이 들어간 뒤에(또는 화면을 떠날 때) 지운다: 새 창을 받는 동안에도 <video>는 옛 주소로 틀고
   // 되감기 때문에, 받기를 시작할 때 지우면 그 사이 되감기가 브라우저에 따라 실패한다(PR #341 claude)
   useEffect(() => {
@@ -213,7 +237,7 @@ export function useEditorVideoPlayback(options: {
       pendingSeekRef.current = null;
       if (target !== null)
         video.currentTime = Math.max(0, clampToWindow(target) - loadedRef.current.startSeconds);
-      setCurrentSeconds(position());
+      settle(position());
     };
     const onTime = () => {
       const now = position();
@@ -223,13 +247,22 @@ export function useEditorVideoPlayback(options: {
           0,
           clampToWindow(action.toSeconds) - loadedRef.current.startSeconds,
         );
+        settle(position());
       } else if (action.kind === 'stop' && !video.paused) {
         video.pause();
+        settle(position());
+      } else if (video.paused && !scrubbingRef.current) {
+        settle(now);
+      } else {
+        // 재생 중(초당 4번쯤 온다)이나 끄는 중에는 허브를 깨우지 않는다
+        clock.publish(now);
       }
-      setCurrentSeconds(position());
     };
     const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    const onPause = () => {
+      setPlaying(false);
+      settle(position());
+    };
     // 경계 틱보다 영상 끝이 먼저 왔다(영상 끝 바로 앞의 틱을 놓침): 「구간 반복」이면 구간 시작으로 되감아 이어 튼다.
     // 전에는 멈추기만 해서, 받은 영상이 구간 끝보다 짧으면 반복을 켜 둬도 끝에서 섰다(POK-490).
     // 받은 영상이 구간 시작에도 못 닿으면 되감을 자리가 영상 밖이라 멈춘다 — 되감기가 영상 길이로 잘리고 play()가 끝난 영상을
@@ -240,12 +273,14 @@ export function useEditorVideoPlayback(options: {
       const loopable = mediaEnd - MEDIA_END_MARGIN_SECONDS > boundsRef.current.startSeconds;
       if (!boundsRef.current.loop || !loopable) {
         setPlaying(false);
+        settle(position());
         return;
       }
       video.currentTime = Math.max(
         0,
         clampToWindow(boundsRef.current.startSeconds) - loadedRef.current.startSeconds,
       );
+      settle(position());
       video.play().catch((e: unknown) => {
         if (!(e instanceof DOMException && e.name === 'AbortError')) setFailure('fatal');
       });
@@ -269,9 +304,10 @@ export function useEditorVideoPlayback(options: {
       video.removeEventListener('ended', onEnded);
       video.removeEventListener('error', onError);
     };
-  }, [video, clampToWindow, boundsNow]);
+  }, [video, clampToWindow, boundsNow, clock, settle]);
 
   // timeupdate 는 초당 4번쯤이라 구간 끝을 0.25초까지 넘긴다 — 재생 중에는 프레임마다 경계를 본다.
+  // 위치는 프레임마다 저장소로만 간다. 허브까지 가는 것은 되감을 때뿐이고, 멈출 때는 pause 이벤트가 올린다
   useEffect(() => {
     if (video === null || !playing) return undefined;
     let raf = 0;
@@ -284,14 +320,15 @@ export function useEditorVideoPlayback(options: {
           0,
           clampToWindow(action.toSeconds) - loadedRef.current.startSeconds,
         );
-      } else if (action.kind === 'stop') {
-        video.pause();
+        settle(loadedRef.current.startSeconds + video.currentTime);
+        return;
       }
-      setCurrentSeconds(now);
+      if (action.kind === 'stop') video.pause();
+      clock.publish(now);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [video, playing, clampToWindow, boundsNow]);
+  }, [video, playing, clampToWindow, boundsNow, clock, settle]);
 
   const togglePlay = useCallback(() => {
     if (video === null) return;
@@ -304,6 +341,7 @@ export function useEditorVideoPlayback(options: {
           0,
           clampToWindow(bounds.startSeconds) - loadedRef.current.startSeconds,
         );
+        settle(loadedRef.current.startSeconds + video.currentTime);
       }
       // 누르자마자 멈추거나 새 영상으로 갈아 끼우면 play()가 AbortError로 거절된다: 보통 조작이라 오류로 알리지 않는다
       video.play().catch((e: unknown) => {
@@ -312,16 +350,16 @@ export function useEditorVideoPlayback(options: {
     } else {
       video.pause();
     }
-  }, [video, clampToWindow, boundsNow]);
+  }, [video, clampToWindow, boundsNow, settle]);
 
   const seekTo = useCallback(
     (seconds: number) => {
       if (video === null) return;
       const target = clampToWindow(seconds);
       video.currentTime = Math.max(0, target - loadedRef.current.startSeconds);
-      setCurrentSeconds(target);
+      settle(target);
     },
-    [video, clampToWindow],
+    [video, clampToWindow, settle],
   );
 
   const seekBy = useCallback(
@@ -331,6 +369,23 @@ export function useEditorVideoPlayback(options: {
     },
     [video, seekTo],
   );
+
+  const scrubTo = useCallback(
+    (seconds: number) => {
+      if (video === null) return;
+      scrubbingRef.current = true;
+      const target = clampToWindow(seconds);
+      video.currentTime = Math.max(0, target - loadedRef.current.startSeconds);
+      clock.publish(target);
+    },
+    [video, clampToWindow, clock],
+  );
+
+  const endScrub = useCallback(() => {
+    if (!scrubbingRef.current) return;
+    scrubbingRef.current = false;
+    settle(clock.getSeconds());
+  }, [clock, settle]);
 
   const setRate = useCallback(
     (rate: number) => {
@@ -381,26 +436,32 @@ export function useEditorVideoPlayback(options: {
     [],
   );
 
-  const playback = useMemo<EditorPlayback>(
+  const playback = useMemo<ClockedPlayback>(
     () => ({
       playing,
       currentSeconds,
+      clock,
       durationSeconds: recordingSeconds,
       error: failure,
       togglePlay,
       seekTo,
       seekBy,
+      scrubTo,
+      endScrub,
       setRate,
       setBounds,
     }),
     [
       playing,
       currentSeconds,
+      clock,
       recordingSeconds,
       failure,
       togglePlay,
       seekTo,
       seekBy,
+      scrubTo,
+      endScrub,
       setRate,
       setBounds,
     ],

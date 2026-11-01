@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { onCrossTabSessionChange, useAuthStore } from '@/stores/auth';
+import { onCrossTabSessionChange, onSessionAdvance, useAuthStore } from '@/stores/auth';
 
 const STORAGE_KEY = 'pc-auth';
 
@@ -69,6 +69,24 @@ describe('useAuthStore', () => {
     expect(useAuthStore.getState().accessToken).toBeNull();
     expect(useAuthStore.getState().refreshToken).toBeNull();
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe('onSessionAdvance: 계정이 바뀌었을 수 있는 순간', () => {
+  it('로그인·로그아웃에 불리고 같은 세션의 회전에는 안 불린다: 회전마다 비우면 받아 둔 것을 30분마다 잃는다', () => {
+    const listener = vi.fn();
+    const unsubscribe = onSessionAdvance(listener);
+    const { setTokens, rotateTokens, clearTokens } = useAuthStore.getState();
+
+    setTokens({ accessToken: 'a-1', refreshToken: 'r-1' });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    rotateTokens({ accessToken: 'a-2', refreshToken: 'r-2' });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    clearTokens();
+    expect(listener).toHaveBeenCalledTimes(2);
+    unsubscribe();
   });
 });
 

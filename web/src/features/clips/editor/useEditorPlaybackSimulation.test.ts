@@ -44,7 +44,47 @@ describe('useEditorPlaybackSimulation', () => {
 
     act(() => vi.advanceTimersByTime(300));
 
+    expect(result.current.clock.getSeconds()).toBeCloseTo(BOUNDS.startSeconds + 0.3, 5);
+  });
+
+  it('재생 틱은 저장소만 움직이고 허브는 깨우지 않는다: 실재생과 같은 규칙이다', () => {
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useEditorPlaybackSimulation({ durationSeconds: DURATION, initialSeconds: 100 });
+    });
+    act(() => result.current.setBounds(BOUNDS));
+    act(() => result.current.togglePlay());
+    const before = renders;
+
+    act(() => vi.advanceTimersByTime(1000));
+
+    expect(renders).toBe(before);
+    expect(result.current.currentSeconds).toBe(100);
+    expect(result.current.clock.getSeconds()).toBeCloseTo(101, 5);
+  });
+
+  it('멈추면 흐르던 위치가 허브까지 올라온다', () => {
+    const { result } = renderSimulation();
+    act(() => result.current.setBounds(BOUNDS));
+    act(() => result.current.togglePlay());
+    act(() => vi.advanceTimersByTime(300));
+
+    act(() => result.current.togglePlay());
+
+    expect(result.current.playing).toBe(false);
     expect(result.current.currentSeconds).toBeCloseTo(BOUNDS.startSeconds + 0.3, 5);
+  });
+
+  it('끄는 동안은 저장소만 움직이고, 끝나면 허브에 올라온다', () => {
+    const { result } = renderSimulation();
+
+    act(() => result.current.scrubTo(105));
+    expect(result.current.clock.getSeconds()).toBe(105);
+    expect(result.current.currentSeconds).toBe(BOUNDS.startSeconds);
+
+    act(() => result.current.endScrub());
+    expect(result.current.currentSeconds).toBe(105);
   });
 
   it('배속을 올리면 같은 시간에 그만큼 더 간다', () => {
@@ -55,7 +95,7 @@ describe('useEditorPlaybackSimulation', () => {
 
     act(() => vi.advanceTimersByTime(300));
 
-    expect(result.current.currentSeconds).toBeCloseTo(BOUNDS.startSeconds + 0.6, 5);
+    expect(result.current.clock.getSeconds()).toBeCloseTo(BOUNDS.startSeconds + 0.6, 5);
   });
 
   it('배속을 바꿔도 진행이 밀리지 않는다 — 인터벌을 다시 걸지 않는다', () => {
@@ -67,7 +107,7 @@ describe('useEditorPlaybackSimulation', () => {
     act(() => result.current.setRate(2)); // 여기서 인터벌이 재시작하면 이 50ms가 버려진다
     act(() => vi.advanceTimersByTime(50)); // 첫 틱 완성
 
-    expect(result.current.currentSeconds).toBeCloseTo(BOUNDS.startSeconds + 0.2, 5);
+    expect(result.current.clock.getSeconds()).toBeCloseTo(BOUNDS.startSeconds + 0.2, 5);
   });
 
   it('구간 반복이면 끝에서 시작으로 되감는다', () => {

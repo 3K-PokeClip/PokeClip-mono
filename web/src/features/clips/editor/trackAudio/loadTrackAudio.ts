@@ -1,4 +1,5 @@
 import type { SegmentAudioAccess } from '@/api/clipEditor';
+import { runLimited } from '@/lib/runLimited';
 import { demuxAudioTracks, toAdts, type AacConfig, type AudioTrackFrames } from './fmp4Audio';
 
 // 구간의 녹화 조각을 받아 소리 트랙마다 풀어 둔다(POK-389). 조각마다 따로 풀지 않고 「이어진 조각끼리」 프레임을 이어 한 번에 푼다.
@@ -17,9 +18,13 @@ export interface SegmentAudioSource {
 }
 
 /** 조각 사이가 이만큼 넘게 벌어지면 다른 덩어리다(조각 길이는 ms 정수라 어긋남이 작다) */
-const GAP_TOLERANCE_MS = 50;
+export const GAP_TOLERANCE_MS = 50;
 /** 동시에 받는 조각 수 */
 const PARALLEL = 4;
+/**
+ * 한 덩어리의 트랙을 동시에 푸는 수. 트랙이 여섯이면 풀린 소리(수십 MB)와 풀기 작업이 한꺼번에 여섯 몫 선다
+ */
+const DECODE_PARALLEL = 2;
 
 interface Run {
   startAtMs: number;
@@ -66,15 +71,25 @@ export class SegmentUrlExpiredError extends Error {
   }
 }
 
+/** 조각 목록만 보고 받을 필요가 없다고 판정했다(precheck가 false). 본문은 받지 않았다 */
+export class SegmentsNotReadyError extends Error {
+  constructor() {
+    super('segments not ready');
+  }
+}
+
 /**
+ * @param precheck 조각 목록(주소 응답)만 보고 본문을 받을지 정한다. false면 하나도 받지 않고 SegmentsNotReadyError로 던진다
  * @param baseMs 편집기 시간축의 0초(절대 ms): 조각의 재생 축 시각을 편집기 초로 옮긴다
  * @returns 트랙 번호(파일 순서) → 덩어리들. 받을 조각이 없으면 빈 목록. 주소·내려받기가 실패하거나 받은 조각 하나라도 못 풀면 던진다
  */
 export async function loadTrackAudio(
   source: SegmentAudioSource,
   baseMs: number,
+  precheck?: (segments: SegmentAudioAccess['segments']) => boolean,
 ): Promise<TrackPiece[][]> {
   let current = await source.fetchAccess();
+  if (precheck !== undefined && !precheck(current.segments)) throw new SegmentsNotReadyError();
   const ordered = [...current.segments].sort((a, b) => a.seq - b.seq);
 
   // 받기가 서명 주소 수명(기본 5분)보다 길어지면 뒤에 받는 조각의 주소가 만료된다(느린 망의 3분 구간 ≈ 150MB):
@@ -142,7 +157,15 @@ export async function loadTrackAudio(
   const trackCount = Math.max(0, ...runs.map((run) => run.tracks.length));
   const pieces: TrackPiece[][] = Array.from({ length: trackCount }, () => []);
   for (const run of runs) {
-    const buffers = await Promise.all(run.tracks.map((track) => source.decode(toAdts(track))));
+    // 결과 순서는 트랙 순서다: 끝나는 순서가 아니라 자리(k)에 넣는다
+    const buffers = new Array<AudioBuffer>(run.tracks.length);
+    await runLimited(
+      run.tracks.map((track, k) => ({ track, k })),
+      DECODE_PARALLEL,
+      async ({ track, k }) => {
+        buffers[k] = await source.decode(toAdts(track));
+      },
+    );
     buffers.forEach((buffer, k) =>
       pieces[k]!.push({ startSeconds: (run.startAtMs - baseMs) / 1000, buffer }),
     );

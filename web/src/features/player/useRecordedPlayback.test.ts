@@ -1030,3 +1030,75 @@ describe('useRecordedPlayback: 쿠키가 지워진 줄기 (PR #332 codex)', () =
     expect(load).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('useRecordedPlayback: 영상 노드 자원', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function stubbed() {
+    const { video } = fakeVideo();
+    const pause = vi.fn();
+    const load = vi.fn();
+    Object.defineProperty(video, 'pause', { value: pause });
+    Object.defineProperty(video, 'load', { value: load });
+    return { video, pause, load };
+  }
+
+  const twoSpans = () =>
+    source([
+      [0, 14],
+      [24, 14],
+    ]);
+
+  it('언마운트 때 멈추고 src를 지우고 load로 네트워크 · 디코더를 놓는다', () => {
+    const { video, pause, load } = stubbed();
+    const recorded = twoSpans();
+    // ref는 부품이 서 있는 동안 같은 객체다(매 그리기 새로 만들면 효과가 매번 다시 돈다)
+    const ref = { current: video };
+    const { unmount } = renderHook(() => useRecordedPlayback(ref, recorded));
+    expect(video.getAttribute('src')).not.toBeNull();
+    expect(pause).not.toHaveBeenCalled();
+    unmount();
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(video.getAttribute('src')).toBeNull();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('줄기를 갈아 끼울 때(옮김)는 풀지 않는다: 새 줄기가 붙기 전에 한 번 더 끊기지 않는다', () => {
+    const { video, pause, load } = stubbed();
+    const recorded = twoSpans();
+    const ref = { current: video };
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    const before = video.getAttribute('src');
+    act(() => result.current.seekToFraction(30 / 38));
+    act(() => vi.advanceTimersByTime(300));
+    expect(video.getAttribute('src')).not.toBe(before);
+    expect(pause).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('timeupdate가 같은 초 안에서 오면 반환 객체를 새로 만들지 않는다: 재생기가 초당 네 번 다시 그려지지 않는다', () => {
+    const { video } = stubbed();
+    let time = 3.1;
+    Object.defineProperty(video, 'currentTime', { get: () => time, configurable: true });
+    const recorded = twoSpans();
+    const ref = { current: video };
+    const seen: unknown[] = [];
+    renderHook(() => {
+      const sim = useRecordedPlayback(ref, recorded);
+      seen.push(sim);
+      return sim;
+    });
+    act(() => video.dispatchEvent(new Event('timeupdate')));
+    const afterFirst = seen[seen.length - 1];
+    // 같은 초(3.1 → 3.3)이고 끝까지 남은 초(round)도 같다
+    time = 3.3;
+    act(() => video.dispatchEvent(new Event('timeupdate')));
+    expect(seen[seen.length - 1]).toBe(afterFirst);
+    // 호출 횟수는 재지 않는다: 같은 값으로 상태를 바꾸면 React가 커밋 없이 한 번 더 부를 수 있다(렌더 단계만의 일이다)
+    // 초가 넘어가면 새 객체다
+    time = 4.6;
+    act(() => video.dispatchEvent(new Event('timeupdate')));
+    expect(seen[seen.length - 1]).not.toBe(afterFirst);
+  });
+});

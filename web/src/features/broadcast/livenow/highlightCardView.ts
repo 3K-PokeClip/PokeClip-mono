@@ -5,6 +5,7 @@
 // 화면이 조용히 빈 배지를 그리는 대신 빌드가 멈춘다.
 
 import { parseClockLabel } from '@/features/player/playerMath';
+import { CARD_THUMBNAIL_PASS_MS, pickThumbnailUrl } from '@/features/thumbnail/thumbnailUrl';
 import type { BadgeTone } from '@/ui';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
@@ -92,6 +93,49 @@ function fallbackPosPercent(timestamp: string, uptimeSeconds: number): number {
   const seconds = parseClockLabel(timestamp);
   if (seconds === null || uptimeSeconds <= 0) return 100;
   return Math.min(100, Math.max(0, Math.round((seconds / uptimeSeconds) * 100)));
+}
+
+/** 눈금 계산에 넘기는 라이브 경과의 단위: 경과를 이만큼으로 나눈 값 */
+const CARD_POSITION_STEPS = 100;
+
+/**
+ * 카드 눈금에 넘기는 라이브 경과. 경과는 매초 늘어 그대로 넘기면 카드 전부가 매초 다시 그려지므로 경과의 1% 단위로 올려 묶는다.
+ * 단위를 고정하면 방송 초반의 오차가 커진다: 15초 단위면 61초에 방금 생긴 카드가 끝이 아니라 80% 자리에 선다.
+ * 대신 첫 100초는 단위가 1초라 매초 다시 그려진다: 그 구간은 카드가 거의 없어 정확도를 택했다.
+ */
+export function cardPositionUptime(uptimeSeconds: number): number {
+  const step = Math.max(1, Math.ceil(uptimeSeconds / CARD_POSITION_STEPS));
+  return Math.ceil(uptimeSeconds / step) * step;
+}
+
+/**
+ * 그려진 내용이 같은가. 사진은 글자가 아니라 같은 사진인지 본다: 서버가 목록마다 새로 서명해 주소가 3초마다 바뀐다(POK-277).
+ * 새 주소를 아주 막지는 않는다: 못 받은 사진은 새 주소가 와야 다시 시도한다(CARD_THUMBNAIL_PASS_MS)
+ */
+function sameHighlight(a: LiveHighlight, b: LiveHighlight, now: number): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof LiveHighlight>;
+  for (const key of keys) {
+    if (key !== 'thumbnailUrl' && !Object.is(a[key], b[key])) return false;
+  }
+  const shown = a.thumbnailUrl ?? null;
+  return pickThumbnailUrl(shown, b.thumbnailUrl ?? null, now, CARD_THUMBNAIL_PASS_MS) === shown;
+}
+
+/**
+ * 새로 만든 카드 목록에서 내용이 같은 카드는 앞 객체를 쓰고, 전부 같으면 앞 배열을 그대로 돌려준다. 경과 표기 때문에 목록을 매초 다시
+ * 만들어도 표기가 바뀐 카드만 다시 그린다.
+ */
+export function reuseHighlights(
+  prev: LiveHighlight[],
+  next: LiveHighlight[],
+  now: number,
+): LiveHighlight[] {
+  const known = new Map(prev.map((highlight) => [highlight.id, highlight]));
+  const merged = next.map((highlight) => {
+    const old = known.get(highlight.id);
+    return old !== undefined && sameHighlight(old, highlight, now) ? old : highlight;
+  });
+  return merged.length === prev.length && merged.every((h, i) => h === prev[i]) ? prev : merged;
 }
 
 export function cardVisualFor(

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { retryServerFailure } from '@/lib/queryRetry';
 import { onCrossTabSessionChange } from '@/stores/auth';
 import { ThemeProvider, ToastProvider } from '@/ui';
 
@@ -15,7 +16,7 @@ export function Providers({ children }: { children: ReactNode }) {
         defaultOptions: {
           queries: {
             staleTime: 60_000,
-            retry: 1,
+            retry: retryServerFailure,
           },
         },
       }),

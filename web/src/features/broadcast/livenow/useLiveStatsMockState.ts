@@ -10,7 +10,7 @@ import {
   formatPerMinute,
   missingWord,
   trustedViewerSeries,
-  useLiveData,
+  useLiveField,
   type LiveBroadcastStatus,
   type LiveChartScope,
 } from './liveDataStore';
@@ -74,7 +74,9 @@ const DONATION_SCOPE: Record<LiveChartScope, (minutes: number) => string> = {
 export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockState {
   // 저장소 전체가 아니라 쓰는 칸에만 묶는다: 지난 방송을 트는 동안 재생 위치(playheadMs)가 매초 바뀌어, 통째로 묶으면 그래프(memo)가
   // 매초 다시 그려졌다(PR #316 리뷰 2라운드)
-  const { chart: raw, info, status } = useLiveData();
+  const raw = useLiveField('chart');
+  const info = useLiveField('info');
+  const status = useLiveField('status');
 
   return useMemo(() => {
     const first = raw?.buckets[0];

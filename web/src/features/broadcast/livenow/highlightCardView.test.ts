@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { cardViewFor, cardVisualFor } from './highlightCardView';
+import { CARD_THUMBNAIL_PASS_MS } from '@/features/thumbnail/thumbnailUrl';
+import {
+  cardPositionUptime,
+  cardViewFor,
+  cardVisualFor,
+  reuseHighlights,
+} from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { HighlightStatus, LiveHighlight, LiveStream } from './useLiveMockState';
 
@@ -108,5 +114,102 @@ describe('cardVisualFor — 모르는 카드는 계약 필드에서 세운다', 
     expect(resolved.spark).toBeNull();
     expect(resolved.timeAgo).toBeNull();
     expect(resolved.progress).toBeNull();
+  });
+});
+
+describe('cardPositionUptime: 카드 눈금에 넘기는 라이브 경과', () => {
+  const positionOfNewestCard = (uptime: number) =>
+    Math.round((uptime / cardPositionUptime(uptime)) * 100);
+
+  it.each([1, 30, 61, 74, 101, 301, 899, 1501, 5043, 43_199])(
+    '%d초에 방금 생긴 카드는 끝에서 1% 안에 선다',
+    (uptime) => {
+      expect(positionOfNewestCard(uptime)).toBeGreaterThanOrEqual(99);
+    },
+  );
+
+  it('방송 초반에도 오차가 작다: 15초 단위로 올리면 61초의 카드가 80% 자리에 섰다', () => {
+    expect(positionOfNewestCard(61)).toBe(100);
+  });
+
+  it('한 단위 안에서는 같은 값이다: 값이 그대로면 카드가 다시 그려지지 않는다', () => {
+    expect(cardPositionUptime(3_601)).toBe(cardPositionUptime(3_620));
+  });
+
+  it('경과가 0이면 0이다', () => {
+    expect(cardPositionUptime(0)).toBe(0);
+  });
+});
+
+describe('reuseHighlights', () => {
+  const NOW = Date.parse('2026-10-31T01:00:00Z');
+  /** 카드 사진 주소. 서명 시각만 달라도 글자가 다르다(서버가 목록마다 새로 서명한다) */
+  const photo = (signed: string) =>
+    `https://bucket.s3.amazonaws.com/cards/23.jpg?X-Amz-Date=${signed}&X-Amz-Signature=sig-${signed}`;
+
+  it('내용이 그대로면 앞 배열을 그대로 돌려준다: 매초 새 배열이면 카드 패널의 memo가 무력해진다', () => {
+    const prev = [highlight({ id: 'a' }), highlight({ id: 'b' })];
+
+    const next = reuseHighlights(prev, [highlight({ id: 'a' }), highlight({ id: 'b' })], NOW);
+
+    expect(next).toBe(prev);
+  });
+
+  it('표기가 바뀐 카드만 새 객체다: 나머지 카드는 다시 그리지 않는다', () => {
+    const prev = [highlight({ id: 'a', meta: '5초 전' }), highlight({ id: 'b', meta: '3분 전' })];
+
+    const next = reuseHighlights(
+      prev,
+      [highlight({ id: 'a', meta: '6초 전' }), highlight({ id: 'b', meta: '3분 전' })],
+      NOW,
+    );
+
+    expect(next).not.toBe(prev);
+    expect(next[0]?.meta).toBe('6초 전');
+    expect(next[1]).toBe(prev[1]);
+  });
+
+  it('카드가 늘거나 순서가 바뀌면 새 배열이다', () => {
+    const a = highlight({ id: 'a' });
+    const b = highlight({ id: 'b' });
+
+    expect(reuseHighlights([a], [a, b], NOW)).toEqual([a, b]);
+    const swapped = reuseHighlights([a, b], [highlight({ id: 'b' }), highlight({ id: 'a' })], NOW);
+    expect(swapped[0]).toBe(b);
+    expect(swapped[1]).toBe(a);
+  });
+
+  it('같은 사진을 새로 서명한 주소는 바뀐 것이 아니다: 3초마다 온 카드가 전부 다시 그려진다', () => {
+    const prev = [highlight({ id: 'a', thumbnailUrl: photo('20261031T005930Z') })];
+
+    const next = reuseHighlights(
+      prev,
+      [highlight({ id: 'a', thumbnailUrl: photo('20261031T010000Z') })],
+      NOW,
+    );
+
+    expect(next).toBe(prev);
+  });
+
+  it('1분이 지나면 새 주소를 넘긴다: 못 받은 사진은 새 주소가 와야 다시 시도한다', () => {
+    const oldUrl = photo('20261031T000000Z');
+    const newUrl = photo('20261031T000100Z');
+    const prev = [highlight({ id: 'a', thumbnailUrl: oldUrl })];
+
+    const next = reuseHighlights(
+      prev,
+      [highlight({ id: 'a', thumbnailUrl: newUrl })],
+      Date.parse('2026-10-31T00:00:00Z') + CARD_THUMBNAIL_PASS_MS,
+    );
+
+    expect(next[0]?.thumbnailUrl).toBe(newUrl);
+  });
+
+  it('사진이 생기거나 사라지면 바뀐 것이다', () => {
+    const none = highlight({ id: 'a', thumbnailUrl: null });
+    const shown = highlight({ id: 'a', thumbnailUrl: photo('20261031T010000Z') });
+
+    expect(reuseHighlights([none], [shown], NOW)[0]).toBe(shown);
+    expect(reuseHighlights([shown], [none], NOW)[0]).toBe(none);
   });
 });

@@ -1,6 +1,7 @@
 import type { MouseEvent } from 'react';
 import { Camera, Check, ChevronDown, Pause, Play, Repeat } from 'lucide-react';
 import { DropdownMenu, IconButton } from '@/ui';
+import { usePlaybackValue } from './playbackClock';
 import { SeekIcon } from './SeekIcon';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
@@ -31,12 +32,22 @@ function shortsClock(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}.${tenths % 10}`;
 }
 
-export function TransportBar({ state }: { state: ClipEditorMockState }) {
-  const position = Math.min(
-    Math.max(0, state.playheadSeconds - state.range.startSeconds),
-    state.rangeLengthSeconds,
+/** 쇼츠 안 시각. 재생 막대에서 재생 중에 바뀌는 글자는 이것뿐이라 따로 구독한다: 표기가 같은 동안(0.1초)은 다시 그리지 않는다 */
+function TransportClock({ state }: { state: ClipEditorMockState }) {
+  const elapsed = usePlaybackValue(state.clock, (seconds) =>
+    shortsClock(
+      Math.min(Math.max(0, seconds - state.range.startSeconds), state.rangeLengthSeconds),
+    ),
   );
+  return (
+    <span className={styles.transportTime}>
+      {elapsed}{' '}
+      <span className={styles.transportTotal}>/ {shortsClock(state.rangeLengthSeconds)}</span>
+    </span>
+  );
+}
 
+export function TransportBar({ state }: { state: ClipEditorMockState }) {
   return (
     <div className={styles.transport}>
       <IconButton
@@ -88,10 +99,7 @@ export function TransportBar({ state }: { state: ClipEditorMockState }) {
       >
         <SeekIcon direction="forward" seconds={5} />
       </IconButton>
-      <span className={styles.transportTime}>
-        {shortsClock(position)}{' '}
-        <span className={styles.transportTotal}>/ {shortsClock(state.rangeLengthSeconds)}</span>
-      </span>
+      <TransportClock state={state} />
       <div className={styles.transportRight}>
         <button
           type="button"

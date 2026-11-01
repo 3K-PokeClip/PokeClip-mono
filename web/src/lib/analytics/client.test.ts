@@ -50,11 +50,50 @@ beforeEach(() => {
   // 테스트마다 resetModules로 새 스토어를 만든다. 탭 간 채널을 두면 앞 테스트의 스토어들이 「login」을 받아
   // 같은 목에 reset을 더 부른다 — 이 파일은 한 탭 안의 규칙만 본다
   vi.stubGlobal('BroadcastChannel', undefined);
+  // jsdom에는 없어 시험마다 Safari 폴백(500ms)을 기다리게 된다. 기다리는 동작은 아래 묶음에서 따로 본다
+  vi.stubGlobal('requestIdleCallback', (run: () => void) => run());
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+});
+
+describe('initAnalytics — SDK는 브라우저가 한가할 때 받는다', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('브라우저가 한가해지기 전에는 SDK를 받지 않는다: 하이드레이션과 겹치면 조작 가능해지는 때가 밀린다', async () => {
+    let idle = () => {};
+    const requestIdle = vi.fn((run: () => void, _options: { timeout: number }) => {
+      idle = run;
+    });
+    vi.stubGlobal('requestIdleCallback', requestIdle);
+    const { client } = await load('phc_test', 'https://us.i.posthog.com');
+
+    client.initAnalytics();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(posthog.init).not.toHaveBeenCalled();
+    expect(requestIdle.mock.calls[0]?.[1]).toEqual({ timeout: 3000 });
+
+    idle();
+    await client.whenAnalyticsLoaded();
+    expect(posthog.init).toHaveBeenCalledTimes(1);
+  });
+
+  it('requestIdleCallback이 없는 브라우저(Safari)는 잠깐 기다렸다가 받는다', async () => {
+    vi.stubGlobal('requestIdleCallback', undefined);
+    const { client } = await load('phc_test', 'https://us.i.posthog.com');
+    vi.useFakeTimers();
+
+    client.initAnalytics();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(posthog.init).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    vi.useRealTimers();
+    await client.whenAnalyticsLoaded();
+    expect(posthog.init).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('initAnalytics — 키가 없으면 꺼진다(POK-356)', () => {

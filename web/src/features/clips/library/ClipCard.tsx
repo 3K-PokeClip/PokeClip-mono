@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import clsx from 'clsx';
 import { Badge } from '@/ui';
 import {
@@ -25,7 +26,8 @@ export function clipCardDomId(id: string): string {
   return `clip-card-${id}`;
 }
 
-export function ClipCard({
+// memo인 이유 — 보관함에는 개수 상한이 없고 검색 입력 · 패널 열기마다 격자가 다시 그려진다. 바뀌지 않은 줄의 객체는 그대로다(useLibraryMockState)
+export const ClipCard = memo(function ClipCard({
   clip,
   status,
   selected,
@@ -68,4 +70,4 @@ export function ClipCard({
       </button>
     </li>
   );
-}
+});

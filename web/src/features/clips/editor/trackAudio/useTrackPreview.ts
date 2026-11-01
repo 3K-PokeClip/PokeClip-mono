@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { requestSegmentAudioAccess } from '@/api/clipEditor';
+import { requestSegmentAudioAccess, type SegmentAudioAccess } from '@/api/clipEditor';
 import { segmentTrackKey, segmentTracks } from '../editorMedia';
 import { loadTrackAudio, SegmentUrlExpiredError, type TrackPiece } from './loadTrackAudio';
 import { measureLevels, type TrackLevels } from './trackLevels';
@@ -63,8 +63,10 @@ export function loadSegmentTracks(options: {
   toMs: number;
   decode: (adts: Uint8Array) => Promise<AudioBuffer>;
   signal?: AbortSignal;
+  /** 조각 목록만 보고 본문을 받을지 정한다. false면 하나도 받지 않고 SegmentsNotReadyError로 던진다(loadTrackAudio) */
+  precheck?: (segments: SegmentAudioAccess['segments']) => boolean;
 }): Promise<TrackPiece[][]> {
-  const { streamId, baseMs, fromMs, toMs, decode, signal } = options;
+  const { streamId, baseMs, fromMs, toMs, decode, signal, precheck } = options;
   const abort = new AbortController();
   const stopOuter = () => abort.abort();
   signal?.addEventListener('abort', stopOuter);
@@ -99,6 +101,7 @@ export function loadSegmentTracks(options: {
         decode,
       },
       baseMs,
+      precheck,
     ),
     stopped,
   ])

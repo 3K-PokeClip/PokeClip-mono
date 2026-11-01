@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { chzzkLinkQueryOptions, type ChzzkLinkState } from '@/api/chzzkLink';
 import { soopLinkQueryOptions, type SoopLinkState } from '@/api/soopLink';
-import { useLiveData } from './liveDataStore';
+import { useLiveField } from './liveDataStore';
 import type { BroadcastStatus } from './useBroadcastClock';
 
 // 방송은 들어오는데 방송 채널(치지직 · SOOP)을 하나도 연동하지 않았으면 채팅 · 통계는 올 곳이 없다: 수집기가 연동에서 채널을 찾아
@@ -59,7 +59,8 @@ export const LINK_RECHECK_MS = 20_000;
  * 같은 판정으로 차트 읽기를 멈추므로 화면의 시계 값을 따로 넘기지 않는다. 연동 조회는 그 훅과 같은 쿼리라 요청이 늘지 않는다
  */
 export function useLinkLock(): LinkLock {
-  const { status, relation } = useLiveData();
+  const status = useLiveField('status');
+  const relation = useLiveField('relation');
   const queryClient = useQueryClient();
   // 주기는 두 연동을 같이 보고 정한다: 한 쿼리의 주기를 그 쿼리 값만으로 정하면 다른 쪽이 연동돼 잠금이 풀린 뒤에도 미연동 쪽을
   // 계속 묻는다. 옵션은 그릴 때마다 다시 넘어가므로 다른 쪽 답이 오면 다음 그리기에서 주기가 맞춰진다

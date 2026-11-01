@@ -36,7 +36,8 @@ export function useClipSource(
   // 그 답이 올 때까지 같은 방송의 옛 줄을 둔다: 그사이 비면 보이던 값이 사라졌다가 돌아온다
   const row = useQuery({
     queryKey: ['library-broadcast-row', streamId, live],
-    queryFn: ({ signal }) => fetchBroadcast(streamId, signal),
+    // 끝난 줄은 다시 읽는다: 기억해 둔 줄(다른 화면이 방송 중에 읽은 것)을 쓰면 「끝난 줄을 한 번 더 읽는다」는 뜻이 없다
+    queryFn: ({ signal }) => fetchBroadcast(streamId, signal, { fresh: !live }),
     enabled: active && streamId !== '',
     staleTime: live ? LIVE_ROW_MS : Infinity,
     refetchInterval: live ? LIVE_ROW_MS : false,
