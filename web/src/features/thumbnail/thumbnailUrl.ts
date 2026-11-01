@@ -8,6 +8,12 @@ export const STILL_REFRESH_MS = 50 * 60_000;
 /** 라이브 사진. 서버가 1분마다 새 장면으로 덮는다 */
 export const LIVE_REFRESH_MS = 60_000;
 
+/**
+ * 카드 목록이 같은 사진의 새 주소를 아래로 넘기는 간격. 그 사이에는 같은 카드로 보아 다시 그리지 않는다. 못 받은 사진(ThumbnailImage)은
+ * 새 주소가 와야 다시 시도하므로 이 값이 일시 오류에서 회복하는 시간이다. 멀쩡한 사진은 ThumbnailImage가 보던 주소를 이어 써 다시 받지 않는다
+ */
+export const CARD_THUMBNAIL_PASS_MS = 60_000;
+
 /** 미리서명 주소의 서명 시각(X-Amz-Date, 예: 20261004T101500Z). 모르면 null */
 export function signedAtMs(url: string): number | null {
   try {

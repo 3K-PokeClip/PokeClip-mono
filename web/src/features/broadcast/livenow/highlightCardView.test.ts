@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STILL_REFRESH_MS } from '@/features/thumbnail/thumbnailUrl';
+import { CARD_THUMBNAIL_PASS_MS } from '@/features/thumbnail/thumbnailUrl';
 import { cardViewFor, cardVisualFor, reuseHighlights } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { HighlightStatus, LiveHighlight, LiveStream } from './useLiveMockState';
@@ -151,7 +151,7 @@ describe('reuseHighlights', () => {
   });
 
   it('같은 사진을 새로 서명한 주소는 바뀐 것이 아니다: 3초마다 온 카드가 전부 다시 그려진다', () => {
-    const prev = [highlight({ id: 'a', thumbnailUrl: photo('20261031T005900Z') })];
+    const prev = [highlight({ id: 'a', thumbnailUrl: photo('20261031T005930Z') })];
 
     const next = reuseHighlights(
       prev,
@@ -162,15 +162,15 @@ describe('reuseHighlights', () => {
     expect(next).toBe(prev);
   });
 
-  it('서명이 오래됐으면 새 주소로 바꾼다: 보던 주소를 쥐고 있으면 만료된다', () => {
+  it('1분이 지나면 새 주소를 넘긴다: 못 받은 사진은 새 주소가 와야 다시 시도한다', () => {
     const oldUrl = photo('20261031T000000Z');
-    const newUrl = photo('20261031T010000Z');
+    const newUrl = photo('20261031T000100Z');
     const prev = [highlight({ id: 'a', thumbnailUrl: oldUrl })];
 
     const next = reuseHighlights(
       prev,
       [highlight({ id: 'a', thumbnailUrl: newUrl })],
-      Date.parse('2026-10-31T00:00:00Z') + STILL_REFRESH_MS,
+      Date.parse('2026-10-31T00:00:00Z') + CARD_THUMBNAIL_PASS_MS,
     );
 
     expect(next[0]?.thumbnailUrl).toBe(newUrl);

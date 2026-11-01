@@ -9,9 +9,9 @@ import { soopLinkQueryOptions } from '@/api/soopLink';
 import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import {
+  CARD_THUMBNAIL_PASS_MS,
   keepKnownThumbnail,
   pickThumbnailUrl,
-  STILL_REFRESH_MS,
 } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
 import { setVisibleInterval } from '@/lib/visibleInterval';
@@ -303,7 +303,7 @@ export function sameSnapshot(prev: Snapshot | undefined, next: Snapshot, now: nu
     (prev.hidden ?? false) === (next.hidden ?? false) &&
     prev.eventSeq === next.eventSeq &&
     prev.createdAt === next.createdAt &&
-    pickThumbnailUrl(shownThumbnail, next.thumbnailUrl ?? null, now, STILL_REFRESH_MS) ===
+    pickThumbnailUrl(shownThumbnail, next.thumbnailUrl ?? null, now, CARD_THUMBNAIL_PASS_MS) ===
       shownThumbnail &&
     JSON.stringify(prev.evidence) === JSON.stringify(next.evidence)
   );

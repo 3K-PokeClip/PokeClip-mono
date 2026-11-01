@@ -5,7 +5,7 @@
 // 화면이 조용히 빈 배지를 그리는 대신 빌드가 멈춘다.
 
 import { parseClockLabel } from '@/features/player/playerMath';
-import { STILL_REFRESH_MS, pickThumbnailUrl } from '@/features/thumbnail/thumbnailUrl';
+import { CARD_THUMBNAIL_PASS_MS, pickThumbnailUrl } from '@/features/thumbnail/thumbnailUrl';
 import type { BadgeTone } from '@/ui';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
@@ -95,14 +95,17 @@ function fallbackPosPercent(timestamp: string, uptimeSeconds: number): number {
   return Math.min(100, Math.max(0, Math.round((seconds / uptimeSeconds) * 100)));
 }
 
-/** 그려진 내용이 같은가. 사진은 글자가 아니라 같은 사진인지 본다: 서버가 목록마다 새로 서명해 주소가 3초마다 바뀐다(POK-277) */
+/**
+ * 그려진 내용이 같은가. 사진은 글자가 아니라 같은 사진인지 본다: 서버가 목록마다 새로 서명해 주소가 3초마다 바뀐다(POK-277).
+ * 새 주소를 아주 막지는 않는다: 못 받은 사진은 새 주소가 와야 다시 시도한다(CARD_THUMBNAIL_PASS_MS)
+ */
 function sameHighlight(a: LiveHighlight, b: LiveHighlight, now: number): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof LiveHighlight>;
   for (const key of keys) {
     if (key !== 'thumbnailUrl' && !Object.is(a[key], b[key])) return false;
   }
   const shown = a.thumbnailUrl ?? null;
-  return pickThumbnailUrl(shown, b.thumbnailUrl ?? null, now, STILL_REFRESH_MS) === shown;
+  return pickThumbnailUrl(shown, b.thumbnailUrl ?? null, now, CARD_THUMBNAIL_PASS_MS) === shown;
 }
 
 /**

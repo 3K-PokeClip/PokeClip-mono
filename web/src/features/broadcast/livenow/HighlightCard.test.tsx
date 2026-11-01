@@ -1,8 +1,10 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { prefetchCardEditor } from '@/features/clips/editor/prefetchCardEditor';
 import { HighlightCard } from './HighlightCard';
+import { reuseHighlights } from './highlightCardView';
 import { PENDING_MAX_RECHECKS, PENDING_RECHECK_MS } from './useCardEditorReady';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 
@@ -39,6 +41,57 @@ function renderCard(highlight: LiveHighlight = HIGHLIGHT) {
 const pendingButton = () => screen.getByRole('button', { name: /^편집/ });
 
 beforeEach(() => vi.mocked(prefetchCardEditor).mockReset());
+
+describe('HighlightCard: 사진을 못 받았을 때', () => {
+  const signedAt = Date.parse('2026-10-31T00:00:00Z');
+  const photo = (at: string) =>
+    `https://bucket.s3.amazonaws.com/cards/23.jpg?X-Amz-Date=${at}&X-Amz-Signature=sig-${at}`;
+  const withPhoto = (at: string): LiveHighlight => ({ ...HIGHLIGHT, thumbnailUrl: photo(at) });
+
+  /** 라이브 훅처럼 목록이 올 때마다 reuseHighlights를 거쳐 카드에 넘긴다 */
+  function renderFeed() {
+    let poll: (at: string, now: number) => void = () => undefined;
+    function Feed() {
+      const [list, setList] = useState([withPhoto('20261031T000000Z')]);
+      poll = (at, now) => setList((prev) => reuseHighlights(prev, [withPhoto(at)], now));
+      return (
+        <HighlightCard highlight={list[0]!} stream={STREAM} visuals={{}} onSeek={() => undefined} />
+      );
+    }
+    const view = renderWithProviders(<Feed />);
+    return {
+      image: () => view.container.querySelector('img'),
+      poll: (...a: [string, number]) => poll(...a),
+    };
+  }
+
+  it('한 번 실패해도 1분 안에 새 주소로 다시 시도한다: 새 주소를 막으면 일시 오류 하나로 50분간 자리표시에 머문다', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    const { image, poll } = renderFeed();
+    await act(async () => undefined);
+    fireEvent.error(image()!);
+    expect(image()).toBeNull();
+
+    act(() => poll('20261031T000030Z', signedAt + 30_000));
+    expect(image()).toBeNull();
+
+    act(() => poll('20261031T000100Z', signedAt + 60_000));
+    expect(image()).toHaveAttribute('src', photo('20261031T000100Z'));
+  });
+
+  it('멀쩡한 사진은 새 주소를 받아도 보던 주소를 이어 쓴다: 브라우저 캐시가 안 맞아 다시 받게 된다', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(signedAt + 60_000);
+    const { image, poll } = renderFeed();
+    await act(async () => undefined);
+
+    act(() => poll('20261031T000100Z', signedAt + 60_000));
+
+    expect(image()).toHaveAttribute('src', photo('20261031T000000Z'));
+    vi.useRealTimers();
+  });
+});
 
 describe('HighlightCard: 편집 준비', () => {
   afterEach(() => vi.useRealTimers());
