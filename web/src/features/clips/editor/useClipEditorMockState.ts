@@ -499,15 +499,11 @@ export interface ClipEditorMockState {
    * 허브는 재생 중에 다시 돌지 않는다
    */
   clock: PlaybackClock;
-  /** 멈춤 · 시크 · 구간 경계에서만 바뀌는 재생 위치. 재생 중에는 낡았다: 그리거나 판정하려면 clock을 읽는다 */
-  playheadSeconds: number;
   /** 편집기에서 고른 썸네일 장면(소스 축 초): 쇼츠 구간 밖으로 밀려나면 null(POK-389) */
   thumbnailSeconds: number | null;
   /** 지금 재생 위치가 쇼츠 구간 안이라 썸네일로 고를 수 있는가 */
   canPickThumbnail: boolean;
   pickThumbnail: () => void;
-  /** playheadSeconds의 표기. 같은 이유로 재생 중에는 낡았다 */
-  playheadLabel: string;
   seekBy: (deltaSeconds: number) => void;
   seekTo: (seconds: number) => void;
   /** 끄는 동안 재생 위치를 옮긴다: 허브를 다시 돌리지 않는다. 다 끌면 endScrub을 부른다 */
@@ -715,7 +711,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     initialSeconds: MOCK_SOURCE.playheadSeconds,
   });
   const playback = options.playback ?? (real ? NO_PLAYBACK : simulation);
-  const { playing, currentSeconds: playheadSeconds, clock } = playback;
+  const { playing, clock } = playback;
   const [speed, setSpeed] = useState<number>(1);
   const [loop, setLoop] = useState(true);
 
@@ -1040,8 +1036,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     playing,
     togglePlay: playback.togglePlay,
     clock,
-    playheadSeconds,
-    playheadLabel: formatTimecodeTenths(playheadSeconds),
     seekBy: playback.seekBy,
     seekTo: playback.seekTo,
     scrubTo: playback.scrubTo,

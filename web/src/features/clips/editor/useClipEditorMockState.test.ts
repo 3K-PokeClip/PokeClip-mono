@@ -165,7 +165,7 @@ describe('useClipEditorMockState', () => {
     expect(result.current.playing).toBe(true);
 
     act(() => vi.advanceTimersByTime(200));
-    expect(result.current.playheadSeconds).toBeCloseTo(result.current.range.startSeconds, 5);
+    expect(result.current.clock.getSeconds()).toBeCloseTo(result.current.range.startSeconds, 5);
   });
 
   it('패널 위치를 옮기면 브라우저에 남는다 — 다음 방문에도 그 자리다', () => {
@@ -292,7 +292,7 @@ describe('useClipEditorMockState', () => {
     act(() => result.current.togglePlay());
     act(() => vi.advanceTimersByTime(100));
 
-    expect(result.current.playheadSeconds).toBe(result.current.range.startSeconds);
+    expect(result.current.clock.getSeconds()).toBe(result.current.range.startSeconds);
   });
 
   it('원본 끝에서 더 밀어도 이력이 쌓이지 않는다', () => {
@@ -406,8 +406,7 @@ describe('useClipEditorMockState — 재생 어댑터 주입', () => {
     const { result } = renderEditor({ playback });
 
     expect(result.current.playing).toBe(true);
-    expect(result.current.playheadSeconds).toBe(123.4);
-    expect(result.current.playheadLabel).toBe('0:02:03.4');
+    expect(result.current.clock.getSeconds()).toBe(123.4);
 
     act(() => result.current.togglePlay());
     expect(playback.togglePlay).toHaveBeenCalledOnce();
