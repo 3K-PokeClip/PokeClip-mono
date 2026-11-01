@@ -57,9 +57,7 @@ import { useLiveSession } from './useLiveSession';
 import { LINK_LOCK_WORD, useLinkLock, type LinkLock } from './linkLock';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
-
-/** 카드 눈금에 넘기는 라이브 경과의 단위(초) */
-const CARD_UPTIME_STEP_S = 15;
+import { cardPositionUptime } from './highlightCardView';
 
 // 코드 분할: 스크롤로 내려와 만나는 통계 패널(그래프 계산 · 그리기 코드가 크다, 967줄)은 처음 번들에서 뺀다. 채팅 패널은 첫 화면에
 // 서므로 나누지 않는다. 통계 패널은 화면 맨 아래라 불러오는 동안의 자리(아래 StatsPanelFallback)가 위 요소의 위치를 흔들지 않는다.
@@ -650,14 +648,10 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
         ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
         : `${v.toLocaleString('ko-KR')}명 시청 중`;
 
-  // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다. 라이브는 경과가 매초 늘어 그대로 넘기면
-  // 카드 전부가 매초 다시 그려진다. 눈금은 1% 단위라 CARD_UPTIME_STEP_S로 올려 묶어도 보이는 차이가 없다
+  // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다. 라이브는 경과의 1% 단위로 묶는다
+  // (cardPositionUptime): 그대로 넘기면 카드 전부가 매초 다시 그려진다
   const cardUptime =
-    uptimeSeconds === null
-      ? 0
-      : ended
-        ? uptimeSeconds
-        : Math.ceil(uptimeSeconds / CARD_UPTIME_STEP_S) * CARD_UPTIME_STEP_S;
+    uptimeSeconds === null ? 0 : ended ? uptimeSeconds : cardPositionUptime(uptimeSeconds);
   const streamForCards = useMemo<LiveStream>(
     () => ({ ...stream, uptimeSeconds: cardUptime }),
     [stream, cardUptime],

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { CARD_THUMBNAIL_PASS_MS } from '@/features/thumbnail/thumbnailUrl';
-import { cardViewFor, cardVisualFor, reuseHighlights } from './highlightCardView';
+import {
+  cardPositionUptime,
+  cardViewFor,
+  cardVisualFor,
+  reuseHighlights,
+} from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { HighlightStatus, LiveHighlight, LiveStream } from './useLiveMockState';
 
@@ -109,6 +114,30 @@ describe('cardVisualFor — 모르는 카드는 계약 필드에서 세운다', 
     expect(resolved.spark).toBeNull();
     expect(resolved.timeAgo).toBeNull();
     expect(resolved.progress).toBeNull();
+  });
+});
+
+describe('cardPositionUptime: 카드 눈금에 넘기는 라이브 경과', () => {
+  const positionOfNewestCard = (uptime: number) =>
+    Math.round((uptime / cardPositionUptime(uptime)) * 100);
+
+  it.each([1, 30, 61, 74, 101, 301, 899, 1501, 5043, 43_199])(
+    '%d초에 방금 생긴 카드는 끝에서 1% 안에 선다',
+    (uptime) => {
+      expect(positionOfNewestCard(uptime)).toBeGreaterThanOrEqual(99);
+    },
+  );
+
+  it('방송 초반에도 오차가 작다: 15초 단위로 올리면 61초의 카드가 80% 자리에 섰다', () => {
+    expect(positionOfNewestCard(61)).toBe(100);
+  });
+
+  it('한 단위 안에서는 같은 값이다: 값이 그대로면 카드가 다시 그려지지 않는다', () => {
+    expect(cardPositionUptime(3_601)).toBe(cardPositionUptime(3_620));
+  });
+
+  it('경과가 0이면 0이다', () => {
+    expect(cardPositionUptime(0)).toBe(0);
   });
 });
 

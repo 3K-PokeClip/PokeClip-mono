@@ -95,6 +95,18 @@ function fallbackPosPercent(timestamp: string, uptimeSeconds: number): number {
   return Math.min(100, Math.max(0, Math.round((seconds / uptimeSeconds) * 100)));
 }
 
+/** 눈금 계산에 넘기는 라이브 경과의 단위: 경과를 이만큼으로 나눈 값 */
+const CARD_POSITION_STEPS = 100;
+
+/**
+ * 카드 눈금에 넘기는 라이브 경과. 경과는 매초 늘어 그대로 넘기면 카드 전부가 매초 다시 그려지므로 경과의 1% 단위로 올려 묶는다.
+ * 단위를 고정하면 방송 초반의 오차가 커진다: 15초 단위면 61초에 방금 생긴 카드가 끝이 아니라 80% 자리에 선다.
+ */
+export function cardPositionUptime(uptimeSeconds: number): number {
+  const step = Math.max(1, Math.ceil(uptimeSeconds / CARD_POSITION_STEPS));
+  return Math.ceil(uptimeSeconds / step) * step;
+}
+
 /**
  * 그려진 내용이 같은가. 사진은 글자가 아니라 같은 사진인지 본다: 서버가 목록마다 새로 서명해 주소가 3초마다 바뀐다(POK-277).
  * 새 주소를 아주 막지는 않는다: 못 받은 사진은 새 주소가 와야 다시 시도한다(CARD_THUMBNAIL_PASS_MS)
