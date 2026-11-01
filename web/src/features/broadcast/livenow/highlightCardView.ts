@@ -101,6 +101,7 @@ const CARD_POSITION_STEPS = 100;
 /**
  * 카드 눈금에 넘기는 라이브 경과. 경과는 매초 늘어 그대로 넘기면 카드 전부가 매초 다시 그려지므로 경과의 1% 단위로 올려 묶는다.
  * 단위를 고정하면 방송 초반의 오차가 커진다: 15초 단위면 61초에 방금 생긴 카드가 끝이 아니라 80% 자리에 선다.
+ * 대신 첫 100초는 단위가 1초라 매초 다시 그려진다: 그 구간은 카드가 거의 없어 정확도를 택했다.
  */
 export function cardPositionUptime(uptimeSeconds: number): number {
   const step = Math.max(1, Math.ceil(uptimeSeconds / CARD_POSITION_STEPS));
