@@ -119,6 +119,25 @@ type Options struct {
 	// SeedAlarmErrorTicks 는 부재가 연속 몇 번째 감시에 ERROR 로 오르는가다(40 — 30초 감시로 20분).
 	SeedAlarmErrorTicks int
 
+	// VOD 사본 복사의 설계값 다섯이다(POK-525 설계 r7 3-2 · 4-3 — 복사 엔진 vod_copy.go 만 쓰고 checkVODCopy 가 양수 ·
+	// 기동 검사를 본다).
+	//
+	// VODCopyWorkers 는 동시 복사 수다(8).
+	VODCopyWorkers int
+	// VODCopyCallTimeout 은 CopyObject 한 번의 시한이다(10초). 넘기면 일시 오류로 다시 보낸다.
+	VODCopyCallTimeout time.Duration
+	// VODCopyBudgetMin 은 시도 하나의 복사 예산 하한이다(10분).
+	VODCopyBudgetMin time.Duration
+	// VODCopyPerPair 는 짝 하나당 예산이다(25ms — 일꾼 8 · 한 번 0.2초의 잠정 값 · ISB (a) 실측으로 확정).
+	VODCopyPerPair time.Duration
+	// VODCopyGrace 는 복사 시도가 끝났다고 보는 유예다(1시간) — 시도 하나의 최장 복사 시간(가장 큰 VOD 의 예산 + 키 시한)이
+	// 이보다 짧아야 한다(기동 검사). 유예 재삭제 · 대사가 「유예가 지난 사본은 진행 중 복사의 것이 아니다」 의 보조 근거로 쓴다.
+	VODCopyGrace time.Duration
+
+	// copyRetryDelay 는 복사 일시 오류의 첫 재시도 간격이다(둘째는 두 배) — 0 이면 vodCopyRetryDelay(200ms)다. 같은 패키지의
+	// 시험만 바꾼다: 재시도 갈래를 수백 ms 기다리지 않고 돈다.
+	copyRetryDelay time.Duration
+
 	// statementTimeout 은 DB 문장 하나(GAP 틱은 트랜잭션 하나)의 ctx 시한이다 — 0 이면 index.TxnDeadline 이다(stmtCtx).
 	// 같은 패키지의 시험만 바꾼다: 루프 ctx 는 살아 있고 문장만 시한을 넘는 국면을 10초 기다리지 않고 만든다.
 	statementTimeout time.Duration
@@ -145,6 +164,12 @@ func DefaultOptions(writer, baseURL string) Options {
 
 		SeedAlarmAfter:      10 * time.Minute,
 		SeedAlarmErrorTicks: 40,
+
+		VODCopyWorkers:     8,
+		VODCopyCallTimeout: 10 * time.Second,
+		VODCopyBudgetMin:   10 * time.Minute,
+		VODCopyPerPair:     25 * time.Millisecond,
+		VODCopyGrace:       time.Hour,
 	}
 }
 
@@ -153,7 +178,7 @@ func DefaultOptions(writer, baseURL string) Options {
 // 설계값도 본다 — 0 이하면 정상 경로(holdAge 음수)의 조각도 L2 에 닿아 GAP 줄로 나가고(GAP 줄은 되돌리지 않는다), L1
 // 문턱이 GAP_HOLD 보다 길면 백오프를 당기기 전에 GAP 을 내며, T_edge 가 갱신 의무 이상이면 L4 가 정체 없이도 뜬다. 감시
 // 설계값 둘도 양수여야 한다 — SEED_ALARM_AFTER 가 0 이하면 (c) 가 서지 않고, 승격 감시 수가 0 이하면 첫 감시에 ERROR
-// 다(체크리스트 419 A-8).
+// 다(체크리스트 419 A-8). VOD 사본 복사 설계값은 checkVODCopy 가 본다.
 func (o Options) check() error {
 	switch {
 	case o.Writer == "":
@@ -178,7 +203,7 @@ func (o Options) check() error {
 		return fmt.Errorf("publish: 감시 설계값이 0 이하다(SEED_ALARM_AFTER %v · ERROR 승격 감시 수 %d)",
 			o.SeedAlarmAfter, o.SeedAlarmErrorTicks)
 	}
-	return nil
+	return o.checkVODCopy()
 }
 
 // Publisher 는 한 writer 의 세대 규약이다 — 설계 4.4.3 의 P0–P4 · R1–R4 와 설계 6.2 의 writer fence 를 돈다.
