@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,6 +33,13 @@ import (
 )
 
 func main() {
+	// 1회 실행 모드 — 사이드카를 띄우지 않고 그 일만 하고 종료 코드로 나간다.
+	objectProbe := flag.Bool("rewind-object-probe", false, "객체 탐침 1회 실행(판정 D) — 종료 코드는 object_probe.go")
+	flag.Parse()
+	if *objectProbe {
+		os.Exit(runObjectProbe(os.Getenv, os.Stdout))
+	}
+
 	err := run()
 	// SIGTERM 으로 끝난 것은 정상 종료다. 이것을 실패로 보고하면 오케스트레이터가
 	// 멀쩡한 종료를 장애로 오인하고 재기동 루프에 넣는다.
