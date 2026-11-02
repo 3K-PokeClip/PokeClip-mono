@@ -1,0 +1,704 @@
+/* 시안 1d-a 스튜디오형 — 도구 레일 + 도구 패널 + 미리보기 + 멀티트랙 타임라인.
+   1440×960 시안을 폭에 맞춰 늘린다(고정 크기가 아니다). */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  /* 독이 없는 전체 화면 그룹((fullscreen))에 있다 — 뷰포트를 끝까지 쓴다 */
+  height: 100dvh;
+  min-height: calc(640 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* 레일 + 패널을 오른쪽으로. DOM 순서는 그대로 두고 방향만 뒤집어
+   미리보기·타임라인은 제자리에 남는다 (시안: 미리보기·타임라인은 그대로). */
+.body[data-panel-side='right'] {
+  flex-direction: row-reverse;
+}
+
+/* 경계선도 따라 넘어간다 — 안 넘기면 화면 바깥쪽에 선이 남고 패널 사이가 빈다 */
+.body[data-panel-side='right'] .toolRail,
+.body[data-panel-side='right'] .toolPanel {
+  border-right: 0;
+  border-left: 1px solid var(--pc-color-border-subtle);
+}
+
+/* ---------- 도구 레일 ---------- */
+
+.toolRail {
+  width: calc(58 * var(--pc-u));
+  flex: none;
+  border-right: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  padding: calc(10 * var(--pc-u)) 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+}
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+}
+
+/* 시안: 패널 위치 버튼은 레일 맨 아래에 가는 선을 두고 떨어져 앉는다 */
+.railFooter {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  padding-top: calc(8 * var(--pc-u));
+}
+
+.railDivider {
+  width: calc(30 * var(--pc-u));
+  height: 1px;
+  background: var(--pc-color-border-subtle);
+}
+
+.toolButton {
+  width: calc(46 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) 0 calc(6 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  font-size: calc(9 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.toolButton:hover {
+  background: var(--pc-color-bg-surface-hover);
+  color: var(--pc-color-text-secondary);
+}
+
+.toolButton[aria-selected='true'] {
+  font-weight: 700;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.toolButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* ---------- 도구 패널 ---------- */
+
+.toolPanel {
+  width: calc(296 * var(--pc-u));
+  flex: none;
+  min-height: 0;
+  border-right: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  padding: calc(14 * var(--pc-u));
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+.toolPanel:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* ---------- 타임라인 ---------- */
+
+.timeline {
+  flex: none;
+  border-top: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  padding: calc(8 * var(--pc-u)) calc(20 * var(--pc-u)) calc(6 * var(--pc-u));
+  /* 안전망. 높이 상한이 넘침을 막지만(POK-237), 자동 높이나 아주 낮은 창에서는 미리보기가
+     최소 높이에 걸려 트랜스포트가 여기까지 내려올 수 있다. 그때 배치된 요소(구간 반복
+     스위치·.stage)가 static인 헤더 버튼 위에 그려져 확대(＋)를 덮고 클릭까지 가져간다.
+     타임라인을 배치해 항상 위에 둔다 — 1은 DS z 스케일 맨 아래(--pc-z-docked 10)보다
+     낮아 드롭다운·토스트를 막지 않는다. */
+  position: relative;
+  z-index: 1;
+}
+
+.resizeHandle {
+  height: calc(9 * var(--pc-u));
+  margin: calc(-8 * var(--pc-u)) calc(-20 * var(--pc-u)) calc(2 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+  background: none;
+  border: 0;
+  width: calc(100% + calc(40 * var(--pc-u)));
+  padding: 0;
+}
+
+/* 하드코딩한 흰색은 흰 배경에서 사라진다 — 라이트 모드에선 hover 피드백이 아예 없었다 */
+.resizeHandle:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.resizeHandle:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.resizeGrip {
+  width: calc(44 * var(--pc-u));
+  height: calc(3 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-border-default);
+}
+
+.timelineHead {
+  display: flex;
+  align-items: center;
+  gap: calc(9 * var(--pc-u));
+  margin-bottom: calc(3 * var(--pc-u));
+}
+
+.timelineTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.timelineSummary {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.timelineSummary b {
+  color: var(--pc-color-text-secondary);
+  font-weight: 700;
+}
+
+.zoomGroup {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.zoomValue {
+  font:
+    600 calc(10.5 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+}
+
+.ruler {
+  display: flex;
+  justify-content: space-between;
+  font:
+    500 calc(10 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  color: var(--pc-color-text-muted);
+  padding-left: calc(180 * var(--pc-u));
+  margin-bottom: calc(5 * var(--pc-u));
+  /* 눌러서 재생 위치를 옮긴다(POK-389) */
+  cursor: pointer;
+  user-select: none;
+}
+
+.laneArea {
+  position: relative;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* 덮개(.overlay)가 재는 상자. 스크롤 내용 전체 높이라 줄여서 내려도 구간 상자가 아래 트랙까지 덮는다 */
+.laneContent {
+  position: relative;
+}
+
+.lanes {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4 * var(--pc-u));
+}
+
+/* ---------- 트랙 행 ---------- */
+
+.trackRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.trackLabel {
+  width: calc(172 * var(--pc-u));
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 줄 맨 앞 칸: 소리 줄은 넣기 스피커, 영상 · 자막 줄은 아이콘이 같은 폭으로 서서 이름이 한 줄로 맞는다 */
+.trackLead,
+.trackSpeaker {
+  flex: none;
+  width: calc(24 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
+  display: grid;
+  place-items: center;
+  border-radius: calc(6 * var(--pc-u));
+}
+
+.trackLead {
+  color: var(--pc-color-text-muted);
+}
+
+/* 넣기: 켜면 강조색 바탕의 스피커, 빼면 바탕 없는 음소거 스피커 */
+.trackSpeaker {
+  padding: 0;
+  border: 0;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+  cursor: pointer;
+}
+
+.trackSpeaker[aria-pressed='false'] {
+  background: transparent;
+  color: var(--pc-color-text-muted);
+}
+
+.trackSpeaker:hover {
+  filter: brightness(1.15);
+}
+
+/* 라이트 아이콘은 이미 진해서 밝히면 흐려진다 — 어둡게 */
+:global([data-theme='light']) .trackSpeaker:hover {
+  filter: brightness(0.85);
+}
+
+/* 뺀 줄은 이름을 한 단계만 낮춘다 — 흐린 회색은 못 누르는 줄처럼 읽혔다 */
+.trackRow[data-muted] [data-row-label] {
+  color: var(--pc-color-text-muted);
+}
+
+/* 줄 이름은 한 줄로 줄인다: 이름 칸 폭이 정해져 있어 긴 이름이 넣기·음량 칸을 밀지 않게 */
+.trackLabel [data-row-label] {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 음량 숫자: 누르면 막대, 좌우로 끌면 바로 바뀐다. 비례폭 글꼴에 같은 폭 숫자(고정폭 글꼴은 띄엄띄엄 보였다) */
+.trackVolume {
+  flex: none;
+  width: calc(42 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  padding: 0 calc(5 * var(--pc-u));
+  border: 1px solid transparent;
+  border-radius: calc(6 * var(--pc-u));
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+/* 바꿀 수 있다는 표시: 올리거나 연 동안 테두리 */
+.trackVolume:hover,
+.trackVolume[aria-expanded='true'] {
+  border-color: var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.trackSpeaker:focus-visible,
+.trackVolume:focus-visible,
+.volumePreset:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* 음량 막대 창 */
+.volumePopover {
+  width: calc(210 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(10 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+}
+
+.volumePopoverHead {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  font-weight: 650;
+}
+
+.volumePopoverHead b {
+  font-variant-numeric: tabular-nums;
+}
+
+.volumePresets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: calc(6 * var(--pc-u));
+}
+
+.volumePreset {
+  height: calc(26 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-pill);
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.volumePreset:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.volumePreset[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.lane {
+  flex: 1;
+  min-width: 0;
+  height: calc(24 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  position: relative;
+  overflow: hidden;
+}
+
+.lane[data-kind='video'] {
+  height: calc(30 * var(--pc-u));
+}
+
+.laneFilmstrip {
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgb(120 140 210 / 0.26) 0 calc(54 * var(--pc-u)) /* 라이트 덮음 */,
+    rgb(120 140 210 / 0.1) calc(54 * var(--pc-u)) calc(56 * var(--pc-u)) /* 라이트 덮음 */
+  );
+}
+
+/* 연한 남보라 레인은 흰 바탕에서 묻힌다 — 라이트는 브랜드 남색을 섞어 진하게 */
+:global([data-theme='light']) .laneFilmstrip {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-color-accent) 22%, transparent) 0 calc(54 * var(--pc-u)),
+    color-mix(in srgb, var(--pc-color-accent) 8%, transparent) calc(54 * var(--pc-u))
+      calc(56 * var(--pc-u))
+  );
+}
+
+/* 영상 줄 필름띠(POK-389): 칸마다 그 시각 장면 그림 */
+.filmstrip {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.filmstripTile {
+  flex: 1;
+  min-width: 0;
+  background: rgb(120 140 210 / 0.12); /* 라이트 덮음 */
+  border-right: 1px solid rgb(0 0 0 / 0.35); /* 테마 고정 */
+}
+
+:global([data-theme='light']) .filmstripTile {
+  background: color-mix(in srgb, var(--pc-color-accent) 10%, transparent);
+}
+
+.filmstripTile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.laneWave {
+  width: 100%;
+  height: 70%;
+  margin: auto 0;
+  border-radius: calc(3 * var(--pc-u));
+  background: repeating-linear-gradient(
+    90deg,
+    rgb(140 160 230 / 0.45) 0 2px /* 라이트 덮음 */,
+    transparent 2px 5px
+  ); /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .laneWave {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-color-accent) 55%, transparent) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.laneMuted {
+  opacity: 0.35;
+}
+
+/* 실제 파형(POK-389). 무음은 가는 선만 남고, 뺀 줄은 흐리게 */
+.laneWaveform {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.laneWaveform path {
+  fill: rgb(140 160 230 / 0.6); /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .laneWaveform path {
+  fill: color-mix(in srgb, var(--pc-color-accent) 70%, transparent);
+}
+
+[data-muted] .laneWaveform path {
+  fill: rgb(140 160 230 / 0.25); /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) [data-muted] .laneWaveform path {
+  fill: color-mix(in srgb, var(--pc-color-accent) 30%, transparent);
+}
+
+/* ---------- 구간 오버레이 · 플레이헤드 ---------- */
+
+.overlay {
+  /* 키운 창 밖으로 나간 구간 상자·핸들은 가로로 잘라 감춘다(가장자리 표시가 대신 알린다). 세로는 재생선 머리가 위로 나간다 */
+  overflow-x: clip;
+  overflow-y: visible;
+  position: absolute;
+  left: calc(180 * var(--pc-u));
+  right: 0;
+  top: calc(-4 * var(--pc-u));
+  bottom: calc(-4 * var(--pc-u));
+  pointer-events: none;
+}
+
+.rangeBox {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 2px solid var(--pc-color-accent);
+  background: rgb(88 111 196 / 0.1); /* 테마 고정 */
+  border-radius: calc(8 * var(--pc-u));
+}
+
+/* 3:00을 넘기려 하면 핸들이 늘어나는 대신 흔들린다 (시안 1d-a 안내문) */
+.rangeHandle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: calc(10 * var(--pc-u));
+  height: calc(28 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
+  background: var(--pc-color-accent);
+  border: 0;
+  padding: 0;
+  cursor: col-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.rangeHandleStart {
+  left: calc(-5 * var(--pc-u));
+}
+
+.rangeHandleEnd {
+  right: calc(-5 * var(--pc-u));
+}
+
+.rangeHandle:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 키운 창 밖으로 나간 구간 끝 표시(POK-389). 누르면 그리로 간다 */
+.edgeMarker {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2 * var(--pc-u));
+  padding: calc(3 * var(--pc-u)) calc(7 * var(--pc-u));
+  border: 0;
+  border-radius: calc(999 * var(--pc-u));
+  background: var(--pc-color-accent);
+  color: var(--pc-white); /* 테마 고정 — 브랜드 알약 위 글자 */
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 600;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.edgeMarkerStart {
+  left: calc(4 * var(--pc-u));
+}
+
+.edgeMarkerEnd {
+  right: calc(4 * var(--pc-u));
+}
+
+/* 누르거나 끌어 재생 위치를 옮기는 바닥(덮개는 누르기를 통과시키고 이것만 받는다) */
+.scrub {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--pc-color-point);
+  /* 누르기는 바닥이 받는다: 선 위를 눌러 끌어도 같은 일이다 */
+  pointer-events: none;
+}
+
+/* 재생 위치 머리: 잡을 자리가 보이게 동그랗게(이전 삼각형은 6px라 안 보였다) */
+.playheadTip {
+  position: absolute;
+  top: calc(-7 * var(--pc-u));
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(11 * var(--pc-u));
+  height: calc(11 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-point);
+  box-shadow: 0 0 0 2px var(--pc-color-bg-surface);
+}
+
+/* ---------- 범례 ---------- */
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  margin-top: calc(9 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  flex-wrap: wrap;
+}
+
+.legend b {
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+.legendNote {
+  margin-left: auto;
+}
+
+.previewColumn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(8 * var(--pc-u));
+}
+
+/* ---------- 타임라인 줄 (POK-389) ---------- */
+
+.subtitleBlock {
+  position: absolute;
+  top: calc(3 * var(--pc-u));
+  bottom: calc(3 * var(--pc-u));
+  padding: 0 calc(6 * var(--pc-u));
+  border-radius: calc(4 * var(--pc-u));
+  background: var(--pc-color-accent-subtle);
+  border: 1px solid var(--pc-color-accent);
+  color: var(--pc-color-text-primary);
+  font-size: calc(10 * var(--pc-u));
+  line-height: calc(16 * var(--pc-u));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outsideMask {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--pc-color-bg-canvas);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ---------- 썸네일 장면 (POK-389) ---------- */
+
+.thumbnailTile {
+  position: relative;
+  margin-left: auto;
+  width: calc(36 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  padding: 0;
+  border-radius: calc(4 * var(--pc-u));
+  border: 1px solid var(--pc-color-accent);
+  background: var(--pc-color-bg-inset);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.thumbnailTile:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.thumbnailCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumbnailBadge {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  color: var(--pc-color-text-primary);
+}
+
+.thumbnailMarker {
+  position: absolute;
+  top: calc(-14 * var(--pc-u));
+  transform: translateX(-50%);
+  color: var(--pc-color-accent-text, var(--pc-color-accent));
+}

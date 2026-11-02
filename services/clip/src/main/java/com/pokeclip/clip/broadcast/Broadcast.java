@@ -1,0 +1,290 @@
+package com.pokeclip.clip.broadcast;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+import java.time.Duration;
+import java.time.Instant;
+
+/** 방송 명부. 방송 한 회당 한 줄이고 stream_id가 그 방송의 이름이다. */
+@Entity
+@Table(name = "broadcasts")
+public class Broadcast {
+
+    /**
+     * 방송이 끝난 뒤 원본을 얼마나 보관하는가(ADR-004 — VOD 60일).
+     *
+     * <p><b>설정으로 빼지 않는다.</b> 환경(로컬·운영)마다 달라지는 값이 아니라
+     * 요금제 축의 값이다 — 바뀌는 날은 상품이 바뀌는 날이고, 그때는 이미 채워진
+     * 줄을 어떻게 할지도 함께 정해야 한다. 환경변수로 두면 그 결정이 조용히
+     * 배포 설정으로 흘러내린다.
+     */
+    public static final Duration VOD_RETENTION = Duration.ofDays(60);
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "stream_id", nullable = false, length = 128)
+    private String streamId;
+
+    @Column(name = "streamer_id", nullable = false, length = 128)
+    private String streamerId;
+
+    /**
+     * 물리 키(POK-233, 계약9 {@code ingestStreamId}). 조각 장부·녹화 경로의 {@code stream_id}다. null이면 이 칸을 안 실은
+     * 편지로 만든 줄이고, 그때는 {@code streamId}가 곧 물리 키다({@link #ingestKey()}).
+     */
+    @Column(name = "ingest_stream_id", length = 128)
+    private String ingestStreamId;
+
+    /**
+     * 플랫폼 코드(POK-398, {@link Platform}). 생명주기 편지 처리기는 줄이 생길 때 한 번 정하고 바꾸지 않는다. 방송 도중 플랫폼이
+     * 바뀔 일은 없으니 다른 값이 오면 발행 쪽 결함이고, 첫 값을 지킨다.
+     *
+     * <p>물리 키({@link #fillIngestStreamId})와 규칙이 다르다. 물리 키는 빈 칸을 뒤 편지가 채우지만 플랫폼에는 빈 칸이 없다:
+     * 칸을 안 실은 편지로 만든 줄은 {@code CHZZK}로 굳고, 뒤 편지가 {@code SOOP}을 실어도 안 바뀐다. 그래서 SOOP 방송은
+     * 시작·종료 등 모든 생명주기 편지에 이 칸을 실어야 한다(종료가 먼저 와 자리표시를 만들면 그 값으로 굳는다).
+     *
+     * <p>첫 값을 지키는 것은 <b>생명주기 편지 처리기만의 규칙</b>이다. 수집기가 SOOP 방송을 확인하고 플랫폼을 적는 clip 내부 창구
+     * (POK-397 PR3에서 만든다)는 이미 있는 줄의 값(기본값 {@code CHZZK} 포함)을 덮어쓸 수 있다.
+     */
+    @Column(name = "platform", nullable = false, length = 16)
+    private String platform;
+
+    @Convert(converter = BroadcastStatusConverter.class)
+    @Column(name = "status", nullable = false, length = 16)
+    private BroadcastStatus status;
+
+    /** 종료 선도착 placeholder는 null이다. 낮은 순서의 시작 편지가 늦게 오면 그 시각으로 찬다({@link #fillStartOfPlaceholder}). */
+    @Column(name = "started_at")
+    private Instant startedAt;
+
+    @Column(name = "ended_at")
+    private Instant endedAt;
+
+    /** NULL이 「아직 안 끝나 기한이 없다」는 뜻이다. 값은 종료 처리 때만 찬다. */
+    @Column(name = "vod_expires_at")
+    private Instant vodExpiresAt;
+
+    // columnDefinition만으로는 부족하다 — @JdbcTypeCode가 없으면 드라이버가 varchar로
+    // 보내고 "column is of type jsonb but expression is of type character varying"로
+    // INSERT가 전부 실패한다. 값이 null이어도 터진다(setNull(VARCHAR)).
+    // ddl-auto=validate는 이걸 못 잡는다 (plan-critic 실측 2026-08-18).
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "track_manifest", columnDefinition = "jsonb")
+    private String trackManifest;
+
+    @Column(name = "last_sequence", nullable = false)
+    private Long lastSequence;
+
+    @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
+    private Instant createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
+    protected Broadcast() {
+    }
+
+    private Broadcast(String streamId, String streamerId, String ingestStreamId, String platform, BroadcastStatus status,
+                      Instant startedAt, Instant endedAt, String trackManifest, long lastSequence) {
+        this.streamId = streamId;
+        this.streamerId = streamerId;
+        this.ingestStreamId = blankToNull(ingestStreamId);
+        this.platform = platform;
+        this.status = status;
+        this.startedAt = startedAt;
+        this.endedAt = endedAt;
+        this.trackManifest = trackManifest;
+        this.lastSequence = lastSequence;
+        this.updatedAt = Instant.now();
+    }
+
+    /** 치지직 방송. 플랫폼을 안 정하는 자리(시험·옛 호출부)가 쓴다. 편지 처리는 플랫폼을 받는 쪽을 부른다. */
+    public static Broadcast startedNow(String streamId, String streamerId, String ingestStreamId, long sequence,
+                                       Instant startedAt, String trackManifest) {
+        return startedNow(streamId, streamerId, ingestStreamId, sequence, startedAt, trackManifest, Platform.DEFAULT);
+    }
+
+    /** @param platform 형식을 이미 본 값({@link Platform}). 여기서는 다시 안 본다 */
+    public static Broadcast startedNow(String streamId, String streamerId, String ingestStreamId, long sequence,
+                                       Instant startedAt, String trackManifest, String platform) {
+        return new Broadcast(streamId, streamerId, ingestStreamId, platform, BroadcastStatus.LIVE,
+                startedAt, null, trackManifest, sequence);
+    }
+
+    /** 치지직 방송의 자리표시. 플랫폼을 받는 쪽과 쌍둥이다. */
+    public static Broadcast endedPlaceholder(String streamId, String streamerId, String ingestStreamId,
+                                             long sequence, Instant endedAt) {
+        return endedPlaceholder(streamId, streamerId, ingestStreamId, sequence, endedAt, Platform.DEFAULT);
+    }
+
+    /** ADR-016의 ended placeholder(시작을 못 본 채 끝을 먼저 받은 줄). 플랫폼은 종료 편지의 값이다. */
+    public static Broadcast endedPlaceholder(String streamId, String streamerId, String ingestStreamId,
+                                             long sequence, Instant endedAt, String platform) {
+        Broadcast placeholder = new Broadcast(streamId, streamerId, ingestStreamId, platform, BroadcastStatus.ENDED,
+                null, endedAt, null, sequence);
+        // 생성자에 칸을 더하지 않고 여기서 채운다 — startedNow는 endedAt이 null이라
+        // 같은 식을 태울 수 없고, 생성자에 기한을 받는 칸을 열면 두 팩토리가 서로
+        // 다른 값을 넣을 수 있는 구멍이 생긴다. 기한은 종료 시각에서만 나온다.
+        placeholder.vodExpiresAt = endedAt.plus(VOD_RETENTION);
+        return placeholder;
+    }
+
+    /**
+     * 시작 편지를 반영한다. 이미 반영한 순서 번호보다 낮거나 같으면 아무것도 하지
+     * 않고 false를 돌려준다 — <b>순서를 바로잡는 것이 아니라 견디는 것</b>이 목표다.
+     *
+     * <p>이미 ENDED인 줄에 시작이 와도 상태를 되돌리지 않는다. 순서 번호가 더
+     * 높다면 시작 시각만 채운다. 낮은 순서로 늦게 온 시작은 {@link #fillStartOfPlaceholder}가 받는다.
+     */
+    boolean applyStarted(long sequence, Instant at, String trackManifest) {
+        if (sequence <= this.lastSequence) {
+            return false;
+        }
+        if (this.status != BroadcastStatus.ENDED) {
+            this.status = BroadcastStatus.LIVE;
+        }
+        this.startedAt = at;
+        // null로 덮지 않는다. 이 값은 ADR-016이 정한 broadcast.started payload의
+        // 스냅샷이고 한 번 지워지면 복구 경로가 없다 — 뒤에 온 시작에 트랙 정보가
+        // 없다고 지우면 sequence가 올라간 뒤라 낡은 편지 가드에도 안 걸려 조용히
+        // 사라진다. 빈 placeholder를 뒤늦게 채우는 경로는 그대로 산다.
+        if (trackManifest != null) {
+            this.trackManifest = trackManifest;
+        }
+        this.lastSequence = sequence;
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
+    /**
+     * 종료가 먼저 와 시작 시각을 모르는 줄(placeholder)에, 순서 번호가 낮아 {@link #applyStarted}가 거른 시작 편지의
+     * 시각만 채운다(POK-327). 같은 방송 안에서는 큐가 순서를 지키므로 이 편지는 대개 처리에 거듭 실패해 실패 편지함으로 갔다가
+     * 되돌려진 것이다. 버리면 시작 시각이 영영 비고, 화면은 끝 12시간 창으로만 읽어 같은 물리 키로 한 앞 회차 녹화가 섞인다.
+     *
+     * <p>상태·순서 번호·보관 기한은 안 바꾼다. 끝난 방송은 끝난 채로 두고(ADR-016 「더 낮은 sequence의 started는 무시한다」)
+     * 비어 있던 사실 하나만 받는다. 물리 키({@link #fillIngestStreamId})와 같은 규칙이다: 빈 칸은 낡은 편지로도 채우고 있는 값은 안 바꾼다.
+     * 그래서 정상 순서로 받은 시작 시각을 낡은 편지가 옮기지 못하고, 시작·종료가 어느 순서로 와도 마지막 줄이 같다.
+     * 시각이 없거나 끝보다 늦으면 안 채운다. 받으면 화면이 [시작, 끝] 창을 거꾸로 잡아 시각을 모를 때보다 나빠진다.
+     * 트랙 정보도 비어 있으면 같이 채운다: 렌더 주문서가 이 값을 싣는다(PR #234 codex).
+     *
+     * <p><b>「어느 순서로 와도 같다」는 회차당 시작 편지가 하나라는 계약에 기댄다</b>(계약9 6절 게이트 ④). 둘 이상 오면 되돌린 쪽은
+     * 먼저 온 편지의 시각이, 순서대로 받은 쪽은 번호가 높은 편지의 시각이 남아 갈린다. 그 계약이 바뀌면 채운 편지의 순서 번호를
+     * 따로 저장해 더 높은 번호로 덮어야 한다(칸이 하나 는다, PR #234 codex).
+     *
+     * @return 채웠으면 true
+     */
+    boolean fillStartOfPlaceholder(Instant at, String trackManifest) {
+        if (this.startedAt != null || this.endedAt == null || at == null || at.isAfter(this.endedAt)) {
+            return false;
+        }
+        this.startedAt = at;
+        if (this.trackManifest == null) {
+            this.trackManifest = trackManifest;
+        }
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
+    /**
+     * 종료 편지 없이 닫는다(POK-244 놓친 방송 치우기). <b>{@code lastSequence}를 건드리지 않는다</b> —
+     * 그래야 뒤늦게 온 진짜 {@code ended}(더 높은 순서)가 {@link #applyEnded}로 정상 통과해 시각을 정정하고,
+     * 낮은 순서의 편지는 여전히 낡은 것으로 걸러진다. 부르는 쪽이 「아직 LIVE인가」를 락 안에서 본다.
+     *
+     * @param at 마지막 살아있는 신호 시각. 지금 시각이 아니다 — 방송은 그 근처에서 끝났다
+     */
+    public void endBySilence(Instant at) {
+        this.status = BroadcastStatus.ENDED;
+        this.endedAt = at;
+        this.vodExpiresAt = at.plus(VOD_RETENTION);
+        this.updatedAt = Instant.now();
+    }
+
+    boolean applyEnded(long sequence, Instant at) {
+        if (sequence <= this.lastSequence) {
+            return false;
+        }
+        this.status = BroadcastStatus.ENDED;
+        this.endedAt = at;
+        this.vodExpiresAt = at.plus(VOD_RETENTION);
+        this.lastSequence = sequence;
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public String getStreamId() {
+        return streamId;
+    }
+
+    public String getStreamerId() {
+        return streamerId;
+    }
+
+    /**
+     * 조각 장부·녹화 경로를 찾는 키. 편지가 물리 키를 실었으면 그 값, 아니면 {@code streamId}다(옛 줄·지금 1번 편지).
+     * 식별·자격·로그에는 쓰지 않는다. 그것은 {@code streamId}다.
+     */
+    public String ingestKey() {
+        return ingestStreamId != null ? ingestStreamId : streamId;
+    }
+
+    /**
+     * 물리 키가 빈 줄이면 뒤 편지의 값으로 채운다. 이미 있으면 안 바꾼다. 한 회차의 편지 둘은 같은 경로를 싣는다(계약9)
+     * 그래서 다른 값이 오면 발행 쪽 결함이고, 먼저 저장한 키로 조각을 계속 찾는 편이 방송 도중 키가 바뀌는 것보다 낫다.
+     */
+    void fillIngestStreamId(String ingestStreamId) {
+        if (this.ingestStreamId == null) {
+            this.ingestStreamId = blankToNull(ingestStreamId);
+        }
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    public String getPlatform() {
+        return platform;
+    }
+
+    public BroadcastStatus getStatus() {
+        return status;
+    }
+
+    public Instant getStartedAt() {
+        return startedAt;
+    }
+
+    public Instant getEndedAt() {
+        return endedAt;
+    }
+
+    public Instant getVodExpiresAt() {
+        return vodExpiresAt;
+    }
+
+    public String getTrackManifest() {
+        return trackManifest;
+    }
+
+    public Long getLastSequence() {
+        return lastSequence;
+    }
+
+    /** 「우리가 처음 안 시각」. 살아있는 신호가 아니다 — 치우개가 시작·조각이 둘 다 없을 때만 바닥값으로 쓴다. */
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+}

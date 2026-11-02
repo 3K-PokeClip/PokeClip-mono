@@ -1,13 +1,47 @@
 import { describe, expect, it } from 'vitest';
 import {
   AT_EDGE_THRESHOLD_SECONDS,
-  LIVE_WINDOW_SECONDS,
+  LIVE_EDGE_BACKOFF_SECONDS,
+  REWIND_UI_MAX_SECONDS,
+  DEFAULT_VOLUME,
   behindFromSeekFraction,
   formatBehind,
   formatUptime,
   isAtEdge,
+  parseClockLabel,
   progressFraction,
+  restoredVolume,
+  seekFractionFromPointer,
+  volumeLevel,
 } from './playerMath';
+
+describe('volumeLevel — 스피커 아이콘의 단계(POK-517)', () => {
+  it('음소거이거나 음량이 0이면 소리가 안 난다', () => {
+    expect(volumeLevel(true, 70)).toBe('silent');
+    expect(volumeLevel(false, 0)).toBe('silent');
+    expect(volumeLevel(true, 0)).toBe('silent');
+  });
+
+  it('절반 아래는 작은 소리, 절반부터는 큰 소리다', () => {
+    expect(volumeLevel(false, 1)).toBe('low');
+    expect(volumeLevel(false, 49)).toBe('low');
+    expect(volumeLevel(false, 50)).toBe('high');
+    expect(volumeLevel(false, 100)).toBe('high');
+  });
+});
+
+describe('restoredVolume — 음량 0에서 소리를 켤 때(POK-517)', () => {
+  it('마지막 음량으로 되살린다', () => {
+    expect(restoredVolume(40)).toBe(40);
+    expect(restoredVolume(10)).toBe(10);
+  });
+
+  it('너무 작으면 켜도 안 들리므로 기본 음량이다', () => {
+    expect(restoredVolume(9)).toBe(DEFAULT_VOLUME);
+    expect(restoredVolume(1)).toBe(DEFAULT_VOLUME);
+    expect(restoredVolume(0)).toBe(DEFAULT_VOLUME);
+  });
+});
 
 describe('formatBehind — 계약3 4절 시차 표기', () => {
   it('분을 2자리로 패딩한다 (-01:23)', () => {
@@ -15,10 +49,14 @@ describe('formatBehind — 계약3 4절 시차 표기', () => {
     expect(formatBehind(307)).toBe('-05:07');
   });
 
-  it('상한은 -1:00:00이다', () => {
-    expect(formatBehind(LIVE_WINDOW_SECONDS)).toBe('-1:00:00');
-    expect(formatBehind(LIVE_WINDOW_SECONDS + 999)).toBe('-1:00:00');
+  it('1시간부터는 -H:MM:SS다 — 표시 상한(REWIND_UI_MAX_SECONDS)은 -1:00:00', () => {
+    expect(formatBehind(REWIND_UI_MAX_SECONDS)).toBe('-1:00:00');
     expect(formatBehind(3599)).toBe('-59:59');
+  });
+
+  it('1시간 넘는 녹화 다시보기는 -1:00:00에서 멈추지 않는다 — POK-253', () => {
+    expect(formatBehind(REWIND_UI_MAX_SECONDS + 999)).toBe('-1:16:39');
+    expect(formatBehind(9000)).toBe('-2:30:00');
   });
 
   it('음수·0은 -00:00으로 바닥을 친다', () => {
@@ -38,28 +76,98 @@ describe('formatUptime', () => {
   });
 });
 
+describe('parseClockLabel — formatUptime의 역함수', () => {
+  it('H:MM:SS·M:SS를 초로 되돌린다', () => {
+    expect(parseClockLabel('1:24:03')).toBe(5043);
+    expect(parseClockLabel('12:34')).toBe(754);
+    expect(parseClockLabel('0:07')).toBe(7);
+  });
+
+  it('formatUptime과 왕복한다 — 카드 timestamp가 이 왕복 위에 선다', () => {
+    for (const seconds of [0, 7, 754, 5043, 3599, 3600]) {
+      expect(parseClockLabel(formatUptime(seconds))).toBe(seconds);
+    }
+  });
+
+  it('시계 표기가 아니면 null이다 — 호출부가 시킹을 건너뛴다', () => {
+    expect(parseClockLabel('방금')).toBeNull();
+    expect(parseClockLabel('1:24:03:07')).toBeNull();
+    expect(parseClockLabel('5043')).toBeNull();
+    expect(parseClockLabel('1:2a:03')).toBeNull();
+    // 분·초 칸이 60을 넘으면 시계가 아니다
+    expect(parseClockLabel('1:60:03')).toBeNull();
+    expect(parseClockLabel('1:24:99')).toBeNull();
+  });
+});
+
 describe('behindFromSeekFraction', () => {
-  it('클릭 위치를 시차로 환산한다 (우측 끝 = 엣지)', () => {
-    expect(behindFromSeekFraction(1)).toBe(0);
-    expect(behindFromSeekFraction(0.5)).toBe(LIVE_WINDOW_SECONDS / 2);
+  it('시크바 위치를 시차로 환산한다 (우측 끝 = 엣지)', () => {
+    expect(behindFromSeekFraction(1, REWIND_UI_MAX_SECONDS)).toBe(0);
+    expect(behindFromSeekFraction(0.5, REWIND_UI_MAX_SECONDS)).toBe(REWIND_UI_MAX_SECONDS / 2);
   });
 
   it('엣지 3초 미만은 0으로 스냅한다', () => {
-    const nearEdge = 1 - 2 / LIVE_WINDOW_SECONDS; // 시차 2초 지점
-    expect(behindFromSeekFraction(nearEdge)).toBe(0);
+    const nearEdge = 1 - 2 / REWIND_UI_MAX_SECONDS; // 시차 2초 지점
+    expect(behindFromSeekFraction(nearEdge, REWIND_UI_MAX_SECONDS)).toBe(0);
   });
 
   it('범위를 벗어난 입력은 0..윈도우로 클램프한다', () => {
-    expect(behindFromSeekFraction(-0.2)).toBe(LIVE_WINDOW_SECONDS);
-    expect(behindFromSeekFraction(1.7)).toBe(0);
+    expect(behindFromSeekFraction(-0.2, REWIND_UI_MAX_SECONDS)).toBe(REWIND_UI_MAX_SECONDS);
+    expect(behindFromSeekFraction(1.7, REWIND_UI_MAX_SECONDS)).toBe(0);
+  });
+
+  it('창이 짧으면 그 창 기준으로 환산한다 — POK-32', () => {
+    // 방송 10분: 왼쪽 끝이 방송 시작점이어야 한다 (1시간 기준이면 좌측 83%가 죽은 영역)
+    expect(behindFromSeekFraction(0, 600)).toBe(600);
+    expect(behindFromSeekFraction(0.5, 600)).toBe(300);
+  });
+
+  it('창을 1시간으로 자르지 않는다 — 2시간 반 녹화의 왼쪽 끝은 처음이다(POK-253). 라이브 상한은 창을 만드는 쪽이 건다', () => {
+    expect(behindFromSeekFraction(0, 9000)).toBe(9000);
+    expect(behindFromSeekFraction(0.5, 9000)).toBe(4500);
+    expect(progressFraction(4500, 9000)).toBe(0.5);
+  });
+
+  it('되감을 곳이 없으면 항상 0이다', () => {
+    expect(behindFromSeekFraction(0, 0)).toBe(0);
+    expect(behindFromSeekFraction(0, -10)).toBe(0);
+    expect(behindFromSeekFraction(0, Number.NaN)).toBe(0);
   });
 });
 
 describe('progressFraction', () => {
   it('엣지는 1, 윈도우 끝은 0', () => {
-    expect(progressFraction(0)).toBe(1);
-    expect(progressFraction(LIVE_WINDOW_SECONDS)).toBe(0);
-    expect(progressFraction(LIVE_WINDOW_SECONDS * 2)).toBe(0);
+    expect(progressFraction(0, REWIND_UI_MAX_SECONDS)).toBe(1);
+    expect(progressFraction(REWIND_UI_MAX_SECONDS, REWIND_UI_MAX_SECONDS)).toBe(0);
+    expect(progressFraction(REWIND_UI_MAX_SECONDS * 2, REWIND_UI_MAX_SECONDS)).toBe(0);
+  });
+
+  it('창이 짧으면 그 창 기준으로 채운다 — POK-32', () => {
+    expect(progressFraction(300, 600)).toBe(0.5);
+    expect(progressFraction(600, 600)).toBe(0);
+  });
+
+  it('되감을 곳이 없으면 엣지(1)로 둔다 — 0 나눗셈 방어', () => {
+    // 방어가 없으면 NaN이 CSS width로 나가 트랙이 사라진다
+    expect(progressFraction(0, 0)).toBe(1);
+    expect(progressFraction(10, 0)).toBe(1);
+    expect(progressFraction(1, Number.NaN)).toBe(1);
+  });
+});
+
+describe('seekFractionFromPointer', () => {
+  it('트랙 안 좌표를 비율로 환산한다', () => {
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 300)).toBe(0.5);
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 100)).toBe(0);
+  });
+
+  it('트랙 밖으로 나간 드래그 좌표는 0..1로 클램프한다', () => {
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 40)).toBe(0);
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 900)).toBe(1);
+  });
+
+  it('폭이 없으면 계산 불가라 null이다', () => {
+    expect(seekFractionFromPointer({ left: 0, width: 0 }, 50)).toBeNull();
   });
 });
 
@@ -68,5 +176,13 @@ describe('isAtEdge', () => {
     expect(isAtEdge(0)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS - 1)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS)).toBe(false);
+  });
+});
+
+describe('LIVE_EDGE_BACKOFF_SECONDS', () => {
+  // 임계값과의 관계는 여기서 검증하지 않는다 — 시차를 백오프 지점 기준으로 재므로
+  // 스냅 직후 시차는 0이다. 실제 회귀(스냅 → 재칠)는 dvrWindow.test.ts가 잡는다.
+  it('부분 세그먼트를 피하려면 0보다 커야 한다', () => {
+    expect(LIVE_EDGE_BACKOFF_SECONDS).toBeGreaterThan(0);
   });
 });

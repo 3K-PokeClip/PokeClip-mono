@@ -1,10 +1,17 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginSettingsScreen } from '@/features/settings/plugin/PluginSettingsScreen';
+import { PLUGIN_DOWNLOADS } from '@/lib/pluginDownload';
 import { useAuthStore } from '@/stores/auth';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
+
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 
 // 서버의 사람용 표기와 같은 XXXX-XXXX (Crockford Base32, PairingCodeService.format)
 const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
@@ -46,6 +53,7 @@ function callsTo(spy: ReturnType<typeof stubFetch>, url: string) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
   useOnboardingStore.setState({
     welcomeSeen: false,
@@ -62,11 +70,14 @@ afterEach(() => {
 });
 
 describe('PluginSettingsScreen', () => {
-  it('디자인 1m의 블록 세 개를 렌더하고 발급 상태를 서버에서 읽는다', async () => {
+  it('디자인 1m의 블록을 렌더하고 발급 상태를 서버에서 읽는다', async () => {
     stubStreamKeyFetch();
     renderWithProviders(<PluginSettingsScreen />);
 
-    expect(screen.getByRole('region', { name: '플러그인 연결 상태' })).toHaveTextContent('연결됨');
+    // 웹은 플러그인 연결 상태를 모른다 — 시안의 연결 상태 배너도 「연결 진단」 버튼도 두지 않는다(ADR-077 결정 4)
+    expect(screen.queryByRole('region', { name: '플러그인 연결 상태' })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
+    expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
     // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
@@ -138,6 +149,23 @@ describe('PluginSettingsScreen', () => {
     expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
     expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(1);
     expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+    // 발급 성공 뒤 한 번 센다 — 코드 원문은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['pairing_code_issued', {}]]);
+  });
+
+  it('코드를 발급해도 연결됐다고 말하지 않는다 — 발급은 OBS에 넣었다는 증거가 아니다', async () => {
+    stubStreamKeyFetch({ issued: false });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '코드 발급' }));
+    // 코드 모달이 떠 있는 동안에도 연결됐다고 말하지 않는다(모달은 body로 포털된다)
+    expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
+    fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
+
+    // 화면 전체를 본다 — 발급 뒤 코드 카드나 모달에 「연결됨」 배지가 다시 붙는 회귀를 잡는다
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
   });
 
   it('상태 조회를 한 번도 못 읽으면 미발급이 아니라 오류·다시 시도를 보여준다 (리뷰 #73)', async () => {
@@ -159,6 +187,44 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
 
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+  });
+
+  it('다시 시도는 응답까지 오류 카드를 둔 채 그 버튼만 돈다 — 스켈레톤으로 갈아끼우지 않는다 (POK-446)', async () => {
+    let statusCalls = 0;
+    let answer: (res: Response) => void = () => {};
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET') {
+        statusCalls += 1;
+        if (statusCalls === 3) return jsonResponse(200, { issued: true, createdAt: CREATED_AT });
+        // 첫 조회는 실패, 둘째(다시 시도)는 붙잡아 「다시 읽는 중」을 만든다
+        return statusCalls === 1
+          ? jsonResponse(500, { reason: '서버 오류' })
+          : new Promise<Response>((resolve) => (answer = resolve));
+      }
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+    const card = screen.getByRole('region', { name: '연동 코드' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '다시 시도' }));
+
+    // 접근 이름은 aria-label이 대신한다(발급 버튼과 같은 .busyButton) — 응답까지 잠겨 두 번 보내지 않는다
+    const retrying = await screen.findByRole('button', { name: '다시 불러오는 중' });
+    expect(retrying).toHaveAttribute('aria-busy', 'true');
+    expect(retrying).toBeDisabled();
+    expect(card).toHaveTextContent('연동 코드 상태를 불러오지 못했어요');
+    // 다시 읽는 동안 쿼리는 pending으로 돌아가지만 코드 박스 스켈레톤(64u)으로 바뀌지 않는다
+    expect(card.querySelector('[style*="64 * var(--pc-u)"]')).toBeNull();
+    expect(statusCalls).toBe(2);
+
+    // 또 실패하면 다시 누를 수 있는 오류 카드로 돌아온다
+    await act(async () => answer(jsonResponse(500, { reason: '서버 오류' })));
+    const again = await screen.findByRole('button', { name: '다시 시도' });
+    expect(again).not.toHaveAttribute('aria-busy');
+    expect(again).toBeEnabled();
+
+    fireEvent.click(again);
     expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
   });
 
@@ -248,5 +314,22 @@ describe('PluginSettingsScreen', () => {
     // 접근 이름에서는 aria-label이 이겨 '재발급'으로는 찾을 수 없어야 한다
     expect(busyButton).toHaveTextContent('재발급');
     expect(screen.queryByRole('button', { name: '재발급' })).not.toBeInTheDocument();
+  });
+
+  it('배너 → 창에서 OS별 고정 주소의 파일을 받는다 — 설치·연결 상태는 지어내지 않는다 (POK-379)', async () => {
+    stubStreamKeyFetch();
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+    expect(dialog).toBeInTheDocument();
+    // jsdom 기본 UA는 OS를 모른다 — 감지 못 하면 Windows 탭으로 연다
+    expect(screen.getByRole('tab', { name: 'Windows' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('link', { name: /Windows 설치 파일/ })).toHaveAttribute(
+      'href',
+      PLUGIN_DOWNLOADS.windows.url,
+    );
+    expect(document.body).not.toHaveTextContent(/설치됨|연결됨/);
   });
 });

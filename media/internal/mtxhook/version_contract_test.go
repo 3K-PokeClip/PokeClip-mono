@@ -2,7 +2,7 @@ package mtxhook
 
 // 이 파일은 MediaMTX **버전 드리프트 방지 장치**다.
 //
-// 버전을 고정하는 자리는 media/Dockerfile.mtxhook 의 FROM 한 곳뿐이며 그것이 설계 의도다.
+// 제품 버전 고정의 기준은 media/Dockerfile.mtxhook 의 FROM 이며 그것이 설계 의도다.
 // 문제는 "1.19.3 이라서 참인 사실"에 기대는 코드·설정·문서가 그 바깥에 흩어져 있다는 것이다.
 // 그 전제가 새 버전에서 깨져도 **아무 오류가 나지 않는다** — 훅은 fire-and-forget 이라
 // 실행되지 않아도 무징후이고, 길이 측정은 틀린 값을 조용히 기록한다.
@@ -10,24 +10,45 @@ package mtxhook
 // 그래서 사람의 기억 대신 기계가 잡게 한다. FROM 태그가 아래 상수와 어긋나는 순간
 // 빨간불이 되고, 그 실패 메시지가 곧 재확인 안내서다.
 //
-// 이 패키지에 두는 이유: mtxhook 은 존재 이유 자체가 MediaMTX 훅 계약이고, 아래 8개 전제
+// 이 패키지에 두는 이유: mtxhook 은 존재 이유 자체가 MediaMTX 훅 계약이고, 아래 9개 전제
 // 중 하나(runOnReady 매핑)를 이미 event.go 에 담고 있다. 상수는 프로덕션 코드가 쓰지
 // 않으므로 테스트 파일 안에 둔다 — 아무도 안 읽는 값을 프로덕션에 심는 것보다 정직하다.
 
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// pinnedMediaMTXVersion 은 media/Dockerfile.mtxhook 의 FROM 태그와 같아야 하는 값이다.
-// 이 값을 고치는 행위 = "아래 8개 전제를 새 버전에서 재확인했다"는 선언이다.
-const pinnedMediaMTXVersion = "1.19.3"
+// pinnedMediaMTXTag 는 media/Dockerfile.mtxhook 의 FROM 태그와 같아야 하는 값이다.
+// **이 값만 바뀌는 것(.1 → .2)은 우리 수정이 바뀐 것이지 버전업이 아니다** — 그래서 이
+// 값이 어긋났을 때의 안내는 forkPinGuide(이미지 발행 절차)이지 9개 전제 재확인이 아니다.
+// 단, 같은 릴리스 안에서 상류 베이스 커밋이 이동한 경우는 준버전업이며 README 규약의 표적 재확인을 따른다.
+const pinnedMediaMTXTag = "v1.21.1-pokeclip.2"
+
+// upstreamBaseVersion 은 우리 포크 빌드가 올라타 있는 상류 MediaMTX 버전이다.
+// **아래 9개 전제를 짊어지는 상수는 이것 하나다** — 이 값을 고치는 행위가 곧 "9개 전제를
+// 새 버전에서 재확인했다"는 서명이고, 그때만 versionUpgradeGuide 가 안내로 나간다.
+const upstreamBaseVersion = "1.21.1"
+
+// pinnedMediaMTXDigest 는 FROM 이 가리키는 이미지의 불변 좌표다.
+//
+// 역할 분담을 흐리지 말 것: **같은 태그 재푸시로 내용이 바뀌는 것을 실제로 막는 것은
+// Dockerfile 의 digest pin 자체**다(도커가 그 digest 를 받는다). 이 상수가 지키는 것은
+// 그 좌표가 조용히 사라지거나 다른 값으로 바뀌는 것 — 즉 "핀이 풀린 상태"의 발견이다.
+// 닻을 태그에서 digest 로 옮긴 근거는 ADR-050 선결 B. 이미지를 새로 발행했다면 워크플로
+// 실행 요약이 찍어 주는 값을 여기에 옮겨 적는다.
+const pinnedMediaMTXDigest = "sha256:8b5318ceee0b4a3638ce3a8fe8cfa5afbfaea71413ffaa330b601f1cc6264dc8"
 
 // mediaMTXImage 는 버전을 고정하는 베이스 이미지 이름이다. 같은 Dockerfile 에 빌드
 // 스테이지 FROM(golang:...)이 따로 있으므로 이 이름을 포함한 FROM 만 대상으로 삼는다.
-const mediaMTXImage = "bluenviron/mediamtx"
+//
+// **상류 공식 이미지가 아니라 우리 포크 빌드다.** 상류 베이스에 없는 수정을, 라인이 올라탄
+// 상류 베이스에 들어올 때까지 우리 라인이 싣는다 — 수정 목록의 정본은 media/README.md 의
+// "이미지 출처에 묶인 전제" 절 표이고, 자세한 사정은 Dockerfile 주석에도 있다.
+const mediaMTXImage = "xodbs1021/mediamtx"
 
 // dockerfileRel 은 저장소 루트 기준 경로다. 상대 경로 방식은 cmd/mtxhookwrite 의
 // contract_test.go(docker-compose.yml 대조)와 같은 관례를 따른다.
@@ -40,7 +61,7 @@ const checklistSection = "MediaMTX 버전업 체크리스트"
 // 줄 번호는 일부러 적지 않는다 — 금방 낡는다. 대신 grep 으로 바로 찾히는 닻을 적는다.
 const versionUpgradeGuide = `
 버전을 올렸다면 이 상수도 같이 고치고, media/README.md 의 "` + checklistSection + `"를 따른다.
-아래 8곳은 "지금 고정된 버전이라서 참인 사실"에 기대고 있다. 새 버전에서도 참인지 확인한
+아래 9곳은 "지금 고정된 버전이라서 참인 사실"에 기대고 있다. 새 버전에서도 참인지 확인한
 뒤에 상수를 고쳐라 — 전제가 깨져도 오류는 나지 않는다(훅 실패는 무징후다).
 
  1. infra/compose/mediamtx.yml  (닻: "pathDefaults 는 all_others 에도 상속된다")
@@ -49,7 +70,7 @@ const versionUpgradeGuide = `
  2. infra/compose/mediamtx.yml  (닻: "이 세 줄에 ` + "`$`" + ` 를 넣지 않는다")
     명령 문자열을 shell 규칙으로 먼저 쪼갠 뒤 조각별로 변수를 치환한다는 순서에 기댄
     안전성 근거다. 순서가 뒤집히면 송출자가 인자 개수를 늘릴 수 있다.
-    → 업스트림 internal/externalcmd/cmd_os.go 를 확인한다.
+    → 업스트림 internal/externalcmd/cmd_os_other.go(#6156 에서 cmd_os.go 를 개명) 를 확인한다.
  3. media/README.md  (닻: "구명칭 runOnReady")
  4. media/internal/mtxhook/event.go  (닻: Kind 주석의 "runOnAvailable 로 매핑")
     3·4 는 같은 사실이다 — runOnReady 는 세션 축이 아니라 runOnAvailable 로 매핑된다.
@@ -67,16 +88,132 @@ const versionUpgradeGuide = `
     순간 실패한다. moq: no 라 지금은 참이지만 moq/webrtc/rtsps + auto.key 류를 켜면 비root
     에서 기동 자체가 실패한다(POK-79 E7). → 새 버전 기본 설정의 CWD 쓰기 지점을 확인하고,
     기동 로그에 "failed to save"·"permission denied" 가 없는지 본다.
+ 9. media/README.md 전제 표 9행  (닻: "302 cookieCheck")
+    HLS 첫 요청의 302 cookieCheck 는 1.19.3 에도 있던 동작이다(1.20.1 전환 때 처음 체크리스트화).
+    버전별 델타만 다르다 — 1.20.1: plain HTTP 쿠키 중단(Partitioned 통합)·세션 쿼리 폴백(만료 401).
+    1.21.1: 세션 수명을 서버가 관리한다 — 세션이 살아 있는데 muxer 가 닫히면 최대 30초 404,
+    세션이 없으면 401(본문 "session not found"), CORS 는 요청 Origin 을 그대로 돌려준다(Vary: Origin).
+    이 행은 서빙 경계 상시 리스크라 롤백해도 걷어내지 않는다. 델타 서술만 그 버전 값으로 갱신한다.
 `
 
-// 버전 고정 자리(Dockerfile 의 FROM)와 이 파일의 상수가 어긋나면 빨간불이 된다.
-// 상수는 "8개 전제를 재확인했다"는 서명이므로, 서명 없이 FROM 만 올라가는 것을 막는다.
+// forkPinGuide 는 "버전"이 아니라 **"어느 이미지냐"** 가 어긋났을 때의 안내다.
+//
+// 위 9곳이 MediaMTX 버전에 묶인 전제라면, 이것은 이미지 출처에 묶인 전제다:
+// 이 이미지에는 라인이 올라탄 상류 베이스에 없는 수정이 들어 있다(목록의 정본은 media/README.md
+// 의 "이미지 출처에 묶인 전제" 절 표). 상류 공식 이미지로 되돌리면 그 표 넷째 열의 손실이 생기고,
+// 훅 실패 보고는 **사라져도 오류도 로그도 내지 않는다.**
+const forkPinGuide = `
+FROM 이 가리키는 이미지가 우리 포크 빌드가 아니다.
+
+이 이미지에만 있는 것 — 상류 v1.21.1 에 없는 수정
+(정본은 media/README.md 의 "이미지 출처에 묶인 전제" 절 표):
+  - bluenviron/mediamtx#6206  설정 리로드와 훅 로깅 사이의 데이터 경합 수정
+                              — 닫힘(2026-10-11) — 상류는 bluenviron/mediamtx#6326 으로 다르게 고침(릴리스 전)
+  - bluenviron/mediamtx#6259  모든 훅 명령의 실패를 로그에 남긴다
+  - bluenviron/mediamtx#6261  CertLoader.Close() 가 watch() 의 끝을 기다린다
+  - (상류 미게시)             훅 출력을 서버 로그로 돌리는 설정 — 기본 꺼짐, 제품 설정에 키 없음
+  - bluenviron/mediamtx#6292  설정 PATCH 가 <redacted> 를 비밀번호로 저장하지 않는다
+                              — 체리픽: 상류 v1.21.2 에 있다. 라인 베이스가 v1.21.1 이라 싣는다
+  - bluenviron/mediamtx#6306  U — 인증 사용자별 SRT passphrase. 값이 있으면 경로 passphrase 를 대신한다
+상류 공식 이미지(bluenviron/mediamtx:1.21.1)로 되돌리면 runOnOffline·runOnRecordSegmentComplete
+의 실패가 다시 로그 없이 지나가고(bluenviron/mediamtx#6259), 로거를 다시 만드는 리로드에서
+훅 로깅과의 데이터 경합이 돌아온다(bluenviron/mediamtx#6206). U 를 쓰는 dev-media 계정별
+방송(후속 PR) 뒤라면 사용자 값이 사라져 모든 SRT 송출이 경로 잠금값에 막힌다
+(bluenviron/mediamtx#6306 — 안전한 실패지만 송출이 멈춘다). 나머지는 지금 설정에서
+차이가 없다 — CertLoader 를 만들지 않고(TLS·MoQ 꺼짐), 출력 설정은 꺼져 있고, 설정 PATCH 를
+부르지 않으며, 인증 사용자에 srtPassphrase 가 없다.
+
+새 이미지를 발행했다면:
+  1. xodbs1021/mediamtx 의 pokeclip 라인에 커밋하고 *-pokeclip.* 태그를 민다.
+  2. pokeclip-image 워크플로가 멀티아치 이미지를 올리고 실행 요약에 digest 를 찍는다.
+  3. digest 를 옮기기 전에 출처를 확인한다 — 그 워크플로 실행 기록의 headSha 가 검수한 라인
+     tip 과 같고, 이미지에서 꺼낸 /mediamtx(플랫폼마다, docker create · docker cp)의
+     go version -m 이 vcs.revision=<그 tip> · vcs.modified=false 여야 한다.
+  4. 그 tag·digest 를 media/Dockerfile.mtxhook 의 FROM 과 이 파일의 상수 2개에 함께 옮긴다.
+  5. infra/dev-media/compose.yml 의 image 줄(dev-media 서버 핀)은 따로 판단한다 — 서버가 필요로
+     할 때 서버 기준으로 올리고, 이 FROM 과 같을 필요는 없다(ADR-040 2026-10-12 추기).
+  6. ③ 재포장 핀을 대조한다 — media/README.md 의 "포크 태그를 올릴 때 — ③ 재포장 핀 대조".
+
+상류 main 에만 일부 머지됐다면, 수정이 포함된 상류 커밋으로 베이스를 옮겨 준버전업 표적
+재확인을 마친 뒤 중복 수정을 빼고 .N 을 올려 위 절차로 다시 낸다(베이스를 유지하면 수정도 유지한다).
+새 상류 릴리스로 옮기는 경우에는 v<새 버전>-pokeclip.1 로 발행하고 upstreamBaseVersion 갱신과
+전제 9곳 전수 재확인을 함께 한다.
+README 표의 모든 행이 상류 릴리스에 들어갔다면 — bluenviron/mediamtx#6206 처럼 상류가 다른
+수정으로 대체한 것은 그 대체 수정(bluenviron/mediamtx#6326)이 들어갔다면(= 포크가 필요 없어졌다면)
+포크를 걷어낸다. 그 표에는 U(bluenviron/mediamtx#6306)도 있다 — U 없이 공식 이미지로 되돌리면
+U 를 쓰는 dev-media 계정별 방송(후속 PR) 뒤에는 모든 SRT 송출이 경로 잠금값에 막힌다.
+걷어낼 때는 아래를 전부 정리한다.
+빠뜨리면 공식 태그에서 포크 전용 단언이 남아 빨간불이 된다:
+  1. Dockerfile FROM 을 bluenviron/mediamtx:<그 버전>@sha256:<그 이미지 digest> 로 되돌린다
+     — 공식 이미지도 태그 + digest 로 고정한다(같은 태그를 다시 밀어도 바뀌지 않게).
+     infra/dev-media/compose.yml 의 image 줄(서버 핀)은 서버가 기대는 수정(특히 U)을 기준으로
+     따로 판단한다.
+  2. mediaMTXImage 를 "bluenviron/mediamtx" 로 되돌린다.
+  3. pinnedMediaMTXTag 를 그 버전으로 고치거나, upstreamBaseVersion 하나로 합친다.
+  4. pinnedMediaMTXDigest 는 그 공식 이미지의 digest 로 고치고
+     TestPinnedMediaMTXDigestMatchesDockerfile 은 남긴다(그 실패 안내는 versionUpgradeGuide 로).
+  5. TestPinnedTagCarriesUpstreamBaseVersion 과 TestPinContractRejectsUnusedForkStageBypass 를
+     지운다 — 둘 다 포크 전용이다. regexp import 는 이 둘 말고 쓰는 곳이 없어 함께 지운다.
+  6. 남는 테스트·도우미의 forkPinGuide 참조를 모두 versionUpgradeGuide 로 바꾼 뒤
+     이 안내(forkPinGuide)를 지운다 — 먼저 지우면 undefined: forkPinGuide 로 컴파일이 깨진다.
+  7. media/README.md 의 "이미지 출처에 묶인 전제" 절을 걷어낸다.
+끝으로 남는 포크 서술을 저장소 루트에서 찾아 고친다:
+  git grep -n -F -e -pokeclip. -e xodbs1021 -e 포크 -- media infra docs
+`
+
+// 고정 자리(Dockerfile 의 FROM)와 이 파일의 상수가 어긋나면 빨간불이 된다.
+// FROM 만 조용히 갈리는 것을 막는 장치다 — 9개 전제의 서명은 upstreamBaseVersion 이 진다.
 func TestPinnedMediaMTXVersionMatchesDockerfile(t *testing.T) {
 	tag := mediaMTXTagFromDockerfile(t, readDockerfile(t))
 
-	if tag != pinnedMediaMTXVersion {
-		t.Fatalf("media/Dockerfile.mtxhook 의 FROM 태그 = %q, pinnedMediaMTXVersion = %q — 어긋난다.\n%s",
-			tag, pinnedMediaMTXVersion, versionUpgradeGuide)
+	if tag != pinnedMediaMTXTag {
+		t.Fatalf("media/Dockerfile.mtxhook 의 FROM 태그 = %q, pinnedMediaMTXTag = %q — 어긋난다.\n%s",
+			tag, pinnedMediaMTXTag, forkPinGuide)
+	}
+}
+
+// digest 는 태그와 달리 갈아 끼울 수 없는 좌석이다. 같은 태그로 다른 이미지가 올라와도
+// 이 단언이 걸린다 — 무징후 교체를 막는 것이 이 상수의 존재 이유다(ADR-050 선결 B).
+func TestPinnedMediaMTXDigestMatchesDockerfile(t *testing.T) {
+	digest := digestOf(t, mediaMTXRefFromDockerfile(t, readDockerfile(t)))
+
+	if digest != pinnedMediaMTXDigest {
+		t.Fatalf("media/Dockerfile.mtxhook 의 FROM digest = %q, pinnedMediaMTXDigest = %q — 어긋난다.\n%s",
+			digest, pinnedMediaMTXDigest, forkPinGuide)
+	}
+}
+
+// 포크 태그는 `v<상류버전>-pokeclip.<N>` 형식이고, 자기가 올라탄 상류 버전을 이름에 담는다.
+// 그 대응이 깨지면 "전제 9곳이 묶인 버전"이 무엇인지 아무도 알 수 없게 된다.
+//
+// 접두 검사가 아니라 **형식 전체**를 본다 — 접두만 보면 `v1.20.1-pokeclip.1-hotfix` 같은
+// 변형이 통과하고, 그러면 태그에서 상류 버전을 읽는 규칙 자체가 흐려진다.
+func TestPinnedTagCarriesUpstreamBaseVersion(t *testing.T) {
+	want := regexp.MustCompile(`^v` + regexp.QuoteMeta(upstreamBaseVersion) + `-pokeclip\.[1-9][0-9]*$`)
+
+	if !want.MatchString(pinnedMediaMTXTag) {
+		t.Fatalf("포크 태그 %q 가 형식 %s 에 맞지 않는다 — 전제 9곳이 어느 상류 버전에 묶인 "+
+			"것인지 태그에서 읽을 수 없게 된다. 상류 버전을 올렸다면 upstreamBaseVersion 도 "+
+			"함께 고치고 아래 9곳을 재확인하라.\n%s",
+			pinnedMediaMTXTag, want, versionUpgradeGuide)
+	}
+}
+
+// 뚫릴 수 있었던 입력의 회귀.
+//
+// "우리 이미지를 쓰는 FROM 이 하나 있는가"로 물으면 아래 입력이 통과한다 — 쓰지 않는
+// 스테이지에 포크 이미지를 남겨 두고 **실제로 도는 최종 스테이지만 상류 공식 이미지로**
+// 바꾼 모양이다. 그 컨테이너에는 우리 패치가 없고, 그 사실은 아무 오류도 내지 않는다.
+func TestPinContractRejectsUnusedForkStageBypass(t *testing.T) {
+	const dockerfile = `FROM ghcr.io/xodbs1021/mediamtx:v1.20.1-pokeclip.1@sha256:dead AS unused
+FROM golang:1.26-alpine AS build
+FROM bluenviron/mediamtx:1.20.1
+COPY --from=build /out/mtxhookwrite /hooks-bin/mtxhookwrite
+`
+
+	if ref := lastFromRef(dockerfile); strings.Contains(ref, mediaMTXImage) {
+		t.Errorf("최종 스테이지 FROM = %q 인데 %q 를 쓰는 것으로 판정했다 — 쓰지 않는 포크 "+
+			"스테이지를 남긴 우회가 통과한다.", ref, mediaMTXImage)
 	}
 }
 
@@ -119,37 +256,62 @@ func readDockerfile(t *testing.T) string {
 func mediaMTXTagFromDockerfile(t *testing.T, dockerfile string) string {
 	t.Helper()
 
-	var refs []string
-	for line := range strings.SplitSeq(dockerfile, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			continue // 주석 안의 예시 FROM(digest pin 안내)을 잡지 않는다.
-		}
-		fields := strings.Fields(trimmed)
-		if len(fields) < 2 || !strings.EqualFold(fields[0], "FROM") {
-			continue
-		}
-		if strings.Contains(fields[1], mediaMTXImage) {
-			refs = append(refs, fields[1])
+	return tagOf(t, mediaMTXRefFromDockerfile(t, dockerfile))
+}
+
+// mediaMTXRefFromDockerfile 은 **최종 스테이지**의 이미지 참조 전체(`이름:태그@digest`)를
+// 돌려준다. 태그와 digest 를 각각 대조해야 해서 참조를 통째로 얻는 자리를 따로 둔다.
+//
+// **왜 "우리 이미지를 쓰는 FROM 이 하나 있는가"를 묻지 않는가**: 그 물음은 우회를 통과시킨다 —
+// 쓰지 않는 스테이지에 포크 이미지를 남겨 두고 최종 스테이지만 상류 공식 이미지로 바꾸면
+// 조건이 참이 되고, 실제로 도는 컨테이너에는 우리 패치가 없다(그 실패는 무징후다).
+// 그래서 **마지막 FROM** 만 본다 — 최종 이미지의 베이스는 그것 하나뿐이다.
+// 같은 패키지 runtime_identity_contract_test.go 의 finalStageLines 와 같은 취지다.
+func mediaMTXRefFromDockerfile(t *testing.T, dockerfile string) string {
+	t.Helper()
+
+	last := lastFromRef(dockerfile)
+
+	if last == "" {
+		t.Fatalf("%s 에 FROM 이 하나도 없다 — 버전 고정 자리가 사라졌거나 형식이 바뀌었다.\n%s",
+			dockerfileRel, forkPinGuide)
+	}
+	if !strings.Contains(last, mediaMTXImage) {
+		t.Fatalf("%s 의 **최종 스테이지** FROM = %q 로 %q 가 아니다 — 실제로 도는 컨테이너의 "+
+			"베이스가 우리 포크 빌드가 아니다.\n%s", dockerfileRel, last, mediaMTXImage, forkPinGuide)
+	}
+	return last
+}
+
+// lastFromRef 는 최종 스테이지의 베이스 이미지 참조다.
+// 순수 함수로 떼어 둔 이유는 회귀 입력(아래 우회 재현)을 직접 먹이기 위해서다.
+func lastFromRef(dockerfile string) string {
+	var last string
+	for _, fields := range activeDockerfileLines(dockerfile) {
+		if strings.EqualFold(fields[0], "FROM") && len(fields) >= 2 {
+			last = fields[1]
 		}
 	}
+	return last
+}
 
-	switch {
-	case len(refs) == 0:
-		t.Fatalf("%s 에 %q 를 쓰는 FROM 이 없다 — 버전 고정 자리가 사라졌거나 형식이 바뀌었다.\n%s",
-			dockerfileRel, mediaMTXImage, versionUpgradeGuide)
-	case len(refs) > 1:
-		t.Fatalf("%s 에 %q FROM 이 %d 곳 있다(%q) — 어느 것이 버전 고정 자리인지 모호하다.",
-			dockerfileRel, mediaMTXImage, len(refs), refs)
+// digestOf 는 이미지 참조에서 digest 를 떼어 낸다. digest 가 없으면 Fatal 이다 —
+// 태그만 남은 참조는 "같은 이름으로 다른 내용이 올 수 있는 상태"라 고정이 아니다.
+func digestOf(t *testing.T, ref string) string {
+	t.Helper()
+
+	_, digest, ok := strings.Cut(ref, "@")
+	if !ok || digest == "" {
+		t.Fatalf("%s 의 FROM %q 에 digest 가 없다 — 태그만으로는 같은 이름에 다른 내용이 "+
+			"올라오는 것을 막지 못한다(그 교체는 무징후다).\n%s", dockerfileRel, ref, forkPinGuide)
 	}
-
-	return tagOf(t, refs[0])
+	return digest
 }
 
 // tagOf 는 이미지 참조에서 태그만 떼어 낸다.
 //
-// digest pin(`이미지:태그@sha256:...`)도 받는다 — Dockerfile 주석이 그 형태로 바꾸는 길을
-// 열어 두고 있으므로, 그때 이 장치가 형식 때문에 죽으면 안 된다.
+// digest pin(`이미지:태그@sha256:...`)을 받는다 — 지금 FROM 이 실제로 그 형태다.
+// 태그와 digest 를 각각 대조하므로 여기서는 digest 를 떼어 내고 태그만 본다.
 // 레지스트리 호스트에 포트가 붙는 경우(`host:5000/...`)를 위해 마지막 `/` 뒤에서 자른다.
 func tagOf(t *testing.T, ref string) string {
 	t.Helper()

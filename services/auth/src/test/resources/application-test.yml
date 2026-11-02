@@ -43,8 +43,22 @@ pokeclip:
     # IllegalStateException으로 컨텍스트가 죽고, IntegrationTestSupport를 상속한
     # 테스트가 전부 같이 죽는다. 값을 바꿀 일이 있으면 `base64 -d | wc -c`로 먼저 센다.
     key: dGVzdC1vbmx5LWFlcy0yNTYta2V5LTMyYnl0ZXMhISE=
+  withdrawal-purge:
+    # 시험은 발송기를 안 돌린다. WithdrawalPurgeTest가 가짜 서버로 한 바퀴씩 손으로 부른다.
+    # 주소는 아무도 안 듣는 포트다(실수로 보내면 연결 거부로 바로 실패한다).
+    clip-base-url: http://127.0.0.1:1
+    collector-base-url: http://127.0.0.1:1
+    dispatch: false
   internal-api:
     token: test-only-internal-token-32bytes-long!!
+    # 셸에 STREAM_KEY_RESOLVE_TOKEN·STREAM_KEY_RESOLVE_ALLOWED_CIDRS가 export돼 있어도 시험은 닫힌 창구를 잰다 —
+    # 아래 forward-headers-strategy 줄과 같은 이유로 이 두 줄이 기본 yml의 placeholder 줄을 덮는다.
+    # 창구를 여는 시험의 @TestPropertySource·@DynamicPropertySource는 이것보다 위라 그쪽은 계속 열린다.
+    # 재현: export한 채 돌리면 WithoutResolveToken이 401 대신 403이었고, ForwardedHeadersNativeTest는
+    # native라 부팅 검사에 걸려 컨텍스트가 안 떴다.
+    stream-key-resolve:
+      token: ""
+      allowed-cidrs: ""
   chzzk:
     app:
       client-id: test-chzzk-client-id
@@ -61,3 +75,65 @@ pokeclip:
       # 컨텍스트마다 틱이 돌면 DB를 뒤지고 HTTP를 시도한다. 배선은 ChzzkTokenRefreshSchedulerTest가 잰다.
       enabled: false
       interval: PT10M
+  youtube:
+    app:
+      client-id: test-youtube-client-id
+      client-secret: test-youtube-client-secret
+      redirect-uri: http://localhost:8081/oauth/youtube/callback
+    authorize-uri: https://accounts.google.com/o/oauth2/v2/auth
+    # 자리표시다. @NotBlank라 비울 수 없고, 실제 주소는 IntegrationTestSupport·RealServerTestSupport가
+    # @DynamicPropertySource로 가짜 서버(FakeYoutubeServer)로 덮어쓴다(DynamicPropertySource가 yml보다 우선).
+    token-uri: http://127.0.0.1:1
+    revoke-uri: http://127.0.0.1:1
+    api-base-uri: http://127.0.0.1:1
+    state-ttl: PT10M
+    resolve-min-remaining: PT30M
+    check:
+      # 치지직 갱신 스케줄러와 같은 이유로 끈다. 배선은 전용 테스트가 잰다.
+      enabled: false
+      interval: PT1H
+      staleness: PT24H
+    retention:
+      # 컨텍스트마다 바퀴가 돌면 다른 시험이 심은 행을 지운다. YoutubeRetentionJobTest가 한 바퀴를 손으로 부른다.
+      run: false
+      interval: PT1H
+      unlinked-grace: P7D
+      broken-grace: P30D
+      channel-refresh-after: P30D
+  soop:
+    app:
+      client-id: test-soop-client-id
+      client-secret: test-soop-client-secret
+      redirect-uri: http://localhost:3000/oauth/soop/callback
+    authorize-uri: https://openapi.sooplive.com/auth/code
+    # 자리표시다. 실제 주소는 IntegrationTestSupport·RealServerTestSupport가 가짜 서버(FakeSoopServer)로 덮어쓴다.
+    api-base-uri: http://127.0.0.1:1
+    state-ttl: PT10M
+    refresh-ahead: PT2H
+    resolve-min-remaining: PT1H
+    check:
+      # 치지직 갱신 스케줄러와 같은 이유로 끈다. 배선은 전용 시험이 잰다.
+      enabled: false
+      interval: PT1H
+      staleness: PT24H
+      reject-brake: 3
+      batch-limit: 25
+  retention:
+    # 컨텍스트마다 틱이 돌면 다른 시험이 심은 행을 지운다. 배선은 RetentionCleanupSchedulerTest가 잰다.
+    enabled: false
+    interval: PT10M
+    batch-limit: 1000
+    refresh-tokens-keep-for: P14D
+    pairing-attempts-keep-for: PT1H
+    pairing-codes-keep-for: PT1H
+
+# 🔴 진짜 톰캣을 띄우는 검사(RANDOM_PORT)도 기본이 와일드카드다 — 주소를 안 정하면
+#    남이 같은 번호의 127.0.0.1 을 잡아 요청을 가져간다(가짜 서버 셋과 같은 함정).
+#    루프백에 못박으면 커널이 그 번호를 예약해 가로챌 창이 없어진다.
+server:
+  address: 127.0.0.1
+  # 셸에 FORWARD_HEADERS_STRATEGY가 export돼 있어도 시험은 기본값을 잰다 — 이 줄이 기본 yml의 placeholder 줄을 덮는다
+  # (환경변수는 placeholder를 채울 뿐 이 프로파일 yml보다 아래다). ForwardedHeadersNativeTest의
+  # @TestPropertySource(addFirst)는 이것보다 위라 그쪽은 계속 native다. 리뷰 라운드 1 재현: export한 채 돌리면
+  # ForwardedHeadersDisabledTest가 429 대신 404였다.
+  forward-headers-strategy: none

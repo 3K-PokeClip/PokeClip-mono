@@ -12,6 +12,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 /**
@@ -46,7 +47,10 @@ public class ChzzkTokenRefresher {
      */
     @Transactional
     public RefreshResult refreshIfExpiringWithin(Long userId, Duration minRemaining) {
-        Instant now = Instant.now();
+        // DB(timestamptz)는 마이크로초까지 반올림해 둔다. 리눅스 시계는 나노초를 주므로 자르지 않으면
+        // 스냅샷에 실은 만료 시각이 방금 저장한 값과 1µs 안쪽으로 어긋난다. 이 줄을 지키는 시험(ChzzkTokenRefresherTest의
+        // 「임박하면_갱신하고…」)은 리눅스 CI에서만 빨개진다(macOS 로컬은 마이크로초 시계라 초록).
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         if (users.findByIdForUpdate(userId).isEmpty()) {
             return RefreshResult.of(RefreshOutcome.NOT_LINKED);
         }

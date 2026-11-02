@@ -34,10 +34,23 @@ func (s *stubStore) MarkFailed(_ context.Context, _ string, seq, _ int64) (bool,
 	s.failed = append(s.failed, seq)
 	return true, nil
 }
-func (s *stubStore) PendingUploads(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+func (s *stubStore) PendingUploads(_ context.Context, _ index.Axis, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 	return nil, after, nil
 }
-func (s *stubStore) CountBacklog(context.Context) (int64, int64, int64, error) { return 0, 0, 0, nil }
+func (s *stubStore) MarkPlaybackUploaded(context.Context, string, int64, int64) (bool, error) {
+	return true, nil
+}
+
+func (s *stubStore) SettlePlaybackFailure(context.Context, string, int64, string, string) (bool, error) {
+	return true, nil
+}
+
+func (s *stubStore) MarkInitUploaded(context.Context, string, []byte, string, int64, bool) (index.InitMark, error) {
+	return index.InitMarkSuccess, nil
+}
+func (s *stubStore) CountBacklog(context.Context, index.Axis) (int64, int64, int64, error) {
+	return 0, 0, 0, nil
+}
 
 func (s *stubStore) failedSeqs() []int64 {
 	s.mu.Lock()
@@ -59,6 +72,20 @@ func noCredentialsEnv(t *testing.T) {
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	noEndpointEnv(t)
+}
+
+// noEndpointEnv 는 바깥 셸의 SDK 엔드포인트 설정을 비운다 — 조립 시험의 실효 엔드포인트는 시험이 정한 값뿐이어야 한다
+// (종결 라운드 1 CL1-8). 예컨대 셸에 AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true 가 있으면 시험이 넣은 AWS_ENDPOINT_URL_S3 를
+// SDK 가 무시해 결과가 바뀐다. 자격증명을 막는 noCredentialsEnv 가 함께 부른다.
+func noEndpointEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3",
+		"AWS_USE_FIPS_ENDPOINT", "AWS_USE_DUALSTACK_ENDPOINT",
+	} {
+		t.Setenv(k, "")
+	}
 }
 
 func uploadCfg(t *testing.T, root *os.Root, dir string) config.Config {
@@ -90,7 +117,7 @@ func TestNewUploaderBranches(t *testing.T) {
 			t.Error("Results() != nil — 비활성인데 select 가 이 케이스를 고를 수 있다")
 		}
 		up.Start(context.Background())
-		if up.RequestUpload(index.UploadTarget{StreamID: "s", Seq: 1, Bytes: 1}) {
+		if up.RequestUpload(index.UploadTarget{StreamID: "s", Axis: index.AxisArchive, Seq: 1, Bytes: 1}) {
 			t.Error("비활성인데 접수됐다")
 		}
 		up.Shutdown() // 미기동 Shutdown 안전
@@ -183,7 +210,7 @@ func newLocalTarget(t *testing.T, dir, streamID string, seq int64) index.UploadT
 	t.Helper()
 	wall := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	return index.UploadTarget{
-		StreamID: streamID, Seq: seq,
+		StreamID: streamID, Axis: index.AxisArchive, Seq: seq,
 		S3Key:     index.S3Key(streamID, seq, wall),
 		LocalPath: filepath.Join(dir, streamID, "seg.mp4"),
 		Bytes:     100,
@@ -199,6 +226,12 @@ func newLocalTarget(t *testing.T, dir, streamID string, seq int64) index.UploadT
 // run() 은 DB·워처가 있어야 돌아 단위 테스트가 불가능하다. 그래서 등록 순서 자체를
 // 소스에서 확인한다 — 이 회귀는 "누가 defer 한 줄을 위로 옮기는" 형태로 오기 때문에
 // 위치 검사만으로도 정확히 잡힌다.
+//
+// 되감기 발행 몫의 둘(체크리스트 474 A-3 3 · 판단 J74)도 같은 규칙이다 — 발행자 풀은 up.Shutdown 보다 먼저, fence
+// 반납(rewind.stop — 차선 ctx 취소 → 작업 대기 → 반납)보다 늦게 닫혀야 한다. 반납 문장이 그 풀로 나간다.
+//
+// 풀 관측의 stop 둘(POK-388)도 같다 — 관측 고루틴이 풀을 읽으므로 각자 자기 풀의 Close 보다 뒤에 등록돼
+// 먼저 실행돼야 한다.
 func TestShutdownDeferRegistrationOrder(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
@@ -206,7 +239,8 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 	}
 	text := string(src)
 
-	order := []string{"defer pool.Close()", "defer root.Close()", "defer up.Shutdown()"}
+	order := []string{"defer pool.Close()", "defer stopIndexerStats()", "defer root.Close()", "defer up.Shutdown()",
+		"defer pubPool.Close()", "defer stopPublisherStats()", "defer rewind.stop(ctx, cancelLanes)"}
 	prev := -1
 	for _, want := range order {
 		at := strings.Index(text, want)
@@ -214,10 +248,33 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 			t.Fatalf("%q 를 찾지 못했다 — 종료 절차가 사라졌거나 이름이 바뀌었다", want)
 		}
 		if at <= prev {
-			t.Fatalf("%q 의 등록 위치가 앞선다. 등록 순서는 %v 여야 하고, "+
-				"LIFO 이므로 실행은 그 역순(Shutdown -> root.Close -> pool.Close)이다", want, order)
+			t.Fatalf("%q 의 등록 위치가 앞선다. 등록 순서는 %v 여야 하고, LIFO 이므로 실행은 그 역순"+
+				"(rewind.stop -> stopPublisherStats -> pubPool.Close -> Shutdown -> root.Close -> stopIndexerStats -> "+
+				"pool.Close)이다", want, order)
 		}
 		prev = at
+	}
+	// 루프의 ctx 가 곧 차선 ctx 다(7c 판단 7 · 검수 C7c-2) — run ctx 를 넘기면 루프가 오류로 끝나도 run ctx 가 살아 있어
+	// rewind.stop 이 차선 작업을 끊지 못하고 기다림에 매달린다.
+	if !strings.Contains(text, "loop(laneCtx, deps)") || strings.Contains(text, "loop(ctx, deps)") {
+		t.Error("loop 에 차선 ctx(laneCtx)가 아닌 ctx 를 넘긴다 — 오류 종료 때 rewind.stop 이 차선 작업을 끊지 못한다")
+	}
+}
+
+// P11 — 풀 관측은 풀마다 자기 이름으로 붙는다(POK-388). 이름이 엇갈리면 폐기 지표가 다른 풀의 것으로 읽히고,
+// 호출이 빠지면 그 풀의 폐기가 보이지 않는다. run() 은 단위 시험이 불가능하므로(위 시험) 호출 문자열을 본다.
+func TestPoolStatsStartedPerPool(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("main.go 를 읽지 못했다: %v", err)
+	}
+	for _, want := range []string{
+		`stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)`,
+		`stopPublisherStats := poolstat.Start(ctx, pubPool, "publisher", log)`,
+	} {
+		if n := strings.Count(string(src), want); n != 1 {
+			t.Errorf("main.go 에 %q 가 %d번 있다, want 1 — 풀과 관측 이름의 짝이 바뀌었거나 호출이 빠졌다", want, n)
+		}
 	}
 }
 

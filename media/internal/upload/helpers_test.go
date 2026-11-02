@@ -3,14 +3,18 @@ package upload
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
@@ -138,16 +142,91 @@ type markCall struct {
 	expectBytes int64
 }
 
+// playbackMarkCall 은 ③ 성공 CAS 한 번이다 — bytes 는 산출 길이(SET)다.
+type playbackMarkCall struct {
+	streamID string
+	seq      int64
+	bytes    int64
+}
+
+// playbackFailCall 은 ③ 실패 CAS 한 번이다 — 사유가 index.ReasonInitMismatch 면 세션 결속 갈래다.
+type playbackFailCall struct {
+	streamID  string
+	seq       int64
+	sessionID string
+	reason    string
+}
+
+// initMarkCall 은 첫 init CAS 한 번의 인자 전부다.
+type initMarkCall struct {
+	sessionID    string
+	sha256       []byte
+	s3Key        string
+	bytes        int64
+	incompatible bool
+}
+
 type fakeUploadStore struct {
 	mu sync.Mutex
 
 	onMarkUploaded func(ctx context.Context, streamID string, seq, expectBytes int64) (bool, error)
 	onMarkFailed   func(ctx context.Context, streamID string, seq, expectBytes int64) (bool, error)
-	onPending      func(ctx context.Context, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error)
-	onBacklog      func(ctx context.Context) (int64, int64, int64, error)
+	// onPending·onBacklog 는 축을 함께 받는다 — 스위퍼 회차가 축마다 한 번씩 부른다.
+	onPending func(ctx context.Context, axis index.Axis, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error)
+	onBacklog func(ctx context.Context, axis index.Axis) (int64, int64, int64, error)
+	// onInitMark 가 nil 이면 첫 init CAS 는 언제나 InitMarkSuccess 다.
+	onInitMark func(sessionID string, sha256 []byte) (index.InitMark, error)
+	// onPlaybackFailed 가 nil 이면 ③ 실패 CAS 는 언제나 1행을 바꾼다.
+	onPlaybackFailed func(streamID string, seq int64, reason string) (bool, error)
 
-	uploaded []markCall
-	failed   []markCall
+	uploaded       []markCall
+	failed         []markCall
+	playbackMarked []playbackMarkCall
+	playbackFailed []playbackFailCall
+	initMarks      []initMarkCall
+}
+
+func (f *fakeUploadStore) MarkInitUploaded(_ context.Context, sessionID string, sha256 []byte, s3Key string, bytes int64, incompatible bool) (index.InitMark, error) {
+	f.mu.Lock()
+	f.initMarks = append(f.initMarks, initMarkCall{sessionID, append([]byte(nil), sha256...), s3Key, bytes, incompatible})
+	hook := f.onInitMark
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(sessionID, sha256)
+	}
+	return index.InitMarkSuccess, nil
+}
+
+func (f *fakeUploadStore) MarkPlaybackUploaded(_ context.Context, streamID string, seq, bytes int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.playbackMarked = append(f.playbackMarked, playbackMarkCall{streamID, seq, bytes})
+	return true, nil
+}
+
+func (f *fakeUploadStore) SettlePlaybackFailure(_ context.Context, streamID string, seq int64, sessionID, reason string) (bool, error) {
+	f.mu.Lock()
+	f.playbackFailed = append(f.playbackFailed, playbackFailCall{streamID, seq, sessionID, reason})
+	hook := f.onPlaybackFailed
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(streamID, seq, reason)
+	}
+	return true, nil
+}
+
+// playbackCalls 는 ③ CAS 호출 기록이다.
+func (f *fakeUploadStore) playbackCalls() (marked []playbackMarkCall, failed []playbackFailCall) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]playbackMarkCall(nil), f.playbackMarked...), append([]playbackFailCall(nil), f.playbackFailed...)
+}
+
+// initCalls 는 첫 init CAS 호출 기록이다.
+func (f *fakeUploadStore) initCalls() []initMarkCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]initMarkCall(nil), f.initMarks...)
 }
 
 func (f *fakeUploadStore) MarkUploaded(ctx context.Context, streamID string, seq, expectBytes int64) (bool, error) {
@@ -172,22 +251,22 @@ func (f *fakeUploadStore) MarkFailed(ctx context.Context, streamID string, seq, 
 	return true, nil
 }
 
-func (f *fakeUploadStore) PendingUploads(ctx context.Context, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+func (f *fakeUploadStore) PendingUploads(ctx context.Context, axis index.Axis, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 	f.mu.Lock()
 	hook := f.onPending
 	f.mu.Unlock()
 	if hook != nil {
-		return hook(ctx, tailGraceSecs, limit, after)
+		return hook(ctx, axis, tailGraceSecs, limit, after)
 	}
 	return nil, after, nil
 }
 
-func (f *fakeUploadStore) CountBacklog(ctx context.Context) (int64, int64, int64, error) {
+func (f *fakeUploadStore) CountBacklog(ctx context.Context, axis index.Axis) (int64, int64, int64, error) {
 	f.mu.Lock()
 	hook := f.onBacklog
 	f.mu.Unlock()
 	if hook != nil {
-		return hook(ctx)
+		return hook(ctx, axis)
 	}
 	return 0, 0, 0, nil
 }
@@ -204,6 +283,7 @@ type putCall struct {
 	key  string
 	size int64
 	body []byte
+	axis index.Axis
 }
 
 type fakePutter struct {
@@ -212,7 +292,7 @@ type fakePutter struct {
 	calls []putCall
 }
 
-func (p *fakePutter) Put(ctx context.Context, key string, body io.Reader, size int64) error {
+func (p *fakePutter) Put(ctx context.Context, key string, body io.Reader, size int64, axis index.Axis) error {
 	p.mu.Lock()
 	fn := p.fn
 	p.mu.Unlock()
@@ -223,7 +303,7 @@ func (p *fakePutter) Put(ctx context.Context, key string, body io.Reader, size i
 	n, _ := io.ReadFull(body, buf)
 
 	p.mu.Lock()
-	p.calls = append(p.calls, putCall{key: key, size: size, body: buf[:n]})
+	p.calls = append(p.calls, putCall{key: key, size: size, body: buf[:n], axis: axis})
 	p.mu.Unlock()
 
 	if fn != nil {
@@ -236,6 +316,82 @@ func (p *fakePutter) putCalls() []putCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]putCall(nil), p.calls...)
+}
+
+// ListObjectsV2 를 비롯한 아래 List… 메서드 열둘은 S3 LIST 금지(프로필 4절)의 동적 그물이다 — 계획 6.5 ⑵ · 발행 쪽
+// fakeStore 와 같은 형. *s3.Client 의 목록 연산 전부다(TestFakePutterTrapsListCalls 가 SDK 실물과 대조한다). Putter 에는
+// 목록 연산이 없어 여기 닿는 길은 SDK 목록 인터페이스로의 형 단언뿐이다. 생성 자리가 백 곳이 넘어 가짜마다 t 를 넣지
+// 않는다 — 불리면 패키지 기록(listTrap)에 적고 오류를 돌려주며, TestMain 이 m.Run 뒤에 기록이 있으면 패키지를 실패로
+// 바꾼다. 워커 고루틴에서 불려도 잃지 않는다.
+func (p *fakePutter) ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	return nil, listCalled("ListObjectsV2")
+}
+
+func (p *fakePutter) ListObjects(context.Context, *s3.ListObjectsInput, ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
+	return nil, listCalled("ListObjects")
+}
+
+func (p *fakePutter) ListBuckets(context.Context, *s3.ListBucketsInput, ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
+	return nil, listCalled("ListBuckets")
+}
+
+func (p *fakePutter) ListObjectVersions(context.Context, *s3.ListObjectVersionsInput, ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+	return nil, listCalled("ListObjectVersions")
+}
+
+func (p *fakePutter) ListObjectAnnotations(context.Context, *s3.ListObjectAnnotationsInput, ...func(*s3.Options)) (*s3.ListObjectAnnotationsOutput, error) {
+	return nil, listCalled("ListObjectAnnotations")
+}
+
+func (p *fakePutter) ListBucketAnalyticsConfigurations(context.Context, *s3.ListBucketAnalyticsConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketAnalyticsConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketAnalyticsConfigurations")
+}
+
+func (p *fakePutter) ListBucketIntelligentTieringConfigurations(context.Context, *s3.ListBucketIntelligentTieringConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketIntelligentTieringConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketIntelligentTieringConfigurations")
+}
+
+func (p *fakePutter) ListBucketInventoryConfigurations(context.Context, *s3.ListBucketInventoryConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketInventoryConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketInventoryConfigurations")
+}
+
+func (p *fakePutter) ListBucketMetricsConfigurations(context.Context, *s3.ListBucketMetricsConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketMetricsConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketMetricsConfigurations")
+}
+
+func (p *fakePutter) ListDirectoryBuckets(context.Context, *s3.ListDirectoryBucketsInput, ...func(*s3.Options)) (*s3.ListDirectoryBucketsOutput, error) {
+	return nil, listCalled("ListDirectoryBuckets")
+}
+
+func (p *fakePutter) ListMultipartUploads(context.Context, *s3.ListMultipartUploadsInput, ...func(*s3.Options)) (*s3.ListMultipartUploadsOutput, error) {
+	return nil, listCalled("ListMultipartUploads")
+}
+
+func (p *fakePutter) ListParts(context.Context, *s3.ListPartsInput, ...func(*s3.Options)) (*s3.ListPartsOutput, error) {
+	return nil, listCalled("ListParts")
+}
+
+// listTrap 은 fakePutter 의 목록 함정이 불린 기록이다 — 한 건이 연산 이름과 부른 자리의 스택이다.
+var listTrap struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+// listCalled 는 목록 연산 op 가 불렸다고 패키지 기록에 적고 호출자에게 돌려줄 오류를 만든다.
+func listCalled(op string) error {
+	listTrap.mu.Lock()
+	defer listTrap.mu.Unlock()
+	listTrap.calls = append(listTrap.calls, op+"\n"+string(debug.Stack()))
+	return fmt.Errorf("fakePutter: %s 는 금지된 목록 연산이다", op)
+}
+
+// takeListTrapCalls 는 쌓인 기록을 꺼내고 비운다.
+func takeListTrapCalls() []string {
+	listTrap.mu.Lock()
+	defer listTrap.mu.Unlock()
+	calls := listTrap.calls
+	listTrap.calls = nil
+	return calls
 }
 
 // --- 파일·대상 픽스처 -------------------------------------------------------
@@ -272,10 +428,18 @@ func writeSegment(t *testing.T, dir, streamID, name string, size int) string {
 
 var fixtureWall = time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 
+// archiveKey 는 ② 아카이브 축의 게이트 키다.
+// 축 파라미터화(POK-195 M3) 전의 targetKey{stream, seq} 자리를 그대로 잇는다 —
+// 축을 명시하지 않은 기존 케이스는 전부 ② 축을 재는 것이었다.
+func archiveKey(streamID string, seq int64) targetKey {
+	return targetKey{streamID: streamID, axis: index.AxisArchive, seq: seq}
+}
+
 // newTarget 은 [0] 대상 검증을 통과하는 정상 대상이다.
 func newTarget(streamID string, seq int64, path string, bytes int64, isTail bool) index.UploadTarget {
 	return index.UploadTarget{
 		StreamID:  streamID,
+		Axis:      index.AxisArchive,
 		Seq:       seq,
 		S3Key:     index.S3Key(streamID, seq, fixtureWall),
 		LocalPath: path,

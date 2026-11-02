@@ -7,13 +7,14 @@ import org.springframework.boot.health.contributor.Status;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.pokeclip.chat.collector.support.TestHealth;
 
 /**
  * 상태 전이와 그것이 health로 나가는 모양을 붙여서 본다.
  *
  * <p>{@code CollectorHealthEndpointTest}에 넣지 않는 이유는 그쪽이 중첩
  * {@code @SpringBootTest} 둘로 <b>HTTP 응답만</b> 보는 구조라 {@code CollectionStatus}를
- * 임의의 상태로 놓을 수 없어서다. 여기서는 {@code new CollectorHealth(status)}를 직접 부른다.
+ * 임의의 상태로 놓을 수 없어서다. 여기서는 {@code TestHealth.legacyOnly(status)}를 직접 부른다.
  */
 class CollectionStatusTest {
 
@@ -24,7 +25,7 @@ class CollectionStatusTest {
         Instant disconnectedAt = Instant.parse("2026-08-07T12:00:00Z");
         status.reconnecting(StopReason.TRANSPORT_CLOSED, disconnectedAt, 3);
 
-        Health health = new CollectorHealth(status).health();
+        Health health = TestHealth.legacyOnly(status).health();
 
         assertThat(health.getStatus())
                 .as("재연결 중에는 채팅이 실제로 안 들어온다. UP이면 '수집이 죽었는데 health는 UP'이다")
@@ -51,7 +52,7 @@ class CollectionStatusTest {
         status.establishing();
         assertThat(status.collectingIfPending()).isTrue();
 
-        assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.UP);
+        assertThat(TestHealth.legacyOnly(status).health().getStatus()).isEqualTo(Status.UP);
     }
 
     /**
@@ -68,7 +69,7 @@ class CollectionStatusTest {
                 .as("재시도마다 ESTABLISHING으로 덮이면 health가 UP으로 돌아가고, "
                         + "수립이 시한을 다 쓰는 동안 '채팅은 안 오는데 UP'이 된다")
                 .isEqualTo(CollectionStatus.State.RECONNECTING);
-        assertThat(new CollectorHealth(status).health().getStatus())
+        assertThat(TestHealth.legacyOnly(status).health().getStatus())
                 .as("상태만 지키고 health가 UP이면 밖에서는 아무 신호도 없다")
                 .isEqualTo(Status.DOWN);
     }

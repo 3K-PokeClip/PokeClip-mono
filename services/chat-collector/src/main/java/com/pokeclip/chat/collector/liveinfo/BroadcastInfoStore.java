@@ -1,0 +1,281 @@
+package com.pokeclip.chat.collector.liveinfo;
+
+import com.pokeclip.chat.collector.Platform;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.stereotype.Component;
+
+import java.sql.Array;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * {@code broadcast_info} 읽고 쓰기(POK-234 태스크 10). 쓰는 쪽은 PR-C의 수집기가,
+ * 읽는 쪽은 {@link BroadcastInfoController}가 쓴다.
+ *
+ * <p><b>제목·태그를 로그에 싣지 않는다.</b> 그래서 이 클래스에는 로거가 없다 —
+ * 나중에 로거를 다는 사람이 「무엇을 실을 수 있나」를 여기서 다시 판단하게 된다.
+ */
+@Component
+public class BroadcastInfoStore {
+
+    private static final String COLUMNS =
+            "platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users, category_image_url";
+
+    private static final String INSERT = """
+            INSERT INTO broadcast_info
+              (platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users, category_image_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """;
+
+    /**
+     * 최신 한 줄. <b>{@code id}까지 보는 이유</b>는 같은 시각에 두 줄이 들어갈 수 있기 때문이다
+     * (관측 주기가 짧아지거나 시계가 되감기면). 시각만 보면 어느 줄이 나올지 실행마다 갈린다.
+     */
+    private static final String LATEST = "SELECT " + COLUMNS + """
+             FROM broadcast_info
+            WHERE stream_id = ?
+            ORDER BY observed_at DESC, id DESC
+            LIMIT 1
+            """;
+
+    /**
+     * 구간 훑기. <b>내림차순으로 뽑아 뒤집는다</b> — 상한에 걸릴 때 잘려 나가는 쪽이
+     * <b>먼 과거</b>여야 한다. 오름차순 {@code LIMIT}으로 자르면 최근이 통째로 사라지는데,
+     * 화면은 그것을 「최근에 아무 관측이 없었다」로 그린다.
+     */
+    private static final String SERIES = "SELECT " + COLUMNS + """
+             FROM broadcast_info
+            WHERE stream_id = ? AND observed_at >= ?
+            ORDER BY observed_at DESC, id DESC
+            LIMIT ?
+            """;
+
+    /**
+     * 여러 방송의 마지막 제목을 한 번에(POK-259, clip 방송 목록이 한 장에 최대 100개를 묻는다). 방송마다 색인을 최신부터 거꾸로 훑어
+     * <b>제목이 있는</b> 첫 줄 하나를 {@code LATERAL}로 고른다. 설정 조회와 라이브 목록이 둘 다 빈 회차는 제목 없이 한 줄이 남는데,
+     * 그 줄을 고르면 보이던 제목이 방송 번호로 돌아간다. 카테고리는 고른 줄 것이다(다른 시점 값을 섞지 않는다).
+     * {@code BroadcastTitlePlanTest}가 색인을 타는지 잰다.
+     *
+     * <p>한계: 「공백뿐」 판정이 PostgreSQL {@code \s}(로캘에 따라 다름)와 자바 {@code strip}에서 아주 드물게 갈린다. 제목이 자바만 공백으로
+     * 보는 글자(예: 로캘에 따라 U+3000)로만 이루어지면 그 줄이 뽑혀 빈 제목이 되고 clip이 버려 번호가 보인다(앞 관측 제목으로 안 간다).
+     */
+    static final String LATEST_TITLES = """
+            SELECT s.stream_id, i.live_title, i.category
+              FROM unnest(?::text[]) AS s(stream_id)
+              CROSS JOIN LATERAL (
+                    SELECT b.live_title, b.category
+                      FROM broadcast_info b
+                     WHERE b.stream_id = s.stream_id
+                       AND b.live_title ~ '\\S'
+                     ORDER BY b.observed_at DESC, b.id DESC
+                     LIMIT 1) i""";
+
+    /**
+     * 여러 방송의 플랫폼마다 최신 값(POK-397). 한 방송을 치지직·SOOP에 같이 내보내면 줄이 번갈아 쌓이므로 플랫폼마다 따로 고른다.
+     * 시청자 수·관측 시각은 그 플랫폼의 <b>최신 줄</b>이고 제목 조건이 없다: SOOP은 방송 중이 아니거나 칸을 못 얻으면 제목 없이
+     * 시청자 수만 남을 수 있는데, 제목 있는 줄에서 꺼내면 그 플랫폼 숫자가 통째로 사라진다(계획 검증 M1). 제목·카테고리는
+     * {@link #LATEST_TITLES}와 같은 이유로 그 플랫폼의 <b>제목 있는</b> 최신 줄 것이다(없으면 null).
+     *
+     * <p>방송 × 플랫폼 열거를 {@code LATERAL}로 돈다. {@code DISTINCT ON (stream_id, platform)}은 방송의 줄을 전부 읽어 정렬해 한 장
+     * 100방송에 200ms쯤이라 버렸다(계획 검증 실측). V317 색인 {@code (stream_id, platform, observed_at)}이 있어야 플랫폼까지 범위로
+     * 찾는다. 없으면 SOOP을 중간에 끈 방송·SOOP 없는 방송에서 그 방송 이력을 처음까지 훑는다. {@code BroadcastTitlePlanTest}가 잰다.
+     * 줄이 없는 (방송, 플랫폼)은 결과에 없다. 순서는 방송은 받은 순, 플랫폼은 열거 순이다.
+     */
+    static final String LATEST_BY_PLATFORM = """
+            SELECT s.stream_id, p.platform, l.observed_at, l.concurrent_users, t.live_title, t.category
+              FROM unnest(?::text[]) WITH ORDINALITY AS s(stream_id, ord)
+              CROSS JOIN unnest(?::text[]) WITH ORDINALITY AS p(platform, pord)
+              CROSS JOIN LATERAL (
+                    SELECT b.observed_at, b.concurrent_users
+                      FROM broadcast_info b
+                     WHERE b.stream_id = s.stream_id
+                       AND b.platform = p.platform
+                     ORDER BY b.observed_at DESC, b.id DESC
+                     LIMIT 1) l
+              LEFT JOIN LATERAL (
+                    SELECT b.live_title, b.category
+                      FROM broadcast_info b
+                     WHERE b.stream_id = s.stream_id
+                       AND b.platform = p.platform
+                       AND b.live_title ~ '\\S'
+                     ORDER BY b.observed_at DESC, b.id DESC
+                     LIMIT 1) t ON true
+             ORDER BY s.ord, p.pord""";
+
+    /**
+     * 구간 창구가 접을 줄(POK-462). 방송 하나의 모든 플랫폼 줄을 <b>최신부터</b> 상한 + 1개 뽑는다: 넘치면 잘려 나가는 쪽이 먼 과거여야 하고
+     * (라이브 화면은 최근 값이 필요하다), + 1은 「딱 상한」과 「넘쳤다」를 가르려는 것이다. {@code (stream_id, observed_at)} 색인(V308)을 탄다.
+     */
+    private static final String TIMELINE = "SELECT " + COLUMNS + """
+             FROM broadcast_info
+            WHERE stream_id = ?
+            ORDER BY observed_at DESC, id DESC
+            LIMIT ?
+            """;
+
+    private static final String[] PLATFORMS =
+            java.util.Arrays.stream(Platform.values()).map(Platform::name).toArray(String[]::new);
+
+    private static final RowMapper<BroadcastInfo> MAPPER = BroadcastInfoStore::toInfo;
+
+    private final JdbcTemplate jdbc;
+
+    public BroadcastInfoStore(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * {@code tags}가 {@code TEXT[]}라 {@link java.sql.Connection#createArrayOf}가 필요하고,
+     * 그것을 얻으려고 {@code PreparedStatementCreator}를 쓴다 — 배열을 문자열로 만들어 넘기면
+     * 태그에 쉼표·중괄호가 든 순간 조용히 갈라진다.
+     *
+     * <p>🔴 <b>{@code null} 원소를 걸러서 넣는다</b>({@link #nonNullTags}). PostgreSQL
+     * {@code TEXT[]}는 원소 NULL을 <b>허용</b>하므로 그대로 넣으면 저장은 성공하고
+     * <b>읽기가 터진다</b> — 아래 {@link #toInfo}의 대칭 처방과 같이 본다.
+     */
+    public void insert(BroadcastInfo info) {
+        jdbc.update(connection -> {
+            java.sql.PreparedStatement ps = connection.prepareStatement(INSERT);
+            ps.setString(1, info.platform().name());
+            ps.setString(2, info.streamId());
+            ps.setString(3, info.channelId());
+            ps.setTimestamp(4, Timestamp.from(info.observedAt()));
+            ps.setString(5, info.title());
+            ps.setArray(6, connection.createArrayOf("text", nonNullTags(info.tags())));
+            ps.setString(7, info.category());
+            if (info.viewers() == null) {
+                ps.setNull(8, java.sql.Types.INTEGER);
+            } else {
+                ps.setInt(8, info.viewers());
+            }
+            ps.setString(9, info.categoryImageUrl());
+            return ps;
+        });
+    }
+
+    public Optional<BroadcastInfo> latest(String streamId) {
+        return jdbc.query(LATEST, MAPPER, streamId).stream().findFirst();
+    }
+
+    /** @return 방송 번호 → 마지막 제목. 제목이 있는 관측이 없는 방송은 맵에 없다. 제목 앞뒤 공백은 깎는다 */
+    public Map<String, Title> latestTitles(List<String> streamIds) {
+        Map<String, Title> titles = new LinkedHashMap<>();
+        if (streamIds.isEmpty()) {
+            return titles;
+        }
+        jdbc.query(connection -> {
+            java.sql.PreparedStatement ps = connection.prepareStatement(LATEST_TITLES);
+            ps.setArray(1, connection.createArrayOf("text", streamIds.toArray(String[]::new)));
+            return ps;
+        }, rs -> {
+            titles.put(rs.getString("stream_id"), new Title(rs.getString("live_title").strip(), rs.getString("category")));
+        });
+        return titles;
+    }
+
+    /** 방송 하나의 마지막 제목과 같은 관측의 카테고리. 카테고리는 비어 있을 수 있다 */
+    public record Title(String title, String category) {
+    }
+
+    /**
+     * @return 방송 번호 → 플랫폼마다 최신 값(플랫폼 열거 순). 관측이 하나도 없는 방송은 맵에 없다. 제목 앞뒤 공백은 깎는다
+     */
+    public Map<String, List<PlatformLatest>> latestByPlatform(List<String> streamIds) {
+        Map<String, List<PlatformLatest>> latest = new LinkedHashMap<>();
+        if (streamIds.isEmpty()) {
+            return latest;
+        }
+        jdbc.query(connection -> {
+            java.sql.PreparedStatement ps = connection.prepareStatement(LATEST_BY_PLATFORM);
+            ps.setArray(1, connection.createArrayOf("text", streamIds.toArray(String[]::new)));
+            ps.setArray(2, connection.createArrayOf("text", PLATFORMS));
+            return ps;
+        }, rs -> {
+            String title = rs.getString("live_title");
+            latest.computeIfAbsent(rs.getString("stream_id"), id -> new ArrayList<>()).add(new PlatformLatest(
+                    Platform.valueOf(rs.getString("platform")),
+                    title == null ? null : title.strip(),
+                    rs.getString("category"),
+                    rs.getObject("concurrent_users", Integer.class),
+                    rs.getTimestamp("observed_at").toInstant()));
+        });
+        return latest;
+    }
+
+    /**
+     * 한 방송의 한 플랫폼 최신 값. {@code viewers}·{@code observedAt}은 최신 줄, {@code title}·{@code category}는 제목 있는 최신 줄이라
+     * 두 시점이 다를 수 있다. {@code viewers}의 null은 「못 찾았다」이지 0명이 아니다({@link BroadcastInfo}).
+     */
+    public record PlatformLatest(Platform platform, String title, String category, Integer viewers, Instant observedAt) {
+    }
+
+    /** @param max 이 값보다 많으면 <b>먼 과거부터</b> 잘린다(위 {@code SERIES} 주석) */
+    public List<BroadcastInfo> series(String streamId, Instant since, int max) {
+        List<BroadcastInfo> newestFirst =
+                new ArrayList<>(jdbc.query(SERIES, MAPPER, streamId, Timestamp.from(since), max));
+        Collections.reverse(newestFirst);
+        return newestFirst;
+    }
+
+    /** 구간 창구가 접을 줄. 시각 오름차순이고, 상한을 넘으면 오래된 쪽을 버리고 {@code truncated}다. */
+    public TimelineRows timelineRows(String streamId, int max) {
+        List<BroadcastInfo> newestFirst = new ArrayList<>(jdbc.query(TIMELINE, MAPPER, streamId, max + 1));
+        boolean truncated = newestFirst.size() > max;
+        if (truncated) {
+            newestFirst.removeLast();
+        }
+        Collections.reverse(newestFirst);
+        return new TimelineRows(newestFirst, truncated);
+    }
+
+    /** @param truncated 줄 상한에 걸려 오래된 줄을 버렸다 */
+    public record TimelineRows(List<BroadcastInfo> rows, boolean truncated) {
+    }
+
+    /**
+     * 🔴 <b>쓰는 쪽과 읽는 쪽을 나란히 고쳤다.</b> 한쪽만 막으면 반쪽이 남는다 —
+     * 읽기만 고치면 앞으로 들어올 NULL 원소가 표에 계속 쌓이고, 쓰기만 고치면
+     * <b>이미 들어간 행</b>이 영영 500을 낸다.
+     *
+     * <p>버리는 쪽으로 정한 이유: 이름 없는 태그는 화면에 그릴 것이 없다. 빈 문자열로
+     * 바꾸면 화면에 빈 딱지가 뜨는데 그것은 「태그가 있다」는 거짓 신호다.
+     */
+    private static String[] nonNullTags(List<String> tags) {
+        if (tags == null) {
+            return new String[0];
+        }
+        return tags.stream().filter(java.util.Objects::nonNull).toArray(String[]::new);
+    }
+
+    /**
+     * 🔴 <b>{@code List.of}를 쓰지 않는다 — 그것이 원소 {@code null}에 NPE를 던진다</b>
+     * (실 PG 재현: {@code ARRAY['a',NULL]::text[]} 한 줄이면 {@code latest}가 통째로 500).
+     * 저장이 성공한 뒤 읽기만 터지므로 <b>그 행이 최신인 동안 그 방송의 창구가 영구히 죽는다</b>,
+     * 그리고 clip이 5xx를 {@code collector_unavailable}로 접어 화면에는
+     * 「수집 서버가 아프다」로 보인다 — 실제로는 한 줄의 데이터 이상이다.
+     */
+    private static BroadcastInfo toInfo(ResultSet rs, int rowNum) throws SQLException {
+        Array tags = rs.getArray("tags");
+        return new BroadcastInfo(
+                Platform.valueOf(rs.getString("platform")),
+                rs.getString("stream_id"),
+                rs.getString("channel_id"),
+                rs.getTimestamp("observed_at").toInstant(),
+                rs.getString("live_title"),
+                tags == null ? List.of()
+                        : List.of(nonNullTags(java.util.Arrays.asList((String[]) tags.getArray()))),
+                rs.getString("category"),
+                rs.getObject("concurrent_users", Integer.class),
+                rs.getString("category_image_url"));
+    }
+}

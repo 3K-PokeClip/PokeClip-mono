@@ -109,8 +109,8 @@ class HeartbeatSignalTest extends IntegrationTestSupport {
 
             assertThat(captor.messages())
                     .as("이 줄이 안 나가면 ping이 안 나가고 있다는 사실이 어디에도 안 남는다")
-                    .contains("chat.session.ping_send_failed cause=MISUSE",
-                            "chat.session.ping_send_failed cause=CONNECTION_DEAD");
+                    .contains("chat.session.ping_send_failed stream=none cause=MISUSE",
+                            "chat.session.ping_send_failed stream=none cause=CONNECTION_DEAD");
         }
     }
 
@@ -122,7 +122,7 @@ class HeartbeatSignalTest extends IntegrationTestSupport {
     private CollectorRunner runnerFor(CollectionStatus status) {
         return new CollectorRunner(new ChzzkProperties(true, "test-token",
                 "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
     }

@@ -1,0 +1,574 @@
+package com.pokeclip.chat.collector.broadcast.reattach;
+
+import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
+import com.pokeclip.chat.collector.broadcast.EndedStream;
+import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
+import com.pokeclip.chat.collector.broadcast.ProcessResult;
+import com.pokeclip.chat.collector.broadcast.StreamerId;
+import com.pokeclip.chat.collector.broadcast.attach.LaneKey;
+import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
+import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.status.CollectionState;
+import com.pokeclip.chat.collector.soop.SoopWatch;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
+
+/**
+ * clip에 「지금 방송 중인 것」을 물어, <b>붙어 있어야 하는데 안 붙은 방송</b>에 붙는다.
+ *
+ * <p><b>왜 필요한가</b>: 수집을 다시 시작하는 트리거가 지금까지 <b>일회용 시작 알림뿐</b>이었다.
+ * 처리하면 지워지고 복구 경로가 없어서, 재배포·재시작 뒤 그 방송은 <b>끝날 때까지 안 걷힌다</b>
+ * ({@code CLAUDE.md}「다음 카드로 넘긴 것」). 이 부품이 그 구멍을 메운다.
+ *
+ * <h2>🔴 알림 경로와 <b>같은 줄</b>에 넣는다 — 이 설계의 기둥이다</h2>
+ *
+ * 줄 이름은 {@link LaneKey#of}이고, {@code SqsIntakeRunner}가 쓰는 것과 <b>같은 함수</b>다.
+ * 그래서 같은 스트리머의 알림 처리와 재부착은 <b>절대 겹치지 않고 제출 순서대로</b> 돈다.
+ * 여기서 나오는 것이 셋이다.
+ *
+ * <ol>
+ *   <li><b>{@code SessionRegistry.retargetOrSkip}의 비원자성이 지금도 안 열린다.</b>
+ *       그 {@code SEAT_STOPPING} 주석이 <b>「지금 도달 경로가 없는 이유는 상태가 아니라
+ *       스레드 수다 … 수립을 워커로 빼는 날 이 자리를 다시 본다」</b>고 예고했고(계획 검증 I4),
+ *       태스크 3이 수립을 줄로 빼고 태스크 7이 <b>둘째 제출자</b>를 붙인 지금이 그 날이다.
+ *       <b>판정: 열리지 않는다.</b> 근거가 「스레드가 하나」에서
+ *       <b>「같은 스트리머는 같은 줄이고 줄 안은 직렬」</b>로 바뀌었을 뿐이다 —
+ *       {@code registry.open}을 부르는 자리가 {@code LinkedSessionStarter} 하나뿐이고, 두 경로
+ *       모두 {@code StreamerId.parse}가 성공한 것만 그 문에 넣으므로 줄 이름이 언제나
+ *       {@code Long.toString(streamerId)}(= 자리 열쇠)와 <b>일대일</b>이다.
+ *       {@code 재부착은_알림_경로와_같은_줄에_들어간다}가 {@code "007"} 대 {@code "7"}로 잰다.</li>
+ *   <li><b>아래 재확인 둘이 「사이에 아무 일도 안 일어난다」를 보장받는다.</b> 목록 조회는
+ *       스케줄러 스레드에서 도는데, 줄에 들어온 뒤로는 같은 스트리머의 ENDED·STARTED가
+ *       끼어들 수 없다. <b>재확인이 필요한 이유와 재확인으로 충분한 이유가 서로 다르다</b> —
+ *       필요한 이유는 목록 조회가 줄 밖이라서, 충분한 이유는 줄이 직렬이라서다.</li>
+ *   <li><b>{@code dropPending}을 여기서 부르지 않는다.</b> 아래 {@link #attachOne} 참고.</li>
+ * </ol>
+ *
+ * <h2>🔴 재부착은 <b>포기 기록을 만들지 않는다</b> — 이미 있는 것은 존중한다</h2>
+ *
+ * 아래 {@link #sweepOnce}가 {@code chat_ended_streams}의 메모를 보고 건너뛰는데,
+ * <b>그 메모를 재부착이 만들면 자기가 자기를 24시간 막는다.</b> 처음 설계할 때는 그 메모를
+ * 만드는 것이 <b>시작 알림뿐</b>이라고 전제했는데, 재부착도 같은 문
+ * ({@code LinkedSessionStarter})을 쓰므로 그 전제가 이 카드에서 깨졌다(감사 라운드 3 H1).
+ *
+ * <p>그래서 메모를 남기는 자리를 문 안에서 <b>{@code BroadcastEventProcessor}</b>로 옮겼다 —
+ * 편지가 없는 부름은 그 층을 안 지나가므로 이 갈래가 <b>구조적으로</b> 닫힌다. 근거 셋:
+ *
+ * <ol>
+ *   <li><b>재부착에는 메모의 원래 목적이 없다.</b> 그 메모는 「알림을 지우기 전에 남긴다」인데
+ *       (지우면 되돌아올 트리거가 없으므로) <b>재부착은 알림을 하나도 안 지운다.</b></li>
+ *   <li><b>자기 메모로 자기를 막는 것</b>은 이 카드의 목적을 무력화한다. 증폭 갈래가 하나
+ *       더 있다 — {@code ChzzkLinkClient}는 auth의 계약 위반({@code chat.link.incomplete})도
+ *       영구 거절로 치므로, auth가 한 번 잘못 답하면 <b>한 회차로 살아 있는 방송 전부에</b>
+ *       메모가 박힌다.</li>
+ *   <li><b>창구 답이 나빠지지 않는다.</b> 재부착이 줍는 방송은 어차피 알림이 이미 소비돼
+ *       메모가 없던 방송이다.</li>
+ * </ol>
+ *
+ * <p><b>대가</b>: 연동이 끊긴 스트리머의 방송에 주기마다 auth를 두드린다. auth는
+ * {@code NOT_LINKED}를 즉시 답하고 그 로그는 INFO다(미연동 방송 시작이 정상 트래픽이라
+ * 이미 그렇게 정해져 있다).
+ *
+ * <h2>🔴 예외 하나: 연동 문제로 포기한 메모는 건너뛰지 않고 다시 묻는다 (POK-342)</h2>
+ *
+ * 방송 중에 연동이 끊겨 포기하면(사유가 {@link CollectionState#needsRelink}) 화면은 「연동을 다시
+ * 하세요」를 띄운다. 그런데 메모를 다른 사유와 똑같이 건너뛰면 <b>다시 연동해도 그 방송에는
+ * 24시간 안 붙는다.</b> 그래서 그 메모만은 매 회차 붙이기 문을 다시 두드린다: 문이 auth에
+ * 연동 상태를 묻고, 살아 있으면 붙는다. 붙은 <b>뒤에</b> 메모를 지운다.
+ *
+ * <ol>
+ *   <li><b>auth를 안 고쳤다.</b> 「연동 성공을 수집기에 알린다」는 길도 있었지만 서버 둘과 새 계약이
+ *       든다. 재부착이 이미 매분 같은 문을 두드리고 있어서, 거름망 한 칸을 여는 것으로 같은 일이 된다.</li>
+ *   <li><b>지우는 것이 붙은 뒤인 이유</b>: 창구는 살아 있는 세션을 메모보다 먼저 본다. 붙은 뒤에
+ *       지우면 화면이 「포기」에서 바로 「붙는 중」으로 넘어가고, 먼저 지우면 붙기 전까지
+ *       {@code unknown}(배너 끔)이 끼고, 붙기에 실패하면 그 방송은 메모 없이 남는다.</li>
+ *   <li><b>메모를 새로 만들지 않는 규칙은 그대로다.</b> 연동이 아직 끊겨 있으면 문이
+ *       {@code LINK_REFUSED}를 돌려주고 메모는 처음 것 그대로 남는다(남긴 시각도 안 바뀐다).</li>
+ *   <li><b>다른 사유의 포기는 지금처럼 24시간 건너뛴다</b>: 다시 연동해도 안 풀리는 사유라
+ *       두드려 얻을 것이 없다.</li>
+ * </ol>
+ *
+ * <p><b>대가</b>: 연동이 끊긴 채 방송이 이어지는 동안 그 방송마다 매분 auth 한 번. 위 문단의 대가와
+ * 같은 크기다. 치지직이 토큰을 거부했는데({@code SESSION_AUTH_REJECTED}·{@code SUBSCRIBE_REJECTED})
+ * auth는 아직 그 토큰을 「살아 있다」로 답하는 동안은 매분 치지직 발급 요청도 한 번 나간다:
+ * 스트리머가 다시 연동하면 auth의 토큰이 바뀌어 그때 붙는다.
+ *
+ * <h2>이 부품이 여는 손실 경로 하나 — 백프레셔를 알림 경로와 나눠 쓴다</h2>
+ *
+ * {@code StreamerSerialExecutor}의 상한은 <b>프로세스에 하나</b>다. 재부착이 방송 여럿을
+ * 한꺼번에 제출하면 {@code saturated()}가 서고, {@code SqsIntakeRunner}가 그것을 보고
+ * <b>큐를 두드리는 것 자체를 쉰다.</b> <b>알림은 큐에 그대로 남으므로 유실이 아니라 지연이다</b>
+ * (그리고 그 지연은 health의 {@code letterStalled}가 2분 뒤 드러낸다).
+ * 반대로 재부착이 밀리는 것은 {@code chat.reattach.deferred}가 남긴다.
+ *
+ * <h2>🔴 미해결 — 이미 켜진 방송에 뒤늦게 붙어도 채팅이 오는지 <b>안 쟀다</b></h2>
+ *
+ * <b>이 부품의 존재 이유가 정확히 그 갈래인데 한 번도 안 밟았다.</b> 재부착은
+ * <b>이미 켜진</b> 방송(재배포·재시작 뒤)에 뒤늦게 붙는 장치다. 그런데 2026-09-08 실기동도
+ * 재부착으로 붙였지만 <b>그때는 방송 전이었다</b> — 경로는 지나갔어도 조건이 반대였다.
+ * 즉 이 경로가 안전하다는 근거가 없고, <b>안전하지 않다는 근거도 없다.</b>
+ *
+ * <p><b>「없다」가 아니라 「안 쟀다」로 적는 이유</b>는 증상이 조용해서다 — 그 갈래가 열려 있어도
+ * <b>실패로 보이지 않는다</b>: {@code chat.reattach.attach_failed}가 안 나오고
+ * {@code chat.reattach.swept}의 {@code submitted}가 정상으로 오르며 세션도 살아 있는데
+ * 채팅만 0건이다. 목록·상태·health 어디에도 차이가 안 난다.
+ *
+ * <p>같은 실기동에서 <b>방송이 켜져 있는데 8분 동안 0건</b>인 구간을 봤다. <b>원인은 못 가렸고</b>
+ * (시청자 0명이라는 더 단순한 설명이 배제되지 않았다) 그래서 <b>이 미해결의 근거로 쓰지 않는다.</b>
+ * 사정과 재는 방법은 {@link com.pokeclip.chat.collector.session.StreamSession} 클래스 주석에 있다.
+ */
+public class Reattacher {
+
+    private static final Logger log = LoggerFactory.getLogger(Reattacher.class);
+
+    private final LiveBroadcastClient client;
+    private final SessionRegistry registry;
+    private final EndedStreamStore store;
+    private final GapMeasurer measurer;
+    private final StreamerSerialExecutor lanes;
+    private final BroadcastSessions sessions;
+    private final Supplier<Instant> clock;
+    /** 떼기 유예(POK-244). null이면 떼지 않는다 — 옛 생성자와 같은 뜻이다. */
+    private final Duration detachGrace;
+    /** SOOP 방송 지켜보기(POK-397). 명부의 줄을 넣고, 떼기 회차에 명부에 없는 것을 뺀다. */
+    private final SoopWatch soop;
+
+    /**
+     * 숫자로 못 읽은 스트리머 식별자의 수. <b>1번이 식별자 체계를 바꾸면 모든 방송이 이 길이다</b> —
+     * 로그만으로는 「한 건 이상했다」와 구분이 안 된다. 판정기의 같은 이름 카운터와 짝이다.
+     */
+    private final AtomicLong unreadableStreamerIds = new AtomicLong();
+
+    public Reattacher(LiveBroadcastClient client, SessionRegistry registry, EndedStreamStore store,
+                      GapMeasurer measurer, StreamerSerialExecutor lanes,
+                      BroadcastSessions sessions, Supplier<Instant> clock) {
+        this(client, registry, store, measurer, lanes, sessions, clock, null);
+    }
+
+    /** @param detachGrace 떼기 유예. null이면 명부에 없는 세션을 떼지 않는다(POK-219 그대로) */
+    public Reattacher(LiveBroadcastClient client, SessionRegistry registry, EndedStreamStore store,
+                      GapMeasurer measurer, StreamerSerialExecutor lanes,
+                      BroadcastSessions sessions, Supplier<Instant> clock, Duration detachGrace) {
+        this(client, registry, store, measurer, lanes, sessions, clock, detachGrace, SoopWatch.NONE);
+    }
+
+    public Reattacher(LiveBroadcastClient client, SessionRegistry registry, EndedStreamStore store,
+                      GapMeasurer measurer, StreamerSerialExecutor lanes,
+                      BroadcastSessions sessions, Supplier<Instant> clock, Duration detachGrace, SoopWatch soop) {
+        this.soop = soop;
+        this.client = client;
+        this.registry = registry;
+        this.store = store;
+        this.measurer = measurer;
+        this.lanes = lanes;
+        this.sessions = sessions;
+        this.clock = clock;
+        this.detachGrace = detachGrace;
+    }
+
+    /**
+     * 한 바퀴. <b>던지지 않는다</b> — {@code @Scheduled}는 태스크가 한 번이라도 던지면 그 뒤
+     * 주기가 안 돈다. 재부착이 영영 멈추는데 아무 신호도 없다({@code EndedStreamSweeper}와
+     * 같은 이유이자 같은 폭).
+     *
+     * <p><b>대신 성패를 돌려준다.</b> 삼키기만 하면 clip에 몇 시간을 못 닿아도 밖에서는
+     * 아무 차이가 없다 — 이 카드가 새로 만든 사각이라 {@code ReattachScheduler}가 이 값을
+     * {@link ReattachStatus}에 옮기고 health가 그것을 드러낸다. <b>여기서 직접 안 쓰는 이유</b>는
+     * 이 부품이 「무엇을 줍나」만 알아야 해서다(검사 열셋이 이 생성자를 직접 부른다).
+     *
+     * @return 한 바퀴가 통째로 돌았으면 {@code true}. 개별 방송의 붙이기 실패는 여기 안 실린다 —
+     *         그것은 {@code chat.reattach.attach_failed}가 방송 번호와 함께 남긴다
+     */
+    public boolean sweep() {
+        try {
+            sweepOnce();
+            return true;
+        } catch (Throwable t) {
+            // clip 주소·내부 토큰이 예외 메시지에 실릴 수 있다. 타입 이름만 남긴다.
+            // <b>예외 객체를 인자로 넘기지 마라</b> — SLF4J가 throwable로 인식해 메시지와
+            // 스택트레이스를 통째로 렌더한다(이 서버가 실제로 데인 자리, codex P2).
+            log.warn("chat.reattach.failed causeType={}", t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
+     * <b>거르는 순서가 뜻을 가른다 — 싼 것부터다.</b> 이미 붙어 있나(메모리) → 메모가 있나
+     * (DB 한 번) → 스트리머를 읽을 수 있나(파싱). 평상시에는 목록의 거의 전부가 첫 거름망에서
+     * 빠지므로, 순서를 뒤집으면 매 주기 DB를 방송 수만큼 두드린다.
+     *
+     * <p><b>거름망이 두 겹이다</b>(여기 + {@link #attachOne}). 겹치는 것이 낭비가 아니라
+     * 역할이 다르다 — 여기는 <b>비용</b>을 아끼고, 저기는 <b>줄에 들어간 뒤 벌어진 일</b>을 본다.
+     */
+    private void sweepOnce() {
+        LiveBroadcasts live = client.list();
+        Set<String> attached = Set.copyOf(registry.activeStreamIds());
+        // 🔴 <b>줄 하나의 계약 위반이 그 회차 전부를 죽이지 않게 여기서 먼저 턴다.</b>
+        // 바로 아래 {@code attached.contains}가 JDK 불변 Set이라 {@code contains(null)}에서
+        // <b>크기와 무관하게</b> NPE를 던진다(빈 Set도 그렇다 — 실측). 그러면 이상한 줄 하나가
+        // 그 회차의 <b>다른 모든 방송</b>을 같이 죽이고, 남는 것은 바깥 catch의
+        // {@code causeType=NullPointerException} 한 줄뿐이라 원인도 안 보인다.
+        //
+        // <b>봉투가 깨진 것과 갈린다</b> — {@code broadcasts} 칸 자체가 없으면 회차가 성립하지
+        // 않아 {@link LiveBroadcastClient}가 던지고, <b>줄 하나</b>가 깨진 것은 아래
+        // {@code streamer_id_unreadable}와 같이 세고 넘어간다(LiveBroadcasts javadoc의 방향).
+        //
+        // <b>카운터를 새로 만들지 않았다.</b> {@code unreadableStreamerIds}는 판정기·재부착·
+        // health·README 넷에 걸쳐 있어 짝을 만들면 그 넷이 같이 흔들린다. 그쪽은 「식별자 체계가
+        // 통째로 바뀌었나」를 세야 하는 값이고, {@code stream_id}는 clip의 {@code V201}이
+        // {@code NOT NULL}이라 <b>한 줄만 와도 그 자체가 사건</b>이다 — 로그 한 줄이면 된다.
+        //
+        // 🔴 <b>거름망 자신이 터지는 자리가 한 칸 더 바깥에 있다</b>(로컬 리뷰 라운드 3).
+        // Jackson 3는 배열 원소의 {@code null}을 <b>리스트에 그대로 넣는다</b>(재현함:
+        // {@code {"broadcasts":[null,{…}]}} → {@code size=2}, 첫 원소가 {@code null}).
+        // 그러면 아래 {@code item.streamId()}가 바로 위 방어가 도는 자리까지 가기도 전에
+        // NPE를 던져 <b>같은 결말</b>이 된다 — 회차 전부가 죽고 {@code causeType=NPE} 한 줄만 남는다.
+        //
+        // <b>로그를 갈랐다.</b> 「그 줄을 못 쓴다」는 같지만 <b>원인이 다르다</b> —
+        // 칸이 빈 것은 clip 명부의 값이 이상한 것이고, 원소가 없는 것은 <b>배열 자체</b>가
+        // 이상한 것이다(clip의 {@code LiveBroadcastsResponse.from}이 {@code row -> new Item(…)}이라
+        // 지금 코드로는 원소가 {@code null}일 수 없다 — 그래서 실제로 오면 직렬화 계층이
+        // 바뀌었다는 뜻이다). 한 이름으로 묶으면 {@code stream_id_missing}을 본 사람이
+        // <b>있지도 않은 빈 칸</b>을 찾으러 간다 — 라운드 2가 고치려던 것이 정확히 그 모양이다.
+        List<LiveBroadcasts.Item> rows = live.broadcasts();
+        List<LiveBroadcasts.Item> readable = new ArrayList<>(rows.size());
+        int nullRows = 0;
+        int missingStreamIds = 0;
+        for (LiveBroadcasts.Item item : rows) {
+            if (item == null) {
+                nullRows++;
+            } else if (item.streamId() == null) {
+                missingStreamIds++;
+            } else {
+                readable.add(item);
+            }
+        }
+        if (nullRows > 0) {
+            log.warn("chat.reattach.null_row count={}", nullRows);
+        }
+        if (missingStreamIds > 0) {
+            log.warn("chat.reattach.stream_id_missing count={}", missingStreamIds);
+        }
+        List<LiveBroadcasts.Item> candidates = readable.stream()
+                .filter(item -> !attached.contains(item.streamId()))
+                .toList();
+        detachMissing(live, readable, nullRows + missingStreamIds);
+        // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다. SOOP 지켜보기가 켜져 있으면 붙은 방송까지 넣으므로 읽을 수 있는 줄 전부를,
+        // 꺼져 있으면(기본) 옛 범위 그대로 후보만 묻는다(PR #363 봇: 꺼진 배포에서 붙은 방송 수만큼 조회가 커지지 않게).
+        List<LiveBroadcasts.Item> asked = soop == SoopWatch.NONE ? candidates : readable;
+        Map<String, EndedStream> memos = store.findAll(
+                asked.stream().map(LiveBroadcasts.Item::streamId).toList());
+        watchSoop(readable, memos);
+
+        int submitted = 0;
+        int deferred = 0;
+        int relink = 0;
+        for (LiveBroadcasts.Item item : candidates) {
+            EndedStream memo = memos.get(item.streamId());
+            if (memo != null && !relinkable(memo)) {
+                continue;   // 끝났거나, 다시 연동해도 안 풀리는 사유로 포기한 방송이다
+            }
+            StreamerId streamer = StreamerId.parse(item.streamerId());
+            if (!streamer.valid()) {
+                log.warn("chat.reattach.streamer_id_unreadable stream={}", item.streamId());
+                unreadableStreamerIds.incrementAndGet();
+                continue;
+            }
+            // 🔴 시각이 없으면 EPOCH다. 갈아끼움은 「더 늦게 시작한 방송만」이라 EPOCH는
+            // 절대 못 이긴다 — 자리가 비었을 때만 붙고 살아 있는 세션을 안 뺏는다.
+            //
+            // 🔴 <b>여기 들어가는 값이 clip 명부의 startedAt이고, 알림 경로는 봉투의
+            // occurredAt을 같은 칸에 넣는다.</b> 갈아끼움이 그 둘을 직접 비교하는데
+            // 「둘이 같은 눈금」은 우리가 안 재어 본 전제다 — 근거와 갈릴 때의 증상은
+            // SessionKey javadoc에 적었다(감사 라운드 3 H8).
+            Instant startedAt = item.startedAt() != null ? item.startedAt() : Instant.EPOCH;
+            // 🔴 원문이 아니라 LaneKey다. 알림 경로와 같은 줄에 들어가는 것이 이 설계의 기둥이고,
+            // 표기가 갈리는 여지가 바로 여기다 — 두 발행자가 다른 시스템이다(1번의 SQS 봉투 vs
+            // clip 명부의 칸). 클래스 javadoc 1번 항목이 무엇이 걸려 있는지를 적어 뒀다.
+            String lane = LaneKey.of(item.streamerId());
+            if (lanes.submit(lane, () -> attachOne(item.streamId(), streamer, startedAt))) {
+                submitted++;
+                if (memo != null) {
+                    relink++;
+                }
+            } else {
+                deferred++;
+            }
+        }
+        if (deferred > 0) {
+            // <b>버린 것이 아니라 미룬 것이다.</b> 다음 회차가 같은 목록을 다시 받는다 —
+            // 재부착은 상태가 없어서 「어디까지 했다」를 기억할 필요가 없다.
+            log.warn("chat.reattach.deferred count={} reason=LANES_FULL", deferred);
+        }
+        log.info("chat.reattach.swept received={} candidates={} submitted={} deferred={} relink={}",
+                live.broadcasts().size(), candidates.size(), submitted, deferred, relink);
+    }
+
+    /**
+     * 명부의 <b>모든</b> 읽을 수 있는 줄을 SOOP 지켜보기에 넣는다(POK-397 계획 검증 M4). 치지직이 붙어 있어도(위 후보 거름망을 타면 SOOP을 못 넣은
+     * 채 붙은 방송이 영영 안 들어온다), 치지직 포기 메모가 있어도 넣는다. 종료 메모만 뺀다. 넣기는 멱등이고 I/O가 없다.
+     */
+    private void watchSoop(List<LiveBroadcasts.Item> readable, Map<String, EndedStream> memos) {
+        if (soop == SoopWatch.NONE) {
+            return;   // 꺼진 배포(기본)에서 아래 다시 보기 조회를 안 태운다
+        }
+        List<LiveBroadcasts.Item> toWatch = new ArrayList<>();
+        for (LiveBroadcasts.Item item : readable) {
+            EndedStream memo = memos.get(item.streamId());
+            if ((memo == null || memo.stopped()) && StreamerId.parse(item.streamerId()).valid()) {
+                toWatch.add(item);
+            }
+        }
+        if (toWatch.isEmpty()) {
+            return;
+        }
+        // 넣기 직전에 종료 메모를 다시 본다(감사 2회차 n5). 위 묶음 조회 뒤 종료 편지가 메모를 쓰고 지켜보기를 빼면, 묶음만 믿은 넣기가 끝난 방송을
+        // 되살린다. 후보를 모아 묶음 조회 한 번으로 묻는다(지켜보기 틱의 거르기와 같은 조회, 줄마다 낱개로 묻지 않는다). 이 조회와 넣는 순간 사이의
+        // 좁은 틈은 지켜보기 틱이 종료 메모로 다시 걸러 메운다.
+        Map<String, EndedStream> fresh = store.findAll(toWatch.stream().map(LiveBroadcasts.Item::streamId).toList());
+        for (LiveBroadcasts.Item item : toWatch) {
+            EndedStream memo = fresh.get(item.streamId());
+            if (memo != null && !memo.stopped()) {
+                continue;
+            }
+            soop.watch(item.streamId(), StreamerId.parse(item.streamerId()).value(),
+                    item.startedAt() != null ? item.startedAt() : Instant.EPOCH);
+        }
+    }
+
+    /** 연동을 다시 하면 풀리는 사유로 포기한 메모인가. 종료 메모는 사유가 없어 false다. */
+    private static boolean relinkable(EndedStream memo) {
+        return memo.stopped() && CollectionState.needsRelink(memo.stopReason());
+    }
+
+    /**
+     * 반대 방향(POK-244) — <b>내가 붙어 있는데 clip 명부에 없는 방송</b>의 세션을 반납한다.
+     * clip이 종료 편지를 놓친 방송을 치우면(치우개) 그 다음 회차에 여기서 자리가 돌아온다.
+     * 두 서버가 각자 시각을 재지 않는다 — 판정은 clip 하나이고 우리는 명부를 따른다.
+     *
+     * <p><b>안 떼는 조건 다섯</b>이 이 갈래의 전부다.
+     * <ol>
+     *   <li>꺼져 있다(유예 null).</li>
+     *   <li>명부가 상한에 잘렸다({@code truncated}) — 살아있는 방송이 「사라진 것」으로 보인다. 그 회차는 통째로 건너뛴다.</li>
+     *   <li>명부에 읽을 수 없는 줄이 하나라도 있다(원소 {@code null}·번호 없음) — 그 줄이 내가 걷는 방송일 수
+     *       있으므로 <b>붙이기는 하되 떼기는 건너뛴다</b>(봇 리뷰 1판 codex P2). 위 거름망은 「붙이기」를 위한
+     *       것이고, 떼기는 명부가 온전할 때만 믿는다.</li>
+     *   <li>방송 시작 뒤 유예 안이다 — 같은 편지를 clip과 각자 받으므로 우리가 먼저 붙고 clip이 아직 안 적은 순간이 있다.</li>
+     *   <li>🔴 <b>같은 스트리머의 다른 방송이 명부에 있다</b>(codex P1) — 옛 방송 A를 걷는데 명부에 새 방송 B가 있으면
+     *       그것은 종료를 놓친 채 다음 방송이 시작된 경우이고, 붙이기 갈래의 <b>갈아끼움</b>이 소켓을 B로 옮긴다
+     *       (인증·구독을 다시 안 하고 채팅 공백이 없다). 여기서 A를 먼저 닫으면 B가 처음부터 다시 붙어야 하고
+     *       그 사이 채팅은 되찾을 수 없다. 스트리머 단위로 판정하는 이유가 그것이다.</li>
+     * </ol>
+     *
+     * <p>반납은 기존 종료 경로({@code BroadcastSessions.stop} → 등록부 {@code close})를 그대로 부르되
+     * <b>그 스트리머의 줄에 넣는다</b> — 같은 스트리머의 알림 처리·붙이기와 순서가 섞이지 않는다(codex P1).
+     * 새 종료 경로를 만들지 않는다. <b>메모({@code chat_ended_streams})는 남기지 않는다</b> — 메모의 열쇠는
+     * 편지의 순서 번호이고 여기엔 편지가 없다. 재전송된 시작 편지가 그 사이 세션을 다시 열면 다음 회차가 다시 뗀다(1분).
+     * 줄이 가득 차면 미룬다 — 다음 회차가 같은 명부를 다시 본다.
+     */
+    private void detachMissing(LiveBroadcasts live, List<LiveBroadcasts.Item> readable, int unreadableRows) {
+        if (detachGrace == null) {
+            return;
+        }
+        if (live.truncated()) {
+            log.warn("chat.reattach.detach_skipped reason=TRUNCATED");
+            return;
+        }
+        if (unreadableRows > 0) {
+            log.warn("chat.reattach.detach_skipped reason=UNREADABLE_ROWS count={}", unreadableRows);
+            return;
+        }
+        Set<String> listedStreams = new HashSet<>();
+        Set<String> listedStreamers = new HashSet<>();
+        for (LiveBroadcasts.Item item : readable) {
+            listedStreams.add(item.streamId());
+            if (item.streamerId() != null) {
+                listedStreamers.add(LaneKey.of(item.streamerId()));
+            }
+        }
+        Instant cutoff = clock.get().minus(detachGrace);
+        // SOOP 지켜보기도 같은 판정으로 치운다(L7). 등록부 세션이 없는 SOOP 단독 방송은 아래 반복에 안 걸린다.
+        soop.retainListed(listedStreams, cutoff);
+        int submitted = 0;
+        int deferred = 0;
+        for (SessionRegistry.ActiveStart mine : registry.activeStreamStarts()) {
+            String lane = LaneKey.of(Long.toString(mine.streamerId()));
+            if (listedStreams.contains(mine.streamId()) || listedStreamers.contains(lane)
+                    || mine.startedAt().isAfter(cutoff)) {
+                continue;
+            }
+            if (lanes.submit(lane, () -> detachOne(mine))) {
+                submitted++;
+            } else {
+                deferred++;
+            }
+        }
+        if (submitted > 0 || deferred > 0) {
+            log.info("chat.reattach.detach_swept submitted={} deferred={}", submitted, deferred);
+        }
+    }
+
+    /** 줄 안에서 도는 반납. 실패는 세고 넘어간다 — 다음 회차가 다시 본다. */
+    private void detachOne(SessionRegistry.ActiveStart mine) {
+        try {
+            if (sessions.stop(mine.streamId())) {
+                log.info("chat.reattach.detached stream={} startedAt={}", mine.streamId(), mine.startedAt());
+            }
+        } catch (RuntimeException e) {
+            log.warn("chat.reattach.detach_failed stream={} causeType={}", mine.streamId(), e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 줄 안에서 도는 본체. <b>이 안에서는 같은 스트리머의 알림 처리가 끼어들 수 없다</b>
+     * (클래스 javadoc 2번 항목).
+     *
+     * <p>🔴 <b>여기서 {@link StreamerSerialExecutor#dropPending}을 부르지 않는다.</b>
+     * 그 줄의 대기열에는 <b>알림 경로의 배치</b>가 들어 있을 수 있고, 버리면 그 알림들은
+     * 지워지지 않은 채 가시성 시한이 지나야 다시 온다. 재부착 하나가 실패했다는 사실은
+     * 그 알림들도 실패한다는 근거가 <b>아니므로</b> 얻는 것 없이 늦추기만 한다.
+     * (알림 경로가 부르는 것은 정반대 이유다 — 거기서는 <b>앞엣것이 실패한 채로 뒤엣것이
+     * 처리·삭제되면 영구 유실</b>이라 버리는 쪽이 싸다.)
+     *
+     * <p><b>반대 방향은 해롭지 않다</b>: 알림 배치가 실패해 {@code dropPending}이 대기 중인
+     * 재부착 작업을 같이 버려도, 재부착은 상태가 없고 주기적이라 다음 회차가 같은 목록을
+     * 다시 받는다. 그래서 이 부품은 「제출했다」를 기억하지 않는다.
+     *
+     * <p><b>예외를 삼키고 이름을 남긴다.</b> 안 잡아도 실행기의 {@code catch (Throwable)}이
+     * 받아 줄은 안 멈추지만, 그 로그에는 <b>줄 이름만 있고 방송 번호가 없다</b> —
+     * 「어느 방송이 안 붙었나」가 이 부품의 유일한 진단이다.
+     */
+    private void attachOne(String streamId, StreamerId streamer, Instant startedAt) {
+        try {
+            attachOnce(streamId, streamer, startedAt);
+        } catch (Throwable t) {
+            log.warn("chat.reattach.attach_failed stream={} causeType={}",
+                    streamId, t.getClass().getSimpleName());
+        }
+    }
+
+    private void attachOnce(String streamId, StreamerId streamer, Instant startedAt) {
+        // 🔴 <b>메모를 여기서 다시 본다</b>(계획 검증 M2). 위 sweepOnce의 findAllIds는 줄에
+        // 넣기 <b>전</b>에, 스케줄러 스레드에서 돌았다. 그 사이 ENDED 알림이 처리되면
+        // <b>끝난 방송에 세션이 선다.</b>
+        //
+        // 그리고 그것을 막을 층이 아래에 없다 — LinkedSessionStarter는 EndedStreamStore를
+        // 안 본다. 그 검사는 BroadcastEventProcessor.handleStarted에만 있고
+        // <b>재부착은 그 층을 안 탄다.</b>
+        //
+        // 닫을 트리거도 없다: 그 방송의 ENDED는 이미 소비돼 큐에 없다. 계정당 세 자리 중
+        // 하나를 프로세스가 끝날 때까지 먹고, 창구는 그 방송에 collecting을 답한다.
+        //
+        // 연동 문제 포기 메모는 예외다(POK-342, 클래스 javadoc): 줄 안에서 다시 봐도 그 사유면 붙으러 간다.
+        // 그 사이 종료 편지가 처리돼 「끝남」으로 바뀌었으면 relinkable이 false라 여기서 걸린다.
+        Optional<EndedStream> memo = store.find(streamId);
+        if (memo.isPresent() && !relinkable(memo.get())) {
+            log.info("chat.reattach.skipped_late stream={} reason=MEMO_APPEARED", streamId);
+            return;
+        }
+        // 🔴 <b>그 사이에 붙었는지도 다시 본다</b>(계획 검증 T5). sessions.start는
+        // 「이미 걷고 있음」과 「새로 열었음」에 <b>똑같이 PROCESSED</b>를 준다
+        // (LinkedSessionStarter의 첫 갈래). 안 가르면 gap_measured가 <b>이미 걷고 있던
+        // 방송의 공백</b>을 찍어, 나중에 그 로그를 세면 유실이 실제보다 많아 보인다.
+        //
+        // <b>세 번째 뜻은 이 재확인으로 못 가른다</b> — auth가 영구히 거절하면 세션이 서
+        // 보지도 못하는데 그것도 PROCESSED였다(감사 라운드 3 H1). 그 갈래는 여기서 다시
+        // 묻는 대신 <b>문이 LINK_REFUSED로 갈라서 돌려준다.</b>
+        //
+        // 🔴 <b>왜 「호출 뒤에 currentStreamIdOf를 다시 보기」로 안 풀었나.</b> 그러면
+        // 로그는 맞아지지만 <b>메모가 생기는 것을 못 막는다</b> — H1의 더 큰 절반이
+        // 그쪽이고, 그것은 문 안에서만 닫을 수 있다. 문이 이미 갈라 주므로 여기서
+        // 등록부를 한 번 더 두드릴 이유도 없어졌다.
+        if (streamId.equals(registry.currentStreamIdOf(streamer.value()))) {
+            log.info("chat.reattach.skipped_late stream={} reason=ALREADY_ATTACHED", streamId);
+            return;
+        }
+        // <b>재는 것이 붙기보다 먼저다.</b> 붙고 나면 새 채팅이 들어와 마지막 채팅 시각이 바뀐다.
+        //
+        // 🔴 <b>그래서 순서는 그대로 두고 실패만 삼킨다</b>(로컬 리뷰 라운드 1). 순서를 뒤집는
+        // 처방도 있었지만 그쪽은 <b>DB가 멀쩡한 평상시에도</b> 값을 망친다 — 붙은 뒤에 재면
+        // 새 채팅이 이미 들어와 공백이 늘 0에 가깝게 찍힌다. 여기서 고치려는 것은 DB가
+        // 아플 때뿐이므로, 그 대가를 모든 회차에 물리는 것은 바꿔치기가 못 된다.
+        Gap gap = measureQuietly(streamId, startedAt);
+        ProcessResult result = sessions.start(streamId, streamer, startedAt);
+        if (result != ProcessResult.PROCESSED) {
+            // 살아 있는 뒤 방송을 못 이긴 것(IGNORED_STALE) · auth가 아픈 것(RETRY_LATER) ·
+            // <b>auth가 영구히 거절한 것(LINK_REFUSED)</b> 셋이 여기로 온다. <b>셋 다 다음
+            // 회차가 같은 목록을 다시 받으므로 여기서 재시도하지 않는다</b> — 여기서 돌면
+            // 그 줄이 그동안 남의 알림을 막는다.
+            //
+            // LINK_REFUSED도 다음 회차가 다시 시도한다. 그것이 곧 「재부착은 포기 기록을
+            // 만들지 않는다」의 대가이자 목적이다(클래스 javadoc).
+            log.info("chat.reattach.not_attached stream={} result={}", streamId, result);
+            return;
+        }
+        log.info("chat.reattach.gap_measured stream={} basis={} since={} gapMs={}",
+                streamId, gap.basis(), gap.since(), gap.gapMs());
+        memo.ifPresent(stopped -> forgetQuietly(streamId, stopped.stopReason()));
+    }
+
+    /**
+     * 다시 연동돼 붙은 방송의 포기 메모를 지운다. <b>실패해도 붙은 세션은 그대로 둔다</b>: 세션이 서 있는
+     * 동안은 창구가 메모를 안 보고 재부착도 그 방송을 후보로 안 본다. 남은 메모는 그 세션이 끝난 뒤
+     * 창구의 답을 「포기」로 남기는데, 종료 편지가 오면 덮이고 아니면 24시간 치우기가 지운다.
+     */
+    private void forgetQuietly(String streamId, String reason) {
+        try {
+            if (store.forgetStopped(streamId, reason)) {
+                log.info("chat.reattach.relinked stream={} reason={}", streamId, reason);
+            }
+        } catch (Throwable t) {
+            // 예외 객체를 인자로 넘기지 마라: sweep의 catch와 같은 이유다.
+            log.warn("chat.reattach.relink_forget_failed stream={} causeType={}",
+                    streamId, t.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 🔴 <b>재는 데 실패해도 붙는다 — 이것은 관측이지 판정이 아니다.</b>
+     *
+     * <p>바로 위 {@code store.find}·{@code currentStreamIdOf}와 성격이 갈린다. 그 둘은
+     * 「붙어도 되는 방송인가」를 정하는 <b>판정</b>이라 실패하면 안 붙는 쪽이 안전한 방향이다.
+     * 이쪽은 <b>로그 한 줄을 위한 관측</b>이라, 실패가 붙이기를 막으면 부수 기능 하나가
+     * 이 카드의 목적을 통째로 무력화한다. 실제로 그랬다 — {@link GapMeasurer}는
+     * {@code chat_messages}에 질의하므로 DB가 반개방이면 {@code socketTimeout}(10초)에
+     * 걸려 던졌고, {@link #attachOne}의 {@code catch}가 그것을 받아
+     * {@code attach_failed}만 남긴 채 <b>붙이기가 아예 안 불렸다.</b>
+     *
+     * <p><b>DB가 아픈 동안 채팅 저장도 안 되지만 세션은 서 있어야 한다</b> — 회복되는 순간
+     * 곧바로 저장이 이어진다. 안 붙어 있으면 회복돼도 걷을 것이 없고 채팅에는 백필이 없다.
+     *
+     * <p><b>폭이 {@code Throwable}인 이유</b>는 위 {@link #attachOne}과 같다 — 좁히면
+     * {@code LinkageError}류가 바깥 {@code catch}로 새어 다시 붙이기를 막는다.
+     * (이 서버의 아카이버 {@code safeTick}이 {@code Throwable}이고 적재 틱이
+     * {@code RuntimeException}인 것이 「쌍둥이 미대조」로 남아 있는 자리와 같은 결이다.)
+     */
+    private Gap measureQuietly(String streamId, Instant startedAt) {
+        try {
+            return measurer.measure(streamId, startedAt, clock.get());
+        } catch (Throwable t) {
+            // 예외 객체를 인자로 넘기지 마라 — SLF4J가 throwable로 인식해 접속 문자열이
+            // 실릴 수 있는 메시지와 스택트레이스를 통째로 렌더한다(sweep의 catch와 같은 이유).
+            log.warn("chat.reattach.gap_measure_failed stream={} causeType={}",
+                    streamId, t.getClass().getSimpleName());
+            // <b>UNKNOWN으로 뭉치지 않는다.</b> 그 값은 이미 「clip이 시작 시각을 안 줬다」이고,
+            // 같은 값으로 두면 뒤에 로그를 세는 쪽이 두 원인을 못 가른다.
+            return new Gap(Gap.Basis.MEASURE_FAILED, null, -1L);
+        }
+    }
+
+    public long unreadableStreamerIds() {
+        return unreadableStreamerIds.get();
+    }
+}

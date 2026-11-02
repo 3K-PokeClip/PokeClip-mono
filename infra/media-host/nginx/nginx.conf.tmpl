@@ -1,0 +1,196 @@
+# Media 상자 앞단 프록시(nginx) 설정 템플릿.
+#
+# Terraform templatefile() 로 렌더한다 — prod 는 M9 user_data, 시험은
+# test/lib/render.sh 가 같은 함수를 부른다. 렌더 결과를 공식 nginx 이미지
+# (images.json 의 nginx 항목 — 다이제스트 고정)의 /etc/nginx/nginx.conf 에
+# 읽기 전용으로 붙인다. nginx 는 MediaMTX 와 같은 망 칸(network_mode:
+# service:mediamtx)에 서서, 루프백에만 열린 MediaMTX 포트로 넘긴다.
+#
+# 템플릿 변수:
+#   proxy_live_port      LL-HLS(live) 듣기 포트 → 127.0.0.1:8888.
+#   proxy_playback_port  재생 서버(playback) 듣기 포트 → 127.0.0.1:9996.
+#   proxy_control_port   제어면 듣기 포트.
+#   proxy_health_port    헬스 듣기 포트(control 대상 그룹 헬스도 이것).
+#   media_health_path    헬스 경로(/ 로 시작). 이 경로만 고정 200 이다.
+#   control_upstream     제어면 상류 <호스트>:<포트>. 비면 제어면 경로가 모두
+#                        404 다(상류 호출 0 — 제어면 서버 배포 전 기본값).
+#                        호스트는 IP 또는 nginx 기동 때 풀리는 이름이어야
+#                        한다 — 기동 때 한 번 풀고 다시 풀지 않는다(못 풀면
+#                        nginx 가 뜨지 않는다).
+#
+# 지키는 것:
+#   - MediaMTX 관리 API(Control API) 포트로 가는 설정을 두지 않는다 — 렌더
+#     결과에 그 포트 번호가 한 번도 나오지 않는다(주석 포함). 무인증 관리
+#     항목은 없고 api 권한은 사이드카 자격(비밀번호)에만 있지만, 넘기면 kick ·
+#     설정 변경 · 녹화 삭제 표면이 내부 ALB 쪽으로 열려 그 자격 하나에 기댄다.
+#   - 상류 대기 시간(proxy_read_timeout)은 15초 이상이다. LL-HLS 블로킹
+#     리로드는 다음 조각이 나올 때까지 응답을 붙잡는다.
+#   - 판단과 전달이 같은 경로를 본다. nginx 는 경로의 %XX 를 풀고 점 구간 ·
+#     겹 슬래시를 접은 경로($uri)로 location 을 고르지만, 앞단 인가(CloudFront
+#     서명 쿠키 정책)와 원문을 받는 상류(MediaMTX LL-HLS)는 원문 경로를 본다.
+#     그래서 원문 경로(요청 대상의 쿼리 앞)가 풀고 접어도 바뀌지 않는 꼴일
+#     때만 넘긴다 — playback 은 원문도 /{id}/list · /{id}/get 꼴이어야 하고
+#     (아니면 403), live · 제어면은 원문에 인코딩한 . / \ % · 빈 조각 · 점
+#     구간이 있으면 400 이다.
+#   - 접근 로그 형식에 Authorization 을 싣지 않는다. 쿼리 문자열도 싣지 않는다
+#     (재생 토큰이 쿼리로 올 수 있다). 경로는 받은 원문 그대로 싣는다 — 거절한
+#     우회 원문이 풀고 접은 정상 경로처럼 남지 않게. 오류 로그 줄은 nginx 가
+#     형식을 정한다 — Authorization 은 실리지 않지만 요청 줄(쿼리 포함)과 Host ·
+#     Referer 머리 값은 실린다. 쿼리로 토큰을 받게 되면 다시 판단한다.
+#   - 리다이렉트(끝 슬래시 없는 허용 접두사의 301)의 Location 은 상대 경로다
+#     (absolute_redirect off) — nginx 의 듣기 포트 · http 가 바깥 응답에
+#     실리지 않게.
+#   - 응답 머리 · 오류 페이지에 nginx 판 번호를 싣지 않는다(server_tokens off).
+#   - 원본 응답 머리(Cache-Control 포함)는 손대지 않고 넘긴다.
+#
+# 이 파일의 nginx 변수에는 중괄호 꼴을 쓰지 않는다 — templatefile() 이 달러
+# 중괄호를 자기 보간으로 읽는다(필요하면 달러를 둘 겹쳐 이스케이프한다).
+
+worker_processes auto;
+
+# 로그는 docker 로그로 낸다(오류 = 표준 오류 · 접근 = 표준 출력).
+error_log /dev/stderr warn;
+
+events {
+  worker_connections 1024;
+}
+
+http {
+  default_type application/octet-stream;
+  server_tokens off;
+  absolute_redirect off;
+
+  # 요청 대상 원문의 경로(쿼리 앞까지) — 접근 로그가 싣는다.
+  map $request_uri $raw_request_path {
+    "~^(?<raw_path_part>[^?]*)" $raw_path_part;
+  }
+
+  log_format edge '$remote_addr [$time_local] '
+                  '"$request_method $raw_request_path $server_protocol" '
+                  '$status $body_bytes_sent '
+                  '$request_time $upstream_addr $upstream_status';
+  access_log /dev/stdout edge;
+
+  # 형제 앞단(infra/dev-media/nginx.conf)과 같은 프록시 기본값이다.
+  proxy_http_version 1.1;
+  proxy_buffering off;
+  proxy_read_timeout 90s;
+  proxy_set_header Host $host;
+
+  # playback 원문 대조 — 요청 대상 원문의 경로가 /{id}/list · /{id}/get 꼴일
+  # 때만 1 이다. 경로에 % · 빈 조각(//) · 점만으로 된 {id}(. · ..)가 있으면
+  # 0(→ 403). 그래서 원문 경로와 $uri 가 같고, 앞단 인가가 본 {id} 가 아래 쿼리
+  # 대조의 {id} 다(/A/..%2fB/list 는 $uri 로 /B/list 가 된다). 쿼리 안의 % 는
+  # 받는다(시각의 %3A · %2B).
+  map $request_uri $playback_raw_path_ok {
+    default 0;
+    "~^/(?!\.+/)[A-Za-z0-9._~-]+/(?:list|get)(?:\?|$)" 1;
+  }
+
+  # playback 쿼리 대조 — /{id}/list · /{id}/get 의 쿼리에 path 가 정확히
+  # 하나이고 그 값이 경로의 {id} 와 같을 때만 1 이다. 없음 · 빈 값 · 다른 값 ·
+  # 중복(값 없는 path 키도 센다)은 0(→ 403). 이름에 % 가 든 쿼리 키도 0 이다 —
+  # MediaMTX 는 키를 풀어 읽으므로 pa%74h 같은 키가 두 번째 path 로 들어오는
+  # 것을 막는다. {id} 는 풀어 읽어도 바뀌지 않는 문자만 받는다.
+  map "$uri|&$args&" $playback_query_ok {
+    default 0;
+    "~^/([A-Za-z0-9._~-]+)/(?:list|get)\|(?!.*&path(?=[=&]).*&path[=&])(?!.*&[^&=]*%)(?=.*&path=\1&)" 1;
+  }
+
+  # 원문 경로 거절 — live · 제어면은 요청 대상 원문을 상류에 그대로 넘긴다
+  # (proxy_pass 에 URI 없음). 그래서 상류가 nginx 와 다르게 풀고 접을 수 있는
+  # 원문은 받지 않는다. 경로(쿼리 앞)에 인코딩한 . / \ %(%2e · %2f · %5c · %25 —
+  # 대소문자 무관) · 빈 조각(//) · 점 구간(/./ · /../ · 끝 /. · /..)이 있으면
+  # 1(→ 400). 그 밖 %XX(한글 경로 이름 등)와 쿼리는 받는다. ..; · \ · ..%3F ·
+  # ..%23 은 원문 그대로 넘긴다 — 상류(MediaMTX · 제어면 서버)가 Go net/http 라
+  # ; 를 경로 구분으로, \ 를 / 로 읽지 않고, 푼 %3F · %23 을 쿼리 · 조각으로
+  # 다시 읽지 않는다는 전제다. 상류가 바뀌면 다시 판단한다.
+  map $request_uri $raw_path_unsafe {
+    default 0;
+    "~*^[^?]*(?:%2e|%2f|%5c|%25|//|/\.\.?(?:[/?]|$))" 1;
+  }
+
+  # live — 경로 · 쿼리 · Authorization 을 그대로 MediaMTX LL-HLS 로 넘긴다
+  # (/live 같은 접두사도 지우지 않는다). 원문 경로 거절에 걸리면 400 이다.
+  server {
+    listen ${proxy_live_port};
+
+    if ($raw_path_unsafe) {
+      return 400;
+    }
+
+    location / {
+      proxy_pass http://127.0.0.1:8888;
+    }
+  }
+
+  # playback — /{id}/list · /{id}/get 을 재생 서버의 /list · /get 으로 넘긴다.
+  # 쿼리는 원문 그대로다(시각의 %3A · %2B 를 다시 쓰지 않는다). 동작 이름은
+  # 이름 붙은 캡처로 받는다 — 번호 캡처는 if 가 map 정규식을 평가할 때 덮인다.
+  server {
+    listen ${proxy_playback_port};
+
+    location ~ ^/[A-Za-z0-9._~-]+/(?<playback_op>list|get)$ {
+      if ($playback_raw_path_ok = 0) {
+        return 403;
+      }
+      if ($playback_query_ok = 0) {
+        return 403;
+      }
+      proxy_pass http://127.0.0.1:9996/$playback_op$is_args$args;
+    }
+
+    location / {
+      return 404;
+    }
+  }
+
+  # 제어면 — /api/ingest/ · /api/streams/ 만 상류로 넘긴다. 그 밖 경로는 404 다.
+  # 상류에는 원문 그대로 가므로(경로 · 메서드 · 본문 · Authorization) 풀고 접으면
+  # 허용 경로가 되는 원문(/admin/..%2Fapi/ingest/x)은 위 원문 경로 거절로 막는다.
+  server {
+    listen ${proxy_control_port};
+
+    if ($raw_path_unsafe) {
+      return 400;
+    }
+
+%{ if control_upstream == "" ~}
+    location /api/ingest/ {
+      return 404;
+    }
+
+    location /api/streams/ {
+      return 404;
+    }
+%{ else ~}
+    location /api/ingest/ {
+      proxy_pass http://${control_upstream};
+    }
+
+    location /api/streams/ {
+      proxy_pass http://${control_upstream};
+    }
+%{ endif ~}
+
+    location / {
+      return 404;
+    }
+  }
+
+  # 헬스 — nginx 자신이 고정 200 을 낸다(상류 호출 없음). 대상 그룹이 몇 초마다
+  # 부르므로 접근 로그에 남기지 않는다.
+  server {
+    listen ${proxy_health_port};
+
+    location = ${media_health_path} {
+      access_log off;
+      default_type text/plain;
+      return 200 "ok\n";
+    }
+
+    location / {
+      return 404;
+    }
+  }
+}

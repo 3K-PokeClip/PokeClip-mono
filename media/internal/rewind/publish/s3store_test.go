@@ -1,0 +1,648 @@
+package publish
+
+// S3Store 의 요청 모양과 응답 분기 — 로컬 TLS 서버(httptest)로 S3 를 흉내 내고, 실제 SDK 클라이언트가 그
+// 서버에 보낸 요청을 잰다(Google Go 가이드 「Use real transports」). 외부 S3 로 나가는 요청은 없다.
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
+)
+
+const testBucket = "pokeclip-test"
+
+var _ Store = (*S3Store)(nil)
+
+// s3Request 는 흉내 서버가 받은 요청 하나다.
+type s3Request struct {
+	method string
+	path   string
+	header http.Header
+	body   []byte
+}
+
+// s3Stub 은 흉내 서버가 받은 요청의 기록이다.
+type s3Stub struct {
+	mu       sync.Mutex
+	requests []s3Request
+}
+
+func (s *s3Stub) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.requests)
+}
+
+// only 는 받은 요청이 정확히 하나일 때 그것을 돌려준다.
+func (s *s3Stub) only(t *testing.T) s3Request {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.requests) != 1 {
+		t.Fatalf("흉내 서버가 받은 요청 %d건, want 1", len(s.requests))
+	}
+	return s.requests[0]
+}
+
+// newStubbedStore 는 respond 로 답하는 로컬 S3 흉내 서버와 그 서버에 붙은 S3Store 를 만든다.
+//
+// 클라이언트는 조립점이 LoadDefaultConfig 로 만들 클라이언트의 기본값을 그대로 가진다 — 재시도 3회 ·
+// 요청 체크섬 WhenSupported. 시도 수와 본문 모양을 S3Store 가 요청마다 고정하는지 보려면 그 기본값이 살아
+// 있어야 한다. 자격증명은 서명에만 쓰는 가짜 값이다. optFns 는 조립점이 클라이언트에 붙이는 옵션 함수다
+// (예: s3errbody.Limit).
+func newStubbedStore(t *testing.T, respond http.HandlerFunc, optFns ...func(*s3.Options)) (*S3Store, *s3Stub) {
+	t.Helper()
+	stub := &s3Stub{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("요청 본문 읽기 실패: %v", err)
+		}
+		stub.mu.Lock()
+		stub.requests = append(stub.requests, s3Request{method: r.Method, path: r.URL.Path, header: r.Header.Clone(), body: body})
+		stub.mu.Unlock()
+		respond(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	client := s3.New(s3.Options{
+		Region:       "ap-northeast-2",
+		BaseEndpoint: aws.String(srv.URL),
+		UsePathStyle: true,
+		HTTPClient:   srv.Client(),
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "test", SecretAccessKey: "test", Source: "publish-test"}, nil
+		}),
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenSupported,
+	}, optFns...)
+	return NewS3Store(client, testBucket), stub
+}
+
+// respondObject 는 200 으로 답한다. etag 가 비면 ETag 헤더를 싣지 않는다. meta 는 x-amz-meta-* 헤더로,
+// body 는 응답 본문으로 싣는다(HEAD 면 본문 없음).
+func respondObject(etag string, meta map[string]string, body []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if etag != "" {
+			w.Header().Set("ETag", etag)
+		}
+		for k, v := range meta {
+			w.Header().Set("X-Amz-Meta-"+k, v)
+		}
+		if r.Method == http.MethodHead {
+			return
+		}
+		// 쓰기가 실패하면 클라이언트가 받은 본문이 달라져 본문 단언이 잡는다.
+		_, _ = w.Write(body)
+	}
+}
+
+// respondError 는 S3 오류 응답(XML 본문)으로 답한다. HEAD 에는 본문이 없다 — S3 도 그렇다.
+func respondError(status int, code string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(status)
+		if r.Method == http.MethodHead {
+			return
+		}
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+"\n"+
+			`<Error><Code>%s</Code><Message>stub</Message><RequestId>req-1</RequestId><HostId>host-1</HostId></Error>`, code)
+	}
+}
+
+// metaHeaders 는 요청의 x-amz-meta-* 헤더다(이름은 Go 가 정규화한 모양).
+func metaHeaders(h http.Header) map[string]string {
+	out := map[string]string{}
+	for k, v := range h {
+		if strings.HasPrefix(k, "X-Amz-Meta-") {
+			out[k] = strings.Join(v, ",")
+		}
+	}
+	return out
+}
+
+// sentinels 는 Store 가 응답 분기로 돌려주는 오류다(Store 설명의 표).
+var sentinels = []error{ErrPreconditionFailed, ErrNotFound, ErrConflict}
+
+// 조건부 PUT 의 요청 모양 — 조건 헤더는 정확히 하나이고(첫 판 If-None-Match: * · 갱신 If-Match: <ETag>),
+// 메타는 x-amz-meta-* 로 같은 요청에 실리며(설계 4.4.2 원자성), 본문은 그대로 간다(aws-chunked 로 감싸지
+// 않는다). 응답의 ETag 를 그대로 돌려준다.
+//
+// 목록 객체 머리(M5 설계 4.5 표 · R12)도 같은 요청에 실린다 — Content-Type 은 HLS 목록 타입, Cache-Control 은
+// 엣지 · 브라우저가 1초만 들고 있게 한다. 잡는 결함: 머리를 더하다 조건 · 메타가 빠지거나(다른 요청 입력에
+// 실음) 머리가 빠져 S3 기본값(application/octet-stream · 캐시 지시 없음)이 시청자에게 간다. 메타는 발행이 실제로
+// 싣는 여덟 키 그대로다(encodeMeta).
+func TestS3StorePutSendsConditionAndMeta(t *testing.T) {
+	cases := []struct {
+		name            string
+		cond            Precondition
+		wantIfMatch     []string
+		wantIfNoneMatch []string
+	}{
+		{name: "IfAbsent", cond: IfAbsent(), wantIfNoneMatch: []string{"*"}},
+		{name: "IfMatch", cond: IfMatch(`"prev-etag"`), wantIfMatch: []string{`"prev-etag"`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, stub := newStubbedStore(t, respondObject(`"new-etag"`, nil, nil))
+			meta := encodeMeta(rewind.Published{Gen: 7, MediaSequence: 10, PublishedSeq: 12, SegmentCount: 3}, "sess-1")
+
+			etag, err := store.Put(context.Background(), testKey, tc.cond, bodyA, meta)
+			if err != nil {
+				t.Fatalf("Put(%+v) 실패: %v", tc.cond, err)
+			}
+			if etag != `"new-etag"` {
+				t.Errorf("Put 의 ETag = %q, want %q(응답 그대로)", etag, `"new-etag"`)
+			}
+
+			req := stub.only(t)
+			if req.method != http.MethodPut || req.path != "/"+testBucket+"/"+testKey {
+				t.Errorf("요청 = %s %s, want PUT /%s/%s", req.method, req.path, testBucket, testKey)
+			}
+			if got := req.header.Values("If-Match"); !slices.Equal(got, tc.wantIfMatch) {
+				t.Errorf("If-Match = %q, want %q", got, tc.wantIfMatch)
+			}
+			if got := req.header.Values("If-None-Match"); !slices.Equal(got, tc.wantIfNoneMatch) {
+				t.Errorf("If-None-Match = %q, want %q", got, tc.wantIfNoneMatch)
+			}
+			wantMeta := map[string]string{}
+			for k, v := range meta {
+				wantMeta[http.CanonicalHeaderKey("x-amz-meta-"+k)] = v
+			}
+			if len(wantMeta) != 8 {
+				t.Fatalf("발행 메타 키 = %d개, want 8 — 시험 전제가 깨졌다", len(wantMeta))
+			}
+			if got := metaHeaders(req.header); !maps.Equal(got, wantMeta) {
+				t.Errorf("메타 헤더 = %v, want %v", got, wantMeta)
+			}
+			if got := req.header.Values("Content-Type"); !slices.Equal(got, []string{"application/vnd.apple.mpegurl"}) {
+				t.Errorf("Content-Type = %q, want [application/vnd.apple.mpegurl](HLS 목록)", got)
+			}
+			if got := req.header.Values("Cache-Control"); !slices.Equal(got, []string{"public, max-age=1"}) {
+				t.Errorf("Cache-Control = %q, want [public, max-age=1]", got)
+			}
+			if !bytes.Equal(req.body, bodyA) {
+				t.Errorf("요청 본문 = %q, want %q(그대로)", req.body, bodyA)
+			}
+		})
+	}
+}
+
+// 목록 객체의 Cache-Control 은 키 축으로 갈린다(kty A1 2026-10-27). 라이브 · 동결 DVR 목록(dvr/)은 조각마다 판이
+// 바뀌어 1초, VOD 문서(vod/)는 IfAbsent 로 한 번만 쓰고 바뀌지 않아 1시간이다. 키는 발행 경로가 쓰는 생성 함수
+// 그대로 만든다 — vodKey 의 접두가 바뀌면 이 시험이 먼저 깨진다. 잡는 결함: VOD 가 1초로 남아 엣지 질의가 늘거나,
+// 라이브 목록이 1시간을 받아 시청자가 낡은 판에 묶인다.
+func TestS3StorePutCacheControlByAxis(t *testing.T) {
+	dvr, err := manifestKey("demo", "sess-1")
+	if err != nil {
+		t.Fatalf("manifestKey: %v", err)
+	}
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatalf("vodKey: %v", err)
+	}
+	cases := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{name: "DVR", key: dvr, want: "public, max-age=1"},
+		{name: "VOD", key: vod, want: "public, max-age=3600"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, stub := newStubbedStore(t, respondObject(`"new-etag"`, nil, nil))
+
+			if _, err := store.Put(context.Background(), tc.key, IfAbsent(), bodyA, nil); err != nil {
+				t.Fatalf("Put(%q) 실패: %v", tc.key, err)
+			}
+
+			req := stub.only(t)
+			if got := req.header.Values("Cache-Control"); !slices.Equal(got, []string{tc.want}) {
+				t.Errorf("Put(%q) 의 Cache-Control = %q, want [%s]", tc.key, got, tc.want)
+			}
+			if got := req.header.Values("Content-Type"); !slices.Equal(got, []string{"application/vnd.apple.mpegurl"}) {
+				t.Errorf("Put(%q) 의 Content-Type = %q, want [application/vnd.apple.mpegurl](축과 무관)", tc.key, got)
+			}
+		})
+	}
+}
+
+// 4.4 [B-1] 응답 분기의 매핑 — 412 · 409 · 404(키 부재)는 센티널로, 나머지는 센티널이 아닌 오류로 온다.
+// 버킷이 없다는 404(NoSuchBucket)는 키 부재가 아니라 설정 결함이다. 어느 분기든 시도는 한 번이다 — 기본
+// 재시도가 3회인 클라이언트로도 503 에 요청이 하나만 나간다(재시도는 호출자 몫 — RC-19 시도 상한).
+func TestS3StorePutMapsResponseStatus(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		code   string
+		// want 는 errors.Is 가 참이어야 할 센티널이다. nil 이면 어느 센티널도 아니어야 한다.
+		want error
+	}{
+		{name: "412_PreconditionFailed", status: http.StatusPreconditionFailed, code: "PreconditionFailed", want: ErrPreconditionFailed},
+		{name: "409_ConditionalRequestConflict", status: http.StatusConflict, code: "ConditionalRequestConflict", want: ErrConflict},
+		{name: "404_NoSuchKey", status: http.StatusNotFound, code: "NoSuchKey", want: ErrNotFound},
+		{name: "404_NoSuchBucket", status: http.StatusNotFound, code: "NoSuchBucket"},
+		{name: "403_AccessDenied", status: http.StatusForbidden, code: "AccessDenied"},
+		{name: "503_SlowDown", status: http.StatusServiceUnavailable, code: "SlowDown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, stub := newStubbedStore(t, respondError(tc.status, tc.code))
+
+			_, err := store.Put(context.Background(), testKey, IfMatch(`"prev-etag"`), bodyA, nil)
+			if err == nil {
+				t.Fatalf("%d %s 응답에 Put 오류가 없다", tc.status, tc.code)
+			}
+			for _, s := range sentinels {
+				if got, want := errors.Is(err, s), s == tc.want; got != want {
+					t.Errorf("errors.Is(%v, %v) = %t, want %t", err, s, got, want)
+				}
+			}
+			if n := stub.count(); n != 1 {
+				t.Errorf("요청 %d건, want 1 — 시도는 한 번이다", n)
+			}
+		})
+	}
+}
+
+// 빈 ETag 의 IfMatch 는 보내지 않는다 — SDK 는 빈 If-Match 헤더도 싣고, 저장소가 그것을 조건 없는 쓰기로
+// 읽으면 남의 판을 덮는다.
+func TestS3StorePutRejectsEmptyIfMatch(t *testing.T) {
+	store, stub := newStubbedStore(t, respondObject(`"new-etag"`, nil, nil))
+
+	if _, err := store.Put(context.Background(), testKey, IfMatch(""), bodyA, nil); !errors.Is(err, errEmptyETag) {
+		t.Errorf("Put(IfMatch(\"\")) 오류 = %v, want errEmptyETag", err)
+	}
+	if n := stub.count(); n != 0 {
+		t.Errorf("빈 If-Match 로 요청이 %d건 나갔다, want 0", n)
+	}
+}
+
+// 200 인데 ETag 가 없으면 성공으로 보고하지 않는다 — 다음 IfMatch 를 만들 수 없다. 쓰기는 적용됐으므로
+// 「적용되지 않았다」는 센티널도 아니다(새 ETag 를 모른다 — 호출자는 결과 모름과 같이 Head 로 확인한다).
+func TestS3StorePutWithoutETagIsUnknownResult(t *testing.T) {
+	store, stub := newStubbedStore(t, respondObject("", nil, nil))
+
+	_, err := store.Put(context.Background(), testKey, IfAbsent(), bodyA, nil)
+	if err == nil {
+		t.Fatal("ETag 없는 200 을 성공으로 보고했다")
+	}
+	for _, s := range sentinels {
+		if errors.Is(err, s) {
+			t.Errorf("ETag 없는 200 의 오류가 %v 다 — 적용된 쓰기를 적용되지 않았다고 보고한다", s)
+		}
+	}
+	if req := stub.only(t); req.method != http.MethodPut {
+		t.Errorf("요청 = %s, want PUT(보낸 뒤 응답을 판정한다)", req.method)
+	}
+}
+
+// ctx 마감이 지나면 응답을 기다리지 않고 돌아오고, 그 오류는 결과 모름이다 — 센티널이 아니고
+// errors.Is(err, context.DeadlineExceeded) 가 참이다. 세대 규약의 P3 마감(계획 4.5 A1 결정 9)이 이
+// 경로로 끝난다.
+func TestS3StorePutHonorsContextDeadline(t *testing.T) {
+	release := make(chan struct{})
+	store, _ := newStubbedStore(t, func(http.ResponseWriter, *http.Request) { <-release })
+	t.Cleanup(func() { close(release) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.Put(ctx, testKey, IfAbsent(), bodyA, nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("마감 지난 Put 의 오류 = %v, want context.DeadlineExceeded 계열", err)
+		}
+		for _, s := range sentinels {
+			if errors.Is(err, s) {
+				t.Errorf("마감 지난 Put 의 오류가 %v 다 — 결과 모름을 「적용되지 않았다」로 보고한다", s)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ctx 마감이 지났는데 Put 이 돌아오지 않는다")
+	}
+}
+
+// Head 는 HEAD 요청 하나로 ETag 와 메타를 읽는다 — 본문을 받지 않는다(설계 4.4.2 Head/Get 분리). 404 는 부재
+// (Exists 거짓)이고 오류가 아니다. 403 은 부재로 읽지 않는다: s3:ListBucket 권한이 없으면 없는 키에도 403
+// 이 오지만(service/s3 v1.106.3 HeadObject 문서) 있는 키의 권한 오류와 가를 수 없다.
+func TestS3StoreHead(t *testing.T) {
+	cases := []struct {
+		name    string
+		respond http.HandlerFunc
+		want    Stat
+		wantErr bool
+	}{
+		{
+			name:    "200_etag_and_meta",
+			respond: respondObject(`"e1"`, map[string]string{"Pc-Gen": "7", "PC-Pub-Seq": "12"}, nil),
+			want:    Stat{Exists: true, ETag: `"e1"`, Meta: map[string]string{"pc-gen": "7", "pc-pub-seq": "12"}},
+		},
+		{name: "404_absent", respond: respondError(http.StatusNotFound, "NotFound"), want: Stat{}},
+		{name: "403_not_absence", respond: respondError(http.StatusForbidden, "AccessDenied"), wantErr: true},
+		{name: "503_error", respond: respondError(http.StatusServiceUnavailable, "SlowDown"), wantErr: true},
+		{name: "200_without_etag", respond: respondObject("", nil, nil), wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, stub := newStubbedStore(t, tc.respond)
+
+			st, err := store.Head(context.Background(), testKey)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("Head 오류 = %v, want 오류 있음 = %t", err, tc.wantErr)
+			}
+			if !tc.wantErr && !sameStat(st, tc.want) {
+				t.Errorf("Head = %+v, want %+v", st, tc.want)
+			}
+			req := stub.only(t)
+			if req.method != http.MethodHead || req.path != "/"+testBucket+"/"+testKey {
+				t.Errorf("요청 = %s %s, want HEAD /%s/%s", req.method, req.path, testBucket, testKey)
+			}
+		})
+	}
+}
+
+// Get 은 GET 요청 하나로 본문과 그 응답의 ETag 를 읽는다. 키 부재(404 NoSuchKey)는 ErrNotFound, 버킷 부재는 설정
+// 결함이라 ErrNotFound 가 아니다. 되감기 목록 본문은 dvrGetBodyLimit(발행 전 검사 S5 의 상한 + 봉인 줄)까지 받는다 —
+// 상한 크기는 읽고, 한 바이트라도 넘으면 센티널이 아닌 오류다. 200 인데 ETag 가 없으면 오류다 — 읽은 본문에 조건을 걸 수 없다.
+func TestS3StoreGet(t *testing.T) {
+	atLimit := bytes.Repeat([]byte{'x'}, dvrGetBodyLimit)
+	overLimit := bytes.Repeat([]byte{'x'}, dvrGetBodyLimit+1)
+	cases := []struct {
+		name         string
+		respond      http.HandlerFunc
+		want         []byte
+		wantETag     string
+		wantNotFound bool
+		wantErr      bool
+	}{
+		{name: "200_body", respond: respondObject(`"e1"`, nil, bodyA), want: bodyA, wantETag: `"e1"`},
+		{name: "200_body_at_limit", respond: respondObject(`"e1"`, nil, atLimit), want: atLimit, wantETag: `"e1"`},
+		{name: "200_body_over_limit", respond: respondObject(`"e1"`, nil, overLimit), wantErr: true},
+		{name: "200_no_etag", respond: respondObject("", nil, bodyA), wantErr: true},
+		{name: "404_NoSuchKey", respond: respondError(http.StatusNotFound, "NoSuchKey"), wantNotFound: true, wantErr: true},
+		{name: "404_NoSuchBucket", respond: respondError(http.StatusNotFound, "NoSuchBucket"), wantErr: true},
+		{name: "503_error", respond: respondError(http.StatusServiceUnavailable, "SlowDown"), wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, stub := newStubbedStore(t, tc.respond)
+
+			body, etag, err := store.Get(context.Background(), testKey)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("Get 오류 = %v, want 오류 있음 = %t", err, tc.wantErr)
+			}
+			if got := errors.Is(err, ErrNotFound); got != tc.wantNotFound {
+				t.Errorf("errors.Is(%v, ErrNotFound) = %t, want %t", err, got, tc.wantNotFound)
+			}
+			if !bytes.Equal(body, tc.want) {
+				// 상한 크기 본문을 통째로 찍지 않게 앞부분만 싣는다.
+				t.Errorf("Get 본문 = %.64q(%d바이트), want %.64q(%d바이트)", body, len(body), tc.want, len(tc.want))
+			}
+			if etag != tc.wantETag {
+				t.Errorf("Get ETag = %q, want %q", etag, tc.wantETag)
+			}
+			req := stub.only(t)
+			if req.method != http.MethodGet || req.path != "/"+testBucket+"/"+testKey {
+				t.Errorf("요청 = %s %s, want GET /%s/%s", req.method, req.path, testBucket, testKey)
+			}
+		})
+	}
+}
+
+// Get 은 상한을 넘는 순간 읽기를 멈춘다 — 본문 끝을 기다리지 않는다. 흉내 서버는 상한+1 바이트를 보낸 뒤
+// 응답을 붙잡아 둔다: 끝까지 읽고 나서 크기를 재는 구현은 여기서 묶이고, 끝없이 흘리는 저장소에는 메모리를
+// 잡힌다.
+func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
+	release := make(chan struct{})
+	store, _ := newStubbedStore(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", `"e1"`)
+		_, _ = w.Write(bytes.Repeat([]byte{'x'}, dvrGetBodyLimit+1))
+		w.(http.Flusher).Flush()
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := store.Get(context.Background(), testKey)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("상한을 넘는 본문의 Get 이 오류가 아니다")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("상한을 넘겼는데 Get 이 본문 끝을 기다린다 — 상한에서 읽기를 멈추지 않는다")
+	}
+}
+
+// Get 의 본문 상한은 키 축으로 갈린다 — VOD 문서 키는 rewind.MaxVODBodyBytes(설계 D29), 그 밖(되감기 목록)은
+// rewind.MaxBodyBytes 에 봉인 줄(rewind.SealLineBytes)을 더한 값이다 — S5 를 지난 열린 본문을 봉인한 판까지 읽는다. 상한 초과는 errBodyOverLimit 다 — 우리가 쓴 판일 수 없어 감사가 mismatch 로 가른다
+// (보안 M-1). 목록 상한을 VOD 에 쓰면 512KiB 넘는 VOD 의 변조가 읽기 실패로 묻힌다.
+func TestS3StoreGetLimitByAxis(t *testing.T) {
+	dvr, err := manifestKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		key     string
+		size    int
+		wantErr bool
+	}{
+		{name: "DVR_S5_상한", key: dvr, size: rewind.MaxBodyBytes},
+		{name: "DVR_봉인판_상한", key: dvr, size: rewind.MaxBodyBytes + rewind.SealLineBytes},
+		{name: "DVR_초과", key: dvr, size: rewind.MaxBodyBytes + rewind.SealLineBytes + 1, wantErr: true},
+		{name: "VOD_목록_상한_초과", key: vod, size: rewind.MaxBodyBytes + 1},
+		{name: "VOD_상한", key: vod, size: rewind.MaxVODBodyBytes},
+		{name: "VOD_초과", key: vod, size: rewind.MaxVODBodyBytes + 1, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := newStubbedStore(t, respondObject(`"e1"`, nil, bytes.Repeat([]byte{'x'}, tc.size)))
+
+			body, _, err := store.Get(context.Background(), tc.key)
+
+			if tc.wantErr {
+				if !errors.Is(err, errBodyOverLimit) {
+					t.Errorf("Get(%q) %d바이트 오류 = %v, want errBodyOverLimit", tc.key, tc.size, err)
+				}
+				return
+			}
+			if err != nil || len(body) != tc.size {
+				t.Errorf("Get(%q) = %d바이트 · %v, want %d바이트 · nil", tc.key, len(body), err, tc.size)
+			}
+		})
+	}
+}
+
+// hugeChunk 는 거대 오류 본문 흉내 서버가 되풀이해 쓰는 32KiB 조각이다 — 한 번만 할당한다.
+var hugeChunk = bytes.Repeat([]byte{'x'}, 32<<10)
+
+// respondHuge 는 status 와 hugeChunk 를 128번 이은 4MiB 본문(상한 s3errbody.MaxBytes 의 64배)으로 답한다. HEAD 에는 본문이 없다
+// — S3 도 그렇다. 클라이언트가 먼저 닫으면 쓰기를 멈춘다.
+func respondHuge(status int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(status)
+		if r.Method == http.MethodHead {
+			return
+		}
+		for range 128 {
+			if _, err := w.Write(hugeChunk); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// rawBodyCounter 는 SDK 가 확정한 HTTP 클라이언트를 감싸 원 응답 본문에서 읽은 바이트를 센다. 옵션 함수 option 을 s3errbody.Limit
+// 앞에 두면 Limit 의 감싸개 아래(원 본문)에서 잰다.
+type rawBodyCounter struct {
+	next s3.HTTPClient
+	read atomic.Int64
+}
+
+func (c *rawBodyCounter) option(o *s3.Options) {
+	c.next = o.HTTPClient
+	o.HTTPClient = c
+}
+
+func (c *rawBodyCounter) Do(r *http.Request) (*http.Response, error) {
+	resp, err := c.next.Do(r)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	resp.Body = &countedBody{ReadCloser: resp.Body, read: &c.read}
+	return resp, nil
+}
+
+// countedBody 는 Read 한 바이트를 read 에 더하는 응답 본문이다.
+type countedBody struct {
+	io.ReadCloser
+	read *atomic.Int64
+}
+
+func (b *countedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.read.Add(int64(n))
+	return n, err
+}
+
+// D7 · D8 — 조립점처럼 s3errbody.Limit 을 붙인 클라이언트에서 상한을 넘는 오류 본문은 상한까지만 읽히고(오류 문장에
+// ErrTooLarge), 상태 코드 센티널(412 · 409 · 404)은 그대로다. 거대 본문의 404 는 코드를 잃어 키 부재(ErrNotFound)로 읽힌다(수용 —
+// 실 S3 의 NoSuchBucket 본문은 상한의 백분의 일). 403 · 500 은 센티널이 아니고 ErrTooLarge 를 errors.Is 로 볼 수 있다. 시도는
+// 한 번이다.
+func TestS3StoreKeepsClassOnHugeErrorBody(t *testing.T) {
+	cases := []struct {
+		name   string
+		get    bool
+		status int
+		// want 는 errors.Is 가 참이어야 할 센티널이다. nil 이면 어느 센티널도 아니고 ErrTooLarge 가 errors.Is 로 보여야 한다.
+		want error
+	}{
+		{name: "PUT_412", status: http.StatusPreconditionFailed, want: ErrPreconditionFailed},
+		{name: "PUT_409", status: http.StatusConflict, want: ErrConflict},
+		{name: "GET_404", get: true, status: http.StatusNotFound, want: ErrNotFound},
+		{name: "GET_403", get: true, status: http.StatusForbidden},
+		{name: "GET_500", get: true, status: http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw rawBodyCounter
+			store, stub := newStubbedStore(t, respondHuge(tc.status), raw.option, s3errbody.Limit)
+
+			var err error
+			if tc.get {
+				_, _, err = store.Get(context.Background(), testKey)
+			} else {
+				_, err = store.Put(context.Background(), testKey, IfMatch(`"prev-etag"`), bodyA, nil)
+			}
+			if err == nil {
+				t.Fatalf("거대 본문 %d 응답에 오류가 없다", tc.status)
+			}
+			for _, s := range sentinels {
+				if got, want := errors.Is(err, s), s == tc.want; got != want {
+					t.Errorf("errors.Is(%v, %v) = %t, want %t", err, s, got, want)
+				}
+			}
+			// 센티널 갈래는 원 오류를 문장으로만 싣는다(storeError) — 상한이 실제로 작동했는지는 문장으로 본다.
+			if !strings.Contains(err.Error(), s3errbody.ErrTooLarge.Error()) {
+				t.Errorf("오류 %q 에 %q 가 없다 — 상한이 작동하지 않았다", err, s3errbody.ErrTooLarge)
+			}
+			if tc.want == nil && !errors.Is(err, s3errbody.ErrTooLarge) {
+				t.Errorf("errors.Is(%v, ErrTooLarge) = false, want true", err)
+			}
+			if n := raw.read.Load(); n > s3errbody.MaxBytes+1 {
+				t.Errorf("원 본문에서 %d바이트 읽음, want %d 이하", n, s3errbody.MaxBytes+1)
+			}
+			stub.only(t)
+		})
+	}
+}
+
+// D7 · D1 — s3errbody.Limit 을 붙여도 상한 아래의 오류 본문과 2xx 본문, HEAD 의 판정은 그대로다: 작은 404 NoSuchBucket 은 코드가
+// 남아 ErrNotFound 가 아니고, HEAD 404 는 부재이며, 상한보다 큰 2xx GET 본문(100KiB)은 바이트 그대로 읽힌다.
+func TestS3StoreWithLimitKeepsSmallErrorsAndSuccessBodies(t *testing.T) {
+	t.Run("GET_404_NoSuchBucket", func(t *testing.T) {
+		store, stub := newStubbedStore(t, respondError(http.StatusNotFound, "NoSuchBucket"), s3errbody.Limit)
+
+		_, _, err := store.Get(context.Background(), testKey)
+
+		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, s3errbody.ErrTooLarge) {
+			t.Errorf("Get(404 NoSuchBucket) 오류 = %v, want ErrNotFound · ErrTooLarge 아닌 오류", err)
+		}
+		stub.only(t)
+	})
+	t.Run("HEAD_404_absent", func(t *testing.T) {
+		// HEAD 라 본문이 없다 — 거대 본문 서버여도 작은 404 와 같은 시험이다.
+		store, stub := newStubbedStore(t, respondHuge(http.StatusNotFound), s3errbody.Limit)
+
+		st, err := store.Head(context.Background(), testKey)
+
+		if err != nil || !sameStat(st, Stat{}) {
+			t.Errorf("Head(404) = %+v · %v, want 부재 · nil", st, err)
+		}
+		stub.only(t)
+	})
+	t.Run("GET_200_100KiB", func(t *testing.T) {
+		want := bytes.Repeat([]byte("0123456789abcdef"), 100<<10/16)
+		store, stub := newStubbedStore(t, respondObject(`"e1"`, nil, want), s3errbody.Limit)
+
+		got, _, err := store.Get(context.Background(), testKey)
+
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("Get(200) = %d바이트 · %v, want %d바이트 그대로 · nil", len(got), err, len(want))
+		}
+		stub.only(t)
+	})
+}

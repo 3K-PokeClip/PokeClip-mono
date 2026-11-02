@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# 계약 시험(ingest_auth_contract.sh) 전용 저널 이음매 — 로컬 엔진에는 journald
+# 가 없어, IP 한도 전환 스크립트가 부르는 꼴
+# `journalctl -t <태그> CONTAINER_ID_FULL=<id> -q --no-pager -o cat` 을 그
+# 컨테이너의 `docker logs <id>` 로 바꿔 낸다(컨테이너 ID 로 거르는 것은 같다).
+# 그 밖의 꼴은 종료 2.
+
+set -euo pipefail
+
+main() {
+  if (( $# != 7 )) || [[ "$1" != -t || -z "$2" \
+    || "$3" != CONTAINER_ID_FULL=?* \
+    || "$4 $5 $6 $7" != '-q --no-pager -o cat' ]]; then
+    printf '저널 이음매: 모르는 호출\n' >&2
+    exit 2
+  fi
+  exec docker logs "${3#*=}" 2>&1
+}
+
+main "$@"

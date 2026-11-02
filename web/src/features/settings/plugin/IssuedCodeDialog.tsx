@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, TriangleAlert } from 'lucide-react';
 import { Button, Dialog, IconButton, VisuallyHidden } from '@/ui';
+import { REPLAY_BLOCK_CLASS } from '@/lib/analytics';
 import type { DisplayedPairingCode } from './useStreamKeyState';
 import { useCountdown } from './useCountdown';
 import styles from './PluginSettingsScreen.module.css';
@@ -77,7 +78,8 @@ export function IssuedCodeDialog({
             <Dialog.Title>연동 코드가 발급되었어요</Dialog.Title>
             <Dialog.Description>OBS 플러그인 설정에 아래 코드를 입력하세요.</Dialog.Description>
             <div className={styles.issueCodeBox}>
-              <span className={styles.issueCode}>{issued.code}</span>
+              {/* 페어링 코드는 세션 녹화에서 통째로 뺀다 — 자릿수도 남기지 않는다 (POK-358) */}
+              <span className={`${styles.issueCode} ${REPLAY_BLOCK_CLASS}`}>{issued.code}</span>
               <div className={styles.issueCopyWrap} data-copied={copied || undefined}>
                 {copied ? (
                   <span className={styles.issueCopiedTip} aria-hidden>

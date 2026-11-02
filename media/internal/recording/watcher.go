@@ -138,6 +138,13 @@ func NewWatcher(opt WatcherOptions) (*Watcher, error) {
 	}, nil
 }
 
+// Close 는 fsnotify 핸들을 닫는다. **Start 가 실패한 뒤의 정리 전용**이다(f6i — 강등이
+// fd·inotify 인스턴스를 누수하면 재시도가 곧 자원 고갈이다). Start 가 성공한 뒤에는
+// 부르지 않는다 — 그때의 소유자는 eventLoop(defer fsw.Close)다.
+func (w *Watcher) Close() error {
+	return w.fsw.Close()
+}
+
 // Start 는 동기다. 반환된 시점에는 감시 등록이 이미 끝나 있으므로,
 // 이후 생성되는 파일은 유실되지 않는다. "walk 종료 - watch 등록" 공백이 구조적으로 없다.
 func (w *Watcher) Start(ctx context.Context) error {

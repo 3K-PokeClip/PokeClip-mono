@@ -1,0 +1,664 @@
+package upload
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"maps"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
+)
+
+// 축 파라미터화(POK-195 M3 단계 5 · 설계 5.5.4)의 게이트 T1·T2·T3·T5·T6·T9 다.
+//
+// ② 아카이브 축의 거동은 기존 파일들(worker_test·sweep_test·upload_test·guard_test)이
+// 그대로 잰다 — 이 파일은 **축이 늘어도 ② 가 변하지 않는다**와 **다른 축이 ② 로 새지 않는다**
+// 두 가지만 본다.
+
+// initKeyOf 는 설계 5.2 의 init 키를 생산자 쪽 함수로 만든다.
+// 검사기(initKeyRe)와 생산자(playback.InitKey)는 서로를 모르는 두 구현이라,
+// 둘이 같은 형상을 말하는지는 이렇게 맞대 봐야 드러난다(worker.go 의 s3KeyRe 주석
+// "재계산해 비교하지는 않는다"는 런타임 경로의 규약이고, 테스트가 두 구현의 합치를
+// 재는 것은 그 규약과 다른 축이다).
+func initKeyOf(t *testing.T, streamID, sessionID string) string {
+	t.Helper()
+	k, err := playback.InitKey(streamID, sessionID)
+	if err != nil {
+		t.Fatalf("playback.InitKey(%q, %q) 실패: %v", streamID, sessionID, err)
+	}
+	return k
+}
+
+func segKeyOf(t *testing.T, streamID string, seq int64) string {
+	t.Helper()
+	k, err := playback.SegKey(streamID, seq)
+	if err != nil {
+		t.Fatalf("playback.SegKey(%q, %d) 실패: %v", streamID, seq, err)
+	}
+	return k
+}
+
+// axisTarget 은 축만 다른 접수용 대상이다. 게이트 판정에는 키·파일이 필요 없다
+// (검증은 워커의 [0] 단계이고, 접수 게이트는 키를 보지 않는다).
+func axisTarget(a index.Axis, streamID string, seq int64, sessionID string) index.UploadTarget {
+	return index.UploadTarget{
+		StreamID: streamID, Axis: a, Seq: seq, SessionID: sessionID, Bytes: 1,
+	}
+}
+
+// newGateUploader 는 워커·스위퍼 고루틴 없이 접수 게이트만 도는 업로더다.
+// 소비자가 없어야 "무엇이 큐에 들어갔는가"가 스케줄러에 흔들리지 않는다.
+func newGateUploader(t *testing.T) *Uploader {
+	t.Helper()
+	root, dir := newRoot(t)
+	opt := DefaultOptions(root, dir)
+	opt.SweepEvery = time.Hour
+	u := New(&fakeUploadStore{}, &fakePutter{}, opt, newLogCapture().logger())
+	u.armForSweepTest()
+	return u
+}
+
+// T9 — 작업 키는 (streamID, axis, seq, sessionID) 이고 생성 경로는 하나다(설계 5.5.2).
+//
+// 잡는 결함 둘: ⑴ 축이 키에 안 실리면 ② 와 ③ 가 같은 in-flight 자리를 다퉈 한쪽이
+// 통째로 누락된다 ⑵ ②·③ 가 sessionID 로 갈리면 같은 행이 게이트에서 두 자리를 차지해
+// 백오프·격리가 반쪽만 걸린다.
+func TestJobKeyIsAxisScoped(t *testing.T) {
+	t.Run("같은_stream_seq_라도_축이_다르면_다른_키다", func(t *testing.T) {
+		u := newGateUploader(t)
+		for _, a := range []index.Axis{index.AxisArchive, index.AxisPlayback, index.AxisInit} {
+			if got := u.enqueue(axisTarget(a, "demo", 7, "S-1"), OriginLive); got != EnqueueAdmitted {
+				t.Fatalf("%s 축 접수 = %v, want admitted — 축이 키에 실리지 않아 in-flight 가 겹쳤다", a, got)
+			}
+		}
+	})
+
+	t.Run("init_은_세션마다_다른_키다", func(t *testing.T) {
+		u := newGateUploader(t)
+		if got := u.enqueue(axisTarget(index.AxisInit, "demo", 0, "S-1"), OriginLive); got != EnqueueAdmitted {
+			t.Fatalf("첫 세션 접수 = %v, want admitted", got)
+		}
+		if got := u.enqueue(axisTarget(index.AxisInit, "demo", 0, "S-2"), OriginLive); got != EnqueueAdmitted {
+			t.Fatalf("둘째 세션 접수 = %v, want admitted — init 의 유일성 축은 sessionID 다", got)
+		}
+		if got := u.enqueue(axisTarget(index.AxisInit, "demo", 0, "S-1"), OriginLive); got != EnqueueRejected {
+			t.Fatalf("같은 세션 재접수 = %v, want rejected — in-flight 가 잡혀 있어야 한다", got)
+		}
+	})
+
+	t.Run("init_키는_사용하지_않는_Seq_로_갈리지_않는다", func(t *testing.T) {
+		// 잡는 결함: init 축에서 Seq 는 쓰지 않는 필드인데(설계 5.5.2 · 계획 4.5) 키에 들면
+		// 같은 세션의 init 이 Seq 값만 달라도 다른 작업으로 인정된다 — in-flight·백오프·격리를
+		// 통째로 우회해 같은 init 객체가 중복 PUT 된다.
+		u := newGateUploader(t)
+		if got := u.enqueue(axisTarget(index.AxisInit, "demo", 0, "S-1"), OriginLive); got != EnqueueAdmitted {
+			t.Fatalf("Seq=0 접수 = %v, want admitted", got)
+		}
+		if got := u.enqueue(axisTarget(index.AxisInit, "demo", 1, "S-1"), OriginLive); got != EnqueueRejected {
+			t.Fatalf("Seq=1 접수 = %v, want rejected — 같은 세션이면 Seq 와 무관하게 같은 작업이다", got)
+		}
+	})
+
+	t.Run("아카이브_키는_sessionID_로_갈리지_않는다", func(t *testing.T) {
+		u := newGateUploader(t)
+		if got := u.enqueue(axisTarget(index.AxisArchive, "demo", 7, ""), OriginLive); got != EnqueueAdmitted {
+			t.Fatalf("첫 접수 = %v, want admitted", got)
+		}
+		if got := u.enqueue(axisTarget(index.AxisArchive, "demo", 7, "S-1"), OriginLive); got != EnqueueRejected {
+			t.Fatalf("세션을 실은 같은 행 접수 = %v, want rejected — ②·③ 의 키에 세션은 들지 않는다", got)
+		}
+	})
+}
+
+// T2 — 격리는 축 안에서만 돈다.
+//
+// 잡는 결함: ② 의 영구 격리(worker.go 의 processTarget 에서 validateTarget 실패 시 quarantine)가
+// 축을 안 가리면 같은 seq 의 ③·init 이 프로세스 수명 동안 통째로 사라진다.
+// 격리는 되돌릴 수 없어 관측조차 되지 않는다.
+func TestQuarantineIsPerAxis(t *testing.T) {
+	u := newGateUploader(t)
+	u.gate.quarantine(targetKeyOf(axisTarget(index.AxisArchive, "demo", 7, "")))
+
+	if got := u.enqueue(axisTarget(index.AxisArchive, "demo", 7, ""), OriginLive); got != EnqueueRejected {
+		t.Fatalf("② 접수 = %v, want rejected — 격리된 축이다", got)
+	}
+	for _, a := range []index.Axis{index.AxisPlayback, index.AxisInit} {
+		if got := u.enqueue(axisTarget(a, "demo", 7, "S-1"), OriginLive); got != EnqueueAdmitted {
+			t.Fatalf("%s 축 접수 = %v, want admitted — 다른 축의 격리에 걸리면 안 된다", a, got)
+		}
+	}
+}
+
+// T6 — 백오프도 축 안에서만 돈다.
+//
+// 잡는 결함: ② 의 실패 간격이 ③·init 을 함께 밀면, 아카이브가 아픈 동안 되감기 축이
+// 이유 없이 30분까지 정지한다(설계 5.5.4 #1 "②·③가 백오프·격리 공유").
+func TestBackoffIsPerAxis(t *testing.T) {
+	u := newGateUploader(t)
+	u.gate.registerFailure(targetKeyOf(axisTarget(index.AxisArchive, "demo", 7, "")))
+
+	if got := u.enqueue(axisTarget(index.AxisArchive, "demo", 7, ""), OriginLive); got != EnqueueRejected {
+		t.Fatalf("② 접수 = %v, want rejected — 백오프 중이다", got)
+	}
+	for _, a := range []index.Axis{index.AxisPlayback, index.AxisInit} {
+		if got := u.enqueue(axisTarget(a, "demo", 7, "S-1"), OriginLive); got != EnqueueAdmitted {
+			t.Fatalf("%s 축 접수 = %v, want admitted — 다른 축의 백오프에 걸리면 안 된다", a, got)
+		}
+	}
+}
+
+// T3 — in-flight 도 축 안에서만 돈다(중복 접수 방지는 축마다 독립이다).
+func TestInflightIsPerAxis(t *testing.T) {
+	u := newGateUploader(t)
+	if got := u.enqueue(axisTarget(index.AxisPlayback, "demo", 7, ""), OriginLive); got != EnqueueAdmitted {
+		t.Fatalf("③ 첫 접수 = %v, want admitted", got)
+	}
+	if got := u.enqueue(axisTarget(index.AxisPlayback, "demo", 7, ""), OriginLive); got != EnqueueRejected {
+		t.Fatalf("③ 재접수 = %v, want rejected — 같은 축·같은 행은 한 번만 든다", got)
+	}
+	if got := u.enqueue(axisTarget(index.AxisArchive, "demo", 7, ""), OriginLive); got != EnqueueAdmitted {
+		t.Fatalf("② 접수 = %v, want admitted — ③ 가 처리 중이어도 ② 는 독립이다", got)
+	}
+}
+
+// T1 — 브레이커는 축별 3개다(설계 5.5.3 확정).
+//
+// 잡는 결함: ② 의 하드 실패 폭풍이 브레이커를 열 때 되감기·init 축까지 함께 멈추면
+// "②의 폭풍이 ③를 세우지 않는다"는 계약이 깨진다.
+func TestCircuitBreakerIsPerAxis(t *testing.T) {
+	t.Run("한_축의_하드_실패_연속은_그_축만_연다", func(t *testing.T) {
+		u := newGateUploader(t)
+		for i := 0; i < u.opt.CircuitMax; i++ {
+			u.brk.of(index.AxisArchive).record(outcomeHard, errors.New("403"))
+		}
+
+		if got := u.enqueue(axisTarget(index.AxisArchive, "demo", 7, ""), OriginLive); got != EnqueueRejected {
+			t.Fatalf("② 접수 = %v, want rejected — 그 축의 브레이커가 열렸다", got)
+		}
+		for _, a := range []index.Axis{index.AxisPlayback, index.AxisInit} {
+			if got := u.enqueue(axisTarget(a, "demo", 7, "S-1"), OriginLive); got != EnqueueAdmitted {
+				t.Fatalf("%s 축 접수 = %v, want admitted — 다른 축의 폭풍에 멈추면 안 된다", a, got)
+			}
+		}
+	})
+
+	t.Run("OpenCircuit_은_축_인자_없이_3축_전부를_연다", func(t *testing.T) {
+		u := newGateUploader(t)
+		u.OpenCircuit("no_credentials")
+
+		for _, a := range []index.Axis{index.AxisArchive, index.AxisPlayback, index.AxisInit} {
+			if got := u.enqueue(axisTarget(a, "demo", 7, "S-1"), OriginLive); got != EnqueueRejected {
+				t.Fatalf("%s 축 접수 = %v, want rejected — 자격증명 부재는 축과 무관한 사정이다", a, got)
+			}
+		}
+	})
+}
+
+// 축 미판정 대상은 접수 단계에서 거부한다 — 브레이커를 고를 수 없으니 게이트가 성립하지 않는다.
+func TestEnqueueRefusesUnknownAxis(t *testing.T) {
+	u := newGateUploader(t)
+	if got := u.enqueue(index.UploadTarget{StreamID: "demo", Seq: 7, Bytes: 1}, OriginLive); got != EnqueueRejected {
+		t.Fatalf("접수 = %v, want rejected — 영값 축은 fail-closed 다", got)
+	}
+	if len(u.queue) != 0 {
+		t.Fatalf("큐 길이 = %d, want 0 — 축을 모르는 작업이 큐에 들면 안 된다", len(u.queue))
+	}
+}
+
+// init 축은 Result 를 보내지 않는다(계획 4.5 · upload.go:65-71 Result 계약).
+//
+// 잡는 결함: init 이 바꾸는 장부는 stream_sessions 이고 세그먼트 커서가 아니다.
+// 통지하면 main.go 를 지나 indexer 가 **seq=0 꼬리**(= 모든 스트림의 첫 조각)의 UploadState 를
+// 뒤집어 correctTail 위양성·duration 교정 차단·PDT 누적 오염을 낳는다.
+// 구조 강제라 함수 머리에서 축을 본다 — 호출부 열거로 막지 않는다.
+func TestOnlyArchiveAxisSendsResult(t *testing.T) {
+	cases := []struct {
+		name string
+		axis index.Axis
+		want int
+	}{
+		{"아카이브는_통지한다", index.AxisArchive, 1},
+		{"재생축은_통지하지_않는다", index.AxisPlayback, 0},
+		{"init축은_통지하지_않는다", index.AxisInit, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u := newGateUploader(t)
+			u.sendResult(job{target: axisTarget(c.axis, "demo", 0, "S-1")}, index.UploadStateUploaded)
+			if got := len(u.results); got != c.want {
+				t.Fatalf("Result = %d건, want %d건", got, c.want)
+			}
+		})
+	}
+}
+
+// initJobTarget 은 실물 파일이 있는 init 축 대상이다.
+func initJobTarget(t *testing.T, dir, streamID, sessionID, file string, bytes int64) index.UploadTarget {
+	t.Helper()
+	return index.UploadTarget{
+		StreamID: streamID, Axis: index.AxisInit, SessionID: sessionID,
+		S3Key:     initKeyOf(t, streamID, sessionID),
+		LocalPath: writeSegment(t, dir, streamID, file, int(bytes)),
+		Bytes:     bytes,
+	}
+}
+
+// init 축의 성공 마킹은 세션 장부의 첫 init CAS 다(설계 5.5.5 셋째 문장 · 계획 2.1 planMark).
+// 잡는 결함 둘: ⑴ init 결과가 ② 의 CAS(markUploadedSQL)로 새어 아카이브 열을 바꾼다
+// ⑵ 산출 init 이 아닌 값(입력 파일 바이트)의 해시가 기록돼 5.3ⓑ 동일성 축이 항진식이 된다.
+func TestInitSuccessMarksSessionLedgerNotArchive(t *testing.T) {
+	st := &fakeUploadStore{}
+	put := &fakePutter{}
+	prod := &fakeProducer{}
+	u, cap, dir, _ := newPlaybackUploader(t, st, put, prod, nil)
+	target := initJobTarget(t, dir, "demo", "S-20260901-0001", "init.mp4", 64)
+
+	if got := runTarget(t, u, target); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+
+	calls := put.putCalls()
+	if len(calls) != 1 || calls[0].key != target.S3Key || string(calls[0].body) != string(fakeInit) {
+		t.Fatalf("PUT = %+v, want 1회 key %q · 산출 init 바이트", calls, target.S3Key)
+	}
+	want := initMarkCall{sessionID: "S-20260901-0001", sha256: fakeInitSHA(), s3Key: target.S3Key, bytes: int64(len(fakeInit))}
+	if got := st.initCalls(); len(got) != 1 || !sameInitCall(got[0], want) {
+		t.Fatalf("MarkInitUploaded = %+v, want 1회 %+v", got, want)
+	}
+	if uploaded, failed := st.markCalls(); len(uploaded) != 0 || len(failed) != 0 {
+		t.Errorf("② 마킹 = uploaded %d·failed %d회, want 0회 — init 은 세그먼트 열을 바꾸지 않는다",
+			len(uploaded), len(failed))
+	}
+	if len(u.results) != 0 {
+		t.Errorf("Result = %d건, want 0건 — Result 는 ② 전용이다", len(u.results))
+	}
+}
+
+// ③ 축의 성공 마킹은 ③ CAS 다(설계 5.5.5 첫 문장). 잡는 결함: 기본 갈래가 ② 로 열려 있으면
+// ③ 결과가 ② 의 CAS 로 흘러 아카이브 열을 바꾼다 — ③ 의 바이트 수(산출 길이)는 ② 의
+// 크기 앵커와도 달라 그 CAS 는 영원히 0행이다.
+func TestPlaybackSuccessMarksPlaybackLedgerNotArchive(t *testing.T) {
+	st := &fakeUploadStore{}
+	u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+	target := playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg.mp4", 64), 64)
+	target.ExpectedInitSHA = fakeInitSHA()
+
+	if got := runLive(u, target); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+	marked, failed := st.playbackCalls()
+	if len(marked) != 1 || marked[0] != (playbackMarkCall{"demo", 7, int64(len(fakeSeg))}) || len(failed) != 0 {
+		t.Errorf("③ 마킹 = uploaded %+v · failed %+v, want uploaded 1회 {demo 7 %d}", marked, failed, len(fakeSeg))
+	}
+	if uploaded, failed := st.markCalls(); len(uploaded) != 0 || len(failed) != 0 {
+		t.Errorf("② 마킹 = uploaded %d·failed %d회, want 0회", len(uploaded), len(failed))
+	}
+	if len(u.results) != 0 {
+		t.Errorf("Result = %d건, want 0건 — Result 는 ② 전용이다", len(u.results))
+	}
+}
+
+// 마킹의 기본 갈래는 거부다(planMark — 계획 4.5). 모르는 축의 결과는 어느 장부 CAS 로도 흘려보내지
+// 않는다. [0] 과 접수 게이트가 먼저 거르지만 마킹 자리도 스스로 막는다 — 잡는 결함: 기본 갈래가
+// ② 로 열리면 판정 순서가 바뀌는 날 모르는 축의 결과가 아카이브 열을 바꾼다.
+func TestMarkingRefusesUnknownAxis(t *testing.T) {
+	st := &fakeUploadStore{}
+	u, cap, _ := newWorkerUploader(t, st, &fakePutter{}, nil)
+	j := job{target: index.UploadTarget{StreamID: "demo", Seq: 7, SessionID: "S-1", Bytes: 64}}
+
+	if ok, _ := u.markUploadedByAxis(j, payload{size: 64}, u.log); ok {
+		t.Error("성공 마킹이 이어갔다 — 모르는 축은 거부한다")
+	}
+	if u.markFailedByAxis(j, playbackReasonUploadFailed, u.log) {
+		t.Error("실패 마킹이 이어갔다 — 모르는 축은 거부한다")
+	}
+	uploaded, failed := st.markCalls()
+	pMarked, pFailed := st.playbackCalls()
+	if n := len(uploaded) + len(failed) + len(pMarked) + len(pFailed) + len(st.initCalls()); n != 0 {
+		t.Errorf("장부 CAS = %d회, want 0회", n)
+	}
+	if n := cap.count("upload_mark_unsupported"); n != 2 {
+		t.Errorf("upload_mark_unsupported = %d건, want 2건", n)
+	}
+}
+
+// init 축의 **실패**는 CAS 가 없다(설계 5.5.5 는 init 에 성공 CAS 한 문장만 정의한다).
+// 마킹을 건너뛰고 격리·브레이커만 남긴다 — 실패 상태 컬럼을 새로 만들지 않는다.
+func TestInitFailureSkipsMarkingButStillQuarantines(t *testing.T) {
+	st := &fakeUploadStore{}
+	u, cap, dir := newWorkerUploader(t, st, &fakePutter{}, nil)
+	target := initJobTarget(t, dir, "demo", "S-20260901-0002", "init.mp4", 64)
+	if err := os.Remove(target.LocalPath); err != nil {
+		t.Fatalf("실물 제거 실패: %v", err)
+	}
+
+	if got := runTarget(t, u, target); got != outcomeSoft {
+		t.Errorf("outcome = %v, want soft — 실패로는 세되 장부는 안 바꾼다", got)
+	}
+	if _, failed := st.markCalls(); len(failed) != 0 {
+		t.Errorf("MarkFailed = %d회, want 0회 — init 에는 실패 CAS 가 없다", len(failed))
+	}
+	if len(u.results) != 0 {
+		t.Errorf("Result = %d건, want 0건", len(u.results))
+	}
+	if !u.gate.quarantined(targetKeyOf(target)) {
+		t.Error("격리되지 않았다 — 없는 파일은 다음 회차에도 없다")
+	}
+	if len(cap.find("upload_mark_unsupported")) != 0 {
+		t.Error("upload_mark_unsupported 가 났다 — 실패 마킹의 init 갈래는 거부가 아니라 생략이다")
+	}
+}
+
+// ② 경로 바이트 동일성 — 축이 늘어도 아카이브 경로의 키·바이트·마킹·통지가 그대로여야 한다.
+// 축 파라미터화가 건드릴 수 있는 네 지점을 한 번에 못 박는다.
+func TestArchivePathIsUnchangedByAxisParameterization(t *testing.T) {
+	st := &fakeUploadStore{}
+	put := &fakePutter{}
+	u, _, dir := newWorkerUploader(t, st, put, nil)
+	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+	target := newTarget("demo", 7, path, 128, false)
+
+	if got := runTarget(t, u, target); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success", got)
+	}
+
+	calls := put.putCalls()
+	if len(calls) != 1 {
+		t.Fatalf("PUT = %d회, want 1회", len(calls))
+	}
+	if calls[0].key != index.S3Key("demo", 7, fixtureWall) {
+		t.Errorf("PUT 키 = %q, want 예약 키 그대로", calls[0].key)
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("실물 읽기 실패: %v", err)
+	}
+	if !bytes.Equal(calls[0].body, want) {
+		t.Errorf("PUT 바이트가 실물과 다르다 (%d != %d 바이트)", len(calls[0].body), len(want))
+	}
+
+	uploaded, _ := st.markCalls()
+	if len(uploaded) != 1 || uploaded[0] != (markCall{"demo", 7, 128}) {
+		t.Errorf("MarkUploaded = %v, want 1회 {demo 7 128}", uploaded)
+	}
+	if len(u.results) != 1 {
+		t.Fatalf("Result = %d건, want 1건", len(u.results))
+	}
+	if got := <-u.results; got != (Result{StreamID: "demo", Seq: 7, State: index.UploadStateUploaded}) {
+		t.Errorf("Result = %+v, want {demo 7 uploaded}", got)
+	}
+}
+
+// 스위퍼 회차 로그는 축마다 그 축의 라벨과 그 축의 수치를 함께 싣는다(설계 5.5.4 #7·#8).
+//
+// 잡는 결함 둘: ⑴ 라벨과 잔량 집계가 서로 다른 축을 가리키면 ③ 의 잔량이 ② 의 것으로 읽혀 어느
+// 축이 막혔는지 모른다(#7 「축 라벨은 수치와 함께 갈려야 한다」) ⑵ 회차 ID 를 축마다 올리면 한
+// tick 이 세 회차로 세어져 ② 의 회차 계수(AC4 r1−r0)가 부푼다.
+func TestSweepRoundLogsCarryEachAxisLabelWithItsOwnCounts(t *testing.T) {
+	counts := map[index.Axis][3]int64{ // 축마다 다른 (pending, failed, bytes_null)
+		index.AxisArchive:  {31, 1, 0},
+		index.AxisPlayback: {40, 2, 3},
+		index.AxisInit:     {5, 0, 1},
+	}
+	st := &fakeUploadStore{onBacklog: func(_ context.Context, a index.Axis) (int64, int64, int64, error) {
+		c := counts[a]
+		return c[0], c[1], c[2], nil
+	}}
+	// 임계를 음수로 두어 잔량이 얼마든 upload_backlog 가 나오게 한다 — 수치를 읽기 위해서다.
+	u, cap := newSweepUploader(t, st, func(o *Options) { o.BacklogWarn = -1 })
+
+	u.sweepOnce(context.Background(), nil)
+
+	backlog := cap.find("upload_backlog")
+	got := map[any][3]int64{}
+	for _, rec := range backlog {
+		got[rec.attrs["axis"]] = [3]int64{rec.attrs["pending"].(int64), rec.attrs["failed"].(int64), rec.attrs["bytes_null"].(int64)}
+	}
+	want := map[any][3]int64{"archive": {31, 1, 0}, "playback": {40, 2, 3}, "init": {5, 0, 1}}
+	if len(backlog) != 3 || !maps.Equal(got, want) {
+		t.Errorf("upload_backlog %d건 · 라벨별 (pending, failed, bytes_null) = %v, want 3건 %v", len(backlog), got, want)
+	}
+
+	summaries := map[any]int{}
+	for _, rec := range cap.find("upload_sweep") {
+		summaries[rec.attrs["axis"]]++
+	}
+	if want := (map[any]int{"archive": 2, "playback": 2, "init": 2}); !maps.Equal(summaries, want) {
+		t.Errorf("upload_sweep 라벨별 건수 = %v, want %v — 축마다 1·2단계 요약", summaries, want)
+	}
+
+	if u.sweepRound != 1 {
+		t.Errorf("sweepRound = %d, want 1 — 한 회차의 세 축은 회차 ID 하나를 함께 쓴다", u.sweepRound)
+	}
+	for _, name := range []string{"upload_sweep", "upload_backlog"} {
+		for _, rec := range cap.find(name) {
+			if rec.attrs["sweep_round"] != uint64(1) {
+				t.Errorf("%s(axis=%v) sweep_round = %v, want 1", name, rec.attrs["axis"], rec.attrs["sweep_round"])
+			}
+		}
+	}
+}
+
+// T5 — 축마다 키 문법이 다르다.
+//
+// 잡는 결함: 검사기가 ② 문법 하나뿐이면 ③·init 키가 `bad_key` 로 판정돼
+// worker.go 의 processTarget 이 validateTarget 실패 시 하는 **되돌릴 수 없는 격리**에
+// 걸린다(설계 5.5.4 #3 "왜 막히나").
+// 반대 방향도 함께 못 박는다 — 축을 바꿔 낸 키는 통과하면 안 된다.
+func TestKeyGrammarIsPerAxis(t *testing.T) {
+	u, cap, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
+	local := writeSegment(t, dir, "demo", "seg.mp4", 64)
+	const session = "S-20260901-0001"
+
+	cases := []struct {
+		name   string
+		target index.UploadTarget
+		reason string // "" 이면 통과해야 한다
+	}{
+		{"아카이브_축은_기존_문법_그대로", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 7,
+			S3Key: index.S3Key("demo", 7, fixtureWall), LocalPath: local, Bytes: 64}, ""},
+		{"재생_축은_dvr_seg_문법", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: session,
+			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, ""},
+		{"init_축은_dvr_init_문법", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
+			S3Key: initKeyOf(t, "demo", session), LocalPath: local, Bytes: 64}, ""},
+		{"init_축_리터럴_형상", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
+			S3Key: "dvr/demo/init/" + session + ".mp4", LocalPath: local, Bytes: 64}, ""},
+
+		{"아카이브_축에_재생_키", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 7,
+			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, "bad_key"},
+		{"재생_축에_아카이브_키", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7,
+			S3Key: index.S3Key("demo", 7, fixtureWall), LocalPath: local, Bytes: 64}, "bad_key"},
+		{"init_축에_아카이브_키", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
+			S3Key: index.S3Key("demo", 7, fixtureWall), LocalPath: local, Bytes: 64}, "bad_key"},
+		{"init_축에_재생_키", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
+			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, "bad_key"},
+		{"키의_stream_이_다르면_축과_무관하게_거부", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
+			S3Key: initKeyOf(t, "other", session), LocalPath: local, Bytes: 64}, "bad_key"},
+
+		// 세션 성분은 생산자(playback.InitKey)가 낼 수 있는 집합만 받는다.
+		// `.`·`..` 는 경로 참조라 URL 을 깨고, 점을 품은 성분은 회부 ① 확정 문법
+		// (S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq}, streamID 는 [A-Za-z0-9_-]{1,64})에서
+		// 나올 수 없다 — 좁혀도 정상 대상이 격리되지 않는다.
+		{"init_세션_성분이_현재_경로_참조", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: ".",
+			S3Key: "dvr/demo/init/..mp4", LocalPath: local, Bytes: 64}, "bad_key"},
+		{"init_세션_성분이_상위_경로_참조", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: "..",
+			S3Key: "dvr/demo/init/...mp4", LocalPath: local, Bytes: 64}, "bad_key"},
+		{"init_세션_성분에_점", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: "a.b",
+			S3Key: "dvr/demo/init/a.b.mp4", LocalPath: local, Bytes: 64}, "bad_key"},
+
+		// ③ 은 세션 없이는 기대 init 도 보정값 표도 찾을 수 없고 불일치를 세션에 결속할 수도 없다.
+		// 세션 없는 조각의 ③ 은 애초에 만들지 않으므로(계획 2.1) 여기 온 것은 호출자 결함이다 —
+		// 보류 목록에서 조용히 썩게 두지 않고 드러낸다.
+		{"재생_축은_세션이_있어야_한다", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7,
+			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, "no_session"},
+
+		{"축_미판정은_거부", index.UploadTarget{
+			StreamID: "demo", Seq: 7,
+			S3Key: index.S3Key("demo", 7, fixtureWall), LocalPath: local, Bytes: 64}, "bad_axis"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cap.reset()
+			_, ok := u.validateTarget(c.target, u.log)
+			if c.reason == "" {
+				if !ok {
+					t.Fatalf("검증 실패 — 통과해야 한다 (%s)", cap.dump())
+				}
+				return
+			}
+			if ok {
+				t.Fatal("검증 통과 — 거부해야 한다")
+			}
+			rec := cap.one(t, "upload_target_rejected")
+			if rec.level != slog.LevelError {
+				t.Errorf("레벨 = %v, want ERROR", rec.level)
+			}
+			if rec.attrs["reason"] != c.reason {
+				t.Errorf("reason = %v, want %q", rec.attrs["reason"], c.reason)
+			}
+		})
+	}
+}
+
+// init_mark_outcome_transport_table(계획 4.5 A2 결정 10 · 뮤테이션 115 · 116) — init CAS 의 결과가 워커 경계를 건너
+// 어디로 가는가. 이어 가는 셋(Success · Revoked · AlreadySame)은 성공으로 끝나 기다리던 ③ 을 다시 넣고, 확정 사실은
+// Success 와 Revoked 만 Dirty 원소가 된다 — Revoked 는 해제 참으로(init 확정과 계승 해제가 한 원소). 나머지(Mismatch
+// · Missing · 오류)는 실패 등록(백오프) 뒤 보류를 풀지 않는다. 잡는 결함: Revoked 가 default 로 떨어지면 해제된
+// 회차의 init 이 확정 실패로 읽혀 그 회차 ③ 이 영영 보류되고(115), afterUploaded 가 판정을 버리면 해제가 루프에
+// 닿지 않는다(116).
+func TestInitMarkOutcomeTransportTable(t *testing.T) {
+	initEvent := func(revoked bool) []DirtyEvent {
+		return []DirtyEvent{{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisInit, SessionID: "S-1", InheritRevoked: revoked}}
+	}
+	tests := []struct {
+		name        string
+		mark        index.InitMark
+		err         error
+		wantOutcome outcome
+		wantEvents  []DirtyEvent
+		wantRequeue bool
+	}{
+		{"성공", index.InitMarkSuccess, nil, outcomeSuccess, initEvent(false), true},
+		{"해제", index.InitMarkRevoked, nil, outcomeSuccess, initEvent(true), true},
+		{"해제_건너뜀", index.InitMarkRevokeSkipped, nil, outcomeSuccess, initEvent(false), true},
+		{"이미_같음", index.InitMarkAlreadySame, nil, outcomeSuccess, nil, true},
+		{"불일치", index.InitMarkMismatch, nil, outcomeNeutral, nil, false},
+		{"세션_부재", index.InitMarkMissing, nil, outcomeNeutral, nil, false},
+		{"오류", 0, errors.New("연결 끊김"), outcomeNeutral, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &fakeUploadStore{onInitMark: func(string, []byte) (index.InitMark, error) { return tt.mark, tt.err }}
+			u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+			runLive(u, playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg7.mp4", 64), 64)) // 기대 init 을 몰라 보류된다
+			initJob := initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)
+
+			got := runLive(u, initJob)
+
+			if got != tt.wantOutcome {
+				t.Errorf("outcome = %v, want %v (%s)", got, tt.wantOutcome, cap.dump())
+			}
+			if _, blocked := u.gate.backoffBlocked(targetKeyOf(initJob)); blocked != !tt.wantRequeue {
+				t.Errorf("실패 등록(백오프) = %v, want %v", blocked, !tt.wantRequeue)
+			}
+			if requeued := len(u.queue) == 1; requeued != tt.wantRequeue {
+				t.Errorf("보류 ③ 재투입 = %v(큐 %d건), want %v", requeued, len(u.queue), tt.wantRequeue)
+			}
+			sameEvents(t, u.Dirty().Peek(), tt.wantEvents)
+		})
+	}
+}
+
+// 닫힌 사슬의 늦은 첫 init(POK-196 M6 D75 (나)) — 장부가 확정만 하고 계승 해제를 건너뛰었다(InitMarkRevokeSkipped). 워커는
+// 확정으로 이어 가고(위 표 「해제_건너뜀」) WARN init_revoke_skipped reason=chain_closed 한 줄을 남긴다 — 닫힌 사슬에 늦은
+// init 이 왔다는 실제 발생 표지다(설계 8절).
+func TestInitRevokeSkippedWarnsChainClosed(t *testing.T) {
+	st := &fakeUploadStore{onInitMark: func(string, []byte) (index.InitMark, error) { return index.InitMarkRevokeSkipped, nil }}
+	u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+	if got := runLive(u, initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+	rec := cap.one(t, "init_revoke_skipped")
+	if rec.level != slog.LevelWarn || rec.attrs["reason"] != "chain_closed" || rec.attrs["session_id"] != "S-1" {
+		t.Fatalf("init_revoke_skipped = %+v, want WARN reason=chain_closed session_id=S-1", rec)
+	}
+}
+
+// already_same_does_not_restore_inheritance(계획 4.5 A2 결정 10 〔r42 재정의〕 · 뮤테이션 117) — 앞선 CAS 는 서버에서
+// 커밋됐는데(계승 해제였을 수 있다) 워커는 결과를 잃었고(MarkTimeout 시한), 재시도는 AlreadySame 을 받는다. 이
+// 호출은 앞선 확정이 계승을 풀었는지 모르므로 Dirty 에 표시하지 않는다 — 해제 거짓으로 표시하면 캐시가 「init 확정 ∧
+// 낡은 계승」을 얻는다(그 회차의 캐시 반영은 30초 감시 화해 몫 — 결정 11). 기다리던 ③ 은 그래도 다시 넣는다.
+func TestAlreadySameDoesNotRestoreInheritance(t *testing.T) {
+	calls := 0
+	st := &fakeUploadStore{onInitMark: func(string, []byte) (index.InitMark, error) {
+		calls++
+		if calls == 1 {
+			return 0, context.DeadlineExceeded // 서버는 커밋했고 워커는 결과를 잃었다
+		}
+		return index.InitMarkAlreadySame, nil
+	}}
+	u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+	runLive(u, playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg7.mp4", 64), 64))
+	initJob := initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)
+	if got := runLive(u, initJob); got != outcomeNeutral {
+		t.Fatalf("결과를 잃은 첫 시도 outcome = %v, want neutral — 준비가 어긋났다 (%s)", got, cap.dump())
+	}
+
+	if got := runLive(u, initJob); got != outcomeSuccess {
+		t.Fatalf("재시도 outcome = %v, want success (%s)", got, cap.dump())
+	}
+
+	if got := u.Dirty().Peek(); len(got) != 0 {
+		t.Errorf("Dirty = %+v, want 없음 — AlreadySame 은 해제 여부를 모른다", got)
+	}
+	if n := len(u.queue); n != 1 {
+		t.Errorf("보류 ③ 재투입 = %d건, want 1건", n)
+	}
+}
+
+// 워커는 대상의 축을 그대로 Putter 에 넘긴다 — 객체 머리를 고르는 것은 그 축이다(M5 설계 4.5 D5). 잡는 결함:
+// 축을 버리고 상수 하나를 넘기면 ③ · init 이 ② 머리(캐시 지시 없음 · video/iso.segment)로 올라간다.
+func TestWorkerPassesTargetAxisToPutter(t *testing.T) {
+	put := &fakePutter{}
+	u, cap, dir, _ := newPlaybackUploader(t, &fakeUploadStore{}, put, &fakeProducer{}, nil)
+	archive := newTarget("demo", 7, writeSegment(t, dir, "demo", "seg7.mp4", 64), 64, false)
+	initJob := initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)
+	seg := playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg7p.mp4", 64), 64)
+	seg.ExpectedInitSHA = fakeInitSHA()
+
+	for _, tgt := range []index.UploadTarget{archive, initJob, seg} {
+		if got := runLive(u, tgt); got != outcomeSuccess {
+			t.Fatalf("%v outcome = %v, want success (%s)", tgt.Axis, got, cap.dump())
+		}
+	}
+
+	calls := put.putCalls()
+	want := []index.Axis{index.AxisArchive, index.AxisInit, index.AxisPlayback}
+	if len(calls) != len(want) {
+		t.Fatalf("PUT = %d회, want %d회", len(calls), len(want))
+	}
+	for i, c := range calls {
+		if c.axis != want[i] {
+			t.Errorf("PUT[%d] %q 의 축 = %v, want %v", i, c.key, c.axis, want[i])
+		}
+	}
+}

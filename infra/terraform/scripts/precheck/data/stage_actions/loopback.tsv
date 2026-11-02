@@ -1,0 +1,12 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 M10 O7f 9(루프백 헬스 SSM · secret-count.sh box · kty 로컬
+# secret-count.sh ssm <command-id> — 값은 Secrets Manager 에서 읽어 stdin).
+
+# SSM 실행 · 기록 읽기
+ssm:SendCommand	ap-northeast-2	*
+ssm:GetCommandInvocation	ap-northeast-2	*
+
+# 대조할 비밀 값 읽기
+secretsmanager:GetSecretValue	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*

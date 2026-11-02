@@ -1,0 +1,190 @@
+package session
+
+// 세션 종료 문장 다섯 벌의 대조(POK-195 M4 — 계획 부기 21 · POK-196 M6-3b 커밋 ④ 가 L3 를, ④b 가 L2′ 를 더함).
+//
+// 세션을 ending 으로 보내는 문장이 두 패키지에 다섯 있다: TD 분할의 endSessionSQL 은 여기에,
+// init 불일치의 종료 절은 index 의 결속 CTE(SettlePlaybackFailure) 안에, 4.1 오프라인 전이는 index.EndLive
+// (스트림 단위 — 사유 'offline')에, L3 는 index.EndGapRun(스트림 · 회차 — 사유 'gap_run')에, L2′ 는
+// index.EndStallSeal(스트림 · 회차 — 사유 'stall_seal')에 있다. index 는
+// session 을 임포트하지 않으므로(index/session.go 경계) 술어(state='live')와 사유 어휘를 공유할 집이 없다. 이
+// 파일이 다섯 문장을 같은 출발 상태에 돌려 효과를 대조한다 — 한쪽만 바뀌면 여기서 갈린다. 4D 의 표식 · 사유
+// 승격은 종료 문장이 아니라 여기에 없다.
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+)
+
+// endedAtFixture 는 이미 끝난 출발 상태의 시각이다. 문장이 그 행을 건드리지 않았는지를
+// 이 값의 보존으로 잰다.
+var endedAtFixture = time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)
+
+// seedEndingFixture 는 출발 상태 하나의 세션 행과, 그 세션에 귀속된 ③ pending 조각 1행을 심는다.
+// 조각은 index 결속 CTE 의 앵커다(이 패키지의 문장은 쓰지 않는다).
+func seedEndingFixture(t *testing.T, pool *pgxpool.Pool, sessionID, streamID, state, reason string) {
+	t.Helper()
+	ctx := context.Background()
+	var endReason, endingAt, endedAt any
+	if state != "live" {
+		endReason, endingAt = reason, endedAtFixture
+	}
+	if state == "ended" {
+		endedAt = endedAtFixture
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO stream_sessions (session_id, stream_id, started_at, state, end_reason, ending_at, ended_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		sessionID, streamID, wall.Add(-time.Hour), state, endReason, endingAt, endedAt); err != nil {
+		t.Fatalf("세션 픽스처 실패 %s: %v", sessionID, err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO stream_segments
+    (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path,
+     upload_state, bytes, session_id, playback_pdt, playback_s3_key)
+VALUES ($1, 0, 0, $2, 4000, $3, $4, 'pending', 1000, $5, $2, $6)`,
+		streamID, wall.Add(-time.Hour), index.S3Key(streamID, 0, wall),
+		fmt.Sprintf("/recordings/%s/0.mp4", streamID), sessionID,
+		fmt.Sprintf("dvr/%s/seg/000000.m4s", streamID)); err != nil {
+		t.Fatalf("조각 픽스처 실패 %s: %v", streamID, err)
+	}
+}
+
+// endShape 는 종료 문장이 바꾸는 네 열과, 바꾸지 않아야 하는 동결 축(dvr_state)이다.
+type endShape struct {
+	state     string
+	endReason *string
+	endingAt  *time.Time
+	endedAt   *time.Time
+	dvrState  string
+}
+
+func endShapeOf(t *testing.T, pool *pgxpool.Pool, sessionID string) endShape {
+	t.Helper()
+	var s endShape
+	if err := pool.QueryRow(context.Background(),
+		`SELECT state, end_reason, ending_at, ended_at, dvr_state FROM stream_sessions WHERE session_id = $1`,
+		sessionID).Scan(&s.state, &s.endReason, &s.endingAt, &s.endedAt, &s.dvrState); err != nil {
+		t.Fatalf("세션 조회 실패 %s: %v", sessionID, err)
+	}
+	return s
+}
+
+// reason 은 end_reason 을 비교 가능한 문자열로 편다(NULL 은 "<nil>").
+func (s endShape) reason() string {
+	if s.endReason == nil {
+		return "<nil>"
+	}
+	return *s.endReason
+}
+
+func (s endShape) String() string {
+	return fmt.Sprintf("{state %s, end_reason %s, ending_at %v, ended_at %v, dvr_state %s}",
+		s.state, s.reason(), s.endingAt, s.endedAt, s.dvrState)
+}
+
+func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
+	for _, c := range []struct {
+		name, state, reason string
+	}{
+		{"live_출발", "live", ""},
+		{"이미_ending", "ending", "td_exceeded"},
+		{"이미_ended", "ended", "offline"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			ctx := context.Background()
+			seedEndingFixture(t, pool, "S-reg", "regstream", c.state, c.reason)
+			seedEndingFixture(t, pool, "S-idx", "idxstream", c.state, c.reason)
+			seedEndingFixture(t, pool, "S-end", "endstream", c.state, c.reason)
+			seedEndingFixture(t, pool, "S-gap", "gapstream", c.state, c.reason)
+			seedEndingFixture(t, pool, "S-seal", "sealstream", c.state, c.reason)
+
+			// EndLive 를 먼저 부른다 — 다른 두 스트림의 회차가 아직 출발 상태일 때 불러야 스트림 단위
+			// 술어(stream_id)가 드러난다. 그 술어를 잃으면 남의 live 회차까지 offline 으로 닫는다.
+			ended, err := index.EndLive(ctx, pool, "endstream", crossClose, noEnqueue)
+			if err != nil {
+				t.Fatalf("EndLive 실패: %v", err)
+			}
+			gapped, err := index.EndGapRun(ctx, pool, "gapstream", "S-gap", crossClose, noEnqueue)
+			if err != nil {
+				t.Fatalf("EndGapRun 실패: %v", err)
+			}
+			sealed, err := index.EndStallSeal(ctx, pool, "sealstream", "S-seal", crossClose, noEnqueue)
+			if err != nil {
+				t.Fatalf("EndStallSeal 실패: %v", err)
+			}
+			withTx(t, pool, func(tx pgx.Tx) {
+				if _, err := tx.Exec(ctx, endSessionSQL, "S-reg", index.ReasonInitMismatch); err != nil {
+					t.Fatalf("endSessionSQL 실행 실패: %v", err)
+				}
+			})
+			if _, err := index.NewUploadStore(pool).SettlePlaybackFailure(ctx,
+				"idxstream", 0, "S-idx", index.ReasonInitMismatch); err != nil {
+				t.Fatalf("index 결속 종료 실패: %v", err)
+			}
+
+			reg, idx, end := endShapeOf(t, pool, "S-reg"), endShapeOf(t, pool, "S-idx"), endShapeOf(t, pool, "S-end")
+			gap, seal := endShapeOf(t, pool, "S-gap"), endShapeOf(t, pool, "S-seal")
+			if c.state == "live" {
+				if reg.state != "ending" || reg.reason() != "init_mismatch" || reg.endingAt == nil || reg.endedAt != nil {
+					t.Errorf("endSessionSQL 결과 = %v, want {ending, init_mismatch, ending_at 있음, ended_at nil}", reg)
+				}
+				if ended != "S-end" || end.state != "ending" || end.reason() != "offline" || end.endingAt == nil || end.endedAt != nil {
+					t.Errorf("EndLive = %q · 회차 %v, want S-end · {ending, offline, ending_at 있음, ended_at nil}", ended, end)
+				}
+				if gapped != "S-gap" || gap.state != "ending" || gap.reason() != "gap_run" || gap.endingAt == nil || gap.endedAt != nil {
+					t.Errorf("EndGapRun = %q · 회차 %v, want S-gap · {ending, gap_run, ending_at 있음, ended_at nil}", gapped, gap)
+				}
+				if sealed != "S-seal" || seal.state != "ending" || seal.reason() != "stall_seal" || seal.endingAt == nil || seal.endedAt != nil {
+					t.Errorf("EndStallSeal = %q · 회차 %v, want S-seal · {ending, stall_seal, ending_at 있음, ended_at nil}", sealed, seal)
+				}
+			} else {
+				if reg.state != c.state || reg.reason() != c.reason ||
+					reg.endingAt == nil || !reg.endingAt.Equal(endedAtFixture) {
+					t.Errorf("endSessionSQL 결과 = %v, want 출발 상태 그대로(%s, %s) — live 가 아닌 세션을 덮었다", reg, c.state, c.reason)
+				}
+				if ended != "" || end.state != c.state || end.reason() != c.reason ||
+					end.endingAt == nil || !end.endingAt.Equal(endedAtFixture) {
+					t.Errorf("EndLive = %q · 회차 %v, want \"\"(0행) · 출발 상태 그대로(%s, %s) — live 가 아닌 회차를 덮었다",
+						ended, end, c.state, c.reason)
+				}
+				if gapped != "" || gap.state != c.state || gap.reason() != c.reason ||
+					gap.endingAt == nil || !gap.endingAt.Equal(endedAtFixture) {
+					t.Errorf("EndGapRun = %q · 회차 %v, want \"\"(0행) · 출발 상태 그대로(%s, %s) — live 가 아닌 회차를 덮었다",
+						gapped, gap, c.state, c.reason)
+				}
+				if sealed != "" || seal.state != c.state || seal.reason() != c.reason ||
+					seal.endingAt == nil || !seal.endingAt.Equal(endedAtFixture) {
+					t.Errorf("EndStallSeal = %q · 회차 %v, want \"\"(0행) · 출발 상태 그대로(%s, %s) — live 가 아닌 회차를 덮었다",
+						sealed, seal, c.state, c.reason)
+				}
+			}
+			if reg.state != idx.state || reg.reason() != idx.reason() ||
+				(reg.endingAt == nil) != (idx.endingAt == nil) || (reg.endedAt == nil) != (idx.endedAt == nil) {
+				t.Errorf("두 종료 문장의 결과가 다르다: session = %v, index = %v", reg, idx)
+			}
+			// 사유 어휘는 문장마다 다르다 — 술어의 효과(상태 · 두 시각의 유무)만 견준다.
+			if end.state != reg.state || (end.endingAt == nil) != (reg.endingAt == nil) || (end.endedAt == nil) != (reg.endedAt == nil) {
+				t.Errorf("EndLive 와 endSessionSQL 의 효과가 다르다: EndLive = %v, session = %v", end, reg)
+			}
+			if gap.state != reg.state || (gap.endingAt == nil) != (reg.endingAt == nil) || (gap.endedAt == nil) != (reg.endedAt == nil) {
+				t.Errorf("EndGapRun 과 endSessionSQL 의 효과가 다르다: EndGapRun = %v, session = %v", gap, reg)
+			}
+			if seal.state != reg.state || (seal.endingAt == nil) != (reg.endingAt == nil) || (seal.endedAt == nil) != (reg.endedAt == nil) {
+				t.Errorf("EndStallSeal 과 endSessionSQL 의 효과가 다르다: EndStallSeal = %v, session = %v", seal, reg)
+			}
+			for _, s := range []endShape{reg, idx, end, gap, seal} {
+				if s.dvrState != "open" {
+					t.Errorf("종료 뒤 회차 %v, want dvr_state open — 종료 문장은 동결 축을 쓰지 않는다(M6)", s)
+				}
+			}
+		})
+	}
+}

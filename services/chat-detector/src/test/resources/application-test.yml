@@ -1,0 +1,5 @@
+# 시험 전용. 운영 yml이 환경변수에서 받는 값 중 @NotBlank가 걸린 것을 여기서 채운다.
+# 값 자체는 아무 의미 없다 — 시험은 가짜 서버를 부르고 토큰이 실제로 나가는지만 잰다.
+pokeclip:
+  internal-api:
+    token: test-internal-token

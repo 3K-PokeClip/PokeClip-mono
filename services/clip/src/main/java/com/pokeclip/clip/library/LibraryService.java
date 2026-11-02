@@ -1,0 +1,240 @@
+package com.pokeclip.clip.library;
+
+import com.pokeclip.clip.delegation.AccessErrors;
+import com.pokeclip.clip.delegation.AccessibleResult;
+import com.pokeclip.clip.delegation.BroadcastAccessGuard;
+import com.pokeclip.clip.delegation.DelegationResolveClient;
+import com.pokeclip.clip.library.LibraryEntry.BroadcastSummary;
+import com.pokeclip.clip.paging.CursorCodec;
+import com.pokeclip.clip.paging.ListLimit;
+import com.pokeclip.clip.paging.ListParams;
+import com.pokeclip.clip.recipe.Recipe;
+import com.pokeclip.clip.recipe.RecipeDocument;
+import com.pokeclip.clip.recipe.RecipeErrors.RecipeNotFoundException;
+import com.pokeclip.clip.recipe.RecipeRepository;
+import com.pokeclip.clip.render.Clip;
+import com.pokeclip.clip.render.ClipRepository;
+import com.pokeclip.clip.render.ClipSnapshot;
+import com.pokeclip.clip.render.RenderJob;
+import com.pokeclip.clip.render.RenderJobRepository;
+import com.pokeclip.clip.render.RenderRequestService;
+import com.pokeclip.clip.thumbnail.ThumbnailUrls;
+import com.pokeclip.clip.upload.LiveUpload;
+import com.pokeclip.clip.upload.UploadRequestBrief;
+import com.pokeclip.clip.upload.UploadRequestService;
+import com.pokeclip.clip.upload.UploadRequestStore;
+import com.pokeclip.clip.upload.UploadSnapshot;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * 보관함(POK-243) — 내가 볼 수 있는 방송들의 편집본을 상태별로 거른 목록과, 편집본 하나의 상세.
+ *
+ * <p><b>자격 판정이 목록과 상세에서 다르다.</b> 목록은 방송 목록과 같은 판정이다 — auth에 「볼 수 있는 스트리머」를 먼저 받아
+ * 그 번호로만 조회하므로 남의 편집본은 <b>안 나온다</b>(200). 상세는 편집본의 방송으로 {@link BroadcastAccessGuard}에 묻고,
+ * 거절이면 <b>{@code recipe_not_found}로 접는다</b> — {@code broadcast_not_found}로 나가면 「그 번호의 편집본이 있다」가 새고,
+ * 카드 문이 같은 이유로 {@code jump_card_not_found}로 접는다({@code JumpCardService.requireViewableCard}).
+ *
+ * <p>auth 왕복은 트랜잭션 밖이고 표 조립만 읽기 트랜잭션이다({@code RecipeService}와 같은 모양). 🔴 <b>그 트랜잭션은
+ * {@code REPEATABLE READ}다.</b> 상태를 판 질의와 영상·편집본을 다시 읽는 질의가 둘인데, 기본(READ COMMITTED)은 문장마다
+ * 새 스냅샷이라 그 사이에 일꾼의 보고나 편집이 끼면 {@code status=rendering}인데 {@code latestClip.status=rendered}가
+ * 나간다(PR #189 codex). 트랜잭션 하나로 묶는 것만으로는 안 막힌다 — 스냅샷 하나여야 한다.
+ */
+@Service
+public class LibraryService {
+
+    private static final Logger log = LoggerFactory.getLogger(LibraryService.class);
+
+    /** 방송 목록과 같은 값(README가 정본). 한 줄이 영상 봉투까지 안고 있어 카드(50)보다 작다. */
+    private static final int DEFAULT_LIMIT = 20;
+    private static final int MAX_LIMIT = 100;
+
+    private final LibraryQuery query;
+    private final RecipeRepository recipes;
+    private final ClipRepository clips;
+    private final RenderJobRepository jobs;
+    private final RenderRequestService render;
+    private final UploadRequestService uploads;
+    private final DelegationResolveClient delegation;
+    private final BroadcastAccessGuard guard;
+    /** 읽기 전용 + REPEATABLE READ — 이유는 클래스 주석. 주입받은 템플릿(READ COMMITTED)을 그대로 쓰면 안 된다. */
+    private final TransactionTemplate transactions;
+    private final ObjectMapper mapper;
+    private final ThumbnailUrls thumbnails;
+    private final UploadRequestStore uploadRequests;
+
+    LibraryService(LibraryQuery query, RecipeRepository recipes, ClipRepository clips, RenderJobRepository jobs,
+                   RenderRequestService render, UploadRequestService uploads, DelegationResolveClient delegation,
+                   BroadcastAccessGuard guard,
+                   TransactionTemplate transactions, ObjectMapper mapper, ThumbnailUrls thumbnails,
+                   UploadRequestStore uploadRequests) {
+        this.thumbnails = thumbnails;
+        this.uploadRequests = uploadRequests;
+        this.query = query;
+        this.recipes = recipes;
+        this.clips = clips;
+        this.jobs = jobs;
+        this.render = render;
+        this.uploads = uploads;
+        this.delegation = delegation;
+        this.guard = guard;
+        this.transactions = new TransactionTemplate(transactions.getTransactionManager());
+        this.transactions.setReadOnly(true);
+        this.transactions.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        this.mapper = mapper;
+    }
+
+    /**
+     * @param status {@code null}이거나 빈 문자열이면 전부(빈 문자열을 「안 줬다」로 접는 것은 {@code cursor}와 같은 규칙)
+     * @param limit {@code null}이면 {@link #DEFAULT_LIMIT}
+     * @param cursor {@code null}이거나 빈 문자열이면 첫 장
+     * @param streamerId 화면이 고른 채널(POK-390). 방송 목록과 같은 규칙({@code BroadcastListService.list})
+     * @throws com.pokeclip.clip.paging.InvalidListParamException 상태가 모르는 값이거나 개수가 0 이하거나 {@code streamerId}가 숫자가 아니다 (400)
+     * @throws com.pokeclip.clip.paging.InvalidCursorException 이어받기 표시가 우리 모양이 아니다 (400)
+     * @throws AccessErrors.NotViewableException 토큰의 주체를 회원 번호로 못 읽거나, 고른 채널을 볼 수 없다 (404 {@code broadcast_not_found})
+     * @throws AccessErrors.AuthUnavailableException 볼 수 있는 스트리머를 물어보지 못했다 (503)
+     */
+    public LibraryPage list(String requesterSubject, String status, Integer limit, String cursor, String streamerId) {
+        // 형식 검사가 auth 왕복보다 먼저다 — 틀린 요청에 7초짜리 왕복을 태우지 않는다(방송 목록과 같은 순서).
+        LibraryStatus wanted = status == null || status.isBlank() ? null : LibraryStatus.fromParam(status);
+        int size = ListLimit.resolve(limit, DEFAULT_LIMIT, MAX_LIMIT);
+        List<Long> after = CursorCodec.decodeOrFirstPage(CursorCodec.Kind.LIBRARY, cursor);
+        Long afterId = after == null ? null : after.get(0);
+        Long chosen = ListParams.streamerIdOrNull(streamerId);
+        long userId = 요청자_번호(requesterSubject);
+
+        AccessibleResult accessible = delegation.accessible(userId);
+        if (!accessible.available()) {
+            // 빈 목록으로 접지 않는다 — 화면이 「편집본이 없다」고 단정하면 auth가 살아난 뒤에도 다시 안 온다.
+            throw new AccessErrors.AuthUnavailableException();
+        }
+        accessible = accessible.narrowTo(chosen);
+        if (chosen != null && accessible.streamers().isEmpty()) {
+            // 방송 목록과 같은 이유로 404다(빈 목록이면 끊긴 위임을 화면이 모른다).
+            throw new AccessErrors.NotViewableException("streamer_not_accessible");
+        }
+        List<String> streamerIds = accessible.streamers().stream()
+                .map(entry -> String.valueOf(entry.streamerUserId()))
+                .toList();
+        if (streamerIds.isEmpty()) {
+            return LibraryPage.empty();
+        }
+
+        LibraryPage result = transactions.execute(tx -> {
+            // 상한 하나를 더 받아 「다음 장이 있나」를 본다(방송 목록과 같은 수법).
+            List<LibraryRow> rows = query.findPage(streamerIds, wanted, afterId, size + 1);
+            boolean hasMore = rows.size() > size;
+            List<LibraryRow> page = hasMore ? rows.subList(0, size) : rows;
+            String next = hasMore
+                    ? CursorCodec.encode(CursorCodec.Kind.LIBRARY, page.get(page.size() - 1).recipeId())
+                    : null;
+            return new LibraryPage(assemble(page), next);
+        });
+        return new LibraryPage(withPictures(result.items()), result.nextCursor());
+    }
+
+    /**
+     * @throws RecipeNotFoundException 그 번호가 없거나 <b>볼 자격이 없다</b> — 둘이 같은 본문·같은 바닥 시간이다 (404)
+     * @throws AccessErrors.AuthUnavailableException 자격을 물어보지 못했다 (503)
+     */
+    public LibraryDetail get(String requesterSubject, long recipeId) {
+        LibraryRow row = query.findOne(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
+        try {
+            guard.requireViewable(requesterSubject, row.streamId());
+        } catch (AccessErrors.NotViewableException e) {
+            // 거절을 「없는 편집본」으로 접는다 — 이유는 클래스 주석. 판정 불가(503)는 그대로 올린다.
+            log.info("clip.library.not_viewable recipeId={} reason={}", recipeId, e.reason());
+            throw new RecipeNotFoundException(recipeId);
+        }
+        LibraryDetail detail = transactions.execute(tx -> {
+            // 자격 판정 사이에 지워질 표가 없다(편집본은 영구 보존) — 그래도 다시 읽어 상태를 판정 뒤 시점으로 맞춘다.
+            LibraryRow fresh = query.findOne(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
+            LibraryEntry entry = assemble(List.of(fresh)).get(0);
+            Recipe recipe = recipes.findById(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
+            return LibraryDetail.of(entry, RecipeDocument.fromStored(mapper, recipe));
+        });
+        return detail.withThumbnailUrl(withPictures(List.of(detail.entry())).get(0).thumbnailUrl());
+    }
+
+    /**
+     * 사진 주소(POK-277)는 <b>트랜잭션이 끝난 뒤</b> 붙인다. 사진은 부가 칸이라 못 읽으면 비우는데({@link ThumbnailUrls}), 트랜잭션
+     * 안에서 질의가 실패하면 예외를 삼켜도 PostgreSQL이 그 트랜잭션을 깨뜨려 뒤 질의·커밋이 실패한다(로컬 리뷰 1라운드). 밖에서 읽으면
+     * 실패가 그 자리에서 끝난다.
+     */
+    private List<LibraryEntry> withPictures(List<LibraryEntry> entries) {
+        List<Long> clipIds = entries.stream()
+                .filter(entry -> entry.latestClip() != null)
+                .map(entry -> entry.latestClip().id())
+                .toList();
+        Map<Long, String> pictures = thumbnails.ofClips(clipIds);
+        return entries.stream()
+                .map(entry -> entry.latestClip() == null ? entry : entry.withThumbnailUrl(pictures.get(entry.latestClip().id())))
+                .toList();
+    }
+
+    /** 줄들을 응답 모양으로. 편집본·영상·주문·업로드를 <b>각각 한 번씩</b> 읽는다: 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
+    private List<LibraryEntry> assemble(List<LibraryRow> rows) {
+        Map<Long, Recipe> recipeById = recipes.findAllById(rows.stream().map(LibraryRow::recipeId).toList()).stream()
+                .collect(Collectors.toMap(Recipe::getId, Function.identity()));
+        List<Long> clipIds = rows.stream().map(LibraryRow::clipId).filter(id -> id != null).toList();
+        Map<Long, Clip> clipById = clips.findAllById(clipIds).stream()
+                .collect(Collectors.toMap(Clip::getId, Function.identity()));
+        Map<Long, RenderJob> jobByClipId = clipIds.isEmpty() ? Map.of() : jobs.findByClipIdIn(clipIds).stream()
+                .collect(Collectors.toMap(RenderJob::getClipId, Function.identity()));
+        Map<Long, UploadSnapshot> uploadByClipId = uploads.latestFor(clipIds).stream()
+                .collect(Collectors.toMap(UploadSnapshot::clipId, Function.identity()));
+        // 「렌더 뒤 업로드」 의도(POK-291): 줄마다 지금 판 + 최신 영상의 판. 한 번에 읽는다(줄마다 안 묻는다).
+        Set<UploadRequestStore.Key> keys = new HashSet<>();
+        recipeById.values().forEach(r -> keys.add(new UploadRequestStore.Key(r.getId(), r.getRecipeVersion())));
+        clipById.values().forEach(c -> keys.add(new UploadRequestStore.Key(c.getRecipeId(), c.getRecipeVersion())));
+        Map<UploadRequestStore.Key, UploadRequestBrief> briefs = uploadRequests.briefs(keys);
+        // 모든 판의 살아 있는 업로드(POK-334): 새 판을 주문해도 옛 판으로 올린 영상이 남게. 이것도 한 번에 읽는다.
+        Map<Long, List<LiveUpload>> aliveByRecipeId = uploads.aliveFor(recipeById.keySet());
+
+        List<LibraryEntry> entries = new ArrayList<>(rows.size());
+        for (LibraryRow row : rows) {
+            // 질의가 준 번호는 같은 트랜잭션 안에서 읽었으니 반드시 있다 — 없으면 우리 버그라 500이 맞다.
+            Recipe recipe = recipeById.get(row.recipeId());
+            Clip clip = row.clipId() == null ? null : clipById.get(row.clipId());
+            ClipSnapshot latest = clip == null ? null
+                    : render.snapshot(clip, Optional.ofNullable(jobByClipId.get(row.clipId())),
+                            Optional.ofNullable(uploadByClipId.get(row.clipId())),
+                            Optional.ofNullable(briefs.get(new UploadRequestStore.Key(clip.getRecipeId(), clip.getRecipeVersion()))));
+            RecipeDocument.Cut cut = recipe.getCutInAtMs() == null ? null
+                    : new RecipeDocument.Cut(recipe.getCutInAtMs(), recipe.getCutOutAtMs());
+            entries.add(new LibraryEntry(recipe.getId(), recipe.getStreamId(), recipe.getCreatorId(),
+                    recipe.getRecipeVersion(), cut, row.status(),
+                    new BroadcastSummary(row.broadcastStatus(), row.startedAt(), row.endedAt(), row.vodExpiresAt()),
+                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt(), null,
+                    briefs.get(new UploadRequestStore.Key(recipe.getId(), recipe.getRecipeVersion())),
+                    aliveByRecipeId.getOrDefault(recipe.getId(), List.of())));
+        }
+        return entries;
+    }
+
+    /**
+     * {@code BroadcastListService.요청자_번호}와 같은 판정, 다른 로그 이름({@code clip.library.*}) — 자리가 갈려야 어느 문이
+     * 아픈지가 보인다. 값 자체는 안 찍는다(개행이 섞이면 로그 한 줄이 여러 줄로 쪼개진다).
+     */
+    private static long 요청자_번호(String requesterSubject) {
+        try {
+            return Long.parseLong(requesterSubject);
+        } catch (NumberFormatException e) {
+            log.error("clip.library.identity_not_numeric reason=subject_not_numeric");
+            throw new AccessErrors.NotViewableException("subject_not_numeric");
+        }
+    }
+}

@@ -1,0 +1,43 @@
+<!doctype html>
+<!--
+  공유 미리보기 이미지(assets/img/og.jpg, 1200×630) 합성 틀 (POK-349). 배포하지 않는다 — scripts/는 배포 목록 밖이다.
+  배경 og-base.jpg 왼쪽 빈 자리에 로고와 히어로 문구를 얹는다. 다시 만드는 법은 같은 폴더의 render.mjs.
+  문구를 바꾸면 index.html의 og:image:alt도 같이 고친다.
+-->
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>PokeClip OG</title>
+  <style>
+    @font-face {
+      font-family: 'Pretendard Variable';
+      src: url('../../assets/fonts/PretendardVariable.woff2') format('woff2-variations');
+      font-weight: 45 920;
+    }
+    html, body { margin: 0; background: #141517; }
+    .og {
+      position: relative; width: 1200px; height: 630px; overflow: hidden;
+      background: url('../../assets/img/og-base.jpg') center / cover no-repeat;
+      font-family: 'Pretendard Variable', sans-serif; color: #eef0f3;
+    }
+    .og__copy { position: absolute; left: 80px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; width: 600px; }
+    .og__logo { width: 260px; height: auto; display: block; }
+    .og__title { margin: 44px 0 0; font-size: 60px; line-height: 1.18; font-weight: 700; letter-spacing: -0.025em; }
+    .og__title em {
+      font-style: normal;
+      background: linear-gradient(135deg, #8da0ea 0%, #e25fb4 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .og__url { margin: 36px 0 0; font-size: 26px; font-weight: 600; color: rgb(238 240 243 / 0.6); letter-spacing: 0.01em; }
+  </style>
+</head>
+<body>
+  <div class="og">
+    <div class="og__copy">
+      <img class="og__logo" src="../../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" />
+      <h1 class="og__title">방송이 끝나기 전에,<br /><em>하이라이트는 이미<br />유튜브에.</em></h1>
+      <p class="og__url">pokeclip.com</p>
+    </div>
+  </div>
+</body>
+</html>

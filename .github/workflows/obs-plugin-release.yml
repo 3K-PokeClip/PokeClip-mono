@@ -1,0 +1,140 @@
+# obs-plugin 배포 — obs-plugin-v<X.Y.Z>[-<접미사>] 태그를 밀면 GitHub Release에 설치 산출물을 붙인다 (POK-284).
+# 자산: Windows 설치 파일(exe)·zip, macOS pkg, SHA256SUMS.txt (설치 파일은 POK-361).
+#
+# 잡:
+#  - version  태그 모양 · buildspec.json 판 번호 · 태그 커밋 출처(develop 또는 main에 머지된 커밋) 검사
+#  - build    obs-plugin-ci.yml을 그대로 불러 같은 잡으로 빌드한다(태그 푸시엔 경로 필터가 없다)
+#  - publish  아티팩트 → SHA256SUMS → draft Release → 자산 수 확인 → 공개
+#
+# 판 번호: buildspec.json의 X.Y.Z가 정본이다. 태그의 X.Y.Z가 다르면 실패한다.
+# 접미사(-test.1, -rc.1 …)가 붙으면 prerelease로 낸다. 공개된 Release·자산은 덮어쓰지 않는다.
+name: obs-plugin-release
+
+on:
+  push:
+    tags:
+      - 'obs-plugin-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: obs-plugin-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 태그 커밋이 origin/develop·origin/main에 들어 있는지 본다
+      - name: 태그 · 판 번호 · 출처 검사
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^obs-plugin-v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::태그 모양이 obs-plugin-v<X.Y.Z>[-<접미사>]가 아니다: $TAG"
+            exit 1
+          fi
+          tag_version="${BASH_REMATCH[1]}"
+          suffix="${BASH_REMATCH[2]}"
+          spec_version="$(jq -r .version obs-plugin/buildspec.json)"
+          if [[ "$tag_version" != "$spec_version" ]]; then
+            echo "::error::태그 판 번호 $tag_version ≠ obs-plugin/buildspec.json $spec_version — buildspec을 먼저 올리고 그 커밋에 태그를 민다"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/develop && ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::태그 커밋 $GITHUB_SHA가 origin/develop·origin/main 어디에도 없다 — 머지된 커밋에만 태그를 민다"
+            exit 1
+          fi
+          echo "version=${tag_version}${suffix}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$suffix" ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: version
+    uses: ./.github/workflows/obs-plugin-ci.yml
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pokeclip-obs-*-${{ github.sha }}
+          merge-multiple: true
+          path: dist
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS.txt"
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" .
+          cat SHA256SUMS.txt
+      - name: 릴리스 노트
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "PokeClip for OBS ${VERSION} — 커밋 \`${GITHUB_SHA:0:8}\`"
+            echo
+            echo "## 설치"
+            echo
+            echo "| OS | 파일 | 설치 |"
+            echo "| --- | --- | --- |"
+            echo "| Windows | \`pokeclip-obs-*-windows-x64-installer.exe\` | 실행 → \`%ProgramData%\\obs-studio\\plugins\\pokeclip-obs\` · 제거는 설정 › 앱 |"
+            echo "| Windows (포터블 OBS·수동) | \`pokeclip-obs-*-windows-x64.zip\` | 압축을 OBS 폴더에 푼다 — 설치 파일과 함께 쓰지 않는다 |"
+            echo "| macOS | \`pokeclip-obs-*-macos-universal.pkg\` | 더블클릭 → \`~/Library/Application Support/obs-studio/plugins\` |"
+            echo
+            echo "OBS를 끈 뒤 설치한다. 자세한 절차는 [README 「설치」](https://github.com/${REPO}/blob/${TAG}/obs-plugin/README.md#설치)."
+            echo
+            echo "## 서명 상태"
+            echo
+            echo "- Windows: 서명 없음 — Chrome·SmartScreen이 경고할 수 있다(SmartScreen은 「추가 정보 → 실행」)."
+            echo "- macOS: pkg 서명·Apple 공증 없음 — 처음 열면 막히면 시스템 설정 › 개인정보 보호 및 보안 › 「그래도 열기」."
+            echo
+            echo "## 받은 파일 확인"
+            echo
+            echo "\`SHA256SUMS.txt\`와 대조한다: \`shasum -a 256 -c SHA256SUMS.txt\`"
+          } > notes.md
+          cat notes.md
+      - name: draft로 올린 뒤 확인하고 공개
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: |
+          if is_draft="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::$TAG Release가 이미 공개돼 있다 — 공개된 자산은 덮어쓰지 않는다. 새 판 번호나 접미사로 다시 태그를 민다"
+              exit 1
+            fi
+            echo "앞선 실패로 남은 draft를 지우고 다시 만든다"
+            gh release delete "$TAG" --repo "$REPO" --yes
+          fi
+          flags=(--verify-tag --draft --title "PokeClip for OBS ${VERSION}" --notes-file notes.md)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" --repo "$REPO" "${flags[@]}" dist/*
+          expected="$(find dist -maxdepth 1 -type f | wc -l)"
+          uploaded="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')"
+          if [[ "$uploaded" -ne "$expected" ]]; then
+            echo "::error::자산 $uploaded개만 올라갔다(기대 $expected개) — draft로 남겨 둔다"
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$REPO" --draft=false
+          gh release view "$TAG" --repo "$REPO"

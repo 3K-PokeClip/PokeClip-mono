@@ -1,0 +1,163 @@
+# obs-plugin/ 전용 CI — media-ci와 같은 원칙: 워크플로 레벨 경로 필터, 브랜치 보호 필수 체크가 아니다.
+# obs-plugin을 안 건드린 PR에는 체크 런이 생기지 않는다.
+#
+# 잡:
+#  - unit-tests  OBS 없이 도는 C++ 테스트 (페어링 코드·keyint 옵션·streamid·브리지 보안 규칙·SSE)
+#  - dock-ui     브라우저 독 페이지 테스트·타입체크·빌드 → 산출물(data/ui)을 다음 잡에 넘긴다
+#  - windows / macos  obs-plugintemplate 경로로 실제 플러그인 빌드 → 설치 파일(exe · pkg)과 zip 아티팩트 (미서명).
+#                     설치 파일은 같은 잡에서 무인 설치·제거 시험을 거친다.
+#
+# push에도 돈다 — Windows 실기 검증용 zip을 PR 없이 받기 위해서다 (로컬에 Windows 툴체인이 없다).
+# develop push도 돈다 — 머지된 판의 산출물을 남긴다(30일). main은 태그로만 배포하므로 뺀다.
+# 태그 배포는 obs-plugin-release.yml이 이 워크플로를 workflow_call로 불러 같은 잡으로 빌드한다.
+name: obs-plugin-ci
+
+on:
+  pull_request:
+    paths:
+      - 'obs-plugin/**'
+      - 'web/src/ui/styles/**' # 독 페이지가 web 디자인 토큰을 그대로 import 한다
+      - 'web/src/ui/assets/fonts/**'
+      - 'web/public/brand/pokeclip-symbol.svg' # 독 머리의 브랜드 심볼
+      - '.github/workflows/obs-plugin-ci.yml'
+  push:
+    branches-ignore:
+      - main
+    paths: # pull_request와 같은 목록
+      - 'obs-plugin/**'
+      - 'web/src/ui/styles/**'
+      - 'web/src/ui/assets/fonts/**'
+      - 'web/public/brand/pokeclip-symbol.svg'
+      - '.github/workflows/obs-plugin-ci.yml'
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+# 호출된 워크플로 안의 github.workflow는 호출자 이름이라 그룹 이름에 쓰지 않는다(릴리스 워크플로 그룹과 겹친다).
+# develop은 커밋마다 그룹을 나눠 연달아 머지돼도 앞 커밋 빌드가 취소되지 않게 한다.
+concurrency:
+  group: obs-plugin-ci-${{ github.ref == 'refs/heads/develop' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure·build·test
+        run: |
+          cmake -S obs-plugin/tests -B obs-plugin/build_tests
+          cmake --build obs-plugin/build_tests --parallel
+          ctest --test-dir obs-plugin/build_tests --output-on-failure
+
+  dock-ui:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: obs-plugin/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: obs-plugin/ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: obs-plugin/ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build # tsc --noEmit + vite build → ../data/ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dock-ui
+          path: obs-plugin/data/ui
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    runs-on: windows-2022
+    needs: [unit-tests, dock-ui]
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: obs-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dock-ui
+          path: obs-plugin/data/ui
+      - uses: actions/cache@v4
+        with:
+          path: obs-plugin/.deps
+          key: windows-deps-${{ hashFiles('obs-plugin/buildspec.json') }}
+      - name: Build
+        run: .github/scripts/Build-Windows.ps1 -Target x64 -Configuration RelWithDebInfo
+      - name: Package (zip — obs-plugins/64bit + data/obs-plugins/pokeclip-obs · 설치 파일 — %ProgramData%\obs-studio\plugins\pokeclip-obs)
+        run: .github/scripts/Package-Windows.ps1 -Target x64 -Configuration RelWithDebInfo -BuildInstaller
+      - name: 설치 파일 무인 시험 (OBS 실행 중 거절 · 설치 · 옛 사본 정리 · 재설치 · 제거 · 보존 범위)
+        run: .github/scripts/Test-WindowsInstaller.ps1 -Installer (Get-Item -Path release/pokeclip-obs-*-windows-x64-installer.exe).FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pokeclip-obs-windows-x64-${{ github.sha }}
+          path: |
+            obs-plugin/release/pokeclip-obs-*-windows-x64-installer.exe
+            obs-plugin/release/pokeclip-obs-*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/develop' && 30 || 14 }}
+
+  macos:
+    runs-on: macos-26
+    needs: [unit-tests, dock-ui]
+    defaults:
+      run:
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        working-directory: obs-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dock-ui
+          path: obs-plugin/data/ui
+      - name: Select Xcode
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.5.app/Contents/Developer
+          # macos-ci 프리셋이 Xcode 컴파일 캐시(CAS)를 켠다 — 경로를 안 주면 읽기 전용 기본 위치를 잡아 컴파일이 전부 죽는다.
+          cas="${HOME}/Library/Developer/Xcode/DerivedData/CompilationCache.noindex"
+          mkdir -p "${cas}"
+          print "XCODE_CAS_PATH=${cas}" >> $GITHUB_ENV
+      - uses: actions/cache@v4
+        with:
+          path: obs-plugin/.deps
+          key: macos-deps-${{ hashFiles('obs-plugin/buildspec.json') }}
+      - name: Build (unsigned)
+        env:
+          CODESIGN_IDENT: '-'
+        run: .github/scripts/build-macos --config RelWithDebInfo
+      # cmake --install이 create-package.cmake(pkgbuild+productbuild)로 만든 pkg를 산출물로 낸다 — tar.xz는 더 안 만든다.
+      - name: Package (pkg → ~/Library/Application Support/obs-studio/plugins)
+        run: .github/scripts/package-macos --config RelWithDebInfo --package
+      - name: 설치 파일 시험 (pkg → 현재 사용자 홈)
+        run: |
+          pkgs=(release/pokeclip-obs-*-macos-universal.pkg)
+          (( ${#pkgs} == 1 ))
+          pkgutil --check-signature "${pkgs[1]}" || print '서명 없음 — 공인 서명(POK-360) 전까지 정상'
+          pkgutil --expand "${pkgs[1]}" "${RUNNER_TEMP}/pkg-expand"
+          cat "${RUNNER_TEMP}"/pkg-expand/*.pkg/PackageInfo
+          installer -pkg "${pkgs[1]}" -target CurrentUserHomeDirectory
+          plugin="${HOME}/Library/Application Support/obs-studio/plugins/pokeclip-obs.plugin"
+          test -d "${plugin}"
+          archs="$(lipo -archs "${plugin}/Contents/MacOS/pokeclip-obs")"
+          print "archs: ${archs}"
+          [[ ${archs} == *arm64* && ${archs} == *x86_64* ]]
+          test -f "${plugin}/Contents/Resources/ui/index.html"
+          test -f "${plugin}/Contents/Resources/locale/en-US.ini"
+          codesign -dv "${plugin}" 2>&1 | sed -n '1,6p'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pokeclip-obs-macos-universal-${{ github.sha }}
+          path: obs-plugin/release/pokeclip-obs-*-macos-universal.*
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/develop' && 30 || 14 }}

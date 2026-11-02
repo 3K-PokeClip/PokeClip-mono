@@ -1,6 +1,7 @@
 import {
   createContext,
   forwardRef,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -101,17 +102,30 @@ const DropdownMenuContent = forwardRef<HTMLDivElement, DropdownMenuContentProps>
       open: ctx.open,
     });
     const measureRef = useMeasureOnAttach(update);
-    const composedRef = useComposedRefs<HTMLDivElement>(ref, ctx.contentRef, measureRef);
+    // 열면 첫 항목에 초점을 둔다. 내용은 Portal이 한 번 더 그린 뒤에야 붙어서 열림 이펙트 때는 아직 없다: 붙는 순간에
+    // 옮긴다(PR #341 2차 — 키보드로 열면 초점이 트리거에 남아 항목을 못 골랐다). 열린 동안 한 번만: 합친 ref가 바뀌어
+    // 다시 불려도 화살표로 옮긴 초점을 빼앗지 않게
+    const focusedOnOpen = useRef(false);
+    const focusFirstOnAttach = useCallback((node: HTMLDivElement | null) => {
+      if (node === null || focusedOnOpen.current) return;
+      focusedOnOpen.current = true;
+      node.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus();
+    }, []);
+    const composedRef = useComposedRefs<HTMLDivElement>(
+      ref,
+      ctx.contentRef,
+      measureRef,
+      focusFirstOnAttach,
+    );
     const typeahead = useRef({ str: '', timer: 0 });
 
     useEffect(() => {
       if (!ctx.open) return;
-      const first = ctx.contentRef.current?.querySelector<HTMLElement>(
-        '[role="menuitem"]:not([aria-disabled="true"])',
-      );
-      first?.focus();
       const trigger = ctx.triggerRef.current;
-      return () => trigger?.focus();
+      return () => {
+        focusedOnOpen.current = false;
+        trigger?.focus();
+      };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [ctx.open]);
 

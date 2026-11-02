@@ -1,0 +1,2 @@
+# R0: conftest 는 검사 루트의 이 파일을 읽어 namespace · data 등을 바꾼다.
+namespace = ["missing"]

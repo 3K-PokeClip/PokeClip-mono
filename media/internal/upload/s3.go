@@ -12,13 +12,43 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 )
 
-// segmentContentType 은 세그먼트 객체의 Content-Type 이다.
+// 객체 머리 값이다(M5 설계 4.5 표). 호출자가 매번 넘기지 않는다 — 축이 고르는 계약이지 인자가 아니다(Putter
+// 계약 3번).
 //
-// 호출자가 매번 넘기지 않는다 — 이것은 계약이지 인자가 아니다(Putter 계약 3번).
-// fMP4 세그먼트의 표준 타입이며, CloudFront·플레이어 경로에서의 적합성은 POK-28 이월(M4)이다.
-const segmentContentType = "video/iso.segment"
+//   - segmentContentType 은 fMP4 조각(② 원본 · ③ 조각)의 표준 타입이다.
+//   - initContentType 은 init(MAP — ftyp+moov)의 타입이다. init 은 조각이 아니라 MP4 파일이다.
+//   - immutableCacheControl 은 ③ 조각 · init 의 캐시 지시다. 같은 키의 바이트가 바뀌지 않는다(재추출 결정성 —
+//     설계 10절 R13 · reextract_test.go). 엣지는 자기 상한(1일)으로 자르고 브라우저는 1년을 지킨다.
+const (
+	segmentContentType    = "video/iso.segment"
+	initContentType       = "video/mp4"
+	immutableCacheControl = "public, max-age=31536000, immutable"
+)
+
+// objectHeaders 는 한 객체의 PUT 머리다. cacheControl 이 비면 머리를 싣지 않는다.
+type objectHeaders struct {
+	contentType, cacheControl string
+}
+
+// headersFor 는 축별 머리 표다. ② 원본은 CDN 에 나가지 않아 캐시 지시가 없다. 표에 없는 축(미판정 영값 포함)은
+// 오류다 — ② 머리로 접어 올리면 축이 틀린 객체가 조용히 생긴다.
+func headersFor(axis index.Axis) (objectHeaders, error) {
+	switch axis {
+	case index.AxisArchive:
+		return objectHeaders{contentType: segmentContentType}, nil
+	case index.AxisPlayback:
+		return objectHeaders{contentType: segmentContentType, cacheControl: immutableCacheControl}, nil
+	case index.AxisInit:
+		return objectHeaders{contentType: initContentType, cacheControl: immutableCacheControl}, nil
+	default:
+		return objectHeaders{}, fmt.Errorf("객체 머리 표에 없는 축(%v)이다", axis)
+	}
+}
 
 // S3Options 는 PUT 대상을 특정하는 설정이다. 자격증명은 여기 없다 —
 // 코드가 자격증명을 직접 읽지 않는 것이 G14 이며, SDK 의 기본 체인이 env·프로필에서 찾는다.
@@ -73,7 +103,7 @@ func newS3Putter(ctx context.Context, opt S3Options, log *slog.Logger, httpClien
 		// 금지하는 바로 그 동작이고, 되감기 불가 스트림에서는 아예 실패한다.
 		// 무결성은 Content-Length 와 응답 ETag 로 확인한다.
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
-	})
+	}, s3errbody.Limit) // 오류 응답 본문은 상한까지만 읽는다 — WithHTTPClient 로 감싸면 CA 묶음 해석이 깨진다
 	log.Info("uploader_started", "bucket", opt.Bucket, "region", opt.Region, "endpoint", opt.Endpoint)
 
 	// 기동 시 한 번 확인한다. 실패해도 기동을 거부하지 않는다 — 자격증명은 나중에
@@ -88,18 +118,26 @@ func newS3Putter(ctx context.Context, opt S3Options, log *slog.Logger, httpClien
 	return &s3Putter{client: client, bucket: opt.Bucket}, true, nil
 }
 
-// Put 은 계약 셋을 그대로 지킨다: ctx 준수 / 처음부터 정확히 size 바이트 / Content-Type 고정.
+// Put 은 계약 셋을 그대로 지킨다: ctx 준수 / 처음부터 정확히 size 바이트 / 축별 머리 고정.
 //
 // body 를 감싸지 않고 그대로 넘기되 ContentLength 를 명시한다 — SDK 가 길이를 모르면
 // 되감기를 시도하거나 청크 인코딩으로 보내는데, 둘 다 계약 2번 위반이다.
-func (p *s3Putter) Put(ctx context.Context, key string, body io.Reader, size int64) error {
-	_, err := p.client.PutObject(ctx, &s3.PutObjectInput{
+func (p *s3Putter) Put(ctx context.Context, key string, body io.Reader, size int64, axis index.Axis) error {
+	h, err := headersFor(axis)
+	if err != nil {
+		return fmt.Errorf("PUT 거부 key=%q: %w", key, err)
+	}
+	in := &s3.PutObjectInput{
 		Bucket:        aws.String(p.bucket),
 		Key:           aws.String(key),
 		Body:          io.LimitReader(body, size),
 		ContentLength: aws.Int64(size),
-		ContentType:   aws.String(segmentContentType),
-	})
+		ContentType:   aws.String(h.contentType),
+	}
+	if h.cacheControl != "" {
+		in.CacheControl = aws.String(h.cacheControl)
+	}
+	_, err = p.client.PutObject(ctx, in)
 	if err != nil {
 		return fmt.Errorf("PUT 실패 key=%q: %w", key, err)
 	}
@@ -111,7 +149,7 @@ func (p *s3Putter) Put(ctx context.Context, key string, body io.Reader, size int
 // 결정 8‴의 "무분류"와 모순되지 않는다 — 그 무분류는 **재시도 여부**에 대한 것이다.
 // 어떤 오류든 RetryMax 까지 똑같이 재시도한다. 이 함수는 재시도가 전부 끝난 뒤
 // "이 실패가 설정 문제인가"만 판정해 브레이커 streak 에 넣는다.
-// 목적도(재시도 vs 전역 차단) 시점도(매 시도 vs 행 종결) 다르다(CX-2 ⑤).
+// 목적도(재시도 vs 축 브레이커 차단) 시점도(매 시도 vs 행 종결) 다르다(CX-2 ⑤).
 type putErrClass int
 
 const (
@@ -144,7 +182,7 @@ var hardCodes = map[string]struct{}{
 // awshttp.ResponseError 의 상태 코드와 smithy.APIError 의 코드 문자열을 둘 다 본다 —
 // 엔드포인트 구현(MinIO 등)에 따라 한쪽만 채워질 수 있다. **둘 다 없으면 soft 다.**
 // soft 가 기본값인 것이 중요하다: 알 수 없는 오류를 hard 로 오분류하면 브레이커가
-// 전역으로 열려 정상 트래픽까지 막는다(R2).
+// 그 축만 열려 그 축의 정상 트래픽까지 막는다(R2).
 //
 // 두 SDK 타입을 명시로 받은 뒤 같은 모양의 구조적 인터페이스도 한 번 더 본다.
 // 후자는 SDK 를 임포트하지 않는 테스트 더블과 다른 엔드포인트 구현을 위한 것이다.

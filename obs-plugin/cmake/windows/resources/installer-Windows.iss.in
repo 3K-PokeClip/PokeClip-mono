@@ -1,0 +1,177 @@
+; PokeClip for OBS — Windows 설치 파일 (POK-261 · POK-361)
+;
+; cmake/windows/helpers.cmake가 configure_file(@ONLY)로 build_x64/installer-Windows.generated.iss를 만들고
+; .github/scripts/Package-Windows.ps1 -BuildInstaller가 iscc /DStageDir=<install 트리>로 컴파일한다.
+; 상류 obs-plugintemplate(2023-06~2025-01)의 installer-Windows.iss.in을 이 저장소 배치에 맞게 고쳤다.
+;
+; 설치 위치: %ProgramData%\obs-studio\plugins\@CMAKE_PROJECT_NAME@\{bin\64bit, data}
+;  - OBS 32 frontend(AddExtraModulePaths)가 읽는 플러그인 경로다. 템플릿 windows-x64 프리셋의 설치 접두와 같다.
+;  - 포터블 OBS는 이 경로를 읽지 않는다 → zip을 OBS 폴더에 푸는 수동 설치로 안내한다.
+;  - 예전 zip 수동 설치(<OBS>\obs-plugins\64bit\·<OBS>\data\obs-plugins\)가 남아 있으면 두 벌이 잡히므로 지운다.
+; OBS가 켜져 있으면(OBSStudioCore 뮤텍스) 닫으라고 하고 막는다. 방송 중일 수 있어 자동으로 닫지 않는다.
+; 제거는 이 플러그인 폴더만 지운다 — OBS 본체·다른 플러그인·%APPDATA%\obs-studio\plugin_config(페어링·설정)는 남긴다.
+
+#define MyAppName "@PLUGIN_DISPLAY_NAME@"
+#define MyAppVersion "@CMAKE_PROJECT_VERSION@"
+#define MyAppPublisher "@PLUGIN_AUTHOR@"
+#define MyAppURL "@PLUGIN_WEBSITE@"
+#define MyModule "@CMAKE_PROJECT_NAME@"
+#define SourceRoot "@PLUGIN_SOURCE_DIR_NATIVE@"
+#ifndef StageDir
+  #error StageDir가 없다 — iscc /DStageDir=<release\<구성>\@CMAKE_PROJECT_NAME@> 로 부른다
+#endif
+#define HaveKorean FileExists(CompilerPath + "Languages\Korean.isl")
+
+[Setup]
+; AppId는 buildspec.json uuids.windowsApp — 배포한 뒤 바꾸면 덮어쓰기 설치·제거가 끊긴다.
+AppId={{@UUID_APP@}
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppURL}
+AppUpdatesURL={#MyAppURL}
+VersionInfoVersion=@PLUGIN_VERSION_MAJOR@.@PLUGIN_VERSION_MINOR@.@PLUGIN_VERSION_PATCH@.0
+DefaultDirName={commonappdata}\obs-studio\plugins\{#MyModule}
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+UsePreviousAppDir=no
+DirExistsWarning=no
+; 제거 프로그램은 기본 자리({app})에 둔다 — 하위 폴더에 두면 Inno가 {app}을 먼저 지우려다 실패하고 빈 폴더가 남는다.
+; OBS는 bin\64bit만 훑으므로 {app}\unins000.exe는 모듈로 잡히지 않는다.
+UninstallDisplayName={#MyAppName}
+PrivilegesRequired=admin
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+MinVersion=10.0
+AppMutex=OBSStudioCore
+CloseApplications=no
+WizardStyle=modern
+Compression=lzma2
+SolidCompression=yes
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+#if HaveKorean
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+#endif
+
+[Messages]
+; AppMutex 안내의 기본 문구는 %1에 AppName(이 플러그인)을 넣는다 — 닫아야 하는 건 OBS Studio다.
+english.SetupAppRunningError=Setup has detected that OBS Studio is currently running.%n%nPlease close OBS Studio now, then click OK to continue, or Cancel to exit.
+english.UninstallAppRunningError=Uninstall has detected that OBS Studio is currently running.%n%nPlease close OBS Studio now, then click OK to continue, or Cancel to exit.
+#if HaveKorean
+korean.SetupAppRunningError=OBS Studio가 실행 중입니다.%n%nOBS Studio를 닫은 뒤 확인을 누르세요. 설치를 그만두려면 취소를 누르세요.
+korean.UninstallAppRunningError=OBS Studio가 실행 중입니다.%n%nOBS Studio를 닫은 뒤 확인을 누르세요. 제거를 그만두려면 취소를 누르세요.
+#endif
+
+[CustomMessages]
+english.LicenseCaption=License Information
+english.LicenseDescription=Please review the license terms before installing {#MyAppName}.
+english.LicenseSubCaption=Once you are aware of your rights, click Next to continue.
+english.NoObs=OBS Studio does not seem to be installed (registry key HKLM\SOFTWARE\OBS Studio not found).%n%nInstall anyway? The plugin is loaded by OBS Studio 32 or later.
+english.OldObs=The installed OBS Studio is version %1. This plugin is built for OBS Studio 32 or later and may not load.%n%nInstall anyway?
+#if HaveKorean
+korean.LicenseCaption=라이선스 안내
+korean.LicenseDescription={#MyAppName}을(를) 설치하기 전에 라이선스를 확인하세요.
+korean.LicenseSubCaption=권리를 확인했으면 다음을 누르세요.
+korean.NoObs=OBS Studio가 설치돼 있지 않은 것 같습니다(레지스트리 HKLM\SOFTWARE\OBS Studio 없음).%n%n그래도 설치할까요? 플러그인은 OBS Studio 32 이상이 불러옵니다.
+korean.OldObs=설치된 OBS Studio가 %1 버전입니다. 이 플러그인은 OBS Studio 32 이상용이라 불러오지 못할 수 있습니다.%n%n그래도 설치할까요?
+#endif
+
+[InstallDelete]
+; 독 페이지 산출물은 해시 파일 이름이라 덮어쓰기만 하면 옛 파일이 남는다 — 플러그인 data만 비우고 다시 넣는다.
+Type: filesandordirs; Name: "{app}\data"
+
+[Files]
+Source: "{#StageDir}\bin\64bit\*.dll"; DestDir: "{app}\bin\64bit"; Flags: ignoreversion
+Source: "{#StageDir}\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceRoot}\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "{#SourceRoot}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceRoot}\LICENSE"; Flags: dontcopy
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\data"
+Type: dirifempty; Name: "{app}\bin\64bit"
+Type: dirifempty; Name: "{app}\bin"
+Type: dirifempty; Name: "{app}"
+
+[Code]
+const
+  ObsRegKey = 'SOFTWARE\OBS Studio';
+  MinObsMajor = 32;
+
+function GetObsDir(): String;
+begin
+  Result := '';
+  if not RegQueryStringValue(HKLM64, ObsRegKey, '', Result) then
+    if not RegQueryStringValue(HKLM32, ObsRegKey, '', Result) then
+      Result := '';
+end;
+
+function InitializeSetup(): Boolean;
+var
+  ObsDir, ObsExe: String;
+  VersionMS, VersionLS: Cardinal;
+  Major: Cardinal;
+begin
+  Result := True;
+  ObsDir := GetObsDir();
+  if ObsDir = '' then
+  begin
+    Log('OBS Studio 레지스트리 키가 없다');
+    Result := SuppressibleMsgBox(CustomMessage('NoObs'), mbConfirmation, MB_YESNO, IDYES) = IDYES;
+    exit;
+  end;
+  Log('OBS Studio 위치: ' + ObsDir);
+  ObsExe := AddBackslash(ObsDir) + 'bin\64bit\obs64.exe';
+  if GetVersionNumbers(ObsExe, VersionMS, VersionLS) then
+  begin
+    Major := VersionMS shr 16;
+    Log('OBS Studio 주 버전: ' + IntToStr(Major));
+    if Major < MinObsMajor then
+      Result := SuppressibleMsgBox(FmtMessage(CustomMessage('OldObs'), [IntToStr(Major)]), mbConfirmation, MB_YESNO, IDYES) = IDYES;
+  end
+  else
+    Log('obs64.exe 버전을 읽지 못했다: ' + ObsExe);
+end;
+
+procedure InitializeWizard();
+var
+  LicenseText: AnsiString;
+  Page: TOutputMsgMemoWizardPage;
+begin
+  ExtractTemporaryFile('LICENSE');
+  LoadStringFromFile(ExpandConstant('{tmp}\LICENSE'), LicenseText);
+  Page := CreateOutputMsgMemoPage(wpWelcome, CustomMessage('LicenseCaption'), CustomMessage('LicenseDescription'),
+    CustomMessage('LicenseSubCaption'), String(LicenseText));
+end;
+
+// 예전 zip 수동 설치(OBS 폴더 안)가 남아 있으면 이 플러그인 파일만 지운다 — 남겨 두면 OBS가 두 벌을 잡는다.
+procedure RemoveManualCopy();
+var
+  ObsDir, Base: String;
+begin
+  ObsDir := GetObsDir();
+  if ObsDir = '' then
+    exit;
+  Base := AddBackslash(ObsDir);
+  if FileExists(Base + 'obs-plugins\64bit\{#MyModule}.dll') then
+  begin
+    Log('예전 수동 설치를 지운다: ' + Base + 'obs-plugins\64bit\{#MyModule}.dll');
+    DeleteFile(Base + 'obs-plugins\64bit\{#MyModule}.dll');
+    DeleteFile(Base + 'obs-plugins\64bit\{#MyModule}.pdb');
+  end;
+  if DirExists(Base + 'data\obs-plugins\{#MyModule}') then
+  begin
+    Log('예전 수동 설치 data를 지운다: ' + Base + 'data\obs-plugins\{#MyModule}');
+    DelTree(Base + 'data\obs-plugins\{#MyModule}', True, True, True);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    RemoveManualCopy();
+end;

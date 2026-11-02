@@ -31,11 +31,18 @@ public class TestJwtFactory {
 
     public String idToken(String issuer, String audience, String sub,
                           String email, String name, String picture, Instant expiresAt) throws Exception {
+        return idToken(issuer, audience, sub, email, name, picture, expiresAt, true);
+    }
+
+    /** {@code emailVerified}가 null이면 칸을 아예 안 싣는다(POK-256 차단 시험). */
+    public String idToken(String issuer, String audience, String sub, String email, String name, String picture,
+                          Instant expiresAt, Object emailVerified) throws Exception {
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
                 .issuer(issuer)
                 .audience(List.of(audience))
                 .subject(sub)
                 .claim("email", email)
+                .claim("email_verified", emailVerified)
                 .claim("name", name)
                 .claim("picture", picture)
                 .issueTime(Date.from(Instant.now().minusSeconds(10)))

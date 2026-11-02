@@ -1,0 +1,2 @@
+# terraform.tfvars 로 복사해 실제 값을 넣는다. terraform.tfvars 는 추적하지 않는다.
+state_bucket_name = "<STATE_BUCKET_NONPROD>"

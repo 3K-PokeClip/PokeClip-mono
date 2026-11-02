@@ -2,20 +2,25 @@ package com.pokeclip.auth.config;
 
 import com.pokeclip.auth.chzzk.ChzzkProperties;
 import com.pokeclip.auth.google.GoogleAuthProperties;
+import com.pokeclip.auth.profile.PhotoProperties;
+import com.pokeclip.auth.soop.SoopProperties;
 import com.pokeclip.auth.streamkey.secret.SecretStoreConfig;
 import com.pokeclip.auth.streamkey.secret.SecretStoreProperties;
 import com.pokeclip.auth.token.JwtConfig;
 import com.pokeclip.auth.token.JwtProperties;
+import com.pokeclip.auth.youtube.YoutubeProperties;
 import com.pokeclip.web.CorsProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Properties;
@@ -44,6 +49,12 @@ class RequiredPropertiesTest {
     private static final String[] VALID_CHZZK =
             chzzk("cid", "csecret", "http://localhost:8081/oauth/chzzk/callback");
 
+    private static final String[] VALID_YOUTUBE =
+            youtube("ycid", "ycsecret", "http://localhost:8081/oauth/youtube/callback");
+
+    private static final String[] VALID_SOOP =
+            soop("scid", "scsecret", "http://localhost:3000/oauth/soop/callback");
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                     ConfigurationPropertiesAutoConfiguration.class))
@@ -57,7 +68,9 @@ class RequiredPropertiesTest {
             // 그 상황이다. 비움을 검증하는 테스트는 아래에서 덮어쓴다.
             .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY))
             .withPropertyValues(internalApi(VALID_INTERNAL_TOKEN))
-            .withPropertyValues(VALID_CHZZK);
+            .withPropertyValues(VALID_CHZZK)
+            .withPropertyValues(VALID_YOUTUBE)
+            .withPropertyValues(VALID_SOOP);
 
     @Test
     void JWT_시크릿이_비어_있으면_부팅이_실패한다() {
@@ -116,6 +129,42 @@ class RequiredPropertiesTest {
                 .withPropertyValues(google("id", "secret"))
                 .withPropertyValues(cors("http://localhost:3000"))
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * 수명 둘이 비면 <b>어느 프로퍼티인지와 함께</b> 거부해야 한다. 전에는 {@code refresh-token-ttl}이 없으면
+     * 바인딩이 조용히 null을 넣고 {@code RetentionKeepForCheck.check()}의 {@code keepFor.compareTo(null)}이 터져
+     * {@code BeanCreationException: NullPointerException}으로만 죽었다 — 메시지에 이름이 없어 운영자가 어디를
+     * 고칠지 모른다(리뷰 라운드 2). 이 저장소의 다른 필수 값은 전부 이름을 찍는다.
+     *
+     * <p>{@code access-token-ttl}도 같이 잰다 — 같은 record의 쌍둥이 칸이라 한쪽만 막으면 나머지가 남는다.
+     * 이쪽이 null이면 부팅이 아니라 <b>토큰 발급 때 500</b>으로 터진다(더 늦게 보인다).
+     * 시크릿과 달리 값을 리포트에 실어도 된다(수명은 비밀이 아니고, 빈 값이면 {@code rejected value [null]}이다).
+     *
+     * <p>이름은 yml 키(kebab)가 아니라 <b>record 칸 이름</b>으로 찍힌다({@code pokeclip.jwt.refreshTokenTtl}) —
+     * 바인딩 검증이 자바 필드 기준이라서다. 실측한 그대로 단언한다.
+     */
+    @Test
+    void JWT_수명이_비어_있으면_부팅이_실패하고_어느_값인지_알려준다() {
+        ApplicationContextRunner base = runner
+                .withPropertyValues("pokeclip.jwt.secret=test-only-secret-key-at-least-32-bytes-long!!")
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"));
+
+        base.withPropertyValues("pokeclip.jwt.access-token-ttl=PT30M")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("어느 값이 비었는지 메시지에 없다 — 이름 없는 NPE로 죽는다")
+                            .contains("pokeclip.jwt.refreshTokenTtl");
+                });
+        base.withPropertyValues("pokeclip.jwt.refresh-token-ttl=P14D")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("쌍둥이 칸이 안 막혀 있다")
+                            .contains("pokeclip.jwt.accessTokenTtl");
+                });
     }
 
     /**
@@ -275,6 +324,287 @@ class RequiredPropertiesTest {
                 .contains("${DB_PORT:5432}");
     }
 
+    /**
+     * DB 로그인 방식 셋(POK-407)이 yml에 사이드카와 같은 이름으로 있다. 기본은 password라 로컬 compose · CI가 지금 그대로
+     * 붙는다. 이름이 어긋나면 운영에서 POSTGRES_AUTH=iam을 줘도 조용히 비밀번호 방식으로 남는다.
+     */
+    @Test
+    void DB_로그인_방식_자리가_사이드카와_같은_이름으로_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+        assertThat(properties.getProperty("pokeclip.datasource.auth")).isEqualTo("${POSTGRES_AUTH:password}");
+        assertThat(properties.getProperty("pokeclip.datasource.region")).isEqualTo("${AWS_REGION:ap-northeast-2}");
+        assertThat(properties.getProperty("pokeclip.datasource.ssl-root-cert")).isEqualTo("${POSTGRES_SSLROOTCERT:}");
+    }
+
+    /**
+     * 위 두 사진 테스트는 <b>값이 주어졌을 때</b>의 거동을 잰다. 이것은 yml에 그 자리가 실제로
+     * <b>선언돼 있는지</b>를 잰다 — 사진 설정 블록을 통째로 지워도 아무것도 안 깨지던 자리다
+     * (주입으로 확인: 블록 삭제 → 전 시험 초록).
+     *
+     * <p>DeploymentEnvVarsTest가 필수 변수 목록을 <b>이 yml에서 뽑기 때문에</b> 그렇다 —
+     * 선언을 지우면 요구도 같이 사라져 스스로를 못 지킨다. 그래서 선언 자체를 여기서 못박는다.
+     * {@code ${VAR:}}(빈 기본값)가 「부팅 검증으로 잡는 필수 값」이라는 표시이고,
+     * 그 모양이 아니면 그 검사가 compose·.env.dev.example을 강제하지 않는다.
+     *
+     * <p>{@code force-path-style}만 기본값이 있다 — 켜고 끄는 스위치라 값이 필요 없고,
+     * 그래서 <b>DeploymentEnvVarsTest가 이 하나만 못 잡는다</b>(손으로 챙긴 자리다).
+     * 그 의도까지 함께 못박아, 누가 "일관성"을 이유로 넷과 같은 모양으로 바꾸면 빨간불이 되게 한다.
+     */
+    @Test
+    void 사진_설정이_yml에_빈_기본값으로_선언돼_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("pokeclip.profile-photo.bucket"))
+                .as("창고 이름 선언이 없다 — 사진 기능의 켜짐/꺼짐 스위치가 사라진다")
+                .isEqualTo("${PROFILE_PHOTO_S3_BUCKET:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.endpoint"))
+                .isEqualTo("${PROFILE_PHOTO_S3_ENDPOINT:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.token-secret"))
+                .as("표 서명키 선언이 없다 — 배포 파일 검사가 이 변수를 강제하지 않게 된다")
+                .isEqualTo("${PROFILE_PHOTO_TOKEN_SECRET:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.base-url"))
+                .isEqualTo("${PROFILE_PHOTO_BASE_URL:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.force-path-style"))
+                .as("스위치라 기본값을 일부러 뒀다 — 넷과 같은 모양으로 바꾸면 값 없이 뜨는 길이 막힌다")
+                .isEqualTo("${PROFILE_PHOTO_S3_FORCE_PATH_STYLE:false}");
+    }
+
+    /**
+     * 청소 프로퍼티 여섯의 <b>운영 값</b>은 다른 어떤 시험도 안 읽는다 — {@code application-test.yml}이 여섯을
+     * 전부 덮고 {@code RetentionPropertiesTest}는 값을 직접 넣는다. 그래서 {@code refresh-tokens-keep-for: PT1H}
+     * 같은 양수 오타는 부팅 검증(양수만 본다)을 지나 <b>운영에서만</b> 재사용 봉쇄의 창이 준다.
+     * 사용자 결정값(2026-09-03)을 여기 못박는다. 바꾸려면 결정을 먼저 바꾼다.
+     *
+     * <p><b>반대쪽 값({@code pokeclip.jwt.refresh-token-ttl})과 둘의 관계도 여기서 본다.</b> {@code RetentionKeepForCheck}가
+     * 부팅에서 보는 것이 그 관계인데, 지금까지는 {@code refresh-token-ttl}만 {@code P30D}로 올려도 시험이 전부 초록이고
+     * <b>운영 인스턴스만 부팅을 거부했다</b>(리뷰 라운드 2 재현 R3 — 배포에서 재시작 루프로 처음 보인다).
+     * 관계를 직접 단언해야 어느 쪽을 고쳐도 잡힌다.
+     */
+    @Test
+    void 청소_프로퍼티의_운영_값이_결정대로_적혀_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("pokeclip.retention.enabled"))
+                .as("운영 기본은 켜짐이다 — 꺼짐은 테스트 프로파일만").isEqualTo("true");
+        assertThat(properties.getProperty("pokeclip.retention.interval")).isEqualTo("PT10M");
+        assertThat(properties.getProperty("pokeclip.retention.batch-limit")).isEqualTo("1000");
+        assertThat(properties.getProperty("pokeclip.retention.refresh-tokens-keep-for"))
+                .as("회수 행 보관 = 재사용 봉쇄의 창. 사용자 결정값이다(2026-09-03) — 바꾸려면 결정을 먼저 바꾼다")
+                .isEqualTo("P14D");
+        assertThat(properties.getProperty("pokeclip.retention.pairing-attempts-keep-for")).isEqualTo("PT1H");
+        assertThat(properties.getProperty("pokeclip.retention.pairing-codes-keep-for")).isEqualTo("PT1H");
+
+        assertThat(properties.getProperty("pokeclip.jwt.refresh-token-ttl"))
+                .as("보관의 하한이 되는 값이다 — 이쪽만 올리면 운영 부팅이 거부되는데 시험은 전부 초록이었다")
+                .isEqualTo("P14D");
+        assertThat(Duration.parse(properties.getProperty("pokeclip.retention.refresh-tokens-keep-for")))
+                .as("보관이 수명보다 짧다 — RetentionKeepForCheck가 운영 부팅을 거부한다(규칙은 「같다」가 아니라 「이상」이다)")
+                .isGreaterThanOrEqualTo(
+                        Duration.parse(properties.getProperty("pokeclip.jwt.refresh-token-ttl")));
+    }
+
+    /**
+     * 프록시 헤더 전략의 <b>운영 기본값</b>도 다른 어떤 시험이 안 본다 — {@code application-test.yml}이 리터럴
+     * {@code none}으로 덮고({@code ForwardedHeadersDisabledTest}가 그것을 쓴다), {@code ForwardedHeadersNativeTest}는
+     * {@code @TestPropertySource}로 자기 값을 넣으며, {@code DeploymentEnvVarsTest}는 {@code ${FORWARD_HEADERS_STRATEGY:}}
+     * 까지만 보고 <b>기본값은 안 본다</b>. 그래서 기본을 {@code native}로 뒤집어도 752건이 전부 초록이었다
+     * (리뷰 라운드 2 재현 R1).
+     *
+     * <p>기본이 {@code native}가 되면 프록시가 없는 dev에서 <b>아무나 보낸 {@code X-Forwarded-For}를 믿는 길</b>이
+     * 열린다(교환 창구의 IP당 한도가 헤더 한 줄로 우회된다 — 소켓이 루프백이면 신뢰 대역 안이다).
+     * 위 사진 검사({@code PROFILE_PHOTO_S3_FORCE_PATH_STYLE})와 같은 모양으로 기본값까지 통째로 못박는다.
+     */
+    @Test
+    void 프록시_헤더_전략의_운영_기본값이_none이다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("server.forward-headers-strategy"))
+                .as("프록시 헤더를 믿는 것이 기본이 됐다 — 프록시가 없는 환경에서 IP당 한도가 헤더로 우회된다")
+                .isEqualTo("${FORWARD_HEADERS_STRATEGY:none}");
+    }
+
+    /**
+     * 신뢰 대역은 운영에서 {@code FORWARD_HEADERS_TRUSTED_PROXIES}로 좁힌다(POK-316). 비워 두면 전과 같아야 하므로 기본값은
+     * Boot 기본 대역을 글자 그대로 옮겨 적었다: Boot 판을 올려 그 값이 바뀌면 여기서 갈린다. 다른 시험은 기본값을 안 본다
+     * ({@code ProxyTrustNativeTest}는 좁힌 값을 넣고, 나머지 실서버 시험은 대역에 루프백이 있는지만 본다).
+     */
+    @Test
+    void 신뢰_대역의_운영_기본값이_Boot_기본_대역과_같다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+        String bootDefault = new TomcatServerProperties().getRemoteip().getInternalProxies();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("server.tomcat.remoteip.internal-proxies"))
+                .as("환경변수 이름이 어긋났거나 기본값이 Boot 기본 대역과 갈렸다")
+                .isEqualTo("${FORWARD_HEADERS_TRUSTED_PROXIES:" + bootDefault + "}");
+    }
+
+    /**
+     * 유튜브 앱 설정 셋도 치지직과 같은 이유로 한 덩어리다 — 하나만 빠지면 나머지가 무의미하고,
+     * 실패 메시지에 시크릿이 남으면 안 된다. 치지직 앱과 <b>다른 GCP 앱</b>이라 값이 별개다.
+     */
+    @Test
+    void 유튜브_앱_설정_중_하나라도_비면_부팅이_실패하고_원인이_하나로_모인다() {
+        String secretNeedle = "LEAK-youtube-secret-" + UUID.randomUUID();
+        for (String[] broken : List.of(
+                youtube("", secretNeedle, "http://x"),
+                youtube("i", "", "http://x"),
+                youtube("i", secretNeedle, ""))) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(broken)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure()))
+                                .as("유튜브 앱 설정이 아닌 다른 이유로 부팅이 실패했다")
+                                .contains("YOUTUBE_CLIENT_ID·YOUTUBE_CLIENT_SECRET·YOUTUBE_REDIRECT_URI")
+                                .as("실패 메시지에 유튜브 시크릿이 평문으로 남았다")
+                                .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
+    /** SOOP 앱 셋도 치지직·유튜브와 같은 이유로 한 덩어리다. SOOP 콘솔에 앱당 리다이렉트가 하나라 환경마다 앱이 따로다. */
+    @Test
+    void SOOP_앱_설정_중_하나라도_비면_부팅이_실패하고_원인이_하나로_모인다() {
+        String secretNeedle = "LEAK-soop-secret-" + UUID.randomUUID();
+        for (String[] broken : List.of(
+                soop("", secretNeedle, "http://x"),
+                soop("i", "", "http://x"),
+                soop("i", secretNeedle, ""))) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(broken)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure()))
+                                .as("SOOP 앱 설정이 아닌 다른 이유로 부팅이 실패했다")
+                                .contains("SOOP_CLIENT_ID·SOOP_CLIENT_SECRET·SOOP_REDIRECT_URI")
+                                .as("실패 메시지에 SOOP 시크릿이 평문으로 남았다")
+                                .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
+    /**
+     * 🔴 SOOP 설정은 Java 기본값이 없다(계획 검증 C5). 스케줄러의 {@code @Scheduled} 자리표시는 Environment에서
+     * 풀리므로 yml에 값이 없으면 운영에서만 부팅이 죽고 시험 프로파일(자기 yml이 채운다)은 초록이다. 그래서 운영 yml
+     * 원문을 YAML로 읽어 키가 다 있는지 잰다.
+     */
+    @Test
+    void SOOP_설정값이_운영_yml에_전부_적혀_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties props = yaml.getObject();
+
+        assertThat(props).isNotNull();
+        assertThat(props.getProperty("pokeclip.soop.app.client-id")).isEqualTo("${SOOP_CLIENT_ID:}");
+        assertThat(props.getProperty("pokeclip.soop.app.client-secret")).isEqualTo("${SOOP_CLIENT_SECRET:}");
+        assertThat(props.getProperty("pokeclip.soop.app.redirect-uri")).isEqualTo("${SOOP_REDIRECT_URI:}");
+        assertThat(props.getProperty("pokeclip.soop.authorize-uri")).isEqualTo("https://openapi.sooplive.com/auth/code");
+        assertThat(props.getProperty("pokeclip.soop.api-base-uri")).isEqualTo("https://openapi.sooplive.com");
+        assertThat(props.getProperty("pokeclip.soop.state-ttl")).isEqualTo("PT10M");
+        assertThat(props.getProperty("pokeclip.soop.refresh-ahead")).isEqualTo("PT2H");
+        assertThat(props.getProperty("pokeclip.soop.resolve-min-remaining")).isEqualTo("PT1H");
+        assertThat(props.get("pokeclip.soop.check.enabled")).isEqualTo(true);
+        assertThat(props.getProperty("pokeclip.soop.check.interval")).isEqualTo("PT1H");
+        assertThat(props.getProperty("pokeclip.soop.check.staleness")).isEqualTo("PT24H");
+        assertThat(props.get("pokeclip.soop.check.reject-brake")).isEqualTo(3);
+        assertThat(props.get("pokeclip.soop.check.batch-limit")).isEqualTo(25);
+    }
+
+    /** 키 하나가 빠지면 {@code @NotNull}이 부팅을 세운다(기본값으로 조용히 뜨지 않는다). */
+    @Test
+    void SOOP_설정값이_하나라도_빠지면_부팅이_실패한다() {
+        for (String missing : List.of("pokeclip.soop.state-ttl=", "pokeclip.soop.refresh-ahead=",
+                "pokeclip.soop.resolve-min-remaining=", "pokeclip.soop.check.interval=",
+                "pokeclip.soop.check.staleness=", "pokeclip.soop.check.reject-brake=",
+                "pokeclip.soop.check.batch-limit=", "pokeclip.soop.check.batch-limit=0")) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(missing)
+                    .run(context -> {
+                        assertThat(context).as(missing).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure())).as(missing)
+                                .contains("pokeclip.soop");
+                    });
+        }
+    }
+
+    /**
+     * <b>레코드 단위 시험(PhotoPropertiesTest)은 생성자만 잰다</b> — 그것이 부팅 실패로 이어지는지는
+     * 컨텍스트를 띄워 봐야 안다. 창고 이름만 채우고 나머지를 비우면 사진을 올릴 수는 있는데 볼 수가
+     * 없는 상태가 되고, 그대로 뜨면 사진을 올리는 순간에야 원인 모를 오류가 난다.
+     *
+     * <p>PhotoToken이 이 검증에 기대고 있다 — 빈 서명키는 {@code SecretKeySpec}에서
+     * {@code IllegalArgumentException}이 되는데 그것은 {@code sign}의 catch를 빠져나간다.
+     */
+    @Test
+    void 창고_이름만_있고_나머지가_비면_부팅이_실패하고_서명키가_남지_않는다() {
+        String secretNeedle = "LEAK-photo-secret-" + UUID.randomUUID();
+        for (String[] broken : List.of(
+                photo("bucket", "", "http://localhost:8082"),
+                photo("bucket", secretNeedle, ""))) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(broken)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure()))
+                                .as("사진 설정이 아닌 다른 이유로 부팅이 실패했다")
+                                .contains("PROFILE_PHOTO_")
+                                .as("실패 메시지에 사진 표 서명키가 평문으로 남았다")
+                                .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
+    /** 창고 이름이 비면 나머지가 없어도 정상이다 — 사진 기능만 꺼진 채 서버가 뜬다(CI·팀원 로컬 기본). */
+    @Test
+    void 창고_이름이_비면_나머지가_없어도_부팅한다() {
+        runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
+                .withPropertyValues(photo("", "", ""))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(PhotoProperties.class).enabled()).isFalse();
+                });
+    }
+
+    private static String[] photo(String bucket, String tokenSecret, String baseUrl) {
+        return new String[]{
+                "pokeclip.profile-photo.bucket=" + bucket,
+                "pokeclip.profile-photo.region=ap-northeast-2",
+                "pokeclip.profile-photo.endpoint=",
+                "pokeclip.profile-photo.force-path-style=false",
+                "pokeclip.profile-photo.token-secret=" + tokenSecret,
+                "pokeclip.profile-photo.base-url=" + baseUrl};
+    }
+
     private static String[] chzzk(String clientId, String clientSecret, String redirectUri) {
         return new String[]{
                 "pokeclip.chzzk.app.client-id=" + clientId,
@@ -287,6 +617,44 @@ class RequiredPropertiesTest {
                 "pokeclip.chzzk.resolve-min-remaining=PT12H",
                 "pokeclip.chzzk.refresh.enabled=true",
                 "pokeclip.chzzk.refresh.interval=PT10M"};
+    }
+
+    /**
+     * {@code @NotBlank}·{@code @NotNull}이 걸린 값을 <b>전부</b> 채운다. 하나라도 빠지면 위 테스트가
+     * 유튜브 앱 검증이 아닌 이유로 실패하면서 {@code hasFailed()}로 초록이 된다.
+     */
+    private static String[] youtube(String clientId, String clientSecret, String redirectUri) {
+        return new String[]{
+                "pokeclip.youtube.app.client-id=" + clientId,
+                "pokeclip.youtube.app.client-secret=" + clientSecret,
+                "pokeclip.youtube.app.redirect-uri=" + redirectUri,
+                "pokeclip.youtube.authorize-uri=https://accounts.google.com/o/oauth2/v2/auth",
+                "pokeclip.youtube.token-uri=https://oauth2.googleapis.com/token",
+                "pokeclip.youtube.revoke-uri=https://oauth2.googleapis.com/revoke",
+                "pokeclip.youtube.api-base-uri=https://www.googleapis.com",
+                "pokeclip.youtube.state-ttl=PT10M",
+                "pokeclip.youtube.resolve-min-remaining=PT30M",
+                "pokeclip.youtube.check.enabled=true",
+                "pokeclip.youtube.check.interval=PT1H",
+                "pokeclip.youtube.check.staleness=PT24H"};
+    }
+
+    /** {@code @NotBlank}·{@code @NotNull}이 걸린 값을 <b>전부</b> 채운다(유튜브 헬퍼와 같은 이유). */
+    private static String[] soop(String clientId, String clientSecret, String redirectUri) {
+        return new String[]{
+                "pokeclip.soop.app.client-id=" + clientId,
+                "pokeclip.soop.app.client-secret=" + clientSecret,
+                "pokeclip.soop.app.redirect-uri=" + redirectUri,
+                "pokeclip.soop.authorize-uri=https://openapi.sooplive.com/auth/code",
+                "pokeclip.soop.api-base-uri=https://openapi.sooplive.com",
+                "pokeclip.soop.state-ttl=PT10M",
+                "pokeclip.soop.refresh-ahead=PT2H",
+                "pokeclip.soop.resolve-min-remaining=PT1H",
+                "pokeclip.soop.check.enabled=true",
+                "pokeclip.soop.check.interval=PT1H",
+                "pokeclip.soop.check.staleness=PT24H",
+                "pokeclip.soop.check.reject-brake=3",
+                "pokeclip.soop.check.batch-limit=25"};
     }
 
     private String[] jwt(String secret) {
@@ -310,7 +678,8 @@ class RequiredPropertiesTest {
     }
 
     @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class,
-            SecretStoreProperties.class, InternalApiProperties.class, ChzzkProperties.class})
+            SecretStoreProperties.class, InternalApiProperties.class, ChzzkProperties.class,
+            YoutubeProperties.class, PhotoProperties.class, SoopProperties.class})
     static class BoundProperties {
     }
 }

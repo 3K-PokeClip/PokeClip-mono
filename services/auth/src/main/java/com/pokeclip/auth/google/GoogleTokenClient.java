@@ -22,13 +22,20 @@ public class GoogleTokenClient {
         this.properties = properties;
     }
 
-    public String exchangeCodeForIdToken(String code) {
+    /**
+     * codeVerifier는 PKCE 원문이다(POK-483) — 구글이 동의 때 받은 challenge와 대조한다.
+     * null이면 싣지 않는다: 과도기에는 PKCE 이전 web의 요청도 받는다(GoogleLoginRequest javadoc).
+     */
+    public String exchangeCodeForIdToken(String code, String codeVerifier) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("code", code);
         form.add("client_id", properties.clientId());
         form.add("client_secret", properties.clientSecret());
         form.add("redirect_uri", properties.redirectUri());
         form.add("grant_type", "authorization_code");
+        if (codeVerifier != null) {
+            form.add("code_verifier", codeVerifier);
+        }
 
         // Map으로 받는다. ParameterizedTypeReference는 생성자에서 자기 제네릭
         // 슈퍼타입을 리플렉션으로 읽는데, diamond(<>)로 만든 익명 클래스는 그

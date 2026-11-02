@@ -1,22 +1,33 @@
 #!/usr/bin/env bash
-# mediamtx.demo.yml.tmpl → $DEMO_HOME/mediamtx.demo.yml 렌더 (멘토 데모용 임시 서버, 2026-08-24 만료)
+# mediamtx.demo.yml.tmpl → $DEMO_HOME/mediamtx.demo.yml 렌더 (dev-media 계정별 방송 서버)
 #
 # 사용:  sudo env DEMO_HOME=/opt/pokeclip-demo ./infra/dev-media/render.sh
-#        (DEMO_PATH·SRT_PASSPHRASE 는 인자로 넘기지 않는다 — $DEMO_HOME/.env 에서 읽는다.
+#        (템플릿이 쓰는 값은 경로 잠금값 하나다. 렌더마다 openssl rand -hex 32 로
+#         새로 만든다 — 인자로 받지 않는다.
+#         .env 는 source 하지 않는다 — DEMO_HOME 한 줄만 읽는다.
 #         .env 는 root:root 0600 이므로 sudo 없이 실행하면 .env 읽기 검사에서 중단된다.)
 #
-# 이 스크립트의 가드 6종이 이 구성의 **유일한 자동 검사**다. 실패는 전부 fail-closed(산출물을 남기지 않음).
-#   1) 필수 변수 미설정·빈값 거부
-#   2) 길이 검사 — DEMO_PATH >= 20자, SRT_PASSPHRASE 10~64자
-#   3) 문자셋 검사 — 둘 다 소문자 hex 만(정규식 경로 승격·YAML 주입 차단)
-#   4) 렌더 결과에 플레이스홀더(__) 잔존 시 산출물 삭제 후 실패
-#   5) DEMO_HOME 이 절대경로가 아니면 거부 — 상대경로는 compose 가 딴 디렉토리나 named volume 으로 해석한다
-#   6) DEMO_HOME 디렉토리 부재 시 거부 — 오타 경로에 설정을 조용히 떨구지 않는다
+# 이 스크립트의 가드가 설정 파일의 자동 검사다. 실패는 전부 fail-closed(산출물을 남기지 않고, 기존 정상본은 그대로).
+#   1) DEMO_HOME 이 절대경로가 아니면 거부 — 상대경로는 compose 가 딴 디렉토리나 named volume 으로 해석한다
+#   2) DEMO_HOME 디렉토리 부재 시 거부 — 오타 경로에 설정을 조용히 떨구지 않는다
+#   3) 잠금값이 64자 소문자 hex 가 아니면 거부(openssl 부재 · 실패 포함)
+#   4) 렌더 결과에 플레이스홀더(__) 잔존 시 거부
+#   5) 렌더 결과의 안전 전제 단언 — authMethod: http · read 한 줄뿐인
+#      authHTTPExclude · 빈 apiTrustedProxies · 정규식 경로 한 줄(값 없음)뿐인
+#      paths · 두 칸(송출 · SRT 읽기)에 같은 잠금값. 하나라도 빠지거나 바뀌면 거부
+#   6) .env 의 DEMO_HOME 줄(앞 공백 · export · = 앞 공백 · YAML 'DEMO_HOME: 값' 꼴
+#      포함)이 하나가 아니거나 'DEMO_HOME=<실행한 DEMO_HOME>' 이 아니면 거부 — compose
+#      가 .env 의 값으로 붙일 자리와 렌더 자리가 갈린다
+#   7) DEMO_HOME 이 링크이거나, root · 실행 계정 밖의 소유이거나, 그룹 · 기타 쓰기가
+#      있으면 거부 — 남이 렌더 자리의 임시 파일을 바꿔칠 수 있다
 set -euo pipefail
 
-readonly MIN_DEMO_PATH_LEN=20
-readonly MIN_PASSPHRASE_LEN=10 # MediaMTX 하한 10 (FFmpeg 상한 64 와의 교집합)
-readonly MAX_PASSPHRASE_LEN=64
+readonly LOCK_PLACEHOLDER='__PATH_LOCK_PASSPHRASE__'
+readonly REGEX_PATH_LINE='  "~^[0-9A-HJKMNP-TV-Z]{26}$":'
+# compose 가 DEMO_HOME 대입으로 읽을 수 있는 줄의 꼴(앞 공백 · export · = 앞 공백 ·
+# YAML 의 'DEMO_HOME: 값')
+readonly HOME_LINE_RE='^[[:space:]]*(export[[:space:]]+)?'\
+'DEMO_HOME[[:space:]]*[=:]'
 readonly TMPL="$(cd "$(dirname "$0")" && pwd)/mediamtx.demo.yml.tmpl"
 
 die() {
@@ -33,46 +44,178 @@ require_absolute_home() {
   [ -d "$DEMO_HOME" ] || die "DEMO_HOME 디렉토리가 없습니다: $DEMO_HOME"
 }
 
-load_env() {
-  local envfile="$DEMO_HOME/.env"
+#######################################
+# DEMO_HOME 에 실행 계정과 root 밖의 누구도 쓸 수 없는지 단언한다(가드 7). 쓸 수 있으면
+# 그 사람이 임시 파일을 만든 뒤 · 단언과 mv 사이에 그 이름을 링크나 다른 파일로 바꿔칠
+# 수 있다(mktemp 는 이름을 미리 심는 것만 막는다). 실행 계정 소유도 받는다 — 그 디렉터리에
+# 쓸 수 있는 것은 실행 계정과 root 뿐이라, root 가 아닌 계정의 로컬 렌더도 같은 단언으로
+# 돈다. 상자(sudo — root 실행)에서는 root 소유만 남는다.
+# Globals:
+#   DEMO_HOME
+#######################################
+require_private_home() {
+  local writable
+  [[ ! -L "$DEMO_HOME" ]] || die "DEMO_HOME 이 링크입니다: $DEMO_HOME"
+  [[ -O "$DEMO_HOME" || -n "$(find "$DEMO_HOME" -maxdepth 0 -user 0)" ]] ||
+    die "DEMO_HOME 이 root · 실행 계정 소유가 아닙니다: $DEMO_HOME"
+  writable="$(find "$DEMO_HOME" -maxdepth 0 \( -perm -020 -o -perm -002 \))" ||
+    die "DEMO_HOME 의 권한을 읽을 수 없습니다: $DEMO_HOME"
+  [[ -z "${writable}" ]] ||
+    die "DEMO_HOME 에 그룹 · 기타 쓰기 권한이 있습니다: $DEMO_HOME — 남이 렌더 자리를 바꿔칠 수 있습니다"
+}
+
+#######################################
+# $DEMO_HOME/.env 에서 DEMO_HOME 줄만 읽어 실행한 DEMO_HOME 과 같은지 본다(가드 6).
+# 파일을 source 하지 않는다 — 템플릿이 쓰는 값이 없으므로 비밀(resolve 출입증 ·
+# Control API 비번)을 이 스크립트와 자식 프로세스의 환경에 들이지 않는다. 값은
+# 메시지에 싣지 않는다.
+# Globals:
+#   DEMO_HOME
+#######################################
+check_env_home() {
+  local envfile="$DEMO_HOME/.env" line found='' n=0
   [ -r "$envfile" ] || die "$envfile 를 읽을 수 없습니다 — 파일이 없거나(root:root 0600) sudo 없이 실행했습니다"
-  set -a
-  # shellcheck disable=SC1090
-  . "$envfile"
-  set +a
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" =~ ${HOME_LINE_RE} ]]; then
+      n=$((n + 1))
+      found="${line}"
+    fi
+  done <"$envfile"
+  [[ "${n}" == 1 ]] ||
+    die "$envfile 에 DEMO_HOME 줄이 하나가 아닙니다(${n}개 — 앞 공백 · export 꼴 포함)"
+  [[ "${found}" == "DEMO_HOME=${DEMO_HOME}" ]] ||
+    die "$envfile 의 DEMO_HOME 줄이 'DEMO_HOME=<실행한 DEMO_HOME>' 이 아닙니다 —" \
+      "compose 가 붙일 자리와 렌더 자리가 갈립니다"
 }
 
-require_values() {
-  [ -n "${DEMO_PATH:-}" ] || die "DEMO_PATH 가 비어 있습니다"
-  [ -n "${SRT_PASSPHRASE:-}" ] || die "SRT_PASSPHRASE 가 비어 있습니다"
-  [ "${#DEMO_PATH}" -ge "$MIN_DEMO_PATH_LEN" ] ||
-    die "DEMO_PATH 가 ${#DEMO_PATH}자입니다 — ${MIN_DEMO_PATH_LEN}자 이상이어야 합니다 (openssl rand -hex 12)"
-  [ "${#SRT_PASSPHRASE}" -ge "$MIN_PASSPHRASE_LEN" ] && [ "${#SRT_PASSPHRASE}" -le "$MAX_PASSPHRASE_LEN" ] ||
-    die "SRT_PASSPHRASE 가 ${#SRT_PASSPHRASE}자입니다 — ${MIN_PASSPHRASE_LEN}~${MAX_PASSPHRASE_LEN}자여야 합니다 (openssl rand -hex 16)"
-  # 문자셋 검사 — openssl rand -hex 산출물은 소문자 hex 뿐이다. 이 밖의 문자는 거부한다:
-  #  · DEMO_PATH 가 `~^`로 시작하면 MediaMTX 가 정규식 경로로 해석해 은닉이 무너진다
-  #  · 개행·따옴표·콜론이 값에 들어오면 렌더 결과가 YAML 구조를 오염시킨다
-  case "$DEMO_PATH" in *[!0-9a-f]*) die "DEMO_PATH 는 소문자 hex(0-9a-f)만 허용합니다 (openssl rand -hex 12)" ;; esac
-  case "$SRT_PASSPHRASE" in *[!0-9a-f]*) die "SRT_PASSPHRASE 는 소문자 hex(0-9a-f)만 허용합니다 (openssl rand -hex 16)" ;; esac
+#######################################
+# 경로 잠금값을 새로 만든다. 값은 이 스크립트 밖에 남지 않는다 — 아무도 알 필요가 없다.
+# Outputs:
+#   64자 소문자 hex 를 stdout 에 쓴다(호출자가 명령 치환으로 받는다).
+#######################################
+new_path_lock() {
+  command -v openssl >/dev/null || die "openssl 이 없습니다 — 잠금값을 만들 수 없습니다"
+  local lock
+  lock="$(openssl rand -hex 32)" || die "openssl rand 가 실패했습니다"
+  # 값은 메시지에 싣지 않는다 — 길이만.
+  [[ "${lock}" =~ ^[0-9a-f]{64}$ ]] ||
+    die "잠금값이 64자 소문자 hex 가 아닙니다 (길이 ${#lock})"
+  printf '%s' "${lock}"
 }
 
-# 치환은 셸 문자열 치환으로 한다 — 시크릿이 sed 스크립트나 프로세스 인자로 노출되지 않는다.
-# 원자 교체: 임시파일에 렌더·검증한 뒤에만 mv -f 로 최종 경로에 얹는다. 도중 실패하면 trap 이
-# 임시파일을 지우고 기존 정상본은 그대로 보존된다(가드 3 "실패 시 산출물 미잔존" 계약 준수).
+#######################################
+# 파일에서 줄 전체가 기대값과 같은 줄의 수를 센다. 셸 비교로 세어 값이 프로세스 인자에 실리지 않는다.
+# Arguments:
+#   파일 경로, 기대하는 줄
+# Outputs:
+#   개수를 stdout 에 쓴다.
+#######################################
+count_line() {
+  local line n=0
+  while IFS= read -r line; do
+    [[ "${line}" == "$2" ]] && n=$((n + 1))
+  done <"$1"
+  printf '%d' "${n}"
+}
+
+#######################################
+# 파일에서 「키:」로 시작하는 최상위 줄의 수를 센다(값이 무엇이든).
+# Arguments:
+#   파일 경로, 키
+# Outputs:
+#   개수를 stdout 에 쓴다.
+#######################################
+count_key() {
+  local line n=0
+  while IFS= read -r line; do
+    [[ "${line}" == "$2:"* ]] && n=$((n + 1))
+  done <"$1"
+  printf '%d' "${n}"
+}
+
+#######################################
+# 최상위 키 블록의 항목 줄(주석 · 빈 줄 제외)을 한 줄에 하나씩 낸다. 블록은 다음 최상위
+# 키에서 끝난다.
+# Arguments:
+#   파일 경로, 최상위 키
+# Outputs:
+#   항목 줄을 stdout 에 쓴다.
+#######################################
+block_items() {
+  local line in_block=0
+  while IFS= read -r line; do
+    if [[ "${line}" == "$2:"* ]]; then
+      in_block=1
+      continue
+    fi
+    ((in_block)) || continue
+    [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
+    [[ "${line}" =~ ^[^[:space:]] ]] && break
+    printf '%s\n' "${line}"
+  done <"$1"
+}
+
+#######################################
+# 렌더 결과가 계정별 방송의 안전 전제를 담는지 단언한다(가드 5). 어긋나면 die.
+#  · authMethod 가 http 가 아니면 기본 내부 사용자(any publish)가 살아난다.
+#  · exclude 에 read 밖의 것(api 등)이 들면 그 행위가 무인증이 된다.
+#  · apiTrustedProxies 가 비지 않으면 api 요청의 출발지를 프록시 헤더로 속일 수 있다(cut 의 출발지 판정).
+#  · 정규식 경로가 없으면 모든 송출이 "path not configured" 다. 경로 아래에 값이 붙으면
+#    (경로별 srtReadPassphrase: "" 등) 아래 잠금값 두 칸을 그 경로에서 덮어쓴다.
+#  · 잠금값 두 칸이 없으면 값 없는 2xx 의 무암호 송출 · SRT 무암호 읽기가 열린다.
+# Globals:
+#   REGEX_PATH_LINE
+# Arguments:
+#   렌더 결과 파일, 잠금값
+#######################################
+assert_rendered() {
+  local file="$1" lock="$2" items
+  [[ "$(count_key "${file}" authMethod)" == 1 &&
+    "$(count_line "${file}" 'authMethod: http')" == 1 ]] ||
+    die "렌더 결과에 'authMethod: http' 한 줄이 없습니다 — 템플릿을 확인하세요"
+  items="$(block_items "${file}" authHTTPExclude)"
+  [[ "$(count_key "${file}" authHTTPExclude)" == 1 &&
+    "${items}" == '  - action: read' ]] ||
+    die "렌더 결과의 authHTTPExclude 가 read 한 항목이 아닙니다 — 템플릿을 확인하세요"
+  [[ "$(count_key "${file}" apiTrustedProxies)" == 1 &&
+    "$(count_line "${file}" 'apiTrustedProxies: []')" == 1 ]] ||
+    die "렌더 결과의 apiTrustedProxies 가 빈 목록이 아닙니다 — 템플릿을 확인하세요"
+  items="$(block_items "${file}" paths)"
+  [[ "$(count_key "${file}" paths)" == 1 &&
+    "${items}" == "${REGEX_PATH_LINE}" ]] ||
+    die "렌더 결과의 paths 가 토큰 꼴 정규식 경로 한 줄(값 없음)이 아닙니다 — 템플릿을 확인하세요"
+  [[ "$(count_line "${file}" "  srtPublishPassphrase: ${lock}")" == 1 &&
+    "$(count_line "${file}" "  srtReadPassphrase: ${lock}")" == 1 ]] ||
+    die "렌더 결과에 잠금값 두 칸(송출 · SRT 읽기)이 없습니다 — 템플릿을 확인하세요"
+}
+
+#######################################
+# 템플릿에 새 잠금값을 넣어 렌더하고, 가드를 통과한 것만 최종 경로에 원자 교체한다.
+# 치환은 셸 문자열 치환으로 한다 — 잠금값이 sed 스크립트나 프로세스 인자로 노출되지
+# 않는다. 임시 파일은 mktemp(O_EXCL — 이미 있는 이름 · 링크를 따라 쓰지 않는다)로
+# 같은 디렉터리에 만들고, 도중 실패하면 trap 이 지운다. 기존 정상본은 그대로다.
+# Globals:
+#   TMPL
+#   LOCK_PLACEHOLDER
+# Arguments:
+#   최종 경로
+#######################################
 render_to() {
-  local out="$1" body tmp
+  local out="$1" body tmp lock
+  lock="$(new_path_lock)"
   body="$(cat "$TMPL")"
-  body="${body//__DEMO_PATH__/$DEMO_PATH}"
-  body="${body//__SRT_PASSPHRASE__/$SRT_PASSPHRASE}"
+  # 같은 자리표시를 두 칸에 쓰므로 전역 치환 한 번으로 두 칸이 같은 값이 된다.
+  body="${body//${LOCK_PLACEHOLDER}/${lock}}"
 
-  tmp="$out.tmp.$$"
+  tmp="$(mktemp "${out}.tmp.XXXXXX")" || die "임시 파일을 만들 수 없습니다: ${out}"
   trap 'rm -f "$tmp"' EXIT
-  (umask 0137 && : >"$tmp") # 시크릿이 들어가기 전에 0640 으로 만든다
+  chmod 0640 "$tmp" # mktemp 는 0600 으로 만든다 — 잠금값이 들어가기 전에 0640 으로
   printf '%s\n' "$body" >"$tmp"
 
   if grep -q '__' "$tmp"; then
     die "렌더 결과에 플레이스홀더(__)가 남았습니다 — 산출물을 만들지 않았습니다. 템플릿을 확인하세요"
   fi
+  assert_rendered "${tmp}" "${lock}"
 
   mv -f "$tmp" "$out" # 검증 통과분만 원자적으로 교체
   trap - EXIT
@@ -81,9 +224,8 @@ render_to() {
 main() {
   [ -r "$TMPL" ] || die "템플릿을 읽을 수 없습니다: $TMPL"
   require_absolute_home
-  load_env
-  require_absolute_home # .env 가 DEMO_HOME 을 덮어썼을 수 있으므로 다시 본다
-  require_values
+  require_private_home
+  check_env_home
 
   local out="$DEMO_HOME/mediamtx.demo.yml"
   render_to "$out"

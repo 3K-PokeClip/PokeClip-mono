@@ -45,7 +45,7 @@
 }
 .remove:hover {
   opacity: 1;
-  background: rgb(var(--pc-gray-1000-rgb) / 0.18);
+  background: rgb(var(--pc-gray-1000-rgb) / 0.18); /* 테마 고정 — 양쪽 다 어둡게 덮는 워시 */
 }
 .remove:focus-visible {
   outline: 2px solid var(--pc-color-focus-ring);

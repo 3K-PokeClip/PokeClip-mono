@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import { ApiError } from '@/api/client';
 import {
   issuePairingCode,
@@ -9,10 +10,11 @@ import {
   streamKeyStatusQueryOptions,
   type StreamKeyStatus,
 } from '@/api/streamKeys';
+import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
 
-// 연동 코드 실상태 훅 (POK-102) — usePluginMockState의 교체 주석이 약속한 자리.
+// 연동 코드 실상태 훅 (POK-102).
 // 화면 용어 "연동 코드"는 사용자 모델이고, 실제로는 스트림키 유무(GET /api/stream-keys)와
 // 페어링 코드 발급(POST pairing-codes)의 합성이다. 발급·재발급은 같은 동작 —
 // 새 일회용 코드를 찍는 1콜이고(키가 없으면 서버 ensureKey가 만든다), 키 회전(rotate)은
@@ -44,6 +46,8 @@ export interface StreamKeyState {
   /** 상태를 한 번도 못 읽었다 — 미발급으로 오인시키지 말고 오류·재시도를 그린다. */
   error: boolean;
   retryStatus: () => void;
+  /** 「다시 시도」로 다시 읽는 중 — 오류 카드를 둔 채 누른 버튼만 돈다(POK-446). */
+  retrying: boolean;
   code: PairingCodeStatus;
   /** 발급 진행 중 — 버튼 잠금. */
   busy: boolean;
@@ -62,7 +66,7 @@ export function useStreamKeyState(): StreamKeyState {
   const status = useQuery(streamKeyStatusQueryOptions);
   const [justIssued, setJustIssued] = useState<DisplayedPairingCode | null>(null);
 
-  const mutation = useMutation({
+  const mutation = useSessionMutation({
     mutationFn: issuePairingCode,
     onSuccess: (issued) => {
       // 마감은 서버 expiresAt이 아니라 "수신 순간 + TTL"로 앵커한다 — 클라 시계가
@@ -78,19 +82,20 @@ export function useStreamKeyState(): StreamKeyState {
       }));
       // 코드 발급 = 온보딩 2단계(플러그인) 완료 (POK-113 시작 가이드 체크)
       markPluginLinked();
+      track('pairing_code_issued', {}); // 코드 값은 싣지 않는다 (POK-357)
     },
     onError: (e) => {
       if (e instanceof ApiError && e.status === 429) {
         // ADR-019: 계정당 분당 3회 — 문구도 그 제한값 그대로 안내한다 (POK-103 완료조건)
         toast({
-          variant: 'danger',
+          tone: 'error',
           title: '코드 발급이 잠시 제한됐어요',
           description: '1분에 3회까지만 발급할 수 있어요. 잠시 후 다시 시도해 주세요.',
         });
         return;
       }
       toast({
-        variant: 'danger',
+        tone: 'error',
         title: '코드 발급에 실패했어요',
         description: '잠시 후 다시 시도해 주세요.',
       });
@@ -104,9 +109,15 @@ export function useStreamKeyState(): StreamKeyState {
   const issue = useCallback(() => mutate(), [mutate]);
   const clearJustIssued = useCallback(() => setJustIssued(null), []);
   const { refetch } = status;
+  const [retrying, setRetrying] = useState(false);
   const retryStatus = useCallback(() => {
-    void refetch();
+    // 응답까지 누른 「다시 시도」를 돌린다(POK-446). 데이터가 없는 쿼리는 다시 읽는 동안 pending으로 돌아가 오류가
+    // 지워진다 — 그대로 두면 오류 카드가 스켈레톤으로 바뀌어 누른 버튼이 사라진다
+    setRetrying(true);
+    void refetch().finally(() => setRetrying(false));
   }, [refetch]);
+  // 데이터가 오면 바로 끝이다: 그 뒤의 다시 읽기는 받아 둔 상태를 그린다
+  const retryingFirstLoad = retrying && status.data === undefined;
 
   // 카드의 날짜는 서버 createdAt(최초 발급일) 하나만 쓴다 — 발급 직후엔 위 낙관 갱신이
   // 값을 보장한다. justIssued로 "오늘"을 따로 만들면 재발급 시 재조회가 과거 날짜로
@@ -115,11 +126,12 @@ export function useStreamKeyState(): StreamKeyState {
   const issuedAt = createdAt ? new Date(createdAt).toLocaleDateString('ko-KR') : undefined;
 
   return {
-    loading: status.isPending,
+    loading: status.isPending && !retryingFirstLoad,
     // 데이터를 한 번이라도 읽었으면 그것을 그대로 보여준다 — 재조회 실패에 오류 화면으로
     // 갈아끼우는 쪽이 더 헷갈린다. "아무것도 모르는" 최초 실패만 오류로 그린다. (리뷰 #73)
-    error: status.isError && status.data === undefined,
+    error: (status.isError && status.data === undefined) || retryingFirstLoad,
     retryStatus,
+    retrying: retryingFirstLoad,
     code: {
       // 발급 직후엔 status 재조회가 끝나기 전에도 발급됨으로 보여야 한다
       issued: (status.data?.issued ?? false) || justIssued !== null,

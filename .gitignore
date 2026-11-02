@@ -1,8 +1,17 @@
 # 로컬 시크릿 — 이 저장소는 public이다. 키가 한 번 올라가면 지워도 히스토리에 남는다
-.env
+# 🔴 `.env` 만 막으면 `.env.backup`·`.env.bak` 같은 사본이 그대로 통과한다 —
+# 2026-08-24(POK-117)에 실제로 그렇게 추적 대상에 떴고 2026-08-27에 또 났다.
+# 그래서 `.env` 로 시작하는 것을 전부 막고 값 없는 견본만 되돌린다(web/.gitignore 와 같은 방식).
+.env*
+!.env.example
+!.env.dev.example
 # 개인 override — .example 을 cp 해서 쓴다. 자격증명 보간이 들어가므로 커밋 금지
 docker-compose.override.yml
 *.pem
+# 공개 인증서만 되돌린다 — AWS 가 공개 배포하는 RDS CA 번들(키 없음 · media/README.md CA 번들 절).
+!media/certs/rds-global-bundle.pem
+# 같은 번들의 서버 넷 사본(POK-407, services/README.md 「DB 로그인 방식」). 바이트가 같은지 RdsCaBundleTest가 본다.
+!services/db-support/certs/rds-global-bundle.pem
 *.p12
 **/application-local.yml
 
@@ -11,6 +20,7 @@ infra/compose/stub/data/
 
 # 데모 서버 로컬 산출물 (.env·렌더된 설정·DVR — 기한부, 2026-08-24 철거 시 이 줄도 원복)
 infra/dev-media/local/
+infra/dev-media/hls.min.js
 
 # 빌드 산출물
 # go build ./cmd/... 은 패키지 이름으로 실행 파일을 현재 디렉토리에 떨군다.
@@ -23,6 +33,14 @@ web/dist/
 # IDE
 .idea/
 .vscode/
+# Eclipse·STS(Buildship)가 만든다. 전부 자동 생성물이라 지워도 IDE 를 열면 다시 생긴다.
+# services/**/bin/ 은 Gradle 의 build/ 와 같은 .class 를 중복 컴파일한 것이다 —
+# 위의 services/**/build/ 와 같은 성격인데 이 줄이 없어서 591개가 노출돼 있었다(2026-08-24).
+.classpath
+.project
+.factorypath
+.settings/
+services/**/bin/
 
 # OS
 .DS_Store

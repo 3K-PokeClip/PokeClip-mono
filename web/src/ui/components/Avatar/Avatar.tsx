@@ -3,6 +3,7 @@ import {
   cloneElement,
   forwardRef,
   isValidElement,
+  useEffect,
   useState,
   type ComponentPropsWithoutRef,
   type ReactElement,
@@ -35,6 +36,11 @@ export const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(function Avatar(
   ref,
 ) {
   const [errored, setErrored] = useState(false);
+  // 새 이미지가 오면 다시 시도한다 — 걷지 않으면 한 번 실패한 아바타가 교체 뒤에도
+  // 이니셜에 머문다 (프로필 사진을 바꿔도 안 바뀌는 것처럼 보인다)
+  useEffect(() => {
+    setErrored(false);
+  }, [src]);
   const showImg = Boolean(src) && !errored;
   return (
     <span ref={ref} data-size={size} className={clsx(styles.avatar, className)} {...rest}>

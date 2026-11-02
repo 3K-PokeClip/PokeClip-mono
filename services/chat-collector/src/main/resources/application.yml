@@ -1,11 +1,23 @@
 spring:
+  task:
+    scheduling:
+      pool:
+        # @Scheduled가 여섯이다(끝난 방송 치우기 · 재부착 · 방송 정보 · 탈퇴 채널 정리 · 60일 정리 · SOOP 지켜보기, POK-397). 기본 1이면
+        # 방송 정보가 목록을 훑는 동안 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리). 정리 둘이 큰 표를 지우는 동안에도
+        # 앞의 셋이 안 밀리게 하나씩 몫을 준다. SOOP 지켜보기는 POK-456부터 전용 스레드(soop-watch)에서 돈다(넣는 순간 깨우려고).
+        size: 6
   application:
     name: pokeclip-chat-collector
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
-    username: ${POSTGRES_USER:pokeclip}
-    password: ${POSTGRES_PASSWORD:change-me-local-only}
+    # DB 접속값 셋은 기본값을 두지 않는다(auth · clip과 같은 꼴, POK-161 · POK-331). 공개 저장소에 적힌 비밀번호로
+    # 붙는 창을 닫는다. DB_HOST · DB_PORT는 .env에 없는 값이라 남긴다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
     hikari:
+      # 세션 경로를 자기 스키마 하나로 둔다(POK-428). Hikari가 새 연결마다 setSchema로 search_path를 바꾸므로
+      # 맨 이름은 app_chat_collector와 암묵 pg_catalog에서만 풀린다 — public에 누가 같은 이름의 함수를 심어도 고르지 않는다.
+      schema: ${pokeclip.datasource.schema}
       data-source-properties:
         # 반개방 스톨(연결은 살았는데 응답이 안 옴)을 끊는 유일한 시한이다(초).
         # 없으면 동기 batchUpdate가 영영 매달려 단일 저장 스레드가 죽고, 버퍼는
@@ -24,13 +36,14 @@ spring:
     # 네 서버가 DB 하나를 공유한다. 기본 이력 테이블 이름을 쓰면 나중에 뜬 쪽이
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다. 번호 대역은 V3xx (chat).
     table: flyway_schema_history_chat
-    # auth가 먼저 마이그레이션한 DB에서는 public이 비어 있지 않은데 우리 이력
-    # 테이블은 없다 — 이 설정이 없으면 첫 부팅이 "Found non-empty schema(s)
-    # ... but no schema history table"로 죽는다 (verifier 실물 부팅 실측).
-    baseline-on-migrate: true
-    # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V3xx라 실질 영향은 없지만,
-    # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
-    baseline-version: 0
+    # 표와 이력 테이블을 자기 스키마에 만든다(POK-428). 남의 표가 없는 스키마라 baseline 설정이 필요 없다 —
+    # 이 스키마가 이력 없이 비어 있지 않으면 Flyway가 non-empty로 멈춘다(의도).
+    schemas: ${pokeclip.datasource.schema}
+    # 🔴 동시 색인(V309 CONCURRENTLY)은 잠금을 쥔 다른 트랜잭션이 끝나기를 기다린다. Flyway 기본은 잠금을 다른 연결의
+    # 트랜잭션으로 쥐어서 V309가 그 트랜잭션을 영영 기다리다 socketTimeout(10초)에 끊겼다. 부팅은 재시도로 넘어갔지만 그 사이
+    # 뒤 마이그레이션(V310~)이 안 돌아 표가 없었다(POK-233 시험에서 찾음). 세션 잠금이면 새 DB에서 열 개가 20ms에 다 선다.
+    postgresql:
+      transactional-lock: false
   http:
     clients:
       # 복수형이다. 단수형 spring.http.client.*는 4.0.0부터 아무것도 바인딩하지
@@ -69,6 +82,13 @@ management:
 
 logging:
   level:
+    # DB 로거 트리 셋을 info로 박는다(POK-409). 로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 한다:
+    # root TRACE 실측(clip)에서 org.hibernate.orm.jdbc.extract가 읽은 칸 값을, org.hibernate.orm.core가 DEBUG에서
+    # 엔티티 통째를, org.springframework.jdbc.core.StatementCreatorUtils가 JdbcTemplate 매개변수를,
+    # org.postgresql.core.v3.QueryExecutorImpl이 보내는 값을 찍었다. 방송의 물리 키는 지금 스트림키와 같다.
+    # org.springframework.jdbc · org.postgresql 은 이 아래 줄들이 이미 박고 있다(POK-84 반개방 · 와이어 로거).
+    # 디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다(예: LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug).
+    org.hibernate.orm: info
     # auth와 같은 방어선. DEBUG로 켜면 나가는 요청 본문이 통째로 찍힌다.
     # 구체 로거 레벨이 root보다 우선하므로 LOGGING_LEVEL_ROOT=debug로도 안 뚫린다.
     org.springframework.web: info
@@ -93,11 +113,40 @@ logging:
     software.amazon.awssdk: info
     org.apache.hc.client5.http: info
     io.netty: info
+    # 네 번째 길 — 이번엔 들어오는 요청이다. 위 다섯 줄은 전부 우리가 밖으로 내보내는 길을
+    # 막은 것이고, 들어오는 HTTP는 POK-128 이전에 컨트롤러가 0개라 막을 면적 자체가 없었다.
+    # 수집 상태 창구가 그 면적을 열었다 — clip이 X-Internal-Token 헤더에 내부 토큰을 실어 보낸다.
+    # root를 TRACE로 내리면 톰캣 org.apache.coyote.http11.Http11InputBuffer가 받은 바이트를
+    # "Received [GET /internal/... X-Internal-Token: <값> ...]"로 통째로 찍는다
+    # (2026-08-22 실측: root INFO 0건·DEBUG 0건·TRACE 1건. 톰캣이 JUL FINER로 찍어
+    # 브릿지가 logback DEBUG로 번역하므로 root=DEBUG에서는 안 보인다 — 조건은 root=TRACE 하나다).
+    # 새는 값이 auth와 공유하는 INTERNAL_API_TOKEN이라 채팅 본문보다 파급이 크고, 사람이 TRACE를
+    # 켜는 순간은 정확히 이 창구를 디버깅할 때다. 위 다섯 줄과 같은 이유로 여기 박는다 —
+    # 구체 로거 레벨이 root보다 우선한다. ChatCollectionEndpointTest의
+    # 창구를_쳐도_내부_토큰이_root_TRACE에서_로그에_안_남는다가 이 줄이 실제로 막는지를 행동으로 잰다.
+    org.apache.coyote: info
 
 pokeclip:
+  datasource:
+    # 이 서버의 표가 사는 스키마(POK-428 — 이름 = DB 계정, 운영 10_roles.sql이 마스터 소유로 만든다). 위의
+    # hikari.schema(세션 경로)와 flyway.schemas(표 · 이력 자리)가 이 한 키에서 나온다.
+    schema: app_chat_collector
+    # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
+    # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
+    auth: ${POSTGRES_AUTH:password}
+    # iam 토큰을 서명할 리전.
+    region: ${AWS_REGION:ap-northeast-2}
+    # iam에서만 쓴다. RDS CA 번들의 절대 경로. 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다.
+    ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
+
   chzzk:
-    # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 붙으려 하고
-    # 연결 상한 3개를 말없이 먹는다. 실측할 때만 프로파일 local에서 켠다.
+    # 편지 없이 설정에 적힌 토큰 하나로 한 채널만 붙이는 옛 경로다. 실측·디버깅용으로
+    # 남긴다 — 운영에서는 꺼 두고 아래 broadcast.intake의 방송 편지로 붙는다.
+    # 켜져 있으면 CI·남의 로컬이 뜰 때마다 붙으려 하고 연결 상한 3개를 말없이 먹는다.
+    #
+    # 이것과 broadcast.intake.enabled를 같이 켜면 부팅이 거부된다 — 옛 경로 세션의
+    # 영구 정지(REVOKED·401·403)가 프로세스를 exit 1로 내려 편지로 연 세션 전부를
+    # 끊고, 그 방송들을 되살릴 STARTED 편지는 이미 소비돼 큐에 없다.
     enabled: ${CHZZK_ENABLED:false}
     # 기본값을 빈 문자열로 두고 @NotBlank로 잡는다(auth와 같은 규칙).
     # 안 주면 리터럴 "${CHZZK_ACCESS_TOKEN}"이 바인딩돼 서버는 뜨고 수집만 실패한다.
@@ -105,6 +154,10 @@ pokeclip:
     base-url: https://openapi.chzzk.naver.com
     # 세션 URL 30초 만료의 절반. 만료 탓인지 우리가 느린 건지가 구분된다.
     establish-timeout: 15s
+    # 후원 구독이 일시 실패(429·5xx·시한)했을 때 다시 시도하는 주기. 재부착과 같은 1분이다 —
+    # 더 짧게 잡을 이유가 없다(상대가 429를 준 상황이면 자주 두드리는 것이 오히려 나쁘다).
+    # 401·403 은 재시도하지 않는다. 시간이 안 풀어 주는 실패라 부하만 준다.
+    donation-retry-period: 1m
     # 재시도 간격. 둘 다 2026-08-08 실서버 실측으로 정했다.
     #
     # 첫 간격이 1초인 근거: 발급만 하고 안 붙은 세션은 연결 자리를 안 먹는다.
@@ -131,3 +184,226 @@ pokeclip:
       pending-max: ${CHAT_ARCHIVE_PENDING_MAX:60}
       # 수신→아카이브 바구니 상한(채팅 수). DB 바구니와 같은 1만. 넘치면 오래된 것부터(archiveBufferDropped).
       buffer-capacity: ${CHAT_ARCHIVE_BUFFER_MAX:10000}
+
+  chat-purge:
+    # 탈퇴 정리(POK-256). auth가 탈퇴한 스트리머의 채널을 알리면 명부에 적고 이 주기로 지운다.
+    interval: PT15S
+    # 탈퇴 알림 뒤 이만큼 늦게 받은 채팅까지 지운다(적재 바구니에 남아 있던 것). 창이 닫히면 명부 줄을 닫는다.
+    late-window: PT10M
+    # 채팅·후원·방송 정보 보관 기한. 영상 보관(60일, ADR-004)과 같다. 채팅 원본 파일(S3 chat/)은 창고 수명 규칙이 맡는다.
+    retain: P60D
+    retention-interval: PT1H
+    # 한 번에 지우는 줄 수. 긴 DELETE 하나가 적재를 막지 않게 자른다.
+    batch: 5000
+
+  broadcast:
+    # 메모 치우기 주기. 하루에 한 번이면 충분하지만, 프로세스가 하루를 못 살면
+    # 한 번도 안 도므로 짧게 잡는다 — 지울 것이 없으면 DELETE 한 번이라 싸다.
+    # initialDelay도 같은 값이다: fixedDelay의 기본 initialDelay는 0이라
+    # 컨텍스트가 뜨자마자 DELETE가 나가고 부팅과 겹친다(auth 스케줄러도 같은 이유).
+    ended-sweep-interval: ${BROADCAST_ENDED_SWEEP_INTERVAL:PT1H}
+    # 메모 보관 기간. ADR-016의 TTL 24h.
+    ended-retention: ${BROADCAST_ENDED_RETENTION:PT24H}
+    intake:
+      # 운영의 시작 경로다. 켜면 이 큐의 방송 편지가 세션을 열고 닫는다.
+      # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 큐를 두드린다.
+      # 큐 주소가 비었다고 저절로 꺼지지 않는다 — "일부러 안 켬"과 "설정을 깜빡함"이
+      # 똑같이 보이면 안 되므로, 켜졌는데 주소가 없으면 부팅이 실패한다.
+      #
+      # 켜면 pokeclip.link.*(auth 주소·내부 토큰)가 실제로 쓰인다 — 그 둘이 비면
+      # 부팅이 죽는다. 꺼져 있으면 열쇠를 물을 일이 없어 아예 안 만든다.
+      enabled: ${BROADCAST_INTAKE_ENABLED:false}
+      queue-url: ${BROADCAST_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+      # 비면 진짜 AWS. LocalStack 주소(scheme+host+port)를 줄 수 있다.
+      endpoint: ${BROADCAST_QUEUE_ENDPOINT:}
+      # SQS 상한이 20초다. 넘기면 호출이 거부되는데 부팅은 성공한다 —
+      # 그래서 IntakeProperties가 부팅에서 막는다.
+      wait-time: ${BROADCAST_QUEUE_WAIT:20s}
+      # SQS가 한 번에 주는 최대치가 10이다.
+      max-messages: ${BROADCAST_QUEUE_MAX_MESSAGES:10}
+  reattach:
+    # 켜면 clip에 「지금 방송 중인 목록」을 물어 안 붙은 방송에 붙는다. 재배포·재시작으로
+    # 잃은 방송을 줍는 복구 장치다 — 시작 알림은 일회용이라 처리하면 지워진다.
+    #
+    # 기본이 꺼짐이다. 켜져 있으면 CI·팀원 로컬이 뜰 때마다 clip을 두드린다.
+    #
+    # 🔴 이것만 켜고 broadcast.intake.enabled를 끄면 부팅이 거부된다 — 붙이는 문
+    # (BroadcastSessions)을 편지 경로가 만들기 때문이고, 애초에 알림 경로가 꺼져 있으면
+    # 재부착이 주울 것이 없다. ReattachConfiguration 생성자가 이유를 적어 죽인다.
+    enabled: ${CHAT_REATTACH_ENABLED:false}
+    # clip의 내부 창구 주소(8081). 컨테이너 안에서는 호스트가 서비스 이름이다.
+    # 기본값을 빈 문자열이 아니라 로컬 주소로 둔 것은 link.auth-base-url과 같은 규칙이다 —
+    # 다만 켜져 있는데 이 값이 비면 LiveBroadcastClient 생성자가 부팅을 죽인다.
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+    # 주기. 붙기 실패는 다음 회차가 같은 목록을 다시 받으므로, 이 값이 곧 복구 지연의
+    # 상한이다 — 평소에 쓰는 값이 아니라 사고 뒤에만 뜻이 있다.
+    interval: ${CHAT_REATTACH_INTERVAL:PT1M}
+    # 첫 회차. 주기와 같은 값을 쓰면 부팅 직후 1분을 그냥 잃는다 — 배포로 채팅이 안 걷히는
+    # 시간이 정확히 이 값이다. 0으로 두면 컨텍스트가 다 뜨기 전에 clip을 두드린다.
+    # 환경변수를 안 뺀 이유: 운영자가 만질 값이 아니고, 만지면 위 둘의 관계가 깨진다.
+    # ReattachWiringTest.첫_회차가_주기보다_먼저_돈다가 이 줄과 @Scheduled를 같이 읽어 잰다.
+    initial-delay: PT5S
+    # 떼기(POK-244). 켜면 같은 회차에서 「내가 붙어 있는데 clip 명부에 없는 방송」의 세션을 반납한다 —
+    # clip이 종료 편지를 놓친 방송을 치우면(BROADCAST_REAPER_*) 그 다음 회차(1분)에 자리가 돌아온다.
+    # 안 떼는 회차: 명부가 상한(500)에 잘렸거나 읽을 수 없는 줄이 하나라도 있을 때(살아있는 방송이 「사라진 것」으로 보인다).
+    # 같은 스트리머의 다른 방송이 명부에 있으면 옛 방송은 갈아끼움의 몫이라 안 뗀다.
+    # 🔴 재부착(enabled)이 꺼진 채 이것만 켜면 부팅이 거부된다(DetachSwitchGuard) — 이 갈래는 재부착 회차 안에서 돈다.
+    # 기본 꺼짐 — 켜는 것은 clip 쪽 치우개와 같은 결정이다.
+    detach-enabled: ${CHAT_DETACH_ENABLED:false}
+    # 방송 시작 뒤 이만큼은 명부에 없어도 안 뗀다. 같은 편지를 clip과 각자 받아 우리가 먼저 붙는 순간이 있다.
+    detach-grace: ${CHAT_DETACH_GRACE:PT10M}
+  relay:
+    # 켜면 받은 채팅·후원을 저장과 따로 clip에 바로 민다(POK-234 PR-B). clip이 SSE로 화면에 뿌린다.
+    # 저장과 독립이다 — clip이 죽어도 표 적재는 그대로이고, 중계는 재시도 없이 버리고 센다.
+    # 기본이 꺼짐이다. 켜져 있으면 CI·팀원 로컬이 뜰 때마다 clip을 두드린다.
+    enabled: ${CHAT_RELAY_ENABLED:false}
+    # 수신 → 중계 바구니 상한(건). 넘치면 오래된 것부터 버리고 센다(번호를 받은 뒤라 화면이 빈틈으로 안다).
+    buffer-capacity: ${CHAT_RELAY_BUFFER_MAX:10000}
+    # 바구니가 비었을 때 다시 볼 주기 = 한가할 때 더해지는 최대 지연. 환경변수를 안 뺐다(계획 검증 F13) —
+    # 보내는 동안 쌓인 것은 저절로 한 묶음이 되므로 묶음 창이 아니고 운영자가 만질 값이 아니다.
+    flush-max-delay: PT0.1S
+    # 재부착과 같은 clip 주소를 받되 값은 따로 든다 — 재부착이 꺼진 배포에서도 중계는 켤 수 있다.
+    # 켜져 있는데 비면 ClipRelayClient 생성자가 부팅을 죽인다.
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+  platforms:
+    # clip 내부 창구 주소(POK-397). 수집기가 그 플랫폼에서 방송을 확인하면 clip 플랫폼 묶음(PUT …/platforms/{P})에 알린다.
+    # 재부착·중계와 같은 환경변수를 받되 값은 따로 든다. 방송 정보(liveinfo)가 켜져 있는데 비면 ClipPlatformClient 생성자가 부팅을 죽인다.
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+  soop:
+    # SOOP 방송 지켜보기(POK-397). 켜면 SOOP 연동 스트리머의 방송을 1분마다 확인해 방송 정보(platform SOOP)를 남기고 화면에 밀고
+    # clip 플랫폼 묶음에 SOOP을 알린다. 채팅 세션 자리는 안 쓴다(SOOP 채팅은 PR4).
+    # 🔴 기본 꺼짐. PR3b(웹이 플랫폼별로 읽기) 배포 뒤에 켠다. 먼저 켜면 플랫폼을 모르는 화면의 숫자·그래프가 두 플랫폼 사이를 오간다.
+    # 켜면 내부 토큰(INTERNAL_API_TOKEN)·auth 주소·clip 주소가 필요하다(비면 부팅이 죽는다).
+    watch-enabled: ${SOOP_WATCH_ENABLED:false}
+    # 켜면 방송 여부 응답 data의 키 이름과 status 값만 INFO 한 줄(soop.live.diagnose)로 남긴다. 값은 안 찍는다. 실방송 진단용, 기본 꺼짐.
+    diagnose-response: ${SOOP_DIAGNOSE_RESPONSE:false}
+    api-base-uri: ${SOOP_API_BASE_URI:https://openapi.sooplive.com}
+    # 묻는 간격(POK-456). 넣은 뒤 fast-window 동안 「방송 중」을 볼 때까지 fast-interval마다, 그 뒤 interval마다 묻는다.
+    # SDK가 지난 채팅을 다시 주지 않아 시작 직후 늦게 붙으면 그만큼 잃는다. 틱은 전용 스레드에서 fast-interval마다 돌고,
+    # 새 방송을 넣는 순간 한 번 더 깬다. 호출 수 계산은 services/README.md 「SOOP 방송 지켜보기」.
+    interval: PT1M
+    fast-interval: PT10S
+    fast-window: PT3M
+    initial-delay: PT20S
+    # 동시에 지켜보는 방송 상한(설계 전제 동시 사용자 100명). 한 틱 시간이 이것에 비례한다(방송마다 SOOP 시한 접속 1초·읽기 2초 최대 두 번).
+    max-watched: 100
+    chat:
+      # SOOP 채팅 받기(POK-397 PR4). 켜면 위 지켜보기가 방송 중으로 본 방송마다 화면 없는 Chromium 탭에서 SOOP 공식 Chat SDK로
+      # 채팅을 받아 치지직과 같은 세 길(표 · 원본 · 화면 중계)에 platform SOOP으로 넣는다(ADR-105 사용자 결정). 기본 꺼짐.
+      # 🔴 지켜보기(watch-enabled)가 꺼져 있는데 이것만 켜면 부팅을 거부한다(붙을 방송을 지켜보기가 고른다).
+      # 🔴 SOOP은 메시지 시각을 안 주므로 시각은 받은 시각이다. Chromium 탭이 방송마다 수십 MB라 켤 때 메모리 상한을 같이 본다.
+      enabled: ${SOOP_CHAT_ENABLED:false}
+      # 🔴 비밀. auth와 같은 SOOP 앱 값. 공식 SDK가 생성자에서 둘 다 받는다(문서 예시). 켜졌는데 비면 부팅을 거부한다.
+      client-id: ${SOOP_CLIENT_ID:}
+      client-secret: ${SOOP_CLIENT_SECRET:}
+      # 공식 SDK 스크립트. 시험만 가짜 SDK 주소로 바꾼다.
+      sdk-url: ${SOOP_CHAT_SDK_URL:https://static.sooplive.com/asset/app/chat-sdk/sooplive-chat-sdk.js}
+      # 탭이 여는 빈 페이지의 출처. SDK가 출처를 보는지 문서에 없어 흔한 개발 출처로 둔다.
+      page-origin: http://localhost
+      # 동시에 여는 탭 상한(지켜보기 상한과 같게).
+      max-sessions: 100
+      # 끊기면 다시 붙는 간격. 처음 1초, 이어서 끊기면 두 배씩 60초까지.
+      reconnect-min: PT1S
+      reconnect-max: PT60S
+  liveinfo:
+    # 켜면 걷고 있는 방송마다 1분에 한 번 제목·태그·카테고리·시청자 수를 broadcast_info에 남기고
+    # (중계가 켜져 있으면) 화면에 broadcast-info로 민다(POK-234 PR-C). 기본 꺼짐.
+    enabled: ${BROADCAST_INFO_ENABLED:false}
+    interval: ${BROADCAST_INFO_INTERVAL:PT1M}
+    initial-delay: PT30S
+    # 🔴 비밀. 전체 라이브 목록이 앱 인증이라 필요하다(시청자 수). 켜져 있는데 비면 부팅이 죽는다.
+    client-id: ${CHZZK_CLIENT_ID:}
+    client-secret: ${CHZZK_CLIENT_SECRET:}
+    # 목록 한 바퀴 페이지 상한(한 장 20개). 목록은 시청자 수 내림차순이라 작은 방송은 뒤에 있다.
+    max-pages: 500
+  link:
+    # auth의 내부 API 주소(8082). 컨테이너 안에서는 호스트가 서비스 이름이다.
+    auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
+    # auth의 /internal/** 체인이 X-Internal-Token으로 보는 값. 기본값을 빈 문자열로 두고
+    # ChzzkLinkClient 생성자에서 잡는다 — 안 주면 리터럴 "${INTERNAL_API_TOKEN}"이 바인딩돼
+    # 서버는 뜨고 열쇠 조회만 전부 401이 되며, 401은 재시도 갈래라 편지가 큐에서 영원히 돈다.
+    internal-token: ${INTERNAL_API_TOKEN:}
+  query:
+    # 범위 창구 둘(목록·차트)의 상한이다. 환경변수를 안 뺐다 — 운영자가 만질 값이 아니라
+    # clip·프론트와의 계약값이고, 늘리면 한 번에 받아야 하는 양이 같이 늘어난다.
+    #
+    # window-max 1시간: 되감기 화면이 한 번에 보여 주는 구간이 분 단위라 시간 단위면 넉넉하다.
+    # 넘으면 400 too_wide다 — 잘라 주지 않는다. 잘라 주면 부르는 쪽이 「덜 받은 것」을 모른다.
+    #
+    # page-max 500을 넘겨 달라고 하면 400이 아니라 잘라 준다(page-max까지). 많이 달라는 것은
+    # 오류가 아니고, 400으로 만들면 부르는 쪽이 상한을 알아야만 창구를 쓸 수 있다.
+    # 반대로 limit=0 이하는 400이다 — 「0건을 달라」는 요청은 실수 말고는 뜻이 없다.
+    #
+    # chart-max-buckets 720: 1시간을 5초로 자르면 720점이다. 즉 window-max와 최소 bucket의
+    # 곱이 정확히 이 값이라, 셋 중 하나를 바꾸면 나머지 둘을 같이 본다.
+    window-max: PT1H
+    page-default: 200
+    page-max: 500
+    chart-max-buckets: 720
+  sync:
+    # 채팅 시각에서 빼는 보정값(ms)이다. 한 항이 아니라 합이다 —
+    # (방송 지연 + 시청자 반응 지연 + 전달 지연) − 우리 인제스트 지연.
+    #
+    # 여기에 치지직 시계와 이 기계 시계의 차이까지 섞여 있고 그 차이는 고정이 아니다:
+    # 같은 코드로 잰 전달 지연이 2026-08-05에 +175ms, 08-15에 −39~−70ms였다.
+    # 그래서 부호를 미리 못 박아 음수를 허용하고, 기계·환경이 바뀌면 다시 잰다.
+    #
+    # 기본값 3900은 실측이다(2026-08-24). 표본 20개의 중앙값 3,884ms를 반올림했다 —
+    # 평균 4,100 · 범위 3,746~4,977이고, 표본 15개일 때 중앙값 3,893에서 20개일 때
+    # 3,884로 수렴했다. 측정 장소는 로컬 개발 노트북이다(EC2에는 조각 장부를 쓰는
+    # 구성이 없어 거기서 잴 수 없었다).
+    #
+    # 🔴 이 값에서 시계 오프셋 4.0초를 이미 뺐다 — 측정 기계의 시계가 정확한 시각보다
+    # 그만큼 느렸다(애플·구글 NTP 둘이 +4.005~+4.017초로 일치). 채팅 시각은 치지직 서버가
+    # 찍고 영상 조각 시각은 이 기계가 찍으므로 그 차이가 측정값에 통째로 섞여 든다.
+    # 안 뺐으면 여기 약 7.9초가 적혔을 것이다.
+    #
+    # P₂(녹화된 영상 안에서 읽은 사건의 실제 위치) 판독 오차는 ±33ms다 — 사람이 재생기로
+    # 읽지 않고 30fps 프레임 단위로 자동 검출했다.
+    #
+    # 중앙값을 「리듬 탄 상태」의 3,800(첫 한두 번을 뺀 열한 표본의 중앙값)이 아니라 첫 회차를
+    # 포함해 골랐다. 매 회차의 처음 한두 번이 1초쯤 느렸는데(다음 사건을 예상하는가에 따라 반응
+    # 지연이 갈린다), 실제 하이라이트는 시청자가 예상하지 못한 순간에 터지므로 그쪽이 우리가
+    # 맞춰야 할 상태다.
+    #
+    # 🔴 운영으로 옮길 때 반드시 다시 잰다. 한계 다섯(로컬 · 시계 오프셋을 손으로 뺌 ·
+    # 테스트 패턴 송출 · 시청자 한 명 · 치지직 단독)은 services/README.md에 적어 뒀다.
+    #
+    # SyncOffsetBindingTest가 이 줄이 실제로 걸리는지를 행동으로 잰다 — 값 단언이 아니라
+    # 음수 보정을 실제로 먹여 변환 결과가 그만큼 밀리는지 본다. 줄을 지우거나 변수 이름에
+    # 오타를 내면 SyncProperties 빈은 그대로 뜨고 defaultOffsetMs만 조용히 0이 된다
+    # (둘 다 주입해서 빨간불을 확인했다). RestClient.create()·spring.http.client 단수형과
+    # 같은 모양의 함정이다 — 설정은 완벽한데 값이 안 걸리고 서버는 뜬다.
+    #
+    # 🔴 크기가 ±600000ms(10분)를 넘으면 부팅이 거부된다(SyncProperties.MAX_ABS_OFFSET_MS).
+    # 창구의 messageTime 그물(1970~2200)은 보정을 빼기 「전」 값에 걸려서 보정 후에는 그물이
+    # 없다 — 1.5초를 나노초로 착각한 1500000000(=17일)을 넣으면 입력은 400에 안 걸리고
+    # no_footage가 나가며, 부르는 쪽은 「영영 없음」으로 읽고 재시도를 그만둔다. 채팅에는
+    # 백필이 없어 그 방송의 하이라이트가 통째로 사라지는데 서버는 정상으로 뜬다.
+    # 상한 10분은 이 값이 무엇의 합인지에서 나왔다 — 지배 항(방송 지연·반응 지연)이 초 단위라
+    # 현실 크기가 수 초~수십 초이고 거기에 10배 이상 여유를 준 자리다. 그때 그 「초 단위」는
+    # 추정이었고 위 실측(3.9초)이 그것을 확인했지만, 상한은 그대로 둔다 — 여유가 목적이고
+    # 운영 재실측은 이보다 클 수 있다.
+    #
+    # 🔴 이 그물은 「위쪽」만 자른다. 큰 쪽 착각(ms를 마이크로초·나노초로)은 걸리지만 작은 쪽
+    # (3.9초를 3900 대신 4로 적음)은 4ms로 그대로 통과하고 서버는 멀쩡히 뜬다. 하한을 둘 수
+    # 없기 때문이다 — 0이 「보정 안 함」이라는 유효한 값이다. 다만 0으로의 되돌림 하나는
+    # VideoPositionCalculatorTest.실물_기본_보정값이_자리_표시_0이_아니다()가 잡는다.
+    default-offset-ms: ${CHAT_SYNC_OFFSET_MS:3900}
+    # 채널별 덮어쓰기는 pokeclip.sync.channel-offset-ms.<채널ID>: <ms> 로 준다.
+    # 환경변수가 아니라 yml이다 — 채널마다 다른 값이라 이름을 미리 못 정한다.
+    #
+    # 🔴 여기에 `channel-offset-ms: {}`(빈 맵)를 쓰지 마라. Spring의
+    # YamlProcessor.buildFlattenedMap이 그것을 빈 문자열로 평탄화하고, Binder가
+    # String → Map<String,Long> 변환기를 못 찾아 BindException이 난다.
+    # SyncProperties는 @ConfigurationPropertiesScan이 모든 컨텍스트에 올리므로
+    # 스프링 검사 전부와 운영 부팅이 통째로 죽는다(계획 검증이 재현). 줄을 아예 안 쓰면
+    # compact 생성자가 null을 빈 맵으로 받는다 — 그래서 여기 주석만 있고 키가 없다.
+    #
+    # 🔴 반대로 키만 쓰고 값을 빠뜨리면(`streamer-a:`) 그 줄이 조용히 사라진다(2026-08-24 실측).
+    # 같은 평탄화로 값이 빈 문자열이 되는데 이때는 Binder가 엔트리째 버려서, 부팅은 멀쩡하고
+    # 그 채널만 기본 보정값으로 떨어진다. 적어 놓고 안 걸리는 상태라 오해하기 쉽다 —
+    # 설정 쪽에서는 못 잡는다(엔트리가 사라진 뒤라 남는 정보가 없다).
+    #
+    # 채널별 값에도 위 ±600000ms 상한이 똑같이 걸린다 — 같은 뿌리에 자리가 둘이다.

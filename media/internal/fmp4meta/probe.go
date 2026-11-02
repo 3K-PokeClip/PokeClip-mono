@@ -17,10 +17,10 @@ type DurationProbe func(path string) (durationMS int64, err error)
 
 // ProbeDurationMS 는 fMP4 파일의 박스를 읽어 길이를 실측한다. wall 추정은 하지 않는다(G2).
 //
-// 구현 근거 — U4 해소 실측(abema/go-mp4 v1.7.1):
+// 구현 근거 — U4 해소 실측(abema/go-mp4 v1.7.1, v1.7.3 에서 재확인):
 //
 //	mp4.Probe(io.ReadSeeker) (*ProbeInfo, error) 의 ProbeInfo.Duration/Timescale 을 쓴다.
-//	이 값은 moov/mvhd 에서 오며 MediaMTX 1.19.3 기준 "트랙 중 최대 길이"와 일치한다
+//	이 값은 moov/mvhd 에서 오며 MediaMTX 1.19.3·1.20.1·1.21.1 기준 "트랙 중 최대 길이"와 일치한다(1.20.1 실산출물 mvhd 4.117s = max track 재확인, 1.21.1 실산출물 39개 ffprobe 대조 최대 차 1ms)
 //	(ffprobe 독립 실측 대조: segment_4s 4012ms = 비디오 트랙, tail_2s 2042ms = 오디오 트랙).
 //	ProbeInfo.Segments 의 Duration 합은 실제 길이의 절반만 나와 쓸 수 없었다.
 //
@@ -28,7 +28,7 @@ type DurationProbe func(path string) (durationMS int64, err error)
 // 이는 실측 확인된 동작이다 — 쓰는 중에 복사한 파일은 duration=0, 세그먼트가 닫힌 뒤에는
 // 실제 값이 기록된다. "0을 길이로 채택"하는 것보다 실패를 명시하는 편이 안전하다.
 func ProbeDurationMS(path string) (int64, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:forbidigo // 예외 2(m2) — ProbeT 워커 안에서만 실행된다. 열고·읽고·닫기가 워커 안에서 통째로 끝난다(.golangci.yml 머리 주석).
 	if err != nil {
 		return 0, fmt.Errorf("세그먼트 파일 열기 실패 %q: %w", path, err)
 	}

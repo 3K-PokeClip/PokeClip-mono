@@ -9,6 +9,8 @@
   white-space: nowrap;
   border: 1px solid transparent;
   border-radius: var(--pc-radius-pill);
+  /* soft·outline 글자색 — 기본은 채움색, 상태 톤은 글자용(-text) 토큰(라이트에서 채움색은 4.5:1 미달) */
+  --_t: var(--_c);
 }
 .badge[data-size='sm'] {
   font-size: var(--pc-font-size-2xs);
@@ -31,27 +33,38 @@
 .badge[data-tone='point'] {
   --_c: var(--pc-color-point);
   --_bg: var(--pc-color-point-subtle);
-  --_on: var(--pc-white);
+  --_on: var(--pc-white); /* 테마 고정 — 진한 채움 위 글자 */
 }
 .badge[data-tone='success'] {
   --_c: var(--pc-color-success);
+  --_t: var(--pc-color-success-text);
   --_bg: var(--pc-color-success-subtle);
-  --_on: var(--pc-white);
+  --_on: var(--pc-white); /* 테마 고정 — 진한 채움 위 글자 */
 }
 .badge[data-tone='warning'] {
   --_c: var(--pc-color-warning);
+  --_t: var(--pc-color-warning-text);
   --_bg: var(--pc-color-warning-subtle);
-  --_on: var(--pc-gray-1000);
+  --_on: var(--pc-gray-1000); /* 테마 고정 — 밝은 채움 위 글자 */
 }
 .badge[data-tone='danger'] {
   --_c: var(--pc-color-danger);
+  --_t: var(--pc-color-danger-text);
   --_bg: var(--pc-color-danger-subtle);
   --_on: var(--pc-color-text-on-danger);
 }
 .badge[data-tone='info'] {
   --_c: var(--pc-color-info);
+  --_t: var(--pc-color-info-text);
   --_bg: var(--pc-color-info-subtle);
-  --_on: var(--pc-gray-1000);
+  --_on: var(--pc-gray-1000); /* 테마 고정 — 밝은 채움 위 글자 */
+}
+/* accent·point는 다크 글자가 채움색(primary-500·point-500)이라 -text로 바꾸면 다크가 달라진다 — 라이트만 */
+:global([data-theme='light']) .badge[data-tone='accent'] {
+  --_t: var(--pc-color-accent-text);
+}
+:global([data-theme='light']) .badge[data-tone='point'] {
+  --_t: var(--pc-color-point-text);
 }
 .badge[data-variant='solid'] {
   background: var(--_c);
@@ -59,10 +72,10 @@
 }
 .badge[data-variant='soft'] {
   background: var(--_bg);
-  color: var(--_c);
+  color: var(--_t);
 }
 .badge[data-variant='outline'] {
   background: transparent;
-  color: var(--_c);
+  color: var(--_t);
   border-color: var(--_c);
 }

@@ -1,0 +1,13 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 3절 「부분 진행」 ② · M17a 「데이터」 · M10 O7f 3 · 11 · 설계 8절
+# 멈춤 자리 ② · 13-1(10-13 10:59 허용). KVS 값 동작만 둔다.
+
+# CloudFront KVS 값(데이터면)
+cloudfront-keyvaluestore:PutKey	us-east-1	*
+cloudfront-keyvaluestore:GetKey	us-east-1	*
+cloudfront-keyvaluestore:ListKeys	us-east-1	*
+cloudfront-keyvaluestore:DescribeKeyValueStore	us-east-1	*
+cloudfront-keyvaluestore:UpdateKeys	us-east-1	*
+cloudfront-keyvaluestore:DeleteKey	us-east-1	*

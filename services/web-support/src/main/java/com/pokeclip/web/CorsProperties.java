@@ -2,6 +2,7 @@ package com.pokeclip.web;
 
 import jakarta.validation.constraints.NotEmpty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
 
 import java.util.List;
@@ -17,7 +18,14 @@ import java.util.List;
  */
 @ConfigurationProperties(prefix = "pokeclip.cors")
 @Validated
-public record CorsProperties(@NotEmpty List<String> allowedOrigins) {
+/**
+ * @param allowCredentials 브라우저가 쿠키를 주고받게 허용할지. <b>기본 false</b> — 토큰은 Authorization
+ *                         헤더로 온다. 켜는 것은 clip뿐이다(영상 출입증 POK-122가 Set-Cookie로 답한다).
+ *                         켜면 {@code Access-Control-Allow-Origin}에 와일드카드를 못 쓰는데, 그것은
+ *                         아래 생성자가 이미 막고 있다.
+ */
+public record CorsProperties(@NotEmpty List<String> allowedOrigins,
+                             @DefaultValue("false") boolean allowCredentials) {
 
     public CorsProperties {
         if (allowedOrigins != null && allowedOrigins.contains("*")) {

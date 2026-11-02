@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -51,6 +52,28 @@ func TestAdvanceCarriesS3KeyIntoCursor(t *testing.T) {
 	}
 	if got := f.upload.targets()[0].S3Key; got != want {
 		t.Errorf("요청 대상의 S3Key = %q, want %q", got, want)
+	}
+}
+
+// 실시간 유입이 만드는 대상은 ② 아카이브 축이다(POK-195 M3 · 설계 5.5.4 #4).
+//
+// 위 (h) 와 똑같은 부류의 결함이다 — 필드명 리터럴이라 빠뜨려도 컴파일이 통과하고
+// 영값(미판정)이 된다. 그 상태로 접수되면 업로더가 fail-closed 로 전부 거부해
+// 실시간 업로드가 통째로 멈춘다.
+func TestRequestedTargetCarriesArchiveAxis(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.makeFile("s1", segName(baseWall, 0), 1000)
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+
+	got := f.upload.targets()
+	if len(got) != 1 {
+		t.Fatalf("요청 대상 = %d건, want 1건", len(got))
+	}
+	if got[0].Axis != index.AxisArchive {
+		t.Errorf("Axis = %v, want %v — 축이 없으면 업로더가 거부한다", got[0].Axis, index.AxisArchive)
+	}
+	if got[0].SessionID != "" {
+		t.Errorf("SessionID = %q, want 빈 문자열 — ② 의 대상 식별자는 seq 다", got[0].SessionID)
 	}
 }
 
@@ -355,7 +378,7 @@ func (f *fixture) holdNow(t *testing.T, streamID string, size int) string {
 		Seq: 0, StartWallUTC: wall, Bytes: int64(size), LocalPath: path,
 		S3Key: index.S3Key(streamID, 0, wall), UploadState: index.UploadStatePending,
 	}}
-	f.ix.holdTail(streamID, f.ix.cursors[streamID].Tail, time.Now())
+	f.ix.holdTail(streamID, f.ix.cursors[streamID].Tail, nil, time.Now())
 	return path
 }
 
@@ -710,5 +733,28 @@ func TestHookSegmentPromotesHeldPredecessor(t *testing.T) {
 	}
 	if got[1].Seq != 1 || !got[1].IsTail {
 		t.Errorf("새 꼬리 = %+v, want seq 1 IsTail=true", got[1])
+	}
+}
+
+// 다른 회차의 개시 기억(종결 라운드 1 CL1-7 (d) · 판단 J64) — 인덱서가 든 개시 행의 게이트 입력은 그 회차의 init 요청에만
+// 싣는다. 개시 행을 이 프로세스가 보지 못한 회차(개시 행의 COMMIT 응답을 잃은 갈래 — 장부의 마지막 귀속 회차를 바로 그
+// 회차로 맞춰 흉내 낸다)의 init 요청에는, 앞 회차의 개시 기억이 남아 있어도 그 값을 싣지 않는다. 잡는 결함: 회차 대조를
+// 빼면 앞 회차가 물려받은 회차 · 첫 조각 경로가 엉뚱한 회차의 계승 게이트 입력으로 나간다.
+func TestInitRequestIgnoresOpeningOfOtherSession(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := f.injectReads()
+	f.store.scriptSessions("S2", "S3")
+	f.store.scriptInheritance("S2", "S1", "/recordings/s1/prev-first.mp4")
+	f.row(r, 0, mtxiOf(recA, 0)) // S2 개시 — 계승 게이트 입력을 든다
+
+	f.store.mu.Lock()
+	f.store.lastSession["s1"] = "S3" // S3 의 개시 행을 이 프로세스가 보지 못했다
+	f.store.mu.Unlock()
+	s1 := f.row(r, 4*time.Second, mtxiOf(recA, 4*time.Second))
+
+	got := f.upload.targetsOf(index.AxisInit)
+	want := index.UploadTarget{StreamID: "s1", Axis: index.AxisInit, SessionID: "S3", LocalPath: s1.Path, Bytes: 1000, IsTail: true}
+	if len(got) != 2 || !reflect.DeepEqual(got[1], want) {
+		t.Errorf("init 요청 = %+v\nwant 둘째 %+v(S2 의 게이트 입력 없음)", got, want)
 	}
 }

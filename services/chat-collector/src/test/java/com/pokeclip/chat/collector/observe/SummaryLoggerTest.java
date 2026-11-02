@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.observe;
 
+import com.pokeclip.chat.collector.relay.RelayCounters;
 import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.support.TestPersistence;
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -31,10 +33,10 @@ class SummaryLoggerTest {
     @Test
     void 요약_한_줄에_판정에_필요한_항목이_전부_있다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+        String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         assertThat(line).startsWith("chat.summary ");
         for (String key : REQUIRED) {
@@ -50,13 +52,13 @@ class SummaryLoggerTest {
     @Test
     void 요약이_박아둔_문자열이_아니라_실제_값을_싣는다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
-        metrics.recordMessage(new ChatMessage("CH1", "S2", "ㅎㅎ", 3_000L, "{}"), 3_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S2", "ㅎㅎ", 3_000L, "{}", null, null), 3_100L);
         metrics.recordDecodeFailure();
         metrics.recordSystemEvent("connected");
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                7L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+        String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
+                7L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         assertThat(line).contains("received=2")
                 .contains("decodeFailures=1")
@@ -69,10 +71,10 @@ class SummaryLoggerTest {
     @Test
     void 요약에_본문과_작성자_식별자가_없다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L, "{\"content\":\"CONTENT-NEEDLE\"}"), 1_100L);
+        metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L, "{\"content\":\"CONTENT-NEEDLE\"}", "NICK-NEEDLE", "streamer"), 1_100L);
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+        String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         // 양성 대조가 먼저다. 수신 0건이면 바늘이 요약을 지나간 적이 없어
         // doesNotContain 둘이 자동으로 참이 된다 — 아무것도 검사하지 않은 초록불이다.
@@ -82,17 +84,17 @@ class SummaryLoggerTest {
         // channelId는 개별 메시지 필드는 아니지만 요약에 실을 이유도 없다 —
         // persisted/conflicts/dropped 숫자만 싣는다는 정책을 여기서 못박는다.
         assertThat(line).doesNotContain("CONTENT-NEEDLE").doesNotContain("SENDER-NEEDLE")
-                .doesNotContain("CHANNEL-NEEDLE");
+                .doesNotContain("CHANNEL-NEEDLE").doesNotContain("NICK-NEEDLE");
     }
 
     /** 적재가 생겼는데 요약에 안 실리면 "저장이 도는지"를 아무도 못 본다. */
     @Test
     void 요약에_persisted_conflicts_poisoned_dropped가_실린다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 5L, 2L, 3L, 1L, ArchiveCounters.NONE);
+        String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
+                0L, 5L, 2L, 3L, 1L, ArchiveCounters.NONE, 0L);
 
         // 키만 박아 둔 상수 문자열이 통과하지 못하게 값까지 본다.
         assertThat(line).contains("persisted=5")
@@ -109,7 +111,7 @@ class SummaryLoggerTest {
     void 요약_줄에_아카이브_카운터_여섯이_값과_함께_실린다() {
         CollectionMetrics metrics = new CollectionMetrics();
         ArchiveCounters archive = counters(7, 1, 3, 2, 1, 4, "r1");
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L, 0L, 0L, 0L, 0L, archive);
+        String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(), 0L, 0L, 0L, 0L, 0L, archive, 0L);
         assertThat(line).contains("archived=7").contains("archiveBufferDropped=1").contains("uploaded=3")
                 .contains("pending=2").contains("droppedObjects=1").contains("droppedMessages=4");
     }
@@ -117,10 +119,39 @@ class SummaryLoggerTest {
     @Test
     void 판정_줄에는_archiveRunId까지_실린다() {
         // stopReason null = 정상 종료(SHUTDOWN) — StopReason에는 SHUTDOWN 상수가 없다.
-        String line = SummaryLogger.renderVerdict(1L, new CollectionMetrics().verdict(), null,
-                0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"));
+        String line = SummaryLogger.renderVerdict(1L, 0L, new CollectionMetrics().verdict(), null,
+                0L, 0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"), 0L, RelayCounters.NONE);
         for (String key : REQUIRED_ARCHIVE) assertThat(line).contains(key);
         assertThat(line).contains("archiveRunId=k7x2m9pq");
+    }
+
+    /**
+     * 🔴 <b>판정 줄이 버린 후원 수를 싣는다</b>(봇 codex).
+     *
+     * <p>30초 요약은 <b>창 값</b>이라 세션이 다음 틱 전에 끝나면 마지막 창이 통째로 사라지고,
+     * <b>짧은 방송은 생애가 전부 사라진다.</b> 후원은 아카이브에 안 쌓으므로 버려진 것은
+     * 표에도 원본에도 없다 — <b>되찾을 수 없는 유일한 유실</b>인데 판정 줄이 그것을
+     * 안 실었다. 이 줄이 없으면 그 숫자는 프로세스가 죽는 순간 사라진다.
+     *
+     * <p><b>값을 본다.</b> {@code contains("donationDropped=")} 만 보면 0을 박아 둔 구현도
+     * 통과한다 — 넘긴 값이 그대로 나오는지 못박는다.
+     *
+     * <p>🔴 <b>「받은 후원 수」는 여기서 안 잰다 — 그 항을 뺐기 때문이다</b>(봇 codex, 두 번째).
+     * 처음엔 {@code donations=} 도 실었는데 <b>편지 경로에서 늘 0</b>이었다. 더 나쁜 것은
+     * <b>이 검사가 그것을 못 잡았다는 점</b>이다 — 지표를 직접 넘겨 재므로 운영 경로를
+     * 지나가지 않는다. <b>시험이 통과한다는 것과 시험이 잰다는 것은 다르다.</b>
+     */
+    @Test
+    void 판정_줄이_버린_후원_수를_싣는다() {
+        String line = SummaryLogger.renderVerdict(1L, 0L, new CollectionMetrics().verdict(), null,
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 5L, RelayCounters.NONE);
+
+        assertThat(line)
+                .as("버린 후원은 표에도 원본에도 없다 — 이 줄에 없으면 어디에도 안 남는다")
+                .contains("donationDropped=5");
+        assertThat(line)
+                .as("받은 수는 편지 경로에서 늘 0이라 뺐다 — 되살리려면 등록부 합산이 먼저다")
+                .doesNotContain("donations=");
     }
 
     /** 값만 돌려주는 카운터 묶음. */
@@ -136,14 +167,83 @@ class SummaryLoggerTest {
         };
     }
 
+    /**
+     * <b>줄이 어느 방송의 것인지 말하는가.</b> 스트리머가 여럿이면 30초마다 이 줄이
+     * 세션 수만큼 나가는데, 식별자가 없으면 <b>서로 구분되지 않는 줄 N개</b>가 된다 —
+     * 「일부만 안 걷힌다」를 로그로 가르는 열쇠가 여기 하나뿐이다.
+     */
+    // 문항 2: contains("stream=")이면 포맷에 박아 둔 문자열도 통과한다.
+    //         <b>인자로 준 값</b>이 그대로 나오는지를 본다.
+    @Test
+    void 요약_줄이_어느_방송의_것인지_말한다() {
+        CollectionMetrics metrics = new CollectionMetrics();
+
+        String line = SummaryLogger.render("s-42", metrics.snapshot(), Heartbeat.idleForTest(),
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
+
+        assertThat(line).startsWith("chat.summary stream=s-42 ");
+    }
+
+    /**
+     * <b>같은 스트리머의 새 방송이 오면 번호만 갈아끼운다</b>(세션도 소켓도 그대로).
+     * 요약이 시작 시점의 번호를 붙들면 그 뒤 줄이 전부 <b>끝난 방송</b>을 가리킨다 —
+     * 그 줄을 보고 앞 방송이 아직 걷히고 있다고 읽는다.
+     */
+    // 문항 2: 첫 단언(s1)만 있으면 값을 붙들어 둔 구현도 통과한다. 갈아끼운 뒤를 같이 본다.
+    // 문항 5: start()가 stream.get()을 한 번만 부르게 되돌리면 둘째 대기가 시한을 다 쓰고 빨간불이다.
+    @Test
+    void 방송_번호를_갈아끼우면_다음_요약부터_새_번호가_나간다() throws Exception {
+        CollectionMetrics metrics = new CollectionMetrics();
+        AtomicReference<String> stream = new AtomicReference<>("s1");
+
+        try (LogCaptor captor = new LogCaptor();
+             SummaryLogger ignored = SummaryLogger.start(stream::get, metrics, Heartbeat.idleForTest(),
+                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(),
+                     () -> 0L, ArchiveCounters.NONE, () -> 0L)) {
+            awaitLine(captor, "chat.summary stream=s1 ");
+            assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.summary stream=s1 "));
+
+            stream.set("s2");
+
+            awaitLine(captor, "chat.summary stream=s2 ");
+            assertThat(captor.messages())
+                    .as("시작 시점의 번호를 붙들면 끝난 방송 번호를 단 줄이 영영 나간다")
+                    .anyMatch(m -> m.startsWith("chat.summary stream=s2 "));
+        }
+    }
+
+    /**
+     * <b>편지 경로에서 「몇을 걷었나」를 말하는 항.</b> 판정 줄의 {@code session=}은 러너
+     * 자신의 세션 번호라 그 경로에서 늘 0이다 — 이 항이 없으면 판정 줄만 보고
+     * 「이 프로세스는 아무것도 안 걷었다」로 읽힌다.
+     */
+    // 문항 2: contains("registrySessions=")이면 박아 둔 문자열도 통과한다. 값을 본다.
+    // 문항 4: registrySessions=3만 보면 <b>session=을 그 값으로 덮은</b> 구현도 통과한다 —
+    //         두 항이 서로 다른 값을 든다는 것을 한 문자열로 못박는다.
+    @Test
+    void 판정_줄이_편지로_연_세션_수를_싣는다() {
+        String line = SummaryLogger.renderVerdict(0L, 3L, new CollectionMetrics().verdict(), null,
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L, RelayCounters.NONE);
+
+        assertThat(line).startsWith("chat.session.verdict session=0 registrySessions=3 ");
+    }
+
+    private static void awaitLine(LogCaptor captor, String prefix) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (captor.messages().stream().noneMatch(m -> m.startsWith(prefix))
+                && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+    }
+
     /** 요약은 ping 스케줄러가 아니라 자기 스레드에서 나가야 한다. */
     @Test
     void 요약은_ping_스레드에서_찍히지_않는다() throws Exception {
         CollectionMetrics metrics = new CollectionMetrics();
 
         try (LogCaptor captor = new LogCaptor();
-             SummaryLogger logger = SummaryLogger.start(metrics, Heartbeat.idleForTest(),
-                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE)) {
+             SummaryLogger logger = SummaryLogger.start(() -> "s1", metrics, Heartbeat.idleForTest(),
+                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE, () -> 0L)) {
             Thread.sleep(400);
 
             assertThat(logger.emitterThreadNames())

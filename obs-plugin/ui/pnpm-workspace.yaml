@@ -1,0 +1,4 @@
+# 단일 프로젝트 — packages 키 없음. pnpm 설정 파일로만 쓴다 (web/ 과 같은 방식).
+allowBuilds:
+  esbuild: true
+verifyDepsBeforeRun: false

@@ -35,7 +35,7 @@
   width: calc(20 * var(--pc-u));
   height: calc(20 * var(--pc-u));
   border-radius: var(--pc-radius-circle);
-  background: var(--pc-white);
+  background: var(--pc-white); /* 테마 고정 — 흰 손잡이 */
   box-shadow: var(--pc-shadow-sm);
   transition: transform var(--pc-duration-fast) var(--pc-ease-standard);
 }

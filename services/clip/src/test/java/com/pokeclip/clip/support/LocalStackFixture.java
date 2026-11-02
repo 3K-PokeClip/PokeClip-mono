@@ -1,0 +1,195 @@
+package com.pokeclip.clip.support;
+
+import org.testcontainers.localstack.LocalStackContainer;
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.CreateQueueRequest;
+import software.amazon.awssdk.services.sqs.model.GetQueueAttributesRequest;
+import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
+import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+
+import java.net.URI;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 가짜 SQS(LocalStack)를 static 블록에서 한 번만 띄우는 <b>정적 픽스처</b> —
+ * 상속하지 않고 이름으로 부른다(chat-collector의 LocalStackFixture와 같은 모양).
+ *
+ * <p>이미지 태그는 <b>4.14.0</b>으로 고정한다 — 커뮤니티(무료) 이미지의 마지막
+ * SemVer다. CalVer {@code 2026.x}는 통합(유료 인증) 이미지라
+ * {@code LOCALSTACK_AUTH_TOKEN} 없이는 즉시 종료한다
+ * ("No credentials were found … LocalStack has quit", 2026-08-16 실측).
+ *
+ * <p>자격증명은 SDK 표준 체인의 시스템 프로퍼티 자리에 LocalStack이 준 더미 값을
+ * 넣는다 — 운영 코드에는 키를 받는 자리가 없다.
+ */
+public final class LocalStackFixture {
+
+    private static final LocalStackContainer LOCALSTACK =
+            new LocalStackContainer("localstack/localstack:4.14.0").withServices("sqs", "s3")
+                    // 기본값은 미리서명 주소의 서명을 안 본다: 그러면 위조 주소도 200이라 「주소가 출입증」을 못 잰다(POK-247 실측).
+                    .withEnv("S3_SKIP_SIGNATURE_VALIDATION", "0");
+
+    private static final SqsClient SQS;
+    private static final S3Client S3;
+
+    static {
+        LOCALSTACK.start();
+        System.setProperty("aws.accessKeyId", LOCALSTACK.getAccessKey());
+        System.setProperty("aws.secretAccessKey", LOCALSTACK.getSecretKey());
+        // httpClient를 여기서도 명시한다. sqs가 apache5-client를 runtime으로 딸려오므로
+        // SPI에 후보가 둘이고, 안 박으면 어느 쪽이 쓰일지 클래스패스 순서에 달린다.
+        SQS = SqsClient.builder()
+                .region(Region.of(LOCALSTACK.getRegion()))
+                .endpointOverride(LOCALSTACK.getEndpoint())
+                .httpClient(UrlConnectionHttpClient.builder()
+                        .socketTimeout(Duration.ofSeconds(30))
+                        .build())
+                .build();
+        // 완성 영상 창고(POK-247). LocalStack은 가상 호스트 주소를 못 풀어 경로 방식이다(운영 코드도 주소를 덮으면 그렇게 한다).
+        S3 = S3Client.builder()
+                .region(Region.of(LOCALSTACK.getRegion()))
+                .endpointOverride(LOCALSTACK.getEndpoint())
+                .forcePathStyle(true)
+                .httpClient(UrlConnectionHttpClient.builder()
+                        .socketTimeout(Duration.ofSeconds(30))
+                        .build())
+                .build();
+    }
+
+    private LocalStackFixture() {
+    }
+
+    /** 대조·준비용 클라이언트 하나. 컨테이너가 JVM 끝까지 살고 이것도 그만큼 산다. */
+    public static SqsClient client() {
+        return SQS;
+    }
+
+    /** S3 대조·준비용 클라이언트. 탈퇴 정리 시험(POK-256)이 지운 뒤 창고에 무엇이 남았나 센다. */
+    public static S3Client s3() {
+        return S3;
+    }
+
+    public static String region() {
+        return LOCALSTACK.getRegion();
+    }
+
+    public static String endpoint() {
+        return LOCALSTACK.getEndpoint().toString();
+    }
+
+    /** 창고를 만들고(있으면 그대로) 파일 하나를 놓는다. 완성 영상 주소 시험이 「그 주소로 진짜 받아지나」를 잰다. */
+    public static void putObject(String bucket, String key, byte[] body, String contentType) {
+        ensureBucket(bucket);
+        S3.putObject(b -> b.bucket(bucket).key(key).contentType(contentType), RequestBody.fromBytes(body));
+    }
+
+    /** 창고가 없으면 만든다. 썸네일 그림 시험(POK-291)이 운영 코드의 putObject 앞에 부른다. */
+    public static synchronized void ensureBucket(String bucket) {
+        if (S3.listBuckets().buckets().stream().noneMatch(b -> b.name().equals(bucket))) {
+            S3.createBucket(b -> b.bucket(bucket));
+        }
+    }
+
+    /** 표준 큐 + 전용 실패 큐(POK-125 렌더 주문줄 모양). {@code maxReceiveCount}를 넘으면 실패 큐로 옮긴다. */
+    public record QueuePair(String queueUrl, String dlqUrl) {
+    }
+
+    public static QueuePair createStandardQueueWithDlq(String name, int maxReceiveCount) {
+        String dlqUrl = SQS.createQueue(CreateQueueRequest.builder().queueName(name + "-dlq").build()).queueUrl();
+        String dlqArn = SQS.getQueueAttributes(GetQueueAttributesRequest.builder()
+                        .queueUrl(dlqUrl).attributeNames(QueueAttributeName.QUEUE_ARN).build())
+                .attributes().get(QueueAttributeName.QUEUE_ARN);
+        String queueUrl = SQS.createQueue(CreateQueueRequest.builder()
+                .queueName(name)
+                .attributes(Map.of(
+                        QueueAttributeName.VISIBILITY_TIMEOUT, "2",
+                        QueueAttributeName.REDRIVE_POLICY,
+                        "{\"deadLetterTargetArn\":\"" + dlqArn + "\",\"maxReceiveCount\":\"" + maxReceiveCount + "\"}"))
+                .build()).queueUrl();
+        return new QueuePair(queueUrl, dlqUrl);
+    }
+
+    /** 표준 큐에 본문 그대로. 그룹·중복제거 ID가 없다(표준 큐는 거부한다). */
+    public static void sendPlain(String queueUrl, String body) {
+        SQS.sendMessage(SendMessageRequest.builder().queueUrl(queueUrl).messageBody(body).build());
+    }
+
+    /** 한 통 꺼내 본문을 돌려주고 <b>지운다</b>. 비어 있으면 {@code null}. 롱폴링 2초 — 방금 실은 것을 기다리는 데 충분하다. */
+    public static String receiveAndDelete(String queueUrl) {
+        List<software.amazon.awssdk.services.sqs.model.Message> messages = SQS.receiveMessage(
+                software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest.builder()
+                        .queueUrl(queueUrl).maxNumberOfMessages(1).waitTimeSeconds(2).build()).messages();
+        if (messages.isEmpty()) {
+            return null;
+        }
+        SQS.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
+                .queueUrl(queueUrl).receiptHandle(messages.getFirst().receiptHandle()).build());
+        return messages.getFirst().body();
+    }
+
+    /** 이름이 .fifo로 끝나야 한다 — 아니면 InvalidParameterValue로 거부된다. */
+    public static String createFifoQueue(String name) {
+        return SQS.createQueue(CreateQueueRequest.builder()
+                .queueName(name)
+                .attributes(Map.of(
+                        QueueAttributeName.FIFO_QUEUE, "true",
+                        QueueAttributeName.CONTENT_BASED_DEDUPLICATION, "false"))
+                .build()).queueUrl();
+    }
+
+    /** 그룹·중복제거 ID가 <b>필수다</b> — 빠지면 SQS가 거부한다. 값은 ADR-016이 정한 것. */
+    public static void sendStarted(String queueUrl, String eventId, String streamId, long sequence) {
+        SQS.sendMessage(SendMessageRequest.builder()
+                .queueUrl(queueUrl)
+                .messageBody(startedJson(eventId, streamId, sequence))
+                .messageGroupId(streamId)          // ADR-016: 같은 방송의 순서를 지킨다
+                .messageDeduplicationId(eventId)   // ADR-016: 재시도가 같은 편지임을 알린다
+                .build());
+    }
+
+    /** 종류만 다른 봉투. 러너가 모르는 종류를 어떻게 다루는지 재는 데 쓴다. */
+    public static void sendRaw(String queueUrl, String body, String groupId, String dedupId) {
+        SQS.sendMessage(SendMessageRequest.builder()
+                .queueUrl(queueUrl)
+                .messageBody(body)
+                .messageGroupId(groupId)
+                .messageDeduplicationId(dedupId)
+                .build());
+    }
+
+    /**
+     * 큐에 남은 편지 수 — <b>보이는 것과 처리 중인 것을 더한다.</b>
+     *
+     * <p>{@code ApproximateNumberOfMessages}만 세면 안 된다. 러너가 안 지운 편지는
+     * 가시성 타임아웃(기본 30초)이 지나기 전까지 <b>보이지 않는 상태</b>로 큐에 남는데,
+     * 그 값만 읽으면 0이라 "지웠다"와 구분이 안 된다 — 삭제를 통째로 지워도 초록인
+     * 시험이 된다. 둘을 더해야 "큐에서 사라졌다"를 실제로 잰다.
+     */
+    public static int approximateMessageCount(String queueUrl) {
+        Map<QueueAttributeName, String> attributes = SQS.getQueueAttributes(
+                        GetQueueAttributesRequest.builder()
+                                .queueUrl(queueUrl)
+                                .attributeNames(List.of(
+                                        QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES,
+                                        QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES_NOT_VISIBLE))
+                                .build())
+                .attributes();
+        return Integer.parseInt(attributes.get(QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES))
+                + Integer.parseInt(
+                        attributes.get(QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES_NOT_VISIBLE));
+    }
+
+    public static String startedJson(String eventId, String streamId, long sequence) {
+        return """
+                {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.started",
+                 "occurredAt":"2026-08-18T00:00:00Z","streamId":"%s","streamerId":"%s",
+                 "sequence":%d,"traceId":"trace-1","payload":{"trackManifest":{"manifestVersion":3}}}
+                """.formatted(eventId, streamId, TestIds.STREAMER, sequence);
+    }
+}

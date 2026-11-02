@@ -11,18 +11,38 @@ export interface Me {
   id: number;
   email: string;
   name: string;
-  profileImageUrl: string;
+  /**
+   * 그림 태그에 그대로 넣는 주소. 구글 사진이거나, 직접 올린 사진이면 auth의
+   * `/api/profile-photos/{id}?token=…`다(10분 단위로 안정, 사진을 바꾸면 즉시 달라진다).
+   * `null`이면 구글이 사진을 안 줬거나 사진 창고가 꺼진 것 — 이니셜을 그린다.
+   * 뒤의 token이 서명값이라 **직접 조립하지 않는다** (POK-207 계약).
+   */
+  profileImageUrl: string | null;
 }
 
-/** 구글 동의 화면에서 받은 authorization code를 우리 토큰 한 쌍으로 바꾼다. 처음 온 사용자는 자동 가입. */
-export async function loginWithGoogle(code: string): Promise<TokenPair> {
+/**
+ * 구글 동의 화면에서 받은 authorization code를 우리 토큰 한 쌍으로 바꾼다. 처음 온 사용자는 자동 가입.
+ * codeVerifier는 동의 URL에 challenge로 실었던 PKCE 원문이다 — 구글이 challenge와 대조한다 (POK-483).
+ */
+export async function loginWithGoogle(code: string, codeVerifier: string): Promise<TokenPair> {
   const res = await fetch('/api/auth/google', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, codeVerifier }),
   });
   if (!res.ok) {
     // 401은 사유를 알려주지 않는 계약 — 문구를 일반화한다.
+    // 403(구글 이메일 미인증, POK-256)·409(이메일이 다른 계정에 있음)만 서버가 사유와 문구를 준다.
+    // 사용자가 직접 풀어야 하는 상태라 그 문구를 그대로 보여 준다.
+    if (res.status === 403 || res.status === 409) {
+      const body = (await res.json().catch(() => null)) as {
+        message?: string;
+        reason?: string;
+      } | null;
+      if (body?.reason && body.message) {
+        throw new ApiError(res.status, body.message, body.reason);
+      }
+    }
     throw new ApiError(res.status, '로그인에 실패했어요');
   }
   return res.json() as Promise<TokenPair>;

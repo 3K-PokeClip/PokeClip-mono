@@ -1,0 +1,10 @@
+{
+  "resource": {
+    "aws_secretsmanager_secret_version": {
+      "signing_key": {
+        "secret_id": "example",
+        "secret_string": "not-a-real-secret"
+      }
+    }
+  }
+}

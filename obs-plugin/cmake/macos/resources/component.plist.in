@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  pkgbuild 구성요소 목록 (POK-361) — create-package.cmake가 pkgbuild의 component-plist 옵션으로 넘긴다.
+  BundleIsVersionChecked=false: CFBundleVersion은 CI 실행 번호(buildnumber.cmake)라, 판 검사가 켜져 있으면
+  앞선 실행의 pkg를 나중에 설치할 때 Installer가 번들을 소리 없이 건너뛴다(시험판을 오가며 설치).
+  BundleIsRelocatable=false: 다른 곳의 같은 번들 ID를 찾아가 갱신하지 않게 고정한다(InstallCmds-883 pkgbuild는
+  plist 없이도 relocate가 비어 있었다 — 도구 판에 기대지 않으려고 적어 둔다).
+  BundleOverwriteAction=upgrade: 옛 번들을 지우고 새로 깔아 옛 리소스(해시 이름 독 파일)가 남지 않게 한다.
+-->
+<plist version="1.0">
+<array>
+    <dict>
+        <key>RootRelativeBundlePath</key>
+        <string>Library/Application Support/obs-studio/plugins/@CMAKE_PROJECT_NAME@.plugin</string>
+        <key>BundleHasStrictIdentifier</key>
+        <true/>
+        <key>BundleIsRelocatable</key>
+        <false/>
+        <key>BundleIsVersionChecked</key>
+        <false/>
+        <key>BundleOverwriteAction</key>
+        <string>upgrade</string>
+    </dict>
+</array>
+</plist>

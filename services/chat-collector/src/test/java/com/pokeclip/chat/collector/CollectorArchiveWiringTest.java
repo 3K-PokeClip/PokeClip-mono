@@ -114,7 +114,7 @@ class CollectorArchiveWiringTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, "test-only-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder, TestPersistence.unusedBuffer(), throwingOnce, archive, () -> { });
         runner.run(null);
         awaitState(status, CollectionStatus.State.COLLECTING);
@@ -139,7 +139,7 @@ class CollectorArchiveWiringTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, "test-only-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder, TestPersistence.unusedBuffer(), recording, archive, () -> { });
         runner.run(null);
         awaitState(status, CollectionStatus.State.COLLECTING);
@@ -190,7 +190,7 @@ class CollectorArchiveWiringTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, "test-only-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder, TestPersistence.unusedBuffer(), TestPersistence.disabledPersister(), archive, () -> { });
         runner.run(null);
         return status;

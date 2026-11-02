@@ -29,8 +29,8 @@ const TONE: Record<TextTone, string> = {
   secondary: 'var(--pc-color-text-secondary)',
   muted: 'var(--pc-color-text-muted)',
   accent: 'var(--pc-color-accent-text)',
-  danger: 'var(--pc-color-danger)',
-  success: 'var(--pc-color-success)',
+  danger: 'var(--pc-color-danger-text)',
+  success: 'var(--pc-color-success-text)',
 };
 
 const WEIGHT: Record<FontWeightToken, number> = {

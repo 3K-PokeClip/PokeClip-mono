@@ -1,0 +1,435 @@
+package com.pokeclip.clip.jumpcard.api;
+
+import com.pokeclip.clip.collector.CollectorErrors;
+import com.pokeclip.clip.delegation.AccessErrors;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.TimelineNotReadyException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
+import com.pokeclip.clip.paging.InvalidCursorException;
+import com.pokeclip.clip.paging.InvalidListParamException;
+import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
+import com.pokeclip.clip.playback.PlaybackErrors;
+import com.pokeclip.clip.recipe.RecipeErrors;
+import com.pokeclip.clip.render.RenderErrors;
+import com.pokeclip.clip.upload.UploadErrors;
+import com.pokeclip.clip.support.NotFoundFloor;
+import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * 카드 관련 예외를 상태 코드로 옮기는 유일한 자리.
+ *
+ * <p><b>{@code IllegalArgumentException}을 통째로 잡지 않는다.</b> 잡으면 내부 버그로 나온
+ * 예외가 400으로 둔갑하고, 판별기는 그것을 「내가 잘못 보냈다」로 읽어 재시도를 멈춘다.
+ * 400을 줄 자리는 컨트롤러가 {@code InvalidHighlightException}으로 좁혀 던진다.
+ *
+ * <p>🔴 <b>이 조언은 범위를 안 좁혔다 — 이 서버의 모든 문이 여기를 탄다.</b> 카드 밖의 것도
+ * 여기 사는 이유가 그것이다(POK-174의 목록 문 둘·자격 판정). 좁힌 조언을 새로 만들면
+ * 어느 쪽이 이길지가 배치 순서에 달리는데, {@code assignableTypes}는 <b>우선권을 주지 않고
+ * 전역이 이긴다</b>(감사 2회차 실측).
+ *
+ * <p>🔴 <b>{@code AccessErrors}의 예외 둘은 {@code SegmentErrors}에 같은 단순 이름이 있다</b>
+ * ({@code NotViewableException}·{@code AuthUnavailableException}). 그래서 여기서는
+ * <b>바깥 클래스까지 적는다</b> — 단순 이름으로 import하면 잘못된 쪽을 골라도 <b>조용히
+ * 컴파일된다</b>(둘 다 {@code RuntimeException} 하위다). 잘못 고르면 두 가지가 한꺼번에
+ * 무너진다: 전역이 세그먼트 타입을 가로채 그 문의 봉투가 갈리고, {@code AccessErrors} 쪽은
+ * 아무도 안 다뤄 <b>404가 500으로</b> 나간다.
+ */
+@RestControllerAdvice
+public class JumpCardExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(JumpCardExceptionHandler.class);
+
+    /**
+     * 404. <b>이 갈래는 사람 문과 내부 문이 함께 쓴다</b> — 통로 열기(사람)와 판별기가 카드를 넣는
+     * 문({@code POST /internal/…/highlights})이 같은 예외를 던진다. 그래서 바닥은
+     * {@link NotFoundFloor#awaitFloorIfMarked}로 <b>기준이 찍힌 요청에만</b> 건다.
+     * 내부 문에는 감출 존재가 없고(서버 간 토큰) 판별기는 404를 재시도 상한으로 세므로,
+     * 거기에 25ms를 무는 것은 순수한 비용이다(계획 검증 m5).
+     */
+    @ExceptionHandler(BroadcastNotFoundException.class)
+    ResponseEntity<Map<String, Object>> broadcastNotFound(BroadcastNotFoundException e,
+                                                          HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("broadcast_not_found"));
+    }
+
+    /**
+     * 404. 위와 같은 바닥을 탄다 — <b>카드 번호를 훑어 보는 것도 같은 종류의 탐색</b>이라
+     * 「없는 카드」와 「자격 없어 못 보는 카드」가 시간으로 갈리면 안 된다. 그 두 갈래를 실제로
+     * 만드는 것은 문 넷에 판정을 붙이는 태스크 8이고, 바닥은 지금 미리 자리를 잡아 둔다.
+     */
+    @ExceptionHandler(JumpCardNotFoundException.class)
+    ResponseEntity<Map<String, Object>> jumpCardNotFound(JumpCardNotFoundException e,
+                                                         HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("jump_card_not_found"));
+    }
+
+    /**
+     * 503. {@code scope}를 실어야 웹이 "탭을 닫아라"(user)와 "잠시 뒤 다시"(total)를 구분해 안내한다.
+     * SSE 경로에서 나가지만 본문은 JSON이다 — 연결이 서기 전에 끝나므로 event-stream이 아니다.
+     */
+    @ExceptionHandler(StreamLimitExceededException.class)
+    ResponseEntity<Map<String, Object>> streamLimit(StreamLimitExceededException e) {
+        Map<String, Object> body = error("stream_limit");
+        body.put("scope", e.scope());
+        return json(HttpStatus.SERVICE_UNAVAILABLE, body);
+    }
+
+    /** 503. 웹 마킹(POK-392)의 방송에 시각 기준점이 아직 없다. 첫 조각은 방송 시작 뒤 수 초 안에 생겨 잠시 뒤 다시 누르면 된다. */
+    @ExceptionHandler(TimelineNotReadyException.class)
+    ResponseEntity<Map<String, Object>> timelineNotReady(TimelineNotReadyException e) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(e.retryAfterSeconds()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(error("timeline_not_ready"));
+    }
+
+    /** 401. 다른 401(체인이 내는 것)과 상태 코드가 같아야 프론트가 한 갈래로 처리한다. */
+    @ExceptionHandler(TokenAlreadyExpiredException.class)
+    ResponseEntity<Map<String, Object>> tokenExpired(TokenAlreadyExpiredException e) {
+        return json(HttpStatus.UNAUTHORIZED, error("token_expired"));
+    }
+
+    @ExceptionHandler(InvalidHighlightException.class)
+    ResponseEntity<Map<String, Object>> invalid(InvalidHighlightException e) {
+        Map<String, Object> body = error("invalid_request");
+        body.put("field", e.field());
+        return json(HttpStatus.BAD_REQUEST, body);
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    ResponseEntity<Map<String, Object>> beanValidation(MethodArgumentNotValidException e) {
+        Map<String, Object> body = error("invalid_request");
+        if (e.getFieldError() != null) {
+            body.put("field", e.getFieldError().getField());
+        }
+        return json(HttpStatus.BAD_REQUEST, body);
+    }
+
+    // ── POK-174: 자격 판정과 목록 문 둘이 나눠 쓰는 갈래 ──────────
+
+    /**
+     * 404. <b>사유가 무엇이든 본문이 같다</b> — 「없는 방송」과 「자격 없음」이 응답에서 갈리면
+     * 남의 방송 이름을 넣어 보는 것만으로 그 방송의 실재를 알 수 있다(PRD 결정).
+     * 그래서 사유는 <b>로그로만</b> 간다. 값은 우리 코드가 정한 고정 문자열이라 외부 입력이
+     * 그대로 로그로 가지 않는다.
+     *
+     * <p>WARN이 아닌 이유는 <b>남남의 정상 거절이 대부분</b>이라 그 자체로는 이상이 아니어서다
+     * ({@code SegmentExceptionHandler}와 같은 판단).
+     *
+     * <p>🔴 <b>본문이 같은 것만으로는 안 갈린다 — 시간이 갈린다.</b> 「없는 방송」은 auth를
+     * 안 부르고 「자격 없음」은 왕복을 태운다(세그먼트 문에서 1.5ms 대 4.4ms 실측). 그래서
+     * {@link NotFoundFloor}가 두 갈래를 같은 바닥 뒤로 민다 — 그 클래스는 이 카드에서
+     * {@code segment.api}를 떠나 {@code support}로 옮겨 왔고, 사람 문 둘이 나눠 쓴다.
+     */
+    @ExceptionHandler(AccessErrors.NotViewableException.class)
+    ResponseEntity<Map<String, Object>> notViewable(AccessErrors.NotViewableException e,
+                                                    HttpServletRequest request) {
+        // 값은 우리 코드가 정한 고정 문자열이다 — 외부 입력이 그대로 로그로 가지 않는다.
+        log.info("clip.access.not_viewable reason={}", e.reason());
+        // 기다림이 로그 뒤인 것은 의도다 — 로그를 쓰는 시간까지 바닥 안에 들어간다.
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("broadcast_not_found"));
+    }
+
+    /**
+     * 503. <b>404로 접지 않는다</b> — 화면이 「없는 방송」이라고 단정하면 auth가 살아난 뒤에도
+     * 편집자는 다시 시도하지 않는다. 목록 문에서는 <b>빈 목록으로도 접지 않는다</b>(같은 이유).
+     */
+    @ExceptionHandler(AccessErrors.AuthUnavailableException.class)
+    ResponseEntity<Map<String, Object>> authUnavailable(AccessErrors.AuthUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("authorization_unavailable"));
+    }
+
+    /**
+     * 503. <b>{@code authorization_unavailable}과 낱말이 갈린다</b> — 둘 다 「잠시 뒤 다시」이지만
+     * 화면 안내가 다르다. 자격을 못 물으면 아무것도 못 보고, 수집기를 못 부르면 <b>채팅만</b>
+     * 안 보이고 카드 편집은 그대로 된다.
+     *
+     * <p><b>빈 목록으로 접지 않는다</b>(위 둘과 같은 이유) — 화면이 「그 구간에 채팅이 없었다」로
+     * 단정하면 수집기가 살아난 뒤에도 편집자는 다시 누르지 않는다.
+     */
+    @ExceptionHandler(CollectorErrors.CollectorUnavailableException.class)
+    ResponseEntity<Map<String, Object>> collectorUnavailable(CollectorErrors.CollectorUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("collector_unavailable"));
+    }
+
+    /**
+     * 503. 출입증 문(POK-122) 하나만 쓴다 — 서명 재료가 비었거나(로컬·설정 누락) 방송 번호가
+     * 정책에 못 들어가는 모양이다. <b>404로 접지 않는다</b>: 자격은 이미 통과한 뒤라 「없는 방송」이
+     * 아니고, 화면이 그렇게 단정하면 설정을 채운 뒤에도 다시 안 누른다.
+     * {@code authorization_unavailable}과 낱말을 가르는 이유는 위 둘과 같다 — 안내가 다르다.
+     */
+    @ExceptionHandler(PlaybackErrors.SigningUnavailableException.class)
+    ResponseEntity<Map<String, Object>> playbackSigningUnavailable(PlaybackErrors.SigningUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("playback_signing_unavailable"));
+    }
+
+    // ── POK-124: 레시피 문 넷이 쓰는 갈래 ──────────
+
+    /**
+     * 404. <b>레시피 번호는 자격 판정 뒤에만 찾는다</b>(서비스 순서)이라 여기 오는 요청은 이미 그 방송을 볼 수
+     * 있는 사람이다 — 그래서 {@code broadcast_not_found}와 낱말을 가른다. 다른 방송의 번호를 넣어도 이것이
+     * 나가므로(리포지터리가 방송 번호를 같이 건다) 번호를 훑어 남의 방송 레시피 수를 셀 수는 없다.
+     * 바닥은 위 404들과 같이 탄다 — 「내 방송에 없는 번호」와 「남의 방송에 있는 번호」가 시간으로 갈리면 안 된다.
+     */
+    @ExceptionHandler(RecipeErrors.RecipeNotFoundException.class)
+    ResponseEntity<Map<String, Object>> recipeNotFound(RecipeErrors.RecipeNotFoundException e,
+                                                       HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("recipe_not_found"));
+    }
+
+    /** 400. 계약6 모양이 아니다. {@code field}는 칸 경로 또는 덩어리 이름이고 값은 안 싣는다. */
+    @ExceptionHandler(RecipeErrors.InvalidRecipeException.class)
+    ResponseEntity<Map<String, Object>> invalidRecipe(RecipeErrors.InvalidRecipeException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    // ── POK-125: 영상 만들기 주문·보고 문이 쓰는 갈래 ──────────
+
+    /** 404. 그 방송에 그 번호의 영상이 없다. 바닥은 위 404들과 같이 탄다. */
+    @ExceptionHandler(RenderErrors.ClipNotFoundException.class)
+    ResponseEntity<Map<String, Object>> clipNotFound(RenderErrors.ClipNotFoundException e, HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("clip_not_found"));
+    }
+
+    /** 503. 주문줄이 꺼져 있다 — 404로 접지 않는다(설정을 채운 뒤 다시 누르게). {@code playback_signing_unavailable}과 같은 자세. */
+    @ExceptionHandler(RenderErrors.RenderUnavailableException.class)
+    ResponseEntity<Map<String, Object>> renderUnavailable(RenderErrors.RenderUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("render_unavailable"));
+    }
+
+    /** 400. 구간이 없는 템플릿은 주문할 수 없다 — {@code field:"cut"}. */
+    @ExceptionHandler(RenderErrors.RecipeNotRenderableException.class)
+    ResponseEntity<Map<String, Object>> recipeNotRenderable(RenderErrors.RecipeNotRenderableException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /** 409. 조각이 아직 다 안 올라왔다. 잠시 뒤 다시 — 잘라서 주문하지 않는다. */
+    @ExceptionHandler(RenderErrors.SourceNotReadyException.class)
+    ResponseEntity<Map<String, Object>> sourceNotReady(RenderErrors.SourceNotReadyException e) {
+        return json(HttpStatus.CONFLICT, error("source_not_ready"));
+    }
+
+    /** 409. 완성 전 영상의 주소를 달라고 했다(POK-247). 빈 목록 200으로 접지 않는다: 화면이 「파일 없는 영상」으로 읽는다. */
+    @ExceptionHandler(RenderErrors.ClipNotRenderedException.class)
+    ResponseEntity<Map<String, Object>> clipNotRendered(RenderErrors.ClipNotRenderedException e) {
+        return json(HttpStatus.CONFLICT, error("clip_not_rendered"));
+    }
+
+    /** 400. 원본 조각 주소(POK-389)의 구간이 잘못됐다: {@code field}는 {@code fromMs}·{@code toMs}. */
+    @ExceptionHandler(RenderErrors.InvalidSegmentRangeException.class)
+    ResponseEntity<Map<String, Object>> invalidSegmentRange(RenderErrors.InvalidSegmentRangeException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /** 410. 보관 기한이 지난 방송의 원본 조각(POK-389). 조각 조회 문과 같은 {@code vod_expired}. */
+    @ExceptionHandler(RenderErrors.SegmentsExpiredException.class)
+    ResponseEntity<Map<String, Object>> segmentsExpired(RenderErrors.SegmentsExpiredException e) {
+        return json(HttpStatus.GONE, error("vod_expired"));
+    }
+
+    // ── POK-220: 유튜브 업로드 주문·일꾼 보고 문이 쓰는 갈래 ──────────
+
+    /** 503. 업로드 주문줄이 꺼져 있다. */
+    @ExceptionHandler(UploadErrors.UploadUnavailableException.class)
+    ResponseEntity<Map<String, Object>> uploadUnavailable(UploadErrors.UploadUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("upload_unavailable"));
+    }
+
+    /** 400. 제목·설명·벌 번호(사람 문) 또는 보고 모양(일꾼 문)이 규칙에 안 맞는다. 값은 안 싣는다. */
+    @ExceptionHandler(UploadErrors.InvalidUploadRequestException.class)
+    ResponseEntity<Map<String, Object>> invalidUpload(UploadErrors.InvalidUploadRequestException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    // ── POK-291: 영상 만들기 + 유튜브 바로 올리기가 더한 갈래 ──────────
+
+    /**
+     * 413. 썸네일 그림이 상한(10MB)을 넘는다. 서블릿 층이 바이트를 다 받기 전에 끊고 여기로 온다(컨트롤러에 안 닿는다).
+     * 이 처리기가 없으면 스프링 기본 봉투로 나가 화면이 「무엇이 너무 큰지」를 못 가른다.
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<Map<String, Object>> payloadTooLarge(MaxUploadSizeExceededException e) {
+        return json(HttpStatus.CONTENT_TOO_LARGE, error("payload_too_large"));
+    }
+
+    /** 400. multipart에 필수 파트({@code request})가 없다. 스프링 기본 봉투로 나가지 않게 같은 400 모양으로 낸다. */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    ResponseEntity<Map<String, Object>> missingPart(MissingServletRequestPartException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.getRequestPartName()));
+    }
+
+    /** 415. JPEG·PNG가 아니다(첫 바이트 판정). */
+    @ExceptionHandler(UploadErrors.UnsupportedImageException.class)
+    ResponseEntity<Map<String, Object>> unsupportedImage(UploadErrors.UnsupportedImageException e) {
+        return json(HttpStatus.UNSUPPORTED_MEDIA_TYPE, error("unsupported_image"));
+    }
+
+    /** 503. 그림을 창고에 못 뒀다. 렌더를 주문하기 전이다: 다시 누르면 된다. */
+    @ExceptionHandler(UploadErrors.ThumbnailStoreUnavailableException.class)
+    ResponseEntity<Map<String, Object>> thumbnailStoreUnavailable(UploadErrors.ThumbnailStoreUnavailableException e) {
+        log.warn("clip.upload.thumbnail_store_failed cause={}", e.getCause() == null ? "none" : e.getCause().getClass().getSimpleName());
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("thumbnail_store_unavailable"));
+    }
+
+    /** 409. 스트리머의 유튜브 채널이 연결돼 있지 않다. {@code reason}은 auth 판정 낱말(NOT_LINKED·UNLINKED·BROKEN)이다. */
+    @ExceptionHandler(UploadErrors.YoutubeNotLinkedException.class)
+    ResponseEntity<Map<String, Object>> youtubeNotLinked(UploadErrors.YoutubeNotLinkedException e) {
+        Map<String, Object> body = error("youtube_not_linked");
+        body.put("reason", e.reason());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 같은 편집본 같은 판이 이미 올라갔거나 올라가는 중이다. 그 업로드 번호를 싣는다. */
+    @ExceptionHandler(UploadErrors.AlreadyUploadedException.class)
+    ResponseEntity<Map<String, Object>> alreadyUploaded(UploadErrors.AlreadyUploadedException e) {
+        Map<String, Object> body = error("already_uploaded");
+        body.put("uploadId", e.uploadId());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 다시 시도할 업로드가 없다. */
+    @ExceptionHandler(UploadErrors.NothingToRetryException.class)
+    ResponseEntity<Map<String, Object>> nothingToRetry(UploadErrors.NothingToRetryException e) {
+        return json(HttpStatus.CONFLICT, error("nothing_to_retry"));
+    }
+
+    /** 409. 「확인 필요」가 아닌 업로드를 풀려고 했다(POK-333). 지금 상태를 싣는다. */
+    @ExceptionHandler(UploadErrors.UploadNotCheckingException.class)
+    ResponseEntity<Map<String, Object>> uploadNotChecking(UploadErrors.UploadNotCheckingException e) {
+        Map<String, Object> body = error("upload_not_checking");
+        body.put("status", e.status());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 「안 올라갔다」를 아직 못 받는다(POK-333). 다시 누를 수 있는 시각을 싣는다. */
+    @ExceptionHandler(UploadErrors.ResolutionTooEarlyException.class)
+    ResponseEntity<Map<String, Object>> resolutionTooEarly(UploadErrors.ResolutionTooEarlyException e) {
+        Map<String, Object> body = error("resolution_too_early");
+        body.put("allowedAt", e.allowedAt().toString());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 404. 모르는 업로드 번호. 일꾼 문은 바닥을 안 탄다(서버 간 토큰). 사람 문(POK-333)은 컨트롤러가 바닥을 건다. */
+    @ExceptionHandler(UploadErrors.UploadNotFoundException.class)
+    ResponseEntity<Map<String, Object>> uploadNotFound(UploadErrors.UploadNotFoundException e) {
+        return json(HttpStatus.NOT_FOUND, error("upload_not_found"));
+    }
+
+    /** 422. 주문서가 큐 상한을 넘는다(계약1 2절 {@code MESSAGE_TOO_LARGE} — 발행 API 축의 코드). */
+    @ExceptionHandler(RenderErrors.MessageTooLargeException.class)
+    ResponseEntity<Map<String, Object>> messageTooLarge(RenderErrors.MessageTooLargeException e) {
+        return json(HttpStatus.UNPROCESSABLE_CONTENT, error("message_too_large"));
+    }
+
+    /** 404(내부 문). 모르는 잡. 바닥을 안 탄다 — 서버 간 토큰이라 감출 존재가 없다({@code broadcastNotFound}와 같은 이유). */
+    @ExceptionHandler(RenderErrors.JobNotFoundException.class)
+    ResponseEntity<Map<String, Object>> jobNotFound(RenderErrors.JobNotFoundException e) {
+        return json(HttpStatus.NOT_FOUND, error("job_not_found"));
+    }
+
+    /** 400(내부 문). 보고 본문이 계약 모양이 아니다. */
+    @ExceptionHandler(RenderErrors.InvalidJobEventException.class)
+    ResponseEntity<Map<String, Object>> invalidJobEvent(RenderErrors.InvalidJobEventException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /**
+     * 400. 어느 칸인지만 말한다 — 표시는 <b>불투명</b>이라 「태그가 틀렸다」·「칸이 모자란다」를
+     * 알려 줘도 웹이 고칠 수 있는 것이 아니다. 받은 표시를 되돌려주지도 않는다.
+     */
+    @ExceptionHandler(InvalidCursorException.class)
+    ResponseEntity<Map<String, Object>> invalidCursor(InvalidCursorException e) {
+        return json(HttpStatus.BAD_REQUEST, field("cursor"));
+    }
+
+    /**
+     * 410 {@code vod_expired}. 보관 기간(60일)이 지난 방송: 세그먼트 미리보기 · 렌더 주문(새로 만드는 갈래) · 영상 출입증이 같은
+     * 본문을 낸다(POK-335). 이 응답은 <b>자격이 확인된 사람에게만</b> 도달한다: 「있었는데 없어졌다」는 뜻이라 그 자체로 방송의
+     * 실재를 말하기 때문이다. 순서(자격 판정 뒤)를 지키는 것은 부르는 쪽이다. 세그먼트 전용 조언에서 옮겨 왔다: 문 셋이 나눠 쓰고,
+     * 두 조언이 같은 예외를 잡으면 우선권 없이 전역이 이긴다
+     */
+    @ExceptionHandler(VodExpiredException.class)
+    ResponseEntity<Map<String, Object>> vodExpired(VodExpiredException e) {
+        return json(HttpStatus.GONE, error("vod_expired"));
+    }
+
+    /** 400. 목록 문의 요청 칸({@code state}·{@code limit})이 범위 밖이다. */
+    @ExceptionHandler(InvalidListParamException.class)
+    ResponseEntity<Map<String, Object>> invalidListParam(InvalidListParamException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /**
+     * 400. <b>{@code limit=abc}처럼 값이 안 바뀌면 컨트롤러 메서드에 들어오기 전에 끝난다</b> —
+     * 그러면 위 갈래를 못 지나고 스프링 기본 {@code /error} 봉투로 나가, 웹이 같은 400에
+     * <b>모양이 다른 본문 둘</b>을 받는다.
+     *
+     * <p>🔴 <b>이 타입은 {@code SegmentExceptionHandler}에서 옮겨 왔다</b>(POK-174).
+     * 그쪽에 두면 좁힌 조언이라 <b>새 문에는 안 걸린다</b> — 그리고 양쪽에 두면 전역이 이겨
+     * 좁힌 쪽이 죽은 코드가 된다({@code assignableTypes}는 우선권을 안 준다). 한 자리에 모은다.
+     *
+     * <p>값 자체는 안 싣는다 — 자유 입력을 그대로 되돌려주는 자리가 되면 안 된다.
+     * 칸 이름은 우리 시그니처에서 온 고정 문자열이다.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ResponseEntity<Map<String, Object>> typeMismatch(MethodArgumentTypeMismatchException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.getName()));
+    }
+
+    /** 400. 위와 같은 뿌리의 다른 갈래 — 값이 안 바뀌는 것이 아니라 아예 없는 경우다. */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    ResponseEntity<Map<String, Object>> missingParameter(MissingServletRequestParameterException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.getParameterName()));
+    }
+
+    /**
+     * <b>Content-Type을 명시해야 한다.</b> SSE 문은 {@code produces=text/event-stream}이고
+     * 브라우저 EventSource는 {@code Accept: text/event-stream}을 보낸다 — 그 상태로 JSON을 돌려주면
+     * 협상에 실패해 {@code HttpMediaTypeNotAcceptableException}이 나고 <b>404·503이 500으로 둔갑한다</b>
+     * (실측: 없는 방송 → 500, 상한 초과 → 500). 명시하면 협상을 건너뛴다.
+     */
+    private ResponseEntity<Map<String, Object>> json(HttpStatus status, Map<String, Object> body) {
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(body);
+    }
+
+    private Map<String, Object> error(String code) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", code);
+        return body;
+    }
+
+    /**
+     * 400 갈래들이 <b>칸 순서까지</b> 같은 봉투를 내게 하는 자리.
+     * {@code LinkedHashMap}이라 순서가 곧 본문이고, {@code SegmentExceptionHandler}의
+     * 같은 이름 도우미와 <b>한 글자도 다르면 안 된다</b> — 두 조언이 같은 문의 400을 나눠 낸다.
+     */
+    private Map<String, Object> field(String name) {
+        Map<String, Object> body = error("invalid_request");
+        body.put("field", name);
+        return body;
+    }
+}

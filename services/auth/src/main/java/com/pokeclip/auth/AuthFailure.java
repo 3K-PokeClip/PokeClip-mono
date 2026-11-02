@@ -11,6 +11,11 @@ public enum AuthFailure {
     GOOGLE_TOKEN_EXCHANGE_FAILED,
     GOOGLE_RESPONSE_MISSING_ID_TOKEN,
     GOOGLE_ID_TOKEN_INVALID,
+    /**
+     * 구글 계정의 이메일 인증을 안 마쳤다(POK-256). 이메일이 편집자 초대의 열쇠라 미인증 주소는 받지 않는다.
+     * {@link #EMAIL_ALREADY_REGISTERED}처럼 이유를 알려 준다(403): 사용자가 구글에서 직접 풀어야 하는 상태다.
+     */
+    GOOGLE_EMAIL_UNVERIFIED,
 
     REFRESH_TOKEN_UNKNOWN,
     /** 유예 창 안의 중복 회전. 정상 동작이라 INFO다. */
@@ -39,5 +44,15 @@ public enum AuthFailure {
     EMAIL_ALREADY_REGISTERED,
 
     /** 인증 실패가 아니라 데이터 불일치. DataInconsistencyException이 쓴다. */
-    USER_NOT_FOUND
+    USER_NOT_FOUND,
+
+    /**
+     * 탈퇴한 회원인데 <b>새 것을 만들어 주는 쓰기 경로</b>에 도달했다({@code ActiveUserGuard}).
+     *
+     * <p>보통은 입구 필터({@code WithdrawnAccountFilter})가 401로 먼저 막는다. 여기까지 오는 것은
+     * <b>필터를 지난 뒤 탈퇴가 커밋된 요청</b>이거나 <b>로그인이 없는 경로</b>(페어링 교환)뿐이라
+     * 드물다. 응답은 나머지와 같은 401이고 사유는 로그에만 남는다 —
+     * 「그 계정이 탈퇴했다」를 응답으로 알려 줄 이익이 없다.
+     */
+    WITHDRAWN_ACCOUNT
 }

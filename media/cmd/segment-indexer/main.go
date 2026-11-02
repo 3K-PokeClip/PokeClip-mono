@@ -15,14 +15,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/control"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/secretfile"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -40,8 +45,50 @@ func main() {
 	}
 }
 
+// validateObservationWindow 는 ⓐ2 앵커가 성립할 수 있는 창인지 본다.
+//
+// **왜 config 가 아니라 여기인가**: 비교 상대가 index.TxnDeadline(주조 트랜잭션의 클라이언트
+// 상한)인데 config 층은 그 패키지를 보지 않는다. 상수를 복사해 오면 두 곳이 갈리므로,
+// 두 값이 원본 그대로 함께 보이는 조립 지점에서 본다(config 의 교차 검증 4 옆 주석이 이리로 보낸다).
+//
+// **무엇을 막나**: indexer 의 usableAnchor 는 `now−ObservedAt <= ObsFresh − TxnDeadline` 으로
+// 판정한다 — 트랜잭션이 상한까지 늘어져도 관측이 그때까지 신선하도록 미리 빼는 것이다.
+// ObsFresh 가 상한 이하면 우변이 0 이하가 되어 **어떤 관측도 앵커가 될 수 없고** 스캔 유입
+// ⓐ2 가 영구 봉인된다. 폴은 성공하고 로그도 깨끗한데 주조만 안 되는 무징후 고장이라
+// (교차 검증 4 와 같은 종류) 기동 때 값으로 잡는 것이 유일한 방어다. 방향 자체는 비주조(안전)라
+// 프로세스를 죽일 일은 아니지만, 조용히 기능 하나가 없는 채로 도는 것이 더 나쁘다.
+//
+// 관측이 꺼져 있어도(MTX_API_URL 빈 값) 건너뛰지 않는다 — config 의 나머지 관측 값 검증과
+// 같은 규칙이다(오타를 켜는 날에야 알게 되면 그때도 무징후다).
+func validateObservationWindow(obsFresh time.Duration) error {
+	if obsFresh > index.TxnDeadline {
+		return nil
+	}
+	return fmt.Errorf(
+		"OBS_FRESH(%v)는 주조 트랜잭션 상한(%v)보다 길어야 한다 — 같거나 짧으면 스캔 유입의 "+
+			"ⓐ2 상태 방증 앵커가 영구 불성립이라 그 되감기 컷오프가 조용히 주조되지 않는다"+
+			"(워처·훅 유입 ⓐ1 은 영향 없다). "+
+			"기본값 30s 로 두거나, 최소 %v 보다 크게 잡아라",
+		obsFresh, index.TxnDeadline, index.TxnDeadline)
+}
+
 func run() error {
 	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if err := validateObservationWindow(cfg.ObsFresh); err != nil {
+		return err
+	}
+	// 관측 폴러의 비밀번호 파일을 여기서 읽는다 — DB 연결보다 먼저라 설정 오류가 DB 상태와 무관하게
+	// 드러난다. 실패는 기동 실패다(OpenRoot 와 같은 꼴 · ADR-063 강등의 예외 — startObserver 주석).
+	obsOpt, err := observerOptions(cfg)
+	if err != nil {
+		return err
+	}
+	// 4C resolve 클라이언트(POK-472 — 4D 수신부와 계약9 발행기의 streamerId 가 쓴다). 토큰 파일 읽기 실패는 같은 이유로 여기서
+	// 기동 실패다.
+	resolver, err := newResolveClient(cfg)
 	if err != nil {
 		return err
 	}
@@ -54,16 +101,11 @@ func run() error {
 	defer stop()
 
 	// --- 1. 기동: 설정 -> DB 연결 -> (개발 환경이면) 표 생성 ---
-	pool, err := pgxpool.New(ctx, cfg.PGDSN)
+	pool, dbConfig, err := openIndexerPool(ctx, cfg.PG, log, dbStepTimeout)
 	if err != nil {
-		// DSN 에는 비밀번호가 들어 있으므로 에러에 싣지 않는다.
-		return fmt.Errorf("DB 연결 풀 생성 실패: %w", err)
+		return err
 	}
 	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("DB 접속 확인 실패: %w", err)
-	}
 	if cfg.EnsureSchema {
 		// EnsureSchema 는 Store 인터페이스 밖의 자유 함수다(D7).
 		// 정본 DDL(1번 소유 — ddl.go)을 부팅 시 보장한다. 마이그레이션 도구 도입 시 이 3줄과 ddl.go 만 바꾸면 된다(G7).
@@ -72,8 +114,23 @@ func run() error {
 		}
 		log.Info("schema_ensured", "note", "정본 DDL(1번 소유). 컬럼 변경은 3번 승인 — 계약-세그먼트인덱스 4절")
 	}
+	// 기동 스키마 확인 — M6 장부 객체가 없으면 schema_not_ready 로 멈춘다(운영은 운영 SQL 적용이 선행 조건).
+	if err := requireLedgerSchema(ctx, pool, log); err != nil {
+		return err
+	}
+	// 연결 폐기 관측(POK-388). 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
+	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
+	defer stopIndexerStats()
 
-	store := index.NewPGStore(pool)
+	// 계약9 발행(M6-8) — 게이트 하나를 결정자(새 회차 started) · 정산 조립(완결 평가 ended) · 4D 칸이 함께 쓴다. 꺼지면
+	// 영값 게이트라 outbox 문장이 0 이다. ★ pool.Close 보다 뒤에 등록해 발행기가 먼저 멈춘다(D47).
+	lifecycle, stopLifecycle := startLifecycle(ctx, cfg, pool, resolver, log)
+	defer stopLifecycle()
+
+	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
+	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
+	store := index.NewPGStore(pool,
+		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log), playback.SegKey)
 
 	// 업로더가 파일을 여는 유일한 손잡이다. 루트를 못 열면 기동 실패다 —
 	// 그 상태로 진행하면 모든 PUT 이 열기 단계에서 실패한다.
@@ -92,23 +149,41 @@ func run() error {
 	//   풀이 닫히기 전에 반환되어야 한다. 코드 배치가 그 순서를 보장한다(결정 17″).
 	defer up.Shutdown()
 
-	w, err := recording.NewWatcher(cfg.Watcher)
-	if err != nil {
-		return err
-	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, w, up, cfg.Indexer, log)
-
-	// --- 2. watch 등록 (동기) ---
+	// --- 2. 관측 폴러 — 설계 6.5.3 ⑶ 1~2단계 ---
 	//
-	// 주석 ⓐ: w.Start() 가 ix.Scan() 보다 먼저인 이유.
-	// Start 는 동기라서 반환 시점에는 감시 등록이 이미 끝나 있다. 순서를 뒤집어 Scan 을
-	// 먼저 하면 "훑기는 끝났는데 감시는 아직 안 켜진" 공백 구간이 생기고, 그 사이에
-	// 만들어진 파일은 훑기에도 안 잡히고 알림도 오지 않아 영구 미아가 된다(설계 3절 2번).
-	if err := w.Start(ctx); err != nil {
-		return err
-	}
+	// 워처보다 **먼저** 띄우는 이유: 첫 관측을 확보한 뒤에 초기 수집이 돌아야 그 주기의
+	// 스캔 유입이 ⓐ2 를 쓸 수 있다. 뒤로 미루면 재기동 직후 한 주기가 통째로
+	// 관측 이력 0(= EpochKnown=false) 위에서 돌아 스캔 유입은 아무것도 주조하지 못한다
+	// (ⓐ1 워처·훅 유입은 관측과 무관하게 주조한다 — 관측이 가르는 것은 스캔 유입뿐이다).
+	observer, stopObserver := startObserver(ctx, obsOpt, log)
+	defer stopObserver()
 
-	// --- 2-1. 훅 어댑터 (선택) ---
+	// --- 3. 워처 조립·기동 — 실패는 강등이다 ---
+	//
+	// 주석 ⓐ: 워처 기동이 초기 수집 발사보다 먼저인 이유.
+	// Start 는 동기라서 반환 시점에는 감시 등록이 이미 끝나 있다. 순서를 뒤집으면
+	// "훑기는 끝났는데 감시는 아직 안 켜진" 공백 구간이 생기고, 그 사이에 만들어진
+	// 파일은 훑기에도 안 잡히고 알림도 오지 않아 영구 미아가 된다(설계 3절 2번).
+	//
+	// 실패 처분(ADR-063 결정 1): 조립·기동 단계 실패 = **강등**(프로세스 유지 + 주기
+	// 재시도). 재기동이 상태를 바꿀 수도 있으나 바뀌지 않는 경우가 실재하고, 그때
+	// 프로세스 종료는 다른 유입(훅·스캔)까지 죽인다 — 훅 판정(아래 3-1)의 일반화다.
+	// 기동 **후** 사망(Done 닫힘)은 반대로 종료다: loop 의 watcherDone case 가 그대로
+	// 담당하고 새 프로세스가 실제로 회복시킨다.
+	w, wErr := assembleWatcher(ctx, cfg.Watcher)
+	if wErr != nil {
+		log.Error("watcher_degraded", "value", 1, "err", wErr,
+			"note", "워처만 강등된다. 훅·스캔 유입은 계속되고 재장착은 재스캔 주기가 시도한다")
+	}
+	// 겹 1 — 호출부의 인터페이스 변수 선언. *recording.Watcher 타입 그대로 넘기면
+	// typed-nil 이 indexer.New 의 nil 가드(겹 2)를 통과한다.
+	var adopt indexer.Adopter
+	if w != nil {
+		adopt = w
+	}
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, adopt, up, observer, cfg.Indexer, log)
+
+	// --- 3-1. 훅 어댑터 (선택) ---
 	//
 	// HOOK_SPOOL_PATH 가 비어 있으면 Reader 를 **아예 만들지 않는다**. 그러면 아래 두 채널이
 	// nil 로 남고 select 의 해당 case 는 영구 비활성이 된다 — 이것이 즉시 롤백 스위치다.
@@ -141,17 +216,53 @@ func run() error {
 		log.Info("hook_reader_started", "spool", cfg.HookSpoolPath, "poll", cfg.HookPollInterval)
 	}
 
-	// --- 3. 초기 스캔: 꺼져 있는 동안 쌓인 파일을 따라잡는다 ---
+	// --- 3-2. 되감기 발행 몫 (선택) — 업로더 기동(4) 앞이다 ---
 	//
-	// 2번과 3번 사이에 생성된 파일이 walk 와 워처 FIFO 양쪽에 잡힐 수 있다.
-	// 이는 설계상 허용이며 H2(경로 중복 확인)와 DB UNIQUE 가 흡수한다.
-	if err := ix.Scan(ctx, cfg.SegmentRoot); err != nil {
-		return err
+	// 업로더 워커가 Dirty 집합을 읽으므로 그 집합은 Start 전에 붙어야 하고, 캐시는 루프가 돌기 전 이 고루틴에서 한 번만 인덱서에
+	// 끼운다(assemblePublishing). S3_BUCKET 이 비었거나 조립이 강등되면 발행 몫이 없다 — 루프 보조 타입은 4.1 종료 전이만
+	// 돈다(체크리스트 474 판단 J69 · J77). 강등도 사망이 아니다: 업로드 · 인덱싱은 그대로 돈다(ADR-063 결정 1).
+	// 종료 문장의 옵션 · 완결 평가 칸은 한 벌이다 — 4.1 전이 · 4D 회차 닫힘 칸 · 정산 걸음이 같은 값을 쓴다(finalize_wire.go).
+	// 차선은 조립 밖에서 채운다 — 발행 꺼짐 · 강등에서도 정산 · 상태 전달 차선이 돈다(M6 3.2).
+	fa := newFinalizeAssembly(cfg, lifecycle, log)
+	rewind := &rewindLoop{ix: ix, root: cfg.SegmentRoot, log: log, endLive: fa.endLive(pool), lanes: publish.NewLanes()}
+	// L3(연속 GAP 셋 → ending)는 스위치가 켜졌을 때만 손잡이를 끼운다 — 기본 끔(kty K5 · REWIND_GAP_RUN_END).
+	rewind.endGapRun = fa.gapRunEnd(cfg.RewindGapRunEnd, pool)
+	// L2′(정체 마감 → 봉인 → ending)도 같다 — 기본 끔(kty K5 · REWIND_STALL_SEAL). 발행자의 봉인 문턱은 publishOptions 가 같은
+	// 스위치로 정한다.
+	rewind.endStallSeal = fa.stallSealEnd(cfg.RewindStallSeal, pool)
+	logRewindEndSwitches(log, cfg.RewindGapRunEnd, cfg.RewindStallSeal)
+	// 제어면 상태 몫(Board · 받은편지함 · 재기동 적재)은 발행 조립 앞이다 — 꺼짐 · 강등 · 정상 모두 받은편지함이 있다(M5 3.3).
+	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
+	// 상태 표지 받은편지함은 기동 때 하나다 — 만료(아래)와 4D 수신부가 Changed 로 넣고, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
+	inbox := session.NewPlaybackInbox()
+	pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind)
+	if pubPool != nil {
+		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
+		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
+		defer pubPool.Close()
+		stopPublisherStats := poolstat.Start(ctx, pubPool, "publisher", log)
+		defer stopPublisherStats() // 위 인덱서 풀 관측과 같은 원리 — pubPool.Close 보다 먼저 멈춘다
 	}
+	// 60일 만료(M6-4) — 발행 몫이 강등이면 켜지 않는다(startExpiry). ★ pool.Close 보다 뒤에 등록해 먼저 멈춘다(D24).
+	stopExpiry := startExpiry(ctx, cfg, pool, pubPool != nil, inbox.Changed, log)
+	defer stopExpiry()
+	// 루프의 ctx 가 곧 차선 ctx 다(rewindLoop 문서). run ctx 에서 떼어 두어, 루프가 오류로 끝나 run ctx 가 살아 있어도
+	// rewind.stop 이 작업을 끊고 기다린 뒤 fence 를 반납한다(판단 J74).
+	laneCtx, cancelLanes := context.WithCancel(ctx)
+	defer rewind.stop(ctx, cancelLanes)
 
-	// 워커·스위퍼는 초기 Scan 뒤에 띄운다. Scan 이 커서를 채우기 전에 스위퍼가 돌면
-	// 인덱서가 곧 요청할 행을 먼저 집어 in-flight 로 막는다.
+	// --- 4. 업로더 기동 + 초기 수집 발사 ---
+	//
+	// 부수 효과 있는 컴포넌트의 시작은 미루지 않는다(ADR-063 결정 6): 업로더는 boot 에서
+	// 켠다 — 초기 수집이 hung FS 에 잡혀도 훅 유입 조각의 업로드 접수가 살아 있어야
+	// 한다(f6p). 구 코드가 "초기 Scan 뒤 Start"로 막던 스위퍼 선점은 이제 arm 대기가
+	// 막는다: 스위퍼는 첫 완주 수집(loop 의 armSweeper 호출) 또는 폴백 경과까지 안 돈다.
 	up.Start(ctx)
+
+	// 초기 수집은 발사만 한다 — 결과는 loop 의 CollectDone case 가 받는다(수집 대기 점유 0).
+	// 2번과 이 발사 사이에 생성된 파일이 walk 와 워처 FIFO 양쪽에 잡힐 수 있다.
+	// 이는 설계상 허용이며 H2(경로 중복 확인)와 DB UNIQUE 가 흡수한다.
+	ix.StartCollect(ctx, cfg.SegmentRoot)
 
 	log.Info("watching", "root", cfg.SegmentRoot,
 		"idle_timeout", cfg.Watcher.IdleTimeout, "rescan_every", cfg.Watcher.RescanEvery,
@@ -163,23 +274,137 @@ func run() error {
 	holdTicker := time.NewTicker(cfg.Indexer.HoldTick)
 	defer holdTicker.Stop()
 
-	// --- 4. 메인 루프 ---
+	// 되감기 제어면 서버(M5 3.7). ★ 위 rewind.stop · 풀 Close · up.Shutdown 보다 뒤에 등록해 먼저 멈춘다(LIFO) — 처리 중
+	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 인덱서 풀로 읽는다(동시 2 — M6 11절). 4D 수신부(POK-472)는
+	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 루프가 비운다(fa.wire).
+	intents := session.NewIntentInbox()
+	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound(), startedEnqueuer(lifecycle))), inbox.Changed, intents.Post, log)
+	if err != nil {
+		return err
+	}
+	stopControl := startControlWithEndSignal(cfg, board, log, control.NewRoundLookup(pool, cfg.RewindPublicBaseURL, log), recv)
+	defer stopControl()
+	// 정산 몫(M6-3b) — 발행 조립 뒤 · 루프 기동 전. 루프가 받은편지함 둘을 holdTick 마다 비운다.
+	fa.wire(rewind, cfg, pool, inbox, intents)
+
+	// --- 5. 메인 루프 ---
 	//
 	// 결과를 즉시 return 하지 않는다. 정상·오류가 같은 출구로 나가야 defer 로 등록한
 	// 종료 절차가 어느 경로에서도 같은 순서로 돈다.
-	loopErr := loop(ctx, loopDeps{
+	deps := loopDeps{
 		ix: ix, root: cfg.SegmentRoot, rescanEvery: cfg.Watcher.RescanEvery, log: log,
-		watcherDone: w.Done(), watcherErr: w.Wait,
-		completed: w.Completed(), rescans: w.Rescans(),
 		hookEvents: hookEvents, hookDone: hookDone, hookErr: hookErr,
 		uploadResults: up.Results(), holdTicks: holdTicker.C,
-	})
+		armSweeper: up.ArmSweeper, stallFactor: collectStallFactor,
+		reattachWatcher: func() (*recording.Watcher, error) {
+			return assembleWatcher(ctx, cfg.Watcher)
+		},
+		rewind: rewind,
+	}
+	if w != nil {
+		deps.watcherDone, deps.watcherErr = w.Done(), w.Wait
+		deps.completed, deps.rescans = w.Completed(), w.Rescans()
+	} else {
+		// 강등 국면 — 네 채널이 nil 로 남고 그 case 들은 영구 비활성이다(훅 채널과 같은
+		// 성질). 재장착은 loop 의 재스캔 주기가 시도한다.
+		deps.watcherDegraded = true
+	}
+	loopErr := loop(laneCtx, deps)
 	if loopErr != nil {
 		return loopErr
 	}
 	// 정상 종료도 흔적을 남긴다. 로그가 그냥 끊기면 죽은 것인지 끝난 것인지 구분할 수 없다.
 	log.Info("shutdown", "reason", "종료 신호를 받아 정상 종료한다")
 	return nil
+}
+
+// assembleWatcher 는 워처를 만들고 기동한다. 두 실패점(NewWatcher·Start)을 한 값으로
+// 합쳐 강등 판정에 쓴다. Start 실패 시 fsnotify 핸들을 닫는다(f6i) — 강등 상태의
+// 주기 재시도가 fd·inotify 인스턴스를 누수하면 재시도 자체가 자원 고갈이 된다.
+func assembleWatcher(ctx context.Context, opt recording.WatcherOptions) (*recording.Watcher, error) {
+	w, err := recording.NewWatcher(opt)
+	if err != nil {
+		return nil, fmt.Errorf("워처 조립 실패: %w", err)
+	}
+	if err := w.Start(ctx); err != nil {
+		if closeErr := w.Close(); closeErr != nil {
+			// 1차 에러(기동 실패)가 정본이고 이것은 정리 실패의 흔적이다 — 삼키지 않는다.
+			opt.Log.Warn("watcher_close_failed", "err", closeErr)
+		}
+		return nil, fmt.Errorf("워처 기동 실패: %w", err)
+	}
+	return w, nil
+}
+
+// startObserver 는 관측 폴러를 띄우고 첫 관측까지 기다린다(설계 6.5.3 ⑶ 1~2단계).
+//
+// 돌려주는 관측자가 nil 이면 인덱서가 널 오브젝트로 편다 — 그 상태의 관측은 영값
+// (EpochKnown=false · 관측 시각 없음)이라 ⓐ2(상태 방증)가 닫히고 4.1 종료 전이도 서지 않는다
+// (같은 스트림의 연속 방송이 한 회차로 이어진다). 인덱싱·업로드는 그대로 돈다.
+//
+// **실패 처분이 워처·훅과 같다**: 조립 실패도 관측 실패도 강등이지 사망이 아니다.
+// 관측은 주조 자격의 보강재일 뿐이고, 없으면 방향은 언제나 비주조(안전)다(설계 S3).
+//
+// **예외 하나 — 자격 파일 실패는 기동 실패다**(ADR-063 「관측 실패는 강등」 의 예외, kty 2026-10-19).
+// 자격이 틀린 채 강등으로 뜨면 운영자가 끄지도 않은 관측이 조용히 사라진다. 그래서 비밀번호 파일은
+// 여기가 아니라 run 이 이 함수보다 앞(DB 연결 전)에서 observerOptions 로 읽고, 실패하면 기동을 멈춘다.
+// opt 는 그 결과라 Pass 가 이미 채워져 있다. 자격이 거부되는 것(401)은 기동 뒤의 관측 실패라 강등이고,
+// 폴러가 auth_rejected 를 ERROR 로 낸다.
+//
+// 두 번째 반환값은 폴 고루틴의 종료를 기다리는 함수다. 폴러의 소유자는 run() 이고,
+// **부모 ctx 취소에 기대지 않고 자기 ctx 를 직접 끊는다** — loop 이 에러로 빠져나오면
+// 부모는 아직 살아 있어서, 취소 없이 Done 만 기다리면 그 자리에서 영원히 멈춘다.
+func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) (indexer.StateObserver, func()) {
+	noop := func() {}
+	if opt.APIURL == "" {
+		// 즉시 롤백 스위치(HOOK_SPOOL_PATH 와 같은 형태). 무징후로 두지 않는다 —
+		// 이 상태에서는 스캔 유입이 영영 주조되지 않고 회차도 끝나지 않는데, 증상은 "되감기가
+		// 안 된다" · "회차가 이어진다"뿐이다.
+		log.Info("mtxstate_disabled",
+			"note", "MTX_API_URL 이 비어 있다. ⓐ2(상태 방증)가 fail-closed 되고 스캔 유입은 주조하지 않는다. 4.1 회차 종료 전이도 멈춘다 — live 회차가 끝나지 않는다")
+		return nil, noop
+	}
+	opt.Log = log
+	poller, err := mtxstate.NewPoller(opt)
+	if err != nil {
+		log.Error("mtxstate_setup_failed", "url", opt.APIURL, "err", err,
+			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed, 4.1 회차 종료 전이(M4 ⓒ)도 서지 않는다")
+		return nil, noop
+	}
+
+	pollCtx, cancelPoll := context.WithCancel(ctx)
+	poller.Start(pollCtx)
+	stop := func() {
+		cancelPoll()
+		<-poller.Done()
+	}
+	// 첫 관측을 BootWait 까지 기다린다. 못 얻어도 그대로 진행한다 — 그 창(최대 3초)에
+	// 만들어진 파일은 초기 수집이 회수한다(기존 규약).
+	observed := poller.WaitFirstObservation(ctx)
+	// auth · user 로 「자격을 싣고 붙었나」 를 기동 한 줄에서 본다. 비밀번호 · 파일 경로는 싣지 않는다.
+	log.Info("mtxstate_started",
+		"url", opt.APIURL, "poll", opt.PollInterval, "first_observation", observed,
+		"auth", poller.AuthScheme(), "user", opt.User)
+	return poller, stop
+}
+
+// observerOptions 는 관측 폴러의 설정을 완성한다 — config 가 채운 값에 비밀번호 파일의 내용을 Pass 로
+// 얹는다(POK-373). config 는 파일을 열지 않으므로(손잡이는 main 이 — SEGMENT_ROOT 의 OpenRoot 와 같은 꼴)
+// 여기서 읽는다.
+//
+// **실패는 기동 실패다** — run 이 이 에러를 그대로 돌려준다(startObserver 주석의 ADR-063 예외).
+// MTX_API_URL 이 비면(관측 끔 — 즉시 롤백 스위치) 파일을 읽지 않는다. 롤백이 파일 문제에 막히면 안 된다.
+func observerOptions(cfg config.Config) (mtxstate.Options, error) {
+	opt := cfg.MTXState
+	if opt.APIURL == "" || cfg.MTXAPIPassFile == "" {
+		return opt, nil
+	}
+	pass, err := secretfile.Read("MTX_API_PASS_FILE", cfg.MTXAPIPassFile, secretfile.Options{ShowPath: true})
+	if err != nil {
+		return mtxstate.Options{}, err
+	}
+	opt.Pass = mtxstate.NewSecret(pass)
+	return opt, nil
 }
 
 // newUploader 는 설정에 따라 업로더를 고른다. 분기는 셋이고 기동을 거부하는 것은 하나뿐이다.
@@ -239,19 +464,49 @@ type loopDeps struct {
 	// 업로더가 꺼져 있으면 Results() 가 nil 을 주므로 그 case 는 영구 비활성이다 —
 	// 훅 채널과 정확히 같은 규약이다.
 	uploadResults <-chan upload.Result
-	// holdTicks 는 보류 중인 꼬리를 살펴보는 주기다. 티커의 소유자는 run 이다.
+	// holdTicks 는 보류 중인 꼬리를 살펴보고 4.1 종료 판정을 돌리는 주기다. 티커의 소유자는 run 이다.
 	holdTicks <-chan time.Time
+
+	// armSweeper 는 첫 완주 수집에서 스위퍼를 여는 손잡이다(up.ArmSweeper).
+	// arm 판정의 소유자가 loop 인 이유: Indexer 는 업로더 생애주기를 모른다(원칙 4).
+	armSweeper func()
+	// stallFactor 는 scan_collect_stalled 판정 계수 k 다(경과 > ScanCollectBudget × k).
+	stallFactor float64
+
+	// watcherDegraded 는 워처 부재 국면 표식이다. 참이면 재스캔 주기마다 재장착을
+	// 시도한다 — 유계 재시도(주기당 1회)가 회복을 담당한다(ADR-063 결정 1).
+	watcherDegraded bool
+	// reattachWatcher 는 재장착 손잡이다(assembleWatcher). 성공 시 loop 이 채널 넷을
+	// 갈아 끼우고 SetAdopter 를 함께 부른다 — H4·H5 되돌림이 실제 워처로 복귀한다(f6f).
+	reattachWatcher func() (*recording.Watcher, error)
+
+	// rewind 는 루프가 되감기 회차 · 캐시 · 발행을 돌보는 몫이다(holdTicks case 와 되감기 완료 case 가 부른다).
+	rewind *rewindLoop
 }
 
-// loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망·업로드결과·보류틱을
+// collectStallFactor 는 수집 정지 판정 계수다. soft 예산 45초 × 2 = 90초 —
+// 예산 초과(절단으로 회복)와 진짜 정지(결과 자체가 없음)를 가르는 여유다.
+const collectStallFactor = 2.0
+
+// loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망·업로드결과·보류틱·되감기 작업 결과를
 // 한 곳에서 받아 차례로 처리한다.
 //
-// 주석 ⓑ: Scan·Handle·HandleHook·ApplyUploadResult·ReleaseHeldTails 의 호출자는 이 루프
-// 하나뿐이다. 그래서 Indexer 에 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로
+// 주석 ⓑ: Scan·Handle·HandleHook·ApplyUploadResult·ReleaseHeldTails·OfflineDue·OfflineTried 의 호출자는
+// 이 루프 하나뿐이다. 그래서 Indexer 에 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로
 // 이들이 동시에 불릴 수 없다. 이 규약을 깨고 다른 고루틴에서 부르면 즉시 seq 중복이 난다.
 func loop(ctx context.Context, d loopDeps) error {
 	ticker := time.NewTicker(d.rescanEvery)
 	defer ticker.Stop()
+
+	// 재장착은 워커로 발사하고 결과만 select 로 받는다(단일 비행). 동기로 부르면
+	// assembleWatcher 의 Start→addWatchTree(무상한 FS walk)가 hung FS 에서 loop 자체를
+	// 세운다 — 격리 원칙의 자기위반이다(cx 리뷰 차단 1). hung 상태의 버려진 재장착
+	// 워커는 단일 비행이라 최대 1개다(fsnotify 핸들 점유도 1개로 유계).
+	type reattachResult struct {
+		w   *recording.Watcher
+		err error
+	}
+	var reattachPending chan reattachResult // nil = 비행 없음(그 case 는 영구 비활성)
 
 	for {
 		select {
@@ -274,9 +529,7 @@ func loop(ctx context.Context, d loopDeps) error {
 			}
 
 		case <-d.rescans:
-			if err := d.ix.Scan(ctx, d.root); err != nil {
-				return err
-			}
+			d.ix.StartCollect(ctx, d.root)
 
 		case ev, ok := <-d.hookEvents:
 			if !ok {
@@ -302,9 +555,44 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.hookDone = nil
 
 		case <-ticker.C:
-			// 아무 일이 없어도 주기마다 전수 점검한다. 놓친 게 있으면 여기서 복구된다.
-			if err := d.ix.Scan(ctx, d.root); err != nil {
+			// 워처 강등 국면이면 재장착 워커를 발사한다(비행 중이면 건너뜀 = 유계).
+			if d.watcherDegraded && d.reattachWatcher != nil && reattachPending == nil {
+				ch := make(chan reattachResult, 1)
+				reattachPending = ch
+				go func() {
+					w, err := d.reattachWatcher()
+					ch <- reattachResult{w: w, err: err}
+				}()
+			}
+			// 아무 일이 없어도 주기마다 전수 점검을 발사한다. 놓친 게 있으면 여기서 복구된다.
+			// 발사만 하고 결과는 CollectDone case 가 받는다 — 수집이 루프를 세우지 않는다.
+			d.ix.StartCollect(ctx, d.root)
+
+		// 재장착 결과 — 성공이면 채널 넷을 갈아 끼우고 SetAdopter 를 함께 부른다(f6f).
+		case r := <-reattachPending:
+			reattachPending = nil
+			if r.err != nil {
+				d.log.Warn("watcher_reattach_failed", "err", r.err,
+					"note", "다음 재스캔 주기에 다시 시도한다. 훅·스캔 유입은 계속된다")
+				continue
+			}
+			d.watcherDone, d.watcherErr = r.w.Done(), r.w.Wait
+			d.completed, d.rescans = r.w.Completed(), r.w.Rescans()
+			d.ix.SetAdopter(r.w)
+			d.watcherDegraded = false
+			d.log.Info("watcher_recovered", "note", "재장착 완료 — 되돌림(H4·H5)이 실제 워처로 복귀한다")
+			// 내림은 세움(run 의 value=1)과 같은 ERROR 다 — LOG_LEVEL=error 로 걸러도 해소가 보인다(set/clear 대칭).
+			d.log.Error("watcher_degraded", "value", 0)
+
+		// 수집 워커의 결과가 도착했다. 처리(스트림 루프)는 여기 — 즉 loop 고루틴에서 돈다(D10).
+		case res := <-d.ix.CollectDone():
+			first, err := d.ix.ApplyCollect(ctx, d.root, res)
+			if err != nil {
 				return err
+			}
+			if first {
+				// 첫 완주 — 커서가 채워졌으므로 스위퍼를 열어도 선점이 없다.
+				d.armSweeper()
 			}
 
 		// 업로드 판정을 커서에 반영한다. 비활성 업로더의 Results() 는 nil 이라
@@ -313,8 +601,21 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.ix.ApplyUploadResult(res.StreamID, res.Seq, res.State)
 
 		// 보류 중인 꼬리를 살펴본다. 예산 안에서만 stat 한다.
+		// 수집 정지 판정을 겸행한다 — 결과가 안 온 채 예산 × k 를 넘기면 한 시도에 한 번 ERROR.
 		case <-d.holdTicks:
+			if d.ix.CollectOverdue(d.stallFactor) {
+				d.log.Error("scan_collect_stalled", "root", d.root, "factor", d.stallFactor,
+					"note", "수집 결과가 오지 않고 있다. FS 정지 의심 — 프로세스는 계속 돈다")
+			}
 			d.ix.ReleaseHeldTails()
+			// 4.1 판정과 발행 갈래는 틱 채널의 값이 아니라 지금 시각으로 선다 — 루프가 밀려 틱 값이 과거가 되면
+			// 관측 신선도가 그만큼 느슨해진다(현행 두 줄도 틱 값을 쓰지 않는다).
+			d.rewind.holdTick(ctx, time.Now())
+
+		// 되감기 차선 작업(발행 · 적재 · 감시)의 결과를 반영한다. 발행 몫이 없으면 nil 채널이라 이 case 는 영구
+		// 비활성이다 — 훅 채널과 같은 규약이다(체크리스트 474 판단 J69).
+		case res := <-d.rewind.done():
+			d.rewind.complete(ctx, res, time.Now())
 		}
 	}
 }

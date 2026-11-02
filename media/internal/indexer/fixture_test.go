@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -31,9 +34,33 @@ type fakeStore struct {
 	updateTailOK      *bool
 	updateTail        []updateTailCall
 
+	// seeds 는 "적격 seed 는 주조된다"를 흉내 낸다(실제 판정은 SQL 이 한다).
+	seeds bool
+	// declineAs 는 미주조일 때 돌려줄 귀속 어휘다. 영값이면 종전대로 no_corroboration 이다 —
+	// 귀속은 SQL 이 정하지만(store.go), 그 값이 신호로 어떻게 드러나는지는 여기서 잰다.
+	declineAs index.SeedDecline
+
 	insertCalls     int
 	loadCursorCalls int
+	// lastSeed 는 마지막 Insert 에 동봉된 주조 판정 입력이다(buildSeed 검증용).
+	lastSeed index.Seed
+	// lastSource 는 마지막 Insert 에 동봉된 세션 결정 입력이다(sessionOp 배선 검증용).
+	lastSource index.SessionSource
+
+	// sessions 는 들어간 행마다 앞에서 하나씩 꺼내 쓰는 귀속 세션 대본이다. 세션 결정은 SQL
+	// (session.Registry)이 하지만, 그 결과가 InsertCommit 으로 루프에 어떻게 닿는지는 여기서 잰다.
+	// "" 는 비귀속(NULL) 행이다. 대본이 비었으면 세션 필드를 채우지 않는다(종전 동작).
+	sessions []string
+	// lastSession·lastPDT·lastDurMS 는 대본으로 귀속한 스트림별 마지막 행이다(개시·PDT 흉내).
+	lastSession map[string]string
+	lastPDT     map[string]time.Time
+	lastDurMS   map[string]int32
+	// inheritance 는 회차별 재접속 계승 개시 대본이다(scriptInheritance) — 그 회차를 연 행의 결과가 싣는 두 칸이다.
+	inheritance map[string]inheritance
 }
+
+// inheritance 는 재접속 계승 개시가 개시 결과에 싣는 두 칸이다(물려받은 회차 · 그 회차 첫 조각 경로).
+type inheritance struct{ session, prevFirst string }
 
 type updateTailCall struct {
 	streamID   string
@@ -42,8 +69,75 @@ type updateTailCall struct {
 	bytes      int64
 }
 
+// insertCallCount 는 Insert 시도 횟수다(장벽 검증 — 시도 자체가 없어야 하는 국면용).
+func (s *fakeStore) insertCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.insertCalls
+}
+
 func newFakeStore() *fakeStore {
-	return &fakeStore{rows: map[string][]index.Record{}}
+	return &fakeStore{
+		rows:        map[string][]index.Record{},
+		lastSession: map[string]string{},
+		lastPDT:     map[string]time.Time{},
+		lastDurMS:   map[string]int32{},
+		inheritance: map[string]inheritance{},
+	}
+}
+
+// scriptSessions 는 다음에 들어갈 행들의 귀속 세션을 차례로 정한다("" = 비귀속).
+func (s *fakeStore) scriptSessions(ids ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = append(s.sessions, ids...)
+}
+
+// scriptInheritance 는 회차 sessionID 를 재접속 계승 개시로 만든다 — 그 회차를 연 행의 결과가 물려받은 회차 inherits 와
+// 그 회차 첫 조각 경로 prevFirst 를 싣는다(session 의 계승 갈래 · index 의 개시 되읽기가 하는 일의 흉내).
+func (s *fakeStore) scriptInheritance(sessionID, inherits, prevFirst string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inheritance[sessionID] = inheritance{session: inherits, prevFirst: prevFirst}
+}
+
+// attribute 는 대본의 다음 세션으로 InsertCommit 의 개시 통로 9필드를 채운다 — store.go
+// withCommitted 와 같은 뜻이다: 개시 = 직전 귀속 세션과 다른 세션, PDT = 개시면 벽시계·
+// 아니면 max(직전 PDT + 직전 길이, 벽시계)(설계 5.1.1 재귀식), 키 = playback.SegKey(실패면 NULL),
+// 개시 TD = max(6, 첫 조각 반올림 초)(session.openTargetDuration 과 같은 규칙 — TD 운반, 커밋 ④).
+// base 는 ⓐ 의 개시 값(0)이고, 계승 · 직전 첫 조각은 scriptInheritance 로 정한 회차의 개시 행만 값이다.
+// s.mu 를 쥔 채로 부른다.
+func (s *fakeStore) attribute(r index.Record, res index.InsertCommit) index.InsertCommit {
+	res.DurationMS = r.DurationMS
+	if len(s.sessions) == 0 {
+		return res
+	}
+	sid := s.sessions[0]
+	s.sessions = s.sessions[1:]
+	if sid == "" {
+		return res
+	}
+	res.SessionID = sid
+	res.SessionOpened = s.lastSession[r.StreamID] != sid
+	if res.SessionOpened {
+		res.TargetDuration = max(6, int32(math.Round(float64(r.DurationMS)/1000)))
+		if in, ok := s.inheritance[sid]; ok {
+			res.InheritsSession, res.PrevFirstLocalPath = in.session, in.prevFirst
+		}
+	}
+	pdt := r.StartWallUTC.UTC()
+	if !res.SessionOpened {
+		carried := s.lastPDT[r.StreamID].Add(time.Duration(s.lastDurMS[r.StreamID]) * time.Millisecond)
+		if carried.After(pdt) {
+			pdt = carried
+		}
+	}
+	res.PlaybackPDT = pdt
+	if key, err := playback.SegKey(r.StreamID, r.Seq); err == nil {
+		res.PlaybackS3Key = key
+	}
+	s.lastSession[r.StreamID], s.lastPDT[r.StreamID], s.lastDurMS[r.StreamID] = sid, pdt, r.DurationMS
+	return res
 }
 
 func (s *fakeStore) seed(recs ...index.Record) {
@@ -90,35 +184,44 @@ func (s *fakeStore) ExistingPaths(_ context.Context, streamID string) (map[strin
 	return out, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record) (index.InsertOutcome, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.InsertCommit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.insertCalls++
+	s.lastSeed = seed
+	s.lastSource = src
 
 	if len(s.insertErrs) > 0 {
 		err := s.insertErrs[0]
 		s.insertErrs = s.insertErrs[1:]
 		if err != nil {
-			return index.InsertInserted, err
+			return index.InsertInserted, index.InsertCommit{}, err
 		}
 	}
 
 	if s.alwaysSeqConflict {
-		return index.InsertSeqConflict, nil
+		return index.InsertSeqConflict, index.InsertCommit{}, nil
 	}
 
 	for _, existing := range s.rows[r.StreamID] {
 		if existing.LocalPath == r.LocalPath {
-			return index.InsertDuplicatePath, nil
+			return index.InsertDuplicatePath, index.InsertCommit{}, nil
 		}
 	}
 	for _, existing := range s.rows[r.StreamID] {
 		if existing.Seq == r.Seq {
-			return index.InsertSeqConflict, nil
+			return index.InsertSeqConflict, index.InsertCommit{}, nil
 		}
 	}
 	s.rows[r.StreamID] = append(s.rows[r.StreamID], r)
-	return index.InsertInserted, nil
+	if s.seeds && seed.Eligible {
+		return index.InsertInserted, s.attribute(r, index.InsertCommit{Seeded: true}), nil
+	}
+	decline := s.declineAs
+	if decline == index.DeclineNone {
+		decline = index.DeclineNoCorroboration
+	}
+	return index.InsertInserted, s.attribute(r, index.InsertCommit{Decline: decline}), nil
 }
 
 func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {
@@ -178,6 +281,41 @@ func (p *probeStub) fn(path string) (int64, error) {
 	}
 	i := min(p.calls-1, len(p.vals)-1)
 	return p.vals[i], nil
+}
+
+// ---------------------------------------------------------------------------
+// fake observer — 폴러 대신 관측 스냅샷을 직접 주입한다(계획 단계 4 "스냅샷 직접 주입").
+// 호출 횟수를 세는 이유: 조각 하나에 채취가 정확히 1회여야 재시도 경로에서 판정이 갈리지
+// 않는다(Seed 재사용 규약과 같은 근거).
+// ---------------------------------------------------------------------------
+
+type fakeObserver struct {
+	mu    sync.Mutex
+	obs   map[string]mtxstate.Observation
+	calls int
+}
+
+func newObserver() *fakeObserver {
+	return &fakeObserver{obs: map[string]mtxstate.Observation{}}
+}
+
+func (o *fakeObserver) set(streamID string, obs mtxstate.Observation) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.obs[streamID] = obs
+}
+
+func (o *fakeObserver) Latest(streamID string) mtxstate.Observation {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls++
+	return o.obs[streamID]
+}
+
+func (o *fakeObserver) callCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.calls
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +394,25 @@ func (c *logCapture) attrs(msg string) map[string]any {
 	return out
 }
 
+// attrsAll 은 그 메시지의 기록 전부에서 속성을 뽑는다(기록 순서대로).
+func (c *logCapture) attrsAll(msg string) []map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []map[string]any
+	for i := range c.records {
+		if c.records[i].Message != msg {
+			continue
+		}
+		m := map[string]any{}
+		c.records[i].Attrs(func(a slog.Attr) bool {
+			m[a.Key] = a.Value.Any()
+			return true
+		})
+		out = append(out, m)
+	}
+	return out
+}
+
 func (c *logCapture) errorCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -273,15 +430,16 @@ func (c *logCapture) errorCount() int {
 // ---------------------------------------------------------------------------
 
 type fixture struct {
-	t       *testing.T
-	root    string
-	store   *fakeStore
-	probe   *probeStub
-	adopter *fakeAdopter
-	upload  *fakeUploadRequester
-	logs    *logCapture
-	ix      *Indexer
-	opt     Options
+	t        *testing.T
+	root     string
+	store    *fakeStore
+	probe    *probeStub
+	adopter  *fakeAdopter
+	upload   *fakeUploadRequester
+	observer *fakeObserver
+	logs     *logCapture
+	ix       *Indexer
+	opt      Options
 }
 
 // testOptions 는 기본값의 의미는 그대로 두고 시간 상수만 짧게 줄인다.
@@ -295,6 +453,10 @@ func testOptions() Options {
 		SettleWait:   10 * time.Millisecond,
 		MaxSettle:    60 * time.Millisecond,
 	}
+	// 관측 축의 두 창은 config 기본값 그대로다(OBS_FRESH 30초 · OBS_BACKFILL 60초) —
+	// 판정 경계를 재는 케이스가 프로덕션과 같은 수치 위에 서야 한다.
+	opt.ObsFresh = 30 * time.Second
+	opt.ObsBackfill = 60 * time.Second
 	// 보류 수명주기 테스트가 실제 시간을 기다려야 하므로 ms 급으로 줄인다.
 	// 여기서 줄이지 않으면 (c) 계열이 held 맵 직접 주입에 의존하게 되고,
 	// 그러면 ReleaseHeldTails 의 판정 자체가 검증되지 않는다.
@@ -305,22 +467,23 @@ func testOptions() Options {
 func newFixture(t *testing.T, probeVals ...int64) *fixture {
 	t.Helper()
 	f := &fixture{
-		t:       t,
-		root:    t.TempDir(),
-		store:   newFakeStore(),
-		probe:   newProbe(probeVals...),
-		adopter: &fakeAdopter{},
-		upload:  &fakeUploadRequester{accept: true},
-		logs:    &logCapture{},
-		opt:     testOptions(),
+		t:        t,
+		root:     t.TempDir(),
+		store:    newFakeStore(),
+		probe:    newProbe(probeVals...),
+		adopter:  &fakeAdopter{},
+		upload:   &fakeUploadRequester{accept: true},
+		observer: newObserver(),
+		logs:     &logCapture{},
+		opt:      testOptions(),
 	}
-	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.opt, slog.New(f.logs))
+	f.reload()
 	return f
 }
 
 // reload 는 Options 를 바꾼 뒤 인덱서를 다시 만든다.
 func (f *fixture) reload() {
-	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.opt, slog.New(f.logs))
+	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
 }
 
 // makeFile 은 실제 파일을 만들고 mtime 을 충분히 과거로 돌린다.
@@ -403,4 +566,17 @@ func (f *fakeUploadRequester) targets() []index.UploadTarget {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]index.UploadTarget(nil), f.got...)
+}
+
+// targetsOf 는 그 축의 요청만 요청 순서대로 돌려준다(거부된 요청 포함).
+func (f *fakeUploadRequester) targetsOf(axis index.Axis) []index.UploadTarget {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []index.UploadTarget
+	for _, t := range f.got {
+		if t.Axis == axis {
+			out = append(out, t)
+		}
+	}
+	return out
 }

@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.archive;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
@@ -188,6 +190,6 @@ class ChatArchiverCloseTest {
     }
 
     private static ArchivableChat chat(long receivedAt) {
-        return new ArchivableChat("CH", receivedAt, "{}");
+        return new ArchivableChat(Platform.CHZZK, "CH", receivedAt, "{}");
     }
 }

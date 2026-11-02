@@ -1,0 +1,6 @@
+# R2: resource 와 라벨 사이에 공백이 없어도 같은 선언이다.
+resource"aws_cloudfrontkeyvaluestore_key" "k" {
+  key_value_store_arn = "example"
+  key                 = "example"
+  value               = "example"
+}

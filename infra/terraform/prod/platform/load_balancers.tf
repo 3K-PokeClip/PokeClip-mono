@@ -1,0 +1,253 @@
+# 공개 ALB(app · api — 설계 4-2 · 4-3) · REGIONAL WAF · 내부 ALB(media —
+# CloudFront VPC origin 뒤, 4-4 · 4-5) · SRT NLB(4-6). 두 ALB 리스너의 기본
+# 동작은 고정 404 다(alb 모듈 — 규칙에 걸린 요청만 대상에 닿는다).
+#
+# 이 루트에 없는 규칙: 내부 ALB 인그레스 ← CloudFront VPC origin(edge) · 내부
+# ALB · NLB 이그레스 → Media 와 Media 대상 등록(media — 5-5).
+
+locals {
+  # next 의 keep-alive 65초 · clip SSE 하트비트 20초보다 짧다.
+  alb_idle_timeout = 60
+
+  # 공개 ALB 는 잘못된 헤더(HTTP 헤더 이름 규칙 밖)를 버린다 — 요청 밀수 방어.
+  public_alb_drop_invalid_header_fields = true
+
+  # web/next.config.ts 에서 AUTH_API_URL 로 가는 접두사(7 · 9 · 14 · 18 · 19 ·
+  # 24 · 26 · 29 · 30행). 그 파일에 줄이 늘면 여기도 늘린다.
+  auth_path_prefixes = [
+    "/api/auth",
+    "/api/stream-keys",
+    "/api/chzzk-link",
+    "/api/editor-delegations",
+    "/api/editor-invitations",
+    "/api/youtube-link",
+    "/api/soop-link",
+    "/api/streamers",
+    "/api/profile-photos",
+  ]
+
+  service_target_group = {
+    for name, service in var.services : name => {
+      port        = service.port
+      protocol    = "HTTP"
+      target_type = "ip"
+      health_check = {
+        port = "traffic-port"
+        path = service.health_check_path
+      }
+    }
+  }
+
+  # clip-sse 는 같은 clip 서비스다 — 긴 SSE 연결이 clip 그룹의 응답 시간 지표를
+  # 흐리지 않게 뗀다(설계 4-3).
+  public_target_groups = merge(local.service_target_group, {
+    clip-sse = local.service_target_group.clip
+  })
+
+  # auth 는 접두사마다 규칙 하나로 나뉜다(priority + 0 … + 8 — 조건 값 한도,
+  # 계획 P1). clip-sse 는 clip 보다 앞이어야 SSE 가 clip-sse 로 간다.
+  public_listener_rules = {
+    auth = {
+      priority      = 100
+      target_group  = "auth"
+      host_headers  = [var.api_host]
+      path_prefixes = local.auth_path_prefixes
+      path_patterns = []
+      path_rewrite  = null
+    }
+    clip-sse = {
+      priority      = 200
+      target_group  = "clip-sse"
+      host_headers  = [var.api_host]
+      path_prefixes = []
+      path_patterns = ["/api/clip/broadcasts/*/events"]
+      path_rewrite  = null
+    }
+    clip = {
+      priority      = 300
+      target_group  = "clip"
+      host_headers  = [var.api_host]
+      path_prefixes = []
+      path_patterns = ["/api/clip/*"]
+      path_rewrite  = null
+    }
+    next = {
+      priority      = 400
+      target_group  = "next"
+      host_headers  = [var.app_host]
+      path_prefixes = []
+      path_patterns = []
+      path_rewrite  = null
+    }
+  }
+
+  # Media 상자 nginx 포트 · 헬스 경로의 정본 — 출력으로 내보내 media 루트가
+  # 같은 값으로 상자를 띄운다.
+  media_proxy_ports = tomap(var.proxy_ports)
+  media_health_path = var.media_health_path
+
+  # 헬스는 프록시 헬스 포트 · 경로다(traffic-port 아님) — 제어면 서버가 없어도
+  # control 이 healthy 다(설계 3-3-1).
+  internal_target_groups = {
+    for name in ["live", "control", "playback"] : name => {
+      port        = local.media_proxy_ports[name]
+      protocol    = "HTTP"
+      target_type = "instance"
+      health_check = {
+        port = tostring(local.media_proxy_ports["health"])
+        path = local.media_health_path
+      }
+    }
+  }
+
+  internal_listener_rules = {
+    live = {
+      priority      = 100
+      target_group  = "live"
+      path_patterns = ["/live/*"]
+      path_rewrite  = { regex = "^/live/(.*)$", replace = "/$1" }
+    }
+    rewind = {
+      priority      = 200
+      target_group  = "control"
+      path_patterns = ["/api/streams/*/rewind"]
+      path_rewrite  = null
+    }
+    ingest = {
+      priority      = 300
+      target_group  = "control"
+      path_patterns = ["/api/ingest/*"]
+      path_rewrite  = null
+    }
+    playback = {
+      priority      = 400
+      target_group  = "playback"
+      path_patterns = ["/playback/*"]
+      path_rewrite  = { regex = "^/playback/(.*)$", replace = "/$1" }
+    }
+  }
+
+  nlb_subnet_id   = local.network.media_public_subnet_id
+  nlb_health_port = local.media_proxy_ports["health"]
+}
+
+module "waf" {
+  source = "../../modules/waf_acl"
+
+  name                = "pokeclip-prod-regional"
+  scope               = "REGIONAL"
+  managed_rule_groups = var.waf_managed_rule_groups
+  rate_limit          = var.waf_rate_limit
+
+  # 자격 증명이 실리는 헤더 · 질의 인자는 웹 ACL 데이터 보호로 요청 샘플 ·
+  # 로그 모두에서 가린다(POK-459 · POK-479). 내부 토큰 헤더 둘(auth
+  # /internal/** 공용 X-Internal-Token · 계약4 resolve 전용
+  # X-Stream-Key-Resolve-Token)은 정상 경로로는 공개 ALB 에 오지 않지만 잘못
+  # 실려 와도 남지 않게 미리 둔다. 질의 인자는 OAuth 콜백의 ?code=(web 콜백
+  # 화면들) · 프로필 사진 주소의 ?token=(auth PhotoUrls)이다.
+  #
+  # referer 도 가린다(kty 2026-10-25). web 은 Referrer-Policy 를 전역
+  # strict-origin-when-cross-origin, 콜백 화면 넷(/auth/callback ·
+  # /oauth/<제공자>/callback)은 no-referrer 로 명시한다(POK-482). 그래서 정상
+  # 경로로는 ?code= 가 든 전체 주소가 Referer 에 실리지 않는다. 이 가림은 그
+  # 정책이 회귀하거나 다른 클라이언트가 콜백 주소를 Referer 로 보낼 때를 막는
+  # 이중 안전장치다 — 정책이 없으면 콜백 화면이 같은 출처(app)로 보내는 요청의
+  # Referer 에 전체 주소가 실리고, SINGLE_QUERY_ARGUMENT 는 헤더 안의 그 값을
+  # 가리지 못한다. 대가로 요청 샘플 · 로그에서 요청이 어느 화면에서
+  # 왔는지(출처 정보)를 잃는다.
+  #
+  # 질의 인자를 하나라도 가리면 로그의 규칙 일치 · 속도 규칙 세부
+  # (RuleMatchDetails · rateBasedRuleList)에서 질의 문자열 전체가 REDACTED 가
+  # 된다(AWS WAF 개발자 안내서 「Data protection limitations」) — 질의를 보는
+  # 규칙에 걸린 차단 로그에서 공격 페이로드를 볼 수 없다. 차단 자체는 그대로다
+  # (데이터 보호는 저장되는 요청 데이터만 바꾼다 — AWS WAF API
+  # 「FieldToProtect」). 오탐을 볼 때의 대안은 README 「공개 WAF 데이터 보호」.
+  protected_headers = [
+    "authorization",
+    "cookie",
+    "referer",
+    "x-internal-token",
+    "x-stream-key-resolve-token",
+  ]
+  protected_query_args = ["code", "token"]
+
+  # 차단된 요청만 남긴다(장부 17 · kty 결정). 보존은 ECS 로그(services.tf)와
+  # 같다. redacted_headers 는 데이터 보호와 겹쳐 두는 로그 가림이다 — 데이터
+  # 보호를 끄거나 줄여도 로그의 authorization · cookie 는 가려진다. 다만 AWS 가
+  # 보장하는 범위는 그 헤더를 단일 헤더(SingleHeader)로 보는 규칙까지이고, 헤더
+  # 전체(Headers)를 보는 규칙의 일치 세부 · 요청 샘플은 범위 밖이다(AWS WAF API
+  # 「LoggingConfiguration」 RedactedFields). referer · 내부 토큰 헤더 · 질의
+  # 인자는 데이터 보호로만 가린다 — 내부 토큰 헤더는 정상 경로로 들어오지 않는
+  # 선제 항목이라 로그 가림까지 겹치지 않는다(kty 2026-10-25).
+  logging = {
+    log_group_name    = "aws-waf-logs-pokeclip-prod-public"
+    retention_in_days = local.log_retention_days
+    redacted_headers  = ["authorization", "cookie"]
+  }
+}
+
+module "public_alb" {
+  source = "../../modules/alb"
+
+  name            = var.public_alb_name
+  internal        = false
+  vpc_id          = local.network.vpc_id
+  subnet_ids      = local.network.public_subnet_ids
+  certificate_arn = local.certs.cert_arn_apne2
+  idle_timeout    = local.alb_idle_timeout
+  target_groups   = local.public_target_groups
+  listener_rules  = local.public_listener_rules
+
+  drop_invalid_header_fields = local.public_alb_drop_invalid_header_fields
+}
+
+resource "aws_wafv2_web_acl_association" "public" {
+  resource_arn = module.public_alb.alb_arn
+  web_acl_arn  = module.waf.web_acl_arn
+}
+
+module "internal_alb" {
+  source = "../../modules/alb"
+
+  name            = var.internal_alb_name
+  internal        = true
+  vpc_id          = local.network.vpc_id
+  subnet_ids      = local.network.private_subnet_ids
+  certificate_arn = local.certs.cert_arn_apne2
+  idle_timeout    = local.alb_idle_timeout
+  target_groups   = local.internal_target_groups
+  listener_rules  = local.internal_listener_rules
+}
+
+module "nlb" {
+  source = "../../modules/media_ingest"
+
+  name                 = "pokeclip-prod"
+  vpc_id               = local.network.vpc_id
+  subnet_id            = local.nlb_subnet_id
+  health_port          = local.nlb_health_port
+  ingest_allowed_cidrs = var.ingest_allowed_cidrs
+
+  ingest_public_approved = var.ingest_public_approved
+}
+
+resource "aws_vpc_security_group_ingress_rule" "public_alb_https" {
+  security_group_id = module.public_alb.sg_id
+  description       = "HTTPS from internet"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+# 서비스 포트 = 헬스 포트(traffic-port)라 서비스마다 규칙 하나다.
+resource "aws_vpc_security_group_egress_rule" "public_alb_to_service" {
+  for_each = var.services
+
+  security_group_id            = module.public_alb.sg_id
+  description                  = "ALB to ${each.key}"
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.port
+  to_port                      = each.value.port
+  referenced_security_group_id = local.service_sg_ids[each.key]
+}

@@ -1,8 +1,12 @@
 package com.pokeclip.auth.streamkey;
 
+import com.pokeclip.auth.streamkey.secret.PassphraseRefIssuer;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.streamkey.secret.StreamKeySecretRetirer;
+import com.pokeclip.auth.streamkey.secret.StreamKeySecrets;
 import com.pokeclip.auth.support.CrockfordBase32;
 import com.pokeclip.auth.support.Sha256;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -17,7 +21,6 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Optional;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -33,26 +36,40 @@ public class StreamKeyService {
 
     private final StreamKeyRepository streamKeyRepository;
     private final StreamKeyCreator streamKeyCreator;
+    @StreamKeySecrets
     private final SecretStore secretStore;
+    private final StreamKeySecretRetirer secretRetirer;
+    private final PassphraseRefIssuer refIssuer;
     private final UserRepository userRepository;
+    private final ActiveUserGuard activeUserGuard;
     private final SecureRandom random = new SecureRandom();
 
     /**
      * 발급의 유일한 입구다. 지금은 조건 없이 주지만 원래는 결제해야 발급이므로,
      * 나중에 조건 한 줄이 들어갈 자리가 여기 하나뿐이어야 한다.
+     * <b>그 「조건 한 줄」이 실제로 처음 들어온 것이 아래 탈퇴 확인이다.</b>
      *
      * <p>이 메서드에 &#64;Transactional을 걸지 않는다. 걸면 재조회가 삽입 실패와 같은
      * 트랜잭션에 묶여 오염된 세션에서 쿼리를 돌리게 된다
      * (UserService.findOrCreate와 같은 이유).
+     *
+     * <p>🔴 <b>확인이 만드는 갈래 앞이 아니라 맨 앞이다.</b> 「새로 만들 때만 본다」로 두면
+     * <b>이미 있는 키를 탈퇴한 회원에게 그대로 내주는</b> 갈래가 남는다 — 회수를 넘어 만들어진
+     * 키가 하나라도 있으면(위 창) 교환이 그것을 계속 돌려준다. 재는 것은
+     * {@code WithdrawnWriteGuardStreamKeyTest}다.
+     *
+     * <p>대가는 발급·교환마다 회원 표 조회가 하나 느는 것이다. 둘 다 rate limit이 걸린 드문 경로고,
+     * <b>Media가 부르는 {@code resolve}는 이 메서드를 안 지난다</b> — 그쪽 지연은 안 변한다.
      */
     public StreamKeyMaterial ensureKey(Long userId) {
+        activeUserGuard.requireAlive(userId, "streamkey.ensure");
         return findMaterial(userId).orElseGet(() -> createOrRead(userId));
     }
 
     private StreamKeyMaterial createOrRead(Long userId) {
         StreamKeyMaterial material = new StreamKeyMaterial(
                 CrockfordBase32.random(random, TOKEN_LENGTH), randomPassphrase());
-        String ref = "streamkey:" + UUID.randomUUID();
+        String ref = refIssuer.issue();
 
         try {
             StreamKey created = streamKeyCreator.create(userId, ref, material);
@@ -108,8 +125,12 @@ public class StreamKeyService {
 
     /**
      * 키 행은 있는데 secret이 없으면 우리 저장소가 어긋난 것이다. 500으로 올린다 —
-     * Media 입장에서 "키가 틀림"이 아니라 "판단 불가"이고 조치가 정반대다.
+     * Media 입장에서 "키가 틀림"이 아니라 "판단 불가"이고, 둘은 원인과 후속 조치가 다르다.
      * RequestIdFilter의 request.failed ERROR가 상관 ID와 함께 잡는다.
+     *
+     * <p>저장소가 답하지 못한 경우(Secrets Manager 스로틀·시간 초과)는 저장소가
+     * {@code SecretStoreUnavailableException}을 던진다. 같은 500이지만 request.failed의 예외 종류로
+     * 「없음」과 「저장소 장애」가 갈린다.
      */
     StreamKeyMaterial materialOf(StreamKey key) {
         return StreamKeyMaterial.deserialize(secretStore.get(key.getPassphraseRef())
@@ -153,19 +174,33 @@ public class StreamKeyService {
         // create가 아니다. REQUIRES_NEW로 부르면 새 트랜잭션이 위의 revokeAlive를
         // 못 봐 부분 유니크 인덱스에 걸린다.
         streamKeyCreator.createInCurrentTransaction(
-                userId, "streamkey:" + UUID.randomUUID(), material);
+                userId, refIssuer.issue(), material);
 
         // 옛 secret 삭제를 커밋 뒤로 미룬다. 커밋 전에 지우면 롤백 시 "옛 키는
         // 살아 있는데 passphrase가 없는" 복구 불능 상태가 된다 — 그 스트리머는
         // 송출도 재발급도 못 한다. 커밋 후면 최악이 아무도 참조하지 않는 고아
         // secret 하나다. 후자를 택했다.
         //
+        // 지우는 곳은 읽기 저장소 하나가 아니라 retire-from의 전부다(POK-272). 롤백 중에는
+        // 같은 키의 사본이 PG와 Secrets Manager 양쪽에 있을 수 있다.
+        //
         // 로그도 같은 자리에서 찍는다. 롤백됐는데 "재발급했다"가 남으면
         // 조사에서 거짓 알리바이가 된다(TokenService.logAfterCommit과 같은 이유).
+        //
+        // 🔴 정리가 실패해도 재발급은 이미 끝났다. 커밋 뒤 콜백의 예외는 스프링이 삼키지 않고 호출자에게
+        // 올려 보내, 성공한 재발급이 500이 되고 아래 감사 줄도 빠진다. 정리가 원격 호출(Secrets Manager)이
+        // 되면서 스로틀·시간 초과로 실제로 나는 갈래다(POK-272 로컬 리뷰 1). 그래서 감사 줄을 먼저 찍고
+        // 정리 실패는 잡아서 WARN으로 남긴다. 남은 옛 사본을 지울 장치는 없다(이행 실행기는 병행 종료 때
+        // 걷었다, POK-329). WARN을 보고 손으로 지운다(송출에는 무해, 비용만 든다).
         String staleRef = previous.getPassphraseRef();
         afterCommit(() -> {
-            secretStore.delete(staleRef);
             log.info("auth.streamkey.rotated userId={}", userId);
+            try {
+                secretRetirer.retire(staleRef);
+            } catch (RuntimeException e) {
+                log.warn("auth.streamkey.secret.retire_failed userId={} causeType={}",
+                        userId, e.getClass().getSimpleName());
+            }
         });
 
         return now;

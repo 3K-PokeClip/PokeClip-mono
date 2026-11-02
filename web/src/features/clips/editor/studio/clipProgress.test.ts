@@ -1,0 +1,365 @@
+import { describe, expect, it } from 'vitest';
+import type { ClipSnapshot, UploadSnapshot } from '@/api/clipEditor';
+import { clipProgressBar, clipSettled, clipStatusView, stepClock } from './clipProgress';
+
+// 편집기 헤더의 영상 상태 알약(POK-492)과 상태 확인(폴링)이 멈추는 때(POK-291): 업로드 정보가 있으면 업로드가 끝날 때까지 묻는다.
+
+function clip(over: Partial<ClipSnapshot> = {}): ClipSnapshot {
+  return {
+    id: 77,
+    streamId: 's1',
+    recipeId: 31,
+    recipeVersion: 1,
+    requestedBy: '9',
+    status: 'rendered',
+    progress: null,
+    outputs: [{ outputId: 'o1', kind: 'video', s3Key: 'k' }],
+    error: null,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T11:00:00Z',
+    ...over,
+  };
+}
+
+function upload(status: string, code?: string): UploadSnapshot {
+  return {
+    id: 5,
+    clipId: 77,
+    outputId: 'o1',
+    title: '보스 막타',
+    status,
+    videoId: null,
+    error: code ? { code, message: null } : null,
+    requestedBy: '9',
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T11:00:00Z',
+  };
+}
+
+const intent = { title: '보스 막타', privacyStatus: 'private', thumbnailSource: 'none' } as const;
+
+describe('clipStatusView: 영상 상태 알약과 작은 창(POK-492)', () => {
+  const rendering = (percent: number | null) =>
+    clip({
+      status: 'rendering',
+      uploadRequest: intent,
+      progress: percent === null ? null : { percent, stage: null, attempt: 1, jobId: 'j' },
+    });
+
+  // 시험 줄의 시각은 모두 2026-09-20T11:00Z = 한국 20:00(시험은 Asia/Seoul로 돈다). 같은 날 밤에 연 편집기다
+  const NOW = new Date('2026-09-20T12:00:00Z');
+  const view = (c: ClipSnapshot) => clipStatusView(c, NOW);
+
+  it.each([
+    [
+      '대기',
+      clip({ status: 'queued', uploadRequest: intent }),
+      'progress',
+      '차례 기다리는 중',
+      [
+        ['now', '20:00부터'],
+        ['todo', null],
+        ['todo', null],
+      ],
+    ],
+    [
+      '만드는 중',
+      rendering(42),
+      'progress',
+      '영상 만드는 중 42%',
+      [
+        ['done', '20:00'],
+        ['now', '42%'],
+        ['todo', null],
+      ],
+    ],
+    [
+      '올리는 중',
+      clip({ uploadRequest: intent, upload: upload('uploading') }),
+      'progress',
+      '유튜브에 올리는 중',
+      [
+        ['done', '20:00'],
+        ['done', '20:00'],
+        ['now', '20:00부터'],
+      ],
+    ],
+    [
+      '업로드됨',
+      clip({ upload: upload('uploaded') }),
+      'success',
+      '유튜브에 올라갔어요',
+      [
+        ['done', '20:00'],
+        ['done', '20:00'],
+        ['done', '20:00'],
+      ],
+    ],
+    [
+      '업로드 실패',
+      clip({ upload: upload('failed', 'QUOTA_EXCEEDED') }),
+      'danger',
+      '업로드 실패',
+      [
+        ['done', '20:00'],
+        ['done', '20:00'],
+        ['danger', '20:00 실패'],
+      ],
+    ],
+    [
+      '확인 필요',
+      clip({ upload: upload('checking') }),
+      'warning',
+      '확인 필요',
+      [
+        ['done', '20:00'],
+        ['done', '20:00'],
+        ['warning', '확인 필요'],
+      ],
+    ],
+    [
+      '업로드 안 됨',
+      clip({ uploadRequest: intent, upload: null }),
+      'warning',
+      '업로드 안 됨',
+      [
+        ['done', '20:00'],
+        ['done', '20:00'],
+        ['warning', '시작 안 됨'],
+      ],
+    ],
+    [
+      '영상 만들기 실패',
+      clip({ status: 'failed' }),
+      'danger',
+      '영상 만들기 실패',
+      [
+        ['done', '20:00'],
+        ['danger', '20:00 실패'],
+        ['todo', null],
+      ],
+    ],
+  ] as const)('%s: 상태색 하나와 짧은 말, 단계마다 상태와 시각', (_, c, tone, title, steps) => {
+    const v = view(c);
+    expect(v).toMatchObject({ tone, title });
+    expect(v.steps.map((step) => [step.state, step.note])).toEqual(steps);
+    expect(v.steps.map((step) => step.label)).toEqual(['대기', '영상 만들기', '유튜브 올리기']);
+  });
+
+  it('단계 시각은 오늘이면 시:분, 다른 날이면 월/일 시:분이고, 모르면 지어내지 않는다', () => {
+    expect(stepClock('2026-09-20T11:00:00Z', NOW)).toBe('20:00');
+    expect(stepClock('2026-09-19T11:05:00Z', NOW)).toBe('9/19 20:05');
+    expect(stepClock(undefined, NOW)).toBeNull();
+    expect(stepClock('언제', NOW)).toBeNull();
+    // 서버가 시각을 안 주면 시각 없이 「실패」만 말한다
+    expect(view(clip({ status: 'failed', updatedAt: '' })).steps[1].note).toBe('실패');
+  });
+
+  it('「다시 올리기」로 새 업로드 줄이 생겨도 「영상 만들기」 완성 시각은 그대로다(PR #454 1차 리뷰)', () => {
+    // 20:02 완성 → 20:30에 다시 올림: 새 업로드 줄의 생성 시각이 완성 시각을 덮지 않는다
+    const v = view(
+      clip({
+        updatedAt: '2026-09-20T11:02:00Z',
+        upload: { ...upload('uploading'), createdAt: '2026-09-20T11:30:00Z' },
+      }),
+    );
+    expect(v.steps[1].note).toBe('20:02');
+    expect(v.steps[2].note).toBe('20:30부터');
+  });
+
+  it('화면 말에 「주문」이 없다(사용자가 못 알아듣는다, 2026-10-28)', () => {
+    const all = [
+      clip({ status: 'queued', uploadRequest: intent }),
+      rendering(null),
+      clip({ uploadRequest: intent, upload: null }),
+    ].map(view);
+    for (const v of all) expect(`${v.title} ${v.detail}`).not.toContain('주문');
+  });
+
+  it('영상 만들기 실패는 영상 만들기 창을 다시 여는 「다시 만들기」를 준다', () => {
+    expect(view(clip({ status: 'failed' })).actions).toEqual(['remake', 'library']);
+  });
+
+  it('만드는 중인데 서버가 퍼센트를 안 줬으면 0%라 하지 않고 %를 뺀다(POK-444)', () => {
+    expect(clipStatusView(rendering(null)).title).toBe('영상 만드는 중');
+    expect(clipStatusView(rendering(null)).progress).toEqual({ value: null });
+  });
+
+  it('업로드됨: 유튜브에서 보기 주소와 공개 범위를 말한다', () => {
+    const view = clipStatusView(
+      clip({ upload: { ...upload('uploaded'), videoId: 'abc123', privacyStatus: 'unlisted' } }),
+    );
+    expect(view.actions).toEqual(['youtube', 'library']);
+    expect(view.youtubeUrl).toBe('https://youtu.be/abc123');
+    expect(view.detail).toBe('일부 공개로 올라갔어요.');
+    // 영상 번호가 아직 없으면 가짜 주소를 만들지 않는다
+    expect(clipStatusView(clip({ upload: upload('uploaded') })).actions).toEqual(['library']);
+  });
+
+  it('업로드 실패는 보관함과 같은 사유를 말하고 다시 올리기를 준다', () => {
+    const view = clipStatusView(clip({ upload: upload('failed', 'QUOTA_EXCEEDED') }));
+    expect(view.detail).toBe(
+      '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요. 내일 다시 올려 주세요.',
+    );
+    expect(view.actions).toEqual(['retryUpload', 'library']);
+  });
+
+  // 예약 시각: NOW(한국 21:00) 기준 앞 22:00(13:00Z) · 지난 20:30(11:30Z). 2026-09-20은 일요일이다
+  const LATER = '2026-09-20T13:00:00Z';
+  const EARLIER = '2026-09-20T11:30:00Z';
+  const NOTIFY = '구독자에게 새 영상 알림이 갈 수 있어요.';
+
+  it.each([
+    [
+      '공개',
+      { privacyStatus: 'public' },
+      `다시 올리면 「공개」로 올라가 누구나 볼 수 있어요. ${NOTIFY}`,
+    ],
+    [
+      '일부 공개',
+      { privacyStatus: 'unlisted' },
+      '다시 올리면 「일부 공개」로 올라가 주소를 아는 사람만 볼 수 있어요.',
+    ],
+    [
+      '예약 전',
+      { privacyStatus: 'private', publishAt: LATER },
+      `다시 올리면 「예약」 9월 20일 (일) 22:00에 공개로 바뀌어요. ${NOTIFY}`,
+    ],
+    [
+      '예약 시각 지남',
+      { privacyStatus: 'private', publishAt: EARLIER },
+      `「예약」 시각(9월 20일 (일) 20:30)이 지나 다시 올리면 바로 공개돼요. ${NOTIFY}`,
+    ],
+    ['비공개', { privacyStatus: 'private' }, null],
+    ['옛 서버(범위 없음 = 비공개)', {}, null],
+  ] as const)(
+    '업로드 실패의 「다시 올리기」는 그 줄의 공개 범위를 미리 말한다 — %s(보관함 「다시 시도」와 같은 경고, PR #454 2차 리뷰)',
+    (_, privacy, note) => {
+      const v = view(clip({ upload: { ...upload('failed', 'QUOTA_EXCEEDED'), ...privacy } }));
+      expect(v.actions).toContain('retryUpload');
+      expect(v.retryNote).toBe(note);
+    },
+  );
+
+  it('업로드 줄이 없을 때의 「다시 올리기」는 업로드 정보의 범위로 말하고, 다시 올리기가 없으면 말하지 않는다', () => {
+    const notStarted = view(
+      clip({ uploadRequest: { ...intent, privacyStatus: 'public' }, upload: null }),
+    );
+    expect(notStarted.retryNote).toBe(
+      `다시 올리면 「공개」로 올라가 누구나 볼 수 있어요. ${NOTIFY}`,
+    );
+    const uploaded = view(clip({ upload: { ...upload('uploaded'), privacyStatus: 'public' } }));
+    expect(uploaded.retryNote).toBeNull();
+  });
+
+  it('예약 공개로 올라간 영상은 그 시각이 지났는지에 따라 말한다: 지났으면 「바뀌어요」라 하지 않는다(PR #454 2차 리뷰)', () => {
+    const scheduled = (publishAt: string) =>
+      view(clip({ upload: { ...upload('uploaded'), privacyStatus: 'private', publishAt } })).detail;
+    expect(scheduled(LATER)).toBe(
+      '「예약」 9월 20일 (일) 22:00에 공개되도록 올렸어요. 그 전까지는 비공개예요.',
+    );
+    expect(scheduled(EARLIER)).toBe('「예약」 9월 20일 (일) 20:30에 공개되도록 올렸어요.');
+  });
+
+  it('완성됐는데 업로드가 시작되지 않았으면(정보는 있는데 줄이 없음) 기다리지 않고 다시 올리기를 준다', () => {
+    // 완성과 업로드 줄은 한 트랜잭션이라, 정보가 있는데 줄이 없으면 자동 업로드를 건너뛴 것이다
+    const view = clipStatusView(clip({ uploadRequest: intent, upload: null }));
+    expect(view).toMatchObject({ tone: 'warning', title: '업로드 안 됨', progress: null });
+    expect(view.actions).toEqual(['retryUpload', 'library']);
+  });
+
+  it('업로드 정보가 없는 완성 영상(옛 서버 포함)은 「영상 완성」이고 올리기 단계는 「안 올림」이다', () => {
+    const v = view(clip());
+    expect(v).toMatchObject({ tone: 'success', title: '영상 완성' });
+    expect(v.steps[2]).toEqual({ label: '유튜브 올리기', state: 'todo', note: '안 올림' });
+  });
+
+  it('확인 필요는 푸는 곳(보관함)으로만 보낸다', () => {
+    expect(view(clip({ upload: upload('checking') })).actions).toEqual(['libraryCheck']);
+    // 영상이 지금 판이면 판 번호를 알아도 같다
+    expect(
+      clipStatusView(clip({ upload: upload('checking') }), NOW, { version: 1, vodExpiresAt: null })
+        .actions,
+    ).toEqual(['libraryCheck']);
+  });
+
+  it('확인 필요 영상이 옛 판인데 원본이 만료됐으면 다시 올릴 수 있다고 약속하지 않는다(PR #462 5차 리뷰)', () => {
+    const v = clipStatusView(clip({ upload: upload('checking') }), NOW, {
+      version: 2,
+      vodExpiresAt: '2026-09-20T11:59:00Z',
+    });
+    expect(v.actions).toEqual(['library']);
+    expect(v.detail).toBe('이 판은 올라갔는지 확인하지 못했어요.');
+  });
+
+  it('확인 필요 영상이 옛 판이면 보관함에 풀 곳이 없어 보내지 않고, 지금 판으로 다시 올릴 길을 말한다', () => {
+    const v = clipStatusView(clip({ upload: upload('checking') }), NOW, {
+      version: 2,
+      vodExpiresAt: '2026-09-20T12:01:00Z',
+    });
+    expect(v.actions).toEqual(['library']);
+    expect(v.detail).toBe(
+      '이 판은 올라갔는지 확인하지 못했어요. 지금 판으로 영상을 만들면 다시 올릴 수 있어요.',
+    );
+    // 올라갔는지 모르는 것은 그대로다: 상태를 지어내지 않는다
+    expect(v).toMatchObject({ tone: 'warning', title: '확인 필요' });
+    expect(v.steps[2]).toEqual({ label: '유튜브 올리기', state: 'warning', note: '확인 필요' });
+  });
+});
+
+describe('clipSettled: 상태 확인을 멈추는 때', () => {
+  it('렌더 중이면 계속, 실패면 멈춘다', () => {
+    expect(clipSettled(clip({ status: 'queued' }))).toBe(false);
+    expect(clipSettled(clip({ status: 'rendering' }))).toBe(false);
+    expect(clipSettled(clip({ status: 'failed' }))).toBe(true);
+  });
+
+  it('완성됐어도 업로드 정보가 있으면 업로드가 끝날 때까지 묻는다', () => {
+    // 줄이 없으면 기다려도 안 생긴다: 끝없이 묻지 않는다
+    expect(clipSettled(clip({ uploadRequest: intent, upload: null }))).toBe(true);
+    expect(clipSettled(clip({ uploadRequest: intent, upload: upload('queued') }))).toBe(false);
+    expect(clipSettled(clip({ uploadRequest: intent, upload: upload('uploading') }))).toBe(false);
+    expect(clipSettled(clip({ uploadRequest: intent, upload: upload('uploaded') }))).toBe(true);
+    expect(clipSettled(clip({ uploadRequest: intent, upload: upload('failed') }))).toBe(true);
+    // 확인 필요는 사람이 채널을 봐야 풀린다
+    expect(clipSettled(clip({ uploadRequest: intent, upload: upload('checking') }))).toBe(true);
+  });
+
+  it('업로드 정보가 없는 완성 영상은 바로 멈춘다(옛 길)', () => {
+    expect(clipSettled(clip())).toBe(true);
+  });
+});
+
+describe('clipProgressBar: 헤더 진행 막대(POK-444)', () => {
+  it('렌더 퍼센트가 있으면 그 값이다', () => {
+    expect(
+      clipProgressBar(
+        clip({
+          status: 'rendering',
+          progress: { percent: 42, stage: null, attempt: 1, jobId: 'j' },
+        }),
+      ),
+    ).toEqual({ value: 42 });
+  });
+
+  it('퍼센트가 없는 기다림(만드는 중 · 대기열 · 유튜브에 올리는 중)은 불확정이다: 지어낸 %가 없다', () => {
+    expect(clipProgressBar(clip({ status: 'rendering', progress: null }))).toEqual({ value: null });
+    expect(clipProgressBar(clip({ status: 'queued' }))).toEqual({ value: null });
+    expect(clipProgressBar(clip({ uploadRequest: intent, upload: upload('uploading') }))).toEqual({
+      value: null,
+    });
+    // 완성됐어도 업로드는 아직 대기열이다
+    expect(clipProgressBar(clip({ uploadRequest: intent, upload: upload('queued') }))).toEqual({
+      value: null,
+    });
+  });
+
+  it('기다릴 것이 없으면 막대가 없다: 완성 · 실패 · 업로드됨 · 업로드 실패 · 확인 필요', () => {
+    expect(clipProgressBar(clip())).toBeNull();
+    expect(clipProgressBar(clip({ status: 'failed' }))).toBeNull();
+    expect(clipProgressBar(clip({ uploadRequest: intent, upload: null }))).toBeNull();
+    expect(clipProgressBar(clip({ upload: upload('uploaded') }))).toBeNull();
+    expect(clipProgressBar(clip({ upload: upload('failed', 'QUOTA_EXCEEDED') }))).toBeNull();
+    expect(clipProgressBar(clip({ upload: upload('checking') }))).toBeNull();
+  });
+});

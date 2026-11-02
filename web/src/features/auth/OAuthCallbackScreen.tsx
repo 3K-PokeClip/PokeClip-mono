@@ -3,10 +3,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Button, Spinner } from '@/ui';
+import { LinkButton } from '@/ui';
+import { ReplaceLink } from '@/components/ReplaceLink';
 import { loginWithGoogle } from '@/api/auth';
+import { ApiError } from '@/api/client';
+import { track } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
+import { CALLBACK_PENDING_LABEL, CallbackPending } from './CallbackPending';
 import { consumeOAuthState } from './googleOAuth';
+import { stripOAuthParamsFromUrl } from './stripOAuthParams';
 import styles from './OAuthCallbackScreen.module.css';
 
 // 구글 동의 화면 복귀 처리 (POK-101) — ?code를 우리 토큰 한 쌍으로 바꾼다.
@@ -54,8 +59,11 @@ export function OAuthCallbackScreen() {
     // 성공한 로그인이 실패 화면으로 뒤집힌다. ref 가드가 필수다.
     if (startedRef.current) return;
     startedRef.current = true;
+    // 실패 안내로 이 화면에 머물러도 주소창에 1회용 값을 남기지 않는다. params는 이미 읽은 사본이다 (POK-482).
+    stripOAuthParamsFromUrl();
 
-    const stored = consumeOAuthState(); // 검증 결과와 무관하게 즉시 소모 — 재사용 방지
+    // 검증 결과와 무관하게 즉시 소모 — 재사용 방지. PKCE verifier도 같은 항목이라 여기서 함께 사라진다 (POK-483).
+    const stored = consumeOAuthState();
 
     if (params.get('error') !== null) {
       // access_denied 등 — 구글이 사유를 실어 주지만 사용자에겐 취소로 뭉뚱그리는 편이 정확하다.
@@ -79,15 +87,22 @@ export function OAuthCallbackScreen() {
       return;
     }
 
-    loginWithGoogle(code)
+    loginWithGoogle(code, stored.codeVerifier)
       .then((pair) => {
         // 자동 로그아웃(401→clearTokens)은 캐시를 못 비운다 — 공용 PC에서 이전 계정의
         // me 캐시가 새 로그인에 새지 않도록, 토큰을 심기 전에 여기서 비운다. (리뷰 #72)
         queryClient.clear();
         useAuthStore.getState().setTokens(pair);
+        // 아직 익명으로 나간다 — 다음 화면의 AuthGuard가 회원 번호로 식별하면 그 사람에게 합쳐진다 (POK-357)
+        track('login_completed', {});
         router.replace(sanitizeReturnTo(stored.returnTo));
       })
-      .catch(() => {
+      .catch((e: unknown) => {
+        // 사유가 실려 온 거절(403 이메일 미인증 · 409 이메일 중복)은 서버 문구로 무엇을 할지 알려 준다.
+        if (e instanceof ApiError && e.code !== null) {
+          setPhase({ kind: 'error', title: '로그인할 수 없는 계정이에요', description: e.message });
+          return;
+        }
         // 401 사유 미공개 계약 + 네트워크 실패 — 문구를 나누지 않는다.
         setPhase({
           kind: 'error',
@@ -97,22 +112,15 @@ export function OAuthCallbackScreen() {
       });
   }, [params, queryClient, router]);
 
-  if (phase.kind === 'working') {
-    return (
-      <main className={styles.screen}>
-        <Spinner size="lg" />
-        <p className={styles.working}>로그인하는 중…</p>
-      </main>
-    );
-  }
+  if (phase.kind === 'working') return <CallbackPending label={CALLBACK_PENDING_LABEL.login} />;
 
   return (
     <main className={styles.screen}>
       <h1 className={styles.title}>{phase.title}</h1>
       <p className={styles.description}>{phase.description}</p>
-      <Button variant="solid" size="md" onClick={() => router.replace('/login')}>
+      <LinkButton as={ReplaceLink} href="/login" variant="solid" size="md">
         로그인 화면으로
-      </Button>
+      </LinkButton>
     </main>
   );
 }

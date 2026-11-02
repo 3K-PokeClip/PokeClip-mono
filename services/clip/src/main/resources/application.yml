@@ -6,9 +6,26 @@ spring:
     # 변수 이름을 팀 docker-compose(.env.example)와 맞췄다. `.env`를 그대로 쓰면
     # 로컬에서든 compose 안에서든 추가 설정 없이 붙는다.
     # compose 네트워크 안에서 띄울 때만 DB_HOST=postgres 를 준다.
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
-    username: ${POSTGRES_USER:pokeclip}
-    password: ${POSTGRES_PASSWORD:change-me-local-only}
+    #
+    # 접속값 셋에는 기본값을 주지 않는다(POK-161). 기본값을 두면 공개 저장소의
+    # .env.example에 적힌 값으로 실제 DB에 붙는 창이 열린다. DB_HOST·DB_PORT는
+    # .env에 없는 값이라 지우면 로컬이 깨진다 — 일부러 남긴다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      # 세션 경로를 자기 스키마 하나로 둔다(POK-428). Hikari가 새 연결마다 setSchema로 search_path를 바꾸므로
+      # 맨 이름은 app_clip와 암묵 pg_catalog에서만 풀린다 — public에 누가 같은 이름의 함수를 심어도 고르지 않는다.
+      schema: ${pokeclip.datasource.schema}
+      data-source-properties:
+        # DB 응답 대기 시한(초, POK-414). 연결은 받고 응답을 안 하는 DB(반개방)를 끊는 것은 이것뿐이다:
+        # queryTimeout은 취소를 서버에 보내 답 없는 상대에게 무력하고, Hikari connection-timeout은 풀에서 빌리는
+        # 대기라 이미 빌린 연결의 읽기를 못 끊는다(services/CLAUDE.md 실측, 둘 다 20초 넘게 매달림). 없으면 그 요청
+        # 스레드가 끝없이 매달려 풀이 바닥나고 화면이 통째로 멈춘다(수집 서버 PR #55와 같은 현상).
+        # 수집 · 판별 서버와 같은 10이다. 이 연결의 모든 문장에 걸린다: 10초를 넘기는 마이그레이션(큰 표 색인)을
+        # 쓰는 날 이 값을 다시 본다. 정수로 주면 Hikari가 조용히 무시한다(문자열로 바인딩돼야 먹는다).
+        # DatasourceTimeoutTest가 값이 아니라 행동으로 잰다. iam 허용 목록(db-support)이 받는 유일한 드라이버 속성이다.
+        socketTimeout: 10
 
   jpa:
     hibernate:
@@ -24,23 +41,297 @@ spring:
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
     # 마이그레이션 번호는 모듈별 대역을 쓴다 — V1xx auth · V2xx clip · V3xx chat.
     table: flyway_schema_history_clip
+    # 표와 이력 테이블을 자기 스키마에 만든다(POK-428). 남의 표가 없는 스키마라 baseline 설정이 필요 없다 —
+    # 이 스키마가 이력 없이 비어 있지 않으면 Flyway가 non-empty로 멈춘다(의도).
+    schemas: ${pokeclip.datasource.schema}
+
+  servlet:
+    multipart:
+      # 「영상 만들기」의 썸네일 그림(POK-291). 서블릿 층이 바이트를 다 받기 전에 자르고 413 payload_too_large로 접는다.
+      # 유튜브 썸네일 문서 기준 상한 안쪽이다(실제 붙는 크기는 업로드 일꾼이 유튜브에 묻는다).
+      max-file-size: 10MB
+      # 🔴 요청 상한은 파일 상한보다 커야 한다. 같게 두면 multipart 경계·파트 헤더·request 파트가 더해져 정확히 10MB인 그림이
+      # 413이 된다(auth 프로필 사진에서 실측한 함정). RenderUploadSizeLimitTest가 「정확히 10MB는 통과」를 못박는다.
+      max-request-size: 11MB
+
+  http:
+    clients:
+      # 복수형이다. 단수형 spring.http.client.*는 아무것도 바인딩하지 않고 오류도 없다
+      # (auth·chat-collector에서 두 번 밟은 함정). auth가 연결만 받고 답을 안 하면
+      # 이 시한이 유일한 탈출구다 — 없으면 미리보기 요청이 톰캣 스레드를 무기한 쥔다.
+      # 실측: 응답 안 주는 서버에 5,031ms에 SocketTimeoutException(계획 검증 Q2).
+      connect-timeout: 2s
+      read-timeout: 5s
 
 logging:
   pattern:
     # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
     level: "%5p [%X{requestId:-}]"
+  level:
+    # DB 로거 트리 셋을 info로 박는다(POK-409). 로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 한다:
+    # root TRACE 실측(clip)에서 org.hibernate.orm.jdbc.extract가 읽은 칸 값을, org.hibernate.orm.core가 DEBUG에서
+    # 엔티티 통째를, org.springframework.jdbc.core.StatementCreatorUtils가 JdbcTemplate 매개변수를,
+    # org.postgresql.core.v3.QueryExecutorImpl이 보내는 값을 찍었다. 방송의 물리 키는 지금 스트림키와 같다.
+    # 디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다(예: LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug).
+    org.hibernate.orm: info
+    org.springframework.jdbc: info
+    org.postgresql: info
+    # 🔴 이 서버의 첫 발신 HTTP다. clip 클래스패스에 AWS SDK가 끌어온 httpclient5가 있어
+    # 팩토리가 JDK가 아니라 Apache HC5로 뽑히고, 그 두 로거가 DEBUG에서 나가는 헤더를
+    # 통째로 찍는다 — X-Internal-Token 평문 유출을 실측했다(계획 검증 F4, 2건).
+    # 그 토큰은 auth·clip·chat-collector 셋의 /internal/**을 여는 열쇠다.
+    # chat-collector가 같은 자리를 이미 막아 뒀다(POK-116).
+    # AuthClientTokenLeakTest가 root를 TRACE로 올린 채 이 줄이 버티는지 잰다 — 지우면
+    # 그 검사가 빨간불이다(구현 때 재현: 호출 2회에 headers·wire가 각각 찍어 유출 4건).
+    org.apache.hc.client5.http: info
+    # 🔴 이 줄도 위와 똑같이 「유일한 차단막」이다. 구현 중에 「지워도 전부 초록이니 방어
+    # 깊이일 뿐」이라고 적어 뒀는데 거짓이었고, 감사 2회차가 반증했다 — 스위치가 둘이라
+    # 기본 설정에서만 안 보였다. DispatcherServlet은 TRACE에서 요청 헤더를 찍는데, 평소에는
+    # spring.mvc.log-request-details(Boot 기본 false)가 그것을 "N header(s)"로 접는다.
+    # root=TRACE 고정으로 나머지 둘을 갈라 실측한 결과:
+    #   log-request-details=false + 이 줄 제거 → 유출 0   (그래서 못 보고 넘어갔다)
+    #   log-request-details=true  + 이 줄 제거 → 🔴 JWT 통째로 유출
+    #   log-request-details=true  + 이 줄 유지 → 유출 0   (이 줄이 막는다)
+    # 유출 주체는 org.springframework.web.servlet.DispatcherServlet이다.
+    # 그 프로퍼티는 Boot 공식 값이고 자기 문서가 "민감 정보를 찍을 수 있다"고 경고한다 —
+    # 사람이 그걸 켜는 순간은 정확히 이 문을 디버깅할 때이므로, 아래 coyote 줄을 정당화한
+    # 논증(root=TRACE를 켜는 순간)과 글자 그대로 같다.
+    # SegmentApiTokenLeakTest.요청_상세_로깅을_켜도_액세스_토큰이_로그에_안_남는다가
+    # 그 값을 런타임에 켜고 진짜 요청을 태워 행동으로 잰다(양성 대조 포함).
+    org.springframework.web: info
+    # 🔴 hc5 줄은 「나가는」 HTTP만 막고, 이 줄은 「들어오는」 쪽이다(위 spring 줄은 로거
+    # 트리가 넓어 양쪽에 걸친다). 같은 뿌리인데 한쪽만 막혀 있었다 — POK-118이 첫 컨트롤러를
+    # 열어 이 면적이 생겼고, POK-117의 세그먼트 미리보기가 사람 문을 하나 더 열었다.
+    # root를 TRACE로 내리면 톰캣 org.apache.coyote.http11.Http11InputBuffer가 받은 바이트를
+    # "Received [GET /api/clip/... Authorization: Bearer <JWT> ...]"로 통째로 찍는다.
+    # 2026-08-24 clip 실측: root INFO 0건 · DEBUG 0건 · TRACE 1건(chat-collector가 POK-128에서
+    # 잰 값과 같다). 톰캣이 JUL FINER로 찍고 브릿지가 logback DEBUG로 번역하므로
+    # root=DEBUG에서는 안 보인다 — 조건은 root=TRACE 하나다.
+    # 새는 값이 사람의 액세스 토큰이라, 한 번 남으면 그 편집자가 되어 남의 방송을 열 수 있다.
+    # 사람이 TRACE를 켜는 순간은 정확히 이 문을 디버깅할 때다.
+    # SegmentApiTokenLeakTest.미리보기를_쳐도_…가 root를 TRACE로 내린 채 실제로 요청을 태워
+    # 이 줄이 막는지 행동으로 잰다. 그 검사는 「톰캣이 지금도 그 헤더를 찍는가」까지 같이
+    # 잰다 — JUL 핸들러를 잎(Http11InputBuffer)에 직접 걸어 기록을 받아 본다. 톰캣이
+    # 조용해지는 날 "안 샜다"가 아무것도 안 본 채 초록이 되는 것을 그 단언이 막는다.
+    org.apache.coyote: info
 
 server:
   port: 8081
+  # 프록시가 붙여 주는 X-Forwarded-* 헤더를 믿을지. env 이름은 auth와 같다(FORWARD_HEADERS_STRATEGY).
+  # 🔴 빈 기본값은 none이 아니라 「미설정」이다(빈 값의 enum 변환이 null). env를 안 넣으면 지금처럼 Boot가
+  # 클라우드 플랫폼을 감지해 전략을 고른다 — 이 줄이 생겨도 운영 clip의 동작은 바뀌지 않는다.
+  # 만료 방송 전용 창구(아래 pokeclip.internal-api.expired-broadcasts)를 열 때만 none이나 native여야 부팅이 산다.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:}
 
 management:
   endpoints:
     web:
       exposure:
         include: health
+  endpoint:
+    health:
+      # 이게 없으면 Boot 기본값 never가 걸려 detail이 HTTP 응답에서 잘린다.
+      # IntakeHealth가 withDetail("status", …)·withDetail("lastPollSucceededAt", …)를
+      # 아무리 잘 만들어도 밖에서는 {"status":"UP"}만 보이고, 그러면 "서버는 떴는데
+      # 수신은 죽은" 상태를 구분할 수 없다 — 이 카드가 막으려는 실패 그 자체다.
+      # PRD 성공 기준이 "상세에 꺼져 있음이 보인다"라 이 줄이 그 기준의 일부다.
+      #
+      # 지금 detail에 담기는 것은 상태 이름·마지막 성공 시각·실패 사유 클래스명뿐이라
+      # 비밀이 없다. 큐 주소는 일부러 안 담는다(IntakeConfiguration 참고).
+      # 비밀이 담기는 detail을 추가하는 날 이 줄을 다시 봐야 한다.
+      show-details: always
 
 pokeclip:
+  datasource:
+    # 이 서버의 표가 사는 스키마(POK-428 — 이름 = DB 계정, 운영 10_roles.sql이 마스터 소유로 만든다). 위의
+    # hikari.schema(세션 경로)와 flyway.schemas(표 · 이력 자리)가 이 한 키에서 나온다.
+    schema: app_clip
+    # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
+    # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
+    auth: ${POSTGRES_AUTH:password}
+    # iam 토큰을 서명할 리전.
+    region: ${AWS_REGION:ap-northeast-2}
+    # iam에서만 쓴다. RDS CA 번들의 절대 경로. 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다.
+    ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
+
+  jwt:
+    # auth와 같은 값이어야 한다 — 같은 대칭키로 서명된 토큰을 검증한다(ADR-048).
+    # 이 서버는 발급하지 않는다.
+    # 기본값을 빈 문자열로 두는 이유는 auth와 같다 — 안 주면 리터럴 "${JWT_SECRET}"이
+    # 값으로 바인딩돼 서버는 그냥 뜨고, 사람 API만 전부 401이 되고 신호가 안 남는다.
+    secret: ${JWT_SECRET:}
+
+  internal-api:
+    # 판별기(chat-detector)가 X-Internal-Token 헤더로 보낸다. auth와 같은 값이다 —
+    # 서버 간 토큰은 하나다. 빈 기본값을 두는 이유는 JWT_SECRET과 같다.
+    #
+    # POK-117부터 이 값이 나가는 방향으로도 쓰인다 — DelegationResolveClient가 auth의
+    # /internal/**에 같은 헤더로 보낸다. 새 토큰 프로퍼티를 만들지 않는 이유가 그것이다.
+    token: ${INTERNAL_API_TOKEN:}
+    # 1번(Media)의 만료 실행기만 쓰는 전용 출입증(POK-196 M6). 헤더 X-Expired-Broadcasts-Token을 단
+    # GET /internal/broadcasts/expired만 ExpiredBroadcastSecurityConfig 체인이 받고, 허용 대역(Media 프라이빗 서브넷,
+    # 쉼표 목록) 안에서만 열린다. 헤더 없는 요청은 위 공용 토큰 그대로다. 토큰이 비면 창구가 닫힌다 — 전용 헤더 요청은
+    # 늘 401이고 clip은 그대로 뜬다. 토큰이 있으면 부팅을 검사한다(대역이 있고 IPv4 · server.forward-headers-strategy가
+    # none이나 native · 톰캣 remoteip 헤더 이름 속성 없음 · 공용 토큰과 다름). 전달 머리글을 단 전용 헤더 요청은 403이다.
+    # 🔴 전략은 위 server 절이 FORWARD_HEADERS_STRATEGY로 받고, 비면 플랫폼 감지다. 토큰을 넣는 환경은
+    # FORWARD_HEADERS_STRATEGY(none 또는 native)를 같이 넣어야 부팅이 산다.
+    expired-broadcasts:
+      token: ${EXPIRED_BROADCASTS_TOKEN:}
+      allowed-cidrs: ${EXPIRED_BROADCASTS_ALLOWED_CIDRS:}
+
+  auth-client:
+    # auth 내부 창구 주소(8082). 기본값이 없다 — 이 서버의 사람 문(세그먼트 미리보기)이
+    # 자격 판정 없이는 안 열리므로, 주소가 비면 부팅을 거부하는 것이 맞다(PRD 결정).
+    # chat-collector는 localhost 기본값을 주는데 그쪽은 조건부(편지 경로)라 처지가 다르다.
+    base-url: ${AUTH_BASE_URL:}
+
+  collector-client:
+    # 수집기(chat-collector, 8083) 내부 창구 주소. 🔴 비어도 부팅은 산다 — auth-client와
+    # 다른 이유는, 자격 판정이 없으면 사람 문 전부가 무방비지만 수집기가 없으면 채팅 문 셋만
+    # 503이고 카드 편집·목록·통로는 그대로 돌기 때문이다. 그 셋까지 같이 죽이는 것이 더 나쁘다.
+    base-url: ${COLLECTOR_BASE_URL:}
+    # 전역 spring.http.clients.*(2s+5s)와 따로 둔다. 채팅 문은 그 앞에 auth 자격 판정을
+    # 태우고 그 왕복만 최악 7초라, 같은 값을 얹으면 사람이 최악 14초를 기다린다.
+    connect-timeout: 2s
+    read-timeout: 3s
+
+  jump-card:
+    stream:
+      # ⚠ 아래 숫자는 측정값이 아니라 추정이다. 동시 사용자 100명 전제에서 넉넉히 잡았고 실사용 후 조정한다.
+      # 앞단 프록시가 조용한 연결을 끊지 않게 주기적으로 주석을 보낸다.
+      # 로컬엔 프록시가 없어 이 값이 틀려도 배포 후에만 드러난다.
+      heartbeat: PT20S
+      # 연결 수명 상한. 실제 수명은 min(이 값, 토큰 exp까지 남은 시간)이다.
+      timeout: PT4H
+      # 전송 스레드 수. 연결은 스트라이프 하나에 고정돼 순서가 지켜진다.
+      # 안 읽는 구독자는 자기 스트라이프만 막는다 — send 시한 장치는 두지 않는다(작동하지 않는다,
+      # CardStreamExecutor 주석 참고). 막힌 연결은 서버의 write timeout이 IOException으로 푼다.
+      stripes: 4
+      # 스트라이프당 대기 상한. 넘치면 버리고 WARN.
+      # ⚠ POK-174 뒤로 버려진 카드를 메우는 것은 「카드 목록 문」이다 — 통로가 지난 카드를 안
+      #   보내므로 재연결은 안 메우고, 언제 다시 부를지는 화면이 정한다(「통로 먼저, 목록 나중」).
+      #   초기 전송은 주석 한 줄(+ 끝난 방송이면 ended)이라 카드 수와 무관하게 <b>큐를 한 칸만</b> 쓴다.
+      #   되살려서 카드를 다시 실으면 상한을 넘는 순간 영구 유실이 돌아온다
+      #   (2026-08-23 실측: 1200장에서 201건이 재연결 2회차에도 그대로 잘렸다).
+      queue-capacity: 1000
+      # 탭 몇 개 + 모바일. 한 사람이 연결을 다 먹지 못하게.
+      max-per-user: 4
+      # 한 방송을 여는 사람 = 스트리머 + 편집자(정원은 POK-207 미정).
+      max-per-stream: 50
+      # 서버 한 대 전체.
+      max-total: 500
+
+  broadcast:
+    intake:
+      # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
+      enabled: ${BROADCAST_INTAKE_ENABLED:false}
+      # 켜져 있을 때만 필수다(IntakeProperties가 검사한다).
+      queue-url: ${BROADCAST_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+      # 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소를 준다.
+      endpoint: ${BROADCAST_QUEUE_ENDPOINT:}
+      # SQS 롱폴링 최대값. 짧게 잡으면 빈 응답만 반복해 요청 수가 는다.
+      wait-time: 20s
+      max-messages: 10
+    reaper:
+      # 놓친 방송 치우기(POK-244). 종료 편지를 못 받은 방송이 영원히 live로 남지 않게, 마지막 조각(1번 장부)
+      # 뒤로 grace만큼 조용하면 ended로 굳힌다. 편지가 정상이면 한 번도 안 돈다.
+      # 기본이 꺼짐이다 — 켜는 것은 운영자의 결정이다(유예가 짧으면 살아있는 방송을 닫는다).
+      enabled: ${BROADCAST_REAPER_ENABLED:false}
+      interval: ${BROADCAST_REAPER_INTERVAL:PT1M}
+      # 🔴 20분 미만은 부팅이 거부한다 — 편지는 마지막 조각 뒤 정산 창 15분이 지나야 만들어지고 전달·처리가
+      # 더 걸린다(계약9 게이트 ④·계약-세그먼트인덱스 6-5). 정산 창과 같은 값이면 늘 경주한다. 30분 = 여유 15분.
+      # 🔴 켜져 있는데 stream_segments 표(1번 장부)가 없으면 부팅이 거부된다 — media 없는 배포에서 켜지 마라.
+      grace: ${BROADCAST_REAPER_GRACE:PT30M}
+
+  render:
+    # 영상 만들기 주문(POK-125). 기본이 꺼짐이다 — 켜져 있으면 CI·남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
+    # 꺼진 채로 주문 문을 부르면 503 render_unavailable. 보고 문(/internal/jobs)과 조회 문은 꺼져 있어도 돈다.
+    enabled: ${RENDER_ENABLED:false}
+    # 켜져 있을 때만 필수 넷(RenderProperties가 검사한다). 큐 둘은 계약1 1절 jobs-render + 전용 DLQ.
+    queue-url: ${RENDER_QUEUE_URL:}
+    dlq-url: ${RENDER_DLQ_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소를 준다.
+    endpoint: ${RENDER_QUEUE_ENDPOINT:}
+    # 완성 영상이 놓일 창고. 주문서의 outputPrefix = s3://{이 값}/clips/{clipId}.
+    output-bucket: ${CLIPS_BUCKET:}
+    # 조각(1번 장부 s3_key)이 있는 창고. 주문서의 sourceKeys[].bucket.
+    segment-bucket: ${SEGMENT_BUCKET:}
+    # 못 실은 주문을 다시 보내는 주기(outbox). 이보다 오래된 미발행 주문만 다시 보낸다.
+    outbox-retry-interval: PT30S
+    # 실패 큐를 훑는 주기. 재시도를 다 쓴 주문을 SWEPT로 닫는다.
+    reconcile-interval: ${RENDER_RECONCILE_INTERVAL:PT1M}
+    # 한 주문의 실행(STARTED) 상한. 이 번째가 마지막 시도다(계약1 attemptOrdinal 한도 3).
+    max-attempts: 3
+    # 완성 영상 주소(POK-247)의 수명. 그 사이 영상 재생·내려받기가 된다. 지나면 문을 다시 부른다.
+    file-url-ttl: PT60M
+    # 원본 조각 주소(POK-389)의 수명. 편집기가 트랙별로 미리 들으려고 받자마자 내려받는다. 조각엔 방송 소리가 전부 들어 있다.
+    segment-audio-url-ttl: PT5M
+    # 주문서 크기 상한(계약1 2절 200KB).
+    max-message-bytes: 204800
+
+  upload:
+    # 유튜브 업로드 주문(POK-220). 기본이 꺼짐이다(렌더와 같은 이유). 꺼진 채로 주문 문을 부르면 503 upload_unavailable.
+    # 일꾼 문(/internal/uploads)과 조회는 꺼져 있어도 돈다. 올릴 파일의 창고는 render.output-bucket이다.
+    enabled: ${UPLOAD_ENABLED:false}
+    # 켜져 있을 때만 필수 둘(UploadProperties가 검사한다). jobs-upload + 전용 DLQ.
+    queue-url: ${UPLOAD_QUEUE_URL:}
+    dlq-url: ${UPLOAD_DLQ_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 렌더 줄과 같은 AWS다. 로컬은 LocalStack 주소.
+    endpoint: ${RENDER_QUEUE_ENDPOINT:}
+    outbox-retry-interval: PT30S
+    # 실패 큐를 훑는 주기. 올리기 주소가 적힌 적 있으면 failed가 아니라 checking으로 닫는다.
+    reconcile-interval: ${UPLOAD_RECONCILE_INTERVAL:PT1M}
+
+  thumbnail:
+    # 썸네일(POK-277). 기본이 꺼짐이다(렌더와 같은 이유). 꺼져 있으면 주문을 안 내고 목록의 사진 주소가 전부 null이다.
+    # 일꾼 보고 문(/internal/thumbnails)은 꺼져 있어도 돈다. 사진 창고는 render.output-bucket, 조각 창고는 render.segment-bucket.
+    enabled: ${THUMBNAIL_ENABLED:false}
+    # 켜져 있을 때만 필수(ThumbnailProperties가 검사한다). jobs-thumbnail + 전용 DLQ(clip은 DLQ를 안 읽는다: 다음 순회가 다시 찍는다).
+    queue-url: ${THUMBNAIL_QUEUE_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 렌더 줄과 같은 AWS다. 로컬은 LocalStack 주소.
+    endpoint: ${RENDER_QUEUE_ENDPOINT:}
+    # 주문을 훑는 주기. 라이브 사진이 이 간격으로 바뀐다(사용자 결정 1분).
+    interval: ${THUMBNAIL_INTERVAL:PT1M}
+    # 사진 주소의 수명. 화면은 목록을 다시 받을 때 새 주소를 받는다.
+    url-ttl: PT60M
+
+  youtube-video:
+    # 올린 영상 번호의 30일 확인(POK-423, 처리방침 13절). 영상 번호를 auth에 넘기고 auth가 그 회원 토큰으로 유튜브에 묻는다.
+    # 켜고 끄는 값이 없다: 끄면 「30일마다 확인」을 안 지킨다. 지우는 기한(해제 7일 · 철회 30일)은 auth가 정한다.
+    check-interval: PT1H
+    check-after: P30D
+
+  purge:
+    # 탈퇴 정리기(POK-256). auth가 탈퇴를 알리면 명부에 적고 이 주기로 표·창고·녹화 조각을 지운다.
+    # 켜고 끄는 값이 없다: 꺼 두면 탈퇴한 사람의 기록이 남는다.
+    interval: PT15S
+
+  playback:
+    # 영상 출입증(POK-122). 셋(key-pair-id · private-key-pem · resource-base-url)이 다 비면 「꺼짐」이고
+    # 부팅은 산다 — 로컬에는 CloudFront가 없다. 꺼진 채로 문을 부르면 503 playback_signing_unavailable.
+    # 일부만 채우면 부팅을 거부한다(실수). 비밀키는 PKCS#8 PEM 본문이고 리터럴 \n을 개행으로 읽는다.
+    key-pair-id: ${CLOUDFRONT_KEY_PAIR_ID:}
+    private-key-pem: ${CLOUDFRONT_PRIVATE_KEY_PEM:}
+    # 영상이 나가는 CDN 도메인(끝 / 없음). 정책 범위는 종류마다 {이 값}/{kind}/{streamId}/* 다 — 앞 와일드카드
+    # {이 값}/*/{streamId}/* 는 쿼리스트링 트릭으로 남의 방송을 열어 금지(봇 리뷰 2판). 경로가 있으면 쿠키 Path도 거기서 시작.
+    resource-base-url: ${MEDIA_BASE_URL:}
+    # 쿠키 Domain. 운영은 .pokeclip.com(앱·미디어·clip이 전부 그 아래여야 한다). 비면 호스트 전용.
+    cookie-domain: ${PLAYBACK_COOKIE_DOMAIN:}
+    # 출입증 수명. 지나면 CDN이 403을 주고 웹이 같은 문을 다시 부른다.
+    ttl: ${PLAYBACK_ACCESS_TTL:PT60M}
+    # 켜면 셋이 다 빈 「꺼짐」도 부팅 거부(POK-321). prod만 true. 기본 false라 prod에서 빠뜨리면
+    # 재생이 꺼진 채 조용히 뜬다(부팅 확인은 초록, 재생 문만 503). prod 런타임 변수에 반드시 넣는다.
+    required: ${PLAYBACK_REQUIRED:false}
+
   cors:
+    # 🔴 clip만 켠다(auth는 기본 false). 출입증 문이 Set-Cookie로 답하는데, 앱이 다른 오리진에서
+    # credentials: 'include'로 불러야 브라우저가 그 쿠키를 받는다 — 서버가 이 값을 안 켜면
+    # 브라우저가 응답을 통째로 버리고 화면에는 CORS 오류만 뜬다.
+    allow-credentials: true
     # 비면 부팅이 실패한다(CorsProperties). 기본값으로 localhost를 주지 않는 이유는
     # 그러면 운영 배포에 localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데
     # 로그는 조용하기 때문이다.

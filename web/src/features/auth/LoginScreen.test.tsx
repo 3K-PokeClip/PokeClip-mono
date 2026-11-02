@@ -63,6 +63,18 @@ describe('LoginScreen', () => {
     expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/settings/plugin');
   });
 
+  it('비동기로 실패해도(PKCE challenge 계산 등) 오류를 표면화하고 복원 경로를 되돌린다', async () => {
+    window.sessionStorage.setItem('pc-auth-return', '/settings/plugin');
+    startGoogleLogin.mockRejectedValue(new Error('crypto.subtle을 쓸 수 없다'));
+    render(<LoginScreen />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Google로 시작하기/ }));
+
+    // 진입이 비동기라(POK-483) 거부는 다음 틱에 온다 — 그래도 「안 눌리는 버튼」이 되면 안 된다
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/settings/plugin');
+  });
+
   it('이미 세션이 있으면 /home으로 되돌린다 (역가드)', async () => {
     window.localStorage.setItem('pc-auth', JSON.stringify({ v: 1, refreshToken: 'refresh-1' }));
 
@@ -71,10 +83,42 @@ describe('LoginScreen', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/home'));
   });
 
+  it('가입 고지가 약관·처리방침 전문으로 잇고 만 14세 조건을 밝힌다', () => {
+    // 가입은 이 고지 + 로그인으로 성립한다(POK-269) — 링크가 없으면 약관 명시 의무를 못 채운다.
+    // 처리방침은 「동의」가 아니라 「확인」 대상이다.
+    render(<LoginScreen />);
+
+    // 문서는 랜딩(pokeclip.com)의 정적 페이지다 — 대시보드(app.pokeclip.com)는 그 주소로 잇는다.
+    // 정본은 끝 슬래시 꼴(canonical·sitemap과 같다)
+    expect(screen.getByRole('link', { name: '이용약관' })).toHaveAttribute(
+      'href',
+      'https://pokeclip.com/terms/',
+    );
+    expect(screen.getByRole('link', { name: '개인정보 처리방침' })).toHaveAttribute(
+      'href',
+      'https://pokeclip.com/privacy/',
+    );
+    expect(screen.getByText(/만 14세 이상이며/)).toBeInTheDocument();
+    // 동의의 계기(시작하기 버튼)와 약관 동의가 한 문장에 있다
+    expect(screen.getByText(/시작하면 만 14세 이상이며.*동의한 것으로 봅니다/)).toBeInTheDocument();
+    expect(screen.queryByText(/처리방침에 동의/)).not.toBeInTheDocument();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = render(<LoginScreen />);
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
+  });
+
+  // 표식은 「가드가 복원 경로를 남기지 않게」 하는 1회용 힌트다. 가드를 거치지 않고 오는
+  // 경로(/goodbye 탈퇴 완료)에서는 소비될 자리가 없어 탭에 남고, 나중에 비자발적으로
+  // 끊겼을 때 그것이 의도적 종료로 오해되어 복원 경로를 잃는다.
+  it('묵은 의도적 종료 표식을 걷는다', () => {
+    window.sessionStorage.setItem('pc-auth-logout', '1');
+
+    render(<LoginScreen />);
+
+    expect(window.sessionStorage.getItem('pc-auth-logout')).toBeNull();
   });
 });

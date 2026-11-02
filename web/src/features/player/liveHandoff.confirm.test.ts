@@ -1,0 +1,304 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
+import { HANDOFF_NOTICE, HANDOFF_SKIP_NOTICE } from './liveHandoff';
+import {
+  openSession,
+  transition,
+  type PlaybackSessionState,
+  type SessionEffect,
+  type SessionEvent,
+} from './rewindSwitch';
+import {
+  UNSTAMPED,
+  handedOff,
+  pos,
+  resetEventKit,
+  stamped,
+  startRun,
+  streamPoll,
+} from './handoffTestKit';
+
+// 넘김 확인 시험(POK-200 c13e — 설계 r9 4절 H0–H7 · A2 · A4 · 11절 T10 · T11 · T17 ·
+// T19 · T23). 넘김 행(P1)은 c13h 몫이라 시작 상태는 handedOff 가 P1 결과 모양으로
+// 만든다. E = NOW · TD 6초 · P = E − 6000.
+
+const MIN = 60_000;
+const T0 = Date.parse('2026-10-25T05:00:00.000Z');
+const NOW = T0 + 60 * MIN;
+const E = NOW;
+const P = E - 6_000;
+const DEADLINE = NOW + 6_000 + 12_000; // 넘긴 시각 + (E − P) + 2 × TD
+const LIVE_URL = 'https://media.pokeclip.com/live/key-1/index.m3u8';
+const A1 = 'https://media.pokeclip.com/dvr/key-1/a1/index.m3u8';
+/** 되돌림이 재생기에 거는 멈춤 유지(사람이 멈춰 있었으면 멈춘 채 갈아 끼운다) */
+const KEEP_PAUSED: SessionEffect = { kind: 'keep-paused-on-swap' };
+/** 되돌림이 거두는 넘김 안내(실측 M4 — 되돌린 뒤 약 3초 남았다) */
+const WITHDRAW: SessionEffect = { kind: 'withdraw-notice', text: HANDOFF_NOTICE };
+
+function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindStatusResult {
+  const status: RewindStatus = { ready: true, mode: 'live', url, firstPdtMs, headPdtMs };
+  return { kind: 'ok', status };
+}
+
+/** 라이브 재생기의 위치 사건 — runMs 는 그 재생기의 played 연속 길이다 */
+function at(atMs: number, runMs: number): SessionEvent {
+  return { type: 'position', atMs, playing: true, runMs, epoch: UNSTAMPED };
+}
+
+function run(start: PlaybackSessionState, events: SessionEvent[], now = NOW + 1_000) {
+  let state = start;
+  const effects: SessionEffect[] = [];
+  for (const event of events) {
+    const next = transition(state, stamped(state, event), now);
+    state = next.state;
+    effects.push(...next.effects);
+  }
+  return { state, effects };
+}
+
+/** A1 을 P 에서 보다가 NOW 에 라이브로 넘긴 확인 중 세션 */
+function confirming(): PlaybackSessionState {
+  startRun();
+  const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
+  const watching = run(fresh, [
+    streamPoll(liveReady(A1, T0, NOW)),
+    { type: 'seek', targetMs: P, view: { lowerMs: P + 1, endMs: NOW + 28_000 } },
+    {
+      type: 'list-loaded',
+      url: A1,
+      firstMs: T0,
+      lastEndMs: E,
+      targetDurationS: 6,
+      headSpanMs: 18_000,
+    },
+    pos(P),
+  ]).state;
+  return handedOff(watching, NOW);
+}
+
+function rewindSource(start: PlaybackSessionState, atMs: number) {
+  const generation = start.source.generation + 1;
+  return { kind: 'rewind', url: A1, startAtMs: atMs, generation, strictStart: false };
+}
+
+let info: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  resetEventKit();
+  info = vi.spyOn(console, 'info').mockImplementation(() => {});
+});
+afterEach(() => info.mockRestore());
+
+describe('끝 증거 · 연속 검사 · 시한(T10)', () => {
+  it('a: 확인 중 라이브가 닫히면 마지막 검증 위치에서 끝남 대기(되감기 기원)로 되돌린다', () => {
+    const s = confirming();
+    const { state, effects } = run(s, [at(E - 5_500, 500), { type: 'live-closed' }]);
+    expect(state.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: false });
+    expect(state.source).toEqual(rewindSource(s, E - 5_500));
+    expect(state.handoffBlock).toEqual({ url: A1, endMs: E, reason: 'reverted' });
+    expect([state.handoff, state.boundLive]).toEqual([null, false]);
+    expect(effects).toEqual([KEEP_PAUSED, WITHDRAW, { kind: 'refresh', retryWhileUrl: A1 }]);
+  });
+
+  it('b · d: 위치 없이 끝 증거(라이브 닫힘 · ENDLIST · 끝 도달)가 오면 P 로 되돌린다', () => {
+    for (const type of ['live-closed', 'endlist', 'end-reached'] as const) {
+      const s = confirming();
+      const { state } = run(s, [{ type: 'playing' }, { type }]);
+      expect(state.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind' });
+      expect(state.source).toEqual(rewindSource(s, P));
+    }
+  });
+
+  it('c · g3: 연속으로 E 에 닿으면 확인이 끝나고, 그 뒤 라이브 닫힘은 현행(live 기원 끝남 대기)이다', () => {
+    const seen: SessionEvent[] = [];
+    for (let k = 1; k <= 6; k += 1) seen.push(at(P + k * 1_000, k * 1_000));
+    const before = run(confirming(), seen.slice(0, 5)).state;
+    expect(before.handoff?.seenAtMs).toBe(P + 5_000);
+    const done = run(before, seen.slice(5)).state;
+    expect(done.handoff).toBeNull();
+    const closed = run(done, [{ type: 'live-closed' }]).state;
+    expect(closed.phase).toMatchObject({ kind: 'ending-wait', origin: 'live', atEnd: true });
+  });
+
+  it('e: 건너뛴 시작(연속 시작 > P + 250)은 P 로 되돌리고, 그 안 · P 앞은 둔다', () => {
+    const skipped = run(confirming(), [at(E + 3_000, 0)]).state;
+    expect(skipped.phase).toEqual({ kind: 'rewind', pendingNext: null });
+    expect(skipped.source).toEqual(rewindSource(confirming(), P));
+    expect([skipped.handoff, skipped.handoffBlock?.reason]).toEqual([null, 'reverted']);
+    expect(info).toHaveBeenCalledWith('[player] handoff_confirm_failed', 'start');
+    expect(run(confirming(), [at(P + 250, 0)]).state.handoff).not.toBeNull();
+    expect(run(confirming(), [at(P + 251, 0)]).state.phase.kind).toBe('rewind');
+    expect(run(confirming(), [at(P - 6_000, 0)]).state.handoff).not.toBeNull();
+  });
+
+  it('g: 확인 중 자동 시크는 마지막 검증 위치로 되돌린다 — 앞으로 간 적 없으면 start · 있으면 jump', () => {
+    const still = run(confirming(), [at(P, 0), at(P + 5_000, 0)]).state;
+    expect(still.source.startAtMs).toBe(P);
+    expect(info).toHaveBeenLastCalledWith('[player] handoff_confirm_failed', 'start');
+    const jumped = run(confirming(), [at(P + 1_000, 1_000), at(P + 5_000, 0)]).state;
+    expect(jumped.source.startAtMs).toBe(P + 1_000);
+    expect(info).toHaveBeenLastCalledWith('[player] handoff_confirm_failed', 'jump');
+    expect(run(confirming(), [at(E, 900)]).state.phase.kind).toBe('rewind');
+  });
+
+  it('g2: nudge 로 연속 시작이 P + 2300 이 되면 P + 2000 으로 되돌린다', () => {
+    const steps = [at(P + 1_000, 1_000), at(P + 2_000, 2_000), at(P + 3_300, 1_000)];
+    expect(run(confirming(), steps).state.source.startAtMs).toBe(P + 2_000);
+  });
+
+  it('h: 시한(넘긴 시각 + 18000) 전에는 두고, 닿으면 tick · 폴링 어느 사건이든 되돌린다', () => {
+    const s = confirming();
+    expect(run(s, [{ type: 'tick' }], DEADLINE - 1).state.handoff).not.toBeNull();
+    expect(run(s, [{ type: 'tick' }], DEADLINE).state.phase.kind).toBe('rewind');
+    expect(run(s, [streamPoll(liveReady(A1, T0, E))], DEADLINE).state.phase.kind).toBe('rewind');
+    expect(info).toHaveBeenLastCalledWith('[player] handoff_confirm_failed', 'deadline');
+  });
+
+  it('i: 사람의 창 안 시크 · LIVE 는 확인을 그만둔다 — 그 뒤 라이브 닫힘은 되돌림이 아니다', () => {
+    const view = { lowerMs: E - 16_000, endMs: E + 20_000 };
+    const sought = run(confirming(), [{ type: 'seek', targetMs: E - 2_000, view }]);
+    expect([sought.state.phase.kind, sought.state.handoff]).toEqual(['live', null]);
+    const live = run(confirming(), [{ type: 'live-button', x: { kind: 'unknown' }, attempt: 0 }]);
+    expect([live.state.handoff, live.effects]).toEqual([null, [{ kind: 'seek-live-edge' }]]);
+    const closed = run(live.state, [{ type: 'live-closed' }]).state;
+    expect(closed.phase).toMatchObject({ kind: 'ending-wait', origin: 'live' });
+  });
+
+  it('H1′: playing 은 endingSince 만 비우고 확인은 그대로 둔다', () => {
+    const s = { ...confirming(), endingSince: NOW - MIN };
+    const { state } = run(s, [{ type: 'playing' }]);
+    expect([state.endingSince, state.handoff]).toEqual([null, s.handoff]);
+  });
+
+  it('H2: playing 전에 끝 증거가 오면 앞 끝남 대기의 시각을 이어 쓴다 — 재접속 대기 · 20분 시한을 처음부터 세지 않는다', () => {
+    // 끝남 대기(E1)에서 넘긴 세션은 앞 대기의 endingSince 를 들고 온다(H1′ playing 만 비운다)
+    const since = NOW - MIN;
+    const carried = run({ ...confirming(), endingSince: since }, [{ type: 'live-closed' }]);
+    expect(carried.state.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind' });
+    expect(carried.state.endingSince).toBe(since);
+    // 앞 대기가 없으면(rewind 에서 넘김) 되돌린 그 시각부터 센다
+    expect(run(confirming(), [{ type: 'live-closed' }]).state.endingSince).toBe(NOW + 1_000);
+  });
+});
+
+describe('되돌림의 멈춤 유지(c13f cc M1 — 효과로 건다) · 넘김 안내 거둠', () => {
+  const count = (effects: SessionEffect[], kind: SessionEffect['kind']) =>
+    effects.filter((e) => e.kind === kind).length;
+  /** 되돌림 넷 — H0 시한 · H1a · H2 · H2t */
+  const reverts: Array<[SessionEvent, number]> = [
+    [{ type: 'tick' }, DEADLINE],
+    [at(E + 3_000, 0), NOW + 1_000],
+    [{ type: 'live-closed' }, NOW + 1_000],
+    [{ type: 'live-start-truncated' }, NOW + 1_000],
+  ];
+  /** 되돌림이 아닌 것 — 사람의 시크(H6) · 확인 끝 · 다시 세움(H3 · H4) */
+  function others(): [PlaybackSessionState, SessionEvent[]] {
+    const view = { lowerMs: E - 16_000, endMs: E + 20_000 };
+    const entry = { url: A1, firstPdtMs: T0, headPdtMs: E };
+    const s = { ...confirming(), entry, rewindOpen: true };
+    const events: SessionEvent[] = [
+      { type: 'seek', targetMs: T0 + 10 * MIN, view },
+      at(E, 6_000),
+      { type: 'remount' },
+      { type: 'live-400' },
+    ];
+    return [s, events];
+  }
+
+  it('되돌림 넷(H0 시한 · H1a · H2 · H2t)은 멈춤 유지 효과를 한 번 낸다', () => {
+    for (const [event, now] of reverts) {
+      expect(count(run(confirming(), [event], now).effects, 'keep-paused-on-swap')).toBe(1);
+    }
+  });
+
+  it('사람의 시크(H6) · 확인 끝 · 다시 세움(H3 · H4)은 멈춤 유지를 걸지 않는다', () => {
+    const [s, events] = others();
+    for (const event of events)
+      expect(count(run(s, [event]).effects, 'keep-paused-on-swap')).toBe(0);
+  });
+
+  it('되돌림 넷은 넘김 안내 「라이브로 이어서 볼게요」 를 거둔다 — 되돌린 뒤 남지 않게(실측 M4)', () => {
+    for (const [event, now] of reverts) {
+      const { effects } = run(confirming(), [event], now);
+      expect(effects.filter((e) => e.kind === 'withdraw-notice')).toEqual([WITHDRAW]);
+    }
+    const [s, events] = others();
+    for (const event of events) expect(count(run(s, [event]).effects, 'withdraw-notice')).toBe(0);
+  });
+});
+
+describe('다시 세움 · 이탈 · 잘림(T11 · T17 · T19 · T23)', () => {
+  it('T11: 확인 중 리마운트 · 목록 400 은 이어 볼 자리에서 strictStart 로 다시 세우고 연속 검사를 새로 센다', () => {
+    for (const event of [{ type: 'remount' }, { type: 'live-400' }] as const) {
+      const s = run(confirming(), [at(P + 2_000, 2_000)]).state;
+      const { state } = run(s, [event]);
+      const generation = s.source.generation + 1;
+      expect(state.source).toMatchObject({ startAtMs: P + 2_000, strictStart: true, generation });
+      expect(state.handoff).toEqual({ ...s.handoff, atMs: P + 2_000, seenAtMs: null });
+    }
+    const done = run(confirming(), [at(E, 6_000)]).state;
+    expect(run(done, [{ type: 'remount' }]).state.source).toMatchObject({ startAtMs: null });
+  });
+
+  it('T11 H4: 목록 400 은 지금 소스 url 이 아니라 세션의 라이브 주소로 새 라이브 재생기를 세운다', () => {
+    // 확인 중에는 두 url 이 같다(실영향 0). 설계 r9 4절 H4 문언
+    // `{live, liveUrl, …}` 을 고정하려고 일부러 어긋낸다
+    const stale = 'https://media.pokeclip.com/live/key-1/stale.m3u8';
+    const base = run(confirming(), [at(P + 2_000, 2_000)]).state;
+    const s = { ...base, source: { ...base.source, url: stale } };
+    const { state } = run(s, [{ type: 'live-400' }]);
+    const generation = s.source.generation + 1;
+    const source = {
+      kind: 'live',
+      url: LIVE_URL,
+      startAtMs: P + 2_000,
+      generation,
+      strictStart: true,
+    };
+    expect(state.source).toEqual(source);
+  });
+
+  it('T17: 확인 중 창 밖 시크로 되감기에 다시 들면 확인이 사라지고, 그 뒤 ENDLIST 는 되돌림이 아니다(H5)', () => {
+    const entry = { url: A1, firstPdtMs: T0, headPdtMs: E };
+    const s = { ...confirming(), entry, rewindOpen: true };
+    const view = { lowerMs: E - 16_000, endMs: E + 20_000 };
+    const back = run(s, [{ type: 'seek', targetMs: T0 + 10 * MIN, view }]).state;
+    expect([back.phase.kind, back.handoff]).toEqual(['rewind', null]);
+    const ended = run(back, [{ type: 'endlist' }]).state;
+    expect(ended.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: false });
+    expect(ended.handoffBlock).toBeNull();
+  });
+
+  it('T19: 라이브 첫 목록이 잘리면 P 로 되돌리고 막음 truncated · url 하나에 안내 한 번', () => {
+    const s = confirming();
+    const first = run(s, [{ type: 'live-start-truncated' }]);
+    expect(first.state.source).toEqual(rewindSource(s, P));
+    expect(first.state.handoffBlock).toEqual({ url: A1, endMs: E, reason: 'truncated' });
+    const skip = { kind: 'notice', text: HANDOFF_SKIP_NOTICE };
+    expect(first.effects).toEqual([KEEP_PAUSED, WITHDRAW, skip]);
+    const again = run({ ...confirming(), liveHintUrl: A1 }, [{ type: 'live-start-truncated' }]);
+    expect(again.effects).toEqual([KEEP_PAUSED, WITHDRAW]);
+  });
+
+  it('T23: 확인이 없을 때의 잘림은 같은 라이브를 strictStart 없이 다시 세운다(H7)', () => {
+    const s = { ...confirming(), handoff: null };
+    const { state } = run(s, [{ type: 'live-start-truncated' }]);
+    expect(state.phase.kind).toBe('live');
+    const generation = s.source.generation + 1;
+    expect(state.source).toEqual({ ...s.source, strictStart: false, generation });
+  });
+
+  it('A2: 막은 url 의 목록이 막을 때의 끝보다 자라면 막음을 푼다', () => {
+    const blocked = run(confirming(), [{ type: 'live-closed' }]).state;
+    const loaded = (url: string, lastEndMs: number): SessionEvent => ({
+      type: 'list-loaded',
+      url,
+      firstMs: T0,
+      lastEndMs,
+      targetDurationS: 6,
+      headSpanMs: 18_000,
+    });
+    expect(run(blocked, [loaded(A1, E)]).state.handoffBlock).not.toBeNull();
+    expect(run(blocked, [loaded(LIVE_URL, E + 4_000)]).state.handoffBlock).not.toBeNull();
+    expect(run(blocked, [loaded(A1, E + 4_000)]).state.handoffBlock).toBeNull();
+  });
+});

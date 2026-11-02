@@ -1,6 +1,6 @@
 package com.pokeclip.chat.collector.archive;
 
-import com.pokeclip.chat.collector.support.StallingTcpProxy;
+import com.pokeclip.db.support.StallingTcpProxy;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.core.exception.SdkClientException;

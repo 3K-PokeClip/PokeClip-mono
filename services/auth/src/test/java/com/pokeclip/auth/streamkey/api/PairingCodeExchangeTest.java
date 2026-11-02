@@ -212,7 +212,10 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         exchange("ZZZZ-ZZZZ", "10.0.9.8").andExpect(status().isNotFound());
     }
 
-    /** IP 원문을 남기지 않는다. 청소 작업이 없어 사실상 영구 보관이 된다. */
+    /**
+     * IP 원문을 남기지 않는다. 행은 {@code pairing-attempts-keep-for}(1시간) 뒤 청소가 지운다({@code RetentionCleanerAttemptsTest}).
+     * V106 파일 안의 「영구 보관」 문장은 체크섬 때문에 못 고친 옛 문장이고 표 COMMENT는 V112가 덮었다.
+     */
     @Test
     void 시도_표에_IP_원문이_없다() throws Exception {
         exchange("ZZZZ-ZZZZ", "203.0.113.77");

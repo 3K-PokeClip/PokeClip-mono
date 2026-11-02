@@ -45,13 +45,14 @@ docker compose up -d --build
   있다. 예컨대 `recordings`만 정상이고 `hooks`가 root면 **훅 3종이 전부 `permission denied`로
   죽어 스풀이 0줄**이 되는데, 녹화는 멀쩡해서 겉으로는 정상으로 보인다.
   (이 진단이 없는 볼륨을 미리 만들어도 무해하다 — 빈 볼륨은 media 기동 시 정상적으로 채워진다.)
-- 이후에는 `git pull && docker compose up -d --build`로 평소대로 돌아간다.
+- 이후에는 `git pull && docker compose up -d --build`로 평소대로 돌아간다. 버킷을 쓰는 사람은
+  먼저 ⓒ 팀 1회 조치(`media/README.md` 「ⓒ 팀 1회 조치」 — override 사본 수정)를 한다.
 
 | 서비스 | 포트 | 용도 |
 |---|---|---|
 | postgres:17 | 5432 | 3번: 스키마 v0 마이그레이션은 여기에 (M1 2단계) |
 | redis:7.4 | 6379 | 3번: 키·TTL·pub/sub 설계 자리 |
-| media (MediaMTX 1.19.3 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM`. **비특권 UID 10002로 실행**(POK-79) — 실행 계정 정본도 같은 Dockerfile의 `USER` |
+| media (MediaMTX 1.21.1 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM`. **비특권 UID 10002로 실행**(POK-79) — 실행 계정 정본도 같은 Dockerfile의 `USER` |
 | media-stub (nginx) | 8080 | 2번: 플레이어 개발용 정적 세그먼트 (`infra/compose/stub/README.md`) |
 | segment-indexer | (포트 없음) | 1번: 녹화 세그먼트를 감지해 `stream_segments`에 기록하는 사이드카 (`media/README.md`) |
 
@@ -204,7 +205,9 @@ cd media && go test ./internal/index/ -v
   `media-ci`의 postgres 서비스 컨테이너는 잡마다 뜨고 잡과 함께 사라져 공유가 없으므로 고정 이름을 쓴다.
   **규약을 완화한 것이 아니라 적용 조건(PG를 공유하는 실행의 존재)을 드러낸 것이다.**
 - `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지한다(`CREATE TABLE IF NOT EXISTS`).
-  `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
+  전용 DB는 패키지마다 하나씩이라(`pokeclip_uploadtest`와 접미 DB 일곱)
+  `pokeclip_uploadtest` 하나만 지우면 나머지 패키지가 옛 스키마로 실패한다. 접미 DB
+  전부를 지우는 루프는 [`media/README.md`](../media/README.md)의 「테스트」 절에 있다.
 
 ### 스트림 이름 제약
 
@@ -292,7 +295,20 @@ docker compose up -d --no-deps segment-indexer   # 사이드카만 재기동. Me
 **기본 상태는 업로더 꺼짐이다.** `S3_BUCKET`이 비어 있으면 사이드카는 인덱싱만 하고
 (`uploader_disabled` INFO 1줄), S3·AWS 자격증명이 전혀 필요 없다 — 2·3번은 이 절을 건너뛰면 된다.
 
-1번이 실버킷 업로드까지 확인하려면:
+1번이 실버킷 업로드까지 확인하려면 아래를 따른다. **버킷을 주면 되감기 목록
+발행(M4 ⓒ)도 함께 켜진다.**
+
+*   override 의 `REWIND_PUBLIC_BASE_URL` 이 필수다. 버킷이 있는데 비면 사이드카가
+    기동을 거부하고 인덱싱 · 업로드도 함께 멈춘다. 예시 파일의 기본값
+    `http://127.0.0.1:8090` 은 로컬 실측용이다.
+*   켜짐 확인 줄은 `rewind_publish_started` 다(조립이 실패하면
+    `rewind_publish_degraded` ERROR 한 줄 — 업로드 · 인덱싱은 계속 돈다).
+*   목록은 같은 버킷의 `dvr/{스트림}/{회차}/index.m3u8` 에 쌓인다. **`dvr/`
+    객체를 지우는 코드는 없다** — 실험 뒤에는 직접 지운다.
+*   머지로 사이드카 코드가 바뀌었으면 아래 2) 의 `up` 에 `--build` 를 더한다 —
+    `--force-recreate` 는 컨테이너만 다시 만들고 이미지는 다시 빌드하지 않는다.
+*   macOS 기본 셸 zsh 에 붙여 넣을 때 아래 블록의 `#` 주석 줄이 명령으로 읽히면
+    `setopt interactivecomments` 를 먼저 친다.
 
 ```bash
 # 1) 개인 override 를 만든다 (커밋 금지 — .gitignore 등재됨)
@@ -301,7 +317,7 @@ cp docker-compose.override.yml.example docker-compose.override.yml
 # 2) 같은 셸에 임시 자격증명을 내보내고 재기동한다
 eval "$(aws configure export-credentials --format env)"
 docker compose up -d --force-recreate segment-indexer
-docker compose logs segment-indexer | grep -E 'uploader_started|credentials_ok'
+docker compose logs segment-indexer | grep -E 'uploader_started|credentials_ok|rewind_publish_started'
 
 # 3) 위 "세그먼트 인덱싱 확인" 절차로 송출한 뒤, 장부가 uploaded 로 차는지 본다
 docker compose exec -T -e Q="SELECT upload_state, count(*) FROM stream_segments WHERE stream_id='$STREAM' GROUP BY 1;" \
@@ -309,11 +325,17 @@ docker compose exec -T -e Q="SELECT upload_state, count(*) FROM stream_segments 
 ```
 
 끌 때는 override를 **제외**하고 재기동한다 — `unset S3_BUCKET`은 무효다
-(override의 `${S3_BUCKET:-…}`가 미설정·빈값을 둘 다 실버킷으로 치환한다):
+(override의 `${S3_BUCKET-…}`는 미설정이면 실버킷으로 채운다). `S3_BUCKET=` 를
+따로 한 줄로 쳐도 무효다 — 내보내지(export) 않은 변수는 compose 에 닿지 않는다.
+빈 값은 명령 앞에 붙여야 닿고(`S3_BUCKET= docker compose up …`), 그 꼴도 새 예시
+사본에서만 통한다 — 옛 사본의 `${S3_BUCKET:-…}` 는 빈 값도 실버킷으로 채우므로 그
+줄을 예시 파일대로 고친다. 버킷을 빼면 업로더와 되감기 목록 발행이 함께 꺼지고
+확인 줄도 둘이다:
 
 ```bash
 docker compose -f docker-compose.yml up -d --force-recreate segment-indexer
 docker compose -f docker-compose.yml logs segment-indexer | grep -c uploader_disabled   # 1
+docker compose -f docker-compose.yml logs segment-indexer | grep -c rewind_publish_disabled   # 1
 ```
 
 주의: `AWS_PROFILE`을 override에 넣는 것은 `~/.aws` 마운트 폴백을 켤 때만 —
@@ -381,6 +403,33 @@ docker compose up -d --build
 
 훅 채널만 끄는 부분 롤백은 위 "훅 채널 확인"의 "끄는 법(즉시 롤백)"을 쓴다.
 
+## dev 프록시 트러블슈팅 (POK-217)
+
+웹(`:3000`)의 `/api/*`는 Next rewrites가 백엔드로 프록시한다(`web/next.config.ts`).
+브라우저에서 API가 **500**으로 떨어지고 dev 서버 로그에 아래가 찍히면:
+
+```
+ERROR  Failed to proxy http://localhost:8082/api/auth/me AggregateError
+```
+
+**그 순간 백엔드가 연결을 받지 않았다는 뜻이다** — 프록시 설정 문제가 아니다.
+`AggregateError`는 Node가 `::1`·`127.0.0.1` 양쪽 연결에 모두 실패했을 때 나온다
+(하위 에러가 전부 `ECONNREFUSED`). 확인 순서:
+
+1. `curl -s http://localhost:8082/actuator/health` — auth가 떠 있는지부터.
+2. **auth를 재시작한 직후라면 정상이다.** Spring Boot 4는 graceful shutdown이 기본이라
+   종료가 시작되면 즉시 accept 소켓을 닫고, 새 프로세스가 뜰 때까지 몇 초간 연결이
+   거부된다. 이 창에서 페이지를 새로고침하면 첫 요청들이 위 에러로 죽는다 —
+   재시도 있는 호출(React Query 조회)은 가려지지만, **1회용 값 교환(치지직 연동
+   `code`, 구글 로그인 `code`)은 그대로 소실된다.** 백엔드 재시작 중에는 동의
+   플로우를 태우지 말 것.
+3. 건강한 백엔드 상대로는 이 에러가 나지 않는다 — 동시 50건·유휴 25초 후 재사용·
+   커넥션당 120건 연속 실측 전부 무실패(POK-217 검증). 백엔드가 떠 있는데도
+   난다면 그때가 새 조사가 필요한 시점이다.
+
+같은 실패는 운영 빌드(`next start`)에서도 동일하게 난다 — dev 전용이 아니므로
+배포 환경에서 auth를 재배포하는 순간에도 같은 창이 열린다.
+
 ## 2번(플레이어) 로컬 URL 매핑
 
 | 용도 | URL |
@@ -393,6 +442,7 @@ docker compose up -d --build
 
 ## 설계 근거 포인터
 
-- 파라미터(4s/0.5s/900개): ADR-020 · 재생 규약: 계약3 (플레이어는 **catch-up 끄기** 필수)
+- 파라미터(4s/0.5s): ADR-020 · 라이브 창 7조각 28초: ADR-102(1시간 되감기는
+  사이드카 /dvr 별도 URL) · 재생 규약: 계약3 (플레이어는 **catch-up 끄기** 필수)
 - 이 환경은 로컬 전용 — AWS 배포(프라이빗+NLB, ADR-021)는 별도 IaC로 진행
-- 멘토 데모용 AWS 임시 서버는 `infra/dev-media/`(기한부 — 2026-08-24 만료 후 디렉토리째 삭제, 팀 공용 아님)
+- 멘토 데모용 AWS 임시 서버는 `infra/dev-media/`(유지 확정 — ADR-040 2026-08-30 추기, 팀 공용 아님)

@@ -1,0 +1,60 @@
+package com.pokeclip.chat.collector.sync;
+
+import java.util.Locale;
+
+/**
+ * 채팅 시각 하나를 영상 위치로 바꾼 결과.
+ *
+ * <p><b>{@code positionMs}·{@code segmentSeq}는 {@link State#CONVERTED}일 때만 값이 있다.</b>
+ * 나머지 둘에서 0을 실으면 「0초 지점」이라는 <b>그럴듯하게 틀린 답</b>이 되고, 부르는 쪽은
+ * 그것을 변환 성공과 구분할 수 없다. 그래서 상자 타입({@code Long})으로 두고 팩터리 셋으로만
+ * 만든다 — 생성자를 직접 부르지 못하게 막지는 않지만, <b>위치 없는 판정에 위치를 실을 방법이
+ * 팩터리에는 없다</b>.
+ *
+ * <p><b>{@code positionMs}는 영상 전체 기준 절대 위치이고 {@code segmentSeq}는 참고값이다.</b>
+ * 둘을 「이 조각 파일 안에서 seek할 오프셋」 쌍으로 쓰면 경계에서 어긋난다 — 미세 어긋남 연장
+ * 갈래에서 {@code delta}가 조각 길이와 같으면 클램프 때문에 {@code positionMs}가 <b>다음 조각의
+ * {@code start_pts}와 같아지는데</b> {@code segmentSeq}는 여전히 앞 조각이다. 그 자리에서
+ * 조각 파일을 열어 seek하면 마지막 프레임 하나를 넘어간다. <b>클램프 결정의 직접적 귀결이고
+ * 알고 받아들인 것이다</b> — 근거는 {@link VideoPositionCalculator} javadoc의 클램프 절.
+ *
+ * @param positionMs      영상 시작을 0으로 한 <b>절대</b> 위치(ms)
+ * @param segmentSeq      그 위치가 들어 있는 조각 번호(참고값)
+ * @param appliedOffsetMs 이 답을 낼 때 실제로 뺀 보정값. <b>판정과 무관하게 늘 싣는다</b> —
+ *                        「왜 이 위치가 나왔나」를 밖에서 재현하려면 이 값이 필요하다
+ */
+public record VideoPosition(State state, Long positionMs, Long segmentSeq, long appliedOffsetMs) {
+
+    /**
+     * 판정 셋. <b>가르는 축은 「다시 물으면 답이 바뀔 수 있는가」다.</b>
+     *
+     * <p>{@link #NOT_YET_INDEXED}는 조각이 아직 장부에 안 들어온 것이라 <b>다시 물으면 된다</b>.
+     * {@link #NO_FOOTAGE}는 그 시각의 영상이 <b>영영 없다</b> — 첫 조각 이전이거나, 조각과 조각
+     * 사이의 진짜 공백이거나, 벽시계가 역행해 위치를 믿을 수 없는 구간이다. 둘을 뭉치면
+     * 부르는 쪽이 영영 안 올 것을 영원히 다시 묻는다.
+     */
+    public enum State {
+        CONVERTED, NOT_YET_INDEXED, NO_FOOTAGE;
+
+        /**
+         * 밖에 나가는 이름은 소문자다({@code CollectionState} 선례) — 이 서버의 창구 둘이
+         * 같은 모양이어야 부르는 쪽이 형식을 두 벌 배선하지 않는다. <b>이름은 clip과의 약속이다</b> —
+         * 열거 상수 이름을 바꾸면 wire 이름도 같이 바뀐다.
+         */
+        public String wireName() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    public static VideoPosition converted(long positionMs, long segmentSeq, long appliedOffsetMs) {
+        return new VideoPosition(State.CONVERTED, positionMs, segmentSeq, appliedOffsetMs);
+    }
+
+    public static VideoPosition notYetIndexed(long appliedOffsetMs) {
+        return new VideoPosition(State.NOT_YET_INDEXED, null, null, appliedOffsetMs);
+    }
+
+    public static VideoPosition noFootage(long appliedOffsetMs) {
+        return new VideoPosition(State.NO_FOOTAGE, null, null, appliedOffsetMs);
+    }
+}

@@ -1,0 +1,10 @@
+/* 편집기 첫 읽기 스켈레톤(POK-444). 칸 모양은 StudioScreen.module.css · editorShared.module.css의 로드 뒤 클래스를
+   그대로 쓰고, 여기에는 묶음 껍데기만 둔다. */
+
+/* 본문(.body)과 타임라인을 한 로딩 영역으로 묶는다 — 로드 뒤 .screen 안에서 둘이 차지하던 세로 흐름 그대로 */
+.fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

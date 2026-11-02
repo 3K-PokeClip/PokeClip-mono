@@ -1,5 +1,7 @@
 package com.pokeclip.auth.config;
 
+import com.pokeclip.web.security.InternalTokenFilter;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -12,7 +14,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 
 /**
  * /internal/** 전용 체인. 기본 SecurityConfig보다 먼저 매칭돼 이 경로를 통째로
- * 가져간다.
+ * 가져간다. 단 전용 헤더가 붙은 resolve 요청은 그보다 앞선 {@code @Order(0)} 체인
+ * (StreamKeyResolveSecurityConfig)이 먼저 가져간다.
  *
  * <p>체인을 나눈 이유가 둘이다. 기본 체인의 anyRequest().authenticated()와
  * oauth2ResourceServer가 걸리면 Media 헤더가 401을 맞는다. 그리고 <b>인증 수단
@@ -21,7 +24,9 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  *
  * <p>JwtDecoder를 아예 안 태운다. 사용자 JWT로는 여기 들어올 길이 없다.
  */
+// 웹 앱일 때만 있다. 웹이 없는 컨텍스트에는 HttpSecurity 빈이 없어 이것이 있으면 못 뜬다(POK-272 이행 실행기 때 달았다)
 @Configuration
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class InternalSecurityConfig {
 
     @Bean

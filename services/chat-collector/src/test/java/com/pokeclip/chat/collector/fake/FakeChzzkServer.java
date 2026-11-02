@@ -6,18 +6,24 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.springframework.web.socket.server.HandshakeInterceptor;
 
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -53,8 +59,53 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         // 실서버와 같은 경로다. /fake/... 로 두면 SessionUrl이 "경로가 이미 있는"
         // 분기를 타서, 실서버가 실제로 타는 "경로 없음 → /socket.io/ 부착" 분기를
         // 통합 경로에서 한 번도 안 밟는다. 프로브 시도 #1을 깨뜨린 자리다.
-        registry.addHandler(fakeSocketHandler(fakeChzzkBehavior()), "/socket.io/")
+        FakeChzzkBehavior behavior = fakeChzzkBehavior();
+        registry.addHandler(fakeSocketHandler(behavior), "/socket.io/")
+                // 업그레이드가 정해진 자리에서 센다. 클라이언트의 open()은 101만 받고 돌아오므로, 서버가 그 소켓을
+                // afterConnectionEstablished에서 등록하기 전에 테스트가 닫고 reset()까지 갈 수 있다. 등록으로만 세면
+                // reset()이 빈 자리를 보고 지나가고, 늦게 등록된 소켓의 종료 프레임 "1"이 다음 시행에 남는다(POK-468).
+                // 톰캣은 101을 이 처리기가 돌아간 뒤에 보내므로 여기서 세면 클라이언트보다 앞선다. 101일 때만 센다:
+                // 거절된 요청은 afterConnectionClosed가 안 와서 센 것이 영영 안 줄어든다
+                .addInterceptors(new HandshakeInterceptor() {
+                    @Override
+                    public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                                   WebSocketHandler wsHandler, Map<String, Object> attributes) {
+                        return true;
+                    }
+
+                    @Override
+                    public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                               WebSocketHandler wsHandler, Exception exception) {
+                        if (exception == null && response instanceof ServletServerHttpResponse servlet
+                                && servlet.getServletResponse().getStatus() == HttpStatus.SWITCHING_PROTOCOLS.value()) {
+                            behavior.socketAccepted();
+                        }
+                    }
+                })
                 .setAllowedOrigins("*");
+    }
+
+    /**
+     * 요청이 들고 온 Access Token. <b>가짜 서버가 스트리머를 가르는 유일한 값이다</b> —
+     * 구독 API에 채널 파라미터가 없어(CLAUDE.md 「스트리머 여러 명」) 클라이언트가
+     * 채널을 보내는 자리가 없다. 헤더가 없으면 빈 문자열이다(소켓에 직접 붙는 검사).
+     */
+    static String bearerToken(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        if (header == null || !header.startsWith("Bearer ")) {
+            return FakeChzzkBehavior.NO_TOKEN;
+        }
+        return header.substring("Bearer ".length());
+    }
+
+    /** 핸드셰이크 쿼리의 {@code auth=FAKE-AUTH-<표>}에서 표를 되찾는다. */
+    static String handleOfQuery(String query) {
+        for (String pair : (query == null ? "" : query).split("&")) {
+            if (pair.startsWith("auth=" + FakeChzzkBehavior.AUTH_PREFIX)) {
+                return pair.substring(("auth=" + FakeChzzkBehavior.AUTH_PREFIX).length());
+            }
+        }
+        return FakeChzzkBehavior.NO_TOKEN;
     }
 
     /**
@@ -85,19 +136,28 @@ public class FakeChzzkServer implements WebSocketConfigurer {
          */
         @GetMapping("/open/v1/sessions/auth")
         public ResponseEntity<String> auth(HttpServletRequest request) throws InterruptedException {
+            String token = bearerToken(request);
             behavior.countAuthCall();
             if (!behavior.authDelay.isZero()) {
                 Thread.sleep(behavior.authDelay.toMillis());
             }
-            if (behavior.authStatus != 200) {
-                return ResponseEntity.status(behavior.authStatus).body(errorBody(behavior.authStatus));
+            // 토큰별 스위치가 전역보다 우선한다. 없으면 전역 값이라 기존 검사는 그대로다.
+            int status = behavior.authStatusFor(token);
+            if (status != 200) {
+                return ResponseEntity.status(status).body(errorBody(status));
             }
             // 죽은 포트를 주면 발급은 200인데 그 url로는 못 붙는다. ②의 실패를
             // 만드는 유일한 길이라 여기서 갈아 끼운다.
             int socketPort = behavior.sessionUrlPort != 0
                     ? behavior.sessionUrlPort : request.getServerPort();
+            // <b>토큰이 아니라 표를 실어 보낸다.</b> 소켓 핸드셰이크에는 Authorization
+            // 헤더가 없어(쿼리만 온다) 그 접속이 누구 것인지 알려면 url에 무언가를
+            // 실어야 하는데, 토큰을 그대로 실으면 <b>소켓 URI의 쿼리로 새어 나간다</b>
+            // (ChatLogLeakTest가 실제로 잡았다). 실서버의 auth 값도 치지직이 만든
+            // 별개의 값이지 우리 토큰이 아니다.
             String url = request.getScheme() + "://" + request.getServerName()
-                    + ":" + socketPort + "?auth=FAKE-AUTH";
+                    + ":" + socketPort + "?auth=" + FakeChzzkBehavior.AUTH_PREFIX
+                    + behavior.mintHandle(token);
             // 봉투는 실측 그대로다(01_probe.md) — code·message가 한 겹 더 있다.
             return ResponseEntity.ok(
                     "{\"code\":200,\"message\":null,\"content\":{\"url\":\"" + url + "\"}}");
@@ -110,7 +170,8 @@ public class FakeChzzkServer implements WebSocketConfigurer {
          * 프레임이고(01_probe.md), 안 쏘면 ChatSession이 ⑤에서 영영 기다린다.
          */
         @PostMapping("/open/v1/sessions/events/subscribe/chat")
-        public ResponseEntity<String> subscribe(@RequestParam String sessionKey) {
+        public ResponseEntity<String> subscribe(@RequestParam String sessionKey,
+                                                HttpServletRequest request) {
             // 거부하면 subscribed를 안 쏜다. 거부해 놓고 쏘면 "구독이 됐다"와
             // "안 됐다"가 소켓에서 같아 보여, 클라이언트가 ④의 실패를 무시해도
             // ⑤가 통과시켜 준다.
@@ -119,7 +180,11 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                         .body(errorBody(behavior.subscribeStatus));
             }
             if (behavior.sendSubscribed) {
-                behavior.emitSystem("{\"type\":\"subscribed\",\"data\":"
+                // <b>그 sessionKey의 소켓에만 쏜다.</b> "가장 최근 소켓"에 쏘면
+                // 스트리머 스무 명이 동시에 수립할 때 남의 소켓으로 가고, 자기
+                // subscribed를 못 받은 세션이 ⑤에서 시한을 다 쓴다.
+                behavior.emitSystemTo(bearerToken(request),
+                        "{\"type\":\"subscribed\",\"data\":"
                         + "{\"eventType\":\"CHAT\",\"channelId\":\"FAKE-CHANNEL\"}}");
             }
             // 수립 스레드가 이 응답에 막혀 있는 동안 도는 훅. 소켓은 이미 열려
@@ -133,6 +198,28 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
+
+        /**
+         * 후원 구독. <b>거부해도 채팅 세션은 그대로 살아 있어야 한다</b> —
+         * 그것이 POK-234 태스크 4가 지키는 것이고, 여기서 403을 주는 것이
+         * 그 자리를 만드는 유일한 손잡이다.
+         */
+        @PostMapping("/open/v1/sessions/events/subscribe/donation")
+        public ResponseEntity<String> subscribeDonation(@RequestParam String sessionKey,
+                                                        HttpServletRequest request) {
+            behavior.countSubscribeDonationCall();
+            if (behavior.subscribeDonationStatus != 200) {
+                return ResponseEntity.status(behavior.subscribeDonationStatus)
+                        .body(errorBody(behavior.subscribeDonationStatus));
+            }
+            if (behavior.sendDonationSubscribed) {
+                behavior.emitSystemTo(bearerToken(request),
+                        "{\"type\":\"subscribed\",\"data\":"
+                        + "{\"eventType\":\"DONATION\",\"channelId\":\"FAKE-CHANNEL\"}}");
+            }
+            behavior.onSubscribeDonationBeforeResponse.run();
+            return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
+        }
     }
 
     /** 구독 반납. 안 오면 세션이 우리 손으로 안 닫히고 연결 상한을 먹는다. */
@@ -144,19 +231,47 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         FakeUnsubscribeRest(FakeChzzkBehavior behavior) { this.behavior = behavior; }
 
         @PostMapping("/open/v1/sessions/events/unsubscribe/chat")
-        public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey)
+        public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey,
+                                                  HttpServletRequest request)
                 throws InterruptedException {
             // 실패해도 도착한 사실은 센다. 안 세면 "왔는데 터졌다"와 "아예 안 왔다"가
-            // 같아 보인다.
-            behavior.countUnsubscribeCall();
+            // 같아 보인다. 프로토콜을 같이 넘기는 이유는 도착 시각만으로는 "겹쳤다"를
+            // 해석할 수 없기 때문이다 — HTTP/2면 커넥션 하나에 다 몰린다.
+            String token = bearerToken(request);
+            behavior.countUnsubscribeCall(request.getProtocol(), token);
             // 세는 것이 먼저다. 붙들고 있는 동안 뒷정리 스레드가 여기 갇혀 있으므로,
             // 테스트는 이 카운터로 "갇힌 시점"을 정확히 집어낼 수 있다.
-            if (!behavior.unsubscribeDelay.isZero()) {
-                Thread.sleep(behavior.unsubscribeDelay.toMillis());
+            //
+            // <b>나가고 들어오는 것을 try/finally로 감싼다.</b> 겹친 수는 "지금 이 안에 몇이
+            // 있나"라 나가는 자리를 한 곳으로 모아야 세진다 — 아래 return이 둘이라
+            // 손으로 빼면 한 갈래를 빼먹고 그때 겹침이 실제보다 크게 보인다.
+            try {
+                if (!behavior.unsubscribeDelay.isZero()) {
+                    Thread.sleep(behavior.unsubscribeDelay.toMillis());
+                }
+                // 토큰별 스위치가 전역보다 우선한다. 없으면 전역 값이라 기존 검사는 그대로다.
+                int status = behavior.unsubscribeStatusFor(token);
+                if (status != 200) {
+                    return ResponseEntity.status(status).body(errorBody(status));
+                }
+                return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
+            } finally {
+                behavior.endUnsubscribeCall();
             }
-            if (behavior.unsubscribeStatus != 200) {
-                return ResponseEntity.status(behavior.unsubscribeStatus)
-                        .body(errorBody(behavior.unsubscribeStatus));
+        }
+
+        /**
+         * 후원 구독 반납. <b>채팅 반납과 따로 센다</b> — 묶으면 「반납이 둘 나갔다」와
+         * 「채팅 반납이 두 번 나갔다」가 같은 값이 되어 아무도 못 가른다.
+         */
+        @PostMapping("/open/v1/sessions/events/unsubscribe/donation")
+        public ResponseEntity<String> unsubscribeDonation(@RequestParam String sessionKey)
+                throws InterruptedException {
+            // 도착을 먼저 센다 — 채팅 반납과 같은 규칙이다. 붙들려 있는 동안에도
+            // "왔다"가 보여야 나란히 나갔는지를 상대 쪽에서 잴 수 있다.
+            behavior.countUnsubscribeDonationCall();
+            if (!behavior.unsubscribeDonationDelay.isZero()) {
+                Thread.sleep(behavior.unsubscribeDonationDelay.toMillis());
             }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
@@ -171,7 +286,13 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                     t.setDaemon(true);
                     return t;
                 });
-        private final AtomicLong lastPingAt = new AtomicLong();
+        /**
+         * <b>소켓마다 따로 잰다.</b> 하나로 두면 스트리머 스무 명 중 한 명의 ping이
+         * 나머지 열아홉의 시계까지 되감아, 실제로는 ping이 끊긴 소켓을 리퍼가
+         * 영영 안 끊는다 — 함정 3(조용한 유실)을 재는 자가 통째로 무력해진다.
+         */
+        private final java.util.Map<String, AtomicLong> lastPingAtBySocket =
+                new java.util.concurrent.ConcurrentHashMap<>();
 
         FakeSocketHandler(FakeChzzkBehavior behavior) { this.behavior = behavior; }
 
@@ -186,25 +307,37 @@ public class FakeChzzkServer implements WebSocketConfigurer {
 
         @Override
         public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-            behavior.rememberQuery(session.getUri() == null ? "" : session.getUri().getQuery());
+            String query = session.getUri() == null ? "" : session.getUri().getQuery();
+            behavior.rememberQuery(query);
+            // 표 → 토큰. 쿼리에는 토큰이 없다(위 auth 주석).
+            String handle = handleOfQuery(query);
+            String token = behavior.tokenForHandle(handle);
+            // 토큰 자리를 먼저 잡는다. 아래 전송이 전부 그 자리를 거쳐 나간다.
+            behavior.rememberFor(token, session);
             behavior.remember(session);
-            lastPingAt.set(System.nanoTime());
+            lastPingAtBySocket.put(session.getId(), new AtomicLong(System.nanoTime()));
             behavior.startPingClock();
             behavior.markConnectionEstablished();
 
-            // 전송은 전부 behavior.send()를 지난다. 스프링 세션은 동시 전송에
+            // 전송은 전부 behavior의 sendLock을 지난다. 스프링 세션은 동시 전송에
             // 안전하지 않아서, 락을 나눠 쥐면 채팅 홍수 + 하트비트가 겹치는
             // 순간(=T1·T2가 겨냥한 바로 그 상황)에 서버가 스스로 무너진다:
             // IllegalStateException: The remote endpoint was in state [TEXT_PARTIAL_WRITING]
             // upgrades는 실측이 ["websocket"]이다. 빈 배열이 아니다(01_probe.md).
-            behavior.send("0{\"sid\":\"fake\",\"upgrades\":[\"websocket\"],"
+            //
+            // <b>이 소켓에 보낸다.</b> 전역 send()는 "가장 최근 소켓"이라, 스트리머
+            // 스무 명이 동시에 붙으면 핸드셰이크가 남의 소켓으로 두 번 가고
+            // 자기 소켓은 핸드셰이크를 못 받아 수립이 시한을 다 쓴다.
+            behavior.sendTo(token, "0{\"sid\":\"fake\",\"upgrades\":[\"websocket\"],"
                     + "\"pingInterval\":" + behavior.pingIntervalMillis + ","
                     + "\"pingTimeout\":" + behavior.pingTimeoutMillis + "}");
-            behavior.send("40");
+            behavior.sendTo(token, "40");
 
             if (behavior.sendConnected) {
-                behavior.emitSystem("{\"type\":\"connected\","
-                        + "\"data\":{\"sessionKey\":\"FAKE-KEY\"}}");
+                // sessionKey도 <b>내용이 없는 값</b>이다 — 구독·반납은 Authorization
+                // 헤더로 스트리머를 가른다(실서버도 그 헤더를 요구한다).
+                behavior.emitSystemTo(token, "{\"type\":\"connected\",\"data\":{\"sessionKey\":\""
+                        + FakeChzzkBehavior.SESSION_KEY_PREFIX + handle + "\"}}");
             }
             scheduleReaper(session);
         }
@@ -215,10 +348,16 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             behavior.record(raw);
 
             if (EngineIoFrame.parse(raw).type() == EngineIoFrame.Type.PING) {
-                lastPingAt.set(System.nanoTime());
+                AtomicLong clock = lastPingAtBySocket.get(session.getId());
+                if (clock != null) {
+                    clock.set(System.nanoTime());
+                }
                 behavior.markPingReceived();     // 간격의 지상 진실
                 if (behavior.answerPong) {
-                    behavior.send("3");          // 같은 락을 탄다
+                    // <b>ping을 보낸 그 소켓에 돌려준다.</b> 전역 send()로 두면
+                    // 스트리머가 여럿일 때 pong이 남의 소켓으로 가고, 자기 pong을
+                    // 못 받은 세션이 멀쩡한데도 좀비로 판정돼 끊는다.
+                    behavior.sendTo(behavior.tokenOf(session), "3");   // 같은 락을 탄다
                 }
             }
         }
@@ -229,6 +368,7 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             if (task != null) {
                 task.cancel(false);
             }
+            lastPingAtBySocket.remove(session.getId());
             behavior.forget(session);
         }
 
@@ -236,10 +376,11 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         private void scheduleReaper(WebSocketSession session) {
             long deadlineMillis = behavior.pingIntervalMillis + behavior.pingTimeoutMillis;
             reapers.put(session.getId(), reaper.scheduleAtFixedRate(() -> {
-                if (!behavior.disconnectWhenPingMissing || !session.isOpen()) {
+                AtomicLong clock = lastPingAtBySocket.get(session.getId());
+                if (!behavior.disconnectWhenPingMissing || !session.isOpen() || clock == null) {
                     return;
                 }
-                long idleMillis = (System.nanoTime() - lastPingAt.get()) / 1_000_000;
+                long idleMillis = (System.nanoTime() - clock.get()) / 1_000_000;
                 if (idleMillis > deadlineMillis) {
                     try {
                         // NO_STATUS_CODE(1005)를 쓰면 안 된다. RFC 6455가 전송을

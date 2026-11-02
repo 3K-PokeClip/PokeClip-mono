@@ -28,3 +28,35 @@
 
 - Positive: U12(정본에 UNIQUE 포함 여부) 종결 — 멱등 최후 방어선이 정본 사양이 됨. "임시→정본 교체" 마이그레이션 단계 자체가 소멸. 구 POK-35의 테이블 생성 스코프 제거(남는 스코프: 컬럼 정책·인덱스 전략 리뷰 — 3번 승인 절차로 흡수).
 - Negative: 스키마 운영 책임(백업·마이그레이션 절차·RDS 권한 설계)이 1번으로 이동 — AWS 배포 전에 결정 필요. 계약 문서(위키) 4절 소유 표 갱신 필요.
+
+## 추기 2026-10-19 — dev 는 시험을 위해 손으로 적용한다(POK-368)
+
+- **무엇:** 정본 `schemaDDL`(고정 커밋 `ef5c23f1` 의 `media/internal/index/ddl.go`)을 dev 서버 상자의 공유 postgres(3번 서버 넷이 함께 쓰는 DB)에 1번이 한 번 손으로 적용했다. 표 넷(`stream_segments` · `stream_sessions` · `stream_cutoffs` · `stream_published_gaps`)과 함수 · 트리거 하나씩이 생겼다. 이어서 조각 창고에 이미 있던 조각 22개(`streams/p79b-447fb75c/…`)를 가리키는 시험 줄 22개를 넣었다.
+- **왜:** dev 에는 이 표를 만들고 채우는 인덱서가 없다. 그래서 3번이 dev 에서 렌더 · 썸네일을 시험할 수 없었다(POK-332).
+- **결정 3 과의 관계:** 「로컬 compose 에서만 생성」 에 dev 예외 하나를 더한다. RDS(프로덕션) 적용 절차는 여전히 AWS 배포 시점에 정한다.
+- **운영 규칙:** 결정 1 · 2 의 소유 · 승인 규칙은 그대로다. `ddl.go` 가 바뀌면 dev 재적용은 1번 몫이다. 3번은 이 표를 읽기만 한다. dev 에서는 인덱서가 없으므로 치우개(`BROADCAST_REAPER_ENABLED`)를 켜지 않는다. 지울 때는 시험 줄을 먼저 지우고, 치우개 · 썸네일(`THUMBNAIL_ENABLED`) · 떼기(`CHAT_DETACH_ENABLED`) 스위치가 꺼진 것을 확인한 뒤 표 넷과 함수를 지운다.
+- **나중에 정할 것:** dev 에 인덱서가 붙는 날 이 표를 이어 쓸지는 그때 정한다.
+- **기록:** POK-368 코멘트.
+
+## 추기 2026-10-23 — prod 적용은 `prod/runtime/sql/` 의 psql 스크립트로 한다(POK-304)
+
+- **무엇:** 결정 3 의 「RDS(프로덕션) 적용 절차」 를 이 추기로 정한다. 적용 원본은
+    `infra/terraform/prod/runtime/sql/` 이다. 순서는 `00_preflight` → `10_roles` →
+    `20_schema`(`media_owner` 로 바꿔 `stream_schema.sql` 을 읽는다) →
+    `30_grants` → `40_verify` 이고, 각 파일을 마스터 사용자로 `psql -1` 한 번씩
+    돌린다. `50_advisory_probe` 는 확인만 하고 되돌린다. 실행 절차는
+    `infra/terraform/runbooks/runtime-1a.md` 에 둔다.
+- **사본과 정본:** `stream_schema.sql` 의 표지 사이는 `ddl.go` 의 `schemaDDL` 과
+    바이트가 같다. `30_grants.sql` 의 media 두 계정 GRANT 는
+    `pgtest.MediaIndexerGrantSQL` · `lcRoleGrants` 와 같은 집합이다. 앱 서버
+    사용자 넷(10 · 30 — POK-407)의 GRANT 는 `services/README.md`
+    「서버별 DB 계정과 권한」 목록과 같은 집합이다. 셋 다
+    `media/internal/index/prod_sql_contract_test.go` 가 강제하고, 비superuser
+    마스터 대역으로 실제로 적용하는 시험은 `prod_sql_apply_pg_test.go` 다.
+    media-ci 의 paths 에 이 디렉터리가 있어 SQL 만 고쳐도 시험이 돈다.
+- **dev 재적용:** 추기 2026-10-19 의 dev 재적용도 이 사본(`stream_schema.sql`)을
+    원본으로 쓴다. 고정 커밋의 `ddl.go` 에서 손으로 뽑지 않는다.
+- **운영 규칙:** 결정 1 · 2 는 그대로다. `ddl.go` 를 바꾸는 PR 은 같은 PR 에서
+    사본을 고친다(안 고치면 media-ci 가 깨진다). 부팅 시 `ENSURE_SCHEMA` 는 로컬
+    compose 전용으로 남는다.
+- **기록:** POK-304 코멘트.

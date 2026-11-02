@@ -17,10 +17,22 @@ spring:
     username: ${POSTGRES_USER}
     password: ${POSTGRES_PASSWORD}
     hikari:
+      # 세션 경로를 자기 스키마 하나로 둔다(POK-428). Hikari가 새 연결마다 setSchema로 search_path를 바꾸므로
+      # 맨 이름은 app_auth와 암묵 pg_catalog에서만 풀린다 — public에 누가 같은 이름의 함수를 심어도 고르지 않는다.
+      schema: ${pokeclip.datasource.schema}
       # Hikari 기본값과 같은 10이다. 값을 바꾸는 게 아니라 "운영 풀은 10"을 글로 못박는다 —
       # 치지직 resolve는 커넥션을 쥔 채 외부 HTTP(read-timeout 5s)를 기다리므로 풀 크기가 곧
       # 동시 처리 상한이다. ChzzkResolvePoolExhaustionTest가 같은 10에서 동시 25로 잰다.
       maximum-pool-size: 10
+      data-source-properties:
+        # DB 응답 대기 시한(초, POK-414). 연결은 받고 응답을 안 하는 DB(반개방)를 끊는 것은 이것뿐이다:
+        # queryTimeout은 취소를 서버에 보내 답 없는 상대에게 무력하고, Hikari connection-timeout은 풀에서 빌리는
+        # 대기라 이미 빌린 연결의 읽기를 못 끊는다(services/CLAUDE.md 실측, 둘 다 20초 넘게 매달림). 없으면 그 요청
+        # 스레드가 끝없이 매달려 풀이 바닥나고 화면이 통째로 멈춘다(수집 서버 PR #55와 같은 현상).
+        # 수집 · 판별 서버와 같은 10이다. 이 연결의 모든 문장에 걸린다: 10초를 넘기는 마이그레이션(큰 표 색인)을
+        # 쓰는 날 이 값을 다시 본다. 정수로 주면 Hikari가 조용히 무시한다(문자열로 바인딩돼야 먹는다).
+        # DatasourceTimeoutTest가 값이 아니라 행동으로 잰다. iam 허용 목록(db-support)이 받는 유일한 드라이버 속성이다.
+        socketTimeout: 10
 
   jpa:
     hibernate:
@@ -36,16 +48,22 @@ spring:
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
     # 마이그레이션 번호는 모듈별 대역을 쓴다 — V1xx auth · V2xx clip · V3xx chat.
     table: flyway_schema_history_auth
-    # 공유 DB에서 뜨는 순서와 무관하게 부팅하려면 모든 Flyway 서버에 필요하다 —
-    # auth가 "첫 서버"라는 보장이 없다. chat-collector가 먼저 마이그레이션한 빈 DB에
-    # auth가 나중에 뜨면 public은 비어 있지 않은데 우리 이력 테이블은 없어서
-    # "Found non-empty schema(s) ... but no schema history table"로 죽는다
-    # (chat-collector 쪽 실측 2026-08-15, auth도 같은 메시지로 재현 — IntegrationTestSupport가
-    # 그 상황을 심어 두어 이 두 줄을 지우면 auth 테스트 전체가 빨강이다).
-    baseline-on-migrate: true
-    # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V1xx라 실질 영향은 없지만,
-    # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
-    baseline-version: 0
+    # 표와 이력 테이블을 자기 스키마에 만든다(POK-428). 남의 표가 없는 스키마라 baseline 설정이 필요 없다 —
+    # 이 스키마가 이력 없이 비어 있지 않으면 Flyway가 non-empty로 멈춘다(의도).
+    schemas: ${pokeclip.datasource.schema}
+
+  servlet:
+    multipart:
+      # 잘라낸 512x512 PNG가 들어갈 크기. 크기 판정을 서블릿 층에서 하므로 앱이 바이트를
+      # 다 받기 전에 끊는다 — 글자로 받았다면 재기 전에 이미 다 받아 놓게 된다.
+      max-file-size: 2MB
+      # 🔴 <b>요청 상한은 파일 상한보다 커야 한다.</b> 둘을 2MB로 같게 뒀더니 정확히 2MB인
+      # 파일이 413이었다(실측) — max-file-size는 파일만 재는데 이쪽은 multipart 경계와
+      # 파트 헤더까지 더해 재므로 <b>먼저 걸린다.</b> 그러면 실효 상한이 문서가 말하는 2MB보다
+      # 작아지고, README의 「자르는 크기가 약 723px를 넘으면 거부된다」는 경계도 그만큼 낮아진다.
+      # 3MB는 파일 상한 2MB + 오버헤드에 넉넉한 여유다. 파일 자체는 여전히 위 줄이 자른다.
+      # ProfilePhotoSizeLimitTest.정확히_상한인_파일은_통과한다가 이 관계를 못박는다.
+      max-request-size: 3MB
 
   http:
     clients:
@@ -56,9 +74,32 @@ spring:
       # 설정이지 구글 인증 설정이 아니므로 여기가 맞는 자리다.
       connect-timeout: 2s
       read-timeout: 5s
+      # s3가 Apache5를 딸려와 httpclient5가 클래스패스에 오르면 Boot가 RestClient 구현을
+      # 오류 없이 바꾼다(이 카드에서 재현: JdkClientHttpRequestFactory →
+      # HttpComponentsClientHttpRequestFactory). 위 connect 2s·read 5s는 구글·치지직·유튜브
+      # 호출 전부에 걸린 실측값이라, 층이 바뀌면 어디서 끊는지를 다시 재야 하는 것이 된다.
+      #
+      # 이 핀을 잃으면 시한만 늘어나는 게 아니다 — httpclient5 5.6.1의 기본 재시도가 429·503에
+      # 1회(간격 1초) 붙고, 상태코드 기반이라 POST도 탄다. 치지직 갱신은 users 행 락을 쥔 채
+      # HTTP를 기다리므로(「알려진 구멍」 10번) 그 한 번이 그대로 잠금 시간이 된다.
+      # AWS SDK 자기 경로는 무관하다 — apache5-client가 disableAutomaticRetries를 부른다.
+      # 이 증폭은 스프링 쪽 핀을 잃었을 때만 생긴다.
+      #
+      # 단수형 spring.http.client.factory는 deprecated 별칭이고 spring.http.clients.factory는 없다.
+      # RestClientFactoryTest가 RestClient·RestTemplate 양쪽 구현체를 직접 단언한다.
+      imperative:
+        factory: jdk
 
 logging:
   level:
+    # DB 로거 트리 셋을 info로 박는다(POK-409). 로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 한다:
+    # root TRACE 실측(clip)에서 org.hibernate.orm.jdbc.extract가 읽은 칸 값을, org.hibernate.orm.core가 DEBUG에서
+    # 엔티티 통째를, org.springframework.jdbc.core.StatementCreatorUtils가 JdbcTemplate 매개변수를,
+    # org.postgresql.core.v3.QueryExecutorImpl이 보내는 값을 찍었다. 방송의 물리 키는 지금 스트림키와 같다.
+    # 디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다(예: LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug).
+    org.hibernate.orm: info
+    org.springframework.jdbc: info
+    org.postgresql: info
     # 이 로거를 DEBUG로 켜면 나가는 폼 본문이 통째로 찍힌다 —
     # DefaultRestClient.logBody가 "Writing [" 뒤에 본문을 그대로 붙이고,
     # LogFormatUtils를 안 거치므로 길이 상한이 없다. 구글 토큰 교환의
@@ -74,6 +115,14 @@ logging:
     # 사유 코드로 로그에 남긴다. 이 프로젝트는 유니크 위반을 정상 제어 흐름으로 쓰기까지
     # 한다(초대·계정 생성 경합) — 그 WARN은 어차피 잡음이다.
     org.hibernate.orm.jdbc.error: error
+    # 사진이 나가는 길 — S3 PUT 본문. AWS SDK 2.46.7의 HTTP 클라이언트는 Apache 5이고
+    # org.apache.hc.client5.http.wire(본문 전체)·.headers(Authorization 값)가 DEBUG에 찍는다.
+    # SDK 상위 계층 DEBUG는 서명 canonical request를 대량으로 남긴다. netty는 async
+    # 클라이언트용이라 지금은 안 도는 길이지만 s3가 딸려오므로 같이 막는다.
+    # 구체 로거가 root보다 우선하므로 root=TRACE로도 안 뚫린다 — SecretLeakTest가 그것까지 잰다.
+    software.amazon.awssdk: info
+    org.apache.hc.client5.http: info
+    io.netty: info
   pattern:
     # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
     # logback-spring.xml을 만들지 않는 이유는 배포가 없어 환경별 형식이
@@ -82,6 +131,24 @@ logging:
 
 server:
   port: 8082
+  # 프록시가 붙여 주는 X-Forwarded-* 헤더를 믿을지. 기본 none = 안 믿는다. dev(EC2 compose, 플랫폼 감지 없음)에서는
+  # 전과 같은 동작이다. 🔴 운영 ECS에서는 다르다: 전략을 안 적으면 Boot 4.0+가 AWS_EXECUTION_ENV로 ECS를 감지해
+  # (CloudPlatform.AWS_ECS) 자동으로 native를 켰을 텐데, 이 명시 none이 그 유추를 끈다. 운영 태스크 정의에
+  # FORWARD_HEADERS_STRATEGY=native를 반드시 넣는다.
+  # 🔴 빈 문자열은 none이 아니라 「미설정」이라 Boot 유추로 간다(빈 값의 enum 변환이 null). compose의 :-none만 빈 값을 막는다.
+  # native면 톰캣 RemoteIpValve가 신뢰 대역(server.tomcat.remoteip.internal-proxies 기본값: 사설망·루프백)에서
+  # 온 요청의 X-Forwarded-For를 요청자 IP로 채택한다(교환 rate limit이 로드밸런서 뒤에서 전역 한도가 되는 것을
+  # 막는다, POK-91). 대역 밖 소켓이 보낸 헤더는 무시된다. 한정 조건·HSTS 등 운영 서술은 README 「프록시 뒤 실제 IP」 절.
+  # 🔴 native는 X-Forwarded-For만이 아니다: Proto·Host·Port까지 처리해 HSTS가 붙는 자리가 있다. 서술은 위 README 절.
+  # 그 절에 없는 실측 하나만 여기 남긴다: Valve가 request.setSecure(true)를 하고 HstsHeaderWriter가 isSecure()를 본다.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
+  tomcat:
+    remoteip:
+      # native일 때 믿는 프록시 대역(쉼표로 이은 CIDR). 운영은 FORWARD_HEADERS_TRUSTED_PROXIES로 VPC 안(ALB·웹)과
+      # CloudFront 원본 쪽 대역만 남긴다(POK-316). 기본값은 Boot 기본 대역을 글자 그대로 옮긴 것이다: 안 주면 전과 같다.
+      # RequiredPropertiesTest가 Boot 값과 같은지 본다. 🔴 빈 값은 「아무 프록시도 안 믿음」이다(한도가 전역으로 돌아간다).
+      # 🔴 주소 하나도 /32처럼 접두를 붙인다. 값 전체에 '/'가 없으면 톰캣이 목록을 정규식 하나로 읽어 아무 주소에도 안 맞는다.
+      internal-proxies: "${FORWARD_HEADERS_TRUSTED_PROXIES:192.168.0.0/16, 172.16.0.0/12, 169.254.0.0/16, fc00::/7, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, fe80::/10, ::1/128}"
 
 management:
   endpoints:
@@ -90,6 +157,18 @@ management:
         include: health
 
 pokeclip:
+  datasource:
+    # 이 서버의 표가 사는 스키마(POK-428 — 이름 = DB 계정, 운영 10_roles.sql이 마스터 소유로 만든다). 위의
+    # hikari.schema(세션 경로)와 flyway.schemas(표 · 이력 자리)가 이 한 키에서 나온다.
+    schema: app_auth
+    # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
+    # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
+    auth: ${POSTGRES_AUTH:password}
+    # iam 토큰을 서명할 리전.
+    region: ${AWS_REGION:ap-northeast-2}
+    # iam에서만 쓴다. RDS CA 번들의 절대 경로. 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다.
+    ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
+
   jwt:
     # 기본값을 빈 문자열로 두고 @NotBlank로 잡는다. 기본값을 아예 안 주면
     # 환경변수가 없을 때 부팅이 죽는 게 아니라 리터럴 "${JWT_SECRET}"이 값으로
@@ -113,11 +192,36 @@ pokeclip:
     # JWT_SECRET과 같다 — 안 주면 리터럴 "${SECRET_STORE_KEY}"가 바인딩돼
     # 서버는 뜨고 스트림키만 전부 실패한다.
     key: ${SECRET_STORE_KEY:}
+  stream-key-secret-store:
+    # 스트림키 암호를 어디서 읽고 쓰나(POK-272, ADR-018). postgres | aws. 위 secret-store(PG)는 유튜브·치지직
+    # 토큰이 계속 쓰므로 SECRET_STORE_KEY는 aws로 바꿔도 필수다.
+    type: ${STREAM_KEY_SECRET_STORE_TYPE:postgres}
+    # 재발급·탈퇴 때 옛 암호를 지울 저장소(쉼표 목록). type을 반드시 포함한다. dev는 aws(병행 종료, POK-329).
+    retire-from: ${STREAM_KEY_SECRET_RETIRE_FROM:postgres}
+    # 새 암호 이름의 앞부분 = Secrets Manager 비밀 이름 접두. '/'로 끝난다. dev는 pokeclip/dev/stream-key/ 이고
+    # dev compose가 비면 기동을 거부한다(:?). IAM 정책이 이 접두 안만 허용한다.
+    ref-prefix: ${STREAM_KEY_SECRET_REF_PREFIX:pokeclip/local/stream-key/}
+    region: ${AWS_REGION:ap-northeast-2}
+  withdrawal-purge:
+    # 탈퇴 뒤 clip·수집기에 「이 회원 기록을 지워라」를 보낸다(POK-256). 장부(withdrawal_purge_jobs)에 적고 받을 때까지
+    # 다시 보낸다. 두 주소가 비면 부팅이 거부된다 — 비어 있으면 탈퇴한 사람의 방송·채팅 기록이 조용히 남는다.
+    # compose 안에서는 http://clip:8081 · http://chat-collector:8083 이다.
+    clip-base-url: ${CLIP_BASE_URL:}
+    collector-base-url: ${COLLECTOR_BASE_URL:}
+    dispatch: true
+    interval: PT15S
   internal-api:
     # Media(1번)가 X-Internal-Token 헤더로 보낸다. 기본값을 빈 문자열로 두는
     # 이유는 JWT_SECRET과 같다 — 안 주면 리터럴이 바인딩돼 서버는 뜨고
     # 검증 API만 전부 401이 된다.
     token: ${INTERNAL_API_TOKEN:}
+    # resolve 전용 출입증(계약4 4C). Media가 이 토큰을 X-Stream-Key-Resolve-Token 헤더에 싣고 허용 대역(IPv4 CIDR,
+    # 쉼표 목록) 안에서만 부른다. 토큰이 비면 창구가 닫힌다 — 전용 헤더 요청은 늘 401이고 auth는 그대로 뜬다.
+    # 토큰이 있으면 StreamKeyResolveSecurityConfig가 부팅을 검사한다(대역이 있고 IPv4 · 위 forward-headers-strategy가
+    # none이나 native · 톰캣 remoteip 헤더 이름 속성 없음 · 공용 토큰과 다름). 전달 머리글을 단 전용 헤더 요청은 403이다.
+    stream-key-resolve:
+      token: ${STREAM_KEY_RESOLVE_TOKEN:}
+      allowed-cidrs: ${STREAM_KEY_RESOLVE_ALLOWED_CIDRS:}
   chzzk:
     # 앱 셋은 한 덩어리다(ChzzkProperties.App). 하나만 빠져도 부팅에서 죽는다.
     # 기본값을 빈 문자열로 두는 이유는 JWT_SECRET과 같다.
@@ -139,3 +243,110 @@ pokeclip:
       # 꺼지면 갱신이 영영 안 돌고 증상은 24시간 뒤에 나온다. ChzzkTokenRefreshSchedulerTest가 배선을 잰다.
       enabled: true
       interval: PT10M
+  youtube:
+    # 앱 셋은 한 덩어리다(YoutubeProperties.App). 하나만 빠져도 부팅에서 죽는다.
+    # 로그인용 구글 앱(pokeclip.google.*)과 다른 GCP 앱이다 — 업로드 권한은 프로젝트 단위
+    # 심사 대상이라 폭발 반경을 나눴다.
+    app:
+      client-id: ${YOUTUBE_CLIENT_ID:}
+      client-secret: ${YOUTUBE_CLIENT_SECRET:}
+      redirect-uri: ${YOUTUBE_REDIRECT_URI:}
+    authorize-uri: https://accounts.google.com/o/oauth2/v2/auth
+    # 로그인(pokeclip.google.token-uri)과 주소가 같지만 별개 키로 둔다 — 앱이 다르다.
+    token-uri: https://oauth2.googleapis.com/token
+    revoke-uri: https://oauth2.googleapis.com/revoke
+    # channels.list의 뿌리.
+    api-base-uri: https://www.googleapis.com
+    # state 수명. 치지직과 같은 이유로 10분이다.
+    state-ttl: PT10M
+    # 워커에 넘기기 전 최소 남은 수명. 구글 access가 1시간이라 치지직(12시간)과 자릿수가 다르다 —
+    # 이보다 적게 남았으면 resolve가 즉석 갱신해서 준다.
+    resolve-min-remaining: PT30M
+    check:
+      # 철회 점검. 운영 기본 켜짐, 테스트 프로파일만 끈다(치지직과 같은 이유).
+      enabled: true
+      # 틱 주기. 선별이 staleness로 거르므로 틱이 잦아도 회원당 구글 호출은 하루 1회다.
+      interval: PT1H
+      # 이보다 오래 확인 안 한 연동만 점검한다.
+      staleness: PT24H
+    retention:
+      # 유튜브 데이터 보관(POK-423, 처리방침 13절). 기한 셋은 처리방침 문장 그대로다: 바꾸면 처리방침도 바꾼다.
+      # 해제 7일 · 철회/갱신 불가 30일 뒤 채널 정보를 지우고 clip에 영상 번호 지우기를 알리며, 연동 중 30일마다 채널 이름을 다시 받는다.
+      # 구글에 권한 취소(revoke)는 안 보낸다(ADR-052). clip 주소는 withdrawal-purge.clip-base-url을 같이 쓴다.
+      run: true
+      interval: PT1H
+      unlinked-grace: P7D
+      broken-grace: P30D
+      channel-refresh-after: P30D
+  soop:
+    # 앱 셋은 한 덩어리다(SoopProperties.App). 하나만 빠져도 부팅에서 죽는다.
+    # redirect-uri는 SOOP 개발자 콘솔에 앱당 하나다: 환경마다 앱이 다르다(치지직과 같다).
+    app:
+      client-id: ${SOOP_CLIENT_ID:}
+      client-secret: ${SOOP_CLIENT_SECRET:}
+      redirect-uri: ${SOOP_REDIRECT_URI:}
+    # 🔴 아래 값은 전부 여기에만 있다(SoopProperties에 Java 기본값 없음). 빠지면 @NotNull이 부팅을 세운다.
+    authorize-uri: https://openapi.sooplive.com/auth/code
+    api-base-uri: https://openapi.sooplive.com
+    # state 수명. 치지직과 같은 이유로 10분이다.
+    state-ttl: PT10M
+    # 스케줄러가 이만큼 남았을 때 미리 갱신한다. 문서 예시 토큰 수명 8시간 기준이라 1시간 틱이면 만료 전 한두 번 기회가 있다.
+    refresh-ahead: PT2H
+    # 수집기에 넘기기 전 최소 남은 수명. 이보다 적게 남았으면 resolve가 즉석 갱신해서 준다.
+    resolve-min-remaining: PT1H
+    check:
+      # 갱신 점검. 운영 기본 켜짐, 시험 프로파일만 끈다(치지직과 같은 이유).
+      enabled: true
+      interval: PT1H
+      # 만료가 멀어도 이보다 오래 확인 안 한 연동은 갱신해 본다(철회를 미리 안다).
+      staleness: PT24H
+      # 한 틱에서 갱신 거절이 연달아 이만큼 나면 그 틱을 멈춘다. 앱 설정 오류로 전 회원이 BROKEN 되는 것을 막는다.
+      reject-brake: 3
+      # 한 틱이 보는 후보 상한. 스프링 기본 스케줄러는 스레드 하나라 다른 틱과 나눈다(오래 확인 안 한 순 앞부터).
+      batch-limit: 25
+  profile-photo:
+    # 창고 이름이 비면 사진 기능이 통째로 꺼진다(chat-collector의 S3_BUCKET 관례). CI·팀원 로컬 기본.
+    # 이름을 PROFILE_PHOTO_ 접두어로 두는 이유: S3_BUCKET은 chat-collector가 이미 쓴다.
+    # 같은 이름이면 .env.dev.example이 값을 하나만 가져 두 서버가 같은 창고를 가리킨다.
+    bucket: ${PROFILE_PHOTO_S3_BUCKET:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 비면 진짜 AWS. LocalStack·MinIO 등 호환 스토리지 주소(scheme+host+port).
+    endpoint: ${PROFILE_PHOTO_S3_ENDPOINT:}
+    force-path-style: ${PROFILE_PHOTO_S3_FORCE_PATH_STYLE:false}
+    # 사진 표 서명키. 로그인 토큰(JWT_SECRET)과 다른 값이어야 한다 — 같으면 두 종류가 섞일 여지가 생긴다.
+    # 창고 이름이 차 있는데 이것이 비면 PhotoProperties가 부팅을 세운다.
+    token-secret: ${PROFILE_PHOTO_TOKEN_SECRET:}
+    # 사진 주소의 앞부분(예 http://localhost:8082). 화면과 서버가 다른 주소에 있어 절대 주소가 필요하고,
+    # 요청에서 유추하면 프록시 뒤에서 틀린다(프록시 뒤에서는 native 전략이 켜져야 맞고, 그 전제를 안 두려고 명시 설정으로 받는다).
+    base-url: ${PROFILE_PHOTO_BASE_URL:}
+  retention:
+    # 보관 기한 청소(POK-89). 10분마다 표 셋(refresh_tokens·pairing_exchange_attempts·pairing_codes)에서
+    # 보관 기간이 지난 행을 한 바퀴에 batch-limit개씩, 상한에 걸리면 같은 틱에서 최대 10바퀴
+    # (RetentionCleanupScheduler.MAX_ROUNDS) 이어 지운다. 그래도 남은 것은 다음 틱이 이어서 지운다.
+    # 스케줄러 스레드가 하나라(유튜브 철회 점검과 같은 스레드) 틱 하나가 오래 돌면 치지직 갱신 틱이 밀린다:
+    # 상한 × 바퀴가 그 예산이다. 1,000행 한 바퀴가 수십 ms다. 폭주가 이어져 rounds=10 capped=true가 틱마다
+    # 계속되면 batch-limit을 올린다.
+    # 운영 기본 켜짐. 테스트 프로파일만 끈다(컨텍스트마다 틱이 돌아 표를 지운다).
+    # 부팅 검증은 양수와 「refresh-tokens-keep-for ≥ pokeclip.jwt.refresh-token-ttl」(RetentionKeepForCheck)만 본다.
+    #   짧으면 만료 전 옛 토큰의 재사용이 봉쇄(REUSED, 그 회원 세션 전부 끊음) 대신 「모르는 토큰」(UNKNOWN, 401뿐)으로 빠진다.
+    #   거부 메시지에 두 값을 일수까지 함께 싣는다(PT336H로만 찍히면 여기 적힌 P14D를 못 찾는다).
+    #   아래 enabled: false면 이 검사도 함께 꺼진다(RetentionKeepForCheck가 스케줄러와 같은 조건 애노테이션이다).
+    # 나머지 하한은 운영자가 지킨다(PRD 결정):
+    #   refresh-tokens-keep-for가 10초(TokenService.REUSE_GRACE) 아래면 유예 창 안 재회전이 ALREADY_ROTATED 대신 UNKNOWN이 된다.
+    #   pairing-attempts-keep-for가 1분(교환 한도 창) 아래면 6번째 교환이 429가 아니라 404가 된다(한도 무력화).
+    #   pairing-codes-keep-for는 내려도 판정이 안 바뀐다: 발급 한도는 created_at 최근 1분을 세고 살아있는 코드는
+    #   만료 전이라 청소가 절대 안 지운다(keep 1초에서도 4번째 발급이 429였다, 감사 2회차 실측). 잃는 것은
+    #   만료·중복 거절 사유(410·409)가 404가 되는 창뿐이다.
+    enabled: true
+    interval: PT10M
+    batch-limit: 1000
+    # 🔴 회수된 refresh 토큰을 남기는 기간 = 도난 토큰 재사용 봉쇄의 창. 회수 행이 표에 있는 동안만 「이미 쓴 토큰이
+    # 또 왔다」를 잡고, 청소 뒤 그 토큰은 「모르는 토큰」(401)이라 봉쇄가 없다. 왜 이 값인가·잃는 것은 README
+    # 「운영 전 잔불 정리」 절. 하한은 pokeclip.jwt.refresh-token-ttl(위, 부팅 검증). 회수 안 된 만료 행도 만료 뒤 같은 기간.
+    refresh-tokens-keep-for: P14D
+    # 교환 rate limit 판정 창은 1분이다. IP 해시가 소금 없는 SHA-256이라 복원 가능한데, 보관이 짧을수록
+    # 그 위험 창이 준다. 사후 조사는 pokeclip.pairing.exchange.rate_limited 카운터가 대신한다.
+    pairing-attempts-keep-for: PT1H
+    # 만료 뒤 이 기간이 지나면 지운다. 발급 한도(계정당 분당 3회)는 최근 1분만 세고 교환은 만료 전 행만
+    # 소비하므로 겹치지 않는다. 지운 뒤에는 그 코드로 교환하면 409·410 대신 404다.
+    pairing-codes-keep-for: PT1H

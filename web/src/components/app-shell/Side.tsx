@@ -1,0 +1,245 @@
+'use client';
+
+import { useRef } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import {
+  Bell,
+  ChevronsUpDown,
+  CreditCard,
+  FolderOpen,
+  HelpCircle,
+  History,
+  LayoutTemplate,
+  Link2,
+  Menu,
+  Plug,
+  Radio,
+  Upload,
+  User,
+  Users,
+  type LucideIcon,
+} from 'lucide-react';
+import { Avatar, IconButton } from '@/ui';
+import { ChannelSwitcher, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
+import { useSidebarStore } from '@/stores/sidebar';
+import { BrandSymbol } from './BrandSymbol';
+import { isDockHrefActive } from './dockTransition';
+import styles from './Side.module.css';
+
+// 독 그룹별 좌측 사이드바 (디자인 Side). 그룹이 달라도 껍데기는 같고 메뉴만 갈리므로
+// 컴포넌트 하나가 menu prop으로 메뉴를 고른다 — 그룹마다 복제하면 접기 동작·치수가 곧 어긋난다.
+
+/**
+ * 사이드바 항목 key. 유니온으로 두는 이유는 배지 prop의 키를 이 목록으로 좁히기 위해서다 —
+ * `string`이면 오타가 타입을 통과해 배지가 조용히 안 그려진다(Dock의 DockHref와 같은 방식).
+ */
+type SideItemKey =
+  | 'livenow'
+  | 'vod'
+  | 'library'
+  | 'template'
+  | 'upstatus'
+  | 'link'
+  | 'editors'
+  | 'plugin'
+  | 'noti'
+  | 'billing'
+  | 'account'
+  | 'help';
+
+interface Item {
+  key: SideItemKey;
+  label: string;
+  Icon: LucideIcon;
+  href?: string; // 없으면 비활성 — 각 하위 티켓에서 라우트가 생기면 href를 추가한다
+  /** 채널 주인의 일: 남의 채널(편집자)이면 숨기지 않고 비활성으로 둔다(POK-390 PRD 「막는 메뉴」) */
+  ownerOnly?: true;
+}
+
+interface Group {
+  title: string;
+  items: Item[];
+}
+
+/** 독 그룹 key. 라우트 세그먼트(`/broadcast`·`/clips`·`/settings`)와 같은 이름을 쓴다. */
+export type SideMenu = 'broadcast' | 'clips' | 'settings';
+
+/**
+ * 항목 key → 배지 수. Dock의 DockBadges와 같은 방식 — MENUS는 모듈 상수라 값을 prop으로
+ * 받아야 그룹 레이아웃이 훅 값을 흘려 넣을 수 있다. 아직 채우는 화면은 없다 — 여기서는 자리만 연다.
+ */
+export type SideBadges = Partial<Record<SideItemKey, number>>;
+
+// IA v5.7. 라우팅된 화면만 href를 갖는다 — 나머지는 별도 티켓.
+const MENUS: Record<SideMenu, Group[]> = {
+  // 「방송」 그룹(POK-210). livenow·vod는 그룹 안의 화면이라 이름을 바꾸지 않는다 —
+  // livenow는 실제로 라이브고, 바뀐 것은 그 둘을 담는 그룹의 이름이다.
+  broadcast: [
+    {
+      title: '방송',
+      items: [
+        { key: 'livenow', label: '라이브 대시보드', Icon: Radio, href: '/broadcast/livenow' },
+        { key: 'vod', label: '지난 방송', Icon: History, href: '/broadcast/vod' },
+      ],
+    },
+  ],
+  // 「클립」 그룹(POK-235). 보관함(1g)만 화면이 있다 — 템플릿 관리(1h)는 MVP 밖,
+  // 업로드 상태(1i)는 시안 미확정. 승인 대기함(1j)은 승인 게이트가 없어 뺐다(POK-236 폐기, POK-254).
+  clips: [
+    {
+      title: '하이라이트 · 클립',
+      items: [
+        { key: 'library', label: '보관함', Icon: FolderOpen, href: '/clips/library' },
+        { key: 'template', label: '템플릿 관리', Icon: LayoutTemplate },
+      ],
+    },
+    {
+      title: '업로드',
+      items: [{ key: 'upstatus', label: '업로드 상태', Icon: Upload }],
+    },
+  ],
+  settings: [
+    {
+      title: '채널 · 협업자',
+      items: [
+        {
+          key: 'link',
+          label: '채널 연동',
+          Icon: Link2,
+          href: '/settings/channels',
+          ownerOnly: true,
+        },
+        {
+          key: 'editors',
+          label: '편집자 관리',
+          Icon: Users,
+          href: '/settings/editors',
+          ownerOnly: true,
+        },
+      ],
+    },
+    {
+      title: '환경설정',
+      items: [
+        { key: 'plugin', label: '플러그인', Icon: Plug, href: '/settings/plugin', ownerOnly: true },
+        { key: 'noti', label: '알림 설정', Icon: Bell, href: '/settings/notifications' },
+        { key: 'billing', label: '구독 · 결제', Icon: CreditCard, ownerOnly: true },
+        { key: 'account', label: '계정', Icon: User, href: '/settings/account' },
+        { key: 'help', label: '도움말 · 문의', Icon: HelpCircle, href: '/settings/help' },
+      ],
+    },
+  ],
+};
+
+export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) {
+  const pathname = usePathname();
+  // 지금 채널을 그대로 보인다(POK-390). 내 채널이면 로그인한 사람의 사진·이름이다: 하드코딩이던 시절엔 계정 화면에서
+  // 사진·이름을 바꿔도 사이드바만 남처럼 남아, 「헤더·사이드바에 바로 반영」이라는 토스트가 거짓이 됐다.
+  const channel = useChannelIdentity();
+  const othersChannel = channel.role === '편집자';
+  // 그룹을 옮겨도 접힘이 따라간다 — 지역 상태로 두면 레이아웃이 갈릴 때마다 초기화된다
+  const collapsed = useSidebarStore((s) => s.collapsed);
+  const toggleCollapsed = useSidebarStore((s) => s.toggle);
+  const userBlockRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <aside className={styles.sidebar} data-collapsed={collapsed}>
+      <div className={styles.brand}>
+        <span className={styles.brandMark}>
+          <BrandSymbol size={28} className={styles.brandLogo} />
+        </span>
+        <span className={styles.brandName}>PokeClip</span>
+        <span className={styles.brandToggle}>
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label={collapsed ? '사이드바 펼치기' : '사이드바 접기'}
+            aria-expanded={!collapsed}
+            onClick={toggleCollapsed}
+          >
+            {/* 크기는 CSS가 셸 배율로 정한다 — size prop은 덮어써져 무의미 */}
+            <Menu aria-hidden />
+          </IconButton>
+        </span>
+      </div>
+      {MENUS[menu].map((group, i) => (
+        <div key={group.title}>
+          {i > 0 && <div className={styles.divider} />}
+          <div className={styles.groupTitle}>{group.title}</div>
+          <nav className={styles.nav} aria-label={group.title}>
+            {group.items.map(({ key, label, Icon, href, ownerOnly }) => {
+              const badge = badges?.[key];
+              const content = (
+                <>
+                  {/* 크기는 CSS(.itemIcon)가 셸 배율로 정한다 — size prop은 덮어써져 무의미 */}
+                  <Icon aria-hidden className={styles.itemIcon} />
+                  <span className={styles.label}>{label}</span>
+                  {badge ? <span className={styles.badge}>{badge}</span> : null}
+                </>
+              );
+              if (!href || (ownerOnly && othersChannel)) {
+                return (
+                  <span key={key} className={styles.item} aria-disabled="true">
+                    {content}
+                  </span>
+                );
+              }
+              // 하위 경로 판정은 독과 같은 규칙을 쓴다 — 복사본을 만들면 조용히 갈라진다
+              const active = isDockHrefActive(pathname, href);
+              return (
+                <Link
+                  key={key}
+                  href={href}
+                  className={styles.item}
+                  aria-current={active ? 'page' : undefined}
+                >
+                  {content}
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+      ))}
+      <div ref={userBlockRef} className={styles.userBlock}>
+        {/* 프로필이 곧 채널 스위처다(시안 1u). 트리거는 아바타+이름까지만: 알림 버튼까지 넣으면 버튼 안 버튼이 된다.
+            펼친 사이드바에서는 위로, 접힌 레일에서는 오른쪽으로 연다(시안 ①②). 위로 열 때는 버튼이 아니라 이 블록에
+            붙여 구분선 위 10px에 띄운다: 버튼에 붙이면 블록 윗여백만큼 내려와 창이 구분선을 덮는다 */}
+        <ChannelSwitcher
+          side={collapsed ? 'right' : 'top'}
+          align={collapsed ? 'end' : 'start'}
+          anchorRef={collapsed ? undefined : userBlockRef}
+          offset={collapsed ? undefined : 10}
+        >
+          <button
+            type="button"
+            className={styles.userTrigger}
+            aria-label={`계정 전환 · ${channel.name ?? ''} 채널${channel.role ? ` · ${channel.role}` : ''}`}
+          >
+            {/* me 로딩 중엔 이름 없는 빈 아바타: 이니셜이 나중에 채워져도 어긋날 것이 없다
+                (GlobalHeader와 같은 처리) */}
+            <Avatar
+              size="sm"
+              src={channel.photo ?? undefined}
+              name={channel.name ?? undefined}
+              className={styles.userAvatar}
+            />
+            {/* 요금제(Pro)는 뺐다: 구독 API가 없다. 역할은 칩 대신 회색 작은 글씨로 */}
+            <span className={styles.userText}>
+              <span className={styles.userName}>{channel.name ? `${channel.name} 채널` : ''}</span>
+              <span className={styles.userRole}>{channel.role}</span>
+            </span>
+            {/* 눌러서 채널을 바꾼다는 표시(시안 1u의 위아래 화살표). 접힌 레일에선 라벨과 함께 접는다 */}
+            <ChevronsUpDown aria-hidden className={styles.userChevron} />
+          </button>
+        </ChannelSwitcher>
+        <div className={styles.bellWrap}>
+          <IconButton variant="ghost" size="sm" aria-label="알림">
+            <Bell aria-hidden />
+          </IconButton>
+          <span className={styles.bellDot} />
+        </div>
+      </div>
+    </aside>
+  );
+}

@@ -1,0 +1,6 @@
+# backend.hcl 로 복사해 실제 값을 넣는다. backend.hcl 은 추적하지 않는다.
+bucket       = "<STATE_BUCKET_NONPROD>"
+key          = "nonprod/dns-legacy/terraform.tfstate"
+region       = "ap-northeast-2"
+encrypt      = true
+use_lockfile = true

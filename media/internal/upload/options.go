@@ -8,9 +8,11 @@ package upload
 import (
 	"os"
 	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
-// 상수 17개. 값의 소유자는 이 블록 하나다 — env 로 여는 3개(RetryMax·SweepEvery·CircuitMax)만
+// 상수 19개. 값의 소유자는 이 블록 하나다 — env 로 여는 3개(RetryMax·SweepEvery·CircuitMax)만
 // Options 필드로 덮어쓴다.
 const (
 	// defaultRetryMax 는 PUT 재시도 상한이다. AC3-a 의 기대 수치(조각당 upload_retry 3건)와 직결된다
@@ -18,7 +20,7 @@ const (
 	defaultRetryMax = 4
 	// defaultSweepEvery 는 재개 스위프 주기다.
 	defaultSweepEvery = 30 * time.Second
-	// defaultCircuitMax 는 하드 실패가 연속으로 몇 행 나면 전역 차단할지다. 0 = 브레이커 무효화.
+	// defaultCircuitMax 는 하드 실패가 연속으로 몇 행 나면 **그 축의** 브레이커를 열지다(축별 3개). 0 = 브레이커 무효화.
 	defaultCircuitMax = 3
 
 	// defaultRetryBase 는 재시도 지수 백오프의 첫 간격이다. 1s+2s+4s = 총 약 7초로,
@@ -62,6 +64,17 @@ const (
 	// defaultShutdownMarkGrace 는 PUT 취소 후 마킹 완주를 봐주는 시간이다.
 	// 4s + 2s = 최악 6초로 docker compose stop 기본 10초 안에 든다.
 	defaultShutdownMarkGrace = 2 * time.Second
+	// defaultArmFallback 은 스위퍼 arm 폴백이다(POK-168 M1). 정본 산식은
+	// max(2×RescanEvery, 2×ScanCollectBudget)이고 config 가 계산해 덮어쓴다 —
+	// 기본값 조합(5분·45초)에서 그 식의 값이 10분이라 여기 상수도 10분이다.
+	defaultArmFallback = 10 * time.Minute
+	// defaultHeldPerSession 은 세션 init 확정을 기다리는 ③ 작업을 세션마다 몇 개까지 들고
+	// 있을지다(계획 2.1). 넘치는 작업은 들지 않는다 — 장부에 pending 으로 남아 스위퍼가 다시 집는다.
+	defaultHeldPerSession = 64
+	// defaultSessionTTL 은 회차별 메모리(보정값 표·sessionInit·보류 목록)의 수명이다. 녹화 파일
+	// 보존(MediaMTX recordDeleteAfter 기본 1일)과 같은 창이다 — 그 뒤 재생성은 어차피 원본이
+	// 없다(계획 4.2-R R3).
+	defaultSessionTTL = 24 * time.Hour
 )
 
 // Options 는 업로더의 판단 기준이다. 앞의 셋은 env 로 열려 있고 나머지는 상수다.
@@ -70,6 +83,10 @@ type Options struct {
 	SegmentRoot string
 	// Root 는 파일을 여는 유일한 손잡이다. os.Root 는 루트 밖 이탈만 막는다(결정 15″).
 	Root *os.Root
+	// Producer 는 ③·init 바이트를 만드는 손잡이다(설계 3.2 — 기본 = Go 재포장). Root 가 연
+	// 입력을 받아 메모리 산출만 돌려준다 — 디스크 쓰기 0(G4). nil 이면 널 오브젝트
+	// (playback.NoProducer)가 끼워져 ③·init 작업이 만들지 않고 실패한다.
+	Producer playback.Producer
 
 	RetryMax   int           // env
 	SweepEvery time.Duration // env
@@ -92,6 +109,13 @@ type Options struct {
 	MarkTimeout        time.Duration
 	ShutdownGrace      time.Duration
 	ShutdownMarkGrace  time.Duration
+	// ArmFallback 은 첫 완주 수집 신호(ArmSweeper) 없이도 스위퍼를 여는 상한이다.
+	// 0 이하면 폴백 없이 arm 신호·종료만 기다린다(테스트용).
+	ArmFallback time.Duration
+	// HeldPerSession 은 세션마다 보류 목록에 들 수 있는 ③ 작업 수다.
+	HeldPerSession int
+	// SessionTTL 은 회차별 메모리의 수명이다(보정값 표 = 마지막 실시간 ③ 요청으로부터).
+	SessionTTL time.Duration
 }
 
 // DefaultOptions 는 설계 8절의 기본값이다.
@@ -99,6 +123,7 @@ func DefaultOptions(root *os.Root, segmentRoot string) Options {
 	return Options{
 		SegmentRoot:        segmentRoot,
 		Root:               root,
+		Producer:           playback.Remuxer{},
 		RetryMax:           defaultRetryMax,
 		SweepEvery:         defaultSweepEvery,
 		CircuitMax:         defaultCircuitMax,
@@ -119,5 +144,8 @@ func DefaultOptions(root *os.Root, segmentRoot string) Options {
 		MarkTimeout:        defaultMarkTimeout,
 		ShutdownGrace:      defaultShutdownGrace,
 		ShutdownMarkGrace:  defaultShutdownMarkGrace,
+		ArmFallback:        defaultArmFallback,
+		HeldPerSession:     defaultHeldPerSession,
+		SessionTTL:         defaultSessionTTL,
 	}
 }

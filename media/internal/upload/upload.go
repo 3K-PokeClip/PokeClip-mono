@@ -6,10 +6,12 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
 // Origin 은 이 작업이 어느 경로에서 왔는가다. 업로더가 내는 모든 로그에 실린다.
@@ -74,9 +76,10 @@ type Result struct {
 // 구현 계약 셋 — 하나라도 어기면 종료 상한(G18″)이 무너진다:
 //  1. ctx 취소를 반드시 준수한다. 취소되면 즉시 ctx.Err() 계열 오류로 반환한다.
 //  2. body 를 처음부터 정확히 size 바이트만 읽는다(되감기하지 않는다).
-//  3. Content-Type 은 구현이 상수로 고정한다(계약이므로 호출자가 매번 넘길 이유가 없다).
+//  3. 객체 머리(Content-Type · Cache-Control)는 구현이 축별 상수 표로 고정한다 — 호출자는 이미 들고 있는
+//     대상의 축만 넘긴다(M5 설계 4.5 D5). 표에 없는 축이면 보내지 않고 오류다(fail-closed).
 type Putter interface {
-	Put(ctx context.Context, key string, body io.Reader, size int64) error
+	Put(ctx context.Context, key string, body io.Reader, size int64, axis index.Axis) error
 }
 
 // job 은 큐에 실리는 항목이다.
@@ -90,7 +93,7 @@ type job struct {
 	sweepRound uint64
 }
 
-func (j job) key() targetKey { return targetKey{j.target.StreamID, j.target.Seq} }
+func (j job) key() targetKey { return targetKeyOf(j.target) }
 
 // lifecycle 은 Shutdown 이 어떤 순서로 불려도 안전하게 만드는 상태다.
 type lifecycle int32
@@ -114,7 +117,7 @@ type Uploader struct {
 	now  func() time.Time
 	off  bool // Disabled 로 만들어졌는가
 	gate *gates
-	brk  *breaker
+	brk  *breakers
 
 	state     atomic.Int32 // lifecycle
 	accepting atomic.Bool
@@ -130,6 +133,13 @@ type Uploader struct {
 	workerStop  chan struct{}      // close 로 워커의 큐 receive 와 백오프 대기를 깨운다
 	sweepDone   chan struct{}
 	workerDone  chan struct{}
+
+	// armCh 는 스위퍼 arm 신호다(POK-168 M1 — Uploader 수명 계약 3).
+	// 스위퍼 goroutine 자체는 Start 가 띄우되(그래야 미arm Shutdown 의 sweepDone join 이
+	// 산다) 실제 스위프는 이 채널이 닫힌 뒤에만 시작한다. arm 판정의 소유자는 main loop 다 —
+	// 첫 완주 수집(ApplyCollect firstComplete)이 ArmSweeper 를 부른다.
+	armCh   chan struct{}
+	armOnce sync.Once
 
 	// sweepRound 는 스위프 회차 ID 다(1부터 단조 증가, 리셋 없음).
 	// 쓰기는 스위퍼 고루틴만, 읽기는 enqueue 의 OriginSweep 경로만 한다 —
@@ -148,6 +158,14 @@ type Uploader struct {
 	// 인터페이스로 번지지 않는다.
 	// ★ 교체는 Start 전에만 한다. 기동 뒤에 바꾸면 워커 고루틴과 레이스다.
 	statFile func(*os.File) (fs.FileInfo, error)
+
+	// sessions 는 회차별 메모리다(보정값 표·sessionInit·보류 목록). Disabled 업로더에는 없다(nil).
+	sessions *sessionMemory
+
+	// dirty 는 ③·init 결과 이벤트 집합이다. 소비자(되감기 발행 루프)가 붙기(AttachDirty) 전에는 nil 이라
+	// 표시가 no-op 이다 — 아무도 비우지 않는 원소를 쌓지 않는다(계획 6.4 「ⓐ 단독 국면 메모리 0」).
+	// 사실은 이미 장부에 있어 소비자가 붙을 때 부팅 재구성이 복원한다.
+	dirty *Dirty
 }
 
 // New 는 업로더를 만든다. 고루틴은 아직 뜨지 않는다.
@@ -159,6 +177,10 @@ func New(st index.UploadStore, put Putter, opt Options, log *slog.Logger) *Uploa
 // 브레이커의 lazy 전이와 백오프는 전부 시각 비교라, 실제 시간을 기다리는 테스트는
 // 느리고 흔들린다. 공개 시그니처는 그대로 둔 채 이음매를 여기 하나만 낸다.
 func newWithClock(st index.UploadStore, put Putter, opt Options, log *slog.Logger, now func() time.Time) *Uploader {
+	if opt.Producer == nil {
+		// 배선이 빠졌으면 만들지 않고 실패하는 쪽으로 기운다 — nil 을 부르면 워커가 죽는다.
+		opt.Producer = playback.NoProducer{}
+	}
 	return &Uploader{
 		st:       st,
 		put:      put,
@@ -166,10 +188,12 @@ func newWithClock(st index.UploadStore, put Putter, opt Options, log *slog.Logge
 		log:      log,
 		now:      now,
 		gate:     newGates(opt, now),
-		brk:      newBreaker(opt, log, now),
+		brk:      newBreakers(opt, log, now),
 		queue:    make(chan job, opt.QueueLen),
 		results:  make(chan Result, opt.ResultBufLen),
+		armCh:    make(chan struct{}),
 		statFile: (*os.File).Stat,
+		sessions: newSessionMemory(opt),
 	}
 }
 
@@ -203,12 +227,26 @@ func (u *Uploader) Start(ctx context.Context) {
 	u.state.Store(int32(lifecycleStarted))
 }
 
+// ArmSweeper 는 스위퍼의 스위프 시작을 허가한다. 멱등이며 고루틴 안전하다(F-42).
+//
+// 부르는 쪽은 main loop 하나다 — 첫 완주 수집이 끝나면 커서 선점 위험이 사라지므로
+// 그때 연다. 폴백(Options.ArmFallback)은 스위퍼 자신이 계산한다.
+func (u *Uploader) ArmSweeper() {
+	if u.off {
+		return
+	}
+	u.armOnce.Do(func() { close(u.armCh) })
+}
+
 // OpenCircuit 은 기동 시 자격증명을 얻지 못했을 때처럼 밖에서 전역 차단을 거는 경로다.
+//
+// **축 인자를 받지 않고 3축 전부를 연다**(계획 4.5): 자격증명 부재는 축과 무관한 사정이라
+// 축별로 나눠 열 이유가 없다. 축별 분리(5.5.3)가 사는 자리는 실패 누적으로 여는 경로다.
 func (u *Uploader) OpenCircuit(reason string) {
 	if u.off {
 		return
 	}
-	u.brk.open(reason)
+	u.brk.openAll(reason)
 }
 
 // Results 는 장부가 바뀌었다는 통지 채널이다. 비활성이면 nil 이라 select 에서 절대 선택되지 않는다.
@@ -219,25 +257,91 @@ func (u *Uploader) Results() <-chan Result {
 	return u.results
 }
 
+// Dirty 는 ③·init 결과 이벤트 집합이다(Peek·Ack 은 되감기 루프가 부른다). 소비자가 없는 국면과
+// Disabled 업로더에서는 nil 이다 — nil 집합의 메서드는 아무것도 하지 않는다(Results 와 같은 이디엄).
+func (u *Uploader) Dirty() *Dirty { return u.dirty }
+
+// AttachDirty 는 ③·init 결과 이벤트 집합을 붙인다 — 소비자(되감기 발행 루프)가 붙는 국면에만, 발행 몫을 조립한 조립점이
+// Start 전에 한 번 부른다(판단 J70). 붙인 뒤로 워커가 결과마다 표시하고 루프가 Dirty 로 읽는다. Start 뒤에는 워커 고루틴이
+// 떠 있어 바꾸면 레이스라 아무것도 하지 않고, Disabled 업로더도 아무것도 하지 않는다(표시할 워커가 없다). Start 처럼 메인
+// 고루틴에서만 부른다.
+func (u *Uploader) AttachDirty() {
+	if u.off || u.state.Load() != int32(lifecycleNew) {
+		return
+	}
+	u.dirty = &Dirty{}
+}
+
+// ForgetSession 은 끝난 회차의 sessionInit·보류 목록을 지운다. 고루틴 안전하다. 부르는 자리는 루프가
+// 세션 종료(분리·오프라인)를 관측하는 곳이고, 되감기 발행 몫을 조립했을 때만 배선된다(판단 J86). 루프가
+// 관측하지 못하는 TD 분할과 배선이 없는 국면은 수명(Options.SessionTTL)이 같은 것을 치운다.
+//
+// 보정값 표는 남긴다: 정산 창(ending)의 스위퍼 재시도가 같은 보정값을 써야 한다(계획 4.2-R R3).
+// 표는 수명(Options.SessionTTL)이 치운다.
+func (u *Uploader) ForgetSession(sessionID string) {
+	if u.off {
+		return
+	}
+	u.sessions.forget(sessionID)
+}
+
+// tidySessions 는 회차별 메모리의 수명 청소와 남은 보류 재요청이다. 자리는 스위퍼 tick 이다
+// (새 select case 없이 기존 주기를 쓴다 — 계획 2.1).
+func (u *Uploader) tidySessions() {
+	u.sessions.evict(u.now())
+	u.drainHeld()
+}
+
 // RequestUpload 는 실시간 경로(인덱서)의 유일한 진입점이다. 논블로킹이며 고루틴 안전하다.
 //
 // 반환이 bool 인 이유: 인덱서가 알아야 할 것은 "큐에 들어갔는가" 하나뿐이며,
 // Rejected 와 QueueFull 의 구분은 스위퍼의 커서 계산에만 쓸모가 있다.
 // false 는 "아무 일도 없었다"이며 호출자는 어떤 상태도 기록하면 안 된다.
+// 단 ③ 표 기록은 접수 결과와 무관하다 — 거부돼도 그 조각의 보정값 줄은 남는다(계획 4.2-R R3).
+//
+// ③ 요청을 회차의 보정값 표에 적는 자리는 **여기 하나뿐이다**. 스위퍼 작업과 보류 재요청은
+// enqueue 를 바로 불러 이 기록을 지나지 않는다 — 공용 입구에서 적으면 스위퍼 작업의 영값
+// 보정값이 줄을 만들고 재수집마다 표 수명이 늘어난다(계획 뮤테이션 64).
 func (u *Uploader) RequestUpload(t index.UploadTarget) bool {
+	if t.Axis == index.AxisPlayback && u.admitting() {
+		u.sessions.recordLive(t, u.now())
+	}
 	return u.enqueue(t, OriginLive) == EnqueueAdmitted
 }
 
-// enqueue 는 비공개 공용 입구다. 게이트 순서는 결정 6‴ 표 그대로다.
+// admitting 은 지금 접수를 받는가다 — 비활성·미기동·종료 중이면 거짓이다.
+func (u *Uploader) admitting() bool {
+	return !u.off && u.state.Load() == int32(lifecycleStarted) && u.accepting.Load()
+}
+
+// enqueue 는 비공개 공용 입구다. 게이트 순서는 결정 6‴ 표 그대로다. 큐 포화는 요청 1건마다 WARN
+// 한 줄이다 — 스위퍼는 첫 포화에서 회차를 끊는다.
 func (u *Uploader) enqueue(t index.UploadTarget, o Origin) EnqueueOutcome {
-	if u.off || u.state.Load() != int32(lifecycleStarted) || !u.accepting.Load() {
+	return u.enqueueAt(t, o, slog.LevelWarn)
+}
+
+// enqueueAt 은 enqueue 의 본체다. 큐 포화 로그(upload_queue_full)의 수준과 그 줄에 덧붙일 속성만
+// 부르는 쪽이 정한다 — 보류 재요청은 drain 한 번의 포화를 Debug 요약 한 줄로 남긴다(requeueHeld).
+func (u *Uploader) enqueueAt(t index.UploadTarget, o Origin, fullLevel slog.Level, fullAttrs ...any) EnqueueOutcome {
+	if !u.admitting() {
 		return EnqueueRejected
 	}
 
-	k := targetKey{t.StreamID, t.Seq}
-	lg := u.log.With("stream_id", t.StreamID, "seq", t.Seq, "origin", o.String())
+	// 축을 모르면 브레이커도 게이트 키도 고를 수 없다 — 판정이 성립하지 않으므로 거부한다.
+	// Rejected 인 이유: 이 행에 우리가 할 일이 영영 없다는 결론이라 커서는 전진해야 한다.
+	brk := u.brk.of(t.Axis)
+	if brk == nil {
+		u.log.Error("upload_target_rejected", "reason", "bad_axis",
+			"stream_id", t.StreamID, "axis", t.Axis.String(),
+			"s3_key", t.S3Key, "origin", o.String())
+		return EnqueueRejected
+	}
 
-	if !u.brk.allowEnqueue() {
+	k := targetKeyOf(t)
+	lg := u.log.With("stream_id", t.StreamID, "axis", t.Axis.String(),
+		"seq", t.Seq, "origin", o.String())
+
+	if !brk.allowEnqueue() {
 		lg.Debug("upload_skipped_circuit")
 		return EnqueueRejected
 	}
@@ -273,7 +377,8 @@ func (u *Uploader) enqueue(t index.UploadTarget, o Origin) EnqueueOutcome {
 		admitted = true
 		return EnqueueAdmitted
 	default:
-		lg.Warn("upload_queue_full", "queue_len", len(u.queue), "sweep_round", j.sweepRound)
+		lg.With(fullAttrs...).Log(context.Background(), fullLevel, "upload_queue_full",
+			"queue_len", len(u.queue), "sweep_round", j.sweepRound)
 		return EnqueueQueueFull
 	}
 }
@@ -349,10 +454,22 @@ func (u *Uploader) drainQueue() int {
 
 // sendResult 는 논블로킹 통지다. 채널이 가득 차면 판정을 버린다 —
 // 커서 동기화는 최선 노력이며 5분 주기 Scan 이 치유한다(L7).
-func (u *Uploader) sendResult(r Result) {
+//
+// **작업을 통째로 받는 것이 계약이다.** Result 는 세그먼트 커서의 통지이므로
+// ② 아카이브 축만 보낸다 — init 이 바꾸는 장부는 stream_sessions 이고, 그 결과를 통지하면
+// seq=0(모든 스트림의 첫 조각) 꼬리의 UploadState 가 뒤집혀 커서가 DB 와 갈린다.
+// 축을 인자에 실어 함수 머리에서 보는 것이 구조 강제다 — Result 에 축 필드를 더하는 안은
+// 받는 쪽마다 축을 거르는 규율을 새로 지운다(필드를 빠뜨린 통지는 영값 = 미판정 축으로 온다 —
+// index.Axis). ③·init 통지는 이벤트 집합(Dirty)이 맡는다(계획 4.5 · 부기 11·18).
+func (u *Uploader) sendResult(j job, state index.UploadState) {
+	if j.target.Axis != index.AxisArchive {
+		return
+	}
+	r := Result{StreamID: j.target.StreamID, Seq: j.target.Seq, State: state}
 	select {
 	case u.results <- r:
 	default:
-		u.log.Debug("upload_mark_skipped", "stream_id", r.StreamID, "seq", r.Seq)
+		u.log.Debug("upload_mark_skipped", "stream_id", r.StreamID,
+			"axis", j.target.Axis.String(), "seq", r.Seq)
 	}
 }

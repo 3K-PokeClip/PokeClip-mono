@@ -1,0 +1,31 @@
+/* 좌측 사이드바를 두는 독 그룹(방송·클립·설정)의 공용 셸.
+   사이드바가 화면 최상단부터 전체 높이를 차지하고 본문만 스크롤된다.
+
+   그룹마다 복제하던 것을 세 번째(클립, POK-235)에서 하나로 올렸다 — Side를 menu prop 하나로
+   묶어 둔 것과 같은 이유다(복제하면 치수가 조용히 갈라진다). 저장소의 「세 번째가 같은 것을
+   원하면 그때 공용으로 올린다」 관행(features/settings/editors/editorDates.ts)도 여기서
+   발동한다.
+
+   본문 폭은 가두지 않는다 — 접힌 사이드바가 남긴 폭은 본문이 쓴다
+   (docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」). */
+.shell {
+  display: flex;
+  min-height: 100dvh;
+}
+
+/* 본문 패딩을 각 화면이 잡는 그룹 — 방송(라이브는 위·아래 값이 다르고 vod/[streamId]는
+   ScreenContainer를 쓴다)과 클립(보관함은 본문 오른쪽에 상세 패널이 서야 해서 여기서 패딩을
+   주면 패널이 본문 안으로 밀린다). */
+.content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 본문 패딩을 레이아웃이 잡는 그룹 — 설정. 값은 사이드바 화면 공용 토큰이라
+   (app/shell.css --pc-shell-body-pad-*) 방송·클립 화면들과 같은 배율을 타고,
+   그래서 탭을 오가도 h1의 x 좌표가 같다. */
+.contentPadded {
+  flex: 1;
+  min-width: 0;
+  padding: var(--pc-shell-body-pad-top) var(--pc-shell-body-pad-x) var(--pc-shell-body-pad-bottom);
+}

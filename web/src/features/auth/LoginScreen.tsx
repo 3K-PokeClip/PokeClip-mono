@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { consumeReturnPath, restoreReturnPath } from '@/components/app-shell/AuthGuard';
+import {
+  clearIntentionalLogout,
+  consumeReturnPath,
+  restoreReturnPath,
+} from '@/components/app-shell/AuthGuard';
+import { BrandSymbol } from '@/components/app-shell/BrandSymbol';
+import { LEGAL_URLS } from '@/features/legal/legalInfo';
+import { track } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { GoogleGIcon } from './GoogleGIcon';
 import { startGoogleLogin } from './googleOAuth';
@@ -14,6 +21,13 @@ import styles from './LoginScreen.module.css';
 export function LoginScreen() {
   const router = useRouter();
   useAuthHydration();
+  // 의도적 종료 표식은 「가드가 복원 경로를 남기지 않게」 하는 1회용 힌트다. 로그인
+  // 화면에 닿았으면 그 수명은 끝났다 — 가드를 거치지 않고 온 경우(/goodbye)에는
+  // 소비될 자리가 없어 표식이 탭에 남고, 나중에 비자발적으로 끊겼을 때 그것이
+  // 의도적 종료로 오해되어 복원 경로를 잃는다.
+  useEffect(() => {
+    clearIntentionalLogout();
+  }, []);
   const hydrated = useAuthStore((s) => s.hydrated);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const [startFailed, setStartFailed] = useState(false);
@@ -26,10 +40,13 @@ export function LoginScreen() {
   // OAuth 진입 실패(NEXT_PUBLIC_GOOGLE_CLIENT_ID 부재 등 배포 설정 오류) — onClick의
   // throw는 에러 바운더리 밖이라 콘솔에만 남고 사용자에겐 "버튼이 안 눌리는" 증상이
   // 된다. 문구로 표면화하고, 이미 소모한 복원 경로는 되돌린다. (리뷰 #72)
-  const handleGoogleLogin = () => {
+  // 진입은 PKCE challenge 계산 때문에 비동기다(POK-483) — 거부도 같은 자리에서 받는다.
+  const handleGoogleLogin = async () => {
     const returnTo = consumeReturnPath();
     try {
-      startGoogleLogin(returnTo ?? undefined);
+      await startGoogleLogin(returnTo ?? undefined);
+      // 동의 화면으로 떠나는 자리라 비콘으로 바로 보낸다 — 시작을 못 하고 던졌으면 세지 않는다 (POK-357)
+      track('login_started', {}, { beacon: true });
     } catch {
       if (returnTo !== null) restoreReturnPath(returnTo);
       setStartFailed(true);
@@ -41,7 +58,7 @@ export function LoginScreen() {
       <section className={styles.left}>
         <div className={styles.column}>
           <div className={styles.brand}>
-            <Image src="/brand/pokeclip-symbol.svg" alt="" width={36} height={36} priority />
+            <BrandSymbol size={36} className={styles.brandSymbol} />
             <span className={styles.wordmark}>PokeClip</span>
             <span className={styles.beta}>BETA</span>
           </div>
@@ -58,8 +75,28 @@ export function LoginScreen() {
               지금은 로그인을 시작할 수 없어요. 잠시 후 다시 시도해 주세요.
             </p>
           ) : null}
+          {/* 가입은 이 고지 + 로그인으로 성립한다(체크박스 없음, POK-269). 약관은 「동의」,
+              처리방침은 「확인」이다 — 처리방침은 동의를 받는 대상이 아니다. 전문 링크가
+              문구 바로 옆에 있어야 약관 명시 의무(약관규제법 제3조)를 채운다.
+              「시작하면」은 바로 위 「Google로 시작하기」 버튼을 가리킨다 — 「Google로」를 빼야 첫 줄이
+              400u 칸에 한 줄로 들어간다. 문장마다 줄을 나눈다(좁으면 낱말 단위로 접힌다).
+              문서는 랜딩(pokeclip.com)에 있어 새 탭으로 연다 — 로그인 흐름을 끊지 않는다. */}
           <p className={styles.terms}>
-            계속 진행하면 이용약관 및 개인정보 처리방침에 동의하게 됩니다.
+            시작하면 만 14세 이상이며{' '}
+            <a href={LEGAL_URLS.terms} target="_blank" rel="noopener noreferrer">
+              이용약관
+            </a>
+            에 동의한 것으로 봅니다.
+            <br />
+            <a
+              href={LEGAL_URLS.privacy}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.privacyLink}
+            >
+              개인정보 처리방침
+            </a>
+            도 확인하세요.
           </p>
         </div>
       </section>

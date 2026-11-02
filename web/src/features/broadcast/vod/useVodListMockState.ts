@@ -1,0 +1,430 @@
+'use client';
+
+import {
+  broadcastTitle,
+  fetchAllBroadcasts,
+  fetchAllJumpCards,
+  mediaStreamId,
+} from '@/api/clipEditor';
+import { ensurePlaybackAccessForList } from '@/api/playbackAccess';
+
+/** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
+const LIST_POLL_MS = 60_000;
+/** 이 안에 다시 들어오거나 탭으로 돌아오면 받아 둔 값을 그대로 쓴다 */
+const REVISIT_FRESH_MS = 20_000;
+/** 「다시 시도」가 도는 표시의 상한. 쪽이 많으면 읽기가 길어져 버튼이 오래 묶이지 않게 한다(PR #377 리뷰) */
+const RETRY_SPINNER_MAX_MS = 15_000;
+/**
+ * 기억한 카드 수를 다시 세는 간격(POK-254). 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 방금 끝난 방송은 주기마다,
+ * 나머지는 이만큼 지나면 센다: 주기마다 전체 이력을 세면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex).
+ */
+const CARD_COUNT_TTL_MS = 10 * 60_000;
+/**
+ * 한 주기에 다시 세는 오래된 방송 수의 상한. 처음 읽을 때 모든 방송이 같은 시각에 세어져, 상한이 없으면 10분마다 전체 이력의
+ * 카드 목록을 한꺼번에 불렀다(리뷰 1라운드). 남은 것은 다음 주기로 넘어가 흩어진다
+ */
+const CARD_RECOUNT_PER_POLL = 20;
+/** 방송마다 묻는 읽기의 동시 수. 방송이 많은 계정이 처음 들어올 때 전체 이력을 한꺼번에 묻지 않게 한다 */
+const ROW_READ_PARALLEL = 6;
+import { useCallback, useMemo, useState } from 'react';
+import { queryOptions, useQuery } from '@tanstack/react-query';
+import { track } from '@/lib/analytics';
+import { runLimited } from '@/lib/runLimited';
+import { useToast } from '@/ui';
+import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
+import { recordingTimeline } from '@/features/player/recordingTimeline';
+import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
+import { excludeLive, filterByPeriod, isJustEnded } from './vodListView';
+import { useChannelStreamerId } from '@/features/channel/ChannelScope';
+
+// 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
+// VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 녹화 재생 서버가 설정된 곳에서만 끝난 방송을 「다시 보기 가능」으로 본다.
+// 방송 제목도 명부에 칸이 없어 아직 방송 번호로 보인다.
+//
+// ⚠ VodBroadcast는 계약 미러다 — services/clip `BroadcastListResponse.Item`과 칸 이름·값이
+// 같다. 실연동 때 화면을 안 고치려면 이 모양을 지켜야 한다. 계약에 없는 표기값은 아래
+// VodRowVisual로 갈라 뒀다 — 그쪽은 B5가 생기면 통째로 서버 값에 자리를 내준다.
+//
+// 화면 컴포넌트에는 목업 값을 두지 않는다 — 언젠가 서버가 내려줄 값은 전부 여기서 나오고,
+// 화면에는 구조 라벨('지난 방송' 같은 고정 문구)만 남는다.
+
+/** 계약의 status — 소문자 그대로다(BroadcastStatus.dbValue). `state=past`는 뒤 둘로 펼쳐진다 */
+export type VodBroadcastStatus = 'live' | 'ended' | 'vod_ready';
+
+/** 「내 방송」과 「내가 편집하는 방송」을 가르는 표시 재료 — 권한이 아니다(ADR-055) */
+export type VodBroadcastRelation = 'OWNER' | 'EDITOR';
+
+/** 계약 한 줄 — 이 여섯 칸이 서버가 주는 전부다 */
+export interface VodBroadcast {
+  streamId: string;
+  status: VodBroadcastStatus;
+  relation: VodBroadcastRelation;
+  /** ⚠ null 가능 — 시작 알림의 발생 시각이 비어 오면 그렇다(ADR-016 종료 선도착) */
+  startedAt: string | null;
+  endedAt: string | null;
+  /** 60일 보관 만료 시각. 기한이 지난 방송도 목록에 남으므로 과거일 수 있다 */
+  vodExpiresAt: string | null;
+  /** 가장 크게 터진 장면 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
+}
+
+/**
+ * 계약에 없는 표기값 — 제목·썸네일 길이·카드 수는 목록 문이 아직 안 싣는다.
+ * B5(VOD 확정)가 생기면 이 타입은 통째로 사라지고 계약 필드로 대체된다.
+ */
+export interface VodRowVisual {
+  title: string;
+  /** 준비 중이라 아직 모르면 null */
+  durationSec: number | null;
+  cardCount: number;
+  /** 녹화 재생 서버에 물어 녹화가 없다고 확인됐다(POK-254). 물을 수 없으면 비운다 */
+  recordingMissing?: boolean;
+  /** 만료 임박 행의 「저장하지 않은 카드 N개가 함께 삭제됩니다」 */
+  unsavedCardCount?: number;
+}
+
+/**
+ * 풀 VOD 내려받기 상태 — 시안 1f의 행 오른쪽 조작부 3분기가 이 값에서 갈린다.
+ *
+ * ⚠ 실제로 받는 일은 아직 아무것도 안 한다. 받기를 시작하면 「준비 중인 기능」 토스트가
+ * 뜨고 행은 idle에 머문다 — 다운로드 백엔드가 기능명세·계약에 아직 없기 때문이다(POK-226).
+ * 화면은 시안대로 세 상태를 모두 그릴 수 있어야 하므로 목업이 두 상태를 심어 둔다.
+ */
+export type VodDownloadState =
+  { kind: 'idle' } | { kind: 'downloading'; progress: number } | { kind: 'done' };
+
+export const VOD_DOWNLOAD_IDLE: VodDownloadState = { kind: 'idle' };
+
+export type VodPeriodFilter = 'all' | '7d' | '30d' | 'custom';
+
+/** 「기간 지정」의 두 입력. 'YYYY-MM-DD'이고 안 채운 쪽은 null */
+export interface VodCustomRange {
+  from: string | null;
+  to: string | null;
+}
+
+/** 테스트 주입 — 빈 상태·경계 케이스를 화면 밖에서 만든다 (ClipEditorOptions 선례) */
+export interface VodListOptions {
+  broadcasts?: VodBroadcast[];
+  visuals?: Record<string, VodRowVisual>;
+  downloads?: Record<string, VodDownloadState>;
+  /** D-day·기간 계산의 기준 시각 — 시험이 얼린다. 없으면 지금 */
+  now?: Date;
+}
+
+export interface VodListMockState {
+  /** 모든 D-day·기간 계산의 기준 시각 */
+  now: Date;
+  /** live 제외 + 기간 필터를 통과한 행 */
+  broadcasts: VodBroadcast[];
+  /** 필터와 무관한 전체 수 — 「아직 없다」와 「이 기간에 없다」를 가른다 */
+  totalCount: number;
+  /**
+   * 서버 목록을 아직 한 번도 못 읽었다. 그동안의 빈 목록은 「없다」가 아니라 「모른다」다(QA 2026-10-11)
+   */
+  loading: boolean;
+  /**
+   * 한 번도 못 읽었는데 읽기가 실패했다(POK-441). 주기가 60초라 다음 주기까지 「불러오는 중」으로 두면 실패가 1분 가려진다 —
+   * 못 불러왔다고 말하고 바로 다시 시도하게 한다. 한 번이라도 읽었으면 실패해도 옛 목록을 두므로 늘 false다
+   */
+  failed: boolean;
+  /** 한 번도 못 읽은 채 실패한 횟수. 다시 실패하면 안내를 새로 그려 낭독기가 다시 읽게 화면이 key로 쓴다(PR #377 리뷰) */
+  failCount: number;
+  /** 「다시 시도」로 부른 읽기가 도는 중 */
+  retrying: boolean;
+  /** 지금 바로 새로 읽는다(주기 읽기와 겹쳐도 따로 읽는다) */
+  retry: () => void;
+  visuals: Record<string, VodRowVisual>;
+  filter: VodPeriodFilter;
+  setFilter: (filter: VodPeriodFilter) => void;
+  customRange: VodCustomRange;
+  setCustomRange: (range: VodCustomRange) => void;
+  downloads: Record<string, VodDownloadState>;
+  /** 화질을 고르고 받기를 눌렀을 때 — 지금은 「준비 중」만 알린다 */
+  requestDownload: (streamId: string, quality: string) => void;
+  cancelDownload: (streamId: string) => void;
+  /** 「받기 완료」를 눌러 다시 받기 — 자리를 idle로 되돌린다 */
+  resetDownload: (streamId: string) => void;
+}
+
+// 「지금」을 고정한다. 클라이언트 시계로 계산하면 하이드레이션이 어긋나고(MOCK_GREETING 선례),
+// 목업 날짜와 함께 얼면 D-day가 결정적이라 테스트가 시계를 조작할 필요도 없다.
+// 연동 때는 서버 응답이 CSR로 오므로 이 상수가 `new Date()`가 된다 — 훅 내부만 바뀐다.
+
+/**
+ * MOCK_NOW에서 거슬러 올라간 시각. setHours 같은 지역 시간 계산을 안 쓰는 이유는 D-day가
+ * 실행 환경의 시간대에 따라 하루씩 흔들리지 않게 하려는 것이다 — 「지금」을 얼렸으면
+ * 배지도 얼어야 한다. 하루 안쪽으로 시간을 물리면 보관 만료가 `D-(60 - days)`로 떨어진다.
+ */
+
+/** 보관 만료는 종료 시각 + 60일이다(ADR-004) — D-day가 저절로 행마다 달라진다 */
+
+// 시안 1f의 네 상태를 모두 담고, 기간 칩을 눌렀을 때 목록이 눈에 띄게 달라지도록 종료일을
+// 흩어 뒀다 — 7일 이내 4개 · 30일 이내 9개 · 전체 12개.
+
+const EMPTY_RANGE: VodCustomRange = { from: null, to: null };
+const NO_ROWS: VodBroadcast[] = [];
+const NO_VISUALS: Record<string, VodRowVisual> = {};
+
+// ── clip 창구 배선(POK-251): `GET /api/clip/broadcasts?state=past|live` + 방송마다 카드 수 ──
+
+interface WireBroadcast {
+  streamId: string;
+  status: string;
+  relation: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  vodExpiresAt: string | null;
+  /** 녹화 경로의 키(POK-233). 옛 서버면 빠져 온다 */
+  ingestStreamId?: string | null;
+  /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
+  thumbnailUrl?: string | null;
+  /** 방송 제목(POK-259, 켜진 플랫폼 중에서). 없거나 옛 서버면 비어 온다 */
+  title?: string | null;
+}
+
+function isoMs(iso: string | null): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
+/** 방송마다 재 둔 값. 쿼리 데이터에 함께 두어 화면을 떠났다 돌아와도 남는다: 안 그러면 들어올 때마다 전체 이력의 카드를 다시 센다 */
+interface RowMemory {
+  /** 아직 한 번도 못 셌으면 null */
+  cardCount: number | null;
+  /** 마지막으로 세려고 한 시각(실패해도 넘긴다: 늘 실패하는 방송이 다시 세는 차례를 독차지하지 않게) */
+  countedAt: number;
+  recorded: boolean;
+  /** 재생 서버에 물어 녹화가 없다고 들었다(묻지 못했으면 앞 답을 둔다) */
+  missing: boolean;
+}
+
+interface VodListData {
+  rows: VodBroadcast[];
+  visuals: Record<string, VodRowVisual>;
+  memory: Record<string, RowMemory>;
+}
+
+/** 목록 한 벌. 목록을 못 읽으면 던진다: react-query가 지난 목록을 그대로 두고 다음 주기에 다시 읽는다 */
+async function loadVodList(
+  streamerId: number | null,
+  memory: Record<string, RowMemory>,
+  signal: AbortSignal,
+): Promise<VodListData> {
+  // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰)
+  const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId, signal);
+  const cache = new Map(Object.entries(memory));
+  // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
+  const nowMs = Date.now();
+  const countStale = (b: WireBroadcast) => {
+    const known = cache.get(b.streamId);
+    return (
+      known === undefined ||
+      known.cardCount === null ||
+      isJustEnded(b.endedAt, new Date(nowMs)) ||
+      nowMs - known.countedAt >= CARD_COUNT_TTL_MS
+    );
+  };
+  // 다시 셀 방송. 처음 보는 방송·못 센 방송·방금 끝난 방송은 다 세고, 오래된 방송은 가장 오래전에 센 것부터 한 주기에
+  // CARD_RECOUNT_PER_POLL개까지만. 고정 순서로 고르면 방송이 많을 때 앞쪽이 다시 낡아 뒤쪽은 영영 차례가 안 왔다(PR #256 codex)
+  const recountIds = new Set<string>();
+  const oldStale: { id: string; countedAt: number }[] = [];
+  for (const b of all) {
+    if (!countStale(b)) continue;
+    const known = cache.get(b.streamId);
+    if (known !== undefined && known.cardCount !== null && !isJustEnded(b.endedAt, new Date(nowMs)))
+      oldStale.push({ id: b.streamId, countedAt: known.countedAt });
+    else recountIds.add(b.streamId);
+  }
+  oldStale
+    .sort((x, y) => x.countedAt - y.countedAt)
+    .slice(0, CARD_RECOUNT_PER_POLL)
+    .forEach(({ id }) => recountIds.add(id));
+  const checkRecording = (b: WireBroadcast) =>
+    b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
+  // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
+  // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
+  // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
+  const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
+  // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317). 한 탭에 든 키는 12개까지라 차례가 안 온 키는 쿠키 없이 묻고
+  // 다음 주기에 다시 온다
+  const access = ensurePlaybackAccessForList(
+    all.filter(checkRecording).map((b) => ({ streamId: b.streamId, mediaKey: mediaStreamId(b) })),
+  );
+  const spansOf = (key: string) => {
+    let found = spansByKey.get(key);
+    if (found === undefined) {
+      found = Promise.resolve(access.get(key)).then(() => lookupRecordingSpans(key));
+      spansByKey.set(key, found);
+    }
+    return found;
+  };
+  await runLimited(
+    all.filter((b) => recountIds.has(b.streamId) || checkRecording(b)),
+    ROW_READ_PARALLEL,
+    async (b) => {
+      if (signal.aborted) return;
+      const known = cache.get(b.streamId);
+      const recount = known === undefined || recountIds.has(b.streamId);
+      const [fetched, spans] = await Promise.all([
+        known !== undefined && !recount
+          ? Promise.resolve(known.cardCount)
+          : fetchAllJumpCards(b.streamId, signal).then(
+              (cards) => cards.length,
+              () => null,
+            ),
+        // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
+        checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
+      ]);
+      // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
+      // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
+      // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
+      // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
+      const recorded =
+        known?.recorded === true ||
+        (spans !== null &&
+          recordingTimeline(
+            spans,
+            recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
+            isoMs(b.endedAt),
+          ) !== null);
+      cache.set(b.streamId, {
+        cardCount: fetched ?? known?.cardCount ?? null,
+        countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
+        // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
+        // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
+        // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
+        recorded,
+        missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
+      });
+    },
+  );
+  const rows: VodBroadcast[] = all.map((b) => ({
+    streamId: b.streamId,
+    // 서버 상태가 정본이다. 녹화 재생 서버가 있고 그 방송의 녹화가 실제로 있을 때만 「다시 보기 가능」으로 올린다
+    status:
+      b.status === 'ended' && cache.get(b.streamId)?.recorded
+        ? 'vod_ready'
+        : ((b.status as VodBroadcastStatus) ?? 'ended'),
+    relation: b.relation === 'EDITOR' ? 'EDITOR' : 'OWNER',
+    startedAt: b.startedAt,
+    endedAt: b.endedAt,
+    vodExpiresAt: b.vodExpiresAt,
+    thumbnailUrl: b.thumbnailUrl ?? null,
+  }));
+  const titles = new Map(all.map((b) => [b.streamId, broadcastTitle(b)]));
+  const visuals: Record<string, VodRowVisual> = {};
+  for (const b of rows) {
+    const dur =
+      b.startedAt && b.endedAt
+        ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
+        : null;
+    visuals[b.streamId] = {
+      title: titles.get(b.streamId) ?? b.streamId,
+      durationSec: dur,
+      cardCount: cache.get(b.streamId)?.cardCount ?? 0,
+      recordingMissing: b.status === 'ended' && cache.get(b.streamId)?.missing === true,
+    };
+  }
+  return { rows, visuals, memory: Object.fromEntries(cache) };
+}
+
+export function vodListQueryOptions(streamerId: number | null) {
+  const queryKey = ['vod-list', streamerId] as const;
+  return queryOptions({
+    queryKey,
+    queryFn: ({ client, signal }) =>
+      loadVodList(streamerId, client.getQueryData<VodListData>(queryKey)?.memory ?? {}, signal),
+    // 받아 둔 목록을 바로 보여 주고 뒤에서 다시 읽는다. 금방 돌아오면 읽지 않는다: 탭을 오갈 때마다 전체 목록을 읽지 않게
+    staleTime: REVISIT_FRESH_MS,
+    // 카드 수를 다시 세는 간격보다 길게 둔다: 금방 돌아오면 다시 세지 않는다
+    gcTime: 3 * CARD_COUNT_TTL_MS,
+    refetchInterval: LIST_POLL_MS,
+    // 다음 주기가 곧 다시 읽고, 첫 읽기 실패는 바로 말해야 한다(POK-441)
+    retry: false,
+  });
+}
+
+export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
+  // 고른 채널(POK-390). ChannelScope가 채널이 바뀌면 화면을 다시 세운다
+  const streamerId = useChannelStreamerId();
+  const { toast } = useToast();
+  const [filter, setFilter] = useState<VodPeriodFilter>('all');
+  const [customRange, setCustomRange] = useState<VodCustomRange>(EMPTY_RANGE);
+  const [downloads, setDownloads] = useState<Record<string, VodDownloadState>>(
+    () => options.downloads ?? {},
+  );
+  const injected = options.broadcasts !== undefined;
+  const list = useQuery({ ...vodListQueryOptions(streamerId), enabled: !injected });
+  const { refetch, dataUpdatedAt } = list;
+  const fetched = list.data?.rows ?? NO_ROWS;
+  const fetchedVisuals = list.data?.visuals ?? NO_VISUALS;
+  // 한 번도 못 읽었을 때만 실패로 친다. 한 번이라도 읽었으면 실패해도 옛 목록을 두고 다음 주기를 기다린다
+  const failCount = list.data === undefined ? list.errorUpdateCount : 0;
+  const [retrying, setRetrying] = useState(false);
+  const [openedAt] = useState(() => new Date());
+  const now = useMemo(
+    () => (dataUpdatedAt === 0 ? openedAt : new Date(dataUpdatedAt)),
+    [dataUpdatedAt, openedAt],
+  );
+
+  const source = options.broadcasts ?? fetched;
+  const visuals = options.visuals ?? fetchedVisuals;
+
+  const setDownload = useCallback((streamId: string, state: VodDownloadState) => {
+    setDownloads((prev) => ({ ...prev, [streamId]: state }));
+  }, []);
+  const requestDownload = useCallback(() => {
+    track('pending_feature_clicked', { feature: 'vod_download' }); // 수요를 본다 (POK-357)
+    toast({
+      tone: 'info',
+      title: '준비 중인 기능이에요',
+      description: '풀 VOD 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
+    });
+  }, [toast]);
+  const cancelDownload = useCallback(
+    (streamId: string) => setDownload(streamId, VOD_DOWNLOAD_IDLE),
+    [setDownload],
+  );
+  const resetDownload = useCallback(
+    (streamId: string) => setDownload(streamId, VOD_DOWNLOAD_IDLE),
+    [setDownload],
+  );
+  const retry = useCallback(() => {
+    if (injected) return;
+    setRetrying(true);
+    // 목록은 쪽마다 시한을 받아 다 합치면 길어진다: 도는 표시에만 상한을 둔다. 다음 주기나 다음 클릭이 다시 읽는다
+    void Promise.race([
+      refetch(),
+      new Promise<void>((resolve) => window.setTimeout(resolve, RETRY_SPINNER_MAX_MS)),
+    ]).finally(() => setRetrying(false));
+  }, [injected, refetch]);
+
+  const past = useMemo(() => excludeLive(source), [source]);
+  const baseNow = options.now ?? now;
+  const broadcasts = useMemo(
+    () => filterByPeriod(past, filter, customRange, baseNow),
+    [past, filter, customRange, baseNow],
+  );
+
+  return {
+    now: baseNow,
+    broadcasts,
+    totalCount: past.length,
+    loading: !injected && list.data === undefined,
+    failed: !injected && failCount > 0,
+    failCount,
+    retrying,
+    retry,
+    visuals,
+    filter,
+    setFilter,
+    customRange,
+    setCustomRange,
+    downloads,
+    requestDownload,
+    cancelDownload,
+    resetDownload,
+  };
+}

@@ -1,3 +1,17 @@
+# 🔴 RANDOM_PORT 톰캣도 루프백에만 붙인다 — 기본값(주소 없음)은 와일드카드다.
+# 와일드카드로 잡은 임시 포트는 자리를 못 지킨다: 커널이 IPv6 와일드카드와 IPv4 루프백을
+# 주소 계열이 달라 충돌로 보지 않아, 뒤늦게 뜬 아무 프로세스나 127.0.0.1:같은포트를 잡을 수
+# 있고 잡으면 더 구체적인 주소라 localhost 트래픽을 통째로 가져간다. 그러면 시험이
+# 「연결은 됐는데 우리 서버가 아니었다」로 깨지고 원인이 우리 코드처럼 보인다 —
+# clip/CLAUDE.md의 StripeHeadOfLineTest 「header parser received no bytes」가 그 모양이다.
+# 실측(2026-08-26): 이 줄이 없으면 톰캣 포트를 127.0.0.1로 가로채는 데 100% 성공했다.
+# 같은 뿌리를 FakeAuth도 밟고 있었다(전수 16회 중 2회 빨간불) — 거기는 코드에서 고쳤다.
+server:
+  address: 127.0.0.1
+  # 셸에 FORWARD_HEADERS_STRATEGY가 export돼 있어도 시험은 기본값(미설정)을 잰다 — 이 줄이 기본 yml의 placeholder
+  # 줄을 덮는다(auth application-test.yml 과 같다). 전략이 필요한 시험은 @TestPropertySource로 따로 준다.
+  forward-headers-strategy: ""
+
 spring:
   jpa:
     hibernate:
@@ -8,3 +22,85 @@ spring:
 pokeclip:
   cors:
     allowed-origins: http://localhost:3000
+    allow-credentials: true
+
+  # playback.*는 일부러 비워 둔다(꺼짐). 출입증 시험(PlaybackAccessControllerTest)이 자기
+  # @DynamicPropertySource로 넷을 채워 컨텍스트 하나를 더 쓴다 — 나머지 컨텍스트가 「꺼짐」이라
+  # 503 갈래는 그쪽에서 잰다. 셋 중 일부만 채우면 부팅이 거부되므로 여기 하나만 두면 안 된다.
+
+  jwt:
+    # TestTokens.SECRET과 같은 문자열이어야 한다. 갈리면 인증 시험이 통째로 401이 된다.
+    secret: test-only-jwt-secret-at-least-32-bytes!!
+
+  internal-api:
+    token: test-only-internal-token-32bytes-long!!
+    # 셸에 EXPIRED_BROADCASTS_TOKEN·EXPIRED_BROADCASTS_ALLOWED_CIDRS가 export돼 있어도 시험은 닫힌 창구를 잰다 —
+    # 이 두 줄이 기본 yml의 placeholder 줄을 덮는다(auth application-test.yml 의 stream-key-resolve 와 같다).
+    # 창구를 여는 시험의 @TestPropertySource는 이것보다 위라 그쪽은 계속 열린다.
+    expired-broadcasts:
+      token: ""
+      allowed-cidrs: ""
+
+  auth-client:
+    # 🔴 이 줄이 없으면 clip의 모든 @SpringBootTest가 죽는다. base-url의 운영 기본값이
+    # 비어 있고(부팅 게이트), @ConfigurationPropertiesScan이 이 프로퍼티를 모든 컨텍스트에
+    # 올리며, DelegationResolveClient가 조건 없이 만들어져 validate()가 전 부팅을 막는다
+    # (계획 검증 실측: HealthEndpointTest FAILED ← IllegalStateException).
+    #
+    # 🔴 스프링 시험에서는 이 값이 실제로 쓰이지 않는다 — IntegrationTestSupport가
+    # @DynamicPropertySource로 가짜 auth의 주소를 덮는다(POK-174). 그래서 「덮어쓰기를
+    # 빠뜨리면 연결 거부로 드러난다」는 옛 설명은 더 이상 맞지 않는다. 지금 그 자리를
+    # 지키는 것은 가짜 auth의 초기 응답이 503이라는 것이다 — 답을 안 건 시험은 통과가
+    # 아니라 거절을 받는다.
+    #
+    # 컨텍스트를 안 띄우는 시험(AccessibleClientTest·DelegationResolveClientTest)은
+    # 각자 가짜 서버를 세워 생성자에 직접 넣으므로 이 값과 무관하다.
+    base-url: http://127.0.0.1:1
+
+  collector-client:
+    # 🔴 아무도 안 듣는 포트. 스프링 시험에서는 실제로 쓰이지 않는다 —
+    # IntegrationTestSupport가 @DynamicPropertySource로 가짜 수집기의 주소를 덮는다.
+    # 그래도 비워 두지 않는 이유는, 비면 CollectorClient가 「꺼짐」이 되어 문 셋이 전부
+    # 503으로 접히고 그 시험들이 무엇을 재는지 모르게 되기 때문이다.
+    base-url: http://127.0.0.1:1
+    connect-timeout: 2s
+    read-timeout: 3s
+
+  jump-card:
+    stream:
+      # 시험은 한 사용자로 연결을 여러 번 열고 닫는다. 끊긴 자리는 즉시 반납되지 않아서
+      # (서버는 다음 쓰기가 실패해야 안다) 운영 기본값 4로는 뒤 시험이 503으로 오염된다.
+      # 상한 자체를 재는 시험은 자기 @TestPropertySource로 4를 다시 건다.
+      max-per-user: 50
+
+  youtube-video:
+    # 시험은 순회를 돌리지 않는다(첫 순회가 한 시간 뒤). YoutubeVideoCheckTest가 확인 본체를 손으로 부른다.
+    check-interval: PT1H
+    check-after: P30D
+
+  purge:
+    # 시험은 정리기를 돌리지 않는다(첫 순회가 한 시간 뒤). StreamerPurgerTest가 정리 본체를 손으로 부른다.
+    interval: PT1H
+
+  render:
+    # 시험은 기본 꺼짐. 주문 문 시험(RenderRequestControllerTest)이 자기 @DynamicPropertySource로 LocalStack 큐를
+    # 채워 컨텍스트 하나를 더 쓴다(출입증 시험과 같은 모양). 보고 문·정리기 시험은 큐 없이 표만 쓴다.
+    enabled: false
+    region: ap-northeast-2
+    outbox-retry-interval: PT30S
+    reconcile-interval: PT1M
+    max-attempts: 3
+    max-message-bytes: 204800
+
+  broadcast:
+    intake:
+      # 테스트는 큐에 안 붙는다. 진짜 왕복은 SqsIntakeEndToEndTest가 LocalStack으로 잰다.
+      enabled: false
+      region: ap-northeast-2
+      wait-time: 20s
+      max-messages: 10
+    reaper:
+      # 시험은 스케줄러를 안 켠다 — 치우개는 StaleBroadcastReaperTest가 손으로 만들어 한 회차씩 돌린다.
+      enabled: false
+      interval: PT1M
+      grace: PT30M

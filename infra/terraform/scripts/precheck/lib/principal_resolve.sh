@@ -1,0 +1,619 @@
+# shellcheck shell=bash
+# 부품끼리 · principal-check.sh 와 전역 변수를 나눠 쓴다(각 함수 주석의
+# Globals) — 파일 하나만 검사하면 정의 · 사용 쪽이 안 보인다.
+# shellcheck disable=SC2034,SC2154
+#
+# 2-3 판정의 주체 · 대상 해석(계획 M17b 2절 (3)(a) · (b)). 읽기 호출만 하고
+# 모두 --cli-input-json file:// 로 넘긴다(aws_call). principal-check.sh 가
+# source 한다 — aws_call · fail_call · die · 데이터 배열(principal_data.sh)은
+# 부르는 쪽에 있다.
+#
+# 주체: instance-profile → iam get-instance-profile(역할 ARN — 같은 역할이면
+# 한 단위로 합침), role → iam get-role, user → iam get-user. NoSuchEntity 와
+# 「인스턴스 프로필에 역할 0개」 만 PRINCIPAL_MISSING 이고, 그 밖 오류는 종료
+# 2 다(cc348-5). get-role · get-user 의 성공 응답은 ARN 이 정확히 하나여야
+# 한다(빈 출력도 종료 2).
+#
+# 대상: 단계와 무관한 해석(tag: · arn: · zone: · input: · prodrole)은 행마다
+# 한 번,
+# 주체에 매인 해석(self:group 의 그룹 · policy:attached 의 고객 관리형
+# 정책)은 단위마다 한 번 한다. arn: 이 로그 그룹 ARN(…:log-group:<이름>)
+# 이면 이름 꼴과 「:log-stream:」 을 붙인 꼴 두 ARN 을 묻는다 — IAM 정책은
+# 로그 그룹을 대개 「이름:*」 로 적어(CloudWatch Logs API 참조 LogGroup.arn),
+# 이름 꼴만 물으면 「log-group:*:*」 같은 허용을 놓친다. tag:s3:bucket/<키>
+# 는 필터 s3:bucket 으로 푼 버킷 ARN 마다 「/<키>」 를 붙인 객체 ARN 을 묻는다
+# (이름 끝이 생성 때 정해지는 버킷의 객체 표본 — apex 객체, POK-479). 질문
+# ARN 에 「*」 는 넣지 않는다. tag: · zone: · prodrole 이 0건이면
+# TARGET_NONE 이다. zone: 은 뒤 점을 맞춘 이름이 같고 공개(PrivateZone =
+# False)인 존이 정확히 1건이어야 하고, 2건 이상이면 종료 2 다(cc348-3). 존
+# 목록이 잘렸으면(IsTruncated True · NextDNSName 있음 — 한 번에 최대 100개)
+# 다음 쪽의 같은 이름 공개 존을 못 보므로 종료 2 다.
+#
+# input:<이름> 은 apply 뒤에야 ARN 이 정해지는 자원(관리형 마스터 비밀 —
+# 이름 끝이 생성 때 정해짐)을 kty 가 증거 루트에 적은 입력 파일
+# input-<이름>.txt 로 푼다(rt1a 종결 r1 H4 · 런북 runtime-1a 3). 파일이
+# 없으면 TARGET_NONE 이다. 파일은 evidence::check_file 을 통과해야 하고(0700
+# 루트 · 링크 아닌 0600 일반 파일), 줄마다 이 계정 · 행의 리전의 비밀 전체
+# ARN 이어야 한다 — 이름이 입력 이름의 접두(principal::input_name_prefix —
+# rds-master 는 rds!db-)로 시작하고, 끝이 「-」 + 영숫자 6자(Secrets Manager
+# 가 이름 뒤에 붙이는 접미)다. 부분 ARN(접미 없음)은 받지 않는다 — 시뮬레이터
+# 는 없는 자원도 평가해, 전체 ARN 에만 걸린 dev 정책을 놓친다. 빈 파일 · 꼴
+# 밖 줄은 종료 2 다. 파일 이름 말고는 표준 오류에 적지 않는다.
+# 참고: https://docs.aws.amazon.com/secretsmanager/latest/userguide/whats-in-a-secret.html
+# (ARN 꼴 SecretName-6RandomCharacters) ·
+# https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html
+# (이름 글자 /_+=.@- · 접미는 「-」 + 6자).
+#
+# 추가 문맥에 ${ACM_VALIDATION}(prod ACM 검증 레코드 이름 자리 — POK-484)이
+# 든 행은 존이 풀리면 이름도 푼다(실행마다 한 번). prod 인증서가 있는 두
+# 리전(ACM_REGIONS)에서 Environment = prod 태그의 인증서를 찾고, 인증서마다
+# acm describe-certificate 로 검증 옵션의 레코드 이름을 읽어 끝 점을 떼고
+# 겹침을 하나로 합친다. 이름은 ACM 이 정하는 값이라 데이터에 적을 수 없고,
+# 대표 이름으로 물으면 실제 이름을 그대로(StringEquals) 또는 일부 글자로
+# (StringLike) 적은 dev 정책을 놓친다 — 실제 이름으로 묻는다. 이름이 0개면
+# TARGET_NONE 이다(첫 단계 O7b 직전에는 인증서가 아직 없어 정상). 레코드
+# 이름이 없는 검증 옵션(None — 레코드가 아직 안 만들어짐 · DNS 검증이 아님)과
+# 정규화 꼴(「_」 로 시작 · 소문자 · 숫자 · 「_」 · 「-」 · 「.」 — 이스케이프가
+# 필요 없는 글자) 밖 이름은 종료 2 다. 질문은 이름마다 하나다(ForAllValues
+# 조건은 이름을 모아 물으면 더 좁게 판정한다).
+# 참고: https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html
+# (이름은 도메인 · 계정마다 ACM 이 만든 「_」 + 긴 문자열 · 자동 갱신은 그
+# 레코드가 남아 있어야 함) ·
+# https://docs.aws.amazon.com/acm/latest/APIReference/API_DomainValidation.html
+# (ResourceRecord 는 필수 아님) ·
+# https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/specifying-conditions-route53.html
+# (레코드 이름 문맥의 정규화 꼴 · StringEquals 로 레코드 이름을 지명하는 예).
+
+readonly PROD_ROLE_PATH='/pokeclip/prod/'
+readonly AWS_MANAGED_POLICY='arn:aws:iam::aws:policy/'
+readonly ZONE_ID_PATTERN='^/hostedzone/[A-Z0-9]+$'
+# 로그 그룹 ARN 의 둘째 질문 꼴에 붙이는 끝(별표 없는 로그 스트림 꼴).
+readonly LOG_STREAM_SUFFIX=':log-stream:'
+# input: 해석의 입력 파일 이름 앞부분(증거 루트 바로 아래).
+readonly INPUT_PREFIX='input-'
+# 비밀 ARN 의 이름 접두 뒤(이름 나머지 + 「-」 + 영숫자 6자 접미).
+readonly SECRET_TAIL_PATTERN='^[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$'
+# prod 인증서가 있는 리전(prod/certs — 서울 ALB · us-east-1 CloudFront).
+ACM_REGIONS=(ap-northeast-2 us-east-1)
+readonly ACM_REGIONS
+# 인증서 하나의 검증 옵션마다 레코드 이름 한 줄(없으면 None — 안쪽 목록이라
+# 투영이 null 을 빼지 않는다).
+ACM_QUERY='Certificate.DomainValidationOptions[].'
+ACM_QUERY+='[ResourceRecord.Name]'
+readonly ACM_QUERY
+# 끝 점을 뗀 검증 레코드 이름(머리 주석의 정규화 꼴).
+readonly VALIDATION_NAME_PATTERN='^_[a-z0-9_-]+(\.[a-z0-9_-]+)+$'
+# 존 목록 질의 — 첫 줄은 「IsTruncated<탭>NextDNSName」, 그 뒤 존마다 「이름<탭>
+# ID<탭>PrivateZone」(text 출력은 스칼라를 먼저, 목록을 줄마다 낸다).
+ZONE_QUERY='[IsTruncated,NextDNSName,'
+ZONE_QUERY+='HostedZones[].[Name,Id,Config.PrivateZone]]'
+readonly ZONE_QUERY
+
+# 주체 단위(같은 ARN 을 합친 것 — 같은 색인).
+u_arn=()
+u_keys=()
+u_kind=()
+u_groups=()
+u_attached=()
+# PRINCIPAL_MISSING 인 주체 키.
+missing_keys=()
+# 대상 행의 단계 무관 해석 결과(t_* 와 같은 색인 — ARN 줄들, 0건이면 빈 값)
+# 와 TARGET_NONE 여부(1).
+tr_arns=()
+tr_none=()
+# 대상 행의 검증 레코드 이름(t_* 와 같은 색인 — 이름 줄들, 자리표시자 없는
+# 행은 빈 값).
+tr_names=()
+# 검증 레코드 이름 해석 결과(이름 줄들)와 해석했는지.
+validation_names=""
+validation_done=0
+# prodrole 해석 결과(ARN 줄들)와 해석했는지.
+prod_roles=""
+prod_roles_done=0
+# principal::read_list · principal::resolve_principal 이 남기는 값.
+list_items=""
+resolved_arn=""
+merged_lines=""
+
+#######################################
+# ARN 의 마지막 「/」 뒤(이름)를 낸다.
+# Arguments:
+#   ARN.
+# Outputs:
+#   이름.
+#######################################
+principal::arn_name() {
+  printf '%s\n' "${1##*/}"
+}
+
+#######################################
+# 마지막 읽기 호출의 탭 · 줄바꿈 구분 출력을 list_items(줄마다 하나)로 옮긴다.
+# 항목마다 정규식을 통과해야 한다(아니면 응답 꼴 — 종료 2).
+# Globals:
+#   call_out, list_items, req_n
+# Arguments:
+#   항목 정규식.
+#######################################
+principal::read_list() {
+  local pattern="$1" rest item
+  rest="${call_out//$'\t'/$'\n'}"$'\n'
+  list_items=""
+  while [[ -n "${rest}" ]]; do
+    item="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    [[ -n "${item}" ]] || continue
+    if ! [[ "${item}" =~ ${pattern} ]] || ! precheck::is_plain "${item}"; then
+      die "읽기 응답의 꼴이 다름(res-${req_n}.txt)"
+    fi
+    list_items+="${item}"$'\n'
+  done
+}
+
+#######################################
+# 이 계정의 IAM ARN 정규식을 낸다.
+# Globals:
+#   account
+# Arguments:
+#   종류(role · user · group · policy).
+# Outputs:
+#   정규식.
+#######################################
+principal::iam_pattern() {
+  printf '^arn:aws:iam::%s:%s/[A-Za-z0-9+=,.@_/-]+$\n' "${account}" "$1"
+}
+
+#######################################
+# 주체 하나를 ARN 으로 푼다. 없으면 resolved_arn 이 빈 값이다.
+# Globals:
+#   p_kind, p_name, resolved_arn, call_err, list_items
+# Arguments:
+#   p_* 색인.
+#######################################
+principal::resolve_principal() {
+  local i="$1" kind="${p_kind[$1]}" body query call field pattern
+  case "${kind}" in
+    instance-profile)
+      call=get-instance-profile field=InstanceProfileName
+      query='InstanceProfile.Roles[].Arn'
+      pattern="$(principal::iam_pattern role)"
+      ;;
+    role)
+      call=get-role field=RoleName query=Role.Arn
+      pattern="$(principal::iam_pattern role)"
+      ;;
+    *)
+      call=get-user field=UserName query=User.Arn
+      pattern="$(principal::iam_pattern user)"
+      ;;
+  esac
+  body="{\"${field}\":\"${p_name[i]}\"}"
+  resolved_arn=""
+  if ! aws_call "${body}" iam "${call}" --query "${query}"; then
+    grep -qF '(NoSuchEntity)' -- "${call_err}" && return 0
+    fail_call "주체 해석"
+  fi
+  principal::read_list "${pattern}"
+  if [[ "${list_items}" == *$'\n'?* ||
+    ( "${kind}" != instance-profile && -z "${list_items}" ) ]]; then
+    die "주체 응답에 ARN 이 하나가 아님(res-${req_n}.txt)"
+  fi
+  resolved_arn="${list_items%$'\n'}"
+}
+
+#######################################
+# 주체를 모두 풀어 단위로 합치고 principals.tsv 에 남긴다.
+# Globals:
+#   p_key, p_kind, u_arn, u_keys, u_kind, missing_keys, evidence_dir
+#######################################
+principal::resolve_principals() {
+  local i j kind record=""
+  for i in "${!p_key[@]}"; do
+    principal::resolve_principal "${i}"
+    record+="${p_key[i]}"$'\t'"${p_kind[i]}"$'\t'"${resolved_arn:-MISSING}"
+    record+=$'\n'
+    if [[ -z "${resolved_arn}" ]]; then
+      missing_keys+=("${p_key[i]}")
+      continue
+    fi
+    kind=role
+    [[ "${p_kind[i]}" == user ]] && kind=user
+    for j in ${u_arn[@]+"${!u_arn[@]}"}; do
+      if [[ "${u_arn[j]}" == "${resolved_arn}" ]]; then
+        u_keys[j]+=",${p_key[i]}"
+        continue 2
+      fi
+    done
+    u_arn+=("${resolved_arn}")
+    u_keys+=("${p_key[i]}")
+    u_kind+=("${kind}")
+    u_groups+=("")
+    u_attached+=("")
+  done
+  precheck::write_evidence "${evidence_dir}/principals.tsv" '%s' "${record}"
+}
+
+#######################################
+# prod 역할(경로 /pokeclip/prod/)을 한 번만 푼다.
+# Globals:
+#   prod_roles, prod_roles_done, list_items, PROD_ROLE_PATH
+#######################################
+principal::resolve_prod_roles() {
+  [[ "${prod_roles_done}" -eq 1 ]] && return 0
+  aws_call "{\"PathPrefix\":\"${PROD_ROLE_PATH}\"}" iam list-roles \
+    --query 'Roles[].Arn' || fail_call "prod 역할 해석"
+  principal::read_list "$(principal::iam_pattern role)"
+  prod_roles="${list_items}"
+  prod_roles_done=1
+}
+
+#######################################
+# zone: 행을 존 ARN 으로 푼다(뒤 점을 맞춘 이름 일치 · 공개 · 정확히 1건).
+# 목록이 잘렸으면 멈춘다.
+# Globals:
+#   call_out, list_items, req_n, ZONE_ID_PATTERN, ZONE_QUERY
+# Arguments:
+#   존 이름.
+#######################################
+principal::resolve_zone() {
+  local want="${1%.}." rest line name id private found=""
+  aws_call "{\"DNSName\":\"${want}\"}" route53 list-hosted-zones-by-name \
+    --query "${ZONE_QUERY}" || fail_call "존 해석"
+  line="${call_out%%$'\n'*}"
+  case "${line}" in
+    $'False\tNone') ;;
+    True$'\t'* | False$'\t'?*) die "존 목록이 잘림(res-${req_n}.txt)" ;;
+    *) die "존 목록 응답의 꼴이 다름(res-${req_n}.txt)" ;;
+  esac
+  rest="${call_out#*$'\n'}"$'\n'
+  [[ "${call_out}" == *$'\n'* ]] || rest=""
+  list_items=""
+  while [[ -n "${rest}" ]]; do
+    line="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    [[ -n "${line}" ]] || continue
+    precheck::tsv_ok "${line}" 3 || die "존 목록 응답의 꼴이 다름(res-${req_n}.txt)"
+    name="${line%%$'\t'*}"
+    private="${line##*$'\t'}"
+    id="${line#*$'\t'}"
+    id="${id%%$'\t'*}"
+    [[ "${id}" =~ ${ZONE_ID_PATTERN} ]] ||
+      die "존 목록 응답의 꼴이 다름(res-${req_n}.txt)"
+    [[ "${name%.}." == "${want}" && "${private}" == False ]] || continue
+    [[ -z "${found}" ]] || die "같은 이름의 공개 존이 둘 이상(res-${req_n}.txt)"
+    found="arn:aws:route53:::hostedzone/${id#/hostedzone/}"
+  done
+  [[ -z "${found}" ]] || list_items="${found}"$'\n'
+}
+
+#######################################
+# 입력 파일의 줄 하나가 이 계정 · 행의 리전의 기대 이름 비밀 전체 ARN 인지
+# 본다(머리 주석).
+# Arguments:
+#   줄, ARN 앞부분(이름 앞까지), 이름 접두.
+# Returns:
+#   맞으면 0.
+#######################################
+principal::input_arn_ok() {
+  local line="$1" head="$2" name_prefix="$3" tail
+  principal::concrete_arn "${line}" || return 1
+  [[ "${line}" == "${head}${name_prefix}"* ]] || return 1
+  tail="${line#"${head}${name_prefix}"}"
+  [[ "${tail}" =~ ${SECRET_TAIL_PATTERN} ]]
+}
+
+#######################################
+# input: 행을 증거 루트의 입력 파일로 푼다(머리 주석). 파일이 없으면
+# list_items 가 빈 값이다.
+# Globals:
+#   t_region, list_items, account, INPUT_PREFIX
+# Arguments:
+#   t_* 색인, 입력 이름.
+#######################################
+principal::resolve_input() {
+  local t="$1" name="${INPUT_PREFIX}$2.txt" root file line head name_prefix
+  name_prefix="$(principal::input_name_prefix "$2")" ||
+    die "모르는 입력 이름(${name})"
+  head="arn:aws:secretsmanager:${t_region[t]}:${account}:secret:"
+  root="$(evidence::root)" || exit 2
+  file="${root}/${name}"
+  list_items=""
+  [[ -e "${file}" || -L "${file}" ]] || return 0
+  evidence::check_file "${file}" || exit 2
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -n "${line}" ]] || continue
+    principal::input_arn_ok "${line}" "${head}" "${name_prefix}" ||
+      die "입력 파일의 줄이 이 계정 · 행의 리전 · 기대 이름의 비밀 전체 ARN" \
+        "이 아님(${name})"
+    list_items+="${line}"$'\n'
+  done <"${file}" || die "입력 파일을 읽지 못함(${name})"
+  [[ -n "${list_items}" ]] || die "입력 파일이 비어 있음(${name})"
+}
+
+#######################################
+# 태그로 푼 버킷 ARN(list_items)마다 「/<키>」 를 붙여 객체 ARN 으로 바꾼다
+# (tag:s3:bucket/<키>). 버킷 ARN 이 아닌 줄은 응답 꼴이다(종료 2).
+# Globals:
+#   list_items, req_n
+# Arguments:
+#   객체 키.
+#######################################
+principal::append_object_key() {
+  local rest="${list_items}" item
+  list_items=""
+  while [[ -n "${rest}" ]]; do
+    item="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    if [[ "${item}" != arn:aws:s3:::?* ||
+      "${item}" == arn:aws:s3:::*/* ]]; then
+      die "읽기 응답의 꼴이 다름(res-${req_n}.txt)"
+    fi
+    list_items+="${item}/$1"$'\n'
+  done
+}
+
+#######################################
+# 한 리전의 Environment = prod 태그 자원 ARN 을 읽는다(응답은 call_out).
+# Arguments:
+#   리전, 자원 유형 필터(서비스:유형).
+#######################################
+principal::get_tagged() {
+  local body='{"TagFilters":[{"Key":"Environment","Values":["prod"]}],'
+  body+="\"ResourceTypeFilters\":[\"$2\"]}"
+  aws_call "${body}" resourcegroupstaggingapi get-resources --region "$1" \
+    --query 'ResourceTagMappingList[].ResourceARN' || fail_call "태그 해석"
+}
+
+#######################################
+# 인증서 하나의 검증 레코드 이름을 merged_lines 에 더한다(끝 점 뗌 · 겹침
+# 하나로). 레코드 이름이 없는 검증 옵션 · 정규화 꼴 밖 이름은 종료 2 다.
+# Globals:
+#   list_items, merged_lines, req_n, ACM_QUERY, VALIDATION_NAME_PATTERN
+# Arguments:
+#   리전, 인증서 ARN.
+#######################################
+principal::add_validation_names() {
+  local rest item name
+  aws_call "{\"CertificateArn\":\"$2\"}" acm describe-certificate \
+    --region "$1" --query "${ACM_QUERY}" || fail_call "검증 이름 해석"
+  principal::read_list '^[^[:space:]]+$'
+  rest="${list_items}"
+  while [[ -n "${rest}" ]]; do
+    item="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    [[ "${item}" != None ]] ||
+      die "검증 레코드 이름이 없는 인증서(res-${req_n}.txt)"
+    name="${item%.}"
+    [[ "${name}" =~ ${VALIDATION_NAME_PATTERN} ]] ||
+      die "읽기 응답의 꼴이 다름(res-${req_n}.txt)"
+    principal::merge_lines "${name}"$'\n'
+  done
+}
+
+#######################################
+# prod 인증서의 검증 레코드 이름을 한 번만 푼다(머리 주석).
+# Globals:
+#   validation_names, validation_done, list_items, merged_lines, account,
+#   ACM_REGIONS
+#######################################
+principal::resolve_validation_names() {
+  local region certs cert
+  [[ "${validation_done}" -eq 1 ]] && return 0
+  merged_lines=""
+  for region in "${ACM_REGIONS[@]}"; do
+    principal::get_tagged "${region}" acm:certificate
+    principal::read_list \
+      "^arn:aws:acm:${region}:${account}:certificate/[A-Za-z0-9-]+$"
+    certs="${list_items}"
+    while [[ -n "${certs}" ]]; do
+      cert="${certs%%$'\n'*}"
+      certs="${certs#*$'\n'}"
+      principal::add_validation_names "${region}" "${cert}"
+    done
+  done
+  validation_names="${merged_lines}"
+  validation_done=1
+}
+
+#######################################
+# 단계 무관 해석 하나(tag: · arn: · zone: · input: · prodrole)를 list_items
+# 로 낸다.
+# Globals:
+#   t_method, t_region, list_items, account, ACCOUNT_PLACEHOLDER, prod_roles
+# Arguments:
+#   t_* 색인.
+#######################################
+principal::resolve_target_arns() {
+  local t="$1" method="${t_method[$1]}" arn filter
+  list_items=""
+  case "${method}" in
+    arn:*)
+      arn="${method#arn:}"
+      arn="${arn//${ACCOUNT_PLACEHOLDER}/${account}}"
+      list_items="${arn}"$'\n'
+      if [[ "${arn}" == arn:aws:logs:*:log-group:* &&
+        "${arn#*:log-group:}" != *:* ]]; then
+        list_items+="${arn}${LOG_STREAM_SUFFIX}"$'\n'
+      fi
+      ;;
+    tag:*)
+      filter="${method#tag:}"
+      principal::get_tagged "${t_region[t]}" "${filter%%/*}"
+      principal::read_list \
+        '^arn:aws:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[^*[:space:]]+$'
+      [[ "${filter}" != */* ]] || principal::append_object_key "${filter#*/}"
+      ;;
+    zone:*) principal::resolve_zone "${method#zone:}" ;;
+    input:*) principal::resolve_input "${t}" "${method#input:}" ;;
+    prodrole)
+      principal::resolve_prod_roles
+      list_items="${prod_roles}"
+      ;;
+    *) ;;
+  esac
+}
+
+#######################################
+# 이번 단계에서 도는 대상 행의 단계 무관 해석을 하고 targets.tsv 에 남긴다.
+# 검증 레코드 이름 자리가 든 행은 ARN 줄 뒤에 이름 줄을 남기고, 이름이
+# 0개면 TARGET_NONE 이다.
+# Globals:
+#   t_key, t_method, t_active, t_context, tr_arns, tr_none, tr_names,
+#   list_items, validation_names, evidence_dir, VALIDATION_PLACEHOLDER
+#######################################
+principal::resolve_targets() {
+  local t rest record=""
+  for t in "${!t_key[@]}"; do
+    tr_arns[t]=""
+    tr_none[t]=0
+    tr_names[t]=""
+    [[ "${t_active[t]}" -eq 1 ]] || continue
+    case "${t_method[t]}" in
+      self:* | policy:attached) continue ;;
+      *) ;;
+    esac
+    principal::resolve_target_arns "${t}"
+    if [[ -n "${list_items}" &&
+      "${t_context[t]}" == *"${VALIDATION_PLACEHOLDER}"* ]]; then
+      rest="${list_items}"
+      principal::resolve_validation_names
+      tr_names[t]="${validation_names}"
+      list_items=""
+      [[ -z "${validation_names}" ]] || list_items="${rest}"
+    fi
+    tr_arns[t]="${list_items}"
+    if [[ -z "${list_items}" ]]; then
+      tr_none[t]=1
+      record+="${t_key[t]}"$'\t'"TARGET_NONE"$'\n'
+      continue
+    fi
+    rest="${list_items}${tr_names[t]}"
+    while [[ -n "${rest}" ]]; do
+      record+="${t_key[t]}"$'\t'"${rest%%$'\n'*}"$'\n'
+      rest="${rest#*$'\n'}"
+    done
+  done
+  precheck::write_evidence "${evidence_dir}/targets.tsv" '%s' "${record}"
+}
+
+#######################################
+# 붙은 관리형 정책 목록 호출 하나의 고객 관리형 정책을 list_items 로 낸다
+# (AWS 관리형은 뺀다).
+# Globals:
+#   list_items, AWS_MANAGED_POLICY
+# Arguments:
+#   호출(list-attached-*-policies), 요청 칸, 이름.
+#######################################
+principal::attached_policies() {
+  local call="$1" field="$2" name="$3" item rest
+  aws_call "{\"${field}\":\"${name}\"}" iam "${call}" \
+    --query 'AttachedPolicies[].PolicyArn' || fail_call "붙은 정책 해석"
+  principal::read_list '^arn:aws:iam::[a-z0-9]+:policy/[A-Za-z0-9+=,.@_/-]+$'
+  rest="${list_items}"
+  list_items=""
+  while [[ -n "${rest}" ]]; do
+    item="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    [[ "${item}" == "${AWS_MANAGED_POLICY}"* ]] && continue
+    list_items+="${item}"$'\n'
+  done
+}
+
+#######################################
+# merged_lines(줄 목록)에 없는 줄들만 더한다(순서 유지). 명령 치환을 쓰지
+# 않는다 — 끝 줄바꿈이 잘려 목록이 깨지지 않게.
+# Globals:
+#   merged_lines
+# Arguments:
+#   더할 줄들.
+#######################################
+principal::merge_lines() {
+  local rest="$1" item
+  while [[ -n "${rest}" ]]; do
+    item="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    [[ $'\n'"${merged_lines}" == *$'\n'"${item}"$'\n'* ]] ||
+      merged_lines+="${item}"$'\n'
+  done
+}
+
+#######################################
+# 이번 단계의 대상 행 가운데 해석 방법이 하나라도 그것인지 본다.
+# Globals:
+#   t_method, t_active
+# Arguments:
+#   해석 방법.
+# Returns:
+#   있으면 0.
+#######################################
+principal::uses_method() {
+  local t
+  for t in "${!t_method[@]}"; do
+    [[ "${t_active[t]}" -eq 1 && "${t_method[t]}" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+#######################################
+# 단위 하나의 고객 관리형 정책(자기 · 사용자의 그룹 · prod 역할에 붙은
+# 것)을 u_attached 에 둔다.
+# Globals:
+#   u_arn, u_kind, u_groups, u_attached, prod_roles, list_items,
+#   merged_lines
+# Arguments:
+#   u_* 색인.
+#######################################
+principal::resolve_attached() {
+  local j="$1" rest group role
+  merged_lines=""
+  if [[ "${u_kind[j]}" == role ]]; then
+    principal::attached_policies list-attached-role-policies RoleName \
+      "$(principal::arn_name "${u_arn[j]}")"
+  else
+    principal::attached_policies list-attached-user-policies UserName \
+      "$(principal::arn_name "${u_arn[j]}")"
+  fi
+  principal::merge_lines "${list_items}"
+  rest="${u_groups[j]}"
+  while [[ -n "${rest}" ]]; do
+    group="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    principal::attached_policies list-attached-group-policies GroupName \
+      "$(principal::arn_name "${group}")"
+    principal::merge_lines "${list_items}"
+  done
+  principal::resolve_prod_roles
+  rest="${prod_roles}"
+  while [[ -n "${rest}" ]]; do
+    role="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    principal::attached_policies list-attached-role-policies RoleName \
+      "$(principal::arn_name "${role}")"
+    principal::merge_lines "${list_items}"
+  done
+  u_attached[j]="${merged_lines}"
+}
+
+#######################################
+# 단위마다 주체에 매인 해석(사용자의 그룹 · 붙은 고객 관리형 정책)을 한다.
+# 이번 단계에 self:group · policy:attached 행이 없으면 부르지 않는다.
+# Globals:
+#   u_arn, u_kind, u_groups, list_items
+#######################################
+principal::resolve_unit_targets() {
+  local j need_attached=0 need_groups=0
+  principal::uses_method policy:attached && need_attached=1
+  principal::uses_method self:group && need_groups=1
+  [[ "${need_attached}" -eq 1 ]] && need_groups=1
+  for j in ${u_arn[@]+"${!u_arn[@]}"}; do
+    if [[ "${need_groups}" -eq 1 && "${u_kind[j]}" == user ]]; then
+      aws_call "{\"UserName\":\"$(principal::arn_name "${u_arn[j]}")\"}" iam \
+        list-groups-for-user --query 'Groups[].Arn' ||
+        fail_call "그룹 해석"
+      principal::read_list "$(principal::iam_pattern group)"
+      u_groups[j]="${list_items}"
+    fi
+    if [[ "${need_attached}" -eq 1 ]]; then
+      principal::resolve_attached "${j}"
+    fi
+  done
+}

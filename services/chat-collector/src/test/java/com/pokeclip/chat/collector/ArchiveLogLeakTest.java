@@ -71,7 +71,7 @@ class ArchiveLogLeakTest extends IntegrationTestSupport {
             String raw = "{\"senderChannelId\":\"" + SENDER + "\",\"content\":\"" + CONTENT + "\",\"messageTime\":1754300000000}";
             // tick()은 archive 패키지 안에서만 보인다(이 테스트는 collector 패키지) — 실제 스케줄러로 돌린다.
             archiver.start();
-            archiver.offer(new ArchivableChat("leak-ch", now, raw));
+            archiver.offer(new ArchivableChat(Platform.CHZZK, "leak-ch", now, raw));
             clock.advance(Duration.ofSeconds(62));
             awaitUntil(Duration.ofSeconds(5), () -> archiver.uploadedCount() == 1);
             assertThat(archiver.uploadedCount()).as("실제로 올라가야 유출 검사가 그 경로를 본 것이다").isEqualTo(1);
@@ -125,7 +125,7 @@ class ArchiveLogLeakTest extends IntegrationTestSupport {
     }
 
     private static void uploadOneWithNeedles(S3Client s3, String tag) throws Exception {
-        byte[] body = JsonLinesEncoder.encodeLine(new ArchivableChat("leak-ch", 1L,
+        byte[] body = JsonLinesEncoder.encodeLine(new ArchivableChat(Platform.CHZZK, "leak-ch", 1L,
                 "{\"senderChannelId\":\"" + SENDER + "\",\"content\":\"" + CONTENT + "\"}"));
         new S3ArchiveUploader(s3, BUCKET).upload(new ArchiveObject("chat/leak/" + tag + "-" + UUID.randomUUID() + ".jsonl", body, 1));
     }

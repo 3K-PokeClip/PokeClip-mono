@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.observe;
 
 import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.persist.PersistCounters;
+import com.pokeclip.chat.collector.relay.RelayCounters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /**
  * 30초마다 요약 한 줄. <b>자기 전용 스케줄러를 갖는다.</b>
@@ -40,6 +42,9 @@ public final class SummaryLogger implements AutoCloseable {
     private SummaryLogger() { }
 
     /**
+     * @param stream       어느 방송의 줄인가. <b>값이 아니라 공급자로 받는다</b> — 같은
+     *                     스트리머의 새 방송이 오면 소켓은 그대로 두고 번호만 갈아끼므로
+     *                     (retarget), 붙들어 두면 그 뒤 줄이 전부 끝난 방송 번호를 단다
      * @param sinkFailures 삼킨 싱크 예외의 수를 읽어 오는 곳. ChatSession이 들고
      *                     있는 값이라 공급자로 받는다 — 세션은 재수립마다 바뀐다
      * @param counters     적재 카운터 묶음(persisted·conflicts·poisoned) —
@@ -47,18 +52,19 @@ public final class SummaryLogger implements AutoCloseable {
      * @param dropped      버퍼 상한 초과로 버린 수. 소유가 ChatBuffer라 따로 받는다
      * @param archive      아카이브 카운터 여섯 + runId 묶음. 아카이브가 꺼져 있으면 {@link ArchiveCounters#NONE}
      */
-    public static SummaryLogger start(CollectionMetrics metrics, Heartbeat heartbeat,
-                                      Duration period, LongSupplier sinkFailures,
+    public static SummaryLogger start(Supplier<String> stream, CollectionMetrics metrics,
+                                      Heartbeat heartbeat, Duration period, LongSupplier sinkFailures,
                                       PersistCounters counters, LongSupplier dropped,
-                                      ArchiveCounters archive) {
+                                      ArchiveCounters archive, LongSupplier donationDropped) {
         SummaryLogger logger = new SummaryLogger();
         long periodMillis = period.toMillis();
         logger.scheduler.scheduleAtFixedRate(() -> {
             logger.emitterThreadNames.add(Thread.currentThread().getName());
             try {
-                log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
+                log.info("{}", render(stream.get(), metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
                         counters.persistedCount(), counters.conflictedCount(),
-                        counters.poisonedCount(), dropped.getAsLong(), archive));
+                        counters.poisonedCount(), dropped.getAsLong(), archive,
+                        donationDropped.getAsLong()));
             } catch (RuntimeException e) {
                 // 요약이 터져도 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 요약이 영영 안 나가고,
@@ -70,10 +76,14 @@ public final class SummaryLogger implements AutoCloseable {
     }
 
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
-    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures,
-                                long persisted, long conflicted, long poisoned, long dropped,
-                                ArchiveCounters archive) {
+    public static String render(String stream, CollectionMetrics.Snapshot s, Heartbeat heartbeat,
+                                long sinkFailures, long persisted, long conflicted, long poisoned,
+                                long dropped, ArchiveCounters archive, long donationDropped) {
         return "chat.summary"
+                // <b>첫 항이다.</b> 스트리머가 여럿이면 30초마다 이 줄이 세션 수만큼 나가는데,
+                // 이것이 없으면 <b>서로 구분되지 않는 줄 N개</b>가 된다 — 「일부만 안 걷힌다」를
+                // 로그로 가르는 유일한 열쇠다. 옛 경로는 방송 번호를 몰라 none이다.
+                + " stream=" + stream
                 + " received=" + s.received()
                 + " maxReceiveGap=" + duration(s.maxReceiveGap())
                 + " lastReceivedAt=" + instant(s.lastReceivedAt())
@@ -112,7 +122,13 @@ public final class SummaryLogger implements AutoCloseable {
                 + " uploaded=" + archive.uploadedCount()
                 + " pending=" + archive.pendingCount()
                 + " droppedObjects=" + archive.droppedObjectsCount()
-                + " droppedMessages=" + archive.droppedMessagesCount();
+                + " droppedMessages=" + archive.droppedMessagesCount()
+                // 후원 관측 둘. <b>위 검산 등식 어디에도 안 든다</b> — received가 채팅만 세기
+                // 때문이다(계획 검증 F3). 따로 싣는 이유: 후원은 아카이브에 안 쌓으므로
+                // donationDropped가 오르면 그 후원은 표에도 원본에도 없고
+                // 범위 창구가 메워 줄 길이 없다 — 되찾을 수 없는 유일한 유실이다.
+                + " donations=" + s.donations()
+                + " donationDropped=" + donationDropped;
     }
 
     /**
@@ -132,6 +148,7 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code persisted}·{@code conflicts}·{@code poisoned}·{@code dropped}·
      *       {@code archived}·{@code archiveBufferDropped}·{@code uploaded}·{@code pending}·
      *       {@code droppedObjects}·{@code droppedMessages}·
+     *       {@code donationDropped}·
      *       {@code reconnects}·{@code outage}
      *   <li>{@code archiveRunId}는 누계가 아니라 이 프로세스의 표식이다 — S3 키의
      *       {@code -{runId}.jsonl}과 같은 값이라 이걸로 이 프로세스가 올린 파일을 찾는다
@@ -141,7 +158,11 @@ public final class SummaryLogger implements AutoCloseable {
      *       <b>{@code lastOutageFrom}만 있고 {@code lastOutageTo}가 {@code none}이면
      *       끊긴 채로 끝난 것이다</b> — 그때 {@code outage}는 판정 시각까지의
      *       하한이지 유실의 전부가 아니다
-     *   <li>{@code session}은 경계가 아니라 몇 번째 세션의 판정인가다
+     *   <li>{@code session}은 경계가 아니라 몇 번째 세션의 판정인가다. <b>러너 자신의
+     *       세션 번호라 편지 경로에서는 0이다</b> — 러너가 세션을 하나도 안 열기 때문이고,
+     *       그 경로에서 「몇을 걷었나」를 말하는 것은 바로 아래 {@code registrySessions}다
+     *   <li>{@code registrySessions}는 편지로 <b>실제로 세운</b> 세션의 누계다(닫힌 것도 센다).
+     *       번호 갈아끼움은 안 센다 — 세션도 소켓도 그대로라 새로 선 것이 아니다
      *   <li>{@code reason}은 경계가 아니라 그 판정의 사유다
      * </ul>
      *
@@ -167,23 +188,45 @@ public final class SummaryLogger implements AutoCloseable {
      *
      * <p>요약과 같은 규칙이다. 본문·작성자 식별자·닉네임·토큰은 어느 필드에도 없다.
      */
-    public static void logFinalVerdict(long session, CollectionMetrics.Verdict verdict,
-                                       Object stopReason,
+    public static void logFinalVerdict(long session, long registrySessions,
+                                       CollectionMetrics.Verdict verdict,
+                                       Object stopReason, long otherSessionsReceived,
                                        PersistCounters counters, long dropped,
-                                       ArchiveCounters archive) {
-        log.info("{}", renderVerdict(session, verdict, stopReason, counters.persistedCount(),
-                counters.conflictedCount(), counters.poisonedCount(), dropped, archive));
+                                       ArchiveCounters archive, long donationDropped, RelayCounters relay) {
+        log.info("{}", renderVerdict(session, registrySessions, verdict, stopReason, otherSessionsReceived,
+                counters.persistedCount(), counters.conflictedCount(), counters.poisonedCount(),
+                dropped, archive, donationDropped, relay));
     }
 
-    /** 순수 함수라 로그 없이도 검사할 수 있다. */
-    public static String renderVerdict(long session, CollectionMetrics.Verdict v,
-                                       Object stopReason,
+    /**
+     * 순수 함수라 로그 없이도 검사할 수 있다.
+     *
+     * @param otherSessionsReceived {@code verdict} 밖의 세션들이 받은 채팅 수 — 스트리머
+     *                              여럿을 동시에 걷을 때 {@code SessionRegistry}의 몫이다.
+     *                              <b>등식의 좌변이라 반드시 합쳐야 한다</b>: 우변 넷
+     *                              (persisted·conflicts·poisoned·dropped)은 공유 부품의
+     *                              프로세스 누계인데 좌변만 세션별이라, 안 합치면 등식이
+     *                              깨지는 것이 아니라 <b>「받은 게 없다」로 읽힌다.</b>
+     *                              <b>더할 수 있는 것만 여기로 온다</b> — 최댓값(수신 공백·
+     *                              ping/pong 간격)과 「마지막 하나」(절단 시각·지연 중앙값)는
+     *                              합치면 조용히 틀린 숫자가 되므로 안 싣는다
+     */
+    public static String renderVerdict(long session, long registrySessions,
+                                       CollectionMetrics.Verdict v,
+                                       Object stopReason, long otherSessionsReceived,
                                        long persisted, long conflicted, long poisoned, long dropped,
-                                       ArchiveCounters archive) {
+                                       ArchiveCounters archive, long donationDropped, RelayCounters relay) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
+                // <b>편지 경로에서는 이 러너가 연 세션이 없어 0이다</b> — 세션 번호는
+                // 세션별 줄(chat.session.ended)이 든다.
                 + " session=" + session
-                + " received=" + v.totalReceived()
+                // <b>편지 경로에서 이 프로세스가 몇을 걷었는지는 여기 하나에만 있다.</b>
+                // 위 session=은 러너 자신의 것이라 그 경로에서 늘 0이고, 아래 received는
+                // 세션 수가 아니라 채팅 수다 — 이 항이 없으면 "세션 0개"로 읽힌다.
+                // <b>더할 수 있는 값이라</b> 실을 수 있다(최댓값·「마지막 하나」는 못 싣는다).
+                + " registrySessions=" + registrySessions
+                + " received=" + (v.totalReceived() + otherSessionsReceived)
                 + " collectedFor=" + duration(v.totalCollectedFor())
                 + " lastReceivedAt=" + instant(v.lastReceivedAt())
                 + " maxReceiveGap=" + duration(v.maxReceiveGap())
@@ -222,6 +265,29 @@ public final class SummaryLogger implements AutoCloseable {
                 + " pending=" + archive.pendingCount()
                 + " droppedObjects=" + archive.droppedObjectsCount()
                 + " droppedMessages=" + archive.droppedMessagesCount()
+                // 🔴 <b>버린 후원 수. 이 줄에 없으면 어디에도 안 남는다</b>(봇 codex).
+                // 30초 요약은 <b>창 값</b>이라 세션이 다음 틱 전에 끝나면 마지막 창이 통째로
+                // 사라지고, <b>짧은 방송은 생애가 전부 사라진다.</b> 게다가 후원은 아카이브에
+                // 안 쌓으므로 버려진 그 후원은 표에도 원본에도 없다 —
+                // <b>되찾을 수 없는 유일한 유실</b>인데 판정 줄이 그것을 안 실었다.
+                // 위 검산 등식 어디에도 안 든다(received 는 채팅만 센다).
+                //
+                // 🔴 <b>「받은 후원 수」는 일부러 안 싣는다</b>(봇 codex, 두 번째 지적).
+                // 처음에 {@code v.donations()} 를 실었는데 <b>편지 경로에서 늘 0이다</b> —
+                // 그 지표는 러너 자신의 세션 것이고 운영에서 러너는 세션을 하나도 안 연다.
+                // 등록부는 세션마다 지표를 따로 두고 해체할 때 <b>채팅 수만</b> 옮긴다.
+                // 제대로 실으려면 방송 경계마다 후원 몫을 이관하는 배선이 필요한데,
+                // <b>받은 수는 chat_donations 표를 세면 나온다</b> — 표에 없는 것은 버린 수뿐이다.
+                // 위 registrySessions 주석과 같은 규칙이다: <b>조용히 틀린 숫자를 싣느니 안 싣는다.</b>
+                + " donationDropped=" + donationDropped
+                // 중계 셈 넷(프로세스 누계, 감사 L6). 러너가 판정 직전에 중계를 닫아(기한을 넘기면 나가 있는 것과
+                // 잔량을 버린 수로 확정) 등식 relayOffered = relayed + relayDropped + relayBufferDropped 로 검산한다.
+                // 🔴 relayed 는 「clip 이 받았다」이지 「브라우저에 갔다」가 아니다 — clip 쪽 버림은 clip 의 셈이다.
+                // 꺼져 있으면 넷 다 0이다(RelayCounters.NONE).
+                + " relayOffered=" + relay.relayOffered()
+                + " relayed=" + relay.relayed()
+                + " relayDropped=" + relay.relayDropped()
+                + " relayBufferDropped=" + relay.bufferDropped()
                 // 이 runId로 S3에서 이 프로세스의 파일을 찾는다 — 키의 "-{runId}.jsonl" 부분이다.
                 // 재시작이 잦으면 같은 분에 파일이 여럿인데, 어느 것이 이 프로세스 것인지는 이 값뿐이다.
                 + " archiveRunId=" + archive.runId()

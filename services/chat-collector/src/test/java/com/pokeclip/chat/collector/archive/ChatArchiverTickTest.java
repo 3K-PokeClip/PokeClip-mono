@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.archive;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
@@ -97,7 +99,7 @@ class ChatArchiverTickTest {
         clock.advance(Duration.ofSeconds(61));             // 백오프 상한을 넘겨 시도가 나가게
         archiver.tick();
         assertThat(uploader.uploaded).extracting(ArchiveObject::key).containsExactly(
-                "chat/CH/2026-08-15/10/1023-r1.jsonl", "chat/CH/2026-08-15/10/1024-r1.jsonl", "chat/CH/2026-08-15/10/1025-r1.jsonl");
+                "chat/CHZZK/CH/2026-08-15/10/1023-r1.jsonl", "chat/CHZZK/CH/2026-08-15/10/1024-r1.jsonl", "chat/CHZZK/CH/2026-08-15/10/1025-r1.jsonl");
         assertThat(archiver.uploadedCount()).isEqualTo(3);
         assertThat(archiver.pendingCount()).isZero();
     }
@@ -246,6 +248,6 @@ class ChatArchiverTickTest {
     }
 
     private static ArchivableChat chat(long receivedAt) {
-        return new ArchivableChat("CH", receivedAt, "{\"t\":" + receivedAt + "}");
+        return new ArchivableChat(Platform.CHZZK, "CH", receivedAt, "{\"t\":" + receivedAt + "}");
     }
 }

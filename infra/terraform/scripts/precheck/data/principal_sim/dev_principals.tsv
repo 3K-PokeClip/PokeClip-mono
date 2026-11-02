@@ -1,0 +1,12 @@
+# 2-3 판정의 고정 dev 자동 주체 — 열: 키 · 종류(instance-profile · role ·
+# user) · 이름(탭 구분). 「#」 줄은 주석, 빈 줄은 건너뜀. 꼴은
+# lib/principal_data.sh 머리 주석.
+# 출처: 계획 M17b r3.1 1절 3 · 2절 (3)(a), 실측 M4'(2026-10-19 — 넷 모두
+# 권한 경계 없음). 멘토용 알림 주체(notify)는 두지 않는다(kty 88차).
+# dev-box · media-dev 는 같은 인스턴스 프로필이라 해석 뒤 같은 역할로
+# 합쳐진다(한 단위로 묻는다).
+# 목록 밖 주체는 판정하지 않는다(런북 「이 점검이 보장하지 않는 것」 B2 · B3).
+dev-box	instance-profile	pokeclip-dev-profile
+media-dev	instance-profile	pokeclip-dev-profile
+dev-deployer	user	pokeclip-dev-deployer
+dev-oidc	role	pokeclip-dev-deploy

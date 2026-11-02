@@ -1,0 +1,169 @@
+# services/ 가 develop 에 들어오면 dev 서버(dev.pokeclip.com)를 그 코드로 갱신한다.
+#
+# 이미지는 EC2 에서 직접 굽는다. 레지스트리(ECR)를 거치지 않는 이유는 t3.small 이
+# 실측에서 빌드를 견뎠고(2026-08-19: 빌드 후 가용 1314MB·디스크 3.9GB 여유),
+# 레지스트리를 넣으면 리포지토리·수명주기 정책·pull 권한이 함께 늘기 때문이다.
+# 빌드가 EC2 를 넘어서는 날 ECR 로 옮긴다 — 그때 바뀌는 것은 이 파일뿐이다.
+#
+# 자격증명은 GitHub OIDC 로 받는 역할 pokeclip-dev-deploy 다. 역할 권한은 둘뿐이다 —
+# 명령 실행은 dev EC2 한 대에만(SendCommand), 결과 읽기는 GetCommandInvocation 하나다.
+# 결과 읽기의 대상은 * 라 명령 ID 와 인스턴스 ID 를 알면 다른 명령의 결과도 읽힌다
+# (ID 를 찾는 목록 조회 ListCommandInvocations 는 주지 않는다).
+# 2026-08-19 에 OIDC 가 거부돼 한동안 액세스 키로 우회했다. 원인은 SCP 가 아니라
+# 신뢰 정책의 sub 형식이었다 — 이 저장소 토큰의 sub 는 GitHub 고정 subject
+# (repo:소유자@ID/저장소@ID:…)인데 신뢰 정책은 옛 이름 형식만 받았다.
+# 신뢰 조건은 그 형식의 environment dev-deploy 단위로 묶인다(POK-367). environment 의
+# 배포 브랜치는 develop 하나라, develop 밖 브랜치와 이 environment 를 쓰지 않는 잡은
+# 이 역할로 로그인하지 못한다. 그러니 다른 워크플로가 같은 environment 를 쓰지 않게 둔다.
+# 잡의 environment 를 바꾸거나 빼면 토큰의 sub 가 바뀐다 — 신뢰 조건도 같은 걸음에서
+# 바꿔야 로그인된다.
+name: services-deploy
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'services/**'
+      # 렌더 · 업로드 일꾼(POK-332). 같은 상자 같은 compose 에서 뜨므로 같은 잡이 굽는다
+      - 'workers/render/**'
+      - 'workers/upload/**'
+      - '.github/workflows/services-deploy.yml' # 이 파일을 고치는 커밋은 이 파일로 검증한다
+
+# contents 는 checkout 용이 아니라(이 잡은 체크아웃하지 않는다) 기본값을 좁히기 위해
+# 명시한다. OIDC 토큰 권한(id-token)은 잡 deploy 에만 준다.
+permissions:
+  contents: read
+
+# 배포는 겹치면 안 된다. cancel-in-progress 를 켜지 않는 이유는 배포를 중간에
+# 끊으면 EC2 가 "새 코드로 체크아웃됐는데 컨테이너는 옛 이미지"인 상태로 남기 때문이다.
+concurrency:
+  group: services-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # 역할 신뢰 조건이 이 environment 단위다(맨 위 주석).
+    environment: dev-deploy
+    # 잡에 permissions 를 주면 맨 위 값을 물려받지 않으므로 contents 도 다시 적는다.
+    # id-token 은 OIDC 토큰을 받는 데 쓴다.
+    permissions:
+      contents: read
+      id-token: write
+    # 아래 기다리기(195회 × 15초 = 약 49분)와 https 확인(최대 400초)을 담는다. 서버 넷을 같은 상자에서
+    # 하나씩 구우므로 둘만 굽던 때(30분)보다 길다. 첫 배포에서 잰 시간을 보고 줄인다(POK-331).
+    timeout-minutes: 60
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # 역할 최대 세션 1시간 · 잡 60분(timeout-minutes). 잡을 60분 넘게 늘리면
+          # 뒤쪽 aws 호출이 세션 만료로 실패한다.
+          role-duration-seconds: 3600
+          aws-region: ap-northeast-2
+
+      - name: dev 서버를 최신 develop 으로 갱신한다
+        env:
+          INSTANCE_ID: i-07bcb578cb12f7ade
+          # 이 잡이 SSM 으로 EC2 에 넘기는 셸이다. GITHUB_SHA 를 박아 두면
+          # 배포된 커밋이 무엇인지 EC2 쪽 로그만 봐도 확정된다.
+          SHA: ${{ github.sha }}
+          # 디스크 지킴 상수 셋. 상자는 30GB다. 빌드 캐시가 두 번 디스크를 100%로 채워 배포를 멈췄다: 2026-10-16(22.5GB, 7번
+          # 실패)과 10-24(22.9GB, POK-332 머지 배포가 auth 굽기에서 실패). 옛 처방은 「24시간보다 오래된 캐시만 지운다」였는데
+          # 하루에 여러 번 배포하면 캐시가 다 24시간 안이라 0B를 지웠다(10-24 로그 Total 0B). 그래서 나이가 아니라 크기로 둔다
+          # (POK-425): 굽기 전과 굽기 뒤에 빌드 캐시를 BUILD_CACHE_MAX 아래로 줄이고, 굽기 전에 남은 공간이 MIN_FREE_GB보다
+          # 적으면 캐시를 통째로 비운 뒤 굽는다(그 판은 처음부터 굽어 느리지만 디스크가 차서 실패하는 것보다 낫다).
+          # 크기 6GB: 이미지 여섯(서버 넷 각 약 0.6GB · 일꾼 약 1.3 · 1.1GB)과 postgres 자료 · 로그를 두고도 30GB 안에 여유가
+          # 남는 선이다. 줄이면 매번 더 많이 다시 굽는다. 배포 끝에 사용률이 DISK_WARN_PERCENT 이상이면 경고를 띄운다.
+          BUILD_CACHE_MAX: 6gb
+          MIN_FREE_GB: "8"
+          DISK_WARN_PERCENT: "80"
+        run: |
+          set -euo pipefail
+
+          # 일꾼 둘(POK-332)은 서버 넷 다음에 굽고, 받는 쪽이라 clip 보다 먼저 올린다(up 두 번). 일꾼은 health 주소가 없어
+          # 「running 인가」로 보고(아니면 배포 실패), 큐 주소 변수가 컨테이너 안에서 비었으면 경고만 찍는다(값은 안 찍는다):
+          # dev .env 가 아직 빈 채로 머지돼도 서버 넷 배포를 막지 않으려는 것이다. 비면 일꾼은 그 줄을 안 보고 떠 있기만 한다.
+          # 서버 넷(POK-331)을 하나씩 굽는다. compose 기본은 동시 빌드라 Gradle 넷이 한꺼번에 돌면
+          # 옛 컨테이너가 떠 있는 상자의 메모리가 모자랄 수 있다. -q 는 SSM 출력(앞 24,000자만 돌려준다)을
+          # 빌드 로그가 채워 끝의 health · compose ps · free 줄이 잘리지 않게 한다.
+          # 그다음 상자 안 127.0.0.1 로 서버 넷의 health 를 잰다. 넷이 동시에 뜨므로 마감 하나(600초)를 같이 쓴다.
+          # 횟수가 아니라 시각으로 재는 이유: 연결만 받고 답하지 않는 포트면 회차마다 curl 5초 + 쉼 10초가 들어
+          # 40회가 400초가 아니라 600초가 되고, 넷이면 약 40분이 기다리기 예산을 먹는다(PR #258 codex). 바깥 포트를 닫아도
+          # (POK-293 M12) 이 길은 남는다. 못 뜬 서버가 있어도 compose ps · free -m · df -h 를 먼저 찍고 실패한다.
+          # 굽기 전 · 뒤에 빌드 캐시를 BUILD_CACHE_MAX 아래로 줄이고, 굽기 전 남은 공간이 MIN_FREE_GB 미만이면 캐시를 통째로
+          # 비운다(위 env 의 이유). 크기 상한 옵션 이름이 도커 판마다 다르다(옛 --keep-storage, 새 --max-used-space). 🔴 도움말에 새
+          # 이름이 보여도 상자의 buildkit 이 낮으면 거부한다(2026-10-24 dev 실측: 「buildkit v0.17.0+ is required for max-used-space」,
+          # 0B). 그래서 도움말로 고르지 않고 새 이름 → 옛 이름 차례로 해 보고, 둘 다 실패하면 ::warning:: 을 찍고 캐시를 통째로 비운다
+          # (그 판 다음 배포는 처음부터 굽어 느리지만 디스크가 차는 것보다 낫다, POK-425 후속). 캐시를 다
+          # 비우고도 남은 공간이 모자라면(이미지 · DB 자료가 찼다) 그것도 경고한다. 끝에서 디스크가 DISK_WARN_PERCENT 이상이면 ::warning:: 줄을 찍는다.
+          # 상수들은 이 셸에서 풀려 상자에 글자로 간다(앞에 \ 가 없다).
+          # 굽기 뒤의 image prune 은 이름이 떨어진 옛 :dev 이미지만 지운다(돌고 있는 컨테이너의 이미지는 안 지운다).
+          # 아래에서 SSM 출력을 잡 로그로 그대로 내보내므로 Actions가 경고로 띄운다(실패로 바꾸지는 않는다).
+          # prune 은 지운 항목을 한 줄씩 찍어 SSM 출력(앞 24,000자)을 채우므로 합계 한 줄만 남긴다.
+          # \$ 는 이 셸이 아니라 상자에서 풀리게 한다.
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --timeout-seconds 3000 \
+            --comment "deploy $SHA" \
+            --parameters "commands=[
+              'set -e',
+              'cd /home/ec2-user/pokeclip-mono',
+              'sudo -u ec2-user git fetch --depth 1 origin develop',
+              'sudo -u ec2-user git checkout -B develop FETCH_HEAD',
+              'sudo -u ec2-user git log --oneline -1',
+              'cd services',
+              'cap_prune() { for flag in --max-used-space --keep-storage; do if sudo -u ec2-user docker builder prune -f \$flag $BUILD_CACHE_MAX > /tmp/pokeclip-prune.log 2>&1; then tail -1 /tmp/pokeclip-prune.log; return 0; fi; done; echo ::warning::build cache cap prune failed with both flags, pruning all build cache; tail -2 /tmp/pokeclip-prune.log; sudo -u ec2-user docker builder prune -af | tail -1; }',
+              'cap_prune',
+              'free_gb=\$(df --output=avail -BG / | tail -1 | tr -dc 0-9); if [ \$free_gb -lt $MIN_FREE_GB ]; then echo low disk \${free_gb}G free, pruning all build cache; sudo -u ec2-user docker builder prune -af | tail -1; free_gb=\$(df --output=avail -BG / | tail -1 | tr -dc 0-9); if [ \$free_gb -lt $MIN_FREE_GB ]; then echo ::warning::dev box still only \${free_gb}G free after clearing build cache; fi; fi',
+              'df -h /',
+              'for s in auth clip chat-collector chat-detector render-worker upload-worker; do echo build \$s; sudo -u ec2-user docker compose -f docker-compose.dev.yml build -q \$s; done',
+              'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d render-worker upload-worker',
+              'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d postgres auth clip chat-collector chat-detector',
+              'sudo -u ec2-user docker image prune -f',
+              'cap_prune',
+              'fail=0; end=\$((\$(date +%s) + 600)); for p in 8081 8082 8083 8084; do ok=0; while [ \$(date +%s) -lt \$end ]; do if curl -sf -m 5 -o /dev/null http://127.0.0.1:\$p/actuator/health; then ok=1; break; fi; sleep 10; done; if [ \$ok -eq 1 ]; then echo \$p UP; else echo \$p not UP within 600s; fail=1; fi; done; sudo -u ec2-user docker compose -f docker-compose.dev.yml ps; free -m; df -h /; use=\$(df --output=pcent / | tail -1 | tr -dc 0-9); if [ \$use -ge $DISK_WARN_PERCENT ]; then echo ::warning::dev box disk \$use% used; fi',
+              'wfail=0; for s in render-worker upload-worker; do if [ -z \"\$(sudo -u ec2-user docker compose -f docker-compose.dev.yml ps --status running -q \$s)\" ]; then echo \$s not running; wfail=1; else echo \$s running; fi; done; for v in render-worker:RENDER_QUEUE_URL render-worker:THUMBNAIL_QUEUE_URL upload-worker:UPLOAD_QUEUE_URL; do s=\${v%%:*}; n=\${v#*:}; if ! sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T \$s env 2>/dev/null | grep -q ^\$n=.; then echo ::warning::\$s \$n empty; fi; done; [ \$fail -eq 0 ] && [ \$wfail -eq 0 ]'
+            ]" \
+            --query Command.CommandId --output text)
+
+          echo "SSM CommandId: $CMD_ID"
+
+          # send-command 는 비동기다. 기다리지 않으면 배포가 실패해도 잡이 초록으로 끝난다.
+          # aws ssm wait command-executed 는 최대 대기가 짧아 빌드를 못 기다린다 — 직접 돈다.
+          for _ in $(seq 1 195); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            [ "$STATUS" = "InProgress" ] || [ "$STATUS" = "Pending" ] || break
+            sleep 15
+          done
+
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' --output text | tail -60
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "::error::배포 실패 (SSM status=$STATUS)"
+            aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query 'StandardErrorContent' --output text | tail -30
+            exit 1
+          fi
+
+      - name: 밖에서 https 로 auth 까지 닿는지 확인한다
+        # 컨테이너가 떴다는 것(위 SSM 의 마지막 줄)과 밖에서 부를 수 있다는 것은 다르다.
+        # 바깥 8082 는 닫는다(POK-293 M12). 사용자가 쓰는 길(https → nginx → 웹 → auth)로 잰다.
+        # /actuator/health 는 웹 리라이트 목록(web/next.config.ts)에 없어 이 길로는 웹이 404 를 낸다
+        # (2026-10-16 실측). 그래서 토큰 없이 부르면 auth 가 401 로 답하는 /api/auth/me 를 쓴다.
+        # 401 은 auth 가 직접 낸 것이다. 웹이 리라이트를 못 찾으면 404, auth 가 죽어 있으면 5xx 다.
+        run: |
+          for i in $(seq 1 40); do
+            CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" \
+              https://dev.pokeclip.com/api/auth/me || true)
+            if [ "$CODE" = "401" ]; then echo "auth 에 https 로 닿음 (${i}회차)"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::https://dev.pokeclip.com/api/auth/me 가 400초 안에 401 로 답하지 않았다 (마지막 $CODE)"
+          exit 1

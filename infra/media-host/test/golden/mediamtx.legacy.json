@@ -1,0 +1,80 @@
+{
+  "api": true,
+  "apiAddress": "127.0.0.1:9997",
+  "apiTrustedProxies": [],
+  "authInternalUsers": [
+    {
+      "ips": [],
+      "pass": null,
+      "permissions": [
+        {
+          "action": "publish",
+          "path": null
+        }
+      ],
+      "user": "any"
+    },
+    {
+      "ips": [
+        "127.0.0.1",
+        "::1"
+      ],
+      "pass": null,
+      "permissions": [
+        {
+          "action": "playback",
+          "path": null
+        }
+      ],
+      "user": "any"
+    },
+    {
+      "ips": [],
+      "pass": "@@MTX_API_PASS@@",
+      "permissions": [
+        {
+          "action": "api"
+        }
+      ],
+      "user": "pokeclip-sidecar"
+    }
+  ],
+  "hls": true,
+  "hlsAddress": "127.0.0.1:8888",
+  "hlsAllowOrigins": [
+    "https://app.pokeclip.com"
+  ],
+  "hlsCDNSecret": "@@HLS_CDN_SECRET@@",
+  "hlsDirectory": "/dvr",
+  "hlsPartDuration": "500ms",
+  "hlsSegmentCount": 900,
+  "hlsSegmentDuration": "4s",
+  "hlsTrustedProxies": [],
+  "hlsVariant": "lowLatency",
+  "metrics": false,
+  "moq": false,
+  "pathDefaults": {
+    "record": true,
+    "recordFormat": "fmp4",
+    "recordPath": "/recordings/%path/%Y-%m-%d_%H-%M-%S-%f",
+    "recordSegmentDuration": "4s",
+    "runOnOffline": "/hooks-bin/mtxhookwrite -kind offline",
+    "runOnOnline": "/hooks-bin/mtxhookwrite -kind online",
+    "runOnRecordSegmentComplete": "/hooks-bin/mtxhookwrite -kind segcomplete"
+  },
+  "paths": {
+    "all_others": null
+  },
+  "playback": true,
+  "playbackAddress": "127.0.0.1:9996",
+  "playbackAllowOrigins": [
+    "https://app.pokeclip.com"
+  ],
+  "playbackTrustedProxies": [],
+  "pprof": false,
+  "rtmp": false,
+  "rtsp": false,
+  "srt": true,
+  "srtAddress": ":8890",
+  "webrtc": false
+}

@@ -1,0 +1,257 @@
+#include "config.hpp"
+
+#include "constants.hpp"
+#include "private-file.hpp"
+#include "server-env.hpp"
+
+#include <obs-module.h>
+#include <plugin-support.h>
+#include <util/platform.h>
+
+namespace pokeclip {
+
+PluginConfig DefaultConfig()
+{
+	PluginConfig c;
+	const ServerDefaults &servers = ServersFor(kBuildServerEnv);
+	c.serverEnv = kBuildServerEnv;
+	c.apiBase = servers.apiBase;
+	c.ingestHost = servers.ingestHost;
+	c.ingestPort = servers.ingestPort;
+	c.latencyMs = kDefaultLatencyMs;
+	return c;
+}
+
+ConfigStore &ConfigStore::Instance()
+{
+	static ConfigStore store;
+	return store;
+}
+
+static std::string GetStringOr(obs_data_t *data, const char *key, const std::string &fallback)
+{
+	if (!obs_data_has_user_value(data, key))
+		return fallback;
+	const char *v = obs_data_get_string(data, key);
+	return v ? std::string(v) : fallback;
+}
+
+static int GetIntOr(obs_data_t *data, const char *key, int fallback)
+{
+	return obs_data_has_user_value(data, key) ? (int)obs_data_get_int(data, key) : fallback;
+}
+
+static bool GetBoolOr(obs_data_t *data, const char *key, bool fallback)
+{
+	return obs_data_has_user_value(data, key) ? obs_data_get_bool(data, key) : fallback;
+}
+
+void ConfigStore::Load()
+{
+	std::lock_guard lock(mutex_);
+
+	char *dir = obs_module_config_path("");
+	if (dir) {
+		os_mkdirs(dir);
+		bfree(dir);
+	}
+	char *path = obs_module_config_path("pokeclip.json");
+	if (!path) {
+		obs_log(LOG_WARNING, "config path unavailable — using defaults");
+		config_ = DefaultConfig();
+		return;
+	}
+	path_ = path;
+	bfree(path);
+
+	config_ = DefaultConfig();
+	obs_data_t *data = obs_data_create_from_json_file_safe(path_.c_str(), "bak");
+	if (!data) {
+		obs_log(LOG_INFO, "no config yet — defaults");
+		return;
+	}
+
+	PluginConfig d = config_;
+	config_.apiBase = GetStringOr(data, "api_base", d.apiBase);
+	config_.ingestHost = GetStringOr(data, "ingest_host", d.ingestHost);
+	config_.ingestPort = GetIntOr(data, "ingest_port", d.ingestPort);
+	config_.streamId = GetStringOr(data, "streamid", "");
+	config_.passphrase = GetStringOr(data, "passphrase", "");
+	config_.sendPassphrase = GetBoolOr(data, "send_passphrase", d.sendPassphrase);
+	config_.latencyMs = GetIntOr(data, "latency_ms", d.latencyMs);
+	config_.syncStart = GetBoolOr(data, "sync_start", d.syncStart);
+	config_.forceFallback = GetBoolOr(data, "force_fallback", d.forceFallback);
+	config_.dockIntroShown = GetBoolOr(data, "dock_intro_shown", d.dockIntroShown);
+	config_.audioAutoAssign = GetBoolOr(data, "audio_auto_assign", d.audioAutoAssign);
+	config_.audioAssignPrompted = GetBoolOr(data, "audio_assign_prompted", d.audioAssignPrompted);
+	config_.audioTrackMap.clear();
+	if (obs_data_array_t *map = obs_data_get_array(data, "audio_track_map")) {
+		// 손상 항목(자리 범위 밖·빈 열쇠)은 배정 계산이 걸러 낸다(ComputeAssignment 1단계).
+		size_t count = obs_data_array_count(map);
+		for (size_t i = 0; i < count && i < kTrackMapCap * 2; i++) {
+			obs_data_t *item = obs_data_array_item(map, i);
+			AudioTrackMapEntry e;
+			e.key = obs_data_get_string(item, "key");
+			e.slot = (int)obs_data_get_int(item, "slot");
+			e.name = obs_data_get_string(item, "name");
+			e.assignedAt = obs_data_get_int(item, "assigned_at");
+			e.lastSeen = obs_data_get_int(item, "last_seen");
+			// POK-290 전 파일에는 없다 — 없음과 ""(앱을 모른 채 앉음)는 뜻이 달라 파일에 있을 때만 채운다.
+			if (obs_data_has_user_value(item, "app"))
+				e.app = obs_data_get_string(item, "app");
+			obs_data_release(item);
+			config_.audioTrackMap.push_back(std::move(e));
+		}
+		obs_data_array_release(map);
+	}
+	config_.audioMixerBackup.clear();
+	// 리뷰 2판 형식은 되돌린 본방 트랙을 계정 하나로(audio_reserved_mask) 기억했다.
+	// 항목별 값이 없으면 그것을 쓴다.
+	uint32_t legacyReserved = static_cast<uint32_t>(GetIntOr(data, "audio_reserved_mask", 0)) & kStemMask;
+	if (obs_data_array_t *backup = obs_data_get_array(data, "audio_mixer_backup")) {
+		size_t count = obs_data_array_count(backup);
+		for (size_t i = 0; i < count && i < kMixerBackupCap * 2; i++) {
+			obs_data_t *item = obs_data_array_item(backup, i);
+			AudioMixerBackup b;
+			b.key = obs_data_get_string(item, "key");
+			b.mixers = static_cast<uint32_t>(obs_data_get_int(item, "mixers"));
+			b.restored = obs_data_has_user_value(item, "restored")
+					     ? static_cast<uint32_t>(obs_data_get_int(item, "restored")) & kStemMask
+					     : legacyReserved;
+			obs_data_release(item);
+			if (!b.key.empty())
+				config_.audioMixerBackup.push_back(std::move(b));
+		}
+		obs_data_array_release(backup);
+	}
+	config_.clipApiBase = GetStringOr(data, "clip_api_base", "");
+	config_.endSignalBase = GetStringOr(data, "end_signal_base", "");
+	config_.markHotkey.clear();
+	if (obs_data_t *hotkey = obs_data_get_obj(data, "mark_hotkey")) {
+		config_.markHotkey = obs_data_get_json(hotkey);
+		obs_data_release(hotkey);
+	}
+
+	// 서버 환경(POK-267). 키가 있으면 그 값, 없거나 모르는 값이면 api_base로 짐작한다(옛 파일 — dev 키로 페어링된
+	// 설치는 개발에 남는다). 그다음 손대지 않은 기본값(옛 http dev · ingest.pokeclip.com 포함)을 그 환경의 짝으로
+	// 올린다 — 직접 적은 주소는 그대로. 올린 값은 다음 저장 때 파일에 남는다.
+	ServerEnv env = kBuildServerEnv;
+	const std::string envText = GetStringOr(data, "server_env", "");
+	if (!ParseServerEnv(envText, env)) {
+		if (!envText.empty())
+			obs_log(LOG_WARNING, "config: unknown server_env '%s' — inferring from api_base",
+				envText.c_str());
+		env = InferServerEnv(config_, kBuildServerEnv);
+	}
+	const ServerEnvChange moved = ApplyServerEnv(config_, env);
+	if (moved.api || moved.ingest)
+		obs_log(LOG_INFO, "config: default servers moved to %s (api %s, ingest %s:%d)", ServerEnvName(env),
+			config_.apiBase.c_str(), config_.ingestHost.c_str(), config_.ingestPort);
+	obs_data_release(data);
+
+	obs_log(LOG_INFO, "config loaded (env=%s, paired=%s, ingest=%s:%d)", ServerEnvName(config_.serverEnv),
+		config_.HasKey() ? "yes" : "no", config_.ingestHost.c_str(), config_.ingestPort);
+}
+
+PluginConfig ConfigStore::Get() const
+{
+	std::lock_guard lock(mutex_);
+	return config_;
+}
+
+bool ConfigStore::Update(const std::function<void(PluginConfig &)> &mutate)
+{
+	std::lock_guard lock(mutex_);
+	mutate(config_);
+	return SaveLocked(SaveBackup::KeepPrevious);
+}
+
+bool ConfigStore::Commit(const std::function<void(PluginConfig &)> &mutate, SaveBackup backup)
+{
+	std::lock_guard lock(mutex_);
+	PluginConfig previous = config_;
+	mutate(config_);
+	if (SaveLocked(backup))
+		return true;
+	config_ = std::move(previous);
+	return false;
+}
+
+bool ConfigStore::SaveLocked(SaveBackup backupMode)
+{
+	if (path_.empty())
+		return false;
+
+	obs_data_t *data = obs_data_create();
+	obs_data_set_string(data, "server_env", ServerEnvName(config_.serverEnv));
+	obs_data_set_string(data, "api_base", config_.apiBase.c_str());
+	obs_data_set_string(data, "ingest_host", config_.ingestHost.c_str());
+	obs_data_set_int(data, "ingest_port", config_.ingestPort);
+	obs_data_set_string(data, "streamid", config_.streamId.c_str());
+	obs_data_set_string(data, "passphrase", config_.passphrase.c_str());
+	obs_data_set_bool(data, "send_passphrase", config_.sendPassphrase);
+	obs_data_set_int(data, "latency_ms", config_.latencyMs);
+	obs_data_set_bool(data, "sync_start", config_.syncStart);
+	obs_data_set_bool(data, "force_fallback", config_.forceFallback);
+	obs_data_set_bool(data, "dock_intro_shown", config_.dockIntroShown);
+	obs_data_set_bool(data, "audio_auto_assign", config_.audioAutoAssign);
+	obs_data_set_bool(data, "audio_assign_prompted", config_.audioAssignPrompted);
+	obs_data_array_t *map = obs_data_array_create();
+	for (const AudioTrackMapEntry &e : config_.audioTrackMap) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "key", e.key.c_str());
+		obs_data_set_int(item, "slot", e.slot);
+		obs_data_set_string(item, "name", e.name.c_str());
+		obs_data_set_int(item, "assigned_at", e.assignedAt);
+		obs_data_set_int(item, "last_seen", e.lastSeen);
+		if (e.app)
+			obs_data_set_string(item, "app", e.app->c_str());
+		obs_data_array_push_back(map, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(data, "audio_track_map", map);
+	obs_data_array_release(map);
+	obs_data_array_t *backup = obs_data_array_create();
+	for (const AudioMixerBackup &b : config_.audioMixerBackup) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "key", b.key.c_str());
+		obs_data_set_int(item, "mixers", b.mixers);
+		obs_data_set_int(item, "restored", b.restored);
+		obs_data_array_push_back(backup, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(data, "audio_mixer_backup", backup);
+	obs_data_array_release(backup);
+	obs_data_set_string(data, "clip_api_base", config_.clipApiBase.c_str());
+	obs_data_set_string(data, "end_signal_base", config_.endSignalBase.c_str());
+	if (!config_.markHotkey.empty()) {
+		if (obs_data_t *hotkey = obs_data_create_from_json(config_.markHotkey.c_str())) {
+			obs_data_set_obj(data, "mark_hotkey", hotkey);
+			obs_data_release(hotkey);
+		}
+	}
+
+	const bool keepPrevious = backupMode == SaveBackup::KeepPrevious;
+#ifdef _WIN32
+	// SameAsNew는 POSIX와 같은 순서 규칙(WriteBackupThenMain — .bak을 먼저 새 판으로, 그다음 본 파일)을 쓴다.
+	// 백업 인자가 null이면 libobs가 ReplaceFileW(…, NULL)로 바꾼다. 드물게 ERROR_UNABLE_TO_MOVE_REPLACEMENT면
+	// 본 파일이 사라질 수 있는데, 그때도 남는 .bak은 새 판이라 키가 되살아나지는 않는다.
+	bool ok = keepPrevious ? obs_data_save_json_pretty_safe(data, path_.c_str(), "tmp", "bak")
+			       : WriteBackupThenMain(path_, [data](const std::string &target) {
+					 return obs_data_save_json_pretty_safe(data, target.c_str(), "tmp", nullptr);
+				 });
+#else
+	// streamid·passphrase가 든다 — 처음부터 0600으로 쓴다. libobs 저장은 tmp를 umask 권한(보통 0644)으로 만들어
+	// rename하므로, 뒤에 chmod를 걸어도 그 사이 남이 읽을 틈이 있다.
+	const char *json = obs_data_get_json_pretty(data);
+	bool ok = json && *json &&
+		  (keepPrevious ? WritePrivateFileAtomic(path_, json) : WritePrivateFileReplacingBackup(path_, json));
+#endif
+	obs_data_release(data);
+
+	if (!ok)
+		obs_log(LOG_WARNING, "config save failed");
+	return ok;
+}
+
+} // namespace pokeclip

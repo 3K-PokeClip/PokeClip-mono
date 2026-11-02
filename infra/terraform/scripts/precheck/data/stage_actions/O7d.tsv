@@ -1,0 +1,151 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 M8 「O7d 선행 0」(elb · ecs · servicediscovery · iam 역할 · wafv2
+# REGIONAL · ec2 SG 규칙) · 고유 확인(Cloud Map 사설 존 리전 조건 · ELB 한도) ·
+# 설계 13-1 미판정 행 · REGIONAL WAF 트래픽 로그(장부 17 — WAF 개발자 안내서
+# 「Permissions required to publish logs to CloudWatch Logs」 · CloudWatch
+# Logs 안내서 「Logs sent to CloudWatch Logs」, 2026-10-24 확인) · 웹 ACL
+# 데이터 보호의 UpdateWebACL(POK-459 — 묶음 행은 POK-460 이 더함) · 로그
+# 그룹 태그 동작(결정 65 예외 · 리뷰가 찾은 누락 · kty 2026-10-25 넣고 PR).
+# SG 규칙 재조회 읽기(POK-479 — 결정 65 예외 · 그 덩어리의 주석).
+# 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
+
+# 공개 ALB · 내부 ALB · NLB · 대상 그룹 · 리스너 규칙 · 한도 읽기
+elasticloadbalancing:CreateLoadBalancer	ap-northeast-2	*
+elasticloadbalancing:CreateTargetGroup	ap-northeast-2	*
+elasticloadbalancing:CreateListener	ap-northeast-2	*
+elasticloadbalancing:CreateRule	ap-northeast-2	*
+elasticloadbalancing:ModifyLoadBalancerAttributes	ap-northeast-2	*
+elasticloadbalancing:ModifyTargetGroupAttributes	ap-northeast-2	*
+elasticloadbalancing:AddTags	ap-northeast-2	*
+elasticloadbalancing:DescribeLoadBalancers	ap-northeast-2	*
+elasticloadbalancing:DescribeAccountLimits	ap-northeast-2	*
+
+# ECS 클러스터 · 태스크 정의 · 서비스 · 로그 그룹(WAF 로그 그룹도 같은 행 —
+# 같은 (동작, 리전)은 한 행)
+ecs:CreateCluster	ap-northeast-2	*
+ecs:RegisterTaskDefinition	ap-northeast-2	*
+ecs:CreateService	ap-northeast-2	*
+ecs:DescribeServices	ap-northeast-2	*
+ecs:TagResource	ap-northeast-2	*
+logs:CreateLogGroup	ap-northeast-2	*
+logs:PutRetentionPolicy	ap-northeast-2	*
+# 로그 그룹(REGIONAL WAF 로그 그룹 포함)은 default_tags 를 받아 생성이
+# logs:TagResource 도 인가한다(CreateLogGroup API 원문 「logs:TagResource or
+# logs:TagLogGroup」 · runtime-1a 선례). 결정 65 예외 · 리뷰가 찾은 누락 ·
+# kty 2026-10-25 넣고 PR.
+logs:TagResource	ap-northeast-2	*
+logs:ListTagsForResource	ap-northeast-2	*
+
+# Cloud Map 사설 DNS 네임스페이스 · 서비스
+servicediscovery:CreatePrivateDnsNamespace	ap-northeast-2	*
+servicediscovery:CreateService	ap-northeast-2	*
+servicediscovery:GetOperation	ap-northeast-2	*
+servicediscovery:TagResource	ap-northeast-2	*
+
+# Cloud Map 이 대신 만드는 Route 53 사설 존 · VPC 연결 — 리전 조건이
+# 미판정이라 두 리전 모두(설계 13-1)
+route53:CreateHostedZone	ap-northeast-2	*
+route53:CreateHostedZone	us-east-1	*
+route53:AssociateVPCWithHostedZone	ap-northeast-2	*
+route53:AssociateVPCWithHostedZone	us-east-1	*
+
+# ECS 실행 · 작업 역할(경로 /pokeclip/prod/ — 계획 3절)
+iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# iam:GetRole 은 자원을 * 로 둔다 — 이 단계의 prod 역할 경로와 2-3 판정
+# 래퍼의 dev 역할 해석(get-role) 둘 다 덮는다(같은 (동작, 리전)은 한 행).
+iam:GetRole	us-east-1	*
+iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:AttachRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:CreateServiceLinkedRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/aws-service-role/*
+
+# REGIONAL WAF — 웹 ACL 데이터 보호(POK-459)는 웹 ACL 갱신이다
+wafv2:CreateWebACL	ap-northeast-2	*
+wafv2:GetWebACL	ap-northeast-2	*
+wafv2:UpdateWebACL	ap-northeast-2	*
+wafv2:AssociateWebACL	ap-northeast-2	*
+wafv2:TagResource	ap-northeast-2	*
+
+# REGIONAL WAF 트래픽 로그 — 로깅 설정과 CloudWatch Logs 전달. 로그 그룹 자원
+# 정책은 AWS 가 로깅을 켤 때 만든다(그래서 PutResourcePolicy ·
+# DescribeResourcePolicies · DescribeLogGroups 가 필요). 삭제 동작은 이 단계
+# (생성)에 넣지 않는다. GetLoggingConfiguration 은 provider 가 만든 뒤 읽는다.
+wafv2:PutLoggingConfiguration	ap-northeast-2	*
+wafv2:GetLoggingConfiguration	ap-northeast-2	*
+logs:CreateLogDelivery	ap-northeast-2	*
+logs:PutResourcePolicy	ap-northeast-2	*
+logs:DescribeResourcePolicies	ap-northeast-2	*
+logs:DescribeLogGroups	ap-northeast-2	*
+
+# SG · 규칙(별도 자원)
+ec2:CreateSecurityGroup	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupIngress	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupEgress	ap-northeast-2	*
+ec2:RevokeSecurityGroupEgress	ap-northeast-2	*
+ec2:DescribeSecurityGroups	ap-northeast-2	*
+ec2:CreateTags	ap-northeast-2	*
+# SG 규칙 재조회 — 이 루트의 SG 규칙(aws_vpc_security_group_ingress_rule ·
+# egress_rule: prod/platform 의 load_balancers.tf · services.tf, 모듈
+# ecs_service · media_ingest).
+# provider 6.68.0 은 SG 규칙을 Read 에서 DescribeSecurityGroupRules 로
+# 읽는다(internal/service/ec2 의 vpc_security_group_ingress_rule.go Read →
+# find.go findSecurityGroupRuleByID — egress 규칙도 같은 Read). 규칙을 만드는
+# apply 는 부르지 않고(Create 는 AuthorizeSecurityGroupIngress · Egress 만 —
+# ingress · egress 규칙 파일 대조 2026-10-26) 재apply 의 refresh 가 부른다 —
+# 거부되면 plan 에서 멈춘다(부분 apply 아님). 결정 65 예외 · 리뷰가 찾은
+# 누락(POK-479).
+ec2:DescribeSecurityGroupRules	ap-northeast-2	*
+
+# 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
+s3:ListBucket	ap-northeast-2	*
+s3:GetObject	ap-northeast-2	*
+s3:PutObject	ap-northeast-2	*
+s3:DeleteObject	ap-northeast-2	*
+
+# 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
+# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1)이고,
+# principal-check.sh 가 부르는 리전과 같다(2026-10-19 확인).
+# ec2:DescribeRegions 는 넣지 않는다(kty 45차). iam:SimulatePrincipalPolicy 는
+# 이 도구 자신의 호출이라 그것이 거부되면 종료 2 로 드러난다.
+iam:GetAccountAuthorizationDetails	us-east-1	*
+iam:GetContextKeysForPrincipalPolicy	us-east-1	*
+iam:SimulateCustomPolicy	us-east-1	*
+iam:GetInstanceProfile	us-east-1	*
+iam:ListAccessKeys	us-east-1	*
+s3:GetBucketPolicy	ap-northeast-2	*
+secretsmanager:GetResourcePolicy	ap-northeast-2	*
+ecr:GetRepositoryPolicy	ap-northeast-2	*
+sns:GetTopicAttributes	ap-northeast-2	*
+sqs:GetQueueAttributes	ap-northeast-2	*
+ec2:DescribeInstances	ap-northeast-2	*
+ec2:DescribeInstances	us-east-1	*
+lambda:ListFunctions	ap-northeast-2	*
+lambda:ListFunctions	us-east-1	*
+ecs:ListTaskDefinitions	ap-northeast-2	*
+ecs:ListTaskDefinitions	us-east-1	*
+ecs:DescribeTaskDefinition	ap-northeast-2	*
+ecs:DescribeTaskDefinition	us-east-1	*
+cloudtrail:LookupEvents	ap-northeast-2	*
+cloudtrail:LookupEvents	us-east-1	*
+tag:GetTagKeys	ap-northeast-2	*
+tag:GetTagKeys	us-east-1	*
+tag:GetResources	ap-northeast-2	*
+tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). 인스턴스 프로필 · 태그 해석 · 자원
+# 정책 읽기는 위 덩어리에 있다. iam:GetRole 은 같은 (동작, 리전)이 한 행이라
+# 위 단계 행(자원 *)을 쓴다.
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*
+# ACM 검증 레코드 이름 해석(POK-484 — prod 인증서의 두 리전).
+acm:DescribeCertificate	ap-northeast-2	*
+acm:DescribeCertificate	us-east-1	*

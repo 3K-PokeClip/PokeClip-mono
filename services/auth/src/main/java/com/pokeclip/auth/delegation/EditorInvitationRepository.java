@@ -90,4 +90,27 @@ public interface EditorInvitationRepository extends JpaRepository<EditorInvitati
             + "i.respondedAt = :now, i.updatedAt = :now "
             + "WHERE i.id = :id AND i.status = com.pokeclip.auth.delegation.InvitationStatus.PENDING")
     int cancel(@Param("id") Long id, @Param("now") Instant now);
+
+    /**
+     * 이 회원이 낀 살아있는 초대를 <b>양쪽 방향 모두</b> 거둬들인다(탈퇴).
+     *
+     * <p>🔴 <b>받은 쪽이 탈퇴해도 {@code CANCELED}다</b>(PRD D9). {@code DECLINED}로 적으면
+     * 스트리머 화면에 「거절함」으로 보이는데, 사람이 한 응답과 계정이 사라진 것은 다른 사건이다 —
+     * 위임에 {@code WITHDRAWAL}을 만든 이유와 같다.
+     * 새 상태를 안 만든 근거: 웹이 {@code CANCELED}를 화면에 안 그린다(보낸 목록에서 PENDING만 거른다).
+     * <b>그리기 시작하면 그때 새 값을 넣는다.</b>
+     *
+     * <p>만료를 보지 않는 것은 위 {@code cancel}과 같다 — 거둬들이는 것을 막을 이유가 없다.
+     * {@code status = PENDING}은 남긴다: 이미 응답한 초대를 되돌리면 <b>수락까지 끝나 위임을 만든
+     * 초대가 「취소됨」이 되어</b> 살아있는 위임의 부모가 CANCELED인 모순이 남는다.
+     *
+     * <p>🔴 회원 조건이 한 줄에 두 갈래인 것은 {@code EditorDelegationRepository.revokeAllOfUser}와 같다 —
+     * 그쪽 주석의 경고가 여기에도 그대로 걸린다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE EditorInvitation i SET i.status = com.pokeclip.auth.delegation.InvitationStatus.CANCELED, "
+            + "i.respondedAt = :now, i.updatedAt = :now "
+            + "WHERE i.status = com.pokeclip.auth.delegation.InvitationStatus.PENDING "
+            + "AND (i.streamerId = :userId OR i.inviteeId = :userId)")
+    int cancelAllOfUser(@Param("userId") Long userId, @Param("now") Instant now);
 }

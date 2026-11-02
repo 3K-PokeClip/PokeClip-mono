@@ -2,6 +2,7 @@ package com.pokeclip.auth.delegation;
 
 import com.pokeclip.auth.delegation.api.dto.ReceivedInvitationResponse;
 import com.pokeclip.auth.delegation.api.dto.SentInvitationResponse;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +48,7 @@ public class InvitationService {
     private final EditorDelegationRepository delegations;
     private final InvitationWriter writer;
     private final UserRepository users;
+    private final ActiveUserGuard activeUserGuard;
 
     /**
      * 이메일로 계정을 찾아 초대한다. 살아있는 초대가 이미 있으면 새 행을 만들지 않고
@@ -66,7 +68,12 @@ public class InvitationService {
      * 극소수는 수락 시점에 위임 유일 인덱스가 막는다.
      */
     public EditorInvitation invite(Long streamerId, String email) {
-        User invitee = users.findByEmail(email.toLowerCase(Locale.ROOT))
+        // 🔴 탈퇴한 계정은 초대를 보내지도 받지도 못한다 — 둘 다 전수 세기에서 나온 자리다(PR #148).
+        // 답이 갈리는 것은 의도다: 보내는 쪽이 탈퇴했으면 자기 인증 문제라 401이고, 상대가 탈퇴했으면
+        // 부르는 쪽 계정은 멀쩡하므로 「그런 계정이 없다」(404)가 사실 그대로다.
+        // 막는 이유도 갈린다 — 보낸 초대는 일괄 취소를 넘어 살아남고, 받는 초대는 영영 수락되지 않는다.
+        activeUserGuard.requireAlive(streamerId, "delegation.invite");
+        User invitee = users.findAliveByEmail(email.toLowerCase(Locale.ROOT))
                 .orElseThrow(() -> new DelegationException(
                         DelegationFailure.INVITEE_NOT_FOUND, "그 이메일로 가입한 계정이 없다"));
         if (invitee.getId().equals(streamerId)) {

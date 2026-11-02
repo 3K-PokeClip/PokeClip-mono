@@ -9,7 +9,9 @@ dependencyManagement {
 }
 
 dependencies {
-    implementation project(':common')
+    // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
+    implementation project(':db-support')
+
 
     // 채팅 원본 1분 파일을 S3에 올린다(POK-116). s3가 runtime으로 끌어오는 HTTP 클라이언트는
     // Apache 5(apache-client 4가 아니다) — S3Clients가 시한을 박으려면 컴파일에서 보여야 해서 명시.
@@ -17,6 +19,12 @@ dependencies {
     // application.yml의 spring.http.clients.imperative.factory=jdk가 그것을 막는다.
     implementation 'software.amazon.awssdk:s3'
     implementation 'software.amazon.awssdk:apache5-client'
+
+    // 1번 Media가 넣는 방송 생명주기 편지를 꺼낸다(계약9, ADR-016).
+    // url-connection-client를 같이 넣지 않는다 — 위 apache5-client가 이미 있어 SDK HTTP
+    // 구현이 둘이 되고, 빌더가 명시를 빠뜨리면 "Multiple HTTP implementations"로 죽는다.
+    // SqsClient는 S3Clients와 같이 Apache5HttpClient를 명시한다.
+    implementation 'software.amazon.awssdk:sqs'
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
@@ -36,6 +44,10 @@ dependencies {
 
     runtimeOnly 'org.postgresql:postgresql'
 
+    // SOOP 채팅(POK-397 PR4). SOOP은 채팅을 브라우저 JavaScript SDK로만 준다(ADR-105). 화면 없는 Chromium에서 공식 SDK를 돌린다.
+    // 브라우저 실행 파일은 이미지에 미리 굽고 실행 중에는 내려받지 않는다(Dockerfile의 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).
+    implementation 'com.microsoft.playwright:playwright:1.52.0'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
@@ -47,6 +59,7 @@ dependencies {
     // LogCaptor. 요약 한 줄이 실제로 찍히는지, 그리고 어느 레벨에서도 본문이
     // 안 새는지를 로그에서 직접 확인한다(auth의 SecretLeakTest와 같은 방식).
     testImplementation testFixtures(project(':web-support'))
+    testImplementation testFixtures(project(':db-support'))
 
     // 가짜 치지직 서버 전용. 운영 아티팩트에는 안 들어간다.
     // 임베디드 톰캣의 WsServerContainer 초기화는 spring-boot-tomcat이 이미 하므로
@@ -55,6 +68,14 @@ dependencies {
 }
 
 tasks.named('test') {
+    // DocumentedEnvVarsTest가 이 파일을 읽는다. 선언하지 않으면 Gradle이 입력으로 안 세고,
+    // README만 고친 실행에서 test 태스크가 UP-TO-DATE로 통째로 건너뛴다 —
+    // 문서에서 환경변수를 지워도 초록이다(2026-08-19에 결함 주입으로 실측하다 드러났다).
+    // 반대 방향(yml에 변수 추가)은 processResources가 이미 입력이라 원래 다시 돈다.
+    inputs.file(rootProject.file('README.md'))
+            .withPropertyName('servicesReadme')
+            .withPathSensitivity(PathSensitivity.NONE)
+
     // pgjdbc는 socketTimeout으로 끊긴 배치의 뒷정리에서 `assert false`를 밟는다
     // (BatchResultHandler.isAutoCommit — 닫힌 커넥션의 getAutoCommit, 42.7.11 실측).
     // Gradle 테스트 JVM은 -ea가 기본이라 운영에서 PSQLException(08006)으로 오는

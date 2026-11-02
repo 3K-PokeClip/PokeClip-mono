@@ -1,0 +1,48 @@
+# 첫 실행의 비교 기준 — 설계 13-1 SCP 판정 대조표에서 옮긴다(유일한 출처).
+# 열: 묶음 · 동작 · 리전 · 판정(allow · deny) · 13-1 판정 시각(KST). 탭 구분,
+# 「#」 줄은 주석.
+# 넣는 행: 13-1 에서 동작 이름으로 판정되고 리전이 적힌 행 가운데, 그 묶음
+# 파일에 실제로 있는 (동작, 리전)만(kty 58차). 서비스 묶음 행(「ec2 VPC ·
+# 서브넷 … 허용」 등)은 동작으로 펼치지 않고, 리전 표기가 없는 행은 넣지
+# 않는다. 「바뀜」 이력이 있는 동작(KVS 값 동작 · rds-db:connect)은 가장 최근
+# 판정(10-13 10:59 허용)을 쓴다. 실호출 행은 재판정을 대신하지 않아 넣지
+# 않는다. 여기 없는 (동작, 리전)은 첫 판정에서 CHANGED 로 나온다.
+
+# 13-1 「cloudtrail:LookupEvents | 서울 · us-east-1 허용 · ap-northeast-1 거부 |
+# 10-13 11:05」 — 2-3 판정 묶음(도쿄는 묶음에 없음).
+5	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+5	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+O7a	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+O7a	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+O7b	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+O7b	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+O7c	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+O7c	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+O7d	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+O7d	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+O7e	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+O7e	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+O7f	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+O7f	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+8	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+8	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+8a	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+8a	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+9	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+9	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+ci-followup	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+ci-followup	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+
+# 13-1 「cloudfront-keyvaluestore:PutKey · GetKey · ListKeys ·
+# DescribeKeyValueStore · UpdateKeys · DeleteKey | 서울 · us-east-1 | 허용 |
+# 10-13 10:59」(10-12 13:38 거부에서 바뀜) — 묶음은 us-east-1.
+O7f-stop2	cloudfront-keyvaluestore:PutKey	us-east-1	allow	2026-10-13T10:59+09:00
+O7f-stop2	cloudfront-keyvaluestore:GetKey	us-east-1	allow	2026-10-13T10:59+09:00
+O7f-stop2	cloudfront-keyvaluestore:ListKeys	us-east-1	allow	2026-10-13T10:59+09:00
+O7f-stop2	cloudfront-keyvaluestore:DescribeKeyValueStore	us-east-1	allow	2026-10-13T10:59+09:00
+O7f-stop2	cloudfront-keyvaluestore:UpdateKeys	us-east-1	allow	2026-10-13T10:59+09:00
+O7f-stop2	cloudfront-keyvaluestore:DeleteKey	us-east-1	allow	2026-10-13T10:59+09:00
+
+# 13-1 「rds-db:connect | 서울 · us-east-1 | 허용 | 10-13 10:59」(10-12 13:38
+# 거부에서 바뀜) — 묶음은 서울.
+O7e-stop1	rds-db:connect	ap-northeast-2	allow	2026-10-13T10:59+09:00

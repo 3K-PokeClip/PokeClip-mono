@@ -31,8 +31,8 @@ public class AuthService {
     private final UserRepository userRepository;
     private final TokenService tokenService;
 
-    public TokenPair loginWithGoogle(String code) {
-        String idToken = googleTokenClient.exchangeCodeForIdToken(code);
+    public TokenPair loginWithGoogle(String code, String codeVerifier) {
+        String idToken = googleTokenClient.exchangeCodeForIdToken(code, codeVerifier);
         GoogleUser googleUser = googleIdTokenVerifier.verify(idToken);
 
         User user = userService.findOrCreate(
@@ -52,5 +52,10 @@ public class AuthService {
         return userRepository.findById(userId)
                 .orElseThrow(() -> new DataInconsistencyException(
                         AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
+    }
+
+    /** 이름 수정은 UserService가 트랜잭션 최상단으로 처리한다 — 이 클래스는 조합만 한다. */
+    public User updateName(Long userId, String rawName) {
+        return userService.updateName(userId, rawName);
     }
 }

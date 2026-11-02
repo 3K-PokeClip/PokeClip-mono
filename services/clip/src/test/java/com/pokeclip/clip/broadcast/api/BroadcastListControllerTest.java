@@ -1,0 +1,1340 @@
+package com.pokeclip.clip.broadcast.api;
+
+import ch.qos.logback.classic.Level;
+import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
+import com.pokeclip.clip.broadcast.Envelopes;
+import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.TestIds;
+import com.pokeclip.clip.support.TestTokens;
+import com.pokeclip.web.support.LogCaptor;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import tools.jackson.databind.ObjectMapper;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * 편집자가 홈 화면을 열 때 처음 부르는 문. 재는 것은 넷이다 —
+ * <b>자격 창구를 실제로 거치는가</b> · 상태 코드 · 응답 한 줄의 모양 · 이어받기 왕복.
+ *
+ * <p><b>가짜 자격 창구를 Mockito로 갈아 끼우지 않는다.</b> 그렇게 하면 이 클래스가
+ * 「판정이 붙기 전과 정확히 같은 것」을 재게 된다(스킬 문항 2). 진짜로 듣는 소켓
+ * ({@link IntegrationTestSupport#AUTH})으로 가고, <b>답을 안 걸어 둔 시험은 503을 받는다</b> —
+ * 그래서 「auth를 안 물어도 되는 갈래」와 「물어야 하는 갈래」가 저절로 갈린다.
+ *
+ * <p>🔴 <b>요청자 번호가 {@link TestIds#STREAMER}와 다르다.</b> 같으면 auth에 안 묻고
+ * 문자열만 비교하는 구현에서도 초록이 된다.
+ */
+@AutoConfigureMockMvc
+class BroadcastListControllerTest extends IntegrationTestSupport {
+
+    private static final String ACCESSIBLE = "/internal/editor-delegations/accessible";
+
+    /** auth의 스트리머 채널 이름 창구(POK-430). */
+    private static final String NAMES = "/internal/streamer-channel-names";
+
+    /** 수집기의 「여러 방송의 마지막 제목」 창구(POK-259). */
+    private static final String TITLES = "/internal/broadcast-info/latest";
+
+    /** JWT {@code sub}. 방송 픽스처의 스트리머 번호와 <b>다른 사람</b>이다. */
+    private static final String 요청자 = "4174";
+
+    /** 내가 편집자로 맡은 남의 스트리머. */
+    private static final String 남의_스트리머 = "3";
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final Instant 시작_시각 = Instant.parse("2026-08-25T00:00:00Z");
+    private static final Duration 육십일 = Duration.ofDays(60);
+
+    private final MockMvc mvc;
+    private final JdbcTemplate jdbc;
+    private final BroadcastEventProcessor processor;
+
+    BroadcastListControllerTest(MockMvc mvc, JdbcTemplate jdbc, BroadcastEventProcessor processor) {
+        this.mvc = mvc;
+        this.jdbc = jdbc;
+        this.processor = processor;
+    }
+
+    @BeforeEach
+    void 앞_테스트의_흔적을_지운다() {
+        방송과_카드를_비운다(jdbc);
+    }
+
+    // ── 200과 그 모양 ────────────────────────────────────────────
+
+    /**
+     * 최신이 위다. 그리고 <b>auth를 정확히 한 번 물었다</b>는 것을 같이 잰다 —
+     * 0이면 판정 경로를 안 탄 것이고, 그때 이 갈래는 아무것도 안 재면서 초록이 된다.
+     */
+    @Test
+    void 내_방송이_최신순으로_나온다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-1", TestIds.STREAMER, "live");
+        방송을_넣는다("s-2", TestIds.STREAMER, "live");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(2))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-2"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-1"));
+
+        // 경로별로 센다: 줄이 있는 장은 이름 창구(POK-430)도 한 번 불러 총합은 2다
+        assertThat(AUTH.callCount(ACCESSIBLE)).as("자격 창구를 안 거쳤다 — 이 갈래는 판정을 안 재고 있다").isEqualTo(1);
+    }
+
+    /**
+     * 돈 내는 쪽(스트리머)과 매일 쓰는 쪽(전담 편집자)이 다르다 — <b>맡은 방송이 안 나오면
+     * 편집자에게는 이 제품이 빈 화면이다.</b> 관계가 줄마다 실려야 화면이 「내 방송」과
+     * 「맡은 방송」을 가른다(PRD 성공 기준).
+     */
+    @Test
+    void 편집자로_맡은_방송도_같이_나오고_관계가_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(2))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"))
+                .andExpect(jsonPath("$.broadcasts[0].relation").value("EDITOR"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-mine"))
+                .andExpect(jsonPath("$.broadcasts[1].relation").value("OWNER"));
+    }
+
+    /**
+     * 🔴 <b>남의 방송을 실제로 심어 두고 잰다.</b> 안 심으면 「비었다」가 조회가 통째로
+     * 망가져도 참이다. auth가 본인만 돌려주는 상황을 만들어, 거르는 쪽이 <b>목록 창구의 답</b>임을
+     * 못 박는다.
+     */
+    @Test
+    void 관계없는_사람은_빈_목록을_받는다() throws Exception {
+        볼_수_있는_스트리머(줄(요청자, "OWNER"));
+        방송을_넣는다("s-others", TestIds.STREAMER, "live");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(0))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+    }
+
+    /**
+     * auth가 빈 목록을 주는 경우. <b>이 갈래는 「빈 목록이면 조회를 건너뛴다」는 방어가
+     * 있으나 없으나 초록이다</b> — 빈 {@code IN} 목록도 예외 없이 0행이기 때문이다(계획 검증 실측).
+     * 여기서 재는 것은 <b>죽지 않는다는 것</b>뿐이고, 건너뛰기 자체는 성능·의도의 문제다.
+     * 주입으로 확인했고 진행 기록에 그렇게 적었다.
+     */
+    @Test
+    void auth가_빈_목록을_주면_200에_빈_목록이다() throws Exception {
+        AUTH.respondWith(ACCESSIBLE, 200, "{\"streamers\":[]}");
+        방송을_넣는다("s-others", TestIds.STREAMER, "live");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(0));
+    }
+
+    // ── state — 🔴 계약이 소문자다 ────────────────────────────────
+
+    /**
+     * 🔴 <b>열거형을 그대로 바인딩하면 {@code state=live}가 400이다</b>(계획 검증 실측:
+     * {@code MethodArgumentTypeMismatchException}). PRD·README·2번에게 줄 계약이 전부
+     * 소문자인데, 시험을 {@code state=LIVE}로 쓰면 <b>초록인 채 계약이 대문자로 바뀐다.</b>
+     * 그래서 대문자가 거절되는 것까지 같은 갈래에서 잰다.
+     */
+    @Test
+    void state는_소문자_live와_past를_받는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-live", TestIds.STREAMER, "live");
+        방송을_넣는다("s-ended", TestIds.STREAMER, "ended");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-live"))
+                .andExpect(jsonPath("$.broadcasts[0].status").value("live"));
+
+        목록("?state=past")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-ended"))
+                .andExpect(jsonPath("$.broadcasts[0].status").value("ended"));
+
+        목록("?state=LIVE")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("state"));
+    }
+
+    @Test
+    void state가_없으면_400이다() throws Exception {
+        목록("")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("state"));
+
+        assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
+    }
+
+    @Test
+    void state가_이상하면_400이다() throws Exception {
+        목록("?state=archived")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("state"));
+    }
+
+    // ── 개수 ────────────────────────────────────────────────────
+
+    /**
+     * 🔴 <b>상한보다 많이 심어야 잰다.</b> 100장만 심으면 상한이 통째로 사라져도 100장이 나온다.
+     */
+    @Test
+    void 상한을_넘는_개수는_상한으로_깎인다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        for (int i = 1; i <= 101; i++) {
+            방송을_넣는다("s-%03d".formatted(i), TestIds.STREAMER, "live");
+        }
+
+        목록("?state=live&limit=1000")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(100))
+                .andExpect(jsonPath("$.nextCursor").value(org.hamcrest.Matchers.notNullValue()));
+    }
+
+    /**
+     * m1 실측 — 서비스가 {@code IllegalArgumentException}을 던지면 전역 조언이 <b>일부러</b>
+     * 안 잡으므로 {@code ServletException}으로 빠져 <b>500</b>이 된다. 400이어야 한다.
+     */
+    @Test
+    void 개수가_0이거나_음수면_400이다() throws Exception {
+        for (String 값 : new String[]{"0", "-1"}) {
+            목록("?state=live&limit=" + 값)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("invalid_request"))
+                    .andExpect(jsonPath("$.field").value("limit"));
+        }
+
+        assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
+    }
+
+    /** 숫자가 아닌 값은 컨트롤러 메서드에 들어오기 전에 끝난다 — 그래도 봉투가 같아야 한다. */
+    @Test
+    void 숫자가_아닌_개수도_같은_400_봉투다() throws Exception {
+        String 형식오류 = 본문(목록("?state=live&limit=abc").andExpect(status().isBadRequest()));
+        String 값오류 = 본문(목록("?state=live&limit=0").andExpect(status().isBadRequest()));
+
+        assertThat(형식오류).as("정본 봉투가 비어 있으면 아래 비교가 아무것도 안 잰다")
+                .contains("invalid_request").contains("limit");
+        assertThat(형식오류).isEqualTo(값오류);
+    }
+
+    // ── 이어받기 ────────────────────────────────────────────────
+
+    /** 표시를 받아 그대로 되돌려 넣는 <b>왕복</b>을 잰다 — 감싸기와 풀기가 한 짝인지가 여기서 닫힌다. */
+    @Test
+    void 이어받으면_그_줄_다음부터_나온다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-1", TestIds.STREAMER, "live");
+        방송을_넣는다("s-2", TestIds.STREAMER, "live");
+        방송을_넣는다("s-3", TestIds.STREAMER, "live");
+
+        String 첫장 = 본문(목록("?state=live&limit=2")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-3"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-2")));
+        String 다음_표시 = (String) 맵(첫장).get("nextCursor");
+        assertThat(다음_표시).as("표시가 없으면 아래 요청이 첫 장을 또 받아 아무것도 안 잰다").isNotNull();
+
+        목록("?state=live&limit=2&cursor=" + 다음_표시)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-1"))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+    }
+
+    @Test
+    void 마지막_장에는_다음_표시가_없다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-1", TestIds.STREAMER, "live");
+        방송을_넣는다("s-2", TestIds.STREAMER, "live");
+
+        목록("?state=live&limit=20")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(2))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+    }
+
+    /**
+     * 🔴 <b>줄 수가 상한과 <i>정확히</i> 같은 경계.</b> 「다음 장이 있나」를 상한 하나를 더
+     * 받아 판정하므로 여기서 {@code >}를 {@code >=}로 한 글자 바꾸면 <b>마지막 장에
+     * 다음 표시가 붙는다</b> — 화면은 있지도 않은 다음 장을 한 번 더 받으러 간다.
+     *
+     * <p>이 갈래를 넣기 전에는 그 결함을 <b>19건이 전부 통과했다</b>(주입 s4). 위
+     * {@code 마지막_장에는_다음_표시가_없다}는 2장을 20장 상한으로 받아 경계에서 멀다.
+     */
+    @Test
+    void 줄_수가_상한과_같으면_다음_표시가_없다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-1", TestIds.STREAMER, "live");
+        방송을_넣는다("s-2", TestIds.STREAMER, "live");
+
+        목록("?state=live&limit=2")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(2))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+    }
+
+    @Test
+    void 이어받기_표시가_깨졌으면_400이다() throws Exception {
+        목록("?state=live&cursor=!!!not-base64!!!")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("cursor"));
+
+        assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
+    }
+
+    /**
+     * 🔴 <b>「칸이 비어 있다」와 「칸을 안 줬다」를 같게 본다.</b> 스프링은 {@code ?cursor=}를
+     * {@code null}이 아니라 <b>{@code ""}</b>로 넘긴다({@code defaultValue}가 있어야 대체한다) —
+     * 고치기 전에는 그 빈 문자열이 표시를 푸는 자리로 그대로 가서 <b>첫 장이 400</b>이었다.
+     * 웹이 {@code cursor=${표시 ?? ''}} 같은 흔한 모양으로 쓰면 홈 화면이 안 열린다.
+     *
+     * <p><b>{@code limit}은 이미 이렇게 군다</b> — {@code Integer}라 변환기가 빈 문자열을
+     * {@code null}로 바꿔 기본값을 탄다. 같은 응답의 두 칸이 다르게 굴던 것을 맞춘 것이다.
+     *
+     * <p>🔴 이것은 {@code ListLimit}의 「0을 조용히 봐 주지 않는다」와 <b>충돌하지 않는다</b> —
+     * {@code 0}은 <b>값을 준 것</b>이고 빈 문자열은 <b>값이 없는 것</b>이다. 그래서
+     * {@code ?limit=0}은 지금도 400이다(바로 위 갈래가 그것을 잰다).
+     */
+    @Test
+    void 빈_이어받기_표시는_안_준_것과_같다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-1", TestIds.STREAMER, "live");
+        방송을_넣는다("s-2", TestIds.STREAMER, "live");
+
+        // 앞엣것은 웹이 `cursor=${표시 ?? ''}`로 보내는 모양 그대로다.
+        // 뒤엣것은 공백만 있는 값 — 🔴 URL에 `%20`으로 쓰면 MockMvc가 한 번 더 감싸 리터럴
+        // "%20"이 되어(빈 값이 아니라 진짜 깨진 표시다) 400이 맞다. 그래서 칸 값으로 싣는다.
+        for (ResultActions 응답 : List.of(
+                목록("?state=live&limit=2&cursor="),
+                mvc.perform(get("/api/clip/broadcasts")
+                        .param("state", "live").param("limit", "2").param("cursor", " ")
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))))) {
+            응답.andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts.length()").value(2))
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-2"))
+                    .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-1"));
+        }
+    }
+
+    // ── 거절 ────────────────────────────────────────────────────
+
+    /**
+     * 🔴 <b>빈 목록이 아니다.</b> 빈 목록을 주면 화면이 「방송이 없다」고 단정하고, auth가
+     * 살아난 뒤에도 편집자는 다시 시도하지 않는다. 그래서 본문에 {@code broadcasts}라는
+     * 칸이 <b>아예 없어야</b> 한다 — {@code jsonPath().doesNotExist()}는 값이 null인 키도
+     * 통과하므로 본문 문자열로 잰다.
+     */
+    @Test
+    void auth를_못_물으면_503이고_빈_목록이_아니다() throws Exception {
+        AUTH.respondWith(ACCESSIBLE, 500, "");
+        방송을_넣는다("s-1", TestIds.STREAMER, "live");
+
+        String 본문 = 본문(목록("?state=live")
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("authorization_unavailable")));
+
+        assertThat(본문).doesNotContain("broadcasts").doesNotContain("nextCursor");
+    }
+
+    @Test
+    void 토큰이_없으면_401이다() throws Exception {
+        mvc.perform(get("/api/clip/broadcasts?state=live"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * 우리가 발급·검증한 토큰인데 {@code sub}가 숫자가 아니면 auth에 물어볼 수가 없다.
+     * <b>「볼 수 없다」로 접고 ERROR를 남긴다</b> — {@code BroadcastAccessGuard}·
+     * {@code SegmentQueryService}와 같은 판정이다(쌍둥이 셋이 같은 모양이어야 한다).
+     *
+     * <p>ERROR인 이유는 이것이 <b>조용한 장애</b>이기 때문이다 — 응답으로는 영영 구분이 안 된다.
+     * <b>값 자체는 안 찍는다</b>(로그 위조 차단).
+     */
+    @Test
+    void 주체가_숫자가_아니면_404이고_ERROR가_남는다() throws Exception {
+        String 숫자가_아닌_주체 = "subject-NOT-A-NUMBER-4174";
+
+        try (LogCaptor 로그 = new LogCaptor()) {
+            mvc.perform(get("/api/clip/broadcasts?state=live")
+                            .header("Authorization", "Bearer " + TestTokens.access(숫자가_아닌_주체)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error").value("broadcast_not_found"));
+
+            assertThat(로그.levelOf("clip.list.identity_not_numeric")).isEqualTo(Level.ERROR);
+            assertThat(로그.messages()).anyMatch(m -> m.contains("reason=subject_not_numeric"));
+            assertThat(로그.messages()).as("값 자체는 안 찍는다").noneMatch(m -> m.contains(숫자가_아닌_주체));
+        }
+
+        assertThat(AUTH.callCount()).as("숫자로 못 바꾼 번호로 auth를 두드리면 안 된다").isZero();
+    }
+
+    // ── 응답 한 줄의 모양 ────────────────────────────────────────
+
+    /**
+     * 🔴 <b>감추거나 지어내지 않는다</b>(PRD 성공 기준). 종료 선도착 placeholder는 시작 시각이
+     * 비어 있고, 화면은 그것을 「시작 시각 미상」으로 그린다.
+     *
+     * <p>{@code doesNotExist()}로 재면 안 된다 — <b>값이 null인 키도 통과</b>해서 키가 아예
+     * 빠진 것을 못 잡는다(POK-121 실측). 그래서 본문을 맵으로 읽어 <b>키가 있는 것</b>과
+     * <b>값이 null인 것</b>을 따로 단언한다.
+     */
+    @Test
+    void 시작_시각이_빈_방송도_나오고_그_칸이_빈_채로_나간다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-placeholder", TestIds.STREAMER, "ended", null, 시작_시각, 시작_시각.plus(육십일));
+
+        String 본문 = 본문(목록("?state=past")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].startedAt").value(nullValue())));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("startedAt");
+        assertThat(한_줄.get("startedAt")).isNull();
+    }
+
+    /**
+     * 영상은 못 봐도 방송 기록은 남는다 — 빼면 편집자에게는 방송이 사라진 것으로 보인다.
+     * 화면이 「보관 만료」를 그릴 재료(보관 기한)가 응답에 실려 있어야 한다.
+     */
+    @Test
+    void 보관_기한이_지난_방송도_나오고_기한이_실려_있다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        Instant 지난_기한 = Instant.parse("2026-01-01T00:00:00Z");
+        방송을_넣는다("s-expired", TestIds.STREAMER, "ended", 시작_시각, 지난_기한.minus(육십일), 지난_기한);
+
+        목록("?state=past")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-expired"))
+                .andExpect(jsonPath("$.broadcasts[0].vodExpiresAt").value(지난_기한.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].endedAt").value(지난_기한.minus(육십일).toString()));
+    }
+
+    // ── 시각 기준점(POK-255) ───────────────────────────────────────
+
+    /**
+     * 기준점 = 첫 조각의 절대 시각 − 그 조각의 {@code start_pts_ms}. 첫 조각이 방송 시작 편지보다 <b>32초 늦게</b>
+     * 시작한 방송(2026-09-17 실측과 같은 모양)이면 기준점이 시작 편지가 아니라 첫 조각 쪽이어야 한다 — 웹이 이 값에 카드 ms를
+     * 더해 컷을 만들고, 시작 편지로 대신하면 편집 구간이 32초 어긋난다.
+     */
+    @Test
+    void 시각_기준점은_첫_조각의_절대_시각에서_pts를_뺀_값이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-origin", TestIds.STREAMER, "live");
+        Instant 첫_조각 = 시작_시각.plusSeconds(32);
+        // 조각 셋: pts 1500부터(녹화기가 앞을 잘랐다), playback_pdt는 조각 길이만큼 이어진다. 벽시계는 흔들린다
+        조각을_넣는다("s-origin", 1, 1_500, 첫_조각.plusMillis(1_500), 첫_조각.plusMillis(1_500 + 120));
+        조각을_넣는다("s-origin", 2, 5_500, 첫_조각.plusMillis(5_500), 첫_조각.plusMillis(5_500 - 80));
+        조각을_넣는다("s-origin", 3, 9_500, 첫_조각.plusMillis(9_500), 첫_조각.plusMillis(9_500 + 40));
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(첫_조각.toString()));
+    }
+
+    /**
+     * 방송 번호가 회차 번호가 되면(POK-233) 같은 스트리머의 방송 둘이 <b>한 물리 키</b>를 나눠 쓴다. 조각은 물리 키로 찾고, 기준점은
+     * 방송 번호 자리에 실린다 — 맵을 물리 키로 채우면 목록이 방송 번호로 꺼내다 못 찾아 둘 다 빈다. 영상 주소용 물리 키도 싣는다.
+     */
+    @Test
+    void 물리_키를_나눠_쓰는_방송_둘은_각자_제_시간의_조각으로_기준점을_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        Instant 어제 = 시작_시각.minusSeconds(86_400);
+        방송을_넣는다("S-old-1", TestIds.STREAMER, "ended", 어제, 어제.plusSeconds(3_600), 어제.plusSeconds(86_400 * 60L));
+        방송을_넣는다("S-new-2", TestIds.STREAMER, "live");
+        jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'key-shared'");
+        조각을_넣는다("key-shared", 1, 0, 어제.plusSeconds(7), 어제.plusSeconds(7));
+        조각을_넣는다("key-shared", 900, 3_600_000, 시작_시각.plusSeconds(11), 시작_시각.plusSeconds(11));
+
+        목록("?state=live")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-new-2"))
+                .andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("key-shared"))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                        .value(시작_시각.plusSeconds(11).minusMillis(3_600_000).toString()));
+        목록("?state=past")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-old-1"))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(어제.plusSeconds(7).toString()));
+    }
+
+    /** 물리 키가 빈 옛 줄은 방송 번호가 곧 영상 주소의 키다 — 칸을 비우면 화면이 주소를 못 만든다. */
+    @Test
+    void 물리_키가_빈_옛_줄은_방송_번호를_물리_키로_싣는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("old-key", TestIds.STREAMER, "live");
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("old-key"));
+    }
+
+    /** 재생 시각({@code playback_pdt})이 아직 빈 조각은 벽시계로 잰다 — 렌더 주문의 조각 찾기와 같은 축이다. */
+    @Test
+    void 재생_시각이_빈_조각은_벽시계로_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-wall", TestIds.STREAMER, "live");
+        조각을_넣는다("s-wall", 1, 0, null, 시작_시각.plusSeconds(10));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(10).toString()));
+    }
+
+    /**
+     * 장부의 {@code stream_id}는 물리 키(오늘은 스트림키)라 <b>같은 이름으로 다른 방송의 조각</b>도 쌓인다. 방송 시간
+     * 밖(시작 10분 전보다 이른) 조각은 안 본다 — 보면 지난 방송의 기준점이 나온다.
+     */
+    @Test
+    void 방송_시간_밖의_조각은_안_본다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-reuse", TestIds.STREAMER, "live");
+        // 하루 전 방송의 조각(pts 0) — 가장 작은 pts지만 방송 밖이다
+        조각을_넣는다("s-reuse", 1, 0, 시작_시각.minusSeconds(86_400), 시작_시각.minusSeconds(86_400));
+        조각을_넣는다("s-reuse", 2, 0, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(5).toString()));
+    }
+
+    /**
+     * 장부의 {@code start_pts_ms}는 방송을 넘어 이어진다(media가 마지막 행에서 이어 받는다). 그래서 시작 몇 분 전에 끝난 앞 방송
+     * 꼬리 조각은 pts가 <b>더 작다</b> — 「가장 작은 pts」로 고르면 그 조각이 뽑혀 앞 회차의 기준점이 나온다(로컬 리뷰 1라운드).
+     */
+    @Test
+    void 시작_몇_분_전의_앞_방송_꼬리_조각은_안_섞인다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-tail", TestIds.STREAMER, "live");
+        // 앞 회차 꼬리: 5분 전, pts 100,000 · 재생 시각이 벽시계보다 3초 앞서 있다(회차 안에서 쌓인 차)
+        조각을_넣는다("s-tail", 10, 100_000, 시작_시각.minusSeconds(300 - 3), 시작_시각.minusSeconds(300));
+        // 이번 회차 첫 조각: pts는 이어서 104,000 · 재생 시각은 벽시계로 다시 맞춰졌다
+        조각을_넣는다("s-tail", 11, 104_000, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(5).minusMillis(104_000).toString()));
+    }
+
+    /** 기준점은 부가 칸이다 — 장부 표를 못 읽어도 목록은 나가고 기준점만 빈다(여기서 500이면 홈·라이브가 통째로 죽는다). */
+    @Test
+    void 조각_장부를_못_읽어도_목록은_나가고_기준점만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-noledger", TestIds.STREAMER, "live");
+        jdbc.execute("ALTER TABLE public.stream_segments RENAME TO stream_segments_hidden");
+        try {
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-noledger"))
+                    .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(nullValue()));
+        } finally {
+            jdbc.execute("ALTER TABLE public.stream_segments_hidden RENAME TO stream_segments");
+        }
+    }
+
+    /** 조각이 없으면 기준점도 없다 — 지어내지 않는다. 칸은 빼지 않고 null로 싣는다(화면이 「모름」을 안다). */
+    @Test
+    void 조각이_없으면_기준점은_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-empty", TestIds.STREAMER, "live");
+
+        String 본문 = 본문(목록("?state=live").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("timelineOriginAt");
+        assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
+    /**
+     * 종료 편지가 먼저 와 시작 시각을 모르는 방송은 기준점을 안 잰다. 아래 경계가 없으면 같은 키의 <b>앞 방송 조각</b>이 첫 조각으로
+     * 뽑혀 남의 회차 기준점이 나간다(PR #202 codex).
+     */
+    @Test
+    void 시작_시각을_모르는_방송은_기준점을_안_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-placeholder", TestIds.STREAMER, "ended", null, 시작_시각, 시작_시각.plus(육십일));
+        // 하루 전 방송의 조각 — 종료 편지보다 앞이라 위 경계에는 안 걸린다
+        조각을_넣는다("s-placeholder", 1, 0, 시작_시각.minusSeconds(86_400), 시작_시각.minusSeconds(86_400));
+
+        String 본문 = 본문(목록("?state=past").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("timelineOriginAt");
+        assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
+    /**
+     * 종료 편지가 먼저 와 생긴 방송도 시작 편지가 늦게 오면 목록에 그 시작 시각이 실리고, 기준점도 <b>그 회차의</b> 조각으로 잰다
+     * (POK-327). 웹은 시작 시각이 있으면 [시작, 끝] 창을 타서 웹 코드를 안 바꾼다. 같은 물리 키로 세 시간 전에 한 앞 회차 조각은
+     * 시작 2분 전 경계에 걸려 안 섞인다. 시작을 모르던 때는 웹이 끝 12시간 창으로 읽어 그 회차 녹화까지 틀 수 있었다.
+     */
+    @Test
+    void 종료가_먼저_온_방송도_늦게_온_시작_편지로_시작_시각과_기준점이_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        Instant 끝 = 시작_시각.plusSeconds(3_600);
+        processor.process(Envelopes.ended("e-end", "S-late", "key-shared", 2L, 끝));
+        processor.process(Envelopes.started("e-start", "S-late", "key-shared", 1L, 시작_시각));
+        // 같은 물리 키의 앞 회차 조각(세 시간 전)과 이 회차 첫 조각(32초 뒤). pts는 회차를 넘어 이어진다
+        조각을_넣는다("key-shared", 1, 0, 시작_시각.minusSeconds(10_800), 시작_시각.minusSeconds(10_800));
+        Instant 첫_조각 = 시작_시각.plusSeconds(32);
+        조각을_넣는다("key-shared", 2, 3_600_000, 첫_조각, 첫_조각);
+
+        목록("?state=past")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-late"))
+                .andExpect(jsonPath("$.broadcasts[0].status").value("ended"))
+                .andExpect(jsonPath("$.broadcasts[0].startedAt").value(시작_시각.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].endedAt").value(끝.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(첫_조각.minusMillis(3_600_000).toString()));
+    }
+
+    // ── 방송 제목(POK-259) ───────────────────────────────────────
+
+    /**
+     * 수집기가 준 방송마다의 마지막 제목·카테고리가 실린다. <b>한 장을 한 번에 묻는다</b>는 것(방송 수만큼 왕복하지 않는다)과 물은
+     * 방송 번호를 같이 잰다.
+     */
+    @Test
+    void 수집기가_준_제목과_카테고리가_방송마다_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-a", TestIds.STREAMER, "live");
+        방송을_넣는다("s-b", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-a":{"title":"새 제목","category":"League of Legends"},"s-b":{"title":"다른 방송","category":null}}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-b"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("다른 방송"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-a"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("새 제목"))
+                .andExpect(jsonPath("$.broadcasts[1].category").value("League of Legends"));
+
+        assertThat(COLLECTOR.callCount()).as("방송마다 묻지 않고 한 장을 한 번에 묻는다").isEqualTo(1);
+        assertThat(COLLECTOR.lastPath()).isEqualTo(TITLES);
+        // 주소가 아니라 본문에 싣는다(128자 번호 100개면 주소가 톰캣 한도 8KB를 넘는다, PR #214 codex)
+        assertThat(COLLECTOR.lastMethod()).isEqualTo("POST");
+        assertThat(COLLECTOR.lastQuery()).isEmpty();
+        assertThat(COLLECTOR.lastBody()).isEqualTo("{\"streamIds\":[\"s-b\",\"s-a\"]}");
+    }
+
+    /** 수집기가 제목을 모르는 방송(관측이 아직 없다)은 칸을 빼지 않고 null로 싣는다. 화면은 그때 방송 번호를 보인다. */
+    @Test
+    void 수집기가_모르는_방송은_제목이_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-noinfo", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, "{\"titles\":{}}");
+
+        String 본문 = 본문(목록("?state=live").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("title").containsKey("category");
+        assertThat(한_줄.get("title")).isNull();
+        assertThat(한_줄.get("category")).isNull();
+    }
+
+    /**
+     * 제목은 부가 칸이다. 수집기가 죽었거나(5xx) 모르는 모양을 주거나 400을 줘도 목록은 나가고 제목만 빈다. 다른 부가 칸(기준점)은
+     * 그대로 실린다. 여기서 500이면 홈·지난 방송·라이브가 통째로 죽는다.
+     */
+    @Test
+    void 수집기가_아프면_목록은_나가고_제목만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-sick", TestIds.STREAMER, "live");
+        조각을_넣는다("s-sick", 1, 0, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        for (String[] 수집기 : new String[][] {{"503", ""}, {"200", "제목 아님"}, {"400", "{\"error\":\"too_many\"}"},
+                {"200", "{\"titles\":{\"s-sick\":{\"title\":7}}}"}, {"200", ""}, {"200", "   "}, {"200", "[]"}}) {
+            COLLECTOR.respondWith(TITLES, Integer.parseInt(수집기[0]), 수집기[1]);
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-sick"))
+                    .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue()))
+                    // 플랫폼 칸은 그대로 나가고 시청자 수만 빈다(POK-397)
+                    .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(1))
+                    .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                    .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()))
+                    .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(시작_시각.plusSeconds(5).toString()));
+        }
+    }
+
+    /** 볼 방송이 없으면 수집기를 안 부른다(빈 목록에 왕복 하나를 태울 이유가 없다). */
+    @Test
+    void 방송이_없으면_수집기를_안_부른다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        목록("?state=live").andExpect(status().isOk()).andExpect(jsonPath("$.broadcasts.length()").value(0));
+        assertThat(COLLECTOR.callCount()).isZero();
+    }
+
+    /**
+     * 협상에 실패하면 상태 코드가 <b>500으로 둔갑한다</b> — POK-118이 이 자리에서 실제로 덴
+     * 사고다. 세 갈래를 한 번에 보는 것은 {@code json} 하나가 셋의 공통 출구여서다.
+     */
+    @Test
+    void 오류_응답은_Accept가_JSON이_아니어도_JSON으로_나간다() throws Exception {
+        오류_협상("?state=archived").andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.error").value("invalid_request"));
+        오류_협상("?state=live&cursor=!!!").andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.field").value("cursor"));
+
+        AUTH.respondWith(ACCESSIBLE, 500, "");
+        오류_협상("?state=live").andExpect(status().isServiceUnavailable())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.error").value("authorization_unavailable"));
+    }
+
+    // ── 한 스트리머로 좁히기(POK-390 채널 스위처) ─────────────────
+
+    /**
+     * 화면이 고른 채널 하나의 방송만 나온다. <b>내 방송을 같이 심어 둔다</b>: 안 심으면 인자를 무시하는
+     * 구현도 1건이라 초록이다. auth는 여전히 한 번 묻는다(좁히는 재료가 그 답이다).
+     */
+    @Test
+    void 스트리머를_고르면_그_채널_방송만_나온다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"))
+                .andExpect(jsonPath("$.broadcasts[0].relation").value("EDITOR"));
+
+        assertThat(AUTH.callCount(ACCESSIBLE)).as("좁혀도 자격 창구는 거친다").isEqualTo(1);
+    }
+
+    /**
+     * 볼 수 없는 채널을 고르면 <b>404</b>다(200 빈 목록이 아니다). 빈 목록이면 위임이 끊긴 편집자 화면이
+     * 「방송이 없다」로 남아 내 채널로 못 돌아간다. 본문은 「없는 번호」와 「권한 없음」을 안 가른다.
+     * 🔴 그 채널의 방송을 실제로 심어 둔다: 안 심으면 거르기가 통째로 빠져도 「안 나간다」가 참이다.
+     */
+    @Test
+    void 볼_수_없는_스트리머를_고르면_404이고_남의_방송이_안_나간다() throws Exception {
+        볼_수_있는_스트리머(줄(요청자, "OWNER"));
+        방송을_넣는다("s-others", 남의_스트리머, "live");
+
+        String 본문 = 본문(목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("broadcast_not_found")));
+
+        assertThat(본문).doesNotContain("s-others").doesNotContain("broadcasts");
+    }
+
+    /**
+     * 볼 수 있는 채널인데 방송이 0건이면 <b>200 빈 목록</b>이다(404가 아니다). 웹은 목록 404를 「위임 끊김」으로 읽어
+     * 내 채널로 돌려보낸다: 라이브가 없는 채널을 고를 때마다 튕겨 나가면 안 된다(감사 1회차 지적 1).
+     * 내 채널에는 방송을 심어 둔다: 섞여 나오지 않는 것까지 같이 잰다.
+     */
+    @Test
+    void 볼_수_있는_스트리머의_방송이_0건이면_200에_빈_목록이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+
+        목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(0))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+    }
+
+    /** 번호는 숫자로 비교한다: 문자열로 비교하면 {@code 0003}이 404가 된다(auth 답은 숫자 3이다). */
+    @Test
+    void 선행_0이_붙은_번호도_같은_채널이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        목록("?state=live&streamerId=000" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"));
+    }
+
+    /** 형식 오류는 auth 왕복 전에 400이다: 다른 칸과 같은 봉투. long을 넘는 숫자도 형식 오류다. */
+    @Test
+    void 숫자가_아닌_스트리머는_400이고_auth를_안_부른다() throws Exception {
+        for (String 값 : List.of("abc", "3abc", "99999999999999999999")) {
+            목록("?state=live&streamerId=" + 값)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("invalid_request"))
+                    .andExpect(jsonPath("$.field").value("streamerId"));
+        }
+
+        assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
+    }
+
+    /** 빈 값·공백만은 「안 줬다」다: {@code cursor}와 같은 규칙(계획 검증 m3). 섞인 목록이 그대로 나온다. */
+    @Test
+    void 빈_스트리머는_안_준_것과_같다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        // 🔴 주소에 %20을 직접 쓰면 MockMvc가 % 를 한 번 더 바꿔 글자 「%20」이 들어간다: 값은 param으로 넣는다.
+        for (String 값 : List.of("", "  ")) {
+            mvc.perform(get("/api/clip/broadcasts?state=live").param("streamerId", 값)
+                            .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts.length()").value(2));
+        }
+    }
+
+    /** auth를 못 물었으면 채널을 골라도 <b>503</b>이다: 좁힌 빈 목록을 「볼 수 없다」(404)로 읽으면 안 된다. */
+    @Test
+    void auth를_못_물으면_스트리머를_골라도_503이다() throws Exception {
+        AUTH.respondWith(ACCESSIBLE, 500, "");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("authorization_unavailable"));
+    }
+
+    // ── 플랫폼(POK-398) ──
+
+    /** 칸이 없던 줄(기존 방송, 플랫폼을 안 실은 편지)은 치지직으로 나간다. 화면은 이 값으로 띠의 플랫폼 태그를 그린다. */
+    @Test
+    void 방송마다_플랫폼이_실리고_안_적힌_줄은_치지직이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-old", TestIds.STREAMER, "live");
+        processor.process(Envelopes.startedOn("evt-soop", "s-soop", 1L, "SOOP"));
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-soop"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-old"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("CHZZK"));
+    }
+
+    // ── 켜진 플랫폼과 플랫폼별 시청자 수(POK-397) ──
+
+    /**
+     * 한 방송을 치지직·SOOP에 같이 내보내면 {@code platforms}가 둘이고 플랫폼마다 시청자 수가 따로다. 묶음 표에 SOOP만 있어도 수집기가 치지직 값을
+     * 봤으면 편지 플랫폼(CHZZK)이 빠지지 않는다(계획 검증 M6: 치지직 목록 훑기가 실패한 분에는 수집기가 CHZZK를 묶음에 못 알리지만, 방송 정보
+     * 줄은 남는다). 옛 칸 {@code platform}은 편지 값 그대로다(L2).
+     */
+    @Test
+    void 동시_방송은_플랫폼마다_시청자_수가_따로_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-dual", TestIds.STREAMER, "live");
+        묶음("s-dual", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-dual":{"title":"치지직 제목","category":"LoL"}},
+                 "platforms":{"s-dual":[
+                   {"platform":"CHZZK","title":"치지직 제목","category":"LoL","viewers":100,"observedAt":"2026-08-25T00:05:00Z"},
+                   {"platform":"SOOP","title":null,"category":null,"viewers":30,"observedAt":"2026-08-25T00:04:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(2))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(100))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].observedAt").value("2026-08-25T00:05:00Z"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].viewers").value(30))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].observedAt").value("2026-08-25T00:04:00Z"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직 제목"));
+        assertThat(COLLECTOR.callCount()).as("시청자 수도 같은 한 번의 왕복에서 온다").isEqualTo(1);
+    }
+
+    /** 순서는 CHZZK → SOOP → 그 밖 이름순이다. 편지가 SOOP이어도 순서는 같고, 옛 칸은 편지 값(SOOP) 그대로다. */
+    @Test
+    void 플랫폼_순서는_치지직_숲_그_밖_이름순이고_옛_칸은_켜진_플랫폼_첫째다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_플랫폼으로_넣는다("s-order", "SOOP");
+        묶음("s-order", "YOUTUBE");
+        묶음("s-order", "AFREECA_OLD");
+        묶음("s-order", "CHZZK");
+        묶음("s-order", "SOOP");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK")) // 편지 값(SOOP)과 다를 수 있다
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(
+                        org.hamcrest.Matchers.contains("CHZZK", "SOOP", "AFREECA_OLD", "YOUTUBE")))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].observedAt").value(nullValue()));
+    }
+
+    /**
+     * 묶음 표가 비면 편지 플랫폼 하나다. 수집기가 그 플랫폼 값을 주면 실리고, 다른 방송 값은 안 섞인다. 묶음에 SOOP만 있고 수집기도 SOOP만 봤으면
+     * SOOP 하나다(편지 플랫폼 CHZZK를 안 붙인다, 아래 시험).
+     */
+    @Test
+    void 묶음이_없으면_편지_플랫폼_하나다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-one", TestIds.STREAMER, "live");
+        방송을_넣는다("s-two", TestIds.STREAMER, "live");
+        묶음("s-two", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},"platforms":{
+                  "s-one":[{"platform":"CHZZK","title":null,"category":null,"viewers":7,"observedAt":"2026-08-25T00:01:00Z"}],
+                  "s-two":[{"platform":"SOOP","title":null,"category":null,"viewers":9,"observedAt":"2026-08-25T00:02:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-one"))
+                .andExpect(jsonPath("$.broadcasts[1].platforms.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[1].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[1].platforms[0].viewers").value(7))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-two"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(9));
+    }
+
+    /**
+     * 편지 플랫폼은 ① 묶음 표가 비었거나 ② 묶음 표에 있거나 ③ 수집기가 그 플랫폼 값을 봤을 때만 넣는다(로컬 리뷰 1라운드).
+     * 🔴 Media는 지금 편지에 {@code platform}을 안 싣는다. 그래서 {@code broadcasts.platform}은 늘 CHZZK이고, 편지 플랫폼을 무조건 넣으면 SOOP만
+     * 하는 방송에도 시청자 수 없는 치지직이 붙는다. 옛 칸 {@code platform}은 켜진 플랫폼의 첫째다(편지 값 CHZZK가 아니다).
+     */
+    @Test
+    void 편지_플랫폼은_묶음이_비었거나_묶음이나_수집기에_있을_때만_넣는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-soop-only", TestIds.STREAMER, "live");
+        묶음("s-soop-only", "SOOP");
+        방송을_넣는다("s-dual-seen", TestIds.STREAMER, "live");
+        묶음("s-dual-seen", "SOOP");
+        방송을_넣는다("s-empty", TestIds.STREAMER, "live");
+        방송을_넣는다("s-both", TestIds.STREAMER, "live");
+        묶음("s-both", "CHZZK");
+        묶음("s-both", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},"platforms":{
+                  "s-soop-only":[{"platform":"SOOP","viewers":5,"observedAt":"2026-08-25T00:01:00Z"}],
+                  "s-dual-seen":[{"platform":"CHZZK","viewers":7,"observedAt":"2026-08-25T00:01:00Z"},
+                                 {"platform":"SOOP","viewers":8,"observedAt":"2026-08-25T00:01:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[3].streamId").value("s-soop-only"))
+                .andExpect(jsonPath("$.broadcasts[3].platform").value("SOOP")) // 옛 칸은 켜진 플랫폼 첫째(재시험 결함)
+                .andExpect(jsonPath("$.broadcasts[3].platforms[*].platform").value(org.hamcrest.Matchers.contains("SOOP")))
+                .andExpect(jsonPath("$.broadcasts[2].streamId").value("s-dual-seen"))
+                .andExpect(jsonPath("$.broadcasts[2].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK", "SOOP")))
+                .andExpect(jsonPath("$.broadcasts[2].platforms[0].viewers").value(7))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-empty"))
+                .andExpect(jsonPath("$.broadcasts[1].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK")))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-both"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK", "SOOP")));
+    }
+
+    /**
+     * 제목은 <b>목록에 실린 플랫폼 중 켜진 것</b>에서 고른다. 켜짐 = 그 방송의 가장 최근 관측에서 3분 안에 관측된 플랫폼이다(웹의 「관측 3분 안」과
+     * 같은 폭, 끝난 방송도 마지막에 켜져 있던 것을 고르게 지금 시각이 아니라 마지막 관측에 잰다). 켜진 것 중 시청자가 많은 쪽, 같으면 CHZZK → SOOP
+     * 순서이고, 그 플랫폼에 제목이 없으면 다음 켜진 플랫폼이다. 켜진 플랫폼에 제목이 없으면 꺼진 플랫폼·옛 칸 제목도 안 쓴다. 카테고리는 고른 제목과
+     * 같은 플랫폼 값이다.
+     */
+    @Test
+    void 제목은_켜진_플랫폼_중_시청자_많은_쪽이고_꺼진_플랫폼_제목은_안_쓴다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_플랫폼으로_넣는다("s-t1", "SOOP");
+        방송을_플랫폼으로_넣는다("s-t2", "SOOP");
+        방송을_플랫폼으로_넣는다("s-t3", "SOOP");
+        묶음("s-t1", "CHZZK");
+        묶음("s-t2", "CHZZK");
+        묶음("s-t2", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-t1":{"title":"치지직 제목","category":"LoL"},"s-t2":{"title":"옛 칸 둘","category":"Talk"},
+                           "s-t3":{"title":"옛 칸 제목","category":"Talk"}},
+                 "platforms":{
+                  "s-t1":[{"platform":"CHZZK","title":"치지직 제목","category":"LoL","viewers":1,"observedAt":"2026-08-25T00:09:00Z"},
+                          {"platform":"SOOP","title":"숲 제목","category":"Just Chatting","viewers":2,"observedAt":"2026-08-25T00:01:00Z"}],
+                  "s-t2":[{"platform":"CHZZK","title":"치지직 둘","category":"LoL","viewers":1,"observedAt":"2026-08-25T00:09:00Z"},
+                          {"platform":"SOOP","title":null,"category":null,"viewers":2,"observedAt":"2026-08-25T00:08:00Z"}],
+                  "s-t3":[{"platform":"SOOP","title":"  ","category":null,"viewers":2,"observedAt":"2026-08-25T00:01:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[2].streamId").value("s-t1"))
+                .andExpect(jsonPath("$.broadcasts[2].title").value("치지직 제목")) // SOOP은 8분 전 관측이라 꺼짐
+                .andExpect(jsonPath("$.broadcasts[2].category").value("LoL"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-t2"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("치지직 둘")) // 시청자 많은 SOOP에 제목이 없으면 다음 켜진 플랫폼
+                .andExpect(jsonPath("$.broadcasts[1].category").value("LoL"))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-t3"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue())) // 켜진 SOOP에 제목이 없으면 옛 칸도 안 쓴다
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()));
+    }
+
+    /**
+     * 웹 PR3b 로컬 리뷰 결함(POK-397): 치지직으로 잠깐 켰다 끄고 SOOP으로만 방송하면 묶음에 CHZZK가 남고 편지 플랫폼은 늘 CHZZK라, 「편지 플랫폼 먼저」
+     * 규칙이 꺼진 치지직 제목을 골랐다. 꺼진 플랫폼은 시청자가 많았어도 제목 후보가 아니다.
+     */
+    @Test
+    void 치지직을_잠깐_켰다_끄고_SOOP으로만_방송하면_SOOP_제목이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-switch", TestIds.STREAMER, "live");
+        묶음("s-switch", "CHZZK");
+        묶음("s-switch", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-switch":{"title":"숲 제목","category":null}},
+                 "platforms":{"s-switch":[
+                   {"platform":"CHZZK","title":"꺼진 치지직 제목","category":"LoL","viewers":50,"observedAt":"2026-08-25T00:02:00Z"},
+                   {"platform":"SOOP","title":"숲 제목","category":null,"viewers":3,"observedAt":"2026-08-25T00:10:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].title").value("숲 제목"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()))
+                // 옛 칸(PR3b 전 웹 홈 태그)도 같은 규칙이다. 묶음 순서의 첫째(CHZZK)면 SOOP 제목에 치지직 태그가 붙는다(로컬 리뷰 4라운드)
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(
+                        org.hamcrest.Matchers.contains("CHZZK", "SOOP")));
+    }
+
+    /** 켜짐 폭의 끝: 마지막 관측에서 정확히 3분 전 관측은 켜짐, 3분 1초 전은 꺼짐이다. */
+    @Test
+    void 마지막_관측에서_정확히_3분_전은_켜짐이고_그보다_앞은_꺼짐이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-edge-in", TestIds.STREAMER, "live");
+        묶음("s-edge-in", "CHZZK");
+        묶음("s-edge-in", "SOOP");
+        방송을_넣는다("s-edge-out", TestIds.STREAMER, "live");
+        묶음("s-edge-out", "CHZZK");
+        묶음("s-edge-out", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},
+                 "platforms":{
+                  "s-edge-in":[{"platform":"CHZZK","title":"치지직","viewers":1,"observedAt":"2026-08-25T00:10:00Z"},
+                               {"platform":"SOOP","title":"숲","viewers":9,"observedAt":"2026-08-25T00:07:00Z"}],
+                  "s-edge-out":[{"platform":"CHZZK","title":"치지직","viewers":1,"observedAt":"2026-08-25T00:10:00Z"},
+                                {"platform":"SOOP","title":"숲","viewers":9,"observedAt":"2026-08-25T00:06:59Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-edge-in"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("숲"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-edge-out"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"));
+    }
+
+    /** 둘 다 켜져 있으면 시청자가 많은 쪽 제목·옛 칸 {@code platform}이다(편지 플랫폼 CHZZK가 먼저가 아니다). 같으면 CHZZK → SOOP. */
+    @Test
+    void 동시_방송이면_시청자_많은_플랫폼_제목과_옛_칸이고_같으면_치지직이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-more-soop", TestIds.STREAMER, "live");
+        묶음("s-more-soop", "CHZZK");
+        묶음("s-more-soop", "SOOP");
+        방송을_넣는다("s-tie", TestIds.STREAMER, "live");
+        묶음("s-tie", "CHZZK");
+        묶음("s-tie", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},
+                 "platforms":{
+                  "s-more-soop":[{"platform":"CHZZK","title":"치지직 제목","category":"LoL","viewers":10,"observedAt":"2026-08-25T00:10:00Z"},
+                                 {"platform":"SOOP","title":"숲 제목","category":null,"viewers":40,"observedAt":"2026-08-25T00:09:00Z"}],
+                  "s-tie":[{"platform":"SOOP","title":"숲 같음","category":null,"viewers":5,"observedAt":"2026-08-25T00:10:00Z"},
+                           {"platform":"CHZZK","title":"치지직 같음","category":"LoL","viewers":5,"observedAt":"2026-08-25T00:10:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-more-soop"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("숲 제목"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-tie"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직 같음"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"));
+    }
+
+    /**
+     * 재시험 결함(POK-397): SOOP으로만 방송하는데 치지직 세션이 붙어 있으면 옛 칸 제목이 치지직 설정 제목이었다. 묶음 [SOOP] · 수집기 SOOP만이면
+     * 목록 [SOOP], 제목은 SOOP 쪽, 옛 칸 {@code platform}도 SOOP이다. 옛 칸 제목(치지직)은 안 쓴다.
+     */
+    @Test
+    void SOOP_전용_방송은_SOOP_제목과_SOOP_플랫폼만_싣는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-soop", TestIds.STREAMER, "live");
+        묶음("s-soop", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-soop":{"title":"꺼진 치지직 제목","category":"LoL"}},
+                 "platforms":{"s-soop":[{"platform":"SOOP","title":"숲 제목","category":null,"viewers":12,
+                                         "observedAt":"2026-08-25T00:05:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(org.hamcrest.Matchers.contains("SOOP")))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("숲 제목"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()));
+    }
+
+    /**
+     * 목록에 안 실린 플랫폼(수집기는 봤지만 묶음에 없고 편지 플랫폼도 아님, 예: clip 알림이 아직 실패 중)의 제목은 안 쓴다. 제목과 태그가 다른
+     * 플랫폼을 가리키면 화면이 거짓말을 한다(주입 T1이 처음엔 초록이라 넣었다).
+     */
+    @Test
+    void 실리지_않은_플랫폼의_제목은_안_쓴다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-unlisted", TestIds.STREAMER, "live");
+        묶음("s-unlisted", "CHZZK");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-unlisted":{"title":"숲 제목","category":null}},
+                 "platforms":{"s-unlisted":[
+                   {"platform":"CHZZK","title":null,"viewers":3,"observedAt":"2026-08-25T00:05:00Z"},
+                   {"platform":"SOOP","title":"숲 제목","viewers":4,"observedAt":"2026-08-25T00:05:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK")))
+                .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue()));
+    }
+
+    /** 옛 수집기(응답에 {@code platforms}가 없다)면 지금과 같다: 제목은 옛 칸, 플랫폼은 편지 값 하나, 시청자 수는 null. */
+    @Test
+    void 옛_수집기_응답이면_지금과_같다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-legacy", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, "{\"titles\":{\"s-legacy\":{\"title\":\"옛 제목\",\"category\":\"LoL\"}}}");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].title").value("옛 제목"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value("LoL"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()));
+    }
+
+    /** 수집기 응답의 플랫폼 원소 하나가 이상해도 그 원소만 버린다. 나머지 방송·원소와 목록은 그대로 나간다. */
+    @Test
+    void 플랫폼_원소가_이상하면_그_원소만_버린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-odd", TestIds.STREAMER, "live");
+        묶음("s-odd", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},"platforms":{"s-odd":[
+                  {"platform":7,"viewers":1},
+                  {"platform":"CHZZK","viewers":"많음","observedAt":"어제"},
+                  {"platform":"SOOP","viewers":4,"observedAt":"2026-08-25T00:03:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].observedAt").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].viewers").value(4));
+    }
+
+    // ── 접속 중인 편집자 수(POK-398) ── 셈 규칙은 EditorsOnlineCountTest, 실제 연결은 EditorsOnlineEndToEndTest가 잰다
+
+    /**
+     * 방송 중 줄은 숫자(아무도 없으면 0), 끝난 줄은 null이다. 끝난 방송의 대시보드는 연결을 닫으므로 셀 것이 없고,
+     * 0으로 내면 화면이 「아무도 없다」와 「잴 수 없다」를 못 가른다.
+     */
+    @Test
+    void 방송_중_줄에는_편집자_수가_있고_끝난_줄은_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-eo-live", TestIds.STREAMER, "live");
+        방송을_넣는다("s-eo-ended", TestIds.STREAMER, "ended", 시작_시각, 시작_시각.plusSeconds(60), 시작_시각.plus(육십일));
+
+        목록("?state=live")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-eo-live"))
+                .andExpect(jsonPath("$.broadcasts[0].editorsOnline").value(0));
+        목록("?state=past")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-eo-ended"))
+                .andExpect(jsonPath("$.broadcasts[0].editorsOnline").value(nullValue()));
+    }
+
+    // ── 스트리머 채널 이름(POK-430) ─────────────────────────────
+
+    /**
+     * 내 줄(OWNER)과 맡은 줄(EDITOR) 모두 그 스트리머의 이름이 실린다. 편집자 화면이 남의 방송에도 주인 화면과 같은 이름을 그리는 재료다.
+     *
+     * <p>🔴 <b>볼 수 있지만 이 장에 방송이 없는 스트리머(11)를 같이 심는다.</b> 안 심으면 「볼 수 있는 스트리머 전부를 보낸다」는 틀린
+     * 구현도 같은 본문을 보내 초록이다. 이름 창구에는 이 장에 줄이 있는 스트리머만 간다.
+     */
+    @Test
+    void 내_줄과_맡은_줄_모두_스트리머_채널_이름이_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"), 줄("11", "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+        AUTH.respondWith(NAMES, 200, """
+                {"names":{"7":{"chzzk":"내 치지직","soop":null},"3":{"chzzk":null,"soop":"남의 숲"},"11":{"chzzk":"방송 없는 채널","soop":null}}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"))
+                .andExpect(jsonPath("$.broadcasts[0].relation").value("EDITOR"))
+                .andExpect(jsonPath("$.broadcasts[0].channelNames.CHZZK").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].channelNames.SOOP").value("남의 숲"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-mine"))
+                .andExpect(jsonPath("$.broadcasts[1].relation").value("OWNER"))
+                .andExpect(jsonPath("$.broadcasts[1].channelNames.CHZZK").value("내 치지직"))
+                .andExpect(jsonPath("$.broadcasts[1].channelNames.SOOP").value(nullValue()));
+
+        assertThat(AUTH.callCount(NAMES)).as("스트리머마다 묻지 않고 한 장을 한 번에 묻는다").isEqualTo(1);
+        assertThat(보낸_스트리머_번호()).containsExactlyInAnyOrder(7L, 3L);
+    }
+
+    /** 개수로 잘려 이 장에 안 나온 스트리머도 이름 창구에 안 간다(다음 장에서 묻는다). */
+    @Test
+    void 개수로_잘린_줄의_스트리머는_묻지_않는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+        AUTH.respondWith(NAMES, 200, "{\"names\":{}}");
+
+        목록("?state=live&limit=1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"));
+
+        assertThat(보낸_스트리머_번호()).containsExactly(3L);
+    }
+
+    /**
+     * 이름은 부가 칸이다. auth 이름 창구가 죽었거나(5xx) 모르는 모양을 줘도 목록은 200이고 두 칸이 null로 남는다(키는 그대로).
+     *
+     * <p>🔴 가짜 auth는 안 정한 경로에 503을 주므로 다른 목록 시험은 전부 「이름 창구 503」으로 돈다. 그래서 여기서는 회차마다
+     * <b>이름 창구가 실제로 불렸다</b>를 같이 잰다(안 불러도 초록인 시험이 되지 않게). 성공 짝은 위 시험이다.
+     */
+    @Test
+    void 이름_창구가_아프면_목록은_나가고_이름만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-sick", TestIds.STREAMER, "live");
+
+        int 회차 = 0;
+        for (String[] 이름_창구 : new String[][] {{"500", ""}, {"503", ""}, {"400", "{}"}, {"200", "이름 아님"}, {"200", ""},
+                {"200", "[]"}, {"200", "{\"names\":[]}"}, {"200", "{\"names\":{\"7\":{\"chzzk\":5,\"soop\":[]}}}"}}) {
+            AUTH.respondWith(NAMES, Integer.parseInt(이름_창구[0]), 이름_창구[1]);
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-sick"))
+                    // 값이 null인 키는 exists()가 「없음」으로 본다: 키가 남는지는 hasKey로 잰다
+                    .andExpect(jsonPath("$.broadcasts[0].channelNames", allOf(hasKey("CHZZK"), hasKey("SOOP"))))
+                    .andExpect(jsonPath("$.broadcasts[0].channelNames.CHZZK").value(nullValue()))
+                    .andExpect(jsonPath("$.broadcasts[0].channelNames.SOOP").value(nullValue()));
+            회차++;
+            assertThat(AUTH.callCount(NAMES)).as("이름 창구를 안 불렀다 — 이 회차는 실패 처리를 안 재고 있다(%s)", 이름_창구[0])
+                    .isEqualTo(회차);
+        }
+    }
+
+    /** 이 장에 줄이 없으면 이름 창구를 안 부른다(빈 목록에 왕복 하나를 태울 이유가 없다). */
+    @Test
+    void 방송이_없으면_이름_창구를_안_부른다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        목록("?state=live").andExpect(status().isOk()).andExpect(jsonPath("$.broadcasts.length()").value(0));
+        assertThat(AUTH.callCount(ACCESSIBLE)).isEqualTo(1);
+        assertThat(AUTH.callCount(NAMES)).isZero();
+    }
+
+    // ── 도우미 ──────────────────────────────────────────────────
+
+    private void 볼_수_있는_스트리머(String... 줄들) {
+        AUTH.respondWith(ACCESSIBLE, 200, "{\"streamers\":[" + String.join(",", 줄들) + "]}");
+    }
+
+    /** 이름 창구가 마지막으로 받은 번호들. 숫자로 읽어 비교한다(문자열 모양에 기대지 않는다). */
+    @SuppressWarnings("unchecked")
+    private static List<Long> 보낸_스트리머_번호() {
+        String 받은_본문 = AUTH.lastBodyOf(NAMES);
+        assertThat(받은_본문).as("이름 창구를 안 불렀다").isNotNull();
+        return ((List<Number>) 맵(받은_본문).get("streamerUserIds")).stream().map(Number::longValue).toList();
+    }
+
+    private static String 줄(String streamerUserId, String relation) {
+        return "{\"streamerUserId\":%s,\"relation\":\"%s\"}".formatted(streamerUserId, relation);
+    }
+
+    private ResultActions 목록(String 질의) throws Exception {
+        return mvc.perform(get("/api/clip/broadcasts" + 질의)
+                .header("Authorization", "Bearer " + TestTokens.access(요청자)));
+    }
+
+    /** JSON을 <b>안</b> 받겠다는 Accept를 실어 보낸다(브라우저 EventSource가 보내는 값). */
+    private ResultActions 오류_협상(String 질의) throws Exception {
+        return mvc.perform(get("/api/clip/broadcasts" + 질의)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .header("Authorization", "Bearer " + TestTokens.access(요청자)));
+    }
+
+    private static String 본문(ResultActions 응답) throws Exception {
+        return 응답.andReturn().getResponse().getContentAsString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> 맵(String 본문) {
+        return MAPPER.readValue(본문, Map.class);
+    }
+
+    private void 방송을_넣는다(String streamId, String streamerId, String status) {
+        방송을_넣는다(streamId, streamerId, status, 시작_시각, null, null);
+    }
+
+    private void 방송을_넣는다(String streamId, String streamerId, String status,
+                        Instant startedAt, Instant endedAt, Instant vodExpiresAt) {
+        jdbc.update("""
+                        INSERT INTO broadcasts
+                            (stream_id, streamer_id, status, started_at, ended_at, last_sequence, vod_expires_at)
+                        VALUES (?, ?, ?, ?, ?, 1, ?)""",
+                streamId, streamerId, status,
+                startedAt == null ? null : OffsetDateTime.ofInstant(startedAt, ZoneOffset.UTC),
+                endedAt == null ? null : OffsetDateTime.ofInstant(endedAt, ZoneOffset.UTC),
+                vodExpiresAt == null ? null : OffsetDateTime.ofInstant(vodExpiresAt, ZoneOffset.UTC));
+    }
+
+    private void 방송을_플랫폼으로_넣는다(String streamId, String platform) {
+        jdbc.update("""
+                        INSERT INTO broadcasts (stream_id, streamer_id, status, started_at, last_sequence, platform)
+                        VALUES (?, ?, 'live', ?, 1, ?)""",
+                streamId, TestIds.STREAMER, OffsetDateTime.ofInstant(시작_시각, ZoneOffset.UTC), platform);
+    }
+
+    private void 묶음(String streamId, String platform) {
+        jdbc.update("INSERT INTO broadcast_platforms (stream_id, platform, first_seen_at, last_seen_at) "
+                + "VALUES (?, ?, now(), now())", streamId, platform);
+    }
+
+    private void 조각을_넣는다(String streamId, long seq, long startPtsMs, Instant playbackPdt, Instant wall) {
+        jdbc.update("""
+                        INSERT INTO public.stream_segments
+                            (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms, s3_key, upload_state)
+                        VALUES (?, ?, ?, ?, ?, 4000, ?, 'uploaded')""",
+                streamId, seq, startPtsMs, OffsetDateTime.ofInstant(wall, ZoneOffset.UTC),
+                playbackPdt == null ? null : OffsetDateTime.ofInstant(playbackPdt, ZoneOffset.UTC),
+                "streams/" + streamId + "/seg_" + seq + ".m4s");
+    }
+}

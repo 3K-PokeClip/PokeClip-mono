@@ -1,72 +1,46 @@
-# media/ 전용 CI — 세 층으로 나뉜다 (ADR-013 모노레포 원칙)
-#   changes    : 무엇이 바뀌었나만 판정한다(싸다)
-#   check      : media를 실제로 검사한다(비싸다 — media가 바뀐 PR에서만 돈다)
-#   media-gate : 위 둘의 결과를 단일 체크 하나로 접는다 = main 브랜치 보호의 필수 체크
-# 워크플로 레벨 `paths:`를 일부러 쓰지 않는다. paths로 스킵된 워크플로는 체크 런이 아예
-# 생기지 않아, 필수 체크로 지정하면 media를 안 건드린 PR이 전부 Pending으로 영원히 잠긴다.
-# 잡 레벨 `if:`로 스킵된 잡은 'skipped'로 보고되고, media-gate가 skipped를 통과로 친다 —
-# 그래서 비용 절감(안 바뀌면 안 검사)과 필수 체크(항상 존재)를 동시에 얻는다.
+# media/ 전용 CI — 워크플로 레벨 경로 필터로 media 변경 PR에서만 돈다 (ADR-013 모노레포 원칙 · ADR-0004).
+# 이 워크플로는 브랜치 보호의 필수 체크가 아니다. 그래서 paths로 통째 스킵해도 되고,
+# 스킵된 PR에는 체크 런이 아예 생기지 않아 media를 안 건드린 팀원 PR의 체크 목록에
+# 나타나지 않는다 — 그것이 이 구조의 목적이다.
+# ⚠ 다시 필수 체크로 만들려면 paths를 걷고 잡 레벨 변경 감지 + 집계 잡 구조(git 이력
+#   4afb3e6, POK-75)로 되돌려야 한다. paths로 스킵된 워크플로는 체크 런이 안 생겨,
+#   필수로 지정하는 순간 media 무변경 PR이 전부 Pending으로 영원히 잠긴다.
 name: media-ci
 
 on:
   pull_request:
+    paths:
+      - 'media/**'
+      - '.github/workflows/media-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
+      # media 계약 테스트 2개가 저장소 루트의 compose를 직접 읽고, 못 읽으면 fail한다
+      # (internal/mtxhook/runtime_identity_contract_test.go, cmd/mtxhookwrite/contract_test.go).
+      # 이 줄이 없으면 compose만 고치는 PR에서 드리프트 탐지 계약이 통째로 잠든다.
+      # media 테스트가 media/ 밖에서 읽는 파일은 현재 이것과 아래 prod SQL 둘뿐이다 — 새로 생기면 여기도 늘린다.
+      - 'docker-compose.yml'
+      # prod SQL 은 ddl.go · 권한 목록의 사본이다. internal/index/prod_sql_contract_test.go 가 바이트 · GRANT
+      # 집합을 대조하고 prod_sql_apply_pg_test.go 가 실제로 적용한다 — SQL 만 고치는 PR 에서도 돌아야 한다.
+      - 'infra/terraform/prod/runtime/sql/**'
+      # paths는 PR의 변경 파일 3,000개까지만 본다. 그 뒤에 놓인 media 파일은 감지되지 않아
+      # 이 워크플로가 안 돌고, 필수 체크도 아니라 검사 없이 머지된다(fail-open). 그런 PR은 쪼갠다.
 
-# 이 워크플로에서 GitHub API를 쓰는 곳은 changes 잡의 변경 파일 조회(pull-requests: read)뿐이다.
-# 나머지 잡은 PR의 코드를 go test로 실행할 뿐이라, 토큰 권한을 저장소 기본값에 맡기지 않고
-# checkout에 필요한 최소치로 못박는다.
-# 아래는 워크플로 기본값이다 — 잡에 permissions가 있으면 그 잡에서는 이 값이 통째로 대체된다.
+# 이 워크플로는 GitHub API를 쓰지 않는다. PR의 코드를 go test로 실행할 뿐이라, 토큰 권한을
+# 저장소 기본값에 맡기지 않고 checkout에 필요한 최소치로 못박는다.
 permissions:
   contents: read
 
 # 같은 PR에 새 커밋이 오면 이전 실행을 취소한다. 낡은 실행이 러너와 서비스 컨테이너를
 # 계속 점유하고 체크 목록을 어지럽히는 것을 막는다.
 # (판정 무결성 목적이 아니다 — 옛 실행의 결과는 옛 SHA의 체크로 남고 최신 SHA의 판정을
-#  덮지 않는다. 이 블록을 지워도 게이트 동작은 같다.)
-# 필수 체크와의 상호작용: 실행이 취소되면 check 잡이 'cancelled'로 끝나고, media-gate는
-# if: always() 덕에 그래도 돌아 needs.check.result == 'cancelled'를 보고 exit 1 한다 —
-# 즉 옛 SHA의 media-gate가 failure로 남을 수 있다. 이는 의도된 동작이다.
-# 브랜치 보호는 PR의 head SHA에 붙은 체크만 보므로, 옛 SHA의 빨간불은 머지 가부에 영향이 없다.
-# (사람이 체크 목록에서 그 빨간불을 보고 놀랄 수는 있다 — 놀람이지 오판정이 아니다.)
+#  덮지 않는다. 이 블록을 지워도 체크 동작은 같다.)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # 이 잡의 이름은 하는 일 그대로다 — "무엇이 바뀌었나"만 판정하고 검사는 하지 않는다.
-  changes:
-    runs-on: ubuntu-latest
-    # 잡 레벨 permissions는 워크플로 레벨을 "대체"한다(합치지 않는다).
-    # pull_request 이벤트에서 paths-filter는 체크아웃 없이 API로 변경 파일 목록을 읽는다 —
-    # 그래서 contents는 필요 없고 pull-requests: read만 있으면 된다.
-    # (근거는 액션 자신의 README·action.yml이다. coder는 이 액션을 checkout과 함께 쓰지만
-    #  그건 그쪽이 push 이벤트도 받기 때문이고, 우리 트리거는 pull_request 단독이다.)
-    permissions:
-      pull-requests: read
-    outputs:
-      media: ${{ steps.filter.outputs.media }} # 문자열 'true'/'false'다
-    steps:
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: filter
-        with:
-          # 이 블록은 액션에 문자열로 넘어가지만 액션이 YAML로 파싱한다 — '#'는 주석으로 처리된다.
-          filters: |
-            media:
-              - 'media/**'
-              - '.github/workflows/media-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
-              # media 계약 테스트 2개가 저장소 루트의 compose를 직접 읽고, 못 읽으면 fail한다
-              # (internal/mtxhook/runtime_identity_contract_test.go, cmd/mtxhookwrite/contract_test.go).
-              # 이 줄이 없으면 compose만 고치는 PR에서 드리프트 탐지 계약이 통째로 잠든다.
-              # media 테스트가 media/ 밖에서 읽는 파일은 현재 이 하나뿐이다 — 새로 생기면 여기도 늘린다.
-              - 'docker-compose.yml'
-
-  # 잡 이름은 이 잡이 하는 일 전부(gofmt·vet·test)를 담는다.
-  # 이 id는 필수 체크 이름이 아니다 — 필수 체크는 맨 아래 media-gate 하나뿐이다.
+  # 잡 이름은 이 잡이 하는 일 전부(gofmt·lint·vet·test)를 담는다.
+  # 이 id가 곧 체크 런 이름(`media-ci / check`)이다. 필수 체크가 아니므로 이름을 바꿔도
+  # 함께 고칠 곳이 없다.
   check:
-    needs: changes
-    # 워크플로 레벨 paths 대신 여기서 거른다. paths로 스킵하면 체크가 아예 안 생겨
-    # 필수 체크가 Pending으로 남지만, 잡 레벨 if로 스킵하면 'skipped'로 보고되고
-    # 아래 media-gate가 skipped를 통과로 친다.
-    if: needs.changes.outputs.media == 'true'
     runs-on: ubuntu-latest
     # 잡 전체 상한이다(checkout·setup-go·모듈 다운로드·gofmt·vet·test 전부 포함).
     # 아래 `go test -timeout 20m`은 성격이 다른 상한이다 — 잡 시작이 아니라 각 테스트
@@ -152,6 +126,19 @@ jobs:
             exit 1
           fi
 
+      # m2(naked FS 금지 — POK-168 r15a·ADR-063) 강제 배선. 규칙 정본 = media/.golangci.yml.
+      # 강제 범위는 설계대로 indexer + fmp4meta 두 패키지다 — 경로 인자가 규칙의 일부다.
+      # 버전 고정 v2.13.2(2026-09-01 확인, go1.26 빌드 · 2026-10-12 go1.27.0 에서 다시 확인 — 0 issues,
+      # 일부러 넣은 os.Open 위반은 forbidigo 1건으로 잡음): 도구 갱신은 규칙 변경과 같은 급으로 다룬다.
+      # go1.27.2 컴파일러는 export data 5판을 쓰는데 v2.13.2(x/tools v0.49.0)는 4판까지만 읽는다
+      # (2026-10-12 확인) — go 줄을 1.27.2 이상으로 올리면 lint 판이 5판을 읽는지 먼저 확인한다.
+      # go install은 위 setup-go 모듈 캐시를 타므로 2회차부터는 수 초다.
+      # POK-170 D14d: 같은 규칙을 janitor(로컬 ② 정리기) · cmd/janitor 에도 건다 — 삭제 통로는 fsop.RemoveT 하나다.
+      - name: golangci-lint (m2 — naked FS 금지)
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          "$(go env GOPATH)/bin/golangci-lint" run ./internal/indexer/... ./internal/fmp4meta/... ./internal/janitor/... ./cmd/janitor/...
+
       # kty Q2-B 승인(2026-08-17) — 티켓 문언 밖 추가분.
       - run: go vet ./...
 
@@ -161,9 +148,13 @@ jobs:
       #             취소하기 전에 go가 먼저 panic해 덤프를 남기도록, 위 timeout-minutes 주석의
       #             부등식을 만족하는 값으로 잡았다(로컬 정상 총소요 14~16초 대비 20m).
       # -v를 붙이지 않는다 — 로그가 비대해지고, skip 0 판정은 로그 grep이 아니라 구조로 한다
-      # (초록불 = REQUIRE_PG 가드 미발동, container: 부재 = 비root. skip 경로는 이 둘뿐이다).
+      # (초록불 = REQUIRE_PG 가드 미발동, container: 부재 = 비root. 이 PR 의 PG 시험이 환경 탓에 skip 되는 경로는
+      # 이 둘뿐이다 — develop 에는 GOMAXPROCS 1 · fd 계수 불가 플랫폼에서 건너뛰는 시험 셋(ingestauth · connlog)이
+      # 더 있으나 이 러너(다중 코어 Linux)에서는 발동하지 않는다.
+      # 예외 하나 — G8 동시 writer 시험(rewind/publish g8_race_pg_test.go)은 부하로 경쟁 국면이 서지
+      # 않고 결함 신호도 없으면 스스로 건너뛴다. 그 계보는 같은 패키지의 결정적 교차 시험이 판정한다).
       # -p/-parallel도 명시하지 않는다 — 기본값(GOMAXPROCS)이 러너 스펙 변화를 자동 흡수한다.
-      # -coverprofile은 -cover를 함께 켠다 — 9개 패키지의 `coverage: NN.N% of statements`가
+      # -coverprofile은 -cover를 함께 켠다 — 모든 패키지의 `coverage: NN.N% of statements`가
       # 이 스텝 로그에 전부 찍힌다(티켓의 "다른 패키지는 측정만"이 이걸로 충족된다).
       # ./... 한 번 실행이면 결과가 `mode:` 헤더 한 줄짜리 단일 파일로 병합된다(Go 1.10+,
       # golang/go#6909) — 패키지별 재실행도 프로파일 병합 도구도 필요 없다.
@@ -178,43 +169,39 @@ jobs:
       # 판정은 정수 교차곱(cov*100 < tot*80)이라 반올림·로케일·awk 구현체 차이에 흔들리지 않는다.
       # 로그의 (527/554문) 정수쌍이 판정의 근거다 — 79.99%는 표시가 80.0%여도 FAIL이 맞다.
       # 대상 목록을 늘릴 때 internal/ 밖 패키지를 넣으려면 base도 함께 고친다(바뀔 축이 두 곳이다).
-      - name: coverage gate (index·upload·indexer 각 80% 미만이면 실패)
+      # playback 이 목록에 들어온 이유(POK-195 M4 ⓐ): ③(재생 렌디션) 바이트를 만드는 층이며,
+      # 여기가 틀리면 되감기가 잘린 실물이나 시각이 어긋난 조각을 영구히 가리킨다.
+      # rewind/boundary 가 들어온 이유(POK-195 M4 ⓑ): 되감기 창의 경계(settled 접두·1시간 창)를
+      # 정하는 층이며, 여기가 틀리면 홀 뒤 조각이 목록에 실려 404 가 나거나 창이 끝없이 자란다.
+      # rewind 가 들어온 이유(같은 PR): 목록 본문(HLS 텍스트)을 쓰는 층이며, 발행된 줄은 고칠 수
+      # 없어서 여기가 틀리면 잘못된 URI·끊김 표시·PDT 가 그 목록이 사는 동안 그대로 남는다.
+      # rewind/cache 가 들어온 이유(같은 PR): 목록의 입력(장부·GAP 원장·컷오프의 메모리 뷰)을 드는 층이며,
+      # 여기가 장부와 어긋나면 settled 가 아닌 조각·교정 전 길이가 목록에 실리거나 계승 접두가 빠진 목록이
+      # 실려 고칠 수 없다.
+      # rewind/publish 가 들어온 이유(POK-195 M4 ⓒ): 목록을 S3 에 올리는 층이며(세대 규약 · fence · GAP 원장),
+      # 여기가 틀리면 낡은 writer 가 새 판을 덮거나 404 를 가리키는 목록이 시청자에게 나간다.
+      # streamkey·keyresolve·ingestauth·mtxctl 이 들어온 이유(ingest-auth 응답기): 송출 인증 관문을 이루는 층이며
+      # (토큰·passphrase 값, 4C 클라이언트, 판정표·예산·차례·거부 목록·허용 기록·절단, 절단의 Control API 클라이언트),
+      # 여기가 틀리면 거부한 키의 송출이 붙거나 정상 송출이 막히고, passphrase·출입증·API 비번이 로그로 샌다.
+      # secretfile 이 들어온 이유(POK-310): 사이드카와 응답기가 함께 쓰는 비밀 파일 읽기 층이며(종류·권한·크기·
+      # 끝 줄바꿈·경로 숨김), 여기가 틀리면 남이 읽는 파일의 비밀을 받거나 FIFO 에서 기동이 멈추거나 경로 자리의 비밀이 샌다.
+      # janitor 가 들어온 이유(POK-170 · K4): 로컬 ② 조각 파일을 지우는 층이며, 여기가 틀리면 업로드되지
+      # 않은 유일본을 지우거나(복구 불가) 지운 파일의 장부가 남아 거짓 경보 · 정리 정지가 생긴다.
+      # cmd/janitor 는 internal/ 밖이라 이 게이트(base)에 넣지 않았다 — 측정만 한다.
+      # pgconf 가 들어온 이유(POK-311): 사이드카와 janitor 의 DB 로그인 층이며(인증 방식 · RDS IAM 토큰 · TLS 검증 ·
+      # CA 번들 확인), 여기가 틀리면 평문 · 약한 TLS 로 붙거나 만료된 토큰으로 새 연결이 막히고, 비밀번호 · 자격 증명이 로그로 샌다.
+      # rewind/status · control 이 들어온 이유(POK-200 M5): 시청자에게 「지금 되감기를 볼 수 있나 · 어느 목록인가」를 답하는
+      # 층이다(도출 규칙 · 불변 스냅숏 · 공개 무서명 HTTP · 스트림별 한도 · 회차 조회 상한). 여기가 틀리면 ready 인데 url 이
+      # 404 이거나, 무작위 요청이 남의 스트림을 503 으로 만들거나 DB 를 말린다.
+      - name: coverage gate (index·upload·indexer·session·mtxstate·playback·rewind/boundary·rewind·rewind/cache·rewind/publish·streamkey·keyresolve·ingestauth·mtxctl·secretfile·janitor·pgconf·rewind/status·control 각 80% 미만이면 실패)
         run: |
           set -euo pipefail
           LC_ALL=C awk -v min=80 -v base="github.com/3K-PokeClip/pokeclip-mono/media/internal/" '
             NR==1 { next }
             { f=$1; sub(/:.*/,"",f); sub(/\/[^\/]+$/,"",f); tot[f]+=$2; if ($3>0) cov[f]+=$2 }
-            END { n=split("index,upload,indexer",want,","); rc=0
+            END { n=split("index,upload,indexer,session,mtxstate,playback,rewind/boundary,rewind,rewind/cache,rewind/publish,streamkey,keyresolve,ingestauth,mtxctl,secretfile,janitor,pgconf,rewind/status,control",want,","); rc=0
               for (i=1;i<=n;i++) { k=base want[i]
                 if (!(k in tot)) { printf "FAIL %-8s 프로파일에 없음 — 테스트가 안 돌았거나 경로 오타\n", want[i]; rc=1 }
                 else if (cov[k]*100 < tot[k]*min) { printf "FAIL %-8s %.1f%% (%d/%d문) < %d%%\n", want[i], cov[k]*100/tot[k], cov[k], tot[k], min; rc=1 }
                 else printf "ok   %-8s %.1f%% (%d/%d문)\n", want[i], cov[k]*100/tot[k], cov[k], tot[k] }
               exit rc }' cover.out
-
-  # 주의: 이 잡의 id는 main 브랜치 보호의 "필수 체크 이름" 그 자체다(체크 런 이름 = 잡 이름).
-  #   바꾸려면 반드시 같은 작업에서 두 곳을 함께 고친다:
-  #     (1) 이 잡 id   (2) gh api -X PUT .../branches/main/protection 의 contexts/checks
-  #   한쪽만 바꾸면 보호가 존재하지 않는 체크를 기다려 모든 PR이 Pending으로 잠긴다.
-  # 주의: 새 검사 잡을 추가하면 반드시 아래 needs에 넣는다 — 빠뜨리면 그 잡이 실패해도 게이트가 통과한다.
-  media-gate:
-    runs-on: ubuntu-latest
-    needs: [changes, check]
-    permissions: {} # 결과만 읽는다. 토큰 권한이 필요 없다.
-    # if: always() — 위 잡이 실패·스킵·취소돼도 이 잡은 반드시 돌아 체크를 만든다.
-    #   이것이 "항상 존재하는 필수 체크"의 정체다.
-    # 층 구분(중요): 이 always()는 '잡' 층이다. check 잡 안의 커버리지 게이트 '스텝'에는
-    #   if: always()를 붙이면 안 된다(위 'coverage gate' 스텝 머리 주석 — 테스트 실패를
-    #   게이트 결과가 덮어 false green이 된다).
-    #   서로 다른 층이고, 한쪽을 다른 쪽의 근거로 인용하면 안 된다.
-    if: always()
-    steps:
-      - name: 필수 검사 집계
-        run: |
-          echo "- changes: ${{ needs.changes.result }}"
-          echo "- check:   ${{ needs.check.result }}"
-          # skipped는 통과로 친다(media 무변경 PR의 정상 경로). failure·cancelled만 실패다.
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
-            echo "필수 검사 중 실패하거나 취소된 잡이 있다" >&2
-            exit 1
-          fi
-          echo "필수 검사 통과"

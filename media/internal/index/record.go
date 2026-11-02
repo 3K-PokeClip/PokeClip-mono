@@ -42,6 +42,23 @@ type Record struct {
 	UploadState     UploadState
 	Bytes           int64
 	IsDiscontinuity bool
+
+	// --- carrier 3필드 (POK-168 M2 · 설계 5.4.2 NULL 운반 규약 · 게이트 n1a~d) ---
+	//
+	// 반드시 포인터다: nil ⇒ SQL NULL. 값 타입으로 두면 "" 가 NOT VALID FK 에 걸려
+	// 23503 으로 INSERT 자체가 실패하고(세션 미확정 = 정상 상태인데), PlaybackPDT 는
+	// zero time 을 SQL 로 구분할 방법이 없다. 값 타입 필드를 두지 않는 것 자체가
+	// 구조 보장이다 — n1d 가 정적으로 단언한다.
+	//
+	// 미확정(nil)은 이후 생산자(세션 레지스트리·③ 추출 — M3)가 1회 채운다.
+	// 불변 트리거(ddl.go)가 "NULL → 값 1회"만 허용하고 재변경을 막는다.
+
+	// SessionID 는 세션(회차) 귀속이다. stream_sessions.session_id 를 참조한다(FK NOT VALID).
+	SessionID *string
+	// PlaybackPDT 는 되감기 목록에 실리는 단조 PDT 원천이다(start_wall_utc 는 역행 가능).
+	PlaybackPDT *time.Time
+	// PlaybackS3Key 는 ③(재생 렌디션) 키다. 계약 5-5 착지 컬럼에 INSERT 시점부터 실을 수 있게 한다.
+	PlaybackS3Key *string
 }
 
 // TailRow 는 스트림의 마지막 행이다. 파생값의 단일 출처이며,

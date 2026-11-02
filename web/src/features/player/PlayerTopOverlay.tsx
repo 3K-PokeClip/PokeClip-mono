@@ -1,20 +1,45 @@
-import { Clock } from 'lucide-react';
-import { Avatar } from '@/ui';
+import { MessageSquare } from 'lucide-react';
+import { Avatar, Skeleton } from '@/ui';
 import styles from './GlassPlayer.module.css';
-import { formatUptime } from './playerMath';
+import { PlayerControlHint } from './PlayerControlHint';
 
-// 플레이어 상단 오버레이 — 채널 필 + 방송 경과 필 (시안 영상 플레이어 글래스).
-// 뒤로가기는 1b에선 화면 헤더(LiveHeader)가 담당하므로 여기엔 없다.
+// 플레이어 상단 오버레이 — 채널 필 + 채팅 열기 (시안 영상 플레이어 글래스).
+// 뒤로가기는 1b에서 페이지 헤더가 사라진 뒤 사이드 메뉴가 담당하므로 여기엔 없다.
+//
+// 필의 둘째 줄은 시청자 수만이다. 시안이 라이브에서 제목을 안 쓰고(제목 줄은 VOD 변형의 것),
+// 1b에선 영상 바로 아래 방송 정보 바가 제목과 경과 시간을 이미 말한다 — 여기 두면 같은 값이
+// 한 화면에 두 번 선다.
+
+/** 배지는 clip의 방송 명부가 말하는 상태를 그대로 옮긴다 — 모르면 「확인 중」. 안 주면 LIVE(시안 기본) */
+export type PlayerBroadcastStatus = 'live' | 'ended' | 'offline' | 'unknown';
+
+const BADGE_LABEL: Record<PlayerBroadcastStatus, string> = {
+  live: 'LIVE',
+  ended: '종료',
+  offline: '오프라인',
+  unknown: '확인 중',
+};
+
 export function PlayerTopOverlay({
   channelName,
-  title,
   viewersNote,
-  uptimeSeconds,
+  status = 'live',
+  infoPending = false,
+  chatPanelOpen,
+  onToggleChatPanel,
 }: {
   channelName: string;
-  title: string;
+  /** 필 아래 줄 — 라이브는 「1,842명 시청 중」 */
   viewersNote: string;
-  uptimeSeconds: number;
+  status?: PlayerBroadcastStatus;
+  /**
+   * 방송 정보를 받아 오는 중이다(POK-449). 이때 빈 채널 이름 · 시청자 줄은 번쩍이는 회색 막대로 둔다: 수집기가 방송을 찾기 전이라
+   * 비었을 뿐이고, 곧 채워진다
+   */
+  infoPending?: boolean;
+  /** 바깥 채팅 패널이 열려 있는가 — 닫혀 있을 때만 여는 버튼이 뜬다 */
+  chatPanelOpen?: boolean;
+  onToggleChatPanel?: () => void;
 }) {
   return (
     <div className={styles.topOverlay}>
@@ -22,21 +47,38 @@ export function PlayerTopOverlay({
         <Avatar size="sm" name={channelName} />
         <div className={styles.channelText}>
           <div className={styles.channelRow}>
-            <span className={styles.channelName}>{channelName}</span>
-            <span className={styles.liveBadge}>
+            {infoPending && !channelName ? (
+              <Skeleton width={84} height={12} data-testid="player-channel-pending" />
+            ) : (
+              <span className={styles.channelName}>{channelName}</span>
+            )}
+            <span className={styles.liveBadge} data-status={status}>
               <span className={styles.liveBadgeDot} aria-hidden />
-              LIVE
+              {BADGE_LABEL[status]}
             </span>
           </div>
           <div className={styles.channelSub}>
-            {title} · {viewersNote}
+            {infoPending && !viewersNote ? (
+              <Skeleton width={64} height={10} data-testid="player-viewers-pending" />
+            ) : (
+              viewersNote
+            )}
           </div>
         </div>
       </div>
-      <div className={styles.uptimePill}>
-        <Clock size={14} aria-hidden />
-        <span aria-label="방송 경과 시간">{formatUptime(uptimeSeconds)}</span>
-      </div>
+      {/* 패널은 플레이어 밖이라 접으면 되살릴 곳이 없다 — 닫혔을 때만 이 자리에 통로가 선다 */}
+      {onToggleChatPanel && chatPanelOpen === false ? (
+        <PlayerControlHint label="채팅 열기" align="end" side="bottom">
+          <button
+            type="button"
+            className={styles.chatOpenBtn}
+            aria-label="채팅 열기"
+            onClick={onToggleChatPanel}
+          >
+            <MessageSquare size={17} aria-hidden />
+          </button>
+        </PlayerControlHint>
+      ) : null}
     </div>
   );
 }

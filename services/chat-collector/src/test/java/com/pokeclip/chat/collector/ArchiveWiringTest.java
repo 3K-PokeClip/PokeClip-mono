@@ -53,7 +53,7 @@ class ArchiveWiringTest extends IntegrationTestSupport {
     void 창고_이름이_있으면_ChatArchive_빈은_진짜_아카이버이고_그_틱이_돈다() throws Exception {
         assertThat(archive).isInstanceOf(ChatArchiver.class);
         assertThat(archive.counters().runId()).as("UUID 앞 8자 hex").matches("[0-9a-f]{8}");
-        archive.offer(new ArchivableChat("wiring", System.currentTimeMillis(), "{}"));
+        archive.offer(new ArchivableChat(Platform.CHZZK, "wiring", System.currentTimeMillis(), "{}"));
         awaitUntil(Duration.ofSeconds(5), () -> archive.counters().archivedCount() == 1);
         assertThat(archive.counters().archivedCount()).as("start()가 안 불렸으면 바구니에서 창으로 아무것도 안 간다").isEqualTo(1);
     }

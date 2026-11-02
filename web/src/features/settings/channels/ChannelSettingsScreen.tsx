@@ -1,80 +1,77 @@
 'use client';
 
-import { Tv } from 'lucide-react';
-import { Badge, Button } from '@/ui';
+import { useEffect } from 'react';
+import { useOnboardingHydration, useOnboardingStore } from '@/stores/onboarding';
 import { SettingsPageHeader } from '../SettingsPageHeader';
-import { CHZZK_LINKED_META, useChannelMockState } from './useChannelMockState';
+import { ChzzkChannelRow } from './ChzzkChannelRow';
+import { SoopChannelRow } from './SoopChannelRow';
+import { UnlinkChzzkDialog } from './UnlinkChzzkDialog';
+import { UnlinkSoopDialog } from './UnlinkSoopDialog';
+import { UnlinkYoutubeDialog } from './UnlinkYoutubeDialog';
+import { YoutubeChannelSection } from './YoutubeChannelSection';
+import { useChzzkLinkState } from './useChzzkLinkState';
+import { useSoopLinkState } from './useSoopLinkState';
+import { useYoutubeLinkState } from './useYoutubeLinkState';
 import styles from './ChannelSettingsScreen.module.css';
 
-// 디자인 1k 설정 · 채널 연동의 방송 채널 섹션만 옮긴 목업 스텁 (POK-112).
-// 유튜브 채널 섹션(OAuth 연동·업로드 채널 선택·재인증)은 POK-112 본 구현에서 붙인다.
+// 디자인 1k 설정 · 채널 연동 (POK-205 치지직 · POK-221 유튜브 · POK-396 SOOP). 조립만 한다:
+// 상태 판단은 use*LinkState 훅, 상태별 표현은 *ChannelRow가 갖는다.
 export function ChannelSettingsScreen() {
-  const { chzzkLinked, linkChzzk, unlinkChzzk } = useChannelMockState();
+  // 아래 미러링이 저장된 값과 비교하므로 스토어가 먼저 서 있어야 한다. 온보딩 스토어를 세우는 곳이
+  // /home의 OnboardingController뿐이라, 이 화면으로 바로 들어오면 정적 기본값(false)과 비교하게 되고
+  // stale 플래그가 그대로 살아남는다. 선언 순서상 이 이펙트가 아래 미러링 이펙트보다 먼저 돈다.
+  useOnboardingHydration();
+  const chzzk = useChzzkLinkState();
+  const soop = useSoopLinkState();
+  const youtube = useYoutubeLinkState();
+  const setChannelLinked = useOnboardingStore((s) => s.setChannelLinked);
+
+  // 홈 시작 가이드 1단계 「방송 채널 연동」은 이 플래그를 본다. 필자는 이 이펙트 하나뿐이다(쓰는 곳이
+  // 둘이면 갈라진다). 방송 채널은 치지직이나 SOOP 중 하나면 된다(POK-396 C8). 각자의 `linked`는
+  // ACTIVE·EXPIRED만 true인 서버 값 그대로다. 하나라도 아직 모르면 건드리지 않는다: 모르는 쪽을
+  // false로 치면 SOOP만 연동한 사람의 플래그가 치지직 조회 실패 한 번에 꺼진다.
+  const chzzkLinked = chzzk.linked;
+  const soopLinked = soop.linked;
+  useEffect(() => {
+    if (chzzkLinked === undefined || soopLinked === undefined) return;
+    const linked = chzzkLinked || soopLinked;
+    if (useOnboardingStore.getState().channelLinked === linked) return; // 불필요한 localStorage 쓰기 차단
+    setChannelLinked(linked);
+  }, [chzzkLinked, soopLinked, setChannelLinked]);
 
   return (
     <div className={styles.screen}>
-      <SettingsPageHeader
-        title="채널 연동"
-        description="방송 플랫폼에서 하이라이트를 감지하고, 유튜브로 클립을 업로드합니다"
-      />
-      <section aria-label="방송 채널">
-        <h2 className={styles.sectionTitle}>방송 채널</h2>
+      {/* 1k의 상단은 제목 한 줄이다 — 보조 설명을 두지 않는다 */}
+      <SettingsPageHeader title="채널 연동" />
+      {/* aria-label 대신 제목 참조 — 제목 텍스트와 접근 이름이 중복 낭독되지 않게 (PairingCodeCard 선례) */}
+      <section className={styles.broadcastSection} aria-labelledby="broadcast-channels-title">
+        <h2 id="broadcast-channels-title" className={styles.sectionTitle}>
+          방송 채널
+        </h2>
         <div className={styles.rows}>
-          <div className={styles.row}>
-            {/* 치지직 아이콘 자산은 POK-112 본 구현에서 — 그전까지 lucide 플레이스홀더 */}
-            <span className={`${styles.channelIcon} ${styles.chzzkIcon}`}>
-              <Tv aria-hidden />
-            </span>
-            <div className={styles.rowBody}>
-              <div className={styles.rowTitleRow}>
-                <span className={styles.rowName}>치지직</span>
-                {chzzkLinked && (
-                  <Badge tone="success" variant="soft" size="sm">
-                    연동됨
-                  </Badge>
-                )}
-              </div>
-              <div className={styles.rowMeta}>
-                {chzzkLinked ? CHZZK_LINKED_META : '연동하면 치지직 방송에서 하이라이트를 감지해요'}
-              </div>
-            </div>
-            {chzzkLinked ? (
-              <Button variant="ghost" size="sm" onClick={unlinkChzzk}>
-                연동 해제
-              </Button>
-            ) : (
-              <Button variant="soft" size="sm" onClick={linkChzzk}>
-                연동
-              </Button>
-            )}
-          </div>
-          <div className={styles.row}>
-            <span className={`${styles.channelIcon} ${styles.soopIcon}`}>
-              <SoopMark />
-            </span>
-            <div className={styles.rowBody}>
-              <div className={styles.rowTitleRow}>
-                <span className={styles.rowName}>SOOP</span>
-              </div>
-              <div className={styles.rowMeta}>연동하면 SOOP 방송에서도 하이라이트를 감지해요</div>
-            </div>
-            {/* SOOP 연동은 IA대로 자리만 — 기능은 별도 배치 */}
-            <Button variant="soft" size="sm" disabled>
-              연동
-            </Button>
-          </div>
+          <ChzzkChannelRow state={chzzk} />
+          <SoopChannelRow state={soop} />
         </div>
       </section>
+      <YoutubeChannelSection state={youtube} />
+      <UnlinkChzzkDialog
+        open={chzzk.confirmOpen}
+        busy={chzzk.unlinking}
+        onCancel={chzzk.closeConfirm}
+        onConfirm={chzzk.confirmUnlink}
+      />
+      <UnlinkSoopDialog
+        open={soop.confirmOpen}
+        busy={soop.unlinking}
+        onCancel={soop.closeConfirm}
+        onConfirm={soop.confirmUnlink}
+      />
+      <UnlinkYoutubeDialog
+        open={youtube.confirmOpen}
+        busy={youtube.unlinking}
+        onCancel={youtube.closeConfirm}
+        onConfirm={youtube.confirmUnlink}
+      />
     </div>
-  );
-}
-
-// SOOP 로고 (디자인 1k의 인라인 SVG 그대로 — 브랜드 블루 #0057FF)
-// 접근 이름은 옆의 행 제목 "SOOP" 텍스트가 제공한다 — 로고까지 읽히면 중복 낭독.
-function SoopMark() {
-  return (
-    <svg viewBox="0 0 378.77 215.21" fill="#0057FF" aria-hidden>
-      <path d="M271.17,0c-31.87,0-60.51,13.86-80.21,35.88-.84.95-2.3.95-3.14,0C168.11,13.86,139.48,0,107.61,0,48.18,0,0,48.18,0,107.61s48.18,107.61,107.61,107.61c31.87,0,60.51-13.86,80.21-35.88.84-.95,2.3-.95,3.14,0,19.7,22.02,48.34,35.88,80.21,35.88,59.43,0,107.61-48.18,107.61-107.61S330.6,0,271.17,0ZM271.17,163.56c-17.22,0-31.6-8.3-40.43-17.67-2.81-2.99-6.29-7.09-10.13-10.57-1.83-1.66-3.65-3.14-5.39-4.48-7.2-5.13-16.13-8.18-25.83-8.18s-18.63,3.05-25.83,8.18c-1.75,1.33-3.56,2.82-5.39,4.48-3.84,3.48-7.32,7.58-10.13,10.57-8.82,9.37-23.21,17.67-40.43,17.67-.44,0-.87-.02-1.31-.03-.74-.02-1.48-.04-2.22-.09-.51-.03-1.01-.08-1.51-.12-.3-.02-.6-.05-.89-.08-28.12-2.96-50.03-26.74-50.03-55.64v.24-.47.24c0-28.89,21.91-52.67,50.02-55.64.31-.03.63-.05.95-.09.48-.04.97-.08,1.45-.11.74-.04,1.48-.06,2.24-.09.43,0,.86-.03,1.29-.03,17.22,0,31.6,8.3,40.43,17.67,2.81,2.99,6.29,7.09,10.13,10.57,1.83,1.66,3.65,3.14,5.39,4.48,7.2,5.13,16.13,8.18,25.83,8.18s18.63-3.05,25.83-8.18c1.75-1.33,3.56-2.82,5.39-4.48,3.84-3.48,7.32-7.58,10.13-10.57,8.82-9.37,23.21-17.67,40.43-17.67.43,0,.85.02,1.28.03.75.02,1.51.04,2.25.09.47.03.95.06,1.42.11.33.02.67.05,1,.09,27.03,2.86,48.32,24.96,49.9,52.36,0,.18.02.36.03.53.02.51.03,1.02.04,1.53.01.76.02,1.52,0,2.28-.01.57-.01,1.15-.04,1.72,0,.12-.02.24-.02.36-1.52,27.45-22.83,49.63-49.91,52.49-.34.03-.68.06-1.02.09-.46.04-.93.08-1.39.11-.74.04-1.51.06-2.26.09-.43,0-.85.03-1.28.03v.02Z" />
-    </svg>
   );
 }

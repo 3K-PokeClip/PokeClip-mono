@@ -34,7 +34,9 @@ public final class CollectionMetrics {
             Duration delayMedian,
             Duration delayMax,
             Map<String, Long> systemEvents,
-            long decodeFailures
+            long decodeFailures,
+            /** 이 창에서 받은 후원 수. <b>received에 안 든다</b> — 검산 등식이 채팅 것이다. */
+            long donations
     ) { }
 
     /**
@@ -66,6 +68,8 @@ public final class CollectionMetrics {
             long delaySamples,
             Map<String, Long> systemEvents,
             long decodeFailures,
+            /** 세션 전체에서 받은 후원 수. <b>totalReceived에 안 든다.</b> */
+            long donations,
             // --- 아래 여섯은 세션이 끝날 때 걷어 올린 값이다. 위와 경계가 같다 ---
             Duration totalCollectedFor,
             Duration maxPingGap,
@@ -94,6 +98,8 @@ public final class CollectionMetrics {
     private long maxReceiveGapMillis;
     private long orderViolations;
     private long decodeFailures;
+    /** 이 창의 후원 수. received와 따로 센다 — 검산 등식이 채팅 것이다. */
+    private long donations;
 
     // 누적 — snapshot()이 안 건드린다
     private long totalReceived;
@@ -107,6 +113,7 @@ public final class CollectionMetrics {
     private long totalMaxReceiveGapMillis;
     private long totalOrderViolations;
     private long totalDecodeFailures;
+    private long totalDonations;
 
     // 세션이 끝날 때 걷어 올린다. Heartbeat는 소켓마다 새로 만들어져 저절로
     // 리셋되므로, 안 걷으면 판정 줄에 마지막 세션 값만 남는다.
@@ -165,6 +172,41 @@ public final class CollectionMetrics {
     public void beginSession() {
         synchronized (lock) {
             previousReceivedAtMillis = 0;
+        }
+    }
+
+    /**
+     * <b>같은 소켓으로 다음 방송을 걷기 시작한다</b>(갈아끼움).
+     *
+     * <p>{@link #beginSession()}과 다른 일이다 — 그쪽은 <b>세션</b>이 다시 선 것이라 수신
+     * 시계만 되잡는다. 여기는 <b>세션은 그대로인데 방송만 바뀐</b> 자리라, 방송 단위로 세는
+     * 값을 전부 0에서 다시 시작한다. 안 그러면 {@code stream=} 레이블이 새 방송을 가리키는
+     * 동안 그 안의 숫자는 앞 방송 것을 안고 간다 — {@code SessionRegistry.receivedOf}가
+     * 「이 방송이 받은 양」이라고 문서화한 값에 <b>앞 방송 몫이 그대로 섞였다</b>
+     * (codex P2, 재현함: 갈아끼운 직후 새 방송의 수신량이 앞 방송의 5였다).
+     *
+     * <p><b>세션 단위 값은 안 건드린다</b>({@code totalCollectedMillis}·ping/pong 간격·
+     * 절단 구간). 소켓이 그대로라 그 세션은 끝나지 않았고, 판정 줄은 프로세스 전체를
+     * 말하는 자리라 방송 경계로 잘리면 안 된다.
+     *
+     * @return 앞 방송이 받은 양. <b>부르는 쪽이 프로세스 누계로 옮겨야 한다</b> —
+     *         여기서 0으로 만들기만 하면 그만큼 총량이 줄어 판정 줄이 유실로 읽는다
+     */
+    public long beginBroadcast() {
+        synchronized (lock) {
+            long carried = totalReceived;
+            totalReceived = 0;
+            received = 0;
+            delaysMillis.clear();
+            maxReceiveGapMillis = 0;
+            orderViolations = 0;
+            decodeFailures = 0;
+            donations = 0;
+            systemEvents.clear();
+            lastReceivedAtMillis = 0;
+            previousReceivedAtMillis = 0;
+            previousMessageTimeMillis = 0;
+            return carried;
         }
     }
 
@@ -237,6 +279,19 @@ public final class CollectionMetrics {
         }
     }
 
+    /**
+     * 후원 한 건. <b>{@code received}를 올리지 않는다</b> — 그 값은 검산 등식
+     * {@code received = persisted + conflicts + poisoned + dropped}의 왼쪽이고
+     * 그 오른쪽은 전부 <b>채팅</b> 표의 카운터다. 후원을 섞으면 등식이 영구히 벌어져
+     * 운영자가 유실을 검산할 수 없게 된다(계획 검증 F3).
+     */
+    public void recordDonation() {
+        synchronized (lock) {
+            donations++;
+            totalDonations++;
+        }
+    }
+
     public void recordDecodeFailure() {
         synchronized (lock) {
             decodeFailures++;
@@ -261,6 +316,7 @@ public final class CollectionMetrics {
                     sorted.size(),
                     Map.copyOf(systemEvents),
                     totalDecodeFailures,
+                    totalDonations,
                     Duration.ofMillis(totalCollectedMillis),
                     Duration.ofMillis(totalMaxPingGapMillis),
                     Duration.ofMillis(totalMaxPongGapMillis),
@@ -277,6 +333,12 @@ public final class CollectionMetrics {
     public void recordSystemEvent(String type) {
         synchronized (lock) {
             systemEvents.merge(type, 1L, Long::sum);
+        }
+    }
+
+    public long totalDonations() {
+        synchronized (lock) {
+            return totalDonations;
         }
     }
 
@@ -301,13 +363,15 @@ public final class CollectionMetrics {
                     at(sorted, sorted.size() / 2),
                     at(sorted, sorted.size() - 1),
                     Map.copyOf(systemEvents),
-                    decodeFailures);
+                    decodeFailures,
+                    donations);
 
             delaysMillis.clear();
             received = 0;
             maxReceiveGapMillis = 0;
             orderViolations = 0;
             decodeFailures = 0;
+            donations = 0;
             // previousReceivedAtMillis는 안 지운다. 지우면 창 경계를 넘는 공백이
             // 통째로 사라져, 30초 동안 한 건도 안 온 구간이 어느 요약에도 안 남는다.
             return snapshot;

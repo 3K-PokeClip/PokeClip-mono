@@ -1,5 +1,6 @@
 package com.pokeclip.auth.google;
 
+import com.pokeclip.auth.AuthFailure;
 import com.pokeclip.auth.AuthException;
 import com.pokeclip.auth.support.TestJwtFactory;
 import org.junit.jupiter.api.BeforeEach;
@@ -101,5 +102,28 @@ class GoogleIdTokenVerifierTest {
                 Instant.now().plus(Duration.ofMinutes(5)));
 
         assertThat(verifier.verify(token).profileImageUrl()).isNull();
+    }
+
+    /** 이메일 인증을 안 마친 계정은 막는다(POK-256). 미인증 주소로 남에게 갈 초대를 가로채는 길을 닫는다. */
+    @Test
+    void 이메일_인증이_안_됐거나_빠지면_막는다() throws Exception {
+        for (Object emailVerified : new Object[]{false, "false", null}) {
+            String token = factory.idToken(ISSUER, CLIENT_ID, "sub-1", "a@example.com", "김태현", null,
+                    Instant.now().plus(Duration.ofMinutes(5)), emailVerified);
+
+            assertThatThrownBy(() -> verifier.verify(token))
+                    .as("email_verified=%s", emailVerified)
+                    .isInstanceOfSatisfying(AuthException.class,
+                            e -> assertThat(e.failure()).isEqualTo(AuthFailure.GOOGLE_EMAIL_UNVERIFIED));
+        }
+    }
+
+    /** 옛 발급분은 문자열로 싣는다. 이것까지 막으면 멀쩡한 사람이 로그인을 못 한다. */
+    @Test
+    void 이메일_인증이_문자열_true여도_통과한다() throws Exception {
+        String token = factory.idToken(ISSUER, CLIENT_ID, "sub-1", "a@example.com", "김태현", null,
+                Instant.now().plus(Duration.ofMinutes(5)), "true");
+
+        assertThat(verifier.verify(token).sub()).isEqualTo("sub-1");
     }
 }

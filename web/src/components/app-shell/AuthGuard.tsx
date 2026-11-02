@@ -3,6 +3,11 @@
 import { useEffect, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useMe } from '@/features/auth/useSession';
+import {
+  identifyUser,
+  subscribeAnalyticsPreference,
+  syncAnalyticsOptOutFromStorage,
+} from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 
 // 보호 라우트 가드 (POK-101) — 독 4개 라우트를 (dock)/layout.tsx에서 한 번에 덮는다.
@@ -25,6 +30,19 @@ export function markIntentionalLogout() {
   }
 }
 
+/**
+ * 표식을 쓰지 않고 걷는다 — 가드 밖에서 세션을 접은 화면(/goodbye)이 스스로 로그인으로
+ * 나갈 때 부른다. 안 걷으면 표식이 탭 세션에 남아, 다음에 **비자발적으로** 끊겼을 때
+ * 가드가 그것을 의도적 종료로 읽고 복원 경로를 저장하지 않는다.
+ */
+export function clearIntentionalLogout() {
+  try {
+    sessionStorage.removeItem(LOGOUT_KEY);
+  } catch {
+    /* 삭제 실패 — 표식이 남는 것까지만 감수 */
+  }
+}
+
 export function AuthGuard({ children }: { children: ReactNode }) {
   useAuthHydration();
   const hydrated = useAuthStore((s) => s.hydrated);
@@ -35,7 +53,20 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   // 세션 부트스트랩 — 화면은 낙관적으로 즉시 그리고(첫 페인트를 네트워크에 잡히지 않게),
   // me가 최종 401이면(내부의 refresh 회전 실패 = 만료·도난 감지) apiFetch가 clearTokens를
   // 부르고 아래 이펙트가 /login으로 보낸다. 완료조건 "만료·도난 시 자연 복귀"가 이 경로다.
-  useMe();
+  const me = useMe();
+  const userId = me.data?.id;
+
+  // 사용 통계(PostHog)의 사람 식별 — 보호 화면은 전부 이 가드를 지나므로 여기 한 곳에서 한다 (POK-356).
+  // 회원 번호만 넘긴다. 로그아웃 때의 초기화는 lib/analytics가 auth 스토어를 구독해 한다.
+  // 이 브라우저에서 「이용 분석 참여」를 껐으면 identifyUser가 식별하지 않는다
+  useEffect(() => {
+    if (userId !== undefined) identifyUser(userId);
+  }, [userId]);
+
+  // 같은 브라우저의 다른 탭이 「이용 분석 참여」를 바꾸면 이 탭의 SDK에도 건다 — 쿠키는 같이 읽지만 전송 대기열·녹화·식별은
+  // 탭마다라, 다시 켠 것을 걸지 않으면 이 탭은 새로고침 전까지 안 보낸다(PR #382 리뷰). 값은 쪽지가 아니라 쿠키에서 읽는다
+  // (늦게 온 쪽지가 마지막 선택을 덮지 않게, PR #382 3차 리뷰)
+  useEffect(() => subscribeAnalyticsPreference(syncAnalyticsOptOutFromStorage), []);
 
   useEffect(() => {
     if (!hydrated || refreshToken !== null) return;

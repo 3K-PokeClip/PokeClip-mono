@@ -20,6 +20,9 @@ class GoogleTokenClientTest {
 
     private static final String TOKEN_URI = "https://oauth2.googleapis.com/token";
 
+    /** RFC 7636 부록 B의 verifier. 형식은 요청 DTO(GoogleLoginRequest)가 이미 걸렀다는 전제다. */
+    private static final String CODE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
     GoogleAuthProperties properties;
     MockRestServiceServer server;
     GoogleTokenClient client;
@@ -45,7 +48,39 @@ class GoogleTokenClientTest {
                         {"access_token":"ignored","id_token":"the-id-token","expires_in":3599}
                         """, MediaType.APPLICATION_JSON));
 
-        assertThat(client.exchangeCodeForIdToken("auth-code-1")).isEqualTo("the-id-token");
+        assertThat(client.exchangeCodeForIdToken("auth-code-1", CODE_VERIFIER))
+                .isEqualTo("the-id-token");
+        server.verify();
+    }
+
+    /** PKCE(POK-483) — 동의 URL에 실린 challenge의 원문을 구글이 대조한다. 빠지면 구글이 교환을 거부한다. */
+    @Test
+    void 교환_요청에_code_verifier가_실린다() {
+        server.expect(requestTo(TOKEN_URI))
+                .andExpect(content().string(
+                        org.hamcrest.Matchers.containsString("code_verifier=" + CODE_VERIFIER)))
+                .andRespond(withSuccess("""
+                        {"id_token":"the-id-token"}
+                        """, MediaType.APPLICATION_JSON));
+
+        client.exchangeCodeForIdToken("auth-code-1", CODE_VERIFIER);
+        server.verify();
+    }
+
+    /**
+     * 과도기(POK-483 1단계)에는 verifier 없는 요청도 받는다. 빈 code_verifier가 실려 구글이
+     * 거부하지 않도록, null이면 아예 싣지 않는다.
+     */
+    @Test
+    void verifier가_null이면_code_verifier를_싣지_않는다() {
+        server.expect(requestTo(TOKEN_URI))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("code_verifier"))))
+                .andRespond(withSuccess("""
+                        {"id_token":"the-id-token"}
+                        """, MediaType.APPLICATION_JSON));
+
+        client.exchangeCodeForIdToken("auth-code-1", null);
         server.verify();
     }
 
@@ -58,7 +93,7 @@ class GoogleTokenClientTest {
                               """)
                         .contentType(MediaType.APPLICATION_JSON));
 
-        assertThatThrownBy(() -> client.exchangeCodeForIdToken("expired-code"))
+        assertThatThrownBy(() -> client.exchangeCodeForIdToken("expired-code", CODE_VERIFIER))
                 .isInstanceOf(AuthException.class);
     }
 
@@ -69,7 +104,8 @@ class GoogleTokenClientTest {
                         {"access_token":"only-access-token"}
                         """, MediaType.APPLICATION_JSON));
 
-        assertThatThrownBy(() -> client.exchangeCodeForIdToken("code-without-idtoken"))
+        assertThatThrownBy(
+                () -> client.exchangeCodeForIdToken("code-without-idtoken", CODE_VERIFIER))
                 .isInstanceOf(AuthException.class);
     }
 }

@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.support.TestHealth;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.health.contributor.Health;
 
@@ -29,7 +30,7 @@ class CollectorHealthSnapshotTest {
         FlippingStatus status = new FlippingStatus();
         status.reconnecting(StopReason.PONG_TIMEOUT, DISCONNECTED_AT, 3);
 
-        Health health = new CollectorHealth(status).health();
+        Health health = healthOf(status);
 
         // 양성 대조. 렌더 도중에 상태가 실제로 안 바뀌었다면 아래 단언들은
         // 겨냥한 순간을 한 번도 안 만든 채 저절로 참이 된다.
@@ -49,6 +50,11 @@ class CollectorHealthSnapshotTest {
                 .containsEntry("reason", "PONG_TIMEOUT")
                 .containsEntry("disconnectedAt", DISCONNECTED_AT.toString())
                 .containsEntry("attempt", 3);
+    }
+
+    /** 등록부·큐는 이 갈래가 보는 것이 아니다 — 재는 것은 옛 경로 상태를 <b>한 스냅숏으로</b> 그리는가다. */
+    private static Health healthOf(CollectionStatus status) {
+        return TestHealth.legacyOnly(status).health();
     }
 
     /**

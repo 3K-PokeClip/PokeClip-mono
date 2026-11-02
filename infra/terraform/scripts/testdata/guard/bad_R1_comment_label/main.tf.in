@@ -1,0 +1,5 @@
+# R1: 키워드와 따옴표 없는 라벨 사이에 블록 주석을 끼워도 같은 선언이다.
+resource/* x */aws_secretsmanager_secret_version "t" {
+  secret_id     = "example"
+  secret_string = "example"
+}

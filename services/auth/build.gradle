@@ -1,11 +1,30 @@
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     id 'java'
     id 'org.springframework.boot'
 }
 
+dependencyManagement {
+    // Boot 4.1.0 BOM은 AWS SDK를 관리하지 않는다 — 여기서 한 번만 박는다(chat-collector와 같은 버전).
+    imports { mavenBom 'software.amazon.awssdk:bom:2.46.7' }
+}
+
 dependencies {
-    implementation project(':common')
     implementation project(':web-support')
+    // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
+    implementation project(':db-support')
+
+    // 프로필 사진을 S3에 둔다(POK-207). s3가 runtime으로 끌어오는 HTTP 클라이언트는 Apache 5인데,
+    // 그것이 클래스패스에 오르면 Boot가 RestClient 스택을 JDK에서 Apache5로 조용히 바꾼다 —
+    // 구글·치지직·유튜브 호출의 실측 시한이 다른 층에서 끊게 된다. application.yml의
+    // spring.http.clients.imperative.factory=jdk가 막고 RestClientFactoryTest가 지킨다.
+    // 시한을 클라이언트에 박으려면 컴파일에서 보여야 해서 apache5-client를 명시한다.
+    // url-connection-client는 넣지 않는다 — sync 구현이 둘이 되면 빌더가 SPI 순서에 갈린다.
+    implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:apache5-client'
+    // 스트림키 암호 저장소(POK-272, ADR-018). 클라이언트는 SecretsManagerClients 한 곳에서만 만든다.
+    implementation 'software.amazon.awssdk:secretsmanager'
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-security'
@@ -24,10 +43,39 @@ dependencies {
 
     // LogCaptor는 web-support의 테스트 픽스처에 하나만 둔다.
     testImplementation testFixtures(project(':web-support'))
+    testImplementation testFixtures(project(':db-support'))
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-postgresql'
+    // 가짜 S3. 2.x 좌표다 — 1.x의 org.testcontainers:localstack가 아니다.
+    testImplementation 'org.testcontainers:testcontainers-localstack'
+}
+
+// DeploymentEnvVarsTest는 저장소의 배포 파일 둘을 읽는다. 입력으로 선언하지 않으면 그 파일만 바뀐 커밋에서
+// Gradle이 테스트를 UP-TO-DATE로 건너뛰어 — 검사가 있는데도 안 도는 상태가 된다(실측: 변수를 지워도 초록,
+// --rerun에서만 빨간불). 그 시험이 막으려는 사고가 정확히 「compose에만 빠뜨림」이라 치명적인 구멍이다.
+tasks.named('test') {
+    inputs.files(rootProject.file('docker-compose.dev.yml'), rootProject.file('.env.dev.example'),
+            rootProject.file('README.md'))
+            .withPropertyName('contractDocs')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // TokenSubjectRegistryTest는 소스의 javadoc 문장(전수 명부)을 읽는다. 주석만 바꾸면 클래스 파일이
+    // 그대로라 test가 UP-TO-DATE가 되고 — 명부를 틀린 숫자로 고쳐도 초록이다. 위와 같은 함정이라
+    // main 소스를 입력으로 한 번 더 선언한다(컴파일 입력과 별개다).
+    inputs.files(sourceSets.main.java)
+            .withPropertyName('mainSourcesForDocTests')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// lombok.config가 @StreamKeySecrets를 생성자 매개변수로 복사한다(POK-272). Gradle은 그 파일을 컴파일 입력으로 모른다.
+// 지워도 증분 빌드가 옛 클래스를 그대로 써서 스트림키가 조용히 PG를 받는데 바인딩 시험이 초록이었다(주입으로 확인,
+// --rerun에서만 빨간불). 위 test 입력과 같은 함정이라 같은 방식으로 막는다.
+tasks.named('compileJava') {
+    inputs.file('lombok.config')
+            .withPropertyName('lombokConfig')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }

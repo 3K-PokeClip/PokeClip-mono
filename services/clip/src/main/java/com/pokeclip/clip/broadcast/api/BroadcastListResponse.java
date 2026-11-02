@@ -1,0 +1,130 @@
+package com.pokeclip.clip.broadcast.api;
+
+import com.pokeclip.clip.broadcast.Broadcast;
+import com.pokeclip.clip.broadcast.BroadcastPage;
+import com.pokeclip.clip.broadcast.PlatformViewers;
+import com.pokeclip.clip.collector.BroadcastTitle;
+import com.pokeclip.clip.delegation.ChannelNames;
+import com.pokeclip.clip.delegation.ResolveResult;
+
+import java.time.Instant;
+import java.util.List;
+
+/**
+ * 방송 목록 화면이 받는 모양. 2번(web)과의 계약이라 칸 이름을 바꾸지 않는다.
+ *
+ * <p><b>{@code nextCursor}는 불투명하다</b> — 웹은 이 문자열을 풀어 보거나 만들지 않고,
+ * 받은 것을 그대로 되돌려 넣기만 한다. 마지막 장이면 {@code null}이다.
+ */
+public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
+
+    /**
+     * 한 줄.
+     *
+     * <p>🔴 <b>{@code startedAt}이 {@code null}로 나갈 수 있다</b> — 종료 선도착 placeholder는
+     * 시작을 못 본 줄이다(ADR-016). <b>감추거나 지어내지 않는다</b>(PRD 성공 기준). 화면은
+     * 그것을 「시작 시각 미상」으로 그린다. 시작 편지가 늦게라도 오면 그 시각으로 찬다(POK-327).
+     *
+     * <p>{@code vodExpiresAt}을 싣는 것은 <b>기한이 지난 방송도 목록에 그대로 두기</b>
+     * 때문이다 — 영상은 못 봐도 방송 기록은 남고, 화면이 「보관 만료」를 그릴 재료가 필요하다.
+     *
+     * <p>{@code status}가 {@code String}인 것은 계약이 소문자여서다.
+     * {@code BroadcastStatus}를 그대로 실으면 {@code "LIVE"}로 나간다({@code @JsonValue}가 없다).
+     * <b>{@code state}로 접지 않고 실제 상태 값을 그대로 싣는다</b> — 나중에
+     * {@code ended}와 {@code vod_ready}를 화면이 구분하고 싶어질 여지를 남긴다(PRD 결정).
+     *
+     * <p>{@code timelineOriginAt}은 <b>시각 기준점</b>이다(POK-255) — 이 방송의 카드·조각 ms가 0이 되는 절대 시각.
+     * 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 조각이 아직 없으면 {@code null}이고, 그때는 방송 시작
+     * 시각으로 대신한다(수십 초 어긋날 수 있다). 계산은 {@code TimelineOriginReader}.
+     *
+     * <p>{@code ingestStreamId}는 녹화·라이브 영상 주소의 키다(POK-233). 방송을 가리키는 이름({@code streamId})과 갈릴 수
+     * 있어 화면은 영상 주소를 만들 때 이 값을 쓴다. 옛 줄은 {@code streamId}와 같다.
+     *
+     * <p>{@code thumbnailUrl}은 사진 주소다(POK-277, 수명 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝난 방송이면
+     * 점수가 가장 높은 카드의 장면이고 카드 사진이 없으면 마지막 라이브 화면이다. 사진이 없으면 {@code null}이다(화면은 자리표시).
+     * 목록을 다시 받을 때마다 새 주소가 오므로 덮어쓴 라이브 사진이 브라우저 캐시에 막히지 않는다.
+     *
+     * <p>{@code title}·{@code category}는 치지직 방송 제목과 카테고리다(POK-259). 수집기가 1분마다 남기는 방송 정보에서 제목이 있는
+     * 마지막 관측을 고르고, 카테고리는 같은 관측의 값이다. 관측이 없거나 수집기 표를 못 읽으면 둘 다 {@code null}이고 화면은 방송 번호를
+     * 보인다. 수집기에 한 장을 한 번에 묻는다({@code BroadcastTitleClient}).
+     *
+     * <p>{@code platform}은 방송 플랫폼 코드다(POK-398, {@code CHZZK}·{@code SOOP}, 늘 있다). 켜진 플랫폼 중 시청자가 많은 쪽(제목과 같은 규칙, 관측이 없으면
+     * {@code platforms}의 첫째)이라 편지 값과 다를 수 있다(POK-397). 화면은 이 값으로 라이브 띠의 플랫폼 태그를 그린다.
+     *
+     * <p>{@code platforms}는 그 방송이 켜진 플랫폼과 플랫폼마다 시청자 수다(POK-397). 편지 플랫폼({@code platform})과 묶음 표
+     * ({@code broadcast_platforms}, 수집기가 확인할 때 적는다)의 합이라 늘 한 개 이상이고, 순서는 CHZZK → SOOP → 그 밖 이름순이다.
+     * 시청자 수·관측 시각은 수집기의 그 플랫폼 최신 줄이고 모르면 {@code null}이다. 꺼진 플랫폼도 묶음에 남으므로 화면은
+     * {@code observedAt}이 오래됐으면 꺼진 것으로 본다. {@code title}·{@code category}는 켜진 플랫폼 중 시청자가 많은 쪽 제목이다.
+     *
+     * <p>{@code editorsOnline}은 그 방송의 라이브 대시보드를 지금 열어 둔 편집자 수다(POK-398). 스트리머 본인과 묻는 사람은 빼고,
+     * 같은 사람의 여러 탭은 한 명이다. 방송 중 줄만 숫자(아무도 없으면 0)이고 끝난 줄은 {@code null}이다. clip 한 대 전제다
+     * ({@code BroadcastListService}).
+     *
+     * <p>{@code channelNames}는 그 방송 스트리머의 플랫폼 채널 이름이다(POK-430, {@code {"CHZZK":..,"SOOP":..}}). 키는 늘 둘이고 값은
+     * auth에 저장된 <b>지금 연동된</b> 이름(치지직 채널 이름 · SOOP 닉네임)이다. 연동이 없거나 해제됐거나 auth에 못 물었으면 그 칸이
+     * {@code null}이다. 내 줄(OWNER)과 맡은 줄(EDITOR) 모두 싣는다: 편집자 화면이 남의 방송에도 이름을 그리는 재료다.
+     *
+     * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
+     * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
+     */
+    public record Item(String streamId,
+                       String ingestStreamId,
+                       String status,
+                       ResolveResult relation,
+                       Instant startedAt,
+                       Instant endedAt,
+                       Instant vodExpiresAt,
+                       Instant timelineOriginAt,
+                       String thumbnailUrl,
+                       String title,
+                       String category,
+                       String platform,
+                       List<PlatformViewers> platforms,
+                       Integer editorsOnline,
+                       ChannelNames channelNames) {
+    }
+
+    /**
+     * 옛 칸 {@code platform} = 대표 플랫폼(켜진 것 중 시청자 많은 쪽, 제목과 같은 규칙, POK-397). 관측이 없으면 실린 플랫폼의 첫째, 그것도 없으면 편지 값이다.
+     * Media가 편지에 플랫폼을 안 실어 편지 값이 늘 CHZZK라, 편지 값이나 묶음 순서 첫째를 그대로 실으면 SOOP으로만 방송하는 방송에 치지직 태그가 떴다
+     * (재시험 결함 · 로컬 리뷰 4라운드).
+     */
+    private static String platformOf(Broadcast row, BroadcastPage page) {
+        String lead = page.leadPlatforms().get(row.getStreamId());
+        if (lead != null) {
+            return lead;
+        }
+        List<PlatformViewers> listed = page.platforms().getOrDefault(row.getStreamId(), List.of());
+        return listed.isEmpty() ? row.getPlatform() : listed.get(0).platform();
+    }
+
+    public static BroadcastListResponse from(BroadcastPage page) {
+        List<Item> items = page.rows().stream().map(row -> toItem(row, page)).toList();
+        return new BroadcastListResponse(items, page.nextCursor());
+    }
+
+    /**
+     * 관계는 못 찾을 수 없다 — 줄을 뽑은 조건이 {@code streamer_id IN (이 맵의 키 전부)}라
+     * 모든 줄의 번호가 키에 있다. 그래도 {@code get}이 {@code null}을 낼 자리라 <b>그 사실을
+     * 여기 적어 둔다</b>: 조회 조건과 이 맵이 <b>같은 목록에서</b> 나오는 한 성립하고,
+     * 둘의 출처가 갈리는 날 이 칸이 조용히 비게 된다.
+     */
+    private static Item toItem(Broadcast row, BroadcastPage page) {
+        BroadcastTitle title = page.titles().get(row.getStreamId());
+        return new Item(row.getStreamId(),
+                row.ingestKey(),
+                row.getStatus().dbValue(),
+                page.relations().get(row.getStreamerId()),
+                row.getStartedAt(),
+                row.getEndedAt(),
+                row.getVodExpiresAt(),
+                page.origins().get(row.getStreamId()),
+                page.thumbnails().get(row.getStreamId()),
+                title == null ? null : title.title(),
+                title == null ? null : title.category(),
+                platformOf(row, page),
+                page.platforms().getOrDefault(row.getStreamId(), List.of()),
+                page.editorsOnline().get(row.getStreamId()),
+                page.channelNames().getOrDefault(row.getStreamerId(), ChannelNames.UNKNOWN));
+    }
+}

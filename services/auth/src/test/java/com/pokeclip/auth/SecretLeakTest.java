@@ -14,6 +14,8 @@ import com.pokeclip.auth.chzzk.ChzzkMe;
 import com.pokeclip.auth.chzzk.ChzzkTokens;
 import com.pokeclip.auth.chzzk.api.dto.ChzzkResolveRequest;
 import com.pokeclip.auth.chzzk.api.dto.LinkRequest;
+import com.pokeclip.auth.soop.SoopCleanupExecutor;
+import com.pokeclip.auth.soop.SoopLinkStateCodec;
 import com.pokeclip.auth.streamkey.api.dto.ExchangeRequest;
 import com.pokeclip.auth.streamkey.api.dto.ResolveRequest;
 import com.pokeclip.auth.token.RefreshTokenRepository;
@@ -23,6 +25,13 @@ import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
 import com.pokeclip.auth.support.FakeHttpServer;
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import com.pokeclip.auth.support.PhotoLocalStackFixture;
+import com.pokeclip.auth.youtube.YoutubeChannel;
+import com.pokeclip.auth.youtube.YoutubeCleanupExecutor;
+import com.pokeclip.auth.youtube.YoutubeLinkStateCodec;
+import com.pokeclip.auth.youtube.YoutubeLinkWriter;
+import com.pokeclip.auth.youtube.YoutubeTokens;
+import com.pokeclip.auth.youtube.api.dto.YoutubeResolveRequest;
 import com.pokeclip.web.RequestIdFilter;
 import com.pokeclip.web.support.LogCaptor;
 import jakarta.validation.constraints.NotBlank;
@@ -41,6 +50,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.lang.annotation.Annotation;
 import java.time.Duration;
@@ -54,6 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -84,7 +95,13 @@ class SecretLeakTest extends IntegrationTestSupport {
 
     private static final String SPRING_WEB_LOGGER = "org.springframework.web";
 
+    /** 유니크 위반 메시지에 컬럼 값(채널 ID·이메일)이 실려 나오는 로거. application.yml이 error로 눌러 둔다. */
+    private static final String HIBERNATE_JDBC_ERROR_LOGGER = "org.hibernate.orm.jdbc.error";
+
     private static final String GOOGLE_CODE = needle("google-code");
+
+    /** PKCE 원문(POK-483). 바늘 꼴(62자 · 영숫자와 -)이 RFC 7636 형식을 통과해 실제 교환까지 간다. */
+    private static final String GOOGLE_CODE_VERIFIER = needle("google-code-verifier");
 
     /** application-test.yml 대신 아래 @DynamicPropertySource로 주입한다. */
     private static final String CLIENT_SECRET = needle("google-client-secret");
@@ -100,7 +117,8 @@ class SecretLeakTest extends IntegrationTestSupport {
      */
     private static final String INTERNAL_TOKEN = "test-only-internal-token-32bytes-long!!";
 
-    private static final List<String> SECRETS = List.of(GOOGLE_CODE, CLIENT_SECRET, JWT_SECRET);
+    private static final List<String> SECRETS =
+            List.of(GOOGLE_CODE, GOOGLE_CODE_VERIFIER, CLIENT_SECRET, JWT_SECRET);
 
     /** 치지직 바늘. 토큰 둘·채널은 가짜 서버가 돌려주고, code는 요청에, 시크릿은 설정(@DynamicPropertySource)에서 온다. */
     private static final String CHZZK_ACCESS = needle("chzzk-access");
@@ -109,11 +127,39 @@ class SecretLeakTest extends IntegrationTestSupport {
     private static final String CHZZK_CLIENT_SECRET = needle("chzzk-client-secret");
     private static final String CHZZK_CHANNEL_ID = needle("chzzk-channel");
 
+    /** 유튜브 바늘. 토큰 둘·채널은 가짜 구글이 돌려주고, code는 요청에, 시크릿은 설정(@DynamicPropertySource)에서 온다. */
+    private static final String YT_ACCESS = needle("youtube-access");
+    private static final String YT_REFRESH = needle("youtube-refresh");
+    private static final String YT_CODE = needle("youtube-code");
+    private static final String YT_CLIENT_SECRET = needle("youtube-client-secret");
+    private static final String YT_CHANNEL_ID = needle("youtube-channel");
+
+    /** SOOP 바늘(POK-396). 토큰 둘·아이디·닉네임은 가짜 SOOP이 돌려주고, code는 요청에, 시크릿은 설정에서 온다. */
+    private static final String SOOP_ACCESS = needle("soop-access");
+    private static final String SOOP_REFRESH = needle("soop-refresh");
+    private static final String SOOP_CODE = needle("soop-code");
+    private static final String SOOP_CLIENT_SECRET = needle("soop-client-secret");
+    private static final String SOOP_USER_ID = needle("soop-user");
+    private static final String SOOP_NICK = needle("soop-nick");
+    /** 방송 중이 아닐 때 방송국 정보 주소에서 꺼내는 아이디(실측 꼴). 꺼낸 값도 로그·응답에 나오면 안 된다. */
+    private static final String SOOP_LOGO_ID = needle("soop-logo-user");
+
     /**
-     * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 둘뿐이다.
+     * resolve 전용 출입증 바늘(계약4 4C). 토큰과 허용 대역은 설정(@DynamicPropertySource)에서 온다.
+     * 대역 바늘은 망 주소(.0)다 — 요청을 보내는 주소(.7)와 글자가 달라야, 설정 값이 샌 것과 요청자
+     * 주소가 찍힌 것이 갈린다. 주소는 문서용 대역(RFC 5737)이다.
+     */
+    private static final String RESOLVE_TOKEN = needle("stream-key-resolve-token");
+    private static final String RESOLVE_ALLOWED_NETWORK = "198.51.100.0";
+    private static final String RESOLVE_ALLOWED_SOURCE = "198.51.100.7";
+
+    /**
+     * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 셋뿐이다 — PKCE 원문도
+     * 나가는 폼 본문에 실린다(POK-483).
      * JWT 서명키는 본문에 실리지 않아 DEBUG에서도 안 샌다 — 그래서 여기 없다.
      */
-    private static final List<String> LEAKS_AT_DEBUG = List.of(GOOGLE_CODE, CLIENT_SECRET);
+    private static final List<String> LEAKS_AT_DEBUG =
+            List.of(GOOGLE_CODE, GOOGLE_CODE_VERIFIER, CLIENT_SECRET);
 
     /**
      * 400 본문에 code와 client_secret을 일부러 싣는다. RestClientResponseException의
@@ -139,12 +185,22 @@ class SecretLeakTest extends IntegrationTestSupport {
     private final ChzzkLinkStateCodec stateCodec;
     private final ChzzkLinkWriter linkWriter;
     private final ChzzkCleanupExecutor cleanup;
+    private final YoutubeLinkStateCodec youtubeCodec;
+    private final YoutubeLinkWriter youtubeWriter;
+    private final YoutubeCleanupExecutor youtubeCleanup;
+    private final com.pokeclip.auth.youtube.YoutubeChannelLinkRepository youtubeLinks;
+    private final SoopLinkStateCodec soopCodec;
+    private final SoopCleanupExecutor soopCleanup;
 
     SecretLeakTest(MockMvc mockMvc, TokenService tokenService, UserService userService,
                    UserRepository userRepository,
                    RefreshTokenRepository refreshTokenRepository,
                    JdbcTemplate jdbcTemplate, Environment environment,
-                   ChzzkLinkStateCodec stateCodec, ChzzkLinkWriter linkWriter, ChzzkCleanupExecutor cleanup) {
+                   ChzzkLinkStateCodec stateCodec, ChzzkLinkWriter linkWriter, ChzzkCleanupExecutor cleanup,
+                   YoutubeLinkStateCodec youtubeCodec, YoutubeLinkWriter youtubeWriter,
+                   YoutubeCleanupExecutor youtubeCleanup,
+                   com.pokeclip.auth.youtube.YoutubeChannelLinkRepository youtubeLinks,
+                   SoopLinkStateCodec soopCodec, SoopCleanupExecutor soopCleanup) {
         this.mockMvc = mockMvc;
         this.tokenService = tokenService;
         this.userService = userService;
@@ -155,6 +211,12 @@ class SecretLeakTest extends IntegrationTestSupport {
         this.stateCodec = stateCodec;
         this.linkWriter = linkWriter;
         this.cleanup = cleanup;
+        this.youtubeCodec = youtubeCodec;
+        this.youtubeWriter = youtubeWriter;
+        this.youtubeCleanup = youtubeCleanup;
+        this.youtubeLinks = youtubeLinks;
+        this.soopCodec = soopCodec;
+        this.soopCleanup = soopCleanup;
     }
 
     /**
@@ -168,6 +230,17 @@ class SecretLeakTest extends IntegrationTestSupport {
         registry.add("pokeclip.google.client-secret", () -> CLIENT_SECRET);
         registry.add("pokeclip.jwt.secret", () -> JWT_SECRET);
         registry.add("pokeclip.chzzk.app.client-secret", () -> CHZZK_CLIENT_SECRET);
+        registry.add("pokeclip.youtube.app.client-secret", () -> YT_CLIENT_SECRET);
+        registry.add("pokeclip.soop.app.client-secret", () -> SOOP_CLIENT_SECRET);
+        // 사진 창고를 여기서도 켠다. 창고를 끄면 S3 호출이 아예 안 일어나 아래 검사가
+        // 「찾을 것이 없어서 통과」한다. 이 클래스는 이미 자기 @DynamicPropertySource를
+        // 갖고 있으므로 컨텍스트가 더 늘지 않는다.
+        PhotoLocalStackFixture.register(registry);
+        // resolve 전용 출입증도 연다. 닫혀 있으면 전용 헤더 요청이 401로 끝나 토큰·대역이 흐를 길이 없다.
+        // 같은 메서드에 더하므로 위와 같은 이유로 컨텍스트가 늘지 않는다.
+        registry.add("pokeclip.internal-api.stream-key-resolve.token", () -> RESOLVE_TOKEN);
+        registry.add("pokeclip.internal-api.stream-key-resolve.allowed-cidrs",
+                () -> RESOLVE_ALLOWED_NETWORK + "/24");
     }
 
     @AfterAll
@@ -178,6 +251,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     @BeforeEach
     void setUp() {
         CHZZK.reset();   // 같은 static 가짜 서버를 다른 클래스와 나눠 쓴다. 여기서 심은 needle이 다음으로 새지 않게.
+        YOUTUBE.reset();
+        SOOP.reset();
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
@@ -187,6 +262,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     @AfterEach
     void tearDown() {
         cleanup.awaitIdle(Duration.ofSeconds(5));   // 전용 스레드의 정리가 다음 클래스의 CHZZK.reset() 뒤에 도착하지 않게
+        youtubeCleanup.awaitIdle(Duration.ofSeconds(5));   // 유튜브 쪽도 같은 이유 — 안 걸면 정리 로그가 다음 클래스로 샌다
+        soopCleanup.awaitIdle(Duration.ofSeconds(5));
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
     }
@@ -194,6 +271,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     /** FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
     private void clearStreamKeyChildren() {
         jdbcTemplate.update("DELETE FROM chzzk_channel_links");
+        jdbcTemplate.update("DELETE FROM youtube_channel_links");
+        jdbcTemplate.update("DELETE FROM soop_channel_links");
         jdbcTemplate.update("DELETE FROM pairing_exchange_attempts");
         jdbcTemplate.update("DELETE FROM pairing_codes");
         jdbcTemplate.update("DELETE FROM stream_keys");
@@ -210,7 +289,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         try (LogCaptor captor = new LogCaptor()) {
             String body = mockMvc.perform(post("/api/auth/google")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"code\":\"" + GOOGLE_CODE + "\"}"))
+                            .content(googleLoginBody(GOOGLE_CODE_VERIFIER)))
                     .andExpect(status().isUnauthorized())
                     .andReturn().getResponse().getContentAsString();
 
@@ -357,6 +436,47 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
+     * resolve 전용 출입증 체인(계약4 4C)의 세 갈래를 HTTP로 태운다 — 통과(200)·틀린 토큰(401)·
+     * 허용 밖 출발지(403). 찾을 것은 설정에서 온 토큰·대역과 요청이 내민 틀린 토큰이다. 지금은 출발지·토큰
+     * 필터에 로거가 없다 — "누가 막혔나 보자"며 설정 값(전용 토큰·대역)이나 받은 토큰을 찍는 변경이
+     * 여기서 걸린다. 요청자 주소를 찍는 변경은 이 시험 밖이다(필터의 무로그 원칙은 코드가 지킨다).
+     */
+    @Test
+    void resolve_전용_출입증을_돌려도_토큰과_대역이_로그에_남지_않는다() throws Exception {
+        String wrongToken = needle("stream-key-resolve-wrong");
+        String outsideSource = "203.0.113.50";   // 허용 대역 밖(RFC 5737 문서용 주소)
+
+        try (LogCaptor captor = new LogCaptor()) {
+            mockMvc.perform(dedicatedResolve(RESOLVE_TOKEN, RESOLVE_ALLOWED_SOURCE))
+                    .andExpect(status().isOk());
+            mockMvc.perform(dedicatedResolve(wrongToken, RESOLVE_ALLOWED_SOURCE))
+                    .andExpect(status().isUnauthorized());
+            mockMvc.perform(dedicatedResolve(RESOLVE_TOKEN, outsideSource))
+                    .andExpect(status().isForbidden());
+
+            assertThat(captor.messages())
+                    .as("전용 체인을 지나 resolve까지 가지 못했다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.streamkey.resolve_rejected"));
+            assertNoSecretsIn(captor, List.of(RESOLVE_TOKEN, wrongToken, RESOLVE_ALLOWED_NETWORK));
+            // 설정 record를 통째로 찍으면 토큰과 대역이 함께 나간다.
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("StreamKeyResolveAccessProperties[");
+        }
+    }
+
+    /** 없는 키로 전용 헤더 resolve를 부른다. 없는 키면 컨트롤러가 거절 사유만 한 줄 남긴다. */
+    private static MockHttpServletRequestBuilder dedicatedResolve(String token, String source) {
+        return post("/internal/stream-keys/resolve")
+                .header("X-Stream-Key-Resolve-Token", token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"streamid\":\"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish\"}")
+                .with(request -> {
+                    request.setRemoteAddr(source);
+                    return request;
+                });
+    }
+
+    /**
      * 치지직 연동 경로 전체를 HTTP로 태운다 — 정상 연동·교환 거부·해제·resolve·즉석 갱신 거부.
      * 가짜 치지직이 바늘 토큰·바늘 채널을 돌려주고, 거부 본문에도 바늘을 싣는다
      * (RestClientResponseException 메시지에 본문이 붙으므로 그것을 옮기는 변경이 여기서 걸린다).
@@ -474,6 +594,281 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
+     * SOOP 연동 경로(POK-396). 치지직 시나리오의 쌍둥이다. 다른 점: 토큰을 버리는 HTTP가 없어 실패 뒤엔
+     * {@code token_orphaned} 한 줄만 남고, 응답에는 SOOP 아이디가 <b>없어야</b> 한다(닉네임만 있다).
+     * 닉네임도 로그에는 없어야 한다.
+     */
+    @Test
+    void SOOP_연동_경로를_돌려도_토큰_code_아이디_닉네임이_로그에_남지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("soop-sub"), "soop@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String state = soopCodec.issue(user.getId(), Instant.now());
+        SOOP.tokenResponds(200, "{\"access_token\":\"" + SOOP_ACCESS + "\",\"refresh_token\":\"" + SOOP_REFRESH
+                + "\",\"token_type\":\"Bearer\",\"expires_in\":28800}");
+        SOOP.statusResponds(200, "{\"result\":1,\"data\":{\"user_id\":\"" + SOOP_USER_ID + "\",\"status\":\"streamend\"}}");
+        SOOP.stationResponds(200, "{\"result\":1,\"data\":{\"user_nick\":\"" + SOOP_NICK + "\"}}");
+        List<String> needles = List.of(SOOP_ACCESS, SOOP_REFRESH, SOOP_CODE, SOOP_CLIENT_SECRET, SOOP_USER_ID, SOOP_NICK,
+                SOOP_LOGO_ID, state, JWT_SECRET);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            String startBody = mockMvc.perform(post("/api/soop-link/start").header("Authorization", bearer))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(startBody).as("동의 URL에는 시크릿이 없다").doesNotContain(SOOP_CLIENT_SECRET);
+
+            // ① 정상 연동. 응답에는 닉네임만 있고 아이디·토큰은 없다.
+            String linked = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(linked).contains(SOOP_NICK).doesNotContain(SOOP_USER_ID)
+                    .doesNotContain(SOOP_ACCESS).doesNotContain(SOOP_REFRESH);
+            assertThat(SOOP.tokenRequests()).as("바늘이 실제로 SOOP으로 나갔다").anySatisfy(r ->
+                    assertThat(r).containsEntry("code", SOOP_CODE).containsEntry("client_secret", SOOP_CLIENT_SECRET));
+            String status = mockMvc.perform(get("/api/soop-link").header("Authorization", bearer))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(status).contains(SOOP_NICK).doesNotContain(SOOP_USER_ID);
+
+            // ② 재연동: 옛 행 닫기·비우기 + 커밋 뒤 정리.
+            String state2 = soopCodec.issue(user.getId(), Instant.now());
+            mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state2 + "\"}"))
+                    .andExpect(status().isCreated());
+            assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            // ②-b 방송 중이 아닐 때의 재연동: 아이디를 방송국 정보 주소에서 꺼낸다. 꺼낸 값도 응답·로그에 없어야 한다.
+            SOOP.statusResponds(200, "{\"result\":1,\"data\":{\"broad_no\":\"0\",\"status\":\"streamend\"}}");
+            SOOP.stationResponds(200, com.pokeclip.auth.support.FakeSoopServer.stationBody(SOOP_NICK,
+                    com.pokeclip.auth.support.FakeSoopServer.logoUrl(SOOP_LOGO_ID)));
+            String stateLogo = soopCodec.issue(user.getId(), Instant.now());
+            String logoLinked = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + stateLogo + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(logoLinked).doesNotContain(SOOP_LOGO_ID);
+            assertThat(jdbcTemplate.queryForObject("SELECT soop_user_id FROM soop_channel_links WHERE user_id = ? "
+                    + "AND revoked_at IS NULL", String.class, user.getId())).as("바늘이 실제로 아이디로 저장됐다").isEqualTo(SOOP_LOGO_ID);
+            assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            // ③ 교환 400: 본문에 바늘. 에러 응답에도 로그에도 없어야 한다.
+            String state3 = soopCodec.issue(user.getId(), Instant.now());
+            SOOP.tokenResponds(400, "{\"error\":\"bad code " + SOOP_CODE + " secret " + SOOP_CLIENT_SECRET + "\"}");
+            String rejected = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state3 + "\"}"))
+                    .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
+            assertNoSecretsIn(rejected, needles);
+
+            // ④ 교환은 됐는데 아이디 조회가 거부: 받은 토큰은 버릴 길이 없어 한 줄만 남는다. msg에 바늘.
+            String state4 = soopCodec.issue(user.getId(), Instant.now());
+            SOOP.tokenResponds(200, "{\"access_token\":\"" + SOOP_ACCESS + "\",\"refresh_token\":\"" + SOOP_REFRESH
+                    + "\",\"expires_in\":28800}");
+            SOOP.statusResponds(200, "{\"result\":-1,\"msg\":\"" + SOOP_USER_ID + " " + SOOP_ACCESS + "\"}");
+            mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state4 + "\"}"))
+                    .andExpect(status().isBadRequest());
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.soop.link.created"))
+                    .anyMatch(m -> m.startsWith("auth.soop.link.relinked"))
+                    .anyMatch(m -> m.startsWith("auth.soop.link.rejected"))
+                    .anyMatch(m -> m.startsWith("auth.soop.link.token_orphaned"));
+            assertNoSecretsIn(captor, needles);
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("SoopTokens[")
+                    .doesNotContain("SoopIdentity[")
+                    .doesNotContain("LinkResult[")
+                    .doesNotContain("LinkResponse[")
+                    .doesNotContain("LinkStatusResponse[");
+        }
+    }
+
+    /**
+     * {@code org.hibernate.orm.jdbc.error}를 WARN으로 올리면 유니크 위반 메시지에 <b>컬럼 값이 그대로</b> 실린다
+     * ({@code Key (channel_id)=(…) already exists}). 채널 ID는 로그에 안 찍는 값이므로 그 한 줄이 방어선이고,
+     * 지금까지 어느 검사도 그것을 못박지 않았다(감사 1라운드 사소-D).
+     *
+     * <p>web 로거와 같은 모양으로 잰다 — 기본값 없는 {@code getProperty}(줄이 사라지면 빨간불) +
+     * <b>양성 재현</b>(WARN에서 실제로 새는 것). 음성(기본 레벨에서 안 샘)은 같은 흐름에서 이어 잰다.
+     */
+    @Test
+    void 하이버네이트_JDBC_오류를_WARN으로_켜면_채널ID가_새므로_설정에서_켜지_않는다() {
+        String level = environment.getProperty("logging.level." + HIBERNATE_JDBC_ERROR_LOGGER);
+        assertThat(level).as("application.yml에 이 로거 레벨이 박혀 있어야 root를 내려도 버틴다").isNotNull();
+        assertThat(Level.toLevel(level, Level.DEBUG).toInt())
+                .as("아래가 재현하는 유출이 이 레벨에서 열린다: " + level)
+                .isGreaterThanOrEqualTo(Level.ERROR.toInt());
+        Level levelBefore = levelOf(HIBERNATE_JDBC_ERROR_LOGGER);
+        assertThat(levelBefore).isNotNull();
+
+        var owner = userService.findOrCreate(needle("yt-dup-owner"), "dup1@example.com", "김태현", null);
+        var other = userService.findOrCreate(needle("yt-dup-other"), "dup2@example.com", "김태현", null);
+        youtubeWriter.create(owner.getId(), new YoutubeChannel(YT_CHANNEL_ID, "채널"),
+                new YoutubeTokens(YT_ACCESS, YT_REFRESH, Duration.ofHours(1), null));
+
+        // ① 기본 레벨(error) — 같은 위반을 내도 값이 안 샌다.
+        try (LogCaptor quiet = new LogCaptor()) {
+            assertThatThrownBy(() -> insertDuplicateChannel(other.getId()))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertNoSecretsIn(quiet, List.of(YT_CHANNEL_ID));
+        }
+
+        // ② WARN으로 올리면 — 같은 위반이 채널 ID를 통째로 찍는다. 이 재현이 ①의 근거다.
+        try (LogCaptor loud = new LogCaptor()) {
+            setLevel(HIBERNATE_JDBC_ERROR_LOGGER, Level.WARN);
+            try {
+                assertThatThrownBy(() -> insertDuplicateChannel(other.getId()))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            } finally {
+                setLevel(HIBERNATE_JDBC_ERROR_LOGGER, levelBefore);
+            }
+            assertThat(renderAll(loud))
+                    .as("WARN에서 더는 안 샌다면 application.yml의 그 줄을 다시 볼 때다")
+                    .contains(YT_CHANNEL_ID);
+        }
+    }
+
+    /** 사전 조회를 거치지 않고 DB 유니크(uq_youtube_links_alive_channel)까지 그대로 보낸다 — Hibernate가 그 예외를 찍는 자리다. */
+    private void insertDuplicateChannel(Long userId) {
+        youtubeLinks.saveAndFlush(com.pokeclip.auth.youtube.YoutubeChannelLink.of(
+                userId, YT_CHANNEL_ID, "채널", null, "youtube-access:dup", "youtube-refresh:dup",
+                Instant.now().plus(Duration.ofHours(1)), Instant.now()));
+    }
+
+    /**
+     * 유튜브 연동 경로 전체를 HTTP로 태운다 — 정상 연동·즉석 갱신·해제·재연동·교환 거부·갱신 거부.
+     * 가짜 구글이 바늘 토큰·바늘 채널을 돌려주고, 거부 본문에도 바늘을 싣는다(핸들러가 원인 본문을
+     * 옮기기 시작하면 여기서 걸린다). 바늘이 <b>실제로 구글로 나갔는지</b>도 함께 재므로
+     * 「경로가 안 돌아서 초록」이 되지 않는다.
+     */
+    @Test
+    void 유튜브_연동_경로를_돌려도_토큰_code_채널이_로그에_남지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("youtube-sub"), "yt@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String state = youtubeCodec.issue(user.getId(), Instant.now());
+        YOUTUBE.tokenResponds(200, tokenJson(YT_ACCESS, YT_REFRESH));
+        YOUTUBE.channelsResponds(200, "{\"items\":[{\"id\":\"" + YT_CHANNEL_ID
+                + "\",\"snippet\":{\"title\":\"채널\"}}]}");
+        List<String> needles = List.of(YT_ACCESS, YT_REFRESH, YT_CODE, YT_CLIENT_SECRET, YT_CHANNEL_ID,
+                state, JWT_SECRET);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            // ① 동의 URL — 여기에 시크릿이 실리면 브라우저 주소창에 그대로 남는다.
+            String startBody = mockMvc.perform(post("/api/youtube-link/start").header("Authorization", bearer))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(startBody).as("동의 URL에는 시크릿이 없다").doesNotContain(YT_CLIENT_SECRET);
+            assertThat(startBody).as("동의 URL 형태가 맞는지").contains("access_type=offline");
+
+            // ② 연동 — 응답에 채널은 있고 토큰은 없다.
+            String linked = mockMvc.perform(post("/api/youtube-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + YT_CODE + "\",\"state\":\"" + state + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(linked).contains(YT_CHANNEL_ID).doesNotContain(YT_ACCESS).doesNotContain(YT_REFRESH);
+            assertThat(YOUTUBE.tokenRequests()).as("바늘이 실제로 구글로 나갔다").anySatisfy(r ->
+                    assertThat(r).containsEntry("code", YT_CODE).containsEntry("client_secret", YT_CLIENT_SECRET));
+
+            // ③ 내부 창구 — 여기서는 토큰을 준다(그것이 계약이다). 로그에는 남지 않아야 한다.
+            String resolved = mockMvc.perform(post("/internal/youtube-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(resolved).contains(YT_ACCESS).contains(YT_CHANNEL_ID);
+
+            // ④ 즉석 갱신 — access를 만료시켜 갱신 경로를 태운다. 새 바늘도 안 새야 한다.
+            String refreshedAccess = needle("youtube-access-refreshed");
+            jdbcTemplate.update("UPDATE youtube_channel_links SET access_expires_at = now() - interval '1 hour' "
+                    + "WHERE user_id = ?", user.getId());
+            YOUTUBE.tokenResponds(200, tokenJson(refreshedAccess, null));   // 갱신 응답엔 refresh가 없다(실물)
+            String refreshed = mockMvc.perform(post("/internal/youtube-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(refreshed).contains(refreshedAccess);
+            assertThat(YOUTUBE.tokenRequests()).anySatisfy(r -> assertThat(r).containsEntry("refresh_token", YT_REFRESH));
+            // 커밋 뒤 로그가 정리 스레드가 아니라 요청 스레드에서 찍혀 상관 ID가 살아 있다.
+            assertThat(captor.mdcOf("auth.youtube.link.refreshed", RequestIdFilter.MDC_KEY)).isNotBlank();
+            assertThat(captor.events()).filteredOn(ev -> ev.getFormattedMessage().startsWith("auth.youtube.link.refreshed"))
+                    .isNotEmpty()
+                    .allSatisfy(ev -> assertThat(ev.getThreadName()).doesNotStartWith("youtube-cleanup-"));
+
+            // ⑤ 해제 → 재연동. 두 경로의 커밋 뒤 로그(unlinked·relinked)가 실제로 찍히는지도 여기서 못박는다.
+            mockMvc.perform(delete("/api/youtube-link").header("Authorization", bearer))
+                    .andExpect(status().isNoContent());
+            assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+            assertThat(YOUTUBE.revokedTokens()).as("해제는 구글에 refresh로 revoke를 보낸다(POK-423)").containsExactly(YT_REFRESH);
+            YOUTUBE.tokenResponds(200, tokenJson(YT_ACCESS, YT_REFRESH));
+            String state2 = youtubeCodec.issue(user.getId(), Instant.now());
+            mockMvc.perform(post("/api/youtube-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + YT_CODE + "\",\"state\":\"" + state2 + "\"}"))
+                    .andExpect(status().isCreated());
+            youtubeWriter.create(user.getId(), new YoutubeChannel(YT_CHANNEL_ID, "채널"),
+                    new YoutubeTokens(YT_ACCESS, YT_REFRESH, Duration.ofHours(1), null));   // relinked 경로
+            assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            // ⑥ 교환 거부 — 거부 본문에 바늘이 들어 있다. 핸들러가 그것을 옮기면 여기서 걸린다.
+            YOUTUBE.tokenResponds(400, "{\"error\":\"invalid_grant\",\"error_description\":\"bad code "
+                    + YT_CODE + " secret " + YT_CLIENT_SECRET + "\"}");
+            String rejected = mockMvc.perform(post("/api/youtube-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + YT_CODE + "\",\"state\":\""
+                                    + youtubeCodec.issue(user.getId(), Instant.now()) + "\"}"))
+                    .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
+            assertThat(rejected).contains("INVALID_CODE").doesNotContain(YT_CODE).doesNotContain(YT_CLIENT_SECRET);
+
+            // ⑦ 갱신 거부 → BROKEN. 거부 본문에 refresh 바늘을 싣는다.
+            jdbcTemplate.update("UPDATE youtube_channel_links SET access_expires_at = now() - interval '1 hour' "
+                    + "WHERE user_id = ? AND revoked_at IS NULL", user.getId());
+            YOUTUBE.tokenResponds(400, "{\"error\":\"invalid_grant\",\"error_description\":\"revoked "
+                    + YT_REFRESH + "\"}");
+            String broken = mockMvc.perform(post("/internal/youtube-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(broken).contains("BROKEN");
+            assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.created"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.refreshed"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.unlinked"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.relinked"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.rejected"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.refresh_rejected"));
+            assertNoSecretsIn(captor, needles);
+            assertNoSecretsIn(captor, List.of(refreshedAccess));
+            assertNoSecretsIn(broken, List.of(YT_ACCESS, YT_REFRESH, refreshedAccess));
+
+            // ⑧ 통째로 찍는 코드가 들어온 것 자체를 잡는다. record toString은 단순 이름만 쓰므로
+            //    LinkResult[·LinkSnapshot[·RefreshResult[·LinkStatusResponse[는 위 치지직 목록이 이미 덮는다.
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("YoutubeTokens[")
+                    .doesNotContain("YoutubeChannel[")
+                    .doesNotContain("YoutubeResolveResult[")
+                    .doesNotContain("YoutubeResolveResponse[")
+                    .doesNotContain("LinkResult[")
+                    .doesNotContain("LinkSnapshot[")
+                    .doesNotContain("RefreshResult[")
+                    .doesNotContain("LinkStatusResponse[");
+        }
+    }
+
+    /** 구글 토큰 응답 한 벌. refresh가 null이면 빼고 만든다 — 갱신 응답의 실물 모양이다. */
+    private static String tokenJson(String access, String refresh) {
+        return "{\"access_token\":\"" + access + "\""
+                + (refresh == null ? "" : ",\"refresh_token\":\"" + refresh + "\"")
+                + ",\"expires_in\":3600,\"token_type\":\"Bearer\",\"scope\":\""
+                + com.pokeclip.auth.support.FakeYoutubeServer.SCOPE_GRANTED + "\"}";
+    }
+
+    /**
      * 치지직 쪽 DEBUG 유출 재현(감사 1회차 실측). {@code DefaultRestClient.logBody}는 폼뿐 아니라
      * JSON(Map) 본문도 {@code Writing [{clientId=…, clientSecret=…, code=…, state=…}]}로 통째로 찍는다 —
      * client_secret·code·state·refresh 토큰 원문 넷이 샌다. {@code application.yml}의
@@ -506,7 +901,13 @@ class SecretLeakTest extends IntegrationTestSupport {
             } finally {
                 setLevel(SPRING_WEB_LOGGER, levelBefore);
             }
-            assertThat(CHZZK.tokenCalls()).as("바늘이 실제로 나갔다").isEqualTo(2);
+            assertThat(CHZZK.tokenCalls())
+                    .as("""
+                            바늘이 실제로 나갔다. 호출 수가 이보다 <b>늘었으면</b> 유출이 아니라 \
+                            application.yml의 spring.http.clients.imperative.factory=jdk 핀이 빠진 것이다 — \
+                            그러면 스택이 httpclient5로 바뀌고 그쪽 기본 재시도(429·503에 1회, 간격 1초)가 \
+                            같은 요청을 한 번 더 내보낸다.""")
+                    .isEqualTo(2);
 
             String debugLog = renderAll(captor);
             for (String secret : List.of(CHZZK_CODE, CHZZK_CLIENT_SECRET, state, CHZZK_REFRESH)) {
@@ -530,12 +931,22 @@ class SecretLeakTest extends IntegrationTestSupport {
     @Test
     void 깨진_JSON과_본문_검증_실패에도_원문이_남지_않는다() throws Exception {
         String broken = needle("broken-json-code");
+        // unreserved가 아닌 + 하나로 형식만 깨뜨린다. 나머지는 실제 verifier와 같은 꼴이다.
+        String brokenVerifier = needle("malformed-verifier") + "+";
 
         try (LogCaptor captor = new LogCaptor()) {
             // 닫히지 않은 JSON.
             String parseFailure = mockMvc.perform(post("/api/auth/google")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"code\":\"" + broken + "\""))
+                    .andExpect(status().isBadRequest())
+                    .andReturn().getResponse().getContentAsString();
+
+            // PKCE 원문 형식 위반(POK-483). 레코드 생성자가 값 없이 거부한다 — @Pattern이면
+            // 바인딩 실패 리포트가 거부된 원문을 찍는다.
+            String malformedVerifier = mockMvc.perform(post("/api/auth/google")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(googleLoginBody(brokenVerifier)))
                     .andExpect(status().isBadRequest())
                     .andReturn().getResponse().getContentAsString();
 
@@ -550,8 +961,9 @@ class SecretLeakTest extends IntegrationTestSupport {
             assertThat(captor.messages())
                     .as("400을 인증 실패로 집계하면 미인증 트래픽이 알람을 만든다")
                     .noneMatch(m -> m.startsWith("auth.failed"));
-            assertNoSecretsIn(captor, List.of(broken));
+            assertNoSecretsIn(captor, List.of(broken, brokenVerifier));
             assertNoSecretsIn(parseFailure, List.of(broken));
+            assertNoSecretsIn(malformedVerifier, List.of(brokenVerifier));
             assertNoSecretsIn(validationFailure, List.of(broken));
         }
     }
@@ -565,12 +977,24 @@ class SecretLeakTest extends IntegrationTestSupport {
     @Test
     void 시크릿을_받는_DTO에는_NotBlank_말고는_걸지_않는다() throws Exception {
         assertThat(constraintsOn(GoogleLoginRequest.class, "code")).containsExactly(NotBlank.class);
+        // 과도기에는 선택값이라 제약이 없다(POK-483 1단계). 형식은 레코드 생성자가 값 없이 거른다.
+        assertThat(constraintsOn(GoogleLoginRequest.class, "codeVerifier")).isEmpty();
         assertThat(constraintsOn(RefreshRequest.class, "refreshToken")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ExchangeRequest.class, "code")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ResolveRequest.class, "streamid")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(LinkRequest.class, "code")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(LinkRequest.class, "state")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ChzzkResolveRequest.class, "userId")).containsExactly(NotNull.class);
+        assertThat(constraintsOn(YoutubeResolveRequest.class, "userId")).containsExactly(NotNull.class);
+        // 유튜브 LinkRequest는 FQN이다 — 위에서 치지직 LinkRequest를 이미 import했다.
+        assertThat(constraintsOn(com.pokeclip.auth.youtube.api.dto.LinkRequest.class, "code"))
+                .containsExactly(NotBlank.class);
+        assertThat(constraintsOn(com.pokeclip.auth.youtube.api.dto.LinkRequest.class, "state"))
+                .containsExactly(NotBlank.class);
+        assertThat(constraintsOn(com.pokeclip.auth.soop.api.dto.LinkRequest.class, "code"))
+                .containsExactly(NotBlank.class);
+        assertThat(constraintsOn(com.pokeclip.auth.soop.api.dto.LinkRequest.class, "state"))
+                .containsExactly(NotBlank.class);
     }
 
     /**
@@ -634,7 +1058,7 @@ class SecretLeakTest extends IntegrationTestSupport {
             try {
                 mockMvc.perform(post("/api/auth/google")
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"code\":\"" + GOOGLE_CODE + "\"}"))
+                                .content(googleLoginBody(GOOGLE_CODE_VERIFIER)))
                         .andExpect(status().isUnauthorized());
             } finally {
                 setLevel(SPRING_WEB_LOGGER, levelBefore);
@@ -652,6 +1076,178 @@ class SecretLeakTest extends IntegrationTestSupport {
             // 서명키는 요청·응답 본문에 실리지 않아 DEBUG에서도 안 샌다.
             // LEAKS_AT_DEBUG에서 빠진 것이 실수가 아님을 여기서 못박는다.
             assertNoSecretsIn(captor, List.of(JWT_SECRET));
+        }
+    }
+
+    /**
+     * 프로필 사진이 나가는 길에 붙은 로거 셋. AWS SDK 2.46.7의 HTTP 클라이언트는 Apache 5이고,
+     * {@code org.apache.hc.client5.http.wire}는 요청 본문 전체를, {@code .headers}는 Authorization
+     * 값을 DEBUG에 찍는다. SDK 상위 계층 DEBUG는 서명 canonical request를 대량으로 남긴다.
+     * netty는 async 클라이언트용이라 지금은 안 도는 길이지만 s3가 딸려오므로 같이 막는다.
+     */
+    private static final List<String> STORAGE_QUIET_LOGGERS =
+            List.of("software.amazon.awssdk", "org.apache.hc.client5.http", "io.netty");
+
+    /**
+     * 위 셋을 info로 눌러 두는 application.yml 세 줄을 지금까지 어느 검사도 안 지켰다 —
+     * 지워도 아무 데서도 안 걸린다(계획 검증 1회차). 창고 호출이 실제로 도는 것은
+     * 뒤 태스크가 얹고, <b>여기서는 배선만 잰다</b>.
+     *
+     * <p>web 로거와 같은 모양이다 — 기본값 없는 {@code getProperty}(줄이 사라지면 빨간불) +
+     * logback까지 닿았는지(프로퍼티만 있고 안 박히면 방어가 없는 것과 같다). 거기에 한 겹 더:
+     * <b>root를 TRACE로 내린 채</b> 유효 레벨을 본다. 구체 로거 레벨이 root보다 우선한다는 것이
+     * 이 방어의 전제인데, 그 전제를 글로만 적어 두면 다음 사람이 "root로 막으면 되지"로 지운다.
+     */
+    @Test
+    void 창고_SDK_로거는_root를_TRACE로_내려도_INFO_아래로_안_간다() {
+        박혀서_root를_안_따라간다(STORAGE_QUIET_LOGGERS);
+    }
+
+    /**
+     * DB 로거 트리 셋(POK-409). root TRACE에서 읽은 칸 값 · JdbcTemplate 매개변수 · 드라이버가 보내는 값을 찍는다. 이 서버는 비밀을
+     * 해시 · 암호문으로만 저장해 원문은 안 가지만 회원 이메일 · 이름이 지나간다. 값을 실제로 흘려 보는 시험은 clip
+     * {@code DbValueTraceLeakTest}에 있고, 여기서는 이 서버 yml에서 세 줄이 박혀 있는지를 창고 로거와 같은 모양으로 지킨다.
+     */
+    @Test
+    void DB_로거_트리_셋은_root를_TRACE로_내려도_INFO_아래로_안_간다() {
+        박혀서_root를_안_따라간다(List.of("org.hibernate.orm", "org.springframework.jdbc", "org.postgresql"));
+    }
+
+    private void 박혀서_root를_안_따라간다(List<String> loggers) {
+        for (String logger : loggers) {
+            String level = environment.getProperty("logging.level." + logger);
+            assertThat(level)
+                    .as(logger + " 레벨이 application.yml에 박혀 있어야 root를 내려도 버틴다")
+                    .isNotNull();
+            assertThat(Level.toLevel(level, Level.DEBUG).toInt())
+                    .as(logger + "가 이 레벨이면 본문·Authorization이 열린다: " + level)
+                    .isGreaterThanOrEqualTo(Level.INFO.toInt());
+            assertThat(levelOf(logger))
+                    .as(logger + ": 프로퍼티가 Environment에만 있고 logback까지 안 닿았다")
+                    .isNotNull();
+        }
+
+        // 여기서부터가 양성 대조다. root를 TRACE로 내려도 셋의 판정 레벨이 안 따라 내려가야
+        // 한다 — 따라 내려간다면 방어가 "운영에서 root를 안 내린다"는 사람의 규칙에 걸려 있는 것이다.
+        Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+        assertThat(rootBefore).as("root에 명시 레벨이 없으면 아래 복원이 상속을 지운다").isNotNull();
+        try {
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            for (String logger : loggers) {
+                assertThat(effectiveLevelOf(logger).toInt())
+                        .as(logger + "가 root=TRACE를 그대로 물려받았다 — 세 줄 중 이 줄이 없다")
+                        .isGreaterThanOrEqualTo(Level.INFO.toInt());
+            }
+        } finally {
+            setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+        }
+    }
+
+    /**
+     * 위 검사는 <b>배선</b>만 본다 — 세 로거의 레벨이 박혀 있는지. 여기서는 <b>창고 호출을 실제로 돌린다.</b>
+     * root를 TRACE로 내린 채 사진을 올리고 다시 꺼내므로, application.yml의 세 줄 중 하나라도 없으면
+     * Apache 5 wire 로거가 <b>PUT 본문 전체</b>를, headers 로거가 <b>Authorization 값</b>을 찍는다.
+     *
+     * <p>바늘을 사진 바이트 안에 심는다 — 실제로 나가는 물건이라야 「본문이 찍히면 걸린다」가 참이 된다.
+     * 서명 쪽은 값이 매번 달라 바늘을 못 심으므로 서명 <b>방식 이름</b>(AWS4-HMAC-SHA256)으로 잡는다.
+     * 그 글자는 Authorization 값과 canonical request 양쪽에 들어 있어 어느 쪽이 새도 걸린다.
+     */
+    @Test
+    void 사진_경로를_돌려도_바이트도_서명도_로그에_남지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("photo-sub"), "photo@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String photoNeedle = needle("photo-bytes");
+
+        try (LogCaptor captor = new LogCaptor()) {
+            // LogCaptor가 생성자에서 root를 INFO로 올려 둔다. 그 위에서 다시 내려야
+            // 「구체 로거가 root보다 우선한다」는 전제가 실제로 시험된다.
+            // close()가 LogCaptor 생성 이전 레벨로 되돌리므로 여기서 따로 복원하지 않는다.
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+
+            mockMvc.perform(multipart("/api/auth/me/photo")
+                            .file(new org.springframework.mock.web.MockMultipartFile(
+                                    "file", "me.png", "image/png", pngContaining(photoNeedle)))
+                            .header("Authorization", bearer)
+                            .with(r -> {
+                                r.setMethod("PUT");
+                                return r;
+                            }))
+                    .andExpect(status().isOk());
+
+            // 버전이 파일 자리를 정하므로(자리 둘을 번갈아 쓴다) 표에서 읽어 넣는다 —
+            // 0을 박으면 사진이 반대 자리에 있을 때 404가 나고 이 검사는 아무것도 안 재게 된다.
+            long photoVersion = com.pokeclip.auth.profile.PhotoStorage.versionOf(
+                    userRepository.findById(user.getId()).orElseThrow().getProfilePhotoUpdatedAt());
+            String token = com.pokeclip.auth.profile.PhotoToken.issue(
+                    PhotoLocalStackFixture.TOKEN_SECRET, user.getId(), photoVersion, Instant.now());
+            mockMvc.perform(get("/api/profile-photos/" + user.getId() + "?token=" + token))
+                    .andExpect(status().isOk());
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.profile.photo.uploaded"));
+
+            assertNoSecretsIn(captor, List.of(photoNeedle));
+
+            // 사유마다 따로 단언한다. 한 체인에 묶으면 어느 줄이 걸렸든 첫 as()의 문구가 나와
+            // 원인을 잘못 짚게 된다.
+            String logged = renderAll(captor);
+            assertThat(logged)
+                    .as("S3 서명이 로그에 남았다 — application.yml의 창고 로거 세 줄 중 하나가 없다")
+                    .doesNotContain("AWS4-HMAC-SHA256");
+            assertThat(logged)
+                    .as("설정 record를 통째로 찍으면 표 서명키가 그대로 나간다")
+                    .doesNotContain("PhotoProperties[");
+            assertThat(logged)
+                    .as("꺼낸 그림을 통째로 찍으면 바이트가 배열 주소가 아니라 내용으로 나갈 수 있다")
+                    .doesNotContain("StoredPhoto[");
+        }
+    }
+
+    /** 앞 8바이트는 PNG 표식(내용 판정이 통과해야 창고까지 간다), 그 뒤에 바늘을 심는다. */
+    private static byte[] pngContaining(String needle) {
+        byte[] magic = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        byte[] tail = needle.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        byte[] body = new byte[magic.length + tail.length];
+        System.arraycopy(magic, 0, body, 0, magic.length);
+        System.arraycopy(tail, 0, body, magic.length, tail.length);
+        return body;
+    }
+
+    /**
+     * 🔴 <b>탈퇴는 개인정보를 지우러 가는 경로다</b> — 그 경로가 지우려는 값을 로그에 남기면
+     * 표에서 지운 의미가 없다. 로그는 표보다 오래 살고 여러 곳으로 복제된다(POK-172 완료 조건).
+     *
+     * <p>바늘을 <b>네 칸에 다 심는다</b> — 구글 식별자·이메일·이름·사진 주소. 한 칸만 심으면
+     * 「어느 칸이 새는지」가 아니라 「그 칸이 안 샌다」만 재게 되고, 나중에 다른 칸을 찍는 코드가
+     * 조용히 통과한다.
+     *
+     * <p>이메일 바늘만 <b>소문자</b>다. {@code UserCreator}가 이메일을 소문자로 통일해 저장하므로
+     * 대문자가 섞인 바늘은 <b>표에 그 글자로 존재하지 않아</b> 검사가 저절로 통과한다.
+     *
+     * <p>여기까지 오는 값은 로그가 <b>회원 번호만</b> 찍는다는 규칙(운영 로깅 절)의 마지막 방어선이다.
+     */
+    @Test
+    void 탈퇴_경로를_돌려도_이메일_이름_구글식별자가_로그에_남지_않는다() throws Exception {
+        String subNeedle = needle("withdraw-sub");
+        String emailNeedle = needle("withdraw-email").toLowerCase(java.util.Locale.ROOT) + "@example.com";
+        String nameNeedle = needle("withdraw-name");
+        String photoNeedle = "https://lh3.googleusercontent.com/" + needle("withdraw-photo");
+
+        var user = userService.findOrCreate(subNeedle, emailNeedle, nameNeedle, photoNeedle);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+
+        try (LogCaptor captor = new LogCaptor()) {
+            mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer))
+                    .andExpect(status().isNoContent());
+            // 막히는 갈래도 태운다 — 「탈퇴한 회원이다」를 알리려고 사유에 개인정보를 실으면 여기서 걸린다.
+            mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer))
+                    .andExpect(status().isUnauthorized());
+
+            assertThat(captor.messages())
+                    .as("탈퇴 경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.equals("auth.withdrawal.completed userId=" + user.getId()));
+            assertNoSecretsIn(captor, List.of(subNeedle, emailNeedle, nameNeedle, photoNeedle));
         }
     }
 
@@ -701,6 +1297,10 @@ class SecretLeakTest extends IntegrationTestSupport {
      * 바늘은 매 실행 무작위다. code-1·sub-1 같은 짧은 상수는 다른 로그와 우연히
      * 겹쳐 "안 샜다"가 아니라 "겹친 것을 못 봤다"로 통과할 수 있다.
      */
+    private static String googleLoginBody(String codeVerifier) {
+        return "{\"code\":\"" + GOOGLE_CODE + "\",\"codeVerifier\":\"" + codeVerifier + "\"}";
+    }
+
     private static String needle(String label) {
         return "LEAK-" + label + "-" + UUID.randomUUID();
     }
@@ -760,6 +1360,11 @@ class SecretLeakTest extends IntegrationTestSupport {
     /** 명시 레벨만 돌려준다. 안 박혀 있으면 null이다(부모에서 물려받는 상태). */
     private static Level levelOf(String loggerName) {
         return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getLevel();
+    }
+
+    /** 상속까지 반영한 실제 판정 레벨. 명시 레벨이 없으면 부모(끝은 root) 값이 온다. */
+    private static Level effectiveLevelOf(String loggerName) {
+        return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getEffectiveLevel();
     }
 
     private static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {

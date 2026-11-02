@@ -1,0 +1,13 @@
+# 템플릿 빌드 산출물·의존성
+/.deps/
+/build_*/
+/release/
+/cmake/.CMakeBuildNumber
+*.lock.json
+.DS_Store
+
+# 브라우저 독 페이지 빌드 산출물 (ui/에서 pnpm build로 생성)
+/data/ui/
+
+# ui 의존성
+/ui/node_modules/

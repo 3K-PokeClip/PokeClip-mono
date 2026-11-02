@@ -30,11 +30,38 @@ public abstract class IntegrationTestSupport {
      * <b>{@code FATAL: sorry, too many clients already}</b>로 컨텍스트 로딩이
      * 무너진다 — 30 × 컨텍스트 수가 100을 넘기 때문이다.
      *
-     * <p>300인 이유: 컨텍스트가 8개 안팎이고 8 × 30 = 240이라 여유를 뒀다.
+     * <p>🔴 <b>900 그대로다(POK-429).</b> prod 꼴 resolve 창구(/24 대역 · {@code native})를 연 MockMvc 컨텍스트
+     * 하나({@code StreamKeyResolveProdShapeTest})를 더해 <b>29개</b>다(2026-10-24 실측, 아래 grep). 아래 문단의 25 뒤 다른
+     * 카드가 셋을 더해 이 카드 앞 기준선은 28이었다. 29 × 30 − 1 × 20 = <b>850</b>, 상한 897에서 여유 47(컨텍스트 하나).
+     * 하나는 더 들어가고, 그다음을 더하기 전에 올린다. 다음 카드는 이 줄의 셈부터 다시 잰다.
+     *
+     * <p>(POK-429 전 문단) <b>900으로 올렸다(POK-316).</b> 위 지시대로다: 2026-10-08 뒤 다른 카드가 남은 하나를 썼는지 몰라 먼저 올렸다.
+     * 이 카드는 {@code native} + 좁힌 신뢰 대역 + resolve 창구를 연 실서버 컨텍스트 하나({@code ProxyTrustNativeTest})를 더해
+     * <b>25개</b>다(2026-10-23 실측, 아래 grep). 25 × 30 − 1 × 20 = <b>730</b>, 상한 897에서 여유 167(컨텍스트 다섯).
+     * 다음 카드는 이 줄의 셈부터 다시 잰다.
+     *
+     * <p>(POK-316 전 문단) <b>750으로 올렸다(POK-272).</b> 아래 「다음 카드가 컨텍스트를 하나라도 더하면 750」 지시대로다. 스트림키
+     * 저장소를 aws로 켠 컨텍스트 둘(LocalStack · 가짜 서버)에 resolve 전용 출입증 컨텍스트 하나(계약4 4C)가 더해져
+     * <b>24개</b>다(2026-10-08 실측). 풀 10은 하나다 — 풀 고갈 시험 두 클래스(치지직 · 유튜브)가 한 컨텍스트를
+     * 나눈다. 24 × 30 − 1 × 20 = <b>700</b>, 상한 747에서 여유 47(컨텍스트 하나). 하나는 더 들어가고, 그다음을
+     * 더하기 전에 900으로 올린다. 병행 종료(POK-329)는 컨텍스트를 안 더했다. 롤백 상태(양쪽 정리)는 정리기 단위
+     * 시험으로 재고, 그 때문에 컨텍스트를 하나 더 띄우지 않았다.
+     *
+     * <p>(POK-272 전 문단) 600인 이유: 지금 컨텍스트가 <b>21개</b>다(POK-89 실측 — 17은 POK-171 시점 값이고 그 뒤 사진·유튜브 시험이 둘,
+     * 이 카드가 둘(청소기를 켠 컨텍스트 · {@code native} 프록시 헤더를 켠 실서버 컨텍스트)을 더했다). 풀 10 컨텍스트 둘을
+     * 빼면 21 × 30 − 2 × 20 = <b>590</b>, superuser 몫 3을 뺀 상한이 <b>597</b>이다 —
+     * <b>남은 여유는 커넥션 7개, 컨텍스트로는 0개다.</b> 🔴 <b>다음 카드가 컨텍스트를 하나라도 더하면 이 값을 먼저 750으로 올린다</b>
+     * (실측: {@code grep -oh "HikariPool-[0-9]*" build/test-results/test/*.xml | sort -u | wc -l}. {@code maxParallelForks}가
+     * 없어 fork는 하나다).
+     * <b>300으로는 실제로 넘쳤다</b> — POK-207 태스크 5에서 사진·유튜브 검사 13건이 이 메시지로
+     * 한꺼번에 죽었다(사진과 무관한 유튜브 검사가 같이 죽는다는 것이 이 값의 성질이다).
+     * Hikari는 minimumIdle 기본값이 maximumPoolSize라 컨텍스트마다 30까지 실제로 연다.
+     * 딱 맞는 450이 아니라 600인 이유는 PostgreSQL이 superuser 몫 3을 따로 떼어 두기도 하고,
+     * <b>컨텍스트를 더하는 다음 카드가 같은 벽에 부딪히지 않게</b>다.
      */
     protected static final PostgreSQLContainer POSTGRES =
             new PostgreSQLContainer("postgres:17")
-                    .withCommand("postgres", "-c", "max_connections=300");
+                    .withCommand("postgres", "-c", "max_connections=900");
 
     /**
      * 가짜 치지직도 static으로 하나만 띄운다. 모든 컨텍스트가 같은 api-base-uri를 받아야
@@ -43,28 +70,14 @@ public abstract class IntegrationTestSupport {
      */
     protected static final FakeChzzkServer CHZZK = FakeChzzkServer.start();
 
+    /** 가짜 구글도 같은 이유로 static 하나다. 상태는 각 테스트 클래스가 {@code @BeforeEach}에서 reset()한다. */
+    protected static final FakeYoutubeServer YOUTUBE = FakeYoutubeServer.start();
+
+    /** 가짜 SOOP도 같은 이유로 static 하나다. RealServerTestSupport도 이것을 쓴다(따로 띄우지 않는다). */
+    protected static final FakeSoopServer SOOP = FakeSoopServer.start();
+
     static {
         POSTGRES.start();
-        seedNonEmptySchema();
-    }
-
-    /**
-     * 다른 서버(chat-collector)가 먼저 마이그레이션한 공유 DB를 재현한다 — public이
-     * 비어 있지 않은데 auth의 이력 테이블(flyway_schema_history_auth)은 없는 상태.
-     * 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않으므로 auth도 이 상황을
-     * 만나고, application.yml의 baseline-on-migrate가 없으면 "Found non-empty
-     * schema(s) ... but no schema history table"로 죽는다(chat-collector 쪽 실물 부팅
-     * 실측 2026-08-15, PR #56). 여기 심어 두면 모든 스프링 테스트가 이 경로를 지나므로
-     * baseline 설정을 지우는 회귀가 즉시 전체 빨강이 된다 — chat-collector와 같은 방식.
-     */
-    private static void seedNonEmptySchema() {
-        try (java.sql.Connection connection = java.sql.DriverManager.getConnection(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-             java.sql.Statement statement = connection.createStatement()) {
-            statement.execute("CREATE TABLE chat_collector_placeholder_for_baseline (id int)");
-        } catch (java.sql.SQLException e) {
-            throw new IllegalStateException("공유 DB 재현용 더미 표 생성 실패", e);
-        }
     }
 
     @DynamicPropertySource
@@ -73,5 +86,10 @@ public abstract class IntegrationTestSupport {
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("pokeclip.chzzk.api-base-uri", CHZZK::baseUrl);
+        // 유튜브는 주소가 셋이다 — 토큰·철회는 별개 키, 채널 목록만 api-base-uri 아래에 붙는다.
+        registry.add("pokeclip.youtube.token-uri", YOUTUBE::tokenUri);
+        registry.add("pokeclip.youtube.revoke-uri", YOUTUBE::revokeUri);
+        registry.add("pokeclip.youtube.api-base-uri", YOUTUBE::baseUrl);
+        registry.add("pokeclip.soop.api-base-uri", SOOP::baseUrl);
     }
 }

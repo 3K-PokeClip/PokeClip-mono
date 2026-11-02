@@ -38,5 +38,9 @@ subprojects {
 
     tasks.named('test') {
         useJUnitPlatform()
+        // 가짜 외부 서버(JDK 내장 HttpServer)가 응답을 Nagle 없이 바로 보내게 한다. 기본값(꺼짐)이면 리눅스에서
+        // 머리와 본문이 지연 ACK와 맞물려 응답마다 약 40ms 늦어지고, 시각을 재는 시험(JumpCardAccessTest)이
+        // 그 지연을 auth가 느린 것으로 읽는다. macOS에서는 이 지연이 없다(POK-330).
+        systemProperty 'sun.net.httpserver.nodelay', 'true'
     }
 }

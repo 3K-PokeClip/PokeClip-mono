@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
@@ -16,6 +18,7 @@ import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,8 +43,9 @@ class ChatPersisterTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM chat_messages");
     }
 
+    /** 방송 번호를 모르는 채로 들어온 채팅 — 옛 경로(CHZZK_ENABLED)와 같은 상태다. */
     private static PersistableChat chat(String sender, String content, long time) {
-        return new PersistableChat("ch-1", sender, content, time, time + 175);
+        return new PersistableChat(Platform.CHZZK, null, "ch-1", sender, content, time, time + 175, null, null);
     }
 
     @Test
@@ -266,11 +270,19 @@ class ChatPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void NUL은_생성_지점에서_제거되고_해시와_저장이_같은_본문을_쓴다() {
-        PersistableChat chat = new PersistableChat("ch", "s", "a\0b", 1L, 2L);
+        PersistableChat chat = new PersistableChat(Platform.CHZZK, null, "ch", "s", "a\0b", 1L, 2L,
+                "닉\0네임", "com\0mon_user");
 
         assertThat(chat.content())
                 .as("생성 지점에서 안 지우면 해시 본문과 저장 본문이 갈릴 수 있다")
                 .isEqualTo("ab");
+        assertThat(chat.nickname()).isEqualTo("닉네임");
+        // 🔴 <b>역할이 네 번째다</b>(봇 claude). 후원 쪽에서 세 번 같은 실수를 고치면서
+        // 채팅의 이 칸을 안 봤다. 지금은 치지직이 이 값을 안 보내 영향이 0이지만,
+        // 보내기 시작하면 NUL 한 글자가 그 배치를 포이즌 격리로 보내 채팅을 버린다.
+        assertThat(chat.userRole())
+                .as("디코더가 userRoleCode 를 검증 없이 그대로 넘긴다")
+                .isEqualTo("common_user");
     }
 
     /** ⑼의 결과 — NUL 채팅은 격리가 아니라 정상 저장이다(제거된 본문으로). */
@@ -457,7 +469,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
         ChatBuffer buffer = new ChatBuffer(100);
         ChatPersister persister = new ChatPersister(jdbc, buffer);
         buffer.offer(chat("s-1", "정상", 1723600000000L));
-        buffer.offer(new PersistableChat("ch-1", "s-2", "시각오버플로", Long.MAX_VALUE, Long.MAX_VALUE));
+        buffer.offer(new PersistableChat(Platform.CHZZK, null, "ch-1", "s-2", "시각오버플로", Long.MAX_VALUE, Long.MAX_VALUE, null, null));
 
         int consumed = persister.flushOnce();
 
@@ -514,9 +526,10 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 배치_결과에_행_수가_없으면_계상하지_않고_예외로_드러낸다() {
         // Hikari를 거치지 않는 DataSource — 부팅 검사가 못 보는 경로를 그대로 재현한다.
-        // Testcontainers URL에는 이미 ?loggerLevel=OFF가 있어 '&'로 잇는다('?'면 옵션이 무시된다).
+        // Testcontainers URL에는 이미 ?loggerLevel=OFF가 있어 '&'로 잇는다('?'면 옵션이 무시된다). Hikari가 아니라
+        // hikari.schema가 닿지 않으므로 경로(자기 스키마 — POK-428)를 URL로 준다.
         JdbcTemplate rewriting = new JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(
-                POSTGRES.getJdbcUrl() + "&reWriteBatchedInserts=true",
+                POSTGRES.getJdbcUrl() + "&reWriteBatchedInserts=true&currentSchema=app_chat_collector",
                 POSTGRES.getUsername(), POSTGRES.getPassword()));
         ChatBuffer buffer = new ChatBuffer(100);
         ChatPersister persister = new ChatPersister(rewriting, buffer);
@@ -536,6 +549,177 @@ class ChatPersisterTest extends IntegrationTestSupport {
         assertThat(persister.conflictedCount()).isZero();
         // 유실이 아니라 계상 불능이다 — 배치는 이미 표에 있다.
         assertThat(count()).isEqualTo(2);
+    }
+
+    /**
+     * 태스크 12. 붙어 있는 방송 번호가 그대로 행에 남는다 — 판별기가 「어느 방송의
+     * 반응인가」를 이 컬럼으로 가른다.
+     */
+    // 문항 1: 이 갈래는 <b>다중 세션을 안 잰다</b> — 저장 경로만 본다. 세션이 각자
+    //         자기 번호를 찍는지는 StreamIdStampingTest가 잰다(거기 문항 1 답이 있다).
+    // 문항 2: 대상 코드를 안 부르면 행이 없어 queryForObject가 던진다 — 자동으로 참이 안 된다.
+    // 문항 5: INSERT의 stream_id 자리를 지우면 null이 나와 빨간불 — 확인함(주입 L).
+    @Test
+    void 새로_들어온_채팅에_방송_번호가_채워진다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s1", "ch-1", "s-1", "안녕",
+                1723600000000L, 1723600000175L, null, null));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        assertThat(jdbc.queryForObject(
+                "SELECT stream_id FROM chat_messages WHERE channel_id = 'ch-1'", String.class))
+                .isEqualTo("s1");
+    }
+
+    /**
+     * 편지 없이 붙은 옛 경로(CHZZK_ENABLED)에서는 방송 번호가 없다. 여기서 저장이
+     * 멈추면 <b>수집 자체가 죽는다</b> — NULL이 곧 「모른다」는 표시이고, 읽는 쪽은
+     * 그것으로 구분한다.
+     */
+    // 문항 2: 행이 없으면 queryForObject가 던진다 — count 단언을 같이 둬서 "저장이 됐고
+    //         그 값이 NULL"과 "아예 안 들어갔다"를 가른다.
+    @Test
+    void 방송_번호를_몰라도_저장은_된다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(new PersistableChat(Platform.CHZZK, null, "ch-1", "s-1", "안녕",
+                1723600000000L, 1723600000175L, null, null));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        assertThat(count()).as("NOT NULL이면 저장이 통째로 실패한다").isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT stream_id FROM chat_messages WHERE channel_id = 'ch-1'", String.class))
+                .isNull();
+    }
+
+    /**
+     * <b>두 방송의 채팅이 안 섞인다.</b> 판별기는 이 컬럼으로 방송을 가르므로,
+     * 남의 번호가 찍히면 다른 방송의 반응을 자기 하이라이트 근거로 읽는다.
+     */
+    // 문항 4: 「둘 다 번호가 채워졌다」만 보면 <b>둘이 서로의 번호로 찍혀도</b> 통과하고,
+    //         한쪽 번호로만 조회하면 <b>둘 다 같은 번호</b>인 경우가 그 조회에서만 걸린다.
+    //         양쪽을 각자의 번호로 조회해 짝이 맞는지 본다.
+    // 문항 5: toRow에서 streamId 자리에 상수를 넣으면 한쪽이 비어 빨간불 — 확인함(주입 M).
+    @Test
+    void 두_방송의_채팅이_안_섞인다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s1", "chA", "u1", "A방송",
+                1723600000000L, 1723600000175L, null, null));
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s2", "chB", "u2", "B방송",
+                1723600000001L, 1723600000176L, null, null));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        assertThat(contentsOf("s1")).containsExactly("A방송");
+        assertThat(contentsOf("s2")).containsExactly("B방송");
+    }
+
+    /**
+     * <b>지문 제약은 방송 번호를 안 본다.</b> 넣으면 방송 경계에서 같은 채팅이 두 번
+     * 들어간다 — 방송을 껐다 켜면 번호는 바뀌는데 소켓은 그대로라(retarget) 재연결·
+     * 이중 처리로 겹치는 프레임이 서로 다른 번호를 달고 온다.
+     */
+    // 문항 5: uq_chat_messages_fingerprint에 stream_id를 넣으면 2건이 되어 빨간불 — 확인함(주입 N).
+    @Test
+    void 지문_제약은_방송_번호를_안_본다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s1", "ch-1", "u1", "같은말",
+                1723600000000L, 1723600000175L, null, null));
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s2", "ch-1", "u1", "같은말",
+                1723600000000L, 1723600000176L, null, null));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        assertThat(count())
+                .as("방송 번호가 지문에 들어가면 방송 경계에서 같은 채팅이 두 번 남는다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * 닉네임·역할이 <b>같은 행에</b> 들어가는지 본다. 순서를 재는 것이 요점이다 —
+     * 칸 둘이 같은 타입이라 INSERT 파라미터를 맞바꿔도 컴파일러도 DB도 안 막는다.
+     */
+    @Test
+    void 닉네임과_역할이_같은_행에_저장된다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s-1", "CH", "S", "hi",
+                1_754_300_000_000L, 1_754_300_000_100L, "겜돌이", "common_user"));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT nickname, user_role FROM chat_messages WHERE stream_id='s-1' AND content='hi'");
+        assertThat(row).containsEntry("nickname", "겜돌이").containsEntry("user_role", "common_user");
+    }
+
+    /** 옛 행·옛 경로에는 이 값이 없다. 빈 문자열로 접으면 「이름이 빈 사람」과 못 가른다. */
+    @Test
+    void 닉네임이_없으면_칸이_NULL로_남는다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(chat("s-none", "이름없음", 1_754_300_000_001L));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT nickname, user_role FROM chat_messages WHERE content='이름없음'");
+        assertThat(row.get("nickname")).isNull();
+        assertThat(row.get("user_role")).isNull();
+    }
+
+    /**
+     * 닉네임에도 NUL 제거를 건다 — 본문과 같은 이유(PG TEXT가 거부하는 것은 사실상 NUL뿐)이고,
+     * 안 걸면 닉네임 한 글자 때문에 그 배치가 포이즌 격리로 넘어간다.
+     */
+    @Test
+    void 닉네임의_NUL도_생성_지점에서_제거된다() {
+        PersistableChat chat =
+                new PersistableChat(Platform.CHZZK, null, "ch", "s", "본문", 1L, 2L, "겜\0돌이", "streamer");
+
+        assertThat(chat.nickname()).isEqualTo("겜돌이");
+    }
+
+    /**
+     * 🔴 <b>문자열 칸 여섯 전부</b>(감사 L10). 본문·닉네임·역할만 지우고 <b>채널 번호 둘과 방송 번호를 안 지웠다</b> —
+     * 쌍둥이 {@code PersistableDonation}은 여섯 칸을 다 지우는데 채팅만 갈려 있었다(같은 뿌리 한 자리 더).
+     * 표가 {@code channel_id}·{@code sender_channel_id}를 {@code TEXT NOT NULL}, {@code stream_id}를
+     * {@code VARCHAR(128)}로 받으므로 NUL 한 글자면 그 채팅이 포이즌 격리로 버려진다(감사 실측 poisoned=1).
+     * 칸마다 단언을 따로 둔다 — 한 칸의 제거만 빠져도 여기서 빨간불이다.
+     */
+    @Test
+    void 채팅의_문자열_칸_여섯_전부_NUL을_생성_지점에서_지운다() {
+        PersistableChat chat = new PersistableChat(Platform.CHZZK, "stre\0am", "c\0h", "sen\0der", "본\0문", 1L, 2L,
+                "닉\0", "ro\0le");
+
+        assertThat(chat.streamId()).as("stream_id").isEqualTo("stream");
+        assertThat(chat.channelId()).as("channel_id").isEqualTo("ch");
+        assertThat(chat.senderChannelId()).as("sender_channel_id").isEqualTo("sender");
+        assertThat(chat.content()).as("content").isEqualTo("본문");
+        assertThat(chat.nickname()).as("nickname").isEqualTo("닉");
+        assertThat(chat.userRole()).as("user_role").isEqualTo("role");
+    }
+
+    /** L10의 결과 — 식별자에 NUL이 있어도 격리가 아니라 정상 저장이다. */
+    @Test
+    void 채널_번호와_방송_번호에_NUL이_있어도_저장된다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        ChatPersister persister = new ChatPersister(jdbc, buffer);
+        buffer.offer(new PersistableChat(Platform.CHZZK, "nul\0-stream", "c\0h-1", "s\0-1", "본문", 1723600000000L,
+                1723600000175L, null, null));
+
+        persister.flushOnce();
+
+        assertThat(persister.poisonedCount()).as("NUL이 격리로 갔다면 채팅이 버려진 것이다").isZero();
+        assertThat(persister.persistedCount()).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_messages WHERE stream_id = 'nul-stream' AND channel_id = 'ch-1'"
+                        + " AND sender_channel_id = 's-1'", Long.class)).isEqualTo(1L);
+    }
+
+    /** 그 방송 번호로 남은 본문들. 짝이 맞는지 보려면 <b>양쪽</b>을 이렇게 뽑아야 한다. */
+    private List<String> contentsOf(String streamId) {
+        return jdbc.queryForList(
+                "SELECT content FROM chat_messages WHERE stream_id = ?", String.class, streamId);
     }
 
     private long count() {

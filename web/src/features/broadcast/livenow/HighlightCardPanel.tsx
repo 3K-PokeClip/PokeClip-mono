@@ -1,0 +1,218 @@
+'use client';
+
+import { memo, useState } from 'react';
+import Link from 'next/link';
+import clsx from 'clsx';
+import { Zap } from 'lucide-react';
+import { EmptyState, Spinner } from '@/ui';
+import styles from './LiveScreen.module.css';
+import { HighlightCard } from './HighlightCard';
+import type { CardVisual } from './useLiveDetailsMockState';
+import type {
+  CardListStatus,
+  HighlightSource,
+  LiveCardSnapshot,
+  LiveHighlight,
+  LiveStream,
+} from './useLiveMockState';
+
+// 하이라이트 카드 패널(시안 1b) — 가로로 넘기는 카드 행.
+// 개수는 넘어온 목록에서 그때그때 센다. 목업에 박아 두면 마킹으로 카드가 늘었을 때
+// 필터 표기만 옛 수에 남는다.
+
+// 'hidden'은 가린 카드만 본다(POK-463): 거기서만 되살릴 수 있다
+type Filter = 'all' | HighlightSource | 'hidden';
+
+const FILTERS: Array<{ value: Filter; label: string }> = [
+  { value: 'all', label: '전체' },
+  { value: 'auto', label: '자동' },
+  { value: 'manual', label: '수동' },
+  { value: 'hidden', label: '숨김' },
+];
+
+// memo인 이유 — 화면이 경과 표기 때문에 매초 다시 그려진다. 카드 9장의 파형 문자열 생성과
+// 필터링이 초당 한 번씩 다시 도는 것을 막는다(ChatPanel·LiveStatsPanel도 같은 이유).
+export const HighlightCardPanel = memo(function HighlightCardPanel({
+  highlights,
+  hiddenHighlights = [],
+  stream,
+  visuals,
+  pendingLabel,
+  detectionPaused,
+  detectionLocked = false,
+  ended = false,
+  listStatus,
+  onSeek,
+  onCardChange,
+}: {
+  highlights: LiveHighlight[];
+  /** 가린 카드(POK-463). 「숨김」 칸을 누르면 이것만 보인다 */
+  hiddenHighlights?: LiveHighlight[];
+  /** 카드 목록을 받았나(useLiveMockState.cardsStatus). 받기 전에 비어 있으면 「없다」가 아니다 */
+  listStatus: CardListStatus;
+  stream: LiveStream;
+  visuals: Record<string, CardVisual>;
+  pendingLabel: string | null;
+  /** 수집이 끊겨 자동 탐지가 멈춘 상태 — 감지 중이라고 말하면 거짓이 된다 */
+  detectionPaused: boolean;
+  /**
+   * 방송 채널 연동이 없어 채팅이 오지 않는다(linkLock) — 자동 탐지가 처음부터 꺼져 있다. 「수집이 끊겨」는 까닭이 다르고, 사람이 할 일
+   * (채널 연동)도 다르다. 수동 마킹은 채팅 없이 되므로 패널은 잠그지 않는다
+   */
+  detectionLocked?: boolean;
+  /** 끝난 방송: 감지는 방송 중에 끝났다. 「자동 감지 중」이라고 하면 지금 감지하는 것처럼 읽힌다(QA 2026-10-11) */
+  ended?: boolean;
+  onSeek: (timestamp: string) => void;
+  /** 가리기·되살리기 답(바뀐 카드 한 장)을 목록에 넣는다(useLiveMockState.mergeCard) */
+  onCardChange?: (card: LiveCardSnapshot) => void;
+}) {
+  const [filter, setFilter] = useState<Filter>('all');
+
+  const listFor = (value: Filter) =>
+    value === 'all'
+      ? highlights
+      : value === 'hidden'
+        ? hiddenHighlights
+        : highlights.filter((h) => h.source === value);
+  const shown = listFor(filter);
+  // 만들어질 카드는 수동이다: 「자동」·「숨김」을 보고 있을 땐 자리도 두지 않는다.
+  // 아니면 자리만 3초 섰다 사라지고 카드는 안 보여 마킹이 실패한 것처럼 읽힌다.
+  const showPending = pendingLabel !== null && filter !== 'auto' && filter !== 'hidden';
+
+  return (
+    <section className={styles.cardPanel} aria-label="하이라이트 카드">
+      <div className={styles.cardPanelHeader}>
+        <h2 className={styles.cardPanelHeading}>하이라이트 카드</h2>
+        <span className={styles.cardPanelNote}>
+          {ended
+            ? '카드 클릭 = 시점 이동'
+            : // 멈췄을 때 「핫키로 직접 남길 수 있어요」라고 했지만 그 길은 아직 없다(POK-119·257, QA 2026-10-11)
+              `${detectionLocked ? '자동 감지 꺼짐' : detectionPaused ? '자동 감지 멈춤' : '자동 감지 중'} · 카드 클릭 = 시점 이동`}
+        </span>
+        <div className={styles.filterGroup} role="group" aria-label="하이라이트 필터">
+          {FILTERS.map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              className={clsx(styles.filterChip, filter === value && styles.filterChipActive)}
+              aria-pressed={filter === value}
+              onClick={() => setFilter(value)}
+            >
+              {label} {listFor(value).length}
+            </button>
+          ))}
+          <span className={styles.cardPanelDivider} aria-hidden />
+          {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
+          <Link className={styles.cardPanelLink} href="/clips/library">
+            보관함
+          </Link>
+        </div>
+      </div>
+      {shown.length === 0 && !showPending ? (
+        <EmptyTrack
+          filter={filter}
+          listStatus={listStatus}
+          visibleCount={highlights.length}
+          hiddenCount={hiddenHighlights.length}
+          ended={ended}
+          detectionPaused={detectionPaused}
+          detectionLocked={detectionLocked}
+        />
+      ) : (
+        /* 가로 스크롤 영역은 키보드로도 훑을 수 있어야 한다 (axe scrollable-region-focusable) */
+        <ul className={styles.cardTrack} tabIndex={0} aria-label="하이라이트 카드 목록">
+          {showPending ? (
+            <li className={styles.cardSlot}>
+              <div className={styles.pendingCard}>
+                <Spinner size="sm" label="카드 만드는 중" />
+                <span className={styles.pendingLabel}>{pendingLabel} 수동 마킹</span>
+                <span className={styles.pendingNote}>카드 만드는 중…</span>
+              </div>
+            </li>
+          ) : null}
+          {shown.map((highlight) => (
+            <li key={highlight.id} className={styles.cardSlot}>
+              <HighlightCard
+                highlight={highlight}
+                stream={stream}
+                visuals={visuals}
+                onSeek={onSeek}
+                onCardChange={onCardChange}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+});
+
+// 카드 줄이 비었을 때 하는 말. 카드가 하나도 없으면 빈 상태 카드(아이콘·제목·설명)다. 불러오는 중·필터·숨김으로
+// 빈 자리는 같은 점선 틀에 한 줄만 쓴다: 「아직 없다」 카드를 다시 쓰면 거짓이 된다. 줄이 통째로 사라지는 자리라
+// 한 줄은 role="status"로 낭독시킨다.
+function EmptyTrack({
+  filter,
+  listStatus,
+  visibleCount,
+  hiddenCount,
+  ended,
+  detectionPaused,
+  detectionLocked,
+}: {
+  filter: Filter;
+  listStatus: CardListStatus;
+  visibleCount: number;
+  hiddenCount: number;
+  ended: boolean;
+  detectionPaused: boolean;
+  detectionLocked: boolean;
+}) {
+  const note = (text: string, busy = false) => (
+    <p className={styles.cardEmptyNote} role="status">
+      {/* 도는 표시는 눈에만 보인다. Spinner도 status라 그대로 두면 문장과 두 번 낭독된다 */}
+      {busy ? <Spinner size="sm" aria-hidden /> : null}
+      {text}
+    </p>
+  );
+  // 목록을 받기 전에 「없어요」라고 하면 거짓이다: 모르는 것은 없는 것이 아니다
+  if (listStatus === 'loading') return note('카드를 불러오는 중…', true);
+  // 실패를 「불러오는 중」으로 가리지 않는다. 다음 주기(라이브 3초, 끝난 방송 1분)에 다시 읽으니 도는 표시는 둔다
+  if (listStatus === 'failed') return note('카드를 불러오지 못했어요. 다시 시도하는 중…', true);
+  if (filter === 'hidden') return note('가린 카드가 없어요.');
+  // 「수동」 칸에는 자동 카드가 쌓이지 않는다. 카드가 0장이어도 「여기에 쌓여요」 카드를 보이면 거짓이다
+  if (filter === 'manual') return note('수동으로 남긴 카드가 없어요.');
+  if (visibleCount > 0) return note('자동 감지한 카드가 없어요.');
+  // 다 가렸는데 「감지된 하이라이트가 없어요」라고 하면 거짓이다
+  if (hiddenCount > 0) return note('보이는 카드가 없어요. 가린 카드는 「숨김」에서 볼 수 있어요.');
+  // 연동이 없으면 기다려도 자동 카드는 안 생긴다 — 「아직」이라 하지 않는다
+  if (detectionLocked && !ended)
+    return (
+      <EmptyState
+        className={styles.cardEmpty}
+        icon={<Zap size={21} />}
+        title="자동 감지가 꺼져 있어요"
+        description={
+          <>
+            방송 채널을 연동해야 채팅 반응으로 카드를 만들어요.
+            <br />
+            수동 마킹은 그대로 쓸 수 있어요.
+          </>
+        }
+      />
+    );
+  return (
+    <EmptyState
+      className={styles.cardEmpty}
+      icon={<Zap size={21} />}
+      // 끝난 방송에는 더 생기지 않는다 — 「아직」이라고 하면 기다리면 생길 것처럼 읽힌다
+      title={ended ? '이 방송에서 감지된 하이라이트가 없어요' : '아직 감지된 하이라이트가 없어요'}
+      description={
+        ended
+          ? '자동 감지는 방송 중에만 카드를 만들어요.'
+          : detectionPaused
+            ? '채팅 수집이 끊겨 자동 감지가 멈춰 있어요.'
+            : '채팅 반응이 튀는 순간을 찾으면 여기에 카드가 실시간으로 쌓여요.'
+      }
+    />
+  );
+}

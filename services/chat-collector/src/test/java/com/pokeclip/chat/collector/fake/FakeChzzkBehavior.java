@@ -84,6 +84,13 @@ public class FakeChzzkBehavior {
      * (CP5가 같은 상황을 10회 중 3회만 재현했다).
      */
     public volatile Runnable onSubscribeBeforeResponse = () -> { };
+
+    /**
+     * 후원 구독 응답 <b>직전</b>에 부른다. 채팅 쪽({@link #onSubscribeBeforeResponse})과
+     * 따로 두는 것이 요점이다 — 하나로 묶으면 수립 ④까지 같이 붙들려 재시도만
+     * 매달아 두는 창을 못 만든다.
+     */
+    public volatile Runnable onSubscribeDonationBeforeResponse = () -> { };
     /**
      * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
      * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
@@ -103,11 +110,223 @@ public class FakeChzzkBehavior {
      * 곧 <b>뒷정리 스레드가 왕복에 갇힌 시점</b>이다 — 테스트가 그 시점을 노린다.
      */
     public volatile Duration unsubscribeDelay = Duration.ZERO;
+    /**
+     * 후원 구독 REST가 돌려줄 상태. 403이면 <b>채팅은 되는데 후원만 거부</b>다.
+     *
+     * <p>{@code subscribeStatus}로는 그 자리를 못 만든다 — 그것은 채팅 구독까지 같이
+     * 거부해 수립 자체가 실패한다. 「후원 권한만 없는 토큰」은 실제로 흔한 상태다
+     * (앱 동의에 후원 Scope가 빠진 경우).
+     */
+    public volatile int subscribeDonationStatus = 200;
+    /**
+     * false면 후원 구독 REST가 200을 주고도 {@code subscribed(DONATION)}을 안 쏜다.
+     *
+     * <p>우리는 그 프레임을 <b>기다리지 않으므로</b> 이 스위치를 꺼도 수립이 성공해야 한다 —
+     * 그것이 이 스위치의 존재 이유다(안 기다린다는 선택을 재는 손잡이).
+     */
+    public volatile boolean sendDonationSubscribed = true;
 
     private final List<String> received = new CopyOnWriteArrayList<>();
     private final AtomicReference<String> handshakeQuery = new AtomicReference<>("");
     private final AtomicReference<WebSocketSession> session = new AtomicReference<>();
     private final Object sendLock = new Object();
+
+    // ---------------------------------------------------------------------
+    // 스트리머 여럿 (POK-127 태스크 9)
+    //
+    // <b>신원은 채널이 아니라 Access Token이다.</b> 구독 API에 채널 파라미터가
+    // 아예 없어서(CLAUDE.md 「스트리머 여러 명」) 클라이언트가 채널을 보내는 자리가
+    // 한 군데도 없다 — 가짜 서버가 채널로 세션을 고르려면 실서버에 없는 정보를
+    // 지어내야 한다. 토큰은 발급·구독·반납 셋 다 Authorization 헤더로 실려 오므로
+    // 그것이 실물에서도 유일한 식별자다.
+    //
+    // 발급이 돌려주는 url에 {@code auth=FAKE-AUTH-<토큰>}을, connected 프레임에
+    // {@code sessionKey=FAKE-KEY-<토큰>}을 실어 소켓·구독·반납을 그 토큰으로 잇는다.
+    // ---------------------------------------------------------------------
+
+    /** 접두어. 소켓 핸드셰이크 쿼리에서 <b>표</b>를 되찾는 열쇠다. */
+    static final String AUTH_PREFIX = "FAKE-AUTH-";
+    /** 접두어. connected 프레임이 싣는 세션 열쇠. 실서버처럼 <b>내용이 없는 값</b>이다. */
+    static final String SESSION_KEY_PREFIX = "FAKE-KEY-";
+
+    /**
+     * 발급 때 내주는 <b>일회용 표</b>. 소켓 핸드셰이크에는 Authorization 헤더가 없어서
+     * 그 접속이 누구 것인지 알려면 url에 무언가를 실어야 하는데,
+     * <b>거기에 Access Token을 그대로 실으면 안 된다.</b>
+     *
+     * <p>처음에 그렇게 만들었다가 {@code ChatLogLeakTest}가 빨간불로 잡았다 —
+     * 토큰이 소켓 URI의 쿼리에 들어가 절단 경로의 로그로 새어 나왔다. <b>실서버가
+     * 주는 auth 값은 치지직이 만든 별개의 값이지 우리 토큰이 아니다</b>(CLAUDE.md
+     * 프로토콜 ①②). 가짜가 거기서 거짓말을 하면 유출 검사가 없는 결함을 잡는다.
+     */
+    private final java.util.Map<String, String> tokenByHandle =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final AtomicLong handleSeq = new AtomicLong();
+
+    /** 발급 한 번에 표 하나. 실서버의 세션 url도 일회용이다(약 30초 만료·재사용 불가). */
+    String mintHandle(String accessToken) {
+        String handle = "H" + handleSeq.incrementAndGet();
+        tokenByHandle.put(handle, accessToken);
+        return handle;
+    }
+
+    String tokenForHandle(String handle) {
+        return tokenByHandle.getOrDefault(handle, NO_TOKEN);
+    }
+
+    /**
+     * 토큰이 없는 접속의 자리. {@code EngineIoSocketTest}처럼 발급 REST를 안 거치고
+     * 소켓에 바로 붙는 검사가 여기 들어온다 — 그쪽은 세션이 하나뿐이라 구분이 필요 없다.
+     */
+    static final String NO_TOKEN = "";
+
+    private final java.util.Map<String, WebSocketSession> byToken =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    /** 소켓 → 토큰. pong을 <b>그 ping을 보낸 소켓</b>에 돌려주려면 필요하다. */
+    private final java.util.Map<String, String> tokenBySocketId =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    /** 토큰별 세션 발급 상태. 없으면 전역 {@link #authStatus}를 쓴다. */
+    private final java.util.Map<String, Integer> authStatusByToken =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 토큰별 구독 반납 상태. 없으면 전역 {@link #unsubscribeStatus}를 쓴다. */
+    private final java.util.Map<String, Integer> unsubscribeStatusByToken =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 이 스트리머의 세션 발급만 실패시킨다. 재연결 루프를 한 세션만 백오프에
+     * 가둬 두는 손잡이다 — 전역 {@link #authStatus}로는 전부 같이 막힌다.
+     */
+    public void failSessionCreateFor(String accessToken, int status) {
+        authStatusByToken.put(accessToken, status);
+    }
+
+    /**
+     * 이 스트리머의 구독 반납만 실패시킨다. 전역 {@link #unsubscribeStatus}로는 전부 같이
+     * 막혀서 <b>「하나가 실패해도 나머지는 닫힌다」를 잴 수가 없다</b> — 전부 실패하면
+     * "나머지"가 없다.
+     */
+    public void failReleaseFor(String accessToken, int status) {
+        unsubscribeStatusByToken.put(accessToken, status);
+    }
+
+    /** 이 스트리머의 소켓만 끊는다. 다른 스트리머의 소켓은 그대로 둔다. */
+    public void dropConnectionFor(String accessToken) {
+        WebSocketSession s = require(accessToken);
+        try {
+            s.close(org.springframework.web.socket.CloseStatus.NORMAL);
+        } catch (Exception e) {
+            // 토큰 원문 금지 — 이유는 require() 주석에.
+            throw new IllegalStateException("가짜 서버 절단 실패 " + attachedCount(), e);
+        }
+    }
+
+    /** 이 스트리머에게만 동의 철회를 보낸다. 재시도로 안 풀리는 사유다. */
+    public void sendRevokedTo(String accessToken) {
+        sendTo(accessToken, "42[\"SYSTEM\",\"" + escape("{\"type\":\"revoked\"}") + "\"]");
+    }
+
+    /** 이 스트리머에게만 채팅을 보낸다. */
+    public void emitChatTo(String accessToken, String innerJson) {
+        sendTo(accessToken, "42[\"CHAT\",\"" + escape(innerJson) + "\"]");
+    }
+
+    /** 이 스트리머에게만 후원을 보낸다. */
+    public void emitDonationTo(String accessToken, String innerJson) {
+        sendTo(accessToken, "42[\"DONATION\",\"" + escape(innerJson) + "\"]");
+    }
+
+    /**
+     * 이 스트리머에게 권한 회수를 보낸다. {@code eventType}이 CHAT·DONATION·SUBSCRIPTION 중
+     * 무엇인가로 <b>채팅을 끊을지 말지가 갈린다</b>(POK-234 태스크 4B).
+     *
+     * <p>{@code eventType}에 null을 주면 <b>그 칸이 없는 옛 모양</b>을 쏜다 —
+     * 그때는 지금대로 멈추는 것이 안전한 방향이라 그 갈래도 재야 한다.
+     */
+    public void emitRevokedTo(String accessToken, String eventType) {
+        String inner = eventType == null
+                ? "{\"type\":\"revoked\",\"data\":{\"channelId\":\"FAKE-CHANNEL\"}}"
+                : "{\"type\":\"revoked\",\"data\":{\"eventType\":\"" + eventType
+                        + "\",\"channelId\":\"FAKE-CHANNEL\"}}";
+        emitSystemTo(accessToken, inner);
+    }
+
+    /**
+     * 이 스트리머의 소켓이 <b>지금 서버 쪽에서</b> 열려 있는가.
+     *
+     * <p>세션이 살아 있다는 것을 클라이언트 상태({@code statusOf})로만 재면
+     * 「health는 UP인데 소켓은 죽었다」가 통과한다 — 이 서비스의 유일한 치명 실패가
+     * 정확히 그 모양이다. 관측점을 상대 쪽에 둔다.
+     */
+    public boolean isConnected(String accessToken) {
+        WebSocketSession s = byToken.get(accessToken);
+        return s != null && s.isOpen();
+    }
+
+    /** 지금 붙어 있는 스트리머들. 세션 수가 아니라 <b>서로 다른 토큰 수</b>를 본다. */
+    public java.util.Set<String> connectedTokens() {
+        return java.util.Set.copyOf(byToken.keySet());
+    }
+
+    void sendTo(String accessToken, String frame) {
+        WebSocketSession s = require(accessToken);
+        synchronized (sendLock) {
+            try {
+                s.sendMessage(new TextMessage(frame));
+            } catch (Exception e) {
+                // 토큰 원문 금지 — 이유는 require() 주석에.
+                throw new IllegalStateException("가짜 서버 전송 실패 " + attachedCount(), e);
+            }
+        }
+    }
+
+    void emitSystemTo(String accessToken, String innerJson) {
+        sendTo(accessToken, "42[\"SYSTEM\",\"" + escape(innerJson) + "\"]");
+    }
+
+    /**
+     * <b>예외 메시지에 토큰을 실으면 안 된다.</b> 절단 뒷정리 중에 클라이언트 ping이
+     * 도착하면 pong을 돌려주려다 여기서 던지는데, 그 예외를 스프링 WebSocket
+     * 데코레이터가 그대로 로그에 찍는다 — 가짜 서버가 만든 유출로
+     * {@code ChatLogLeakTest}가 빨간불이 된다. 절단과 ping이 겹치는 창이 좁아
+     * <b>부하가 걸린 모듈 전체 실행에서만</b> 났다.
+     *
+     * <p>진단에 필요한 것은 「어느 토큰인가」가 아니라 「무엇이 없었는가」다 —
+     * 표에 아예 없는 것(신원을 못 찾음)과 있었는데 닫힌 것(절단)은 원인이 다르다.
+     */
+    private WebSocketSession require(String accessToken) {
+        WebSocketSession s = byToken.get(accessToken);
+        if (s == null || !s.isOpen()) {
+            throw new IllegalStateException(
+                    "가짜 서버에 그 스트리머의 열린 세션이 없다"
+                            + " 세션=" + (s == null ? "표에_없음" : "닫힘")
+                            + " " + attachedCount());
+        }
+        return s;
+    }
+
+    /** 토큰 목록 대신 개수만. {@code byToken.keySet()}은 남의 토큰까지 통째로 샌다. */
+    private String attachedCount() {
+        return "붙어_있는_토큰_수=" + byToken.size();
+    }
+
+    int authStatusFor(String accessToken) {
+        return authStatusByToken.getOrDefault(accessToken, authStatus);
+    }
+
+    int unsubscribeStatusFor(String accessToken) {
+        return unsubscribeStatusByToken.getOrDefault(accessToken, unsubscribeStatus);
+    }
+
+    void rememberFor(String accessToken, WebSocketSession s) {
+        byToken.put(accessToken, s);
+        tokenBySocketId.put(s.getId(), accessToken);
+    }
+
+    /** 그 소켓이 어느 스트리머의 것인가. pong을 되돌려 줄 자리를 고르는 데 쓴다. */
+    String tokenOf(WebSocketSession s) {
+        return tokenBySocketId.getOrDefault(s.getId(), NO_TOKEN);
+    }
 
     /**
      * 서버가 2를 실제로 받은 시각. <b>ping 간격의 지상 진실은 여기다.</b>
@@ -132,6 +351,37 @@ public class FakeChzzkBehavior {
 
     private final AtomicLong authRequestNanos = new AtomicLong();
     private final AtomicInteger unsubscribeCalls = new AtomicInteger();
+
+    /**
+     * 반납 요청이 <b>서버에 도착한</b> 시각(nanoTime). 동시 요청이 실제로 겹쳐서
+     * 나가는지를 재는 자다(POK-127 태스크 1 프로브).
+     *
+     * <p><b>관측점을 상대 쪽에 둔다.</b> 우리 쪽에서 "동시에 던졌다"를 세면
+     * 커넥션 풀이 배치로 쪼갠 것을 못 본다 — 던진 수와 겹친 수는 다른 값이고,
+     * 둘을 같은 것으로 읽으면 종료 유예 산수의 근거가 통째로 틀어진다.
+     */
+    private final List<Long> unsubscribeArrivalNanos = new CopyOnWriteArrayList<>();
+    /**
+     * 그 요청이 실제로 타고 온 프로토콜({@code HttpServletRequest.getProtocol()}).
+     *
+     * <p><b>HTTP/2면 커넥션 하나에 다 몰리므로 위 도착 시각의 해석이 통째로 달라진다.</b>
+     * 여기(로컬 톰캣)와 치지직이 다를 수 있어, 실물과 대조하려면 양쪽 다 적혀 있어야 한다.
+     */
+    private final List<String> unsubscribeProtocols = new CopyOnWriteArrayList<>();
+    /**
+     * <b>지금 이 서버 안에 들어와 있는 반납 요청의 수</b>와 그 최댓값.
+     *
+     * <p>도착 시각만으로는 겹침을 못 읽는다 — 뭉치 경계를 몇 ms로 잡느냐에 답이 달라지고,
+     * 그 값은 우리가 고르는 것이다. <b>"안에 몇이 같이 있었나"는 고를 것이 없다.</b>
+     * 관측점이 상대 쪽인 것은 같은 이유다: 우리 쪽에서 "동시에 던졌다"를 세면 커넥션 풀이
+     * 배치로 쪼갠 것을 못 본다(multi-session-test-reality 문항 3).
+     *
+     * <p><b>🔴 이 값은 가짜 서버(HTTP/1.1)가 잰 것이다.</b> 치지직은 HTTP/2라 커넥션 하나에
+     * 몰리므로 <b>겹치는 이유가 다르다.</b> 판정 근거는 태스크 1의 실계정 프로브다
+     * (세션 셋 동시 반납 총 67ms·69ms = 최대 개별 소요, 전부 HTTP_2).
+     */
+    private final AtomicInteger releasesInServer = new AtomicInteger();
+    private final AtomicInteger maxConcurrentReleases = new AtomicInteger();
     private final AtomicInteger closedSessions = new AtomicInteger();
     private final AtomicBoolean unsubscribeSawOpenSession = new AtomicBoolean();
 
@@ -174,6 +424,44 @@ public class FakeChzzkBehavior {
     public int unsubscribeCallCount() { return unsubscribeCalls.get(); }
 
     /**
+     * 후원 구독 반납이 왔는지. <b>채팅 반납과 따로 센다</b> — 한 카운터로 묶으면
+     * 「반납이 둘 나갔다」와 「채팅 반납이 두 번 나갔다」가 같은 값이 된다.
+     */
+    public int unsubscribeDonationCallCount() { return unsubscribeDonationCalls.get(); }
+
+    /** 후원 <b>구독</b> 호출 수. 재시도가 실제로 나가는지를 이 값으로만 잴 수 있다. */
+    public int subscribeDonationCallCount() { return subscribeDonationCalls.get(); }
+
+    void countSubscribeDonationCall() { subscribeDonationCalls.incrementAndGet(); }
+
+    void countUnsubscribeDonationCall() { unsubscribeDonationCalls.incrementAndGet(); }
+
+    /**
+     * 후원 구독 반납 REST가 <b>도착을 센 뒤</b> 응답 전에 붙들고 있는 시간.
+     *
+     * <p><b>{@link #unsubscribeDelay}와 따로 두는 것이 요점이다.</b> 하나로 묶으면
+     * 「둘이 나란히 나갔다」와 「하나가 두 번 나갔다」가 같은 총소요로 보인다 —
+     * 둘 다 붙들어야 직렬(합)과 나란히(최대)가 갈린다.
+     */
+    public volatile Duration unsubscribeDonationDelay = Duration.ZERO;
+
+    private final AtomicInteger unsubscribeDonationCalls = new AtomicInteger();
+
+    private final AtomicInteger subscribeDonationCalls = new AtomicInteger();
+
+    /** 반납 요청들이 서버에 도착한 시각. 정렬돼 있지 않다 — 도착 순서 그대로다. */
+    public List<Long> unsubscribeArrivalNanos() { return List.copyOf(unsubscribeArrivalNanos); }
+
+    /** 위 도착들과 같은 순서의 프로토콜 목록. */
+    public List<String> unsubscribeProtocols() { return List.copyOf(unsubscribeProtocols); }
+
+    /**
+     * 반납 요청이 이 서버 안에 <b>동시에</b> 몇 개까지 들어와 있었나. 1이면 배치로 나간 것이다 —
+     * 코드가 동시여도 커넥션 풀·락이 막으면 그렇게 된다.
+     */
+    public int maxConcurrentReleases() { return maxConcurrentReleases.get(); }
+
+    /**
      * 반납 REST가 도착했을 때 WS 세션이 열려 있었는가.
      * <b>순서를 실제로 보는 유일한 자다</b> — 건수만 세면 소켓을 먼저 닫도록
      * 뒤집어도 그대로 초록이다(실측으로 확인됨).
@@ -192,6 +480,11 @@ public class FakeChzzkBehavior {
     /** 테스트가 채팅을 쏟는 입구. 이중 인코딩된 채로 나간다. */
     public void emitChat(String innerJson) {
         send("42[\"CHAT\",\"" + escape(innerJson) + "\"]");
+    }
+
+    /** 지금 붙어 있는 소켓 하나에 후원을 보낸다(옛 경로 검사용). */
+    public void emitDonation(String innerJson) {
+        send("42[\"DONATION\",\"" + escape(innerJson) + "\"]");
     }
 
     public void emitSystem(String innerJson) {
@@ -287,19 +580,45 @@ public class FakeChzzkBehavior {
     void remember(WebSocketSession s) { session.set(s); }
 
     /**
+     * 업그레이드를 받아 준 뒤 아직 안 닫힌 소켓 수. {@link #reset()}이 이것이 0이 되기를 기다린다. 세션 자리(session · byToken)는
+     * afterConnectionEstablished에서야 차서, 그보다 먼저 닫힌 소켓을 못 본다(POK-468). 물리 상태라 reset()이 지우지 않는다
+     */
+    private final AtomicInteger openSockets = new AtomicInteger();
+    void socketAccepted() { openSockets.incrementAndGet(); }
+    void socketGone() { openSockets.decrementAndGet(); }
+
+    /**
      * 끊긴 세션을 현재 세션 자리에서 치운다. <b>같은 세션일 때만</b> 치운다 —
      * 앞 접속이 늦게 끊기면서 이미 들어온 새 접속을 지우면, 뒤 테스트가
      * "열린 세션이 없다"로 간헐 실패한다. 실제로 그렇게 났다.
      */
     void forget(WebSocketSession s) {
         closedSessions.incrementAndGet();
+        socketGone();
         session.compareAndSet(s, null);
+        // 값으로 지운다. 토큰으로 지우면 <b>같은 스트리머가 재연결한 새 소켓을</b>
+        // 늦게 끊긴 앞 소켓이 지워, 그 뒤 emit/close가 "붙어 있는데 없다"로 터진다.
+        // 위 compareAndSet과 같은 이유다.
+        byToken.values().remove(s);
+        tokenBySocketId.remove(s.getId());
     }
 
-    void countUnsubscribeCall() {
-        WebSocketSession s = session.get();
+    void countUnsubscribeCall(String protocol, String accessToken) {
+        // 도착 시각이 가장 먼저다. 아래 줄들이 앞서면 그 시간이 도착 시각에 섞여,
+        // 겹침을 재는 자에 서버 쪽 처리 시간이 잡음으로 들어간다.
+        unsubscribeArrivalNanos.add(System.nanoTime());
+        unsubscribeProtocols.add(protocol);
+        // <b>그 스트리머의 소켓</b>이 열려 있었는지를 본다. "가장 최근 소켓"으로 두면
+        // 스트리머가 여럿일 때 남의 소켓 상태를 읽어 반납-후-닫기 순서 단언이 뜻을 잃는다.
+        WebSocketSession s = byToken.get(accessToken);
         unsubscribeSawOpenSession.set(s != null && s.isOpen());
         unsubscribeCalls.incrementAndGet();
+        maxConcurrentReleases.accumulateAndGet(releasesInServer.incrementAndGet(), Math::max);
+    }
+
+    /** 반납 하나가 이 서버를 빠져나갔다. 부르는 자리는 응답 갈래 셋을 감싸는 finally 하나다. */
+    void endUnsubscribeCall() {
+        releasesInServer.decrementAndGet();
     }
 
     /**
@@ -319,6 +638,10 @@ public class FakeChzzkBehavior {
         received.clear();
         authCalls.set(0);
         unsubscribeCalls.set(0);
+        releasesInServer.set(0);
+        maxConcurrentReleases.set(0);
+        unsubscribeArrivalNanos.clear();
+        unsubscribeProtocols.clear();
         closedSessions.set(0);
         unsubscribeSawOpenSession.set(false);
         // 안 지우면 앞 테스트의 접속 시각이 남아 다음 테스트가 큰 값을 본다.
@@ -328,6 +651,11 @@ public class FakeChzzkBehavior {
         // 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 객체도 하나뿐이다.
         // 앞 클래스가 쓰던 세션을 남겨 두면 뒤 클래스가 그것으로 보내려다 실패한다.
         session.set(null);
+        byToken.clear();
+        tokenBySocketId.clear();
+        authStatusByToken.clear();
+        unsubscribeStatusByToken.clear();
+        tokenByHandle.clear();
         pingIntervalMillis = 1000;
         pingTimeoutMillis = 2400;
         sendConnected = true;
@@ -340,8 +668,14 @@ public class FakeChzzkBehavior {
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;
         onSubscribeBeforeResponse = () -> { };
+        onSubscribeDonationBeforeResponse = () -> { };
         unsubscribeStatus = 200;
         unsubscribeDelay = Duration.ZERO;
+        subscribeDonationStatus = 200;
+        sendDonationSubscribed = true;
+        unsubscribeDonationCalls.set(0);
+        subscribeDonationCalls.set(0);
+        unsubscribeDonationDelay = Duration.ZERO;
     }
 
     /** 앞 세션이 닫히기를 기다리는 시한. 실측 최대 23ms에 200배 여유다. */
@@ -362,7 +696,9 @@ public class FakeChzzkBehavior {
      */
     private void awaitSessionClosed() {
         long deadline = System.nanoTime() + AWAIT_CLOSED_TIMEOUT.toNanos();
-        while (session.get() != null && System.nanoTime() < deadline) {
+        // 토큰 자리도 같이 본다 — 스트리머가 여럿이면 최근 세션 하나만 비어도
+        // 나머지 소켓이 살아서 다음 테스트로 프레임을 흘린다(POK-127 태스크 9).
+        while ((session.get() != null || !byToken.isEmpty() || openSockets.get() > 0) && System.nanoTime() < deadline) {
             try {
                 Thread.sleep(10);
             } catch (InterruptedException e) {
@@ -370,9 +706,10 @@ public class FakeChzzkBehavior {
                 return;
             }
         }
-        if (session.get() != null) {
+        if (session.get() != null || !byToken.isEmpty() || openSockets.get() > 0) {
             throw new IllegalStateException("앞 세션이 " + AWAIT_CLOSED_TIMEOUT.toSeconds()
-                    + "초 안에 안 닫혔다. 닫지 않고 끝낸 테스트가 있으면 그 프레임이 다음 테스트로 넘어간다");
+                    + "초 안에 안 닫혔다. 닫지 않고 끝낸 테스트가 있으면 그 프레임이 다음 테스트로 넘어간다"
+                    + " (남은 토큰=" + byToken.keySet() + ", 열린 소켓=" + openSockets.get() + ")");
         }
     }
 

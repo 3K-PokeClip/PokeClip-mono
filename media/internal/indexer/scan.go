@@ -20,31 +20,42 @@ import (
 //
 // TODO(C2): 지금은 매번 전체 walk 다. 트리거는 "recordings 파일 수 1만 초과"이며,
 // 그때는 mtime 증분 walk 로 바꾼다.
+// Scan 은 수집과 처리를 동기로 잇는 편의 경로다 — 프로덕션 loop 은 이것 대신
+// StartCollect/ApplyCollect(collect.go)를 쓴다(수집 대기 점유 0). 여기 남긴 이유는
+// "수집→처리" 의 의미론을 한 이름으로 재는 테스트들 때문이며, 두 경로가 같은
+// collectTree·scanStream 을 지나므로 판정이 갈리지 않는다.
 func (ix *Indexer) Scan(ctx context.Context, root string) error {
-	byStream, err := ix.collect(root)
-	if err != nil {
-		return err
-	}
-
-	for streamID, segs := range byStream {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := ix.scanStream(ctx, root, streamID, segs); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := ix.ApplyCollect(ctx, root, ix.collectTree(ctx, root))
+	return err
 }
 
-// collect 은 트리를 훑어 스트림별 세그먼트 목록을 만든다.
-func (ix *Indexer) collect(root string) (map[string][]recording.Segment, error) {
-	byStream := map[string][]recording.Segment{}
+// collectTree 는 트리를 훑어 스트림별 세그먼트 목록을 만든다. **수집 워커 고루틴에서 돈다** —
+// ix 의 맵을 만지면 안 되고(D10), 고루틴 안전한 로그만 허용된다. 거부 디렉토리 경고
+// 재료는 결과에 실어 ApplyCollect(단일 고루틴)가 warnedRejected 맵으로 처리한다.
+//
+// 예산(ScanCollectBudget)은 soft 다: 넘기면 truncated 로 표시하고 걷은 데까지 돌려준다 —
+// 부분 결과는 처리되고 다음 주기가 재개한다(f6j).
+func (ix *Indexer) collectTree(ctx context.Context, root string) collectResult {
+	res := collectResult{
+		byStream: map[string][]recording.Segment{},
+		rejected: map[string]error{},
+	}
+	start := time.Now()
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error { //nolint:forbidigo // 예외 1(m2) — 수집 워커 자신이 격리 단위다. 개별 호출에 5초 상한을 씌우면 45초 수집 예산 위에서 정상 수집이 매 주기 절단된다(.golangci.yml 머리 주석).
+		if cerr := ctx.Err(); cerr != nil {
+			// SIGTERM 등 부모 취소는 절단이 아니라 중단이다(f6j 대조군).
+			return cerr
+		}
+		if time.Since(start) > ix.opt.ScanCollectBudget {
+			res.truncated = true
+			return fs.SkipAll
+		}
 		if err != nil {
-			// 훑는 도중 사라진 파일 때문에 전체 스캔을 포기하지는 않는다.
+			// 훑는 도중 사라진 파일 때문에 전체 스캔을 포기하지는 않는다. 경로는 결과에 실어
+			// ApplyCollect 가 4.1 점검 결손으로 옮긴다(워커는 ix 맵을 만지지 않는다).
 			ix.log.Warn("walk_entry_failed", "path", path, "err", err)
+			res.walkErrs = append(res.walkErrs, path)
 			return nil
 		}
 		if d.IsDir() {
@@ -54,21 +65,19 @@ func (ix *Indexer) collect(root string) (map[string][]recording.Segment, error) 
 		if parseErr != nil {
 			if errors.Is(parseErr, recording.ErrInvalidStreamID) {
 				// 세그먼트 파일 모양이지만 스트림 이름이 화이트리스트를 통과하지 못했다.
-				// 조용히 버리면 원인을 알 수 없고, 매 스캔마다 경고하면 로그가 쏟아진다.
-				ix.warnRejectedStream(filepath.Dir(path), parseErr)
+				res.rejected[filepath.Dir(path)] = parseErr
 				return nil
 			}
 			// 세그먼트 파일이 아니다. 녹화 폴더에는 다른 파일이 섞일 수 있다.
 			ix.log.Debug("non_segment_file_skipped", "path", path, "err", parseErr)
 			return nil
 		}
-		byStream[seg.StreamID] = append(byStream[seg.StreamID], seg)
+		res.byStream[seg.StreamID] = append(res.byStream[seg.StreamID], seg)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return byStream, nil
+	res.elapsed = time.Since(start)
+	res.err = err
+	return res
 }
 
 func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs []recording.Segment) error {
@@ -106,6 +115,15 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 			"stream_id", streamID, "files", len(segs), "indexed", indexedAtStart,
 			"pending", pendingCount, "holes", holes)
 	}()
+	// 결손 ⅱ(4.1 ③(b)) — 이 수집을 처리한 뒤 커서 마지막 시작보다 늦은 미기록 파일이 남으면 그
+	// 스트림의 점검 결손이다. scan_summary 와 같은 이유로 모든 종료 경로에서 한 번 잰다. 원인(최신
+	// 파일 확인 실패 · 워처 인계 · 측정 실패 · 길이 0 · poison)을 갈래마다 표시하지 않고 결과로
+	// 판정하므로, 갈래가 늘어도 이 자리는 그대로다.
+	defer func() {
+		if ix.lateUnrecorded(streamID, segs) {
+			ix.markCheckGap(streamID)
+		}
+	}()
 
 	// (a) 꼬리 재성장 복구 — 재기동으로 잃은 교정 창을 되살린다.
 	if err := ix.recoverTail(ctx, root, streamID); err != nil {
@@ -140,7 +158,7 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 
 	// (d) 최신 파일 판정(D11). 무조건 보류하면 "방송 종료 후 재기동" 파일이 영구 누락된다.
 	latest := pending[len(pending)-1]
-	fi, err := os.Stat(latest.Path)
+	fi, err := ix.statT(latest.Path, "scan_latest")
 	if err != nil {
 		ix.log.Warn("latest_stat_failed", "stream_id", streamID, "path", latest.Path, "err", err)
 		return nil
@@ -152,6 +170,23 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 	// 아직 최근에 쓰인 흔적이 있으면 녹화 중일 수 있으니 감시자에게 넘겨 계속 지켜보게 한다.
 	ix.adopt.Adopt(latest)
 	return nil
+}
+
+// lateUnrecorded 는 segs 가운데 커서 마지막 시작보다 늦은 미기록 파일이 있는가다 — 그런 파일은
+// 나중 수집이 장부에 넣을 수 있다. 마지막 시작 이하의 미기록 파일(구멍)은 H3 가 영구히 거르므로
+// 세지 않는다. 커서와 이력 맵은 처리 중에 교체될 수 있어(seq 충돌 재적재 · H3 재적재) 지금 값을
+// 읽는다.
+func (ix *Indexer) lateUnrecorded(streamID string, segs []recording.Segment) bool {
+	last := ix.cursors[streamID].LastStartWall()
+	for _, seg := range segs {
+		if _, ok := ix.indexed[streamID][seg.Path]; ok {
+			continue
+		}
+		if seg.StartWall.After(last) {
+			return true
+		}
+	}
+	return false
 }
 
 // reportHoles 는 인덱스 구멍의 **위치와 시각**을 남긴다. 개수만으로는 무엇을 잃었는지
@@ -188,7 +223,7 @@ func (ix *Indexer) recoverTail(ctx context.Context, root, streamID string) error
 	// 상태 검사와 stat 의 순서를 바꿨다. 이제 uploaded·failed 꼬리의 성장도 correctTail 의
 	// 3분기로 판정된다(G12‴ 탐지 사슬). 대가는 비pending 꼬리에 stat 1회가 더 드는 것인데,
 	// 스트림당 5분에 한 번 도는 경로라 무시할 수 있다. 다만 "비용 0"은 아니다.
-	fi, err := os.Stat(cur.Tail.LocalPath)
+	fi, err := ix.statT(cur.Tail.LocalPath, "scan_tail")
 	pending := cur.Tail.UploadState == index.UploadStatePending
 	if os.IsNotExist(err) {
 		if !pending {

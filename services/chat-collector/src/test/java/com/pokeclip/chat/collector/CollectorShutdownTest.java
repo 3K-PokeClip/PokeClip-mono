@@ -78,7 +78,7 @@ class CollectorShutdownTest extends IntegrationTestSupport {
             // 실제로는 수립 실패였던 상태가 만들어질 수 있다.
             assertThat(captor.messages())
                     .as("반납에 성공한 결말이 returned로 안 나가면 세 갈래를 가른 의미가 없다")
-                    .contains("chat.session.released session=" + session + " subscription=returned");
+                    .contains("chat.session.released session=" + session + " stream=none subscription=returned");
         }
 
         assertThat(behavior.unsubscribeCallCount())
@@ -145,7 +145,7 @@ class CollectorShutdownTest extends IntegrationTestSupport {
             // "반납을 보냈는데 실패했다"를 아무도 못 가른다.
             assertThat(captor.messages())
                     .as("반납이 매번 터져도 수립 실패와 같은 줄이 나가면 원인을 못 찾는다")
-                    .contains("chat.session.released session=" + session + " subscription=failed");
+                    .contains("chat.session.released session=" + session + " stream=none subscription=failed");
         }
 
         // 양성 대조. 반납을 아예 안 보냈다면 실패 갈래를 밟은 것이 아니다.
@@ -208,7 +208,7 @@ class CollectorShutdownTest extends IntegrationTestSupport {
             assertThat(captor.messages())
                     .as("반납 왕복을 인터럽트하면 자리가 서버에 남아 상한 3개를 먹는다")
                     .contains("chat.session.released session=" + session
-                            + " subscription=returned");
+                            + " stream=none subscription=returned");
 
             // <b>전제를 같이 잰다.</b> 지연이 어쩌다 사라지면 반납이 종료보다 먼저
             // 끝나고, 그러면 위 단언은 인터럽트를 되살려도 통과한다 — 검사가 아무것도

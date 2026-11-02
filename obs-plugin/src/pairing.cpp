@@ -1,0 +1,216 @@
+#include "pairing.hpp"
+#include "pairing-code.hpp"
+
+#include "app-state.hpp"
+#include "audio-router.hpp"
+#include "config.hpp"
+#include "constants.hpp"
+#include "server-env.hpp"
+#include "srt-target.hpp"
+
+#include <curl/curl.h>
+#include <obs-module.h>
+#include <plugin-support.h>
+
+#include <algorithm>
+
+
+namespace pokeclip {
+
+namespace {
+
+size_t WriteToString(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+	constexpr size_t kMaxBody = 64 * 1024;
+	auto *out = static_cast<std::string *>(userdata);
+	size_t n = size * nmemb;
+	// 넘치는 부분은 버리되 받기는 끝까지 한다(전체는 CURLOPT_TIMEOUT이 묶는다). 0을 돌려주면 curl이 쓰기 오류로 끝나
+	// 받은 HTTP 상태를 잃고 「network」로 보고한다 — 프록시·WAF의 큰 HTML 오류 페이지. mark-sender.cpp와 같다.
+	if (out->size() < kMaxBody)
+		out->append(ptr, std::min(n, kMaxBody - out->size()));
+	return n;
+}
+
+// OBS가 종료 중이면 전송을 끊는다. 이 요청은 브리지 워커나 폴백 패널 스레드에서 돌고,
+// 브리지 Stop()은 워커를 join하므로 여기서 안 끊으면 종료가 타임아웃(최대 ~20초)만큼 멈춘다.
+int AbortOnShutdown(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+{
+	return AppState::Instance().IsShutdown() ? 1 : 0;
+}
+
+std::string ReasonForStatus(long status)
+{
+	switch (status) {
+	case 400:
+	case 404:
+		return "not_found"; // 서버는 형식 오류도 NOT_FOUND로 답한다
+	case 409:
+		return "already_used";
+	case 410:
+		return "expired";
+	case 429:
+		return "rate_limited";
+	default:
+		return status >= 500 ? "server_error" : "bad_response";
+	}
+}
+
+} // namespace
+
+PairingResult PairWithCode(const std::string &rawCode)
+{
+	PairingResult result;
+
+	std::string code = NormalizePairingCode(rawCode);
+	if (code.empty()) {
+		result.reason = "invalid_format";
+		return result;
+	}
+	if (IsStreamingPhase(AppState::Instance().Snapshot().phase)) {
+		// ADR-019: 방송 중에는 자격증명을 바꾸지 않는다.
+		result.reason = "streaming";
+		return result;
+	}
+
+	PluginConfig config = ConfigStore::Instance().Get();
+	std::string url = config.apiBase;
+	while (!url.empty() && url.back() == '/')
+		url.pop_back();
+	url += kPairingExchangePath;
+
+	obs_data_t *body = obs_data_create();
+	obs_data_set_string(body, "code", code.c_str());
+	std::string bodyJson = obs_data_get_json(body);
+	obs_data_release(body);
+
+	CURL *curl = curl_easy_init();
+	if (!curl) {
+		result.reason = "network";
+		return result;
+	}
+
+	std::string response;
+	std::string userAgent = std::string("pokeclip-obs/") + PLUGIN_VERSION;
+	struct curl_slist *headers = nullptr;
+	headers = curl_slist_append(headers, "Content-Type: application/json");
+	headers = curl_slist_append(headers, "Accept: application/json");
+
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+	curl_easy_setopt(curl, CURLOPT_POST, 1L);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, bodyJson.c_str());
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(bodyJson.size()));
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent.c_str());
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteToString);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, AbortOnShutdown);
+#if defined(_WIN32) && LIBCURL_VERSION_NUM >= 0x074700
+	curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+
+	CURLcode rc = curl_easy_perform(curl);
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpStatus);
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+
+	if (rc != CURLE_OK) {
+		obs_log(LOG_WARNING, "pairing exchange failed: network (%s)", curl_easy_strerror(rc));
+		result.reason = "network";
+		return result;
+	}
+	if (result.httpStatus != 200) {
+		result.reason = ReasonForStatus(result.httpStatus);
+		obs_log(LOG_INFO, "pairing exchange rejected: http %ld (%s)", result.httpStatus,
+			result.reason.c_str());
+		return result;
+	}
+
+	obs_data_t *parsed = obs_data_create_from_json(response.c_str());
+	std::string streamId = parsed ? obs_data_get_string(parsed, "streamid") : "";
+	std::string passphrase = parsed ? obs_data_get_string(parsed, "passphrase") : "";
+	if (parsed)
+		obs_data_release(parsed);
+
+	if (!IsSafeStreamId(streamId) || passphrase.size() < 10 || passphrase.size() > 79) {
+		obs_log(LOG_WARNING, "pairing exchange: unexpected response shape");
+		result.reason = "bad_response";
+		return result;
+	}
+
+	// 교환을 기다리는 사이(최대 15초) 독 숨은 스위치로 서버 환경이 바뀌었으면, 이 키는 옛 환경의 Auth가 발급했다 —
+	// 새 짝에 붙이지 않고 버린다(POK-267). 먼저 한 번 보고 바뀌었으면 저장하지 않고 끝낸다(Commit은 바꾼 것이 없어도
+	// 파일을 다시 쓴다). 그 확인과 저장 사이의 틈은 저장과 같은 잠금 아래에서 다시 본다.
+	bool serverChanged = !SameKeyIssuer(ConfigStore::Instance().Get(), config);
+	bool saved = false;
+	if (!serverChanged)
+		saved = ConfigStore::Instance().Commit([&](PluginConfig &c) {
+			if (!SameKeyIssuer(c, config)) {
+				serverChanged = true;
+				return;
+			}
+			c.streamId = streamId;
+			c.passphrase = passphrase;
+		});
+	if (serverChanged) {
+		obs_log(LOG_WARNING, "pairing exchange: server env changed while waiting — key discarded");
+		result.reason = "server_changed";
+		return result;
+	}
+	if (!saved) {
+		result.reason = "save_failed";
+		return result;
+	}
+
+	AppState::Instance().Mutate([&](StateSnapshot &s) {
+		s.paired = true;
+		s.keyHint = KeyHintOf(streamId);
+		s.retry.keySuspect = false; // 키가 바뀌었다 — 지난 키를 두고 띄운 확인 안내는 지운다
+		// 키가 없거나 어긋나서 멈춰 있었으면 새 키로 풀렸다 — 사유를 지워야 「다시 연결」이 뜬다(CanSendNow).
+		if (s.errorCode == "no_key" || s.errorCode == "invalid_key") {
+			s.errorCode.clear();
+			s.errorDetail.clear();
+			if (s.phase == StreamPhase::Error)
+				s.phase = StreamPhase::Idle;
+		}
+	});
+	obs_log(LOG_INFO, "paired (key …%s)", KeyHintOf(streamId).c_str());
+	AudioRouter::Instance().Schedule("paired"); // 페어링된 OBS부터 오디오 트랙을 자동 배정한다
+	result.ok = true;
+	return result;
+}
+
+PairingResult Unpair()
+{
+	PairingResult result;
+	if (IsStreamingPhase(AppState::Instance().Snapshot().phase)) {
+		result.reason = "streaming";
+		return result;
+	}
+	// .bak에도 새 판을 쓴다 — 직전 판을 남기면 본 파일이 깨졌을 때 지운 키가 .bak에서 되살아난다.
+	bool saved = ConfigStore::Instance().Commit(
+		[](PluginConfig &c) {
+			c.streamId.clear();
+			c.passphrase.clear();
+		},
+		ConfigStore::SaveBackup::SameAsNew);
+	if (!saved) {
+		result.reason = "save_failed";
+		return result;
+	}
+	AppState::Instance().Mutate([](StateSnapshot &s) {
+		s.paired = false;
+		s.keyHint.clear();
+		s.retry.keySuspect = false;
+	});
+	obs_log(LOG_INFO, "unpaired");
+	AudioRouter::Instance().Schedule("unpaired");
+	result.ok = true;
+	return result;
+}
+
+} // namespace pokeclip

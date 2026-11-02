@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,26 +23,70 @@ import (
 // 픽스처 — 루프의 신호 처리만 보므로 DB·워처는 최소한의 가짜로 세운다.
 // ---------------------------------------------------------------------------
 
+// fakeStore 는 넣은 행을 들고 있다가 커서와 경로 이력으로 돌려준다 — 전수 수집이 스트림마다 커서를 DB 에서 다시
+// 적재해도 장부와 같은 값을 보게 한다(4.1 루프 층 시험이 수집을 여러 번 적용한다).
 type fakeStore struct {
 	mu      sync.Mutex
 	rows    []index.Record
 	inserts int
+	// insertErrs 는 그 경로의 INSERT 가 돌려줄 오류다(poison 흉내). 없으면 들어간다.
+	insertErrs map[string]error
 }
 
-func (s *fakeStore) LoadCursor(context.Context, string) (index.Cursor, error) {
-	return index.Cursor{}, nil
-}
-
-func (s *fakeStore) ExistingPaths(context.Context, string) (map[string]struct{}, error) {
-	return map[string]struct{}{}, nil
-}
-
-func (s *fakeStore) Insert(_ context.Context, r index.Record) (index.InsertOutcome, error) {
+// LoadCursor 는 그 스트림의 마지막 행으로 커서를 만든다. 행이 없으면 첫 세그먼트 전이다.
+func (s *fakeStore) LoadCursor(_ context.Context, streamID string) (index.Cursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var tail *index.Record
+	for i, r := range s.rows {
+		if r.StreamID == streamID && (tail == nil || r.Seq > tail.Seq) {
+			tail = &s.rows[i]
+		}
+	}
+	if tail == nil {
+		return index.Cursor{}, nil
+	}
+	return index.Cursor{NextSeq: tail.Seq + 1, Tail: &index.TailRow{
+		Seq: tail.Seq, StartPTSMS: tail.StartPTSMS, StartWallUTC: tail.StartWallUTC,
+		DurationMS: tail.DurationMS, Bytes: tail.Bytes, LocalPath: tail.LocalPath,
+		UploadState: tail.UploadState, S3Key: tail.S3Key,
+	}}, nil
+}
+
+func (s *fakeStore) ExistingPaths(_ context.Context, streamID string) (map[string]struct{}, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	paths := map[string]struct{}{}
+	for _, r := range s.rows {
+		if r.StreamID == streamID {
+			paths[r.LocalPath] = struct{}{}
+		}
+	}
+	return paths, nil
+}
+
+func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed, _ index.SessionSource) (index.InsertOutcome, index.InsertCommit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.insertErrs[r.LocalPath]; err != nil {
+		return index.InsertInserted, index.InsertCommit{}, err
+	}
 	s.inserts++
 	s.rows = append(s.rows, r)
-	return index.InsertInserted, nil
+	return index.InsertInserted, index.InsertCommit{}, nil
+}
+
+// rowsOf 는 그 스트림에 들어간 행이다(넣은 차례).
+func (s *fakeStore) rowsOf(streamID string) []index.Record {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []index.Record
+	for _, r := range s.rows {
+		if r.StreamID == streamID {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (s *fakeStore) UpdateTail(context.Context, string, int64, int32, int64) (bool, error) {
@@ -57,9 +102,18 @@ func (s *fakeStore) insertCount() int {
 type logCapture struct {
 	mu      sync.Mutex
 	records []slog.Record
+	// warnOnly 가 참이면 WARN 미만을 받지 않는다 — 운영의 LOG_LEVEL=warn 과 같은 걸러냄이다.
+	warnOnly atomic.Bool
+	// errorOnly 가 참이면 ERROR 미만을 받지 않는다 — 운영의 LOG_LEVEL=error 와 같은 걸러냄이다.
+	errorOnly atomic.Bool
 }
 
-func (c *logCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (c *logCapture) Enabled(_ context.Context, level slog.Level) bool {
+	if c.errorOnly.Load() && level < slog.LevelError {
+		return false
+	}
+	return !c.warnOnly.Load() || level >= slog.LevelWarn
+}
 
 func (c *logCapture) Handle(_ context.Context, r slog.Record) error {
 	c.mu.Lock()
@@ -135,6 +189,8 @@ type loopFixture struct {
 	err       chan error
 	// hookWaitErr 는 Reader.Wait() 이 돌려줄 사유다. nil 이면 정상 종료를 뜻한다.
 	hookWaitErr error
+	// ends 는 holdTicks case 의 4.1 전이가 부르는 가짜 EndLive 다. 관측이 없어 이 픽스처의 틱은 전이하지 않는다.
+	ends *fakeEndLive
 }
 
 func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
@@ -150,6 +206,7 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 		hookEv:    make(chan mtxhook.Event),
 		hookDone:  make(chan struct{}),
 		err:       make(chan error, 1),
+		ends:      &fakeEndLive{},
 	}
 	log := slog.New(f.logs)
 
@@ -157,7 +214,7 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 	opt.SegmentRoot = f.root
 	// up 은 nil 이다 — 이 파일이 보는 것은 루프의 신호 처리이지 업로드 정책이 아니다.
 	// nil 이면 아무것도 요청하지 않는 기본값이 끼워진다(indexer.New).
-	ix := indexer.New(f.store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, opt, log)
+	ix := indexer.New(f.store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, nil, opt, log)
 
 	f.deps = loopDeps{
 		ix:          ix,
@@ -168,6 +225,9 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 		watcherErr:  func() error { return nil },
 		completed:   f.completed,
 		rescans:     f.rescans,
+		armSweeper:  func() {}, // 완주 판정이 나도 이 파일의 관심사가 아니다 — no-op
+		stallFactor: collectStallFactor,
+		rewind:      &rewindLoop{ix: ix, root: f.root, log: log, endLive: f.ends.endLive},
 	}
 	if withHook {
 		f.deps.hookEvents = f.hookEv

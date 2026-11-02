@@ -18,8 +18,12 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fsop"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 )
 
 // Adopter 는 인덱서가 워처에게 파일을 되돌려 줄 때 쓰는 유일한 통로다.
@@ -41,6 +45,24 @@ type Adopter interface {
 type UploadRequester interface {
 	RequestUpload(t index.UploadTarget) (accepted bool)
 }
+
+// StateObserver 는 인덱서가 "지금 이 스트림이 송출 중인가"를 읽는 유일한 통로다.
+//
+// 인터페이스를 쓰는 쪽인 여기에 둔 이유는 Adopter·UploadRequester 와 같다: 관측을
+// 어떻게 얻는지(폴 주기·API·페이지 규약)와 그 관측으로 무엇을 판정하는지는 바뀌는
+// 이유가 다르다. *mtxstate.Poller 가 그대로 만족한다.
+//
+// 반드시 논블로킹이어야 한다 — 여기서 막히면 D10 메인 루프가 통째로 선다.
+type StateObserver interface {
+	Latest(streamID string) mtxstate.Observation
+}
+
+// noObserver 는 폴러 미배선(MTX_API_URL 빈 값·조립 실패) 국면의 널 오브젝트다(m3 이디엄).
+// 영값 관측은 EpochKnown=false 라 ⓐ2 가 fail-closed 된다 — 배선을 빠뜨려도 방향은
+// 언제나 비주조다(설계 S3).
+type noObserver struct{}
+
+func (noObserver) Latest(string) mtxstate.Observation { return mtxstate.Observation{} }
 
 // Options 는 두뇌의 판단 기준이 되는 숫자들이다.
 type Options struct {
@@ -87,6 +109,8 @@ type Options struct {
 	HoldStatBudget int
 	// InsertRetryBase 는 지수 백오프의 첫 간격이다.
 	// 기본 2s + InsertRetryMax 5회 = 시도 사이 간격 2+4+8+16 = 정확히 30s(설계 2.4절 "총 ~30s").
+	// 락 경합(ErrLockContended) 재시도는 여기에 시도당 락 대기(lock_timeout 5s × store 층
+	// 최대 2회)가 얹혀 최악 ~80s 까지 늘 수 있다 — 유계이며 ctx 취소가 뚫는다(cc 리뷰 r5).
 	InsertRetryBase time.Duration
 	// IdleTimeout 은 워처와 같은 값을 쓴다. H4(유휴 커밋 전 mtime 재검)와
 	// Scan(d)(최신 파일 분기)의 판정 기준이다.
@@ -104,7 +128,29 @@ type Options struct {
 	// 워처와 같은 값이어야 두 채널이 같은 local_path 문자열을 만든다(GH7).
 	// 기본값을 두지 않는다 — 워처 루트와 한 곳에서 맞추는 것이 config.Load 의 책임이다.
 	SegmentRoot string
+	// FSOpTimeout 은 개별 FS 호출(stat·프로브)의 워커 상한이다(m2 — 처리 FS 격리).
+	// 멈춘 파일시스템에서 D10 루프가 이 시간 이상 잡히지 않게 하는 값이다.
+	FSOpTimeout time.Duration
+	// ScanCollectBudget 은 전수 수집(collectTree)의 soft 예산이다. 넘기면 절단하고
+	// 걷은 데까지 처리한다 — 정지 판정(scan_collect_stalled)은 이 값 × k 로 holdTicks 가 한다.
+	ScanCollectBudget time.Duration
+	// ObsFresh·ObsBackfill 은 ⓐ2(상태 방증)의 두 시간 창이다(설계 6.5.2 — OBS_FRESH·
+	// OBS_BACKFILL). 값의 집은 config 이고 여기는 옮겨 담는 자리다(TailGrace 와 같은 규칙).
+	//
+	// **영값에 기본값을 씌우지 않는다** — 0 이면 관측은 언제나 낡은 것으로, 백로그 하한은
+	// 가장 엄격하게 판정된다. 둘 다 안전 방향(ⓐ2 불성립 = 비주조·비개시)이라
+	// TailGrace 처럼 "자체 모순"이 아니다.
+	ObsFresh    time.Duration
+	ObsBackfill time.Duration
+	// SeedEnabled 는 ③ 체제 플래그다(계약 6항 2단계 — REWIND_SEED_ENABLED, 기본 켜짐).
+	// 효력은 "컷오프 없는 스트림에 최초 컷오프를 만들 권한"뿐이다: 꺼져 있으면 주조를
+	// 시도하지 않고(구 동작 — c1) INSERT 는 그대로 돈다. 해제해도 이미 기록된 컷오프는
+	// 유효하다 — 4축 술어는 장부를 읽지 플래그를 읽지 않는다.
+	SeedEnabled bool
 }
+
+// liveFresh 는 ⓐ1(실시간 유입 방증)의 신선도 상한이다(설계 LIVE_FRESH — ADR-062).
+const liveFresh = 60 * time.Second
 
 // DefaultOptions 는 설계 2.4절의 기본값이다.
 func DefaultOptions() Options {
@@ -126,17 +172,29 @@ func DefaultOptions() Options {
 		IdleTimeout:        10 * time.Second,
 		BreakGuard:         20 * time.Millisecond,
 		Settle:             recording.DefaultSettleOptions(),
+		FSOpTimeout:        fsop.DefaultOpTimeout,
+		ScanCollectBudget:  45 * time.Second,
 	}
 }
 
 // Indexer 는 고루틴 안전하지 않다. D10 단일 호출자 규약이 락을 대신한다.
 type Indexer struct {
-	store  index.Store
-	probe  fmp4meta.DurationProbe
-	adopt  Adopter
-	upload UploadRequester
-	opt    Options
-	log    *slog.Logger
+	store    index.Store
+	probe    fmp4meta.DurationProbe
+	adopt    Adopter
+	upload   UploadRequester
+	observer StateObserver
+	opt      Options
+	log      *slog.Logger
+
+	// fsLatch 는 FS 열화 래치다(m2). loop 단일 고루틴만 만진다 — D10 규약이 락을 대신한다.
+	fsLatch *fsop.Latch
+	// statFn·probeFn 은 fsop 워커 경유의 기본값을 담는 주입점이다. 교체는 테스트뿐이다.
+	statFn  func(string) (os.FileInfo, error)
+	probeFn func(string) (int64, error)
+	// mtxiFn·trackEndsFn 도 같은 주입점이다 — ③ 시간 도장의 재료를 읽는다(chain.go).
+	mtxiFn      func(string) (playback.Mtxi, error)
+	trackEndsFn func(string) (playback.Ends, error)
 
 	// 아래 상태는 전부 스트림별이다. 하나라도 전역으로 뭉개면 다중 스트림에서 조용히 틀린다.
 	cursors map[string]*index.Cursor
@@ -160,6 +218,19 @@ type Indexer struct {
 	held map[string]heldTail
 	// requested 는 업로더에게 넘긴 꼬리의 seq 다. 확인 2.5 가 이 값을 본다.
 	requested map[string]int64
+	// chains 는 ③ 시간 도장 사슬의 보관값이다(chain.go).
+	chains map[string]playbackChain
+	// initAdmitted 는 이 프로세스에서 init 요청이 업로더에 접수된 스트림별 마지막 회차다 — init 은
+	// 회차마다 접수될 때까지 그 회차의 행에서 요청한다(upload.go requestRowUploads).
+	initAdmitted map[string]string
+	// opened 는 이 프로세스가 본 스트림별 마지막 개시 행의 결과다 — 그 회차의 init 요청이 개시 행의 계승 게이트
+	// 입력(물려받은 회차 · 그 회차 첫 조각 경로)을 싣게 한다. 거부 뒤 다음 행의 재요청도 같다(판단 J64). 수명은
+	// initAdmitted 와 같다.
+	opened map[string]index.InsertCommit
+	// rewind 는 되감기 캐시다(rewind/cache). 장부에 커밋된 행(advance)과 꼬리 교정(correctTail)을
+	// 커밋 직후 그대로 넘긴다 — 캐시가 평시 DB 를 묻지 않고 목록을 만들 수 있는 통로가 이 둘이다(프로필
+	// 4절 「합성은 평시 DB 조회 0」). nil 이면 넘기지 않는다(캐시의 nil 규약 — 조립은 M4 PR ⓒ).
+	rewind *cache.Cache
 
 	// --- 훅 세션 경계 상태(ADR-027). 전부 프로세스 메모리에만 있다. ---
 	//
@@ -173,6 +244,21 @@ type Indexer struct {
 	// %path 가 곧 스트림 디렉토리 1레벨이고, name.go 의 화이트리스트가 슬래시를 허용하지 않아
 	// 중첩 %path 는 애초에 인덱싱되지 않는다(= 새 실패 모드가 아니라 범위 밖).
 
+	// --- 전수 수집 상태(collect.go). 채널만 워커와 공유하고 나머지는 loop 전용이다. ---
+
+	collectDoneCh chan collectResult
+	// collectInflight 는 단일 비행 표식이다. ApplyCollect 만 내린다(세대 토큰 불요의 근거).
+	collectInflight bool
+	collectStart    time.Time
+	// collectStalledWarned 는 "한 시도에 stalled 한 번" 규칙이다. StartCollect 가 리셋한다.
+	collectStalledWarned bool
+	// firstCollectDone 은 첫 완주 여부다 — ApplyCollect 의 firstComplete 반환이 한 번만
+	// 참이 되게 한다(스위퍼 arm 은 한 번이면 된다).
+	firstCollectDone bool
+	// handleCount 는 Handle 호출 누계다(f6n — 주기당 호출 수로 국면을 가른다).
+	// 단일 고루틴(D10)이라 원자 연산이 필요 없다.
+	handleCount int64
+
 	// pendingOffline 은 아직 짝지어지지 않은 offline 훅이다(스트림별 1건, 더 늦은 것만 유지).
 	pendingOffline map[string]sessionMark
 	// lastOnlineAt 은 스트림별 online watermark 다 — 이보다 이른 offline 은 stale 로 버린다.
@@ -180,20 +266,81 @@ type Indexer struct {
 	// breaks 는 무장된 세션 경계 **큐**다(OnlineAt 오름차순).
 	// 단일 포인터면 연쇄 재접속에서 앞 경계가 덮여 영구 미탐이 되므로 큐로 둔다.
 	breaks map[string][]sessionBreak
+
+	// --- 4.1 종료 판정(judgment.go). 전부 loop 전용이다. ---
+
+	// offline 은 스트림별 판정 상태다(기다림 · 한 번 가드). OfflineDue · OfflineTried 만 바꾼다.
+	offline map[string]offlineState
+	// offlinePausedUntil 은 전이 실패 뒤 쉼이 끝나는 시각이다(OfflineTried) — 그 전에는 어느
+	// 스트림도 due 에 들지 않는다.
+	offlinePausedUntil time.Time
+	// completedCollectStart 는 가장 최근에 적용된 수집이 4.1 완주(완주 ∧ 루트 순회 오류 없음)였을 때
+	// 그 시작이고, 아니면 영값이다(자격 없음) — ③(a) 의 입력. ApplyCollect 가 머리에서 지우고 ⑥ 이
+	// 4.1 완주면 적는다(firstCollectDone 은 첫 완주 한 번뿐이다).
+	completedCollectStart time.Time
+	// checkGaps 는 스트림별로 점검 결손(③(b) — 순회 오류 ⅰ · 늦은 미기록 파일 ⅱ)이 난 마지막
+	// 수집의 시작이다. ApplyCollect · scanStream 이 markCheckGap 으로만 쓴다.
+	checkGaps map[string]time.Time
 }
 
-// New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를 넘긴다.
-// up 이 nil 이면 아무것도 요청하지 않는 기본값이 끼워진다 — 배선 전에도 인덱서는 그대로 돈다.
+// noAdopter 는 워처 부재(강등) 국면의 널 오브젝트다(m3 — ADR-063 결정 2).
+// nil 대신 no-op 구현을 끼우면 호출점 개수와 무관하게 안전하다 — 호출점 열거는
+// r15a 검증에서 두 번 깨졌다(1/3 · 4/14). 되돌림 실패 = 그 파일을 미기록으로 남김 →
+// 다음 수집이 회수한다. 매 호출이 adopt_dropped_degraded 로 계수된다(f6e).
+type noAdopter struct{ log *slog.Logger }
+
+func (n noAdopter) Adopt(seg recording.Segment) {
+	n.log.Warn("adopt_dropped_degraded", "stream_id", seg.StreamID, "path", seg.Path,
+		"note", "워처 부재 — 미기록으로 남기고 다음 수집이 회수한다")
+}
+
+// SetAdopter 는 워처 복귀(재장착) 때 loop 이 부른다. nil 은 널 오브젝트로 편다(m3b —
+// plain nil 한정: typed-nil 은 호출부의 인터페이스 변수 선언(겹 1)과 이 가드(겹 2)가 막고,
+// setter 에서 일반적으로 잡으려면 리플렉션이 필요해 과설계다 — 닫지 않는다).
+func (ix *Indexer) SetAdopter(a Adopter) {
+	if a == nil {
+		a = noAdopter{log: ix.log}
+	}
+	ix.adopt = a
+}
+
+// SetRewindCache 는 되감기 캐시를 끼운다 — 발행 몫을 조립할 때 조립점이 한 번 부른다(계획 4.5 A3 결정 2 〔r44〕). 끼운
+// 뒤로 장부에 커밋된 행(INSERT push)과 꼬리 교정(교정 push)이 그 캐시에 닿는다. nil 은 캐시의 nil 규약 그대로다 —
+// *cache.Cache 의 nil 은 모든 메서드가 아무것도 하지 않으므로 SetAdopter 와 달리 널 오브젝트로 펴지 않는다.
+func (ix *Indexer) SetRewindCache(c *cache.Cache) {
+	ix.rewind = c
+}
+
+// New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를,
+// obs 에는 *mtxstate.Poller 를 넘긴다. up 이 nil 이면 아무것도 요청하지 않는 기본값이,
+// w 가 nil 이면(워처 강등) 널 오브젝트가, obs 가 nil 이면(관측 미배선) EpochKnown=false
+// 를 돌려주는 널 오브젝트가 끼워진다(m3a) — 배선 전에도 인덱서는 그대로 돈다.
 func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
-	up UploadRequester, opt Options, log *slog.Logger) *Indexer {
+	up UploadRequester, obs StateObserver, opt Options, log *slog.Logger) *Indexer {
 	if up == nil {
 		up = noUploader{}
 	}
-	return &Indexer{
+	if w == nil {
+		w = noAdopter{log: log}
+	}
+	if obs == nil {
+		obs = noObserver{}
+	}
+	if opt.FSOpTimeout <= 0 {
+		// 0 이면 모든 FS 워커가 즉시 타임아웃해 처리 전체가 조용히 멈춘다.
+		// config 를 거치지 않는 호출자에게 그 조합은 자체 모순이다(TailGrace 와 같은 규칙).
+		opt.FSOpTimeout = fsop.DefaultOpTimeout
+	}
+	if opt.ScanCollectBudget <= 0 {
+		// 0 이면 첫 항목에서 즉시 절단돼 수집이 영구 공전한다 — 같은 규칙으로 보정한다.
+		opt.ScanCollectBudget = 45 * time.Second
+	}
+	ix := &Indexer{
 		store:           store,
 		probe:           probe,
 		adopt:           w,
 		upload:          up,
+		observer:        obs,
 		opt:             opt,
 		log:             log,
 		cursors:         map[string]*index.Cursor{},
@@ -206,10 +353,75 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		warnedRejected:  map[string]bool{},
 		held:            map[string]heldTail{},
 		requested:       map[string]int64{},
+		chains:          map[string]playbackChain{},
+		initAdmitted:    map[string]string{},
+		opened:          map[string]index.InsertCommit{},
 		pendingOffline:  map[string]sessionMark{},
 		lastOnlineAt:    map[string]time.Time{},
 		breaks:          map[string][]sessionBreak{},
+		collectDoneCh:   make(chan collectResult, 1),
+		offline:         map[string]offlineState{},
+		checkGaps:       map[string]time.Time{},
 	}
+	ix.fsLatch = fsop.NewLatch(log)
+	ix.statFn = func(p string) (os.FileInfo, error) { return fsop.StatT(p, ix.opt.FSOpTimeout) }
+	ix.probeFn = func(p string) (int64, error) { return fsop.ProbeT(p, ix.opt.FSOpTimeout, ix.probe) }
+	ix.mtxiFn = func(p string) (playback.Mtxi, error) { return fsop.ReadT(p, ix.opt.FSOpTimeout, playback.ReadMtxi) }
+	ix.trackEndsFn = func(p string) (playback.Ends, error) { return fsop.ReadT(p, ix.opt.FSOpTimeout, playback.TrackEnds) }
+	// Settle 옵션의 단일 생성점(m2-ⓑ)이다. 전 호출점이 이 주입을 자동으로 받고,
+	// 미래에 추가되는 호출점도 자동으로 덮인다 — static_rules_test 가 이 자리를 단언한다.
+	ix.opt.Settle = newSettleOptions(ix.opt.Settle, func(p string) (os.FileInfo, error) {
+		return ix.statT(p, "settle")
+	})
+	return ix
+}
+
+// newSettleOptions 는 fsop 주입 Settle 옵션의 단일 생성점이다(m2-ⓑ).
+// 다른 자리에서 recording.SettleOptions 를 만들면 static_rules_test 가 막는다.
+func newSettleOptions(base recording.SettleOptions, stat func(string) (os.FileInfo, error)) recording.SettleOptions {
+	base.Stat = stat
+	return base
+}
+
+// statT 는 stat 의 유일한 관문이다. 타임아웃(ErrStalled)을 정상 실패와 구분해
+// fs_op_stalled 신호와 래치 트립으로 잇는다(f6m ⓓ). 정상 os 에러는 그대로 통과시킨다.
+//
+// 관문 머리의 래치 확인이 "트립 후 새 FS 워커 0"의 구조 강제다 — 진입점(Handle 등)
+// 확인만으로는 같은 이벤트 처리 중간에 트립됐을 때 후속 호출(promote 재프로브 등)이
+// 워커를 계속 만든다(cx 리뷰 차단 3). 이미 트립이면 워커 없이 ErrStalled 로 즉답한다.
+func (ix *Indexer) statT(path, site string) (os.FileInfo, error) {
+	if ix.fsLatch.Tripped() {
+		return nil, fmt.Errorf("%w: op=stat site=%s (latched)", fsop.ErrStalled, site)
+	}
+	fi, err := ix.statFn(path)
+	if errors.Is(err, fsop.ErrStalled) {
+		ix.log.Error("fs_op_stalled", "op", "stat", "site", site, "path", path)
+		ix.fsLatch.Trip(path, site)
+	}
+	return fi, err
+}
+
+// probeT 는 프로브의 유일한 관문이다. 열고·읽고·닫기 전체가 워커 안에서 끝난다(fsop 계약 2).
+// 래치 확인 규약은 statT 와 같다 — 트립 후에는 워커를 만들지 않는다.
+func (ix *Indexer) probeT(path string) (int64, error) {
+	if ix.fsLatch.Tripped() {
+		return 0, fmt.Errorf("%w: op=probe (latched)", fsop.ErrStalled)
+	}
+	d, err := ix.probeFn(path)
+	if errors.Is(err, fsop.ErrStalled) {
+		ix.log.Error("fs_op_stalled", "op", "probe", "site", "probe", "path", path)
+		ix.fsLatch.Trip(path, "probe")
+	}
+	return d, err
+}
+
+// fileSizeT 는 크기만 필요한 호출자를 위한 statT 축약이다.
+func (ix *Indexer) fileSizeT(path, site string) (int64, error) {
+	fi, err := ix.statT(path, site)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
 }
 
 // Handle 은 완성된 세그먼트 1개를 설계 3절 6번의 H0-H9 순서대로 처리한다.
@@ -218,6 +430,17 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 // 반환 에러는 "프로세스를 끝내야 하는 상황"만을 뜻한다(DB 재시도 소진, 복구 불가 seq 충돌).
 // 세그먼트 1개를 건너뛰는 판정은 로그를 남기고 nil 을 돌려준다.
 func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
+	// 래치 확인(m2 ⓒ) — 트립 상태에서는 이벤트마다 새 FS 워커를 남기지 않는다.
+	// 조기 반환은 반드시 nil 이다: loop 은 Handle 에러를 프로세스 종료로 번역하므로
+	// 여기서 에러를 돌려주면 hung FS 가 곧 프로세스 사망이 된다(격리 장치 ≠ 사망 장치).
+	// 이 조각은 미기록으로 남고 다음 수집이 회수한다.
+	if ix.fsLatch.Tripped() {
+		ix.log.Warn("fs_latch_early_return", "site", "handle",
+			"stream_id", seg.StreamID, "path", seg.Path)
+		return nil
+	}
+	ix.handleCount++ // f6n 국면 판별 재료 — 래치 조기 반환은 처리가 아니므로 세지 않는다
+
 	// H0. 사유 검증 — zero value 가 정상 경로로 흘러드는 것을 원천 차단한다.
 	if seg.Reason == recording.ReasonUnknown {
 		ix.log.Error("unknown_completion_reason", "stream_id", seg.StreamID, "path", seg.Path)
@@ -244,7 +467,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	// 정상 기록된 파일이 늦은 세그먼트로 오해받아 ERROR 가 쏟아진다(리뷰 지적 X1).
 	if _, ok := indexed[seg.Path]; ok {
 		if cur.Tail != nil && cur.Tail.LocalPath == seg.Path {
-			if fi, statErr := os.Stat(seg.Path); statErr == nil && fi.Size() > cur.Tail.Bytes {
+			if fi, statErr := ix.statT(seg.Path, "h2_regrow"); statErr == nil && fi.Size() > cur.Tail.Bytes {
 				// 중복이 아니라 재성장이다.
 				return ix.correctTail(ctx, seg)
 			}
@@ -254,28 +477,13 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	}
 
 	// H3. 늦은 세그먼트 검사(D12) — 지금 넣으면 seq 순서와 시간 순서가 어긋나 G8 이 깨진다.
-	if cur.Tail != nil && !seg.StartWall.After(cur.LastStartWall()) {
-		// 메모리 이력이 낡아서 오해한 것일 수 있으니 DB 에서 한 번 다시 읽어 확인한다.
-		fresh, reloadErr := ix.store.ExistingPaths(ctx, seg.StreamID)
-		if reloadErr != nil {
-			return reloadErr
-		}
-		ix.indexed[seg.StreamID] = fresh
-		if _, ok := fresh[seg.Path]; ok {
-			ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
-			return nil
-		}
-		// 진짜 유실이다. 자동 복구는 없으므로(9절 L5) 사람이 보도록 크게 남긴다.
-		ix.log.Error("late_segment_skipped",
-			"stream_id", seg.StreamID, "path", seg.Path,
-			"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
-			"last_seq", cur.Tail.Seq)
-		return nil
+	if skip, h3Err := ix.lateOrDuplicate(ctx, cur, seg, "handle"); skip || h3Err != nil {
+		return h3Err
 	}
 
 	// H4. 유휴 커밋 전 mtime 재검(D13-예방) — 방금 전까지 쓰이고 있었다면 아직 녹화 중이다.
 	if seg.Reason == recording.ReasonIdle {
-		if fi, statErr := os.Stat(seg.Path); statErr == nil && time.Since(fi.ModTime()) < ix.opt.IdleTimeout {
+		if fi, statErr := ix.statT(seg.Path, "h4_idle"); statErr == nil && time.Since(fi.ModTime()) < ix.opt.IdleTimeout {
 			// 무음으로 두면 "왜 이 파일이 안 들어오지"를 로그에서 추적할 수 없다.
 			ix.log.Debug("idle_readopted",
 				"stream_id", seg.StreamID, "path", seg.Path,
@@ -286,7 +494,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	}
 
 	// H5. 측정 — probe 먼저, 크기 변동 시에만 Settle (정상 경로 추가 지연 0).
-	d, size, ok := ix.measure(ctx, seg)
+	d, size, mtxi, ok := ix.measure(ctx, seg)
 	if !ok {
 		return nil
 	}
@@ -302,7 +510,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	}
 
 	// H8 + H9.
-	return ix.commit(ctx, seg, d, size)
+	return ix.commit(ctx, seg, d, size, mtxi)
 }
 
 // state 는 스트림의 커서와 이력 맵을 준비한다. 처음 보는 스트림이면 DB 에서 적재한다.
@@ -328,36 +536,46 @@ func (ix *Indexer) state(ctx context.Context, streamID string) (*index.Cursor, m
 //
 // 발상: 대부분의 파일은 이미 다 써져 있다. 먼저 재 보고, 재는 동안 크기가 변했을 때만
 // 안정될 때까지 기다린다 -> 정상 상황에서는 대기 시간이 0이다.
-func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (durationMS int64, size int64, ok bool) {
-	size0, err := fileSize(seg.Path)
+//
+// 크기가 안정된 뒤 ③ 시간 도장의 재료(mtxi)도 여기서 읽는다(계획 4.2-R 규칙 ③ — 실시간·훅·
+// 전수 스캔이 모두 이 자리로 모인다). mtxi 가 nil 이면 판독 실패(상자 부재·해석 실패)이며
+// 커밋은 그대로 한다 — 도장을 어떻게 할지는 사슬(advance)이 정한다.
+func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (durationMS int64, size int64, mtxi *playback.Mtxi, ok bool) {
+	size0, err := ix.fileSizeT(seg.Path, "measure")
 	if err != nil {
 		ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
-		return 0, 0, false
+		return 0, 0, nil, false
 	}
 	ix.warnOnWallSkew(seg)
 
 	d := ix.probeOrZero(seg)
-	size1, err := fileSize(seg.Path)
+	size1, err := ix.fileSizeT(seg.Path, "measure")
 	if err != nil {
 		ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
-		return 0, 0, false
+		return 0, 0, nil, false
 	}
 
 	rounds := 0
 	for ; size1 != size0 && rounds < ix.opt.MaxSettleRounds; rounds++ {
+		// 남은 라운드 래치 확인(m2 ⓑ) — 앞 라운드에서 트립됐으면 더 반복하지 않는다.
+		if ix.fsLatch.Tripped() {
+			ix.log.Warn("fs_latch_early_return", "site", "measure",
+				"stream_id", seg.StreamID, "path", seg.Path)
+			return 0, 0, nil, false
+		}
 		fi, settleErr := recording.Settle(ctx, seg.Path, ix.opt.Settle)
 		if settleErr != nil {
 			if errors.Is(settleErr, context.Canceled) || errors.Is(settleErr, context.DeadlineExceeded) {
-				return 0, 0, false
+				return 0, 0, nil, false
 			}
 			break
 		}
 		size0 = fi.Size()
 		d = ix.probeOrZero(seg)
-		size1, err = fileSize(seg.Path)
+		size1, err = ix.fileSizeT(seg.Path, "measure")
 		if err != nil {
 			ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
-			return 0, 0, false
+			return 0, 0, nil, false
 		}
 	}
 
@@ -369,9 +587,12 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 			"stream_id", seg.StreamID, "path", seg.Path, "reason", seg.Reason,
 			"rounds", rounds, "size0", size0, "size1", size1)
 		ix.adopt.Adopt(seg)
-		return 0, 0, false
+		return 0, 0, nil, false
 	}
-	return d, size1, true
+	if mtxi, ok = ix.readMtxi(seg); !ok {
+		return 0, 0, nil, false
+	}
+	return d, size1, mtxi, true
 }
 
 // promote 는 H6 를 수행한다. "다음 파일이 생겨서 완성"인 경우만 4000ms 를 기대할 수 있다.
@@ -402,7 +623,7 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 
 	// 재프로브 동안 파일이 더 써졌을 수 있으므로 성공·실패 어느 쪽이든 크기를 다시 읽는다.
 	// 낡은 크기를 기록하면 다음 Scan(a)가 그것을 재성장으로 오인해 쓸데없이 UpdateTail 한다.
-	if fi, err := os.Stat(seg.Path); err == nil {
+	if fi, err := ix.statT(seg.Path, "promote"); err == nil {
 		size = fi.Size()
 	}
 
@@ -425,9 +646,73 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 	return d, size
 }
 
-// commit 은 H8(PTS·discontinuity)와 H9(INSERT)를 수행한다.
-func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64) error {
+// logSeed 는 주조 결과 신호다. 플래그 OFF 면 아무것도 내지 않는다(구 동작 무소음 — c1).
+//
+// **seed 를 인자로 받는 이유**: 라벨은 장부에 실제로 실린 값과 같아야 한다. 유입 사유에서
+// 다시 파생하면 ⓐ1→ⓐ2 폴백이 일어난 조각의 로그가 장부와 갈린다(로그: live_ingress /
+// 장부: state_obs) — 설계 9.1 f0~f3 이 seed_reason 으로 국면을 가르므로 그 순간
+// 게이트가 재는 대상이 사라진다.
+func (ix *Indexer) logSeed(seg recording.Segment, seq int64, seed index.Seed, res index.InsertCommit) {
+	if !ix.opt.SeedEnabled {
+		return
+	}
+	if res.DiagErr != nil {
+		// 귀속 진단 실패 — 삽입·주조 결과와 무관, 신호 정밀도만 낮아진다(cc 리뷰 차단 2).
+		ix.log.Warn("seed_resolve_failed", "stream_id", seg.StreamID, "seq", seq, "err", res.DiagErr)
+	}
+	switch {
+	case res.Seeded:
+		ix.log.Info("cutoff_seeded",
+			"stream_id", seg.StreamID, "seq", seq,
+			"reason", string(seed.Reason), "channel", string(seed.Channel))
+	case res.Decline == index.DeclineNotSettleable || res.Decline == index.DeclineStaleCorroboration:
+		// 미주조 열화 국면의 관측 신호(S4 — seed_declined).
+		ix.log.Info("seed_declined",
+			"stream_id", seg.StreamID, "seq", seq, "reason", string(res.Decline))
+	default:
+		// no_corroboration(비적격 유입)·existing_cutoff(승계)는 평시 상태라 Debug 로 낮춘다.
+		ix.log.Debug("seed_skipped",
+			"stream_id", seg.StreamID, "seq", seq, "reason", string(res.Decline))
+	}
+}
+
+// lateOrDuplicate 는 H3(늦은 세그먼트 검사 — D12)의 판정 본문이다. 꼬리보다 늦지 않은
+// 조각을 "경로 중복(정상 멱등)"과 "진짜 유실"로 가른다 — 메모리 이력이 낡아 오해했을 수
+// 있으니 DB 를 한 번 다시 읽어 확인한 뒤, 유실이면 크게 남긴다(9절 L5: 자동 복구 없음).
+// Handle 의 H3 와 seq 충돌 재적재 후 재검(commit)이 이 본문을 공유한다 — 두 곳이
+// 갈라지면 "재검 = H3 와 동일" 불변식이 조용히 깨진다(cc 리뷰 r6 권고로 추출).
+// skip=true 면 이 조각 처리를 여기서 끝낸다(로그는 이미 남겼다). site 는 로그 속성이다.
+func (ix *Indexer) lateOrDuplicate(ctx context.Context, cur *index.Cursor, seg recording.Segment, site string) (bool, error) {
+	if cur.Tail == nil || seg.StartWall.After(cur.LastStartWall()) {
+		return false, nil
+	}
+	fresh, reloadErr := ix.store.ExistingPaths(ctx, seg.StreamID)
+	if reloadErr != nil {
+		return false, reloadErr
+	}
+	ix.indexed[seg.StreamID] = fresh
+	if _, ok := fresh[seg.Path]; ok {
+		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
+		return true, nil
+	}
+	ix.log.Error("late_segment_skipped",
+		"stream_id", seg.StreamID, "path", seg.Path,
+		"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
+		"last_seq", cur.Tail.Seq, "site", site)
+	return true, nil
+}
+
+// commit 은 H8(PTS·discontinuity)와 H9(INSERT)를 수행한다. mtxi 는 measure 가 읽은 도장 재료이며
+// 장부에 싣지 않고 advance 로만 넘긴다(index.Record 무접촉 — 계획 4.2-R 규칙 ③).
+func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64, mtxi *playback.Mtxi) error {
 	cur := ix.cursors[seg.StreamID]
+	// 관측 스냅샷은 **여기서 한 번** 채취해 주조 판정과 세션 결정에 같은 값을 흘린다.
+	// 두 번 읽으면 같은 조각이 두 축에서 다른 관측으로 판정된다.
+	obs := ix.observation(seg.StreamID)
+	seed, corroborated := ix.buildSeed(seg, obs, time.Now().UTC())
+	// 세션 결정 입력 — seed 와 같은 자리에서 한 번 만들고 재시도·재적재 경로에서 재사용한다
+	// (같은 세그먼트의 판정이 재시도 여부에 따라 달라지지 않게).
+	src := index.SessionSource{Op: sessionOp(seg.Reason, corroborated), Obs: obs}
 
 	// 무장 조회는 여기서 딱 한 번이다. 해제는 INSERT 결과가 나온 뒤에 한다.
 	dec := ix.peekBreak(cur, seg)
@@ -441,15 +726,18 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 
 	rec := ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-	outcome, poisoned, err := ix.insertWithRetry(ctx, rec)
+	outcome, insertCommit, poisoned, err := ix.insertWithRetry(ctx, rec, seed, src)
 	if err != nil {
 		return err
 	}
 	if poisoned {
 		// 커서를 전진시키지 않는다. 이 세그먼트만 인덱스에 없는 채로 남는다.
 		//
-		// 무장도 해제하지 않는다 — 이것이 무장이 메모리에 잔존하는 **유일한** 경로다
-		// (재시도 소진은 err 반환 → 프로세스 종료 → 메모리 무장도 함께 소멸).
+		// 무장도 해제하지 않는다 — 무장이 메모리에 잔존하는 경로는 셋이다: 여기,
+		// seq 충돌 재적재 뒤의 재시도 poison(아래 — 같은 논리), 재적재 후 H3 재검의
+		// 물러남(재적재된 꼬리가 이미 경계를 지났으므로 다음 Handle 진입부의
+		// reconcileBreaks 가 회수한다). 재시도 소진은 err 반환 → 프로세스 종료 →
+		// 메모리 무장도 함께 소멸.
 		// 다음 INSERT 조각은 "무장 이후 처음 장부에 오르는 조각"이므로 표시가 정당하며,
 		// 아예 미표시보다 늦은 표시가 낫다(오탐 방향이 안전하다).
 		return nil
@@ -466,11 +754,21 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		ix.cursors[seg.StreamID] = &reloaded
 		ix.reconcileUploadState(seg.StreamID)
 		cur = &reloaded
+
+		// H3 재검(재적재 후) — 선점 행이 이 조각보다 늦은 벽시계면, 여기서 다음 seq 로
+		// 재작성하는 순간 seq 순서와 시간 순서가 어긋난다(G8 — cx 리뷰 r5 반증: Handle 의
+		// H3 는 낡은 커서로 판정했다). 이 국면은 다른 쓰기자의 실재(D10 위반)이므로
+		// 조각 하나보다 인덱스 순서 불변식이 우선이다.
+		if skip, h3Err := ix.lateOrDuplicate(ctx, cur, seg, "seq_conflict_reload"); skip || h3Err != nil {
+			return h3Err
+		}
+
 		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
 		// 이미 정해졌다 — 여기서 재계산하면 같은 세그먼트의 판정이 재시도 여부에 따라 달라진다.
+		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
 		rec = ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-		outcome, poisoned, err = ix.insertWithRetry(ctx, rec)
+		outcome, insertCommit, poisoned, err = ix.insertWithRetry(ctx, rec, seed, src)
 		if err != nil {
 			return err
 		}
@@ -499,7 +797,8 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	case index.InsertInserted:
-		ix.advance(cur, seg, rec)
+		ix.logSeed(seg, rec.Seq, seed, insertCommit)
+		ix.advance(cur, seg, rec, insertCommit, mtxi)
 		if dec.Index >= 0 {
 			ix.releaseBreak(seg.StreamID, dec)
 			ix.log.Info("hook_break_consumed",
@@ -571,7 +870,8 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 
 // advance 는 커서를 한 칸 전진시킨다.
 // 꼬리 행 하나만 갈아 끼우면 파생 3값이 동시에 맞는다 — 빠뜨릴 곳 자체가 없어진다.
-func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.Record) {
+// ③ 도장 사슬도 이 자리에서 행마다 한 번 전진하고(res·mtxi 가 그 재료다), 업로드 요청이 뒤따른다.
+func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) {
 	// 직전 꼬리를 붙잡아 둔다 — 이 INSERT 로 그 행은 더 이상 꼬리가 아니게 되므로,
 	// 보류 중이었다면 지금이 올릴 때다(파일이 더 자랄 수 없다).
 	prev := cur.Tail
@@ -590,37 +890,25 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		ix.indexed[seg.StreamID] = map[string]struct{}{}
 	}
 	ix.indexed[seg.StreamID][rec.LocalPath] = struct{}{}
+	// 장부에 커밋된 행은 되감기 캐시에도 들어간다 — 커밋 값(res)만 넘긴다(INSERT push).
+	ix.rewind.ApplyInsert(seg.StreamID, rec.Seq, res)
 
 	if seg.Reason == recording.ReasonNextFile {
 		ix.learn(seg.StreamID, int64(rec.DurationMS))
 	}
+
+	// ③ 도장 사슬은 로그보다 먼저 전진한다 — 판독 실패로 도장을 고정했다는 신호가 아래 로그의
+	// mtxi_pinned 속성이다(계획 4.2-R 규칙 ④ⓐ — 새 로그 키 0).
+	playbackTarget, pinned := ix.advanceChain(seg.StreamID, prev, rec, res, mtxi)
 
 	// reason 은 채널별 기여도(훅 vs 파일)를 재는 유일한 창이다.
 	// 이 값의 분포가 무너지는 것이 "훅 채널이 무징후로 죽었다"의 유일한 신호다.
 	ix.log.Info("segment_indexed",
 		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", rec.DurationMS,
 		"start_pts_ms", rec.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
-		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason)
+		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason, "mtxi_pinned", pinned)
 
-	now := time.Now()
-	// 보류 중이던 직전 꼬리를 승격한다. 더 이상 꼬리가 아니므로 IsTail=false 다 —
-	// 워커의 크기 재확인이 이 값으로 갈린다(결정 4⁵).
-	if h, ok := ix.held[seg.StreamID]; ok && prev != nil && h.seq == prev.Seq {
-		if !ix.requestUpload(seg.StreamID, prev, false) {
-			ix.holdAfterRejection(seg.StreamID, prev, now)
-		}
-	}
-
-	// 새 꼬리의 처우. 더 자라지 않는다고 확증된 사유는 즉시 올린다.
-	if growthConfirmed(seg.Reason) {
-		if !ix.requestUpload(seg.StreamID, cur.Tail, true) {
-			ix.holdAfterRejection(seg.StreamID, cur.Tail, now)
-		}
-		return
-	}
-	// Idle·Scan 으로 확정된 꼬리는 아직 자랄 수 있다. 붙들었다가 다음 INSERT 나
-	// TailHold 경과 + 크기 일치에서 올린다.
-	ix.holdTail(seg.StreamID, cur.Tail, now)
+	ix.requestRowUploads(seg, prev, cur.Tail, res, playbackTarget)
 }
 
 // correctTail 은 이미 넣은 마지막 행의 길이와 크기를 사후에 고친다(D13-교정).
@@ -723,12 +1011,20 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 	cur.Tail.DurationMS = int32(d)
 	cur.Tail.Bytes = fi.Size()
 	// 이것으로 파생 NextPTSMS / ExpectedNextWall 이 자동 교정된다.
+	// 되감기 캐시도 장부가 받은 길이를 따른다(교정 push) — 거절된 교정은 여기 닿지 않는다.
+	ix.rewind.ApplyTailCorrection(seg.StreamID, cur.Tail.Seq, cur.Tail.DurationMS)
 
 	// 교정이 보류 시계를 리셋한다 — 방금 자란 것을 확인했으므로 TailHold 를 다시 센다.
 	// eligibleAt 은 start_wall_utc 기반이라 불변이며, 그래야 스위퍼 자격 시점과 계속 맞물린다(R9).
 	if h, ok := ix.held[seg.StreamID]; ok && h.seq == cur.Tail.Seq {
 		h.since = time.Now()
 		h.nextTry = h.since
+		if h.playbackTarget != nil {
+			// 붙든 ③ 작업도 교정된 크기를 따른다 — 워커의 꼬리 성장 판정이 이 값을 본다.
+			t := *h.playbackTarget
+			t.Bytes = cur.Tail.Bytes
+			h.playbackTarget = &t
+		}
 		ix.held[seg.StreamID] = h
 	}
 
@@ -743,7 +1039,7 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 // 미완성 파일은 박스에 길이가 없어 에러가 나는데, 이는 H6 재프로브 승격과 H7 폭 검증이
 // 이미 다루는 상황이므로 별도 분기를 만들지 않는다.
 func (ix *Indexer) probeOrZero(seg recording.Segment) int64 {
-	d, err := ix.probe(seg.Path)
+	d, err := ix.probeT(seg.Path)
 	if err != nil {
 		ix.log.Warn("probe_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
 		return 0
@@ -754,7 +1050,7 @@ func (ix *Indexer) probeOrZero(seg recording.Segment) int64 {
 // warnOnWallSkew 는 파일명 시각과 mtime 이 크게 어긋나면 경고한다(D6).
 // mtime 은 세그먼트의 끝 시각에 가까우므로 기대 길이만큼의 차이는 정상이다.
 func (ix *Indexer) warnOnWallSkew(seg recording.Segment) {
-	fi, err := os.Stat(seg.Path)
+	fi, err := ix.statT(seg.Path, "wall_skew")
 	if err != nil {
 		return
 	}
@@ -808,14 +1104,6 @@ func (ix *Indexer) learn(streamID string, durationMS int64) {
 // ---------------------------------------------------------------------------
 // 작은 도우미
 // ---------------------------------------------------------------------------
-
-func fileSize(path string) (int64, error) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return 0, err
-	}
-	return fi.Size(), nil
-}
 
 // sleepCtx 는 ctx 취소 시 false 를 돌려준다.
 func sleepCtx(ctx context.Context, d time.Duration) bool {

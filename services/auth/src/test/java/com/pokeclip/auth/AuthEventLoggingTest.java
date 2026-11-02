@@ -30,6 +30,9 @@ import static org.mockito.BDDMockito.willThrow;
 
 class AuthEventLoggingTest extends IntegrationTestSupport {
 
+    /** PKCE 원문. 형식 검사는 요청 DTO(GoogleLoginRequest) 몫이라 이 층에는 아무 값이나 된다. */
+    private static final String CODE_VERIFIER = "code-verifier-1";
+
     private final AuthService authService;
     private final TokenService tokenService;
     private final UserRepository userRepository;
@@ -61,7 +64,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
 
-        given(googleTokenClient.exchangeCodeForIdToken("code-1")).willReturn("id-1");
+        given(googleTokenClient.exchangeCodeForIdToken("code-1", CODE_VERIFIER)).willReturn("id-1");
         given(googleIdTokenVerifier.verify("id-1"))
                 .willReturn(new GoogleUser("sub-1", "a@example.com", "김태현", null));
     }
@@ -80,7 +83,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
     @Test
     void 로그인에_성공하면_INFO로_남는다() {
         try (LogCaptor captor = new LogCaptor()) {
-            authService.loginWithGoogle("code-1");
+            authService.loginWithGoogle("code-1", CODE_VERIFIER);
 
             assertThat(captor.levelOf("auth.login.success")).isEqualTo(Level.INFO);
             assertThat(captor.levelOf("auth.user.created")).isEqualTo(Level.INFO);
@@ -94,7 +97,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
      */
     @Test
     void 회전에_성공하면_상관_ID를_단_INFO로_남는다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
 
         try (LogCaptor captor = new LogCaptor()) {
             MDC.put(RequestIdFilter.MDC_KEY, "trace-rotate");
@@ -113,7 +116,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
 
     @Test
     void 로그아웃하면_INFO로_남는다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
 
         try (LogCaptor captor = new LogCaptor()) {
             tokenService.logout(issued.refreshToken());
@@ -128,7 +131,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
      */
     @Test
     void 이미_취소된_토큰으로_로그아웃하면_남지_않는다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
         tokenService.logout(issued.refreshToken());
 
         try (LogCaptor captor = new LogCaptor()) {
@@ -148,7 +151,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
      */
     @Test
     void 로그아웃이_롤백되면_남지_않는다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
 
         try (LogCaptor captor = new LogCaptor()) {
             new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
@@ -171,7 +174,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
      */
     @Test
     void 회전이_롤백되면_rotated가_남지_않는다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
         willThrow(new IllegalStateException("커밋 전 실패")).given(jwtEncoder).encode(any());
 
         try (LogCaptor captor = new LogCaptor()) {
@@ -189,7 +192,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
      */
     @Test
     void 재사용을_감지하면_WARN으로_끊긴_세션_수까지_남는다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
         tokenService.rotate(issued.refreshToken());
         // 기존 TokenServiceTest.ageRevokedTokens()와 같은 값·같은 WHERE를 쓴다.
         // WHERE가 없으면 테이블 전체·전 사용자가 대상이 돼 병렬 실행에서 깨지고,
@@ -213,7 +216,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
     @Test
     void 이메일과_이름은_로그에_남지_않는다() {
         try (LogCaptor captor = new LogCaptor()) {
-            authService.loginWithGoogle("code-1");
+            authService.loginWithGoogle("code-1", CODE_VERIFIER);
 
             String all = String.join("\n", captor.messages());
             assertThat(all).doesNotContain("a@example.com");

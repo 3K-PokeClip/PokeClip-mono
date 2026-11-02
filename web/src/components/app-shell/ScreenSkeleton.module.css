@@ -1,0 +1,16 @@
+/* 사이드바 화면 본문의 첫 로딩 뼈대(POK-442) — ScreenSkeleton.tsx */
+
+/* 방송·클립 화면과 같은 본문 패딩(app/shell.css 공용 토큰): h1 막대가 로드 뒤 h1 자리에 선다 */
+.padded {
+  padding: var(--pc-shell-body-pad-top) var(--pc-shell-body-pad-x) var(--pc-shell-body-pad-bottom);
+}
+
+.title {
+  margin-bottom: calc(20 * var(--pc-u));
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10 * var(--pc-u));
+}

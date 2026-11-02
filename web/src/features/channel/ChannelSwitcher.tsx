@@ -1,0 +1,785 @@
+'use client';
+
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactElement,
+  type Ref,
+  type RefObject,
+} from 'react';
+import Link from 'next/link';
+import clsx from 'clsx';
+import { Check } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { track } from '@/lib/analytics';
+import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
+import { Avatar, Button, LoadingRegion, Popover, Skeleton, Slot, useToast } from '@/ui';
+import { ApiError } from '@/api/client';
+import {
+  acceptInvitation,
+  declineInvitation,
+  delegationsAsEditorQueryOptions,
+  isInvitationGone,
+  receivedInvitationsQueryOptions,
+  respondFailureMessage,
+  revokeDelegation,
+  type ReceivedInvitation,
+  type StreamerDelegation,
+} from '@/api/editors';
+import { useLogout, useMe } from '@/features/auth/useSession';
+import { expiresLabel } from '@/features/settings/editors/editorDates';
+import { useChannelStore } from '@/stores/channel';
+import { useActiveChannel, useSwitchChannel, type SwitchTarget } from './useActiveChannel';
+import styles from './ChannelSwitcher.module.css';
+
+// 채널 스위처(POK-390, 시안 1u). 로그인 계정이 아니라 「지금 일하는 채널」을 바꾼다: 내 채널 · 편집 참여 중인 채널 ·
+// 받은 초대가 한 목록에 나온다. 트리거는 부르는 쪽이 준다(사이드바 프로필 · 홈 헤더 아바타).
+// 시안에서 뺀 것: 요금제(Pro) · 편집자 등급(기본·신뢰) · 채널별 알림 숫자 · 플랫폼 이름: 데이터가 없거나 결정으로 빠졌다.
+
+export type ChannelRole = '스트리머' | '편집자';
+
+/** 창이 열린 동안 받은 초대를 다시 읽는 간격. 스트리머가 보낸 초대가 새로고침 없이 20초 안에 뜬다(POK-481) */
+export const RECEIVED_POLL_MS = 20_000;
+
+/** 트리거가 그릴 지금 채널: 아직 안 섰으면 내 이름으로(사이드바가 빈칸으로 깜빡이지 않게). */
+export function useChannelIdentity(): {
+  name: string | null;
+  photo: string | null;
+  role: ChannelRole | null;
+} {
+  const me = useMe().data;
+  const active = useActiveChannel();
+  if (active.ready) {
+    return {
+      name: active.name,
+      photo: active.photo,
+      role: active.relation === 'OWNER' ? '스트리머' : '편집자',
+    };
+  }
+  return { name: me?.name ?? null, photo: me?.profileImageUrl ?? null, role: null };
+}
+
+export interface ChannelSwitcherProps {
+  /** 트리거 하나. Popover.Trigger가 클릭·aria-expanded를 붙인다. */
+  children: ReactElement;
+  /** 펼친 사이드바는 위로, 접힌 사이드바는 오른쪽으로, 헤더는 아래로(시안 ①②) */
+  side: 'top' | 'right' | 'bottom';
+  align: 'start' | 'end';
+  /** 트리거 대신 위치를 잡을 블록(사이드바는 구분선 위로 띄우려고 프로필 블록을 준다) */
+  anchorRef?: RefObject<HTMLElement | null>;
+  offset?: number;
+}
+
+export function ChannelSwitcher({
+  children,
+  side,
+  align,
+  anchorRef,
+  offset,
+}: ChannelSwitcherProps) {
+  const [open, setOpen] = useState(false);
+  // 거절·나가기 요청이 나가 있는 동안은 창을 닫지 않는다: 바깥 클릭·Esc·트리거로 닫히면 확인 덮개가 같이 사라져
+  // 취소된 줄 알았다가 결과 토스트를 보게 된다(PR #342 리뷰 1)
+  const [busy, setBusy] = useState(false);
+  // 전환 화면이 걷힐 때 포커스를 돌려줄 표식: 전환 전 포커스는 창 안의 채널 줄에 있었고 그 줄은 창과 함께 사라져, 덮기 전
+  // 요소로는 못 돌아간다(PR #342 2차 리뷰). 트리거 자체는 POK-442부터 채널 범위 밖이라 전환해도 다시 그려지지 않는다.
+  // 사이드바(펼침·접힘)와 홈 헤더에 하나씩이다
+  const returnFocus = side === 'bottom' ? 'channel-switcher-header' : 'channel-switcher-sidebar';
+  // 고른 채널이 바뀌면 창을 닫는다(POK-442). 트리거(사이드바·홈 헤더)가 채널 범위 밖으로 나와 바꿔도 다시 서지 않는다:
+  // 창에서 고른 전환은 pick이 닫지만, 다른 탭에서 고르거나 위임이 끊겨 내 채널로 돌아온 것은 열린 창에 그대로 남는다.
+  // 거절·나가기 요청 중(busy)이면 닫지 않는다: 바깥 클릭을 막는 것과 같은 이유다(PR #342 리뷰 1).
+  // 처음 읽힘(아직 아무 회원으로도 안 읽힘 → 저장값)은 바뀐 것이 아니다: 사이드바가 me보다 먼저 서서 그 전에 열 수 있다
+  const storeUserId = useChannelStore((s) => s.userId);
+  const selected = useChannelStore((s) => s.selected);
+  const [seen, setSeen] = useState({ userId: storeUserId, selected });
+  if (seen.userId !== storeUserId || seen.selected !== selected) {
+    setSeen({ userId: storeUserId, selected });
+    if (seen.userId !== null && open && !busy) setOpen(false);
+  }
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && busy) return;
+        setOpen(next);
+      }}
+      side={side}
+      align={align}
+      anchorRef={anchorRef}
+      offset={offset}
+    >
+      <Popover.Trigger>
+        <Slot data-switch-return={returnFocus}>{children}</Slot>
+      </Popover.Trigger>
+      <Popover.Content className={styles.panel} aria-label="계정 전환">
+        {/* 본문은 열렸을 때만 선다: 쿼리·로그아웃 훅이 닫힌 트리거마다 돌지 않게 */}
+        <SwitcherPanel
+          onClose={() => setOpen(false)}
+          onBusyChange={setBusy}
+          returnFocus={returnFocus}
+        />
+      </Popover.Content>
+    </Popover>
+  );
+}
+
+function SwitcherPanel({
+  onClose,
+  onBusyChange,
+  returnFocus,
+}: {
+  onClose: () => void;
+  onBusyChange: (busy: boolean) => void;
+  returnFocus: string;
+}) {
+  const meQuery = useMe();
+  const me = meQuery.data;
+  const active = useActiveChannel();
+  const switchTo = useSwitchChannel();
+  const logout = useLogout();
+  const asEditor = useQuery(delegationsAsEditorQueryOptions);
+  // 받은 초대는 남(스트리머의 초대·취소)이 바꾼다. 창을 열 때마다 새로 읽고(staleTime 0: 60초 안에 다시 열어도) 열린 동안엔
+  // 주기로 읽는다. 창이 닫히면 이 구독이 사라져 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481). 한 번도 못 읽었으면
+  // 주기로 두드리지 않는다: 회복은 「다시 시도」가 맡는다 — 주기 읽기마다 그 버튼이 저절로 돌며 눌리지 않게 되지 않게(PR #412 리뷰)
+  const received = useQuery({
+    ...receivedInvitationsQueryOptions,
+    staleTime: 0,
+    refetchInterval: (query) => (query.state.data === undefined ? false : RECEIVED_POLL_MS),
+  });
+  const select = useChannelStore((s) => s.select);
+  // 저장된 남의 채널이 있다(지금은 as-editor를 못 읽어 내 채널로 보일 수 있다)
+  const storedOther = useChannelStore((s) => s.selected !== null && s.selected !== s.userId);
+  // 거절·나가기 확인은 창 안 덮개로 묻는다(시안 1u ③). 덮개가 스크롤 밖에 있어야 해서 상태를 목록이 아니라 여기 둔다
+  const [asking, setAsking] = useState<Asking | null>(null);
+  // 관리 모드: 참여 채널마다 「나가기」를 꺼낸다(시안 비교 3안). 평소 창은 바꾸기만 해서 실수로 나갈 일이 없다
+  const [managing, setManaging] = useState(false);
+  // 나간 뒤 포커스를 둘 곳: 누른 줄은 목록을 다시 읽으면 사라진다(PR #342 리뷰 6). 참여 채널이 남으면 「관리/완료」,
+  // 마지막 채널이었으면 그것도 사라지니 늘 남는 「내 채널」 줄
+  const manageRef = useRef<HTMLButtonElement>(null);
+  const mineRef = useRef<HTMLButtonElement>(null);
+  const focusAfterLeave = useRef<HTMLElement | null>(null);
+  // 한 번 쓰고 비운다(취소로 닫힐 땐 비어 있어 누른 버튼으로 간다). ref만 읽어 고정해 둔다: 덮개의 포커스 효과가 다시 돌지 않게
+  const takeFocusAfterLeave = useCallback(() => {
+    const target = focusAfterLeave.current;
+    focusAfterLeave.current = null;
+    return target;
+  }, []);
+
+  if (!me) {
+    // 내 정보 전엔 「내 채널」 줄 자리를 스켈레톤으로 둔다(POK-446). 못 읽었으면 제목만: 실패를 로딩으로 가리지 않는다
+    return (
+      <>
+        <div className={styles.head}>계정 전환</div>
+        {meQuery.isPending && (
+          <div className={styles.section}>
+            <div className={styles.sectionTitle}>내 채널</div>
+            <LoadingRegion label="내 채널을 불러오는 중">
+              <RowSkeleton />
+            </LoadingRegion>
+          </div>
+        )}
+      </>
+    );
+  }
+  const currentId = active.ready ? active.streamerId : me.id;
+  const pick = (target: SwitchTarget) => {
+    // 지금 채널을 다시 누르면 닫기만 한다: 같은 채널로 「전환했어요」를 띄우지 않는다
+    if (target.streamerId !== currentId) switchTo(target, { returnFocus });
+    // 다만 내 채널로 보이는 것이 as-editor를 못 읽어서라면 저장된 남의 채널이 남아 있다. 「내 채널」을 눌렀으면 그것을 지운다:
+    // 안 지우면 나중에 목록이 읽히는 순간 그 채널로 되돌아간다(PR #323 codex 2차). 같은 채널로 보이니 토스트는 없다
+    else if (target.relation === 'OWNER' && storedOther) select(me.id, null);
+    onClose();
+  };
+  // 실패는 그 목록을 한 번도 못 받았을 때만이다. react-query는 다시 읽기가 실패해도 받아 둔 목록을 남기므로, 그것을 실패로
+  // 보면 보이던 초대가 사라진다. 두 목록은 따로 본다: 참여 채널을 못 읽어도 받은 초대는 보인다(로컬 리뷰 1라운드)
+  const channelsFailed = asEditor.data === undefined && asEditor.isError;
+  const invitesFailed = received.data === undefined && received.isError;
+  const channels = asEditor.data ?? [];
+  const invitations = received.data ?? [];
+  // 첫 응답 전엔 빈 목록이 아니라 모르는 것이다(POK-446): 구역 자리에 줄 스켈레톤을 두고, 개수는 응답 뒤에만 쓴다. 응답이
+  // 비었으면 지금처럼 구역을 숨긴다. 받아 둔 목록은 다시 읽는 동안에도 그대로 둔다(isPending은 데이터가 없을 때만 참)
+  const channelsLoading = asEditor.isPending;
+  const invitesLoading = received.isPending;
+  const loadingLabel =
+    channelsLoading && invitesLoading
+      ? '참여 채널과 받은 초대를 불러오는 중'
+      : channelsLoading
+        ? '참여 채널을 불러오는 중'
+        : '받은 초대를 불러오는 중';
+  // 참여 채널이 다 없어지면(마지막 채널에서 나감·끊김) 관리 모드도 끈다: 남기면 초대를 수락해 구역이 다시 설 때 「완료」·
+  // 「나가기」가 켜진 채로 서서 새 줄을 눌러도 바뀌지 않는다(PR #342 2차 리뷰)
+  if (managing && channels.length === 0) setManaging(false);
+  const left = (channel: StreamerDelegation, refresh: () => void) => {
+    focusAfterLeave.current = channels.length > 1 ? manageRef.current : mineRef.current;
+    setAsking(null);
+    if (channel.streamerId !== currentId) {
+      refresh();
+      return;
+    }
+    // 지금 들어가 있는 채널에서 나왔으면 전환 화면과 함께 내 채널로 돌아간다. 목록은 바꾼 뒤에 다시 읽고, 덮는 동안
+    // 그 채널 요청이 404로 와도 끊김 경고는 띄우지 않는다(useSwitchChannel의 SwitchOptions)
+    switchTo(
+      { streamerId: me.id, name: me.name, relation: 'OWNER' },
+      { onSwitched: refresh, leftStreamerId: channel.streamerId, returnFocus },
+    );
+    onClose();
+  };
+
+  return (
+    <>
+      {/* 패널이 아니라 이 칸이 스크롤한다: 덮개가 스크롤과 상관없이 보이는 칸을 덮게. 덮개가 떠 있는 동안 뒤는
+          누를 수도 Tab으로 갈 수도 없다 */}
+      <div className={styles.scroll} inert={asking !== null}>
+        <div className={styles.head}>계정 전환</div>
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>내 채널</div>
+          <ChannelRow
+            buttonRef={mineRef}
+            name={me.name}
+            photo={me.profileImageUrl}
+            role="스트리머"
+            current={currentId === me.id}
+            onClick={() => pick({ streamerId: me.id, name: me.name, relation: 'OWNER' })}
+          />
+          {channelsLoading && <ChannelsSkeleton label={loadingLabel} />}
+          {channels.length > 0 && (
+            <>
+              <div className={clsx(styles.sectionTitle, styles.sectionHead)}>
+                <span>편집 참여 중 · {channels.length}</span>
+                <button
+                  ref={manageRef}
+                  type="button"
+                  className={styles.manage}
+                  // 눌림 상태(aria-pressed)는 두지 않는다: 이름이 관리↔완료로 바뀌며 상태를 말해, 둘 다 두면 낭독기가
+                  // 「완료, 눌림」처럼 서로 다른 말을 한다(PR #342 리뷰 7)
+                  onClick={() => setManaging((m) => !m)}
+                >
+                  {managing ? '완료' : '관리'}
+                </button>
+              </div>
+              {channels.map((d) => (
+                <ChannelRow
+                  key={d.id}
+                  name={d.streamerName}
+                  photo={d.streamerProfileImageUrl}
+                  role="편집자"
+                  current={currentId === d.streamerId}
+                  managing={managing}
+                  onLeave={(opener) => setAsking({ kind: 'leave', channel: d, opener })}
+                  onClick={() =>
+                    pick({
+                      streamerId: d.streamerId,
+                      name: d.streamerName,
+                      relation: 'EDITOR',
+                      photo: d.streamerProfileImageUrl,
+                    })
+                  }
+                />
+              ))}
+            </>
+          )}
+        </div>
+        {(channelsFailed || invitesFailed) && (
+          // 못 읽은 것을 「없음」으로 숨기지 않는다: 기한 있는 초대를 놓친다(받은 초대에 답하는 곳은 이 창뿐이다)
+          <div className={styles.fallback}>
+            <span>
+              {channelsFailed && invitesFailed
+                ? '참여 채널과 받은 초대를 불러오지 못했어요'
+                : channelsFailed
+                  ? '참여 채널을 불러오지 못했어요'
+                  : '받은 초대를 불러오지 못했어요'}
+            </span>
+            <Button
+              variant="soft"
+              size="sm"
+              // 못 읽은 목록의 다시 읽기에만 돈다: 받은 초대의 주기 읽기마다 버튼이 돌지 않게(POK-481)
+              loading={
+                (channelsFailed && asEditor.isFetching) || (invitesFailed && received.isFetching)
+              }
+              onClick={() => {
+                if (channelsFailed) void asEditor.refetch();
+                if (invitesFailed) void received.refetch();
+              }}
+            >
+              다시 시도
+            </Button>
+          </div>
+        )}
+        {/* 낭독할 말은 창에 하나만: 참여 채널도 기다리는 중이면 그쪽 자리가 둘을 같이 말한다 */}
+        {invitesLoading && <InvitesSkeleton label={channelsLoading ? undefined : loadingLabel} />}
+        {invitations.length > 0 && (
+          <Invitations
+            invitations={invitations}
+            onDecline={(invitation, opener) => setAsking({ kind: 'decline', invitation, opener })}
+          />
+        )}
+        <div className={styles.foot}>
+          <span className={styles.email}>{me.email}</span>
+          <Link href="/settings/account" className={styles.footLink} onClick={onClose}>
+            계정 설정
+          </Link>
+          <button type="button" className={styles.footButton} onClick={() => logout()}>
+            로그아웃
+          </button>
+        </div>
+      </div>
+      {asking?.kind === 'decline' && (
+        <DeclineConfirm
+          invitation={asking.invitation}
+          opener={asking.opener}
+          onClose={() => setAsking(null)}
+          onBusyChange={onBusyChange}
+          fallbackFocus={mineRef}
+        />
+      )}
+      {asking?.kind === 'leave' && (
+        <LeaveConfirm
+          channel={asking.channel}
+          opener={asking.opener}
+          onClose={() => setAsking(null)}
+          onBusyChange={onBusyChange}
+          onLeft={(refresh) => left(asking.channel, refresh)}
+          returnFocusTo={takeFocusAfterLeave}
+        />
+      )}
+    </>
+  );
+}
+
+interface ChannelRowProps {
+  name: string;
+  photo: string | null;
+  role: '스트리머' | '편집자';
+  current: boolean;
+  onClick: () => void;
+  /** 관리 모드: 줄을 눌러도 바꾸지 않고 오른쪽에 「나가기」를 둔다(참여 채널만) */
+  managing?: boolean;
+  onLeave?: (opener: HTMLElement) => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+}
+
+function ChannelRow({
+  name,
+  photo,
+  role,
+  current,
+  onClick,
+  managing,
+  onLeave,
+  buttonRef,
+}: ChannelRowProps) {
+  const leaving = Boolean(managing && onLeave);
+  const row = (
+    <button
+      ref={buttonRef}
+      type="button"
+      className={styles.row}
+      aria-current={current ? 'true' : undefined}
+      // 남의 채널이 지금 채널이면 그 줄을 point로 칠한다: 내 채널(accent)과 색으로 갈린다
+      data-others-channel={role === '편집자' || undefined}
+      // 관리 중엔 줄을 눌러도 바꾸지 않는다: 나가려다 그 채널로 들어가는 일이 없게
+      data-managing={leaving || undefined}
+      aria-disabled={leaving || undefined}
+      // Tab 순서에서도 뺀다: 누를 수 없는 줄이 채널 수만큼 정지점이 되면 「나가기」까지 멀어진다(PR #342 리뷰 8)
+      tabIndex={leaving ? -1 : undefined}
+      onClick={leaving ? undefined : onClick}
+    >
+      {/* 채널 주인의 프로필 사진. 사진이 없으면 이름 글자 아바타 */}
+      <Avatar size="sm" src={photo ?? undefined} name={name} className={styles.rowAvatar} />
+      <span className={styles.rowText}>
+        <span className={styles.rowName}>{name} 채널</span>
+        <span className={styles.rowMeta}>{role}</span>
+      </span>
+      {current && !leaving && <Check aria-hidden className={styles.rowCheck} />}
+    </button>
+  );
+  if (!leaving) return row;
+  // 버튼 안에 버튼을 넣지 않으려고 줄 위에 겹쳐 둔다
+  return (
+    <div className={styles.rowWrap}>
+      {row}
+      <Button
+        className={styles.leave}
+        variant="outline"
+        size="sm"
+        aria-label={`${name} 채널에서 나가기`}
+        onClick={(e) => onLeave?.(e.currentTarget)}
+      >
+        나가기
+      </Button>
+    </div>
+  );
+}
+
+const u = (n: number) => `calc(${n} * var(--pc-u))`;
+
+/**
+ * 글자 한 줄 자리의 막대(POK-446). 그 줄의 클래스 안에 글자 크기(1em)만 한 막대를 인라인으로 세워, 줄 높이(글자 × 1.5)와
+ * 위아래 여백은 로드 뒤 글자와 같은 값을 쓴다. 블록 막대에 여백을 주면 부모 여백과 겹쳐(margin collapse) 높이가 어긋난다.
+ */
+function LineBar({ width }: { width: string }) {
+  return (
+    <Skeleton
+      width={width}
+      height="1em"
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+    />
+  );
+}
+
+/** 채널 줄 자리: 로드 뒤 줄과 같은 .row·.rowText 안에 아바타(32u)와 이름·역할 두 줄 */
+function RowSkeleton() {
+  return (
+    <div className={clsx(styles.row, styles.rowSkeleton)} aria-hidden="true">
+      {/* Skeleton은 폭·높이를 인라인으로 덮으므로 .rowAvatar의 32u를 다시 준다 */}
+      <Skeleton circle height={u(32)} style={{ flexShrink: 0 }} />
+      <span className={styles.rowText}>
+        <span className={styles.rowName}>
+          <LineBar width={u(96)} />
+        </span>
+        <span className={styles.rowMeta}>
+          <LineBar width={u(32)} />
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 「편집 참여 중」 구역 자리: 제목 줄과 줄 하나. 제목은 막대로만 둔다 — 참여 채널이 없는 계정에선 구역이 통째로 없으니
+ * 글자로 미리 쓰면 거짓이 된다. 낭독할 말(label)은 이 자리가 맡는다
+ */
+function ChannelsSkeleton({ label }: { label: string }) {
+  return (
+    <LoadingRegion label={label}>
+      <div className={styles.sectionTitle} aria-hidden="true">
+        <LineBar width={u(64)} />
+      </div>
+      <RowSkeleton />
+    </LoadingRegion>
+  );
+}
+
+/** 「받은 초대」 카드 자리: 같은 점선 상자에 제목 막대와 초대 하나(이름·기한·수락/거절 버튼). label이 없으면 그리기만 한다 */
+function InvitesSkeleton({ label }: { label?: string }) {
+  const bars = (
+    <>
+      <div className={styles.sectionTitleFlat} aria-hidden="true">
+        <LineBar width={u(44)} />
+      </div>
+      <div className={styles.invite} aria-hidden="true">
+        <div className={styles.inviteName}>
+          <LineBar width={u(150)} />
+        </div>
+        <div className={styles.inviteMeta}>
+          <LineBar width={u(64)} />
+        </div>
+        {/* 버튼 sm 높이(32u)·md 반경 */}
+        <div className={styles.inviteActions}>
+          <Skeleton width={u(52)} height={u(32)} radius="md" />
+          <Skeleton width={u(52)} height={u(32)} radius="md" />
+        </div>
+      </div>
+    </>
+  );
+  return label ? (
+    <LoadingRegion label={label} className={styles.invites}>
+      {bars}
+    </LoadingRegion>
+  ) : (
+    <div className={styles.invites} aria-hidden="true">
+      {bars}
+    </div>
+  );
+}
+
+/**
+ * 수락·거절 공통: 끝나면 받은 초대와 참여 채널 목록을 다시 읽는다(수락하면 참여 채널이 는다). 실패해도 읽는다: 실패는 대개
+ * 그 사이 스트리머가 취소했거나 다른 곳에서 먼저 답했다는 뜻이라 목록이 낡았다(POK-481). onDone(거절 덮개 닫기)은 그 초대가
+ * 끝났을 때만 부른다: 성공 · 이미 처리된 초대 · 세션이 바뀜. 모르는 실패(일시 장애)엔 덮개를 남겨 「거절하기」만 다시 누르면
+ * 되게 한다 — 나가기 덮개와 같은 규칙(PR #412 리뷰)
+ */
+function useInvitationAction(
+  send: (id: number) => Promise<void>,
+  doneTitle: string,
+  outcome: 'accepted' | 'declined',
+  onDone?: () => void,
+) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  return useSessionMutation({
+    mutationFn: send,
+    onSuccess: () => {
+      track('editor_invitation_responded', { outcome }); // 상대 이름·초대 번호는 싣지 않는다 (POK-357)
+      toast({ tone: 'success', title: doneTitle });
+    },
+    // 서버 사유 코드는 보이지 않는다: 사람 말로 바꾸고 모르는 실패는 폴백 문구로
+    onError: (e: unknown) => toast({ tone: 'error', ...respondFailureMessage(e) }),
+    onSettled: (_data, error) => {
+      if (error === null || isInvitationGone(error) || error instanceof StaleSessionError)
+        onDone?.();
+      void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
+      void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
+    },
+  });
+}
+
+/** 창 안 덮개로 묻는 일과 누른 버튼(확인을 닫으면 포커스가 돌아갈 곳) */
+type Asking =
+  | { kind: 'decline'; invitation: ReceivedInvitation; opener: HTMLElement }
+  | { kind: 'leave'; channel: StreamerDelegation; opener: HTMLElement };
+
+/** 받은 초대: 수락은 바로 보내고, 거절만 덮개로 한 번 더 묻는다(되돌릴 수 없다). */
+function Invitations({
+  invitations,
+  onDecline,
+}: {
+  invitations: ReceivedInvitation[];
+  onDecline: (invitation: ReceivedInvitation, opener: HTMLElement) => void;
+}) {
+  const accept = useInvitationAction(acceptInvitation, '초대를 수락했어요', 'accepted');
+  const title = `받은 초대 ${invitations.length}`;
+
+  return (
+    <div role="group" aria-label={title} className={styles.invites}>
+      <div className={styles.sectionTitleFlat}>{title}</div>
+      {invitations.map((inv) => {
+        // 수락 중엔 누른 초대의 수락만 돌고, 나머지 초대 버튼은 지금처럼 잠근다(POK-446)
+        const accepting = accept.isPending && accept.variables === inv.id;
+        return (
+          <div key={inv.id} className={styles.invite}>
+            <div className={styles.inviteName}>{inv.streamerName} 채널의 편집자 초대</div>
+            <div className={styles.inviteMeta}>{expiresLabel(inv.expiresAt)}</div>
+            <div className={styles.inviteActions}>
+              {/* 폭은 라벨 그대로 둔다: 스피너가 라벨 옆에 붙어 버튼이 넓어지면 「거절」이 밀린다(.busyButton) */}
+              <Button
+                variant="solid"
+                size="sm"
+                loading={accepting}
+                aria-label={accepting ? '수락하는 중' : undefined}
+                className={styles.busyButton}
+                disabled={accept.isPending}
+                onClick={() => accept.mutate(inv.id)}
+              >
+                수락
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={accept.isPending}
+                onClick={(e) => onDecline(inv, e.currentTarget)}
+              >
+                거절
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 받은 초대 거절 확인 */
+function DeclineConfirm({
+  invitation,
+  opener,
+  onClose,
+  onBusyChange,
+  fallbackFocus,
+}: {
+  invitation: ReceivedInvitation;
+  opener: HTMLElement;
+  onClose: () => void;
+  onBusyChange: (busy: boolean) => void;
+  /** 「거절」 버튼이 없어질 때 포커스를 둘 늘 남는 자리(「내 채널」 줄) */
+  fallbackFocus: RefObject<HTMLElement | null>;
+}) {
+  // 닫힐 때 「거절」 버튼이 없으면 늘 남는 자리로 보낸다: 거절이 끝난 카드는 다음 읽기에서 지워지고, 덮개를 연 사이 주기
+  // 읽기가 카드를 먼저 지울 수도 있다(PR #412 리뷰). ref만 읽어 고정해 둔다: 덮개의 포커스 효과가 다시 돌지 않게
+  const finished = useRef(false);
+  const returnFocusTo = useCallback(
+    () => (finished.current || !opener.isConnected ? fallbackFocus.current : null),
+    [opener, fallbackFocus],
+  );
+  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', () => {
+    finished.current = true;
+    onClose();
+  });
+  return (
+    <PanelConfirm
+      title={`${invitation.streamerName}님의 초대를 거절할까요?`}
+      text="거절하면 목록에서 사라지고, 다시 참여하려면 새로 초대받아야 해요."
+      confirmLabel="거절하기"
+      busy={decline.isPending}
+      opener={opener}
+      onConfirm={() => decline.mutate(invitation.id)}
+      onClose={onClose}
+      onBusyChange={onBusyChange}
+      returnFocusTo={returnFocusTo}
+    />
+  );
+}
+
+/**
+ * 참여 채널 나가기 확인. 나간 뒤 무엇을 할지는 부르는 쪽(onLeft)이 정한다: 지금 채널이면 내 채널로 바꾼 뒤에 목록을
+ * 다시 읽어야 해서 다시 읽기(refresh)를 넘긴다.
+ */
+function LeaveConfirm({
+  channel,
+  opener,
+  onClose,
+  onBusyChange,
+  onLeft,
+  returnFocusTo,
+}: {
+  channel: StreamerDelegation;
+  opener: HTMLElement;
+  onClose: () => void;
+  onBusyChange: (busy: boolean) => void;
+  onLeft: (refresh: () => void) => void;
+  /** 나간 뒤 포커스를 둘 곳(없으면 누른 버튼) */
+  returnFocusTo: () => HTMLElement | null;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const leave = useSessionMutation({
+    mutationFn: () => revokeDelegation(channel.id),
+    onSuccess: () => {
+      track('editor_delegation_ended', { initiator: 'editor' });
+      toast({ tone: 'success', title: `${channel.streamerName} 채널에서 나왔어요` });
+      onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
+    },
+    onError: (e: unknown) => {
+      // 없는 것과 같은 404: 스트리머가 먼저 내보냈거나 다른 곳에서 이미 나왔다. 나온 것과 결과가 같으니 나온 뒤 흐름(목록
+      // 다시 읽기 · 지금 채널이었으면 내 채널로)을 그대로 탄다(POK-481)
+      if (e instanceof ApiError && e.status === 404 && e.message === 'DELEGATION_NOT_FOUND') {
+        toast({
+          tone: 'error',
+          title: '이미 끊긴 채널이에요',
+          description: '스트리머가 내보냈거나 다른 곳에서 먼저 나왔어요.',
+        });
+        onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
+        return;
+      }
+      toast({
+        tone: 'error',
+        title: '채널에서 나가지 못했어요',
+        description: '잠시 후 다시 시도해 주세요.',
+      });
+    },
+  });
+  return (
+    <PanelConfirm
+      title={`${channel.streamerName} 채널의 편집자에서 나갈까요?`}
+      text="이 채널의 하이라이트·클립을 더 볼 수 없어요. 다시 들어가려면 새로 초대받아야 해요."
+      confirmLabel="나가기"
+      busy={leave.isPending}
+      opener={opener}
+      onConfirm={() => leave.mutate()}
+      onClose={onClose}
+      onBusyChange={onBusyChange}
+      returnFocusTo={returnFocusTo}
+    />
+  );
+}
+
+/**
+ * 창 안 확인 덮개(시안 1u ③, 시안 비교 B안) — 받은 초대 거절과 참여 채널 나가기가 같이 쓴다. 화면 가운데 모달 대신
+ * 창 안에서 묻되, 덮개는 패널(position: fixed)을 기준으로 보이는 칸 전체를 덮는다: 창을 내려 둔 채로 눌러도 카드가
+ * 눈앞 가운데에 뜬다.
+ */
+function PanelConfirm({
+  title,
+  text,
+  confirmLabel,
+  busy,
+  opener,
+  onConfirm,
+  onClose,
+  onBusyChange,
+  returnFocusTo,
+}: {
+  title: string;
+  text: string;
+  confirmLabel: string;
+  busy: boolean;
+  opener: HTMLElement;
+  onConfirm: () => void;
+  onClose: () => void;
+  /** 요청이 나가 있는지 창(Popover)에 알린다: 그동안은 창도 닫히지 않는다 */
+  onBusyChange: (busy: boolean) => void;
+  /** 닫힐 때 포커스를 둘 곳. 없거나 null이면 누른 버튼(opener) */
+  returnFocusTo?: () => HTMLElement | null;
+}) {
+  const titleId = useId();
+  const textId = useId();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  // 열리면 취소에 포커스(Enter 한 번에 거절·나가기 되지 않게). 닫히면 누른 버튼으로 돌아간다: passive effect의
+  // 정리는 뒤 칸의 inert가 풀린 뒤에 돌아 포커스가 들어간다
+  useEffect(() => {
+    cancelRef.current?.focus();
+    return () => {
+      const target = returnFocusTo?.() ?? opener;
+      if (target.isConnected) target.focus();
+    };
+  }, [opener, returnFocusTo]);
+
+  useEffect(() => {
+    onBusyChange(busy);
+    return () => onBusyChange(false);
+  }, [busy, onBusyChange]);
+
+  // 요청이 나간 뒤에는 닫지 않는다: 결과가 오기 전에 사라지면 취소된 줄 안다(ConfirmDialog와 같다)
+  const cancel = () => {
+    if (!busy) onClose();
+  };
+
+  return (
+    <div
+      className={styles.confirm}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) cancel();
+      }}
+      onKeyDown={(e) => {
+        // 창 전체가 아니라 덮개만 닫는다: 여기서 멈추면 창의 Esc 닫기(document 리스너)까지 가지 않는다
+        if (e.key !== 'Escape') return;
+        e.stopPropagation();
+        cancel();
+      }}
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={textId}
+        className={styles.confirmCard}
+      >
+        <div id={titleId} className={styles.confirmTitle}>
+          {title}
+        </div>
+        <div id={textId} className={styles.confirmText}>
+          {text}
+        </div>
+        <div className={styles.confirmActions}>
+          <Button
+            ref={cancelRef}
+            variant="outline"
+            size="sm"
+            fullWidth
+            disabled={busy}
+            onClick={cancel}
+          >
+            취소
+          </Button>
+          <Button variant="danger" size="sm" fullWidth loading={busy} onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}

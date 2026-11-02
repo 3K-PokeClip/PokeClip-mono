@@ -3,7 +3,11 @@ package com.pokeclip.chat.collector.chzzk;
 import com.pokeclip.chat.collector.StopReason;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.ObjectMapper;
+
+import java.net.URI;
+import java.util.Map;
 
 /**
  * 치지직 REST 둘. 세션 발급과 채팅 구독.
@@ -63,7 +67,53 @@ public class ChzzkSessionClient {
     public boolean unsubscribeChatQuietly(String sessionKey) {
         try {
             restClient.post()
-                    .uri(baseUrl + "/open/v1/sessions/events/unsubscribe/chat?sessionKey=" + sessionKey)
+                    .uri(sessionKeyUri("/open/v1/sessions/events/unsubscribe/chat", sessionKey))
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 후원 구독. <b>던지지 않는다</b> — 채팅 구독과 운명을 갈라야 하기 때문이다.
+     *
+     * <p>{@link #subscribeChat}은 401/403에서 던져 수립을 영구 실패로 끝낸다. 후원에 같은
+     * 규칙을 걸면 <b>후원 권한만 없는 토큰이 채팅까지 못 걷는다</b> — 앱 동의에 후원 Scope가
+     * 빠진 경우가 실제로 그 자리다. 결과를 값으로 돌려주고 부르는 쪽이 기록만 한다.
+     *
+     * @return 401·403이면 REFUSED, 그 밖의 실패면 FAILED, 200이면 SUBSCRIBED
+     */
+    public DonationSubscription subscribeDonation(String sessionKey) {
+        try {
+            restClient.post()
+                    .uri(sessionKeyUri("/open/v1/sessions/events/subscribe/donation", sessionKey))
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            return DonationSubscription.SUBSCRIBED;
+        } catch (RestClientResponseException e) {
+            // 응답 본문을 안 본다 — 토큰이 되비쳐 나올 수 있다(createSession과 같은 규칙).
+            int status = e.getStatusCode().value();
+            return (status == 401 || status == 403)
+                    ? DonationSubscription.REFUSED : DonationSubscription.FAILED;
+        } catch (Exception e) {
+            return DonationSubscription.FAILED;
+        }
+    }
+
+    /**
+     * 후원 구독을 반납한다. {@link #unsubscribeChatQuietly}와 같은 규칙으로 던지지 않는다 —
+     * 종료 경로에서 예외가 나가면 뒤따르는 채팅 반납과 소켓 정리가 통째로 건너뛰어진다.
+     *
+     * @return 반납 요청이 200으로 끝났으면 true
+     */
+    public boolean unsubscribeDonationQuietly(String sessionKey) {
+        try {
+            restClient.post()
+                    .uri(sessionKeyUri("/open/v1/sessions/events/unsubscribe/donation", sessionKey))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .toBodilessEntity();
@@ -77,7 +127,7 @@ public class ChzzkSessionClient {
     public void subscribeChat(String sessionKey) {
         try {
             restClient.post()
-                    .uri(baseUrl + "/open/v1/sessions/events/subscribe/chat?sessionKey=" + sessionKey)
+                    .uri(sessionKeyUri("/open/v1/sessions/events/subscribe/chat", sessionKey))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .toBodilessEntity();
@@ -95,5 +145,16 @@ public class ChzzkSessionClient {
             throw new SessionEstablishException(EstablishStage.SUBSCRIBE,
                     StopReason.SUBSCRIBE_FAILED, "cause=" + e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * 세션 키를 값 자리로 넘긴 주소. 키는 치지직이 준 값이고 문서가 모양을 약속하지 않는다(지금 실측은 UUID).
+     * 주소에 바로 이어 붙이면 {@code +}가 공백으로 읽힌다. 라이브 목록 커서가 그렇게 400을 받았다(POK-325,
+     * {@code ChzzkLiveInfoClient.lives}). 값 자리를 예약 문자까지 바꾸는 것도 {@code encode()}다.
+     */
+    private URI sessionKeyUri(String path, String sessionKey) {
+        return UriComponentsBuilder.fromUriString(baseUrl + path)
+                .queryParam("sessionKey", "{sessionKey}")
+                .encode().buildAndExpand(Map.of("sessionKey", sessionKey)).toUri();
     }
 }

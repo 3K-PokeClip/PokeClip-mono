@@ -1,0 +1,878 @@
+/* 시안 1d 클립 편집기 — 두 모드가 함께 쓰는 표면(헤더·미리보기·트랜스포트).
+   숫자는 시안 px을 --pc-u로 환산한 값이다. */
+
+/* ---------- 헤더 ---------- */
+
+.header {
+  flex: none;
+  /* 아래 가장자리에 다시 읽기 막대(.headerReloadBar)를 얹는 기준 */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(22 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(32 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
+  border-radius: var(--pc-radius-md);
+  color: var(--pc-color-text-primary);
+  flex: none;
+}
+
+.backLink:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.headerTitleBlock {
+  /* 문구 아래 영상 진행 막대(.headerProgress)를 얹는 기준 */
+  position: relative;
+  line-height: 1.3;
+  min-width: 0;
+}
+
+.headerTitle {
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.headerMeta {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  margin-top: calc(1 * var(--pc-u));
+}
+
+.headerHistory {
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--pc-u));
+  margin-left: calc(8 * var(--pc-u));
+  padding: 0 calc(10 * var(--pc-u));
+  border-left: 1px solid var(--pc-color-border-subtle);
+}
+
+.headerActions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+/* ---------- 영상 상태 알약 · 작은 창(POK-492 시안 A) ---------- */
+
+/* 상태색 하나(카드당 하나) — 기다리는 중은 강조색, 끝은 성공, 실패는 위험, 사람이 봐야 하면 경고.
+   글자는 -text(라이트에서 진한 쪽), 바탕은 -subtle이다. 단계 목록(ClipStepList)도 제 색을 스스로 정한다 — 보관함 진행
+   카드(POK-510)가 작은 창 없이 목록만 쓴다 */
+.statusPill[data-tone='progress'],
+.statusPopover[data-tone='progress'],
+.statusSteps[data-tone='progress'] {
+  --status-fg: var(--pc-color-accent-text);
+  --status-bg: var(--pc-color-accent-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-accent) 45%, transparent);
+}
+
+.statusPill[data-tone='success'],
+.statusPopover[data-tone='success'],
+.statusSteps[data-tone='success'] {
+  --status-fg: var(--pc-color-success-text);
+  --status-bg: var(--pc-color-success-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-success) 45%, transparent);
+}
+
+.statusPill[data-tone='danger'],
+.statusPopover[data-tone='danger'],
+.statusSteps[data-tone='danger'] {
+  --status-fg: var(--pc-color-danger-text);
+  --status-bg: var(--pc-color-danger-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-danger) 45%, transparent);
+}
+
+.statusPill[data-tone='warning'],
+.statusPopover[data-tone='warning'],
+.statusSteps[data-tone='warning'] {
+  --status-fg: var(--pc-color-warning-text);
+  --status-bg: var(--pc-color-warning-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-warning) 55%, transparent);
+}
+
+/* 알약: 헤더 버튼(sm)과 같은 높이에 맞춘다. 막대는 알약 안에 들어 있어 섰다 사라져도 헤더가 밀리지 않는다 */
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  height: calc(30 * var(--pc-u));
+  padding: 0 calc(10 * var(--pc-u)) 0 calc(9 * var(--pc-u));
+  margin-right: calc(4 * var(--pc-u));
+  border: 1px solid var(--status-line);
+  border-radius: var(--pc-radius-pill);
+  background: var(--status-bg);
+  color: var(--status-fg);
+  font: inherit;
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.statusPill:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.statusPillIcon {
+  display: inline-flex;
+}
+
+.statusPillBar {
+  width: calc(56 * var(--pc-u));
+}
+
+.statusPillChevron {
+  opacity: 0.8;
+}
+
+/* 작은 창(시안 A, 2026-10-29): 머리 한 줄 → 이은 세로 단계 → 버튼 가로 둘. 색은 지금 상태 하나 — 지난 단계 · 버튼은 무채색 */
+.statusPopover {
+  width: calc(300 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+}
+
+/* 머리 한 줄: 왼쪽 상태(상태색) · 오른쪽 판 */
+.statusHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  padding-bottom: calc(10 * var(--pc-u));
+  margin-bottom: calc(12 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+
+.statusTitle {
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 750;
+  color: var(--status-fg);
+  white-space: nowrap;
+}
+
+.statusVersion {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  white-space: nowrap;
+}
+
+.statusSteps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 단계 한 줄: 왼쪽 동그라미 칸(20u) · 오른쪽 이름과 시각(지금 단계면 그 아래 막대와 설명) */
+.statusStep {
+  position: relative;
+  display: grid;
+  grid-template-columns: calc(20 * var(--pc-u)) 1fr;
+  column-gap: calc(10 * var(--pc-u));
+  padding-bottom: calc(12 * var(--pc-u));
+}
+
+.statusStepMark {
+  position: relative;
+  z-index: 1;
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-muted);
+}
+
+/* 동그라미를 잇는 세로 줄 — 이 동그라미 아래 끝부터 다음 단계 동그라미까지 */
+.statusStepLine {
+  position: absolute;
+  left: calc(10 * var(--pc-u) - 0.75px);
+  top: calc(20 * var(--pc-u));
+  bottom: 0;
+  width: 1.5px;
+  background: var(--pc-color-border-default);
+}
+
+.statusStep[data-state='done'] > .statusStepMark {
+  border-color: var(--pc-color-border-strong);
+  background: var(--pc-color-bg-surface-hover);
+  color: var(--pc-color-text-secondary);
+}
+
+.statusStep[data-state='done'] > .statusStepLine {
+  background: var(--pc-color-border-strong);
+}
+
+/* 지금 단계는 알약과 같은 상태색이다 */
+.statusStep:is([data-state='now'], [data-state='danger'], [data-state='warning'])
+  > .statusStepMark {
+  border-color: var(--status-fg);
+  background: var(--status-bg);
+  color: var(--status-fg);
+}
+
+/* 지금 도는 단계: 동그라미 테두리가 그대로 도는 고리다. 옅은 고리(트랙) 위로 상태색 호 하나가 돌고, 가운데는 상태색 점.
+   DS 스피너를 안에 넣으면 스피너 제 테두리 원과 동그라미 원이 두 겹으로 겹쳐 어긋나 보였다(2026-10-29 사용자 지적) */
+.statusStep[data-state='now'] > .statusStepMark {
+  border-color: var(--status-line);
+}
+
+.statusStep[data-state='now'] > .statusStepMark::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  border: 1.5px solid transparent;
+  border-top-color: var(--status-fg);
+  animation: status-step-spin 0.9s linear infinite;
+}
+
+.statusStepDot {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  background: var(--status-fg);
+}
+
+@keyframes status-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusStep[data-state='now'] > .statusStepMark::before {
+    animation-duration: 2.4s;
+  }
+}
+
+.statusStepBody {
+  min-width: 0;
+  padding-top: calc(2 * var(--pc-u));
+}
+
+.statusStepRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+}
+
+.statusStepLabel {
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+.statusStep[data-state='todo'] .statusStepLabel {
+  font-weight: 500;
+  color: var(--pc-color-text-muted);
+}
+
+.statusStep:is([data-state='now'], [data-state='danger'], [data-state='warning']) .statusStepLabel {
+  font-weight: 700;
+  color: var(--pc-color-text-primary);
+}
+
+.statusStepNote {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.statusStep:is([data-state='now'], [data-state='danger'], [data-state='warning']) .statusStepNote {
+  font-weight: 600;
+  color: var(--status-fg);
+}
+
+.statusStepBar {
+  margin-top: calc(7 * var(--pc-u));
+}
+
+.statusDetail {
+  margin: calc(6 * var(--pc-u)) 0 0;
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 다 끝나 지금 단계가 없을 때의 설명: 단계 아래 버튼 위 */
+.statusDetail[data-standalone] {
+  margin: 0 0 calc(12 * var(--pc-u));
+}
+
+/* 「다시 올리기」의 공개 범위 경고: 버튼 바로 위 작은 글. 상태색은 머리에만 쓰므로 무채색이다 */
+.statusRetryNote {
+  margin: 0 0 calc(8 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 버튼 가로 둘 — 같은 크기로 폭을 나눠 채운다(하나면 꽉 찬다) */
+.statusActions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(2 * var(--pc-u));
+}
+
+/* 다시 읽기 막대(POK-444): 헤더 아래 가장자리 한 줄. 화면 폭 끝까지 가므로 둥근 끝을 뺀다 */
+.header > .headerReloadBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  border-radius: 0;
+}
+
+/* 보내는 중에도 버튼 폭은 라벨 폭 그대로다(POK-444, PluginSettingsScreen의 .busyButton과 같은 방식): 라벨은 자리만
+   지키게 시각만 숨기고(visibility) 스피너를 흐름에서 빼 가운데 겹친다. 숨은 「로딩 중」 글자도 같이 숨지만 이름은
+   버튼 aria-label이 댄다 */
+.busyButton {
+  position: relative;
+}
+
+.busyButton[data-loading] > span:not([aria-hidden='true']) {
+  visibility: hidden;
+}
+
+.busyButton[data-loading] > span[aria-hidden='true'] {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- 미리보기 ---------- */
+
+/* 영상이 미리보기 칸을 최대한 쓰게 위아래 여백은 숨 쉴 만큼만 둔다 — 넓은 칸에서도 세로가 판 크기를 정한다 */
+.preview {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: calc(8 * var(--pc-u)) calc(20 * var(--pc-u)) 0;
+}
+
+/* 소스 판과 결과 판이 나란히 선다 — 무엇을 잘라 무엇이 나오는지가 한 화면에 있다 */
+.stage {
+  flex: 1;
+  min-height: calc(220 * var(--pc-u));
+  display: flex;
+  gap: calc(20 * var(--pc-u));
+  align-items: stretch;
+  justify-content: center;
+  min-width: 0;
+}
+
+.sourceSide,
+.resultSide,
+.resultOnly {
+  /* 판은 **두 축 모두**에 갇혀야 한다 — 높이에만 맞추면 16:9 원본이 무대 폭을 넘어 결과를 덮고,
+     폭에만 맞추면 무대보다 길어져 타임라인을 덮는다. 컨테이너 질의로 둘 다 재서 작은 쪽을 쓴다. */
+  position: relative;
+  container-type: size;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(5 * var(--pc-u));
+}
+
+.sourceSide {
+  /* 소스가 주인공이다 — 16:9 라 결과(9:16)보다 훨씬 넓게 잡는다 */
+  flex: 3;
+}
+
+.resultSide {
+  flex: 1;
+}
+
+/* 다른 도구일 때 — 결과 하나가 가운데를 차지한다 */
+.resultOnly {
+  flex: 1;
+}
+
+.sideLabel {
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+  white-space: nowrap;
+}
+
+/* 라벨과 안내 사이에 흐름으로 놓인다. 높이는 「남은 세로」와 「폭이 허락하는 세로」 중 작은 쪽 —
+   한쪽만 보면 원본이 무대 폭을 넘어 결과를 덮거나, 무대보다 길어져 타임라인을 덮는다. */
+.sourcePanel,
+.resultFrame {
+  position: relative;
+  flex: none;
+  aspect-ratio: var(--pc-ar);
+  /* 판 위아래에 흐름으로 놓이는 것들(라벨·안내 줄)의 몫을 뺀다 — 칸마다 다르다 */
+  height: min(calc(100cqh - var(--pc-reserve)), calc(100cqw / var(--pc-ar)));
+}
+
+/* 소스 칸: 위 라벨 한 줄(≈13u) + 간격 */
+.sourceSide {
+  --pc-reserve: calc(20 * var(--pc-u));
+}
+
+/* 결과 칸: 위 라벨 한 줄 + 간격. 아래 안내 줄은 미리보기를 못 틀 때만 뜨므로 평소엔 자리를 안 비운다 */
+.resultSide {
+  --pc-reserve: calc(20 * var(--pc-u));
+}
+
+/* 결과만 있을 때는 라벨도 없다 — 판이 칸 높이를 다 쓴다 */
+.resultOnly {
+  --pc-reserve: 0px;
+}
+
+/* 안내 줄(폰트 10.5u + 패딩 3u×2 + 간격 ≈ 24u)이 뜨면 줄 수만큼 판을 줄인다 */
+.resultSide:has(.stageNote) {
+  --pc-reserve: calc(44 * var(--pc-u));
+}
+
+.resultSide:has(.stageNote + .stageNote) {
+  --pc-reserve: calc(68 * var(--pc-u));
+}
+
+.resultOnly:has(.stageNote) {
+  --pc-reserve: calc(24 * var(--pc-u));
+}
+
+.resultOnly:has(.stageNote + .stageNote) {
+  --pc-reserve: calc(48 * var(--pc-u));
+}
+
+/* 클립 만들기 — 소스를 통째로 보여주고 그 위에 사각형을 얹는다 */
+.sourcePanel {
+  border-radius: calc(10 * var(--pc-u));
+  overflow: hidden;
+  border: 1px solid var(--pc-color-border-default);
+  background: var(--pc-color-bg-inset);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none; /* 사각형 드래그를 브라우저 스크롤에 뺏기지 않는다 */
+}
+
+.sourcePlaceholder {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* --- 크롭 사각형 ------------------------------------------------------- */
+/* 시안 규약: 선택 = 2px solid, 비선택 = 2px dashed + 흐리게. 색은 주 영역 accent / 보조 point */
+.cropRect {
+  position: absolute;
+  border: calc(2 * var(--pc-u)) dashed var(--pc-color-accent);
+  border-radius: calc(6 * var(--pc-u));
+  opacity: 0.6;
+}
+
+.cropRect[data-tone='point'] {
+  border-color: var(--pc-color-point);
+}
+
+.cropRect[data-selected='on'] {
+  border-style: solid;
+  opacity: 1;
+}
+
+/* 선택된 프레임만 바깥을 덮는다 — 시안의 box-shadow 0 0 0 9999px */
+.cropRect[data-scrim='on'] {
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.5); /* 테마 고정 */
+}
+
+/* 사각형 안 */
+.cropBody {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: move;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: calc(2 * var(--pc-u));
+  overflow: hidden;
+}
+
+.cropBody:focus-visible {
+  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-text-primary);
+  outline-offset: calc(-4 * var(--pc-u));
+}
+
+.cropBadge,
+.cropReading {
+  font-size: calc(9 * var(--pc-u));
+  font-weight: 700;
+  padding: calc(2 * var(--pc-u)) calc(5 * var(--pc-u));
+  border-radius: calc(4 * var(--pc-u));
+  background: rgb(0 0 0 / 0.55); /* 테마 고정 */
+  color: var(--pc-color-text-primary);
+  white-space: nowrap;
+}
+
+.cropReading {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.cropRect:hover .cropReading,
+.cropBody:focus-visible .cropReading,
+.cropRect:focus-within .cropReading {
+  opacity: 1;
+}
+
+/* 크롭 모드 — 메인 프레임 안에서 작은 화면이 놓일 자리를 잡는 타깃 (시안 cropPipTarget) */
+.pipTarget {
+  position: absolute;
+  z-index: 4;
+  border: calc(2 * var(--pc-u)) solid var(--pc-color-point);
+  border-radius: calc(4 * var(--pc-u));
+  background: rgb(212 70 151 / 0.28); /* 테마 고정 */
+}
+
+.pipBody {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: move;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.pipBody:focus-visible {
+  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-text-primary);
+  outline-offset: calc(-4 * var(--pc-u));
+}
+
+.cropBadge[data-tone='point'] {
+  background: var(--pc-color-point);
+}
+
+.cropHandle[data-tone='point'] {
+  background: var(--pc-color-point);
+}
+
+.cropHandle {
+  position: absolute;
+  width: calc(9 * var(--pc-u));
+  height: calc(9 * var(--pc-u));
+  padding: 0;
+  border: 1px solid var(--pc-color-bg-canvas);
+  border-radius: 99px;
+  background: var(--pc-color-accent);
+  z-index: 1;
+}
+
+.cropRect[data-tone='point'] .cropHandle {
+  background: var(--pc-color-point);
+}
+
+.cropHandle[data-corner='nw'] {
+  left: calc(-5 * var(--pc-u));
+  top: calc(-5 * var(--pc-u));
+  cursor: nwse-resize;
+}
+
+.cropHandle[data-corner='ne'] {
+  right: calc(-5 * var(--pc-u));
+  top: calc(-5 * var(--pc-u));
+  cursor: nesw-resize;
+}
+
+.cropHandle[data-corner='sw'] {
+  left: calc(-5 * var(--pc-u));
+  bottom: calc(-5 * var(--pc-u));
+  cursor: nesw-resize;
+}
+
+.cropHandle[data-corner='se'] {
+  right: calc(-5 * var(--pc-u));
+  bottom: calc(-5 * var(--pc-u));
+  cursor: nwse-resize;
+}
+
+/* --- 클립 미리보기 ----------------------------------------------------- */
+/* 결과 화면 안의 길이(구분선·작은 화면 테두리·자막)는 **결과 칸 폭에 대한 비**로 그린다 — 렌더가 같은 비로
+   영상에 그린다(계약6 7절, recipeLook.ts). 시안 px 값은 결과 칸 기준 폭 240px 에서의 값이다:
+   --pc-fu = 기준 폭에서의 1px(결과 칸 폭 / 240). 그래서 화면 크기가 달라도 미리보기와 영상의 비례가 같다.
+   변수는 쓰는 자리에서 풀리므로 cqw 가 안쪽 요소 기준(= 이 칸)으로 잰다. */
+.resultFrame {
+  container-type: inline-size;
+  --pc-fu: calc(100cqw / 240);
+  display: flex;
+  flex-direction: column;
+  border-radius: calc(12 * var(--pc-u));
+  overflow: hidden;
+  border: 1px solid var(--pc-color-border-default);
+  box-shadow: var(--pc-shadow-lg);
+  background: #000; /* 테마 고정 */
+}
+
+.resultPane {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* 크롭 모드의 작은 화면(data-placement='overlay')은 CropResult 가 자리·테두리·그림자를 전부 인라인으로
+   정한다 — 여기서 기본값을 깔면 「테두리 표시」를 꺼도 라인이 남는다 */
+
+/* 중앙 모드 — 시안: 블러 배경 / 원본 16:9 그대로 / 블러 배경. 영상 칸은 비율을 지켜 가운데 선다 */
+.resultPane[data-placement='contain'] {
+  flex: 1;
+  width: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 중앙 모드의 흐린 바탕 — 원본 전체를 결과에 꽉 차게 깔고 흐린다. 흐림 가장자리가 비치지 않게 칸보다 넓게 깐다 */
+.resultBlur {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.resultContain {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 분할 경계선 — 시안의 「두 영역 사이 2px 라인」 */
+.resultFrame[data-border='on'] .resultPane[data-placement='stack'] + .resultPane {
+  border-top: max(1px, calc(var(--pc-fu) * 2)) solid var(--pc-color-accent);
+}
+
+/* 번인 자막 미리보기 — 결과 화면 아래쪽에 얹힌다 (시안 1d) */
+.burnedSubtitle {
+  position: absolute;
+  left: calc(var(--pc-fu) * 8);
+  right: calc(var(--pc-fu) * 8);
+  bottom: calc(var(--pc-fu) * 10);
+  z-index: 3;
+  text-align: center;
+  font-size: calc(var(--pc-fu) * 11);
+  font-weight: 800;
+  line-height: 1.25;
+  color: #fff; /* 테마 고정 */
+  text-shadow: 0 var(--pc-fu) calc(var(--pc-fu) * 3) rgb(0 0 0 / 0.9); /* 테마 고정 */
+  pointer-events: none;
+  /* 긴 자막이 결과 화면을 넘지 않게 — 넘치면 잘라 보여준다 */
+  max-height: 40%;
+  overflow: hidden;
+}
+
+/* 자막 위치 — 시안이 자막 패널로 옮긴 상단 / 경계 / 하단 */
+.burnedSubtitle[data-position='top'] {
+  top: calc(var(--pc-fu) * 10);
+  bottom: auto;
+}
+
+/* 「경계」는 두 영역 사이다 — 분할 지분이 정한다 (PreviewCanvas 가 --pc-edge 로 넘긴다) */
+.burnedSubtitle[data-position='edge'] {
+  top: var(--pc-edge, 50%);
+  bottom: auto;
+  transform: translateY(-50%);
+}
+
+/* 결과 판 바로 아래 한 줄 — 미리보기를 못 틀거나 트랙별로 못 들을 때 이유를 알린다 */
+.stageNote {
+  /* 결과 칸은 무대 폭의 1/4 뿐이라 한 줄이 칸보다 넓어질 수 있다 — 넘쳐서 원본 판을 덮지 않게 줄인다 */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(10.5 * var(--pc-u));
+  padding: calc(3 * var(--pc-u)) calc(11 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: rgb(0 0 0 / 0.55); /* 테마 고정 */
+  color: rgb(255 255 255 / 0.85); /* 테마 고정 */
+}
+
+/* ---------- 세그먼트 컨트롤 (레이아웃·배속 공용) ---------- */
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(9 * var(--pc-u));
+  overflow: hidden;
+}
+
+.segment {
+  padding: calc(5 * var(--pc-u)) calc(13 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-secondary);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.segment + .segment {
+  border-left: 1px solid var(--pc-color-border-default);
+}
+
+.segment:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.segment[aria-checked='true'] {
+  font-weight: 700;
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+}
+
+.segment:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.segmented[data-size='sm'] {
+  border-radius: calc(8 * var(--pc-u));
+}
+
+/* 라운딩은 컨테이너에만 준다 — 칸마다 주면 선택된 칸이 홀로 뜬 알약처럼 보인다 */
+.segmented[data-size='sm'] .segment {
+  padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+}
+
+/* 배속은 액센트 채움 대신 은은한 틴트 — 시안 1d */
+.segmented[data-size='sm'] .segment[aria-checked='true'] {
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+/* ---------- 트랜스포트 ---------- */
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  margin-top: calc(8 * var(--pc-u));
+  /* 미리보기와 형제 요소라 .preview의 패딩을 물려받지 못한다 — 같은 값을 직접 준다 */
+  padding: 0 calc(20 * var(--pc-u));
+  flex-wrap: wrap;
+  row-gap: calc(8 * var(--pc-u));
+}
+
+/* 재생 아이콘도 같은 이유로 디자인 단위로 잰다 — 되감기(21단위)보다 작아지면
+   가운데 주 버튼이 곁다리보다 작아 보인다. 버튼(md = 40단위)은 그대로다. */
+.transportPlayIcon {
+  width: calc(25 * var(--pc-u));
+  height: calc(25 * var(--pc-u));
+}
+
+.transportTime {
+  font:
+    600 calc(12 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  margin-left: calc(6 * var(--pc-u));
+}
+
+/* 「/ 0:30.0」 — 쇼츠 길이는 흐리게 */
+.transportTotal {
+  font-weight: 500;
+  color: var(--pc-color-text-muted);
+}
+
+.transportRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+/* 오른쪽 칩 셋(반복 · 배속 · 썸네일): 같은 높이의 알약, 켜진 반복만 강조색 */
+.transportChip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
+  padding: 0 calc(14 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  border: 1px solid var(--pc-color-border-default);
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.transportChip:hover:not(:disabled) {
+  background: var(--pc-color-bg-surface-hover);
+  color: var(--pc-color-text-primary);
+}
+
+.transportChip:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.transportChip[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.transportChip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 배속 메뉴 한 줄: 값 왼쪽, 고른 값만 체크 오른쪽 */
+.transportMenuItem {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(16 * var(--pc-u));
+  min-width: calc(64 * var(--pc-u));
+}

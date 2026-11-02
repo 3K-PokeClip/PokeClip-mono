@@ -1,6 +1,7 @@
 package com.pokeclip.auth.chzzk;
 
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.UserRepository;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +20,8 @@ class ChzzkLinkWriterTest {
     private final SecretStore secretStore = mock(SecretStore.class);
     private final ChzzkTokenDiscarder discarder = mock(ChzzkTokenDiscarder.class);
     private final ChzzkLinkWriter writer = new ChzzkLinkWriter(mock(ChzzkChannelLinkRepository.class), secretStore,
-            mock(UserRepository.class), discarder, mock(ChzzkCleanupExecutor.class));
+            mock(UserRepository.class), mock(ActiveUserGuard.class), discarder,
+            mock(ChzzkCleanupExecutor.class));
 
     @Test
     void secrets_삭제가_던져도_옛_토큰_revoke는_시도하고_예외는_올린다() {

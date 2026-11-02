@@ -1,44 +1,73 @@
+import Link from 'next/link';
 import { Badge } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import { Thumb } from './Thumb';
 import type { HomeVod } from './useHomeMockState';
 
-// 디자인 1a ③ — 지난 방송·VOD 그리드.
-// "지난 방송 목록" 화면(1f)은 M2(POK-106)라 링크 자리만 둔다 (SettingsSidebar 선례).
+// 디자인 1a ③ — 지난 방송·VOD 그리드. clip `state=past` 실값이다 (제목은 아직 streamId).
+// 첫 응답 전엔 홈이 큰 칸 스켈레톤만 그려 이 격자는 늘 읽은 뒤에 선다 — 「불러오는 중」 칸이 없다(POK-378).
 export function VodGrid({ vods }: { vods: HomeVod[] }) {
   return (
     <section aria-label="지난 방송 · VOD" data-tour-id={TOUR_TARGET.vodGrid}>
       <div className={styles.vodHeader}>
         <h2 className={styles.sectionLabel}>지난 방송 · VOD</h2>
         <span className={styles.vodKeepNote}>60일 보관</span>
-        <span className={styles.mutedLink} aria-disabled="true">
+        <Link href="/broadcast/vod" className={styles.mutedLink}>
           지난 방송 목록
-        </span>
+        </Link>
       </div>
-      <ul className={styles.vodGrid}>
-        {vods.map((vod) => (
-          <li key={vod.id} className={styles.vodCard}>
-            <Thumb label="VOD 썸네일">
-              {vod.badge?.kind === 'preparing' ? (
-                <span className={styles.overlayPillTopLeft}>준비 중</span>
-              ) : null}
-              {vod.badge?.kind === 'dday' ? (
-                <span className={styles.overlayTopLeft}>
-                  <Badge tone="danger" variant="solid" size="sm">
-                    {vod.badge.label}
-                  </Badge>
-                </span>
-              ) : null}
-              {vod.duration ? <span className={styles.durationPill}>{vod.duration}</span> : null}
-            </Thumb>
-            <div className={styles.vodText}>
-              <div className={styles.vodTitle}>{vod.title}</div>
-              <div className={styles.vodMeta}>{vod.meta}</div>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {vods.length === 0 ? (
+        <p className={styles.emptyState}>방송이 끝나면 다시 볼 수 있는 VOD가 여기 쌓여요.</p>
+      ) : (
+        <ul className={styles.vodGrid}>
+          {vods.map((vod) => (
+            <li key={vod.id} className={styles.vodCard}>
+              {vod.href ? (
+                <Link href={vod.href} className={styles.vodLink}>
+                  <VodCardBody vod={vod} />
+                </Link>
+              ) : (
+                // 보관이 끝나 열 것이 없다: 링크를 안 만든다(지난 방송 목록과 같다, POK-254)
+                <div className={styles.vodLink}>
+                  <VodCardBody vod={vod} />
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
+  );
+}
+
+function VodCardBody({ vod }: { vod: HomeVod }) {
+  return (
+    <>
+      <Thumb label="썸네일 준비 중" src={vod.thumbnailUrl}>
+        {vod.badge?.kind === 'preparing' ? (
+          <span className={styles.overlayPillTopLeft}>준비 중</span>
+        ) : null}
+        {vod.badge?.kind === 'dday' ? (
+          <span className={styles.overlayTopLeft}>
+            <Badge tone="danger" variant="solid" size="sm">
+              {vod.badge.label}
+            </Badge>
+          </span>
+        ) : null}
+        {vod.badge?.kind === 'expired' ? (
+          <span className={styles.overlayTopLeft}>
+            <Badge tone="danger" variant="soft" size="sm">
+              보관 만료
+            </Badge>
+          </span>
+        ) : null}
+        {vod.duration ? <span className={styles.durationPill}>{vod.duration}</span> : null}
+      </Thumb>
+      <div className={styles.vodText}>
+        <div className={styles.vodTitle}>{vod.title}</div>
+        <div className={styles.vodMeta}>{vod.meta}</div>
+      </div>
+    </>
   );
 }
