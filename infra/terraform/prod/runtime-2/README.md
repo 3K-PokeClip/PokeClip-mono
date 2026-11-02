@@ -82,6 +82,11 @@ plan 이 멈추고, 정책 자원은 그 precondition 을 기다립니다(`depen
 
 이 루트의 출력은 없습니다. 다른 루트는 이 루트를 읽지 않습니다.
 
+edge 의 media 배포가 교체돼 `media_distribution_arn` 이 바뀌면 이 루트를
+다시 plan · apply 합니다. 그 전까지 허용문이 옛 ARN 을 가리켜, 서명 쿠키가
+있어도 `/dvr/*` · `/vod/*` 가 403 입니다. edge apply 는 이 루트를 다시
+돌리지 않습니다.
+
 ## 적용(O7f 의 6)
 
 [엣지 시험 런북](../../runbooks/edge-tests.md) 「O7f 순서」 의 6 입니다.
@@ -100,7 +105,13 @@ KVS 값과는 무관해 A1 · A2 멈춤 자리에서도 합니다.
     돌립니다. `state-object-runtime-2` 행은 이 루트와 함께 들어와, O7f 의
     0 을 그 전 커밋으로 돌렸으면 이 행은 판정을 거치지 않았습니다. 시작
     기준은 0 과 같습니다 — 멈춤 0 이고, 판정 불가는 0 이거나 모두 kty
-    「진행」 기록이 있어야 합니다.
+    「진행」 기록이 있어야 합니다. edge apply 뒤라 0 에서 자원이 없던 행도
+    이번에 처음 풀립니다 — 배포 행(`cf-distribution` — 0 에서는
+    `TARGET_NONE`)과 prod 버킷 행의 apex 버킷(`edge-apex-bucket` ·
+    `edge-apex-object`)입니다. apex 버킷처럼 OAC Allow 문장이 있는 버킷은
+    갈래 B 실행에서 역할 주체 × 그 행이 `RESOURCE_POLICY_UNSIMULATED`(판정
+    불가)가 될 수 있습니다. 그때 진행 여부는 kty 가 `approvals.tsv` 로
+    정합니다(단계 직전 점검 런북 「2-3 판정의 결과와 갈래」).
 1.  **init**: `backend.hcl.example` 을 `backend.hcl` 로 복사해 상태 버킷을
     넣습니다(추적하지 않음).
 

@@ -101,7 +101,10 @@ edge apply 는 [엣지 비밀 런북](../../runbooks/edge-secrets.md) 「초기�
 1.  엣지만 시험 · 랜딩 업로드 · 런타임 2단 순서는 계획 M10 O7f 를 따릅니다.
     런타임 2단 apply 는 [prod/runtime-2](../runtime-2/README.md) 「적용
     (O7f 의 6)」 입니다. 그 apply 전에는 `/dvr/*` · `/vod/*` 가 버킷에서
-    403 입니다(OAC 허용문 없음).
+    403 입니다(OAC 허용문 없음). 뒤에 media 배포가 교체돼
+    `media_distribution_arn` 이 바뀌면 런타임 2단을 다시 plan · apply
+    합니다. 그 전까지 허용문이 옛 ARN 을 가리켜, 서명 쿠키가 있어도
+    `/dvr/*` · `/vod/*` 가 403 입니다.
 
 함수가 이 루트의 함수 로그 그룹보다 먼저 로그를 내면(apply 가 그룹 전에
 멈춘 채 T6b 를 했을 때 등) AWS 가 그룹을 먼저 만들어 다음 apply 가 이미
