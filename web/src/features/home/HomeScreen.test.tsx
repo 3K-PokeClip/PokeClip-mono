@@ -1297,15 +1297,20 @@ describe('LiveNowBand', () => {
   });
 
   describe('사진 로딩', () => {
-    it('사진을 다 받기 전에는 칸이 반짝이는 회색이고 사진은 숨는다. 받으면 걷힌다', () => {
+    it('사진을 다 받기 전에는 칸이 반짝이는 회색이고 사진은 숨는다. 받으면 사진이 다 나타난 뒤 걷힌다', () => {
       const { container } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />);
       const img = container.querySelector('img')!;
       expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
       expect(img).toHaveAttribute('data-pending');
 
       fireEvent.load(img);
-      expect(screen.queryByTestId('thumb-loading')).toBeNull();
       expect(img).not.toHaveAttribute('data-pending');
+      // 사진이 나타나는 0.2초 동안은 아래에 남는다: 바로 걷으면 칸 바탕이 비쳐 한 번 꺼졌다 켜진다
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
     });
 
     it('1분 갱신으로 주소가 바뀌어도 다시 반짝이지 않는다: 새 사진을 받는 동안 앞 사진을 그대로 둔다', () => {
@@ -1313,6 +1318,9 @@ describe('LiveNowBand', () => {
         <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />,
       );
       fireEvent.load(container.querySelector('img')!);
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
 
       const next = SHOT.replace('stream-1.jpg', 'stream-1-b.jpg');
       rerender(<LiveNowBand live={{ ...LIVE, thumbnailUrl: next }} />);

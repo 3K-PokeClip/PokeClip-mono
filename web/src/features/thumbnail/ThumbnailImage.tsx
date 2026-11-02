@@ -4,6 +4,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { pickThumbnailUrl, STILL_REFRESH_MS } from './thumbnailUrl';
 import styles from './ThumbnailImage.module.css';
 
+/** placeholder를 사진 아래에 남겨 두는 시간. 사진이 나타나는 시간(ThumbnailImage.module.css의 0.2s)에 여유를 더했다 */
+const FADE_MS = 250;
+
 // 썸네일 칸 안의 사진(POK-277). 사진이 없거나 못 받으면(만료·삭제) 원래 자리표시(fallback)를 그대로 보인다.
 // 주소가 미리서명이고 크기가 제각각이라 next/image가 아니라 img다(Avatar와 같은 판단).
 export function ThumbnailImage({
@@ -30,8 +33,9 @@ export function ThumbnailImage({
 }) {
   const [shown, setShown] = useState<string | null>(src ?? null);
   const [errored, setErrored] = useState(false);
-  // 이 img가 사진을 한 번이라도 그렸는가. 자리표시로 내려갔다(사진 없음 · 못 받음) 다시 올라오면 새 img라 처음부터 기다린다
-  const [painted, setPainted] = useState(false);
+  // 이 img의 첫 사진: 받는 중(wait, 사진은 숨는다) → 나타나는 중(fade, placeholder는 사진 아래에 남는다) → 다 나타남(done).
+  // 자리표시로 내려갔다(사진 없음 · 못 받음) 다시 올라오면 새 img라 처음부터 기다린다
+  const [phase, setPhase] = useState<'wait' | 'fade' | 'done'>('wait');
   // 못 받은 뒤에는 이어 쓰기를 하지 않고 들어온 주소로 바로 바꾼다. 같은 사진의 새 서명이 와도 보던(실패한) 주소를 붙잡으면
   // 일시 오류 하나로 갱신 시간(최대 50분)까지 자리표시에 머문다(로컬 리뷰 1라운드)
   useEffect(() => {
@@ -45,8 +49,14 @@ export function ThumbnailImage({
   }, [shown]);
   const hasImg = Boolean(shown) && !errored;
   useEffect(() => {
-    if (!hasImg) setPainted(false);
+    if (!hasImg) setPhase('wait');
   }, [hasImg]);
+  // 사진이 다 나타난 뒤에 placeholder를 걷는다. 받자마자 걷으면 사진이 투명한 동안 칸 바탕이 비쳐 한 번 꺼졌다 켜진다(PR #465 리뷰)
+  useEffect(() => {
+    if (phase !== 'fade') return;
+    const timer = window.setTimeout(() => setPhase('done'), FADE_MS);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
   if (!shown || errored) {
     // 첫 칸은 placeholder 자리다. 사진이 와도 같은 칸에 남아 같은 노드로 이어진다
     const awaiting = pending && !errored && placeholder !== undefined;
@@ -57,10 +67,11 @@ export function ThumbnailImage({
       </>
     );
   }
-  const waiting = placeholder !== undefined && !painted;
+  const layered = placeholder !== undefined;
+  const waiting = layered && phase === 'wait';
   return (
     <>
-      {waiting ? placeholder : null}
+      {layered && phase !== 'done' ? placeholder : null}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         className={styles.img}
@@ -68,7 +79,8 @@ export function ThumbnailImage({
         src={shown}
         alt=""
         loading="lazy"
-        onLoad={() => setPainted(true)}
+        // 나타날 placeholder가 없으면 바로 끝이다(타이머를 걸지 않는다)
+        onLoad={() => setPhase((p) => (p !== 'wait' ? p : layered ? 'fade' : 'done'))}
         onError={() => setErrored(true)}
       />
     </>
