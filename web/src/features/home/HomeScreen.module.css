@@ -599,6 +599,12 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 사진을 받는 동안 칸 전체를 덮는 반짝이는 회색(Thumb shimmer). Skeleton의 position: relative를 이기려고 두 단계로 쓴다 */
+.thumb .thumbLoading {
+  position: absolute;
+  inset: 0;
+}
+
 .overlayPillTopLeft {
   position: absolute;
   top: calc(7 * var(--pc-u));

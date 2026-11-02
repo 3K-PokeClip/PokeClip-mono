@@ -68,6 +68,11 @@ export interface LiveNow {
   completedClips: number | null;
   /** 최신 방송 화면 사진(POK-277). 아직 없으면 null */
   thumbnailUrl?: string | null;
+  /**
+   * 방송 시작에서 PHOTO_WAIT_MS가 지났다. 그 전에 사진이 없으면 첫 사진을 찍는 중이라 영상 칸을 반짝이는 회색으로 두고, 지난 뒤에도
+   * 없으면 방송 아이콘 자리표시로 돌아간다(끝없이 번쩍이면 곧 온다고 읽힌다, POK-449와 같은 판단). 없으면(옛 값) 기다리지 않는다
+   */
+  photoLate?: boolean;
 }
 
 export type VodBadge =
@@ -143,6 +148,11 @@ const PAST_LIST_MS = 60_000;
 const LIBRARY_POLL_MS = 60_000;
 /** 방송마다 카드를 읽는 동시 수 */
 const CARD_READ_PARALLEL = 6;
+/**
+ * 라이브 첫 사진을 기다리는 시한. 서버는 조각이 올라온 뒤(약 33초) 1분 순회로 사진을 찍고(일꾼 약 4초), 홈은 10초마다 읽는다.
+ * 그래서 방송 시작에서 2분 가까이 걸릴 수 있어 방송 정보 시한(2분)보다 넉넉히 잡는다
+ */
+const PHOTO_WAIT_MS = 3 * 60_000;
 const PAST_LIMIT = 8;
 const EXPIRING_WINDOW_DAYS = 7;
 const DAY_MS = 86_400_000;
@@ -343,6 +353,8 @@ async function loadHome(
       detectedCards: cardCountOf(liveBroadcast.streamId),
       completedClips: null,
       thumbnailUrl: liveBroadcast.thumbnailUrl ?? null,
+      // 시작 시각을 모르면 기다릴 기준이 없어 처음부터 자리표시다(infoLate와 같은 갈래)
+      photoLate: startedAtMs === null || now - startedAtMs >= PHOTO_WAIT_MS,
     };
   }
 

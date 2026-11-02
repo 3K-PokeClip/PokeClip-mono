@@ -16,7 +16,8 @@ import type { LiveNow } from './useHomeMockState';
 // 「방송 정보를 받아 오고 있어요」 한 줄을 적는다(시안 (가)). 아무 정보도 없으면 영상 칸 배지도 「연결 중」이다. 방송 시작에서
 // 2분(INFO_WAIT_MS)이 지나도 비어 있으면 막대를 걷고 못 받았다고 적는다: 끝없이 번쩍이면 곧 온다고 읽힌다
 //
-// LIVE 배지의 경과는 시작 시각으로 매초 센다(LiveUptime)
+// 영상 칸도 같다. 사진을 내려받는 동안, 그리고 방송 직후 첫 사진을 찍는 동안(photoLate 전) 칸 전체가 반짝이는 회색이다. 시한이
+// 지나도 사진이 없으면 방송 아이콘으로 돌아간다. LIVE 배지의 경과는 시작 시각으로 매초 센다(LiveUptime)
 export function LiveNowBand({ live }: { live: LiveNow }) {
   const dashboardHref = `/broadcast/livenow?stream=${encodeURIComponent(live.streamId)}`;
   const missing = live.title === null || live.platform === null || live.viewers === null;
@@ -34,6 +35,8 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
           label={<Radio size={30} />}
           src={live.thumbnailUrl}
           refreshMs={LIVE_REFRESH_MS}
+          shimmer
+          photoPending={live.photoLate === false}
           className={styles.liveThumb}
         >
           {connecting ? (

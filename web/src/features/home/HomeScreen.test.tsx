@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1293,6 +1293,51 @@ describe('LiveNowBand', () => {
     // 자리표시는 방송 아이콘이다: 「라이브 방송 화면」 같은 글자는 진짜 값처럼 읽혔다(POK-449)
     expect(container.querySelector('svg')).not.toBeNull();
     expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
+  });
+
+  describe('사진 로딩', () => {
+    it('사진을 다 받기 전에는 칸이 반짝이는 회색이고 사진은 숨는다. 받으면 걷힌다', () => {
+      const { container } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />);
+      const img = container.querySelector('img')!;
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      expect(img).toHaveAttribute('data-pending');
+
+      fireEvent.load(img);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(img).not.toHaveAttribute('data-pending');
+    });
+
+    it('1분 갱신으로 주소가 바뀌어도 다시 반짝이지 않는다: 새 사진을 받는 동안 앞 사진을 그대로 둔다', () => {
+      const { container, rerender } = render(
+        <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />,
+      );
+      fireEvent.load(container.querySelector('img')!);
+
+      const next = SHOT.replace('stream-1.jpg', 'stream-1-b.jpg');
+      rerender(<LiveNowBand live={{ ...LIVE, thumbnailUrl: next }} />);
+      expect(container.querySelector('img')).toHaveAttribute('src', next);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
+    });
+
+    it('방송 직후 첫 사진을 찍는 동안(시한 전)은 아이콘 대신 반짝이는 회색, 시한이 지나면 아이콘이다', () => {
+      const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, photoLate: false }} />);
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      expect(container.querySelector('svg')).toBeNull();
+
+      rerender(<LiveNowBand live={{ ...LIVE, photoLate: true }} />);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('svg')).not.toBeNull();
+    });
+
+    it('사진을 못 받으면 반짝이지 않고 아이콘으로 돌아간다', () => {
+      const { container } = render(
+        <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT, photoLate: false }} />,
+      );
+      fireEvent.error(container.querySelector('img')!);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('svg')).not.toBeNull();
+    });
   });
 
   describe('LIVE 경과', () => {
