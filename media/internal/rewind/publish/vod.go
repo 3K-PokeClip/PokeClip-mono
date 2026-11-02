@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -113,7 +114,7 @@ const vodStateSQL = `SELECT vod_state FROM stream_sessions WHERE session_id = $1
 
 // FreezeVOD 는 닫힌 사슬의 VOD 문서를 IfAbsent 로 한 번 쓰고 사슬 전 세션의 vod_* 를 확정한다(phase 3).
 // 새 URL 의 새 문서라 기존 목록의 변경이 아니다. 412 면 Head 의 pc-body-sha256 이
-// 재렌더 값과 같을 때만 채택한다.
+// 재렌더 값과 같을 때, 또는 저장된 본문이 조각 단위로 같은 옛 판(/dvr URI)일 때만 채택한다(adopt).
 //
 // chain 의 StreamID · Tail · SessionIDs 를 쓴다(SessionIDs 는 사슬을 닫은 집합 — 장부와 다르면 실패). abandon 은 정산 창이
 // 끝났는가다 — 참이면 미착지 행을 GAP 줄로 싣고(settle_deadline) 거짓이면 미착지 행이 있을 때 재시도다. 문서는
@@ -326,7 +327,7 @@ func (v *vodJob) write(ctx context.Context, l index.ChainLedger, plan vodPlan) F
 		err = checkETag(etag)
 	}
 	if errors.Is(err, ErrPreconditionFailed) {
-		etag, err = v.adopt(ctx, sum)
+		etag, sum, err = v.adopt(ctx, sum, body)
 		if err != nil {
 			return v.adoptFailed(err)
 		}
@@ -340,16 +341,23 @@ func (v *vodJob) write(ctx context.Context, l index.ChainLedger, plan vodPlan) F
 	return v.confirm(ctx, result, &plan, etag, sum[:])
 }
 
+// vodAdoptedLegacyLog 는 옛 판 채택의 신호다(WARN · stream · key · session) — 그 VOD 가 이관 대상이 됐다(설계 r7 4-9).
+const vodAdoptedLegacyLog = "vod_adopted_legacy"
+
 // errVODConflict 는 412 뒤 Head 의 본문 sha 가 다시 렌더한 본문과 다르다는 뜻이다(D7 vod_conflict).
 var errVODConflict = errors.New("publish: VOD 키에 다른 본문이 있다")
 
-// adopt 는 412 뒤 Head 로 저장된 판을 본다 — pc-body-sha256 이 sum 과 같으면 그 판의 ETag 를 돌려준다(D7 채택).
-func (v *vodJob) adopt(ctx context.Context, sum [sha256.Size]byte) (string, error) {
+// errAdoptGet 은 옛 판 채택이 저장된 본문을 읽지 못했다는 뜻이다 — 결과를 모르니 재시도다.
+var errAdoptGet = errors.New("publish: 412 뒤 VOD 본문 읽기 실패")
+
+// adopt 는 412 뒤 Head 로 저장된 판을 본다 — pc-body-sha256 이 sum 과 같으면 그 판의 ETag 를 돌려준다(D7 채택). 다르면
+// 옛 판 채택(adoptLegacy)을 본다. 돌려준 sha 는 확정할 판의 본문 sha 다. body 는 다시 렌더한 본문(sum 의 원본)이다.
+func (v *vodJob) adopt(ctx context.Context, sum [sha256.Size]byte, body []byte) (string, [sha256.Size]byte, error) {
 	hctx, cancel := context.WithTimeout(ctx, v.p.opt.PublishTimeout)
 	stat, err := v.p.store.Head(hctx, v.key)
 	cancel()
 	if err != nil {
-		return "", err
+		return "", sum, err
 	}
 	got, err := metaSHA256(stat.Meta)
 	if err == nil {
@@ -357,19 +365,70 @@ func (v *vodJob) adopt(ctx context.Context, sum [sha256.Size]byte) (string, erro
 	}
 	switch {
 	case !stat.Exists:
-		return "", fmt.Errorf("publish: 412 뒤 VOD 키 %q 에 객체가 없다", v.key)
+		return "", sum, fmt.Errorf("publish: 412 뒤 VOD 키 %q 에 객체가 없다", v.key)
 	case err != nil:
-		return "", fmt.Errorf("%w — 저장된 판의 메타를 읽을 수 없다: %v", errVODConflict, err)
+		return "", sum, fmt.Errorf("%w — 저장된 판의 메타를 읽을 수 없다: %v", errVODConflict, err)
 	case got != sum:
-		return "", errVODConflict
+		return v.adoptLegacy(ctx, sum, body)
 	}
-	return stat.ETag, nil
+	return stat.ETag, sum, nil
 }
 
-// adoptFailed 는 채택 실패의 결과다 — 다른 본문이면 실패(덮어쓰지 않는다), Head 를 못 읽었으면 재시도다.
+// adoptLegacy 는 저장된 판이 지금 렌더한 본문 body 의 옛 판인지 본다(설계 r7 4-9 「교체 순간의 경합」 · E85). 교체
+// 겹침(media-swap 정상 교체 — 옛 이미지 A 와 새 이미지가 하루까지 함께 뜸) 동안 사본 이전 이미지 A 가 같은 사슬의 VOD 를
+// 먼저 IfAbsent 로 올렸으면 그 본문의 조각 · MAP URI 는 /dvr 이라 sha 가 다르다. Get 한 본문이 옛 판이고 조각 단위로 body
+// 와 같으면 그 본문의 sha 와 같은 응답의 ETag 로 확정하고 vod_adopted_legacy 를 낸다 — 그 VOD 는 옛 판으로 확정되고
+// 이관이 새 판으로 옮긴다. 아니면 지금처럼 errVODConflict 다(덮어쓰지 않는다).
+//
+// 반대 방향은 여기서 막지 못한다(E96): 새 이미지가 새 판을 먼저 올리면 A 는 412 뒤 자기 렌더와 sha 가 달라 vod_conflict
+// → freeze_failed 로 간다. 그 판정은 A(옛 이미지)의 코드라 이 갈래로 고칠 수 없다 — 교체 런북이 A 사이드카를 일찍 멈추게
+// 권한다.
+func (v *vodJob) adoptLegacy(ctx context.Context, sum [sha256.Size]byte, body []byte) (string, [sha256.Size]byte, error) {
+	gctx, cancel := context.WithTimeout(ctx, v.p.opt.PublishTimeout)
+	stored, etag, err := v.p.store.Get(gctx, v.key)
+	cancel()
+	switch {
+	case errors.Is(err, errBodyOverLimit):
+		return "", sum, fmt.Errorf("%w — %v", errVODConflict, err) // 축의 상한을 넘는 본문은 우리가 쓴 판이 아니다(Store.Get)
+	case err != nil:
+		return "", sum, fmt.Errorf("%w: %w", errAdoptGet, err)
+	}
+	if err := checkETag(etag); err != nil {
+		return "", sum, fmt.Errorf("%w — 저장된 판의 ETag 를 읽을 수 없다: %v", errVODConflict, err)
+	}
+	if err := v.checkLegacy(stored, body); err != nil {
+		return "", sum, err
+	}
+	v.p.log.Log(ctx, slog.LevelWarn, vodAdoptedLegacyLog, "stream", v.chain.StreamID, "key", v.key, "session", v.chain.SessionIDs[0])
+	return etag, sha256.Sum256(stored), nil
+}
+
+// checkLegacy 는 stored 가 body 의 옛 판인가다 — stored 의 URI 앞머리가 전부 /dvr 이고 조각 열(seq · 키 · MAP · GAP ·
+// DISCONTINUITY)이 body 와 같아야 한다. 아니면 errVODConflict 다.
+func (v *vodJob) checkLegacy(stored, body []byte) error {
+	old, err := parseVODSegments(stored, v.p.opt.BaseURL)
+	if err != nil {
+		return fmt.Errorf("%w — 저장된 본문: %v", errVODConflict, err)
+	}
+	cur, err := parseVODSegments(body, v.p.opt.BaseURL)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%w — 렌더한 본문: %v", errVODConflict, err)
+	case old.ns != vodNSLegacy:
+		return errVODConflict
+	case !old.sameSegments(cur):
+		return fmt.Errorf("%w — 옛 판이지만 조각 열이 다르다", errVODConflict)
+	}
+	return nil
+}
+
+// adoptFailed 는 채택 실패의 결과다 — 다른 본문이면 실패(덮어쓰지 않는다), Head · Get 을 못 읽었으면 재시도다.
 func (v *vodJob) adoptFailed(err error) FreezeOutcome {
-	if errors.Is(err, errVODConflict) {
+	switch {
+	case errors.Is(err, errVODConflict):
 		return vodFailed(vodConflict, err)
+	case errors.Is(err, errAdoptGet):
+		return vodRetry(freezeGetFailed, err)
 	}
 	return vodRetry(freezeHeadFailed, err)
 }
