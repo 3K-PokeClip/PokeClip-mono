@@ -7,6 +7,7 @@
 #   않는 것」) 보존할 문장이 없고, 작업 역할을 막는 Deny 도 두지 않는다
 #   (CONTRACT-runtime.md 「작업 역할 대상」).
 # - 앞 루트 출력의 꼴이 어긋나면 terraform_data.remote_contract 가 멈춘다.
+# - 두 원격 상태가 각자 자기 루트의 상태 키를 읽는다(runtime · edge).
 #
 # 앞 루트 상태는 override_data 로 흉내 낸다(AWS 호출 0). 버킷 이름 · ARN ·
 # 계정 ID(111122223333)는 가짜 값이다. 버킷 이름을 1단 기본값과 다르게 둬,
@@ -42,6 +43,19 @@ run "reads_runtime_and_edge_state_keys" {
       var.state_keys.edge == "prod/edge/terraform.tfstate"
     )
     error_message = "앞 루트 상태 키 기본값이 runtime · edge 의 backend key 와 다르다."
+  }
+
+  # 기본값만 보면 데이터 소스가 다른 키를 읽어도(edge 에 runtime 키를 잇는
+  # 등) 통과한다. override_data 는 outputs 만 바꾸고 config 는 설정 그대로라
+  # 연결을 여기서 본다.
+  assert {
+    condition     = data.terraform_remote_state.runtime.config.key == "prod/runtime/terraform.tfstate"
+    error_message = "runtime 원격 상태가 runtime 상태 키를 읽지 않는다."
+  }
+
+  assert {
+    condition     = data.terraform_remote_state.edge.config.key == "prod/edge/terraform.tfstate"
+    error_message = "edge 원격 상태가 edge 상태 키를 읽지 않는다."
   }
 }
 

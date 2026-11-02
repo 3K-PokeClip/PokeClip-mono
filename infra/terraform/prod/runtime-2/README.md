@@ -95,6 +95,12 @@ KVS 값과는 무관해 A1 · A2 멈춤 자리에서도 합니다.
     쓰기 · 잠금(`s3:ListBucket` · `GetObject` · `PutObject` ·
     `DeleteObject`)이고, 모두 `O7f` 묶음에 있습니다. 2-3 판정 대상에는 이
     루트의 상태 객체(`state-object-runtime-2` — 첫 단계 O7f)가 있습니다.
+1.  **2-3 재판정**: apply 직전에 이 루트가 든 커밋에서 O7f 의 2-3 판정
+    (`principal-check.sh O7f` — 단계 직전 점검 런북 「2-3 판정」)을 다시
+    돌립니다. `state-object-runtime-2` 행은 이 루트와 함께 들어와, O7f 의
+    0 을 그 전 커밋으로 돌렸으면 이 행은 판정을 거치지 않았습니다. 시작
+    기준은 0 과 같습니다 — 멈춤 0 이고, 판정 불가는 0 이거나 모두 kty
+    「진행」 기록이 있어야 합니다.
 1.  **init**: `backend.hcl.example` 을 `backend.hcl` 로 복사해 상태 버킷을
     넣습니다(추적하지 않음).
 
@@ -114,9 +120,9 @@ KVS 값과는 무관해 A1 · A2 멈춤 자리에서도 합니다.
 1.  **1단 무변경 확인**: 다음 1단 plan(`prod/runtime`)에서
     `aws_s3_bucket.rewind` 의 변경이 0 이어야 합니다. 변경이 보이면 1단이
     이 정책을 지우려는 것이니 apply 하지 않고 멈춥니다.
-1.  **동작 확인**: 재생 경로 확인은 엣지 시험 런북 「런타임 뒤 시험」
-    (O7f 의 12)이 합니다 — `/dvr/*` · `/vod/*` 는 서명 쿠키가 있어야 해
-    (키 그룹) 이 apply 직후 단독으로 보지 않습니다.
+1.  **동작 확인**: 재생 경로 확인은 엣지 시험 런북의 T13(rewind 객체
+    읽기 — 「런타임 뒤 시험」, O7f 의 12)이 합니다. `/dvr/*` · `/vod/*` 는
+    서명 쿠키가 있어야 해(키 그룹) 이 apply 직후 단독으로 보지 않습니다.
 
 ### 2-3 판정에 미치는 영향
 
@@ -132,11 +138,59 @@ kty 가 `approvals.tsv` 로 정합니다(단계 직전 점검 런북 「2-3 판�
 
 이 루트는 edge 를 읽으므로 **edge 보다 먼저** 내립니다 —
 [prod 철거 런북](../../runbooks/prod-teardown.md) 「지키는 순서」 2 가 이
-루트를 먼저 내릴 다른 소비 루트로 셉니다(그 런북은 이 루트를 내리지
-않습니다). `terraform plan -destroy` 의 기대값은 `aws_s3_bucket_policy.rewind`
-· `terraform_data.remote_contract` 삭제 둘이고, 내린 뒤 `/dvr/*` ·
-`/vod/*` 는 버킷에서 403 입니다. 삭제는 `s3:DeleteBucketPolicy` 를 부르고,
-단계 직전 점검에는 철거 단계 묶음이 아직 없습니다(철거 런북 「시작 전」).
+루트를 먼저 내릴 다른 소비 루트로 셉니다. 그 런북은 이 루트를 내리지
+않으니 아래를 따릅니다. 실행자 · 출력 취급은 그 런북과 같습니다(kty 로컬
+터미널 · 출력을 세션 · 문서에 붙여 넣지 않음).
+
+**코드를 되돌리기(revert) 전에** 끝냅니다. plan 만 만들고 revert 하면
+정책이 관리 밖에 남습니다.
+
+1.  **destroy plan**:
+
+    ```shell
+    terraform -chdir=infra/terraform/prod/runtime-2 plan -destroy -out=runtime-2-destroy.plan
+    ```
+
+    기대값은 `Plan: 0 to add, 0 to change, 2 to destroy.` 입니다 —
+    `aws_s3_bucket_policy.rewind` · `terraform_data.remote_contract` 삭제
+    둘. 다르면 apply 하지 않고 kty 에게 보고합니다.
+1.  **apply**(kty 승인 뒤):
+
+    ```shell
+    terraform -chdir=infra/terraform/prod/runtime-2 apply runtime-2-destroy.plan
+    ```
+
+    삭제는 `s3:DeleteBucketPolicy` 를 부릅니다. 단계 직전 점검에는 철거
+    단계 묶음이 아직 없습니다(철거 런북 「시작 전」). `AccessDenied` 로
+    실패하면 다시 시도하지 않고 kty 에게 보고합니다(계획 3절 「SCP 멈춤
+    규칙」).
+1.  **완료 확인**: 판정은 `state list` 가 빈 것으로 합니다. 정책이 실제로
+    없어졌는지는 `get-bucket-policy` 가 `NoSuchBucketPolicy` 오류로 끝나는
+    것으로 보강합니다(읽기 — 정책 본문이 나오면 계정 ID 가 든 ARN 이 있어
+    표준 출력은 버립니다).
+
+    ```shell
+    terraform -chdir=infra/terraform/prod/runtime-2 state list   # 출력 없음
+    bucket="$(terraform -chdir=infra/terraform/prod/runtime output -raw rewind_bucket_name)"
+    aws s3api get-bucket-policy --bucket "${bucket}" > /dev/null
+    # 0 이 아닌 종료 · 오류 문구에 NoSuchBucketPolicy
+    ```
+
+    버킷에서 `/dvr/*` · `/vod/*` 가 403 인 것으로는 가리지 못합니다. 허용
+    주체가 CloudFront 서비스뿐이라 S3 직접 요청은 정책이 있어도 403 이고,
+    CDN 도 쿠키가 없으면 키 그룹이 먼저 403 을 냅니다.
+1.  **plan 파일 삭제**: `rm -f
+    infra/terraform/prod/runtime-2/runtime-2-destroy.plan`(계정 ID 가 든
+    ARN).
+1.  **revert**: 그다음 머지 커밋을 `git revert -m 1 <머지 커밋>` 으로
+    되돌립니다.
+
+**남는 상태 객체**: destroy 는 상태 객체를 지우지 않아, 상태 버킷에
+`prod/runtime-2/terraform.tfstate`(자원 0)가 남습니다. 이 절차는 그것을
+지우지 않습니다 — 지우는 것은 상태 버킷 쓰기라 따로 kty 승인이 필요합니다.
+뒤에 prod 철거 런북을 돌리면 「시작 전」 4(의존 루트 확인)가 이 키에서
+멈춥니다(보수 방향). 그때 위 완료 확인의 빈 `state list` 를 근거로 kty
+에게 보고하고, 지울지는 kty 가 정합니다.
 
 ## 검증
 
@@ -147,5 +201,13 @@ terraform -chdir=infra/terraform/prod/runtime-2 test
 ```
 
 시험(`tests/runtime_2.tftest.hcl`)은 mock provider · `override_data` 로 AWS
-를 부르지 않습니다. 허용문 전체 · 문장 수 · Deny 부재 · 조건이 edge 출력을
-따름 · 앞 루트 출력 꼴 위반 여섯 가지를 단언합니다.
+를 부르지 않습니다. run 은 11개입니다.
+
+| run 수 | 단언 |
+|---|---|
+| 1 | 상태 키 — 변수 기본값과 두 원격 상태의 `config.key` |
+| 1 | 정책이 1단 출력의 버킷에 붙음 |
+| 1 | 허용문 전체 |
+| 1 | 조건이 edge 출력을 따름 |
+| 1 | 문장 수 · Deny 부재 |
+| 6 | 앞 루트 출력 꼴 위반(edge 셋 · runtime 셋) |
