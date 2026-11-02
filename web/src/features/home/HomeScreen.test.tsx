@@ -5,6 +5,7 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { LiveNowBand } from '@/features/home/LiveNowBand';
+import { LiveUptime } from '@/features/home/LiveUptime';
 import { TipCard, TIPS } from '@/features/home/TipCard';
 import { daysAgoLabel, weekStarts, type LiveNow } from '@/features/home/useHomeMockState';
 import { useOnboardingStore } from '@/stores/onboarding';
@@ -1342,14 +1343,20 @@ describe('LiveNowBand', () => {
 
   describe('LIVE 경과', () => {
     it('목록을 다시 읽지 않아도 매초 1초씩 오른다(건너뛰지 않는다)', () => {
+      // 초 경계에서 0.6초 지난 때 연다. 1초 간격(setInterval)으로 세면 1초 뒤에야 바뀌어 아래 0.415초 단언에서 걸린다
+      vi.setSystemTime(LIVE_NOW + 600);
       render(<LiveNowBand live={LIVE} />);
       expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
-      // 초 경계 바로 뒤에 깬다: 경계 전에는 그대로다
+      // 다음 초 경계(0.4초 뒤) 바로 뒤에 깬다: 경계 전에는 그대로다
       act(() => {
-        vi.advanceTimersByTime(100);
+        vi.advanceTimersByTime(399);
       });
       expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
-      for (const label of ['1:24:04', '1:24:05', '1:24:06']) {
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+      expect(screen.getByText('LIVE 1:24:04')).toBeInTheDocument();
+      for (const label of ['1:24:05', '1:24:06', '1:24:07']) {
         act(() => {
           vi.advanceTimersByTime(1_000);
         });
@@ -1358,7 +1365,7 @@ describe('LiveNowBand', () => {
       act(() => {
         vi.advanceTimersByTime(60_000);
       });
-      expect(screen.getByText('LIVE 1:25:06')).toBeInTheDocument();
+      expect(screen.getByText('LIVE 1:25:07')).toBeInTheDocument();
     });
 
     it('탭이 숨으면 멈추고, 돌아오면 바로 지금 경과로 맞춘다', () => {
@@ -1386,6 +1393,12 @@ describe('LiveNowBand', () => {
         vi.advanceTimersByTime(3_000);
       });
       expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
+    });
+
+    it('시작 시각을 모르면 타이머를 걸지 않는다: 글자가 그대로여도 매초 다시 그리지 않게', () => {
+      // 띠의 다른 부품이 건 타이머와 섞이지 않게 배지 글자만 연다
+      render(<LiveUptime startedAtMs={null} />);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it('시작 시각이 나중에 와도(모름 → 앎) 다음 초를 기다리지 않고 바로 지금 경과로 적는다', () => {
