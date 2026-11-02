@@ -36,13 +36,14 @@ func newFakeLedger() *fakeLedger {
 		invalid: map[string]bool{}, deleted: map[string][]int64{}}
 }
 
-// put 은 스트림에 대상 행 n 개를 넣는다(seq 0..n-1 · 키 둘).
+// put 은 스트림에 대상 행 n 개를 넣는다(seq 0..n-1 · 키 둘). ③ 키는 playback.SegKey 꼴이다 — 만료가 그 키에서 VOD 사본
+// 키를 파생한다(POK-525).
 func (l *fakeLedger) put(stream string, n int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for i := range n {
 		l.rows[stream] = append(l.rows[stream], index.ExpiryRow{Seq: int64(i), S3Key: fmt.Sprintf("%s/a/%d", stream, i),
-			PlaybackS3Key: fmt.Sprintf("%s/p/%d", stream, i), SessionID: stream + "-s"})
+			PlaybackS3Key: fmt.Sprintf("dvr/%s/seg/%06d.m4s", stream, i), SessionID: stream + "-s"})
 	}
 }
 

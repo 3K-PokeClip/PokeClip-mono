@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
 // 묶음 크기 — S3 DeleteObjects 한 요청의 키 상한(1000)과 장부 한 트랜잭션의 행 상한(index.ExpiryDeleteBatch).
@@ -77,7 +78,7 @@ func (e *Expirer) deleteBroadcast(ctx context.Context, b Broadcast) (string, err
 	if err != nil {
 		return "documents", err
 	}
-	if err := e.deleteDocuments(ctx, docs); err != nil {
+	if err := e.deleteDocuments(ctx, q.StreamID, docs); err != nil {
 		return "documents", err
 	}
 	seqs, keyErr := e.deleteSegmentKeys(ctx, targets)
@@ -108,16 +109,35 @@ func (e *Expirer) signalCutoff(stream string, valid bool) {
 	}
 }
 
-// targets 는 대상 행만 고르고, 건너뛴 행은 사유별로 WARN 한 줄씩 낸다.
-func (e *Expirer) targets(stream string, rows []index.ExpiryRow) []index.ExpiryRow {
-	out := make([]index.ExpiryRow, 0, len(rows))
+// skipVODPathInvalid 는 ③ 키가 그 행의 조각 키가 아니라 VOD 사본 키를 파생하지 못한 행의 건너뜀 사유다(POK-525).
+const skipVODPathInvalid = "vod_path_invalid"
+
+// target 은 지울 조각 행 하나와 그 행의 객체 키다 — ② · ③ · ③ 의 VOD 사본(③ 이 없으면 ② 하나).
+type target struct {
+	seq  int64
+	keys []string
+}
+
+// targets 는 대상 행만 고르고, 건너뛴 행은 사유별로 WARN 한 줄씩 낸다. 사본 키를 파생하지 못한 행도 건너뛴다 — 행을
+// 지우면 그 사본 키를 다시 알 길이 없다.
+func (e *Expirer) targets(stream string, rows []index.ExpiryRow) []target {
+	out := make([]target, 0, len(rows))
 	skipped := map[string]int{}
 	for _, r := range rows {
 		if r.Skip != "" {
 			skipped[r.Skip]++
 			continue
 		}
-		out = append(out, r)
+		t := target{seq: r.Seq, keys: []string{r.S3Key}}
+		if r.PlaybackS3Key != "" {
+			vod, err := copyKey(r.PlaybackS3Key, playback.VODObject{StreamID: stream, Seq: r.Seq})
+			if err != nil {
+				skipped[skipVODPathInvalid]++
+				continue
+			}
+			t.keys = append(t.keys, r.PlaybackS3Key, vod)
+		}
+		out = append(out, t)
 	}
 	for reason, n := range skipped {
 		e.log.Warn("expiry_skipped", "reason", reason, "stream_id", stream, "rows", n)
@@ -125,51 +145,90 @@ func (e *Expirer) targets(stream string, rows []index.ExpiryRow) []index.ExpiryR
 	return out
 }
 
-// deleteDocuments 는 문서를 종류마다 따로 지운다(docs 는 지우는 순서 — dvr → vod → init). 한 종류에서 하나라도
-// 실패하면 뒤 종류는 지우지 않는다 — 남은 재생 목록이 지워진 init 을 가리키면 MAP 404 다(설계 7절 단계 3).
-func (e *Expirer) deleteDocuments(ctx context.Context, docs []index.ExpiryDocument) error {
+// copyKey 는 ③ 조각 · init 키 key 의 VOD 사본 키다(playback.VODPath). 사본이 want(그 행의 스트림 · seq 또는 그 세션의
+// 스트림 · 세션)를 가리키지 않으면 오류다 — 만료는 장부 행에서 파생한 그 행 · 그 세션의 사본만 지운다.
+func copyKey(key string, want playback.VODObject) (string, error) {
+	vod, err := playback.VODPath(key)
+	if err != nil {
+		return "", err
+	}
+	if got, err := playback.ParseVODPath(vod); err != nil || got != want {
+		return "", fmt.Errorf("expiry: 키 %.64q 의 사본 %.64q 는 그 행 · 세션(%+v)의 사본이 아니다", key, vod, want)
+	}
+	return vod, nil
+}
+
+// documentBatches 는 문서 키를 종류마다 한 묶음으로 나눈다(docs 는 지우는 순서 — dvr → vod → init). init 묶음에는
+// init 키마다 그 VOD 사본 키를 더한다. 사본 키를 파생하지 못한 init 이 하나라도 있으면 아무 묶음도 돌려주지 않는다 —
+// init 을 건너뛰고 조각을 지우면 조각 0 이 된 세션 행이 지워져 init · 사본 키를 다시 알 길이 없다.
+func documentBatches(stream string, docs []index.ExpiryDocument) ([][]string, error) {
+	var batches [][]string
 	for start := 0; start < len(docs); {
 		end := start + 1
 		for end < len(docs) && docs[end].Kind == docs[start].Kind {
 			end++
 		}
-		keys := make([]string, 0, end-start)
+		keys := make([]string, 0, 2*(end-start))
 		for _, d := range docs[start:end] {
 			keys = append(keys, d.Key)
+			if d.Kind != index.ExpiryDocInit {
+				continue
+			}
+			vod, err := copyKey(d.Key, playback.VODObject{StreamID: stream, SessionID: d.SessionID})
+			if err != nil {
+				return nil, fmt.Errorf("init 사본 키 파생 실패 session=%q: %w", d.SessionID, err)
+			}
+			keys = append(keys, vod)
 		}
+		batches = append(batches, keys)
+		start = end
+	}
+	return batches, nil
+}
+
+// deleteDocuments 는 문서를 종류마다 따로 지운다(documentBatches). 한 종류에서 하나라도 실패하면 뒤 종류는 지우지
+// 않는다 — 남은 재생 목록이 지워진 init 을 가리키면 MAP 404 다(설계 7절 단계 3).
+func (e *Expirer) deleteDocuments(ctx context.Context, stream string, docs []index.ExpiryDocument) error {
+	batches, err := documentBatches(stream, docs)
+	if err != nil {
+		return err
+	}
+	for _, keys := range batches {
 		if failed, err := e.deleteKeys(ctx, keys); err != nil || len(failed) > 0 {
 			return failedErr(err, failed)
 		}
-		start = end
 	}
 	return nil
 }
 
-// deleteSegmentKeys 는 대상 행의 두 키(s3_key · playback_s3_key)를 지우고, 두 키가 다 지워진 행의 seq 를 돌려준다.
-// 일부 실패는 오류로 함께 돌려준다 — 그 행은 다음 회차에 다시 본다.
-func (e *Expirer) deleteSegmentKeys(ctx context.Context, rows []index.ExpiryRow) ([]int64, error) {
-	keys := make([]string, 0, 2*len(rows))
-	for _, r := range rows {
-		keys = append(keys, r.S3Key)
-		if r.PlaybackS3Key != "" {
-			keys = append(keys, r.PlaybackS3Key)
-		}
+// deleteSegmentKeys 는 대상 행의 키(② · ③ · ③ 의 VOD 사본)를 지우고, 키가 다 지워진 행의 seq 를 돌려준다. 일부
+// 실패는 오류로 함께 돌려준다 — 그 행은 다음 회차에 다시 본다.
+func (e *Expirer) deleteSegmentKeys(ctx context.Context, targets []target) ([]int64, error) {
+	keys := make([]string, 0, 3*len(targets))
+	for _, t := range targets {
+		keys = append(keys, t.keys...)
 	}
 	failed, err := e.deleteKeys(ctx, keys)
-	seqs := make([]int64, 0, len(rows))
-	for _, r := range rows {
-		if _, bad := failed[r.S3Key]; bad {
-			continue
+	seqs := make([]int64, 0, len(targets))
+	for _, t := range targets {
+		if allDeleted(t.keys, failed) {
+			seqs = append(seqs, t.seq)
 		}
-		if _, bad := failed[r.PlaybackS3Key]; bad && r.PlaybackS3Key != "" {
-			continue
-		}
-		seqs = append(seqs, r.Seq)
 	}
 	if err != nil || len(failed) > 0 {
 		return seqs, failedErr(err, failed)
 	}
 	return seqs, nil
+}
+
+// allDeleted 는 keys 가운데 지우지 못한 키(failed)가 하나도 없는가다.
+func allDeleted(keys []string, failed map[string]error) bool {
+	for _, k := range keys {
+		if _, bad := failed[k]; bad {
+			return false
+		}
+	}
+	return true
 }
 
 // deleteKeys 는 키를 objectBatch 단위로 지운다. 요청 자체가 실패하면 그 묶음과 뒤 묶음 키를 모두 실패로 친다.

@@ -30,8 +30,8 @@ func TestSweepDeletesBroadcastInOrder(t *testing.T) {
 		t.Fatalf("상태 표지 %v (live1 한 번 기대)", r.changed)
 	}
 	keys := r.objects.deletedKeys()
-	if len(keys) != 7 || keys[0] != "dvr/live1" {
-		t.Fatalf("객체 삭제 %v (문서 먼저 · 7개 기대)", keys)
+	if len(keys) != 10 || keys[0] != "dvr/live1" {
+		t.Fatalf("객체 삭제 %v (문서 먼저 · 문서 하나 + 행 셋 × 키 셋(② · ③ · ③ 의 VOD 사본) = 10개 기대)", keys)
 	}
 	if got := r.ledger.deletedSeqs("live1"); !slices.Equal(got, []int64{0, 1, 2}) {
 		t.Fatalf("행 삭제 %v", got)
@@ -196,7 +196,7 @@ func TestSweepOneBroadcastFailureDoesNotBlockOthers(t *testing.T) {
 func TestSweepDeletesOnlyRowsWhoseKeysWereDeleted(t *testing.T) {
 	r := newRig(t, nil)
 	r.ledger.put("k", 3)
-	r.objects.fail = func(k string) bool { return k == "k/p/1" }
+	r.objects.fail = func(k string) bool { return k == "dvr/k/seg/000001.m4s" }
 	r.clip.pages[""] = clipPage{items: []clipItem{item("k")}}
 	r.sweep(t)
 	if got := r.ledger.deletedSeqs("k"); !slices.Equal(got, []int64{0, 2}) {
@@ -241,7 +241,7 @@ func TestSweepE2InvalidCutoffAlarmOnceOthersContinue(t *testing.T) {
 		t.Fatal("e3 — 다른 스트림이 지워지지 않았다")
 	}
 	for _, k := range r.objects.deletedKeys() {
-		if strings.HasPrefix(k, "bad/") {
+		if strings.Contains(k, "bad/") {
 			t.Fatalf("e1 — 무효 컷오프 스트림의 객체를 지웠다: %s", k)
 		}
 	}
@@ -293,7 +293,7 @@ func TestSweepSkipsNonTargetRows(t *testing.T) {
 		t.Fatalf("행 삭제 %v", got)
 	}
 	for _, k := range r.objects.deletedKeys() {
-		if strings.HasSuffix(k, "/1") {
+		if strings.HasSuffix(k, "/1") || strings.HasSuffix(k, "/000001.m4s") {
 			t.Fatalf("건너뛸 행의 객체를 지웠다: %s", k)
 		}
 	}
@@ -305,10 +305,10 @@ func TestSweepSkipsNonTargetRows(t *testing.T) {
 // 객체 삭제는 1000 키 단위 · 행 삭제는 500 행 단위로 나눈다.
 func TestSweepBatchesObjectsAndRows(t *testing.T) {
 	r := newRig(t, nil)
-	r.ledger.put("big", 1200) // 키 2400
+	r.ledger.put("big", 1200) // 키 3600(② · ③ · ③ 의 VOD 사본)
 	r.clip.pages[""] = clipPage{items: []clipItem{item("big")}}
 	r.sweep(t)
-	if !slices.Equal(r.objects.batches, []int{1000, 1000, 400}) {
+	if !slices.Equal(r.objects.batches, []int{1000, 1000, 1000, 600}) {
 		t.Fatalf("객체 묶음 %v", r.objects.batches)
 	}
 	n := 0
@@ -450,13 +450,13 @@ func TestSweepDocumentKindsDeleteInOrderAndStopOnFailure(t *testing.T) {
 	docs := []index.ExpiryDocument{
 		{Kind: index.ExpiryDocDVR, SessionID: "x-s", Key: "dvr/x"},
 		{Kind: index.ExpiryDocVOD, SessionID: "x-s", Key: "vod/x"},
-		{Kind: index.ExpiryDocInit, SessionID: "x-s", Key: "init/x"},
+		{Kind: index.ExpiryDocInit, SessionID: "x-s", Key: "dvr/x/init/x-s.mp4"},
 	}
 	for _, tt := range []struct {
 		name, fail string
 		want       []string
 	}{
-		{"모두 성공", "", []string{"dvr/x", "vod/x", "init/x"}},
+		{"모두 성공", "", []string{"dvr/x", "vod/x", "dvr/x/init/x-s.mp4", "vod/x/init/x-s.mp4"}},
 		{"dvr 실패", "dvr/x", nil},
 		{"vod 실패", "vod/x", []string{"dvr/x"}},
 	} {
@@ -469,8 +469,8 @@ func TestSweepDocumentKindsDeleteInOrderAndStopOnFailure(t *testing.T) {
 			if got := r.objects.deletedKeys(); !slices.Equal(got, tt.want) {
 				t.Fatalf("지운 키 %v, want %v", got, tt.want)
 			}
-			if tt.fail == "" && !slices.Equal(r.objects.batches, []int{1, 1, 1}) {
-				t.Fatalf("요청 %v (종류마다 한 요청 — [1 1 1] 기대)", r.objects.batches)
+			if tt.fail == "" && !slices.Equal(r.objects.batches, []int{1, 1, 2}) {
+				t.Fatalf("요청 %v (종류마다 한 요청 · init 묶음에 사본 키 — [1 1 2] 기대)", r.objects.batches)
 			}
 		})
 	}
