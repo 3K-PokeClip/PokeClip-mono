@@ -7,6 +7,7 @@
 //	phase 1   DVR 동결 — 1단 FreezeDVR × 3 → 2단 Endlist × 3 → 3단 freeze_failed · 좌초(freezing 60초 초과)는 좌초 회수
 //	사슬 닫힘 꼬리 · 후속 없음 · init 판정 끝 · (즉시 닫는 사유 ∨ 표식 ∨ 창 지남) → 사슬 전원 vod freezing
 //	phase 3   VOD 동결 — 정산 창(꼬리 ending_at + 15분) 안이면 미착지를 기다리고 지나면 GAP 으로 포기 · 장애 3회 → freeze_failed
+//	          (사본 복사 일시 오류는 창 끝 + 45분 기한 안에서 세지 않는다)
 //	phase 4   dvr · vod 종국 꼬리 → 사슬 전원 ended
 //
 // 발행 꺼짐(S3_BUCKET 빈 값)은 발행 흔적이 없을 때만 PUT 없이 빈 동결로 닫고, 흔적이 있으면 보류한다 — 버킷 있던 판의 /dvr
@@ -86,13 +87,25 @@ type Decision struct {
 	Step    Step
 	Abandon bool
 	Hold    string
+	// DeferUntil 은 StepFreezeVOD 에서만 뜻이 있다 — 영값이 아니면 이 시각까지 사본 복사 대기를 세지 않는다(EndingAt +
+	// SettleWindow + VODDeferLimit). 판정 시각이 그 뒤면 영값이다.
+	DeferUntil time.Time
+}
+
+// Deferred 는 VOD 걸음의 복사 일시 오류를 판정 결과로 옮긴다 — DeferUntil 이 있으면 OutcomeDeferred(세지 않음), 없으면
+// OutcomeRetry(센다)다.
+func (d Decision) Deferred() Outcome {
+	if d.DeferUntil.IsZero() {
+		return OutcomeRetry
+	}
+	return OutcomeDeferred
 }
 
 // Attempts 는 세션 하나의 단별 실패 횟수다 — 루프 메모리에 두고 재기동하면 0 에서 다시 센다.
 type Attempts struct {
 	DVR  int // 1단 FreezeDVR
 	Seal int // 2단 Endlist
-	VOD  int // phase 3 FreezeVOD(정산 대기는 세지 않는다)
+	VOD  int // phase 3 FreezeVOD(정산 대기 · 기한 안 복사 대기는 세지 않는다)
 }
 
 // Outcome 은 걸음 하나의 결과를 판정이 쓰는 꼴로 줄인 것이다(발행 층의 FreezeOutcome 을 차선 작업이 옮긴다).
@@ -103,10 +116,15 @@ const (
 	OutcomeRetry                        // 이번에는 서지 않았다 — 같은 걸음을 다시 한다
 	OutcomeUnsettled                    // VOD 정산 대기(③ 미착지 · 정산 창 안) — 장애가 아니다
 	OutcomeFailed                       // 같은 입력으로 다시 해도 서지 않는다 — 다음 단으로
+	OutcomeDeferred                     // VOD 사본 복사의 일시 오류(기한 안) — 장애가 아니라 세지 않는다(정산 대기와 같은 대우)
 )
 
+// VODDeferLimit 은 정산 창 끝에서 사본 복사 대기를 세지 않고 기다리는 상한이다(kty K8 — 설계 r7 4-3). 지나면 복사 일시
+// 오류도 장애로 세어 MaxAttempts 뒤 freeze_failed 로 닫는다.
+const VODDeferLimit = 45 * time.Minute
+
 // After 는 걸음 step 의 결과 out 을 센다. 재시도는 그 단을 하나 올리고, 실패는 그 단을 상한까지 올려 다음 단으로 넘긴다.
-// 정산 대기 · 성공은 세지 않는다. 좌초 회수 · 3단 · 장부 걸음은 단이 없다(시한 · 재시도를 그 걸음이 스스로 진다).
+// 정산 대기 · 복사 대기(기한 안) · 성공은 세지 않는다. 좌초 회수 · 3단 · 장부 걸음은 단이 없다(시한 · 재시도를 그 걸음이 스스로 진다).
 func (a Attempts) After(step Step, out Outcome, limit int) Attempts {
 	var n *int
 	switch step {
@@ -206,7 +224,9 @@ func nextAfterDVR(s index.EndingSession, a Attempts, o Options) Decision {
 	return Decision{Step: StepMarkEnded}
 }
 
-// nextVOD 는 phase 2 · 3 이다 — 정산 대기는 FreezeVOD(포기 없음)의 unsettled 재시도가 맡는다.
+// nextVOD 는 phase 2 · 3 이다 — 정산 대기는 FreezeVOD(포기 없음)의 unsettled 재시도가 맡는다. 판정 시각이 복사 대기
+// 기한(꼬리 ending_at + 정산 창 + VODDeferLimit) 앞이면 그 기한을 DeferUntil 에 채운다 — 시각은 행의 DB now() 라 재기동 ·
+// 시계 차에 강하다(설계 r7 4-3).
 func nextVOD(s index.EndingSession, a Attempts, o Options) Decision {
 	switch o.Mode {
 	case ModeOff:
@@ -220,5 +240,9 @@ func nextVOD(s index.EndingSession, a Attempts, o Options) Decision {
 	if a.VOD >= o.MaxAttempts {
 		return Decision{Step: StepFailVOD}
 	}
-	return Decision{Step: StepFreezeVOD, Abandon: !s.Now.Before(s.EndingAt.Add(index.SettleWindow))}
+	d := Decision{Step: StepFreezeVOD, Abandon: !s.Now.Before(s.EndingAt.Add(index.SettleWindow))}
+	if until := s.EndingAt.Add(index.SettleWindow + VODDeferLimit); s.Now.Before(until) {
+		d.DeferUntil = until
+	}
+	return d
 }

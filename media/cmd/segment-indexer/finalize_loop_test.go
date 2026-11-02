@@ -483,24 +483,123 @@ func TestFinalizeLaneWorkLeavesCacheToLoopD2(t *testing.T) {
 }
 
 // 발행 층 결과를 판정의 결과로 줄이는 표 — 정산 대기(unsettled)는 장애 재시도와 갈라 받는다(cx m62 c4 v 주의 — 정산 창
-// 만료 전의 대기를 VOD 장애 3회에 섞으면 정산 중인 사슬이 freeze_failed 로 끝난다). 변이 = unsettled 갈래 제거 → FAIL.
+// 만료 전의 대기를 VOD 장애 3회에 섞으면 정산 중인 사슬이 freeze_failed 로 끝난다). 복사 대기(copy_pending)는 판정의 기한이
+// 있으면 세지 않는 대기, 없으면 세는 재시도다(설계 r7 4-3). 변이 = unsettled · copy_pending 갈래 제거 → FAIL.
 func TestOutcomeOfSeparatesUnsettledFromRetry(t *testing.T) {
+	inside := finalize.Decision{Step: finalize.StepFreezeVOD, DeferUntil: loopBase.Add(time.Hour)}
+	after := finalize.Decision{Step: finalize.StepFreezeVOD, Abandon: true}
+	pending := publish.FreezeOutcome{Retry: true, Reason: publish.ReasonCopyPending}
 	tests := []struct {
 		name string
 		in   publish.FreezeOutcome
+		d    finalize.Decision
 		want finalize.Outcome
 	}{
-		{"섬", publish.FreezeOutcome{Result: publish.ResultFrozen}, finalize.OutcomeDone},
-		{"GAP 있는 섬", publish.FreezeOutcome{Result: publish.ResultFrozenWithGaps}, finalize.OutcomeDone},
-		{"빈 동결", publish.FreezeOutcome{Result: publish.ResultEmpty}, finalize.OutcomeDone},
-		{"정산 대기", publish.FreezeOutcome{Retry: true, Reason: publish.ReasonUnsettled}, finalize.OutcomeUnsettled},
-		{"장애 재시도", publish.FreezeOutcome{Retry: true, Reason: "db"}, finalize.OutcomeRetry},
-		{"실패", publish.FreezeOutcome{Result: publish.ResultFailed}, finalize.OutcomeFailed},
+		{"섬", publish.FreezeOutcome{Result: publish.ResultFrozen}, inside, finalize.OutcomeDone},
+		{"GAP 있는 섬", publish.FreezeOutcome{Result: publish.ResultFrozenWithGaps}, inside, finalize.OutcomeDone},
+		{"빈 동결", publish.FreezeOutcome{Result: publish.ResultEmpty}, inside, finalize.OutcomeDone},
+		{"정산 대기", publish.FreezeOutcome{Retry: true, Reason: publish.ReasonUnsettled}, inside, finalize.OutcomeUnsettled},
+		{"정산 대기 · 기한 뒤", publish.FreezeOutcome{Retry: true, Reason: publish.ReasonUnsettled}, after, finalize.OutcomeUnsettled},
+		{"복사 대기 · 기한 안", pending, inside, finalize.OutcomeDeferred},
+		{"복사 대기 · 기한 뒤", pending, after, finalize.OutcomeRetry},
+		{"장애 재시도 · 기한 안", publish.FreezeOutcome{Retry: true, Reason: "db"}, inside, finalize.OutcomeRetry},
+		{"실패", publish.FreezeOutcome{Result: publish.ResultFailed}, inside, finalize.OutcomeFailed},
 	}
 	for _, tt := range tests {
-		if got := outcomeOf(tt.in); got != tt.want {
-			t.Errorf("%s: outcomeOf(%+v) = %v, want %v", tt.name, tt.in, got, tt.want)
+		if got := outcomeOf(tt.in, tt.d); got != tt.want {
+			t.Errorf("%s: outcomeOf(%+v, %+v) = %v, want %v", tt.name, tt.in, tt.d, got, tt.want)
 		}
+	}
+}
+
+// 걸음 결과 반영(cc r1 H1 · 설계 r7 4-3) — 복사 대기(Deferred)는 세지 않고 다음 정산 스캔(30초) 뒤로 재시도를 예약하며
+// session_freeze_deferred 한 줄을 남긴다. 장애 재시도는 그대로 4초 뒤 · 셈이고, 정산 대기는 예약 없이 다음 스캔에 맡긴다.
+// 변이 M98(Deferred 갈래의 재시도 예약 제거) → FAIL.
+func TestFinalStepDoneSchedulesByOutcome(t *testing.T) {
+	tests := []struct {
+		name         string
+		out          finalize.Outcome
+		wantAfter    time.Duration // 0 이면 예약 없음
+		wantAttempts finalize.Attempts
+		wantDeferred int
+	}{
+		{"복사 대기", finalize.OutcomeDeferred, 30 * time.Second, finalize.Attempts{VOD: 1}, 1},
+		{"장애 재시도", finalize.OutcomeRetry, freezeRetryAfter, finalize.Attempts{VOD: 2}, 0},
+		{"정산 대기", finalize.OutcomeUnsettled, 0, finalize.Attempts{VOD: 1}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFinalLoop(t, finalize.ModePublishing)
+			fin := f.rewind.fin
+			fin.attempts["S1"], fin.running["S1"], fin.streamOf["S1"], fin.vod = finalize.Attempts{VOD: 1}, finalize.StepFreezeVOD, "demo", 1
+			step := finalStep{row: endingRow("S1", nil), d: finalize.Decision{Step: finalize.StepFreezeVOD, DeferUntil: loopBase.Add(time.Hour)},
+				out: tt.out, freeze: publish.FreezeOutcome{Axis: publish.AxisVOD, Result: publish.ResultRetry, Retry: true}}
+			f.rewind.finalStepDone(t.Context(), publish.Result{Kind: publish.KindFinalize, Value: step}, loopBase)
+
+			if got := fin.attempts["S1"]; got != tt.wantAttempts {
+				t.Errorf("Attempts = %+v, want %+v", got, tt.wantAttempts)
+			}
+			at, ok := fin.retryAt["S1"]
+			e, queued := fin.fast["S1"]
+			switch {
+			case tt.wantAfter == 0 && (ok || queued):
+				t.Errorf("retryAt = %v(%v) · 빠른 길 = %+v(%v), want 예약 없음", at, ok, e, queued)
+			case tt.wantAfter != 0 && (!at.Equal(loopBase.Add(tt.wantAfter)) || !e.due.Equal(loopBase.Add(tt.wantAfter))):
+				t.Errorf("retryAt = %v · 빠른 길 due = %v, want 둘 다 %v", at, e.due, loopBase.Add(tt.wantAfter))
+			}
+			if got := f.logs.countLevel(slog.LevelWarn, "session_freeze_deferred"); got != tt.wantDeferred {
+				t.Errorf("session_freeze_deferred WARN %d줄, want %d", got, tt.wantDeferred)
+			}
+		})
+	}
+}
+
+// 복사 대기는 기한 안에서 시도마다 다음 정산 스캔에 다시 낸다 — 스캔이 매초 돌아도 30초 전에는 다시 내지 않고, 세지 않아
+// 사다리(StepFailVOD)로 가지 않는다(E51). 변이 M98 → 매 틱 다시 내어 FAIL.
+func TestCopyPendingRetriesAtNextScanWithoutCounting(t *testing.T) {
+	f := newFinalLoop(t, finalize.ModePublishing)
+	row := endingRow("S1", func(s *index.EndingSession) { s.DVRState, s.VODState = "frozen", "freezing" })
+	f.work.scanRows = []index.EndingSession{row}
+	f.work.rows["S1"] = row
+	f.work.stepOut = func(_ index.EndingSession, d finalize.Decision) finalize.Outcome { return d.Deferred() }
+	now := loopBase
+	for range 61 { // 0 · 30 · 60초
+		f.hold(now)
+		f.settle(now)
+		now = now.Add(time.Second)
+	}
+	want := []finalize.Step{finalize.StepFreezeVOD, finalize.StepFreezeVOD, finalize.StepFreezeVOD}
+	if got := f.work.stepsSeen(); !slices.Equal(got, want) {
+		t.Fatalf("60초 동안 걸음 = %v, want %v(30초 간격 · 세지 않음)", got, want)
+	}
+	if got := f.rewind.fin.attempts["S1"]; got != (finalize.Attempts{}) {
+		t.Fatalf("Attempts = %+v, want 무변경", got)
+	}
+}
+
+// session_freeze_deferred 의 속성(설계 r7 7절) — axis=vod · step · session_id · reason · copied · total · err · defer_until.
+func TestNoteStepLogsCopyPendingDeferral(t *testing.T) {
+	f := newFinalLoop(t, finalize.ModePublishing)
+	until := loopBase.Add(time.Hour)
+	cause := errors.New("slow down")
+	f.rewind.noteStep(finalStep{
+		row: endingRow("S1", nil), d: finalize.Decision{Step: finalize.StepFreezeVOD, DeferUntil: until}, out: finalize.OutcomeDeferred,
+		freeze: publish.FreezeOutcome{Axis: publish.AxisVOD, Result: publish.ResultRetry, Retry: true, Reason: publish.ReasonCopyPending,
+			Copied: 7, Total: 10, Err: cause},
+	}, finalize.Attempts{})
+	rec := f.logs.last("session_freeze_deferred")
+	if rec == nil || rec.level != slog.LevelWarn {
+		t.Fatalf("session_freeze_deferred = %+v, want WARN 한 줄", rec)
+	}
+	want := map[string]any{"axis": "vod", "step": "freeze_vod", "session_id": "S1", "reason": publish.ReasonCopyPending,
+		"copied": int64(7), "total": int64(10), "err": cause, "defer_until": until}
+	for k, v := range want {
+		if rec.attrs[k] != v {
+			t.Errorf("속성 %s = %v, want %v", k, rec.attrs[k], v)
+		}
+	}
+	if n := f.logs.count("session_freeze_retry"); n != 0 {
+		t.Errorf("session_freeze_retry %d줄, want 0(복사 대기는 장애 재시도 줄이 아니다)", n)
 	}
 }
 

@@ -63,7 +63,7 @@ func (r *rewindLoop) sealDone(ctx context.Context, res publish.Result, now time.
 	rec := r.stream(s)
 	rec.running = nil
 	out, _ := res.Value.(sealResult)
-	switch outcomeOf(out.out) {
+	switch outcomeOf(out.out, finalize.Decision{}) { // 봉인에는 복사 대기 기한이 없다
 	case finalize.OutcomeDone:
 		rec.stallSeal = stallSeal{sealed: out.sessionID}
 		r.log.Info("stall_seal", "stream_id", s, "session_id", out.sessionID, "result", out.out.Result)

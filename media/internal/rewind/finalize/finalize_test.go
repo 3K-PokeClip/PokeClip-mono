@@ -109,20 +109,29 @@ func TestNextDecidesStepByLedgerRow(t *testing.T) {
 			s.DVRState, s.EndReason, s.InitSettled = "freeze_failed", "intentional", true
 		}), Attempts{}, ModePublishing, Decision{Step: StepCloseChain}},
 
-		// 정산 · VOD 동결 — 정산 창(꼬리 ending_at + 15분) 안이면 포기 없이(미착지면 재시도), 지나면 포기(D8).
+		// 정산 · VOD 동결 — 정산 창(꼬리 ending_at + 15분) 안이면 포기 없이(미착지면 재시도), 지나면 포기(D8). 복사 대기
+		// 기한(ending_at + 15분 + 45분 — 설계 r7 4-3) 앞이면 DeferUntil 이 그 기한이다.
 		{"VOD 창 안 → 포기 없이", row(func(s *index.EndingSession) { frozen(s); s.VODState = "freezing" }), Attempts{},
-			ModePublishing, Decision{Step: StepFreezeVOD}},
+			ModePublishing, Decision{Step: StepFreezeVOD, DeferUntil: now.Add(59 * time.Minute)}},
 		{"VOD 창 지남 → 포기", row(func(s *index.EndingSession) {
 			frozen(s)
 			s.VODState, s.EndingAt = "freezing", now.Add(-16*time.Minute)
-		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, Abandon: true}},
+		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, Abandon: true, DeferUntil: now.Add(44 * time.Minute)}},
 		{"VOD 창 끝 1ns 전 → 포기 없이", row(func(s *index.EndingSession) {
 			frozen(s)
 			s.VODState, s.EndingAt = "freezing", now.Add(-index.SettleWindow+time.Nanosecond)
-		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD}},
+		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, DeferUntil: now.Add(VODDeferLimit + time.Nanosecond)}},
 		{"VOD 창 정확히 15분 → 포기", row(func(s *index.EndingSession) {
 			frozen(s)
 			s.VODState, s.EndingAt = "freezing", now.Add(-index.SettleWindow)
+		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, Abandon: true, DeferUntil: now.Add(VODDeferLimit)}},
+		{"복사 기한 1ns 전 → 기한을 채움", row(func(s *index.EndingSession) {
+			frozen(s)
+			s.VODState, s.EndingAt = "freezing", now.Add(-index.SettleWindow-VODDeferLimit+time.Nanosecond)
+		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, Abandon: true, DeferUntil: now.Add(time.Nanosecond)}},
+		{"복사 기한 정확히 → 기한 없음", row(func(s *index.EndingSession) {
+			frozen(s)
+			s.VODState, s.EndingAt = "freezing", now.Add(-index.SettleWindow-VODDeferLimit)
 		}), Attempts{}, ModePublishing, Decision{Step: StepFreezeVOD, Abandon: true}},
 		{"VOD 3회 실패 → freeze_failed", row(func(s *index.EndingSession) { frozen(s); s.VODState = "freezing" }),
 			Attempts{VOD: 3}, ModePublishing, Decision{Step: StepFailVOD}},
@@ -170,6 +179,7 @@ func TestAttemptsAfterOutcome(t *testing.T) {
 		{"VOD 재시도", Attempts{VOD: 1}, StepFreezeVOD, OutcomeRetry, Attempts{VOD: 2}},
 		{"VOD 정산 대기는 세지 않음", Attempts{VOD: 2}, StepFreezeVOD, OutcomeUnsettled, Attempts{VOD: 2}},
 		{"VOD 실패 → 확정으로", Attempts{}, StepFreezeVOD, OutcomeFailed, Attempts{VOD: 3}},
+		{"VOD 복사 대기는 세지 않음", Attempts{VOD: 2}, StepFreezeVOD, OutcomeDeferred, Attempts{VOD: 2}},
 		{"성공은 그대로", Attempts{DVR: 2}, StepFreezeDVR, OutcomeDone, Attempts{DVR: 2}},
 		{"좌초 회수 재시도는 세지 않음", Attempts{}, StepRecoverOrphan, OutcomeRetry, Attempts{}},
 		{"3단 재시도는 세지 않음", Attempts{DVR: 3, Seal: 3}, StepFailDVR, OutcomeRetry, Attempts{DVR: 3, Seal: 3}},
@@ -199,6 +209,51 @@ func TestUnsettledRetriesNeverReachFailVOD(t *testing.T) {
 	}
 	if d := Next(s, a, opts(ModePublishing)); d.Step != StepFailVOD {
 		t.Fatalf("장애 3회 뒤 걸음 = %+v, want FailVOD", d)
+	}
+}
+
+// 복사 대기(설계 r7 4-3 · E51 · E52)는 기한 안에서만 세지 않는다 — 기한 안의 복사 일시 오류를 몇 번 받아도 VOD 는
+// freeze_failed 로 가지 않고, 기한 뒤의 일시 오류 셋이 쌓여야 간다. 변이 M62(OutcomeDeferred 를 셈) · M63(기한 무시) → FAIL.
+func TestCopyPendingDefersOnlyUntilDeadline(t *testing.T) {
+	inside := row(func(s *index.EndingSession) { frozen(s); s.VODState = "freezing" })
+	var a Attempts
+	for i := range 100 {
+		d := Next(inside, a, opts(ModePublishing))
+		if d.Step != StepFreezeVOD {
+			t.Fatalf("기한 안 복사 대기 %d회 뒤 걸음 = %+v, want FreezeVOD", i, d)
+		}
+		a = a.After(d.Step, d.Deferred(), 3)
+	}
+	if a != (Attempts{}) {
+		t.Fatalf("기한 안 복사 대기 100회 뒤 Attempts = %+v, want 무변경", a)
+	}
+
+	after := row(func(s *index.EndingSession) {
+		frozen(s)
+		s.VODState, s.EndingAt = "freezing", now.Add(-index.SettleWindow-VODDeferLimit)
+	})
+	for i := range 3 {
+		d := Next(after, a, opts(ModePublishing))
+		if d.Step != StepFreezeVOD {
+			t.Fatalf("기한 뒤 복사 대기 %d회 뒤 걸음 = %+v, want FreezeVOD", i, d)
+		}
+		a = a.After(d.Step, d.Deferred(), 3)
+	}
+	if d := Next(after, a, opts(ModePublishing)); d.Step != StepFailVOD {
+		t.Fatalf("기한 뒤 복사 대기 3회 뒤 걸음 = %+v, want FailVOD", d)
+	}
+}
+
+// Deferred 의 두 값 — 기한이 있으면 세지 않는 대기, 없으면 세는 재시도다.
+func TestDecisionDeferred(t *testing.T) {
+	if got := (Decision{Step: StepFreezeVOD, DeferUntil: now}).Deferred(); got != OutcomeDeferred {
+		t.Fatalf("기한 있음 Deferred = %v, want OutcomeDeferred", got)
+	}
+	if got := (Decision{Step: StepFreezeVOD}).Deferred(); got != OutcomeRetry {
+		t.Fatalf("기한 없음 Deferred = %v, want OutcomeRetry", got)
+	}
+	if VODDeferLimit != 45*time.Minute {
+		t.Fatalf("VODDeferLimit = %v, want 45m(kty K8)", VODDeferLimit)
 	}
 }
 

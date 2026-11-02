@@ -158,7 +158,7 @@ func runFinalStep(ctx context.Context, deps finalDeps, s index.EndingSession, d 
 			return res
 		}
 		res.freeze = deps.pub.FreezeVOD(ctx, c, d.Abandon)
-		res.out = outcomeOf(res.freeze)
+		res.out = outcomeOf(res.freeze, d)
 		res.progressed = res.out == finalize.OutcomeDone || res.out == finalize.OutcomeFailed
 		return res
 	case finalize.StepEmptyFreezeVOD:
@@ -196,7 +196,7 @@ func runDVRStep(ctx context.Context, deps finalDeps, res finalStep) finalStep {
 	case finalize.StepRecoverOrphan:
 		res.freeze = deps.pub.RecoverOrphan(ctx, s.StreamID, s.SessionID)
 	}
-	res.out = outcomeOf(res.freeze)
+	res.out = outcomeOf(res.freeze, res.d)
 	if res.out == finalize.OutcomeFailed && (res.d.Step == finalize.StepFailDVR || res.d.Step == finalize.StepRecoverOrphan) {
 		res.out = finalize.OutcomeDone
 	}
@@ -214,13 +214,16 @@ func (r finalStep) ledger(ok bool, err error) finalStep {
 	return r
 }
 
-// outcomeOf 는 발행 층 결과를 판정의 결과로 줄인다 — 정산 대기(unsettled)는 장애 재시도와 가른다.
-func outcomeOf(o publish.FreezeOutcome) finalize.Outcome {
+// outcomeOf 는 발행 층 결과를 판정의 결과로 줄인다 — 정산 대기(unsettled)는 장애 재시도와 가르고, 사본 복사 대기
+// (copy_pending)는 판정 d 의 기한에 따라 세지 않는 대기 또는 세는 재시도다(d.Deferred — 설계 r7 4-3).
+func outcomeOf(o publish.FreezeOutcome, d finalize.Decision) finalize.Outcome {
 	switch {
 	case o.Result == publish.ResultFrozen, o.Result == publish.ResultFrozenWithGaps, o.Result == publish.ResultEmpty:
 		return finalize.OutcomeDone
 	case o.Retry && o.Reason == publish.ReasonUnsettled:
 		return finalize.OutcomeUnsettled
+	case o.Retry && o.Reason == publish.ReasonCopyPending:
+		return d.Deferred()
 	case o.Retry:
 		return finalize.OutcomeRetry
 	}

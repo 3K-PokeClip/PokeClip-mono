@@ -33,6 +33,8 @@ const (
 	playbackLanePrefix = "playback:"
 	// freezeRetryAfter 는 S3 걸음 재시도 간격이다(설계 3.1 — 4초 × 3).
 	freezeRetryAfter = 4 * time.Second
+	// copyPendingRetryAfter 는 기한 안 사본 복사 대기의 재시도 간격이다 — 다음 정산 스캔(설계 r7 4-3).
+	copyPendingRetryAfter = finalizeScanEvery
 	// fastSettleWait 는 빠른 길의 꼬리 정착 대기 상한이다(설계 3.2 — 장부 정착 + 10초).
 	fastSettleWait = 10 * time.Second
 )
@@ -339,7 +341,8 @@ func (r *rewindLoop) finalLoadDone(ctx context.Context, res publish.Result, now 
 	}
 }
 
-// finalStepDone 은 걸음 결과를 반영한다 — 실패 횟수 · 신호 · 상태 표지 · 다음 걸음(섰으면 곧바로 다시 읽고, 재시도면 4초 뒤).
+// finalStepDone 은 걸음 결과를 반영한다 — 실패 횟수 · 신호 · 상태 표지 · 다음 걸음(섰으면 곧바로 다시 읽고, 재시도면 4초 뒤,
+// 기한 안 복사 대기면 다음 정산 스캔 뒤).
 func (r *rewindLoop) finalStepDone(ctx context.Context, res publish.Result, now time.Time) {
 	f := r.fin
 	out, _ := res.Value.(finalStep)
@@ -364,6 +367,9 @@ func (r *rewindLoop) finalStepDone(ctx context.Context, res publish.Result, now 
 	case out.out == finalize.OutcomeRetry:
 		f.retryAt[id] = now.Add(freezeRetryAfter)
 		f.queueFast(out.row.StreamID, id, now.Add(freezeRetryAfter))
+	case out.out == finalize.OutcomeDeferred:
+		f.retryAt[id] = now.Add(copyPendingRetryAfter)
+		f.queueFast(out.row.StreamID, id, now.Add(copyPendingRetryAfter))
 	case out.progressed:
 		delete(f.retryAt, id)
 		f.queueFast(out.row.StreamID, id, now)
@@ -383,8 +389,9 @@ func stepAxis(s finalize.Step) string {
 }
 
 // noteStep 은 걸음 신호다(설계 8절) — session_freeze(섰다 · INFO) · session_freeze_retry(재시도 · WARN · 정산 대기는 남기지
-// 않음) · session_freeze_failed(freeze_failed 종국 · ERROR) · session_settle_abandoned(정산 창 만료로 GAP 포기 · WARN) ·
-// finalize_step_failed(장부 문장 오류 · 경합 제외 · WARN).
+// 않음) · session_freeze_deferred(기한 안 사본 복사 대기 · WARN · 시도마다 — 설계 r7 7절) · session_freeze_failed(freeze_failed
+// 종국 · ERROR) · session_settle_abandoned(정산 창 만료로 GAP 포기 · WARN) · finalize_step_failed(장부 문장 오류 · 경합 제외 ·
+// WARN).
 func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 	axis, id, step := stepAxis(out.d.Step), out.row.SessionID, out.d.Step.String()
 	if out.err != nil {
@@ -399,6 +406,10 @@ func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 			"attempt", attemptOf(out.d.Step, a), "reason", out.freeze.Reason, "err", out.freeze.Err)
 		return
 	case finalize.OutcomeUnsettled:
+		return
+	case finalize.OutcomeDeferred:
+		r.log.Warn("session_freeze_deferred", "axis", axis, "step", step, "session_id", id, "reason", out.freeze.Reason,
+			"copied", out.freeze.Copied, "total", out.freeze.Total, "err", out.freeze.Err, "defer_until", out.d.DeferUntil)
 		return
 	}
 	switch {

@@ -42,11 +42,16 @@ const (
 	vodConflict     = "vod_conflict"    // 같은 키에 다른 본문이 있다
 	vodLedgerWrite  = "gap_ledger"      // 렌더 전 GAP 원장 쓰기 실패
 	vodContended    = "contended"       // 꼬리 행 잠금이 lock_timeout(5초)에 걸렸다(55P03)
+	vodCopyPending  = "copy_pending"    // 사본 복사의 일시 오류 · 예산 소진 · 취소(설계 r7 4-3) — 다음 시도가 처음부터 다시 한다
 )
 
 // ReasonUnsettled 는 VOD 동결의 정산 대기 재시도 사유다(FreezeOutcome.Reason) — 정산 창 안의 ③ 미착지라 장애가 아니다.
 // 판정부(M6-3b)가 이 사유를 장애 재시도와 갈라 센다.
 const ReasonUnsettled = vodUnsettled
+
+// ReasonCopyPending 은 VOD 동결의 사본 복사 대기 재시도 사유다(FreezeOutcome.Reason) — 일시 오류 · 예산 소진이라 콘텐츠
+// 장애가 아니다. 판정부가 기한(finalize.VODDeferLimit) 안에서는 세지 않는다.
+const ReasonCopyPending = vodCopyPending
 
 // vodMinRowBytes 는 VOD 본문에서 조각 하나가 차지하는 바이트의 하한이다 — PDT 줄(태그 25 · UTC 밀리초 시각 24 · 줄바꿈
 // 1) 50 · EXTINF 줄(가장 짧은 「#EXTINF:0.001,」 · 줄바꿈) 15 · URI 줄(BaseURL 한 글자 이상 · 「/」 · 키 한 글자 이상 ·

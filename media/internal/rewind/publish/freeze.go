@@ -42,13 +42,16 @@ const (
 //
 // Retry 가 참이면 같은 걸음을 4초 뒤 다시 한다(상한 3회는 판정부가 센다). Result 가 failed 면 같은 입력으로 다시 해도
 // 서지 않는다 — DVR 은 봉인(Endlist)으로, 봉인도 실패면 freeze_failed 로 간다. Reason 은 retry · failed 의 사유(로그
-// 속성 reason 값)다. Err 는 사유에 딸린 원인 오류다(없을 수 있다).
+// 속성 reason 값)다. Err 는 사유에 딸린 원인 오류다(없을 수 있다). Copied · Total 은 VOD 사본 복사의 진척(복사를 마친 짝
+// 수 · 전체 짝 수 — 신호 속성 copied · total)이고 다른 걸음에서는 0 이다.
 type FreezeOutcome struct {
 	Axis   string
 	Result string
 	Retry  bool
 	Reason string
 	Err    error
+	Copied int
+	Total  int
 }
 
 // 재시도 · 실패 사유 — FreezeOutcome.Reason 값이다.
