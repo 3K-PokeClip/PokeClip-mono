@@ -11,12 +11,14 @@ import { useOnboardingStore } from '@/stores/onboarding';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
+// LiveNowBand 시험의 시계. 시작에서 1:24:03 지난 때로 고정한다(LIVE 배지가 시작 시각으로 매초 센다)
+const LIVE_NOW = Date.parse('2026-10-20T11:36:03Z');
 const LIVE: LiveNow = {
   streamId: 'stream-1',
   title: '롤 랭크 방송',
   platform: '치지직',
   startedNote: '오후 7:12 시작',
-  uptimeLabel: '1:24:03',
+  startedAtMs: LIVE_NOW - (1 * 3600 + 24 * 60 + 3) * 1000,
   viewers: '1,842',
   infoLate: false,
   detectedCards: 8,
@@ -1272,17 +1274,74 @@ describe('주 경계·며칠 전', () => {
 });
 
 describe('LiveNowBand', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: LIVE_NOW });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const SHOT =
+    'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
+
   it('라이브 사진이 있으면 칸을 채우고, 없으면 자리표시를 보인다(POK-277)', () => {
-    const src =
-      'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
-    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: src }} />);
-    expect(container.querySelector('img')).toHaveAttribute('src', src);
+    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />);
+    expect(container.querySelector('img')).toHaveAttribute('src', SHOT);
 
     rerender(<LiveNowBand live={LIVE} />);
     expect(container.querySelector('img')).toBeNull();
     // 자리표시는 방송 아이콘이다: 「라이브 방송 화면」 같은 글자는 진짜 값처럼 읽혔다(POK-449)
     expect(container.querySelector('svg')).not.toBeNull();
     expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
+  });
+
+  describe('LIVE 경과', () => {
+    it('목록을 다시 읽지 않아도 매초 1초씩 오른다(건너뛰지 않는다)', () => {
+      render(<LiveNowBand live={LIVE} />);
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      // 초 경계 바로 뒤에 깬다: 경계 전에는 그대로다
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      for (const label of ['1:24:04', '1:24:05', '1:24:06']) {
+        act(() => {
+          vi.advanceTimersByTime(1_000);
+        });
+        expect(screen.getByText(`LIVE ${label}`)).toBeInTheDocument();
+      }
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByText('LIVE 1:25:06')).toBeInTheDocument();
+    });
+
+    it('탭이 숨으면 멈추고, 돌아오면 바로 지금 경과로 맞춘다', () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get');
+      render(<LiveNowBand live={LIVE} />);
+      visibility.mockReturnValue('hidden');
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+
+      visibility.mockReturnValue('visible');
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      expect(screen.getByText('LIVE 1:24:33')).toBeInTheDocument();
+      visibility.mockRestore();
+    });
+
+    it('시작 시각을 모르면 「--:--:--」이고 세지 않는다', () => {
+      render(<LiveNowBand live={{ ...LIVE, startedAtMs: null }} />);
+      expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(3_000);
+      });
+      expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
+    });
   });
 
   it('플랫폼을 모르면 플랫폼 태그를 달지 않는다 — 치지직·SOOP·씨미 중 무엇인지 지어내지 않는다', () => {

@@ -51,8 +51,11 @@ export interface LiveNow {
   /** 이 방송 대시보드를 지금 연 편집자 수(POK-398, 스트리머 본인과 나는 뺌). 0이거나 모르면(null·없음) 띠에 안 적는다 */
   editorsOnline?: number | null;
   startedNote: string;
-  /** 방송 경과 표기 — LIVE 배지 옆에 그대로 붙는다 */
-  uptimeLabel: string;
+  /**
+   * 방송 시작 시각(epoch ms). LIVE 배지가 이것으로 경과를 매초 센다(LiveUptime). 읽은 시각으로 미리 적어 두면 방송 목록을 다시 읽는
+   * 10초마다 숫자가 건너뛴다. 모르면 null(「--:--:--」)
+   */
+  startedAtMs: number | null;
   /** 시청자 수 — 수집기가 아직 못 쟀으면 null */
   viewers: string | null;
   /**
@@ -153,7 +156,7 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T | null>
   }
 }
 
-function msToClock(ms: number): string {
+export function msToClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -322,6 +325,8 @@ async function loadHome(
     const latest = info === null ? null : primaryInfo(info, now).latest;
     const title = latest?.title?.trim() || liveBroadcast.title?.trim() || null;
     const startedAt = liveBroadcast.startedAt;
+    const parsedStart = startedAt ? Date.parse(startedAt) : NaN;
+    const startedAtMs = Number.isNaN(parsedStart) ? null : parsedStart;
     live = {
       streamId: liveBroadcast.streamId,
       title,
@@ -330,7 +335,7 @@ async function loadHome(
       platform: onAirLabel(info?.platforms ?? liveBroadcast.platforms, now),
       editorsOnline: liveBroadcast.editorsOnline ?? null,
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
-      uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
+      startedAtMs,
       // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
       viewers: typeof latest?.viewers === 'number' ? latest.viewers.toLocaleString('ko-KR') : null,
       // 시작 시각을 모르는 방송(자리표시)은 기다릴 기준이 없어 처음부터 글자로 적는다: 막대가 끝없이 번쩍이지 않게(로컬 리뷰 1라운드)

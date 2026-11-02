@@ -421,6 +421,8 @@
   font-size: calc(11 * var(--pc-u));
   font-weight: 750;
   letter-spacing: 0.03em;
+  /* 경과가 매초 바뀐다: 숫자 폭이 제각각이면 배지가 매초 떨린다 */
+  font-variant-numeric: tabular-nums;
 }
 
 /* 영상 위 오버레이 — 테마 불변이라 시안 raw 값 유지 */
