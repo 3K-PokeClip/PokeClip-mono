@@ -593,9 +593,9 @@ func TestProdSQLVerifyAcceptsAlwaysEnabledFloorTrigger(t *testing.T) {
 	}
 }
 
-// ledgerTables 는 장부 표 여섯이다(재실행 잠금 시험의 대상).
+// ledgerTables 는 장부 표 여섯과 회수 기록 표다(재실행 잠금 시험의 대상).
 const ledgerTables = "'stream_segments', 'stream_sessions', 'stream_cutoffs', 'stream_published_gaps', " +
-	"'stream_seq_floors', 'broadcast_lifecycle_outbox'"
+	"'stream_seq_floors', 'broadcast_lifecycle_outbox', 'vod_copy_intents'"
 
 // 한 창 재실행의 교착 방지 — 수렴된 DB 에 20 을 다시 돌리는 트랜잭션은 장부 표를 잠그지 않는다(ACCESS SHARE
 // 밖). 표 잠금이 없으면 사이드카 문장이 어느 순서로 표를 잡든 재실행과 서로 기다리지 않는다. CREATE INDEX IF NOT

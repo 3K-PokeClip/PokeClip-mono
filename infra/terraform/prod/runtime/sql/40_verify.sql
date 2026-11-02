@@ -38,8 +38,9 @@
 --                                   (indisvalid · indisready) 정의(열 · 정렬 · 부분 인덱스 술어)가 ddl.go 와 같다
 --   index:<FK 인덱스>               M6-4 FK 인덱스 셋(stream_segments_session_id_idx · stream_published_gaps_session_idx ·
 --                                   stream_sessions_inherits_idx)과 M6-3b 발행 흔적 인덱스
---                                   (stream_segments_uploaded_session_idx)는 제 표에 그 이름으로 있는지만 본다 — 정의
---                                   문자열 비교는 PG 판이 바뀌면 깨진다
+--                                   (stream_segments_uploaded_session_idx) · 회수 기록 기한 인덱스
+--                                   (vod_copy_intents_due_idx)는 제 표에 그 이름으로 있는지만 본다 — 정의 문자열 비교는
+--                                   PG 판이 바뀌면 깨진다
 --   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 일반 연결에서 켜진 채('O' · 'A' — 'R' 은
 --                                   replica 에서만 돈다) 제 함수 · 시점(tgtype — 갱신은 AFTER DELETE 문장 단위 ·
 --                                   검사는 BEFORE INSERT 행 단위) · 전이 표 이름(갱신만 deleted_rows)에 묶여 있다 —
@@ -51,7 +52,7 @@
 --                                   pg_catalog, pg_temp 로 고정돼 있다 — 정의자 함수가 부른 쪽 search_path 로 돌면
 --                                   public 의 덫을 media_owner 신분으로 부른다
 --   privilege:<역할>:<표>:<권한>    표 단위 권한이 30 의 목록과 같다(PUBLIC 과 교차 권한이 없는 앱 사용자 둘은
---                                   stream_* 에 아무것도 없다). 권한은 PG17 의
+--                                   stream_* · vod_copy_intents 에 아무것도 없다). 권한은 PG17 의
 --                                   MAINTAIN 까지 여덟이고, 끝에 +grant_option 이 붙은 것은 재부여 권한이다(모두 없다)
 --   column:<역할>:<표>.<열>:<권한>  열 단위 권한이 표 단위 권한과 같다 — 예외는 janitor 의 stream_segments.local_path
 --                                   UPDATE 하나다(+grant_option 은 위와 같다)
@@ -73,7 +74,7 @@
 -- 단언하지 않는 것: 다른 DB(postgres · template1)의 CONNECT · TEMP 는 PUBLIC 기본으로 남는다(K12 — 이 DB 의
 -- TEMP 는 위에서 단언한다). 비밀번호 없음도 보지 못한다 — 마스터는 pg_authid 를 읽지 못하고
 -- pg_roles.rolpassword 는 늘 ******** 다. 앱 사용자가 자기 표에 갖는 권한과 app_chat_detector 의 chat_messages
--- SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 표 행렬은 stream_* 표만 본다.
+-- SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 표 행렬은 stream_* 표와 vod_copy_intents 만 본다.
 --
 -- 내장 함수는 pg_catalog 로 한정하고 연산자는 pg_catalog 에 정확한 판이 있는 형으로 맞춘다(oid 열과 비교하는
 -- regclass · regprocedure · 정수 상수는 ::oid). 배열 비교(text[] = text[])는 pg_catalog 에 다형 판뿐이라
@@ -144,19 +145,20 @@ BEGIN
     ),
     tables(t) AS (
         VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps'),
-               ('stream_seq_floors'), ('broadcast_lifecycle_outbox')
+               ('stream_seq_floors'), ('broadcast_lifecycle_outbox'), ('vod_copy_intents')
     ),
     -- M6 장부 열(ledger_column:<표>.<열>).
     ledger_columns(t, c) AS (
         VALUES ('stream_sessions', 'round_id'), ('stream_sessions', 'round_closed_at'),
                ('stream_sessions', 'expired_at'), ('stream_sessions', 'stop_marked_at')
     ),
-    -- M6-4 FK 인덱스 · M6-3b 발행 흔적 인덱스(index:<인덱스> — 이름 존재만).
+    -- M6-4 FK 인덱스 · M6-3b 발행 흔적 인덱스 · 회수 기록 기한 인덱스(index:<인덱스> — 이름 존재만).
     fk_indexes(t, i) AS (
         VALUES ('stream_segments', 'stream_segments_session_id_idx'),
                ('stream_published_gaps', 'stream_published_gaps_session_idx'),
                ('stream_sessions', 'stream_sessions_inherits_idx'),
-               ('stream_segments', 'stream_segments_uploaded_session_idx')
+               ('stream_segments', 'stream_segments_uploaded_session_idx'),
+               ('vod_copy_intents', 'vod_copy_intents_due_idx')
     ),
     -- seq 하한 트리거와 그 함수 · 정의자 여부 · tgtype · 이전 전이 표(trigger:<트리거> · function:<함수>).
     -- tgtype 비트: 1 = 행 단위 · 2 = BEFORE · 4 = INSERT · 8 = DELETE. 갱신 8 = AFTER DELETE 문장 단위 · 검사 7 =
@@ -187,6 +189,10 @@ BEGIN
                ('media_indexer', 'broadcast_lifecycle_outbox', 'INSERT'),
                ('media_indexer', 'broadcast_lifecycle_outbox', 'UPDATE'),
                ('media_indexer', 'broadcast_lifecycle_outbox', 'DELETE'),
+               ('media_indexer', 'vod_copy_intents', 'SELECT'),
+               ('media_indexer', 'vod_copy_intents', 'INSERT'),
+               ('media_indexer', 'vod_copy_intents', 'UPDATE'),
+               ('media_indexer', 'vod_copy_intents', 'DELETE'),
                ('media_janitor', 'stream_segments', 'SELECT'),
                ('media_janitor', 'stream_sessions', 'SELECT'),
                ('media_janitor', 'stream_cutoffs', 'SELECT'),

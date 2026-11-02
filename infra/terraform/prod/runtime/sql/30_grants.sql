@@ -8,7 +8,8 @@
 --
 -- media_indexer 의 DELETE(조각 · 세션 · GAP · outbox) · stream_cutoffs UPDATE · DELETE 는 M6 만료 · outbox 몫이다
 -- (ADR-0006 개정 — docs/decisions/2026-10-26-media-indexer-m6-delete-grants.md). TRUNCATE · DDL 은 없고, seq 하한
--- 표는 SELECT 만이다(하한은 stream_segments 트리거가 정의자 권한으로 올린다).
+-- 표는 SELECT 만이다(하한은 stream_segments 트리거가 정의자 권한으로 올린다). vod_copy_intents 의 네 권한은 VOD 사본
+-- 회수 기록(POK-525)의 발급 · 잡기 · 닫기 몫이고, 앱 사용자에게는 이 표 권한이 없다.
 --
 -- 목록 정본은 media 쪽이다. media_indexer = media/internal/pgtest/role.go 의 mediaIndexerGrants,
 -- media_janitor = media/internal/index/local_cleanup_role_pg_test.go 의 lcRoleGrants. 이 파일의 GRANT 가
@@ -29,6 +30,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stream_cutoffs TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_published_gaps TO media_indexer;
 GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON vod_copy_intents TO media_indexer;
 
 GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
 GRANT SELECT ON stream_published_gaps TO media_janitor;

@@ -431,6 +431,28 @@ BEGIN
             FOR EACH ROW EXECUTE FUNCTION stream_segments_check_seq_floor();
     END IF;
 END $do$;
+
+-- ============================================================================
+-- VOD 사본 회수 기록(POK-525 ①-5a) — 1번 소유. 복사가 첫 CopyObject 앞에 범위(스트림 · seq · init 회차)를 커밋하고,
+-- 발급 때 정한 due_at 이 지나면 유예 재삭제가 잡아(임대) 정리한 뒤 지운다(copy_intents.go). 외래키가 없다 — 만료 ·
+-- 탈퇴가 조각 · 세션 행을 지워도 남아야 그 범위의 사본을 거둔다. 대사는 이 표를 읽지 않는다.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS vod_copy_intents (
+    intent_id     bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    stream_id     text        NOT NULL,
+    first_seq     bigint      NOT NULL,
+    last_seq      bigint      NOT NULL,
+    init_sessions text[]      NOT NULL DEFAULT '{}',
+    due_at        timestamptz NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    CONSTRAINT vod_copy_intents_seq_range_chk CHECK (last_seq >= first_seq)
+);
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('vod_copy_intents_due_idx') IS NULL THEN
+        CREATE INDEX vod_copy_intents_due_idx ON vod_copy_intents (due_at);
+    END IF;
+END $do$;
 `
 
 // EnsureSchema 는 표가 없으면 만든다.

@@ -576,6 +576,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stream_cutoffs TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_published_gaps TO media_indexer;
 GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON vod_copy_intents TO media_indexer;
 ```
 
 - **DELETE 는 M6 만료 · outbox 몫만이다(ADR-0006 개정 —
@@ -584,6 +585,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_inde
   outbox 행을 지운다. `stream_cutoffs` 의 UPDATE · DELETE 는 만료의 컷오프
   전진 · 제거 몫이다 — 주조는 여전히 한 번 넣고(`ON CONFLICT DO NOTHING`)
   고치지 않는다. 쓰는 문장은 M6-4 · M6-8 이 들이고, 권한은 미리 준다.
+- **`vod_copy_intents` 는 VOD 사본 회수 기록이다(POK-525).** 복사가 첫
+  CopyObject 앞에 범위를 INSERT 하고, 기한이 지나면 유예 재삭제가
+  `FOR UPDATE SKIP LOCKED` 로 잡아 기한을 UPDATE(임대)한 뒤 정리를 마치면
+  DELETE 한다. 3번 앱 사용자에게는 이 표 권한이 없다.
 - **TRUNCATE 없음 · `stream_seq_floors` 는 SELECT 만.** seq 하한은
   `stream_segments` 의 `AFTER DELETE` 트리거가 정의자(표 소유자) 권한으로
   올린다. 사이드카가 하한을 내리거나 지울 수 없다.
@@ -591,8 +596,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_inde
   별도 역할이 적용한다. 이 계정으로 `ENSURE_SCHEMA=true` 를 켜면 기동 때
   42501 로 막힌다.
 - **그 밖에 이 계정에 따로 주는 권한은 없다 — 대신 PUBLIC(모든 계정)
-  기본 권한에 기댄다.** 시퀀스는 없고(DDL 에 `SERIAL` · `IDENTITY` 0),
-  트리거 함수 · advisory 잠금 · `set_config` 는 PUBLIC 기본 권한으로 돈다(하한
+  기본 권한에 기댄다.** 시퀀스는 `vod_copy_intents` 의 `IDENTITY` 하나뿐이고
+  `IDENTITY` 기본값은 시퀀스 권한을 보지 않는다. 트리거 함수 · advisory
+  잠금 · `set_config` 는 PUBLIC 기본 권한으로 돈다(하한
   갱신 함수만 PUBLIC EXECUTE 를 회수했다 — 트리거 발화는 EXECUTE 를 보지 않는다).
   `public` 스키마 `USAGE` 도 PUBLIC 기본값에 기댄다. DB `CONNECT` 는 다르다
   — 운영 DB(`pokeclip`)는 CONNECT 를 PUBLIC 에서 거두고 계정마다 따로
