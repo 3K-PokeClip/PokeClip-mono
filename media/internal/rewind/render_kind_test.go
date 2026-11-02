@@ -39,8 +39,9 @@ func TestRenderSlidingKindIsByteIdenticalToGolden(t *testing.T) {
 	}
 }
 
-// TestRenderVODKindAddsOnlyPlaylistTypeLine 은 KindVOD 가 슬라이딩 본문에 PLAYLIST-TYPE:VOD 한 줄만
-// 머리(DISCONTINUITY-SEQUENCE 다음 · 첫 조각 앞)에 더하는지 본다.
+// TestRenderVODKindAddsOnlyPlaylistTypeLine 은 KindVOD 가 슬라이딩 본문에서 조각 · MAP URI 의 이름공간을
+// /vod 로 옮기고(POK-525 objectURI) PLAYLIST-TYPE:VOD 한 줄을 머리(DISCONTINUITY-SEQUENCE 다음 · 첫 조각 앞)에
+// 더하는 것 말고는 같은지 본다.
 func TestRenderVODKindAddsOnlyPlaylistTypeLine(t *testing.T) {
 	n := rewind.Session{ID: "N", TargetDuration: 6, DiscontinuityBase: 2, MinSeq: 10, InitUploaded: true}
 	sliding := playlist("N", []rewind.Session{n}, run("N", 10, 14, day))
@@ -52,9 +53,9 @@ func TestRenderVODKindAddsOnlyPlaylistTypeLine(t *testing.T) {
 	if !ok {
 		t.Fatalf("슬라이딩 본문에 DISC-SEQ 줄이 없다:\n%s", open)
 	}
-	want := head + "#EXT-X-DISCONTINUITY-SEQUENCE:2\n" + playlistTypeVOD + rest
+	want := head + "#EXT-X-DISCONTINUITY-SEQUENCE:2\n" + playlistTypeVOD + strings.ReplaceAll(rest, dvrPrefix, vodPrefix)
 	if got := mustRender(t, vod); got != want {
-		t.Fatalf("Render(KindVOD) 가 슬라이딩 본문 + PLAYLIST-TYPE 한 줄과 다르다 — %s", firstDiff(got, want))
+		t.Fatalf("Render(KindVOD) 가 슬라이딩 본문(URI 는 /vod) + PLAYLIST-TYPE 한 줄과 다르다 — %s", firstDiff(got, want))
 	}
 }
 

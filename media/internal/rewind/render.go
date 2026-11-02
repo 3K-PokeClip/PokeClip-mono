@@ -5,7 +5,8 @@
 // 같은 입력이면 같은 바이트를 내는 순수 계층이라 로그도 남기지 않는다.
 //
 // 지키는 불변식(프로필 4절): 조각 URI 는 영구히 고정된다 — 세션·티어 축이 없는 장부의
-// playback_s3_key 그대로다(설계 5.2 D1). 본문은 순수 HLS 다 — 우리 용도의 줄(#PC-)·주석·빈 줄이
+// playback_s3_key 그대로다(설계 5.2 D1). VOD 목록만 그 키의 사본 경로(/vod 이름공간)를 싣고, 이름공간은
+// 목록마다 하나다(objectURI). 본문은 순수 HLS 다 — 우리 용도의 줄(#PC-)·주석·빈 줄이
 // 없고, 세대 정보는 본문 밖 메타데이터로 간다(설계 4.4.2).
 package rewind
 
@@ -74,7 +75,7 @@ type Playlist struct {
 	// StreamID 는 stream_id 다. MAP 의 init 키 첫 성분이다.
 	StreamID string
 	// BaseURL 은 조각·MAP URI 의 앞머리다 — 끝에 '/' 가 없는 절대 URL(예 https://media.pokeclip.com).
-	// URI 는 BaseURL + "/" + 키다.
+	// URI 는 BaseURL + "/" + 키(VOD 목록이면 사본 경로)다 — objectURI.
 	BaseURL string
 	// Cutoff 는 그 스트림의 활성화 컷오프(stream_cutoffs.cutoff_seq)다 — 끊김 표시 술어의 하한이다.
 	Cutoff int64
@@ -104,11 +105,11 @@ type Playlist struct {
 //	#EXT-X-PLAYLIST-TYPE:VOD                    KindVOD 일 때만
 //	조각마다 이 순서로:
 //	  #EXT-X-DISCONTINUITY                      HasDiscontinuityTag 가 참일 때
-//	  #EXT-X-MAP:URI="<BaseURL>/<init 키>"      회차가 바뀌는 첫 줄(목록 첫 줄 포함)
+//	  #EXT-X-MAP:URI="<objectURI(init 키)>"     회차가 바뀌는 첫 줄(목록 첫 줄 포함)
 //	  #EXT-X-GAP                                GAP 원장에 있는 행
 //	  #EXT-X-PROGRAM-DATE-TIME:<playback_pdt>
 //	  #EXTINF:<duration_ms 를 초로, 소수 셋째 자리>,
-//	  <BaseURL>/<playback_s3_key>
+//	  <objectURI(playback_s3_key)>              KindVOD 면 /vod 사본 경로
 //	#EXT-X-ENDLIST                              Ended 일 때만
 //
 // MSN 이 첫 줄 조각의 seq 인 것이 계약이다(위치 카운터가 아니다 — 설계 4.8 대안 B 기각). 그래서
@@ -171,7 +172,11 @@ func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool) err
 		if err != nil {
 			return fmt.Errorf("rewind: seq %d 의 MAP 키 파생 실패: %w", r.Seq, err)
 		}
-		fmt.Fprintf(b, "#EXT-X-MAP:URI=\"%s/%s\"\n", p.BaseURL, key)
+		uri, err := p.objectURI(key)
+		if err != nil {
+			return fmt.Errorf("rewind: seq %d 의 MAP URI 파생 실패: %w", r.Seq, err)
+		}
+		fmt.Fprintf(b, "#EXT-X-MAP:URI=\"%s\"\n", uri)
 	}
 	if r.IsGap {
 		b.WriteString("#EXT-X-GAP\n")
@@ -179,8 +184,29 @@ func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool) err
 	fmt.Fprintf(b, "#EXT-X-PROGRAM-DATE-TIME:%s\n", FormatPDT(r.PlaybackPDT))
 	// duration_ms 는 양수다(쓰기 경로의 폭 검증 — indexer H7). 정수 나눗셈이라 자릿수가 정확하다.
 	fmt.Fprintf(b, "#EXTINF:%d.%03d,\n", r.DurationMS/1000, r.DurationMS%1000)
-	fmt.Fprintf(b, "%s/%s\n", p.BaseURL, r.PlaybackS3Key)
+	uri, err := p.objectURI(r.PlaybackS3Key)
+	if err != nil {
+		return fmt.Errorf("rewind: seq %d 의 조각 URI 파생 실패: %w", r.Seq, err)
+	}
+	fmt.Fprintf(b, "%s\n", uri)
 	return nil
+}
+
+// objectURI 는 목록이 조각 · MAP 줄에 싣는 URI 다. 되감기 목록(KindSliding)은 BaseURL + "/" + key, VOD
+// 목록(KindVOD)은 BaseURL + "/" + playback.VODPath(key) — 닫힌 사슬의 사본(/vod 이름공간)이다. 렌더
+// (writeSegment)와 발행 전 검사(segmentMismatch · initURI)가 이 하나를 쓴다 — 둘이 갈리면 VOD 가 /dvr 를
+// 가리킨 채 나가거나 렌더한 VOD 본문이 검사에 걸린다(POK-525 설계 r7 3-2). 이름공간은 목록마다 하나라
+// 한 목록 안에서 섞이지 않는다(프로필 4절 「세그먼트 정규 URL 영구 고정」). VOD 목록인데 key 가 ③ 조각 ·
+// init 키 문법 밖이면 오류다 — 사본 경로를 지어낼 수 없다.
+func (p Playlist) objectURI(key string) (string, error) {
+	if p.Kind != KindVOD {
+		return p.BaseURL + "/" + key, nil
+	}
+	path, err := playback.VODPath(key)
+	if err != nil {
+		return "", err
+	}
+	return p.BaseURL + "/" + path, nil
 }
 
 // session 은 회차 목록에서 id 인 회차를 찾는다. 한 목록이 걸치는 회차는 한두 개라 차례로 본다.

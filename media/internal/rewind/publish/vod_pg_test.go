@@ -157,8 +157,8 @@ func TestFreezeVODFillsUnattributedRowWithGap(t *testing.T) {
 	wantOutcome(t, p.FreezeVOD(t.Context(), chain, false), AxisVOD, ResultFrozenWithGaps, false)
 
 	body, _ := stored(store, vodChainKey)
-	if lines := vodLines(body); len(lines) != 10 || !strings.HasPrefix(lines[5], "#EXT-X-GAP ") || !strings.HasSuffix(lines[5], "/dvr/str/seg/000005.m4s") {
-		t.Errorf("VOD 조각 줄 = %q, want seq 5 가 GAP 줄(③ 키 이름)", lines)
+	if lines := vodLines(body); len(lines) != 10 || !strings.HasPrefix(lines[5], "#EXT-X-GAP ") || !strings.HasSuffix(lines[5], "/vod/str/seg/000005.m4s") {
+		t.Errorf("VOD 조각 줄 = %q, want seq 5 가 GAP 줄(③ 키의 사본 경로 — VOD 목록은 /vod 이름공간)", lines)
 	}
 	wantGapLedger(t, p, map[int64]string{5: "P/mixed_boundary/vod_abandoned"})
 	wantVODFrozen(t, p, store, ResultFrozenWithGaps, 0, 9)

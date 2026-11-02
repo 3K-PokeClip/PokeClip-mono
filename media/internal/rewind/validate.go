@@ -173,7 +173,7 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 //	머리 넷   VERSION · TD · MSN · DISC-SEQ 줄이 첫 조각 앞에 한 줄씩 — 값은 6 · 소유 회차 TD · 첫 행 seq ·
 //	         소유 회차 base(headerMismatch)
 //	종류·닫힘 PLAYLIST-TYPE 줄 = KindVOD 면 VOD 한 줄 · 아니면 0줄 · ENDLIST 줄 있음 = Ended(headerMismatch)
-//	조각마다  URI = BaseURL + "/" + playback_s3_key · PDT 줄 = playback_pdt(ms 로 자름) ·
+//	조각마다  URI = objectURI(playback_s3_key) · PDT 줄 = playback_pdt(ms 로 자름) ·
 //	         EXTINF 줄 = duration_ms · GAP 줄은 GAP 원장에 있는 행에만 · MAP 줄 개수·위치
 //	         (segmentMismatch)
 //
@@ -253,8 +253,12 @@ func (p Playlist) headerMismatch(body []byte, lines []string, first segmentLines
 // 이어 적용된다 — 4.4.4.5). 있는지·값이 맞는지는 S4(접두)·S5(MAP 도달 가능)가 본다 — 여기서 보면 접두
 // MAP 문제가 계승 취소에서 발행 중단으로 뒤집힌다(이 조항이 S4 보다 먼저 돈다).
 func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart bool) string {
-	if want := p.BaseURL + "/" + r.PlaybackS3Key; seg.uri != want {
-		return fmt.Sprintf("URI %q — 장부 키로는 %q", seg.uri, want)
+	uri, err := p.objectURI(r.PlaybackS3Key)
+	if err != nil {
+		return fmt.Sprintf("장부 키 %.64q 로 조각 URI 를 만들 수 없다: %v", r.PlaybackS3Key, err)
+	}
+	if seg.uri != uri {
+		return fmt.Sprintf("URI %q — 장부 키로는 %q", seg.uri, uri)
 	}
 	if maps := linesWithPrefix(seg.tags, "#EXT-X-MAP:"); len(maps) > 1 || (!runStart && len(maps) > 0) {
 		return fmt.Sprintf("MAP 줄 %d개 — 회차가 이어지는 조각 앞은 0줄, 바뀌는 조각 앞은 1줄까지다", len(maps))
@@ -547,13 +551,13 @@ func (p Playlist) mapProblem(seg segmentLines, sessionID string) string {
 	return ""
 }
 
-// initURI 는 회차의 init 객체 URL 이다 — 렌더가 MAP 에 쓰는 것과 같은 BaseURL + "/" + init 키.
+// initURI 는 회차의 init 객체 URL 이다 — 렌더가 MAP 에 쓰는 것과 같은 objectURI(init 키).
 func (p Playlist) initURI(sessionID string) (string, error) {
 	key, err := playback.InitKey(p.StreamID, sessionID)
 	if err != nil {
 		return "", err
 	}
-	return p.BaseURL + "/" + key, nil
+	return p.objectURI(key)
 }
 
 // mapURI 는 태그 줄 가운데 EXT-X-MAP 의 URI 다(없으면 거짓).

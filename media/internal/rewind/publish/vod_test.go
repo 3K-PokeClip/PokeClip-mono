@@ -47,12 +47,12 @@ func TestVODJudgeFailsChainTooLarge(t *testing.T) {
 	}
 }
 
-// vodMinRowBytes 는 VOD 본문에서 조각 하나가 차지하는 바이트의 하한이다 — 가장 짧은 값(1ms · 한 글자 BaseURL · 한 글자
-// 키)의 조각 하나가 렌더에 더하는 바이트가 그 이상이어야 조기 판정이 정상 문서를 거부하지 않는다.
+// vodMinRowBytes 는 VOD 본문에서 조각 하나가 차지하는 바이트의 하한이다 — 가장 짧은 값(1ms · 한 글자 BaseURL · ③ 키
+// 문법의 키)의 조각 하나가 렌더에 더하는 바이트가 그 이상이어야 조기 판정이 정상 문서를 거부하지 않는다.
 func TestVODMinRowBytesIsLowerBound(t *testing.T) {
 	row := func(seq int64) boundary.Row {
 		return boundary.Row{Seq: seq, SessionID: "S", DurationMS: 1, PlaybackPDT: fxDay.Add(time.Duration(seq) * time.Millisecond),
-			PlaybackS3Key: "k", PlaybackUploaded: true}
+			PlaybackS3Key: fmt.Sprintf("dvr/%s/seg/%06d.m4s", fxStream, seq), PlaybackUploaded: true}
 	}
 	render := func(n int64) int {
 		pl := rewind.Playlist{StreamID: fxStream, BaseURL: "h", Owner: "S", Kind: rewind.KindVOD, Ended: true,

@@ -299,7 +299,7 @@ func TestValidateBodyHeaderMatchesKindAndEnded(t *testing.T) {
 	vodBody := mustRender(t, vod)
 	const vodLine = "#EXT-X-PLAYLIST-TYPE:VOD\n"
 	const discSeq = "#EXT-X-DISCONTINUITY-SEQUENCE:0\n"
-	uri300 := "https://media.pokeclip.com/dvr/str/seg/000300.m4s\n"
+	vodURI300 := vodPrefix + "str/seg/000300.m4s\n" // VOD 본문의 첫 조각 줄(objectURI — /vod)
 	tests := []struct {
 		name string
 		p    rewind.Playlist
@@ -314,7 +314,7 @@ func TestValidateBodyHeaderMatchesKindAndEnded(t *testing.T) {
 		{"VOD_에_PLAYLIST-TYPE_없음", vod, open, "S5"},
 		{"VOD_에_PLAYLIST-TYPE_EVENT", vod, strings.Replace(vodBody, vodLine, "#EXT-X-PLAYLIST-TYPE:EVENT\n", 1), "S5"},
 		{"VOD_에_PLAYLIST-TYPE_중복", vod, strings.Replace(vodBody, vodLine, vodLine+vodLine, 1), "S5"},
-		{"VOD_의_PLAYLIST-TYPE_이_첫_조각_뒤", vod, strings.Replace(strings.Replace(vodBody, vodLine, "", 1), uri300, uri300+vodLine, 1), "S5"},
+		{"VOD_의_PLAYLIST-TYPE_이_첫_조각_뒤", vod, strings.Replace(strings.Replace(vodBody, vodLine, "", 1), vodURI300, vodURI300+vodLine, 1), "S5"},
 		{"닫힌_목록인데_ENDLIST_없음", slidingEnded, open, "S5"},
 		{"열린_목록인데_ENDLIST", sliding, open + "#EXT-X-ENDLIST\n", "S5"},
 		{"열린_VOD_인데_ENDLIST", vod, vodBody + "#EXT-X-ENDLIST\n", "S5"},
