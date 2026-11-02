@@ -437,3 +437,11 @@ func (nopPublishStore) Head(context.Context, string) (publish.Stat, error) {
 func (nopPublishStore) Get(context.Context, string) ([]byte, string, error) {
 	return nil, "", errNopStore
 }
+
+func (nopPublishStore) Copy(context.Context, string, string) error {
+	return errNopStore
+}
+
+func (nopPublishStore) Delete(context.Context, []string) error {
+	return errNopStore
+}

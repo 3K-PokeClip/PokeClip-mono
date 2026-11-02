@@ -34,6 +34,7 @@ var _ Store = (*S3Store)(nil)
 type s3Request struct {
 	method string
 	path   string
+	query  string
 	header http.Header
 	body   []byte
 }
@@ -76,8 +77,10 @@ func newStubbedStore(t *testing.T, respond http.HandlerFunc, optFns ...func(*s3.
 			t.Errorf("요청 본문 읽기 실패: %v", err)
 		}
 		stub.mu.Lock()
-		stub.requests = append(stub.requests, s3Request{method: r.Method, path: r.URL.Path, header: r.Header.Clone(), body: body})
+		stub.requests = append(stub.requests, s3Request{method: r.Method, path: r.URL.Path, query: r.URL.RawQuery, header: r.Header.Clone(), body: body})
 		stub.mu.Unlock()
+		// 읽은 본문을 되돌려 respond 도 요청 본문을 읽게 한다(DeleteObjects 흉내).
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		respond(w, r)
 	}))
 	t.Cleanup(srv.Close)

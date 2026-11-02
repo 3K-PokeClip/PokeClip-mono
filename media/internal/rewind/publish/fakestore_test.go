@@ -167,6 +167,42 @@ func (f *fakeStore) Get(ctx context.Context, key string) ([]byte, string, error)
 	return bytes.Clone(obj.body), obj.etag, nil
 }
 
+// Copy 는 Store.Copy 다 — 원본 판의 본문 · ETag · 메타를 그대로 대상에 둔다(메타 지시 COPY · 단일 PUT 객체의 사본은 ETag 가
+// 같다). 키 검사는 S3Store 와 같다(checkCopy).
+func (f *fakeStore) Copy(ctx context.Context, src, dst string) error {
+	if err := checkCopy(src, dst); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	obj, ok := f.objects[src]
+	if !ok {
+		return fmt.Errorf("%w: COPY src=%q", ErrNotFound, src)
+	}
+	f.objects[dst] = fakeObject{body: bytes.Clone(obj.body), etag: obj.etag, meta: maps.Clone(obj.meta)}
+	return nil
+}
+
+// Delete 는 Store.Delete 다 — 없는 키는 성공이다. 묶음으로 나누지 않는다(나누기는 S3Store 의 요청 모양이다). 키 검사는
+// S3Store 와 같다(checkDelete).
+func (f *fakeStore) Delete(ctx context.Context, keys []string) error {
+	if err := checkDelete(keys); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		delete(f.objects, k)
+	}
+	return nil
+}
+
 // ListObjectsV2 를 비롯한 아래 List… 메서드 열둘은 S3 LIST 금지(프로필 4절)의 동적 그물이다 — 계획
 // 6.5 ⑵. *s3.Client 의 목록 연산 전부다(TestFakeStoreFailsTestOnListCalls 가 SDK 실물과 대조한다).
 // Store 에는 목록 연산이 없어 여기 닿는 길은 SDK 목록 인터페이스로의 형 단언뿐이다. 시그니처가 *s3.Client

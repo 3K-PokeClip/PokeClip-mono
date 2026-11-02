@@ -458,3 +458,111 @@ func TestFakeStoreFailsTestOnListCalls(t *testing.T) {
 		})
 	}
 }
+
+// 가짜의 Copy 는 S3 서버 측 복사(메타 지시 COPY)의 결과를 낸다 — 사본은 원본의 본문 · 메타 · ETag 를 그대로 갖고, 대상에 있던
+// 판은 덮인다. 원본은 그대로다.
+func TestFakeStoreCopyKeepsBodyMetaAndETag(t *testing.T) {
+	f := newFakeStore(t)
+	ctx := context.Background()
+	if _, err := f.Put(ctx, copySrcKey, IfAbsent(), bodyA, map[string]string{"pc-gen": "1"}); err != nil {
+		t.Fatalf("원본 Put 실패: %v", err)
+	}
+	if _, err := f.Put(ctx, copyDstKey, IfAbsent(), bodyB, map[string]string{"pc-gen": "9"}); err != nil {
+		t.Fatalf("대상 Put 실패: %v", err)
+	}
+
+	if err := f.Copy(ctx, copySrcKey, copyDstKey); err != nil {
+		t.Fatalf("Copy 실패: %v", err)
+	}
+
+	src, err := f.Head(ctx, copySrcKey)
+	if err != nil {
+		t.Fatalf("원본 Head 실패: %v", err)
+	}
+	dst, err := f.Head(ctx, copyDstKey)
+	if err != nil {
+		t.Fatalf("사본 Head 실패: %v", err)
+	}
+	if !src.Exists || !sameStat(dst, src) {
+		t.Errorf("사본 Head = %+v, want 원본 Head %+v 와 같음", dst, src)
+	}
+	if body, _, err := f.Get(ctx, copyDstKey); err != nil || !bytes.Equal(body, bodyA) {
+		t.Errorf("사본 본문 = %q · %v, want %q(원본 본문)", body, err, bodyA)
+	}
+}
+
+// 원본이 없으면 ErrNotFound 이고 대상은 그대로다(S3 의 404 NoSuchKey).
+func TestFakeStoreCopyMissingSourceIsNotFound(t *testing.T) {
+	f := newFakeStore(t)
+
+	if err := f.Copy(context.Background(), copySrcKey, copyDstKey); !errors.Is(err, ErrNotFound) {
+		t.Errorf("없는 원본의 Copy 오류 = %v, want ErrNotFound", err)
+	}
+	if st, err := f.Head(context.Background(), copyDstKey); err != nil || st.Exists {
+		t.Errorf("실패한 Copy 뒤 대상 Head = %+v · %v, want 없음", st, err)
+	}
+}
+
+// 가짜의 Delete 는 사본 키를 지우고 없는 키는 성공으로 친다(S3 DeleteObjects 의 뜻) — 목록에 없는 키는 남는다.
+func TestFakeStoreDeleteRemovesKeysAndIgnoresMissing(t *testing.T) {
+	f := newFakeStore(t)
+	ctx := context.Background()
+	initCopy := "vod/demo/init/sess-1.mp4"
+	keep := "vod/demo/seg/000099.m4s"
+	for _, k := range []string{copyDstKey, initCopy, keep} {
+		plant(f, putCall{key: k, body: bodyA})
+	}
+
+	if err := f.Delete(ctx, []string{copyDstKey, initCopy, "vod/demo/seg/999999.m4s"}); err != nil {
+		t.Fatalf("Delete 실패: %v", err)
+	}
+
+	for _, k := range []string{copyDstKey, initCopy} {
+		if st, err := f.Head(ctx, k); err != nil || st.Exists {
+			t.Errorf("지운 키 %q 의 Head = %+v · %v, want 없음", k, st, err)
+		}
+	}
+	if st, err := f.Head(ctx, keep); err != nil || !st.Exists {
+		t.Errorf("목록에 없던 키 %q 의 Head = %+v · %v, want 있음", keep, st, err)
+	}
+}
+
+// 가짜도 S3Store 와 같은 키 검사를 한다 — Copy 는 ③ 원본 → 그 사본 키만, Delete 는 사본 키(와 탐침 원본)만 받고 나머지는
+// errBadObjectKey 다. 거절된 호출은 저장소를 바꾸지 않는다. 끝난 ctx 로는 저장소에 닿지 않는다.
+func TestFakeStoreCopyDeleteRejectLikeS3Store(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeStore(t)
+	plant(f, putCall{key: copySrcKey, body: bodyA})
+	plant(f, putCall{key: copyDstKey, body: bodyB})
+
+	rejected := []struct {
+		name string
+		call func() error
+	}{
+		{name: "Copy_swapped", call: func() error { return f.Copy(ctx, copyDstKey, copySrcKey) }},
+		{name: "Copy_other_pair", call: func() error { return f.Copy(ctx, "dvr/demo/seg/000011.m4s", copyDstKey) }},
+		{name: "Copy_same_key", call: func() error { return f.Copy(ctx, copySrcKey, copySrcKey) }},
+		{name: "Copy_parent_ref", call: func() error { return f.Copy(ctx, copySrcKey, "vod/../x.m4s") }},
+		{name: "Delete_source", call: func() error { return f.Delete(ctx, []string{copyDstKey, copySrcKey}) }},
+		{name: "Delete_empty_key", call: func() error { return f.Delete(ctx, []string{copyDstKey, ""}) }},
+	}
+	for _, r := range rejected {
+		if err := r.call(); !errors.Is(err, errBadObjectKey) {
+			t.Errorf("%s 오류 = %v, want errBadObjectKey", r.name, err)
+		}
+	}
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := f.Copy(done, copySrcKey, copyDstKey); !errors.Is(err, context.Canceled) {
+		t.Errorf("끝난 ctx 의 Copy 오류 = %v, want context.Canceled", err)
+	}
+	if err := f.Delete(done, []string{copyDstKey}); !errors.Is(err, context.Canceled) {
+		t.Errorf("끝난 ctx 의 Delete 오류 = %v, want context.Canceled", err)
+	}
+
+	for key, want := range map[string][]byte{copySrcKey: bodyA, copyDstKey: bodyB} {
+		if body, _, err := f.Get(ctx, key); err != nil || !bytes.Equal(body, want) {
+			t.Errorf("거절된 호출 뒤 %q = %q · %v, want %q 그대로", key, body, err, want)
+		}
+	}
+}

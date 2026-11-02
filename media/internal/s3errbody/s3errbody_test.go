@@ -126,6 +126,29 @@ func TestLimitWrapsOnlyNon2xx(t *testing.T) {
 	}
 }
 
+// LimitAll 은 상태와 무관하게 본문을 MaxBytes 까지만 읽게 한다 — 「200 인데 오류」 처리가 붙은 연산(CopyObject)은 상태 200 의
+// 오류 본문을 SDK 가 상한 없이 복사하므로(service/s3 v1.106.3 deserializers.go awsRestxml_deserializeOpErrorCopyObject) 2xx 도
+// 감싸야 한다. 상한 크기 본문은 그대로 읽힌다.
+func TestLimitAllWrapsEveryStatus(t *testing.T) {
+	limitedAll := func(next s3.HTTPClient) s3.HTTPClient {
+		o := s3.Options{HTTPClient: next}
+		s3errbody.LimitAll(&o)
+		return o.HTTPClient
+	}
+	for _, status := range []int{200, 204, 299, 404, 500} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			over := doOrFatal(t, limitedAll(respondBody(status, newCountingBody(s3errbody.MaxBytes+1))))
+			if got, err := io.ReadAll(over.Body); len(got) != s3errbody.MaxBytes || !errors.Is(err, s3errbody.ErrTooLarge) {
+				t.Errorf("상태 %d · 상한+1 본문 = %d바이트 · err %v, want %d바이트 · ErrTooLarge", status, len(got), err, s3errbody.MaxBytes)
+			}
+			at := doOrFatal(t, limitedAll(respondBody(status, newCountingBody(s3errbody.MaxBytes))))
+			if got, err := io.ReadAll(at.Body); len(got) != s3errbody.MaxBytes || err != nil {
+				t.Errorf("상태 %d · 상한 본문 = %d바이트 · err %v, want %d바이트 · nil", status, len(got), err, s3errbody.MaxBytes)
+			}
+		})
+	}
+}
+
 // next 가 오류 없이 nil 응답을 주면 그대로 (nil, nil) 이다 — 감싸개가 역참조하지 않는다. 빈 응답으로 바꾸는 일은 SDK 의 전송기가
 // 맡는다(smithy-go v1.27.6 transport/http/client.go ClientHandler.Handle).
 func TestLimitPassesNilResponse(t *testing.T) {
@@ -201,6 +224,27 @@ func TestLimitClosesOriginalBody(t *testing.T) {
 				t.Errorf("원 본문 Close %d번, want 1", n)
 			}
 		})
+	}
+}
+
+// 상한을 넘는 순간 원 본문을 닫는다 — 감싼 본문의 Close 가 불리지 않아도 연결이 풀린다. SDK 의 「200 인데 오류」 처리는 본문을
+// io.NopCloser 로 다시 감싸(service/s3 v1.106.3 handle_200_error.go) 감싼 본문의 Close 가 원 본문에 닿지 않는다 — 닫지 않으면 읽다
+// 만 연결과 그 읽기 고루틴이 남는다. 뒤에 Close 를 불러도 원 본문 Close 는 한 번이다.
+func TestLimitClosesOriginalOnTooLarge(t *testing.T) {
+	body := newCountingBody(hugeSize)
+	resp := doOrFatal(t, limited(respondBody(http.StatusInternalServerError, body)))
+
+	if _, err := io.ReadAll(resp.Body); !errors.Is(err, s3errbody.ErrTooLarge) {
+		t.Fatalf("본문 읽기 err = %v, want ErrTooLarge", err)
+	}
+	if n := body.closes.Load(); n != 1 {
+		t.Errorf("상한 초과 직후 원 본문 Close %d번, want 1(그 자리에서 닫는다)", n)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("Close = %v, want nil", err)
+	}
+	if n := body.closes.Load(); n != 1 {
+		t.Errorf("Close 뒤 원 본문 Close %d번, want 1(두 번 닫지 않는다)", n)
 	}
 }
 

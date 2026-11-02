@@ -7,14 +7,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 )
 
 // Store 가 쓰는 객체의 머리다 — 되감기 목록(/dvr · M5 설계 4.5 표)과 VOD 문서(/vod · M6 FreezeVOD)가 받는다. 구현이
@@ -160,6 +163,70 @@ func (s *S3Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 func checkBodyLimit(key string, body []byte) error {
 	if limit := getBodyLimit(key); len(body) > limit {
 		return fmt.Errorf("%w: GET key=%q: 상한 %d바이트", errBodyOverLimit, key, limit)
+	}
+	return nil
+}
+
+// maxDeleteKeys 는 DeleteObjects 한 요청에 싣는 키의 상한이다 — S3 API 의 상한(1000)이다.
+const maxDeleteKeys = 1000
+
+// Copy 는 Store.Copy 다 — CopyObject 하나로 같은 버킷(s.bucket) 안에서 복사한다. 메타 지시는 COPY 를 명시한다(기본값에
+// 기대지 않는다 — E56). 암호화 머리(x-amz-server-side-encryption*)는 싣지 않는다 — 사본의 암호화는 원본이 아니라 대상
+// 버킷의 기본 암호화가 정한다. 복사 원본 머리는 "버킷/키" 를 인코딩 없이 싣는다 — 키는 checkCopy 가 ③ 키 문법(URL 안전
+// 문자 성분)만 받으므로 인코딩해도 같다.
+//
+// 상태 200 에 오류 본문이 오는 응답(복사 도중 실패)은 SDK 가 오류로 바꾼다(service/s3 v1.106.3 CopyObject 의
+// HandleResponseErrorWith200Status — E60). 그때 SDK 는 본문을 상한 없이 복사하므로 연산별 옵션 s3errbody.LimitAll 로 모든
+// 응답 본문을 상한까지만 읽는다(조립점의 s3errbody.Limit 은 2xx 를 감싸지 않는다). 404 NoSuchKey 는 원본 부재라 ErrNotFound
+// 다(storeError).
+func (s *S3Store) Copy(ctx context.Context, src, dst string) error {
+	if err := checkCopy(src, dst); err != nil {
+		return err
+	}
+	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(s.bucket),
+		Key:               aws.String(dst),
+		CopySource:        aws.String(s.bucket + "/" + src),
+		MetadataDirective: types.MetadataDirectiveCopy,
+	}, requestOptions, s3errbody.LimitAll)
+	if err != nil {
+		return storeError(fmt.Sprintf("COPY src=%q", src), dst, err)
+	}
+	return nil
+}
+
+// Delete 는 Store.Delete 다 — 키를 maxDeleteKeys 개씩 받은 순서대로 DeleteObjects(Quiet — 응답에는 못 지운 키만 온다)로
+// 보낸다. 무결성 머리는 SDK 가 붙인다(이 연산은 요청 체크섬이 필수라 requestOptions 의 WhenRequired 에서도 계산한다).
+func (s *S3Store) Delete(ctx context.Context, keys []string) error {
+	if err := checkDelete(keys); err != nil {
+		return err
+	}
+	for batch := range slices.Chunk(keys, maxDeleteKeys) {
+		if err := s.deleteBatch(ctx, batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteBatch 는 keys(maxDeleteKeys 개 이하)를 DeleteObjects 한 요청으로 지운다. 요청이 실패하거나 응답의 Errors 칸에 키가
+// 있으면 오류다 — 문장에는 못 지운 키 수와 첫 키의 코드를 싣는다.
+func (s *S3Store) deleteBatch(ctx context.Context, keys []string) error {
+	ids := make([]types.ObjectIdentifier, len(keys))
+	for i, k := range keys {
+		ids[i] = types.ObjectIdentifier{Key: aws.String(k)}
+	}
+	out, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(s.bucket),
+		Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+	}, requestOptions)
+	if err != nil {
+		return fmt.Errorf("publish: DELETE %d키(첫 key=%q): %w", len(keys), keys[0], err)
+	}
+	if len(out.Errors) > 0 {
+		first := out.Errors[0]
+		return fmt.Errorf("publish: DELETE %d키 중 %d키를 못 지웠다 — 첫 key=%q %s: %s",
+			len(keys), len(out.Errors), aws.ToString(first.Key), aws.ToString(first.Code), aws.ToString(first.Message))
 	}
 	return nil
 }

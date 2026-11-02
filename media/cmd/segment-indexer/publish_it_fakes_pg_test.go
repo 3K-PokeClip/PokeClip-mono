@@ -36,6 +36,7 @@ import (
 //   - headFalse404 면 Head 가 객체가 있어도 없다고 답한다(탐침 C).
 //   - Put 마다 차례를 적는다 — 적용된 PUT 은 본문까지 남아 그 키의 판 이력이 된다(versions).
 //   - 목록 연산 · Get 에 닿으면 시험을 실패로 적는다(LIST 금지 · M4 의 GET 호출자 0).
+//   - Copy 는 원본 판을 그대로 옮기고(없으면 ErrNotFound) Delete 는 없는 키도 성공이다. 키 검사는 발행 패키지 몫이다.
 type itStore struct {
 	t testing.TB
 
@@ -116,6 +117,34 @@ func (s *itStore) Head(ctx context.Context, key string) (publish.Stat, error) {
 func (s *itStore) Get(context.Context, string) ([]byte, string, error) {
 	s.t.Errorf("itStore: Get 호출 — M4 발행 경로에 GET 호출자는 없다")
 	return nil, "", errors.New("itStore: Get 은 부르지 않는다")
+}
+
+// Copy 는 원본 판을 그대로 대상에 둔다(메타 지시 COPY) — 원본이 없으면 ErrNotFound 다.
+func (s *itStore) Copy(ctx context.Context, src, dst string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	obj, ok := s.objects[src]
+	if !ok {
+		return fmt.Errorf("%w: COPY src=%q", publish.ErrNotFound, src)
+	}
+	s.objects[dst] = itObject{body: slices.Clone(obj.body), etag: obj.etag, meta: maps.Clone(obj.meta)}
+	return nil
+}
+
+// Delete 는 keys 를 지운다 — 없는 키는 성공이다.
+func (s *itStore) Delete(ctx context.Context, keys []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range keys {
+		delete(s.objects, k)
+	}
+	return nil
 }
 
 // ListObjectsV2 · ListObjects 는 S3 LIST 금지(프로필 4절)의 동적 그물이다 — SDK 목록 인터페이스로의 형 단언이 닿으면 실패로

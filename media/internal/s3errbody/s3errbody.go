@@ -1,19 +1,21 @@
-// Package s3errbody 는 2xx 가 아닌 S3 응답 본문을 SDK 가 읽는 양을 제한한다.
+// Package s3errbody 는 2xx 가 아닌 S3 응답 본문(「200 인데 오류」 연산이면 모든 응답 본문)을 SDK 가 읽는 양을 제한한다.
 //
 // SDK 는 오류 응답 본문을 상한 없이 메모리에 복사한다(service/s3 v1.106.3 deserializers.go). 고장 나거나 적대적인 엔드포인트가
 // 거대한 오류 본문을 보내면 사이드카가 그만큼 메모리를 잡는다. 이 패키지는 SDK 의 HTTP 클라이언트를 감싸 그 본문을 MaxBytes 까지만
 // 읽게 한다. 상태 코드는 그대로 남으므로 상태 코드에 기댄 오류 분류는 바뀌지 않는다. S3 오류 XML 의 크기는 실측 1건(2929B)과
 // 추정(수십 KB 이하)뿐이다 — 상한을 넘는 오류 본문은 코드 문자열을 잃고 상태 코드로만 분류된다.
 //
-// 고정판(service/s3 v1.106.3) 가정: 사이드카가 쓰는 PutObject · HeadObject · HeadBucket · GetObject 는 S3 의 「200 인데 오류」
-// 커스터마이즈 비대상이라 오류 본문은 언제나 2xx 가 아닌 응답으로 온다. SDK 판을 올려 이 가정이 깨지면 sdkassume_test.go 의 가드
-// 시험이 FAIL 한다 — 그때 이 패키지의 범위를 다시 정한다.
+// 고정판(service/s3 v1.106.3) 가정: 사이드카가 쓰는 PutObject · HeadObject · HeadBucket · GetObject · DeleteObjects 는 S3 의
+// 「200 인데 오류」 커스터마이즈 비대상이라 오류 본문은 언제나 2xx 가 아닌 응답으로 온다. 그 처리가 붙은 CopyObject 는 상태 200
+// 의 오류 본문도 상한 없이 복사하므로, 부르는 곳이 연산별 옵션 LimitAll 로 모든 상태의 본문을 막는다. SDK 판을 올려 이 가정이
+// 깨지면 sdkassume_test.go 의 가드 시험이 FAIL 한다 — 그때 이 패키지의 범위를 다시 정한다.
 package s3errbody
 
 import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -35,33 +37,46 @@ func Limit(o *s3.Options) {
 	o.HTTPClient = client{next: o.HTTPClient}
 }
 
-// client 는 2xx 가 아닌 응답의 본문을 limitedBody 로 바꾸는 s3.HTTPClient 다. 상태가 없어 여러 고루틴이 함께 써도 된다 —
-// 계수는 응답마다 limitedBody 안에 있다.
+// LimitAll 은 Limit 과 같되 상태 코드와 무관하게 모든 응답 본문을 MaxBytes 까지만 읽게 한다. 「200 인데 오류」 처리가 붙은 연산
+// (CopyObject)에 연산별 옵션으로 붙인다 — 그 처리는 상태 200 의 오류 본문을 500 으로 바꿔 상한 없이 복사한다(service/s3
+// v1.106.3 handle_200_error.go · deserializers.go awsRestxml_deserializeOpErrorCopyObject). 성공 본문이 작은 연산에만 쓴다
+// (CopyObjectResult 는 수백 바이트) — GetObject 처럼 본문을 받는 연산에 쓰면 MaxBytes 넘는 정상 본문이 ErrTooLarge 가 된다.
+func LimitAll(o *s3.Options) {
+	o.HTTPClient = client{next: o.HTTPClient, all: true}
+}
+
+// client 는 2xx 가 아닌 응답(all 이면 모든 응답)의 본문을 limitedBody 로 바꾸는 s3.HTTPClient 다. 상태가 없어 여러 고루틴이 함께
+// 써도 된다 — 계수는 응답마다 limitedBody 안에 있다.
 type client struct {
 	next s3.HTTPClient
+	all  bool
 }
 
 // Do 는 next 에 요청을 한 번 보낸다. 오류가 있거나 응답이 nil 이면 그대로 돌려준다(nil 응답은 smithy-go v1.27.6 전송기
-// transport/http/client.go 가 빈 응답으로 바꾼다). 2xx(SDK 와 같은 200 <= code < 300)이거나 본문이 nil 이면 원 응답을 그대로
-// 돌려준다.
+// transport/http/client.go 가 빈 응답으로 바꾼다). all 이 아닌데 2xx(SDK 와 같은 200 <= code < 300)이거나, 본문이 nil 이면 원
+// 응답을 그대로 돌려준다.
 func (c client) Do(r *http.Request) (*http.Response, error) {
 	resp, err := c.next.Do(r)
 	if err != nil || resp == nil {
 		return resp, err
 	}
-	if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.Body == nil {
+	if (!c.all && resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.Body == nil {
 		return resp, nil
 	}
 	resp.Body = &limitedBody{rc: resp.Body, r: io.LimitedReader{R: resp.Body, N: MaxBytes + 1}}
 	return resp, nil
 }
 
-// limitedBody 는 원 본문을 MaxBytes 까지 통과시키는 ReadCloser 다. MaxBytes+1 째 바이트를 읽으면 그 바이트는 버리고 ErrTooLarge 를
-// 내며, 그 뒤의 Read 도 모두 ErrTooLarge 다 — 원 본문에서는 MaxBytes+1 바이트 넘게 읽지 않는다. Close 는 원 본문을 닫는다.
+// limitedBody 는 원 본문을 MaxBytes 까지 통과시키는 ReadCloser 다. MaxBytes+1 째 바이트를 읽으면 그 바이트는 버리고 원 본문을 그
+// 자리에서 닫은 뒤 ErrTooLarge 를 내며, 그 뒤의 Read 도 모두 ErrTooLarge 다 — 원 본문에서는 MaxBytes+1 바이트 넘게 읽지 않는다.
+// 그 자리에서 닫는 것은 SDK 의 「200 인데 오류」 처리가 본문을 io.NopCloser 로 다시 감싸 이 Close 가 불리지 않을 수 있어서다
+// (service/s3 v1.106.3 handle_200_error.go) — 닫지 않으면 읽다 만 연결이 남는다. Close 는 원 본문을 한 번만 닫는다.
 type limitedBody struct {
-	rc       io.ReadCloser
-	r        io.LimitedReader // 남은 허용량 N 은 MaxBytes+1 에서 시작한다(한 바이트 더 읽어야 상한과 초과를 가른다)
-	tooLarge bool
+	rc        io.ReadCloser
+	r         io.LimitedReader // 남은 허용량 N 은 MaxBytes+1 에서 시작한다(한 바이트 더 읽어야 상한과 초과를 가른다)
+	tooLarge  bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (b *limitedBody) Read(p []byte) (int, error) {
@@ -74,9 +89,16 @@ func (b *limitedBody) Read(p []byte) (int, error) {
 	}
 	// 허용량을 다 썼다 — 이번에 읽은 마지막 바이트가 MaxBytes+1 째다.
 	b.tooLarge = true
+	b.closeOriginal()
 	return n - 1, ErrTooLarge
 }
 
 func (b *limitedBody) Close() error {
-	return b.rc.Close()
+	b.closeOriginal()
+	return b.closeErr
+}
+
+// closeOriginal 은 원 본문을 한 번만 닫는다 — 상한 초과 자리와 Close 둘 다 부른다.
+func (b *limitedBody) closeOriginal() {
+	b.closeOnce.Do(func() { b.closeErr = b.rc.Close() })
 }

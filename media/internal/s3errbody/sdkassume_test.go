@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go/middleware"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
@@ -36,8 +37,9 @@ var (
 	opKey    = aws.String("key")
 )
 
-// sidecarOps 는 사이드카가 부르는 S3 연산 전부다(upload/s3.go Put · rewind/publish/s3store.go Put · Head · Get ·
-// cmd/segment-indexer/rewind_assembly.go checkBucket). 새 연산을 부르게 되면 여기에 더한다.
+// sidecarOps 는 사이드카가 부르는 S3 연산 가운데 「200 인데 오류」 처리가 없는 것 전부다(upload/s3.go Put ·
+// rewind/publish/s3store.go Put · Head · Get · Delete · cmd/segment-indexer/rewind_assembly.go checkBucket) — Limit 이 덮는다. 그
+// 처리가 있는 연산은 limitAllOps 에 둔다. 새 연산을 부르게 되면 둘 중 하나에 더한다.
 var sidecarOps = map[string]s3Op{
 	"PutObject": func(ctx context.Context, c *s3.Client, optFn func(*s3.Options)) error {
 		_, err := c.PutObject(ctx, &s3.PutObjectInput{Bucket: opBucket, Key: opKey}, optFn)
@@ -53,6 +55,23 @@ var sidecarOps = map[string]s3Op{
 	},
 	"GetObject": func(ctx context.Context, c *s3.Client, optFn func(*s3.Options)) error {
 		_, err := c.GetObject(ctx, &s3.GetObjectInput{Bucket: opBucket, Key: opKey}, optFn)
+		return err
+	},
+	"DeleteObjects": func(ctx context.Context, c *s3.Client, optFn func(*s3.Options)) error {
+		_, err := c.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: opBucket,
+			Delete: &types.Delete{Objects: []types.ObjectIdentifier{{Key: opKey}}},
+		}, optFn)
+		return err
+	},
+}
+
+// limitAllOps 는 사이드카가 부르는 S3 연산 가운데 「200 인데 오류」 처리가 붙은 것 전부다(rewind/publish/s3store.go Copy) — 상태
+// 200 의 오류 본문을 Limit 이 덮지 못하므로 부르는 곳이 연산별 옵션 LimitAll 을 붙인다(그 결선은 publish 의
+// TestS3StoreCopyLimitsHuge200ErrorBody 가 잰다).
+var limitAllOps = map[string]s3Op{
+	"CopyObject": func(ctx context.Context, c *s3.Client, optFn func(*s3.Options)) error {
+		_, err := c.CopyObject(ctx, &s3.CopyObjectInput{Bucket: opBucket, Key: opKey, CopySource: aws.String("bucket/src")}, optFn)
 		return err
 	},
 }
@@ -101,7 +120,7 @@ func s3ModuleVersion() string {
 	return "판 미상"
 }
 
-// D13 — 사이드카 연산 넷의 스택에 「200 인데 오류」 처리가 없다(고정판 service/s3 v1.106.3 가정). 있으면 상태 200 인 오류 응답이
+// D13 — sidecarOps 의 스택에 「200 인데 오류」 처리가 없다(고정판 service/s3 v1.106.3 가정). 있으면 상태 200 인 오류 응답이
 // 비2xx 전용 감싸개를 지나 무상한 복사로 간다.
 func TestSidecarOpsHaveNo200ErrorPath(t *testing.T) {
 	for name, op := range sidecarOps {
@@ -113,15 +132,15 @@ func TestSidecarOpsHaveNo200ErrorPath(t *testing.T) {
 	}
 }
 
-// D13 자기 시험 — 같은 열거가 고정판에서 「200 인데 오류」 처리를 다는 CopyObject 에서는 그 ID 를 찾는다. ID 문자열이 바뀌거나
-// 열거가 망가져 가드가 헛도는 것을 막는다. 출처: service/s3@v1.106.3/api_op_CopyObject.go:1038.
-func TestGuardSeesCopyObject200ErrorPath(t *testing.T) {
-	copyObject := func(ctx context.Context, c *s3.Client, optFn func(*s3.Options)) error {
-		_, err := c.CopyObject(ctx, &s3.CopyObjectInput{Bucket: opBucket, Key: opKey, CopySource: aws.String("bucket/src")}, optFn)
-		return err
-	}
-
-	if ids := deserializeIDs(t, copyObject); !slices.Contains(ids, process200ErrorID) {
-		t.Errorf("CopyObject 역직렬화 단계 ID %v 에 %q 가 없다 — 가드가 헛돈다(%s %s)", ids, process200ErrorID, s3Module, s3ModuleVersion())
+// D13 짝 — limitAllOps 의 스택에는 「200 인데 오류」 처리가 있다. 이 처리가 사라지면 LimitAll 이 불필요해지고(sidecarOps 로
+// 옮긴다), ID 문자열이 바뀌거나 열거가 망가지면 위 가드가 헛돈다 — 둘 다 여기서 FAIL 한다. 출처:
+// service/s3@v1.106.3/api_op_CopyObject.go:1038.
+func TestLimitAllOpsHave200ErrorPath(t *testing.T) {
+	for name, op := range limitAllOps {
+		t.Run(name, func(t *testing.T) {
+			if ids := deserializeIDs(t, op); !slices.Contains(ids, process200ErrorID) {
+				t.Errorf("%s 역직렬화 단계 ID %v 에 %q 가 없다 — 가드가 헛돌거나 LimitAll 범위 재검토(%s %s)", name, ids, process200ErrorID, s3Module, s3ModuleVersion())
+			}
+		})
 	}
 }
