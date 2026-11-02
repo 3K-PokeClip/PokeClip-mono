@@ -59,6 +59,22 @@ describe('ThumbnailImage', () => {
     expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
   });
 
+  it('이미 받은 사진이면(다른 화면에서 돌아옴) placeholder 없이 바로 보인다: load를 기다려 다시 페이드하지 않는다', () => {
+    const complete = vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+    const width = vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(640);
+    const { container } = render(
+      <ThumbnailImage
+        src={SRC}
+        fallback={<span>자리표시</span>}
+        placeholder={<span>받는 중</span>}
+      />,
+    );
+    expect(screen.queryByText('받는 중')).toBeNull();
+    expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
+    complete.mockRestore();
+    width.mockRestore();
+  });
+
   it('pending이면 사진이 없는 동안 자리표시 대신 placeholder를 보이고, 못 받으면 자리표시로 돌아간다', () => {
     const wait = <span>받는 중</span>;
     const { container, rerender } = render(

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { pickThumbnailUrl, STILL_REFRESH_MS } from './thumbnailUrl';
 import styles from './ThumbnailImage.module.css';
 
@@ -57,6 +57,11 @@ export function ThumbnailImage({
     const timer = window.setTimeout(() => setPhase('done'), FADE_MS);
     return () => window.clearTimeout(timer);
   }, [phase]);
+  // 이미 받은 사진(다른 화면에 갔다 돌아옴)이면 붙는 순간 끝낸다. load는 다음 태스크에 와서, 기다리면 로딩 칸이 한 프레임 비치고
+  // 페이드가 다시 돈다(PR #465 리뷰). ref는 커밋 중에 불려 그리기 전에 맞춰진다
+  const settleIfReady = useCallback((img: HTMLImageElement | null) => {
+    if (img?.complete && img.naturalWidth > 0) setPhase('done');
+  }, []);
   if (!shown || errored) {
     // 첫 칸은 placeholder 자리다. 사진이 와도 같은 칸에 남아 같은 노드로 이어진다
     const awaiting = pending && !errored && placeholder !== undefined;
@@ -74,6 +79,7 @@ export function ThumbnailImage({
       {layered && phase !== 'done' ? placeholder : null}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
+        ref={layered ? settleIfReady : undefined}
         className={styles.img}
         data-pending={waiting || undefined}
         src={shown}
