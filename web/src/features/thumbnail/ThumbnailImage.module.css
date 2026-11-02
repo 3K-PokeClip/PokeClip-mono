@@ -6,3 +6,18 @@
   height: 100%;
   object-fit: cover;
 }
+
+/* 자리표시(placeholder)를 준 칸만: 다 받기 전에는 숨겼다가 서서히 나타난다. 받는 동안 위에서부터 끊겨 그려지지 않게 */
+.img {
+  transition: opacity 0.2s ease;
+}
+
+.img[data-pending] {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .img {
+    transition: none;
+  }
+}

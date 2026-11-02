@@ -10,13 +10,21 @@ export function ThumbnailImage({
   src,
   fallback,
   refreshMs = STILL_REFRESH_MS,
+  placeholder,
 }: {
   src: string | null | undefined;
   fallback: ReactNode;
   refreshMs?: number;
+  /**
+   * 첫 사진을 내려받는 동안 보일 것(반짝이는 회색 칸 등). 주면 사진은 다 받은 뒤 서서히 나타난다. 이미 그린 사진이 새 주소로 바뀔
+   * 때(라이브 1분 갱신)는 다시 보이지 않는다: 브라우저가 새 사진을 받는 동안 앞 사진을 그대로 둔다
+   */
+  placeholder?: ReactNode;
 }) {
   const [shown, setShown] = useState<string | null>(src ?? null);
   const [errored, setErrored] = useState(false);
+  // 이 img가 사진을 한 번이라도 그렸는가. 자리표시로 내려갔다(사진 없음 · 못 받음) 다시 올라오면 새 img라 처음부터 기다린다
+  const [painted, setPainted] = useState(false);
   // 못 받은 뒤에는 이어 쓰기를 하지 않고 들어온 주소로 바로 바꾼다. 같은 사진의 새 서명이 와도 보던(실패한) 주소를 붙잡으면
   // 일시 오류 하나로 갱신 시간(최대 50분)까지 자리표시에 머문다(로컬 리뷰 1라운드)
   useEffect(() => {
@@ -28,15 +36,25 @@ export function ThumbnailImage({
   useEffect(() => {
     setErrored(false);
   }, [shown]);
+  const hasImg = Boolean(shown) && !errored;
+  useEffect(() => {
+    if (!hasImg) setPainted(false);
+  }, [hasImg]);
   if (!shown || errored) return <>{fallback}</>;
+  const waiting = placeholder !== undefined && !painted;
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      className={styles.img}
-      src={shown}
-      alt=""
-      loading="lazy"
-      onError={() => setErrored(true)}
-    />
+    <>
+      {waiting ? placeholder : null}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        className={styles.img}
+        data-pending={waiting || undefined}
+        src={shown}
+        alt=""
+        loading="lazy"
+        onLoad={() => setPainted(true)}
+        onError={() => setErrored(true)}
+      />
+    </>
   );
 }
