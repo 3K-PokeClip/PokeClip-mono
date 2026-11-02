@@ -41,8 +41,9 @@ function useSecondTick(originMs: number | null): number {
       if (document.visibilityState === 'hidden') stop();
       else tick();
     };
+    // 지금 시각부터 맞추고 다음 초 경계를 건다. 시작 시각이 나중에 오면(모름 → 앎) 마운트 때 잡은 시각으로 세어 그만큼 틀린다.
     // 탭이 숨은 채로 열렸으면 돌아올 때(visibilitychange) 시작한다
-    if (document.visibilityState !== 'hidden') arm();
+    if (document.visibilityState !== 'hidden') tick();
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       stop();

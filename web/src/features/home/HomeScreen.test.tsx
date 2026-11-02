@@ -1387,6 +1387,16 @@ describe('LiveNowBand', () => {
       });
       expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
     });
+
+    it('시작 시각이 나중에 와도(모름 → 앎) 다음 초를 기다리지 않고 바로 지금 경과로 적는다', () => {
+      const { rerender } = render(<LiveNowBand live={{ ...LIVE, startedAtMs: null }} />);
+      act(() => {
+        vi.advanceTimersByTime(120_000);
+      });
+      rerender(<LiveNowBand live={LIVE} />);
+      // 마운트 때 시각으로 세면 2분 적은 1:24:03이 1초 가까이 보인다
+      expect(screen.getByText('LIVE 1:26:03')).toBeInTheDocument();
+    });
   });
 
   it('플랫폼을 모르면 플랫폼 태그를 달지 않는다 — 치지직·SOOP·씨미 중 무엇인지 지어내지 않는다', () => {
