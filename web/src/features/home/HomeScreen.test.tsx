@@ -1331,6 +1331,16 @@ describe('LiveNowBand', () => {
       expect(container.querySelector('svg')).not.toBeNull();
     });
 
+    it('첫 사진 주소가 오면 기다리던 반짝이는 칸을 그대로 이어 쓴다: 아이콘을 거쳐 새로 붙지 않는다', () => {
+      const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, photoLate: false }} />);
+      const awaiting = screen.getByTestId('thumb-loading');
+
+      rerender(<LiveNowBand live={{ ...LIVE, photoLate: false, thumbnailUrl: SHOT }} />);
+      expect(container.querySelector('img')).toHaveAttribute('data-pending');
+      // 같은 노드여야 반짝임이 처음부터 다시 돌지 않는다
+      expect(screen.getByTestId('thumb-loading')).toBe(awaiting);
+    });
+
     it('사진을 못 받으면 반짝이지 않고 아이콘으로 돌아간다', () => {
       const { container } = render(
         <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT, photoLate: false }} />,

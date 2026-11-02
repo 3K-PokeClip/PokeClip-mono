@@ -52,6 +52,25 @@ describe('ThumbnailImage', () => {
     expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
   });
 
+  it('pending이면 사진이 없는 동안 자리표시 대신 placeholder를 보이고, 못 받으면 자리표시로 돌아간다', () => {
+    const wait = <span>받는 중</span>;
+    const { container, rerender } = render(
+      <ThumbnailImage src={null} fallback={<span>자리표시</span>} placeholder={wait} pending />,
+    );
+    expect(screen.getByText('받는 중')).toBeInTheDocument();
+    expect(screen.queryByText('자리표시')).toBeNull();
+
+    rerender(
+      <ThumbnailImage src={SRC} fallback={<span>자리표시</span>} placeholder={wait} pending />,
+    );
+    expect(container.querySelector('img')).toHaveAttribute('data-pending');
+    expect(screen.getByText('받는 중')).toBeInTheDocument();
+
+    fireEvent.error(container.querySelector('img')!);
+    expect(screen.getByText('자리표시')).toBeInTheDocument();
+    expect(screen.queryByText('받는 중')).toBeNull();
+  });
+
   it('못 받은 뒤 같은 사진의 새 서명 주소가 오면 바로 다시 시도한다(갱신 시간을 기다리지 않는다)', () => {
     // 서명 3초 뒤로 시계를 고정한다. 안 그러면 「50분 지났다」로 새 주소를 쓰게 돼 이 갈래를 재지 못한다
     vi.useFakeTimers({ toFake: ['Date'] });

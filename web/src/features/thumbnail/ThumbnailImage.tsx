@@ -11,6 +11,7 @@ export function ThumbnailImage({
   fallback,
   refreshMs = STILL_REFRESH_MS,
   placeholder,
+  pending = false,
 }: {
   src: string | null | undefined;
   fallback: ReactNode;
@@ -20,6 +21,12 @@ export function ThumbnailImage({
    * 때(라이브 1분 갱신)는 다시 보이지 않는다: 브라우저가 새 사진을 받는 동안 앞 사진을 그대로 둔다
    */
   placeholder?: ReactNode;
+  /**
+   * 사진이 아직 없지만 곧 온다(라이브 첫 사진). 사진이 없는 동안 fallback 대신 placeholder를 보인다(못 받았으면 fallback).
+   * 판정을 여기서 하는 까닭: 부모의 src는 그리는 주소(shown)보다 한 그리기 먼저 바뀌어, 부모가 src로 가르면 첫 주소가 오는 순간
+   * fallback이 한 번 끼고 placeholder가 새로 붙는다(반짝임이 처음부터 다시 돈다)
+   */
+  pending?: boolean;
 }) {
   const [shown, setShown] = useState<string | null>(src ?? null);
   const [errored, setErrored] = useState(false);
@@ -40,7 +47,16 @@ export function ThumbnailImage({
   useEffect(() => {
     if (!hasImg) setPainted(false);
   }, [hasImg]);
-  if (!shown || errored) return <>{fallback}</>;
+  if (!shown || errored) {
+    // 첫 칸은 placeholder 자리다. 사진이 와도 같은 칸에 남아 같은 노드로 이어진다
+    const awaiting = pending && !errored && placeholder !== undefined;
+    return (
+      <>
+        {awaiting ? placeholder : null}
+        {awaiting ? null : fallback}
+      </>
+    );
+  }
   const waiting = placeholder !== undefined && !painted;
   return (
     <>

@@ -22,34 +22,32 @@ export function Thumb({
   refreshMs?: number;
   /** 사진을 내려받는 동안 반짝이는 회색 칸을 보인다 */
   shimmer?: boolean;
-  /** 사진이 아직 없지만 곧 온다(라이브 첫 사진). 자리표시 대신 반짝이는 회색 칸이다 */
+  /** 사진이 아직 없지만 곧 온다(라이브 첫 사진). shimmer와 함께 쓰면 자리표시 대신 반짝이는 회색 칸이다 */
   photoPending?: boolean;
   className?: string;
   children?: ReactNode;
 }) {
-  const loading = (
-    <Skeleton
-      width="100%"
-      height="100%"
-      radius="none"
-      className={styles.thumbLoading}
-      data-testid="thumb-loading"
-    />
-  );
   return (
     <div className={clsx(styles.thumb, className)}>
       <ThumbnailImage
         src={src}
         refreshMs={refreshMs}
-        placeholder={shimmer ? loading : undefined}
+        placeholder={
+          shimmer ? (
+            <Skeleton
+              width="100%"
+              height="100%"
+              radius="none"
+              className={styles.thumbLoading}
+              data-testid="thumb-loading"
+            />
+          ) : undefined
+        }
+        pending={photoPending}
         fallback={
-          shimmer && photoPending && !src ? (
-            loading
-          ) : (
-            <span className={styles.thumbLabel} aria-hidden>
-              {label}
-            </span>
-          )
+          <span className={styles.thumbLabel} aria-hidden>
+            {label}
+          </span>
         }
       />
       {children}
