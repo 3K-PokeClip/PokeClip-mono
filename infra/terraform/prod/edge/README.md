@@ -46,7 +46,7 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
 | 자원 | 루트 |
 |---|---|
 | apex 업로드 역할 · 정책 | 후속 승인 지점(설계 8절 — 40차). 지금 업로드는 kty IAM 사용자 |
-| rewind 버킷 정책(OAC 허용문) | 런타임 트랙 2단(출력 `media_distribution_arn` 을 씀) |
+| rewind 버킷 정책(OAC 허용문) | 런타임 트랙 2단 [`prod/runtime-2`](../runtime-2/README.md)(출력 `media_distribution_arn` 을 씀 — 이 루트 apply 뒤) |
 | KVS 값(`cdn-secret`) | `scripts/kvs-put-cdn-secret.sh`(O7f 멈춤 자리 ②) |
 | 운영 이름 레코드 | `prod/records` |
 
@@ -83,7 +83,7 @@ plan 이 멈춥니다.
 | `apex_bucket_name` · `apex_distribution_id` | kty 로컬 랜딩 업로드(sync · 무효화) |
 | `apex_distribution_domain` · `apex_distribution_zone_id` | records(apex · www) |
 | `media_distribution_domain` · `media_distribution_zone_id` | records(media) |
-| `media_distribution_arn` | 런타임 트랙 2단(rewind 버킷 OAC 허용문) |
+| `media_distribution_arn` | 런타임 트랙 2단 `prod/runtime-2`(rewind 버킷 OAC 허용문의 `AWS:SourceArn`) |
 | `cdn_kvs_arn` | `scripts/kvs-put-cdn-secret.sh --kvs-arn` |
 
 ## 적용 순서(O7f)
@@ -99,6 +99,9 @@ edge apply 는 [엣지 비밀 런북](../../runbooks/edge-secrets.md) 「초기�
     봅니다.
 1.  KVS 값 입력(멈춤 자리 ② — 런북 「O7f」).
 1.  엣지만 시험 · 랜딩 업로드 · 런타임 2단 순서는 계획 M10 O7f 를 따릅니다.
+    런타임 2단 apply 는 [prod/runtime-2](../runtime-2/README.md) 「적용
+    (O7f 의 6)」 입니다. 그 apply 전에는 `/dvr/*` · `/vod/*` 가 버킷에서
+    403 입니다(OAC 허용문 없음).
 
 함수가 이 루트의 함수 로그 그룹보다 먼저 로그를 내면(apply 가 그룹 전에
 멈춘 채 T6b 를 했을 때 등) AWS 가 그룹을 먼저 만들어 다음 apply 가 이미

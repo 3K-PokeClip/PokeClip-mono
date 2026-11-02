@@ -50,7 +50,8 @@
 #     않는다. Environment = prod 태그라 secrets · network-sg 행이 이미 푼다.
 
 # 상태 버킷 · 상태 객체(루트마다 · 같은 버킷 정책을 읽는다 — platform ·
-# media 는 POK-460)
+# media 는 POK-460). 런타임 2단(prod/runtime-2)은 edge apply 뒤 O7f 안에서
+# apply 해 첫 단계가 O7f 다(edge-tests 런북 「O7f 순서」 의 6).
 state-bucket	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2	bucket	ap-northeast-2	s3:ListBucket,s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:DeleteBucket	s3	-
 state-object-bootstrap	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/bootstrap/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-secrets	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/secrets/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
@@ -61,6 +62,7 @@ state-object-runtime	runtime-1a	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/pro
 state-object-platform	O7d	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/platform/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-media	O7e	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/media/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-edge	O7f	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/edge/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-runtime-2	O7f	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/runtime-2/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-records	8	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/records/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 
 # 비밀 pokeclip/prod/* · ECR pokeclip-prod/*

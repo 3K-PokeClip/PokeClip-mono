@@ -9,8 +9,9 @@
 
 *   **런타임 1단**: 엣지 platform · media · edge 보다 먼저 적용하는 런타임
     루트입니다(RDS · 앱 비밀 · SNS/SQS · rewind 버킷).
-*   **런타임 2단**: edge 뒤에 적용하는 런타임 루트입니다(rewind 버킷 OAC
-    정책). chat ↔ auth · clip SG 규칙은 POK-306 계약 개정으로 platform 몫이
+*   **런타임 2단**: edge 뒤에 적용하는 런타임 루트입니다
+    ([prod/runtime-2](prod/runtime-2/README.md) — rewind 버킷 OAC 정책).
+    chat ↔ auth · clip SG 규칙은 POK-306 계약 개정으로 platform 몫이
     됐습니다(아래 「auth → chat-collector」).
 
 ## 상태 위치
@@ -18,7 +19,9 @@
 런타임 1단의 상태는 prod 상태 버킷 `pokeclip-tfstate-prod-apne2` 의 키
 `prod/runtime/terraform.tfstate` 로 고정합니다. platform · media · edge 는
 `terraform_remote_state` 로 이 키를 읽습니다(키는 변수 기본값으로 고정하고,
-시험에서는 `override_data` 로 흉내 냅니다).
+시험에서는 `override_data` 로 흉내 냅니다). 런타임 2단의 키는
+`prod/runtime-2/terraform.tfstate` 이고, 2단이 1단 · edge 키를 읽습니다 —
+다른 루트는 2단을 읽지 않습니다.
 
 ## 출력과 소유 경계
 
@@ -41,7 +44,7 @@
 | 런타임 1단 → media | `ingest_auth_resolve_token_secret_arn`(string — 위 그릇의 전체 ARN, `media_secret_arns` 의 원소와 같은 값) | 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더(M9 user_data). 목록의 순서에 기대지 않으려는 이름 있는 출력이다 | 출력 = 런타임, 키 정의 · 읽기 = M15, 렌더 = M9(user_data) |
 | 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
 | 런타임 1단 → edge | `rewind_bucket_regional_domain_name` | `cdn_media` 의 `rewind-s3` 오리진 도메인. edge 는 이 하나만 읽는다 — `rewind_bucket_name` · `rewind_bucket_arn` 은 런타임 2단 버킷 정책 몫이다 | 버킷 = 런타임 |
-| edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn`) | 버킷 정책 = 런타임 2단 |
+| edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn` · 동작 `s3:GetObject` · 자원 `dvr/*` · `vod/*`) | 버킷 정책 = 런타임 2단(`prod/runtime-2/rewind_bucket_policy.tf`) |
 | 런타임 → 엣지 시험 | 시험 계정 · 계약9 억제 조건 | 루프백 · T1 부터 T3 · T8 | 런타임 |
 
 clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위 표의 런타임
@@ -114,8 +117,8 @@ DLQ 는 키를 내지 않습니다(clip 이 읽지 않음).
     읽을 수 있습니다. 지우기를 좁힐 대상은 탈퇴 정리가 지우는
     셋(`streams/*` · `dvr/*/init/*` · `dvr/*/seg/*`)이고, 읽기는 미리 듣기가
     서명하는 원본 조각(`streams/*`)입니다. 좁히는 일은 platform 후속입니다.
-    런타임 2단의 rewind 버킷 정책(OAC)이 작업 역할을 막는 Deny 를 두지 않아야
-    합니다.
+    런타임 2단의 rewind 버킷 정책(OAC)은 작업 역할을 막는 Deny 를 두지
+    않습니다(허용문 하나 — `prod/runtime-2` 시험이 Deny 부재를 단언).
 
 *   auth 의 스트림 키 비밀(이름 = 접두 + UUID, auth 가 만든다)은 런타임
     자원이 아닙니다. platform 이 접두 `pokeclip/prod/stream-key/` 로 정책 ·

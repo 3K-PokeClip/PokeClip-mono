@@ -13,8 +13,9 @@ platform · media · edge · 일꾼 배치 루트는 이 루트의 상태(키
 
 *   SG 규칙(RDS ← SQL 실행기 5432 규칙만 예외 — 실행기가 켜진 동안), 비밀
     읽기 · DB 접속 · 발행 · 수신 정책. 소비 루트가 자기 역할에 붙입니다.
-*   rewind 버킷 정책(OAC 허용문). edge 배포 ARN 이 있어야 해서 런타임 2단이
-    만듭니다.
+*   rewind 버킷 정책(OAC 허용문). edge 배포 ARN 이 있어야 해서 런타임
+    2단([prod/runtime-2](../runtime-2/README.md))이 만듭니다. 버킷 정책은
+    버킷당 하나라 이 루트는 rewind 버킷에 정책을 두지 않습니다.
 *   media DB 계정 · 앱 서버 DB 사용자 · `stream_*` 스키마 · 권한. Terraform
     이 아니라 `sql/` 과 [runtime-1a 런북](../../runbooks/runtime-1a.md)으로
     적용합니다. 앱 서버 사용자 이름은 출력 `app_db_users` 가
@@ -225,10 +226,12 @@ Jira POK-304 코멘트와 같은 목록). 1 · 2 · 7 은 1단-나 ①(POK-428)�
 *   segment 창고 = rewind 버킷이라 platform 의 clip `SegmentDelete` ·
     `SegmentRead`(`<버킷>/*`)가 목록 객체까지 지우고 읽을 수 있습니다. 좁히는
     일(지우기 `streams/*` · `dvr/*/init/*` · `dvr/*/seg/*`, 읽기
-    `streams/*`)은 platform 후속이고, 런타임 2단 버킷 정책이 작업 역할을 막지
-    않게 둡니다.
-*   새 버킷 셋(clips · 프로필 사진 · 채팅 원본)에 TLS 거부 버킷 정책이
-    없습니다 — rewind 와 함께 런타임 2단에서 둡니다(K8).
+    `streams/*`)은 platform 후속입니다. 런타임 2단 버킷 정책은 허용문 하나라
+    작업 역할을 막지 않습니다.
+*   네 버킷(rewind · clips · 프로필 사진 · 채팅 원본)에 TLS 거부 버킷
+    정책이 없습니다 — 런타임 2단 후속입니다(K8). 2단의 첫 PR 은 rewind OAC
+    허용문만 둡니다. rewind 의 거부문은 2단의 같은 정책 자원에 문장으로
+    더합니다(버킷 정책은 버킷당 하나).
 *   `clip_job_features` 의 거부 규칙(render · upload 둘 다 끔)은 런타임 변수
     값만 막습니다. 코드 되돌리기로 env 가 빠져 yml 기본값(둘 다 false)으로
     도는 길은 [runtime-1a 런북](../../runbooks/runtime-1a.md) 「1단-다 —

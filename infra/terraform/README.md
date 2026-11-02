@@ -52,13 +52,14 @@ infra/terraform/
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
     ├── media/                     # ⑨ Media EC2 · 인스턴스 역할 · Media SG
     ├── edge/                      # ⑩ CloudFront 배포 · WAF · KVS · CF Function
+    ├── runtime-2/                 # ⑪ 런타임 2단 — rewind 버킷 정책(media OAC 읽기 허용문)
     └── records/                   # ⑫ 운영 별칭 레코드
 ```
 
 ⑤ · ⑪ 은 prod 런타임 트랙이 소유합니다 — ⑤ 런타임 1단은 `prod/runtime` 이고,
-⑪ 런타임 2단(rewind 버킷 정책)은 후속 PR 입니다(Media ↔ auth SG 규칙은 ⑨
-media — kty 결정 2026-10-25 (나), chat ↔ auth · clip SG 규칙은 ⑧ platform —
-POK-306 계약 개정). 그
+⑪ 런타임 2단은 `prod/runtime-2`(rewind 버킷 정책 — edge 뒤 apply)입니다
+(Media ↔ auth SG 규칙은 ⑨ media — kty 결정 2026-10-25 (나), chat ↔ auth ·
+clip SG 규칙은 ⑧ platform — POK-306 계약 개정). 그
 트랙과 주고받는 출력 이름 · 소유 경계는
 [런타임 트랙 인터페이스 계약](CONTRACT-runtime.md)이 정본입니다.
 운영 측(ISB)이 만든 것(SCP ·

@@ -47,7 +47,7 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
 | 3 | KVS 값 입력(멈춤 자리 ②) | 「KVS 값 입력」 |
 | 4 | 엣지만 시험 — T0 · T8e 해석 · T11 404 · T2b 기본 거절 · T2b 경로 우회 · T12 ⓐ | 「엣지만 시험」 · 「경로 우회 시험」 |
 | 5 | 랜딩 업로드(kty 로컬) | [prod 산출물 런북](prod-artifacts.md) 「랜딩 업로드(O7f 의 5)」 |
-| 6 | 런타임 트랙 2단 | [런타임 트랙 계약](../CONTRACT-runtime.md) |
+| 6 | 런타임 트랙 2단 — rewind 버킷 OAC 허용문 apply(1 뒤 언제든 · Media 무관) | [prod/runtime-2](../prod/runtime-2/README.md) 「적용(O7f 의 6)」 · [런타임 트랙 계약](../CONTRACT-runtime.md) |
 | 7 | auth · clip · next 정상 기동 확인 | 계획 M10 O7f 7 |
 | 8 | 시험 스트림 키 발급 · 입력 | [엣지 비밀 런북](edge-secrets.md) 「O7f」 |
 | 9 | 루프백 헬스 · `secret-count` | 계획 M10 O7f 9 |
