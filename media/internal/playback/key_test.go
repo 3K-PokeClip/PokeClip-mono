@@ -3,7 +3,12 @@ package playback
 // ③(재생 렌디션) 키 파생의 단위 검증(POK-195 M3 — 설계 5.2).
 // 순수 함수라 DB·파일시스템이 없다 — 형상이 계약이므로 리터럴로 못 박는다.
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // 설계 5.2 의 조각 키 형상 그대로다: dvr/{streamID}/seg/{NNNNNN}.m4s.
 // 세션 축이 없는 것이 결정 자체다(계약 ⓑ "s3_key 에서 결정적 파생" 준수).
@@ -152,5 +157,204 @@ func TestInitKeyRejectsComponentThatIsNotURLSafe(t *testing.T) {
 	}
 	if got, err := InitKey("a/b", "S-1"); err == nil {
 		t.Errorf("stream_id 가 경로를 벗어났는데 통과했다: %q", got)
+	}
+}
+
+// vodPathRow 는 공유 골든 testdata/vod_path.golden.txt 의 한 줄이다.
+type vodPathRow struct {
+	line  int    // 파일의 줄 번호(1부터) — 실패 문구가 가리킨다
+	input string // ③ 조각 · init 키 후보
+	want  string // ok 줄이면 기대 사본 키, err 줄이면 빈 값
+	ok    bool
+}
+
+// readVODPathGolden 은 공유 골든을 읽는다. 꼴이 틀린 줄은 시험 대상이 아니라 골든의 고장이라 Fatal 이다 —
+// clip Java 시험도 같은 파일을 같은 꼴로 읽으므로 꼴을 여기서 못 박는다(파일 머리 주석).
+func readVODPathGolden(t *testing.T) []vodPathRow {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "vod_path.golden.txt"))
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	var rows []vodPathRow
+	var oks, errs int
+	for i, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		cols := strings.Split(line, "\t")
+		if len(cols) != 3 {
+			t.Fatalf("Setup: vod_path.golden.txt %d행 = %q, want 탭으로 가른 세 열", i+1, line)
+		}
+		switch {
+		case cols[2] == "ok" && cols[1] != "":
+			oks++
+		case cols[2] == "err" && cols[1] == "":
+			errs++
+		default:
+			t.Fatalf("Setup: vod_path.golden.txt %d행 = %q, want <입력> TAB <사본 키> TAB ok 또는 <입력> TAB TAB err", i+1, line)
+		}
+		rows = append(rows, vodPathRow{line: i + 1, input: cols[0], want: cols[1], ok: cols[2] == "ok"})
+	}
+	if oks == 0 || errs == 0 {
+		t.Fatalf("Setup: vod_path.golden.txt 에 ok 줄 %d · err 줄 %d, want 둘 다 1 이상", oks, errs)
+	}
+	return rows
+}
+
+// E21(설계 r7 9절): 생산자 키 꼴 · 사본 키 판정 꼴 · 탈퇴 정리(clip Java)의 사본 키 파생이 갈라지지 않게 셋이 같은
+// 골든을 읽는다. 이 시험은 Go 쪽 절반이다 — 앞자리 0 으로 늘린 seq · 2^53 · int64 끝은 받고, 그 밖은 오류다.
+func TestVODPathGolden(t *testing.T) {
+	for _, row := range readVODPathGolden(t) {
+		got, err := VODPath(row.input)
+		if row.ok && (err != nil || got != row.want) {
+			t.Errorf("%d행: VODPath(%q) = (%q, %v), want (%q, nil)", row.line, row.input, got, err, row.want)
+		}
+		if !row.ok && err == nil {
+			t.Errorf("%d행: VODPath(%q) = (%q, nil), want 오류", row.line, row.input, got)
+		}
+	}
+}
+
+// ParseVODPath 는 VODPath 의 역이다(⑤ 대사가 사본 키를 풀 때 쓴다). 골든의 ok 줄마다 기대 사본 키가 입력과 같은
+// 스트림 · seq(또는 세션)로 풀린다. err 줄의 dvr/ 꼴 입력은 앞머리만 vod/ 로 바꿔도 여전히 오류다 — 역도 같은 문법
+// 한 벌이다. vod/ 로 시작하지 않는 입력은 사본 키가 아니라 오류다.
+func TestParseVODPathInvertsGolden(t *testing.T) {
+	for _, row := range readVODPathGolden(t) {
+		if row.ok {
+			got, err := ParseVODPath(row.want)
+			if err != nil {
+				t.Errorf("%d행: ParseVODPath(%q) = %v, want nil", row.line, row.want, err)
+			} else if want := dvrObjectOf(t, row.input); got != want {
+				t.Errorf("%d행: ParseVODPath(%q) = %+v, want %+v", row.line, row.want, got, want)
+			}
+		}
+		if rest, isDVR := strings.CutPrefix(row.input, "dvr/"); isDVR && !row.ok {
+			if got, err := ParseVODPath("vod/" + rest); err == nil {
+				t.Errorf("%d행: ParseVODPath(%q) = (%+v, nil), want 오류(VODPath 가 거절한 꼴)", row.line, "vod/"+rest, got)
+			}
+		}
+		if !strings.HasPrefix(row.input, "vod/") {
+			if got, err := ParseVODPath(row.input); err == nil {
+				t.Errorf("%d행: ParseVODPath(%q) = (%+v, nil), want 오류(사본 키가 아님)", row.line, row.input, got)
+			}
+		}
+	}
+}
+
+// dvrObjectOf 는 골든 ok 줄의 ③ 키가 가리키는 스트림 · seq(또는 세션)다. 조각은 공개된 역 ParseSegKey 로 풀고, init 은
+// 성분을 잘라 InitKey 로 다시 만들어 같은지 본다(InitKey 가 만들 수 있는 키여야 init 이다).
+func dvrObjectOf(t *testing.T, key string) VODObject {
+	t.Helper()
+	if streamID, seq, err := ParseSegKey(key); err == nil {
+		return VODObject{StreamID: streamID, Seq: seq}
+	}
+	parts := strings.Split(key, "/")
+	if len(parts) != 4 || parts[2] != "init" || !strings.HasSuffix(parts[3], ".mp4") {
+		t.Fatalf("Setup: 골든 ok 줄 %q 는 조각 키도 init 키도 아니다", key)
+	}
+	obj := VODObject{StreamID: parts[1], SessionID: strings.TrimSuffix(parts[3], ".mp4")}
+	if rebuilt, err := InitKey(obj.StreamID, obj.SessionID); err != nil || rebuilt != key {
+		t.Fatalf("Setup: 골든 ok 줄 %q 를 InitKey 가 만들지 못한다: (%q, %v)", key, rebuilt, err)
+	}
+	return obj
+}
+
+// 왕복: SegKey · InitKey 가 만든 키를 VODPath 로 옮기고 ParseVODPath 로 풀면 만든 값 그대로다.
+func TestParseVODPathRoundTripsVODPath(t *testing.T) {
+	var keys []string
+	var wants []VODObject
+	for _, tc := range []struct {
+		streamID string
+		seq      int64
+	}{
+		{"demo-stream", 123},
+		{"s", 0},
+		{"s", 1000000},
+		{"a.b", 9223372036854775807},
+	} {
+		key, err := SegKey(tc.streamID, tc.seq)
+		if err != nil {
+			t.Fatalf("SegKey(%q, %d) 가 거부됐다: %v", tc.streamID, tc.seq, err)
+		}
+		keys = append(keys, key)
+		wants = append(wants, VODObject{StreamID: tc.streamID, Seq: tc.seq})
+	}
+	for _, tc := range []struct{ streamID, sessionID string }{
+		{"demo-stream", "S-20260902-101530-demo-stream-42"},
+		{"s", "a.b"},
+	} {
+		key, err := InitKey(tc.streamID, tc.sessionID)
+		if err != nil {
+			t.Fatalf("InitKey(%q, %q) 가 거부됐다: %v", tc.streamID, tc.sessionID, err)
+		}
+		keys = append(keys, key)
+		wants = append(wants, VODObject{StreamID: tc.streamID, SessionID: tc.sessionID})
+	}
+	for i, key := range keys {
+		vod, err := VODPath(key)
+		if err != nil {
+			t.Errorf("VODPath(%q) = %v, want nil", key, err)
+			continue
+		}
+		got, err := ParseVODPath(vod)
+		if err != nil || got != wants[i] {
+			t.Errorf("ParseVODPath(VODPath(%q) = %q) = (%+v, %v), want (%+v, nil)", key, vod, got, err, wants[i])
+		}
+	}
+}
+
+// IsInit 은 init 사본과 조각 사본을 가른다 — 조각 seq 0 이 init 으로 읽히면 대사가 세션 축으로 장부를 본다.
+func TestVODObjectIsInitOnlyForInitCopies(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{
+		{"vod/s/seg/000000.m4s", false},
+		{"vod/s/seg/000007.m4s", false},
+		{"vod/s/init/S-1.mp4", true},
+	} {
+		obj, err := ParseVODPath(tc.key)
+		if err != nil {
+			t.Fatalf("ParseVODPath(%q) = %v, want nil", tc.key, err)
+		}
+		if got := obj.IsInit(); got != tc.want {
+			t.Errorf("ParseVODPath(%q).IsInit() = %v, want %v", tc.key, got, tc.want)
+		}
+	}
+}
+
+// 골든 파일에 실을 수 없는 꼴(개행 · CR · NUL)과 사본 키가 아닌 것(목록 문서 · 퍼센트 인코딩된 채인 보고서 키 · dvr/
+// 키)을 양쪽 함수가 거절한다. 보고서 키는 ⑤ 가 URL 디코딩한 뒤에 넘긴다 — 디코딩 전 꼴이 통과하면 해석이 두 벌이 된다.
+func TestVODPathAndParseVODPathRejectUnfitKeys(t *testing.T) {
+	for _, key := range []string{
+		"dvr/s/seg/000007.m4s\n",
+		"dvr/s/seg/000007.m4s\r",
+		"dvr/s/init/S-1.mp4\n",
+		"dvr/s/init/S-1\x00.mp4",
+		"dvr/s/S-1/index.m3u8",
+	} {
+		if got, err := VODPath(key); err == nil {
+			t.Errorf("VODPath(%q) = (%q, nil), want 오류", key, got)
+		}
+	}
+	for _, key := range []string{
+		"",
+		"vod/",
+		"vod/s/seg/000007.m4s\n",
+		"vod/s/init/S-1.mp4\n",
+		"vod/s/S-1/index.m3u8",
+		"vod/s/S-1/v2/index.m3u8",
+		"vod%2Fs%2Fseg%2F000001.m4s",
+		"vod/s%2Fx/seg/000001.m4s",
+		"dvr/s/seg/000007.m4s",
+		"dvr/s/init/S-1.mp4",
+		"/vod/s/seg/000007.m4s",
+		"vod/../seg/000007.m4s",
+		"vod/s/init/..mp4",
+	} {
+		if got, err := ParseVODPath(key); err == nil {
+			t.Errorf("ParseVODPath(%q) = (%+v, nil), want 오류", key, got)
+		}
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // urlSafe 는 키 성분이 되감기 URL 경로에 그대로 실릴 수 있는 문자만 쓰는지 본다.
@@ -95,4 +96,86 @@ func InitKey(streamID, sessionID string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("dvr/%s/init/%s.mp4", streamID, sessionID), nil
+}
+
+// initKeyRe 는 InitKey 가 만드는 init 키의 모양이다. 성분의 글자는 segKeyRe 와 같이 여기서 보지 않고 checkComponent 가 본다.
+var initKeyRe = regexp.MustCompile(`^dvr/([^/]+)/init/([^/]+)\.mp4$`)
+
+// parseInitKey 는 InitKey 의 역이다 — init 키 key 를 스트림과 세션으로 푼다. 두 성분 모두 InitKey 와 같은 검사를 받는다.
+func parseInitKey(key string) (streamID, sessionID string, err error) {
+	m := initKeyRe.FindStringSubmatch(key)
+	if m == nil {
+		return "", "", fmt.Errorf("playback: init 키 %.64q 는 dvr/{stream}/init/{session}.mp4 가 아니다", key)
+	}
+	if checkComponent("stream_id", m[1]) != nil || checkComponent("session_id", m[2]) != nil {
+		return "", "", fmt.Errorf("playback: init 키 %.64q 의 성분은 키에 쓸 수 없다(URL 안전 문자 [A-Za-z0-9._-] 만 · 상위 · 현재 경로 참조 금지)", key)
+	}
+	return m[1], m[2], nil
+}
+
+// ③ 키와 VOD 사본 키의 앞머리다. 사본 키는 앞머리만 다르고 나머지는 ③ 키 그대로다.
+const (
+	dvrPrefix = "dvr/"
+	vodPrefix = "vod/"
+)
+
+// VODPath 는 ③ 조각 · init 키를 VOD 사본 키로 옮긴다 — 앞머리 dvr/ 를 vod/ 로 바꿀 뿐
+// 나머지는 그대로다. 사본 키는 저장 키이자 URL 경로다(/vod 비헤이비어는 경로 = 키).
+// 조각 키는 ParseSegKey 가 받는 것, init 키는 InitKey 문법이다. 둘 다 아니면 오류다.
+//
+//	dvr/{streamID}/seg/{NNNNNN}.m4s     → vod/{streamID}/seg/{NNNNNN}.m4s
+//	dvr/{streamID}/init/{sessionID}.mp4 → vod/{streamID}/init/{sessionID}.mp4
+//
+// 받는 꼴은 공유 골든 testdata/vod_path.golden.txt 가 못 박는다 — clip 의 탈퇴 정리(Java)가 같은 파일로 같은 사본 키를
+// 파생하는지 본다(POK-525 E21). seq 자릿수를 정규화하지 않는다(앞자리 0 으로 늘린 seq 도 그대로 옮긴다).
+func VODPath(key string) (string, error) {
+	rest, ok := strings.CutPrefix(key, dvrPrefix)
+	if !ok {
+		return "", fmt.Errorf("playback: %.64q 는 dvr/ 로 시작하지 않아 사본 키로 옮길 수 없다", key)
+	}
+	if _, err := parseObject(key); err != nil {
+		return "", err
+	}
+	return vodPrefix + rest, nil
+}
+
+// VODObject 는 VOD 사본 키 하나가 가리키는 것이다(그 원본 ③ 키와 같다) — 조각 사본이면 (StreamID, Seq), init 사본이면
+// (StreamID, SessionID).
+type VODObject struct {
+	StreamID  string
+	Seq       int64  // 조각 사본의 seq. init 사본이면 0 이다.
+	SessionID string // init 사본의 세션. 조각 사본이면 빈 값이다.
+}
+
+// IsInit 은 init 사본인지다. 세션 성분은 비어 있을 수 없으므로(checkComponent) 빈 세션 = 조각 사본이다.
+func (o VODObject) IsInit() bool { return o.SessionID != "" }
+
+// ParseVODPath 는 VODPath 의 역이다 — 사본 키 path 를 스트림과 seq(조각) 또는 세션(init)으로 푼다.
+//
+//	vod/{streamID}/seg/{십진 6자리 이상}.m4s → VODObject{StreamID, Seq}
+//	vod/{streamID}/init/{sessionID}.mp4    → VODObject{StreamID, SessionID}
+//
+// 앞머리만 vod/ 이고 나머지는 ParseSegKey · InitKey 와 같은 문법 한 벌이다. VOD 목록 문서(vod/{s}/{head}/index.m3u8)와
+// 퍼센트 인코딩된 채인 키는 사본 키가 아니라 오류다 — 사본 키를 지우는 쪽(⑤ 대사)이 쓰므로 엄격하게 거절한다.
+func ParseVODPath(path string) (VODObject, error) {
+	rest, ok := strings.CutPrefix(path, vodPrefix)
+	if !ok {
+		return VODObject{}, fmt.Errorf("playback: 사본 키 %.64q 는 vod/ 로 시작하지 않는다", path)
+	}
+	obj, err := parseObject(dvrPrefix + rest)
+	if err != nil {
+		return VODObject{}, fmt.Errorf("playback: 사본 키 %.64q 는 vod/{stream}/seg/{6자리 이상}.m4s 도 vod/{stream}/init/{session}.mp4 도 아니다", path)
+	}
+	return obj, nil
+}
+
+// parseObject 는 ③ 조각 · init 키 key 가 가리키는 것을 푼다 — VODPath 와 ParseVODPath 가 함께 쓰는 문법 한 벌이다.
+func parseObject(key string) (VODObject, error) {
+	if streamID, seq, err := ParseSegKey(key); err == nil {
+		return VODObject{StreamID: streamID, Seq: seq}, nil
+	}
+	if streamID, sessionID, err := parseInitKey(key); err == nil {
+		return VODObject{StreamID: streamID, SessionID: sessionID}, nil
+	}
+	return VODObject{}, fmt.Errorf("playback: %.64q 는 ③ 조각 키(dvr/{stream}/seg/{6자리 이상}.m4s)도 init 키(dvr/{stream}/init/{session}.mp4)도 아니다", key)
 }

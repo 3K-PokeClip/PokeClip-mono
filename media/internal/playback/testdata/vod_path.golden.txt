@@ -1,0 +1,77 @@
+# ③ 조각 · init 키 → VOD 사본 키(playback.VODPath)의 공유 골든이다(POK-525 E21).
+# Go 시험(media/internal/playback 의 TestVODPathGolden)과 clip Java 시험이 이 파일을
+# 그대로 읽어 같은 판정을 내야 한다 — 생산자 · 판정 · 삭제 쪽 키 꼴이 갈라지지 않게 한다.
+#
+# 꼴(UTF-8 · LF):
+#   '#' 로 시작하는 줄은 주석, 빈 줄은 건너뛴다.
+#   나머지 줄은 탭으로 가른 세 열이다: <입력 키> TAB <기대 사본 키> TAB <ok|err>
+#   ok  = VODPath(입력) 이 기대 사본 키를 낸다(앞머리 dvr/ 를 vod/ 로 바꿀 뿐 나머지는 그대로).
+#   err = VODPath(입력) 이 오류다. 기대 열은 비어 있다.
+#   첫 열이 빈 줄(빈 입력)도 있다 — 탭으로 가를 때 빈 열을 버리지 않는다(Java 면 split("\t", -1)).
+# 입력에 탭 · 개행 · 제어 문자는 없다(그 꼴은 Go 단위 시험이 따로 본다).
+
+# 조각 — seq 자릿수 경계(%06d · 앞자리 0 · 2^53 · int64 끝)
+dvr/s/seg/000000.m4s	vod/s/seg/000000.m4s	ok
+dvr/s/seg/000007.m4s	vod/s/seg/000007.m4s	ok
+dvr/s/seg/099999.m4s	vod/s/seg/099999.m4s	ok
+dvr/s/seg/100000.m4s	vod/s/seg/100000.m4s	ok
+dvr/s/seg/999999.m4s	vod/s/seg/999999.m4s	ok
+dvr/s/seg/1000000.m4s	vod/s/seg/1000000.m4s	ok
+dvr/s/seg/0000007.m4s	vod/s/seg/0000007.m4s	ok
+dvr/s/seg/9007199254740991.m4s	vod/s/seg/9007199254740991.m4s	ok
+dvr/s/seg/9007199254740992.m4s	vod/s/seg/9007199254740992.m4s	ok
+dvr/s/seg/9223372036854775807.m4s	vod/s/seg/9223372036854775807.m4s	ok
+dvr/s/seg/9223372036854775808.m4s		err
+dvr/s/seg/10000000000000000000.m4s		err
+dvr/s/seg/00007.m4s		err
+
+# 조각 — 스트림 성분(URL 안전 문자 [A-Za-z0-9._-] 전부)
+dvr/demo-stream/seg/000123.m4s	vod/demo-stream/seg/000123.m4s	ok
+dvr/Str_7a.b-C/seg/001297.m4s	vod/Str_7a.b-C/seg/001297.m4s	ok
+
+# init — 세션 축
+dvr/demo-stream/init/S-20260902-101530-demo-stream-42.mp4	vod/demo-stream/init/S-20260902-101530-demo-stream-42.mp4	ok
+dvr/s/init/a.b.mp4	vod/s/init/a.b.mp4	ok
+
+# 빈 값
+		err
+
+# 앞머리 다름
+vod/s/seg/000007.m4s		err
+streams/s/seg/000007.m4s		err
+/dvr/s/seg/000007.m4s		err
+DVR/s/seg/000007.m4s		err
+dvr		err
+dvr/		err
+
+# 비정규 성분 — 상위 · 현재 경로 참조 · 빈 성분 · 구분자 · URL 에 못 싣는 문자
+dvr/../seg/000007.m4s		err
+dvr/./seg/000007.m4s		err
+dvr//seg/000007.m4s		err
+dvr/a/b/seg/000007.m4s		err
+dvr/s b/seg/000007.m4s		err
+dvr/s%2Fx/seg/000007.m4s		err
+dvr/한글/seg/000007.m4s		err
+dvr/s/init/.mp4		err
+dvr/s/init/..mp4		err
+dvr/s/init/...mp4		err
+dvr/s/init/a/b.mp4		err
+dvr/s/init/a b.mp4		err
+dvr/../init/S-1.mp4		err
+
+# 조각 · init 문법이 아님 — 확장자 · 대소문자 · 부호 · 전각 숫자 · 질의 · 축 혼동 · 목록 문서
+dvr/s/seg/000007.mp4		err
+dvr/s/seg/000007.M4S		err
+dvr/s/seg/+00007.m4s		err
+dvr/s/seg/-000007.m4s		err
+dvr/s/seg/０００００７.m4s		err
+dvr/s/seg/000007.m4s?x=1		err
+dvr/s/seg/000007.m4s/		err
+dvr/s/init/S-1.m4s		err
+dvr/s/init/S-1.MP4		err
+dvr/s/init/S-1.mp4?x=1		err
+dvr/s/seg/S-1.mp4		err
+dvr/s/init/000007.m4s		err
+dvr/s/seg/index.m3u8		err
+dvr/s/S-1/index.m3u8		err
+dvr/s/000007.m4s		err
