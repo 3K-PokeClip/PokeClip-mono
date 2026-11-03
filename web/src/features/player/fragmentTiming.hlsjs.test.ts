@@ -9,8 +9,10 @@ import Hls, {
   type LoaderContext,
 } from 'hls.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mediaTimeAt } from './dvrWindow';
 import {
   TIMING_TAG,
+  datedFragments,
   playlistDurationS,
   timingVersions,
   type HlsFragmentLike,
@@ -150,6 +152,38 @@ describe('playlistDurationS — tagList 의 원래 EXTINF(초)', () => {
     expect(playlistDurationS(fakeFragment([['INF']]))).toBeNull();
     expect(playlistDurationS(fakeFragment([['INF', '']]))).toBeNull();
     expect(playlistDurationS(fakeFragment([['INF', 'abc']]))).toBeNull();
+  });
+});
+
+// T-ovl 파서 몫(설계 r7 10절 c4 · 12.3) — 1초 미만 PDT 부분 겹침(B8)이 든 판 2 목록을 진짜 파서가 고치지 않고
+// 글자 그대로 조각에 남기는가. 끝까지 트는 몫(브라우저)은 실측대 T-ovl 이다.
+describe('T-ovl 파서 몫 — 겹친 PDT 목록', () => {
+  /** PDT 를 글자로 정한 4초 조각 */
+  function datedSegment(sn: number, pdt: string, before: readonly string[] = []): string[] {
+    return [...before, `#EXT-X-PROGRAM-DATE-TIME:${pdt}`, '#EXTINF:4.000,', `seg${sn}.mp4`];
+  }
+
+  it('999 · 500 · 1ms 겹친 PDT 를 조각마다 글자대로 남기고, 시각 → 자리는 나중 조각이다', () => {
+    const pdts = [
+      '2026-11-02T05:00:00.000Z',
+      // 앞 조각 끝(04.000)보다 999ms 이르다
+      '2026-11-02T05:00:03.001Z',
+      // 앞 조각 끝(07.001)보다 500ms 이르다
+      '2026-11-02T05:00:06.501Z',
+      // 앞 조각 끝(10.501)보다 1ms 이르다
+      '2026-11-02T05:00:10.500Z',
+    ];
+    const details = parse(
+      playlistText(
+        0,
+        pdts.map((pdt, sn) => datedSegment(sn, pdt, sn === 0 ? [VERSION_2] : [])),
+      ),
+    );
+
+    expect(details.fragments.map((frag) => frag.programDateTime)).toEqual(pdts.map(Date.parse));
+    const fragments = datedFragments(details.fragments, 'rewind', () => null);
+    // 둘째 조각 PDT 03.001 뒤 0.5초 — 첫 조각(00.000 + 3.5초)이 아니라 둘째 조각 자리다
+    expect(mediaTimeAt(fragments, Date.parse('2026-11-02T05:00:03.501Z'))).toBeCloseTo(4.5, 9);
   });
 });
 

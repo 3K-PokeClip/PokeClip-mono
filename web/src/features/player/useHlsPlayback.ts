@@ -10,7 +10,9 @@ import {
   mediaTimeAt,
   programDateAt,
   rewindWindowSeconds,
+  type DatedFragment,
 } from './dvrWindow';
+import { datedFragments, type StartOf } from './fragmentTiming';
 import {
   isPlaybackForbidden,
   recoverForbiddenRecording,
@@ -34,6 +36,7 @@ import { guardRewindFloor } from './rewindFloor';
 import { useSourcePosition, type PositionHooks } from './sourcePosition';
 import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
+import { trackVideoStarts } from './videoStarts';
 import {
   CLIP_MARK_MS,
   PLAYER_QUALITIES,
@@ -64,6 +67,10 @@ const HAVE_CURRENT_DATA = 2;
 const DEFAULT_LIVE_LAG_MS = 3_000;
 /** 창 하한으로 옮긴 뒤 이 배수 × TD 안에 또 옮기면 알리지 않는다(숨은 탭의 밀린 갱신이 한꺼번에 올 때 — 5.3.1절) */
 const FLOOR_NOTICE_QUIET_TD = 2;
+/** 영상 시작 기록이 없는 재생기(라이브 · 재생기가 서기 전)의 startOf — 판 2 조각도 해체 전처럼 센다 */
+function noVideoStart(): null {
+  return null;
+}
 
 /** 재생기가 로드한 목록 하나(세션의 observedEndMs · roundRewindUrls 재료) */
 export interface LoadedPlaylist extends LoadedList {
@@ -189,6 +196,14 @@ export function useHlsPlayback(
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
+  /** 재생기의 조각별 영상 시작 — 되감기 · 다시보기 재생기가 선 동안만 적는다(설계 r7 3.3절) */
+  const startOfRef = useRef<StartOf>(noVideoStart);
+  /** 시각 환산에 넘길 목록 조각 — 판 2 는 영상 축 조각이다(설계 r7 3.5절). 목록을 모르면 빈 배열 */
+  const fragmentsOf = useCallback(
+    (details: LevelDetails | null | undefined): readonly DatedFragment[] =>
+      details ? datedFragments(details.fragments, sourceRef.current.kind, startOfRef.current) : [],
+    [],
+  );
   const clipTimer = useRef<number>(undefined);
 
   // 방송 경과는 스트림 메타데이터에 없다 — 시뮬레이션처럼 시드+티커로 표시만 유지한다.
@@ -218,7 +233,7 @@ export function useHlsPlayback(
     const sync = hlsRef.current?.liveSyncPosition ?? null;
     const axis = sessionAxis({
       kind,
-      fragments: details.fragments,
+      fragments: fragmentsOf(details),
       targetDurationS: details.targetduration,
       currentTime: video.currentTime,
       liveEdgeTime: kind === 'live' && range ? liveEdgePosition(range, sync) : null,
@@ -228,7 +243,7 @@ export function useHlsPlayback(
     });
     if (axis !== null && kind === 'live') lagMsRef.current = Math.max(0, Date.now() - axis.edgeMs);
     return axis;
-  }, [videoRef]);
+  }, [videoRef, fragmentsOf]);
 
   /** 세션 모드: 목표 실제 시각을 세션에 넘긴다. 축을 모르면 false */
   const requestSeek = useCallback(
@@ -320,20 +335,20 @@ export function useHlsPlayback(
         return 'moved';
       }
       const range = dvrRange(video.seekable);
-      const target = mediaTimeAt(hlsRef.current?.latestLevelDetails?.fragments ?? [], epochMs);
+      const target = mediaTimeAt(fragmentsOf(hlsRef.current?.latestLevelDetails), epochMs);
       if (!range || target === null) return 'unknown';
       if (target + CARD_SECOND_SLACK_MS / 1000 < range.start) return 'outside';
       const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
       seekToBehind(live - target);
       return 'moved';
     },
-    [videoRef, seekToBehind, readAxis, sessionActive],
+    [videoRef, seekToBehind, readAxis, sessionActive, fragmentsOf],
   );
 
   const seekToMs = useCallback(
     (atMs: number) => {
       const video = videoRef.current;
-      const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
+      const fragments = fragmentsOf(hlsRef.current?.latestLevelDetails);
       if (!video) return;
       const axis = readAxis();
       const range = dvrRange(video.seekable);
@@ -350,7 +365,7 @@ export function useHlsPlayback(
       }
       onSeek?.();
     },
-    [videoRef, readAxis, onSeek],
+    [videoRef, readAxis, onSeek, fragmentsOf],
   );
 
   const keepPausedOnSwap = useCallback(
@@ -446,7 +461,7 @@ export function useHlsPlayback(
     const rearmEnd = () => {
       const details = hlsRef.current?.latestLevelDetails;
       if (!endSent || !details || lastEndMs === null) return;
-      const atMs = programDateAt(details.fragments, video.currentTime);
+      const atMs = programDateAt(fragmentsOf(details), video.currentTime);
       if (atMs === null || atMs >= lastEndMs) return;
       endSent = false;
       waiting = false;
@@ -520,7 +535,7 @@ export function useHlsPlayback(
       if (moved.kind === 'reload') load.set(moved.to);
       // 멈춘 채 옮겼으면 재개 판정도 옮긴 자리로 한다 — 옛 자리로 세션에 다시 넘겨 알림이 겹치지 않게
       if (video.paused && pausedAtMsRef.current !== null) {
-        pausedAtMsRef.current = programDateAt(details.fragments, moved.to);
+        pausedAtMsRef.current = programDateAt(fragmentsOf(details), moved.to);
       }
       const now = Date.now();
       const quietMs = FLOOR_NOTICE_QUIET_TD * details.targetduration * 1000;
@@ -566,8 +581,9 @@ export function useHlsPlayback(
     const checkStall = () => {
       const details = hlsRef.current?.latestLevelDetails;
       if (endSent || !hooksRef.current.onEndReached || !details) return;
-      const list = loadedList(details.fragments, details.targetduration);
-      const atMs = programDateAt(details.fragments, video.currentTime);
+      const fragments = fragmentsOf(details);
+      const list = loadedList(fragments, details.targetduration);
+      const atMs = programDateAt(fragments, video.currentTime);
       if (list === null || atMs === null) return;
       if (endStalled({ list, atMs, waiting, sinceGrowMs: Date.now() - lastGrowAt })) reachEnd();
     };
@@ -592,7 +608,7 @@ export function useHlsPlayback(
       if (video.readyState < HAVE_CURRENT_DATA) return;
       // 시각은 조각 목록으로 센다(programDateAt) — 같은 초 · 같은 시차 · 같은 재생 여부면
       // 앞 값을 둔다(nextLivePosition)
-      const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
+      const fragments = fragmentsOf(hlsRef.current?.latestLevelDetails);
       const at = programDateAt(fragments, video.currentTime);
       const edge = programDateAt(fragments, liveEdgePosition(range, sync));
       const run = playedRunMs(video.played, video.currentTime);
@@ -635,6 +651,9 @@ export function useHlsPlayback(
         // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
         const hls = new HlsCtor(startAtMs === null ? base : { ...base, autoStartLoad: false });
         hlsRef.current = hls;
+        // 기록의 처리기는 hls.destroy() 가 함께 뗀다(removeAllListeners). 라이브는 c 스위치 전이라 달지 않는다
+        startOfRef.current =
+          kind === 'live' ? noVideoStart : trackVideoStarts(hls, HlsCtor.Events).startOf;
         armStart(hls, HlsCtor.Events, { kind, startAtMs, strictStart }, load, () => {
           if (disposed) return;
           hls.destroy();
@@ -643,7 +662,7 @@ export function useHlsPlayback(
         });
         hls.on(HlsCtor.Events.LEVEL_UPDATED, (...[, data]) => {
           if (kind === 'rewind') keepRewindFloor(hls, data.details);
-          const list = loadedList(data.details.fragments, data.details.targetduration);
+          const list = loadedList(fragmentsOf(data.details), data.details.targetduration);
           if (list !== null) {
             if (lastEndMs === null || list.lastEndMs > lastEndMs) {
               lastGrowAt = Date.now();
@@ -773,11 +792,22 @@ export function useHlsPlayback(
       video.removeEventListener('loadeddata', onHealed);
       hlsRef.current?.destroy();
       hlsRef.current = null;
+      startOfRef.current = noVideoStart;
       // src 제거만으로는 네트워크·디코더가 붙어 있다 — load()까지 해야 리소스가 해제된다
       video.removeAttribute('src');
       video.load();
     };
-  }, [videoRef, source.kind, src, source.generation, readAxis, sessionActive, swap, measure]);
+  }, [
+    videoRef,
+    source.kind,
+    src,
+    source.generation,
+    readAxis,
+    sessionActive,
+    swap,
+    measure,
+    fragmentsOf,
+  ]);
 
   return {
     playing,

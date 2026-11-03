@@ -91,6 +91,8 @@ export interface DatedFragment {
   programDateTime: number | null;
   /** EXT-X-GAP 조각 — 영상 시각은 차지하지만 내용이 없다(hls.js Fragment.gap 과 같다) */
   gap?: boolean;
+  /** start · duration 이 영상 첫 표본 재생 위치(v_k) · 원래 EXTINF 인 판 2 조각(fragmentTiming.datedFragments) */
+  videoAxis?: boolean;
 }
 
 /**
@@ -101,13 +103,18 @@ export interface DatedFragment {
  * 창 처음인데 채팅이 최신으로 튀었다(POK-326 리뷰 2라운드). 첫 조각을 받기 전의 0초는 부르는 쪽이 거른다(재생 위치에
  * 영상이 없다). 조각이 없거나 시각 표시가 없으면 모른다(null). hls.js playingDate를 쓰지 않는다: 그것은
  * 재생 위치가 0이면 「값 없음」으로 보고 직전 자리의 시각을 줘, 시작 직후·맨 앞으로 옮긴 직후에 시차와 다른
- * 자리를 가리켰다(POK-326 리뷰 1라운드)
+ * 자리를 가리켰다(POK-326 리뷰 1라운드). 판 2 영상 축 조각(videoAxis)은 뒤 조각이 있으면 조각 안 거리를 그 조각
+ * 길이에서 멈춘다 — cc 가 바뀌는 자리의 영상 없는 재생 구간으로 외삽하지 않는다(계약 2.3 · 설계 r6 5.1)
  */
 export function programDateAt(fragments: readonly DatedFragment[], t: number): number | null {
   for (let i = fragments.length - 1; i >= 0; i -= 1) {
     const frag = fragments[i]!;
     if (frag.start > t && i > 0) continue;
-    return frag.programDateTime === null ? null : frag.programDateTime + (t - frag.start) * 1000;
+    if (frag.programDateTime === null) return null;
+    const hasNext = i < fragments.length - 1;
+    const offset =
+      frag.videoAxis && hasNext ? Math.min(t - frag.start, frag.duration) : t - frag.start;
+    return frag.programDateTime + offset * 1000;
   }
   return null;
 }
@@ -115,7 +122,8 @@ export function programDateAt(fragments: readonly DatedFragment[], t: number): n
 /**
  * 실제 시각(epoch ms)의 영상 시각(초): programDateAt의 거꾸로. 그 시각 앞에서 시작한 마지막 조각에서 센다: 조각 사이에서 시각이
  * 뛴 틈(송출이 다시 붙은 자리) 안이면 영상이 없으니 뒤 조각의 시작이다. 첫 조각보다 이르면 첫 조각에서 거꾸로 이어 센다(부르는
- * 쪽이 되감기 창 안으로 자른다). 조각이 없거나 시각 표시가 없으면 null
+ * 쪽이 되감기 창 안으로 자른다). 조각이 없거나 시각 표시가 없으면 null. 뒤에서부터 훑어 「PDT ≤ T 인 마지막 조각」을 고르므로
+ * PDT 가 겹친 목록(1초 미만 부분 겹침 — 경계 표 B8)은 나중 조각이다
  */
 export function mediaTimeAt(fragments: readonly DatedFragment[], epochMs: number): number | null {
   const first = fragments[0];

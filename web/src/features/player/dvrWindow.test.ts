@@ -192,3 +192,49 @@ describe('programDateAt·mediaTimeAt: 영상 시각과 실제 시각(PDT) 환산
     expect(mediaTimeAt([{ start: 0, duration: 4, programDateTime: null }], T)).toBeNull();
   });
 });
+
+describe('programDateAt·mediaTimeAt: 판 2 영상 축 조각(videoAxis — 설계 r7 3.4절)', () => {
+  const T = Date.parse('2026-11-03T05:00:00Z');
+
+  it('뒤 조각이 있으면 조각 안 거리를 그 조각 길이(원래 EXTINF)에서 멈춘다 — 영상 없는 자리로 외삽하지 않는다', () => {
+    // 앞 조각 영상은 4.2초에 끝나고 뒤 조각 영상은 4.5초에 시작한다(cc 가 바뀌는 자리의 영상 없는 재생 구간)
+    const frags: DatedFragment[] = [
+      { start: 0.2, duration: 4, programDateTime: T, videoAxis: true },
+      { start: 4.5, duration: 4, programDateTime: T + 4_400, videoAxis: true },
+    ];
+    expect(programDateAt(frags, 4.4)).toBe(T + 4_000);
+    expect(programDateAt(frags, 4.5)).toBe(T + 4_400);
+  });
+
+  it('마지막 조각은 지금처럼 이어 센다(LL-HLS 만드는 중 조각)', () => {
+    const frags: DatedFragment[] = [
+      { start: 0.2, duration: 4, programDateTime: T, videoAxis: true },
+      { start: 4.2, duration: 4, programDateTime: T + 4_400, videoAxis: true },
+    ];
+    expect(programDateAt(frags, 9.2)).toBeCloseTo(T + 9_400, 6);
+  });
+
+  it('videoAxis 가 아닌 조각(판 NULL · 지금 식)은 멈추지 않는다', () => {
+    const frags: DatedFragment[] = [
+      { start: 0.2, duration: 4, programDateTime: T },
+      { start: 4.5, duration: 4, programDateTime: T + 4_400 },
+    ];
+    expect(programDateAt(frags, 4.4)).toBeCloseTo(T + 4_200, 6);
+  });
+
+  describe('겹침(B8): 앞 [0, 4000) · 뒤 PDT 3500', () => {
+    const frags: DatedFragment[] = [
+      { start: 0, duration: 4, programDateTime: T, videoAxis: true },
+      { start: 4.1, duration: 4, programDateTime: T + 3_500, videoAxis: true },
+    ];
+
+    it('시각 → 자리(mediaTimeAt)는 나중 조각이다 — PDT ≤ T 인 마지막 조각', () => {
+      expect(mediaTimeAt(frags, T + 3_700)).toBeCloseTo(4.3, 9);
+    });
+
+    it('자리 → 시각(programDateAt)은 앞 조각 끝에서 멈추고, 뒤 조각부터 1초 미만 뒤로 간다(받아들인 한계)', () => {
+      expect(programDateAt(frags, 4.05)).toBe(T + 4_000);
+      expect(programDateAt(frags, 4.1)).toBe(T + 3_500);
+    });
+  });
+});

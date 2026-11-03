@@ -1,7 +1,7 @@
 import type Hls from 'hls.js';
 import type { BufferAppendingData, Events, InitPTSFoundData, LevelUpdatedData } from 'hls.js';
 import { readTrackStart, readVideoTrack, type VideoTrackInfo } from '../../lib/fmp4Boxes';
-import type { HlsFragmentLike } from './fragmentTiming';
+import type { StartOf } from './fragmentTiming';
 
 // 조각마다 영상 첫 표본의 재생 위치(v_k)와 구성 시차(c_k)를 hls.js 사건에서 적는다(설계 r7 3.3 · 4.1절).
 // 판 2 조각의 영상 축 환산(datedFragments)이 이 기록을 읽는다. 붙이는 재생기는 배선(useHlsPlayback)이 정한다.
@@ -14,17 +14,6 @@ import type { HlsFragmentLike } from './fragmentTiming';
 // - INIT_PTS_FOUND(id=main): 미디어 조각 cc 별 initPTS. 먼저 나온 트랙(소리일 수 있다)의 눈금이다.
 // - LEVEL_UPDATED: 목록에서 빠진 순번(startSN 앞)의 기록을 버린다.
 // FRAG_LOADED 는 쓰지 않는다(바이트가 비어 있을 수 있음 — 설계 r6 4.2).
-
-/** 조각 하나의 영상 시작 */
-export interface VideoStart {
-  /** v_k: 영상 tfdt / 영상 timescale − initPTS / initPTS timescale (초) */
-  videoStartS: number;
-  /** c_k: 그 조각 첫 영상 표본 cto / 영상 timescale (초) — 라이브 스위치 ON 갈래만 쓴다 */
-  firstCtoS: number;
-}
-
-/** 조각 → 그 조각의 영상 시작. 붙인 바이트를 읽지 못했거나 그 cc 의 initPTS 를 모르면 null */
-export type StartOf = (frag: HlsFragmentLike) => VideoStart | null;
 
 export interface VideoStarts {
   startOf: StartOf;
