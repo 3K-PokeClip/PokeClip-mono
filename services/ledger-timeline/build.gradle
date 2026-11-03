@@ -1,0 +1,20 @@
+// 서버가 아니라 라이브러리다. bootJar를 만들지 않으므로 spring-boot 플러그인을 붙이지 않는다.
+//
+// 여기는 장부 시각 ↔ 매체 자리 변환 F(locate · locateEnd)와 예상 결과 길이(lengthMs)만 둔다(POK-196 · 계약
+// 세그먼트인덱스 6-6-6). 축(start_wall_utc · playback_pdt · start_pts_ms)은 부르는 쪽이 고른다. clip과
+// 채팅 수집기가 같은 빌드라 한 소스를 같이 쓰려고 따로 뺐다 — web-support · db-support는 웹 · DB 설비라
+// 순수 함수의 자리로 맞지 않는다.
+//
+// 공유 시험 표 src/test/resources/ledger-timeline-cases.json은 services · 렌더 일꾼 · 웹 세 곳이 읽는
+// 계약이다. 렌더 일꾼은 상대 경로로 읽으므로 이 파일을 옮기면 렌더 시험이 깨진다.
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    // 운영 의존은 없다. 아래는 시험 몫이다 — 판은 Boot BOM이 정한다.
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.assertj:assertj-core'
+    // 공유 시험 표(JSON)를 읽는다. Boot 4는 Jackson 3(tools.jackson)이다 — 서버 넷과 같은 좌표다.
+    testImplementation 'tools.jackson.core:jackson-databind'
+}
