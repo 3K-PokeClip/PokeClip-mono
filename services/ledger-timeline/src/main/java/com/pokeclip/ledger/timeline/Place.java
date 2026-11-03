@@ -19,7 +19,7 @@ public sealed interface Place {
     record Gap(long beforeSeq, long afterSeq, long intoGapMs, long gapMs) implements Place {
     }
 
-    /** 첫 행 앞(F 5항 「밖」). */
+    /** 첫 행 앞(F 5항 「밖」). 행이 하나도 없어도 이것이다 — 빈 회차(「아직」)는 부르는 쪽이 먼저 가른다. */
     record BeforeFirst() implements Place {
     }
 
