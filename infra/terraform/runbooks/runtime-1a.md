@@ -1008,6 +1008,11 @@ POK-525(조각 키를 업로드 때부터 회차 경로에) 교체의 DB 몫입�
     `dvr/{stream}/{round}/seg/{seq}.m4s`(회차 경로) · 옛 꼴
     `dvr/{stream}/seg/{seq}.m4s`. 사이드카의 새 꼴 쓰기 스위치
     (`PLAYBACK_ROUND_KEYS`)가 켜져 있을 때만 새 꼴을 씁니다.
+*   **② · ③ · init**: 사이드카 업로더가 올리는 세 갈래(축)입니다 — ② 는
+    녹화 파일 그대로(`upload_state` · 질의의 `archive` 행), ③ 은 되감기용으로
+    다시 짠 조각(`playback_upload_state` · `playback` 행), init 은 회차의 머리
+    조각(`init_uploaded_at` · `init` 행)입니다. 뜻은 media README 「M4 ⓐ 용어」 의
+    「②·③·init 축」 과 같습니다.
 *   **운영 SQL 2**(`60_round_frozen.sql`): `stream_sessions.round_id` 를
     다른 값으로 바꾸는 UPDATE 를 거부하는 트리거(회차 불변 트리거
     `stream_sessions_round_frozen`)를 깝니다. 운영 SQL 1(00–40 — 「M6 스키마
@@ -1065,7 +1070,10 @@ git show "<SHA>:infra/terraform/prod/runtime/sql/60_round_frozen.sql" \
     `VERIFY OK`. `40_verify.sql` 은 트리거를 단언하지 않습니다(운영 SQL 1
     뒤에도 돌기 때문) — 트리거 모양은 60 끝의 DO 블록이 단언합니다.
 *   잠금 대기 상한은 60 파일이 스스로 겁니다(`SET LOCAL lock_timeout =
-    '3s'` — 「재실행 걸음」 의 `PGOPTIONS` 는 넣지 않습니다). 표준 오류에
+    '3s'`). `make_sql_step` 은 `apply.json` 의 마지막 명령만 빼고 나머지를
+    물려받는데, 이 흐름의 5-1 이 새로 만든 `apply.json` 에는 「재실행
+    걸음」 의 `PGOPTIONS` 줄이 없습니다(그 줄은 「재실행 걸음」 의 jq 가 끼울
+    때만 생김). 표준 오류에
     `lock timeout`(SQLSTATE 55P03)이 있으면 파일 전체가 롤백돼 트리거는
     없습니다. 「실패 · 시간 초과」 대로 끄고, 다음 흐름에서 B `PATHS 0` 을
     다시 본 뒤 4(켬)부터 다시 합니다.
@@ -1304,22 +1312,38 @@ RESET ROLE;
 SQL
 ```
 
-자리를 채운 사본을 만들어 보냅니다. `fill_read` 는 값이 UTC 시각
-(`…Z`) · 스트림 ID(`[A-Za-z0-9_-]`, 64자 이하) 꼴이 아니거나 채우지 않은
-자리가 남으면 멈춥니다. `<SHA>` 처럼 꺾쇠로 적은 자리는 실제 값으로 바꿔
-부릅니다.
+자리를 채운 사본을 만들어 보냅니다. `fill_read` 는 자리마다 받는 꼴이
+정해져 있고, 아래 가운데 하나면 멈춥니다. `<SHA>` 처럼 꺾쇠로 적은 자리는
+실제 값으로 바꿔 부릅니다.
+
+*   시각 자리(`since` · `cut` · `cut2` · `on`) 값이 UTC 시각 꼴
+    (`2026-11-03T01:02:03Z`)이 아님. PG 가 시각으로 받는 `infinity` ·
+    `epoch` · `now` 도 멈춥니다 — 그런 값이 들어가면 Q1 · Q2 가 0 을 내
+    「켜기 전」 · 배출을 거짓으로 통과시킬 수 있습니다.
+*   `test` 값이 스트림 ID 꼴(`[A-Za-z0-9_-]`, 64자 이하)이 아님.
+*   값에 개행 · 제어 문자가 있음(조건을 끼우는 여러 줄 값을 막음).
+*   위 다섯이 아닌 자리 이름.
+*   채운 뒤에도 채우지 않은 자리가 남음.
 
 ```shell
 fill_read() {  # fill_read <원본> <결과> <자리=값> …
-  local src="$1" out="$2" pair key val
+  local src="$1" out="$2" pair key val form
   shift 2
   cp -- "${src}" "${out}" || return 1
   for pair in "$@"; do
     key="${pair%%=*}"
     val="${pair#*=}"
-    printf '%s\n' "${val}" | grep -Eqx \
-      '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z|[A-Za-z0-9_-]{1,64}' ||
-      { echo "멈춤: ${key} 값이 UTC 시각 · 스트림 ID 꼴이 아님" >&2; return 1; }
+    case "${key}" in
+      since | cut | cut2 | on)
+        form='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' ;;
+      test) form='[A-Za-z0-9_-]{1,64}' ;;
+      *) echo "멈춤: 모르는 자리 「${key}」" >&2; return 1 ;;
+    esac
+    case "${val}" in
+      *[[:cntrl:]]*) echo "멈춤: ${key} 값에 개행 · 제어 문자" >&2; return 1 ;;
+    esac
+    printf '%s\n' "${val}" | grep -Eqx -- "${form}" ||
+      { echo "멈춤: ${key} 값이 그 자리의 꼴(${form})이 아님" >&2; return 1; }
     sed "s/<${key}>/${val}/g" "${out}" >"${out}.new" &&
       mv -- "${out}.new" "${out}" || return 1
   done
@@ -1351,12 +1375,30 @@ fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
 *   **`bytes_null`** 은 크기가 없어 업로더가 집지 않는 행입니다. 배출로는
     0 이 되지 않으니 0 이 아니면 kty 에게 보고합니다. init 행은 크기
     개념이 없어 NULL 입니다.
+*   **init 행이 줄지 않을 때.** init 행은 안 끝난 세션을 모두 셉니다.
+    업로더는 경로 · 크기가 있는 조각이 하나도 없는 세션(만들 재료가 없음)은
+    집지 않으므로, 그런 세션이 있으면 배출로는 0 이 되지 않습니다(질의는
+    설계 원문 그대로 둡니다 — 막히는 쪽으로 틀림). 기다려도 같은 값이면 같은
+    흐름에서 「M6 읽기 질의」 의 업로드 적체(`make_read backlog`)를 보냅니다.
+    그 `init` 행의 셋째 값이 조각 없는 안 끝난 세션 수입니다(스트림 · 시각
+    구분 없이 전체). 0 이 아니든 0 이든 기다림을 멈추고 두 결과를 kty 에게
+    보고합니다 — 끝나지 못하고 남은 세션일 수 있습니다.
 *   **색인 안 된 녹화는 세지 못합니다.** 상자 디스크에 녹화 파일이 있어도
     색인기가 행을 만들기 전이면(색인 지연 · 사이드카 정지 중) Q2 · Q2-B 에
     나오지 않습니다. 사이드카가 도는 상자를 방송 없는 창에서 재는 까닭입니다.
 *   **Q1 · Q3 의 새 꼴 판별**은 키 앞부분(`dvr/` 뒤 경로 성분이 둘인지)만
     봅니다. Q3 은 회차 성분(셋째 성분)을 그 조각 세션의 `round_id` 와
     견줍니다.
+*   **Q3 은 세션 없는 행을 세지 않습니다.** 조각을 세션과 이어 붙여(inner
+    JOIN) 보므로 `session_id` 가 NULL 인 새 꼴 행은 `matched` 에도
+    `mismatched` 에도 들지 않습니다. 새 꼴 행 전수는 Q1 이 셉니다(시각 하한이
+    `<since>` 라 Q3 의 `<on>` 보다 넓음).
+*   **Q1 · Q3 은 `stream_segments` 를 전부 훑습니다.** 시작 시각만으로 거르는
+    인덱스가 없고(`stream_segments_wall_idx` 는 `stream_id` 가 앞 열), 마스터
+    계정에는 `statement_timeout` 이 없습니다(60초 상한은 `media_indexer` 역할
+    몫 — `10_roles.sql`). 질의의 상한은 페이로드의 `executionTimeout` 300초뿐
+    입니다. 읽기라 사이드카 쓰기를 막지는 않습니다. 시간 초과면 「실패 · 시간
+    초과」 대로 끄고 kty 에게 보고합니다.
 *   **Q4 가 국면을 쓰지 않는 까닭.** 국면 `vod` 는 `vod_state` 가 `frozen`
     이든 `frozen_with_gaps` 든 같고(`media/internal/index/round_playback.go`),
     정산 기한까지 올라가지 않은 조각은 GAP 줄로 마감됩니다

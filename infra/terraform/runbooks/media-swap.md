@@ -623,6 +623,10 @@ A 를 배출 · 정지한 **뒤에만** B 의 새 꼴 쓰기를 켜고, 첫 새 
 
 ### POK-525 교체 선행
 
+1.  걸음 0 이 끝나 있습니다 — PR Ⓐ(상자 역할의 되감기 객체 삭제 권한
+    `RewindDelete`) 머지본으로 `prod/media` apply(plan 변경 = 정책 문 하나)
+    → SSM 으로 상자 역할의 put · delete 한 번(종료 0). 설계 r9.4 9-3 1 ·
+    계획 r2 8절 걸음 0 이고, 이 절의 걸음이 아닙니다.
 1.  PR Ⓑ1(회차 불변) · Ⓑ2(회차 키 · 스위치) · Ⓒ(하한 원장 · Writer)가 모두
     머지돼 있습니다. **Ⓒ 가 머지되기 전에는 이 절을 시작하지 않습니다.**
 1.  B 의 사이드카 이미지 · 설치 묶음을 빌드한 커밋이 셋을 모두 조상으로
@@ -688,8 +692,9 @@ echo "SIDECAR_RUNNING ${running}"
 echo "LAYOUT ${layout:-none}"
 echo "ROUND_FROZEN ${frozen:-none}"
 ok=0
+# 트리거는 absent 만 통과다 — unknown(조회 실패)은 없음을 확인한 것이 아니다.
 if [ "${running}" = 1 ] && [ "${layout}" = legacy ] \
-  && [ "${frozen}" != present ]; then
+  && [ "${frozen}" = absent ]; then
   ok=1
 fi
 if [ "$#" -eq 0 ]; then
@@ -708,11 +713,15 @@ SH
 |---|---|---|
 | `SIDECAR_RUNNING` | `1` | 실행 중 사이드카 컨테이너 수 |
 | `LAYOUT` | `legacy` | 그 컨테이너의 마지막 기동 줄의 layout. 줄이 없으면 `none` |
-| `ROUND_FROZEN` | `present` 아님 | 그 기동 때 회차 불변 트리거 조회 결과(`absent` · `unknown`). `present` 면 운영 SQL 2 가 이미 깔렸다 — 켜기 전 상태가 아니다 |
+| `ROUND_FROZEN` | `absent` | 그 기동 때 회차 불변 트리거 조회 결과. `present` 면 운영 SQL 2 가 이미 깔렸다 — 켜기 전 상태가 아니다. `unknown`(조회 실패) · `none`(줄 없음)이면 트리거가 없는지 모른다 — NOT OK |
 | `Q1` | `0` | 인자로 준 Q1 값(인자가 있을 때만) |
 | `SIDECAR LEGACY OK` · `NOT OK` | OK | 인자 없음 — 위 셋 |
 | `BEFORE ON OK` · `NOT OK` | OK | 인자 있음 — 위 넷(「켜기 전」 선언 판정) |
 | `LAYOUT CHECK FAIL <단계>` | — | `usage` · `docker`(컨테이너 조회 실패) · `journal`(저널 조회 실패) — 판정이 아니다. 다시 봅니다 |
+
+`ROUND_FROZEN unknown` 은 그 컨테이너가 뜰 때 트리거 조회가 실패한
+것입니다. 기동 줄은 컨테이너를 만들 때 한 번만 나와 다시 재도 같습니다 —
+멈추고 kty 에게 보고합니다.
 
 **정지 유지 판정**(`disabled-check.sh` — 인자 없음). A 유닛이 부팅 때 다시
 뜨지 않게 됐는지 봅니다.
@@ -761,6 +770,8 @@ media_ssm a "${work}/stop.sh"                        # 4.5
 media_ssm a "${work}/disable.sh"
 media_ssm a "${work}/stopped-check.sh"
 media_ssm a "${work}/disabled-check.sh"
+media_ssm a "${work}/stopped-check.sh"               # 4.6 — A 판정 다시
+media_ssm a "${work}/disabled-check.sh"
 media_ssm b "${work}/layout-check.sh" <Q1 값>        # 4.6
 media_ssm b "${work}/paths.sh"                       # 4.7 · 4.9 직전
 media_ssm b "${work}/round-keys.sh" on               # 4.7
@@ -798,8 +809,9 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         502 로 재시도를 소진할 수 있습니다. `round-keys.sh on` 을 보낸
         시각과 OK 를 본 시각을 적습니다.
     *   OK 를 본 시각이 Q3 의 `<on>` 입니다.
-    *   `SIDECAR ROUND KEYS FAIL …` 이면 「POK-525 롤백」 의 켬 실패 행으로,
-        판정 줄 없이 끝났으면(SSM 취소 · 시간 초과) 켬 중단 행으로 갑니다.
+    *   `SIDECAR ROUND KEYS FAIL …` 이면 「POK-525 롤백」 의 켬 실패 갈래
+        (판정 줄 끝에 따라 셋)로, 판정 줄 없이 끝났으면(SSM 취소 · 시간
+        초과) 켬 중단 갈래로 갑니다.
 *   **4.8 — 이 순간부터 A 복귀는 닫힙니다**(롤백 하한). Q3 의 `mismatched`
     가 0 이 아니면 멈추고 kty 에게 보고합니다.
 *   **4.9 — 운영 SQL 2.** 직전에 B `PATHS 0` 을 다시 봅니다(트리거를 만드는
@@ -815,7 +827,7 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         상한에 걸리면 다음 주기로 밀립니다.
     1.  **업로드 · 발행 정상 · VOD 문서 URI 새 꼴** — 국면이 `vod` 가 된 뒤
         Q4(`<on>` · `<test>`)의 `pass` 가 `t`: 그 회차 조각(컷오프 이상)의
-        ③ 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0 · 최신 세션
+        ③(되감기 조각) 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0 · 최신 세션
         `vod_state` 가 `frozen`(`frozen_with_gaps` 아님)이고 VOD 문서 키
         있음 · 회차 닫힘.
 
@@ -840,28 +852,79 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
 
 **「켜기 전」 선언 판정** — 둘 다 참일 때만 「켜기 전」 으로 A 복귀를
 엽니다. ⓐ B `layout-check.sh <Q1 값>` 이 `BEFORE ON OK` — 지금 실행 중
-사이드카의 마지막 기동 줄이 `layout=legacy`(트리거 `present` 아님) ⓑ 그
+사이드카의 마지막 기동 줄이 `layout=legacy` · `round_frozen=absent` ⓑ 그
 인자 Q1 이 방금 잰 값(`<since>` 그대로)으로 0. 파일 값은 보지 않습니다 —
 파일을 끔으로 되돌려도 실행 중 컨테이너는 켬일 수 있습니다. Q1 ≥ 1 이면
 「켠 뒤 · 새 꼴 행 1 이상」 입니다. `layout=legacy` 하나만으로는 A 복귀
-근거가 아닙니다 — Q1 0 과 트리거 없음(4.9 를 돌리지 않음 · `ROUND_FROZEN`
-이 `present` 아님)이 함께 필요합니다.
+근거가 아닙니다 — Q1 0 과 트리거 없음 확인(4.9 를 돌리지 않음 ·
+`ROUND_FROZEN absent`)이 함께 필요합니다.
 
 `rolled-back` 판정 줄은 이 판정을 대신하지 않습니다. 스크립트는 복원
-재생성이 만든 컨테이너가 `layout=legacy` 줄을 낸 것까지만 보고, 그 뒤에도
-그 컨테이너가 실행 중인지는 다시 보지 않습니다. 그래서 `rolled-back` 뒤에도
-「실행 중 사이드카 `layout=legacy` ∧ Q1 재측정 0」 을 이 판정으로 따로
+재생성이 만든 컨테이너가 `layout=legacy` 줄을 내고 그 대조 직후 실행 중
+사이드카 하나인 것까지 보지만, 판정 줄을 낸 뒤 그 컨테이너가 계속 도는지와
+Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실행 중 사이드카
+`layout=legacy` · 트리거 `absent` ∧ Q1 재측정 0」 을 이 판정으로 따로
 봅니다.
 
-| 상태 | 판정 | 방법 |
-|---|---|---|
-| **켜기 전**(4.1–4.6) | 스위치 끔 · 트리거 없음 · 「켜기 전」 선언 판정 | 아래 「켜기 전 복귀」 |
-| **켬 실패 · `rolled-back`**(4.7) | `SIDECAR ROUND KEYS FAIL <단계> rolled-back` — 스크립트가 복원 묶음(파일 끔 → 재생성 → 그 컨테이너 legacy 대조)을 마침 | Q1 을 다시 재고 「켜기 전」 선언 판정 → `BEFORE ON OK` 면 「켜기 전」. Q1 ≥ 1 이면 「켠 뒤 · 새 꼴 행 1 이상」, Q1 0 인데 NOT OK 면 아래 `restore-failed` 행 |
-| **켬 실패 · `restore-failed`**(4.7) | `SIDECAR ROUND KEYS FAIL <단계> restore-failed` — 파일 · 실행 상태 미확정 | 아래 「restore-failed 처리」 |
-| **켬 중단**(4.7) | 판정 줄 없이 끝남 — 종료 130 · 143(INT · TERM) · SSM `Cancelled` · `TimedOut`. 스크립트는 신호를 받으면 복원 묶음 없이 끝나고(강제 종료면 트랩도 돌지 않음), 파일은 이미 켬일 수 있고 실행 중 사이드카는 미확정 | `on` 을 다시 보내지 않습니다. 아래 「restore-failed 처리」 를 그대로 — `off` → 결과 갈래대로 손 처리 → Q1 재측정 · 「켜기 전」 선언 판정 |
-| **켠 뒤 · 새 꼴 행 0**(4.7 OK · 4.8 전) | Q1 0 · 트리거 없음 | `round-keys.sh off` → `OK off` 면 「켜기 전」 선언 판정. 그 밖이면 「restore-failed 처리」 의 `off` 결과 갈래 |
-| **켠 뒤 · 새 꼴 행 1 이상**(4.8 뒤) | Q1 ≥ 1 | A 로 돌아가지 않습니다. 고친 이미지로 「설정 반영 교체」(POK-525 하한 이상끼리). 새 꼴 쓰기만 멈추려면 `round-keys.sh off`(이미 쓴 새 꼴 행은 같은 이미지가 계속 읽음). A 의 이미지 · d03980cc · 그 밖의 하한 아래 이미지 금지 |
-| **트리거 결함**(4.9 뒤) | 정당한 세션 UPDATE 가 23514 `stream_sessions.round_id is frozen` | 런타임 1단-가 런북 「POK-525 트리거 롤백 짝」(손 SQL · 승인) → 고친 60 파일 PR → 다시 4.9. A 복귀 수단이 아님 |
+상태마다 판정과 방법입니다.
+
+*   **켜기 전**(4.1–4.6)
+    *   판정: 스위치 끔 · 트리거 없음 · 「켜기 전」 선언 판정.
+    *   방법: 아래 「켜기 전 복귀」.
+*   **켬 실패 · 바뀐 것 없음**(4.7)
+    *   판정: `SIDECAR ROUND KEYS FAIL lock` · `not-running` · `write` ·
+        `config`(종료 1) · `usage`(종료 2) — 뒤에 `rolled-back` ·
+        `restore-failed` 가 붙지 않습니다. 스크립트가 스위치 파일을 바꾸기
+        전에 멈춰 파일 · 실행 중 사이드카가 그대로입니다(media-host README
+        「판정 줄」).
+    *   방법: 「켜기 전」 그대로입니다.
+        *   `lock` — 다른 `round-keys.sh` 실행이 잠금을 쥐었거나 잠금 파일을
+            열지 못한 것입니다. 이 스크립트는 동시에 둘을 돌리지 않습니다 —
+            B 에서 아직 도는 SSM 명령이 없는지(아래 명령이 `0`) 확인한 뒤
+            같은 `on` 을 다시 보냅니다(승인). 다시 보내도 `lock` 이면 kty
+            에게 보고합니다.
+
+            ```shell
+            aws ssm list-commands --instance-id "$(media_ids | jq -er .b)" \
+              --filters key=Status,value=InProgress --query 'length(Commands)'
+            ```
+
+        *   그 밖 — 판정 줄을 kty 에게 보고하고, 다시 켤지는 kty 가
+            정합니다. 다시 켜면 4.6(Q1 · A 판정 · `BEFORE ON OK`)부터
+            합니다.
+*   **켬 실패 · `rolled-back`**(4.7)
+    *   판정: `SIDECAR ROUND KEYS FAIL <단계> rolled-back` — 스크립트가 복원
+        묶음(파일 끔 → 재생성 → 그 컨테이너 legacy 대조)을 마쳤습니다.
+    *   방법: Q1 을 다시 재고 「켜기 전」 선언 판정 → `BEFORE ON OK` 면
+        「켜기 전」. Q1 ≥ 1 이면 「켠 뒤 · 새 꼴 행 1 이상」, Q1 0 인데 NOT
+        OK 면 아래 「restore-failed 처리」.
+*   **켬 실패 · `restore-failed`**(4.7)
+    *   판정: `SIDECAR ROUND KEYS FAIL <단계> restore-failed` — 파일 · 실행
+        상태 미확정.
+    *   방법: 아래 「restore-failed 처리」.
+*   **켬 중단**(4.7)
+    *   판정: 판정 줄 없이 끝남 — 종료 130 · 143(INT · TERM) · SSM
+        `Cancelled` · `TimedOut`. 스크립트는 신호를 받으면 복원 묶음 없이
+        끝나고(강제 종료면 트랩도 돌지 않음), 파일은 이미 켬일 수 있고 실행 중
+        사이드카는 미확정입니다.
+    *   방법: `on` 을 다시 보내지 않습니다. 아래 「restore-failed 처리」 를
+        그대로 — `off` → 결과 갈래대로 손 처리 → Q1 재측정 · 「켜기 전」 선언
+        판정.
+*   **켠 뒤 · 새 꼴 행 0**(4.7 OK · 4.8 전)
+    *   판정: Q1 0 · 트리거 없음.
+    *   방법: `round-keys.sh off` → `OK off` 면 「켜기 전」 선언 판정. 그
+        밖이면 「restore-failed 처리」 의 `off` 결과 갈래.
+*   **켠 뒤 · 새 꼴 행 1 이상**(4.8 뒤)
+    *   판정: Q1 ≥ 1.
+    *   방법: A 로 돌아가지 않습니다. 고친 이미지로 「설정 반영
+        교체」(POK-525 하한 이상끼리). 새 꼴 쓰기만 멈추려면 `round-keys.sh
+        off`(이미 쓴 새 꼴 행은 같은 이미지가 계속 읽음). A 의 이미지 ·
+        d03980cc · 그 밖의 하한 아래 이미지 금지.
+*   **트리거 결함**(4.9 뒤)
+    *   판정: 정당한 세션 UPDATE 가 23514 `stream_sessions.round_id is
+        frozen`.
+    *   방법: 런타임 1단-가 런북 「POK-525 트리거 롤백 짝」(손 SQL · 승인) →
+        고친 60 파일 PR → 다시 4.9. A 복귀 수단이 아닙니다.
 
 **켜기 전 복귀**(A 로 돌아감 — 실행 직전마다 승인):
 
@@ -892,12 +955,21 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         `/etc/pokeclip-media/sidecar.env` 를 손으로 정확히
         `PLAYBACK_ROUND_KEYS=false` 한 줄(`root:root 0644`)로 씁니다(명령
         원문을 kty 에게 보이고 승인). 2 로.
+    *   `SIDECAR ROUND KEYS FAIL lock` — 다른 실행이 잠금을 쥐어(또는 잠금
+        파일을 열지 못해) 아무것도 바꾸지 않았습니다. 동시에 둘을 돌리지
+        않습니다 — 아직 도는 SSM 명령이 없는지 위 「켬 실패 · 바뀐 것 없음」
+        의 `list-commands` 로 확인한 뒤 1 을 다시 합니다. 다시 해도 `lock`
+        이면 kty 에게 보고합니다.
+    *   `SIDECAR ROUND KEYS FAIL config` · `usage` — 스크립트가 설정 · 인자
+        검사에서 멈춰 파일 · 사이드카가 그대로입니다. kty 에게 보고하고,
+        설정 · 인자를 고친 뒤 1 을 다시 합니다.
 1.  B 유닛 재시작 — **방송 없는 창에서만** 합니다. 시작 스크립트가 compose
     전체를 `--force-recreate` 로 다시 띄워 mediamtx 도 내려가므로(`start-
     media.sh` 머리 9) 진행 중 송출이 끊깁니다. 직전에 B `PATHS 0` 을 보고
     `restart.sh` → B 기동 판정(`start-check.sh`).
 1.  Q1 을 다시 재고 「켜기 전」 선언 판정 → `BEFORE ON OK` 면 「켜기 전」.
-    Q1 ≥ 1 이면 「켠 뒤 · 새 꼴 행 1 이상」.
+    Q1 ≥ 1 이면 「켠 뒤 · 새 꼴 행 1 이상」. `LAYOUT legacy` 인데
+    `ROUND_FROZEN` 이 `absent` 가 아니면 멈추고 kty 에게 보고합니다.
 1.  그래도 `LAYOUT legacy` 가 아니면 B 사이드카만 멈추고 kty 에게
     회부합니다. 송출은 mediamtx 가 계속하고, 색인은 사이드카가 다시 뜰 때
     디스크의 녹화를 따라잡습니다. 컨테이너 단독 정지는 media-host README
@@ -1112,7 +1184,10 @@ git merge-base --is-ancestor <M6-0 머지 커밋 SHA> <이미지의 빌드 커�
     결함이면 새 하한 이상 이미지로 설정 반영 교체를 하고, 운영 SQL 결함이면
     고친 문장을 더하는 전진 SQL PR 을 머지한 뒤 런타임 1단-가 런북 「M6
     스키마 재실행」 을 그 머지 SHA 로 다시 돕니다. 그 런북의 「되돌리기 ·
-    해체」 SQL 은 이 용도로 쓰지 않습니다(해체 전용).
+    해체」 SQL 은 이 용도로 쓰지 않습니다(해체 전용). 같은 런북의
+    「POK-525 트리거 롤백 짝」 은 회차 불변 트리거
+    (`stream_sessions_round_frozen`) 하나만 지우는 별개 절차라 이 셋에 들지
+    않고, 이 셋을 여는 근거도 되지 않습니다.
 *   기능만 끄고 싶으면 이미지가 아니라 스위치로 끕니다. prod 의 되감기 제어면
     스위치는 `prod/media` tfvars 의 `control_upstream` 이고(비우면 nginx 가
     제어면 경로를 404 로 답함) 설정 반영 교체로 들어갑니다. 사이드카 env

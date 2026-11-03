@@ -44,7 +44,7 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
 readonly CASES='R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17
-R30 R31 R32'
+R20 R21 R22 R23 R24 R25 R30 R31 R32'
 readonly SCRIPT='bin/sidecar-round-keys.sh'
 readonly SIDECAR_TAG='pokeclip-media-sidecar'
 readonly KEY='PLAYBACK_ROUND_KEYS'
@@ -681,10 +681,10 @@ setup_before_on() {
 }
 
 # R17 — 런북 사이드카 layout 판정(교체 걸음 4.1 · 「켜기 전」 선언 판정 · P1 ·
-# E34). 실행 중 사이드카 하나의 저널 마지막 기동 줄이 layout=legacy(트리거
-# present 아님)면 SIDECAR LEGACY OK, Q1 을 인자로 주면 그것도 0 이어야 BEFORE
-# ON OK. 옛 컨테이너만 legacy · round · Q1 1 이상 · 실행 중 둘 · 트리거 present
-# 는 NOT OK, 조회 실패 · 인자 오류는 FAIL.
+# E34). 실행 중 사이드카 하나의 저널 마지막 기동 줄이 layout=legacy · 트리거
+# absent 면 SIDECAR LEGACY OK, Q1 을 인자로 주면 그것도 0 이어야 BEFORE ON OK.
+# 옛 컨테이너만 legacy · round · Q1 1 이상 · 실행 중 둘 · 트리거 present ·
+# unknown 은 NOT OK, 조회 실패 · 인자 오류는 FAIL.
 case_runbook_layout() {
   local ok=0 args
   setup_before_on 'pcbenchnew running legacy absent'
@@ -725,6 +725,17 @@ case_runbook_layout() {
   run_runbook layout-check.sh 0 || return 1
   expect_verdict frozen 'BEFORE ON NOT OK' 1 'ROUND_FROZEN present' || ok=1
 
+  # 트리거 조회 실패(unknown)는 「없음」 을 확인한 것이 아니다 — absent 만 통과.
+  setup_before_on 'pcbenchnew running legacy unknown'
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict frozen-unknown 'BEFORE ON NOT OK' 1 'ROUND_FROZEN unknown' \
+    || ok=1
+
+  setup_before_on 'pcbenchnew running legacy unknown'
+  run_runbook layout-check.sh || return 1
+  expect_verdict frozen-unknown-only 'SIDECAR LEGACY NOT OK' 1 \
+    'ROUND_FROZEN unknown' || ok=1
+
   setup_before_on 'pcbencha running legacy absent' \
     'pcbenchb running legacy absent'
   run_runbook layout-check.sh 0 || return 1
@@ -747,6 +758,192 @@ case_runbook_layout() {
     expect_verdict "usage「${args}」" 'LAYOUT CHECK FAIL usage' 2 || ok=1
   done
   return "${ok}"
+}
+
+# R20–R25 는 런타임 런북(runtime-1a.md 「POK-525 읽기 질의」)의 자리 채움 함수
+# fill_read 다. 런북의 함수 정의를 그대로 뽑아 운영자 셸로 부른다 — 자리마다
+# 허용 꼴 · 개행과 제어 문자 · 모르는 자리 · 남은 자리를 거절하는지 본다.
+
+# 런타임 런북 — fill_read 의 원문.
+readonly RUNTIME_RUNBOOK="${MEDIA_HOST_DIR}/../terraform/runbooks/runtime-1a.md"
+# fill_read 가 채우는 고정 원본 — 자리 다섯이 모두 있다.
+readonly FILL_SOURCE="SELECT '<since>'::timestamptz, '<cut>'::timestamptz,
+       '<cut2>'::timestamptz, '<on>'::timestamptz
+ WHERE stream_id <> '<test>';"
+# fill_read 를 부르는 운영자 셸 — 런북은 kty 로컬 터미널(zsh)에서 돈다. zsh 가
+# 없는 기계(CI)에서는 bash 만 본다.
+fill_shells=(bash)
+if command -v zsh >/dev/null 2>&1; then
+  fill_shells+=(zsh)
+fi
+readonly fill_shells
+
+#######################################
+# 런타임 런북에서 fill_read 함수 정의(`fill_read() {` 줄부터 첫 `}` 줄까지)를
+# 낸다.
+# Returns:
+#   0 / 1 정의가 하나가 아니거나 닫히지 않음.
+#######################################
+runbook_fill_read() {
+  awk '
+    /^fill_read\(\) \{/ { inside = 1; found++ }
+    inside { print }
+    inside && $0 == "}" { inside = 0; closed++ }
+    END { exit !(found == 1 && closed == 1) }' "${RUNTIME_RUNBOOK}"
+}
+
+#######################################
+# 런북의 fill_read 를 운영자 셸(bash · 있으면 zsh)마다 빈 환경에서 부른다.
+# 원본은 사례 디렉터리의 고정 SQL 이고, 셸마다 결과 · 표준 오류 · 종료 코드를
+# fill.<셸>.{sql,err,status} 에 남긴다.
+# Globals:
+#   ops_dir, fill_shells
+# Arguments:
+#   <자리=값> ….
+#######################################
+run_fill_read() {
+  local shell status
+  ops_fixture::new_case
+  if ! runbook_fill_read >"${ops_dir}/fill_read.sh"; then
+    harness::add_reason '런북에 fill_read 정의가 하나가 아님'
+    return 1
+  fi
+  printf '%s\n' "${FILL_SOURCE}" >"${ops_dir}/src.sql"
+  for shell in "${fill_shells[@]}"; do
+    status=0
+    # shellcheck disable=SC2016 # $1 · $@ 는 안쪽 셸에서 펼친다.
+    harness::bounded "${OPS_RUN_TIMEOUT}" env -i "HOME=${ops_dir}/home" \
+      'PATH=/usr/bin:/bin' "${shell}" -c '. "$1"; shift; fill_read "$@"' \
+      fill "${ops_dir}/fill_read.sh" "${ops_dir}/src.sql" \
+      "${ops_dir}/fill.${shell}.sql" "$@" </dev/null >/dev/null \
+      2>"${ops_dir}/fill.${shell}.err" || status=$?
+    printf '%s\n' "${status}" >"${ops_dir}/fill.${shell}.status"
+  done
+}
+
+#######################################
+# 셸마다 fill_read 가 거절했는지 본다 — 종료 1 · 표준 오류에 「멈춤」.
+# Arguments:
+#   이름.
+#######################################
+expect_fill_rejected() {
+  local shell ok=0
+  for shell in "${fill_shells[@]}"; do
+    if [[ "$(cat -- "${ops_dir}/fill.${shell}.status")" != 1 ]] \
+      || ! grep -q -F -- '멈춤' "${ops_dir}/fill.${shell}.err"; then
+      harness::add_reason "$1(${shell}): 거절하지 않음 — 종료 $(cat -- \
+        "${ops_dir}/fill.${shell}.status") / $(harness::log_tail \
+        "${ops_dir}/fill.${shell}.err")"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+# R20 — 런북 fill_read 정상 채움(시각 자리 넷 · 시험 스트림 자리).
+case_fill_read_ok() {
+  local shell ok=0 want
+  want="$(printf '%s\n' "${FILL_SOURCE}" | sed \
+    -e 's/<since>/2026-11-03T01:02:03Z/; s/<cut>/2026-11-03T01:02:04Z/' \
+    -e 's/<cut2>/2026-11-03T01:02:05Z/; s/<on>/2026-11-03T01:02:06Z/' \
+    -e 's/<test>/loop_back-1/')"
+  run_fill_read since=2026-11-03T01:02:03Z cut=2026-11-03T01:02:04Z \
+    cut2=2026-11-03T01:02:05Z on=2026-11-03T01:02:06Z test=loop_back-1 \
+    || return 1
+  for shell in "${fill_shells[@]}"; do
+    if [[ "$(cat -- "${ops_dir}/fill.${shell}.status")" != 0 \
+      || "$(cat -- "${ops_dir}/fill.${shell}.sql")" != "${want}" ]]; then
+      harness::add_reason "${shell}: 채운 결과가 다름 — 종료 $(cat -- \
+        "${ops_dir}/fill.${shell}.status") / $(harness::log_tail \
+        "${ops_dir}/fill.${shell}.err")"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+#######################################
+# 자리 하나를 주어진 값으로, 나머지 자리를 모두 꼴 안의 값으로 채워 fill_read
+# 를 부른다 — 남은 자리 검사가 아니라 그 값의 검사로 거절되는지 보게 한다.
+# 시험할 짝을 맨 앞에 둔다(같은 자리를 앞 짝이 채우면 뒤 짝은 바꿀 것이 없다).
+# Arguments:
+#   <자리=값>.
+#######################################
+run_fill_one() {
+  local pair="$1" key name valid=()
+  key="${pair%%=*}"
+  for name in since cut cut2 on; do
+    [[ "${name}" == "${key}" ]] || valid+=("${name}=2026-11-03T01:02:03Z")
+  done
+  [[ "${key}" == test ]] || valid+=('test=loopback')
+  run_fill_read "${pair}" "${valid[@]}"
+}
+
+# R21 — 시각 자리(since · cut · cut2 · on)는 UTC Z 시각 꼴만 — PG 가 받는
+# infinity · -infinity · epoch · now, 숫자만, 스트림 ID 꼴(2026-11-03X)은 거절.
+case_fill_read_time_slots() {
+  local ok=0 key val
+  for key in since cut cut2 on; do
+    for val in infinity -infinity epoch now 20261103 2026-11-03X \
+      2026-11-03T01:02:03 '2026-11-03 01:02:03Z'; do
+      run_fill_one "${key}=${val}" || return 1
+      expect_fill_rejected "${key}=${val}" || ok=1
+    done
+  done
+  return "${ok}"
+}
+
+# R22 — 시험 스트림 자리(test)는 스트림 ID 꼴만 — 시각 꼴 · 따옴표 · 공백 ·
+# 빈 값 · 65자는 거절.
+case_fill_read_test_slot() {
+  local ok=0 val
+  for val in 2026-11-03T01:02:03Z "x' OR 'a'='a" 'a b' '' \
+    "$(printf 'a%.0s' {1..65})"; do
+    run_fill_one "test=${val}" || return 1
+    expect_fill_rejected "test=${val}" || ok=1
+  done
+  return "${ok}"
+}
+
+# R23 — 값에 개행 · 제어 문자가 있으면 거절한다. 한 줄만 꼴에 맞아도 통과하던
+# 갈래(sed 치환 안의 역슬래시 개행은 개행이 된다)로 AND FALSE 조건을 끼우는
+# 값을 포함한다.
+case_fill_read_control() {
+  local ok=0 val nl=$'\n'
+  for val in "loopback${nl}" "x' AND FALSE AND 'y\\${nl}loopback" \
+    "loop"$'\t'"back" "loop"$'\r'; do
+    run_fill_one "test=${val}" || return 1
+    expect_fill_rejected "test=${val}" || ok=1
+    if grep -q -F -- 'AND FALSE' "${ops_dir}"/fill.*.sql 2>/dev/null; then
+      harness::add_reason 'AND FALSE 가 결과에 들어감'
+      ok=1
+    fi
+  done
+  for val in "2026-11-03T01:02:03Z${nl}" \
+    "2026-11-03T01:02:03Z\\${nl}2026-11-03T01:02:03Z"; do
+    run_fill_one "since=${val}" || return 1
+    expect_fill_rejected 'since 개행' || ok=1
+  done
+  return "${ok}"
+}
+
+# R24 — 모르는 자리 · 빈 자리 이름 · `=` 없는 짝은 거절한다(다른 자리는 모두
+# 채워 남은 자리 검사에 기대지 않는다).
+case_fill_read_unknown_key() {
+  local ok=0 pair
+  for pair in sinse=2026-11-03T01:02:03Z =loopback SHA=loopback since; do
+    run_fill_read "${pair}" since=2026-11-03T01:02:03Z \
+      cut=2026-11-03T01:02:03Z cut2=2026-11-03T01:02:03Z \
+      on=2026-11-03T01:02:03Z test=loopback || return 1
+    expect_fill_rejected "${pair}" || ok=1
+  done
+  return "${ok}"
+}
+
+# R25 — 채우지 않은 자리가 남으면 거절한다(값은 모두 꼴 안).
+case_fill_read_leftover() {
+  run_fill_read since=2026-11-03T01:02:03Z || return 1
+  expect_fill_rejected '<cut> 남음'
 }
 
 #######################################
@@ -925,6 +1122,18 @@ main() {
     case_lock_spot
   harness::run_case R32 'layout 맞은 뒤 실행 중 아님 → verify 갈래' \
     case_not_running_after_verify
+  harness::run_case R20 '런북 fill_read → 시각 · 시험 스트림 자리 채움' \
+    case_fill_read_ok
+  harness::run_case R21 '런북 fill_read 시각 자리 → Z 시각 꼴 밖 거절' \
+    case_fill_read_time_slots
+  harness::run_case R22 '런북 fill_read test 자리 → 스트림 ID 꼴 밖 거절' \
+    case_fill_read_test_slot
+  harness::run_case R23 '런북 fill_read → 개행 · 제어 문자 거절' \
+    case_fill_read_control
+  harness::run_case R24 '런북 fill_read → 모르는 자리 거절' \
+    case_fill_read_unknown_key
+  harness::run_case R25 '런북 fill_read → 채우지 않은 자리 남으면 거절' \
+    case_fill_read_leftover
 
   # shellcheck disable=SC2086 # 이름 목록을 낱낱으로 넘긴다.
   if ! harness::summary 0 ${CASES}; then

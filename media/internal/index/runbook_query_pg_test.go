@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -60,20 +61,47 @@ func runbookQuery(text, name string) (string, error) {
 
 // readOnlyHeredocFirst 는 표지 블록을 담은 here-document 의 첫 줄을 낸다 — 런북의 make_read 가 첫 줄
 // `SET TRANSACTION READ ONLY;` 를 요구하므로, 블록을 옮기다 그 줄을 떨어뜨리면 운영에서 읽기 전용 보장이 빠진다.
+// 블록이 그 here-document 안에 끝까지 있어야 한다 — 시작 줄과 BEGIN 사이, BEGIN 과 END 사이에 닫는 줄 `SQL` 이 없고
+// END 뒤에 닫는 줄이 있다. 그렇지 않으면 첫 줄이 블록과 다른 here-document 의 것이다.
 func readOnlyHeredocFirst(text, name string) (string, error) {
+	const closing = "SQL"
 	lines := strings.Split(text, "\n")
+	begin, end := -1, -1
 	for i, line := range lines {
-		if line != "-- BEGIN "+name {
-			continue
+		switch line {
+		case "-- BEGIN " + name:
+			begin = i
+		case "-- END " + name:
+			end = i
 		}
-		for j := i - 1; j >= 0; j-- {
-			if strings.HasSuffix(lines[j], "<<'SQL'") {
-				return lines[j+1], nil
-			}
+	}
+	if begin < 0 || end <= begin {
+		return "", fmt.Errorf("표지 %s 한 쌍 없음", name)
+	}
+	start := -1
+	for j := begin - 1; j >= 0 && start < 0; j-- {
+		switch {
+		case lines[j] == closing:
+			return "", fmt.Errorf("%s 앞에서 here-document 가 닫힘(%d행)", name, j+1)
+		case strings.HasSuffix(lines[j], "<<'SQL'"):
+			start = j
 		}
+	}
+	if start < 0 {
 		return "", fmt.Errorf("%s 앞에 here-document 시작이 없음", name)
 	}
-	return "", fmt.Errorf("표지 %s 없음", name)
+	if slices.Contains(lines[begin:end], closing) {
+		return "", fmt.Errorf("%s 의 END 전에 here-document 가 닫힘", name)
+	}
+	for _, line := range lines[end+1:] {
+		if line == closing {
+			return lines[start+1], nil
+		}
+		if strings.HasSuffix(line, "<<'SQL'") {
+			break
+		}
+	}
+	return "", fmt.Errorf("%s 를 담은 here-document 가 닫히지 않음", name)
 }
 
 // fillRunbookQuery 는 자리 표시를 값으로 바꾸고, 남은 자리 표시가 있으면 오류를 낸다.
@@ -247,6 +275,37 @@ func TestRunbookQueryBlocksSitInReadOnlyHeredocs(t *testing.T) {
 	}
 }
 
+// readOnlyHeredocFirst 는 표지 블록이 here-document 안에 끝까지 들어 있을 때만 그 첫 줄을 낸다 — 블록 앞에서
+// here-document 가 닫히거나, END 표지 전에 닫히거나, 닫히지 않으면 오류다(첫 줄만 보면 다른 here-document 의 첫 줄을
+// 읽고 통과한다).
+func TestRunbookReadOnlyHeredocFirstChecksBoundaries(t *testing.T) {
+	const start, first = "cat >\"${payload}/q9.sql\" <<'SQL'", "SET TRANSACTION READ ONLY;"
+	join := func(lines ...string) string { return strings.Join(lines, "\n") }
+	cases := []struct {
+		name, text string
+		ok         bool
+	}{
+		{"안에 끝까지", join(start, first, "-- BEGIN Q9", "SELECT 1;", "-- END Q9", "RESET ROLE;", "SQL"), true},
+		{"블록 앞에서 닫힘", join(start, first, "SQL", "-- BEGIN Q9", "SELECT 1;", "-- END Q9"), false},
+		{"END 전에 닫힘", join(start, first, "-- BEGIN Q9", "SELECT 1;", "SQL", "-- END Q9"), false},
+		{"닫히지 않음", join(start, first, "-- BEGIN Q9", "SELECT 1;", "-- END Q9"), false},
+		{"END 없음", join(start, first, "-- BEGIN Q9", "SELECT 1;", "SQL"), false},
+		{"닫기 전에 다음 here-document", join(start, first, "-- BEGIN Q9", "SELECT 1;", "-- END Q9", start, first, "SQL"), false},
+		{"here-document 밖", join(first, "-- BEGIN Q9", "SELECT 1;", "-- END Q9"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := readOnlyHeredocFirst(c.text, "Q9")
+			if c.ok && (err != nil || got != first) {
+				t.Errorf("readOnlyHeredocFirst = %q, %v — want %q, nil", got, err, first)
+			}
+			if !c.ok && err == nil {
+				t.Errorf("readOnlyHeredocFirst = %q, nil — want 오류", got)
+			}
+		})
+	}
+}
+
 // Q2(A 배출 — E25)의 축마다 waiting 이 업로더 스위퍼가 집는 수와 같다. 고정물은 업로더 술어를 하나씩 어긴 행을
 // 축마다 둔다 — 런북 질의가 술어 하나를 빠뜨리면 그 행을 더 세어 갈린다. 시각은 모두 <cut> 앞 · 24시간 안 · 꼬리
 // 유예 밖이다(꼬리 예외 · 창 경계는 이 대조의 축이 아니다).
@@ -324,6 +383,63 @@ func TestRunbookQ2CountsWhatUploaderPicks(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Errorf("Q2 축 = %v, want archive · playback · init 세 행", got)
+	}
+}
+
+// Q2(A 배출)는 시험 스트림(<test>) · <cut> 뒤 · 24시간 밖(②(녹화 파일 그대로) · ③(되감기 조각) 축)을 세지 않는다. 축마다
+// 세는 행 하나를 함께 둬 0 끼리 같아 헛통과하지 않게 하고, 빼야 할 행은 업로더 술어로는 모두 집히는 꼴로 둔다 — 그
+// 제외 술어 하나를 빼면 그 축이 1 늘어 갈린다. init 축은 세션 시작 시각의 <cut> 상한과 시험 스트림만 본다(24시간
+// 창 없음 — 25시간 전 세션은 init 업로드를 마친 꼴로 둬 판정 밖).
+func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	now := time.Now().UTC()
+	cut := now.Add(-30 * time.Minute)
+	beforeCut := cut.Add(-10 * time.Minute)
+	afterCut := cut.Add(10 * time.Second)
+	stale := now.Add(-25 * time.Hour)
+	sessions := []runbookSession{
+		{id: "S-b", stream: "bstream", state: "live", started: beforeCut},
+		{id: "S-test", stream: runbookTestStream, state: "live", started: beforeCut},
+		{id: "S-late", stream: "latestream", state: "live", started: afterCut},
+		{id: "S-old", stream: "oldstream", state: "live", started: stale.Add(-time.Hour), initUploaded: true},
+	}
+	cutoffs := map[string]int64{"bstream": 0, runbookTestStream: 0, "latestream": 0, "oldstream": 0}
+	waiting := func(stream, session string, start time.Time) runbookSegment {
+		return runbookSegment{stream: stream, session: session, seq: 0, start: start, archive: "pending",
+			playback: "pending", key: fmt.Sprintf("dvr/%s/seg/000000.m4s", stream)}
+	}
+	segments := []runbookSegment{
+		waiting("bstream", "S-b", beforeCut),            // 셈 — ② · ③ 각 하나 · init 재료
+		waiting(runbookTestStream, "S-test", beforeCut), // 시험 스트림
+		waiting("latestream", "S-late", afterCut),       // <cut> 뒤
+		waiting("oldstream", "S-old", stale),            // 24시간 밖
+	}
+	if err := seedRunbook(ctx, pool, sessions, cutoffs, segments); err != nil {
+		t.Fatalf("고정물: %v", err)
+	}
+	query, err := loadRunbookQuery("Q2", map[string]string{"cut": rfc3339(cut), "test": runbookTestStream})
+	if err != nil {
+		t.Fatalf("Q2 뽑기: %v", err)
+	}
+
+	rows, err := runReadOnly(ctx, pool, query)
+	if err != nil {
+		t.Fatalf("Q2 실행: %v", err)
+	}
+	got, err := axisWaiting(rows)
+	if err != nil {
+		t.Fatalf("Q2 행: %v", err)
+	}
+
+	want := map[string]int64{"archive": 1, "playback": 1, "init": 1}
+	for axis, n := range want {
+		if got[axis] != n {
+			t.Errorf("Q2 %s waiting = %d, want %d(전체 %v)", axis, got[axis], n, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("Q2 축 = %v, want %v", got, want)
 	}
 }
 
@@ -507,7 +623,8 @@ func TestRunbookQ4PassesOnlyCleanTestRound(t *testing.T) {
 		{name: "GAP 기록 하나", change: `INSERT INTO stream_published_gaps (stream_id, seq, session_id, reason)
 VALUES ('` + test + `', 3, 'S-t', 'settle_deadline')`},
 		{name: "frozen_with_gaps", change: `UPDATE stream_sessions SET vod_state = 'frozen_with_gaps' WHERE session_id = 'S-t'`},
-		{name: "VOD 문서 키 없음", change: `UPDATE stream_sessions SET vod_state = 'freezing', vod_s3_key = NULL WHERE session_id = 'S-t'`},
+		// 상태는 frozen 그대로 두고 키만 비운다 — vod_doc 조건 하나만 빼면 이 사례가 갈린다.
+		{name: "VOD 문서 키 없음", change: `UPDATE stream_sessions SET vod_s3_key = NULL WHERE session_id = 'S-t'`},
 		{name: "회차 안 닫힘", change: `UPDATE stream_sessions SET round_closed_at = NULL WHERE session_id = 'S-t'`},
 		{name: "옛 꼴 키", change: q4ExtraSegment("dvr/" + test + "/seg/000005.m4s")},
 		{name: "다른 회차 키", change: q4ExtraSegment("dvr/" + test + "/S-x/seg/000005.m4s")},
