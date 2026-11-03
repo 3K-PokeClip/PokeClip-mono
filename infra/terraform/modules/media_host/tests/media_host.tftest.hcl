@@ -406,6 +406,7 @@ run "instance_role_policy_statements" {
         "arn:aws:rds-db:ap-northeast-2:123456789012:dbuser:db-EXAMPLE0123456789ABCDEFGH/media_janitor",
       ])
       RewindObjects = toset(["arn:aws:s3:::pokeclip-prod-rewind-example/*"])
+      RewindDelete  = toset(["arn:aws:s3:::pokeclip-prod-rewind-example/*"])
       RewindBucket  = toset(["arn:aws:s3:::pokeclip-prod-rewind-example"])
     }
     error_message = "인스턴스 역할 정책의 statement · Resource 가 계획 M9 c1 과 다르다."
@@ -421,6 +422,7 @@ run "instance_role_policy_statements" {
       EcrPull       = toset(["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"])
       DbConnect     = toset(["rds-db:connect"])
       RewindObjects = toset(["s3:GetObject", "s3:PutObject"])
+      RewindDelete  = toset(["s3:DeleteObject"])
       RewindBucket  = toset(["s3:ListBucket"])
       DenylistRead  = toset(["ssm:GetParameter"])
     }
@@ -431,7 +433,7 @@ run "instance_role_policy_statements" {
   assert {
     condition = alltrue([
       for statement in data.aws_iam_policy_document.media.statement :
-      contains(["EcrAuth", "RewindObjects"], statement.sid) ||
+      contains(["EcrAuth", "RewindObjects", "RewindDelete"], statement.sid) ||
       alltrue([for resource in statement.resources : !strcontains(resource, "*")])
     ])
     error_message = "GetAuthorizationToken · rewind 객체 밖의 문에 와일드카드 Resource 가 있다."
