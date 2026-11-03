@@ -94,7 +94,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "rewind" {
 }
 
 output "rewind_bucket_name" {
-  description = "rewind 버킷 이름(edge 오리진)."
+  description = "rewind 버킷 이름(런타임 2단 버킷 정책의 대상 — edge 는 regional 도메인만 읽는다)."
   value       = aws_s3_bucket.rewind.bucket
 }
 
