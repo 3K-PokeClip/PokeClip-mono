@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"os"
@@ -192,8 +193,9 @@ type Indexer struct {
 	// statFn·probeFn 은 fsop 워커 경유의 기본값을 담는 주입점이다. 교체는 테스트뿐이다.
 	statFn  func(string) (os.FileInfo, error)
 	probeFn func(string) (int64, error)
-	// mtxiFn·trackEndsFn 도 같은 주입점이다 — ③ 시간 도장의 재료를 읽는다(chain.go).
-	mtxiFn      func(string) (playback.Mtxi, error)
+	// timingFn·trackEndsFn 도 같은 주입점이다 — 조각의 시각 사실(장부 원래 사실 칸 · ③ 시간 도장의 재료)과 직전 조각의
+	// 트랙 끝을 읽는다(chain.go · timing_read.go).
+	timingFn    func(string) (playback.SegmentTiming, error)
 	trackEndsFn func(string) (playback.Ends, error)
 
 	// 아래 상태는 전부 스트림별이다. 하나라도 전역으로 뭉개면 다중 스트림에서 조용히 틀린다.
@@ -220,6 +222,8 @@ type Indexer struct {
 	requested map[string]int64
 	// chains 는 ③ 시간 도장 사슬의 보관값이다(chain.go).
 	chains map[string]playbackChain
+	// timingReads 는 스트림별 시각 판독 상태(막힘 표지 · 포기 이력)다(timing_read.go).
+	timingReads map[string]*timingReadState
 	// initAdmitted 는 이 프로세스에서 init 요청이 업로더에 접수된 스트림별 마지막 회차다 — init 은
 	// 회차마다 접수될 때까지 그 회차의 행에서 요청한다(upload.go requestRowUploads).
 	initAdmitted map[string]string
@@ -311,12 +315,16 @@ func (ix *Indexer) SetRewindCache(c *cache.Cache) {
 	ix.rewind = c
 }
 
-// New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를,
-// obs 에는 *mtxstate.Poller 를 넘긴다. up 이 nil 이면 아무것도 요청하지 않는 기본값이,
+// New 는 인덱서를 만든다. readTiming 에는 playback.ReadTiming 을, w 에는 *recording.Watcher 를, up 에는
+// *upload.Uploader 를, obs 에는 *mtxstate.Poller 를 넘긴다. readTiming 은 probe 와 같은 판독 재료라 fsop 워커가 감싼다 —
+// nil 이면 playback.ReadTiming 이다. up 이 nil 이면 아무것도 요청하지 않는 기본값이,
 // w 가 nil 이면(워처 강등) 널 오브젝트가, obs 가 nil 이면(관측 미배선) EpochKnown=false
 // 를 돌려주는 널 오브젝트가 끼워진다(m3a) — 배선 전에도 인덱서는 그대로 돈다.
-func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
-	up UploadRequester, obs StateObserver, opt Options, log *slog.Logger) *Indexer {
+func New(store index.Store, probe fmp4meta.DurationProbe, readTiming func(io.ReadSeeker) (playback.SegmentTiming, error),
+	w Adopter, up UploadRequester, obs StateObserver, opt Options, log *slog.Logger) *Indexer {
+	if readTiming == nil {
+		readTiming = playback.ReadTiming
+	}
 	if up == nil {
 		up = noUploader{}
 	}
@@ -354,6 +362,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		held:            map[string]heldTail{},
 		requested:       map[string]int64{},
 		chains:          map[string]playbackChain{},
+		timingReads:     map[string]*timingReadState{},
 		initAdmitted:    map[string]string{},
 		opened:          map[string]index.InsertCommit{},
 		pendingOffline:  map[string]sessionMark{},
@@ -366,7 +375,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 	ix.fsLatch = fsop.NewLatch(log)
 	ix.statFn = func(p string) (os.FileInfo, error) { return fsop.StatT(p, ix.opt.FSOpTimeout) }
 	ix.probeFn = func(p string) (int64, error) { return fsop.ProbeT(p, ix.opt.FSOpTimeout, ix.probe) }
-	ix.mtxiFn = func(p string) (playback.Mtxi, error) { return fsop.ReadT(p, ix.opt.FSOpTimeout, playback.ReadMtxi) }
+	ix.timingFn = func(p string) (playback.SegmentTiming, error) { return fsop.ReadT(p, ix.opt.FSOpTimeout, readTiming) }
 	ix.trackEndsFn = func(p string) (playback.Ends, error) { return fsop.ReadT(p, ix.opt.FSOpTimeout, playback.TrackEnds) }
 	// Settle 옵션의 단일 생성점(m2-ⓑ)이다. 전 호출점이 이 주입을 자동으로 받고,
 	// 미래에 추가되는 호출점도 자동으로 덮인다 — static_rules_test 가 이 자리를 단언한다.
@@ -481,6 +490,12 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 		return h3Err
 	}
 
+	// 막힘 표지(POK-196 PDT 계획 4절 c5) — 시각 판독이 일시 실패한 조각보다 늦은 같은 스트림 조각은 커밋하지도 Adopt 하지도
+	// 않는다. 먼저 커밋하면 다시 읽은 조각이 H3 에서 영구히 빠진다. 다음 재스캔이 미기록으로 남은 둘을 순서대로 다시 넘긴다.
+	if ix.heldBehindBlock(seg) {
+		return nil
+	}
+
 	// H4. 유휴 커밋 전 mtime 재검(D13-예방) — 방금 전까지 쓰이고 있었다면 아직 녹화 중이다.
 	if seg.Reason == recording.ReasonIdle {
 		if fi, statErr := ix.statT(seg.Path, "h4_idle"); statErr == nil && time.Since(fi.ModTime()) < ix.opt.IdleTimeout {
@@ -494,7 +509,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	}
 
 	// H5. 측정 — probe 먼저, 크기 변동 시에만 Settle (정상 경로 추가 지연 0).
-	d, size, mtxi, ok := ix.measure(ctx, seg)
+	d, size, read, ok := ix.measure(ctx, seg)
 	if !ok {
 		return nil
 	}
@@ -510,7 +525,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	}
 
 	// H8 + H9.
-	return ix.commit(ctx, seg, d, size, mtxi)
+	return ix.commit(ctx, seg, d, size, read)
 }
 
 // state 는 스트림의 커서와 이력 맵을 준비한다. 처음 보는 스트림이면 DB 에서 적재한다.
@@ -537,14 +552,13 @@ func (ix *Indexer) state(ctx context.Context, streamID string) (*index.Cursor, m
 // 발상: 대부분의 파일은 이미 다 써져 있다. 먼저 재 보고, 재는 동안 크기가 변했을 때만
 // 안정될 때까지 기다린다 -> 정상 상황에서는 대기 시간이 0이다.
 //
-// 크기가 안정된 뒤 ③ 시간 도장의 재료(mtxi)도 여기서 읽는다(계획 4.2-R 규칙 ③ — 실시간·훅·
-// 전수 스캔이 모두 이 자리로 모인다). mtxi 가 nil 이면 판독 실패(상자 부재·해석 실패)이며
-// 커밋은 그대로 한다 — 도장을 어떻게 할지는 사슬(advance)이 정한다.
-func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (durationMS int64, size int64, mtxi *playback.Mtxi, ok bool) {
+// 크기가 안정된 뒤 조각의 시각 사실(장부 원래 사실 칸 · ③ 시간 도장의 mtxi)도 여기서 한 번 읽는다(계획 4.2-R 규칙 ③ ·
+// POK-196 PDT 설계 r7 4절 — 실시간·훅·전수 스캔이 모두 이 자리로 모인다). 판독이 일시 실패하면 커밋하지 않는다(readTiming).
+func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (durationMS int64, size int64, read timingRead, ok bool) {
 	size0, err := ix.fileSizeT(seg.Path, "measure")
 	if err != nil {
 		ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
-		return 0, 0, nil, false
+		return 0, 0, timingRead{}, false
 	}
 	ix.warnOnWallSkew(seg)
 
@@ -552,7 +566,7 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 	size1, err := ix.fileSizeT(seg.Path, "measure")
 	if err != nil {
 		ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
-		return 0, 0, nil, false
+		return 0, 0, timingRead{}, false
 	}
 
 	rounds := 0
@@ -561,12 +575,12 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 		if ix.fsLatch.Tripped() {
 			ix.log.Warn("fs_latch_early_return", "site", "measure",
 				"stream_id", seg.StreamID, "path", seg.Path)
-			return 0, 0, nil, false
+			return 0, 0, timingRead{}, false
 		}
 		fi, settleErr := recording.Settle(ctx, seg.Path, ix.opt.Settle)
 		if settleErr != nil {
 			if errors.Is(settleErr, context.Canceled) || errors.Is(settleErr, context.DeadlineExceeded) {
-				return 0, 0, nil, false
+				return 0, 0, timingRead{}, false
 			}
 			break
 		}
@@ -575,7 +589,7 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 		size1, err = ix.fileSizeT(seg.Path, "measure")
 		if err != nil {
 			ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
-			return 0, 0, nil, false
+			return 0, 0, timingRead{}, false
 		}
 	}
 
@@ -587,12 +601,12 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 			"stream_id", seg.StreamID, "path", seg.Path, "reason", seg.Reason,
 			"rounds", rounds, "size0", size0, "size1", size1)
 		ix.adopt.Adopt(seg)
-		return 0, 0, nil, false
+		return 0, 0, timingRead{}, false
 	}
-	if mtxi, ok = ix.readMtxi(seg); !ok {
-		return 0, 0, nil, false
+	if read, ok = ix.readTiming(seg); !ok {
+		return 0, 0, timingRead{}, false
 	}
-	return d, size1, mtxi, true
+	return d, size1, read, true
 }
 
 // promote 는 H6 를 수행한다. "다음 파일이 생겨서 완성"인 경우만 4000ms 를 기대할 수 있다.
@@ -702,10 +716,11 @@ func (ix *Indexer) lateOrDuplicate(ctx context.Context, cur *index.Cursor, seg r
 	return true, nil
 }
 
-// commit 은 H8(PTS·discontinuity)와 H9(INSERT)를 수행한다. mtxi 는 measure 가 읽은 도장 재료이며
-// 장부에 싣지 않고 advance 로만 넘긴다(index.Record 무접촉 — 계획 4.2-R 규칙 ③).
-func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64, mtxi *playback.Mtxi) error {
+// commit 은 H8(discontinuity)와 H9(INSERT)를 수행한다. read 는 measure 가 읽은 시각 사실이다 — 장부 재료(TimingInput)는
+// 여기서 한 번 만들어 재시도 · 재적재 경로에서 재사용하고, ③ 도장 재료(mtxi)는 advance 로 넘긴다.
+func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64, read timingRead) error {
 	cur := ix.cursors[seg.StreamID]
+	timing := ix.timingInput(cur, seg, read, d)
 	// 관측 스냅샷은 **여기서 한 번** 채취해 주조 판정과 세션 결정에 같은 값을 흘린다.
 	// 두 번 읽으면 같은 조각이 두 축에서 다른 관측으로 판정된다.
 	obs := ix.observation(seg.StreamID)
@@ -724,7 +739,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		dec = noBreak
 	}
 
-	rec := ix.buildRecord(cur, seg, d, size, dec.Apply)
+	rec := ix.buildRecord(cur, seg, d, size, dec.Apply, timing)
 
 	outcome, insertCommit, poisoned, err := ix.insertWithRetry(ctx, rec, seed, src)
 	if err != nil {
@@ -766,7 +781,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
 		// 이미 정해졌다 — 여기서 재계산하면 같은 세그먼트의 판정이 재시도 여부에 따라 달라진다.
 		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
-		rec = ix.buildRecord(cur, seg, d, size, dec.Apply)
+		rec = ix.buildRecord(cur, seg, d, size, dec.Apply, timing)
 
 		outcome, insertCommit, poisoned, err = ix.insertWithRetry(ctx, rec, seed, src)
 		if err != nil {
@@ -798,7 +813,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		return nil
 	case index.InsertInserted:
 		ix.logSeed(seg, rec.Seq, seed, insertCommit)
-		ix.advance(cur, seg, rec, insertCommit, mtxi)
+		ix.advance(cur, seg, rec, insertCommit, read)
 		if dec.Index >= 0 {
 			ix.releaseBreak(seg.StreamID, dec)
 			ix.log.Info("hook_break_consumed",
@@ -817,39 +832,33 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 // breakHit 은 "훅으로 확인된 세션 경계를 이 조각이 소비한다"는 판정이다(peekBreak 산출).
 // 여기가 IsDiscontinuity 의 **유일한 대입 지점**이다 — 대입 지점을 늘리면 어느 경로로
 // 참이 됐는지 추적할 수 없어진다.
-func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size int64, breakHit bool) index.Record {
-	startPTS := int64(0)
+//
+// 위치(start_pts_ms)는 여기서 정하지 않는다 — 판과 무관하게 store 가 Insert 트랜잭션에서 정하고 InsertCommit.StartPTSMS 로
+// 돌려준다(POK-196 PDT 설계 r7 7.1 · 계획 0절 6). drift 는 끊김 판정의 재료로만 남는다.
+func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size int64, breakHit bool, timing index.TimingInput) index.Record {
 	isDiscont := false
 
 	if cur.Tail != nil {
 		drift := seg.StartWall.Sub(cur.ExpectedNextWall()).Milliseconds()
-		if abs64(drift) <= ix.opt.DriftToleranceMS {
-			startPTS = cur.NextPTSMS()
-			if drift < 0 {
-				// 톨러런스 이내의 음수 drift 는 무음으로 두지 않되 ERROR 로 올리지도 않는다.
-				// duration 은 미디어 타임라인에서, wall 은 파일명에서 오므로 작은 음수는
-				// 상시 발생하는 측정 입도 차이다(60초 방송 실측: 전이 14건 중 13건이 -1~-22ms).
-				// ERROR 로 올리면 그 신호가 소음에 묻혀 진짜 사고를 못 보게 된다.
-				ix.log.Debug("negative_drift_within_tolerance",
-					"stream_id", seg.StreamID, "path", seg.Path, "drift_ms", drift,
-					"seg_wall", seg.StartWall, "expected_next_wall", cur.ExpectedNextWall())
-			}
-		} else {
-			// max(0, drift) 가 G8(단조 비감소)을 식 수준에서 보장하는 유일한 지점이다.
-			// drift 가 음수일 때 그대로 더하면 PTS 가 뒤로 후퇴해 구간이 겹친다.
-			startPTS = cur.NextPTSMS() + max(int64(0), drift)
-			isDiscont = true
-			if drift < 0 {
-				// 시계 역행 또는 NTP step.
-				ix.log.Error("negative_drift",
-					"stream_id", seg.StreamID, "path", seg.Path, "drift_ms", drift,
-					"seg_wall", seg.StartWall, "expected_next_wall", cur.ExpectedNextWall())
-			}
+		isDiscont = abs64(drift) > ix.opt.DriftToleranceMS
+		switch {
+		case drift < 0 && !isDiscont:
+			// 톨러런스 이내의 음수 drift 는 무음으로 두지 않되 ERROR 로 올리지도 않는다.
+			// duration 은 미디어 타임라인에서, wall 은 파일명에서 오므로 작은 음수는
+			// 상시 발생하는 측정 입도 차이다(60초 방송 실측: 전이 14건 중 13건이 -1~-22ms).
+			// ERROR 로 올리면 그 신호가 소음에 묻혀 진짜 사고를 못 보게 된다.
+			ix.log.Debug("negative_drift_within_tolerance",
+				"stream_id", seg.StreamID, "path", seg.Path, "drift_ms", drift,
+				"seg_wall", seg.StartWall, "expected_next_wall", cur.ExpectedNextWall())
+		case drift < 0:
+			// 시계 역행 또는 NTP step.
+			ix.log.Error("negative_drift",
+				"stream_id", seg.StreamID, "path", seg.Path, "drift_ms", drift,
+				"seg_wall", seg.StartWall, "expected_next_wall", cur.ExpectedNextWall())
 		}
 	}
 
-	// 훅 판정을 합성한다. PTS 식은 손대지 않는다 — 0.9s 재접속의 drift 는 tolerance 이내라
-	// 타임라인은 그대로 이어 붙고 플래그만 선다. POK-36 케이스에서 원하던 결과다.
+	// 훅 판정을 합성한다 — 0.9s 재접속의 drift 는 tolerance 이내라 플래그는 훅이 세운다. POK-36 케이스에서 원하던 결과다.
 	//
 	// cur.Tail == nil 이면 breakHit 은 구조적으로 false 다(peekBreak 이 Apply 를 주지 않는다).
 	isDiscont = isDiscont || breakHit
@@ -857,7 +866,6 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 	return index.Record{
 		StreamID:        seg.StreamID,
 		Seq:             cur.NextSeq,
-		StartPTSMS:      startPTS,
 		StartWallUTC:    seg.StartWall,
 		DurationMS:      int32(d),
 		S3Key:           index.S3Key(seg.StreamID, cur.NextSeq, seg.StartWall),
@@ -865,24 +873,28 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 		UploadState:     index.UploadStatePending,
 		Bytes:           size,
 		IsDiscontinuity: isDiscont,
+		Timing:          timing,
 	}
 }
 
 // advance 는 커서를 한 칸 전진시킨다.
 // 꼬리 행 하나만 갈아 끼우면 파생 3값이 동시에 맞는다 — 빠뜨릴 곳 자체가 없어진다.
-// ③ 도장 사슬도 이 자리에서 행마다 한 번 전진하고(res·mtxi 가 그 재료다), 업로드 요청이 뒤따른다.
-func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) {
+// 꼬리의 위치 · 길이는 store 가 커밋한 값(res)이고 칸은 장부에 실은 값(rec.Timing)이다 — 그래야 메모리 커서가 재적재한
+// 커서와 같다(POK-196 PDT 계획 4절 c5 · 설계 r7 4절 「메모리 커서는 장부 꼬리 행의 사본」).
+// ③ 도장 사슬도 이 자리에서 행마다 한 번 전진하고(res·read 의 mtxi 가 그 재료다), 업로드 요청이 뒤따른다.
+func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.Record, res index.InsertCommit, read timingRead) {
 	// 직전 꼬리를 붙잡아 둔다 — 이 INSERT 로 그 행은 더 이상 꼬리가 아니게 되므로,
 	// 보류 중이었다면 지금이 올릴 때다(파일이 더 자랄 수 없다).
 	prev := cur.Tail
 
 	cur.Tail = &index.TailRow{
-		Seq: rec.Seq, StartPTSMS: rec.StartPTSMS, StartWallUTC: rec.StartWallUTC,
-		DurationMS: rec.DurationMS, Bytes: rec.Bytes, LocalPath: rec.LocalPath,
+		Seq: rec.Seq, StartPTSMS: res.StartPTSMS, StartWallUTC: rec.StartWallUTC,
+		DurationMS: res.DurationMS, Bytes: rec.Bytes, LocalPath: rec.LocalPath,
 		UploadState: index.UploadStatePending,
 		// ★ S3Key 를 빠뜨려도 컴파일이 통과하고 빈 문자열이 된다. 그 상태로 held 가 승격되면
 		//   키가 빈 채 요청되어 대상 검증에 걸리고 그 조각은 영구 미업로드된다(R-a).
-		S3Key: rec.S3Key,
+		S3Key:  rec.S3Key,
+		Timing: rec.Timing.Facts,
 	}
 	cur.NextSeq = rec.Seq + 1
 
@@ -899,14 +911,16 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 
 	// ③ 도장 사슬은 로그보다 먼저 전진한다 — 판독 실패로 도장을 고정했다는 신호가 아래 로그의
 	// mtxi_pinned 속성이다(계획 4.2-R 규칙 ④ⓐ — 새 로그 키 0).
-	playbackTarget, pinned := ix.advanceChain(seg.StreamID, prev, rec, res, mtxi)
+	playbackTarget, pinned := ix.advanceChain(seg.StreamID, prev, rec, res, read.mtxi())
 
 	// reason 은 채널별 기여도(훅 vs 파일)를 재는 유일한 창이다.
 	// 이 값의 분포가 무너지는 것이 "훅 채널이 무징후로 죽었다"의 유일한 신호다.
-	ix.log.Info("segment_indexed",
-		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", rec.DurationMS,
-		"start_pts_ms", rec.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
-		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason, "mtxi_pinned", pinned)
+	// 판 · 이어 계산 속성(timingAttrs)은 POK-196 PDT 설계 r7 8절의 판 NULL 몫이다.
+	ix.log.Info("segment_indexed", append([]any{
+		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", res.DurationMS,
+		"start_pts_ms", res.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
+		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason, "mtxi_pinned", pinned},
+		timingAttrs(rec.Timing, read, res)...)...)
 	// 새 회차 개시 행은 판을 고른 게이트를 남긴다(POK-196 PDT 설계 r7 8절 · 9.3) — 회차를 이어 가는 개시(재접속 계승 ·
 	// TD 분할)는 게이트를 읽지 않아 TimingGateRead 가 nil 이다.
 	if res.SessionOpened && res.TimingGateRead != nil {
@@ -1000,10 +1014,15 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 		return nil
 	}
 
+	// 영상 끝은 같은 조각을 한 번 다시 읽어 길이와 함께 넘긴다(POK-196 PDT 설계 r7 2.14). 넘기지 못하는 갈래는 nil(그 칸
+	// 그대로)이고 길이 교정은 그대로 한다.
+	videoEnd, ok := ix.grownVideoEnd(seg, cur.Tail, d)
+	if !ok {
+		return nil
+	}
+
 	// 확인 4: 최종 판정은 DB 가 내린다. 메모리와 DB 가 어긋나 있을 수 있다.
-	// 영상 끝은 아직 넘기지 않는다(nil = 그 칸 그대로) — 조각을 ReadTiming 으로 다시 읽어 채우는 것은 판독 배선 커밋(c5)
-	// 몫이다(POK-196 PDT 계획 4절 c4a · c5).
-	updated, err := ix.store.UpdateTail(ctx, seg.StreamID, cur.Tail.Seq, int32(d), fi.Size(), nil)
+	updated, err := ix.store.UpdateTail(ctx, seg.StreamID, cur.Tail.Seq, int32(d), fi.Size(), videoEnd)
 	if err != nil {
 		return err
 	}
@@ -1019,6 +1038,11 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 	oldDuration, oldBytes := cur.Tail.DurationMS, cur.Tail.Bytes
 	cur.Tail.DurationMS = int32(d)
 	cur.Tail.Bytes = fi.Size()
+	if videoEnd != nil {
+		// 장부 문장은 옛 값이 있을 때만 바꾸고(grownVideoEnd 가 그때만 넘긴다), 메모리 꼬리도 같은 값을 따른다.
+		end := time.Duration(*videoEnd)
+		cur.Tail.Timing.VideoEnd = &end
+	}
 	// 이것으로 파생 NextPTSMS / ExpectedNextWall 이 자동 교정된다.
 	// 되감기 캐시도 장부가 받은 길이를 따른다(교정 push) — 거절된 교정은 여기 닿지 않는다.
 	ix.rewind.ApplyTailCorrection(seg.StreamID, cur.Tail.Seq, cur.Tail.DurationMS)

@@ -171,7 +171,7 @@ func (f *phaseFixture) rebuild(durationMS int64) {
 	f.t.Helper()
 	opt := testOptions()
 	opt.SeedEnabled = true
-	f.ix = New(f.store, func(string) (int64, error) { return durationMS, nil },
+	f.ix = New(f.store, func(string) (int64, error) { return durationMS, nil }, noTimingFacts,
 		f.adopt, nil, f.observer, opt, slog.New(f.logs))
 	if f.degraded.reattached {
 		// 재장착이 실패한 경로 — 같은 널 오브젝트에 다른 가드로 도달한다.

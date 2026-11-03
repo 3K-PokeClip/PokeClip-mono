@@ -85,7 +85,7 @@ func raceScanFixture(t *testing.T) (*fixture, *raceScanStore) {
 			DurationMS: 4000, LocalPath: path, UploadState: state, Bytes: 1000,
 		})
 	}
-	f.ix = New(st, f.probe.fn, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
+	f.ix = New(st, f.probe.fn, noTimingFacts, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
 	return f, st
 }
 

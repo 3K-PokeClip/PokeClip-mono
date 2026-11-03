@@ -209,7 +209,7 @@ func (s *fakeStore) LoadCursor(_ context.Context, streamID string) (index.Cursor
 		Tail: &index.TailRow{
 			Seq: r.Seq, StartPTSMS: r.StartPTSMS, StartWallUTC: r.StartWallUTC,
 			DurationMS: r.DurationMS, Bytes: r.Bytes, LocalPath: r.LocalPath,
-			UploadState: r.UploadState, S3Key: r.S3Key,
+			UploadState: r.UploadState, S3Key: r.S3Key, Timing: r.Timing.Facts,
 		},
 	}, nil
 }
@@ -286,6 +286,11 @@ func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, du
 		if r.Seq == seq && r.UploadState == index.UploadStatePending {
 			s.rows[streamID][i].DurationMS = durationMS
 			s.rows[streamID][i].Bytes = bytes
+			// 영상 끝은 옛 값이 있고 넘긴 값이 있을 때만 바꾼다(store.go updateTailSQL 과 같은 뜻).
+			if old := r.Timing.Facts.VideoEnd; old != nil && videoEndNS != nil {
+				end := time.Duration(*videoEndNS)
+				s.rows[streamID][i].Timing.Facts.VideoEnd = &end
+			}
 			return true, nil
 		}
 	}
@@ -533,7 +538,7 @@ func newFixture(t *testing.T, probeVals ...int64) *fixture {
 
 // reload 는 Options 를 바꾼 뒤 인덱서를 다시 만든다.
 func (f *fixture) reload() {
-	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
+	f.ix = New(f.store, f.probe.fn, noTimingFacts, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
 }
 
 // makeFile 은 실제 파일을 만들고 mtime 을 충분히 과거로 돌린다.

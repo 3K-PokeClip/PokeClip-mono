@@ -78,7 +78,7 @@ func newOfflineLoop(t *testing.T, edit func(*indexer.Options)) *offlineLoop {
 		edit(&opt)
 	}
 	log := slog.New(f.logs)
-	f.ix = indexer.New(f.store, f.probe.fn, noopAdopter{}, nil, f.obs, opt, log)
+	f.ix = indexer.New(f.store, f.probe.fn, noTimingFacts, noopAdopter{}, nil, f.obs, opt, log)
 	f.rewind = &rewindLoop{ix: f.ix, root: f.root, cache: f.cache, log: log, endLive: f.ends.endLive}
 	return f
 }

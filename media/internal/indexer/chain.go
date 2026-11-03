@@ -15,7 +15,6 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fsop"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
-	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // mtxiGapTolerance 는 같은 녹화기 안에서 구멍으로 보지 않는 mtxi 간격의 상한이다(kty 결정 G).
@@ -150,10 +149,11 @@ func (ix *Indexer) recordSkew(streamID string, c, link playbackChain, adjacent b
 		"stream_id", streamID, "session_id", link.sessionID, "seq", link.seq, "seconds", skew.Seconds())
 }
 
-// linkOf 는 행의 보관값 뼈대다. 도장 재료(표식·mtxi·pos·offset)는 부르는 쪽이 채운다.
+// linkOf 는 행의 보관값 뼈대다. 도장 재료(표식·mtxi·pos·offset)는 부르는 쪽이 채운다. 길이는 store 가 커밋한 값이다
+// (POK-196 PDT 계획 4절 c5 — 판 2 에서는 mvhd 가 아니라 영상 길이다).
 func linkOf(rec index.Record, res index.InsertCommit) playbackChain {
 	return playbackChain{
-		sessionID: res.SessionID, seq: rec.Seq, dur: time.Duration(rec.DurationMS) * time.Millisecond,
+		sessionID: res.SessionID, seq: rec.Seq, dur: time.Duration(res.DurationMS) * time.Millisecond,
 		path: rec.LocalPath, pdt: res.PlaybackPDT,
 	}
 }
@@ -168,36 +168,23 @@ func playbackTargetOf(streamID string, link playbackChain, rec index.Record, res
 	}
 }
 
-// readMtxi 는 H5 마지막 판독이다(규칙 ③). 반환 nil 은 판독 실패(상자 부재·해석 실패)라 커밋은
-// 그대로 한다. ok 가 거짓이면 시간 초과다 — 이 이벤트를 커밋 없이 끝내고 Adopt 하지 않는다
-// (stat_failed 와 같다: 미기록으로 남고 래치 해제 뒤 다음 수집이 다시 찾는다. m3c 의 Adopt 3곳 불변).
-func (ix *Indexer) readMtxi(seg recording.Segment) (mtxi *playback.Mtxi, ok bool) {
-	m, err := ix.mtxiT(seg.Path)
-	if errors.Is(err, fsop.ErrStalled) {
-		return nil, false
-	}
-	if err != nil {
-		return nil, true
-	}
-	return &m, true
-}
-
-// mtxiT 는 mtxi 판독의 유일한 관문이다(계획 4.2-R 규칙 ③ — m2). 열고·읽고·닫기가 fsop 워커 안에서
-// 끝나고, 래치 규약은 probeT 와 같다: 트립 뒤에는 워커를 만들지 않고, 시간 초과는 fs_op_stalled 와
-// 래치 트립으로 잇는다.
-func (ix *Indexer) mtxiT(path string) (playback.Mtxi, error) {
+// timingT 는 조각 시각 판독(playback.ReadTiming — mtxi · 트랙별 시작 · 끝)의 유일한 관문이다(계획 4.2-R 규칙 ③ — m2 ·
+// POK-196 PDT 계획 4절 c5). 열고·읽고·닫기가 fsop 워커 안에서 끝나고, 래치 규약은 probeT 와 같다: 트립 뒤에는 워커를
+// 만들지 않고, 시간 초과는 fs_op_stalled 와 래치 트립으로 잇는다. 신호의 site 는 옛 mtxi 관문의 이름(mtxi)을 그대로 쓴다 —
+// 같은 자리 · 같은 재료(도장 재료 판독)이고, 운영 문서의 판별 문자열이 그 이름이다(README 신호 절).
+func (ix *Indexer) timingT(path string) (playback.SegmentTiming, error) {
 	if ix.fsLatch.Tripped() {
-		return playback.Mtxi{}, fmt.Errorf("%w: op=read site=mtxi (latched)", fsop.ErrStalled)
+		return playback.SegmentTiming{}, fmt.Errorf("%w: op=read site=mtxi (latched)", fsop.ErrStalled)
 	}
-	m, err := ix.mtxiFn(path)
+	st, err := ix.timingFn(path)
 	if errors.Is(err, fsop.ErrStalled) {
 		ix.log.Error("fs_op_stalled", "op", "read", "site", "mtxi", "path", path)
 		ix.fsLatch.Trip(path, "mtxi")
 	}
-	return m, err
+	return st, err
 }
 
-// trackEndsT 는 리셋을 이을 때 직전 조각의 두 트랙 끝을 다시 읽는 관문이다(mtxiT 와 같은 규약).
+// trackEndsT 는 리셋을 이을 때 직전 조각의 두 트랙 끝을 다시 읽는 관문이다(timingT 와 같은 규약).
 func (ix *Indexer) trackEndsT(path string) (playback.Ends, error) {
 	if ix.fsLatch.Tripped() {
 		return playback.Ends{}, fmt.Errorf("%w: op=read site=track_ends (latched)", fsop.ErrStalled)

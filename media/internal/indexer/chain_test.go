@@ -1,7 +1,7 @@
 package indexer
 
 // ③ 시간 도장 사슬(chain.go)의 단위 검증이다 — 계획 4.2-R R3 「보관값 전진 규칙」 ①~⑥.
-// mtxi·트랙 끝 판독은 mtxiFn·trackEndsFn 주입으로 대신한다(파일 I/O 없이 산식만 잰다).
+// 시각 판독·트랙 끝 판독은 timingFn·trackEndsFn 주입으로 대신한다(파일 I/O 없이 산식만 잰다).
 // 실물 조각을 fsop 관문으로 읽는 배선은 TestChainReadsRecorderMtxiThroughFsopGate 하나가 본다.
 
 import (
@@ -26,12 +26,10 @@ var (
 	recB = [16]byte{0xbb}
 )
 
-var (
-	errNoMtxi = errors.New("머리말에 mtxi 상자가 없다(주입)")
-	errNoEnds = errors.New("트랙 끝을 읽지 못했다(주입)")
-)
+var errNoEnds = errors.New("트랙 끝을 읽지 못했다(주입)")
 
-// fakeReads 는 경로별 mtxi·트랙 끝 판독 결과다. 등록하지 않은 경로는 판독 실패다.
+// fakeReads 는 경로별 mtxi·트랙 끝 판독 결과다. 등록하지 않은 경로의 조각은 머리말에 mtxi 가 없다(결정적 부재 — 커밋은
+// 그대로 하고 도장을 기대값에 고정한다). 트랙 끝은 등록하지 않으면 판독 실패다.
 type fakeReads struct {
 	mtxi map[string]playback.Mtxi
 	ends map[string]playback.Ends
@@ -42,12 +40,12 @@ type fakeReads struct {
 // injectReads 는 두 판독 주입점을 가짜로 바꾼다. 픽스처를 reload 하면 다시 불러야 한다.
 func (f *fixture) injectReads() *fakeReads {
 	r := &fakeReads{mtxi: map[string]playback.Mtxi{}, ends: map[string]playback.Ends{}}
-	f.ix.mtxiFn = func(p string) (playback.Mtxi, error) {
+	f.ix.timingFn = func(p string) (playback.SegmentTiming, error) {
 		m, ok := r.mtxi[p]
 		if !ok {
-			return playback.Mtxi{}, errNoMtxi
+			return playback.SegmentTiming{}, nil
 		}
-		return m, nil
+		return playback.SegmentTiming{Mtxi: &m}, nil
 	}
 	f.ix.trackEndsFn = func(p string) (playback.Ends, error) {
 		r.endsCalls = append(r.endsCalls, p)
@@ -66,7 +64,7 @@ func mtxiOf(rec [16]byte, dts time.Duration) *playback.Mtxi {
 }
 
 // row 는 at(baseWall 기준) 자리에 조각 파일을 만들어 훅 유입으로 처리한다. m 이 nil 이면 그 조각의
-// mtxi 판독은 실패한다. 길이는 픽스처 프로브가 차례로 준다(훅 유입은 재프로브가 없다).
+// 머리말에 mtxi 가 없다. 길이는 픽스처 프로브가 차례로 준다(훅 유입은 재프로브가 없다).
 func (f *fixture) row(r *fakeReads, at time.Duration, m *playback.Mtxi) recording.Segment {
 	f.t.Helper()
 	seg := f.segment("s1", segName(baseWall, at), 1000, recording.ReasonHook)
@@ -99,9 +97,9 @@ func TestMtxiReadStallTripsLatchWithoutCommitOrAdopt(t *testing.T) {
 	f := newFixture(t, 4000)
 	seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonHook)
 	calls := 0
-	f.ix.mtxiFn = func(p string) (playback.Mtxi, error) {
+	f.ix.timingFn = func(p string) (playback.SegmentTiming, error) {
 		calls++
-		return playback.Mtxi{}, fmt.Errorf("%w: op=read path=%q", fsop.ErrStalled, p)
+		return playback.SegmentTiming{}, fmt.Errorf("%w: op=read path=%q", fsop.ErrStalled, p)
 	}
 
 	if err := f.handle(seg); err != nil {
@@ -129,9 +127,9 @@ func TestMtxiReadStallTripsLatchWithoutCommitOrAdopt(t *testing.T) {
 // 앞선 FS 호출이 트립시킨 뒤에도 새 워커가 생기지 않게 하는 구조 강제다(statT·probeT 와 같다).
 func TestReadGatesRefuseWhileLatched(t *testing.T) {
 	f := newFixture(t)
-	f.ix.mtxiFn = func(string) (playback.Mtxi, error) {
-		t.Error("래치가 섰는데 mtxi 판독 워커를 만들었다")
-		return playback.Mtxi{}, nil
+	f.ix.timingFn = func(string) (playback.SegmentTiming, error) {
+		t.Error("래치가 섰는데 시각 판독 워커를 만들었다")
+		return playback.SegmentTiming{}, nil
 	}
 	f.ix.trackEndsFn = func(string) (playback.Ends, error) {
 		t.Error("래치가 섰는데 트랙 끝 판독 워커를 만들었다")
@@ -139,8 +137,8 @@ func TestReadGatesRefuseWhileLatched(t *testing.T) {
 	}
 	f.ix.fsLatch.Trip("/p", "measure")
 
-	if _, err := f.ix.mtxiT("/p"); !errors.Is(err, fsop.ErrStalled) {
-		t.Errorf("mtxiT 오류 = %v, want ErrStalled", err)
+	if _, err := f.ix.timingT("/p"); !errors.Is(err, fsop.ErrStalled) {
+		t.Errorf("timingT 오류 = %v, want ErrStalled", err)
 	}
 	if _, err := f.ix.trackEndsT("/p"); !errors.Is(err, fsop.ErrStalled) {
 		t.Errorf("trackEndsT 오류 = %v, want ErrStalled", err)
@@ -673,11 +671,13 @@ func (f *fixture) recorderFragment(name string, at time.Duration) recording.Segm
 	return seg
 }
 
-// 배선 — 기본 판독 관문(fsop.ReadT + playback.ReadMtxi·TrackEnds)이 실물 조각의 mtxi 와 트랙 끝을
+// 배선 — 기본 판독 관문(fsop.ReadT + playback.ReadTiming·TrackEnds)이 실물 조각의 mtxi 와 트랙 끝을
 // 읽어 도장을 만든다. 두 조각은 녹화기 표식이 달라(다른 연결) 둘째 조각이 첫 조각 끝에 이어 붙는다.
 // 기대값은 playback 패키지의 실물 판독 테스트가 고정한 값(mtxi 5,987,981,859ns · 소리 끝 3,994,013,605ns)이다.
 func TestChainReadsRecorderMtxiThroughFsopGate(t *testing.T) {
 	f := newFixture(t, 4000, 2000)
+	// 픽스처의 판독기 대신 실물 판독기로 세운다 — 관문(fsop.ReadT)은 New 가 감싼 그대로다.
+	f.ix = New(f.store, f.probe.fn, playback.ReadTiming, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
 	f.store.scriptSessions("S1", "S1")
 	f.mustHandle(f.recorderFragment("segment_4s.mp4", 0))
 	f.mustHandle(f.recorderFragment("segment_tail_2s.mp4", 4*time.Second)) // 녹화기 표식 cf6d… · mtxi 17,992,993,197ns

@@ -154,7 +154,7 @@ func (h *itHarness) start(o itOptions) {
 	store := index.NewPGStore(h.pool, newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, log), playback.SegKey)
 	opt := indexer.DefaultOptions()
 	opt.SegmentRoot = h.root
-	h.ix = indexer.New(store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, nil, opt, log)
+	h.ix = indexer.New(store, func(string) (int64, error) { return 4000, nil }, noTimingFacts, noopAdopter{}, nil, nil, opt, log)
 	h.cache = &cache.Cache{Options: cache.Options{LedgerRowCap: o.rowCap}}
 	h.ix.SetRewindCache(h.cache)
 

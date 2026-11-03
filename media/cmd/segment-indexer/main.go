@@ -181,7 +181,7 @@ func run() error {
 	if w != nil {
 		adopt = w
 	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, adopt, up, observer, cfg.Indexer, log)
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, playback.ReadTiming, adopt, up, observer, cfg.Indexer, log)
 
 	// --- 3-1. 훅 어댑터 (선택) ---
 	//
