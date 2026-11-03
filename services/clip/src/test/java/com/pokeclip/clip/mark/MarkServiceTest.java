@@ -5,7 +5,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardService.RecordResult;
 import com.pokeclip.clip.mark.MarkErrors.MarkRejectedException;
-import com.pokeclip.clip.segment.TimelineOriginReader;
+import com.pokeclip.clip.segment.ServerClockPosition;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,15 +52,15 @@ class MarkServiceTest extends IntegrationTestSupport {
 
     private final StreamKeyResolveClient keys;
     private final BroadcastRepository broadcasts;
-    private final TimelineOriginReader origins;
+    private final ServerClockPosition positions;
     private final JumpCardService cards;
     private final JdbcTemplate jdbc;
 
-    MarkServiceTest(StreamKeyResolveClient keys, BroadcastRepository broadcasts, TimelineOriginReader origins,
+    MarkServiceTest(StreamKeyResolveClient keys, BroadcastRepository broadcasts, ServerClockPosition positions,
                     JumpCardService cards, JdbcTemplate jdbc) {
         this.keys = keys;
         this.broadcasts = broadcasts;
-        this.origins = origins;
+        this.positions = positions;
         this.cards = cards;
         this.jdbc = jdbc;
     }
@@ -141,7 +141,7 @@ class MarkServiceTest extends IntegrationTestSupport {
         방송("S-1", TOKEN, STARTED);
         조각(TOKEN, T0, 0);
         String eventId = UUID.randomUUID().toString();
-        MarkService service = new MarkService(keys, broadcasts, origins, cards,
+        MarkService service = new MarkService(keys, broadcasts, positions, cards,
                 Clock.fixed(RECEIVED.plusSeconds(10), ZoneOffset.UTC));
 
         RecordResult result = service.mark(BEARER, eventId, 본문(eventId, SENT_AT - 3_000, SENT_AT), RECEIVED);
@@ -246,7 +246,7 @@ class MarkServiceTest extends IntegrationTestSupport {
     }
 
     private RecordResult mark(String eventId, long pressedAt, long sentAt, Instant received) {
-        MarkService service = new MarkService(keys, broadcasts, origins, cards, Clock.fixed(received, ZoneOffset.UTC));
+        MarkService service = new MarkService(keys, broadcasts, positions, cards, Clock.fixed(received, ZoneOffset.UTC));
         return service.mark(BEARER, eventId, 본문(eventId, pressedAt, sentAt), service.now());
     }
 

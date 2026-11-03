@@ -105,14 +105,26 @@ public abstract class IntegrationTestSupport {
                         playback_pdt     timestamptz,
                         -- 재생용 사본 키(계약 5-5, ADR-057). 탈퇴 정리(POK-256)가 원본과 같이 지운다.
                         playback_s3_key  text,
+                        -- PDT 판(POK-196 생산자 c1 · NULL = 옛 식, 2 = 판 2). 생산자가 함께 더하는 나머지 여섯 칸은
+                        -- 생산자 기록이라 소비자가 읽지 않아(경계 표 B10) 시드에 두지 않는다. 마크 저장 위치와 카드
+                        -- 장면이 이 칸으로 행의 축을 가른다.
+                        timing_version   smallint,
                         PRIMARY KEY (stream_id, seq)
                     )""");
-            // 1번 회차 장부의 칸 셋만. 탈퇴 정리(POK-256)가 회차 머리 파일(init) 키를 읽는다. 정본은 같은 ddl.go.
+            // 1번 회차 장부. 탈퇴 정리(POK-256)가 회차 머리 파일(init) 키를 읽고, 회차 고르기(RoundRows)가 회차 · 계승 칸을
+            // 읽는다. 정본은 같은 ddl.go — 운영은 started_at NOT NULL 이지만 칸 셋만 심는 옛 시험(탈퇴 정리)이 있어 여기는
+            // 비워 둘 수 있게 둔다.
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS public.stream_sessions (
-                        session_id  text PRIMARY KEY,
-                        stream_id   text NOT NULL,
-                        init_s3_key text
+                        session_id       text PRIMARY KEY,
+                        stream_id        text NOT NULL,
+                        init_s3_key      text,
+                        state            text NOT NULL DEFAULT 'live',
+                        started_at       timestamptz,
+                        round_id         text,
+                        round_closed_at  timestamptz,
+                        inherits_session text REFERENCES public.stream_sessions(session_id),
+                        CONSTRAINT stream_sessions_state_chk CHECK (state IN ('live','ending','ended'))
                     )""");
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("1번 장부 시드 실패", e);

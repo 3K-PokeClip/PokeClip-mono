@@ -4,6 +4,7 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
+import com.pokeclip.clip.jumpcard.CardPositionReader.Scene;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.HotkeyBroadcastGoneException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.HotkeyEventOwnedByOtherException;
@@ -16,6 +17,7 @@ import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -23,6 +25,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -63,6 +66,7 @@ public class JumpCardService {
     private final BroadcastAccessGuard guard;
     private final ThumbnailUrls thumbnails;
     private final ApplicationEventPublisher events;
+    private final CardPositionReader cardScenes;
 
     /**
      * 🔴 <b>열기·가리기·되살리기 문이 {@code @Transactional} 대신 이것을 쓴다.</b> 자격 판정을 트랜잭션 밖에서
@@ -73,9 +77,10 @@ public class JumpCardService {
     JumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
                     ObjectMapper mapper, CardStreamRegistry registry,
                     BroadcastAccessGuard guard, TransactionTemplate transactions, ThumbnailUrls thumbnails,
-                    ApplicationEventPublisher events) {
+                    ApplicationEventPublisher events, CardPositionReader cardScenes) {
         this.thumbnails = thumbnails;
         this.events = events;
+        this.cardScenes = cardScenes;
         this.cards = cards;
         this.broadcasts = broadcasts;
         this.mapper = mapper;
@@ -87,33 +92,41 @@ public class JumpCardService {
     /**
      * 자동 카드(2A). <b>자동만 받는다</b>(POK-391): 수동 카드는 {@link #recordHotkey}로만 만든다.
      * 컨트롤러가 {@code hotkey}를 400으로 먼저 거절하므로 여기 오는 다른 출처는 우리 코드의 버그다.
+     *
+     * <p>카드 장면(POK-196)은 저장 트랜잭션 <b>앞에서</b> 읽는다. 장부 읽기가 트랜잭션 안에서 실패하면 PostgreSQL 이 그
+     * 트랜잭션을 통째로 무르게 해 카드 저장까지 잃는다 — 장면은 부가 칸이라 비워서 내는 편이 맞다.
      */
-    @Transactional
     public RecordResult record(String streamId, HighlightRequest request) {
         if (JumpCardSource.fromDbValue(request.source()) != JumpCardSource.AUTO) {
             throw new IllegalArgumentException("2A는 자동 카드만 받는다");
         }
         // FK 위반으로 막는 대신 먼저 본다 — FK 위반은 "진짜 실패"로 분류돼 500이 되고,
         // 판별기는 404를 받아야 재시도 상한을 센다.
-        broadcasts.findByStreamId(streamId).orElseThrow(() -> new BroadcastNotFoundException(streamId));
+        Broadcast broadcast = broadcasts.findByStreamId(streamId)
+                .orElseThrow(() -> new BroadcastNotFoundException(streamId));
 
         String evidence = request.evidence() == null ? null : mapper.writeValueAsString(request.evidence());
+        Map<Long, Scene> planned = scenesOrEmpty(broadcast, List.of(request.streamTimestampMs(),
+                request.window().startMs(), request.window().endMs()));
 
-        int inserted = cards.insertAutoIfAbsent(streamId, request.eventId(),
-                request.streamTimestampMs(), request.window().startMs(), request.window().endMs(),
-                request.score(), evidence);
+        RecordResult result = transactions.execute(status -> {
+            int inserted = cards.insertAutoIfAbsent(streamId, request.eventId(),
+                    request.streamTimestampMs(), request.window().startMs(), request.window().endMs(),
+                    request.score(), evidence);
 
-        JumpCard card = cards.findAutoByStreamIdAndWindowStartMs(streamId, request.window().startMs()).orElseThrow();
-        JumpCardSnapshot snapshot = snapshot(card);
-
-        if (inserted == 1) {
-            publishAfterCommit(snapshot);
-            events.publishEvent(new JumpCardCreated(card.getId()));
-        } else {
+            JumpCard card = cards.findAutoByStreamIdAndWindowStartMs(streamId, request.window().startMs()).orElseThrow();
+            if (inserted == 1) {
+                JumpCardSnapshot snapshot = snapshot(card).withScenes(planned);
+                publishAfterCommit(snapshot);
+                events.publishEvent(new JumpCardCreated(card.getId()));
+                return new RecordResult(true, snapshot);
+            }
             log.info("jumpcard.duplicate_skipped streamId={} source={} windowStartMs={} eventId={}",
                     streamId, JumpCardSource.AUTO, request.window().startMs(), request.eventId());
-        }
-        return new RecordResult(inserted == 1, snapshot);
+            return new RecordResult(false, snapshot(card));
+        });
+        // 이미 있던 카드는 요청 값과 다를 수 있어 그 카드 값으로 다시 읽는다(드문 갈래).
+        return result.created() ? result : new RecordResult(false, withScenes(result.card(), Optional.of(broadcast)));
     }
 
     /**
@@ -136,6 +149,10 @@ public class JumpCardService {
      * <p>넘겨받은 방송의 주인이 {@code userId}가 아니면 {@link HotkeyBroadcastGoneException}이다(404 갈래: 남의 방송의
      * 존재를 안 흘린다). eventId로 찾은 카드는 그 카드 방송의 주인을 따로 본다.
      *
+     * <p>카드 장면(POK-196)은 <b>방송 행 잠금 밖</b>에서 읽는다 — 새 카드의 값은 잠그기 전에 알므로 그 장면을 먼저 읽어
+     * 발행 · 응답에 싣고, 이미 있던 카드(같은 eventId · 20초 안)는 트랜잭션이 끝난 뒤 그 카드 값으로 읽는다. 잠금 안에서 읽으면
+     * 같은 방송의 다른 마킹이 그 왕복만큼 더 줄을 선다.
+     *
      * @param pressedMs 누른 시각을 영상 위치(방송 기준 ms)로 바꾼 값. 0 이상
      * @throws HotkeyBroadcastGoneException 방송이 잠그려는 사이 사라졌거나 이 회원의 방송이 아니다(404 갈래)
      * @throws HotkeyEventOwnedByOtherException eventId가 남의 방송 카드다(400 갈래)
@@ -147,6 +164,16 @@ public class JumpCardService {
         }
         long start = Math.max(0, pressedMs - HOTKEY_BEFORE_MS);
         long end = Math.addExact(pressedMs, HOTKEY_AFTER_MS);
+        Optional<Broadcast> broadcast = broadcasts.findByStreamId(streamId);
+        Map<Long, Scene> planned = broadcast.map(b -> scenesOrEmpty(b, List.of(pressedMs, start, end)))
+                .orElse(Map.of());
+        RecordResult result = recordHotkeyLocked(streamId, userId, eventId, pressedMs, start, end, planned);
+        return result.created() ? result : new RecordResult(false, withScenes(result.card(), broadcast));
+    }
+
+    /** {@link #recordHotkey}의 잠금 구간. 새 카드만 {@code planned} 장면을 입혀 발행한다. */
+    private RecordResult recordHotkeyLocked(String streamId, String userId, String eventId, long pressedMs,
+                                            long start, long end, Map<Long, Scene> planned) {
         return transactions.execute(status -> {
             Broadcast locked = broadcasts.findByStreamIdForUpdate(streamId)
                     .orElseThrow(HotkeyBroadcastGoneException::new);
@@ -176,7 +203,7 @@ public class JumpCardService {
                 // 잠금 밖에서 같은 eventId가 다른 방송으로 먼저 들어갔다. 색인이 막았고 그 카드를 다시 읽었다.
                 return existing(card, userId);
             }
-            JumpCardSnapshot snapshot = snapshot(card);
+            JumpCardSnapshot snapshot = snapshot(card).withScenes(planned);
             publishAfterCommit(snapshot);
             events.publishEvent(new JumpCardCreated(card.getId()));
             log.info("jumpcard.hotkey_created cardId={} by={}", card.getId(), userId);
@@ -191,7 +218,9 @@ public class JumpCardService {
      * @throws HotkeyEventOwnedByOtherException eventId가 남의 방송 카드다(400 갈래)
      */
     public Optional<RecordResult> existingHotkey(String eventId, String userId) {
-        return cards.findHotkeyByEventId(eventId).map(card -> existing(card, userId));
+        return cards.findHotkeyByEventId(eventId).map(card -> existing(card, userId))
+                .map(r -> new RecordResult(false,
+                        withScenes(r.card(), broadcasts.findByStreamId(r.card().streamId()))));
     }
 
     /** eventId로 찾은 카드를 돌려준다. 그 카드의 방송 주인이 이 회원이 아니면 거절한다(계획 검증 E4). */
@@ -228,22 +257,26 @@ public class JumpCardService {
      * 「두 번 가렸다」로 세지거나 화면이 헛돌지 않게.
      */
     public JumpCardSnapshot hide(long id, String userId) {
-        requireViewableCard(id, userId);
-        return transactions.execute(status -> toggleHidden(id, "hide", userId, () -> cards.hide(id, userId)));
+        Map<Long, Scene> scenes = scenesOf(requireViewableCard(id, userId));
+        return transactions.execute(status -> toggleHidden(id, "hide", userId, () -> cards.hide(id, userId), scenes));
     }
 
     /** 되살린다(POK-463). 누구나 한다({@link JumpCardRepository#unhide} 주석). 안 가린 카드면 지금 카드를 돌려준다. */
     public JumpCardSnapshot unhide(long id, String userId) {
-        requireViewableCard(id, userId);
-        return transactions.execute(status -> toggleHidden(id, "unhide", userId, () -> cards.unhide(id)));
+        Map<Long, Scene> scenes = scenesOf(requireViewableCard(id, userId));
+        return transactions.execute(status -> toggleHidden(id, "unhide", userId, () -> cards.unhide(id), scenes));
     }
 
-    /** 가리기·되살리기의 공통 꼬리: 쓰고, 다시 읽고, 바뀌었을 때만 기록하고 커밋 뒤에 발행한다. */
-    private JumpCardSnapshot toggleHidden(long id, String action, String userId, IntSupplier write) {
+    /**
+     * 가리기·되살리기의 공통 꼬리: 쓰고, 다시 읽고, 바뀌었을 때만 기록하고 커밋 뒤에 발행한다. 장면은 트랜잭션 앞에서 읽어
+     * 둔 것이다 — 가리기는 카드 값을 안 바꾸므로 같은 장면이다.
+     */
+    private JumpCardSnapshot toggleHidden(long id, String action, String userId, IntSupplier write,
+                                          Map<Long, Scene> scenes) {
         int updated = write.getAsInt();
         // 판정 뒤 카드가 지워졌으면(탈퇴 정리) 404로 접는다. 다시 읽는 것은 UPDATE 뒤라 지금 값이다.
         JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
-        JumpCardSnapshot snapshot = snapshot(card);
+        JumpCardSnapshot snapshot = snapshot(card).withScenes(scenes);
         if (updated == 1) {
             cards.recordAction(id, action, userId);
             log.info("jumpcard.{} cardId={} by={}", action, id, userId);
@@ -274,7 +307,7 @@ public class JumpCardService {
      * 자기 호출은 프록시를 안 타기 때문이다.
      * {@code BroadcastListTransactionTest.카드를_열_때도_auth_왕복_동안_커넥션을_안_쥔다}가 그 불변식을 잰다.
      */
-    private void requireViewableCard(long cardId, String requesterSubject) {
+    private JumpCard requireViewableCard(long cardId, String requesterSubject) {
         JumpCard card = cards.findById(cardId).orElseThrow(() -> new JumpCardNotFoundException(cardId));
         try {
             guard.requireViewable(requesterSubject, card.getStreamId());
@@ -283,6 +316,7 @@ public class JumpCardService {
             log.info("jumpcard.access.not_viewable reason={} cardId={}", e.reason(), cardId);
             throw new JumpCardNotFoundException(cardId);
         }
+        return card;
     }
 
     /**
@@ -334,9 +368,14 @@ public class JumpCardService {
                 ? CursorCodec.encode(CursorCodec.Kind.CARD, last.getStreamTimestampMs(), last.getId())
                 : null;
         Map<Long, String> pictures = thumbnails.ofCards(page.stream().map(JumpCard::getId).toList());
-        return new JumpCardPage(page.stream()
+        List<JumpCardSnapshot> snapshots = page.stream()
                 .map(card -> snapshot(card).withThumbnailUrl(pictures.get(card.getId())))
-                .toList(), next);
+                .toList();
+        // 장면은 그 장 카드를 모아 한 번에 읽는다(회차 고르기 + 회차 행 — 카드 수와 무관하게 두 왕복).
+        List<Long> values = snapshots.stream().flatMap(s -> s.sceneValues().stream()).toList();
+        Map<Long, Scene> scenes = snapshots.isEmpty() ? Map.of()
+                : broadcasts.findByStreamId(streamId).map(b -> scenesOrEmpty(b, values)).orElse(Map.of());
+        return new JumpCardPage(snapshots.stream().map(s -> s.withScenes(scenes)).toList(), next);
     }
 
     /**
@@ -370,6 +409,31 @@ public class JumpCardService {
 
     private JumpCardSnapshot snapshot(JumpCard card) {
         return JumpCardSnapshot.of(card, mapper);
+    }
+
+    /** 카드 한 장의 장면(그 방송을 찾아 {@link #scenesOrEmpty}). 방송이 없으면 비어 있다. */
+    private Map<Long, Scene> scenesOf(JumpCard card) {
+        List<Long> values = List.of(card.getStreamTimestampMs(), card.getWindowStartMs(), card.getWindowEndMs());
+        return broadcasts.findByStreamId(card.getStreamId()).map(b -> scenesOrEmpty(b, values)).orElse(Map.of());
+    }
+
+    private JumpCardSnapshot withScenes(JumpCardSnapshot card, Optional<Broadcast> broadcast) {
+        return card.withScenes(broadcast.map(b -> scenesOrEmpty(b, card.sceneValues())).orElse(Map.of()));
+    }
+
+    /**
+     * 카드 장면(POK-196)은 부가 칸이다. 장부를 못 읽으면(장부 표가 없거나 옛 모양 — 판 칸이 아직 없는 DB) 칸만 비우고 카드는
+     * 낸다. 비면 웹은 기준점 + 카드 ms 의 지금 식으로 떨어진다. 방송 목록의 기준점({@code BroadcastListService
+     * .originsOrEmpty})과 같은 처분이다.
+     */
+    private Map<Long, Scene> scenesOrEmpty(Broadcast broadcast, Collection<Long> values) {
+        try {
+            return cardScenes.scenesOf(broadcast, values);
+        } catch (DataAccessException e) {
+            log.warn("jumpcard.scene_unavailable streamId={} reason={}", broadcast.getStreamId(),
+                    e.getClass().getSimpleName());
+            return Map.of();
+        }
     }
 
     /**

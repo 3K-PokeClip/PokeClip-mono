@@ -4,7 +4,8 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardService.RecordResult;
-import com.pokeclip.clip.segment.TimelineOriginReader;
+import com.pokeclip.clip.segment.ServerClockPosition;
+import com.pokeclip.clip.segment.ServerClockPosition.Position;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,14 +16,16 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
 
 /**
  * OBS 수동 마킹(계약4 4B/2B)을 그 회원의 켜진 방송의 수동 카드로 만든다(POK-391).
  *
  * <p><b>순서가 계약이다.</b> 본문(400) → 헤더 대조(400) → 키 확인(400·401·503) → 파생 값 대조(401) → eventId 선조회(200·400)
- * → 방송 고르기(404) → 늦은 마크(400) → 기준점(503) → 시각 환산(400) → 저장(201·200). 앞 단계가 거절하면 뒤 단계는 안 돈다 :
- * 키를 확인하기 전에 방송·카드를 읽으면 키 없는 사람이 응답으로 남의 방송 상태를 알 수 있다.
+ * → 방송 고르기(404) → 늦은 마크(400) → 저장 위치(503 회차 귀속 행 없음 · 400 상한 밖) → 저장(201·200). 앞 단계가 거절하면
+ * 뒤 단계는 안 돈다 : 키를 확인하기 전에 방송·카드를 읽으면 키 없는 사람이 응답으로 남의 방송 상태를 알 수 있다.
+ *
+ * <p>저장 위치는 「누른 시각 − 기준점」 이 아니라 회차 귀속 행에서 행별로 고른다({@link ServerClockPosition} · POK-196) —
+ * 출시 이미지가 쓴 판 NULL 행은 회차 안 기준점이 상수가 아니라 회차 상수 하나를 빼면 다른 조각이 나온다.
  *
  * <p>🔴 <b>로그에 streamid·Authorization·파생 값·passphrase를 안 싣는다</b>(계약4 보안). 회원 번호·카드 번호·사유만.
  */
@@ -33,7 +36,7 @@ public class MarkService {
 
     private static final String BEARER = "Bearer ";
 
-    /** 기준점이 없을 때 플러그인에게 주는 다시 보내기 간격(초). 첫 조각은 방송 시작 뒤 수 초 안에 생긴다. */
+    /** 위치를 고를 조각(회차 귀속 행)이 없을 때 플러그인에게 주는 다시 보내기 간격(초). 첫 조각은 방송 시작 뒤 수 초 안에 생긴다. */
     static final int TIMELINE_RETRY_AFTER_SECONDS = 5;
 
     /**
@@ -48,22 +51,22 @@ public class MarkService {
 
     private final StreamKeyResolveClient keys;
     private final BroadcastRepository broadcasts;
-    private final TimelineOriginReader origins;
+    private final ServerClockPosition positions;
     private final JumpCardService cards;
     private final Clock clock;
 
     @Autowired
     MarkService(StreamKeyResolveClient keys, BroadcastRepository broadcasts,
-                TimelineOriginReader origins, JumpCardService cards) {
-        this(keys, broadcasts, origins, cards, Clock.systemUTC());
+                ServerClockPosition positions, JumpCardService cards) {
+        this(keys, broadcasts, positions, cards, Clock.systemUTC());
     }
 
     /** 시험이 받은 시각을 고정하는 자리(계획 검증 E9: {@code Clock} 빈이 없다. {@code ThumbnailSweeper}와 같은 모양). */
     MarkService(StreamKeyResolveClient keys, BroadcastRepository broadcasts,
-                TimelineOriginReader origins, JumpCardService cards, Clock clock) {
+                ServerClockPosition positions, JumpCardService cards, Clock clock) {
         this.keys = keys;
         this.broadcasts = broadcasts;
-        this.origins = origins;
+        this.positions = positions;
         this.cards = cards;
         this.clock = clock;
     }
@@ -115,12 +118,12 @@ public class MarkService {
             log.info("clip.mark.late by={}", userId);
             throw MarkErrors.invalidRequest();
         }
-        Instant origin = origins.originsOf(List.of(broadcast)).get(broadcast.getStreamId());
-        if (origin == null) {
-            throw MarkErrors.timelineNotReady(TIMELINE_RETRY_AFTER_SECONDS);
+        Position position = positions.ofServerClock(broadcast, pressed, ServerClockPosition.Source.OBS)
+                .orElseThrow(() -> MarkErrors.timelineNotReady(TIMELINE_RETRY_AFTER_SECONDS));
+        if (position.cardMs() > MAX_CARD_MS) {
+            throw MarkErrors.invalidRequest();
         }
-        long cardMs = cardMillis(pressed, origin).orElseThrow(MarkErrors::invalidRequest);
-        return cards.recordHotkey(broadcast.getStreamId(), userId, request.eventId(), cardMs);
+        return cards.recordHotkey(broadcast.getStreamId(), userId, request.eventId(), position.cardMs());
     }
 
     /** 키를 auth에 묻고 파생 값을 맞댄다. 맞으면 회원 번호. */
@@ -178,20 +181,4 @@ public class MarkService {
         return Instant.ofEpochMilli(Math.min(pressed, receivedAt.toEpochMilli()));
     }
 
-    /**
-     * 카드 ms = 누른 시각 − 기준점. 기준점보다 앞이면 0(감사 1회차 A2: {@code recordHotkey}에 음수가 가면 500이다).
-     * 넘치거나 {@link #MAX_CARD_MS}를 넘으면 비어 있다: 시각이 틀린 것이라 부르는 쪽이 400으로 바꾼다(위와 같은 이유로 예외를 안 고른다).
-     */
-    static OptionalLong cardMillis(Instant pressed, Instant origin) {
-        long ms;
-        try {
-            ms = Math.subtractExact(pressed.toEpochMilli(), origin.toEpochMilli());
-        } catch (ArithmeticException e) {
-            return OptionalLong.empty();
-        }
-        if (ms > MAX_CARD_MS) {
-            return OptionalLong.empty();
-        }
-        return OptionalLong.of(Math.max(0, ms));
-    }
 }
