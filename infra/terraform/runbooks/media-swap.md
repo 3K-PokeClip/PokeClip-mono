@@ -1003,7 +1003,10 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
     *   `SIDECAR ROUND KEYS FAIL write` — 파일이 그대로입니다. SSM 으로
         `/etc/pokeclip-media/sidecar.env` 를 손으로 정확히
         `PLAYBACK_ROUND_KEYS=false` 한 줄(`root:root 0644`)로 씁니다(명령
-        원문을 kty 에게 보이고 승인). 2 로.
+        원문을 kty 에게 보이고 승인). 스크립트와 같은 차례로 씁니다 — 자리가
+        링크가 아닌 일반 파일인지 먼저 보고, 같은 디렉터리의 임시 파일에 써
+        `chown 0:0` · `chmod 0644` 한 뒤 `mv -f` 로 바꿉니다(제자리에 `>` 로
+        덮어쓰지 않습니다). 2 로.
     *   `SIDECAR ROUND KEYS FAIL lock` — 다른 실행이 잠금을 쥐어(또는 잠금
         파일을 열지 못해) 아무것도 바꾸지 않았습니다. 동시에 둘을 돌리지
         않습니다 — 아직 도는 SSM 명령 · 상자 프로세스가 없는지 위 「켬 실패

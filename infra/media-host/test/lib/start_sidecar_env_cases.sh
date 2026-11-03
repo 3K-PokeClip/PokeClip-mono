@@ -13,7 +13,8 @@
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다.
 
 readonly SIDECAR_ENV_NAME='sidecar.env'
-readonly SIDECAR_BLOCKED_LINE='MEDIA START BLOCKED: sidecar settings unavailable'
+readonly SIDECAR_BLOCKED_LINE='MEDIA START BLOCKED: sidecar settings'\
+' unavailable'
 
 #######################################
 # 사례 디렉터리의 sidecar.env 를 행 이름의 꼴로 바꿔 둔다(fixture::new_case 가
@@ -33,7 +34,9 @@ sidecar_env::seed() {
       ln -s -- "${fixture_dir}/real.env" "${f}"
       ;;
     dir) mkdir -p -- "${f}" ;;
-    two) printf 'PLAYBACK_ROUND_KEYS=false\nPLAYBACK_ROUND_KEYS=true\n' >"${f}" ;;
+    two)
+      printf 'PLAYBACK_ROUND_KEYS=false\nPLAYBACK_ROUND_KEYS=true\n' >"${f}"
+      ;;
     on) printf 'PLAYBACK_ROUND_KEYS=on\n' >"${f}" ;;
     upper) printf 'PLAYBACK_ROUND_KEYS=TRUE\n' >"${f}" ;;
     crlf) printf 'PLAYBACK_ROUND_KEYS=true\r\n' >"${f}" ;;

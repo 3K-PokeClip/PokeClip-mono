@@ -92,7 +92,9 @@ $(od -c "${out}" | head -3 | tr '\n' ' ')"
 #   0 통과 / 1 어긋남.
 #######################################
 sidecar_cases::check_55() {
-  local ok=0 v json got dir="${scratch}/no-sidecar-env" err
+  local ok=0 v json got dir="${scratch}/no-sidecar-env" err want
+  want='{"env_file":[{"beside":true,"required":true}],'
+  want+='"key_in_environment":false}'
   sidecar_cases::require || return 1
   for v in ${COMPOSE_VARIANTS}; do
     json="$(auth_cases::noenv_json "${v}")"
@@ -111,9 +113,7 @@ $(harness::log_tail "${json}.err")"
              required: (if .required == false then false else true end)}],
          key_in_environment: ((.environment // {}) | has($key))}' \
       "${json}" 2>/dev/null)" || got='(구성 JSON 을 읽지 못함)'
-    if [[ "${got}" != \
-      '{"env_file":[{"beside":true,"required":true}],"key_in_environment":false}' ]]
-    then
+    if [[ "${got}" != "${want}" ]]; then
       harness::add_reason "갈래 ${v}: 사이드카 env_file · environment ${got}"
       ok=1
     fi

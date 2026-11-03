@@ -1518,7 +1518,9 @@ fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
     붙임) 키가 모두 그 회차 새 꼴이고 GAP 이 없으면 문서의 URI 도 새
     꼴입니다. `pass` 가 `f` 면 나머지 열(`not_uploaded` · `not_round_keys` ·
     `gaps` · `vod_state` 등)이 무엇이 어긋났는지 보여 줍니다.
-*   기록(8)에 옮기는 것은 `== read` 뒤 결과 줄과 채운 자리 값입니다.
+*   기록(8)에 옮기는 것은 `== read` 뒤 결과 줄과 채운 자리 값입니다. Q4 는
+    `round_id` 열을 빼고 옮깁니다(회차 id 를 옮기지 않는 「발행 잔여 질의」 와
+    같은 규칙).
 
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기
 
