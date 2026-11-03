@@ -168,8 +168,9 @@ func trapCalls(notices []*pgconn.Notice) map[string]int {
 	return calls
 }
 
-// 음성 대조 — 앱 사용자가 public 에 덫을 심어도 마스터 대역이 돌리는 00–50 은 덫을 하나도 부르지 않는다.
+// 음성 대조 — 앱 사용자가 public 에 덫을 심어도 마스터 대역이 돌리는 00–50 · 60 은 덫을 하나도 부르지 않는다.
 // 00 은 TLS 가 아닌 로컬 연결에서 tls 로 실패하고 50 은 회수 불가 갈래로 끝나지만(사례 ① · ⑥), 덫은 그 전에 불린다.
+// 60(운영 SQL 2)의 끝 단언도 40 과 같은 카탈로그 함수 · 집계를 마스터 신분으로 부른다.
 func TestProdSQLDoesNotCallSearchPathTraps(t *testing.T) {
 	env := newProdSQLEnv(t)
 	if _, err := applyProdSQL(t, env.master, expandProdSQL(t, "10_roles.sql")); err != nil {
@@ -183,6 +184,7 @@ func TestProdSQLDoesNotCallSearchPathTraps(t *testing.T) {
 		failedChecks(t, err, preflightFailedPrefix)
 	}
 	env.mustApplyAll(t)
+	env.mustApplyRoundFrozen(t)
 	if _, err := execScript(t, env.master, expandProdSQL(t, "50_advisory_probe.sql")); err != nil &&
 		!isSQLState(err, pgInsufficientPrivilege) {
 		t.Errorf("50_advisory_probe.sql(대역) 오류 = %v, want nil 또는 42501", err)

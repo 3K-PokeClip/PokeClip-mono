@@ -378,6 +378,26 @@ auth 의 4C resolve(`/internal/stream-keys/resolve`)로 키를 풀어 대조한�
 `intentional_end` 한 줄이다 — 효과는 INFO, 미적용은 WARN 이다. `forwarded`
 줄은 `latest`(L) · `marked_at`(L 의 표식)을 함께 싣는다.
 
+**회차 불변 트리거(POK-525).** `stream_sessions` 의 트리거
+`stream_sessions_round_frozen` 이 `round_id` 를 다른 값으로 바꾸는 UPDATE 를
+23514 `stream_sessions.round_id is frozen` 으로 거부한다(NULL 에서 값 · 값에서
+NULL 도 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바꾸는 UPDATE 는
+지나간다(`UPDATE OF round_id` + `WHEN`). 새 판 코드에는 `round_id` 를 바꾸는
+문장이 없다 — 트리거는 옛 이미지 · 손 SQL 같은 다른 길을 막는 울타리다.
+
+*   **운영 SQL 2:** 운영은
+    [60_round_frozen.sql](../infra/terraform/prod/runtime/sql/60_round_frozen.sql)
+    로만 깐다. 운영 SQL 1(00–50)과 따로, 새 꼴 쓰기를 켜고 첫 새 꼴 행이 생긴
+    뒤에 돌린다. 끝 단언이 트리거 모양을 보고 `ROUND FROZEN OK` 를 낸다.
+    `40_verify.sql` 은 이 트리거를 보지 않는다. 로컬 `ENSURE_SCHEMA=true` 는
+    스키마 뒤에 같은 DDL(`ddl.go` 의 `roundFrozenDDL`)을 함께 돌린다.
+*   **기동 필수 아님:** 기동 스키마 확인(`MissingLedgerSchema`)은 이 트리거를
+    보지 않는다. 사이드카는 트리거가 없어도 뜬다. 있는지는
+    `index.RoundFrozenTriggerPresent` 로 읽는다.
+*   **롤백 짝:** 트리거가 정당한 세션 UPDATE 를 막을 때만
+    `DROP TRIGGER IF EXISTS stream_sessions_round_frozen ON stream_sessions;`
+    를 쓴다. 옛 판(A)으로 돌아가는 수단이 아니다.
+
 **계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
 `broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
 outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만

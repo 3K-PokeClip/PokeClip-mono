@@ -164,7 +164,8 @@ UPDATE stream_sessions SET state = 'ended', ended_at = pg_catalog.now()
 
 // MarkChainEnded 는 사슬 phase 4 다(위상 잠금 선행). 사슬 전원이 dvr · vod 종국일 때만 state='ended', ended_at=now() 를
 // 쓰고 바꾼 행 수를 돌려준다(아니면 0 · 쓰지 않음). 완결 평가할 회차는 Chain 이나 스캔 행의 값이 아니라 잠금 뒤 사슬
-// 꼬리 행에서 다시 읽은 round_id 다 — 늦은 4D 분리가 동결 중인 사슬을 통째로 옮겼을 수 있다(D55 다섯째 갈래). 같은
+// 꼬리 행에서 다시 읽은 round_id 다 — POK-525 전 판의 늦은 4D 분리가 동결 중인 사슬을 통째로 옮겼을 수 있다(D55
+// 다섯째 갈래 — 새 판은 round_id 를 바꾸지 않고, 회차 불변 트리거를 깐 DB 에서는 생기지 않는다). 같은
 // 트랜잭션 끝에서 그 회차로 TryCloseRound(닫힘 조건 평가 + 완결 평가)를 부른다. 잠금 순서는 상한 설정 → 위상 잠금 →
 // ② 소속 행 → ③ 사슬 행이다.
 func MarkChainEnded(ctx context.Context, pool *pgxpool.Pool, c Chain, o CloseOptions, enqueue EndedEnqueuer) (int64, error) {

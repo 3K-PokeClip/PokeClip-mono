@@ -181,8 +181,8 @@ func TestForwardedToEndedLatestEnqueuesROutboxD55(t *testing.T) {
 	}
 }
 
-// D55 다섯째 갈래 뒤 몫 — 동결 중 사슬이 늦은 분리로 회차 B 로 통째로 옮겨졌다. phase 4 는 다시 읽은 회차 B 로 완결을
-// 평가해 B ended 1행이다. 변이 = Chain 의 RoundID(R)로 평가 → B ended 0 으로 FAIL.
+// D55 다섯째 갈래 뒤 몫 — 동결 중 사슬이 POK-525 전 판의 늦은 분리로 회차 B 로 통째로 옮겨진 꼴이다(회차 불변 트리거
+// 뒤로는 생기지 않아 장부 꼴로만 심는다). phase 4 는 다시 읽은 회차 B 로 완결을 평가해 B ended 1행이다. 변이 = Chain 의 RoundID(R)로 평가 → B ended 0 으로 FAIL.
 func TestPhaseFourOnMovedChainEnqueuesNewRoundEndedD55(t *testing.T) {
 	pool := newWireTestPool(t)
 	const s = "d55-move"
