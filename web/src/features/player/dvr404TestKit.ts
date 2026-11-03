@@ -13,13 +13,18 @@ import {
 // 않을 수 있어, 끝 상태만 보는 단언으로는 중간의 위반을 못 잡는다.
 //
 // 제품 모듈에서는 옛 판에도 있는 transition 과 타입만 읽는다 — 제품 파일을 되돌린
-// 트리(음성 대조)에서도 이 파일이 로드되고 시험이 단언으로 FAIL 하게. 그래서 「세우지
-// 않음」 은 제품 함수(isPlayerStartHeld)를 부르지 않고 계획 3-6 의 정의를 여기
-// 옮겨 둔다. 제품 함수가 이 정의와 같은지는 rewindSwitch.dvr404.test.ts 가 따로 본다.
+// 트리(음성 대조)에서도 이 파일이 로드되게. 그래서 「세우지 않음」 은 제품
+// 함수(isPlayerStartHeld)를 부르지 않고 계획 3-6 의 정의를 여기 옮겨 둔다. 이
+// 사본과 제품 함수가 같다는 보장은 없다 — 두 시험 파일의 국면별 표가 고른 국면에서만
+// 제품 함수를 대조한다. 그래서 정의를 바꿀 때는 둘을 함께 고친다.
 
-/** 계획 3-6 의 「새로 서는 재생기는 hls.js 를 만들지 않는다」 — 막힌 끝남 대기 */
+/**
+ * 계획 3-6 의 「새로 서는 재생기는 hls.js 를 만들지 않는다」 — 제어면을 다시 읽는
+ * 되감기(recheck) · 막힌 끝남 대기
+ */
 function startHeldBySpec(state: PlaybackSessionState): boolean {
   const { phase } = state;
+  if (phase.kind === 'rewind') return phase.recheck === true;
   return phase.kind === 'ending-wait' && phase.blocked === true;
 }
 
@@ -37,11 +42,21 @@ export function assertPhaseInvariants(state: PlaybackSessionState): void {
  */
 export function step(session: PlaybackSessionState, event: SessionEvent, now: number): Transition {
   const next = transition(session, stamped(session, event), now);
-  assertPhaseInvariants(next.state);
-  if (startHeldBySpec(session) && !startHeldBySpec(next.state)) {
-    const regenerated = next.state.source.generation > session.source.generation;
-    const released = regenerated || next.state.closed !== null;
-    expect(released, '세우지 않음이 풀리면 세대 상승 또는 닫힘').toBe(true);
-  }
+  assertTransitionInvariants(session, next.state);
   return next;
+}
+
+/**
+ * 전이 하나의 앞 · 뒤 상태에 국면 불변식과 전이 불변식을 단언한다 — 세션 훅 시험이
+ * 감싼 transition 에서 부른다(계획 8-0)
+ */
+export function assertTransitionInvariants(
+  before: PlaybackSessionState,
+  after: PlaybackSessionState,
+): void {
+  assertPhaseInvariants(after);
+  if (!startHeldBySpec(before) || startHeldBySpec(after)) return;
+  const regenerated = after.source.generation > before.source.generation;
+  const released = regenerated || after.closed !== null;
+  expect(released, '세우지 않음이 풀리면 세대 상승 또는 닫힘').toBe(true);
 }

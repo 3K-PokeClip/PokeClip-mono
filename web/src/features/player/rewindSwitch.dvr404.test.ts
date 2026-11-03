@@ -129,6 +129,26 @@ function endedAtTail(probing: boolean): PlaybackSessionState {
 /** 404 로 막힌 끝남 대기 */
 const blockedOf = (s: PlaybackSessionState) => feed(s, [gone(s)]).state;
 
+/**
+ * 조회 실패 기원(K1 ②) — 끝 E 앞에서 보다 404 → recheck → 잠시 불가로 막힌 뒤 끝에
+ * 닿은 끝남 대기(목록 봉인 없음). 막힌 뒤의 위치 사건은 재생 중이다(hold-frame 직후 꼴).
+ * probing 이면 막히기 전(되감기)에 문을 세워 탐침 하나를 청해 둔다(늦은 결과의 재료)
+ */
+function blockedByRecheck(probing: boolean): PlaybackSessionState {
+  const near = rewindNear(P);
+  const door = probing ? feed(near, [doorPoll()]).state : near;
+  const watched = feed(door, [pos(P)]).state;
+  const blocked = feed(watched, [gone(watched), streamPoll(UNAVAILABLE, X_A, R)]).state;
+  return feed(blocked, [pos(E), END_REACHED]).state;
+}
+
+/** 같은 상태에서 막힘만 내린 것 — 막히기 전 대조(차림의 판별력)에 쓴다 */
+function withoutBlock(state: PlaybackSessionState): PlaybackSessionState {
+  const { phase } = state;
+  if (phase.kind !== 'ending-wait') throw new Error('끝남 대기가 아니다');
+  return { ...state, phase: { ...phase, blocked: false } };
+}
+
 /** 막힘이 풀리지 않았다 — 국면 · 세대 · 20분 기준 · 덮개 · 탐침 요청 0 */
 function expectStillBlocked(
   result: { state: PlaybackSessionState; effects: SessionEffect[] },
@@ -364,7 +384,8 @@ describe('막힌 세션의 사람 단추(P22 · U3)', () => {
 
 describe('T1 · U1 회귀 — 막힘은 W5 밖에서 풀리지 않는다(cx H1)', () => {
   // K1: ENDLIST 는 목록을 봉인해(sealList) 넘김 조건이 298 과 무관하게 거짓이 된다.
-  // 그래서 지연 P1 · 새 탐침은 봉인 없는 끝 도달(D9) 기원에서 잰다. 각 시험은 먼저
+  // 그래서 지연 P1 · 새 탐침은 봉인 없는 끝 도달(D9) 기원과 ② 조회 실패 기원(recheck →
+  // 잠시 불가 → 막힘 — 봉인 없음)에서 잰다. 각 시험은 먼저
   // 막히기 전의 같은 입력이 실제로 넘김 · 탐침 · 이음을 내는지 확인한다(차림의 판별력).
 
   it('(b) 막히기 전에 청한 탐침의 늦은 P1 은 넘기지 않고 탐침만 비운다', () => {
@@ -406,6 +427,46 @@ describe('T1 · U1 회귀 — 막힘은 W5 밖에서 풀리지 않는다(cx H1)'
     const resume = () => streamPoll(liveReady(A2, join - MIN, join + MIN), X_A, R);
     expect(feed(ending, [resume()]).state.phase.kind).toBe('rewind');
     const s = blockedOf(ending);
+    const kept = feed(s, [resume()]);
+    expectStillBlocked(kept, s);
+  });
+
+  it('② 조회 실패 기원: 차림이 recheck → 잠시 불가 → 막힘 → 끝 도달이다(봉인 없음)', () => {
+    const s = blockedByRecheck(true);
+    expect(s.phase).toEqual({
+      kind: 'ending-wait',
+      origin: 'rewind',
+      atEnd: true,
+      recordOnEnd: false,
+      blocked: true,
+    });
+    expect(s.list?.sealed).toBe(false);
+    expect(s.handoffProbe).not.toBeNull();
+  });
+
+  it('(b) ② 조회 실패 기원: 막히기 전에 청한 탐침의 늦은 P1 은 넘기지 않고 탐침만 비운다', () => {
+    const s = blockedByRecheck(true);
+    const unblocked = feed(withoutBlock(s), [settleProbe(s, E - 2_000)], R + 500);
+    expect(unblocked.state.phase.kind).toBe('live');
+    const late = feed(s, [settleProbe(s, E - 2_000)], R + 500);
+    expectStillBlocked(late, s);
+    expect(late.state.handoffProbe).toBeNull();
+    expect(late.effects).toEqual([]);
+  });
+
+  it('(c) ② 조회 실패 기원: 같은 url 폴링이 문을 다시 세워도 새 탐침을 청하지 않는다', () => {
+    const s = blockedByRecheck(false);
+    const unblocked = feed(withoutBlock(s), [doorPoll(X_A, R)]);
+    expect(kinds(unblocked.effects)).toContain('probe-live');
+    const polled = feed(s, [doorPoll(X_A, R)]);
+    expectStillBlocked(polled, s);
+    expect(polled.state.handoffProbe).toBeNull();
+  });
+
+  it('(a) ② 조회 실패 기원: 같은 회차 새 url 이 이음 지점을 품어도 잇지 않는다', () => {
+    const s = blockedByRecheck(false);
+    const resume = () => streamPoll(liveReady(A2, E - 2_000, E + MIN), X_A, R);
+    expect(feed(withoutBlock(s), [resume()]).state.phase.kind).toBe('rewind');
     const kept = feed(s, [resume()]);
     expectStillBlocked(kept, s);
   });
