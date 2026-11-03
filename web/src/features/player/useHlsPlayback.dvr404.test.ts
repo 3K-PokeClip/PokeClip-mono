@@ -6,8 +6,9 @@ import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 // 되감기 조각 404 의 재생기 몫(POK-528 c5 — 계획 4절 · 4-1 · 4-2 · 8-3): 재생기가 되감기
 // 조각 404 를 가로채 받기를 멈추고 세션에 올리는 배선 · 앱이 건 멈춤(holdFrame)이 사람
 // 멈춤으로 적히지 않는 것 · 목록 다시 받기의 멈춤 기록 버리기(dropPauseMark) · 사람이 멈춘
-// 동안의 404 붙잡기(c9) · 「세우지 않음」(startHeld) 재생기 기동을 본다. 다시 받은 재생기의 시작 자리 · 하한 잘림 보고는
-// useHlsPlayback.relist.test.ts 가 본다(c7 — c3 의 「시작 하한 추정 S」 묶음을 대체).
+// 동안의 404 붙잡기(c9) · 「세우지 않음」(startHeld) 재생기 기동을 본다. 다시 받은 재생기의
+// 시작 자리 · 하한 잘림 보고는 useHlsPlayback.relist.test.ts 가 본다(c7 — c3 의 「시작 하한
+// 추정 S」 묶음을 대체).
 // hls.js 흉내는 useHlsPlayback.start.test.ts 꼴이다(처음부터 off() 를 둔다).
 
 interface Details {
@@ -517,12 +518,13 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
 
   // P34 — 붙잡은 채 사람이 옮기면 받기를 멈춘 재생기는 그 자리를 받지 않는다. 다시 틀 때 세션에 올려 다시 받기가
   // 선다(세션 시크면 세션이 목표를 들고 있다 — 세션 훅 층 시험). 지금 동작을 고정한다
-  it('붙잡은 채 시크(seekToMs) → 받기 0 · 시크 요청 0 → 다시 틀면 고리 1 · 시크 요청 0 · startLoad 0', async () => {
+  it('붙잡은 채 시크(seekToMs) → 받기 0 · 고리 0 · 시크 요청 0 → 다시 틀면 고리 1 · 시크 요청 0 · startLoad 0', async () => {
     const { result, video, hooks, hls } = await pausedAt(36);
     raise(hls, fragError(404));
     act(() => result.current.seekToMs(F + 24_000));
     expect(video.currentTime).toBe(24);
     expect(hls.startLoad).not.toHaveBeenCalled();
+    expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
     resume(video);
     expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1]]);
     expect(hooks.onSeekRequest).not.toHaveBeenCalled();

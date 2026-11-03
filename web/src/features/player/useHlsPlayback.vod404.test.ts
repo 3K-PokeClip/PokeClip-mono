@@ -1,5 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type * as playbackAccessModule from '@/api/playbackAccess';
+import { reportPlaybackForbidden } from '@/api/playbackAccess';
 import type * as hlsErrorsModule from './hlsErrors';
 import { consumeDvrSegmentGone } from './hlsErrors';
 import { recordingTimeline } from './recordingTimeline';
@@ -28,6 +30,12 @@ const spy = vi.hoisted(() => ({ instances: [] as FakeHls[] }));
 vi.mock('./hlsErrors', async (importOriginal) => {
   const actual = await importOriginal<typeof hlsErrorsModule>();
   return { ...actual, consumeDvrSegmentGone: vi.fn(actual.consumeDvrSegmentGone) };
+});
+
+// 403 갈래가 출입증을 버렸는지 보려고 감싼다 — 동작은 원본 그대로다
+vi.mock('@/api/playbackAccess', async (importOriginal) => {
+  const actual = await importOriginal<typeof playbackAccessModule>();
+  return { ...actual, reportPlaybackForbidden: vi.fn(actual.reportPlaybackForbidden) };
 });
 
 vi.mock('hls.js', () => ({ default: FakeHls }));
@@ -100,6 +108,12 @@ const INIT_SEGMENT = 'https://m/dvr/k/a1/init.mp4';
 /** 끊김 알림(useHlsPlayback.ts STOPPED_NOTES.broken) */
 const BROKEN_NOTE = '영상이 끊겼어요. 새로고침하면 다시 연결해요';
 
+/** 출입증을 버리고 다시 받는 중이라는 알림(useHlsPlayback.ts STOPPED_NOTES.forbidden) */
+const FORBIDDEN_NOTE = '영상 출입증이 끝나 다시 받고 있어요';
+
+/** 영상 키(출입증 쿠키의 경로) — 403 갈래는 이 키가 있을 때만 선다 */
+const MEDIA_KEY = 'k/a1';
+
 /** hls.js 기본 조각 재시도 수(Hls.DefaultConfig.fragLoadPolicy.default.errorRetry.maxNumRetry — 실물 층이 고정) */
 const DEFAULT_FRAG_RETRIES = 6;
 
@@ -108,11 +122,14 @@ function sourceOf(kind: PlaybackSource['kind'], generation: number): PlaybackSou
   return { kind, url, startAtMs: null, generation, strictStart: false };
 }
 
-/** 재생기를 세우고 hls.js 읽기를 기다린다 */
-async function mount(source: PlaybackSource, hooks: PlaybackHooks) {
+/**
+ * 재생기를 세우고 hls.js 읽기를 기다린다
+ * @param mediaKey 영상 키. 없으면 403 갈래가 서지 않는다
+ */
+async function mount(source: PlaybackSource, hooks: PlaybackHooks, mediaKey?: string) {
   const ref = { current: document.createElement('video') };
   const view = renderHook(() =>
-    useHlsPlayback(ref, source, {}, undefined, undefined, false, undefined, hooks),
+    useHlsPlayback(ref, source, {}, undefined, mediaKey, false, undefined, hooks),
   );
   await act(async () => {
     await vi.dynamicImportSettled();
@@ -199,6 +216,7 @@ function raiseDefaultRound(hls: FakeHls) {
 beforeEach(() => {
   spy.instances.length = 0;
   vi.mocked(consumeDvrSegmentGone).mockClear();
+  vi.mocked(reportPlaybackForbidden).mockClear();
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
   vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(() => 0);
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -309,6 +327,19 @@ describe('다시보기 · 되감기 첫 목록 치명 → 곧바로 끊김(POK-5
       expect(calledHooks(hooks)).toEqual([]);
     },
   );
+
+  // 첫 목록 403 도 MANIFEST_LOAD_ERROR 치명이라 isFirstListFailure 가 참이다. 그래도 403 갈래(출입증 버리기)가 이 갈래보다
+  // 앞에 서야 출입증을 다시 받는다 — 순서를 바꾸면 403 이 끊김으로 떨어지고 출입증을 버리지 않는다(M8f)
+  it('vod 첫 목록 403(영상 키 있음) → 403 갈래가 먼저 — 출입증 버리기 1 · 끊김 아님 · startLoad 0 · destroy 1', async () => {
+    const hooks = sessionHooks();
+    const { result, hls } = await mount(sourceOf('vod', 3), hooks, MEDIA_KEY);
+    raise(hls, firstListFailed(FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR, 403, VOD_URL));
+    expect(vi.mocked(reportPlaybackForbidden).mock.calls).toEqual([[MEDIA_KEY]]);
+    expect(result.current.playbackError).toBe(FORBIDDEN_NOTE);
+    expect(hls.startLoad).not.toHaveBeenCalled();
+    expect(hls.destroy).toHaveBeenCalledTimes(1);
+    expect(calledHooks(hooks)).toEqual([]);
+  });
 
   // 되감기 조각 404 뒤 세션은 같은 url 로 세대를 올려 재생기를 새로 세운다(목록 다시 받기 — 계획 1절 1). 그 새 재생기의
   // 첫 목록이 치명이면 막힘이 아니라 끊김이다(계획 0-2 의 3 — 자동 회복 없음). 세션 층(relist 'list' 유지)은 c7 뒤 몫이다

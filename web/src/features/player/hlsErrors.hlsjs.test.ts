@@ -242,8 +242,11 @@ describe('첫 목록 실패 가르기(POK-528 c8) — 첫 목록 치명만 참 �
     ['첫 목록 시한', true, { details: ErrorDetails.MANIFEST_LOAD_TIMEOUT, response: undefined }],
     ['첫 목록 파싱 오류', true, { details: ErrorDetails.MANIFEST_PARSING_ERROR }],
     ['비치명 첫 목록 404', false, { fatal: false }],
+    // 방어 행 — 1.7.3 은 MANIFEST_PARSING_ERROR 를 멀티변이 목록에서만 치명으로 올려(playlist-loader.ts 346-358 ·
+    // 415-417 · 614) 이 꼴을 내지 않는다. 변이 목록의 파싱 오류는 LEVEL_PARSING_ERROR · LEVEL_EMPTY_ERROR 비치명이다
+    // (같은 파일 742 · 764). 치명 조건이 빠지지 않는지만 본다
     [
-      '비치명 파싱 오류(변이 목록의 파싱 오류는 이 꼴)',
+      '방어 행 — 비치명 MANIFEST_PARSING_ERROR',
       false,
       { details: ErrorDetails.MANIFEST_PARSING_ERROR, fatal: false },
     ],

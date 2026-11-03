@@ -104,7 +104,7 @@ function fragmentAt(sn: number): Fragment {
 }
 
 /**
- * 다시보기 재생기 꼴 — 앱의 vod 재생기 설정(HLS_REWIND_CONFIG · useHlsPlayback.ts 694) · 변이 하나 · ENDLIST 목록(조각 둘)
+ * 다시보기 재생기 꼴 — 앱의 vod 재생기 설정(useHlsPlayback 이 고르는 HLS_REWIND_CONFIG) · 변이 하나 · ENDLIST 목록(조각 둘)
  * · 미디어가 붙은 채 받기 직전(IDLE). 조각 받기는 진짜 FragmentLoader 가 하고, 그 아래 망만 가짜 fLoader 가 늘 404 로 끝낸다.
  * hls.js 안쪽 칸은 hlsErrors.hlsjs.test.ts 의 되감기 재생기 꼴과 같이 채운다(목록 받기를 건너뛰려고)
  */
