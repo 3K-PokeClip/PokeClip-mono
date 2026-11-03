@@ -1,5 +1,6 @@
 package com.pokeclip.render.work;
 
+import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.JobEnvelope;
 import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.job.RenderPlan;
@@ -12,6 +13,7 @@ import com.pokeclip.render.media.MediaProbe;
 import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.media.RenderCommands;
 import com.pokeclip.render.media.RenderCommands.AudioRunInput;
+import com.pokeclip.render.media.RenderCommands.TrackHead;
 import com.pokeclip.render.media.RenderCommands.VideoPiece;
 import com.pokeclip.render.media.SegmentTiming;
 import com.pokeclip.render.media.SegmentTiming.LengthMatch;
@@ -113,7 +115,7 @@ final class JoinedRenderer {
         long midBytes = sizeOf(dir, pieces.size());
         progress.report(20, "cut");
 
-        List<AudioRunInput> runs = runInputs(timeline, dir);
+        List<AudioRunInput> runs = runInputs(timeline, timings, dir);
         ProcessRunner.Result measured = runner.run(
                 RenderCommands.measureLoudnessJoined(ffmpeg, runs, recipe.tracks()), dir, deadline);
         String loudnessFix = Loudness.correctFilter(measured.stderr(), mapper);
@@ -241,21 +243,43 @@ final class JoinedRenderer {
         return pieces;
     }
 
-    /** 소리 묶음마다 concat demuxer 목록을 쓰고 최종 단계 입력으로 옮긴다. */
-    private static List<AudioRunInput> runInputs(RenderTimeline timeline, Path dir) {
+    /**
+     * 소리 묶음마다 concat demuxer 목록을 쓰고 최종 단계 입력으로 옮긴다. 흐름에서 읽는 트랙마다 앞 무음(계획 값)과 입력 표본율을
+     * 싣는다 — 표본율은 묶음 첫 파일 판독 값이다(concat demuxer 가 첫 파일 설정으로 흐름 전체를 디코드한다).
+     */
+    private static List<AudioRunInput> runInputs(RenderTimeline timeline, Map<Long, SegmentTiming> timings,
+                                                 Path dir) {
         List<AudioRunInput> runs = new ArrayList<>();
         for (AudioRun run : timeline.audioRuns()) {
+            SegmentTiming first = timings.get(run.fileSeqs().getFirst());
             Set<Integer> silent = new HashSet<>();
-            run.tracks().stream().filter(AudioRun.TrackStart::silent).forEach(t -> silent.add(t.trackId()));
+            Map<Integer, TrackHead> heads = new LinkedHashMap<>();
+            for (AudioRun.TrackStart t : run.tracks()) {
+                if (t.silent()) {
+                    silent.add(t.trackId());
+                } else {
+                    heads.put(t.trackId(), new TrackHead(inputSampleRate(first, t.trackId()),
+                            t.frontSilenceSamples()));
+                }
+            }
             AudioRunInput input = new AudioRunInput(
                     run.primeSeq() == null ? null : sourceFile(run.primeSeq()),
                     run.seqs().stream().map(JoinedRenderer::sourceFile).toList(),
                     run.captureSeq() == null ? null : sourceFile(run.captureSeq()),
-                    run.concatDurationsUs(), run.fromSample(), run.toSample(), run.lengthSamples(), silent);
+                    run.concatDurationsUs(), run.fromSample(), run.toSample(), run.lengthSamples(), silent, heads);
             write(dir.resolve(RenderCommands.runListFile(runs.size())), RenderCommands.runList(input));
             runs.add(input);
         }
         return runs;
+    }
+
+    /** 판독한 소리 표본율. 읽지 못했으면(0) 흐름 안 채움 문턱을 정할 수 없어 실패다. */
+    private static int inputSampleRate(SegmentTiming first, int trackId) {
+        int rate = trackId < first.audio().size() ? first.audio().get(trackId).sampleRate() : 0;
+        if (rate <= 0) {
+            throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "소리 트랙 " + trackId + " 표본율을 읽지 못했다");
+        }
+        return rate;
     }
 
     // ── 자막(설계 7.6) ──

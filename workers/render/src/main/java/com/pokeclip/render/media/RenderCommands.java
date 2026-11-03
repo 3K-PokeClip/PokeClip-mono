@@ -6,6 +6,7 @@ import com.pokeclip.render.recipe.Recipe.AudioTrack;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.IntFunction;
 
@@ -49,6 +50,9 @@ public final class RenderCommands {
      * 다시 매기면 제자리다(운영 판 8.0.1 실측 — 뜀 0 · 싱크 그대로 · 크기 그대로).
      */
     static final String LOUDNESS_SETTLE = "asetpts=N/SR/TB,aresample=48000";
+
+    /** 흐름 안 채움 문턱의 표본 수 — AAC 프레임(1024표본)의 반. 이보다 작은 시각 차는 고치지 않는다(설계 7.9 불감 구간). */
+    private static final double AAC_HALF_FRAME_SAMPLES = 512;
 
     private RenderCommands() {
     }
@@ -148,15 +152,20 @@ public final class RenderCommands {
      * @param toSample          흐름에서 자를 끝(배타)
      * @param lengthSamples     결과에서 이 묶음이 차지하는 길이(다음 묶음 결과 자리 − 이 묶음 결과 자리)
      * @param silentTrackIds    이 묶음 전체에 패킷이 없는 트랙 — 그 트랙은 정확한 길이의 무음으로 채운다
+     * @param trackHeads        흐름에서 읽는 트랙마다(무음 대체 트랙 밖) 입력 표본율과 앞 무음
      */
     public record AudioRunInput(String primeFile, List<String> segmentFiles, String captureFile,
                                 List<Long> concatDurationsUs, long fromSample, long toSample, long lengthSamples,
-                                Set<Integer> silentTrackIds) {
+                                Set<Integer> silentTrackIds, Map<Integer, TrackHead> trackHeads) {
 
         public AudioRunInput {
             segmentFiles = List.copyOf(segmentFiles);
             concatDurationsUs = List.copyOf(concatDurationsUs);
             silentTrackIds = Set.copyOf(silentTrackIds);
+            trackHeads = Map.copyOf(trackHeads);
+            if (trackHeads.keySet().stream().anyMatch(silentTrackIds::contains)) {
+                throw new IllegalArgumentException("silent track has a head: " + trackHeads.keySet());
+            }
             if (segmentFiles.isEmpty()) {
                 throw new IllegalArgumentException("audio run has no segment");
             }
@@ -174,6 +183,15 @@ public final class RenderCommands {
             }
         }
 
+        /** 흐름에서 읽는 트랙 하나의 머리 값. 없으면 앞 무음 · 채움 문턱을 정할 수 없어 거부한다. */
+        TrackHead head(int trackId) {
+            TrackHead head = trackHeads.get(trackId);
+            if (head == null) {
+                throw new IllegalArgumentException("audio run has no head for track " + trackId);
+            }
+            return head;
+        }
+
         /** 목록에 적는 차례 — 준비 조각은 맨 앞에만, 확보 조각은 맨 끝에만. */
         List<String> files() {
             List<String> files = new ArrayList<>();
@@ -185,6 +203,23 @@ public final class RenderCommands {
                 files.add(captureFile);
             }
             return files;
+        }
+    }
+
+    /**
+     * 소리 묶음에서 흐름으로 읽는 트랙 하나의 머리(설계 7.4 소리 묶음 4 · 5).
+     *
+     * @param inputSampleRate     흐름 소리의 표본율 — concat demuxer 가 첫 파일 설정으로 흐름 전체를 디코드하므로 그 파일 값이다.
+     *                            흐름 안 채움 문턱({@code min_hard_comp})을 이 단위로 정한다
+     * @param frontSilenceSamples 자를 구간 시작보다 트랙 첫 표본이 늦은 만큼(48kHz 표본) — {@code adelay} 로 되돌린다
+     */
+    public record TrackHead(int inputSampleRate, long frontSilenceSamples) {
+
+        public TrackHead {
+            if (inputSampleRate <= 0 || frontSilenceSamples < 0) {
+                throw new IllegalArgumentException("bad track head: rate " + inputSampleRate + " front "
+                        + frontSilenceSamples);
+            }
         }
     }
 
@@ -324,6 +359,18 @@ public final class RenderCommands {
      * 고른 트랙마다 묶음 구간을 잇고 섞는다. 구간은 흐름에서 표본 정수로 자른 뒤 0 에서 시작시키고 정확한 길이로 끝낸다 —
      * 그래야 {@code concat}이 누적 길이로 다음 구간을 놓는 자리가 계획 자리와 같다.
      *
+     * <p>구간 하나의 사슬(설계 7.5):
+     *
+     * <ol>
+     *   <li>{@code aresample} — 48kHz 로 옮기며 흐름 시각 틈을 무음으로 채운다. 같은 녹화로 이어진 조각 사이에서 녹화기가 버린
+     *       표본(E9)과 한 조각만 패킷이 없는 트랙이 그 틈이다. 문턱은 입력 표본율의 AAC 반 프레임이다 — 기본 문턱(0.1초)은 64ms
+     *       틈을 채우지 않아 그 뒤 소리가 앞당겨진다.</li>
+     *   <li>{@code atrim} 표본 정수 · {@code asetpts=PTS-STARTPTS} — 구간 첫 표본을 0 에 놓는다.</li>
+     *   <li>{@code adelay … :all=1} — 트랙이 자를 구간 시작보다 늦게 시작하면 위 0 시작이 그만큼 앞당기므로, 그 차를 모든
+     *       채널에 되돌린다({@code all} 이 없으면 첫 채널만 밀린다).</li>
+     *   <li>형식 맞춤 · {@code apad} · {@code atrim=end_sample} — 정확한 길이.</li>
+     * </ol>
+     *
      * @param firstRunInput 묶음 0 의 ffmpeg 입력 번호
      */
     private static String runGraph(List<AudioRunInput> runs, List<AudioTrack> tracks, int firstRunInput,
@@ -338,10 +385,13 @@ public final class RenderCommands {
                 if (run.silentTrackIds().contains(n)) {
                     graph.append("anullsrc=r=48000:cl=stereo,atrim=end_sample=").append(run.lengthSamples());
                 } else {
+                    TrackHead head = run.head(n);
                     graph.append('[').append(firstRunInput + r).append(":a:").append(n)
-                            .append("]aresample=48000:async=1,atrim=start_pts=").append(run.fromSample())
+                            .append("]aresample=48000:async=1:min_hard_comp=").append(fillThreshold(head))
+                            .append(",atrim=start_pts=").append(run.fromSample())
                             .append(":end_pts=").append(run.toSample())
-                            .append(",asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,apad,")
+                            .append(",asetpts=PTS-STARTPTS,adelay=delays=").append(head.frontSilenceSamples())
+                            .append("S:all=1,aformat=sample_rates=48000:channel_layouts=stereo,apad,")
                             .append("atrim=end_sample=").append(run.lengthSamples());
                 }
                 graph.append(label).append(';');
@@ -351,6 +401,11 @@ public final class RenderCommands {
                     .append("];");
         }
         return graph.append(mixGraph(tracks, n -> "[acat" + n + "]", tail)).toString();
+    }
+
+    /** 흐름 안 채움 문턱(초) — AAC 반 프레임(512표본)을 입력 표본율로. 48kHz 면 0.010667. */
+    private static String fillThreshold(TrackHead head) {
+        return String.format(Locale.ROOT, "%.6f", AAC_HALF_FRAME_SAMPLES / head.inputSampleRate());
     }
 
     /**

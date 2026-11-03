@@ -1,6 +1,7 @@
 package com.pokeclip.render.media;
 
 import com.pokeclip.render.media.RenderCommands.AudioRunInput;
+import com.pokeclip.render.media.RenderCommands.TrackHead;
 import com.pokeclip.render.media.RenderCommands.VideoPiece;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -22,15 +24,20 @@ class RenderCommandsJoinedTest {
     private static final long TS = 90_000;
     private static final List<AudioTrack> TWO_TRACKS = List.of(new AudioTrack(1, 1.0), new AudioTrack(3, 0.6));
 
-    /** 첫 묶음: 같은 녹화 두 조각 · 준비 · 확보 없음. */
+    /** 첫 묶음: 같은 녹화 두 조각 · 준비 · 확보 없음. 트랙 3 은 자를 구간 시작보다 64ms(3072표본) 늦게 시작한다. */
     private static final AudioRunInput RUN_0 = new AudioRunInput(null, List.of("seg_1.mp4", "seg_2.mp4"), null,
-            List.of(4_000_000L), 96, 384_096, 384_000, Set.of());
-    /** 둘째(마지막) 묶음: 머리 앞 준비 조각 · 끝 확보 조각 · 트랙 3 은 이 묶음 전체에 패킷이 없다. */
+            List.of(4_000_000L), 96, 384_096, 384_000, Set.of(),
+            Map.of(1, new TrackHead(48_000, 0), 3, new TrackHead(48_000, 3_072)));
+    /** 둘째(마지막) 묶음: 머리 앞 준비 조각 · 끝 확보 조각 · 트랙 3 은 이 묶음 전체에 패킷이 없다. 입력은 44.1kHz. */
     private static final AudioRunInput RUN_1 = new AudioRunInput("seg_4.mp4", List.of("seg_5.mp4"), "seg_6.mp4",
-            List.of(3_990_000L, 4_000_000L), 192_000, 288_000, 96_000, Set.of(3));
+            List.of(3_990_000L, 4_000_000L), 192_000, 288_000, 96_000, Set.of(3),
+            Map.of(1, new TrackHead(44_100, 512)));
 
-    private static final String CHAIN_TAIL = "asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,"
-            + "apad,atrim=end_sample=";
+    /** 48kHz 입력의 흐름 안 채움 문턱 = AAC 반 프레임(512 ÷ 48000초). */
+    private static final String RESAMPLE_48K = "aresample=48000:async=1:min_hard_comp=0.010667";
+    private static final String RESAMPLE_44K = "aresample=48000:async=1:min_hard_comp=0.011610";
+    private static final String FORMAT_TAIL =
+            "aformat=sample_rates=48000:channel_layouts=stereo,apad,atrim=end_sample=";
 
     @Test
     void 조각_단계는_원래_틱으로_잘라_FFV1_NUT_중간_파일에_쓴다() {
@@ -114,14 +121,14 @@ class RenderCommandsJoinedTest {
 
     @Test
     void 묶음_간격_수가_파일_수와_맞지_않거나_0_이하면_거부한다() {
-        assertThatThrownBy(() -> new AudioRunInput("p.mp4", List.of("a.mp4"), null, List.of(), 0, 10, 10, Set.of()))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AudioRunInput("p.mp4", List.of("a.mp4"), null, List.of(), 0, 10, 10, Set.of(),
+                Map.of())).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AudioRunInput(null, List.of("a.mp4", "b.mp4"), null, List.of(0L), 0, 10, 10,
-                Set.of())).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AudioRunInput(null, List.of(), null, List.of(), 0, 10, 10, Set.of()))
+                Set.of(), Map.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AudioRunInput(null, List.of(), null, List.of(), 0, 10, 10, Set.of(), Map.of()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AudioRunInput(null, List.of("a.mp4"), null, List.of(), 0, 10, 0, Set.of()))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AudioRunInput(null, List.of("a.mp4"), null, List.of(), 0, 10, 0, Set.of(),
+                Map.of())).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -133,13 +140,13 @@ class RenderCommandsJoinedTest {
                 "-loop", "1", "-i", "o1_a.png",
                 "-filter_complex", "[0:v:0]setsar=1,[3:v]overlay,subtitles=burn.srt:force_style='"
                         + RenderCommands.BURN_STYLE + "'[vout];"
-                        + "[1:a:1]aresample=48000:async=1,atrim=start_pts=96:end_pts=384096," + CHAIN_TAIL
-                        + "384000[a0_1];"
-                        + "[2:a:1]aresample=48000:async=1,atrim=start_pts=192000:end_pts=288000," + CHAIN_TAIL
-                        + "96000[a1_1];"
+                        + "[1:a:1]" + RESAMPLE_48K + ",atrim=start_pts=96:end_pts=384096,asetpts=PTS-STARTPTS,"
+                        + "adelay=delays=0S:all=1," + FORMAT_TAIL + "384000[a0_1];"
+                        + "[2:a:1]" + RESAMPLE_44K + ",atrim=start_pts=192000:end_pts=288000,asetpts=PTS-STARTPTS,"
+                        + "adelay=delays=512S:all=1," + FORMAT_TAIL + "96000[a1_1];"
                         + "[a0_1][a1_1]concat=n=2:v=0:a=1[acat1];"
-                        + "[1:a:3]aresample=48000:async=1,atrim=start_pts=96:end_pts=384096," + CHAIN_TAIL
-                        + "384000[a0_3];"
+                        + "[1:a:3]" + RESAMPLE_48K + ",atrim=start_pts=96:end_pts=384096,asetpts=PTS-STARTPTS,"
+                        + "adelay=delays=3072S:all=1," + FORMAT_TAIL + "384000[a0_3];"
                         + "anullsrc=r=48000:cl=stereo,atrim=end_sample=96000[a1_3];"
                         + "[a0_3][a1_3]concat=n=2:v=0:a=1[acat3];"
                         + "[acat1]volume=1.000[a1];[acat3]volume=0.600[a3];[a1][a3]"
@@ -220,6 +227,51 @@ class RenderCommandsJoinedTest {
         assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1)).doesNotContain("asetpts=N/SR/TB");
     }
 
+    /**
+     * 묶음 머리 앞 무음(설계 7.4 소리 묶음 5 · 7.5). {@code asetpts=PTS-STARTPTS} 는 구간 첫 표본을 0 에 놓으므로, 트랙이 자를 구간
+     * 시작보다 늦게 시작하면 그만큼 앞당겨진다 — 그 차를 바로 뒤 {@code adelay} 가 표본 단위로 되돌린다. {@code all=1} 이 없으면
+     * 첫 채널만 밀리고 나머지 채널은 앞당겨진 채 남는다(af_adelay {@code all} 기본 0 · 설계 16.2 P23).
+     */
+    @Test
+    void 앞_무음은_0_시작_바로_뒤에서_모든_채널에_표본_단위로_넣는다() {
+        String graph = finalCommand().get(finalCommand().indexOf("-filter_complex") + 1);
+        assertThat(graph).contains("asetpts=PTS-STARTPTS,adelay=delays=3072S:all=1,aformat=")
+                .contains("asetpts=PTS-STARTPTS,adelay=delays=0S:all=1,aformat=")
+                .contains("asetpts=PTS-STARTPTS,adelay=delays=512S:all=1,aformat=");
+        // 패킷 있는 구간 셋마다 하나 · 무음 대체 구간에는 없다
+        assertThat(graph.split("adelay=", -1)).hasSize(4);
+        assertThat(graph.split(":all=1,", -1)).hasSize(4);
+        assertThat(graph).doesNotContain("anullsrc=r=48000:cl=stereo,adelay");
+    }
+
+    /**
+     * 흐름 안 채움 문턱(설계 7.4 소리 묶음 5). 같은 녹화로 이어진 조각 사이에서 녹화기가 버린 표본(E9 — 64ms 실측)은 흐름 시각 틈으로
+     * 남는다. {@code aresample} 의 기본 문턱(0.1초)은 그 틈을 채우지 않아 뒤 소리가 앞당겨지므로, 문턱을 입력 표본율의 AAC 반
+     * 프레임(512표본)으로 명시한다.
+     */
+    @Test
+    void 흐름_안_채움_문턱은_입력_표본율의_AAC_반_프레임이다() {
+        String graph = finalCommand().get(finalCommand().indexOf("-filter_complex") + 1);
+        assertThat(graph).contains("[1:a:1]aresample=48000:async=1:min_hard_comp=0.010667,atrim=")
+                .contains("[1:a:3]aresample=48000:async=1:min_hard_comp=0.010667,atrim=")
+                .contains("[2:a:1]aresample=48000:async=1:min_hard_comp=0.011610,atrim=");
+        assertThat(graph.split("min_hard_comp=", -1)).hasSize(4);
+    }
+
+    @Test
+    void 트랙_머리_값이_없거나_틀리면_거부한다() {
+        assertThatThrownBy(() -> new TrackHead(0, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new TrackHead(48_000, -1)).isInstanceOf(IllegalArgumentException.class);
+        // 무음 대체 트랙은 흐름에서 읽지 않으므로 머리 값이 없다
+        assertThatThrownBy(() -> new AudioRunInput(null, List.of("a.mp4"), null, List.of(), 0, 10, 10, Set.of(1),
+                Map.of(1, new TrackHead(48_000, 0)))).isInstanceOf(IllegalArgumentException.class);
+        // 흐름에서 읽는 트랙에 머리 값이 없으면 앞 무음 · 문턱을 정할 수 없다
+        AudioRunInput headless = new AudioRunInput(null, List.of("a.mp4"), null, List.of(), 0, 10, 10, Set.of(),
+                Map.of(3, new TrackHead(48_000, 0)));
+        assertThatThrownBy(() -> RenderCommands.measureLoudnessJoined("ffmpeg", List.of(headless), TWO_TRACKS))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void 패킷_없는_묶음_트랙은_정확한_길이의_무음이다() {
         String graph = finalCommand().get(finalCommand().indexOf("-filter_complex") + 1);
@@ -250,9 +302,10 @@ class RenderCommandsJoinedTest {
                 "-copyts", "-f", "concat", "-safe", "0", "-i", "run_0.ffconcat",
                 "-copyts", "-f", "concat", "-safe", "0", "-i", "run_1.ffconcat",
                 "-filter_complex",
-                "[0:a:1]aresample=48000:async=1,atrim=start_pts=96:end_pts=384096," + CHAIN_TAIL + "384000[a0_1];"
-                        + "[1:a:1]aresample=48000:async=1,atrim=start_pts=192000:end_pts=288000," + CHAIN_TAIL
-                        + "96000[a1_1];"
+                "[0:a:1]" + RESAMPLE_48K + ",atrim=start_pts=96:end_pts=384096,asetpts=PTS-STARTPTS,"
+                        + "adelay=delays=0S:all=1," + FORMAT_TAIL + "384000[a0_1];"
+                        + "[1:a:1]" + RESAMPLE_44K + ",atrim=start_pts=192000:end_pts=288000,asetpts=PTS-STARTPTS,"
+                        + "adelay=delays=512S:all=1," + FORMAT_TAIL + "96000[a1_1];"
                         + "[a0_1][a1_1]concat=n=2:v=0:a=1[acat1];"
                         + "[acat1]volume=1.000[a1];[a1]aformat=sample_rates=48000:channel_layouts=stereo,"
                         + Loudness.measureFilter() + "[aout]",
