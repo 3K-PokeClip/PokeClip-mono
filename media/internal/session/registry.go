@@ -152,6 +152,14 @@ type Decision struct {
 	// PrevFirstLocalPath 는 재접속 계승 개시가 물려받는 직전 회차의 첫 조각 local_path 다(계획 2.3 registry
 	// 행 ⑵) — 새 회차 init 의 stsd 호환 게이트 입력이다(ADR-044 RC3-28). 계승 개시가 아니면 "" 다.
 	PrevFirstLocalPath string
+	// RoundID 는 이 조각이 드는 회차다(POK-525 — ⑹ 키의 회차 성분 · PDT timing_round_id 가 같은 값을 쓴다). 갈래별 뜻:
+	//   - 계속: 그 live 세션의 round_id. NULL(M6 전 세션)이면 "" 다.
+	//   - 개시: 비지 않는다. TD 분할 = 끝낼 live 의 round_id(NULL 이면 새 세션 id) · 표식 분할 = 새 세션 id ·
+	//     직전 회차 합류 · 계승 = 이어 가는 round_id · 새 회차 = 새 세션 id.
+	//   - 비귀속: "" 다.
+	// 「새 회차를 여는가」 는 RoundID == Open 이 돌려준 session_id 로 가린다. Open 은 자기가 쓸 round_id 가 이 값과 다르면
+	// 오류를 내 트랜잭션을 되돌린다 — 두 계산이 갈리면 키가 틀리기 전에 멈춘다.
+	RoundID string
 	// plan 은 Open 이 쓸 값이다. 비공개인 이유는 호출자가 다른 조각의 값으로 세션을
 	// 열 수 없게 하기 위해서다 — 결정과 쓰기가 같은 입력을 본다는 것이 구조로 보장된다.
 	plan *openPlan
@@ -249,18 +257,19 @@ func (r *Registry) Decide(ctx context.Context, tx pgx.Tx, in Input, now time.Tim
 // 그 인덱스가 스트림당 live 행이 하나임을 물리로 보증하므로 LIMIT 을 두지 않는다.
 // state='live' 술어를 빼면 인덱스를 벗어나고, ending 세션까지 현 세션으로 보게 된다.
 const currentLiveSQL = `
-SELECT session_id, started_at, target_duration, discontinuity_base, stop_marked_at
+SELECT session_id, started_at, target_duration, discontinuity_base, stop_marked_at, round_id
   FROM stream_sessions
  WHERE stream_id = $1 AND state = 'live'`
 
 // loadLive 는 현 live 를 읽는다. query 는 currentLiveSQL 이나 그 잠금판(lockLiveSQL)이다.
 func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID, query string) (*liveSession, error) {
 	var (
-		s      liveSession
-		marked *time.Time
+		s       liveSession
+		marked  *time.Time
+		roundID *string
 	)
 	err := tx.QueryRow(ctx, query, streamID).
-		Scan(&s.id, &s.startedAt, &s.targetDuration, &s.discontinuityBase, &marked)
+		Scan(&s.id, &s.startedAt, &s.targetDuration, &s.discontinuityBase, &marked, &roundID)
 	// 행이 없다 = 현 live 세션이 없다. 에러가 아니라 정상 상태(개시 갈래)다.
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -272,6 +281,9 @@ func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID, query stri
 	s.startedAt = s.startedAt.UTC()
 	if marked != nil {
 		s.stopMarkedAt = marked.UTC()
+	}
+	if roundID != nil {
+		s.roundID = *roundID
 	}
 	return &s, nil
 }
@@ -408,7 +420,7 @@ func joinable(prev previousSession, startWall time.Time, window time.Duration) b
 	return gap >= 0 && gap <= window
 }
 
-// liveSession 은 현 live 세션 행에서 읽는 값이다. 판정에 쓰는 네 열이 전부다.
+// liveSession 은 현 live 세션 행에서 읽는 값이다.
 type liveSession struct {
 	id                string
 	startedAt         time.Time
@@ -416,6 +428,8 @@ type liveSession struct {
 	discontinuityBase int64
 	// stopMarkedAt 은 그 live 의 의도적 종료 표식이다. 없으면 영값이다.
 	stopMarkedAt time.Time
+	// roundID 는 그 live 의 회차다 — 계속 · TD 분할의 Decision.RoundID 재료다. NULL(M6 전 세션)이면 "" 다.
+	roundID string
 }
 
 // decide 는 DB 를 보지 않는 판정부다 — 현 live 세션(없으면 nil)과 입력만으로 갈래를 정한다.
@@ -450,7 +464,7 @@ func (r *Registry) decide(live *liveSession, in Input, now time.Time) Decision {
 				"started_at", live.startedAt, "slack", r.opt.FloorSlack)
 			return Decision{Outcome: OutcomeNone}
 		}
-		return Decision{Outcome: OutcomeCurrent, SessionID: live.id, BaseSessionID: live.id}
+		return Decision{Outcome: OutcomeCurrent, SessionID: live.id, BaseSessionID: live.id, RoundID: live.roundID}
 	}
 
 	// 여기부터는 현 live 세션이 없다 — 열 것인가를 연산이 가른다.
@@ -518,7 +532,13 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 		p.roundFromEnding = true // 15.2 표 4행 — 회차 · 표식은 끝내는 UPDATE 의 RETURNING 이 정본
 		// 기저 세션은 곧 ending 으로 보낼 그 세션이다 — ID 를 손에 쥐고 있으므로 조회하지 않는다.
 		// 조회로 찾으면 started_at 최신이 새 세션(또는 더 늦게 시작한 옛 세션)이라 어긋난다.
-		return Decision{Outcome: OutcomeOpenFresh, BaseSessionID: split.id, EndingSessionID: split.id, plan: p}
+		// 회차는 잠근 live 의 round_id 다 — live 인 회차는 닫히지 않으므로(index 회차 스캔의 state <> 'live') Open 이
+		// RETURNING 으로 받을 successorRound 와 같은 값이다. NULL 이면 15.2 표 3행 — 새 회차다.
+		round := split.roundID
+		if round == "" {
+			round = p.newSessionID()
+		}
+		return Decision{Outcome: OutcomeOpenFresh, BaseSessionID: split.id, EndingSessionID: split.id, RoundID: round, plan: p}
 	case inherit != nil:
 		// 불연속 기준은 TD 분할과 같은 복사로 잇고, inherits_session 은 이 갈래만 쓴다(TD 분할은 NULL — 계획 2.3
 		// registry 행 ⑶ 대칭 기록 금지). TD 는 직전 회차 TD 아래로 내려가지 않는다 — 계승 목록은 직전 회차 조각을
@@ -526,11 +546,18 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 		p.inheritsSession = inherit.id
 		p.discontinuityBase = inherit.discontinuityBase
 		p.targetDuration = max(p.targetDuration, inherit.targetDuration)
-		return Decision{Outcome: OutcomeOpen, PrevFirstLocalPath: inherit.firstLocalPath, plan: p}
+		// 회차는 아직 새 회차다 — 직전 회차에 드는지(15.2 표 5 · 6행)는 openFromPrevious 가 정해 덮는다.
+		return Decision{Outcome: OutcomeOpen, PrevFirstLocalPath: inherit.firstLocalPath, RoundID: p.newSessionID(), plan: p}
 	}
 	// discontinuity_base 는 DDL 기본값과 같은 0 이다 — 설계가 비분할 개시의 승계를
 	// 규정하지 않았고 소비자(렌더)가 M4 라 승계 산식을 지어내지 않는다.
-	return Decision{Outcome: OutcomeOpen, plan: p}
+	return Decision{Outcome: OutcomeOpen, RoundID: p.newSessionID(), plan: p}
+}
+
+// newSessionID 는 이 계획으로 열 세션의 id 다 — 새 회차의 round_id 이기도 하다(15.2 표 「자기 → 새 회차」). Decide 와
+// Open 이 같은 규칙을 이 한 자리에서 쓴다.
+func (p *openPlan) newSessionID() string {
+	return sessionID(p.streamID, p.startedAt, p.seq)
 }
 
 // endSessionSQL 은 live 세션을 ending 으로 보내는 문장이다($1 session_id · $2 end_reason).
@@ -610,10 +637,13 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 			roundID, marked = ended.successorRound()
 		}
 	}
-	id := sessionID(p.streamID, p.startedAt, p.seq)
+	id := p.newSessionID()
 	newRound := roundID == ""
 	if newRound {
 		roundID = id // 15.2 표 「자기 → 새 회차」 — round_id 는 그 회차 머리 세션의 session_id 다
+	}
+	if err := checkDecidedRound(roundID, d.RoundID, id); err != nil {
+		return "", err
 	}
 	// 계승이 아니면 NULL 이다 — "" 를 쓰면 inherits_session 의 FK(자기 표 참조)가 23503 으로 막는다.
 	var inherits *string
@@ -632,6 +662,16 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 		}
 	}
 	return id, nil
+}
+
+// checkDecidedRound 는 개시가 쓸 회차(written)가 결정이 정한 회차(decided — ⑹ 키의 회차 성분)와 같은지 본다. 갈리면
+// 배선 결함이다 — 오류로 트랜잭션을 되돌려 키가 세션과 다른 회차로 저장되기 전에 멈춘다(설계 r9.4 회차 정본 · 계획 r2 E31).
+func checkDecidedRound(written, decided, sessionID string) error {
+	if written == decided {
+		return nil
+	}
+	return fmt.Errorf("session: 개시가 쓸 round_id %q 가 결정의 RoundID %q 와 다르다 session_id=%q — 배선 결함",
+		written, decided, sessionID)
 }
 
 // sessionID 는 새 세션의 PK 를 만든다.

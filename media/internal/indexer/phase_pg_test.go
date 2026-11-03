@@ -92,6 +92,7 @@ func (d phaseDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInp
 		BaseSessionID:      dec.BaseSessionID,
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		RoundID:            dec.RoundID,
 		Plan:               dec,
 	}, nil
 }
@@ -101,6 +102,7 @@ func (d phaseDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDeci
 	if !ok {
 		return "", fmt.Errorf("테스트 어댑터: 개시 계획이 session.Decision 이 아니다(%T)", dec.Plan)
 	}
+	plan.RoundID = dec.RoundID // 장부가 든 회차를 Open 이 대조한다(프로덕션 어댑터와 같은 꼴)
 	return d.reg.Open(ctx, tx, plan, firstPDT)
 }
 

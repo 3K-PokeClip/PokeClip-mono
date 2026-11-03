@@ -109,7 +109,16 @@ type SessionDecision struct {
 	// PrevFirstLocalPath 는 재접속 계승 개시가 물려받는 직전 회차의 첫 조각 local_path 다 — init 의 stsd 호환
 	// 게이트 입력이다(계획 2.3 registry 행 ⑵). 계승 개시가 아니면 "" 다. 이것도 결과에 싣기만 한다.
 	PrevFirstLocalPath string
-	Plan               SessionPlan
+	// RoundID 는 이 조각이 드는 회차다 — ⑹ 키의 회차 성분이고 PDT 의 timing_round_id 가 같은 값을 쓴다(한 트랜잭션에서
+	// 한 번 정한 값 — 설계 r9.4 회차 정본 · 80_pdt (가)). 결정자가 Decide 에서 채운다. 갈래별 뜻:
+	//   - 계속: 그 live 세션의 round_id. NULL(M6 전 세션)이면 "" 다.
+	//   - 개시: 비지 않는다. TD 분할 = 끝낼 live 의 round_id(NULL 이면 새 세션 id) · 표식 분할 = 새 세션 id ·
+	//     직전 회차 합류 · 계승 = 이어 가는 round_id · 새 회차 = 새 세션 id.
+	//   - 비귀속: "" 다.
+	// 「새 회차를 여는가」 는 RoundID == Open 이 돌려준 session_id 로 가린다(Open 뒤에서 쓴다). Open 은 이 값을 대조해
+	// 자기가 쓸 round_id 와 다르면 오류를 낸다 — 트랜잭션이 되돌려져 키가 세션과 다른 회차로 저장되지 않는다.
+	RoundID string
+	Plan    SessionPlan
 }
 
 // PlaybackKeyFunc 는 ③ 조각 키 파생이다(설계 5.2 — playback.SegKey).
