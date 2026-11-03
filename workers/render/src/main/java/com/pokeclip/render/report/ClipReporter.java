@@ -33,6 +33,9 @@ public class ClipReporter {
 
     private static final Logger log = LoggerFactory.getLogger(ClipReporter.class);
 
+    /** clip {@code clips.error_message} 칸 폭(VARCHAR(512)). 보고 문장은 이 안에서 자른다. */
+    static final int MAX_ERROR_MESSAGE = 512;
+
     private final RestClient client;
     private final ObjectMapper mapper;
     private final List<Duration> retryDelays;
@@ -115,7 +118,7 @@ public class ClipReporter {
     private void error(ObjectNode body, ErrorCode code, String message, boolean retryable) {
         ObjectNode error = body.putObject("error");
         error.put("code", code.name());
-        error.put("message", message);
+        error.put("message", safeMessage(message));
         error.put("retryable", retryable);
     }
 
@@ -161,6 +164,27 @@ public class ClipReporter {
                     last.getMessage());
         }
         throw new ReportUnavailable("clip 보고 실패 type=" + type, last);
+    }
+
+    /**
+     * 보고 · 로그에 싣는 실패 문장. 거절 문장에는 입력에서 온 글자가 섞일 수 있다(레시피 값 되울림 등). 제어 문자 · 줄 나눔
+     * 문자는 빈칸으로 바꿔 로그 한 줄을 위조하지 못하게 하고, {@value #MAX_ERROR_MESSAGE}자(코드 포인트)에서 자른다.
+     *
+     * @return null 이면 null
+     */
+    public static String safeMessage(String message) {
+        if (message == null) {
+            return null;
+        }
+        StringBuilder safe = new StringBuilder();
+        message.codePoints().limit(MAX_ERROR_MESSAGE).forEach(c -> safe.appendCodePoint(lineSafe(c) ? c : ' '));
+        return safe.toString();
+    }
+
+    private static boolean lineSafe(int codePoint) {
+        int type = Character.getType(codePoint);
+        return !Character.isISOControl(codePoint) && type != Character.LINE_SEPARATOR
+                && type != Character.PARAGRAPH_SEPARATOR;
     }
 
     /** SUCCEEDED의 산출물 한 줄(계약1 4절 result). */

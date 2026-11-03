@@ -74,6 +74,28 @@ class SharedTimelineCasesTest {
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("version");
     }
 
+    /** 판은 정수 2 하나다 — 2.9 가 잘려 2 로 읽히거나 글자 "2" 가 통과하지 않는다. */
+    @Test
+    void 표_판이_정수_2_가_아니면_거절한다() {
+        for (String version : new String[] {"2.9", "2.0", "\"2\"", "null"}) {
+            String bad = table(AUDIO_JOIN).replace("\"version\": 2", "\"version\": " + version);
+            assertThatThrownBy(() -> SharedTimelineCases.parse(bad)).as(version)
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("version");
+        }
+    }
+
+    /** 사례 목록은 배열이다 — 객체로 오면 그 값들을 사례로 돌지 않는다. */
+    @Test
+    void 사례_목록이_배열이_아니면_거절한다() {
+        String object = "{\"version\": 2, \"cases\": {\"a\": " + AUDIO_JOIN + "}}";
+        String missing = "{\"version\": 2}";
+
+        for (String bad : List.of(object, missing)) {
+            assertThatThrownBy(() -> SharedTimelineCases.parse(bad)).as(bad)
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("cases");
+        }
+    }
+
     @Test
     void 모르는_갈래가_있으면_거절한다() {
         String unknown = "{\"id\": \"x\", \"kind\": \"resultOffset\"}";

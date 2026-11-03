@@ -57,12 +57,18 @@ public final class SharedTimelineCases {
 
     static SharedTimelineCases parse(String json) {
         JsonNode root = MAPPER.readTree(json);
-        if (root.path("version").asInt(-1) != VERSION) {
+        // 정수 칸만 판으로 본다 — asInt 는 2.9 를 2 로 자르고 글자 "2" 도 2 로 읽는다.
+        JsonNode version = root.path("version");
+        if (!version.isIntegralNumber() || !version.canConvertToInt() || version.asInt() != VERSION) {
             throw new IllegalStateException("표 version이 " + VERSION + "이 아니다: " + root.get("version"));
+        }
+        // 객체도 값들로 순회되므로 배열인지 따로 본다.
+        if (!root.path("cases").isArray()) {
+            throw new IllegalStateException("표 cases가 배열이 아니다");
         }
         List<AudioJoinCase> audioJoin = new ArrayList<>();
         Set<String> ids = new HashSet<>();
-        for (JsonNode c : root.path("cases")) {
+        for (JsonNode c : root.get("cases")) {
             String id = c.path("id").asString("");
             if (id.isEmpty() || !ids.add(id)) {
                 throw new IllegalStateException("사례 id가 비었거나 겹친다: " + c.get("id"));

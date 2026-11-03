@@ -18,6 +18,12 @@ final class PlanCheck {
     /** 좌표 오프셋 상한 = 조각 길이 + 이만큼(설계 5.3 4). 파일 머리 원점이 영상 첫 DTS보다 앞설 수 있는 몫이다. */
     static final long OFFSET_SLACK_US = 1_000_000;
 
+    /**
+     * ms 칸(조각 길이 · 틈 안 거리 · 예상 길이) 상한. µs로 바꾸고 {@link #OFFSET_SLACK_US}를 더해도 long에 담기는 가장 큰
+     * 값이다 — 오프셋 상한 산식이 감겨 거대 · 음수 길이가 통과하지 않게 하는 구조 상한이지 정책 값이 아니다.
+     */
+    static final long MAX_MS = (Long.MAX_VALUE - OFFSET_SLACK_US) / 1000;
+
     private PlanCheck() {
     }
 
@@ -26,14 +32,31 @@ final class PlanCheck {
      * @param recipeSubtitles 레시피 자막 구간 수
      */
     static void check(RenderPlan plan, List<SourceSegment> sources, int recipeSubtitles) {
+        durations(sources);
         List<SourceSegment> media = sources.stream().filter(s -> s.ref().role() == SourceRole.SEGMENT).toList();
         mediaSeqs(plan, media);
+        // 매체 열은 위에서 엄격히 오름 · segment 항목과 하나씩 맞물림을 봤다 — seq 로 찾는 표가 겹치지 않는다.
+        Map<Long, Integer> positions = new HashMap<>();
+        Map<Long, SourceSegment> mediaBySeq = new HashMap<>();
+        for (int i = 0; i < media.size(); i++) {
+            positions.put(media.get(i).seq(), i);
+            mediaBySeq.put(media.get(i).seq(), media.get(i));
+        }
         capture(sources, media);
-        primes(sources, plan.mediaSeqs());
+        primes(sources, plan.mediaSeqs(), positions, mediaBySeq);
         range(plan, media);
-        subtitles(plan, recipeSubtitles);
-        if (plan.lengthMs() < 1) {
-            throw new PlanViolation(6, "plan.lengthMs가 1보다 작다");
+        subtitles(plan, recipeSubtitles, mediaBySeq);
+        if (plan.lengthMs() < 1 || plan.lengthMs() > MAX_MS) {
+            throw new PlanViolation(6, "plan.lengthMs가 1 이상 상한 이하가 아니다");
+        }
+    }
+
+    /** 규칙 4 의 앞 조건: 모든 역할의 {@code durationMs} 는 0 이상 {@link #MAX_MS} 이하다(오프셋 상한 산식이 넘치지 않게). */
+    private static void durations(List<SourceSegment> sources) {
+        for (SourceSegment s : sources) {
+            if (s.durationMs() < 0 || s.durationMs() > MAX_MS) {
+                throw new PlanViolation(4, "sourceKeys[].durationMs가 범위 밖이다");
+            }
         }
     }
 
@@ -77,9 +100,8 @@ final class PlanCheck {
      * (첫 매체가 아니면 o 바로 앞 매체 뒤)에 있고, 한 머리에 하나뿐이며 sourceKeys에서 o 항목 바로 앞이다. 첫 매체는 표지와
      * 무관하게 늘 머리다 — 머리 표지 {@code followsLedgerPrevious}를 이 검사에 쓰지 않는다.
      */
-    private static void primes(List<SourceSegment> sources, List<Long> mediaSeqs) {
-        Map<Long, SourceSegment> mediaBySeq = new HashMap<>();
-        sources.stream().filter(s -> s.ref().role() == SourceRole.SEGMENT).forEach(s -> mediaBySeq.put(s.seq(), s));
+    private static void primes(List<SourceSegment> sources, List<Long> mediaSeqs, Map<Long, Integer> positions,
+                               Map<Long, SourceSegment> mediaBySeq) {
         Set<Long> owners = new HashSet<>();
         for (int i = 0; i < sources.size(); i++) {
             SourceSegment p = sources.get(i);
@@ -91,7 +113,7 @@ final class PlanCheck {
             if (o == null) {
                 throw new PlanViolation(3, "audio_prime의 ownerSeq가 매체 열에 없다");
             }
-            int at = mediaSeqs.indexOf(owner);
+            int at = positions.get(owner);
             boolean head = at == 0 || !o.joinsPrevious();
             if (!head || o.isDiscontinuity()) {
                 throw new PlanViolation(3, "audio_prime의 머리가 같은 녹화로 이어지는 묶음 머리가 아니다");
@@ -120,33 +142,53 @@ final class PlanCheck {
     }
 
     private static void offset(long offsetUs, SourceSegment segment, String where) {
-        if (offsetUs < 0 || offsetUs > segment.durationMs() * 1000 + OFFSET_SLACK_US) {
+        if (!inside(offsetUs, segment)) {
             throw new PlanViolation(4, where + ".offsetUs가 조각 밖이다");
         }
     }
 
+    /** {@code 0 ≤ offsetUs ≤ durationMs × 1000 + 1초}. {@link #durations}가 길이를 묶어 산식이 넘치지 않는다. */
+    private static boolean inside(long offsetUs, SourceSegment segment) {
+        return offsetUs >= 0 && offsetUs <= segment.durationMs() * 1000 + OFFSET_SLACK_US;
+    }
+
     /**
-     * 규칙 5: 번호는 유일하고 레시피 구간 수 미만. 매체 끝점은 매체 열 안, 틈 끝점은 매체 열의 조각이거나 첫 매체 앞 조각.
+     * 규칙 5: 번호는 유일하고 레시피 구간 수 미만. 매체 끝점은 매체 열 안이고 오프셋은 그 조각의 규칙 4 범위 안, 틈 끝점은
+     * 매체 열의 조각이거나 첫 매체 앞 조각(장부 seq 는 0 부터라 음수는 아니다)이고 틈 안 거리는 0 이상 {@link #MAX_MS} 이하.
+     * 「첫 매체 앞 조각」 이 바로 앞 회차 seq 인지는 장부를 읽지 않아 보지 못한다(clip 보장 · 설계 5.3 「5 의 보장 나눔」).
      * 끝점 순서는 보지 않는다(결과 0 이하면 그 자막만 뺀다 · P18).
      */
-    private static void subtitles(RenderPlan plan, int recipeSubtitles) {
+    private static void subtitles(RenderPlan plan, int recipeSubtitles, Map<Long, SourceSegment> mediaBySeq) {
         Set<Integer> indexes = new HashSet<>();
         for (SubtitleSpan span : plan.subtitles()) {
             if (span.index() < 0 || span.index() >= recipeSubtitles || !indexes.add(span.index())) {
                 throw new PlanViolation(5, "plan.subtitles[].index " + span.index() + "가 겹치거나 레시피 밖이다");
             }
-            point(span.start(), plan);
-            point(span.end(), plan);
+            point(span.start(), plan, mediaBySeq);
+            point(span.end(), plan, mediaBySeq);
         }
     }
 
-    private static void point(SubtitlePoint point, RenderPlan plan) {
-        boolean inside = switch (point) {
-            case SubtitlePoint.AtMedia m -> plan.mediaSeqs().contains(m.at().seq());
-            case SubtitlePoint.InGap g -> plan.mediaSeqs().contains(g.afterSeq()) || g.afterSeq() < plan.in().seq();
-        };
-        if (!inside) {
-            throw new PlanViolation(5, "plan.subtitles[] 끝점이 매체 열 밖을 가리킨다");
+    private static void point(SubtitlePoint point, RenderPlan plan, Map<Long, SourceSegment> mediaBySeq) {
+        switch (point) {
+            case SubtitlePoint.AtMedia m -> {
+                SourceSegment segment = mediaBySeq.get(m.at().seq());
+                if (segment == null) {
+                    throw new PlanViolation(5, "plan.subtitles[] 끝점이 매체 열 밖을 가리킨다");
+                }
+                if (!inside(m.at().offsetUs(), segment)) {
+                    throw new PlanViolation(5, "plan.subtitles[] 끝점의 offsetUs가 조각 밖이다");
+                }
+            }
+            case SubtitlePoint.InGap g -> {
+                boolean known = mediaBySeq.containsKey(g.afterSeq()) || g.afterSeq() < plan.in().seq();
+                if (g.afterSeq() < 0 || !known) {
+                    throw new PlanViolation(5, "plan.subtitles[] 끝점이 매체 열 밖을 가리킨다");
+                }
+                if (g.intoGapMs() < 0 || g.intoGapMs() > MAX_MS) {
+                    throw new PlanViolation(5, "plan.subtitles[] 끝점의 intoGapMs가 범위 밖이다");
+                }
+            }
         }
     }
 }

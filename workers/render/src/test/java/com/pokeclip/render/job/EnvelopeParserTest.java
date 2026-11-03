@@ -1,6 +1,7 @@
 package com.pokeclip.render.job;
 
 import com.pokeclip.render.support.Fixtures;
+import com.pokeclip.render.support.PlanOrder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -88,7 +89,70 @@ class EnvelopeParserTest {
                 new SourceRef(2, SourceRole.SEGMENT, null));
         assertThat(job.sources()).extracting(SourceSegment::sourceStartAtMs)
                 .containsExactly(Fixtures.start(0), Fixtures.start(1), Fixtures.start(2));
-        assertThat(output.getOut()).contains("render.legacy_order jobId=" + jobId + " sources=3");
+        assertThat(output.getOut()).contains("render.legacy_order jobId=" + jobId + " sources=3 plan=absent");
+    }
+
+    /** {@code "plan": null} 도 옛 꼴이다(받는 집합을 줄이지 않는다). 다만 칸이 없을 때와 가를 수 있게 로그에 남긴다. */
+    @Test
+    void 계획이_null_이면_옛_꼴로_읽고_null_이었다고_남긴다(CapturedOutput output) {
+        ObjectNode e = Fixtures.envelope(jobId, Fixtures.recipe("s1"));
+        e.putNull("plan");
+
+        assertThat(parser.parse(body(e)).plan()).isNull();
+        assertThat(output.getOut()).contains("render.legacy_order jobId=" + jobId + " sources=3 plan=null");
+    }
+
+    /** 거절 문장은 로그와 사용자 화면(clips.error_message)까지 간다. 입력에서 온 글자를 싣지 않는다. */
+    @Test
+    void 거절_문장은_입력_값을_되울리지_않는다() {
+        String evil = "EVIL\nrender.forged";
+
+        ObjectNode legacyRole = Fixtures.envelope(jobId, Fixtures.recipe("s1"));
+        ((ObjectNode) legacyRole.get("sourceKeys").get(0)).put("role", evil);
+        assertThat(rejectedMessage(legacyRole)).doesNotContain("EVIL");
+
+        ObjectNode role = PlanOrder.of(jobId).segment(101, false, false).in(101, 0).out(101, 9).json();
+        ((ObjectNode) role.get("sourceKeys").get(0)).put("role", evil);
+        assertThat(rejectedMessage(role)).doesNotContain("EVIL");
+
+        ObjectNode origin = PlanOrder.of(jobId).segment(101, false, false).in(101, 0).out(101, 9).json();
+        ((ObjectNode) origin.get("plan")).put("offsetOrigin", evil);
+        assertThat(rejectedMessage(origin)).doesNotContain("EVIL");
+
+        ObjectNode field = PlanOrder.of(jobId).segment(101, false, false).in(101, 0).out(101, 9).json();
+        ((ObjectNode) field.get("plan")).put(evil, 1);
+        assertThat(rejectedMessage(field)).doesNotContain("EVIL");
+
+        ObjectNode sourceField = PlanOrder.of(jobId).segment(101, false, false).in(101, 0).out(101, 9).json();
+        ((ObjectNode) sourceField.get("sourceKeys").get(0)).put(evil, 1);
+        assertThat(rejectedMessage(sourceField)).doesNotContain("EVIL");
+    }
+
+    /** 중복 키 · 본문 뒤 쓰레기는 어느 값을 믿을지 정할 수 없다. 관용으로 읽지 않는다. */
+    @Test
+    void 중복_키나_본문_뒤_쓰레기가_있으면_읽지_않는다() {
+        String legacy = body(Fixtures.envelope(jobId, Fixtures.recipe("s1")));
+        String plan = PlanOrder.of(jobId).segment(101, false, false).in(101, 0).out(101, 9).body();
+
+        assertThat(plan).contains("\"lengthMs\":5000");
+        for (String bad : new String[] {
+                legacy.replaceFirst("\\{", "{\"schemaVersion\":1,"),
+                plan.replace("\"lengthMs\":5000", "\"lengthMs\":5000,\"lengthMs\":6000"),
+                plan.replaceFirst("\"plan\":", "\"plan\":null,\"plan\":"),
+                legacy + " {}",
+                plan + "x"}) {
+            assertThatThrownBy(() -> parser.parse(bad)).as(bad).isInstanceOf(EnvelopeParser.Unreadable.class);
+        }
+    }
+
+    private String rejectedMessage(ObjectNode envelope) {
+        try {
+            parser.parse(body(envelope));
+        } catch (EnvelopeParser.Rejected r) {
+            assertThat(r.failure().code()).isEqualTo(ErrorCode.ENVELOPE_VALIDATION);
+            return r.getMessage();
+        }
+        throw new AssertionError("거절하지 않았다");
     }
 
     /** P9 — 판별은 두 칸(계획 · 조각 시작 시각)이다. 계획도 시작 시각도 없으면 어느 꼴도 아니다(설계 r7 5.3 1). */

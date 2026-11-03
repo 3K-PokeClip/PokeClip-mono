@@ -5,11 +5,14 @@ import com.pokeclip.render.recipe.RecipeParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectReader;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -21,6 +24,9 @@ import java.util.UUID;
  *   <li>{@link Unreadable}. jobId조차 못 읽었다. 보고할 곳이 없어 부른 쪽이 메시지를 치운다.</li>
  *   <li>{@link Rejected}. jobId는 읽었고 무토큰 preflight 실패로 보고한다(SCHEMA_VERSION·ENVELOPE_VALIDATION·VALIDATION).</li>
  * </ul>
+ *
+ * <p>중복 키와 본문 뒤 쓰레기는 어느 값을 믿을지 정할 수 없어 {@link Unreadable}이다. 이 엄격도는 이 파서의 reader에만 켠다
+ * (주입된 공용 {@code ObjectMapper} 설정은 그대로다).
  */
 public final class EnvelopeParser {
 
@@ -28,16 +34,24 @@ public final class EnvelopeParser {
 
     static final int SCHEMA_VERSION = 1;
 
-    private final ObjectMapper mapper;
+    /** 새 꼴 매체 · 확보 조각 항목의 칸(설계 r7 5.2). 그 밖 칸은 거절한다 — 거둔 칸이 항목 쪽에서 조용히 무시되지 않게. */
+    private static final Set<String> FLAGGED_SOURCE_FIELDS =
+            Set.of("role", "bucket", "s3Key", "seq", "durationMs", "isDiscontinuity", "followsLedgerPrevious");
+    /** 새 꼴 준비 조각 항목의 칸. 두 표지가 없고 {@code ownerSeq}가 있다(설계 r7 5.2). */
+    private static final Set<String> PRIME_SOURCE_FIELDS =
+            Set.of("role", "bucket", "s3Key", "seq", "ownerSeq", "durationMs");
+
+    private final ObjectReader reader;
 
     public EnvelopeParser(ObjectMapper mapper) {
-        this.mapper = mapper;
+        this.reader = mapper.reader().with(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY,
+                DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     }
 
     public JobEnvelope parse(String body) {
         JsonNode root;
         try {
-            root = mapper.readTree(body);
+            root = reader.readTree(body);
         } catch (JacksonException e) {
             throw new Unreadable("JSON이 아니다");
         }
@@ -80,7 +94,9 @@ public final class EnvelopeParser {
             throw RenderFailure.permanent(ErrorCode.VALIDATION, "recipe.streamId가 주문서와 다르다");
         }
         if (legacy) {
-            log.info("render.legacy_order jobId={} sources={}", jobId, sources.size());
+            // 칸이 없는가 · null 인가를 가른다. 둘 다 옛 꼴이지만 null 은 새 생산자가 계획을 비운 것일 수 있다.
+            log.info("render.legacy_order jobId={} sources={} plan={}", jobId, sources.size(),
+                    planNode == null ? "absent" : "null");
         } else {
             PlanCheck.check(plan, sources, recipe.subtitles() == null ? 0 : recipe.subtitles().segments().size());
         }
@@ -89,8 +105,8 @@ public final class EnvelopeParser {
     }
 
     /**
-     * 새 꼴 조각 목록(설계 r7 5.2). 역할 셋을 받고 {@code sourceStartAtMs}는 받지 않는다. 역할 사이 자리 · 수는
-     * {@link PlanCheck}가 본다.
+     * 새 꼴 조각 목록(설계 r7 5.2). 역할 셋을 받고 {@code sourceStartAtMs}는 받지 않는다. 항목은 역할마다 정해진 칸만 받는다
+     * (매체 = 규칙 2 · 확보 · 준비 = 규칙 3). 역할 사이 자리 · 수 · 값 범위는 {@link PlanCheck}가 본다.
      */
     private List<SourceSegment> planSources(JsonNode node) {
         if (node == null || !node.isArray()) {
@@ -101,15 +117,16 @@ public final class EnvelopeParser {
             if (!item.isObject()) {
                 throw envelope("sourceKeys[]가 객체가 아니다");
             }
-            String roleName = item.path("role").asString("");
-            SourceRole role = SourceRole.of(roleName)
-                    .orElseThrow(() -> new PlanViolation(2, "sourceKeys[].role=" + roleName + "은 모르는 역할이다"));
+            SourceRole role = SourceRole.of(item.path("role").asString(""))
+                    .orElseThrow(() -> new PlanViolation(2, "sourceKeys[].role은 모르는 역할이다"));
             if (item.has("sourceStartAtMs")) {
                 throw new PlanViolation(1, "plan이 있는 주문서에 sourceKeys[].sourceStartAtMs가 실렸다");
             }
+            int flagRule = role == SourceRole.SEGMENT ? 2 : 3;
+            PlanReader.onlyKnown(item, role == SourceRole.AUDIO_PRIME ? PRIME_SOURCE_FIELDS : FLAGGED_SOURCE_FIELDS,
+                    flagRule, "sourceKeys[]");
             long seq = whole(item, "seq");
             Long owner = role == SourceRole.AUDIO_PRIME ? ownerSeq(item) : null;
-            int flagRule = role == SourceRole.SEGMENT ? 2 : 3;
             boolean discontinuity = role != SourceRole.AUDIO_PRIME && flag(item, "isDiscontinuity", flagRule);
             boolean follows = role != SourceRole.AUDIO_PRIME && flag(item, "followsLedgerPrevious", flagRule);
             sources.add(new SourceSegment(text(item, "bucket"), text(item, "s3Key"), new SourceRef(seq, role, owner),
@@ -147,7 +164,7 @@ public final class EnvelopeParser {
             String role = item.path("role").asString("");
             if (!"segment".equals(role)) {
                 // ADR-071: 지금 주문서는 조각 목록만 싣는다. 중간본(video/audio 항목)은 아직 없다.
-                throw envelope("sourceKeys[].role=" + role + "은 지원하지 않는다");
+                throw envelope("sourceKeys[].role은 지원하지 않는다");
             }
             JsonNode start = item.get("sourceStartAtMs");
             if (start == null || start.isNull()) {

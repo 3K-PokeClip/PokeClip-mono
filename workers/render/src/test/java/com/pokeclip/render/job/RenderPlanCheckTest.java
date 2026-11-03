@@ -173,9 +173,71 @@ class RenderPlanCheckTest {
         ((ObjectNode) gaps.get("plan")).putArray("gaps");
         rejectedBy(gaps, 2);
 
-        ObjectNode nested = twoSegments().json();
-        ((ObjectNode) nested.get("plan").get("in")).put("style", "freeze");
-        rejectedBy(nested, 2);
+    }
+
+    /** 모르는 칸은 그 칸이 속한 규칙으로 거절한다 — 시작 · 끝은 4, 자막 · 끝점은 5(로그 rule= 가 자리를 가리키게). */
+    @Test
+    void 계획_안_모르는_칸은_그_자리의_규칙으로_거절한다() {
+        ObjectNode in = twoSegments().json();
+        ((ObjectNode) in.get("plan").get("in")).put("style", "freeze");
+        rejectedBy(in, 4);
+
+        ObjectNode out = twoSegments().json();
+        ((ObjectNode) out.get("plan").get("out")).put("style", "freeze");
+        rejectedBy(out, 4);
+
+        ObjectNode toEnd = twoSegments().outToSegmentEnd(102).json();
+        ((ObjectNode) toEnd.get("plan").get("out")).put("style", "freeze");
+        rejectedBy(toEnd, 4);
+
+        ObjectNode span = twoSegments().subtitleAtMedia(0, 101, 0, 101, 1).json();
+        ((ObjectNode) span.get("plan").get("subtitles").get(0)).put("style", "x");
+        rejectedBy(span, 5);
+
+        ObjectNode media = twoSegments().subtitleAtMedia(0, 101, 0, 101, 1).json();
+        ((ObjectNode) media.get("plan").get("subtitles").get(0).get("start")).put("style", "x");
+        rejectedBy(media, 5);
+
+        ObjectNode gap = twoSegments().subtitleInGap(0, 101, 0, 101, 1).json();
+        ((ObjectNode) gap.get("plan").get("subtitles").get(0).get("end")).put("style", "x");
+        rejectedBy(gap, 5);
+    }
+
+    /**
+     * 조각 항목도 fail-closed 다 — 역할마다 정해진 칸 밖은 거절한다. 거둔 갈래 칸 · 거둔 판 표시가 항목 쪽에 실려 조용히
+     * 무시되지 않게 한다(설계 5.2). 매체는 규칙 2, 확보 · 준비는 규칙 3.
+     */
+    @Test
+    void 조각_항목에_역할_밖_칸이_오면_거절한다() {
+        ObjectNode fill = twoSegments().json();
+        ((ObjectNode) fill.get("sourceKeys").get(1)).put("fill", "freeze");
+        rejectedBy(fill, 2);
+
+        ObjectNode timing = twoSegments().json();
+        ((ObjectNode) timing.get("sourceKeys").get(0)).put("timingVersion", 2);
+        rejectedBy(timing, 2);
+
+        ObjectNode segmentOwner = twoSegments().json();
+        ((ObjectNode) segmentOwner.get("sourceKeys").get(1)).put("ownerSeq", 101);
+        rejectedBy(segmentOwner, 2);
+
+        ObjectNode captureOwner = twoSegments().capture(103, false, true).json();
+        ((ObjectNode) captureOwner.get("sourceKeys").get(2)).put("ownerSeq", 102);
+        rejectedBy(captureOwner, 3);
+
+        ObjectNode captureUnknown = twoSegments().capture(103, false, true).json();
+        ((ObjectNode) captureUnknown.get("sourceKeys").get(2)).put("gaps", 1);
+        rejectedBy(captureUnknown, 3);
+
+        ObjectNode primeFlag = PlanOrder.of(jobId).prime(100, 101).segment(101, false, false).in(101, 0).out(101, 9)
+                .json();
+        ((ObjectNode) primeFlag.get("sourceKeys").get(0)).put("isDiscontinuity", false);
+        rejectedBy(primeFlag, 3);
+
+        ObjectNode primeUnknown = PlanOrder.of(jobId).prime(100, 101).segment(101, false, false).in(101, 0)
+                .out(101, 9).json();
+        ((ObjectNode) primeUnknown.get("sourceKeys").get(0)).put("sourceStartAtMsX", 1);
+        rejectedBy(primeUnknown, 3);
     }
 
     @Test
@@ -347,6 +409,82 @@ class RenderPlanCheckTest {
         }
     }
 
+    // ── 값 범위(ms · µs · seq) ─────────────────────────────────────────
+
+    /** ms 칸 구조 상한 — µs 로 바꾸고 1초 여유를 더해도 long 에 담기는 가장 큰 ms. */
+    private static final long MAX_MS = (Long.MAX_VALUE - PlanCheck.OFFSET_SLACK_US) / 1000;
+
+    /** 곱셈이 감겨 상한이 작은 양수가 되면 통과했다(cx 재현 — {@code Long.MIN_VALUE × 1000 = 0}). */
+    @Test
+    void 규칙4_조각_길이가_음수이거나_구조_상한_밖이면_어느_역할이든_거절한다() {
+        for (long bad : new long[] {-1, Long.MIN_VALUE, MAX_MS + 1, Long.MAX_VALUE}) {
+            rejectedBy(withDuration(threeSegments().json(), 0, bad), 4);
+            rejectedBy(withDuration(threeSegments().json(), 1, bad), 4);
+            rejectedBy(withDuration(PlanOrder.of(jobId).prime(100, 101).segment(101, false, false)
+                    .in(101, 0).out(101, 9).json(), 0, bad), 4);
+            rejectedBy(withDuration(twoSegments().capture(103, false, true).json(), 2, bad), 4);
+        }
+        ObjectNode wrapped = withDuration(twoSegments().in(101, 500_000).json(), 0, Long.MIN_VALUE);
+        rejectedBy(wrapped, 4);
+    }
+
+    @Test
+    void 규칙4_조각_길이는_0부터_구조_상한까지_받는다() {
+        assertThat(parser.parse(MAPPER.writeValueAsString(withDuration(threeSegments().json(), 1, 0)))
+                .sources().get(1).durationMs()).isZero();
+        assertThat(parser.parse(MAPPER.writeValueAsString(withDuration(threeSegments().json(), 1, MAX_MS)))
+                .sources().get(1).durationMs()).isEqualTo(MAX_MS);
+        ObjectNode longest = withDuration(PlanOrder.of(jobId).segment(101, false, false).in(101, 0)
+                .out(101, MAX_MS * 1000 + PlanCheck.OFFSET_SLACK_US).json(), 0, MAX_MS);
+        assertThat(parser.parse(MAPPER.writeValueAsString(longest)).plan().out().offsetUs())
+                .isEqualTo(MAX_MS * 1000 + PlanCheck.OFFSET_SLACK_US);
+    }
+
+    /** 자막 매체 끝점도 시작 · 끝과 같은 범위다 — 그 끝점이 가리키는 조각의 길이 + 1초. */
+    @Test
+    void 규칙5_매체_끝점_오프셋이_그_조각_밖이면_거절한다() {
+        long limit = PlanOrder.DURATION_MS * 1000 + PlanCheck.OFFSET_SLACK_US;
+        rejectedBy(twoSegments().subtitleAtMedia(0, 101, -1, 101, 1).json(), 5);
+        rejectedBy(twoSegments().subtitleAtMedia(0, 101, 0, 102, limit + 1).json(), 5);
+        rejectedBy(twoSegments().subtitleAtMedia(0, 101, Long.MIN_VALUE, 102, 0).json(), 5);
+        rejectedBy(twoSegments().subtitleAtMedia(0, 101, 0, 102, Long.MAX_VALUE).json(), 5);
+
+        ObjectNode shortSecond = withDuration(twoSegments().in(101, 0).out(102, 0)
+                .subtitleAtMedia(0, 101, 0, 102, 2_000_001).json(), 1, 1000);
+        rejectedBy(shortSecond, 5);
+
+        assertThat(parser.parse(twoSegments().subtitleAtMedia(0, 101, 0, 102, limit).body()).plan().subtitles())
+                .hasSize(1);
+    }
+
+    @Test
+    void 규칙5_틈_끝점의_거리가_음수이거나_구조_상한_밖이면_거절한다() {
+        rejectedBy(twoSegments().subtitleInGap(0, 101, -1, 101, 1).json(), 5);
+        rejectedBy(twoSegments().subtitleInGap(0, 101, 0, 101, Long.MIN_VALUE).json(), 5);
+        rejectedBy(twoSegments().subtitleInGap(0, 101, 0, 101, MAX_MS + 1).json(), 5);
+
+        assertThat(parser.parse(twoSegments().subtitleInGap(0, 101, 0, 101, MAX_MS).body()).plan().subtitles())
+                .hasSize(1);
+    }
+
+    /** 장부 seq 는 0 부터다. 「in.seq 앞 회차 seq」 의 정확성은 clip 몫이지만 음수는 장부에 있을 수 없다. */
+    @Test
+    void 규칙5_틈_끝점의_앞_조각_seq_가_음수면_거절한다() {
+        rejectedBy(twoSegments().subtitleInGap(0, -1, 0, 101, 1).json(), 5);
+        rejectedBy(twoSegments().subtitleInGap(0, Long.MIN_VALUE, 0, 101, 1).json(), 5);
+
+        assertThat(parser.parse(twoSegments().subtitleInGap(0, 0, 0, 101, 1).body()).plan().subtitles()
+                .getFirst().start()).isEqualTo(new SubtitlePoint.InGap(0, 0));
+    }
+
+    @Test
+    void 규칙6_예상_길이가_구조_상한을_넘으면_거절한다() {
+        rejectedBy(twoSegments().lengthMs(MAX_MS + 1).json(), 6);
+        rejectedBy(twoSegments().lengthMs(Long.MAX_VALUE).json(), 6);
+
+        assertThat(parser.parse(twoSegments().lengthMs(MAX_MS).body()).plan().lengthMs()).isEqualTo(MAX_MS);
+    }
+
     @Test
     void 거절하면_규칙_번호를_로그에_남긴다(CapturedOutput output) {
         assertThatThrownBy(() -> parser.parse(twoSegments().lengthMs(0).body()))
@@ -442,6 +580,17 @@ class RenderPlanCheckTest {
     private PlanOrder twoSegments() {
         return PlanOrder.of(jobId).segment(101, false, false).segment(102, false, true)
                 .in(101, 1_000_000).out(102, 2_000_000);
+    }
+
+    private PlanOrder threeSegments() {
+        return PlanOrder.of(jobId).segment(101, false, false).segment(102, false, true).segment(103, false, true)
+                .in(101, 1_000_000).out(103, 2_000_000);
+    }
+
+    /** {@code sourceKeys[at].durationMs} 를 바꾼 봉투. */
+    private static ObjectNode withDuration(ObjectNode envelope, int at, long durationMs) {
+        ((ObjectNode) envelope.get("sourceKeys").get(at)).put("durationMs", durationMs);
+        return envelope;
     }
 
     private void rejectedBy(ObjectNode envelope, int rule) {

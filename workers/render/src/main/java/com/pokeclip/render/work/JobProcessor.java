@@ -71,15 +71,28 @@ public class JobProcessor implements MessageHandler {
             log.error("render.envelope_unreadable reason={}", e.getMessage());
             return Disposition.DELETE;
         } catch (EnvelopeParser.Rejected e) {
-            log.warn("render.preflight_rejected jobId={} code={} reason={}", e.jobId(), e.failure().code(),
-                    e.getMessage());
-            return afterTerminal(e.jobId(), () -> reporter.terminalFailed(e.jobId(), null, e.failure().code(),
-                    e.getMessage(), false));
+            return rejected(e);
         }
         try {
             return run(job);
         } catch (ReportUnavailable e) {
             log.warn("render.report_unavailable jobId={} err={}", job.jobId(), e.getMessage());
+            return Disposition.LEAVE;
+        }
+    }
+
+    /**
+     * preflight 실패를 무토큰으로 종결 보고한다. 거절 문장에는 입력 글자가 섞일 수 있어 로그에도 다듬은 문장을 싣는다.
+     * clip이 끝내 답을 안 하면 다른 보고와 같이 메시지를 둔다 — 다시 받으면 같은 거절을 다시 보고한다.
+     */
+    private Disposition rejected(EnvelopeParser.Rejected e) {
+        log.warn("render.preflight_rejected jobId={} code={} reason={}", e.jobId(), e.failure().code(),
+                ClipReporter.safeMessage(e.getMessage()));
+        try {
+            return afterTerminal(e.jobId(), () -> reporter.terminalFailed(e.jobId(), null, e.failure().code(),
+                    e.getMessage(), false));
+        } catch (ReportUnavailable u) {
+            log.warn("render.report_unavailable jobId={} err={}", e.jobId(), u.getMessage());
             return Disposition.LEAVE;
         }
     }

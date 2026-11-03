@@ -12,7 +12,10 @@ import com.pokeclip.render.support.PlanOrder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigInteger;
@@ -36,6 +39,7 @@ import static org.mockito.Mockito.when;
 /**
  * 계약1 4절 「워커 거동」 표를 한 줄씩 잰다. 렌더·S3는 가짜, clip 보고 문은 실제 HTTP 가짜다.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class JobProcessorTest {
 
     @TempDir
@@ -149,6 +153,38 @@ class JobProcessorTest {
         assertThat(failed.body().has("executionToken")).isFalse();
         assertThat(failed.body().path("error").path("code").asString()).isEqualTo("ENVELOPE_VALIDATION");
         verify(renderer, never()).render(any(), any(), any(), any());
+    }
+
+    /** 거절 보고도 다른 보고처럼 clip 이 끝내 답을 안 하면 메시지를 그대로 둔다(큐 루프 오류로 새지 않는다). */
+    @Test
+    void 거절_보고를_clip이_끝내_못_받으면_메시지를_둔다() {
+        clip.answer("TERMINAL_FAILED", 503, "{}").answer("TERMINAL_FAILED", 502, "{}")
+                .answer("TERMINAL_FAILED", 500, "{}");
+        ObjectNode envelope = Fixtures.envelope(jobId, Fixtures.recipe("s1"));
+        ((ObjectNode) envelope.get("recipe")).put("title", "x");
+
+        assertThat(processor.process(Fixtures.MAPPER.writeValueAsString(envelope))).isEqualTo(Disposition.LEAVE);
+        assertThat(clip.types()).containsExactly("TERMINAL_FAILED", "TERMINAL_FAILED", "TERMINAL_FAILED");
+    }
+
+    /**
+     * 거절 문장에 입력 글자가 섞여 와도(레시피 파서가 값을 되울린다) 로그 한 줄을 위조하지 못하고, 보고 문장은
+     * clips.error_message 칸 폭(512자) 안이다.
+     */
+    @Test
+    void 거절_문장은_제어_문자를_빼고_512자_안으로_보고하고_남긴다(CapturedOutput output) {
+        String evil = "X\nrender.forged jobId=0\r " + "가".repeat(600);
+        ObjectNode envelope = Fixtures.envelope(jobId, Fixtures.recipe("s1"));
+        ((ObjectNode) envelope.get("recipe").get("subtitles")).put("mode", evil);
+
+        assertThat(processor.process(Fixtures.MAPPER.writeValueAsString(envelope))).isEqualTo(Disposition.DELETE);
+
+        String message = clip.last("TERMINAL_FAILED").body().path("error").path("message").asString();
+        assertThat(message).contains("render.forged").doesNotContain("\n").doesNotContain("\r")
+                .doesNotContain(" ");
+        assertThat(message.length()).isEqualTo(512);
+        assertThat(output.getOut()).contains("render.preflight_rejected jobId=" + jobId)
+                .doesNotContain("\nrender.forged").doesNotContain(" ");
     }
 
     @Test
