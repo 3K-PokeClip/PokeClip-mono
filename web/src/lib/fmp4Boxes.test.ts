@@ -268,9 +268,11 @@ describe('readTrackStart: 조각에서 그 트랙 첫 traf 의 tfdt 와 첫 표�
 
   it('tfdt v1 이 안전 정수(2^53 − 1)를 넘으면 판독 실패로 null 이다', () => {
     const safe = videoFragment(1, tfdt(1, 2n ** 53n - 1n), trun(0, 0, [{}]));
+    const exact = videoFragment(1, tfdt(1, 2n ** 53n), trun(0, 0, [{}]));
     const unsafe = videoFragment(1, tfdt(1, 2n ** 53n + 1n), trun(0, 0, [{}]));
 
     expect(readTrackStart(safe, 1)?.baseDecodeTime).toBe(Number.MAX_SAFE_INTEGER);
+    expect(readTrackStart(exact, 1)).toBeNull();
     expect(readTrackStart(unsafe, 1)).toBeNull();
   });
 
@@ -286,8 +288,12 @@ describe('readTrackStart: 조각에서 그 트랙 첫 traf 의 tfdt 와 첫 표�
     expect(readTrackStart(bytes, 1)?.firstCtoTicks).toBe(-1500);
   });
 
-  it('cto 앞의 칸(0x001 · 0x004 · 0x100 · 0x200 · 0x400)을 건너뛰고 첫 표본 것만 읽는다', () => {
-    const run = trun(1, 0xf05, [
+  // 0x004 first_sample_flags 와 0x400 sample_flags 는 함께 켜지 않는다(ISOBMFF 8.8.8)
+  it.each([
+    { name: '0x001 · 0x004 · 0x100 · 0x200', flags: 0xb05 },
+    { name: '0x001 · 0x100 · 0x200 · 0x400', flags: 0xf01 },
+  ])('cto 앞의 칸($name)을 건너뛰고 첫 표본 것만 읽는다', ({ flags }) => {
+    const run = trun(1, flags, [
       { duration: 3000, size: 900, flags: 0x10000, cto: 6000 },
       { duration: 3000, size: 400, flags: 0x10000, cto: -3000 },
     ]);
@@ -296,6 +302,18 @@ describe('readTrackStart: 조각에서 그 트랙 첫 traf 의 tfdt 와 첫 표�
       baseDecodeTime: 42,
       firstCtoTicks: 6000,
     });
+  });
+
+  it('표본이 없는 trun 은 건너뛰고 표본이 있는 첫 trun 의 cto 를 읽는다', () => {
+    const empty = trun(1, 0x800, []);
+    const bytes = concat(
+      moof(traf(tfhd(1), tfdt(0, 0n), empty, trun(1, 0x800, [{ cto: -1500 }]))),
+      box('mdat'),
+    );
+    const allEmpty = concat(moof(traf(tfhd(1), tfdt(0, 0n), empty, empty)), box('mdat'));
+
+    expect(readTrackStart(bytes, 1)?.firstCtoTicks).toBe(-1500);
+    expect(readTrackStart(allEmpty, 1)?.firstCtoTicks).toBe(0);
   });
 
   it('그 트랙의 첫 traf 를 고른다: 다른 트랙 traf 가 앞에 있어도', () => {
@@ -370,6 +388,21 @@ describe('readTrackSpans: 트랙마다 첫 tfdt 와 표본 길이 합을 읽는�
       { trackId: 1, handler: 'vide', timescale: 90000, startTicks: 100, durationTicks: 12000 },
       { trackId: 2, handler: 'soun', timescale: 48000, startTicks: 50, durationTicks: 3904 },
     ]);
+  });
+
+  // 0x01 base_data_offset(8) · 0x02 sample_description_index(4) 칸 값은 기본 길이 960 과 다르게 둔다
+  it.each([
+    { name: '0x01', flags: 0x09, before: [u64(7n)] },
+    { name: '0x02', flags: 0x0a, before: [u32(1)] },
+    { name: '0x01 · 0x02', flags: 0x0b, before: [u64(7n), u32(1)] },
+  ])('tfhd 기본 길이는 앞 칸($name)만큼 밀린 자리에서 읽는다', ({ flags, before }) => {
+    const header = fullBox('tfhd', 0, DEFAULT_BASE_IS_MOOF | flags, u32(1), ...before, u32(960));
+    const bytes = concat(
+      init(trak(1, 'soun', 48000)),
+      moof(traf(header, tfdt(0, 0n), trun(0, 0, [{}, {}]))),
+    );
+
+    expect(readTrackSpans(bytes)[0]?.durationTicks).toBe(1920);
   });
 
   it('조각에 없는 트랙은 빠진다', () => {
@@ -502,5 +535,89 @@ describe('상자 끝: 짧은 trun 머리는 판독 실패다', () => {
     );
 
     expect(readTrackSpans(bytes)).toEqual([]);
+  });
+});
+
+/** trun 표본 수가 상자 안 표본 표보다 많다(뒤 mdat 바이트가 남은 표본 자리에 온다) */
+const SHORT_SAMPLE_TABLES = [
+  { name: '0x100 길이 표', trun: fullBox('trun', 0, 0x100, u32(3), u32(10)) },
+  { name: '0x200 크기 표(길이는 기본값)', trun: fullBox('trun', 0, 0x200, u32(3), u32(900)) },
+];
+
+describe('상자 끝: 표본 표가 상자를 넘는 trun 은 판독 실패다', () => {
+  it.each(SHORT_SAMPLE_TABLES)('readTrackSpans — $name 이 짧으면 빈 목록', ({ trun: run }) => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000)),
+      moof(traf(tfhd(1, 3000), tfdt(0, 0n), run)),
+      box('mdat', u32(5), u32(6)),
+    );
+
+    expect(readTrackSpans(bytes)).toEqual([]);
+  });
+});
+
+/** tfdt 값 칸이 상자 끝을 넘는다(그 자리에 뒤 trun 의 머리가 온다) */
+const SHORT_TFDTS = [
+  { name: 'v0 값 칸 없음', tfdt: fullBox('tfdt', 0, 0) },
+  { name: 'v1 값 칸 4바이트뿐', tfdt: fullBox('tfdt', 1, 0, u32(0)) },
+];
+
+describe('상자 끝: 값 칸이 짧은 tfdt 는 판독 실패다', () => {
+  it.each(SHORT_TFDTS)('readTrackStart — $name 이면 null', ({ tfdt: decodeTime }) => {
+    expect(readTrackStart(videoFragment(1, decodeTime, trun(0, 0, [{}])), 1)).toBeNull();
+  });
+
+  it.each(SHORT_TFDTS)('readTrackSpans — $name 이면 빈 목록', ({ tfdt: decodeTime }) => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000)),
+      moof(traf(tfhd(1, 3000), decodeTime, trun(0, 0, [{}]))),
+    );
+
+    expect(readTrackSpans(bytes)).toEqual([]);
+  });
+});
+
+// --- 모르는 버전: 0 · 1 밖의 버전은 칸 자리를 모르므로 v0 처럼 읽지 않는다 ---
+
+/** tkhd 또는 mdhd 만 버전 2 인 영상 trak(칸 배치는 v0 와 같다) */
+const VERSION_2_TRAKS = [
+  {
+    name: 'tkhd',
+    trak: box(
+      'trak',
+      fullBox('tkhd', 2, 3, u32(0), u32(0), u32(1), u32(0)),
+      box('mdia', MDHD, HDLR),
+    ),
+  },
+  {
+    name: 'mdhd',
+    trak: box(
+      'trak',
+      TKHD,
+      box('mdia', fullBox('mdhd', 2, 0, u32(0), u32(0), u32(90000), u32(0)), HDLR),
+    ),
+  },
+];
+
+describe('모르는 버전: tkhd · mdhd · tfdt 버전 2 는 판독 실패다', () => {
+  it.each(VERSION_2_TRAKS)('readVideoTrack — $name 버전 2 면 null', ({ trak }) => {
+    expect(readVideoTrack(init(trak))).toBeNull();
+  });
+
+  it.each(VERSION_2_TRAKS)('readTrackSpans — $name 버전 2 면 빈 목록', ({ trak }) => {
+    const bytes = concat(
+      init(trak),
+      moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0x100, [{ duration: 10 }]))),
+    );
+
+    expect(readTrackSpans(bytes)).toEqual([]);
+  });
+
+  it('tfdt 버전 2 면 readTrackStart 는 null · readTrackSpans 는 빈 목록', () => {
+    const version2 = fullBox('tfdt', 2, 0, u64(42n));
+    const fragment = moof(traf(tfhd(1), version2, trun(0, 0x100, [{ duration: 10 }])));
+
+    expect(readTrackStart(concat(fragment, box('mdat')), 1)).toBeNull();
+    expect(readTrackSpans(concat(init(trak(1, 'vide', 90000)), fragment))).toEqual([]);
   });
 });

@@ -79,11 +79,14 @@ export function readVideoTrack(init: Uint8Array): VideoTrackInfo | null {
 export interface FragmentTrackStart {
   /** tfdt 의 baseMediaDecodeTime(트랙 timescale 눈금) */
   baseDecodeTime: number;
-  /** 첫 표본의 composition time offset(눈금). trun 에 칸이 없으면 0 */
+  /** 첫 표본(표본이 있는 첫 trun)의 composition time offset(눈금). 칸이나 표본이 없으면 0 */
   firstCtoTicks: number;
 }
 
-/** 조각(moof)에서 그 트랙의 첫 traf — tfdt(v0/v1) 와 첫 표본 cto(trun 0x800, v0 무부호 · v1 부호) */
+/**
+ * 조각(moof)에서 그 트랙의 첫 traf — tfdt(v0/v1) 와 첫 표본 cto(표본이 있는 첫 trun 의 0x800,
+ * v0 무부호 · v1 부호)
+ */
 export function readTrackStart(fragment: Uint8Array, trackId: number): FragmentTrackStart | null {
   const view = viewOf(fragment);
   try {
@@ -92,8 +95,7 @@ export function readTrackStart(fragment: Uint8Array, trackId: number): FragmentT
     const tfdt = child(view, traf, 'tfdt');
     const baseDecodeTime = tfdt ? decodeTime(view, tfdt) : null;
     if (baseDecodeTime === null) return null;
-    const trun = child(view, traf, 'trun');
-    const firstCtoTicks = trun ? firstCto(view, trun) : 0;
+    const firstCtoTicks = firstCto(view, traf);
     return firstCtoTicks === null ? null : { baseDecodeTime, firstCtoTicks };
   } catch {
     return null;
@@ -170,7 +172,7 @@ interface TrackHeader {
 
 /**
  * trak → tkhd 의 track_ID · hdlr 의 handler_type · mdhd 의 timescale. 상자가 빠졌으면 null,
- * 상자가 그 칸까지 닿지 않으면 RangeError(판독기가 null · 빈 목록으로 바꾼다)
+ * 상자가 그 칸까지 닿지 않거나 tkhd · mdhd 버전이 0 · 1 이 아니면 RangeError(판독기가 null · 빈 목록으로 바꾼다)
  */
 function trackHeader(view: DataView, trak: Box): TrackHeader | null {
   const tkhd = child(view, trak, 'tkhd');
@@ -180,9 +182,14 @@ function trackHeader(view: DataView, trak: Box): TrackHeader | null {
   if (!within(tkhd, tkhd.start + 4) || !within(mdhd, mdhd.start + 4)) {
     throw new RangeError('tkhd · mdhd');
   }
+  const tkhdVersion = view.getUint8(tkhd.start);
+  const mdhdVersion = view.getUint8(mdhd.start);
+  if (tkhdVersion > 1 || mdhdVersion > 1) {
+    throw new RangeError('tkhd · mdhd version');
+  }
   // tkhd · mdhd 버전 1 은 생성 · 수정 시각이 64비트라 뒤 칸이 8바이트 밀린다
-  const trackIdAt = tkhd.start + (view.getUint8(tkhd.start) === 1 ? 20 : 12);
-  const timescaleAt = mdhd.start + (view.getUint8(mdhd.start) === 1 ? 20 : 12);
+  const trackIdAt = tkhd.start + (tkhdVersion === 1 ? 20 : 12);
+  const timescaleAt = mdhd.start + (mdhdVersion === 1 ? 20 : 12);
   if (
     !within(tkhd, trackIdAt + 4) ||
     !within(mdhd, timescaleAt + 4) ||
@@ -262,10 +269,14 @@ function fragmentHeader(view: DataView, traf: Box): FragmentHeader {
   return { trackId, defaultDuration: view.getUint32(at) };
 }
 
-/** tfdt → baseMediaDecodeTime. v1 은 64비트라 안전 정수(2^53 − 1)를 넘으면 판독 실패로 null */
+/**
+ * tfdt → baseMediaDecodeTime. v1 은 64비트라 안전 정수(2^53 − 1)를 넘으면 판독 실패로 null.
+ * 버전이 0 · 1 이 아니면 칸 자리를 모르므로 null
+ */
 function decodeTime(view: DataView, tfdt: Box): number | null {
   if (!within(tfdt, tfdt.start + 4)) return null;
   const version = view.getUint8(tfdt.start);
+  if (version > 1) return null;
   if (!within(tfdt, tfdt.start + (version === 1 ? 12 : 8))) return null;
   if (version !== 1) return view.getUint32(tfdt.start + 4);
   const value = view.getBigUint64(tfdt.start + 4);
@@ -297,14 +308,22 @@ function trunLayout(view: DataView, trun: Box): TrunLayout {
   return { version: word >>> 24, flags, count: view.getUint32(trun.start + 4), samplesAt };
 }
 
-/** 첫 표본 cto: 0x100 길이 · 0x200 크기 · 0x400 표지 칸을 건너뛴 0x800. 칸이 없거나 표본이 없으면 0 */
-function firstCto(view: DataView, trun: Box): number | null {
-  const { version, flags, count, samplesAt } = trunLayout(view, trun);
-  if (!(flags & 0x800) || count === 0) return 0;
-  const at =
-    samplesAt + (flags & 0x100 ? 4 : 0) + (flags & 0x200 ? 4 : 0) + (flags & 0x400 ? 4 : 0);
-  if (!within(trun, at + 4)) return null;
-  return version === 1 ? view.getInt32(at) : view.getUint32(at);
+/**
+ * traf 의 첫 표본 cto: 표본이 없는 trun 은 건너뛰고, 표본이 있는 첫 trun 에서
+ * 0x100 길이 · 0x200 크기 · 0x400 표지 칸을 건너뛴 0x800. 칸이 없거나 표본이 하나도 없으면 0
+ */
+function firstCto(view: DataView, traf: Box): number | null {
+  for (const trun of boxes(view, traf.start, traf.end)) {
+    if (trun.type !== 'trun') continue;
+    const { version, flags, count, samplesAt } = trunLayout(view, trun);
+    if (count === 0) continue;
+    if (!(flags & 0x800)) return 0;
+    const at =
+      samplesAt + (flags & 0x100 ? 4 : 0) + (flags & 0x200 ? 4 : 0) + (flags & 0x400 ? 4 : 0);
+    if (!within(trun, at + 4)) return null;
+    return version === 1 ? view.getInt32(at) : view.getUint32(at);
+  }
+  return 0;
 }
 
 /** traf 안 trun 전부의 표본 길이 합. 0x100 칸이 없는 trun 은 표본마다 fallback */
