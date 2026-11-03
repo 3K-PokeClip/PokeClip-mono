@@ -167,24 +167,38 @@ class JobProcessorTest {
         assertThat(clip.types()).containsExactly("TERMINAL_FAILED", "TERMINAL_FAILED", "TERMINAL_FAILED");
     }
 
-    /**
-     * 거절 문장에 입력 글자가 섞여 와도(레시피 파서가 값을 되울린다) 로그 한 줄을 위조하지 못하고, 보고 문장은
-     * clips.error_message 칸 폭(512자) 안이다.
-     */
+    /** 레시피 값에 줄 나눔 · 위조 줄을 넣어도 거절 문장은 고정 글자다 — 보고에도 로그에도 입력이 실리지 않는다. */
     @Test
-    void 거절_문장은_제어_문자를_빼고_512자_안으로_보고하고_남긴다(CapturedOutput output) {
-        String evil = "X\nrender.forged jobId=0\r " + "가".repeat(600);
+    void 레시피_거절_문장은_입력_값을_보고에도_로그에도_싣지_않는다(CapturedOutput output) {
+        String evil = "X\nrender.forged jobId=0\r\u2028" + "가".repeat(600);
         ObjectNode envelope = Fixtures.envelope(jobId, Fixtures.recipe("s1"));
         ((ObjectNode) envelope.get("recipe").get("subtitles")).put("mode", evil);
 
         assertThat(processor.process(Fixtures.MAPPER.writeValueAsString(envelope))).isEqualTo(Disposition.DELETE);
 
         String message = clip.last("TERMINAL_FAILED").body().path("error").path("message").asString();
-        assertThat(message).contains("render.forged").doesNotContain("\n").doesNotContain("\r")
-                .doesNotContain(" ");
-        assertThat(message.length()).isEqualTo(512);
+        assertThat(message).isEqualTo("subtitles.mode은 지원하지 않는다");
         assertThat(output.getOut()).contains("render.preflight_rejected jobId=" + jobId)
-                .doesNotContain("\nrender.forged").doesNotContain(" ");
+                .doesNotContain("render.forged").doesNotContain("가가");
+    }
+
+    /**
+     * 실패 문장에 제어 · 줄 나눔(U+2028) · 서식(U+202E) 문자와 짝 없는 서로게이트가 섞여 와도 빈칸으로 바꿔 보고하고,
+     * 길이는 clip 이 자르는 UTF-16 단위 512 안이다(보조 평면 글자 쌍을 가르지 않는다).
+     */
+    @Test
+    void 실패_문장은_다듬어서_UTF16_512_단위_안으로_보고한다() {
+        String smile = "\uD83D\uDE00";
+        String evil = "X\nrender.forged\r\u2028\u202E\uD800" + smile.repeat(600);
+        when(renderer.render(any(), any(), any(), any()))
+                .thenThrow(RenderFailure.permanent(ErrorCode.VALIDATION, evil));
+
+        assertThat(processor.process(body())).isEqualTo(Disposition.DELETE);
+
+        String message = clip.last("TERMINAL_FAILED").body().path("error").path("message").asString();
+        String head = "X render.forged    ";
+        assertThat(message).isEqualTo(head + smile.repeat((512 - head.length()) / 2));
+        assertThat(message.length()).isLessThanOrEqualTo(512);
     }
 
     @Test

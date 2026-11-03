@@ -33,7 +33,7 @@ public class ClipReporter {
 
     private static final Logger log = LoggerFactory.getLogger(ClipReporter.class);
 
-    /** clip {@code clips.error_message} 칸 폭(VARCHAR(512)). 보고 문장은 이 안에서 자른다. */
+    /** clip {@code clips.error_message} 칸 폭(VARCHAR(512)). 보고 문장은 UTF-16 단위로 이 안에서 자른다. */
     static final int MAX_ERROR_MESSAGE = 512;
 
     private final RestClient client;
@@ -167,8 +167,13 @@ public class ClipReporter {
     }
 
     /**
-     * 보고 · 로그에 싣는 실패 문장. 거절 문장에는 입력에서 온 글자가 섞일 수 있다(레시피 값 되울림 등). 제어 문자 · 줄 나눔
-     * 문자는 빈칸으로 바꿔 로그 한 줄을 위조하지 못하게 하고, {@value #MAX_ERROR_MESSAGE}자(코드 포인트)에서 자른다.
+     * 보고 · 로그에 싣는 실패 문장. 거절 문장은 입력 값을 싣지 않지만, 여기서 한 번 더 다듬는다(앞으로 생길 문장 · 예외 문장).
+     * 제어 문자 · 줄 나눔 문자는 로그 한 줄 위조를, 서식 문자(Cf — 방향 덮어쓰기 · 폭 0 · BOM)는 화면 위장을 막으려고 빈칸으로
+     * 바꾼다. 짝 없는 서로게이트도 빈칸이다 — 그대로 두면 UTF-8 로 나가며 {@code ?} 로 조용히 바뀐다.
+     *
+     * <p>길이는 UTF-16 단위 {@value #MAX_ERROR_MESSAGE} 안이다. clip 은 이 단위로 자르고({@code Clip.failed}) DB 칸은
+     * 글자로 세므로(VARCHAR(512)) UTF-16 쪽이 더 엄하다. 보조 평면 글자(두 단위)가 경계에 걸리면 통째로 뺀다 — 쌍을 가르면
+     * clip 이 짝 없는 서로게이트를 받는다.
      *
      * @return null 이면 null
      */
@@ -177,14 +182,22 @@ public class ClipReporter {
             return null;
         }
         StringBuilder safe = new StringBuilder();
-        message.codePoints().limit(MAX_ERROR_MESSAGE).forEach(c -> safe.appendCodePoint(lineSafe(c) ? c : ' '));
+        for (int i = 0; i < message.length(); ) {
+            int c = message.codePointAt(i);
+            i += Character.charCount(c);
+            int kept = lineSafe(c) ? c : ' ';
+            if (safe.length() + Character.charCount(kept) > MAX_ERROR_MESSAGE) {
+                break;
+            }
+            safe.appendCodePoint(kept);
+        }
         return safe.toString();
     }
 
     private static boolean lineSafe(int codePoint) {
         int type = Character.getType(codePoint);
         return !Character.isISOControl(codePoint) && type != Character.LINE_SEPARATOR
-                && type != Character.PARAGRAPH_SEPARATOR;
+                && type != Character.PARAGRAPH_SEPARATOR && type != Character.FORMAT && type != Character.SURROGATE;
     }
 
     /** SUCCEEDED의 산출물 한 줄(계약1 4절 result). */
