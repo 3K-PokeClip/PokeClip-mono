@@ -53,7 +53,10 @@ function vodReady(firstPdtMs: number, headPdtMs: number): RewindStatusResult {
 }
 
 const ENDED = status({ mode: 'ended' });
-const roundPoll = (result: RewindStatusResult): SessionEvent => ({ type: 'round-poll', result });
+
+function roundPoll(result: RewindStatusResult): SessionEvent {
+  return { type: 'round-poll', result };
+}
 
 function loaded(url: string, firstMs: number, lastEndMs: number): SessionEvent {
   return {
@@ -87,7 +90,9 @@ function feed(
   return { state, effects };
 }
 
-const kinds = (effects: SessionEffect[]) => effects.map((e) => e.kind);
+function kinds(effects: SessionEffect[]): Array<SessionEffect['kind']> {
+  return effects.map((e) => e.kind);
+}
 
 beforeEach(resetEventKit);
 
@@ -111,10 +116,22 @@ function liveReady(): RewindStatusResult {
   return status({ ready: true, mode: 'live', url: A1, firstPdtMs: T0, headPdtMs: NOW });
 }
 
-/** 녹화로 정한 끝남 대기 — 종국 셋(20분 시한 · 회차별 ended · 재접속 대기 뒤 회차별 404) */
-const byDeadline = () => feed(endedByEndlist(), [TICK], AFTER_DEADLINE).state;
-const byEnded = () => feed(endedByEndlist(), [roundPoll(ENDED)]).state;
-const byNone = () => feed(endedByEndlist(), [roundPoll(NONE)], R + RESUME_WAIT_MS).state;
+// 녹화로 정한 끝남 대기 — 종국 셋(20분 시한 · 회차별 ended · 재접속 대기 뒤 회차별 404)
+
+/** 20분 시한으로 녹화로 정한 끝남 대기 */
+function byDeadline(): PlaybackSessionState {
+  return feed(endedByEndlist(), [TICK], AFTER_DEADLINE).state;
+}
+
+/** 회차별 ended 로 녹화로 정한 끝남 대기 */
+function byEnded(): PlaybackSessionState {
+  return feed(endedByEndlist(), [roundPoll(ENDED)]).state;
+}
+
+/** 재접속 대기(360초) 뒤 회차별 404 로 녹화로 정한 끝남 대기 */
+function byNone(): PlaybackSessionState {
+  return feed(endedByEndlist(), [roundPoll(NONE)], R + RESUME_WAIT_MS).state;
+}
 
 /** 녹화로 정한 끝남 대기에서 404 를 받아 마지막 확인에 든 세션 */
 function finalOf(recorded: PlaybackSessionState, now = AFTER_DEADLINE): PlaybackSessionState {

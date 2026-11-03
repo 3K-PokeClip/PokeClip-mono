@@ -203,8 +203,9 @@ function roundFinal(session: PlaybackSessionState, phase: EndingPhase): Transiti
 /**
  * 되감기 조각 404(POK-528 계획 3-2) — 이 목록을 끝까지 재생할 수 없으니 지금 프레임에서 멈춘다.
  * 녹화로 정하기 전이면 막고, 녹화로 정한 뒤면 끝 도달을 기다릴 수 없으니 회차별 조회를 마지막으로
- * 한 번 한다(W6 — 그 물음은 pollTargets 가 회차별 경로를 켜는 렌더에서 곧바로 나간다). 이미
- * 막혔거나 마지막 확인 중이면 그대로다
+ * 한 번 한다(W6). 그 물음은 보통 pollTargets 가 회차별 경로를 켜는 렌더에서 곧바로 나간다. 다만
+ * 경로가 꺼졌다 켜지는 일이 한 렌더 묶음에 겹쳐 켜짐이 렌더에 드러나지 않으면, 이미 걸려 있던
+ * 다음 정기 물음(REWIND_POLL_MS 주기)이 그 물음이 된다. 이미 막혔거나 마지막 확인 중이면 그대로다
  */
 function onEndingSegmentGone(session: PlaybackSessionState, phase: EndingPhase): Transition {
   if (phase.blocked || phase.finalCheck) return stateOnly(session);

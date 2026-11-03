@@ -72,7 +72,7 @@ function loaded(url: string, firstMs: number, lastEndMs: number): SessionEvent {
 
 /** 지금 되감기 재생기(지금 세대)의 /dvr 미디어 조각 404 */
 function gone(state: PlaybackSessionState, generation = state.source.generation): SessionEvent {
-  return { type: 'dvr-segment-gone', generation } as SessionEvent;
+  return { type: 'dvr-segment-gone', generation };
 }
 
 /** 사건을 차례로 감싸개로 먹이고 마지막 상태와 모든 효과를 돌려준다 */
@@ -274,6 +274,81 @@ describe('vod-offered 의 404 → 같은 자리 다시보기(W4)', () => {
     expect(moved.state.source).toMatchObject({ kind: 'vod', startAtMs: null });
     expect(moved.effects).toEqual([]);
   });
+});
+
+describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계획 8-1)', () => {
+  // 끝에 닿은 세션(atEnd:true)은 「다시보기 보기」 단추로는 처음부터 연다(openVod). 404 로 옮길
+  // 때는 atEnd 갈래를 쓰지 않고 lastAtMs 를 범위에 가둔 같은 자리로 간다(정본 4-10 (나)-2).
+  // 끝에 닿기 전 차림에서는 두 길이 같은 값을 내 서로를 가르지 못하므로, 이 묶음은 끝에 닿은
+  // 차림만 쓴다. 다시보기 끝을 E 뒤로 둬 가둔 자리가 E 그대로가 되게 한다.
+  const vodPastTail = vodReady(T0, NOW + MIN);
+
+  /** 끝에 닿은 끝남 대기에서 회차별 vod 를 받아 든 다시보기 제안(atEnd:true · lastAtMs = E) */
+  function offeredAtTail(): PlaybackSessionState {
+    return feed(endedAtTail(false), [{ type: 'round-poll', result: vodPastTail }]).state;
+  }
+
+  it('W4: 끝에 닿은 제안의 404 는 같은 자리(가둔 E)로 · 같은 상태의 「다시보기 보기」 는 처음부터', () => {
+    const s = offeredAtTail();
+    expect(s.phase).toMatchObject({ kind: 'vod-offered', atEnd: true });
+    expect(s.lastAtMs).toBe(E);
+    const moved = feed(s, [gone(s)]);
+    expect(moved.state.phase).toEqual({ kind: 'vod' });
+    expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: E });
+    expect(moved.effects).toEqual([]);
+    const pressed = feed(s, [{ type: 'button', which: 'vod' }]);
+    expect(pressed.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: null });
+  });
+
+  it('W4: 끝에 닿은 제안의 404 도 끝 여유 뒤 자리는 끝 여유 앞으로 가두고 알린다', () => {
+    const s = feed(endedAtTail(false), [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
+    expect(s.phase).toMatchObject({ kind: 'vod-offered', atEnd: true });
+    const moved = feed(s, [gone(s)]);
+    expect(moved.state.source).toMatchObject({ kind: 'vod', startAtMs: NOW - MARGIN_MS });
+    expect(moved.effects).toEqual([{ kind: 'notice', text: SESSION_NOTICES.vodStart }]);
+  });
+
+  /** 막힌 뒤 끝에 닿은 세션 — ENDLIST 뒤 404 로 막히고 멈춘 프레임이 끝 E 였다 */
+  function blockedThenTail(): PlaybackSessionState {
+    const s = blockedOf(endedByEndlist(E - 1_000));
+    return feed(s, [pos(E), END_REACHED]).state;
+  }
+
+  const blockedAtTail: Array<[string, () => PlaybackSessionState]> = [
+    ['막힌 뒤 끝 도달', blockedThenTail],
+    ['끝 도달 뒤 막힘', () => blockedOf(endedAtTail(false))],
+  ];
+
+  for (const [name, make] of blockedAtTail) {
+    it(`W5 · ${name}: 막힘은 남고 회차별 vod 는 처음부터가 아니라 같은 자리(E)로`, () => {
+      const s = make();
+      expect(s.phase).toEqual({
+        kind: 'ending-wait',
+        origin: 'rewind',
+        atEnd: true,
+        recordOnEnd: false,
+        blocked: true,
+      });
+      expect(s.closed).toBeNull();
+      expect(s.lastAtMs).toBe(E);
+      const moved = feed(s, [{ type: 'round-poll', result: vodPastTail }]);
+      expect(moved.state.phase).toEqual({ kind: 'vod' });
+      expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: E });
+      expect(moved.effects).toEqual([]);
+    });
+
+    it(`W5 · ${name}: 겹침 불통과 · 재접속 대기 안 404 는 그대로 · ended · 대기 뒤 404 · 20분은 녹화`, () => {
+      const s = make();
+      const far = vodReady(NOW + 10 * MIN, NOW + 20 * MIN);
+      expectStillBlocked(feed(s, [{ type: 'round-poll', result: far }]), s);
+      expectStillBlocked(feed(s, [{ type: 'round-poll', result: NONE }], R + MIN), s);
+      const ended = feed(s, [{ type: 'round-poll', result: status({ mode: 'ended' }) }]);
+      expect(ended.state.closed).toBe('recorded');
+      const none = feed(s, [{ type: 'round-poll', result: NONE }], R + RESUME_WAIT_MS);
+      expect(none.state.closed).toBe('recorded');
+      expect(feed(s, [TICK], R + ENDING_WAIT_MS).state.closed).toBe('recorded');
+    });
+  }
 });
 
 describe('막힌 세션의 출구 — W5 셋(계획 3-4)', () => {
@@ -478,7 +553,7 @@ describe('T1 · U1 회귀 — 막힘은 W5 밖에서 풀리지 않는다(cx H1)'
       [pos(E, { playing: true }), R + 200],
       [settleProbe(s, E - 2_000), R + 400],
       [doorPoll(X_UNKNOWN, R + 600), R + 600],
-      [{ type: 'dvr-segment-gone', generation: s.source.generation } as SessionEvent, R + 800],
+      [gone(s), R + 800],
       [doorPoll(X_A, R + 1_000), R + 1_000],
       [streamPoll(liveReady(A2, E - 2_000, E + MIN), X_A, R + 1_200), R + 1_200],
       [streamPoll(UNAVAILABLE, X_A, R + 1_400), R + 1_400],
@@ -489,7 +564,9 @@ describe('T1 · U1 회귀 — 막힘은 W5 밖에서 풀리지 않는다(cx H1)'
       expectStillBlocked(next, s);
       state = next.state;
     }
-    expect(feed(state, [TICK], s.endingSince! + ENDING_WAIT_MS).state.closed).toBe('recorded');
+    const since = s.endingSince;
+    if (since === null) throw new Error('끝남 대기의 20분 기준 시각이 없다');
+    expect(feed(state, [TICK], since + ENDING_WAIT_MS).state.closed).toBe('recorded');
   });
 });
 
