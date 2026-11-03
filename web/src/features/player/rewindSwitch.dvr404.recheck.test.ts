@@ -119,8 +119,14 @@ function rewindAt(atMs: number | null, p = P20): PlaybackSessionState {
 /** 404 를 받아 제어면을 다시 읽는 중인 되감기 */
 const recheckOf = (s: PlaybackSessionState) => feed(s, [gone(s)]).state;
 
-/** (가) 로 옮겨 세운 되감기의 기대 국면 */
-const moved = (floorMs: number) => ({ kind: 'rewind', pendingNext: null, movedFloorMs: floorMs });
+/**
+ * (가) 로 옮겨 세운 되감기의 기대 국면. noticed = 이 (가) 사슬에서 하한 알림을 이미
+ * 냈다(기본 참 — 대부분의 시험은 첫 옮김에서 알린다)
+ */
+function moved(floorMs: number, noticed = true) {
+  const phase = { kind: 'rewind', pendingNext: null, movedFloorMs: floorMs };
+  return noticed ? { ...phase, floorNoticed: true } : phase;
+}
 
 describe('되감기 조각 404 → 제어면을 다시 읽는다(계획 3-2)', () => {
   it('처음 404 는 recheck 를 세우고 곧바로 묻는다 — 덮개 없음 · 스트림 폴링만', () => {
@@ -162,6 +168,7 @@ describe('되감기 조각 404 → 제어면을 다시 읽는다(계획 3-2)', (
 
   it('recheck 중 LIVE 는 출구다 · 명부 ended 는 지금처럼 다시 묻기', () => {
     const s = recheckOf(rewindAt(P20));
+    expect(s.phase).toMatchObject({ recheck: true });
     const live = feed(s, [{ type: 'live-button', x: X_A, attempt: 0 }]);
     expect(live.state.phase).toEqual({ kind: 'live' });
     expect(live.state.source.generation).toBe(s.source.generation + 1);
@@ -219,7 +226,7 @@ describe('(가) — 같은 회차 · readyLive 면 그 목록 하한으로 옮�
     expect(done.effects).toEqual([DROP, OLDEST]);
   });
 
-  it('다른 회차 url 이어도 X 가 이 회차면 그 url 로 옮긴다', () => {
+  it('다른 url 이어도 X 가 이 회차면 그 url 로 옮긴다', () => {
     const s = recheckOf(rewindAt(P20));
     const done = feed(s, [poll(liveReady(P20 + MIN, A2))]);
     expect(done.state.source).toMatchObject({ kind: 'rewind', url: A2 });
@@ -254,6 +261,7 @@ describe('되풀이 속도 · 알림 한 번(계획 3-3 · P2 · P25)', () => {
     const f1 = P20 + MIN;
     const a = feed(recheckOf(rewindAt(P20)), [poll(liveReady(f1))]).state;
     const r = recheckOf(a);
+    expect(r.phase).toMatchObject({ recheck: true });
     const earlier = feed(r, [poll(liveReady(f1 - 4_000))]);
     expect(earlier.state.phase).toEqual(r.phase);
     expect(earlier.effects).toEqual([]);
@@ -264,6 +272,9 @@ describe('되풀이 속도 · 알림 한 번(계획 3-3 · P2 · P25)', () => {
     const a = feed(recheckOf(rewindAt(P20)), [poll(liveReady(f1))]).state;
     const chained = feed(recheckOf(a), [poll(liveReady(f1 + 4_000))]);
     expect(chained.effects).toEqual([DROP]);
+    // 세 번째도 알리지 않는다 — 알렸다는 표가 사슬 내내 이어진다
+    const third = feed(recheckOf(chained.state), [poll(liveReady(f1 + 8_000))]);
+    expect(third.effects).toEqual([DROP]);
     const view = { lowerMs: NOW, endMs: NOW + 28_000 };
     const reopened = feed(chained.state, [
       { type: 'live-button', x: X_A, attempt: 0 },
@@ -302,6 +313,57 @@ describe('되풀이 속도 · 알림 한 번(계획 3-3 · P2 · P25)', () => {
     expect(held.state.phase).toEqual({ kind: 'rewind', pendingNext: range });
     expect(held.state.source.generation).toBe(a.source.generation);
     expect(feed(held.state, [gone(held.state)]).effects).toEqual([{ kind: 'refresh' }]);
+  });
+});
+
+describe('알림 한 번 — 이번 사슬에서 이미 알렸는가로 판정한다(kty 「고쳐」 · P16 · P25)', () => {
+  it('(i) 첫 (가) 가 그 자리에서 세워 알리지 않았으면 · 다음 (가) 가 앞으로 밀 때 알린다', () => {
+    // 첫 (가): lastAtMs P20 ≥ S1 = P20 − 48초 → 그 자리 · 알림 0
+    const f1 = P20 - MIN;
+    const first = feed(recheckOf(rewindAt(P20)), [poll(liveReady(f1))]);
+    expect(first.state.source.startAtMs).toBe(P20);
+    expect(first.effects).toEqual([DROP]);
+    expect(first.state.phase).toEqual(moved(f1, false));
+    // 다음 (가): S2 = P20 + 12초 > lastAtMs → 앞으로 밀림 · 이 사슬의 첫 알림
+    const second = feed(recheckOf(first.state), [poll(liveReady(P20))]);
+    expect(second.state.source.startAtMs).toBe(P20 + MARGIN_MS);
+    expect(second.effects).toEqual([DROP, OLDEST]);
+    expect(second.state.phase).toEqual(moved(P20));
+    // 같은 사슬의 되풀이는 다시 알리지 않는다
+    const third = feed(recheckOf(second.state), [poll(liveReady(P20 + 4_000))]);
+    expect(third.effects).toEqual([DROP]);
+  });
+
+  it('(ii) 옮긴 새 재생기가 그 자리를 재생하면 사슬이 끝난다 — 오래 재생 뒤 404 의 (가) 는 다시 알린다', () => {
+    const f1 = P20 + MIN;
+    const s1 = f1 + MARGIN_MS;
+    const first = feed(recheckOf(rewindAt(P20)), [poll(liveReady(f1))]);
+    expect(first.effects).toEqual([DROP, OLDEST]);
+    // 새 재생기의 위치(지금 시대) — 첫 위치에서 사슬이 끝나고 · 같은 url 로 수 분 재생한다
+    startRun();
+    const played = feed(first.state, [loaded(A1, f1, NOW + MIN), pos(s1)]);
+    expect(played.state.phase).toEqual(moved(f1, false));
+    const later = feed(played.state, [pos(s1 + 5 * MIN)]).state;
+    // 10분 멈춤 → 404 → 하한이 수 분 앞으로 → (가) 가 앞으로 민다 · 새 사슬이라 알린다
+    const r = recheckOf(later);
+    expect(r.phase).toMatchObject({ recheck: true, movedFloorMs: f1 });
+    const f2 = s1 + 15 * MIN;
+    const second = feed(r, [poll(liveReady(f2))]);
+    expect(second.state.source.startAtMs).toBe(f2 + MARGIN_MS);
+    expect(second.effects).toEqual([DROP, OLDEST]);
+  });
+
+  it('목록 로드 · 옛 시대 위치는 사슬을 끝내지 않는다 — P25 되풀이(목록을 받고 첫 조각 404)는 알림 한 번', () => {
+    const f1 = P20 + MIN;
+    const before = recheckOf(rewindAt(P20));
+    const oldEpoch = before.positionEpoch;
+    const first = feed(before, [poll(liveReady(f1))]);
+    expect(first.effects).toEqual([DROP, OLDEST]);
+    // 새 재생기가 목록을 받는다 · 옛 재생기의 늦은 위치(옛 시대)가 온다 — 둘 다 끝이 아니다
+    const listed = feed(first.state, [loaded(A1, f1, NOW + MIN), pos(P20, { epoch: oldEpoch })]);
+    expect(listed.state.phase).toEqual(moved(f1));
+    const second = feed(recheckOf(listed.state), [poll(liveReady(f1 + 4_000))]);
+    expect(second.effects).toEqual([DROP]);
   });
 });
 
@@ -421,6 +483,7 @@ describe('넘김 갈래 — recheck 는 넘김 · 되돌림이 새 국면을 세
       poll(status({ ready: true, mode: 'live', url: A1, firstPdtMs: T0, headPdtMs: NOW })),
     ]);
     const r = recheckOf(doored.state);
+    expect(r.phase).toMatchObject({ recheck: true });
     const probed = feed(r, [pos(E - 2_000)]);
     expect(kinds(probed.effects)).toContain('probe-live');
     return probed.state;

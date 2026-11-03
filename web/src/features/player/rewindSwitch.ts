@@ -70,7 +70,8 @@ export type SessionPhase =
   /**
    * pendingNext = 지금 위치를 덮지 않는 새 url 과 그 범위(최신 폴링 값). 끝 도달 때 E 를 덮으면 그 E 에서 잇는다 ·
    * recheck = /dvr 조각 404 를 받아 제어면을 다시 읽는 중(재생기는 받기를 멈췄다) · movedFloorMs = 이 국면은 404 뒤
-   * 제어면 목록의 첫 조각(그 값)으로 옮겨 세운 것이다(POK-528 (가) — 되풀이 속도 상한과 알림 한 번의 재료). 둘 다 없으면
+   * 제어면 목록의 첫 조각(그 값)으로 옮겨 세운 것이다(POK-528 (가) — 되풀이 속도 상한의 재료) · floorNoticed = 이번
+   * (가) 사슬에서 「하한으로 옮겼다」 알림을 이미 냈다(알림 한 번의 재료 — 사슬의 끝은 endNoticeChain). 셋 다 없으면
    * 거짓 · 없음이고, 국면을 새로 세우면 버려진다
    */
   | {
@@ -78,6 +79,7 @@ export type SessionPhase =
       pendingNext: RewindRange | null;
       recheck?: boolean;
       movedFloorMs?: number;
+      floorNoticed?: boolean;
     }
   /**
    * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 · recordOnEnd = 회차 종국 또는 20분 시한이 섰다 ·
@@ -518,8 +520,9 @@ function onRecheckPoll(
  * (가) — 제어면 목록 하한으로 새 되감기 재생기를 세운다. 새 재생기는 첫 목록에서 첫 조각
  * F + 맨 앞 조각 셋 길이 아래를 잘라 시작하므로, 그 하한 S 를 지금 목록의 여유로
  * 추정해(답에 조각 길이가 없다) 지금 자리가 S 이상이면 그 자리에서, 아니면 S 에서 세운다.
- * 옮겼다는 알림은 (가) 가 잇달아 일어나는 사슬의 첫 옮김에서만 낸다. 멈춤 자리 기록은
- * 옛 목록 축이라 버리게 한다
+ * 옮겼다는 알림은 앞으로 민 옮김 가운데 이번 사슬에서 아직 알리지 않았을 때만 낸다 —
+ * 사슬의 첫 옮김이 그 자리에서 세웠으면(알림 0) 다음에 앞으로 미는 옮김이 알린다. 멈춤
+ * 자리 기록은 옛 목록 축이라 버리게 한다
  */
 function moveToFloor(
   session: PlaybackSessionState,
@@ -531,14 +534,15 @@ function moveToFloor(
   const startFloorMs = floorMs + session.edgeMarginMs;
   const atMs = session.lastAtMs;
   const start = atMs !== null && atMs >= startFloorMs ? atMs : startFloorMs;
+  const noticed = phase.floorNoticed === true;
+  const notify = start !== atMs && !noticed;
   const effects: SessionEffect[] = [{ kind: 'drop-pause-mark' }];
-  if (start !== atMs && phase.movedFloorMs === undefined) {
-    effects.push({ kind: 'notice', text: SESSION_NOTICES.oldest });
-  }
+  if (notify) effects.push({ kind: 'notice', text: SESSION_NOTICES.oldest });
+  const chainNoticed = noticed || notify ? { floorNoticed: true } : {};
   return {
     state: {
       ...session,
-      phase: { kind: 'rewind', pendingNext: null, movedFloorMs: floorMs },
+      phase: { kind: 'rewind', pendingNext: null, movedFloorMs: floorMs, ...chainNoticed },
       source: replace(session, 'rewind', live.url, start),
       entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
       rewindOpen: true,
@@ -548,6 +552,21 @@ function moveToFloor(
     },
     effects,
   };
+}
+
+/**
+ * (가) 사슬의 끝 — 알렸다는 표(floorNoticed)를 버린다. 지금 시대의 위치 사건은 옮겨 세운
+ * 새 재생기가 그 자리에 화면을 붙였다는 뜻이다(재생기는 재생 위치에 영상이 있을 때만
+ * 위치를 낸다 — useHlsPlayback 의 paint · paintSession 의 HAVE_CURRENT_DATA 가드). 그
+ * 뒤의 404 는 같은 까닭의 되풀이가 아니라 새 사건이라 다시 알린다(오래 재생 · 멈춤 뒤
+ * 404). 목록 로드는 끝이 아니다 — 하한이 S 보다 늘 앞서는 되풀이(P25)에서 새 재생기는
+ * 목록을 받고 첫 조각에서 404 를 받아, 목록 로드로 끝내면 10초마다 알린다. 옛 시대의
+ * 위치는 위치 시대 대조가 먼저 버린다. 되풀이 속도 상한(movedFloorMs)은 건드리지 않는다
+ */
+function endNoticeChain(phase: SessionPhase): SessionPhase {
+  if (phase.kind !== 'rewind' || phase.floorNoticed !== true) return phase;
+  const { floorNoticed: _ended, ...rest } = phase;
+  return rest;
 }
 
 type OfferedPhase = Extract<SessionPhase, { kind: 'vod-offered' }>;
@@ -650,6 +669,7 @@ function onAnyPhase(
       if (event.epoch !== session.positionEpoch) return stateOnly(session);
       const moved = {
         ...session,
+        phase: endNoticeChain(session.phase),
         lastAtMs: event.atMs,
         playing: event.playing,
         positionGeneration: session.source.generation,
