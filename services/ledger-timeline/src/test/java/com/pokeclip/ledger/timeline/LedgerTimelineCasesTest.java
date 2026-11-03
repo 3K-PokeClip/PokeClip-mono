@@ -148,6 +148,56 @@ class LedgerTimelineCasesTest {
                 .hasMessageContaining("length");
     }
 
+    /** 위 시험은 length 에서 먼저 던진다 — audioJoin 만 빈 표도 따로 막혀야 식 대조가 빈 초록이 되지 않는다. */
+    @Test
+    void audioJoin_갈래만_비어도_표를_거절한다() {
+        String json = "{\"version\": 2, \"cases\": [" + fCase("\"wall\"", row(1, null)) + ", "
+                + "{\"id\": \"l\", \"kind\": \"length\", \"inMs\": 0, \"outMs\": 1, \"joinedCutPartMs\": [], "
+                + "\"expectLengthMs\": 1}]}";
+
+        assertThatThrownBy(() -> LedgerTimelineCases.parse(json))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("audioJoin");
+    }
+
+    /** id 는 세 읽는 쪽이 실패 사례를 가리키는 이름이다 — 겹치면 어느 사례가 깨졌는지 갈리지 않는다. */
+    @Test
+    void 같은_id가_두_번_나오면_표를_거절한다() {
+        String json = table(fCase("\"wall\"", row(1, null)) + ", " + fCase("\"wall\"", row(1, null)));
+
+        assertThatThrownBy(() -> LedgerTimelineCases.parse(json))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("id");
+    }
+
+    @Test
+    void id가_비면_표를_거절한다() {
+        String json = table(fCase("\"wall\"", row(1, null)).replace("\"id\": \"f\"", "\"id\": \"\""));
+
+        assertThatThrownBy(() -> LedgerTimelineCases.parse(json))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("id");
+    }
+
+    /** 설계 r7 3.5 — rows[] 는 timingVersion 칸을 싣는다. 빠지면 판 NULL 로 읽을지 판 2 로 읽을지 갈린다. */
+    @Test
+    void 행에_timingVersion_칸이_없으면_표를_거절한다() {
+        String json = table(fCase("\"wall\"", row(1, null).replace(", \"timingVersion\": null", "")));
+
+        assertThatThrownBy(() -> LedgerTimelineCases.parse(json))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("timingVersion");
+    }
+
+    @Test
+    void timingVersion이_2와_null_밖이면_표를_거절한다() {
+        String json = table(fCase("\"wall\"", row(1, "3")));
+
+        assertThatThrownBy(() -> LedgerTimelineCases.parse(json))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("timingVersion");
+    }
+
     @Test
     void 축마다_원점_표지_규칙이_설계_3_2_표와_같다() {
         assertThat(Axis.WALL.originOf(2)).isEqualTo("FILE_HEAD");
