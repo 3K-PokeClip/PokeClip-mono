@@ -4,12 +4,13 @@
 
 ## 무엇이 들어가나
 
-**서버 4개**가 여기서 실행된다. `web-support/` · `db-support/`는 서버가 아니다.
+**서버 4개**가 여기서 실행된다. `web-support/` · `db-support/` · `ledger-timeline/`은 서버가 아니다.
 
 | 모듈 | 포트 | 역할 |
 |---|---|---|
 | `web-support/` | — | 여러 서버가 같이 쓰는 **웹 인프라**(CORS·상관 ID). 서버가 아니다 |
 | `db-support/` | — | 서버 넷이 같이 쓰는 **DB 로그인 장치**(비밀번호 · RDS IAM · `db_connected`, POK-407). 서버가 아니다 |
+| `ledger-timeline/` | — | 장부 시각 ↔ 매체 자리 변환 F · 예상 결과 길이(순수 함수 · 의존 없음, POK-196). 공유 시험 표 `src/test/resources/ledger-timeline-cases.json`은 렌더 일꾼 · 웹도 읽는 계약이다. 서버가 아니다 |
 | `clip/` | 8081 | 방송 세션 · **점프카드 저장·SSE 전송** · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
 | `auth/` | 8082 | 로그인 · 스트림 키 · 채널 연동 · 유튜브 토큰 |
 | `chat-collector/` | 8083 | 치지직·SOOP 채팅 실시간 수집 · 시차 보정 · S3 아카이브 |
@@ -81,6 +82,8 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 
 그때 지킬 경계는 전과 같다. **계약만 둔다** — 공유 엔티티·SQS 메시지 형식.
 로직·웹 계층은 두지 않는다. 여기가 두꺼워지면 서버들이 한 덩어리가 되고 나눈 의미가 사라진다.
+`ledger-timeline/`은 이 원칙의 정해 둔 예외다 — 장부 시각 변환(순수 함수)만 두고 운영 의존이 없어 서버들을 한 덩어리로
+묶지 않는다(POK-196 · 설계 r7 3.2).
 
 ## 반대로 채팅 둘은 왜 나눴나
 
@@ -129,7 +132,7 @@ set -a && . ../.env && set +a
 ```
 
 **PR에서는 `services-ci`가 돈다**(`.github/workflows/services-ci.yml`). `services/`를 고친 PR마다
-서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도, chat-detector 잡은 `db-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
+서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도, clip 잡은 `ledger-timeline`도, chat-detector 잡은 `db-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
 건너뛰는 것이 정상이다. 필수 체크는 아니다.
 
 **`.env`를 싣는 줄을 빼먹으면 DB 접속이 실패한다.** `docker compose`는 `.env`를 자동으로
