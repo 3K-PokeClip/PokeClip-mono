@@ -1500,7 +1500,8 @@ fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
     JOIN) 보므로 `session_id` 가 NULL 인 새 꼴 행은 `matched` 에도
     `mismatched` 에도 들지 않습니다. 새 꼴 행 전수는 Q1 이 셉니다(시각 하한이
     `<since>` 라 Q3 의 `<on>` 보다 넓음).
-*   **Q1 · Q3 은 `stream_segments` 를 전부 훑습니다.** 시작 시각만으로 거르는
+*   **Q1 · Q3 은 `stream_segments` 를 전부 훑습니다**(Q2 · Q2-B 의 ② · ③ 축도
+    시작 시각 조건만 써서 같은 꼴일 수 있습니다 — 상한도 같습니다). 시작 시각만으로 거르는
     인덱스가 없고(`stream_segments_wall_idx` 는 `stream_id` 가 앞 열), 마스터
     계정에는 `statement_timeout` 이 없습니다(60초 상한은 `media_indexer` 역할
     몫 — `10_roles.sql`). 질의의 상한은 페이로드의 `executionTimeout` 300초뿐

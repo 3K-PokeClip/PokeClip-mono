@@ -736,6 +736,15 @@ root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)�
         「Aborting on container exit」 0 · MainPID · NRestarts 불변 · 부착
         서비스 ID 불변 · 응답기 ID 교체)와 양성 대조 사례 23(부착 nginx 재생성
         → Aborting · ID 바뀜)이고, CI 잡 media-host-systemd 가 3회 돌린다.
+    *   **예외 — 사이드카만 다시 만들기:** 새 꼴 쓰기 스위치를 바꿀 때 사이드카
+        컨테이너만 재생성하는 것은 `sidecar-round-keys.sh on|off` 로만 한다
+        (교체 런북 `runbooks/media-swap.md` 「POK-525 교체」 · 롤백 — 실행 직전
+        승인 · 방송 없는 창 · 다른 운영 스크립트와 순차). 스크립트는 `docker
+        compose up -d --no-deps --force-recreate sidecar` 를 부르고, mediamtx ·
+        nginx 와 유닛 주 프로세스는 그대로다. 상설 시험은 `unit_restart_test.sh`
+        사례 24(스위치 on 으로 사이드카만 재생성해도 유닛 · 부착 서비스 불변)다.
+        교체 런북 롤백의 `restore-failed` 4번째 걸음(사이드카 단독 정지)은 이
+        예외에도 들지 않는 kty 별도 승인 예외다.
 1.  **SSM 에서 `docker inspect` · `docker exec … env` ·
     `/run/pokeclip-media` 내용 출력을 금지한다.** `docker exec` 는
     `paths-count.sh` · `paths-list.sh` 가 사이드카 컨테이너에 쓰는 고정 `sh -c`
@@ -747,9 +756,13 @@ root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)�
         런북」)만 쓴다. 응답기 이미지에는 셸이 없어 이 둘 말고는 exec 할 것이
         없다.
 1.  **SSM 명령 출력에는 판정 줄(`LOOPBACK …` · `PATHS …` · `SECRET COUNT …` ·
-    `INGEST AUTH …` · cut 출력 한 줄)과 force 때의 `paths-list.sh` 방송
-    목록(공개 식별자)만 남긴다.** 결과를 파일로 저장하는 것은 종료 0 일
-    때만이다.
+    `INGEST AUTH …` · `SIDECAR ROUND KEYS …` · 교체 런북 상자 판정 스크립트의
+    `SIDECAR_RUNNING` · `LAYOUT …` · `ROUND_FROZEN` · `SIDECAR LEGACY …` ·
+    `Q1`(인자로 받은 값을 되읽는 줄) · `BEFORE ON …` · `LAYOUT CHECK FAIL …` ·
+    `ENABLED` · `MEDIA DISABLED …` · `MEDIA STOPPED …` · `round-keys-ps.sh` 의
+    프로세스 줄 · `ROUND KEYS PROC 0` · cut 출력 한 줄)과 force 때의
+    `paths-list.sh` 방송 목록(공개 식별자)만 남긴다.** 결과를 파일로 저장하는
+    것은 종료 0 일 때만이다.
 
 ## 응답기 런북
 
@@ -773,7 +786,8 @@ not-running` 이다. 어느 쪽이든 아무것도 하지 않는다. 모든 명�
 *   **mediamtx · nginx 는 손으로 재생성하지 않는다.** 시작 스크립트가 붙은
     (부착) 서비스를 밖에서 다시 만들면, 엔진 25.0.16 실측(M15 c7)에서 주 `up`
     이 걸린 채 유닛이 active 로 남았다. MainPID 도 그대로라 systemd 가 회복시키지
-    않는다. 응답기 밖의 서비스는 위 운영 규칙 1 대로 유닛으로만 다시 띄운다.
+    않는다. 응답기 밖의 서비스는 위 운영 규칙 1 대로 유닛으로만 다시 띄운다(사이드카만
+    다시 만드는 것은 규칙 1 의 사이드카 예외 — `sidecar-round-keys.sh` 로만).
 
 ### 거부 목록 덧붙이기 · 긴급 절단
 
