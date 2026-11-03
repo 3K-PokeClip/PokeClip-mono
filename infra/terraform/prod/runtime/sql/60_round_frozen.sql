@@ -28,6 +28,9 @@
 --   round_frozen_function  함수가 stream_sessions_reject_round_change() 이고 search_path 가 pg_catalog, pg_temp 로
 --                          고정돼 있다
 --
+-- round_frozen_when 은 PG17 의 pg_get_triggerdef 출력 글자에 기댄다. PG 메이저 판을 올리면 60 을 다시 적용해 확인한다 —
+-- 출력이 바뀌어 정상 트리거를 거짓 거부하면 psql -1 이 롤백한다(fail-closed · 있던 트리거는 그대로 남는다).
+--
 -- 40_verify.sql 은 이 트리거를 단언하지 않는다(운영 SQL 1 뒤에도 돌기 때문이다). 롤백 짝은 트리거 결함(정당한 세션
 -- UPDATE 를 막음) 대응 전용이고 A 복귀 수단이 아니다:
 --   DROP TRIGGER IF EXISTS stream_sessions_round_frozen ON stream_sessions;

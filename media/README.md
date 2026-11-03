@@ -397,6 +397,13 @@ NULL 도 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바�
 *   **롤백 짝:** 트리거가 정당한 세션 UPDATE 를 막을 때만
     `DROP TRIGGER IF EXISTS stream_sessions_round_frozen ON stream_sessions;`
     를 쓴다. 옛 판(A)으로 돌아가는 수단이 아니다.
+*   **범위 밖 — 지우고 다시 넣기:** 트리거는 `UPDATE OF round_id` 만 막는다.
+    세션 행을 DELETE 한 뒤 다른 `round_id` 로 다시 INSERT 하는 길은 막지
+    않는다. 조각 · 계승이 참조하는 세션은 FK 가 DELETE 를 막고, 비시험 코드에
+    그렇게 다시 넣는 경로는 없다(만료 정리의 DELETE 는 다시 넣지 않는다).
+*   **PG 메이저 판 올림 체크리스트:** 60 을 다시 적용해 끝 단언이
+    `ROUND FROZEN OK` 를 내는지 확인한다. `round_frozen_when` 은
+    `pg_get_triggerdef` 출력 글자에 기대므로 판이 바뀌면 거짓 실패할 수 있다.
 
 **계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
 `broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
