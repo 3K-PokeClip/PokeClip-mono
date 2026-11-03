@@ -241,11 +241,13 @@ function fragmentIndexAt(fragments: readonly DatedFragment[], m: number): number
   return fragments.findLastIndex((frag) => frag.start <= m + SECONDS_EPSILON);
 }
 
-const toMs = (seconds: number) => Math.round(seconds * 1000);
+function toMs(seconds: number): number {
+  return Math.round(seconds * 1000);
+}
 
 /**
- * 반개 끝(locateEnd) — 플레이어에는 대응 함수가 없다(재생기는 점으로 옮겨 간다). 표의 (k, dur(k)) 와 (k + 1, 0) 은
- * 이어진 이웃이면 같은 재생 위치라, 표 자리를 재생 위치로 옮겨 mediaTimeAt 값과 견준다
+ * 반개 끝(locateEnd) — 플레이어에는 대응 함수가 없다(재생기는 점으로 옮겨 간다). 누적 배치라 표의 (k, dur(k)) 와
+ * (k + 1, 0) 은 이웃이 이어졌든 끊겼든 같은 재생 위치라, 표 자리를 재생 위치로 옮겨 mediaTimeAt 값과 견준다
  */
 function expectEndAt(c: PdtCase, videoStarts: readonly number[], at: number) {
   const expected = c.expect;
@@ -257,11 +259,19 @@ function expectEndAt(c: PdtCase, videoStarts: readonly number[], at: number) {
   expect(toMs(at)).toBe(toMs(videoStarts[i] ?? Number.NaN) + expected.offsetMs);
 }
 
-/** 시작 쪽(locate) — 재생 위치가 든 조각과 조각 안 거리가 표 자리와 같고, 거꾸로 그 자리의 PDT 는 그 행 PDT + 거리다 */
-function expectPlaceAt(c: PdtCase, fragments: readonly DatedFragment[], at: number) {
+/**
+ * 시작 쪽(locate) — 재생 위치가 든 조각과 조각 안 거리가 표 자리와 같고, 거꾸로 그 자리의 PDT 는 그 행 PDT + 거리다.
+ * 거리는 시험이 지은 참값 v_k(videoStarts)에서 센다 — 플레이어가 낸 조각 시작에서 세면 그 시작이 틀려도 상쇄된다
+ */
+function expectPlaceAt(
+  c: PdtCase,
+  fragments: readonly DatedFragment[],
+  videoStarts: readonly number[],
+  at: number,
+) {
   const j = fragmentIndexAt(fragments, at);
   const seq = c.rows[j]?.seq;
-  const offsetMs = toMs(at - (fragments[j]?.start ?? Number.NaN));
+  const offsetMs = toMs(at) - toMs(videoStarts[j] ?? Number.NaN);
   if (c.expect.place === 'media') {
     expect({ seq, offsetMs }).toEqual({ seq: c.expect.seq, offsetMs: c.expect.offsetMs });
     const rowStartMs = c.rows[j]?.startAtMs ?? Number.NaN;
@@ -353,7 +363,7 @@ describe('공유 시험 표의 F · pdt 사례 — 플레이어 환산(datedFrag
     if (c.op === 'locateEnd') {
       expectEndAt(c, videoStarts, at);
     } else {
-      expectPlaceAt(c, fragments, at);
+      expectPlaceAt(c, fragments, videoStarts, at);
     }
   });
 });
