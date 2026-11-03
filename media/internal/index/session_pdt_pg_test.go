@@ -137,9 +137,12 @@ func TestBaseRowSkipsRowsThatAreNotSettledInTheBaseSession(t *testing.T) {
 			segAt(stream, 2, wall, 4000), Seed{}, liveIngress()); err != nil {
 			t.Fatalf("Insert 실패: %v", err)
 		}
-		want := sessionBase.Add(4 * time.Second) // seq 0 에서 이어진다(seq 1 은 후보가 아니다)
+		// seq 0 에서 이어지고(seq 1 은 후보가 아니다 — 후보면 seq 1 벽시계 + 4초 = 34초) 그 사이 비귀속 행 길이 U(4초)만큼
+		// 더 간다(POK-196 PDT 판 NULL U · 계약 6-6-3 「비귀속 행 뒤 첫 귀속 행의 PDT 는 그 사이 비귀속 행 길이 합만큼 더
+		// 간다」).
+		want := sessionBase.Add(8 * time.Second)
 		if c := carrierOf(t, pool, stream, 2); c.PDT == nil || !c.PDT.Equal(want) {
-			t.Fatalf("playback_pdt = %v, want %v — NULL 행을 기저항으로 잡았다", c.PDT, want)
+			t.Fatalf("playback_pdt = %v, want %v(= seq 0 PDT + 길이 + U) — NULL 행을 기저항으로 잡았거나 U 를 뺐다", c.PDT, want)
 		}
 	})
 

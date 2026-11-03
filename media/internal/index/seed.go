@@ -102,4 +102,22 @@ type InsertCommit struct {
 	PlaybackS3Key string
 	// DurationMS 는 INSERT 때의 duration_ms 다. 꼬리 교정은 그 뒤 UpdateTail 이 따로 한다.
 	DurationMS int32
+	// StartPTSMS 는 이 행의 start_pts_ms 다 — 위치는 store 가 이 트랜잭션에서 정한다(Record.StartPTSMS 는 입력이 아니다).
+	// 인덱서 커서 · ③ 사슬은 이 값으로 전진한다(r6 259–262 승계 · 계획 0절 6).
+	StartPTSMS int64
+
+	// --- PDT 판 칸(설계 r7 3절 · 8절 신호 재료) — 이 트랜잭션이 판 정하기로 고른 값이다 ---
+
+	// TimingVersion 은 이 행의 timing_version 이다. nil 이면 판 NULL 이다.
+	TimingVersion *int16
+	// TimingBranch 는 판 2 행을 쓴 갈래다. 판 NULL 행이면 "" 다.
+	TimingBranch Branch
+	// DeltaMS 는 판 2 행의 견준 차(짐작 − 앞 끝)다. 판 NULL 행 · 견주지 않은 행이면 0 이다.
+	DeltaMS int64
+	// TimingRoundID 는 이 행의 timing_round_id(이어 계산 회차 — 설계 2.4)다. "" 면 회차 없음이다(신호
+	// segment_indexed.round_id 의 재료).
+	TimingRoundID string
+	// TimingGateRead 는 이 트랜잭션이 판을 고르려고 읽은 게이트 행이다. 새 회차 개시 · 회차 없는 비귀속 행만 게이트를
+	// 읽고, 그 밖(회차를 이어 가는 행)은 nil 이다(신호 timing_gate_read 의 재료 — 고른 판은 TimingVersion).
+	TimingGateRead *TimingGate
 }

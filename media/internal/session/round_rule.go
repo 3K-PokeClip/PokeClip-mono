@@ -104,6 +104,7 @@ func (r *Registry) openFromPrevious(in Input, prev previousSession) Decision {
 	case prev.roundID == "": // 3행 — 새 회차(계승은 위 판정 그대로)
 	case d.plan.inheritsSession != "", joinable(prev, in.StartWallUTC, r.opt.ReconnectWindow) && !prev.roundClosed: // 5 · 6행
 		d.plan.roundID = prev.roundID
+		d.RoundID = prev.roundID
 		if !prev.stopMarkedAt.IsZero() {
 			marked := prev.stopMarkedAt
 			d.plan.stopMarkedAt = &marked

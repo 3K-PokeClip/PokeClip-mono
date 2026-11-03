@@ -16,7 +16,13 @@ package index
 //	  setTxnLimitsSQL              Insert · EndLive 첫 문장             (표 없음 — set_config)
 //	  lockCutoffStreamSQL          Insert 주조 적격 갈래                 (표 없음 — advisory 잠금)
 //	  openedSessionSQL             Insert 개시 갈래                      sessions SELECT
-//	  basePDTSQL                   Insert 귀속 갈래(기저 세션 있음)      segments SELECT
+//	  basePDTSQL                   Insert 귀속 갈래(기저 세션 있음)      segments SELECT(기저 행 + 비귀속 길이 U)
+//	placement.go · timing_decide.go · timing_gate.go(POK-196 PDT c4a)
+//	  lastRowSQL                   Insert 전 갈래(위치 q)                segments SELECT
+//	  anchorSQL                    Insert 귀속 갈래 · q 에 PDT 없음       segments SELECT
+//	  lastAttributedSQL            Insert 비귀속 갈래(판 정하기 3항)      segments · sessions SELECT
+//	  lockTimingGateSharedSQL      Insert 새 회차 · 회차 없는 비귀속      (표 없음 — advisory 공유 잠금)
+//	  timingGateSQL                같은 자리 · ReadTimingGate             gate SELECT
 //	  insertSeedSQL                Insert                               segments INSERT · cutoffs INSERT(ON CONFLICT DO NOTHING)
 //	  cutoffExistsSQL              Insert 적격인데 미주조(진단)          cutoffs SELECT
 //	  updateTailSQL                UpdateTail                           segments UPDATE(+ SELECT)
@@ -126,7 +132,7 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 	if err != nil || !split.SessionOpened || split.EndingSessionID != first.SessionID {
 		t.Fatalf("TD 분할 Insert = (%+v, %v), want 새 회차 · 옛 회차 %s ending", split, err, first.SessionID)
 	}
-	if ok, err := store.UpdateTail(ctx, stream, 2, 7100, 2000); err != nil || !ok {
+	if ok, err := store.UpdateTail(ctx, stream, 2, 7100, 2000, nil); err != nil || !ok {
 		t.Fatalf("UpdateTail = (%v, %v), want (true, nil)", ok, err)
 	}
 	cur, err := store.LoadCursor(ctx, stream)
@@ -146,8 +152,14 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 		sessions[1].State != "ending" || *sessions[1].EndReason != "offline" {
 		t.Errorf("회차 = %+v, want [ending(td_exceeded) ending(offline)]", sessions)
 	}
+	// 현 live 가 없는 비귀속 조각 — 판 정하기 3항(마지막 귀속 행의 회차가 열려 있음 → 그 판 · 그 회차).
+	_, unattributed, err := store.Insert(ctx, segAt(stream, 3, base.Add(15*time.Second), 100), Seed{}, currentOnly())
+	if err != nil || unattributed.SessionID != "" || unattributed.TimingRoundID != first.SessionID {
+		t.Fatalf("비귀속 Insert = (%+v, %v), want 비귀속 · 회차 %s", unattributed, err, first.SessionID)
+	}
 	// 현 live 가 없는 조각 — 직전 회차 조회(session 패키지)가 그 회차 끝 조각의 끝 시각(길이 × interval)을 계산한다.
-	_, reopened, err := store.Insert(ctx, segAt(stream, 3, base.Add(15100*time.Millisecond), 4000), Seed{}, liveIngress())
+	// 바로 앞 행이 비귀속(PDT NULL)이라 위치 앵커를 한 줄 더 읽는다.
+	_, reopened, err := store.Insert(ctx, segAt(stream, 4, base.Add(15100*time.Millisecond), 4000), Seed{}, liveIngress())
 	if err != nil || !reopened.SessionOpened {
 		t.Fatalf("종료 뒤 Insert = (%+v, %v), want 새 회차 개시", reopened, err)
 	}
@@ -155,9 +167,53 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 		"loadCursorSQL": loadCursorSQL, "existingPathsSQL": existingPathsSQL, "setTxnLimitsSQL": setTxnLimitsSQL,
 		"lockCutoffStreamSQL": lockCutoffStreamSQL, "openedSessionSQL": openedSessionSQL, "basePDTSQL": basePDTSQL,
 		"insertSeedSQL": insertSeedSQL, "cutoffExistsSQL": cutoffExistsSQL, "updateTailSQL": updateTailSQL,
-		"endLiveSQL": endLiveSQL,
+		"endLiveSQL": endLiveSQL, "lastRowSQL": lastRowSQL, "anchorSQL": anchorSQL, "lastAttributedSQL": lastAttributedSQL,
+		"lockTimingGateSharedSQL": lockTimingGateSharedSQL, "timingGateSQL": timingGateSQL,
 	})
 	traps.RequireNotCalled(t)
+}
+
+// 판을 고르는 두 자리(새 회차 개시 · 회차 없는 비귀속 행)와 기동 검사 읽기(ReadTimingGate)가 media_indexer 권한으로
+// 돈다(POK-196 PDT c4a · 설계 9.3 권한). 음성 대조: 게이트 SELECT 를 거두면 새 회차 개시와 기동 검사 읽기가 42501 이다
+// (쓰기자 거부 트리거도 부른 쪽 권한으로 게이트를 읽으므로 w 없는 INSERT 는 어느 갈래든 42501 이다 — c1 몫).
+func TestMediaIndexerRoleReadsTimingGate(t *testing.T) {
+	admin := newTestPool(t)
+	ctx := context.Background()
+	stream, base := "role-gate-read", roleBase()
+
+	t.Run("권한 있음", func(t *testing.T) {
+		role := pgtest.NewMediaIndexerRole(t, admin)
+		t.Cleanup(func() { role.RequireNoneDenied(t) })
+		store := newSessionStore(role.Pool)
+		if _, res, err := store.Insert(ctx, segAt(stream, 0, base, 4000), Seed{}, currentOnly()); err != nil || res.TimingGateRead == nil {
+			t.Fatalf("회차 없는 비귀속 Insert = (%+v, %v), want 게이트를 읽음", res, err)
+		}
+		if _, res, err := store.Insert(ctx, segAt(stream, 1, base.Add(4*time.Second), 4000), Seed{}, liveIngress()); err != nil ||
+			!res.SessionOpened || res.TimingGateRead == nil {
+			t.Fatalf("새 회차 Insert = (%+v, %v), want 개시 · 게이트를 읽음", res, err)
+		}
+		if _, err := ReadTimingGate(ctx, role.Pool); err != nil {
+			t.Fatalf("ReadTimingGate 오류 = %v, want nil", err)
+		}
+		role.RequireSent(t, map[string]string{
+			"lockTimingGateSharedSQL": lockTimingGateSharedSQL, "timingGateSQL": timingGateSQL, "lastAttributedSQL": lastAttributedSQL,
+		})
+	})
+
+	t.Run("게이트 SELECT 회수", func(t *testing.T) {
+		role := pgtest.NewMediaIndexerRole(t, admin)
+		role.Revoke(t, "SELECT", "stream_timing_gate")
+		store := newSessionStore(role.Pool)
+		if _, err := EndLive(ctx, role.Pool, stream, testClose, noopEnqueue); err != nil {
+			t.Fatalf("EndLive 오류 = %v", err)
+		}
+		if _, _, err := store.Insert(ctx, segAt(stream, 2, base.Add(10*time.Minute), 4000), Seed{}, liveIngress()); !pgtest.IsInsufficientPrivilege(err) {
+			t.Errorf("새 회차 Insert 오류 = %v, want 42501", err)
+		}
+		if _, err := ReadTimingGate(ctx, role.Pool); !pgtest.IsInsufficientPrivilege(err) {
+			t.Errorf("ReadTimingGate 오류 = %v, want 42501", err)
+		}
+	})
 }
 
 // 업로드 장부 경로 — 축 셋의 대상 조회 · 잔량 집계와 CAS 여섯 갈래가 media_indexer 권한만으로 돌고 상태가

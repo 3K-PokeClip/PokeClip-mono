@@ -89,7 +89,7 @@ func (s *fakeStore) rowsOf(streamID string) []index.Record {
 	return out
 }
 
-func (s *fakeStore) UpdateTail(context.Context, string, int64, int32, int64) (bool, error) {
+func (s *fakeStore) UpdateTail(context.Context, string, int64, int32, int64, *int64) (bool, error) {
 	return true, nil
 }
 

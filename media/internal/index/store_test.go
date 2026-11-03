@@ -85,7 +85,7 @@ func TestUpdateTailSucceedsOnPendingTail(t *testing.T) {
 		t.Fatalf("Insert 실패: %v", err)
 	}
 
-	ok, err := store.UpdateTail(ctx, streamID, 0, 6000, 9999)
+	ok, err := store.UpdateTail(ctx, streamID, 0, 6000, 9999, nil)
 	if err != nil {
 		t.Fatalf("UpdateTail 실패: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestUpdateTailRejectedWhenNewerRowExists(t *testing.T) {
 		}
 	}
 
-	ok, err := store.UpdateTail(ctx, streamID, 0, 6000, 9999)
+	ok, err := store.UpdateTail(ctx, streamID, 0, 6000, 9999, nil)
 	if err != nil {
 		t.Fatalf("UpdateTail 실패: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestUpdateTailRejectedWhenUploaded(t *testing.T) {
 		t.Fatalf("업로드 상태 준비 실패: %v", err)
 	}
 
-	ok, err := store.UpdateTail(ctx, streamID, 0, 6000, 9999)
+	ok, err := store.UpdateTail(ctx, streamID, 0, 6000, 9999, nil)
 	if err != nil {
 		t.Fatalf("UpdateTail 실패: %v", err)
 	}
@@ -163,10 +163,16 @@ func TestLoadCursorCarriesTailFields(t *testing.T) {
 	store := NewPGStore(newTestPool(t), nil, nil)
 	streamID := uniqueStreamID(t)
 
+	// 앞 행을 하나 두어 꼬리의 start_pts_ms 가 0 이 아니게 한다 — 위치는 store 가 정하므로(POK-196 PDT c4a) 꼬리 위치는
+	// 바로 앞 행 끝(4000)이다. 실어 보낸 StartPTSMS(20000)는 쓰이지 않는다.
+	if _, _, err := store.Insert(ctx, sampleRecord(streamID, 4, "/recordings/a/5.mp4"), Seed{}, SessionSource{}); err != nil {
+		t.Fatalf("앞 행 Insert 실패: %v", err)
+	}
 	want := sampleRecord(streamID, 5, "/recordings/a/6.mp4")
 	if _, _, err := store.Insert(ctx, want, Seed{}, SessionSource{}); err != nil {
 		t.Fatalf("Insert 실패: %v", err)
 	}
+	want.StartPTSMS = 4000
 
 	cur, err := store.LoadCursor(ctx, streamID)
 	if err != nil {

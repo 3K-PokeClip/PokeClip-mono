@@ -55,6 +55,13 @@ type fakeStore struct {
 	lastSession map[string]string
 	lastPDT     map[string]time.Time
 	lastDurMS   map[string]int32
+	// unattributedMS 는 스트림의 마지막 귀속 행 뒤 비귀속 행 길이 합 U 다(판 NULL PDT 식 — index/placement.go).
+	unattributedMS map[string]int64
+	// gateRead 는 개시 행이 판을 고르려고 읽었다고 돌려줄 게이트다(nil 이면 돌려주지 않는다 — 종전 동작). 회차는 대본의
+	// 세션 그대로 둔다(흉내 — 새 회차 id = 머리 세션 id).
+	gateRead *index.TimingGate
+	// pdts 는 들어간 행의 PDT 다(스트림 → seq → PDT · 비귀속은 없음) — 위치 식의 앵커(j′)를 찾는 재료다.
+	pdts map[string]map[int64]time.Time
 	// inheritance 는 회차별 재접속 계승 개시 대본이다(scriptInheritance) — 그 회차를 연 행의 결과가 싣는 두 칸이다.
 	inheritance map[string]inheritance
 }
@@ -67,6 +74,7 @@ type updateTailCall struct {
 	seq        int64
 	durationMS int32
 	bytes      int64
+	videoEndNS *int64
 }
 
 // insertCallCount 는 Insert 시도 횟수다(장벽 검증 — 시도 자체가 없어야 하는 국면용).
@@ -83,6 +91,9 @@ func newFakeStore() *fakeStore {
 		lastPDT:     map[string]time.Time{},
 		lastDurMS:   map[string]int32{},
 		inheritance: map[string]inheritance{},
+
+		unattributedMS: map[string]int64{},
+		pdts:           map[string]map[int64]time.Time{},
 	}
 }
 
@@ -103,23 +114,28 @@ func (s *fakeStore) scriptInheritance(sessionID, inherits, prevFirst string) {
 
 // attribute 는 대본의 다음 세션으로 InsertCommit 의 개시 통로 9필드를 채운다 — store.go
 // withCommitted 와 같은 뜻이다: 개시 = 직전 귀속 세션과 다른 세션, PDT = 개시면 벽시계·
-// 아니면 max(직전 PDT + 직전 길이, 벽시계)(설계 5.1.1 재귀식), 키 = playback.SegKey(실패면 NULL),
+// 아니면 max(직전 PDT + 직전 길이 + U, 벽시계)(설계 5.1.1 재귀식 · 판 NULL U — U 는 그 사이 비귀속 행 길이 합),
+// 키 = playback.SegKey(실패면 NULL),
 // 개시 TD = max(6, 첫 조각 반올림 초)(session.openTargetDuration 과 같은 규칙 — TD 운반, 커밋 ④).
 // base 는 ⓐ 의 개시 값(0)이고, 계승 · 직전 첫 조각은 scriptInheritance 로 정한 회차의 개시 행만 값이다.
 // s.mu 를 쥔 채로 부른다.
 func (s *fakeStore) attribute(r index.Record, res index.InsertCommit) index.InsertCommit {
 	res.DurationMS = r.DurationMS
 	if len(s.sessions) == 0 {
+		s.unattributedMS[r.StreamID] += int64(r.DurationMS)
 		return res
 	}
 	sid := s.sessions[0]
 	s.sessions = s.sessions[1:]
 	if sid == "" {
+		s.unattributedMS[r.StreamID] += int64(r.DurationMS)
 		return res
 	}
 	res.SessionID = sid
 	res.SessionOpened = s.lastSession[r.StreamID] != sid
+	res.TimingRoundID = sid
 	if res.SessionOpened {
+		res.TimingGateRead = s.gateRead
 		res.TargetDuration = max(6, int32(math.Round(float64(r.DurationMS)/1000)))
 		if in, ok := s.inheritance[sid]; ok {
 			res.InheritsSession, res.PrevFirstLocalPath = in.session, in.prevFirst
@@ -127,7 +143,7 @@ func (s *fakeStore) attribute(r index.Record, res index.InsertCommit) index.Inse
 	}
 	pdt := r.StartWallUTC.UTC()
 	if !res.SessionOpened {
-		carried := s.lastPDT[r.StreamID].Add(time.Duration(s.lastDurMS[r.StreamID]) * time.Millisecond)
+		carried := s.lastPDT[r.StreamID].Add(time.Duration(int64(s.lastDurMS[r.StreamID])+s.unattributedMS[r.StreamID]) * time.Millisecond)
 		if carried.After(pdt) {
 			pdt = carried
 		}
@@ -137,7 +153,31 @@ func (s *fakeStore) attribute(r index.Record, res index.InsertCommit) index.Inse
 		res.PlaybackS3Key = key
 	}
 	s.lastSession[r.StreamID], s.lastPDT[r.StreamID], s.lastDurMS[r.StreamID] = sid, pdt, r.DurationMS
+	s.unattributedMS[r.StreamID] = 0
 	return res
+}
+
+// place 는 store 의 판 NULL 위치 식(I23 — index/placement.go)을 흉내 낸다: 위치는 실어 보낸 Record.StartPTSMS 가 아니라
+// 바로 앞 행 q 와 앵커 j′(앞에서 PDT 가 있는 가장 가까운 행)로 정한다. pdt 는 이 행의 PDT(영값 = NULL)다. 행을
+// 넣기 전에 s.mu 를 쥔 채로 부른다.
+//
+//	PDT 있음: max(j′.start + ⌊PDT⌋ − ⌊j′.PDT⌋, q.start + q.dur) · PDT 없음: q.start + q.dur · 첫 행: 0
+func (s *fakeStore) place(streamID string, pdt time.Time) int64 {
+	rows := s.rows[streamID]
+	if len(rows) == 0 {
+		return 0
+	}
+	q := rows[len(rows)-1]
+	end := q.StartPTSMS + int64(q.DurationMS)
+	if pdt.IsZero() {
+		return end
+	}
+	for i := len(rows) - 1; i >= 0; i-- {
+		if anchor, ok := s.pdts[streamID][rows[i].Seq]; ok {
+			return max(rows[i].StartPTSMS+pdt.UnixMilli()-anchor.UnixMilli(), end)
+		}
+	}
+	return end
 }
 
 func (s *fakeStore) seed(recs ...index.Record) {
@@ -213,21 +253,31 @@ func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, s
 			return index.InsertSeqConflict, index.InsertCommit{}, nil
 		}
 	}
+	res := index.InsertCommit{Seeded: true}
+	if !s.seeds || !seed.Eligible {
+		res = index.InsertCommit{Decline: s.declineAs}
+		if res.Decline == index.DeclineNone {
+			res.Decline = index.DeclineNoCorroboration
+		}
+	}
+	res = s.attribute(r, res)
+	// 위치는 store 가 정한다(POK-196 PDT c4a) — 실어 보낸 StartPTSMS 를 쓰지 않고 장부 행 · 커밋 값 둘 다에 같은 값을 둔다.
+	r.StartPTSMS = s.place(r.StreamID, res.PlaybackPDT)
+	res.StartPTSMS = r.StartPTSMS
 	s.rows[r.StreamID] = append(s.rows[r.StreamID], r)
-	if s.seeds && seed.Eligible {
-		return index.InsertInserted, s.attribute(r, index.InsertCommit{Seeded: true}), nil
+	if !res.PlaybackPDT.IsZero() {
+		if s.pdts[r.StreamID] == nil {
+			s.pdts[r.StreamID] = map[int64]time.Time{}
+		}
+		s.pdts[r.StreamID][r.Seq] = res.PlaybackPDT
 	}
-	decline := s.declineAs
-	if decline == index.DeclineNone {
-		decline = index.DeclineNoCorroboration
-	}
-	return index.InsertInserted, s.attribute(r, index.InsertCommit{Decline: decline}), nil
+	return index.InsertInserted, res, nil
 }
 
-func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {
+func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64, videoEndNS *int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.updateTail = append(s.updateTail, updateTailCall{streamID, seq, durationMS, bytes})
+	s.updateTail = append(s.updateTail, updateTailCall{streamID, seq, durationMS, bytes, videoEndNS})
 
 	if s.updateTailOK != nil {
 		return *s.updateTailOK, nil

@@ -60,6 +60,8 @@ func (d registryDecider) Decide(ctx context.Context, tx pgx.Tx, in SessionInput,
 		BaseSessionID:      dec.BaseSessionID,
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		RoundID:            dec.RoundID,
+		FloorRejected:      dec.FloorRejected,
 		Plan:               dec,
 	}, nil
 }

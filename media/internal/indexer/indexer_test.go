@@ -186,8 +186,9 @@ func TestCase08UnknownReasonIsRejected(t *testing.T) {
 	}
 }
 
-// 케이스9 — drift 가 톨러런스를 넘으면 그 공백만큼 타임라인을 건너뛰고 불연속으로 표시한다(H8).
-func TestCase09ReanchorsWhenDriftExceedsTolerance(t *testing.T) {
+// 케이스9 — drift 가 톨러런스를 넘으면 불연속으로 표시한다(H8). 위치는 drift 만큼 건너뛰지 않는다 — 위치는 store 가
+// 판 NULL 위치 식으로 정하고(POK-196 PDT c4a · 비귀속 행이라 바로 앞 행 끝), drift 는 끊김 판정 재료로만 남는다.
+func TestCase09MarksDiscontinuityWhenDriftExceedsTolerance(t *testing.T) {
 	f := newFixture(t, 4000)
 	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
 
@@ -200,8 +201,8 @@ func TestCase09ReanchorsWhenDriftExceedsTolerance(t *testing.T) {
 	if !last.IsDiscontinuity {
 		t.Fatal("is_discontinuity = false, want true")
 	}
-	if want := int64(4000 + 6000); last.StartPTSMS != want {
-		t.Fatalf("start_pts_ms = %d, want %d (= NextPTS + drift)", last.StartPTSMS, want)
+	if want := int64(4000); last.StartPTSMS != want {
+		t.Fatalf("start_pts_ms = %d, want %d (= 바로 앞 행 끝 — drift 를 더하지 않는다)", last.StartPTSMS, want)
 	}
 }
 
@@ -223,7 +224,7 @@ func TestCase10NegativeDriftDoesNotRewindPTS(t *testing.T) {
 		t.Fatalf("start_pts_ms 가 역행했다: %d -> %d", rows[0].StartPTSMS, last.StartPTSMS)
 	}
 	if last.StartPTSMS != 4000 {
-		t.Fatalf("start_pts_ms = %d, want 4000 (max(0, drift) 로 눌러야 한다)", last.StartPTSMS)
+		t.Fatalf("start_pts_ms = %d, want 4000 (= 바로 앞 행 끝 — 위치는 store 가 정한다)", last.StartPTSMS)
 	}
 	if n := f.logs.count(slog.LevelError, "negative_drift"); n != 1 {
 		t.Fatalf("negative_drift = %d건, want 1", n)

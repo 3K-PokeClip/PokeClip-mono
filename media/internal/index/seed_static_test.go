@@ -59,7 +59,7 @@ func TestB1CutoffInsertSingleStatement(t *testing.T) {
 // d2_no_seq_argument — cutoff_seq 자리에 바인드 파라미터가 없다: 값은 ins 의 RETURNING(i.seq)
 // 에서만 온다. 인자 자리 부재가 과대·과소 기록을 표현 불가능하게 만든다.
 func TestD2CutoffSeqHasNoBindArgument(t *testing.T) {
-	if !strings.Contains(insertSeedSQL, "SELECT i.stream_id, i.seq, $14, $15") {
+	if !strings.Contains(insertSeedSQL, "SELECT i.stream_id, i.seq, $21, $22") {
 		t.Fatal("주조 SELECT 목록이 설계 형상과 다르다 — cutoff_seq 는 i.seq 여야 하고 바인드가 아니어야 한다")
 	}
 	// seed CTE 절 안에 i.seq 이외의 seq 원천(바인드)이 없어야 한다.

@@ -907,6 +907,13 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", rec.DurationMS,
 		"start_pts_ms", rec.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
 		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason, "mtxi_pinned", pinned)
+	// 새 회차 개시 행은 판을 고른 게이트를 남긴다(POK-196 PDT 설계 r7 8절 · 9.3) — 회차를 이어 가는 개시(재접속 계승 ·
+	// TD 분할)는 게이트를 읽지 않아 TimingGateRead 가 nil 이다.
+	if res.SessionOpened && res.TimingGateRead != nil {
+		ix.log.Info("timing_gate_read",
+			"stream_id", seg.StreamID, "seq", rec.Seq, "round_id", res.TimingRoundID,
+			"timing_version", versionText(res.TimingVersion), "gate_changed_at", res.TimingGateRead.ChangedAt)
+	}
 
 	ix.requestRowUploads(seg, prev, cur.Tail, res, playbackTarget)
 }
@@ -994,7 +1001,9 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 	}
 
 	// 확인 4: 최종 판정은 DB 가 내린다. 메모리와 DB 가 어긋나 있을 수 있다.
-	updated, err := ix.store.UpdateTail(ctx, seg.StreamID, cur.Tail.Seq, int32(d), fi.Size())
+	// 영상 끝은 아직 넘기지 않는다(nil = 그 칸 그대로) — 조각을 ReadTiming 으로 다시 읽어 채우는 것은 판독 배선 커밋(c5)
+	// 몫이다(POK-196 PDT 계획 4절 c4a · c5).
+	updated, err := ix.store.UpdateTail(ctx, seg.StreamID, cur.Tail.Seq, int32(d), fi.Size(), nil)
 	if err != nil {
 		return err
 	}
