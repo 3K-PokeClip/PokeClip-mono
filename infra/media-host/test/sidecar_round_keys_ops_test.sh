@@ -14,6 +14,12 @@
 # (verify 실패 · 복원 컨테이너 round), R13–R15 는 설정 · on 의 읽기 점검 · off 의
 # 실패 갈래다.
 #
+# R16 · R17 은 이 스크립트가 아니라 교체 런북(infra/terraform/runbooks/
+# media-swap.md 「POK-525 교체」)의 상자 판정 스크립트 둘이다(계획 4-7 셸 사례).
+# 런북의 here-document 본문(`cat > "${work}/<이름>" <<'SH'` 부터 `SH` 줄 앞까지)을
+# 그대로 뽑아 /bin/sh 로 돌린다 — 사본이 없어 런북 글자를 바꾸면 이 사례가 바뀐
+# 글자를 잰다. systemctl 은 사례 디렉터리에 둔 가짜다.
+#
 # 제품 스크립트가 없으면 사례가 FAIL 이다. 건너뛰는 갈래는 없다.
 #
 # 사용: bash infra/media-host/test/sidecar_round_keys_ops_test.sh
@@ -33,7 +39,7 @@ source "${TEST_DIR}/lib/harness.sh"
 # shellcheck source=lib/ops_fixture.sh
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
-readonly CASES='R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15'
+readonly CASES='R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17'
 readonly SCRIPT='bin/sidecar-round-keys.sh'
 readonly SIDECAR_TAG='pokeclip-media-sidecar'
 readonly KEY='PLAYBACK_ROUND_KEYS'
@@ -42,6 +48,10 @@ readonly LINE_OFF="${KEY}=false"
 # 원래 실행 중 사이드카(끔으로 만들어짐)의 저널 줄.
 readonly LEGACY_LINE='{"level":"INFO","msg":"playback_key_layout",'\
 '"layout":"legacy","round_frozen":"absent"}'
+# 교체 런북 — 상자 판정 스크립트의 원문(R16 · R17).
+readonly RUNBOOK="${MEDIA_HOST_DIR}/../terraform/runbooks/media-swap.md"
+# 런북 판정 스크립트가 거르는 compose 프로젝트(prod 고정값).
+readonly RUNBOOK_PROJECT='pokeclip-media'
 
 #######################################
 # 사례 디렉터리 — 실행 중 사이드카 하나(만들 때 env 끔 · 저널 legacy) ·
@@ -494,6 +504,231 @@ case_off_fail_stages() {
   return "${ok}"
 }
 
+#######################################
+# 교체 런북에서 상자 판정 스크립트 하나의 here-document 본문을 낸다.
+# Arguments:
+#   스크립트 파일 이름(예: disabled-check.sh).
+# Returns:
+#   0 / 1 그 here-document 가 없거나 닫히지 않음.
+#######################################
+runbook_script() {
+  awk -v start="cat > \"\${work}/$1\" <<'SH'" '
+    $0 == start { inside = 1; found++; next }
+    inside && $0 == "SH" { inside = 0; closed++; next }
+    inside { print }
+    END { exit !(found == 1 && closed == 1) }' "${RUNBOOK}"
+}
+
+#######################################
+# 사례 디렉터리에 가짜 systemctl 을 둔다 — argv 를 log/systemctl.<n>.argv 에
+# 남기고, is-enabled 는 state/systemctl.enabled 의 낱말을 낸다(enabled 면 종료 0,
+# 그 밖은 종료 1 — 진짜 systemctl 은 disabled 에서도 1 이다).
+# state/systemctl.fail 이 있으면 표준 출력 없이 종료 1(조회 실패).
+# Globals:
+#   ops_dir
+#######################################
+fake_systemctl() {
+  cat >"${ops_dir}/bin/systemctl" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+n=1
+until (set -C; : >"${PCBENCH_FAKE_LOG_DIR}/systemctl.${n}.argv") 2>/dev/null
+do
+  n=$((n + 1))
+done
+printf '%s\n' "$@" >"${PCBENCH_FAKE_LOG_DIR}/systemctl.${n}.argv"
+[[ "$*" == 'is-enabled pokeclip-media' ]] || exit 2
+if [[ -e "${PCBENCH_FAKE_STATE_DIR}/systemctl.fail" ]]; then
+  printf 'Failed to get unit file state for pokeclip-media.service\n' >&2
+  exit 1
+fi
+word="$(cat -- "${PCBENCH_FAKE_STATE_DIR}/systemctl.enabled")"
+printf '%s\n' "${word}"
+[[ "${word}" == enabled ]]
+FAKE
+  chmod +x "${ops_dir}/bin/systemctl"
+}
+
+#######################################
+# 런북 판정 스크립트를 빈 환경에서 /bin/sh 로 돌린다(SSM 의 AWS-RunShellScript
+# 꼴 — 인자는 media_ssm 이 앞에 붙이는 set -- 대신 sh 의 인자로 준다). 가짜
+# docker 의 프로젝트는 런북 고정값으로 맞춘다.
+# Globals:
+#   ops_dir, ops_status
+# Arguments:
+#   스크립트 파일 이름, 스크립트 인자 ….
+#######################################
+run_runbook() {
+  local script="${ops_dir}/$1"
+  shift
+  ops_status=0
+  if ! runbook_script "${script##*/}" >"${script}"; then
+    harness::add_reason "런북에 ${script##*/} here-document 가 하나가 아님"
+    ops_status=127
+    return 1
+  fi
+  # shellcheck disable=SC2016 # $0 · $@ 는 sh -c 안에서 펼친다.
+  harness::bounded "${OPS_RUN_TIMEOUT}" /bin/sh -c 'exec "$@" 2>"$0"' \
+    "${ops_dir}/err" env -i "HOME=${ops_dir}/home" \
+    "PATH=${ops_dir}/bin:/usr/bin:/bin" "TMPDIR=${ops_dir}/tmp" \
+    "PCBENCH_FAKE_LIB=${TEST_DIR}/ops_fakebin/record.sh" \
+    "PCBENCH_FAKE_LOG_DIR=${ops_dir}/log" \
+    "PCBENCH_FAKE_STATE_DIR=${ops_dir}/state" \
+    "PCBENCH_FAKE_PROJECT=${RUNBOOK_PROJECT}" \
+    /bin/sh "${script}" "$@" </dev/null >"${ops_dir}/out" \
+    2>"${ops_dir}/harness.err" || ops_status=$?
+}
+
+#######################################
+# 표준 출력의 마지막 줄 · 종료 코드 · 품은 줄을 본다.
+# Arguments:
+#   이름, 기대 마지막 줄, 기대 종료 코드, 품어야 할 줄 ….
+#######################################
+expect_verdict() {
+  local name="$1" last="$2" status="$3" line ok=0
+  shift 3
+  if [[ "$(tail -n 1 -- "${ops_dir}/out")" != "${last}" ]]; then
+    harness::add_reason "${name}: 마지막 줄이 「${last}」 아님: $(tr '\n' '|' \
+      <"${ops_dir}/out") / 오류: $(harness::log_tail "${ops_dir}/err")"
+    ok=1
+  fi
+  if (( ops_status != status )); then
+    harness::add_reason "${name}: 종료 코드 ${ops_status}(기대 ${status})"
+    ok=1
+  fi
+  for line in "$@"; do
+    if ! grep -q -x -F -- "${line}" "${ops_dir}/out"; then
+      harness::add_reason "${name}: 「${line}」 줄 없음"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+# R16 — 런북 MEDIA DISABLED 판정(교체 걸음 4.5 · E26) — disabled 만 OK, enabled ·
+# 조회 실패는 NOT OK. 조회는 is-enabled 한 번.
+case_runbook_disabled() {
+  local ok=0 variant
+  for variant in disabled enabled fail; do
+    ops_fixture::new_case
+    fake_systemctl
+    if [[ "${variant}" == fail ]]; then
+      : >"${ops_dir}/state/systemctl.fail"
+    else
+      printf '%s\n' "${variant}" >"${ops_dir}/state/systemctl.enabled"
+    fi
+    run_runbook disabled-check.sh || return 1
+    case "${variant}" in
+      disabled)
+        expect_verdict disabled 'MEDIA DISABLED OK' 0 'ENABLED disabled' \
+          || ok=1
+        ;;
+      enabled)
+        expect_verdict enabled 'MEDIA DISABLED NOT OK' 1 'ENABLED enabled' \
+          || ok=1
+        ;;
+      fail)
+        expect_verdict fail 'MEDIA DISABLED NOT OK' 1 'ENABLED unknown' \
+          || ok=1
+        ;;
+    esac
+    if [[ "$(cat -- "${ops_dir}/log/systemctl.1.argv" 2>/dev/null)" != \
+      "$(printf '%s\n' is-enabled pokeclip-media)" \
+      || -e "${ops_dir}/log/systemctl.2.argv" ]]; then
+      harness::add_reason "${variant}: systemctl 조회가 is-enabled 한 번이 아님"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+#######################################
+# 「켜기 전」 선언 판정 사례 디렉터리 — 사이드카 컨테이너들과 그 저널을 둔다.
+# Arguments:
+#   「<id> <running|exited> <저널 layout|none> <round_frozen>」 묶음 ….
+#######################################
+setup_before_on() {
+  local spec id status layout frozen
+  ops_fixture::new_case
+  for spec in "$@"; do
+    read -r id status layout frozen <<<"${spec}"
+    ops_fixture::container "${id}" sidecar "${status}"
+    [[ "${layout}" != none ]] || continue
+    printf '{"level":"INFO","msg":"playback_key_layout","layout":"%s",%s}\n' \
+      "${layout}" "\"round_frozen\":\"${frozen}\"" \
+      >"${ops_dir}/state/journal.c.${id}"
+  done
+}
+
+# R17 — 런북 사이드카 layout 판정(교체 걸음 4.1 · 「켜기 전」 선언 판정 · P1 ·
+# E34). 실행 중 사이드카 하나의 저널 마지막 기동 줄이 layout=legacy(트리거
+# present 아님)면 SIDECAR LEGACY OK, Q1 을 인자로 주면 그것도 0 이어야 BEFORE
+# ON OK. 옛 컨테이너만 legacy · round · Q1 1 이상 · 실행 중 둘 · 트리거 present
+# 는 NOT OK, 조회 실패 · 인자 오류는 FAIL.
+case_runbook_layout() {
+  local ok=0 args
+  setup_before_on 'pcbenchnew running legacy absent'
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict legacy 'BEFORE ON OK' 0 'SIDECAR_RUNNING 1' 'LAYOUT legacy' \
+    'ROUND_FROZEN absent' 'Q1 0' || ok=1
+  if ! grep -q -x -F -- 'CONTAINER_ID_FULL=pcbenchnew' \
+    "${ops_dir}"/log/journalctl.*.argv; then
+    harness::add_reason 'legacy: 실행 중 컨테이너 ID 로 거른 저널을 읽지 않음'
+    ok=1
+  fi
+
+  setup_before_on 'pcbenchnew running legacy absent'
+  run_runbook layout-check.sh || return 1
+  expect_verdict legacy-only 'SIDECAR LEGACY OK' 0 'LAYOUT legacy' || ok=1
+  if grep -q '^Q1 ' "${ops_dir}/out"; then
+    harness::add_reason 'legacy-only: Q1 을 주지 않았는데 Q1 줄이 있음'
+    ok=1
+  fi
+
+  setup_before_on 'pcbenchnew running round absent'
+  run_runbook layout-check.sh || return 1
+  expect_verdict round-only 'SIDECAR LEGACY NOT OK' 1 'LAYOUT round' || ok=1
+
+  setup_before_on 'pcbenchnew running round absent'
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict round 'BEFORE ON NOT OK' 1 'LAYOUT round' || ok=1
+
+  setup_before_on 'pcbenchold exited legacy absent' 'pcbenchnew running none -'
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict old-only 'BEFORE ON NOT OK' 1 'LAYOUT none' || ok=1
+
+  setup_before_on 'pcbenchnew running legacy absent'
+  run_runbook layout-check.sh 1 || return 1
+  expect_verdict q1 'BEFORE ON NOT OK' 1 'LAYOUT legacy' 'Q1 1' || ok=1
+
+  setup_before_on 'pcbenchnew running legacy present'
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict frozen 'BEFORE ON NOT OK' 1 'ROUND_FROZEN present' || ok=1
+
+  setup_before_on 'pcbencha running legacy absent' \
+    'pcbenchb running legacy absent'
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict two 'BEFORE ON NOT OK' 1 'SIDECAR_RUNNING 2' || ok=1
+
+  setup_before_on 'pcbenchnew running legacy absent'
+  : >"${ops_dir}/state/ps.fail"
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict docker 'LAYOUT CHECK FAIL docker' 2 || ok=1
+
+  setup_before_on 'pcbenchnew running legacy absent'
+  : >"${ops_dir}/state/journal.fail"
+  run_runbook layout-check.sh 0 || return 1
+  expect_verdict journal 'LAYOUT CHECK FAIL journal' 2 || ok=1
+
+  for args in x '0 0' -1 1x; do
+    setup_before_on 'pcbenchnew running legacy absent'
+    # shellcheck disable=SC2086 # 인자 묶음을 낱낱으로 넘긴다.
+    run_runbook layout-check.sh ${args} || return 1
+    expect_verdict "usage「${args}」" 'LAYOUT CHECK FAIL usage' 2 || ok=1
+  done
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/sidecar_round_keys_ops_test.sh\n' \
@@ -533,6 +768,10 @@ main() {
     case_on_bad_current
   harness::run_case R15 'off · 실행 중 사이드카의 단계 실패 → 그 단계 · 복원 없음' \
     case_off_fail_stages
+  harness::run_case R16 '런북 MEDIA DISABLED 판정 → disabled 만 OK' \
+    case_runbook_disabled
+  harness::run_case R17 '런북 layout 판정 → 실행 중 legacy(∧ Q1 0)만 OK' \
+    case_runbook_layout
 
   # shellcheck disable=SC2086 # 이름 목록을 낱낱으로 넘긴다.
   if ! harness::summary 0 ${CASES}; then
