@@ -18,8 +18,11 @@ import java.util.Map;
  * 화면은 목록을 다시 받을 때 사진을 얻는다.
  *
  * <p>{@code fileHead} · {@code playerAtMs}는 카드 장면(POK-196 · {@link CardPositionReader})이다 — 편집기는 {@code fileHead}
- * (파일명 시각 축)로, 플레이어 카드 클릭은 {@code playerAtMs}(목록 PDT 축)로 간다. 둘 다 같은 장면에서 나와 썸네일과 같은
- * 조각이다. 목록 · 통로 · 마크 응답이 모두 싣고, 장면이 없으면 {@code null}(웹은 기준점 + 카드 ms 의 지금 식으로 떨어진다).
+ * (파일명 시각 축)로, 플레이어 카드 클릭은 {@code playerAtMs}(목록 PDT 축)로 간다. 둘 다 같은 장면에서 나오고, 같은 장면에서
+ * <b>계산된 썸네일 주문 값</b>({@code CardPositionReader.Scene.thumbnailOrder()})과 같은 조각이다. 🔴 실제 사진 순회는
+ * PR-B2(S-c4) 전환 전까지 지금 SQL({@code ThumbnailTargets} — 시간창 안 덮는 행 · seq 최소)이라 틈 · 겹침 · 비귀속 자리에서는
+ * 사진이 다른 조각일 수 있다(예: 귀속 행 A {@code [0,4000)} · B {@code [3999,7999)} · 카드 3999 → 장면 B · 사진 A). 이미 찍힌
+ * 사진은 전환 뒤 다시 찍지 않는다. 목록 · 통로 · 마크 응답이 모두 싣고, 장면이 없으면 {@code null}(웹은 기준점 + 카드 ms 의 지금 식으로 떨어진다).
  * 「기준점 + 카드 ms」 는 출시 이미지가 쓴 판 NULL 행에서 다른 조각을 가리켜 이 칸이 따로 있다(설계 r7 8.2).
  */
 public record JumpCardSnapshot(long id,
