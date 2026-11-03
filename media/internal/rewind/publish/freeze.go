@@ -526,11 +526,12 @@ func renderSession(s index.RewindSession) rewind.Session {
 	}
 }
 
-// boundaryRow 는 장부 행 r 의 경계 행이다(열이 1:1 이다).
+// boundaryRow 는 장부 행 r 의 경계 행이다(열이 1:1 이다). 이름 붙은 필드라 열을 빼먹어도 컴파일된다 — 판(TimingVersion)을
+// 빼먹으면 동결 DVR · VOD 본문에 판 태그가 없다(TestFreezeDVRRowsCarryTimingVersion · TestVODPlanKeepsTimingVersionThroughFillGap).
 func boundaryRow(r index.RewindRow) boundary.Row {
 	return boundary.Row{
 		Seq: r.Seq, SessionID: r.SessionID, DurationMS: r.DurationMS, PlaybackPDT: r.PlaybackPDT,
-		PlaybackS3Key: r.PlaybackS3Key, PlaybackUploaded: r.PlaybackUploaded, IsGap: r.IsGap,
+		PlaybackS3Key: r.PlaybackS3Key, PlaybackUploaded: r.PlaybackUploaded, IsGap: r.IsGap, TimingVersion: r.TimingVersion,
 	}
 }
 

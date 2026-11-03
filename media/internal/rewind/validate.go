@@ -176,6 +176,8 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 //	조각마다  URI = BaseURL + "/" + playback_s3_key · PDT 줄 = playback_pdt(ms 로 자름) ·
 //	         EXTINF 줄 = duration_ms · GAP 줄은 GAP 원장에 있는 행에만 · MAP 줄 개수·위치
 //	         (segmentMismatch)
+//	판 태그   조각마다 timingTag 가 바라는 줄 그대로(개수 0 또는 1 · 값 · 자리 MAP 뒤 · PDT 앞 — timingMismatch) ·
+//	         본문 전체의 판 태그 줄 수 = 줄을 바라는 조각 수(마지막 조각 뒤에 붙은 줄도 센다)
 //
 // 나머지 검사는 행 값으로 판정한다. 그 판정이 발행되는 바이트에도 참이려면 본문이 행 값을 그대로
 // 적었어야 하고, 이 조항이 그것을 확인한다 — 없으면 행과 다른 EXTINF·PDT·URI 를 적은 본문이 검사를
@@ -185,7 +187,8 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 // 잰다. 머리 줄과 MAP 줄은 개수·위치까지 본다 — 렌더가 쓰는 자리 한 곳만 읽으면 중복·이동한 줄이 지나간다.
 // MAP 의 있고 없음·값과 URI 의 절대성은 S4·S5 가 본문에서 읽고, DISCONTINUITY 는 어느 검사도 읽지 않는다.
 // 서식(EXTINF 소수 셋째 자리 · pdtLayout · URI 결합)은 Render 와 같다 — 둘이 갈리면 모든 목록이 여기서
-// 멈추므로 곧바로 드러난다(g6_f2 검사).
+// 멈추므로 곧바로 드러난다(g6_f2 검사). 판 태그는 다른 검사가 읽지 않지만 플레이어가 조각마다 환산식을 고르는
+// 재료라(계약3 7-6) 줄 하나가 빠지거나 옮겨 가면 그 뒤 조각 전부의 시각이 틀린다 — 그래서 이 조항이 행 값과 견준다.
 func checkBodyMatchesRows(p Playlist, body []byte, lines []string, segs []segmentLines) error {
 	if len(segs) != len(p.Rows) {
 		return violation("S5", "본문의 조각 %d개가 목록 행 %d개와 다르다 — 본문이 이 목록의 렌더 결과가 아니다",
@@ -194,11 +197,20 @@ func checkBodyMatchesRows(p Playlist, body []byte, lines []string, segs []segmen
 	if problem := p.headerMismatch(body, lines, segs[0]); problem != "" {
 		return violation("S5", "머리 줄이 목록 값과 다르다 — %s", problem)
 	}
+	wantTags := 0
 	for i, r := range p.Rows {
 		runStart := i == 0 || r.SessionID != p.Rows[i-1].SessionID
-		if problem := p.segmentMismatch(r, segs[i], runStart); problem != "" {
+		timing := timingTag(p.Rows, i)
+		if problem := p.segmentMismatch(r, segs[i], runStart, timing); problem != "" {
 			return violation("S5", "seq %d 조각이 행과 다르다 — %s", r.Seq, problem)
 		}
+		if timing != "" {
+			wantTags++
+		}
+	}
+	if got := len(linesWithPrefix(lines, timingTagName)); got != wantTags {
+		return violation("S5", "본문의 판 태그 줄 %d개가 목록 행이 바라는 %d개와 다르다 — 조각 밖(마지막 조각 뒤)에 줄이 있다",
+			got, wantTags)
 	}
 	return nil
 }
@@ -246,13 +258,14 @@ func (p Playlist) headerMismatch(body []byte, lines []string, first segmentLines
 }
 
 // segmentMismatch 는 본문 조각 seg 가 행 r 을 그대로 적지 않은 곳이다("" = 그대로 적었다). runStart 는 이
-// 조각에서 회차가 바뀌는가다(목록 첫 조각 포함). PDT·EXTINF·GAP 줄은 순서를 보지 않고 모음으로 견준다 —
-// 조각 앞 태그는 순서와 무관하게 그 조각에 붙는다(RFC 8216bis-22 4.4.4).
+// 조각에서 회차가 바뀌는가다(목록 첫 조각 포함). timing 은 이 조각이 바라는 판 태그 줄이다("" = 0줄 — timingTag).
+// PDT·EXTINF·GAP 줄은 순서를 보지 않고 모음으로 견준다 — 조각 앞 태그는 순서와 무관하게 그 조각에 붙는다(RFC
+// 8216bis-22 4.4.4). 판 태그 줄만은 자리를 본다(timingMismatch).
 //
 // MAP 줄은 개수·위치만 본다: 회차가 이어지는 조각 앞 0줄, 바뀌는 조각 앞 1줄 이하(MAP 은 다음 MAP 까지
 // 이어 적용된다 — 4.4.4.5). 있는지·값이 맞는지는 S4(접두)·S5(MAP 도달 가능)가 본다 — 여기서 보면 접두
 // MAP 문제가 계승 취소에서 발행 중단으로 뒤집힌다(이 조항이 S4 보다 먼저 돈다).
-func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart bool) string {
+func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart bool, timing string) string {
 	if want := p.BaseURL + "/" + r.PlaybackS3Key; seg.uri != want {
 		return fmt.Sprintf("URI %q — 장부 키로는 %q", seg.uri, want)
 	}
@@ -272,6 +285,29 @@ func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart boo
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		return fmt.Sprintf("PDT·EXTINF·GAP 줄 %q — 행 값으로는 %q", got, want)
+	}
+	return timingMismatch(seg.tags, timing)
+}
+
+// timingMismatch 는 조각 태그 줄 tags 의 판 태그가 바라는 줄 want 와 다른 곳이다("" = 같다 — want "" 는 0줄). 판 태그
+// 줄은 이름(timingTagName)으로 센다 — 값이 깨진 줄(콜론 없음 · 꼬리 글자)도 센다.
+// 한 줄이면 자리도 본다: 그 조각의 MAP 줄 뒤(MAP 이 없으면 어디든) · PDT 줄 앞이다(계약3 7-6). MAP 앞이면 hls.js 1.7.3
+// 이 그 줄을 초기화 조각의 것으로 읽어 이 조각에 판이 없다.
+func timingMismatch(tags []string, want string) string {
+	got := linesWithPrefix(tags, timingTagName)
+	switch {
+	case want == "" && len(got) == 0:
+		return ""
+	case want == "":
+		return fmt.Sprintf("판 태그 줄 %q — 판 NULL 첫 조각 · 앞 조각과 판이 같은 조각 앞은 0줄이다", got)
+	case !slices.Equal(got, []string{want}):
+		return fmt.Sprintf("판 태그 줄 %q — 행의 판으로는 %q 한 줄이다", got, want)
+	}
+	at := slices.Index(tags, want)
+	mapAt := slices.IndexFunc(tags, func(l string) bool { return strings.HasPrefix(l, "#EXT-X-MAP:") })
+	pdtAt := slices.IndexFunc(tags, func(l string) bool { return strings.HasPrefix(l, "#EXT-X-PROGRAM-DATE-TIME:") })
+	if at < mapAt || at > pdtAt {
+		return fmt.Sprintf("판 태그 줄 %q 가 %d번째 태그 줄이다 — MAP 줄(%d번째) 뒤 · PDT 줄(%d번째) 앞이어야 한다", want, at+1, mapAt+1, pdtAt+1)
 	}
 	return ""
 }

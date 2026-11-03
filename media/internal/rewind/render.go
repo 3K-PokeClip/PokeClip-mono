@@ -6,13 +6,16 @@
 //
 // 지키는 불변식(프로필 4절): 조각 URI 는 영구히 고정된다 — 세션·티어 축이 없는 장부의
 // playback_s3_key 그대로다(설계 5.2 D1). 본문은 순수 HLS 다 — 우리 용도의 줄(#PC-)·주석·빈 줄이
-// 없고, 세대 정보는 본문 밖 메타데이터로 간다(설계 4.4.2).
+// 없고, 세대 정보는 본문 밖 메타데이터로 간다(설계 4.4.2). 예외는 사용자 태그 한 종류다 — 판 태그
+// #EXT-X-POKECLIP-TIMING(계약3 7-6 · POK-196 PDT 설계 r7 2.12)은 플레이어가 조각마다 PDT 환산식을 고르는 재료라
+// 본문에 싣는다. 판 NULL 목록에는 이 줄이 없어 옛 목록과 같은 바이트다.
 package rewind
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +26,13 @@ import (
 // pdtLayout 은 EXT-X-PROGRAM-DATE-TIME 의 서식이다 — UTC·밀리초 세 자리(설계 4.8.2 실물,
 // RFC 8216bis-22 4.4.4.6 "to at least millisecond accuracy"). 밀리초 아래는 Format 이 버린다.
 const pdtLayout = "2006-01-02T15:04:05.000Z07:00"
+
+// timingTagName 은 판 태그의 이름이고 timingTagPrefix 는 그 줄의 머리다 — 값(판)이 콜론 뒤에 온다(계약3 7-6
+// 「판 태그」). 값은 행의 timing_version 이고 판 NULL 은 0 이다. 플레이어는 2 만 판 2 로 읽고 그 밖은 판 NULL 로 읽는다.
+const (
+	timingTagName   = "#EXT-X-POKECLIP-TIMING"
+	timingTagPrefix = timingTagName + ":"
+)
 
 // FormatPDT 는 t 를 EXT-X-PROGRAM-DATE-TIME 서식(UTC · 밀리초 세 자리 · pdtLayout)으로 쓴다. 목록 렌더와
 // 제어면(상태 응답의 firstPdt · headPdt)이 함께 쓴다 — 둘이 갈리면 웹이 상태의 시각으로 목록 안 조각을
@@ -105,6 +115,7 @@ type Playlist struct {
 //	조각마다 이 순서로:
 //	  #EXT-X-DISCONTINUITY                      HasDiscontinuityTag 가 참일 때
 //	  #EXT-X-MAP:URI="<BaseURL>/<init 키>"      회차가 바뀌는 첫 줄(목록 첫 줄 포함)
+//	  #EXT-X-POKECLIP-TIMING:<판>               timingTag 가 줄을 낼 때(첫 줄이 판 NULL 이 아님 · 앞 줄과 판이 다름)
 //	  #EXT-X-GAP                                GAP 원장에 있는 행
 //	  #EXT-X-PROGRAM-DATE-TIME:<playback_pdt>
 //	  #EXTINF:<duration_ms 를 초로, 소수 셋째 자리>,
@@ -146,7 +157,7 @@ func Render(p Playlist) ([]byte, error) {
 				p.Rows[i-1].Seq, r.Seq)
 		}
 		newRun := i == 0 || r.SessionID != p.Rows[i-1].SessionID
-		if err := p.writeSegment(&b, r, newRun); err != nil {
+		if err := p.writeSegment(&b, r, newRun, timingTag(p.Rows, i)); err != nil {
 			return nil, err
 		}
 	}
@@ -157,8 +168,10 @@ func Render(p Playlist) ([]byte, error) {
 }
 
 // writeSegment 는 조각 하나(태그 줄들과 URI 줄)를 쓴다. newRun 은 이 행에서 회차가 바뀌는가다 —
-// MAP 은 회차가 바뀌는 줄에만 쓴다(회차 안 init 은 같은 바이트다 — ADR-073).
-func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool) error {
+// MAP 은 회차가 바뀌는 줄에만 쓴다(회차 안 init 은 같은 바이트다 — ADR-073). timing 은 이 조각의 판 태그 줄이고
+// "" 면 쓰지 않는다. 자리는 MAP 뒤 · GAP 앞이다 — 계약3 7-6 의 「MAP 뒤 · PDT 앞」 안이고, MAP 앞에 두면 hls.js 1.7.3
+// 이 그 태그를 이 조각이 아니라 초기화 조각의 tagList 로 넘긴다.
+func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool, timing string) error {
 	s, ok := p.session(r.SessionID)
 	if !ok {
 		return fmt.Errorf("rewind: seq %d 의 회차 %q 가 회차 목록에 없다", r.Seq, r.SessionID)
@@ -173,6 +186,9 @@ func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool) err
 		}
 		fmt.Fprintf(b, "#EXT-X-MAP:URI=\"%s/%s\"\n", p.BaseURL, key)
 	}
+	if timing != "" {
+		b.WriteString(timing + "\n")
+	}
 	if r.IsGap {
 		b.WriteString("#EXT-X-GAP\n")
 	}
@@ -181,6 +197,21 @@ func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool) err
 	fmt.Fprintf(b, "#EXTINF:%d.%03d,\n", r.DurationMS/1000, r.DurationMS%1000)
 	fmt.Fprintf(b, "%s/%s\n", p.BaseURL, r.PlaybackS3Key)
 	return nil
+}
+
+// timingTag 는 목록 행 rows 의 i 번째 조각 앞에 설 판 태그 줄이다("" = 줄 없음 — 계약3 7-6 「판 태그」).
+//
+//	첫 조각       판 NULL 이 아니면 그 판의 줄
+//	그 밖의 조각   앞 행과 판이 다르면 그 판의 줄(판 NULL 이면 값 0)
+//
+// 그래서 판 NULL 목록에는 줄이 없다. 플레이어는 조각마다 마지막으로 본 태그의 판을 쓴다. 렌더와 발행 전 검사(S5 「본문
+// = 목록 값」)가 이 정의 하나를 쓴다 — 따로 적으면 한쪽만 바뀌어도 모든 판 2 목록이 발행을 멈추거나 틀린 태그가 지나간다.
+func timingTag(rows []boundary.Row, i int) string {
+	v := rows[i].TimingVersion
+	if (i == 0 && v == 0) || (i > 0 && v == rows[i-1].TimingVersion) {
+		return ""
+	}
+	return timingTagPrefix + strconv.FormatInt(int64(v), 10)
 }
 
 // session 은 회차 목록에서 id 인 회차를 찾는다. 한 목록이 걸치는 회차는 한두 개라 차례로 본다.
