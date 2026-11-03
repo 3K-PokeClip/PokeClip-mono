@@ -11,8 +11,8 @@ import type { PlaybackSource } from './rewindSwitch';
 /** 1번 목록 발행기가 목록 첫 조각과 판이 바뀌는 조각에 싣는 사용자 태그(계약3 7-6) */
 export const TIMING_TAG = 'EXT-X-POKECLIP-TIMING';
 
-/** 조각의 시각 판 — 2 는 판 2(영상 축 조각), null 은 판 NULL · 태그 없는 옛 목록(지금 식) */
-export type TimingVersion = 2 | null;
+/** 조각의 시각 판 — 2 는 판 2(영상 축 조각). 판 NULL · 태그 없는 옛 목록(지금 식)은 쓰는 자리에서 null 로 적는다 */
+export type TimingVersion = 2;
 
 /** 판 2 로 읽는 태그 값 — 그 밖(`0` · 모르는 값)은 판 NULL 이다 */
 const VERSION_2_VALUE = '2';
@@ -42,7 +42,7 @@ export interface VideoStart {
 export type StartOf = (frag: HlsFragmentLike) => VideoStart | null;
 
 /** 이 조각에 실린 판 태그의 판 — 둘 이상이면 마지막 태그다. 태그가 없으면 undefined(앞 판을 잇는다) */
-function taggedVersion(frag: HlsFragmentLike): TimingVersion | undefined {
+function taggedVersion(frag: HlsFragmentLike): TimingVersion | null | undefined {
   const tag = frag.tagList.findLast(([name]) => name === TIMING_TAG);
   if (!tag) return undefined;
   return tag[1] === VERSION_2_VALUE ? 2 : null;
@@ -55,8 +55,8 @@ function taggedVersion(frag: HlsFragmentLike): TimingVersion | undefined {
  * 목록이면 hls.js 가 건너뛴 자리를 앞 목록의 조각 객체로 채워, 새 첫 조각의 태그가 목록 앞에 오지 않을 수
  * 있다. /vod 는 VOD 목록을 다시 받지 않아 델타 갱신이 없다(base-playlist-controller 라이브 갈래)
  */
-export function timingVersions(fragments: readonly HlsFragmentLike[]): TimingVersion[] {
-  let current: TimingVersion = null;
+export function timingVersions(fragments: readonly HlsFragmentLike[]): Array<TimingVersion | null> {
+  let current: TimingVersion | null = null;
   return fragments.map((frag) => {
     const tagged = taggedVersion(frag);
     if (tagged !== undefined) current = tagged;

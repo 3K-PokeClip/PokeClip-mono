@@ -393,8 +393,8 @@ describe('trackVideoStarts — 진짜 hls.js 사건으로 조각마다 영상 �
 describe('trackVideoStarts — 진짜 Hls 의 LEVEL_UPDATED 로 목록에서 빠진 기록을 버린다', () => {
   /** 가짜 loader 의 load 인자 — 설정(가운데)은 쓰지 않는다 */
   type LoadArgs = [LoaderContext, unknown, LoaderCallbacks<LoaderContext>];
-  const TD = 4;
-  const PDT0 = Date.parse('2026-11-03T05:00:00.000Z');
+  const targetDurationS = 4;
+  const firstPdtMs = Date.parse('2026-11-03T05:00:00.000Z');
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
@@ -405,11 +405,15 @@ describe('trackVideoStarts — 진짜 Hls 의 LEVEL_UPDATED 로 목록에서 빠
 
   /** 순번 from 부터 세 조각인 라이브 목록(ENDLIST 없음 · LL 파트 없음) */
   function livePlaylist(from: number): string {
-    const lines = ['#EXTM3U', '#EXT-X-VERSION:9', `#EXT-X-TARGETDURATION:${TD}`];
+    const lines = ['#EXTM3U', '#EXT-X-VERSION:9', `#EXT-X-TARGETDURATION:${targetDurationS}`];
     lines.push(`#EXT-X-MEDIA-SEQUENCE:${from}`, '#EXT-X-MAP:URI="init.mp4"');
     for (let sn = from; sn < from + 3; sn++) {
-      const pdt = new Date(PDT0 + (sn - 100) * TD * 1000).toISOString();
-      lines.push(`#EXT-X-PROGRAM-DATE-TIME:${pdt}`, `#EXTINF:${TD}.000,`, `seg${sn}.mp4`);
+      const pdt = new Date(firstPdtMs + (sn - 100) * targetDurationS * 1000).toISOString();
+      lines.push(
+        `#EXT-X-PROGRAM-DATE-TIME:${pdt}`,
+        `#EXTINF:${targetDurationS}.000,`,
+        `seg${sn}.mp4`,
+      );
     }
     return lines.join('\n');
   }
@@ -460,14 +464,14 @@ describe('trackVideoStarts — 진짜 Hls 의 LEVEL_UPDATED 로 목록에서 빠
     foundInitPts(hls, gone);
     appendInit(hls, gone, AV_INIT);
     appendMedia(hls, gone, avFragment(ORIGIN_S, 0));
-    appendMedia(hls, kept, avFragment(ORIGIN_S + TD, 0));
+    appendMedia(hls, kept, avFragment(ORIGIN_S + targetDurationS, 0));
     expect(starts.startOf(gone)).not.toBeNull();
 
-    await vi.advanceTimersByTimeAsync(TD * 1000);
+    await vi.advanceTimersByTimeAsync(targetDurationS * 1000);
 
     expect(updates.length).toBeGreaterThanOrEqual(2);
     expect(updates.at(-1)!.startSN).toBe(101);
     expect(starts.startOf(gone)).toBeNull();
-    expect(starts.startOf(kept)?.videoStartS).toBeCloseTo(TD, 6);
+    expect(starts.startOf(kept)?.videoStartS).toBeCloseTo(targetDurationS, 6);
   });
 });
