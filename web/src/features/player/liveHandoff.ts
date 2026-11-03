@@ -7,7 +7,7 @@ import type {
   StreamPollEvent,
   Transition,
 } from './rewindSwitch';
-import { deniesRound, replace } from './sessionShared';
+import { confirmedAtMs, deniesRound, replace } from './sessionShared';
 
 // 되감기 → 라이브 꼬리 넘김의 칸과 행 몸통(POK-200 c13 · 설계 r9 2절 · 4절).
 // rewindSwitch 는 여기 함수를 한 줄로 부르고, 여기는 rewindSwitch 의 타입만 읽는다.
@@ -86,6 +86,12 @@ export interface HandoffFields {
    */
   positionGeneration: number | null;
   /**
+   * 이 소스 안에서 청했지만 아직 위치가 오지 않은 시크 목표(epoch ms — POK-528). 시크를 청하면
+   * positionGeneration 이 비고 lastAtMs 는 시크 전 자리로 남으므로 이 칸이 목표를 든다. 그 자리의
+   * 위치가 오거나 재생기를 바꾸면 null 이다
+   */
+  pendingSeekMs: number | null;
+  /**
    * 위치 시대 — 재생기를 바꾸거나(세대 상승) 안에서 옮길 때마다 1 오른다. 이
    * 시대에 잰 위치만 받는다(재생기가 잴 때 찍는다)
    */
@@ -107,6 +113,7 @@ export function openHandoffFields(): HandoffFields {
   return {
     playing: false,
     positionGeneration: null,
+    pendingSeekMs: null,
     positionEpoch: 0,
     list: null,
     handoffDoor: null,
@@ -244,16 +251,40 @@ export function withHandoffRules(
 
 /**
  * 재생기를 바꾸거나(세대 상승) 안에서 옮긴(seek-within) 전이 뒤 — 위치 시대를
- * 1 올린다. 옮겼으면 옮긴 자리의 위치가 올 때까지 위치 칸을 비운다
+ * 1 올린다. 옮겼으면 옮긴 자리의 위치가 올 때까지 위치 칸을 비우고 그 목표를
+ * pendingSeekMs 에 든다(둘이 한 전이에 오면 옮김을 따른다). 재생기만 바꿨으면 앞
+ * 소스의 시크 목표를 버린다. 위치 칸을 쓰는 곳은 이것과 seenPosition 둘이다
  */
 export function withPositionEpoch(prev: PlaybackSessionState, step: Transition): Transition {
   const swapped = step.state.source.generation !== prev.source.generation;
-  const moved = step.effects.some((effect) => effect.kind === 'seek-within');
-  if (!swapped && !moved) return step;
-  const positionGeneration = moved ? null : step.state.positionGeneration;
+  const seek = step.effects.findLast((effect) => effect.kind === 'seek-within');
+  if (!swapped && seek === undefined) return step;
   const positionEpoch = step.state.positionEpoch + 1;
-  const state = { ...step.state, positionGeneration, positionEpoch };
+  const position =
+    seek === undefined
+      ? { positionGeneration: step.state.positionGeneration, pendingSeekMs: null }
+      : { positionGeneration: null, pendingSeekMs: seek.atMs };
+  const state = { ...step.state, ...position, positionEpoch };
   return { state, effects: step.effects };
+}
+
+/**
+ * 지금 시대의 위치 사건이 위치 칸을 고친다 — 지금 소스가 그 자리에 화면을 붙였다(확인된
+ * 위치). 끝나지 않은 시크 목표는 버리고, 세션이 본 가장 이른 자리를 넓힌다
+ */
+export function seenPosition(
+  session: PlaybackSessionState,
+  event: Extract<SessionEvent, { type: 'position' }>,
+): PlaybackSessionState {
+  const { watchedFromMs } = session;
+  return {
+    ...session,
+    lastAtMs: event.atMs,
+    playing: event.playing,
+    positionGeneration: session.source.generation,
+    pendingSeekMs: null,
+    watchedFromMs: watchedFromMs === null ? event.atMs : Math.min(watchedFromMs, event.atMs),
+  };
 }
 
 /**
@@ -261,10 +292,10 @@ export function withPositionEpoch(prev: PlaybackSessionState, step: Transition):
  * 안이다. 새 소스가 첫 위치를 내기 전의 lastAtMs 는 앞 소스의 자리라 보지 않는다
  */
 function inHandoffBand(session: PlaybackSessionState): boolean {
-  const { list, lastAtMs } = session;
-  if (list === null || lastAtMs === null) return false;
-  if (session.positionGeneration !== session.source.generation) return false;
-  return lastAtMs >= list.endMs - HANDOFF_BAND_TD * list.tdMs;
+  const { list } = session;
+  const atMs = confirmedAtMs(session);
+  if (list === null || atMs === null) return false;
+  return atMs >= list.endMs - HANDOFF_BAND_TD * list.tdMs;
 }
 
 /**
@@ -377,7 +408,9 @@ export function onLiveProbe(
     return { state: session, effects: [] };
   }
   const cleared = { ...session, handoffProbe: null };
-  const { list, lastAtMs: atMs } = cleared;
+  const { list } = cleared;
+  // 넘김 조건(canHandOff)이 띠를 보므로 확인된 위치만 넘긴다
+  const atMs = confirmedAtMs(cleared);
   if (list === null || atMs === null || !canHandOff(cleared, now)) {
     return { state: cleared, effects: [] };
   }

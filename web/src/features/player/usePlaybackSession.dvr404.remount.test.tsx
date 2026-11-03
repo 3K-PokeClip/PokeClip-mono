@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { assertTransitionInvariants } from './dvr404TestKit';
+import { assertTransitionInvariants, relistGuard, revisitGuard } from './dvr404TestKit';
 import type * as rewindSwitchModule from './rewindSwitch';
 import { SESSION_NOTICES, transition, type XAnswer } from './rewindSwitch';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
@@ -21,16 +21,21 @@ vi.mock('./rewindSwitch', async (importOriginal) => {
 // 되감기 조각 404 의 세션 · 재생기 끝단(POK-528 c5 — 계획 4-1 · 4-2 · 8-3 · 8-3c). 세션 ·
 // 실재생 훅 · hls.js 흉내를 한 화면에 묶는다. 404 는 흉내 재생기의 ERROR 로 넣어 재생기의
 // 가로채기 → 세션 사건 → 효과 → 재생기 명령까지 잇는다.
-// ① 리마운트 기동(U2 · 8-3c): 막힘 · 마지막 확인 · 제어면 다시 읽기(recheck) 중에 재생기가
-//    내려갔다 다시 서면(출입증 회복 · 시계 key) 새 재생기는 hls.js 를 만들지 않는다. 풀리는
-//    전이(다시보기 · (가))에서 세대가 올라 정상 기동한다.
-// ② 사람 멈춤 → 404 → (가)(계획 3-3 · 부수 [cc] M1): 새 재생기가 스스로 틀어도 옛 축의
-//    멈춘 자리로 세션에 옮겨 달라지 않는다 — 알림 합 1 · 시크 요청 0.
+// ① 리마운트 기동(U2 · 8-3c): 막힘 · 마지막 확인 중에 재생기가 내려갔다 다시 서면(출입증
+//    회복 · 시계 key) 새 재생기는 hls.js 를 만들지 않는다. 풀리는 전이(다시보기)에서 세대가
+//    올라 정상 기동한다. 목록을 다시 받는 중(relist)의 리마운트는 곧바로 선다(c7 · 계획 3-6).
+// ② 404 → 목록 다시 받기 · 사람 멈춤(계획 3-3 (2) · P37): 새 재생기가 스스로 틀어도 옛 축의
+//    멈춘 자리로 세션에 옮겨 달라지 않는다 — 알림 합 ≤ 1 · 시크 사건 0. 흉내는 hls.js 실물처럼
+//    MANIFEST_PARSED · LEVEL_LOADED · LEVEL_UPDATED 를 loadSource 한 호출에서 차례로 내고
+//    (playlist-loader.ts 573 · 594 · 805 · level-controller.ts 387), play() 의 play 사건은 그
+//    호출 뒤(마이크로과제)에 낸다 — 시험 머리에서 이 순서를 단언으로 고정한다.
 
 const fake = vi.hoisted(() => ({
   instances: [] as FakeHls[],
   /** 있으면 loadSource 가 곧바로 목록 · 조각 사건을 낸다 */
   bootList: null as Details | null,
+  /** 흉내가 낸 사건 · 미디어 play 사건의 차례(흉내 순서 단언의 재료) */
+  order: [] as string[],
 }));
 
 vi.mock('hls.js', () => ({ default: FakeHls }));
@@ -71,6 +76,7 @@ class FakeHls {
     if (list === null) return;
     this.trigger(FakeHls.Events.MANIFEST_PARSED, {});
     this.trigger(FakeHls.Events.LEVEL_LOADED, { details: list });
+    this.trigger(FakeHls.Events.LEVEL_UPDATED, { details: list });
     this.trigger(FakeHls.Events.FRAG_LOADED, {});
   });
   constructor() {
@@ -91,6 +97,7 @@ class FakeHls {
     this.on(event, wrapped);
   }
   trigger(event: string, data: unknown) {
+    fake.order.push(event);
     // 목록은 목록 사건에서만 갈아 끼운다 — ERROR 자료의 details 는 오류 갈래 문자열이다(hls.js ErrorData)
     if (event === FakeHls.Events.LEVEL_LOADED || event === FakeHls.Events.LEVEL_UPDATED) {
       // 목록 사건의 자료는 늘 목록을 싣는다(hls.js LevelLoadedData · LevelUpdatedData 의 details)
@@ -109,7 +116,7 @@ const A1 = `${BASE}/dvr/key-1/a1/index.m3u8`;
 const VOD = `${BASE}/vod/key-1/r-A/index.m3u8`;
 const STREAM = `${BASE}/api/streams/key-1/rewind`;
 const ROUND = `${BASE}/api/streams/key-1/rounds/r-A/rewind`;
-/** 404 를 받은 옛 목록의 첫 조각 · 되감은 자리 · (가) 답의 첫 조각(하한이 2분 밀림) */
+/** 404 를 받은 옛 목록의 첫 조각 · 되감은 자리 · 다시 받은 새 목록의 첫 조각(하한이 2분 밀림) */
 const OLD_F = NOW - 700_000;
 const TARGET = NOW - 600_000;
 const NEW_F = OLD_F + 120_000;
@@ -177,9 +184,12 @@ function current(): PlaybackSession {
   return session;
 }
 
+/** 출입증 키 — 403 갈래(출입증 버림 · 재생기 내림)를 타게 한다 */
+const MEDIA_KEY = 'key-1';
+
 function Player({ playback }: { playback: PlaybackSession }) {
   const ref = useRef<HTMLVideoElement>(null);
-  useLiveRewindPlayback(ref, playback);
+  useLiveRewindPlayback(ref, playback, {}, undefined, MEDIA_KEY);
   return <video ref={ref} data-testid="video" />;
 }
 
@@ -220,6 +230,11 @@ function playCalls(): number {
   return vi.mocked(HTMLMediaElement.prototype.play).mock.calls.length;
 }
 
+/** 세션 알림 가운데 「가장 오래된 지점으로 옮겼어요」 의 수 */
+function oldestNotices(onNotice: ReturnType<typeof vi.fn>): number {
+  return onNotice.mock.calls.filter(([text]) => text === SESSION_NOTICES.oldest).length;
+}
+
 /** 되감기 재생기가 미디어 조각 404 를 받았다 — hls.js 가 앱에 올리는 꼴 */
 function segmentGone(hls: FakeHls) {
   act(() =>
@@ -233,8 +248,11 @@ function segmentGone(hls: FakeHls) {
   );
 }
 
-/** 세션을 열고 되감은 화면 — 되감기 재생기는 옛 목록으로 서고, 본 자리 · 목록 끝을 세션이 안다 */
-async function rewindScreen() {
+/**
+ * 세션을 열고 되감은 화면 — 되감기 재생기는 옛 목록으로 서고, 목록 끝을 세션이 안다. watched 면
+ * 되감은 자리의 위치도 받았다(확인된 위치). 아니면 첫 위치 전이다
+ */
+async function rewindScreen(watched = true) {
   const onNotice = vi.fn();
   const opts = options(onNotice);
   const view = render(<Screen options={opts} playerShown />);
@@ -259,15 +277,17 @@ async function rewindScreen() {
       headSpanMs: 12_000,
     }),
   );
-  act(() =>
-    current().dispatch({
-      type: 'position',
-      atMs: TARGET,
-      playing: true,
-      runMs: 0,
-      epoch: current().positionEpoch(),
-    }),
-  );
+  if (watched) {
+    act(() =>
+      current().dispatch({
+        type: 'position',
+        atMs: TARGET,
+        playing: true,
+        runMs: 0,
+        epoch: current().positionEpoch(),
+      }),
+    );
+  }
   const rewindHls = lastHls();
   const remount = async () => {
     view.rerender(<Screen options={opts} playerShown={false} />);
@@ -281,10 +301,14 @@ async function rewindScreen() {
 /** 감싼 transition 의 모든 호출에 감싸개 불변식을 단언하고 사건 꼴을 돌려준다(계획 8-0) */
 function checkedEvents(): string[] {
   const { calls, results } = vi.mocked(transition).mock;
+  const guards = [relistGuard(), revisitGuard()];
   return calls.map(([before, event], i) => {
     const result = results[i];
     if (result?.type !== 'return') throw new Error(`transition ${i} 이 돌려주지 않았다`);
-    assertTransitionInvariants(before, result.value.state);
+    assertTransitionInvariants(before, event, result.value);
+    for (const guard of guards) {
+      guard.observe(before, event, result.value.state);
+    }
     return event.type;
   });
 }
@@ -294,6 +318,7 @@ beforeEach(() => {
   vi.mocked(transition).mockClear();
   fake.instances.length = 0;
   fake.bootList = null;
+  fake.order.length = 0;
   media.paused = false;
   session = null;
   control.stream = () => jsonResponse(200, liveBody(OLD_F));
@@ -316,8 +341,11 @@ beforeEach(() => {
     this: HTMLMediaElement,
   ) {
     media.paused = false;
-    // 브라우저는 play 사건을 큐에 넣는다 — 같은 동기 흐름의 목록 사건(LEVEL_LOADED) 뒤에 난다
-    queueMicrotask(() => this.dispatchEvent(new Event('play')));
+    // 브라우저는 play 사건을 큐에 넣는다 — 같은 동기 흐름의 목록 사건(LEVEL_LOADED · LEVEL_UPDATED) 뒤에 난다
+    queueMicrotask(() => {
+      fake.order.push('play');
+      this.dispatchEvent(new Event('play'));
+    });
     return Promise.resolve();
   });
 });
@@ -330,11 +358,16 @@ afterEach(() => {
 });
 
 describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는 hls.js 를 만들지 않는다(U2 · 계획 8-3c)', () => {
-  it('막힘 기원: 404 → (나) 막힘 · 멈춤 → 리마운트 → 생성 0 · 재생 0 → 다시보기가 나오면 생성 1 · 재생 1', async () => {
+  it('막힘 기원: 404 → 다시 받기 → 화면 전 404 → 막힘 · 멈춤 → 리마운트 → 생성 0 · 재생 0 → 다시보기가 나오면 생성 1 · 재생 1', async () => {
     const { rewindHls, remount } = await rewindScreen();
-    control.stream = () => jsonResponse(503, { error: 'unavailable' });
     segmentGone(rewindHls);
     expect(rewindHls.stopLoad).toHaveBeenCalledTimes(1);
+    await settle();
+    const relistHls = lastHls();
+    expect(relistHls).not.toBe(rewindHls);
+    expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'paint' } });
+    segmentGone(relistHls);
+    expect(relistHls.stopLoad).toHaveBeenCalledTimes(1);
     await settle();
     expect(current().state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
     expect(media.paused).toBe(true);
@@ -382,51 +415,112 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     checkedEvents();
   });
 
-  it('recheck 기원: 404 → 제어면 답 대기 중 리마운트 → 생성 0 → (가) 답이면 세대가 올라 생성 1 · 재생 1', async () => {
-    const { rewindHls, remount } = await rewindScreen();
-    const answer = heldReply();
-    control.stream = answer.reply;
+  it('다시 받기 기원: 404 → 첫 목록 전 리마운트 → 세우지 않음 아님 · 새 재생기 생성 · 재생 1 · 새 목록 판정 알림 1', async () => {
+    const { rewindHls, remount, onNotice } = await rewindScreen();
+    fake.bootList = null;
     segmentGone(rewindHls);
     await settle();
-    expect(current().state.phase).toMatchObject({ kind: 'rewind', recheck: true });
-    // 덮개 없는 국면 — 덮개 · 주소가 그대로여도 세대가 올라 풀리는지 끝단에서 본다. 값만 바뀐 다시 그리기에 새
-    // startHeld 를 싣는지(K3 · useMemo 의존)는 이 시험이 가르지 못한다 — 판별은 useLiveRewindPlayback.test.ts 단위 시험
-    expect(current().view).toMatchObject({ cover: null, startHeld: true });
+    expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'list' } });
+    expect(current().view).toMatchObject({ cover: null, startHeld: false });
     const created = fake.instances.length;
     const played = playCalls();
-    await remount();
-    expect(fake.instances).toHaveLength(created);
-    expect(playCalls()).toBe(played);
+    onNotice.mockClear();
     fake.bootList = listFrom(NEW_F, true);
-    answer.release(liveBody(NEW_F));
-    await settle();
-    expect(current().state.phase).toMatchObject({ kind: 'rewind', movedFloorMs: NEW_F });
-    expect(current().view).toMatchObject({ cover: null, startHeld: false });
-    expect(fake.instances).toHaveLength(created + 1);
+    await remount();
+    expect(fake.instances.length).toBeGreaterThan(created);
+    expect(lastHls().loadSource).toHaveBeenCalledTimes(1);
     expect(playCalls()).toBe(played + 1);
+    expect(current().state.source.startAtMs).toBe(TARGET);
+    expect(oldestNotices(onNotice)).toBe(1);
+    checkedEvents();
+  });
+
+  it('첫 위치 전 다시 받기의 첫 목록 403(키 있음) → 재생기 내림 → 회복 리마운트 → 시작 = 청한 자리 · 하한에서 받기 · 알림 1(R3 · P41)', async () => {
+    const { rewindHls, remount, onNotice } = await rewindScreen(false);
+    fake.bootList = null;
+    segmentGone(rewindHls);
+    await settle();
+    const relistHls = lastHls();
+    expect(current().state.source).toMatchObject({ url: A1, startAtMs: TARGET });
+    act(() =>
+      relistHls.trigger(FakeHls.Events.ERROR, {
+        type: FakeHls.ErrorTypes.NETWORK_ERROR,
+        details: FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR,
+        fatal: true,
+        response: { url: A1, code: 403, text: '' },
+      }),
+    );
+    expect(relistHls.destroy).toHaveBeenCalledTimes(1);
+    onNotice.mockClear();
+    fake.bootList = listFrom(NEW_F, true);
+    await remount();
+    const recovered = lastHls();
+    expect(recovered).not.toBe(relistHls);
+    expect(current().state.source).toMatchObject({ url: A1, startAtMs: TARGET });
+    // 새 목록 첫 조각 NEW_F 는 청한 자리 뒤 — 창 하한(영상 12초)에서 받는다
+    expect(recovered.startLoad.mock.calls).toEqual([[12]]);
+    expect(oldestNotices(onNotice)).toBe(1);
     checkedEvents();
   });
 });
 
-describe('사람 멈춤 → 404 → (가) — 멈춘 자리 기록을 버린다(계획 3-3 · 부수 [cc] M1)', () => {
-  it('새 재생기가 스스로 틀어도 옛 축의 멈춘 자리로 시크를 청하지 않는다 — 알림 합 1 · 시크 사건 0', async () => {
+describe('404 → 목록 다시 받기 · 사람 멈춤 — 옛 축의 멈춘 자리로 시크하지 않는다(계획 3-3 (2) · P37)', () => {
+  /** 사람이 멈춘다 — 재생기는 pause 사건으로만 안다 */
+  function userPause(view: ReturnType<typeof render>) {
+    media.paused = true;
+    view.getByTestId('video').dispatchEvent(new Event('pause'));
+  }
+
+  it('① 404 → 정리 뒤 · 새 재생기 첫 목록 전 사람 멈춤(축이 없어 기록 없음) → 새 재생기가 스스로 틂 → 시크 사건 0 · 알림 합 ≤ 1', async () => {
     const { view, rewindHls, onNotice } = await rewindScreen();
+    const eventsBefore = checkedEvents().length;
+    onNotice.mockClear();
+    fake.bootList = null;
+    segmentGone(rewindHls);
+    await settle();
+    const relistHls = lastHls();
+    expect(relistHls).not.toBe(rewindHls);
+    act(() => userPause(view));
+    const list = listFrom(NEW_F, true);
     act(() => {
-      media.paused = true;
-      view.getByTestId('video').dispatchEvent(new Event('pause'));
+      relistHls.trigger(FakeHls.Events.MANIFEST_PARSED, {});
+      relistHls.trigger(FakeHls.Events.LEVEL_LOADED, { details: list });
+      relistHls.trigger(FakeHls.Events.LEVEL_UPDATED, { details: list });
     });
+    await settle();
+    expect(media.paused).toBe(false);
+    expect(checkedEvents().slice(eventsBefore)).not.toContain('seek');
+    expect(oldestNotices(onNotice)).toBeLessThanOrEqual(1);
+  });
+
+  it('② 404 와 같은 act 안 커밋 전 사람 멈춤(옛 재생기 · 옛 목록 축이 기록을 적음) → 첫 목록 판정이 기록을 버림 → 시크 사건 0 · 알림 합 ≤ 1', async () => {
+    const { view, rewindHls, onNotice } = await rewindScreen();
     const eventsBefore = checkedEvents().length;
     onNotice.mockClear();
     fake.bootList = listFrom(NEW_F, true);
-    control.stream = () => jsonResponse(200, liveBody(NEW_F));
-    segmentGone(rewindHls);
+    fake.order.length = 0;
+    act(() => {
+      rewindHls.trigger(FakeHls.Events.ERROR, {
+        type: FakeHls.ErrorTypes.NETWORK_ERROR,
+        details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
+        fatal: false,
+        frag: { sn: 7, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
+        response: { url: `${BASE}/dvr/key-1/a1/seg7.mp4`, code: 404, text: '' },
+      });
+      userPause(view);
+    });
     await settle();
-    await settle();
-    expect(current().state.phase).toMatchObject({ kind: 'rewind', movedFloorMs: NEW_F });
-    // 새 재생기가 MANIFEST_PARSED 에서 틀고 play 사건이 났다
+    // 흉내 순서 — 새 재생기의 첫 목록 사건이 한 호출에서 차례로 나고 play 사건은 그 뒤다(판별력의 전제)
+    const boot = [
+      FakeHls.Events.MANIFEST_PARSED,
+      FakeHls.Events.LEVEL_LOADED,
+      FakeHls.Events.LEVEL_UPDATED,
+      'play',
+    ];
+    expect(fake.order.filter((event) => boot.includes(event))).toEqual(boot);
+    expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'paint' } });
     expect(media.paused).toBe(false);
-    const after = checkedEvents().slice(eventsBefore);
-    expect(after).not.toContain('seek');
-    expect(onNotice.mock.calls.filter(([text]) => text === SESSION_NOTICES.oldest)).toHaveLength(1);
+    expect(checkedEvents().slice(eventsBefore)).not.toContain('seek');
+    expect(oldestNotices(onNotice)).toBeLessThanOrEqual(1);
   });
 });

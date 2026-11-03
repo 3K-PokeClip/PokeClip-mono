@@ -42,8 +42,8 @@ export function useLiveRewindPlayback(
       axisLowerMs,
       // 끝에 닿아 덮개가 선 동안 재생 단추를 막는다(끝난 목록이 처음부터 돌지 않게)
       holdPlay: view.cover !== null,
-      // 제어면을 다시 읽거나 막힌 동안 새로 서는 재생기는 받지도 틀지도 않는다(POK-528 U2) — 덮개 · 주소가 그대로이고
-      // 세대만 오르는 해제(recheck → (가))도 있어 의존에 따로 둔다
+      // 막힌 동안 새로 서는 재생기는 받지도 틀지도 않는다(POK-528 U2) — 덮개 · 주소가 그대로이고 세대만 오르는
+      // 전이(목록 다시 받기 · 리마운트)도 있어 의존에 따로 둔다
       startHeld: view.startHeld,
     }),
     [dispatch, liveButton, notice, positionEpoch, axisLowerMs, view.cover, view.startHeld],

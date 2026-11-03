@@ -8,6 +8,7 @@ import {
   openHandoffFields,
   releaseBlock,
   requestProbe,
+  seenPosition,
   withHandoffRules,
   withNextDoor,
   withPositionEpoch,
@@ -24,6 +25,8 @@ import {
   openVodHere,
   readyLive,
   replace,
+  restartAtMs,
+  resumeAtMs,
   seekInList,
   seekLive,
   stateOnly,
@@ -64,23 +67,25 @@ export interface StreamAsk {
   receivedAtMs: number;
 }
 
+/**
+ * 되감기 조각 404 뒤 보던 목록(같은 url)을 다시 받아 새로 세운 재생기가 아직 화면을 붙이지 못했다(POK-528
+ * 계획 3-1). stage = 첫 목록 전(list) · 첫 목록은 받았고 화면을 기다림(paint). noticed = 이 다시 받기에서
+ * 「하한으로 옮겼다」 를 이미 알렸다 — 리마운트를 끼어도 남고 화면이 붙으면 다시 받기와 함께 사라진다
+ */
+export interface RelistState {
+  stage: 'list' | 'paint';
+  noticed: boolean;
+}
+
 /** 재생 세션의 국면 — 명부 상태(broadcastStatus)와 따로 움직인다 */
 export type SessionPhase =
   | { kind: 'live' }
   /**
    * pendingNext = 지금 위치를 덮지 않는 새 url 과 그 범위(최신 폴링 값). 끝 도달 때 E 를 덮으면 그 E 에서 잇는다 ·
-   * recheck = /dvr 조각 404 를 받아 제어면을 다시 읽는 중(재생기는 받기를 멈췄다) · movedFloorMs = 이 국면은 404 뒤
-   * 제어면 목록의 첫 조각(그 값)으로 옮겨 세운 것이다(POK-528 (가) — 되풀이 속도 상한의 재료) · floorNoticed = 이번
-   * (가) 사슬에서 「하한으로 옮겼다」 알림을 이미 냈다(알림 한 번의 재료 — 사슬의 끝은 endNoticeChain). 셋 다 없으면
-   * 거짓 · 없음이고, 국면을 새로 세우면 버려진다
+   * relist = 404 뒤 보던 목록을 다시 받은 재생기가 화면을 기다리는 중(RelistState). 없으면 평소 되감기이고, 국면을
+   * 새로 세우면 버려진다. 같은 재생기의 pendingNext 만 바꾸는 폴링은 국면을 펼쳐 relist 를 남긴다
    */
-  | {
-      kind: 'rewind';
-      pendingNext: RewindRange | null;
-      recheck?: boolean;
-      movedFloorMs?: number;
-      floorNoticed?: boolean;
-    }
+  | { kind: 'rewind'; pendingNext: RewindRange | null; relist?: RelistState }
   /**
    * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 · recordOnEnd = 회차 종국 또는 20분 시한이 섰다 ·
    * blocked = 되감기 조각 404 로 이 목록을 끝까지 재생할 수 없다(POK-528 — 회차별 조회의 vod · 종국 · 20분과 사람 단추로만
@@ -185,6 +190,11 @@ export type SessionEvent =
       targetDurationS: number;
       /** 맨 앞 조각 셋의 길이 합(ms) — 창 하한 여유(LoadedList.headSpanMs) */
       headSpanMs: number;
+      /**
+       * 되감기 재생기의 첫 목록에서 시작을 창 하한으로 잘랐다(playbackEdge.startCut — POK-528). 첫 목록이
+       * 아니거나 시작 요청이 없거나 시각 표시가 없으면 칸이 없다
+       */
+      startFloorCut?: boolean;
     }
   /**
    * playing = 재생 중인가 · runMs = 지금 위치를 담은 played 범위의 길이(연속 시작 = atMs − runMs) · epoch = 재생기가 이 자리를
@@ -225,8 +235,8 @@ export type SessionEffect =
   /** 지금 프레임에서 멈춘다 — 사람의 멈춤으로 적지 않는다(POK-528 · 막힘) */
   | { kind: 'hold-frame' }
   /**
-   * 재생기가 들고 있는 사람 멈춤 자리 기록을 버린다 — 404 뒤 제어면 하한으로 옮긴 새 재생기가
-   * 옛 목록 축의 멈춘 자리로 다시 옮겨 달라고 하지 않게(POK-528 (가))
+   * 재생기가 들고 있는 사람 멈춤 자리 기록을 버린다 — 404 뒤 목록을 다시 받은 새 재생기가
+   * 옛 목록 축의 멈춘 자리로 다시 옮겨 달라고 하지 않게(POK-528 목록 다시 받기)
    */
   | { kind: 'drop-pause-mark' };
 
@@ -304,8 +314,8 @@ function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number)
 }
 
 /**
- * (나) — 404 를 받은 되감기가 그 목록 하한으로 옮기지 못하면 막힌 끝남 대기로 간다
- * (POK-528 계획 3-3). 끝남 대기 진입과 같고, 막힘을 세우고 지금 프레임에서 멈춘다
+ * 막힘 — 목록을 다시 받은 되감기가 화면을 붙이기 전에 또 404 를 받으면 막힌 끝남 대기로 간다
+ * (POK-528 계획 3-2 · 3-3 (5)). 끝남 대기 진입과 같고, 막힘을 세우고 지금 프레임에서 멈춘다
  */
 function enterBlocked(session: PlaybackSessionState, atEnd: boolean, now: number): Transition {
   const ending = enterEnding(session, atEnd, now);
@@ -401,25 +411,19 @@ function onRewind(
 ): Transition {
   switch (event.type) {
     case 'seek':
-      // 다시 읽는 동안 시크는 무시한다 — 재생기가 받기를 멈췄고 복구는 세션 효과만 한다(POK-528 P15)
-      if (phase.recheck) return stateOnly(session);
       return seekInList(session, event.targetMs, event.view);
     case 'live-button':
       return liveFromAway(session, event.x, event.attempt);
     case 'stream-poll':
-      return phase.recheck
-        ? onRecheckPoll(withNextDoor(session, event), phase, event, now)
-        : onRewindStreamPoll(session, event, now);
+      return onRewindStreamPoll(session, phase, event, now);
     case 'dvr-segment-gone':
-      return onRewindSegmentGone(session, phase);
+      return onRewindSegmentGone(session, phase, now);
     case 'endlist':
-      // 다시 읽는 중의 끝 신호는 404 를 안다는 사실을 버리지 않고 막힌 끝남 대기로 간다(POK-528 cc 시나리오 A)
-      if (phase.recheck) return enterBlocked(session, false, now);
+      // 다시 받은 목록의 ENDLIST 도 같다 — pendingNext 가 있으면 relist 를 남긴 채 refresh(POK-528 계획 3-3 (3))
       return phase.pendingNext !== null
         ? { state: session, effects: [{ kind: 'refresh', retryWhileUrl: session.source.url }] }
         : enterEnding(session, false, now);
     case 'end-reached': {
-      if (phase.recheck) return enterBlocked(session, true, now);
       const next = phase.pendingNext;
       const endMs = session.list?.endMs ?? null;
       if (next !== null && within(endMs, next.firstPdtMs, next.headPdtMs)) {
@@ -439,14 +443,21 @@ function onRewind(
   }
 }
 
+type RewindPhase = Extract<SessionPhase, { kind: 'rewind' }>;
+
 /**
  * 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 새 url 의 문을
  * 세운다. R11 은 갱신한 뒤 넘김 조건이면 탐침을 청한다. R9 · R10 은 X 가 이 회차일
  * 때만이다 — 설계 r9 R9 행은 X 모름 · 다른 방송에도 갈아 끼우고 문만 달리했지만,
- * kty 결정(K1 확장)으로 갈아 끼우지도 보류하지도 않는다
+ * kty 결정(K1 확장)으로 갈아 끼우지도 보류하지도 않는다. 새 url 의 범위는 이어 볼
+ * 자리(resumeAtMs)로 본다 — 첫 위치 전 · 시크 중의 lastAtMs 는 앞 소스 · 시크 전
+ * 자리다(POK-528 Q1). 갈아 끼우면 국면을 새로 세워 relist 를 버리고(새 재생기 —
+ * 그 url 의 다시 받기는 따로 하나), 보류(R10)는 국면을 펼쳐 relist 를 남긴다(R2).
+ * 갈아 끼운 재생기의 하한 잘림을 알리지 않는 것은 기존 R9 교체와 같은 한계다(J5)
  */
 function onRewindStreamPoll(
   before: PlaybackSessionState,
+  phase: RewindPhase,
   event: StreamPollEvent,
   now: number,
 ): Transition {
@@ -463,110 +474,108 @@ function onRewindStreamPoll(
     };
     return requestProbe(seen, now) ?? stateOnly(seen);
   }
+  // 이 회차에서 이미 본 url 은 다시 잇지 않는다 — 끝남 대기 이음(endingWait)과 같은 칸 · 같은 규칙(P46)
+  if (session.roundRewindUrls.has(live.url)) return stateOnly(session);
   // 새 url 은 같은 회차일 때만 갈아 끼우거나 보류한다 — 다른 회차 · X 모름은 그대로 둔다(문은 D 표가 비웠다)
   if (!isThisRound(session, event.x)) return stateOnly(session);
-  if (within(session.lastAtMs, live.firstPdtMs, live.headPdtMs)) {
+  const resume = resumeAtMs(session);
+  if (within(resume, live.firstPdtMs, live.headPdtMs)) {
     return stateOnly({
       ...session,
       entry: range,
       rewindOpen: true,
       phase: { kind: 'rewind', pendingNext: null },
-      source: replace(session, 'rewind', live.url, session.lastAtMs),
+      source: replace(session, 'rewind', live.url, resume),
       roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
       handoffDoor: movedDoor(live.url, event.ask),
     });
   }
-  return stateOnly({ ...session, phase: { kind: 'rewind', pendingNext: range } });
-}
-
-type RewindPhase = Extract<SessionPhase, { kind: 'rewind' }>;
-
-/**
- * 되감기 조각 404(POK-528 계획 3-2) — 제어면을 다시 읽는다. 처음이면 곧바로 묻고, (가) 로
- * 옮긴 자리의 404 면 다음 정기 폴링을 기다린다(되풀이 속도 상한 — 묻고 옮기고 다시 404
- * 가 지체 없이 돌지 않게). 이미 다시 읽는 중이면 그대로다
- */
-function onRewindSegmentGone(session: PlaybackSessionState, phase: RewindPhase): Transition {
-  if (phase.recheck) return stateOnly(session);
-  const state = { ...session, phase: { ...phase, recheck: true } };
-  if (phase.movedFloorMs !== undefined) return stateOnly(state);
-  return { state, effects: [{ kind: 'refresh' }] };
+  return stateOnly({ ...session, phase: { ...phase, pendingNext: range } });
 }
 
 /**
- * 다시 읽는 중의 스트림 답(POK-528 계획 3-3 — 문은 D 표를 먼저 탔다). 같은 회차의
- * readyLive 면 그 목록 하한으로 옮기되(가) 앞서 옮긴 첫 조각보다 나아가지 않았으면
- * 다음 폴링을 기다린다. 같은 회차가 mode live 인데 ready 가 없으면 기다린다(W2). 그 밖은
- * 모두 막힌 끝남 대기다(나) — X 모름 · 다른 회차 · 방송 없음 · mode 비 live · 잠시 불가 · 404
+ * 되감기 조각 404(POK-528 계획 3-2) — 다시 받는 중이 아니면 보던 목록(같은 url)을 다시 받는다.
+ * 다시 받은 재생기가 화면을 붙이기 전에 또 404 면 막힌 끝남 대기다(되풀이 상한 — 3-3 (5))
  */
-function onRecheckPoll(
+function onRewindSegmentGone(
   session: PlaybackSessionState,
   phase: RewindPhase,
-  event: StreamPollEvent,
   now: number,
 ): Transition {
-  const { result } = event;
-  const liveMode = result.kind === 'ok' && result.status.mode === 'live';
-  if (!liveMode || !isThisRound(session, event.x)) return enterBlocked(session, false, now);
-  const live = readyLive(result);
-  if (live === null) return stateOnly(session);
-  if (phase.movedFloorMs !== undefined && live.firstPdtMs <= phase.movedFloorMs) {
-    return stateOnly(session);
-  }
-  return moveToFloor(session, phase, live, event.ask);
+  if (phase.relist !== undefined) return enterBlocked(session, false, now);
+  return relistSameList(session, phase);
 }
 
 /**
- * (가) — 제어면 목록 하한으로 새 되감기 재생기를 세운다. 새 재생기는 첫 목록에서 첫 조각
- * F + 맨 앞 조각 셋 길이 아래를 잘라 시작하므로, 그 하한 S 를 지금 목록의 여유로
- * 추정해(답에 조각 길이가 없다) 지금 자리가 S 이상이면 그 자리에서, 아니면 S 에서 세운다.
- * 옮겼다는 알림은 앞으로 민 옮김 가운데 이번 사슬에서 아직 알리지 않았을 때만 낸다 —
- * 사슬의 첫 옮김이 그 자리에서 세웠으면(알림 0) 다음에 앞으로 미는 옮김이 알린다. 멈춤
- * 자리 기록은 옛 목록 축이라 버리게 한다
+ * 목록 다시 받기 — 같은 url 을 세대 + 1 로 다시 세운다. 재생기가 새 목록 창 하한 아래를 자르고,
+ * 시작은 이어 볼 자리(모르면 목록 하한에서)다. pendingNext · entry 는 url 이 같아 그대로 둔다.
+ * 멈춤 자리 기록은 옛 목록 축이라 버리게 한다(첫 목록 판정이 한 번 더 버린다 — P37)
  */
-function moveToFloor(
-  session: PlaybackSessionState,
-  phase: RewindPhase,
-  live: RewindRange,
-  ask: StreamAsk,
-): Transition {
-  const floorMs = live.firstPdtMs;
-  const startFloorMs = floorMs + session.edgeMarginMs;
-  const atMs = session.lastAtMs;
-  const start = atMs !== null && atMs >= startFloorMs ? atMs : startFloorMs;
-  const noticed = phase.floorNoticed === true;
-  const notify = start !== atMs && !noticed;
-  const effects: SessionEffect[] = [{ kind: 'drop-pause-mark' }];
-  if (notify) effects.push({ kind: 'notice', text: SESSION_NOTICES.oldest });
-  const chainNoticed = noticed || notify ? { floorNoticed: true } : {};
+function relistSameList(session: PlaybackSessionState, phase: RewindPhase): Transition {
   return {
     state: {
       ...session,
-      phase: { kind: 'rewind', pendingNext: null, movedFloorMs: floorMs, ...chainNoticed },
-      source: replace(session, 'rewind', live.url, start),
-      entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
-      rewindOpen: true,
-      roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
-      handoffDoor: movedDoor(live.url, ask),
-      observedEndMs: maxOrSelf(session.observedEndMs, live.headPdtMs),
+      phase: { ...phase, relist: { stage: 'list', noticed: false } },
+      source: replace(session, 'rewind', session.source.url, restartAtMs(session)),
     },
-    effects,
+    effects: [{ kind: 'drop-pause-mark' }],
   };
 }
 
 /**
- * (가) 사슬의 끝 — 알렸다는 표(floorNoticed)를 버린다. 지금 시대의 위치 사건은 옮겨 세운
- * 새 재생기가 그 자리에 화면을 붙였다는 뜻이다(재생기는 재생 위치에 영상이 있을 때만
- * 위치를 낸다 — useHlsPlayback 의 paint · paintSession 의 HAVE_CURRENT_DATA 가드). 그
- * 뒤의 404 는 같은 까닭의 되풀이가 아니라 새 사건이라 다시 알린다(오래 재생 · 멈춤 뒤
- * 404). 목록 로드는 끝이 아니다 — 하한이 S 보다 늘 앞서는 되풀이(P25)에서 새 재생기는
- * 목록을 받고 첫 조각에서 404 를 받아, 목록 로드로 끝내면 10초마다 알린다. 옛 시대의
- * 위치는 위치 시대 대조가 먼저 버린다. 되풀이 속도 상한(movedFloorMs)은 건드리지 않는다
+ * 다시 받은 첫 목록의 판정(POK-528 계획 3-3 (2)) — 지금 소스 url 의 목록이 첫 목록 전(list)에 오면
+ * 한 번 본다. 재생기가 실제로 창 하한으로 잘랐고(startFloorCut) 이 다시 받기에서 아직 알리지 않았으면
+ * 알린다(같은 relist 안 재알림 억제). 같은 호출 스택에서 새 재생기의 play 사건보다 먼저 멈춤 자리 기록을
+ * 한 번 더 버리게 한다 — 404 뒤 옛 재생기 정리 전의 사람 멈춤이 옛 축의 자리를 다시 적었을 수 있다(P37).
+ * 판정할 목록이 아니면 null
  */
-function endNoticeChain(phase: SessionPhase): SessionPhase {
-  if (phase.kind !== 'rewind' || phase.floorNoticed !== true) return phase;
-  const { floorNoticed: _ended, ...rest } = phase;
+function relistNotice(
+  session: PlaybackSessionState,
+  event: Extract<SessionEvent, { type: 'list-loaded' }>,
+): Transition | null {
+  const { phase } = session;
+  if (phase.kind !== 'rewind' || phase.relist?.stage !== 'list') return null;
+  if (event.url !== session.source.url) return null;
+  const cut = event.startFloorCut === true;
+  const relist: RelistState = { stage: 'paint', noticed: phase.relist.noticed || cut };
+  const effects: SessionEffect[] = [{ kind: 'drop-pause-mark' }];
+  if (cut && !phase.relist.noticed) effects.push({ kind: 'notice', text: SESSION_NOTICES.oldest });
+  return { state: { ...session, phase: { ...phase, relist } }, effects };
+}
+
+/**
+ * 화면 붙음 — 지금 시대의 위치 사건은 다시 받은 재생기가 그 자리에 화면을 붙였다는 뜻이다(재생기는
+ * 재생 위치에 영상이 있을 때만 위치를 낸다 — useHlsPlayback 의 HAVE_CURRENT_DATA 가드). 다시 받기를
+ * 끝낸다 — 그 뒤의 404 는 새 사건이라 다시 받고 다시 판정한다
+ */
+function settleRelist(phase: SessionPhase): SessionPhase {
+  if (phase.kind !== 'rewind' || phase.relist === undefined) return phase;
+  const { relist: _painted, ...rest } = phase;
   return rest;
+}
+
+/**
+ * 리마운트로 선 새 재생기는 첫 목록을 다시 판정한다 — 단계만 첫 목록 전(list)으로 되돌리고
+ * noticed 는 남긴다(같은 relist 안 재알림 억제 · 새 잘림은 알림 — P31 · P47)
+ */
+function remountRelist(phase: SessionPhase): SessionPhase {
+  if (phase.kind !== 'rewind' || phase.relist?.stage !== 'paint') return phase;
+  return { ...phase, relist: { ...phase.relist, stage: 'list' } };
+}
+
+/**
+ * 리마운트의 시작 — 되감기는 이어 볼 자리에서 다시 선다(첫 위치 전의 lastAtMs 는 앞 소스 자리이거나
+ * 비었다 — POK-528 R3). 다시보기는 마지막 자리 · 라이브는 라이브 끝(지금 동작)
+ */
+function remountStartAtMs(session: PlaybackSessionState): number | null {
+  switch (session.source.kind) {
+    case 'rewind':
+      return restartAtMs(session);
+    case 'vod':
+      return session.lastAtMs;
+    case 'live':
+      return null;
+  }
 }
 
 type OfferedPhase = Extract<SessionPhase, { kind: 'vod-offered' }>;
@@ -610,18 +619,22 @@ function onVodOffered(
   }
 }
 
-/** 「다시보기 보기」 — 끝에 닿았으면 처음부터, 아니면 지금 자리에서(하한이 이긴다 — 짧은 VOD 는 첫 조각 · R47) */
+/**
+ * 「다시보기 보기」 — 끝에 닿았거나 자리를 모르면 처음부터, 아니면 이어 볼 자리에서(하한이 이긴다 —
+ * 짧은 VOD 는 첫 조각 · R47)
+ */
 function openVod(session: PlaybackSessionState, phase: OfferedPhase): Transition {
-  if (phase.atEnd || session.lastAtMs === null) {
+  const atMs = resumeAtMs(session);
+  if (phase.atEnd || atMs === null) {
     return stateOnly({
       ...session,
       phase: { kind: 'vod' },
       source: replace(session, 'vod', phase.url, null),
     });
   }
-  const start = vodStartAt(session, session.lastAtMs, phase);
+  const start = vodStartAt(session, atMs, phase);
   const effects: SessionEffect[] =
-    start === session.lastAtMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
+    start === atMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
   return {
     state: {
       ...session,
@@ -649,7 +662,7 @@ function onAnyPhase(
     case 'list-loaded': {
       const own = event.url === session.source.url;
       const frozen = session.foreignLive !== null;
-      return stateOnly({
+      const seen: PlaybackSessionState = {
         ...session,
         roundRewindUrls:
           own && session.source.kind === 'rewind'
@@ -661,21 +674,14 @@ function onAnyPhase(
         list: own ? loadedList(session, event) : session.list,
         handoffBlock: releaseBlock(session, event.url, event.lastEndMs),
         edgeMarginMs: event.headSpanMs > 0 ? event.headSpanMs : session.edgeMarginMs,
-      });
+      };
+      return relistNotice(seen, event) ?? stateOnly(seen);
     }
     case 'position': {
       // 다른 시대(재생기를 바꾸거나 옮기기 전)에 잰 위치다 — 커밋된 위치가 효과로 늦게 올라왔다. 세션을 다시 열면 시대가
       // 0 부터 다시 서므로, 닫힌 앞 세션의 값은 이 대조로 가르지 못한다
       if (event.epoch !== session.positionEpoch) return stateOnly(session);
-      const moved = {
-        ...session,
-        phase: endNoticeChain(session.phase),
-        lastAtMs: event.atMs,
-        playing: event.playing,
-        positionGeneration: session.source.generation,
-        watchedFromMs:
-          session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
-      };
+      const moved = { ...seenPosition(session, event), phase: settleRelist(session.phase) };
       // A1 — 확인 중인 live 는 H 행, rewind 는 R6(넘김 조건이면 탐침)
       const rewinding = moved.phase.kind === 'rewind';
       const probed = rewinding ? requestProbe(moved, now) : null;
@@ -694,10 +700,14 @@ function onAnyPhase(
     case 'remount': {
       const confirming = onHandoffConfirming(session, event, now);
       if (confirming !== null) return confirming;
-      const startAtMs = session.source.kind === 'live' ? null : session.lastAtMs;
       return stateOnly({
         ...session,
-        source: { ...session.source, startAtMs, generation: session.source.generation + 1 },
+        phase: remountRelist(session.phase),
+        source: {
+          ...session.source,
+          startAtMs: remountStartAtMs(session),
+          generation: session.source.generation + 1,
+        },
       });
     }
     case 'leave':

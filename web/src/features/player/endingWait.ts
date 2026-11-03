@@ -19,6 +19,7 @@ import {
   openVodHere,
   readyLive,
   replace,
+  resumeAtMs,
   seekInList,
   seekLive,
   stateOnly,
@@ -78,11 +79,12 @@ export function onEnding(
 }
 
 /**
- * 이음 지점 — rewind 기원이면 atEnd ? E : P, live 기원이면 lastAtMs. url 이 바뀌어
- * list 가 비었으면 E 대신 lastAtMs(T12)
+ * 이음 지점 — rewind 기원이면 atEnd ? E : 이어 볼 자리(resumeAtMs — 첫 위치 전이면 청한 자리 ·
+ * POK-528 계획 3-4), live 기원이면 lastAtMs. url 이 바뀌어 list 가 비었으면 E 대신 lastAtMs(T12)
  */
 function joinPoint(session: PlaybackSessionState, phase: EndingPhase): number | null {
-  if (phase.origin !== 'rewind' || !phase.atEnd) return session.lastAtMs;
+  if (phase.origin !== 'rewind') return session.lastAtMs;
+  if (!phase.atEnd) return resumeAtMs(session);
   return session.list?.endMs ?? session.lastAtMs;
 }
 

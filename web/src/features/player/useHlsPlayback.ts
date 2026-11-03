@@ -27,6 +27,7 @@ import {
   endStalled,
   loadedList,
   sessionAxis,
+  startCut,
   type LoadedList,
   type SessionAxis,
 } from './playbackEdge';
@@ -67,6 +68,21 @@ const HAVE_CURRENT_DATA = 2;
 const DEFAULT_LIVE_LAG_MS = 3_000;
 /** 창 하한으로 옮긴 뒤 이 배수 × TD 안에 또 옮기면 알리지 않는다(숨은 탭의 밀린 갱신이 한꺼번에 올 때 — 5.3.1절) */
 const FLOOR_NOTICE_QUIET_TD = 2;
+/**
+ * 되감기 재생기의 첫 목록에서 시작을 창 하한으로 잘랐나 — armStart 가 첫 LEVEL_LOADED 에서 같은 조각 ·
+ * 같은 함수(startCut)로 자리를 정하므로 결과가 같다. 첫 LEVEL_UPDATED 는 기동 처리기보다 먼저 돌아 그 값을
+ * 읽을 수 없어 한 번 더 부른다(POK-528 계획 3-3 (2)). 되감기가 아니거나 시작 요청 · 시각 표시가 없으면 칸 없음
+ */
+function firstStartCut(
+  kind: PlaybackSource['kind'],
+  startAtMs: number | null,
+  details: LevelDetails,
+): { startFloorCut?: boolean } {
+  if (kind !== 'rewind' || startAtMs === null) return {};
+  const cut = startCut(details.fragments, startAtMs, kind, details.targetduration);
+  return cut === null ? {} : { startFloorCut: cut.floorCut };
+}
+
 /** 영상 시작 기록이 없는 재생기(스위치 OFF 라이브 · 재생기가 서기 전)의 startOf — 판 2 조각도 해체 전처럼 센다 */
 function noVideoStart(): null {
   return null;
@@ -75,6 +91,8 @@ function noVideoStart(): null {
 /** 재생기가 로드한 목록 하나(세션의 observedEndMs · roundRewindUrls 재료) */
 export interface LoadedPlaylist extends LoadedList {
   url: string;
+  /** 되감기 재생기의 첫 목록에서 시작을 창 하한으로 잘랐다(POK-528 — firstStartCut) */
+  startFloorCut?: boolean;
 }
 
 /**
@@ -482,6 +500,8 @@ export function useHlsPlayback(
     };
     // 재생기 하나의 사건 상태: ENDLIST 를 올렸나 · 목록이 마지막으로 자란 때 · 끝 도달을 올렸나
     let endlistSent = false;
+    // 첫 목록에서만 시작 잘림을 싣는다(POK-528 — 세션의 하한 알림 판정)
+    let firstList = true;
     let lastEndMs: number | null = null;
     let lastGrowAt = Date.now();
     let endSent = false;
@@ -716,8 +736,10 @@ export function useHlsPlayback(
               endSent = false;
             }
             lastEndMs = list.lastEndMs;
-            hooksRef.current.onListLoaded?.({ url: src, ...list });
+            const cut = firstList ? firstStartCut(kind, startAtMs, data.details) : {};
+            hooksRef.current.onListLoaded?.({ url: src, ...list, ...cut });
           }
+          firstList = false;
           // ENDLIST 는 「조각이 더 붙지 않는다」뿐이다 — 끝 도달과 따로 올린다(cx H1)
           if (!data.details.live && !endlistSent) {
             endlistSent = true;

@@ -603,3 +603,139 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
     expect(interceptor.stopLoad).not.toHaveBeenCalled();
   });
 });
+
+/** 되감기 미디어 목록(방송 중 — ENDLIST 없음 · 4초 조각 셋) */
+const LIVE_REWIND_PLAYLIST = [
+  '#EXTM3U',
+  '#EXT-X-VERSION:6',
+  '#EXT-X-TARGETDURATION:4',
+  '#EXT-X-MEDIA-SEQUENCE:1',
+  '#EXT-X-PROGRAM-DATE-TIME:2026-10-25T05:00:00.000Z',
+  '#EXTINF:4.000,',
+  'seg1.mp4',
+  '#EXTINF:4.000,',
+  'seg2.mp4',
+  '#EXTINF:4.000,',
+  'seg3.mp4',
+  '',
+].join('\n');
+
+/** 목록 다시 받기를 기다리는 동안의 가짜 시계 길이(계획 8-2 c7 ① — 30초) */
+const RELIST_WAIT_MS = 30_000;
+
+/** 가짜 pLoader 가 받은 목록 요청 하나 — 응답을 보류하고 끊김(abort · destroy)을 기록한다 */
+interface HeldListRequest {
+  context: LoaderContext;
+  aborted: boolean;
+  /** 보류한 요청에 목록을 흘린다 — 끊긴 요청은 실물 XHR 처럼 답하지 않는다 */
+  respond: () => void;
+}
+
+/**
+ * 목록 요청을 시험이 쥐는 되감기 재생기 — 첫 목록(MANIFEST)은 곧바로 답하고 그 뒤 목록 요청은
+ * 보류한다. 받기 사건(LEVEL_LOADED · LEVEL_UPDATED) 수를 센다
+ */
+function rewindPlayerWithHeldLists(): {
+  hls: Hls;
+  requests: HeldListRequest[];
+  listEvents: () => number;
+} {
+  const requests: HeldListRequest[] = [];
+  class HeldListLoader {
+    stats = new LoadStats();
+    private request: HeldListRequest | null = null;
+    load(...[context, , callbacks]: LoadArgs) {
+      const stats = this.stats;
+      const request: HeldListRequest = {
+        context,
+        aborted: false,
+        respond: () => {
+          if (request.aborted) return;
+          stats.loading.end = performance.now();
+          callbacks.onSuccess(
+            { url: context.url, data: LIVE_REWIND_PLAYLIST },
+            stats,
+            context,
+            null,
+          );
+        },
+      };
+      this.request = request;
+      requests.push(request);
+      if (requests.length === 1) queueMicrotask(request.respond);
+    }
+    abort() {
+      if (this.request !== null) this.request.aborted = true;
+    }
+    destroy() {
+      this.abort();
+    }
+  }
+  const hls = new Hls({
+    ...HLS_REWIND_CONFIG,
+    autoStartLoad: true,
+    pLoader: HeldListLoader as unknown as HlsConfig['pLoader'],
+    debug: SILENT,
+  });
+  instances.push(hls);
+  let listEvents = 0;
+  const count = () => {
+    listEvents += 1;
+  };
+  hls.on(Events.LEVEL_LOADED, count);
+  hls.on(Events.LEVEL_UPDATED, count);
+  return { hls, requests, listEvents: () => listEvents };
+}
+
+/** 첫 목록을 받아 다음 목록 요청 하나가 보류된 채 나갈 때까지 가짜 시계를 민다 */
+async function untilReloadHeld(player: ReturnType<typeof rewindPlayerWithHeldLists>) {
+  player.hls.loadSource(PLAYLIST_URL);
+  await vi.advanceTimersByTimeAsync(0);
+  for (let t = 0; t < RELIST_WAIT_MS && player.requests.length < 2; t += 500) {
+    await vi.advanceTimersByTimeAsync(500);
+  }
+}
+
+describe('되감기 조각 404 가로채기 뒤 목록 요청 — 진짜 hls.js 1.7.3(POK-528 c7 · 계획 8-2)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('전제 — 가로채지 않으면 방송 중 목록은 30초 동안 다시 청해진다(요청 관측의 판별력)', async () => {
+    fakeClock();
+    const player = rewindPlayerWithHeldLists();
+    await untilReloadHeld(player);
+    expect(player.requests.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('① 가로채기 뒤 가짜 시계 30초 동안 새 목록 요청 0(P27 — 다시 받기는 세션이 새 재생기로 한다)', async () => {
+    fakeClock();
+    const player = rewindPlayerWithHeldLists();
+    player.hls.loadSource(PLAYLIST_URL);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(player.requests).toHaveLength(1);
+    expect(consumeDvrSegmentGone(player.hls, fragError(), ErrorTypes, ErrorDetails, vi.fn())).toBe(
+      true,
+    );
+    await vi.advanceTimersByTimeAsync(RELIST_WAIT_MS);
+    expect(player.requests.map((request) => request.context.type)).toEqual(['manifest']);
+  });
+
+  it('② 진행 중이던 목록 요청은 가로채기의 stopLoad 가 끊는다 — 그 응답이 와도 목록 사건 0', async () => {
+    fakeClock();
+    const player = rewindPlayerWithHeldLists();
+    await untilReloadHeld(player);
+    const held = player.requests[1];
+    if (held === undefined) throw new Error('다시 청한 목록 요청이 없다');
+    const before = player.listEvents();
+    expect(consumeDvrSegmentGone(player.hls, fragError(), ErrorTypes, ErrorDetails, vi.fn())).toBe(
+      true,
+    );
+    held.respond();
+    await vi.advanceTimersByTimeAsync(RELIST_WAIT_MS);
+    expect({ aborted: held.aborted, listEvents: player.listEvents() - before }).toEqual({
+      aborted: true,
+      listEvents: 0,
+    });
+  });
+});

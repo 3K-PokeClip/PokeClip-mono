@@ -34,7 +34,7 @@ export interface SessionPlayer {
   keepPausedOnSwap: () => void;
   /** 지금 프레임에서 멈추되 사람의 멈춤으로 적지 않는다(되감기 조각 404 · POK-528) */
   holdFrame: () => void;
-  /** 재생기가 들고 있는 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(POK-528 (가)) */
+  /** 재생기가 들고 있는 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(POK-528 목록 다시 받기) */
   dropPauseMark: () => void;
 }
 

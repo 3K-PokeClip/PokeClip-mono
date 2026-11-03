@@ -38,14 +38,13 @@ export interface SessionView {
 type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 
 /**
- * 새로 서는 재생기(세대가 올라 다시 서는 것 · 리마운트 포함)를 세우지 않는가 — 제어면을
- * 다시 읽는 되감기(recheck) · 막힌 끝남 대기 · 마지막 확인 중인 끝남 대기(POK-528 U2).
- * 화면에 그릴 것이 아니라 재생기 수명 지시다. 국면 데이터에서 뽑으므로 세대가 오를 때마다
- * 같은 값을 다시 읽는다
+ * 새로 서는 재생기(세대가 올라 다시 서는 것 · 리마운트 포함)를 세우지 않는가 — 막힌 끝남
+ * 대기 · 마지막 확인 중인 끝남 대기(POK-528 U2). 되감기는 404 뒤 목록을 다시 받는 중에도
+ * 세운다(다시 받기가 곧 새 재생기다 — 계획 3-6). 화면에 그릴 것이 아니라 재생기 수명
+ * 지시다. 국면 데이터에서 뽑으므로 세대가 오를 때마다 같은 값을 다시 읽는다
  */
 export function isPlayerStartHeld(session: PlaybackSessionState): boolean {
   const { phase } = session;
-  if (phase.kind === 'rewind') return phase.recheck === true;
   return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
 }
 

@@ -24,13 +24,12 @@ vi.mock('./rewindSwitch', async (importOriginal) => {
 // ② 마지막 확인의 회차별 물음은 한 번이다(정본 r7 1151 「두 번째 확인은 없다」).
 //    답을 기다리는 동안 숨김 복귀가 되풀이돼도 요청을 끊고 다시 묻지 않고, 처음
 //    물음의 시한(8초)에 녹화로 닫는다.
-// ③ 백그라운드 탭 10분(W13 증거 · c3 몫): 숨은 탭은 브라우저가 타이머를 묶어 정기
-//    물음이 나가지 않는다. 그동안 recheck 는 풀리지 않고, 보이게 되면 곧바로 묻는
-//    물음(useRewindStatus 숨김 복귀)의 답이 recheck 를 푼다. 숨은 동안은 시계만
-//    밀고(vi.setSystemTime) 타이머는 돌리지 않는다 — 묶인 타이머의 꼴이다.
-//    c3 파일(usePlaybackSession.dvr404.test.ts)이 아니라 여기 두는 까닭: 스트림 ·
-//    회차별 답을 함께 쥐는 serve · openRewind 와 숨김 전환 setVisibility 를 ② 와
-//    같이 쓴다. c3 파일의 차림은 스트림 답 하나만 쥔다.
+// ③ 백그라운드 탭 10분(W13 증거 · c7 몫): 숨은 탭은 브라우저가 타이머를 묶어 정기
+//    물음이 나가지 않는다. 목록 다시 받기는 제어면 답을 기다리지 않으므로, 숨은
+//    동안이든 보이게 된 뒤든 404 는 곧바로 같은 목록을 다시 받는다(물음 0). 숨은
+//    동안은 시계만 밀고(vi.setSystemTime) 타이머는 돌리지 않는다 — 묶인 타이머의
+//    꼴이다. usePlaybackSession.dvr404.test.ts 가 아니라 여기 두는 까닭: 숨김 전환
+//    setVisibility 와 물음 기록 serve · openRewind 를 ② 와 같이 쓴다.
 
 const BASE = 'https://media.pokeclip.com';
 const NOW = Date.parse('2026-10-25T06:00:00.000Z');
@@ -92,10 +91,6 @@ function liveBody(floorMs: number): unknown {
   });
 }
 
-/** 같은 회차 · 방송 중인데 아직 받을 목록이 없다(W2) */
-function notReadyBody(): unknown {
-  return body({ mode: 'live', url: A1 });
-}
 const ENDED_BODY = body({ mode: 'ended' });
 
 /** 끊기 신호가 올 때까지 답하지 않는 응답 — 끊기면 fetch 처럼 AbortError 로 거절한다 */
@@ -146,10 +141,10 @@ function options(canOpen: boolean, onClose: (closed: SessionClosed) => void): Se
 /** 감싼 transition 의 모든 호출에 감싸개 불변식을 단언한다(계획 8-0) */
 function assertAllTransitions(): void {
   const { calls, results } = vi.mocked(transition).mock;
-  calls.forEach(([before], i) => {
+  calls.forEach(([before, event], i) => {
     const result = results[i];
     if (result?.type !== 'return') throw new Error(`transition ${i} 이 돌려주지 않았다`);
-    assertTransitionInvariants(before, result.value.state);
+    assertTransitionInvariants(before, event, result.value);
   });
 }
 
@@ -250,38 +245,29 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
   });
 });
 
-describe('백그라운드 탭 10분 — 숨김 복귀의 곧바로 묻기가 recheck 를 푼다(8-3 웹 행 · W13)', () => {
-  it('숨은 동안 W2 로 기다리던 recheck 가 복귀 물음의 답(F 진전)으로 옮겨진다 — 타이머를 돌리지 않고', async () => {
-    const movedF = FIRST_F + HIDDEN_MS;
-    let visibleAgain = false;
+describe('백그라운드 탭 10분 — 404 는 숨김과 무관하게 곧바로 같은 목록을 다시 받는다(8-3b · W13)', () => {
+  it('숨은 지 10분 뒤 404 → 타이머를 돌리지 않고 곧바로 세대 + 1 · 같은 url · 물음 0 → 보이게 되어도 다시 받기 유지', async () => {
     const { session, gone } = await openRewind({
-      stream: (n) => {
-        if (n === 0) return liveBody(FIRST_F);
-        return visibleAgain ? liveBody(movedF) : notReadyBody();
-      },
+      stream: () => liveBody(FIRST_F),
       round: () => ENDED_BODY,
     });
-    const generation = session().state.source.generation;
-    gone();
-    await flush();
-    expect(session().state.phase).toMatchObject({ kind: 'rewind', recheck: true });
-    const asked = streamStarts.length;
+    const { source } = session().state;
     setVisibility('hidden');
     vi.setSystemTime(Date.now() + HIDDEN_MS);
     await flush();
+    const asked = streamStarts.length;
+    gone();
+    await flush();
+    expect(session().state.source).toMatchObject({
+      url: source.url,
+      generation: source.generation + 1,
+    });
+    expect(session().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'list' } });
     expect(streamStarts).toHaveLength(asked);
-    expect(session().state.phase).toMatchObject({ kind: 'rewind', recheck: true });
-    const returnedAt = Date.now();
-    visibleAgain = true;
     act(() => setVisibility('visible'));
     await flush();
-    expect(streamStarts).toHaveLength(asked + 1);
-    expect(streamStarts[asked]).toBe(returnedAt);
-    expect(Date.now()).toBe(returnedAt);
-    const { phase, source } = session().state;
-    expect(phase.kind === 'rewind' && phase.recheck).toBeFalsy();
-    expect(phase).toMatchObject({ kind: 'rewind', movedFloorMs: movedF });
-    expect(source.generation).toBe(generation + 1);
+    expect(session().state.source.generation).toBe(source.generation + 1);
+    expect(session().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'list' } });
     assertAllTransitions();
   });
 });
