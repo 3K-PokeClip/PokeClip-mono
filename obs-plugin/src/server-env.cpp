@@ -55,7 +55,8 @@ bool IsKnownDefaultApiBase(const std::string &base)
 
 bool IsKnownDefaultIngestHost(const std::string &host)
 {
-	return host == kProdServers.ingestHost || host == kDevServers.ingestHost || host == kLegacyDefaultIngestHost;
+	return host == kProdServers.ingestHost || host == kDevServers.ingestHost || host == kLegacyDefaultIngestHost ||
+	       host == kLegacyProdIngestHost;
 }
 
 ServerEnv InferServerEnv(const PluginConfig &c, ServerEnv fallback)
@@ -64,11 +65,16 @@ ServerEnv InferServerEnv(const PluginConfig &c, ServerEnv fallback)
 		return ServerEnv::Dev;
 	if (SameBase(c.apiBase, kProdServers.apiBase))
 		return ServerEnv::Prod;
-	// api_base를 직접 적었다(로컬 auth 등) — 수신 호스트가 한 환경의 기본값이면 그쪽으로 본다. 옛 기본 수신
-	// 호스트(ingest.pokeclip.com)는 dev 키와 운영 수신을 섞던 값이라 어느 환경의 근거도 되지 않는다.
+	// api_base를 직접 적었다(로컬 auth 등) — 수신 호스트가 한 환경의 기본값이면 그쪽으로 본다. POK-267 이전 기본
+	// 수신 호스트(ingest.pokeclip.com)는 dev 키와 운영 수신을 섞던 값이라 어느 환경의 근거도 되지 않는다 — 지금 운영
+	// 값과 이름이 같아도 그렇다. 그래서 맨 먼저 본다.
+	if (c.ingestHost == kLegacyDefaultIngestHost)
+		return fallback;
 	if (c.ingestHost == kDevServers.ingestHost)
 		return ServerEnv::Dev;
-	if (c.ingestHost == kProdServers.ingestHost)
+	// 0.2.1 이전 운영 짝(media.pokeclip.com)은 운영에만 쓰였다 — 운영 흔적으로 본다. kProdServers 비교는 지금은
+	// 위 옛 값과 같아 닿지 않는다 — 운영 호스트가 다시 바뀌어도 규칙이 값과 무관하게 읽히게 둔다.
+	if (c.ingestHost == kProdServers.ingestHost || c.ingestHost == kLegacyProdIngestHost)
 		return ServerEnv::Prod;
 	return fallback;
 }

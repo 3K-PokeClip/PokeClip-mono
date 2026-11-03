@@ -46,7 +46,7 @@ const NO_RETRY: RetryView = { attempt: 0, nextAt: 0, gaveUp: false, keySuspect: 
 const MOCK_RETRY_INTERVAL_MS = 5000; // 300초 창 안의 간격과 같다
 // 플러그인 constants.hpp kProdServers·kDevServers와 같은 짝
 const MOCK_SERVERS: Record<ServerEnv, Pick<PluginSettings, 'api_base' | 'ingest_host' | 'ingest_port'>> = {
-  prod: { api_base: 'https://api.pokeclip.com', ingest_host: 'media.pokeclip.com', ingest_port: 8890 },
+  prod: { api_base: 'https://api.pokeclip.com', ingest_host: 'ingest.pokeclip.com', ingest_port: 8890 },
   dev: { api_base: 'https://dev.pokeclip.com', ingest_host: 'media-dev.pokeclip.com', ingest_port: 8890 },
 };
 const BUSY: Phase[] = ['starting', 'live', 'reconnecting', 'stopping'];
@@ -256,7 +256,7 @@ export function createMockBridge(scenario: string): Bridge {
 
   return {
     async hello() {
-      return { plugin: 'pokeclip-obs', pluginVersion: '0.2.0', obsVersion: '32.2.2', state };
+      return { plugin: 'pokeclip-obs', pluginVersion: '0.2.1', obsVersion: '32.2.2', state };
     },
     subscribe(onState, onConnection) {
       listeners.add(onState);

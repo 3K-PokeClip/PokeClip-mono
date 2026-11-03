@@ -29,10 +29,10 @@ struct ServerDefaults {
 	int ingestPort;
 };
 
-// 운영 api = 1번 Jira 댓글(2026-10-13, POK-267) 확정값. 운영 SRT 수신 호스트는 사용자 결정(2026-10-14)으로
-// media.pokeclip.com이다 — ADR-020·021·POK-300은 ingest.pokeclip.com(NLB)이라 1번 확인 대기. 포트 8890은 로컬
-// compose·dev-media 값이고 운영 포트는 위키에 미확정(status.md).
-inline constexpr ServerDefaults kProdServers{"prod", "https://api.pokeclip.com", "media.pokeclip.com", 8890};
+// 운영 api = 1번 Jira 댓글(2026-10-13, POK-267) 확정값. 운영 SRT 수신 = ingest.pokeclip.com(NLB, ADR-020·021·
+// POK-300) — media.pokeclip.com은 CloudFront라 SRT(UDP)가 닿지 않는다. 포트 8890 = 운영 수신 모듈 srt_port 기본값
+// (prod 덮어쓰기 없음).
+inline constexpr ServerDefaults kProdServers{"prod", "https://api.pokeclip.com", "ingest.pokeclip.com", 8890};
 // 개발 = dev 서버(HTTPS — HTTP는 301로 돌려보내 POST가 닿지 않는다, 2026-09-30 확인) + dev-media(ADR-040, 팀 IP 한정).
 inline constexpr ServerDefaults kDevServers{"dev", "https://dev.pokeclip.com", "media-dev.pokeclip.com", 8890};
 
@@ -44,8 +44,11 @@ inline constexpr ServerEnv kBuildServerEnv = ServerEnv::Prod;
 
 // 예전 기본값 — 저장된 설정에 이 값이 있으면 읽을 때 지금 환경의 값으로 올린다(손대지 않은 기본값으로 본다).
 inline constexpr const char *kLegacyDefaultApiBase = "http://dev.pokeclip.com";
+// POK-267 이전 기본 수신 — dev 키와 운영 수신이 섞인 짝이었다. 지금 운영 값과 이름이 같다(InferServerEnv).
 inline constexpr const char *kLegacyDefaultIngestHost = "ingest.pokeclip.com";
 inline constexpr int kLegacyDefaultIngestPort = 8890;
+// 2026-10-14부터 0.2.1 전까지의 운영 짝 수신 — CloudFront라 SRT가 닿지 않으므로 직접 적은 값으로 보지 않는다.
+inline constexpr const char *kLegacyProdIngestHost = "media.pokeclip.com";
 
 static_assert(std::string_view(kProdServers.apiBase).substr(0, 8) == "https://", "운영 api는 https여야 한다");
 static_assert(std::string_view(kDevServers.apiBase).substr(0, 8) == "https://", "개발 api는 https여야 한다");
