@@ -170,18 +170,23 @@ type FragOutcome = { code: number } | 'timeout';
 
 type LoadArgs = [LoaderContext, unknown, LoaderCallbacks<LoaderContext>];
 
-interface FragmentLoaderInternals {
+interface StreamControllerInternals {
+  state: string;
   fragmentLoader: { load(frag: Fragment): Promise<FragLoadedData> };
+  loadInitSegmentIfNeeded(mediaFrag: Fragment): Promise<void> | undefined;
 }
 
-/**
- * 진짜 FragmentLoader(stream-controller 가 쓰는 것)로 조각 하나를 받다가 outcome 으로 끝나게 하고, 그 거절(LoadError)에
- * 담긴 오류 자료를 돌려준다. 앱이 ERROR 처리기에서 받는 꼴의 원본이다(fragment-loader.ts 118-131 · 147-159)
- */
-async function rejectedFragLoad(sn: Fragment['sn'], outcome: FragOutcome): Promise<ErrorData> {
+const PLAYLIST_URL = 'https://m/dvr/k/a/index.m3u8';
+
+/** 받는 조각마다 끝나는 꼴을 정하는 가짜 fLoader 를 물린 되감기 재생기 — 받기는 앱이 직접 부른다(autoStartLoad 끔) */
+function rewindPlayerEndingWith(outcomeFor: (url: string) => FragOutcome): {
+  hls: Hls;
+  streamController: StreamControllerInternals;
+} {
   class EndingLoader {
     stats = new LoadStats();
     load(...[context, , callbacks]: LoadArgs) {
+      const outcome = outcomeFor(context.url);
       queueMicrotask(() => {
         if (outcome === 'timeout') {
           callbacks.onTimeout(this.stats, context, null);
@@ -200,11 +205,31 @@ async function rejectedFragLoad(sn: Fragment['sn'], outcome: FragOutcome): Promi
     debug: SILENT,
   });
   instances.push(hls);
-  const frag = new Fragment(PlaylistLevelType.MAIN, 'https://m/dvr/k/a/index.m3u8');
+  const { streamController } = hls as unknown as { streamController: StreamControllerInternals };
+  return { hls, streamController };
+}
+
+/** 미디어 조각 sn 과 그 조각의 init 조각(MediaMTX 처럼 별도 파일 init.mp4) */
+function mediaFragWithInit(sn: number): Fragment {
+  const initSegment = new Fragment(PlaylistLevelType.MAIN, PLAYLIST_URL);
+  initSegment.sn = 'initSegment';
+  initSegment.relurl = 'init.mp4';
+  const frag = new Fragment(PlaylistLevelType.MAIN, PLAYLIST_URL);
   frag.sn = sn;
-  frag.relurl = sn === 'initSegment' ? 'init.mp4' : `seg${sn}.mp4`;
-  const { fragmentLoader } = (hls as unknown as { streamController: FragmentLoaderInternals })
-    .streamController;
+  frag.relurl = `seg${sn}.mp4`;
+  frag.initSegment = initSegment;
+  return frag;
+}
+
+/**
+ * 진짜 FragmentLoader(stream-controller 가 쓰는 것)로 조각 하나를 받다가 outcome 으로 끝나게 하고, 그 거절(LoadError)에
+ * 담긴 오류 자료를 돌려준다(fragment-loader.ts 118-131 · 147-159). 미디어 조각이면 stream-controller 가 이 자료를 그대로
+ * ERROR 로 올려 앱이 받는다. init 조각이면 앱이 받는 꼴이 아니다 — hls.js 가 frag 를 미디어 조각으로 바꿔 끼운 뒤
+ * 올린다(아래 initLoadErrorSeenByApp)
+ */
+async function rejectedFragLoad(frag: Fragment, outcome: FragOutcome): Promise<ErrorData> {
+  const { streamController } = rewindPlayerEndingWith(() => outcome);
+  const { fragmentLoader } = streamController;
   const failure: unknown = await fragmentLoader.load(frag).then(
     () => {
       throw new Error('조각 받기가 거절되지 않았다');
@@ -214,9 +239,47 @@ async function rejectedFragLoad(sn: Fragment['sn'], outcome: FragOutcome): Promi
   return (failure as { data: ErrorData }).data;
 }
 
-/** 조각 받기가 HTTP 상태 code 로 끝난 응답 */
-function httpStatus(code: number): ErrorData['response'] {
-  return { url: 'https://m/dvr/k/a/seg7.mp4', code, text: '' };
+/**
+ * 진짜 stream-controller 의 init 받기 경로(loadInitSegmentIfNeeded — _doFragLoad 가 미디어 조각 받기 앞에 부른다)로
+ * 미디어 조각의 init 만 404 로 끝나게 하고, 앱의 ERROR 처리기가 받은 자료를 돌려준다. hls.js 는 거절 자료의 frag 를
+ * 미디어 조각으로 바꿔 끼운 뒤 올린다(base-stream-controller.ts 815-823)
+ */
+async function initLoadErrorSeenByApp(mediaFrag: Fragment): Promise<ErrorData> {
+  const initUrl = mediaFrag.initSegment?.url;
+  const requested: string[] = [];
+  const { hls, streamController } = rewindPlayerEndingWith((url) => {
+    requested.push(url);
+    return { code: 404 };
+  });
+  const seen: ErrorData[] = [];
+  hls.on(Events.ERROR, (_event, data) => {
+    seen.push({ ...data });
+  });
+  // 받기 중인 국면 — STOPPED · ERROR 면 hls.js 가 ERROR 를 올리지 않고 거절만 다시 던진다(816-818)
+  streamController.state = 'FRAG_LOADING';
+  const loading = streamController.loadInitSegmentIfNeeded(mediaFrag);
+  if (loading === undefined) throw new Error('init 받기가 시작되지 않았다');
+  await loading.then(
+    () => {
+      throw new Error('init 받기가 거절되지 않았다');
+    },
+    () => undefined,
+  );
+  // 받은 파일은 init 하나뿐이다 — 실패한 파일이 init 임을 고정한다
+  expect(requested).toEqual([initUrl]);
+  const [data, ...rest] = seen;
+  if (data === undefined || rest.length > 0) {
+    throw new Error(`앱 처리기가 오류를 ${seen.length}번 받았다`);
+  }
+  return data;
+}
+
+const MEDIA_URL = 'https://m/dvr/k/a/seg7.mp4';
+const INIT_URL = 'https://m/dvr/k/a/init.mp4';
+
+/** 조각 받기가 HTTP 상태 code 로 끝난 응답 — 실패한 파일은 url */
+function httpStatus(code: number, url: string = MEDIA_URL): ErrorData['response'] {
+  return { url, code, text: '' };
 }
 
 /** 표 시험의 조각 받기 오류 — 바꿀 칸만 덮어쓴다 */
@@ -225,7 +288,7 @@ function fragError(overrides: Partial<ErrorData> = {}): ErrorData {
     type: ErrorTypes.NETWORK_ERROR,
     details: ErrorDetails.FRAG_LOAD_ERROR,
     fatal: false,
-    frag: { sn: 7 },
+    frag: { sn: 7, initSegment: { url: INIT_URL } },
     response: httpStatus(404),
     ...overrides,
   } as unknown as ErrorData;
@@ -239,7 +302,17 @@ describe('미디어 조각 404 가르기(POK-528) — 하한 밖으로 밀린 �
     ['403', false, { response: httpStatus(403) }],
     ['503', false, { response: httpStatus(503) }],
     ['조각 받기 시한', false, { details: ErrorDetails.FRAG_LOAD_TIMEOUT, response: undefined }],
-    ['init 조각 404', false, { frag: { sn: 'initSegment' } as ErrorData['frag'] }],
+    // 앱이 받는 꼴 — hls.js 가 frag 를 미디어 조각으로 바꿔 끼워 sn 은 미디어, 실패한 파일은 그 init
+    ['init 조각 404(미디어 조각으로 바꿔 끼운 꼴)', false, { response: httpStatus(404, INIT_URL) }],
+    [
+      'init 조각 자체로 온 404(바꿔 끼우기 전 꼴)',
+      false,
+      {
+        frag: { sn: 'initSegment' } as ErrorData['frag'],
+        response: httpStatus(404, INIT_URL),
+      },
+    ],
+    ['조각 받기 오류에 응답 없음', false, { response: undefined }],
     ['변이 목록 404', false, { details: ErrorDetails.LEVEL_LOAD_ERROR, frag: undefined }],
     ['멀티변이 목록 404', false, { details: ErrorDetails.MANIFEST_LOAD_ERROR, frag: undefined }],
     ['네트워크 오류가 아닌 갈래', false, { type: ErrorTypes.MEDIA_ERROR }],
@@ -247,31 +320,35 @@ describe('미디어 조각 404 가르기(POK-528) — 하한 밖으로 밀린 �
     expect(isMediaSegmentNotFound(fragError(overrides), ErrorTypes, ErrorDetails)).toBe(expected);
   });
 
-  it('진짜 FragmentLoader 의 미디어 조각 404 거절은 참이다', async () => {
-    const data = await rejectedFragLoad(7, { code: 404 });
+  it('진짜 FragmentLoader 의 미디어 조각 404 거절은 참이다(init 이 붙어 있어도)', async () => {
+    const data = await rejectedFragLoad(mediaFragWithInit(7), { code: 404 });
     expect(data).toMatchObject({
       type: ErrorTypes.NETWORK_ERROR,
       details: ErrorDetails.FRAG_LOAD_ERROR,
       fatal: false,
-      response: { code: 404 },
+      response: { code: 404, url: MEDIA_URL },
     });
     expect(isMediaSegmentNotFound(data, ErrorTypes, ErrorDetails)).toBe(true);
   });
 
-  it('진짜 FragmentLoader 의 init 조각 404 거절은 같은 꼴이지만 거짓이다(하한 대상이 아니다)', async () => {
-    const data = await rejectedFragLoad('initSegment', { code: 404 });
+  it('진짜 init 받기 경로의 init 404 는 앱에 미디어 sn 으로 오지만 거짓이다(하한 대상이 아니다)', async () => {
+    const mediaFrag = mediaFragWithInit(7);
+    const data = await initLoadErrorSeenByApp(mediaFrag);
     expect(data).toMatchObject({
       type: ErrorTypes.NETWORK_ERROR,
       details: ErrorDetails.FRAG_LOAD_ERROR,
-      response: { code: 404 },
+      response: { code: 404, url: INIT_URL },
     });
-    expect(data.frag?.sn).toBe('initSegment');
+    // 전제 고정 — 앱이 받는 frag 는 init 이 아니라 바꿔 끼운 미디어 조각이다(sn 만으로는 못 가른다)
+    expect(data.frag).toBe(mediaFrag);
+    expect(data.frag?.sn).toBe(7);
+    expect(data.frag?.initSegment?.url).toBe(INIT_URL);
     expect(isMediaSegmentNotFound(data, ErrorTypes, ErrorDetails)).toBe(false);
   });
 
   it('진짜 FragmentLoader 의 미디어 조각 403 · 시한 거절은 거짓이다', async () => {
-    const forbidden = await rejectedFragLoad(7, { code: 403 });
-    const timedOut = await rejectedFragLoad(7, 'timeout');
+    const forbidden = await rejectedFragLoad(mediaFragWithInit(7), { code: 403 });
+    const timedOut = await rejectedFragLoad(mediaFragWithInit(7), 'timeout');
     expect(timedOut.details).toBe(ErrorDetails.FRAG_LOAD_TIMEOUT);
     expect(isMediaSegmentNotFound(forbidden, ErrorTypes, ErrorDetails)).toBe(false);
     expect(isMediaSegmentNotFound(timedOut, ErrorTypes, ErrorDetails)).toBe(false);
