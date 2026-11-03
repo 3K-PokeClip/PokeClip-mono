@@ -9,6 +9,7 @@ package index
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -229,41 +230,44 @@ func TestProdSQLDirHoldsOnlyKnownFiles(t *testing.T) {
 
 // stream_schema.sql 의 두 표지 사이가 schemaDDL 과 바이트가 같다(D8).
 func TestProdStreamSchemaCopyMatchesSchemaDDL(t *testing.T) {
-	requireCopyMatches(t, prodSchemaFile, schemaCopyBegin, schemaCopyEnd, "schemaDDL", schemaDDL)
+	src := readProdSQL(t, prodSchemaFile)
+	if err := copyMismatch(src, schemaCopyBegin, schemaCopyEnd, schemaDDL); err != nil {
+		t.Errorf("%s 사본 대조 실패: %v — ddl.go 를 바꿨으면 표지 사이를 schemaDDL 그대로 다시 붙여 넣는다", prodSchemaFile, err)
+	}
 }
 
 // 60_round_frozen.sql 의 두 표지 사이가 roundFrozenDDL 과 바이트가 같다(E9 — 로컬 EnsureSchema 와 운영이 같은 트리거를 깐다).
 func TestProdRoundFrozenCopyMatchesRoundFrozenDDL(t *testing.T) {
-	requireCopyMatches(t, roundFrozenFile, roundFrozenCopyBegin, roundFrozenCopyEnd, "roundFrozenDDL", roundFrozenDDL)
+	src := readProdSQL(t, roundFrozenFile)
+	if err := copyMismatch(src, roundFrozenCopyBegin, roundFrozenCopyEnd, roundFrozenDDL); err != nil {
+		t.Errorf("%s 사본 대조 실패: %v — ddl.go 를 바꿨으면 표지 사이를 roundFrozenDDL 그대로 다시 붙여 넣는다", roundFrozenFile, err)
+	}
 }
 
-// requireCopyMatches 는 prod SQL 파일 name 의 두 표지 begin · end 사이가 ddl.go 의 상수 constName(값 want)과 바이트가
-// 같은지 본다. 다르면 처음 갈라지는 줄을 알린다.
-func requireCopyMatches(t *testing.T, name, begin, end, constName, want string) {
-	t.Helper()
-	src := readProdSQL(t, name)
+// copyMismatch 는 src 의 두 표지 begin · end 사이가 정본 want 와 바이트가 같은지 본다. 같으면 nil 이고, 다르면
+// 까닭(표지 개수 · 순서, 또는 처음 갈라지는 줄)을 오류로 돌려준다. 실패 판정은 부르는 Test 가 한다.
+func copyMismatch(src, begin, end, want string) error {
 	if n := strings.Count(src, begin); n != 1 {
-		t.Fatalf("%s 의 시작 표지 %q 개수 = %d, want 1", name, begin, n)
+		return fmt.Errorf("시작 표지 %q 개수 = %d, want 1", begin, n)
 	}
 	if n := strings.Count(src, end); n != 1 {
-		t.Fatalf("%s 의 끝 표지 %q 개수 = %d, want 1", name, end, n)
+		return fmt.Errorf("끝 표지 %q 개수 = %d, want 1", end, n)
 	}
 	from := strings.Index(src, begin) + len(begin)
 	to := strings.Index(src, end)
 	if to < from {
-		t.Fatalf("%s 의 끝 표지가 시작 표지보다 앞에 있다", name)
+		return errors.New("끝 표지가 시작 표지보다 앞에 있다")
 	}
 	got := src[from:to]
 	if got == want {
-		return
+		return nil
 	}
 	i := 0
 	for i < len(got) && i < len(want) && got[i] == want[i] {
 		i++
 	}
 	line := strings.Count(want[:i], "\n") + 1
-	t.Errorf("%s 사본 = %d 바이트, %s = %d 바이트 — %s 의 %d 번째 줄(%d 바이트)에서 처음 갈라진다. "+
-		"ddl.go 를 바꿨으면 표지 사이를 %s 그대로 다시 붙여 넣는다", name, len(got), constName, len(want), constName, line, i, constName)
+	return fmt.Errorf("사본 %d 바이트 · 정본 %d 바이트 — 정본의 %d 번째 줄(%d 바이트)에서 처음 갈라진다", len(got), len(want), line, i)
 }
 
 // 60_round_frozen.sql 의 모양(r9.1 cc L5) — 메타 명령은 \set ON_ERROR_STOP on 하나이고, 처음 · 끝 문장은 SET ROLE
