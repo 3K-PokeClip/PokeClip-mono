@@ -624,6 +624,7 @@ run "bootstrap_requires_every_bundle_file" {
       "bin/secret-count.sh",
       "bin/ingest-auth-deny-sync.sh",
       "bin/ingest-auth-ip-limit.sh",
+      "bin/sidecar-round-keys.sh",
       "bin/lib/ops.sh",
       "bin/lib/mtx_paths.sh",
       "bin/lib/deny_tokens.sh",
@@ -631,7 +632,7 @@ run "bootstrap_requires_every_bundle_file" {
       "bin/lib/render_files.sh",
       "mediamtx.yml.tmpl",
     ]
-    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 14개(bin/ 여덟 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
+    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 15개(bin/ 아홉 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
   }
 }
 

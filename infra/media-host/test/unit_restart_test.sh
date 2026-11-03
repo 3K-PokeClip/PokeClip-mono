@@ -4,7 +4,7 @@
 # 정지 · 데몬 흔들기 · 크래시 경로에서 유닛과 컨테이너가 기대대로 움직이는지 본다.
 #
 # 사례 1 – 3 · 20 · 21 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 ·
-# 가짜 aws 상태 파일 · 저널 건수 · 렌더 자리 건수 도구). 사례 4 – 19 · 22 · 23 은
+# 가짜 aws 상태 파일 · 저널 건수 · 렌더 자리 건수 도구). 사례 4 – 19 · 22 – 24 는
 # 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu 러너)에서만 돈다. 없으면 그
 # 사례들은 FAIL 이다 — 건너뛰는 갈래는 없다.
 #
@@ -32,7 +32,8 @@
 # · 유닛 cgroup SIGKILL · 유닛 밖에 남은 스택 — 옛 비밀을 붙든 컨테이너가 남지
 # 않는지)이고 lib/unit_crash_cases.sh 에 있다. 사례 19 는 기동 중(비밀 조회 중)
 # 정지다. 사례 22 · 23 은 응답기 모드 D8(응답기만 재생성 · 양성 대조 — 부착
-# 서비스 재생성)이고 lib/unit_ingest_auth_cases.sh 에 있다.
+# 서비스 재생성)이고 lib/unit_ingest_auth_cases.sh 에 있다. 사례 24 는 새 꼴 쓰기
+# 스위치(사이드카만 재생성 — E38)이고 lib/unit_sidecar_keys_cases.sh 에 있다.
 #
 # 한 바퀴 약 10분이다(사례 22 · 23 을 더한 c7 상자 실측 9분 40초). 반복(N=3)은
 # 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
@@ -57,6 +58,8 @@ source "${TEST_DIR}/lib/unit_runtime_cases.sh"
 source "${TEST_DIR}/lib/unit_crash_cases.sh"
 # shellcheck source=lib/unit_ingest_auth_cases.sh
 source "${TEST_DIR}/lib/unit_ingest_auth_cases.sh"
+# shellcheck source=lib/unit_sidecar_keys_cases.sh
+source "${TEST_DIR}/lib/unit_sidecar_keys_cases.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly UNIT_NAME='pcbench-edge-proxy'
@@ -81,7 +84,7 @@ readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 readonly UNIT_BASE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 readonly CONFIG_TIMEOUT=60
 readonly SYSTEMCTL_TIMEOUT=120
-readonly CASE_COUNT=23
+readonly CASE_COUNT=24
 
 # prod 유닛 지시어(설명 줄 Description= 은 빼고) — 「절|키=값」 한 줄에 하나.
 # 줄 잇기(끝 백슬래시)는 systemd 처럼 이어 붙인 한 줄로 적는다. 담는 것: docker
@@ -786,6 +789,8 @@ main() {
     responder::case_recreate_only
   harness::run_case 23 'D8 양성 대조 — 부착 nginx 재생성 → Aborting · ID 바뀜' \
     responder::case_attached_recreate
+  harness::run_case 24 '스위치 on — 사이드카만 재생성 → 유닛 · 부착 서비스 불변' \
+    sidecar_keys::case_recreate_only
   harness::run_case 18 '⑤ 정리 — 유닛 · 설치본 · 컨테이너 · 망 · 볼륨 0' \
     check_case_18
 

@@ -20,6 +20,16 @@
 #        PCBENCH_FAKE_STALE_ENV 가 있으면 반대 값을 쓴다(반영 안 됨 흉내).
 #        state/journal.none 이 있으면 저널을 쓰지 않는다. state/compose.up.fail
 #        이 있으면 종료 1, state/compose.up.hang 이 있으면 오래 잔다.
+#   compose -p <P> -f <F> up -d --no-deps --force-recreate sidecar
+#        사이드카 재생성을 흉내 낸다 — 위와 같이 새 ID 를 state/ps.sidecar 의 단
+#        하나의 running 줄로 두고, 만들 때 F 옆 sidecar.env 의 줄을 그 컨테이너
+#        환경(state/ctr.<새 ID>.env)으로 둔다(env_file 은 만들 때만 읽힌다). 새
+#        컨테이너 저널 state/journal.c.<새 ID> 에 playback_key_layout 줄을 쓴다 —
+#        layout 은 그 환경이 PLAYBACK_ROUND_KEYS=true 면 round, 아니면 legacy.
+#        k 번째 사이드카 재생성의 갈래는 state/sidecar.up.<k> 의 낱말이다: fail
+#        (종료 1 · 아무것도 안 바꿈) · hang(오래 잔다) · nojournal(저널 줄 없음) ·
+#        stale(반대 layout) · round · legacy(env 와 무관하게 그 layout). 파일이
+#        없으면 위 기본 동작.
 #   compose -p <P> -f <F> exec -T <S> /ingest-auth healthcheck
 #        state/health.exec.fail 이 있으면 종료 1.
 #   ps -a -q --no-trunc --filter label=com.pokeclip.loopback=<이름>
@@ -293,7 +303,45 @@ fake_recreate() {
 }
 
 #######################################
-# compose — up(재생성) · exec(healthcheck) 두 꼴만 받는다.
+# compose up sidecar — 사이드카 재생성을 흉내 낸다(갈래는 머리 주석).
+# Arguments:
+#   compose 파일.
+#######################################
+fake_recreate_sidecar() {
+  local file="$1" k=1 n=1 id mode="" line layout
+  while [[ -e "${STATE}/sidecar.up.done.${k}" ]]; do
+    k=$((k + 1))
+  done
+  : >"${STATE}/sidecar.up.done.${k}"
+  [[ ! -f "${STATE}/sidecar.up.${k}" ]] || mode="$(cat -- \
+    "${STATE}/sidecar.up.${k}")"
+  case "${mode}" in
+    hang) exec sleep 60 ;;
+    fail)
+      printf '가짜 docker: compose up 실패(시험)\n' >&2
+      exit 1
+      ;;
+  esac
+  while [[ -e "${STATE}/made.pcbenchrecreated${n}" ]]; do
+    n=$((n + 1))
+  done
+  id="pcbenchrecreated${n}"
+  : >"${STATE}/made.${id}"
+  line="$(cat -- "$(dirname -- "${file}")/sidecar.env" 2>/dev/null)" || line=""
+  printf '%s\n' "${line}" >"${STATE}/ctr.${id}.env"
+  printf '%s running\n' "${id}" >"${STATE}/ps.sidecar"
+  [[ "${line}" == PLAYBACK_ROUND_KEYS=true ]] && layout=round || layout=legacy
+  case "${mode}" in
+    nojournal) return 0 ;;
+    stale) [[ "${layout}" == round ]] && layout=legacy || layout=round ;;
+    round | legacy) layout="${mode}" ;;
+  esac
+  printf '{"level":"INFO","msg":"playback_key_layout","layout":"%s",%s}\n' \
+    "${layout}" '"round_frozen":"absent"' >"${STATE}/journal.c.${id}"
+}
+
+#######################################
+# compose — up(응답기 · 사이드카 재생성) · exec(healthcheck) 꼴만 받는다.
 # Arguments:
 #   compose 뒤의 argv.
 #######################################
@@ -305,6 +353,8 @@ fake_compose() {
   shift 4
   if [[ "$*" == 'up -d --no-deps --force-recreate ingest-auth' ]]; then
     fake_recreate "${file}" ingest-auth
+  elif [[ "$*" == 'up -d --no-deps --force-recreate sidecar' ]]; then
+    fake_recreate_sidecar "${file}"
   elif [[ "$*" == 'exec -T ingest-auth /ingest-auth healthcheck' ]]; then
     if [[ -e "${STATE}/health.exec.fail" ]]; then
       printf 'ingest-auth: /healthz 의 답이 200 이 아니다 — HTTP 503\n' >&2
