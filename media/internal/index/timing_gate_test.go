@@ -60,14 +60,15 @@ func TestReadableVersionsAreNullAndTwo(t *testing.T) {
 	}
 }
 
-// 쓰기 시점 판 검사 — 이 커밋은 판 NULL 만 쓴다. 판 2 요구는 ErrTimingVersionUnsupported 다(판 2 쓰기 경로는 다음
-// 커밋이 연다 — 계획 3절 「c4a 의 중간 동작」).
-func TestCheckWritableVersionRefusesVersionTwo(t *testing.T) {
-	two := int16(2)
-	if err := checkWritableVersion(nil); err != nil {
-		t.Errorf("checkWritableVersion(NULL) = %v, want nil", err)
+// 쓰기 시점 판 검사 — 이 이미지는 readableVersions(판 NULL · 2)를 쓴다. 그 밖의 판 요구는 ErrTimingVersionUnsupported 다.
+func TestCheckWritableVersionAdmitsReadableVersionsOnly(t *testing.T) {
+	two, three := int16(2), int16(3)
+	for _, v := range []*int16{nil, &two} {
+		if err := checkWritableVersion(v); err != nil {
+			t.Errorf("checkWritableVersion(%v) = %v, want nil", v, err)
+		}
 	}
-	if err := checkWritableVersion(&two); !errors.Is(err, ErrTimingVersionUnsupported) {
-		t.Errorf("checkWritableVersion(2) = %v, want ErrTimingVersionUnsupported", err)
+	if err := checkWritableVersion(&three); !errors.Is(err, ErrTimingVersionUnsupported) {
+		t.Errorf("checkWritableVersion(3) = %v, want ErrTimingVersionUnsupported", err)
 	}
 }

@@ -29,8 +29,8 @@ type TimingGate struct {
 var readableVersions = []*int16{nil, new(int16(2))}
 
 // ErrTimingVersionUnsupported 는 쓰려는 행의 판이 이 이미지가 쓸 수 없는 판이라는 뜻이다(쓰기 시점 판 검사 — 신호
-// timing_version_unsupported). 이 커밋은 판 NULL 만 쓴다 — 스위치 2 인 게이트로 새 회차를 열려 하면 이 오류다. 판 2
-// 쓰기 경로는 다음 커밋이 연다(계획 3절 「c4a 의 중간 동작」 · 배포하지 않는 중간 상태).
+// timing_version_unsupported). 이 이미지가 쓰는 판은 readableVersions(판 NULL · 2)다 — 판 정하기가 그 밖의 판(앞 세션이
+// 앞날 이미지로 쓴 판 3 회차를 잇는 행 등)을 고르면 이 오류다.
 //
 // 부르는 쪽(indexer H9)은 PgError 가 아닌 오류라 재시도로 접고(classifyInsertError), 상한을 다 쓰면 프로세스를 끝낸다 —
 // 잘못된 판으로 장부에 쓰는 것보다 색인이 멈추는 쪽이 안전하다.
@@ -49,7 +49,9 @@ const timingGateSQL = `SELECT new_round_version, highest_version, changed_at FRO
 // lockTimingGateSharedSQL 은 게이트 열쇠의 공유 잠금이다(설계 9.3 · P19) — 게이트 트리거의 배타 잠금(래치 낮추기 ·
 // 스위치 변경)과만 부딪히고 회차 개시끼리는 부딪히지 않는다. 트랜잭션 끝에 풀린다. 대기는 트랜잭션 지역
 // lock_timeout(setTxnLimitsSQL 5초)을 따라 55P03 으로 끊기고, Insert 가 즉시 한 번 다시 시도한 뒤 ErrLockContended 로
-// 올린다 — 부르는 쪽은 H9 백오프로 재시도한다(c1 보안 검수 M2 — 전역 열쇠를 남이 쥐어도 사이드카가 끝나지 않는다).
+// 올린다 — 부르는 쪽은 H9 백오프로 재시도하고, 상한(기본 5회 · 약 30초)을 다 쓰면 프로세스를 끝내 재기동에 맡긴다(D8 ·
+// indexer/insert.go insertWithRetry). 전역 열쇠를 남이 오래 쥐면 상자의 사이드카가 종료 · 재기동을 되풀이한다(c1 보안 검수 M2
+// · K7 (가)로 받아들인 위협).
 // hashtext 는 integer 를 내고 pg_catalog 의 잠금 함수는 bigint 판뿐이라 ::bigint 로 맞춘다(lockCutoffStreamSQL 과 같은 꼴).
 const lockTimingGateSharedSQL = `
 SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('pc_timing_gate'::text)::bigint)`
@@ -103,10 +105,10 @@ func hasVersion(list []*int16, v *int16) bool {
 	})
 }
 
-// checkWritableVersion 은 쓰기 시점 판 검사다 — 이 커밋이 쓰는 판은 NULL 뿐이다. 판 2 요구는
-// ErrTimingVersionUnsupported 다(판 2 쓰기 경로는 다음 커밋이 연다).
+// checkWritableVersion 은 쓰기 시점 판 검사다 — 이 이미지가 쓰는 판(readableVersions — 판 NULL 식 · 판 2 섞기)이 아니면
+// ErrTimingVersionUnsupported 다.
 func checkWritableVersion(v *int16) error {
-	if v == nil {
+	if hasVersion(readableVersions, v) {
 		return nil
 	}
 	return fmt.Errorf("%w: timing_version=%d", ErrTimingVersionUnsupported, *v)

@@ -99,21 +99,34 @@ func (ix *Indexer) timingInput(cur *index.Cursor, seg recording.Segment, read ti
 	return in
 }
 
-// timingAttrs 는 segment_indexed 의 판 · 이어 계산 속성이다(설계 8절 — 판 NULL 몫). 견줌 결과(comparable · same_instance ·
-// delta_ms)는 판 2 섞기가 정하는 값이라 여기서 싣지 않는다.
+// timingAttrs 는 segment_indexed 의 판 · 이어 계산 속성이다(설계 8절). 견줌 결과(comparable · same_instance · 견줬을 때
+// delta_ms)는 판 2 섞기가 정하는 값이라 판 2 행에만 싣는다.
 func timingAttrs(in index.TimingInput, read timingRead, res index.InsertCommit) []any {
-	head, lead := "unknown", int64(0)
-	if read.st != nil {
-		head, lead = "audio", read.st.HeadLead.Milliseconds()
-		if read.st.Head.Video {
-			head = "video"
-		}
-	}
-	return []any{
+	head, lead := headTrack(read)
+	attrs := []any{
 		"timing_version", versionText(res.TimingVersion), "timing_branch", string(res.TimingBranch),
 		"round_id", res.TimingRoundID, "head_track", head, "head_lead_ms", lead,
 		"wall_ms", in.Facts.Wall.UnixMilli(), "attributed", res.SessionID != "",
 	}
+	if !isV2(res) {
+		return attrs
+	}
+	attrs = append(attrs, "comparable", res.TimingCompared, "same_instance", res.TimingSameInstance)
+	if res.TimingCompared {
+		attrs = append(attrs, "delta_ms", res.DeltaMS)
+	}
+	return attrs
+}
+
+// headTrack 은 머리 트랙 이름과 머리 앞섬(ms)이다. 판독이 없으면 unknown · 0 이다.
+func headTrack(read timingRead) (string, int64) {
+	if read.st == nil {
+		return "unknown", 0
+	}
+	if read.st.Head.Video {
+		return "video", read.st.HeadLead.Milliseconds()
+	}
+	return "audio", read.st.HeadLead.Milliseconds()
 }
 
 // grownVideoEnd 는 꼬리 교정이 넘길 영상 끝(ns)이다 — 자란 조각을 한 번 다시 읽는다(설계 2.14). nil 이면 그 칸을 넘기지

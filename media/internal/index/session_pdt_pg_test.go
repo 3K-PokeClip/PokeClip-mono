@@ -167,8 +167,9 @@ func TestBaseRowSkipsRowsThatAreNotSettledInTheBaseSession(t *testing.T) {
 	})
 }
 
-// 전 픽스처 공통 불변 — M3 쓰기 경로가 만든 행은 session_id 와 playback_pdt 가 쌍으로 간다.
+// 전 픽스처 공통 불변 — M3 쓰기 경로가 만든 판 NULL 행은 session_id 와 playback_pdt 가 쌍으로 간다.
 // "세 열 전부-아니면-전무"가 아니다: 키 파생 실패는 playback_s3_key 만 NULL 로 남긴다(설계 5.2).
+// 판 2 행에는 이 쌍이 없다 — 판 2 비귀속 행도 회차의 PDT 를 갖는다(POK-196 PDT 설계 r7 2.5 · timing_v2_store_pg_test.go).
 func TestWrittenRowsPairSessionIDWithPlaybackPDT(t *testing.T) {
 	pool := newTestPool(t)
 	store := newSessionStore(pool)
@@ -188,7 +189,7 @@ func TestWrittenRowsPairSessionIDWithPlaybackPDT(t *testing.T) {
 		var paired bool
 		if err := pool.QueryRow(ctx, `
 			SELECT bool_and((session_id IS NULL) = (playback_pdt IS NULL))
-			  FROM stream_segments WHERE stream_id = $1`, s).Scan(&paired); err != nil {
+			  FROM stream_segments WHERE stream_id = $1 AND timing_version IS NULL`, s).Scan(&paired); err != nil {
 			t.Fatalf("쌍 동치 조회 실패: %v", err)
 		}
 		if !paired {

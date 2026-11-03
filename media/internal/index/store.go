@@ -264,7 +264,11 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	txctx, cancel := context.WithTimeout(ctx, TxnDeadline)
 	defer cancel()
 
-	tx, err := s.pool.Begin(txctx)
+	// 격리 수준을 READ COMMITTED 로 못 박는다 — 잠금을 기다린 뒤의 문장이 그 사이 커밋된 값을 보는 것은 이 수준에서만이다
+	// (게이트 공유 잠금 뒤 스위치 읽기 · 세션 소속 잠금 뒤 재판정 · 컷오프 직렬화 락 뒤 시각). DB · 역할의 기본값
+	// (default_transaction_isolation)이 repeatable read 면 첫 문장의 스냅숏으로 낡은 스위치를 읽어 래치 없는 장부에 판 2 행을
+	// 쓴다(broadcast/outbox_rows.go abandon 과 같은 처방).
+	tx, err := s.pool.BeginTx(txctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return InsertInserted, InsertCommit{}, fmt.Errorf("주조 트랜잭션 시작 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
@@ -302,14 +306,12 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	}
 
 	// ⑵~⑹ 세션 결정 → 판 정하기 → 기저 행 → PDT → 세션 쓰기 → 위치 → 키. carrier 3열 · 위치 · 판 칸이 여기서 정해진다.
-	var (
-		opening sessionOpening
-		timing  timingChoice
-	)
-	r, opening, timing, err = s.settleCarrier(txctx, tx, r, src, now.UTC())
+	var st settlement
+	r, st, err = s.settleCarrier(txctx, tx, r, src, now.UTC())
 	if err != nil {
 		return InsertInserted, InsertCommit{}, err
 	}
+	timing := st.timing
 
 	// ⓐ 가 거짓이어도 $21~$25 는 유효한 값으로 내려간다 — seed 의 WHERE 가 막으므로
 	// CHECK 에 닿을 행 자체가 없지만, 드라이버 층에서 놀랄 일을 만들지 않는다.
@@ -342,14 +344,24 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	// 여기서부터는 삽입이 **이미 커밋됐다** — 귀속 진단의 실패를 Insert 의 에러로 올리면
 	// 성공한 삽입이 실패로 오보고돼 재시도 → 23505 → (진단 실패 지속 시) 크래시루프가
 	// 된다(cc 리뷰 차단 2, 라이브 재현). 진단 실패는 InsertCommit.DiagErr 로만 나른다.
-	return InsertInserted, withCommitted(s.resolveSeed(ctx, r, seed, seeded), r, opening, timing), nil
+	return InsertInserted, withCommitted(s.resolveSeed(ctx, r, seed, seeded), r, st), nil
+}
+
+// settlement 는 settleCarrier 가 정한 것 가운데 장부 행 칸 밖의 결과다 — 세션 개시 · 판 정하기 · 판 2 섞기.
+type settlement struct {
+	opening sessionOpening
+	timing  timingChoice
+	// mix 는 판 2 행의 섞기 결과다. 판 NULL 행이면 nil 이다.
+	mix *v2Mix
 }
 
 // withCommitted 는 커밋된 carrier · 위치 · 판 칸과 세션 개시 결과를 주조 결과에 얹는다.
 //
 // 커밋 뒤 이 한 자리에서만 부른다 — 롤백된 트랜잭션의 개시가 결과로 새어 나가지 않게
 // 하는 구조가 이것이다(앞선 반환은 전부 영값 InsertCommit 이다).
-func withCommitted(res InsertCommit, r Record, o sessionOpening, tc timingChoice) InsertCommit {
+func withCommitted(res InsertCommit, r Record, st settlement) InsertCommit {
+	o, tc := st.opening, st.timing
+	res = withMix(res, st.mix)
 	res.SessionOpened = o.opened
 	res.DiscontinuityBase = o.discontinuityBase
 	res.TargetDuration = o.targetDuration
@@ -389,11 +401,13 @@ var ErrSessionContended = errors.New("index: 세션 개시 경합(one_live_uq) �
 // (Record 는 값으로 받으므로 호출자의 사본은 그대로다). 값을 정하는 자리가 둘이면
 // 장부만 보고 어느 쪽이 이겼는지 알 수 없다.
 //
-// 비귀속·비개시(정책 거부 또는 CurrentOnly 인데 현 세션 부재)면 ⑷⑸ 를 건너뛰고 carrier 셋 다
-// nil 로 남는다 — ⓒ 가 주조를 막아 not_settleable 로 귀속된다(설계 6.5.2 · M2 와 결과 동일).
+// 비귀속·비개시(정책 거부 또는 CurrentOnly 인데 현 세션 부재)면 ⑸ 를 건너뛰고 session_id · ③ 키는 nil 로 남는다 — ⓒ 가
+// 주조를 막아 not_settleable 로 귀속된다(설계 6.5.2 · M2 와 결과 동일). PDT 는 판 NULL 이면 nil, 판 2 면 섞기 값이다(설계
+// r7 2.5 — 판 2 회차 안 비귀속 행도 회차의 PDT 를 잇는다).
 //
-// 개시 갈래면 둘째 반환값이 새 세션 행에 쓰인 값을 싣는다(InsertCommit 의 개시 통로). 셋째는 판 정하기의 결과다.
-func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src SessionSource, now time.Time) (Record, sessionOpening, timingChoice, error) {
+// 개시 갈래면 둘째 반환값의 opening 이 새 세션 행에 쓰인 값을 싣는다(InsertCommit 의 개시 통로). timing 은 판 정하기, mix 는
+// 판 2 섞기의 결과다.
+func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src SessionSource, now time.Time) (Record, settlement, error) {
 	r.SessionID, r.PlaybackPDT, r.PlaybackS3Key = nil, nil, nil
 	r.StartPTSMS = 0
 
@@ -404,57 +418,66 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 		DurationMS: r.DurationMS, SessionSource: src,
 	}, now)
 	if err != nil {
-		return r, sessionOpening{}, timingChoice{}, sessionError("세션 결정 실패", err, r)
+		return r, settlement{}, sessionError("세션 결정 실패", err, r)
 	}
 	q, err := readLastRow(ctx, tx, r.StreamID, r.Seq)
 	if err != nil {
-		return r, sessionOpening{}, timingChoice{}, err
+		return r, settlement{}, err
 	}
 	if !dec.Opens && dec.SessionID == "" {
-		tc, err := settleUnattributed(ctx, tx, &r, dec, q)
-		return r, sessionOpening{}, tc, err
+		st, err := settleUnattributed(ctx, tx, &r, dec, q)
+		return r, st, err
 	}
 	return s.settleAttributed(ctx, tx, r, dec, q)
 }
 
-// settleUnattributed 는 비귀속 행의 판 · 회차와 위치(q 끝)를 정한다 — 판 NULL 이라 PDT 는 NULL 그대로다.
-func settleUnattributed(ctx context.Context, tx pgx.Tx, r *Record, dec SessionDecision, q *lastRow) (timingChoice, error) {
+// settleUnattributed 는 비귀속 행의 판 · 회차와 PDT · 위치를 정한다. 판 NULL 이면 PDT 는 NULL 이고 위치는 q 끝이다. 판 2 면
+// 귀속과 같은 섞기로 PDT · 위치 · 길이를 쓰고(설계 2.5 「판 2 비귀속 행」) 세션 · ③ 키만 nil 로 둔다 — 시작점 자격 ⓒ 가
+// 주조를 막아 not_settleable 이고, ③ 업로드 조회는 세션 결합이라 그 행을 집지 않는다.
+func settleUnattributed(ctx context.Context, tx pgx.Tx, r *Record, dec SessionDecision, q *lastRow) (settlement, error) {
 	tc, err := unattributedTiming(ctx, tx, *r, dec.FloorRejected)
 	if err != nil {
-		return timingChoice{}, err
+		return settlement{}, err
 	}
 	if err := checkWritableVersion(tc.version); err != nil {
-		return timingChoice{}, fmt.Errorf("stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		return settlement{}, fmt.Errorf("stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
-	r.StartPTSMS = legacyStart(q, nil, nil)
-	return tc, nil
+	if !isV2(tc.version) {
+		r.StartPTSMS = legacyStart(q, nil, nil)
+		return settlement{timing: tc}, nil
+	}
+	mix, err := settleV2(ctx, tx, r, tc.roundID, q, false, dec.FloorRejected)
+	return settlement{timing: tc, mix: mix}, err
 }
 
 // settleAttributed 는 ⑷~⑹ 이다 — 기저 행 → 판 정하기 → PDT → 세션 쓰기 → 위치 → 키.
-func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec SessionDecision, q *lastRow) (Record, sessionOpening, timingChoice, error) {
+func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec SessionDecision, q *lastRow) (Record, settlement, error) {
 	// ⑷ 기저 행 1행 → 판 → PDT. 개시 갈래는 이 값이 곧 새 세션의 first_pdt 라 ⑸ 보다 앞이다.
 	base, err := readBaseRow(ctx, tx, r, dec.BaseSessionID)
 	if err != nil {
-		return r, sessionOpening{}, timingChoice{}, err
+		return r, settlement{}, err
 	}
 	tc, err := attributedTiming(ctx, tx, dec, base)
 	if err != nil {
-		return r, sessionOpening{}, timingChoice{}, err
+		return r, settlement{}, err
 	}
 	if err := checkWritableVersion(tc.version); err != nil {
-		return r, sessionOpening{}, timingChoice{}, fmt.Errorf("stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		return r, settlement{}, fmt.Errorf("stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
-	pdt := legacyPDT(base, r.StartWallUTC.UTC())
+	pdt, mix, err := attributedPDT(ctx, tx, &r, dec, base, q, tc)
+	if err != nil {
+		return r, settlement{}, err
+	}
 
 	// ⑸ 개시 갈래만 세션 표를 쓴다(계속 갈래는 세션 표를 건드리지 않는다).
 	sessionID := dec.SessionID
 	var opening sessionOpening
 	if dec.Opens {
 		if sessionID, err = s.decider.Open(ctx, tx, dec, pdt); err != nil {
-			return r, sessionOpening{}, timingChoice{}, sessionError("세션 개시 실패", err, r)
+			return r, settlement{}, sessionError("세션 개시 실패", err, r)
 		}
 		if opening, err = readOpening(ctx, tx, sessionID); err != nil {
-			return r, sessionOpening{}, timingChoice{}, err
+			return r, settlement{}, err
 		}
 		// 행에 쓰이지 않는 두 값은 결정에서 옮긴다 — Open 이 성공한 뒤라 개시가 실제로 쓴 결정의 값이다.
 		opening.endingSessionID, opening.prevFirstLocalPath = dec.EndingSessionID, dec.PrevFirstLocalPath
@@ -464,12 +487,14 @@ func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec
 	}
 	r.SessionID, r.PlaybackPDT = &sessionID, &pdt
 
-	// 위치(I23) — PDT 가 정해진 뒤라 ⑷ 뒤다. q 에 PDT 가 없으면 앵커를 한 줄 더 읽는다.
-	anchor, err := readAnchor(ctx, tx, r.StreamID, r.Seq, q)
-	if err != nil {
-		return r, sessionOpening{}, timingChoice{}, err
+	// 판 NULL 위치(I23) — PDT 가 정해진 뒤라 ⑷ 뒤다. q 에 PDT 가 없으면 앵커를 한 줄 더 읽는다. 판 2 위치는 섞기가 정했다.
+	if mix == nil {
+		anchor, err := readAnchor(ctx, tx, r.StreamID, r.Seq, q)
+		if err != nil {
+			return r, settlement{}, err
+		}
+		r.StartPTSMS = legacyStart(q, anchor, &pdt)
 	}
-	r.StartPTSMS = legacyStart(q, anchor, &pdt)
 
 	// ⑹ ③ 키 파생. **실패는 오류가 아니라 playback_s3_key NULL 이다**(설계 5.2):
 	// ⓒ 가 주조를 막고 다음 조각이 재시도한다. 세션·PDT 까지 함께 버리면 그 조각이
@@ -477,7 +502,7 @@ func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec
 	if key, keyErr := s.playbackKey(r.StreamID, r.Seq); keyErr == nil {
 		r.PlaybackS3Key = &key
 	}
-	return r, opening, tc, nil
+	return r, settlement{opening: opening, timing: tc, mix: mix}, nil
 }
 
 // sessionOpening 은 이 트랜잭션이 연 세션 행에 쓰인 값과, 행에 쓰이지 않고 결정이 실어 온 개시 결과 두 값

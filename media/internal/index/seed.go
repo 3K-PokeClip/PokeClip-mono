@@ -114,6 +114,27 @@ type InsertCommit struct {
 	TimingBranch Branch
 	// DeltaMS 는 판 2 행의 견준 차(짐작 − 앞 끝)다. 판 NULL 행 · 견주지 않은 행이면 0 이다.
 	DeltaMS int64
+	// TimingReset 은 판 2 회차 첫 행의 까닭이다(stream_first · new_round · no_round · floor_rejected — 신호 timing_reset).
+	// 섞은 행 · 판 고정 위반으로 접힌 행 · 판 NULL 행이면 "" 다.
+	TimingReset string
+	// TimingBroken 은 판 2 행이 판 고정 위반으로 회차 첫 행에 접힌 까닭이다(prev_missing · version_mismatch — 신호
+	// timing_round_broken). 정상 경로에서는 "" 다.
+	TimingBroken string
+	// TimingSameInstance · TimingCompared 는 판 2 섞기의 견줌 재료다(segment_indexed 의 same_instance · comparable). 회차 첫
+	// 행 · 판 NULL 행이면 거짓이다.
+	TimingSameInstance, TimingCompared bool
+	// TimingLimitedBy 는 겹침 갈래에서 이긴 항이다(w · overlap_cap · end_lead · start_lead — 신호 pdt_overlap 의 limited_by).
+	// 그 밖이면 "" 다.
+	TimingLimitedBy string
+	// TimingPrevFacts 는 섞기가 이은 p(같은 회차 최신 행)의 원래 사실 칸이다 — 새 장 · 겹침의 까닭(녹화기 바뀜 · 번호
+	// 건너뜀 · mtxi 없음)을 가르는 재료다. p 가 없으면(회차 첫 행 · 판 NULL 행) nil 이다.
+	TimingPrevFacts *TimingFacts
+	// TimingPrevVersion 은 같은 회차 앞 행 p 의 판이다 — 판 고정 위반(timing_round_broken version_mismatch)의 「두 판」 재료다.
+	// p 가 없거나 판 NULL 이면 nil 이다.
+	TimingPrevVersion *int16
+	// TimingResetBackMS 는 판 2 회차 첫 행에서 바로 앞 행 q 의 PDT 끝 − 짐작 w 다(timing_reset 의 「q 끝 − w」 — 양수면 PDT 가
+	// 그만큼 뒤로 간다). q 가 없거나 q 의 PDT 가 NULL 이면 nil 이다.
+	TimingResetBackMS *int64
 	// TimingRoundID 는 이 행의 timing_round_id(이어 계산 회차 — 설계 2.4)다. "" 면 회차 없음이다(신호
 	// segment_indexed.round_id 의 재료).
 	TimingRoundID string

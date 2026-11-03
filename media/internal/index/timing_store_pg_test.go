@@ -1,7 +1,7 @@
 package index
 
 // store 의 판 정하기 · 회차 칸 · 원래 사실 칸 · 커밋 값의 PG 통합 시험(POK-196 PDT 생산자 c4a · 설계 r7 2.3 · 2.4 ·
-// 9.3 · 계획 4절 c4a). 판 NULL 행만 쓴다 — 판 2 요구는 이 커밋에서 timing_version_unsupported 다(계획 3절 중간 동작).
+// 9.3 · 계획 4절 c4a). 판을 고르는 자리를 본다 — 판 2 를 고른 행의 섞기 값은 timing_v2_store_pg_test.go(c4b)가 잰다.
 // 위치(I23) · U 는 timing_placement_pg_test.go 가 잰다. PG_DSN 미설정이면 skip 이다.
 
 import (
@@ -88,9 +88,8 @@ func strPtr(p *string) string {
 var versionTwo = int16(2)
 
 // 판 정하기 1항 · 새 회차(설계 r7 9.3) — 새 회차를 여는 행은 게이트 공유 잠금 아래 스위치의 판을 쓴다. 게이트 NULL 이면
-// 판 NULL 이고 회차 칸은 새 세션의 round_id(= 그 session_id)다. 스위치 2 인 새 회차는 이 커밋에서 쓰지 않고
-// ErrTimingVersionUnsupported 로 되돌린다(행 · 세션 모두 남지 않는다). 잡는 결함: 새 회차가 게이트를 안 읽으면 스위치가
-// 소용없고(m5 의 거울), 판 2 를 그대로 쓰면 판 2 섞기 없는 판 2 행이 생긴다.
+// 판 NULL 이고 회차 칸은 새 세션의 round_id(= 그 session_id)다. 스위치 2 인 새 회차는 판 2 로 연다(회차 첫 행 — new_round).
+// 잡는 결함: 새 회차가 게이트를 안 읽으면 스위치가 소용없다(m5 의 거울).
 func TestNewRoundTakesGateSwitchVersion(t *testing.T) {
 	pool := newTestPool(t)
 	store := newSessionStore(pool)
@@ -113,15 +112,12 @@ func TestNewRoundTakesGateSwitchVersion(t *testing.T) {
 	}
 	setGateSwitch(t, pool, &versionTwo)
 	// 재접속 창(300초) 밖 — 15.2 표 7행 새 회차.
-	_, _, err := store.Insert(ctx, timedSeg(stream, 1, sessionBase.Add(10*time.Minute), 4000), Seed{}, liveIngress())
-	if !errors.Is(err, ErrTimingVersionUnsupported) {
-		t.Fatalf("스위치 2 새 회차 Insert 오류 = %v, want ErrTimingVersionUnsupported", err)
-	}
-	if n := len(sessionsOf(t, pool, stream)); n != 1 {
-		t.Errorf("세션 수 = %d, want 1(되돌린 개시는 남지 않는다)", n)
-	}
-	if cur, err := store.LoadCursor(ctx, stream); err != nil || cur.NextSeq != 1 {
-		t.Errorf("LoadCursor = (%+v, %v), want 다음 seq 1(행이 남지 않았다)", cur, err)
+	next := mustInsert(t, store, timedSeg(stream, 1, sessionBase.Add(10*time.Minute), 4000), liveIngress())
+	row = timingOf(t, pool, stream, 1)
+	if row.version == nil || *row.version != versionTwo || strPtr(row.round) != next.SessionID || next.TimingBranch != BranchRoundFirst ||
+		next.TimingReset != resetNewRound || next.TimingGateRead == nil || next.TimingGateRead.NewRoundVersion == nil {
+		t.Errorf("스위치 2 새 회차 (판, 회차, 갈래, 까닭, 게이트) = (%v, %s, %s, %s, %+v), want (2, %s, round_first, new_round, 스위치 2 를 읽음)",
+			row.version, strPtr(row.round), next.TimingBranch, next.TimingReset, next.TimingGateRead, next.SessionID)
 	}
 }
 
@@ -163,8 +159,8 @@ func TestContinuingRoundKeepsLegacyVersionAfterSwitch(t *testing.T) {
 }
 
 // 판 정하기 1항 「v(s) = v(p)」 — 이어 가는 회차의 판은 게이트가 아니라 앞 세션의 마지막 귀속 행(기저 행)의 판이다. 앞
-// 세션이 판 2 행을 쓴 회차를 게이트 NULL 에서 이어 쓰면 그 행은 판 2 요구라 이 커밋에서는 되돌린다. 잡는 결함: 이어
-// 가는 행의 판을 게이트에서 읽으면 판 2 회차가 판 NULL 로 이어져 한 회차 두 판이 된다(P4 의 거울).
+// 세션이 판 2 행을 쓴 회차를 게이트 NULL 에서 이어 쓰면 그 행은 판 2 다(게이트를 읽지 않는다). 잡는 결함: 이어 가는
+// 행의 판을 게이트에서 읽으면 판 2 회차가 판 NULL 로 이어져 한 회차 두 판이 된다(P4 의 거울).
 func TestContinuingRoundTakesBaseRowVersionNotGate(t *testing.T) {
 	pool := newTestPool(t)
 	store := newSessionStore(pool)
@@ -185,9 +181,12 @@ func TestContinuingRoundTakesBaseRowVersionNotGate(t *testing.T) {
 		t.Fatalf("판 2 앞 행 픽스처 실패: %v", err)
 	}
 
-	_, _, err := store.Insert(ctx, timedSeg(stream, 1, sessionBase.Add(10*time.Second), 4000), Seed{}, liveIngress())
-	if !errors.Is(err, ErrTimingVersionUnsupported) {
-		t.Fatalf("판 2 회차를 잇는 계승 Insert 오류 = %v, want ErrTimingVersionUnsupported(게이트 NULL 이 아니라 앞 세션 판 2)", err)
+	res := mustInsert(t, store, timedSeg(stream, 1, sessionBase.Add(10*time.Second), 4000), liveIngress())
+	// 지금 행은 칸이 w 뿐이라 같은 녹화기 이어짐이 아니다 — 견주어 Δ = w − E = 10000 − 4000 > θ 라 새 장이다.
+	if row := timingOf(t, pool, stream, 1); row.version == nil || *row.version != versionTwo || strPtr(row.round) != prev ||
+		res.TimingGateRead != nil || res.TimingBranch != BranchNewChapterGap || res.DeltaMS != 6000 {
+		t.Errorf("판 2 회차를 잇는 계승 행 (판, 회차, 게이트 읽음, 갈래, Δ) = (%v, %s, %t, %s, %d), want (2 — 게이트 NULL 이 아니라 앞 세션 판, %s, false, new_chapter_gap, 6000)",
+			row.version, strPtr(row.round), res.TimingGateRead != nil, res.TimingBranch, res.DeltaMS, prev)
 	}
 }
 
@@ -207,8 +206,11 @@ func TestUnattributedRowFollowsLastAttributedRound(t *testing.T) {
 			t.Errorf("(판, 회차, 게이트 읽음) = (%v, %s, %t), want (NULL, NULL, true)", row.version, strPtr(row.round), res.TimingGateRead != nil)
 		}
 		setGateSwitch(t, pool, &versionTwo)
-		if _, _, err := store.Insert(ctx, timedSeg(stream, 1, sessionBase.Add(4*time.Second), 4000), Seed{}, currentOnly()); !errors.Is(err, ErrTimingVersionUnsupported) {
-			t.Errorf("스위치 2 · 회차 없는 비귀속 Insert 오류 = %v, want ErrTimingVersionUnsupported(게이트 판)", err)
+		res = mustInsert(t, store, timedSeg(stream, 1, sessionBase.Add(4*time.Second), 4000), currentOnly())
+		if row := timingOf(t, pool, stream, 1); row.version == nil || *row.version != versionTwo || row.round != nil || res.TimingGateRead == nil ||
+			res.TimingBranch != BranchRoundFirst || res.TimingReset != resetNoRound {
+			t.Errorf("스위치 2 · 회차 없는 비귀속 행 (판, 회차, 게이트 읽음, 갈래, 까닭) = (%v, %s, %t, %s, %s), want (2 — 게이트 판, NULL, true, round_first, no_round)",
+				row.version, strPtr(row.round), res.TimingGateRead != nil, res.TimingBranch, res.TimingReset)
 		}
 	})
 
@@ -230,13 +232,16 @@ func TestUnattributedRowFollowsLastAttributedRound(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE stream_sessions SET round_closed_at = now() WHERE session_id = $1`, head.SessionID); err != nil {
 			t.Fatalf("회차 닫힘 픽스처 실패: %v", err)
 		}
-		if _, _, err := store.Insert(ctx, timedSeg(stream, 2, sessionBase.Add(8*time.Second), 4000), Seed{}, currentOnly()); !errors.Is(err, ErrTimingVersionUnsupported) {
-			t.Errorf("닫힌 회차 뒤 비귀속 Insert(스위치 2) 오류 = %v, want ErrTimingVersionUnsupported(게이트 판)", err)
+		res = mustInsert(t, store, timedSeg(stream, 2, sessionBase.Add(8*time.Second), 4000), currentOnly())
+		if row := timingOf(t, pool, stream, 2); row.version == nil || *row.version != versionTwo || row.round != nil || res.TimingGateRead == nil ||
+			res.TimingBranch != BranchRoundFirst || res.TimingReset != resetNoRound {
+			t.Errorf("닫힌 회차 뒤 비귀속 행(스위치 2) (판, 회차, 게이트 읽음, 갈래, 까닭) = (%v, %s, %t, %s, %s), want (2 — 게이트 판, NULL, true, round_first, no_round)",
+				row.version, strPtr(row.round), res.TimingGateRead != nil, res.TimingBranch, res.TimingReset)
 		}
 		setGateSwitch(t, pool, nil)
-		res = mustInsert(t, store, timedSeg(stream, 2, sessionBase.Add(8*time.Second), 4000), currentOnly())
-		if row := timingOf(t, pool, stream, 2); row.version != nil || row.round != nil || res.TimingGateRead == nil {
-			t.Errorf("닫힌 회차 뒤 비귀속 행 (판, 회차, 게이트 읽음) = (%v, %s, %t), want (NULL, NULL, true)",
+		res = mustInsert(t, store, timedSeg(stream, 3, sessionBase.Add(12*time.Second), 4000), currentOnly())
+		if row := timingOf(t, pool, stream, 3); row.version != nil || row.round != nil || res.TimingGateRead == nil {
+			t.Errorf("닫힌 회차 뒤 비귀속 행(스위치 NULL) (판, 회차, 게이트 읽음) = (%v, %s, %t), want (NULL, NULL, true)",
 				row.version, strPtr(row.round), res.TimingGateRead != nil)
 		}
 	})
