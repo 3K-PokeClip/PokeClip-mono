@@ -1,4 +1,9 @@
-import { RESUME_WAIT_MS, type PlaybackSessionState, type SessionButton } from './rewindSwitch';
+import {
+  RESUME_WAIT_MS,
+  type PlaybackSessionState,
+  type SessionButton,
+  type SessionPhase,
+} from './rewindSwitch';
 
 // 재생 세션이 화면에 그릴 것(설계 5.3절 종결 판, POK-200 M5) — 상태기계(rewindSwitch)의 상태에서 덮개 · 버튼 · 띠 · 숨김을 뽑는
 // 순수 함수다. 전이는 rewindSwitch 가 정하고, 여기는 그 상태를 읽기만 한다.
@@ -23,6 +28,33 @@ export interface SessionView {
   recordEmphasis: boolean;
   /** 「다시보기 준비됨」 — 아직 보는 시청자에게 띠로 */
   vodReady: boolean;
+  /**
+   * 새로 서는 재생기는 받지도 틀지도 않는다(isPlayerStartHeld · POK-528 U2). 재생기 수명
+   * 지시이지 그릴 것이 아니다 — 재생기가 기동할 때 한 번 읽는다
+   */
+  startHeld: boolean;
+}
+
+type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
+
+/**
+ * 새로 서는 재생기(세대가 올라 다시 서는 것 · 리마운트 포함)를 세우지 않는가 — 막힌 끝남
+ * 대기(POK-528 U2). 화면에 그릴 것이 아니라 재생기 수명 지시다. 국면 데이터에서 뽑으므로
+ * 세대가 오를 때마다 같은 값을 다시 읽는다
+ */
+export function isPlayerStartHeld(session: PlaybackSessionState): boolean {
+  const { phase } = session;
+  return phase.kind === 'ending-wait' && phase.blocked === true;
+}
+
+/**
+ * 끝남 대기의 덮개 — 막혔으면 끝까지 볼 수 없음이 정해졌으니 재접속 대기 안이어도 「다시보기
+ * 준비 중」(POK-528 (나)-5), 끝에 닿았으면 재접속 대기 동안 「확인 중」 · 그 뒤 「준비 중」
+ */
+function endingCover(phase: EndingPhase, waiting: boolean): SessionView['cover'] {
+  if (phase.blocked) return 'preparing';
+  if (!phase.atEnd) return null;
+  return waiting ? 'checking' : 'preparing';
 }
 
 function offerActions(session: PlaybackSessionState): SessionButton[] {
@@ -41,13 +73,14 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
     liveChecking: session.liveChecking,
     recordEmphasis: false,
     vodReady: false,
+    startHeld: isPlayerStartHeld(session),
   };
   const phase = session.phase;
   if (phase.kind === 'ending-wait') {
     const waiting = session.endingSince !== null && now - session.endingSince < RESUME_WAIT_MS;
     return {
       ...base,
-      cover: phase.atEnd ? (waiting ? 'checking' : 'preparing') : null,
+      cover: endingCover(phase, waiting),
       actions: offerActions(session),
       seekHidden: phase.atEnd && phase.origin === 'live',
       recordEmphasis: session.rosterEnded,

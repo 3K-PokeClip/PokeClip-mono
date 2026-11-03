@@ -91,6 +91,36 @@ export function close(
   return { state: { ...session, closed: reason }, effects: [effect] };
 }
 
+// ── 다시보기 ──
+
+/**
+ * 다시보기 범위(vod) 안에서 atMs 에 가장 가까운 시작 자리 — 첫 조각 앞이면 첫 조각,
+ * 끝 여유(headPdtMs − 창 하한 여유) 뒤면 끝 여유. 하한이 이긴다(짧은 VOD 는 첫 조각 · R47)
+ */
+export function vodStartAt(session: PlaybackSessionState, atMs: number, vod: RewindRange): number {
+  return Math.max(vod.firstPdtMs, Math.min(atMs, vod.headPdtMs - session.edgeMarginMs));
+}
+
+/**
+ * 같은 자리 다시보기로 옮긴다 — 끝난 회차의 되감기 조각이 사라졌을 때(POK-528 W4 · W5).
+ * 자리를 모르면 처음부터, 자리를 범위 안으로 가뒀으면 알린다. 제안 단추는 거둔다
+ */
+export function openVodHere(session: PlaybackSessionState, vod: RewindRange): Transition {
+  const atMs = session.lastAtMs;
+  const start = atMs === null ? null : vodStartAt(session, atMs, vod);
+  const effects: SessionEffect[] =
+    start === null || start === atMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
+  return {
+    state: {
+      ...session,
+      phase: { kind: 'vod' },
+      source: replace(session, 'vod', vod.url, start),
+      offer: null,
+    },
+    effects,
+  };
+}
+
 // ── 시크 ──
 
 export function seekLive(

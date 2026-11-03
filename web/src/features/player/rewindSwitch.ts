@@ -21,11 +21,13 @@ import {
   close,
   isThisRound,
   liveFromAway,
+  openVodHere,
   readyLive,
   replace,
   seekInList,
   seekLive,
   stateOnly,
+  vodStartAt,
   within,
   withUrl,
   type RewindRange,
@@ -67,8 +69,18 @@ export type SessionPhase =
   | { kind: 'live' }
   /** pendingNext = 지금 위치를 덮지 않는 새 url 과 그 범위(최신 폴링 값). 끝 도달 때 E 를 덮으면 그 E 에서 잇는다 */
   | { kind: 'rewind'; pendingNext: RewindRange | null }
-  /** 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 · recordOnEnd = 회차 종국 또는 20분 시한이 섰다 */
-  | { kind: 'ending-wait'; origin: 'live' | 'rewind'; atEnd: boolean; recordOnEnd: boolean }
+  /**
+   * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 · recordOnEnd = 회차 종국 또는 20분 시한이 섰다 ·
+   * blocked = 되감기 조각 404 로 이 목록을 끝까지 재생할 수 없다(POK-528 — 회차별 조회의 vod · 종국 · 20분과 사람 단추로만
+   * 풀린다). 없으면 거짓이다
+   */
+  | {
+      kind: 'ending-wait';
+      origin: 'live' | 'rewind';
+      atEnd: boolean;
+      recordOnEnd: boolean;
+      blocked?: boolean;
+    }
   | { kind: 'vod-offered'; url: string; firstPdtMs: number; headPdtMs: number; atEnd: boolean }
   | { kind: 'vod' };
 
@@ -170,6 +182,8 @@ export type SessionEvent =
   | { type: 'live-start-truncated' }
   /** 라이브 창 탐침의 결과 — seq 는 probe-live 효과의 순번 */
   | { type: 'live-probe'; seq: number; result: LiveProbeResult }
+  /** 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다. generation = 그 재생기의 소스 세대(POK-528) */
+  | { type: 'dvr-segment-gone'; generation: number }
   | { type: 'leave' };
 
 export type SessionEffect =
@@ -193,7 +207,9 @@ export type SessionEffect =
    * 넘김 확인이 깨져 되감기로 되돌렸다(H0 · H1a · H2 · H2t) — 사람이 멈춰 있었으면
    * 새 재생기를 멈춘 채 세운다. 멈췄는지는 재생기가 사람의 pause · play 로 안다
    */
-  | { kind: 'keep-paused-on-swap' };
+  | { kind: 'keep-paused-on-swap' }
+  /** 지금 프레임에서 멈춘다 — 사람의 멈춤으로 적지 않는다(POK-528 · 막힘) */
+  | { kind: 'hold-frame' };
 
 export interface Transition {
   state: PlaybackSessionState;
@@ -444,6 +460,9 @@ function onVodOffered(
       return origin === 'live'
         ? seekLive(session, event.targetMs, event.view)
         : seekInList(session, event.targetMs, event.view);
+    case 'dvr-segment-gone':
+      // W4 — 다시보기가 이미 있으니 같은 자리 다시보기로 곧바로 옮긴다
+      return openVodHere(session, phase);
     case 'live-button':
       if (phase.atEnd) return stateOnly(session);
       // live 기원은 live 표의 LIVE 행 — 라이브 끝으로 시크 · 국면 그대로(종결 정정 live 표 · VOD 제안을 잃지 않는다)
@@ -463,10 +482,7 @@ function openVod(session: PlaybackSessionState, phase: OfferedPhase): Transition
       source: replace(session, 'vod', phase.url, null),
     });
   }
-  const start = Math.max(
-    phase.firstPdtMs,
-    Math.min(session.lastAtMs, phase.headPdtMs - session.edgeMarginMs),
-  );
+  const start = vodStartAt(session, session.lastAtMs, phase);
   const effects: SessionEffect[] =
     start === session.lastAtMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
   return {
@@ -530,6 +546,13 @@ function onAnyPhase(
     }
     case 'live-probe':
       return onLiveProbe(session, event.seq, event.result, now);
+    case 'dvr-segment-gone':
+      // 지금 세대의 되감기 재생기가 낸 404 만 국면 표로 넘긴다 — 교체를 커밋한 뒤 정리 전인 옛 재생기의 늦은 404 는
+      // 버린다(위치 시대 대조와 같은 꼴)
+      if (event.generation !== session.source.generation || session.source.kind !== 'rewind') {
+        return stateOnly(session);
+      }
+      return null;
     case 'remount': {
       const confirming = onHandoffConfirming(session, event, now);
       if (confirming !== null) return confirming;

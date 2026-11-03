@@ -16,6 +16,7 @@ import {
   close,
   isThisRound,
   liveFromAway,
+  openVodHere,
   readyLive,
   replace,
   seekInList,
@@ -62,9 +63,13 @@ export function onEnding(
     case 'button':
       return onEndingButton(session, event.which);
     case 'seek':
+      // 막힌 동안 시크는 무시한다 — 재생기가 받기를 멈췄고 복구는 세션 효과만 한다(POK-528 P15)
+      if (phase.blocked) return stateOnly(session);
       return onEndingSeek(session, phase, event.targetMs, event.view);
     case 'live-button':
       return phase.atEnd ? stateOnly(session) : liveFromAway(session, event.x, event.attempt);
+    case 'dvr-segment-gone':
+      return onEndingSegmentGone(session, phase);
     default:
       return stateOnly(session);
   }
@@ -92,8 +97,9 @@ function onEndingStreamPoll(
   const live = readyLive(event.result);
   if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
   const sameRound = isThisRound(session, currentX);
-  // 되감기의 자동 이음은 같은 방송(X = 이 회차)이 끊겼다 돌아온 경우뿐이다 — 다른 방송 · 모름은 버튼 규칙으로
-  const joinable = phase.origin === 'live' || sameRound;
+  // 되감기의 자동 이음은 같은 방송(X = 이 회차)이 끊겼다 돌아온 경우뿐이다 — 다른 방송 · 모름은 버튼 규칙으로.
+  // 막힌 세션은 잇지 않는다 — 회차별 조회의 vod · 종국 · 20분과 사람 단추로만 풀린다(POK-528 U1)
+  const joinable = !phase.blocked && (phase.origin === 'live' || sameRound);
   const join = joinPoint(session, phase);
   if (joinable && within(join, live.firstPdtMs, live.headPdtMs)) {
     const resumed = {
@@ -118,8 +124,9 @@ function onEndingStreamPoll(
       source: replace(session, 'live', session.liveUrl, null),
     });
   }
-  // 되감기 기원의 「새 방송 보기」는 끝에 닿은 뒤에만 — 다른 방송은 끝까지 두고 끝 도달 뒤 제안한다(kty K1 확장 (가))
-  const offersNew = phase.origin === 'live' || phase.atEnd;
+  // 되감기 기원의 「새 방송 보기」는 끝에 닿은 뒤에만 — 다른 방송은 끝까지 두고 끝 도달 뒤 제안한다(kty K1 확장 (가)).
+  // 막힌 세션은 끝까지 볼 수 없으니 곧바로 제안한다(POK-528 W7)
+  const offersNew = phase.origin === 'live' || phase.atEnd || phase.blocked === true;
   let offer: Offer | null = null;
   if (sameRound) offer = { kind: 'go-live' };
   else if (offersNew && currentX?.kind === 'known' && currentX.id !== '') {
@@ -148,6 +155,11 @@ function onEndingRoundPoll(
   const seenEnd = session.observedEndMs;
   if (seenFrom === null || seenEnd === null) return stateOnly(session);
   if (status.firstPdtMs > seenEnd || status.headPdtMs < seenFrom) return stateOnly(session);
+  if (phase.blocked) {
+    // 막힌 세션은 제안을 거치지 않고 같은 자리 다시보기로 옮긴다 — 끝까지 볼 수 없으니 기다릴 것이 없다(POK-528 W5)
+    const vod = { url: status.url, firstPdtMs: status.firstPdtMs, headPdtMs: status.headPdtMs };
+    return openVodHere(session, vod);
+  }
   return stateOnly({
     ...session,
     phase: {
@@ -161,11 +173,26 @@ function onEndingRoundPoll(
   });
 }
 
-/** 회차 종국(회차별 ended · 재접속 대기 뒤 404 · 20분 시한) — 끝에 닿았으면 녹화로, 아니면 끝까지 본 뒤 녹화로 */
+/**
+ * 회차 종국(회차별 ended · 재접속 대기 뒤 404 · 20분 시한) — 끝에 닿았거나 막혔으면(끝까지 볼 수 없다 · POK-528 W5)
+ * 녹화로, 아니면 끝까지 본 뒤 녹화로
+ */
 function roundFinal(session: PlaybackSessionState, phase: EndingPhase): Transition {
-  if (phase.atEnd) return close(session, 'recorded');
+  if (phase.atEnd || phase.blocked) return close(session, 'recorded');
   if (phase.recordOnEnd) return stateOnly(session);
   return stateOnly({ ...session, phase: { ...phase, recordOnEnd: true } });
+}
+
+/**
+ * 되감기 조각 404(POK-528 계획 3-2) — 녹화로 정하기 전이면 이 목록을 끝까지 재생할 수 없으니
+ * 막고 지금 프레임에서 멈춘다. 이미 막혔거나 녹화로 정했으면 그대로다
+ */
+function onEndingSegmentGone(session: PlaybackSessionState, phase: EndingPhase): Transition {
+  if (phase.blocked || phase.recordOnEnd) return stateOnly(session);
+  return {
+    state: { ...session, phase: { ...phase, blocked: true } },
+    effects: [{ kind: 'hold-frame' }],
+  };
 }
 
 function onEndingButton(session: PlaybackSessionState, which: SessionButton): Transition {
