@@ -29,6 +29,9 @@ vi.mock('./rewindSwitch', async (importOriginal) => {
 //    MANIFEST_PARSED · LEVEL_LOADED · LEVEL_UPDATED 를 loadSource 한 호출에서 차례로 내고
 //    (playlist-loader.ts 573 · 594 · 805 · level-controller.ts 387), play() 의 play 사건은 그
 //    호출 뒤(마이크로과제)에 낸다 — 시험 머리에서 이 순서를 단언으로 고정한다.
+// ③ 사람이 멈춘 동안의 404(c9 · 계획 4-3 · 8-5): 재생기가 받기만 멈추고 세션에 올리지 않는다.
+//    다시 틀 때 올려 세션이 국면 행대로 잇는다 — rewind 는 같은 목록 다시 받기(이어 볼 자리 ·
+//    세션 시크 목표) · 끝남 대기는 막힘 · 다시보기 제안은 같은 자리 다시보기.
 
 const fake = vi.hoisted(() => ({
   instances: [] as FakeHls[],
@@ -585,5 +588,151 @@ describe('404 → 목록 다시 받기 · 사람 멈춤 — 옛 축의 멈춘 �
     expect(media.paused).toBe(false);
     expect(checkedEvents().slice(eventsBefore)).not.toContain('seek');
     expect(oldestNotices(onNotice)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('사람이 멈춘 동안의 되감기 조각 404 — 다시 틀 때 세션이 잇는다(c9 · 계획 4-3 · 8-5)', () => {
+  /** 사람이 멈춘다 — 재생기는 pause 사건으로만 안다(멈춘 자리는 옛 목록 축에 적힌다) */
+  function userPause(view: ReturnType<typeof render>) {
+    act(() => {
+      media.paused = true;
+      view.getByTestId('video').dispatchEvent(new Event('pause'));
+    });
+  }
+
+  /** 사람이 다시 튼다 — play 사건은 큐에서 난다 */
+  async function userPlay(view: ReturnType<typeof render>) {
+    act(() => {
+      void (view.getByTestId('video') as HTMLVideoElement).play();
+    });
+    await settle();
+    await settle();
+  }
+
+  it('rewind: 멈춤 → 404 → 고리 0 · 교체 0 · 화면 그대로 → 재생 → 같은 url 다시 받기(세대 + 1 · 이어 볼 자리) · 새 목록 하한 알림 1', async () => {
+    const { view, rewindHls, onNotice } = await rewindScreen();
+    userPause(view);
+    const eventsBefore = checkedEvents().length;
+    const before = current().state;
+    const created = fake.instances.length;
+    onNotice.mockClear();
+    fake.bootList = listFrom(NEW_F, true);
+    segmentGone(rewindHls);
+    await settle();
+    expect(rewindHls.stopLoad).toHaveBeenCalledTimes(1);
+    expect(current().state.phase).toEqual({ kind: 'rewind', pendingNext: null });
+    expect(current().state.source).toEqual(before.source);
+    expect(fake.instances).toHaveLength(created);
+    expect(media.paused).toBe(true);
+    expect(checkedEvents().slice(eventsBefore)).not.toContain('dvr-segment-gone');
+    expect(onNotice).not.toHaveBeenCalled();
+    const played = playCalls();
+    // 기동 때의 받기(armStart) 뒤로 옛 재생기는 더 받지 않는다 — 제자리 다시 받기 없음
+    const loads = rewindHls.startLoad.mock.calls.length;
+    await userPlay(view);
+    expect(current().state.source).toMatchObject({
+      kind: 'rewind',
+      url: A1,
+      startAtMs: TARGET,
+      generation: before.source.generation + 1,
+    });
+    expect(fake.instances).toHaveLength(created + 1);
+    expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'paint' } });
+    expect(oldestNotices(onNotice)).toBe(1);
+    // 사람이 한 번 · 다시 받은 새 재생기가 한 번
+    expect(playCalls() - played).toBe(2);
+    expect(rewindHls.startLoad).toHaveBeenCalledTimes(loads);
+    const after = checkedEvents().slice(eventsBefore);
+    expect(after.filter((event) => event === 'dvr-segment-gone')).toHaveLength(1);
+    expect(after).not.toContain('seek');
+  });
+
+  it('rewind: 404 없이 멈춤 → 제어면 첫 조각이 늦어져도 재생 때 멈춘 자리(목록 하한 안)에서 그대로 — 시크 0 · 알림 0(P35)', async () => {
+    const { view, rewindHls, onNotice } = await rewindScreen();
+    const video = view.getByTestId('video') as HTMLVideoElement;
+    video.currentTime = 16;
+    userPause(view);
+    const eventsBefore = checkedEvents().length;
+    const created = fake.instances.length;
+    onNotice.mockClear();
+    control.stream = () => jsonResponse(200, liveBody(OLD_F + 40_000));
+    await act(async () => vi.advanceTimersByTime(10_000));
+    await settle();
+    expect(current().state.entry?.firstPdtMs).toBe(OLD_F + 40_000);
+    await userPlay(view);
+    expect(video.currentTime).toBe(16);
+    expect(oldestNotices(onNotice)).toBe(0);
+    expect(rewindHls.stopLoad).not.toHaveBeenCalled();
+    expect(fake.instances).toHaveLength(created);
+    expect(checkedEvents().slice(eventsBefore)).not.toContain('seek');
+  });
+
+  it('rewind: 멈춤 → 404 → 붙잡은 채 세션 시크(목록 안) → 재생 → 다시 받기가 시크 목표에서 선다(P34 · 이어 볼 자리 둘째 단)', async () => {
+    const { view, rewindHls } = await rewindScreen();
+    userPause(view);
+    const loads = rewindHls.startLoad.mock.calls.length;
+    fake.bootList = null;
+    segmentGone(rewindHls);
+    await settle();
+    const asked = TARGET + 40_000;
+    act(() =>
+      current().dispatch({
+        type: 'seek',
+        targetMs: asked,
+        view: { lowerMs: OLD_F + 12_000, endMs: NOW - 2_000 },
+      }),
+    );
+    await settle();
+    expect(current().state.pendingSeekMs).toBe(asked);
+    expect(rewindHls.startLoad).toHaveBeenCalledTimes(loads);
+    const generation = current().state.source.generation;
+    await userPlay(view);
+    expect(current().state.source).toMatchObject({
+      kind: 'rewind',
+      url: A1,
+      startAtMs: asked,
+      generation: generation + 1,
+    });
+    expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'list' } });
+    checkedEvents();
+  });
+
+  it('끝남 대기(rewind 기원 · 막힘 아님): 멈춤 → 404 → 국면 그대로 → 재생 → 막힘 · 지금 프레임에서 멈춤(c2 행)', async () => {
+    const { view, rewindHls } = await rewindScreen();
+    act(() => current().dispatch({ type: 'endlist' }));
+    await settle();
+    const ending = current().state.phase;
+    expect(ending).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: false });
+    expect(ending).not.toHaveProperty('blocked');
+    userPause(view);
+    const eventsBefore = checkedEvents().length;
+    segmentGone(rewindHls);
+    await settle();
+    expect(current().state.phase).toEqual(ending);
+    expect(checkedEvents().slice(eventsBefore)).not.toContain('dvr-segment-gone');
+    await userPlay(view);
+    expect(current().state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
+    expect(media.paused).toBe(true);
+    checkedEvents();
+  });
+
+  it('다시보기 제안: 멈춤 → 404 → 새 재생기 0 → 재생 → 같은 자리 다시보기 1(W4)', async () => {
+    const { view, rewindHls } = await rewindScreen();
+    act(() => current().dispatch({ type: 'endlist' }));
+    await settle();
+    control.round = () => jsonResponse(200, vodBody());
+    await act(async () => vi.advanceTimersByTime(10_000));
+    await settle();
+    expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD });
+    userPause(view);
+    const created = fake.instances.length;
+    segmentGone(rewindHls);
+    await settle();
+    expect(fake.instances).toHaveLength(created);
+    expect(current().state.source.kind).toBe('rewind');
+    await userPlay(view);
+    expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: TARGET });
+    expect(fake.instances).toHaveLength(created + 1);
+    checkedEvents();
   });
 });

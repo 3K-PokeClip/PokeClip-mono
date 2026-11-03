@@ -525,6 +525,17 @@ export function useHlsPlayback(
       endSent = false;
       waiting = false;
     };
+    // 사람이 멈춘 동안의 되감기 조각 404 는 받기만 멈추고 세션에 올리지 않는다 — 다시 틀 때(onPlay) 올린다(POK-528 c9 ·
+    // 계획 4-3). 사람 멈춤 = 멈춰 있고 멈춘 자리 기록이 있다(앱이 건 멈춤은 기록을 남기지 않는다). 재생기 하나의 상태라
+    // 세대가 바뀌면 옛 재생기와 함께 버린다
+    let goneWhilePaused = false;
+    const reportGone = (gone: (generation: number) => void) => {
+      if (video.paused && pausedAtMsRef.current !== null) {
+        goneWhilePaused = true;
+        return;
+      }
+      gone(generation);
+    };
     let recoveredNetwork = false;
     let recoveredMedia = false;
     // 브라우저 기본 HLS(옛 iOS Safari)의 오류 처리. hls.js 갈래에서만 단다
@@ -554,6 +565,13 @@ export function useHlsPlayback(
       pausedAtMsRef.current = null;
       // 사용자가 다시 틀었다 — 멈춘 채 넘긴 것이 교체로 이어지지 않았어도 다음 재생기의 자동 재생을 막지 않는다
       swap.userPlayed();
+      // 멈춘 동안 붙잡은 404 가 있으면 이 목록은 낡았다 — 하한 안팎을 보지 않고 세션에 올려 목록을 다시 받게 한다. 옛
+      // 자리 시크 · 제자리 다시 받기(startLoad)는 하지 않는다(계획 4-3)
+      if (goneWhilePaused) {
+        goneWhilePaused = false;
+        hooksRef.current.onDvrSegmentGone?.(generation);
+        return;
+      }
       const axis = sessionActive() ? readAxis() : null;
       if (pausedAtMs !== null && axis !== null && pausedAtMs < axis.view.lowerMs) {
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
@@ -747,9 +765,10 @@ export function useHlsPlayback(
           }
         });
         hls.on(HlsCtor.Events.ERROR, (_event, data) => {
-          // 되감기 조각 404 는 첫 비치명에서 가로챈다 — hls.js 가 예약한 다시 받기를 끊고 세션에 올린다(POK-528)
+          // 되감기 조각 404 는 첫 비치명에서 가로챈다 — hls.js 가 예약한 다시 받기를 끊고 세션에 올린다(POK-528 ·
+          // 사람이 멈춘 동안이면 다시 틀 때 — reportGone)
           const gone = hooksRef.current.onDvrSegmentGone;
-          const onGone = gone === undefined ? undefined : () => gone(generation);
+          const onGone = gone === undefined ? undefined : () => reportGone(gone);
           if (
             kind === 'rewind' &&
             consumeDvrSegmentGone(hls, data, HlsCtor.ErrorTypes, HlsCtor.ErrorDetails, onGone)

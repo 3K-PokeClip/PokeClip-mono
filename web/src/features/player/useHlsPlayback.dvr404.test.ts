@@ -5,8 +5,8 @@ import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
 // 되감기 조각 404 의 재생기 몫(POK-528 c5 — 계획 4절 · 4-1 · 4-2 · 8-3): 재생기가 되감기
 // 조각 404 를 가로채 받기를 멈추고 세션에 올리는 배선 · 앱이 건 멈춤(holdFrame)이 사람
-// 멈춤으로 적히지 않는 것 · 목록 다시 받기의 멈춤 기록 버리기(dropPauseMark) · 「세우지
-// 않음」(startHeld) 재생기 기동을 본다. 다시 받은 재생기의 시작 자리 · 하한 잘림 보고는
+// 멈춤으로 적히지 않는 것 · 목록 다시 받기의 멈춤 기록 버리기(dropPauseMark) · 사람이 멈춘
+// 동안의 404 붙잡기(c9) · 「세우지 않음」(startHeld) 재생기 기동을 본다. 다시 받은 재생기의 시작 자리 · 하한 잘림 보고는
 // useHlsPlayback.relist.test.ts 가 본다(c7 — c3 의 「시작 하한 추정 S」 묶음을 대체).
 // hls.js 흉내는 useHlsPlayback.start.test.ts 꼴이다(처음부터 off() 를 둔다).
 
@@ -397,12 +397,13 @@ describe('앱이 건 멈춤(holdFrame)은 사람 멈춤으로 적히지 않는�
     expect(playCalls()).toBe(1);
   });
 
-  it('목록 다시 받기의 멈춤 기록 버리기 — 사람 멈춤 → 404 → dropPauseMark → 다시 받은 새 재생기가 틀어도 옛 자리 시크 0 · 재생기 알림 0', async () => {
+  it('목록 다시 받기의 멈춤 기록 버리기 — 재생 중 404 → 사람 멈춤 → dropPauseMark → 다시 받은 새 재생기가 틀어도 옛 자리 시크 0 · 재생기 알림 0', async () => {
     const hooks = sessionHooks();
     const { result, video, swapTo } = await playingRewind(hooks);
-    userPause(video);
+    // 재생 중 404 는 곧바로 올라간다 — 멈춤은 그 뒤 새 재생기가 서기 전이다(멈춘 동안의 404 는 아래 묶음)
     raise(lastHls(), fragError(404));
     expect(hooks.onDvrSegmentGone).toHaveBeenCalledTimes(1);
+    userPause(video);
     act(() => result.current.dropPauseMark());
     await swapTo({ source: sourceOf('rewind', 2, S), hooks });
     parsed(lastHls(), NEW_LIST);
@@ -410,6 +411,135 @@ describe('앱이 건 멈춤(holdFrame)은 사람 멈춤으로 적히지 않는�
     expect(hooks.onSeekRequest).not.toHaveBeenCalled();
     expect(hooks.onNotice).not.toHaveBeenCalled();
   });
+});
+
+/** 세션이 마지막으로 받은 제어면 첫 조각 — 옛 목록 첫 조각 F 보다 20초 늦다(다시 틀 때 비교값에 넣지 않는다) */
+const CONTROL_F = F + 20_000;
+/** 옛 목록의 창 하한(맨 앞 4초 조각 셋) · 끝(4초 조각 열 개) */
+const OLD_LOWER = F + 12_000;
+const OLD_END = F + 40_000;
+
+// 사람이 멈춘 동안의 되감기 조각 404(POK-528 c9 · 계획 4-3 · 8-5). 받기만 멈추고(stopLoad) 세션에 올리지 않은 채
+// 기다리다가, 다시 틀 때 하한 안팎을 보지 않고 이 세대로 고리를 한 번 부른다 — 세션이 같은 목록을 다시 받는다. 옛 자리
+// 시크 · 제자리 다시 받기(startLoad)는 하지 않는다. 404 가 없으면 재개 판정은 지금처럼 재생기 목록 하한만 본다(제어면
+// 첫 조각 axisLowerMs 는 넣지 않음 — P35). tmp 41b85090 의 시험 차림을 옮겨 이 판정으로 고쳤다
+describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추고 다시 틀 때 세션에 올린다(POK-528 c9 · 계획 4-3 · 8-5)', () => {
+  beforeEach(stubMediaPlayback);
+
+  /** 세션 모드 고리 — 제어면 첫 조각을 쥐여 둔다(비교값에 넣지 않는지 보려고) */
+  function resumeHooks() {
+    return {
+      onSeekRequest: vi.fn(),
+      onNotice: vi.fn(),
+      onDvrSegmentGone: vi.fn(),
+      axisLowerMs: CONTROL_F,
+    };
+  }
+
+  /** 옛 목록을 쥔 재생기(세대 1)를 세우고, 재생 위치를 atS 초에 둔 채 사람이 멈춘다 */
+  async function pausedAt(atS: number, kind: PlaybackSource['kind'] = 'rewind') {
+    const hooks = resumeHooks();
+    const mounted = await mount(sourceOf(kind, 1), hooks);
+    const hls = lastHls();
+    hls.latestLevelDetails = OLD_LIST;
+    mounted.video.currentTime = atS;
+    userPause(mounted.video);
+    return { ...mounted, hooks, hls };
+  }
+
+  /** 사람이 다시 튼다 */
+  function resume(video: HTMLVideoElement) {
+    act(() => {
+      void video.play();
+    });
+  }
+
+  it.each([
+    ['하한 밖(영상 0초)', 0],
+    ['하한 안(영상 36초)', 36],
+  ])(
+    '멈춘 동안 404 · 자리 %s → 받기만 멈춤(고리 0 · 교체 0 · 화면 그대로) → 다시 틀면 이 세대로 고리 1 · 시크 요청 0 · startLoad 0',
+    async (_name, atS) => {
+      const { video, hooks, hls } = await pausedAt(atS);
+      raise(hls, fragError(404));
+      expect(hls.stopLoad).toHaveBeenCalledTimes(1);
+      expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
+      expect(fake.instances).toHaveLength(1);
+      expect(pauseCalls()).toBe(0);
+      expect(media.paused).toBe(true);
+      resume(video);
+      expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1]]);
+      expect(hooks.onSeekRequest).not.toHaveBeenCalled();
+      expect(hls.startLoad).not.toHaveBeenCalled();
+      expect(video.currentTime).toBe(atS);
+      expect(fake.instances).toHaveLength(1);
+      // 붙잡은 것은 한 번 쓰면 버린다 — 다시 멈췄다 틀어도 또 부르지 않는다
+      userPause(video);
+      resume(video);
+      expect(hooks.onDvrSegmentGone).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('404 없이 멈췄다 다시 틀 때 멈춘 자리가 목록 하한 안이면 제어면 첫 조각이 늦어도 그대로 튼다 — 시크 요청 0(41b85090 (ii) 를 뒤집음 · P35)', async () => {
+    const { video, hooks, hls } = await pausedAt(16);
+    resume(video);
+    expect(hooks.onSeekRequest).not.toHaveBeenCalled();
+    expect(video.currentTime).toBe(16);
+    expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
+    expect(hls.startLoad).not.toHaveBeenCalled();
+  });
+
+  it('404 없이 멈춘 자리가 목록 하한 앞이면 지금처럼 그 하한으로 옮겨 달라고 한다 — 시크 요청 1 · 고리 0', async () => {
+    const { video, hooks, hls } = await pausedAt(0);
+    resume(video);
+    expect(hooks.onSeekRequest.mock.calls).toEqual([[F, { lowerMs: OLD_LOWER, endMs: OLD_END }]]);
+    expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
+    expect(hls.startLoad).not.toHaveBeenCalled();
+  });
+
+  it('앱이 건 멈춤(holdFrame) 뒤의 404 는 미루지 않는다 — 곧바로 이 세대로 고리 1(사람 멈춤만 기다린다)', async () => {
+    const hooks = resumeHooks();
+    const { result } = await mount(sourceOf('rewind', 1), hooks);
+    const hls = lastHls();
+    hls.latestLevelDetails = OLD_LIST;
+    act(() => result.current.holdFrame());
+    expect(media.paused).toBe(true);
+    raise(hls, fragError(404));
+    expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1]]);
+  });
+
+  it('다시보기 재생기의 재개는 지금 비교 그대로다 — 녹화 첫 조각 뒤 자리면 그대로 튼다', async () => {
+    const { video, hooks } = await pausedAt(16, 'vod');
+    resume(video);
+    expect(hooks.onSeekRequest).not.toHaveBeenCalled();
+    expect(video.currentTime).toBe(16);
+  });
+
+  // P34 — 붙잡은 채 사람이 옮기면 받기를 멈춘 재생기는 그 자리를 받지 않는다. 다시 틀 때 세션에 올려 다시 받기가
+  // 선다(세션 시크면 세션이 목표를 들고 있다 — 세션 훅 층 시험). 지금 동작을 고정한다
+  it('붙잡은 채 시크(seekToMs) → 받기 0 · 시크 요청 0 → 다시 틀면 고리 1 · 시크 요청 0 · startLoad 0', async () => {
+    const { result, video, hooks, hls } = await pausedAt(36);
+    raise(hls, fragError(404));
+    act(() => result.current.seekToMs(F + 24_000));
+    expect(video.currentTime).toBe(24);
+    expect(hls.startLoad).not.toHaveBeenCalled();
+    resume(video);
+    expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1]]);
+    expect(hooks.onSeekRequest).not.toHaveBeenCalled();
+    expect(hls.startLoad).not.toHaveBeenCalled();
+  });
+
+  it.each<PlaybackSource['kind']>(['rewind', 'live'])(
+    '붙잡은 채 세대가 바뀌면(%s 새 재생기 — 폴링 교체 · LIVE) 붙잡은 404 는 옛 재생기와 함께 버린다 — 다시 틀어도 고리 0',
+    async (kind) => {
+      const { video, hooks, hls, swapTo } = await pausedAt(0);
+      raise(hls, fragError(404));
+      await swapTo({ source: sourceOf(kind, 2, kind === 'rewind' ? S : null), hooks });
+      expect(fake.instances).toHaveLength(2);
+      resume(video);
+      expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('「세우지 않음」 재생기 기동(POK-528 U2 · 계획 4-2 · 8-3 리마운트 기동 셋)', () => {
