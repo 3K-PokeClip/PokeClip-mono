@@ -835,14 +835,20 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 //
 // 위치(start_pts_ms)는 여기서 정하지 않는다 — 판과 무관하게 store 가 Insert 트랜잭션에서 정하고 InsertCommit.StartPTSMS 로
 // 돌려준다(POK-196 PDT 설계 r7 7.1 · 계획 0절 6). drift 는 끊김 판정의 재료로만 남는다.
+//
+// 판정의 기준 행은 꼬리 q(seq 바로 앞 장부 행)다 — q · 이 조각 둘 다 표식 · 번호가 있으면 칸으로, 하나라도 없으면 drift 로
+// 정하고 훅 판정을 OR 로 합친다(judgeDiscontinuity · POK-196 PDT 계획 4절 c6). drift 로그 둘은 판정 갈래와 무관하게 파일명
+// 시각의 관측으로 남는다.
 func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size int64, breakHit bool, timing index.TimingInput) index.Record {
 	isDiscont := false
 
 	if cur.Tail != nil {
 		drift := seg.StartWall.Sub(cur.ExpectedNextWall()).Milliseconds()
-		isDiscont = abs64(drift) > ix.opt.DriftToleranceMS
-		switch {
-		case drift < 0 && !isDiscont:
+		verdict := judgeDiscontinuity(cur.Tail.Timing, timing.Facts, drift, ix.opt.DriftToleranceMS, breakHit)
+		ix.logDiscontinuity(seg, cur.NextSeq, cur.Tail.Timing, timing.Facts, verdict)
+		isDiscont = verdict.broken
+		switch outside := abs64(drift) > ix.opt.DriftToleranceMS; {
+		case drift < 0 && !outside:
 			// 톨러런스 이내의 음수 drift 는 무음으로 두지 않되 ERROR 로 올리지도 않는다.
 			// duration 은 미디어 타임라인에서, wall 은 파일명에서 오므로 작은 음수는
 			// 상시 발생하는 측정 입도 차이다(60초 방송 실측: 전이 14건 중 13건이 -1~-22ms).
@@ -857,11 +863,8 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 				"seg_wall", seg.StartWall, "expected_next_wall", cur.ExpectedNextWall())
 		}
 	}
-
-	// 훅 판정을 합성한다 — 0.9s 재접속의 drift 는 tolerance 이내라 플래그는 훅이 세운다. POK-36 케이스에서 원하던 결과다.
-	//
-	// cur.Tail == nil 이면 breakHit 은 구조적으로 false 다(peekBreak 이 Apply 를 주지 않는다).
-	isDiscont = isDiscont || breakHit
+	// 훅 판정은 judgeDiscontinuity 가 합성한다. cur.Tail == nil 이면 첫 행이라 거짓이고, breakHit 도 구조적으로 false 다
+	// (peekBreak 이 Apply 를 주지 않는다).
 
 	return index.Record{
 		StreamID:        seg.StreamID,

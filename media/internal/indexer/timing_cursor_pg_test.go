@@ -17,22 +17,37 @@ import (
 )
 
 // 귀속(송출 중 관측 — 회차 개시 · 판 NULL PDT 이어짐)과 비귀속(관측 없음 — PDT NULL · 바로 앞 행 끝) 두 갈래에서, 6초 drift
-// (톨러런스 1.5초 넘음) 조각까지 넣은 뒤 메모리 커서를 장부 커서와 견준다. 드리프트 행은 is_discontinuity 가 참이다.
+// (톨러런스 1.5초 넘음) 조각까지 넣은 뒤 메모리 커서를 장부 커서와 견준다. 칸 있음(같은 녹화기 · 번호 7 → 8 → 9)과 칸
+// 없음(mtxi 없음) 두 갈래도 함께 돈다. 드리프트 행의 is_discontinuity 는 칸이 있으면 거짓(같은 녹화기 이어짐 — 파일명
+// 도약은 보지 않는다), 칸이 없으면 drift 폴백으로 참이다(c6 · r6 2.8 · I15 「+5001ms 도약 → 거짓」).
 // 잡는 결함: advance 가 rec 값으로 전진하거나(drift 가산 위치 · mvhd 길이), 칸을 꼬리에 넣지 않으면 갈라진다.
 func TestCommittedCursorEqualsLedgerCursorPG(t *testing.T) {
 	// 비귀속 갈래는 방증 없는 재스캔 유입이다 — 세션 결정이 「지금 회차만」(SessionCurrentOnly)이라 회차가 열리지 않는다.
-	for _, tt := range []struct {
+	type branch struct {
 		name       string
 		publishing bool
 		reason     recording.CompletionReason
-	}{{"귀속", true, recording.ReasonNextFile}, {"비귀속", false, recording.ReasonScan}} {
+		marks      bool
+	}
+	var branches []branch
+	for _, b := range []branch{{"귀속", true, recording.ReasonNextFile, false}, {"비귀속", false, recording.ReasonScan, false}} {
+		withMarks, noMarks := b, b
+		withMarks.name, withMarks.marks = b.name+"/칸 있음", true
+		noMarks.name = b.name + "/칸 없음"
+		branches = append(branches, withMarks, noMarks)
+	}
+	for _, tt := range branches {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newPhaseFixture(t, "cursor-"+map[bool]string{true: "attr", false: "unattr"}[tt.publishing], phase{watcher: true})
+			db := "cursor-" + map[bool]string{true: "attr", false: "unattr"}[tt.publishing] + map[bool]string{true: "-marks", false: ""}[tt.marks]
+			f := newPhaseFixture(t, db, phase{watcher: true})
 			if tt.publishing {
 				f.publishing(0, 2*time.Minute)
 			}
 			number := uint64(7)
 			f.ix.timingFn = func(string) (playback.SegmentTiming, error) {
+				if !tt.marks {
+					return playback.SegmentTiming{}, nil
+				}
 				st := sampleTiming()
 				st.Mtxi.SegmentNumber = number
 				number++
@@ -65,8 +80,8 @@ SELECT (SELECT is_discontinuity FROM stream_segments WHERE stream_id = $1 AND se
 				f.stream).Scan(&discont, &start, &attributed); err != nil {
 				t.Fatalf("장부 조회 실패: %v", err)
 			}
-			if !discont {
-				t.Error("6초 drift 행의 is_discontinuity = false, want true")
+			if want := !tt.marks; discont != want {
+				t.Errorf("6초 drift 행의 is_discontinuity = %v, want %v(칸 있음이면 같은 녹화기 이어짐 · 없으면 drift 폴백)", discont, want)
 			}
 			// 귀속 갈래가 실제로 귀속(판 NULL PDT 이어짐 · I23 앵커 위치)을 지났는지 — 아니면 두 갈래가 같은 식만 잰다.
 			if want := map[bool]int{true: 3, false: 0}[tt.publishing]; attributed != want {
