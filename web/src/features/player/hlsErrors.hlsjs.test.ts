@@ -11,9 +11,9 @@ import Hls, {
   type LoaderCallbacks,
   type LoaderContext,
 } from 'hls.js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
-import { isMediaSegmentNotFound, isPlaylistLoadError } from './hlsErrors';
+import { consumeDvrSegmentGone, isMediaSegmentNotFound, isPlaylistLoadError } from './hlsErrors';
 
 // 진짜 hls.js 1.7.3(dist)의 오류 처리가 받기 오류 404 를 언제 치명으로 올리는지와, 앱이 그 오류를 목록 오류로 가르는지를
 // 함께 본다(cx H1). error-helper retryForHttpStatus 는 4xx 를 다시 받지 않지만 조각 오류는 stream-controller
@@ -352,5 +352,215 @@ describe('미디어 조각 404 가르기(POK-528) — 하한 밖으로 밀린 �
     expect(timedOut.details).toBe(ErrorDetails.FRAG_LOAD_TIMEOUT);
     expect(isMediaSegmentNotFound(forbidden, ErrorTypes, ErrorDetails)).toBe(false);
     expect(isMediaSegmentNotFound(timedOut, ErrorTypes, ErrorDetails)).toBe(false);
+  });
+});
+
+/** 404 뒤 hls.js 가 받기를 다시 여는 세 갈래(계획 8-2) — 방송 중 가운데 조각 · 방송 중 마지막 조각 · ENDLIST 목록 */
+type GoneBranch = 'live-middle' | 'live-last' | 'endlist';
+
+interface LoadingInternals {
+  state: string;
+  setInterval(millis: number): boolean;
+  hasInterval(): boolean;
+  hasNextTick(): boolean;
+  fragmentLoader: { load(frag: Fragment): Promise<FragLoadedData> };
+}
+
+interface LoadingPlayer {
+  hls: Hls;
+  streamController: LoadingInternals;
+  /** 404 를 낼, 지금 받는 조각(sn 1) */
+  frag: Fragment;
+  /** 조각 받기 시도 수(fragmentLoader.load — 네트워크 없이 센다) */
+  loads: () => number;
+  /** FRAG_LOADING 사건 수(base-stream-controller.ts 1173 — 받기를 시작할 때마다 난다) */
+  fragLoadings: () => number;
+}
+
+function fragmentAt(sn: number): Fragment {
+  const frag = new Fragment(PlaylistLevelType.MAIN, PLAYLIST_URL);
+  frag.sn = sn;
+  frag.level = 0;
+  frag.start = (sn - 1) * 4;
+  frag.duration = 4;
+  frag.relurl = `seg${sn}.mp4`;
+  return frag;
+}
+
+/**
+ * 변이 하나 · 미디어가 붙은 되감기 재생기가 조각 sn 1 을 받는 중인 꼴. tick 은 100ms 주기로
+ * 돌고(stream-controller 기동 꼴), 다음 tick(tickImmediate)도 막지 않는다 — 갈래마다 404 뒤의
+ * 예약(틈 넘김의 다음 tick · 같은 조각 재시도)이 판별 신호다. 받기는 끝나지 않는 약속으로
+ * 바꿔 시도 수만 센다
+ */
+function rewindPlayerLoading(branch: GoneBranch): LoadingPlayer {
+  const hls = new Hls({ ...HLS_REWIND_CONFIG, debug: SILENT });
+  instances.push(hls);
+  const frag = fragmentAt(1);
+  const fragments = branch === 'live-middle' ? [frag, fragmentAt(2)] : [frag];
+  const details = {
+    live: branch !== 'endlist',
+    startSN: 1,
+    endSN: fragments.length,
+    fragments,
+    fragmentStart: 0,
+    fragmentEnd: fragments.length * 4,
+    edge: fragments.length * 4,
+    targetduration: 4,
+    totalduration: fragments.length * 4,
+    partList: null,
+    updated: true,
+    advanced: true,
+  };
+  const level = {
+    fragmentError: 0,
+    loadError: 0,
+    loadErrorTime: 0,
+    pathwayId: '.',
+    bitrate: 500000,
+    maxBitrate: 500000,
+    attrs: {},
+    audioCodec: 'aac',
+    videoCodec: 'avc1',
+    hasAudioGroup: () => false,
+    hasSubtitleGroup: () => false,
+    details,
+  };
+  const internals = hls as unknown as {
+    levelController: Record<string, unknown>;
+    streamController: LoadingInternals;
+  };
+  Object.assign(internals.levelController, {
+    _levels: [level],
+    currentLevelIndex: 0,
+    currentLevel: level,
+  });
+  const { streamController } = internals;
+  // 미디어가 붙어야 doTickIdle 이 받기까지 간다(stream-controller.ts 245-256)
+  const media = document.createElement('video');
+  Object.assign(streamController, {
+    _hasEnoughToStart: true,
+    levels: [level],
+    levelLastLoaded: level,
+    fragCurrent: frag,
+    media,
+    mediaBuffer: media,
+    state: 'FRAG_LOADING',
+  });
+  const load = vi
+    .spyOn(streamController.fragmentLoader, 'load')
+    .mockImplementation(() => new Promise<FragLoadedData>(() => {}));
+  let fragLoadings = 0;
+  hls.on(Events.FRAG_LOADING, () => {
+    fragLoadings += 1;
+  });
+  streamController.setInterval(100);
+  return {
+    hls,
+    streamController,
+    frag,
+    loads: () => load.mock.calls.length,
+    fragLoadings: () => fragLoadings,
+  };
+}
+
+/** fragment-loader 가 미디어 조각 404 로 거절한 꼴의 비치명 오류를 쏜다 */
+function raiseMedia404(hls: Hls, frag: Fragment): void {
+  hls.trigger(Events.ERROR, {
+    type: ErrorTypes.NETWORK_ERROR,
+    details: ErrorDetails.FRAG_LOAD_ERROR,
+    fatal: false,
+    frag,
+    response: { url: `https://m/dvr/k/a/${frag.relurl}`, code: 404, text: '' },
+    error: new Error('HTTP 404'),
+  } as unknown as ErrorData);
+}
+
+/** tick · 재시도 시각(performance.now — checkRetryDate)을 함께 미는 가짜 시계 */
+function fakeClock(): void {
+  vi.useFakeTimers({
+    toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'],
+  });
+}
+
+/** 제어면 응답 지연 꼴(계획 8-2) — 이 동안 받기가 다시 나가면 하한 밖 조각을 또 청한 것이다 */
+const CONTROL_DELAY_MS = 60_000;
+
+describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 멈춤(POK-528 c5 · 계획 8-2)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each<[GoneBranch, string]>([
+    ['live-middle', 'IDLE'],
+    ['live-last', 'FRAG_LOADING_WAITING_RETRY'],
+    ['endlist', 'FRAG_LOADING_WAITING_RETRY'],
+  ])(
+    '전제 — 가로채지 않으면(고리 없음) %s 404 뒤 hls.js 가 받기를 다시 연다(앱 처리기가 볼 때 국면 %s)',
+    (branch, stateSeenByApp) => {
+      fakeClock();
+      const player = rewindPlayerLoading(branch);
+      const seen: string[] = [];
+      player.hls.on(Events.ERROR, (_event, data) => {
+        seen.push(player.streamController.state);
+        expect(consumeDvrSegmentGone(player.hls, data, ErrorTypes, ErrorDetails)).toBe(false);
+      });
+      raiseMedia404(player.hls, player.frag);
+      expect(seen).toEqual([stateSeenByApp]);
+      vi.advanceTimersByTime(CONTROL_DELAY_MS);
+      // 요청 관측의 판별력 — 이 차림에서는 가로채지 않으면 받기 시도가 보인다
+      expect(player.loads()).toBeGreaterThan(0);
+      expect(player.fragLoadings()).toBeGreaterThan(0);
+    },
+  );
+
+  it.each<GoneBranch>(['live-middle', 'live-last', 'endlist'])(
+    '%s 404 를 가로채면 STOPPED · 주기 tick 없음 · 다음 tick 없음 · 고리 1 · 제어면 지연 60초 동안 받기 0',
+    (branch) => {
+      fakeClock();
+      const player = rewindPlayerLoading(branch);
+      const onGone = vi.fn();
+      const consumed: boolean[] = [];
+      player.hls.on(Events.ERROR, (_event, data) => {
+        consumed.push(consumeDvrSegmentGone(player.hls, data, ErrorTypes, ErrorDetails, onGone));
+      });
+      raiseMedia404(player.hls, player.frag);
+      // 상태 단언(1차 증거)
+      expect(consumed).toEqual([true]);
+      expect(onGone).toHaveBeenCalledTimes(1);
+      expect(player.streamController.state).toBe('STOPPED');
+      expect(player.streamController.hasInterval()).toBe(false);
+      expect(player.streamController.hasNextTick()).toBe(false);
+      vi.advanceTimersByTime(CONTROL_DELAY_MS);
+      // 요청 관측(2차 증거 — 판별력은 위 전제 시험과 변이 M5a 로 교정)
+      expect(player.loads()).toBe(0);
+      expect(player.fragLoadings()).toBe(0);
+      expect(player.streamController.state).toBe('STOPPED');
+    },
+  );
+
+  it('init 404 는 가로채지 않는다 — 고리 0 · 가로채기의 stopLoad 0(hls.js 의 지금 경로 그대로)', async () => {
+    const { hls, streamController } = rewindPlayerEndingWith(() => ({ code: 404 }));
+    // 가로채기가 부르는 stopLoad 만 센다 — 변이가 없는 이 차림에서는 hls.js 오류 처리가 치명으로 올리며 스스로
+    // stopLoad 를 부를 수 있다(error-controller)
+    const interceptor = { stopLoad: vi.fn() };
+    const onGone = vi.fn();
+    const consumed: boolean[] = [];
+    hls.on(Events.ERROR, (_event, data) => {
+      consumed.push(consumeDvrSegmentGone(interceptor, data, ErrorTypes, ErrorDetails, onGone));
+    });
+    streamController.state = 'FRAG_LOADING';
+    const loading = streamController.loadInitSegmentIfNeeded(mediaFragWithInit(7));
+    if (loading === undefined) throw new Error('init 받기가 시작되지 않았다');
+    await loading.then(
+      () => {
+        throw new Error('init 받기가 거절되지 않았다');
+      },
+      () => undefined,
+    );
+    expect(consumed.length).toBeGreaterThan(0);
+    expect(consumed).not.toContain(true);
+    expect(onGone).not.toHaveBeenCalled();
+    expect(interceptor.stopLoad).not.toHaveBeenCalled();
   });
 });

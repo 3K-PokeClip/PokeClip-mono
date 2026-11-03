@@ -13,6 +13,7 @@ import {
   usePlaybackSession,
   type PlaybackSession,
   type SessionOptions,
+  type SessionPlayer,
 } from './usePlaybackSession';
 
 // 세션에 들어간 사건 · 나온 효과를 보려고 상태기계를 감싼다 — 동작은 원본 그대로다
@@ -227,5 +228,83 @@ describe('응답 지연 변형 — 요청 주기와 응답 · 교체 간격을 �
   it('교체 간격에는 하한이 없다 — 지연이 흔들리면 10초보다 짧은 간격이 난다(한계 고정)', async () => {
     const run = await runRepeat({ floorMs: advancing, delayMs: alternating });
     expect(Math.min(...gapsOf(run.swaps))).toBeLessThan(POLL_MS);
+  });
+});
+
+describe('재생기 명령 배선 — hold-frame · drop-pause-mark(POK-528 c5 · 계획 4-1 · 3-3 · 8-3)', () => {
+  function fakePlayer(): SessionPlayer {
+    return {
+      seekToMs: vi.fn(),
+      seekToLiveEdge: vi.fn(),
+      keepPausedOnSwap: vi.fn(),
+      holdFrame: vi.fn(),
+      dropPauseMark: vi.fn(),
+    };
+  }
+
+  /** 세션을 열고 재생기를 묶은 뒤 되감는다 */
+  async function rewindWithPlayer(answer: StreamAnswer) {
+    serve(answer);
+    const { result } = renderHook(() => usePlaybackSession(options(vi.fn())));
+    await flush();
+    const session = (): PlaybackSession => {
+      const current = result.current;
+      if (current === null) throw new Error('세션이 없다');
+      return current;
+    };
+    const player = fakePlayer();
+    act(() => session().bindPlayer(player));
+    act(() =>
+      session().dispatch({
+        type: 'seek',
+        targetMs: NOW - 600_000,
+        view: { lowerMs: NOW - 16_000, endMs: NOW },
+      }),
+    );
+    expect(session().state.phase.kind).toBe('rewind');
+    const gone = () =>
+      act(() =>
+        session().dispatch({
+          type: 'dvr-segment-gone',
+          generation: session().state.source.generation,
+        }),
+      );
+    return { session, player, gone };
+  }
+
+  it('막힌 끝남 대기의 hold-frame 은 재생기 holdFrame 을 한 번 부르고 멈춤 유지는 걸지 않는다', async () => {
+    const { session, player, gone } = await rewindWithPlayer({
+      floorMs: () => FIRST_F,
+      delayMs: () => 0,
+    });
+    act(() => session().dispatch({ type: 'endlist' }));
+    await flush();
+    gone();
+    await flush();
+    expect(session().state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
+    expect(player.holdFrame).toHaveBeenCalledTimes(1);
+    expect(player.keepPausedOnSwap).not.toHaveBeenCalled();
+    expect(player.dropPauseMark).not.toHaveBeenCalled();
+  });
+
+  it('(가) 의 drop-pause-mark 는 새 소스를 커밋하기 전에 재생기 dropPauseMark 를 한 번 부른다', async () => {
+    const { session, player, gone } = await rewindWithPlayer({
+      floorMs: advancing,
+      delayMs: () => 0,
+    });
+    const before = session().state.source.generation;
+    // 커밋 앞인지 — 부른 순간 세션 칸(stateRef 즉시 갱신 · positionEpoch)이 아직 옛 소스인가
+    const epochs: number[] = [];
+    vi.mocked(player.dropPauseMark).mockImplementation(() => {
+      epochs.push(session().positionEpoch());
+    });
+    const epochBefore = session().positionEpoch();
+    gone();
+    await flush();
+    expect(session().state.source.generation).toBeGreaterThan(before);
+    expect(session().state.phase).toMatchObject({ kind: 'rewind' });
+    expect(player.dropPauseMark).toHaveBeenCalledTimes(1);
+    expect(epochs).toEqual([epochBefore]);
+    expect(player.holdFrame).not.toHaveBeenCalled();
   });
 });

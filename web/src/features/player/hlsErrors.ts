@@ -1,8 +1,10 @@
+import type Hls from 'hls.js';
 import type { ErrorData, ErrorDetails, ErrorTypes } from 'hls.js';
 
 /**
  * 목록(멀티변이 · 변이 · 오디오 목록)을 받지 못한 오류인가. 조각 · 키 받기 오류는 아니다 — 목록이 살아 있어도 조각 하나는
- * 404 일 수 있고, hls.js 는 그것도 재시도 한도(fragLoadPolicy 기본 6회)를 다 쓰면 치명으로 올린다(cx H1)
+ * 404 일 수 있고, hls.js 는 그것도 재시도 한도(fragLoadPolicy 기본 6회)를 다 쓰면 치명으로 올린다(cx H1). 단 세션에 묶인
+ * 되감기 재생기의 미디어 조각 404 는 이 판정보다 앞에서 앱이 가로챈다(consumeDvrSegmentGone · POK-528)
  * @param details hls.js 의 ErrorDetails. 재생기는 hls.js 를 동적으로 읽으므로 값을 넘겨받는다(번들 분리)
  */
 export function isPlaylistLoadError(
@@ -48,4 +50,28 @@ function failedOnInitSegment(data: Pick<ErrorData, 'response' | 'frag'>): boolea
   const initUrl = data.frag?.initSegment?.url;
   if (!initUrl) return false;
   return data.response?.url === initUrl;
+}
+
+/**
+ * 되감기 재생기의 미디어 조각 404(isMediaSegmentNotFound)를 앱이 먼저 가로챈다(POK-528) — 받기를 멈추고 세션에
+ * 올린다. hls.js 는 앱 처리기보다 먼저 돌아(hls.ts 351-357) 이미 다음 받기를 예약해 둔 뒤다: 마지막 · ENDLIST 조각은
+ * 같은 조각 재시도, 방송 중 가운데 조각은 틈 넘김 뒤 다음 tick(base-stream-controller.ts 2153-2187). stopLoad 가
+ * 그 예약과 목록 재요청을 함께 끊는다(176-194). 다시 받기 · 재생기 내리기는 하지 않는다 — 복구(새 재생기 · 다시보기 ·
+ * 닫기)는 세션이 정한다
+ * @param onGone 세션 고리. 없으면 가로채지 않는다(지금 동작 — hls.js 재시도와 앱의 한 번 다시 받기)
+ * @param types hls.js 의 ErrorTypes
+ * @param details hls.js 의 ErrorDetails
+ * @returns 가로챘나 — 참이면 오류 처리기는 여기서 끝난다
+ */
+export function consumeDvrSegmentGone(
+  hls: Pick<Hls, 'stopLoad'>,
+  data: Pick<ErrorData, 'type' | 'details' | 'response' | 'frag'>,
+  types: typeof ErrorTypes,
+  details: typeof ErrorDetails,
+  onGone?: () => void,
+): boolean {
+  if (onGone === undefined || !isMediaSegmentNotFound(data, types, details)) return false;
+  hls.stopLoad();
+  onGone();
+  return true;
 }

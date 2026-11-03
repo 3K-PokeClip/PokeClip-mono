@@ -223,3 +223,38 @@ describe('createSwapPause — 멈춘 채 갈아 끼우기 표', () => {
     expect(swap.holds(5)).toBe(false);
   });
 });
+
+describe('createSwapPause — 앱이 건 멈춤 표시(POK-528 계획 4-1)', () => {
+  it('앱이 곧 멈춘다고 적으면 다음 pause 하나만 앱 멈춤으로 먹는다', () => {
+    const swap = createSwapPause();
+    expect(swap.takeAppPause()).toBe(false);
+    swap.appPausing();
+    expect(swap.takeAppPause()).toBe(true);
+    expect(swap.takeAppPause()).toBe(false);
+  });
+
+  it('play 사건이 묵은 앱 멈춤 표시를 지운다 — 다음 사람 멈춤을 삼키지 않게', () => {
+    const swap = createSwapPause();
+    swap.appPausing();
+    swap.userPlayed();
+    expect(swap.takeAppPause()).toBe(false);
+  });
+
+  it('앱 멈춤으로 먹은 pause 는 사람 멈춤이 아니다 — 넘김 되돌림이 표를 걸지 않는다', () => {
+    const swap = createSwapPause();
+    swap.appPausing();
+    // 재생기의 pause 처리기 꼴 — 앱 멈춤이면 사람 멈춤으로 적지 않는다
+    if (!swap.takeAppPause()) swap.userPaused();
+    swap.keepIfUserPaused(3);
+    expect(swap.holds(4)).toBe(false);
+  });
+
+  it('표시를 먹은 뒤의 pause 는 지금처럼 사람 멈춤이라 넘김 되돌림이 표를 건다', () => {
+    const swap = createSwapPause();
+    swap.appPausing();
+    swap.takeAppPause();
+    if (!swap.takeAppPause()) swap.userPaused();
+    swap.keepIfUserPaused(3);
+    expect(swap.holds(4)).toBe(true);
+  });
+});

@@ -19,7 +19,7 @@ import {
   reportPlaybackForbidden,
 } from '@/api/playbackAccess';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
-import { isPlaylistLoadError } from './hlsErrors';
+import { consumeDvrSegmentGone, isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
 import { armStart, createSwapPause, trackLoadFrom } from './hlsStart';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
@@ -109,6 +109,16 @@ export interface PlaybackHooks extends PositionHooks {
   holdPlay?: boolean;
   /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 라이브 재생기의 시크바가 라이브 창 밖까지 넓어진다 */
   axisLowerMs?: number | null;
+  /**
+   * 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다(POK-528). 인자는 그 404 를 낸 재생기의 세대 — 세션이
+   * 옛 재생기의 늦은 404 를 버린다. 없으면 가로채지 않는다(지금 동작)
+   */
+  onDvrSegmentGone?: (generation: number) => void;
+  /**
+   * 새로 서는 재생기는 hls.js 를 만들지 않는다(받지도 틀지도 않음 · POK-528 U2). 재생기가 설 때(세대가 오를 때) 한 번
+   * 읽는다 — 풀리는 전이는 세대를 올리므로 그때 정상 기동한다
+   */
+  startHeld?: boolean;
 }
 
 export type { LivePosition } from './livePosition';
@@ -144,6 +154,10 @@ export function useHlsPlayback(
   seekToLiveEdge: () => void;
   /** 사람이 멈춰 있으면 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다(세션의 넘김 되돌림) */
   keepPausedOnSwap: () => void;
+  /** 지금 프레임에서 멈추되 사람의 멈춤으로 적지 않는다(세션의 hold-frame · POK-528) */
+  holdFrame: () => void;
+  /** 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(세션의 drop-pause-mark · POK-528) */
+  dropPauseMark: () => void;
 } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
@@ -373,6 +387,21 @@ export function useHlsPlayback(
     [swap],
   );
 
+  const dropPauseMark = useCallback(() => {
+    pausedAtMsRef.current = null;
+    pausedHandledRef.current = false;
+  }, []);
+
+  // 앱이 건 멈춤은 사람 멈춤 표 · 자리 기록에 남기지 않는다 — 다음 재생기의 재개 시크 · 멈춘 채 갈아 끼우기가
+  // 이 멈춤으로 서지 않게(계획 4-1). 이미 멈춰 있으면 pause 사건이 나지 않으니 표시를 세우지 않는다
+  const holdFrame = useCallback(() => {
+    dropPauseMark();
+    const video = videoRef.current;
+    if (!video || video.paused) return;
+    swap.appPausing();
+    video.pause();
+  }, [videoRef, swap, dropPauseMark]);
+
   const seekToLiveEdge = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -438,6 +467,8 @@ export function useHlsPlayback(
     if (!video) return;
     // 세대가 오를 때 다시 서는 재생기 하나의 소스(종류 · 시작 시각). 효과는 종류 · 주소 · 세대에만 걸린다(설계 5.4절)
     const { kind, startAtMs, strictStart, generation } = sourceRef.current;
+    // 세우지 않음은 이 재생기가 설 때 한 번 읽는다(POK-528 U2) — 풀리면 세대가 올라 효과가 다시 돈다
+    const held = hooksRef.current.startHeld === true;
 
     // StrictMode 이중 이펙트·동적 import 경합 방어 — 클린업 후 도착한 인스턴스를 버린다
     let disposed = false;
@@ -520,6 +551,10 @@ export function useHlsPlayback(
       hooksRef.current.onPlaying?.();
     };
     const onPause = () => {
+      if (swap.takeAppPause()) {
+        setPlaying(false);
+        return;
+      }
       swap.userPaused();
       setPlaying(false);
       if (!sessionActive()) return;
@@ -652,6 +687,8 @@ export function useHlsPlayback(
         return;
       }
       if (disposed) return;
+      // 받지도 틀지도 않는다 — hls.js 생성 · 받기 · 자동 재생 · 기본 HLS 의 src 가 모두 이 뒤다
+      if (held) return;
 
       if (HlsCtor.isSupported()) {
         const base = kind === 'live' ? HLS_LIVE_CONFIG : HLS_REWIND_CONFIG;
@@ -688,6 +725,15 @@ export function useHlsPlayback(
           }
         });
         hls.on(HlsCtor.Events.ERROR, (_event, data) => {
+          // 되감기 조각 404 는 첫 비치명에서 가로챈다 — hls.js 가 예약한 다시 받기를 끊고 세션에 올린다(POK-528)
+          const gone = hooksRef.current.onDvrSegmentGone;
+          const onGone = gone === undefined ? undefined : () => gone(generation);
+          if (
+            kind === 'rewind' &&
+            consumeDvrSegmentGone(hls, data, HlsCtor.ErrorTypes, HlsCtor.ErrorDetails, onGone)
+          ) {
+            return;
+          }
           if (!data.fatal) return;
           // 403은 출입증 쿠키가 없다는 뜻이다(만료 · 다른 탭이 쿠키 한도를 넘겨 지워짐). 다시 불러도 또 403이라 한 번 더 해 보지
           // 않고 출입증을 버린다: 라이브 화면이 1분 안에 다시 받고 재생기를 새로 세운다(POK-410)
@@ -845,6 +891,8 @@ export function useHlsPlayback(
     seekToMs,
     seekToLiveEdge,
     keepPausedOnSwap,
+    holdFrame,
+    dropPauseMark,
     // 화질은 표시용: 렌디션이 하나라 고를 것이 없어 메뉴를 안 보인다(POK-253)
     settingsMenu: false,
     replay: false,
