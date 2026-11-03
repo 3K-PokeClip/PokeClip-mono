@@ -1,7 +1,19 @@
-import Hls, { ErrorDetails, ErrorTypes, Events, type ErrorData } from 'hls.js';
+import Hls, {
+  ErrorDetails,
+  ErrorTypes,
+  Events,
+  Fragment,
+  LoadStats,
+  PlaylistLevelType,
+  type ErrorData,
+  type FragLoadedData,
+  type HlsConfig,
+  type LoaderCallbacks,
+  type LoaderContext,
+} from 'hls.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { HLS_LIVE_CONFIG } from './hlsConfig';
-import { isPlaylistLoadError } from './hlsErrors';
+import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
+import { isMediaSegmentNotFound, isPlaylistLoadError } from './hlsErrors';
 
 // 진짜 hls.js 1.7.3(dist)의 오류 처리가 받기 오류 404 를 언제 치명으로 올리는지와, 앱이 그 오류를 목록 오류로 가르는지를
 // 함께 본다(cx H1). error-helper retryForHttpStatus 는 4xx 를 다시 받지 않지만 조각 오류는 stream-controller
@@ -150,5 +162,118 @@ describe('hls.js 1.7.3 의 받기 오류 404 와 목록 오류 가르기(cx H1)'
       isPlaylistLoadError({ details: ErrorDetails.AUDIO_TRACK_LOAD_ERROR }, ErrorDetails),
     ).toBe(true);
     expect(isPlaylistLoadError({ details: ErrorDetails.KEY_LOAD_ERROR }, ErrorDetails)).toBe(false);
+  });
+});
+
+/** 조각 받기가 끝나는 꼴 — HTTP 상태 하나로 실패하거나 시한에 걸린다 */
+type FragOutcome = { code: number } | 'timeout';
+
+type LoadArgs = [LoaderContext, unknown, LoaderCallbacks<LoaderContext>];
+
+interface FragmentLoaderInternals {
+  fragmentLoader: { load(frag: Fragment): Promise<FragLoadedData> };
+}
+
+/**
+ * 진짜 FragmentLoader(stream-controller 가 쓰는 것)로 조각 하나를 받다가 outcome 으로 끝나게 하고, 그 거절(LoadError)에
+ * 담긴 오류 자료를 돌려준다. 앱이 ERROR 처리기에서 받는 꼴의 원본이다(fragment-loader.ts 118-131 · 147-159)
+ */
+async function rejectedFragLoad(sn: Fragment['sn'], outcome: FragOutcome): Promise<ErrorData> {
+  class EndingLoader {
+    stats = new LoadStats();
+    load(...[context, , callbacks]: LoadArgs) {
+      queueMicrotask(() => {
+        if (outcome === 'timeout') {
+          callbacks.onTimeout(this.stats, context, null);
+          return;
+        }
+        callbacks.onError({ code: outcome.code, text: '' }, context, null, this.stats);
+      });
+    }
+    abort() {}
+    destroy() {}
+  }
+  const hls = new Hls({
+    ...HLS_REWIND_CONFIG,
+    autoStartLoad: false,
+    fLoader: EndingLoader as unknown as HlsConfig['fLoader'],
+    debug: SILENT,
+  });
+  instances.push(hls);
+  const frag = new Fragment(PlaylistLevelType.MAIN, 'https://m/dvr/k/a/index.m3u8');
+  frag.sn = sn;
+  frag.relurl = sn === 'initSegment' ? 'init.mp4' : `seg${sn}.mp4`;
+  const { fragmentLoader } = (hls as unknown as { streamController: FragmentLoaderInternals })
+    .streamController;
+  const failure: unknown = await fragmentLoader.load(frag).then(
+    () => {
+      throw new Error('조각 받기가 거절되지 않았다');
+    },
+    (error: unknown) => error,
+  );
+  return (failure as { data: ErrorData }).data;
+}
+
+/** 조각 받기가 HTTP 상태 code 로 끝난 응답 */
+function httpStatus(code: number): ErrorData['response'] {
+  return { url: 'https://m/dvr/k/a/seg7.mp4', code, text: '' };
+}
+
+/** 표 시험의 조각 받기 오류 — 바꿀 칸만 덮어쓴다 */
+function fragError(overrides: Partial<ErrorData> = {}): ErrorData {
+  return {
+    type: ErrorTypes.NETWORK_ERROR,
+    details: ErrorDetails.FRAG_LOAD_ERROR,
+    fatal: false,
+    frag: { sn: 7 },
+    response: httpStatus(404),
+    ...overrides,
+  } as unknown as ErrorData;
+}
+
+describe('미디어 조각 404 가르기(POK-528) — 하한 밖으로 밀린 조각만 참', () => {
+  it.each<[string, boolean, Partial<ErrorData>]>([
+    ['미디어 조각 404', true, {}],
+    ['치명으로 올라온 미디어 조각 404(치명 여부는 보지 않는다)', true, { fatal: true }],
+    ['상태 0(망 끊김)', false, { response: httpStatus(0) }],
+    ['403', false, { response: httpStatus(403) }],
+    ['503', false, { response: httpStatus(503) }],
+    ['조각 받기 시한', false, { details: ErrorDetails.FRAG_LOAD_TIMEOUT, response: undefined }],
+    ['init 조각 404', false, { frag: { sn: 'initSegment' } as ErrorData['frag'] }],
+    ['변이 목록 404', false, { details: ErrorDetails.LEVEL_LOAD_ERROR, frag: undefined }],
+    ['멀티변이 목록 404', false, { details: ErrorDetails.MANIFEST_LOAD_ERROR, frag: undefined }],
+    ['네트워크 오류가 아닌 갈래', false, { type: ErrorTypes.MEDIA_ERROR }],
+  ])('%s → %s', (_name, expected, overrides) => {
+    expect(isMediaSegmentNotFound(fragError(overrides), ErrorTypes, ErrorDetails)).toBe(expected);
+  });
+
+  it('진짜 FragmentLoader 의 미디어 조각 404 거절은 참이다', async () => {
+    const data = await rejectedFragLoad(7, { code: 404 });
+    expect(data).toMatchObject({
+      type: ErrorTypes.NETWORK_ERROR,
+      details: ErrorDetails.FRAG_LOAD_ERROR,
+      fatal: false,
+      response: { code: 404 },
+    });
+    expect(isMediaSegmentNotFound(data, ErrorTypes, ErrorDetails)).toBe(true);
+  });
+
+  it('진짜 FragmentLoader 의 init 조각 404 거절은 같은 꼴이지만 거짓이다(하한 대상이 아니다)', async () => {
+    const data = await rejectedFragLoad('initSegment', { code: 404 });
+    expect(data).toMatchObject({
+      type: ErrorTypes.NETWORK_ERROR,
+      details: ErrorDetails.FRAG_LOAD_ERROR,
+      response: { code: 404 },
+    });
+    expect(data.frag?.sn).toBe('initSegment');
+    expect(isMediaSegmentNotFound(data, ErrorTypes, ErrorDetails)).toBe(false);
+  });
+
+  it('진짜 FragmentLoader 의 미디어 조각 403 · 시한 거절은 거짓이다', async () => {
+    const forbidden = await rejectedFragLoad(7, { code: 403 });
+    const timedOut = await rejectedFragLoad(7, 'timeout');
+    expect(timedOut.details).toBe(ErrorDetails.FRAG_LOAD_TIMEOUT);
+    expect(isMediaSegmentNotFound(forbidden, ErrorTypes, ErrorDetails)).toBe(false);
+    expect(isMediaSegmentNotFound(timedOut, ErrorTypes, ErrorDetails)).toBe(false);
   });
 });
