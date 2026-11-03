@@ -276,16 +276,15 @@ func run() error {
 
 	// 되감기 제어면 서버(M5 3.7). ★ 위 rewind.stop · 풀 Close · up.Shutdown 보다 뒤에 등록해 먼저 멈춘다(LIFO) — 처리 중
 	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 인덱서 풀로 읽는다(동시 2 — M6 11절). 4D 수신부(POK-472)는
-	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 루프가 비운다(fa.wire).
-	intents := session.NewIntentInbox()
-	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound(), startedEnqueuer(lifecycle))), inbox.Changed, intents.Post, log)
+	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown).
+	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound())), inbox.Changed, log)
 	if err != nil {
 		return err
 	}
 	stopControl := startControlWithEndSignal(cfg, board, log, control.NewRoundLookup(pool, cfg.RewindPublicBaseURL, log), recv)
 	defer stopControl()
-	// 정산 몫(M6-3b) — 발행 조립 뒤 · 루프 기동 전. 루프가 받은편지함 둘을 holdTick 마다 비운다.
-	fa.wire(rewind, cfg, pool, inbox, intents)
+	// 정산 몫(M6-3b) — 발행 조립 뒤 · 루프 기동 전. 루프가 받은편지함을 holdTick 마다 비운다.
+	fa.wire(rewind, cfg, pool, inbox)
 
 	// --- 5. 메인 루프 ---
 	//

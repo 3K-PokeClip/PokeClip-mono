@@ -51,7 +51,7 @@ func TestFinalizeLaneKeysCannotBeStreamIDs(t *testing.T) {
 func TestFinalizeWirePassesPlaybackReadMax(t *testing.T) {
 	r := &rewindLoop{}
 	cfg := config.Config{RewindPlaybackReadMax: 3}
-	newFinalizeAssembly(cfg, broadcast.Gate{}, slog.Default()).wire(r, cfg, nil, session.NewPlaybackInbox(), session.NewIntentInbox())
+	newFinalizeAssembly(cfg, broadcast.Gate{}, slog.Default()).wire(r, cfg, nil, session.NewPlaybackInbox())
 	if r.fin.readMax != 3 {
 		t.Fatalf("readMax = %d, want 3(설정값)", r.fin.readMax)
 	}

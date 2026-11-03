@@ -66,7 +66,7 @@ INSERT INTO broadcast_lifecycle_outbox
 VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
 ON CONFLICT (event_id) DO NOTHING`
 
-// EnqueueStarted 는 새 회차를 여는 트랜잭션 안에서 started 행을 넣는다(15.4 — registry 개시 · 4D round_split).
+// EnqueueStarted 는 새 회차를 여는 트랜잭션 안에서 started 행을 넣는다(15.4 — registry 개시).
 // startedAt 은 머리 세션 started_at 이다. 게이트가 그 stream_id 를 내지 않거나 round 가 비면(M6 전 세션) 아무 문장도
 // 보내지 않는다(D45). 회차 열쇠가 식별자 규칙(CheckRound)을 어기면 행을 abandoned 로 넣고 ERROR 를 남긴다(D48) —
 // pending 으로 두면 영영 못 나가고, 행이 없으면 ended 를 막을 근거가 없다. 오류는 INSERT 실패뿐이다.
@@ -146,7 +146,7 @@ SELECT $2, st.round_id, $3, 2, COALESCE(sg.last_end, d.last_ended), st.ingest_st
 ON CONFLICT (event_id) DO NOTHING`
 
 // EnqueueEndedIfComplete 는 회차를 닫거나 회차 세션을 ended 로 바꾸는 트랜잭션 끝에서 부른다(15.2 완결 평가 규칙 —
-// CloseRound · tryCloseRound · 4D round_split · MarkChainEnded). 「닫힘 ∧ 전원 ended」 이고 started 행이 살아 있으면
+// CloseRound · tryCloseRound · MarkChainEnded). 「닫힘 ∧ 전원 ended」 이고 started 행이 살아 있으면
 // ended 행을 넣고 참을 돌려준다. 겹쳐 불려도 행은 하나다. 게이트가 꺼져 있으면 문장을 보내지 않는다. started 를 낸
 // 회차만 ended 를 내므로 허용 목록은 started 쪽에서 이미 걸렀다.
 //

@@ -217,8 +217,8 @@ SELECT pg_catalog.count(*) FROM pg_catalog.pg_stat_activity
 	t.Fatalf("잠금 대기 백엔드가 %d 개가 되지 않았다", n)
 }
 
-// d64Setup 은 A(R · 멈춘 연결) ← B(멈춘 뒤 합류 · R · A 계승 · 즉시 닫는 사유) 다. 4D 는 T=A · 합류한 B 를 새 회차로
-// 떼려 하고, 사슬 닫힘은 B 꼬리의 사슬 [A B] 를 닫으려 한다.
+// d64Setup 은 A(R · 멈춘 연결) ← B(멈춘 뒤 합류 · R · A 계승 · 즉시 닫는 사유) 다. 4D 는 T=A · 회차 최신 B 에 표식을
+// 걸고(forwarded) 회차를 닫으려 하고, 사슬 닫힘은 B 꼬리의 사슬 [A B] 를 닫으려 한다.
 func d64Setup(t *testing.T) *pgxpool.Pool {
 	pool := newTestPool(t)
 	seedLedger(t, pool, ledgerRow{id: "S-A", streamID: "demo", state: "ending", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
@@ -240,28 +240,28 @@ func realCloseRound() IntentOptions {
 	return o
 }
 
-// D64 (나) — 4D round_split 이 먼저 커밋하면 B 는 새 회차라 A 를 계승해도 사슬 간선이 아니다. 그 뒤 사슬 닫힘은 B 꼬리의
-// 사슬 [B] 만, A 꼬리의 사슬 [A] 만 닫는다 — 닫힌 사슬 안을 가르는 이동이 생기지 않는다.
-func TestRoundSplitThenChainCloseKeepsChainsApartD64(t *testing.T) {
+// D64 (나) — 4D forwarded 가 먼저 커밋해도 행을 옮기지 않으니 사슬 [A B] 는 한 회차 R 그대로다. forwarded 는 최신 B 에
+// 표식을 걸고 같은 트랜잭션의 회차 닫힘(실제 TryCloseRound)으로 R 을 닫는다. 그 뒤 사슬 닫힘은 B 꼬리의 사슬 [A B] 를 통째로
+// 닫는다 — POK-525 전 round_split 이 만들던 「닫힌 사슬 안을 가르는 이동」 이 생길 자리가 없다.
+func TestForwardedThenChainCloseKeepsChainWholeD64(t *testing.T) {
 	pool := d64Setup(t)
 	ctx := context.Background()
 	res, err := ApplyIntentionalEnd(ctx, pool, endAt("demo"), realCloseRound())
-	if err != nil || res.Effect != effectRoundSplit {
-		t.Fatalf("4D = %+v err %v, want round_split", res, err)
+	if err != nil || res.Effect != effectForwarded {
+		t.Fatalf("4D = %+v err %v, want forwarded", res, err)
 	}
-	for _, tail := range []string{"S-B", "S-A"} {
-		c, ok, err := index.CloseChain(ctx, pool, tail, crossClose)
-		if err != nil || !ok || len(c.SessionIDs) != 1 || c.SessionIDs[0] != tail {
-			t.Fatalf("CloseChain(%s) = %+v ok %v err %v, want 사슬 [%s]", tail, c, ok, err, tail)
-		}
+	if !roundClosedOf(t, pool, "S-A") || !roundClosedOf(t, pool, "S-B") {
+		t.Fatalf("R 이 닫히지 않았다 — 최신 B 의 표식이 회차 닫힘 조건을 세워야 한다")
+	}
+	c, ok, err := index.CloseChain(ctx, pool, "S-B", crossClose)
+	if err != nil || !ok || len(c.SessionIDs) != 2 || c.RoundID != "S-R" {
+		t.Fatalf("CloseChain(S-B) = %+v ok %v err %v, want 사슬 [S-A S-B] · 회차 S-R", c, ok, err)
 	}
 }
 
-// D64 (다) — 4D 와 사슬 닫힘이 동시에 든다. 끝 상태는 언제나 둘 가운데 하나다(위상 잠금 · 같은 행 잠금 아래 직렬):
-//
-//	닫힘이 먼저  A · B freezing · B 회차 R 그대로 · 4D 는 round_split_blocked
-//	4D 가 먼저   B 회차 = B · 사슬 닫힘은 B 사슬 [B] 만 · A vod none
-func TestRoundSplitAndChainCloseConcurrentEndInOneOfTwoStatesD64(t *testing.T) {
+// D64 (다) — 4D 와 사슬 닫힘이 동시에 든다. 위상 잠금 · 같은 행 잠금 아래 직렬이고, 어느 쪽이 먼저든 4D 는 forwarded 이고
+// B 의 회차는 R · 표식 있음이다. 사슬 닫힘은 [A B] 를 함께 닫거나(둘 다 freezing) 경합으로 물러난다(둘 다 none).
+func TestForwardedAndChainCloseConcurrentKeepOneRoundD64(t *testing.T) {
 	ctx := context.Background()
 	for i := range 10 {
 		pool := d64Setup(t)
@@ -274,11 +274,20 @@ func TestRoundSplitAndChainCloseConcurrentEndInOneOfTwoStatesD64(t *testing.T) {
 		if cr.err != nil && !errors.Is(cr.err, index.ErrTopologyContended) {
 			t.Fatalf("반복 %d: CloseChain 오류 %v", i, cr.err)
 		}
-		a, b, bRound := vodOf(t, pool, "S-A"), vodOf(t, pool, "S-B"), strOf(roundOf(t, pool, "S-B").roundID)
-		closeFirst := res.Skip == skipRoundSplitBlocked && a == "freezing" && b == "freezing" && bRound == "S-R"
-		splitFirst := res.Effect == effectRoundSplit && bRound == "S-B" && a == "none" && (b == "freezing" || !cr.ok)
-		if !closeFirst && !splitFirst {
-			t.Fatalf("반복 %d: 끝 상태가 두 직렬 결과 밖이다 — 4D %+v · 닫힘 ok %v · A %s · B %s · B 회차 %s", i, res, cr.ok, a, b, bRound)
+		a, b, bRow := vodOf(t, pool, "S-A"), vodOf(t, pool, "S-B"), roundOf(t, pool, "S-B")
+		chainWhole := (a == "freezing" && b == "freezing" && cr.ok) || (a == "none" && b == "none" && !cr.ok)
+		if res.Effect != effectForwarded || strOf(bRow.roundID) != "S-R" || bRow.stopMarkedAt == nil || !chainWhole {
+			t.Fatalf("반복 %d: 끝 상태가 직렬 결과 밖이다 — 4D %+v · 닫힘 ok %v · A %s · B %s · B 회차 %s · B 표식 %v", i, res, cr.ok, a, b, strOf(bRow.roundID), bRow.stopMarkedAt)
 		}
 	}
+}
+
+// roundClosedOf 는 세션 행의 round_closed_at 이 찼는가다.
+func roundClosedOf(t *testing.T, pool *pgxpool.Pool, id string) bool {
+	t.Helper()
+	var closed bool
+	if err := pool.QueryRow(context.Background(), `SELECT round_closed_at IS NOT NULL FROM stream_sessions WHERE session_id = $1`, id).Scan(&closed); err != nil {
+		t.Fatal(err)
+	}
+	return closed
 }

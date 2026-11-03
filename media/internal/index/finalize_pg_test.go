@@ -4,8 +4,8 @@ package index
 // 설계 2.2 · 3.3 사슬 간선 규칙 · 3.1 phase 3 비귀속 행 · 9절 D57).
 //
 // 사슬은 같은 회차 안에서 inherits_session 으로 이어진 세션들이다. 부모의 round_id 가 NULL(M6 전 세션)이면 옛
-// 규칙대로 간선을 따르고, 아니면 같은 round_id 일 때만 따른다. 회차를 가로지르는 계승 간선(늦은 회차 분리가
-// 만든다)은 사슬을 잇지 않는다. 여기서는 그 규칙이 SQL 에서 어떤 세션을 사슬로 묶는지와, 사슬 범위 안의 행을
+// 규칙대로 간선을 따르고, 아니면 같은 round_id 일 때만 따른다. 회차를 가로지르는 계승 간선(POK-525 전 늦은 회차
+// 분리가 만들었다)은 사슬을 잇지 않는다. 여기서는 그 규칙이 SQL 에서 어떤 세션을 사슬로 묶는지와, 사슬 범위 안의 행을
 // 어떤 값으로 가져오는지를 장부 실물로 잰다. PG_DSN 미설정이면 전량 skip 된다.
 
 import (
@@ -23,33 +23,32 @@ import (
 // chainTestMaxRows 는 상한을 재지 않는 시험의 사슬 적재 상한이다 — 픽스처 행 수보다 넉넉하다.
 const chainTestMaxRows = 1000
 
-// setRound 는 픽스처 회차의 round_id 를 정한다("" = NULL — M6 전 세션).
-func setRound(t *testing.T, pool *pgxpool.Pool, sessionID, roundID string) {
-	t.Helper()
-	var v any
-	if roundID != "" {
-		v = roundID
-	}
-	if _, err := pool.Exec(context.Background(),
-		`UPDATE stream_sessions SET round_id = $2 WHERE session_id = $1`, sessionID, v); err != nil {
-		t.Fatalf("round_id 픽스처 실패 %s: %v", sessionID, err)
-	}
-}
-
-// chainSession 은 사슬 픽스처 회차 하나다 — 시작 시각(기준에서 초) · 계승 · 회차.
+// chainSession 은 사슬 픽스처 회차 하나다 — 시작 시각(기준에서 초) · 계승 · 회차("" = round_id NULL — M6 전 세션).
 type chainSession struct {
 	id, inherits, round string
 	at                  int
 }
 
-// putChainSessions 는 stream 에 회차들을 심는다. 모두 ending(오프라인) · init 확정 · TD 6 · base 0 이다.
+// putChainSessions 는 stream 에 회차들을 심는다. 모두 ending(오프라인) · init 확정 · TD 6 · base 0 이다. round_id 는
+// INSERT 때 정한다 — 회차 불변 트리거가 그 뒤의 변경을 거부한다(POK-525).
 func putChainSessions(t *testing.T, pool *pgxpool.Pool, stream string, sessions ...chainSession) {
 	t.Helper()
+	nullable := func(v string) any {
+		if v == "" {
+			return nil
+		}
+		return v
+	}
 	for _, s := range sessions {
 		at := rewindT0.Add(time.Duration(s.at) * time.Second)
-		putRewindSession(t, pool, rewindSessionRow{RewindSession{SessionID: s.id, State: "ending", EndReason: "offline",
-			InitUploaded: true, FirstPDT: at, InheritsSession: s.inherits, TargetDuration: 6}, stream, at})
-		setRound(t, pool, s.id, s.round)
+		if _, err := pool.Exec(context.Background(), `
+INSERT INTO stream_sessions
+    (session_id, stream_id, started_at, state, end_reason, init_uploaded_at, discontinuity_base, first_pdt,
+     inherits_session, target_duration, round_id)
+VALUES ($1, $2, $3, 'ending', 'offline', $4, 0, $3, $5, 6, $6)`,
+			s.id, stream, at, at.Add(time.Second), nullable(s.inherits), nullable(s.round)); err != nil {
+			t.Fatalf("사슬 픽스처 삽입 실패 %s: %v", s.id, err)
+		}
 	}
 }
 
@@ -67,7 +66,7 @@ func chainIDs(t *testing.T, pool *pgxpool.Pool, stream, tail string) []string {
 // 잇는다. 다른 스트림의 같은 이름 계승은 따라가지 않는다.
 //
 //	A0 ← A1 ← A2   회차 RA — 셋이 한 사슬
-//	A2 ← B0 ← B1   B 는 A2 를 계승하지만 회차 RB 다(늦은 분리) — B 사슬은 B0 · B1 뿐
+//	A2 ← B0 ← B1   B 는 A2 를 계승하지만 회차 RB 다(POK-525 전 늦은 분리) — B 사슬은 B0 · B1 뿐
 //	N0 ← N1        N0 은 round_id NULL(M6 전) · N1 은 회차 RN — 부모가 NULL 이라 옛 규칙대로 잇는다
 func TestLoadChainLedgerFollowsEdgeRule(t *testing.T) {
 	pool := newTestPool(t)

@@ -249,7 +249,7 @@ func (r *Registry) Decide(ctx context.Context, tx pgx.Tx, in Input, now time.Tim
 		return d, nil // 계속 · 비귀속은 잠그지 않는다(M6 3.3 — 「계속」 조각 INSERT 를 줄 세우지 않는다)
 	}
 	// 개시 갈래면 소속 행을 잠그고 처음부터 다시 판정한다(M6 3.3 소속 잠금 · D69). 잠금 전에 본 값은
-	// 늦은 4D(분리 · 표식) · 회차 닫힘의 커밋과 겹치면 낡는다 — 잠근 읽기는 커밋된 새 판을 본다(READ COMMITTED).
+	// 늦은 4D 표식 · 회차 닫힘의 커밋과 겹치면 낡는다 — 잠근 읽기는 커밋된 새 판을 본다(READ COMMITTED).
 	return r.decideLocked(ctx, tx, in, now, d)
 }
 

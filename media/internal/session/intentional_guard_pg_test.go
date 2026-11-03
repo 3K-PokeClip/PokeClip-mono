@@ -114,7 +114,7 @@ func TestIntentionalResultRetryable(t *testing.T) {
 		{IntentionalResult{Skip: skipContended}, true},
 		{IntentionalResult{Skip: skipBadTime}, false},
 		{IntentionalResult{Skip: skipNoSession}, false},
-		{IntentionalResult{Skip: skipRoundSplitBlocked}, false},
+		{IntentionalResult{Skip: skipRoundClosed}, false},
 		{IntentionalResult{Effect: effectMarked}, false},
 	} {
 		if got := c.res.Retryable(); got != c.want {
