@@ -191,6 +191,61 @@ class CutPlannerTest {
         assertThat(ready.lengthMs()).isEqualTo(2_700);
     }
 
+    /**
+     * 이어진 틈 안에서 시작한 컷의 자막 — 끝 F끝 은 이어진 틈 안 끝을 앞 조각 끝 {@code (A, dur)} 로 내는데 A 는 계획 밖이다(렌더
+     * 5.3 규칙 5 거절). 같은 매체 자리의 계획 안 표기 {@code (B, 0)} 로 낸다 — 결과 길이 0 이라 렌더가 버린다.
+     */
+    @Test
+    void 이어진_틈_안에서_시작한_컷의_자막_끝점은_계획_안_조각을_가리킨다() {
+        List<RoundRow> rows = List.of(
+                row(1, 0, 4_000).first().build(),
+                row(2, 4_600, 4_000).build(),
+                row(3, 9_200, 4_000).build());
+        List<RecipeDocument.Segment> subtitles = List.of(new RecipeDocument.Segment(4_400L, 4_500L, "틈 안"));
+
+        Ready ready = (Ready) CutPlanner.plan(input(rows, 4_300, 10_300, true, subtitles), new FakeLedger());
+
+        assertThat(ready.media()).extracting(RoundRow::seq).containsExactly(2L, 3L);
+        assertThat(ready.subtitles()).containsExactly(
+                new SubtitleSpan(0, new AtMedia(new MediaCoord(2, 0)), new AtMedia(new MediaCoord(2, 0))));
+        assertAllInPlan(ready);
+    }
+
+    /** 꼬리 대칭 — 컷이 이어진 틈 안에서 끝나면 틈 안 자막의 시작 F 가 뒤 조각 {@code (C, 0)} 이다. 계획 안 표기는 {@code (B, dur)}. */
+    @Test
+    void 이어진_틈_안에서_끝난_컷의_자막_시작점은_계획_안_조각을_가리킨다() {
+        List<RoundRow> rows = List.of(
+                row(1, 0, 4_000).first().build(),
+                row(2, 4_600, 4_000).build(),
+                row(3, 9_200, 4_000).build());
+        List<RecipeDocument.Segment> subtitles = List.of(new RecipeDocument.Segment(8_700L, 8_800L, "틈 안"));
+
+        Ready ready = (Ready) CutPlanner.plan(input(rows, 1_000, 8_800, true, subtitles), new FakeLedger());
+
+        assertThat(ready.out()).isEqualTo(new End(2, 4_000_000L));
+        assertThat(ready.media()).extracting(RoundRow::seq).containsExactly(1L, 2L);
+        assertThat(ready.subtitles()).containsExactly(new SubtitleSpan(0,
+                new AtMedia(new MediaCoord(2, 4_000_000)), new AtMedia(new MediaCoord(2, 4_000_000))));
+        assertAllInPlan(ready);
+    }
+
+    /**
+     * 컷과 겹치지 않는 자막은 싣지 않고 나머지는 레시피 안 자리({@code index})를 지킨다. 컷 시작에 끝이 닿기만 한 자막(반개 구간이라
+     * 겹침 0)도 싣지 않는다.
+     */
+    @Test
+    void 컷_밖_자막을_빼도_나머지_자막은_레시피_자리를_지킨다() {
+        List<RoundRow> rows = List.of(row(1, 0, 4_000).first().build(), row(2, 4_000, 4_000).build());
+        List<RecipeDocument.Segment> subtitles = List.of(
+                new RecipeDocument.Segment(100L, 500L, "컷 앞"),
+                new RecipeDocument.Segment(500L, 1_000L, "컷 시작에 닿기만"),
+                new RecipeDocument.Segment(2_000L, 3_000L, "컷 안"));
+
+        Ready ready = (Ready) CutPlanner.plan(input(rows, 1_000, 6_000, true, subtitles), new FakeLedger());
+
+        assertThat(ready.subtitles()).extracting(SubtitleSpan::index).containsExactly(2);
+    }
+
     /** B8 · K1-c — 판 2 두 조각이 999ms 겹치면 겹친 구간은 나중 조각이다. */
     @Test
     void 겹친_999ms_구간에서_시작하면_나중_조각이다() {
@@ -399,6 +454,18 @@ class CutPlannerTest {
     }
 
     // ── 도우미 ────────────────────────────────────────────────────
+
+    /** 렌더 계획 검사 5.3 규칙 5 — 자막의 매체 끝점 seq 는 계획 매체 안이다. */
+    private static void assertAllInPlan(Ready ready) {
+        List<Long> plan = ready.media().stream().map(RoundRow::seq).toList();
+        for (SubtitleSpan span : ready.subtitles()) {
+            for (var point : List.of(span.start(), span.end())) {
+                if (point instanceof AtMedia at) {
+                    assertThat(plan).as("자막 %d 끝점 %s", span.index(), point).contains(at.at().seq());
+                }
+            }
+        }
+    }
 
     private static List<RoundRow> oneRow() {
         return List.of(row(10, 10_000, 4_000).first().build());

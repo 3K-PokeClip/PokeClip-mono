@@ -170,8 +170,12 @@ public class WebMarkService {
             throw new InvalidHighlightException("positionMs");
         }
         Instant listed = origin.plusMillis(position);
-        return positions.ofPlayback(broadcast, listed)
-                .orElseThrow(() -> new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS))
-                .cardMs();
+        Position stored = positions.ofPlayback(broadcast, listed)
+                .orElseThrow(() -> new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS));
+        // 상한은 라이브 · OBS 와 같이 저장 위치에 건다 — 위 범위는 입력 위치의 것이다.
+        if (stored.cardMs() > MarkService.MAX_CARD_MS) {
+            throw new InvalidHighlightException("positionMs");
+        }
+        return stored.cardMs();
     }
 }

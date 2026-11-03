@@ -72,6 +72,43 @@ class RoundRowsTest extends IntegrationTestSupport {
         assertThat(((RoundRows.Members) round).sessionIds()).containsExactlyInAnyOrder("S-n", "S-n2", "S-n3");
     }
 
+    /** 계승 사슬이 고리를 이뤄도(장부 오류) 같은 세션을 두 번 따라가지 않아 끝난다. */
+    @Test
+    void 계승_사슬이_고리여도_끝나고_고리의_세션이_귀속이다() {
+        seed.session("S-c", KEY, null, null);
+        seed.session("S-c2", KEY, null, "S-c");
+        jdbc.update("UPDATE public.stream_sessions SET inherits_session = 'S-c2' WHERE session_id = 'S-c'");
+
+        Round round = rounds.roundOf(방송("S-c")).orElseThrow();
+
+        assertThat(((RoundRows.Members) round).sessionIds()).containsExactlyInAnyOrder("S-c", "S-c2");
+    }
+
+    /** 사슬 깊이 — 재접속 수만큼 이어진 긴 사슬도 끝까지 따른다(깊이 상한을 두지 않는다 · 끝남은 위 고리 시험이 보장). */
+    @Test
+    void 긴_계승_사슬도_끝까지_따른다() {
+        seed.session("S-d0", KEY, null, null);
+        for (int i = 1; i < 60; i++) {
+            seed.session("S-d" + i, KEY, null, "S-d" + (i - 1));
+        }
+
+        Round round = rounds.roundOf(방송("S-d0")).orElseThrow();
+
+        assertThat(((RoundRows.Members) round).sessionIds()).hasSize(60).contains("S-d59");
+    }
+
+    /** 사슬은 같은 물리 키 안에서만 잇는다 — 다른 키의 세션이 내 세션을 계승한다고 적혀도 회차에 들지 않는다. */
+    @Test
+    void 계승_사슬은_다른_물리_키의_세션으로_넘어가지_않는다() {
+        seed.session("S-k", KEY, null, null);
+        seed.session("S-k2", KEY, null, "S-k");
+        seed.session("S-foreign", "OTHERKEY", null, "S-k2");
+
+        Round round = rounds.roundOf(방송("S-k")).orElseThrow();
+
+        assertThat(((RoundRows.Members) round).sessionIds()).containsExactlyInAnyOrder("S-k", "S-k2");
+    }
+
     @Test
     void 머리_세션_행이_없는_옛_방송은_시작_앞_2분부터_종료_뒤_10분까지의_시간창이다() {
         Broadcast broadcast = 방송("S-old");

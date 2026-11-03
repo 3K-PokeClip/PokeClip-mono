@@ -17,7 +17,6 @@ import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -168,7 +167,19 @@ public class JumpCardService {
         Map<Long, Scene> planned = broadcast.map(b -> scenesOrEmpty(b, List.of(pressedMs, start, end)))
                 .orElse(Map.of());
         RecordResult result = recordHotkeyLocked(streamId, userId, eventId, pressedMs, start, end, planned);
-        return result.created() ? result : new RecordResult(false, withScenes(result.card(), broadcast));
+        return result.created() ? result
+                : new RecordResult(false, withScenes(result.card(), broadcastOf(result.card(), broadcast)));
+    }
+
+    /**
+     * 돌려줄 카드의 방송. 같은 eventId 의 카드는 같은 주인의 <b>다른 방송</b> 카드일 수 있다 — 그때 요청 방송의 회차로 장면을 읽으면
+     * 다른 회차 행의 자리가 실린다.
+     */
+    private Optional<Broadcast> broadcastOf(JumpCardSnapshot card, Optional<Broadcast> requested) {
+        if (requested.isPresent() && requested.get().getStreamId().equals(card.streamId())) {
+            return requested;
+        }
+        return broadcasts.findByStreamId(card.streamId());
     }
 
     /** {@link #recordHotkey}의 잠금 구간. 새 카드만 {@code planned} 장면을 입혀 발행한다. */
@@ -422,14 +433,15 @@ public class JumpCardService {
     }
 
     /**
-     * 카드 장면(POK-196)은 부가 칸이다. 장부를 못 읽으면(장부 표가 없거나 옛 모양 — 판 칸이 아직 없는 DB) 칸만 비우고 카드는
-     * 낸다. 비면 웹은 기준점 + 카드 ms 의 지금 식으로 떨어진다. 방송 목록의 기준점({@code BroadcastListService
+     * 카드 장면(POK-196)은 부가 칸이다. 장부를 못 읽거나(장부 표가 없거나 옛 모양 — 판 칸이 아직 없는 DB) 장부 값이 장면 계산의
+     * 전제를 깨면(공통 모듈의 행 열 검사 등) 칸만 비우고 카드는 낸다 — 장면 실패로 자동 카드 저장 · 목록 · 가리기가 500 이 되면
+     * 안 된다. 비면 웹은 기준점 + 카드 ms 의 지금 식으로 떨어진다. 방송 목록의 기준점({@code BroadcastListService
      * .originsOrEmpty})과 같은 처분이다.
      */
     private Map<Long, Scene> scenesOrEmpty(Broadcast broadcast, Collection<Long> values) {
         try {
             return cardScenes.scenesOf(broadcast, values);
-        } catch (DataAccessException e) {
+        } catch (RuntimeException e) {
             log.warn("jumpcard.scene_unavailable streamId={} reason={}", broadcast.getStreamId(),
                     e.getClass().getSimpleName());
             return Map.of();

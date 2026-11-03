@@ -6,6 +6,7 @@ import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.jumpcard.CardPositionReader;
 import com.pokeclip.clip.jumpcard.CardPositionReader.OffsetOrigin;
 import com.pokeclip.clip.jumpcard.CardPositionReader.ThumbnailOrder;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot.FileHead;
@@ -30,6 +31,7 @@ import java.util.UUID;
 
 import static com.pokeclip.clip.support.LedgerSeed.at;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * P31(설계 r7 16.2 · 계획 8.2) — 카드 · 마크 ↔ 플레이어 · 편집기 · 썸네일. 한 카드의 썸네일 주문 값 · {@code fileHead} ·
@@ -294,6 +296,37 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(thumbnailOf("S-k", mark)).contains(new ThumbnailOrder(2, 499, OffsetOrigin.VIDEO_START));
         assertThat(mark.playerAtMs()).isEqualTo(abs(103_500));
         assertThat(thumbnailOf("S-k", chat)).contains(new ThumbnailOrder(2, 699, OffsetOrigin.VIDEO_START));
+    }
+
+    // ── 다른 방송 카드 · 상한 ─────────────────────────────────────────────
+
+    /** 같은 eventId 가 같은 주인의 다른 방송 카드면 그 카드를 돌려준다 — 장면도 요청 방송이 아니라 그 카드 방송의 회차로 읽는다. */
+    @Test
+    void 같은_eventId가_내_다른_방송_카드면_장면도_그_카드_방송의_회차로_읽는다() {
+        시드_d();
+        시드_f();
+        String eventId = UUID.randomUUID().toString();
+        JumpCardSnapshot made = cards.recordHotkey("S-d", 주인, eventId, 20_500L).card();
+
+        JumpCardSnapshot again = cards.recordHotkey("S-f", 주인, eventId, 205_000L).card();
+
+        assertThat(again.streamId()).isEqualTo("S-d");
+        assertThat(again.playerAtMs()).isEqualTo(abs(125_000)).isEqualTo(made.playerAtMs());
+        assertThat(again.fileHead()).isEqualTo(made.fileHead());
+    }
+
+    /** 지난 방송 마크도 저장 위치에 라이브 · OBS 와 같은 카드 ms 상한(48시간)을 건다 — 입력 위치만 보면 상한이 입력 기준이 된다. */
+    @Test
+    void 지난_방송_마크의_저장_위치가_카드_ms_상한을_넘으면_400이다() {
+        방송("S-m", "P31M", at(0));
+        seed.session("S-m", "P31M", "S-m", null);
+        seed.row("P31M", 1).pts(MarkService.MAX_CARD_MS).wallAndPdt(1_000).session("S-m").insert();
+        끝낸다("S-m");
+        long origin = origins.originsOf(List.of(방송_찾기("S-m"))).get("S-m").toEpochMilli();
+
+        assertThatThrownBy(() -> webPast("S-m", abs(2_000) - origin))
+                .isInstanceOfSatisfying(InvalidHighlightException.class,
+                        e -> assertThat(e.field()).isEqualTo("positionMs"));
     }
 
     // ── 신호 ──────────────────────────────────────────────────────────────

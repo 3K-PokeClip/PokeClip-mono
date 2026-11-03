@@ -35,8 +35,9 @@ public class RoundRows {
 
     /**
      * 머리 세션 여럿 → (머리, 회차 세션) 쌍. 머리 행이 없는 머리는 결과에 없다. 계승 사슬은 {@code UNION}으로 이어 같은 세션을
-     * 두 번 따라가지 않는다(사슬이 고리를 이뤄도 끝난다). 색인: 세션 PK · {@code stream_sessions_inherits_idx} · 회차 세션은
-     * {@code stream_sessions_stream_idx}(stream_id 범위).
+     * 두 번 따라가지 않는다(사슬이 고리를 이뤄도 끝난다 · 깊이 상한은 두지 않는다 — 사슬 길이는 그 키의 세션 수 안이다). 사슬은
+     * 머리와 같은 물리 키({@code stream_id}) 안에서만 잇는다 — 행 읽기도 그 키로 거르지만 회차 세션 목록부터 다른 키가 섞이지 않게
+     * 한다. 색인: 세션 PK · {@code stream_sessions_inherits_idx} · 회차 세션은 {@code stream_sessions_stream_idx}(stream_id 범위).
      */
     static final String HEADS = """
             WITH RECURSIVE head AS (
@@ -44,13 +45,13 @@ public class RoundRows {
                   FROM public.stream_sessions
                  WHERE session_id = ANY(?::text[])
             ), chain AS (
-                SELECT h.session_id AS head_id, h.session_id
+                SELECT h.session_id AS head_id, h.session_id, h.stream_id
                   FROM head h
                  WHERE h.round_id IS NULL
                 UNION
-                SELECT c.head_id, s.session_id
+                SELECT c.head_id, s.session_id, s.stream_id
                   FROM public.stream_sessions s
-                  JOIN chain c ON s.inherits_session = c.session_id
+                  JOIN chain c ON s.inherits_session = c.session_id AND s.stream_id = c.stream_id
             )
             SELECT h.session_id AS head_id, m.session_id
               FROM head h

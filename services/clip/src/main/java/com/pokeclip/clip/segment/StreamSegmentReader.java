@@ -123,11 +123,15 @@ public class StreamSegmentReader {
                      WHERE p.stream_id = s.stream_id AND p.seq < s.seq) AS ledger_previous_seq
               FROM public.stream_segments s""";
 
-    /** 파일명 시각 반개 구간 {@code [from, to)} 겹침 — 판 무관. */
+    /**
+     * 파일명 시각 반개 구간 {@code [from, to)} 겹침 — 판 무관. 응답 칸({@code startWallUtcMs})과 확보 거리가 쓰는 <b>ms 내림 축</b>으로
+     * 본다 — µs 원값으로 끝을 재면 내림 축에서 창 앞에 끝나는 행(벽시각 0.999ms · 길이 4000 · 창 {@code [4000, …)})이 실린다. 시작
+     * 쪽은 {@code to} 가 ms 정수라 원값 비교가 내림 축 비교와 같다.
+     */
     private static final String WALL_OVERLAP = """
 
                AND s.start_wall_utc < ?
-               AND s.start_wall_utc + s.duration_ms * interval '1 millisecond' > ?
+               AND date_trunc('milliseconds', s.start_wall_utc) + s.duration_ms * interval '1 millisecond' > ?
              ORDER BY s.seq""";
 
     /** 회차 세션에 귀속된 행만. 색인 {@code stream_segments_session_idx (stream_id, session_id, seq)}. */

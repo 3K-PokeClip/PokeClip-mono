@@ -156,6 +156,21 @@ class SegmentAudioAxisTest extends IntegrationTestSupport {
         assertThat(root.get("gapEvidence").toString()).isEqualTo("[{\"beforeSeq\":1,\"afterSeq\":3}]");
     }
 
+    /**
+     * 겹침은 응답 칸과 같은 ms 내림 축으로 본다. 벽시각이 0.999ms 인 행은 응답에서 {@code [0, 4000)} 이라 {@code [4000, 5000)} 과
+     * 겹치지 않는다 — µs 원값으로 겹침을 보면 이 행이 실려 웹의 덮음 판정과 갈린다.
+     */
+    @Test
+    void 겹침은_응답과_같은_ms_내림_축으로_본다() throws Exception {
+        방송(true);
+        seed.row(키, 1).pts(0).wallMicros(999).session(방송).insert();
+        seed.row(키, 2).pts(4_000).wall(4_000).session(방송).insert();
+
+        JsonNode root = mapper.readTree(json(issue(4_000, 5_000, "fileHead")));
+
+        assertThat(seqs(root)).containsExactly(2L);
+    }
+
     // ── 끝 소리 확보(계약 6-6-8 · AudioCaptureRule) ────────────────
 
     @Test

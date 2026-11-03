@@ -108,7 +108,7 @@ public final class CutPlanner {
             return reject(input, Reason.NO_FOOTAGE);
         }
         List<RoundRow> media = rows.subList(first, last + 1);
-        List<SubtitleSpan> subtitles = subtitlesOf(axis, input);
+        List<SubtitleSpan> subtitles = subtitlesOf(axis, input, rows, media);
         if (!media.stream().allMatch(RoundRow::uploaded)) {
             return new NotReady("media_pending");
         }
@@ -207,9 +207,11 @@ public final class CutPlanner {
 
     /**
      * ⑤ 자막 끝점 — 컷으로 자른 뒤 시작은 F · 끝은 F끝. 끊긴 틈 안 끝점은 틈 자리로 둔다(렌더가 결과 길이 0 이하인 자막만 뺀다).
-     * 컷과 겹치지 않는 자막은 싣지 않는다. {@code toSegmentEnd} 는 자막에 쓰지 않는다.
+     * 컷과 겹치지 않는 자막은 싣지 않는다. {@code toSegmentEnd} 는 자막에 쓰지 않는다. 매체 끝점은 계획 매체 안 seq 로
+     * 낸다({@link #inPlan}).
      */
-    private static List<SubtitleSpan> subtitlesOf(List<LedgerRow> axis, CutInput input) {
+    private static List<SubtitleSpan> subtitlesOf(List<LedgerRow> axis, CutInput input, List<RoundRow> rows,
+                                                  List<RoundRow> media) {
         List<SubtitleSpan> spans = new ArrayList<>();
         for (int i = 0; i < input.subtitles().size(); i++) {
             RecipeDocument.Segment segment = input.subtitles().get(i);
@@ -218,10 +220,41 @@ public final class CutPlanner {
             if (start >= end) {
                 continue;
             }
-            spans.add(new SubtitleSpan(i, pointOf(LedgerTimeline.locate(axis, start)),
-                    pointOf(LedgerTimeline.locateEnd(axis, end))));
+            spans.add(new SubtitleSpan(i, inPlan(pointOf(LedgerTimeline.locate(axis, start)), rows, media),
+                    inPlan(pointOf(LedgerTimeline.locateEnd(axis, end)), rows, media)));
         }
         return spans;
+    }
+
+    /**
+     * 이어진 틈의 같은 매체 자리를 계획 안 표기로 바꾼다. 컷이 이어진 틈 안에서 시작하면 계획은 뒤 조각 B 부터인데, 틈 안 자막의 끝
+     * F끝 은 앞 조각 끝 {@code (A, dur)} 을 낸다 — 같은 매체 자리 {@code (B, 0)} 이다. 끝 쪽은 대칭으로 뒤 조각 머리
+     * {@code (C, 0)} 이 앞 조각 끝 {@code (B, dur)} 이다. 계획 밖 seq 를 그대로 실으면 렌더 계획 검사(설계 r7 5.3 규칙 5 — 매체 끝점
+     * seq 는 계획 매체 안)가 주문 전체를 거절한다. 같은 자리라 자막의 뜻은 그대로다(대개 결과 길이 0 이라 렌더가 버린다).
+     *
+     * @throws IllegalStateException 계획 밖 끝점이 이어진 이웃의 같은 자리가 아니다(컷으로 자른 자막에서는 생기지 않는다)
+     */
+    private static SubtitlePoint inPlan(SubtitlePoint point, List<RoundRow> rows, List<RoundRow> media) {
+        if (!(point instanceof SubtitlePoint.AtMedia at)) {
+            return point;
+        }
+        RoundRow first = media.get(0);
+        RoundRow last = media.get(media.size() - 1);
+        long seq = at.at().seq();
+        if (seq < first.seq()) {
+            RoundRow before = rows.get(indexOf(rows, first.seq()) - 1);
+            if (before.seq() == seq && first.continuesPrevious() && at.at().offsetUs() == before.durationMs() * 1000L) {
+                return new SubtitlePoint.AtMedia(new MediaCoord(first.seq(), 0));
+            }
+        } else if (seq > last.seq()) {
+            RoundRow after = rows.get(indexOf(rows, last.seq()) + 1);
+            if (after.seq() == seq && after.continuesPrevious() && at.at().offsetUs() == 0) {
+                return new SubtitlePoint.AtMedia(new MediaCoord(last.seq(), last.durationMs() * 1000L));
+            }
+        } else {
+            return point;
+        }
+        throw new IllegalStateException("자막 끝점이 계획 밖이다: " + point);
     }
 
     private static SubtitlePoint pointOf(Place place) {

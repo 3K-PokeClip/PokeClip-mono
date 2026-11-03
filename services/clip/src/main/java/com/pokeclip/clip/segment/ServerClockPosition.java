@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
 
@@ -65,7 +65,7 @@ public class ServerClockPosition {
      * {@code timeline_not_ready}로 바꾼다.
      */
     public Optional<Position> ofServerClock(Broadcast broadcast, Instant t, Source source) {
-        return position(broadcast, source, rows -> fromServerClock(rows, t.toEpochMilli()));
+        return position(broadcast, source, (round, rows) -> fromServerClock(rows, t.toEpochMilli()));
     }
 
     /**
@@ -73,16 +73,17 @@ public class ServerClockPosition {
      * 「목록 PDT − 기준점」 을 정확히 되살린다.
      */
     public Optional<Position> ofPlayback(Broadcast broadcast, Instant p) {
-        return position(broadcast, Source.WEB_PAST, rows -> fromPlayback(rows, p.toEpochMilli()));
+        return position(broadcast, Source.WEB_PAST, (round, rows) -> fromPlayback(round, rows, p.toEpochMilli()));
     }
 
     private Optional<Position> position(Broadcast broadcast, Source source,
-                                        Function<List<Row>, Optional<Position>> pick) {
+                                        BiFunction<Round, List<Row>, Optional<Position>> pick) {
         Optional<Round> round = rounds.roundOf(broadcast);
         if (round.isEmpty()) {
             return Optional.empty();
         }
-        Optional<Position> position = pick.apply(rounds.rowsOf(round.get()));
+        Optional<Position> position = pick.apply(round.get(), rounds.rowsOf(round.get()));
+        // streamId 는 방송 번호(API 경로에 드러나는 값)다 — 계약4 의 SRT streamid(접속 비밀)가 아니다.
         position.ifPresent(p -> log.info(
                 "clip.mark.positioned streamId={} source={} axis={} seq={} rounds={} extended={} folded={}",
                 broadcast.getStreamId(), source.value, p.axis(), p.seq(),
@@ -124,33 +125,40 @@ public class ServerClockPosition {
     }
 
     /**
-     * 지난 방송: 회차 행 가운데 목록 시각 ≤ P 인 seq 최대 행 k → {@code start_pts(k) + (P − 목록 시각(k))}. 가장자리 셋(cc rev8
-     * 부수 5) — 거리가 k 길이를 넘고 다음 행 k′ 가 있으면 {@code start_pts(k′)}(뒤 조각 첫 화면 · 카드 장면 함수의 틈 처분과 같은
-     * 자리), 마지막 행 끝 뒤면 {@code start_pts(k) + dur − 1}(마지막 화면 쪽 매체 자리), 첫 행 앞이면 {@code start_pts(첫 행)}.
+     * 지난 방송: 회차 행 가운데 목록 시각 ≤ P 인 seq 최대 행 k → {@code start_pts(k) + (P − 목록 시각(k))}. 가장자리 셋 — 거리가
+     * k 길이를 넘고 다음 행 k′ 가 있으면 {@code start_pts(k′)}(뒤 조각 첫 화면 · 카드 장면 함수의 틈 처분과 같은 자리), 마지막 행
+     * 끝 뒤면 {@code start_pts(k) + dur − 1}(마지막 화면 쪽 매체 자리), 첫 행 앞이면 {@code start_pts(첫 행)}.
      *
-     * <p>목록 시각은 {@code playback_pdt} 이고, 빈 행(세션 장부 전의 옛 행)은 기준점과 같은 식으로 벽시각이다 — 웹이 뺀 기준점이
-     * {@code COALESCE(playback_pdt, start_wall_utc) − start_pts} 라 같은 축으로 되살려야 왕복이 정확하다.
+     * <p>목록 시각은 {@code playback_pdt} 다. <b>회차 귀속 행은 PDT 가 빈 행을 floor 에 넣지 않는다</b> — 귀속 행에는 늘 있으나 DB
+     * 제약은 아니라서, 빈 행을 벽시각으로 끼우면 두 축이 한 열에 섞여 seq 가 큰 그 행이 앞 행의 자리를 가로챈다. 회차 귀속 행에
+     * PDT 가 하나도 없으면 위치가 없다(부르는 쪽이 503). <b>머리 세션 행이 없는 옛 방송(시간창)만</b> 빈 행(세션 장부 전의 옛 행)을
+     * 기준점과 같은 식으로 벽시각으로 본다 — 웹이 뺀 기준점이 {@code COALESCE(playback_pdt, start_wall_utc) − start_pts} 라 같은
+     * 축으로 되살려야 왕복이 정확하다.
      */
-    static Optional<Position> fromPlayback(List<Row> rows, long p) {
-        if (rows.isEmpty()) {
+    static Optional<Position> fromPlayback(Round round, List<Row> rows, long p) {
+        List<Row> listed = round instanceof RoundRows.Members
+                ? rows.stream().filter(r -> r.pdtMs() != null).toList()
+                : rows;
+        if (listed.isEmpty()) {
             return Optional.empty();
         }
-        Place place = LedgerTimeline.locate(ledger(rows, ServerClockPosition::listedMs), p);
+        Place place = LedgerTimeline.locate(ledger(listed, ServerClockPosition::listedMs), p);
         return Optional.of(switch (place) {
             case Place.Media m -> {
-                Row k = rowOf(rows, m.seq());
+                Row k = rowOf(listed, m.seq());
                 yield new Position(k.startPtsMs() + m.offsetMs(), k.seq(), "pdt", false, false);
             }
             case Place.Gap g -> {
-                Row next = rowOf(rows, g.afterSeq());
+                Row next = rowOf(listed, g.afterSeq());
                 yield new Position(next.startPtsMs(), next.seq(), "pdt", false, true);
             }
             case Place.AfterLast a -> {
-                Row last = rows.get(rows.size() - 1);
+                Row last = listed.get(listed.size() - 1);
                 yield new Position(last.startPtsMs() + Math.max(0, last.durationMs() - 1), last.seq(), "pdt", false,
                         true);
             }
-            case Place.BeforeFirst b -> new Position(rows.get(0).startPtsMs(), rows.get(0).seq(), "pdt", false, true);
+            case Place.BeforeFirst b -> new Position(listed.get(0).startPtsMs(), listed.get(0).seq(), "pdt", false,
+                    true);
         });
     }
 

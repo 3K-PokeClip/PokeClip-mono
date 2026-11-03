@@ -4,6 +4,7 @@ import com.pokeclip.clip.segment.RoundRows.Row;
 import com.pokeclip.clip.segment.ServerClockPosition.Position;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,6 +20,12 @@ class ServerClockPositionTest {
     private static Row legacy(long seq, long pts, long wall, Long pdt, int duration) {
         return new Row(seq, pts, duration, wall, pdt, null, true);
     }
+
+    /** 회차 귀속 행 열(지난 방송 floor 의 목록 시각 = PDT). */
+    private static final RoundRows.Round MEMBERS = new RoundRows.Members("K", List.of("S"));
+
+    /** 머리 세션 행이 없는 옛 방송의 시간창(목록 시각 = 기준점과 같은 {@code COALESCE}). */
+    private static final RoundRows.Round WINDOW = new RoundRows.TimeWindow("K", Instant.EPOCH, null);
 
     /** 판 2 행: 축 = PDT. */
     private static Row v2(long seq, long pts, long wall, long pdt, int duration) {
@@ -103,7 +110,7 @@ class ServerClockPositionTest {
     void 재생_위치는_목록_PDT_로_고른_행의_위치에_거리를_더한다() {
         List<Row> rows = List.of(legacy(1, 0, 100_000, 100_000L, 4_000), legacy(2, 4_000, 104_900, 104_900L, 4_000));
 
-        assertThat(ServerClockPosition.fromPlayback(rows, 105_400))
+        assertThat(ServerClockPosition.fromPlayback(MEMBERS, rows, 105_400))
                 .contains(new Position(4_500, 2, "pdt", false, false));
     }
 
@@ -112,7 +119,7 @@ class ServerClockPositionTest {
         List<Row> rows = List.of(legacy(10, 200_000, 100_000, 100_000L, 4_000),
                 legacy(11, 210_000, 110_000, 110_000L, 4_000));
 
-        assertThat(ServerClockPosition.fromPlayback(rows, 106_000))
+        assertThat(ServerClockPosition.fromPlayback(MEMBERS, rows, 106_000))
                 .contains(new Position(210_000, 11, "pdt", false, true));
     }
 
@@ -120,7 +127,7 @@ class ServerClockPositionTest {
     void 재생_위치가_마지막_행_끝_뒤면_마지막_화면_쪽_매체_자리다() {
         List<Row> rows = List.of(legacy(10, 200_000, 100_000, 100_000L, 4_000));
 
-        assertThat(ServerClockPosition.fromPlayback(rows, 120_000))
+        assertThat(ServerClockPosition.fromPlayback(MEMBERS, rows, 120_000))
                 .contains(new Position(203_999, 10, "pdt", false, true));
     }
 
@@ -128,21 +135,40 @@ class ServerClockPositionTest {
     void 재생_위치가_첫_행_앞이면_첫_행_시작이다() {
         List<Row> rows = List.of(legacy(10, 200_000, 100_000, 100_000L, 4_000));
 
-        assertThat(ServerClockPosition.fromPlayback(rows, 50_000))
+        assertThat(ServerClockPosition.fromPlayback(MEMBERS, rows, 50_000))
                 .contains(new Position(200_000, 10, "pdt", false, true));
     }
 
-    /** PDT 가 빈 행(세션 장부 전의 옛 행)은 기준점과 같은 식으로 벽시각을 목록 시각으로 본다. */
+    /** 옛 방송 시간창의 PDT 가 빈 행(세션 장부 전의 옛 행)은 기준점과 같은 식으로 벽시각을 목록 시각으로 본다. */
     @Test
-    void PDT가_빈_행은_벽시각을_목록_시각으로_본다() {
+    void 옛_방송_시간창의_PDT가_빈_행은_벽시각을_목록_시각으로_본다() {
         List<Row> rows = List.of(legacy(1, 0, 100_000, null, 4_000));
 
-        assertThat(ServerClockPosition.fromPlayback(rows, 101_000))
+        assertThat(ServerClockPosition.fromPlayback(WINDOW, rows, 101_000))
+                .contains(new Position(1_000, 1, "pdt", false, false));
+    }
+
+    /**
+     * 회차 귀속 행은 목록 PDT 로만 floor 한다. PDT 가 빈 귀속 행(DB 제약은 아님)을 벽시각으로 끼우면 목록 시각 축이 섞여 앞 행을
+     * 가로챈다 — 벽시각 104,000 은 PDT 200,000 인 앞 행보다 seq 가 커서 P = 201,000 의 floor 가 된다.
+     */
+    @Test
+    void 회차_귀속_행의_빈_PDT는_지난_방송_floor에_끼지_않는다() {
+        List<Row> rows = List.of(legacy(1, 0, 100_000, 200_000L, 4_000), legacy(2, 4_000, 104_000, null, 4_000));
+
+        assertThat(ServerClockPosition.fromPlayback(MEMBERS, rows, 201_000))
                 .contains(new Position(1_000, 1, "pdt", false, false));
     }
 
     @Test
+    void 회차_귀속_행에_PDT가_하나도_없으면_위치가_없다() {
+        List<Row> rows = List.of(legacy(1, 0, 100_000, null, 4_000));
+
+        assertThat(ServerClockPosition.fromPlayback(MEMBERS, rows, 101_000)).isEmpty();
+    }
+
+    @Test
     void 재생_위치도_행이_없으면_없다() {
-        assertThat(ServerClockPosition.fromPlayback(List.of(), 1_000)).isEqualTo(Optional.empty());
+        assertThat(ServerClockPosition.fromPlayback(MEMBERS, List.of(), 1_000)).isEqualTo(Optional.empty());
     }
 }
