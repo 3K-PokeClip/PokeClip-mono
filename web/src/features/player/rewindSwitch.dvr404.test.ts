@@ -91,8 +91,13 @@ function feed(
   return { state, effects };
 }
 
-const kinds = (effects: SessionEffect[]) => effects.map((e) => e.kind);
-const doorPoll = (x: XAnswer = X_A, at = R) => streamPoll(liveReady(A1, T0, NOW), x, at);
+function kinds(effects: SessionEffect[]): Array<SessionEffect['kind']> {
+  return effects.map((e) => e.kind);
+}
+
+function doorPoll(x: XAnswer = X_A, at = R): SessionEvent {
+  return streamPoll(liveReady(A1, T0, NOW), x, at);
+}
 
 beforeEach(resetEventKit);
 
@@ -127,7 +132,9 @@ function endedAtTail(probing: boolean): PlaybackSessionState {
 }
 
 /** 404 로 막힌 끝남 대기 */
-const blockedOf = (s: PlaybackSessionState) => feed(s, [gone(s)]).state;
+function blockedOf(s: PlaybackSessionState): PlaybackSessionState {
+  return feed(s, [gone(s)]).state;
+}
 
 /**
  * 다시 받기 기원(K1 ② — POK-528 c7 에서 차림 교체) — 끝 E 앞에서 보다 404 → 목록 다시

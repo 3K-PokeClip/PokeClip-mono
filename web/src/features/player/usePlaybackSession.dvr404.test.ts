@@ -115,7 +115,9 @@ const steady: Answers = () => ({ url: A1, floorMs: FIRST_F });
 
 async function flush() {
   await act(async () => {
-    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+    }
   });
 }
 
@@ -262,7 +264,9 @@ async function runRelist(
     const { generation } = session().state.source;
     if (generation === seen) continue;
     seen = generation;
-    for (const event of playerEvents(session, onSwap)) dispatch(event);
+    for (const event of playerEvents(session, onSwap)) {
+      dispatch(event);
+    }
   }
   // 마지막 반복에 넣은 사건이 띄운 비동기 일(라이브 창 탐침 등)을 act 안에서 끝낸 뒤에 센다
   await flush();

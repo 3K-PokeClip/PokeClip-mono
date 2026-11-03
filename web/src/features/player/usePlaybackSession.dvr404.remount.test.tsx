@@ -53,16 +53,16 @@ interface Details {
 type Handler = (event: string, data: unknown) => void;
 
 class FakeHls {
-  static isSupported = () => true;
-  static Events = {
+  static readonly isSupported = () => true;
+  static readonly Events = {
     MANIFEST_PARSED: 'hlsManifestParsed',
     LEVEL_LOADED: 'hlsLevelLoaded',
     LEVEL_UPDATED: 'hlsLevelUpdated',
     FRAG_LOADED: 'hlsFragLoaded',
     ERROR: 'hlsError',
   };
-  static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
-  static ErrorDetails = {
+  static readonly ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+  static readonly ErrorDetails = {
     FRAG_LOAD_ERROR: 'fragLoadError',
     MANIFEST_LOAD_ERROR: 'manifestLoadError',
     MANIFEST_LOAD_TIMEOUT: 'manifestLoadTimeOut',
@@ -71,7 +71,7 @@ class FakeHls {
   };
   readonly handlers = new Map<string, Handler[]>();
   latestLevelDetails: Details | null = null;
-  liveSyncPosition = null;
+  readonly liveSyncPosition = null;
   readonly startLoad = vi.fn();
   readonly stopLoad = vi.fn();
   readonly destroy = vi.fn();
@@ -229,7 +229,9 @@ function options(onNotice: (text: string) => void): SessionOptions {
 async function settle() {
   await act(async () => {
     await vi.dynamicImportSettled();
-    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+    }
   });
 }
 

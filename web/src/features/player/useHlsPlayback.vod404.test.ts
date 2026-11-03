@@ -63,7 +63,7 @@ class FakeHls {
   };
   /** 목록 사건이 실어 온 목록 — 이 시험은 목록을 쏘지 않아 늘 null 이다 */
   latestLevelDetails: unknown = null;
-  liveSyncPosition: number | null = null;
+  readonly liveSyncPosition: number | null = null;
   readonly handlers = new Map<string, Handler[]>();
   readonly startLoad = vi.fn();
   readonly stopLoad = vi.fn();

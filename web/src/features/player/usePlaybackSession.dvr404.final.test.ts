@@ -121,7 +121,9 @@ function serve(answers: Answers): void {
 
 async function flush() {
   await act(async () => {
-    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+    }
   });
 }
 

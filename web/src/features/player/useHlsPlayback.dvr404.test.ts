@@ -29,16 +29,16 @@ vi.mock('hls.js', () => ({ default: FakeHls }));
 type Handler = (event: string, data: unknown) => void;
 
 class FakeHls {
-  static isSupported = () => true;
-  static Events = {
+  static readonly isSupported = () => true;
+  static readonly Events = {
     MANIFEST_PARSED: 'hlsManifestParsed',
     LEVEL_LOADED: 'hlsLevelLoaded',
     LEVEL_UPDATED: 'hlsLevelUpdated',
     FRAG_LOADED: 'hlsFragLoaded',
     ERROR: 'hlsError',
   };
-  static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
-  static ErrorDetails = {
+  static readonly ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+  static readonly ErrorDetails = {
     FRAG_LOAD_ERROR: 'fragLoadError',
     INTERNAL_ABORTED: 'aborted',
     MANIFEST_LOAD_ERROR: 'manifestLoadError',
@@ -47,7 +47,7 @@ class FakeHls {
   };
   readonly handlers = new Map<string, Handler[]>();
   latestLevelDetails: Details | null = null;
-  liveSyncPosition: number | null = null;
+  readonly liveSyncPosition: number | null = null;
   readonly startLoad = vi.fn();
   readonly stopLoad = vi.fn();
   readonly destroy = vi.fn();
@@ -481,7 +481,7 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
     },
   );
 
-  it('404 없이 멈췄다 다시 틀 때 멈춘 자리가 목록 하한 안이면 제어면 첫 조각이 늦어도 그대로 튼다 — 시크 요청 0(41b85090 (ii) 를 뒤집음 · P35)', async () => {
+  it('404 없이 멈췄다 다시 틀 때 멈춘 자리가 목록 하한 안이면 제어면 첫 조각이 그 자리보다 뒤여도 그대로 튼다 — 시크 요청 0(41b85090 (ii) 를 뒤집음 · P35 — 비교값은 재생기 목록 하한만)', async () => {
     const { video, hooks, hls } = await pausedAt(16);
     resume(video);
     expect(hooks.onSeekRequest).not.toHaveBeenCalled();

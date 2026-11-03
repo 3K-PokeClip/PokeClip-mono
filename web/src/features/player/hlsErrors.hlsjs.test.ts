@@ -290,7 +290,7 @@ function rewindPlayerEndingWith(outcomeFor: (url: string) => FragOutcome): {
   streamController: StreamControllerInternals;
 } {
   class EndingLoader {
-    stats = new LoadStats();
+    readonly stats = new LoadStats();
     load(...[context, , callbacks]: LoadArgs) {
       const outcome = outcomeFor(context.url);
       queueMicrotask(() => {
@@ -589,8 +589,11 @@ function fakeClock(): void {
   });
 }
 
-/** 제어면 응답 지연 꼴(계획 8-2) — 이 동안 받기가 다시 나가면 하한 밖 조각을 또 청한 것이다 */
-const CONTROL_DELAY_MS = 60_000;
+/**
+ * 가로챈 옛 인스턴스가 받기를 멈춘 채로 남는지 지켜보는 구간(계획 8-2) — 이 동안 받기가 다시 나가면
+ * 하한 밖 조각을 또 청한 것이다. 전제 시험은 같은 구간에서 가로채지 않은 재생기가 받기를 다시 여는지 본다
+ */
+const OBSERVE_MS = 60_000;
 
 describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 멈춤(POK-528 c5 · 계획 8-2)', () => {
   afterEach(() => {
@@ -613,7 +616,7 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
       });
       raiseMedia404(player.hls, player.frag);
       expect(seen).toEqual([stateSeenByApp]);
-      vi.advanceTimersByTime(CONTROL_DELAY_MS);
+      vi.advanceTimersByTime(OBSERVE_MS);
       // 요청 관측의 판별력 — 이 차림에서는 가로채지 않으면 받기 시도가 보인다
       expect(player.loads()).toBeGreaterThan(0);
       expect(player.fragLoadings()).toBeGreaterThan(0);
@@ -649,13 +652,13 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
   // 요청 관측(2차 증거)은 상태 단언과 따로 둔다 — 상태 단언이 먼저 끊기면 받기 수가 기록되지 않는다(c5 검수 이연 M ·
   // 변이 M5a). 관측을 다 모은 뒤 한 번에 견주어, 실패하면 받기 수가 그대로 출력에 남는다
   it.each<GoneBranch>(['live-middle', 'live-last', 'endlist'])(
-    '%s 404 를 가로채면 제어면 지연 60초 동안 받기 0 · 받기 시작 사건 0 · 그 뒤에도 STOPPED',
+    '%s 404 를 가로채면 관측 구간 60초 동안 받기 0 · 받기 시작 사건 0 · 그 뒤에도 STOPPED',
     (branch) => {
       fakeClock();
       const player = rewindPlayerLoading(branch);
       const consumed = intercept(player, vi.fn());
       raiseMedia404(player.hls, player.frag);
-      vi.advanceTimersByTime(CONTROL_DELAY_MS);
+      vi.advanceTimersByTime(OBSERVE_MS);
       expect({
         consumed,
         loads: player.loads(),
@@ -747,7 +750,7 @@ function rewindPlayerWithHeldLists(): {
 } {
   const requests: HeldListRequest[] = [];
   class HeldListLoader {
-    stats = new LoadStats();
+    readonly stats = new LoadStats();
     private request: HeldListRequest | null = null;
     load(...[context, , callbacks]: LoadArgs) {
       const stats = this.stats;

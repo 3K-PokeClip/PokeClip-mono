@@ -42,8 +42,8 @@ export function useLiveRewindPlayback(
       axisLowerMs,
       // 끝에 닿아 덮개가 선 동안 재생 단추를 막는다(끝난 목록이 처음부터 돌지 않게)
       holdPlay: view.cover !== null,
-      // 막힌 동안 새로 서는 재생기는 받지도 틀지도 않는다(POK-528 U2) — 덮개 · 주소가 그대로이고 세대만 오르는
-      // 전이(목록 다시 받기 · 리마운트)도 있어 의존에 따로 둔다
+      // 막힌 동안 새로 서는 재생기는 받지도 틀지도 않는다(POK-528 U2). 덮개가 이미 preparing 인 끝남 대기(끝에 닿아 재접속
+      // 대기가 지남)에서 404 로 막힘 · 마지막 확인이 서면 덮개 · 주소는 그대로이고 이 값만 거짓에서 참으로 바뀌어 의존에 따로 둔다
       startHeld: view.startHeld,
     }),
     [dispatch, liveButton, notice, positionEpoch, axisLowerMs, view.cover, view.startHeld],

@@ -33,16 +33,16 @@ vi.mock('hls.js', () => ({ default: FakeHls }));
 type Handler = (event: string, data: unknown) => void;
 
 class FakeHls {
-  static isSupported = () => true;
-  static Events = {
+  static readonly isSupported = () => true;
+  static readonly Events = {
     MANIFEST_PARSED: 'hlsManifestParsed',
     LEVEL_LOADED: 'hlsLevelLoaded',
     LEVEL_UPDATED: 'hlsLevelUpdated',
     FRAG_LOADED: 'hlsFragLoaded',
     ERROR: 'hlsError',
   };
-  static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
-  static ErrorDetails = {
+  static readonly ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+  static readonly ErrorDetails = {
     FRAG_LOAD_ERROR: 'fragLoadError',
     MANIFEST_LOAD_ERROR: 'manifestLoadError',
     LEVEL_LOAD_ERROR: 'levelLoadError',
@@ -50,7 +50,7 @@ class FakeHls {
   };
   readonly handlers = new Map<string, Handler[]>();
   latestLevelDetails: Details | null = null;
-  liveSyncPosition: number | null = null;
+  readonly liveSyncPosition: number | null = null;
   readonly startLoad = vi.fn();
   readonly stopLoad = vi.fn();
   readonly destroy = vi.fn();
