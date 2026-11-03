@@ -100,6 +100,7 @@ variables {
   ecr_credential_helper_version = "0.12.0-3.amzn2023"
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
+  broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
 }
 
 # EC2 user_data 한도 16 KiB 는 base64 를 풀기 전(압축본) 크기에 걸린다.
