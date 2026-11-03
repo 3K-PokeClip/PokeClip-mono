@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * ffprobe 로 조각을 잰다. 옛 꼴 주문은 {@link #probe}(해상도 · 소리 스트림 수 · 영상 길이 · 소리 자리), 새 꼴 주문은
@@ -38,6 +39,11 @@ public class MediaProbe {
 
     private static final Logger log = LoggerFactory.getLogger(MediaProbe.class);
     private static final BigInteger MICROS = BigInteger.valueOf(1_000_000);
+    /**
+     * ffprobe 가 찍는 초 꼴({@code %f} — 부호 · 정수부 · 소수부). 지수 표기는 받지 않는다(거대 지수가 큰 수 계산으로 번진다 —
+     * sec L3). 정수부 12자리면 µs 로 옮겨도 long 안이다.
+     */
+    private static final Pattern SECONDS = Pattern.compile("-?[0-9]{1,12}(\\.[0-9]{1,9})?");
 
     private final ProcessRunner runner;
     private final ObjectMapper mapper;
@@ -107,7 +113,19 @@ public class MediaProbe {
         return parseTiming(root);
     }
 
+    /**
+     * 판독 JSON → {@link SegmentTiming}. 합 · 차는 {@code …Exact}, 큰 정수 계산 끝 변환은 {@code longValueExact} 라 넘침이
+     * {@link ArithmeticException} 으로 오고, 그 조각은 다시 받아도 같으므로 여기서 {@code SOURCE_MISMATCH} 로 바꾼다(sec M1).
+     */
     static SegmentTiming parseTiming(JsonNode root) {
+        try {
+            return readTiming(root);
+        } catch (ArithmeticException e) {
+            throw mismatch("영상 조각의 시각을 읽지 못했다");
+        }
+    }
+
+    private static SegmentTiming readTiming(JsonNode root) {
         JsonNode video = firstVideo(root);
         long ts = timescale(video);
         Map<Integer, List<JsonNode>> packets = packetsByStream(root);
@@ -120,7 +138,7 @@ public class MediaProbe {
         long packetTicks = 0;
         for (int i = 0; i < pts.length; i++) {
             pts[i] = integer(videoPackets.get(i), "pts");
-            packetTicks += integer(videoPackets.get(i), "duration");
+            packetTicks = Math.addExact(packetTicks, integer(videoPackets.get(i), "duration"));
         }
         Arrays.sort(pts);
         long interval = SegmentTiming.medianInterval(pts);
@@ -130,7 +148,7 @@ public class MediaProbe {
         if (tail <= 0) {
             throw mismatch("영상 조각의 프레임 길이를 알 수 없다");
         }
-        long videoLength = integer(last, "dts") + tail - d0;
+        long videoLength = Math.subtractExact(Math.addExact(integer(last, "dts"), tail), d0);
 
         List<TrackRange> audio = new ArrayList<>();
         Head head = new Head(d0, ts);
@@ -155,11 +173,19 @@ public class MediaProbe {
      * 어긋나면 WARN · 아니면 DEBUG). 준비 조각처럼 어긋나도 실패로 만들지 않는 자리는 {@link SegmentTiming#lengthMatch} 를 쓴다.
      */
     public static LengthMatch requireLength(String jobId, long seq, long ledgerMs, SegmentTiming timing) {
-        LengthMatch match = timing.lengthMatch(ledgerMs);
-        long videoMs = SegmentTiming.roundHalfUp(BigInteger.valueOf(timing.videoLengthTicks()).multiply(
-                BigInteger.valueOf(1_000)), BigInteger.valueOf(timing.videoTimescale()));
-        long streamMs = SegmentTiming.roundHalfUp(BigInteger.valueOf(timing.streamDurationUs()),
-                BigInteger.valueOf(1_000));
+        LengthMatch match;
+        long videoMs;
+        long streamMs;
+        try {
+            match = timing.lengthMatch(ledgerMs);
+            videoMs = SegmentTiming.roundHalfUp(BigInteger.valueOf(timing.videoLengthTicks()).multiply(
+                    BigInteger.valueOf(1_000)), BigInteger.valueOf(timing.videoTimescale()));
+            streamMs = SegmentTiming.roundHalfUp(BigInteger.valueOf(timing.streamDurationUs()),
+                    BigInteger.valueOf(1_000));
+        } catch (ArithmeticException e) {
+            // 대조 정수식이 넘치는 판독 — 그 조각은 다시 받아도 같다(sec M1)
+            throw mismatch("영상 조각 길이가 기록과 다르다");
+        }
         if (match == LengthMatch.NONE) {
             log.warn("render.source_length jobId={} seq={} ledgerMs={} videoMs={} streamMs={} matched={}", jobId, seq,
                     ledgerMs, videoMs, streamMs, match.label());
@@ -202,14 +228,13 @@ public class MediaProbe {
     }
 
     private static int streamIndex(JsonNode stream) {
-        return Math.toIntExact(integer(stream, "index"));
+        return smallInteger(stream, "index");
     }
 
     private static Map<Integer, List<JsonNode>> packetsByStream(JsonNode root) {
         Map<Integer, List<JsonNode>> byStream = new HashMap<>();
         for (JsonNode packet : root.path("packets")) {
-            byStream.computeIfAbsent(Math.toIntExact(integer(packet, "stream_index")), k -> new ArrayList<>())
-                    .add(packet);
+            byStream.computeIfAbsent(smallInteger(packet, "stream_index"), k -> new ArrayList<>()).add(packet);
         }
         return byStream;
     }
@@ -221,19 +246,21 @@ public class MediaProbe {
         if (!own.isEmpty()) {
             JsonNode last = own.getLast();
             firstPts = integer(own.getFirst(), "pts");
-            endPts = integer(last, "pts") + integer(last, "duration");
+            endPts = Math.addExact(integer(last, "pts"), integer(last, "duration"));
         }
         return new TrackRange(ordinal, tsA, firstPts, endPts, own.size(), streamIndex(stream),
                 text(stream, "codec_name"), parseIntOrZero(text(stream, "sample_rate")),
-                stream.path("channels").asInt(0), text(stream, "extradata_hash"));
+                smallIntegerOrZero(stream, "channels"), text(stream, "extradata_hash"));
     }
 
     private static int[] displaySize(JsonNode video) {
-        int width = video.path("width").asInt(0);
-        int height = video.path("height").asInt(0);
+        int width = smallIntegerOrZero(video, "width");
+        int height = smallIntegerOrZero(video, "height");
         int rotation = 0;
         for (JsonNode side : video.path("side_data_list")) {
-            rotation = side.path("rotation").asInt(rotation);
+            if (side.has("rotation")) {
+                rotation = smallInteger(side, "rotation");
+            }
         }
         return Math.abs(rotation) % 180 == 90 ? new int[] {height, width} : new int[] {width, height};
     }
@@ -257,18 +284,36 @@ public class MediaProbe {
         return den;
     }
 
+    /**
+     * 정수 칸(long). {@code isIntegralNumber()} 만 보고 {@code asLong()} 을 부르면 범위 밖 값이 잘리거나 Jackson 예외로 새어
+     * 일시 실패(재시도)가 된다 — 그래서 long 에 정확히 담기는지까지 본다. 확인은 {@code job.JsonIntegers} 와 같다(media 쪽 사본).
+     */
     private static long integer(JsonNode node, String field) {
         JsonNode value = node.get(field);
-        if (value == null || !value.isIntegralNumber()) {
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()) {
             throw mismatch("영상 조각의 시각을 읽지 못했다");
         }
         return value.asLong();
     }
 
-    /** ffprobe 의 초 문자열(소수 6자리)을 µs 정수로. 실수를 거치지 않는다. */
+    /** 정수 칸(int — 스트림 번호 · 회전). 있어야 하고 int 에 정확히 담겨야 한다. */
+    private static int smallInteger(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToInt()) {
+            throw mismatch("영상 조각의 스트림 정보를 읽지 못했다");
+        }
+        return value.asInt();
+    }
+
+    /** 없으면 0 인 정수 칸(int — 화면 크기 · 채널 수). 있는데 int 에 담기지 않으면 판독 꼴이 어긋난 것이다. */
+    private static int smallIntegerOrZero(JsonNode node, String field) {
+        return node.has(field) ? smallInteger(node, field) : 0;
+    }
+
+    /** ffprobe 의 초 문자열(소수 6자리)을 µs 정수로. 실수를 거치지 않는다. 꼴은 {@link #SECONDS} 만 받는다. */
     private static long micros(JsonNode node, String field) {
         String value = text(node, field);
-        if (value == null) {
+        if (value == null || !SECONDS.matcher(value).matches()) {
             throw mismatch("영상 조각의 길이를 읽지 못했다");
         }
         try {

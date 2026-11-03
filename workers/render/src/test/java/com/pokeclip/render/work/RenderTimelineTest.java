@@ -7,6 +7,7 @@ import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.media.SegmentTiming;
 import com.pokeclip.render.work.RenderTimeline.Placement;
 import com.pokeclip.render.work.RenderTimeline.VideoCut;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -288,6 +289,11 @@ class RenderTimelineTest {
         assertThat(t.lengthUs()).isEqualTo(180_000_000);
         assertThat(t.lengthCapped()).isTrue();
         assertThat(t.notes()).extracting(RenderTimeline.Note::event).contains("render.out_retreated");
+        // B 의 x′ ≺ 100,000 프레임(33,366.67 · 66,700µs — 100,033.33 은 넘음) 2장이 물림으로 빠졌다(물림은 out_retreated
+        // 몫이라 droppedSeqs 에는 없다)
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.end_owned")).singleElement()
+                .satisfies(n -> assertThat(n.fields())
+                        .isEqualTo("endUs=180000000 droppedFrames=2 droppedSeqs=[] capped=true"));
     }
 
     // ── 실패 ──────────────────────────────────────────────────────────
@@ -320,7 +326,78 @@ class RenderTimelineTest {
                         f -> assertThat(f.code()).isEqualTo(ErrorCode.SOURCE_MISSING));
     }
 
+    /**
+     * 틱 정수식이 long 을 넘는 판독(c = 10¹³틱 → 2·10⁶·PTS 넘침). 다시 받아도 같은 조각이라 일시 실패(재시도)가 아니라
+     * 종결이다(sec M1).
+     */
+    @Test
+    void 시각_계산이_long_을_넘는_조각이면_SOURCE_MISMATCH_종결() {
+        SegmentTiming huge = timing(grid(10_000_000_000_000L, FRAME, 4), 12_000, track(2_400, 10));
+
+        assertPermanentMismatch(() -> RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(10, 0), end(10, 100_000), List.of(10L)),
+                List.of(media(10, false)), Map.of(10L, huge), TRACK0));
+    }
+
+    /**
+     * 이음 불변식이 깨지는 판독: A 의 PTS 가 V(2틱)보다 훨씬 넓게 퍼졌다(9000 · 39000). B 는 J 라 A 프레임 둘이 다 남고
+     * (e − a = 30001) R_B − R_A = 2 라 {@code R_{j+1} − R_j ≥ e_j − a_j} 가 깨진다. 조각 꼴 탓이라 종결이다(sec M1).
+     */
+    @Test
+    void 이음_불변식이_깨지는_조각이면_SOURCE_MISMATCH_종결() {
+        SegmentTiming spread = timing(new long[] {9_000, 39_000}, 2, track(2_400, 10));
+
+        assertPermanentMismatch(() -> RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(2, 400_000), List.of(1L, 2L)),
+                List.of(media(1, false), media(2, true)), Map.of(1L, spread, 2L, standard(4)), TRACK0));
+    }
+
+    // ── 결과 끝 소유 신호(설계 15절 render.end_owned) ─────────────────────
+
+    /**
+     * 위 180초 사례의 신호. 끝 소유 앞에 남던 프레임 = A 5415 + B 3(x′ ≺ 100,000) = 5418 · 뒤 = A 5400(end_pts 16,206,001)
+     * → droppedFrames 18 · B 는 결과 시작이 끝 이상이라 droppedSeqs [2] · endUs = lengthUs.
+     */
+    @Test
+    void 결과_끝_소유_신호는_끝_µs_빠진_프레임_수_빠진_조각을_싣는다() {
+        RenderTimeline t = RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(2, 100_000), List.of(1L, 2L)),
+                List.of(media(1, false), media(2, true), capture(4)),
+                Map.of(1L, standard(5_415), 2L, standard(4), 4L, standard(4)), TRACK0);
+
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.end_owned")).singleElement()
+                .satisfies(n -> assertThat(n.fields())
+                        .isEqualTo("endUs=180000000 droppedFrames=18 droppedSeqs=[2] capped=true"));
+    }
+
+    /** 끝이 앞 조각 m 안 사례: 조각은 안 빠지고(B 소리만) 프레임만 빠진다 — A 1장 · B 3장. */
+    @Test
+    void 조각이_안_빠져도_프레임이_빠지면_결과_끝_소유_신호를_남긴다() {
+        RenderTimeline t = RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(2, 100_000), List.of(1L, 2L)),
+                List.of(media(1, false), media(2, true)), Map.of(1L, standard(5_401), 2L, standard(4)), TRACK0);
+
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.end_owned")).singleElement()
+                .satisfies(n -> assertThat(n.fields())
+                        .isEqualTo("endUs=180000000 droppedFrames=4 droppedSeqs=[] capped=true"));
+    }
+
+    /** 끝이 out 조각 안에서 끝나면 끝 소유가 더 빼는 프레임이 없다 — 신호도 없다. */
+    @Test
+    void 끝_소유가_뺀_것이_없으면_결과_끝_소유_신호가_없다() {
+        RenderTimeline t = single(OffsetOrigin.VIDEO_START, 33_333, end(10, 100_000));
+
+        assertThat(t.notes()).extracting(RenderTimeline.Note::event).doesNotContain("render.end_owned");
+    }
+
     // ── 도우미 ────────────────────────────────────────────────────────
+
+    private static void assertPermanentMismatch(ThrowingCallable call) {
+        assertThatThrownBy(call).isInstanceOfSatisfying(RenderFailure.class, f -> {
+            assertThat(f.code()).isEqualTo(ErrorCode.SOURCE_MISMATCH);
+            assertThat(f.retryable()).isFalse();
+        });
+    }
 
     private static RenderTimeline single(OffsetOrigin origin, long inUs, EndBoundary out) {
         return RenderTimeline.of(plan(origin, at(10, inUs), out, List.of(10L)), List.of(media(10, false)),

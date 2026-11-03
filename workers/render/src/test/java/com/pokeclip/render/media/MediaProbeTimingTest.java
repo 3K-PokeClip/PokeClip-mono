@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.math.BigInteger;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -229,6 +230,139 @@ class MediaProbeTimingTest {
         packet(root, 0, 0, 0, 0);
 
         assertMismatch(root);
+    }
+
+    // ── 범위 밖 값(sec M1 · L3) — 방송자가 정할 수 있는 값이라 잘리거나 일시 실패로 새지 않고 종결이다 ──
+
+    @Test
+    void 패킷_시각이_long_범위를_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("packets").get(5)).put("pts", BigInteger.ONE.shiftLeft(64));
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 스트림_번호가_int_범위를_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("streams").get(1)).put("index", 1L << 32);
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 패킷_스트림_번호가_int_범위를_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("packets").get(5)).put("stream_index", 1L << 32);
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 영상_길이_V_가_long_을_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        lastVideoPacket((ArrayNode) root.get("packets")).put("dts", Long.MAX_VALUE - 1_000);
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 패킷_길이_합이_long_을_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("packets").get(0)).put("duration", Long.MAX_VALUE);
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 소리_끝_PTS_가_long_을_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ArrayNode packets = (ArrayNode) root.get("packets");
+        ObjectNode lastAudio = null;
+        for (int i = 0; i < packets.size(); i++) {
+            if (packets.get(i).get("stream_index").asInt() == 1) {
+                lastAudio = (ObjectNode) packets.get(i);
+            }
+        }
+        lastAudio.put("pts", Long.MAX_VALUE - 10);
+
+        assertMismatch(root);
+    }
+
+    /** 시간 단위 1/1 · D0 = 10¹³틱 → 파일 머리 µs = 10¹⁹ 이 long 을 넘는다(판독 안 큰 정수 계산의 끝 변환). */
+    @Test
+    void 파일_머리_µs_가_long_을_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = root("0.000000");
+        video(root, 0, "1/1", "0.000000", "2.000000");
+        packet(root, 0, 10_000_000_000_000L, 10_000_000_000_000L, 1);
+        packet(root, 0, 10_000_000_000_001L, 10_000_000_000_001L, 1);
+
+        assertMismatch(root);
+    }
+
+    /** 시간 단위 1/1 · V = 10¹⁶ + 1틱 → 길이 대조의 V × 1000 이 long 을 넘는다. 다시 받아도 같은 조각이라 종결이다. */
+    @Test
+    void 길이_대조가_long_을_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = root("0.000000");
+        video(root, 0, "1/1", "0.000000", "2.000000");
+        packet(root, 0, 0, 0, 1);
+        packet(root, 0, 10_000_000_000_000_000L, 10_000_000_000_000_000L, 1);
+        SegmentTiming t = MediaProbe.parseTiming(root);
+
+        assertThatThrownBy(() -> MediaProbe.requireLength("job", 1, 4_000, t))
+                .isInstanceOfSatisfying(RenderFailure.class, f -> {
+                    assertThat(f.code()).isEqualTo(ErrorCode.SOURCE_MISMATCH);
+                    assertThat(f.retryable()).isFalse();
+                });
+    }
+
+    @Test
+    void 화면_크기가_int_범위를_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("streams").get(0)).put("width", 1L << 32);
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 소리_채널_수가_int_범위를_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("streams").get(1)).put("channels", 1L << 32);
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 회전값이_int_범위를_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("streams").get(0)).putArray("side_data_list").addObject().put("rotation", 1L << 32);
+
+        assertMismatch(root);
+    }
+
+    /** ffprobe 는 초를 소수 꼴({@code %f})로만 찍는다. 지수 표기는 판독 꼴이 아니다(거대 지수는 큰 수 계산으로 번진다). */
+    @Test
+    void 초_문자열이_지수_표기면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("streams").get(0)).put("duration", "4.221322E0");
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 초_문자열의_정수부가_12자리를_넘으면_SOURCE_MISMATCH() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("streams").get(0)).put("duration", "1234567890123.000000");
+
+        assertMismatch(root);
+    }
+
+    @Test
+    void 음수_초_문자열은_µs_로_읽는다() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("format")).put("start_time", "-0.021000");
+
+        assertThat(MediaProbe.parseTiming(root).formatStartUs()).isEqualTo(-21_000);
     }
 
     @Test

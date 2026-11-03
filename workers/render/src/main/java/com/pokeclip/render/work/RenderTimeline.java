@@ -94,12 +94,19 @@ public final class RenderTimeline {
      * @param sources  주문서 {@code sourceKeys} 그대로(역할 · J 표지)
      * @param timings  seq → 판독. 위 입력 약속
      * @param trackIds 고른 트랙 번호(레시피 순서)
-     * @throws RenderFailure {@code SOURCE_MISMATCH}(timescale 다름 · 영상 패킷 없음 · 파일 머리가 영상 뒤) ·
-     *                       {@code SOURCE_MISSING}(고른 트랙 없음) · {@code SOURCE_RANGE}(자를 프레임 없음)
+     * @throws RenderFailure {@code SOURCE_MISMATCH}(timescale 다름 · 영상 패킷 없음 · 파일 머리가 영상 뒤 · 판독 값이 정수식을
+     *                       넘김 · 이음 불변식이 깨짐) · {@code SOURCE_MISSING}(고른 트랙 없음) · {@code SOURCE_RANGE}(자를
+     *                       프레임 없음)
      */
     public static RenderTimeline of(RenderPlan plan, List<SourceSegment> sources, Map<Long, SegmentTiming> timings,
                                     List<Integer> trackIds) {
-        return new RenderTimeline(new Layout(plan, sources, timings, trackIds).build());
+        try {
+            return new RenderTimeline(new Layout(plan, sources, timings, trackIds).build());
+        } catch (ArithmeticException | IllegalStateException e) {
+            // 산식의 입력은 주문서 검사를 지난 계획과 조각 판독뿐이다. 넘침(…Exact)이나 이음 불변식 깨짐은 그 조각 꼴 탓이라
+            // 다시 받아도 같다 — 일시 실패(재시도)로 새지 않게 종결로 바꾼다(sec M1).
+            throw new RenderFailure(ErrorCode.SOURCE_MISMATCH, "영상 조각 시각으로 결과를 짜지 못했다", false, e);
+        }
     }
 
     public List<VideoCut> videoCuts() {
@@ -435,9 +442,11 @@ public final class RenderTimeline {
         // ── 결과 끝 소유(7.4 1–4) ──
 
         private void ownEnd() {
+            int framesBefore = keptFrames(false);
+            List<Long> droppedSeqs = new ArrayList<>();
             setEnd();
             while (true) {
-                dropLateSegments();
+                droppedSeqs.addAll(dropLateSegments());
                 Seg last = order.getLast();
                 if (order.size() == 1 || !kept(last, true).isEmpty() || last.joins()) {
                     break;
@@ -448,6 +457,30 @@ public final class RenderTimeline {
             if (kept(order.getFirst(), true).isEmpty()) {
                 throw RenderFailure.permanent(ErrorCode.SOURCE_RANGE, "자를 프레임이 없다");
             }
+            noteEndOwned(framesBefore - keptFrames(true), droppedSeqs);
+        }
+
+        /** 지금 순서에서 남는 프레임 수. {@code withEnd} 면 결과 끝 소유까지 건다. */
+        private int keptFrames(boolean withEnd) {
+            int n = 0;
+            for (Seg s : order) {
+                n += kept(s, withEnd).size();
+            }
+            return n;
+        }
+
+        /**
+         * {@code render.end_owned}(설계 15절) — 끝 소유가 뭔가를 뺐을 때만 한 줄. {@code endUs} = 확정한 끝(= lengthUs) ·
+         * {@code droppedFrames} = 끝 소유 앞에 남던 프레임 수 − 뒤에 남은 수(빠진 조각 · 끝 뒤 프레임 · 물림으로 빠진 조각의
+         * 프레임) · {@code droppedSeqs} = 결과 시작이 끝 이상이라 뺀 조각(물림은 {@code render.out_retreated} 몫).
+         */
+        private void noteEndOwned(int droppedFrames, List<Long> droppedSeqs) {
+            if (droppedFrames <= 0 && droppedSeqs.isEmpty()) {
+                return;
+            }
+            long endUs = roundDiv(Math.addExact(Math.multiplyExact(b, MICROS), Math.multiplyExact(x, ts)), ts);
+            notes.add(new Note("render.end_owned", "endUs=" + endUs + " droppedFrames=" + droppedFrames
+                    + " droppedSeqs=" + droppedSeqs + " capped=" + capped));
         }
 
         /** 끝을 「기준 틱 b + µs 오프셋 x」 로 적고 180초를 넘으면 상한으로 바꾼다(7.4 1 · 2 · 물린 뒤 재상한). */
@@ -470,8 +503,8 @@ public final class RenderTimeline {
             }
         }
 
-        /** 결과 시작(소리가 처음 드는 자리)이 끝 이상인 조각을 뺀다(7.4 4). 첫 조각은 남긴다. */
-        private void dropLateSegments() {
+        /** 결과 시작(소리가 처음 드는 자리)이 끝 이상인 조각을 뺀다(7.4 4). 첫 조각은 남긴다. 뺀 조각 seq 를 돌려준다. */
+        private List<Long> dropLateSegments() {
             long endScaled = Math.addExact(Math.multiplyExact(TWO_MICROS, b), Math.multiplyExact(2 * x, ts));
             List<Seg> late = new ArrayList<>();
             for (int i = 1; i < order.size(); i++) {
@@ -480,14 +513,13 @@ public final class RenderTimeline {
                 }
             }
             if (late.isEmpty()) {
-                return;
+                return List.of();
             }
             order.removeAll(late);
-            notes.add(new Note("render.end_owned", "droppedSeqs=" + late.stream().map(Seg::seq).toList()
-                    + " capped=" + capped));
             if (late.contains(origOut) && captureLost == null) {
                 captureLost = capped ? "capped" : "end_owned";
             }
+            return late.stream().map(Seg::seq).toList();
         }
 
         /** 2·10⁶ 배 결과 시작. J 이음 조각은 파일 머리 자리(Δ + D0 − m), 묶음 머리는 영상 첫 DTS 자리. */
@@ -673,8 +705,61 @@ public final class RenderTimeline {
                     resultStart, resultEnd);
             l.notes.add(new Note("render.audio_run", "run=" + gi + " seqs=" + run.seqs() + " prime=" + run.primeSeq()
                     + " capture=" + run.captureSeq() + " fromSample=" + run.fromSample() + " toSample="
-                    + run.toSample() + " resultStartSample=" + resultStart));
+                    + run.toSample() + " frontSilence="
+                    + tracks.stream().map(AudioRun.TrackStart::frontSilenceSamples).toList()
+                    + " resultStartSample=" + resultStart));
+            notePads(run, files, offsetUs);
             return run;
+        }
+
+        /**
+         * {@code render.audio_pad}(설계 15절 · DEBUG) — 고른 트랙마다 앞 무음({@code adelay})과 끝 무음({@code apad}). 끝 무음 =
+         * 묶음 길이 − (흐름 안 트랙 소리 끝과 자를 구간 끝 중 앞선 것 − 자를 구간 시작)이다. 무음 대체 트랙은
+         * {@code render.track_silent} 가 이미 말하고, 둘 다 1ms 미만이면 줄을 내지 않는다(묶음 · 트랙마다 쌓이지 않게).
+         */
+        private void notePads(AudioRun run, List<SegmentTiming> files, long[] offsetUs) {
+            for (AudioRun.TrackStart track : run.tracks()) {
+                if (track.silent()) {
+                    continue;
+                }
+                int li = lastWithPackets(files, track.trackId());
+                SegmentTiming f = files.get(li);
+                long soundEnd = flowSample(f, track.trackId(), offsetUs[li], f.audio().get(track.trackId()).endPts());
+                long covered = Math.min(run.toSample(), soundEnd) - run.fromSample();
+                long back = Math.clamp(run.lengthSamples() - covered, 0, Math.max(run.lengthSamples(), 0));
+                long frontMs = samplesToMs(track.frontSilenceSamples());
+                long backMs = samplesToMs(back);
+                if (frontMs > 0 || backMs > 0) {
+                    l.notes.add(new Note("render.audio_pad", "run=" + run.index() + " track=" + track.trackId()
+                            + " frontMs=" + frontMs + " backMs=" + backMs));
+                }
+            }
+        }
+
+        private static int lastWithPackets(List<SegmentTiming> files, int track) {
+            for (int i = files.size() - 1; i >= 0; i--) {
+                SegmentTiming f = files.get(i);
+                if (track < f.audio().size() && f.audio().get(track).packets() > 0) {
+                    return i;
+                }
+            }
+            throw new IllegalStateException("트랙 " + track + " 패킷이 묶음에 없다");
+        }
+
+        /** 파일 f 의 소리 PTS 가 흐름에 놓이는 자리(48kHz 표본 · 반올림) — {@code S_f + pts/T − st_f}. */
+        private static long flowSample(SegmentTiming f, int track, long offsetUs, long pts) {
+            BigInteger tb = BigInteger.valueOf(f.audio().get(track).timescale());
+            BigInteger micros = BigInteger.valueOf(MICROS);
+            BigInteger num = BigInteger.valueOf(offsetUs - f.formatStartUs()).multiply(tb)
+                    .add(BigInteger.valueOf(pts).multiply(micros)).multiply(BigInteger.valueOf(OUTPUT_RATE));
+            BigInteger den = tb.multiply(micros);
+            BigInteger[] qr = num.shiftLeft(1).add(den).divideAndRemainder(den.shiftLeft(1));
+            return (qr[1].signum() < 0 ? qr[0].subtract(BigInteger.ONE) : qr[0]).longValueExact();
+        }
+
+        /** 표본 → ms(반올림 · 표본 ≥ 0). */
+        private static long samplesToMs(long samples) {
+            return Math.floorDiv(Math.addExact(Math.multiplyExact(samples, 2_000), OUTPUT_RATE), 2 * OUTPUT_RATE);
         }
 
         /** 흐름 안 파일 자리(µs): 누적 정확값 S(간격 = σ_i + V_i − σ_{i+1})를 µs 로 반올림(concat demuxer 오프셋). */

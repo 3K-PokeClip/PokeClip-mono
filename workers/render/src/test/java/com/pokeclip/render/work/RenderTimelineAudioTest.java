@@ -77,6 +77,44 @@ class RenderTimelineAudioTest {
                         List.of(new TrackStart(0, false, 0), new TrackStart(1, false, 0)), 0, 4_800),
                 new AudioRun(1, null, List.of(3L), null, List.of(), 2_400, 5_600,
                         List.of(new TrackStart(0, false, 0), new TrackStart(1, false, 480)), 4_800, 8_000));
+        // 설계 15절 render.audio_run 의 frontSilence 칸 = 고른 트랙 순서의 앞 무음 표본
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.audio_run"))
+                .extracting(RenderTimeline.Note::fields)
+                .containsExactly(
+                        "run=0 seqs=[1] prime=null capture=null fromSample=2400 toSample=7200 frontSilence=[0, 0]"
+                                + " resultStartSample=0",
+                        "run=1 seqs=[3] prime=null capture=null fromSample=2400 toSample=5600 frontSilence=[0, 480]"
+                                + " resultStartSample=4800");
+        // render.audio_pad: 트랙 1 의 C 앞 무음 480표본 = 10ms · 소리는 C 끝(흐름 0.26초)까지 있어 끝 무음 0
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.audio_pad"))
+                .extracting(RenderTimeline.Note::fields)
+                .containsExactly("run=1 track=1 frontMs=10 backMs=0");
+    }
+
+    /**
+     * 트랙 소리가 자를 구간 끝보다 먼저 끝나면 그 차가 끝 무음({@code apad})이다. 단일 조각 [4000, 7200) · 트랙 끝 PTS 8400
+     * → 흐름 0.175 − 0.05 = 0.125초 = 6000표본 → 소리 2000표본 · 묶음 길이 3200 → 끝 무음 1200표본 = 25ms.
+     */
+    @Test
+    void 트랙_소리가_자를_구간보다_먼저_끝나면_끝_무음을_신호로_남긴다() {
+        SegmentTiming early = timing(grid(0, FRAME, 4), 12_000, track(2_400, 8_400, 10));
+        RenderTimeline t = RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(10, 33_333), end(10, 100_000), List.of(10L)),
+                List.of(media(10, false)), Map.of(10L, early), List.of(0));
+
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.audio_pad"))
+                .extracting(RenderTimeline.Note::fields)
+                .containsExactly("run=0 track=0 frontMs=0 backMs=25");
+    }
+
+    /** 앞 · 끝 무음이 모두 1ms 미만이면 신호를 내지 않는다(묶음 · 트랙마다 줄이 쌓이지 않게). */
+    @Test
+    void 앞_끝_무음이_없으면_무음_신호가_없다() {
+        RenderTimeline t = RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(10, 33_333), end(10, 100_000), List.of(10L)),
+                List.of(media(10, false)), Map.of(10L, standard(4)), List.of(0));
+
+        assertThat(t.notes()).extracting(RenderTimeline.Note::event).doesNotContain("render.audio_pad");
     }
 
     /**
