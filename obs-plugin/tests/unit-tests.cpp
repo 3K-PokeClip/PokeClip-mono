@@ -1888,7 +1888,7 @@ TEST(infer_server_env_from_files_without_key)
 	c.ingestHost = "media-dev.pokeclip.com";
 	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
 	// 0.2.1 이전 운영 짝(media.pokeclip.com)은 운영 흔적이라 운영으로 본다. 배포 빌드는 fallback으로 봐도 결과가
-	// 같고, 개발 빌드에서 운영을 뜻한 값을 dev로 바꾸지 않는다(기대값을 바꾸지 않아 diff도 작다)
+	// 같고, 개발 빌드에서 운영을 뜻한 값을 dev로 바꾸지 않는다
 	c.ingestHost = "media.pokeclip.com";
 	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Prod);
 	c.ingestHost = "127.0.0.1";
