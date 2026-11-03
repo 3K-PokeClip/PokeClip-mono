@@ -15,7 +15,7 @@
 | `minio-certs` | 로컬 CA · `minio` SAN 서버 인증서를 만든다(있으면 건너뜀) | 없음 · 한 번 돌고 끝 |
 | `minio` | S3 API(https) · 데이터 볼륨 | 망 안 `https://minio:9000` 만 |
 | `minio-init` | 버킷 `pokeclip-rewind-local` · 익명 정책(`dvr/*` · `vod/*` GetObject 만) | 없음 · 한 번 돌고 끝 |
-| `dvr-edge` | `/dvr/` 와 `/vod/` 의 VOD 문서만 MinIO 로 넘기는 nginx · CORS · 목록 거부 | 호스트 `127.0.0.1:28480` |
+| `dvr-edge` | `/dvr/` 경로와 `/vod/` 의 VOD 문서만 MinIO 로 넘기는 nginx · CORS · 목록 거부 | 호스트 `127.0.0.1:28480` |
 | `minio-check` | 공통 수용 시험(아래) — 평소 up 에는 안 뜬다 | 프로필 `rewind-minio-check` |
 
 사이드카에는 `S3_*` · `REWIND_PUBLIC_BASE_URL` · `SSL_CERT_DIR` 를 덧붙인다. 사이드카와
