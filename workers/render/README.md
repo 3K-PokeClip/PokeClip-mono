@@ -147,29 +147,32 @@ cd workers/render && ./gradlew test
 - `src/test/resources/segments/`는 **로컬 MediaMTX에 실제로 송출해 받은 녹화 조각 셋**이다(영상 640×360 30fps + 소리 6트랙).
 - 🔴 **홈브루 ffmpeg는 libass가 없어 자막 번인을 못 한다.** 그 기계에서는 번인 시험이 CC만 켜고 돈다.
   번인까지 재려면 배포 이미지와 같은 ffmpeg로 돌린다. JDK 이미지는 배포 이미지 기반(21-jre)과 같은 Ubuntu
-  26.04 판을 다이제스트로 박고, ffmpeg와 같은 소스의 라이브러리 7개까지 `Dockerfile`의 `FFMPEG_VERSION` 판으로
-  깐다. 시험 앞에 판 첫 줄과 꾸러미 판 8개를 찍는다:
+  26.04 판을 다이제스트로 박고, `Dockerfile`의 `FFMPEG_PACKAGES`(ffmpeg와 같은 소스의 라이브러리 7개 포함)를
+  `FFMPEG_VERSION` 판으로 깐다. 시험 앞에 판 첫 줄과 꾸러미 판 8개를 찍는다:
 
 ```bash
 v=$(sed -n 's/^ARG FFMPEG_VERSION=//p' Dockerfile)
-docker run --rm -e FFMPEG_VERSION="$v" -v "$PWD":/src -w /src \
+pkgs=$(sed -n 's/^ARG FFMPEG_PACKAGES="\(.*\)"$/\1/p' Dockerfile)
+docker run --rm -e FFMPEG_VERSION="$v" -e FFMPEG_PACKAGES="$pkgs" -v "$PWD":/src -w /src \
   eclipse-temurin:21-jdk@sha256:ebfbb18d11ff163ee83b21258acf12248af48d22a0fdfdc68fa1a1516c05976a bash -c '
     set -e
-    pkgs="ffmpeg libavcodec62 libavdevice62 libavfilter11 libavformat62 libavutil60 libswresample6 libswscale9"
     apt-get update -qq
-    apt-get install -y -qq --no-install-recommends $(for p in $pkgs; do echo "$p=$FFMPEG_VERSION"; done) fonts-noto-cjk >/dev/null
+    apt-get install -y -qq --no-install-recommends \
+      $(for p in $FFMPEG_PACKAGES; do echo "$p=$FFMPEG_VERSION"; done) fonts-noto-cjk >/dev/null
     ffmpeg -hide_banner -version | sed -n 1p
-    dpkg-query -W $pkgs
+    dpkg-query -W $FFMPEG_PACKAGES
     ./gradlew -q test --tests "*ClipRendererTest"'
 ```
 
 - 판을 올릴 때 같이 고칠 곳: `Dockerfile`의 `ARG FFMPEG_VERSION`(workers-ci · 위 명령이 이 줄을 읽는다) ·
-  `RenderImagePinTest`의 판 글자. 라이브러리 이름(so 판)이 바뀌면 `Dockerfile` · workers-ci · 위 명령 ·
-  `RenderImagePinTest`의 꾸러미 목록도. 기반 이미지 다이제스트를 옮기면 위 JDK 다이제스트도 같은 Ubuntu 판으로.
+  `RenderImagePinTest`의 판 글자. 라이브러리 이름(so 판)이 바뀌면 `Dockerfile`의 `ARG FFMPEG_PACKAGES`와
+  `RenderImagePinTest`의 꾸러미 목록. 기반 이미지 다이제스트를 옮기면 위 JDK 다이제스트도 같은 Ubuntu 판으로.
 
-**PR에서는 `workers-ci`가 돈다**(`.github/workflows/workers-ci.yml`). 배포 이미지와 같은 꾸러미(ffmpeg ·
-fonts-noto-cjk)를 깔고, 시험 전에 ffmpeg에 `subtitles` 필터(libass)가 없으면 실패한다(없으면 번인 시험이
-CC만 켜고 초록이 된다). 시험 뒤 건너뛴 시험이 하나라도 있으면 실패한다.
+**PR에서는 `workers-ci`가 돈다**(`.github/workflows/workers-ci.yml`). 렌더 잡은 `Dockerfile`의
+`FFMPEG_PACKAGES` 꾸러미 8개를 `FFMPEG_VERSION` 판으로, 한글 글꼴(fonts-noto-cjk)과 함께 깐다. 깐 뒤 이미지
+빌드와 같은 검사로 꾸러미 판을 대조하고, PATH의 ffmpeg가 찍는 판 첫 줄도 그 판인지 본다. 시험 전에 ffmpeg에
+`subtitles` 필터(libass)가 없으면 실패한다(없으면 번인 시험이 CC만 켜고 초록이 된다). 시험 뒤 건너뛴 시험이
+하나라도 있으면 실패한다.
 
 **이미지**: 빌드 컨텍스트는 이 폴더다. ffmpeg(libass·libx264)와 한글 글꼴이 들어간다.
 

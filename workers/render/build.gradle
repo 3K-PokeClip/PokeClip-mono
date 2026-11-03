@@ -47,4 +47,11 @@ tasks.named('test') {
     inputs.file('../../services/ledger-timeline/src/test/resources/ledger-timeline-cases.json')
             .withPropertyName('ledgerTimelineCases')
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // RenderImagePinTest가 이 둘을 글자로 읽는다(ffmpeg 판 고정). 같은 까닭으로 입력에 넣는다.
+    inputs.file('Dockerfile')
+            .withPropertyName('renderDockerfile')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file('../../.github/workflows/workers-ci.yml')
+            .withPropertyName('workersCi')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
