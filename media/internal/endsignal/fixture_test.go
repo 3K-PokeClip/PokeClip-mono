@@ -98,7 +98,6 @@ type fixture struct {
 	mu      sync.Mutex
 	applied []session.IntentionalEnd
 	changed []string
-	posted  []session.RevokeIntent
 }
 
 // validVerdict 는 시험 벡터 passphrase 를 돌려주는 허락 판정이다.
@@ -130,11 +129,6 @@ func (f *fixture) testOptions() Options {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.changed = append(f.changed, streamID)
-		},
-		PostIntent: func(streamID, sessionID string) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			f.posted = append(f.posted, session.RevokeIntent{StreamID: streamID, SessionID: sessionID})
 		},
 		Now:            clock,
 		Log:            slog.New(slog.NewJSONHandler(f.log, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -207,12 +201,11 @@ func (f *fixture) postOK(token string) response {
 	return f.post(signalBody(token, 420, 1834000), "Bearer "+testBearer)
 }
 
-// snapshot 은 표지 · 해제 요청 · 적용 입력의 사본이다.
-func (f *fixture) snapshot() (changed []string, posted []session.RevokeIntent, applied []session.IntentionalEnd) {
+// snapshot 은 표지 · 적용 입력의 사본이다.
+func (f *fixture) snapshot() (changed []string, applied []session.IntentionalEnd) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string(nil), f.changed...), append([]session.RevokeIntent(nil), f.posted...),
-		append([]session.IntentionalEnd(nil), f.applied...)
+	return append([]string(nil), f.changed...), append([]session.IntentionalEnd(nil), f.applied...)
 }
 
 // lastEndSignalKeys 는 마지막 end_signal 줄의 키 집합이다 — 빈 값과 키 없음을 가른다(logLine 의 문자열 칸은 둘 다 "" 다).

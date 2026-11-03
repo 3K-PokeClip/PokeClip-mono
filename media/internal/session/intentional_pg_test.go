@@ -1,8 +1,9 @@
 package session
 
 // 의도적 종료 적용(4D — POK-196 M6-3a 커밋 ② · 설계 M6 2.3 · 3.3 · 3.4 · 9절 D10 · D12 · D53 · D55 · D69 · D73 · POK-525
-// 설계 r9.3 3-2 · E8)의 실 PG 시험. 함수 칸(CloseRound · EnqueueStarted)은 가짜로 끼워 「같은 트랜잭션에서 불렸는가」만 잰다 — 실제 회차
-// 닫힘 · 완결 평가는 M6-3b, started outbox 는 M6-8 몫이다(계획 4.R 「앞 몫 · 뒤 몫」).
+// 설계 r9.3 3-2 · E8)의 실 PG 시험. 함수 칸(CloseRound)은 가짜로 끼워 「같은 트랜잭션에서 불렸는가」만 잰다 — 실제 회차
+// 닫힘 · 완결 평가는 M6-3b 몫이다(계획 4.R 「앞 몫 · 뒤 몫」). started 칸 가짜(enqueueStarted)는 forwarded 뒤 레지스트리
+// 개시가 새 회차를 열 때 쓴다.
 
 import (
 	"context"
@@ -18,6 +19,7 @@ import (
 )
 
 // intentSlots 는 함수 칸 가짜다 — 부른 회차와, 부른 순간 그 회차의 남은 행이 모두 닫혔는지(같은 트랜잭션 안에서 읽음)를 적는다.
+// started 칸(enqueueStarted)은 레지스트리 Options 에 끼운다.
 type intentSlots struct {
 	mu          sync.Mutex
 	closed      []string
@@ -44,15 +46,17 @@ SELECT COALESCE(pg_catalog.bool_and(round_closed_at IS NOT NULL), false)
 			s.closedShut = append(s.closedShut, shut)
 			return nil
 		},
-		EnqueueStarted: func(_ context.Context, _ pgx.Tx, round, ingestStreamID string, at time.Time) error {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			s.started = append(s.started, round)
-			s.startedFrom = append(s.startedFrom, ingestStreamID)
-			s.startedAt = append(s.startedAt, at)
-			return nil
-		},
 	}
+}
+
+// enqueueStarted 는 레지스트리 started 칸 가짜다(session.Options.EnqueueStarted 꼴).
+func (s *intentSlots) enqueueStarted(_ context.Context, _ pgx.Tx, round, ingestStreamID string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.started = append(s.started, round)
+	s.startedFrom = append(s.startedFrom, ingestStreamID)
+	s.startedAt = append(s.startedAt, at)
+	return nil
 }
 
 // stopAt 은 시험의 멈춘 시각(StoppedAt)이다 — 연결은 한 시간 전에 시작했다.
@@ -125,8 +129,8 @@ func TestApplyIntentionalEndSkipsWithoutWriting(t *testing.T) {
 					t.Errorf("미적용인데 %s 를 썼다: 표식 %v · 사유 %s", c.wantT, got.stopMarkedAt, strOf(got.endReason))
 				}
 			}
-			if len(slots.closed)+len(slots.started) != 0 {
-				t.Errorf("미적용인데 함수 칸을 불렀다: close %v · started %v", slots.closed, slots.started)
+			if len(slots.closed) != 0 {
+				t.Errorf("미적용인데 함수 칸을 불렀다: close %v", slots.closed)
 			}
 		})
 	}
@@ -203,7 +207,7 @@ func TestApplyIntentionalEndUpgradesLatestEndedSession(t *testing.T) {
 
 			res := apply(t, pool, endAt("demo"), slots.options())
 
-			if res.Effect != effectUpgraded || res.SessionID != "S-T" || res.RoundID != "S-R" || res.RevokeSession != "" {
+			if res.Effect != effectUpgraded || res.SessionID != "S-T" || res.RoundID != "S-R" {
 				t.Fatalf("결과 = %+v, want upgraded · S-T · S-R", res)
 			}
 			got := roundOf(t, pool, "S-T")
@@ -214,8 +218,8 @@ func TestApplyIntentionalEndUpgradesLatestEndedSession(t *testing.T) {
 			if err := pool.QueryRow(context.Background(), `SELECT vod_state FROM stream_sessions WHERE session_id='S-T'`).Scan(&vodState); err != nil || vodState != vod {
 				t.Errorf("vod_state = (%q, %v), want %q 그대로", vodState, err, vod)
 			}
-			if len(slots.closed) != 1 || slots.closed[0] != "S-R" || len(slots.started) != 0 {
-				t.Errorf("함수 칸 close %v · started %v, want close [S-R] · started 없음", slots.closed, slots.started)
+			if len(slots.closed) != 1 || slots.closed[0] != "S-R" {
+				t.Errorf("함수 칸 close %v, want close [S-R]", slots.closed)
 			}
 		})
 	}
@@ -281,16 +285,16 @@ func TestApplyIntentionalEndForwardsMarkToLiveLatest(t *testing.T) {
 
 			res, before, after := applyTimed(t, pool, endAt("demo"), o)
 
-			if res.Effect != effectForwarded || res.SessionID != "S-T" || res.RoundID != "S-R" || res.RevokeSession != "" {
-				t.Fatalf("결과 = %+v, want forwarded · S-T · S-R · 해제 없음", res)
+			if res.Effect != effectForwarded || res.SessionID != "S-T" || res.RoundID != "S-R" {
+				t.Fatalf("결과 = %+v, want forwarded · S-T · S-R", res)
 			}
 			mark := requireArrivalMark(t, pool, "S-L", before, after)
 			if got := roundOf(t, pool, "S-L"); got.state != "live" || strOf(got.roundID) != "S-R" || got.endReason != nil {
 				t.Errorf("L = (%s, 회차 %s, 사유 %s), want (live, S-R, NULL) — forwarded 는 live 를 끝내지 않는다", got.state, strOf(got.roundID), strOf(got.endReason))
 			}
 			requireTUntouched(t, pool, "S-T", "offline")
-			if len(slots.closed)+len(slots.started) != 0 {
-				t.Errorf("live L 인데 함수 칸을 불렀다: close %v · started %v", slots.closed, slots.started)
+			if len(slots.closed) != 0 {
+				t.Errorf("live L 인데 함수 칸을 불렀다: close %v", slots.closed)
 			}
 			a := sig.attrs("intentional_end")
 			if a["effect"] != effectForwarded || a["latest"] != "S-L" || a["marked_at"] != mark {
@@ -329,8 +333,8 @@ func TestApplyIntentionalEndForwardsMarkToEndedLatestAndClosesRound(t *testing.T
 				t.Errorf("L = (%s, %s, 회차 %s, vod %s), want (%s, %s, S-R, %s) — 사유 · 동결은 그대로", got.state, strOf(got.endReason), strOf(got.roundID), vodOf(t, pool, "S-L"), c.state, c.reason, c.vod)
 			}
 			requireTUntouched(t, pool, "S-T", "offline")
-			if len(slots.closed) != 1 || slots.closed[0] != "S-R" || len(slots.started) != 0 {
-				t.Errorf("함수 칸 close %v · started %v, want close [S-R] · started 없음", slots.closed, slots.started)
+			if len(slots.closed) != 1 || slots.closed[0] != "S-R" {
+				t.Errorf("함수 칸 close %v, want close [S-R]", slots.closed)
 			}
 		})
 	}
@@ -364,7 +368,7 @@ func TestForwardedMarkOpensNewRoundFromNextSegment(t *testing.T) {
 			mark := requireArrivalMark(t, pool, "S-L", before, after)
 			slots := &intentSlots{}
 			r, _ := newRoundRegistry()
-			r.opt.EnqueueStarted = slots.options().EnqueueStarted
+			r.opt.EnqueueStarted = slots.enqueueStarted
 
 			opened := openOne(t, pool, r, Input{StreamID: "demo", Seq: 9, StartWallUTC: mark.Add(c.off), DurationMS: 4000, Op: OpenOrCurrent})
 
@@ -393,9 +397,9 @@ func TestForwardedMarkOpensNewRoundFromNextSegment(t *testing.T) {
 	}
 }
 
-// forwarded 는 계승 간선 · round_id 를 건드리지 않고 계승 해제를 요청하지 않는다 — 옮기는 세션이 없어 회차를 가로지르는
-// 간선이 생기지 않는다(설계 r9.3 3-2). L 이 끝난 T 를 계승 중이어도 L 에 표식만 건다.
-func TestForwardedLeavesInheritanceEdgeAndRequestsNoRevoke(t *testing.T) {
+// forwarded 는 계승 간선 · round_id 를 건드리지 않는다 — 옮기는 세션이 없어 회차를 가로지르는 간선이 생기지 않는다(설계
+// r9.3 3-2). L 이 끝난 T 를 계승 중이어도 L 에 표식만 건다.
+func TestForwardedLeavesInheritanceEdge(t *testing.T) {
 	pool := newTestPool(t)
 	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ending", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
 	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
@@ -403,8 +407,8 @@ func TestForwardedLeavesInheritanceEdgeAndRequestsNoRevoke(t *testing.T) {
 
 	res := apply(t, pool, endAt("demo"), (&intentSlots{}).options())
 
-	if res.Effect != effectForwarded || res.RevokeSession != "" {
-		t.Fatalf("결과 = %+v, want forwarded · RevokeSession 빈 값", res)
+	if res.Effect != effectForwarded {
+		t.Fatalf("결과 = %+v, want forwarded", res)
 	}
 	if got := roundOf(t, pool, "S-L"); strOf(got.roundID) != "S-R" || strOf(got.inherits) != "S-T" || got.stopMarkedAt == nil {
 		t.Errorf("L (round_id, 계승, 표식) = (%s, %s, %v), want (S-R, S-T, 표식)", strOf(got.roundID), strOf(got.inherits), got.stopMarkedAt)
@@ -697,9 +701,8 @@ func TestApplyIntentionalEndRejectsUnwiredOptions(t *testing.T) {
 	seedSegment(t, pool, "demo", "S-X", 1, stopAt.Add(-5*time.Second))
 	full := (&intentSlots{}).options()
 	for name, o := range map[string]IntentOptions{
-		"CloseRound_없음":     {ShortConn: full.ShortConn, Slack: full.Slack, EnqueueStarted: full.EnqueueStarted},
-		"EnqueueStarted_없음": {ShortConn: full.ShortConn, Slack: full.Slack, CloseRound: full.CloseRound},
-		"수치_없음":             {CloseRound: full.CloseRound, EnqueueStarted: full.EnqueueStarted},
+		"CloseRound_없음": {ShortConn: full.ShortConn, Slack: full.Slack},
+		"수치_없음":         {CloseRound: full.CloseRound},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ApplyIntentionalEnd(context.Background(), pool, endAt("demo"), o); err == nil {

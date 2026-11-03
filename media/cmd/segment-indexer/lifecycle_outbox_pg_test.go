@@ -165,7 +165,7 @@ func TestForwardedToEndedLatestEnqueuesROutboxD55(t *testing.T) {
 	seedOutboxSession(t, pool, "S-L", s, "ended", "offline", "S-R", "", "frozen", stop.Add(20*time.Second), time.Time{})
 	publishedStarted(t, pool, "S-R", s)
 	fa := finalizeAssembly{close: outboxClose, enqueue: newEndedEnqueuer(gate)}
-	o := newIntentOptions(slog.New(slog.DiscardHandler), fa.closeRound(), startedEnqueuer(gate))
+	o := newIntentOptions(slog.New(slog.DiscardHandler), fa.closeRound())
 
 	res, err := session.ApplyIntentionalEnd(context.Background(), pool,
 		session.IntentionalEnd{StreamID: s, StoppedAt: stop, ConnStartedAt: stop.Add(-time.Hour)}, o)
@@ -219,8 +219,9 @@ func TestRoundScanClosesEndedTailRoundAndEnqueuesD59(t *testing.T) {
 	}
 }
 
-// D61 — 늦은 round_split 뒤 A 를 계승하는 B 는 다른 회차다. 사슬 간선이 같은 round_id 만이라 A 사슬은 B 송출 끝을
-// 기다리지 않고 닫혀 phase 4 에 닿고, R ended 1행이다. 변이 = 간선 CTE 의 round_id 조건 제거 → A 가 닫히지 않아 FAIL.
+// D61 — POK-525 전 늦은 round_split 이 장부에 남긴 꼴: A 를 계승하는 B 가 다른 회차다. 사슬 간선이 같은 round_id
+// 만이라 A 사슬은 B 송출 끝을 기다리지 않고 닫혀 phase 4 에 닿고, R ended 1행이다. 변이 = 간선 CTE 의 round_id 조건
+// 제거 → A 가 닫히지 않아 FAIL.
 func TestChainAcrossRoundEdgeClosesAndEnqueuesRD61(t *testing.T) {
 	pool := newWireTestPool(t)
 	ctx := context.Background()

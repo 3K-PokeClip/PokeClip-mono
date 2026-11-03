@@ -94,7 +94,7 @@ type rewindLoop struct {
 	liveEndRetryAt time.Time
 
 	// fin 은 정산 몫이다(M6-3b — rewind_finalize.go). run 이 조립 밖에서 채워 발행 꺼짐 · 강등에서도 돈다. nil 이면 정산 ·
-	// 상태 전달 · 계승 해제를 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
+	// 상태 전달을 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
 	fin *finalizer
 }
 
@@ -162,11 +162,10 @@ type laneJob struct {
 type laneJobKind int
 
 const (
-	jobTick   laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
-	jobRenew                         // lazy 갱신(RenewFence)
-	jobLoad                          // 캐시 적재(LoadLedger)
-	jobRevoke                        // 4D round_split 의 계승 해제(RevokeInheritance — M6-3b)
-	jobSeal                          // L2′ 봉인(Endlist — M6-3b 커밋 ④b)
+	jobTick  laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
+	jobRenew                        // lazy 갱신(RenewFence)
+	jobLoad                         // 캐시 적재(LoadLedger)
+	jobSeal                         // L2′ 봉인(Endlist — M6-3b 커밋 ④b)
 )
 
 // holdTick 은 holdTicks case 의 되감기 몫이다 — 그 case 의 현재 시각 now 로 4.1 종료 전이를 돌리고, 발행 몫이 있으면 차례대로
@@ -179,7 +178,7 @@ const (
 // 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
 //
 // 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → endGapRuns(L3) → endStallSeals(L2′ —
-// 둘 다 스위치 켬일 때만) → 받은편지함 비우기(계승 해제 · 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5
+// 둘 다 스위치 켬일 때만) → 받은편지함 비우기(상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5
 // Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식 EndLive · L3 · L2′ 가 남긴 표지는 같은 틱의
 // 받은편지함 비우기에서 읽힌다. L2′ 의 봉인은 발행 몫의 사다리가 스트림 차선에 낸다(stall_seal.go).
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
@@ -244,8 +243,6 @@ func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.
 		r.finalStepDone(ctx, res, now)
 	case publish.KindPlayback:
 		r.playbackDone(ctx, res, rerun)
-	case publish.KindRevoke:
-		r.revokeDone(ctx, res, rerun, now)
 	case publish.KindSeal:
 		r.sealDone(ctx, res, now)
 	}

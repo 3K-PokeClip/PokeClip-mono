@@ -39,8 +39,6 @@ type IntentionalResult struct {
 	// Skip: no_session · conn_mismatch · short_conn · ambiguous · round_closed · contended
 	// · bad_time(연결 시작이 멈춘 시각보다 늦음 또는 멈춘 시각이 PG 시계 + Slack 보다 미래 — 수신부 범위 검사의 겹 방어)
 	Skip string
-	// RevokeSession 은 계승 해제 요청 칸이다. 요청을 만들던 round_split 이 없어져 늘 빈 값이다(칸 · 소비 경로는 뒤따라 지운다).
-	RevokeSession string
 
 	latest   string    // forwarded 의 회차 최신 L(신호 칸)
 	markedAt time.Time // forwarded 가 L 에 건 표식(신호 칸 — 이미 표식이 있었으면 그 값)
@@ -52,16 +50,13 @@ func (r IntentionalResult) Retryable() bool {
 	return r.Skip == skipContended
 }
 
-// IntentOptions 는 수치와 함수 칸이다. session 은 index · broadcast 를 임포트하지 않으므로 회차 닫힘 · 완결 평가와
-// started outbox 는 cmd 가 묶어 끼운다. 비어 있으면 적용 전에 오류다 — 조립(cmd)이 무동작 + WARN 기본값을 끼운다.
+// IntentOptions 는 수치와 함수 칸이다. session 은 index 를 임포트하지 않으므로 회차 닫힘 · 완결 평가는 cmd 가 묶어
+// 끼운다. 비어 있으면 적용 전에 오류다 — 조립(cmd)이 무동작 + WARN 기본값을 끼운다.
 type IntentOptions struct {
 	ShortConn, Slack time.Duration // 4초 · 8초(K8)
 	// CloseRound 는 회차 닫힘 조건 평가(이미 닫혔으면 건너뜀) + 완결 평가다. upgraded 와 L 이 끝난 forwarded 가 같은 tx
 	// 끝에서 부른다.
 	CloseRound func(ctx context.Context, tx pgx.Tx, round string) error
-	// EnqueueStarted 는 broadcast.EnqueueStarted 다. 지금 4D 효과는 회차를 열지 않아 부르지 않는다 — forwarded 뒤의 새
-	// 회차는 개시(레지스트리 Open)가 열고 그 started 를 넣는다.
-	EnqueueStarted func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error
 	// Log 는 intentional_end 신호를 받는다. nil 이면 slog.Default() 다.
 	Log *slog.Logger
 }
@@ -91,9 +86,8 @@ const membershipTries = 5
 var errMembershipContended = errors.New("session: 소속 행이 재확인 상한 안에 멈추지 않았다")
 
 // ApplyIntentionalEnd 는 판정과 효과를 한 트랜잭션에서 한다(3.4). 돌아오면 커밋된 뒤다. 부른 쪽은 Effect 가 비지
-// 않으면 PlaybackChanged(e.StreamID) 를, RevokeSession 이 비지 않으면 intents.Post(e.StreamID, RevokeSession) 를
-// 부른다. 캐시는 만지지 않는다. 미적용(잠금 경합 · 시한의 contended 포함)은 오류가 아니라 Skip 이다. contended 는
-// 커밋 전에 접히고 Retryable 이 참이다.
+// 않으면 PlaybackChanged(e.StreamID) 를 부른다. 캐시는 만지지 않는다. 미적용(잠금 경합 · 시한의 contended 포함)은
+// 오류가 아니라 Skip 이다. contended 는 커밋 전에 접히고 Retryable 이 참이다.
 func ApplyIntentionalEnd(ctx context.Context, pool *pgxpool.Pool, e IntentionalEnd, o IntentOptions) (IntentionalResult, error) {
 	if err := o.validate(e); err != nil {
 		return IntentionalResult{}, err
@@ -113,7 +107,7 @@ func ApplyIntentionalEnd(ctx context.Context, pool *pgxpool.Pool, e IntentionalE
 
 	res, err := applyIntent(tctx, tx, e, o)
 	if isContention(err) {
-		res.Effect, res.Skip, res.RevokeSession = "", skipContended, ""
+		res.Effect, res.Skip = "", skipContended
 		o.logResult(e, res)
 		return res, nil
 	}
@@ -131,7 +125,7 @@ func ApplyIntentionalEnd(ctx context.Context, pool *pgxpool.Pool, e IntentionalE
 
 // validate 는 적용 전 검사다 — 조립 결함과 입력 결함은 쓰기 전에 오류로 올린다.
 func (o IntentOptions) validate(e IntentionalEnd) error {
-	if o.CloseRound == nil || o.EnqueueStarted == nil {
+	if o.CloseRound == nil {
 		return errors.New("session: IntentOptions 함수 칸이 비었다 — 조립이 기본값(무동작 + WARN)을 끼워야 한다")
 	}
 	if o.ShortConn <= 0 || o.Slack <= 0 {
@@ -210,7 +204,7 @@ SELECT COALESCE(
 // lockSessionSQL 은 세션 행 하나의 소속 잠금이다 — 강도는 FOR NO KEY UPDATE(조각 INSERT 의 FK 잠금과 충돌하지 않음 · D71).
 const lockSessionSQL = `SELECT 1 FROM stream_sessions WHERE session_id = $1 FOR NO KEY UPDATE`
 
-// lockMembership 은 소속 행을 잡고 **새 문장으로 다시 고른다**(설계 3.3 분리 · 닫힘 쪽). 바뀌었으면 새 소속 행을 잡고
+// lockMembership 은 소속 행을 잡고 **새 문장으로 다시 고른다**(설계 3.3 닫힘 쪽). 바뀌었으면 새 소속 행을 잡고
 // 다시 본다. membershipTries 안에 멈추지 않으면 errMembershipContended 다. 세션이 없으면 "" 다.
 func lockMembership(ctx context.Context, tx pgx.Tx, streamID string) (string, error) {
 	locked := ""
@@ -270,7 +264,7 @@ func (o IntentOptions) logResult(e IntentionalEnd, res IntentionalResult) {
 	}
 	if res.Effect != "" {
 		log.Info("intentional_end", "stream_id", e.StreamID, "effect", res.Effect,
-			"round", res.RoundID, "session", res.SessionID, "revoke", res.RevokeSession)
+			"round", res.RoundID, "session", res.SessionID)
 		return
 	}
 	log.Warn("intentional_end", "stream_id", e.StreamID, "skip", res.Skip,

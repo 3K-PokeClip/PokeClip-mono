@@ -107,7 +107,7 @@ func TestCloseRoundRechecksAfterLock(t *testing.T) {
 	}
 }
 
-// TryCloseRound — 이미 닫힌 회차는 건너뛰고 완결 평가만 한다(4D round_split 이 R 을 직접 닫은 뒤 부르는 꼴).
+// TryCloseRound — 이미 닫힌 회차는 건너뛰고 완결 평가만 한다(회차가 닫힌 뒤 사슬 phase 4 가 부르는 꼴).
 func TestTryCloseRoundOnClosedRoundOnlyEvaluates(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()

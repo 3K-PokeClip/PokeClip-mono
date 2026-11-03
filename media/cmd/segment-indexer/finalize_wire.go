@@ -86,7 +86,7 @@ func logRewindEndSwitches(log *slog.Logger, gapRunEnd, stallSeal bool) {
 }
 
 // closeRound 는 4D 적용의 회차 닫힘 칸이다(session.IntentOptions.CloseRound — 설계 10절 「M6-3b 가 CloseRound 칸을 채운다」).
-// upgraded 는 그 트랜잭션에서 회차를 닫고 완결을 평가하고, round_split 은 R 을 직접 닫은 뒤라 완결만 평가된다.
+// upgraded 와 L 이 끝난 forwarded 가 그 트랜잭션 끝에서 불러 회차를 닫고 완결을 평가한다.
 func (a finalizeAssembly) closeRound() func(ctx context.Context, tx pgx.Tx, round string) error {
 	return func(ctx context.Context, tx pgx.Tx, round string) error {
 		_, err := index.TryCloseRound(ctx, tx, round, a.close, a.enqueue)
@@ -108,14 +108,14 @@ func finalizeMode(bucket string, assembled bool) finalize.Mode {
 
 // wire 는 r 에 정산 몫을 채운다 — run 이 발행 조립(assemblePublishing) 뒤 · 루프 기동 전에 한 번 부른다. 차선은 조립 밖에서
 // 이미 채워져 있어야 한다(run). 상태 전달 sink 는 M5 받은편지함(assembleStatus 가 채운 finals)이다.
-func (a finalizeAssembly) wire(r *rewindLoop, cfg config.Config, pool *pgxpool.Pool, inbox *session.PlaybackInbox, intents *session.IntentInbox) {
+func (a finalizeAssembly) wire(r *rewindLoop, cfg config.Config, pool *pgxpool.Pool, inbox *session.PlaybackInbox) {
 	var sink index.PlaybackSink
 	if r.finals != nil {
 		sink = r.finals.Post
 	}
 	r.fin = newFinalizer(finalizerOptions{
 		Mode: finalizeMode(cfg.S3.Bucket, r.pub != nil), Every: finalizeScanEvery, CloseAfter: a.close.Window + a.close.Slack,
-		Work: newFinalizeWork(pool, r.pub, a.close, a.enqueue), Inbox: inbox, Intents: intents, Sink: sink,
+		Work: newFinalizeWork(pool, r.pub, a.close, a.enqueue), Inbox: inbox, Sink: sink,
 		PlaybackReadMax: cfg.RewindPlaybackReadMax,
 	})
 }

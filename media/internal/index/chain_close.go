@@ -4,8 +4,8 @@ package index
 // 종결 정정 D75).
 //
 // 사슬 닫힘은 사슬 전원의 vod_state 를 none → freezing 으로 바꾸는 한 문장이다(DDL 변경 0 — 4절 「사슬 닫힘 표식」). 그 뒤
-// 사슬의 구성은 바뀌지 않는다: 개시는 vod_state='none' 인 꼬리만 계승하고(session inheritable), 4D 분리는 닫힌 사슬 안을
-// 가르지 않으며(round_split_blocked), init 계승 해제는 vod_state='none' 일 때만 간선을 끊는다(markInitUploadedSQL).
+// 사슬의 구성은 바뀌지 않는다: 개시는 vod_state='none' 인 꼬리만 계승하고(session inheritable), 4D 는 세션의 round_id ·
+// 계승 간선을 바꾸지 않으며, init 계승 해제는 vod_state='none' 일 때만 간선을 끊는다(markInitUploadedSQL).
 
 import (
 	"context"
