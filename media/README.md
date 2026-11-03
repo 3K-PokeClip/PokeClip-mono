@@ -175,7 +175,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `SEGMENT_ROOT` | `/recordings` | 감시할 녹화 루트. 컨테이너에 읽기 전용으로 붙는다 |
 | `ENSURE_SCHEMA` | `false` | true면 기동 시 정본 DDL(1번 소유)로 `stream_segments`를 만든다. 로컬 compose 전용 — RDS/마이그레이션 도구 도입 시 끈다 |
 | `TZ` | (미설정) | 컨테이너 시간대. **UTC로 고정한다.** 저장 값은 코드가 UTC로 강제하지만 로그 시각도 UTC로 맞춘다 |
-| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`. **`info` 보다 높이지 않는다** — `warn` · `error` 로 올리면 기동 신호 `playback_key_layout` 의 INFO 줄(끔 · 켬의 `present`)이 사라져 `sidecar-round-keys.sh` 가 켜기 · 복원을 판정하지 못한다(런북 `media-swap.md` 「POK-525 교체 선행」 의 `LOG_LEVEL` 항목과 같은 뜻) |
+| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`. **`info` 보다 높이지 않는다** — `warn` · `error` 로 올리면 기동 신호 `playback_key_layout` 의 INFO 줄(끔 · 켬의 `present`)이 사라져 `sidecar-round-keys.sh` 가 끄기 · 트리거 뒤 켜기 · 복원을 판정하지 못하고, `error` 면 트리거 없을 때의 켬 WARN 줄까지 사라져 그 켜기도 못 한다(런북 `media-swap.md` 「POK-525 교체 선행」 의 `LOG_LEVEL` 항목과 같은 뜻) |
 | `SEGMENT_EXPECTED_DURATION_MS` | `4000` | 세그먼트 1개의 기대 길이. `mediamtx.yml`의 `recordSegmentDuration`과 수동으로 맞춘 값 |
 | `SEGMENT_SUSPECT_BELOW_MS` | `3850` | 이보다 짧게 측정되면 덜 써진 파일로 의심하고 다시 잰다 |
 | `SEGMENT_DRIFT_TOLERANCE_MS` | `1500` | 벽시계 기대치와 실제가 이만큼 넘게 어긋나면 끊김으로 판정한다 |
