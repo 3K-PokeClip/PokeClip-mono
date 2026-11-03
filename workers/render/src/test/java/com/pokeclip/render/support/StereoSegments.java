@@ -18,25 +18,34 @@ import java.util.List;
  * 녹화기 사건처럼 손질하는 도구. 짜임은 {@link DirectSegments} 와 같다 — 연속 fMP4 를 한 번 인코딩하고 moof 자리에서 4초 조각으로
  * 나눈다(생성 경로 「바로 씀」). 트랙 t 의 왼쪽은 분홍 잡음 씨앗 {@code seed + 2t}, 오른쪽은 {@code seed + 2t + 1} 이다.
  *
- * <p>AAC 잡음 대체(PNS)는 끈다. PNS 는 디코더가 패킷 차례를 따라 이어지는 난수열로 잡음을 다시 만들므로, 패킷을 건너뛴 흐름(E9 ·
- * 한 조각만 패킷 0)은 그 뒤 표본이 연속 디코드와 영영 달라져 자리를 표본 단위로 맞댈 수 없다.
+ * <p>AAC 잡음 대체(PNS)는 끈다. 켠 채로는 자리 · 무음 단언은 통과했지만 패킷을 건너뛴 흐름(E9 · 한 조각만 패킷 0)의 그 뒤 PCM 만
+ * 연속 디코드와 0.06–0.13 달랐고, 끄자 5/5 통과했다(R-c5 실측). 원인은 PNS 가 디코더 쪽에서 패킷 차례를 따라 이어지는 난수열로
+ * 잡음을 다시 만들기 때문이라고 본다(추론 — 디코더 소스로 확인하지 않았다).
  *
- * <p>소리 패킷은 1024표본마다 0 부터 놓인다(입력을 1024표본 늦춰 인코더 앞 프레임이 0 에 온다). 그래서 4초 조각의 첫 소리는 영상
- * 첫 프레임보다 512표본 늦고(4.0초 = 187.5 패킷), 8초 조각의 첫 소리는 영상 첫 프레임과 같은 자리다(375 패킷).
+ * <p>소리 패킷은 1024표본마다 0 부터 놓인다(입력을 1024표본 늦춰 인코더 앞 프레임이 0 에 온다). 그래서 48kHz 면 4초 조각의 첫
+ * 소리는 영상 첫 프레임보다 512표본 늦고(4.0초 = 187.5 패킷), 8초 조각의 첫 소리는 영상 첫 프레임과 같은 자리다(375 패킷).
+ * 44.1kHz 면 조각 경계가 패킷 경계에 맞지 않는다(4.0초 = 172.27 패킷).
  */
 public final class StereoSegments {
 
     private StereoSegments() {
     }
 
+    /** 48kHz 녹화. */
     public static DirectSegments.Recording write(Path dir, String name, int seconds, int seed, int tracks) {
+        return write(dir, name, seconds, seed, tracks, 48_000);
+    }
+
+    /** @param sampleRate 소리 표본율(잡음 원천 · 인코딩 모두) */
+    public static DirectSegments.Recording write(Path dir, String name, int seconds, int seed, int tracks,
+                                                 int sampleRate) {
         Path continuous = dir.resolve(name + "_all.mp4");
         List<String> cmd = new ArrayList<>(List.of("ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
                 "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30"));
         for (int t = 0; t < tracks; t++) {
             int left = seed + 2 * t;
-            cmd.addAll(List.of("-f", "lavfi", "-i", "anoisesrc=color=pink:seed=" + left + ":sample_rate=48000[l];"
-                    + "anoisesrc=color=pink:seed=" + (left + 1) + ":sample_rate=48000[r];"
+            cmd.addAll(List.of("-f", "lavfi", "-i", "anoisesrc=color=pink:seed=" + left + ":sample_rate=" + sampleRate
+                    + "[l];anoisesrc=color=pink:seed=" + (left + 1) + ":sample_rate=" + sampleRate + "[r];"
                     + "[l][r]join=inputs=2:channel_layout=stereo[out0]"));
         }
         cmd.addAll(List.of("-t", String.valueOf(seconds), "-map", "0:v"));

@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -135,10 +136,10 @@ class AssWriterTest {
     void 격자보다_촘촘한_프레임은_계획_프레임을_덮고_이웃은_10ms_안이다() {
         long[] frames = grid(750, 1_200);
 
-        for (long from = 100; from < 140; from++) {
-            long startUs = Math.round(frames[(int) from] * 1e6 / TS);
-            long endUs = Math.round(frames[(int) from + 50] * 1e6 / TS);
-            List<Long> got = covered(framed(frames, cue(startUs, endUs, "가")), frames).getFirst();
+        for (int from = 100; from < 140; from++) {
+            long startUs = Math.round(frames[from] * 1e6 / TS);
+            long endUs = Math.round(frames[from + 50] * 1e6 / TS);
+            List<Integer> got = covered(framed(frames, cue(startUs, endUs, "가")), frames).getFirst();
             assertThat(got).as("시작 프레임 %d", from).containsAll(range(from, from + 50));
             assertThat(got.getFirst()).isGreaterThanOrEqualTo(from - 1);
             assertThat(got.getLast()).isLessThanOrEqualTo(from + 50);
@@ -154,7 +155,7 @@ class AssWriterTest {
         long[] frames = grid(900, 2_000);
         assertThat(libassMs(1_451_700)).isEqualTo(16_129);
 
-        List<Long> got = covered(framed(frames, cue(16_130_000, 16_630_000, "가")), frames).getFirst();
+        List<Integer> got = covered(framed(frames, cue(16_130_000, 16_630_000, "가")), frames).getFirst();
 
         assertThat(got).containsAll(range(1_613, 1_663));
         assertThat(got.getFirst()).isGreaterThanOrEqualTo(1_612);
@@ -204,9 +205,9 @@ class AssWriterTest {
         return LongStream.range(0, n).map(i -> i * step).toArray();
     }
 
-    /** 프레임 번호 {@code [from, to)}. */
-    private static List<Long> range(long from, long to) {
-        return LongStream.range(from, to).boxed().toList();
+    /** 프레임 번호(프레임 열 {@code frames} 의 차례) {@code [from, to)}. */
+    private static List<Integer> range(int from, int to) {
+        return IntStream.range(from, to).boxed().toList();
     }
 
     /** ffmpeg n8.0.1 {@code vf_subtitles.c:239-241} 그대로 — 실수 ms 를 libass 의 정수 ms 로(버림). */
@@ -218,18 +219,21 @@ class AssWriterTest {
     private static final Pattern DIALOGUE = Pattern.compile(
             "^Dialogue: 0,(\\d+):(\\d{2}):(\\d{2})\\.(\\d{2}),(\\d+):(\\d{2}):(\\d{2})\\.(\\d{2}),", Pattern.MULTILINE);
 
-    /** 직렬화한 ASS 의 자막마다 그리는 프레임 번호 — libass 0.17.4 {@code ass_render.c:3151-3154}: 시작 ≤ ms < 끝. */
-    private static List<List<Long>> covered(String ass, long[] frames) {
-        List<List<Long>> out = new ArrayList<>();
+    /**
+     * 직렬화한 ASS 의 자막마다 그리는 프레임 번호(프레임 열의 차례).
+     * libass 0.17.4 {@code ass_render.c:3151-3154}: 시작 ≤ ms < 끝.
+     */
+    private static List<List<Integer>> covered(String ass, long[] frames) {
+        List<List<Integer>> out = new ArrayList<>();
         Matcher m = DIALOGUE.matcher(ass);
         while (m.find()) {
             long start = assMs(m, 1);
             long end = assMs(m, 5);
-            List<Long> shown = new ArrayList<>();
+            List<Integer> shown = new ArrayList<>();
             for (int i = 0; i < frames.length; i++) {
                 long now = libassMs(frames[i]);
                 if (now >= start && now < end) {
-                    shown.add((long) i);
+                    shown.add(i);
                 }
             }
             out.add(shown);

@@ -111,13 +111,17 @@ public final class SyncCorrection {
         return out;
     }
 
-    /** 빠진 확인점이 있으면 EXCLUDED, 남은 확인점 가운데 하나라도 |잔차| ≥ 0.1ms 면 FAIL. */
+    /**
+     * 남은(빠지지 않은) 확인점 가운데 하나라도 |잔차| ≥ 0.1ms 면 FAIL, 아니면 빠진 확인점이 있으면 EXCLUDED, 아니면 PASS. 빠진
+     * 확인점이 남은 확인점의 FAIL 을 가리지 않게 FAIL 을 먼저 본다. 빠진 확인점의 잔차는 판정에 쓰지 않는다.
+     */
     public static Verdict verdict(List<Judged> judged) {
         BigDecimal line90 = LINE_MS.multiply(TICKS_PER_MS);
-        if (judged.stream().anyMatch(Judged::excluded)) {
-            return Verdict.EXCLUDED;
+        boolean over = judged.stream().filter(j -> !j.excluded())
+                .anyMatch(j -> j.residualTimes90().abs().compareTo(line90) >= 0);
+        if (over) {
+            return Verdict.FAIL;
         }
-        boolean over = judged.stream().anyMatch(j -> j.residualTimes90().abs().compareTo(line90) >= 0);
-        return over ? Verdict.FAIL : Verdict.PASS;
+        return judged.stream().anyMatch(Judged::excluded) ? Verdict.EXCLUDED : Verdict.PASS;
     }
 }

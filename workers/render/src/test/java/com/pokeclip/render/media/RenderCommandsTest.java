@@ -13,12 +13,13 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * 옛 꼴 주문(계획 없음)의 세 명령(잇기 · 소리 크기 재기 · 출력). 기대값은 develop 코드의 출력이다. 바뀐 곳은 출력 명령의 평준화
+ * 꼬리 한 구절({@link #LOUDNESS_SETTLE})뿐이고 나머지는 한 글자도 바뀌지 않아야 한다.
+ */
 class RenderCommandsTest {
 
-    /**
-     * 옛 꼴 주문(계획 없음)의 세 명령. 기대값은 develop 코드의 출력이다. 바뀐 곳은 출력 명령의 평준화 꼬리 한 구절
-     * ({@link #LOUDNESS_SETTLE})뿐이고 나머지는 한 글자도 바뀌지 않아야 한다.
-     */
+    /** 옛 꼴 사례가 쓰는 고른 트랙 둘(트랙 1 · 3, 크기 1.0 · 0.6). */
     private static final List<AudioTrack> TWO_TRACKS = List.of(new AudioTrack(1, 1.0), new AudioTrack(3, 0.6));
 
     /** develop 대비 옛 꼴 출력 명령에 더한 유일한 구절 — 평준화가 있을 때 그 바로 뒤, {@code [aout]} 앞. */

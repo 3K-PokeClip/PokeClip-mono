@@ -1,8 +1,12 @@
 package com.pokeclip.render.work;
 
 import com.pokeclip.render.job.EnvelopeParser;
+import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.JobEnvelope;
+import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.media.MediaProbe;
+import com.pokeclip.render.media.ProcessRunner;
+import com.pokeclip.render.media.RenderCommands;
 import com.pokeclip.render.media.SegmentTiming;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
 import com.pokeclip.render.storage.S3Store;
@@ -19,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -29,8 +35,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -42,12 +52,16 @@ import static org.mockito.Mockito.mock;
  * 이 기계의 실제 ffmpeg 로 A′ 전 경로를 돌리고, 최종 단계 그래프 그대로에서 트랙별 묶음 이음 {@code [acatN]} 을 PCM 으로 뽑아(AAC
  * 재인코딩 전) 녹화 연속 디코드 기준과 채널마다 맞댄다.
  *
- * <p>자료는 좌우 채널에 서로 다른 무늬를 넣은 스테레오 트랙 넷의 12초 녹화 하나({@link StereoSegments})와 그 조각 사본 셋이다.
+ * <p>자료는 좌우 채널에 서로 다른 무늬를 넣은 스테레오 트랙 넷의 12초 녹화 하나({@link StereoSegments})와 그 조각 사본, 그리고
+ * 따로 만든 녹화 둘이다.
  *
  * <ul>
  *   <li>30 · 31 · 32 — 손대지 않은 조각.</li>
  *   <li>52 — 32 사본에서 고른 트랙(1 · 3)의 첫 3패킷(3072표본 · 64ms)을 지움(녹화기가 버린 표본 E9). 50 · 51 은 30 · 31 과 같다.</li>
  *   <li>61 — 31 사본에서 트랙 1 패킷을 모두 뺌(한 조각만 패킷 0). 60 · 62 는 30 · 32 와 같다.</li>
+ *   <li>71 — 31 사본에서 트랙 1 의 첫 3패킷을 지움(가운데 조각의 64ms 틈). 70 · 72 는 30 · 32 와 같다.</li>
+ *   <li>49 — 소리 트랙 둘뿐인 4초 녹화 {@code r2} 의 조각(고른 트랙 3 이 없는 준비 조각).</li>
+ *   <li>80 · 81 — 44.1kHz 8초 녹화 {@code rq} 의 두 조각. 81 은 트랙 1 의 첫 3패킷을 지운 사본(늦게 시작하는 트랙).</li>
  * </ul>
  *
  * <p>판정: 결과 표본 n ↔ 기준 표본 n + lag 이고 lag 는 영상 계획(묶음 Δ)에서 낸다 — 기대 lag ±48 안에서 차가 가장 작은 자리가
@@ -64,10 +78,14 @@ class JoinedAudioTest {
     /** 맞댈 때 건너뛰는 일그러짐 몫(디코더가 앞 패킷 없이 받은 패킷 하나 + 여유). */
     private static final int SETTLE = 2 * AAC_FRAME;
     private static final int LAG_TOLERANCE = 4;
+    /** 44.1kHz 녹화 {@code rq} 의 표본율. */
+    private static final int Q_RATE = 44_100;
+    private static final Pattern RESAMPLE = Pattern.compile("aresample=48000:async=1:min_hard_comp=[0-9.]+");
 
     @TempDir
     static Path fixtures;
     private static Recording rs;
+    private static Recording rq;
     private static final Map<Long, Path> FILES = new HashMap<>();
 
     @TempDir
@@ -89,6 +107,13 @@ class JoinedAudioTest {
         Path dropped = StereoSegments.dropHead(p.get(2), fixtures.resolve("e9_a1.m4s"), 1, DROPPED_FRAMES);
         FILES.put(52L, StereoSegments.dropHead(dropped, fixtures.resolve("e9.m4s"), 3, DROPPED_FRAMES));
         FILES.put(61L, StereoSegments.dropTrack(p.get(1), fixtures.resolve("hole.m4s"), 1));
+        FILES.put(70L, p.get(0));
+        FILES.put(71L, StereoSegments.dropHead(p.get(1), fixtures.resolve("mid.m4s"), 1, DROPPED_FRAMES));
+        FILES.put(72L, p.get(2));
+        FILES.put(49L, StereoSegments.write(fixtures, "r2", 4, 91, 2).pieces().getFirst());
+        rq = StereoSegments.write(fixtures, "rq", 8, 81, 4, Q_RATE);
+        FILES.put(80L, rq.pieces().get(0));
+        FILES.put(81L, StereoSegments.dropHead(rq.pieces().get(1), fixtures.resolve("q_late.m4s"), 1, DROPPED_FRAMES));
     }
 
     @BeforeEach
@@ -112,6 +137,14 @@ class JoinedAudioTest {
         assertThat(audioPts(FILES.get(61L), 3).getFirst()).as("4초 조각 첫 소리 = 영상 첫 프레임 + 512표본")
                 .isEqualTo(192_512);
         assertThat(audioPts(FILES.get(31L), 1)).isNotEmpty();
+        assertThat(audioPts(FILES.get(71L), 1).getFirst()).as("가운데 조각 트랙 1 = 4초 조각 첫 소리 + 64ms")
+                .isEqualTo(192_512 + DROPPED);
+        assertThat(audioPts(FILES.get(71L), 3).getFirst()).isEqualTo(192_512);
+        assertThat(audioStreams(FILES.get(49L))).as("준비 조각에 트랙 3 이 없다").isEqualTo(2);
+        assertThat(audioStreams(FILES.get(80L))).isEqualTo(4);
+        assertThat(audioRate(FILES.get(81L))).isEqualTo(Q_RATE);
+        assertThat(audioPts(FILES.get(81L), 1).getFirst()).as("44.1kHz 트랙 1 은 3패킷 늦게 시작")
+                .isEqualTo(audioPts(FILES.get(81L), 3).getFirst() + DROPPED);
     }
 
     /**
@@ -219,6 +252,104 @@ class JoinedAudioTest {
         }
     }
 
+    /**
+     * 같은 녹화로 이어진 세 조각 중 가운데 조각 머리에서 트랙 1 의 64ms 를 버렸다. 틈이 흐름 한가운데라 앞뒤로 소리가 이어진다 —
+     * 기본 문턱(0.1초)이면 채우지 않아 틈 뒤 두 조각 소리가 64ms 앞당겨진다(설계 7.4 소리 묶음 5 · 문턱 방어 둘째 자리).
+     */
+    @Test
+    void 가운데_조각의_64ms_틈도_무음으로_채워_뒤_두_조각이_제자리다() {
+        String body = order().segment(70, false, false).segment(71, false, true).segment(72, false, true)
+                .in(70, 1_000_000).out(72, 2_000_000).lengthMs(9_000).body();
+
+        Rendered r = render(body);
+
+        assertThat(r.timeline().audioRuns()).hasSize(1);
+        int lag = r.expectedLag(0);
+        // 틈 = 조각 70 마지막 소리 끝(4.010667초)부터 64ms · 결과는 1.0초 앞으로
+        int gapFrom = 192_512 - OUT_RATE;
+        int gapTo = gapFrom + DROPPED;
+        float[][] one = r.pcm(1);
+        float[][] three = r.pcm(3);
+        for (int ch = 0; ch < 2; ch++) {
+            assertOnPlan(one[ch], reference(1)[ch], AAC_FRAME, gapFrom, lag, "트랙 1 채널 " + ch + " 틈 앞");
+            assertSilent(one[ch], gapFrom + 16, gapTo - 16, "트랙 1 채널 " + ch + " 틈");
+            assertOnPlan(one[ch], reference(1)[ch], gapTo + SETTLE, r.end(0) - AAC_FRAME, lag,
+                    "트랙 1 채널 " + ch + " 틈 뒤");
+            assertOnPlan(three[ch], reference(3)[ch], AAC_FRAME, r.end(0) - AAC_FRAME, lag, "트랙 3 채널 " + ch);
+        }
+    }
+
+    /**
+     * 고른 트랙(3)이 없는 준비 조각은 준비 조각 대조가 뺀다(설계 7.4 소리 묶음 7). 그래서 묶음 첫 파일은 결과 조각이고, 흐름 안
+     * 채움 문턱은 그 조각에서 읽은 표본율(48kHz → 0.010667초)로 정한다 — 트랙 없는 파일의 표본율(0)을 읽는 일이 없다.
+     */
+    @Test
+    void 고른_트랙이_없는_준비_조각은_빠지고_묶음_첫_조각의_표본율을_쓴다() {
+        String body = order().prime(49, 51).segment(51, false, false).in(51, 1_000_000).out(51, 3_000_000)
+                .lengthMs(2_000).body();
+
+        renderJob(body);
+
+        String list = read(dir.resolve(RenderCommands.runListFile(0)));
+        assertThat(list).contains(JoinedRenderer.sourceFile(51)).doesNotContain(JoinedRenderer.sourceFile(49));
+        assertThat(finalGraph()).contains("min_hard_comp=0.010667,").doesNotContain("min_hard_comp=0.000000");
+    }
+
+    /** 묶음 첫 파일의 소리 표본율을 읽지 못하면(판독 0) 채움 문턱을 정할 수 없어 {@code SOURCE_MISMATCH} 로 끝낸다. */
+    @Test
+    void 묶음_첫_파일의_표본율을_못_읽으면_SOURCE_MISMATCH() {
+        String body = order().segment(30, false, false).segment(31, false, true)
+                .in(30, 1_000_000).out(31, 2_000_000).lengthMs(5_000).body();
+        runner.intercept((cmd, wd, dl, rr) -> cmd.contains("-show_data_hash") ? unreadableRate(rr.proceed(cmd, wd, dl))
+                : null);
+
+        assertThatThrownBy(() -> renderJob(body)).isInstanceOfSatisfying(RenderFailure.class, f -> {
+            assertThat(f.code()).isEqualTo(ErrorCode.SOURCE_MISMATCH);
+            assertThat(f.getMessage()).contains("표본율을 읽지 못했다");
+        });
+        assertThat(runner.commands()).noneMatch(RecordingRunner::isFinalStage);
+    }
+
+    /**
+     * 44.1kHz 입력 · 둘째 묶음 머리의 트랙이 자를 구간 시작보다 늦게 시작(앞 무음 0 아님). 둘째 묶음은 제 흐름 첫 표본부터 48kHz 로
+     * 옮겨지므로, 기준도 같은 표본에서 같은 {@code aresample} 로 옮겨 맞댄다 — 트랙 1 · 3 의 앞 무음이 서로 다르고 좌우 채널이 같이
+     * 밀린다(설계 7.4 소리 묶음 4 · 16.2 P23 · P25).
+     */
+    @Test
+    void 사십사_kHz_둘째_묶음의_늦게_시작하는_트랙도_좌우_채널_모두_제자리다() {
+        String body = order().segment(80, false, false).segment(81, true, true)
+                .in(80, 1_000_000).out(81, 3_000_000).lengthMs(6_000).body();
+
+        Rendered r = render(body);
+
+        assertThat(r.timeline().audioRuns()).hasSize(2);
+        String resample = resampleClause();
+        assertThat(resample).as("44.1kHz 문턱 = 512 ÷ 44100").endsWith("min_hard_comp=0.011610");
+        int second = Math.toIntExact(r.timeline().audioRuns().get(1).resultStartSample());
+        assertThat(second).isEqualTo(3 * OUT_RATE);
+        int firstLag = r.expectedLag(0);
+        for (int track : List.of(1, 3)) {
+            long head = audioPts(FILES.get(81L), track).getFirst();
+            // 계획 앞 무음 = (트랙 첫 표본 − 조각 81 첫 프레임 4.0초) × 48000
+            long silence = Math.round(head * (double) OUT_RATE / Q_RATE) - 4L * OUT_RATE;
+            assertThat(silence).as("트랙 %d 계획 앞 무음", track).isPositive();
+            AudioRun.TrackStart start = r.timeline().audioRuns().get(1).tracks().stream()
+                    .filter(t -> t.trackId() == track).findFirst().orElseThrow();
+            assertThat(start.frontSilenceSamples()).as("트랙 %d 앞 무음", track).isCloseTo(silence, within(1L));
+            float[][] out = r.pcm(track);
+            float[][] whole = resampledReference(track, 0, resample);
+            float[][] tail = resampledReference(track, head, resample);
+            int lag = Math.toIntExact(-(second + silence));
+            for (int ch = 0; ch < 2; ch++) {
+                String what = "트랙 " + track + " 채널 " + ch;
+                assertOnPlan(out[ch], whole[ch], AAC_FRAME, second - AAC_FRAME, firstLag, what + " 첫 묶음");
+                assertSilent(out[ch], second + 16, Math.toIntExact(second + silence - 16), what + " 둘째 묶음 앞 무음");
+                assertOnPlan(out[ch], tail[ch], Math.toIntExact(second + silence + SETTLE), r.end(1) - AAC_FRAME, lag,
+                        what + " 둘째 묶음");
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- 실행
 
     private record Rendered(RenderTimeline timeline, Map<Integer, float[][]> pcmByTrack) {
@@ -246,12 +377,7 @@ class JoinedAudioTest {
     }
 
     private Rendered render(String body) {
-        ObjectNode envelope = (ObjectNode) Fixtures.MAPPER.readTree(body);
-        ((ObjectNode) envelope.get("recipe")).putNull("subtitles");
-        JobEnvelope job = new EnvelopeParser(Fixtures.MAPPER).parse(Fixtures.MAPPER.writeValueAsString(envelope));
-        MediaProbe probe = new MediaProbe(runner, Fixtures.MAPPER, "ffprobe");
-        new ClipRenderer(store, probe, runner, Fixtures.MAPPER, "ffmpeg", null).render(job, dir, deadline(),
-                (p, s) -> { });
+        JobEnvelope job = renderJob(body);
         Map<Long, SegmentTiming> timings = new LinkedHashMap<>();
         MediaProbe again = new MediaProbe(new RecordingRunner(), Fixtures.MAPPER, "ffprobe");
         for (var s : job.sources()) {
@@ -259,6 +385,62 @@ class JoinedAudioTest {
         }
         List<Integer> trackIds = job.recipe().tracks().stream().map(AudioTrack::trackId).toList();
         return new Rendered(RenderTimeline.of(job.plan(), job.sources(), timings, trackIds), graphPcm(trackIds));
+    }
+
+    /** 자막을 뺀 주문을 실제 ffmpeg 로 렌더한다(시간표를 다시 짜지 않음). */
+    private JobEnvelope renderJob(String body) {
+        ObjectNode envelope = (ObjectNode) Fixtures.MAPPER.readTree(body);
+        ((ObjectNode) envelope.get("recipe")).putNull("subtitles");
+        JobEnvelope job = new EnvelopeParser(Fixtures.MAPPER).parse(Fixtures.MAPPER.writeValueAsString(envelope));
+        MediaProbe probe = new MediaProbe(runner, Fixtures.MAPPER, "ffprobe");
+        new ClipRenderer(store, probe, runner, Fixtures.MAPPER, "ffmpeg", null).render(job, dir, deadline(),
+                (p, s) -> { });
+        return job;
+    }
+
+    private String finalGraph() {
+        List<String> last = runner.commands().stream().filter(RecordingRunner::isFinalStage).reduce((a, b) -> b)
+                .orElseThrow();
+        return last.get(last.indexOf("-filter_complex") + 1);
+    }
+
+    /** 최종 단계 그래프의 흐름 옮기기 구절({@code aresample=48000:async=1:min_hard_comp=…}). 묶음 · 트랙 모두 같아야 한다. */
+    private String resampleClause() {
+        Matcher m = RESAMPLE.matcher(finalGraph());
+        List<String> found = new ArrayList<>();
+        while (m.find()) {
+            found.add(m.group());
+        }
+        assertThat(found).as("흐름 옮기기 구절").isNotEmpty().containsOnly(found.getFirst());
+        return found.getFirst();
+    }
+
+    /**
+     * 녹화 {@code rq} 연속 디코드의 트랙 N 을 표본 {@code fromSample}(입력 표본율 · 시각 그대로)부터 잘라 최종 단계와 같은
+     * {@code resample} 구절로 48kHz 로 옮긴 기준(두 채널). 묶음 흐름도 제 첫 표본부터 옮겨지므로 같은 첫 표본에서 시작하면 옮긴
+     * 표본 자리가 같다.
+     */
+    private float[][] resampledReference(int track, long fromSample, String resample) {
+        Path raw = dir.resolve("qref_" + track + "_" + fromSample + ".raw");
+        runner.proceed(List.of("ffmpeg", "-hide_banner", "-nostdin", "-y", "-i", rq.continuous().toString(),
+                "-map", "0:a:" + track, "-af", "atrim=start_sample=" + fromSample + "," + resample,
+                "-c:a", "pcm_f32le", "-f", "f32le", raw.toString()), dir, deadline());
+        return channels(DirectSegments.pcm(raw));
+    }
+
+    /** 판독 출력의 소리 표본율을 모두 0 으로 — ffprobe 가 표본율을 못 낸 꼴. */
+    private static ProcessRunner.Result unreadableRate(ProcessRunner.Result probed) {
+        String stdout = probed.stdout().replaceAll("\"sample_rate\": \"\\d+\"", "\"sample_rate\": \"0\"");
+        assertThat(stdout).as("판독 출력에 표본율 칸이 있다").isNotEqualTo(probed.stdout());
+        return new ProcessRunner.Result(stdout, probed.stderr());
+    }
+
+    private static String read(Path file) {
+        try {
+            return Files.readString(file);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /** 최종 단계 그래프를 그대로 두고 섞기 앞 트랙별 묶음 이음을 두 채널 PCM 으로 뽑는다. */
@@ -299,6 +481,16 @@ class JoinedAudioTest {
         return Ffmpeg.probe("-v", "error", "-select_streams", "a:" + track, "-show_entries", "packet=pts",
                         "-of", "csv=p=0", file.toString()).lines().filter(l -> !l.isBlank())
                 .map(l -> Long.parseLong(l.split(",")[0].strip())).toList();
+    }
+
+    private static int audioStreams(Path file) {
+        return (int) Ffmpeg.probe("-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                "-of", "csv=p=0", file.toString()).lines().filter(l -> !l.isBlank()).count();
+    }
+
+    private static int audioRate(Path file) {
+        return Integer.parseInt(Ffmpeg.probe("-v", "error", "-select_streams", "a:1", "-show_entries",
+                "stream=sample_rate", "-of", "csv=p=0", file.toString()).strip());
     }
 
     private static Instant deadline() {

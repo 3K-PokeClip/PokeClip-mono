@@ -143,6 +143,24 @@ class SyncCorrectionTest {
                 .as("소리 패킷 빠짐").isEqualTo(Verdict.EXCLUDED);
     }
 
+    /**
+     * 빠진 확인점이 다른 확인점의 FAIL 을 가리지 않는다 — 남은 확인점에 판정선을 넘는 것이 있으면 EXCLUDED 가 아니라 FAIL 이다.
+     * 빠진 확인점 자신의 잔차는 판정에 쓰지 않는다(남은 확인점이 모두 판정선 안이면 EXCLUDED).
+     */
+    @Test
+    void 빠진_확인점이_있어도_남은_확인점의_FAIL_을_먼저_낸다() {
+        List<Segment> flow = List.of(seg(1, 120, 360_000, 360_000, true), seg(2, 120, 359_997, 360_000, false),
+                seg(3, 120, 360_000, 360_000, false), seg(4, 120, 360_000, 360_000, true));
+
+        List<Judged> failed = SyncCorrection.judge(Origin.RECORDER, flow, List.of(cp(3, "0.0"), cp(4, "0.2")));
+        List<Judged> passed = SyncCorrection.judge(Origin.RECORDER, flow, List.of(cp(3, "5.0"), cp(4, "0.0")));
+
+        assertThat(failed.get(0).excluded()).isTrue();
+        assertThat(SyncCorrection.verdict(failed)).as("남은 확인점 4 가 0.2ms").isEqualTo(Verdict.FAIL);
+        assertThat(SyncCorrection.verdict(passed)).as("빠진 확인점 3 의 5ms 는 판정에 안 씀")
+                .isEqualTo(Verdict.EXCLUDED);
+    }
+
     /** 경계 시험: 반올림 전 정확값이 판정선과 같으면 FAIL, 바로 아래면 PASS(설계 13.5 · 계획 C9). */
     @Test
     void 판정선과_정확히_같은_차는_FAIL() {
