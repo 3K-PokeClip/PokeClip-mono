@@ -7,6 +7,7 @@ import { fetchRewindStatus, type RewindStatusResult } from '@/api/rewindStatus';
 // 묻지 않는다. 답은 받을 때마다 onResult 로 올린다(잠시 불가도 올린다 — 직전 상태를 둘지는 받는 쪽이 정한다).
 // 순번으로 늦게 온 답을 버리고(R14), 경로가 바뀌거나 내려가면 걸린 요청을 끊는다. 요청마다 시한을 두고, 답 · 시한 · 오류 어느
 // 갈래에서도 다음 조회를 건다 — 답이 끝나지 않는 요청 하나가 폴링을 멈추지 못한다(cx H1). 주기는 요청을 시작한 때부터 센다.
+// 숨김 복귀에는 곧바로 다시 묻는다 — 한 번만 물어야 하는 경로는 askOnVisible 로 끈다(POK-528 마지막 확인).
 
 /** 폴링 주기. 10초는 D17 결정(치지직 실물)이다 */
 export const REWIND_POLL_MS = 10_000;
@@ -15,6 +16,15 @@ export const REWIND_RETRY_MS = 2_000;
 const REWIND_RETRY_COUNT = 3;
 /** 요청 하나의 시한 — 폴링 주기보다 짧아 다음 주기를 밀지 않는다. 넘으면 끊고 「잠시 불가」로 올린다 */
 export const REWIND_REQUEST_TIMEOUT_MS = 8_000;
+
+export interface RewindPollOptions {
+  /**
+   * 숨은 탭이 보이게 되면 곧바로 다시 묻는가. 기본 참. 거짓이면 걸린 요청 · 그 시한을 그대로 둔다 — 회차별 조회를 한 번만
+   * 하고 시한 뒤 녹화로 가는 마지막 확인(정본 r7 1151)이 복귀마다 새로 묻고 시한을 밀지 않게. 값은 복귀 때 읽는다 — 바뀌어도
+   * 폴링을 새로 기동하지 않는다
+   */
+  askOnVisible?: boolean;
+}
 
 export interface RewindStatusPoll {
   /**
@@ -28,14 +38,18 @@ export interface RewindStatusPoll {
  * @param url 물을 제어면 경로. null 이면 끈다
  * @param controlBase 제어면 주소(답의 url 출처 대조). null 이면 끈다
  * @param onResult 답 하나마다 부른다. 늦게 온 답 · 끊은 요청은 부르지 않는다
+ * @param options 숨김 복귀 동작
  */
 export function useRewindStatus(
   url: string | null,
   controlBase: string | null,
   onResult: (result: RewindStatusResult) => void,
+  options: RewindPollOptions = {},
 ): RewindStatusPoll {
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
+  const askOnVisibleRef = useRef(options.askOnVisible ?? true);
+  askOnVisibleRef.current = options.askOnVisible ?? true;
   const refreshRef = useRef<(retryWhileUrl?: string) => void>(() => {});
 
   useEffect(() => {
@@ -104,9 +118,10 @@ export function useRewindStatus(
       retriesLeft = sameAs === undefined ? 0 : REWIND_RETRY_COUNT;
       ask();
     };
-    // 숨김 복귀는 곧바로 묻기만 한다 — 진행 중인 같은 url 재조회(2초 × 3)는 이어 간다(cc L1)
+    // 숨김 복귀는 곧바로 묻기만 한다 — 진행 중인 같은 url 재조회(2초 × 3)는 이어 간다(cc L1). askOnVisible 이 거짓이면
+    // 묻지 않는다
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') ask();
+      if (document.visibilityState === 'visible' && askOnVisibleRef.current) ask();
     };
     document.addEventListener('visibilitychange', onVisibility);
     ask();

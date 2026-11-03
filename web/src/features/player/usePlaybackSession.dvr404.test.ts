@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { assertTransitionInvariants } from './dvr404TestKit';
+import type * as rewindSwitchModule from './rewindSwitch';
 import {
   SESSION_NOTICES,
   transition,
@@ -18,7 +19,7 @@ import {
 
 // 세션에 들어간 사건 · 나온 효과를 보려고 상태기계를 감싼다 — 동작은 원본 그대로다
 vi.mock('./rewindSwitch', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./rewindSwitch')>();
+  const actual = await importOriginal<typeof rewindSwitchModule>();
   return { ...actual, transition: vi.fn(actual.transition) };
 });
 
@@ -185,8 +186,14 @@ function gapsOf(times: readonly number[]): number[] {
   return times.slice(1).map((at, i) => at - (times[i] ?? at));
 }
 
-const refreshes = (run: Run) => run.effects.filter((e) => e.kind === 'refresh').length;
-const advancing = (n: number) => FIRST_F + n * SEGMENT_MS;
+function refreshes(run: Run): number {
+  return run.effects.filter((e) => e.kind === 'refresh').length;
+}
+
+/** n 번째 물음의 첫 조각 — 물을 때마다 한 조각씩 나아간다 */
+function advancing(n: number): number {
+  return FIRST_F + n * SEGMENT_MS;
+}
 
 describe('되풀이 속도 상한 — 엣지 하한이 늘 F 보다 앞섬(계획 3-3 · P2)', () => {
   it('60초에 스트림 물음 ≤ 8(열 때 1 + refresh 1 + 정기 6) · 교체 2–7 · refresh 1 · 알림 합 1', async () => {
@@ -217,11 +224,16 @@ describe('응답 지연 변형 — 요청 주기와 응답 · 교체 간격을 �
     const gaps = gapsOf(streamStarts.slice(1));
     expect(gaps.length).toBeGreaterThan(0);
     expect(new Set(gaps)).toEqual(new Set([POLL_MS]));
-    expect(run.movedGones.length).toBeGreaterThan(0);
+    // 창에 10 + 8초 이상 남은 404 는 다음 답이 반드시 그 안에 온다 — 답이 빠지면 FAIL 한다.
+    // 창 끝이 가까운 404 는 다음 답이 창 밖일 수 있어 시한만 본다
+    const answerDeadlineMs = POLL_MS + REQUEST_TIMEOUT_MS;
+    const windowEnd = run.goneAt + WINDOW_MS;
+    const roomy = run.movedGones.filter((at) => windowEnd - at >= answerDeadlineMs);
+    expect(roomy.length).toBeGreaterThan(0);
     for (const at of run.movedGones) {
       const next = run.answers.find((answeredAt) => answeredAt > at);
-      if (next === undefined) continue;
-      expect(next - at).toBeLessThanOrEqual(POLL_MS + REQUEST_TIMEOUT_MS);
+      if (roomy.includes(at)) expect(next, `${at - run.goneAt}ms 의 404`).toBeDefined();
+      if (next !== undefined) expect(next - at).toBeLessThanOrEqual(answerDeadlineMs);
     }
   });
 

@@ -90,6 +90,11 @@ function needsX(s: PlaybackSessionState): boolean {
   return (kind === 'live' && s.boundLive) || kind === 'ending-wait' || kind === 'rewind';
 }
 
+/** 마지막 확인 중인가 — 회차별 조회를 한 번만 하고 시한 뒤 녹화로 닫는다(POK-528 W6 · 정본 r7 1151) */
+function inFinalCheck(s: PlaybackSessionState | null): boolean {
+  return s !== null && s.phase.kind === 'ending-wait' && s.phase.finalCheck === true;
+}
+
 function canStart(o: SessionOptions): boolean {
   return (
     o.canOpen &&
@@ -298,7 +303,10 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [dispatch],
   );
   const streamPoll = useRewindStatus(streamUrl, controlBase, onStream);
-  const roundPoll = useRewindStatus(roundUrl, controlBase, onRound);
+  // 마지막 확인의 회차별 조회는 숨김 복귀로 다시 묻지 않는다 — 처음 물음의 답 또는 시한(8초)이 끝낸다
+  const roundPoll = useRewindStatus(roundUrl, controlBase, onRound, {
+    askOnVisible: !inFinalCheck(state),
+  });
   refreshRef.current = {
     stream: (u) => streamPoll.refresh(u),
     round: () => roundPoll.refresh(),
