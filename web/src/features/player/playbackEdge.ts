@@ -57,7 +57,8 @@ export function windowLowerMs(list: LoadedList, kind: PlaybackSource['kind']): n
 
 /**
  * 첫 목록에서 startLoad 할 영상 초. 실제 시각 startAtMs 를 창 하한 이상 · 목록 끝 이하로 자른다(5.4절 시작 위치).
- * 시각 표시가 없으면 null — 부르는 쪽이 기본 시작으로 둔다
+ * 시각 표시가 없으면 null — 부르는 쪽이 기본 시작으로 둔다. 첫 목록은 아직 해체한 조각이 없어 판 2 조각도
+ * 시작 · 길이가 hls.js 첫 값과 같다(datedFragments 의 해체 전 갈래)
  */
 export function startLoadPosition(
   fragments: readonly DatedFragment[],

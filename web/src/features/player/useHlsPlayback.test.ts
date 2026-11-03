@@ -67,6 +67,7 @@ vi.mock('hls.js', () => {
     on(event: string, handler: (event: string, data: unknown) => void) {
       this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
     }
+    off() {}
     trigger(event: string, data: unknown) {
       const details = (data as { details?: FakeHlsLike['latestLevelDetails'] } | null)?.details;
       if (details && typeof details === 'object') this.latestLevelDetails = details;

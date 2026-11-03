@@ -6,6 +6,8 @@
 // 라이브러리(mp4box 등)를 안 쓴 이유: 읽을 상자가 몇 개뿐이고(moov·trak·stsd·esds·trex·moof·traf·tfhd·trun), 녹화 조각의
 // 모양이 정해져 있다(ftyp → 표본 없는 moov → moof/mdat 여러 쌍). 모르는 모양이면 빈 목록을 주고 화면은 영상 소리로 돌아간다.
 
+import { boxes, child, path, type Box } from '@/lib/fmp4Boxes';
+
 /** AudioSpecificConfig에서 ADTS 머리에 필요한 셋 */
 export interface AacConfig {
   /** 1~4만 ADTS로 옮길 수 있다(2 = AAC LC) */
@@ -18,52 +20,6 @@ export interface AudioTrackFrames {
   config: AacConfig;
   /** 조각 안의 AAC 프레임을 나온 순서대로 */
   frames: Uint8Array[];
-}
-
-interface Box {
-  type: string;
-  /** 머리 뒤 첫 바이트 */
-  start: number;
-  end: number;
-  /** 상자 머리 첫 바이트 */
-  boxStart: number;
-}
-
-function* boxes(view: DataView, start: number, end: number): Generator<Box> {
-  let offset = start;
-  while (offset + 8 <= end) {
-    let size = view.getUint32(offset);
-    const type = String.fromCharCode(
-      view.getUint8(offset + 4),
-      view.getUint8(offset + 5),
-      view.getUint8(offset + 6),
-      view.getUint8(offset + 7),
-    );
-    let header = 8;
-    if (size === 1) {
-      if (offset + 16 > end) return;
-      size = Number(view.getBigUint64(offset + 8));
-      header = 16;
-    } else if (size === 0) {
-      size = end - offset;
-    }
-    if (size < header || offset + size > end) return;
-    yield { type, start: offset + header, end: offset + size, boxStart: offset };
-    offset += size;
-  }
-}
-
-function child(view: DataView, parent: Box, type: string): Box | undefined {
-  for (const box of boxes(view, parent.start, parent.end)) if (box.type === type) return box;
-  return undefined;
-}
-
-function path(view: DataView, parent: Box, ...types: string[]): Box | undefined {
-  let box: Box | undefined = parent;
-  for (const type of types) {
-    box = box && child(view, box, type);
-  }
-  return box;
 }
 
 /** ES 서술자의 길이(1~4바이트, 앞 비트가 이어짐 표시) */
