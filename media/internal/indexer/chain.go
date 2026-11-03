@@ -1,8 +1,9 @@
 package indexer
 
 // ③ 시간 도장 사슬(계획 4.2-R R3 — kty 결정 B′·G). 조각 k 의 도장은 pos(k) = mtxi(k) + offset 이다.
-// 평소 offset 은 0 이고, 회차 안에서 mtxi 가 리셋되거나(녹화기 표식 변경 ∨ mtxi 역행) 같은 표식
-// 안에 구멍이 나면 직전 조각 끝에 이어 붙이도록 바뀐다.
+// 평소 offset 은 0 이고, 회차 안에서 mtxi 가 리셋되거나(같은 녹화기 이어짐이 아님 ∨ 역행) 같은 녹화기
+// 안에 구멍이 나면 직전 조각 끝에 이어 붙이도록 바뀐다. 이어짐 판정은 장부의 원래 사실 칸 위의
+// index.SameInstance 이고 리셋 · 구멍은 영상 축에서 잰다(POK-196 PDT 계획 4절 c8 · ADR-073 결정 2 개정).
 //
 // 이 파일이 루프 쪽 전부다 — 보관값(사슬)을 전진시키고 그 행의 ③ 작업 메타를 만든다. 회차별
 // 보정값 표(스위퍼 재생성용)는 업로더 소유이고, 루프는 작업에 메타를 실어 보낼 뿐이다.
@@ -17,10 +18,15 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
-// mtxiGapTolerance 는 같은 녹화기 안에서 구멍으로 보지 않는 mtxi 간격의 상한이다(kty 결정 G).
-// 직전 조각의 예상 끝(mtxi + 장부 길이)보다 이 값을 넘게 늦게 시작하면 그 유실 구간을 압축해
-// 잇는다. 정확히 이 값은 구멍이 아니다 — 같은 연결 안 조각 경계의 어긋남은 영상 ±1틱(11µs)이다.
+// mtxiGapTolerance 는 같은 녹화기 안에서 구멍으로 보지 않는 이웃 차 d 의 상한이다(kty 결정 G).
+// d 는 직전 조각의 끝(영상 축이면 영상 끝, 아니면 mtxi + 장부 길이)부터 이 조각 시작까지다 — 이 값을
+// 넘게 늦게 시작하면 그 유실 구간을 압축해 잇는다. 정확히 이 값은 구멍이 아니다 — 같은 연결 안 조각
+// 경계의 어긋남은 영상 ±1틱(11µs)이다.
 const mtxiGapTolerance = 50 * time.Millisecond
+
+// videoRewindLimit 은 영상 축 이웃 차 d 를 역행(리셋)으로 보는 문턱이다 — d ≤ −1ms 면 리셋이다(ADR-073
+// 결정 2 개정 「리셋 = d(k) ≤ −1ms」). 1ms 미만의 음수는 같은 연결 안 경계 어긋남이다.
+const videoRewindLimit = time.Millisecond
 
 // playbackChain 은 스트림 하나의 ③ 도장 보관값이다 — 사슬이 마지막으로 도장을 찍은 회차 귀속 행의
 // 재료와, 그 회차에서 지금 쓰는 보정값. 루프(D10) 한 goroutine 만 만진다.
@@ -28,8 +34,10 @@ type playbackChain struct {
 	sessionID string
 	// seq 는 보관값 행의 seq 다. INSERT 때 직전 장부 행(prev)과 대조해 사이에 다른 행이 끼었는지
 	// 가린다 — 스트림 안에서 seq 가 유일하므로 회차까지 대조할 필요가 없다.
-	seq      int64
-	recorder [16]byte
+	seq int64
+	// facts 는 행의 원래 사실 칸이다(장부 timing_* — ③ 술어의 재료). 판독에 실패한 행이면 기대값(직전 행과
+	// 같은 녹화기의 다음 번호 · 영상 칸 없음)이다(④ⓐ — expectedFacts).
+	facts index.TimingFacts
 	// mtxi 는 누적 DTS 다. 판독에 실패한 행이면 기대값(직전 mtxi + 장부 길이)이다(④ⓐ).
 	mtxi time.Duration
 	pos  time.Duration
@@ -53,8 +61,12 @@ func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.
 	adjacent := hasChain && prev != nil && prev.Seq == c.seq
 	if adjacent {
 		// ② 꼬리 교정은 그 행이 꼬리인 동안만 일어나므로, 꼬리에서 물러나는 지금의 길이가 최종값이다.
-		// 사슬 행이 아닌 prev(비귀속 행)의 길이로는 어떤 필드도 덮지 않는다.
+		// 사슬 행이 아닌 prev(비귀속 행)의 길이로는 어떤 필드도 덮지 않는다. 영상 끝도 같은 교정을 받는
+		// 유일한 사실 칸이다(설계 r7 2.3 — 옛 값이 있을 때만 바뀐다). 기대값 행(영상 칸 없음)은 그대로 둔다.
 		c.dur = time.Duration(prev.DurationMS) * time.Millisecond
+		if c.facts.VideoEnd != nil && prev.Timing.VideoEnd != nil {
+			c.facts.VideoEnd = prev.Timing.VideoEnd
+		}
 		ix.chains[streamID] = c
 	}
 	if res.SessionID == "" {
@@ -81,7 +93,7 @@ func (ix *Indexer) startChain(streamID string, rec index.Record, res index.Inser
 		return nil
 	}
 	link := linkOf(rec, res)
-	link.recorder, link.mtxi, link.pos = mtxi.RecorderID, mtxi.DTS, mtxi.DTS
+	link.facts, link.mtxi, link.pos = rec.Timing.Facts, mtxi.DTS, mtxi.DTS
 	ix.chains[streamID] = link
 	return playbackTargetOf(streamID, link, rec, res, false)
 }
@@ -92,33 +104,68 @@ func (ix *Indexer) startChain(streamID string, rec index.Record, res index.Inser
 func (ix *Indexer) nextLink(c playbackChain, adjacent bool, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) (link playbackChain, pinned bool) {
 	link = linkOf(rec, res)
 	if mtxi == nil {
-		link.recorder, link.mtxi, link.offset = c.recorder, c.mtxi+c.dur, c.offset
+		link.facts, link.mtxi, link.offset = expectedFacts(c.facts), c.mtxi+c.dur, c.offset
 		link.pos = c.pos + c.dur
 		return link, true
 	}
-	link.recorder, link.mtxi = mtxi.RecorderID, mtxi.DTS
-	link.offset = ix.stitchOffset(c, adjacent, *mtxi)
+	link.facts, link.mtxi = rec.Timing.Facts, mtxi.DTS
+	link.offset = ix.stitchOffset(c, adjacent, *mtxi, rec.Timing.Facts)
 	link.pos = mtxi.DTS + link.offset
 	return link, false
 }
 
-// stitchOffset 은 같은 회차 안 다음 행 k 의 보정값이다(R3 산식). k−1 은 사슬 행이다.
+// stitchOffset 은 같은 회차 안 다음 행 k 의 보정값이다(R3 산식 · POK-196 PDT 계획 4절 c8). k−1 은 사슬 행이고
+// cur 는 k 의 원래 사실 칸이다.
 //
-//	리셋(녹화기 표식 변경 ∨ mtxi 역행)          offset := end(k−1) − mtxi(k)
+//	리셋(¬같은 녹화기 이어짐 ∨ 역행)             offset := end(k−1) − mtxi(k)
 //	  또는 사이에 비귀속 행이 끼었다(⑥)
-//	구멍(표식 같음 ∧ 예상 끝을 허용치 넘게 지남)  offset := pos(k−1) + dur(k−1) − mtxi(k)
+//	구멍(같은 녹화기 이어짐 ∧ d > 허용치)         offset := pos(k−1) + dur(k−1) − mtxi(k)
 //	그 밖                                        직전 보정값 그대로
+//
+// 같은 녹화기 이어짐은 index.SameInstance 다 — 판 2 섞기 · is_discontinuity 와 정의가 한 자리다. 표식이
+// 한쪽이라도 nil(mtxi 없음 · 번호 넘침)이면 이어짐이 아니라 리셋이다. 역행 · d 는 neighborGap 이 잰다.
 //
 // 술어는 사슬 행이 장부의 직전 행일 때만 뜻이 있다 — 끼어든 행이 있으면 구멍·연속을 판정할 기준이
 // 없으므로 저장된 마지막 회차 행의 끝에 잇는다(끼어든 미디어는 회차 밖이라 압축된다).
-func (ix *Indexer) stitchOffset(c playbackChain, adjacent bool, m playback.Mtxi) time.Duration {
-	if !adjacent || m.RecorderID != c.recorder || m.DTS < c.mtxi {
+func (ix *Indexer) stitchOffset(c playbackChain, adjacent bool, m playback.Mtxi, cur index.TimingFacts) time.Duration {
+	if !adjacent || !index.SameInstance(c.facts, cur) {
 		return ix.chainEnd(c) - m.DTS
 	}
-	if m.DTS-(c.mtxi+c.dur) > mtxiGapTolerance {
+	d, rewound := neighborGap(c, m, cur)
+	switch {
+	case rewound:
+		return ix.chainEnd(c) - m.DTS
+	case d > mtxiGapTolerance:
 		return c.pos + c.dur - m.DTS
 	}
 	return c.offset
+}
+
+// neighborGap 은 같은 녹화기 이어짐인 사슬 행 c 와 다음 행 사이의 이웃 차 d 와, 그것이 역행(리셋)인가다.
+//
+//	영상 축(두 행 모두 영상 칸 있음)  d = a(k) − b(k−1)               역행 = d ≤ −1ms
+//	mtxi 축(그 밖)                   d = mtxi(k) − (mtxi(k−1) + dur(k−1))  역행 = mtxi(k) < mtxi(k−1)
+//
+// 영상 축이 먼저다 — 장부 길이가 영상 길이(판 2)면 mtxi(조각 시작 = 머리 트랙 시작) + 장부 길이는 소리 머리
+// 조각의 머리 앞섬만큼 영상 끝보다 이르러 거짓 구멍(실측 최대 226ms)을 낸다(ADR-073 결정 2 개정 「이웃 술어는
+// 영상 축이다」). 영상 칸이 없는 행(소리만 송출 · 판독 실패로 기대값에 고정한 앞 행)은 mtxi 축으로 잰다.
+func neighborGap(c playbackChain, m playback.Mtxi, cur index.TimingFacts) (d time.Duration, rewound bool) {
+	if c.facts.VideoEnd != nil && cur.VideoFirst != nil {
+		d = *cur.VideoFirst - *c.facts.VideoEnd
+		return d, d <= -videoRewindLimit
+	}
+	return m.DTS - (c.mtxi + c.dur), m.DTS < c.mtxi
+}
+
+// expectedFacts 는 mtxi 를 못 읽어 도장을 기대값에 고정한 행의 사슬 칸이다(④ⓐ) — 앞 행과 같은 녹화기의 다음
+// 번호로 둬, 그 자리에 실제 리셋이 없었으면 다음 행이 같은 녹화기 이어짐으로 잇는다. 영상 칸은 비운다: 다음 행은
+// mtxi 축(기대 mtxi + 장부 길이)으로 잰다. 앞 행의 표식이 nil 이면 기대값도 nil 이라 다음 행은 리셋이다.
+func expectedFacts(prev index.TimingFacts) index.TimingFacts {
+	if prev.Recorder == nil || prev.Number == nil {
+		return index.TimingFacts{}
+	}
+	next := *prev.Number + 1
+	return index.TimingFacts{Recorder: prev.Recorder, Number: &next}
 }
 
 // chainEnd 는 보관값 행의 끝 = pos + 먼저 끝난 트랙의 끝이다. 늦게 끝난 쪽에 이으면 소리 빈틈이
