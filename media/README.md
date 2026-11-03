@@ -1709,7 +1709,7 @@ DISC-SEQ · base · 계승 회차 · S1–S7 · 봉인 · 읽기 뷰)은 다시 
 | `internal/index/store.go` · `rewind_read.go` | `EndLive`(스트림 단위 종료 문장) · 적재 읽기(되짚기 하한 · 행 상한 · 읽기 전용 REPEATABLE READ 한 트랜잭션 · 회차 최소 seq 열) · 30초 감시 한 문장 |
 | `internal/session/registry.go` · `cmd/segment-indexer/session_wire.go` | 300초 안 재접속 계승 개시(직전 회차 조회 · 계승 개시 TD) |
 | `internal/upload` | init 확정 CTE 의 stsd 게이트 입력 · Dirty 붙이기(`AttachDirty`) · L1 손잡이(`Expedite`) · 키 문법 한 벌 |
-| `internal/playback` | `ParseSegKey`(③ 조각 키 문법) · `StsdFingerprint` |
+| `internal/playback` | `ParseSegKey`(③ 조각 키 문법) · `StsdFingerprint` 〔추기 2026-11-03 — POK-525 부터 `ParseSegKey` 는 두 꼴을 풀어 `SegRef`(스트림 · 회차 · seq)를 돌려준다: 옛 꼴 `dvr/{stream}/seg/{seq}.m4s`(회차 빈 값) · 회차 꼴 `dvr/{stream}/{round}/seg/{seq}.m4s`(만드는 쪽 `RoundSegKey`). 성분은 128자 이하다(엣지 함수 정규식과 같은 상한). 업로드 워커 · S5 는 회차를 견주지 않고 스트림 · seq 만 본다. 엣지 함수와는 공유 골든 `internal/playback/testdata/seg_key.golden.txt` 로 맞춘다.〕 |
 | `internal/rewind/cache` | 적재 토큰 · 적재 중 push 로그와 재생 · 요구 적재 · 부정 표식 · 잘라내기(`Trim`) · 쉬는 뷰 버리기(`Forget`) · 감시 대조 · 화해 · init 확정 반영 |
 | `internal/rewind/validate.go` | S2 의 DISC-SEQ 비감소 조항 · S5 의 조각 줄 조항(③ 키 문법 · 같은 스트림 · 길이 > 0) |
 | `internal/config/config.go` | `REWIND_PUBLIC_BASE_URL` 적재 · 검증 · 스위치 기본값 `true` |

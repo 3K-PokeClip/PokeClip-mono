@@ -506,12 +506,12 @@ func (p Playlist) segmentProblem(r boundary.Row) string {
 	if r.DurationMS <= 0 {
 		return fmt.Sprintf("길이 %dms 가 0 이하다", r.DurationMS)
 	}
-	stream, _, err := playback.ParseSegKey(r.PlaybackS3Key)
+	ref, err := playback.ParseSegKey(r.PlaybackS3Key)
 	switch {
 	case err != nil:
 		return fmt.Sprintf("조각 키가 ③ 키 문법 밖이다 — %v", err)
-	case stream != p.StreamID:
-		return fmt.Sprintf("조각 키 %.64q 는 다른 스트림 %.64q 의 것이다(목록 스트림 %.64q)", r.PlaybackS3Key, stream, p.StreamID)
+	case ref.StreamID != p.StreamID:
+		return fmt.Sprintf("조각 키 %.64q 는 다른 스트림 %.64q 의 것이다(목록 스트림 %.64q)", r.PlaybackS3Key, ref.StreamID, p.StreamID)
 	}
 	return ""
 }

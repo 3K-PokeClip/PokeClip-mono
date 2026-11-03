@@ -423,18 +423,40 @@ func bodySegments(body []byte) (seqs []int64, gaps map[int64]bool, err error) {
 			gap = true
 		case strings.HasPrefix(line, "https://"):
 			key := line[strings.Index(line[len("https://"):], "/")+len("https://")+1:]
-			_, seq, perr := playback.ParseSegKey(key)
+			ref, perr := playback.ParseSegKey(key)
 			if perr != nil {
 				return nil, nil, fmt.Errorf("URI 줄 %q: %w", line, perr)
 			}
-			seqs = append(seqs, seq)
+			seqs = append(seqs, ref.Seq)
 			if gap {
-				gaps[seq] = true
+				gaps[ref.Seq] = true
 			}
 			gap = false
 		}
 	}
 	return seqs, gaps, nil
+}
+
+// bodySegments 는 두 꼴의 URI 줄에서 모두 seq 를 뽑는다(POK-525 설계 2-1) — 한 회차 안에서 켬 전 행은 옛 꼴 · 뒤 행은
+// 회차 꼴로 섞일 수 있다. PG 가 없어도 돈다.
+func TestBodySegmentsReadsBothKeyForms(t *testing.T) {
+	body := []byte("#EXTM3U\n" +
+		"https://cdn.example/dvr/s/seg/000007.m4s\n" +
+		"#EXT-X-GAP\n" +
+		"https://cdn.example/dvr/s/S-1/seg/000008.m4s\n" +
+		"https://cdn.example/dvr/s/S-1/seg/000009.m4s\n")
+
+	seqs, gaps, err := bodySegments(body)
+
+	if err != nil {
+		t.Fatalf("bodySegments: %v", err)
+	}
+	if want := []int64{7, 8, 9}; !slices.Equal(seqs, want) {
+		t.Errorf("seqs = %v, want %v", seqs, want)
+	}
+	if want := map[int64]bool{8: true}; !maps.Equal(gaps, want) {
+		t.Errorf("gaps = %v, want %v", gaps, want)
+	}
 }
 
 // itSession 은 회차의 세대 규약 열 몇 개다.
