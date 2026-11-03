@@ -54,9 +54,9 @@ function wideA2(): SessionEvent {
 const SOUGHT = T0 + 40 * MIN;
 const REMOUNT: SessionEvent = { type: 'remount' };
 
-/** 되감기 목록 안 시크 — 하한은 첫 조각 + 여유 */
-function seekRewind(targetMs = SOUGHT): SessionEvent {
-  return { type: 'seek', targetMs, view: { lowerMs: T0 + 12_000, endMs: NOW } };
+/** 되감기 목록 안 시크 — 목표는 SOUGHT · 하한은 첫 조각 + 여유 */
+function seekRewind(): SessionEvent {
+  return { type: 'seek', targetMs: SOUGHT, view: { lowerMs: T0 + 12_000, endMs: NOW } };
 }
 
 /** 다시보기 목록 안 시크 — 다시보기는 하한 여유가 없다 */

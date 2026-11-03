@@ -76,7 +76,7 @@ export interface HandoffBlock {
   reason: 'reverted' | 'truncated' | 'unknown';
 }
 
-/** 재생 세션에 더하는 넘김 칸 열하나 */
+/** 재생 세션에 더하는 넘김 칸 열둘 */
 export interface HandoffFields {
   /** 마지막 위치 사건의 재생 여부 */
   playing: boolean;

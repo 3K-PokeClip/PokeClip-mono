@@ -29,7 +29,12 @@ import {
   rewindFromLive,
   status,
 } from './relistTestKit';
-import { SESSION_NOTICES, pollTargets, type PlaybackSessionState } from './rewindSwitch';
+import {
+  SESSION_NOTICES,
+  pollTargets,
+  type PlaybackSessionState,
+  type SessionEvent,
+} from './rewindSwitch';
 import { isPlayerStartHeld, sessionView } from './sessionView';
 
 // 방송 중 되감기 조각 404 → 보던 목록 다시 받기(POK-528 c7 — 계획 3-2 · 3-3 · 3-4 · 3-5 ·
@@ -41,12 +46,20 @@ import { isPlayerStartHeld, sessionView } from './sessionView';
 beforeEach(resetEventKit);
 
 /** 404 를 받아 목록을 다시 받는 중(첫 목록 전)인 되감기 */
-const relisted = (s: PlaybackSessionState) => feed(s, [gone(s)]).state;
+function relisted(s: PlaybackSessionState): PlaybackSessionState {
+  return feed(s, [gone(s)]).state;
+}
+
 /** 다시 받은 첫 목록을 받아 화면을 기다리는 되감기 */
-const painting = (s: PlaybackSessionState, cut = false) =>
-  feed(relisted(s), [loaded(A1, cut)]).state;
+function painting(s: PlaybackSessionState, cut = false): PlaybackSessionState {
+  return feed(relisted(s), [loaded(A1, cut)]).state;
+}
+
 /** 보던 자리 P20 을 품지 않는 같은 회차 새 url A2 의 답(그 범위가 pendingNext 로 든다) */
-const laterA2 = () => poll(liveReady(A2, T0 + 50 * MIN));
+function laterA2(): SessionEvent {
+  return poll(liveReady(A2, T0 + 50 * MIN));
+}
+
 const laterA2Range = { url: A2, firstPdtMs: T0 + 50 * MIN, headPdtMs: NOW + MIN };
 
 describe('되감기 조각 404 → 같은 목록을 다시 받는다(계획 3-2)', () => {

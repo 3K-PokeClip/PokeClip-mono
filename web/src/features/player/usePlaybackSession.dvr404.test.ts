@@ -229,6 +229,8 @@ async function runRelist(
     seen = generation;
     for (const event of playerEvents(session, onSwap)) dispatch(event);
   }
+  // 마지막 반복에 넣은 사건이 띄운 비동기 일(라이브 창 탐침 등)을 act 안에서 끝낸 뒤에 센다
+  await flush();
   const all = checkedTransitions();
   const raisedBy = (type: SessionEvent['type']) =>
     all.filter(({ raised, event }) => raised && event.type === type).length;

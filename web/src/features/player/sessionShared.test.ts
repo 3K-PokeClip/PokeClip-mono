@@ -51,6 +51,7 @@ describe('resumeAtMs — 이어 볼 자리(계획 3-2)', () => {
     ['vod', 'confirmed', L],
     ['vod', 'seeking', Q],
     ['vod', 'requested', S0],
+    ['vod', 'floor', null],
     ['vod', 'none', null],
     ['live', 'confirmed', L],
     ['live', 'requested', L],
