@@ -110,9 +110,9 @@ public class JobProcessor implements MessageHandler {
         List<String> uploaded = new ArrayList<>();
         try (Workspace workspace = new Workspace(workRoot, job.jobId())) {
             Instant deadline = began.plus(jobTimeout);
-            List<ClipRenderer.Produced> produced = renderer.render(job, workspace.dir(), deadline, gate::report);
+            ClipRenderer.Rendered rendered = renderer.render(job, workspace.dir(), deadline, gate::report);
             List<ResultItem> result = new ArrayList<>();
-            for (ClipRenderer.Produced p : produced) {
+            for (ClipRenderer.Produced p : rendered.files()) {
                 String name = p.file().getFileName().toString();
                 String key = job.outputKey(token, name);
                 store.upload(job.outputBucket(), key, p.file(),
@@ -121,7 +121,7 @@ public class JobProcessor implements MessageHandler {
                 result.add(new ResultItem(p.outputId(), p.kind(), key));
             }
             gate.report(95, "upload");
-            Reply reply = reporter.succeeded(job.jobId(), token, result);
+            Reply reply = reporter.succeeded(job.jobId(), token, result, rendered.layout());
             log.info("render.succeeded jobId={} clipId={} files={} elapsedMs={} status={}", job.jobId(), job.clipId(),
                     result.size(), Duration.between(began, clock.instant()).toMillis(), reply.status());
             if (reply.status() == 400 && "INVALID_RESULT".equals(reply.reason())) {

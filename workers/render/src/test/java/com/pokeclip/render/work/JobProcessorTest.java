@@ -54,7 +54,7 @@ class JobProcessorTest {
         store = mock(S3Store.class);
         Path video = Files.writeString(work.resolve("o1.mp4"), "v");
         when(renderer.render(any(), any(), any(), any()))
-                .thenReturn(List.of(new ClipRenderer.Produced("o1", "video", video)));
+                .thenReturn(new ClipRenderer.Rendered(List.of(new ClipRenderer.Produced("o1", "video", video)), null));
         RenderProperties props = new RenderProperties(null, null, null, false, "ap-northeast-2", clip.baseUrl(),
                 "secret-token", work, "ffmpeg", "ffprobe", Duration.ofMinutes(1), Duration.ofSeconds(600),
                 Duration.ofSeconds(1), List.of(Duration.ZERO, Duration.ZERO), null);
@@ -82,6 +82,35 @@ class JobProcessorTest {
         assertThat(done.internalToken()).isEqualTo("secret-token");
         assertThat(done.idempotencyKey()).isEqualTo(done.body().path("eventId").asString());
         assertThat(clip.last("STARTED").body().has("executionToken")).as("STARTED는 무토큰").isFalse();
+        assertThat(done.body().has("placements")).as("옛 꼴 SUCCEEDED 본문은 예전 그대로").isFalse();
+        assertThat(done.body().has("lengthUs")).isFalse();
+    }
+
+    /** 새 꼴 주문은 SUCCEEDED 본문 맨 위에 {@code result} 형제 칸으로 배치표와 결과 길이를 싣는다(설계 r7 3.3 · 7.6). */
+    @Test
+    void 새_꼴_성공은_배치표와_결과_길이를_result_옆에_싣는다() throws Exception {
+        Path video = Files.writeString(work.resolve("o1.mp4"), "v");
+        ClipReporter.ResultLayout layout = new ClipReporter.ResultLayout(List.of(
+                new ClipReporter.PlacementItem(101, 0, -1_000_000, 3_966_667, 21_333),
+                new ClipReporter.PlacementItem(102, 4_000_000, 0, 1_500_000, 0)), 5_500_000);
+        when(renderer.render(any(), any(), any(), any())).thenReturn(
+                new ClipRenderer.Rendered(List.of(new ClipRenderer.Produced("o1", "video", video)), layout));
+        String body = PlanOrder.of(jobId).segment(101, false, false).segment(102, false, true)
+                .in(101, 1_000_000).out(102, 1_500_000).body();
+
+        assertThat(processor.process(body)).isEqualTo(Disposition.DELETE);
+
+        tools.jackson.databind.JsonNode done = clip.last("SUCCEEDED").body();
+        assertThat(done.path("result").get(0).path("outputId").asString()).isEqualTo("o1");
+        assertThat(done.path("lengthUs").asLong()).isEqualTo(5_500_000);
+        assertThat(done.path("placements")).hasSize(2);
+        tools.jackson.databind.JsonNode first = done.path("placements").get(0);
+        assertThat(first.path("seq").asLong()).isEqualTo(101);
+        assertThat(first.path("zeroAtUs").asLong()).isZero();
+        assertThat(first.path("fromUs").asLong()).isEqualTo(-1_000_000);
+        assertThat(first.path("toUs").asLong()).isEqualTo(3_966_667);
+        assertThat(first.path("headLeadUs").asLong()).isEqualTo(21_333);
+        assertThat(done.path("placements").get(1).path("zeroAtUs").asLong()).isEqualTo(4_000_000);
     }
 
     @Test

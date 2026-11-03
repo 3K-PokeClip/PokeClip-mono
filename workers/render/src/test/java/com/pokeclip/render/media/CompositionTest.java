@@ -90,6 +90,53 @@ class CompositionTest {
     }
 
     @Test
+    void 그림_입력_번호는_넘긴_첫_번호부터_세고_나머지_필터는_같다() {
+        // 새 꼴 최종 단계: 영상 0 · 소리 묶음 1–3 이라 그림은 4 부터다
+        Output output = RecipeParser.parse(Fixtures.recipeV2("s1")).outputs().getFirst();
+        Composition.Plan old = Composition.plan(output, 640, 360, "o1_");
+        Composition.Plan joined = Composition.plan(output, 640, 360, "o1_", 4);
+        assertThat(old.firstImageInput()).isEqualTo(1);
+        assertThat(joined.firstImageInput()).isEqualTo(4);
+        assertThat(joined.images()).extracting(Composition.Image::name)
+                .containsExactly("o1_l1_mask.png", "o1_l1_shadow.png", "o1_l1_ring.png");
+        assertThat(joined.graph()).contains("[4:v]format=gray[l1m]", "[5:v]overlay=", "[6:v]overlay=x=194:y=960")
+                .doesNotContain("[1:v]", "[2:v]", "[3:v]")
+                .isEqualTo(old.graph().replace("[3:v]", "[6:v]").replace("[2:v]", "[5:v]").replace("[1:v]", "[4:v]")
+                        .replace("alphamerge", "alphamerge=shortest=1")
+                        .replaceAll("(overlay=x=-?\\d+:y=-?\\d+)", "$1:shortest=1"));
+    }
+
+    /**
+     * 새 꼴 최종 단계에는 출력 길이 창({@code -t})이 없다. 그림은 {@code -loop 1} 로 끝없이 이어지고, 두 입력 합성(framesync)은
+     * 기본값이 먼저 끝난 입력을 마지막 프레임으로 늘이는 것이라 주 영상이 끝나도 출력이 끝나지 않는다. 그래서 그림을 쓰는 자리를
+     * 포함한 모든 두 입력 합성이 먼저 끝난 입력에서 끝나야 한다.
+     */
+    @Test
+    void 새_꼴_두_입력_합성은_모두_먼저_끝난_입력에서_끝난다() {
+        Output output = RecipeParser.parse(Fixtures.recipeV2("s1")).outputs().getFirst();
+        String graph = Composition.plan(output, 640, 360, "o1_", 4).graph();
+        int overlays = graph.split("overlay=", -1).length - 1;
+        assertThat(overlays).as("층 · 그림자 · 테두리 · 바탕 합성").isEqualTo(4);
+        assertThat(graph.split("overlay=x=-?\\d+:y=-?\\d+:shortest=1", -1)).hasSize(overlays + 1);
+        assertThat(graph).contains("[l1r][l1m]alphamerge=shortest=1[l1]");
+        assertThat(graph.split("alphamerge", -1)).hasSize(2);
+    }
+
+    @Test
+    void 옛_꼴_합성에는_끝내기_옵션이_없다() {
+        // 옛 꼴은 출력 -t 가 길이를 막는다 — 필터 문자열은 develop 과 바이트 같아야 한다
+        Output output = RecipeParser.parse(Fixtures.recipeV2("s1")).outputs().getFirst();
+        assertThat(Composition.plan(output, 640, 360, "o1_").graph()).doesNotContain("shortest");
+    }
+
+    @Test
+    void 그림_입력_첫_번호가_원본_자리면_거부한다() {
+        Output output = RecipeParser.parse(Fixtures.recipeV2("s1")).outputs().getFirst();
+        assertThatThrownBy(() -> Composition.plan(output, 640, 360, "o1_", 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void 자르는_자리와_놓일_자리의_비율이_다르면_거부한다() {
         Output wrong = new Output("o1", Aspect.VERT_9_16, null,
                 List.of(new Layer(VERT, new Box(0, 0, 1, 0.5), null)), List.of());

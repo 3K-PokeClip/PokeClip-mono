@@ -72,6 +72,14 @@ public class ClipReporter {
     }
 
     public Reply succeeded(UUID jobId, String token, List<ResultItem> result) {
+        return succeeded(jobId, token, result, null);
+    }
+
+    /**
+     * @param layout 새 꼴 주문의 결과 배치(PDT 설계 r7 3.3 · 7.6). {@code result} 형제 칸 {@code placements} · {@code lengthUs}
+     *               로 싣는다. 옛 꼴은 null — 본문이 예전과 같다
+     */
+    public Reply succeeded(UUID jobId, String token, List<ResultItem> result, ResultLayout layout) {
         return send(jobId, "SUCCEEDED", token, body -> {
             ArrayNode items = body.putArray("result");
             for (ResultItem item : result) {
@@ -80,7 +88,23 @@ public class ClipReporter {
                 node.put("kind", item.kind());
                 node.put("s3Key", item.s3Key());
             }
+            if (layout != null) {
+                placements(body, layout);
+            }
         });
+    }
+
+    private static void placements(ObjectNode body, ResultLayout layout) {
+        ArrayNode placements = body.putArray("placements");
+        for (PlacementItem p : layout.placements()) {
+            ObjectNode node = placements.addObject();
+            node.put("seq", p.seq());
+            node.put("zeroAtUs", p.zeroAtUs());
+            node.put("fromUs", p.fromUs());
+            node.put("toUs", p.toUs());
+            node.put("headLeadUs", p.headLeadUs());
+        }
+        body.put("lengthUs", layout.lengthUs());
     }
 
     /** @param token null이면 preflight 실패(무토큰)다 */
@@ -141,6 +165,21 @@ public class ClipReporter {
 
     /** SUCCEEDED의 산출물 한 줄(계약1 4절 result). */
     public record ResultItem(String outputId, String kind, String s3Key) {
+    }
+
+    /**
+     * 결과 배치표 한 줄(PDT 설계 r7 7.6). 조각 {@code seq} 의 x′ = 0 이 결과 {@code zeroAtUs} 에 놓이고, 결과에 든 그 조각 몫이
+     * x′ 로 {@code [fromUs, toUs]} 다. {@code headLeadUs} = 그 조각 m(파일 머리 → 영상 첫 DTS).
+     */
+    public record PlacementItem(long seq, long zeroAtUs, long fromUs, long toUs, long headLeadUs) {
+    }
+
+    /** SUCCEEDED 의 결과 배치 — 배치표와 결과 길이(µs). */
+    public record ResultLayout(List<PlacementItem> placements, long lengthUs) {
+
+        public ResultLayout {
+            placements = List.copyOf(placements);
+        }
     }
 
     /** 재전송 대기. 시험은 바로 넘긴다. */
