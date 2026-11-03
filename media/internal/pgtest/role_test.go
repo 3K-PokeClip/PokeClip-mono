@@ -59,7 +59,8 @@ func TestMediaIndexerGrantsMatchREADME(t *testing.T) {
 // mediaIndexerAllowance 는 ADR-0006 개정(2026-10-26 — I1-2 권한 절)이 표마다 허용한 권한의 상한이다. DELETE 는 M6
 // 만료 · outbox 정리 몫(segments · sessions · gaps · outbox)뿐이고, stream_cutoffs 의 UPDATE · DELETE 는 만료의 컷오프
 // 전진 · 제거 몫이다. stream_seq_floors 는 SELECT 만이다 — 하한은 트리거가 정의자 권한으로 올린다. TRUNCATE · DDL 은
-// 어느 표에도 없다(ENSURE_SCHEMA=false).
+// 어느 표에도 없다(ENSURE_SCHEMA=false). stream_timing_gate 는 ADR-0006 개정 뒤에 생긴 1번 소유 표로, PDT 설계 r7 9.3 이
+// SELECT 하나로 정했다(스위치 · 래치를 사이드카가 바꾸지 못하게 — POK-196).
 var mediaIndexerAllowance = map[string][]string{
 	"stream_segments":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"stream_sessions":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
@@ -67,6 +68,7 @@ var mediaIndexerAllowance = map[string][]string{
 	"stream_published_gaps":      {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"stream_seq_floors":          {"SELECT"},
 	"broadcast_lifecycle_outbox": {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"stream_timing_gate":         {"SELECT"},
 }
 
 // 권한은 ADR-0006 개정이 표마다 허용한 상한 안에서만 준다 — 목록에 상한 밖 권한(하한 표 쓰기 · TRUNCATE 등)이나

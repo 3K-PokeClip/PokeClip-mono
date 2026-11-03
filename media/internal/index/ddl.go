@@ -210,9 +210,65 @@ BEGIN
     END IF;
 END $do$;
 
+-- PDT 판 2 칸 일곱(POK-196 · 설계 r7 2.3 · 2.4 · 9.2 단계 2). timing_version = 그 행의 PDT 규약 판(NULL = 옛 식) ·
+-- 나머지 여섯 = 생산자가 조각 파일에서 읽은 원래 사실과 이어 계산 회차다. 생산자 기록이라 소비자는 읽지 않는다(계약 B10 ·
+-- 칸 뜻은 통지로 바꿀 수 있다). 출시 이미지는 이 칸을 모르고 INSERT 하므로 모두 NULL 허용 · 기본값 없음이다 — 쓰기자
+-- 거부 트리거가 「timing_wall_guess NULL = 출시 이미지가 쓴 행」 으로 가른다.
+-- 위 열 블록과 같은 카탈로그 확인 이디엄이되, 빠진 칸을 칸마다 고른 뒤 ALTER 한 번에 몰아 배타 잠금을 한 번만 잡는다.
+-- 이 블록과 아래 CHECK · PDT 블록은 prod 에 적용한 뒤 같은 이름으로 정의를 고치지 않는다 — 「이름이 있으면 건너뜀」 이라
+-- 재실행이 옛 정의를 조용히 남기고 기동 확인도 통과한다. 적용 뒤 바꿀 것은 새 이름 · 전진 SQL 로만 한다(설계 9.2).
+DO $do$
+DECLARE
+    missing text[];
+BEGIN
+    SELECT pg_catalog.array_agg(pg_catalog.format('ADD COLUMN %I %s', c.name, c.type) ORDER BY c.ord)
+      INTO missing
+      FROM (VALUES (1, 'timing_version', 'smallint'), (2, 'timing_wall_guess', 'timestamptz'),
+                   (3, 'timing_recorder_id', 'uuid'), (4, 'timing_segment_number', 'bigint'),
+                   (5, 'timing_video_first_ns', 'bigint'), (6, 'timing_video_end_ns', 'bigint'),
+                   (7, 'timing_round_id', 'text')) AS c(ord, name, type)
+     WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema::name = pg_catalog.current_schema()
+                          AND table_name::name  = 'stream_segments'
+                          AND column_name::name = c.name::name);
+    IF missing IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE stream_segments ' || pg_catalog.array_to_string(missing, ', ');
+    END IF;
+END $do$;
+
+-- PDT CHECK 넷(설계 r7 2.3) — 원래 사실 칸의 NULL 짝을 강제한다. NOT VALID 로 더한다: 옛 행은 칸이 모두 NULL 이라 어차피
+-- 만족하고, 검증 훑기의 배타 잠금을 피한다(새 행 · 갱신 행에는 강제된다). 위반은 23514 라 사이드카가 fateFatal 로 끝나므로
+-- 생산자는 번호 넘침이면 표식 · 번호 · 영상 두 칸을 함께 NULL 로 쓴다(넷째 = 판 2 행은 w 와 귀속 무관 PDT 를 갖는다).
+DO $do$
+DECLARE
+    missing text[];
+BEGIN
+    SELECT pg_catalog.array_agg(pg_catalog.format('ADD CONSTRAINT %I CHECK (%s) NOT VALID', c.name, c.expr) ORDER BY c.ord)
+      INTO missing
+      FROM (VALUES (1, 'stream_segments_timing_marker_chk',
+                       '(timing_recorder_id IS NULL) = (timing_segment_number IS NULL)'),
+                   (2, 'stream_segments_timing_video_chk',
+                       '(timing_video_first_ns IS NULL) = (timing_video_end_ns IS NULL)'),
+                   (3, 'stream_segments_timing_video_marker_chk',
+                       'timing_video_first_ns IS NULL OR timing_recorder_id IS NOT NULL'),
+                   (4, 'stream_segments_timing_v2_chk',
+                       'timing_version IS NULL OR (timing_wall_guess IS NOT NULL AND playback_pdt IS NOT NULL)'))
+           AS c(ord, name, expr)
+     WHERE NOT EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = 'stream_segments'::regclass::oid
+                          AND conname  = c.name::name AND contype = 'c');
+    IF missing IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE stream_segments ' || pg_catalog.array_to_string(missing, ', ');
+    END IF;
+END $do$;
+
 -- 6-1 (d) 불변 트리거 — 발행 축 3열은 "NULL → 값 1회 채움"만 허용한다.
 -- 값이 이미 있는데 바뀌면 이미 발행한 목록 줄이 실질 변경된다(설계 6.1.2).
-CREATE OR REPLACE FUNCTION stream_segments_immutable_axes() RETURNS trigger AS $fn$
+-- PDT 칸(설계 r7 2.3 표 「불변」 열): 판 · 원래 사실 · 회차는 INSERT 뒤 어떤 변경도 거부한다(NULL → 값 포함 — 출시 이미지가 쓴
+-- 행에 뒤늦게 사실을 채우면 그 행이 판 2 행처럼 읽힌다). 영상 끝만 꼬리 교정을 받는다 — pending 꼬리 ∧ 옛 값 있음 ∧ 늘림.
+-- 옛 값이 NULL 인 꼬리는 교정이 이 칸을 넘기지 않는다(2.14). search_path 는 아래 하한 함수처럼 고정한다.
+CREATE OR REPLACE FUNCTION stream_segments_immutable_axes() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
 BEGIN
     IF OLD.session_id IS NOT NULL AND NEW.session_id IS DISTINCT FROM OLD.session_id THEN
         RAISE EXCEPTION 'session_id is immutable (stream=%, seq=%)', OLD.stream_id, OLD.seq;
@@ -224,8 +280,19 @@ BEGIN
        AND NEW.playback_s3_key IS DISTINCT FROM OLD.playback_s3_key THEN
         RAISE EXCEPTION 'playback_s3_key is immutable (stream=%, seq=%)', OLD.stream_id, OLD.seq;
     END IF;
+    IF (NEW.timing_version, NEW.timing_wall_guess, NEW.timing_recorder_id, NEW.timing_segment_number,
+        NEW.timing_video_first_ns, NEW.timing_round_id)
+       IS DISTINCT FROM (OLD.timing_version, OLD.timing_wall_guess, OLD.timing_recorder_id, OLD.timing_segment_number,
+                         OLD.timing_video_first_ns, OLD.timing_round_id) THEN
+        RAISE EXCEPTION 'timing facts are immutable (stream=%, seq=%)', OLD.stream_id, OLD.seq;
+    END IF;
+    IF NEW.timing_video_end_ns IS DISTINCT FROM OLD.timing_video_end_ns
+       AND NOT (OLD.upload_state = 'pending' AND OLD.timing_video_end_ns IS NOT NULL
+                AND NEW.timing_video_end_ns IS NOT NULL AND NEW.timing_video_end_ns > OLD.timing_video_end_ns) THEN
+        RAISE EXCEPTION 'timing_video_end_ns only grows on a pending tail (stream=%, seq=%)', OLD.stream_id, OLD.seq;
+    END IF;
     RETURN NEW;
-END $fn$ LANGUAGE plpgsql;
+END $fn$;
 
 DO $do$
 BEGIN
@@ -429,6 +496,116 @@ BEGIN
         CREATE TRIGGER stream_segments_seq_floor_guard
             BEFORE INSERT ON stream_segments
             FOR EACH ROW EXECUTE FUNCTION stream_segments_check_seq_floor();
+    END IF;
+END $do$;
+
+-- ============================================================================
+-- PDT 판 게이트 · 되돌리기 거부(POK-196 · 설계 r7 9.3 · 9.4) — 1번 소유 표(승인 표면 아님 · 통지). 게이트 표가 쓰기자
+-- 거부 트리거보다 앞이다 — 그 트리거가 이 표를 읽는다. 위 칸 블록의 「prod 적용 뒤 같은 이름으로 정의를 고치지 않는다」 가
+-- 이 블록에도 그대로다(함수 본문만 CREATE OR REPLACE 라 재실행이 바꾼다).
+-- ============================================================================
+
+-- 게이트 한 행 — new_round_version = 스위치(새 회차를 여는 판 · 기본 NULL) · highest_version = 래치(스위치가 2 가 된 적이
+-- 있으면 2). 사이드카(media_indexer)는 SELECT 만 갖고 잠그지 않는다 — SELECT … FOR SHARE 는 그 표의 UPDATE 권한도 요구하므로
+-- (PostgreSQL 17 SELECT 문서 The Locking Clause — https://www.postgresql.org/docs/17/sql-select.html#SQL-FOR-UPDATE-SHARE)
+-- 직렬화는 행 잠금이 아니라 advisory 열쇠 pc_timing_gate 로 한다(D14). 회차 개시는 공유 잠금을 잡고 읽고, 아래 게이트
+-- 트리거는 배타 잠금을 잡는다. 스위치 · 래치는 마스터가 SET ROLE media_owner 로 손 SQL 로만 바꾼다.
+CREATE TABLE IF NOT EXISTS stream_timing_gate (
+    id                boolean     PRIMARY KEY DEFAULT true,
+    new_round_version smallint,
+    highest_version   smallint,
+    changed_at        timestamptz,
+    changed_by        text,
+    CONSTRAINT stream_timing_gate_one_row_chk CHECK (id),
+    CONSTRAINT stream_timing_gate_switch_chk  CHECK (new_round_version IN (2)),
+    CONSTRAINT stream_timing_gate_latch_chk   CHECK (highest_version IN (2))
+);
+
+-- 씨앗 행(스위치 · 래치 NULL). 행이 있으면 INSERT 문장을 돌리지 않는다 — 수렴한 재실행이 게이트 표를 잠그지 않게.
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM stream_timing_gate) THEN
+        INSERT INTO stream_timing_gate (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+    END IF;
+END $do$;
+
+-- 게이트 트리거 — 맨 앞에서 열쇠 pc_timing_gate 의 배타 잠금을 잡아 진행 중인 회차 개시(공유 잠금)가 끝나기를 기다린다.
+-- DELETE 는 거부한다. 스위치가 판을 가리키면 래치를 같이 세운다. 래치 낮추기(→ NULL)는 스위치 NULL 이고 판 2 행이 0 일
+-- 때만이다(MongoDB CannotDowngrade 꼴) — 판 2 행 셈은 잠금 뒤라 그 사이 커밋한 개시의 행까지 센다. 스위치를 NULL 로 내리는
+-- 것은 늘 된다(판 2 쓰기를 멈추는 길 · 열린 판 2 회차는 판 고정으로 끝까지 판 2). 거부는 23514 다.
+-- hashtext 는 integer 를 내고 pg_catalog 의 잠금 함수는 bigint 판뿐이라 ::bigint 로 맞춘다(store.go 의 컷오프 열쇠와 같은 꼴).
+CREATE OR REPLACE FUNCTION stream_timing_gate_guard() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+BEGIN
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('pc_timing_gate'::text)::bigint);
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'timing_gate_delete_refused' USING ERRCODE = 'check_violation';
+    END IF;
+    NEW.highest_version := GREATEST(NEW.highest_version, NEW.new_round_version);
+    IF OLD.highest_version IS NOT NULL AND NEW.highest_version IS NULL
+       AND EXISTS (SELECT 1 FROM public.stream_segments s WHERE s.timing_version = 2) THEN
+        RAISE EXCEPTION 'timing_latch_lower_refused'
+            USING ERRCODE = 'check_violation', DETAIL = 'stream_segments 에 판 2 행이 있다';
+    END IF;
+    RETURN NEW;
+END $fn$;
+
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger
+                   WHERE tgrelid = 'stream_timing_gate'::regclass::oid
+                     AND tgname  = 'stream_timing_gate_guard_tg') THEN
+        CREATE TRIGGER stream_timing_gate_guard_tg
+            BEFORE UPDATE OR DELETE ON stream_timing_gate
+            FOR EACH ROW EXECUTE FUNCTION stream_timing_gate_guard();
+    END IF;
+END $do$;
+
+-- 쓰기자 거부(설계 9.4 — 기동 전 검사의 뒷받침) — 래치가 선 뒤 timing_wall_guess 없는 INSERT(출시 이미지)를 23514
+-- legacy_writer_refused 로 거부한다. 새 이미지는 판과 무관하게 이 칸을 늘 채우므로 걸리지 않는다. 결과는 하한 검사와 같다 —
+-- 23 클래스라 출시 사이드카가 종료 코드 1 로 끝나 상자의 모든 스트림 색인이 멈추고 재기동을 되풀이하지만, 장부에 판 2 를
+-- 모르는 줄은 들어가지 않는다. 하한 검사처럼 부른 쪽 권한으로 게이트를 읽는다(넣는 계정 media_indexer 는 게이트 SELECT 를
+-- 갖는다). 래치 판정을 「NULL 이 아님」 으로 두는 까닭: 래치는 판 2 이상이 쓰인 적이 있다는 뜻이고, 어느 판이든 옛 식 쓰기는
+-- 그 회차를 깬다.
+CREATE OR REPLACE FUNCTION stream_segments_refuse_legacy_writer() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+BEGIN
+    IF NEW.timing_wall_guess IS NULL
+       AND EXISTS (SELECT 1 FROM public.stream_timing_gate g WHERE g.highest_version IS NOT NULL) THEN
+        RAISE EXCEPTION 'legacy_writer_refused'
+            USING ERRCODE = 'check_violation',
+                  DETAIL = pg_catalog.format('stream=%s seq=%s', NEW.stream_id, NEW.seq);
+    END IF;
+    RETURN NEW;
+END $fn$;
+
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger
+                   WHERE tgrelid = 'stream_segments'::regclass::oid
+                     AND tgname  = 'stream_segments_legacy_writer_guard') THEN
+        CREATE TRIGGER stream_segments_legacy_writer_guard
+            BEFORE INSERT ON stream_segments
+            FOR EACH ROW EXECUTE FUNCTION stream_segments_refuse_legacy_writer();
+    END IF;
+END $do$;
+
+-- PDT 부분 인덱스 셋 — 비동시(CONCURRENTLY 아님 · 트랜잭션 · DO 블록 안에서 돈다)라 처음 만드는 동안 그 표 쓰기가 멈춘다
+-- (설계 9.2 단계 2 (ㄱ) · 방송 없는 창). 회차 인덱스는 생산자가 p(같은 회차 최신 행)를 한 줄로 찾는다(설계 2.4). floor
+-- 인덱스 둘은 채팅 시각 → 영상 위치 조회가 한쪽 판만 있는 스트림에서 다른 판 행을 끝까지 훑지 않게 한다(r6 2.12) — 판 2
+-- 인덱스는 게이트 트리거의 「판 2 행이 있나」 도 탄다.
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('stream_segments_timing_round_idx') IS NULL THEN
+        CREATE INDEX stream_segments_timing_round_idx ON stream_segments (stream_id, timing_round_id, seq)
+            WHERE timing_round_id IS NOT NULL;
+    END IF;
+    IF pg_catalog.to_regclass('stream_segments_v2_seq_idx') IS NULL THEN
+        CREATE INDEX stream_segments_v2_seq_idx ON stream_segments (stream_id, seq) WHERE timing_version = 2;
+    END IF;
+    IF pg_catalog.to_regclass('stream_segments_legacy_wall_idx') IS NULL THEN
+        CREATE INDEX stream_segments_legacy_wall_idx ON stream_segments (stream_id, start_wall_utc DESC)
+            WHERE timing_version IS NULL;
     END IF;
 END $do$;
 `

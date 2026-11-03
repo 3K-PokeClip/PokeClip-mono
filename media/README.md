@@ -576,6 +576,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stream_cutoffs TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_published_gaps TO media_indexer;
 GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
+GRANT SELECT ON stream_timing_gate TO media_indexer;
 ```
 
 - **DELETE 는 M6 만료 · outbox 몫만이다(ADR-0006 개정 —
