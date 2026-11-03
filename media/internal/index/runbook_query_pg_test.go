@@ -161,9 +161,16 @@ func runReadOnlyColumns(ctx context.Context, pool *pgxpool.Pool, query string) (
 	return names, out, rows.Err()
 }
 
-// axisWaiting 은 Q2 · Q2-B 의 행(축 · waiting · bytes_null)을 축 이름 → waiting 으로 편다.
-func axisWaiting(rows [][]any) (map[string]int64, error) {
-	out := make(map[string]int64, len(rows))
+// axisCount 는 Q2 · Q2-B 의 한 행(waiting · bytes_null)이다. bytes_null 이 NULL(init 행)이면 hasBytesNull 이 거짓이다.
+type axisCount struct {
+	waiting      int64
+	bytesNull    int64
+	hasBytesNull bool
+}
+
+// axisCounts 는 Q2 · Q2-B 의 행(축 · waiting · bytes_null)을 축 이름 → axisCount 로 편다.
+func axisCounts(rows [][]any) (map[string]axisCount, error) {
+	out := make(map[string]axisCount, len(rows))
 	for _, row := range rows {
 		if len(row) != 3 {
 			return nil, fmt.Errorf("열 수 %d(기대 3)", len(row))
@@ -173,7 +180,15 @@ func axisWaiting(rows [][]any) (map[string]int64, error) {
 		if !ok || !ok2 {
 			return nil, fmt.Errorf("행 꼴 %#v", row)
 		}
-		out[axis] = waiting
+		count := axisCount{waiting: waiting}
+		if row[2] != nil {
+			bytesNull, ok := row[2].(int64)
+			if !ok {
+				return nil, fmt.Errorf("bytes_null 꼴 %#v", row)
+			}
+			count.bytesNull, count.hasBytesNull = bytesNull, true
+		}
+		out[axis] = count
 	}
 	return out, nil
 }
@@ -326,7 +341,8 @@ func waitingSegment(stream, session string, start time.Time) runbookSegment {
 // Q2(A 배출 — E25) · Q2-B(B 배출 — E36)의 축마다 waiting 이 업로더 스위퍼가 집는 수와 같다. 두 질의는 상한 자리
 // 표시(<cut> · <cut2>)만 다르고 업로더 술어는 같으므로 한 고정물로 함께 잰다. 고정물은 업로더 술어를 하나씩 어긴 행을
 // 축마다 둔다 — 런북 질의가 술어 하나를 빠뜨리면(failed 를 빼 재시도 대기 행을 못 세는 꼴 포함) 그 행을 더 세거나 덜
-// 세어 갈린다. 시각은 모두 상한 앞 · 24시간 안 · 꼬리 유예 밖이다(꼬리 예외 · 창 경계는 이 대조의 축이 아니다 —
+// 세어 갈린다. bytes 하나만 어긴 행은 런북이 waiting 이 아니라 bytes_null 로 따로 세므로(「0 이 아니면 kty 보고」)
+// 그 열도 축마다 본다. 시각은 모두 상한 앞 · 24시간 안 · 꼬리 유예 밖이다(꼬리 예외 · 창 경계는 이 대조의 축이 아니다 —
 // TestRunbookQ2ExcludesTestStreamAfterCutAndStale · TestRunbookQ2BCountsBDiskRowsBeforeCut2 가 잰다).
 func TestRunbookQ2AndQ2BCountWhatUploaderPicks(t *testing.T) {
 	ctx := context.Background()
@@ -358,6 +374,9 @@ func TestRunbookQ2AndQ2BCountWhatUploaderPicks(t *testing.T) {
 			key: "dvr/pbstream/seg/000006.m4s", noPDT: true},
 		{stream: "pbstream", session: "S-live", seq: 7, start: at, archive: "uploaded", playback: "pending",
 			key: "dvr/pbstream/seg/000007.m4s", noPath: true},
+		// ③ bytes 없음 — 업로더는 안 집고 런북은 waiting 이 아니라 bytes_null 로 센다(② 의 seq 4 와 짝).
+		{stream: "pbstream", session: "S-live", seq: 8, start: at, archive: "uploaded", playback: "pending",
+			key: "dvr/pbstream/seg/000008.m4s", noBytes: true},
 		// ended 세션 · 컷오프 없는 스트림의 ③ 은 안 집힘. 세 세션 모두 init 재료(경로 · 크기 있는 조각)가 있다.
 		{stream: "endstream", session: "S-ended", seq: 0, start: at, archive: "uploaded", playback: "pending",
 			key: "dvr/endstream/seg/000000.m4s"},
@@ -399,15 +418,23 @@ func TestRunbookQ2AndQ2BCountWhatUploaderPicks(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s 실행: %v", q.name, err)
 			}
-			got, err := axisWaiting(rows)
+			got, err := axisCounts(rows)
 			if err != nil {
 				t.Fatalf("%s 행: %v", q.name, err)
 			}
 
+			// bytes_null = 업로더 술어를 bytes 하나만 어긴 행 — ② arstream seq 4 · ③ pbstream seq 8 각 하나, init 은 NULL.
+			wantBytesNull := map[string]axisCount{"archive": {bytesNull: 1, hasBytesNull: true},
+				"playback": {bytesNull: 1, hasBytesNull: true}, "init": {}}
 			for _, axis := range axes {
-				if got[axis.name] != picked[axis.name] {
+				g, want := got[axis.name], wantBytesNull[axis.name]
+				if g.waiting != picked[axis.name] {
 					t.Errorf("%s %s waiting = %d, 업로더가 집는 수 = %d — 런북 질의 술어가 업로더와 갈렸다",
-						q.name, axis.name, got[axis.name], picked[axis.name])
+						q.name, axis.name, g.waiting, picked[axis.name])
+				}
+				if g.bytesNull != want.bytesNull || g.hasBytesNull != want.hasBytesNull {
+					t.Errorf("%s %s bytes_null = %d(NULL 아님 %t), want %d(NULL 아님 %t)",
+						q.name, axis.name, g.bytesNull, g.hasBytesNull, want.bytesNull, want.hasBytesNull)
 				}
 			}
 			if len(got) != len(axes) {
@@ -469,16 +496,18 @@ func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Q2 실행: %v", err)
 	}
-	got, err := axisWaiting(rows)
+	got, err := axisCounts(rows)
 	if err != nil {
 		t.Fatalf("Q2 행: %v", err)
 	}
 
 	// init 3 = S-b · S-mid · S-long — init 축은 init_uploaded_at IS NULL · 안 끝남 · started_at < <cut> 만 본다.
-	want := map[string]int64{"archive": 2, "playback": 2, "init": 3}
+	// bytes_null 은 ② · ③ 이 0(고정물 조각은 모두 크기가 있다) · init 은 NULL 이다.
+	want := map[string]axisCount{"archive": {waiting: 2, hasBytesNull: true}, "playback": {waiting: 2, hasBytesNull: true},
+		"init": {waiting: 3}}
 	for axis, n := range want {
 		if got[axis] != n {
-			t.Errorf("Q2 %s waiting = %d, want %d(전체 %v)", axis, got[axis], n, got)
+			t.Errorf("Q2 %s = %+v, want %+v(전체 %+v)", axis, got[axis], n, got)
 		}
 	}
 	if len(got) != len(want) {
@@ -546,16 +575,18 @@ func TestRunbookQ2BCountsBDiskRowsBeforeCut2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Q2-B 실행: %v", err)
 	}
-	got, err := axisWaiting(rows)
+	got, err := axisCounts(rows)
 	if err != nil {
 		t.Fatalf("Q2-B 행: %v", err)
 	}
 
 	// init 3 = S-b · S-mid · S-long — S-old 는 init 업로드를 마쳤고 S-test 는 시험 스트림, S-edge · S-a 는 <cut2> 와 같거나 뒤에 시작했다.
-	want := map[string]int64{"archive": 2, "playback": 2, "init": 3}
+	// bytes_null 은 ② · ③ 이 0(고정물 조각은 모두 크기가 있다) · init 은 NULL 이다.
+	want := map[string]axisCount{"archive": {waiting: 2, hasBytesNull: true}, "playback": {waiting: 2, hasBytesNull: true},
+		"init": {waiting: 3}}
 	for axis, n := range want {
 		if got[axis] != n {
-			t.Errorf("Q2-B %s waiting = %d, want %d(전체 %v)", axis, got[axis], n, got)
+			t.Errorf("Q2-B %s = %+v, want %+v(전체 %+v)", axis, got[axis], n, got)
 		}
 	}
 	if len(got) != len(want) {
@@ -747,6 +778,11 @@ UPDATE stream_segments SET playback_upload_state = 'failed' WHERE seq = 3`},
 UPDATE stream_sessions SET round_closed_at = NULL WHERE session_id = 'S-y';
 ` + q4Segment("otherstream", 0, "S-t", "", "failed") + `;
 INSERT INTO stream_published_gaps (stream_id, seq, session_id, reason) VALUES ('otherstream', 0, 'S-t', 'settle_deadline')`},
+		// r 의 stream_id = <test> — 다른 스트림이 <on> 뒤 더 늦게 연 회차(안 끝남 · 안 닫힘 · ③ 실패)는 고르지 않는다.
+		{name: "다른 스트림의 더 늦은 회차", pass: true, change: q4Session("S-z", "otherstream", "live", "S-z", "1 minute") + `;
+UPDATE stream_sessions SET ended_at = NULL, round_closed_at = NULL, vod_state = 'none', vod_s3_key = NULL
+ WHERE session_id = 'S-z';
+` + q4Segment("otherstream", 0, "S-z", "", "failed")},
 		// r 의 ORDER BY started_at DESC — on 뒤 회차가 둘이면 가장 늦은 회차를 본다(최신이 실패 · 앞이 깨끗).
 		{name: "최신 회차 실패", change: q4Session("S-t2", test, "ended", "S-t2", "1 minute") + `;
 UPDATE stream_sessions SET vod_state = 'frozen_with_gaps' WHERE session_id = 'S-t2';

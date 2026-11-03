@@ -646,13 +646,12 @@ runtime-1a 「POK-525 읽기 질의」 입니다. 「O8a 당김 교체」 절의
     다이제스트는 위 빌드, `playback_round_keys` 는 적지 않거나 `false`
     (B 는 **끈 채** 뜹니다).
 1.  사이드카 `LOG_LEVEL` 을 `info` 보다 높게(`warn` · `error`) 두지 않습니다.
-    `playback_key_layout` 줄은 끔이면 INFO, 4.7 의 켬(트리거 없음)이면 WARN
-    입니다. `warn` 이면 INFO 줄이 사라져 `sidecar-round-keys.sh off` 와 켬
-    실패 뒤 복원 묶음의 legacy 대조가 `journal` 로 실패하고(복원이면
-    `restore-failed`), 아래 `layout-check.sh` 가 `LAYOUT none` 으로 NOT OK
-    를 냅니다. `error` 면 WARN 줄도 사라져 on 도 `journal` 로 실패하고 이어
-    복원도 실패해 `restore-failed` 가 됩니다. prod compose 는 `LOG_LEVEL` 을
-    적지 않아 `info` 입니다.
+    `playback_key_layout` 줄은 끔이면 INFO, 켬이면 트리거가 없을 때(4.7) WARN
+    · 있을 때(4.9 뒤) INFO 입니다. 등급을 높이면 그 아래 줄이 사라져, 그 줄을
+    기다리는 대조가 `journal` 로 실패합니다 — `warn` 이면 off · 트리거 뒤의 on
+    · 복원 묶음의 legacy 대조, `error` 면 4.7 의 on 까지. 복원 대조가 실패하면
+    `restore-failed` 이고, 아래 `layout-check.sh` 는 `LAYOUT none` 으로 NOT
+    OK 를 냅니다. prod compose 는 `LOG_LEVEL` 을 적지 않아 `info` 입니다.
 
 ### POK-525 교체 상자 스크립트
 
