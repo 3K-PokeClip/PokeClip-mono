@@ -26,8 +26,8 @@ import { HLS_REWIND_CONFIG } from './hlsConfig';
 
 const URL = 'https://m/dvr/k/a/index.m3u8';
 const PDT0 = Date.parse('2026-11-02T05:00:00.000Z');
-const TD = 6;
-const SEG_S = 4;
+const TARGET_DURATION_S = 6;
+const SEGMENT_DURATION_S = 4;
 const VERSION_2 = `#${TIMING_TAG}:2`;
 const VERSION_NULL = `#${TIMING_TAG}:0`;
 
@@ -35,8 +35,8 @@ const VERSION_NULL = `#${TIMING_TAG}:0`;
 function segment(sn: number, before: readonly string[] = []): string[] {
   return [
     ...before,
-    `#EXT-X-PROGRAM-DATE-TIME:${new Date(PDT0 + sn * SEG_S * 1000).toISOString()}`,
-    `#EXTINF:${SEG_S.toFixed(3)},`,
+    `#EXT-X-PROGRAM-DATE-TIME:${new Date(PDT0 + sn * SEGMENT_DURATION_S * 1000).toISOString()}`,
+    `#EXTINF:${SEGMENT_DURATION_S.toFixed(3)},`,
     `seg${sn}.mp4`,
   ];
 }
@@ -50,7 +50,7 @@ function playlistText(
   return [
     '#EXTM3U',
     '#EXT-X-VERSION:9',
-    `#EXT-X-TARGETDURATION:${TD}`,
+    `#EXT-X-TARGETDURATION:${TARGET_DURATION_S}`,
     `#EXT-X-MEDIA-SEQUENCE:${from}`,
     ...head,
     '#EXT-X-MAP:URI="init.mp4"',
@@ -79,7 +79,7 @@ function versionsOf(tags: ReadonlyArray<readonly string[]>, head: string[] = [])
 function fakeFragment(tagList: string[][]): HlsFragmentLike {
   return {
     start: 0,
-    duration: SEG_S,
+    duration: SEGMENT_DURATION_S,
     programDateTime: null,
     gap: false,
     tagList,
@@ -256,7 +256,7 @@ describe('미닫이 갱신 — 진짜 Hls 의 LEVEL_UPDATED 조각', () => {
       // 받은 조각의 PTS 를 hls.js 가 잰 것처럼 적는다 — 다음 갱신의 mergeDetails 가 duration 을 다시 잡는다
       for (const frag of data.details.fragments) {
         frag.startPTS = frag.start;
-        frag.endPTS = frag.start + SEG_S + 0.5;
+        frag.endPTS = frag.start + SEGMENT_DURATION_S + 0.5;
       }
     });
     hls.on(Events.MANIFEST_PARSED, () => hls.startLoad(0));
@@ -268,7 +268,7 @@ describe('미닫이 갱신 — 진짜 Hls 의 LEVEL_UPDATED 조각', () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
     for (let i = 0; i < times; i++) {
-      await vi.advanceTimersByTimeAsync(TD * 1000);
+      await vi.advanceTimersByTimeAsync(TARGET_DURATION_S * 1000);
     }
   }
 
@@ -284,7 +284,17 @@ describe('미닫이 갱신 — 진짜 Hls 의 LEVEL_UPDATED 조각', () => {
     expect(merged.map((frag) => frag.sn)).toEqual([1, 2, 3, 4]);
     expect(timingVersions(merged)).toEqual([2, 2, 2, 2]);
     // hls.js 는 겹친 조각의 duration 을 앞 목록 PTS 로 다시 잡는다 — tagList 의 INF 는 그대로다
-    expect(merged.map((frag) => frag.duration)).not.toEqual([SEG_S, SEG_S, SEG_S, SEG_S]);
-    expect(merged.map(playlistDurationS)).toEqual([SEG_S, SEG_S, SEG_S, SEG_S]);
+    expect(merged.map((frag) => frag.duration)).not.toEqual([
+      SEGMENT_DURATION_S,
+      SEGMENT_DURATION_S,
+      SEGMENT_DURATION_S,
+      SEGMENT_DURATION_S,
+    ]);
+    expect(merged.map(playlistDurationS)).toEqual([
+      SEGMENT_DURATION_S,
+      SEGMENT_DURATION_S,
+      SEGMENT_DURATION_S,
+      SEGMENT_DURATION_S,
+    ]);
   });
 });

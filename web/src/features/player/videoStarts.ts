@@ -47,7 +47,7 @@ export function trackVideoStarts(hls: Hls, events: typeof Events): VideoStarts {
   const records = new Map<number, TrackRecord>();
   let videoTrack: VideoTrackInfo | null = null;
 
-  const onAppending = (_event: string, data: BufferAppendingData) => {
+  function onAppending(_event: string, data: BufferAppendingData) {
     if (data.parent !== MAIN) {
       return;
     }
@@ -66,16 +66,16 @@ export function trackVideoStarts(hls: Hls, events: typeof Events): VideoStarts {
       return;
     }
     records.set(sn, { ...start, timescale: videoTrack.timescale, offsetS: offset });
-  };
+  }
 
-  const onLevelUpdated = (_event: string, data: LevelUpdatedData) => {
+  function onLevelUpdated(_event: string, data: LevelUpdatedData) {
     const { startSN } = data.details;
     for (const sn of records.keys()) {
       if (sn < startSN) {
         records.delete(sn);
       }
     }
-  };
+  }
 
   hls.on(events.BUFFER_APPENDING, onAppending);
   hls.on(events.LEVEL_UPDATED, onLevelUpdated);
@@ -91,12 +91,12 @@ export function trackVideoStarts(hls: Hls, events: typeof Events): VideoStarts {
     };
   };
 
-  const dispose = () => {
+  function dispose() {
     hls.off(events.BUFFER_APPENDING, onAppending);
     hls.off(events.LEVEL_UPDATED, onLevelUpdated);
     records.clear();
     videoTrack = null;
-  };
+  }
 
   return { startOf, dispose };
 }
