@@ -1,8 +1,9 @@
 package session
 
-// 완결 평가 규칙의 정적 단언 — session 몫(POK-196 M6-3b 커밋 ① — 설계 M6 15.2 「완결 평가 네 자리」 가운데 4D
-// round_split). round_closed_at 을 쓰는 문장을 보내는 함수는 같은 트랜잭션에서 완결 평가 칸(IntentOptions.CloseRound)을
-// 부른다. 나머지 세 자리(CloseRound · TryCloseRound · MarkChainEnded)는 index/finalize_static_test.go 가 본다.
+// 완결 평가 규칙의 정적 단언 — session 몫(POK-196 M6-3b 커밋 ① — 설계 M6 15.2 「완결 평가 네 자리」 · POK-525 설계
+// r9.3 3-2). 4D 는 회차를 직접 닫지 않는다 — 닫힘은 같은 트랜잭션 끝에서 부르는 완결 평가 칸(IntentOptions.CloseRound)이
+// 조건을 보고 한다(upgraded · ending · ended L 의 forwarded). 그래서 이 패키지의 비시험 SQL 에는 round_closed_at 을 쓰는
+// 문장이 없어야 한다. 닫는 쪽 세 자리(CloseRound · TryCloseRound · MarkChainEnded)는 index/finalize_static_test.go 가 본다.
 
 import (
 	"go/ast"
@@ -16,15 +17,14 @@ import (
 	"testing"
 )
 
-func TestRoundClosingStatementsEvaluateCompletion(t *testing.T) {
+func TestSessionLeavesRoundClosingToCloseRoundSlot(t *testing.T) {
 	paths, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
 	closing := regexp.MustCompile(`SET\s+round_closed_at\s*=`)
-	flagged := map[string]bool{}
-	var files []*ast.File
+	scanned := 0
 	for _, p := range paths {
 		if strings.HasSuffix(p, "_test.go") {
 			continue
@@ -37,54 +37,19 @@ func TestRoundClosingStatementsEvaluateCompletion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		files = append(files, f)
+		scanned++
 		ast.Inspect(f, func(n ast.Node) bool {
-			vs, ok := n.(*ast.ValueSpec)
-			if !ok {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
 				return true
 			}
-			for i, v := range vs.Values {
-				if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					if s, _ := strconv.Unquote(lit.Value); closing.MatchString(s) {
-						flagged[vs.Names[i].Name] = true
-					}
-				}
+			if s, _ := strconv.Unquote(lit.Value); closing.MatchString(s) {
+				t.Errorf("%s: round_closed_at 을 쓰는 문장이 있다 — 회차 닫힘은 CloseRound 칸(index)이 조건을 보고 한다", fset.Position(lit.Pos()))
 			}
 			return true
 		})
 	}
-	if len(flagged) == 0 {
-		t.Fatal("round_closed_at 을 쓰는 문장 상수가 없다 — round_split 의 R 닫힘 문장이 옮겨졌다")
-	}
-	users := 0
-	for _, f := range files {
-		for _, d := range f.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			uses, evaluates := false, false
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				switch x := n.(type) {
-				case *ast.Ident:
-					uses = uses || flagged[x.Name]
-				case *ast.CallExpr:
-					if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "CloseRound" {
-						evaluates = true
-					}
-				}
-				return true
-			})
-			if !uses {
-				continue
-			}
-			users++
-			if !evaluates {
-				t.Errorf("%s 가 회차를 닫는데 같은 트랜잭션에서 완결 평가 칸(CloseRound)을 부르지 않는다", fn.Name.Name)
-			}
-		}
-	}
-	if users == 0 {
-		t.Fatal("회차 닫힘 문장을 보내는 함수가 없다")
+	if scanned == 0 {
+		t.Fatal("비시험 Go 파일을 하나도 읽지 않았다")
 	}
 }

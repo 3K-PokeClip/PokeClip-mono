@@ -1,6 +1,6 @@
 package main
 
-// 정산 · 상태 전달 · 계승 해제 차선 작업의 몸체(POK-196 M6-3b 커밋 ③ — 설계 M6 3.2 「차선 계약」). 작업은 입력 값만 받아
+// 정산 · 상태 전달 차선 작업의 몸체(POK-196 M6-3b 커밋 ③ — 설계 M6 3.2 「차선 계약」). 작업은 입력 값만 받아
 // 차선 고루틴에서 돌고 결과를 값으로 돌려준다 — 캐시 · 루프 메모리를 만지지 않는다(D2 · 기존 Lanes 계약). 운영 몸체는
 // index 종료 문장과 발행자 동결 메서드를 묶고, 시험은 함수 칸을 가짜로 바꾼다(laneWork 와 같은 꼴 — 새 인터페이스 없음).
 
@@ -15,9 +15,6 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
 )
 
-// revokeNoPublisher 는 발행 몫이 없어(꺼짐 · 강등) 계승 해제를 하지 않은 사유다 — Head 를 볼 수 없다.
-const revokeNoPublisher = "no_publisher"
-
 // finalizeScanLimit 은 정산 · 회차 스캔의 쪽 크기다(설계 3.2 — 50).
 const finalizeScanLimit = 50
 
@@ -27,7 +24,6 @@ type finalizeWork struct {
 	load     func(ctx context.Context, sessionID string) finalLoad
 	step     func(ctx context.Context, s index.EndingSession, d finalize.Decision) finalStep
 	playback func(ctx context.Context, streamID string) playbackRead
-	revoke   func(ctx context.Context, streamID, sessionID string) publish.RevokeOutcome
 }
 
 // finalScan 은 스캔 한 번의 결과다 — 정산 스캔 행 · 다음 커서 · 쪽이 가득 찼는가 · 이번에 닫은 회차의 스트림.
@@ -68,12 +64,6 @@ type playbackRead struct {
 	err      error
 }
 
-// revokeResult 는 계승 해제 작업 한 번의 결과다.
-type revokeResult struct {
-	sessionID string
-	out       publish.RevokeOutcome
-}
-
 // newFinalizeWork 는 운영 몸체다 — 종료 문장은 pool(인덱서 풀)로, S3 걸음은 발행자 pub 로 간다. pub 이 nil 이면(꺼짐 ·
 // 강등) 판정이 S3 걸음을 내지 않는다(finalize.Next) — 그래도 오면 강등 보류로 돌려준다.
 func newFinalizeWork(pool *pgxpool.Pool, pub *publish.Publisher, o index.CloseOptions, enqueue index.EndedEnqueuer) finalizeWork {
@@ -91,12 +81,6 @@ func newFinalizeWork(pool *pgxpool.Pool, pub *publish.Publisher, o index.CloseOp
 		playback: func(ctx context.Context, stream string) playbackRead {
 			st, ok, err := index.LoadStreamPlayback(ctx, pool, stream)
 			return playbackRead{streamID: stream, st: st, ok: ok, err: err}
-		},
-		revoke: func(ctx context.Context, stream, id string) publish.RevokeOutcome {
-			if pub == nil {
-				return publish.RevokeOutcome{Reason: revokeNoPublisher}
-			}
-			return pub.RevokeInheritance(ctx, stream, id)
 		},
 	}
 }

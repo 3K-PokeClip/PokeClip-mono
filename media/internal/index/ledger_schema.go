@@ -58,3 +58,21 @@ func MissingLedgerSchema(ctx context.Context, pool *pgxpool.Pool) ([]string, err
 	}
 	return missing, nil
 }
+
+// roundFrozenTriggerSQL 은 회차 불변 트리거(roundFrozenDDL)가 stream_sessions 에 있는가다. missingLedgerSchemaSQL 과
+// 같은 카탈로그 꼴이고 같은 이유로 비교 형을 맞춘다(사이드카 계정 · search_path 가로채기).
+const roundFrozenTriggerSQL = `
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t
+                WHERE t.tgrelid = pg_catalog.to_regclass('stream_sessions')::oid
+                  AND t.tgname = 'stream_sessions_round_frozen'::name)`
+
+// RoundFrozenTriggerPresent 는 회차 불변 트리거가 있는가다. 기동 신호(새 꼴 쓰기 스위치 상태)의 재료이고 기동을 막지
+// 않는다 — 트리거는 기동 필수 목록(MissingLedgerSchema) 밖이다(운영은 새 판이 뜬 뒤에 깐다). 이름만 보고 모양은 보지
+// 않는다 — 모양은 운영 SQL 2(60_round_frozen.sql)의 끝 단언이 깔 때 본다.
+func RoundFrozenTriggerPresent(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	var present bool
+	if err := pool.QueryRow(ctx, roundFrozenTriggerSQL).Scan(&present); err != nil {
+		return false, fmt.Errorf("회차 불변 트리거 확인 조회 실패: %w", err)
+	}
+	return present, nil
+}

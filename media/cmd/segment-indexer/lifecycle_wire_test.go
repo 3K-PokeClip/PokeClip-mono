@@ -252,7 +252,7 @@ func TestRunWiresLifecycleGate(t *testing.T) {
 		"defer stopLifecycle()",
 		"newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log)",
 		"fa := newFinalizeAssembly(cfg, lifecycle, log)",
-		"newIntentOptions(log, fa.closeRound(), startedEnqueuer(lifecycle))",
+		"newIntentOptions(log, fa.closeRound())",
 	}
 	prev := -1
 	for _, want := range order {

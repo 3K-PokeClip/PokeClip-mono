@@ -1,15 +1,14 @@
 package main
 
-// 루프의 정산 몫 — 받은편지함 비우기 · 빠른 길 · 30초 정산 스캔 · 걸음 배차와 결과 반영 · 상태 전달 차선 · 계승 해제
-// (POK-196 M6-3b 커밋 ③ — 설계 M6 3.2 「누가 언제」 · holdTick 순서 ㉤ · 차선 · 주기 배선 · 3.4 계승 해제). 모두 루프
-// 고루틴에서 돌고 작업 몸체(finalize_work.go)만 차선 고루틴에서 돈다. 판정은 순수 함수(rewind/finalize.Next)다.
+// 루프의 정산 몫 — 받은편지함 비우기 · 빠른 길 · 30초 정산 스캔 · 걸음 배차와 결과 반영 · 상태 전달 차선(POK-196 M6-3b
+// 커밋 ③ — 설계 M6 3.2 「누가 언제」 · holdTick 순서 ㉤ · 차선 · 주기 배선). 모두 루프 고루틴에서 돌고 작업
+// 몸체(finalize_work.go)만 차선 고루틴에서 돈다. 판정은 순수 함수(rewind/finalize.Next)다.
 //
 //	차선 키   "scan:finalize"(스캔 — 감시의 프로세스 차선과 따로) · "final:"+회차(행 읽기 · 걸음) · "playback:"+스트림
-//	         (상태 읽기) · 스트림 id(계승 해제 — 같은 스트림 발행 틱과 겹치지 않게)
+//	         (상태 읽기)
 //	발행 몫   꺼짐 · 강등에서도 돈다 — lanes · 스캔 주기는 run 이 조립 밖에서 채운다. 판정이 꺼짐 · 강등을 Mode 로 가른다
 
 import (
-	"cmp"
 	"context"
 	"maps"
 	"slices"
@@ -44,7 +43,6 @@ type finalizerOptions struct {
 	CloseAfter time.Duration // 사슬 닫힘 시한(재접속 창 + 60초)
 	Work       finalizeWork
 	Inbox      *session.PlaybackInbox
-	Intents    *session.IntentInbox
 	// Sink 는 M5 상태 받은편지함(finalsInbox.Post)이다. nil 이면 보내지 않는다.
 	Sink index.PlaybackSink
 	// PlaybackReadMax 는 상태 읽기의 전체 동시 상한이다(REWIND_PLAYBACK_READ_MAX — 1 이상 · config 가 검사한다).
@@ -53,13 +51,12 @@ type finalizerOptions struct {
 
 // finalizer 는 루프 고루틴의 정산 몫 상태다.
 type finalizer struct {
-	opt     finalize.Options
-	limits  finalize.Limits
-	every   time.Duration
-	work    finalizeWork
-	inbox   *session.PlaybackInbox
-	intents *session.IntentInbox
-	sink    index.PlaybackSink
+	opt    finalize.Options
+	limits finalize.Limits
+	every  time.Duration
+	work   finalizeWork
+	inbox  *session.PlaybackInbox
+	sink   index.PlaybackSink
 
 	lastScan  time.Time
 	scanning  bool
@@ -78,7 +75,6 @@ type finalizer struct {
 	gauge    map[string]int           // 사유 → 마지막으로 낸 게이지 값
 	reading  map[string]bool          // 도는 상태 읽기(스트림)
 	readMax  int                      // 도는 상태 읽기의 전체 상한
-	revokes  map[session.RevokeIntent]bool
 	// seen 은 이번 스캔 한 바퀴에서 본 회차다 — 바퀴가 끝나면 보지 않은 회차의 메모리를 지운다.
 	seen map[string]bool
 }
@@ -92,11 +88,11 @@ type fastEntry struct {
 func newFinalizer(o finalizerOptions) *finalizer {
 	return &finalizer{
 		opt:    finalize.Options{Mode: o.Mode, CloseAfter: o.CloseAfter, MaxAttempts: 3},
-		limits: finalize.DefaultLimits, every: o.Every, work: o.Work, inbox: o.Inbox, intents: o.Intents, sink: o.Sink,
+		limits: finalize.DefaultLimits, every: o.Every, work: o.Work, inbox: o.Inbox, sink: o.Sink,
 		attempts: map[string]finalize.Attempts{}, retryAt: map[string]time.Time{}, fast: map[string]fastEntry{},
 		running: map[string]finalize.Step{}, loading: map[string]bool{}, streamOf: map[string]string{},
 		held: map[string]string{}, gauge: map[string]int{},
-		reading: map[string]bool{}, readMax: o.PlaybackReadMax, revokes: map[session.RevokeIntent]bool{}, seen: map[string]bool{},
+		reading: map[string]bool{}, readMax: o.PlaybackReadMax, seen: map[string]bool{},
 	}
 }
 
@@ -132,19 +128,11 @@ func (f *finalizer) streamInFlight(stream string) int {
 	return n
 }
 
-// drainInboxes 는 holdTick 의 받은편지함 비우기 걸음이다(3.2 순서 — endOfflineSessions 다음). 계승 해제 요청은 그 스트림
-// 차선에, 상태 표지는 스트림마다 "playback:" 차선에 낸다.
+// drainInboxes 는 holdTick 의 받은편지함 비우기 걸음이다(3.2 순서 — endOfflineSessions 다음). 상태 표지는 스트림마다
+// "playback:" 차선에 낸다.
 func (r *rewindLoop) drainInboxes(ctx context.Context) {
 	if r.fin == nil {
 		return
-	}
-	for _, ri := range r.fin.intents.Drain() {
-		r.fin.revokes[ri] = true
-	}
-	for _, ri := range slices.SortedFunc(maps.Keys(r.fin.revokes), func(a, b session.RevokeIntent) int {
-		return cmp.Or(cmp.Compare(a.StreamID, b.StreamID), cmp.Compare(a.SessionID, b.SessionID))
-	}) {
-		r.startRevoke(ctx, ri)
 	}
 	for _, s := range r.fin.inbox.Drain() {
 		r.startPlayback(ctx, s)
@@ -477,44 +465,4 @@ func (r *rewindLoop) playbackDone(ctx context.Context, res publish.Result, rerun
 	if rerun {
 		r.startPlayback(ctx, out.streamID)
 	}
-}
-
-// startRevoke 는 계승 해제 요청 ri 를 그 스트림 차선에 낸다(3.4 계승 해제) — 발행 몫이 없으면 Head 를 볼 수 없어 하지 않는다.
-// 그 스트림 차선에 발행 작업이 돌고 있으면 남겨 두고 다음 holdTick 에 다시 본다.
-func (r *rewindLoop) startRevoke(ctx context.Context, ri session.RevokeIntent) {
-	if !r.publishing() {
-		delete(r.fin.revokes, ri)
-		r.log.Info("intentional_revoke", "stream_id", ri.StreamID, "session_id", ri.SessionID,
-			"result", "skipped", "reason", revokeNoPublisher)
-		return
-	}
-	rec := r.stream(ri.StreamID)
-	if rec.running != nil {
-		return
-	}
-	revoke := r.fin.work.revoke
-	if !r.lanes.Start(ctx, ri.StreamID, func(ctx context.Context) publish.Result {
-		return publish.Result{Kind: publish.KindRevoke, Value: revokeResult{sessionID: ri.SessionID, out: revoke(ctx, ri.StreamID, ri.SessionID)}}
-	}) {
-		return
-	}
-	delete(r.fin.revokes, ri)
-	rec.running = &laneJob{kind: jobRevoke, session: ri.SessionID}
-}
-
-// revokeDone 은 계승 해제 결과다 — 풀렸으면 캐시에 넣는다(cache.ApplyInheritanceRevoked). 그 뒤 차선이 빈 스트림의 미룬
-// 적재 · 병합된 틱을 낸다(resume).
-func (r *rewindLoop) revokeDone(ctx context.Context, res publish.Result, rerun bool, now time.Time) {
-	s := res.StreamID
-	rec := r.stream(s)
-	rec.running = nil
-	out, _ := res.Value.(revokeResult)
-	if out.out.Revoked {
-		r.cache.ApplyInheritanceRevoked(s, out.sessionID)
-		r.log.Info("intentional_revoke", "stream_id", s, "session_id", out.sessionID, "result", "revoked")
-	} else {
-		r.log.Info("intentional_revoke", "stream_id", s, "session_id", out.sessionID, "result", "kept",
-			"reason", out.out.Reason, "err", out.out.Err)
-	}
-	r.resume(ctx, s, rerun, now)
 }
