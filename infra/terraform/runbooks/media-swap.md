@@ -773,7 +773,7 @@ SH
 | 4.5 | A 정지 · 끔 — `stop.sh` → `disable.sh` | `MEDIA STOPPED OK` · `MEDIA DISABLED OK` |
 | 4.6 | 켜기 전 확인 — Q1 다시 · A 판정 다시 · B 「켜기 전」 선언 판정 | Q1 0 · `MEDIA STOPPED OK` · `MEDIA DISABLED OK` · `BEFORE ON OK` |
 | 4.7 | B `paths.sh` → `round-keys.sh on` | B `PATHS 0` · `SIDECAR ROUND KEYS OK on` |
-| 4.8 | 켬 뒤 루프백(첫 새 꼴 쓰기) — 「정상 교체」 3 과 같은 명령 → Q3 | `LOOPBACK OK` · Q3 `matched` 1 이상 · `mismatched` 0 |
+| 4.8 | 켬 뒤 루프백(첫 새 꼴 쓰기 · 4.2 루프백 끝에서 6분 넘게 지난 뒤) — 「정상 교체」 3 과 같은 명령 → Q3 | `LOOPBACK OK` · Q3 `matched` 1 이상 · `mismatched` 0 |
 | 4.9 | B `paths.sh` → 운영 SQL 2(`60_round_frozen.sql` → `40_verify.sql`) | B `PATHS 0` · `ROUND FROZEN OK` · `VERIFY OK` |
 | 4.10 | 시험 방송(시험 키) → 끝낸 뒤 국면 `vod` → Q4 | Q3 `matched` 늘고 `mismatched` 0 · Q4 `pass` `t`(아래 4.10) |
 | 4.11 | A 회수 — 시험 방송이 통과한 날 | Q2 0 · A `MEDIA STOPPED OK` · `MEDIA DISABLED OK` → plan 범위 A 삭제 한 줄 |
@@ -830,6 +830,10 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         초과) 켬 중단 갈래로 갑니다.
 *   **4.8 — 이 순간부터 A 복귀는 닫힙니다**(롤백 하한). Q3 의 `mismatched`
     가 0 이 아니면 멈추고 kty 에게 보고합니다.
+    *   4.8 루프백은 **4.2 루프백이 끝나고 6분이 넘게 지난 뒤** 보냅니다(재접속
+        창 300초 + 회차 닫힘 여유 60초). 그 안이면 4.2 와 같은 시험 스트림이라
+        4.2 의 회차로 이어질 수 있고, 그러면 한 회차에 옛 꼴(4.2)과 새 꼴(4.8 · 4.10) 조각이
+        섞이고 4.10 의 Q4 가 `not_round_keys` 1 이상으로 `f` 를 냅니다.
 *   **4.9 — 운영 SQL 2.** 직전에 B `PATHS 0` 을 다시 봅니다(트리거를 만드는
     동안 세션 쓰기가 막힘). 보내는 법 · 실패 갈래는 런타임 1단-가 런북
     「POK-525 운영 SQL 2 적용」 입니다. B 는 다시 띄우지 않습니다 — 다음
@@ -852,7 +856,10 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
     `f` 면 4.11 로 가지 않고 어긋난 열(`not_uploaded` · `gaps` 등)을 kty
     에게 보고합니다. 4.8 뒤라 A 로 돌아가는 갈래는 없습니다 — 원인을 고쳐
     시험 방송을 다시 합니다(「POK-525 롤백」 의 「켠 뒤 · 새 꼴 행 1
-    이상」).
+    이상」). 어긋난 열이 `not_round_keys` 하나뿐이면 먼저 4.8 이 4.2 의
+    회차로 이어졌는지(위 4.8 — 6분)를 봅니다. 그렇다면 배포 이상이 아니므로,
+    그 회차가 닫힌 뒤(마지막 조각 끝에서 6분 넘게) 시험 방송을 새로 해 새
+    회차의 Q4 를 봅니다.
 *   **4.11 — A 회수를 앞당깁니다.** 4.8 뒤 A 는 되돌릴 곳이 아니라 「정상
     교체」 8 의 하루 관찰을 쓰지 않습니다. 회수 직전 Q2 · A 판정 둘을 다시
     봅니다.
