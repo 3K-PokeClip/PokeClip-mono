@@ -62,6 +62,7 @@ class FakeHls {
   static ErrorDetails = {
     FRAG_LOAD_ERROR: 'fragLoadError',
     MANIFEST_LOAD_ERROR: 'manifestLoadError',
+    MANIFEST_LOAD_TIMEOUT: 'manifestLoadTimeOut',
     LEVEL_LOAD_ERROR: 'levelLoadError',
     AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
   };
@@ -159,6 +160,9 @@ function vodBody(): unknown {
 
 type Reply = () => Response | Promise<Response>;
 
+/** 재생기 끊김 알림(useHlsPlayback STOPPED_NOTES.broken) */
+const BROKEN_NOTE = '영상이 끊겼어요. 새로고침하면 다시 연결해요';
+
 /** 시험이 정하는 제어면 답 — 스트림 · 회차별 */
 const control = {
   stream: (() => jsonResponse(200, liveBody(OLD_F))) as Reply,
@@ -187,10 +191,16 @@ function current(): PlaybackSession {
 /** 출입증 키 — 403 갈래(출입증 버림 · 재생기 내림)를 타게 한다 */
 const MEDIA_KEY = 'key-1';
 
+/** 재생기가 멎은 까닭(끊김 알림 등)은 영상 옆 글로 내보인다 — GlassPlayer 의 덮개 글과 같은 값 */
 function Player({ playback }: { playback: PlaybackSession }) {
   const ref = useRef<HTMLVideoElement>(null);
-  useLiveRewindPlayback(ref, playback, {}, undefined, MEDIA_KEY);
-  return <video ref={ref} data-testid="video" />;
+  const sim = useLiveRewindPlayback(ref, playback, {}, undefined, MEDIA_KEY);
+  return (
+    <>
+      <video ref={ref} data-testid="video" />
+      <p data-testid="stopped">{sim.playbackError ?? ''}</p>
+    </>
+  );
 }
 
 function Screen({ options, playerShown }: { options: SessionOptions; playerShown: boolean }) {
@@ -462,6 +472,59 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     expect(oldestNotices(onNotice)).toBe(1);
     checkedEvents();
   });
+});
+
+// 다시 받은 재생기의 첫 목록 치명은 재생기가 곧바로 끊김을 알리고 내린다(c8). 세션에 올리는 사건이 없으므로 세션은
+// 다시 받는 중(relist 'list')에 그대로 남는다 — 막힘이 아니고 자동 회복도 없다(계획 0-2 의 3 · P30). 출구는 LIVE ·
+// 다음 폴링의 새 url 교체 · 새로고침이다. 같은 url 의 다음 폴링은 아무것도 바꾸지 않는다
+describe('목록 다시 받기의 첫 목록 실패 — 끊김 · 세션은 다시 받는 중 그대로(c8 결합 뒤 · 계획 8-4)', () => {
+  it.each<[string, string, number | null]>([
+    ['404', FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR, 404],
+    ['503', FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR, 503],
+    ['시한', FakeHls.ErrorDetails.MANIFEST_LOAD_TIMEOUT, null],
+  ])(
+    '404 → 다시 받기 → 첫 목록 %s → 끊김 1 · startLoad 0 · 세션 rewind · relist list · 사건 0 · 다음 폴링에도 그대로',
+    async (_name, details, code) => {
+      const { view, rewindHls } = await rewindScreen();
+      fake.bootList = null;
+      segmentGone(rewindHls);
+      await settle();
+      const relistHls = lastHls();
+      expect(relistHls).not.toBe(rewindHls);
+      const relisting = current().state;
+      expect(relisting.source).toMatchObject({ kind: 'rewind', url: A1, startAtMs: TARGET });
+      expect(relisting.phase).toEqual({
+        kind: 'rewind',
+        pendingNext: null,
+        relist: { stage: 'list', noticed: false },
+      });
+      const eventsBefore = checkedEvents().length;
+      act(() =>
+        relistHls.trigger(FakeHls.Events.ERROR, {
+          type: FakeHls.ErrorTypes.NETWORK_ERROR,
+          details,
+          fatal: true,
+          response: code === null ? undefined : { url: A1, code, text: '' },
+        }),
+      );
+      await settle();
+      expect(view.getByTestId('stopped').textContent).toBe(BROKEN_NOTE);
+      expect(relistHls.startLoad).not.toHaveBeenCalled();
+      expect(relistHls.destroy).toHaveBeenCalledTimes(1);
+      expect(checkedEvents().slice(eventsBefore)).toEqual([]);
+      expect(current().state.phase).toEqual(relisting.phase);
+      expect(current().state.source).toEqual(relisting.source);
+      const created = fake.instances.length;
+      await act(async () => vi.advanceTimersByTime(10_000));
+      await settle();
+      expect(checkedEvents().slice(eventsBefore)).toContain('stream-poll');
+      expect(current().state.phase).toEqual(relisting.phase);
+      expect(current().state.source).toEqual(relisting.source);
+      expect(fake.instances).toHaveLength(created);
+      expect(view.getByTestId('stopped').textContent).toBe(BROKEN_NOTE);
+      checkedEvents();
+    },
+  );
 });
 
 describe('404 → 목록 다시 받기 · 사람 멈춤 — 옛 축의 멈춘 자리로 시크하지 않는다(계획 3-3 (2) · P37)', () => {
