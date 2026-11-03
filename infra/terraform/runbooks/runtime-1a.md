@@ -1135,7 +1135,7 @@ make_sql_step round_frozen_drop "${payload}/round_frozen_drop.sql" &&
 | 질의 | 쓰는 자리(교체 걸음) | 통과 |
 |---|---|---|
 | Q1 새 꼴 행 수(`q1.sql`) | 4.2 · 4.6 · 「켜기 전」 선언 판정(롤백) | `round_keys` 0 |
-| Q2 A 배출(`q2.sql`) | 4.4 · 4.11 | 세 행 모두 `waiting` 0 |
+| Q2 A 배출(`q2.sql`) | 4.4 · 4.11 · media-swap.md 「POK-525 다음 교체」 8 · 10(옛 상자 B 배출) | 세 행 모두 `waiting` 0 |
 | Q2-B B 배출(`q2b.sql`) | 롤백 「켜기 전」 의 B 회수 앞 | 세 행 모두 `waiting` 0 |
 | Q3 켬 뒤 키 꼴 대조(`q3.sql`) | 4.8 · 4.10 | `matched` 1 이상 · `mismatched` 0 |
 | Q4 시험 방송 회차(`q4.sql`) | 4.10(방송을 끝내고 국면이 `vod` 가 된 뒤) | `pass` 가 `t` |
@@ -1146,7 +1146,7 @@ make_sql_step round_frozen_drop "${payload}/round_frozen_drop.sql" &&
 | 자리 | 값 |
 |---|---|
 | `<since>` | B 기동(교체 걸음 4.1)의 apply 를 시작한 시각 — 그 앞에는 새 꼴을 쓰는 이미지가 없다. 더 이른 값은 더 많이 셀 뿐이다 |
-| `<cut>` | ingest 전환(4.3)에서 `tg_health` 의 `ingest` 가 B 한 대 healthy 가 된 시각 + 30초(등록 해제 지연) |
+| `<cut>` | ingest 전환(4.3)에서 `tg_health` 의 `ingest` 가 B 한 대 healthy 가 된 시각 + 30초(등록 해제 지연). 「POK-525 다음 교체」 에서는 새 상자 C 한 대 |
 | `<cut2>` | 롤백에서 ingest 를 A 로 되돌린 뒤 `ingest` 가 A 한 대 healthy 가 된 시각 + 30초 |
 | `<on>` | `SIDECAR ROUND KEYS OK on` 을 본 시각(4.7) |
 | `<test>` | 루프백 시험 스트림의 `ingestStreamId` |

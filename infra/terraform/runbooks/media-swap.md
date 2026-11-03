@@ -658,7 +658,16 @@ cat > "${work}/round-keys.sh" <<'SH'
 SH
 printf 'systemctl disable pokeclip-media\n' > "${work}/disable.sh"
 printf 'systemctl restart pokeclip-media\n' > "${work}/restart.sh"
+printf 'systemctl enable pokeclip-media\n' > "${work}/enable.sh"
+printf 'systemctl start pokeclip-media\n' > "${work}/start.sh"
+printf '%s\n' \
+  "pgrep -af 'sidecar-round-keys[.]sh' || echo 'ROUND KEYS PROC 0'" \
+  > "${work}/round-keys-ps.sh"
 ```
+
+*   `round-keys-ps.sh` 는 상자에서 아직 도는 `sidecar-round-keys.sh` 프로세스를
+    줄마다 내고, 없으면 `ROUND KEYS PROC 0` 한 줄을 냅니다. 「POK-525 롤백」 의
+    `lock` · 켬 중단 갈래가 씁니다.
 
 **사이드카 layout 판정**(`layout-check.sh` — 인자: 없음, 또는 Q1 의
 `round_keys` 값). 실행 중 사이드카가 하나인지 보고, 그 컨테이너 ID 로 거른
@@ -887,7 +896,14 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
             ```shell
             aws ssm list-commands --instance-id "$(media_ids | jq -er .b)" \
               --filters key=Status,value=InProgress --query 'length(Commands)'
+            media_ssm b "${work}/round-keys-ps.sh"
             ```
+
+            SSM 명령이 0 이어도 상자에서 `sidecar-round-keys.sh` 프로세스가
+            아직 도는지 `round-keys-ps.sh` 로 봅니다 — SSM 취소가 자식
+            스크립트까지 끝내지 않아 취소된 명령의 스크립트가 계속 돌 수
+            있습니다(로컬 연습 2026-11-03 에서 관찰 · prod 미확인). 돌면 끝날
+            때까지 기다린 뒤(`ROUND KEYS PROC 0`) 다시 보냅니다.
 
         *   그 밖 — 판정 줄을 kty 에게 보고하고, 다시 켤지는 kty 가
             정합니다. 다시 켜면 4.6(Q1 · A 판정 · `BEFORE ON OK`)부터
@@ -907,9 +923,14 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         `Cancelled` · `TimedOut`. 스크립트는 신호를 받으면 복원 묶음 없이
         끝나고(강제 종료면 트랩도 돌지 않음), 파일은 이미 켬일 수 있고 실행 중
         사이드카는 미확정입니다.
-    *   방법: `on` 을 다시 보내지 않습니다. 아래 「restore-failed 처리」 를
-        그대로 — `off` → 결과 갈래대로 손 처리 → Q1 재측정 · 「켜기 전」 선언
-        판정.
+    *   방법: `on` 을 다시 보내지 않습니다. 먼저 `round-keys-ps.sh` 로 상자에서
+        `sidecar-round-keys.sh` 프로세스가 아직 도는지 봅니다 — SSM 취소가
+        자식 스크립트까지 끝내지 않을 수 있습니다(위 `lock` 갈래). 돌면 끝날
+        때까지(`ROUND KEYS PROC 0`) 기다립니다. 그 실행의 판정 줄은 표준
+        출력에만 나와(저널에 남기지 않음) 취소된 명령의 SSM 출력에 실리지
+        않을 수 있습니다 — 판정 줄이 없으면 이 갈래 그대로 갑니다. 그다음
+        아래 「restore-failed 처리」 를 그대로 — `off` → 결과 갈래대로 손 처리
+        → Q1 재측정 · 「켜기 전」 선언 판정.
 *   **켠 뒤 · 새 꼴 행 0**(4.7 OK · 4.8 전)
     *   판정: Q1 0 · 트리거 없음.
     *   방법: `round-keys.sh off` → `OK off` 면 「켜기 전」 선언 판정. 그
@@ -931,6 +952,13 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
 1.  A 를 멈췄으면(4.5 뒤) A 에서 `systemctl enable pokeclip-media` →
     `systemctl start pokeclip-media` → A 기동 판정(「정상 교체」 2 의
     `start-check.sh`). 4.5 전이면 A 는 아직 돌고 있어 이 걸음이 없습니다.
+
+    ```shell
+    media_ssm a "${work}/enable.sh"
+    media_ssm a "${work}/start.sh"
+    media_ssm a "${work}/start-check.sh" <A 의 서비스 집합>
+    ```
+
 1.  활성 키를 A 로 — `ingest_active_key` · `http_active_key` 를 A 로(「정상
     교체」 5 · 6 의 역 · plan 범위 같음) → 일관성(「정상 교체」 7 — 네 그룹
     A 하나).
@@ -957,9 +985,9 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         원문을 kty 에게 보이고 승인). 2 로.
     *   `SIDECAR ROUND KEYS FAIL lock` — 다른 실행이 잠금을 쥐어(또는 잠금
         파일을 열지 못해) 아무것도 바꾸지 않았습니다. 동시에 둘을 돌리지
-        않습니다 — 아직 도는 SSM 명령이 없는지 위 「켬 실패 · 바뀐 것 없음」
-        의 `list-commands` 로 확인한 뒤 1 을 다시 합니다. 다시 해도 `lock`
-        이면 kty 에게 보고합니다.
+        않습니다 — 아직 도는 SSM 명령 · 상자 프로세스가 없는지 위 「켬 실패
+        · 바뀐 것 없음」 의 `list-commands` · `round-keys-ps.sh` 로 확인한 뒤
+        1 을 다시 합니다. 다시 해도 `lock` 이면 kty 에게 보고합니다.
     *   `SIDECAR ROUND KEYS FAIL config` · `usage` — 스크립트가 설정 · 인자
         검사에서 멈춰 파일 · 사이드카가 그대로입니다. kty 에게 보고하고,
         설정 · 인자를 고친 뒤 1 을 다시 합니다.
@@ -990,21 +1018,83 @@ media_ssm b "${work}/sidecar-stop.sh"
 
 ### POK-525 다음 교체
 
-이 교체 뒤의 교체(B → C)에서 C 는 켬으로 뜹니다(4.12 의 tfvars). 그
-교체는 **「정상 교체」 전부**(C 기동 · 루프백 · 경로 수 · ingest · http
-전환 · 일관성 · 옛 상자 배출 · 정지 · 회수)를 그대로 밟습니다. 빠지는 것은
-이번 교체의 일회성 걸음 4.6–4.9(켜기 전 확인 · 켬 · 켬 뒤 루프백 · 운영
-SQL 2)뿐입니다.
+이 교체 뒤의 교체(옛 상자 B → 새 상자 C)입니다. C 는 처음부터 켬으로
+뜨고(4.12 의 tfvars), 트리거는 이미 있습니다. 순서는 **「정상 교체」 1–7 →
+옛 상자 배출 → 정지 → 회수** 이고, 아래 표가 그 전부입니다. 번호는 이 표
+안의 것입니다.
 
-*   **옛 상자 배출은 빠지지 않습니다.** 옛 상자 B 의 이미지가 새 꼴을 읽어도
-    B 디스크에만 있는 미완료 업로드는 C 가 대신 올리지 못합니다(C 에는 그
-    파일이 없음). 그래서 B 를 멈추거나 회수하기 전에 Q2(`<cut>` = ingest 를
-    C 로 옮긴 시각 + 30초)가 0 이어야 하고, 정지는 4.5 와 같이 `stop` →
-    `disable` → `MEDIA STOPPED OK` · `MEDIA DISABLED OK` 입니다.
-*   **선행 조건**: 옛 상자 · 새 상자의 이미지가 모두 POK-525 하한 이상(위
-    판정)이고, 트리거가 이미 있습니다(옛 상자 사이드카의 기동 줄
-    `round_frozen=present` 또는 4.9 의 기록). 하나라도 아니면 이 절(「POK-525
-    교체」)을 처음부터 씁니다.
+「POK-525 교체」 의 걸음 표(4.1–4.12)를 따라 밟지 않습니다. 그 표의 통과
+줄은 끈 채 뜨는 새 상자와 트리거 없는 DB 를 전제로 해서, 켬으로 뜨는 C 에
+대면 교체가 막힙니다 — 4.1 의 `SIDECAR LEGACY OK` 는 늘 NOT OK, 4.2 의 Q1 은
+C 루프백이 새 꼴이라 1 이상, 4.10 의 Q3 · Q4 는 `<on>` 이 없습니다. 이 교체가
+그 표에서 빌려 쓰는 것은 옛 상자 배출(4.4)과 정지(4.5) 둘뿐입니다.
+
+| # | 동작 | 통과 | 바탕 |
+|---|---|---|---|
+| 0 | 선행 조건 확인(아래) | 하한 이상 둘 · 트리거 있음 | — |
+| 1 | 시간대를 고르고 스트리머에게 알린다 | — | 정상 교체 1 |
+| 2 | C 기동(**켬** · 같은 AZ · 등록 안 함) | 기동 판정 넷(`PREREQ_FAIL 0` · `START_BLOCKED 0` · `SIDECAR_DB` · `MEDIA WATCH OK`) | 정상 교체 2 |
+| 3 | C 루프백(대상 그룹 밖) | `LOOPBACK OK` | 정상 교체 3 |
+| 4 | B · C 방송 경로 수 | B `PATHS 0` | 정상 교체 4 |
+| 5 | ingest 전환 — `<cut>` 을 적음 | NLB = C 1대 healthy | 정상 교체 5 |
+| 6 | http 전환 | ALB 셋 = C 1대 healthy | 정상 교체 6 |
+| 7 | 일관성 확인(읽기) | 네 그룹 모두 C 하나 · healthy | 정상 교체 7 |
+| 8 | B 배출 — B `paths.sh` → Q2 | B `PATHS 0` · Q2 세 행 `waiting` 0 | POK-525 교체 4.4 |
+| 9 | B 정지 · 끔 — `stop.sh` → `disable.sh` | `MEDIA STOPPED OK` · `MEDIA DISABLED OK` | POK-525 교체 4.5 |
+| 10 | B 회수 — **하루 관찰 뒤** | 회수 직전 Q2 0 · B `MEDIA STOPPED OK` · `MEDIA DISABLED OK` → plan 범위 B 삭제 한 줄 | 정상 교체 8 · 회수 직전 확인은 4.11 |
+
+```shell
+media_ssm b "${work}/paths.sh"            # 8 · Q2 앞
+media_ssm b "${work}/stop.sh"             # 9
+media_ssm b "${work}/disable.sh"
+media_ssm b "${work}/stopped-check.sh"
+media_ssm b "${work}/disabled-check.sh"
+```
+
+상자 스크립트는 「POK-525 교체 상자 스크립트」 와 같이 작업 디렉터리에 써
+둡니다.
+
+**쓰지 않는 것** — 「POK-525 교체」 의 다음 걸음 · 판정은 이 교체에
+없습니다.
+
+*   `layout-check.sh` 의 끝 판정(4.1 · 4.6). 켬으로 뜬 C 에는 늘 `SIDECAR
+    LEGACY NOT OK` 입니다. C 의 켬 여부는 통과 조건이 아닙니다 — 보려면 그
+    출력의 `LAYOUT` 줄(`round`)만 읽습니다.
+*   Q1(4.2 · 4.6) — C 는 처음부터 새 꼴을 씁니다.
+*   4.6–4.9(켜기 전 확인 · 켬 · 켬 뒤 루프백 · 운영 SQL 2) — 결정 9 (가)로
+    이번 교체에서 끝난 일회성 걸음입니다.
+*   4.10 시험 방송(Q3 · Q4) — 「정상 교체」 에 없는 걸음이고, 판정 질의가 이
+    교체에 없는 `<on>` 을 씁니다.
+*   4.11 의 회수 앞당김과 4.12(tfvars 는 이미 켬).
+*   「POK-525 롤백」 의 갈래 — 모두 A → B 교체의 켬 전후를 가르는 갈래입니다.
+
+걸음마다:
+
+*   **8 · 9 — 옛 상자 배출 · 정지는 빠지지 않습니다.** B 의 이미지가 새 꼴을
+    읽어도 B 디스크에만 있는 미완료 업로드는 C 가 대신 올리지 못합니다(C 에는
+    그 파일이 없음). 그래서 7 뒤 Q2(`<cut>` = `tg_health` 의 `ingest` 가 C 한
+    대 healthy 가 된 시각 + 30초 · `<test>` = 3 의 C 루프백 시험 스트림)가 0
+    이 된 뒤에만 B 를 멈춥니다. 창 안에 0 이 안 되면 B 를 띄운 채 절차를
+    여기서 멈추고, 다음 창에 8 부터 다시 합니다(4.4 와 같음). 정지는 4.5 와
+    같이 유닛으로 `stop` → `disable` 이고 `mask` 는 쓰지 않습니다.
+*   **10 — 회수는 「정상 교체」 8 그대로 하루 관찰 뒤입니다.** B 는 POK-525
+    하한 이상이라 C 가 쓴 새 꼴 행을 읽습니다 — 되돌릴 곳으로 남습니다. 4.11
+    이 하루 관찰을 쓰지 않은 까닭(A 는 새 꼴을 못 읽음)이 여기에는 없습니다.
+    관찰 동안 B 로 되돌려야 하면, B 는 9 에서 멈춰 있으니 B 에서 `enable.sh`
+    → `start.sh` → 기동 판정(`start-check.sh`)을 먼저 보고 활성 키를 B 로
+    돌립니다(「정상 교체」 5 · 6 의 역 → 7). 그 뒤 C 를 회수하기 전의 배출
+    판정은 이 런북에 아직 없습니다 — kty 에게 보고합니다.
+
+**선행 조건**(0) — 하나라도 아니면 이 절이 아니라 「POK-525 교체」 를
+처음부터 씁니다.
+
+1.  B · C 의 이미지가 모두 POK-525 하한 이상(위 「POK-525 하한」 판정)입니다.
+1.  트리거가 이미 있습니다. 첫 다음 교체(B → C)에서는 4.9 의 기록(`ROUND
+    FROZEN OK` · `VERIFY OK`)으로 판정합니다 — B 는 4.9 뒤 다시 뜨지 않아
+    사이드카 기동 줄이 늘 `round_frozen=absent` 입니다. 트리거 뒤에 뜬 옛
+    상자는 기동 줄로도 볼 수 있는데, 옛 상자에 `layout-check.sh` 를 돌려 끝
+    판정(`SIDECAR LEGACY …`)이 아니라 `ROUND_FROZEN` 줄만 읽습니다
+    (`present` 가 통과).
 
 ## 설정 반영 교체
 
