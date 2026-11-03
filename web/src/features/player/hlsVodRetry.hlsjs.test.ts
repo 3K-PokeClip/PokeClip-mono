@@ -22,7 +22,8 @@ import { HLS_REWIND_CONFIG } from './hlsConfig';
 // 쓰면 치명으로 올리고 hls.js 가 stopLoad 한다(error-controller.ts 502-504) — 이때 level-controller.stopLoad 가 조각 오류
 // 수를 0 으로 되돌려(level-controller.ts 82-89) 앱의 다시 받기(useHlsPlayback.ts 778-783) 뒤에 같은 꼴이 한 번 더 돈다.
 // 그래서 감춤은 약 31초 × 2 다. 훅 층(앱이 치명에서 startLoad 한 번 · 두 번째 치명에서 끊김)은
-// useHlsPlayback.vod404.test.ts 가 본다.
+// useHlsPlayback.vod404.test.ts 가 본다. /vod 문서 404 는 조각과 다르다 — 멀티변이 목록 404 는 앱이 다시 받아도 다시 청하지
+// 않아 두 번째 치명이 없다(맨 아래 묶음 · POK-528 c6 X1).
 
 const quiet = () => {};
 const SILENT = { trace: quiet, debug: quiet, log: quiet, warn: quiet, info: quiet, error: quiet };
@@ -228,6 +229,131 @@ describe('다시보기 조각 404 — 진짜 hls.js 1.7.3 의 기본 재시도(P
       false,
       false,
       true,
+    ]);
+  });
+});
+
+/** /vod 문서 받기의 끝 — 멀티변이 목록이 404 거나, 멀티변이는 열리고 변이 목록이 404 다 */
+type DocumentGone = 'multivariant' | 'variant';
+
+const VOD_MULTIVARIANT_URL = 'https://m/vod/k/a/index.m3u8';
+const VOD_VARIANT_URL = 'https://m/vod/k/a/video.m3u8';
+const MULTIVARIANT_TEXT = [
+  '#EXTM3U',
+  '#EXT-X-STREAM-INF:BANDWIDTH=500000,CODECS="avc1.64001f,mp4a.40.2"',
+  'video.m3u8',
+  '',
+].join('\n');
+
+/** 목록 받기 요청 하나 — url 과 그때의 performance.now() */
+interface DocumentRequest {
+  url: string;
+  atMs: number;
+}
+
+interface DocumentPlayer {
+  /** 목록 받기 요청(차례대로) */
+  requests: DocumentRequest[];
+  /** 앱 처리기가 본 오류 */
+  errors: ErrorData[];
+}
+
+/**
+ * 다시보기 재생기를 앱처럼 세운다(HLS_REWIND_CONFIG · loadSource). 목록 망만 가짜 pLoader 로 바꾼다. 앱 처리기는
+ * useHlsPlayback 의 ERROR 처리기와 같은 자리에서 돈다 — 첫 치명 네트워크 오류 안에서 동기로 위치 없이 startLoad 한 번
+ * (useHlsPlayback.ts 778-783). 멀티변이 갈래는 미디어를 붙인다. 변이 갈래는 jsdom 에 MediaSource 가 없어 코덱 검사
+ * (level-controller 의 MANIFEST_INCOMPATIBLE_CODECS_ERROR)를 넘으려고 isTypeSupported 만 가진 MediaSource 를 끼우고,
+ * 그것으로는 미디어를 붙일 수 없어 붙이지 않는다 — 목록 받기는 미디어 없이도 돈다
+ */
+function vodDocumentGone(gone: DocumentGone): DocumentPlayer {
+  const requests: DocumentRequest[] = [];
+  class DocumentLoader {
+    stats = new LoadStats();
+    load(...[context, , callbacks]: LoadArgs) {
+      requests.push({ url: context.url, atMs: performance.now() });
+      const found = gone === 'variant' && context.url === VOD_MULTIVARIANT_URL;
+      queueMicrotask(() => {
+        if (!found) {
+          callbacks.onError({ code: 404, text: 'Not Found' }, context, null, this.stats);
+          return;
+        }
+        this.stats.loading.end = performance.now();
+        callbacks.onSuccess(
+          { url: context.url, data: MULTIVARIANT_TEXT },
+          this.stats,
+          context,
+          null,
+        );
+      });
+    }
+    abort() {}
+    destroy() {}
+  }
+  const hls = new Hls({
+    ...HLS_REWIND_CONFIG,
+    pLoader: DocumentLoader as unknown as HlsConfig['pLoader'],
+    debug: SILENT,
+  });
+  instances.push(hls);
+  const errors: ErrorData[] = [];
+  let recovered = false;
+  hls.on(Events.ERROR, (_event, data) => {
+    errors.push({ ...data });
+    if (!data.fatal || data.type !== ErrorTypes.NETWORK_ERROR || recovered) return;
+    recovered = true;
+    hls.startLoad();
+  });
+  if (gone === 'variant') {
+    vi.stubGlobal('MediaSource', { isTypeSupported: () => true });
+  } else {
+    hls.attachMedia(document.createElement('video'));
+  }
+  hls.loadSource(VOD_MULTIVARIANT_URL);
+  return { requests, errors };
+}
+
+describe('/vod 문서 404 — 진짜 hls.js 1.7.3 이 앱의 한 번 다시 받기에 다시 청하는가(POK-528 c6 X1)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // 멀티변이 목록을 못 받으면 변이(levels)가 없다. 그때 hls.startLoad 는 목록 받기를 다시 열지 않는다 — playlist-loader 의
+  // startLoad 는 빈 몸통이고(loader/playlist-loader.ts 86), stream-controller 는 levels 가 없으면 _forceStartLoad 만 세우고
+  // STOPPED 로 둔다(controller/stream-controller.ts 191-193). 그래서 두 번째 치명이 오지 않는다 — 앱은 끊김 알림을 띄우지
+  // 않은 채 멈춘다(지금 동작 · 훅 층은 useHlsPlayback.vod404.test.ts)
+  it('멀티변이 목록 404 — 치명 하나 · 앱의 startLoad 뒤 다시 청하지 않는다(요청 1 · 두 번째 치명 없음)', async () => {
+    fakeClock();
+    const player = vodDocumentGone('multivariant');
+    await vi.advanceTimersByTimeAsync(AFTER_FATAL_MS);
+    expect(player.requests).toEqual([{ url: VOD_MULTIVARIANT_URL, atMs: 0 }]);
+    expect(player.errors.map((data) => [data.details, data.fatal, data.response?.code])).toEqual([
+      [ErrorDetails.MANIFEST_LOAD_ERROR, true, 404],
+    ]);
+  });
+
+  // 변이 목록 404 는 목록 정책(playlistLoadPolicy.default.errorRetry — config.ts 580-593: maxNumRetry 2 · 1초에서 지수)으로
+  // 두 번 다시 받고(base-playlist-controller.ts 412-458 의 checkRetry) 치명이 된다. 앱의 startLoad 는 level-controller 의
+  // 목록 받기를 다시 열어(base-playlist-controller.ts 55-58) 같은 꼴이 한 바퀴 더 돌고 두 번째 치명이 온다
+  it('변이 목록 404 — 3번 받고(1 → 2초) 치명 · 앱의 startLoad 뒤 한 바퀴 더(3번) 돌고 두 번째 치명', async () => {
+    fakeClock();
+    const player = vodDocumentGone('variant');
+    await vi.advanceTimersByTimeAsync(AFTER_FATAL_MS);
+    expect(player.requests).toEqual([
+      { url: VOD_MULTIVARIANT_URL, atMs: 0 },
+      { url: VOD_VARIANT_URL, atMs: 0 },
+      { url: VOD_VARIANT_URL, atMs: 1_000 },
+      { url: VOD_VARIANT_URL, atMs: 3_000 },
+      { url: VOD_VARIANT_URL, atMs: 3_000 },
+      { url: VOD_VARIANT_URL, atMs: 4_000 },
+      { url: VOD_VARIANT_URL, atMs: 6_000 },
+    ]);
+    expect(player.errors.map((data) => [data.details, data.fatal, data.response?.code])).toEqual([
+      [ErrorDetails.LEVEL_LOAD_ERROR, false, 404],
+      [ErrorDetails.LEVEL_LOAD_ERROR, false, 404],
+      [ErrorDetails.LEVEL_LOAD_ERROR, true, 404],
+      [ErrorDetails.LEVEL_LOAD_ERROR, false, 404],
+      [ErrorDetails.LEVEL_LOAD_ERROR, false, 404],
+      [ErrorDetails.LEVEL_LOAD_ERROR, true, 404],
     ]);
   });
 });

@@ -9,7 +9,8 @@ import { useRecordedPlayback } from './useRecordedPlayback';
 
 // 다시보기(VOD) 조각 404 의 앱 층(POK-528 c6 · W8 (ㄱ) · 계획 8-4 훅 층). kty 결정(2026-11-03)대로 지금 동작을 고정한다:
 // hls.js 가 기본 재시도(비치명 6번 — 실물 층은 hlsVodRetry.hlsjs.test.ts)를 다 쓰고 치명으로 올리면 앱이 한 번 다시
-// 받고(startLoad), 그 뒤 또 치명이면 끊김 알림으로 재생기를 내린다(useHlsPlayback.ts 778-794). 되감기 조각 404 가로채기
+// 받고(startLoad), 그 뒤 또 치명이면 끊김 알림으로 재생기를 내린다(useHlsPlayback.ts 778-794). /vod 문서 404 는 갈래가
+// 나뉜다 — 변이 목록은 같은 길이지만, 멀티변이 목록은 두 번째 치명이 오지 않아 끊김 알림 없이 멈춘다(POK-528 c6 X1). 되감기 조각 404 가로채기
 // (c5)는 kind 'rewind' 에서만 돈다 — 고리를 달아 둔 vod 재생기라도 가로채기 판정(consumeDvrSegmentGone) 자체를 부르지 않는다.
 //
 // K6 — 녹화 재생(지난 방송 상세 · useRecordedPlayback)은 W8 대상이 아니다. hls.js 재생기가 아니라 녹화 재생 서버의 mp4
@@ -127,14 +128,37 @@ function fragGone(fatal: boolean): unknown {
   };
 }
 
-/** /vod 문서(멀티변이 · 변이 목록) 받기 404 — 목록 오류는 hls.js 가 다시 받지 않고 곧바로 치명이다(RC-16) */
-function documentGone(details: string): unknown {
+/** /vod 문서(멀티변이 · 변이 목록) 받기 404 — 치명 여부는 진짜 hls.js 의 순서(hlsVodRetry.hlsjs.test.ts 맨 아래 묶음)를 따른다 */
+function documentGone(details: string, fatal: boolean): unknown {
   return {
     type: FakeHls.ErrorTypes.NETWORK_ERROR,
     details,
-    fatal: true,
+    fatal,
     response: { url: VOD_URL, code: 404, text: '' },
   };
+}
+
+/** 재생기가 세션에 올리는 고리 전부 — 하나도 불리지 않았는지 본다 */
+function sessionHooks() {
+  return {
+    onEndlist: vi.fn(),
+    onStartTruncated: vi.fn(),
+    onEndReached: vi.fn(),
+    onLiveClosed: vi.fn(),
+    onLive400: vi.fn(),
+    onListLoaded: vi.fn(),
+    onPlaying: vi.fn(),
+    onSeekRequest: vi.fn(),
+    onLiveButton: vi.fn(),
+    onNotice: vi.fn(),
+    onDvrSegmentGone: vi.fn(),
+  };
+}
+
+function calledHooks(hooks: ReturnType<typeof sessionHooks>): string[] {
+  return Object.entries(hooks)
+    .filter(([, hook]) => hook.mock.calls.length > 0)
+    .map(([name]) => name);
 }
 
 function raise(hls: FakeHls, data: unknown) {
@@ -199,27 +223,43 @@ describe('다시보기 조각 404 의 앱 한 번 다시 받기(POK-528 c6 · W8
     expect(hls.stopLoad).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ['멀티변이 목록', FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR],
-    ['변이 목록', FakeHls.ErrorDetails.LEVEL_LOAD_ERROR],
-  ])(
-    '/vod 문서(%s) 404 는 콘텐츠 없음 그대로 — 고리 0 · 라이브 닫힘 0 · startLoad 1 → 다음 치명에 끊김',
-    async (_name, details) => {
-      const onDvrSegmentGone = vi.fn();
-      const onLiveClosed = vi.fn();
-      const { result, hls } = await mount(sourceOf('vod', 3), { onDvrSegmentGone, onLiveClosed });
-      raise(hls, documentGone(details));
-      expect(hls.startLoad).toHaveBeenCalledTimes(1);
-      expect(result.current.playbackError).toBeNull();
-      raise(hls, documentGone(details));
-      expect(onDvrSegmentGone).not.toHaveBeenCalled();
-      expect(onLiveClosed).not.toHaveBeenCalled();
-      expect(consumeDvrSegmentGone).not.toHaveBeenCalled();
-      expect(hls.startLoad).toHaveBeenCalledTimes(1);
-      expect(hls.destroy).toHaveBeenCalledTimes(1);
-      expect(result.current.playbackError).toBe(BROKEN_NOTE);
-    },
-  );
+  // 멀티변이 목록을 못 받으면 hls.js 에 변이가 없어 앱의 startLoad 가 아무것도 다시 청하지 않는다 — playlist-loader 의
+  // startLoad 는 빈 몸통(hls.js src/loader/playlist-loader.ts 86) · stream-controller 는 levels 가 없으면 STOPPED 로만
+  // 둔다(src/controller/stream-controller.ts 191-193). 실물 층이 「요청 1 · 두 번째 치명 없음」 을 본다. 그래서 끊김 알림이
+  // 서지 않고, 재생기가 세션에 올리는 고리도 없다(kind 'live' 만 목록 404 를 라이브 닫힘으로 올린다 — useHlsPlayback.ts
+  // 765-776). 세션에 들어가는 사건이 없으니 세션도 따로 알리지 않는다(vod 국면 고유 행은 시크뿐 — rewindSwitch.ts 616-620).
+  // 지금 동작 = 알림 없이 멈춤(kty 확인 후보 · 화면에 무엇이 남는지는 브라우저 미관찰)
+  it('/vod 멀티변이 목록 404 — 첫 치명에 startLoad 1 · 그 뒤 두 번째 치명이 오지 않아 끊김 알림 없음 · 세션 고리 0(알림 없이 멈춤)', async () => {
+    const hooks = sessionHooks();
+    const { result, hls } = await mount(sourceOf('vod', 3), hooks);
+    raise(hls, documentGone(FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR, true));
+    expect(hls.startLoad.mock.calls).toEqual([[]]);
+    expect(hls.destroy).not.toHaveBeenCalled();
+    expect(result.current.playbackError).toBeNull();
+    expect(calledHooks(hooks)).toEqual([]);
+    expect(consumeDvrSegmentGone).not.toHaveBeenCalled();
+  });
+
+  // 변이 목록 404 는 진짜 hls.js 가 목록 정책으로 두 번 다시 받은 뒤 치명이고, 앱의 startLoad 뒤 한 바퀴 더 돌아 두 번째
+  // 치명이 온다(실물 층 「변이 목록 404」)
+  it('/vod 변이 목록 404 — 비치명 2 · 치명 → startLoad 1 → 한 바퀴 더 뒤 치명에 끊김 · destroy 1 · 세션 고리 0', async () => {
+    const hooks = sessionHooks();
+    const { result, hls } = await mount(sourceOf('vod', 3), hooks);
+    const round = () => {
+      raise(hls, documentGone(FakeHls.ErrorDetails.LEVEL_LOAD_ERROR, false));
+      raise(hls, documentGone(FakeHls.ErrorDetails.LEVEL_LOAD_ERROR, false));
+      raise(hls, documentGone(FakeHls.ErrorDetails.LEVEL_LOAD_ERROR, true));
+    };
+    round();
+    expect(hls.startLoad).toHaveBeenCalledTimes(1);
+    expect(result.current.playbackError).toBeNull();
+    round();
+    expect(hls.startLoad).toHaveBeenCalledTimes(1);
+    expect(hls.destroy).toHaveBeenCalledTimes(1);
+    expect(result.current.playbackError).toBe(BROKEN_NOTE);
+    expect(calledHooks(hooks)).toEqual([]);
+    expect(consumeDvrSegmentGone).not.toHaveBeenCalled();
+  });
 });
 
 describe('K6 — 녹화 재생(useRecordedPlayback)은 W8 대상이 아니다', () => {
