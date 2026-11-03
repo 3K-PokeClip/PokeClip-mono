@@ -59,6 +59,37 @@ func (g Gate) logger() *slog.Logger {
 	return g.log
 }
 
+// outboxWritableSQL 은 이 역할이 outbox 에 적재할 수 있는지다 — insertStartedSQL · insertEndedSQL 이 쓰는 권한
+// (SELECT · INSERT 와, started 행 FOR SHARE 가 요구하는 UPDATE)을 묻는다. FOR SHARE 는 어느 한 열의 UPDATE 로도
+// 통과하므로 UPDATE 는 has_any_column_privilege 로 묻는다. 권한 판정 함수는 권한이 없어도 오류를 내지 않는다.
+const outboxWritableSQL = `
+SELECT pg_catalog.has_table_privilege('broadcast_lifecycle_outbox', 'SELECT')
+   AND pg_catalog.has_table_privilege('broadcast_lifecycle_outbox', 'INSERT')
+   AND pg_catalog.has_any_column_privilege('broadcast_lifecycle_outbox', 'UPDATE')`
+
+// outboxWritable 은 켜진 게이트의 적재가 문장을 보내기 전에 같은 트랜잭션에서 묻는 판정이다. 거짓인데 INSERT 를
+// 보내면 42501 이 부르는 쪽 트랜잭션(개시 · 닫힘 · phase 4)을 통째로 롤백한다.
+func outboxWritable(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var ok bool
+	if err := tx.QueryRow(ctx, outboxWritableSQL).Scan(&ok); err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+// writable 은 켜진 게이트의 적재 직전 판정이다. 거짓이면 ERROR lifecycle_enqueue_skipped 를 남긴다 — 커밋 전
+// 「적재 시도」 신호와 같은 자리라 부르는 쪽이 롤백하면 줄만 남을 수 있다.
+func (g Gate) writable(ctx context.Context, tx pgx.Tx, eventType, round string) (bool, error) {
+	ok, err := outboxWritable(ctx, tx)
+	if err != nil {
+		return false, fmt.Errorf("broadcast: %s outbox 권한 판정(회차 %s): %w", eventType, round, err)
+	}
+	if !ok {
+		g.logger().Error("lifecycle_enqueue_skipped", "reason", "privilege", "event_type", eventType, "round", round)
+	}
+	return ok, nil
+}
+
 // insertStartedSQL 은 started 행이다. 겹쳐 불려도 행은 하나다(결정적 eventId · 15.5 cc L④).
 const insertStartedSQL = `
 INSERT INTO broadcast_lifecycle_outbox
@@ -69,7 +100,9 @@ ON CONFLICT (event_id) DO NOTHING`
 // EnqueueStarted 는 새 회차를 여는 트랜잭션 안에서 started 행을 넣는다(15.4 — registry 개시).
 // startedAt 은 머리 세션 started_at 이다. 게이트가 그 stream_id 를 내지 않거나 round 가 비면(M6 전 세션) 아무 문장도
 // 보내지 않는다(D45). 회차 열쇠가 식별자 규칙(CheckRound)을 어기면 행을 abandoned 로 넣고 ERROR 를 남긴다(D48) —
-// pending 으로 두면 영영 못 나가고, 행이 없으면 ended 를 막을 근거가 없다. 오류는 INSERT 실패뿐이다.
+// pending 으로 두면 영영 못 나가고, 행이 없으면 ended 를 막을 근거가 없다. 게이트가 내는 회차라도 부르는 역할에
+// outbox 권한이 없으면(outboxWritable 거짓) 문장 없이 nil 이고 ERROR lifecycle_enqueue_skipped 를 남긴다 — 개시
+// 트랜잭션을 42501 로 롤백하지 않는다. 오류는 판정 · INSERT 실패뿐이다.
 //
 // 여기서 찍는 lifecycle_enqueued · lifecycle_abandoned 는 부르는 쪽 트랜잭션 안의 「적재 시도」 신호다 — 커밋 전에
 // 찍으므로 부르는 쪽이 롤백하면 행 없이 줄만 남는다. 커밋된 사실은 outbox 행과 발행기의 줄이 정본이다 — 발행기는
@@ -77,6 +110,9 @@ ON CONFLICT (event_id) DO NOTHING`
 func EnqueueStarted(ctx context.Context, tx pgx.Tx, g Gate, round, ingestStreamID string, startedAt time.Time) error {
 	if round == "" || !g.allows(ingestStreamID) {
 		return nil
+	}
+	if ok, err := g.writable(ctx, tx, EventStarted, round); err != nil || !ok {
+		return err
 	}
 	state, reason := "pending", ""
 	if err := CheckRound(round); err != nil {
@@ -154,10 +190,15 @@ ON CONFLICT (event_id) DO NOTHING`
 // 부르고, 회차 세션을 ended 로 바꾸거나 회차를 닫는 모든 트랜잭션이 같은 잠금 아래에서 부른다. 판정은 stream_sessions
 // 를 잠그지 않고 읽으므로, 잠금 없이 같은 회차의 두 사슬이 따로 ended 가 되면 두 트랜잭션 모두 상대를 아직 ended 가
 // 아닌 것으로 보아 ended 행이 영영 생기지 않는다. lifecycle_enqueued 는 EnqueueStarted 와 같이 커밋 전 「적재 시도」
-// 신호다. started 행을 FOR SHARE 로 잠그므로 부르는 쪽 역할에는 outbox UPDATE 권한이 있어야 한다(30_grants.sql).
+// 신호다. started 행을 FOR SHARE 로 잠그므로 문장에는 outbox UPDATE 권한이 요건이다(30_grants.sql). 켜진 게이트는
+// 문장 전에 같은 트랜잭션에서 outboxWritable 을 묻고, 거짓이면 문장 없이 (false, nil) · ERROR
+// lifecycle_enqueue_skipped 다 — 닫힘 · phase 4 트랜잭션을 42501 로 롤백하지 않는다.
 func EnqueueEndedIfComplete(ctx context.Context, tx pgx.Tx, g Gate, round string) (bool, error) {
 	if round == "" || !g.Enabled() {
 		return false, nil
+	}
+	if ok, err := g.writable(ctx, tx, EventEnded, round); err != nil || !ok {
+		return false, err
 	}
 	tag, err := tx.Exec(ctx, insertEndedSQL, StartedEventID(round), EndedEventID(round), EventEnded)
 	if err != nil {

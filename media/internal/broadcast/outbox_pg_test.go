@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,27 +212,45 @@ func TestEnqueueStartedTwiceKeepsOneRow(t *testing.T) {
 }
 
 // D45 — 켜는 순간 옛 회차 홍수를 막는다. 게이트 꺼짐 · 허용 목록 밖 · round_id 없는 세션(M6 전)은 INSERT 0 이다.
-// 잡는 결함: 허용 목록을 무시하면 드라이런 계정 밖 회차가, NULL 회차를 받으면 옛 세션이 이벤트를 낸다.
+// 켜진 게이트라도 부르는 역할에 outbox 권한이 없으면 문장 없이 건너뛰고 ERROR lifecycle_enqueue_skipped 를 남긴다.
+// 잡는 결함: 허용 목록을 무시하면 드라이런 계정 밖 회차가, NULL 회차를 받으면 옛 세션이 이벤트를 낸다. 권한 판정이
+// 없으면 INSERT 가 42501 로 개시 트랜잭션을 롤백한다.
 func TestEnqueueStartedSkipsOutsideGate(t *testing.T) {
 	discard := slog.New(slog.DiscardHandler)
+	skipped := &signals{}
 	tests := []struct {
-		name  string
-		gate  Gate
-		round string
+		name   string
+		gate   Gate
+		round  string
+		revoke string // 비지 않으면 media_indexer 역할에서 이 outbox 권한을 거두고 그 역할로 부른다
 	}{
-		{"게이트_영값_꺼짐", Gate{}, "S-A"},
-		{"허용_목록_빔", NewGate(nil, discard), "S-A"},
-		{"허용_목록_밖", NewGate([]string{"zzzzzzzzzzzzzzzzzzzzzzzzzz"}, discard), "S-A"},
-		{"회차_없음_M6_전", openGate(), ""},
+		{"게이트_영값_꺼짐", Gate{}, "S-A", ""},
+		{"허용_목록_빔", NewGate(nil, discard), "S-A", ""},
+		{"허용_목록_밖", NewGate([]string{"zzzzzzzzzzzzzzzzzzzzzzzzzz"}, discard), "S-A", ""},
+		{"회차_없음_M6_전", openGate(), "", ""},
+		{"권한_없음_INSERT", NewGate([]string{"*"}, slog.New(skipped)), "S-A", "INSERT"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pool := newTestPool(t)
+			db := pool
+			if tt.revoke != "" {
+				role := pgtest.NewMediaIndexerRole(t, pool)
+				role.Revoke(t, tt.revoke, "broadcast_lifecycle_outbox")
+				db = role.Pool
+			}
 
-			enqueueStarted(t, pool, tt.gate, tt.round, ingest, base)
+			enqueueStarted(t, db, tt.gate, tt.round, ingest, base)
 
 			if n := countOutbox(t, pool); n != 0 {
 				t.Errorf("outbox 행 = %d, want 0", n)
+			}
+			if tt.revoke == "" {
+				return
+			}
+			if n := skipped.count(slog.LevelError, "lifecycle_enqueue_skipped",
+				"reason", "privilege", "event_type", EventStarted, "round", tt.round); n != 1 {
+				t.Errorf("ERROR lifecycle_enqueue_skipped(started · %s) = %d, want 1", tt.round, n)
 			}
 		})
 	}
@@ -392,19 +411,23 @@ func TestEnqueueEndedRequiresClosedAllEndedRound(t *testing.T) {
 
 // ended 는 started 를 낸(낼) 회차만이다 — started 행이 없거나(켜기 전 회차 · 허용 목록 밖) abandon 이면 만들지 않는다
 // (15.4 · 15.5 X4 규칙 2). 게이트가 꺼져 있으면 문장 자체를 보내지 않는다(권한이 없을 때 42501 로 phase 4 가 막히지
-// 않게 — 7절 활성화 선행 조건).
+// 않게 — 7절 활성화 선행 조건). 켜진 게이트라도 부르는 역할에 outbox 권한이 없으면 문장 없이 거짓 · 오류 없음이고
+// ERROR lifecycle_enqueue_skipped 를 남긴다.
 func TestEnqueueEndedRequiresLiveStartedRow(t *testing.T) {
+	skipped := &signals{}
 	tests := []struct {
 		name    string
 		started string // "" 이면 started 행 없음
 		gate    Gate
 		want    bool
+		revoke  string // 비지 않으면 media_indexer 역할에서 이 outbox 권한을 거두고 그 역할로 부른다
 	}{
-		{"started_pending", "pending", openGate(), true},
-		{"started_published", "published", openGate(), true},
-		{"started_없음", "", openGate(), false},
-		{"started_abandoned", "abandoned", openGate(), false},
-		{"게이트_꺼짐", "pending", Gate{}, false},
+		{"started_pending", "pending", openGate(), true, ""},
+		{"started_published", "published", openGate(), true, ""},
+		{"started_없음", "", openGate(), false, ""},
+		{"started_abandoned", "abandoned", openGate(), false, ""},
+		{"게이트_꺼짐", "pending", Gate{}, false, ""},
+		{"권한_없음_UPDATE", "pending", NewGate([]string{"*"}, slog.New(skipped)), false, "UPDATE"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -415,9 +438,22 @@ func TestEnqueueEndedRequiresLiveStartedRow(t *testing.T) {
 				enqueueStarted(t, pool, openGate(), "S-A", ingest, base)
 				setState(t, pool, "S-A.started", tt.started, base)
 			}
+			db := pool
+			if tt.revoke != "" {
+				role := pgtest.NewMediaIndexerRole(t, pool)
+				role.Revoke(t, tt.revoke, "broadcast_lifecycle_outbox")
+				db = role.Pool
+			}
 
-			if got := enqueueEnded(t, pool, tt.gate, "S-A"); got != tt.want {
+			if got := enqueueEnded(t, db, tt.gate, "S-A"); got != tt.want {
 				t.Errorf("EnqueueEndedIfComplete = %v, want %v", got, tt.want)
+			}
+			if tt.revoke == "" {
+				return
+			}
+			if n := skipped.count(slog.LevelError, "lifecycle_enqueue_skipped",
+				"reason", "privilege", "event_type", EventEnded, "round", "S-A"); n != 1 {
+				t.Errorf("ERROR lifecycle_enqueue_skipped(ended · S-A) = %d, want 1", n)
 			}
 		})
 	}
@@ -435,5 +471,213 @@ func TestEnqueueEndedWithoutSegmentsFallsBackToEndedAt(t *testing.T) {
 	}
 	if r, _ := readOutbox(t, pool, "S-A.ended"); r.payload != "{}" {
 		t.Errorf("payload = %s, want {}", r.payload)
+	}
+}
+
+// statementCounter 는 풀이 보낸 문장을 모두 센다(pgx.QueryTracer) — pgtest.Role 의 기록과 달리 성공한 불필요 SELECT 도
+// 잡는다. 여러 연결이 동시에 부른다.
+type statementCounter struct {
+	mu     sync.Mutex
+	sent   []string
+	denied int
+}
+
+func (c *statementCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sent = append(c.sent, d.SQL)
+	return ctx
+}
+
+func (c *statementCounter) TraceQueryEnd(_ context.Context, _ *pgx.Conn, d pgx.TraceQueryEndData) {
+	if !pgtest.IsInsufficientPrivilege(d.Err) {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.denied++
+}
+
+// containing 은 글자 s 를 담은 문장 수다.
+func (c *statementCounter) containing(s string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, sql := range c.sent {
+		if strings.Contains(sql, s) {
+			n++
+		}
+	}
+	return n
+}
+
+// exactly 는 문장 sql 그대로를 보낸 수다.
+func (c *statementCounter) exactly(sql string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, s := range c.sent {
+		if s == sql {
+			n++
+		}
+	}
+	return n
+}
+
+// deniedCount 는 42501 로 거부된 문장 수다.
+func (c *statementCounter) deniedCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.denied
+}
+
+// countedRolePool 은 media_indexer 역할에서 outbox 권한 revoke 를 거두고, 그 역할로 붙어 문장마다 계수기를 거치는
+// 풀을 돌려준다.
+func countedRolePool(t *testing.T, admin *pgxpool.Pool, revoke ...string) (*pgxpool.Pool, *statementCounter) {
+	t.Helper()
+	role := pgtest.NewMediaIndexerRole(t, admin)
+	for _, p := range revoke {
+		role.Revoke(t, p, "broadcast_lifecycle_outbox")
+	}
+	counter := &statementCounter{}
+	return pgtest.TracedPool(context.Background(), t, role.Pool, counter), counter
+}
+
+// runInTx 는 fn 을 트랜잭션 하나에서 돌리고, 오류가 없으면 커밋한다. 오류는 값으로 돌려준다.
+func runInTx(pool *pgxpool.Pool, fn func(context.Context, pgx.Tx) error) error {
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := fn(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// J4′(a)(브로드캐스트 층) — 꺼진 게이트 · 목록 밖 개시와 꺼진 게이트의 완결 평가는 outbox 를 글자로 담은 문장을
+// 하나도 보내지 않는다(판정 SELECT 포함 — outboxWritableSQL 은 표 이름을 함수 인자 글자로 담는다). outbox 네 권한을
+// 모두 거둔 역할로 돌려 오류 · 42501 · skipped 0 도 본다. 같은 계수기 · 같은 역할로 켜진 게이트의 개시를 돌리면 그 수가
+// 0 보다 커야 한다(양성 대조 — 계수기가 실제로 본다는 교정이라 결과는 보지 않는다).
+// 잡는 결함: 판정을 게이트 판정 앞에 두면(V12) 꺼진 사이드카가 판정 SELECT 를 보내고 skipped 줄을 낸다.
+func TestEnqueueOffGateSendsNoOutboxStatement(t *testing.T) {
+	tests := []struct {
+		name  string
+		ended bool // 참이면 완결 평가, 거짓이면 개시
+		gate  func(*slog.Logger) Gate
+	}{
+		{"개시_영값_게이트", false, func(*slog.Logger) Gate { return Gate{} }},
+		{"개시_허용_목록_빔", false, func(l *slog.Logger) Gate { return NewGate(nil, l) }},
+		{"개시_허용_목록_밖", false, func(l *slog.Logger) Gate {
+			return NewGate([]string{"zzzzzzzzzzzzzzzzzzzzzzzzzz"}, l)
+		}},
+		{"완결_평가_영값_게이트", true, func(*slog.Logger) Gate { return Gate{} }},
+		{"완결_평가_허용_목록_빔", true, func(l *slog.Logger) Gate { return NewGate(nil, l) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			completeRound(t, pool)
+			db, counter := countedRolePool(t, pool, outboxPrivileges[:]...)
+			sig := &signals{}
+			gate := tt.gate(slog.New(sig))
+
+			err := runInTx(db, func(ctx context.Context, tx pgx.Tx) error {
+				if tt.ended {
+					_, err := EnqueueEndedIfComplete(ctx, tx, gate, "S-A")
+					return err
+				}
+				return EnqueueStarted(ctx, tx, gate, "S-B", ingest, base)
+			})
+
+			if err != nil {
+				t.Fatalf("꺼진 게이트 적재 = %v, want nil", err)
+			}
+			if n := counter.containing("broadcast_lifecycle_outbox"); n != 0 {
+				t.Errorf("outbox 글자를 담은 문장 = %d, want 0", n)
+			}
+			if n := counter.deniedCount(); n != 0 {
+				t.Errorf("42501 = %d, want 0", n)
+			}
+			if n := sig.count(slog.LevelError, "lifecycle_enqueue_skipped"); n != 0 {
+				t.Errorf("ERROR lifecycle_enqueue_skipped = %d, want 0", n)
+			}
+
+			_ = runInTx(db, func(ctx context.Context, tx pgx.Tx) error { // 결과는 보지 않는다 — 계수기 교정만
+
+				return EnqueueStarted(ctx, tx, openGate(), "S-C", ingest, base)
+			})
+			if n := counter.containing("broadcast_lifecycle_outbox"); n == 0 {
+				t.Error("양성 대조: 켜진 게이트 개시 뒤 outbox 글자를 담은 문장 = 0, want > 0(계수기가 보지 못한다)")
+			}
+		})
+	}
+}
+
+// J4′(b)(브로드캐스트 층) — 켜진 게이트 × outbox 권한 하나씩 회수(SELECT · INSERT · UPDATE): 개시 · 완결 평가가 오류
+// 없이 돌고 42501 0 · 그 INSERT 문장 0 · ERROR lifecycle_enqueue_skipped 1(event_type 일치) · started 행 0 ·
+// 완결 평가 (false, nil).
+// 잡는 결함: 판정이 없으면 INSERT 회수에서 42501 로 부르는 쪽 트랜잭션이 롤백되고(V2 · V3), SELECT · UPDATE 회수의
+// started 는 판정 없이 행이 생겨 started 와 ended 가 함께 서지 않는다. skipped 를 INFO 로 내리면 LOG_LEVEL=error
+// 에서 안 보인다(V21).
+func TestEnqueueSkipsWithoutOutboxPrivilege(t *testing.T) {
+	for _, privilege := range []string{"SELECT", "INSERT", "UPDATE"} {
+		t.Run("개시_"+privilege+"_회수", func(t *testing.T) {
+			pool := newTestPool(t)
+			db, counter := countedRolePool(t, pool, privilege)
+			sig := &signals{}
+			gate := NewGate([]string{"*"}, slog.New(sig))
+
+			err := runInTx(db, func(ctx context.Context, tx pgx.Tx) error {
+				return EnqueueStarted(ctx, tx, gate, "S-B", ingest, base)
+			})
+
+			if err != nil {
+				t.Fatalf("EnqueueStarted(%s 회수) = %v, want nil", privilege, err)
+			}
+			if _, ok := readOutbox(t, pool, "S-B.started"); ok {
+				t.Errorf("S-B.started 행 있음, want 없음(%s 회수)", privilege)
+			}
+			checkSkipped(t, sig, counter, EventStarted, "S-B", insertStartedSQL)
+		})
+		t.Run("완결_평가_"+privilege+"_회수", func(t *testing.T) {
+			pool := newTestPool(t)
+			completeRound(t, pool)
+			db, counter := countedRolePool(t, pool, privilege)
+			sig := &signals{}
+			gate := NewGate([]string{"*"}, slog.New(sig))
+
+			var enqueued bool
+			err := runInTx(db, func(ctx context.Context, tx pgx.Tx) error {
+				var err error
+				enqueued, err = EnqueueEndedIfComplete(ctx, tx, gate, "S-A")
+				return err
+			})
+
+			if err != nil || enqueued {
+				t.Fatalf("EnqueueEndedIfComplete(%s 회수) = %v · %v, want false · nil", privilege, enqueued, err)
+			}
+			if _, ok := readOutbox(t, pool, "S-A.ended"); ok {
+				t.Errorf("S-A.ended 행 있음, want 없음(%s 회수)", privilege)
+			}
+			checkSkipped(t, sig, counter, EventEnded, "S-A", insertEndedSQL)
+		})
+	}
+}
+
+// checkSkipped 는 켜진 게이트의 건너뜀 신호를 본다 — ERROR skipped 1 · 그 INSERT 문장 0 · 42501 0.
+func checkSkipped(t *testing.T, sig *signals, counter *statementCounter, eventType, round, insertSQL string) {
+	t.Helper()
+	if n := sig.count(slog.LevelError, "lifecycle_enqueue_skipped",
+		"reason", "privilege", "event_type", eventType, "round", round); n != 1 {
+		t.Errorf("ERROR lifecycle_enqueue_skipped(%s · %s) = %d, want 1", eventType, round, n)
+	}
+	if n := counter.exactly(insertSQL); n != 0 {
+		t.Errorf("%s INSERT 문장 = %d, want 0", eventType, n)
+	}
+	if n := counter.deniedCount(); n != 0 {
+		t.Errorf("42501 = %d, want 0", n)
 	}
 }
