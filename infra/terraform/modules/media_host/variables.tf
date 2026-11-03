@@ -460,3 +460,52 @@ variable "ingest_auth_ip_limit" {
     error_message = "ingest_auth_ip_limit 은 \"on\" 또는 \"off\" 여야 한다."
   }
 }
+
+variable "broadcast_topic_arn" {
+  description = "계약9 방송 생명주기 SNS FIFO 주제 ARN(런타임 1단 출력 broadcast_topic_arn — 값 아님). 사이드카 BROADCAST_TOPIC_ARN(응답기 모드 · 발행 목록이 찰 때만 렌더)이고, 인스턴스 역할 sns:Publish 의 Resource 다(목록과 무관하게 늘)."
+  type        = string
+
+  # 사이드카 media/internal/config/lifecycle.go 의 loadLifecycle 과 같은 판정이다
+  # — arn.Parse(콜론으로 가른 칸 여섯 · 첫 칸 arn — 자원은 다섯째 콜론 뒤 전부)
+  # 뒤 서비스 sns · 지역 있음 · 계정 12자리 숫자 · 자원이 .fifo 로 끝나고 그보다
+  # 김. 파티션은 사이드카도 보지 않는다. 여기서 통과한 값을 사이드카가 기동
+  # 거부하지 않게 하는 것이 목적이다.
+  validation {
+    condition = alltrue([
+      for parts in [split(":", var.broadcast_topic_arn)] : try(
+        length(parts) >= 6 &&
+        parts[0] == "arn" &&
+        parts[2] == "sns" &&
+        parts[3] != "" &&
+        can(regex("^[0-9]{12}$", parts[4])) &&
+        endswith(join(":", slice(parts, 5, length(parts))), ".fifo") &&
+        length(join(":", slice(parts, 5, length(parts)))) > length(".fifo"),
+        false,
+      )
+    ])
+    error_message = "broadcast_topic_arn 은 SNS FIFO 주제 ARN(arn:<파티션>:sns:<지역>:<12자리 계정>:<이름>.fifo)이어야 한다."
+  }
+}
+
+variable "lifecycle_publish_streams" {
+  description = "계약9 발행 허용 목록 — ingestStreamId(26자 Crockford base32) 목록, \"*\" 는 전부. 사이드카 LIFECYCLE_PUBLISH_STREAMS(쉼표로 이은 한 값). 비면 렌더하지 않아 발행이 꺼진다. 응답기 모드에서만 채운다. 사이드카는 기동 때만 읽으므로 바꾸는 것은 상자 교체다."
+  type        = list(string)
+  default     = []
+
+  # 사이드카는 항목을 검증하지 않고, 꼴이 틀린 항목의 회차를 오류 없이 버린다
+  # (lifecycle_abandoned reason=streamer_invalid) — 여기가 유일한 방어다.
+  validation {
+    condition = alltrue([
+      for stream in var.lifecycle_publish_streams :
+      stream == "*" || can(regex("^[0-9A-HJKMNP-TV-Z]{26}$", stream))
+    ])
+    error_message = "lifecycle_publish_streams 의 항목은 \"*\" 또는 26자 Crockford base32 대문자(I · L · O · U 없음)여야 한다."
+  }
+
+  # 옛 모드는 발행 env 두 줄을 렌더하지 않아 사이드카가 발행을 끈다
+  # (lifecycle_disabled reason=no_topic) — apply 뒤에야 알지 않게 plan 에서 막는다.
+  validation {
+    condition     = var.ingest_auth_image != "" || length(var.lifecycle_publish_streams) == 0
+    error_message = "옛 모드(ingest_auth_image 빈 값)에서는 lifecycle_publish_streams 를 채우지 않는다 — 발행 env 가 렌더되지 않아 사이드카가 발행을 끈다."
+  }
+}

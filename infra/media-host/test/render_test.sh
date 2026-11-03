@@ -23,6 +23,9 @@
 #   - mediamtx: compose 갈래 a 가 고른 옛 모드(a) · b 가 고른 응답기 모드(b).
 #   - ingest-auth.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(응답기 갈래의
 #     env_file). 응답기 사례(35 – 46)는 test/lib/render_auth_cases.sh 에 있다.
+#   - 사이드카 계약9 발행 env: 갈래 p1 · p2 · p3 · p4 · p6(응답기 · 옛 모드 ×
+#     목록 — p5 는 비밀 0 사례가 갈래 없이 전부를 봐서 없다). 사례(48 – 53)는
+#     test/lib/render_publish_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -57,6 +60,8 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/render_mtx_cases.sh"
 # shellcheck source=lib/render_auth_cases.sh
 source "${TEST_DIR}/lib/render_auth_cases.sh"
+# shellcheck source=lib/render_publish_cases.sh
+source "${TEST_DIR}/lib/render_publish_cases.sh"
 # shellcheck source=../bin/lib/render_files.sh
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
@@ -76,7 +81,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=47
+readonly CASE_COUNT=53
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -903,6 +908,7 @@ main() {
   if check_tools; then
     render_all || true
     auth_cases::prepare || true
+    publish_cases::prepare || true
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
@@ -1000,6 +1006,16 @@ main() {
   harness::run_case 47 \
     'mediamtx 템플릿 원본 — 달러 · 퍼센트 중괄호 0 · 표지 줄 꼴(묶음이 그대로 설치)' \
     mtx_cases::check_47
+  harness::run_case 48 '발행 env — 응답기 · 목록 하나면 사이드카에만 두 줄' \
+    publish_cases::check_48
+  harness::run_case 49 '발행 env — 목록 * 은 따옴표로 렌더 · compose 해석 통과' \
+    publish_cases::check_49
+  harness::run_case 50 '발행 env — 응답기 · 빈 목록이면 0줄' publish_cases::check_50
+  harness::run_case 51 '발행 env — 옛 모드면 목록이 차도 0줄' publish_cases::check_51
+  harness::run_case 52 '발행 갈래 렌더 — 비밀 ARN · 비밀 계열 env 이름 0' \
+    publish_cases::check_52
+  harness::run_case 53 '발행 env — 목록 둘은 쉼표 하나로 이은 한 값' \
+    publish_cases::check_53
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

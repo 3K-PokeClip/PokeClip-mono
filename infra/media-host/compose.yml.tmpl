@@ -18,6 +18,16 @@
 #                        같이 쓴다. 응답기 모드에서만 쓰이지만
 #                        templatefile() 은 안 쓰는 갈래의 변수도 요구해 늘
 #                        넘긴다(옛 모드는 빈 값이어도 된다).
+#   broadcast_topic_arn · lifecycle_publish_streams
+#                        계약9 발행(broadcast.started · ended → SNS FIFO) 설정 —
+#                        주제 ARN(문자열)과 허용 목록(ingestStreamId 목록, "*" 는
+#                        전부). 응답기 모드이고 목록이 찰 때만 사이드카 env 두
+#                        줄로 렌더한다 — 옛 모드는 4C resolve 설정이 없어
+#                        started 를 낼 수 없으므로 두 줄을 렌더하지 않는다.
+#                        두 줄이 없으면(옛 모드 · 빈 목록) 주제가 비어
+#                        사이드카가 발행을 끈다(lifecycle_disabled
+#                        reason=no_topic). 목록은 쉼표로 이은 한 값이고 늘
+#                        따옴표 친다(맨 * 는 YAML 별칭이라 compose 해석이 실패).
 #   janitor_enabled      bool. 참이면 janitor(녹화 정리)를 렌더한다 — 이미지는
 #                        sidecar_image 이고 entrypoint 로 janitor 명령을 고른다.
 #                        거짓이면 서비스가 없다(다음 시작의 --remove-orphans 가
@@ -69,6 +79,12 @@
 #     응답기도 같다 — 시작 스크립트가 tmpfs 에 둔 비밀 셋 · 상태 디렉터리와
 #     거부 목록 디렉터리를 bind 로 받고, env 에는 그 파일 경로(*_FILE)만
 #     적는다.
+#   - 계약9 발행 게이트. 사이드카는 발행 설정을 기동 때만 읽는다 — 바꾸려면
+#     상자를 교체한다(user_data 는 ignore_changes). 같은 DB 에 붙은 사이드카는
+#     모두 게이트가 켜져 있어야 한다 — 꺼진 사이드카가 started 를 낸 회차를
+#     닫으면 ended 가 영영 적재되지 않는다. 재기동 때 게이트 준비가 실패해도
+#     꺼진 게이트로 정산을 계속하므로(ADR-063 결정 1), 발행 목록 계정이
+#     송출하는 동안은 운영 감시를 돈다(media-swap 런북 「O8a 당김 교체」).
 #   - 모든 서비스의 core 덤프 크기 0(ulimits core: 0 — 소프트 · 하드 둘 다).
 #     메모리의 CDN 비밀 · API 비밀번호가 덤프 파일로 남지 않게 한다.
 #   - 볼륨에 복사 금지 옵션을 붙이지 않는다 — 이미지에 심은 소유권 복사가
@@ -214,6 +230,11 @@ services:
       # 사이드카 실행 계정 소유 0400 사본으로 둔다.
       STREAM_KEY_RESOLVE_URL: ${stream_key_resolve_url}
       STREAM_KEY_RESOLVE_TOKEN_FILE: /run/secrets/stream_key_resolve_token
+%{ if length(lifecycle_publish_streams) > 0 ~}
+      # 계약9 발행 — 위 4C 설정이 있는 응답기 모드에서 목록이 찰 때만 둔다.
+      BROADCAST_TOPIC_ARN: "${broadcast_topic_arn}"
+      LIFECYCLE_PUBLISH_STREAMS: "${join(",", lifecycle_publish_streams)}"
+%{ endif ~}
 %{ endif ~}
     volumes:
       - recordings:/recordings:ro
