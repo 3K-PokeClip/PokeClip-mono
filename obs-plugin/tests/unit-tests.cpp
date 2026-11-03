@@ -1742,7 +1742,7 @@ TEST(build_default_env_is_prod_without_dev_macro)
 	CHECK(PluginConfig{}.serverEnv == ServerEnv::Prod);
 	const ServerDefaults &prod = ServersFor(ServerEnv::Prod);
 	CHECK_EQ(std::string(prod.apiBase), std::string("https://api.pokeclip.com"));
-	CHECK_EQ(std::string(prod.ingestHost), std::string("media.pokeclip.com"));
+	CHECK_EQ(std::string(prod.ingestHost), std::string("ingest.pokeclip.com"));
 	CHECK_EQ(prod.ingestPort, 8890);
 	const ServerDefaults &dev = ServersFor(ServerEnv::Dev);
 	CHECK_EQ(std::string(dev.apiBase), std::string("https://dev.pokeclip.com"));
@@ -1804,7 +1804,8 @@ TEST(apply_server_env_swaps_known_defaults_only)
 	ch = ApplyServerEnv(c, ServerEnv::Dev);
 	CHECK(!ch.env && !ch.api && !ch.ingest);
 
-	// 옛 기본값(POK-267 이전: http dev · ingest.pokeclip.com) → 대상 환경 값으로 올린다
+	// 옛 기본값(POK-267 이전: http dev · ingest.pokeclip.com — 수신은 지금 운영 값과 이름이 같다) → 대상 환경 값으로
+	// 올린다
 	PluginConfig old;
 	old.apiBase = kLegacyDefaultApiBase;
 	old.ingestHost = kLegacyDefaultIngestHost;
@@ -1819,7 +1820,37 @@ TEST(apply_server_env_swaps_known_defaults_only)
 	oldProd.ingestPort = 8890;
 	ApplyServerEnv(oldProd, ServerEnv::Prod);
 	CHECK_EQ(oldProd.apiBase, std::string("https://api.pokeclip.com"));
-	CHECK_EQ(oldProd.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(oldProd.ingestHost, std::string("ingest.pokeclip.com"));
+
+	// 0.2.1 이전 운영 기본 수신(media.pokeclip.com — CloudFront라 SRT가 닿지 않는다)도 옛 기본값이다. 운영에
+	// 남아도 지금 운영 값으로 올리고 키는 그대로 둔다
+	PluginConfig oldMedia;
+	oldMedia.serverEnv = ServerEnv::Prod;
+	oldMedia.apiBase = kProdServers.apiBase;
+	oldMedia.ingestHost = "media.pokeclip.com";
+	oldMedia.ingestPort = 8890;
+	oldMedia.streamId = kStreamId;
+	oldMedia.passphrase = "pass-prod-0123456789";
+	ch = ApplyServerEnv(oldMedia, ServerEnv::Prod);
+	CHECK(!ch.env && !ch.api && ch.ingest);
+	CHECK_EQ(oldMedia.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK_EQ(oldMedia.ingestPort, 8890);
+	CHECK_EQ(oldMedia.streamId, std::string(kStreamId));
+	CHECK_EQ(oldMedia.passphrase, std::string("pass-prod-0123456789"));
+	// 직접 고친 포트는 남기고 호스트만 올린다
+	PluginConfig oldMediaPort = oldMedia;
+	oldMediaPort.ingestHost = "media.pokeclip.com";
+	oldMediaPort.ingestPort = 9000;
+	ApplyServerEnv(oldMediaPort, ServerEnv::Prod);
+	CHECK_EQ(oldMediaPort.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK_EQ(oldMediaPort.ingestPort, 9000);
+	// 개발로 가면 개발 짝으로
+	PluginConfig oldMediaDev;
+	oldMediaDev.apiBase = kProdServers.apiBase;
+	oldMediaDev.ingestHost = "media.pokeclip.com";
+	oldMediaDev.ingestPort = 8890;
+	ApplyServerEnv(oldMediaDev, ServerEnv::Dev);
+	CHECK_EQ(oldMediaDev.ingestHost, std::string("media-dev.pokeclip.com"));
 
 	// 직접 적은 값(로컬 compose·로컬 auth)은 그대로다
 	PluginConfig local;
@@ -1838,7 +1869,7 @@ TEST(apply_server_env_swaps_known_defaults_only)
 	port.ingestHost = kDevServers.ingestHost;
 	port.ingestPort = 9000;
 	ApplyServerEnv(port, ServerEnv::Prod);
-	CHECK_EQ(port.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(port.ingestHost, std::string("ingest.pokeclip.com"));
 	CHECK_EQ(port.ingestPort, 9000);
 }
 
@@ -1856,12 +1887,19 @@ TEST(infer_server_env_from_files_without_key)
 	c.apiBase = "http://localhost:8082";
 	c.ingestHost = "media-dev.pokeclip.com";
 	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	// 0.2.1 이전 운영 짝(media.pokeclip.com)은 운영 흔적이라 운영으로 본다. 배포 빌드는 fallback으로 봐도 결과가
+	// 같고, 개발 빌드에서 운영을 뜻한 값을 dev로 바꾸지 않는다(기대값을 바꾸지 않아 diff도 작다)
 	c.ingestHost = "media.pokeclip.com";
 	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Prod);
 	c.ingestHost = "127.0.0.1";
 	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
 	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
 	c.ingestHost = kLegacyDefaultIngestHost; // 옛 기본 수신은 어느 환경의 근거도 아니다
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
+	// 바꾼 뒤 운영 값은 POK-267 이전 옛 값과 같은 이름이다 — 운영의 근거가 아님을 고정한다(server_env 없는 파일의
+	// ingest.pokeclip.com은 dev 키와 운영 수신이 섞였던 설치일 수 있다)
+	c.ingestHost = kProdServers.ingestHost;
 	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
 	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
 }
@@ -1889,7 +1927,7 @@ TEST(put_ordinary_save_keeps_server_pair)
 	c.ingestHost = kDevServers.ingestHost;
 	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
 	CHECK(c.serverEnv == ServerEnv::Prod);
-	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
 	CHECK_EQ(c.streamId, std::string(kStreamId)); // 전환이 아니면 키는 그대로
 	CHECK_EQ(c.passphrase, before.passphrase);
 
@@ -1897,7 +1935,15 @@ TEST(put_ordinary_save_keeps_server_pair)
 	c = before;
 	c.ingestHost = kLegacyDefaultIngestHost;
 	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
-	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
+
+	// 0.2.1 이전 운영 기본 호스트(media.pokeclip.com)를 연 초안을 저장 — 지금 운영 값으로, 키는 그대로
+	c = before;
+	c.ingestHost = "media.pokeclip.com";
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+	CHECK_EQ(c.passphrase, before.passphrase);
 
 	// 직접 적은 호스트·포트는 그대로
 	c = before;

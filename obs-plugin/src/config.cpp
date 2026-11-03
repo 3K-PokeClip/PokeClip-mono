@@ -133,8 +133,8 @@ void ConfigStore::Load()
 	}
 
 	// 서버 환경(POK-267). 키가 있으면 그 값, 없거나 모르는 값이면 api_base로 짐작한다(옛 파일 — dev 키로 페어링된
-	// 설치는 개발에 남는다). 그다음 손대지 않은 기본값(옛 http dev · ingest.pokeclip.com 포함)을 그 환경의 짝으로
-	// 올린다 — 직접 적은 주소는 그대로. 올린 값은 다음 저장 때 파일에 남는다.
+	// 설치는 개발에 남는다). 그다음 손대지 않은 기본값(옛 http dev · 0.2.1 이전 운영 media.pokeclip.com 포함)을 그
+	// 환경의 짝으로 올린다 — 직접 적은 주소는 그대로. 올린 값은 다음 저장 때 파일에 남는다.
 	ServerEnv env = kBuildServerEnv;
 	const std::string envText = GetStringOr(data, "server_env", "");
 	if (!ParseServerEnv(envText, env)) {
