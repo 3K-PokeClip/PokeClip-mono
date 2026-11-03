@@ -2,6 +2,7 @@ package com.pokeclip.render.work;
 
 import com.pokeclip.render.job.OffsetOrigin;
 import com.pokeclip.render.media.SegmentTiming;
+import com.pokeclip.render.media.SegmentTiming.TrackRange;
 import com.pokeclip.render.work.AudioRun.TrackStart;
 import org.junit.jupiter.api.Test;
 
@@ -105,6 +106,27 @@ class RenderTimelineAudioTest {
         assertThat(t.notes()).filteredOn(n -> n.event().equals("render.audio_pad"))
                 .extracting(RenderTimeline.Note::fields)
                 .containsExactly("run=0 track=0 frontMs=0 backMs=25");
+    }
+
+    /**
+     * 끝 무음은 신호에만 쓰는 산식이다 — 그 산식이 넘쳐도(소리 끝 PTS 가 터무니없이 큼 · 1/24000 이라 표본 자리가 long 을 넘김)
+     * 결과는 그대로 짜고 그 신호 줄만 {@code render.signal_skipped} 로 바꾼다. 자를 구간 · 앞 무음은 첫 PTS 로만 센다.
+     */
+    @Test
+    void 무음_신호_산식이_넘쳐도_결과를_짜고_그_줄만_생략한다() {
+        TrackRange huge = new TrackRange(0, 24_000, 1_200, Long.MAX_VALUE, 10);
+        RenderTimeline t = RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(10, 33_333), end(10, 100_000), List.of(10L)),
+                List.of(media(10, false)), Map.of(10L, timing(grid(0, FRAME, 4), 12_000, huge)), List.of(0));
+
+        assertThat(t.audioRuns()).singleElement().satisfies(r -> {
+            assertThat(r.fromSample()).isEqualTo(4_000);
+            assertThat(r.toSample()).isEqualTo(7_200);
+        });
+        assertThat(t.notes()).extracting(RenderTimeline.Note::event).doesNotContain("render.audio_pad");
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.signal_skipped")).singleElement()
+                .satisfies(n -> assertThat(n.fields())
+                        .isEqualTo("signal=render.audio_pad run=0 track=0 reason=overflow"));
     }
 
     /** 앞 · 끝 무음이 모두 1ms 미만이면 신호를 내지 않는다(묶음 · 트랙마다 줄이 쌓이지 않게). */

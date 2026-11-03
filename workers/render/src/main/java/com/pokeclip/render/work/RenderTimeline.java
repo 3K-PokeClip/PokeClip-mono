@@ -10,11 +10,12 @@ import com.pokeclip.render.job.SubtitlePoint;
 import com.pokeclip.render.job.SubtitleSpan;
 import com.pokeclip.render.media.SegmentTiming;
 
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * 렌더 계획 + 조각 판독 → 영상 자를 틱 · 영상 이동량 · 소리 묶음 · 배치표 · 결과 끝(PDT 설계 r7 7.3 · 7.4 · 7.6). 그래프
@@ -25,7 +26,9 @@ import java.util.Map;
  *
  * <p>입력 약속: 결과에 드는 조각({@code segment})은 모두 {@code timings} 에 있다. 준비 조각({@code audio_prime})은 부르는
  * 쪽이 받고 판독을 맞춰 본 것(설계 7.4 소리 묶음 7 — 받지 못함 {@code missing} · 판독 어긋남 {@code mismatch} 는 부르는 쪽이
- * 남기고 빼서 넘긴다)만 넣는다. 확보 조각도 받은 것만 넣는다. 트랙 번호 N 은 {@link SegmentTiming#audio()} 의 N번째다.
+ * 남기고 빼서 넘긴다)만 넣는다. 확보 조각({@code audio_capture})은 결과가 쓸 때만 판독이 든다 — 쓸지는 결과 끝 소유를 마친
+ * {@link Draft} 가 판독 없이 정하므로, 부르는 쪽은 {@link #draft} 로 그 결정을 받은 뒤 쓰일 조각만 받아 판독한다(설계 7.4 소리 묶음
+ * 8 · 1). 트랙 번호 N 은 {@link SegmentTiming#audio()} 의 N번째다.
  */
 public final class RenderTimeline {
 
@@ -33,7 +36,7 @@ public final class RenderTimeline {
     static final long CAP_US = 180_000_000;
     /** {@code aresample} 출력 표본율(설계 7.4 소리 묶음 4). */
     static final long OUTPUT_RATE = 48_000;
-    private static final long MICROS = 1_000_000;
+    static final long MICROS = 1_000_000;
     private static final long TWO_MICROS = 2 * MICROS;
 
     /**
@@ -91,21 +94,80 @@ public final class RenderTimeline {
     }
 
     /**
+     * 확보 조각 판독이 이미 {@code timings} 에 있을 때 한 번에 짠다({@link #draft} 다음 {@link Draft#finish}). 결과가 쓰는 확보
+     * 조각의 판독은 {@code timings} 에 있어야 한다.
+     *
+     * @throws RenderFailure {@link #draft} · {@link Draft#finish} 와 같다
+     */
+    public static RenderTimeline of(RenderPlan plan, List<SourceSegment> sources, Map<Long, SegmentTiming> timings,
+                                    List<Integer> trackIds) {
+        Draft draft = draft(plan, sources, timings, trackIds);
+        return draft.finish(draft.capture().map(c -> timings.get(c.seq())).orElse(null));
+    }
+
+    /**
+     * 결과 끝 소유 · 영상 · 배치표까지 짜고 확보 조각을 쓸지 정한다. 확보 조각 판독은 쓰지 않는다.
+     *
      * @param sources  주문서 {@code sourceKeys} 그대로(역할 · J 표지)
-     * @param timings  seq → 판독. 위 입력 약속
+     * @param timings  seq → 판독. 위 입력 약속(확보 조각은 없어도 된다)
      * @param trackIds 고른 트랙 번호(레시피 순서)
      * @throws RenderFailure {@code SOURCE_MISMATCH}(timescale 다름 · 영상 패킷 없음 · 파일 머리가 영상 뒤 · 판독 값이 정수식을
      *                       넘김 · 이음 불변식이 깨짐) · {@code SOURCE_MISSING}(고른 트랙 없음) · {@code SOURCE_RANGE}(자를
      *                       프레임 없음)
      */
-    public static RenderTimeline of(RenderPlan plan, List<SourceSegment> sources, Map<Long, SegmentTiming> timings,
-                                    List<Integer> trackIds) {
+    public static Draft draft(RenderPlan plan, List<SourceSegment> sources, Map<Long, SegmentTiming> timings,
+                              List<Integer> trackIds) {
+        return asSourceMismatch(() -> new Draft(new Layout(plan, sources, timings, trackIds).build()));
+    }
+
+    /**
+     * 산식의 입력은 주문서 검사를 지난 계획과 조각 판독뿐이다. 넘침(…Exact)이나 이음 불변식 깨짐은 그 조각 꼴 탓이라 다시 받아도
+     * 같다 — 일시 실패(재시도)로 새지 않게 종결로 바꾼다(sec M1). 신호에만 쓰는 산식은 여기까지 오지 않는다({@link AudioFlow}).
+     */
+    private static <T> T asSourceMismatch(Supplier<T> step) {
         try {
-            return new RenderTimeline(new Layout(plan, sources, timings, trackIds).build());
+            return step.get();
         } catch (ArithmeticException | IllegalStateException e) {
-            // 산식의 입력은 주문서 검사를 지난 계획과 조각 판독뿐이다. 넘침(…Exact)이나 이음 불변식 깨짐은 그 조각 꼴 탓이라
-            // 다시 받아도 같다 — 일시 실패(재시도)로 새지 않게 종결로 바꾼다(sec M1).
             throw new RenderFailure(ErrorCode.SOURCE_MISMATCH, "영상 조각 시각으로 결과를 짜지 못했다", false, e);
+        }
+    }
+
+    /**
+     * 결과 끝 소유까지 마친 계획 — 소리 묶음만 남았다. 확보 조각을 쓸지가 여기서 정해진다(원래 out 조각이 결과 마지막으로 남았을
+     * 때만 · 설계 7.4 소리 묶음 8). 이 결정은 이 한 곳에서만 내고, 부르는 쪽은 {@link #capture()} 가 있을 때만 그 조각을 받아
+     * 판독해 {@link #finish} 에 넘긴다 — 쓰지 않을 조각의 받기 · 판독 실패(시한 초과 포함)가 주문에 걸리지 않는다. 한 번만 마친다.
+     */
+    public static final class Draft {
+
+        private final Layout layout;
+        private boolean finished;
+
+        private Draft(Layout layout) {
+            this.layout = layout;
+        }
+
+        /** 결과가 쓸 확보 조각. 쓰지 않으면(없거나 끝 소유로 빠짐) 비었다 — 그때 그 조각은 받지도 판독하지도 않는다. */
+        public Optional<SourceSegment> capture() {
+            return layout.usesCapture ? Optional.of(layout.captureSource) : Optional.empty();
+        }
+
+        /**
+         * 소리 묶음을 짜 계획을 마친다.
+         *
+         * @param capture {@link #capture()} 조각의 판독. 쓰지 않으면 null
+         * @throws IllegalArgumentException 쓸 조각인데 판독이 없거나, 쓰지 않는데 판독을 넘김(부른 쪽 결함)
+         * @throws RenderFailure            {@code SOURCE_MISMATCH}(확보 조각 영상 시간 단위가 다름 · 판독 값이 정수식을 넘김)
+         */
+        public RenderTimeline finish(SegmentTiming capture) {
+            if (finished) {
+                throw new IllegalStateException("이미 마친 계획이다");
+            }
+            if (layout.usesCapture != (capture != null)) {
+                throw new IllegalArgumentException(layout.usesCapture ? "결과가 쓰는 확보 조각의 판독이 없다"
+                        : "결과가 쓰지 않는 확보 조각의 판독이 왔다");
+            }
+            finished = true;
+            return asSourceMismatch(() -> new RenderTimeline(layout.withAudio(capture)));
         }
     }
 
@@ -204,7 +266,7 @@ public final class RenderTimeline {
      * 결과에 드는 조각 하나. {@code joins} = J(첫 매체는 표지와 무관하게 늘 머리 — 설계 5.3 3). PTS 열은 판독이 내줄 때마다 복사하므로
      * 한 번만 받아 둔다.
      */
-    private record Seg(long seq, boolean joins, SegmentTiming t, long[] pts) {
+    record Seg(long seq, boolean joins, SegmentTiming t, long[] pts) {
 
         Seg(long seq, boolean joins, SegmentTiming t) {
             this(seq, joins, t, t.videoPtsSorted());
@@ -237,38 +299,41 @@ public final class RenderTimeline {
         }
     }
 
-    /** 만드는 동안만 쓰는 작업대. 끝나면 값만 {@link RenderTimeline} 으로 옮긴다. */
-    private static final class Layout {
+    /** 만드는 동안만 쓰는 작업대. 끝나면 값만 {@link RenderTimeline} 으로 옮긴다. 소리 묶음은 {@link RunLayout} 이 더한다. */
+    static final class Layout {
 
         private final RenderPlan plan;
-        private final List<SourceSegment> sources;
-        private final Map<Long, SegmentTiming> timings;
-        private final List<Integer> trackIds;
+        final List<SourceSegment> sources;
+        final Map<Long, SegmentTiming> timings;
+        final List<Integer> trackIds;
         private final List<Seg> media = new ArrayList<>();
         private final Map<Long, Long> headLeadBySeq = new HashMap<>();
-        private final List<Note> notes = new ArrayList<>();
-        private long ts;
+        final List<Note> notes = new ArrayList<>();
+        long ts;
         private Seg origIn;
         private Seg origOut;
         private long fInOrig;
         private Long xOut;
 
-        private final List<Seg> order = new ArrayList<>();
-        private final Map<Long, Long> delta = new HashMap<>();
+        final List<Seg> order = new ArrayList<>();
+        final Map<Long, Long> delta = new HashMap<>();
         private boolean toSegmentEnd;
-        private long fIn;
+        long fIn;
         private long b;
         private long x;
         private boolean capped;
-        private String captureLost;
+        String captureLost;
+        SourceSegment captureSource;
+        boolean usesCapture;
+        SegmentTiming captureTiming;
 
         private final List<VideoCut> videoCuts = new ArrayList<>();
         private final List<Long> joinDurations = new ArrayList<>();
-        private final List<AudioRun> runs = new ArrayList<>();
+        final List<AudioRun> runs = new ArrayList<>();
         private final List<Placement> placements = new ArrayList<>();
-        private long endU;
+        long endU;
         private long lengthUs;
-        private long totalSamples;
+        long totalSamples;
 
         Layout(RenderPlan plan, List<SourceSegment> sources, Map<Long, SegmentTiming> timings, List<Integer> trackIds) {
             this.plan = plan;
@@ -290,6 +355,23 @@ public final class RenderTimeline {
             totalSamples = Math.floorDiv(Math.multiplyExact(endU, OUTPUT_RATE), ts * MICROS);
             collectVideo();
             collectPlacements();
+            decideCapture();
+            return this;
+        }
+
+        /** 원래 out 조각이 마지막으로 남았을 때만 확보 조각을 쓴다(7.4 소리 묶음 8). 판독은 보지 않는다. */
+        private void decideCapture() {
+            captureSource = sources.stream().filter(s -> s.ref().role() == SourceRole.AUDIO_CAPTURE).findFirst()
+                    .orElse(null);
+            usesCapture = captureSource != null && order.getLast() == origOut;
+        }
+
+        /** 소리 묶음(쓸 확보 조각이면 그 판독과 함께). 쓸 확보 조각의 영상 시간 단위는 결과 조각과 같아야 한다. */
+        Layout withAudio(SegmentTiming capture) {
+            if (capture != null && capture.videoTimescale() != ts) {
+                throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "조각마다 영상 시간 단위가 다르다");
+            }
+            captureTiming = capture;
             new RunLayout(this).collect();
             return this;
         }
@@ -596,247 +678,8 @@ public final class RenderTimeline {
         }
     }
 
-    /** 소리 묶음(7.4 소리 묶음 1–8). 작업대의 끝난 순서 · Δ · 끝을 읽기만 한다. */
-    private static final class RunLayout {
-
-        private final Layout l;
-
-        RunLayout(Layout layout) {
-            this.l = layout;
-        }
-
-        void collect() {
-            List<List<Seg>> groups = new ArrayList<>();
-            for (int i = 0; i < l.order.size(); i++) {
-                Seg s = l.order.get(i);
-                if (i == 0 || !s.joins()) {
-                    groups.add(new ArrayList<>());
-                }
-                groups.getLast().add(s);
-            }
-            Map<Long, SourceSegment> primeByOwner = primes(groups);
-            SourceSegment capture = capture();
-            for (int gi = 0; gi < groups.size(); gi++) {
-                List<Seg> g = groups.get(gi);
-                boolean lastRun = gi == groups.size() - 1;
-                l.runs.add(layoutRun(gi, g, primeByOwner.get(g.getFirst().seq()), lastRun ? capture : null,
-                        lastRun ? null : groups.get(gi + 1)));
-            }
-        }
-
-        /** 남은 머리마다 쓸 준비 조각. 머리가 빠진 준비 조각은 쓰지 않는다(owner_dropped · 열화 아님). */
-        private Map<Long, SourceSegment> primes(List<List<Seg>> groups) {
-            List<Long> heads = groups.stream().map(g -> g.getFirst().seq()).toList();
-            Map<Long, SourceSegment> byOwner = new HashMap<>();
-            for (SourceSegment s : l.sources) {
-                if (s.ref().role() != SourceRole.AUDIO_PRIME || !l.timings.containsKey(s.seq())) {
-                    continue;
-                }
-                long owner = s.ref().ownerSeq();
-                if (!heads.contains(owner)) {
-                    l.notes.add(primeSkipped(s, "owner_dropped", false));
-                } else if (l.timings.get(s.seq()).videoTimescale() != l.ts) {
-                    l.notes.add(primeSkipped(s, "mismatch", true));
-                } else {
-                    byOwner.put(owner, s);
-                }
-            }
-            return byOwner;
-        }
-
-        private static Note primeSkipped(SourceSegment s, String reason, boolean degraded) {
-            return new Note("render.prime_skipped", "seq=" + s.seq() + " ownerSeq=" + s.ref().ownerSeq()
-                    + " reason=" + reason + " degraded=" + degraded);
-        }
-
-        /** 원래 out 조각이 마지막으로 남았을 때만 확보 조각을 쓴다(7.4 소리 묶음 8). */
-        private SourceSegment capture() {
-            SourceSegment cap = l.sources.stream()
-                    .filter(s -> s.ref().role() == SourceRole.AUDIO_CAPTURE && l.timings.containsKey(s.seq()))
-                    .findFirst().orElse(null);
-            if (cap == null) {
-                return null;
-            }
-            if (l.timings.get(cap.seq()).videoTimescale() != l.ts) {
-                throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "조각마다 영상 시간 단위가 다르다");
-            }
-            if (l.order.getLast() == l.origOut) {
-                return cap;
-            }
-            String reason = l.captureLost == null ? "out_retreated" : l.captureLost;
-            l.notes.add(new Note("render.capture_dropped", "seq=" + cap.seq() + " reason=" + reason));
-            return null;
-        }
-
-        private AudioRun layoutRun(int gi, List<Seg> g, SourceSegment prime, SourceSegment capture, List<Seg> nextRun) {
-            Seg head = g.getFirst();
-            List<SegmentTiming> files = new ArrayList<>();
-            if (prime != null) {
-                files.add(l.timings.get(prime.seq()));
-            }
-            g.forEach(s -> files.add(s.t()));
-            if (capture != null) {
-                files.add(l.timings.get(capture.seq()));
-            }
-            long[] offsetUs = flowOffsetsUs(files);
-            int hi = prime == null ? 0 : 1;
-            long hiU = Math.multiplyExact(offsetUs[hi], l.ts);
-            long stHeadU = Math.multiplyExact(head.t().formatStartUs(), l.ts);
-            long startU = gi == 0
-                    ? hiU + Math.multiplyExact(l.fIn, MICROS) - stHeadU
-                    : hiU + sigmaU(head.t());
-            long endU;
-            if (nextRun == null) {
-                endU = l.endU - Math.multiplyExact(l.delta.get(head.seq()), MICROS) + hiU - stHeadU;
-            } else {
-                Seg tail = g.getLast();
-                int ti = hi + g.size() - 1;
-                endU = Math.multiplyExact(offsetUs[ti], l.ts) + sigmaU(tail.t()) + Math.multiplyExact(tail.v(), MICROS);
-            }
-            long resultStart = gi == 0 ? 0 : resultSample(head);
-            long resultEnd = nextRun == null ? l.totalSamples : resultSample(nextRun.getFirst());
-            List<Long> durations = new ArrayList<>();
-            for (int i = 0; i + 1 < offsetUs.length; i++) {
-                durations.add(offsetUs[i + 1] - offsetUs[i]);
-            }
-            List<AudioRun.TrackStart> tracks = trackStarts(gi, files, offsetUs, startU);
-            AudioRun run = new AudioRun(gi, prime == null ? null : prime.seq(), g.stream().map(Seg::seq).toList(),
-                    capture == null ? null : capture.seq(), durations, samples(startU), samples(endU), tracks,
-                    resultStart, resultEnd);
-            l.notes.add(new Note("render.audio_run", "run=" + gi + " seqs=" + run.seqs() + " prime=" + run.primeSeq()
-                    + " capture=" + run.captureSeq() + " fromSample=" + run.fromSample() + " toSample="
-                    + run.toSample() + " frontSilence="
-                    + tracks.stream().map(AudioRun.TrackStart::frontSilenceSamples).toList()
-                    + " resultStartSample=" + resultStart));
-            notePads(run, files, offsetUs);
-            return run;
-        }
-
-        /**
-         * {@code render.audio_pad}(설계 15절 · DEBUG) — 고른 트랙마다 앞 무음({@code adelay})과 끝 무음({@code apad}). 끝 무음 =
-         * 묶음 길이 − (흐름 안 트랙 소리 끝과 자를 구간 끝 중 앞선 것 − 자를 구간 시작)이다. 무음 대체 트랙은
-         * {@code render.track_silent} 가 이미 말하고, 둘 다 1ms 미만이면 줄을 내지 않는다(묶음 · 트랙마다 쌓이지 않게).
-         */
-        private void notePads(AudioRun run, List<SegmentTiming> files, long[] offsetUs) {
-            for (AudioRun.TrackStart track : run.tracks()) {
-                if (track.silent()) {
-                    continue;
-                }
-                int li = lastWithPackets(files, track.trackId());
-                SegmentTiming f = files.get(li);
-                long soundEnd = flowSample(f, track.trackId(), offsetUs[li], f.audio().get(track.trackId()).endPts());
-                long covered = Math.min(run.toSample(), soundEnd) - run.fromSample();
-                long back = Math.clamp(run.lengthSamples() - covered, 0, Math.max(run.lengthSamples(), 0));
-                long frontMs = samplesToMs(track.frontSilenceSamples());
-                long backMs = samplesToMs(back);
-                if (frontMs > 0 || backMs > 0) {
-                    l.notes.add(new Note("render.audio_pad", "run=" + run.index() + " track=" + track.trackId()
-                            + " frontMs=" + frontMs + " backMs=" + backMs));
-                }
-            }
-        }
-
-        private static int lastWithPackets(List<SegmentTiming> files, int track) {
-            for (int i = files.size() - 1; i >= 0; i--) {
-                SegmentTiming f = files.get(i);
-                if (track < f.audio().size() && f.audio().get(track).packets() > 0) {
-                    return i;
-                }
-            }
-            throw new IllegalStateException("트랙 " + track + " 패킷이 묶음에 없다");
-        }
-
-        /** 파일 f 의 소리 PTS 가 흐름에 놓이는 자리(48kHz 표본 · 반올림) — {@code S_f + pts/T − st_f}. */
-        private static long flowSample(SegmentTiming f, int track, long offsetUs, long pts) {
-            BigInteger tb = BigInteger.valueOf(f.audio().get(track).timescale());
-            BigInteger micros = BigInteger.valueOf(MICROS);
-            BigInteger num = BigInteger.valueOf(offsetUs - f.formatStartUs()).multiply(tb)
-                    .add(BigInteger.valueOf(pts).multiply(micros)).multiply(BigInteger.valueOf(OUTPUT_RATE));
-            BigInteger den = tb.multiply(micros);
-            BigInteger[] qr = num.shiftLeft(1).add(den).divideAndRemainder(den.shiftLeft(1));
-            return (qr[1].signum() < 0 ? qr[0].subtract(BigInteger.ONE) : qr[0]).longValueExact();
-        }
-
-        /** 표본 → ms(반올림 · 표본 ≥ 0). */
-        private static long samplesToMs(long samples) {
-            return Math.floorDiv(Math.addExact(Math.multiplyExact(samples, 2_000), OUTPUT_RATE), 2 * OUTPUT_RATE);
-        }
-
-        /** 흐름 안 파일 자리(µs): 누적 정확값 S(간격 = σ_i + V_i − σ_{i+1})를 µs 로 반올림(concat demuxer 오프셋). */
-        private long[] flowOffsetsUs(List<SegmentTiming> files) {
-            long[] out = new long[files.size()];
-            long cumU = 0;
-            for (int i = 1; i < files.size(); i++) {
-                SegmentTiming a = files.get(i - 1);
-                cumU += sigmaU(a) + Math.multiplyExact(a.videoLengthTicks(), MICROS) - sigmaU(files.get(i));
-                out[i] = roundDiv(cumU, l.ts);
-            }
-            return out;
-        }
-
-        /** σ = D0 − st(µs × ts). */
-        private long sigmaU(SegmentTiming t) {
-            return Math.multiplyExact(t.videoFirstDts(), MICROS) - Math.multiplyExact(t.formatStartUs(), l.ts);
-        }
-
-        /** 묶음 머리 D0 의 결과 자리(표본 · 내림). */
-        private long resultSample(Seg head) {
-            return Math.floorDiv(Math.multiplyExact(l.delta.get(head.seq()) + head.d0(), OUTPUT_RATE), l.ts);
-        }
-
-        private long samples(long u) {
-            return roundDiv(Math.multiplyExact(u, OUTPUT_RATE), l.ts * MICROS);
-        }
-
-        /** 트랙마다 앞 무음(자를 구간 시작보다 첫 표본이 늦은 만큼) · 무음 대체(묶음 전체 패킷 0)(7.4 소리 묶음 5 · 6). */
-        private List<AudioRun.TrackStart> trackStarts(int gi, List<SegmentTiming> files, long[] offsetUs,
-                                                      long startU) {
-            List<AudioRun.TrackStart> out = new ArrayList<>();
-            for (int n : l.trackIds) {
-                int fi = firstWithPackets(files, n);
-                if (fi < 0) {
-                    l.notes.add(new Note("render.track_silent", "run=" + gi + " track=" + n + " reason=no_packets"));
-                    out.add(new AudioRun.TrackStart(n, true, 0));
-                    continue;
-                }
-                out.add(new AudioRun.TrackStart(n, false, frontSilence(files.get(fi), n, offsetUs[fi], startU)));
-            }
-            return out;
-        }
-
-        private static int firstWithPackets(List<SegmentTiming> files, int track) {
-            for (int i = 0; i < files.size(); i++) {
-                SegmentTiming f = files.get(i);
-                if (track < f.audio().size() && f.audio().get(track).packets() > 0) {
-                    return i;
-                }
-            }
-            return -1;
-        }
-
-        /**
-         * 흐름 시각 {@code S_fi + first/T − st_fi} 가 자를 구간 시작보다 늦은 만큼(표본 · 반올림). 소리 time_base 가 영상과
-         * 달라 정수로 맞지 않으므로 이 자리만 큰 정수로 센다.
-         */
-        private long frontSilence(SegmentTiming f, int track, long offsetUs, long startU) {
-            BigInteger ts = BigInteger.valueOf(l.ts);
-            BigInteger tb = BigInteger.valueOf(f.audio().get(track).timescale());
-            BigInteger micros = BigInteger.valueOf(MICROS);
-            BigInteger fileU = BigInteger.valueOf(offsetUs - f.formatStartUs()).multiply(ts)
-                    .subtract(BigInteger.valueOf(startU));
-            BigInteger num = fileU.multiply(tb)
-                    .add(BigInteger.valueOf(f.audio().get(track).firstPts()).multiply(ts).multiply(micros));
-            if (num.signum() <= 0) {
-                return 0;
-            }
-            BigInteger den = tb.multiply(ts).multiply(micros);
-            BigInteger scaled = num.multiply(BigInteger.valueOf(OUTPUT_RATE));
-            return scaled.shiftLeft(1).add(den).divide(den.shiftLeft(1)).longValueExact();
-        }
-    }
-
     /** a ÷ d 를 반 올림(half up · d > 0). */
-    private static long roundDiv(long a, long d) {
+    static long roundDiv(long a, long d) {
         return Math.floorDiv(Math.addExact(Math.multiplyExact(2, a), d), Math.multiplyExact(2, d));
     }
 }

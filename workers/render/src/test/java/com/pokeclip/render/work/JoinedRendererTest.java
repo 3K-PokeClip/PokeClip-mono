@@ -10,6 +10,7 @@ import com.pokeclip.render.job.JobEnvelope;
 import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.job.SourceSegment;
 import com.pokeclip.render.media.MediaProbe;
+import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.media.RenderCommands;
 import com.pokeclip.render.media.SegmentTiming;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
@@ -52,6 +53,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.endsWith;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -261,14 +263,12 @@ class JoinedRendererTest {
     }
 
     /**
-     * 끝 소유로 빠질 확보 조각은 받지 못해도 주문을 마친다(설계 7.4 소리 묶음 8 · 1). 끝 조각 20 은 끊긴 이웃 뒤이고 끝이 파일
-     * 머리라 남는 프레임이 없어 빠진다 — 그러면 그 조각의 같은 녹화 이웃인 확보 조각 21 은 쓰지 않는다.
+     * 끝 소유로 빠질 확보 조각은 받지도 판독하지도 않는다(설계 7.4 소리 묶음 8 · 1). 끝 조각 20 은 끊긴 이웃 뒤이고 끝이 파일
+     * 머리라 남는 프레임이 없어 빠진다 — 그러면 그 조각의 같은 녹화 이웃인 확보 조각 21 은 쓰지 않는다. 저장소에 없거나 판독이
+     * 시한을 넘길 조각이어도 주문은 그 앞에서 결정되므로 걸리지 않는다.
      */
     @Test
-    void 끝_소유로_빠질_확보_조각은_못_받아도_주문을_마친다() {
-        doAnswer(inv -> {
-            throw RenderFailure.permanent(ErrorCode.SOURCE_EXPIRED, "영상 조각이 저장소에 없다");
-        }).when(store).download(anyString(), org.mockito.ArgumentMatchers.endsWith("seg_21.m4s"), any(), any());
+    void 끝_소유로_빠질_확보_조각은_받지_않고_주문을_마친다() {
         String body = order().segment(12, false, false).segment(20, true, true).capture(21, false, true)
                 .in(12, 2_000_000).out(20, 0).body();
 
@@ -277,24 +277,44 @@ class JoinedRendererTest {
         String id = run.job().jobId().toString();
         assertThat(run.timeline().placements()).extracting(RenderTimeline.Placement::seq).containsExactly(12L);
         assertThat(messages()).contains("render.out_retreated jobId=" + id + " fromSeq=20 toSeq=12",
-                "render.capture_dropped jobId=" + id + " seq=21 reason=missing");
+                "render.capture_dropped jobId=" + id + " seq=21 reason=out_retreated");
+        verify(store, never()).download(anyString(), endsWith("seg_21.m4s"), any(), any());
+        assertThat(runner.commands()).noneMatch(c -> String.join(" ", c).contains("seg_21.m4s"));
         assertVideoOnPlan(run);
     }
 
-    /** 끝 소유로 빠질 확보 조각은 판독하지 못해도 주문을 마친다(위와 같은 꼴 · 받은 파일이 영상이 아님). */
+    /** 결과 끝에 쓰일 확보 조각의 판독이 시한을 넘기면 그대로 주문 실패다(삼키지 않는다). */
     @Test
-    void 끝_소유로_빠질_확보_조각은_판독하지_못해도_주문을_마친다() {
+    void 결과_끝에_쓰일_확보_조각의_판독_시한_초과는_주문_실패다() {
+        runner.intercept((command, workDir, deadline, r) -> {
+            if (command.getFirst().equals("ffprobe") && command.getLast().endsWith("seg_12.m4s")) {
+                throw new ProcessRunner.Timeout("ffprobe");
+            }
+            return null;
+        });
+        String body = order().segment(10, false, false).segment(11, false, true).capture(12, false, true)
+                .in(10, 3_000_000).out(11, 1_000_000).body();
+        JobEnvelope job = new EnvelopeParser(Fixtures.MAPPER).parse(body);
+
+        assertThatThrownBy(() -> renderer().render(job, dir, deadline(), (p, s) -> { }))
+                .isInstanceOf(ProcessRunner.Timeout.class);
+        assertThat(runner.commands()).noneMatch(RecordingRunner::isCutPiece);
+    }
+
+    /** 결과 끝에 쓰일 확보 조각을 판독하지 못하면(받은 파일이 영상이 아님) 주문 실패다. */
+    @Test
+    void 결과_끝에_쓰일_확보_조각을_판독하지_못하면_주문_실패다() {
         doAnswer(inv -> {
             Files.writeString(inv.<Path>getArgument(2), "not a segment");
             return null;
-        }).when(store).download(anyString(), org.mockito.ArgumentMatchers.endsWith("seg_21.m4s"), any(), any());
-        String body = order().segment(12, false, false).segment(20, true, true).capture(21, false, true)
-                .in(12, 2_000_000).out(20, 0).body();
+        }).when(store).download(anyString(), endsWith("seg_12.m4s"), any(), any());
+        String body = order().segment(10, false, false).segment(11, false, true).capture(12, false, true)
+                .in(10, 3_000_000).out(11, 1_000_000).body();
         JobEnvelope job = new EnvelopeParser(Fixtures.MAPPER).parse(body);
 
-        renderer().render(job, dir, deadline(), (p, s) -> { });
-
-        assertThat(messages()).contains("render.capture_dropped jobId=" + job.jobId() + " seq=21 reason=mismatch");
+        assertThatThrownBy(() -> renderer().render(job, dir, deadline(), (p, s) -> { }))
+                .isInstanceOfAny(ProcessRunner.Failed.class, RenderFailure.class);
+        assertThat(runner.commands()).noneMatch(RecordingRunner::isCutPiece);
     }
 
     /** 조각 파일 이름은 seq 로 정해지므로, 계획 검사를 빠져나온 seq 겹침은 받기 전에 거절한다(같은 파일을 덮어쓰지 않게). */
@@ -334,7 +354,10 @@ class JoinedRendererTest {
         assertThat(messages()).contains("render.length_drift jobId=" + id + " plannedMs=2000 actualMs=2000");
     }
 
-    /** 신호 수준(설계 15절): 결과 길이 상한만 WARN · 앞 · 끝 무음은 DEBUG · 나머지 계획 신호는 INFO. */
+    /**
+     * 신호 수준(설계 15절): 결과 길이 상한과 신호 산식 실패로 생략한 줄은 WARN · 앞 · 끝 무음은 DEBUG · 나머지 계획 신호는
+     * INFO.
+     */
     @Test
     void 계획_신호는_설계_15절_수준으로_남긴다() {
         Logger logger = (Logger) LoggerFactory.getLogger(JoinedRenderer.class);
@@ -346,13 +369,15 @@ class JoinedRendererTest {
                     new RenderTimeline.Note("render.audio_pad", "run=0 track=1 frontMs=3 backMs=0"));
             JoinedRenderer.logNote(jobId, new RenderTimeline.Note("render.length_capped", "actualMs=180000"));
             JoinedRenderer.logNote(jobId, new RenderTimeline.Note("render.audio_run", "run=0"));
+            JoinedRenderer.logNote(jobId, new RenderTimeline.Note("render.signal_skipped",
+                    "signal=render.audio_pad run=0 track=0 reason=overflow"));
         } finally {
             logger.setLevel(before);
         }
 
         assertThat(logs.list).extracting(e -> e.getFormattedMessage().split(" ")[0], ILoggingEvent::getLevel)
                 .containsExactly(tuple("render.audio_pad", Level.DEBUG), tuple("render.length_capped", Level.WARN),
-                        tuple("render.audio_run", Level.INFO));
+                        tuple("render.audio_run", Level.INFO), tuple("render.signal_skipped", Level.WARN));
     }
 
     /**

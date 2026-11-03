@@ -102,13 +102,12 @@ final class JoinedRenderer {
         requireDistinctSeqs(job.sources());
         Set<Long> fetched = fetch(job, dir, deadline);
         Map<Long, SegmentTiming> timings = read(job, fetched, dir, deadline);
-        CaptureRead capture = readCapture(job, dir, deadline);
-        capture.timing().ifPresent(t -> timings.put(capture.source().seq(), t));
+        List<Integer> trackIds = recipe.tracks().stream().map(AudioTrack::trackId).toList();
+        RenderTimeline.Draft draft = RenderTimeline.draft(job.plan(), job.sources(), timings, trackIds);
+        SegmentTiming capture = readCapture(draft, timings, dir, deadline);
         progress.report(10, "download");
 
-        List<Integer> trackIds = recipe.tracks().stream().map(AudioTrack::trackId).toList();
-        RenderTimeline timeline = RenderTimeline.of(job.plan(), job.sources(), timings, trackIds);
-        requireCaptureIfUsed(jobId, job.plan(), timeline, capture);
+        RenderTimeline timeline = draft.finish(capture);
         timeline.notes().forEach(note -> logNote(jobId, note));
         logFramePick(jobId, job.plan(), timeline);
         long ts = timings.get(job.plan().mediaSeqs().getFirst()).videoTimescale();
@@ -160,7 +159,7 @@ final class JoinedRenderer {
     }
 
     /**
-     * 확보 조각 밖의 조각을 모두 받는다(확보 조각은 {@link #readCapture}). 결과 조각을 못 받으면 그대로 실패다. 준비 조각을
+     * 확보 조각 밖의 조각을 모두 받는다(확보 조각은 결과가 쓸 때만 {@link #readCapture}). 결과 조각을 못 받으면 그대로 실패다. 준비 조각을
      * 저장소에서 못 찾으면(다시 해도 같은 실패) 준비 없이 진행하고 {@code render.prime_skipped reason=missing} 을 남긴다 — 잃는
      * 것은 그 묶음 머리 21ms 안 일그러짐이다. 일시 실패는 준비 조각이어도 그대로 올린다(다시 하면 받을 수 있다).
      *
@@ -233,51 +232,23 @@ final class JoinedRenderer {
     }
 
     /**
-     * 확보 조각 받기 · 판독의 결과. 해냈으면 {@code timing} 이 있고, 못 했으면 그 실패와 사유({@code missing} 받지 못함 ·
-     * {@code mismatch} 판독 실패)를 든다. 주문서에 확보 조각이 없으면 {@code source} 도 null 이다.
+     * 결과가 쓸 확보 조각만 받고 판독한다 — 쓸지는 결과 끝 소유를 마친 계획이 이미 정했다({@link RenderTimeline.Draft#capture} ·
+     * 설계 7.4 소리 묶음 8 · 1). 쓸 조각이면 받기 · 판독 실패(시한 초과 포함)를 그대로 올리고, 쓰지 않을 조각은 손대지 않는다.
+     *
+     * @return 그 판독(받은 조각 판독 표에도 넣는다). 쓰지 않으면 null
      */
-    private record CaptureRead(SourceSegment source, Optional<SegmentTiming> timing, RuntimeException failure,
-                               String reason) {
-
-        static final CaptureRead NONE = new CaptureRead(null, Optional.empty(), null, null);
-    }
-
-    /**
-     * 확보 조각을 받고 판독한다. 실패해도 여기서 올리지 않는다 — 쓸지는 결과 끝 소유를 마친 뒤에 정해지므로(설계 7.4 소리 묶음
-     * 8 · 1) 쓰게 될 때만 그 실패를 올린다({@link #requireCaptureIfUsed}). 시한 초과는 그대로 올린다.
-     */
-    private CaptureRead readCapture(JobEnvelope job, Path dir, Instant deadline) {
-        SourceSegment capture = job.sources().stream().filter(s -> s.ref().role() == SourceRole.AUDIO_CAPTURE)
-                .findFirst().orElse(null);
-        if (capture == null) {
-            return CaptureRead.NONE;
+    private SegmentTiming readCapture(RenderTimeline.Draft draft, Map<Long, SegmentTiming> timings, Path dir,
+                                      Instant deadline) {
+        Optional<SourceSegment> used = draft.capture();
+        if (used.isEmpty()) {
+            return null;
         }
+        SourceSegment capture = used.get();
         Path file = dir.resolve(sourceFile(capture.seq()));
-        try {
-            store.download(capture.bucket(), capture.s3Key(), file, deadline);
-        } catch (RenderFailure f) {
-            return new CaptureRead(capture, Optional.empty(), f, "missing");
-        }
-        try {
-            return new CaptureRead(capture, Optional.of(probe.timing(file, dir, deadline)), null, null);
-        } catch (RenderFailure | ProcessRunner.Failed e) {
-            return new CaptureRead(capture, Optional.empty(), e, "mismatch");
-        }
-    }
-
-    /**
-     * 받기 · 판독에 실패한 확보 조각을 결과가 쓰게 되면(원래 out 조각이 마지막으로 남음 — 설계 7.4 소리 묶음 8) 그 실패를 올린다.
-     * 쓰지 않게 되면 {@code render.capture_dropped} 에 받기 · 판독 사유를 남기고 주문을 이어 간다.
-     */
-    private static void requireCaptureIfUsed(UUID jobId, RenderPlan plan, RenderTimeline timeline,
-                                             CaptureRead capture) {
-        if (capture.failure() == null) {
-            return;
-        }
-        if (timeline.placements().getLast().seq() == plan.mediaSeqs().getLast()) {
-            throw capture.failure();
-        }
-        log.info("render.capture_dropped jobId={} seq={} reason={}", jobId, capture.source().seq(), capture.reason());
+        store.download(capture.bucket(), capture.s3Key(), file, deadline);
+        SegmentTiming timing = probe.timing(file, dir, deadline);
+        timings.put(capture.seq(), timing);
+        return timing;
     }
 
     /**
@@ -503,10 +474,14 @@ final class JoinedRenderer {
 
     // ── 신호(설계 15절) ──
 
-    /** {@link RenderTimeline} 이 낸 신호에 jobId 를 붙여 남긴다. 결과 길이 상한만 WARN · 앞 · 끝 무음은 DEBUG 다(설계 15절). */
+    /**
+     * {@link RenderTimeline} 이 낸 신호에 jobId 를 붙여 남긴다. 결과 길이 상한과 신호 산식 실패로 생략한 줄은 WARN · 앞 · 끝
+     * 무음은 DEBUG 다(설계 15절).
+     */
     static void logNote(UUID jobId, Note note) {
         switch (note.event()) {
-            case "render.length_capped" -> log.warn("{} jobId={} {}", note.event(), jobId, note.fields());
+            case "render.length_capped", "render.signal_skipped" ->
+                    log.warn("{} jobId={} {}", note.event(), jobId, note.fields());
             case "render.audio_pad" -> log.debug("{} jobId={} {}", note.event(), jobId, note.fields());
             default -> log.info("{} jobId={} {}", note.event(), jobId, note.fields());
         }

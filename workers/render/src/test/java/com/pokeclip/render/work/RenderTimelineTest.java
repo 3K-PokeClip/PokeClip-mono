@@ -390,6 +390,72 @@ class RenderTimelineTest {
         assertThat(t.notes()).extracting(RenderTimeline.Note::event).doesNotContain("render.end_owned");
     }
 
+    // ── 확보 조각을 쓸지(설계 7.4 소리 묶음 8 · 1) ───────────────────────
+
+    /**
+     * 확보 조각을 쓸지는 결과 끝 소유를 마친 계획이 정한다 — 원래 out 조각이 마지막으로 남으면(J 사슬 끝 B 0.0667초) 내보내고,
+     * 끝 조각이 물려 빠지면(끊긴 이웃 끝 x′ = 0) 내보내지 않는다. 확보 조각 판독 없이 정해진다.
+     */
+    @Test
+    void 확보_조각을_쓸지는_끝_소유를_마친_계획이_판독_없이_정한다() {
+        RenderTimeline.Draft used = RenderTimeline.draft(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(2, 66_667), List.of(1L, 2L)),
+                List.of(media(1, false), media(2, true), capture(4)),
+                Map.of(1L, standard(4), 2L, standard(4)), TRACK0);
+        SegmentTiming shortV = timing(grid(0, FRAME, 4), 9_000, track(2_400, 10));
+        RenderTimeline.Draft retreated = RenderTimeline.draft(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(3, 0), List.of(1L, 3L)),
+                List.of(media(1, false), media(3, false), capture(4)),
+                Map.of(1L, shortV, 3L, standard(4)), TRACK0);
+
+        assertThat(used.capture()).hasValueSatisfying(c -> assertThat(c.seq()).isEqualTo(4L));
+        assertThat(retreated.capture()).isEmpty();
+        assertThat(retreated.finish(null).notes()).filteredOn(n -> n.event().equals("render.capture_dropped"))
+                .singleElement().satisfies(n -> assertThat(n.fields()).isEqualTo("seq=4 reason=out_retreated"));
+    }
+
+    /** 쓰지 않을 확보 조각은 판독 값이 무엇이든(영상 시간 단위가 달라도) 결과를 짜는 데 걸리지 않는다. */
+    @Test
+    void 쓰지_않을_확보_조각은_시간_단위가_달라도_결과를_짠다() {
+        SegmentTiming shortV = timing(grid(0, FRAME, 4), 9_000, track(2_400, 10));
+        SegmentTiming otherTs = timing(45_000, grid(0, FRAME, 4), 12_000, track(2_400, 10));
+        RenderTimeline t = RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(3, 0), List.of(1L, 3L)),
+                List.of(media(1, false), media(3, false), capture(4)),
+                Map.of(1L, shortV, 3L, standard(4), 4L, otherTs), TRACK0);
+
+        assertThat(t.audioRuns()).singleElement().satisfies(r -> assertThat(r.captureSeq()).isNull());
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.capture_dropped"))
+                .singleElement().satisfies(n -> assertThat(n.fields()).contains("reason=out_retreated"));
+    }
+
+    /** 쓸 확보 조각의 영상 시간 단위가 결과 조각과 다르면 종결이다(흐름 자리를 같은 틱으로 셀 수 없다). */
+    @Test
+    void 쓸_확보_조각의_시간_단위가_다르면_종결이다() {
+        SegmentTiming otherTs = timing(45_000, grid(0, FRAME, 4), 12_000, track(2_400, 10));
+        RenderTimeline.Draft draft = RenderTimeline.draft(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(2, 66_667), List.of(1L, 2L)),
+                List.of(media(1, false), media(2, true), capture(4)),
+                Map.of(1L, standard(4), 2L, standard(4)), TRACK0);
+
+        assertPermanentMismatch(() -> draft.finish(otherTs));
+    }
+
+    /** 계획이 쓰겠다고 한 확보 조각의 판독을 빼고 마치거나, 쓰지 않는다는데 넘기면 부른 쪽 결함이다. */
+    @Test
+    void 확보_조각_판독은_계획이_쓸_때만_넘긴다() {
+        RenderTimeline.Draft used = RenderTimeline.draft(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(2, 66_667), List.of(1L, 2L)),
+                List.of(media(1, false), media(2, true), capture(4)),
+                Map.of(1L, standard(4), 2L, standard(4)), TRACK0);
+        RenderTimeline.Draft none = RenderTimeline.draft(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(2, 66_667), List.of(1L, 2L)),
+                List.of(media(1, false), media(2, true)), Map.of(1L, standard(4), 2L, standard(4)), TRACK0);
+
+        assertThatThrownBy(() -> used.finish(null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> none.finish(standard(4))).isInstanceOf(IllegalArgumentException.class);
+    }
+
     // ── 도우미 ────────────────────────────────────────────────────────
 
     private static void assertPermanentMismatch(ThrowingCallable call) {
