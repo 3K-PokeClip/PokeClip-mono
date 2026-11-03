@@ -19,7 +19,7 @@ import {
   reportPlaybackForbidden,
 } from '@/api/playbackAccess';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
-import { consumeDvrSegmentGone, isPlaylistLoadError } from './hlsErrors';
+import { consumeDvrSegmentGone, isFirstListFailure, isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
 import { armStart, createSwapPause, trackLoadFrom } from './hlsStart';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
@@ -794,6 +794,20 @@ export function useHlsPlayback(
             hls.destroy();
             hlsRef.current = null;
             liveGone();
+            return;
+          }
+          // 다시보기 · 되감기의 첫 목록 치명은 곧바로 끊김이다(POK-528 c8). 첫 목록이 없으면 변이가 없어 아래 한 번 다시
+          // 받기가 아무것도 다시 청하지 않는다(isFirstListFailure). 라이브는 넣지 않는다 — 목록 404 · 400 은 위 갈래가 세션에
+          // 올리고, 그 밖 코드는 지금 동작 그대로다(범위 밖)
+          if (
+            kind !== 'live' &&
+            isFirstListFailure(data, HlsCtor.ErrorTypes, HlsCtor.ErrorDetails)
+          ) {
+            console.error('[player] 첫 목록을 받지 못했어요:', data.details, data.response?.code);
+            setStopped({ src, why: 'broken' });
+            releaseVideoStarts();
+            hls.destroy();
+            hlsRef.current = null;
             return;
           }
           // 최소 복구: 각 1회만 시도, 재발 시 정리하고 영상 위에 알린다

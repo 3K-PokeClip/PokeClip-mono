@@ -19,6 +19,29 @@ export function isPlaylistLoadError(
 }
 
 /**
+ * 첫 목록(hls.js 의 MANIFEST — 멀티변이 목록 또는 변이 하나뿐인 목록)을 받지 못하고 치명으로 끝난 오류인가(POK-528 c8).
+ * hls.js 는 첫 목록의 받기 오류 · 시한 · 파싱 오류를 늘 치명으로 올린다 — 다시 받기(manifestLoadPolicy: 5xx 는 1초 뒤 한 번
+ * · 시한은 두 번 · 4xx 는 다시 받지 않음)는 그 앞 로더 안에서 끝난다(loader/playlist-loader.ts 611-615 · 653-665). 응답
+ * 코드는 보지 않는다: 첫 목록이 없으면 변이가 없어 앱이 startLoad 해도 목록을 다시 청하지 않는 것(playlist-loader.ts 86 ·
+ * stream-controller.ts 191-193)은 코드와 무관하다. 변이 목록 · 조각 오류는 아니다 — 그것은 startLoad 로 다시 받는다
+ * @param types hls.js 의 ErrorTypes
+ * @param details hls.js 의 ErrorDetails. 재생기는 hls.js 를 동적으로 읽으므로 두 값을 넘겨받는다(번들 분리)
+ */
+export function isFirstListFailure(
+  data: Pick<ErrorData, 'type' | 'details' | 'fatal'>,
+  types: typeof ErrorTypes,
+  details: typeof ErrorDetails,
+): boolean {
+  return (
+    data.fatal &&
+    data.type === types.NETWORK_ERROR &&
+    (data.details === details.MANIFEST_LOAD_ERROR ||
+      data.details === details.MANIFEST_LOAD_TIMEOUT ||
+      data.details === details.MANIFEST_PARSING_ERROR)
+  );
+}
+
+/**
  * 미디어 조각을 404 로 받지 못한 오류인가(POK-528) — 방송 중 /dvr 하한 밖으로 밀린 조각이 엣지에서 이 꼴로 온다. 상태 0 ·
  * 403 · 5xx · 시한은 하한과 무관한 받기 실패라 아니다. init 조각은 하한 대상이 아니라 하한으로 옮겨도 낫지 않으므로 아니다.
  * 치명 여부는 보지 않는다 — 같은 404 가 첫 받기에서는 비치명으로, 재시도를 다 쓴 뒤에는 치명으로 온다

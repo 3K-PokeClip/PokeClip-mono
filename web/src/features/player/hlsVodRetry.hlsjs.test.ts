@@ -20,10 +20,10 @@ import { HLS_REWIND_CONFIG } from './hlsConfig';
 // 아니지만(error-helper.ts 86-92) 갈아탈 변이가 없으면 stream 쪽이 같은 조각을 다시 받는다(base-stream-controller.ts
 // 2141-2178 의 noAlternate 갈래). ENDLIST 목록(details.live 거짓)이라 틈 넘김 갈래(2153-2167)는 타지 않는다. 한도를 다
 // 쓰면 치명으로 올리고 hls.js 가 stopLoad 한다(error-controller.ts 502-504) — 이때 level-controller.stopLoad 가 조각 오류
-// 수를 0 으로 되돌려(level-controller.ts 82-89) 앱의 다시 받기(useHlsPlayback.ts 778-783) 뒤에 같은 꼴이 한 번 더 돈다.
-// 그래서 감춤은 약 31초 × 2 다. 훅 층(앱이 치명에서 startLoad 한 번 · 두 번째 치명에서 끊김)은
+// 수를 0 으로 되돌려(level-controller.ts 82-89) 앱의 다시 받기(useHlsPlayback ERROR 처리기의 한 번 다시 받기) 뒤에 같은
+// 꼴이 한 번 더 돈다. 그래서 감춤은 약 31초 × 2 다. 훅 층(앱이 치명에서 startLoad 한 번 · 두 번째 치명에서 끊김)은
 // useHlsPlayback.vod404.test.ts 가 본다. /vod 문서 404 는 조각과 다르다 — 멀티변이 목록 404 는 앱이 다시 받아도 다시 청하지
-// 않아 두 번째 치명이 없다(맨 아래 묶음 · POK-528 c6 X1).
+// 않아 두 번째 치명이 없다(맨 아래 묶음 · POK-528 c6 X1). 그래서 앱은 그 꼴에서 다시 받지 않고 곧바로 끊김을 알린다(c8).
 
 function quiet() {}
 
@@ -76,8 +76,9 @@ function fakeClock(): void {
 }
 
 /**
- * 앱의 치명 처리(useHlsPlayback.ts 778-783)를 같은 자리에 단다 — 첫 치명 네트워크 오류의 처리기 안에서 동기로 위치 없이
- * startLoad 한 번. hls.js 자신의 처리기(error-controller 의 stopLoad 등)는 생성 때 등록돼 이보다 먼저 돈다
+ * 앱의 치명 처리(useHlsPlayback ERROR 처리기의 한 번 다시 받기)를 같은 자리에 단다 — 첫 치명 네트워크 오류의 처리기
+ * 안에서 동기로 위치 없이 startLoad 한 번. 첫 목록 치명을 먼저 끊김으로 내리는 갈래(POK-528 c8)는 흉내 내지 않는다.
+ * hls.js 자신의 처리기(error-controller 의 stopLoad 등)는 생성 때 등록돼 이보다 먼저 돈다
  * @returns 앱 꼴로 부른 startLoad 수 — 위치 없는 부름만 센다. hls.js 의 자동 시작도 hls.startLoad 를 거치지만 늘 위치를
  *     싣는다(playlist-loader.ts 398 checkAutostartLoad 의 startPosition)
  */
@@ -122,7 +123,7 @@ function vodPlayerAlways404(): VodPlayer {
   }
   const hls = new Hls({
     ...HLS_REWIND_CONFIG,
-    // 시험 전용 망 — 제품의 「커스텀 loader 금지」(useHlsPlayback.ts 806)와 무관하다
+    // 시험 전용 망 — 제품의 「커스텀 loader 금지」(useHlsPlayback.ts 의 loadSource 앞 주석)와 무관하다
     fLoader: NotFoundLoader as unknown as HlsConfig['fLoader'],
     debug: SILENT,
   });
@@ -337,8 +338,9 @@ describe('/vod 문서 404 — 진짜 hls.js 1.7.3 이 앱의 한 번 다시 받�
 
   // 멀티변이 목록을 못 받으면 변이(levels)가 없다. 그때 hls.startLoad 는 목록 받기를 다시 열지 않는다 — playlist-loader 의
   // startLoad 는 빈 몸통이고(loader/playlist-loader.ts 86), stream-controller 는 levels 가 없으면 _forceStartLoad 만 세우고
-  // STOPPED 로 둔다(controller/stream-controller.ts 191-193). 그래서 두 번째 치명이 오지 않는다 — 앱은 끊김 알림을 띄우지
-  // 않은 채 멈춘다(지금 동작 · 훅 층은 useHlsPlayback.vod404.test.ts)
+  // STOPPED 로 둔다(controller/stream-controller.ts 191-193). 그래서 두 번째 치명이 오지 않는다. 앱은 이제 이 꼴에서
+  // startLoad 하지 않고 곧바로 끊김을 알린다(POK-528 c8 · isFirstListFailure — 훅 층은 useHlsPlayback.vod404.test.ts).
+  // 이 행은 그 까닭의 실물 근거다 — recoverLikeApp 은 c8 앞의 앱 꼴(한 번 다시 받기)을 흉내 낸다
   it('멀티변이 목록 404 — 치명 하나 · 앱의 startLoad 뒤 다시 청하지 않는다(요청 1 · 두 번째 치명 없음)', async () => {
     fakeClock();
     const player = vodDocumentGone('multivariant');

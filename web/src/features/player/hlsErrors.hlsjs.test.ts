@@ -13,7 +13,12 @@ import Hls, {
 } from 'hls.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
-import { consumeDvrSegmentGone, isMediaSegmentNotFound, isPlaylistLoadError } from './hlsErrors';
+import {
+  consumeDvrSegmentGone,
+  isFirstListFailure,
+  isMediaSegmentNotFound,
+  isPlaylistLoadError,
+} from './hlsErrors';
 
 // 진짜 hls.js 1.7.3(dist)의 오류 처리가 받기 오류 404 를 언제 치명으로 올리는지와, 앱이 그 오류를 목록 오류로 가르는지를
 // 함께 본다(cx H1). error-helper retryForHttpStatus 는 4xx 를 다시 받지 않지만 조각 오류는 stream-controller
@@ -163,6 +168,103 @@ describe('hls.js 1.7.3 의 받기 오류 404 와 목록 오류 가르기(cx H1)'
       isPlaylistLoadError({ details: ErrorDetails.AUDIO_TRACK_LOAD_ERROR }, ErrorDetails),
     ).toBe(true);
     expect(isPlaylistLoadError({ details: ErrorDetails.KEY_LOAD_ERROR }, ErrorDetails)).toBe(false);
+  });
+});
+
+/** 첫 목록 받기가 끝나는 꼴 — HTTP 상태 하나로 실패하거나 · 시한에 걸리거나 · 목록이 아닌 본문을 받는다 */
+type FirstListOutcome = { code: number } | 'timeout' | 'not-a-playlist';
+
+const FIRST_LIST_URL = 'https://m/vod/k/a1/index.m3u8';
+
+/**
+ * 진짜 hls.js 1.7.3 으로 첫 목록(MANIFEST) 받기를 outcome 으로 끝나게 하고 앱 처리기가 받은 오류를 차례로 돌려준다. 가짜
+ * pLoader 는 다시 받지 않는다 — 첫 목록의 다시 받기(manifestLoadPolicy)는 기본 로더 안에서 돌고, 그 뒤 앱이 받는 꼴은
+ * 마지막 실패 하나다(loader/playlist-loader.ts 611-615 · 653-665)
+ */
+async function firstListErrors(outcome: FirstListOutcome): Promise<ErrorData[]> {
+  class FirstListLoader {
+    readonly stats = new LoadStats();
+    load(...[context, , callbacks]: LoadArgs) {
+      queueMicrotask(() => {
+        if (outcome === 'timeout') {
+          callbacks.onTimeout(this.stats, context, null);
+          return;
+        }
+        if (outcome === 'not-a-playlist') {
+          this.stats.loading.end = performance.now();
+          callbacks.onSuccess(
+            { url: context.url, data: '<html></html>' },
+            this.stats,
+            context,
+            null,
+          );
+          return;
+        }
+        callbacks.onError({ code: outcome.code, text: '' }, context, null, this.stats);
+      });
+    }
+    abort() {}
+    destroy() {}
+  }
+  const hls = new Hls({
+    ...HLS_REWIND_CONFIG,
+    pLoader: FirstListLoader as unknown as HlsConfig['pLoader'],
+    debug: SILENT,
+  });
+  instances.push(hls);
+  const seen: ErrorData[] = [];
+  hls.on(Events.ERROR, (_event, data) => {
+    seen.push({ ...data });
+  });
+  hls.loadSource(FIRST_LIST_URL);
+  await vi.waitFor(() => {
+    expect(seen.length).toBeGreaterThan(0);
+  });
+  return seen;
+}
+
+/** 표 시험의 첫 목록 받기 오류 — 바꿀 칸만 덮어쓴다 */
+function firstListError(overrides: Partial<ErrorData> = {}): ErrorData {
+  return {
+    type: ErrorTypes.NETWORK_ERROR,
+    details: ErrorDetails.MANIFEST_LOAD_ERROR,
+    fatal: true,
+    response: { url: FIRST_LIST_URL, code: 404, text: '' },
+    ...overrides,
+  } as unknown as ErrorData;
+}
+
+describe('첫 목록 실패 가르기(POK-528 c8) — 첫 목록 치명만 참 · 응답 코드는 보지 않는다', () => {
+  it.each<[string, boolean, Partial<ErrorData>]>([
+    ['첫 목록 404', true, {}],
+    ['첫 목록 503', true, { response: { url: FIRST_LIST_URL, code: 503, text: '' } }],
+    ['첫 목록 상태 0', true, { response: { url: FIRST_LIST_URL, code: 0, text: '' } }],
+    ['첫 목록 시한', true, { details: ErrorDetails.MANIFEST_LOAD_TIMEOUT, response: undefined }],
+    ['첫 목록 파싱 오류', true, { details: ErrorDetails.MANIFEST_PARSING_ERROR }],
+    ['비치명 첫 목록 404', false, { fatal: false }],
+    [
+      '비치명 파싱 오류(변이 목록의 파싱 오류는 이 꼴)',
+      false,
+      { details: ErrorDetails.MANIFEST_PARSING_ERROR, fatal: false },
+    ],
+    ['치명 변이 목록 404', false, { details: ErrorDetails.LEVEL_LOAD_ERROR }],
+    ['치명 조각 404', false, { details: ErrorDetails.FRAG_LOAD_ERROR }],
+    ['네트워크 오류가 아닌 갈래', false, { type: ErrorTypes.MEDIA_ERROR }],
+  ])('%s → %s', (_name, expected, overrides) => {
+    expect(isFirstListFailure(firstListError(overrides), ErrorTypes, ErrorDetails)).toBe(expected);
+  });
+
+  it.each<[string, FirstListOutcome, ErrorDetails]>([
+    ['404', { code: 404 }, ErrorDetails.MANIFEST_LOAD_ERROR],
+    ['503', { code: 503 }, ErrorDetails.MANIFEST_LOAD_ERROR],
+    ['시한', 'timeout', ErrorDetails.MANIFEST_LOAD_TIMEOUT],
+    ['목록이 아닌 본문', 'not-a-playlist', ErrorDetails.MANIFEST_PARSING_ERROR],
+  ])('진짜 hls.js 의 첫 목록 %s 는 치명 하나로 오고 참이다', async (_name, outcome, details) => {
+    const seen = await firstListErrors(outcome);
+    expect(seen.map((data) => [data.type, data.details, data.fatal])).toEqual([
+      [ErrorTypes.NETWORK_ERROR, details, true],
+    ]);
+    expect(seen.every((data) => isFirstListFailure(data, ErrorTypes, ErrorDetails))).toBe(true);
   });
 });
 
