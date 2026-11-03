@@ -2642,13 +2642,29 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url"}]}` · **400** `{"field":"fromMs"\|"toMs"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
+| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=[&axis=fileHead]` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url","startWallUtcMs"}]}`(표지 갈래는 아래 칸이 더 실린다) · **400** `{"field":"fromMs"\|"toMs"\|"axis"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
 
 - **`fromMs`·`toMs`는 재생 축 UTC epoch ms**(편집본 `cut`과 같은 축)이고 반개 구간이다. `toMs`가 `fromMs` 이하이거나 6분을 넘으면 400이다.
+- **축 표지 `axis=fileHead`(POK-196).** 있으면 두 판 모두 **파일명 시각(`start_wall_utc`) 축**으로 고른다 — 그 방송 회차의 귀속 행
+  (`RoundRows` · 머리 세션 행이 없는 옛 방송은 방송 시간창 행) 가운데 `[fromMs, toMs)`와 겹치는 행이고, 범위 끝 · 조각 시작 · 확정 공백도
+  같은 축이다. 그 축으로 처리했을 때만 뿌리에 **메아리 `"axis":"fileHead"`** 를 싣는다(회차를 못 고르면 메아리 없이 아래 옛 갈래). 웹은
+  메아리가 있을 때만 새 칸을 쓴다(칸 유무가 신호가 아니다). 그 밖의 표지 값은 400 `axis`.
+    - 조각 칸 더함: `startWallUtcMs`(파일명 시각 ms 내림) · `role`(`segment` · `audio_capture`) · `isDiscontinuity`(장부 칸) ·
+      `followsLedgerPrevious`(응답의 바로 앞 조각이 장부에서 이 조각의 바로 앞 행인가 — 첫 조각 · 아직 안 올라간 행이 빠진 자리 거짓).
+      `startAtMs`는 옛 값(재생 축) 그대로다.
+    - 뿌리 칸 더함: `audioCapture`(`attached` 확보 조각을 실음 · `not_ready` 아직 · `skipped` 없이 진행 — 렌더 주문과 같은
+      `AudioCaptureRule` · 컷 끝 = `toMs` · 「끝남」 = 방송 `ended` 이거나 회차 완결) · `gapEvidence`(`[{"beforeSeq","afterSeq"}]` —
+      창 안 회차 행 이웃 가운데 같은 녹화로 이어지지 않은 쌍. 쌍만 싣는다. 비귀속 행이 낀 자리가 여기 든다).
+    - 장부 왕복: 회차 고르기 1 · 창 안 회차 행 1(행마다 장부 바로 앞 행은 PK 역순 한 행) · 확보 후보 0–1 · 회차 완결 0–1(방송 중일 때만).
+      회차 행 읽기는 세션 색인(`stream_segments_session_idx`)을 타고 창 밖 회차 행을 거르개로 버린다 — 비용이 키 이력이 아니라 그 회차
+      길이에 비례한다(`WallAxisReadPlanTest`). 조각 길이 상한이 장부 계약에 없어 벽시계 하한으로 범위를 더 좁히지 않았다.
+- **표지가 없으면 develop 그대로다**(옛 웹 · 열린 옛 편집기 탭): 아래 재생 축 조회 · 응답에서 조각마다 `startWallUtcMs` 하나만 더한다.
+  그 칸을 빼면 develop 응답과 바이트가 같다(`SegmentAudioAxisTest` 기대값 파일). 🔴 표지와 무관하게 축을 바꾸는 판은 내지 않는다 —
+  옛 웹이 파일명 시각 축으로 고른 행을 재생 축에 놓아 덮음 판정이 갈린다.
 - **순서: 구간 → 자격 → 만료 → 켜짐 → 조회.** 조각 조회 문과 같다: 410이 자격 앞이면 남남에게 「있었던 방송」이 샌다.
 - **올라간(`uploaded`) 조각만 싣는다.** 덜 올라온 조각은 주소를 줘도 창고에 없다. 빠진 자리는 화면이 소리 없이 둔다.
 - **`startAtMs`는 재생 축**(`playback_pdt`, 없으면 `start_wall_utc`). 조각 장부는 물리 키로 찾는다(POK-233).
-- **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt`.
+- **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt axis`(`fileHead` · `legacy`).
 - 수명은 `pokeclip.render.segment-audio-url-ttl`(기본 `PT5M`, 0초 초과 7일 이하). 화면은 받자마자 내려받는다.
   조각 창고는 `SEGMENT_BUCKET`이고 주문줄(`RENDER_ENABLED`)과 같이 켜진다: 운영 역할에 조각 창고 `s3:GetObject`가 있어야 주소가 통한다.
 - 🔴 **배포 조건: 조각 창고에 웹 주소를 허락하는 CORS 규칙(GET·HEAD)이 있어야 한다.** 화면이 이 주소를 `fetch`로 받아 푼다.

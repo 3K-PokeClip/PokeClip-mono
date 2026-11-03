@@ -1,6 +1,5 @@
 package com.pokeclip.clip.render;
 
-import com.pokeclip.clip.segment.SegmentSource;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.time.Duration;
@@ -16,6 +15,10 @@ import java.util.List;
  */
 public class SegmentAudioSigner {
 
+    /** 서명할 조각 하나 — 창고 좌표와, 주소만 빈 응답 줄. */
+    record Unsigned(String s3Key, SegmentAudioAccess.Segment segment) {
+    }
+
     private final S3Presigner presigner;
     private final String bucket;
     private final Duration ttl;
@@ -27,14 +30,17 @@ public class SegmentAudioSigner {
     }
 
     /** @param segments 올라간({@code uploaded}) 조각만. 거르기는 부르는 쪽이 한다 */
-    public SegmentAudioAccess sign(List<SegmentSource> segments, Instant now) {
-        List<SegmentAudioAccess.Segment> signed = segments.stream()
-                .map(segment -> new SegmentAudioAccess.Segment(segment.seq(), segment.startAtMs(), segment.durationMs(),
-                        presigner.presignGetObject(request -> request
+    List<SegmentAudioAccess.Segment> sign(List<Unsigned> segments) {
+        return segments.stream()
+                .map(unsigned -> unsigned.segment().withUrl(presigner.presignGetObject(request -> request
                                 .signatureDuration(ttl)
-                                .getObjectRequest(get -> get.bucket(bucket).key(segment.s3Key())))
-                                .url().toString()))
+                                .getObjectRequest(get -> get.bucket(bucket).key(unsigned.s3Key())))
+                        .url().toString()))
                 .toList();
-        return new SegmentAudioAccess(now.plus(ttl), signed);
+    }
+
+    /** 이번에 만든 주소들의 만료 시각. */
+    Instant expiresAt(Instant now) {
+        return now.plus(ttl);
     }
 }

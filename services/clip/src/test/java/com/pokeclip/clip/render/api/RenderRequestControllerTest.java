@@ -437,6 +437,44 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         assertThat(받음.body()).isEqualTo(조각);
     }
 
+    /**
+     * 표지 {@code axis=fileHead} 를 문으로 받아 메아리와 새 칸을 웹에 알린 이름 그대로 싣는다(POK-196 · 설계 r7 9.6). 이 픽스처는
+     * 파일명 시각이 재생 축보다 1시간 뒤라 창을 파일명 시각으로 옮겨 묻는다 — 옛 값({@code startAtMs})은 재생 축 그대로 나온다.
+     * 모르는 표지는 400 이다.
+     */
+    @Test
+    void 원본_조각_주소는_표지가_있으면_파일명_시각_축으로_메아리를_싣는다() throws Exception {
+        볼_수_있다("OWNER");
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
+        long wallIn = RenderFixtures.CUT_IN + 3_600_000;
+
+        JsonNode 응답 = MAPPER.readTree(본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
+                        .param("fromMs", Long.toString(wallIn))
+                        .param("toMs", Long.toString(wallIn + 10_000))
+                        .param("axis", "fileHead")
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                .andExpect(status().isOk())));
+
+        assertThat(응답.get("axis").asString()).isEqualTo("fileHead");
+        JsonNode first = 응답.get("segments").get(0);
+        assertThat(first.get("seq").asLong()).isEqualTo(2);
+        assertThat(first.get("startWallUtcMs").asLong()).isEqualTo(wallIn);
+        assertThat(first.get("startAtMs").asLong()).as("옛 값 그대로").isEqualTo(RenderFixtures.CUT_IN);
+        assertThat(first.get("role").asString()).isEqualTo("segment");
+        assertThat(first.has("isDiscontinuity")).isTrue();
+        assertThat(first.has("followsLedgerPrevious")).isTrue();
+        assertThat(응답.has("audioCapture")).isTrue();
+        assertThat(응답.get("gapEvidence").isArray()).isTrue();
+
+        mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
+                        .param("fromMs", Long.toString(wallIn))
+                        .param("toMs", Long.toString(wallIn + 10_000))
+                        .param("axis", "pdt")
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("axis"));
+    }
+
     /** 주소는 로그에 안 남는다: 한 줄 새면 그 조각이 수명 동안 열린다. 발급 줄 자체는 남는다(양성 대조). */
     @Test
     void 원본_조각_주소는_로그에_안_남는다() throws Exception {
