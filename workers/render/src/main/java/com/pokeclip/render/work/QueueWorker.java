@@ -39,19 +39,22 @@ public class QueueWorker implements SmartLifecycle {
     private final Duration pollWait;
     /** 스레드 이름과 로그의 앞말. 렌더 줄은 {@code render}, 사진 줄은 {@code thumbnail}이라 한 프로세스 안에서 갈린다. */
     private final String name;
+    /** 깔린 ffmpeg 판 첫 줄. 시작 로그에만 싣는다(PDT 설계 15절). */
+    private final String ffmpegVersion;
     private final ScheduledExecutorService keeper;
 
     private volatile boolean running;
     private Thread loop;
 
     public QueueWorker(SqsClient sqs, String queueUrl, MessageHandler processor, Duration visibilityTimeout,
-                       Duration pollWait) {
-        this("render", sqs, queueUrl, processor, visibilityTimeout, pollWait);
+                       Duration pollWait, String ffmpegVersion) {
+        this("render", sqs, queueUrl, processor, visibilityTimeout, pollWait, ffmpegVersion);
     }
 
     public QueueWorker(String name, SqsClient sqs, String queueUrl, MessageHandler processor, Duration visibilityTimeout,
-                       Duration pollWait) {
+                       Duration pollWait, String ffmpegVersion) {
         this.name = name;
+        this.ffmpegVersion = ffmpegVersion;
         this.keeper = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, name + "-visibility");
             t.setDaemon(true);
@@ -68,7 +71,8 @@ public class QueueWorker implements SmartLifecycle {
     public void start() {
         running = true;
         loop = Thread.ofPlatform().name(name + "-queue").start(this::loop);
-        log.info("{}.worker_started queue={}", name, queueUrl);
+        // 판 첫 줄에 빈칸이 있어 맨 끝 칸에 둔다.
+        log.info("{}.worker_started queue={} ffmpeg={}", name, queueUrl, ffmpegVersion);
     }
 
     @Override

@@ -129,7 +129,7 @@ class QueueWorkerLocalStackTest {
         JobProcessor processor = new JobProcessor(new EnvelopeParser(Fixtures.MAPPER),
                 new ClipReporter(props, Fixtures.MAPPER, d -> { }), renderer, store, work, props.jobTimeout(),
                 Clock.systemUTC());
-        return new QueueWorker(sqs, queueUrl, processor, props.visibilityTimeout(), props.pollWait());
+        return new QueueWorker(sqs, queueUrl, processor, props.visibilityTimeout(), props.pollWait(), "test");
     }
 
     private static int visibleAndHidden(String queueUrl) {

@@ -27,7 +27,7 @@ concurrency:
 jobs:
   test:
     name: test (${{ matrix.worker }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     # 실측(2026-10-16, 두 번): render 2분~2분 30초 · upload 1분~1분 45초(꾸러미 설치 포함). 네 배쯤으로 둔다.
     timeout-minutes: 10
     strategy:
@@ -36,10 +36,20 @@ jobs:
         include:
           # 패키지는 각 일꾼 Dockerfile과 같게 둔다. 렌더는 자막의 한글 글꼴(fonts-noto-cjk)이
           # 있어야 libass가 네모 대신 글자를 찍는다. 업로드는 자막을 태우지 않는다.
+          # 렌더는 이미지와 같은 ffmpeg 판으로 시험한다(PDT 설계 7.7). 러너를 이미지 기반(Ubuntu
+          # 26.04)·운영(arm64)과 같게 두고, pinned-packages(ffmpeg와 같은 소스의 라이브러리 7개
+          # 포함 — Dockerfile 목록과 같게)에 Dockerfile의 FFMPEG_VERSION 판을 붙여 깐다. 판 글자는
+          # Dockerfile 한 곳이다. 아카이브가 이 판을 내리면 이미지 빌드처럼 여기서도 설치가 실패해 멈춘다.
           - worker: render
-            packages: ffmpeg fonts-noto-cjk
+            runner: ubuntu-26.04-arm
+            pinned-packages: >-
+              ffmpeg libavcodec62 libavdevice62 libavfilter11 libavformat62 libavutil60
+              libswresample6 libswscale9
+            packages: fonts-noto-cjk
             burns-subtitles: true
           - worker: upload
+            runner: ubuntu-latest
+            pinned-packages: ''
             packages: ffmpeg
             burns-subtitles: false
     defaults:
@@ -60,8 +70,19 @@ jobs:
 
       - name: ffmpeg 설치
         run: |
+          pinned=()
+          if [[ -n "${{ matrix.pinned-packages }}" ]]; then
+            version=$(sed -n 's/^ARG FFMPEG_VERSION=//p' Dockerfile)
+            if [[ -z "$version" ]]; then
+              echo "Dockerfile에서 ARG FFMPEG_VERSION을 못 읽었다" >&2
+              exit 1
+            fi
+            for p in ${{ matrix.pinned-packages }}; do
+              pinned+=("$p=$version")
+            done
+          fi
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }}
+          sudo apt-get install -y --no-install-recommends "${pinned[@]}" ${{ matrix.packages }}
           # head 대신 sed로 첫 줄만 찍는다. 기본 셸이 pipefail이라 head가 먼저 끝나면 ffmpeg가 SIGPIPE로
           # 죽어 단계가 실패할 수 있다(sed는 끝까지 읽는다).
           ffmpeg -hide_banner -version | sed -n 1p
