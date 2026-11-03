@@ -1219,6 +1219,10 @@ make_sql_step round_frozen_drop "${payload}/round_frozen_drop.sql" &&
 
 ### POK-525 읽기 질의
 
+이 절의 Q1 – Q4 는 위 「발행 잔여 질의」 의 Q1 – Q4 와 이름만 같고 다른
+질의입니다. media-swap 「POK-525 교체」 · 롤백 · 다음 교체의 Q 는 이 절을
+가리킵니다.
+
 교체 걸음이 DB 를 읽어 판정하는 질의 다섯입니다. Q1 · Q2 · Q3 은 설계
 (POK-525 r9.4 6절) 문장 그대로이고(Q2 init 행의 셋째 칸만 NULL), Q2-B 는
 계획(r2 4-7)이, Q4 는 교체 걸음 4.10 의 「업로드 · 발행 정상 · VOD 문서 URI

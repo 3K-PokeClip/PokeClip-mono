@@ -585,6 +585,10 @@ POK-525(조각 키를 업로드 때부터 회차 경로에)를 prod 에 넣는 *
 A 를 배출 · 정지한 **뒤에만** B 의 새 꼴 쓰기를 켜고, 첫 새 꼴 행 뒤에
 트리거를 깝니다. 설계 r9.4 9-3 · 9-4 와 계획 r2 4-7 · 8절입니다.
 
+이 절(「POK-525 교체」 · 롤백 · 다음 교체)의 Q1 · Q2 · Q2-B · Q3 · Q4 는
+runtime-1a 「POK-525 읽기 질의」 입니다. 「O8a 당김 교체」 절의 Q1 – Q4
+(runtime-1a 「발행 잔여 질의」)와 이름만 같고 다른 질의입니다.
+
 *   방송이 없는 시간대에 합니다. 실행자 · 승인 규칙은 이 런북 머리와 같고,
     걸음마다 kty 가 승인합니다.
 *   DB 를 읽고 쓰는 걸음(Q1 · Q2 · Q2-B · Q3 · Q4 · 운영 SQL 2 · 롤백 짝)의 SQL 과
@@ -642,13 +646,13 @@ A 를 배출 · 정지한 **뒤에만** B 의 새 꼴 쓰기를 켜고, 첫 새 
     다이제스트는 위 빌드, `playback_round_keys` 는 적지 않거나 `false`
     (B 는 **끈 채** 뜹니다).
 1.  사이드카 `LOG_LEVEL` 을 `info` 보다 높게(`warn` · `error`) 두지 않습니다.
-    `playback_key_layout` 은 끔이면 INFO 줄이라, 높이면 줄이 사라져
-    `sidecar-round-keys.sh off` 가 `journal` 로 실패하고 아래
-    `layout-check.sh` 가 `LAYOUT none` 으로 NOT OK 를 냅니다. on 은 4.7
-    (트리거 없음)에서 WARN 줄이라 높여도 대조가 맞지만, on 이 다른 까닭으로
-    실패해 복원 묶음을 돌면 그 legacy 대조(INFO 줄)가 실패해
-    `restore-failed` 가 됩니다. prod compose 는 `LOG_LEVEL` 을 적지 않아
-    `info` 입니다.
+    `playback_key_layout` 줄은 끔이면 INFO, 4.7 의 켬(트리거 없음)이면 WARN
+    입니다. `warn` 이면 INFO 줄이 사라져 `sidecar-round-keys.sh off` 와 켬
+    실패 뒤 복원 묶음의 legacy 대조가 `journal` 로 실패하고(복원이면
+    `restore-failed`), 아래 `layout-check.sh` 가 `LAYOUT none` 으로 NOT OK
+    를 냅니다. `error` 면 WARN 줄도 사라져 on 도 `journal` 로 실패하고 이어
+    복원도 실패해 `restore-failed` 가 됩니다. prod compose 는 `LOG_LEVEL` 을
+    적지 않아 `info` 입니다.
 
 ### POK-525 교체 상자 스크립트
 

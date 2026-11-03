@@ -130,24 +130,35 @@ func loadRunbookQuery(name string, values map[string]string) (string, error) {
 
 // runReadOnly 는 질의를 읽기 전용 트랜잭션 안에서 돌려 행을 낸다(첫 열 = 축 이름 또는 값).
 func runReadOnly(ctx context.Context, pool *pgxpool.Pool, query string) ([][]any, error) {
+	_, out, err := runReadOnlyColumns(ctx, pool, query)
+	return out, err
+}
+
+// runReadOnlyColumns 는 runReadOnly 와 같되 열 이름도 낸다(Q4 는 판정 열을 이름으로 본다).
+func runReadOnlyColumns(ctx context.Context, pool *pgxpool.Pool, query string) ([]string, [][]any, error) {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // 읽기 전용이라 되돌림 실패는 판정과 무관하다.
 	rows, err := tx.Query(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for _, field := range rows.FieldDescriptions() {
+		names = append(names, field.Name)
 	}
 	var out [][]any
 	for rows.Next() {
 		values, err := rows.Values()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, values)
 	}
-	return out, rows.Err()
+	return names, out, rows.Err()
 }
 
 // axisWaiting 은 Q2 · Q2-B 의 행(축 · waiting · bytes_null)을 축 이름 → waiting 으로 편다.
@@ -410,7 +421,9 @@ func TestRunbookQ2AndQ2BCountWhatUploaderPicks(t *testing.T) {
 // 세는 행 하나를 함께 둬 0 끼리 같아 헛통과하지 않게 하고, 빼야 할 행은 업로더 술어로는 모두 집히는 꼴로 둔다 — 그
 // 제외 술어 하나를 빼면 그 축이 1 늘어 갈린다. 창 안쪽 중간대(18시간 전) 행은 세어 창을 좁히면 줄어 갈리고,
 // <cut> 과 정확히 같은 시각의 행은 세지 않아 경계를 `<=` 로 느슨하게 하면 늘어 갈린다. init 축은 세션 시작 시각의
-// <cut> 상한과 시험 스트림만 본다(24시간 창 없음 — 25시간 전 세션은 init 업로드를 마친 꼴로 둬 판정 밖).
+// <cut> 상한과 시험 스트림만 본다 — 24시간 창이 없다(업로더 init 스위퍼에도 없다). 그래서 25시간 전 시작해 아직 안
+// 끝난 방송(S-long — 최근 조각은 ② · ③ 업로드를 마쳐 init 재료만 준다)도 세어, init 에 시작 시각 창을 더하면 줄어
+// 갈린다. 25시간 전 S-old 는 init 업로드를 마친 꼴로 둬 ② · ③ 창 판정만 맡는다.
 func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -429,8 +442,10 @@ func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 		{id: "S-test", stream: runbookTestStream, state: "live", started: beforeCut},
 		{id: "S-late", stream: "latestream", state: "live", started: afterCut},
 		{id: "S-old", stream: "oldstream", state: "live", started: stale.Add(-time.Hour), initUploaded: true},
+		{id: "S-long", stream: "longstream", state: "live", started: stale},
 	}
-	cutoffs := map[string]int64{"bstream": 0, "midstream": 0, "edgestream": 0, runbookTestStream: 0, "latestream": 0, "oldstream": 0}
+	cutoffs := map[string]int64{"bstream": 0, "midstream": 0, "edgestream": 0, runbookTestStream: 0, "latestream": 0,
+		"oldstream": 0, "longstream": 0}
 	segments := []runbookSegment{
 		waitingSegment("bstream", "S-b", beforeCut),            // 셈 — ② · ③ 각 하나 · init 재료
 		waitingSegment("midstream", "S-mid", mid),              // 셈 — 24시간 창 안쪽 중간대
@@ -438,6 +453,9 @@ func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 		waitingSegment(runbookTestStream, "S-test", beforeCut), // 시험 스트림
 		waitingSegment("latestream", "S-late", afterCut),       // <cut> 뒤
 		waitingSegment("oldstream", "S-old", stale),            // 24시간 밖
+		// 25시간 전 시작한 방송의 최근 조각 — ② · ③ 업로드를 마쳐 init 재료만 준다.
+		{stream: "longstream", session: "S-long", seq: 0, start: beforeCut, archive: "uploaded", playback: "uploaded",
+			key: "dvr/longstream/seg/000000.m4s"},
 	}
 	if err := seedRunbook(ctx, pool, sessions, cutoffs, segments); err != nil {
 		t.Fatalf("고정물: %v", err)
@@ -456,7 +474,8 @@ func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 		t.Fatalf("Q2 행: %v", err)
 	}
 
-	want := map[string]int64{"archive": 2, "playback": 2, "init": 2}
+	// init 3 = S-b · S-mid · S-long — init 축은 init_uploaded_at IS NULL · 안 끝남 · started_at < <cut> 만 본다.
+	want := map[string]int64{"archive": 2, "playback": 2, "init": 3}
 	for axis, n := range want {
 		if got[axis] != n {
 			t.Errorf("Q2 %s waiting = %d, want %d(전체 %v)", axis, got[axis], n, got)
@@ -491,8 +510,12 @@ func TestRunbookQ2BCountsBDiskRowsBeforeCut2(t *testing.T) {
 		{id: "S-long", stream: "longstream", state: "ending", started: stale},
 		{id: "S-a", stream: "astream", state: "live", started: afterCut2},
 		{id: "S-test", stream: runbookTestStream, state: "live", started: beforeCut},
+		{id: "S-old", stream: "oldstream", state: "live", started: stale.Add(-time.Hour), initUploaded: true},
 	}
-	cutoffs := map[string]int64{"bstream": 0, "midstream": 0, "edgestream": 0, "astream": 0}
+	// 세지 않을 ③ 행(oldstream · 시험 스트림)도 세션 · 컷오프를 둔다 — 조인에서 먼저 떨어지면 창 · 시험 스트림
+	// 술어를 빼도 playback 이 그대로라 그 술어를 재지 못한다.
+	cutoffs := map[string]int64{"bstream": 0, "midstream": 0, "edgestream": 0, "astream": 0, "oldstream": 0,
+		runbookTestStream: 0}
 	segments := []runbookSegment{
 		// <cut> 직전 B 조각 — ② 대기 · ③ 대기 각 하나(P2).
 		{stream: "bstream", session: "S-b", seq: 0, start: beforeCut, archive: "pending", playback: "pending",
@@ -507,7 +530,7 @@ func TestRunbookQ2BCountsBDiskRowsBeforeCut2(t *testing.T) {
 		// <cut2> 뒤 A 몫 · 24시간 밖 · 시험 스트림 — 세지 않음.
 		{stream: "astream", session: "S-a", seq: 0, start: afterCut2, archive: "pending", playback: "pending",
 			key: "dvr/astream/seg/000000.m4s"},
-		{stream: "oldstream", seq: 0, start: stale, archive: "pending", playback: "pending"},
+		waitingSegment("oldstream", "S-old", stale),
 		{stream: runbookTestStream, session: "S-test", seq: 0, start: beforeCut, archive: "pending",
 			playback: "pending", key: "dvr/" + runbookTestStream + "/seg/000000.m4s"},
 	}
@@ -528,6 +551,7 @@ func TestRunbookQ2BCountsBDiskRowsBeforeCut2(t *testing.T) {
 		t.Fatalf("Q2-B 행: %v", err)
 	}
 
+	// init 3 = S-b · S-mid · S-long — S-old 는 init 업로드를 마쳤고 S-test 는 시험 스트림, S-edge · S-a 는 <cut2> 와 같거나 뒤에 시작했다.
 	want := map[string]int64{"archive": 2, "playback": 2, "init": 3}
 	for axis, n := range want {
 		if got[axis] != n {
@@ -539,17 +563,22 @@ func TestRunbookQ2BCountsBDiskRowsBeforeCut2(t *testing.T) {
 	}
 }
 
-// Q1 은 <since> 뒤 새 꼴 키 수, Q3 은 <on> 뒤 새 꼴 키의 회차 성분이 세션 round_id 와 같은 수 · 다른 수다.
+// Q1 은 <since> 이후 새 꼴 키 수, Q3 은 <on> 이후 새 꼴 키의 회차 성분이 세션 round_id 와 같은 수 · 다른 수다. 두 시각
+// 경계와 같은 시각의 행을 둬 `>=` 를 `>` 로 좁히면 줄어 갈린다. Q3 은 세션을 조인하므로 세션 없는 새 꼴 행을 세지 않고
+// (LEFT JOIN 으로 바꾸면 mismatched 가 는다), 세션 round_id 가 NULL 인 새 꼴 행은 불일치로 센다(IS DISTINCT FROM 을
+// `<>` 로 바꾸면 NULL 비교가 빠져 줄어 갈린다).
 func TestRunbookQ1Q3CountRoundKeys(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	now := time.Now().UTC()
+	// 초로 자른다 — 경계 행의 시각과 <since> · <on> 글자가 PG 에서 같은 값이어야 한다.
+	now := time.Now().UTC().Truncate(time.Second)
 	since := now.Add(-time.Hour)
 	on := now.Add(-30 * time.Minute)
 	afterOn := on.Add(time.Minute)
 	between := since.Add(time.Minute)
 	sessions := []runbookSession{
 		{id: "S-r", stream: "rstream", state: "live", round: "S-r", started: since.Add(-time.Hour)},
+		{id: "S-n", stream: "nstream", state: "live", started: since.Add(-time.Hour)}, // round_id NULL
 	}
 	seg := func(seq int64, start time.Time, key string) runbookSegment {
 		return runbookSegment{stream: "rstream", session: "S-r", seq: seq, start: start, archive: "uploaded",
@@ -562,6 +591,14 @@ func TestRunbookQ1Q3CountRoundKeys(t *testing.T) {
 		seg(3, afterOn, "dvr/rstream/S-r/seg/000003.m4s"),                 // 켬 뒤 · 회차 일치
 		seg(4, afterOn, "dvr/rstream/S-other/seg/000004.m4s"),             // 켬 뒤 · 회차 불일치
 		seg(5, afterOn, "dvr/rstream/seg/000005.m4s"),                     // 켬 뒤 옛 꼴 — Q3 밖
+		seg(6, since, "dvr/rstream/S-r/seg/000006.m4s"),                   // <since> 와 같은 시각 — Q1 셈
+		seg(7, on, "dvr/rstream/S-r/seg/000007.m4s"),                      // <on> 과 같은 시각 · 회차 일치
+		// 세션 없는 새 꼴 행 — Q1 은 세고 Q3 은 세션 조인에서 빠진다.
+		{stream: "rstream", seq: 8, start: afterOn, archive: "uploaded", playback: "uploaded",
+			key: "dvr/rstream/S-r/seg/000008.m4s"},
+		// 세션 round_id 가 NULL 인 새 꼴 행 — Q3 불일치.
+		{stream: "nstream", session: "S-n", seq: 0, start: afterOn, archive: "uploaded", playback: "uploaded",
+			key: "dvr/nstream/S-n/seg/000000.m4s"},
 	}
 	if err := seedRunbook(ctx, pool, sessions, nil, segments); err != nil {
 		t.Fatalf("고정물: %v", err)
@@ -584,19 +621,22 @@ func TestRunbookQ1Q3CountRoundKeys(t *testing.T) {
 		t.Fatalf("Q3 실행: %v", err)
 	}
 
-	if len(rows1) != 1 || len(rows1[0]) != 1 || rows1[0][0] != int64(3) {
-		t.Errorf("Q1 = %v, want [[3]](<since> 뒤 새 꼴 셋)", rows1)
+	// Q1 7 = seq 2 · 3 · 4 · 6 · 7 · 8 · nstream 0 — start_wall_utc >= <since> 인 새 꼴(세션과 무관).
+	if len(rows1) != 1 || len(rows1[0]) != 1 || rows1[0][0] != int64(7) {
+		t.Errorf("Q1 = %v, want [[7]](<since> 이후 새 꼴 일곱)", rows1)
 	}
-	if len(rows3) != 1 || len(rows3[0]) != 2 || rows3[0][0] != int64(1) || rows3[0][1] != int64(1) {
-		t.Errorf("Q3 = %v, want [[1 1]](matched 1 · mismatched 1)", rows3)
+	// Q3 matched 2 = seq 3 · 7, mismatched 2 = seq 4 · nstream 0 — seq 8 은 세션이 없어 조인에서 빠진다.
+	if len(rows3) != 1 || len(rows3[0]) != 2 || rows3[0][0] != int64(2) || rows3[0][1] != int64(2) {
+		t.Errorf("Q3 = %v, want [[2 2]](matched 2 · mismatched 2)", rows3)
 	}
 }
 
 // q4Case 는 Q4(시험 방송 회차 판정 — 교체 걸음 4.10) 사례 하나다. 통과 고정물(seedQ4Base)에 change 를 얹는다.
 type q4Case struct {
-	name   string
-	change string // 고정물 뒤에 돌리는 SQL(빈 값이면 없음)
-	pass   bool
+	name     string
+	change   string // 고정물 뒤에 돌리는 SQL(빈 값이면 없음)
+	pass     bool
+	vodState string // 빈 값이 아니면 vod_state 열(회차의 최신 세션 값)도 본다
 }
 
 // seedQ4Base 는 Q4 의 통과 고정물을 넣는다 — <on> 뒤 시험 스트림의 회차 하나(끝남 · 닫힘 · vod_state frozen · 새 꼴 키
@@ -633,22 +673,45 @@ VALUES ($1, 0, 'S-old', 'settle_deadline')`, stream)
 	return err
 }
 
-// q4ExtraSegment 는 시험 회차에 ③ 업로드를 마친 조각 seq 5 를 키 key 로 더하는 SQL 이다(playback_s3_key 는 바꿀 수 없어
-// 키 사례는 행을 더한다).
-func q4ExtraSegment(key string) string {
+// sqlTextOrNull 은 빈 값을 SQL NULL 로, 나머지를 따옴표 친 글자로 낸다(시험 고정물 값만 — 따옴표를 거르지 않는다).
+func sqlTextOrNull(value string) string {
+	if value == "" {
+		return "NULL"
+	}
+	return "'" + value + "'"
+}
+
+// q4Session 은 시험 회차 머리 세션 S-t 를 본떠 세션 id 를 더하는 SQL 이다 — 스트림 stream · 상태 state · 회차 round(빈 값이면
+// NULL) 를 주고 시작 시각을 shift 만큼 옮긴다. 끝 · 닫힘 · VOD 열은 S-t 의 값을 그대로 옮긴다(사례가 따로 바꾼다).
+func q4Session(id, stream, state, round, shift string) string {
+	return fmt.Sprintf(`INSERT INTO stream_sessions
+    (session_id, stream_id, started_at, state, first_pdt, round_id, init_uploaded_at, ended_at, round_closed_at,
+     vod_state, vod_s3_key)
+SELECT '%s', '%s', started_at + interval '%s', '%s', first_pdt, %s, init_uploaded_at, ended_at, round_closed_at,
+       vod_state, vod_s3_key
+  FROM stream_sessions WHERE session_id = 'S-t'`, id, stream, shift, state, sqlTextOrNull(round))
+}
+
+// q4Segment 는 시험 회차 조각 seq 4 를 본떠 stream · seq 조각을 세션 session · ③ 키 key(빈 값이면 NULL) · ③ 상태
+// playback 으로 더하는 SQL 이다(playback_s3_key 는 바꿀 수 없어 키 사례는 행을 더한다).
+func q4Segment(stream string, seq int64, session, key, playback string) string {
 	return fmt.Sprintf(`INSERT INTO stream_segments
     (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path, upload_state, bytes,
      is_discontinuity, session_id, playback_pdt, playback_s3_key, playback_upload_state)
-SELECT stream_id, 5, 20000, start_wall_utc, 4000, 'k/5', local_path || '.5', 'uploaded', 1000, false, session_id,
-       playback_pdt, '%s', 'uploaded'
-  FROM stream_segments WHERE stream_id = '%s' AND seq = 4`, key, runbookTestStream)
+SELECT '%[1]s', %[2]d, %[2]d * 4000, start_wall_utc, 4000, 'k/%[1]s/%[2]d', '/recordings/%[1]s/%[2]d.x.mp4',
+       'uploaded', 1000, false, '%[3]s', playback_pdt, %[4]s, '%[5]s'
+  FROM stream_segments WHERE stream_id = '%[6]s' AND seq = 4`, stream, seq, session, sqlTextOrNull(key), playback,
+		runbookTestStream)
 }
 
 // Q4 는 <on> 뒤 시험 스트림의 가장 늦은 회차가 끝나 닫히고 VOD 로 frozen 동결됐으며, 그 회차의 조각(컷오프 이상)이 모두 ③
 // 업로드됐고 키가 그 회차의 새 꼴이며 GAP 기록이 없을 때만 pass 다. 국면 vod 는 frozen_with_gaps 도 포함하고
 // (round_playback.go) 미업로드 조각은 정산 기한 뒤 GAP 으로 마감되므로(vod.go settle_deadline) 국면만으로는 판정하지 않는다.
+// 사례는 pass 의 항 · 회차 고르기 · 스트림 한정 · 컷오프 · 시각 경계를 하나씩 뒤집는다 — 질의가 그 술어 하나를 빠뜨리거나
+// 느슨하게 하면 그 사례만 갈린다.
 func TestRunbookQ4PassesOnlyCleanTestRound(t *testing.T) {
 	test := runbookTestStream
+	newKey := func(round string, seq int) string { return fmt.Sprintf("dvr/%s/%s/seg/%06d.m4s", test, round, seq) }
 	cases := []q4Case{
 		{name: "깨끗한 회차", pass: true},
 		{name: "컷오프 아래 미업로드는 판정 밖", pass: true,
@@ -661,15 +724,53 @@ VALUES ('` + test + `', 3, 'S-t', 'settle_deadline')`},
 		// 상태는 frozen 그대로 두고 키만 비운다 — vod_doc 조건 하나만 빼면 이 사례가 갈린다.
 		{name: "VOD 문서 키 없음", change: `UPDATE stream_sessions SET vod_s3_key = NULL WHERE session_id = 'S-t'`},
 		{name: "회차 안 닫힘", change: `UPDATE stream_sessions SET round_closed_at = NULL WHERE session_id = 'S-t'`},
-		{name: "옛 꼴 키", change: q4ExtraSegment("dvr/" + test + "/seg/000005.m4s")},
-		{name: "다른 회차 키", change: q4ExtraSegment("dvr/" + test + "/S-x/seg/000005.m4s")},
+		{name: "옛 꼴 키", change: q4Segment(test, 5, "S-t", "dvr/"+test+"/seg/000005.m4s", "uploaded")},
+		{name: "다른 회차 키", change: q4Segment(test, 5, "S-t", newKey("S-x", 5), "uploaded")},
+		{name: "③ 키 없음", change: q4Segment(test, 5, "S-t", "", "uploaded")},
 		{name: "on 뒤 회차 없음", change: `UPDATE stream_sessions SET started_at = started_at - interval '1 day' WHERE session_id = 'S-t'`},
+		// v.segments > 0 — 컷오프 이상 조각이 없으면 미업로드 · 키 항이 0 이어도 pass 가 아니다.
+		{name: "컷오프 이상 조각 없음", change: `UPDATE stream_cutoffs SET cutoff_seq = 5`},
+		// t.seq >= 컷오프 — 컷오프와 같은 seq 도 판정 안이다.
+		{name: "컷오프 경계 조각 실패", change: `UPDATE stream_cutoffs SET cutoff_seq = 3;
+UPDATE stream_segments SET playback_upload_state = 'failed' WHERE seq = 3`},
+		// LEFT JOIN · COALESCE 0 — 컷오프 행이 없는 스트림은 모든 조각을 본다.
+		{name: "컷오프 행 없음", pass: true, change: `DELETE FROM stream_cutoffs`},
+		// v.not_ended = 0 — 닫힘 · frozen 이어도 끝나지 않은 세션이 있으면 아니다.
+		{name: "세션 안 끝남", change: `UPDATE stream_sessions SET state = 'ending' WHERE session_id = 'S-t'`},
+		// started_at >= <on> — 켬 시각과 같은 시각에 시작한 회차도 본다.
+		{name: "on 과 같은 시각 회차", pass: true,
+			change: `UPDATE stream_sessions SET started_at = started_at - interval '5 minutes' WHERE session_id = 'S-t'`},
+		// r 의 round_id IS NOT NULL — 회차 없는(옛 판) 세션이 더 늦게 시작해도 회차 세션을 고른다.
+		{name: "더 늦은 회차 없는 세션", pass: true, change: q4Session("S-n", test, "ended", "", "1 minute")},
+		// sess · seg · gaps 의 stream_id = <test> — 다른 스트림의 세션(같은 round_id) · 조각 · GAP(같은 session_id)은 판정 밖.
+		{name: "다른 스트림 행 섞임", pass: true, change: q4Session("S-y", "otherstream", "live", "S-t", "0 minutes") + `;
+UPDATE stream_sessions SET round_closed_at = NULL WHERE session_id = 'S-y';
+` + q4Segment("otherstream", 0, "S-t", "", "failed") + `;
+INSERT INTO stream_published_gaps (stream_id, seq, session_id, reason) VALUES ('otherstream', 0, 'S-t', 'settle_deadline')`},
+		// r 의 ORDER BY started_at DESC — on 뒤 회차가 둘이면 가장 늦은 회차를 본다(최신이 실패 · 앞이 깨끗).
+		{name: "최신 회차 실패", change: q4Session("S-t2", test, "ended", "S-t2", "1 minute") + `;
+UPDATE stream_sessions SET vod_state = 'frozen_with_gaps' WHERE session_id = 'S-t2';
+` + q4Segment(test, 5, "S-t2", newKey("S-t2", 5), "uploaded")},
+		{name: "앞 회차 실패 · 최신 회차 깨끗", pass: true, change: q4Session("S-t0", test, "ended", "S-t0", "-1 minute") + `;
+UPDATE stream_sessions SET vod_state = 'frozen_with_gaps' WHERE session_id = 'S-t0';
+` + q4Segment(test, 5, "S-t0", newKey("S-t0", 5), "uploaded")},
+		// latest 의 started_at DESC — 한 회차 세션 둘(TD 분할)이면 VOD 국면은 늦게 시작한 세션의 값이다.
+		{name: "TD 분할 · 최신 세션 frozen", pass: true, vodState: "frozen",
+			change: q4Session("S-t2", test, "ended", "S-t", "1 minute") + `;
+UPDATE stream_sessions SET vod_state = 'frozen_with_gaps' WHERE session_id = 'S-t';
+` + q4Segment(test, 5, "S-t2", newKey("S-t", 5), "uploaded")},
+		// latest 의 (state = 'live') DESC — 회차에 라이브 세션이 있으면 시작 시각보다 먼저 그 세션의 VOD 국면을 낸다.
+		{name: "회차 안 라이브 세션 우선", vodState: "none",
+			change: q4Session("S-t2", test, "live", "S-t", "-1 minute") + `;
+UPDATE stream_sessions SET ended_at = NULL, round_closed_at = NULL, vod_state = 'none', vod_s3_key = NULL
+ WHERE session_id = 'S-t2'`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
 			pool := newTestPool(t)
-			on := time.Now().UTC().Add(-time.Hour)
+			// 초로 자른다 — 경계 사례의 started_at 과 <on> 글자가 PG 에서 같은 값이어야 한다.
+			on := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 			if err := seedQ4Base(ctx, pool, on); err != nil {
 				t.Fatalf("고정물: %v", err)
 			}
@@ -683,7 +784,7 @@ VALUES ('` + test + `', 3, 'S-t', 'settle_deadline')`},
 				t.Fatalf("Q4 뽑기: %v", err)
 			}
 
-			rows, err := runReadOnly(ctx, pool, query)
+			names, rows, err := runReadOnlyColumns(ctx, pool, query)
 			if err != nil {
 				t.Fatalf("Q4 실행: %v", err)
 			}
@@ -691,9 +792,15 @@ VALUES ('` + test + `', 3, 'S-t', 'settle_deadline')`},
 			if len(rows) != 1 {
 				t.Fatalf("Q4 행 수 = %d, want 1", len(rows))
 			}
-			got, ok := rows[0][len(rows[0])-1].(bool)
-			if !ok || got != c.pass {
-				t.Errorf("Q4 pass = %v, want %v(행 %v)", rows[0][len(rows[0])-1], c.pass, rows[0])
+			got := make(map[string]any, len(names))
+			for i, name := range names {
+				got[name] = rows[0][i]
+			}
+			if pass, ok := got["pass"].(bool); !ok || pass != c.pass {
+				t.Errorf("Q4 pass = %v, want %v(행 %v)", got["pass"], c.pass, got)
+			}
+			if c.vodState != "" && got["vod_state"] != c.vodState {
+				t.Errorf("Q4 vod_state = %v, want %s(행 %v)", got["vod_state"], c.vodState, got)
 			}
 		})
 	}

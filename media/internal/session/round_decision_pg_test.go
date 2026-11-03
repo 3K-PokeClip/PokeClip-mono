@@ -9,31 +9,37 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// decideThenOpen 은 결정 → (개시 갈래면) 개시를 한 트랜잭션에서 돌린다. 개시 갈래가 아니면 opened 는 "" 다.
-func decideThenOpen(t *testing.T, pool *pgxpool.Pool, r *Registry, in Input) (d Decision, opened string) {
+// decideThenOpen 은 결정 → (개시 갈래면) 개시를 한 트랜잭션에서 돌리고, 오류가 없으면 커밋한다. 개시 갈래가 아니면
+// opened 는 "" 다. 시험 대상(Decide · Open)의 오류는 돌려주어 호출한 시험이 판정하고, 여기서 t.Fatal 로 끊는 것은
+// 환경(트랜잭션 시작 · 커밋) 실패뿐이다.
+func decideThenOpen(t *testing.T, pool *pgxpool.Pool, r *Registry, in Input) (d Decision, opened string, err error) {
 	t.Helper()
 	ctx := context.Background()
-	withTx(t, pool, func(tx pgx.Tx) {
-		var err error
-		if d, err = r.Decide(ctx, tx, in, in.StartWallUTC); err != nil {
-			t.Fatalf("결정 실패: %v", err)
-		}
-		if d.Outcome != OutcomeOpen && d.Outcome != OutcomeOpenFresh {
-			return
-		}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("트랜잭션 시작 실패: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if d, err = r.Decide(ctx, tx, in, in.StartWallUTC); err != nil {
+		return d, "", fmt.Errorf("결정 실패: %w", err)
+	}
+	if d.Outcome == OutcomeOpen || d.Outcome == OutcomeOpenFresh {
 		if opened, err = r.Open(ctx, tx, d, in.StartWallUTC); err != nil {
-			t.Fatalf("개시 실패: %v", err)
+			return d, "", fmt.Errorf("개시 실패: %w", err)
 		}
-	})
-	return d, opened
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("트랜잭션 커밋 실패: %v", err)
+	}
+	return d, opened, nil
 }
 
 // 갈래마다 RoundID 가 정해진 값이다 — 개시 갈래는 Open 이 쓴 round_id 와 같고, 「새 회차를 여는가」 는
@@ -89,8 +95,11 @@ func TestDecisionRoundIDEqualsRoundWrittenByOpen(t *testing.T) {
 				}
 			}
 
-			d, opened := decideThenOpen(t, pool, r, c.in)
+			d, opened, err := decideThenOpen(t, pool, r, c.in)
 
+			if err != nil {
+				t.Fatalf("결정 → 개시 = %v, want 오류 없음", err)
+			}
 			if d.Outcome != c.outcome {
 				t.Fatalf("갈래 = %s, want %s", d.Outcome, c.outcome)
 			}
