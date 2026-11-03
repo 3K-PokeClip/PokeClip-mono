@@ -32,6 +32,10 @@ locals {
     rewind_public_base_url = var.rewind_public_base_url
     sidecar_image          = var.sidecar_image
     stream_key_resolve_url = var.stream_key_resolve_url
+
+    # 계약9 발행 — 모듈 입력이 생기기 전까지 꺼짐(빈 목록이면 렌더하지 않는다).
+    broadcast_topic_arn       = ""
+    lifecycle_publish_streams = []
   }
 
   compose_yml = templatefile("${local.media_host_dir}/compose.yml.tmpl", local.template_vars)
