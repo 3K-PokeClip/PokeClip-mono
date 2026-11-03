@@ -253,6 +253,17 @@ describe('리마운트 — 시작은 restartAtMs · 단계는 list 로 · notice
     expect(feed(floor, [remount]).state.source.startAtMs).toBe(0);
     expect(feed(rewindAt(P20), [remount]).state.source.startAtMs).toBe(P20);
   });
+
+  // 판정 잘림 거짓이 앞선 알림을 지우지 않는다 — noticed 는 판정마다 이어 받는다(3-3 (2) 셋째 줄)
+  it('⑤ 알림(잘림 참) → 리마운트 → 잘림 거짓 → 리마운트 → 잘림 참 → 알림 추가 0 · noticed 내내 참', () => {
+    const noticed = feed(relisted(rewindFromLive()), [loaded(A1, true)]);
+    expect(notices(noticed.effects)).toEqual([SESSION_NOTICES.oldest]);
+    const uncut = feed(noticed.state, [remount, loaded(A1, false)]);
+    const done = feed(uncut.state, [remount, loaded(A1, true)]);
+    expect(notices([...uncut.effects, ...done.effects])).toEqual([]);
+    expect(uncut.state.phase).toEqual(relistPhase('paint', true));
+    expect(done.state.phase).toEqual(relistPhase('paint', true));
+  });
 });
 
 describe('kty 「고쳐」 — 다시 받기마다 실제로 잘렸으면 알린다(계획 3-3 (2))', () => {

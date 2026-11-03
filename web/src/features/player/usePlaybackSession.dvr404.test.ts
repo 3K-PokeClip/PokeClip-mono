@@ -55,6 +55,11 @@ const BLOCKED_RETRIES = 3;
 /** 라이브에서 본 자리 · 라이브에서 되감아 청한 자리(58분 전) */
 const LIVE_AT = NOW - 5_000;
 const ASKED = NOW - 58 * MIN;
+/**
+ * 같은 회차 새 url 이 처음 실리는 스트림 답의 순번(0 부터 — 다섯째 답). 넷째 답부터 버리는 결함이
+ * 그 답을 놓치게 셋째 답보다 뒤로 둔다(정식 교정 ① 변이 MB2)
+ */
+const LATE_ANSWER = 4;
 
 interface StreamAnswer {
   url: string;
@@ -64,8 +69,11 @@ interface StreamAnswer {
 /** n 번째(0 부터) 스트림 물음의 답 */
 type Answers = (n: number) => StreamAnswer;
 
-/** 새 세대(재생기)가 설 때마다 시험이 넣는 것 — 화면 전 404 · 첫 목록 뒤 화면 붙음 → 404 · 아무것도 */
-type OnSwap = 'gone' | 'list-then-gone' | 'paint-then-gone' | 'none';
+/**
+ * 새 세대(재생기)가 설 때마다 시험이 넣는 것 — 화면 전 404 · 첫 목록 뒤 화면 붙음 → 404 · 첫 목록 뒤
+ * 화면 붙음(404 없음) · 아무것도
+ */
+type OnSwap = 'gone' | 'list-then-gone' | 'paint-then-gone' | 'paint' | 'none';
 
 let streamStarts: number[];
 /**
@@ -216,6 +224,8 @@ function playerEvents(session: () => PlaybackSession, onSwap: OnSwap): SessionEv
       return [listLoaded, gone];
     case 'paint-then-gone':
       return [listLoaded, painted, gone];
+    case 'paint':
+      return [listLoaded, painted];
     case 'none':
       return [];
   }
@@ -331,6 +341,26 @@ describe('이어 볼 자리 — 세션 훅 층(R1 · Q1 · 계획 8-3b)', () => 
     expect(run.pollSwaps).toBe(0);
     expect(run.session().state.source).toMatchObject({ url: A1, startAtMs: ASKED });
     expect(run.session().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'list' } });
+  });
+});
+
+describe('긴 되감기 세션의 정기 스트림 답 — 세션 훅 층(계획 3-4 · 8-3b)', () => {
+  it('다시 받아 화면을 붙인 뒤 다섯째 답에 처음 실린 같은 회차 새 url → 그 답이 상태에 닿아 이어 볼 자리에서 갈아 끼운다', async () => {
+    const targetMs = NOW - 10 * MIN;
+    const later: Answers = (n) =>
+      n < LATE_ANSWER
+        ? { url: A1, floorMs: FIRST_F }
+        : { url: `${BASE}/dvr/key-1/a2/index.m3u8`, floorMs: NOW - 30 * MIN };
+    const run = await runRelist(later, 'paint', { targetMs });
+    expect(streamStarts.length).toBeGreaterThan(LATE_ANSWER);
+    expect(run).toMatchObject({ relists: 1, pollSwaps: 1, remounts: 0, blocked: 0 });
+    // 다시 받은 재생기가 청한 자리 + 4초에 화면을 붙였다 — 그 자리가 이어 볼 자리다
+    expect(run.session().state.source).toMatchObject({
+      kind: 'rewind',
+      url: `${BASE}/dvr/key-1/a2/index.m3u8`,
+      startAtMs: targetMs + 4_000,
+    });
+    expect(run.session().state.entry).toMatchObject({ firstPdtMs: NOW - 30 * MIN });
   });
 });
 
