@@ -224,6 +224,9 @@ describe('createSwapPause — 멈춘 채 갈아 끼우기 표', () => {
   });
 });
 
+// 재생기의 pause 처리기는 takeAppPause 가 참이면 userPaused 를 부르지 않는다(useHlsPlayback.ts onPause). 그 분기는 여기서
+// 다시 짜지 않는다 — 아래는 표시 메서드의 결과만 보고, 분기 배선은 재생기 훅 시험(useHlsPlayback.dvr404.test.ts 의
+// holdFrame 넷)이 본다
 describe('createSwapPause — 앱이 건 멈춤 표시(POK-528 계획 4-1)', () => {
   it('앱이 곧 멈춘다고 적으면 다음 pause 하나만 앱 멈춤으로 먹는다', () => {
     const swap = createSwapPause();
@@ -240,20 +243,20 @@ describe('createSwapPause — 앱이 건 멈춤 표시(POK-528 계획 4-1)', () 
     expect(swap.takeAppPause()).toBe(false);
   });
 
-  it('앱 멈춤으로 먹은 pause 는 사람 멈춤이 아니다 — 넘김 되돌림이 표를 걸지 않는다', () => {
+  it('앱 멈춤 표시를 먹어도 사람 멈춤으로 적히지 않는다 — 넘김 되돌림이 표를 걸지 않는다', () => {
     const swap = createSwapPause();
     swap.appPausing();
-    // 재생기의 pause 처리기 꼴 — 앱 멈춤이면 사람 멈춤으로 적지 않는다
-    if (!swap.takeAppPause()) swap.userPaused();
+    expect(swap.takeAppPause()).toBe(true);
     swap.keepIfUserPaused(3);
     expect(swap.holds(4)).toBe(false);
   });
 
-  it('표시를 먹은 뒤의 pause 는 지금처럼 사람 멈춤이라 넘김 되돌림이 표를 건다', () => {
+  it('표시를 먹은 뒤의 사람 멈춤은 지금처럼 넘김 되돌림이 표를 건다 — 표시가 남아 삼키지 않는다', () => {
     const swap = createSwapPause();
     swap.appPausing();
-    swap.takeAppPause();
-    if (!swap.takeAppPause()) swap.userPaused();
+    expect(swap.takeAppPause()).toBe(true);
+    expect(swap.takeAppPause()).toBe(false);
+    swap.userPaused();
     swap.keepIfUserPaused(3);
     expect(swap.holds(4)).toBe(true);
   });

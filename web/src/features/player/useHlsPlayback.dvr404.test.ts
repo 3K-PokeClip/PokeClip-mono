@@ -80,9 +80,14 @@ class FakeHls {
     this.on(event, wrapped);
   }
   trigger(event: string, data: unknown) {
-    const { details } = (data ?? {}) as { details?: Details };
-    if (details !== undefined) this.latestLevelDetails = details;
-    for (const h of this.handlers.get(event) ?? []) h(event, data);
+    // 목록은 목록 사건에서만 갈아 끼운다 — ERROR 자료의 details 는 오류 갈래 문자열이다(hls.js ErrorData)
+    if (event === FakeHls.Events.LEVEL_LOADED || event === FakeHls.Events.LEVEL_UPDATED) {
+      // 목록 사건의 자료는 늘 목록을 싣는다(hls.js LevelLoadedData · LevelUpdatedData 의 details)
+      this.latestLevelDetails = (data as { details: Details }).details;
+    }
+    for (const h of this.handlers.get(event) ?? []) {
+      h(event, data);
+    }
   }
   attachMedia() {}
 }
@@ -96,7 +101,7 @@ const S = F + SESSION_MARGIN_MS;
 
 /** 새 목록 — 첫 조각 firstMs(영상 0초) · segmentS 초 조각 n 개 · 미닫이 live 목록 */
 function details(firstMs: number, segmentS: number, n = 10): Details {
-  const fragments = [...Array(n).keys()].map((i) => ({
+  const fragments = Array.from({ length: n }, (_, i) => ({
     start: i * segmentS,
     duration: segmentS,
     programDateTime: firstMs + i * segmentS * 1_000,
@@ -163,9 +168,8 @@ describe('(가) 의 시작 하한 추정 S — 새 재생기가 실제로 받는
     const onNotice = vi.fn();
     const shifted = F + 4_000;
     const hls = await bootAtS(details(shifted, 4), { onNotice });
-    // 영상 12초 = F′ + 12초 = S + 4초
+    // 영상 12초 = F′ + 12초 = S + 4초(F′ = F + 4초 · S = F + 12초) — 세션이 넘긴 S 보다 한 조각 뒤에서 받는다
     expect(hls.startLoad.mock.calls).toEqual([[12]]);
-    expect(shifted + 12_000 - S).toBe(4_000);
     expect(onNotice).not.toHaveBeenCalled();
   });
 });

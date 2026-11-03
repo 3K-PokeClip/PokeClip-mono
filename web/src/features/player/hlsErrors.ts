@@ -26,7 +26,9 @@ export function isPlaylistLoadError(
  * init 404 는 앱에 미디어 조각의 오류로 온다 — hls.js 가 미디어 조각 받기 앞의 init 받기가 거절되면 frag 를 그 미디어
  * 조각으로 바꿔 끼운 뒤 올린다(base-stream-controller.ts 815-823). 그래서 sn 이 아니라 실패한 파일(response.url —
  * fragment-loader.ts 118-126 이 받던 조각의 url 로 채운다)이 그 조각의 init 인지로 가른다. sn 조건(hls.js isMediaFragment
- * 와 같은 식)은 init 조각 자체로 온 꼴을 위해 둔다. 한계: init 과 미디어가 같은 url(한 파일 byterange)이면 가르지 못한다 —
+ * 와 같은 식)은 방어 조건이다 — 1.7.3 은 받기 중이면 늘 바꿔 끼워 올려 init 조각 자체(sn 'initSegment')로는 오지 않는다.
+ * 원본에서 찾은 예외는 거절 때 국면이 이미 STOPPED · ERROR 인 경우다: 바꿔 끼우지 않고 다시 던져(815-818) 바깥 Promise.all
+ * 의 catch(1171)가 init 조각 그대로 올릴 수 있다. 한계: init 과 미디어가 같은 url(한 파일 byterange)이면 가르지 못한다 —
  * MediaMTX 는 init 을 별도 파일로 낸다
  * @param types hls.js 의 ErrorTypes
  * @param details hls.js 의 ErrorDetails. 재생기는 hls.js 를 동적으로 읽으므로 두 값을 넘겨받는다(번들 분리)

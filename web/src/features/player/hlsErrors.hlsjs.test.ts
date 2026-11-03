@@ -21,7 +21,8 @@ import { consumeDvrSegmentGone, isMediaSegmentNotFound, isPlaylistLoadError } fr
 // 비치명으로 다시 받고 그 뒤 치명으로 올린다(앞 조각은 틈으로 넘긴다). 변이가 아예 없으면 처음부터 치명이다(error-controller
 // onErrorOut). 오류 처리기는 생성 때 등록돼(hls.ts 354-356) 앱 처리기보다 먼저 돈다
 
-const quiet = () => {};
+function quiet() {}
+
 const SILENT = { trace: quiet, debug: quiet, log: quiet, warn: quiet, info: quiet, error: quiet };
 
 const instances: Hls[] = [];
@@ -496,14 +497,14 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
     ['live-last', 'FRAG_LOADING_WAITING_RETRY'],
     ['endlist', 'FRAG_LOADING_WAITING_RETRY'],
   ])(
-    '전제 — 가로채지 않으면(고리 없음) %s 404 뒤 hls.js 가 받기를 다시 연다(앱 처리기가 볼 때 국면 %s)',
+    '전제 — 앱이 가로채지 않으면 %s 404 뒤 hls.js 가 받기를 다시 연다(앱 처리기가 볼 때 국면 %s)',
     (branch, stateSeenByApp) => {
       fakeClock();
       const player = rewindPlayerLoading(branch);
+      // 전제는 hls.js 의 상태만 본다 — 제품 판정(consumeDvrSegmentGone)을 부르지 않는다
       const seen: string[] = [];
-      player.hls.on(Events.ERROR, (_event, data) => {
+      player.hls.on(Events.ERROR, () => {
         seen.push(player.streamController.state);
-        expect(consumeDvrSegmentGone(player.hls, data, ErrorTypes, ErrorDetails)).toBe(false);
       });
       raiseMedia404(player.hls, player.frag);
       expect(seen).toEqual([stateSeenByApp]);
@@ -514,16 +515,22 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
     },
   );
 
+  /** 가로채기 판정을 앱 처리기 자리에 단다 — 판정 결과를 차례로 모은다 */
+  function intercept(player: LoadingPlayer, onGone: () => void): boolean[] {
+    const consumed: boolean[] = [];
+    player.hls.on(Events.ERROR, (_event, data) => {
+      consumed.push(consumeDvrSegmentGone(player.hls, data, ErrorTypes, ErrorDetails, onGone));
+    });
+    return consumed;
+  }
+
   it.each<GoneBranch>(['live-middle', 'live-last', 'endlist'])(
-    '%s 404 를 가로채면 STOPPED · 주기 tick 없음 · 다음 tick 없음 · 고리 1 · 제어면 지연 60초 동안 받기 0',
+    '%s 404 를 가로채면 STOPPED · 주기 tick 없음 · 다음 tick 없음 · 고리 1',
     (branch) => {
       fakeClock();
       const player = rewindPlayerLoading(branch);
       const onGone = vi.fn();
-      const consumed: boolean[] = [];
-      player.hls.on(Events.ERROR, (_event, data) => {
-        consumed.push(consumeDvrSegmentGone(player.hls, data, ErrorTypes, ErrorDetails, onGone));
-      });
+      const consumed = intercept(player, onGone);
       raiseMedia404(player.hls, player.frag);
       // 상태 단언(1차 증거)
       expect(consumed).toEqual([true]);
@@ -531,13 +538,45 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
       expect(player.streamController.state).toBe('STOPPED');
       expect(player.streamController.hasInterval()).toBe(false);
       expect(player.streamController.hasNextTick()).toBe(false);
-      vi.advanceTimersByTime(CONTROL_DELAY_MS);
-      // 요청 관측(2차 증거 — 판별력은 위 전제 시험과 변이 M5a 로 교정)
-      expect(player.loads()).toBe(0);
-      expect(player.fragLoadings()).toBe(0);
-      expect(player.streamController.state).toBe('STOPPED');
     },
   );
+
+  // 요청 관측(2차 증거)은 상태 단언과 따로 둔다 — 상태 단언이 먼저 끊기면 받기 수가 기록되지 않는다(c5 검수 이연 M ·
+  // 변이 M5a). 관측을 다 모은 뒤 한 번에 견주어, 실패하면 받기 수가 그대로 출력에 남는다
+  it.each<GoneBranch>(['live-middle', 'live-last', 'endlist'])(
+    '%s 404 를 가로채면 제어면 지연 60초 동안 받기 0 · 받기 시작 사건 0 · 그 뒤에도 STOPPED',
+    (branch) => {
+      fakeClock();
+      const player = rewindPlayerLoading(branch);
+      const consumed = intercept(player, vi.fn());
+      raiseMedia404(player.hls, player.frag);
+      vi.advanceTimersByTime(CONTROL_DELAY_MS);
+      expect({
+        consumed,
+        loads: player.loads(),
+        fragLoadings: player.fragLoadings(),
+        state: player.streamController.state,
+      }).toEqual({ consumed: [true], loads: 0, fragLoadings: 0, state: 'STOPPED' });
+    },
+  );
+
+  it('고리가 없으면 미디어 404 라도 가로채지 않는다 — 판정 거짓 · stopLoad 0(지금 동작)', () => {
+    fakeClock();
+    const player = rewindPlayerLoading('live-middle');
+    // 가로채기가 부르는 stopLoad 만 센다
+    const interceptor = { stopLoad: vi.fn() };
+    const seen: Array<{ media404: boolean; consumed: boolean }> = [];
+    player.hls.on(Events.ERROR, (_event, data) => {
+      seen.push({
+        media404: isMediaSegmentNotFound(data, ErrorTypes, ErrorDetails),
+        consumed: consumeDvrSegmentGone(interceptor, data, ErrorTypes, ErrorDetails),
+      });
+    });
+    raiseMedia404(player.hls, player.frag);
+    // 판별은 참인 자료다 — 거짓은 고리가 없어서다
+    expect(seen).toEqual([{ media404: true, consumed: false }]);
+    expect(interceptor.stopLoad).not.toHaveBeenCalled();
+  });
 
   it('init 404 는 가로채지 않는다 — 고리 0 · 가로채기의 stopLoad 0(hls.js 의 지금 경로 그대로)', async () => {
     const { hls, streamController } = rewindPlayerEndingWith(() => ({ code: 404 }));

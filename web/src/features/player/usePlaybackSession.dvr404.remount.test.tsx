@@ -91,9 +91,14 @@ class FakeHls {
     this.on(event, wrapped);
   }
   trigger(event: string, data: unknown) {
-    const { details } = (data ?? {}) as { details?: Details };
-    if (details !== undefined) this.latestLevelDetails = details;
-    for (const h of this.handlers.get(event) ?? []) h(event, data);
+    // 목록은 목록 사건에서만 갈아 끼운다 — ERROR 자료의 details 는 오류 갈래 문자열이다(hls.js ErrorData)
+    if (event === FakeHls.Events.LEVEL_LOADED || event === FakeHls.Events.LEVEL_UPDATED) {
+      // 목록 사건의 자료는 늘 목록을 싣는다(hls.js LevelLoadedData · LevelUpdatedData 의 details)
+      this.latestLevelDetails = (data as { details: Details }).details;
+    }
+    for (const h of this.handlers.get(event) ?? []) {
+      h(event, data);
+    }
   }
   attachMedia() {}
 }
@@ -384,7 +389,8 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     segmentGone(rewindHls);
     await settle();
     expect(current().state.phase).toMatchObject({ kind: 'rewind', recheck: true });
-    // 덮개 없는 국면 — 덮개 · 주소가 그대로여도 세대만으로 풀려야 한다(K3)
+    // 덮개 없는 국면 — 덮개 · 주소가 그대로여도 세대가 올라 풀리는지 끝단에서 본다. 값만 바뀐 다시 그리기에 새
+    // startHeld 를 싣는지(K3 · useMemo 의존)는 이 시험이 가르지 못한다 — 판별은 useLiveRewindPlayback.test.ts 단위 시험
     expect(current().view).toMatchObject({ cover: null, startHeld: true });
     const created = fake.instances.length;
     const played = playCalls();

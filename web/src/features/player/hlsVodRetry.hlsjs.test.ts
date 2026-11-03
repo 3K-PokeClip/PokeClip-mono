@@ -25,10 +25,11 @@ import { HLS_REWIND_CONFIG } from './hlsConfig';
 // useHlsPlayback.vod404.test.ts 가 본다. /vod 문서 404 는 조각과 다르다 — 멀티변이 목록 404 는 앱이 다시 받아도 다시 청하지
 // 않아 두 번째 치명이 없다(맨 아래 묶음 · POK-528 c6 X1).
 
-const quiet = () => {};
+function quiet() {}
+
 const SILENT = { trace: quiet, debug: quiet, log: quiet, warn: quiet, info: quiet, error: quiet };
 
-const PLAYLIST_URL = 'https://m/dvr/k/a/index.m3u8';
+const PLAYLIST_URL = 'https://m/vod/k/a/index.m3u8';
 
 /** 기본 재시도 간격(ms) — 1초에서 두 배씩, 8초에서 멈춘다(getRetryDelay) */
 const DEFAULT_RETRY_GAPS_MS = [1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
@@ -50,18 +51,20 @@ interface StreamControllerInternals {
 }
 
 interface VodPlayer {
-  hls: Hls;
-  streamController: StreamControllerInternals;
+  readonly hls: Hls;
+  readonly streamController: StreamControllerInternals;
   /** 조각 받기마다 그때의 performance.now()(재시도 시각 비교에 hls.js 가 쓰는 시계 — checkRetryDate) */
-  loadTimes: number[];
+  readonly loadTimes: number[];
   /** 앱 처리기가 본 오류 */
-  errors: ErrorData[];
+  readonly errors: ErrorData[];
 }
 
 const instances: Hls[] = [];
 
 afterEach(() => {
-  for (const hls of instances.splice(0)) hls.destroy();
+  for (const hls of instances.splice(0)) {
+    hls.destroy();
+  }
   vi.useRealTimers();
 });
 
@@ -70,6 +73,23 @@ function fakeClock(): void {
   vi.useFakeTimers({
     toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'],
   });
+}
+
+/**
+ * 앱의 치명 처리(useHlsPlayback.ts 778-783)를 같은 자리에 단다 — 첫 치명 네트워크 오류의 처리기 안에서 동기로 위치 없이
+ * startLoad 한 번. hls.js 자신의 처리기(error-controller 의 stopLoad 등)는 생성 때 등록돼 이보다 먼저 돈다
+ * @returns 앱 꼴로 부른 startLoad 수 — 위치 없는 부름만 센다. hls.js 의 자동 시작도 hls.startLoad 를 거치지만 늘 위치를
+ *     싣는다(playlist-loader.ts 398 checkAutostartLoad 의 startPosition)
+ */
+function recoverLikeApp(hls: Hls): () => number {
+  const startLoad = vi.spyOn(hls, 'startLoad');
+  let recovered = false;
+  hls.on(Events.ERROR, (_event, data) => {
+    if (!data.fatal || data.type !== ErrorTypes.NETWORK_ERROR || recovered) return;
+    recovered = true;
+    hls.startLoad();
+  });
+  return () => startLoad.mock.calls.filter((args) => args.length === 0).length;
 }
 
 function fragmentAt(sn: number): Fragment {
@@ -83,14 +103,14 @@ function fragmentAt(sn: number): Fragment {
 }
 
 /**
- * 다시보기 재생기 꼴 — 앱의 vod 재생기 설정(HLS_REWIND_CONFIG · useHlsPlayback.ts 657) · 변이 하나 · ENDLIST 목록(조각 둘)
+ * 다시보기 재생기 꼴 — 앱의 vod 재생기 설정(HLS_REWIND_CONFIG · useHlsPlayback.ts 694) · 변이 하나 · ENDLIST 목록(조각 둘)
  * · 미디어가 붙은 채 받기 직전(IDLE). 조각 받기는 진짜 FragmentLoader 가 하고, 그 아래 망만 가짜 fLoader 가 늘 404 로 끝낸다.
  * hls.js 안쪽 칸은 hlsErrors.hlsjs.test.ts 의 되감기 재생기 꼴과 같이 채운다(목록 받기를 건너뛰려고)
  */
 function vodPlayerAlways404(): VodPlayer {
   const loadTimes: number[] = [];
   class NotFoundLoader {
-    stats = new LoadStats();
+    readonly stats = new LoadStats();
     load(...[context, , callbacks]: LoadArgs) {
       loadTimes.push(performance.now());
       queueMicrotask(() => {
@@ -102,7 +122,7 @@ function vodPlayerAlways404(): VodPlayer {
   }
   const hls = new Hls({
     ...HLS_REWIND_CONFIG,
-    // 시험 전용 망 — 제품의 「커스텀 loader 금지」(useHlsPlayback.ts 760)와 무관하다
+    // 시험 전용 망 — 제품의 「커스텀 loader 금지」(useHlsPlayback.ts 806)와 무관하다
     fLoader: NotFoundLoader as unknown as HlsConfig['fLoader'],
     debug: SILENT,
   });
@@ -213,13 +233,12 @@ describe('다시보기 조각 404 — 진짜 hls.js 1.7.3 의 기본 재시도(P
   it('치명 뒤 앱의 한 번 다시 받기(startLoad)는 같은 꼴을 한 바퀴 더 돈다 — 감춤 약 31초 × 2', async () => {
     fakeClock();
     const player = vodPlayerAlways404();
-    await vi.advanceTimersByTimeAsync(ROUND_MS + AFTER_FATAL_MS);
-    expect(player.loadTimes).toHaveLength(LOADS_PER_ROUND);
-    // 앱의 치명 처리와 같은 부름(useHlsPlayback.ts 778-783 — 위치 없이 startLoad)
-    player.hls.startLoad();
-    await vi.advanceTimersByTimeAsync(ROUND_MS + AFTER_FATAL_MS);
+    // 앱과 같은 시점 — 첫 치명의 처리기 안에서 곧바로 startLoad(c6 X2)
+    const appStartLoads = recoverLikeApp(player.hls);
+    await vi.advanceTimersByTimeAsync(2 * (ROUND_MS + AFTER_FATAL_MS));
+    expect(appStartLoads()).toBe(1);
+    expect(player.loadTimes).toHaveLength(2 * LOADS_PER_ROUND);
     const second = player.loadTimes.slice(LOADS_PER_ROUND);
-    expect(second).toHaveLength(LOADS_PER_ROUND);
     expect(gaps(second)).toEqual(DEFAULT_RETRY_GAPS_MS);
     expect(player.errors.slice(LOADS_PER_ROUND).map((data) => data.fatal)).toEqual([
       false,
@@ -247,28 +266,30 @@ const MULTIVARIANT_TEXT = [
 
 /** 목록 받기 요청 하나 — url 과 그때의 performance.now() */
 interface DocumentRequest {
-  url: string;
-  atMs: number;
+  readonly url: string;
+  readonly atMs: number;
 }
 
 interface DocumentPlayer {
   /** 목록 받기 요청(차례대로) */
-  requests: DocumentRequest[];
+  readonly requests: DocumentRequest[];
   /** 앱 처리기가 본 오류 */
-  errors: ErrorData[];
+  readonly errors: ErrorData[];
+  /** 앱이 부른 startLoad 수(recoverLikeApp) — 처리기가 돌지 않으면 「다시 청하지 않는다」 가 공허하게 맞는다 */
+  readonly appStartLoads: () => number;
 }
 
 /**
  * 다시보기 재생기를 앱처럼 세운다(HLS_REWIND_CONFIG · loadSource). 목록 망만 가짜 pLoader 로 바꾼다. 앱 처리기는
- * useHlsPlayback 의 ERROR 처리기와 같은 자리에서 돈다 — 첫 치명 네트워크 오류 안에서 동기로 위치 없이 startLoad 한 번
- * (useHlsPlayback.ts 778-783). 멀티변이 갈래는 미디어를 붙인다. 변이 갈래는 jsdom 에 MediaSource 가 없어 코덱 검사
- * (level-controller 의 MANIFEST_INCOMPATIBLE_CODECS_ERROR)를 넘으려고 isTypeSupported 만 가진 MediaSource 를 끼우고,
+ * useHlsPlayback 의 ERROR 처리기와 같은 자리에서 돈다(recoverLikeApp). 멀티변이 갈래는 미디어를 붙인다. 변이 갈래는
+ * jsdom 에 MediaSource 가 없어 코덱 검사(level-controller 의 MANIFEST_INCOMPATIBLE_CODECS_ERROR)를 넘으려고
+ * isTypeSupported 만 가진 MediaSource 를 끼우고,
  * 그것으로는 미디어를 붙일 수 없어 붙이지 않는다 — 목록 받기는 미디어 없이도 돈다
  */
 function vodDocumentGone(gone: DocumentGone): DocumentPlayer {
   const requests: DocumentRequest[] = [];
   class DocumentLoader {
-    stats = new LoadStats();
+    readonly stats = new LoadStats();
     load(...[context, , callbacks]: LoadArgs) {
       requests.push({ url: context.url, atMs: performance.now() });
       const found = gone === 'variant' && context.url === VOD_MULTIVARIANT_URL;
@@ -296,20 +317,17 @@ function vodDocumentGone(gone: DocumentGone): DocumentPlayer {
   });
   instances.push(hls);
   const errors: ErrorData[] = [];
-  let recovered = false;
   hls.on(Events.ERROR, (_event, data) => {
     errors.push({ ...data });
-    if (!data.fatal || data.type !== ErrorTypes.NETWORK_ERROR || recovered) return;
-    recovered = true;
-    hls.startLoad();
   });
+  const appStartLoads = recoverLikeApp(hls);
   if (gone === 'variant') {
     vi.stubGlobal('MediaSource', { isTypeSupported: () => true });
   } else {
     hls.attachMedia(document.createElement('video'));
   }
   hls.loadSource(VOD_MULTIVARIANT_URL);
-  return { requests, errors };
+  return { requests, errors, appStartLoads };
 }
 
 describe('/vod 문서 404 — 진짜 hls.js 1.7.3 이 앱의 한 번 다시 받기에 다시 청하는가(POK-528 c6 X1)', () => {
@@ -325,6 +343,7 @@ describe('/vod 문서 404 — 진짜 hls.js 1.7.3 이 앱의 한 번 다시 받�
     fakeClock();
     const player = vodDocumentGone('multivariant');
     await vi.advanceTimersByTimeAsync(AFTER_FATAL_MS);
+    expect(player.appStartLoads()).toBe(1);
     expect(player.requests).toEqual([{ url: VOD_MULTIVARIANT_URL, atMs: 0 }]);
     expect(player.errors.map((data) => [data.details, data.fatal, data.response?.code])).toEqual([
       [ErrorDetails.MANIFEST_LOAD_ERROR, true, 404],
@@ -338,6 +357,7 @@ describe('/vod 문서 404 — 진짜 hls.js 1.7.3 이 앱의 한 번 다시 받�
     fakeClock();
     const player = vodDocumentGone('variant');
     await vi.advanceTimersByTimeAsync(AFTER_FATAL_MS);
+    expect(player.appStartLoads()).toBe(1);
     expect(player.requests).toEqual([
       { url: VOD_MULTIVARIANT_URL, atMs: 0 },
       { url: VOD_VARIANT_URL, atMs: 0 },

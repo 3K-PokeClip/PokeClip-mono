@@ -33,16 +33,16 @@ vi.mock('hls.js', () => ({ default: FakeHls }));
 type Handler = (event: string, data: unknown) => void;
 
 class FakeHls {
-  static isSupported = () => true;
-  static Events = {
+  static readonly isSupported = () => true;
+  static readonly Events = {
     MANIFEST_PARSED: 'hlsManifestParsed',
     LEVEL_LOADED: 'hlsLevelLoaded',
     LEVEL_UPDATED: 'hlsLevelUpdated',
     FRAG_LOADED: 'hlsFragLoaded',
     ERROR: 'hlsError',
   };
-  static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
-  static ErrorDetails = {
+  static readonly ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+  static readonly ErrorDetails = {
     FRAG_LOAD_ERROR: 'fragLoadError',
     INTERNAL_ABORTED: 'aborted',
     MANIFEST_LOAD_ERROR: 'manifestLoadError',
@@ -78,13 +78,17 @@ class FakeHls {
     if (event === FakeHls.Events.LEVEL_LOADED || event === FakeHls.Events.LEVEL_UPDATED) {
       this.latestLevelDetails = (data as { details: unknown }).details;
     }
-    for (const h of this.handlers.get(event) ?? []) h(event, data);
+    for (const h of this.handlers.get(event) ?? []) {
+      h(event, data);
+    }
   }
   attachMedia() {}
 }
 
 const VOD_URL = 'https://m/vod/k/a1/index.m3u8';
 const REWIND_URL = 'https://m/dvr/k/a1/index.m3u8';
+// 조각 url 의 경로(/dvr · /vod)는 결과와 무관하다 — 판별이 url 로 보는 것은 실패한 파일이 그 조각의 init 인가뿐이다
+// (isMediaSegmentNotFound). 그래서 vod · rewind 행이 같은 꼴을 쓴다
 const MEDIA_SEGMENT = 'https://m/dvr/k/a1/seg7.mp4';
 const INIT_SEGMENT = 'https://m/dvr/k/a1/init.mp4';
 
@@ -167,7 +171,9 @@ function raise(hls: FakeHls, data: unknown) {
 
 /** hls.js 기본 재시도 한 바퀴 — 비치명 6번 뒤 치명 하나 */
 function raiseDefaultRound(hls: FakeHls) {
-  for (let i = 0; i < DEFAULT_FRAG_RETRIES; i += 1) raise(hls, fragGone(false));
+  for (let i = 0; i < DEFAULT_FRAG_RETRIES; i += 1) {
+    raise(hls, fragGone(false));
+  }
   raise(hls, fragGone(true));
 }
 
@@ -186,7 +192,9 @@ describe('다시보기 조각 404 의 앱 한 번 다시 받기(POK-528 c6 · W8
   it('vod + 고리 — 비치명 6번엔 앱이 손대지 않고, 첫 치명에 startLoad 1 · 고리 0 · 끊김 0', async () => {
     const onDvrSegmentGone = vi.fn();
     const { result, hls } = await mount(sourceOf('vod', 3), { onDvrSegmentGone });
-    for (let i = 0; i < DEFAULT_FRAG_RETRIES; i += 1) raise(hls, fragGone(false));
+    for (let i = 0; i < DEFAULT_FRAG_RETRIES; i += 1) {
+      raise(hls, fragGone(false));
+    }
     expect(hls.startLoad).not.toHaveBeenCalled();
     expect(hls.stopLoad).not.toHaveBeenCalled();
     raise(hls, fragGone(true));
@@ -227,7 +235,7 @@ describe('다시보기 조각 404 의 앱 한 번 다시 받기(POK-528 c6 · W8
   // startLoad 는 빈 몸통(hls.js src/loader/playlist-loader.ts 86) · stream-controller 는 levels 가 없으면 STOPPED 로만
   // 둔다(src/controller/stream-controller.ts 191-193). 실물 층이 「요청 1 · 두 번째 치명 없음」 을 본다. 그래서 끊김 알림이
   // 서지 않고, 재생기가 세션에 올리는 고리도 없다(kind 'live' 만 목록 404 를 라이브 닫힘으로 올린다 — useHlsPlayback.ts
-  // 765-776). 세션에 들어가는 사건이 없으니 세션도 따로 알리지 않는다(vod 국면 고유 행은 시크뿐 — rewindSwitch.ts 616-620).
+  // 765-776). 세션에 들어가는 사건이 없으니 세션도 따로 알리지 않는다(vod 국면 고유 행은 시크뿐 — rewindSwitch.ts onVod).
   // 지금 동작 = 알림 없이 멈춤(kty 확인 후보 · 화면에 무엇이 남는지는 브라우저 미관찰)
   it('/vod 멀티변이 목록 404 — 첫 치명에 startLoad 1 · 그 뒤 두 번째 치명이 오지 않아 끊김 알림 없음 · 세션 고리 0(알림 없이 멈춤)', async () => {
     const hooks = sessionHooks();
