@@ -145,6 +145,15 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     `service_ports.auth`)와 같아야 합니다 — 다르면 plan 이 멈춥니다(POK-477).
 *   `rewind_bucket_arn` 에서 버킷 이름을 꺼내 사이드카 `S3_BUCKET` 으로
     넘깁니다.
+*   `broadcast_topic_arn`(필수)은 사이드카 `loadLifecycle` 과 같은 판정으로
+    봅니다 — `arn:<파티션>:sns:<지역>:<12자리 계정>:<이름>.fifo`(파티션은 보지
+    않습니다). 인스턴스 역할 `BroadcastPublish`(`sns:Publish` · 그 주제
+    하나)는 발행 목록과 무관하게 늘 있습니다.
+*   `lifecycle_publish_streams` 의 항목은 `*` 또는 26자 Crockford base32
+    대문자입니다 — 사이드카는 항목을 검증하지 않고 꼴이 틀린 항목의 회차를
+    오류 없이 버립니다. 옛 모드(`ingest_auth_image` 빈 값)에서 채우면 plan 이
+    멈춥니다. 사이드카 env 두 줄은 응답기 모드이고 목록이 찰 때만
+    렌더합니다.
 *   `playback_round_keys`(bool · 기본 `false` · null 은 기본값으로)는 새 꼴
     쓰기 스위치입니다. `/etc/pokeclip-media/sidecar.env` 에 정확히 한 줄
     `PLAYBACK_ROUND_KEYS=true|false` 로 렌더해 첫 부팅에 한 번 씁니다(두 모드
@@ -170,6 +179,10 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 `terraform -chdir=infra/terraform/modules/media_host test`(mock provider).
 
 *   정책 문서의 `json` 은 mock 이 지어내므로 `statement` 입력을 직접 봅니다.
+    예외는 `tests/broadcast_publish_policy.tftest.hcl` 하나입니다 — 정책
+    문서만 진짜 provider 로 계산하고(가짜 자격 · AWS 호출 없음) 나머지 자원 ·
+    data 는 모두 override 해, 실제 정책 JSON 에서 `BroadcastPublish` 를
+    봅니다. 모듈에 자원을 더하면 그 파일에도 `override_resource` 를 더합니다.
 *   compose · nginx 렌더본은 저장소 템플릿을 같은 변수로 다시 렌더한 값과
     같은지, 템플릿 변수 키 집합은 `infra/media-host/test/render_vars.json` 과
     같은지 봅니다.

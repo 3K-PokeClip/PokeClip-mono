@@ -36,6 +36,7 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
 | 처음 기동(O7e) | 「O7e — 처음 기동」 | 없음 |
 | 상자 교체 · AMI 갱신 | 「정상 교체」 | 없는 시간대 |
 | 설정을 바꿈(M15 · O8a · I1-6 반영 · 다이제스트 · 판 · janitor) | 「설정 반영 교체」 → 「정상 교체」 | 없는 시간대 |
+| O8 앞에 응답기 모드로 바꾸며 계약9 발행을 켬(kty 2026-11-03) | 「O8a 당김 교체」 — 정상 교체와 순서가 다름 | 없는 시간대 · 송출 금지 구간 |
 | 방송이 있는데 바꿔야 함 | 「force」 | 있음 |
 | apply 가 중간에 실패함 | 「부분 실패 복구」 | — |
 | O7e 가 이미 끝나 하한 아래 사이드카가 도는 prod 에 M6 운영 SQL 을 적용함(대비 — 새 O7e 는 이 길로 가지 않음) | 「한 창 절차」 | 없는 시간대 |
@@ -118,6 +119,7 @@ terraform -chdir=infra/terraform/prod/media apply "${work}/media.plan"
 | ingest 전환 | `delete,create module.media_host.aws_lb_target_group_attachment.ingest` 한 줄 — NLB 대상 등록 교체만 |
 | http 전환 | `delete,create module.media_host.aws_lb_target_group_attachment.http["live"]` · `["control"]` · `["playback"]` 세 줄 — ALB 대상 등록 교체 3건만 |
 | A 회수 | `delete module.media_host.aws_instance.this["<A>"]` 한 줄 |
+| O8a 당김 B 기동 | `create module.media_host.aws_instance.this["<B>"]` 한 줄 + `update module.media_host.aws_iam_role_policy.media` 한 줄(`BroadcastPublish` — 「O8a 당김 교체」 걸음 0 의 Sid 목록에 `RewindDelete` 가 없으면 그 문도). user_data 차분은 「변경 있음」 만, 정책 차분은 Sid · 동작만 옮깁니다(주제 ARN 원문 금지) |
 
 *   설정 반영 교체의 B 기동에서 공유 자원(인스턴스 역할 정책 · SG 규칙 ·
     거부 목록 파라미터)이 함께 바뀌면, 그 변경이 이번 설정 변경의 의도인지
@@ -1115,6 +1117,283 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
 *   compose 판을 바꾸면 `compose_sha256` 도 함께 바꿉니다. 하나만 바꾸면 B 가
     `MEDIA PREREQ FAIL compose-version` 으로 막힙니다 — 그대로 B 를 회수하고
     고칩니다.
+
+## O8a 당김 교체 — 발행 켠 B 로 옮길 때
+
+O8 앞(kty 2026-11-03 — O8a 1–4 를 O8 앞으로 당김)에 옛 모드 A 를 응답기
+모드 B 로 바꾸면서, 같은 교체에서 사이드카 계약9 발행(broadcast.started ·
+ended → SNS FIFO → clip · chat 큐)을 시험 계정 하나에만 켭니다. NLB 공개
+(O8a 5) · `8a` 묶음 · 주기 판정은 O8 뒤 그대로입니다. 실행자 · 승인 규칙은
+이 런북 머리와 같고, 직전 점검은
+[단계 직전 점검 런북](/infra/terraform/runbooks/stage-precheck.md) 의 「O8a
+당김 교체」 행입니다.
+
+**정상 교체와 다른 점 넷:**
+
+1.  **루프백은 A 정지 뒤입니다**(정상 교체 3 은 전환 전). 루프백도 시험
+    회차를 만들고, 게이트가 꺼진 A 사이드카가 그 회차를 닫으면 ended 가 영영
+    적재되지 않습니다.
+1.  **A 는 전환 직후 정지하고 유닛을 disable 합니다.** 인스턴스는 롤백
+    대상으로 하루 남기되 띄워 두지 않습니다(정상 교체 8 의 「하루 관찰」 동안
+    A 가 떠 있지 않음).
+1.  **롤백은 발행 잔여 질의 Q1–Q3 를 본 뒤에만** 합니다(질의는
+    [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md) 「발행 잔여
+    질의」 · 순서는 아래 「O8a 당김 — 롤백」).
+1.  **발행 목록 계정이 송출하는 동안 운영 감시(M-B · M-A)를 돕니다**(아래
+    「운영 감시」).
+
+**게이트 공존 규칙:** 같은 DB 에 붙은 사이드카는 모두 게이트가 켜져 있어야
+합니다 — media-host README 「계약9 발행」. 꺼졌을 수 있는 사이드카(옛 모드 ·
+빈 목록 · 기동 판정 전)를 DB 에 붙이기 전에는 아래 송출 금지 구간을 열고
+Q1 = 0 · `rounds` ≥ 1 을 봅니다(시험 회차가 생기기 전이면 Q4 0 행).
+
+**송출 금지 구간:** kty · 시험 계정을 포함해 팀 IP 에서 송출하는 누구도
+송출하지 않습니다(O8a 5 전이라 NLB 인바운드는 팀 IP 뿐). 기계 차단이 없는
+사람의 규칙이라 시작 · 끝 시각을 `date` 출력으로 적고, 구간 안의 판정
+직전에 B 의 `PATHS` 를 한 번 더 봅니다.
+
+*   (ㄱ) 걸음 8(B 기동 판정) – 12(A 정지 · 차단).
+*   (ㄴ) 걸음 32(목록 `*` 인 C 로 교체)의 Q1 확인부터 B 정지 · 차단까지.
+*   (ㄷ) 롤백 · 발행 끄기 교체의 Q1 확인부터 옛 상자 정지 · 차단까지.
+
+### O8a 당김 교체 걸음
+
+| 걸음 | 동작 | 통과 | 실패 시 · 멈춤 |
+|---|---|---|---|
+| 0-a | 읽기 확인 — A 사이드카 다이제스트가 M6 하한 이상인지(M6 정산 · 회차 닫힘 스캔을 도는 판인지) | 기록 | 다르면 kty 보고. 하한 아래면 롤백에 「한 창 절차 — A 를 다시 띄울 때」 조건을 더함(아래 롤백 표) |
+| 0-b | 런타임 출력 `broadcast_topic_arn` 실재(이름만 · 값 가림) | 출력 이름 있음 | 없으면 런타임 재적용 필요 → kty 회부 |
+| 0-c | 지금 적용된 역할 정책의 Sid 목록 | Sid 목록 기록 | 걸음 6 plan 기대를 이 결과로 정함 |
+| 0-d | 상자 root `cli_history` 꺼짐 | 꺼짐 | 켜져 있으면 kty 보고(비밀 동작 전) |
+| 0-e | Q4 기준선 | Q4 0 행 | 0 이 아니면 출처 확인 뒤 kty 보고 |
+| 0-f | P47 진입 경로 — 미디어 ALB 의 scheme · 리스너 · SG 출발지 · CloudFront 원본 검증 상태 · NLB SG 가 팀 IP 송출을 받는지 | 경로 기록(값 가림) | 팀 IP → NLB 송출 경로가 없으면 걸음 14 · 15 는 kty 회부(대안 설계 안 함) |
+| 0-g | 사이드카 시험의 「게이트 꺼짐이면 ended 생략」 사례 이름 | 사례 이름 | 없으면 POK-196 세션 통지(차단 아님) |
+| 0-h | POK-196 세션 통지 · 확인 — 발행 켜기 착수 · 게이트 공존 규칙 · 중복 여부 · 후속(사이드카 강등 근본 수정) 요청 | 회신(후속 수락 여부 포함) | 중복이면 kty 회부. 후속 거절이면 kty 회부(O8a 5 개통 조건이라) |
+| 0-i | A 차단 수단(아래 「A 차단」) | disable 만 · disable + mask 중 하나로 확정 | 판정 불가면 disable + mask(보수 — 롤백 ④ 에서 둘 다 되돌림). mask 가 실패하면 아래 「A 차단」 대로 kty 회부 |
+| 1–3 | PR 머지 → 응답기 이미지(재빌드 권장 · arm64) → 직전 점검(`O7e` 묶음 · `sns:Publish` 손 판정 · 2-3 · 이벤트) | 허용 · PASS · 예상 밖 이벤트 0 | 2 실패면 432e3495 사용. 3 이 거부 · 변경이면 멈추고 kty 보고 |
+| 4 | A 에서 resolve 미리 부르기(media-host README 「O8a 2 전 필수 조건」 5) | `code=200` | 실패면 4C 원인 해소 전 진행 금지 |
+| 5–6 | tfvars(응답기 다이제스트 · `stream_key_resolve_url` · `lifecycle_publish_streams = [<시험 ID>]` · `instances.b`) → plan 범위(위 표 「O8a 당김 B 기동」) → apply | 기대와 일치 | 기대 밖 차분이면 apply 안 함 |
+| 7 | (관찰) A 태그 저널 `lifecycle_disabled reason=no_topic` 건수 — 공유 역할 정책이 A 에도 걸렸지만 env 가 없어 발행하지 않음 | 기록 | — |
+| 8 | B 기동 판정(`start-check.sh ingest-auth,janitor,mediamtx,nginx,sidecar` · 관찰 판정) · 응답기 `ingestauth_started` 의 `"auth_channel":"resolve-token"` · `end_signal_disabled` 0 · `lifecycle-check.sh <걸음 8 시각>` · Q4 · 사이드카 컨테이너 id 기록. **(ㄱ) 시작** | `MEDIA START OK` · `MEDIA WATCH OK` · `M-B OK` · Q4 0 행 | `lifecycle_disabled` 면 B 에 송출하지 않고 B 를 고쳐 재교체. outbox 행이 없어 A 는 그대로 안전 |
+| 9–11 | 정상 교체 4(A · B `PATHS 0`) → 5(ingest) → 6 · 7(http · 일관성) | 정상 교체와 같음 | 9 가 0 이 아니면 멈춤. 10 · 11 의 되돌림 = 전환 역적용(outbox 0 행이라 조건 없음) |
+| 12 | A 정지 · 차단 — A 업로드 적체 0(「한 창 절차 7′」 의 앞 조건) → A `PATHS 0` → `stop.sh` → `stopped-check.sh` → `disable.sh` → `blocked-check.sh disabled` → Q4. **(ㄱ) 끝** | `M-A OK` · Q4 0 행 — DB 에 붙은 사이드카 = B 하나 | 적체가 안 빠지면 송출하지 않고 기다림 · 창을 넘기면 kty 보고 |
+| 13 | M-A · M-B · **`Q3_all` = 0**(시험 ID 의 열린 회차 — `started_at` 조건 없음) → B 루프백 `--passphrase` · 상자 안 익명 SRT 거부. 끝나면 종료 감시 | `LOOPBACK OK` · 익명 거부 | 실패면 아래 롤백 표 「걸음 12 뒤」 |
+| 14 | O8a 3 거부 셋(B `PATHS 0` 일 때 — 잘못된 passphrase · 익명 · 다른 사용자 경로) | 셋 다 거부 · outbox 행 수 변화 0 | 0-f 에서 송출 경로가 없었으면 kty 회부. 하나라도 수락되면 즉시 kty 보고 · O8 금지 · 그 회차도 시험 회차로 종료 판정 |
+| 15 | 유지 시험 송출(팀 IP → NLB → B · O8a 3 정상 키 · O8a 4 출발지 보존) — 22 끝까지. 송출 감시 시작 | B `PATHS` 1 | 0-f 에서 송출 경로가 없었거나 붙지 않으면 kty 회부 |
+| 16 | 상자 루프백 `…/<시험 ID>/index.m3u8?cookieCheck=1` — Bearer 없이 · 있게 | 401 · 200 쌍 | 401 아니면 실패 → O8 금지 · kty 보고 |
+| 17 | started 판정 — 시험 회차 sequence 1 `published` · B `lifecycle_published` · clip `broadcast.intake.handled` · chat `LINK_REFUSED` · DLQ 0(상한 5분) | 전부 | `published` 아님 → kty 보고 · 원인 수정 뒤 `published` 확인(송출은 유지) |
+| 18–20 | O7f 10 · 11(7-R) · 12 — [엣지 시험 런북](/infra/terraform/runbooks/edge-tests.md) · [엣지 비밀 런북](/infra/terraform/runbooks/edge-secrets.md) 「T6b 대체 절차」 | 런북 판정 | 18 실패면 kty 보고. 19 는 재판정이 허용 아니면 시작 안 함 · 복원 실패면 즉시 kty 보고(영향 = `/live` 만). 20 은 실패 항목 kty 보고 |
+| 21 | O8a 3 팀 IP 밖 송출 거부 | 거부 | 허용되면 즉시 보고 · O8 금지 |
+| 22 | P47-가 — 0-f 결과에 따른 진입 경로에서 유지 송출 중 부하(media-host README 「O8a 2 전 필수 조건」 2). 새 송출 수락은 여기서 재지 않음 — 같은 시험 ID 는 `overridePublisher: no` 로 거부되고, 기존 HLS 의 200 은 수락 증거가 아님 | 도달률 95% 이상(아래) · `budget_exhausted` 수 · 유지 송출 끊김 여부 · auth 지표 기록 | 외부에서 Bearer 없이 닿는 경로가 없으면 「외부 진입 경로 없음」 과 증거(scheme · SG · 직접 연결 실패)를 보고하고, 상자 안 부하는 kty 결정 없이 하지 않음. 응답기 장애가 보이면 부하 중단 · 보고. 유지 송출이 끊기면 그것도 결과 — 종료 감시로 바꾸고 걸음 24 로 |
+| 23 | **송출 끄기 직전** M-B · M-A → kty 가 유지 송출을 끈다(시각 기록) | `M-B OK` · `M-A OK` | M-B 불통과면 끄지 않음 → 「운영 감시」 (가). M-A 불통과면 A 차단 재적용 뒤 다시 판정 |
+| 24 | 1차 종료 대기 — 종료 감시 · Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 · ended `lifecycle_published` · clip ended 처리 · clip 기록 종료(상한 30분) | 전부 | 상한을 넘기면 kty 보고 · A 재기동 · B 정지 · 발행 끄기 금지. 강등 · 부활은 「운영 감시」 (나). **Q1 > 0 ∧ Q3 = 0 = 자동 복구 경로 없음 → kty 회부(멈춤 자리)** |
+| 25 | 1단-나 ② 9 · 10([런타임 런북](/infra/terraform/runbooks/runtime-1a.md)) — ② 9 는 이 절의 증거와 대조표로 갈음 | 런북 판정 | 갈음 불가 항목이 재기동 · 송출이면 감시 규칙 적용 |
+| 26 | P47-나 — 앞 회차 전부 닫힌 뒤 같은 진입 경로 · 같은 부하에서 루프백으로 새 송출 수락 지연. 직전 M-B · M-A, 끝나면 종료 감시 | 도달률 95% 이상 · 새 송출 수락 지연 · `budget_exhausted` 수 → 걸음 22 결과와 함께 O8 전 kty 보고 | 새 송출 장애가 보이면 부하 중단 · 보고 |
+| 27 | 최종 종료 판정 — 시험 회차 전부(Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 · ended published · clip 처리) · 감시 기록(상한 30분) | 전부 | 걸음 24 와 같음(Q1 > 0 ∧ Q3 = 0 = kty 회부) |
+| 28–29 | 종료 뒤 시험 · `secret-count --passphrase` box · ssm | 런북 판정 · 둘 다 0 | 29 가 0 아니면 정리 · 보고 |
+| 30 | 하루 관찰 뒤 A 회수 — `blocked-check.sh` · A 업로드 적체 0 · Q1 = 0 · `rounds` ≥ 1 | `M-A OK` · 회수 완료 | 조건 미충족이면 보류. A 가 되살아났으면 정지 · 차단 뒤 Q1 · Q3(「운영 감시」 M-A 불통과) |
+| 31 | O8 | O8 런북 | — |
+| 32 | (O8a 5 직전 · D4) 목록 `*` 인 C 로 교체 — (ㄴ) 시작 → Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 → C 기동 · `lifecycle-check.sh`(C) → 전환 → **B 정지 · disable · `blocked-check.sh`(B)** → (ㄴ) 끝 → 하루 뒤 회수 직전 `blocked-check.sh`(B) 다시 | `M-B OK`(C) · `M-A OK`(B) | C 가 꺼진 채 뜨면 C 를 즉시 정지 · Q1 확인 · 금지 유지. 후속 수정이 배포 전이면 C 도 운영 감시 대상 |
+
+*   **시험 회차** = 머리 세션의 `stream_id` 가 시험 ID 이고 `started_at` 이
+    걸음 8 시각 이후인 회차 전부입니다. 회차 수를 고정하지 않습니다 — 루프백
+    회차가 끝나고 300초 안에 유지 송출이 붙으면 같은 회차로 이어집니다.
+*   **`rounds` ≥ 1**(발행 잔여 질의의 시험 회차 수): 걸음 13 뒤에 Q1 · Q2 ·
+    Q3 를 판정으로 쓰는 자리는 모두 이 조건을 함께 봅니다. 시험 ID · 시각
+    입력이 틀려 시험 회차를 하나도 잡지 못하면 Q1 · Q2 · Q3 가 전부 0 으로
+    나오기 때문입니다. 0 이면 멈추고 입력을 다시 봅니다. 걸음 13 루프백이
+    회차를 만들지 못하고 실패한 경우만 0 이 맞고, 그때는 걸음 13 전과 같이
+    Q4 로 봅니다(아래 롤백 표 「걸음 12 뒤」 행).
+*   **도달률**(걸음 22 · 26)은 B nginx live 접근 줄 수 · 응답기 read 판정
+    줄 수를 보낸 요청 수로 나눈 값이고, 95% 이상이어야 합니다. 미달이면 그
+    측정은 무효입니다 — 부하 요청이 엣지(CloudFront 함수 · 서명)에서 막히면
+    응답기 부하로 재지 못하기 때문입니다.
+*   걸음 0-f · 0-h · 14 · 15 · 22 · 24 · 27 의 「kty 회부 · 보고」 와 아래
+    「Q1 > 0 ∧ Q3 = 0」 은 대안을 고르지 않는 **멈춤 자리**입니다.
+
+### O8a 당김 — 운영 감시
+
+사이드카는 재기동 때 게이트 준비(`privilege_check` · `privilege` ·
+`sns_client` · `assembly`)가 실패하면 꺼진 게이트로 정산을 계속합니다(media-host
+README 「계약9 발행」 의 재기동 강등). 후속 수정이 배포될 때까지 발행 목록
+계정이 송출하는 동안 아래를 돕니다(kty 2026-11-03 (다)).
+
+*   **M-B**(그 사이드카 게이트가 지금 켜져 있음 — `lifecycle-check.sh`):
+    통과는 **마지막 기동 시각 뒤** `lifecycle_started` 1줄 ∧ 그 뒤
+    `lifecycle_disabled` 0 입니다. 마지막 기동 시각은 사이드카 컨테이너의
+    `State.StartedAt` 이고, 강등을 고쳐 다시 띄웠으면 감시의 기준 시각이 그
+    시각으로 넘어갑니다.
+    *   이력(걸음 8 이후 `lifecycle_started` · `lifecycle_disabled` 건수 ·
+        `RestartCount` · 수동 재기동 수 · 컨테이너 id)은 기록만 하고 판정에
+        쓰지 않습니다. 강등이 한 번 있었다고 복구 뒤에도 불통과로 남지 않게
+        하기 위해서입니다.
+    *   줄을 남기기 전에 죽은 기동(DB 연결 · 기동 단계 실패)은 정산을 돌기
+        전에 끝난 것이라 판정에서 뺍니다. 다만 지금 떠 있는 사이드카가 없거나
+        갓 떠서 줄이 아직 없으면 `LIFECYCLE CHECK FAIL no-sidecar` · `M-B NOT
+        OK` 입니다 — 1분 뒤 다시 보고, 그래도 같으면 강등으로 다룹니다.
+*   **M-A**(옛 상자 정지 유지 — `blocked-check.sh <disabled|masked>`): 유닛
+    `inactive` · 프로젝트 컨테이너 0 · 유닛이 그 차단 상태입니다.
+*   **주기:**
+    *   **송출 감시** — 시험 ID 송출이 살아 있는 동안 **5분마다** M-B · M-A ·
+        B `PATHS` 를 봅니다. 5분은 창 안 갈래의 회차 닫힘(마지막 조각
+        끝부터 재접속 창 300초 + 여유 60초 — 아래 상한 근거)보다 짧은
+        간격입니다. 창을 기다리지 않고 곧바로 닫히는 4D 종료 신호 · 정지
+        표식 갈래는 이 주기로 막지 못하고, 걸음 23(송출 끄기 직전)의 M-B
+        판정으로만 막습니다. `PATHS` 가 0 이 되면(송출 끊김) 곧바로 종료
+        감시로 바꿉니다.
+    *   **송출 끄기 직전**(걸음 23) — 통과해야 끕니다.
+    *   **종료 감시** — 송출이 끝난 뒤(끈 경우 · 끊긴 경우 · 루프백 13 · 26
+        뒤 모두) **2분마다** M-B · M-A 를 봅니다. **끝나는 조건은 회차 닫힘이
+        아니라 그 회차들의 완결**입니다 — Q1 = Q2 = Q3 = 0 ∧ `rounds` ≥ 1
+        ∧ ended `lifecycle_published` ∧ clip ended 처리. 그 전에 다음 송출이
+        붙으면 송출 감시로 돌아갑니다.
+    *   발행 목록 계정이 송출하는 동안은 언제든 같은 주기입니다(걸음 30 의
+        하루 관찰 · O8 뒤 O8a 5 전 포함). 후속 수정 배포 전까지입니다.
+*   **강등 · 부활을 발견하면:**
+    *   (가) 송출이 살아 있음 — 송출을 유지한 채 B 사이드카만 다시 띄우고
+        (`sidecar-restart.sh` · 실행 직전 승인 · 수동 재기동으로 기록) M-B 를
+        다시 봅니다. 다시 강등되면 `reason` 을 kty 에게 보고하고 **송출을
+        끄지 않습니다** — 끄면 강등된 사이드카가 회차를 닫습니다.
+    *   (나) 송출이 이미 끝남 — 곧바로 다시 띄워 M-B 를 본 뒤 Q1 · Q3 를
+        봅니다. Q3 > 0(회차 열림)이면 통과한 사이드카가 닫으므로 종료 감시를
+        이어 갑니다. **Q1 > 0 ∧ Q3 = 0 이면 자동 복구 경로가 없습니다**(닫히고
+        전원 ended 인 회차는 다시 평가되지 않음) — kty 회부(멈춤 자리)이고, 그
+        방송의 손 복구는 kty 결정입니다.
+    *   M-A 불통과(옛 상자가 되살아남) — 곧바로 정지 · 차단을 다시 하고 Q1 ·
+        Q3 를 봅니다(같은 두 갈래).
+*   **사이드카만 다시 띄우는 근거(kty D7 = (ㄱ)):** media-host README 운영
+    규칙 ① 은 재기동 · 정지를 유닛으로만 하라고 정합니다. 그 근거는 정지
+    쪽입니다 — 사이드카만 멈추면 mediamtx · nginx 가 끝날 때 유닛이 compose
+    전체를 다시 띄워 사이드카가 되살아납니다. 재기동은 엔진의 자동 재기동
+    (`restart: on-failure`)과 같은 동작이라 형식상 예외일 뿐입니다. 이 예외는
+    O8a 당김 시험에만 씁니다. 유닛 재기동은 MediaMTX 를 내려 송출을 끊으므로
+    쓰지 않습니다.
+*   **남는 위험:** 마지막 감시 뒤 · 회차 닫힘 전에 강등 재기동이 끼면 그
+    방송 하나의 clip 기록이 live 로 남습니다(감시 사이 창). 근본 수정
+    (ended 적재를 발행 게이트에서 떼어 강등 중에도 적재 · 발행 준비 재시도 —
+    설계 진행 중)은 POK-301 아래 후속이고 O8a 5 개통 조건입니다.
+
+**종료 대기 상한 30분의 근거**(사이드카 코드 수치):
+
+*   회차 닫힘은 회차 **마지막 조각 끝**부터 재접속 창 300초 + 여유 60초가
+    지난 뒤입니다(`closeSlack` · `closableRoundsSQL`). 스캔은 30초마다 돌지만
+    그 안에서 도는 것이라 최소 대기를 늘리지 않습니다. **플러그인의 의도적
+    종료 신호(4D) · 정지 표식 갈래는 창을 기다리지 않고 곧바로 닫힙니다** —
+    그래서 송출을 끄기 직전(걸음 23)의 M-B 가 마지막 방어선입니다.
+*   마지막 세션의 ended 는 ③ 착지 또는 정산 창 15분(그 세션 `ending_at`
+    기준 · `SettleWindow`) 뒤라, ended 행 적재는 최악 약 21분 30초입니다.
+*   발행은 2초 주기이고, 일시 실패면 1 · 2 · 4 · 8 · 16 · 32초(누적 63초) 뒤
+    60초 간격입니다(`retryCap`). 실패가 한 번 끼면 약 22분 30초에
+    `published` 입니다.
+*   상한 30분은 그 위에 60초 간격 재시도 7회분을 여유로 둡니다. 넘기면 kty
+    보고 — A 재기동 · B 정지 · 발행 끄기는 하지 않습니다.
+
+### O8a 당김 — 상자 스크립트
+
+출력은 판정 줄 · 건수 · 짧은 컨테이너 id 뿐입니다. `lifecycle_started` 줄은
+주제 ARN 을 찍으므로 건수만 셉니다. 「준비」 의 `media_ssm` 으로 보냅니다.
+
+**M-B**(`lifecycle-check.sh` — 인자: 걸음 8 시각의 epoch 초):
+
+```shell
+cat > "${work}/lifecycle-check.sh" <<'SH'
+fail() { echo "LIFECYCLE CHECK FAIL $1"; exit 2; }
+# count_msg <로그> <메시지> — 그 메시지 이름의 JSON 줄 수.
+count_msg() {
+  printf '%s\n' "$1" | awk -v m="\"msg\":\"$2\"" 'index($0, m) { n++ } END { print n + 0 }'
+}
+[ "$#" -eq 1 ] || fail usage
+cid="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+[ -n "${cid}" ] || fail no-sidecar
+meta="$(docker inspect --format '{{.RestartCount}} {{.State.StartedAt}}' "${cid}")" \
+  || fail inspect
+last="$(date -d "${meta#* }" +%s)" || fail started-at
+history="$(journalctl -q -t pokeclip-media-sidecar --since "@$1" -o cat --no-pager)" \
+  || fail journal
+current="$(journalctl -q -t pokeclip-media-sidecar --since "@${last}" -o cat \
+  --no-pager)" || fail journal
+started="$(count_msg "${current}" lifecycle_started)"
+disabled="$(count_msg "${current}" lifecycle_disabled)"
+echo "SIDECAR_ID ${cid}"
+echo "RESTART_COUNT ${meta%% *}"
+echo "LAST_START ${last}"
+for m in lifecycle_started lifecycle_disabled lifecycle_enqueued \
+  lifecycle_published lifecycle_publish_retry lifecycle_backlog \
+  lifecycle_abandoned lifecycle_resolve_failed; do
+  echo "HISTORY_${m} $(count_msg "${history}" "${m}")"
+done
+echo "STARTED_SINCE_LAST ${started}"
+echo "DISABLED_SINCE_LAST ${disabled}"
+if [ "${started}" = 1 ] && [ "${disabled}" = 0 ]; then echo "M-B OK"; exit 0; fi
+echo "M-B NOT OK"
+exit 1
+SH
+```
+
+**A 차단 · M-A**(`blocked-check.sh` — 인자: `disabled` 또는 `masked`):
+
+```shell
+printf 'systemctl disable pokeclip-media\n' > "${work}/disable.sh"
+cat > "${work}/blocked-check.sh" <<'SH'
+[ "$#" -eq 1 ] || { echo "M-A CHECK FAIL usage"; exit 2; }
+state="$(systemctl show -P ActiveState pokeclip-media)" || state=unknown
+enabled="$(systemctl is-enabled pokeclip-media 2>/dev/null)"
+ids="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media)" \
+  || { echo "M-A CHECK FAIL docker"; exit 2; }
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+echo "UNIT ${state}"
+echo "RUNNING ${running}"
+echo "ENABLED ${enabled:-unknown}"
+if [ "${state}" = inactive ] && [ "${running}" = 0 ] && [ "${enabled}" = "$1" ]; then
+  echo "M-A OK"; exit 0
+fi
+echo "M-A NOT OK"
+exit 1
+SH
+```
+
+*   정지는 「한 창 절차 7′」 의 `stop.sh` · `stopped-check.sh` 를 그대로
+    쓰고, 그 뒤 `disable.sh` 를 보냅니다.
+*   **A 차단 — disable 로 되는지:** 부트스트랩(유닛 `enable` 을 부르는 곳)은
+    cloud-init 이 첫 부팅에 한 번만 돌립니다(`modules/media_host/user_data.tf`
+    머리 주석). 그래서 disable 이 재부팅을 넘는다고 봅니다 — 걸음 0 에서
+    상자의 cloud-init 실행 기록으로 확인합니다. 부팅마다 enable 이 다시 돈다고
+    판정되면 mask 가 필요합니다. 다만 유닛 파일이 `/etc/systemd/system` 에
+    직접 있어 `systemctl mask` 는 그 자리에 링크를 만들지 못해 실패할 것으로
+    보입니다(상자 실측 전). 그때는 대안을 고르지 않고 kty 에 회부합니다.
+*   롤백 ④ 에서 되돌릴 때는 `systemctl enable pokeclip-media`(mask 했으면
+    `unmask` 먼저) 뒤 `systemctl start pokeclip-media` 입니다.
+
+**사이드카만 다시 띄우기**(`sidecar-restart.sh` — 운영 감시 (가) · (나)만 ·
+실행 직전 승인):
+
+```shell
+cat > "${work}/sidecar-restart.sh" <<'SH'
+cid="$(docker ps -aq --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" \
+  || { echo "SIDECAR RESTART FAIL docker"; exit 2; }
+[ -n "${cid}" ] || { echo "SIDECAR RESTART FAIL no-sidecar"; exit 2; }
+docker restart "${cid}" >/dev/null || { echo "SIDECAR RESTART FAIL restart"; exit 1; }
+echo "SIDECAR RESTARTED $(date +%s)"
+SH
+```
+
+*   찍힌 시각을 수동 재기동 기록에 적고, 1분 뒤 `lifecycle-check.sh` 를
+    돌립니다.
+
+### O8a 당김 — 롤백
+
+A 로 되돌리기입니다. O8a 5 전이라 옛 모드 A 복귀가 허용됩니다(옛 모드
+단서 — 위 「언제 쓰나」).
+
+| 시점 · 조건 | 순서 |
+|---|---|
+| 걸음 6–11(A 기동 중 · 송출 없음) · Q4 = 0 | 전환 역적용 → B 정지 · 회수 |
+| 걸음 12 뒤 · Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1(걸음 13 전이거나, 걸음 13 루프백이 회차를 만들지 못하고 실패했으면 — `LOOPBACK FAIL test-key` · `pull`, 인증 거부 · 연결 실패 — `rounds` 0 · Q4 0 행. 회차가 하나라도 생겼으면 `rounds` ≥ 1 이라 이 예외에 들지 않음) · B `PATHS 0` · 마지막 M-B 통과 | ① 송출 중지 확인 · **(ㄷ) 시작** ② Q1–Q3 ③ B 유닛 정지(인스턴스 유지 — 새 started 원천 제거) ④ A `enable`(mask 했으면 `unmask` 먼저) · `start` → A 기동 판정 ⑤ 전환을 A 로 → **(ㄷ) 끝** ⑥ B 회수는 하루 뒤. A 가 하한 아래면(걸음 0) 「한 창 절차 — A 를 다시 띄울 때」 조건을 더함 |
+| Q1 > 0 ∧ Q3 > 0(회차가 아직 열림) | **A 를 띄우지 않습니다.** M-B 를 통과한 게이트 켜진 사이드카(B 재기동 뒤 통과, 또는 같은 설정의 C 가 기동 판정 통과)가 회차를 닫고 ended 를 발행한 뒤 위 순서. B 를 살리지 못하면 kty 보고 |
+| Q1 > 0 ∧ Q3 = 0(회차 닫힘 · ended 없음) | **자동 복구 경로 없음 — kty 회부(멈춤 자리).** 롤백 · 교체 · 발행 끄기를 하지 않습니다 |
+| Q2 > 0(SNS 재시도 중) | B 를 떠 있게 두고 원인(신원 정책 · 주제 정책 · SCP)을 kty 승인으로 고친 뒤(다음 재시도 — 최대 60초 뒤 — 에 `published`) 위 순서. outbox 행은 손대지 않습니다 |
+| 발행만 끄기 | 걸음 12 뒤 행과 같은 조건. (ㄷ) = Q1 확인부터 B 정지까지 — ① 송출 중지 · 시작 ② Q1–Q3 ③ 빈 목록 상자 D 기동(목록은 user_data 라 상자 교체) ④ 전환 ⑤ B 정지 · 차단 → 끝. D 의 회차에는 started 가 없어 ended 도 필요 없습니다 |
 
 ## force
 

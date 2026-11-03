@@ -994,6 +994,101 @@ make_read backlog "${payload}/backlog.sql" && send_step backlog
     「한 창 절차」 에서는 그 자리의 갈래를 따르고, 사고 확인이면 Media 교체
     런북 「M6 운영 SQL 경계 · 롤백 하한」 의 복구로 갑니다.
 
+### 발행 잔여 질의
+
+[Media 교체 런북](media-swap.md) 「O8a 당김 교체」 의 계약9 발행 판정 질의
+입니다(kty 2026-11-03). 흐름 · 승인 · 기록 규칙은 위 「M6 읽기 질의」 와
+같습니다 — 읽기 전용 트랜잭션에서 표 주인으로 읽고, `make_read` 로 보내고,
+`VERIFY OK` 를 함께 봅니다.
+
+**시험 회차**는 머리 세션(`session_id = round_id`)의 `stream_id` 가 시험
+ID 이고 `started_at` 이 「O8a 당김 교체」 걸음 8 시각 이후인 회차 전부입니다.
+
+| 행 | 뜻 | 쓰는 자리 · 통과 |
+|---|---|---|
+| `Q1` | 시험 회차의 started 행(sequence 1 · `abandoned` 아님) 가운데 같은 회차의 ended 행(sequence 2)이 없는 수 | 종료 판정 · 롤백 · 교체 전 — 0 |
+| `Q2` | 시험 회차 outbox 행 가운데 `pending` 수(SNS 재시도 중 포함) | 종료 판정 · 롤백 — 0 |
+| `Q3` | 시험 회차 세션 가운데 `round_closed_at` 이 비었거나 `ended` 아닌 수 | 종료 판정 — 0 |
+| `Q3_all` | 시험 ID 의 모든 세션 가운데 `ended` 아니거나 회차가 열린 수(`started_at` 조건 없음) | 걸음 13 직전 — 0 |
+| `abandoned` | 시험 ID 의 outbox `abandoned` 행 수 | 종료 판정 — 0 |
+| `rounds` | 시험 회차 수 | 종료 판정 · 롤백 · 교체 전 — 1 이상(회차 수는 고정하지 않음). 걸음 13 전, 또는 걸음 13 루프백이 회차를 만들지 못하고 실패했을 때(`LOOPBACK FAIL test-key` · `pull`, 인증 거부 · 연결 실패)는 시험 회차가 없어 0 이고, 그때는 Q4 로 봄 — 회차가 하나라도 생겼으면 1 이상 |
+| `Q4_<상태>` | 상태별 outbox 행 수(전체) — 행이 없으면 이 줄도 없음 | 걸음 0 · 8 · 12 의 기준선 — `Q4_` 줄 0 |
+
+*   `Q1 > 0 ∧ Q3 = 0` 은 자동 복구 경로가 없는 갈래입니다(Media 교체 런북
+    「O8a 당김 — 롤백」 — kty 회부).
+*   **`rounds` 가 0 이면 Q1 · Q2 · Q3 · `abandoned` 의 0 은 판정이
+    아닙니다.** Q1 · Q2 · Q3 는 시험 회차 안에서만 세므로, 시험 회차를 하나도
+    잡지 못하면 실제 상태와 무관하게 0 이 됩니다. `abandoned` 는 시험 ID 로만
+    거르고 시각 조건이 없어 `rounds` 가 0 이어도 0 이 아닐 수 있지만(걸음 8
+    전의 행도 셈), 시험 ID 가 틀리면 역시 0 이 됩니다.
+*   걸음 13 뒤인데 `rounds` 가 0 이면 멈추고 시험 ID · 걸음 8 시각을 다시
+    봅니다. 이 멈춤은 입력을 바로잡아 질의를 다시 보내는 자리라, Media 교체
+    런북 「O8a 당김 교체 걸음」 의 **멈춤 자리**(kty 회부 · 보고 — 대안을
+    고르지 않는 자리) 목록에는 들지 않습니다. 걸음 13 루프백이 회차를 만들지
+    못하고 실패했으면 0 이 맞고, 그때는 걸음 13 전과 같이 Q4 로 봅니다(위
+    `rounds` 행).
+*   시험 ID · 걸음 8 시각을 질의에 넣기 전에 꼴을 봅니다 — 시험 ID 는 26자
+    Crockford base32 대문자, 시각은 10자리 epoch 초입니다(밀리초 13자리는 꼴
+    밖). 꼴 밖이면 함수가 「멈춤」 을 내고 질의를 만들지도 보내지도 않습니다
+    (질의에 따옴표 · 문장이 끼지 않게).
+
+```shell
+make_publish_rest() {  # make_publish_rest <시험 ID> <걸음 8 시각 — epoch 초>
+  local test_id="$1" since="$2"
+  [[ "${test_id}" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ && "${since}" =~ ^[0-9]{10}$ ]] ||
+    { echo "멈춤: 시험 ID 또는 시각의 꼴이 틀림" >&2; return 1; }
+  cat >"${payload}/publish-rest.tmpl" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+WITH test_rounds AS (
+  SELECT h.round_id
+    FROM stream_sessions h
+   WHERE h.session_id = h.round_id AND h.stream_id = '@@TEST_ID@@'
+     AND h.started_at >= pg_catalog.to_timestamp(@@SINCE@@)
+)
+SELECT 'Q1' AS q, pg_catalog.count(*) AS n
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.round_id IN (SELECT round_id FROM test_rounds)
+   AND o.sequence = 1 AND o.state <> 'abandoned'
+   AND NOT EXISTS (SELECT 1 FROM broadcast_lifecycle_outbox e
+                    WHERE e.round_id = o.round_id AND e.sequence = 2)
+UNION ALL
+SELECT 'Q2', pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.round_id IN (SELECT round_id FROM test_rounds) AND o.state = 'pending'
+UNION ALL
+SELECT 'Q3', pg_catalog.count(*)
+  FROM stream_sessions s
+ WHERE s.round_id IN (SELECT round_id FROM test_rounds)
+   AND (s.round_closed_at IS NULL OR s.state <> 'ended')
+UNION ALL
+SELECT 'Q3_all', pg_catalog.count(*)
+  FROM stream_sessions s
+ WHERE s.stream_id = '@@TEST_ID@@'
+   AND (s.state <> 'ended' OR (s.round_id IS NOT NULL AND s.round_closed_at IS NULL))
+UNION ALL
+SELECT 'abandoned', pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.ingest_stream_id = '@@TEST_ID@@' AND o.state = 'abandoned'
+UNION ALL
+SELECT 'rounds', pg_catalog.count(*) FROM test_rounds
+UNION ALL
+(SELECT 'Q4_' || o.state, pg_catalog.count(*)
+   FROM broadcast_lifecycle_outbox o GROUP BY o.state ORDER BY o.state);
+RESET ROLE;
+SQL
+  sed -e "s/@@TEST_ID@@/${test_id}/g" -e "s/@@SINCE@@/${since}/g" \
+    "${payload}/publish-rest.tmpl" >"${payload}/publish-rest.sql" ||
+    { echo "멈춤: 질의 파일을 만들지 못함" >&2; return 1; }
+  make_read publish-rest "${payload}/publish-rest.sql"
+}
+make_publish_rest '<시험 ingestStreamId>' '<걸음 8 시각 — epoch 초>' &&
+  send_step publish-rest
+```
+
+*   기록에 옮기는 것은 `== read` 뒤 `q | n` 줄뿐입니다. 회차 id · 행 원문은
+    옮기지 않습니다.
+
 ## POK-525 운영 SQL 2 · 읽기 질의
 
 POK-525(조각 키를 업로드 때부터 회차 경로에) 교체의 DB 몫입니다. 걸음

@@ -117,6 +117,16 @@ data "aws_iam_policy_document" "media" {
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.denylist.arn]
   }
+
+  # 사이드카 계약9 발행(broadcast.started · ended). 주제 · 주제 정책은 런타임
+  # 1단 몫이고 발행 권한은 이 신원 정책이다(CONTRACT-runtime). 주제에 KMS 가
+  # 없어 kms 동작이 없다. 발행 목록이 비어도 둔다 — 발행 끄기 · 켜기가 IAM
+  # 차분 없이 상자 교체 하나로 끝나게 한다.
+  statement {
+    sid       = "BroadcastPublish"
+    actions   = ["sns:Publish"]
+    resources = [var.broadcast_topic_arn]
+  }
 }
 
 resource "aws_iam_role_policy" "media" {

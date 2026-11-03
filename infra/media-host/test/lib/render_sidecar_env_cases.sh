@@ -5,7 +5,7 @@
 # 정의한다.
 # shellcheck disable=SC2154
 #
-# render_test 의 상자 스위치 파일 사례(48 · 49). sidecar.env.tmpl 은 정확히 한 줄
+# render_test 의 상자 스위치 파일 사례(54 · 55). sidecar.env.tmpl 은 정확히 한 줄
 # PLAYBACK_ROUND_KEYS=true|false 로 렌더되고, compose 사이드카는 그 파일(compose
 # 파일 옆)을 required env_file 로 받는다. compose environment 에는 같은 키를
 # 두지 않는다 — 둘이면 environment 가 이겨 상자 파일을 바꿔도 반영되지 않는다.
@@ -58,9 +58,9 @@ sidecar_cases::require() {
   fi
 }
 
-# 사례 48 — 스위치 파일 템플릿 렌더가 true · false 각각 정확히
+# 사례 54 — 스위치 파일 템플릿 렌더가 true · false 각각 정확히
 # `PLAYBACK_ROUND_KEYS=<값>` 한 줄이다(바이트 대조). 변수는 bool 이다.
-sidecar_cases::check_48() {
+sidecar_cases::check_54() {
   local ok=0 value vars out
   sidecar_cases::require || return 1
   for value in true false; do
@@ -84,14 +84,14 @@ $(od -c "${out}" | head -3 | tr '\n' ' ')"
 }
 
 #######################################
-# 사례 49 — 모든 갈래의 사이드카 env_file 은 compose 파일 옆 sidecar.env 하나이고
+# 사례 55 — 모든 갈래의 사이드카 env_file 은 compose 파일 옆 sidecar.env 하나이고
 # required 다. 풀지 않은 environment 에는 PLAYBACK_ROUND_KEYS 가 없고, 풀린
 # env 에는 그 파일의 값이 들어간다. 그 파일이 없는 자리에서는 config 가 그
 # 파일 이름을 대며 실패한다(옛 갈래 a — 응답기 env_file 이 없는 렌더).
 # Returns:
 #   0 통과 / 1 어긋남.
 #######################################
-sidecar_cases::check_49() {
+sidecar_cases::check_55() {
   local ok=0 v json got dir="${scratch}/no-sidecar-env" err
   sidecar_cases::require || return 1
   for v in ${COMPOSE_VARIANTS}; do

@@ -194,6 +194,39 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
 *   **`overridePublisher` 는 옛 모드에서 기본(허용)이다** — 아래 「알려진
     한계」.
 
+### 계약9 발행
+
+**O8 앞(kty 2026-11-03):** 발행 켜기를 응답기 모드 교체에 함께 실어 O8 전에
+시험 계정 하나로 켭니다. 교체 순서는 정상 교체와 다릅니다 —
+[Media 교체 런북](../terraform/runbooks/media-swap.md) 「O8a 당김 교체」.
+
+사이드카의 계약9 발행(broadcast.started · ended → SNS FIFO)은 compose 템플릿
+변수 둘(`broadcast_topic_arn` · `lifecycle_publish_streams`)로 켜고,
+사이드카는 기동 때만 읽습니다([media/README](../../media/README.md) 「계약9
+발행」). 목록을 넓히거나 끄는 것도 상자 교체입니다.
+
+| 모드 · 목록 | 사이드카 env | 기동 줄 |
+|---|---|---|
+| 옛 모드 | 없음 — 목록을 채우면 modules/media_host 가 plan 에서 거부 | `lifecycle_disabled reason=no_topic`(INFO) |
+| 응답기 모드 · 빈 목록 | 없음 | `lifecycle_disabled reason=no_topic`(INFO) |
+| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | `lifecycle_started` — 준비가 실패하면 ERROR `lifecycle_disabled`. 사유는 지금 코드 기준 `no_resolver`(`STREAM_KEY_RESOLVE_URL` · `STREAM_KEY_RESOLVE_TOKEN_FILE` 이 둘 다 비어 4C 클라이언트가 없음 — 설정 결함이라 재시도 없음) · `privilege_check` · `privilege` · `sns_client` · `assembly` |
+
+*   목록 항목(`*` 또는 26자 Crockford base32) · 주제 ARN 꼴은
+    modules/media_host 가 plan 에서 봅니다. 인스턴스 역할의 `sns:Publish`
+    (그 주제 하나)는 목록과 무관하게 늘 있습니다.
+*   **게이트 공존 규칙:** 같은 DB 에 붙은 사이드카는 모두 게이트가 켜져
+    있어야 한다. 목록은 좁혀도 되지만 꺼진 사이드카는 안 된다. 꺼졌을 수 있는
+    사이드카(옛 모드 · 빈 목록 · 기동 판정 전)를 DB 에 붙이기 전에는 송출 금지
+    구간을 열고 Q1 = 0 · `rounds` ≥ 1 을 확인한다(둘 다
+    [런타임 1단-가 런북](../terraform/runbooks/runtime-1a.md) 「발행 잔여
+    질의」 — 시험 회차가 생기기 전이면 Q4). 꺼진 사이드카가 started 를 낸
+    회차를 닫으면 ended 를 넣지 않고, 닫힌 회차는 다시 평가되지 않는다.
+*   **재기동 강등:** 발행 설정이 찬 사이드카도 재기동 때 게이트
+    준비(`privilege_check` · `privilege` · `sns_client` · `assembly`)가
+    실패하면 꺼진 게이트로 정산을 계속한다(ADR-063 결정 1). 후속 수정 배포
+    전까지는 발행 목록 계정이 송출하는 동안 M-B 감시를 한다(Media 교체 런북
+    「O8a 당김 — 운영 감시」).
+
 ### O7 → O8a 2 전환
 
 옛 모드 상자에서 설정 반영 교체로 `ingest_auth_image` 에 다이제스트를 넣는다.
@@ -230,6 +263,13 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
     확인하는 관문으로 둔다 — PR 머지는 막지 않는다.
     *   S-47(이 몰아치기의 로컬 실측) 수치를 kty 에 보고한다(아래 「시험」 의
         기록 자리).
+    *   **대체(2026-11-03 · kty):** 위 판단 관문(공개 착수 전 kty 판단)을
+        실측으로 대체한다. 근거는 O8a 당김 결정 노트와 kty 「설계에 넣을 거
+        넣고 실측할 거 실측하면 되는거아님?」 이다. S-47 기준값(100 · 1,000
+        · 5,000 req/s × 60초 · M15 계획 593–615행의 허용 기준)을 B 활성 뒤
+        다시 재고 O8 전에 보고한다. 새 시점은 Media 교체 런북 「O8a 당김
+        교체」 걸음 22(유지 송출 중 부하) · 26(부하 중 새 송출 수락)이다.
+        아래 셋째 하위 항목(nginx live 경화 회부 결론)은 그대로 남는다.
     *   M8 공개 ALB 의 원본 검증(CloudFront 전용 헤더 등) 상태를 확인한다.
     *   nginx live 경화 회부의 결론을 받는다.
 1.  **전환 직후 상자 위 음성 확인**(SSM · 실행 직전 kty 승인):

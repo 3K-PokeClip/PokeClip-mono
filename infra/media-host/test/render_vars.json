@@ -1,9 +1,11 @@
 {
+  "broadcast_topic_arn": "",
   "control_upstream": "",
   "detached_log_driver": "journald",
   "ingest_auth_image": "",
   "ingest_auth_ip_limit": "on",
   "janitor_enabled": false,
+  "lifecycle_publish_streams": [],
   "media_health_path": "/pcbench-edge-proxy-health",
   "mediamtx_image": "registry.pcbench-edge-proxy.invalid/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "nginx_image": "registry.pcbench-edge-proxy.invalid/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222",
