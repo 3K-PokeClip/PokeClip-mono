@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - 'web/**'
+      - 'media/internal/playback/testdata/**'
       - '.github/workflows/web-ci.yml'
 
 jobs:
