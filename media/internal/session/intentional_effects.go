@@ -95,14 +95,14 @@ func markLive(ctx context.Context, tx pgx.Tx, e IntentionalEnd, res IntentionalR
 
 // roundRow 는 회차 R 의 한 행이다(③ 잠금 뒤 값).
 type roundRow struct {
-	id, state, vodState, inherits string
-	startedAt                     time.Time
+	id, state string
+	startedAt time.Time
 }
 
 // lockRoundRowsSQL 은 ③ — 회차 R 의 전원 행을 started_at, session_id 순으로 잠근다(교착 방지 순서 · 설계 3.3).
 // round_closed_at IS NULL 은 stream_sessions_round_open_idx(부분 인덱스)로 가려는 술어다 — R 은 안 닫혔음을 이미 봤다.
 const lockRoundRowsSQL = `
-SELECT session_id, state, vod_state, inherits_session, started_at
+SELECT session_id, state, started_at
   FROM stream_sessions
  WHERE round_id = $1 AND round_closed_at IS NULL
  ORDER BY started_at, session_id
@@ -114,14 +114,8 @@ func lockRoundRows(ctx context.Context, tx pgx.Tx, roundID string) ([]roundRow, 
 		return nil, fmt.Errorf("회차 행 잠금 실패 round_id=%q: %w", roundID, err)
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (roundRow, error) {
-		var (
-			row      roundRow
-			inherits *string
-		)
-		err := r.Scan(&row.id, &row.state, &row.vodState, &inherits, &row.startedAt)
-		if inherits != nil {
-			row.inherits = *inherits
-		}
+		var row roundRow
+		err := r.Scan(&row.id, &row.state, &row.startedAt)
 		return row, err
 	})
 	if err != nil {
@@ -147,12 +141,13 @@ func latestInRound(rows []roundRow) string {
 	return rows[latest].id
 }
 
-// applyToEndedRound 는 끝난 T(ending · ended)의 효과다 — T 가 R 의 최신이면 upgraded, 아니면 round_split 이나 미적용.
+// applyToEndedRound 는 끝난 T(ending · ended)의 효과다 — T 가 R 의 최신이면 upgraded, 아니면 최신 L 에 앞으로 적용(forwarded).
 func applyToEndedRound(ctx context.Context, tx pgx.Tx, e IntentionalEnd, o IntentOptions, res IntentionalResult, rows []roundRow) (IntentionalResult, error) {
-	if latestInRound(rows) == res.SessionID {
+	latest := latestInRound(rows)
+	if latest == res.SessionID {
 		return upgradeLatest(ctx, tx, e, o, res)
 	}
-	return splitRound(ctx, tx, e, o, res, rows)
+	return forwardToLatest(ctx, tx, o, res, latest)
 }
 
 // upgradeSQL 은 upgraded 효과다 — 사유만 intentional 로 바꾸고 표식을 쓴다(ended 의 동결 · VOD 는 그대로).
@@ -168,5 +163,31 @@ func upgradeLatest(ctx context.Context, tx pgx.Tx, e IntentionalEnd, o IntentOpt
 		return res, fmt.Errorf("4D 승격 뒤 회차 닫힘 실패 round_id=%q: %w", res.RoundID, err)
 	}
 	res.Effect = effectUpgraded
+	return res, nil
+}
+
+// forwardMarkSQL 은 forwarded 효과다 — 회차 최신 L 에 도착 순간 DB 시각 표식을 건다(첫 표식만 남긴다 · 사유 · 동결은 그대로).
+// 4D 의 StoppedAt 은 T 의 시간축 값이라 L 에는 쓰지 않는다. round_id 는 건드리지 않는다 — 이미 녹화된 조각은 옛 회차에 남고,
+// live L 이면 다음 조각이 표식 + 여유 뒤에 시작할 때 표식 분할(markSplitDecision)이 새 회차를 연다.
+const forwardMarkSQL = `
+UPDATE stream_sessions SET stop_marked_at = COALESCE(stop_marked_at, pg_catalog.now())
+ WHERE session_id = $1
+RETURNING state, stop_marked_at`
+
+// forwardToLatest 는 forwarded 효과다(늦은 4D 를 앞으로 적용 — T 가 R 의 최신이 아닐 때). L 이 끝났으면(ending · ended)
+// 같은 트랜잭션 끝에서 CloseRound 칸을 불러 회차 닫힘 조건(「표식 있음」)과 완결을 평가한다. live L 은 아직 송출 중이라
+// 닫지 않는다.
+func forwardToLatest(ctx context.Context, tx pgx.Tx, o IntentOptions, res IntentionalResult, latest string) (IntentionalResult, error) {
+	var state string
+	var marked time.Time
+	if err := tx.QueryRow(ctx, forwardMarkSQL, latest).Scan(&state, &marked); err != nil {
+		return res, fmt.Errorf("4D 앞으로 적용 표식 실패 session_id=%q: %w", latest, err)
+	}
+	if state != "live" {
+		if err := o.CloseRound(ctx, tx, res.RoundID); err != nil {
+			return res, fmt.Errorf("4D 앞으로 적용 뒤 회차 닫힘 실패 round_id=%q: %w", res.RoundID, err)
+		}
+	}
+	res.Effect, res.latest, res.markedAt = effectForwarded, latest, marked
 	return res, nil
 }

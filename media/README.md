@@ -363,6 +363,21 @@ auth 의 4C resolve(`/internal/stream-keys/resolve`)로 키를 풀어 대조한�
 | `STREAM_KEY_RESOLVE_URL` | (빈값 = 4D 끔) | auth 의 주소 `http(s)://host[:port]`. http · https 절대 URL 이어야 하고 호스트가 있어야 한다. 사용자 정보 · 질의 · 조각이 있으면 기동 거부. 경로 `/internal/stream-keys/resolve` 는 코드가 붙인다 — 주소에 경로가 있으면 그 뒤에 이어 붙는다. 3xx 는 따라가지 않고 실패로 본다. 프록시 env(`HTTP_PROXY` 등)를 타지 않고 auth 에 바로 붙는다. `STREAM_KEY_RESOLVE_TOKEN_FILE` 과 짝이다 |
 | `STREAM_KEY_RESOLVE_TOKEN_FILE` | (빈값 = 4D 끔) | resolve 토큰 한 줄이 든 파일의 **컨테이너 안 절대 경로**. 상대 경로는 기동 거부. 토큰은 `X-Stream-Key-Resolve-Token` 머리로 실린다. 파일 규칙은 `MTX_API_PASS_FILE` 과 같다(위 「관측 자격 파일 규칙」 — 일반 파일 · other 비트와 group 쓰기 비트 거부 · 권장 소유 10001 `0400` 또는 `root:10001` `0440` · 4 KiB 이하 · 끝 줄바꿈 하나만 걷음). 앞뒤 공백 · 제어 문자가 남으면 기동 거부. 오류 문구에는 env 이름만 싣고 경로 · 내용은 싣지 않는다. 읽기 실패는 **기동 실패**다(만료 토큰과 다르다). 토큰 값을 env 로 받는 칸은 없다 |
 
+**4D 적용 효과.** 신호가 고른 세션 T(멈춘 연결의 세션)와 그 회차 R 의 상태로
+효과 하나를 고른다. 세션의 `round_id` 는 어느 효과도 바꾸지 않는다 — 늦은
+4D 는 도착 순간부터 앞으로 적용한다(POK-525).
+
+| 효과 | 언제 | 무엇을 쓰나 |
+|---|---|---|
+| `marked` | T 가 live | T 에 멈춘 시각(StoppedAt) 표식. 회차는 닫지 않는다 |
+| `upgraded` | T 가 끝났고 R 의 최신 | T 의 사유를 `intentional` 로 · 표식 · 같은 트랜잭션에서 회차 닫힘 평가 |
+| `forwarded` | T 가 끝났고 R 의 최신 세션 L 이 따로 있음(새 송출이 붙은 뒤 도착) | L 에 **도착 순간 DB 시각** 표식(사유 · 동결 그대로). L 이 끝났으면 같은 트랜잭션에서 회차 닫힘 평가. L 이 live 면 다음 조각이 표식 + 8초 이후에 시작할 때 L 을 끝내고 새 회차를 연다 — 이미 녹화된 조각은 옛 회차에 남는다 |
+
+미적용은 `skip` 사유(`no_session` · `conn_mismatch` · `short_conn` ·
+`ambiguous` · `round_closed` · `contended` · `bad_time`)로 남는다. 신호는
+`intentional_end` 한 줄이다 — 효과는 INFO, 미적용은 WARN 이다. `forwarded`
+줄은 `latest`(L) · `marked_at`(L 의 표식)을 함께 싣는다.
+
 **계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
 `broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
 outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만
