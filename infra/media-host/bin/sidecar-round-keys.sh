@@ -7,7 +7,10 @@
 # 만든 컨테이너의 기동 신호 줄로 한다.
 #
 # 차례(on):
-#   1. 인자 · 설정을 본다.
+#   1. 인자 · 설정을 본다. compose 파일 옆 잠금 파일에 flock 을 기다리지 않고
+#      건다 — 다른 실행이 쥐고 있거나 걸지 못하면 lock 으로 멈춘다(아무것도
+#      쓰지 않는다). 잠금은 그 기술자를 가진 프로세스(스크립트 · 상한 실행
+#      중인 자식)가 모두 끝나면 커널이 푼다(파일은 남긴다).
 #   2. 사이드카 컨테이너가 실행 중 하나가 아니면 멈춘다 — 아무것도 쓰지 않는다.
 #   3. 지금 파일이 링크 아닌 일반 파일이고 허용 줄 하나인지 본다(아니면 write —
 #      아무것도 쓰지 않는다).
@@ -17,16 +20,19 @@
 #      주 프로세스는 그대로).
 #   6. 새 컨테이너의 태그 저널(컨테이너 ID 로 거른다)에서 playback_key_layout
 #      줄을 상한 안에서 기다리고, 그 줄의 layout 이 round 인지 본다. 줄이
-#      여럿이면(같은 컨테이너의 재시작) 모두 맞아야 한다.
+#      여럿이면(같은 컨테이너의 재시작) 모두 맞아야 한다. 맞으면 그 컨테이너가
+#      지금 실행 중인 사이드카 하나인지 다시 본다(아니면 verify 실패).
 #   5 · 6 가운데 하나라도 실패하면 복원 묶음을 돈다 — 파일을 끔으로 되돌리고
 #   사이드카를 다시 재생성해, 그 재생성이 만든 컨테이너의 저널이 layout=legacy
-#   인지 본다. 파일만 되돌리고 끝내지 않는다: 5 가 만든 round 컨테이너가 남기
-#   때문이다.
+#   인지 본다(실행 중 재확인 포함). 파일만 되돌리고 끝내지 않는다: 5 가 만든
+#   round 컨테이너가 남기 때문이다. 지금 파일이 이미 켬이었어도 복원은
+#   끔으로 쓴다(안전 쪽).
 #
-# 차례(off): 사이드카가 실행 중 하나면 on 의 2 · 4 · 5 · 6(layout=legacy)과 같다
-# (복원 묶음은 없다 — 파일은 이미 끔). 실행 중 하나를 확인하지 못하면(없음 · 둘
-# 이상 · 조회 실패) 파일만 끔으로 쓰고 재생성하지 않는다 — 뒤는 런북이
-# 유닛을 다시 띄운다. 지금 파일의 꼴은 보지 않는다(끔으로 덮는다).
+# 차례(off): 잠금은 on 의 1 과 같다. 사이드카가 실행 중 하나면 on 의
+# 2 · 4 · 5 · 6(layout=legacy)과 같다(복원 묶음은 없다 — 파일은 이미 끔). 실행
+# 중 하나를 확인하지 못하면(없음 · 둘 이상 · 조회 실패) 파일만 끔으로 쓰고
+# 재생성하지 않는다 — 뒤는 런북이 유닛을 다시 띄운다. 지금 파일의 꼴은 보지
+# 않는다(끔으로 덮는다).
 #
 # 출력(표준 출력 한 줄):
 #   SIDECAR ROUND KEYS OK on|off                         종료 0
@@ -37,8 +43,8 @@
 #   SIDECAR ROUND KEYS FAIL <단계> restore-failed         종료 4
 #       복원 묶음의 한 걸음이 실패 — 파일 · 실행 상태 미확정(런북 손 처리).
 #   SIDECAR ROUND KEYS FAIL <단계>
-#       usage(종료 2) · config · not-running(on 만) · write — 아무것도 바꾸지
-#       않았거나 파일 원본 그대로. off 의 recreate · journal · verify(파일은
+#       usage(종료 2) · config · lock · not-running(on 만) · write — 아무것도
+#       바꾸지 않았거나 파일 원본 그대로. off 의 recreate · journal · verify(파일은
 #       끔). 그 밖 종료 1.
 #
 # 읽는 변수는 lib/ops.sh 머리 주석. 기동 신호 줄을 기다리는 상한은
@@ -58,6 +64,10 @@ source "${BIN_DIR}/lib/ops.sh"
 readonly LINE_PREFIX='SIDECAR ROUND KEYS'
 readonly ENV_NAME='sidecar.env'
 readonly ENV_KEY='PLAYBACK_ROUND_KEYS'
+# 동시 실행 잠금 파일(compose 파일 옆). 기술자 번호는 리다이렉션에 글자로 적는다
+# (bash 3.2 에는 {변수}> 꼴이 없다) — take_lock 의 9 와 같다.
+readonly LOCK_NAME='sidecar-round-keys.lock'
+readonly LOCK_FD=9
 # 한 줄 파일의 크기 상한(바이트) — 시작 스크립트의 점검과 같다.
 readonly ENV_MAX_BYTES=64
 # 사이드카 컨테이너 로그의 journald tag(compose.yml.tmpl).
@@ -84,6 +94,34 @@ on_exit() {
 fail() {
   ops::say "${LINE_PREFIX} FAIL $1"
   exit "${2:-1}"
+}
+
+#######################################
+# 동시 실행 잠금을 기다리지 않고 건다. 자리가 링크면 걸지 않는다. 기술자는
+# 스크립트가 끝날 때까지 연 채로 둔다.
+# Arguments:
+#   잠금 파일.
+# Returns:
+#   0 잡음 / 1 다른 실행이 쥠 · 열지 못함 · 링크.
+#######################################
+take_lock() {
+  [[ ! -L "$1" ]] || return 1
+  { exec 9>>"$1"; } 2>/dev/null || return 1
+  flock -n "${LOCK_FD}" 2>/dev/null
+}
+
+#######################################
+# 컨테이너가 지금 실행 중인 사이드카 하나인지 본다 — 기동 신호 줄을 낸 뒤
+# 멈췄거나 재시작 중이면 아니다.
+# Arguments:
+#   컨테이너 ID, 명령 한 번의 상한(초).
+# Returns:
+#   0 맞음 / 1 아님 · 조회 실패.
+#######################################
+still_running() {
+  local id
+  id="$(ops::one_container "${OPS_SIDECAR_SERVICE}" "$2")" || return 1
+  [[ "${id}" == "$1" ]]
 }
 
 #######################################
@@ -156,8 +194,8 @@ verify_layout() {
 }
 
 #######################################
-# 사이드카를 재생성하고 새 컨테이너의 layout 을 대조한다. 실패하면 단계를
-# failed_stage 에 둔다.
+# 사이드카를 재생성하고 새 컨테이너의 layout 을 대조한 뒤 그 컨테이너가 실행
+# 중인지 다시 본다. 실패하면 단계를 failed_stage 에 둔다.
 # Globals:
 #   current_id, failed_stage
 # Arguments:
@@ -173,6 +211,9 @@ apply() {
   fi
   current_id="${id}"
   verify_layout "${id}" "$2" "$4" "$3" || status=$?
+  if (( status == 0 )) && ! still_running "${id}" "$3"; then
+    status=2
+  fi
   case "${status}" in
     0) return 0 ;;
     2) failed_stage=verify ;;
@@ -232,6 +273,7 @@ main() {
     || ! file="$(ops::compose_file)"; then
     fail config
   fi
+  take_lock "${file%/*}/${LOCK_NAME}" || fail lock
   if [[ "${want}" == on ]]; then
     switch_on "${file}" "${file%/*}/${ENV_NAME}" "${limit}" "${wait}"
   else

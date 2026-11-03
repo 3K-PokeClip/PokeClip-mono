@@ -73,7 +73,9 @@
 #     CI에서 돌리지 않는다. 로컬 실측 몫이다.
 #   - 시험 전용 에코 이미지(infra/media-host/test/echo)의 빌드 베이스는 다이제스트가 아니라 태그로
 #     고정한다. 최종 이미지는 scratch에 Go 표준 라이브러리만 쓴 정적 바이너리 하나이고 prod에
-#     올리지 않는다.
+#     올리지 않는다. 그 Go 단위 시험(test/echo/main_test.go)은 따로 도는 Go 단계가 없고 이미지
+#     빌드 단계(Dockerfile 의 go test)가 돌린다 — 이 워크플로에서는 media-host-systemd 잡의
+#     unit_restart_test 준비가 빌드하므로, 그 잡이 건너뛰어지는 포크 PR 에서는 돌지 않는다.
 name: infra-ci
 
 on:

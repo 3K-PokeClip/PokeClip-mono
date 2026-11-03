@@ -20,6 +20,10 @@
 # 그대로 뽑아 /bin/sh 로 돌린다 — 사본이 없어 런북 글자를 바꾸면 이 사례가 바뀐
 # 글자를 잰다. systemctl 은 사례 디렉터리에 둔 가짜다.
 #
+# R30–R32 는 PR 단계 보강이다 — 동시 실행 잠금(R30 · R31)과 layout 대조 뒤 그
+# 컨테이너가 실행 중인지 다시 보는 것(R32). 잠금은 가짜 flock 이 진짜
+# flock(2) 로 건다(test/ops_fakebin/flock — macOS 에 flock 명령이 없다).
+#
 # 제품 스크립트가 없으면 사례가 FAIL 이다. 건너뛰는 갈래는 없다.
 #
 # 사용: bash infra/media-host/test/sidecar_round_keys_ops_test.sh
@@ -39,7 +43,8 @@ source "${TEST_DIR}/lib/harness.sh"
 # shellcheck source=lib/ops_fixture.sh
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
-readonly CASES='R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17'
+readonly CASES='R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17
+R30 R31 R32'
 readonly SCRIPT='bin/sidecar-round-keys.sh'
 readonly SIDECAR_TAG='pokeclip-media-sidecar'
 readonly KEY='PLAYBACK_ROUND_KEYS'
@@ -52,6 +57,13 @@ readonly LEGACY_LINE='{"level":"INFO","msg":"playback_key_layout",'\
 readonly RUNBOOK="${MEDIA_HOST_DIR}/../terraform/runbooks/media-swap.md"
 # 런북 판정 스크립트가 거르는 compose 프로젝트(prod 고정값).
 readonly RUNBOOK_PROJECT='pokeclip-media'
+# 동시 실행 잠금 파일(compose 파일 옆).
+readonly LOCK_NAME='sidecar-round-keys.lock'
+# 동시 실행 사례에서 앞 실행이 재생성에 닿기를 기다리는 상한(초).
+readonly FIRST_RUN_WAIT=20
+
+# 동시 실행 사례의 앞 실행(배경) PID.
+first_pid=""
 
 #######################################
 # 사례 디렉터리 — 실행 중 사이드카 하나(만들 때 env 끔 · 저널 legacy) ·
@@ -63,7 +75,7 @@ readonly RUNBOOK_PROJECT='pokeclip-media'
 #######################################
 setup_case() {
   ops_fixture::new_case
-  ln -s -- "${TEST_DIR}/ops_fakebin/chown" "${ops_dir}/bin/chown"
+  link_fakes
   mkdir -p -- "${ops_dir}/etc"
   : >"${ops_dir}/etc/compose.yml"
   printf '%s\n' "${1:-${LINE_OFF}}" >"${ops_dir}/etc/sidecar.env"
@@ -75,10 +87,18 @@ setup_case() {
     'MEDIA_OPS_HEALTH_WAIT=2')
 }
 
+# 사례 디렉터리에 이 시험만 쓰는 가짜(chown · flock)를 둔다.
+link_fakes() {
+  local name
+  for name in chown flock; do
+    ln -s -- "${TEST_DIR}/ops_fakebin/${name}" "${ops_dir}/bin/${name}"
+  done
+}
+
 #######################################
 # k 번째 사이드카 재생성의 갈래를 둔다.
 # Arguments:
-#   k, fail | hang | nojournal | stale | round | legacy.
+#   k, fail | hang | nojournal | stale | round | legacy | exited | restarting.
 #######################################
 up_mode() { printf '%s\n' "$2" >"${ops_dir}/state/sidecar.up.$1"; }
 
@@ -729,6 +749,133 @@ case_runbook_layout() {
   return "${ok}"
 }
 
+#######################################
+# 앞 실행(state/sidecar.up.1 = hang — 재생성에서 잠금을 쥔 채 멈춤)을 배경에서
+# 띄우고 재생성에 닿기를 기다린다. 앞 실행의 종료 코드는 그 사례 디렉터리의
+# status 에 남는다.
+# Globals:
+#   ops_dir, first_pid
+# Returns:
+#   0 닿음 / 1 상한 안에 닿지 않음.
+#######################################
+start_first_run() {
+  local first="${ops_dir}" deadline
+  up_mode 1 hang
+  (
+    ops_fixture::run "${SCRIPT}" MEDIA_OPS_TIMEOUT=2 -- on || true
+    printf '%s\n' "${ops_status}" >"${first}/status"
+  ) &
+  first_pid=$!
+  deadline=$((SECONDS + FIRST_RUN_WAIT))
+  until [[ -e "${first}/state/sidecar.up.done.1" ]]; do
+    if (( SECONDS >= deadline )); then
+      harness::add_reason '앞 실행이 재생성에 닿지 않음'
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
+# R30 — 동시 실행: 앞 실행이 잠금을 쥔 동안 뒤 실행(같은 스위치 파일 · 같은
+# 컨테이너 상태)은 lock(종료 1) · docker · chown 0. 앞 실행은 제 판정(recreate
+# rolled-back)대로 끝나고, 끝난 뒤 다시 돌리면 잠금이 잡혀 OK on 이다.
+case_concurrent_lock() {
+  local ok=0 first
+  setup_case
+  first="${ops_dir}"
+  if ! start_first_run; then
+    harness::wait_exit "${first_pid}" "${OPS_RUN_TIMEOUT}" || true
+    return 1
+  fi
+
+  ops_fixture::new_case
+  link_fakes
+  ops_env+=("MEDIA_COMPOSE_FILE=${first}/etc/compose.yml"
+    'MEDIA_OPS_HEALTH_WAIT=2')
+  ops_fixture::run "${SCRIPT}" "PCBENCH_FAKE_STATE_DIR=${first}/state" -- on \
+    || ok=1
+  ops_fixture::expect_line 'SIDECAR ROUND KEYS FAIL lock' 1 || ok=1
+  if [[ "$(ops_fixture::count docker)" != 0 \
+    || "$(ops_fixture::count chown)" != 0 ]]; then
+    harness::add_reason '뒤 실행이 docker · chown 을 부름'
+    ok=1
+  fi
+  if [[ "$(cat -- "${ops_dir}/log/flock.1.argv" 2>/dev/null)" != \
+    "$(printf '%s\n' -n 9)" ]]; then
+    harness::add_reason '뒤 실행의 잠금이 flock -n 9 한 번이 아님'
+    ok=1
+  fi
+
+  if ! harness::wait_exit "${first_pid}" "${OPS_RUN_TIMEOUT}"; then
+    harness::add_reason '앞 실행이 끝나지 않음'
+    return 1
+  fi
+  ops_dir="${first}"
+  ops_status="$(cat -- "${first}/status" 2>/dev/null)" || ops_status=-1
+  expect_rolled_back 'SIDECAR ROUND KEYS FAIL recreate rolled-back' \
+    pcbenchrecreated1 || ok=1
+  expect_mode "${first}/etc/${LOCK_NAME}" 600 '잠금 파일' || ok=1
+
+  ops_fixture::run "${SCRIPT}" -- on || return 1
+  ops_fixture::expect_line 'SIDECAR ROUND KEYS OK on' 0 || ok=1
+  expect_running pcbenchrecreated2 "${LINE_ON}" round || ok=1
+  return "${ok}"
+}
+
+# R31 — 잠금 자리가 링크 · 디렉터리 → lock · docker 0 · 파일 무변(on · off).
+case_lock_spot() {
+  local ok=0 variant want lock
+  for variant in link dir; do
+    for want in on off; do
+      setup_case
+      lock="${ops_dir}/etc/${LOCK_NAME}"
+      if [[ "${variant}" == link ]]; then
+        : >"${ops_dir}/lock.target"
+        ln -s -- "${ops_dir}/lock.target" "${lock}"
+      else
+        mkdir -- "${lock}"
+      fi
+      ops_fixture::run "${SCRIPT}" -- "${want}" || return 1
+      ops_fixture::expect_line 'SIDECAR ROUND KEYS FAIL lock' 1 || ok=1
+      [[ "$(ops_fixture::count docker)" == 0 ]] || {
+        harness::add_reason "${variant} ${want}: docker 호출 있음"
+        ok=1
+      }
+      expect_untouched "${LINE_OFF}" || ok=1
+    done
+  done
+  return "${ok}"
+}
+
+# R32 — layout 대조는 맞았지만 그 컨테이너가 실행 중이 아님(기동 줄 뒤 멈춤 ·
+# 재시작 중) → verify 갈래: on 은 verify rolled-back, 복원 컨테이너면
+# restore-failed(종료 4), off 는 FAIL verify.
+case_not_running_after_verify() {
+  local ok=0
+  setup_case
+  up_mode 1 exited
+  ops_fixture::run "${SCRIPT}" -- on || return 1
+  expect_rolled_back 'SIDECAR ROUND KEYS FAIL verify rolled-back' \
+    pcbenchrecreated2 || ok=1
+
+  setup_case
+  up_mode 1 nojournal
+  up_mode 2 restarting
+  ops_fixture::run "${SCRIPT}" -- on || return 1
+  ops_fixture::expect_line 'SIDECAR ROUND KEYS FAIL journal restore-failed' 4 \
+    || ok=1
+  expect_compose_count 2 || ok=1
+
+  setup_case "${LINE_ON}"
+  up_mode 1 exited
+  ops_fixture::run "${SCRIPT}" -- off || return 1
+  ops_fixture::expect_line 'SIDECAR ROUND KEYS FAIL verify' 1 || ok=1
+  expect_content "${ops_dir}/etc/sidecar.env" "${LINE_OFF}" '스위치 파일' \
+    || ok=1
+  expect_compose_count 1 || ok=1
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/sidecar_round_keys_ops_test.sh\n' \
@@ -772,6 +919,12 @@ main() {
     case_runbook_disabled
   harness::run_case R17 '런북 layout 판정 → 실행 중 legacy(∧ Q1 0)만 OK' \
     case_runbook_layout
+  harness::run_case R30 '동시 실행 → 뒤 실행 lock · 무변 · 끝나면 풀림' \
+    case_concurrent_lock
+  harness::run_case R31 '잠금 자리 링크 · 디렉터리 → lock · 무변' \
+    case_lock_spot
+  harness::run_case R32 'layout 맞은 뒤 실행 중 아님 → verify 갈래' \
+    case_not_running_after_verify
 
   # shellcheck disable=SC2086 # 이름 목록을 낱낱으로 넘긴다.
   if ! harness::summary 0 ${CASES}; then

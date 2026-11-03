@@ -37,6 +37,7 @@ compose 로 한 묶음으로 돌리고, systemd 유닛 하나가 그 묶음 전�
 | `sidecar.env.tmpl` | `/etc/pokeclip-media/sidecar.env`(렌더본 · `root:root 0644` · 두 모드 공통 · 첫 부팅에만 씀 — 그 뒤의 정본은 이 파일) | 사이드카 서비스 `env_file`(새 꼴 쓰기 스위치 `PLAYBACK_ROUND_KEYS`) · `sidecar-round-keys.sh`(바꿔 씀) · 시작 스크립트(두 모드 모두 꼴 점검) |
 | `nginx/nginx.conf.tmpl` | `/etc/pokeclip-media/nginx.conf`(렌더본) | compose 가 nginx 에 읽기 전용 마운트(원본이 없으면 만들지 않음: `create_host_path: false`, nginx 기동만 실패) |
 | `mediamtx.yml.tmpl` | `/etc/pokeclip-media/mediamtx.yml.tmpl`(저장소 파일 그대로 — 두 모드 블록 · 토큰이 든 원본, 렌더하지 않는다) | `start-media.sh` 가 기동마다 모드 블록을 고르고 비밀을 채움 |
+| (`sidecar-round-keys.sh` 가 씀) | `/etc/pokeclip-media/sidecar-round-keys.lock`(빈 파일 · `root:root 0600` · 지우지 않음) | 스위치 스크립트의 동시 실행 잠금(`flock -n` — 프로세스가 끝나면 커널이 푼다. `flock` 은 AL2023 `util-linux-core` — systemd 가 요구해 상자에 늘 있다) |
 | (M9 이 씀) | `/etc/pokeclip-media/media.env` | 유닛 `EnvironmentFile` · 운영 확인 스크립트. 응답기 모드 키 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM` 은 응답기 모드에서만 읽는다 |
 | (M9 이 씀) | `/root/.docker/config.json`(ECR 자격 도우미 설정) | docker · 시작 스크립트 선행 점검 |
 | (시작 스크립트가 씀) | `/run/pokeclip-media/mediamtx.yml` · `mtx_api_pass` | MediaMTX · 사이드카(읽기 전용 bind — 원본이 없으면 만들지 않음: `create_host_path: false`, 그 컨테이너 기동만 실패) |
@@ -544,11 +545,11 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `INGEST AUTH DENY SYNC FAIL <단계>` | `usage`(종료 2) · `config`(옛 모드에서 파라미터 이름이 비면 여기 — 이름을 먼저 본다) · `not-running`(옛 모드 · 정지 — 아무것도 하지 않음) · `ssm` · `invalid` · `install` · `health` · `recreate` · `unhealthy` |
 | `ingest-auth-ip-limit.sh` | `INGEST AUTH IP LIMIT OK on\|off` | env 파일을 바꾸고 응답기를 재생성해, 새 컨테이너의 `ingestauth_started` 줄 `ip_limit` 가 요청한 값과 같음 |
 | | `INGEST AUTH IP LIMIT FAIL <단계>` | `usage`(종료 2) · `config` · `not-running` · `write` · `recreate` · `unhealthy` · `journal` · `verify` |
-| `sidecar-round-keys.sh` | `SIDECAR ROUND KEYS OK on\|off`(종료 0) | 스위치 파일 = 요청 값이고, 사이드카만 재생성한 새 컨테이너(ID 로 거른 태그 저널)의 `playback_key_layout` 줄 `layout` 이 `round` · `legacy` 로 일치 |
+| `sidecar-round-keys.sh` | `SIDECAR ROUND KEYS OK on\|off`(종료 0) | 스위치 파일 = 요청 값이고, 사이드카만 재생성한 새 컨테이너(ID 로 거른 태그 저널)의 `playback_key_layout` 줄 `layout` 이 `round` · `legacy` 로 일치하며 그 컨테이너가 대조 뒤에도 실행 중 |
 | | `SIDECAR ROUND KEYS FILE off`(종료 3) | off 인데 실행 중 사이드카 하나를 확인하지 못함(없음 · 둘 이상 · 조회 실패) — 파일만 끔으로 쓰고 재생성하지 않음. 반영은 유닛 재시작(런북) |
-| | `SIDECAR ROUND KEYS FAIL <단계> rolled-back`(종료 1) | on 이 `recreate` · `journal` · `verify` 에서 실패 → 복원 묶음 성공(파일 끔 → 다시 재생성 → **그 재생성이 만든** 컨테이너의 `layout=legacy`) |
+| | `SIDECAR ROUND KEYS FAIL <단계> rolled-back`(종료 1) | on 이 `recreate` · `journal` · `verify`(layout 이 다름 · 대조 뒤 그 컨테이너가 실행 중 아님) 에서 실패 → 복원 묶음 성공(파일 끔 → 다시 재생성 → **그 재생성이 만든** 컨테이너의 `layout=legacy` · 실행 중). 지금 파일이 이미 켬이었던 재적용도 복원은 끔으로 쓴다(안전 쪽 — 켬으로 되돌리려면 다시 on) |
 | | `SIDECAR ROUND KEYS FAIL <단계> restore-failed`(종료 4) | 복원 묶음의 한 걸음이 실패 — 파일 · 실행 상태 미확정, 런북 손 처리 |
-| | `SIDECAR ROUND KEYS FAIL <단계>` | `usage`(종료 2) · `config` · `not-running`(on 만) · `write`(on 은 지금 파일이 꼴 밖일 때도) — 아무것도 바꾸지 않았거나 파일 원본 그대로. off 의 `recreate` · `journal` · `verify` — 파일은 끔(종료 1) |
+| | `SIDECAR ROUND KEYS FAIL <단계>` | `usage`(종료 2) · `config` · `lock`(다른 실행이 잠금을 쥠 · 잠금 파일을 못 엶 · 자리가 링크 — 기다리지 않는다. 앞 실행이 끝났는지 본 뒤 다시) · `not-running`(on 만) · `write`(on 은 지금 파일이 꼴 밖일 때도) — 아무것도 바꾸지 않았거나 파일 원본 그대로. off 의 `recreate` · `journal` · `verify` — 파일은 끔(종료 1) |
 | `ops/force-diff.sh` | `FORCE REMAINING <n>` + 남은 ID | n 이 0 이면 복구 완료 |
 | | `FORCE FAIL input A\|B\|ended` · `FORCE FAIL usage` | 입력 거부 · 인자 오류 |
 | | `FORCE FAIL count A\|B` · `FORCE FAIL empty A` | 잘린 목록(ID 줄 수가 개수 인자와 다름 · 마지막 줄에 끝 줄바꿈 없음) · A 에 ID 가 없음 |
@@ -1139,7 +1140,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | `test/unit_restart_test.sh` | 유닛 재기동 사례 1–24(15–17 = 크래시 경로 · 19 = 기동 중 정지 · 20 · 21 = 저널 · 렌더 자리 건수 도구가 조회 실패를 0 건으로 바꾸지 않는지 — 가짜 sudo 로 정적 · 22 · 23 = 응답기 모드 D8 과 그 양성 대조 · 24 = 스위치 on 으로 사이드카만 재생성해도 유닛 · 부착 서비스 불변) | 1–3 · 20 · 21 은 어디서나, 4–19 · 22–24 는 리눅스 · systemd · sudo(CI 잡 media-host-systemd 3회). **13–17 은 호스트를 흔든다**(docker 엔진 재시작 · dockerd kill -9 · SIGKILL) — CI(`GITHUB_ACTIONS=true`) · 일회용 상자(`PCBENCH_ALLOW_HOST_DISRUPTION=1`)가 아니면 거부한다. 개발 머신에서 돌리지 않는다 |
 | `test/loopback_test.sh` · `paths_count_test.sh` · `paths_list_test.sh` · `secret_count_test.sh` · `force_diff_test.sh` | 운영 확인 스크립트(가짜 명령) | 어디서나 |
 | `test/ingest_auth_ops_test.sh` | 응답기 운영 스크립트 둘(가짜 aws · docker · journalctl — argv · 판정 줄 · 원자 교체) | 어디서나 |
-| `test/sidecar_round_keys_ops_test.sh` | 스위치 스크립트(가짜 docker · compose · journalctl — 판정 줄 · 종료 코드 · 원자 교체 · 실행 중 사이드카와 그 컨테이너가 만들 때 읽은 값 · 복원 묶음) | 어디서나 |
+| `test/sidecar_round_keys_ops_test.sh` | 사례 R1–R17 · R30–R32. 스위치 스크립트(R1–R15 · R30–R32 — 가짜 docker · compose · journalctl · flock: 판정 줄 · 종료 코드 · 원자 교체 · 실행 중 사이드카와 그 컨테이너가 만들 때 읽은 값 · 복원 묶음 · 동시 실행 잠금 · 대조 뒤 실행 중 재확인)와 교체 런북의 상자 판정 스크립트 둘(R16 · R17) | 어디서나 |
+| `test/echo/main_test.go` | 에코 도구의 Go 단위 시험(사이드카 흉내의 기동 신호 줄) | 에코 이미지 빌드 단계(`test/echo/Dockerfile` — `go test` 가 실패하면 빌드 실패). CI 는 media-host-systemd 잡의 `unit_restart_test` 준비가 빌드한다 |
 | `test/ingest_auth_contract.sh` | 송출 인증 계약 — C0(실물 MediaMTX 의 `authInternalUsers: []` 수용) · 층 L(옛 모드) · 층 A(가짜 응답기) · 층 B(실물 응답기 + 가짜 4C, 실물 cut 포함) | 로컬만(CI 상설 아님 — 무겁고, infra-ci 경로 필터가 응답기 변경에 돌지 않는다). 프로젝트 `pcbench-m15-ingest-auth` · 라벨 `com.pokeclip.bench=m15-ingest-auth` · 호스트 게시 0. 운영 스크립트 사례(C13 · C15 · C18)는 보조 컨테이너(`test/ops_runner` — 판 고정 이미지) 안에서 돌고 거부 목록은 named volume 이다 — 맥 호스트가 rename 한 파일을 virtiofs 로 읽으면 첫 읽기가 잘려 C18 이 흔들렸다(M15 c12). OrbStack · 기본 소켓(`/var/run/docker.sock`) 엔진 전용이다 — 보조 컨테이너에 붙이는 소켓이 바깥 docker CLI 와 같은 엔진이라고 확인하지 않으므로 `DOCKER_HOST` · 원격 · rootless 엔진에서는 돌리지 않는다 |
 | `test/harness_selftest.sh` · `query_guard_selftest.sh` | 시험 부품 자체 | 어디서나 |
 
