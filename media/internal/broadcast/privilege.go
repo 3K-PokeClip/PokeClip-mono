@@ -24,10 +24,10 @@ SELECT p FROM pg_catalog.unnest($1::text[]) AS p
  WHERE NOT pg_catalog.has_table_privilege('broadcast_lifecycle_outbox', p)
  ORDER BY p`
 
-// MissingPrivileges 는 접속 계정에 없는 outbox 권한을 「표:권한」 꼴로 돌려준다(이름 순 · 다 있으면 빈 목록). 부르는
-// 쪽은 하나라도 있으면 게이트를 끈다(ERROR lifecycle_disabled reason=privilege — D50). 그러면 EnqueueStarted ·
-// EnqueueEndedIfComplete 가 문장을 보내지 않아, 운영 권한(30_grants.sql)이 아직 없는 DB 에서도 개시 · phase 4 가
-// 42501 로 막히지 않는다.
+// MissingPrivileges 는 접속 계정에 없는 outbox 권한을 「표:권한」 꼴로 돌려준다(이름 순 · 다 있으면 빈 목록). 발행기
+// 준비가 쓴다 — 하나라도 있으면 발행기를 띄우지 않고 강등한다(ERROR lifecycle_degraded value=1 reason=privilege — D50).
+// 게이트는 켜진 채이고, 운영 권한(30_grants.sql)이 아직 없는 DB 에서 개시 · phase 4 가 42501 로 막히지 않게 하는 것은
+// 적재 직전의 판정(outboxWritable)이다.
 func MissingPrivileges(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 	rows, err := pool.Query(ctx, missingPrivilegesSQL, outboxPrivileges[:])
 	if err != nil {
