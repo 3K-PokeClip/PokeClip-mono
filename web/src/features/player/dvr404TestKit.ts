@@ -45,11 +45,12 @@ function confirmedBySpec(state: PlaybackSessionState): number | null {
 }
 
 /**
- * 계획 3-2 의 이어 볼 자리 — 되감기 소스는 확인된 위치 → 끝나지 않은 시크 → 이
- * 소스의 시작 요청(「목록 하한에서」 는 모름), 그 밖은 lastAtMs. 모르면 null
+ * 계획 3-2 의 이어 볼 자리 — 되감기 · 다시보기 소스는 확인된 위치 → 끝나지 않은 시크
+ * → 이 소스의 시작 요청(「목록 하한에서」 는 모름), 라이브 소스는 lastAtMs. 모르면 null
+ * (다시보기 갈래 — c7 리뷰 V7-1)
  */
 export function resumeBySpec(state: PlaybackSessionState): number | null {
-  if (state.source.kind !== 'rewind') return state.lastAtMs;
+  if (state.source.kind === 'live') return state.lastAtMs;
   const start = state.source.startAtMs;
   const requested = start === FROM_FLOOR_MS ? null : start;
   return confirmedBySpec(state) ?? state.pendingSeekMs ?? requested;
@@ -95,7 +96,7 @@ function isCurrentPosition(before: PlaybackSessionState, event: SessionEvent): b
   return event.type === 'position' && event.epoch === before.positionEpoch;
 }
 
-/** T2 · T3 · T6 — 다시 받기 · 같은 url 다시 세우기 · 리마운트의 시작 */
+/** T2 · T3 · T6 — 다시 받기 · 같은 url 다시 세우기 · 리마운트(되감기 · 다시보기)의 시작 */
 function assertRestart(
   before: PlaybackSessionState,
   event: SessionEvent,
@@ -112,10 +113,12 @@ function assertRestart(
     source.url === before.source.url &&
     source.generation > before.source.generation;
   if (sameUrlAgain) expect(source.startAtMs, 'T3 같은 url 다시 세움 ⇒ 시작 있음').not.toBeNull();
-  const remounted =
-    event.type === 'remount' && before.source.kind === 'rewind' && source.kind === 'rewind';
-  if (remounted) {
+  if (event.type !== 'remount' || source.kind !== before.source.kind) return;
+  if (source.kind === 'rewind') {
     expect(source.startAtMs, 'T6 리마운트 ⇒ 시작 = restartAtMs(앞)').toBe(restartBySpec(before));
+  }
+  if (source.kind === 'vod') {
+    expect(source.startAtMs, 'T6 vod 리마운트 ⇒ 시작 = resumeAtMs(앞)').toBe(resumeBySpec(before));
   }
 }
 

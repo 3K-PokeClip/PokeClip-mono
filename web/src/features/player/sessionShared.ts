@@ -49,12 +49,14 @@ export function confirmedAtMs(session: PlaybackSessionState): number | null {
 }
 
 /**
- * 이어 볼 자리. 되감기 소스는 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작 요청(「목록
- * 하한에서」 는 모름), 그 밖의 소스는 lastAtMs 다. 모르면 null. 첫 위치 전의 lastAtMs 는 앞
- * 소스의 자리라 되감기 소스에서는 읽지 않는다
+ * 이어 볼 자리. 되감기 · 다시보기 소스는 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작
+ * 요청(「목록 하한에서」 는 모름), 라이브 소스는 lastAtMs 다. 모르면 null. 첫 위치 전의
+ * lastAtMs 는 앞 소스의 자리라 되감기 · 다시보기 소스에서는 읽지 않는다(다시보기 — c7 리뷰
+ * V7-1: 다시보기로 옮긴 직후 리마운트가 앞 되감기 소스의 자리에서 서지 않게). 다시보기의
+ * 시작 요청 null 은 「처음부터」 라 그대로 null 이다
  */
 export function resumeAtMs(session: PlaybackSessionState): number | null {
-  if (session.source.kind !== 'rewind') return session.lastAtMs;
+  if (session.source.kind === 'live') return session.lastAtMs;
   const start = session.source.startAtMs;
   const requested = start === RELIST_FROM_FLOOR_MS ? null : start;
   return confirmedAtMs(session) ?? session.pendingSeekMs ?? requested;

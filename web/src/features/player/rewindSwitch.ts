@@ -121,7 +121,10 @@ export interface PlaybackSessionState extends HandoffFields {
   liveUrl: string;
   phase: SessionPhase;
   source: PlaybackSource;
-  /** 마지막으로 본 자리(P) — 리마운트 잇기 · 계승 판정 · 이음 지점 */
+  /**
+   * 마지막으로 본 자리(P) — 이어 볼 자리 · 계승 판정 · 이음 지점의 재료. 소스를 바꿔도 그대로라 첫 위치
+   * 전에는 앞 소스의 자리다 — 지금 소스의 것인지는 positionGeneration 으로 가른다(sessionShared 의 confirmedAtMs)
+   */
   lastAtMs: number | null;
   /** 세션이 본 가장 이른 자리 — VOD 일치 대조 */
   watchedFromMs: number | null;
@@ -565,14 +568,15 @@ function remountRelist(phase: SessionPhase): SessionPhase {
 
 /**
  * 리마운트의 시작 — 되감기는 이어 볼 자리에서 다시 선다(첫 위치 전의 lastAtMs 는 앞 소스 자리이거나
- * 비었다 — POK-528 R3). 다시보기는 마지막 자리 · 라이브는 라이브 끝(지금 동작)
+ * 비었다 — POK-528 R3 · 모르면 목록 하한에서). 다시보기도 이어 볼 자리다 — 첫 위치 전이면 청한 자리 ·
+ * 시크 목표, 모르면 처음부터(null — c7 리뷰 V7-1). 라이브는 라이브 끝(지금 동작)
  */
 function remountStartAtMs(session: PlaybackSessionState): number | null {
   switch (session.source.kind) {
     case 'rewind':
       return restartAtMs(session);
     case 'vod':
-      return session.lastAtMs;
+      return resumeAtMs(session);
     case 'live':
       return null;
   }

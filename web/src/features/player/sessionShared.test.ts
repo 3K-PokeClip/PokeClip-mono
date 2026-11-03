@@ -4,8 +4,9 @@ import { openSession, type PlaybackSessionState, type PlaybackSource } from './r
 import { RELIST_FROM_FLOOR_MS, confirmedAtMs, restartAtMs, resumeAtMs } from './sessionShared';
 
 // 이어 볼 자리 판정 하나(POK-528 c7 — 계획 3-2 · 8-0 의 resumeAtMs 표). 되감기 소스는
-// 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작 요청(「목록 하한에서」 는 모름), 그 밖의
-// 소스는 lastAtMs 다. 감싸개(dvr404TestKit)의 사본과 같은 값인지도 함께 본다.
+// 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작 요청(「목록 하한에서」 는 모름)이고,
+// 다시보기 소스도 같다(c7 리뷰 V7-1 — 첫 위치 전 리마운트). 라이브 소스는 lastAtMs 다.
+// 감싸개(dvr404TestKit)의 사본과 같은 값인지도 함께 본다.
 
 const L = 1_000_000;
 const Q = 2_000_000;
@@ -48,8 +49,8 @@ describe('resumeAtMs — 이어 볼 자리(계획 3-2)', () => {
     ['rewind', 'floor', null],
     ['rewind', 'none', null],
     ['vod', 'confirmed', L],
-    ['vod', 'seeking', L],
-    ['vod', 'requested', L],
+    ['vod', 'seeking', Q],
+    ['vod', 'requested', S0],
     ['vod', 'none', null],
     ['live', 'confirmed', L],
     ['live', 'requested', L],

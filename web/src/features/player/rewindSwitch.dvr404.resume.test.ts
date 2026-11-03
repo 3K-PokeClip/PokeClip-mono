@@ -5,7 +5,9 @@ import {
   A1,
   A2,
   ASKED,
+  END_REACHED,
   ENDLIST,
+  LIVE_AT,
   LIVE_URL,
   MIN,
   NOW,
@@ -39,9 +41,52 @@ import { SESSION_NOTICES, type PlaybackSessionState, type SessionEvent } from '.
 beforeEach(resetEventKit);
 
 /** 라이브 위치는 품고 청한 자리는 품지 않는 같은 회차 새 url */
-const liveOnlyA2 = () => poll(liveReady(A2, NOW - 30 * MIN));
+function liveOnlyA2(): SessionEvent {
+  return poll(liveReady(A2, NOW - 30 * MIN));
+}
+
 /** 청한 자리까지 품는 같은 회차 새 url */
-const wideA2 = () => poll(liveReady(A2, T0));
+function wideA2(): SessionEvent {
+  return poll(liveReady(A2, T0));
+}
+
+/** 목록 안 시크의 목표 — 청한 자리 ASKED · 확인된 자리 P20 와 다르다 */
+const SOUGHT = T0 + 40 * MIN;
+const REMOUNT: SessionEvent = { type: 'remount' };
+
+/** 되감기 목록 안 시크 — 하한은 첫 조각 + 여유 */
+function seekRewind(targetMs = SOUGHT): SessionEvent {
+  return { type: 'seek', targetMs, view: { lowerMs: T0 + 12_000, endMs: NOW } };
+}
+
+/** 다시보기 목록 안 시크 — 다시보기는 하한 여유가 없다 */
+function seekVod(targetMs: number): SessionEvent {
+  return { type: 'seek', targetMs, view: { lowerMs: T0, endMs: NOW } };
+}
+
+/**
+ * 다시보기 재생기를 다시 세운다 — 시작은 이어 볼 자리(확인된 위치 · 시크 목표 · 청한 자리)이고, 첫
+ * 위치 전이면 앞 되감기 소스의 lastAtMs(라이브 위치 LIVE_AT)가 아니다(c7 리뷰 V7-1). 세대는 하나 오른다
+ */
+function expectVodRemountAt(vod: PlaybackSessionState, startAtMs: number | null): void {
+  const again = feed(vod, [REMOUNT]).state;
+  expect(again.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs });
+  expect(again.source.generation).toBe(vod.source.generation + 1);
+}
+
+/** 라이브 위치를 남긴 채 되감은 뒤 ENDLIST → 회차별 vod 로 다시보기 제안까지 온 세션 */
+function offeredFromLive(): PlaybackSessionState {
+  return feed(rewindFromLive(), [ENDLIST, { type: 'round-poll', result: vodReady() }]).state;
+}
+
+/**
+ * 다시 받는 중('paint')에 시크해 시크가 끝나지 않은 되감기(18절의 relist · S) — 404 → 다시
+ * 받기 → 첫 목록 판정 뒤 목록 안 시크. 시작 요청은 ASKED, 시크 목표는 SOUGHT 다
+ */
+function paintSeeking(): PlaybackSessionState {
+  const requested = rewindFromLive();
+  return feed(requested, [gone(requested), loaded(A1, false), seekRewind()]).state;
+}
 
 describe('Q1 — 폴링의 새 url 교체는 이어 볼 자리로 범위를 본다(계획 3-4)', () => {
   it('① 404 뒤 다시 받는 중 · 라이브 위치만 품은 새 url → 교체 없음 · pendingNext · 청한 자리 유지 → 판정 → 화면', () => {
@@ -142,13 +187,12 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
     const vod = feed(blocked, [{ type: 'round-poll', result: vodReady() }]);
     expect(vod.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: ASKED });
     expect(notices(vod.effects)).toEqual([]);
+    expect(vod.state.lastAtMs).toBe(LIVE_AT);
+    expectVodRemountAt(vod.state, ASKED);
   });
 
   it('3 다시보기 제안(되감기 소스 · 첫 위치 전) — 404 · 단추 모두 청한 자리에서 / 대조: live 기원은 lastAtMs', () => {
-    const offered = feed(rewindFromLive(), [
-      ENDLIST,
-      { type: 'round-poll', result: vodReady() },
-    ]).state;
+    const offered = offeredFromLive();
     expect(offered.phase.kind).toBe('vod-offered');
     const byGone = feed(offered, [gone(offered)]).state;
     expect(byGone.source).toMatchObject({ kind: 'vod', startAtMs: ASKED });
@@ -164,6 +208,26 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
     expect(liveOffered.phase.kind).toBe('vod-offered');
     const liveVod = feed(liveOffered, [{ type: 'button', which: 'vod' }]).state;
     expect(liveVod.source).toMatchObject({ kind: 'vod', startAtMs: T0 + 30 * MIN });
+    expectVodRemountAt(byGone, ASKED);
+    expectVodRemountAt(byButton, ASKED);
+  });
+
+  it('3 뒤 · 끝에 닿은 뒤의 단추 vod 는 처음부터(null) — 첫 위치 전 리마운트도 처음부터', () => {
+    const atEnd = feed(offeredFromLive(), [END_REACHED, { type: 'button', which: 'vod' }]).state;
+    expect(atEnd.source).toMatchObject({ kind: 'vod', startAtMs: null });
+    expect(atEnd.lastAtMs).toBe(LIVE_AT);
+    expectVodRemountAt(atEnd, null);
+  });
+
+  it('3 뒤 · 다시보기 안 시크가 끝나기 전 리마운트 → 시크 목표 / 확인된 위치 뒤 → 그 자리(지금 동작)', () => {
+    const opened = feed(offeredFromLive(), [{ type: 'button', which: 'vod' }]).state;
+    const seeking = feed(opened, [seekVod(SOUGHT)]).state;
+    expect(seeking.pendingSeekMs).toBe(SOUGHT);
+    expectVodRemountAt(seeking, SOUGHT);
+    const watched = feed(opened, [loaded(VOD), pos(ASKED + 30_000)]).state;
+    expectVodRemountAt(watched, ASKED + 30_000);
+    const settled = feed(seeking, [loaded(VOD), pos(SOUGHT + 4_000)]).state;
+    expectVodRemountAt(settled, SOUGHT + 4_000);
   });
 
   it('[새 함수 — 음성 대조 제외 · 변이 M7z2 로 교정] 목록 하한(0)에서 선 relist → 막힘 → vod 는 처음부터 · 알림 0(손 상태 — J2)', () => {
@@ -176,16 +240,37 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
   });
 });
 
+describe('relist · S — 다시 받는 중의 시크 목표가 시작 요청을 이긴다(18절 · c7 리뷰 cx M)', () => {
+  it('paint 진입 뒤 시크 → relist 유지 · 이어 볼 자리는 시크 목표', () => {
+    const s = paintSeeking();
+    expect(s.phase).toEqual(relistPhase('paint'));
+    expect(s.source.startAtMs).toBe(ASKED);
+    expect(s.pendingSeekMs).toBe(SOUGHT);
+    expect(resumeBySpec(s)).toBe(SOUGHT);
+  });
+
+  it('폴링 교체 · 리마운트 · 화면 전 404 → 막힘 → vod 모두 시크 목표에서', () => {
+    const s = paintSeeking();
+    const swapped = feed(s, [wideA2()]).state;
+    expect(swapped.source).toMatchObject({ url: A2, startAtMs: SOUGHT });
+    const remounted = feed(s, [REMOUNT]).state;
+    expect(remounted.source).toMatchObject({ url: A1, startAtMs: SOUGHT });
+    expect(remounted.phase).toEqual(relistPhase('list'));
+    const blocked = feed(s, [gone(s)]).state;
+    expect(blocked.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
+    const vod = feed(blocked, [{ type: 'round-poll', result: vodReady() }]).state;
+    expect(vod.source).toMatchObject({ kind: 'vod', startAtMs: SOUGHT });
+  });
+});
+
 describe('T5 — 그대로 칸의 사건은 이어 볼 자리를 바꾸지 않는다(18절 표 · 감싸개가 단언)', () => {
   /** 18절의 위치 상태 — 확인됨(C) · 시크 중(S) · 요청만(R) × relist 없음 · list · paint */
   function starts(): Array<[string, PlaybackSessionState]> {
     const confirmed = rewindAt(P20);
-    const seeking = feed(confirmed, [
-      { type: 'seek', targetMs: T0 + 40 * MIN, view: { lowerMs: T0 + 12_000, endMs: NOW } },
-    ]).state;
+    const seeking = feed(confirmed, [seekRewind()]).state;
     const requested = rewindFromLive();
     const listing = feed(requested, [gone(requested)]).state;
-    const paintingS = feed(seeking, [gone(seeking), loaded(A1, false)]).state;
+    const paintingS = paintSeeking();
     return [
       ['C', confirmed],
       ['S', seeking],
