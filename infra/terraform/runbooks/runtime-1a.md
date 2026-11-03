@@ -1011,21 +1011,26 @@ ID 이고 `started_at` 이 「O8a 당김 교체」 걸음 8 시각 이후인 회
 | `Q3` | 시험 회차 세션 가운데 `round_closed_at` 이 비었거나 `ended` 아닌 수 | 종료 판정 — 0 |
 | `Q3_all` | 시험 ID 의 모든 세션 가운데 `ended` 아니거나 회차가 열린 수(`started_at` 조건 없음) | 걸음 13 직전 — 0 |
 | `abandoned` | 시험 ID 의 outbox `abandoned` 행 수 | 종료 판정 — 0 |
-| `rounds` | 시험 회차 수 | 기록만(회차 수를 고정하지 않음) |
+| `rounds` | 시험 회차 수 | 종료 판정 · 롤백 · 교체 전 — 1 이상(회차 수는 고정하지 않음). 걸음 13 전에는 시험 회차가 없어 0 이고, 그때는 Q4 로 봄 |
 | `Q4_<상태>` | 상태별 outbox 행 수(전체) — 행이 없으면 이 줄도 없음 | 걸음 0 · 8 · 12 의 기준선 — `Q4_` 줄 0 |
 
 *   `Q1 > 0 ∧ Q3 = 0` 은 자동 복구 경로가 없는 갈래입니다(Media 교체 런북
     「O8a 당김 — 롤백」 — kty 회부).
+*   **`rounds` 가 0 이면 Q1 · Q2 · Q3 · `abandoned` 의 0 은 판정이
+    아닙니다.** 시험 회차를 하나도 잡지 못하면 이 넷은 입력과 무관하게 0 이
+    됩니다. 걸음 13 뒤인데 0 이면 멈추고 시험 ID · 걸음 8 시각을 다시
+    봅니다.
 *   시험 ID · 걸음 8 시각을 질의에 넣기 전에 꼴을 봅니다 — 시험 ID 는 26자
-    Crockford base32, 시각은 epoch 초 정수입니다. 꼴 밖이면 멈춥니다(질의에
-    따옴표 · 문장이 끼지 않게).
+    Crockford base32 대문자, 시각은 10자리 epoch 초입니다(밀리초 13자리는 꼴
+    밖). 꼴 밖이면 함수가 「멈춤」 을 내고 질의를 만들지도 보내지도 않습니다
+    (질의에 따옴표 · 문장이 끼지 않게).
 
 ```shell
-test_id='<시험 ingestStreamId>'
-since='<걸음 8 시각 — epoch 초>'
-[[ "${test_id}" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ && "${since}" =~ ^[0-9]+$ ]] ||
-  echo "멈춤: 시험 ID 또는 시각의 꼴이 틀림" >&2
-cat >"${payload}/publish-rest.tmpl" <<'SQL'
+make_publish_rest() {  # make_publish_rest <시험 ID> <걸음 8 시각 — epoch 초>
+  local test_id="$1" since="$2"
+  [[ "${test_id}" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ && "${since}" =~ ^[0-9]{10}$ ]] ||
+    { echo "멈춤: 시험 ID 또는 시각의 꼴이 틀림" >&2; return 1; }
+  cat >"${payload}/publish-rest.tmpl" <<'SQL'
 SET TRANSACTION READ ONLY;
 SET ROLE media_owner;
 WITH test_rounds AS (
@@ -1065,9 +1070,13 @@ UNION ALL
    FROM broadcast_lifecycle_outbox o GROUP BY o.state ORDER BY o.state);
 RESET ROLE;
 SQL
-sed -e "s/@@TEST_ID@@/${test_id}/g" -e "s/@@SINCE@@/${since}/g" \
-  "${payload}/publish-rest.tmpl" >"${payload}/publish-rest.sql"
-make_read publish-rest "${payload}/publish-rest.sql" && send_step publish-rest
+  sed -e "s/@@TEST_ID@@/${test_id}/g" -e "s/@@SINCE@@/${since}/g" \
+    "${payload}/publish-rest.tmpl" >"${payload}/publish-rest.sql" ||
+    { echo "멈춤: 질의 파일을 만들지 못함" >&2; return 1; }
+  make_read publish-rest "${payload}/publish-rest.sql"
+}
+make_publish_rest '<시험 ingestStreamId>' '<걸음 8 시각 — epoch 초>' &&
+  send_step publish-rest
 ```
 
 *   기록에 옮기는 것은 `== read` 뒤 `q | n` 줄뿐입니다. 회차 id · 행 원문은

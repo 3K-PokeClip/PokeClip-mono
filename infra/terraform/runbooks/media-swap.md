@@ -624,7 +624,7 @@ ended → SNS FIFO → clip · chat 큐)을 시험 계정 하나에만 켭니다
 **게이트 공존 규칙:** 같은 DB 에 붙은 사이드카는 모두 게이트가 켜져 있어야
 합니다 — media-host README 「계약9 발행」. 꺼졌을 수 있는 사이드카(옛 모드 ·
 빈 목록 · 기동 판정 전)를 DB 에 붙이기 전에는 아래 송출 금지 구간을 열고
-Q1 = 0 을 봅니다.
+Q1 = 0 · `rounds` ≥ 1 을 봅니다(시험 회차가 생기기 전이면 Q4 0 행).
 
 **송출 금지 구간:** kty · 시험 계정을 포함해 팀 IP 에서 송출하는 누구도
 송출하지 않습니다(O8a 5 전이라 NLB 인바운드는 팀 IP 뿐). 기계 차단이 없는
@@ -637,38 +637,55 @@ Q1 = 0 을 봅니다.
 
 ### O8a 당김 교체 걸음
 
-| 걸음 | 동작 | 통과 |
-|---|---|---|
-| 0 | 읽기 확인 — A 사이드카 다이제스트가 M6 하한 이상인지 · 런타임 출력 `broadcast_topic_arn` 실재(이름만) · 지금 적용된 역할 정책의 Sid 목록 · 상자 root `cli_history` 꺼짐 · Q4 기준선 · A 차단 수단(아래 「A 차단」) · 사이드카 시험의 「게이트 꺼짐이면 ended 생략」 사례 이름 · POK-196 세션 통지 | 기록. Q4 0 행 |
-| 1–3 | PR 머지 → 응답기 이미지(재빌드 권장 · arm64) → 직전 점검(`O7e` 묶음 · `sns:Publish` 손 판정 · 2-3 · 이벤트) | 허용 · PASS · 예상 밖 이벤트 0 |
-| 4 | A 에서 resolve 미리 부르기(media-host README 「O8a 2 전 필수 조건」 5) | `code=200` |
-| 5–6 | tfvars(응답기 다이제스트 · `stream_key_resolve_url` · `lifecycle_publish_streams = [<시험 ID>]` · `instances.b`) → plan 범위(위 표 「O8a 당김 B 기동」) → apply | 기대와 일치 |
-| 7 | (관찰) A 태그 저널 `lifecycle_disabled reason=no_topic` 건수 — 공유 역할 정책이 A 에도 걸렸지만 env 가 없어 발행하지 않음 | 기록 |
-| 8 | B 기동 판정(`start-check.sh ingest-auth,janitor,mediamtx,nginx,sidecar` · 관찰 판정) · 응답기 `ingestauth_started` 의 `"auth_channel":"resolve-token"` · `end_signal_disabled` 0 · `lifecycle-check.sh <걸음 8 시각>` · Q4 · 사이드카 컨테이너 id 기록. **(ㄱ) 시작** | `MEDIA START OK` · `MEDIA WATCH OK` · `M-B OK` · Q4 0 행 |
-| 9–11 | 정상 교체 4(A · B `PATHS 0`) → 5(ingest) → 6 · 7(http · 일관성) | 정상 교체와 같음 |
-| 12 | A 정지 · 차단 — A 업로드 적체 0(「한 창 절차 7′」 의 앞 조건) → A `PATHS 0` → `stop.sh` → `stopped-check.sh` → `disable.sh` → `blocked-check.sh disabled` → Q4. **(ㄱ) 끝** | `M-A OK` · Q4 0 행 — DB 에 붙은 사이드카 = B 하나 |
-| 13 | M-A · M-B · **`Q3_all` = 0**(시험 ID 의 열린 회차 — `started_at` 조건 없음) → B 루프백 `--passphrase` · 상자 안 익명 SRT 거부. 끝나면 종료 감시 | `LOOPBACK OK` · 익명 거부 |
-| 14 | O8a 3 거부 셋(B `PATHS 0` 일 때 — 잘못된 passphrase · 익명 · 다른 사용자 경로) | 셋 다 거부 · outbox 행 수 변화 0 |
-| 15 | 유지 시험 송출(팀 IP → NLB → B · O8a 3 정상 키 · O8a 4 출발지 보존) — 22 끝까지. 송출 감시 시작 | B `PATHS` 1 |
-| 16 | 상자 루프백 `…/<시험 ID>/index.m3u8?cookieCheck=1` — Bearer 없이 · 있게 | 401 · 200 쌍 |
-| 17 | started 판정 — 시험 회차 sequence 1 `published` · B `lifecycle_published` · clip `broadcast.intake.handled` · chat `LINK_REFUSED` · DLQ 0(상한 5분) | 전부 |
-| 18–20 | O7f 10 · 11(7-R) · 12 — [엣지 시험 런북](/infra/terraform/runbooks/edge-tests.md) · [엣지 비밀 런북](/infra/terraform/runbooks/edge-secrets.md) 「T6b 대체 절차」 | 런북 판정 |
-| 21 | O8a 3 팀 IP 밖 송출 거부 | 거부 |
-| 22 | P47-가 — 유지 송출 중 부하(media-host README 「O8a 2 전 필수 조건」 2) | 도달률 95% 이상 · 기록 |
-| 23 | **송출 끄기 직전** M-B · M-A → kty 가 유지 송출을 끈다(시각 기록) | `M-B OK` · `M-A OK` |
-| 24 | 1차 종료 대기 — 종료 감시 · Q1 = Q2 = Q3 = 0 · ended `lifecycle_published` · clip ended 처리 · clip 기록 종료(상한 30분) | 전부 |
-| 25 | 1단-나 ② 9 · 10([런타임 런북](/infra/terraform/runbooks/runtime-1a.md)) — ② 9 는 이 절의 증거와 대조표로 갈음 | 런북 판정 |
-| 26 | P47-나 — 앞 회차 전부 닫힌 뒤 같은 부하에서 루프백으로 새 송출 수락 지연. 직전 M-B · M-A, 끝나면 종료 감시 | 도달률 95% 이상 · 기록 |
-| 27 | 최종 종료 판정 — 시험 회차 전부(Q1 = Q2 = Q3 = 0 · ended published · clip 처리) · 감시 기록(상한 30분) | 전부 |
-| 28–29 | 종료 뒤 시험 · `secret-count --passphrase` box · ssm | 런북 판정 · 둘 다 0 |
-| 30 | 하루 관찰 뒤 A 회수 — `blocked-check.sh` · A 업로드 적체 0 · Q1 = 0 | `M-A OK` · 회수 완료 |
-| 32 | (O8a 5 직전 · D4) 목록 `*` 인 C 로 교체 — (ㄴ) 시작 → Q1 = Q2 = Q3 = 0 → C 기동 · `lifecycle-check.sh`(C) → 전환 → **B 정지 · disable · `blocked-check.sh`(B)** → (ㄴ) 끝 → 하루 뒤 회수 직전 `blocked-check.sh`(B) 다시 | `M-B OK`(C) · `M-A OK`(B) |
+| 걸음 | 동작 | 통과 | 실패 시 · 멈춤 |
+|---|---|---|---|
+| 0-a | 읽기 확인 — A 사이드카 다이제스트가 M6 하한 이상인지(M6 정산 · 회차 닫힘 스캔을 도는 판인지) | 기록 | 다르면 kty 보고. 하한 아래면 롤백에 「한 창 절차 — A 를 다시 띄울 때」 조건을 더함(아래 롤백 표) |
+| 0-b | 런타임 출력 `broadcast_topic_arn` 실재(이름만 · 값 가림) | 출력 이름 있음 | 없으면 런타임 재적용 필요 → kty 회부 |
+| 0-c | 지금 적용된 역할 정책의 Sid 목록 | Sid 목록 기록 | 걸음 6 plan 기대를 이 결과로 정함 |
+| 0-d | 상자 root `cli_history` 꺼짐 | 꺼짐 | 켜져 있으면 kty 보고(비밀 동작 전) |
+| 0-e | Q4 기준선 | Q4 0 행 | 0 이 아니면 출처 확인 뒤 kty 보고 |
+| 0-f | P47 진입 경로 — 미디어 ALB 의 scheme · 리스너 · SG 출발지 · CloudFront 원본 검증 상태 · NLB SG 가 팀 IP 송출을 받는지 | 경로 기록(값 가림) | 팀 IP → NLB 송출 경로가 없으면 걸음 14 · 15 는 kty 회부(대안 설계 안 함) |
+| 0-g | 사이드카 시험의 「게이트 꺼짐이면 ended 생략」 사례 이름 | 사례 이름 | 없으면 POK-196 세션 통지(차단 아님) |
+| 0-h | POK-196 세션 통지 · 확인 — 발행 켜기 착수 · 게이트 공존 규칙 · 중복 여부 · 후속(사이드카 강등 근본 수정) 요청 | 회신(후속 수락 여부 포함) | 중복이면 kty 회부. 후속 거절이면 kty 회부(O8a 5 개통 조건이라) |
+| 0-i | A 차단 수단(아래 「A 차단」) | disable 만 · disable + mask 중 하나로 확정 | 판정 불가면 disable + mask(보수 — 롤백 ④ 에서 둘 다 되돌림). mask 가 실패하면 아래 「A 차단」 대로 kty 회부 |
+| 1–3 | PR 머지 → 응답기 이미지(재빌드 권장 · arm64) → 직전 점검(`O7e` 묶음 · `sns:Publish` 손 판정 · 2-3 · 이벤트) | 허용 · PASS · 예상 밖 이벤트 0 | 2 실패면 432e3495 사용. 3 이 거부 · 변경이면 멈추고 kty 보고 |
+| 4 | A 에서 resolve 미리 부르기(media-host README 「O8a 2 전 필수 조건」 5) | `code=200` | 실패면 4C 원인 해소 전 진행 금지 |
+| 5–6 | tfvars(응답기 다이제스트 · `stream_key_resolve_url` · `lifecycle_publish_streams = [<시험 ID>]` · `instances.b`) → plan 범위(위 표 「O8a 당김 B 기동」) → apply | 기대와 일치 | 기대 밖 차분이면 apply 안 함 |
+| 7 | (관찰) A 태그 저널 `lifecycle_disabled reason=no_topic` 건수 — 공유 역할 정책이 A 에도 걸렸지만 env 가 없어 발행하지 않음 | 기록 | — |
+| 8 | B 기동 판정(`start-check.sh ingest-auth,janitor,mediamtx,nginx,sidecar` · 관찰 판정) · 응답기 `ingestauth_started` 의 `"auth_channel":"resolve-token"` · `end_signal_disabled` 0 · `lifecycle-check.sh <걸음 8 시각>` · Q4 · 사이드카 컨테이너 id 기록. **(ㄱ) 시작** | `MEDIA START OK` · `MEDIA WATCH OK` · `M-B OK` · Q4 0 행 | `lifecycle_disabled` 면 B 에 송출하지 않고 B 를 고쳐 재교체. outbox 행이 없어 A 는 그대로 안전 |
+| 9–11 | 정상 교체 4(A · B `PATHS 0`) → 5(ingest) → 6 · 7(http · 일관성) | 정상 교체와 같음 | 9 가 0 이 아니면 멈춤. 10 · 11 의 되돌림 = 전환 역적용(outbox 0 행이라 조건 없음) |
+| 12 | A 정지 · 차단 — A 업로드 적체 0(「한 창 절차 7′」 의 앞 조건) → A `PATHS 0` → `stop.sh` → `stopped-check.sh` → `disable.sh` → `blocked-check.sh disabled` → Q4. **(ㄱ) 끝** | `M-A OK` · Q4 0 행 — DB 에 붙은 사이드카 = B 하나 | 적체가 안 빠지면 송출하지 않고 기다림 · 창을 넘기면 kty 보고 |
+| 13 | M-A · M-B · **`Q3_all` = 0**(시험 ID 의 열린 회차 — `started_at` 조건 없음) → B 루프백 `--passphrase` · 상자 안 익명 SRT 거부. 끝나면 종료 감시 | `LOOPBACK OK` · 익명 거부 | 실패면 아래 롤백 표 「걸음 12 뒤」 |
+| 14 | O8a 3 거부 셋(B `PATHS 0` 일 때 — 잘못된 passphrase · 익명 · 다른 사용자 경로) | 셋 다 거부 · outbox 행 수 변화 0 | 0-f 에서 송출 경로가 없었으면 kty 회부. 하나라도 수락되면 즉시 kty 보고 · O8 금지 · 그 회차도 시험 회차로 종료 판정 |
+| 15 | 유지 시험 송출(팀 IP → NLB → B · O8a 3 정상 키 · O8a 4 출발지 보존) — 22 끝까지. 송출 감시 시작 | B `PATHS` 1 | 0-f 에서 송출 경로가 없었거나 붙지 않으면 kty 회부 |
+| 16 | 상자 루프백 `…/<시험 ID>/index.m3u8?cookieCheck=1` — Bearer 없이 · 있게 | 401 · 200 쌍 | 401 아니면 실패 → O8 금지 · kty 보고 |
+| 17 | started 판정 — 시험 회차 sequence 1 `published` · B `lifecycle_published` · clip `broadcast.intake.handled` · chat `LINK_REFUSED` · DLQ 0(상한 5분) | 전부 | `published` 아님 → kty 보고 · 원인 수정 뒤 `published` 확인(송출은 유지) |
+| 18–20 | O7f 10 · 11(7-R) · 12 — [엣지 시험 런북](/infra/terraform/runbooks/edge-tests.md) · [엣지 비밀 런북](/infra/terraform/runbooks/edge-secrets.md) 「T6b 대체 절차」 | 런북 판정 | 18 실패면 kty 보고. 19 는 재판정이 허용 아니면 시작 안 함 · 복원 실패면 즉시 kty 보고(영향 = `/live` 만). 20 은 실패 항목 kty 보고 |
+| 21 | O8a 3 팀 IP 밖 송출 거부 | 거부 | 허용되면 즉시 보고 · O8 금지 |
+| 22 | P47-가 — 0-f 결과에 따른 진입 경로에서 유지 송출 중 부하(media-host README 「O8a 2 전 필수 조건」 2). 새 송출 수락은 여기서 재지 않음 — 같은 시험 ID 는 `overridePublisher: no` 로 거부되고, 기존 HLS 의 200 은 수락 증거가 아님 | 도달률 95% 이상(아래) · `budget_exhausted` 수 · 유지 송출 끊김 여부 · auth 지표 기록 | 외부에서 Bearer 없이 닿는 경로가 없으면 「외부 진입 경로 없음」 과 증거(scheme · SG · 직접 연결 실패)를 보고하고, 상자 안 부하는 kty 결정 없이 하지 않음. 응답기 장애가 보이면 부하 중단 · 보고. 유지 송출이 끊기면 그것도 결과 — 종료 감시로 바꾸고 걸음 24 로 |
+| 23 | **송출 끄기 직전** M-B · M-A → kty 가 유지 송출을 끈다(시각 기록) | `M-B OK` · `M-A OK` | M-B 불통과면 끄지 않음 → 「운영 감시」 (가). M-A 불통과면 A 차단 재적용 뒤 다시 판정 |
+| 24 | 1차 종료 대기 — 종료 감시 · Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 · ended `lifecycle_published` · clip ended 처리 · clip 기록 종료(상한 30분) | 전부 | 상한을 넘기면 kty 보고 · A 재기동 · B 정지 · 발행 끄기 금지. 강등 · 부활은 「운영 감시」 (나). **Q1 > 0 ∧ Q3 = 0 = 자동 복구 경로 없음 → kty 회부(멈춤 자리)** |
+| 25 | 1단-나 ② 9 · 10([런타임 런북](/infra/terraform/runbooks/runtime-1a.md)) — ② 9 는 이 절의 증거와 대조표로 갈음 | 런북 판정 | 갈음 불가 항목이 재기동 · 송출이면 감시 규칙 적용 |
+| 26 | P47-나 — 앞 회차 전부 닫힌 뒤 같은 진입 경로 · 같은 부하에서 루프백으로 새 송출 수락 지연. 직전 M-B · M-A, 끝나면 종료 감시 | 도달률 95% 이상 · 새 송출 수락 지연 · `budget_exhausted` 수 → 걸음 22 결과와 함께 O8 전 kty 보고 | 새 송출 장애가 보이면 부하 중단 · 보고 |
+| 27 | 최종 종료 판정 — 시험 회차 전부(Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 · ended published · clip 처리) · 감시 기록(상한 30분) | 전부 | 걸음 24 와 같음(Q1 > 0 ∧ Q3 = 0 = kty 회부) |
+| 28–29 | 종료 뒤 시험 · `secret-count --passphrase` box · ssm | 런북 판정 · 둘 다 0 | 29 가 0 아니면 정리 · 보고 |
+| 30 | 하루 관찰 뒤 A 회수 — `blocked-check.sh` · A 업로드 적체 0 · Q1 = 0 · `rounds` ≥ 1 | `M-A OK` · 회수 완료 | 조건 미충족이면 보류. A 가 되살아났으면 정지 · 차단 뒤 Q1 · Q3(「운영 감시」 M-A 불통과) |
+| 31 | O8 | O8 런북 | — |
+| 32 | (O8a 5 직전 · D4) 목록 `*` 인 C 로 교체 — (ㄴ) 시작 → Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 → C 기동 · `lifecycle-check.sh`(C) → 전환 → **B 정지 · disable · `blocked-check.sh`(B)** → (ㄴ) 끝 → 하루 뒤 회수 직전 `blocked-check.sh`(B) 다시 | `M-B OK`(C) · `M-A OK`(B) | C 가 꺼진 채 뜨면 C 를 즉시 정지 · Q1 확인 · 금지 유지. 후속 수정이 배포 전이면 C 도 운영 감시 대상 |
 
 *   **시험 회차** = 머리 세션의 `stream_id` 가 시험 ID 이고 `started_at` 이
     걸음 8 시각 이후인 회차 전부입니다. 회차 수를 고정하지 않습니다 — 루프백
     회차가 끝나고 300초 안에 유지 송출이 붙으면 같은 회차로 이어집니다.
-*   걸음 14 · 15 · 22 · 24 · 27 의 「kty 보고」 와 아래 「Q1 > 0 ∧ Q3 = 0」 은
-    대안을 고르지 않는 **멈춤 자리**입니다.
+*   **`rounds` ≥ 1**(발행 잔여 질의의 시험 회차 수): 걸음 13 뒤에 Q1 · Q2 ·
+    Q3 를 판정으로 쓰는 자리는 모두 이 조건을 함께 봅니다. 시험 ID · 시각
+    입력이 틀려 시험 회차를 하나도 잡지 못하면 Q1 · Q2 · Q3 가 전부 0 으로
+    나오기 때문입니다. 0 이면 멈추고 입력을 다시 봅니다.
+*   **도달률**(걸음 22 · 26)은 B nginx live 접근 줄 수 · 응답기 read 판정
+    줄 수를 보낸 요청 수로 나눈 값이고, 95% 이상이어야 합니다. 미달이면 그
+    측정은 무효입니다 — 부하 요청이 엣지(CloudFront 함수 · 서명)에서 막히면
+    응답기 부하로 재지 못하기 때문입니다.
+*   걸음 0-f · 0-h · 14 · 15 · 22 · 24 · 27 의 「kty 회부 · 보고」 와 아래
+    「Q1 > 0 ∧ Q3 = 0」 은 대안을 고르지 않는 **멈춤 자리**입니다.
 
 ### O8a 당김 — 운영 감시
 
@@ -700,9 +717,9 @@ README 「계약9 발행」 의 재기동 강등). 후속 수정이 배포될 �
     *   **송출 끄기 직전**(걸음 23) — 통과해야 끕니다.
     *   **종료 감시** — 송출이 끝난 뒤(끈 경우 · 끊긴 경우 · 루프백 13 · 26
         뒤 모두) **2분마다** M-B · M-A 를 봅니다. **끝나는 조건은 회차 닫힘이
-        아니라 그 회차들의 완결**입니다 — Q1 = Q2 = Q3 = 0 ∧ ended
-        `lifecycle_published` ∧ clip ended 처리. 그 전에 다음 송출이 붙으면
-        송출 감시로 돌아갑니다.
+        아니라 그 회차들의 완결**입니다 — Q1 = Q2 = Q3 = 0 ∧ `rounds` ≥ 1
+        ∧ ended `lifecycle_published` ∧ clip ended 처리. 그 전에 다음 송출이
+        붙으면 송출 감시로 돌아갑니다.
     *   발행 목록 계정이 송출하는 동안은 언제든 같은 주기입니다(걸음 30 의
         하루 관찰 · O8 뒤 O8a 5 전 포함). 후속 수정 배포 전까지입니다.
 *   **강등 · 부활을 발견하면:**
@@ -846,7 +863,7 @@ A 로 되돌리기입니다. O8a 5 전이라 옛 모드 A 복귀가 허용됩니
 | 시점 · 조건 | 순서 |
 |---|---|
 | 걸음 6–11(A 기동 중 · 송출 없음) · Q4 = 0 | 전환 역적용 → B 정지 · 회수 |
-| 걸음 12 뒤 · Q1 = Q2 = Q3 = 0 · B `PATHS 0` · 마지막 M-B 통과 | ① 송출 중지 확인 · **(ㄷ) 시작** ② Q1–Q3 ③ B 유닛 정지(인스턴스 유지 — 새 started 원천 제거) ④ A `enable`(mask 했으면 `unmask` 먼저) · `start` → A 기동 판정 ⑤ 전환을 A 로 → **(ㄷ) 끝** ⑥ B 회수는 하루 뒤. A 가 하한 아래면(걸음 0) 「한 창 절차 — A 를 다시 띄울 때」 조건을 더함 |
+| 걸음 12 뒤 · Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1(걸음 13 전이면 `rounds` 0 · Q4 0 행) · B `PATHS 0` · 마지막 M-B 통과 | ① 송출 중지 확인 · **(ㄷ) 시작** ② Q1–Q3 ③ B 유닛 정지(인스턴스 유지 — 새 started 원천 제거) ④ A `enable`(mask 했으면 `unmask` 먼저) · `start` → A 기동 판정 ⑤ 전환을 A 로 → **(ㄷ) 끝** ⑥ B 회수는 하루 뒤. A 가 하한 아래면(걸음 0) 「한 창 절차 — A 를 다시 띄울 때」 조건을 더함 |
 | Q1 > 0 ∧ Q3 > 0(회차가 아직 열림) | **A 를 띄우지 않습니다.** M-B 를 통과한 게이트 켜진 사이드카(B 재기동 뒤 통과, 또는 같은 설정의 C 가 기동 판정 통과)가 회차를 닫고 ended 를 발행한 뒤 위 순서. B 를 살리지 못하면 kty 보고 |
 | Q1 > 0 ∧ Q3 = 0(회차 닫힘 · ended 없음) | **자동 복구 경로 없음 — kty 회부(멈춤 자리).** 롤백 · 교체 · 발행 끄기를 하지 않습니다 |
 | Q2 > 0(SNS 재시도 중) | B 를 떠 있게 두고 원인(신원 정책 · 주제 정책 · SCP)을 kty 승인으로 고친 뒤(다음 재시도 — 최대 60초 뒤 — 에 `published`) 위 순서. outbox 행은 손대지 않습니다 |
