@@ -24,7 +24,7 @@ import (
 var runtimeRunbookPath = filepath.Join("..", "..", "..", "infra", "terraform", "runbooks", "runtime-1a.md")
 
 // runbookQueryNames 는 런북이 표지로 감싼 POK-525 읽기 질의다.
-var runbookQueryNames = []string{"Q1", "Q2", "Q2-B", "Q3"}
+var runbookQueryNames = []string{"Q1", "Q2", "Q2-B", "Q3", "Q4"}
 
 // runbookPlaceholder 는 채우지 않은 자리 표시다(`<>` 연산자는 글자가 없어 걸리지 않는다).
 var runbookPlaceholder = regexp.MustCompile(`<[a-z][a-z0-9]*>`)
@@ -438,5 +438,111 @@ func TestRunbookQ1Q3CountRoundKeys(t *testing.T) {
 	}
 	if len(rows3) != 1 || len(rows3[0]) != 2 || rows3[0][0] != int64(1) || rows3[0][1] != int64(1) {
 		t.Errorf("Q3 = %v, want [[1 1]](matched 1 · mismatched 1)", rows3)
+	}
+}
+
+// q4Case 는 Q4(시험 방송 회차 판정 — 교체 걸음 4.10) 사례 하나다. 통과 고정물(seedQ4Base)에 change 를 얹는다.
+type q4Case struct {
+	name   string
+	change string // 고정물 뒤에 돌리는 SQL(빈 값이면 없음)
+	pass   bool
+}
+
+// seedQ4Base 는 Q4 의 통과 고정물을 넣는다 — <on> 뒤 시험 스트림의 회차 하나(끝남 · 닫힘 · vod_state frozen · 새 꼴 키
+// 셋 모두 ③ 업로드). <on> 앞의 옛 회차(③ 실패 · GAP 기록)는 판정 대상이 아니다.
+func seedQ4Base(ctx context.Context, pool *pgxpool.Pool, on time.Time) error {
+	at := on.Add(5 * time.Minute)
+	stream := runbookTestStream
+	sessions := []runbookSession{
+		{id: "S-old", stream: stream, state: "ended", round: "S-old", started: on.Add(-time.Hour), initUploaded: true},
+		{id: "S-t", stream: stream, state: "ended", round: "S-t", started: at, initUploaded: true},
+	}
+	var segments []runbookSegment
+	for seq := int64(0); seq < 2; seq++ {
+		segments = append(segments, runbookSegment{stream: stream, session: "S-old", seq: seq, start: on.Add(-time.Hour),
+			archive: "uploaded", playback: "failed", key: fmt.Sprintf("dvr/%s/seg/%06d.m4s", stream, seq)})
+	}
+	for seq := int64(2); seq < 5; seq++ {
+		segments = append(segments, runbookSegment{stream: stream, session: "S-t", seq: seq, start: at,
+			archive: "uploaded", playback: "uploaded", key: fmt.Sprintf("dvr/%s/S-t/seg/%06d.m4s", stream, seq)})
+	}
+	if err := seedRunbook(ctx, pool, sessions, map[string]int64{stream: 0}, segments); err != nil {
+		return err
+	}
+	_, err := pool.Exec(ctx, `
+UPDATE stream_sessions
+   SET ended_at = started_at + interval '10 minutes', round_closed_at = started_at + interval '10 minutes',
+       vod_state = 'frozen', vod_s3_key = 'vod/' || stream_id || '/' || session_id || '/index.m3u8'
+ WHERE stream_id = $1`, stream)
+	if err != nil {
+		return err
+	}
+	_, err = pool.Exec(ctx, `INSERT INTO stream_published_gaps (stream_id, seq, session_id, reason)
+VALUES ($1, 0, 'S-old', 'settle_deadline')`, stream)
+	return err
+}
+
+// q4ExtraSegment 는 시험 회차에 ③ 업로드를 마친 조각 seq 5 를 키 key 로 더하는 SQL 이다(playback_s3_key 는 바꿀 수 없어
+// 키 사례는 행을 더한다).
+func q4ExtraSegment(key string) string {
+	return fmt.Sprintf(`INSERT INTO stream_segments
+    (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path, upload_state, bytes,
+     is_discontinuity, session_id, playback_pdt, playback_s3_key, playback_upload_state)
+SELECT stream_id, 5, 20000, start_wall_utc, 4000, 'k/5', local_path || '.5', 'uploaded', 1000, false, session_id,
+       playback_pdt, '%s', 'uploaded'
+  FROM stream_segments WHERE stream_id = '%s' AND seq = 4`, key, runbookTestStream)
+}
+
+// Q4 는 <on> 뒤 시험 스트림의 가장 늦은 회차가 끝나 닫히고 VOD 로 frozen 동결됐으며, 그 회차의 조각(컷오프 이상)이 모두 ③
+// 업로드됐고 키가 그 회차의 새 꼴이며 GAP 기록이 없을 때만 pass 다. 국면 vod 는 frozen_with_gaps 도 포함하고
+// (round_playback.go) 미업로드 조각은 정산 기한 뒤 GAP 으로 마감되므로(vod.go settle_deadline) 국면만으로는 판정하지 않는다.
+func TestRunbookQ4PassesOnlyCleanTestRound(t *testing.T) {
+	test := runbookTestStream
+	cases := []q4Case{
+		{name: "깨끗한 회차", pass: true},
+		{name: "컷오프 아래 미업로드는 판정 밖", pass: true,
+			change: `UPDATE stream_cutoffs SET cutoff_seq = 3; UPDATE stream_segments SET playback_upload_state = 'pending' WHERE seq = 2`},
+		{name: "③ 업로드 실패 하나", change: `UPDATE stream_segments SET playback_upload_state = 'failed' WHERE seq = 3`},
+		{name: "③ 업로드 대기 하나", change: `UPDATE stream_segments SET playback_upload_state = 'pending' WHERE seq = 4`},
+		{name: "GAP 기록 하나", change: `INSERT INTO stream_published_gaps (stream_id, seq, session_id, reason)
+VALUES ('` + test + `', 3, 'S-t', 'settle_deadline')`},
+		{name: "frozen_with_gaps", change: `UPDATE stream_sessions SET vod_state = 'frozen_with_gaps' WHERE session_id = 'S-t'`},
+		{name: "VOD 문서 키 없음", change: `UPDATE stream_sessions SET vod_state = 'freezing', vod_s3_key = NULL WHERE session_id = 'S-t'`},
+		{name: "회차 안 닫힘", change: `UPDATE stream_sessions SET round_closed_at = NULL WHERE session_id = 'S-t'`},
+		{name: "옛 꼴 키", change: q4ExtraSegment("dvr/" + test + "/seg/000005.m4s")},
+		{name: "다른 회차 키", change: q4ExtraSegment("dvr/" + test + "/S-x/seg/000005.m4s")},
+		{name: "on 뒤 회차 없음", change: `UPDATE stream_sessions SET started_at = started_at - interval '1 day' WHERE session_id = 'S-t'`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+			on := time.Now().UTC().Add(-time.Hour)
+			if err := seedQ4Base(ctx, pool, on); err != nil {
+				t.Fatalf("고정물: %v", err)
+			}
+			if c.change != "" {
+				if _, err := pool.Exec(ctx, c.change); err != nil {
+					t.Fatalf("사례 변경: %v", err)
+				}
+			}
+			query, err := loadRunbookQuery("Q4", map[string]string{"on": rfc3339(on), "test": test})
+			if err != nil {
+				t.Fatalf("Q4 뽑기: %v", err)
+			}
+
+			rows, err := runReadOnly(ctx, pool, query)
+			if err != nil {
+				t.Fatalf("Q4 실행: %v", err)
+			}
+
+			if len(rows) != 1 {
+				t.Fatalf("Q4 행 수 = %d, want 1", len(rows))
+			}
+			got, ok := rows[0][len(rows[0])-1].(bool)
+			if !ok || got != c.pass {
+				t.Errorf("Q4 pass = %v, want %v(행 %v)", rows[0][len(rows[0])-1], c.pass, rows[0])
+			}
+		})
 	}
 }

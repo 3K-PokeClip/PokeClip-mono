@@ -1115,9 +1115,10 @@ make_sql_step round_frozen_drop "${payload}/round_frozen_drop.sql" &&
 
 ### POK-525 읽기 질의
 
-교체 걸음이 DB 를 읽어 판정하는 질의 넷입니다. Q1 · Q2 · Q3 은 설계
+교체 걸음이 DB 를 읽어 판정하는 질의 다섯입니다. Q1 · Q2 · Q3 은 설계
 (POK-525 r9.4 6절) 문장 그대로이고(Q2 init 행의 셋째 칸만 NULL), Q2-B 는
-계획(r2 4-7)이 더한 것입니다. 각 질의는 `-- BEGIN <이름>` · `-- END <이름>`
+계획(r2 4-7)이, Q4 는 교체 걸음 4.10 의 「업로드 · 발행 정상 · VOD 문서 URI
+새 꼴」(설계 9-3) 판정으로 더한 것입니다. 각 질의는 `-- BEGIN <이름>` · `-- END <이름>`
 표지 안에 있고, `media/internal/index/runbook_query_pg_test.go` 가 표지 사이
 글자를 그대로 뽑아 PG 에서 돌립니다 — 질의를 고치면 그 시험이 고친 글자를
 잽니다. 보내는 꼴은 「M6 읽기 질의」 의 `make_read` 입니다(첫 줄
@@ -1128,7 +1129,8 @@ make_sql_step round_frozen_drop "${payload}/round_frozen_drop.sql" &&
 | Q1 새 꼴 행 수(`q1.sql`) | 4.2 · 4.6 · 「켜기 전」 선언 판정(롤백) | `round_keys` 0 |
 | Q2 A 배출(`q2.sql`) | 4.4 · 4.11 | 세 행 모두 `waiting` 0 |
 | Q2-B B 배출(`q2b.sql`) | 롤백 「켜기 전」 의 B 회수 앞 | 세 행 모두 `waiting` 0 |
-| Q3 켬 뒤 키 꼴 대조(`q3.sql`) | 4.8 | `matched` 1 이상 · `mismatched` 0 |
+| Q3 켬 뒤 키 꼴 대조(`q3.sql`) | 4.8 · 4.10 | `matched` 1 이상 · `mismatched` 0 |
+| Q4 시험 방송 회차(`q4.sql`) | 4.10(방송을 끝내고 국면이 `vod` 가 된 뒤) | `pass` 가 `t` |
 
 자리 표시는 그 걸음에서 적어 둔 값으로 채웁니다. 시각은 UTC 로 적습니다
 (`date -u +%Y-%m-%dT%H:%M:%SZ`).
@@ -1242,6 +1244,64 @@ SELECT pg_catalog.count(*) FILTER (WHERE pg_catalog.split_part(t.playback_s3_key
 -- END Q3
 RESET ROLE;
 SQL
+cat >"${payload}/q4.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+-- BEGIN Q4
+-- Q4 시험 방송 회차 — <test> = 시험 스트림, <on> = 켬 OK 시각. <on> 뒤 시작한 그 스트림의 가장 늦은 회차 하나를 본다.
+-- 국면 vod 는 frozen_with_gaps 도 포함하고 미업로드 조각은 정산 기한 뒤 GAP 으로 마감되므로, 국면이 아니라 아래를 모두 본다.
+-- 통과 = pass t — 회차 있음 · 끝나지 않은 세션(live · ending) 0 · 회차 닫힘 · 최신 세션 vod_state frozen(frozen_with_gaps 아님)과
+-- VOD 문서 키 · 조각(컷오프 이상) 1 이상 · ③ 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0.
+WITH r AS (
+  SELECT s.round_id
+    FROM stream_sessions s
+   WHERE s.stream_id = '<test>' AND s.round_id IS NOT NULL
+     AND s.started_at >= '<on>'::timestamptz
+   ORDER BY s.started_at DESC, s.session_id DESC
+   LIMIT 1
+),
+sess AS (
+  SELECT s.session_id, s.state, s.started_at, s.round_closed_at, s.vod_state, s.vod_s3_key
+    FROM stream_sessions s
+    JOIN r ON s.round_id = r.round_id
+   WHERE s.stream_id = '<test>'
+),
+latest AS (
+  SELECT vod_state, vod_s3_key
+    FROM sess
+   ORDER BY (state = 'live') DESC, started_at DESC, session_id DESC
+   LIMIT 1
+),
+seg AS (
+  SELECT t.playback_upload_state, t.playback_s3_key
+    FROM stream_segments t
+    JOIN sess ON sess.session_id = t.session_id
+    LEFT JOIN stream_cutoffs cut ON cut.stream_id = t.stream_id
+   WHERE t.stream_id = '<test>' AND t.seq >= COALESCE(cut.cutoff_seq, 0)
+),
+v AS (
+  SELECT (SELECT round_id FROM r) AS round_id,
+         (SELECT pg_catalog.count(*) FROM sess WHERE state <> 'ended') AS not_ended,
+         (SELECT pg_catalog.count(*) FROM sess WHERE round_closed_at IS NULL) AS not_closed,
+         (SELECT vod_state FROM latest) AS vod_state,
+         (SELECT vod_s3_key IS NOT NULL FROM latest) AS vod_doc,
+         (SELECT pg_catalog.count(*) FROM seg) AS segments,
+         (SELECT pg_catalog.count(*) FROM seg WHERE playback_upload_state <> 'uploaded') AS not_uploaded,
+         (SELECT pg_catalog.count(*) FROM seg
+           WHERE playback_s3_key IS NULL OR playback_s3_key !~ '^dvr/[^/]+/[^/]+/seg/'
+              OR pg_catalog.split_part(playback_s3_key, '/', 3) IS DISTINCT FROM (SELECT round_id FROM r)) AS not_round_keys,
+         (SELECT pg_catalog.count(*) FROM stream_published_gaps g
+            JOIN sess ON sess.session_id = g.session_id
+           WHERE g.stream_id = '<test>') AS gaps
+)
+SELECT v.*,
+       COALESCE(v.round_id IS NOT NULL AND v.not_ended = 0 AND v.not_closed = 0
+                AND v.vod_state = 'frozen' AND v.vod_doc
+                AND v.segments > 0 AND v.not_uploaded = 0 AND v.not_round_keys = 0 AND v.gaps = 0, false) AS pass
+  FROM v;
+-- END Q4
+RESET ROLE;
+SQL
 ```
 
 자리를 채운 사본을 만들어 보냅니다. `fill_read` 는 값이 UTC 시각
@@ -1278,6 +1338,9 @@ fill_read "${payload}/q2b.sql" "${payload}/q2b-fill.sql" \
   make_read q2b "${payload}/q2b-fill.sql" && send_step q2b
 fill_read "${payload}/q3.sql" "${payload}/q3-fill.sql" "on=<on 값>" &&
   make_read q3 "${payload}/q3-fill.sql" && send_step q3
+fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
+  "on=<on 값>" "test=<test 값>" &&
+  make_read q4 "${payload}/q4-fill.sql" && send_step q4
 ```
 
 *   한 흐름에서 그 걸음에 필요한 질의만 보냅니다(예: 4.4 는 `q2` 하나).
@@ -1294,6 +1357,17 @@ fill_read "${payload}/q3.sql" "${payload}/q3-fill.sql" "on=<on 값>" &&
 *   **Q1 · Q3 의 새 꼴 판별**은 키 앞부분(`dvr/` 뒤 경로 성분이 둘인지)만
     봅니다. Q3 은 회차 성분(셋째 성분)을 그 조각 세션의 `round_id` 와
     견줍니다.
+*   **Q4 가 국면을 쓰지 않는 까닭.** 국면 `vod` 는 `vod_state` 가 `frozen`
+    이든 `frozen_with_gaps` 든 같고(`media/internal/index/round_playback.go`),
+    정산 기한까지 올라가지 않은 조각은 GAP 줄로 마감됩니다
+    (`media/internal/rewind/publish/vod.go` 의 `settle_deadline`). 그래서
+    업로드 일부가 실패해도 국면은 `vod` 가 됩니다. Q4 는 회차 조각(컷오프
+    이상)의 ③ 상태 · 키 꼴 · GAP 기록(`stream_published_gaps`) ·
+    `vod_state = 'frozen'` 을 직접 봅니다. VOD 문서의 조각 URI 는 장부의 ③
+    키 그대로라(`media/internal/rewind/render.go` — 기준 주소 뒤에 키를
+    붙임) 키가 모두 그 회차 새 꼴이고 GAP 이 없으면 문서의 URI 도 새
+    꼴입니다. `pass` 가 `f` 면 나머지 열(`not_uploaded` · `not_round_keys` ·
+    `gaps` · `vod_state` 등)이 무엇이 어긋났는지 보여 줍니다.
 *   기록(8)에 옮기는 것은 `== read` 뒤 결과 줄과 채운 자리 값입니다.
 
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기

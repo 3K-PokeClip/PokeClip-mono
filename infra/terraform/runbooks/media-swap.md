@@ -585,7 +585,7 @@ A 를 배출 · 정지한 **뒤에만** B 의 새 꼴 쓰기를 켜고, 첫 새 
 
 *   방송이 없는 시간대에 합니다. 실행자 · 승인 규칙은 이 런북 머리와 같고,
     걸음마다 kty 가 승인합니다.
-*   DB 를 읽고 쓰는 걸음(Q1 · Q2 · Q2-B · Q3 · 운영 SQL 2 · 롤백 짝)의 SQL 과
+*   DB 를 읽고 쓰는 걸음(Q1 · Q2 · Q2-B · Q3 · Q4 · 운영 SQL 2 · 롤백 짝)의 SQL 과
     보내는 법은 [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
     「POK-525 운영 SQL 2 · 읽기 질의」 입니다. 이 절에서는 이름으로만
     부릅니다.
@@ -750,7 +750,7 @@ SH
 | 4.7 | B `paths.sh` → `round-keys.sh on` | B `PATHS 0` · `SIDECAR ROUND KEYS OK on` |
 | 4.8 | 켬 뒤 루프백(첫 새 꼴 쓰기) — 「정상 교체」 3 과 같은 명령 → Q3 | `LOOPBACK OK` · Q3 `matched` 1 이상 · `mismatched` 0 |
 | 4.9 | B `paths.sh` → 운영 SQL 2(`60_round_frozen.sql` → `40_verify.sql`) | B `PATHS 0` · `ROUND FROZEN OK` · `VERIFY OK` |
-| 4.10 | 시험 방송(시험 키) | 아래 4.10 |
+| 4.10 | 시험 방송(시험 키) → 끝낸 뒤 국면 `vod` → Q4 | Q3 `matched` 늘고 `mismatched` 0 · Q4 `pass` `t`(아래 4.10) |
 | 4.11 | A 회수 — 시험 방송이 통과한 날 | Q2 0 · A `MEDIA STOPPED OK` · `MEDIA DISABLED OK` → plan 범위 A 삭제 한 줄 |
 | 4.12 | 결정 9 확정 — prod tfvars `playback_round_keys = true` | plan 범위 0 줄 |
 
@@ -808,10 +808,23 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
     기동부터 `round_frozen=present` 입니다. A 는 4.5 에서 멈춰 트리거 있는
     DB 에서 돈 적이 없습니다(트리거에 거절돼 사라지는 A 의 늦은 4D 가
     없음).
-*   **4.10 — 시험 방송.** 시험 키로 송출합니다. 통과 = Q3(`<on>` 그대로)의
-    `matched` 가 늘고 `mismatched` 0, 방송을 끝낸 뒤 그 회차의 국면이
-    `vod` 로 넘어감. 넘어가는 시각은 해제 · 재조회 주기의 합(약 2–3.5분)
-    뒤이고 상한이 아닙니다 — 읽기 상한에 걸리면 다음 주기로 밀립니다.
+*   **4.10 — 시험 방송.** 시험 키로 송출하고 끝냅니다. 통과는 셋입니다.
+    1.  키 새 꼴 — Q3(`<on>` 그대로)의 `matched` 가 늘고 `mismatched` 0.
+    1.  방송을 끝낸 뒤 그 회차의 국면이 `vod` 로 넘어감. 넘어가는 시각은
+        해제 · 재조회 주기의 합(약 2–3.5분) 뒤이고 상한이 아닙니다 — 읽기
+        상한에 걸리면 다음 주기로 밀립니다.
+    1.  **업로드 · 발행 정상 · VOD 문서 URI 새 꼴** — 국면이 `vod` 가 된 뒤
+        Q4(`<on>` · `<test>`)의 `pass` 가 `t`: 그 회차 조각(컷오프 이상)의
+        ③ 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0 · 최신 세션
+        `vod_state` 가 `frozen`(`frozen_with_gaps` 아님)이고 VOD 문서 키
+        있음 · 회차 닫힘.
+
+    국면 `vod` 하나로는 넘어가지 않습니다 — `frozen_with_gaps` 도 국면이
+    `vod` 이고, 정산 기한까지 못 올라간 조각은 GAP 줄로 마감됩니다. Q4 가
+    `f` 면 4.11 로 가지 않고 어긋난 열(`not_uploaded` · `gaps` 등)을 kty
+    에게 보고합니다. 4.8 뒤라 A 로 돌아가는 갈래는 없습니다 — 원인을 고쳐
+    시험 방송을 다시 합니다(「POK-525 롤백」 의 「켠 뒤 · 새 꼴 행 1
+    이상」).
 *   **4.11 — A 회수를 앞당깁니다.** 4.8 뒤 A 는 되돌릴 곳이 아니라 「정상
     교체」 8 의 하루 관찰을 쓰지 않습니다. 회수 직전 Q2 · A 판정 둘을 다시
     봅니다.
