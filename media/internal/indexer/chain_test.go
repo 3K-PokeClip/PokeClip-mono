@@ -85,7 +85,56 @@ func (f *fixture) injectReads() *fakeReads {
 		}
 		return e, nil
 	}
+	// 새 장부에서 시작한 픽스처면 시험 끝에 접기 대조를 건다 — 재기동(reload) 뒤 다시 부른 판독 주입은 건너뛴다.
+	if len(f.store.records("s1")) == 0 {
+		ix := f.ix
+		f.t.Cleanup(func() { f.requireFoldMatchesLive(r, ix) })
+	}
 	return r
+}
+
+// requireFoldMatchesLive 는 장부 행을 seq 순으로 playback.RestoreChain 에 접은 결과가 실시간 ③ 요청의 도장(마지막
+// 요청 기준)과 같은지 본다(POK-196 PDT 계획 4절 c10a 시험 1 — 실시간과 복원이 한 코드). 판독 주입을 쓰는 사슬 시험
+// 전부가 시험 끝에 이 대조를 지난다. 재료는 장부 칸(교정 뒤 길이 · 영상 끝)과 같은 판독 주입의 mtxi 이고, 이음 끝은
+// 실시간과 같은 chainEnd 다. 회차는 ③ 요청에서 읽는다 — 요청이 없는 행(비귀속 · 사슬 없이 mtxi 를 못 읽은 행)은
+// 접기에서도 링크가 없다(비귀속으로 둬도 같은 결과다 — 다음 행이 어느 쪽이든 비인접이다).
+//
+// 재기동(ix 가 바뀜)한 시험은 대조하지 않는다 — 실시간 사슬이 재기동에서 끊긴다(E18 — 복원 배선은 c10b 몫).
+func (f *fixture) requireFoldMatchesLive(r *fakeReads, ix *Indexer) {
+	f.t.Helper()
+	if f.ix != ix {
+		return
+	}
+	live := map[int64]index.UploadTarget{}
+	for _, tg := range f.upload.targetsOf(index.AxisPlayback) {
+		live[tg.Seq] = tg
+	}
+	paths := map[int64]string{}
+	var rows []playback.SourceTiming
+	for _, rec := range f.store.records("s1") {
+		paths[rec.Seq] = rec.LocalPath
+		var mtxi *playback.Mtxi
+		if m, ok := r.mtxi[rec.LocalPath]; ok {
+			mtxi = &m
+		}
+		rows = append(rows, sourceOf(rec, live[rec.Seq].SessionID, rec.DurationMS, mtxi))
+	}
+	rule := func(prev playback.Link) time.Duration {
+		return ix.chainEnd(playbackChain{link: prev, path: paths[prev.Seq]})
+	}
+
+	links := playback.RestoreChain(nil, rows, rule, sameInstance)
+
+	if len(links) != len(live) {
+		f.t.Errorf("접기 링크 %d개, 실시간 ③ 요청 행 %d개 — 같아야 한다", len(links), len(live))
+	}
+	for _, l := range links {
+		tg, ok := live[l.Seq]
+		if !ok || tg.PlaybackPos != l.Pos || tg.StitchOffset != l.Offset || tg.PosPinned != l.Pinned || tg.SessionID != l.SessionID {
+			f.t.Errorf("seq %d 접기 = pos %v · offset %v · 고정 %v · 회차 %q, 실시간 = %+v(있음 %v)",
+				l.Seq, l.Pos, l.Offset, l.Pinned, l.SessionID, tg, ok)
+		}
+	}
 }
 
 // mtxiOf 는 녹화기 표식과 누적 DTS 로 판독값을 만든다. 번호는 fakeReads 가 차례로 매긴다.

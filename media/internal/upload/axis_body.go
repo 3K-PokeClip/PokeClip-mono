@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
@@ -53,20 +52,20 @@ type payload struct {
 	incompatible bool
 }
 
-// payloadFor 는 축이 고르는 본문이다. ok 가 false 면 이번 시도는 r 로 끝난다.
-func (u *Uploader) payloadFor(j job, f *os.File, size int64, lg *slog.Logger) (p payload, r attemptResult, ok bool) {
+// payloadFor 는 축이 고르는 본문이다. ok 가 false 면 이번 시도는 r 로 끝난다. 입력은 리더와 (b) 에서 잰 크기다(input).
+func (u *Uploader) payloadFor(j job, in input, lg *slog.Logger) (p payload, r attemptResult, ok bool) {
 	switch j.target.Axis {
 	case index.AxisPlayback:
-		return u.playbackPayload(j, f, lg)
+		return u.playbackPayload(j, in.r, lg)
 	case index.AxisInit:
-		out, r, ok := u.produce(j, f, 0, lg) // init 바이트는 도장 위치와 무관하다
+		out, r, ok := u.produce(j, in.r, 0, lg) // init 바이트는 도장 위치와 무관하다
 		if !ok {
 			return payload{}, r, false
 		}
 		return payload{body: bytes.NewReader(out.Init), size: int64(len(out.Init)), initSHA: out.InitSHA256[:],
-			incompatible: u.inheritIncompatible(j.target, f, lg)}, attemptResult{}, true
+			incompatible: u.inheritIncompatible(j.target, in.r, lg)}, attemptResult{}, true
 	default:
-		return payload{body: f, size: size}, attemptResult{}, true
+		return payload{body: in.r, size: in.size}, attemptResult{}, true
 	}
 }
 
@@ -81,7 +80,7 @@ func (u *Uploader) payloadFor(j job, f *os.File, size int64, lg *slog.Logger) (p
 //
 // 판정은 비호환 여부까지다 — 계승을 풀지는 CTE 가 같은 문장에서 정한다(후보 ∧ 참). 워커가 해제를 따로 계산하면
 // 해제 판정이 두 곳에 생긴다(계획 4.5 A2 대안 표).
-func (u *Uploader) inheritIncompatible(t index.UploadTarget, f *os.File, lg *slog.Logger) bool {
+func (u *Uploader) inheritIncompatible(t index.UploadTarget, f io.ReadSeeker, lg *slog.Logger) bool {
 	if t.InheritsSession == "" {
 		return false
 	}
@@ -129,7 +128,7 @@ func (u *Uploader) prevFingerprint(t index.UploadTarget) (fp [32]byte, reason st
 //
 // 순서가 계약이다: 위치(스위퍼는 표) → 기대 init(없으면 보류) → 재포장 → 대조. 표 판정이 보류
 // 판정보다 앞이라 보류 목록에는 위치를 확정한 작업만 든다(계획 4.2-R R3 「스위퍼 재생성」).
-func (u *Uploader) playbackPayload(j job, f *os.File, lg *slog.Logger) (payload, attemptResult, bool) {
+func (u *Uploader) playbackPayload(j job, f io.ReadSeeker, lg *slog.Logger) (payload, attemptResult, bool) {
 	t := j.target
 	pos, r, ok := u.playbackPos(j, f, lg)
 	if !ok {
@@ -153,8 +152,8 @@ func (u *Uploader) playbackPayload(j job, f *os.File, lg *slog.Logger) (payload,
 // playbackPos 는 이 ③ 조각의 도장 위치다(계획 4.2-R R3). 실시간 작업(보류 재요청 포함)은 실려
 // 온 위치를 그대로 쓴다. 스위퍼 작업은 장부에 위치가 없어 회차의 보정값 표로 다시 만든다 —
 // 실시간과 **같은 값**이다: 고정 줄이 있으면 그 위치(판독 생략), 없으면 이미 연 입력에서 mtxi 를
-// 읽어(위치는 되돌려 놓는다 — 재포장이 같은 fd 를 처음부터 읽는다) offset 줄을 더한다.
-func (u *Uploader) playbackPos(j job, f *os.File, lg *slog.Logger) (time.Duration, attemptResult, bool) {
+// 읽어(위치는 되돌려 놓는다 — 재포장이 같은 입력을 처음부터 읽는다) offset 줄을 더한다.
+func (u *Uploader) playbackPos(j job, f io.ReadSeeker, lg *slog.Logger) (time.Duration, attemptResult, bool) {
 	t := j.target
 	if j.origin != OriginSweep {
 		return t.PlaybackPos, attemptResult{}, true
@@ -272,7 +271,7 @@ func (u *Uploader) drainHeld() {
 // produce 는 열린 입력을 재포장한다. 산출이 없으면 올릴 것이 없다(계획 2.1 · A6). 실패는 두 갈래다:
 // 같은 입력이면 늘 같은 실패(sameInputFailsAgain)는 첫 시도에서 끝내고, 나머지(입력 해석 실패·임의
 // 오류)는 PUT 실패와 같은 재시도 사다리를 탄다.
-func (u *Uploader) produce(j job, f *os.File, pos time.Duration, lg *slog.Logger) (playback.Output, attemptResult, bool) {
+func (u *Uploader) produce(j job, f io.ReadSeeker, pos time.Duration, lg *slog.Logger) (playback.Output, attemptResult, bool) {
 	out, err := u.opt.Producer.Produce(u.putCtx, playback.Request{Input: f, PlaybackPos: pos})
 	if err != nil {
 		if u.putCtx.Err() != nil {

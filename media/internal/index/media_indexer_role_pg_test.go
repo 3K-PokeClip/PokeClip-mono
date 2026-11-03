@@ -35,6 +35,7 @@ package index
 //	  markInitUploadedSQL                     MarkInitUploaded                     sessions SELECT FOR UPDATE · UPDATE
 //	  pending{Archive,Playback,Init}UploadsSQL PendingUploads 축 셋                segments · sessions · cutoffs SELECT
 //	  count{Archive,Playback,Init}BacklogSQL   CountBacklog 축 셋                  segments · sessions · cutoffs SELECT
+//	  playbackHolesSQL · playbackChainRowsSQL  LoadPlaybackHoles · LoadPlaybackChainRows(③ 사슬 복원 — c10a)  segments · sessions · cutoffs SELECT
 //	rewind_read.go
 //	  rewindCutoffSQL · rewindFloorSQL · rewindRowsSQL · rewindSessionsSQL  LoadRewindLedger(읽기 전용 RR)  cutoffs · segments · gaps · sessions SELECT
 //	  rewindWatchSQL                          LoadRewindWatch                      sessions · cutoffs · segments · gaps SELECT
@@ -273,6 +274,13 @@ func TestMediaIndexerRoleRunsUploadLedger(t *testing.T) {
 	if s := sessionsOf(t, admin, stream); len(s) != 1 || s[0].State != "ending" || *s[0].EndReason != ReasonInitMismatch {
 		t.Errorf("회차 = %+v, want ending(init_mismatch) — init 불일치 결속 CTE", s)
 	}
+	// ③ 사슬 복원의 장부 조회 둘(POK-196 PDT c10a) — seq 0 이 ③ uploaded 라 seq 1 · 2 가 닻 0 의 구멍이다(회차는 ending).
+	if holes, err := LoadPlaybackHoles(ctx, role.Pool, session); err != nil || len(holes) != 2 {
+		t.Errorf("LoadPlaybackHoles = (%d행, %v), want (2행, nil)", len(holes), err)
+	}
+	if rows, err := LoadPlaybackChainRows(ctx, role.Pool, stream, 0, 2); err != nil || len(rows) != 3 {
+		t.Errorf("LoadPlaybackChainRows = (%d행, %v), want (3행, nil)", len(rows), err)
+	}
 	role.RequireSent(t, map[string]string{
 		"markUploadedSQL": markUploadedSQL, "markFailedSQL": markFailedSQL,
 		"markPlaybackUploadedSQL": markPlaybackUploadedSQL, "markPlaybackFailedSQL": markPlaybackFailedSQL,
@@ -280,6 +288,7 @@ func TestMediaIndexerRoleRunsUploadLedger(t *testing.T) {
 		"pendingArchiveUploadsSQL": pendingArchiveUploadsSQL, "pendingPlaybackUploadsSQL": pendingPlaybackUploadsSQL,
 		"pendingInitUploadsSQL": pendingInitUploadsSQL, "countArchiveBacklogSQL": countArchiveBacklogSQL,
 		"countPlaybackBacklogSQL": countPlaybackBacklogSQL, "countInitBacklogSQL": countInitBacklogSQL,
+		"playbackHolesSQL": playbackHolesSQL, "playbackChainRowsSQL": playbackChainRowsSQL,
 	})
 	traps.RequireNotCalled(t)
 }

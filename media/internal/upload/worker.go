@@ -3,6 +3,7 @@ package upload
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -360,14 +361,18 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	}
 	defer f.Close()
 
-	// (b)·(c) 입력 크기
-	size, r, ok := u.measureInput(j, f, lg)
+	// (b) 입력 크기
+	in, r, ok := u.measureInput(j, f, lg)
 	if !ok {
 		return r
 	}
+	// (c) 장부 크기 대조
+	if r, ok := u.checkInputSize(j, in, lg); !ok {
+		return r
+	}
 
-	// (c′) 본문 — ② 는 파일 그대로, ③·init 은 그 파일을 재포장한 메모리 산출이다.
-	p, r, ok := u.payloadFor(j, f, size, lg)
+	// (c′) 본문 — ② 는 입력 그대로, ③·init 은 그 입력을 재포장한 메모리 산출이다.
+	p, r, ok := u.payloadFor(j, in, lg)
 	if !ok {
 		return r
 	}
@@ -388,15 +393,15 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	// (e) 같은 fd 로 **입력 파일**을 다시 잰다. 경로가 아니라 열린 inode 를 재므로 경로 경합이
 	//     없다. ③ 도 입력을 잰다 — 산출 길이는 입력이 같으면 늘 같아 잴 뜻이 없다(계획 2.1
 	//     「③ 축 크기 계약」). init 은 재도 멈추지 않는다 — 올린 머리말 바이트는 입력의 꼬리와
-	//     무관하다(measureInput). 이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는
+	//     무관하다(checkInputSize). 이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는
 	//     양의 증거를 본 경우이고, M-1 표에 없는 분기다(C10).
 	fi2, err := u.statFile(f)
 	if err != nil {
 		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
 		return attemptResult{outcome: outcomeNeutral}
 	}
-	if fi2.Size() != size && t.Axis != index.AxisInit {
-		lg.Warn("file_changed_during_put", "put_size", size, "after_size", fi2.Size())
+	if fi2.Size() != in.size && t.Axis != index.AxisInit {
+		lg.Warn("file_changed_during_put", "put_size", in.size, "after_size", fi2.Size())
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
@@ -414,32 +419,44 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	return attemptResult{outcome: outcomeSuccess}
 }
 
-// measureInput 은 (b) 입력 파일의 크기를 재고 (c) 장부 크기와 대조한다. ok 가 false 면
-// 이번 시도는 r 로 끝난다.
-func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (size int64, r attemptResult, ok bool) {
+// input 은 한 시도의 입력이다 — 본문 단계((c′) 이후)가 읽는 리더와 (b) 에서 잰 크기다(POK-196 PDT 계획 4절 c10a ·
+// 설계 r6 2.10 「입력 꼴」). 지금은 열린 녹화 파일뿐이다. 본문 단계를 파일에 묶지 않아, 로컬 ② 가 없는 행은 ② 객체를
+// 같은 자리에 메모리 입력으로 넣을 수 있다(복원 — c10b). (e) 의 다시 재기는 파일을 연 attemptOnce 가 같은 fd 로 한다.
+type input struct {
+	r    io.ReadSeeker
+	size int64
+}
+
+// measureInput 은 (b) 열린 입력 파일의 크기를 잰다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (in input, r attemptResult, ok bool) {
 	t := j.target
 
 	// (b) 크기 — 오류를 버리지 않는다. fi 를 무조건 역참조하면 nil panic 이다.
 	fi, err := u.statFile(f)
 	if err != nil {
 		lg.Warn("upload_stat_failed", "stage", "pre", "err", err.Error())
-		return 0, attemptResult{outcome: outcomeNeutral}, false
+		return input{}, attemptResult{outcome: outcomeNeutral}, false
 	}
 	if !fi.Mode().IsRegular() {
 		lg.Error("upload_target_rejected", "reason", "not_regular",
 			"path", t.LocalPath, "s3_key", t.S3Key)
 		u.gate.quarantine(j.key())
-		return 0, attemptResult{outcome: outcomeNeutral}, false
+		return input{}, attemptResult{outcome: outcomeNeutral}, false
 	}
-	size = fi.Size()
+	return input{r: f, size: fi.Size()}, attemptResult{}, true
+}
+
+// checkInputSize 는 (c) 잰 입력 크기를 장부 크기와 대조한다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) checkInputSize(j job, in input, lg *slog.Logger) (r attemptResult, ok bool) {
+	t := j.target
 
 	// (c) 크기 재확인은 경로가 아니라 **대상의 속성**이다(결정 4⁵).
-	if size != t.Bytes {
+	if in.size != t.Bytes {
 		if t.IsTail && t.Axis != index.AxisInit {
 			// 꼬리는 아직 자라는 중일 수 있다. 여기서 올리면(③ 이면 재포장하면) 잘린 실물이
 			// 굳는다(G12‴ · 계획 2.1 「③ 축 크기 계약」).
-			u.logTailGrowing(j, lg, t.Bytes, size)
-			return 0, attemptResult{outcome: outcomeNeutral}, false
+			u.logTailGrowing(j, lg, t.Bytes, in.size)
+			return attemptResult{outcome: outcomeNeutral}, false
 		}
 		// 비꼬리는 correctTail 이 애초에 못 고치므로 막아서 얻을 것이 없고,
 		// 막으면 그 조각이 영원히 안 올라간다. 올리되 장부 어긋남을 남긴다(L14).
@@ -452,9 +469,9 @@ func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (size int64,
 		if t.Axis != index.AxisArchive {
 			sizeKey = "input_bytes"
 		}
-		lg.Warn("upload_size_mismatch", "db_bytes", t.Bytes, sizeKey, size)
+		lg.Warn("upload_size_mismatch", "db_bytes", t.Bytes, sizeKey, in.size)
 	}
-	return size, attemptResult{}, true
+	return attemptResult{}, true
 }
 
 // markUploadedByAxis 는 성공 마킹의 축 분기다. 돌려주는 값은 "후처리(백오프 해제·통지)를

@@ -58,6 +58,15 @@ type UploadTarget struct {
 	// 계승 후보인데 빈 값이면(직전 회차에 조각이 없다) 워커가 비호환으로 판정한다(fail-closed).
 	PrevFirstLocalPath string
 
+	// 아래 둘은 ③ 축 조각의 ② 키 · ② 상태다(POK-196 PDT 계획 4절 c10a · 설계 r6 2.10 「입력 꼴」) — 로컬 ② 가 없는
+	// 행에서 ② 객체를 재포장 입력으로 쓸 재료다(복원 배선은 c10b). 스위퍼 ③ 조회가 싣고, 실시간 작업 · 다른 축에서는
+	// 비어 있다.
+
+	// ArchiveS3Key 는 그 조각의 ② 키(s3_key)다.
+	ArchiveS3Key string
+	// ArchiveUploadState 는 그 조각의 ② 상태(upload_state)다.
+	ArchiveUploadState UploadState
+
 	// 아래 셋은 ③ 조각의 시간 도장 메타다(계획 4.2-R R3). **메모리 필드이며 DB 통로가 아니다**
 	// — 장부에 컬럼이 없고, 스위퍼 조회는 채우지 않는다.
 
@@ -331,7 +340,7 @@ SELECT t.stream_id, t.seq, t.s3_key, t.local_path, t.bytes,
        NOT EXISTS (SELECT 1 FROM stream_segments s
                     WHERE s.stream_id = t.stream_id AND s.seq > t.seq) AS is_tail,
        (t.upload_state <> 'pending') AS is_failed, t.start_wall_utc,
-       '', NULL::bytea, '', ''
+       '', NULL::bytea, '', '', '', ''
   FROM stream_segments t
  WHERE t.upload_state IN ('pending','failed')
    AND t.local_path IS NOT NULL
@@ -370,7 +379,7 @@ SELECT t.stream_id, t.seq, t.playback_s3_key, t.local_path, t.bytes,
        NOT EXISTS (SELECT 1 FROM stream_segments s
                     WHERE s.stream_id = t.stream_id AND s.seq > t.seq) AS is_tail,
        (t.playback_upload_state <> 'pending') AS is_failed, t.start_wall_utc,
-       t.session_id, sess.init_sha256, '', ''
+       t.session_id, sess.init_sha256, '', '', t.s3_key, t.upload_state
   FROM stream_segments t
   JOIN stream_sessions sess ON sess.session_id = t.session_id
   JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
@@ -409,7 +418,8 @@ SELECT t.stream_id, t.seq, t.playback_s3_key, t.local_path, t.bytes,
 // 끝 두 열은 계승 호환 게이트 입력이다(계획 4.5 B #3 · #19 · 판단 J65) — 물려받은 회차(inherits_session)와 그
 // 회차의 첫 조각 local_path(stream_segments_session_idx 앞 끝). 재기동 뒤 재수거도 실시간 요청과 같은 판정을
 // 내리게 한다. 계승 후보가 아니거나 물려받은 회차에 조각이 없으면 빈 값이다 — 세 축이 한 Scan 을 쓰므로
-// ② · ③ 문장은 같은 자리에 빈 값 둘을 싣는다.
+// ② · ③ 문장은 같은 자리에 빈 값 둘을 싣는다. 그 뒤 두 열은 ③ 축의 ② 키 · ② 상태다(UploadTarget.ArchiveS3Key ·
+// ArchiveUploadState — POK-196 PDT 계획 4절 c10a). ③ 문장만 값을 싣고 ② · init 문장은 같은 자리에 빈 값 둘을 싣는다.
 const pendingInitUploadsSQL = `
 SELECT s.stream_id, 0::bigint, '', seg.local_path, seg.bytes,
        false AS is_tail, false AS is_failed, s.started_at,
@@ -417,7 +427,8 @@ SELECT s.stream_id, 0::bigint, '', seg.local_path, seg.bytes,
        COALESCE(s.inherits_session, ''),
        COALESCE((SELECT p.local_path FROM stream_segments p
                   WHERE p.stream_id = s.stream_id AND p.session_id = s.inherits_session
-                  ORDER BY p.seq LIMIT 1), '')
+                  ORDER BY p.seq LIMIT 1), ''),
+       '', ''
   FROM stream_sessions s
   JOIN LATERAL (
        SELECT g.local_path, g.bytes FROM stream_segments g
@@ -611,7 +622,7 @@ func (s *pgUploadStore) PendingUploads(ctx context.Context, axis Axis, tailGrace
 		)
 		if err := rows.Scan(&t.StreamID, &t.Seq, &t.S3Key, &t.LocalPath, &t.Bytes, &t.IsTail,
 			&key.IsFailed, &key.StartWall, &t.SessionID, &t.ExpectedInitSHA,
-			&t.InheritsSession, &t.PrevFirstLocalPath); err != nil {
+			&t.InheritsSession, &t.PrevFirstLocalPath, &t.ArchiveS3Key, &t.ArchiveUploadState); err != nil {
 			return nil, after, fmt.Errorf("업로드 대상 스캔 실패 axis=%s: %w", axis, err)
 		}
 		// 축은 조회가 정한다 — 조회가 곧 그 축의 자격 술어이므로 산출도 정의상 그 축이다.
@@ -655,4 +666,108 @@ func (s *pgUploadStore) CountBacklog(ctx context.Context, axis Axis) (int64, int
 		return 0, 0, 0, fmt.Errorf("업로드 잔량 집계 실패 axis=%s: %w", axis, err)
 	}
 	return pending, failed, bytesNull, nil
+}
+
+// PlaybackHole 은 ③ 사슬 복원이 다시 만들 구멍 행 하나다(LoadPlaybackHoles).
+type PlaybackHole struct {
+	Seq int64
+	// State 는 그 행의 ③ 상태다(pending · failed).
+	State UploadState
+	// AnchorSeq 는 같은 회차에서 이 행보다 앞선 ③ uploaded 최신 행(닻)이다. nil 이면 회차 첫 행부터 잇는다. 닻이 같은
+	// 행들이 한 구멍이다 — uploaded 행이 사이에 끼면 닻이 달라진다.
+	AnchorSeq *int64
+}
+
+// playbackHolesSQL ($1 = session_id) — 회차의 ③ 구멍(pending · failed) 전부를 seq 순으로 읽는다(설계 r6 2.10 「구멍은 DB 에서
+// 열거한다」 — 깨운 요청의 seq 를 목표로 병합하면 #9 uploaded → #10 failed → #11 uploaded → #12 pending 에서 #10 을 건너뛴다).
+// 자격 조건은 pendingPlaybackUploadsSQL 과 같다(세션 조인 · 컷오프 · 끝나지 않은 회차 · 키 · PDT · 경로 · 크기). 꼬리
+// 예외 · 키셋 페이징은 없다 — 회차 하나의 구멍이라 작고, 꼬리 행은 복원이 그 자리에서 기다린다.
+//
+// 닻(anchor_seq)은 행마다 같은 회차의 앞선 uploaded 최신 seq 다 — stream_segments_session_idx(stream_id, session_id, seq)
+// 앞 끝을 탄다.
+const playbackHolesSQL = `
+SELECT t.seq, t.playback_upload_state,
+       (SELECT pg_catalog.max(p.seq) FROM stream_segments p
+         WHERE p.stream_id = t.stream_id AND p.session_id = t.session_id AND p.seq < t.seq
+           AND p.playback_upload_state = 'uploaded') AS anchor_seq
+  FROM stream_segments t
+  JOIN stream_sessions sess ON sess.session_id = t.session_id
+  JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
+ WHERE t.session_id = $1
+   AND t.playback_upload_state IN ('pending','failed')
+   AND t.local_path IS NOT NULL
+   AND t.bytes IS NOT NULL
+   AND t.playback_s3_key IS NOT NULL
+   AND t.playback_pdt IS NOT NULL
+   AND sess.state <> 'ended'
+   AND t.seq >= cut.cutoff_seq
+ ORDER BY t.seq`
+
+// LoadPlaybackHoles 는 회차 sessionID 의 ③ 구멍을 seq 순으로 읽는다(playbackHolesSQL).
+func LoadPlaybackHoles(ctx context.Context, pool *pgxpool.Pool, sessionID string) ([]PlaybackHole, error) {
+	rows, err := pool.Query(ctx, playbackHolesSQL, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("③ 구멍 조회 실패 session_id=%q: %w", sessionID, err)
+	}
+	holes, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (PlaybackHole, error) {
+		var h PlaybackHole
+		err := r.Scan(&h.Seq, &h.State, &h.AnchorSeq)
+		return h, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("③ 구멍 스캔 실패 session_id=%q: %w", sessionID, err)
+	}
+	return holes, nil
+}
+
+// PlaybackChainRow 는 ③ 사슬 복원이 읽는 장부 행 하나다(LoadPlaybackChainRows). NULL 글자 칸은 빈 값이다.
+type PlaybackChainRow struct {
+	Seq int64
+	// SessionID 가 빈 값이면 비귀속 행이다 — 사슬을 움직이지 않지만 다음 행의 인접 판정 재료다.
+	SessionID string
+	LocalPath string
+	// Bytes 는 장부 크기다 — 로컬 ② 를 그대로 쓸 수 있는지 · 꼬리 교정으로 바뀌었는지를 가린다.
+	Bytes               *int64
+	DurationMS          int32
+	S3Key               string
+	UploadState         UploadState
+	PlaybackS3Key       string
+	PlaybackUploadState UploadState
+	// Timing 은 원래 사실 칸이다 — 실시간 사슬과 같은 재료(교정 뒤 영상 끝)로 잇는다.
+	Timing TimingFacts
+}
+
+// playbackChainRowsSQL ($1 = stream_id, $2 · $3 = seq 구간 양끝 포함) — 닻부터 구멍 끝까지 장부 행을 비귀속 행까지 seq 순으로
+// 읽는다(설계 r6 2.10 「구멍 하나의 처리」). 원래 사실 칸 다섯과 장부 길이를 함께 싣는다 — 실시간 사슬은 장부 칸(꼬리
+// 교정 뒤 길이 · 영상 끝)으로 잇으므로(indexer/chain.go), 복원도 같은 칸을 읽어야 같은 도장이 난다(r6 목록에 없던 칸 —
+// r7 사슬 재료). PK(stream_id, seq) 범위 읽기다.
+const playbackChainRowsSQL = `
+SELECT seq, COALESCE(session_id, ''), COALESCE(local_path, ''), bytes, duration_ms, s3_key, upload_state,
+       COALESCE(playback_s3_key, ''), playback_upload_state,
+       timing_wall_guess, timing_recorder_id, timing_segment_number, timing_video_first_ns, timing_video_end_ns
+  FROM stream_segments
+ WHERE stream_id = $1 AND seq >= $2 AND seq <= $3
+ ORDER BY seq`
+
+// LoadPlaybackChainRows 는 스트림 streamID 의 seq 구간 [from, to] 장부 행을 seq 순으로 읽는다(playbackChainRowsSQL).
+func LoadPlaybackChainRows(ctx context.Context, pool *pgxpool.Pool, streamID string, from, to int64) ([]PlaybackChainRow, error) {
+	rows, err := pool.Query(ctx, playbackChainRowsSQL, streamID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("사슬 행 조회 실패 stream_id=%q seq=%d–%d: %w", streamID, from, to, err)
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (PlaybackChainRow, error) {
+		var (
+			c     PlaybackChainRow
+			facts factColumns
+		)
+		err := r.Scan(&c.Seq, &c.SessionID, &c.LocalPath, &c.Bytes, &c.DurationMS, &c.S3Key, &c.UploadState,
+			&c.PlaybackS3Key, &c.PlaybackUploadState,
+			&facts.wall, &facts.recorder, &facts.number, &facts.videoFirst, &facts.videoEnd)
+		c.Timing = facts.toFacts()
+		return c, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("사슬 행 스캔 실패 stream_id=%q: %w", streamID, err)
+	}
+	return out, nil
 }
