@@ -210,7 +210,7 @@ func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome
 }
 
 // fillGap 은 행 r 을 GAP 줄로 실을 값으로 채운다 — 회차가 없으면 앞 행 prev 의 회차, PDT 가 없으면 앞 행 PDT + 길이, ③ 키가
-// 없으면 키 이름(playback.SegKey — 객체는 없어도 된다 · GAP 줄은 받지 않는다)이다.
+// 없으면 키 이름(gapKey — 객체는 없어도 된다 · GAP 줄은 받지 않는다)이다.
 func (v *vodJob) fillGap(r, prev boundary.Row) boundary.Row {
 	if r.SessionID == "" {
 		r.SessionID = prev.SessionID
@@ -219,10 +219,25 @@ func (v *vodJob) fillGap(r, prev boundary.Row) boundary.Row {
 		r.PlaybackPDT = prev.PlaybackPDT.Add(msDuration(prev.DurationMS))
 	}
 	if r.PlaybackS3Key == "" {
-		r.PlaybackS3Key, _ = playback.SegKey(v.chain.StreamID, r.Seq) // 스트림은 vodKey 가 이미 검사했다
+		r.PlaybackS3Key = v.gapKey(r.Seq, prev.PlaybackS3Key)
 	}
 	r.IsGap = true
 	return r
+}
+
+// gapKey 는 ③ 키가 없는 GAP 행 seq 의 키 이름이다 — 앞 행 키 prevKey 의 꼴을 따른다(POK-525 설계 2-1 · E12). prevKey 가
+// 회차 꼴이면 그 회차의 회차 꼴(playback.RoundSegKey), 옛 꼴 · 빈 키 · 문법 밖이면 옛 꼴(playback.SegKey)이다.
+//
+// 사슬의 회차로 짓지 않는다 — 새 꼴 쓰기를 끈 상자의 장부에도 회차는 있어, 그러면 옛 꼴 목록에 회차 꼴 GAP 이 섞인다.
+// 앞 행 키의 꼴은 그 행을 쓴 상자의 스위치가 정한 것이라, publish 는 스위치를 모른 채 꼴을 정한다. 파생 오류는 나지 않는다
+// — 스트림은 vodKey 가, 회차 성분은 ParseSegKey 가 같은 검사로 이미 봤고 seq 는 장부 값(0 이상)이다.
+func (v *vodJob) gapKey(seq int64, prevKey string) string {
+	if ref, err := playback.ParseSegKey(prevKey); err == nil && ref.RoundID != "" {
+		key, _ := playback.RoundSegKey(v.chain.StreamID, ref.RoundID, seq)
+		return key
+	}
+	key, _ := playback.SegKey(v.chain.StreamID, seq)
+	return key
 }
 
 // markGaps 는 렌더 전 원장 적기다 — 한 트랜잭션에서 사슬 꼬리 행을 잠그고, 장부를 다시 읽어 plan 을 다시 세운 뒤 GAP

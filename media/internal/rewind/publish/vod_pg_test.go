@@ -18,10 +18,12 @@ import (
 // vodChainKey 는 사슬 P ← S 의 VOD 객체 키다(K1 — 머리 세션).
 const vodChainKey = "vod/str/P/index.m3u8"
 
-// vodRow 는 사슬 픽스처의 장부 행 하나다 — 회차("" 면 비귀속 · "X" 는 사슬 밖 회차)와 ③ 상태다.
+// vodRow 는 사슬 픽스처의 장부 행 하나다 — 회차("" 면 비귀속 · "X" 는 사슬 밖 회차)와 ③ 상태다. key 는 ③ 키다("" 면
+// fxRow 의 옛 꼴 키 · 비귀속 행은 늘 NULL).
 type vodRow struct {
 	session string
 	state   string
+	key     string
 }
 
 // chainRows 는 P 의 행 0..4 · S 의 행 5..9(전부 ③ 확정)다. 고칠 자리는 부르는 쪽이 바꾼다.
@@ -60,8 +62,11 @@ func newVODChainOf(t *testing.T, chain []rewind.Session, rows []vodRow) (*Publis
 	exec(t, pool, `UPDATE stream_sessions SET vod_state = 'freezing', dvr_state = 'frozen' WHERE session_id = ANY($1)`, ids)
 	for seq, r := range rows {
 		row := fxRow(r.session, int64(seq))
-		if r.session == "" {
+		switch {
+		case r.session == "":
 			row = boundary.Row{Seq: int64(seq), DurationMS: 4000}
+		case r.key != "":
+			row.PlaybackS3Key = r.key
 		}
 		insertLedgerRow(t, pool, row, r.state)
 	}
@@ -162,6 +167,28 @@ func TestFreezeVODFillsUnattributedRowWithGap(t *testing.T) {
 	}
 	wantGapLedger(t, p, map[int64]string{5: "P/mixed_boundary/vod_abandoned"})
 	wantVODFrozen(t, p, store, ResultFrozenWithGaps, 0, 9)
+}
+
+// e12_gap_key_round_form(POK-525 설계 2-1 · E12) — 회차 꼴 키(회차 P)의 사슬에서 비귀속 행의 GAP 줄은 앞 행 키의 회차
+// 꼴이다. 장부 · 렌더 · 발행 전 검사(S5) · PUT 을 거친 저장 본문으로 본다. 옛 꼴 사슬은
+// TestFreezeVODFillsUnattributedRowWithGap 이 본다. 변이 = 늘 옛 꼴로 지어냄 → seq 5 줄이 옛 꼴이라 FAIL.
+func TestFreezeVODGapKeyFollowsRoundForm(t *testing.T) {
+	rows := chainRows()
+	for i := range rows {
+		rows[i].key = roundKey(int64(i))
+	}
+	rows[5] = vodRow{session: "", state: "pending"}
+	p, store, chain := newVODChain(t, rows)
+
+	wantOutcome(t, p.FreezeVOD(t.Context(), chain, false), AxisVOD, ResultFrozenWithGaps, false)
+
+	body, _ := stored(store, vodChainKey)
+	lines := vodLines(body)
+	if len(lines) != 10 || !strings.HasSuffix(lines[4], "/dvr/str/P/seg/000004.m4s") ||
+		lines[5] != "#EXT-X-GAP "+fxBaseURL+"/dvr/str/P/seg/000005.m4s" {
+		t.Errorf("VOD 조각 줄 = %q, want seq 5 가 회차 P 꼴 GAP 줄", lines)
+	}
+	wantGapLedger(t, p, map[int64]string{5: "P/mixed_boundary/vod_abandoned"})
 }
 
 // 사슬 범위 안에 사슬 밖 회차의 행이 끼면(구조상 없어야 함) 렌더하지 않고 실패다 — 원장도 쓰지 않는다.

@@ -3,7 +3,10 @@ package publish
 // VOD plan 의 적재 상한 시험이다(POK-196 M6-2 · 보안 sec-m61-c4 M1 — 사슬 행 적재 상한 · too_large 조기 판정).
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -65,5 +68,76 @@ func TestVODMinRowBytesIsLowerBound(t *testing.T) {
 
 	if got := render(2) - render(1); got < vodMinRowBytes {
 		t.Errorf("가장 짧은 조각 하나 = %d바이트, want ≥ vodMinRowBytes %d", got, vodMinRowBytes)
+	}
+}
+
+// gapKeyLedger 는 사슬 P ← S(회차 P — 회차 id 는 머리 세션 id)의 장부다. P 의 행 0 · 1 · S 의 행 3 · 5 는 settled 이고
+// 행 2 · 4 는 비귀속(③ 키 없음)이다. 행 seq 의 ③ 키는 key(seq)다 — 꼴은 부르는 쪽이 정한다.
+func gapKeyLedger(key func(seq int64) string) index.ChainLedger {
+	l := index.ChainLedger{
+		Chain:     index.Chain{StreamID: fxStream, Head: "P", Tail: "S", SessionIDs: []string{"P", "S"}},
+		HasCutoff: true,
+		Sessions: []index.RewindSession{
+			{SessionID: "P", TargetDuration: 6, InitUploaded: true, MinSeq: 0},
+			{SessionID: "S", InheritsSession: "P", TargetDuration: 6, InitUploaded: true, MinSeq: 3},
+		},
+	}
+	for seq, session := range []string{"P", "P", "", "S", "", "S"} {
+		r := ledgerRow(session, int64(seq))
+		if session != "" {
+			r.PlaybackS3Key = key(int64(seq))
+		}
+		l.Rows = append(l.Rows, r)
+	}
+	return l
+}
+
+// legacyKey · roundKey 는 픽스처 스트림의 옛 꼴 · 회차 P 꼴 조각 키다.
+func legacyKey(seq int64) string { return fmt.Sprintf("dvr/%s/seg/%06d.m4s", fxStream, seq) }
+func roundKey(seq int64) string  { return fmt.Sprintf("dvr/%s/P/seg/%06d.m4s", fxStream, seq) }
+
+// e12_gap_key_follows_prev_row(POK-525 설계 2-1 · E12) — 비귀속 행의 GAP 키는 앞 행 키의 꼴을 따른다: 앞 행이 회차 꼴이면
+// 그 회차의 회차 꼴, 옛 꼴이면 옛 꼴이다. 목록은 렌더 그대로 발행 전 검사(S5)를 지나고, 본문은 손으로 적은 골든
+// (rewind/testdata/vod_gap_key_*.m3u8)과 바이트로 같다. 섞인 목록은 켬 전(옛 꼴 0 · 1) · 뒤(회차 꼴 3 · 5) 행이 한 회차에
+// 있다 — 행 2 는 옛 꼴, 행 4 는 회차 꼴 GAP 이다. 행 4 의 회차는 S 이지만 키의 회차는 앞 행 키의 P 다(회차 id ≠ 세션 id).
+// 변이 = 사슬 회차(머리 P)로 회차 꼴을 지어냄 → 옛 꼴 · 섞인 목록의 행 2 가 회차 꼴이 되어 FAIL.
+func TestVODGapKeyFollowsPrevRowForm(t *testing.T) {
+	tests := []struct {
+		name   string
+		key    func(int64) string
+		golden string
+	}{
+		{name: "옛_꼴", key: legacyKey, golden: "vod_gap_key_legacy.m3u8"},
+		{name: "회차_꼴", key: roundKey, golden: "vod_gap_key_round.m3u8"},
+		{name: "섞임", key: func(seq int64) string {
+			if seq < 3 {
+				return legacyKey(seq)
+			}
+			return roundKey(seq)
+		}, golden: "vod_gap_key_mixed.m3u8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := gapKeyLedger(tt.key)
+			v := &vodJob{p: &Publisher{opt: Options{BaseURL: fxBaseURL}}, chain: l.Chain}
+			want, err := os.ReadFile(filepath.Join("..", "testdata", tt.golden))
+			if err != nil {
+				t.Fatalf("골든 읽기 실패: %v", err)
+			}
+
+			plan, out, ok := v.plan(l, false)
+			if !ok {
+				t.Fatalf("plan = %+v, want 통과", out)
+			}
+			pl := v.playlist(l, plan.rows)
+			body := mustRender(t, pl)
+
+			if err := rewind.Validate(pl, body, 1, nil); err != nil {
+				t.Errorf("발행 전 검사(S5) 실패: %v", err)
+			}
+			if !bytes.Equal(body, want) {
+				t.Errorf("VOD 본문이 골든 %s 와 다르다 — got:\n%s", tt.golden, body)
+			}
+		})
 	}
 }
