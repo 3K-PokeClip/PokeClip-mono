@@ -82,7 +82,9 @@ public class TimelineOriginReader {
      * (방송 번호, 세션) 쌍 배열로 받는다 — 방송마다 세션 수가 달라 2차원 배열로 못 싣는다. 🔴 세션마다 따로 고르는 모양이
      * 계획을 가른다: 세션 목록을 {@code IN} 으로 걸고 seq 순 첫 행을 찾으면 PK 를 그 키 이력의 처음부터 훑는다(2만 행 시드에서
      * 실측 — {@code RoundRowsPlanTest}). 세션마다 고르면 {@code stream_segments_session_idx (stream_id, session_id, seq)} 의
-     * 첫 항목 하나씩이다.
+     * 첫 항목 하나씩이다. 판 NULL 행의 µs 값은 ms 로 <b>내린다</b>({@code floor}) — 계약 6-6-5 {@code ⌊PDT⌋ − start_pts} 와
+     * 카드 장면 · 소리 주소의 ms 내림 축에 맞춘다({@code ::bigint} 만 걸면 반올림이라 1ms 갈린다). 위 {@link #ORIGINS} 는
+     * develop 식 그대로다.
      */
     static final String ORIGINS_BY_ROUND = """
             SELECT b.stream_id, o.origin_ms
@@ -92,7 +94,7 @@ public class TimelineOriginReader {
                       FROM unnest(?::text[], ?::text[]) AS m(stream_id, session_id)
                       CROSS JOIN LATERAL (
                             SELECT s.seq,
-                                   (EXTRACT(EPOCH FROM COALESCE(s.playback_pdt, s.start_wall_utc)) * 1000)::bigint
+                                   floor(EXTRACT(EPOCH FROM COALESCE(s.playback_pdt, s.start_wall_utc)) * 1000)::bigint
                                    - s.start_pts_ms AS origin_ms
                               FROM public.stream_segments s
                              WHERE s.stream_id = b.ingest_key AND s.session_id = m.session_id

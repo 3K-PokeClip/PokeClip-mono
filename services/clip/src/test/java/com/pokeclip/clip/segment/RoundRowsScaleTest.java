@@ -27,8 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 행을 거르개로 버린다 — 장부에 {@code start_pts_ms} 색인이 없고 조각 길이 상한이 계약에 없어 범위를 더 좁히지 않았다. 그 비용이
  * <b>키 이력이 아니라 회차 길이</b>에 비례하고, 2만 행 회차(4초 조각 22시간)에서 상한 안인지 잰다.
  *
- * <p>상한(1초)은 판정 경계가 아니라 「회차 길이 비례가 아닌 무언가(키 이력 훑기 · 값마다 왕복)」 를 잡는 그물이다. 실측값은 README
- * 카드 장면 절에 적는다.
+ * <p>비례성은 경과 시간이 아니라 행 수({@code hasSize})와 실행 계획({@code Rows Removed by Filter})이 잡는다. 경과 상한(5초)은
+ * 판정 경계가 아니라 「회차 길이 비례가 아닌 무언가(키 이력 훑기 · 값마다 왕복)」 를 잡는 성긴 그물이다 — 로컬 실측(수십–백수십
+ * ms)보다 한 자릿수 넘게 넉넉히 둬 공유 CI 러너의 흔들림에 깨지지 않게 했다. 실측값은 README 카드 장면 절에 적는다.
  */
 class RoundRowsScaleTest extends IntegrationTestSupport {
 
@@ -37,7 +38,7 @@ class RoundRowsScaleTest extends IntegrationTestSupport {
     private static final Instant START = Instant.parse("2026-09-01T00:00:00Z");
     private static final int HISTORY_ROWS = 20_000;
     private static final int ROUND_ROWS = 20_000;
-    private static final Duration BOUND = Duration.ofSeconds(1);
+    private static final Duration BOUND = Duration.ofSeconds(5);
     private static final Pattern REMOVED = Pattern.compile("Rows Removed by Filter: (\\d+)");
 
     private final RoundRows rounds;

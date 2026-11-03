@@ -74,6 +74,20 @@ class TimelineOriginReaderTest extends IntegrationTestSupport {
         assertThat(found).containsEntry("S-r2", at(664_000 - 604_000));
     }
 
+    /**
+     * 판 NULL 행의 µs 값(여기선 PDT 가 비어 벽시각으로 대체)은 ms 로 <b>내린다</b> — 계약 6-6-5 {@code ⌊PDT⌋ − start_pts} 와
+     * 카드 장면 · 소리 주소의 ms 내림 축과 같다. 반올림이면 0.6ms 가 1ms 로 올라 기준점이 1ms 갈린다.
+     */
+    @Test
+    void 회차_기준점은_µs_값을_ms로_내린다() {
+        seed.session("S-a", KEY, "S-a", null);
+        seed.row(KEY, 1).pts(1_000).wallMicros(5_000_600).session("S-a").insert();
+
+        Map<String, Instant> found = origins.originsOf(List.of(방송("S-a", at(0))));
+
+        assertThat(found).containsEntry("S-a", at(5_000 - 1_000));
+    }
+
     @Test
     void 회차는_있는데_귀속_행이_아직_없으면_기준점이_없다() {
         seed.session("S-a", KEY, "S-a", null);
