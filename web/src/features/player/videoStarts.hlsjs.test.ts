@@ -19,8 +19,9 @@ import { trackVideoStarts, type VideoStarts } from './videoStarts';
 // 4.1 · 10절 c3). 사건은 진짜 Hls 인스턴스에 trigger 로 흘려 넣고, 조각 · 파트는 진짜 M3U8Parser 가 만든 객체를
 // 쓴다. 사건 칸의 꼴은 stream-controller 가 내는 그대로다: init 붙임은 frag 가 MAP 조각(sn 'initSegment' ·
 // cc 는 MAP 줄의 cc)이고 part 는 null(_bufferInitSegment), 조각 붙임은 frag 가 미디어 조각 · LL 파트면 part 가
-// 그 Part(bufferFragmentData), INIT_PTS_FOUND 는 id 가 'main' · frag 가 미디어 조각(_handleTransmuxComplete).
-// hls.js 판을 올려 칸 이름이 바뀌면 여기서 먼저 깨진다.
+// 그 Part · offset 이 붙이는 순간 그 cc 의 −initPTS / timescale(bufferFragmentData), INIT_PTS_FOUND 는 id 가
+// 'main' · frag 가 미디어 조각이고 그 조각 붙임보다 먼저 난다(_handleTransmuxComplete). 기록은 INIT_PTS_FOUND 를
+// 듣지 않지만 시험은 진짜 순서대로 함께 쏜다. hls.js 판을 올려 칸 이름이 바뀌면 여기서 먼저 깨진다.
 
 const URL = 'https://m/dvr/k/a/index.m3u8';
 const VIDEO_TRACK = 1;
@@ -30,7 +31,7 @@ const AUDIO_TS = 48000;
 /** 재포장 도장 기점(3600초) — 소리 트랙 눈금으로 적은 initPTS */
 const ORIGIN_S = 3600;
 
-const quiet = () => {};
+function quiet(): void {}
 const SILENT = { trace: quiet, debug: quiet, log: quiet, warn: quiet, info: quiet, error: quiet };
 
 // --- 합성 바이트(fmp4Boxes.test.ts 와 같은 틀) ---
@@ -143,7 +144,9 @@ function parse(text: string): LevelDetails {
 
 const players: Hls[] = [];
 afterEach(() => {
-  for (const hls of players.splice(0)) hls.destroy();
+  for (const hls of players.splice(0)) {
+    hls.destroy();
+  }
 });
 
 interface Rig {
@@ -169,6 +172,8 @@ function rig(): Rig {
 interface AppendOptions {
   part?: Part | null;
   parent?: PlaylistLevelType;
+  /** 붙이는 순간 그 cc 의 initPTS 기점(초) — null 이면 initPTS 를 아직 모른다(offset 없음) */
+  originS?: number | null;
 }
 
 /** stream-controller._bufferInitSegment 꼴 — frag 는 MAP 조각(frag.initSegment ?? frag) */
@@ -189,12 +194,20 @@ function appendInit(
   });
 }
 
-/** base-stream-controller.bufferFragmentData 꼴 — frag 는 미디어 조각 · LL 파트면 part */
+/** 소리가 먼저라 소리 트랙 눈금으로 잡힌 initPTS(눈금) */
+function initPtsOf(originS: number): number {
+  return Math.round(originS * AUDIO_TS);
+}
+
+/**
+ * base-stream-controller.bufferFragmentData 꼴 — frag 는 미디어 조각 · LL 파트면 part, offset 은 붙이는 순간 그
+ * cc 의 −initPTS / timescale 이다(1363-1368)
+ */
 function appendMedia(
   hls: Hls,
   media: MediaFragment,
   data: Uint8Array<ArrayBuffer>,
-  { part = null, parent = PlaylistLevelType.MAIN }: AppendOptions = {},
+  { part = null, parent = PlaylistLevelType.MAIN, originS = ORIGIN_S }: AppendOptions = {},
 ): void {
   hls.trigger(Events.BUFFER_APPENDING, {
     type: parent === PlaylistLevelType.MAIN ? 'audiovideo' : 'audio',
@@ -202,42 +215,56 @@ function appendMedia(
     frag: media,
     part,
     chunkMeta: new ChunkMetadata(0, Number(media.sn), 0, data.length, part?.index ?? -1),
+    offset: originS === null ? undefined : -initPtsOf(originS) / AUDIO_TS,
     parent,
   });
 }
 
-/** stream-controller._handleTransmuxComplete 꼴 — 소리가 먼저라 소리 트랙으로 잡힌 initPTS */
-function foundInitPts(
-  hls: Hls,
-  media: MediaFragment,
-  originS = ORIGIN_S,
-  id = PlaylistLevelType.MAIN,
-): void {
+/** stream-controller._handleTransmuxComplete 꼴 — 소리가 먼저라 소리 트랙으로 잡힌 initPTS. 그 조각 붙임보다 먼저 난다 */
+function foundInitPts(hls: Hls, media: MediaFragment, originS = ORIGIN_S): void {
   hls.trigger(Events.INIT_PTS_FOUND, {
     timestampOffsets: [],
-    id,
+    id: PlaylistLevelType.MAIN,
     frag: media,
-    initPTS: Math.round(originS * AUDIO_TS),
+    initPTS: initPtsOf(originS),
     timescale: AUDIO_TS,
     trackId: AUDIO_TRACK,
   });
 }
 
 describe('trackVideoStarts — 진짜 hls.js 사건으로 조각마다 영상 시작을 적는다', () => {
-  it('소리 기준 initPTS 로 v_k 를 셈하고, 구성 시차는 v_k 에 더하지 않고 c_k 로 따로 준다', () => {
+  it('붙임의 offset 으로 v_k 를 센다 — 계약3 7-6 식(tfdt / 영상 timescale − 소리 기준 initPTS / timescale)과 같은 값 · c_k 는 따로 준다', () => {
     const { hls, starts, frag } = rig();
     const seg = frag(100);
 
+    foundInitPts(hls, seg);
     appendInit(hls, seg, AV_INIT);
     appendMedia(hls, seg, avFragment(ORIGIN_S + 0.04, 6000));
-    foundInitPts(hls, seg);
 
     const start = starts.startOf(seg);
     expect(start?.videoStartS).toBeCloseTo(0.04, 6);
     expect(start?.firstCtoS).toBeCloseTo(6000 / VIDEO_TS, 6);
   });
 
-  it('그 cc 의 initPTS 를 모르면 null 이다 — MAP 을 다시 받지 않은 DISCONTINUITY 뒤 조각도 알게 되면 값이 난다', () => {
+  it('같은 cc 의 initPTS 가 다시 정해져도 이미 붙인 조각은 그 붙임의 offset 그대로다', () => {
+    // 같은 축 구멍이 조각 길이 이상이면 hls.js 가 같은 cc 의 initPTS 를 새로 정한다(passthrough-remuxer
+    // isInvalidInitPts · stream-controller 1267-1288). 앞서 붙인 조각은 버퍼에서 옛 timestampOffset 자리에 있다
+    const { hls, starts, frag } = rig();
+    const head = frag(101);
+    const tail = frag(102);
+    expect(tail.cc).toBe(head.cc);
+
+    foundInitPts(hls, head, ORIGIN_S + 100);
+    appendInit(hls, head, AV_INIT);
+    appendMedia(hls, head, avFragment(ORIGIN_S + 100.5, 0), { originS: ORIGIN_S + 100 });
+    foundInitPts(hls, tail, ORIGIN_S + 150);
+    appendMedia(hls, tail, avFragment(ORIGIN_S + 154.5, 0), { originS: ORIGIN_S + 150 });
+
+    expect(starts.startOf(head)?.videoStartS).toBeCloseTo(0.5, 6);
+    expect(starts.startOf(tail)?.videoStartS).toBeCloseTo(4.5, 6);
+  });
+
+  it('MAP 을 다시 받지 않은 DISCONTINUITY 뒤 조각은 그 붙임의 offset(새 cc 의 initPTS)으로 센다', () => {
     const { hls, starts, frag } = rig();
     const first = frag(100);
     const afterCut = frag(101);
@@ -245,18 +272,27 @@ describe('trackVideoStarts — 진짜 hls.js 사건으로 조각마다 영상 �
     expect(afterCut.cc).toBe(1);
     expect(afterCut.initSegment?.cc).toBe(0);
 
+    foundInitPts(hls, first);
     appendInit(hls, first, AV_INIT);
     appendMedia(hls, first, avFragment(ORIGIN_S, 0));
-    foundInitPts(hls, first);
+    foundInitPts(hls, afterCut, ORIGIN_S + 100);
     appendInit(hls, afterCut, AV_INIT);
-    appendMedia(hls, afterCut, avFragment(ORIGIN_S + 100.5, 3000));
+    appendMedia(hls, afterCut, avFragment(ORIGIN_S + 100.5, 3000), { originS: ORIGIN_S + 100 });
 
     expect(starts.startOf(first)?.videoStartS).toBeCloseTo(0, 6);
-    expect(starts.startOf(afterCut)).toBeNull();
-
-    foundInitPts(hls, afterCut, ORIGIN_S + 100);
     expect(starts.startOf(afterCut)?.videoStartS).toBeCloseTo(0.5, 6);
     expect(starts.startOf(afterCut)?.firstCtoS).toBeCloseTo(3000 / VIDEO_TS, 6);
+  });
+
+  it('offset 이 없는 붙임(그 cc 의 initPTS 를 모름)은 null 이다 — 앞 기록도 버린다', () => {
+    const { hls, starts, frag } = rig();
+    const seg = frag(100);
+    appendInit(hls, seg, AV_INIT);
+    appendMedia(hls, seg, avFragment(ORIGIN_S + 1, 0));
+    expect(starts.startOf(seg)?.videoStartS).toBeCloseTo(1, 6);
+
+    appendMedia(hls, seg, avFragment(ORIGIN_S + 1, 0), { originS: null });
+    expect(starts.startOf(seg)).toBeNull();
   });
 
   it('영상 트랙이 없는 init 뒤 조각은 null 이다 — 앞 init 에 영상이 있었어도 새 init 을 따른다', () => {
@@ -296,20 +332,18 @@ describe('trackVideoStarts — 진짜 hls.js 사건으로 조각마다 영상 �
     expect(starts.startOf(seg)).toBeNull();
   });
 
-  it('parent 가 audio 인 붙임과 id 가 audio 인 INIT_PTS_FOUND 는 무시한다', () => {
+  it('parent 가 audio 인 붙임은 무시한다', () => {
     const { hls, starts, frag } = rig();
     const seg = frag(100);
+    const audioOnly = { parent: PlaylistLevelType.AUDIO, originS: ORIGIN_S + 50 };
 
-    foundInitPts(hls, seg, ORIGIN_S + 50, PlaylistLevelType.AUDIO);
     appendInit(hls, seg, AV_INIT, PlaylistLevelType.AUDIO);
-    appendMedia(hls, seg, avFragment(ORIGIN_S + 1, 0), { parent: PlaylistLevelType.AUDIO });
+    appendMedia(hls, seg, avFragment(ORIGIN_S + 1, 0), audioOnly);
     expect(starts.startOf(seg)).toBeNull();
 
-    foundInitPts(hls, seg);
     appendInit(hls, seg, AV_INIT);
     appendMedia(hls, seg, avFragment(ORIGIN_S + 1, 0));
-    appendMedia(hls, seg, avFragment(ORIGIN_S + 9, 0), { parent: PlaylistLevelType.AUDIO });
-    foundInitPts(hls, seg, ORIGIN_S + 50, PlaylistLevelType.AUDIO);
+    appendMedia(hls, seg, avFragment(ORIGIN_S + 9, 0), audioOnly);
     expect(starts.startOf(seg)?.videoStartS).toBeCloseTo(1, 6);
   });
 
@@ -320,21 +354,22 @@ describe('trackVideoStarts — 진짜 hls.js 사건으로 조각마다 영상 �
     // 진짜 파서는 파트 번호를 조각마다 0 부터 센다
     expect(parts.map((part) => part.index)).toEqual([0, 1]);
     const [head, tail] = parts as [Part, Part];
-    foundInitPts(hls, seg, ORIGIN_S + 8);
+    const originS = ORIGIN_S + 8;
+    foundInitPts(hls, seg, originS);
     appendInit(hls, seg, AV_INIT);
 
-    appendMedia(hls, seg, avFragment(ORIGIN_S + 10, 0), { part: tail });
+    appendMedia(hls, seg, avFragment(originS + 2, 0), { part: tail, originS });
     expect(starts.startOf(seg)).toBeNull();
 
-    appendMedia(hls, seg, avFragment(ORIGIN_S + 8.1, 0), { part: head });
-    appendMedia(hls, seg, avFragment(ORIGIN_S + 10, 0), { part: tail });
+    appendMedia(hls, seg, avFragment(originS + 0.1, 0), { part: head, originS });
+    appendMedia(hls, seg, avFragment(originS + 2, 0), { part: tail, originS });
     expect(starts.startOf(seg)?.videoStartS).toBeCloseTo(0.1, 6);
   });
 
-  it('dispose 는 단 처리기 셋을 떼고 기록을 비운다 — 뒤 사건은 적지 않는다', () => {
+  it('dispose 는 단 처리기 둘을 떼고 기록을 비운다 — 뒤 사건은 적지 않는다', () => {
     const { hls, starts, frag } = rig();
     const seg = frag(100);
-    const watched = [Events.BUFFER_APPENDING, Events.INIT_PTS_FOUND, Events.LEVEL_UPDATED] as const;
+    const watched = [Events.BUFFER_APPENDING, Events.LEVEL_UPDATED] as const;
     const counts = () => watched.map((event) => hls.listenerCount(event));
     const attached = counts();
     foundInitPts(hls, seg);

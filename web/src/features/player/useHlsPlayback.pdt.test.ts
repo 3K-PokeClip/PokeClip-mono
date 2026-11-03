@@ -28,6 +28,8 @@ const fake = vi.hoisted(() => ({
   instances: [] as FakeHls[],
   /** trackVideoStarts 를 단 재생기 */
   tracked: [] as unknown[],
+  /** 영상 시작 기록을 놓은(dispose) 재생기 */
+  disposed: [] as unknown[],
   /** 순번 → v_k(초) */
   videoStarts: new Map<number, number>(),
   /** 라이브 구성 시차 스위치(LIVE_PTS_CORRECTION) — 시험이 두 값을 주입한다 */
@@ -42,7 +44,7 @@ vi.mock('./fragmentTiming', async (importOriginal) => ({
   },
 }));
 
-// 이 시험이 쏘는 사건은 LEVEL_UPDATED 하나다. 다른 처리기는 이름 없이 달려 돌지 않는다
+// 이 시험이 쏘는 사건은 LEVEL_UPDATED · ERROR 둘이다. 다른 처리기는 이름 없이 달려 돌지 않는다
 vi.mock('hls.js', () => ({ default: FakeHls }));
 
 vi.mock('./videoStarts', () => ({
@@ -53,14 +55,23 @@ vi.mock('./videoStarts', () => ({
         const videoStartS = typeof frag.sn === 'number' ? fake.videoStarts.get(frag.sn) : undefined;
         return videoStartS === undefined ? null : { videoStartS, firstCtoS: 0 };
       },
-      dispose: () => {},
+      dispose: () => {
+        fake.disposed.push(hls);
+      },
     };
   },
 }));
 
 class FakeHls {
   static isSupported = () => true;
-  static Events = { LEVEL_UPDATED: 'hlsLevelUpdated' };
+  static Events = { LEVEL_UPDATED: 'hlsLevelUpdated', ERROR: 'hlsError' };
+  static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+  // hls.js 1.7.3 의 값 그대로(errors.ts)
+  static ErrorDetails = {
+    MANIFEST_LOAD_ERROR: 'manifestLoadError',
+    LEVEL_LOAD_ERROR: 'levelLoadError',
+    AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
+  };
   readonly handlers = new Map<string, ((event: string, data: unknown) => void)[]>();
   latestLevelDetails: Details | null = null;
   liveSyncPosition: number | null = 12;
@@ -70,9 +81,14 @@ class FakeHls {
   on(event: string, handler: (event: string, data: unknown) => void) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
   }
-  trigger(event: string, data: { details: Details }) {
-    this.latestLevelDetails = data.details;
-    for (const h of this.handlers.get(event) ?? []) h(event, data);
+  trigger(event: string, data: { details?: Details | string }) {
+    // 오류 사건의 details 는 오류 이름 글자다 — 목록은 LEVEL_UPDATED 만 바꾼다
+    if (event === FakeHls.Events.LEVEL_UPDATED && typeof data.details === 'object') {
+      this.latestLevelDetails = data.details;
+    }
+    for (const h of this.handlers.get(event) ?? []) {
+      h(event, data);
+    }
   }
   attachMedia() {}
   loadSource() {}
@@ -123,13 +139,13 @@ function source(kind: PlaybackSource['kind']): PlaybackSource {
   };
 }
 
-/** 재생기를 세우고 판 2 목록을 한 번 갱신한다 */
-async function mount(kind: PlaybackSource['kind'], hooks: PlaybackHooks = {}) {
+/** 재생기를 세우고 판 2 목록을 한 번 갱신한다. mediaKey 가 있으면 403 에 출입증을 버린다 */
+async function mount(kind: PlaybackSource['kind'], hooks: PlaybackHooks = {}, mediaKey?: string) {
   const el = document.createElement('video');
   video.el = el;
   const ref = { current: el };
   const view = renderHook(() =>
-    useHlsPlayback(ref, source(kind), {}, undefined, undefined, false, undefined, hooks),
+    useHlsPlayback(ref, source(kind), {}, undefined, mediaKey, false, undefined, hooks),
   );
   await act(async () => {
     await vi.dynamicImportSettled();
@@ -142,6 +158,7 @@ beforeEach(() => {
   vi.useFakeTimers({ now: PDT0 + 20_000 });
   fake.instances.length = 0;
   fake.tracked.length = 0;
+  fake.disposed.length = 0;
   fake.videoStarts.clear();
   fake.liveCorrection = false;
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
@@ -207,5 +224,51 @@ describe('판 2 목록의 시각 환산 — 영상 축 조각', () => {
     const view = await mount('rewind');
     act(() => view.result.current.seekToMs?.(PDT0 + 4_000));
     expect(video.el!.currentTime).toBeCloseTo(4.7, 9);
+  });
+});
+
+describe('영상 시작 기록은 재생기를 내리는 모든 자리에서 놓는다', () => {
+  /** 다시 해 보지 않는 치명 오류 하나 */
+  function fatal(type: string, code?: number) {
+    return { fatal: true, type, details: 'fragLoadError', response: { code } };
+  }
+
+  it('정리(재생기 해체)에서 놓는다', async () => {
+    const view = await mount('rewind');
+    view.unmount();
+    expect(fake.disposed).toEqual([fake.tracked[0]]);
+  });
+
+  it('403 으로 내릴 때 놓고, 뒤 정리에서 다시 놓지 않는다', async () => {
+    const view = await mount('rewind', {}, 'k');
+    act(() => lastHls().trigger('hlsError', fatal('networkError', 403)));
+    expect(fake.disposed).toEqual([lastHls()]);
+    view.unmount();
+    expect(fake.disposed).toHaveLength(1);
+  });
+
+  it('복구 불가로 내릴 때 놓는다', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await mount('rewind');
+    // 첫 네트워크 오류는 한 번 다시 받고, 두 번째에 내린다
+    act(() => lastHls().trigger('hlsError', fatal('networkError')));
+    expect(fake.disposed).toEqual([]);
+    act(() => lastHls().trigger('hlsError', fatal('networkError')));
+    expect(fake.disposed).toEqual([lastHls()]);
+  });
+});
+
+describe('세션 모드(onSeekRequest)의 시각 축도 영상 축 조각으로 잰다', () => {
+  it('실제 시각으로 옮기기(seekToDate)가 세션에 넘기는 창 하한 · 끝은 원래 EXTINF 다', async () => {
+    const onSeekRequest = vi.fn();
+    const view = await mount('rewind', { onSeekRequest });
+    act(() => {
+      view.result.current.seekToDate?.(PDT0 + 5_000);
+    });
+    // hls.js 가 덮은 길이(4.3초)면 하한 PDT0 + 12.9초 · 끝 PDT0 + 11.8초다
+    expect(onSeekRequest).toHaveBeenLastCalledWith(PDT0 + 5_000, {
+      lowerMs: PDT0 + 12_000,
+      endMs: PDT0 + 11_500,
+    });
   });
 });

@@ -42,7 +42,11 @@ function segment(sn: number, before: readonly string[] = []): string[] {
 }
 
 /** 미디어 순번 from 부터의 목록 글자 — head 는 MAP 앞, segments 는 MAP 뒤 */
-function playlistText(from: number, segments: readonly string[][], head: string[] = []): string {
+function playlistText(
+  from: number,
+  segments: ReadonlyArray<string[]>,
+  head: string[] = [],
+): string {
   return [
     '#EXTM3U',
     '#EXT-X-VERSION:9',
@@ -59,7 +63,7 @@ function parse(text: string): LevelDetails {
 }
 
 /** 판 태그 자리만 정하는 조각 n 개 · tags[i] 가 i 번째 조각 PDT 앞 줄 */
-function versionsOf(tags: readonly (readonly string[])[], head: string[] = []) {
+function versionsOf(tags: ReadonlyArray<readonly string[]>, head: string[] = []) {
   const details = parse(
     playlistText(
       0,
@@ -105,6 +109,11 @@ describe('timingVersions — 진짜 M3U8Parser 가 읽은 조각의 판', () => 
     expect(versionsOf([[VERSION_2], [`#${TIMING_TAG}:3`], []])).toEqual([2, null, null]);
     expect(versionsOf([[VERSION_2], [`#${TIMING_TAG}:2.0`]])).toEqual([2, null]);
     expect(versionsOf([[VERSION_2], [`#${TIMING_TAG}`]])).toEqual([2, null]);
+  });
+
+  it('한 조각에 태그가 둘이면 마지막 태그의 판이다', () => {
+    expect(versionsOf([[VERSION_2, VERSION_NULL], []])).toEqual([null, null]);
+    expect(versionsOf([[VERSION_NULL, VERSION_2], []])).toEqual([2, 2]);
   });
 
   it('반례: 목록 머리 줄(MAP 앞)의 태그는 초기화 조각으로 가 첫 조각이 받지 못한다', () => {
@@ -190,19 +199,29 @@ describe('T-ovl 파서 몫 — 겹친 PDT 목록', () => {
 // 미닫이 갱신 — 진짜 Hls 의 목록 갱신 경로(playlist-loader → level-controller mergeDetails →
 // stream-controller LEVEL_UPDATED). 매체는 붙이지 않는다(목록 받기만 본다 — 조각은 청하지 않는다).
 // 전제: /dvr 는 델타 갱신(EXT-X-SKIP)을 광고하지 않는다(계약3 7-5). 델타 목록이면 hls.js 가 건너뛴
-// 자리를 옛 조각 객체로 채워 이 시험이 보는 경로가 아니다. /vod 도 같은 발행기라 같다고 본다(추론).
+// 자리를 옛 조각 객체로 채워 이 시험이 보는 경로가 아니다. /vod 는 VOD 목록을 다시 받지 않아 델타 갱신이 없다
+// (base-playlist-controller 라이브 갈래).
 describe('미닫이 갱신 — 진짜 Hls 의 LEVEL_UPDATED 조각', () => {
   /** 가짜 loader 의 load 인자 — 설정(가운데)은 쓰지 않는다 */
   type LoadArgs = [LoaderContext, unknown, LoaderCallbacks<LoaderContext>];
   const quiet = () => {};
-  const SILENT = { trace: quiet, debug: quiet, log: quiet, warn: quiet, info: quiet, error: quiet };
+  const silentLogger = {
+    trace: quiet,
+    debug: quiet,
+    log: quiet,
+    warn: quiet,
+    info: quiet,
+    error: quiet,
+  };
   const players: Hls[] = [];
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
   afterEach(() => {
-    for (const hls of players.splice(0)) hls.destroy();
+    for (const hls of players.splice(0)) {
+      hls.destroy();
+    }
     vi.useRealTimers();
   });
 
@@ -228,7 +247,7 @@ describe('미닫이 갱신 — 진짜 Hls 의 LEVEL_UPDATED 조각', () => {
       ...HLS_REWIND_CONFIG,
       autoStartLoad: false,
       loader: FakeLoader as unknown as HlsConfig['loader'],
-      debug: SILENT,
+      debug: silentLogger,
     });
     players.push(hls);
     const updates: LevelDetails[] = [];
@@ -248,7 +267,9 @@ describe('미닫이 갱신 — 진짜 Hls 의 LEVEL_UPDATED 조각', () => {
   async function reload(times: number) {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
-    for (let i = 0; i < times; i++) await vi.advanceTimersByTimeAsync(TD * 1000);
+    for (let i = 0; i < times; i++) {
+      await vi.advanceTimersByTimeAsync(TD * 1000);
+    }
   }
 
   it('앞 조각이 빠진 둘째 목록에서도 새 첫 조각의 판 태그와 원래 EXTINF 가 남는다', async () => {

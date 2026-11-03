@@ -10,9 +10,9 @@ import {
 } from './fragmentTiming';
 import { loadedList } from './playbackEdge';
 
-// hls.js 조각 → 환산용 조각(설계 r7 3.2 · 10절 c4 · r6 4.3 표 · 5.1 cx-5 반례). 판 2 조각은 영상 축(start = v_k ·
-// duration = 원래 EXTINF), 판 NULL · 태그 없는 목록 · 라이브는 지금 식 글자 그대로다. 조각은 흉내 조각이고 v_k 는
-// 시험이 sn 별로 준다(videoStarts 의 기록 몫).
+// hls.js 조각 → 환산용 조각(설계 r7 3.2 · 10절 c4 · c5 · r6 4.3 표 · 5.1 cx-5 반례). 판 2 조각은 영상 축(start = v_k ·
+// duration = 원래 EXTINF), 판 NULL · 태그 없는 목록 · 구성 시차 스위치 OFF 라이브는 지금 식 글자 그대로, 스위치 ON
+// 라이브는 start = v_k + c_k 다. 조각은 흉내 조각이고 v_k · c_k 는 시험이 sn 별로 준다(videoStarts 의 기록 몫).
 
 const T = Date.parse('2026-11-03T05:00:00.000Z');
 
@@ -148,9 +148,9 @@ describe('datedFragments — 판 2 해체된 조각은 영상 축(v_k · 원래 
 });
 
 describe('datedFragments — 판 2 해체 전 조각(r6 4.3 표 셋째 · 넷째 줄)', () => {
-  const INFS = [4, 3.9, 4.1, 4, 4.2];
+  const infs = [4, 3.9, 4.1, 4, 4.2];
   function fiveFragments(cc: (sn: number) => number = () => 0) {
-    return INFS.map((inf, sn) =>
+    return infs.map((inf, sn) =>
       frag({
         sn,
         cc: cc(sn),
@@ -171,7 +171,7 @@ describe('datedFragments — 판 2 해체 전 조각(r6 4.3 표 셋째 · 넷째
       expect.closeTo(8.3 + 4.1, 9),
       expect.closeTo(8.3 + 4.1 + 4, 9),
     ]);
-    expect(starts.map((f) => f.duration)).toEqual(INFS);
+    expect(starts.map((f) => f.duration)).toEqual(infs);
     expect(starts.every((f) => f.videoAxis === true)).toBe(true);
   });
 
@@ -189,13 +189,27 @@ describe('datedFragments — 판 2 해체 전 조각(r6 4.3 표 셋째 · 넷째
     const fragments = fiveFragments((sn) => (sn < 2 ? 0 : 1));
     const starts = timing(datedFragments(fragments, 'rewind', startsFrom({ 0: 0.1 })));
     expect(starts.map((f) => f.start)).toEqual([0.1, expect.closeTo(4.1, 9), 8, 12, 16]);
-    expect(starts.map((f) => f.duration)).toEqual(INFS);
+    expect(starts.map((f) => f.duration)).toEqual(infs);
+  });
+
+  it('뒤 cc 만 해체했으면 앞 cc 는 frag.start(hls.js 추정)다 — 뒤에서 이을 때도 cc 를 넘지 않는다', () => {
+    // 0 · 1 은 cc 0(해체 없음), 2 부터 cc 1(3 해체)
+    const fragments = fiveFragments((sn) => (sn < 2 ? 0 : 1));
+    const starts = timing(datedFragments(fragments, 'rewind', startsFrom({ 3: 12.3 })));
+    expect(starts.map((f) => f.start)).toEqual([
+      0,
+      4,
+      expect.closeTo(12.3 - 4.1, 9),
+      12.3,
+      expect.closeTo(12.3 + 4, 9),
+    ]);
+    expect(starts.map((f) => f.duration)).toEqual(infs);
   });
 
   it('아무 조각도 해체하지 않은 첫 목록은 hls.js 첫 값과 같다(시작 자리 — hlsStart 무변경의 근거)', () => {
     const starts = timing(datedFragments(fiveFragments(), 'rewind', NO_STARTS));
     expect(starts.map((f) => f.start)).toEqual([0, 4, 8, 12, 16]);
-    expect(starts.map((f) => f.duration)).toEqual(INFS);
+    expect(starts.map((f) => f.duration)).toEqual(infs);
   });
 });
 
@@ -280,7 +294,7 @@ describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4
       frag({ sn, cc: cc(sn), start: sn * 2, duration: 2, inf: 2, pdt: T + sn * 2_000 }),
     );
   }
-  const C = 1 / 15;
+  const firstCtoS = 1 / 15;
 
   it('기본값은 OFF 다(지금 prod 동작)', () => {
     expect(LIVE_PTS_CORRECTION).toBe(false);
@@ -288,7 +302,7 @@ describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4
 
   it('OFF 는 받은 배열 그대로다 — v_k · c 를 알아도(지금 식과 바이트 단위로 같음)', () => {
     const fragments = liveFragments();
-    const starts = startsWithCto({ 0: [0, C], 1: [2, C] });
+    const starts = startsWithCto({ 0: [0, firstCtoS], 1: [2, firstCtoS] });
     expect(datedFragmentsWith(fragments, 'live', starts, false)).toBe(fragments);
     expect(datedFragments(fragments, 'live', starts)).toBe(fragments);
   });
@@ -296,11 +310,11 @@ describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4
   it('ON: 해체된 조각은 start = v_k + c_k 다 · 길이 · 시각 · 틈 표시는 hls.js 조각 그대로', () => {
     const fragments = [
       frag({ sn: 0, start: 0.001, duration: 2.1, inf: 2, pdt: T }),
-      frag({ sn: 1, start: 2.1, duration: 1.9, inf: 2, pdt: T + 2_000, gap: true }),
+      frag({ sn: 1, start: 2.05, duration: 1.9, inf: 2, pdt: T + 2_000, gap: true }),
     ];
-    const starts = startsWithCto({ 0: [0, C], 1: [2, 0.1] });
+    const starts = startsWithCto({ 0: [0, firstCtoS], 1: [2, 0.1] });
     expect(timing(datedFragmentsWith(fragments, 'live', starts, true))).toEqual([
-      { start: C, duration: 2.1, programDateTime: T, gap: undefined, videoAxis: undefined },
+      { start: firstCtoS, duration: 2.1, programDateTime: T, gap: undefined, videoAxis: undefined },
       { start: 2.1, duration: 1.9, programDateTime: T + 2_000, gap: true, videoAxis: undefined },
     ]);
   });
@@ -309,11 +323,11 @@ describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4
     const fragments = datedFragmentsWith(
       liveFragments(),
       'live',
-      startsWithCto({ 1: [2, C] }),
+      startsWithCto({ 1: [2, firstCtoS] }),
       true,
     );
-    expect(programDateAt(fragments, 2.5)).toBeCloseTo(T + 2_000 + (0.5 - C) * 1000, 6);
-    expect(mediaTimeAt(fragments, T + 2_000)).toBeCloseTo(2 + C, 9);
+    expect(programDateAt(fragments, 2.5)).toBeCloseTo(T + 2_000 + (0.5 - firstCtoS) * 1000, 6);
+    expect(mediaTimeAt(fragments, T + 2_000)).toBeCloseTo(2 + firstCtoS, 9);
   });
 
   it('ON: 해체 전 조각은 같은 cc 의 가장 가까운 해체 조각 c 를 frag.start 에 더한다 — 거리가 같으면 앞 조각', () => {
@@ -350,7 +364,7 @@ describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4
 
   it('ON 이어도 되감기 · 다시보기는 판 2 갈래 그대로다 — c 를 더하지 않는다', () => {
     const fragments = [frag({ sn: 0, start: 0, duration: 4.3, inf: 4, pdt: T, timing: '2' })];
-    const starts = startsWithCto({ 0: [0.2, C] });
+    const starts = startsWithCto({ 0: [0.2, firstCtoS] });
     for (const kind of ['rewind', 'vod'] as const) {
       expect(timing(datedFragmentsWith(fragments, kind, starts, true))).toEqual([
         { start: 0.2, duration: 4, programDateTime: T, gap: undefined, videoAxis: true },

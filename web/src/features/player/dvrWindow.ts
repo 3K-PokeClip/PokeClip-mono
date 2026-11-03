@@ -91,7 +91,10 @@ export interface DatedFragment {
   programDateTime: number | null;
   /** EXT-X-GAP 조각 — 영상 시각은 차지하지만 내용이 없다(hls.js Fragment.gap 과 같다) */
   gap?: boolean;
-  /** start · duration 이 영상 첫 표본 재생 위치(v_k) · 원래 EXTINF 인 판 2 조각(fragmentTiming.datedFragments) */
+  /**
+   * 판 2 조각(fragmentTiming.datedFragments) — duration 은 원래 EXTINF, start 는 v_k(영상 첫 표본 재생 위치)다. 해체 전
+   * 조각의 start 는 같은 cc 해체 조각에서 EXTINF 로 이은 추정이고, 그 cc 를 하나도 해체하지 않았으면 hls.js 추정이다
+   */
   videoAxis?: boolean;
 }
 

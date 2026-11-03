@@ -41,6 +41,7 @@ class FakeHls {
   on(event: string, handler: Handler) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
   }
+  off() {}
   once(event: string, handler: Handler) {
     const wrapped: Handler = (e, data) => {
       this.handlers.set(

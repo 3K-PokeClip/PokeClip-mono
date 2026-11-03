@@ -1,17 +1,23 @@
 import type Hls from 'hls.js';
-import type { BufferAppendingData, Events, InitPTSFoundData, LevelUpdatedData } from 'hls.js';
+import type { BufferAppendingData, Events, LevelUpdatedData } from 'hls.js';
 import { readTrackStart, readVideoTrack, type VideoTrackInfo } from '../../lib/fmp4Boxes';
 import type { StartOf } from './fragmentTiming';
 
 // 조각마다 영상 첫 표본의 재생 위치(v_k)와 구성 시차(c_k)를 hls.js 사건에서 적는다(설계 r7 3.3 · 4.1절).
 // 판 2 조각의 영상 축 환산(datedFragments)이 이 기록을 읽는다. 붙이는 재생기는 배선(useHlsPlayback)이 정한다.
 //
-// 사건 셋은 hls.js 1.7.3 공개 사건이고 주 스레드에서 동기로 난다.
+// 사건 둘은 hls.js 1.7.3 공개 사건이고 주 스레드에서 동기로 난다.
 // - BUFFER_APPENDING(parent=main): 붙이는 바이트 그대로다(passthrough 는 tfdt 를 고치지 않는다). init 붙임은
 //   frag 가 MAP 조각(sn 'initSegment')이고, DISCONTINUITY 에서 MAP 을 다시 받지 않아도 init 을 다시 붙인다
 //   — MAP 조각의 cc 는 MAP 줄의 cc 라 뒤 조각의 cc 와 다를 수 있어 cc 가 아니라 마지막 init 을 쓴다.
-//   조각 붙임이 늘 그 조각의 init 붙임 뒤에 오기 때문이다(stream-controller _bufferInitSegment).
-// - INIT_PTS_FOUND(id=main): 미디어 조각 cc 별 initPTS. 먼저 나온 트랙(소리일 수 있다)의 눈금이다.
+//   조각 붙임이 늘 그 조각의 init 붙임 뒤에 오기 때문이다(stream-controller _handleTransmuxComplete 가
+//   _bufferInitSegment 뒤에 bufferFragmentData 를 부른다. transmuxer 는 첫 조각 · DISCONTINUITY · 화질 전환 ·
+//   init 조각이 바뀐 조각에서 init 을 다시 낸다 — transmuxer.ts push 의 resetInitSegment 조건).
+//   미디어 붙임의 offset 은 붙이는 순간 그 cc 의 −initPTS / timescale 이고(base-stream-controller
+//   bufferFragmentData), buffer-controller 가 그 값을 SourceBuffer.timestampOffset 으로 두고 붙인다. 그래서
+//   v_k = tfdt / 영상 timescale + offset 은 계약3 7-6 식 tfdt / 영상 timescale − initPTS / initPTS timescale 과
+//   같은 값이고, 같은 cc 의 initPTS 가 뒤에 다시 정해져도(같은 축 구멍 ≥ 조각 길이) 이미 붙인 조각은 붙인
+//   자리 그대로다 — INIT_PTS_FOUND 를 듣지 않는 까닭이다.
 // - LEVEL_UPDATED: 목록에서 빠진 순번(startSN 앞)의 기록을 버린다.
 // FRAG_LOADED 는 쓰지 않는다(바이트가 비어 있을 수 있음 — 설계 r6 4.2).
 
@@ -21,17 +27,12 @@ export interface VideoStarts {
   dispose(): void;
 }
 
-/** 붙인 조각에서 읽은 영상 트랙 시작(눈금) */
+/** 붙인 조각에서 읽은 영상 트랙 시작(눈금)과 그 붙임의 offset(초) */
 interface TrackRecord {
   baseDecodeTime: number;
   firstCtoTicks: number;
   timescale: number;
-}
-
-/** INIT_PTS_FOUND 의 initPTS */
-interface InitPts {
-  initPTS: number;
-  timescale: number;
+  offsetS: number;
 }
 
 const MAIN = 'main';
@@ -44,7 +45,6 @@ const INIT_SEGMENT = 'initSegment';
  */
 export function trackVideoStarts(hls: Hls, events: typeof Events): VideoStarts {
   const records = new Map<number, TrackRecord>();
-  const initPtsByCc = new Map<number, InitPts>();
   let videoTrack: VideoTrackInfo | null = null;
 
   const onAppending = (_event: string, data: BufferAppendingData) => {
@@ -60,18 +60,12 @@ export function trackVideoStarts(hls: Hls, events: typeof Events): VideoStarts {
       return;
     }
     const start = videoTrack && readTrackStart(data.data, videoTrack.trackId);
-    if (!videoTrack || !start) {
+    const { offset } = data;
+    if (!videoTrack || !start || offset === undefined || !Number.isFinite(offset)) {
       records.delete(sn);
       return;
     }
-    records.set(sn, { ...start, timescale: videoTrack.timescale });
-  };
-
-  const onInitPts = (_event: string, data: InitPTSFoundData) => {
-    if (data.id !== MAIN) {
-      return;
-    }
-    initPtsByCc.set(data.frag.cc, { initPTS: data.initPTS, timescale: data.timescale });
+    records.set(sn, { ...start, timescale: videoTrack.timescale, offsetS: offset });
   };
 
   const onLevelUpdated = (_event: string, data: LevelUpdatedData) => {
@@ -84,27 +78,23 @@ export function trackVideoStarts(hls: Hls, events: typeof Events): VideoStarts {
   };
 
   hls.on(events.BUFFER_APPENDING, onAppending);
-  hls.on(events.INIT_PTS_FOUND, onInitPts);
   hls.on(events.LEVEL_UPDATED, onLevelUpdated);
 
   const startOf: StartOf = (frag) => {
     const record = typeof frag.sn === 'number' ? records.get(frag.sn) : undefined;
-    const initPts = initPtsByCc.get(frag.cc);
-    if (!record || !initPts) {
+    if (!record) {
       return null;
     }
     return {
-      videoStartS: record.baseDecodeTime / record.timescale - initPts.initPTS / initPts.timescale,
+      videoStartS: record.baseDecodeTime / record.timescale + record.offsetS,
       firstCtoS: record.firstCtoTicks / record.timescale,
     };
   };
 
   const dispose = () => {
     hls.off(events.BUFFER_APPENDING, onAppending);
-    hls.off(events.INIT_PTS_FOUND, onInitPts);
     hls.off(events.LEVEL_UPDATED, onLevelUpdated);
     records.clear();
-    initPtsByCc.clear();
     videoTrack = null;
   };
 

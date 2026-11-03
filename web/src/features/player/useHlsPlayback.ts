@@ -36,7 +36,7 @@ import { guardRewindFloor } from './rewindFloor';
 import { useSourcePosition, type PositionHooks } from './sourcePosition';
 import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
-import { trackVideoStarts } from './videoStarts';
+import { trackVideoStarts, type VideoStarts } from './videoStarts';
 import {
   CLIP_MARK_MS,
   PLAYER_QUALITIES,
@@ -441,6 +441,14 @@ export function useHlsPlayback(
 
     // StrictMode 이중 이펙트·동적 import 경합 방어 — 클린업 후 도착한 인스턴스를 버린다
     let disposed = false;
+    // 이 재생기의 영상 시작 기록(설계 r7 3.3절). 재생기를 내리는 모든 자리(정리 · 시작 잘림 · 403 · 라이브 닫힘 ·
+    // 복구 불가)에서 hls.destroy() 앞에 놓는다 — 처리기를 떼고 기록을 비우며 환산을 기록 없는 재생기로 돌린다
+    let videoStarts: VideoStarts | null = null;
+    const releaseVideoStarts = () => {
+      videoStarts?.dispose();
+      videoStarts = null;
+      startOfRef.current = noVideoStart;
+    };
     // 재생기 하나의 사건 상태: ENDLIST 를 올렸나 · 목록이 마지막으로 자란 때 · 끝 도달을 올렸나
     let endlistSent = false;
     let lastEndMs: number | null = null;
@@ -651,13 +659,13 @@ export function useHlsPlayback(
         // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
         const hls = new HlsCtor(startAtMs === null ? base : { ...base, autoStartLoad: false });
         hlsRef.current = hls;
-        // 기록의 처리기는 hls.destroy() 가 함께 뗀다(removeAllListeners). 라이브는 구성 시차 스위치를 켰을 때만 단다(5.4절)
-        startOfRef.current =
-          kind === 'live' && !LIVE_PTS_CORRECTION
-            ? noVideoStart
-            : trackVideoStarts(hls, HlsCtor.Events).startOf;
+        // 라이브는 구성 시차 스위치를 켰을 때만 단다(5.4절)
+        videoStarts =
+          kind === 'live' && !LIVE_PTS_CORRECTION ? null : trackVideoStarts(hls, HlsCtor.Events);
+        startOfRef.current = videoStarts?.startOf ?? noVideoStart;
         armStart(hls, HlsCtor.Events, { kind, startAtMs, strictStart }, load, () => {
           if (disposed) return;
+          releaseVideoStarts();
           hls.destroy();
           hlsRef.current = null;
           hooksRef.current.onStartTruncated?.();
@@ -695,6 +703,7 @@ export function useHlsPlayback(
               reportPlaybackForbidden(key);
               setStopped({ src, why: 'forbidden' });
             }
+            releaseVideoStarts();
             hls.destroy();
             hlsRef.current = null;
             return;
@@ -713,6 +722,7 @@ export function useHlsPlayback(
             listError &&
             liveGone
           ) {
+            releaseVideoStarts();
             hls.destroy();
             hlsRef.current = null;
             liveGone();
@@ -733,6 +743,7 @@ export function useHlsPlayback(
           // 화면은 마지막 프레임에서 멎는다: 영상 위 덮개로 알리고(playbackError) 원인은 로그로 남긴다
           console.error('[player] 복구 불가 hls.js 오류:', data.type, data.details);
           setStopped({ src, why: 'broken' });
+          releaseVideoStarts();
           hls.destroy();
           hlsRef.current = null;
         });
@@ -792,9 +803,9 @@ export function useHlsPlayback(
       video.removeEventListener('ended', reachEnd);
       if (onNativeError !== null) video.removeEventListener('error', onNativeError);
       video.removeEventListener('loadeddata', onHealed);
+      releaseVideoStarts();
       hlsRef.current?.destroy();
       hlsRef.current = null;
-      startOfRef.current = noVideoStart;
       // src 제거만으로는 네트워크·디코더가 붙어 있다 — load()까지 해야 리소스가 해제된다
       video.removeAttribute('src');
       video.load();

@@ -25,8 +25,8 @@ export type HlsFragmentLike = Pick<
 
 /**
  * 라이브 구성 시차(c) 보정 스위치(설계 r7 3.2 · 5.4절 · D1 (가) · 경계 표 열린 것 3). 켜면 라이브 재생기에도 영상 시작
- * 기록을 달고, 해체된 라이브 조각을 start = v_k + c_k 로 센다. 기본 false = 지금 prod 동작 · 넘김 실측(갈래 넷) 뒤
- * kty 가 정함 · 경계 표 열린 것 3. 실행 중 토글은 없다 — 바꾸는 일은 이 한 줄과 웹 재배포다
+ * 기록을 달고, 해체된 라이브 조각을 start = v_k + c_k 로 센다. 기본 false = 지금 prod 동작 · 넘김 실측 갈래 넷(설계
+ * 12.2 · 경계 대조 W-2) 뒤 kty 가 정함. 실행 중 토글은 없다 — 바꾸는 일은 이 한 줄과 웹 재배포다
  */
 export const LIVE_PTS_CORRECTION = false;
 
@@ -38,10 +38,10 @@ export interface VideoStart {
   firstCtoS: number;
 }
 
-/** 조각 → 그 조각의 영상 시작. 붙인 바이트를 읽지 못했거나 그 cc 의 initPTS 를 모르면 null */
+/** 조각 → 그 조각의 영상 시작. 붙인 바이트를 읽지 못했거나 그 붙임에 offset(그 cc 의 initPTS)이 없으면 null */
 export type StartOf = (frag: HlsFragmentLike) => VideoStart | null;
 
-/** 이 조각에 실린 판 태그의 판. 태그가 없으면 undefined(앞 판을 잇는다) */
+/** 이 조각에 실린 판 태그의 판 — 둘 이상이면 마지막 태그다. 태그가 없으면 undefined(앞 판을 잇는다) */
 function taggedVersion(frag: HlsFragmentLike): TimingVersion | undefined {
   const tag = frag.tagList.findLast(([name]) => name === TIMING_TAG);
   if (!tag) return undefined;
@@ -53,7 +53,7 @@ function taggedVersion(frag: HlsFragmentLike): TimingVersion | undefined {
  * null 이다. 미닫이 갱신에서도 발행기가 목록 첫 조각에 태그를 다시 싣고 hls.js 는 새로 읽은 조각을 넘기므로
  * 목록 안에서만 이으면 된다. 전제: /dvr 는 델타 갱신(EXT-X-SKIP)을 광고하지 않는다(계약3 7-5) — 델타
  * 목록이면 hls.js 가 건너뛴 자리를 앞 목록의 조각 객체로 채워, 새 첫 조각의 태그가 목록 앞에 오지 않을 수
- * 있다. /vod 도 같은 발행기라 같다고 본다(추론 — 7-5 문언은 「되감기 목록」)
+ * 있다. /vod 는 VOD 목록을 다시 받지 않아 델타 갱신이 없다(base-playlist-controller 라이브 갈래)
  */
 export function timingVersions(fragments: readonly HlsFragmentLike[]): TimingVersion[] {
   let current: TimingVersion = null;
@@ -136,8 +136,8 @@ function estimatesFromAfter(
 }
 
 /**
- * 판 태그가 하나라도 실린 목록인가. tagList 가 없는 조각(hls.js 밖에서 만든 조각 · 판 올림으로 칸이 빠진 조각)은 태그
- * 없음으로 읽는다 — 재생 중 처리기에서 던지면 재생기가 멎는다
+ * 판 태그가 하나라도 실린 목록인가. tagList 가 없는 조각은 태그 없음으로 읽는다 — hls.js 조각은 늘 tagList 가 있지만
+ * 기존 재생기 시험(useHlsPlayback*.test.ts)의 흉내 조각에는 이 칸이 없다. 태그가 없으면 뒤의 tagList 읽기에 닿지 않는다
  */
 function hasTimingTag(fragments: readonly HlsFragmentLike[]): boolean {
   return fragments.some((frag) => frag.tagList?.some(([name]) => name === TIMING_TAG) ?? false);
@@ -207,7 +207,8 @@ export function datedFragments(
 }
 
 /**
- * datedFragments 에 라이브 구성 시차 스위치를 매개로 받는다(시험이 두 값을 주입한다 — 설계 r7 10절 c5).
+ * datedFragments 에 라이브 구성 시차 스위치를 매개로 받는다. 시험 전용 — 제품 코드는 datedFragments 를 부른다(시험이
+ * 두 값을 주입한다 — 설계 r7 10절 c5).
  * - 판 2 조각(원래 EXTINF 가 있음)은 영상 축이다: start = v_k(startOf), duration = 원래 EXTINF. 아직 해체하지 않은
  *   조각은 같은 cc 의 가장 가까운 해체 조각 ± EXTINF 합(사이가 모두 판 2 일 때만 · 거리가 같으면 앞 조각), 그 cc 를
  *   하나도 해체하지 않았으면 frag.start(hls.js 추정)다.

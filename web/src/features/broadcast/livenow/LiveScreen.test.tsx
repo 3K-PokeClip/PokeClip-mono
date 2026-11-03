@@ -208,6 +208,7 @@ vi.mock('hls.js', () => {
       if (event === 'hlsError') hlsFake.error = handler;
       if (event === 'hlsLevelUpdated') hlsFake.levelUpdated = handler;
     }
+    off() {}
     attachMedia() {}
     loadSource() {
       hlsFake.loads += 1;
