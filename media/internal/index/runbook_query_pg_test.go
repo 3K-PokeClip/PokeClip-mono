@@ -306,10 +306,18 @@ func TestRunbookReadOnlyHeredocFirstChecksBoundaries(t *testing.T) {
 	}
 }
 
-// Q2(A 배출 — E25)의 축마다 waiting 이 업로더 스위퍼가 집는 수와 같다. 고정물은 업로더 술어를 하나씩 어긴 행을
-// 축마다 둔다 — 런북 질의가 술어 하나를 빠뜨리면 그 행을 더 세어 갈린다. 시각은 모두 <cut> 앞 · 24시간 안 · 꼬리
-// 유예 밖이다(꼬리 예외 · 창 경계는 이 대조의 축이 아니다).
-func TestRunbookQ2CountsWhatUploaderPicks(t *testing.T) {
+// waitingSegment 는 ② · ③ 이 모두 대기(pending)이고 ③ 키가 있는 조각 seq 0 이다 — 업로더 술어로는 두 축 모두 집힌다.
+func waitingSegment(stream, session string, start time.Time) runbookSegment {
+	return runbookSegment{stream: stream, session: session, seq: 0, start: start, archive: "pending",
+		playback: "pending", key: fmt.Sprintf("dvr/%s/seg/000000.m4s", stream)}
+}
+
+// Q2(A 배출 — E25) · Q2-B(B 배출 — E36)의 축마다 waiting 이 업로더 스위퍼가 집는 수와 같다. 두 질의는 상한 자리
+// 표시(<cut> · <cut2>)만 다르고 업로더 술어는 같으므로 한 고정물로 함께 잰다. 고정물은 업로더 술어를 하나씩 어긴 행을
+// 축마다 둔다 — 런북 질의가 술어 하나를 빠뜨리면(failed 를 빼 재시도 대기 행을 못 세는 꼴 포함) 그 행을 더 세거나 덜
+// 세어 갈린다. 시각은 모두 상한 앞 · 24시간 안 · 꼬리 유예 밖이다(꼬리 예외 · 창 경계는 이 대조의 축이 아니다 —
+// TestRunbookQ2ExcludesTestStreamAfterCutAndStale · TestRunbookQ2BCountsBDiskRowsBeforeCut2 가 잰다).
+func TestRunbookQ2AndQ2BCountWhatUploaderPicks(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	now := time.Now().UTC()
@@ -350,70 +358,86 @@ func TestRunbookQ2CountsWhatUploaderPicks(t *testing.T) {
 	if err := seedRunbook(ctx, pool, sessions, cutoffs, segments); err != nil {
 		t.Fatalf("고정물: %v", err)
 	}
-	query, err := loadRunbookQuery("Q2", map[string]string{"cut": rfc3339(now.Add(time.Minute)), "test": runbookTestStream})
-	if err != nil {
-		t.Fatalf("Q2 뽑기: %v", err)
-	}
-
-	rows, err := runReadOnly(ctx, pool, query)
-	if err != nil {
-		t.Fatalf("Q2 실행: %v", err)
-	}
-	got, err := axisWaiting(rows)
-	if err != nil {
-		t.Fatalf("Q2 행: %v", err)
-	}
 
 	// 업로더가 집는 수는 고정물에서 정해진다(축마다 둘) — 0 끼리 같아 헛통과하지 않게 함께 본다.
 	st := NewUploadStore(pool)
-	for _, axis := range []struct {
+	axes := []struct {
 		name string
 		axis Axis
-	}{{"archive", AxisArchive}, {"playback", AxisPlayback}, {"init", AxisInit}} {
-		picked, _, err := st.PendingUploads(ctx, axis.axis, 120, 1000, SweepCursor{})
+	}{{"archive", AxisArchive}, {"playback", AxisPlayback}, {"init", AxisInit}}
+	picked := make(map[string]int64, len(axes))
+	for _, axis := range axes {
+		targets, _, err := st.PendingUploads(ctx, axis.axis, 120, 1000, SweepCursor{})
 		if err != nil {
 			t.Fatalf("%s PendingUploads: %v", axis.name, err)
 		}
-		if len(picked) != 2 {
-			t.Errorf("%s 업로더가 집는 수 = %d, want 2 — 고정물이 의도와 다르다", axis.name, len(picked))
+		if len(targets) != 2 {
+			t.Errorf("%s 업로더가 집는 수 = %d, want 2 — 고정물이 의도와 다르다", axis.name, len(targets))
 		}
-		if got[axis.name] != int64(len(picked)) {
-			t.Errorf("Q2 %s waiting = %d, 업로더가 집는 수 = %d — 런북 질의 술어가 업로더와 갈렸다", axis.name, got[axis.name], len(picked))
-		}
+		picked[axis.name] = int64(len(targets))
 	}
-	if len(got) != 3 {
-		t.Errorf("Q2 축 = %v, want archive · playback · init 세 행", got)
+
+	for _, q := range []struct{ name, bound string }{{"Q2", "cut"}, {"Q2-B", "cut2"}} {
+		t.Run(q.name, func(t *testing.T) {
+			query, err := loadRunbookQuery(q.name, map[string]string{q.bound: rfc3339(now.Add(time.Minute)), "test": runbookTestStream})
+			if err != nil {
+				t.Fatalf("%s 뽑기: %v", q.name, err)
+			}
+
+			rows, err := runReadOnly(ctx, pool, query)
+			if err != nil {
+				t.Fatalf("%s 실행: %v", q.name, err)
+			}
+			got, err := axisWaiting(rows)
+			if err != nil {
+				t.Fatalf("%s 행: %v", q.name, err)
+			}
+
+			for _, axis := range axes {
+				if got[axis.name] != picked[axis.name] {
+					t.Errorf("%s %s waiting = %d, 업로더가 집는 수 = %d — 런북 질의 술어가 업로더와 갈렸다",
+						q.name, axis.name, got[axis.name], picked[axis.name])
+				}
+			}
+			if len(got) != len(axes) {
+				t.Errorf("%s 축 = %v, want archive · playback · init 세 행", q.name, got)
+			}
+		})
 	}
 }
 
 // Q2(A 배출)는 시험 스트림(<test>) · <cut> 뒤 · 24시간 밖(②(녹화 파일 그대로) · ③(되감기 조각) 축)을 세지 않는다. 축마다
 // 세는 행 하나를 함께 둬 0 끼리 같아 헛통과하지 않게 하고, 빼야 할 행은 업로더 술어로는 모두 집히는 꼴로 둔다 — 그
-// 제외 술어 하나를 빼면 그 축이 1 늘어 갈린다. init 축은 세션 시작 시각의 <cut> 상한과 시험 스트림만 본다(24시간
-// 창 없음 — 25시간 전 세션은 init 업로드를 마친 꼴로 둬 판정 밖).
+// 제외 술어 하나를 빼면 그 축이 1 늘어 갈린다. 창 안쪽 중간대(18시간 전) 행은 세어 창을 좁히면 줄어 갈리고,
+// <cut> 과 정확히 같은 시각의 행은 세지 않아 경계를 `<=` 로 느슨하게 하면 늘어 갈린다. init 축은 세션 시작 시각의
+// <cut> 상한과 시험 스트림만 본다(24시간 창 없음 — 25시간 전 세션은 init 업로드를 마친 꼴로 둬 판정 밖).
 func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	now := time.Now().UTC()
+	// 초로 자른다 — 경계 행의 시각과 <cut> 글자가 PG 에서 같은 값이어야 한다(마이크로초 아래를 드라이버는 버리고
+	// PG 는 글자에서 반올림한다).
+	now := time.Now().UTC().Truncate(time.Second)
 	cut := now.Add(-30 * time.Minute)
 	beforeCut := cut.Add(-10 * time.Minute)
 	afterCut := cut.Add(10 * time.Second)
+	mid := now.Add(-18 * time.Hour)
 	stale := now.Add(-25 * time.Hour)
 	sessions := []runbookSession{
 		{id: "S-b", stream: "bstream", state: "live", started: beforeCut},
+		{id: "S-mid", stream: "midstream", state: "live", started: mid},
+		{id: "S-edge", stream: "edgestream", state: "live", started: cut},
 		{id: "S-test", stream: runbookTestStream, state: "live", started: beforeCut},
 		{id: "S-late", stream: "latestream", state: "live", started: afterCut},
 		{id: "S-old", stream: "oldstream", state: "live", started: stale.Add(-time.Hour), initUploaded: true},
 	}
-	cutoffs := map[string]int64{"bstream": 0, runbookTestStream: 0, "latestream": 0, "oldstream": 0}
-	waiting := func(stream, session string, start time.Time) runbookSegment {
-		return runbookSegment{stream: stream, session: session, seq: 0, start: start, archive: "pending",
-			playback: "pending", key: fmt.Sprintf("dvr/%s/seg/000000.m4s", stream)}
-	}
+	cutoffs := map[string]int64{"bstream": 0, "midstream": 0, "edgestream": 0, runbookTestStream: 0, "latestream": 0, "oldstream": 0}
 	segments := []runbookSegment{
-		waiting("bstream", "S-b", beforeCut),            // 셈 — ② · ③ 각 하나 · init 재료
-		waiting(runbookTestStream, "S-test", beforeCut), // 시험 스트림
-		waiting("latestream", "S-late", afterCut),       // <cut> 뒤
-		waiting("oldstream", "S-old", stale),            // 24시간 밖
+		waitingSegment("bstream", "S-b", beforeCut),            // 셈 — ② · ③ 각 하나 · init 재료
+		waitingSegment("midstream", "S-mid", mid),              // 셈 — 24시간 창 안쪽 중간대
+		waitingSegment("edgestream", "S-edge", cut),            // <cut> 과 같은 시각 — 상한은 미만이라 세지 않음
+		waitingSegment(runbookTestStream, "S-test", beforeCut), // 시험 스트림
+		waitingSegment("latestream", "S-late", afterCut),       // <cut> 뒤
+		waitingSegment("oldstream", "S-old", stale),            // 24시간 밖
 	}
 	if err := seedRunbook(ctx, pool, sessions, cutoffs, segments); err != nil {
 		t.Fatalf("고정물: %v", err)
@@ -432,7 +456,7 @@ func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 		t.Fatalf("Q2 행: %v", err)
 	}
 
-	want := map[string]int64{"archive": 1, "playback": 1, "init": 1}
+	want := map[string]int64{"archive": 2, "playback": 2, "init": 2}
 	for axis, n := range want {
 		if got[axis] != n {
 			t.Errorf("Q2 %s waiting = %d, want %d(전체 %v)", axis, got[axis], n, got)
@@ -446,26 +470,37 @@ func TestRunbookQ2ExcludesTestStreamAfterCutAndStale(t *testing.T) {
 // Q2-B(켜기 전 A 복귀 때 B 회수 판정 — E36 · P2)는 아래쪽 시각 경계가 없다 — <cut>(ingest 를 B 로 옮긴 시각) 앞에
 // B 가 만든 조각도 센다. 위쪽 <cut2> 뒤(A 몫) · 24시간 밖(녹화 보존 밖) · 시험 스트림은 세지 않는다. init 축은
 // 세션의 최신 조각에서 다시 만들므로 started_at 의 24시간 창을 두지 않는다 — 오래 이어진 방송의 init 도 센다.
+// 창 안쪽 중간대(18시간 전) 행은 세어 창을 좁히면 줄어 갈리고, <cut2> 와 정확히 같은 시각의 행은 세지 않아 경계를
+// `<=` 로 느슨하게 하면 늘어 갈린다. 업로더 술어(failed · ended · init 완료 · 경로 · PDT)의 대조는
+// TestRunbookQ2AndQ2BCountWhatUploaderPicks 가 맡는다.
 func TestRunbookQ2BCountsBDiskRowsBeforeCut2(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	now := time.Now().UTC()
+	// 초로 자른다 — 경계 행의 시각과 <cut2> 글자가 PG 에서 같은 값이어야 한다.
+	now := time.Now().UTC().Truncate(time.Second)
 	cut := now.Add(-time.Hour)
 	cut2 := now.Add(-30 * time.Minute)
 	beforeCut := cut.Add(-10 * time.Second)
 	afterCut2 := cut2.Add(10 * time.Second)
+	mid := now.Add(-18 * time.Hour)
 	stale := now.Add(-25 * time.Hour)
 	sessions := []runbookSession{
 		{id: "S-b", stream: "bstream", state: "ending", started: beforeCut},
+		{id: "S-mid", stream: "midstream", state: "ending", started: mid},
+		{id: "S-edge", stream: "edgestream", state: "live", started: cut2},
 		{id: "S-long", stream: "longstream", state: "ending", started: stale},
 		{id: "S-a", stream: "astream", state: "live", started: afterCut2},
 		{id: "S-test", stream: runbookTestStream, state: "live", started: beforeCut},
 	}
-	cutoffs := map[string]int64{"bstream": 0, "astream": 0}
+	cutoffs := map[string]int64{"bstream": 0, "midstream": 0, "edgestream": 0, "astream": 0}
 	segments := []runbookSegment{
 		// <cut> 직전 B 조각 — ② 대기 · ③ 대기 각 하나(P2).
 		{stream: "bstream", session: "S-b", seq: 0, start: beforeCut, archive: "pending", playback: "pending",
 			key: "dvr/bstream/seg/000000.m4s"},
+		// 24시간 창 안쪽 중간대 B 조각 — 셈.
+		waitingSegment("midstream", "S-mid", mid),
+		// <cut2> 와 같은 시각 — 상한은 미만이라 세지 않음(세션 시작도 같은 시각이라 init 도 세지 않음).
+		waitingSegment("edgestream", "S-edge", cut2),
 		// 오래 이어진 방송의 최신 조각(창 안 · 업로드 끝) — init 재료만 준다.
 		{stream: "longstream", session: "S-long", seq: 0, start: now.Add(-2 * time.Hour), archive: "uploaded",
 			playback: "uploaded", key: "dvr/longstream/seg/000000.m4s"},
@@ -493,7 +528,7 @@ func TestRunbookQ2BCountsBDiskRowsBeforeCut2(t *testing.T) {
 		t.Fatalf("Q2-B 행: %v", err)
 	}
 
-	want := map[string]int64{"archive": 1, "playback": 1, "init": 2}
+	want := map[string]int64{"archive": 2, "playback": 2, "init": 3}
 	for axis, n := range want {
 		if got[axis] != n {
 			t.Errorf("Q2-B %s waiting = %d, want %d(전체 %v)", axis, got[axis], n, got)

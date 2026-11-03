@@ -643,9 +643,11 @@ A 를 배출 · 정지한 **뒤에만** B 의 새 꼴 쓰기를 켜고, 첫 새 
     (B 는 **끈 채** 뜹니다).
 1.  사이드카 `LOG_LEVEL` 을 `info` 보다 높게(`warn` · `error`) 두지 않습니다.
     `playback_key_layout` 은 끔이면 INFO 줄이라, 높이면 줄이 사라져
-    `sidecar-round-keys.sh` 가 `journal` 로 실패하고(on 이면 복원 묶음의
-    legacy 대조도 실패해 `restore-failed`) 아래 `layout-check.sh` 가 `LAYOUT
-    none` 으로 NOT OK 를 냅니다. prod compose 는 `LOG_LEVEL` 을 적지 않아
+    `sidecar-round-keys.sh off` 가 `journal` 로 실패하고 아래
+    `layout-check.sh` 가 `LAYOUT none` 으로 NOT OK 를 냅니다. on 은 4.7
+    (트리거 없음)에서 WARN 줄이라 높여도 대조가 맞지만, on 이 다른 까닭으로
+    실패해 복원 묶음을 돌면 그 legacy 대조(INFO 줄)가 실패해
+    `restore-failed` 가 됩니다. prod compose 는 `LOG_LEVEL` 을 적지 않아
     `info` 입니다.
 
 ### POK-525 교체 상자 스크립트
