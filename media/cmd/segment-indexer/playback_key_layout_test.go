@@ -10,9 +10,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -102,6 +104,50 @@ func TestReportPlaybackKeyLayoutReadsTriggerAndNeverStopsBoot(t *testing.T) {
 	}
 }
 
+// 트리거 조회는 기동 DB 단계와 같은 상한(dbStepTimeout) 안에서 끝난다 — 받기만 하고 답하지 않는 DB 에서도 기동이 걸리지
+// 않고 unknown 한 줄을 남긴다. 상한이 20초라 실주행 게이트(REQUIRE_PG=1)에서만 돈다(TestStartExpiryPrivilegeCheckIsBounded 와
+// 같은 꼴). 변이: 상한 제거 → 조회가 끝나지 않아 FAIL.
+func TestReportPlaybackKeyLayoutIsBounded(t *testing.T) {
+	if os.Getenv("REQUIRE_PG") != "1" {
+		t.Skip("20초 시험 — REQUIRE_PG=1 실주행 게이트에서만 돈다")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() { // 받기만 하고 답하지 않는 DB
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = c.Close() })
+		}
+	}()
+	pool, err := pgxpool.New(t.Context(), "postgres://u@"+ln.Addr().String()+"/db?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var buf bytes.Buffer
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reportPlaybackKeyLayout(context.Background(), pool, true, newLayoutLog(&buf))
+	}()
+	select {
+	case <-done:
+	case <-time.After(dbStepTimeout + 10*time.Second):
+		t.Fatal("트리거 조회가 상한 없이 걸려 있다")
+	}
+	prefix := `{"level":"WARN","msg":"playback_key_layout","layout":"round","round_frozen":"unknown","err":"`
+	if got := buf.String(); !strings.HasPrefix(got, prefix) || strings.Count(got, "\n") != 1 {
+		t.Errorf("신호 = %q, want 한 줄 %s…", got, prefix)
+	}
+}
+
 // 기동 신호는 기동 스키마 확인 뒤 · 장부(store) 조립 앞에서 낸다 — 스위치 값은 store 의 키 파생과 같은 cfg 칸이다. run() 은
 // DB · 워처가 있어야 돌아 단위 시험이 불가능하므로(boot_test.go 와 같은 사정) 호출 위치를 소스에서 본다.
 func TestBootReportsPlaybackKeyLayoutAfterLedgerSchema(t *testing.T) {
@@ -114,7 +160,7 @@ func TestBootReportsPlaybackKeyLayoutAfterLedgerSchema(t *testing.T) {
 	order := []string{
 		"requireLedgerSchema(ctx, pool, log)",
 		"reportPlaybackKeyLayout(ctx, pool, cfg.PlaybackRoundKeys, log)",
-		"playbackKeyFor(cfg.PlaybackRoundKeys)",
+		"playbackKeyFor(cfg.PlaybackRoundKeys, log)",
 	}
 	prev := -1
 	for _, want := range order {

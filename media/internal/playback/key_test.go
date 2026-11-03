@@ -4,12 +4,14 @@ package playback
 // 순수 함수라 DB·파일시스템이 없다 — 형상이 계약이므로 리터럴로 못 박는다.
 
 import (
-	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // 설계 5.2 의 조각 키 형상 그대로다: dvr/{streamID}/seg/{NNNNNN}.m4s.
@@ -163,7 +165,7 @@ func TestParseSegKeyAcceptsOnlyTheSegmentKeyGrammar(t *testing.T) {
 }
 
 // 공유 골든 testdata/seg_key.golden.txt — Go 의 ParseSegKey 와 엣지 함수(dvr-floor.js) 시험이 같은 파일을 읽는다(설계
-// 3-1 · 4-2 · E6 · E22). 줄 문법: `#` 로 시작하는 줄과 빈 줄은 건너뛰고, 나머지 줄은 탭 셋으로 나뉜 세 열이다 — 입력 키 ·
+// 3-1 · 4-2 · E6 · E22). 줄 문법: `#` 로 시작하는 줄과 빈 줄은 건너뛰고, 나머지 줄은 탭 두 개로 나뉜 세 열이다 — 입력 키 ·
 // 기대(ok 면 `스트림,회차,seq` · 옛 꼴은 회차가 빈 값 · err 면 `-`) · 판정(ok | err). 잡는 결함: 회차 꼴 갈래 · 옛 꼴 갈래 ·
 // 성분 128자 상한 가운데 하나가 빠지거나 넓어지면 그 행이 갈린다.
 func TestParseSegKeyMatchesSharedGolden(t *testing.T) {
@@ -190,42 +192,86 @@ func TestParseSegKeyMatchesSharedGolden(t *testing.T) {
 	}
 }
 
+// 골든의 줄 규약(머리말)을 어긴 파일은 읽기 오류다 — 두 시험(Go · node)이 같은 바이트를 같은 행으로 읽어야 하기 때문이다.
+// 잡는 결함: BOM · CR · NUL · UTF-8 아닌 바이트 · 열 수 · 판정 값 가운데 하나라도 그냥 지나가면 node 의 줄 나누기와 Go 의
+// 줄 나누기가 다른 행을 볼 수 있다(CRLF 파일이면 node 쪽 판정 열 끝에 \r 이 남는다).
+func TestParseSegKeyGoldenRejectsLineRuleViolations(t *testing.T) {
+	const ok = "dvr/s/seg/000007.m4s\ts,,7\tok\n"
+	if rows, err := parseSegKeyGolden([]byte("# 머리\n\n" + ok)); err != nil || len(rows) != 1 {
+		t.Fatalf("규약을 지킨 골든 = (%d행, %v), want (1행, nil)", len(rows), err)
+	}
+	for _, c := range []struct {
+		name string
+		data string
+	}{
+		{"BOM", "\uFEFF" + ok},
+		{"CRLF", strings.TrimSuffix(ok, "\n") + "\r\n"},
+		{"CR_머리줄", "# 머리\r\n" + ok},
+		{"NUL", "dvr/s/seg/000007.m4s\x00\ts,,7\tok\n"},
+		{"UTF-8_아님", "dvr/s/seg/\xff.m4s\t-\terr\n"},
+		{"열_둘", "dvr/s/seg/000007.m4s\tok\n"},
+		{"열_넷", "dvr/s/seg/000007.m4s\ts,,7\tok\tx\n"},
+		{"빈_입력", "\ts,,7\tok\n"},
+		{"판정_값", "dvr/s/seg/000007.m4s\ts,,7\tOK\n"},
+		{"err_기대_값", "dvr/s/seg/000007.m4s\ts,,7\terr\n"},
+		{"ok_기대_대시", "dvr/s/seg/000007.m4s\t-\tok\n"},
+	} {
+		if _, err := parseSegKeyGolden([]byte(c.data)); err == nil {
+			t.Errorf("%s: 규약을 어긴 골든이 읽혔다", c.name)
+		}
+	}
+}
+
 // segKeyGoldenRow 는 공유 골든의 한 행이다.
 type segKeyGoldenRow struct {
 	line                 int
 	input, want, verdict string
 }
 
-// readSegKeyGolden 은 공유 골든을 읽는다. 줄 문법을 어긴 행(열 수 · 판정 값 · err 행의 기대 값)은 시험 실패다 — 엣지
-// 함수 시험이 같은 파일을 같은 문법으로 읽으므로 여기서 문법을 못 박는다.
+// readSegKeyGolden 은 공유 골든을 읽는다. 줄 규약을 어긴 파일은 시험 실패다 — 엣지 함수 시험이 같은 파일을 같은 문법으로
+// 읽으므로 여기서 문법을 못 박는다.
 func readSegKeyGolden(t *testing.T) []segKeyGoldenRow {
 	t.Helper()
-	f, err := os.Open(filepath.Join("testdata", "seg_key.golden.txt"))
+	data, err := os.ReadFile(filepath.Join("testdata", "seg_key.golden.txt"))
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
-	defer f.Close()
+	rows, err := parseSegKeyGolden(data)
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	return rows
+}
+
+// parseSegKeyGolden 은 골든 바이트 data 를 머리말의 줄 규약대로 행으로 푼다 — UTF-8 · BOM 없음 · LF 전용 · NUL 없음이고,
+// `#` 줄과 빈 줄을 뺀 줄은 탭 두 개로 나뉜 세 열(비지 않은 입력 · 기대 · 판정)이며 ok 는 기대 값과, err 는 기대 `-` 와
+// 짝이다. 어기면 줄 번호를 실은 오류다.
+func parseSegKeyGolden(data []byte) ([]segKeyGoldenRow, error) {
+	switch {
+	case !utf8.Valid(data):
+		return nil, errors.New("골든이 UTF-8 이 아니다")
+	case bytes.HasPrefix(data, []byte("\uFEFF")):
+		return nil, errors.New("골든 앞에 BOM 이 있다")
+	case bytes.ContainsAny(data, "\r\x00"):
+		return nil, errors.New("골든에 CR 또는 NUL 이 있다 — LF 전용 · NUL 없음")
+	}
 	var rows []segKeyGoldenRow
-	sc := bufio.NewScanner(f)
-	for n := 1; sc.Scan(); n++ {
-		line := sc.Text()
+	for i, line := range strings.Split(string(data), "\n") {
+		n := i + 1
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		cols := strings.Split(line, "\t")
 		if len(cols) != 3 || cols[0] == "" {
-			t.Fatalf("골든 줄 %d: 열 %d개 — 비지 않은 입력 · 기대 · 판정 세 열이어야 한다", n, len(cols))
+			return nil, fmt.Errorf("골든 줄 %d: 열 %d개 — 비지 않은 입력 · 기대 · 판정 세 열이어야 한다", n, len(cols))
 		}
 		r := segKeyGoldenRow{line: n, input: cols[0], want: cols[1], verdict: cols[2]}
 		if (r.verdict != "ok" && r.verdict != "err") || (r.verdict == "err") != (r.want == "-") {
-			t.Fatalf("골든 줄 %d: 기대 %q · 판정 %q — ok 는 기대 값과, err 는 기대 `-` 와 짝이어야 한다", n, r.want, r.verdict)
+			return nil, fmt.Errorf("골든 줄 %d: 기대 %q · 판정 %q — ok 는 기대 값과, err 는 기대 `-` 와 짝이어야 한다", n, r.want, r.verdict)
 		}
 		rows = append(rows, r)
 	}
-	if err := sc.Err(); err != nil {
-		t.Fatalf("Setup: %v", err)
-	}
-	return rows
+	return rows, nil
 }
 
 // 설계 2-1 의 회차 꼴 형상 그대로다: dvr/{streamID}/{roundID}/seg/{NNNNNN}.m4s. 자릿수 규칙은 SegKey 와 같다.

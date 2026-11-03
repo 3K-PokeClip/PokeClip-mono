@@ -532,8 +532,10 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 		p.roundFromEnding = true // 15.2 표 4행 — 회차 · 표식은 끝내는 UPDATE 의 RETURNING 이 정본
 		// 기저 세션은 곧 ending 으로 보낼 그 세션이다 — ID 를 손에 쥐고 있으므로 조회하지 않는다.
 		// 조회로 찾으면 started_at 최신이 새 세션(또는 더 늦게 시작한 옛 세션)이라 어긋난다.
-		// 회차는 잠근 live 의 round_id 다 — live 인 회차는 닫히지 않으므로(index 회차 스캔의 state <> 'live') Open 이
-		// RETURNING 으로 받을 successorRound 와 같은 값이다. NULL 이면 15.2 표 3행 — 새 회차다.
+		// 회차는 잠근 live 의 round_id 다 — live 인 회차는 닫히지 않으므로 Open 이 RETURNING 으로 받을 successorRound 와
+		// 같은 값이다. 닫힘의 유일한 쓰기 index/round_close.go closeRoundSQL 은 소속 잠금 아래 closableRoundsSQL 판정
+		// (`l.state <> 'live'`) 뒤에만 돈다. 그 전제가 깨진 상태(픽스처로만 생김)면 Open 의 checkDecidedRound 가 개시를
+		// 되돌린다(TestTDSplitOnLiveOfClosedRoundFailsClosed). NULL 이면 15.2 표 3행 — 새 회차다.
 		round := split.roundID
 		if round == "" {
 			round = p.newSessionID()

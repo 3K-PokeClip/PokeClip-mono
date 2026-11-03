@@ -175,7 +175,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `SEGMENT_ROOT` | `/recordings` | 감시할 녹화 루트. 컨테이너에 읽기 전용으로 붙는다 |
 | `ENSURE_SCHEMA` | `false` | true면 기동 시 정본 DDL(1번 소유)로 `stream_segments`를 만든다. 로컬 compose 전용 — RDS/마이그레이션 도구 도입 시 끈다 |
 | `TZ` | (미설정) | 컨테이너 시간대. **UTC로 고정한다.** 저장 값은 코드가 UTC로 강제하지만 로그 시각도 UTC로 맞춘다 |
-| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`. **`info` 보다 높이지 않는다** — `warn` · `error` 로 올리면 기동 신호 `playback_key_layout` 의 INFO 줄(끔 · 켬의 `present`)이 사라져 `sidecar-round-keys.sh` 가 켜기 · 복원을 판정하지 못한다(런북 `media-swap.md` 「POK-525 교체 선행」 의 `LOG_LEVEL` 항목과 같은 뜻) |
 | `SEGMENT_EXPECTED_DURATION_MS` | `4000` | 세그먼트 1개의 기대 길이. `mediamtx.yml`의 `recordSegmentDuration`과 수동으로 맞춘 값 |
 | `SEGMENT_SUSPECT_BELOW_MS` | `3850` | 이보다 짧게 측정되면 덜 써진 파일로 의심하고 다시 잰다 |
 | `SEGMENT_DRIFT_TOLERANCE_MS` | `1500` | 벽시계 기대치와 실제가 이만큼 넘게 어긋나면 끊김으로 판정한다 |
@@ -196,7 +196,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `REWIND_SEED_ENABLED` | `true` | 되감기 컷오프 **주조** 스위치(계약 6항 2단계). 켜져 있으면 각 스트림의 첫 자격 유입이 컷오프 하나를 만든다. M4 ⓒ 부터 기본 켜짐이다(kty 결정 2026-09-02 — 발행 층과 함께 켠다). **명시 `false` 가 롤백 손잡이다** — 컷오프를 새로 만들지 않는다. 빈 값은 기본값(켜짐)으로 읽힌다. 되돌려 꺼도 **이미 기록된 컷오프는 유효하고 그 스트림은 계속 발행된다** — 판정은 이 플래그가 아니라 장부를 읽는다 |
 | `REWIND_GAP_RUN_END` | `false` | 정체 사다리 L3 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차에서 업로드 정체 GAP 이 조각 번호로 이어서 셋 서면(약 12초) 그 회차를 `ending`(사유 `gap_run`)으로 끝낸다. 재접속 창 안의 다음 조각은 새 회차를 열어 이어받는다. **켜는 조건**: 운영 송출의 종단 지연 실측(F-7)과 S3 짧은 장애 주입 실측이 둘 다 참이고 kty 가 승인한 뒤다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값(Go `strconv.ParseBool` 규칙)은 기동 거부다 |
 | `REWIND_STALL_SEAL` | `false` | 정체 사다리 L2′(정체 마감) 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차의 되감기 목록이 5.5초(D_act = 갱신 의무 9초 − 엣지 1.5초 − 발행 예산 2초) 넘게 자라지 못했는데 GAP 도 설 수 없을 때(다음 조각이 없음 · 부적격 · 직전 GAP 실패) 목록 끝에 `#EXT-X-ENDLIST` 를 붙여 봉인하고, 봉인이 서면 그 회차를 `ending`(사유 `stall_seal`)으로 끝낸다(kty 결정 2026-10-27). 재접속 창 안의 다음 조각은 새 세션을 열어(같은 `round_id` — 봉인한 세션을 계승 · 4D 표식이 있어 사유가 `intentional` 이면 계승 · 합류하지 않는다) 그 새 세션의 목록으로 이어받는다. **켜는 조건**은 `REWIND_GAP_RUN_END` 와 같다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
-| `PLAYBACK_ROUND_KEYS` | `false` | 새 꼴(회차) ③ 키 쓰기 스위치(POK-525 — 기본 끔). 켜면 회차가 있는 세션의 조각 키를 `dvr/{stream}/{round}/seg/{NNNNNN}.m4s` 로 쓰고, 끄면 회차가 있어도 옛 꼴 `dvr/{stream}/seg/{NNNNNN}.m4s` 로 쓴다. 회차가 없는 세션(M6 전)은 켜도 옛 꼴이다. 켬에서 회차 성분이 키 문법(URL 안전 문자 · 128자 이하)을 못 지나면 그 조각의 ③ 키만 비고(NULL) 옛 꼴로 물러서지 않는다. 키를 읽는 쪽(업로드 · 목록 발행)은 스위치와 무관하게 두 꼴을 다 받는다. 기동 때만 읽는다(바꾸려면 사이드카를 다시 만든다). prod 상자는 `/etc/pokeclip-media/sidecar.env` 한 줄이 값을 주고, 로컬 compose 는 `true` 다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
+| `PLAYBACK_ROUND_KEYS` | `false` | 새 꼴(회차) ③ 키 쓰기 스위치(POK-525 — 기본 끔). 켜면 회차가 있는 세션의 조각 키를 `dvr/{stream}/{round}/seg/{NNNNNN}.m4s` 로 쓰고, 끄면 회차가 있어도 옛 꼴 `dvr/{stream}/seg/{NNNNNN}.m4s` 로 쓴다. 회차가 없는 세션(M6 전)은 켜도 옛 꼴이다. 켬에서 회차 성분이 키 문법(URL 안전 문자 · 128자 이하)을 못 지나면 그 조각의 ③ 키만 비고(NULL) 옛 꼴로 물러서지 않는다. 키 파생이 실패하면 `playback_key_derive_failed` WARN 한 줄(stream_id · round_id · seq · err)을 남긴다 — 같은 스트림 · 같은 회차의 실패는 첫 번만 알린다. 키를 읽는 쪽(업로드 · 목록 발행)은 스위치와 무관하게 두 꼴을 다 받는다. 기동 때만 읽는다(바꾸려면 사이드카를 다시 만든다). prod 상자는 `/etc/pokeclip-media/sidecar.env` 한 줄이 값을 주고, 로컬 compose 는 `true` 다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
 | `REWIND_PLAYBACK_READ_MAX` | `2` | 상태 전달 읽기(되감기 상태판에 넘길 스트림 상태를 장부에서 읽는 일)의 전체 동시 상한(POK-196 M6 · kty 결정 2026-10-29). 읽기 하나가 인덱서 풀 연결 하나를 쥐므로, 일제 종료 때 스트림 수만큼 읽기가 겹쳐 핫 경로와 풀을 다투지 않게 묶는다. 넘친 스트림은 버리지 않고 다음 보류 틱에 다시 읽는다. 이미 읽고 있는 스트림의 새 표지는 상한과 무관하게 그 읽기에 합쳐진다. 양의 정수만 받는다(0 · 음수 · 문자는 기동 거부) |
 
 **되감기 상태 관측(POK-195) — MediaMTX Control API 폴링.**
@@ -400,7 +400,14 @@ NULL 도 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바�
     layout 은 `PLAYBACK_ROUND_KEYS` 값이다. 켬인데 `present` 가 아니면
     WARN, 그 밖은 INFO 다. 켜는 재생성 직후 · 운영 SQL 2 전에는 WARN 한
     줄이 정상이다. `unknown` 은 조회 실패이고 끝에 `err` 를 싣는다 — 기동은
-    계속된다. 운영 스크립트(`sidecar-round-keys.sh`)와 런북이 이 줄을 센다.
+    계속된다. 조회는 `dbStepTimeout`(20초) 안에서 끝난다. `absent` 는 조회가
+    성공했고 트리거가 없다는 뜻이고, `unknown` 은 있는지 모른다는 뜻이다.
+    운영 스크립트(`sidecar-round-keys.sh`)와 런북이 이 줄을 센다. 실제 줄(시각
+    칸 생략)은 이렇다.
+
+    ```json
+    {"level":"WARN","msg":"playback_key_layout","layout":"round","round_frozen":"absent"}
+    ```
 *   **롤백 짝:** 트리거가 정당한 세션 UPDATE 를 막을 때만
     `DROP TRIGGER IF EXISTS stream_sessions_round_frozen ON stream_sessions;`
     를 쓴다. 옛 판(A)으로 돌아가는 수단이 아니다.
@@ -1758,7 +1765,7 @@ DISC-SEQ · base · 계승 회차 · S1–S7 · 봉인 · 읽기 뷰)은 다시 
 | `internal/index/store.go` · `rewind_read.go` | `EndLive`(스트림 단위 종료 문장) · 적재 읽기(되짚기 하한 · 행 상한 · 읽기 전용 REPEATABLE READ 한 트랜잭션 · 회차 최소 seq 열) · 30초 감시 한 문장 |
 | `internal/session/registry.go` · `cmd/segment-indexer/session_wire.go` | 300초 안 재접속 계승 개시(직전 회차 조회 · 계승 개시 TD) |
 | `internal/upload` | init 확정 CTE 의 stsd 게이트 입력 · Dirty 붙이기(`AttachDirty`) · L1 손잡이(`Expedite`) · 키 문법 한 벌 |
-| `internal/playback` | `ParseSegKey`(③ 조각 키 문법) · `StsdFingerprint` 〔추기 2026-11-03 — POK-525 부터 `ParseSegKey` 는 두 꼴을 풀어 `SegRef`(스트림 · 회차 · seq)를 돌려준다: 옛 꼴 `dvr/{stream}/seg/{seq}.m4s`(회차 빈 값) · 회차 꼴 `dvr/{stream}/{round}/seg/{seq}.m4s`(만드는 쪽 `RoundSegKey`). 성분은 128자 이하다(엣지 함수 정규식과 같은 상한). 업로드 워커 · S5 는 회차를 견주지 않고 스트림 · seq 만 본다. 엣지 함수와는 공유 골든 `internal/playback/testdata/seg_key.golden.txt` 로 맞춘다.〕 |
+| `internal/playback` | `ParseSegKey`(③ 조각 키 문법) · `StsdFingerprint` 〔추기 2026-11-03 — POK-525 부터 `ParseSegKey` 는 두 꼴을 풀어 `SegRef`(스트림 · 회차 · seq)를 돌려준다: 옛 꼴 `dvr/{stream}/seg/{seq}.m4s`(회차 빈 값) · 회차 꼴 `dvr/{stream}/{round}/seg/{seq}.m4s`(만드는 쪽 `RoundSegKey`). 성분은 128자 이하다(엣지 함수 정규식과 같은 상한). 같은 128자 상한이 `InitKey` 의 세션 성분에도 걸린다. 회차는 아무도 견주지 않는다 — S5 는 키의 스트림만 목록 스트림과 견주고, 업로드 워커는 스트림 · seq 를 대상과 견준다. 엣지 함수와는 공유 골든 `internal/playback/testdata/seg_key.golden.txt` 로 맞춘다.〕 |
 | `internal/rewind/cache` | 적재 토큰 · 적재 중 push 로그와 재생 · 요구 적재 · 부정 표식 · 잘라내기(`Trim`) · 쉬는 뷰 버리기(`Forget`) · 감시 대조 · 화해 · init 확정 반영 |
 | `internal/rewind/validate.go` | S2 의 DISC-SEQ 비감소 조항 · S5 의 조각 줄 조항(③ 키 문법 · 같은 스트림 · 길이 > 0) |
 | `internal/config/config.go` | `REWIND_PUBLIC_BASE_URL` 적재 · 검증 · 스위치 기본값 `true` |

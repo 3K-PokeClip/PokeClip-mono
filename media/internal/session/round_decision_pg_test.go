@@ -9,6 +9,7 @@ package session
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,5 +168,50 @@ func TestOpenRejectsRoundIDDifferentFromDecision(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// live 인데 round_closed_at 이 있는 회차 위의 TD 분할 — 코드로는 생기지 않는 상태다. 회차 닫힘을 쓰는 문장은
+// index/round_close.go 의 closeRoundSQL 하나이고, 그 앞 판정 closableRoundsSQL 은 소속 잠금 아래에서 최신(live 우선)이
+// live 인 회차를 고르지 않는다(`l.state <> 'live'`). 개시는 닫힌 회차에 들지 않는다(openFromPrevious 의 !prev.roundClosed ·
+// successorRound 의 roundClosed). 그래서 픽스처로 상태를 억지로 만들어, 생기면 어떻게 되는지를 실물로 고정한다(Ⓑ2-3 DB M1).
+//
+// 결과: Decide 는 잠근 live 의 round_id 를 RoundID 로 내고, Open 은 끝내는 UPDATE 의 RETURNING 이 닫힘을 보고 새 회차를
+// 쓰려다 결정과 갈려 오류다(checkDecidedRound) — 트랜잭션이 되돌려져 새 세션 0 · live 그대로다. 같은 조각마다 되풀이되는
+// fail-closed 이지 키가 세션과 다른 회차로 저장되는 길은 아니다. 변이: Open 의 대조 제거 → 새 회차로 개시가 성공해 FAIL.
+func TestTDSplitOnLiveOfClosedRoundFailsClosed(t *testing.T) {
+	const stream = "demo"
+	pool := newTestPool(t)
+	r, _ := newRoundRegistry()
+	seed := ledgerRow{id: "S-L", streamID: stream, state: "live", roundID: "S-R", roundClosedAt: wall.Add(-time.Minute),
+		startedAt: wall.Add(-time.Hour)}
+	seedLedger(t, pool, seed)
+	in := Input{StreamID: stream, Seq: 2, StartWallUTC: wall, DurationMS: 9000, Op: OpenOrCurrent}
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("트랜잭션 시작 실패: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	d, err := r.Decide(ctx, tx, in, in.StartWallUTC)
+	if err != nil {
+		t.Fatalf("결정 실패: %v", err)
+	}
+	id, openErr := r.Open(ctx, tx, d, in.StartWallUTC)
+	_ = tx.Rollback(ctx)
+
+	if d.Outcome != OutcomeOpenFresh || d.RoundID != "S-R" {
+		t.Fatalf("결정 = (%s, RoundID %q), want (%s, \"S-R\")", d.Outcome, d.RoundID, OutcomeOpenFresh)
+	}
+	if openErr == nil || !strings.Contains(openErr.Error(), "결정의 RoundID") {
+		t.Fatalf("Open = (%q, %v), want 결정과 회차가 갈린다는 오류", id, openErr)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM stream_sessions WHERE stream_id = $1`, stream).Scan(&rows); err != nil {
+		t.Fatalf("세션 수 조회 실패: %v", err)
+	}
+	if got := roundOf(t, pool, seed.id).state; rows != 1 || got != "live" {
+		t.Errorf("세션 행 = %d · %s 상태 = %s, want 1 · live(되돌려졌어야 한다)", rows, seed.id, got)
 	}
 }

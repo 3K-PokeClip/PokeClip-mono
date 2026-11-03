@@ -229,14 +229,25 @@ func (v *vodJob) fillGap(r, prev boundary.Row) boundary.Row {
 // 회차 꼴이면 그 회차의 회차 꼴(playback.RoundSegKey), 옛 꼴 · 빈 키 · 문법 밖이면 옛 꼴(playback.SegKey)이다.
 //
 // 사슬의 회차로 짓지 않는다 — 새 꼴 쓰기를 끈 상자의 장부에도 회차는 있어, 그러면 옛 꼴 목록에 회차 꼴 GAP 이 섞인다.
-// 앞 행 키의 꼴은 그 행을 쓴 상자의 스위치가 정한 것이라, publish 는 스위치를 모른 채 꼴을 정한다. 파생 오류는 나지 않는다
-// — 스트림은 vodKey 가, 회차 성분은 ParseSegKey 가 같은 검사로 이미 봤고 seq 는 장부 값(0 이상)이다.
+// 앞 행 키의 꼴은 그 행을 쓴 상자의 스위치가 정한 것이라, publish 는 스위치를 모른 채 꼴을 정한다. 파생 오류는 정상 장부에서
+// 나지 않는다 — 스트림은 vodKey 가, 회차 성분은 ParseSegKey 가 같은 검사로 이미 봤고 seq 는 장부 값(0 이상)이다. 그래도 나면
+// 빈 키를 돌려준다 — 키를 지어내지 않고 발행 전 검사(S5)가 그 목록을 막게 둔다.
+//
+// 정산 기한 GAP 은 fillGap(r, r) 로 자기 행 키를 prevKey 로 넘긴다(E12 예외). 그 행 키가 NULL 이면 빈 키라 옛 꼴이고, 뒤따르는
+// 비귀속 행도 그 GAP 을 앞 행으로 따라 옛 꼴이 된다(TestVODSettleDeadlineGapWithNullKeyIsLegacyForm).
 func (v *vodJob) gapKey(seq int64, prevKey string) string {
-	if ref, err := playback.ParseSegKey(prevKey); err == nil && ref.RoundID != "" {
-		key, _ := playback.RoundSegKey(v.chain.StreamID, ref.RoundID, seq)
-		return key
+	var (
+		key string
+		err error
+	)
+	if ref, perr := playback.ParseSegKey(prevKey); perr == nil && ref.RoundID != "" {
+		key, err = playback.RoundSegKey(v.chain.StreamID, ref.RoundID, seq)
+	} else {
+		key, err = playback.SegKey(v.chain.StreamID, seq)
 	}
-	key, _ := playback.SegKey(v.chain.StreamID, seq)
+	if err != nil {
+		return ""
+	}
 	return key
 }
 

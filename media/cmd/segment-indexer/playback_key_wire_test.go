@@ -6,6 +6,7 @@ package main
 // 저장된 키를 잰다 — 키의 회차 성분이 조각이 귀속된 세션의 round_id 와 같아야 한다(엣지 하한이 경로 속 회차를 믿는다).
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -45,7 +46,7 @@ func TestPlaybackKeyForPicksLayoutBySwitch(t *testing.T) {
 		{name: "켬_회차_상위_참조", roundKeys: true, roundID: "..", wantErr: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := playbackKeyFor(c.roundKeys)(stream, c.roundID, seq)
+			got, err := playbackKeyFor(c.roundKeys, slog.New(slog.DiscardHandler))(stream, c.roundID, seq)
 			if c.wantErr {
 				if err == nil {
 					t.Fatalf("키 %q 가 나왔다 — 회차 성분 검사 실패는 오류여야 한다(옛 꼴로 물러서면 안 된다)", got)
@@ -56,6 +57,46 @@ func TestPlaybackKeyForPicksLayoutBySwitch(t *testing.T) {
 				t.Fatalf("키 = (%q, %v), want (%q, nil)", got, err, c.want)
 			}
 		})
+	}
+}
+
+// 키 파생이 실패하면(키는 NULL 이 된다) 원인 WARN 한 줄을 남긴다 — 장부(index)에는 로거가 없어 조립 층에서 낸다. 같은
+// 스트림 · 같은 회차의 실패는 첫 번만 알린다(회차가 불량이면 그 회차 조각마다 실패해 줄이 폭주한다). 회차가 바뀌면 다시
+// 알린다. 결과(키 · 오류)는 그대로 돌려준다 — 관측이 ⑹ 규약(실패 = 키 NULL)을 바꾸지 않는다. 변이: 실패 줄 제거 → FAIL ·
+// 같은 회차 거름 제거 → 줄 셋이 되어 FAIL.
+func TestPlaybackKeyFailureWarnsOncePerRound(t *testing.T) {
+	var buf bytes.Buffer
+	derive := playbackKeyFor(true, slog.New(slog.NewJSONHandler(&buf, nil)))
+	bad, other := strings.Repeat("r", 129), strings.Repeat("q", 129)
+
+	for _, c := range []struct {
+		round   string
+		seq     int64
+		wantErr bool
+	}{
+		{round: bad, seq: 7, wantErr: true},
+		{round: bad, seq: 8, wantErr: true},
+		{round: "S-R", seq: 9},
+		{round: bad, seq: 10, wantErr: true},
+		{round: other, seq: 11, wantErr: true},
+	} {
+		if _, err := derive("wirestream", c.round, c.seq); (err != nil) != c.wantErr {
+			t.Fatalf("seq %d: 오류 = %v, want 오류 %v", c.seq, err, c.wantErr)
+		}
+	}
+
+	lines := logLines(t, &buf, "playback_key_derive_failed")
+	if len(lines) != 2 {
+		t.Fatalf("실패 줄 %d개, want 2(회차마다 첫 번만): %s", len(lines), buf.String())
+	}
+	for i, want := range []struct {
+		round string
+		seq   float64
+	}{{bad, 7}, {other, 11}} {
+		l := lines[i]
+		if l["level"] != "WARN" || l["stream_id"] != "wirestream" || l["round_id"] != want.round || l["seq"] != want.seq || l["err"] == nil {
+			t.Errorf("실패 줄 %d = %v, want WARN · stream_id · round_id %.8q… · seq %v · err", i, l, want.round, want.seq)
+		}
 	}
 }
 
@@ -83,13 +124,14 @@ func keyRecord(stream string, s keyStep) index.Record {
 func newKeyStore(pool *pgxpool.Pool, roundKeys bool) index.Store {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return index.NewPGStore(pool, newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, log),
-		playbackKeyFor(roundKeys))
+		playbackKeyFor(roundKeys, log))
 }
 
-// storedCarrier 는 조각의 귀속 세션 · 그 세션의 round_id · ③ 키 · PDT 유무다. NULL 은 "" 다.
+// storedCarrier 는 조각의 귀속 세션 · 그 세션의 round_id · ③ 키 · PDT 유무다. NULL 은 "" 다 — ③ 키만은 keyNull 이 SQL NULL
+// 과 빈 문자열을 가른다.
 type storedCarrier struct {
 	sessionID, roundID, key string
-	hasPDT                  bool
+	keyNull, hasPDT         bool
 }
 
 func carrierWithRound(t *testing.T, pool *pgxpool.Pool, stream string, seq int64) storedCarrier {
@@ -108,7 +150,7 @@ func carrierWithRound(t *testing.T, pool *pgxpool.Pool, stream string, seq int64
 		}
 		return *p
 	}
-	return storedCarrier{sessionID: deref(sess), roundID: deref(round), key: deref(key), hasPDT: pdt != nil}
+	return storedCarrier{sessionID: deref(sess), roundID: deref(round), key: deref(key), keyNull: key == nil, hasPDT: pdt != nil}
 }
 
 // 장부가 쓴 ③ 키의 꼴은 스위치가 정하고, 켬이면 키의 회차 성분이 조각이 귀속된 세션의 stream_sessions.round_id 다 — 새 회차 ·
@@ -196,7 +238,9 @@ func TestStoredKeyIsLegacyForSessionWithoutRound(t *testing.T) {
 
 // 켬 × 회차 있음에서 회차 성분이 키 문법(128자 · URL 안전 문자 · 상위 참조 금지)을 못 지나면 ③ 키만 NULL 이고 세션 · PDT 는
 // 남는다(⑹ 규약 — 옛 꼴로 물러서지도, 조각을 버리지도 않는다). round_id 의 안전은 상류 스트림 id 검사에만 기대므로 장부
-// 쪽에서 한 번 더 막히는지 못 박는다(보안 1). 변이: 켬 갈래가 RoundSegKey 실패에서 SegKey 로 물러섬 → FAIL.
+// 쪽에서 한 번 더 막히는지 못 박는다(보안 1). 키는 SQL NULL 이어야 한다 — 빈 문자열은 ③ 축의
+// `playback_s3_key IS NOT NULL` 조건(업로드 대상 등)을 지나고 키 불변 트리거에 굳는다. 변이: 켬 갈래가 RoundSegKey 실패에서 SegKey 로 물러섬 → FAIL · 장부가 실패에서 빈 문자열을
+// 씀 → FAIL.
 func TestStoredKeyIsNullWhenRoundComponentInvalid(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -219,8 +263,8 @@ func TestStoredKeyIsNullWhenRoundComponentInvalid(t *testing.T) {
 				t.Fatalf("Insert 실패(키 실패는 오류가 아니라 NULL 이어야 한다): %v", err)
 			}
 			got := carrierWithRound(t, pool, stream, s.seq)
-			if got.sessionID != stream+"-live" || !got.hasPDT || got.key != "" {
-				t.Fatalf("carrier = %+v, want 세션 %s-live · PDT 있음 · 키 NULL", got, stream)
+			if got.sessionID != stream+"-live" || !got.hasPDT || !got.keyNull {
+				t.Fatalf("carrier = %+v, want 세션 %s-live · PDT 있음 · 키 SQL NULL", got, stream)
 			}
 		})
 	}
