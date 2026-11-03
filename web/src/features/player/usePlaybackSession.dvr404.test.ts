@@ -43,6 +43,13 @@ const WINDOW_MS = 60_000;
 const STEP_MS = 100;
 /** 정기 물음 주기(useRewindStatus REWIND_POLL_MS) */
 const POLL_MS = 10_000;
+/**
+ * 세대마다 목록 · 화면 · 404 를 넣는 행의 걸음 — 그 행은 걸음마다 세대가 올라 STEP_MS 로는 60초에
+ * 다시 받기 600 · 전이 2261 을 돌려, 부하 높은 기계에서 5초 시한을 넘겼다. 다시 받기 · 화면
+ * 고리는 시계가 아니라 사건으로만 넘어가므로 걸음을 넓혀도 단언의 뜻은 같고, 정기 물음보다
+ * 짧아 물음이 고리 사이에 거듭 든다
+ */
+const PAINT_CYCLE_STEP_MS = 1_000;
 /** 막힘의 refresh 가 답 url 이 그대로인 동안 다시 묻는 수(useRewindStatus REWIND_RETRY_COUNT · R16) */
 const BLOCKED_RETRIES = 3;
 /** 라이브에서 본 자리 · 라이브에서 되감아 청한 자리(58분 전) */
@@ -61,13 +68,21 @@ type Answers = (n: number) => StreamAnswer;
 type OnSwap = 'gone' | 'list-then-gone' | 'paint-then-gone' | 'none';
 
 let streamStarts: number[];
+/**
+ * 지금 시험이 끝났는가 — vitest 는 시한을 넘긴 시험 함수를 멈추지 않으므로, 그 시계 고리가 다음
+ * 시험까지 돌며 옛 세션에 사건을 넣어 같은 transition 모의에 섞인다(다음 행 relists 2 ≠ 1).
+ * afterEach 가 끝을 적고 runRelist 가 매 걸음 확인해 멈춘다
+ */
+let testState: { ended: boolean };
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
   vi.mocked(transition).mockClear();
   streamStarts = [];
+  testState = { ended: false };
 });
 afterEach(() => {
+  testState.ended = true;
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -208,22 +223,32 @@ function playerEvents(session: () => PlaybackSession, onSwap: OnSwap): SessionEv
 
 /**
  * 세션을 열어 라이브 답을 받고(liveAt 이 있으면 라이브 자리도) targetMs 로 되감은 뒤 404 하나를
- * 넣고, 시계를 60초 밀며 세대가 오를 때마다 onSwap 대로 사건을 넣는다
+ * 넣고, 시계를 60초 stepMs 씩 밀며 세대가 오를 때마다 onSwap 대로 사건을 넣는다
  */
 async function runRelist(
   answers: Answers,
   onSwap: OnSwap,
-  { liveAt = null, targetMs = NOW - 10 * MIN }: { liveAt?: number | null; targetMs?: number } = {},
+  {
+    liveAt = null,
+    targetMs = NOW - 10 * MIN,
+    stepMs = STEP_MS,
+  }: { liveAt?: number | null; targetMs?: number; stepMs?: number } = {},
 ): Promise<Run> {
+  const mine = testState;
+  const stopIfEnded = () => {
+    if (mine.ended) throw new Error('시험이 이미 끝났다 — 시한을 넘긴 시계 고리를 멈춘다');
+  };
   const { session, dispatch, onNotice } = await openLive(answers, liveAt);
   dispatch({ type: 'seek', targetMs, view: { lowerMs: NOW - 16_000, endMs: NOW } });
   expect(session().state.phase.kind).toBe('rewind');
   let seen = session().state.source.generation;
   dispatch({ type: 'dvr-segment-gone', generation: seen });
   await flush();
-  for (let t = 0; t < WINDOW_MS; t += STEP_MS) {
-    await act(async () => vi.advanceTimersByTime(STEP_MS));
+  for (let t = 0; t < WINDOW_MS; t += stepMs) {
+    stopIfEnded();
+    await act(async () => vi.advanceTimersByTime(stepMs));
     await flush();
+    stopIfEnded();
     const { generation } = session().state.source;
     if (generation === seen) continue;
     seen = generation;
@@ -277,7 +302,7 @@ describe('목록 다시 받기의 되풀이 상한 — 세션 훅 층(계획 3-3
   });
 
   it('정상: 404 → 다시 받기 → 화면 → 404 … — 404 마다 다시 받기 · 막힘 0 · refresh 0 · 매번 판정 알림', async () => {
-    const run = await runRelist(steady, 'paint-then-gone');
+    const run = await runRelist(steady, 'paint-then-gone', { stepMs: PAINT_CYCLE_STEP_MS });
     expect(run.relists).toBeGreaterThanOrEqual(2);
     expect(run.blocked).toBe(0);
     expect(refreshes(run)).toBe(0);
