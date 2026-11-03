@@ -197,7 +197,7 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
 |---|---|---|
 | 옛 모드 | 없음 — 목록을 채우면 modules/media_host 가 plan 에서 거부 | `lifecycle_disabled reason=no_topic`(INFO) |
 | 응답기 모드 · 빈 목록 | 없음 | `lifecycle_disabled reason=no_topic`(INFO) |
-| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | `lifecycle_started` — 준비가 실패하면 ERROR `lifecycle_disabled`(`privilege_check` · `privilege` · `sns_client` · `assembly`) |
+| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | `lifecycle_started` — 준비가 실패하면 ERROR `lifecycle_disabled`. 사유는 지금 코드 기준 `no_resolver`(`STREAM_KEY_RESOLVE_URL` · `STREAM_KEY_RESOLVE_TOKEN_FILE` 이 둘 다 비어 4C 클라이언트가 없음 — 설정 결함이라 재시도 없음) · `privilege_check` · `privilege` · `sns_client` · `assembly` |
 
 *   목록 항목(`*` 또는 26자 Crockford base32) · 주제 ARN 꼴은
     modules/media_host 가 plan 에서 봅니다. 인스턴스 역할의 `sns:Publish`

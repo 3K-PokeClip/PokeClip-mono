@@ -161,9 +161,9 @@ platform 대상 그룹이 교체될 수 있습니다(provider 6.68.0 기준 — 
 *   이미지 참조 조립(저장소 · 다이제스트 짝 · 빈 응답기), 런타임 · secrets ·
     platform(포트 · 헬스 경로) 출력이 사이드카 env · `media.env` · nginx
     변수에 닿는지, 런타임 출력 `broadcast_topic_arn` 이 사이드카 발행 env 에
-    닿고 이 루트에 그 칸이 없는지, platform 의 auth SG · 포트가 Media ↔ auth 짝(모듈 시험용
-    출력 `auth_resolve_rules`)에 닿는지, 기본값(janitor 켬 · 제어면 상류 빈
-    값), 출력 넷, 다이제스트 꼴 검증을 봅니다.
+    닿고 이 루트에 그 칸이 없는지, platform 의 auth SG · 포트가 Media ↔
+    auth 짝(모듈 시험용 출력 `auth_resolve_rules`)에 닿는지, 기본값(janitor
+    켬 · 제어면 상류 빈 값), 출력 넷, 다이제스트 꼴 검증을 봅니다.
 *   **시험으로 볼 수 없는 것:** 루트 시험은 하위 모듈 안의 자원을 주소로 볼
     수 없습니다. 그래서 그대로 넘기는 선 — `subnet_id` · `vpc_id` · 대상
     그룹 · LB SG · `rds_sg_id` · `rds_resource_id` · `media_secret_arns` — 은
