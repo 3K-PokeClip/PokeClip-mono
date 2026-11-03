@@ -4,7 +4,8 @@ package main
 // 완결 평가 칸(계약9 ended outbox)은 run 이 여기서 한 번 만들고, EndLive · 4D 회차 닫힘 칸 · 정산 걸음이 같은 값을 쓴다.
 //
 // 완결 평가 칸은 broadcast.EnqueueEndedIfComplete 를 게이트와 묶은 것이다. 게이트는 기동 조립(startLifecycle)이 설정에서
-// 만든다 — 꺼진 영값 게이트는 outbox 문장을 보내지 않는다(D45 — 켜기 전 회차는 발행하지 않는다).
+// 만든다 — 꺼진 영값 게이트는 outbox 문장을 보내지 않는다(D45 — 켜기 전 회차는 발행하지 않는다). 그렇게 놓친 완결 평가는
+// 같은 DB 의 발행기 보정이 거둔다(broadcast repair.go).
 
 import (
 	"context"

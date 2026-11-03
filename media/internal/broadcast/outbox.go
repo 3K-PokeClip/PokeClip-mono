@@ -192,7 +192,8 @@ ON CONFLICT (event_id) DO NOTHING`
 // 아닌 것으로 보아 ended 행이 영영 생기지 않는다. lifecycle_enqueued 는 EnqueueStarted 와 같이 커밋 전 「적재 시도」
 // 신호다. started 행을 FOR SHARE 로 잠그므로 문장에는 outbox UPDATE 권한이 요건이다(30_grants.sql). 켜진 게이트는
 // 문장 전에 같은 트랜잭션에서 outboxWritable 을 묻고, 거짓이면 문장 없이 (false, nil) · ERROR
-// lifecycle_enqueue_skipped 다 — 닫힘 · phase 4 트랜잭션을 42501 로 롤백하지 않는다.
+// lifecycle_enqueue_skipped 다 — 닫힘 · phase 4 트랜잭션을 42501 로 롤백하지 않는다. 이렇게 건너뛴 완결 평가와 꺼진
+// 게이트의 완결 평가는 같은 DB 의 발행기 보정(repair.go)이 거둔다.
 func EnqueueEndedIfComplete(ctx context.Context, tx pgx.Tx, g Gate, round string) (bool, error) {
 	if round == "" || !g.Enabled() {
 		return false, nil
