@@ -172,21 +172,17 @@ interface TrackHeader {
 
 /**
  * trak → tkhd 의 track_ID · hdlr 의 handler_type · mdhd 의 timescale. 상자가 빠졌으면 null,
- * 상자가 그 칸까지 닿지 않거나 tkhd · mdhd 버전이 0 · 1 이 아니면 RangeError(판독기가 null · 빈 목록으로 바꾼다)
+ * 상자가 그 칸까지 닿지 않거나 tkhd · mdhd 버전이 0 · 1, hdlr 버전이 0 이 아니면 RangeError
+ * (판독기가 null · 빈 목록으로 바꾼다)
  */
 function trackHeader(view: DataView, trak: Box): TrackHeader | null {
   const tkhd = child(view, trak, 'tkhd');
   const mdhd = path(view, trak, 'mdia', 'mdhd');
   const hdlr = path(view, trak, 'mdia', 'hdlr');
   if (!tkhd || !mdhd || !hdlr) return null;
-  if (!within(tkhd, tkhd.start + 4) || !within(mdhd, mdhd.start + 4)) {
-    throw new RangeError('tkhd · mdhd');
-  }
-  const tkhdVersion = view.getUint8(tkhd.start);
-  const mdhdVersion = view.getUint8(mdhd.start);
-  if (tkhdVersion > 1 || mdhdVersion > 1) {
-    throw new RangeError('tkhd · mdhd version');
-  }
+  const tkhdVersion = knownVersion(view, tkhd, 1);
+  const mdhdVersion = knownVersion(view, mdhd, 1);
+  knownVersion(view, hdlr, 0);
   // tkhd · mdhd 버전 1 은 생성 · 수정 시각이 64비트라 뒤 칸이 8바이트 밀린다
   const trackIdAt = tkhd.start + (tkhdVersion === 1 ? 20 : 12);
   const timescaleAt = mdhd.start + (mdhdVersion === 1 ? 20 : 12);
@@ -208,13 +204,14 @@ function trackHeader(view: DataView, trak: Box): TrackHeader | null {
   return { trackId, handler, timescale };
 }
 
-/** mvex 의 trex → 트랙별 default_sample_duration */
+/** mvex 의 trex → 트랙별 default_sample_duration. trex 버전이 0 이 아니면 RangeError */
 function defaultDurations(view: DataView, moov: Box): Map<number, number> {
   const durations = new Map<number, number>();
   const mvex = child(view, moov, 'mvex');
   if (!mvex) return durations;
   for (const trex of boxes(view, mvex.start, mvex.end)) {
     if (trex.type !== 'trex') continue;
+    knownVersion(view, trex, 0);
     if (!within(trex, trex.start + 16)) {
       throw new RangeError('trex');
     }
@@ -250,11 +247,12 @@ interface FragmentHeader {
 
 /**
  * traf 의 tfhd. tfhd 가 없는 traf 는 어느 트랙인지 모르므로 트랙 0(없는 번호)으로 둔다.
- * 상자가 읽을 칸까지 닿지 않으면 RangeError
+ * 상자가 읽을 칸까지 닿지 않거나 tfhd 버전이 0 이 아니면 RangeError
  */
 function fragmentHeader(view: DataView, traf: Box): FragmentHeader {
   const tfhd = child(view, traf, 'tfhd');
   if (!tfhd) return { trackId: 0 };
+  knownVersion(view, tfhd, 0);
   if (!within(tfhd, tfhd.start + 8)) {
     throw new RangeError('tfhd');
   }
@@ -293,19 +291,19 @@ interface TrunLayout {
 
 /**
  * trun 머리: 표본 수 뒤의 0x001 data_offset · 0x004 first_sample_flags 를 건너뛴 자리까지.
- * 머리가 상자 끝을 넘으면 RangeError
+ * 머리가 상자 끝을 넘거나 버전이 0 · 1 이 아니면 RangeError(버전 2 이상의 cto 부호를 모른다)
  */
 function trunLayout(view: DataView, trun: Box): TrunLayout {
+  const version = knownVersion(view, trun, 1);
   if (!within(trun, trun.start + 8)) {
     throw new RangeError('trun');
   }
-  const word = view.getUint32(trun.start);
-  const flags = word & 0xffffff;
+  const flags = view.getUint32(trun.start) & 0xffffff;
   const samplesAt = trun.start + 8 + (flags & 0x001 ? 4 : 0) + (flags & 0x004 ? 4 : 0);
   if (!within(trun, samplesAt)) {
     throw new RangeError('trun');
   }
-  return { version: word >>> 24, flags, count: view.getUint32(trun.start + 4), samplesAt };
+  return { version, flags, count: view.getUint32(trun.start + 4), samplesAt };
 }
 
 /**
@@ -343,6 +341,21 @@ function trafDuration(view: DataView, traf: Box, fallback: number): number {
     }
   }
   return total;
+}
+
+/**
+ * FullBox 머리의 버전. 머리가 상자 끝을 넘거나 규격(ISO/IEC 14496-12)에 없는 버전(maxVersion 초과)이면
+ * 뒤 칸 자리를 모르므로 RangeError
+ */
+function knownVersion(view: DataView, box: Box, maxVersion: number): number {
+  if (!within(box, box.start + 4)) {
+    throw new RangeError(box.type);
+  }
+  const version = view.getUint8(box.start);
+  if (version > maxVersion) {
+    throw new RangeError(`${box.type} version`);
+  }
+  return version;
 }
 
 /** 읽으려는 칸의 끝(end)이 상자 안인가: 상자 밖 바이트(다음 상자)를 제 칸으로 읽지 않게 */

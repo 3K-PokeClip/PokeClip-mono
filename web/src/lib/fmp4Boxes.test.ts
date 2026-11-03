@@ -621,3 +621,55 @@ describe('모르는 버전: tkhd · mdhd · tfdt 버전 2 는 판독 실패다',
     expect(readTrackSpans(concat(init(trak(1, 'vide', 90000)), fragment))).toEqual([]);
   });
 });
+
+// 규격(ISO/IEC 14496-12)은 trun 에 버전 0 · 1, tfhd · trex · hdlr 에 버전 0 만 둔다
+
+const UNKNOWN_VERSION_TFHD = fullBox('tfhd', 1, DEFAULT_BASE_IS_MOOF, u32(1));
+
+/** hdlr 만 버전 1 인 영상 trak(칸 배치는 v0 와 같다) */
+const UNKNOWN_VERSION_TRAK = box(
+  'trak',
+  TKHD,
+  box('mdia', MDHD, fullBox('hdlr', 1, 0, u32(0), ascii('vide'), u32(0), u32(0), u32(0))),
+);
+
+describe('모르는 버전: trun 버전 2 · tfhd · trex · hdlr 버전 1 은 판독 실패다', () => {
+  it('trun 버전 2 면 readTrackStart 는 null 이다(v0 처럼 무부호 cto 로 읽지 않는다)', () => {
+    const run = fullBox('trun', 2, 0x800, u32(1), u32(0xfffffa24));
+
+    expect(readTrackStart(videoFragment(1, tfdt(0, 0n), run), 1)).toBeNull();
+  });
+
+  it('trun 버전 2 면 readTrackSpans 는 빈 목록이다', () => {
+    const run = fullBox('trun', 2, 0x100, u32(1), u32(10));
+    const bytes = concat(init(trak(1, 'vide', 90000)), moof(traf(tfhd(1), tfdt(0, 0n), run)));
+
+    expect(readTrackSpans(bytes)).toEqual([]);
+  });
+
+  it('tfhd 버전 1 이면 readTrackStart 는 null · readTrackSpans 는 빈 목록', () => {
+    const fragment = moof(
+      traf(UNKNOWN_VERSION_TFHD, tfdt(0, 500n), trun(0, 0x100, [{ duration: 10 }])),
+    );
+
+    expect(readTrackStart(concat(fragment, box('mdat')), 1)).toBeNull();
+    expect(readTrackSpans(concat(init(trak(1, 'vide', 90000)), fragment))).toEqual([]);
+  });
+
+  it('trex 버전 1 이면 readTrackSpans 는 빈 목록이다', () => {
+    const version1 = fullBox('trex', 1, 0, u32(1), u32(1), u32(3000), u32(0), u32(0));
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), box('mvex', version1)),
+      moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0, [{}, {}]))),
+    );
+
+    expect(readTrackSpans(bytes)).toEqual([]);
+  });
+
+  it('hdlr 버전 1 이면 readVideoTrack 은 null · readTrackSpans 는 빈 목록', () => {
+    const fragment = moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0x100, [{ duration: 10 }])));
+
+    expect(readVideoTrack(init(UNKNOWN_VERSION_TRAK))).toBeNull();
+    expect(readTrackSpans(concat(init(UNKNOWN_VERSION_TRAK), fragment))).toEqual([]);
+  });
+});
