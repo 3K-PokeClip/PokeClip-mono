@@ -395,6 +395,12 @@ NULL 도 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바�
 *   **기동 필수 아님:** 기동 스키마 확인(`MissingLedgerSchema`)은 이 트리거를
     보지 않는다. 사이드카는 트리거가 없어도 뜬다. 있는지는
     `index.RoundFrozenTriggerPresent` 로 읽는다.
+*   **기동 신호 `playback_key_layout`:** 기동 스키마 확인 뒤 한 줄
+    `layout=legacy|round round_frozen=present|absent|unknown` 을 낸다.
+    layout 은 `PLAYBACK_ROUND_KEYS` 값이다. 켬인데 `present` 가 아니면
+    WARN, 그 밖은 INFO 다. 켜는 재생성 직후 · 운영 SQL 2 전에는 WARN 한
+    줄이 정상이다. `unknown` 은 조회 실패이고 끝에 `err` 를 싣는다 — 기동은
+    계속된다. 운영 스크립트(`sidecar-round-keys.sh`)와 런북이 이 줄을 센다.
 *   **롤백 짝:** 트리거가 정당한 세션 UPDATE 를 막을 때만
     `DROP TRIGGER IF EXISTS stream_sessions_round_frozen ON stream_sessions;`
     를 쓴다. 옛 판(A)으로 돌아가는 수단이 아니다.
