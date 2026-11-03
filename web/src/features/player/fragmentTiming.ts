@@ -23,6 +23,13 @@ export type HlsFragmentLike = Pick<
   'start' | 'duration' | 'programDateTime' | 'gap' | 'tagList' | 'cc' | 'sn'
 >;
 
+/**
+ * 라이브 구성 시차(c) 보정 스위치(설계 r7 3.2 · 5.4절 · D1 (가) · 경계 표 열린 것 3). 켜면 라이브 재생기에도 영상 시작
+ * 기록을 달고, 해체된 라이브 조각을 start = v_k + c_k 로 센다. 기본 false = 지금 prod 동작 · 넘김 실측(갈래 넷) 뒤
+ * kty 가 정함 · 경계 표 열린 것 3. 실행 중 토글은 없다 — 바꾸는 일은 이 한 줄과 웹 재배포다
+ */
+export const LIVE_PTS_CORRECTION = false;
+
 /** 조각 하나의 영상 시작(videoStarts 의 기록) */
 export interface VideoStart {
   /** v_k: 영상 tfdt / 영상 timescale − initPTS / initPTS timescale (초) */
@@ -137,21 +144,88 @@ function hasTimingTag(fragments: readonly HlsFragmentLike[]): boolean {
 }
 
 /**
+ * 조각마다 같은 cc 에서 가장 가까운 해체 조각의 c(초) — 거리가 같으면 앞 조각이다. 그 cc 를 하나도 해체하지 않았으면 null.
+ * c 는 송출기 설정(B 프레임 수)이라 같은 장 안에서는 조각마다 거의 같다(설계 r7 5.4절)
+ */
+function nearestCtos(
+  fragments: readonly HlsFragmentLike[],
+  ctos: ReadonlyArray<number | null>,
+): Array<number | null> {
+  return fragments.map((frag, i) => {
+    for (let distance = 0; distance < fragments.length; distance += 1) {
+      for (const j of [i - distance, i + distance]) {
+        const cto = ctos[j] ?? null;
+        if (cto !== null && fragments[j]!.cc === frag.cc) {
+          return cto;
+        }
+      }
+    }
+    return null;
+  });
+}
+
+/**
+ * 라이브 조각을 구성 시차 보정 자리로(설계 r7 5.1 표 ON 갈래 · 5.4절). 해체된 조각은 start = v_k + c_k, 해체 전 조각은
+ * frag.start(hls.js 추정 — 라이브는 v_k 자리, T-3b)에 같은 cc 의 가장 가까운 해체 조각 c 를 더하고, 그 cc 를 하나도
+ * 해체하지 않았으면 hls.js 조각 그대로다. 길이 · 시각 · 틈 표시는 hls.js 조각 값이다 — 판 태그가 없는 목록이라 원래
+ * EXTINF 로 바꾸지 않는다
+ */
+function ptsCorrectedLiveFragments(
+  fragments: readonly HlsFragmentLike[],
+  startOf: StartOf,
+): DatedFragment[] {
+  const starts = fragments.map((frag) => startOf(frag));
+  const borrowed = nearestCtos(
+    fragments,
+    starts.map((start) => start?.firstCtoS ?? null),
+  );
+  return fragments.map((frag, i): DatedFragment => {
+    const own = starts[i] ?? null;
+    const cto = borrowed[i] ?? null;
+    if (cto === null) {
+      return frag;
+    }
+    return {
+      start: own !== null ? own.videoStartS + own.firstCtoS : frag.start + cto,
+      duration: frag.duration,
+      programDateTime: frag.programDateTime,
+      gap: frag.gap,
+    };
+  });
+}
+
+/**
  * hls.js 조각 → 시각 환산(programDateAt · mediaTimeAt · loadedList)에 넘길 조각(설계 r7 3.2절 · r6 4.3 표).
- * - 판 2 조각(원래 EXTINF 가 있음)은 영상 축이다: start = v_k(startOf), duration = 원래 EXTINF. 아직 해체하지 않은
- *   조각은 같은 cc 의 가장 가까운 해체 조각 ± EXTINF 합(사이가 모두 판 2 일 때만 · 거리가 같으면 앞 조각), 그 cc 를
- *   하나도 해체하지 않았으면 frag.start(hls.js 추정)다.
- * - 판 NULL · 태그 없는 목록 · 원래 EXTINF 가 없는 판 2 조각은 hls.js 조각 그대로다(지금 식 — 출시 전제).
- * - 라이브는 지금 식이다(라이브 구성 시차 스위치 전 — 설계 r7 5.4절).
- * 해체 뒤의 frag.start · duration 은 hls.js 가 기준 트랙 시작 · 모든 트랙 끝으로 덮은 값이라 판 2 에서 쓰지 않는다
- * (r6 4.1). hls.js 조각은 고치지 않는다 — 버퍼 · 창 판정(rewindFloor)은 hls.js 값 그대로여야 한다
+ * 라이브 구성 시차 스위치는 LIVE_PTS_CORRECTION 이다 — 두 값은 datedFragmentsWith 로 잰다.
  */
 export function datedFragments(
   fragments: readonly HlsFragmentLike[],
   kind: PlaybackSource['kind'],
   startOf: StartOf,
 ): readonly DatedFragment[] {
-  if (kind === 'live' || !hasTimingTag(fragments)) {
+  return datedFragmentsWith(fragments, kind, startOf, LIVE_PTS_CORRECTION);
+}
+
+/**
+ * datedFragments 에 라이브 구성 시차 스위치를 매개로 받는다(시험이 두 값을 주입한다 — 설계 r7 10절 c5).
+ * - 판 2 조각(원래 EXTINF 가 있음)은 영상 축이다: start = v_k(startOf), duration = 원래 EXTINF. 아직 해체하지 않은
+ *   조각은 같은 cc 의 가장 가까운 해체 조각 ± EXTINF 합(사이가 모두 판 2 일 때만 · 거리가 같으면 앞 조각), 그 cc 를
+ *   하나도 해체하지 않았으면 frag.start(hls.js 추정)다.
+ * - 판 NULL · 태그 없는 목록 · 원래 EXTINF 가 없는 판 2 조각은 hls.js 조각 그대로다(지금 식 — 출시 전제).
+ * - 라이브는 스위치가 꺼져 있으면 받은 배열 그대로(지금 식), 켜져 있으면 ptsCorrectedLiveFragments 다(설계 r7 5.4절).
+ * 해체 뒤의 frag.start · duration 은 hls.js 가 기준 트랙 시작 · 모든 트랙 끝으로 덮은 값이라 판 2 에서 쓰지 않는다
+ * (r6 4.1). hls.js 조각은 고치지 않는다 — 버퍼 · 창 판정(rewindFloor)은 hls.js 값 그대로여야 한다
+ */
+export function datedFragmentsWith(
+  fragments: readonly HlsFragmentLike[],
+  kind: PlaybackSource['kind'],
+  startOf: StartOf,
+  livePtsCorrection: boolean,
+): readonly DatedFragment[] {
+  if (kind === 'live') {
+    return livePtsCorrection ? ptsCorrectedLiveFragments(fragments, startOf) : fragments;
+  }
+  if (!hasTimingTag(fragments)) {
     return fragments;
   }
   const versions = timingVersions(fragments);

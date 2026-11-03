@@ -12,7 +12,7 @@ import {
   rewindWindowSeconds,
   type DatedFragment,
 } from './dvrWindow';
-import { datedFragments, type StartOf } from './fragmentTiming';
+import { LIVE_PTS_CORRECTION, datedFragments, type StartOf } from './fragmentTiming';
 import {
   isPlaybackForbidden,
   recoverForbiddenRecording,
@@ -67,7 +67,7 @@ const HAVE_CURRENT_DATA = 2;
 const DEFAULT_LIVE_LAG_MS = 3_000;
 /** 창 하한으로 옮긴 뒤 이 배수 × TD 안에 또 옮기면 알리지 않는다(숨은 탭의 밀린 갱신이 한꺼번에 올 때 — 5.3.1절) */
 const FLOOR_NOTICE_QUIET_TD = 2;
-/** 영상 시작 기록이 없는 재생기(라이브 · 재생기가 서기 전)의 startOf — 판 2 조각도 해체 전처럼 센다 */
+/** 영상 시작 기록이 없는 재생기(스위치 OFF 라이브 · 재생기가 서기 전)의 startOf — 판 2 조각도 해체 전처럼 센다 */
 function noVideoStart(): null {
   return null;
 }
@@ -196,7 +196,7 @@ export function useHlsPlayback(
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
-  /** 재생기의 조각별 영상 시작 — 되감기 · 다시보기 재생기가 선 동안만 적는다(설계 r7 3.3절) */
+  /** 재생기의 조각별 영상 시작 — 되감기 · 다시보기 재생기(라이브는 구성 시차 스위치를 켰을 때)가 선 동안만 적는다(설계 r7 3.3절) */
   const startOfRef = useRef<StartOf>(noVideoStart);
   /** 시각 환산에 넘길 목록 조각 — 판 2 는 영상 축 조각이다(설계 r7 3.5절). 목록을 모르면 빈 배열 */
   const fragmentsOf = useCallback(
@@ -651,9 +651,11 @@ export function useHlsPlayback(
         // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
         const hls = new HlsCtor(startAtMs === null ? base : { ...base, autoStartLoad: false });
         hlsRef.current = hls;
-        // 기록의 처리기는 hls.destroy() 가 함께 뗀다(removeAllListeners). 라이브는 c 스위치 전이라 달지 않는다
+        // 기록의 처리기는 hls.destroy() 가 함께 뗀다(removeAllListeners). 라이브는 구성 시차 스위치를 켰을 때만 단다(5.4절)
         startOfRef.current =
-          kind === 'live' ? noVideoStart : trackVideoStarts(hls, HlsCtor.Events).startOf;
+          kind === 'live' && !LIVE_PTS_CORRECTION
+            ? noVideoStart
+            : trackVideoStarts(hls, HlsCtor.Events).startOf;
         armStart(hls, HlsCtor.Events, { kind, startAtMs, strictStart }, load, () => {
           if (disposed) return;
           hls.destroy();

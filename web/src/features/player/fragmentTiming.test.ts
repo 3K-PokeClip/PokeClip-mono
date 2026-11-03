@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { mediaTimeAt, programDateAt, type DatedFragment } from './dvrWindow';
-import { TIMING_TAG, datedFragments, type HlsFragmentLike, type StartOf } from './fragmentTiming';
+import {
+  LIVE_PTS_CORRECTION,
+  TIMING_TAG,
+  datedFragments,
+  datedFragmentsWith,
+  type HlsFragmentLike,
+  type StartOf,
+} from './fragmentTiming';
 import { loadedList } from './playbackEdge';
 
 // hls.js 조각 → 환산용 조각(설계 r7 3.2 · 10절 c4 · r6 4.3 표 · 5.1 cx-5 반례). 판 2 조각은 영상 축(start = v_k ·
@@ -116,7 +123,7 @@ describe('datedFragments — 판 2 해체된 조각은 영상 축(v_k · 원래 
     ]);
   });
 
-  it('라이브는 이 커밋에서 지금 식이다 — 판 태그 · v_k 가 있어도 쓰지 않는다(스위치는 c5)', () => {
+  it('라이브는 지금 식이다(구성 시차 스위치 기본 OFF) — 판 태그 · v_k 가 있어도 쓰지 않는다', () => {
     const fragments = [frag({ sn: 0, start: 0, duration: 4.3, inf: 4, pdt: T, timing: '2' })];
     expect(timing(datedFragments(fragments, 'live', startsFrom({ 0: 0.2 })))).toEqual([
       { start: 0, duration: 4.3, programDateTime: T, gap: undefined, videoAxis: undefined },
@@ -255,5 +262,99 @@ describe('datedFragments — 겹침(B8) 목록', () => {
       targetDurationS: 4,
       headSpanMs: 12_000,
     });
+  });
+});
+
+/** sn → [v_k, c_k](초). 표에 없으면 그 조각을 아직 해체하지 않았다 */
+function startsWithCto(table: Record<number, [number, number]>): StartOf {
+  return (f) => {
+    const entry = typeof f.sn === 'number' ? table[f.sn] : undefined;
+    return entry === undefined ? null : { videoStartS: entry[0], firstCtoS: entry[1] };
+  };
+}
+
+describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4 · 10절 c5)', () => {
+  // 라이브 목록(MediaMTX)은 판 태그가 없다. hls.js 의 frag.start 는 v_k(DTS 자리 — T-3b)다
+  function liveFragments(cc: (sn: number) => number = () => 0) {
+    return [0, 1, 2, 3, 4].map((sn) =>
+      frag({ sn, cc: cc(sn), start: sn * 2, duration: 2, inf: 2, pdt: T + sn * 2_000 }),
+    );
+  }
+  const C = 1 / 15;
+
+  it('기본값은 OFF 다(지금 prod 동작)', () => {
+    expect(LIVE_PTS_CORRECTION).toBe(false);
+  });
+
+  it('OFF 는 받은 배열 그대로다 — v_k · c 를 알아도(지금 식과 바이트 단위로 같음)', () => {
+    const fragments = liveFragments();
+    const starts = startsWithCto({ 0: [0, C], 1: [2, C] });
+    expect(datedFragmentsWith(fragments, 'live', starts, false)).toBe(fragments);
+    expect(datedFragments(fragments, 'live', starts)).toBe(fragments);
+  });
+
+  it('ON: 해체된 조각은 start = v_k + c_k 다 · 길이 · 시각 · 틈 표시는 hls.js 조각 그대로', () => {
+    const fragments = [
+      frag({ sn: 0, start: 0.001, duration: 2.1, inf: 2, pdt: T }),
+      frag({ sn: 1, start: 2.1, duration: 1.9, inf: 2, pdt: T + 2_000, gap: true }),
+    ];
+    const starts = startsWithCto({ 0: [0, C], 1: [2, 0.1] });
+    expect(timing(datedFragmentsWith(fragments, 'live', starts, true))).toEqual([
+      { start: C, duration: 2.1, programDateTime: T, gap: undefined, videoAxis: undefined },
+      { start: 2.1, duration: 1.9, programDateTime: T + 2_000, gap: true, videoAxis: undefined },
+    ]);
+  });
+
+  it('ON: 재생 위치 t 의 시각은 PDT + (t − (v_k + c_k)) 다(5.1 표)', () => {
+    const fragments = datedFragmentsWith(
+      liveFragments(),
+      'live',
+      startsWithCto({ 1: [2, C] }),
+      true,
+    );
+    expect(programDateAt(fragments, 2.5)).toBeCloseTo(T + 2_000 + (0.5 - C) * 1000, 6);
+    expect(mediaTimeAt(fragments, T + 2_000)).toBeCloseTo(2 + C, 9);
+  });
+
+  it('ON: 해체 전 조각은 같은 cc 의 가장 가까운 해체 조각 c 를 frag.start 에 더한다 — 거리가 같으면 앞 조각', () => {
+    const starts = startsWithCto({ 1: [2, 0.05], 3: [6, 0.1] });
+    const out = datedFragmentsWith(liveFragments(), 'live', starts, true);
+    expect(out.map((f) => f.start)).toEqual([
+      expect.closeTo(0.05, 9),
+      expect.closeTo(2.05, 9),
+      expect.closeTo(4.05, 9),
+      expect.closeTo(6.1, 9),
+      expect.closeTo(8.1, 9),
+    ]);
+  });
+
+  it('ON: 같은 cc 에 해체 조각이 없으면 frag.start 다 — cc 를 넘어 빌리지 않는다', () => {
+    // 0 · 1 은 cc 0(해체 없음), 2 부터 cc 1(3 해체)
+    const fragments = liveFragments((sn) => (sn < 2 ? 0 : 1));
+    const out = datedFragmentsWith(fragments, 'live', startsWithCto({ 3: [6, 0.1] }), true);
+    expect(out.map((f) => f.start)).toEqual([
+      0,
+      2,
+      expect.closeTo(4.1, 9),
+      expect.closeTo(6.1, 9),
+      expect.closeTo(8.1, 9),
+    ]);
+  });
+
+  it('ON: 아무 조각도 해체하지 않은 첫 목록은 hls.js 값 그대로다(시작 자리 몫 — 5.3 표)', () => {
+    const fragments = liveFragments();
+    expect(timing(datedFragmentsWith(fragments, 'live', NO_STARTS, true))).toEqual(
+      timing(fragments),
+    );
+  });
+
+  it('ON 이어도 되감기 · 다시보기는 판 2 갈래 그대로다 — c 를 더하지 않는다', () => {
+    const fragments = [frag({ sn: 0, start: 0, duration: 4.3, inf: 4, pdt: T, timing: '2' })];
+    const starts = startsWithCto({ 0: [0.2, C] });
+    for (const kind of ['rewind', 'vod'] as const) {
+      expect(timing(datedFragmentsWith(fragments, kind, starts, true))).toEqual([
+        { start: 0.2, duration: 4, programDateTime: T, gap: undefined, videoAxis: true },
+      ]);
+    }
   });
 });

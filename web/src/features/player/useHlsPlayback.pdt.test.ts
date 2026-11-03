@@ -30,6 +30,16 @@ const fake = vi.hoisted(() => ({
   tracked: [] as unknown[],
   /** 순번 → v_k(초) */
   videoStarts: new Map<number, number>(),
+  /** 라이브 구성 시차 스위치(LIVE_PTS_CORRECTION) — 시험이 두 값을 주입한다 */
+  liveCorrection: false,
+}));
+
+// 상수 하나만 갈아 끼운다. 환산(datedFragments)은 진짜 모듈의 기본값(OFF) 그대로다 — 재생기 배선만 본다
+vi.mock('./fragmentTiming', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./fragmentTiming')>()),
+  get LIVE_PTS_CORRECTION() {
+    return fake.liveCorrection;
+  },
 }));
 
 // 이 시험이 쏘는 사건은 LEVEL_UPDATED 하나다. 다른 처리기는 이름 없이 달려 돌지 않는다
@@ -133,6 +143,7 @@ beforeEach(() => {
   fake.instances.length = 0;
   fake.tracked.length = 0;
   fake.videoStarts.clear();
+  fake.liveCorrection = false;
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
   vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(false);
   vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(4);
@@ -158,9 +169,15 @@ describe('영상 시작 기록을 다는 재생기', () => {
     expect(fake.tracked).toEqual([lastHls()]);
   });
 
-  it('라이브 재생기에는 달지 않는다(라이브 구성 시차 스위치는 c5)', async () => {
+  it('라이브 구성 시차 스위치가 꺼져 있으면(기본) 라이브 재생기에는 달지 않는다', async () => {
     await mount('live');
     expect(fake.tracked).toEqual([]);
+  });
+
+  it('라이브 구성 시차 스위치가 켜져 있으면 라이브 재생기에도 단다', async () => {
+    fake.liveCorrection = true;
+    await mount('live');
+    expect(fake.tracked).toEqual([lastHls()]);
   });
 });
 
