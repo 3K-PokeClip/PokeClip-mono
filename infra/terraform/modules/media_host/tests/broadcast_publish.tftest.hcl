@@ -417,7 +417,7 @@ run "rejects_empty_publish_stream" {
 
 # --- T-M 모드 조합 ---
 
-# 옛 모드는 4C resolve 설정이 없어 사이드카가 발행을 끈다(no_resolver) — 목록을
+# 옛 모드는 발행 env 두 줄을 렌더하지 않아 사이드카가 발행을 끈다(no_topic) — 목록을
 # 채운 채 apply 해야 알지 않게 plan 에서 막는다.
 run "rejects_publish_streams_in_legacy_mode" {
   command = plan

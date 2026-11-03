@@ -502,10 +502,10 @@ variable "lifecycle_publish_streams" {
     error_message = "lifecycle_publish_streams 의 항목은 \"*\" 또는 26자 Crockford base32 대문자(I · L · O · U 없음)여야 한다."
   }
 
-  # 옛 모드는 4C resolve 설정이 없어 사이드카가 발행을 끈다(lifecycle_disabled
-  # reason=no_resolver) — apply 뒤에야 알지 않게 plan 에서 막는다.
+  # 옛 모드는 발행 env 두 줄을 렌더하지 않아 사이드카가 발행을 끈다
+  # (lifecycle_disabled reason=no_topic) — apply 뒤에야 알지 않게 plan 에서 막는다.
   validation {
     condition     = var.ingest_auth_image != "" || length(var.lifecycle_publish_streams) == 0
-    error_message = "옛 모드(ingest_auth_image 빈 값)에서는 lifecycle_publish_streams 를 채우지 않는다 — 사이드카가 4C resolve 없이 발행을 끈다."
+    error_message = "옛 모드(ingest_auth_image 빈 값)에서는 lifecycle_publish_streams 를 채우지 않는다 — 발행 env 가 렌더되지 않아 사이드카가 발행을 끈다."
   }
 }
