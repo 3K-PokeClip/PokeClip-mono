@@ -20,20 +20,31 @@ import {
 
 /**
  * 계획 3-6 의 「새로 서는 재생기는 hls.js 를 만들지 않는다」 — 제어면을 다시 읽는
- * 되감기(recheck) · 막힌 끝남 대기
+ * 되감기(recheck) · 막힌 끝남 대기 · 마지막 확인 중인 끝남 대기(finalCheck)
  */
 function startHeldBySpec(state: PlaybackSessionState): boolean {
   const { phase } = state;
   if (phase.kind === 'rewind') return phase.recheck === true;
-  return phase.kind === 'ending-wait' && phase.blocked === true;
+  return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
 }
 
-/** 국면 불변식(계획 3-1) — 막힌 끝남 대기는 녹화로 정해지지 않았고 되감기 재생기의 것이다 */
+/**
+ * 국면 불변식(계획 3-1) — 막힌 끝남 대기는 녹화로 정해지지 않았고, 마지막 확인은 녹화로
+ * 정한 뒤에만 서며 막힘과 겹치지 않는다. 둘 다 되감기 재생기의 것이다
+ */
 export function assertPhaseInvariants(state: PlaybackSessionState): void {
   const { phase } = state;
-  if (phase.kind !== 'ending-wait' || phase.blocked !== true) return;
-  expect(phase.recordOnEnd, 'blocked ⇒ ¬recordOnEnd').toBe(false);
-  expect(state.source.kind, 'blocked ⇒ source.kind rewind').toBe('rewind');
+  if (phase.kind !== 'ending-wait') return;
+  const blocked = phase.blocked === true;
+  const finalCheck = phase.finalCheck === true;
+  if (finalCheck) {
+    expect(phase.recordOnEnd, 'finalCheck ⇒ recordOnEnd').toBe(true);
+    expect(blocked, 'finalCheck ⇒ ¬blocked').toBe(false);
+  }
+  if (blocked) expect(phase.recordOnEnd, 'blocked ⇒ ¬recordOnEnd').toBe(false);
+  if (blocked || finalCheck) {
+    expect(state.source.kind, 'blocked ∨ finalCheck ⇒ source.kind rewind').toBe('rewind');
+  }
 }
 
 /**

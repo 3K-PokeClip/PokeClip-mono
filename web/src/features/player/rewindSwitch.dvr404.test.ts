@@ -211,11 +211,12 @@ describe('끝남 대기의 되감기 조각 404 → blocked(계획 3-2)', () => 
     expect(late.state.phase).toEqual(s.phase);
   });
 
-  it('녹화로 정한 끝남 대기(20분 시한)의 404 는 막힘을 세우지 않는다(blocked ⇒ ¬recordOnEnd)', () => {
+  it('녹화로 정한 끝남 대기(20분 시한)의 404 는 막힘이 아니라 마지막 확인이다(blocked ⇒ ¬recordOnEnd · c4)', () => {
     const s = feed(endedByEndlist(), [TICK], R + ENDING_WAIT_MS).state;
     expect(s.phase).toMatchObject({ recordOnEnd: true });
     const late = feed(s, [gone(s)], R + ENDING_WAIT_MS);
     expect(late.state.phase).not.toMatchObject({ blocked: true });
+    expect(late.state.phase).toMatchObject({ recordOnEnd: true, finalCheck: true });
   });
 
   it('막힌 동안 시크는 무시한다 — 복구는 세션 효과만(P15)', () => {

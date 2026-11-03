@@ -39,21 +39,23 @@ type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 
 /**
  * 새로 서는 재생기(세대가 올라 다시 서는 것 · 리마운트 포함)를 세우지 않는가 — 제어면을
- * 다시 읽는 되감기(recheck) · 막힌 끝남 대기(POK-528 U2). 화면에 그릴 것이 아니라 재생기
- * 수명 지시다. 국면 데이터에서 뽑으므로 세대가 오를 때마다 같은 값을 다시 읽는다
+ * 다시 읽는 되감기(recheck) · 막힌 끝남 대기 · 마지막 확인 중인 끝남 대기(POK-528 U2).
+ * 화면에 그릴 것이 아니라 재생기 수명 지시다. 국면 데이터에서 뽑으므로 세대가 오를 때마다
+ * 같은 값을 다시 읽는다
  */
 export function isPlayerStartHeld(session: PlaybackSessionState): boolean {
   const { phase } = session;
   if (phase.kind === 'rewind') return phase.recheck === true;
-  return phase.kind === 'ending-wait' && phase.blocked === true;
+  return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
 }
 
 /**
- * 끝남 대기의 덮개 — 막혔으면 끝까지 볼 수 없음이 정해졌으니 재접속 대기 안이어도 「다시보기
- * 준비 중」(POK-528 (나)-5), 끝에 닿았으면 재접속 대기 동안 「확인 중」 · 그 뒤 「준비 중」
+ * 끝남 대기의 덮개 — 막혔거나 마지막 확인 중이면 끝까지 볼 수 없음이 정해졌으니 재접속 대기
+ * 안이어도 「다시보기 준비 중」(POK-528 (나)-5 · W6), 끝에 닿았으면 재접속 대기 동안 「확인 중」 ·
+ * 그 뒤 「준비 중」
  */
 function endingCover(phase: EndingPhase, waiting: boolean): SessionView['cover'] {
-  if (phase.blocked) return 'preparing';
+  if (phase.blocked || phase.finalCheck) return 'preparing';
   if (!phase.atEnd) return null;
   return waiting ? 'checking' : 'preparing';
 }
