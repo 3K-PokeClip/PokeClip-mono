@@ -42,7 +42,7 @@ prod Media 상자[^box]를 띄우는 루트입니다(설계 3-1 의 ⑨). 자원
 | platform | `target_group_arns` · `internal_alb_sg_id` · `nlb_sg_id` · `media_proxy_ports` · `media_health_path` · `service_sg_ids`(`auth`) · `service_ports`(`auth`) |
 | secrets | `cdn_secret_arn` · `test_stream_key_secret_arn` |
 | registry | `repo_urls`(아래 「이미지」) |
-| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
+| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn` · `broadcast_topic_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
 
 출력 하나라도 없으면 plan 이 그 이름으로 실패합니다. 런타임 1단 출력은 O7e
 선행 확인 ② 입니다. platform 의 `service_ports` 는 Media ↔ auth 짝(kty 결정
@@ -94,6 +94,14 @@ tfvars 에 둡니다.
     `ingest_auth_ip_limit` 은 기본 `"on"` 입니다. 응답기 모드
     (`image_digests.ingest_auth` 가 찬 값)에서 4C 주소가 비면 plan 이
     멈춥니다. 둘 다 바꾸면 설정 반영 교체로 들어갑니다.
+*   `lifecycle_publish_streams`(계약9 발행 허용 목록)는 기본 빈 목록(발행
+    꺼짐)입니다. 항목은 26자 Crockford base32 `ingestStreamId` 또는 `*` 이고,
+    응답기 모드에서만 채웁니다 — 옛 모드에서 채우면 plan 이 멈춥니다. 주제
+    ARN 은 런타임 1단 출력 `broadcast_topic_arn` 에서만 오고 tfvars 칸이
+    없습니다. 인스턴스 역할의 `sns:Publish`(그 주제 하나)는 목록과 무관하게
+    늘 있습니다. 켜기 · 넓히기 · 끄기는 설정 반영 교체이고, 순서는
+    [교체 런북](/infra/terraform/runbooks/media-swap.md) 「O8a 당김 교체」를
+    따릅니다.
 
 적용은 O7e 의 1(kty 승인)입니다. 백엔드는 `backend.hcl.example` 을
 `backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를
@@ -152,7 +160,8 @@ platform 대상 그룹이 교체될 수 있습니다(provider 6.68.0 기준 — 
 
 *   이미지 참조 조립(저장소 · 다이제스트 짝 · 빈 응답기), 런타임 · secrets ·
     platform(포트 · 헬스 경로) 출력이 사이드카 env · `media.env` · nginx
-    변수에 닿는지, platform 의 auth SG · 포트가 Media ↔ auth 짝(모듈 시험용
+    변수에 닿는지, 런타임 출력 `broadcast_topic_arn` 이 사이드카 발행 env 에
+    닿고 이 루트에 그 칸이 없는지, platform 의 auth SG · 포트가 Media ↔ auth 짝(모듈 시험용
     출력 `auth_resolve_rules`)에 닿는지, 기본값(janitor 켬 · 제어면 상류 빈
     값), 출력 넷, 다이제스트 꼴 검증을 봅니다.
 *   **시험으로 볼 수 없는 것:** 루트 시험은 하위 모듈 안의 자원을 주소로 볼
