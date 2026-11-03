@@ -293,6 +293,37 @@ function startsWithCto(table: Record<number, [number, number]>): StartOf {
   };
 }
 
+/** 씨앗을 받는 의사 난수(mulberry32) — 무작위 대조 시험이 실행마다 같은 목록을 만든다 */
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 빌리는 c 의 기준 구현 — 조각마다 거리 0 부터 앞 · 뒤 순서로 넓혀 훑어 같은 cc 의 첫 해체 조각 c 를 고른다(거리가 같으면
+ * 앞 조각 · 없으면 null). 제품 구현이 앞 · 뒤 두 번 훑기로 같은 값을 내는지 대조하는 몫이라 시험 파일에만 둔다
+ */
+function referenceNearestCtos(
+  fragments: readonly HlsFragmentLike[],
+  ctos: ReadonlyArray<number | null>,
+): Array<number | null> {
+  return fragments.map((target, i) => {
+    for (let distance = 0; distance < fragments.length; distance += 1) {
+      for (const j of [i - distance, i + distance]) {
+        const cto = ctos[j] ?? null;
+        if (cto !== null && fragments[j]!.cc === target.cc) return cto;
+      }
+    }
+    return null;
+  });
+}
+
 describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4 · 10절 c5)', () => {
   // 라이브 목록(MediaMTX)은 판 태그가 없다. hls.js 의 frag.start 는 v_k(DTS 자리 — T-3b)다
   function liveFragments(cc: (sn: number) => number = () => 0) {
@@ -365,6 +396,52 @@ describe('datedFragmentsWith — 라이브 구성 시차 스위치(설계 r7 5.4
       expect.closeTo(6.1, 9),
       expect.closeTo(8.1, 9),
     ]);
+  });
+
+  it('ON: 사이에 다른 cc 가 끼어도 같은 cc 의 해체 조각 c 를 빌린다 — 더 가까운 다른 cc 해체 조각은 건너뛴다', () => {
+    // cc 0 · 1 · 1 · 0 · 0 — 0 (cc 0) 과 1 (cc 1) 을 해체했다
+    const ccs = [0, 1, 1, 0, 0];
+    const fragments = liveFragments((sn) => ccs[sn]!);
+    const starts = startsWithCto({ 0: [0, 0.05], 1: [2, 0.2] });
+    const out = datedFragmentsWith(fragments, 'live', starts, true);
+    expect(out.map((f) => f.start)).toEqual([
+      expect.closeTo(0.05, 9),
+      expect.closeTo(2.2, 9),
+      expect.closeTo(4.2, 9),
+      expect.closeTo(6.05, 9),
+      expect.closeTo(8.05, 9),
+    ]);
+  });
+
+  it('ON: 무작위 목록 400개에서 해체 전 조각이 빌리는 c 가 조각마다 훑는 기준 구현과 같다', () => {
+    const random = seededRandom(0x5eed);
+    for (let round = 0; round < 400; round += 1) {
+      const count = Math.floor(random() * 40);
+      const ccCount = 1 + Math.floor(random() * 3);
+      const decodedRate = random() * 0.5;
+      const fragments = Array.from({ length: count }, (_, sn) =>
+        frag({
+          sn,
+          cc: Math.floor(random() * ccCount),
+          start: sn * 2,
+          duration: 2,
+          pdt: PDT0 + sn * 2_000,
+        }),
+      );
+      // sn 은 자리와 같다. c 는 조각마다 다른 값이라 어느 조각에서 빌렸는지가 결과에 드러난다
+      const table: Record<number, [number, number]> = {};
+      for (let sn = 0; sn < count; sn += 1) {
+        if (random() < decodedRate) table[sn] = [sn * 2, (sn + 1) / 1000];
+      }
+      const ctos = fragments.map((_, sn) => table[sn]?.[1] ?? null);
+      const expected = referenceNearestCtos(fragments, ctos).map((cto, i) => {
+        const own = table[i];
+        if (own !== undefined) return own[0] + own[1];
+        return cto === null ? fragments[i]!.start : fragments[i]!.start + cto;
+      });
+      const out = datedFragmentsWith(fragments, 'live', startsWithCto(table), true);
+      expect(out.map((f) => f.start)).toEqual(expected);
+    }
   });
 
   it('ON: 아무 조각도 해체하지 않은 첫 목록은 hls.js 값 그대로다(시작 자리 몫 — 5.3 표)', () => {

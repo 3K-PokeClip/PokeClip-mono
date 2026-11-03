@@ -144,23 +144,47 @@ function hasTimingTag(fragments: readonly HlsFragmentLike[]): boolean {
 }
 
 /**
+ * 조각마다 order 순서로 훑어 같은 cc 에서 그쪽으로 가장 가까운 해체 조각(자기 포함)의 자리 — 없으면 null. cc 마다 마지막으로
+ * 본 해체 조각을 두므로 사이에 다른 cc 조각이 끼어도 잇는다
+ */
+function nearestDecodedIndexes(
+  fragments: readonly HlsFragmentLike[],
+  ctos: ReadonlyArray<number | null>,
+  order: readonly number[],
+): Array<number | null> {
+  const nearest: Array<number | null> = fragments.map(() => null);
+  const lastDecodedByCc = new Map<number, number>();
+  for (const i of order) {
+    const cc = fragments[i]!.cc;
+    if ((ctos[i] ?? null) !== null) {
+      lastDecodedByCc.set(cc, i);
+    }
+    nearest[i] = lastDecodedByCc.get(cc) ?? null;
+  }
+  return nearest;
+}
+
+/**
  * 조각마다 같은 cc 에서 가장 가까운 해체 조각의 c(초) — 거리가 같으면 앞 조각이다. 그 cc 를 하나도 해체하지 않았으면 null.
- * c 는 송출기 설정(B 프레임 수)이라 같은 장 안에서는 조각마다 거의 같다(설계 r7 5.4절)
+ * 앞 · 뒤로 한 번씩 훑어 조각 수에 비례하는 시간에 센다(라이브 목록은 수백 조각이고 그릴 때마다 부른다). c 는 송출기
+ * 설정(B 프레임 수)이라 같은 장 안에서는 조각마다 거의 같다(설계 r7 5.4절)
  */
 function nearestCtos(
   fragments: readonly HlsFragmentLike[],
   ctos: ReadonlyArray<number | null>,
 ): Array<number | null> {
-  return fragments.map((frag, i) => {
-    for (let distance = 0; distance < fragments.length; distance += 1) {
-      for (const j of [i - distance, i + distance]) {
-        const cto = ctos[j] ?? null;
-        if (cto !== null && fragments[j]!.cc === frag.cc) {
-          return cto;
-        }
-      }
-    }
-    return null;
+  const forward = fragments.map((_, i) => i);
+  const backward = fragments.map((_, i) => fragments.length - 1 - i);
+  const before = nearestDecodedIndexes(fragments, ctos, forward);
+  const after = nearestDecodedIndexes(fragments, ctos, backward);
+  return fragments.map((_, i) => {
+    const fromBefore = before[i] ?? null;
+    const fromAfter = after[i] ?? null;
+    const nearest =
+      fromBefore !== null && (fromAfter === null || i - fromBefore <= fromAfter - i)
+        ? fromBefore
+        : fromAfter;
+    return nearest === null ? null : (ctos[nearest] ?? null);
   });
 }
 
