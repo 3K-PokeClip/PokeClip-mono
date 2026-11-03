@@ -23,8 +23,9 @@
 #   - mediamtx: compose 갈래 a 가 고른 옛 모드(a) · b 가 고른 응답기 모드(b).
 #   - ingest-auth.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(응답기 갈래의
 #     env_file). 응답기 사례(35 – 46)는 test/lib/render_auth_cases.sh 에 있다.
-#   - 사이드카 계약9 발행 env: 갈래 p1 – p6(응답기 · 옛 모드 × 목록). 사례
-#     (48 – 53)는 test/lib/render_publish_cases.sh 에 있다.
+#   - 사이드카 계약9 발행 env: 갈래 p1 · p2 · p3 · p4 · p6(응답기 · 옛 모드 ×
+#     목록 — p5 는 비밀 0 사례가 갈래 없이 전부를 봐서 없다). 사례(48 – 53)는
+#     test/lib/render_publish_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·

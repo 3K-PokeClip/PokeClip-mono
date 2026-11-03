@@ -6,15 +6,18 @@
 #
 # render_test 의 사이드카 계약9 발행 env 사례(48 – 53). 발행 env 둘
 # (BROADCAST_TOPIC_ARN · LIFECYCLE_PUBLISH_STREAMS)은 응답기 모드이고 허용
-# 목록이 찰 때만 렌더해야 한다 — 옛 모드는 4C resolve 설정이 없어 사이드카가
-# 발행을 끈다(lifecycle_disabled reason=no_resolver · media/README 「계약9
-# 발행」). 목록 값은 늘 따옴표로 렌더해야 한다 — 맨 `*` 은 YAML 별칭이라
-# compose 해석이 실패한다.
+# 목록이 찰 때만 렌더해야 한다 — 옛 모드는 4C resolve 설정이 없어 started 를
+# 낼 수 없다. 두 줄이 없으면 주제가 비어 사이드카가 발행을 끈다
+# (lifecycle_disabled reason=no_topic · media/README 「계약9 발행」). 목록
+# 값은 늘 따옴표로 렌더해야 한다 — 맨 `*` 은 YAML 별칭이라 compose 해석이
+# 실패한다.
 #
 # 갈래(render_vars.json 을 jq 로 고친 사본 — 주제 ARN 은 모두 채운다. env 가
 # 빠지는 이유가 모드 · 목록이어야 한다):
 #   p1 응답기 · 목록 하나   p2 응답기 · 목록 `*`   p3 응답기 · 빈 목록
 #   p4 옛 모드 · 목록 하나   p6 응답기 · 목록 둘
+# p5 는 없다 — 계획의 다섯째 사례(비밀 0 · 사례 52)는 갈래를 따로 두지 않고
+# 위 갈래 전부를 본다. 번호는 계획의 사례 번호(첫째 – 여섯째)를 따른다.
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다.
 

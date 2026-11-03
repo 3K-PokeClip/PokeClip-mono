@@ -10,6 +10,10 @@
 # override_resource 를 더한다(빠지면 apply 가 가짜 자격으로 AWS 를 불러
 # 실패한다).
 #
+# 두 run 의 assert 셋은 일부러 같다 — terraform test 에는 run 끼리 단언이나
+# 자원을 참조하는 식을 나눌 수단이 없다(시험 파일은 locals 블록을 받지
+# 않는다 — 1.16.4 실측). assert 는 run 마다 그 run 의 상태에서 계산한다.
+#
 # 계정 ID · ARN · id 는 모두 가짜 값이다.
 
 provider "aws" {

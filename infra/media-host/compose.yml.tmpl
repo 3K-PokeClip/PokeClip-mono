@@ -23,8 +23,10 @@
 #                        주제 ARN(문자열)과 허용 목록(ingestStreamId 목록, "*" 는
 #                        전부). 응답기 모드이고 목록이 찰 때만 사이드카 env 두
 #                        줄로 렌더한다 — 옛 모드는 4C resolve 설정이 없어
+#                        started 를 낼 수 없으므로 두 줄을 렌더하지 않는다.
+#                        두 줄이 없으면(옛 모드 · 빈 목록) 주제가 비어
 #                        사이드카가 발행을 끈다(lifecycle_disabled
-#                        reason=no_resolver). 목록은 쉼표로 이은 한 값이고 늘
+#                        reason=no_topic). 목록은 쉼표로 이은 한 값이고 늘
 #                        따옴표 친다(맨 * 는 YAML 별칭이라 compose 해석이 실패).
 #   janitor_enabled      bool. 참이면 janitor(녹화 정리)를 렌더한다 — 이미지는
 #                        sidecar_image 이고 entrypoint 로 janitor 명령을 고른다.

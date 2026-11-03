@@ -146,7 +146,19 @@ run "accepts_hyphenated_topic_name" {
   }
 }
 
-# --- T-A 주제 ARN — 거부하는 값 여덟(콜론 칸 부족 포함) ---
+# --- T-A 주제 ARN — 거부하는 값 아홉(접두 · 콜론 칸 부족 포함) ---
+
+# arn.Parse 는 첫 칸이 「arn」 이 아니면 거부한다. 나머지 칸은 모두 맞는 값이라
+# 첫 칸 검사만 이 값을 거부한다.
+run "rejects_topic_arn_with_wrong_prefix" {
+  command = plan
+
+  variables {
+    broadcast_topic_arn = "xrn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  }
+
+  expect_failures = [var.broadcast_topic_arn]
+}
 
 run "rejects_topic_arn_of_other_service" {
   command = plan
