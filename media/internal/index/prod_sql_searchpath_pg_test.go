@@ -184,7 +184,9 @@ func TestProdSQLDoesNotCallSearchPathTraps(t *testing.T) {
 		failedChecks(t, err, preflightFailedPrefix)
 	}
 	env.mustApplyAll(t)
-	env.mustApplyRoundFrozen(t)
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Errorf("덫을 심은 DB 의 %s 적용 = %v, want nil", roundFrozenFile, err)
+	}
 	if _, err := execScript(t, env.master, expandProdSQL(t, "50_advisory_probe.sql")); err != nil &&
 		!isSQLState(err, pgInsufficientPrivilege) {
 		t.Errorf("50_advisory_probe.sql(대역) 오류 = %v, want nil 또는 42501", err)

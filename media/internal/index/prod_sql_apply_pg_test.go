@@ -422,16 +422,19 @@ func TestProdSQLAppliesAsNonSuperuserMasterAndConverges(t *testing.T) {
 	env.mustApplyAll(t)
 }
 
-// mustApplyRoundFrozen 은 60_round_frozen.sql 을 대역으로 적용하고 ROUND FROZEN OK 를 냈는지 본다.
-func (e *prodSQLEnv) mustApplyRoundFrozen(t *testing.T) {
+// applyRoundFrozen 은 60_round_frozen.sql 을 대역으로 적용한다. 적용 오류가 나거나 ROUND FROZEN OK 행이 없으면 그
+// 까닭을 오류로 돌려준다 — 60 은 시험 대상이므로 실패 판정은 부르는 Test 가 한다. 파일 읽기 · 연결 상태 같은 환경
+// 실패만 helper 안에서 멈춘다.
+func (e *prodSQLEnv) applyRoundFrozen(t *testing.T) error {
 	t.Helper()
 	results, err := applyProdSQL(t, e.master, expandProdSQL(t, roundFrozenFile))
 	if err != nil {
-		t.Fatalf("%s 오류 = %v, want nil", roundFrozenFile, err)
+		return err
 	}
 	if !hasRow(results, roundFrozenOK) {
-		t.Fatalf("%s 결과에 %q 행이 없다", roundFrozenFile, roundFrozenOK)
+		return fmt.Errorf("결과에 %q 행이 없다", roundFrozenOK)
 	}
+	return nil
 }
 
 // roundFrozenTriggerOIDOn 은 conn 의 DB 에서 회차 불변 트리거의 oid 다(없으면 0).
@@ -456,10 +459,14 @@ func TestProdSQLRoundFrozenAppliesAsSeparateStep(t *testing.T) {
 		t.Fatalf("10 ~ 40 뒤 회차 불변 트리거 oid = %d, want 없음 — 운영 SQL 1 이 트리거를 깔면 A 복귀 구간에 4D 가 유실된다(K5)", oid)
 	}
 
-	env.mustApplyRoundFrozen(t)
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Fatalf("%s 첫 적용 = %v, want nil", roundFrozenFile, err)
+	}
 	first := roundFrozenTriggerOIDOn(t, env.super)
 	env.mustVerify(t)
-	env.mustApplyRoundFrozen(t)
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Fatalf("%s 재적용 = %v, want nil", roundFrozenFile, err)
+	}
 	second := roundFrozenTriggerOIDOn(t, env.super)
 
 	if first == 0 {
@@ -504,7 +511,9 @@ INSERT INTO stream_sessions (session_id, stream_id, started_at, state) VALUES ('
 	if oid := roundFrozenTriggerOIDOn(t, env.super); oid != 0 {
 		t.Errorf("잠금 대기로 끊긴 뒤 회차 불변 트리거 oid = %d, want 없음(한 트랜잭션 롤백)", oid)
 	}
-	env.mustApplyRoundFrozen(t)
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Fatalf("쓰기가 끝난 뒤 %s 재적용 = %v, want nil", roundFrozenFile, err)
+	}
 	if oid := roundFrozenTriggerOIDOn(t, env.super); oid == 0 {
 		t.Error("쓰기가 끝난 뒤 다시 적용해도 회차 불변 트리거가 없다")
 	}
@@ -576,7 +585,9 @@ func TestProdSQLRoundFrozenCatchesDefectiveTrigger(t *testing.T) {
 			}
 		})
 	}
-	env.mustApplyRoundFrozen(t)
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Errorf("결함 트리거 사례를 모두 되돌린 뒤 %s 적용 = %v, want nil", roundFrozenFile, err)
+	}
 }
 
 // runtime1aRolesFile 은 1단-가 판 10_roles.sql 의 바이트 사본이다(f1fc0da1 · 9e008743 의 같은 경로). prodSQLDir 의
