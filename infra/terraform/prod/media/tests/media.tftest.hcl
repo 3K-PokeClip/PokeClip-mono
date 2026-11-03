@@ -293,6 +293,42 @@ run "passes_ingest_auth_settings_in_responder_mode" {
   }
 }
 
+# --- 새 꼴 쓰기 스위치(sidecar.env — 결정 9: 모듈 기본 끔 · prod tfvars 만 켬) ---
+
+run "defaults_playback_round_keys_false" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.playback_round_keys == false &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+      ] == ["PLAYBACK_ROUND_KEYS=false\n"]
+    )
+    error_message = "기본값이 sidecar.env 한 줄 PLAYBACK_ROUND_KEYS=false 가 아니다."
+  }
+}
+
+run "passes_playback_round_keys_true" {
+  command = plan
+
+  variables {
+    playback_round_keys = true
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.playback_round_keys == true &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+      ] == ["PLAYBACK_ROUND_KEYS=true\n"]
+    )
+    error_message = "playback_round_keys = true 가 모듈(sidecar.env)로 그대로 가지 않는다."
+  }
+}
+
 # 포트 · 헬스 경로의 정본은 platform 이다(대상 그룹과 같은 값 — CONTRACT-runtime.md).
 run "reads_proxy_ports_and_health_path_from_platform" {
   command = plan

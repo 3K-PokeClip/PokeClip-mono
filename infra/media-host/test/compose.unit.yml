@@ -18,6 +18,9 @@
 #   PCBENCH_HEALTH_PORT · PCBENCH_ECHO_ADMIN_PORT · PCBENCH_SIDECAR_EXIT_DELAY ·
 #   RUNTIME_DIR(유닛 drop-in — start-media.sh 가 렌더하는 자리).
 #
+# 이 파일 옆 sidecar.env(상자 스위치 파일 · 끔)는 start-media.sh 의 시작 점검이
+# 본다 — 에코 사이드카는 읽지 않아 env_file 은 두지 않는다.
+#
 # 실험 식별: 프로젝트 pcbench-edge-proxy · 라벨 com.pokeclip.bench=edge-proxy(컨테이너 ·
 # 망 · 볼륨). 호스트 게시는 127.0.0.1 의 헬스 포트 하나다.
 name: pcbench-edge-proxy

@@ -111,6 +111,13 @@ variable "ingest_auth_ip_limit" {
   default     = "on"
 }
 
+variable "playback_round_keys" {
+  description = "새 꼴 쓰기 스위치(sidecar.env 의 PLAYBACK_ROUND_KEYS). 첫 부팅에 한 번 쓰이고(user_data 는 ignore_changes) 그 뒤의 정본은 상자 안 파일이라, 바꿔도 떠 있는 상자는 그대로이고 다음 상자부터 그 값으로 뜬다. 기본 끔 — POK-525 교체 뒤 prod 값은 true(결정 9)."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "docker_version" {
   description = "AL2023 arm64 저장소의 docker 패키지 판."
   type        = string

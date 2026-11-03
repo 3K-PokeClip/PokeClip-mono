@@ -460,3 +460,10 @@ variable "ingest_auth_ip_limit" {
     error_message = "ingest_auth_ip_limit 은 \"on\" 또는 \"off\" 여야 한다."
   }
 }
+
+variable "playback_round_keys" {
+  description = "새 꼴 쓰기 스위치(sidecar.env 의 PLAYBACK_ROUND_KEYS — 두 모드 공통). user_data 가 첫 부팅에 한 번 쓰고, 그 뒤의 정본은 상자 안 파일이다. 기본 끔(결정 9 — 켬은 prod tfvars 의 몫)."
+  type        = bool
+  default     = false
+  nullable    = false
+}

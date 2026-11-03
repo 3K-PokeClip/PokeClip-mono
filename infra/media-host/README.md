@@ -33,6 +33,7 @@ compose 로 한 묶음으로 돌리고, systemd 유닛 하나가 그 묶음 전�
 | `bin/lib/` 다섯 — `ops.sh` · `mtx_paths.sh` · `deny_tokens.sh` · `docker_config.sh` · `render_files.sh` | `/opt/pokeclip-media/bin/lib/` | 위 스크립트가 source — 시작 스크립트는 뒤 셋, 운영 스크립트는 `ops.sh`(paths 둘은 `mtx_paths.sh` 도, 거부 목록 동기화는 `deny_tokens.sh` 도) |
 | `compose.yml.tmpl` | `/etc/pokeclip-media/compose.yml`(렌더본) | `start-media.sh` · `stop-media.sh` |
 | `ingest-auth.env.tmpl` | `/etc/pokeclip-media/ingest-auth.env`(렌더본 · `root:root 0644` · 두 모드 공통) | 응답기 서비스 `env_file` · `ingest-auth-ip-limit.sh`(바꿔 씀) · 시작 스크립트(응답기 모드에서 꼴 점검) |
+| `sidecar.env.tmpl` | `/etc/pokeclip-media/sidecar.env`(렌더본 · `root:root 0644` · 두 모드 공통 · 첫 부팅에만 씀 — 그 뒤의 정본은 이 파일) | 사이드카 서비스 `env_file`(새 꼴 쓰기 스위치 `PLAYBACK_ROUND_KEYS`) · 시작 스크립트(두 모드 모두 꼴 점검) |
 | `nginx/nginx.conf.tmpl` | `/etc/pokeclip-media/nginx.conf`(렌더본) | compose 가 nginx 에 읽기 전용 마운트(원본이 없으면 만들지 않음: `create_host_path: false`, nginx 기동만 실패) |
 | `mediamtx.yml.tmpl` | `/etc/pokeclip-media/mediamtx.yml.tmpl`(저장소 파일 그대로 — 두 모드 블록 · 토큰이 든 원본, 렌더하지 않는다) | `start-media.sh` 가 기동마다 모드 블록을 고르고 비밀을 채움 |
 | (M9 이 씀) | `/etc/pokeclip-media/media.env` | 유닛 `EnvironmentFile` · 운영 확인 스크립트. 응답기 모드 키 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM` 은 응답기 모드에서만 읽는다 |
@@ -46,8 +47,8 @@ compose 로 한 묶음으로 돌리고, systemd 유닛 하나가 그 묶음 전�
 | `images.json` | 설치하지 않음 | 시험 · O7c 미러링 |
 | `test/` | 설치하지 않음 | 로컬 · CI 시험 |
 
-세 템플릿(`compose.yml.tmpl` · `nginx/nginx.conf.tmpl` · `ingest-auth.env.tmpl`)
-은 Terraform `templatefile()` 문법이다. M9 user_data 가 렌더하고, 시험
+네 템플릿(`compose.yml.tmpl` · `nginx/nginx.conf.tmpl` · `ingest-auth.env.tmpl` ·
+`sidecar.env.tmpl`)은 Terraform `templatefile()` 문법이다. M9 user_data 가 렌더하고, 시험
 (`test/lib/render.sh`)도 같은 함수를 부른다. `mediamtx.yml.tmpl` 은
 `templatefile()` 템플릿이 아니다 — 설치 묶음이 렌더 없이 그대로 깔고, 시작
 스크립트가 모드 블록을 고른 뒤 토큰을 채운다. 그래서 이 파일에는 달러 · 퍼센트
@@ -115,6 +116,14 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
     기본값이고, `paths: all_others:` 가 빠지면 모든 송출이 거부된다.
 *   **송출 인증 변수 셋**(`ingest_auth_image` · `stream_key_resolve_url` ·
     `ingest_auth_ip_limit`)은 아래 「송출 인증 두 모드」 절이 정본이다.
+*   **`playback_round_keys`**(`sidecar.env.tmpl` 변수, bool · 모듈 기본
+    `false`): 새 꼴 쓰기 스위치. `sidecar.env` 는 정확히 한 줄
+    `PLAYBACK_ROUND_KEYS=true|false` 이고, 사이드카가 `env_file`(required)로
+    받는다. compose `environment:` 에는 같은 키를 두지 않는다 — 둘이면
+    environment 가 이겨 파일을 바꿔도 반영되지 않는다. 파일은 첫 부팅에 한 번
+    쓰이고 그 뒤의 정본은 상자 안 파일이라 유닛 재시작 · 재부팅에도 남는다.
+    바꾼 값은 사이드카를 재생성해야 반영된다(env_file 은 만들 때만 읽힌다).
+    끔이면 회차가 있어도 옛 꼴 키, 켬이면 회차 있는 세션에 새 꼴 키를 쓴다.
 
 ## 송출 인증 두 모드
 
@@ -395,6 +404,11 @@ nginx 요청 줄 · 서비스 진단이 섞여 있고, 비밀이 잘못 찍혔�
     (`docker-credential-ecr-login`) · `${DOCKER_CONFIG}/config.json` 의
     `credHelpers` 에 ECR 호스트. 하나라도 실패하면 `MEDIA PREREQ FAIL <항목>`
     으로 끝낸다.
+1.  compose 파일 옆 `sidecar.env` 가 링크 아닌 일반 파일이고 정확히
+    `PLAYBACK_ROUND_KEYS=true` 또는 `=false` 한 줄인지 본다(두 모드 공통 —
+    `MEDIA START BLOCKED: sidecar settings unavailable`). 이 파일이 없으면
+    compose 의 `required` env_file 때문에 판정 줄 없이 재시작만 되풀이되기
+    때문이다. 비밀을 읽기 전에 본다.
 1.  CDN 비밀(MediaMTX `hlsCDNSecret`)을 Secrets Manager 에서 읽는다. argv 에는
     ARN 만 오른다. 실패 · 빈 값 · 허용 글자(`[A-Za-z0-9._+=-]`) 밖이면
     `MEDIA START BLOCKED: CDN secret unavailable`.
@@ -497,6 +511,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | `start-media.sh` | `MEDIA PREREQ OK\|FAIL compose-version` | Compose 판 일치 여부 |
 | | `MEDIA PREREQ OK\|FAIL ecr-credential-helper` | 자격 도우미가 PATH 에 있는지 |
 | | `MEDIA PREREQ OK\|FAIL docker-config <경로>` | 그 `config.json` 의 `credHelpers` 에 ECR 호스트 |
+| | `MEDIA START BLOCKED: sidecar settings unavailable` | 두 모드 — `sidecar.env` 없음 · 링크 · 일반 파일 아님 · `PLAYBACK_ROUND_KEYS=true\|false` 한 줄이 아님 |
 | | `MEDIA START BLOCKED: CDN secret unavailable` | CDN 비밀을 못 읽음 · 빈 값 · 허용 글자 밖 |
 | | `MEDIA START BLOCKED: MTX API credential unavailable` | API 비밀번호 생성 실패 |
 | | `MEDIA START BLOCKED: ingest-auth mode mismatch` | compose 렌더본의 응답기 서비스 키 줄로 모드를 정할 수 없음(`  ingest-auth:` 2 이상 · 같은 키를 뒤 공백 · 같은 줄 값으로 쓴 줄) |
@@ -1110,7 +1125,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 
 | 시험 | 보는 것 | 도는 곳 |
 |---|---|---|
-| `test/render_test.sh` | 네 템플릿 렌더 단언(두 모드 — 옛 갈래는 골든 대조) · `docker compose config -q` · 시험 compose 와의 드리프트(bind 원본 자동 생성 여부 포함) · 렌더를 세는 사례가 읽기 실패를 0 건으로 읽지 않는지(사례 29 — 가짜 grep · awk 로 정적) | terraform · docker compose(컨테이너 안 띄움) |
+| `test/render_test.sh` | 다섯 템플릿 렌더 단언(두 모드 — 옛 갈래는 골든 대조) · `docker compose config -q` · 시험 compose 와의 드리프트(bind 원본 자동 생성 여부 포함) · 렌더를 세는 사례가 읽기 실패를 0 건으로 읽지 않는지(사례 29 — 가짜 grep · awk 로 정적) | terraform · docker compose(컨테이너 안 띄움) |
 | `test/start_test.sh` | 시작 · 정지 스크립트(가짜 docker · chown · aws). 사례 41 = 우회 문자열 검사가 grep 읽기 실패를 0 건으로 읽지 않는지 | 어디서나 |
 | `test/proxy_contract.sh` | 앞단 프록시 계약 사례 1–17 · 1b(14 는 판정 아닌 기록) | terraform · docker(에코 상류 `test/echo` 빌드) |
 | `test/unit_restart_test.sh` | 유닛 재기동 사례 1–23(15–17 = 크래시 경로 · 19 = 기동 중 정지 · 20 · 21 = 저널 · 렌더 자리 건수 도구가 조회 실패를 0 건으로 바꾸지 않는지 — 가짜 sudo 로 정적 · 22 · 23 = 응답기 모드 D8 과 그 양성 대조) | 1–3 · 20 · 21 은 어디서나, 4–19 · 22 · 23 은 리눅스 · systemd · sudo(CI 잡 media-host-systemd 3회). **13–17 은 호스트를 흔든다**(docker 엔진 재시작 · dockerd kill -9 · SIGKILL) — CI(`GITHUB_ACTIONS=true`) · 일회용 상자(`PCBENCH_ALLOW_HOST_DISRUPTION=1`)가 아니면 거부한다. 개발 머신에서 돌리지 않는다 |
@@ -1140,7 +1155,9 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
     렌더를 `docker compose config --no-normalize` 의 JSON 으로 받아 `jq -S` 로
     정렬한 것이다(사례 43). 이 출력은 compose 판에 기대므로 판 고정(5.5.0)을
     올리면 골든도 다시 만든다. 생성 스크립트는 M15 c4 실험 기록의
-    `make-golden.sh` 다.
+    `make-golden.sh` 다. 사이드카 env 의 `CONTROL_LISTEN` · `PLAYBACK_ROUND_KEYS`
+    (상자 스위치 파일을 compose 가 풀어 넣은 값)는 다시 만들지 않고 두 골든에
+    키 한 줄씩만 더했다(사례 43 주석).
 *   **S-3**(응답기만 재생성할 때 compose 전체가 무사한지 — 버리는 실험):
     통과 5/5 · 양성 대조 2/2. 비부착 서비스 재생성은 주 `up` · 부착 서비스를
     건드리지 않고, `docker restart` 는 env_file 을 다시 읽지 않는다. 원문은

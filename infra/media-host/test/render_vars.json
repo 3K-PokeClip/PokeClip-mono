@@ -7,6 +7,7 @@
   "media_health_path": "/pcbench-edge-proxy-health",
   "mediamtx_image": "registry.pcbench-edge-proxy.invalid/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "nginx_image": "registry.pcbench-edge-proxy.invalid/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "playback_round_keys": false,
   "proxy_control_port": 28183,
   "proxy_health_port": 28184,
   "proxy_live_port": 28181,

@@ -63,6 +63,8 @@ module "media_host" {
   stream_key_resolve_token_secret_arn = local.runtime.ingest_auth_resolve_token_secret_arn
   ingest_auth_ip_limit                = var.ingest_auth_ip_limit
 
+  playback_round_keys = var.playback_round_keys
+
   rds_endpoint      = local.runtime.rds_endpoint
   rds_db_name       = local.runtime.rds_db_name
   rds_resource_id   = local.runtime.rds_resource_id
