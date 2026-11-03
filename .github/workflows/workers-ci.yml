@@ -16,6 +16,8 @@ on:
     paths:
       - 'workers/**'
       - '.github/workflows/workers-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
+      # 렌더 시험이 services의 공유 시험 표를 읽는다(SharedTimelineCases). 표만 고친 PR도 렌더 시험을 돌린다.
+      - 'services/ledger-timeline/src/test/resources/ledger-timeline-cases.json'
 
 permissions:
   contents: read

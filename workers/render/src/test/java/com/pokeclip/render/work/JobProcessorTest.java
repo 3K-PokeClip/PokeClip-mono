@@ -8,12 +8,14 @@ import com.pokeclip.render.report.ClipReporter;
 import com.pokeclip.render.storage.S3Store;
 import com.pokeclip.render.support.FakeClip;
 import com.pokeclip.render.support.Fixtures;
+import com.pokeclip.render.support.PlanOrder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -100,6 +102,24 @@ class JobProcessorTest {
         FakeClip.Received failed = clip.last("TERMINAL_FAILED");
         assertThat(failed.body().has("executionToken")).isFalse();
         assertThat(failed.body().path("error").path("code").asString()).isEqualTo("VALIDATION");
+    }
+
+    /** long 에 담기지 않는 계획 정수 칸 — 큐 루프 오류로 새어 재수신 · 실패 큐로 가지 않고 preflight 종결된다. */
+    @Test
+    void 정수_칸이_범위_밖인_새_꼴_주문은_무토큰_TERMINAL_FAILED_뒤_지운다() {
+        ObjectNode envelope = PlanOrder.of(jobId).segment(101, false, false).segment(102, false, true)
+                .in(101, 0).out(102, 0).json();
+        ((ObjectNode) envelope.get("plan")).put("lengthMs",
+                BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.ONE));
+
+        Disposition d = processor.process(Fixtures.MAPPER.writeValueAsString(envelope));
+
+        assertThat(d).isEqualTo(Disposition.DELETE);
+        assertThat(clip.types()).containsExactly("TERMINAL_FAILED");
+        FakeClip.Received failed = clip.last("TERMINAL_FAILED");
+        assertThat(failed.body().has("executionToken")).isFalse();
+        assertThat(failed.body().path("error").path("code").asString()).isEqualTo("ENVELOPE_VALIDATION");
+        verify(renderer, never()).render(any(), any(), any(), any());
     }
 
     @Test
