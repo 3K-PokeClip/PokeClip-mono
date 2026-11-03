@@ -44,7 +44,8 @@ vi.mock('./fragmentTiming', async (importOriginal) => ({
   },
 }));
 
-// 이 시험이 쏘는 사건은 LEVEL_UPDATED · ERROR 둘이다. 다른 처리기는 이름 없이 달려 돌지 않는다
+// 이 시험이 쏘는 사건은 LEVEL_UPDATED · ERROR 둘이다. 다른 처리기는 이름 없이 달려 돌지 않는다(라이브 기동
+// 문지기의 once(LEVEL_UPDATED)는 돈다)
 vi.mock('hls.js', () => ({ default: FakeHls }));
 
 vi.mock('./videoStarts', () => ({
@@ -75,11 +76,23 @@ class FakeHls {
   readonly handlers = new Map<string, ((event: string, data: unknown) => void)[]>();
   latestLevelDetails: Details | null = null;
   liveSyncPosition: number | null = 12;
+  /** 기동 끝 — 시험이 true 로 두면 되감기 창 하한 지키기가 currentTime 을 본다 */
+  hasEnoughToStart?: boolean;
   constructor() {
     fake.instances.push(this);
   }
   on(event: string, handler: (event: string, data: unknown) => void) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+  }
+  once(event: string, handler: (event: string, data: unknown) => void) {
+    const wrapped = (e: string, data: unknown) => {
+      this.handlers.set(
+        event,
+        (this.handlers.get(event) ?? []).filter((h) => h !== wrapped),
+      );
+      handler(e, data);
+    };
+    this.on(event, wrapped);
   }
   trigger(event: string, data: { details?: Details | string }) {
     // 오류 사건의 details 는 오류 이름 글자다 — 목록은 LEVEL_UPDATED 만 바꾼다
@@ -93,17 +106,19 @@ class FakeHls {
   attachMedia() {}
   loadSource() {}
   startLoad() {}
+  stopLoad() {}
   destroy() {}
 }
 
 const PDT0 = Date.parse('2026-11-03T05:00:00.000Z');
 
 /**
- * 판 2 조각 셋 — hls.js 는 해체한 조각의 start · duration 을 소리 기준 · 모든 트랙 끝(4.3초)으로 덮었고, 원래
- * EXTINF 는 4초다. 새 장의 PDT 가 앞 조각 끝보다 500ms 이르다(겹침 — B8)
+ * 판 2 조각(기본은 순번 0–2 셋) — hls.js 는 해체한 조각의 start · duration 을 소리 기준 · 모든 트랙 끝(4.3초)으로
+ * 덮었고, 원래 EXTINF 는 4초다. 새 장의 PDT 가 앞 조각 끝보다 500ms 이르다(겹침 — B8). 판 태그는 목록 첫 조각에
+ * 싣는다
  */
-function versionTwoDetails(): Details {
-  const fragments = [0, 1, 2].map((sn) => ({
+function versionTwoDetails(sns: readonly number[] = [0, 1, 2]): Details {
+  const fragments = sns.map((sn, i) => ({
     sn,
     cc: 0,
     start: sn * 4.3,
@@ -111,14 +126,19 @@ function versionTwoDetails(): Details {
     programDateTime: PDT0 + sn * 4_000 - (sn > 0 ? 500 : 0),
     gap: false,
     tagList:
-      sn === 0
+      i === 0
         ? [
             [TIMING_TAG, '2'],
             ['INF', '4.000'],
           ]
         : [['INF', '4.000']],
   }));
-  return { fragments, fragmentStart: 0, targetduration: 4, live: true };
+  return { fragments, fragmentStart: fragments[0]?.start ?? 0, targetduration: 4, live: true };
+}
+
+/** 순번 0 부터 차례로 v_k(초)를 준다 */
+function setVideoStarts(...starts: number[]) {
+  starts.forEach((videoStartS, sn) => fake.videoStarts.set(sn, videoStartS));
 }
 
 const video = { el: null as HTMLVideoElement | null };
@@ -129,23 +149,33 @@ function lastHls(): FakeHls {
   return h;
 }
 
-function source(kind: PlaybackSource['kind']): PlaybackSource {
+/** 재생기 하나의 시작 — 기본은 시작 시각 없음 */
+type Start = Pick<PlaybackSource, 'startAtMs' | 'strictStart'>;
+
+function source(kind: PlaybackSource['kind'], start: Start): PlaybackSource {
   return {
     kind,
     url: `https://m/${kind}/k/index.m3u8`,
-    startAtMs: null,
     generation: 0,
-    strictStart: false,
+    ...start,
   };
 }
 
-/** 재생기를 세우고 판 2 목록을 한 번 갱신한다. mediaKey 가 있으면 403 에 출입증을 버린다 */
-async function mount(kind: PlaybackSource['kind'], hooks: PlaybackHooks = {}, mediaKey?: string) {
+/**
+ * 재생기를 세우고 판 2 목록을 한 번 갱신한다. mediaKey 가 있으면 403 에 출입증을 버린다. start 가 있으면 그 시작
+ * 시각으로 선다
+ */
+async function mount(
+  kind: PlaybackSource['kind'],
+  hooks: PlaybackHooks = {},
+  mediaKey?: string,
+  start: Start = { startAtMs: null, strictStart: false },
+) {
   const el = document.createElement('video');
   video.el = el;
   const ref = { current: el };
   const view = renderHook(() =>
-    useHlsPlayback(ref, source(kind), {}, undefined, mediaKey, false, undefined, hooks),
+    useHlsPlayback(ref, source(kind, start), {}, undefined, mediaKey, false, undefined, hooks),
   );
   await act(async () => {
     await vi.dynamicImportSettled();
@@ -228,9 +258,9 @@ describe('판 2 목록의 시각 환산 — 영상 축 조각', () => {
 });
 
 describe('영상 시작 기록은 재생기를 내리는 모든 자리에서 놓는다', () => {
-  /** 다시 해 보지 않는 치명 오류 하나 */
-  function fatal(type: string, code?: number) {
-    return { fatal: true, type, details: 'fragLoadError', response: { code } };
+  /** 다시 해 보지 않는 치명 오류 하나. 기본은 조각 받기 오류다 */
+  function fatal(type: string, code?: number, details = 'fragLoadError') {
+    return { fatal: true, type, details, response: { code } };
   }
 
   it('정리(재생기 해체)에서 놓는다', async () => {
@@ -255,6 +285,85 @@ describe('영상 시작 기록은 재생기를 내리는 모든 자리에서 놓
     expect(fake.disposed).toEqual([]);
     act(() => lastHls().trigger('hlsError', fatal('networkError')));
     expect(fake.disposed).toEqual([lastHls()]);
+  });
+
+  it('시작이 잘려 내릴 때 놓고, 뒤 정리에서 다시 놓지 않는다', async () => {
+    // 기록은 라이브 구성 시차 스위치를 켰을 때만 라이브 재생기에 달린다. 시작 시각 PDT0 은 라이브 시작 하한(첫 조각 +
+    // 조각 셋)보다 앞이라 엄격 시작이면 잘린다
+    fake.liveCorrection = true;
+    const onStartTruncated = vi.fn();
+    const view = await mount('live', { onStartTruncated }, undefined, {
+      startAtMs: PDT0,
+      strictStart: true,
+    });
+    // 잘림 알림은 다음 마이크로태스크에 온다(armLiveStart)
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onStartTruncated).toHaveBeenCalledOnce();
+    expect(fake.disposed).toEqual([lastHls()]);
+    view.unmount();
+    expect(fake.disposed).toHaveLength(1);
+  });
+
+  it('라이브가 닫혀(목록 404) 내릴 때 놓고, 뒤 정리에서 다시 놓지 않는다', async () => {
+    fake.liveCorrection = true;
+    const onLiveClosed = vi.fn();
+    const view = await mount('live', { onLiveClosed });
+    act(() => lastHls().trigger('hlsError', fatal('networkError', 404, 'levelLoadError')));
+    expect(onLiveClosed).toHaveBeenCalledOnce();
+    expect(fake.disposed).toEqual([lastHls()]);
+    view.unmount();
+    expect(fake.disposed).toHaveLength(1);
+  });
+});
+
+describe('판 2 목록의 끝 · 창 하한 판정도 영상 축 조각으로 잰다', () => {
+  it('목록 끝 정체(D9)는 영상 축 조각의 끝 1초 안에서 끝 도달이다', async () => {
+    // v_k 는 hls.js 가 덮은 start 보다 이르다. 영상 축이면 끝 PDT0 + 11.5초 · 재생 위치 PDT0 + 10.9초(끝 1초 안),
+    // hls.js 조각이면 끝 PDT0 + 11.8초 · 재생 위치 PDT0 + 10.4초(끝 1초 밖)다
+    setVideoStarts(0.1, 4.1, 8.1);
+    const onEndReached = vi.fn();
+    await mount('rewind', { onEndReached });
+    video.el!.currentTime = 11.5;
+    act(() => video.el!.dispatchEvent(new Event('waiting')));
+    // 목록이 3 × TD(12초) 넘게 자라지 않는다 — 1초 틱마다 판정한다
+    act(() => vi.advanceTimersByTime(13_000));
+    expect(onEndReached).toHaveBeenCalledOnce();
+  });
+
+  it('끝에서 물러난 시크는 영상 축 조각으로 잰 자리가 끝 앞이면 끝 도달을 다시 연다', async () => {
+    // v_k 는 hls.js 가 덮은 start 보다 늦다. 영상 축이면 12.8초는 PDT0 + 11.3초(끝 PDT0 + 11.5초 앞), hls.js
+    // 조각이면 PDT0 + 11.7초(끝 뒤)다
+    setVideoStarts(1, 5, 9);
+    const onEndReached = vi.fn();
+    await mount('rewind', { onEndReached });
+    act(() => video.el!.dispatchEvent(new Event('ended')));
+    video.el!.currentTime = 12.8;
+    act(() => video.el!.dispatchEvent(new Event('seeking')));
+    act(() => video.el!.dispatchEvent(new Event('ended')));
+    expect(onEndReached).toHaveBeenCalledTimes(2);
+  });
+
+  it('멈춘 채 창 하한으로 옮긴 자리의 시각을 영상 축 조각으로 세어 재개 판정에 쓴다', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    setVideoStarts(0.1, 4.1, 8.1, 12.1, 16.1);
+    const onSeekRequest = vi.fn();
+    await mount('rewind', { onSeekRequest });
+    // 기동이 끝난 재생기가 1초 자리(PDT0 + 0.9초 — 창 하한 PDT0 + 12초 앞)에서 멈춘다
+    lastHls().hasEnoughToStart = true;
+    video.el!.currentTime = 1;
+    vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
+    act(() => video.el!.dispatchEvent(new Event('pause')));
+    // 목록이 자라 1초 자리가 옮김 문턱(첫 조각 + 1 TD) 안이다 — hls.js 조각으로 센 창 하한 12.9초로 옮긴다
+    act(() =>
+      lastHls().trigger('hlsLevelUpdated', { details: versionTwoDetails([0, 1, 2, 3, 4]) }),
+    );
+    expect(video.el!.currentTime).toBeCloseTo(12.9, 9);
+    // 옮긴 자리는 영상 축으로 PDT0 + 12.3초라 창 하한 뒤다 — 다시 틀어도 세션에 넘기지 않는다. hls.js 조각으로
+    // 재면 PDT0 + 11.5초(하한 앞)라 옛 자리처럼 넘긴다
+    act(() => video.el!.dispatchEvent(new Event('play')));
+    expect(onSeekRequest).not.toHaveBeenCalled();
   });
 });
 
