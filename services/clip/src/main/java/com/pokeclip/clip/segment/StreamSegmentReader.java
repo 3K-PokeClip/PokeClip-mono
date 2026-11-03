@@ -182,7 +182,14 @@ public class StreamSegmentReader {
         return linked;
     }
 
-    /** seq 다음 행(장부 PK 순 · 회차 · 세션과 무관). 끝 소리 확보 후보다. 장부 바로 다음 행이라 이웃 표시는 참이다. */
+    /**
+     * seq 다음 행(장부 PK 순 · 회차 · 세션과 무관). 끝 소리 확보 후보다. 장부 바로 다음 행이라 이웃 표시는 참이다.
+     *
+     * <p><b>회차 · 방송으로 자르지 않는다</b> — 계약 6-6-5 「컷 끝 소리 확보(6-6-8)는 별도 규칙이라 빠지지 않는다」. 같은 녹화기가
+     * 이어 쓴 다음 파일이면 다른 회차 세션이어도 컷 끝 소리가 거기 있다. 다음 회차 · 다음 방송 행으로 넘어가는 것을 막는 것은
+     * 확보 판정({@link AudioCaptureRule})이 보는 후보의 {@code is_discontinuity} 다 — 새 연결의 첫 조각은 같은 녹화기가 이어 쓴
+     * 파일이 아니라 참이다(계약 6-6). 그 불변식이 깨지면(훅 유실 + 1.5초 안 재접속) 같은 물리 키의 다음 조각 하나가 확보로 실린다.
+     */
     public Optional<WallAxisRow> findRowAfter(String ingestKey, long seq) {
         return jdbc.query(ROW_AFTER, StreamSegmentReader::readRow, ingestKey, seq).stream()
                 .findFirst()

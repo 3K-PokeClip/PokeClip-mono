@@ -130,6 +130,33 @@ class AudioCaptureRuleTest {
         }
     }
 
+    /** 경계 — 「15분 넘게」 다. 정확히 15분은 아직 기다리고, 1ms 넘으면 없이 진행한다. */
+    @Test
+    void 다음_행이_failed_면_정확히_15분엔_기다리고_넘으면_없이_진행한다() {
+        RoundRow failed = next(false, RoundRow.FAILED);
+
+        assertThat(AudioCaptureRule.decide(last(null), new End(10, null), some(failed), OPEN,
+                at(Duration.ofMinutes(15)))).isInstanceOf(Outcome.Wait.class);
+        assertThat(AudioCaptureRule.decide(last(null), new End(10, null), some(failed), OPEN,
+                at(Duration.ofMinutes(15).plusMillis(1)))).isEqualTo(new Outcome.FailedSkip(failed, 15));
+    }
+
+    /** 가용성은 회차 종료와 무관하다(6-6-8 4항) — 회차가 끝났어도 후보가 아직이거나 문턱 안 {@code failed} 면 기다린다. */
+    @Test
+    void 회차가_끝났어도_후보가_있으면_후보의_가용성으로_정한다() {
+        assertThat(AudioCaptureRule.decide(last(null), new End(10, null), some(next(false, RoundRow.PENDING)), ENDED,
+                NOW)).isInstanceOf(Outcome.Wait.class);
+        assertThat(AudioCaptureRule.decide(last(null), new End(10, null), some(next(false, RoundRow.FAILED)), ENDED,
+                at(Duration.ofMinutes(14)))).isInstanceOf(Outcome.Wait.class);
+    }
+
+    /** 순서 — 이어짐(3항)을 가용성(4항)보다 먼저 본다. 새 녹화인 후보는 오래된 {@code failed} 여도 싣지 않고 그냥 진행한다. */
+    @Test
+    void 후보가_새_녹화면_오래된_failed_여도_가용성을_보지_않고_진행한다() {
+        assertThat(AudioCaptureRule.decide(last(null), new End(10, null), some(next(true, RoundRow.FAILED)), OPEN,
+                at(Duration.ofMinutes(16)))).isInstanceOf(Outcome.Proceed.class);
+    }
+
     @Test
     void 다음_행이_없으면_끝난_회차는_진행하고_안_끝났으면_기다린다() {
         assertThat(AudioCaptureRule.decide(last(null), new End(10, null), Optional::empty, ENDED, NOW))

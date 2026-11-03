@@ -30,6 +30,7 @@ import java.sql.Connection;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -53,7 +54,10 @@ class SegmentAudioAxisTest extends IntegrationTestSupport {
     private static final String 방송 = "S-aud";
     private static final String 키 = "AUDKEY";
 
-    /** develop 응답 바이트(그때 코드로 뜬 것 · 시각에 따라 바뀌는 두 값만 자리표시). */
+    /**
+     * develop 응답 바이트 — develop(8e7b329c)의 조회식 · 응답 칸 순서로 아래 {@link #래칫_시드} 를 돌려 뜬 것이다. 시각에 따라
+     * 바뀌는 두 값(만료 시각 · 서명 주소)만 자리표시다. 다시 뜰 때는 develop 을 체크아웃해 같은 시드로 응답을 받는다.
+     */
     private static final String DEVELOP = "/render/audio-access-develop.json";
 
     private final BroadcastAccessGuard guard;
@@ -205,6 +209,93 @@ class SegmentAudioAxisTest extends IntegrationTestSupport {
         assertThat(capture(issue(1_000, 3_500, "fileHead"))).as("방송 종료").isEqualTo("skipped");
     }
 
+    /**
+     * 장부 이웃이면 {@code is_discontinuity} 가 참이어도 이웃 표시는 참이다(웹은 이어 붙인다) — 같은 녹화로 이어지지 않았으니 그
+     * 쌍은 {@code gapEvidence} 에도 든다(웹은 이웃 표시를 먼저 본다).
+     */
+    @Test
+    void 새_녹화로_끊긴_장부_이웃은_이웃_표시가_참이고_gapEvidence_쌍이다() throws Exception {
+        방송(true);
+        seed.row(키, 1).pts(0).wall(0).session(방송).insert();
+        seed.row(키, 2).pts(4_000).wall(5_000).session(방송).discontinuity().insert();
+
+        JsonNode root = mapper.readTree(json(issue(1_000, 7_000, "fileHead")));
+
+        assertThat(seqs(root)).containsExactly(1L, 2L);
+        assertThat(follows(root)).containsExactly(false, true);
+        assertThat(root.get("segments").get(1).get("isDiscontinuity").asBoolean()).isTrue();
+        assertThat(root.get("gapEvidence").toString()).isEqualTo("[{\"beforeSeq\":1,\"afterSeq\":2}]");
+    }
+
+    /** 확보 후보가 {@code failed} 면 15분까지는 아직이고, 넘으면 없이 진행한다(영구 대기가 아니다). */
+    @Test
+    void 확보_후보가_failed_면_15분까지_not_ready_이고_넘으면_skipped_다() throws Exception {
+        방송(true);
+        seed.row(키, 1).pts(0).wall(0).session(방송).insert();
+        seed.row(키, 2).pts(4_000).wall(4_000).insert();
+        jdbc.update("UPDATE public.stream_segments SET upload_state = 'failed' WHERE seq = 2");
+
+        assertThat(capture(issueAt(at(4_000).plus(Duration.ofMinutes(14))))).isEqualTo("not_ready");
+        assertThat(capture(issueAt(at(4_000).plus(Duration.ofMinutes(16))))).isEqualTo("skipped");
+    }
+
+    /**
+     * 옛 방송 시간창의 위 끝 — 끝난 방송은 종료 편지 뒤 10분까지만이다. 그 뒤 행은 같은 키의 다음 방송 몫이다(새 연결이라
+     * {@code is_discontinuity} 참 — 확보로도 안 실린다).
+     */
+    @Test
+    void 옛_방송_시간창은_종료_뒤_10분까지만_싣는다() throws Exception {
+        방송(false);
+        jdbc.update("UPDATE broadcasts SET status = 'ended', ended_at = ? WHERE stream_id = ?",
+                Timestamp.from(at(60_000)), 방송);
+        seed.row(키, 1).pts(0).wall(656_000).insert();
+        seed.row(키, 2).pts(4_000).wall(660_000).insert();
+        seed.row(키, 3).pts(8_000).wall(664_000).discontinuity().insert();
+
+        JsonNode root = mapper.readTree(json(issue(650_000, 700_000, "fileHead")));
+
+        assertThat(root.get("axis").asString()).isEqualTo("fileHead");
+        assertThat(seqs(root)).containsExactly(1L, 2L);
+    }
+
+    // ── 확보 후보와 회차 경계(계약 6-6-5 · 6-6-8) ──────────────────
+
+    /**
+     * 확보 후보는 회차로 자르지 않는다(계약 6-6-5 「컷 끝 소리 확보는 별도 규칙이라 빠지지 않는다」). 다른 회차 · 다른 방송으로 넘어가는
+     * 것을 막는 것은 후보의 {@code is_discontinuity} 다 — 새 연결의 첫 조각은 같은 녹화기가 이어 쓴 파일이 아니라 참이다(6-6 의 판정).
+     * 그래서 다음 회차 첫 행이 새 녹화면 싣지 않는다.
+     */
+    @Test
+    void 다음_회차_첫_행이_새_녹화면_확보로_싣지_않는다() throws Exception {
+        방송(true);
+        seed.session("S-aud-next", 키, "S-aud-next", null);
+        seed.row(키, 1).pts(0).wall(0).session(방송).insert();
+        seed.row(키, 2).pts(4_000).wall(4_000).session("S-aud-next").discontinuity().insert();
+
+        JsonNode root = mapper.readTree(json(issue(1_000, 4_000, "fileHead")));
+
+        assertThat(seqs(root)).containsExactly(1L);
+        assertThat(root.get("audioCapture").asString()).isEqualTo("skipped");
+    }
+
+    /**
+     * 계약 그대로 — 같은 녹화기가 바로 이어 쓴 다음 행(is_discontinuity 거짓)이면 다른 회차 세션에 귀속돼도 확보로 싣는다. 회차로
+     * 자르면 컷 끝 소리(최대 1초)가 빠진다. 렌더 · 편집기는 그 조각의 소리를 컷 끝까지만 쓴다.
+     */
+    @Test
+    void 같은_녹화로_이어진_다음_행은_다른_회차_세션이어도_확보로_싣는다() throws Exception {
+        방송(true);
+        seed.session("S-aud-next", 키, "S-aud-next", null);
+        seed.row(키, 1).pts(0).wall(0).session(방송).insert();
+        seed.row(키, 2).pts(4_000).wall(4_000).session("S-aud-next").insert();
+
+        JsonNode root = mapper.readTree(json(issue(1_000, 4_000, "fileHead")));
+
+        assertThat(seqs(root)).containsExactly(1L, 2L);
+        assertThat(roles(root)).containsExactly("segment", "audio_capture");
+        assertThat(root.get("audioCapture").asString()).isEqualTo("attached");
+    }
+
     // ── 갈래 · 신호 ──────────────────────────────────────────────
 
     /** 회차를 못 고르는 방송(머리 세션 행도 시작 시각도 없음)은 그 축으로 처리하지 않았으니 메아리 없이 develop 그대로다. */
@@ -305,13 +396,22 @@ class SegmentAudioAxisTest extends IntegrationTestSupport {
         return service(segments, rounds).issue(요청자, 방송, at(from).toEpochMilli(), at(to).toEpochMilli(), axis);
     }
 
+    private SegmentAudioAccess issueAt(Instant now) {
+        return service(segments, rounds, now).issue(요청자, 방송, at(1_000).toEpochMilli(), at(3_500).toEpochMilli(),
+                "fileHead");
+    }
+
     private SegmentAudioAccessService service(StreamSegmentReader reader, RoundRows roundRows) {
+        return service(reader, roundRows, at(100_000));
+    }
+
+    private SegmentAudioAccessService service(StreamSegmentReader reader, RoundRows roundRows, Instant now) {
         DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
         factory.registerSingleton("signer", new SegmentAudioSigner(S3Presigner.builder().region(Region.AP_NORTHEAST_2)
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
                 .build(), "segments-test", Duration.ofMinutes(5)));
         return new SegmentAudioAccessService(guard, broadcasts, reader, roundRows,
-                factory.getBeanProvider(SegmentAudioSigner.class), Clock.fixed(at(100_000), ZoneOffset.UTC));
+                factory.getBeanProvider(SegmentAudioSigner.class), Clock.fixed(now, ZoneOffset.UTC));
     }
 
     private String json(SegmentAudioAccess access) {

@@ -93,7 +93,7 @@ class CutPlannerTest {
         assertThat(CutPlanner.plan(input(rows, 1_000, 3_500, false, true), new FakeLedger()))
                 .as("방송만 끝남").isInstanceOfSatisfying(Ready.class, r -> assertThat(r.capture()).isEmpty());
         assertThat(CutPlanner.plan(input(rows, 1_000, 3_500, true, false), new FakeLedger()))
-                .as("회차만 닫힘").isInstanceOf(Ready.class);
+                .as("회차만 닫힘").isInstanceOfSatisfying(Ready.class, r -> assertThat(r.capture()).isEmpty());
         assertThat(CutPlanner.plan(input(rows, 1_000, 3_500, false, false), new FakeLedger()))
                 .isEqualTo(new NotReady("capture_pending"));
     }
@@ -259,6 +259,24 @@ class CutPlannerTest {
         assertThat(ready.media()).extracting(RoundRow::seq).containsExactly(2L);
     }
 
+    /**
+     * 999ms 겹침의 경계 — 겹침 바로 앞은 앞 조각, 겹침 시작은 뒤 조각 머리다. 끝은 F끝 이라 뒤 조각 시작과 같은 끝은 앞 조각 끝
+     * {@code (1, dur)}(맞닿은 다음 컷의 {@code (2, 0)} 과 사이 매체가 빠지지 않게), 앞 조각 끝과 같은 끝은 뒤 조각 안이다.
+     */
+    @Test
+    void 겹친_999ms_구간의_두_끝_경계() {
+        List<RoundRow> rows = List.of(
+                row(1, 100_000, 4_000).first().v2().build(),
+                row(2, 103_001, 4_000).v2().build());
+
+        Ready before = (Ready) CutPlanner.plan(input(rows, 103_000, 103_001, true), new FakeLedger());
+        Ready atEnd = (Ready) CutPlanner.plan(input(rows, 101_000, 104_000, true), new FakeLedger());
+
+        assertThat(before.in()).isEqualTo(new MediaCoord(1, 3_000_000));
+        assertThat(before.out()).isEqualTo(new End(1, 4_000_000L));
+        assertThat(atEnd.out()).isEqualTo(new End(2, 999_000L));
+    }
+
     /** 비귀속 u 가 낀 j → u → k — 회차 행 열에서 k 는 j 의 장부 이웃이 아니라 끊긴 이웃이고, k 묶음은 u 로 디코더를 채운다. */
     @Test
     void 비귀속_행이_낀_이웃은_끊긴_틈이고_뒤_머리는_그_행으로_준비한다() {
@@ -276,6 +294,7 @@ class CutPlannerTest {
                 new Prime(1, neighbor(0, -4_000, RoundRow.UPLOADED)),
                 new Prime(3, neighbor(2, 4_000, RoundRow.UPLOADED)));
         assertThat(ready.lengthMs()).isEqualTo(6_000 - 300);
+        assertThat(ledger.askedBefore).as("머리 둘의 앞 행을 한 번에 묻는다").containsExactly(List.of(1L, 3L));
     }
 
     // ── 축(P19) ──────────────────────────────────────────────────
@@ -496,6 +515,10 @@ class CutPlannerTest {
         return input(rows, in, out, ended, List.of());
     }
 
+    /**
+     * 회차 완결과 방송 {@code ended} 에 같은 값을 넣는다. 두 값이 갈리는 효과는 따로 주는 아래 꼴의 시험 셋(범위 대기 · 범위 거절 ·
+     * 확보)이 잰다.
+     */
     private static CutPlanner.CutInput input(List<RoundRow> rows, long in, long out, boolean ended,
                                             List<RecipeDocument.Segment> subtitles) {
         return new CutPlanner.CutInput("s-1", 7L, rows, in, out, subtitles, ended, ended, null, NOW);
