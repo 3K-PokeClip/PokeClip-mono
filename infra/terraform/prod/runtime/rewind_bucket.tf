@@ -8,7 +8,8 @@
 # 두지 않는 것:
 #   - 버전 관리: 결정 50. 목록을 다시 PUT 하고 CAS 조건부 쓰기로 갱신하므로 이전
 #     버전이 쓸모없이 쌓인다.
-#   - 버킷 정책: OAC 허용문은 edge 배포 ARN 이 있어야 해서 런타임 2단이 만든다.
+#   - 버킷 정책: OAC 허용문은 edge 배포 ARN 이 있어야 해서 런타임 2단
+#     (prod/runtime-2)이 만든다. 버킷 정책은 버킷당 하나라 여기 두면 서로 덮는다.
 #   - 만료: 되감기 세그먼트는 수명주기로 지우지 않는다.
 
 variable "rewind_bucket_name" {
@@ -93,7 +94,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "rewind" {
 }
 
 output "rewind_bucket_name" {
-  description = "rewind 버킷 이름(edge 오리진)."
+  description = "rewind 버킷 이름(런타임 2단 버킷 정책의 대상 — edge 는 regional 도메인만 읽는다)."
   value       = aws_s3_bucket.rewind.bucket
 }
 

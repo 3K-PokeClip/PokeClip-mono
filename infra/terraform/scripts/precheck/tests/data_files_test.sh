@@ -196,7 +196,8 @@ readonly LATE_TARGETS
 # 근거는 prod_targets.tsv 의 platform 덩어리 주석). 끝 덩어리
 # (platform-listener-rule 부터)는 POK-479 가 더한 보안 리뷰 M 다섯과
 # CloudFront 함수 로그 그룹 셋이다. ECS 서비스 로그 그룹은 다섯이다(chat
-# 둘은 POK-306).
+# 둘은 POK-306). 런타임 2단 상태 객체(prod/runtime-2 — 첫 단계 O7f)도 여기서
+# 본다.
 readonly STATE_OBJECT='arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod'
 # 상태 객체 행의 ARN 끝(루트 이름 뒤)과 반드시 묻는 동작.
 STATE_TAIL='terraform.tfstate s3:GetObject,s3:PutObject,s3:DeleteObject'
@@ -206,6 +207,7 @@ readonly STATE_TAIL
 FOLLOWUP_TARGETS=(
   "state-object-platform O7d ${STATE_OBJECT}/platform/${STATE_TAIL}"
   "state-object-media O7e ${STATE_OBJECT}/media/${STATE_TAIL}"
+  "state-object-runtime-2 O7f ${STATE_OBJECT}/runtime-2/${STATE_TAIL}"
   'platform-load-balancer O7d tag:elasticloadbalancing:loadbalancer '\
 'elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:CreateListener'
   'platform-target-group O7d tag:elasticloadbalancing:targetgroup '\
