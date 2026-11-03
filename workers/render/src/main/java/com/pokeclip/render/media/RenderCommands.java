@@ -7,8 +7,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.function.IntFunction;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * ffmpeg 명령 셋을 조립한다. 순수 함수라 명령 문자열 그대로 시험한다.
@@ -32,6 +35,10 @@ import java.util.function.IntFunction;
  *   <li>{@link #measureLoudnessJoined} · {@link #renderJoined}. 이음 목록 하나(영상)와 소리 묶음 입력으로 출력마다 한 번
  *       인코딩한다. 원본 조각을 영상 입력으로 다시 읽지 않고, 시간 창({@code -ss} · {@code -t})이 없다.</li>
  * </ol>
+ *
+ * <p>새 꼴 명령은 셋 다 {@code -benchmark}를 단다 — 끝날 때 그 ffmpeg 의 최대 RSS 한 줄을 표준에러에 남기고({@link #maxRssKib}),
+ * 처리 · 출력은 바꾸지 않는다. concat 입력은 기본 안전 검사({@code -safe 1})로 연다 — 목록 안 이름이 모두 작업 폴더 상대
+ * 이름이라 풀 까닭이 없다.
  */
 public final class RenderCommands {
 
@@ -46,13 +53,23 @@ public final class RenderCommands {
     /**
      * 평준화 뒤 소리 정리 — 시각을 표본 수로 다시 매기고 48kHz 로 되돌린다. 2단계 평준화가 동적 모드로 떨어지면(최고점 대 크기 비
      * 12.5dB 초과 · 잰 LRA 11 초과 · 잰 LRA 0 — {@code linear=true}여도) loudnorm 이 192kHz 로 내보내고, 입력 끝 2.9초 앞 자리에서
-     * 시각이 {@code 100ms − (입력 길이 mod 100ms)}만큼 뛰어 그 뒤 소리가 영상보다 늦다. 표본은 빼거나 더하지 않으므로 표본 수로
-     * 다시 매기면 제자리다(운영 판 8.0.1 실측 — 뜀 0 · 싱크 그대로 · 크기 그대로).
+     * 시각이 {@code 100ms − (입력 길이 mod 100ms)}만큼 뛰어 그 뒤 소리가 영상보다 늦다. 입력 길이가 100ms 의 배수면 뛰지 않는다(뜀
+     * 0 — 식의 100ms 가 아니다). 표본은 빼거나 더하지 않으므로 표본 수로 다시 매기면 제자리다(운영 판 8.0.1 실측 — 뜀 0 · 싱크
+     * 그대로 · 크기 그대로).
      */
     static final String LOUDNESS_SETTLE = "asetpts=N/SR/TB,aresample=48000";
 
     /** 흐름 안 채움 문턱의 표본 수 — AAC 프레임(1024표본)의 반. 이보다 작은 시각 차는 고치지 않는다(설계 7.9 불감 구간). */
     private static final double AAC_HALF_FRAME_SAMPLES = 512;
+
+    /** 최대 RSS 를 남기는 전역 옵션(새 꼴 명령마다 {@code -nostdin} 바로 뒤). */
+    private static final String BENCHMARK = "-benchmark";
+
+    /**
+     * {@code -benchmark} 끝 줄(ffmpeg n8.0.1 {@code fftools/ffmpeg.c:316-317} — {@code getrusage} 의 {@code ru_maxrss}).
+     * Linux 에서 KiB 다(macOS 는 {@code ru_maxrss} 가 바이트라 1024 배로 찍힌다).
+     */
+    private static final Pattern MAX_RSS = Pattern.compile("^bench: maxrss=(\\d{1,18})KiB$", Pattern.MULTILINE);
 
     private RenderCommands() {
     }
@@ -100,10 +117,16 @@ public final class RenderCommands {
      * @param loudnessFix  {@link Loudness#correctFilter}의 결과. null이면 평준화 없음(무음)
      * @param burnFile     번인할 자막 파일. {@link #BURN_SRT}면 예전 모양({@link #BURN_STYLE})을 입히고, ASS({@link AssWriter})는
      *                     파일이 모양을 다 갖고 있다. null이면 번인하지 않는다
+     * @throws IllegalArgumentException 그림 입력 번호가 원본(입력 0) 바로 뒤(1)가 아니면 — 새 꼴 {@code Plan}(그림이 소리 묶음
+     *                                  뒤)이 들어오면 그림 번호가 조용히 어긋난다
      */
     public static List<String> render(String ffmpeg, long offsetMs, long durationMs, Composition.Plan video,
                                       List<AudioTrack> tracks, String loudnessFix, String burnFile,
                                       String fontsDir, String outputFile) {
+        if (video.firstImageInput() != 1) {
+            throw new IllegalArgumentException("images must follow the source, not start at "
+                    + video.firstImageInput());
+        }
         // 평준화가 있을 때만 정리를 붙인다(무음은 평준화가 없어 시각이 뛰지 않는다). 끝 자르기는 출력 -t 가 한다 — ffmpeg 가 출력
         // 소리 사슬 끝에 atrim(duration)을 넣고, 정리 뒤라 그 자르기가 표본 수 시각 위에서 정확하다
         String tail = loudnessFix == null ? null : loudnessFix + "," + LOUDNESS_SETTLE;
@@ -245,8 +268,8 @@ public final class RenderCommands {
     public static List<String> cutPiece(String ffmpeg, VideoPiece piece, int index, long timescale) {
         long start = piece.startPts();
         String shift = start >= 0 ? "-" + start : "+" + (-start);
-        return List.of(ffmpeg, "-hide_banner", "-nostdin", "-y", "-copyts", "-threads", "1", "-i", piece.sourceFile(),
-                "-map", "0:v:0", "-an", "-sn", "-dn",
+        return List.of(ffmpeg, "-hide_banner", "-nostdin", BENCHMARK, "-y", "-copyts", "-threads", "1",
+                "-i", piece.sourceFile(), "-map", "0:v:0", "-an", "-sn", "-dn",
                 "-vf", "trim=start_pts=" + start + ":end_pts=" + piece.endPts() + ",setpts=PTS" + shift,
                 "-fps_mode", "passthrough", "-enc_time_base", "1/" + timescale,
                 "-c:v", "ffv1", "-level", "3", "-g", "1", "-f", "nut", midFile(index));
@@ -290,7 +313,7 @@ public final class RenderCommands {
 
     /** 새 꼴 소리 크기 재기 — 소리 묶음 입력만 읽는다(입력 r = 묶음 r). */
     public static List<String> measureLoudnessJoined(String ffmpeg, List<AudioRunInput> runs, List<AudioTrack> tracks) {
-        List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-hide_banner", "-nostdin"));
+        List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-hide_banner", "-nostdin", BENCHMARK));
         addRunInputs(cmd, runs);
         cmd.addAll(List.of("-filter_complex", runGraph(runs, tracks, 0, Loudness.measureFilter()),
                 "-map", "[aout]", "-f", "null", "-"));
@@ -319,8 +342,8 @@ public final class RenderCommands {
             throw new IllegalArgumentException("images must follow the " + runs.size() + " audio runs, not start at "
                     + video.firstImageInput());
         }
-        List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-hide_banner", "-nostdin", "-y",
-                "-copyts", "-threads", "1", "-f", "concat", "-safe", "0", "-i", JOIN_LIST));
+        List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-hide_banner", "-nostdin", BENCHMARK, "-y",
+                "-copyts", "-threads", "1", "-f", "concat", "-i", JOIN_LIST));
         addRunInputs(cmd, runs);
         for (Composition.Image image : video.images()) {
             cmd.addAll(List.of("-loop", "1", "-i", image.name()));
@@ -351,7 +374,7 @@ public final class RenderCommands {
 
     private static void addRunInputs(List<String> cmd, List<AudioRunInput> runs) {
         for (int r = 0; r < runs.size(); r++) {
-            cmd.addAll(List.of("-copyts", "-f", "concat", "-safe", "0", "-i", runListFile(r)));
+            cmd.addAll(List.of("-copyts", "-f", "concat", "-i", runListFile(r)));
         }
     }
 
@@ -456,6 +479,21 @@ public final class RenderCommands {
     private static List<String> seek(String ffmpeg, long offsetMs, long durationMs) {
         return List.of(ffmpeg, "-hide_banner", "-nostdin", "-ss", seconds(offsetMs), "-i", SOURCE,
                 "-t", seconds(durationMs));
+    }
+
+    /**
+     * 새 꼴 명령 하나의 최대 RSS(KiB) — {@code -benchmark} 끝 줄에서 읽는다.
+     *
+     * @param stderr 그 실행의 표준에러 전문
+     * @return 줄이 없으면(옵션 없는 명령 · 다른 꼴의 출력) 빈 값
+     */
+    public static OptionalLong maxRssKib(String stderr) {
+        Matcher m = MAX_RSS.matcher(stderr);
+        OptionalLong last = OptionalLong.empty();
+        while (m.find()) {
+            last = OptionalLong.of(Long.parseLong(m.group(1)));
+        }
+        return last;
     }
 
     static String seconds(long ms) {

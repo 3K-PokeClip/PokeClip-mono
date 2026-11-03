@@ -99,25 +99,30 @@ final class JoinedRenderer {
         long began = System.nanoTime();
         UUID jobId = job.jobId();
         Recipe recipe = job.recipe();
+        requireDistinctSeqs(job.sources());
         Set<Long> fetched = fetch(job, dir, deadline);
+        Map<Long, SegmentTiming> timings = read(job, fetched, dir, deadline);
+        CaptureRead capture = readCapture(job, dir, deadline);
+        capture.timing().ifPresent(t -> timings.put(capture.source().seq(), t));
         progress.report(10, "download");
 
-        Map<Long, SegmentTiming> timings = read(job, fetched, dir, deadline);
         List<Integer> trackIds = recipe.tracks().stream().map(AudioTrack::trackId).toList();
         RenderTimeline timeline = RenderTimeline.of(job.plan(), job.sources(), timings, trackIds);
+        requireCaptureIfUsed(jobId, job.plan(), timeline, capture);
         timeline.notes().forEach(note -> logNote(jobId, note));
         logFramePick(jobId, job.plan(), timeline);
         long ts = timings.get(job.plan().mediaSeqs().getFirst()).videoTimescale();
 
+        PeakRss peak = new PeakRss();
         long midBegan = System.nanoTime();
-        List<VideoPiece> pieces = cut(timeline, ts, dir, deadline);
+        List<VideoPiece> pieces = cut(timeline, ts, dir, deadline, peak);
         long midStageMs = millisSince(midBegan);
         long midBytes = sizeOf(dir, pieces.size());
         progress.report(20, "cut");
 
         List<AudioRunInput> runs = runInputs(timeline, timings, dir);
-        ProcessRunner.Result measured = runner.run(
-                RenderCommands.measureLoudnessJoined(ffmpeg, runs, recipe.tracks()), dir, deadline);
+        ProcessRunner.Result measured = peak.see(runner.run(
+                RenderCommands.measureLoudnessJoined(ffmpeg, runs, recipe.tracks()), dir, deadline));
         String loudnessFix = Loudness.correctFilter(measured.stderr(), mapper);
         if (loudnessFix == null) {
             log.info("render.loudness_skipped jobId={} reason=silent", jobId);
@@ -126,30 +131,47 @@ final class JoinedRenderer {
 
         SegmentTiming frame = timings.get(job.plan().mediaSeqs().getFirst());
         long finalBegan = System.nanoTime();
-        Captions captions = captions(recipe.subtitles(), timeline, resultFrameTicks(timeline, timings), ts);
-        List<Produced> produced = encode(recipe, captions, frame, ts, runs, loudnessFix, dir, deadline, progress);
+        Captions captions = captions(jobId, recipe.subtitles(), timeline, resultFrameTicks(timeline, timings), ts);
+        FinalStage stage = new FinalStage(frame, ts, runs, recipe.tracks(), loudnessFix);
+        List<Produced> produced = encode(recipe, captions, stage, dir, deadline, progress, peak);
         long finalStageMs = millisSince(finalBegan);
 
         log.info("render.graph_size jobId={} videoInputs={} audioRuns={} chains={} outputs={} elapsedMs={} "
-                        + "midStageMs={} finalStageMs={} midBytes={}", jobId, pieces.size(), runs.size(),
-                runs.size() * trackIds.size(), recipe.outputs().size(), millisSince(began), midStageMs, finalStageMs,
-                midBytes);
+                        + "maxRssMb={} midStageMs={} finalStageMs={} midBytes={}", jobId, pieces.size(), runs.size(),
+                runs.size() * trackIds.size(), recipe.outputs().size(), millisSince(began), peak.mb(), midStageMs,
+                finalStageMs, midBytes);
         logLengthDrift(jobId, job.plan().lengthMs(), timeline.lengthUs());
         return new Rendered(produced, layout(timeline));
     }
 
-    // ── 받기 · 판독(설계 7.2 · 7.4 소리 묶음 7) ──
+    // ── 받기 · 판독(설계 7.2 · 7.4 소리 묶음 7 · 8) ──
 
     /**
-     * 주문서 조각을 모두 받는다. 결과 조각 · 확보 조각을 못 받으면 그대로 실패다. 준비 조각을 저장소에서 못 찾으면(다시 해도 같은
-     * 실패) 준비 없이 진행하고 {@code render.prime_skipped reason=missing} 을 남긴다 — 잃는 것은 그 묶음 머리 21ms 안 일그러짐이다.
-     * 일시 실패는 준비 조각이어도 그대로 올린다(다시 하면 받을 수 있다).
+     * 조각 파일 이름은 seq 로 정하므로 같은 seq 가 둘이면 한 파일을 덮어쓴다. 계획 검사(설계 5.3 2 · 3)가 이미 막지만, 받기
+     * 전에 한 번 더 거절한다.
+     */
+    private static void requireDistinctSeqs(List<SourceSegment> sources) {
+        Set<Long> seen = new HashSet<>();
+        for (SourceSegment s : sources) {
+            if (!seen.add(s.seq())) {
+                throw RenderFailure.permanent(ErrorCode.ENVELOPE_VALIDATION, "sourceKeys 의 seq " + s.seq() + "가 겹친다");
+            }
+        }
+    }
+
+    /**
+     * 확보 조각 밖의 조각을 모두 받는다(확보 조각은 {@link #readCapture}). 결과 조각을 못 받으면 그대로 실패다. 준비 조각을
+     * 저장소에서 못 찾으면(다시 해도 같은 실패) 준비 없이 진행하고 {@code render.prime_skipped reason=missing} 을 남긴다 — 잃는
+     * 것은 그 묶음 머리 21ms 안 일그러짐이다. 일시 실패는 준비 조각이어도 그대로 올린다(다시 하면 받을 수 있다).
      *
      * @return 받은 조각 seq
      */
     private Set<Long> fetch(JobEnvelope job, Path dir, Instant deadline) {
         Set<Long> fetched = new HashSet<>();
         for (SourceSegment s : job.sources()) {
+            if (s.ref().role() == SourceRole.AUDIO_CAPTURE) {
+                continue;
+            }
             try {
                 store.download(s.bucket(), s.s3Key(), dir.resolve(sourceFile(s.seq())), deadline);
                 fetched.add(s.seq());
@@ -165,7 +187,7 @@ final class JoinedRenderer {
 
     /**
      * 받은 조각을 판독한다. 결과 조각은 길이 대조(어긋나면 {@code SOURCE_MISMATCH})와 화면 · 시간 단위 균일 검사를 지나야 한다.
-     * 준비 조각은 어긋나면 빼고 {@code render.prime_skipped reason=mismatch} 를 남긴다(실패로 만들지 않음). 확보 조각은 판독만 한다.
+     * 준비 조각은 어긋나면 빼고 {@code render.prime_skipped reason=mismatch} 를 남긴다(실패로 만들지 않음).
      */
     private Map<Long, SegmentTiming> read(JobEnvelope job, Set<Long> fetched, Path dir, Instant deadline) {
         Map<Long, SegmentTiming> timings = new LinkedHashMap<>();
@@ -176,8 +198,6 @@ final class JoinedRenderer {
                 MediaProbe.requireLength(job.jobId().toString(), s.seq(), s.durationMs(), t);
                 timings.put(s.seq(), t);
                 media.add(t);
-            } else if (s.ref().role() == SourceRole.AUDIO_CAPTURE) {
-                timings.put(s.seq(), probe.timing(dir.resolve(sourceFile(s.seq())), dir, deadline));
             }
         }
         MediaProbe.requireUniform(media);
@@ -212,8 +232,64 @@ final class JoinedRenderer {
         return Optional.of(t);
     }
 
+    /**
+     * 확보 조각 받기 · 판독의 결과. 해냈으면 {@code timing} 이 있고, 못 했으면 그 실패와 사유({@code missing} 받지 못함 ·
+     * {@code mismatch} 판독 실패)를 든다. 주문서에 확보 조각이 없으면 {@code source} 도 null 이다.
+     */
+    private record CaptureRead(SourceSegment source, Optional<SegmentTiming> timing, RuntimeException failure,
+                               String reason) {
+
+        static final CaptureRead NONE = new CaptureRead(null, Optional.empty(), null, null);
+    }
+
+    /**
+     * 확보 조각을 받고 판독한다. 실패해도 여기서 올리지 않는다 — 쓸지는 결과 끝 소유를 마친 뒤에 정해지므로(설계 7.4 소리 묶음
+     * 8 · 1) 쓰게 될 때만 그 실패를 올린다({@link #requireCaptureIfUsed}). 시한 초과는 그대로 올린다.
+     */
+    private CaptureRead readCapture(JobEnvelope job, Path dir, Instant deadline) {
+        SourceSegment capture = job.sources().stream().filter(s -> s.ref().role() == SourceRole.AUDIO_CAPTURE)
+                .findFirst().orElse(null);
+        if (capture == null) {
+            return CaptureRead.NONE;
+        }
+        Path file = dir.resolve(sourceFile(capture.seq()));
+        try {
+            store.download(capture.bucket(), capture.s3Key(), file, deadline);
+        } catch (RenderFailure f) {
+            return new CaptureRead(capture, Optional.empty(), f, "missing");
+        }
+        try {
+            return new CaptureRead(capture, Optional.of(probe.timing(file, dir, deadline)), null, null);
+        } catch (RenderFailure | ProcessRunner.Failed e) {
+            return new CaptureRead(capture, Optional.empty(), e, "mismatch");
+        }
+    }
+
+    /**
+     * 받기 · 판독에 실패한 확보 조각을 결과가 쓰게 되면(원래 out 조각이 마지막으로 남음 — 설계 7.4 소리 묶음 8) 그 실패를 올린다.
+     * 쓰지 않게 되면 {@code render.capture_dropped} 에 받기 · 판독 사유를 남기고 주문을 이어 간다.
+     */
+    private static void requireCaptureIfUsed(UUID jobId, RenderPlan plan, RenderTimeline timeline,
+                                             CaptureRead capture) {
+        if (capture.failure() == null) {
+            return;
+        }
+        if (timeline.placements().getLast().seq() == plan.mediaSeqs().getLast()) {
+            throw capture.failure();
+        }
+        log.info("render.capture_dropped jobId={} seq={} reason={}", jobId, capture.source().seq(), capture.reason());
+    }
+
+    /**
+     * 준비 조각을 쓸 수 있나({@link #primeTiming} 의 대조). 길이 대조 정수식이 넘치면(장부 길이가 터무니없음) 대조 실패로 친다 —
+     * 다시 받아도 같은 값이라 일시 실패로 올리지 않고, 다른 대조 실패처럼 준비 없이 간다.
+     */
     static boolean primeMatches(SegmentTiming prime, long ledgerMs, SegmentTiming owner, List<Integer> trackIds) {
-        if (prime.lengthMatch(ledgerMs) == LengthMatch.NONE) {
+        try {
+            if (prime.lengthMatch(ledgerMs) == LengthMatch.NONE) {
+                return false;
+            }
+        } catch (ArithmeticException e) {
             return false;
         }
         for (int n : trackIds) {
@@ -231,13 +307,13 @@ final class JoinedRenderer {
     // ── 조각 단계 · 목록(설계 7.5 (1) · (2)) ──
 
     /** 영상이 남는 조각마다 차례로 중간 파일을 쓰고, 이음 목록을 쓴다. */
-    private List<VideoPiece> cut(RenderTimeline timeline, long ts, Path dir, Instant deadline) {
+    private List<VideoPiece> cut(RenderTimeline timeline, long ts, Path dir, Instant deadline, PeakRss peak) {
         List<VideoPiece> pieces = new ArrayList<>();
         for (VideoCut c : timeline.videoCuts()) {
             pieces.add(new VideoPiece(sourceFile(c.seq()), c.startPts(), c.endPts(), c.resultTicks()));
         }
         for (int j = 0; j < pieces.size(); j++) {
-            runner.run(RenderCommands.cutPiece(ffmpeg, pieces.get(j), j, ts), dir, deadline);
+            peak.see(runner.run(RenderCommands.cutPiece(ffmpeg, pieces.get(j), j, ts), dir, deadline));
         }
         write(dir.resolve(RenderCommands.JOIN_LIST), RenderCommands.joinList(pieces, ts));
         return pieces;
@@ -302,12 +378,15 @@ final class JoinedRenderer {
 
     /**
      * 계획 자막에 레시피 글자를 붙여 결과 축 두 벌로 옮긴다. 레시피에 자막이 없으면 빈 두 벌이다(계획 검사 5.3 5 가 그때 계획
-     * 자막도 비게 한다).
+     * 자막도 비게 한다). 결과 µs 길이는 있는데 ms 로 내려 길이 0 이 된 자막은 CC 에서 빠지므로
+     * {@code render.subtitle_dropped reason=empty_ms} 를 남긴다 — µs 단계의 {@code reason=empty} 는 {@link RenderTimeline} 이
+     * 낸다. 글자가 비어 빠지는 자막은 옛 꼴처럼 남기지 않는다.
      *
      * @param frameTicks {@link #resultFrameTicks}
      * @param timescale  그 틱의 단위
      */
-    static Captions captions(Subtitles recipe, RenderTimeline timeline, long[] frameTicks, long timescale) {
+    static Captions captions(UUID jobId, Subtitles recipe, RenderTimeline timeline, long[] frameTicks,
+                             long timescale) {
         if (recipe == null) {
             return Captions.NONE;
         }
@@ -315,7 +394,11 @@ final class JoinedRenderer {
         List<SubtitleSegment> framed = new ArrayList<>();
         for (PlacedSubtitle p : timeline.subtitles()) {
             String text = recipe.segments().get(p.index()).text();
-            SrtWriter.onResult(p.startUs(), p.endUs(), text).ifPresent(cues::add);
+            Optional<SubtitleSegment> cue = SrtWriter.onResult(p.startUs(), p.endUs(), text);
+            cue.ifPresent(cues::add);
+            if (cue.isEmpty() && !text.isBlank()) {
+                log.info("render.subtitle_dropped jobId={} index={} reason=empty_ms", jobId, p.index());
+            }
             AssWriter.onFrames(p.startUs(), p.endUs(), text, frameTicks, timescale).ifPresent(framed::add);
         }
         return new Captions(cues, framed);
@@ -340,12 +423,21 @@ final class JoinedRenderer {
     // ── 최종 단계(설계 7.5 (3)) ──
 
     /**
+     * 최종 단계 입력 가운데 출력마다 같은 것.
+     *
+     * @param frame 화면 크기를 읽는 첫 결과 조각 판독
+     * @param ts    영상 원래 틱
+     */
+    private record FinalStage(SegmentTiming frame, long ts, List<AudioRunInput> runs, List<AudioTrack> tracks,
+                              String loudnessFix) {
+    }
+
+    /**
      * 출력마다 최종 단계를 돌린다. 자막은 옛 꼴과 같은 갈래다 — 남은 자막이 있을 때만 태우고(자리가 없으면 예전 모양 SRT 하나 ·
      * 자리가 있으면 출력 해상도마다 ASS) CC 면 출력마다 SRT 를 낸다(빈 파일 금지 · 계약1 3절).
      */
-    private List<Produced> encode(Recipe recipe, Captions captions, SegmentTiming frame, long ts,
-                                  List<AudioRunInput> runs, String loudnessFix, Path dir, Instant deadline,
-                                  Progress progress) {
+    private List<Produced> encode(Recipe recipe, Captions captions, FinalStage stage, Path dir, Instant deadline,
+                                  Progress progress, PeakRss peak) {
         Subtitles spec = recipe.subtitles();
         boolean burn = spec != null && spec.mode().burns() && !captions.cues().isEmpty();
         boolean cc = spec != null && spec.mode().cc() && !captions.cues().isEmpty();
@@ -357,24 +449,35 @@ final class JoinedRenderer {
         List<Output> outputs = recipe.outputs();
         for (int i = 0; i < outputs.size(); i++) {
             Output output = outputs.get(i);
-            Composition.Plan video = Composition.plan(output, frame.width(), frame.height(), output.outputId() + "_",
-                    1 + runs.size());
-            for (Composition.Image image : video.images()) {
-                writeImage(dir.resolve(image.name()), image.image());
-            }
             String burnFile = burn ? burnFile(spec, captions.framed(), output, dir) : null;
-            String file = output.outputId() + ".mp4";
-            runner.run(RenderCommands.renderJoined(ffmpeg, ts, video, runs, recipe.tracks(), loudnessFix, burnFile,
-                    fontsDir, file), dir, deadline);
-            produced.add(new Produced(output.outputId(), "video", dir.resolve(file)));
+            produced.add(encodeVideo(output, burnFile, stage, dir, deadline, peak));
             if (cc) {
-                String srtFile = output.outputId() + ".srt";
-                write(dir.resolve(srtFile), srt);
-                produced.add(new Produced(output.outputId(), "srt", dir.resolve(srtFile)));
+                produced.add(writeCc(output, srt, dir));
             }
             progress.report(30 + 60 * (i + 1) / outputs.size(), "encode");
         }
         return produced;
+    }
+
+    /** 출력 하나의 영상 — 꾸밈 그림을 쓰고 최종 단계를 돌린다. 그림 입력 번호는 소리 묶음 뒤부터다. */
+    private Produced encodeVideo(Output output, String burnFile, FinalStage stage, Path dir, Instant deadline,
+                                 PeakRss peak) {
+        Composition.Plan video = Composition.plan(output, stage.frame().width(), stage.frame().height(),
+                output.outputId() + "_", 1 + stage.runs().size());
+        for (Composition.Image image : video.images()) {
+            writeImage(dir.resolve(image.name()), image.image());
+        }
+        String file = output.outputId() + ".mp4";
+        peak.see(runner.run(RenderCommands.renderJoined(ffmpeg, stage.ts(), video, stage.runs(), stage.tracks(),
+                stage.loudnessFix(), burnFile, fontsDir, file), dir, deadline));
+        return new Produced(output.outputId(), "video", dir.resolve(file));
+    }
+
+    /** 출력 하나의 CC 파일(모든 출력이 같은 SRT 를 쓴다). */
+    private static Produced writeCc(Output output, String srt, Path dir) {
+        String srtFile = output.outputId() + ".srt";
+        write(dir.resolve(srtFile), srt);
+        return new Produced(output.outputId(), "srt", dir.resolve(srtFile));
     }
 
     /**
@@ -400,12 +503,12 @@ final class JoinedRenderer {
 
     // ── 신호(설계 15절) ──
 
-    /** {@link RenderTimeline} 이 낸 신호에 jobId 를 붙여 남긴다. 결과 길이 상한만 WARN 이다. */
+    /** {@link RenderTimeline} 이 낸 신호에 jobId 를 붙여 남긴다. 결과 길이 상한만 WARN · 앞 · 끝 무음은 DEBUG 다(설계 15절). */
     static void logNote(UUID jobId, Note note) {
-        if ("render.length_capped".equals(note.event())) {
-            log.warn("{} jobId={} {}", note.event(), jobId, note.fields());
-        } else {
-            log.info("{} jobId={} {}", note.event(), jobId, note.fields());
+        switch (note.event()) {
+            case "render.length_capped" -> log.warn("{} jobId={} {}", note.event(), jobId, note.fields());
+            case "render.audio_pad" -> log.debug("{} jobId={} {}", note.event(), jobId, note.fields());
+            default -> log.info("{} jobId={} {}", note.event(), jobId, note.fields());
         }
     }
 
@@ -433,6 +536,26 @@ final class JoinedRenderer {
             log.warn("render.length_drift jobId={} plannedMs={} actualMs={}", jobId, plannedMs, actualMs);
         } else {
             log.info("render.length_drift jobId={} plannedMs={} actualMs={}", jobId, plannedMs, actualMs);
+        }
+    }
+
+    /**
+     * 한 주문에서 돈 새 꼴 ffmpeg 들의 최대 RSS — {@code render.graph_size maxRssMb}(설계 15절 · 13.5 enc1 결정과 N8 이 기대는
+     * 관측). 주문 하나 안에서만 쓴다.
+     */
+    private static final class PeakRss {
+
+        private long kib = -1;
+
+        /** 그 실행의 {@code -benchmark} 줄을 읽어 넣고 결과를 그대로 돌려준다. */
+        ProcessRunner.Result see(ProcessRunner.Result result) {
+            RenderCommands.maxRssKib(result.stderr()).ifPresent(k -> kib = Math.max(kib, k));
+            return result;
+        }
+
+        /** MiB(내림). 줄을 하나도 읽지 못했으면 {@code unknown}. */
+        String mb() {
+            return kib < 0 ? "unknown" : Long.toString(kib / 1_024);
         }
     }
 

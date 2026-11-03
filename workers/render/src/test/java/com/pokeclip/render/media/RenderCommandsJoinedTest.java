@@ -42,8 +42,8 @@ class RenderCommandsJoinedTest {
     @Test
     void 조각_단계는_원래_틱으로_잘라_FFV1_NUT_중간_파일에_쓴다() {
         assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("seg_12.mp4", 183_003, 540_004, 0), 0, TS))
-                .containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-y", "-copyts", "-threads", "1", "-i",
-                        "seg_12.mp4", "-map", "0:v:0", "-an", "-sn", "-dn", "-vf",
+                .containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-benchmark", "-y", "-copyts", "-threads", "1",
+                        "-i", "seg_12.mp4", "-map", "0:v:0", "-an", "-sn", "-dn", "-vf",
                         "trim=start_pts=183003:end_pts=540004,setpts=PTS-183003", "-fps_mode", "passthrough",
                         "-enc_time_base", "1/90000", "-c:v", "ffv1", "-level", "3", "-g", "1", "-f", "nut",
                         "mid_000.nut");
@@ -133,10 +133,10 @@ class RenderCommandsJoinedTest {
 
     @Test
     void 최종_단계_전체_명령() {
-        assertThat(finalCommand()).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-y",
-                "-copyts", "-threads", "1", "-f", "concat", "-safe", "0", "-i", "mid_list.ffconcat",
-                "-copyts", "-f", "concat", "-safe", "0", "-i", "run_0.ffconcat",
-                "-copyts", "-f", "concat", "-safe", "0", "-i", "run_1.ffconcat",
+        assertThat(finalCommand()).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-benchmark", "-y",
+                "-copyts", "-threads", "1", "-f", "concat", "-i", "mid_list.ffconcat",
+                "-copyts", "-f", "concat", "-i", "run_0.ffconcat",
+                "-copyts", "-f", "concat", "-i", "run_1.ffconcat",
                 "-loop", "1", "-i", "o1_a.png",
                 "-filter_complex", "[0:v:0]setsar=1,[3:v]overlay,subtitles=burn.srt:force_style='"
                         + RenderCommands.BURN_STYLE + "'[vout];"
@@ -298,9 +298,9 @@ class RenderCommandsJoinedTest {
     @Test
     void 소리_크기_재기는_묶음_입력만_읽는다() {
         assertThat(RenderCommands.measureLoudnessJoined("ffmpeg", List.of(RUN_0, RUN_1), List.of(new AudioTrack(1,
-                1.0)))).containsExactly("ffmpeg", "-hide_banner", "-nostdin",
-                "-copyts", "-f", "concat", "-safe", "0", "-i", "run_0.ffconcat",
-                "-copyts", "-f", "concat", "-safe", "0", "-i", "run_1.ffconcat",
+                1.0)))).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-benchmark",
+                "-copyts", "-f", "concat", "-i", "run_0.ffconcat",
+                "-copyts", "-f", "concat", "-i", "run_1.ffconcat",
                 "-filter_complex",
                 "[0:a:1]" + RESAMPLE_48K + ",atrim=start_pts=96:end_pts=384096,asetpts=PTS-STARTPTS,"
                         + "adelay=delays=0S:all=1," + FORMAT_TAIL + "384000[a0_1];"
@@ -310,6 +310,48 @@ class RenderCommandsJoinedTest {
                         + "[acat1]volume=1.000[a1];[a1]aformat=sample_rates=48000:channel_layouts=stereo,"
                         + Loudness.measureFilter() + "[aout]",
                 "-map", "[aout]", "-f", "null", "-");
+    }
+
+    /**
+     * 새 꼴 concat 입력은 기본 안전 검사({@code -safe 1})로 연다. 목록 안 이름이 모두 작업 폴더 상대 이름이라 풀 까닭이 없고, 풀면
+     * 목록이 바뀌었을 때 폴더 밖 읽기까지 열린다(옛 꼴 {@link RenderCommands#concat}은 P9 바이트 보존이라 그대로 둔다).
+     */
+    @Test
+    void 새_꼴_concat_입력은_안전_검사를_풀지_않는다() {
+        assertThat(finalCommand()).doesNotContain("-safe");
+        assertThat(RenderCommands.measureLoudnessJoined("ffmpeg", List.of(RUN_0, RUN_1), TWO_TRACKS))
+                .doesNotContain("-safe");
+        assertThat(RenderCommands.concat("ffmpeg")).containsSequence("-safe", "0");
+    }
+
+    /** 새 꼴 명령은 셋 다 끝에 최대 RSS 를 남긴다({@code render.graph_size maxRssMb} 의 출처 · 설계 15절). */
+    @Test
+    void 새_꼴_명령은_셋_다_최대_RSS_를_남긴다() {
+        List<List<String>> joined = List.of(finalCommand(),
+                RenderCommands.measureLoudnessJoined("ffmpeg", List.of(RUN_0), TWO_TRACKS),
+                RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 0, TS));
+        assertThat(joined).allSatisfy(c -> assertThat(c.subList(0, 4))
+                .containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-benchmark"));
+    }
+
+    @Test
+    void 최대_RSS_는_benchmark_줄에서_KiB_로_읽는다() {
+        String stderr = "frame=  120 fps=0.0 q=-0.0 Lsize=N/A\nbench: utime=1.234s stime=0.100s rtime=1.500s\n"
+                + "bench: maxrss=571392KiB\n";
+        assertThat(RenderCommands.maxRssKib(stderr)).hasValue(571_392);
+        assertThat(RenderCommands.maxRssKib("frame=  120 fps=0.0\n")).isEmpty();
+        assertThat(RenderCommands.maxRssKib("")).isEmpty();
+    }
+
+    /** 옛 꼴 출력도 그림 입력 번호를 확인한다 — 옛 꼴은 원본(입력 0) 하나 뒤라 1 이어야 한다(새 꼴 가드와 대칭). */
+    @Test
+    void 옛_꼴_출력은_그림_번호가_1_이_아니면_거부한다() {
+        Composition.Plan joined = new Composition.Plan("[0:v:0]setsar=1,[3:v]overlay", List.of(image("o1_a.png")), 3);
+        assertThatThrownBy(() -> RenderCommands.render("ffmpeg", 0, 1_000, joined, TWO_TRACKS, null, null, null,
+                "o1.mp4")).isInstanceOf(IllegalArgumentException.class);
+        Composition.Plan legacy = new Composition.Plan("[0:v:0]setsar=1,[1:v]overlay", List.of(image("o1_a.png")), 1);
+        assertThat(RenderCommands.render("ffmpeg", 0, 1_000, legacy, TWO_TRACKS, null, null, null, "o1.mp4"))
+                .containsSequence("-loop", "1", "-i", "o1_a.png");
     }
 
     private static List<String> finalCommand() {

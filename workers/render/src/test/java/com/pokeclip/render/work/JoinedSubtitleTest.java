@@ -65,6 +65,8 @@ class JoinedSubtitleTest {
     private static final long START_US = 1_533_333;
     /** 자막 0 끝 — B 조각 머리에서 16프레임 뒤(결과 3,533.33ms). */
     private static final long END_US = 533_333;
+    /** ms 안쪽 자막 시작 — 조각 11 머리에서 2,000,100µs(300µs 길이라 결과에서도 한 ms 안에 든다). */
+    private static final long SUB_MS_START_US = 2_000_100;
 
     @TempDir
     static Path fixtures;
@@ -193,6 +195,32 @@ class JoinedSubtitleTest {
 
         assertThat(run.files()).extracting(Produced::kind).containsExactly("video");
         assertThat(finalGraph()).doesNotContain("subtitles=");
+    }
+
+    /**
+     * 결과 µs 길이는 있지만 ms 로 내리면 길이 0 인 자막은 CC 에서 빠지고, 빠진 것을 신호로 남긴다(설계 15절
+     * {@code render.subtitle_dropped} — µs 단계의 {@code reason=empty} 와 가른다). 주문은 성공한다.
+     */
+    @Test
+    void ms_로_내려_길이가_0_인_자막은_빼고_신호를_남긴다() throws IOException {
+        ObjectNode envelope = order().segment(11, false, false).segment(20, true, true).segment(21, false, true)
+                .in(11, 1_000_000).out(21, 2_000_000)
+                .subtitleAtMedia(0, 11, START_US, 20, END_US)
+                .subtitleAtMedia(1, 11, SUB_MS_START_US, 11, SUB_MS_START_US + 300)
+                .lengthMs(9_000).json();
+        ((ObjectNode) envelope.get("recipe").get("subtitles")).put("mode", "CC_ONLY");
+
+        Run run = render(envelope, false);
+
+        RenderTimeline.PlacedSubtitle placed = run.timeline().subtitles().stream().filter(p -> p.index() == 1)
+                .findFirst().orElseThrow();
+        assertThat(placed.endUs()).as("µs 단계는 통과한다").isGreaterThan(placed.startUs());
+        assertThat(Math.floorDiv(placed.endUs(), 1_000)).as("ms 로 내리면 같은 값")
+                .isEqualTo(Math.floorDiv(placed.startUs(), 1_000));
+        assertThat(cues(Files.readString(run.srt()))).extracting(SubtitleSegment::text)
+                .containsExactly("컷에 걸친 자막");
+        assertThat(messages())
+                .contains("render.subtitle_dropped jobId=" + run.job().jobId() + " index=1 reason=empty_ms");
     }
 
     // ---------------------------------------------------------------- 실행

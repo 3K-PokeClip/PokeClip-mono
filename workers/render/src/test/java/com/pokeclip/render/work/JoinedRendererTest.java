@@ -1,5 +1,6 @@
 package com.pokeclip.render.work;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -7,6 +8,7 @@ import com.pokeclip.render.job.EnvelopeParser;
 import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.JobEnvelope;
 import com.pokeclip.render.job.RenderFailure;
+import com.pokeclip.render.job.SourceSegment;
 import com.pokeclip.render.media.MediaProbe;
 import com.pokeclip.render.media.RenderCommands;
 import com.pokeclip.render.media.SegmentTiming;
@@ -29,6 +31,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.nio.file.Files;
@@ -44,11 +48,14 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 /**
  * 새 꼴 주문을 이 기계의 실제 ffmpeg 로 A′ 전 경로(조각 단계 → 이음 목록 → 소리 묶음 → 최종 단계)까지 돌린다(PDT 설계 r7 7.5 ·
@@ -65,6 +72,8 @@ class JoinedRendererTest {
     private static final long AAC_FRAME = 1_024;
     /** 꾸밈 그림 출력 마감 — 정상이면 몇 초, 끝나지 않으면 이 안에 시한 초과로 실패한다. */
     private static final Duration DECORATED_DEADLINE = Duration.ofSeconds(60);
+    /** 최종 소리 상관 싱크 창 하나의 길이(표본 · 0.5초). */
+    private static final long SYNC_WINDOW = 24_000;
 
     @TempDir
     static Path fixtures;
@@ -231,6 +240,79 @@ class JoinedRendererTest {
                         f -> assertThat(f.code()).isEqualTo(ErrorCode.SOURCE_EXPIRED));
     }
 
+    /** 결과 끝이 원래 out 조각에 남으면 확보 조각을 마지막 묶음 끝에 싣고, 그 조각을 못 받으면 실패다(설계 7.4 소리 묶음 8). */
+    @Test
+    void 결과_끝에_쓰일_확보_조각은_싣고_못_받으면_실패다() {
+        String body = order().segment(10, false, false).segment(11, false, true).capture(12, false, true)
+                .in(10, 3_000_000).out(11, 1_000_000).body();
+
+        Run run = render(body);
+
+        assertThat(run.timeline().audioRuns().getLast().captureSeq()).isEqualTo(12L);
+        assertAudioOnPlan(run);
+
+        doAnswer(inv -> {
+            throw RenderFailure.permanent(ErrorCode.SOURCE_EXPIRED, "영상 조각이 저장소에 없다");
+        }).when(store).download(anyString(), org.mockito.ArgumentMatchers.endsWith("seg_12.m4s"), any(), any());
+        JobEnvelope job = new EnvelopeParser(Fixtures.MAPPER).parse(body);
+        assertThatThrownBy(() -> renderer().render(job, newDir(), deadline(), (p, s) -> { }))
+                .isInstanceOfSatisfying(RenderFailure.class,
+                        f -> assertThat(f.code()).isEqualTo(ErrorCode.SOURCE_EXPIRED));
+    }
+
+    /**
+     * 끝 소유로 빠질 확보 조각은 받지 못해도 주문을 마친다(설계 7.4 소리 묶음 8 · 1). 끝 조각 20 은 끊긴 이웃 뒤이고 끝이 파일
+     * 머리라 남는 프레임이 없어 빠진다 — 그러면 그 조각의 같은 녹화 이웃인 확보 조각 21 은 쓰지 않는다.
+     */
+    @Test
+    void 끝_소유로_빠질_확보_조각은_못_받아도_주문을_마친다() {
+        doAnswer(inv -> {
+            throw RenderFailure.permanent(ErrorCode.SOURCE_EXPIRED, "영상 조각이 저장소에 없다");
+        }).when(store).download(anyString(), org.mockito.ArgumentMatchers.endsWith("seg_21.m4s"), any(), any());
+        String body = order().segment(12, false, false).segment(20, true, true).capture(21, false, true)
+                .in(12, 2_000_000).out(20, 0).body();
+
+        Run run = render(body);
+
+        String id = run.job().jobId().toString();
+        assertThat(run.timeline().placements()).extracting(RenderTimeline.Placement::seq).containsExactly(12L);
+        assertThat(messages()).contains("render.out_retreated jobId=" + id + " fromSeq=20 toSeq=12",
+                "render.capture_dropped jobId=" + id + " seq=21 reason=missing");
+        assertVideoOnPlan(run);
+    }
+
+    /** 끝 소유로 빠질 확보 조각은 판독하지 못해도 주문을 마친다(위와 같은 꼴 · 받은 파일이 영상이 아님). */
+    @Test
+    void 끝_소유로_빠질_확보_조각은_판독하지_못해도_주문을_마친다() {
+        doAnswer(inv -> {
+            Files.writeString(inv.<Path>getArgument(2), "not a segment");
+            return null;
+        }).when(store).download(anyString(), org.mockito.ArgumentMatchers.endsWith("seg_21.m4s"), any(), any());
+        String body = order().segment(12, false, false).segment(20, true, true).capture(21, false, true)
+                .in(12, 2_000_000).out(20, 0).body();
+        JobEnvelope job = new EnvelopeParser(Fixtures.MAPPER).parse(body);
+
+        renderer().render(job, dir, deadline(), (p, s) -> { });
+
+        assertThat(messages()).contains("render.capture_dropped jobId=" + job.jobId() + " seq=21 reason=mismatch");
+    }
+
+    /** 조각 파일 이름은 seq 로 정해지므로, 계획 검사를 빠져나온 seq 겹침은 받기 전에 거절한다(같은 파일을 덮어쓰지 않게). */
+    @Test
+    void 조각_seq_가_겹치면_받기_전에_거절한다() {
+        String body = order().segment(10, false, false).segment(11, false, true).in(10, 0).out(11, 0).body();
+        JobEnvelope parsed = new EnvelopeParser(Fixtures.MAPPER).parse(body);
+        List<SourceSegment> doubled = new ArrayList<>(parsed.sources());
+        doubled.add(parsed.sources().getLast());
+        JobEnvelope job = new JobEnvelope(parsed.jobId(), parsed.clipId(), parsed.streamId(), parsed.recipeVersion(),
+                parsed.outputBucket(), parsed.outputKeyPrefix(), doubled, parsed.recipe(), parsed.plan());
+
+        assertThatThrownBy(() -> renderer().render(job, dir, deadline(), (p, s) -> { }))
+                .isInstanceOfSatisfying(RenderFailure.class,
+                        f -> assertThat(f.code()).isEqualTo(ErrorCode.ENVELOPE_VALIDATION));
+        verify(store, never()).download(anyString(), anyString(), any(), any());
+    }
+
     /** 신호(설계 15절): 계획 신호에 jobId 를 붙이고, 틱 선택 · 규모 · 길이 차를 남긴다. */
     @Test
     void 신호를_jobId_와_함께_남긴다() {
@@ -247,8 +329,44 @@ class JoinedRendererTest {
                 .startsWith("render.frame_pick jobId=" + id + " edge=out seq=11 offsetUs=1000000"));
         assertThat(messages()).anySatisfy(m -> assertThat(m)
                 .startsWith("render.graph_size jobId=" + id + " videoInputs=2 audioRuns=1 chains=2 outputs=1 ")
-                .containsPattern("midStageMs=\\d+ finalStageMs=\\d+ midBytes=[1-9]\\d*$"));
+                .containsPattern("elapsedMs=\\d+ maxRssMb=[1-9]\\d* midStageMs=\\d+ finalStageMs=\\d+ "
+                        + "midBytes=[1-9]\\d*$"));
         assertThat(messages()).contains("render.length_drift jobId=" + id + " plannedMs=2000 actualMs=2000");
+    }
+
+    /** 신호 수준(설계 15절): 결과 길이 상한만 WARN · 앞 · 끝 무음은 DEBUG · 나머지 계획 신호는 INFO. */
+    @Test
+    void 계획_신호는_설계_15절_수준으로_남긴다() {
+        Logger logger = (Logger) LoggerFactory.getLogger(JoinedRenderer.class);
+        Level before = logger.getLevel();
+        logger.setLevel(Level.DEBUG);
+        try {
+            UUID jobId = UUID.randomUUID();
+            JoinedRenderer.logNote(jobId,
+                    new RenderTimeline.Note("render.audio_pad", "run=0 track=1 frontMs=3 backMs=0"));
+            JoinedRenderer.logNote(jobId, new RenderTimeline.Note("render.length_capped", "actualMs=180000"));
+            JoinedRenderer.logNote(jobId, new RenderTimeline.Note("render.audio_run", "run=0"));
+        } finally {
+            logger.setLevel(before);
+        }
+
+        assertThat(logs.list).extracting(e -> e.getFormattedMessage().split(" ")[0], ILoggingEvent::getLevel)
+                .containsExactly(tuple("render.audio_pad", Level.DEBUG), tuple("render.length_capped", Level.WARN),
+                        tuple("render.audio_run", Level.INFO));
+    }
+
+    /**
+     * 준비 조각 길이 대조의 정수식이 넘치면(장부 길이가 터무니없음) 그 준비 조각을 쓰지 않는다 — 넘침이 일시 실패(재시도)로 새지
+     * 않고, 다른 대조 실패처럼 준비 없이 간다(설계 7.4 소리 묶음 7).
+     */
+    @Test
+    void 준비_조각_길이_대조가_넘치면_쓰지_않는다() {
+        SegmentTiming t = new MediaProbe(new RecordingRunner(), Fixtures.MAPPER, "ffprobe")
+                .timing(FILES.get(10L), fixtures, deadline());
+
+        assertThat(JoinedRenderer.primeMatches(t, PlanOrder.DURATION_MS, t, List.of(1))).as("정상 길이").isTrue();
+        assertThat(JoinedRenderer.primeMatches(t, Long.MAX_VALUE / 1_000, t, List.of(1))).as("넘치는 장부 길이")
+                .isFalse();
     }
 
     // ---------------------------------------------------------------- 실행
@@ -306,6 +424,15 @@ class JoinedRendererTest {
     private ClipRenderer renderer() {
         MediaProbe probe = new MediaProbe(runner, Fixtures.MAPPER, "ffprobe");
         return new ClipRenderer(store, probe, runner, Fixtures.MAPPER, "ffmpeg", null);
+    }
+
+    /** 같은 시험 안 두 번째 주문의 작업 폴더(첫 주문의 파일과 섞이지 않게). */
+    private Path newDir() {
+        try {
+            return Files.createTempDirectory(dir, "second");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private static Instant deadline() {
@@ -430,16 +557,21 @@ class JoinedRendererTest {
             Recording rec = OWNER.get(r.seqs().getFirst());
             long delta = deltaOf(run, r);
             double[] mix = mixedReference(run, rec);
-            long from = r.resultStartSample() + AAC_FRAME;
-            long to = Math.min(r.resultEndSample() - AAC_FRAME, from + 24_000);
+            long first = r.resultStartSample() + AAC_FRAME;
+            long last = r.resultEndSample() - AAC_FRAME;
             int expected = (int) Math.round(-delta * (double) OUT_RATE / DirectSegments.TIMESCALE);
-            int lag = bestLagByCorrelation(out, mix, from, to, expected);
-            BigDecimal rawMs = BigDecimal.valueOf(15L * lag + 8L * delta)
-                    .divide(BigDecimal.valueOf(720), MathContext.DECIMAL64);
-            List<Judged> judged = SyncCorrection.judge(rec.origin(), flow(run),
-                    List.of(new SyncCorrection.Checkpoint(r.seqs().getFirst(), rawMs)));
-            assertThat(SyncCorrection.verdict(judged)).as("묶음 %d 최종 소리 싱크(원시 %sms)", r.index(), rawMs)
-                    .isEqualTo(SyncCorrection.Verdict.PASS);
+            // 묶음 머리 창과 끝 창 — 머리만 보면 묶음 뒤쪽에서 생긴 시각 뜀(평준화 꼬리 · 흐름 안 채움)을 상관이 놓친다
+            long[][] windows = {
+                {first, Math.min(last, first + SYNC_WINDOW)}, {Math.max(first, last - SYNC_WINDOW), last}};
+            for (long[] w : windows) {
+                int lag = bestLagByCorrelation(out, mix, w[0], w[1], expected);
+                BigDecimal rawMs = BigDecimal.valueOf(15L * lag + 8L * delta)
+                        .divide(BigDecimal.valueOf(720), MathContext.DECIMAL64);
+                List<Judged> judged = SyncCorrection.judge(rec.origin(), flow(run),
+                        List.of(new SyncCorrection.Checkpoint(r.seqs().getFirst(), rawMs)));
+                assertThat(SyncCorrection.verdict(judged)).as("묶음 %d 최종 소리 싱크 창 %d–%d(원시 %sms)", r.index(),
+                        w[0], w[1], rawMs).isEqualTo(SyncCorrection.Verdict.PASS);
+            }
         }
     }
 
