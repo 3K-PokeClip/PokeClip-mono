@@ -207,15 +207,15 @@ function hlsFragmentsOf(
   videoStarts: readonly number[],
 ): HlsFragmentLike[] {
   let cc = 0;
-  return rows.map((row, i) => {
-    if (i > 0 && !row.continuesPrevious) cc += 1;
+  return rows.map((row, index) => {
+    if (index > 0 && !row.continuesPrevious) cc += 1;
     const infS = row.durationMs / 1000;
     const tagList = [['INF', infS.toFixed(3)]];
-    if (i === 0) tagList.unshift([TIMING_TAG, '2']);
+    if (index === 0) tagList.unshift([TIMING_TAG, '2']);
     return {
       sn: row.seq,
       cc,
-      start: (videoStarts[i] ?? 0) - HLS_START_LEAD_S,
+      start: (videoStarts[index] ?? 0) - HLS_START_LEAD_S,
       duration: infS + HLS_DURATION_EXTRA_S,
       programDateTime: PDT0 + row.startAtMs,
       gap: false,
@@ -264,37 +264,40 @@ function expectEndAt(c: PdtCase, videoStarts: readonly number[], at: number) {
  * 거리는 시험이 지은 참값 v_k(videoStarts)에서 센다 — 플레이어가 낸 조각 시작에서 세면 그 시작이 틀려도 상쇄된다
  */
 function expectPlaceAt(
-  c: PdtCase,
+  testCase: PdtCase,
   fragments: readonly DatedFragment[],
   videoStarts: readonly number[],
   at: number,
 ) {
-  const j = fragmentIndexAt(fragments, at);
-  const seq = c.rows[j]?.seq;
-  const offsetMs = toMs(at) - toMs(videoStarts[j] ?? Number.NaN);
-  if (c.expect.place === 'media') {
-    expect({ seq, offsetMs }).toEqual({ seq: c.expect.seq, offsetMs: c.expect.offsetMs });
-    const rowStartMs = c.rows[j]?.startAtMs ?? Number.NaN;
+  const fragmentIndex = fragmentIndexAt(fragments, at);
+  const seq = testCase.rows[fragmentIndex]?.seq;
+  const offsetMs = toMs(at) - toMs(videoStarts[fragmentIndex] ?? Number.NaN);
+  if (testCase.expect.place === 'media') {
+    expect({ seq, offsetMs }).toEqual({
+      seq: testCase.expect.seq,
+      offsetMs: testCase.expect.offsetMs,
+    });
+    const rowStartMs = testCase.rows[fragmentIndex]?.startAtMs ?? Number.NaN;
     expect(programDateAt(fragments, at)).toBe(PDT0 + rowStartMs + offsetMs);
     return;
   }
   // 공백 — 플레이어는 공백 안 시각을 뒤 조각 시작으로 옮긴다(mediaTimeAt). 앞 조각 끝의 PDT 는 원래 EXTINF 로 센다
-  const before = fragments[j - 1];
+  const before = fragments[fragmentIndex - 1];
   const beforeEndMs =
     (before?.programDateTime ?? Number.NaN) + toMs(before?.duration ?? Number.NaN);
   const afterStartMs = programDateAt(fragments, at) ?? Number.NaN;
   expect({
-    beforeSeq: c.rows[j - 1]?.seq,
+    beforeSeq: testCase.rows[fragmentIndex - 1]?.seq,
     afterSeq: seq,
     offsetMs,
-    intoGapMs: PDT0 + c.t - beforeEndMs,
+    intoGapMs: PDT0 + testCase.t - beforeEndMs,
     gapMs: afterStartMs - beforeEndMs,
   }).toEqual({
-    beforeSeq: c.expect.beforeSeq,
-    afterSeq: c.expect.afterSeq,
+    beforeSeq: testCase.expect.beforeSeq,
+    afterSeq: testCase.expect.afterSeq,
     offsetMs: 0,
-    intoGapMs: c.expect.intoGapMs,
-    gapMs: c.expect.gapMs,
+    intoGapMs: testCase.expect.intoGapMs,
+    gapMs: testCase.expect.gapMs,
   });
 }
 
@@ -316,7 +319,9 @@ describe('공유 시험 표 읽기 — fail-closed', () => {
     t: 0,
     expect: media,
   };
-  const table = (cases: unknown[]) => ({ version: TABLE_VERSION, cases });
+  function table(cases: unknown[]) {
+    return { version: TABLE_VERSION, cases };
+  }
 
   it('F · pdt 만 고르고 다른 갈래 · 축은 건너뛴다', () => {
     const wall = { ...pdtCase, id: 'w', axis: 'wall' };
@@ -350,20 +355,20 @@ describe('공유 시험 표의 F · pdt 사례 — 플레이어 환산(datedFrag
   const pdtCases = pdtCasesOf(JSON.parse(readFileSync(TABLE_PATH, 'utf8')));
 
   it.each(pdtCases.map((raw) => [String(raw['id']), raw] as const))('%s', (_id, raw) => {
-    const c = pdtCaseOf(raw);
-    const videoStarts = videoStartsOf(c.rows);
+    const testCase = pdtCaseOf(raw);
+    const videoStarts = videoStartsOf(testCase.rows);
     const fragments = datedFragments(
-      hlsFragmentsOf(c.rows, videoStarts),
+      hlsFragmentsOf(testCase.rows, videoStarts),
       'rewind',
-      startsBySeq(c.rows, videoStarts),
+      startsBySeq(testCase.rows, videoStarts),
     );
-    const m = mediaTimeAt(fragments, PDT0 + c.t);
+    const m = mediaTimeAt(fragments, PDT0 + testCase.t);
     expect(m).not.toBeNull();
     const at = m ?? Number.NaN;
-    if (c.op === 'locateEnd') {
-      expectEndAt(c, videoStarts, at);
+    if (testCase.op === 'locateEnd') {
+      expectEndAt(testCase, videoStarts, at);
     } else {
-      expectPlaceAt(c, fragments, videoStarts, at);
+      expectPlaceAt(testCase, fragments, videoStarts, at);
     }
   });
 });
