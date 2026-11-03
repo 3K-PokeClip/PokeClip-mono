@@ -107,9 +107,10 @@ public class SegmentAudioAccessService {
                 : broadcasts.findByStreamId(streamId).flatMap(b -> byFileHead(b, fromMs, toMs, available));
         SegmentAudioAccess access = fileHead.orElseGet(() -> byPlayback(streamId, fromMs, toMs, available));
         // 주소·창고 좌표는 안 찍는다: 주소가 곧 출입증이다.
-        log.info("clip.segment_audio_access.issued streamId={} userId={} segments={} expiresAt={} axis={}",
+        // axis 는 실제로 처리한 축, requested 는 요청 표지다 — 표지를 보냈는데 옛 갈래로 간 것(회차를 못 고름)을 가른다.
+        log.info("clip.segment_audio_access.issued streamId={} userId={} segments={} expiresAt={} axis={} requested={}",
                 streamId, requesterSubject, access.segments().size(), access.expiresAt(),
-                access.axis() == null ? "legacy" : access.axis());
+                access.axis() == null ? "legacy" : access.axis(), axis == null ? "none" : axis);
         return access;
     }
 
@@ -142,15 +143,18 @@ public class SegmentAudioAccessService {
             return Optional.empty();
         }
         List<WallAxisRow> rows = segments.findRoundRowsByWallTime(round.get(), fromMs, toMs);
-        List<WallAxisRow> uploaded = rows.stream().filter(r -> r.row().uploaded()).toList();
         // 창 안 회차 행이 없으면 「영상 범위의 마지막 조각」 이 없어 확보할 것도 없다.
         Capture capture = rows.isEmpty() ? new Capture("skipped", Optional.empty())
                 : captureOf(broadcast, round.get(), rows.get(rows.size() - 1).row(), toMs);
-        List<SegmentAudioSigner.Unsigned> unsigned = new ArrayList<>(uploaded.size() + 1);
-        for (int i = 0; i < uploaded.size(); i++) {
-            unsigned.add(fileHeadSegment(uploaded.get(i), i == 0 ? null : uploaded.get(i - 1), rows));
+        List<SegmentAudioSigner.Unsigned> unsigned = new ArrayList<>(rows.size() + 1);
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).row().uploaded()) {
+                unsigned.add(unsigned(rows.get(i), "segment", followsInResponse(rows, i)));
+            }
         }
-        capture.row().ifPresent(r -> unsigned.add(captureSegment(r, uploaded, rows)));
+        // 확보 조각은 마지막 회차 행의 장부 바로 다음 행이라, 그 회차 행이 응답에 실렸을 때만 이웃이다.
+        capture.row().ifPresent(r -> unsigned.add(unsigned(r, "audio_capture",
+                followsInResponse(rows, rows.size()))));
         return Optional.of(new SegmentAudioAccess(available.expiresAt(clock.instant()), available.sign(unsigned),
                 FILE_HEAD, capture.state(), gapsOf(rows)));
     }
@@ -161,13 +165,13 @@ public class SegmentAudioAccessService {
 
     private Capture captureOf(Broadcast broadcast, RoundRows.Round round, RoundRow last, long toMs) {
         End out = new End(last.seq(), Math.multiplyExact(toMs - last.wallMs(), 1000L));
-        boolean ended = broadcast.getStatus() != BroadcastStatus.LIVE
-                || round instanceof RoundRows.Members && rounds.roundComplete(broadcast.getStreamId());
         AtomicReference<Optional<WallAxisRow>> next = new AtomicReference<>(Optional.empty());
         AudioCaptureRule.Outcome outcome = AudioCaptureRule.decide(last, out, () -> {
             next.set(segments.findRowAfter(round.ingestKey(), last.seq()));
             return next.get().map(WallAxisRow::row);
-        }, ended, clock.instant());
+        }, () -> broadcast.getStatus() != BroadcastStatus.LIVE
+                || round instanceof RoundRows.Members && rounds.roundComplete(broadcast.getStreamId()),
+                clock.instant());
         return switch (outcome) {
             case AudioCaptureRule.Outcome.Attach a -> new Capture("attached", next.get());
             case AudioCaptureRule.Outcome.Wait w -> new Capture("not_ready", Optional.empty());
@@ -177,23 +181,15 @@ public class SegmentAudioAccessService {
     }
 
     /**
-     * 응답 줄 하나. 이웃 표시는 <b>응답 목록 기준</b>이다 — 회차 목록에서 바로 앞 행이 응답의 바로 앞 조각이고 그 둘이 장부
-     * 이웃일 때만 참이다. 아직 안 올라간 행이 빠진 자리는 거짓이라 웹이 「업로드 대기」 로 읽는다.
+     * 회차 목록 {@code i} 번째 자리(목록 끝 = 확보 조각)의 이웃 표시. <b>응답 목록 기준</b>이다 — 회차 목록의 바로 앞 행이 응답에
+     * 실렸고(올라감) 그 행이 장부 바로 앞 행일 때만 참이다. 아직 안 올라간 행이 빠진 자리는 거짓이라 웹이 「업로드 대기」 로 읽는다.
+     * 확보 조각은 장부 바로 다음 행이라 장부 이웃 칸을 따로 보지 않는다.
      */
-    private static SegmentAudioSigner.Unsigned fileHeadSegment(WallAxisRow r, WallAxisRow previous,
-                                                               List<WallAxisRow> rows) {
-        int at = rows.indexOf(r);
-        boolean follows = previous != null && r.row().followsLedgerPrevious() && at > 0
-                && rows.get(at - 1).row().seq() == previous.row().seq();
-        return unsigned(r, "segment", follows);
-    }
-
-    /** 확보 조각 — 마지막 회차 행의 장부 바로 다음 행이라, 그 회차 행이 응답의 마지막 조각일 때만 이웃이다. */
-    private static SegmentAudioSigner.Unsigned captureSegment(WallAxisRow r, List<WallAxisRow> uploaded,
-                                                              List<WallAxisRow> rows) {
-        boolean follows = !uploaded.isEmpty()
-                && uploaded.get(uploaded.size() - 1).row().seq() == rows.get(rows.size() - 1).row().seq();
-        return unsigned(r, "audio_capture", follows);
+    private static boolean followsInResponse(List<WallAxisRow> rows, int i) {
+        if (i == 0 || !rows.get(i - 1).row().uploaded()) {
+            return false;
+        }
+        return i == rows.size() || rows.get(i).row().followsLedgerPrevious();
     }
 
     private static SegmentAudioSigner.Unsigned unsigned(WallAxisRow r, String role, boolean follows) {

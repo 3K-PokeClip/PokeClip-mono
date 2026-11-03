@@ -5,6 +5,7 @@ import com.pokeclip.clip.segment.CutDecision.End;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -56,17 +57,18 @@ public final class AudioCaptureRule {
      * @param last 결과에 드는 마지막 회차 행 k
      * @param out 컷 끝 경계(k 위 · 파일 머리 기준)
      * @param next k 의 다음 seq 행(회차로 자르지 않음). 거리 조건이 참일 때만 부른다
-     * @param endedOrComplete k 의 회차가 끝났다 — clip 방송 {@code ended} 이거나 회차 완결 술어 참(6-6-8 5항)
+     * @param endedOrComplete k 의 회차가 끝났나 — clip 방송 {@code ended} 이거나 회차 완결 술어 참(6-6-8 5항). 다음 행이 장부에 없을
+     *        때만 묻는다(회차 완결은 장부 왕복이다)
      * @param now 지금 — {@code failed} 문턱을 잰다
      */
-    public static Outcome decide(RoundRow last, End out, Supplier<Optional<RoundRow>> next, boolean endedOrComplete,
-                                 Instant now) {
+    public static Outcome decide(RoundRow last, End out, Supplier<Optional<RoundRow>> next,
+                                 BooleanSupplier endedOrComplete, Instant now) {
         if (last.v2() && !nearSegmentEnd(last, out)) {
             return new Outcome.Proceed();
         }
         Optional<RoundRow> candidate = next.get();
         if (candidate.isEmpty()) {
-            return endedOrComplete ? new Outcome.Proceed() : new Outcome.Wait();
+            return endedOrComplete.getAsBoolean() ? new Outcome.Proceed() : new Outcome.Wait();
         }
         RoundRow row = candidate.get();
         if (row.isDiscontinuity()) {

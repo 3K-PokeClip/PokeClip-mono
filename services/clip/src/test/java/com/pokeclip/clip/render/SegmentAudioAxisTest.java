@@ -237,30 +237,49 @@ class SegmentAudioAxisTest extends IntegrationTestSupport {
             issue(10_000, 22_000, "fileHead");
 
             assertThat(logs.messages()).anyMatch(m -> m.startsWith("clip.segment_audio_access.issued streamId=S-aud")
-                    && m.contains("axis=legacy"));
+                    && m.contains("axis=legacy requested=none"));
             assertThat(logs.messages()).anyMatch(m -> m.startsWith("clip.segment_audio_access.issued streamId=S-aud")
-                    && m.contains("axis=fileHead"));
+                    && m.contains("axis=fileHead requested=fileHead"));
+        }
+    }
+
+    /** 표지를 보냈지만 회차를 못 골라 옛 갈래로 간 것은 표지 없는 요청과 신호가 갈린다. */
+    @Test
+    void 표지를_보냈는데_옛_갈래로_간_것도_신호에서_가른다() {
+        broadcasts.save(Broadcast.endedPlaceholder(방송, TestIds.STREAMER, 키, 1L, at(60_000)));
+        seed.row(키, 1).pts(0).wall(0).pdt(0).insert();
+
+        try (LogCaptor logs = new LogCaptor()) {
+            issue(1_000, 3_500, "fileHead");
+
+            assertThat(logs.messages()).anyMatch(m -> m.startsWith("clip.segment_audio_access.issued streamId=S-aud")
+                    && m.contains("axis=legacy requested=fileHead"));
         }
     }
 
     /**
-     * 장부 왕복 — 회차 고르기 1 · 창 안 회차 행 1 · 확보 후보 1 · 회차 완결 1(방송 중일 때만). 창 안 행은 조각 수와 무관하게 한 번이다.
+     * 장부 왕복 — 회차 고르기 1 · 창 안 회차 행 1 · 확보 후보 0–1 · 회차 완결 0–1. 창 안 행은 조각 수와 무관하게 한 번이다. 회차
+     * 완결은 확보 후보가 장부에 없고 방송 중일 때만 묻는다(계약 6-6-8 — 후보가 있으면 끝남을 보지 않는다).
      */
     @Test
-    void 표지_갈래의_장부_왕복은_넷이고_끝난_방송은_셋이다() throws Exception {
+    void 표지_갈래의_장부_왕복은_후보가_있으면_셋이고_방송_중_후보가_없을_때만_넷이다() throws Exception {
         래칫_시드();
         AtomicInteger statements = new AtomicInteger();
         JdbcTemplate counted = new JdbcTemplate(counting(dataSource, statements));
         SegmentAudioAccessService service = service(new StreamSegmentReader(counted), new RoundRows(counted));
 
         service.issue(요청자, 방송, at(10_000).toEpochMilli(), at(22_000).toEpochMilli(), "fileHead");
-        assertThat(statements).hasValue(4);
+        assertThat(statements).as("방송 중 · 확보 후보 있음").hasValue(3);
+
+        statements.set(0);
+        service.issue(요청자, 방송, at(32_000).toEpochMilli(), at(39_000).toEpochMilli(), "fileHead");
+        assertThat(statements).as("방송 중 · 마지막 행이라 후보 없음 → 회차 완결을 묻는다").hasValue(4);
 
         jdbc.update("UPDATE broadcasts SET status = 'ended', ended_at = ? WHERE stream_id = ?",
                 Timestamp.from(at(60_000)), 방송);
         statements.set(0);
-        service.issue(요청자, 방송, at(10_000).toEpochMilli(), at(22_000).toEpochMilli(), "fileHead");
-        assertThat(statements).hasValue(3);
+        service.issue(요청자, 방송, at(32_000).toEpochMilli(), at(39_000).toEpochMilli(), "fileHead");
+        assertThat(statements).as("끝난 방송 — 회차 완결을 안 묻는다").hasValue(3);
     }
 
     // ── 시드 · 도우미 ──────────────────────────────────────────────

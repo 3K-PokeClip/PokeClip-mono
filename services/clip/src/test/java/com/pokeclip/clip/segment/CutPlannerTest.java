@@ -348,6 +348,23 @@ class CutPlannerTest {
         }
     }
 
+    /** 확보 없이 진행했다는 신호는 계획이 나올 때만 남긴다 — 준비 조각이 아직이라 409 를 다시 물을 때마다 같은 줄이 쌓이지 않게. */
+    @Test
+    void 확보_생략_신호는_계획이_나올_때만_남긴다() {
+        List<RoundRow> rows = List.of(row(1, 0, 4_000).first().build());
+        RoundRow failed = row(2, 4_000, 4_000).failed().build();
+        CutPlanner.CutInput late = new CutPlanner.CutInput("s-1", 7L, rows, 1_000, 3_500, List.of(), false, false,
+                null, Instant.ofEpochMilli(4_000).plus(Duration.ofMinutes(16)));
+
+        try (LogCaptor logs = new LogCaptor()) {
+            CutDecision decision = CutPlanner.plan(late, new FakeLedger().after(1, failed)
+                    .before(1, neighbor(0, -4_000, RoundRow.PENDING)));
+
+            assertThat(decision).isEqualTo(new NotReady("prime_pending"));
+            assertThat(logs.messages()).noneMatch(m -> m.startsWith("clip.render.capture_skipped"));
+        }
+    }
+
     // ── 디코더 준비(P30 판정) ───────────────────────────────────
 
     /** P30 ① — 회차 첫 행 k 의 장부 바로 앞 행 u 가 비귀속이어도 같은 녹화면 준비 조각이다. */

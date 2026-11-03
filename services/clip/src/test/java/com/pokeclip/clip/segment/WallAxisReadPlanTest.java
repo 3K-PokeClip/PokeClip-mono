@@ -55,6 +55,9 @@ class WallAxisReadPlanTest extends IntegrationTestSupport {
     @AfterEach
     void 치운다() {
         jdbc.update("DELETE FROM public.stream_segments WHERE stream_id = ?", KEY);
+        // 시험 시드 표에는 PK 뿐이다 — 여기서 만든 색인이 남으면 뒤 시험의 실행 계획이 달라진다.
+        jdbc.execute("DROP INDEX IF EXISTS public.stream_segments_session_idx");
+        jdbc.execute("DROP INDEX IF EXISTS public.stream_segments_wall_idx");
     }
 
     @Test

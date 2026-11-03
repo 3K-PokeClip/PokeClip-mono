@@ -120,17 +120,18 @@ public final class CutPlanner {
                                       List<SubtitleSpan> subtitles, List<Gap> gaps) {
         RoundRow tail = media.get(media.size() - 1);
         AudioCaptureRule.Outcome capture = AudioCaptureRule.decide(tail, out, () -> ledger.rowAfter(tail.seq()),
-                input.roundComplete() || input.broadcastEnded(), input.now());
+                () -> input.roundComplete() || input.broadcastEnded(), input.now());
         if (capture instanceof AudioCaptureRule.Outcome.Wait) {
             return new NotReady("capture_pending");
-        }
-        if (capture instanceof AudioCaptureRule.Outcome.FailedSkip skip) {
-            log.info("clip.render.capture_skipped streamId={} seq={} reason=failed ageMin={}",
-                    input.streamId(), skip.row().seq(), skip.ageMinutes());
         }
         Optional<Primes> primes = primesOf(media, ledger, input.ledgerSectionStart());
         if (primes.isEmpty()) {
             return new NotReady("prime_pending");
+        }
+        // 계획이 나올 때만 남긴다 — 준비 조각이 아직이면 409 를 다시 물을 때마다 같은 줄이 쌓인다.
+        if (capture instanceof AudioCaptureRule.Outcome.FailedSkip skip) {
+            log.info("clip.render.capture_skipped streamId={} seq={} reason=failed ageMin={}",
+                    input.streamId(), skip.row().seq(), skip.ageMinutes());
         }
         long lengthMs = LedgerTimeline.lengthMs(input.inMs(), input.outMs(),
                 gaps.stream().map(Gap::inCutMs).toList());
