@@ -74,8 +74,10 @@ class WorkerConfiguration {
     QueueWorker thumbnailQueueWorker(RenderProperties p, ThumbnailProperties t, SqsClient sqs, S3Client s3,
                                      ObjectMapper mapper) {
         RenderProperties.requireInternalToken("pokeclip.thumbnail.queue-url", p.internalToken());
-        ThumbnailProcessor processor = new ThumbnailProcessor(mapper, new S3Store(s3), new ProcessRunner(),
-                new ThumbnailReporter(p), p.ffmpeg(), p.workDir().resolve("thumbnails"), t.timeout(), Clock.systemUTC());
+        ProcessRunner runner = new ProcessRunner();
+        ThumbnailProcessor processor = new ThumbnailProcessor(mapper, new S3Store(s3), runner,
+                new MediaProbe(runner, mapper, p.ffprobe()), new ThumbnailReporter(p), p.ffmpeg(),
+                p.workDir().resolve("thumbnails"), t.timeout(), Clock.systemUTC());
         return new QueueWorker("thumbnail", sqs, t.queueUrl(), processor, t.visibilityTimeout(), p.pollWait(),
                 FfmpegVersion.firstLine(new ProcessRunner(), p.ffmpeg(), p.workDir()));
     }
