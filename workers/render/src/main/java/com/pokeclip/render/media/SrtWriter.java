@@ -5,9 +5,11 @@ import com.pokeclip.render.recipe.Recipe.SubtitleSegment;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
- * 방송 절대축 자막을 클립 축(0 = {@code cut.inAtMs})의 SRT로 바꾼다(계약6 2절 경계 규칙).
+ * 자막을 클립 축(결과 영상 0 기준 ms)의 SRT로 바꾼다. 옛 꼴은 방송 절대축 자막을 컷으로 옮기고({@link #clipped} · 0 =
+ * {@code cut.inAtMs} · 계약6 2절 경계 규칙 — 아래 목록), 새 꼴은 계획 실행이 낸 결과 µs 를 ms 로 내린다({@link #onResult}).
  *
  * <ul>
  *   <li>컷 밖 자막은 무시한다(거부 아님). 컷을 넓히면 자연히 돌아온다.</li>
@@ -17,6 +19,8 @@ import java.util.List;
  * </ul>
  */
 public final class SrtWriter {
+
+    private static final long MICROS_PER_MS = 1_000;
 
     private SrtWriter() {
     }
@@ -33,7 +37,27 @@ public final class SrtWriter {
         return inside;
     }
 
-    /** @param clipped {@link #clipped}의 결과(이미 클립 축) */
+    /**
+     * 새 꼴 주문(렌더 계획이 있음)의 자막 하나를 결과 축 ms 로 옮긴다(PDT 설계 r7 7.6). 두 끝은 계획 실행이 낸 결과 µs 이고
+     * ({@code RenderTimeline.subtitles()} — 결과 범위 자르기 · 길이 0 이하 빼기는 거기서 끝났다), 여기서는 둘 다 ms 로 내린다.
+     * 번인은 프레임 시각을 ms 로 내려 {@code [시작, 끝)} 안인지 보므로(ffmpeg n8.0.1 {@code vf_subtitles.c:239-241} 이
+     * libass 에 정수 ms 로 넘김), 프레임 자리에 놓인 끝점을 내리면 시작은 그 프레임부터 · 끝은 그 프레임 앞까지 보인다. 끝을 올리면
+     * 끝 프레임 하나가 더 보인다.
+     *
+     * <p>옛 꼴 {@link #clipped}와 같은 규칙으로 뺀다 — 내린 길이가 0 이거나 글자가 비었거나 공백뿐이면 빈 값.
+     *
+     * @param text 레시피 {@code subtitles.segments[index].text}
+     */
+    public static Optional<SubtitleSegment> onResult(long startUs, long endUs, String text) {
+        long start = Math.floorDiv(startUs, MICROS_PER_MS);
+        long end = Math.floorDiv(endUs, MICROS_PER_MS);
+        if (end <= start || text.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(new SubtitleSegment(start, end, text));
+    }
+
+    /** @param clipped {@link #clipped} · {@link #onResult}의 결과(이미 클립 축) */
     public static String render(List<SubtitleSegment> clipped) {
         StringBuilder out = new StringBuilder();
         int index = 1;

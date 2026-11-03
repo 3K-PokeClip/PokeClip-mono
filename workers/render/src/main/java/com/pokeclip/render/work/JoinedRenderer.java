@@ -5,6 +5,7 @@ import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.job.RenderPlan;
 import com.pokeclip.render.job.SourceRole;
 import com.pokeclip.render.job.SourceSegment;
+import com.pokeclip.render.media.AssWriter;
 import com.pokeclip.render.media.Composition;
 import com.pokeclip.render.media.Loudness;
 import com.pokeclip.render.media.MediaProbe;
@@ -15,9 +16,12 @@ import com.pokeclip.render.media.RenderCommands.VideoPiece;
 import com.pokeclip.render.media.SegmentTiming;
 import com.pokeclip.render.media.SegmentTiming.LengthMatch;
 import com.pokeclip.render.media.SegmentTiming.TrackRange;
+import com.pokeclip.render.media.SrtWriter;
 import com.pokeclip.render.recipe.Recipe;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
 import com.pokeclip.render.recipe.Recipe.Output;
+import com.pokeclip.render.recipe.Recipe.SubtitleSegment;
+import com.pokeclip.render.recipe.Recipe.Subtitles;
 import com.pokeclip.render.report.ClipReporter.PlacementItem;
 import com.pokeclip.render.report.ClipReporter.ResultLayout;
 import com.pokeclip.render.storage.S3Store;
@@ -25,6 +29,7 @@ import com.pokeclip.render.work.ClipRenderer.Produced;
 import com.pokeclip.render.work.ClipRenderer.Progress;
 import com.pokeclip.render.work.ClipRenderer.Rendered;
 import com.pokeclip.render.work.RenderTimeline.Note;
+import com.pokeclip.render.work.RenderTimeline.PlacedSubtitle;
 import com.pokeclip.render.work.RenderTimeline.Placement;
 import com.pokeclip.render.work.RenderTimeline.VideoCut;
 import org.slf4j.Logger;
@@ -47,12 +52,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.LongStream;
 import javax.imageio.ImageIO;
 
 /**
  * 새 꼴 주문(렌더 계획이 있음)을 A′ 두 단계로 만든다(PDT 설계 r7 7.5 · 13.5). 받기 → 판독 · 길이 대조 → 계획 계산
  * ({@link RenderTimeline}) → 조각 단계(영상이 남는 조각마다 무손실 중간 파일) → 이음 목록 · 소리 묶음 목록 → 소리 크기 재기 →
- * 출력마다 최종 단계.
+ * 출력마다 최종 단계(번인 자막 · CC 파일 포함).
  *
  * <p>모든 파일(받은 조각 · 중간 파일 · 목록 · 그림 · 결과)은 부른 쪽이 준 작업 폴더 {@code dir} 안에 바로 쓴다. 그 폴더는 주문마다
  * 만드는 {@link Workspace} 라 성공 · 실패 · 재시도 모두에서 통째로 지워진다(설계 16.2 P33). 자를 틱 · 놓을 자리 · 소리 값은
@@ -118,7 +124,8 @@ final class JoinedRenderer {
 
         SegmentTiming frame = timings.get(job.plan().mediaSeqs().getFirst());
         long finalBegan = System.nanoTime();
-        List<Produced> produced = encode(recipe, frame, ts, runs, loudnessFix, dir, deadline, progress);
+        Captions captions = captions(recipe.subtitles(), timeline, resultFrameTicks(timeline, timings), ts);
+        List<Produced> produced = encode(recipe, captions, frame, ts, runs, loudnessFix, dir, deadline, progress);
         long finalStageMs = millisSince(finalBegan);
 
         log.info("render.graph_size jobId={} videoInputs={} audioRuns={} chains={} outputs={} elapsedMs={} "
@@ -251,10 +258,77 @@ final class JoinedRenderer {
         return runs;
     }
 
+    // ── 자막(설계 7.6) ──
+
+    /**
+     * 결과 축 자막 두 벌. 같은 계획 자막(결과 µs — {@link RenderTimeline} 이 배치표에서 낸 값)에서 나온다.
+     *
+     * @param cues   CC 의 SRT · 자리가 없는 번인(SRT)에 쓰는 ms 목록({@link SrtWriter#onResult})
+     * @param framed 자리가 있는 번인(ASS)에 쓰는 목록 — 결과 프레임 위 10ms 격자 시각({@link AssWriter#onFrames})
+     */
+    record Captions(List<SubtitleSegment> cues, List<SubtitleSegment> framed) {
+
+        static final Captions NONE = new Captions(List.of(), List.of());
+
+        Captions {
+            cues = List.copyOf(cues);
+            framed = List.copyOf(framed);
+        }
+    }
+
+    /**
+     * 계획 자막에 레시피 글자를 붙여 결과 축 두 벌로 옮긴다. 레시피에 자막이 없으면 빈 두 벌이다(계획 검사 5.3 5 가 그때 계획
+     * 자막도 비게 한다).
+     *
+     * @param frameTicks {@link #resultFrameTicks}
+     * @param timescale  그 틱의 단위
+     */
+    static Captions captions(Subtitles recipe, RenderTimeline timeline, long[] frameTicks, long timescale) {
+        if (recipe == null) {
+            return Captions.NONE;
+        }
+        List<SubtitleSegment> cues = new ArrayList<>();
+        List<SubtitleSegment> framed = new ArrayList<>();
+        for (PlacedSubtitle p : timeline.subtitles()) {
+            String text = recipe.segments().get(p.index()).text();
+            SrtWriter.onResult(p.startUs(), p.endUs(), text).ifPresent(cues::add);
+            AssWriter.onFrames(p.startUs(), p.endUs(), text, frameTicks, timescale).ifPresent(framed::add);
+        }
+        return new Captions(cues, framed);
+    }
+
+    /**
+     * 결과 영상 프레임 시각(결과 축 틱 · 오름차순) — 조각 단계가 남기는 프레임(PTS ∈ [startPts, endPts))에 그 조각 이동량을
+     * 더한 값이다. 최종 단계가 이 틱 그대로 내보낸다(설계 16.2 P7 · P32).
+     */
+    static long[] resultFrameTicks(RenderTimeline timeline, Map<Long, SegmentTiming> timings) {
+        LongStream.Builder ticks = LongStream.builder();
+        for (VideoCut c : timeline.videoCuts()) {
+            for (long pts : timings.get(c.seq()).videoPtsSorted()) {
+                if (pts >= c.startPts() && pts < c.endPts()) {
+                    ticks.add(pts + c.deltaTicks());
+                }
+            }
+        }
+        return ticks.build().sorted().toArray();
+    }
+
     // ── 최종 단계(설계 7.5 (3)) ──
 
-    private List<Produced> encode(Recipe recipe, SegmentTiming frame, long ts, List<AudioRunInput> runs,
-                                  String loudnessFix, Path dir, Instant deadline, Progress progress) {
+    /**
+     * 출력마다 최종 단계를 돌린다. 자막은 옛 꼴과 같은 갈래다 — 남은 자막이 있을 때만 태우고(자리가 없으면 예전 모양 SRT 하나 ·
+     * 자리가 있으면 출력 해상도마다 ASS) CC 면 출력마다 SRT 를 낸다(빈 파일 금지 · 계약1 3절).
+     */
+    private List<Produced> encode(Recipe recipe, Captions captions, SegmentTiming frame, long ts,
+                                  List<AudioRunInput> runs, String loudnessFix, Path dir, Instant deadline,
+                                  Progress progress) {
+        Subtitles spec = recipe.subtitles();
+        boolean burn = spec != null && spec.mode().burns() && !captions.cues().isEmpty();
+        boolean cc = spec != null && spec.mode().cc() && !captions.cues().isEmpty();
+        String srt = SrtWriter.render(captions.cues());
+        if (burn && spec.position() == null) {
+            write(dir.resolve(RenderCommands.BURN_SRT), srt);
+        }
         List<Produced> produced = new ArrayList<>();
         List<Output> outputs = recipe.outputs();
         for (int i = 0; i < outputs.size(); i++) {
@@ -264,13 +338,32 @@ final class JoinedRenderer {
             for (Composition.Image image : video.images()) {
                 writeImage(dir.resolve(image.name()), image.image());
             }
+            String burnFile = burn ? burnFile(spec, captions.framed(), output, dir) : null;
             String file = output.outputId() + ".mp4";
-            runner.run(RenderCommands.renderJoined(ffmpeg, ts, video, runs, recipe.tracks(), loudnessFix, null,
+            runner.run(RenderCommands.renderJoined(ffmpeg, ts, video, runs, recipe.tracks(), loudnessFix, burnFile,
                     fontsDir, file), dir, deadline);
             produced.add(new Produced(output.outputId(), "video", dir.resolve(file)));
+            if (cc) {
+                String srtFile = output.outputId() + ".srt";
+                write(dir.resolve(srtFile), srt);
+                produced.add(new Produced(output.outputId(), "srt", dir.resolve(srtFile)));
+            }
             progress.report(30 + 60 * (i + 1) / outputs.size(), "encode");
         }
         return produced;
+    }
+
+    /**
+     * 태울 자막 파일 이름. 자리가 있는 자막(v2)은 출력 해상도가 출력마다 달라 ASS 를 출력마다 쓴다 — 시각은 결과 프레임 위 격자
+     * 값이라 SRT 와 같은 프레임을 덮는다.
+     */
+    private static String burnFile(Subtitles spec, List<SubtitleSegment> framed, Output output, Path dir) {
+        if (spec.position() == null) {
+            return RenderCommands.BURN_SRT;
+        }
+        String name = output.outputId() + ".ass";
+        write(dir.resolve(name), AssWriter.renderOnFrames(framed, spec.position(), output.aspect()));
+        return name;
     }
 
     private static ResultLayout layout(RenderTimeline timeline) {
