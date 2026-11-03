@@ -14,7 +14,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 회차 행 · 회차 기준점 질의가 <b>세션 색인 범위</b>를 타는지 잰다(POK-196 · cc rev8 부수 6 · README 「{@code EXPLAIN} 검사」
+ * 회차 행 · 회차 기준점 질의가 <b>세션 색인 범위</b>를 타는지 잰다(POK-196 · README 「{@code EXPLAIN} 검사」
  * 관례). 장부의 {@code stream_id}는 물리 키(스트림키)라 한 키에 그 스트리머의 조각 이력이 전부 쌓인다 — 회차 세션으로 색인
  * 범위를 못 자르면 카드 목록 · 마크마다 그 이력을 훑는다. 행 몇 개짜리 기능 시험으로는 이 차이가 안 보여 따로 잰다.
  *

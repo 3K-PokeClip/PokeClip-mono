@@ -111,8 +111,8 @@ public class CardPositionReader {
     }
 
     /**
-     * 이어짐 칸은 거짓으로 둔다 — 틈은 이어졌든 끊겼든 뒤 행 첫 화면이라 F 의 공백(뒤 행 seq)만 쓰면 된다(설계 r7 4절 ·
-     * cc rev9 부수 ③: 가르는 판정을 쓰는 곳이 없다).
+     * 이어짐 칸은 거짓으로 둔다 — 틈은 이어졌든 끊겼든 뒤 행 첫 화면이라 F 의 공백(뒤 행 seq)만 쓰면 된다(설계 r7 4절 —
+     * 가르는 판정을 쓰는 곳이 없다).
      */
     private static Optional<Scene> sceneOf(List<LedgerRow> ledger, Map<Long, Row> bySeq, Row first, long v) {
         return switch (LedgerTimeline.locate(ledger, v)) {

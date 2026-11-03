@@ -89,7 +89,7 @@ class ServerClockPositionTest {
                 .contains(new Position(204_000, 10, "wall", false, true));
     }
 
-    /** 첫 귀속 행 앞이면 그 행 시작(cc rev8 부수 2) — 스트림 전체 위치 0 이 아니다. */
+    /** 첫 귀속 행 앞이면 그 행 시작 — 스트림 전체 위치 0 이 아니다. */
     @Test
     void 첫_귀속_행_앞이면_첫_행_시작으로_접는다() {
         List<Row> rows = List.of(legacy(10, 200_000, 100_000, 100_000L, 4_000));

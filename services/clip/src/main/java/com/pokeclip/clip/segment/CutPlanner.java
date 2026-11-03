@@ -34,12 +34,16 @@ import java.util.stream.Collectors;
  * <p><b>축은 늘 파일명 시각({@code start_wall_utc})이고 원점은 파일 머리다</b>(경계 표 5판 B6). 편집기 {@code /get} 이 파일명 시각
  * 축이라 판으로 가르지 않는다 — 판 2 의 PDT 는 {@code /get} 과 장 수준 잔차가 있고 판 NULL 의 PDT 는 래칫으로 앞선다.
  *
- * <p>판정 순서가 계약이다 — ① 범위(회차 행 없음 · 첫 행 앞 · 마지막 행 뒤) ② 틈 판정(<b>좌표로 옮기기 전</b> 원래 범위로 · cx-3)
+ * <p>판정 순서가 계약이다 — ① 범위(회차 행 없음 · 첫 행 앞 · 마지막 행 뒤) ② 틈 판정(<b>좌표로 옮기기 전</b> 원래 범위로)
  * ③ 좌표 ④ 영상 조각 없음 ⑤ 자막 끝점 ⑥ 올라감 ⑦ 끝 소리 확보({@link AudioCaptureRule}) · 디코더 준비 ⑧ 길이. 거절은 준비보다
  * 먼저 본다 — 확정 거절은 다시 물어도 같다. 끊긴 이웃은 모두 이어 붙인다(이음 방식 하나 — 틈 초과 거절 없음).
  *
  * <p>DB 를 읽지 않는다. 회차 행은 부르는 쪽이 주고, 장부 이웃(확보 후보 · 준비 후보)은 판정이 정한 행에 대해서만 {@link Ledger}
  * 로 묻는다 — 어느 행을 물을지가 판정 결과라서다.
+ *
+ * <p><b>이상 입력은 예외다</b>(장부 불변식 위반 — 부르는 쪽에서 500). 회차 행이 seq 오름차순이 아니거나 길이가 음수면 공통 모듈이
+ * {@link IllegalArgumentException}, F 가 낸 seq 가 회차 행에 없거나 장부 바로 앞 행이 머리 뒤면 {@link IllegalStateException}
+ * 이다. 조용히 다른 자리로 접으면 틀린 영상이 나간다.
  */
 public final class CutPlanner {
 
@@ -68,7 +72,8 @@ public final class CutPlanner {
      * @param subtitles 레시피 자막(방송 절대축). 없으면 빈 목록
      * @param roundComplete 장부의 회차 완결 술어가 참이다({@code RoundRows.roundComplete}). 범위 판정(마지막 행 뒤 · 회차 행
      *        없음)의 종국 거절은 <b>이것만</b> 본다(계약 6-6-6 「녹화 밖」 · 설계 r7 9.2 1) — 되돌릴 수 없는 422 라서다
-     * @param broadcastEnded clip 방송이 {@code ended} 다. 끝 소리 확보만 이것을 완결과 함께 본다(계약 6-6-8 5항). 침묵 정리는 회차
+     * @param broadcastEnded clip 방송이 {@code ended} 다 — {@code broadcasts.status} 가 {@code LIVE} 가 아니다(소리 주소 API 와 같은
+     *        식 · 종료 편지 · 침묵 정리가 정한다). 끝 소리 확보만 이것을 완결과 함께 본다(계약 6-6-8 5항). 침묵 정리는 회차
      *        완결 확인 없이 방송을 끝내므로 이 값으로 범위를 거절하면 아직 안 온 꼬리가 영구 422 가 된다
      * @param ledgerSectionStart 이 방송의 장부 구간 시작({@code ExpiredBroadcastReader} 식). null이면 앞 방송이 없다
      * @param now 지금 — 확보 후보 {@code failed} 문턱을 잰다
@@ -158,7 +163,7 @@ public final class CutPlanner {
 
     /**
      * ② 원래 범위가 걸친 끊긴 이웃(J 거짓)마다 자리 · 전체 틈 · 컷 안 몫. 범위는 시작 쪽 틈의 앞 행부터 끝 쪽 틈의 뒤 행까지다 —
-     * 좌표로 옮긴 뒤 범위로 재면 머리 · 꼬리 틈이 사라진다(cx-3). 이어진 이웃 사이 장부 틈(B7)은 F 가 뒤 행 머리로 내므로 틈이
+     * 좌표로 옮긴 뒤 범위로 재면 머리 · 꼬리 틈이 사라진다. 이어진 이웃 사이 장부 틈(B7)은 F 가 뒤 행 머리로 내므로 틈이
      * 아니다.
      */
     private static List<Gap> gapsOf(List<RoundRow> rows, Place a, Place b, long inMs, long outMs) {
@@ -173,19 +178,19 @@ public final class CutPlanner {
             }
             long pEnd = axisMs(p) + p.durationMs();
             long inCut = Math.max(0, Math.min(axisMs(q), outMs) - Math.max(pEnd, inMs));
-            gaps.add(new Gap(p.seq(), q.seq(), placeOf(p, q, a, b), axisMs(q) - pEnd, inCut));
+            gaps.add(new Gap(p.seq(), q.seq(), locationOf(p, q, a, b), axisMs(q) - pEnd, inCut));
         }
         return gaps;
     }
 
-    private static Gap.Place placeOf(RoundRow p, RoundRow q, Place a, Place b) {
+    private static Gap.Location locationOf(RoundRow p, RoundRow q, Place a, Place b) {
         if (a instanceof Place.Gap g && g.beforeSeq() == p.seq() && g.afterSeq() == q.seq()) {
-            return Gap.Place.HEAD;
+            return Gap.Location.HEAD;
         }
         if (b instanceof Place.Gap g && g.beforeSeq() == p.seq() && g.afterSeq() == q.seq()) {
-            return Gap.Place.TAIL;
+            return Gap.Location.TAIL;
         }
-        return Gap.Place.MIDDLE;
+        return Gap.Location.MIDDLE;
     }
 
     /** ③ 시작 — 매체면 그 자리, 끊긴 틈 안이면 뒤 조각 머리. */
@@ -216,6 +221,7 @@ public final class CutPlanner {
         List<SubtitleSpan> spans = new ArrayList<>();
         for (int i = 0; i < input.subtitles().size(); i++) {
             RecipeDocument.Segment segment = input.subtitles().get(i);
+            // 두 시각은 Long 이다 — 레시피 검사(RecipeValidator)가 먼저 돌아 null 이 없다는 전제로 언박싱한다.
             long start = Math.max(segment.startAtMs(), input.inMs());
             long end = Math.min(segment.endAtMs(), input.outMs());
             if (start >= end) {
@@ -271,7 +277,7 @@ public final class CutPlanner {
     }
 
     /**
-     * ⑦ 디코더 준비 — 소리 묶음 머리(결과 첫 행 · J 거짓인 행)마다 규칙 하나(설계 r7 9.4 · cx-c1 · cx-k1). 머리 h 의 장부 바로 앞
+     * ⑦ 디코더 준비 — 소리 묶음 머리(결과 첫 행 · J 거짓인 행)마다 규칙 하나(설계 r7 9.4). 머리 h 의 장부 바로 앞
      * 행 p 가 있고 h 의 {@code is_discontinuity} 가 거짓이면 같은 녹화 흐름이라 p 를 h 묶음의 준비 조각으로 싣는다. 회차 귀속 ·
      * J · {@code followsLedgerPrevious} 는 이 판정에 쓰지 않는다 — p 가 비귀속 행이어도 같은 녹화기 바로 앞 파일이다.
      * <ul>
@@ -332,7 +338,7 @@ public final class CutPlanner {
 
     private static String describeGaps(List<Gap> gaps) {
         return gaps.isEmpty() ? "-" : gaps.stream()
-                .map(g -> g.place().name().toLowerCase(Locale.ROOT) + ":" + g.beforeSeq() + "-" + g.afterSeq() + ":"
+                .map(g -> g.location().name().toLowerCase(Locale.ROOT) + ":" + g.beforeSeq() + "-" + g.afterSeq() + ":"
                         + g.gapMs()
                         + ":" + g.inCutMs())
                 .collect(Collectors.joining(","));

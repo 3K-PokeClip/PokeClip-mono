@@ -97,7 +97,11 @@ public class RoundRows {
         String ingestKey();
     }
 
-    /** 회차 세션들. 비어 있지 않다(머리 자신이 늘 든다). */
+    /**
+     * 회차 세션들. 비어 있지 않다(머리 자신이 늘 든다). 행은 {@code ingestKey}(방송의 물리 키)로 읽는다 — 회차 세션의 장부
+     * {@code stream_id} 가 이 키와 같다는 것이 계약(방송 번호 = 머리 세션 · 물리 키 = 그 세션의 {@code stream_id})이다. 어긋난
+     * 세션의 행은 읽히지 않는다(모두 어긋나면 행 없음 — 마크는 503).
+     */
     public record Members(String ingestKey, List<String> sessionIds) implements Round {
         public Members {
             sessionIds = List.copyOf(sessionIds);

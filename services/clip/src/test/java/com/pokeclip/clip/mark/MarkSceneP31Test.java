@@ -232,7 +232,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(card.fileHead().atMs()).isEqualTo(abs(110_000));
     }
 
-    /** 단언 ⑤(틈) — 틈에서는 숫자가 아니라 장면이 보존된다(cx rev9 M1): 204,000 → PDT 110,000 → 새 마크 210,000. */
+    /** 단언 ⑤(틈) — 틈에서는 숫자가 아니라 장면이 보존된다: 204,000 → PDT 110,000 → 새 마크 210,000. */
     @Test
     void f_틈_장면의_플레이어_값으로_보낸_지난_방송_마크는_같은_장면으로_저장된다() {
         시드_f();
@@ -258,7 +258,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(thumbnailOf("S-f", card)).contains(new ThumbnailOrder(10, 0, OffsetOrigin.FILE_HEAD));
     }
 
-    /** rev8 부수 3 — 창 전체가 한 틈 안이면 두 끝이 같은 값(뒤 조각 첫 화면)이다. */
+    /** 창 전체가 한 틈 안이면 두 끝이 같은 값(뒤 조각 첫 화면)이다. */
     @Test
     void f_창_전체가_틈_안이면_세_값이_뒤_조각_첫_화면이다() {
         시드_f();

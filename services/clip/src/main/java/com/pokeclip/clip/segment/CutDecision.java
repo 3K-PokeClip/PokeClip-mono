@@ -82,9 +82,12 @@ public sealed interface CutDecision {
     record SubtitleSpan(int index, SubtitlePoint start, SubtitlePoint end) {
     }
 
-    /** 끊긴 이웃 하나 — 자리 · 전체 틈 · 컷 안 몫(이어 붙여 결과에서 빠지는 길이). 틈이 0 이하면 컷 안 몫도 0 이다. */
-    record Gap(long beforeSeq, long afterSeq, Place place, long gapMs, long inCutMs) {
-        public enum Place { HEAD, MIDDLE, TAIL }
+    /**
+     * 끊긴 이웃 하나 — 컷 안 자리 · 전체 틈 · 컷 안 몫(이어 붙여 결과에서 빠지는 길이). 틈이 0 이하면 컷 안 몫도 0 이다. 자리 이름이
+     * {@code Location} 인 것은 공통 모듈의 장부 자리 {@code Place}(F 의 결과)와 가르려는 것이다.
+     */
+    record Gap(long beforeSeq, long afterSeq, Location location, long gapMs, long inCutMs) {
+        public enum Location { HEAD, MIDDLE, TAIL }
     }
 
     /** 소리 묶음 머리. */

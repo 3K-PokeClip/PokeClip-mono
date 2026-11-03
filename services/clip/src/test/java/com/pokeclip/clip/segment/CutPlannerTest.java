@@ -124,7 +124,7 @@ class CutPlannerTest {
                 new SubtitleSpan(0, new AtMedia(new MediaCoord(101, 1_500_000)), new AtMedia(new MediaCoord(102, 500_000))),
                 new SubtitleSpan(1, new InGap(101, 500), new InGap(101, 1_500)));
         assertThat(ready.lengthMs()).isEqualTo(9_000);
-        assertThat(ready.gaps()).containsExactly(new Gap(101, 102, Gap.Place.MIDDLE, 2_000, 2_000));
+        assertThat(ready.gaps()).containsExactly(new Gap(101, 102, Gap.Location.MIDDLE, 2_000, 2_000));
         assertThat(ready.primes()).containsExactly(new Prime(101, neighbor(100, 96_000, RoundRow.UPLOADED)));
         assertThat(ready.runHeads()).containsExactly(
                 new RunHead(101, RunHead.Kind.CONTINUED), new RunHead(102, RunHead.Kind.NEW_RECORDING));
@@ -135,7 +135,7 @@ class CutPlannerTest {
     // ── 틈 판정 · 좌표(P11) ─────────────────────────────────────
 
     /**
-     * P11 · cx-3 반례 — 컷이 끊긴 틈 안에서 시작하면 틈 판정은 좌표로 옮기기 <b>전</b> 원래 범위로 한다: 머리 틈이 기록되고 시작은
+     * P11 반례 — 컷이 끊긴 틈 안에서 시작하면 틈 판정은 좌표로 옮기기 <b>전</b> 원래 범위로 한다: 머리 틈이 기록되고 시작은
      * {@code (B, 0)}, 틈 안에서 시작한 자막은 틈 자리 끝점이다. 좌표 뒤 범위({@code [B 시작, out)})로 재면 머리 틈이 사라진다.
      */
     @Test
@@ -147,7 +147,7 @@ class CutPlannerTest {
 
         Ready ready = (Ready) CutPlanner.plan(input(rows, 4_400, 8_000, true, subtitles), new FakeLedger());
 
-        assertThat(ready.gaps()).containsExactly(new Gap(1, 2, Gap.Place.HEAD, 1_000, 600));
+        assertThat(ready.gaps()).containsExactly(new Gap(1, 2, Gap.Location.HEAD, 1_000, 600));
         assertThat(ready.in()).isEqualTo(new MediaCoord(2, 0));
         assertThat(ready.media()).extracting(RoundRow::seq).containsExactly(2L);
         assertThat(ready.subtitles()).containsExactly(
@@ -164,7 +164,7 @@ class CutPlannerTest {
         Ready ready = (Ready) CutPlanner.plan(input(rows, 1_000, 4_500, true), new FakeLedger());
 
         assertThat(ready.out()).isEqualTo(new End(1, null));
-        assertThat(ready.gaps()).containsExactly(new Gap(1, 2, Gap.Place.TAIL, 1_000, 500));
+        assertThat(ready.gaps()).containsExactly(new Gap(1, 2, Gap.Location.TAIL, 1_000, 500));
         assertThat(ready.lengthMs()).isEqualTo(3_000);
     }
 
@@ -289,7 +289,7 @@ class CutPlannerTest {
 
         Ready ready = (Ready) CutPlanner.plan(input(rows, 1_000, 7_000, true), ledger);
 
-        assertThat(ready.gaps()).containsExactly(new Gap(1, 3, Gap.Place.MIDDLE, 300, 300));
+        assertThat(ready.gaps()).containsExactly(new Gap(1, 3, Gap.Location.MIDDLE, 300, 300));
         assertThat(ready.primes()).containsExactly(
                 new Prime(1, neighbor(0, -4_000, RoundRow.UPLOADED)),
                 new Prime(3, neighbor(2, 4_000, RoundRow.UPLOADED)));

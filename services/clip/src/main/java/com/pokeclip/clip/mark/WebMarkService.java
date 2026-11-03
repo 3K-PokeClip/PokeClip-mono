@@ -155,6 +155,7 @@ public class WebMarkService {
      * (POK-196 · 설계 r7 8.2) — 출시 이미지 판 NULL 행에서는 「목록 PDT − 기준점」 이 재생 위치 축 값이 아니다.
      */
     private long positionMillis(WebMarkRequest request, Broadcast broadcast) {
+        // 기준점과 저장 위치는 다른 왕복이라 같은 시점 읽기가 아니다. 지난 방송은 장부 행이 더 붙지 않아 두 읽기가 같은 행을 본다.
         Instant origin = origins.originsOf(List.of(broadcast)).get(broadcast.getStreamId());
         if (origin == null) {
             throw new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS);
