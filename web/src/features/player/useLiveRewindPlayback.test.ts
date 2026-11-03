@@ -141,7 +141,7 @@ describe('되감기 조각 404 의 고리 · 명령 묶음(POK-528 c5 · 계획 
     expect(drop).toHaveBeenCalledTimes(1);
   });
 
-  // K3 — 덮개 · 주소가 그대로인데 「세우지 않음」 값만 바뀌어도(막힘 해제 · 목록 다시 받기) 고리가 새 값을 싣는다
+  // K3 — 덮개 · 주소가 그대로인데 「세우지 않음」 값만 바뀌어도(덮개가 이미 preparing 인 채 막힘 · 마지막 확인이 서는 전이) 고리가 새 값을 싣는다
   it('세션의 「세우지 않음」(view.startHeld)을 고리 startHeld 로 넘기고, 그 값만 바뀌어도 새 값을 싣는다', () => {
     const dispatch = vi.fn<(event: SessionEvent) => void>();
     const base = fakeSession({ dispatch });
