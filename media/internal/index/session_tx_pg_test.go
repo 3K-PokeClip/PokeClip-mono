@@ -86,11 +86,18 @@ func sessionOpForTest(op SessionOp) (session.Op, error) {
 	return 0, fmt.Errorf("테스트 어댑터: 알 수 없는 연산 %d", op)
 }
 
+// legacySegKey 는 실물 키 파생(playback.SegKey)을 PlaybackKeyFunc 에 입힌 옛 꼴 어댑터다 — 회차를 버린다(스위치 끔 상자와
+// 같은 꼴). 이 패키지 시험은 세션 · PDT · 키 유무를 재고, 회차 꼴 선택은 조립 지점 시험(cmd/segment-indexer
+// playback_key_wire_test.go)이 잰다.
+func legacySegKey(streamID, _ string, seq int64) (string, error) {
+	return playback.SegKey(streamID, seq)
+}
+
 // newSessionStore 는 실물 세션 결정자와 실물 키 파생을 끼운 store 다(M3 형상).
 // 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초 · 재접속 계승 창 300초.
 func newSessionStore(pool *pgxpool.Pool) Store {
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
-	return NewPGStore(pool, registryDecider{reg: reg}, playback.SegKey)
+	return NewPGStore(pool, registryDecider{reg: reg}, legacySegKey)
 }
 
 // newKeylessStore 는 키 파생만 실패하는 store 다 — 설계 5.2 "파생 실패는
@@ -98,7 +105,7 @@ func newSessionStore(pool *pgxpool.Pool) Store {
 func newKeylessStore(pool *pgxpool.Pool) Store {
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
 	return NewPGStore(pool, registryDecider{reg: reg},
-		func(string, int64) (string, error) { return "", errors.New("키 파생 실패(픽스처)") })
+		func(string, string, int64) (string, error) { return "", errors.New("키 파생 실패(픽스처)") })
 }
 
 // 유입별 per-call 입력. 관측이 없는 것이 이 단계의 전제다(폴러 배선은 단계 4) —
@@ -705,7 +712,7 @@ func TestSessionDecisionDatabaseErrorPropagatesInsteadOfDeclining(t *testing.T) 
 			ctx := context.Background()
 			stream := sessionStream("decide-err-" + c.name)
 			boom := errors.New("세션 표 접근 실패(픽스처)")
-			store := NewPGStore(pool, failingDecider{err: boom, opens: c.opens}, playback.SegKey)
+			store := NewPGStore(pool, failingDecider{err: boom, opens: c.opens}, legacySegKey)
 
 			_, res, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000),
 				eligibleSeed(time.Now().UTC()), liveIngress())
@@ -811,7 +818,7 @@ func TestDecisionRoundIDReachesStoreAndMatchesSessionRound(t *testing.T) {
 	stream := sessionStream("round-id")
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
 	var last SessionDecision
-	store := NewPGStore(pool, roundProbeDecider{registryDecider: registryDecider{reg: reg}, last: &last}, playback.SegKey)
+	store := NewPGStore(pool, roundProbeDecider{registryDecider: registryDecider{reg: reg}, last: &last}, legacySegKey)
 
 	var head string
 	for _, c := range []struct {
@@ -852,7 +859,7 @@ func TestInsertRollsBackWhenDecisionRoundIDDiffersFromOpen(t *testing.T) {
 	stream := sessionStream("round-id-tampered")
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
 	var last SessionDecision
-	store := NewPGStore(pool, roundProbeDecider{registryDecider: registryDecider{reg: reg}, last: &last, tamper: "S-elsewhere"}, playback.SegKey)
+	store := NewPGStore(pool, roundProbeDecider{registryDecider: registryDecider{reg: reg}, last: &last, tamper: "S-elsewhere"}, legacySegKey)
 
 	_, _, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
 

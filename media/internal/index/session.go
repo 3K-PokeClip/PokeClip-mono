@@ -121,11 +121,14 @@ type SessionDecision struct {
 	Plan    SessionPlan
 }
 
-// PlaybackKeyFunc 는 ③ 조각 키 파생이다(설계 5.2 — playback.SegKey).
+// PlaybackKeyFunc 는 ③ 조각 키 파생이다(설계 5.2 — playback.SegKey · POK-525 설계 2-1 — playback.RoundSegKey).
 //
-// 함수로 주입하는 이유: 파생은 순수하고 구현이 하나이며 상태가 없다. 이 한 줄을 위해
+// roundID 는 결정의 RoundID(조각이 드는 회차 — 없으면 "")다. 어느 꼴로 쓸지(옛 꼴 · 회차 꼴)는 함수가 정한다 — 상자
+// 스위치 PLAYBACK_ROUND_KEYS 가 기동 때 고른 함수가 들어온다(cmd/segment-indexer playbackKeyFor). 장부는 스위치를 모른다.
+//
+// 함수로 주입하는 이유: 파생은 순수하고 상태가 없다. 이 한 줄을 위해
 // 인터페이스를 만들면 읽는 사람이 구현을 찾아 헤맨다(원칙 5).
-type PlaybackKeyFunc func(streamID string, seq int64) (string, error)
+type PlaybackKeyFunc func(streamID, roundID string, seq int64) (string, error)
 
 // noSessionDecider 는 결정자를 끼우지 않은 프로세스의 널 오브젝트다.
 //
@@ -146,6 +149,6 @@ func (noSessionDecider) Open(context.Context, pgx.Tx, SessionDecision, time.Time
 
 // noPlaybackKey 는 키 파생을 끼우지 않은 프로세스의 널 오브젝트다 —
 // 파생 실패와 같은 갈래로 흘러 playback_s3_key 만 NULL 로 남는다(설계 5.2).
-func noPlaybackKey(string, int64) (string, error) {
+func noPlaybackKey(string, string, int64) (string, error) {
 	return "", errors.New("index: ③ 키 파생 함수가 주입되지 않았다")
 }
