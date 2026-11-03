@@ -169,6 +169,8 @@ func upgradeLatest(ctx context.Context, tx pgx.Tx, e IntentionalEnd, o IntentOpt
 // forwardMarkSQL 은 forwarded 효과다 — 회차 최신 L 에 도착 순간 DB 시각 표식을 건다(첫 표식만 남긴다 · 사유 · 동결은 그대로).
 // 4D 의 StoppedAt 은 T 의 시간축 값이라 L 에는 쓰지 않는다. round_id 는 건드리지 않는다 — 이미 녹화된 조각은 옛 회차에 남고,
 // live L 이면 다음 조각이 표식 + 여유 뒤에 시작할 때 표식 분할(markSplitDecision)이 새 회차를 연다.
+// pg_catalog.now() 는 트랜잭션 시작 시각이다 — 같은 트랜잭션에서 부르는 round_close 의 now() 와 같은 기준이고, 잠금 대기만큼
+// 실제 도착보다 이르게 찍힌다(표식 분할이 그만큼 빨라지는 보수 방향).
 const forwardMarkSQL = `
 UPDATE stream_sessions SET stop_marked_at = COALESCE(stop_marked_at, pg_catalog.now())
  WHERE session_id = $1
@@ -180,7 +182,12 @@ RETURNING state, stop_marked_at`
 func forwardToLatest(ctx context.Context, tx pgx.Tx, o IntentOptions, res IntentionalResult, latest string) (IntentionalResult, error) {
 	var state string
 	var marked time.Time
-	if err := tx.QueryRow(ctx, forwardMarkSQL, latest).Scan(&state, &marked); err != nil {
+	err := tx.QueryRow(ctx, forwardMarkSQL, latest).Scan(&state, &marked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// L 은 ③ 에서 잠근 회차 행이라 잠금 아래에서 사라질 수 없다 — 사라졌다면 잠금 계약이 깨진 것이다.
+		return res, fmt.Errorf("4D 앞으로 적용 표식이 0 행을 썼다 session_id=%q — 회차 행 잠금 아래 회차 최신이 사라졌다: %w", latest, err)
+	}
+	if err != nil {
 		return res, fmt.Errorf("4D 앞으로 적용 표식 실패 session_id=%q: %w", latest, err)
 	}
 	if state != "live" {

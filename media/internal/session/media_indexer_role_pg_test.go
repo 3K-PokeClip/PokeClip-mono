@@ -26,6 +26,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/broadcast"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
@@ -189,4 +191,63 @@ func TestMediaIndexerRoleAppliesIntentionalEnd(t *testing.T) {
 		"forwardMarkSQL": forwardMarkSQL,
 	})
 	traps.RequireNotCalled(t)
+}
+
+// 4D forwarded(L 이 끝남)의 실제 회차 닫힘 경로 — CloseRound 칸에 운영 배선(cmd closeRound · newEndedEnqueuer)과 같은
+// index.TryCloseRound + broadcast.EnqueueEndedIfComplete 를 끼워 media_indexer 권한만으로 돌린다. 회차 R 이 닫히고, L 이
+// ended 면 회차가 완결이라 계약9 ended outbox 행이 하나 생긴다(ending 이면 완결이 아니라 없다). 검색 경로 함정을 부르지
+// 않는다. 변이 = forwardToLatest 의 CloseRound 호출 제거 → 회차 닫힘 단언 FAIL.
+func TestMediaIndexerRoleForwardedClosesRoundThroughTryCloseRound(t *testing.T) {
+	for _, c := range []struct {
+		state, reason, vod string
+		wantEnded          int
+	}{
+		{"ending", endReasonTDExceeded, "freezing", 0},
+		{"ended", "offline", "frozen", 1},
+	} {
+		t.Run(c.state, func(t *testing.T) {
+			ctx := context.Background()
+			admin := newTestPool(t)
+			traps := pgtest.PlantSearchPathTraps(t, admin)
+			role := pgtest.NewMediaIndexerRole(t, admin)
+			t.Cleanup(func() { role.RequireNoneDenied(t) })
+			stream := "r-forward-close"
+			seedLedger(t, admin, ledgerRow{id: "S-T", streamID: stream, state: "ended", endReason: "offline", vodState: "frozen", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+			seedSegment(t, admin, stream, "S-T", 1, stopAt.Add(-5*time.Second))
+			seedLedger(t, admin, ledgerRow{id: "S-L", streamID: stream, state: c.state, endReason: c.reason, vodState: c.vod, roundID: "S-R", startedAt: stopAt.Add(20 * time.Second)})
+			gate := broadcast.NewGate([]string{"*"}, nil)
+			withTx(t, admin, func(tx pgx.Tx) {
+				if err := broadcast.EnqueueStarted(ctx, tx, gate, "S-R", stream, stopAt.Add(-time.Hour)); err != nil {
+					t.Fatalf("픽스처(started outbox 행) 실패: %v", err)
+				}
+			})
+			o := (&intentSlots{}).options()
+			o.CloseRound = func(ctx context.Context, tx pgx.Tx, round string) error {
+				_, err := index.TryCloseRound(ctx, tx, round, crossClose, func(ctx context.Context, tx pgx.Tx, round string) error {
+					_, err := broadcast.EnqueueEndedIfComplete(ctx, tx, gate, round)
+					return err
+				})
+				return err
+			}
+
+			res, err := ApplyIntentionalEnd(ctx, role.Pool, endAt(stream), o)
+
+			if err != nil || res.Effect != effectForwarded || res.RoundID != "S-R" {
+				t.Fatalf("4D = (%+v, %v), want forwarded · S-R", res, err)
+			}
+			if !roundClosedOf(t, admin, "S-T") || !roundClosedOf(t, admin, "S-L") {
+				t.Errorf("회차 S-R 이 닫히지 않았다 — forwarded 가 같은 트랜잭션에서 TryCloseRound 를 불러야 한다")
+			}
+			var ended int
+			if err := admin.QueryRow(ctx, `SELECT pg_catalog.count(*) FROM broadcast_lifecycle_outbox WHERE round_id = 'S-R' AND event_type = $1`,
+				broadcast.EventEnded).Scan(&ended); err != nil {
+				t.Fatalf("outbox 조회 실패: %v", err)
+			}
+			if ended != c.wantEnded {
+				t.Errorf("ended outbox 행 = %d, want %d", ended, c.wantEnded)
+			}
+			role.RequireSent(t, map[string]string{"lockRoundRowsSQL": lockRoundRowsSQL, "forwardMarkSQL": forwardMarkSQL})
+			traps.RequireNotCalled(t)
+		})
+	}
 }
