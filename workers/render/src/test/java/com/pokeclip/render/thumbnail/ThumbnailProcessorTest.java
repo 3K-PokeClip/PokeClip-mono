@@ -52,6 +52,8 @@ class ThumbnailProcessorTest {
     private HttpServer clip;
     private final List<JsonNode> reports = new CopyOnWriteArrayList<>();
     private final AtomicInteger status = new AtomicInteger(200);
+    /** 가짜 실행기({@link #판독이})가 받은 ffmpeg 뽑기 수. */
+    private final AtomicInteger 뽑기_횟수 = new AtomicInteger();
     private S3Store store;
     private Path uploaded;
     private Path video;
@@ -376,6 +378,80 @@ class ThumbnailProcessorTest {
         assertThat(processor(fake, Clock.systemUTC()).process(주문서(1_000))).isEqualTo(Disposition.DELETE);
         assertThat(calls.get()).isEqualTo(2);
         assertThat(uploaded).hasContent("좋은 사진");
+    }
+
+    /**
+     * 판독(ffprobe)이 잠깐 안 되면(실패 · 시한 초과) 창고가 잠깐 안 된 것과 같다: 라이브는 지우고 카드 · 완성 영상은 둔다. 판독 없이
+     * 찍지 않는다 — 자리를 못 정했으니 뽑지도 올리지도 알리지도 않는다.
+     */
+    @Test
+    void 판독이_잠깐_안_되면_라이브는_지우고_카드와_완성_영상은_둔다() {
+        받기가_파일을_준다();
+        ProcessRunner failed = 판독이(() -> {
+            throw new ProcessRunner.Failed("ffprobe", 1, "읽기 오류");
+        });
+        ProcessRunner timedOut = 판독이(() -> {
+            throw new ProcessRunner.Timeout("ffprobe");
+        });
+
+        for (ProcessRunner runner : List.of(failed, timedOut)) {
+            assertThat(processor(runner, Clock.systemUTC()).process(주문서("live", 1_000))).isEqualTo(Disposition.DELETE);
+            assertThat(processor(runner, Clock.systemUTC()).process(주문서("card", 1_000))).isEqualTo(Disposition.LEAVE);
+            assertThat(processor(runner, Clock.systemUTC()).process(주문서("clip", 1_000))).isEqualTo(Disposition.LEAVE);
+        }
+        assertThat(뽑기_횟수.get()).as("자리를 못 정하면 뽑지 않는다").isZero();
+        verify(store, never()).upload(any(), any(), any(), any(), any());
+        assertThat(reports).isEmpty();
+    }
+
+    /** 판독 꼴이 어긋나면({@code SOURCE_MISMATCH}) 다시 받아도 같은 파일이다. 세 갈래 모두 지우고, 뽑지도 알리지도 않는다. */
+    @Test
+    void 판독_꼴이_어긋나면_세_갈래_모두_지운다() {
+        받기가_파일을_준다();
+        ProcessRunner noVideo = 판독이(() -> new ProcessRunner.Result("""
+                {"format":{"start_time":"0.000000"},"streams":[],"packets":[]}""", ""));
+
+        for (String kind : List.of("live", "card", "clip")) {
+            assertThat(processor(noVideo, Clock.systemUTC()).process(주문서(kind, 1_000))).as(kind)
+                    .isEqualTo(Disposition.DELETE);
+        }
+        assertThat(뽑기_횟수.get()).isZero();
+        verify(store, never()).upload(any(), any(), any(), any(), any());
+        assertThat(reports).isEmpty();
+    }
+
+    /** 판독은 됐는데 0초로 다시 뽑아도 그림이 없으면 원본이 틀린 것({@code SOURCE_MISMATCH})이다. 카드도 지운다. */
+    @Test
+    void 영초로도_장면을_못_뽑으면_카드도_지운다() {
+        받기가_파일을_준다();
+        ProcessRunner noPicture = 판독이(() -> new ProcessRunner.Result(두_초_판독(), ""));
+
+        assertThat(processor(noPicture, Clock.systemUTC()).process(주문서("card", 1_000))).isEqualTo(Disposition.DELETE);
+        assertThat(뽑기_횟수.get()).as("제자리 한 번 + 0초 한 번").isEqualTo(2);
+        verify(store, never()).upload(any(), any(), any(), any(), any());
+        assertThat(reports).isEmpty();
+    }
+
+    /** 창고 받기가 아무 바이트나 원본 자리에 쓴다(판독 · 뽑기는 가짜 실행기가 답한다). */
+    private void 받기가_파일을_준다() {
+        doAnswer(inv -> {
+            Files.writeString(inv.<Path>getArgument(2), "src");
+            return null;
+        }).when(store).download(any(), any(), any(), any());
+    }
+
+    /** ffprobe 는 {@code probe} 대로 답하고, ffmpeg(뽑기)는 세기만 하고 그림을 쓰지 않는 실행기. */
+    private ProcessRunner 판독이(java.util.function.Supplier<ProcessRunner.Result> probe) {
+        return new ProcessRunner() {
+            @Override
+            public Result run(List<String> command, Path workDir, java.time.Instant deadline) {
+                if ("ffprobe".equals(command.getFirst())) {
+                    return probe.get();
+                }
+                뽑기_횟수.incrementAndGet();
+                return new Result("", "");
+            }
+        };
     }
 
     /** 받기·뽑기·올리기에 상한을 다 쓰면 보고를 시작하지 않고 둔다(보고 시한이 상한 밖에 붙지 않게). */

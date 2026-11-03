@@ -82,6 +82,10 @@ class ThumbnailJobTest {
         ObjectNode bigOffset = 주문서();
         ((ObjectNode) bigOffset.get("source")).put("offsetMs", new java.math.BigInteger("9223372036854775808"));
         assertThat(읽기(bigOffset)).as("offsetMs 가 long 밖").isEmpty();
+        // 2^64 + 5 — 아래 64비트만 남기면 5 라는 그럴듯한 자리가 된다(음수로 감기는 2^63 과 달리 offsetMs >= 0 검사에 안 걸린다)
+        ObjectNode wrapOffset = 주문서();
+        ((ObjectNode) wrapOffset.get("source")).put("offsetMs", new java.math.BigInteger("18446744073709551621"));
+        assertThat(읽기(wrapOffset)).as("offsetMs 가 2^64 + 5").isEmpty();
         ObjectNode wrapVersion = 주문서();
         wrapVersion.put("schemaVersion", 4_294_967_297L);  // int 로 자르면 1 이 된다
         assertThat(읽기(wrapVersion)).as("schemaVersion 이 int 밖").isEmpty();

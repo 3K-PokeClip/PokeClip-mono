@@ -31,7 +31,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * PTS 최댓값을 읽어 고른 자리를 <b>마지막 표시 프레임 시작</b>(P_last)까지로 자르고, 그래도 파일이 없으면 0초로 한 번 더 뽑는다.
  * 진짜 ffmpeg 시험은 앞 1초가 빨강, 뒤 1초가 파랑인 영상으로 「끝을 넘는 자리를 고르면 첫 장면(빨강)이 아니라 끝 장면(파랑)이
  * 나온다」를 잰다: 자르기를 빼면 0초 재시도가 빨강을 뽑아 빨간불이 된다. B 프레임 영상에서는 찍힌 그림이 표시 순 마지막 프레임과
- * 바이트까지 같은지 잰다: DTS 최댓값이나 format 길이로 자르면 마지막 프레임 앞 그림이 찍혀 빨간불이 된다.
+ * 바이트까지 같은지 잰다: DTS 최댓값이나 format 길이로 자르면 마지막 프레임 앞 그림이 찍혀 빨간불이 된다. 가변 프레임 · 회전 표지 ·
+ * format 시작보다 늦게 시작하는 영상 · format 시작이 0이 아닌 파일도 실제 파일로 같은 오라클을 쓴다.
  */
 @ExtendWith(OutputCaptureExtension.class)
 class SceneExtractorTest {
@@ -152,6 +153,70 @@ class SceneExtractorTest {
         assertThat(late).doesNotExist();
     }
 
+    /**
+     * 가변 프레임(VFR): 1초는 30fps, 뒤 1초는 10fps 라 마지막 프레임 시작이 1.9초다. 프레임 수와 30fps 로 끝을 어림하면
+     * (40장 → 1.3초) 마지막 앞 그림이 찍힌다.
+     */
+    @Test
+    void 가변_프레임_영상의_끝을_넘는_자리는_표시_순_마지막_프레임을_찍는다() throws Exception {
+        Path video = 끝만_초록인_가변_프레임_영상();
+        Recording runner = new Recording();
+        Path picture = dir.resolve("thumb.jpg");
+
+        assertThat(recording(runner).extract(video, 999_999, picture)).isTrue();
+
+        assertThat(runner.seeks).containsExactly("1.900");
+        assertThat(sha256(picture)).isEqualTo(sha256(마지막_프레임(video)));
+        assertThat(초록이다(picture)).isTrue();
+    }
+
+    /** 회전 표지(표시 행렬 90도)가 있어도 시각은 그대로다. 그림은 ffmpeg 가 세워서 낸다(세로 180x320). */
+    @Test
+    void 회전_영상의_끝을_넘는_자리도_마지막_프레임을_세워서_찍는다() throws Exception {
+        Path video = 회전_표지를_단(끝만_초록인_영상());
+        Recording runner = new Recording();
+        Path picture = dir.resolve("thumb.jpg");
+
+        assertThat(recording(runner).extract(video, 999_999, picture)).isTrue();
+
+        assertThat(runner.seeks).containsExactly("2.000");
+        assertThat(sha256(picture)).isEqualTo(sha256(마지막_프레임(video)));
+        BufferedImage image = ImageIO.read(picture.toFile());
+        assertThat(image.getWidth()).isEqualTo(180);
+        assertThat(image.getHeight()).isEqualTo(320);
+    }
+
+    /**
+     * 소리가 0초에, 영상이 0.5초에 시작한다(format 시작 0 · 영상 첫 PTS 0.5). 입력 시각 0은 format 시작이라 마지막 프레임 시작은
+     * 2.5초다. 영상 첫 PTS 를 빼면 2.0초가 되어 빨강이 찍힌다.
+     */
+    @Test
+    void 영상이_format_시작보다_늦게_시작해도_마지막_프레임은_format_시작_기준이다() throws Exception {
+        Path video = 영상이_늦게_시작하는(끝만_초록인_영상());
+        Recording runner = new Recording();
+        Path picture = dir.resolve("thumb.jpg");
+
+        assertThat(recording(runner).extract(video, 999_999, picture)).isTrue();
+
+        assertThat(runner.seeks).containsExactly("2.500");
+        assertThat(sha256(picture)).isEqualTo(sha256(마지막_프레임(video)));
+        assertThat(초록이다(picture)).isTrue();
+    }
+
+    /** format 시작이 1.5초인 파일: 마지막 프레임 시작은 3.5 − 1.5 = 2.0초다. 빼지 않으면 끝을 넘어 0초(빨강)로 다시 뽑는다. */
+    @Test
+    void format_시작이_0이_아닌_파일은_그만큼_빼고_자른다() throws Exception {
+        Path video = 시작_시각을_민(끝만_초록인_영상());
+        Recording runner = new Recording();
+        Path picture = dir.resolve("thumb.jpg");
+
+        assertThat(recording(runner).extract(video, 999_999, picture)).isTrue();
+
+        assertThat(runner.seeks).containsExactly("2.000");
+        assertThat(sha256(picture)).isEqualTo(sha256(마지막_프레임(video)));
+        assertThat(초록이다(picture)).isTrue();
+    }
+
     // ── 가짜 실행기 ────────────────────────────────────────────
 
     /** 3초 · 30fps · B 프레임 없음: 마지막 프레임 시작 2.966667초 → 2990 자리는 2.966초로 자른다(고정 여유를 빼지 않는다). */
@@ -233,6 +298,62 @@ class SceneExtractorTest {
         assertThat(noStart.seeks).containsExactly("4.200");
     }
 
+    /** PTS 가 {@code N/A} 인 패킷(PTS 없는 패킷)은 건너뛰고 나머지의 최댓값으로 자른다. */
+    @Test
+    void PTS_가_N_A_인_패킷은_건너뛰고_나머지로_자른다() {
+        Recorder runner = new Recorder("""
+                pts_time=0.000000
+                pts_time=N/A
+                pts_time=2.966667
+                pts_time=N/A
+                start_time=0.000000
+                """, true);
+
+        fake(runner).extract(dir.resolve("v.mp4"), 9_000, dir.resolve("t.jpg"));
+
+        assertThat(runner.seeks).containsExactly("2.966");
+    }
+
+    /** PTS 가 전부 {@code N/A} 면 마지막 프레임을 못 잰 것이다. 고른 자리 그대로 해 본다. */
+    @Test
+    void PTS_가_전부_N_A_면_고른_자리_그대로_해_본다(CapturedOutput output) {
+        Recorder runner = new Recorder("pts_time=N/A\npts_time=N/A\nstart_time=0.000000\n", true);
+
+        assertThat(fake(runner).extract(dir.resolve("v.mp4"), 4_200, dir.resolve("t.jpg"))).isTrue();
+
+        assertThat(runner.seeks).containsExactly("4.200");
+        assertThat(output.getAll()).contains("upload.thumbnail_probe_failed");
+    }
+
+    /** 숫자가 아닌 값이 한 줄이라도 있으면 판독 실패다. 나머지 줄로 어림하지 않고 고른 자리 그대로 해 본다. */
+    @Test
+    void 숫자가_아닌_판독값이_있으면_고른_자리_그대로_해_본다(CapturedOutput output) {
+        Recorder badPts = new Recorder(프레임들(90, 0) + "pts_time=1.0.0\n", true);
+        Recorder badStart = new Recorder(프레임들(90, 0).replace("start_time=0.000000", "start_time=abc"), true);
+
+        fake(badPts).extract(dir.resolve("v.mp4"), 4_200, dir.resolve("t.jpg"));
+        fake(badStart).extract(dir.resolve("v.mp4"), 4_200, dir.resolve("u.jpg"));
+
+        assertThat(badPts.seeks).containsExactly("4.200");
+        assertThat(badStart.seeks).containsExactly("4.200");
+        assertThat(output.getAll()).contains("upload.thumbnail_probe_failed");
+    }
+
+    /** ms 로 바꾼 값이 long 을 넘으면 판독 실패다. 예외가 새지 않고 고른 자리 그대로 해 본다. */
+    @Test
+    void long_범위를_넘는_판독값이면_고른_자리_그대로_해_본다(CapturedOutput output) {
+        Recorder huge = new Recorder("pts_time=0.000000\npts_time=99999999999999999999.000000\nstart_time=0.000000\n",
+                true);
+        Recorder exponent = new Recorder("pts_time=1E+30\nstart_time=0.000000\n", true);
+
+        assertThat(fake(huge).extract(dir.resolve("v.mp4"), 4_200, dir.resolve("t.jpg"))).isTrue();
+        assertThat(fake(exponent).extract(dir.resolve("v.mp4"), 4_200, dir.resolve("u.jpg"))).isTrue();
+
+        assertThat(huge.seeks).containsExactly("4.200");
+        assertThat(exponent.seeks).containsExactly("4.200");
+        assertThat(output.getAll()).contains("upload.thumbnail_probe_failed");
+    }
+
     @Test
     void 음수_자리는_0초다() {
         Recorder runner = new Recorder(끝_10초(), true);
@@ -311,6 +432,10 @@ class SceneExtractorTest {
         return new SceneExtractor(new ProcessRunner(), "ffmpeg", "ffprobe", Duration.ofSeconds(30));
     }
 
+    private SceneExtractor recording(Recording runner) {
+        return new SceneExtractor(runner, "ffmpeg", "ffprobe", Duration.ofSeconds(30));
+    }
+
     private SceneExtractor fake(Recorder runner) {
         return new SceneExtractor(runner, "/x/ffmpeg", "/x/ffprobe", Duration.ofSeconds(30));
     }
@@ -356,6 +481,83 @@ class SceneExtractorTest {
         assertThat(최댓값(packets, "dts_time=")).as("B 프레임이라 DTS 최댓값이 PTS 최댓값보다 앞서야 한다")
                 .isLessThan(최댓값(packets, "pts_time="));
         return video;
+    }
+
+    /**
+     * 1초 빨강(30fps) 뒤 0.9초 파랑과 초록 한 프레임(10fps) — 가변 프레임으로 담는다(320x180 · B 프레임 없음). 프레임 간격이 한
+     * 가지면 가변 프레임 시험이 아니다 — 여기서 멈춘다.
+     */
+    private Path 끝만_초록인_가변_프레임_영상() throws Exception {
+        Assumptions.ffmpeg();
+        Path video = dir.resolve("vfr.mp4");
+        run("ffmpeg", "-hide_banner", "-nostdin", "-y",
+                "-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=1",
+                "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=10:d=0.9",
+                "-f", "lavfi", "-i", "color=c=green:s=320x180:r=10:d=0.1",
+                "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-fps_mode", "vfr",
+                "-c:v", "libx264", "-bf", "0", "-pix_fmt", "yuv420p", video.toString());
+        List<Double> pts = probe(video, "-select_streams", "v:0", "-show_entries", "packet=pts_time").lines()
+                .filter(l -> l.startsWith("pts_time=")).map(l -> Double.parseDouble(l.substring(9))).sorted().toList();
+        assertThat(pts.get(1) - pts.get(0)).as("앞은 30fps").isLessThan(0.05);
+        assertThat(pts.getLast() - pts.get(pts.size() - 2)).as("뒤는 10fps").isGreaterThan(0.09);
+        return video;
+    }
+
+    /** 2초 빨강 뒤 초록 한 프레임(320x180 · 30fps · libx264 기본). 아래 셋이 이 파일을 다른 꼴로 옮긴다. */
+    private Path 끝만_초록인_영상() throws Exception {
+        Assumptions.ffmpeg();
+        Path video = dir.resolve("plain.mp4");
+        run("ffmpeg", "-hide_banner", "-nostdin", "-y",
+                "-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=2",
+                "-f", "lavfi", "-i", "color=c=green:s=320x180:r=30:d=0.0333",
+                "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", video.toString());
+        return video;
+    }
+
+    /** 다시 인코딩하지 않고 표시 행렬 90도만 단다. */
+    private Path 회전_표지를_단(Path plain) throws Exception {
+        Path video = dir.resolve("rot.mp4");
+        run("ffmpeg", "-hide_banner", "-nostdin", "-y", "-display_rotation", "90", "-i", plain.toString(),
+                "-c", "copy", video.toString());
+        assertThat(probe(video, "-select_streams", "v:0", "-show_entries", "stream_side_data=rotation"))
+                .as("회전 표지가 실려야 한다").contains("rotation=90");
+        return video;
+    }
+
+    /** 0초부터 소리, 0.5초부터 영상. 영상 첫 PTS 가 format 시작보다 늦지 않으면 시험이 뜻이 없다 — 여기서 멈춘다. */
+    private Path 영상이_늦게_시작하는(Path plain) throws Exception {
+        Path video = dir.resolve("late.mp4");
+        run("ffmpeg", "-hide_banner", "-nostdin", "-y",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=3",
+                "-itsoffset", "0.5", "-i", plain.toString(),
+                "-map", "0:a", "-map", "1:v", "-c:v", "copy", "-c:a", "aac", video.toString());
+        assertThat(시각(video, "format=start_time")).isEqualTo(0.0);
+        assertThat(시각(video, "stream=start_time", "-select_streams", "v:0")).isEqualTo(0.5);
+        return video;
+    }
+
+    /** 다시 인코딩하지 않고 시각만 1.5초 민다(format 시작 1.5초). format 시작이 그대로 0이면 시험이 뜻이 없다 — 여기서 멈춘다. */
+    private Path 시작_시각을_민(Path plain) throws Exception {
+        Path video = dir.resolve("offset.mp4");
+        run("ffmpeg", "-hide_banner", "-nostdin", "-y", "-i", plain.toString(), "-c", "copy",
+                "-output_ts_offset", "1.5", video.toString());
+        assertThat(시각(video, "format=start_time")).isEqualTo(1.5);
+        return video;
+    }
+
+    private String probe(Path video, String... entries) {
+        List<String> command = new ArrayList<>(List.of("ffprobe", "-v", "error"));
+        command.addAll(List.of(entries));
+        command.addAll(List.of("-of", "default=noprint_wrappers=1", video.toString()));
+        return new ProcessRunner().run(command, dir, Instant.now().plusSeconds(30)).stdout();
+    }
+
+    private double 시각(Path video, String entry, String... select) {
+        List<String> args = new ArrayList<>(List.of(select));
+        args.addAll(List.of("-show_entries", entry));
+        String out = probe(video, args.toArray(String[]::new)).strip();
+        return Double.parseDouble(out.substring(out.indexOf('=') + 1));
     }
 
     /** 오라클: 프레임을 거꾸로 세워 첫 장을 뽑으면 표시 순 마지막 프레임이다(같은 JPEG 설정). */
