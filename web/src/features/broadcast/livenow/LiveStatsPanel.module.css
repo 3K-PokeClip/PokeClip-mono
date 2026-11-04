@@ -409,11 +409,14 @@
   outline-offset: 2px;
 }
 
-/* 묶인 카드 자리마다 핀 줄 바닥에 찍는 점 — 줄기(stem) 바로 위에 서서 몇 장이 어디 있는지 보인다 */
+/* 묶인 카드 자리마다 핀 줄 바닥에 찍는 점 — 줄기(stem) 바로 위에 서서 몇 장이 어디 있는지 보인다. 바닥에 붙여(24~30u) 알약
+   (6~24u)과 겹치지 않게 하고, 알약의 바탕색 테두리(~26u)보다 위에 그린다: 바닥 1u 위에 알약 아래로 깔았을 때는 알약 바로 아래 점의
+   위쪽 절반이 가렸다(PR #482 리뷰). 점은 누름을 받지 않아(pointer-events: none) 위에 있어도 알약 누르기를 막지 않는다 */
 .pinMark,
 .pinMarkManual {
   position: absolute;
-  bottom: calc(1 * var(--pc-u));
+  z-index: 2;
+  bottom: 0;
   width: calc(6 * var(--pc-u));
   height: calc(6 * var(--pc-u));
   border-radius: 50%;
