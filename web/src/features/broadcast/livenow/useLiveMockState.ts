@@ -26,7 +26,7 @@ import {
 import { COLLECTOR_WINDOW_MS } from './chatCollector';
 import { viewedSegment } from './broadcastInfoAt';
 import { focusAtMs } from './categoryThumb';
-import { useBroadcastTimeline } from './useBroadcastTimeline';
+import { refetchTimelineForFirstImage, useBroadcastTimeline } from './useBroadcastTimeline';
 import {
   emitRelay,
   publishLiveData,
@@ -680,6 +680,8 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
                   viewers: number | null;
                   /** 이 관측을 잰 플랫폼(POK-397). 옛 서버면 빠져 온다 */
                   platform?: string | null;
+                  /** 카테고리 사진 주소(POK-462). 없으면 null, 옛 서버면 빠져 온다 */
+                  categoryImageUrl?: string | null;
                 };
                 // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
                 // 최근 창으로 바꾸지 않게
@@ -706,6 +708,8 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
                     },
                   ].slice(-720),
                 });
+                // 정보 바의 카테고리 사진은 시점별 기록에서 온다. 첫 사진은 기록의 다음 주기를 기다리지 않고 바로 읽는다(POK-552)
+                refetchTimelineForFirstImage(queryClient, streamId, ev.categoryImageUrl);
               } catch {
                 /* 무시 */
               }
