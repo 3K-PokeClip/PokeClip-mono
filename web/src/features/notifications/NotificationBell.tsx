@@ -286,7 +286,7 @@ function PanelBody({
   }
   return (
     <>
-      {view.held.length > 0 ? <DndBar count={view.held.length} /> : null}
+      {view.held.length > 0 ? <DndBar count={pendingHeld(view.held)} /> : null}
       {view.todos.length > 0 ? (
         <section className={styles.group} aria-label="확인 필요">
           <h3 className={styles.groupLabel}>
@@ -536,13 +536,21 @@ function InviteActions({ n, state }: { n: AppNotification; state: NotificationsS
   );
 }
 
+/**
+ * 쌓아 둔 것 중 방송이 끝나면 알려 줄 것 — 안 읽은 것만. 묶음을 펴 읽은 것은 끝날 때 토스트(「방송 중 알림 n개」)에도 안 세므로
+ * 띠 · 묶음 머리도 같이 안 센다: 다 세면 띠는 3개, 끝나면 「2개」로 어긋난다(PR #481 4차)
+ */
+function pendingHeld(items: AppNotification[]): number {
+  return items.filter((n) => n.readAt === null).length;
+}
+
 function DndBar({ count }: { count: number }) {
   return (
     <div className={styles.dnd}>
       <Moon aria-hidden />
       <span>
         <b>방송 중이라 「중요」 알림만 띄워요</b>
-        <span>나머지 {count}개는 방송이 끝나면 한 번에 알려 드려요</span>
+        {count > 0 ? <span>나머지 {count}개는 방송이 끝나면 한 번에 알려 드려요</span> : null}
       </span>
     </div>
   );
@@ -560,6 +568,7 @@ function HeldGroup({
   onRead: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const pending = pendingHeld(items);
   return (
     <div className={styles.held}>
       <button
@@ -570,7 +579,15 @@ function HeldGroup({
       >
         <Moon aria-hidden />
         <span>
-          방송이 끝나면 알려 드릴 알림 <b>{items.length}개</b>
+          {pending > 0 ? (
+            <>
+              방송이 끝나면 알려 드릴 알림 <b>{pending}개</b>
+            </>
+          ) : (
+            <>
+              방송 중 쌓아 둔 알림 <b>{items.length}개</b>
+            </>
+          )}
         </span>
         <ChevronDown aria-hidden className={styles.chevron} data-open={open || undefined} />
       </button>

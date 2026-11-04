@@ -621,6 +621,36 @@ describe('NotificationBell', () => {
     expect(screen.getByRole('button', { name: '알림 · 안 읽음 5개' })).toBeInTheDocument();
   });
 
+  it('쌓아 둔 알림을 펴서 읽으면 띠 · 묶음의 「알려 드릴」 수도 줄고, 방송이 끝날 때 토스트 수와 맞는다 (PR #481 4차)', async () => {
+    items.push(
+      wire('n-held-1', 1, 'CLIP_UPLOADED', { clipTitle: 'a', count: 1 }, { held: true }),
+      wire('n-held-2', 1, 'CLIP_FAILED', { clipTitle: 'b', stage: 'RENDER' }, { held: true }),
+    );
+    const { user, queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+    expect(
+      within(panel).getByText('나머지 2개는 방송이 끝나면 한 번에 알려 드려요'),
+    ).toBeInTheDocument();
+
+    await user.click(within(panel).getByRole('button', { name: /방송이 끝나면 알려 드릴 알림/ }));
+    await user.click(
+      within(panel).getByRole('button', { name: '읽음으로 표시: 클립을 만들지 못했어요' }),
+    );
+    expect(
+      await within(panel).findByText('나머지 1개는 방송이 끝나면 한 번에 알려 드려요'),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByRole('button', { name: /방송이 끝나면 알려 드릴 알림 1개/ }),
+    ).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    items = items.map((w) => ({ ...w, held: false }));
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    expect(await screen.findByText('방송 중 알림 1개')).toBeInTheDocument();
+  });
+
   it('화면을 옮겨 종이 바뀐 뒤에도 토스트의 「알림 보기」는 지금 떠 있는 종의 창을 연다', async () => {
     // 홈 헤더 종 ↔ 사이드바 종: 토스트는 앱 전체에 남고 종만 바뀐다
     function Swap() {
