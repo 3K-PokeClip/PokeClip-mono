@@ -1,5 +1,6 @@
 package com.pokeclip.render.media;
 
+import com.pokeclip.render.media.SegmentTiming.ColorTags;
 import com.pokeclip.render.recipe.Recipe.Aspect;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
 
@@ -70,6 +71,21 @@ public final class RenderCommands {
      * Linux 에서 KiB 다(macOS 는 {@code ru_maxrss} 가 바이트라 1024 배로 찍힌다).
      */
     private static final Pattern MAX_RSS = Pattern.compile("^bench: maxrss=(\\d{1,18})KiB$", Pattern.MULTILINE);
+
+    /** 새 꼴 영상 사슬이 시작하는 이름표({@link Composition.Plan#graph} 의 계약). 색 표지는 이 바로 뒤에 붙인다. */
+    private static final String SOURCE_VIDEO = "[0:v:0]";
+
+    // setparams 가 받는 색 칸 값(ffmpeg n8.0.1 `ffmpeg -h filter=setparams`). ffprobe 가 내는 libavutil 이름과 같은 글자다.
+    // 모름 · 미지정 · 예약은 넣지 않는다 — 그 칸은 붙이지 않아 지금처럼 미지정으로 남는다.
+    private static final Set<String> COLOR_RANGES = Set.of("tv", "pc");
+    private static final Set<String> COLOR_PRIMARIES = Set.of("bt709", "bt470m", "bt470bg", "smpte170m", "smpte240m",
+            "film", "bt2020", "smpte428", "smpte431", "smpte432", "jedec-p22", "ebu3213");
+    private static final Set<String> COLOR_TRANSFERS = Set.of("bt709", "bt470m", "bt470bg", "smpte170m", "smpte240m",
+            "linear", "log100", "log316", "iec61966-2-4", "bt1361e", "iec61966-2-1", "bt2020-10", "bt2020-12",
+            "smpte2084", "smpte428", "arib-std-b67");
+    private static final Set<String> COLOR_SPACES = Set.of("gbr", "bt709", "fcc", "bt470bg", "smpte170m", "smpte240m",
+            "ycgco", "ycgco-re", "ycgco-ro", "bt2020nc", "bt2020c", "smpte2085", "chroma-derived-nc",
+            "chroma-derived-c", "ictcp", "ipt-c2");
 
     private RenderCommands() {
     }
@@ -328,11 +344,19 @@ public final class RenderCommands {
      * {@code -x264-params threads=1:lookahead_threads=1} — 인코더 한 스레드(렌더 일꾼 메모리 상한 안에 사진 ffmpeg 와 함께
      * 들어가려고 고정한 값). 셋 다 실측한 명령과 같은 자리 · 같은 차례다.
      *
+     * <p>색 표지(설계 13.5 「색 표지」 · P34): FFV1 · NUT 중간 파일에는 색 칸이 없어 이음 목록 입력의 프레임은 범위 · 원색 · 전달 ·
+     * 행렬이 모두 미지정이다. 원본 판독의 색 칸을 영상 사슬 머리({@code [0:v:0]} 바로 뒤) {@code setparams} 로 다시 붙인다 —
+     * 꾸밈 · 번인 필터가 옛 꼴(원본 디코드 프레임)과 같은 표지의 프레임을 받고, libx264 가 SPS VUI 와 mp4 {@code colr} 에 그
+     * 값을 쓴다. 출력 {@code -color_*} 옵션은 쓰지 않는다 — n8.0.1 실측에서 전달 · 원색을 VUI 에 쓰지 않았고, 미지정 프레임을 그
+     * 범위로 맞추려 자동 scale 이 화소 값을 바꿨다.
+     *
      * @param timescale 영상 원래 틱(조각 단계와 같은 값)
      * @param video     {@link Composition#plan}의 결과 — 그림 입력 번호가 1 + 묶음 수부터여야 한다
-     * @throws IllegalArgumentException 묶음이 없거나 그림 입력 번호가 묶음 뒤가 아니면
+     * @param color     결과 영상에 되살릴 원본 색 칸. 받는 값 목록 밖의 칸(모름 · 예약 포함)은 싣지 않는다
+     * @throws IllegalArgumentException 묶음이 없거나, 그림 입력 번호가 묶음 뒤가 아니거나, 실을 색 칸이 있는데 영상 사슬이
+     *                                  {@code [0:v:0]}에서 시작하지 않으면
      */
-    public static List<String> renderJoined(String ffmpeg, long timescale, Composition.Plan video,
+    public static List<String> renderJoined(String ffmpeg, long timescale, Composition.Plan video, ColorTags color,
                                             List<AudioRunInput> runs, List<AudioTrack> tracks, String loudnessFix,
                                             String burnFile, String fontsDir, String outputFile) {
         if (runs.isEmpty()) {
@@ -348,7 +372,7 @@ public final class RenderCommands {
         for (Composition.Image image : video.images()) {
             cmd.addAll(List.of("-loop", "1", "-i", image.name()));
         }
-        String graph = videoChain(video, burnFile, fontsDir) + "[vout];"
+        String graph = withColor(videoChain(video, burnFile, fontsDir), color) + "[vout];"
                 + runGraph(runs, tracks, 1, finalAudioTail(loudnessFix, runs));
         cmd.addAll(List.of("-filter_complex", graph, "-map", "[vout]", "-map", "[aout]",
                 "-fps_mode", "passthrough", "-threads", "1", "-enc_time_base:v", "1/" + timescale,
@@ -370,6 +394,32 @@ public final class RenderCommands {
         }
         String settle = LOUDNESS_SETTLE + ",atrim=end_sample=" + endSample;
         return loudnessFix == null ? settle : loudnessFix + "," + settle;
+    }
+
+    /**
+     * 영상 사슬 머리에 색 칸을 붙인다. 원본 파일 머리에서 온 글자라 받는 값 목록에 있는 것만 싣는다 — 목록 밖 글자(그래프 문법
+     * 글자가 낀 것 포함)는 그 칸째 버린다. 실을 칸이 없으면 사슬을 그대로 둔다.
+     */
+    private static String withColor(String chain, ColorTags color) {
+        List<String> params = new ArrayList<>();
+        addColor(params, "range", color.range(), COLOR_RANGES);
+        addColor(params, "color_primaries", color.primaries(), COLOR_PRIMARIES);
+        addColor(params, "color_trc", color.transfer(), COLOR_TRANSFERS);
+        addColor(params, "colorspace", color.space(), COLOR_SPACES);
+        if (params.isEmpty()) {
+            return chain;
+        }
+        if (!chain.startsWith(SOURCE_VIDEO)) {
+            throw new IllegalArgumentException("video chain must start at " + SOURCE_VIDEO + " to carry color tags");
+        }
+        return SOURCE_VIDEO + "setparams=" + String.join(":", params) + ","
+                + chain.substring(SOURCE_VIDEO.length());
+    }
+
+    private static void addColor(List<String> params, String option, String value, Set<String> accepted) {
+        if (value != null && accepted.contains(value)) {
+            params.add(option + "=" + value);
+        }
     }
 
     private static void addRunInputs(List<String> cmd, List<AudioRunInput> runs) {

@@ -3,6 +3,7 @@ package com.pokeclip.render.media;
 import com.pokeclip.render.media.RenderCommands.AudioRunInput;
 import com.pokeclip.render.media.RenderCommands.TrackHead;
 import com.pokeclip.render.media.RenderCommands.VideoPiece;
+import com.pokeclip.render.media.SegmentTiming.ColorTags;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
 import org.junit.jupiter.api.Test;
 
@@ -160,6 +161,70 @@ class RenderCommandsJoinedTest {
                 "-movie_timescale", "90000", "-movflags", "+faststart", "o1.mp4");
     }
 
+    /**
+     * 색 표지 되살림(설계 13.5 「색 표지」 · 16.2 P34). FFV1 · NUT 중간 파일에는 색 칸이 없어 최종 단계 입력 프레임이 「미지정」 이다.
+     * 원본 판독의 색 칸을 영상 사슬 머리 {@code setparams} 로 다시 붙인다 — 꾸밈 · 번인 필터가 옛 꼴(원본 디코드)과 같은 표지의
+     * 프레임을 받고, libx264 가 SPS VUI 와 mp4 {@code colr} 에 그 값을 쓴다. 출력 {@code -color_*} 은 쓰지 않는다 — 8.0.1 에서
+     * 전달 · 원색을 VUI 에 쓰지 않고 자동 scale 이 화소를 바꿨다(실측 · 보고 참고).
+     */
+    @Test
+    void 색_표지가_있으면_영상_사슬_머리에_setparams_로_되살린다() {
+        List<String> cmd = finalCommand(new ColorTags("tv", "bt709", "bt709", "bt709"));
+        assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]setparams=range=tv"
+                + ":color_primaries=bt709:color_trc=bt709:colorspace=bt709,setsar=1,[3:v]overlay,subtitles=burn.srt:");
+        assertThat(cmd).noneMatch(a -> a.startsWith("-color") || a.equals("-colorspace"));
+        // 그래프 밖 명령은 색 표지가 없을 때와 바이트 같다
+        List<String> plain = finalCommand();
+        int graph = plain.indexOf("-filter_complex") + 1;
+        assertThat(cmd.subList(0, graph)).isEqualTo(plain.subList(0, graph));
+        assertThat(cmd.subList(graph + 1, cmd.size())).isEqualTo(plain.subList(graph + 1, plain.size()));
+    }
+
+    @Test
+    void 범위_전체_원본도_그_값_그대로_되살린다() {
+        List<String> cmd = finalCommand(new ColorTags("pc", "bt2020nc", "arib-std-b67", "bt2020"));
+        assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]setparams=range=pc"
+                + ":color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc,setsar=1,");
+    }
+
+    @Test
+    void 색_표지가_없으면_영상_사슬은_그대로다() {
+        String graph = finalCommand().get(finalCommand().indexOf("-filter_complex") + 1);
+        assertThat(graph).startsWith("[0:v:0]setsar=1,[3:v]overlay,").doesNotContain("setparams");
+    }
+
+    @Test
+    void 판독에_있는_칸만_싣는다() {
+        List<String> cmd = finalCommand(new ColorTags("tv", "bt709", null, null));
+        assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1))
+                .startsWith("[0:v:0]setparams=range=tv:colorspace=bt709,setsar=1,");
+    }
+
+    /**
+     * 모름 · 예약 값과 setparams 가 받지 않는 값은 싣지 않는다(그 칸은 지금처럼 미지정). 원본 파일 머리에서 온 글자라 그래프 문법
+     * 글자({@code , : ; [ ]})가 끼면 필터를 덧붙일 수 있다 — 받는 값 목록 밖이면 모두 버린다.
+     */
+    @Test
+    void 모르는_값이나_그래프_문법_글자가_든_값은_싣지_않는다() {
+        List<String> none = finalCommand(new ColorTags("unknown", "reserved", "bt709,drawbox", "bt709[x];[x]null"));
+        assertThat(none.get(none.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]setsar=1,")
+                .doesNotContain("setparams", "drawbox");
+        List<String> some = finalCommand(new ColorTags("pc:range=tv", "bt709", "", "BT709"));
+        assertThat(some.get(some.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]setparams=colorspace=bt709,");
+    }
+
+    @Test
+    void 영상_사슬이_원본_영상_입력에서_시작하지_않으면_색_표지를_붙이지_못해_거부한다() {
+        Composition.Plan odd = new Composition.Plan("[0:v]null", List.of(), 2);
+        ColorTags tv = new ColorTags("tv", "bt709", "bt709", "bt709");
+        assertThatThrownBy(() -> RenderCommands.renderJoined("ffmpeg", TS, odd, tv, List.of(RUN_0), TWO_TRACKS, null,
+                null, null, "o1.mp4")).isInstanceOf(IllegalArgumentException.class);
+        // 표지가 없으면 붙일 것이 없어 그대로 둔다
+        List<String> plain = RenderCommands.renderJoined("ffmpeg", TS, odd, ColorTags.UNKNOWN, List.of(RUN_0),
+                TWO_TRACKS, null, null, null, "o1.mp4");
+        assertThat(plain.get(plain.indexOf("-filter_complex") + 1)).startsWith("[0:v]null[vout];");
+    }
+
     @Test
     void 최종_단계_인코더는_한_스레드다_출력_threads_와_x264_params_둘_다() {
         List<String> out = outputSide(finalCommand());
@@ -215,7 +280,7 @@ class RenderCommandsJoinedTest {
     @Test
     void 평준화가_없어도_소리_끝_정리는_같다() {
         List<String> cmd = RenderCommands.renderJoined("ffmpeg", TS, new Composition.Plan("[0:v:0]null", List.of(), 2),
-                List.of(RUN_0), TWO_TRACKS, null, null, null, "o1.mp4");
+                ColorTags.UNKNOWN, List.of(RUN_0), TWO_TRACKS, null, null, null, "o1.mp4");
         assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1)).endsWith(
                 "aformat=sample_rates=48000:channel_layouts=stereo,asetpts=N/SR/TB,aresample=48000,"
                         + "atrim=end_sample=384000[aout]");
@@ -282,15 +347,16 @@ class RenderCommandsJoinedTest {
     void 꾸밈_그림_번호가_묶음_뒤가_아니면_거부한다() {
         // 그림이 [1:v] 를 읽으면 첫 소리 묶음 입력을 그림으로 읽는다
         Composition.Plan wrong = new Composition.Plan("[0:v:0]setsar=1,[1:v]overlay", List.of(image("o1_a.png")), 1);
-        assertThatThrownBy(() -> RenderCommands.renderJoined("ffmpeg", TS, wrong, List.of(RUN_0, RUN_1), TWO_TRACKS,
-                null, null, null, "o1.mp4")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RenderCommands.renderJoined("ffmpeg", TS, wrong, ColorTags.UNKNOWN,
+                List.of(RUN_0, RUN_1), TWO_TRACKS, null, null, null, "o1.mp4"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void 최종_단계_자막_파일이_ASS_면_모양을_덧입히지_않고_글꼴_폴더를_붙인다() {
         Composition.Plan plain = new Composition.Plan("[0:v:0]null", List.of(), 2);
-        List<String> cmd = RenderCommands.renderJoined("ffmpeg", TS, plain, List.of(RUN_0), TWO_TRACKS, null,
-                "o1.ass", "/fonts", "o1.mp4");
+        List<String> cmd = RenderCommands.renderJoined("ffmpeg", TS, plain, ColorTags.UNKNOWN, List.of(RUN_0),
+                TWO_TRACKS, null, "o1.ass", "/fonts", "o1.mp4");
         assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1))
                 .startsWith("[0:v:0]null,subtitles=o1.ass:fontsdir=/fonts[vout];[1:a:1]");
     }
@@ -355,9 +421,13 @@ class RenderCommandsJoinedTest {
     }
 
     private static List<String> finalCommand() {
+        return finalCommand(ColorTags.UNKNOWN);
+    }
+
+    private static List<String> finalCommand(ColorTags color) {
         Composition.Plan plan = new Composition.Plan("[0:v:0]setsar=1,[3:v]overlay", List.of(image("o1_a.png")), 3);
-        return RenderCommands.renderJoined("ffmpeg", TS, plan, List.of(RUN_0, RUN_1), TWO_TRACKS, "loudnorm=FIX",
-                RenderCommands.BURN_SRT, null, "o1.mp4");
+        return RenderCommands.renderJoined("ffmpeg", TS, plan, color, List.of(RUN_0, RUN_1), TWO_TRACKS,
+                "loudnorm=FIX", RenderCommands.BURN_SRT, null, "o1.mp4");
     }
 
     private static Composition.Image image(String name) {

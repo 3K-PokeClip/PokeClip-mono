@@ -27,7 +27,8 @@ import java.util.Objects;
  * @param frameIntervalTicks 영상 PTS 간격 중앙값(틱). {@code toSegmentEnd} 끝 = 마지막 PTS + 이 값(7.3 4)
  * @param width              표시 폭(회전 반영)
  * @param height             표시 높이(회전 반영)
- * @param color              영상 색 표지. 지금은 싣기만 한다 — 쓰는 것은 A′ 다시 잡기 대조 뒤(13.5 「색 표지」 · P34)
+ * @param color              영상 색 표지. 새 꼴 최종 단계가 첫 결과 조각 값을 결과 영상에 되살린다
+ *                           ({@link RenderCommands#renderJoined} · 13.5 「색 표지」 · P34)
  */
 public record SegmentTiming(long videoTimescale, long videoFirstDts, long fileHeadUs, long[] videoPtsSorted,
                             long videoLengthTicks, long streamDurationUs, List<TrackRange> audio, long formatStartUs,

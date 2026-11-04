@@ -16,6 +16,7 @@ import com.pokeclip.render.media.RenderCommands.AudioRunInput;
 import com.pokeclip.render.media.RenderCommands.TrackHead;
 import com.pokeclip.render.media.RenderCommands.VideoPiece;
 import com.pokeclip.render.media.SegmentTiming;
+import com.pokeclip.render.media.SegmentTiming.ColorTags;
 import com.pokeclip.render.media.SegmentTiming.LengthMatch;
 import com.pokeclip.render.media.SegmentTiming.TrackRange;
 import com.pokeclip.render.media.SrtWriter;
@@ -133,6 +134,7 @@ final class JoinedRenderer {
         progress.report(30, "loudness");
 
         SegmentTiming frame = timings.get(job.plan().mediaSeqs().getFirst());
+        logColorMixed(jobId, job.plan().mediaSeqs(), timings);
         long finalBegan = System.nanoTime();
         FinalStage stage = new FinalStage(frame, ts, runs, recipe.tracks(), loudnessFix);
         List<Produced> produced = encode(recipe, captions, stage, dir, deadline, progress, peak);
@@ -450,7 +452,7 @@ final class JoinedRenderer {
     /**
      * 최종 단계 입력 가운데 출력마다 같은 것.
      *
-     * @param frame 화면 크기를 읽는 첫 결과 조각 판독
+     * @param frame 화면 크기 · 되살릴 색 표지를 읽는 첫 결과 조각 판독
      * @param ts    영상 원래 틱
      */
     private record FinalStage(SegmentTiming frame, long ts, List<AudioRunInput> runs, List<AudioTrack> tracks,
@@ -493,8 +495,8 @@ final class JoinedRenderer {
             writeImage(dir.resolve(image.name()), image.image());
         }
         String file = output.outputId() + ".mp4";
-        peak.see(runner.run(RenderCommands.renderJoined(ffmpeg, stage.ts(), video, stage.runs(), stage.tracks(),
-                stage.loudnessFix(), burnFile, fontsDir, file), dir, deadline));
+        peak.see(runner.run(RenderCommands.renderJoined(ffmpeg, stage.ts(), video, stage.frame().color(),
+                stage.runs(), stage.tracks(), stage.loudnessFix(), burnFile, fontsDir, file), dir, deadline));
         return new Produced(output.outputId(), "video", dir.resolve(file));
     }
 
@@ -559,6 +561,34 @@ final class JoinedRenderer {
         log.info("render.frame_pick jobId={} edge=out seq={} offsetUs={} origin={} pts={} endPts={} audioOnly={}",
                 jobId, lastSeq, plan.out().toSegmentEnd() ? "toSegmentEnd" : plan.out().offsetUs(),
                 plan.offsetOrigin(), last.startPts(), last.endPts(), lastSeq != last.seq());
+    }
+
+    /**
+     * 결과 조각 사이 색 표지가 다르면 경고한다(설계 13.5 「색 표지」 · P34). 결과에 되살리는 표지는 첫 결과 조각 값 하나다 — 출력
+     * 표지는 영상 전체에 하나뿐이고, 옛 꼴도 인코더가 첫 프레임 값으로 열린다. 화면 크기 · 시간 단위와 달리 표지가 달라도 이음은
+     * 깨지지 않아 거절하지 않는다. 다른 조각이 여럿이어도 첫 하나만 남긴다.
+     */
+    static void logColorMixed(UUID jobId, List<Long> mediaSeqs, Map<Long, SegmentTiming> timings) {
+        long usedSeq = mediaSeqs.getFirst();
+        ColorTags used = timings.get(usedSeq).color();
+        for (long seq : mediaSeqs) {
+            ColorTags color = timings.get(seq).color();
+            if (!color.equals(used)) {
+                log.warn("render.color_mixed jobId={} seq={} color={} used={} usedSeq={}", jobId, seq, label(color),
+                        label(used), usedSeq);
+                return;
+            }
+        }
+    }
+
+    /** 신호용 색 표지 글자 — 범위/행렬/전달/원색(ffprobe 칸 차례 · 미지정은 unknown). */
+    private static String label(ColorTags color) {
+        return String.join("/", known(color.range()), known(color.space()), known(color.transfer()),
+                known(color.primaries()));
+    }
+
+    private static String known(String value) {
+        return value == null ? "unknown" : value;
     }
 
     /** 계획 길이와 결과 길이의 차(렌더 때 하한 없음 · 설계 9.3). */
