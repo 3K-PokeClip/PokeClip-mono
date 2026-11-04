@@ -51,9 +51,10 @@ function VodCardBody({ vod }: { vod: HomeVod }) {
   return (
     <>
       <Thumb
+        // 보관 만료면 가운데는 「보관 만료」 알약 하나만 둔다 — 사진이 없거나 못 받아 자리표시가 같이 서면 두 글이 포개진다.
         // 카드가 하나도 없으면 사진(가장 크게 터진 장면)도 올 수 없다
         label={
-          vod.cards === 0 ? (
+          expired ? null : vod.cards === 0 ? (
             <span className={styles.vodNoPhoto}>
               <VideoOff size={18} />
               장면 사진 없음

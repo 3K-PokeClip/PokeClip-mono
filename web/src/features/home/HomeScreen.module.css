@@ -674,16 +674,20 @@
   opacity: 0.45;
 }
 
+/* 가운데 어두운 알약 — 흐린 사진의 밝기와 상관없이 읽힌다(길이 표시와 같은 바탕) */
 .vodOffCover {
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 50%;
   z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(12 * var(--pc-u));
+  transform: translate(-50%, -50%);
+  padding: calc(3 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
+  background: rgb(0 0 0 / 0.62); /* 테마 고정 */
+  font-size: calc(11 * var(--pc-u));
   font-weight: 700;
-  color: var(--pc-color-text-secondary);
+  white-space: nowrap;
+  color: #fff; /* 테마 고정 */
 }
 
 .vodNoPhoto {

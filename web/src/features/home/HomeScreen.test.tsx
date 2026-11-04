@@ -1094,6 +1094,8 @@ describe('HomeScreen', () => {
         row('stale', 'ended', at(-2 * HOUR), null),
         row('gone', 'vod_ready', at(-61 * 24 * HOUR), at(-HOUR)),
       ],
+      // 카드가 있는 만료 방송 — 사진이 없으면 원래 「썸네일 준비 중」 자리표시가 선다
+      cards: { gone: [card(1)] },
     });
     renderWithProviders(<HomeScreen />);
 
@@ -1104,6 +1106,9 @@ describe('HomeScreen', () => {
     expect(within(tile('fresh')).getByText('다시 보기 준비 중')).toBeInTheDocument();
     expect(within(tile('stale')).queryByText('다시 보기 준비 중')).toBeNull();
     expect(within(tile('gone')).getByText('보관 만료')).toBeInTheDocument();
+    // 만료 카드의 가운데는 「보관 만료」 하나뿐이다 — 사진 자리표시가 같이 서면 두 글이 포개진다
+    expect(within(tile('gone')).queryByText('썸네일 준비 중')).toBeNull();
+    expect(within(tile('gone')).queryByText('장면 사진 없음')).toBeNull();
     expect(tile('gone').querySelector('a')).toBeNull();
     expect(tile('fresh').querySelector('a')).not.toBeNull();
   });
