@@ -8,7 +8,6 @@ import { chzzkLinkQueryOptions, type ChzzkLinkState } from '@/api/chzzkLink';
 import { soopLinkQueryOptions, type SoopLinkState } from '@/api/soopLink';
 import { streamKeyStatusQueryOptions } from '@/api/streamKeys';
 import { youtubeLinkQueryOptions, type YoutubeLinkState } from '@/api/youtubeLink';
-import { broadcastTitle } from '@/api/clipEditor';
 import { infoWaitOver } from '@/features/broadcast/infoWait';
 import { onAirLabel, primaryInfo, type PlatformLatest } from '@/features/broadcast/platformView';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
@@ -75,13 +74,23 @@ export interface LiveNow {
   photoLate?: boolean;
 }
 
+/** 사진 위 왼쪽 위 표시 하나. D-n은 곧 지워질 때(VOD_EXPIRY_URGENT_DAYS 이하)만 단다 */
 export type VodBadge =
   { kind: 'preparing' } | { kind: 'dday'; label: string } | { kind: 'expired' };
 
 export interface HomeVod {
   id: string;
-  title: string;
-  meta: string;
+  /** 수집기가 본 방송 제목. 없으면 null — 화면이 「제목 없는 방송」으로 적는다(방송 번호는 보이지 않는다) */
+  title: string | null;
+  /** 방송 시작 — 「어제 오후 8:10」 · 「11월 2일 (일) 오후 9:00」. 같은 제목의 방송을 이것으로 가른다 */
+  when: string;
+  /**
+   * 이 방송에서 찾은 카드 수(가린 카드는 목록에서 빠져 세지 않는다, POK-463). 카드를 못 읽었고 기억해 둔 값도 없으면 null(「–」) —
+   * 0으로 접으면 「찾은 장면 없음」이라고 단정하게 된다
+   */
+  cards: number | null;
+  /** 이 방송으로 영상까지 만든 편집본 수(라이브 띠의 클립 완료와 같은 기준). 보관함을 못 읽었으면 null(「–」) */
+  clips: number | null;
   /** 보관이 끝난 방송은 열 것이 없어 null(지난 방송 목록과 같다, POK-254) */
   href: string | null;
   badge?: VodBadge;
@@ -154,7 +163,6 @@ const CARD_READ_PARALLEL = 6;
  */
 const PHOTO_WAIT_MS = 3 * 60_000;
 const PAST_LIMIT = 8;
-const EXPIRING_WINDOW_DAYS = 7;
 const DAY_MS = 86_400_000;
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T | null> {
@@ -187,13 +195,19 @@ function dateLabel(iso: string): string {
   return `${d.getMonth() + 1}월 ${d.getDate()}일`;
 }
 
-/** 만료까지 남은 일수 (올림). 지났으면 0 */
-function daysLeft(iso: string, now: number): number {
-  return Math.max(0, Math.ceil((Date.parse(iso) - now) / DAY_MS));
-}
-
 function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+/** 지난 방송 카드의 시작 시각 — 「오늘 오전 8:02」 · 「어제 오후 8:10」 · 「11월 2일 (일) 오후 9:00」. 날짜는 달력으로 뺀다 */
+export function vodWhenLabel(iso: string, now: Date): string {
+  const d = new Date(iso);
+  const days = Math.round((startOfDay(now).getTime() - startOfDay(d).getTime()) / DAY_MS);
+  const day =
+    days === 0 ? '오늘' : days === 1 ? '어제' : `${dateLabel(iso)} (${WEEKDAYS[d.getDay()]})`;
+  return `${day} ${clockLabel(iso)}`;
 }
 
 /** 이번 주(월요일 0시, 로컬)와 지난주의 시작 시각(ms). 지난주 = [lastWeekStart, weekStart) */
@@ -301,7 +315,7 @@ async function loadHome(
     }
     // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
     // 최근 카드가 통째로 빠진다(PR #200 codex)
-    // 옛 서버가 hidden을 실어 보내도 거르지 않는다: 숨기기는 POK-393에서 없앴다
+    // 가린 카드는 서버가 빼고 준다(includeHidden 기본 false, POK-463) — 홈의 카드 수는 보이는 카드 수다
     const cards = await fetchAllJumpCards(streamId, signal).catch(() => null);
     if (cards !== null) cardCounts[streamId] = { count: cards.length, at: now };
     // 못 읽었으면 기억해 둔 값을(기한이 지났어도) 쓰고 시각은 그대로 둔다 — 다음 주기에 다시 읽는다.
@@ -359,33 +373,29 @@ async function loadHome(
   }
 
   const vods: HomeVod[] = past.map((b) => {
-    const cardCount = cardCountOf(b.streamId);
-    const metaParts = [
-      b.startedAt ? dateLabel(b.startedAt) : '날짜 정보 없음',
-      `카드 ${cardCount}개`,
-    ];
     let badge: VodBadge | undefined;
     // 지난 방송 목록과 같은 규칙: 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안만이다(POK-254). 그 뒤에는 녹화가 없어도
-    // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다
-    const expired = ddayFor(b.vodExpiresAt, new Date(now)).kind === 'expired';
+    // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다. D-n은 지난 방송 목록이 붉게 다는 경계(3일) 안에서만 단다 —
+    // 그보다 먼 기한은 홈이 말하지 않고 「60일 보관」 한 줄과 지난 방송 목록이 맡는다. 녹화 없이 `ended`에 머문 방송도 단다 —
+    // 기한이 지나면 카드·채팅이 함께 지워지고, 지난 방송 목록도 행 상태와 상관없이 D-day를 단다
+    const dday = ddayFor(b.vodExpiresAt, new Date(now));
+    const expired = dday.kind === 'expired';
     if (expired) badge = { kind: 'expired' };
-    else if (b.status === 'ended') {
-      if (isJustEnded(b.endedAt, new Date(now))) badge = { kind: 'preparing' };
-    } else if (b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now) {
-      const d = daysLeft(b.vodExpiresAt, now);
-      if (d <= EXPIRING_WINDOW_DAYS) {
-        badge = { kind: 'dday', label: `D-${d}` };
-        metaParts.push('곧 만료');
-      }
-    }
+    else if (b.status === 'ended' && isJustEnded(b.endedAt, new Date(now)))
+      badge = { kind: 'preparing' };
+    else if (dday.kind === 'active' && dday.urgent) badge = { kind: 'dday', label: dday.label };
     const duration =
       b.startedAt && b.endedAt
         ? msToClock(Date.parse(b.endedAt) - Date.parse(b.startedAt))
         : undefined;
     return {
       id: b.streamId,
-      title: broadcastTitle(b),
-      meta: metaParts.join(' · '),
+      title: b.title?.trim() || null,
+      when: b.startedAt ? vodWhenLabel(b.startedAt, new Date(now)) : '날짜 정보 없음',
+      // 주 합계(cardCountOf)는 못 읽은 방송을 0으로 더하지만, 카드 한 장은 모름과 0을 가른다
+      cards: cardCounts[b.streamId]?.count ?? null,
+      // 보관함은 따로 읽는다 — 훅이 붙인다
+      clips: null,
       href: expired ? null : `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
       badge,
       duration,
@@ -482,7 +492,7 @@ export function useHomeMockState(): HomeMockState {
   return {
     userName: me?.name?.trim() || me?.email || null,
     live,
-    vods: data.vods,
+    vods: data.vods.map((v) => ({ ...v, clips: completedClipsOf(library, v.id) })),
     hasHistory: data.hasHistory,
     week: { ...data.week, ...libraryWeekOf(library, weekStart, Infinity) },
     lastWeek: { ...data.lastWeek, ...libraryWeekOf(library, lastWeekStart, weekStart) },
