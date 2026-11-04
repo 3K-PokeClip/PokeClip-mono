@@ -19,15 +19,13 @@ import {
   acceptInvitation,
   declineInvitation,
   delegationsAsEditorQueryOptions,
-  isInvitationGone,
-  respondFailureMessage,
   type StreamerDelegation,
 } from '@/api/editors';
 import { useMe } from '@/features/auth/useSession';
 import { useActiveChannel, useSwitchChannel } from '@/features/channel/useActiveChannel';
+import { useInvitationResponse } from '@/features/channel/useInvitationResponse';
 import { useChannelStore } from '@/stores/channel';
-import { track } from '@/lib/analytics';
-import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import { useToast, type ToastTone } from '@/ui';
 import {
   fetchMockNotifications,
@@ -139,11 +137,11 @@ export function useNotifications() {
 export type NotificationsState = ReturnType<typeof useNotifications>;
 
 /**
- * 편집자 초대에 수락 · 거절로 답한다 — 채널 스위처의 초대 줄과 같은 API · 같은 문구(ChannelSwitcher useInvitationAction).
- * 끝나면 받은 초대 · 참여 채널 · 알림을 다시 읽는다(서버가 그 알림에 resolvedAt을 채운다).
+ * 편집자 초대에 수락 · 거절로 답한다 — 채널 스위처의 초대 줄과 같은 API, 답한 뒤 처리(문구 · 분석 이벤트 · 받은 초대와 참여
+ * 채널 다시 읽기)는 useInvitationResponse를 같이 쓴다. 그 초대가 끝났으면 알림도 다시 읽는다(서버가 resolvedAt을 채운다).
  */
 export function useRespondInvitation(state: NotificationsState) {
-  const { toast } = useToast();
+  const respond = useInvitationResponse();
   const queryClient = useQueryClient();
   return useSessionMutation({
     mutationFn: async ({ n, answer }: { n: AppNotification; answer: 'accept' | 'decline' }) => {
@@ -151,21 +149,11 @@ export function useRespondInvitation(state: NotificationsState) {
       if (state.mockMode !== null) return resolveMock(n.id);
       await (answer === 'accept' ? acceptInvitation : declineInvitation)(n.payload.invitationId);
     },
-    onSuccess: (_data, { answer }) => {
-      // 채널 스위처에서 답한 것과 같은 이벤트 — 경로가 달라도 응답률 집계가 갈리지 않게(상대 이름 · 초대 번호는 싣지 않는다)
-      track('editor_invitation_responded', {
-        outcome: answer === 'accept' ? 'accepted' : 'declined',
-      });
-      toast({
-        tone: 'success',
-        title: answer === 'accept' ? '초대를 수락했어요' : '초대를 거절했어요',
-      });
-    },
-    onError: (e: unknown) => toast({ tone: 'error', ...respondFailureMessage(e) }),
+    onSuccess: (_data, { answer }) =>
+      respond.onSuccess(answer === 'accept' ? 'accepted' : 'declined'),
+    onError: respond.onError,
     onSettled: (_data, error) => {
-      void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
-      void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
-      if (error === null || isInvitationGone(error) || error instanceof StaleSessionError)
+      if (respond.onSettled(error))
         void queryClient.invalidateQueries({ queryKey: state.queryKey });
     },
   });
