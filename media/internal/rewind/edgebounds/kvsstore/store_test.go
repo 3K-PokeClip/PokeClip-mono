@@ -27,7 +27,7 @@ import (
 
 const (
 	testAccount = "123456789012"
-	testARN     = "arn:aws:cloudfront::" + testAccount + ":key-value-store/a1b2c3d4-5678-90ab-cdef-EXAMPLE11111"
+	testARN     = "arn:aws:cloudfront::" + testAccount + ":key-value-store/a1b2c3d4-5678-90ab-cdef-0123456789ab"
 )
 
 // seenRequest 는 시험 서버가 받은 요청 하나다.
@@ -77,24 +77,29 @@ func newStore(t *testing.T, respond http.HandlerFunc) (*Store, *kvsServer) {
 	return New(client, testARN), ks
 }
 
-// writeJSON 은 상태 · 머리 · JSON 본문을 쓴다.
-func writeJSON(w http.ResponseWriter, status int, header map[string]string, body string) {
+// writeJSON 은 상태 · 머리 · JSON 본문을 쓴다. 본문을 다 쓰지 못하면 시험 실패다 — SDK 가 잘린 응답을 읽어 엉뚱한
+// 이유로 실패하는 것을 가리지 않게. 시험 서버의 고루틴에서 불리므로 Fatal 이 아니라 Errorf 다.
+func writeJSON(t *testing.T, w http.ResponseWriter, status int, header map[string]string, body string) {
+	t.Helper()
 	for k, v := range header {
 		w.Header().Set(k, v)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	io.WriteString(w, body)
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("시험 서버가 응답 본문을 쓰지 못했다: %v", err)
+	}
 }
 
 // writeError 는 REST JSON 오류 응답(오류 종류는 X-Amzn-Errortype 머리)을 쓴다.
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, map[string]string{"X-Amzn-Errortype": code}, fmt.Sprintf(`{"Message":%q}`, message))
+func writeError(t *testing.T, w http.ResponseWriter, status int, code, message string) {
+	t.Helper()
+	writeJSON(t, w, status, map[string]string{"X-Amzn-Errortype": code}, fmt.Sprintf(`{"Message":%q}`, message))
 }
 
 // storePath 는 SDK 가 ARN 을 경로 성분 하나로 넣은 꼴이다 — `:` · `/` 가 퍼센트 인코딩된다.
 const storePath = "/key-value-stores/arn%3Aaws%3Acloudfront%3A%3A" + testAccount +
-	"%3Akey-value-store%2Fa1b2c3d4-5678-90ab-cdef-EXAMPLE11111"
+	"%3Akey-value-store%2Fa1b2c3d4-5678-90ab-cdef-0123456789ab"
 
 // 요청은 SigV4A(전역 지역 집합 *)로 서명되고, 호스트는 ARN 의 계정 번호를 앞에 붙인 끝점이다(SDK 끝점 규칙).
 func assertSignedForAccount(t *testing.T, r seenRequest) {
@@ -112,7 +117,7 @@ func assertSignedForAccount(t *testing.T, r seenRequest) {
 
 func TestDescribeGetsStoreAndReadsETagHeaderAndSize(t *testing.T) {
 	st, ks := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"ETag": "ETAG1"}, fmt.Sprintf(
+		writeJSON(t, w, http.StatusOK, map[string]string{"ETag": "ETAG1"}, fmt.Sprintf(
 			`{"KvsARN":%q,"Created":1.7e9,"ItemCount":3,"TotalSizeInBytes":120,"Status":"READY"}`, testARN))
 	})
 
@@ -137,7 +142,7 @@ func TestDescribeGetsStoreAndReadsETagHeaderAndSize(t *testing.T) {
 // 판이 없는 응답은 오류다 — 빈 판을 If-Match 로 보내면 쓰기가 판 결속을 잃는다.
 func TestDescribeRejectsResponseWithoutETag(t *testing.T) {
 	st, _ := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, nil, `{"ItemCount":0,"TotalSizeInBytes":0}`)
+		writeJSON(t, w, http.StatusOK, nil, `{"ItemCount":0,"TotalSizeInBytes":0}`)
 	})
 
 	if _, err := st.Describe(context.Background()); err == nil {
@@ -153,7 +158,7 @@ type updateBody struct {
 
 func TestUpdateSendsIfMatchPutsAndDeletesAndReturnsNewETag(t *testing.T) {
 	st, ks := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"ETag": "ETAG2"}, `{"ItemCount":2,"TotalSizeInBytes":40}`)
+		writeJSON(t, w, http.StatusOK, map[string]string{"ETag": "ETAG2"}, `{"ItemCount":2,"TotalSizeInBytes":40}`)
 	})
 	puts := []edgebounds.Entry{{Key: "S1/R1", Value: "17"}, {Key: edgebounds.ReleaseMarkerKey, Value: "w-1.42"}}
 
@@ -219,17 +224,27 @@ func TestUpdateSendsAtMostFiftyItems(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("puts%d_deletes%d", tt.puts, tt.deletes), func(t *testing.T) {
 			st, ks := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-				writeJSON(w, http.StatusOK, map[string]string{"ETag": "ETAG2"}, `{"ItemCount":0,"TotalSizeInBytes":0}`)
+				writeJSON(t, w, http.StatusOK, map[string]string{"ETag": "ETAG2"}, `{"ItemCount":0,"TotalSizeInBytes":0}`)
 			})
 
 			_, err := st.Update(context.Background(), "ETAG1", entries(tt.puts), keys("D", tt.deletes))
 
-			sent := len(ks.requests())
-			if tt.wantSent && (err != nil || sent != 1) {
-				t.Errorf("Update = %v · 요청 %d개, want nil · 1개", err, sent)
+			reqs := ks.requests()
+			if !tt.wantSent {
+				if err == nil || len(reqs) != 0 {
+					t.Errorf("Update = %v · 요청 %d개, want 상한 오류 · 0개", err, len(reqs))
+				}
+				return
 			}
-			if !tt.wantSent && (err == nil || sent != 0) {
-				t.Errorf("Update = %v · 요청 %d개, want 상한 오류 · 0개", err, sent)
+			if err != nil || len(reqs) != 1 {
+				t.Fatalf("Update = %v · 요청 %d개, want nil · 1개", err, len(reqs))
+			}
+			var body updateBody
+			if err := json.Unmarshal(reqs[0].body, &body); err != nil {
+				t.Fatalf("본문 %q 를 읽지 못했다: %v", reqs[0].body, err)
+			}
+			if len(body.Puts) != tt.puts || len(body.Deletes) != tt.deletes {
+				t.Errorf("본문 Puts %d개 · Deletes %d개, want %d · %d(빠짐 없이)", len(body.Puts), len(body.Deletes), tt.puts, tt.deletes)
 			}
 		})
 	}
@@ -238,7 +253,7 @@ func TestUpdateSendsAtMostFiftyItems(t *testing.T) {
 // 빈 판으로는 보내지 않는다 — 판 결속 없는 쓰기는 해제된 키를 되살릴 수 있다(설계 3-3 Writer 계약 3).
 func TestUpdateRejectsEmptyIfMatchWithoutSending(t *testing.T) {
 	st, ks := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"ETag": "ETAG2"}, `{"ItemCount":0,"TotalSizeInBytes":0}`)
+		writeJSON(t, w, http.StatusOK, map[string]string{"ETag": "ETAG2"}, `{"ItemCount":0,"TotalSizeInBytes":0}`)
 	})
 
 	_, err := st.Update(context.Background(), "", entries(1), nil)
@@ -253,7 +268,7 @@ func TestUpdateRejectsEmptyIfMatchWithoutSending(t *testing.T) {
 func TestUpdatePassesPreconditionFailureThroughUnclassified(t *testing.T) {
 	const msg = "Pre-Condition failed during update of Key-Value-Store"
 	st, ks := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusBadRequest, "ValidationException", msg)
+		writeError(t, w, http.StatusBadRequest, "ValidationException", msg)
 	})
 
 	_, err := st.Update(context.Background(), "ETAG0", entries(1), nil)
@@ -269,7 +284,7 @@ func TestUpdatePassesPreconditionFailureThroughUnclassified(t *testing.T) {
 
 func TestFetchGetsKeyAsSinglePathSegment(t *testing.T) {
 	st, ks := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, nil, `{"Key":"S1/R1","Value":"17","ItemCount":1,"TotalSizeInBytes":7}`)
+		writeJSON(t, w, http.StatusOK, nil, `{"Key":"S1/R1","Value":"17","ItemCount":1,"TotalSizeInBytes":7}`)
 	})
 
 	value, found, err := st.Fetch(context.Background(), "S1/R1")
@@ -301,7 +316,7 @@ func TestFetchReportsMissingKeyAsNotFoundAndOtherErrorsAsErrors(t *testing.T) {
 	} {
 		t.Run(tt.code, func(t *testing.T) {
 			st, _ := newStore(t, func(w http.ResponseWriter, _ *http.Request) {
-				writeError(w, tt.status, tt.code, "x")
+				writeError(t, w, tt.status, tt.code, "x")
 			})
 
 			value, found, err := st.Fetch(context.Background(), "S1/R1")

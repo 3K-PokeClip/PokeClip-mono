@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -693,6 +694,33 @@ func TestOverdueClearsWhenAnotherWriterReleases(t *testing.T) {
 	}
 }
 
+// 해제 패스의 Describe 가 계속 실패하면 원장을 읽지 않는다(판을 얻은 뒤에 읽는다 — Writer 계약 2). 그래서 닫힌 회차를
+// 처음 본 시각이 잡히지 않아 10분이 지나도 release_overdue 는 서지 않고, 실패는 write_failing(pass=release) 한 줄로만
+// 알린다 — 지금 동작을 못 박는다. 올림 패스는 올릴 후보가 없어 KVS 를 부르지 않으므로 pass=raise 는 없다. 잡는 결함:
+// 판보다 원장을 먼저 읽는 순서로 바뀌는 것(이 시험에서는 release_overdue 가 선다).
+func TestDescribeFailingRaisesWriteFailingOnlyWithoutOverdue(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &logRecorder{}
+		l := newFakeLedger(time.Now)
+		l.seed("s", "r", 7) // 닫힌 미해제 회차
+		st := newFakeStore()
+		st.describeErr = errors.New("ServiceUnavailableException")
+		w := newTestWriter(t, l, st, testOptions(time.Now, rec))
+		stop := runWriter(w)
+		defer stop()
+
+		time.Sleep(21 * time.Minute) // 해제 틱 42번 · 올림 틱 4번 — 처음 틱에서 10분을 두 번 넘긴다
+		synctest.Wait()
+		if n := len(rec.named("dvr_floor_release_overdue")); n != 0 {
+			t.Errorf("Describe 실패 중에 release_overdue %d줄, want 0(처음 본 시각이 없다)", n)
+		}
+		checkFailing(t, rec, "release", reasonFailed)
+		if row, _ := l.row("s", "r"); row.ReleasedAt != nil {
+			t.Error("Describe 실패 중에 원장 행이 해제됐다")
+		}
+	})
+}
+
 // 차단 상태(Writer 계약 6): 원장 하한이 그 회차의 최근 발행 목록 MSN 보다 크면 dvr_floor_blocks_list 가 서고(ERROR ·
 // value=1 · 회차 단위) 아니게 되면 같은 이름 value=0 으로 풀린다. 그 동안에도 KVS 에는 원장 값을 보낸다(값을 내리지
 // 않는다 — E4). E15 경우다 — 웹 불변식은 최신 사슬 목록만 보장한다(kty (가)).
@@ -799,6 +827,28 @@ func TestWriteFailingSetAndRecoveredArePaired(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("쓰기 신호 차례 %v, want %v", got, want)
+	}
+}
+
+// 쓰기 실패 신호의 set(write_failing)과 clear(write_recovered)는 같은 등급 WARN 이다 — clear 만 낮으면 LOG_LEVEL=warn
+// 수집에서 회복이 걸러진다(kty K4 · release_overdue 와 같은 관례). 잡는 결함: write_recovered 를 INFO 로 내는 것.
+func TestWriteFailingAndRecoveredAreBothWarn(t *testing.T) {
+	clock := newTestClock()
+	rec := &logRecorder{}
+	l := newFakeLedger(clock.now)
+	l.seed("s", "r", 1)
+	st := newFakeStore()
+	st.setDeny(true)
+	w := newTestWriter(t, l, st, testOptions(clock.now, rec))
+	w.report("release", w.release(context.Background()))
+	st.setDeny(false)
+	w.report("release", w.release(context.Background()))
+
+	for _, name := range []string{"edge_bounds_write_failing", "edge_bounds_write_recovered"} {
+		got := rec.named(name)
+		if len(got) != 1 || got[0].level != slog.LevelWarn {
+			t.Errorf("%s %+v, want WARN 한 줄", name, got)
+		}
 	}
 }
 

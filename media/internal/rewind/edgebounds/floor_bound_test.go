@@ -23,10 +23,10 @@ func (c *chainLists) publish(msn int64, at time.Time) {
 
 func (c *chainLists) latest() int64 { return c.msn[len(c.msn)-1] }
 
-// oldestServed 는 지금 CDN 이 줄 수 있는 이 사슬 목록 가운데 MSN 이 가장 작은 것이다. CDN 은 Margin 전에 최신이던
-// 목록부터 지금 최신 목록까지를 줄 수 있다고 본다(목록 max-age=1 · KVS 전파 · 발행 주기는 Margin 이 덮는다 — 설계 D2).
-// MSN 이 줄지 않으므로 그 가운데 가장 작은 것은 Margin 전에 최신이던 목록이고, 그런 목록이 없으면(첫 목록이 Margin
-// 안) 첫 목록이다.
+// oldestServed 는 지금 CDN 이 줄 수 있는 이 사슬 목록 가운데 MSN 이 가장 작은 것이다. 보수적 시험 모델이다 — CDN 이
+// Margin 전에 최신이던 목록부터 지금 최신 목록까지를 줄 수 있다고 본다(목록 max-age=1 보다 넓게 · 설계 D2). KVS 전파
+// 늦음의 상한을 보장하는 문장이 아니다. MSN 이 줄지 않으므로 그 가운데 가장 작은 것은 Margin 전에 최신이던 목록이고,
+// 그런 목록이 없으면(첫 목록이 Margin 안) 첫 목록이다.
 func (c *chainLists) oldestServed(now time.Time, margin time.Duration) int64 {
 	cut := now.Add(-margin)
 	oldest := c.msn[0]

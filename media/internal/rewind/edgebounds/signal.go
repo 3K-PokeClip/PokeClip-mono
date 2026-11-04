@@ -7,7 +7,8 @@ import (
 
 // 신호 이름(설계 8-1). release_overdue · blocks_list 는 같은 이름 · 같은 등급(ERROR)으로 value=1(set) · value=0(clear)
 // 를 낸다 — clear 만 등급이 낮으면 LOG_LEVEL=warn 수집에서 회복이 걸러진다(janitor · ingestauth 게이지 관례).
-// write_failing(WARN) · write_recovered(INFO)는 설계 표의 두 이름 · 두 등급 그대로다.
+// write_failing · write_recovered 는 두 이름이되 같은 등급(WARN)이다 — 같은 까닭으로 회복도 set 과 같은 등급에 둔다
+// (2026-11-04 kty 결정 K4 — 설계 표의 INFO 를 바꿈).
 const (
 	signalWriteFailing   = "edge_bounds_write_failing"
 	signalWriteRecovered = "edge_bounds_write_recovered"
@@ -67,7 +68,7 @@ func (w *Writer) report(pass string, err error) {
 		w.opt.Log.Warn(signalWriteFailing, "reason", reasonOf(err), "pass", pass, "err", err.Error())
 	case err == nil && w.failing[pass]:
 		delete(w.failing, pass)
-		w.opt.Log.Info(signalWriteRecovered, "pass", pass)
+		w.opt.Log.Warn(signalWriteRecovered, "pass", pass)
 	}
 }
 
