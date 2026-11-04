@@ -95,6 +95,7 @@ variables {
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
   broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  edge_bounds_kvs_arn           = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 run "accepts_valid_inputs" {
@@ -520,4 +521,123 @@ run "rejects_wildcard_stream_key_resolve_token_secret_arn" {
   }
 
   expect_failures = [var.stream_key_resolve_token_secret_arn]
+}
+
+# /dvr 하한 Writer(POK-525) 스위치는 bool 이고 기본 끔이다 — 끔이면 사이드카
+# REWIND_EDGE_BOUNDS_KVS_ARN 이 빈 값(Writer 꺼짐), 켬이면 KVS ARN 이다. null 은
+# 기본값으로 떨어진다(nullable = false).
+run "defaults_edge_bounds_writer_off" {
+  command = plan
+
+  assert {
+    condition     = output.template_vars.edge_bounds_kvs_arn == ""
+    error_message = "edge_bounds_writer_enabled 기본값에서 사이드카 KVS ARN 이 빈 값이 아니다."
+  }
+}
+
+run "renders_edge_bounds_kvs_arn_when_writer_on" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = true
+  }
+
+  assert {
+    condition     = output.template_vars.edge_bounds_kvs_arn == var.edge_bounds_kvs_arn
+    error_message = "edge_bounds_writer_enabled = true 인데 사이드카 KVS ARN 이 입력 ARN 이 아니다."
+  }
+}
+
+run "null_edge_bounds_writer_falls_back_to_off" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = null
+  }
+
+  assert {
+    condition     = output.template_vars.edge_bounds_kvs_arn == ""
+    error_message = "edge_bounds_writer_enabled = null 이 기본값 false 로 떨어지지 않았다(nullable = false)."
+  }
+}
+
+# KVS ARN 은 전역 CloudFront KVS 하나(리전 빔 · 12자리 계정 · 소문자 UUID id)만
+# 받는다 — 인스턴스 역할 EdgeBoundsKvs 의 Resource 라 와일드카드 · 다른 자원이면
+# 권한이 넓어진다.
+run "accepts_edge_bounds_kvs_arn_in_other_partition" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws-us-gov:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+}
+
+run "rejects_wildcard_edge_bounds_kvs_arn" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:key-value-store/*"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_empty_edge_bounds_kvs_arn" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = ""
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_of_other_resource" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:function/pokeclip-prod-live-auth"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_region" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront:us-east-1:123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_11_digit_account" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::12345678901:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_uppercase_id" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000E1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_trailing_path" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1/x"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
 }

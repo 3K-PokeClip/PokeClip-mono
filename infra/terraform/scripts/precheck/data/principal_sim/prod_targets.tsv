@@ -117,6 +117,15 @@ jobs-thumbnail-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip
 jobs-upload-queue	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 jobs-upload-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload-dlq	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 
+# /dvr 하한 KVS(POK-525 — edge_bounds_kvs.tf). ARN 끝은 생성 때 정해지는 ID
+# 라 표본 ID 로 묻는다(아래 prod/edge 덩어리의 cf-kvs 와 같은 방식 · 같은
+# 한계 — 실제 ID 를 적은 정책은 놓친다). 그릇 동작과 값 동작은 서비스가 달라
+# 행을 나눈다. 값은 쓰기만 묻는다 — dev 주체가 하한을 쓰거나 지우면 시청자
+# 조각이 404 가 되거나 하한이 사라진다. 하한 값은 비밀이 아니라 읽기는 묻지
+# 않는다.
+edge-bounds-kvs	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-edge-bounds-kvs	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore	none	-
+edge-bounds-kvs-data	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-edge-bounds-kvs	key-value-store	us-east-1	cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
+
 # SQL 실행기 역할 · 인스턴스 프로필(켜진 동안만 있다 — 꺼져 있어도 묻는다).
 # 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 이 역할로 새 상자를
 # 띄워 마스터 비밀을 읽는 길). 켜진 실행기 자신에 명령 · 세션을 보내는 길은

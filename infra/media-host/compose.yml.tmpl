@@ -44,6 +44,8 @@
 #                        되감기 목록 URI 앞머리(사이드카 REWIND_PUBLIC_BASE_URL —
 #                        https 절대 URL · 끝 / 없음). S3_BUCKET 이 있으면 사이드카가
 #                        이 값 없이 기동하지 않는다.
+#   edge_bounds_kvs_arn  /dvr 하한 KVS ARN(사이드카 REWIND_EDGE_BOUNDS_KVS_ARN ·
+#                        두 모드 공통). 빈 값이면 하한 Writer 가 꺼진다.
 #   detached_log_driver  비부착 서비스의 로깅 드라이버. "json-file" 이면 회전
 #                        json-file, 그 밖의 값은 모두 journald 다(prod 는
 #                        "journald" — 오타가 나도 prod 쪽으로 떨어진다).
@@ -217,6 +219,7 @@ services:
       S3_BUCKET: ${rewind_bucket_name}
       # 목록 줄 = 이 앞머리 + "/" + S3 키(dvr/…) — 영상 CDN 의 /dvr/* 가 버킷이다.
       REWIND_PUBLIC_BASE_URL: "${rewind_public_base_url}"
+      REWIND_EDGE_BOUNDS_KVS_ARN: "${edge_bounds_kvs_arn}"
       # 제어면 HTTP 서버. 같은 망 칸의 루프백에서만 듣는다 — nginx 제어면 server
       # 가 control_upstream(= 이 주소)으로 넘긴다. control_upstream 이 비면 nginx
       # 가 제어면 경로를 404 로 답해 이 서버에 닿는 길이 없다.

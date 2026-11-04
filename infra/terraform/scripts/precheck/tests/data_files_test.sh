@@ -101,7 +101,9 @@ readonly READ_SERVICES=' s3 secretsmanager ecr sns sqs '
 # 색인의 RUNTIME_ARN_TAILS 가 그 행 ARN 의 꼬리다(이름 = prod/runtime/*.tf ·
 # CONTRACT-runtime.md 「런타임 자원 이름 패턴」). 버킷 · 객체 행은 버킷이
 # 생긴 뒤 단계(O7d)부터 묻는다(prod_targets.tsv 머리 주석). 비공개 사용자
-# 자료 객체는 읽기도 묻는다 — dev 주체의 읽기가 곧 유출이다.
+# 자료 객체는 읽기도 묻는다 — dev 주체의 읽기가 곧 유출이다. /dvr 하한 KVS
+# (POK-525)는 그릇 동작과 값 쓰기를 묻는다 — dev 주체가 하한을 쓰면 시청자
+# 조각이 404 가 된다.
 RUNTIME_TARGETS=('rds-instance runtime-1a rds:DeleteDBInstance'
   'rds-parameter-group runtime-1a rds:ModifyDBParameterGroup'
   'rds-subnet-group runtime-1a rds:DeleteDBSubnetGroup'
@@ -127,7 +129,11 @@ RUNTIME_TARGETS=('rds-instance runtime-1a rds:DeleteDBInstance'
   'profile-photo-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
   'profile-photo-object O7d s3:GetObject,s3:PutObject'
   'chat-archive-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
-  'chat-archive-object O7d s3:GetObject,s3:PutObject')
+  'chat-archive-object O7d s3:GetObject,s3:PutObject'
+  'edge-bounds-kvs runtime-1a cloudfront:UpdateKeyValueStore,'\
+'cloudfront:DeleteKeyValueStore'
+  'edge-bounds-kvs-data runtime-1a cloudfront-keyvaluestore:PutKey,'\
+'cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey')
 readonly RUNTIME_TARGETS
 RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
   ':subgrp:pokeclip-prod-db'
@@ -148,7 +154,9 @@ RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
   ':::pokeclip-prod-profile-photos-apne2'
   ':::pokeclip-prod-profile-photos-apne2/?*'
   ':::pokeclip-prod-chat-archive-apne2'
-  ':::pokeclip-prod-chat-archive-apne2/?*')
+  ':::pokeclip-prod-chat-archive-apne2/?*'
+  ':key-value-store/sample-edge-bounds-kvs'
+  ':key-value-store/sample-edge-bounds-kvs')
 readonly RUNTIME_ARN_TAILS
 # 값 넣기(put-secret-from-file.sh — 1단-다)의 직전 점검이 쓰는 runtime-1a
 # 묶음 행(동작 · 리전 · 자원 패턴 — 5 묶음의 같은 행과 같은 꼴).
@@ -1930,6 +1938,28 @@ expect_runtime_bundle_puts_bucket_cors() {
   testlib::ok "runtime-cors → runtime-1a 묶음에 버킷 CORS 쓰기 · 읽기 행"
 }
 
+#######################################
+# 데이터 단언: runtime-1a 묶음에 /dvr 하한 KVS 그릇(POK-525 —
+# aws_cloudfront_key_value_store · default_tags)의 Terraform 동작 넷이
+# us-east-1 · 자원 * 로 있고, KVS 값 동작은 없다(값은 상자 Writer 몫 —
+# split 단언이 묶음 전체를 본다).
+# Globals:
+#   STAGE_DIR
+#######################################
+expect_runtime_bundle_creates_edge_bounds_kvs() {
+  local rows action
+  rows="$(data_rows "${STAGE_DIR}/runtime-1a.tsv")"
+  for action in cloudfront:CreateKeyValueStore cloudfront:DescribeKeyValueStore \
+    cloudfront:TagResource cloudfront:ListTagsForResource; do
+    if ! has_line "${rows}" "${action}"$'\t''us-east-1'$'\t''*'; then
+      testlib::fail "runtime-kvs: runtime-1a 묶음에 「${action} us-east-1 *」" \
+        "행이 없음"
+      return
+    fi
+  done
+  testlib::ok "runtime-kvs → runtime-1a 묶음에 하한 KVS 그릇 동작 넷"
+}
+
 main() {
   testlib::init data_files_test
   expect_bundle_set
@@ -1949,6 +1979,7 @@ main() {
   expect_runtime_targets
   expect_runtime_bundle_puts_secret_value
   expect_runtime_bundle_puts_bucket_cors
+  expect_runtime_bundle_creates_edge_bounds_kvs
   expect_late_targets
   expect_followup_targets
   expect_acm_validation_targets

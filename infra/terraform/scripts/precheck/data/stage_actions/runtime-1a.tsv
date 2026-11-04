@@ -131,6 +131,17 @@ sqs:SetQueueAttributes	ap-northeast-2	*
 sqs:TagQueue	ap-northeast-2	*
 sqs:ListQueueTags	ap-northeast-2	*
 
+# /dvr 하한 KVS 그릇(POK-525 — prod/runtime/edge_bounds_kvs.tf). O7f 의 CDN 비밀
+# 그릇과 같은 생성 · 재조회 동작에 태그 짝을 더했다 — 잠금 판 v6.68.0 의
+# aws_cloudfront_key_value_store 스키마에 tags 가 있어(providers schema -json
+# 실측 2026-11-04) default_tags 가 붙는다. 태그 읽기(ListTagsForResource)는
+# provider 소스를 대조하지 못해(미대조) 태그 붙는 자원의 재조회 몫으로
+# 더했다. KVS 값 동작은 이 묶음에 없다(값은 상자 Writer 몫 · split 단언).
+cloudfront:CreateKeyValueStore	us-east-1	*
+cloudfront:DescribeKeyValueStore	us-east-1	*
+cloudfront:TagResource	us-east-1	*
+cloudfront:ListTagsForResource	us-east-1	*
+
 # RDS 로그 그룹(30일 · 인스턴스보다 먼저)
 logs:CreateLogGroup	ap-northeast-2	*
 logs:PutRetentionPolicy	ap-northeast-2	*

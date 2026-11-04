@@ -37,6 +37,10 @@ locals {
     # 계약9 발행 — 응답기 모드에서 목록이 찰 때만 렌더한다(compose 템플릿).
     broadcast_topic_arn       = var.broadcast_topic_arn
     lifecycle_publish_streams = var.lifecycle_publish_streams
+
+    # /dvr 하한 Writer — 켬일 때만 KVS ARN, 끔이면 빈 값(사이드카가 Writer 를
+    # 띄우지 않는다). 두 모드 공통이다.
+    edge_bounds_kvs_arn = var.edge_bounds_writer_enabled ? var.edge_bounds_kvs_arn : ""
   }
 
   compose_yml = templatefile("${local.media_host_dir}/compose.yml.tmpl", local.template_vars)
