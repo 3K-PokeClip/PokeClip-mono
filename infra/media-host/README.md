@@ -209,7 +209,7 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
 |---|---|---|
 | 옛 모드 | 없음 — 목록을 채우면 modules/media_host 가 plan 에서 거부 | `lifecycle_disabled reason=no_topic`(INFO) |
 | 응답기 모드 · 빈 목록 | 없음 | `lifecycle_disabled reason=no_topic`(INFO) |
-| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | `lifecycle_started` — 준비가 실패하면 ERROR `lifecycle_disabled`. 사유는 지금 코드 기준 `no_resolver`(`STREAM_KEY_RESOLVE_URL` · `STREAM_KEY_RESOLVE_TOKEN_FILE` 이 둘 다 비어 4C 클라이언트가 없음 — 설정 결함이라 재시도 없음) · `privilege_check` · `privilege` · `sns_client` · `assembly` |
+| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | 준비되면 ERROR `lifecycle_degraded value=0 reason=ready` 와 INFO `lifecycle_started`. 발행기 준비가 실패하면 ERROR `lifecycle_degraded value=1` 이고 `reason` 은 `privilege_check` · `privilege` · `sns_client` · `assembly` 가운데 하나다 — 게이트를 켠 채 두고, 적재 직전 권한 판정이 참이면 적재를 계속한다(거짓이면 ERROR `lifecycle_enqueue_skipped` 로 건너뛰며 그 started 는 되살릴 수 없다). 30초마다 다시 준비하며, 회복하면 `value=0 reason=recovered` 와 `lifecycle_started` 가 더 나온다. `lifecycle_disabled` 는 `no_topic` · `no_streams`(INFO)와 `no_resolver`(ERROR — `STREAM_KEY_RESOLVE_URL` · `STREAM_KEY_RESOLVE_TOKEN_FILE` 이 둘 다 비어 4C 클라이언트가 없음 · 설정 결함이라 재시도 없음)에만 나온다 |
 
 *   목록 항목(`*` 또는 26자 Crockford base32) · 주제 ARN 꼴은
     modules/media_host 가 plan 에서 봅니다. 인스턴스 역할의 `sns:Publish`
@@ -220,12 +220,19 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
     구간을 열고 Q1 = 0 · `rounds` ≥ 1 을 확인한다(둘 다
     [런타임 1단-가 런북](../terraform/runbooks/runtime-1a.md) 「발행 잔여
     질의」 — 시험 회차가 생기기 전이면 Q4). 꺼진 사이드카가 started 를 낸
-    회차를 닫으면 ended 를 넣지 않고, 닫힌 회차는 다시 평가되지 않는다.
-*   **재기동 강등:** 발행 설정이 찬 사이드카도 재기동 때 게이트
+    회차를 닫으면 그 자리에서는 ended 를 넣지 않는다. started 가 적재된
+    회차라면 같은 DB 에 떠 있는 이 판 이상의 발행 사이드카가 회차 시작 뒤
+    1392시간 안에 보정으로 ended 를 낸다([media/README](../../media/README.md)
+    「계약9 발행」). 꺼진 사이드카가 연 회차는 started 가 없어 ended 도 없다.
+*   **재기동 강등:** 발행 설정이 찬 사이드카도 재기동 때 발행기
     준비(`privilege_check` · `privilege` · `sns_client` · `assembly`)가
-    실패하면 꺼진 게이트로 정산을 계속한다(ADR-063 결정 1). 후속 수정 배포
-    전까지는 발행 목록 계정이 송출하는 동안 M-B 감시를 한다(Media 교체 런북
-    「O8a 당김 — 운영 감시」).
+    실패하면 게이트를 켠 채 강등한다 — 적재 직전 권한 판정이 참이면 적재를
+    계속하고(거짓이면 ERROR `lifecycle_enqueue_skipped` 로 건너뛰며 그
+    started 는 되살릴 수 없다), 30초마다 다시 준비해 회복하면 그동안 적재된
+    행을 늦게 낸다(ADR-063 결정 1). 판정 기준은
+    [media/README](../../media/README.md) 「계약9 운영 판정 — D1 · D2 · D4」
+    이고, 상자에서 도는 감시 절차는 Media 교체 런북 「O8a 당김 — 운영 감시」
+    다.
 
 ### O7 → O8a 2 전환
 
