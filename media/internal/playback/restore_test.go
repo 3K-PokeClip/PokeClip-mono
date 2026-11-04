@@ -112,9 +112,23 @@ func TestNextLinkPinsRowWithoutMtxiDeterministically(t *testing.T) {
 		t.Errorf("고정 링크 = pos %v · offset %v · mtxi %v · 고정 %v, want 16s · 2s · 14s(기대값) · 고정",
 			got.Pos, got.Offset, got.Mtxi, got.Pinned)
 	}
-	if got.Recorder == nil || *got.Recorder != rec || got.Number == nil || *got.Number != 8 || got.VideoEnd != nil || got.Dur != 3*time.Second {
-		t.Errorf("고정 링크 칸 = 표식 %v · 번호 %v · 영상 끝 %v · 길이 %v, want 같은 표식 · 8 · nil · 3s",
+	if got.Recorder == nil || *got.Recorder != rec || got.Number == nil || *got.Number != 8 || got.VideoEnd == nil ||
+		*got.VideoEnd != 17*time.Second || got.Dur != 3*time.Second {
+		t.Errorf("고정 링크 칸 = 표식 %v · 번호 %v · 영상 끝 %v · 길이 %v, want 같은 표식 · 8 · 17s(앞 영상 끝 + 길이) · 3s",
 			got.Recorder, got.Number, got.VideoEnd, got.Dur)
+	}
+}
+
+// 앞 행에 영상 끝이 없으면 고정 행의 기대 영상 끝도 없다 — 다음 행은 mtxi 축으로 잰다(지어낸 영상 끝으로 재지 않는다).
+func TestNextLinkPinnedRowAfterRowWithoutVideoHasNoVideoEnd(t *testing.T) {
+	rec := [16]byte{0xaa}
+	prev := Link{Seq: 0, SessionID: "S1", Recorder: &rec, Number: int64Ptr(1), Mtxi: 10 * time.Second, Dur: 4 * time.Second,
+		Pos: 10 * time.Second}
+
+	got := NextLink(prev, false, SourceTiming{Seq: 1, SessionID: "S1", Dur: 4 * time.Second}, stitchAt(0, new([]int64)))
+
+	if got.VideoEnd != nil || !got.Pinned {
+		t.Errorf("고정 링크 영상 끝 = %v · 고정 %v, want nil · 고정", got.VideoEnd, got.Pinned)
 	}
 }
 

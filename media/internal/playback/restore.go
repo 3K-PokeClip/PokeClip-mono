@@ -52,7 +52,8 @@ type Link struct {
 	// Recorder · Number 는 이어짐 판정 재료다. 고정 행이면 기대값(앞 행과 같은 녹화기의 다음 번호)이다.
 	Recorder *[16]byte
 	Number   *int64
-	// VideoEnd 는 영상 축 이웃 차의 재료(b)다. 고정 행이면 nil 이다 — 다음 행은 mtxi 축으로 잰다.
+	// VideoEnd 는 영상 축 이웃 차의 재료(b)다. 고정 행이면 기대값(앞 영상 끝 + 장부 길이)이고, 앞 행에도 없으면 nil 이다 —
+	// 그때 다음 행은 mtxi 축으로 잰다.
 	VideoEnd *time.Duration
 	// Mtxi 는 누적 DTS 다. 고정 행이면 기대값(직전 mtxi + 장부 길이)이다.
 	Mtxi time.Duration
@@ -87,13 +88,20 @@ func StartLink(cur SourceTiming) (link Link, ok bool) {
 // 쪽이 정한다 — 끼어든 비귀속 행이 있으면 거짓).
 //
 // mtxi 가 없으면 도장을 막지 않고 기대값에 고정한다(④ⓐ): pos = pos(k−1) + dur(k−1), 사슬은 기대 mtxi · 표식으로
-// 잇는다 — 그 자리에 실제 리셋 · 구멍이 있었다면 다음 행의 술어가 잡으므로 도장은 뒤로 가지 않는다.
+// 잇는다 — 그 자리에 실제 리셋 · 구멍이 있었다면 다음 행의 술어가 잡으므로 도장은 뒤로 가지 않는다. 앞 행에 영상 끝이
+// 있으면 기대 영상 끝(앞 영상 끝 + 장부 길이)도 든다 — 다음 행을 영상 축으로 잰다(ADR-073 「고정 도장 · 폴백도 영상 축」).
+// mtxi 축으로 재면 앞 행이 소리 머리 조각일 때 기대 mtxi 가 영상 끝보다 머리 앞섬만큼 일러 거짓 구멍(실측 최대 226ms)이
+// 난다(c8 검수 M1).
 func NextLink(prev Link, continues bool, cur SourceTiming, rule StitchRule) Link {
 	next := Link{Seq: cur.Seq, SessionID: cur.SessionID, Dur: cur.Dur}
 	if cur.Mtxi == nil {
 		next.Recorder, next.Number = expectedInstance(prev)
 		next.Mtxi, next.Offset = prev.Mtxi+prev.Dur, prev.Offset
 		next.Pos, next.Pinned = prev.Pos+prev.Dur, true
+		if prev.VideoEnd != nil {
+			end := *prev.VideoEnd + cur.Dur
+			next.VideoEnd = &end
+		}
 		return next
 	}
 	next.Recorder, next.Number, next.VideoEnd = cur.Recorder, cur.Number, cur.VideoEnd

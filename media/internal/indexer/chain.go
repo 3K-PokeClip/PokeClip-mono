@@ -24,7 +24,7 @@ import (
 // 도장 · 보정값)와, 그 링크 밖에서 루프만 쓰는 재료. 루프(D10) 한 goroutine 만 만진다.
 type playbackChain struct {
 	// link 는 playback.NextLink 의 입출력이다(실시간과 복원이 한 코드 — POK-196 PDT 계획 4절 c10a). 판독에 실패한 행이면
-	// 기대값(같은 녹화기의 다음 번호 · 직전 mtxi + 장부 길이 · 영상 칸 없음)이다(④ⓐ). 길이는 다음 행 INSERT 때 꼬리 교정
+	// 기대값(같은 녹화기의 다음 번호 · 직전 mtxi + 장부 길이 · 앞 영상 끝 + 장부 길이)이다(④ⓐ). 길이는 다음 행 INSERT 때 꼬리 교정
 	// 뒤 값으로 확정된다(②).
 	link playback.Link
 	// path 는 리셋을 이을 때 트랙 끝을 다시 읽을 녹화 파일이다.
@@ -91,7 +91,7 @@ func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.
 // withTailCorrection 은 꼬리에서 물러나는 사슬 행 prev 의 교정 뒤 값으로 링크를 덮는다. ② 꼬리 교정은 그 행이 꼬리인 동안만
 // 일어나므로, 꼬리에서 물러나는 지금의 길이가 최종값이다. 사슬 행이 아닌 prev(비귀속 행)의 길이로는 어떤 필드도 덮지 않는다
 // (부르는 쪽이 인접일 때만 부른다). 영상 끝도 같은 교정을 받는 유일한 사실 칸이다(설계 r7 2.3 — 옛 값이 있을 때만 바뀐다).
-// 기대값 행(영상 칸 없음)은 그대로 둔다.
+// 기대값 행(장부 영상 칸 없음 — 기대 영상 끝)은 그대로 둔다.
 func withTailCorrection(l playback.Link, prev *index.TailRow) playback.Link {
 	l.Dur = time.Duration(prev.DurationMS) * time.Millisecond
 	if l.VideoEnd != nil && prev.Timing.VideoEnd != nil {
