@@ -2046,6 +2046,120 @@ TEST(same_key_issuer_detects_env_switch_during_pairing)
 	CHECK(!SameKeyIssuer(localSwitched, local));
 }
 
+// 독 개발자 모드 「인증 서버」(PUT api_base) — 비움·두 짝의 기본 주소·이 PC 주소만
+TEST(dock_api_base_accepts_defaults_and_loopback_only)
+{
+	CHECK_EQ(NormalizeApiBase("  http://localhost:8082/  "), std::string("http://localhost:8082"));
+	CHECK_EQ(NormalizeApiBase("https://dev.pokeclip.com//"), std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(NormalizeApiBase(" \t"), std::string());
+
+	CHECK(IsLoopbackApiBase("http://localhost:8082"));
+	CHECK(IsLoopbackApiBase("HTTP://LocalHost:8082"));
+	CHECK(IsLoopbackApiBase("http://localhost"));
+	CHECK(IsLoopbackApiBase("http://127.0.0.1:8082"));
+	CHECK(IsLoopbackApiBase("http://127.1.2.3:1"));
+	CHECK(IsLoopbackApiBase("https://localhost:8443"));
+	CHECK(IsLoopbackApiBase("http://[::1]:8082"));
+	CHECK(!IsLoopbackApiBase("http://localhost@evil.example")); // 실제로는 뒤쪽 호스트로 간다
+	CHECK(!IsLoopbackApiBase("http://localhost:8082@evil.example"));
+	CHECK(!IsLoopbackApiBase("http://localhost.evil.example"));
+	CHECK(!IsLoopbackApiBase("http://127.0.0.1.evil.example"));
+	CHECK(!IsLoopbackApiBase("http://127.0.0"));
+	// 127.x 판정은 정본(IsLoopbackBase)을 따른다 — 칸마다 0~255인지는 보지 않는다(어디로 가도 이 PC 밖이 아니다)
+	CHECK(IsLoopbackApiBase("http://127.0.0.256"));
+	CHECK(!IsLoopbackApiBase("http://128.0.0.1"));
+	CHECK(!IsLoopbackApiBase("http://[::2]:8082"));
+	CHECK(!IsLoopbackApiBase("http://localhost:0"));
+	CHECK(!IsLoopbackApiBase("http://localhost:65536"));
+	CHECK(!IsLoopbackApiBase("http://localhost:80a"));
+	CHECK(!IsLoopbackApiBase("http://localhost:"));
+	CHECK(!IsLoopbackApiBase("http://localhost/api")); // 경로는 받지 않는다 — 교환 경로를 뒤에 붙인다
+	CHECK(!IsLoopbackApiBase("http://localhost?x=1"));
+	CHECK(!IsLoopbackApiBase("ftp://localhost"));
+	CHECK(!IsLoopbackApiBase("localhost:8082"));
+	CHECK(!IsLoopbackApiBase("http://"));
+
+	CHECK(IsAcceptedDockApiBase(""));
+	CHECK(IsAcceptedDockApiBase("https://api.pokeclip.com"));
+	CHECK(IsAcceptedDockApiBase("https://dev.pokeclip.com"));
+	CHECK(IsAcceptedDockApiBase(kLegacyDefaultApiBase));
+	CHECK(IsAcceptedDockApiBase("http://localhost:8082"));
+	CHECK(!IsAcceptedDockApiBase("https://evil.example")); // PC 밖 다른 주소는 설정 파일로만
+	CHECK(!IsAcceptedDockApiBase("http://api.pokeclip.com"));
+
+	// 독이 받는 이 PC 주소는 마크(IsSecureMarkBase)·종료 신호(IsLoopbackBase)도 받는다 — 판정이 한 곳이라 어긋나지 않는다
+	for (const char *base : {"http://localhost:8082", "HTTP://LocalHost:8082", "http://127.0.0.1:8082", "http://127.1.2.3:1",
+				 "https://localhost:8443", "http://[::1]:8082", "http://[::1]"}) {
+		CHECK(IsLoopbackApiBase(base));
+		CHECK(IsLoopbackBase(base));
+		CHECK(IsSecureMarkBase(base));
+	}
+}
+
+TEST(put_api_base_change_clears_key)
+{
+	const PluginConfig before = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+
+	// 로컬 auth로 — 주소를 두고 키를 지운다(그 서버가 발급한 키가 아니다). 수신 주소·환경은 그대로
+	PluginConfig c = before;
+	CHECK(ApplyPutServerEnv(c, before, std::nullopt, std::string("http://localhost:8082")));
+	CHECK_EQ(c.apiBase, std::string("http://localhost:8082"));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK(!c.HasKey());
+	CHECK(c.passphrase.empty());
+	CHECK(!SameKeyIssuer(c, before)); // 교환을 기다리던 키는 버린다
+
+	// 같은 주소를 다시 보내면 바뀐 게 아니다 — 키는 그대로
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt, std::string("https://api.pokeclip.com")));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 끝 '/'만 다른 같은 주소(설정 파일에 직접 적은 값 — Load는 정리하지 않는다)도 바뀐 게 아니다. 저장된 값을 두고 키도 그대로
+	PluginConfig slash = before;
+	slash.apiBase = "http://localhost:8082/";
+	c = slash;
+	CHECK(!ApplyPutServerEnv(c, slash, std::nullopt, std::string("http://localhost:8082")));
+	CHECK_EQ(c.apiBase, std::string("http://localhost:8082/"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 비움 = 지금 환경의 기본 주소로 돌아간다
+	PluginConfig local = before;
+	local.apiBase = "http://localhost:8082";
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, std::nullopt, std::string()));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK(!c.HasKey());
+
+	// 다른 환경의 기본 주소를 적어도 짝이 섞이지 않는다 — 지금 환경의 기본 주소로(환경은 스위치로 바꾼다)
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, std::nullopt, std::string("https://dev.pokeclip.com")));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt, std::string("https://dev.pokeclip.com")));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 받지 않는 주소는 무시한다(부르는 쪽이 400으로 먼저 막는다) — 키도 그대로
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt, std::string("https://evil.example")));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 같은 본문에 환경 전환이 있으면 비움은 바뀐 환경의 기본 주소다
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, ServerEnv::Dev, std::string()));
+	CHECK(c.serverEnv == ServerEnv::Dev);
+	CHECK_EQ(c.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("media-dev.pokeclip.com"));
+
+	// 방송 중 잠금 — 인증 서버가 바뀌면 출력 설정이 다른 것으로 본다(키가 지워진다)
+	c = before;
+	ApplyPutServerEnv(c, before, std::nullopt, std::string("http://127.0.0.1:8082"));
+	CHECK(!c.SameOutputSettings(before));
+}
+
 // 연결 해제 저장의 순서 규칙(POK-285) — POSIX·Windows 저장이 같이 쓴다. .bak을 먼저 쓰고, 그게 실패하면 본 파일은 건드리지 않는다.
 TEST(replacing_backup_writes_bak_first_and_stops_on_failure)
 {
@@ -2251,6 +2365,7 @@ TEST(mark_secure_base_allows_https_and_loopback_only)
 	CHECK(!IsSecureMarkBase("http://localhost@evil.test"));
 	CHECK(!IsSecureMarkBase("http://127.0.0.1.nip.io"));
 	CHECK(!IsSecureMarkBase("http://localhost:80x"));
+	CHECK(!IsSecureMarkBase("http://localhost:")); // 포트 없이 ':'만 — 종료 신호 판정과 같게(정본 하나)
 	CHECK(!IsSecureMarkBase("ftp://localhost"));
 	CHECK(!IsSecureMarkBase("https://"));
 	CHECK(!IsSecureMarkBase(""));
