@@ -1098,3 +1098,51 @@ func TestLoadPlaybackReadMax(t *testing.T) {
 		}
 	}
 }
+
+// 하한 Writer 의 KVS ARN(REWIND_EDGE_BOUNDS_KVS_ARN — POK-525 계획 Ⓒ-5)은 빈 값이면 끔이다. 꼴 밖이면 기동을 거부하지
+// 않고 끄며 이유를 남긴다 — 조립이 ERROR edge_bounds_config_invalid 로 싣는다(설계 8-1). 하한은 사본이라 오타 하나가
+// 인덱싱 · 업로드까지 죽이면 안 된다. 이유에는 원문을 싣지 않는다(이 파일의 URL 변수들과 같은 규칙).
+func TestLoadEdgeBoundsKVSARN(t *testing.T) {
+	const valid = "arn:aws:cloudfront::123456789012:key-value-store/a1b2c3d4-5678-90ab-cdef-EXAMPLE11111"
+	tests := []struct {
+		name        string
+		raw         string
+		wantARN     string
+		wantInvalid bool
+	}{
+		{"빈 값 = 끔", "", "", false},
+		{"공백 = 끔", "  ", "", false},
+		{"KVS ARN", valid, valid, false},
+		{"앞뒤 공백은 뗀다", " " + valid + " ", valid, false},
+		{"ARN 아님(이름)", "pokeclip-prod-dvr-floor", "", true},
+		{"다른 서비스(IAM 접두)", "arn:aws:cloudfront-keyvaluestore::123456789012:key-value-store/a1b2c3d4", "", true},
+		{"다른 자원(배포)", "arn:aws:cloudfront::123456789012:distribution/E1ABCDEF", "", true},
+		{"지역 ARN(전역 아님)", "arn:aws:cloudfront:us-east-1:123456789012:key-value-store/a1b2c3d4", "", true},
+		{"다른 파티션", "arn:aws-cn:cloudfront::123456789012:key-value-store/a1b2c3d4", "", true},
+		{"계정 12자리 아님", "arn:aws:cloudfront::1234:key-value-store/a1b2c3d4", "", true},
+		{"ID 없음", "arn:aws:cloudfront::123456789012:key-value-store/", "", true},
+		{"ID 에 /", "arn:aws:cloudfront::123456789012:key-value-store/a1b2/c3d4", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := minimalEnv()
+			env["REWIND_EDGE_BOUNDS_KVS_ARN"] = tt.raw
+
+			cfg, err := Load(envOf(env))
+
+			if err != nil {
+				t.Fatalf("Load = %v, want nil(꼴 밖이어도 기동은 계속)", err)
+			}
+			if cfg.EdgeBoundsKVSARN != tt.wantARN {
+				t.Errorf("EdgeBoundsKVSARN = %q, want %q", cfg.EdgeBoundsKVSARN, tt.wantARN)
+			}
+			reason := cfg.EdgeBoundsConfigInvalid
+			if got := reason != ""; got != tt.wantInvalid {
+				t.Errorf("EdgeBoundsConfigInvalid = %q, want 이유 있음 %v", reason, tt.wantInvalid)
+			}
+			if tt.wantInvalid && (!strings.Contains(reason, "REWIND_EDGE_BOUNDS_KVS_ARN") || strings.Contains(reason, tt.raw)) {
+				t.Errorf("이유 %q 는 env 이름을 싣고 원문 %q 는 싣지 않아야 한다", reason, tt.raw)
+			}
+		})
+	}
+}
