@@ -13,6 +13,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { SUPPORT_EMAIL } from '@/features/legal/legalInfo';
 import { track } from '@/lib/analytics';
 import { LinkButton, Tabs, VisuallyHidden } from '@/ui';
 import { useOnboardingStore } from '@/stores/onboarding';
@@ -24,10 +25,9 @@ import styles from './HelpSettingsScreen.module.css';
 
 // 디자인 1q 설정 · 도움말 문의 — 가이드 카드 3개 · 자주 묻는 질문 · 문의 카드.
 //
-// 문의 API는 없다 — 1:1 문의는 디스코드로, 그 밖은 메일로 받는다(메일은 처리방침·탈퇴 창과 같은 주소).
+// 문의 API는 없다 — 1:1 문의는 디스코드로, 그 밖은 메일로 받는다(메일 주소는 탈퇴 창과 같은 SUPPORT_EMAIL).
 // 메일 버튼은 메일 앱을 여는데, 메일 앱이 없는 사람도 옮겨 적을 수 있게 주소를 글로도 보인다.
 
-const SUPPORT_EMAIL = 'support@pokeclip.com';
 const DISCORD_INVITE_URL = 'https://discord.gg/rJM9egeuwr';
 
 const TOPIC_ICONS: Record<FaqTopic, LucideIcon> = {

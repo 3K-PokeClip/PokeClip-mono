@@ -18,6 +18,10 @@ export const LEGAL_URLS = {
   privacyRetention: `${LANDING_URL}/privacy/#retention`,
 } as const;
 
+// 문의 메일 — 랜딩 하단·처리방침·약관(landing/)에 적힌 주소와 같다. 대시보드에서는 도움말 문의 카드와
+// 탈퇴 창이 이 상수 하나를 쓴다. 주소를 바꾸면 landing/의 같은 주소도 함께 고친다.
+export const SUPPORT_EMAIL = 'support@pokeclip.com';
+
 // YouTube API Services Developer Policies III.A가 문구와 주소를 지정한다.
 // 다른 주소로 바꾸지 않는다 — 심사는 정책에 적힌 주소 그대로를 찾는다.
 export const EXTERNAL_URLS = {
