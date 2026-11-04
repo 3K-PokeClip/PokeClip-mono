@@ -33,7 +33,7 @@ export function VodGrid({ vods }: { vods: HomeVod[] }) {
                   <VodCardBody vod={vod} />
                 </Link>
               ) : (
-                // 보관이 끝나 열 것이 없다: 링크를 안 만들고 흐리게 둔다 — 눌리는 척하지 않는다(지난 방송 목록과 같다, POK-254)
+                // 보관이 끝나 열 것이 없다: 링크를 안 만들고 사진을 흑백으로 둔다 — 눌리는 척하지 않는다(지난 방송 목록과 같다, POK-254)
                 <div className={styles.vodLinkOff}>
                   <VodCardBody vod={vod} />
                 </div>
