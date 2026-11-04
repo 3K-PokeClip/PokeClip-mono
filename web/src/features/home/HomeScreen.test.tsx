@@ -1150,6 +1150,12 @@ describe('HomeScreen', () => {
     // 썸네일 자리표시 「썸네일 준비 중」과 가르려고 배지 글자만 정확히 찾는다
     expect(within(tile('fresh')).getByText('다시 보기 준비 중')).toBeInTheDocument();
     expect(within(tile('stale')).queryByText('다시 보기 준비 중')).toBeNull();
+    // 한 시간이 지난 방송은 카드 · 클립이 0이면 그때부터 장면이 없다고 말한다(보관함을 읽은 뒤)
+    expect(await within(tile('stale')).findByText('찾은 장면 없음')).toBeInTheDocument();
+    // 방금 끝난 방송은 마지막 구간 카드가 늦게 뜬다 — 0장이어도 「없다」고 단정하지 않는다
+    expect(within(tile('fresh')).queryByText('찾은 장면 없음')).toBeNull();
+    expect(within(tile('fresh')).queryByText('장면 사진 없음')).toBeNull();
+    expect(within(tile('fresh')).getByText('썸네일 준비 중')).toBeInTheDocument();
     expect(within(tile('gone')).getByText('보관 만료')).toBeInTheDocument();
     // 만료 카드의 가운데는 「보관 만료」 하나뿐이다 — 사진 자리표시가 같이 서면 두 글이 포개진다
     expect(within(tile('gone')).queryByText('썸네일 준비 중')).toBeNull();

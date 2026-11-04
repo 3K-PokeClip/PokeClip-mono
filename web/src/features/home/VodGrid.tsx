@@ -46,15 +46,23 @@ export function VodGrid({ vods }: { vods: HomeVod[] }) {
   );
 }
 
+/**
+ * 카드 수가 다 찼는가. 방금 끝난 방송(「다시 보기 준비 중」)은 마지막 구간 카드가 늦게 뜬다 — 홈도 그 방송의 카드는 매 주기 다시
+ * 읽는다(useHomeMockState `fresh`). 사진도 그 카드 장면에서 나오니, 그동안은 0이어도 「없다」고 단정하지 않는다
+ */
+function cardsSettled(vod: HomeVod): boolean {
+  return vod.badge?.kind !== 'preparing';
+}
+
 function VodCardBody({ vod }: { vod: HomeVod }) {
   const expired = vod.badge?.kind === 'expired';
   return (
     <>
       <Thumb
         // 보관 만료면 가운데는 「보관 만료」 알약 하나만 둔다 — 사진이 없거나 못 받아 자리표시가 같이 서면 두 글이 포개진다.
-        // 카드가 하나도 없으면 사진(가장 크게 터진 장면)도 올 수 없다
+        // 카드가 하나도 없으면 사진(가장 크게 터진 장면)도 올 수 없다. 단 방금 끝난 방송은 아직 단정하지 않는다(cardsSettled)
         label={
-          expired ? null : vod.cards === 0 ? (
+          expired ? null : vod.cards === 0 && cardsSettled(vod) ? (
             <span className={styles.vodNoPhoto}>
               <VideoOff size={18} />
               장면 사진 없음
@@ -99,7 +107,7 @@ function VodCardBody({ vod }: { vod: HomeVod }) {
  * 보관함을 못 읽은 클립(null)을 0으로 접으면 가린 카드로 만든 클립이 「찾은 장면 없음」 뒤로 숨는다
  */
 function VodStats({ vod }: { vod: HomeVod }) {
-  if (vod.cards === 0 && vod.clips === 0)
+  if (vod.cards === 0 && vod.clips === 0 && cardsSettled(vod))
     return <div className={clsx(styles.vodStats, styles.vodStatsEmpty)}>찾은 장면 없음</div>;
   return (
     <div className={styles.vodStats}>
