@@ -3084,12 +3084,15 @@ describe('LiveScreen — 실시간 통계', () => {
 
     const pins = screen.getAllByRole('button', { name: /^하이라이트 (#\d+|수동) — / });
     expect(pins.length).toBeGreaterThan(0);
+    // 하나짜리 핀은 멀리 홀로 선 #4다. 8·7·6·5는 100초 간격이라 가운데에 선 「4장」 묶음 하나다(PR #482 리뷰: 가운데로 옮긴
+    // 묶음과 뒤 핀이 다시 붙으면 합친다)
+    expect(screen.getByRole('button', { name: /^하이라이트 4개 묶음/ })).toHaveTextContent('4장');
     expect(
-      screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }),
+      screen.getByRole('button', { name: /^하이라이트 #4 — .*0:47:22로 이동$/ }),
     ).toBeInTheDocument();
 
     // 핀에서 누른 이동은 카드 목록과 갈라 센다 (POK-357)
-    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #4 — .*0:47:22로 이동$/ }));
     expect(track.mock.calls.filter(([n]) => n === 'highlight_card_seeked')).toEqual([
       ['highlight_card_seeked', { from: 'stats_pin', mode: 'live' }],
     ]);

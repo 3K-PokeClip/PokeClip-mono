@@ -3,6 +3,7 @@ import {
   bucketEnd,
   categorySpans,
   clusterPins,
+  clusterPinsCentered,
   fmtDuration,
   fmtSeconds,
   fmtTick,
@@ -215,6 +216,36 @@ describe('statsChart: 카테고리·핀', () => {
     ]);
     // 묶인 핀은 묶인 것을 모두 들고 다닌다 — 툴팁이 나머지 카드도 말한다(PR #316 리뷰 3라운드)
     expect(pins[1]!.items.map((p) => p.x)).toEqual([100, 120]);
+  });
+
+  it('묶음은 묶인 핀들 가운데에 서고, 가운데로 옮겨 뒤 핀과 붙으면 그 핀까지 묶는다(PR #482 리뷰)', () => {
+    // 100 · 143은 묶여 121.5에 서는데 144는 첫 핀에서 44라 따로 섰다: 22.5 간격으로 알약이 겹쳤다
+    const pins = clusterPinsCentered([{ x: 100 }, { x: 143 }, { x: 144 }, { x: 300 }], 44);
+    expect(pins.map((p) => [p.x, p.items.length])).toEqual([
+      [122, 3],
+      [300, 1],
+    ]);
+    expect(pins[0]!.more).toBe(2);
+    // 떨어진 핀은 제자리다
+    expect(clusterPinsCentered([{ x: 10 }, { x: 60 }], 44).map((p) => p.x)).toEqual([10, 60]);
+  });
+
+  it('가운데에 세운 핀 사이는 늘 간격 이상이고, 모든 핀이 한 번씩 든다', () => {
+    // 고정 씨앗의 의사 난수: 몰린 곳 · 홀로 선 곳이 섞인 배치를 여러 번 본다
+    let seed = 7;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    for (let round = 0; round < 200; round++) {
+      const xs = Array.from({ length: 2 + Math.floor(rand() * 20) }, () => ({
+        x: Math.round(rand() * 600),
+      }));
+      const pins = clusterPinsCentered(xs, 44);
+      for (let i = 1; i < pins.length; i++)
+        expect(pins[i]!.x - pins[i - 1]!.x).toBeGreaterThanOrEqual(44);
+      expect(pins.flatMap((p) => p.items)).toHaveLength(xs.length);
+    }
   });
 });
 

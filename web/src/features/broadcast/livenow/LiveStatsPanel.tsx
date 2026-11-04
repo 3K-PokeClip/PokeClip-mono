@@ -28,7 +28,7 @@ import {
   bucketEnd,
   bucketIndexAt,
   categorySpans,
-  clusterPins,
+  clusterPinsCentered,
   fmtDuration,
   fmtHM,
   fmtHMS,
@@ -355,12 +355,10 @@ function Timeline({
     return {
       inView: cardsIn,
       hot: new Set(cardsIn.map((c) => bucketIndexAt(view, c.atMs))),
-      // 묶음은 묶인 카드들 가운데에 선다(x). 첫 카드 자리에 세우면 나머지 카드 자리가 비어, 카드가 빠진 것처럼 보였다(2026-11-04)
-      pins: clusterPins(
+      // 묶음은 묶인 카드들 가운데에 서고, 옮긴 자리끼리도 핀 폭(PIN_GAP)만큼 떨어진다(clusterPinsCentered)
+      pins: clusterPinsCentered(
         cardsIn.map((c) => ({ card: c, x: xOf(view, c.atMs, contentW) })),
         PIN_GAP * u,
-      ).map((g) =>
-        g.items.length > 1 ? { ...g, x: (g.items[0]!.x + g.items[g.items.length - 1]!.x) / 2 } : g,
       ),
     };
   }, [cards, view, contentW, u]);

@@ -314,3 +314,25 @@ export function clusterPins<T extends { x: number }>(pins: readonly T[], gap: nu
   }
   return out;
 }
+
+/**
+ * 묶음을 묶인 핀들 가운데(첫 핀과 끝 핀 사이)에 세운다 — 첫 핀 자리에 세우면 나머지 카드 자리가 비어 카드가 빠진 것처럼
+ * 보였다. clusterPins는 첫 핀에서 거리를 재므로 가운데로 옮기면 뒤 핀과 다시 gap 안으로 붙을 수 있다(100 · 143이 묶여
+ * 121.5에 서면 144 핀과 22.5, PR #482 리뷰). 옮긴 자리끼리 gap보다 가까운 이웃은 합쳐 다시 가운데에 세운다. 합친 묶음의
+ * 가운데는 앞 묶음보다 오른쪽으로만 가서 앞 이웃과는 멀어지고, 뒤 이웃만 다시 본다 — 끝나면 모든 핀 사이가 gap 이상이다
+ */
+export function clusterPinsCentered<T extends { x: number }>(pins: readonly T[], gap: number) {
+  const center = (items: readonly T[]) => (items[0]!.x + items[items.length - 1]!.x) / 2;
+  const out = clusterPins(pins, gap).map((g) => ({ ...g, x: center(g.items) }));
+  for (let i = 0; i + 1 < out.length;) {
+    const a = out[i]!;
+    const b = out[i + 1]!;
+    if (b.x - a.x >= gap) {
+      i += 1;
+      continue;
+    }
+    const items = [...a.items, ...b.items];
+    out.splice(i, 2, { first: a.first, x: center(items), more: items.length - 1, items });
+  }
+  return out;
+}
