@@ -1,5 +1,6 @@
 import type { Bridge } from './bridge';
 import type {
+  ActionResult,
   AudioKind,
   AudioRouting,
   AudioSource,
@@ -17,6 +18,8 @@ import type {
 //       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream|audio_other_scene
 // &env=dev — 개발 서버로 붙은 상태(머리 「개발 서버」 표시·개발자 모드 켜짐). 기본은 운영(POK-267) — 개발자 모드는 로고를
 //            3초 안에 5번 눌러 켠다.
+// &putdelay=ms — 설정 저장(PUT)이 상태(SSE)를 먼저 보내고 응답은 이만큼 늦게 돌려준다(플러그인은 저장 → 상태 → 응답 순이고
+//               둘은 다른 연결이라 상태가 먼저 닿는다). 저장 중 패널 깜빡임 같은 순서 문제를 볼 때 쓴다.
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
 const src = (key: string, name: string, kind: AudioKind, showing = true): AudioSource => ({ key, name, kind, showing });
 const MIC = src('ch:3', '마이크/보조', 'mic');
@@ -59,6 +62,7 @@ const isKnownApiBase = (base: string) => MOCK_KNOWN_API_BASES.includes(base);
 
 export function createMockBridge(scenario: string): Bridge {
   const env: ServerEnv = new URLSearchParams(location.search).get('env') === 'dev' ? 'dev' : 'prod';
+  const putDelayMs = Number(new URLSearchParams(location.search).get('putdelay') ?? 0) || 0;
   const servers = MOCK_SERVERS[env];
   const base: BridgeState = {
     version: 1,
@@ -262,6 +266,60 @@ export function createMockBridge(scenario: string): Bridge {
   const markResult = (patch: Partial<MarkStats>) =>
     emit({ marks: { ...state.marks, ...patch, seq: state.marks.seq + 1 } });
 
+  // 플러그인 PutConfig 흉내 — 바꾸고 상태(SSE)를 먼저 보낸 뒤 응답을 돌려준다(putSettings가 응답만 늦춘다)
+  function applySettings(next: Partial<PluginSettings>): ActionResult & { settings?: PluginSettings } {
+    // 플러그인처럼 마크 주소(clip_api_base)는 브리지로 안 바뀐다
+    const { api_base: nextApi, clip_api_base: _clip, default_api_base: _default, server_env: nextEnv, ...editable } = next;
+    const unpairedState = { paired: false, keyHint: '', retry: { ...state.retry, keySuspect: false } };
+    if (nextApi !== undefined) {
+      // 플러그인처럼: 비움·기본 주소는 지금 환경의 기본 주소, 직접 적는 주소는 이 PC만. 바뀌면 연결이 해제된다.
+      const trimmed = nextApi.trim().replace(/\/+$/, '');
+      if (trimmed && !isKnownApiBase(trimmed) && !isLoopbackApiBase(trimmed)) return { ok: false, reason: 'invalid_api_base' };
+      const target = isLoopbackApiBase(trimmed) ? trimmed : MOCK_SERVERS[settings.server_env].api_base;
+      if (target === settings.api_base) return { ok: true, settings };
+      if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
+      settings = { ...settings, api_base: target };
+      emit({ apiBase: target, ...unpairedState });
+      return { ok: true, settings };
+    }
+    if (nextEnv && nextEnv !== settings.server_env) {
+      // 플러그인처럼: 환경을 바꾸면 짝째로 바뀌고(같은 본문의 수신 주소는 무시·직접 적은 이 PC 인증 서버는 남는다) 연결이
+      // 해제된다. 방송 중엔 거절.
+      if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
+      const pair = MOCK_SERVERS[nextEnv];
+      settings = {
+        ...settings,
+        server_env: nextEnv,
+        ...pair,
+        api_base: isLoopbackApiBase(settings.api_base) ? settings.api_base : pair.api_base,
+        default_api_base: pair.api_base,
+      };
+      emit({
+        serverEnv: nextEnv,
+        apiBase: settings.api_base,
+        ingest: `${settings.ingest_host}:${settings.ingest_port}`,
+        ...unpairedState,
+      });
+      return { ok: true, settings };
+    }
+    const autoWas = settings.audio_auto_assign;
+    settings = { ...settings, ...editable };
+    // 플러그인처럼: 스위치를 바꿨으면 처음 안내에 답한 것으로 친다
+    if (settings.audio_auto_assign !== autoWas) settings.audio_assign_prompted = true;
+    const answered = settings.audio_assign_prompted === true;
+    emit({
+      ingest: `${settings.ingest_host}:${settings.ingest_port}`,
+      audio: {
+        ...state.audio,
+        autoAssign: settings.audio_auto_assign,
+        applied: settings.audio_auto_assign && state.paired,
+        prompt: state.audio.prompt && !answered && !settings.audio_auto_assign,
+        customRouting: settings.audio_auto_assign ? false : state.audio.customRouting,
+      },
+    });
+    return { ok: true, settings };
+  }
+
   return {
     async hello() {
       return { plugin: 'pokeclip-obs', pluginVersion: '0.2.1', obsVersion: '32.2.2', state };
@@ -306,56 +364,9 @@ export function createMockBridge(scenario: string): Bridge {
       return settings;
     },
     async putSettings(next) {
-      // 플러그인처럼 마크 주소(clip_api_base)는 브리지로 안 바뀐다
-      const { api_base: nextApi, clip_api_base: _clip, default_api_base: _default, server_env: nextEnv, ...editable } = next;
-      const unpairedState = { paired: false, keyHint: '', retry: { ...state.retry, keySuspect: false } };
-      if (nextApi !== undefined) {
-        // 플러그인처럼: 비움·기본 주소는 지금 환경의 기본 주소, 직접 적는 주소는 이 PC만. 바뀌면 연결이 해제된다.
-        const trimmed = nextApi.trim().replace(/\/+$/, '');
-        if (trimmed && !isKnownApiBase(trimmed) && !isLoopbackApiBase(trimmed)) return { ok: false, reason: 'invalid_api_base' };
-        const target = isLoopbackApiBase(trimmed) ? trimmed : MOCK_SERVERS[settings.server_env].api_base;
-        if (target === settings.api_base) return { ok: true, settings };
-        if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
-        settings = { ...settings, api_base: target };
-        emit({ apiBase: target, ...unpairedState });
-        return { ok: true, settings };
-      }
-      if (nextEnv && nextEnv !== settings.server_env) {
-        // 플러그인처럼: 환경을 바꾸면 짝째로 바뀌고(같은 본문의 수신 주소는 무시·직접 적은 이 PC 인증 서버는 남는다) 연결이
-        // 해제된다. 방송 중엔 거절.
-        if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
-        const pair = MOCK_SERVERS[nextEnv];
-        settings = {
-          ...settings,
-          server_env: nextEnv,
-          ...pair,
-          api_base: isLoopbackApiBase(settings.api_base) ? settings.api_base : pair.api_base,
-          default_api_base: pair.api_base,
-        };
-        emit({
-          serverEnv: nextEnv,
-          apiBase: settings.api_base,
-          ingest: `${settings.ingest_host}:${settings.ingest_port}`,
-          ...unpairedState,
-        });
-        return { ok: true, settings };
-      }
-      const autoWas = settings.audio_auto_assign;
-      settings = { ...settings, ...editable };
-      // 플러그인처럼: 스위치를 바꿨으면 처음 안내에 답한 것으로 친다
-      if (settings.audio_auto_assign !== autoWas) settings.audio_assign_prompted = true;
-      const answered = settings.audio_assign_prompted === true;
-      emit({
-        ingest: `${settings.ingest_host}:${settings.ingest_port}`,
-        audio: {
-          ...state.audio,
-          autoAssign: settings.audio_auto_assign,
-          applied: settings.audio_auto_assign && state.paired,
-          prompt: state.audio.prompt && !answered && !settings.audio_auto_assign,
-          customRouting: settings.audio_auto_assign ? false : state.audio.customRouting,
-        },
-      });
-      return { ok: true, settings };
+      const r = applySettings(next);
+      if (putDelayMs) await new Promise((done) => setTimeout(done, putDelayMs));
+      return r;
     },
     async mark() {
       if (state.phase !== 'live' && state.phase !== 'reconnecting') {

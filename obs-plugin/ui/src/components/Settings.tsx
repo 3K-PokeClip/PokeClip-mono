@@ -115,12 +115,31 @@ export function SettingsPanel({
     setSettings((s) => (s && s.audio_auto_assign !== autoAssign ? { ...s, audio_auto_assign: autoAssign } : s));
   }, [autoAssign]);
 
-  // 서버 환경·인증 서버가 다른 곳(다른 브리지 클라이언트)에서 바뀌었으면 수신 주소·기본 주소는 옛 짝이다 — 버리고 다시 불러온다.
+  // 서버 환경·인증 서버가 바뀌면(이 패널의 저장이든 다른 브리지 클라이언트든) 열어 둔 초안은 옛 짝이다 — 버린다.
   useEffect(() => {
-    setSettings((s) => (s && (s.server_env !== serverEnv || s.api_base !== apiBase) ? null : s));
     setServer(null);
     setApiDraft(null);
   }, [serverEnv, apiBase]);
+  // 들고 있는 설정이 상태와 다른 짝이면 뒤에서 다시 읽는다. 비우지는 않는다 — 플러그인은 상태(SSE)를 PUT 응답보다 먼저
+  // 보내서, 비우면 저장할 때마다 패널이 「불러오는 중…」으로 깜빡인다. 잠깐 기다려 그사이 PUT 응답이 새 설정을 주면
+  // (stale이 풀리면) 다시 읽지 않는다 — 다른 클라이언트가 바꾼 경우에만 읽는다.
+  const stale = settings !== null && (settings.server_env !== serverEnv || settings.api_base !== apiBase);
+  useEffect(() => {
+    if (!stale) return;
+    let live = true;
+    const t = window.setTimeout(() => {
+      bridge
+        .getSettings()
+        .then((s) => {
+          if (live) setSettings(s);
+        })
+        .catch(() => {});
+    }, 300);
+    return () => {
+      live = false;
+      window.clearTimeout(t);
+    };
+  }, [stale, serverEnv, apiBase]);
 
   useEffect(() => {
     if (!devVisible || !settings || focusDev <= scrolledFor.current) return;
