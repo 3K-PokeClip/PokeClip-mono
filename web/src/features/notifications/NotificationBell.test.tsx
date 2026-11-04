@@ -116,6 +116,13 @@ let asEditorPending = false;
 let asEditor: unknown[] = [];
 /** 켜 두면 참여 채널 목록(as-editor) 읽기가 실패한다 */
 let asEditorFails = false;
+/** 켜 두면 참여 채널 목록 요청을 붙잡아 두었다가 releaseAsEditor()에 그때의 asEditor · asEditorFails로 답한다 */
+let holdAsEditor = false;
+let heldAsEditor: (() => void)[] = [];
+function releaseAsEditor() {
+  holdAsEditor = false;
+  heldAsEditor.splice(0).forEach((answer) => answer());
+}
 /** 켜 두면 다음 목록 요청 하나를 붙잡아, 요청이 나간 때의(옛) 값으로 releaseList()에 늦게 답한다 */
 let holdList = false;
 let releaseList: (() => void) | null = null;
@@ -129,6 +136,12 @@ let answerStatus = 204;
 function stub() {
   return stubFetch((url, init) => {
     if (url === '/api/auth/me') return jsonResponse(200, ME);
+    if (url === '/api/editor-delegations/as-editor' && holdAsEditor)
+      return new Promise<Response>((resolve) => {
+        heldAsEditor.push(() =>
+          resolve(asEditorFails ? jsonResponse(500, {}) : jsonResponse(200, asEditor)),
+        );
+      });
     if (url === '/api/editor-delegations/as-editor')
       return asEditorPending
         ? new Promise<Response>(() => {})
@@ -197,6 +210,8 @@ beforeEach(() => {
   asEditorPending = false;
   asEditor = [];
   asEditorFails = false;
+  holdAsEditor = false;
+  heldAsEditor = [];
   holdList = false;
   releaseList = null;
   holdRead = false;
@@ -553,6 +568,67 @@ describe('NotificationBell', () => {
     });
     await waitFor(() => expect(push).toHaveBeenCalledWith('/settings/channels'));
     expect(useChannelStore.getState().selected).toBeNull();
+  });
+
+  it('새로고침 직후 저장된 남의 채널 알림은 확인 전엔 가지 않고, 확인이 실패하면 알린다 (PR #481 5차)', async () => {
+    items.push(
+      wire(
+        'n-live',
+        1,
+        'MANAGED_BROADCAST_STARTED',
+        { broadcastTitle: '솔랭' },
+        { channelId: 9, channelName: '라면왕' },
+      ),
+    );
+    holdAsEditor = true;
+    useChannelStore.setState({ userId: ME.id, selected: 9 });
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    await user.click(
+      within(panel).getByRole('button', { name: /^안 읽음 · 라면왕 채널이 방송을 시작했어요/ }),
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(push).not.toHaveBeenCalled();
+
+    asEditorFails = true;
+    act(() => releaseAsEditor());
+    expect(await screen.findByText('채널 정보를 확인하지 못했어요')).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it('새로고침 직후 저장된 남의 채널 알림은 확인되면 전환 화면 없이 간다 (PR #481 5차)', async () => {
+    items.push(
+      wire(
+        'n-live',
+        1,
+        'MANAGED_BROADCAST_STARTED',
+        { broadcastTitle: '솔랭' },
+        { channelId: 9, channelName: '라면왕' },
+      ),
+    );
+    holdAsEditor = true;
+    asEditor = [
+      {
+        id: 1,
+        counterpartId: 9,
+        counterpartName: '라면왕',
+        counterpartProfileImageUrl: null,
+        grantedAt: new Date().toISOString(),
+      },
+    ];
+    useChannelStore.setState({ userId: ME.id, selected: 9 });
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    await user.click(
+      within(panel).getByRole('button', { name: /^안 읽음 · 라면왕 채널이 방송을 시작했어요/ }),
+    );
+    act(() => releaseAsEditor());
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/broadcast/livenow'));
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
   });
 
   it('창을 다시 열면 「전체」를 보다 닫았어도 「안 읽음」 탭부터 보인다', async () => {

@@ -202,7 +202,9 @@ export function useGoToNotification() {
       else switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' }, go);
       return;
     }
-    if (n.channel.id === current) {
+    // 바로 가는 지름길은 확인된 지금 채널에서만: 새로고침 직후(참여 목록을 읽는 중) 저장된 선택은 아직 확인 전이라, 그대로
+    // 가면 목록 읽기가 실패했을 때 내 채널로 풀려 내 채널의 라이브가 뜬다 — 아래에서 확인한 뒤 간다(PR #481 5차)
+    if (active.ready && n.channel.id === active.streamerId) {
       router.push(href);
       return;
     }
@@ -237,6 +239,11 @@ export function useGoToNotification() {
         });
         return;
       }
+    }
+    // 저장된 선택이 바로 그 채널이면(확인 전이었을 뿐) 바꾸지 않고 간다 — 같은 채널로 바꾸는 전환 화면을 띄우지 않게
+    if (saved === n.channel.id) {
+      router.push(href);
+      return;
     }
     switchTo(
       {
