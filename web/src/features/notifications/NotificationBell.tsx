@@ -28,6 +28,7 @@ import {
   type NotificationKind,
 } from '@/api/notifications';
 import { Button, IconButton, Popover, Skeleton } from '@/ui';
+import { isInvitationFinished } from '@/features/channel/useInvitationResponse';
 import {
   buildPanelView,
   describeNotification,
@@ -488,7 +489,10 @@ function InviteActions({ n, state }: { n: AppNotification; state: NotificationsS
   }, [asking]);
   // 수락 · 거절 모두 읽음을 같이 보낸다: 서버는 답한 초대에 resolvedAt만 채우므로, 안 보내면 거절한 알림이 「확인 필요」에서
   // 빠진 뒤 안 읽은 「처리됨」 줄로 남고 종 숫자도 그대로다
-  function answer(kind: 'accept' | 'decline', options?: { onSettled?: () => void }) {
+  function answer(
+    kind: 'accept' | 'decline',
+    options?: { onSettled?: (data: unknown, error: unknown) => void },
+  ) {
     if (n.readAt === null) state.markRead(n.id);
     respond.mutate({ n, answer: kind }, options);
   }
@@ -510,7 +514,14 @@ function InviteActions({ n, state }: { n: AppNotification; state: NotificationsS
             size="sm"
             variant="danger"
             disabled={busy}
-            onClick={() => answer('decline', { onSettled: () => setAsking(false) })}
+            // 모르는 실패(일시 장애)엔 확인을 남겨 「거절하기」만 다시 누르게 한다 — 채널 스위처와 같은 규칙(PR #481 4차)
+            onClick={() =>
+              answer('decline', {
+                onSettled: (_data, error) => {
+                  if (isInvitationFinished(error)) setAsking(false);
+                },
+              })
+            }
           >
             거절하기
           </Button>

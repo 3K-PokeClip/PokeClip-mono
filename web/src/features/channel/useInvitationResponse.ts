@@ -14,6 +14,14 @@ const DONE_TITLE: Record<InvitationOutcome, string> = {
 };
 
 /**
+ * 그 초대가 끝났는가(답이 끝남 · 이미 처리된 초대 · 세션이 바뀜). 모르는 실패(일시 장애)면 false — 부른 쪽은 거절 확인을
+ * 남겨 「거절하기」만 다시 누르게 한다(PR #412 리뷰, 알림 창도 같은 규칙 — PR #481 4차)
+ */
+export function isInvitationFinished(error: unknown): boolean {
+  return error === null || isInvitationGone(error) || error instanceof StaleSessionError;
+}
+
+/**
  * 받은 초대에 수락 · 거절로 답한 뒤의 공통 처리. 채널 스위처의 초대 줄과 알림 창의 초대 카드가 같이 쓴다 — 두 벌이면 한쪽만
  * 고쳐 문구 · 분석 이벤트 · 다시 읽는 목록이 조용히 갈린다(PR #481 3차).
  *
@@ -38,7 +46,7 @@ export function useInvitationResponse() {
     onSettled(error: unknown): boolean {
       void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
       void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
-      return error === null || isInvitationGone(error) || error instanceof StaleSessionError;
+      return isInvitationFinished(error);
     },
   };
 }

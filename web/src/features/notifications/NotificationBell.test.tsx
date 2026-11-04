@@ -120,6 +120,8 @@ let releaseList: (() => void) | null = null;
 /** 켜 두면 다음 읽음 요청 하나를 붙잡아 releaseRead()에 처리하고 답한다 */
 let holdRead = false;
 let releaseRead: (() => void) | null = null;
+/** 초대 답(수락 · 거절)에 줄 상태 — 204가 아니면 처리하지 않고 그 상태로 실패한다(일시 장애 흉내) */
+let answerStatus = 204;
 
 /** 서버 흉내: 읽음 · 모두 읽음 · 초대 답을 받으면 목록 상태를 실제처럼 바꾼다(다시 읽으면 바뀐 값이 온다) */
 function stub() {
@@ -153,6 +155,7 @@ function stub() {
       if (url === '/api/notifications/read-all')
         items = items.map((w) => (w.held ? w : { ...w, readAt: w.readAt ?? at }));
       const answered = /^\/api\/editor-invitations\/(\d+)\/(accept|decline)$/.exec(url);
+      if (answered && answerStatus !== 204) return jsonResponse(answerStatus, {});
       if (answered)
         items = items.map((w) =>
           w.kind === 'EDITOR_INVITED' && w.data.invitationId === Number(answered[1])
@@ -191,6 +194,7 @@ beforeEach(() => {
   releaseList = null;
   holdRead = false;
   releaseRead = null;
+  answerStatus = 204;
   useSwitchCurtain.getState().reset();
   // 앞 시험에서 남은 부탁이 다음 시험의 종에 닿지 않게(종 수는 시험이 끝나며 떼어져 0이다)
   useNotificationRequests.setState({ seq: 0, request: null, pending: false });
@@ -866,6 +870,31 @@ describe('NotificationBell', () => {
     expect(within(panel).getByRole('button', { name: '취소' })).toHaveFocus();
     await user.keyboard('{Enter}');
     expect(within(panel).getByRole('button', { name: '거절' })).toHaveFocus();
+  });
+
+  it('거절이 일시 장애로 실패하면 확인을 남겨 「거절하기」만 다시 누르게 한다 (PR #481 4차)', async () => {
+    items.push(
+      wire(
+        'n-invite',
+        1,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+    );
+    answerStatus = 503;
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    await user.click(within(panel).getByRole('button', { name: '거절' }));
+    await user.click(within(panel).getByRole('button', { name: '거절하기' }));
+    await waitFor(() =>
+      expect(within(panel).getByRole('button', { name: '거절하기' })).toBeEnabled(),
+    );
+    expect(
+      within(panel).getByText('거절하면 라면왕 채널이 다시 초대해야 참여할 수 있어요'),
+    ).toBeInTheDocument();
   });
 
   it('초대를 거절해도 읽음을 같이 보낸다 — 「처리됨」 줄이 안 읽음으로 남지 않는다', async () => {
