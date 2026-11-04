@@ -14,6 +14,8 @@ const player = vi.hoisted(() => ({
   livePosition: null as LivePosition | null,
   hooks: null as PlaybackHooks | null,
   keepPausedOnSwap: () => {},
+  holdFrame: () => {},
+  dropPauseMark: () => {},
 }));
 
 /** 실재생 훅의 인자 — 흉내가 고리(hooks) 자리를 타입으로 집는다 */
@@ -29,6 +31,8 @@ vi.mock('./useHlsPlayback', () => ({
       seekToMs: () => {},
       seekToLiveEdge: () => {},
       keepPausedOnSwap: player.keepPausedOnSwap,
+      holdFrame: player.holdFrame,
+      dropPauseMark: player.dropPauseMark,
     };
   },
 }));
@@ -110,5 +114,46 @@ describe('재생기 고리 · 명령 묶음 — 연결 통합(설계 r9 11절 ·
     renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ bindPlayer })));
     bindPlayer.mock.calls[0]?.[0]?.keepPausedOnSwap();
     expect(keep).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('되감기 조각 404 의 고리 · 명령 묶음(POK-528 c5 · 계획 4절 · 4-1 · 4-2)', () => {
+  it('재생기의 404 고리(onDvrSegmentGone)를 그 재생기 세대를 실은 dvr-segment-gone 사건으로 올린다', () => {
+    const dispatch = vi.fn<(event: SessionEvent) => void>();
+    renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ dispatch })));
+    player.hooks?.onDvrSegmentGone?.(7);
+    expect(dispatch.mock.calls.filter(([e]) => e.type === 'dvr-segment-gone')).toEqual([
+      [{ type: 'dvr-segment-gone', generation: 7 }],
+    ]);
+  });
+
+  it('세션에 묶는 재생기 명령의 holdFrame · dropPauseMark 가 재생기의 같은 명령을 부른다', () => {
+    const bindPlayer = vi.fn<(p: SessionPlayer | null) => void>();
+    const hold = vi.fn();
+    const drop = vi.fn();
+    player.holdFrame = hold;
+    player.dropPauseMark = drop;
+    renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ bindPlayer })));
+    const bound = bindPlayer.mock.calls[0]?.[0];
+    bound?.holdFrame();
+    bound?.dropPauseMark();
+    expect(hold).toHaveBeenCalledTimes(1);
+    expect(drop).toHaveBeenCalledTimes(1);
+  });
+
+  // K3 — 덮개 · 주소가 그대로인데 「세우지 않음」 값만 바뀌어도(덮개가 이미 preparing 인 채 막힘이 서는 전이) 고리가 새 값을 싣는다
+  it('세션의 「세우지 않음」(view.startHeld)을 고리 startHeld 로 넘기고, 그 값만 바뀌어도 새 값을 싣는다', () => {
+    const dispatch = vi.fn<(event: SessionEvent) => void>();
+    const base = fakeSession({ dispatch });
+    const held = { ...base, view: { ...base.view, startHeld: true } };
+    const view = renderHook(
+      (session: PlaybackSession) => useLiveRewindPlayback({ current: null }, session),
+      {
+        initialProps: held,
+      },
+    );
+    expect(player.hooks?.startHeld).toBe(true);
+    view.rerender({ ...held, view: { ...held.view, startHeld: false } });
+    expect(player.hooks?.startHeld).toBe(false);
   });
 });

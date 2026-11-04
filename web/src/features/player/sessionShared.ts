@@ -33,6 +33,40 @@ export const SESSION_NOTICES = {
   vodStart: '다시보기는 이 시각부터 볼 수 있어요',
 } as const;
 
+/**
+ * 「목록 하한에서」 — 자리를 모를 때 같은 url 로 다시 세우는 시작(epoch 0). 재생기가 첫 목록 창
+ * 하한으로 자른다. 자리로 읽지 않는다(POK-528 계획 3-2)
+ */
+export const RELIST_FROM_FLOOR_MS = 0;
+
+// ── 이어 볼 자리(POK-528 계획 3-2) ──
+// 「확인된 위치」 · 「이어 볼 자리」 판정은 여기 셋만 한다. 위치 칸을 쓰는 곳은 liveHandoff 의
+// withPositionEpoch · seenPosition 둘이다.
+
+/** 지금 소스에서 확인된 위치 — 이 재생기가 그 자리에 화면을 붙였다. 아니면 null */
+export function confirmedAtMs(session: PlaybackSessionState): number | null {
+  return session.positionGeneration === session.source.generation ? session.lastAtMs : null;
+}
+
+/**
+ * 이어 볼 자리. 되감기 · 다시보기 소스는 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작
+ * 요청(「목록 하한에서」 는 모름), 라이브 소스는 lastAtMs 다. 모르면 null. 첫 위치 전의
+ * lastAtMs 는 앞 소스의 자리라 되감기 · 다시보기 소스에서는 읽지 않는다(다시보기 — c7 리뷰
+ * V7-1: 다시보기로 옮긴 직후 리마운트가 앞 되감기 소스의 자리에서 서지 않게). 다시보기의
+ * 시작 요청 null 은 「처음부터」 라 그대로 null 이다
+ */
+export function resumeAtMs(session: PlaybackSessionState): number | null {
+  if (session.source.kind === 'live') return session.lastAtMs;
+  const start = session.source.startAtMs;
+  const requested = start === RELIST_FROM_FLOOR_MS ? null : start;
+  return confirmedAtMs(session) ?? session.pendingSeekMs ?? requested;
+}
+
+/** 같은 url 로 다시 세울 시작(다시 받기 · 되감기 리마운트) — 모르면 목록 하한에서 */
+export function restartAtMs(session: PlaybackSessionState): number {
+  return resumeAtMs(session) ?? RELIST_FROM_FLOOR_MS;
+}
+
 // ── 작은 도구 ──
 
 /** 효과 없는 전이 — 상태를 그대로 두거나 바꾼 상태만 돌려준다 */
@@ -89,6 +123,37 @@ export function close(
   const effect: SessionEffect =
     goTo === undefined ? { kind: 'close', reason } : { kind: 'close', reason, goTo };
   return { state: { ...session, closed: reason }, effects: [effect] };
+}
+
+// ── 다시보기 ──
+
+/**
+ * 다시보기 범위(vod) 안에서 atMs 에 가장 가까운 시작 자리 — 첫 조각 앞이면 첫 조각,
+ * 끝 여유(headPdtMs − 창 하한 여유) 뒤면 끝 여유. 하한이 이긴다(짧은 VOD 는 첫 조각 · R47)
+ */
+export function vodStartAt(session: PlaybackSessionState, atMs: number, vod: RewindRange): number {
+  return Math.max(vod.firstPdtMs, Math.min(atMs, vod.headPdtMs - session.edgeMarginMs));
+}
+
+/**
+ * 같은 자리 다시보기로 옮긴다 — 끝난 회차의 되감기 조각이 사라졌을 때(POK-528 W4 제안 중 404 ·
+ * W5 막힌 뒤 · W6 마지막 확인에서 회차별 답이 본 구간과 겹치는 다시보기일 때).
+ * 자리는 이어 볼 자리다 — 모르면 처음부터, 자리를 범위 안으로 가뒀으면 알린다. 제안 단추는 거둔다
+ */
+export function openVodHere(session: PlaybackSessionState, vod: RewindRange): Transition {
+  const atMs = resumeAtMs(session);
+  const start = atMs === null ? null : vodStartAt(session, atMs, vod);
+  const effects: SessionEffect[] =
+    start === null || start === atMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
+  return {
+    state: {
+      ...session,
+      phase: { kind: 'vod' },
+      source: replace(session, 'vod', vod.url, start),
+      offer: null,
+    },
+    effects,
+  };
 }
 
 // ── 시크 ──

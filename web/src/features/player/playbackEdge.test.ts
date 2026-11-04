@@ -6,6 +6,7 @@ import {
   sessionAxis,
   loadedList,
   startIsTruncated,
+  startCut,
   startLoadPosition,
   windowLowerMs,
   type LoadedList,
@@ -101,6 +102,59 @@ describe('startLoadPosition — 첫 목록에서 시작 위치(영상 초)를 �
   it('시각 표시가 없으면 null(부르는 쪽이 기본 시작)', () => {
     expect(
       startLoadPosition([{ start: 0, duration: 4, programDateTime: null }], PDT0, 'vod', 4),
+    ).toBeNull();
+  });
+});
+
+/** 맨 앞부터 [영상 시작, PDT0 뒤 ms] 의 4초 조각 */
+function placed(points: ReadonlyArray<readonly [number, number]>): DatedFragment[] {
+  return points.map(([start, afterMs]) => ({
+    start,
+    duration: 4,
+    programDateTime: PDT0 + afterMs,
+  }));
+}
+
+describe('startCut — 첫 목록의 시작 자리와 창 하한으로 잘렸는가(POK-528 c7 · 계획 3-3 (2))', () => {
+  it.each<[string, number, { position: number; floorCut: boolean }]>([
+    ['첫 조각 앞 → 하한으로 · 잘림', PDT0 - 5_000, { position: 22, floorCut: true }],
+    ['하한 앞 → 하한으로 · 잘림', PDT0 + 4_000, { position: 22, floorCut: true }],
+    ['하한 = 요청 → 그대로 · 잘림 아님(경계)', PDT0 + 12_000, { position: 22, floorCut: false }],
+    ['하한 위 → 그대로', PDT0 + 14_000, { position: 24, floorCut: false }],
+    ['끝 뒤 → 끝으로 · 잘림 아님', PDT0 + 99_000, { position: 30, floorCut: false }],
+  ])('평목록: %s', (_name, startAtMs, expected) => {
+    expect(startCut(FRAGS, startAtMs, 'rewind', 4)).toEqual(expected);
+    expect(startLoadPosition(FRAGS, startAtMs, 'rewind', 4)).toBe(expected.position);
+  });
+
+  it('틈 목록 — 요청 16초는 틈 안이라 다음 조각(영상 8초)인데 하한(12초) 앞이라 잘린다(epoch 비교는 거짓)', () => {
+    const gap = placed([
+      [0, 0],
+      [4, 4_000],
+      [8, 20_000],
+      [12, 24_000],
+      [16, 28_000],
+    ]);
+    expect(startCut(gap, PDT0 + 16_000, 'rewind', 4)).toEqual({ position: 12, floorCut: true });
+  });
+
+  it('겹침 목록 — 요청 11.8초는 나중 조각의 영상 13.8초라 하한(12초) 위 · 잘리지 않는다(epoch 비교는 참)', () => {
+    const overlap = placed([
+      [0, 0],
+      [4, 2_000],
+      [8, 6_000],
+      [12, 10_000],
+      [16, 14_000],
+    ]);
+    const cut = startCut(overlap, PDT0 + 11_800, 'rewind', 4);
+    expect(cut?.floorCut).toBe(false);
+    expect(cut?.position).toBeCloseTo(13.8);
+  });
+
+  it('vod 는 여유가 없어 첫 조각에서 잘리지 않는다 · 시각 표시가 없으면 null', () => {
+    expect(startCut(FRAGS, PDT0, 'vod', 4)).toEqual({ position: 10, floorCut: false });
+    expect(
+      startCut([{ start: 0, duration: 4, programDateTime: null }], PDT0, 'rewind', 4),
     ).toBeNull();
   });
 });
