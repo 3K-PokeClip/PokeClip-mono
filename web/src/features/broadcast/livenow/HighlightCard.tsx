@@ -2,20 +2,21 @@
 
 import { memo } from 'react';
 import Link from 'next/link';
-
-import { Bookmark, EyeOff, RotateCw } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
+import { Bookmark, BookmarkCheck, EyeOff, Play, RotateCw } from 'lucide-react';
 import clsx from 'clsx';
 import {
-  Badge,
   Button,
   IconButton,
   LinkButton,
   Progress,
   Spinner,
+  Tooltip,
   VisuallyHidden,
   useToast,
 } from '@/ui';
-import { setJumpCardHidden } from '@/api/clipEditor';
+import { forgetLibraryList, setJumpCardHidden } from '@/api/clipEditor';
 import styles from './LiveScreen.module.css';
 import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
@@ -23,27 +24,46 @@ import type { LiveCardSnapshot, LiveHighlight, LiveStream } from './useLiveMockS
 import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import { useLiveField } from './liveDataStore';
 import { useCardEditorReady } from './useCardEditorReady';
+import { useCardSave, type CardSaveState } from './cardSave';
 
-// 하이라이트 카드(시안 1b) — 세로 목록의 한 행이던 것을 가로로 넘기는 카드로 바꿨다.
-// 표시 규칙은 전부 highlightCardView가 정한다: 이 파일은 그 결과를 그리기만 한다.
+// 하이라이트 카드(시안 B2-1, 2026-11-04) — 사진이 카드의 몸통이다. 왼쪽 위 점수(수동은 「수동」), 오른쪽 위 「저장」 알약,
+// 아래 그늘에 방송 시각 · 길이(왼쪽)와 경과(오른쪽). 사진 밑은 「편집」과 가리기만. 감지 사유 · 상태 배지 · 원클릭 업로드는 뺐다.
+// 표시 규칙은 highlightCardView가 정한다: 이 파일은 그 결과를 그리기만 한다.
 
-/** 미니 파형 뷰박스 — 진폭 0..1을 여기 맞춰 편다 */
-const SPARK_WIDTH = 100;
-const SPARK_HEIGHT = 22;
+const LIBRARY_HREF = '/clips/library';
 
-function sparkPoints(spark: readonly number[]): string {
-  if (spark.length < 2) return '';
-  return spark
-    .map((amplitude, index) => {
-      const x = (index / (spark.length - 1)) * SPARK_WIDTH;
-      const y = SPARK_HEIGHT - Math.min(1, Math.max(0, amplitude)) * SPARK_HEIGHT;
-      return `${Math.round(x * 10) / 10},${Math.round(y * 10) / 10}`;
-    })
-    .join(' ');
+/**
+ * 사진 오른쪽 위 「보관함 저장」 알약 — 글자가 붙어 무엇인지 바로 읽힌다. 저장되면 강조색 「저장됨」이 되고 누르면 보관함으로 간다
+ * (같은 카드를 또 저장해 편집본이 둘 생기지 않게)
+ */
+function SavePill({ state, onSave }: { state: CardSaveState; onSave: () => void }) {
+  if (state === 'saved')
+    return (
+      <Link
+        href={LIBRARY_HREF}
+        className={clsx(styles.cardSave, styles.cardSaveDone)}
+        aria-label="보관함에 저장됨 · 보관함 열기"
+      >
+        <BookmarkCheck size={13} aria-hidden />
+        저장됨
+      </Link>
+    );
+  return (
+    <button
+      type="button"
+      className={styles.cardSave}
+      disabled={state === 'saving'}
+      onClick={onSave}
+      aria-label={state === 'saving' ? '보관함에 저장하는 중' : '보관함에 저장'}
+    >
+      {state === 'saving' ? <Spinner size="sm" /> : <Bookmark size={13} aria-hidden />}
+      {state === 'saving' ? '저장 중' : '저장'}
+    </button>
+  );
 }
 
 // memo인 이유 — 카드 목록이 바뀌어도(방금 생긴 카드의 「n초 전」은 매초다) 내용이 같은 카드는 객체가 그대로다(reuseHighlights).
-// 긴 방송은 카드가 수백 장이라 전부 다시 그리면 매초 그만큼의 썸네일·파형을 다시 맞춘다
+// 긴 방송은 카드가 수백 장이라 전부 다시 그리면 매초 그만큼의 썸네일을 다시 맞춘다
 export const HighlightCard = memo(function HighlightCard({
   highlight,
   stream,
@@ -59,6 +79,8 @@ export const HighlightCard = memo(function HighlightCard({
   onCardChange?: (card: LiveCardSnapshot) => void;
 }) {
   const { toast } = useToast();
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const view = cardViewFor(highlight);
   const visual = cardVisualFor(highlight, stream, visuals);
   const processing = view.state === 'processing';
@@ -74,6 +96,25 @@ export const HighlightCard = memo(function HighlightCard({
     view.showActions &&
     !highlight.hidden &&
     (editor.state === 'loading' || editor.state === 'pending');
+  // 보관함 저장 — 편집기를 열지 않고 카드 구간 그대로 편집본을 만든다. 영상을 안 받으므로 편집 준비 중에도 된다
+  const cardSave = useCardSave(streamId, cardId);
+  const canSave = view.showActions && !highlight.hidden;
+  const save = () => {
+    cardSave.save().then(
+      (snap) => {
+        if (snap === null) return;
+        forgetLibraryList(queryClient);
+        // 되돌리기는 두지 않는다: 편집본을 지우는 문이 아직 없다(되돌릴 수 없는 일에 되돌리기를 달지 않는다, ADR-044)
+        toast({
+          tone: 'success',
+          title: '보관함에 저장했어요',
+          description: `편집본 #${snap.id} · ${highlight.timestamp} 장면`,
+          action: { label: '보관함 열기', onClick: () => router.push(LIBRARY_HREF) },
+        });
+      },
+      () => toast({ tone: 'error', title: '보관함에 저장하지 못했어요' }),
+    );
+  };
   // 가리기·되살리기(POK-463). 실패는 카드가 제 칸에 그대로 남으니 토스트로만 알린다
   const setHidden = (hidden: boolean) => {
     setJumpCardHidden<LiveCardSnapshot>(cardId, hidden).then(
@@ -95,72 +136,62 @@ export const HighlightCard = memo(function HighlightCard({
         view.dimmed && styles.cardDimmed,
       )}
     >
-      {/* 카드 전체가 아니라 썸네일만 버튼이다 — 아래 버튼줄과 겹치면 버튼 안에 버튼이 된다 */}
-      <button
-        type="button"
-        className={styles.cardThumb}
-        onClick={() => onSeek(highlight.timestamp)}
-        aria-label={`${highlight.timestamp} 시점으로 이동`}
-      >
-        <ThumbnailImage
-          src={highlight.thumbnailUrl}
-          fallback={
-            <span className={styles.cardThumbLabel} aria-hidden>
-              하이라이트 장면
-            </span>
-          }
-        />
-        {visual.spark ? (
-          <svg
-            className={styles.cardSpark}
-            viewBox={`0 0 ${SPARK_WIDTH} ${SPARK_HEIGHT}`}
-            preserveAspectRatio="none"
-            aria-hidden
-          >
-            <polyline points={sparkPoints(visual.spark)} vectorEffect="non-scaling-stroke" />
-          </svg>
-        ) : null}
-        {/* 방송 전체에서 이 카드가 어디쯤인지 — 시크바와 같은 눈금이다 */}
-        <span className={styles.cardPosTrack} aria-hidden>
-          <span className={styles.cardPosMark} style={{ left: `${visual.posPercent}%` }} />
-        </span>
-        {highlight.score !== undefined ? (
+      <div className={styles.cardThumbBox}>
+        {/* 카드 전체가 아니라 사진만 단추다 — 아래 버튼줄과 겹치면 버튼 안에 버튼이 된다. 저장 알약도 그래서 단추 밖 형제다 */}
+        <button
+          type="button"
+          className={styles.cardThumb}
+          onClick={() => onSeek(highlight.timestamp)}
+          aria-label={`${highlight.timestamp} 시점으로 이동`}
+        >
+          <ThumbnailImage
+            src={highlight.thumbnailUrl}
+            fallback={
+              <span className={styles.cardThumbLabel} aria-hidden>
+                하이라이트 장면
+              </span>
+            }
+          />
+          <span className={styles.cardShade} aria-hidden />
           <span className={styles.cardScore} aria-hidden>
-            <Badge tone="point" variant="solid" size="sm">
-              {highlight.score}점
-            </Badge>
+            {highlight.score !== undefined ? `${highlight.score}점` : '수동'}
           </span>
-        ) : null}
-        <span className={styles.cardReason} aria-hidden>
-          {visual.reason}
-        </span>
-        {visual.duration ? (
-          <span className={styles.cardDuration} aria-hidden>
-            {visual.duration}
+          <span className={styles.cardCaption} aria-hidden>
+            <span className={styles.cardTime}>
+              {highlight.timestamp}
+              {visual.duration ? <small>{visual.duration}</small> : null}
+            </span>
+            {visual.timeAgo ? <span className={styles.cardAgo}>{visual.timeAgo}</span> : null}
           </span>
-        ) : null}
-        {processing ? (
-          <span className={styles.cardProcessing}>
-            <Spinner size="sm" label="클립 생성 중" />
+          {/* 준비 중에는 위치 눈금 자리에 도는 띠가 흐른다. 아니면 방송 전체에서 이 카드가 어디쯤인지(시크바와 같은 눈금) */}
+          {preparing ? (
+            <span className={styles.cardSweep} aria-hidden />
+          ) : (
+            <span className={styles.cardPosTrack} aria-hidden>
+              <span className={styles.cardPosMark} style={{ left: `${visual.posPercent}%` }} />
+            </span>
+          )}
+          {processing ? (
+            <span className={styles.cardProcessing}>
+              <Spinner size="sm" label="클립 생성 중" />
+            </span>
+          ) : null}
+          {/* 올리면 「여기부터 보기」 — 사진이 시점 이동 단추라는 것을 보인다 */}
+          <span className={styles.cardPlay} aria-hidden>
+            <Play size={16} fill="currentColor" /> 여기부터 보기
           </span>
-        ) : null}
-      </button>
+        </button>
+        {canSave ? <SavePill state={cardSave.state} onSave={save} /> : null}
+      </div>
       <div className={styles.cardBody}>
-        <h3 className={styles.cardTitle}>{highlight.title}</h3>
-        <p className={styles.cardMeta}>{highlight.meta}</p>
-        <div className={styles.cardStatusRow}>
-          <Badge tone={view.badgeTone} variant="soft" size="sm">
-            {view.badgeLabel}
-          </Badge>
-          {visual.timeAgo ? <span className={styles.cardTimeAgo}>{visual.timeAgo}</span> : null}
-        </div>
-        {/* 점수·사유·길이는 시안상 썸네일 위에만 있는데 그쪽은 aria-hidden이다(버튼 이름을
-            덮어써 자식 글이 읽히지 않는다). 카드를 정렬하는 근거인 점수를 듣는 쪽에도 남긴다. */}
+        {/* 제목 · 점수 · 감지 사유는 사진 위에 안 쓰거나 aria-hidden이다(단추 이름이 덮는다). 듣는 쪽에는 남긴다 */}
+        <h3 className={styles.cardTitleHidden}>{highlight.title}</h3>
         <VisuallyHidden>
           {[
             highlight.score !== undefined ? `${highlight.score}점` : null,
             visual.reason,
             visual.duration ? `길이 ${visual.duration}` : null,
+            visual.timeAgo,
           ]
             .filter(Boolean)
             .join(' · ')}
@@ -174,60 +205,72 @@ export const HighlightCard = memo(function HighlightCard({
         {highlight.hidden ? (
           // 가린 카드는 되살리기만 한다. 되살리기는 누구나 한다(가린 사람이 자리를 비워도 막히지 않게, 서버와 같은 규칙)
           <div className={styles.cardActions}>
-            <Button variant="soft" size="sm" onClick={() => setHidden(false)}>
+            <Button
+              variant="soft"
+              size="sm"
+              className={styles.cardGrow}
+              onClick={() => setHidden(false)}
+            >
               되살리기
             </Button>
           </div>
         ) : view.showActions ? (
           // 「편집」은 이 카드의 방송·카드 번호를 싣고 편집기로 들어간다. 카드를 찜하는 일은 없다(POK-393): 여러 편집자가
-          // 같은 카드를 각자 편집한다. 업로드·보관함 저장은 각자 라우트가 설 때까지 비활성으로 둔다.
+          // 같은 카드를 각자 편집한다.
           <div className={styles.cardActions}>
             {/* 카드는 전부 서버 카드(card-N)다. 화면에만 세우던 수동 마킹 카드(marked-…)는 없어졌다(QA 2026-10-11) */}
             {editor.state === 'ready' || editor.state === 'failed' ? (
-              <LinkButton as={Link} href={editorHref} variant="soft" size="sm">
+              <LinkButton
+                as={Link}
+                href={editorHref}
+                variant="solid"
+                size="sm"
+                className={styles.cardGrow}
+              >
                 편집
               </LinkButton>
             ) : (
-              // 준비 전: 회색으로 막고 도는 표시만 둔다. 준비 중이라는 점선은 버튼이 아니라 카드 테두리가 맡는다(cardPreparing)
+              // 준비 전: 막고 까닭을 글로 쓴다(준비 중이라는 점선은 카드 테두리가 맡는다, cardPreparing)
               <Button
                 variant="soft"
                 size="sm"
                 disabled
+                className={styles.cardGrow}
                 iconStart={<Spinner size="sm" />}
-                aria-label={editor.state === 'pending' ? '편집 녹화를 기다리는 중' : '편집 준비 중'}
+                aria-label={editor.state === 'pending' ? '녹화 기다리는 중' : '편집 준비 중'}
               >
-                편집
+                {editor.state === 'pending' ? '녹화 기다리는 중' : '편집 준비 중'}
               </Button>
             )}
-            {/* 미리 받기가 실패해도 「편집」은 연다(편집기가 다시 받는다). 실패는 다시 시도 단추로 알린다 */}
+            {/* 미리 받기가 실패해도 「편집」은 연다(편집기가 다시 받는다). 실패는 경고색 다시 시도 단추로 알린다 */}
             {editor.state === 'failed' ? (
+              <Tooltip content="편집 영상을 미리 못 불러왔어요. 다시 시도" describe={false}>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  className={styles.cardRetry}
+                  aria-label="편집 영상을 미리 못 불러왔어요. 다시 시도"
+                  onClick={editor.retry}
+                >
+                  <RotateCw size={15} aria-hidden />
+                </IconButton>
+              </Tooltip>
+            ) : null}
+            {/* 가리기(POK-463): 가린 카드는 패널의 「숨김」 칸이 모은다 */}
+            <Tooltip content="이 카드 가리기" describe={false}>
               <IconButton
                 variant="ghost"
                 size="sm"
-                aria-label="편집 영상을 미리 못 불러왔어요. 다시 시도"
-                title="편집 영상을 미리 못 불러왔어요. 다시 시도"
-                onClick={editor.retry}
+                aria-label="이 카드 가리기"
+                onClick={() => setHidden(true)}
               >
-                <RotateCw size={15} aria-hidden />
+                <EyeOff size={15} aria-hidden />
               </IconButton>
-            ) : null}
-            <Button variant="solid" size="sm" disabled>
-              원클릭 업로드
-            </Button>
-            <IconButton variant="ghost" size="sm" aria-label="보관함에 저장" disabled>
-              <Bookmark size={15} aria-hidden />
-            </IconButton>
-            {/* 가리기(POK-463): 시안에 카드별 단추가 없어 같은 줄의 작은 아이콘 하나로 둔다. 가린 카드는 패널의 「숨김」 칸이 모은다 */}
-            <IconButton
-              variant="ghost"
-              size="sm"
-              aria-label="이 카드 가리기"
-              onClick={() => setHidden(true)}
-            >
-              <EyeOff size={15} aria-hidden />
-            </IconButton>
+            </Tooltip>
           </div>
-        ) : null}
+        ) : (
+          <p className={styles.cardNote}>되감기 범위를 지나 곧 사라져요</p>
+        )}
       </div>
     </article>
   );

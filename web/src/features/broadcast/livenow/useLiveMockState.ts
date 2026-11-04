@@ -80,6 +80,10 @@ export interface LiveHighlight {
   atMs?: number;
   /** 감지 사유 한 줄(채팅 ×3.2 급증 (120건) · 수동 마킹) — 통계 그래프 툴팁 */
   reason?: string;
+  /** 카드 창 길이(초) — 카드 사진 위 길이 표기 */
+  lengthSec?: number;
+  /** 만든 지 얼마(방금 · 3분 전) — 카드 사진 오른쪽 아래 */
+  ago?: string;
   /** 가린 카드(POK-463): 「숨김」 칸에서만 보이고 「되살리기」만 할 수 있다 */
   hidden?: boolean;
 }
@@ -251,17 +255,20 @@ function toHighlight(c: Snapshot, now: number, base: number | null): LiveHighlig
       : `채팅 급증${count !== null ? ` (${count}건)` : ''}`;
   // 옛 서버가 claimedBy를 실어 보내도 안 본다: 집기는 POK-393에서 없앴다
   const status: HighlightStatus = manual ? 'manual' : 'scored';
+  const ago = timeAgo(c.createdAt, now);
   return {
     id: `card-${c.id}`,
     timestamp: msToClock(c.streamTimestampMs),
     title: manual ? '핫키로 남긴 순간' : `채팅이 튄 순간 #${c.id}`,
-    meta: `${reason} · ${winSec}초 · ${timeAgo(c.createdAt, now)}`,
+    meta: `${reason} · ${winSec}초 · ${ago}`,
     status,
     source: manual ? 'manual' : 'auto',
     score: c.score ?? undefined,
     thumbnailUrl: c.thumbnailUrl ?? null,
     atMs: cardAt(c, base),
     reason,
+    lengthSec: winSec,
+    ago,
     ...(c.hidden ? { hidden: true } : {}),
   };
 }

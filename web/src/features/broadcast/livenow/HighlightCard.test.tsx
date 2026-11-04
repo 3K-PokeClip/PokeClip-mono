@@ -3,12 +3,18 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { prefetchCardEditor } from '@/features/clips/editor/prefetchCardEditor';
+import { saveCardDraft } from '@/features/clips/editor/saveCardDraft';
+import type { RecipeSnapshot } from '@/api/clipEditor';
+import { forgetCardSaves } from './cardSave';
 import { HighlightCard } from './HighlightCard';
 import { reuseHighlights } from './highlightCardView';
 import { PENDING_MAX_RECHECKS, PENDING_RECHECK_MS } from './useCardEditorReady';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 
 vi.mock('@/features/clips/editor/prefetchCardEditor', () => ({ prefetchCardEditor: vi.fn() }));
+vi.mock('@/features/clips/editor/saveCardDraft', () => ({ saveCardDraft: vi.fn() }));
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: routerPush }) }));
 
 // 「편집」은 편집기가 쓰는 영상 · 소리 · 파형을 미리 다 받은 뒤에 열린다(POK-499)
 
@@ -30,6 +36,9 @@ const HIGHLIGHT: LiveHighlight = {
   meta: '채팅 ×4.2 급증 · 42초 · 방금',
   status: 'scored',
   source: 'auto',
+  score: 97,
+  lengthSec: 60,
+  ago: '3분 전',
 };
 
 function renderCard(highlight: LiveHighlight = HIGHLIGHT) {
@@ -38,11 +47,17 @@ function renderCard(highlight: LiveHighlight = HIGHLIGHT) {
   );
 }
 
-const pendingButton = () => screen.getByRole('button', { name: /^편집/ });
+const pendingButton = () =>
+  screen.getByRole('button', { name: /^(편집 준비 중|녹화 기다리는 중)$/ });
 /** 준비 중 표시(마젠타 점선 테두리)를 두른 카드인가 */
 const isPreparing = (card: HTMLElement) => /cardPreparing/.test(card.className);
 
-beforeEach(() => vi.mocked(prefetchCardEditor).mockReset());
+beforeEach(() => {
+  vi.mocked(prefetchCardEditor).mockReset();
+  vi.mocked(saveCardDraft).mockReset();
+  routerPush.mockReset();
+  forgetCardSaves();
+});
 
 describe('HighlightCard: 사진을 못 받았을 때', () => {
   const signedAt = Date.parse('2026-10-31T00:00:00Z');
@@ -156,7 +171,7 @@ describe('HighlightCard: 편집 준비', () => {
     vi.mocked(prefetchCardEditor).mockResolvedValueOnce('pending').mockResolvedValueOnce('ready');
     renderCard();
     await act(async () => undefined);
-    expect(pendingButton()).toHaveAccessibleName('편집 녹화를 기다리는 중');
+    expect(pendingButton()).toHaveAccessibleName('녹화 기다리는 중');
     expect(isPreparing(screen.getByRole('article'))).toBe(true);
     await act(async () => {
       vi.advanceTimersByTime(PENDING_RECHECK_MS);
@@ -214,6 +229,102 @@ describe('HighlightCard: 편집 준비', () => {
     expect(prefetchCardEditor).not.toHaveBeenCalled();
     // 받지 않으니 상태가 loading에 머무르지만 기다릴 것이 없다: 점선을 두르지 않는다
     for (const card of screen.getAllByRole('article')) expect(isPreparing(card)).toBe(false);
+  });
+});
+
+describe('HighlightCard: 시안 B2-1 모양', () => {
+  beforeEach(() => vi.mocked(prefetchCardEditor).mockResolvedValue('ready'));
+
+  it('사진 위에 점수 · 방송 시각 · 길이 · 경과를 쓰고, 감지 사유 · 상태 배지 · 원클릭 업로드는 없다', async () => {
+    const { container } = renderCard();
+    await screen.findByRole('link', { name: '편집' });
+    const thumb = screen.getByRole('button', { name: '1:07:50 시점으로 이동' });
+    expect(thumb).toHaveTextContent('97점');
+    expect(thumb).toHaveTextContent('1:07:50');
+    expect(thumb).toHaveTextContent('1:00');
+    expect(thumb).toHaveTextContent('3분 전');
+    expect(thumb).toHaveTextContent('여기부터 보기');
+    expect(thumb).not.toHaveTextContent('자동 감지');
+    expect(screen.queryByText('검토 대기')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '원클릭 업로드' })).not.toBeInTheDocument();
+    // 제목은 화면에 안 쓰지만 제목으로 훑는 쪽에는 남는다
+    expect(screen.getByRole('heading', { name: '채팅이 튄 순간' })).toBeInTheDocument();
+    expect(container.querySelector('article')).not.toBeNull();
+  });
+
+  it('수동 카드는 점수 자리에 「수동」이다', async () => {
+    renderCard({ ...HIGHLIGHT, source: 'manual', status: 'manual', score: undefined });
+    await screen.findByRole('link', { name: '편집' });
+    expect(screen.getByRole('button', { name: '1:07:50 시점으로 이동' })).toHaveTextContent('수동');
+  });
+
+  it('만료 카드는 버튼줄 · 저장 대신 곧 사라진다고 쓴다', () => {
+    renderCard({ ...HIGHLIGHT, status: 'expired' });
+    expect(screen.getByText('되감기 범위를 지나 곧 사라져요')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '보관함에 저장' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '이 카드 가리기' })).not.toBeInTheDocument();
+  });
+});
+
+describe('HighlightCard: 보관함 저장', () => {
+  const snapshot = { id: 31 } as RecipeSnapshot;
+
+  it('「저장」을 누르면 카드 구간 그대로 편집본을 만들고 「저장됨」이 되며, 알림에서 보관함을 연다', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    let finish: (value: RecipeSnapshot) => void = () => undefined;
+    vi.mocked(saveCardDraft).mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    renderCard();
+
+    fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+    expect(saveCardDraft).toHaveBeenCalledWith(expect.any(String), '23');
+    expect(screen.getByRole('button', { name: '보관함에 저장하는 중' })).toBeDisabled();
+    await act(async () => finish(snapshot));
+
+    const done = screen.getByRole('link', { name: '보관함에 저장됨 · 보관함 열기' });
+    expect(done).toHaveAttribute('href', '/clips/library');
+    expect(await screen.findByText('보관함에 저장했어요')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '보관함 열기' }));
+    expect(routerPush).toHaveBeenCalledWith('/clips/library');
+  });
+
+  it('편집 준비 중이어도 저장된다: 저장은 영상을 받지 않는다', async () => {
+    vi.mocked(prefetchCardEditor).mockReturnValue(new Promise(() => undefined));
+    vi.mocked(saveCardDraft).mockResolvedValue(snapshot);
+    renderCard();
+    expect(pendingButton()).toBeDisabled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+    });
+    expect(screen.getByRole('link', { name: '보관함에 저장됨 · 보관함 열기' })).toBeInTheDocument();
+  });
+
+  it('저장된 카드는 다시 그려져도(목록이 새로 와도) 「저장됨」이다 — 두 번 눌러 편집본이 둘 생기지 않게', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    vi.mocked(saveCardDraft).mockResolvedValue(snapshot);
+    const first = renderCard();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+    });
+    first.unmount();
+    renderCard();
+    expect(screen.getByRole('link', { name: '보관함에 저장됨 · 보관함 열기' })).toBeInTheDocument();
+    expect(saveCardDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('실패하면 저장 전으로 돌아가고 알린다', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    vi.mocked(saveCardDraft).mockRejectedValue(new Error('503'));
+    renderCard();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+    });
+    expect(await screen.findByText('보관함에 저장하지 못했어요')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '보관함에 저장' })).toBeEnabled();
+  });
+
+  it('가린 카드에는 저장이 없다', () => {
+    renderCard({ ...HIGHLIGHT, hidden: true });
+    expect(screen.queryByRole('button', { name: '보관함에 저장' })).not.toBeInTheDocument();
   });
 });
 

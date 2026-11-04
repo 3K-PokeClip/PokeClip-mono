@@ -2156,10 +2156,11 @@ describe('LiveScreen — 방송 정보 바', () => {
 });
 
 describe('LiveScreen — 하이라이트 카드', () => {
-  it('상태 배지는 점수와 검토 대기다: 「편집 중」 배지가 없다 (POK-393)', async () => {
+  it('점수는 사진 위에 있고 상태 배지(검토 대기 · 「편집 중」)는 없다 (POK-393 · 시안 B2-1)', async () => {
     await renderLive();
 
     expect(screen.getByText('97점')).toBeInTheDocument();
+    expect(screen.queryByText('검토 대기')).not.toBeInTheDocument();
     expect(screen.queryByText(/편집 중/)).not.toBeInTheDocument();
   });
 
@@ -2171,8 +2172,8 @@ describe('LiveScreen — 하이라이트 카드', () => {
     fireEvent.click(edits[0] as HTMLElement);
     await settle();
     expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/claim'))).toHaveLength(0);
-    // 업로드 라우트는 아직 없다: 자리만 두고 비활성
-    expect(screen.getAllByRole('button', { name: '원클릭 업로드' })[0]).toBeDisabled();
+    // 원클릭 업로드는 카드에서 뺐다(2026-11-04 사용자 결정): 자리도 두지 않는다
+    expect(screen.queryAllByRole('button', { name: '원클릭 업로드' })).toHaveLength(0);
   });
 
   it('모든 카드에 편집·가리기가 있고 놓기는 없다: 숨김 칸은 처음엔 0이다 (POK-393 · POK-463)', async () => {
@@ -5656,7 +5657,10 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     await settle();
 
     expect(screen.getByText('방송 중이 아니에요')).toBeInTheDocument();
-    expect(screen.queryByText(/^1:2\d:\d\d$/)).toBeNull();
+    // 카드 사진 위의 방송 시각(시안 B2-1)은 경과 시계가 아니다: 카드 밖에서만 센다
+    expect(
+      screen.queryAllByText(/^1:2\d:\d\d$/).filter((el) => el.closest('article') === null),
+    ).toHaveLength(0);
     expect(screen.queryByText(/명 시청 중/)).toBeNull();
   });
 

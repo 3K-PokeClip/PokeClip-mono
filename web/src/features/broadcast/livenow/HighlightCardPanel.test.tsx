@@ -1,7 +1,10 @@
 import { fireEvent, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { HighlightCardPanel } from './HighlightCardPanel';
+
+// 카드의 저장 알림이 보관함으로 보낸다(useRouter)
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 import type { CardListStatus, LiveHighlight, LiveStream } from './useLiveMockState';
 
 const STREAM: LiveStream = {
