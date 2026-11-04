@@ -323,8 +323,9 @@ func publishWithB(t *testing.T, admin *pgxpool.Pool, round string) {
 
 // J2′ — J1′ 의 강등 사이드카가 k(3)번째 재시도에서 회복한다(로컬 SNS 대역 · 실제 SNS 클라이언트). 강등 중 쌓인 R 의
 // started → ended 가 차례로 나가고, INFO lifecycle_started attempt=3 · ERROR value=0 reason=recovered 각 1 · WARN 2 다.
-// 회복 뒤 시도 주기보다 한참 늦게 넣은 행도 published 다(발행기 ctx 는 재시도 고루틴의 긴 ctx — P4).
-// 잡는 결함: 재시도 1회(V5) · 발행기를 시도 시한 ctx 에서 땀(V6).
+// 회복 뒤 시도 주기보다 한참 늦게 넣은 행도 published 다(발행기 ctx 는 재시도 고루틴의 긴 ctx — P4). 발행기 기동 칸이
+// 받은 ctx 에 시한이 없음도 본다 — 시험 창보다 긴 시한은 늦은 행으로 드러나지 않는다.
+// 잡는 결함: 재시도 1회(V5) · 발행기를 시도 시한 ctx 에서 땀(V6 · V6b · V6c · V6d).
 func TestDegradedSidecarRecoversOnKthRetryJ2(t *testing.T) {
 	const k = 3
 	admin := newWireTestPool(t)
@@ -339,6 +340,15 @@ func TestDegradedSidecarRecoversOnKthRetryJ2(t *testing.T) {
 	steps.snsPublish = func(ctx context.Context) (func(context.Context, broadcast.Message) error, error) {
 		return newSNSPublish(ctx, degradeLC)
 	}
+	var runs, deadlined atomic.Int32 // 발행기 기동 칸이 받은 ctx — 시도 시한이 붙었는지는 시간과 무관하게 본다
+	run := steps.runPublisher
+	steps.runPublisher = func(ctx context.Context, o broadcast.PublisherOptions) (func(), error) {
+		runs.Add(1)
+		if _, ok := ctx.Deadline(); ok {
+			deadlined.Add(1)
+		}
+		return run(ctx, o)
+	}
 	log, buf := newLockedLog(slog.LevelInfo)
 	gate, stop := startLifecycleWith(t.Context(), degradeLC, okResolve, steps, log)
 	defer stop()
@@ -347,6 +357,9 @@ func TestDegradedSidecarRecoversOnKthRetryJ2(t *testing.T) {
 	close(g.release)
 	if s := waitOutboxState(t, admin, broadcast.EndedEventID(round), "published", 10*time.Second); s != "published" {
 		t.Fatalf("R.ended %q, want published — 전체 %s", s, buf)
+	}
+	if n, d := runs.Load(), deadlined.Load(); n != 1 || d != 0 {
+		t.Fatalf("발행기 기동 %d 번 · 시한 붙은 ctx %d 번, want 1 · 0 — 발행기 ctx 는 재시도 고루틴의 긴 ctx 다(P4)", n, d)
 	}
 	time.Sleep(4 * steps.every) // 회복 뒤 시도 주기보다 늦게 넣는다
 	late := lateStarted(t, admin, degradeToken(21))
