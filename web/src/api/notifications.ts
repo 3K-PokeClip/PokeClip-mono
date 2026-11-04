@@ -26,16 +26,28 @@ export const NOTIFICATIONS_SERVER_READY = false;
 export const NOTIFICATION_KEEP_DAYS = 14;
 export const NOTIFICATION_MAX_COUNT = 50;
 
-export type NotificationKind =
-  | 'CHAT_LINK_BROKEN'
-  | 'YOUTUBE_LINK_EXPIRED'
-  | 'CLIP_UPLOADED'
-  | 'CLIP_FAILED'
-  | 'EDITOR_UPLOADED'
-  | 'VOD_EXPIRING'
-  | 'BROADCAST_ENDED'
-  | 'MANAGED_BROADCAST_STARTED'
-  | 'EDITOR_INVITED';
+// 종류는 여기 한 곳에서만 늘린다: 유니온 · fromWire가 받는 목록이 이 배열에서 나온다. 두 벌로 두면 한쪽에만 더했을 때 타입
+// 검사는 통과하고 그 종류가 fromWire에서 조용히 버려진다(PR #481 4차). 더하면 fromWire switch · NotificationPayload ·
+// 문구(notificationView) · 아이콘(NotificationBell)이 타입 오류로 알려 준다
+const NOTIFICATION_KINDS = [
+  'CHAT_LINK_BROKEN',
+  'YOUTUBE_LINK_EXPIRED',
+  'CLIP_UPLOADED',
+  'CLIP_FAILED',
+  'EDITOR_UPLOADED',
+  'VOD_EXPIRING',
+  'BROADCAST_ENDED',
+  'MANAGED_BROADCAST_STARTED',
+  'EDITOR_INVITED',
+] as const;
+
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+const KINDS: ReadonlySet<string> = new Set<string>(NOTIFICATION_KINDS);
+
+function isKnownKind(kind: string): kind is NotificationKind {
+  return KINDS.has(kind);
+}
 
 export type ClipPrivacy = 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
 
@@ -107,24 +119,13 @@ export interface NotificationsResponse {
   items: AppNotification[];
 }
 
-const KINDS: ReadonlySet<string> = new Set<NotificationKind>([
-  'CHAT_LINK_BROKEN',
-  'YOUTUBE_LINK_EXPIRED',
-  'CLIP_UPLOADED',
-  'CLIP_FAILED',
-  'EDITOR_UPLOADED',
-  'VOD_EXPIRING',
-  'BROADCAST_ENDED',
-  'MANAGED_BROADCAST_STARTED',
-  'EDITOR_INVITED',
-]);
-
 /**
  * 서버 한 건을 화면 꼴로 옮긴다. 모르는 종류는 버린다(서버가 종류를 먼저 늘려도 창이 깨지지 않게). data는 종류가 정한 칸만
  * 화이트리스트로 옮긴다 — 스프레드로 받으면 서버가 칸을 늘릴 때 조용히 딸려 들어온다.
  */
 export function fromWire(wire: NotificationWire): AppNotification | null {
-  if (!KINDS.has(wire.kind)) return null;
+  const kind = wire.kind;
+  if (!isKnownKind(kind)) return null;
   const d: Record<string, unknown> =
     wire.data !== null && typeof wire.data === 'object' ? wire.data : {};
   const str = (k: string) => (typeof d[k] === 'string' ? (d[k] as string) : '');
@@ -132,7 +133,7 @@ export function fromWire(wire: NotificationWire): AppNotification | null {
   const privacy = (): ClipPrivacy =>
     d.privacy === 'PUBLIC' || d.privacy === 'UNLISTED' ? d.privacy : 'PRIVATE';
   let payload: NotificationPayload;
-  switch (wire.kind as NotificationKind) {
+  switch (kind) {
     case 'CHAT_LINK_BROKEN':
       payload = { kind: 'CHAT_LINK_BROKEN', platform: d.platform === 'SOOP' ? 'SOOP' : 'CHZZK' };
       break;
