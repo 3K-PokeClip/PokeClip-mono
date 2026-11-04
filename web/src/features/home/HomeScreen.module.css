@@ -1018,11 +1018,18 @@
   outline-offset: calc(3 * var(--pc-u));
 }
 
-/* ThumbnailImage의 나타나기(opacity)를 지우지 않게 함께 적는다 */
+/* ThumbnailImage의 나타나기(opacity)를 지우지 않게 함께 적는다. 이 선택자가 ThumbnailImage의 감속 모드 `.img { transition: none }`보다
+   세므로, 감속 모드 끄기도 여기서 같이 적는다 */
 .vodLink .thumb img {
   transition:
     opacity 0.2s ease,
     transform 0.25s var(--pc-ease-decelerate, ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vodLink .thumb img {
+    transition: none;
+  }
 }
 
 .vodLink:hover .vodTitle {
