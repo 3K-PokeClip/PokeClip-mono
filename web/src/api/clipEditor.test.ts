@@ -575,4 +575,25 @@ describe('forgetLibraryList', () => {
     unsubscribe();
     client.clear();
   });
+
+  it('첫 읽기가 걸려 있으면 그 읽기를 접고 다시 읽는다 — 저장 전에 나간 요청의 옛 목록이 서지 않게', async () => {
+    // 받아 둔 데이터 없이 읽는 중인 쿼리는 다시 읽으라 해도 그 요청을 같이 썼다(PR #480 3차 리뷰)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const answers: ((list: string[]) => void)[] = [];
+    const reads = vi.fn(() => new Promise<string[]>((resolve) => answers.push(resolve)));
+    const observer = new QueryObserver(client, { queryKey: ['library', 1], queryFn: reads });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+
+    forgetLibraryList(client);
+
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
+    answers[0]!([]); // 저장 전에 나간 요청 — 새 편집본이 없다
+    answers[1]!(['편집본']);
+    await vi.waitFor(() => expect(client.getQueryData(['library', 1])).toEqual(['편집본']));
+    // 접은 읽기가 오류로 보이지 않는다
+    expect(observer.getCurrentResult().isError).toBe(false);
+    unsubscribe();
+    client.clear();
+  });
 });
