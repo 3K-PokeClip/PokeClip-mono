@@ -1,12 +1,14 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { QueryClient } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestQueryClient, makeQueryWrapper } from '@/test/testProviders';
 
 // 라이브 상태 훅의 데이터 층(POK-251 정비): 끝난 방송의 굳은 차트 · 방송 정보를 React Query 캐시에서 다시 쓰고, 같은 카드 · 같은
 // 카드 시각은 다시 싣지 않는다. 서버 응답은 apiFetch를 가로채 흉내 낸다
 const api = vi.hoisted(() => ({
   calls: [] as string[],
+  /** 이벤트 통로가 보낼 글. null이면 통로가 없다(붙지 못한다) */
+  sse: null as string | null,
 }));
 vi.mock('@/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/client')>();
@@ -14,7 +16,7 @@ vi.mock('@/api/client', async (importOriginal) => {
     new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
   return {
     ...actual,
-    apiFetch: async (path: string) => {
+    apiFetch: async (path: string, init?: RequestInit) => {
       api.calls.push(path);
       const { pathname } = new URL(path, 'http://localhost');
       if (pathname.endsWith('/jump-cards')) return json({ cards: [] });
@@ -24,7 +26,23 @@ vi.mock('@/api/client', async (importOriginal) => {
           appliedOffsetMs: 0,
           buckets: [{ start: '2026-10-31T00:00:00.000Z', chats: 3, donations: 0 }],
         });
-      if (pathname.endsWith('/broadcast-info')) return json({ latest: null, series: [] });
+      // 통로를 시험할 때는 정기 조회가 답하지 않는다: 통로로 온 방송 정보만 남는다
+      if (pathname.endsWith('/broadcast-info'))
+        return api.sse !== null
+          ? new Promise<Response>(() => {})
+          : json({ latest: null, series: [] });
+      if (pathname.endsWith('/events') && api.sse !== null) {
+        const text = api.sse;
+        // 보낸 뒤 끊지 않는다(끊으면 5초 뒤 다시 붙는다). 화면이 내려가면 닫는다
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(text));
+              init?.signal?.addEventListener('abort', () => controller.close());
+            },
+          }),
+        );
+      }
       // 그 밖(이벤트 통로 · 연동 · 시점 기록)은 없다: 훅은 다음 주기에 다시 묻는다
       throw new Error(`unexpected ${pathname}`);
     },
@@ -169,5 +187,54 @@ describe('useLiveMockState: 카드 시각', () => {
       sameSnapshot(shown, card({ thumbnailUrl: signed('a', '20261031T000100Z') }), later),
     ).toBe(false);
     expect(sameSnapshot(card(), card(), now)).toBe(true);
+  });
+});
+
+describe('useLiveMockState: 통로로 온 방송 정보', () => {
+  beforeEach(() => {
+    api.calls.length = 0;
+    resetLiveData();
+    publishLiveData({ streamId: 's1', status: 'live', startedAt: Date.now() - 600_000 });
+  });
+  afterEach(() => {
+    api.sse = null;
+  });
+
+  // 라이브 화면처럼 저장소를 구독하는 바깥 화면(LiveScreenBody) 안에 훅을 쓰는 화면(LiveDashboard)이 있다
+  function Dashboard() {
+    useLiveMockState(false);
+    return null;
+  }
+  function Body() {
+    const info = useLiveField('info');
+    return (
+      <>
+        <output>{info?.series.map((p) => p.viewers).join(',') ?? ''}</output>
+        <Dashboard />
+      </>
+    );
+  }
+
+  it('그리기 밖에서 저장소에 싣는다: 상태 갱신 함수 안에서 실으면 구독하는 다른 화면을 그리기 중에 깨운다', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const ev = {
+      time: new Date(Date.now() - 5_000).toISOString(),
+      title: '제목',
+      tags: [],
+      category: 'talk',
+      viewers: 0,
+      platform: 'CHZZK',
+    };
+    api.sse = `event: broadcast-info\ndata: ${JSON.stringify(ev)}\n\n`;
+    const { unmount } = render(<Body />, {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+    // 0명도 값이다
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('0'));
+    unmount();
+    expect(
+      errors.mock.calls.some((args) => String(args[0]).includes('Cannot update a component')),
+    ).toBe(false);
+    errors.mockRestore();
   });
 });

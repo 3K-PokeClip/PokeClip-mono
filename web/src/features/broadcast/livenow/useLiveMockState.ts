@@ -376,6 +376,18 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     setInfo(null);
     publishLiveData({ chart: null, info: null, cardTimes: [] });
     let stopped = false;
+    /**
+     * 받아 둔 방송 정보(상태 info와 같은 값). 통로 이벤트는 이것에 이어 붙인다. 상태 갱신 함수(setInfo(prev => …)) 안에서 저장소에
+     * 실으면 그 함수가 다음 그리기(LiveDashboard) 도중에 돌아, 저장소를 구독하는 다른 화면(LiveScreenBody)을 그리기 중에 깨웠다
+     * (React 「Cannot update a component while rendering a different component」)
+     */
+    let latestInfo: LoadedInfo | null = null;
+    const putInfo = (next: LoadedInfo) => {
+      if (stopped) return;
+      latestInfo = next;
+      setInfo(next);
+      publishLiveData({ info: toLiveInfo(next) });
+    };
     type Range = typeof rangeRef.current;
     /** 지난 방송 주소인데 방송 상태를 아직 모른다: 그래프를 어느 창으로 읽을지 모르니 기다린다 */
     const waitForRange = (rg: Range) => pastRoute && rg.status !== 'live' && rg.status !== 'ended';
@@ -606,8 +618,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
           series,
           scope: sinceMs === null ? 'recent' : 'broadcast',
         };
-        setInfo(loaded);
-        publishLiveData({ info: toLiveInfo(loaded) });
+        putInfo(loaded);
         if (sinceMs !== null && rg.status === 'ended') infoDoneFor = settledKey(rg, askedAt);
       }
     };
@@ -670,33 +681,30 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
                   /** 이 관측을 잰 플랫폼(POK-397). 옛 서버면 빠져 온다 */
                   platform?: string | null;
                 };
-                setInfo((prev) => {
-                  // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
-                  // 최근 창으로 바꾸지 않게
-                  const next: LoadedInfo = {
-                    scope: prev?.scope ?? 'recent',
-                    latest: {
-                      title: ev.title,
-                      tags: ev.tags ?? [],
-                      category: ev.category,
-                      viewers: ev.viewers,
+                // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
+                // 최근 창으로 바꾸지 않게
+                const prev = latestInfo;
+                putInfo({
+                  scope: prev?.scope ?? 'recent',
+                  latest: {
+                    title: ev.title,
+                    tags: ev.tags ?? [],
+                    category: ev.category,
+                    viewers: ev.viewers,
+                    observedAt: ev.time,
+                  },
+                  platforms: withPlatformObservation(prev?.platforms, ev),
+                  // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397). 카테고리도 남긴다:
+                  // 버리면 바뀐 카테고리가 다음 정기 조회까지 통계 띠에 안 보였다(POK-465)
+                  series: [
+                    ...(prev?.series ?? []),
+                    {
                       observedAt: ev.time,
+                      viewers: ev.viewers,
+                      category: ev.category,
+                      platform: ev.platform,
                     },
-                    platforms: withPlatformObservation(prev?.platforms, ev),
-                    // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397). 카테고리도 남긴다:
-                    // 버리면 바뀐 카테고리가 다음 정기 조회까지 통계 띠에 안 보였다(POK-465)
-                    series: [
-                      ...(prev?.series ?? []),
-                      {
-                        observedAt: ev.time,
-                        viewers: ev.viewers,
-                        category: ev.category,
-                        platform: ev.platform,
-                      },
-                    ].slice(-720),
-                  };
-                  publishLiveData({ info: toLiveInfo(next) });
-                  return next;
+                  ].slice(-720),
                 });
               } catch {
                 /* 무시 */

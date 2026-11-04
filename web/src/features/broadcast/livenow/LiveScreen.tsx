@@ -135,6 +135,13 @@ function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
   return kind === 'pending' || kind === 'found';
 }
 
+/** 지난 방송 정보 바의 방송한 날짜 — 「2026.10.20」(이 기기 시간대) */
+export function broadcastDateLabel(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
+}
+
 /**
  * 출입증을 이 간격으로 다시 본다. 받아 둔 것이 쓸 만하면 요청이 없고(만료 5분 전에 새로 받는 것은 playbackAccess가 정한다), 실패했거나
  * 쿠키가 지워져(403) 버려졌으면 이 간격 안에 다시 받는다
@@ -621,12 +628,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 카드 · 통계까지 통째로 다시 그려졌다
   const stats = useLiveStatsMockState(viewStatus);
 
-  // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
-  // 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다: 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 끝난 방송은
-  // 지금 보는 사람이 아니라 끝날 때 값이고(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다), 방송 정보를
-  // 받기 전이면 「기록 없음」이라 단정하지 않는다. 어떤 기록을 믿고(끝난 방송은 방송 창으로 읽은 것만, 리뷰 4라운드) 값이 없을 때
-  // 무엇이라 쓰는지는 통계와 같은 함수 하나가 정한다(리뷰 5라운드). 값과 말은 통계 훅이 센 것을 그대로 쓴다: 두 곳에서 따로
-  // 세면 한쪽 인자만 바뀌어도 다시 갈린다(리뷰 6라운드)
+  // 정보 바의 시청자 수(라이브만 — 끝난 방송은 아래에서 방송한 날짜를 쓴다)는 broadcast-info의 series에서 마지막으로 잰 값이다
+  // (수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다:
+  // 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 어떤 기록을 믿고 값이 없을 때 무엇이라 쓰는지는 통계와 같은 함수 하나가
+  // 정한다(리뷰 5라운드). 값과 말은 통계 훅이 센 것을 그대로 쓴다: 두 곳에서 따로 세면 한쪽 인자만 바뀌어도 다시 갈린다(리뷰
+  // 6라운드). 끝난 방송의 시청자 수는 통계 칸(평균 · 최고)만 말한다: 「끝날 때 N명 시청」은 며칠 전 방송의 끝 무렵 숫자라
+  // 방송한 날짜로 바꿨다(PR #482)
   const v = stats.lastViewers;
   // 방송 정보를 받아 오는 중(POK-449): 방송 중이거나 아직 상태를 모르고, 방송 시작에서 2분이 안 지났다. 이때 빈 칸(채널 이름 · 시청자
   // 수 · 제목 · 카테고리)은 회색 막대다. 그 뒤로는 지금처럼 까닭(확인 중 · 수집 전)을 글자로 적는다
@@ -639,14 +646,18 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     lockWord === null &&
     (viewStatus === 'live' || viewStatus === 'unknown') &&
     !infoWaitOver(clock.startedAt ?? firstSeen.at, Date.now());
-  const viewersLabel =
-    v === null
+  // 끝난 방송은 시청자 수 대신 방송한 날짜다(2026-11-04 사용자 결정: 「끝날 때 N명 시청」 → 「2026.10.20」). 시청자 수는 통계의 평균 ·
+  // 최고가 말한다. 시작 시각을 모르면 끝난 날, 둘 다 모르면(명부 답 전) 확인 중이다
+  const broadcastDay = clock.startedAt ?? clock.endedAt;
+  const viewersLabel = ended
+    ? broadcastDay === null
+      ? '날짜 확인 중'
+      : broadcastDateLabel(broadcastDay)
+    : v === null
       ? infoPending
         ? ''
         : `시청자 수 ${lockWord ?? stats.noViewers}`
-      : ended
-        ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
-        : `${v.toLocaleString('ko-KR')}명 시청 중`;
+      : `${v.toLocaleString('ko-KR')}명 시청 중`;
 
   // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다. 라이브는 경과의 1% 단위로 묶는다
   // (cardPositionUptime): 그대로 넘기면 카드 전부가 매초 다시 그려진다

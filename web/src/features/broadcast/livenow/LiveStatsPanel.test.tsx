@@ -377,6 +377,42 @@ describe('LiveStatsPanel: 그래프', () => {
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
     expect(container.querySelector('circle[data-single]')).not.toBeNull();
   });
+
+  /** 시청자 선 path의 마지막 점 x와 그래프 폭 */
+  const lineEnd = (container: HTMLElement) => {
+    const d = container.querySelector(`.${styles.viewerLine}`)!.getAttribute('d')!;
+    const last = d
+      .split(/[MLC ]/)
+      .filter(Boolean)
+      .at(-1)!;
+    const width = Number(container.querySelector(`svg.${styles.svg}`)!.getAttribute('width'));
+    return { x: Number(last.split(',')[0]), width };
+  };
+
+  it('라이브 시청자 선은 마지막 관측에서 「지금」까지 이어진다: 0명이어도 끊기지 않는다', () => {
+    const c = chart(268);
+    // 1분마다 잰 0명. 마지막 관측은 「지금」 40초 전이다
+    const viewers = Array.from({ length: 134 }, (_, k) => ({
+      t: c.t0 + k * 60_000 + 20_000,
+      v: 0,
+    }));
+    const { container } = panel({ stats: stats({ viewers, lastViewers: 0 }) });
+    const { x, width } = lineEnd(container);
+    expect(x).toBeCloseTo(width, 0);
+    // 맥박 점도 끝에 선다
+    expect(Number(container.querySelector(`.${styles.livePulse}`)!.getAttribute('cx'))).toBeCloseTo(
+      width,
+      0,
+    );
+  });
+
+  it('마지막 관측이 3분보다 오래됐으면 「지금」까지 잇지 않는다: 그 뒤는 모른다', () => {
+    const c = chart(268);
+    const viewers = Array.from({ length: 120 }, (_, k) => ({ t: c.t0 + k * 60_000, v: 10 }));
+    const { container } = panel({ stats: stats({ viewers, lastViewers: 10 }) });
+    const { x, width } = lineEnd(container);
+    expect(x).toBeLessThan(width - 10);
+  });
 });
 
 describe('LiveStatsPanel: 열쇠', () => {
@@ -412,9 +448,9 @@ describe('LiveStatsPanel: 열쇠', () => {
     const { rerender, props } = panel({ cards: near(0) });
     rerender(<LiveStatsPanel {...props} cards={near(10_000)} />);
     rerender(<LiveStatsPanel {...props} cards={near(20_000)} />);
-    // 붙은 둘은 묶음 하나(개수 2)로, 떨어진 하나는 따로
+    // 붙은 둘은 묶음 하나(「2장」)로, 떨어진 하나는 따로
     expect(screen.getAllByRole('button', { name: /^하이라이트 / })).toHaveLength(2);
-    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2장$/);
   });
 });
 
@@ -427,10 +463,30 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     CARDS[1]!,
   ];
 
+  it('묶음은 묶인 카드들 가운데에 서고, 카드 자리마다 점을 찍는다: 첫 카드 자리에만 서면 카드가 빠져 보였다', () => {
+    const { container } = panel({ cards: near });
+    const marks = [...container.querySelectorAll<HTMLElement>(`.${styles.pinMark}`)];
+    expect(marks).toHaveLength(2);
+    const [a, b] = marks.map((m) => parseFloat(m.style.left));
+    const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
+    expect(a).toBeLessThan(b!);
+    expect(parseFloat(group.style.left)).toBeCloseTo((a! + b!) / 2, 5);
+  });
+
+  it('점은 모든 핀 뒤에 그린다: 같은 층(z-index 1)이라 순서가 알약 테두리 위 · 가장자리 그림자 아래를 정한다(PR #482 2차 리뷰)', () => {
+    const { container } = panel({ cards: near });
+    const pinButtons = screen.getAllByRole('button', { name: /^하이라이트 / });
+    const lastPin = pinButtons.at(-1)!;
+    const marks = [...container.querySelectorAll<HTMLElement>(`.${styles.pinMark}`)];
+    expect(marks.length).toBeGreaterThan(0);
+    for (const mark of marks)
+      expect(lastPin.compareDocumentPosition(mark) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('겹치는 핀은 개수 하나로 묶고, 떨어진 핀은 하나짜리 그대로다', () => {
     panel({ cards: near });
     const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
-    expect(group).toHaveTextContent(/^2$/);
+    expect(group).toHaveTextContent(/^2장$/);
     expect(group).toHaveAttribute('aria-expanded', 'false');
     // 묶인 카드는 따로 핀이 없다
     expect(screen.queryByRole('button', { name: /^하이라이트 #12/ })).toBeNull();
@@ -535,7 +591,7 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     act(() =>
       resize([{ contentRect: { width: 1000 } } as ResizeObserverEntry], {} as ResizeObserver),
     );
-    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2장$/);
     act(() =>
       resize([{ contentRect: { width: 1092 } } as ResizeObserverEntry], {} as ResizeObserver),
     );

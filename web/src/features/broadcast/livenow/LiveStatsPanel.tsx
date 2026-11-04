@@ -2,7 +2,7 @@
 
 // 실시간 통계 — 위쪽 숫자 줄 + 한 상자 두 층 그래프(위 시청자 선 · 아래 채팅 막대) + 카테고리 띠 + 시간축.
 // 하이라이트는 그래프 위 핀(누르면 그 카드 시점으로 간다)과 막대 색(포인트색)으로, 후원은 숫자 줄과 툴팁에만 둔다(막대 아래 후원
-// 줄은 사용자 결정으로 뺐다). 겹치는 핀은 개수 묶음이고, 누르면 카드 목록을 띄운다(POK-500). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
+// 줄은 사용자 결정으로 뺐다). 겹치는 핀은 「N장」 묶음(묶인 카드 가운데 + 카드 자리마다 점)이고, 누르면 카드 목록을 띄운다(POK-500). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
 // 오른쪽 눈금과 층 이름은 제자리다. 방송 중이면 처음에 오른쪽 끝(지금)을 보여 주고, 끝에 붙어 있으면 새 칸이 와도 끝을 따라간다.
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import {
@@ -18,6 +18,7 @@ import {
   type PointerEvent,
 } from 'react';
 import { LoadingRegion, Skeleton } from '@/ui';
+import { ON_AIR_WINDOW_MS } from '@/features/broadcast/platformView';
 import styles from './LiveStatsPanel.module.css';
 import {
   BAR_MAX,
@@ -27,7 +28,7 @@ import {
   bucketEnd,
   bucketIndexAt,
   categorySpans,
-  clusterPins,
+  clusterPinsCentered,
   fmtDuration,
   fmtHM,
   fmtHMS,
@@ -38,6 +39,7 @@ import {
   rangeScale,
   smoothPath,
   timeTicks,
+  viewerTail,
   viewerWindow,
   viewersAt,
   xOf,
@@ -194,7 +196,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
         </span>
         {cards.length > 0 ? (
           <span className={styles.headHint}>
-            핀을 누르면 그 카드로, 숫자 묶음은 목록에서 골라요
+            핀을 누르면 그 카드로, 「N장」 묶음은 목록에서 골라요
           </span>
         ) : null}
       </div>
@@ -353,7 +355,8 @@ function Timeline({
     return {
       inView: cardsIn,
       hot: new Set(cardsIn.map((c) => bucketIndexAt(view, c.atMs))),
-      pins: clusterPins(
+      // 묶음은 묶인 카드들 가운데에 서고, 옮긴 자리끼리도 핀 폭(PIN_GAP)만큼 떨어진다(clusterPinsCentered)
+      pins: clusterPinsCentered(
         cardsIn.map((c) => ({ card: c, x: xOf(view, c.atMs, contentW) })),
         PIN_GAP * u,
       ),
@@ -395,8 +398,14 @@ function Timeline({
     const top = 10 * u;
     const y = (v: number) =>
       scale ? base - ((v - scale.min) / (scale.max - scale.min)) * (base - top) : base;
-    const pts = vw.map((p) => [xOf(view, p.t, contentW), y(p.v)] as const);
-    const line = smoothPath(pts);
+    const measured = vw.map((p) => [xOf(view, p.t, contentW), y(p.v)] as const);
+    // 마지막 관측에서 그래프 끝까지는 그 값 그대로 곧게 잇는다(viewerTail). 곡선에는 넣지 않는다: 넣으면 마지막 관측 앞 곡선 모양이
+    // 바뀌어 새 관측이 올 때마다 앞 선이 출렁인다
+    const tail = viewerTail(vw, view.t1, ON_AIR_WINDOW_MS);
+    const end = tail ? ([xOf(view, tail.t, contentW), y(tail.v)] as const) : null;
+    const curve = smoothPath(measured);
+    const line = end ? `${curve}L${end[0].toFixed(1)},${end[1].toFixed(1)}` : curve;
+    const pts = end ? [...measured, end] : measured;
     return { scale, y, pts, line, area: areaPath(pts, base, line) };
   }, [stats.viewers, view, contentW, u]);
   const vScale = viewer.scale;
@@ -643,7 +652,8 @@ function Timeline({
                     }}
                     aria-label={`하이라이트 ${items.length}개 묶음 · ${first.card.timestamp}부터 · 눌러서 고르기`}
                   >
-                    {items.length}
+                    {/* 숫자만 쓰면 자동 카드 번호(#12)처럼 읽혔다 */}
+                    {`${items.length}장`}
                   </button>
                 );
               }
@@ -664,6 +674,21 @@ function Timeline({
                 </button>
               );
             })}
+            {/* 묶인 카드 자리마다 핀 줄 바닥에 점을 찍는다: 묶음 하나만 서면 몇 장이 어디 있는지 안 보였다. 모든 핀 뒤에 그린다 —
+                점과 알약은 같은 층(z-index 1)이라 뒤에 그린 점이 알약 테두리 위에 서고, 그보다 뒤에 그리는 가장자리 그림자는 둘을 함께
+                덮는다(PR #482 2차 리뷰: z-index 2로 올렸을 때는 그림자 위로 점만 떠 보였다) */}
+            {pins.flatMap(({ items }) =>
+              items.length > 1
+                ? items.map((it) => (
+                    <span
+                      key={`mark-${it.card.id}`}
+                      className={it.card.manual ? styles.pinMarkManual : styles.pinMark}
+                      style={{ left: it.x }}
+                      aria-hidden
+                    />
+                  ))
+                : [],
+            )}
           </div>
           <svg
             className={styles.svg}
