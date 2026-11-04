@@ -307,6 +307,18 @@ describe('HighlightCard: 보관함 저장', () => {
     expect(routerPush).toHaveBeenCalledWith('/clips/library');
   });
 
+  it('저장이 끝나면 받아 둔 보관함 목록을 버린다 — 보관함으로 가면 새 편집본이 든 목록을 다시 읽는다', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    vi.mocked(saveCardDraft).mockResolvedValue(snapshot);
+    const { queryClient } = renderCard();
+    queryClient.setQueryData(['library', 7], []);
+
+    fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+
+    expect(await screen.findByText('보관함에 저장했어요')).toBeInTheDocument();
+    expect(queryClient.getQueryState(['library', 7])).toBeUndefined();
+  });
+
   it('키보드로 저장해도 초점이 「저장됨」에 남는다 — 단추가 바뀌어 초점이 문서로 떨어지지 않게', async () => {
     vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
     let finish: (value: RecipeSnapshot) => void = () => undefined;
@@ -363,7 +375,8 @@ describe('HighlightCard: 보관함 저장', () => {
   it('실패하면 저장 전으로 돌아가고 알린다', async () => {
     vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
     vi.mocked(saveCardDraft).mockRejectedValue(new Error('503'));
-    renderCard();
+    const { queryClient } = renderCard();
+    queryClient.setQueryData(['library', 7], []);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
     });
@@ -371,6 +384,8 @@ describe('HighlightCard: 보관함 저장', () => {
     expect(screen.getByRole('button', { name: '보관함에 저장' })).not.toHaveAttribute(
       'aria-disabled',
     );
+    // 새 편집본이 없으니 받아 둔 보관함 목록은 그대로 둔다
+    expect(queryClient.getQueryData(['library', 7])).toEqual([]);
   });
 
   it('계정이 바뀌면(로그아웃) 저장한 카드도 「저장」으로 돌아간다 — 앞 계정의 「저장됨」이 다음 사람 화면에 남지 않게', async () => {
