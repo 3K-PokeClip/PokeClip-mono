@@ -1,8 +1,8 @@
 package index
 
 // 회차 상태 읽기 셋의 media_indexer 최소 권한 시험(POK-196 M6-3a 커밋 ④). 권한 목록 · 시험 꼴은
-// media_indexer_role_pg_test.go 머리 주석과 같다 — 세 문장이 그 권한(sessions · segments SELECT)만으로 돌고 검색 경로
-// 함정을 부르지 않는다.
+// media_indexer_role_pg_test.go 머리 주석과 같다 — 세 문장이 그 권한(sessions · segments · edge_bounds SELECT)만으로 돌고
+// 검색 경로 함정을 부르지 않는다. edge_bounds 는 판정식의 하한 원장 줄(POK-525)이다 — 표가 비어도 실행 시작 때 문장 전체의 표 권한을 검사한다.
 
 import (
 	"context"
