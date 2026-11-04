@@ -39,6 +39,8 @@ function renderCard(highlight: LiveHighlight = HIGHLIGHT) {
 }
 
 const pendingButton = () => screen.getByRole('button', { name: /^편집/ });
+/** 준비 중 표시(마젠타 점선 테두리)를 두른 카드인가 */
+const isPreparing = (card: HTMLElement) => /cardPreparing/.test(card.className);
 
 beforeEach(() => vi.mocked(prefetchCardEditor).mockReset());
 
@@ -106,6 +108,17 @@ describe('HighlightCard: 편집 준비', () => {
     await act(async () => finish('ready'));
   });
 
+  it('준비 중에는 카드를 마젠타 점선으로 두르고, 다 받으면 기본 카드와 같아진다', async () => {
+    let finish: (value: 'ready') => void = () => undefined;
+    vi.mocked(prefetchCardEditor).mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    renderCard();
+    expect(isPreparing(screen.getByRole('article'))).toBe(true);
+    // 점선은 카드 테두리만 맡는다: 「편집」 버튼에는 따로 두르지 않는다
+    expect(pendingButton().className).not.toMatch(/Preparing|Pending/);
+    await act(async () => finish('ready'));
+    expect(isPreparing(screen.getByRole('article'))).toBe(false);
+  });
+
   it('다 받으면 「편집」이 이 카드의 편집기로 열린다', async () => {
     vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
     renderCard();
@@ -126,10 +139,13 @@ describe('HighlightCard: 편집 준비', () => {
       .mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
     renderCard();
     expect(await screen.findByRole('link', { name: '편집' })).toBeInTheDocument();
+    // 실패로 연 카드도 「편집」이 열렸으니 점선을 걷는다
+    expect(isPreparing(screen.getByRole('article'))).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: /다시 시도/ }));
     await waitFor(() => expect(prefetchCardEditor).toHaveBeenCalledTimes(2));
     // 다시 받는 동안에도 이미 열린 「편집」을 다시 잠그지 않는다
     expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
+    expect(isPreparing(screen.getByRole('article'))).toBe(false);
     await act(async () => finish('ready'));
     expect(screen.queryByRole('button', { name: /다시 시도/ })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
@@ -141,11 +157,13 @@ describe('HighlightCard: 편집 준비', () => {
     renderCard();
     await act(async () => undefined);
     expect(pendingButton()).toHaveAccessibleName('편집 녹화를 기다리는 중');
+    expect(isPreparing(screen.getByRole('article'))).toBe(true);
     await act(async () => {
       vi.advanceTimersByTime(PENDING_RECHECK_MS);
     });
     expect(prefetchCardEditor).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('link', { name: '편집' })).toBeInTheDocument();
+    expect(isPreparing(screen.getByRole('article'))).toBe(false);
   });
 
   it(`녹화가 ${PENDING_MAX_RECHECKS}번 다시 물어도 안 올라오면 실패로 넘겨 「편집」을 연다: 영원히 막지 않는다`, async () => {
@@ -194,6 +212,8 @@ describe('HighlightCard: 편집 준비', () => {
     renderCard({ ...HIGHLIGHT, hidden: true });
     renderCard({ ...HIGHLIGHT, id: 'card-24', status: 'expired' });
     expect(prefetchCardEditor).not.toHaveBeenCalled();
+    // 받지 않으니 상태가 loading에 머무르지만 기다릴 것이 없다: 점선을 두르지 않는다
+    for (const card of screen.getAllByRole('article')) expect(isPreparing(card)).toBe(false);
   });
 });
 

@@ -74,8 +74,6 @@ export interface LiveHighlight {
   source: HighlightSource;
   /** 채점 점수 — 채점 전(unprocessed)·수동 카드에는 없다 */
   score?: number;
-  /** 방금 감지된 카드 — 마젠타 틴트로 강조 */
-  emphasized?: boolean;
   /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
   /** 카드가 가리키는 절대 시각(epoch ms, cardAt) — 통계 그래프의 핀 자리 */
@@ -235,7 +233,7 @@ export function msToClock(ms: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function toHighlight(c: Snapshot, index: number, now: number, base: number | null): LiveHighlight {
+function toHighlight(c: Snapshot, now: number, base: number | null): LiveHighlight {
   const ev = c.evidence ?? {};
   const ratio = typeof ev.ratio === 'number' ? ev.ratio : null;
   const count =
@@ -261,7 +259,6 @@ function toHighlight(c: Snapshot, index: number, now: number, base: number | nul
     status,
     source: manual ? 'manual' : 'auto',
     score: c.score ?? undefined,
-    emphasized: index === 0,
     thumbnailUrl: c.thumbnailUrl ?? null,
     atMs: cardAt(c, base),
     reason,
@@ -767,13 +764,13 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
   const shownHiddenHighlights = useRef<LiveHighlight[]>([]);
   const highlights = useMemo(() => {
     // 방송 시각이 늦은 것부터, 같으면 번호가 큰 것부터: 둘 다 저장 뒤 안 바뀐다. 순번(eventSeq)은 행이 바뀔 때마다 올라
-    // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에서 「방금」 강조를 받았다(PR #326 codex)
+    // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에 섰다(PR #326 codex)
     const list = Object.values(cards)
       .filter((c) => !c.hidden)
       .sort(byLatest);
     shownHighlights.current = reuseHighlights(
       shownHighlights.current,
-      list.map((c, i) => toHighlight(c, i, now, base)),
+      list.map((c) => toHighlight(c, now, base)),
       now,
     );
     return shownHighlights.current;
@@ -782,10 +779,9 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     const list = Object.values(cards)
       .filter((c) => c.hidden)
       .sort(byLatest);
-    // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 가린 카드에는 주지 않는다
     shownHiddenHighlights.current = reuseHighlights(
       shownHiddenHighlights.current,
-      list.map((c) => toHighlight(c, -1, now, base)),
+      list.map((c) => toHighlight(c, now, base)),
       now,
     );
     return shownHiddenHighlights.current;

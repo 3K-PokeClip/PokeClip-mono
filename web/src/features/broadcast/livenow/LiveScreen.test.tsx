@@ -2297,14 +2297,14 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getByText(/^97점 · /)).toBeInTheDocument();
   });
 
-  it('카드는 방송 시각이 늦은 것부터다: 순번이 큰 옛 숨김 카드가 맨 앞에 와서 강조를 받지 않는다 (POK-393)', async () => {
+  it('카드는 방송 시각이 늦은 것부터다: 순번이 큰 옛 숨김 카드가 맨 앞에 오지 않는다 (POK-393)', async () => {
     // 옛 숨김 카드는 숨길 때 트리거가 순번을 올려 놓았다: 방송 시각은 가장 이른데 순번은 가장 크다
     // 같은 방송 시각이면 번호가 큰 쪽이 앞이다(10번은 8번과 시각이 같고 순번은 작다)
     server.extraCards = [
       card(9, { eventSeq: 999, streamTimestampMs: 30_000 }),
       card(10, { eventSeq: 1, streamTimestampMs: 5_000_000 }),
     ];
-    const { container } = await renderLive();
+    await renderLive();
 
     const titles = screen
       .getAllByRole('article')
@@ -2312,14 +2312,6 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(titles[0]).toBe('채팅이 튄 순간 #10');
     expect(titles[1]).toBe('채팅이 튄 순간 #8');
     expect(titles[titles.length - 1]).toBe('채팅이 튄 순간 #9');
-    const emphasized = container.querySelectorAll('[class*="cardEmphasized"]');
-    expect(emphasized).toHaveLength(1);
-    expect(emphasized[0]).toHaveTextContent('채팅이 튄 순간 #10');
-  });
-
-  it('강조는 맨 앞 카드 하나뿐이다: 여럿이면 「방금」이라는 뜻을 잃는다', async () => {
-    const { container } = await renderLive();
-    expect(container.querySelectorAll('[class*="cardEmphasized"]')).toHaveLength(1);
   });
 
   it('필터 칩이 실제 카드 수를 센다 — 전체 8 · 자동 6 · 수동 2', async () => {

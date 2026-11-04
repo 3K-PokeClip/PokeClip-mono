@@ -68,6 +68,12 @@ export const HighlightCard = memo(function HighlightCard({
   const editorHref = `/clips/editor?stream=${encodeURIComponent(streamId)}&card=${cardId}`;
   // 편집기가 쓰는 영상 · 소리 · 파형을 미리 받아, 다 와야 「편집」을 연다(POK-499). 버튼줄이 있는 카드만 받는다
   const editor = useCardEditorReady(streamId, cardId, view.showActions && !highlight.hidden);
+  // 아직 「편집」을 못 여는 카드는 만드는 중인 카드 자리와 같은 마젠타 점선으로 두르고, 다 받으면(실패로 연 것도) 기본 카드로 돌아간다.
+  // 미리 받지 않는 카드(가린 카드 · 만료 카드)는 상태가 loading에 머무르므로 받는 카드인지 먼저 본다
+  const preparing =
+    view.showActions &&
+    !highlight.hidden &&
+    (editor.state === 'loading' || editor.state === 'pending');
   // 가리기·되살리기(POK-463). 실패는 카드가 제 칸에 그대로 남으니 토스트로만 알린다
   const setHidden = (hidden: boolean) => {
     setJumpCardHidden<LiveCardSnapshot>(cardId, hidden).then(
@@ -85,7 +91,7 @@ export const HighlightCard = memo(function HighlightCard({
       ref={editor.ref}
       className={clsx(
         styles.card,
-        highlight.emphasized && styles.cardEmphasized,
+        preparing && styles.cardPreparing,
         view.dimmed && styles.cardDimmed,
       )}
     >
@@ -182,12 +188,11 @@ export const HighlightCard = memo(function HighlightCard({
                 편집
               </LinkButton>
             ) : (
-              // 준비 전: 회색으로 막고, 만드는 중인 카드 자리와 같은 점선 · 도는 표시를 쓴다
+              // 준비 전: 회색으로 막고 도는 표시만 둔다. 준비 중이라는 점선은 버튼이 아니라 카드 테두리가 맡는다(cardPreparing)
               <Button
                 variant="soft"
                 size="sm"
                 disabled
-                className={styles.cardEditPending}
                 iconStart={<Spinner size="sm" />}
                 aria-label={editor.state === 'pending' ? '편집 녹화를 기다리는 중' : '편집 준비 중'}
               >
