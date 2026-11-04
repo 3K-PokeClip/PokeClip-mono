@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
@@ -418,6 +419,49 @@ describe('NotificationBell', () => {
     expect(await screen.findByText('방송 중 알림 2개')).toBeInTheDocument();
     expect(screen.queryByText('「a」 · 비공개')).toBeNull();
     expect(screen.getByRole('button', { name: '알림 · 안 읽음 5개' })).toBeInTheDocument();
+  });
+
+  it('화면을 옮겨 종이 바뀐 뒤에도 토스트의 「알림 보기」는 지금 떠 있는 종의 창을 연다', async () => {
+    // 홈 헤더 종 ↔ 사이드바 종: 토스트는 앱 전체에 남고 종만 바뀐다
+    function Swap() {
+      const [sidebar, setSidebar] = useState(false);
+      return (
+        <>
+          {sidebar ? (
+            <NotificationBell key="sidebar" place="sidebar" />
+          ) : (
+            <NotificationBell key="header" place="header" />
+          )}
+          <button type="button" onClick={() => setSidebar(true)}>
+            화면 옮기기
+          </button>
+        </>
+      );
+    }
+    stub();
+    const { queryClient } = renderWithProviders(<Swap />);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+
+    // 닫을 때까지 남는 초대 토스트가 헤더 종에서 뜬다
+    items = [
+      wire(
+        'n-invite',
+        0,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+      ...items,
+    ];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    expect(await screen.findByText('라면왕 채널이 편집자로 초대했어요')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '화면 옮기기' }));
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    await user.click(screen.getByRole('button', { name: '알림 보기' }));
+
+    expect(await screen.findByRole('dialog', { name: '알림' })).toBeInTheDocument();
   });
 
   it('편집자 초대는 수락을 바로 보내고, 거절은 카드 안에서 한 번 더 묻는다', async () => {

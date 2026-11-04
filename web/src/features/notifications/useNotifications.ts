@@ -36,6 +36,7 @@ import {
   resolveMock,
   useNotificationsMockMode,
 } from './mockNotifications';
+import { useNotificationRequests } from './notificationRequests';
 import {
   describeNotification,
   isOpenTodo,
@@ -226,25 +227,20 @@ const MAX_SINGLE_TOASTS = 2;
  * 새로 온 알림을 오른쪽 아래 토스트로 알린다. 처음 읽은 목록은 알리지 않는다(창을 열 때마다 쌓인 걸 다시 울리지 않게).
  * 쌓여 있던 것(held)이 풀리면(방송이 끝남) 하나씩이 아니라 「방송 중 알림 n개」 하나로 — 디자인 1n ②.
  * 「중요」로 받은 할 일(연동 만료 · 초대)은 닫을 때까지 남긴다.
+ *
+ * 토스트 단추는 이 훅을 부른 종의 함수를 쥐지 않고 우편함(notificationRequests)에 부탁만 넣는다: 화면을 옮겨 종이 바뀐 뒤에
+ * 눌러도 지금 떠 있는 종이 받아 처리한다.
  */
-export function useArrivalToasts(
-  state: NotificationsState,
-  onOpenItem: (n: AppNotification) => void,
-  onOpenPanel: () => void,
-) {
+export function useArrivalToasts(state: NotificationsState) {
   const { toast } = useToast();
+  const send = useNotificationRequests((s) => s.send);
   const known = useRef<Map<string, boolean> | null>(null);
-  const openItem = useRef(onOpenItem);
-  const openPanel = useRef(onOpenPanel);
-  useEffect(() => {
-    openItem.current = onOpenItem;
-    openPanel.current = onOpenPanel;
-  });
 
   const { items, enabled } = state;
   const loaded = enabled && !state.isPending && !state.isError;
   useEffect(() => {
     if (!loaded) return;
+    const openPanel = () => send({ kind: 'panel' });
     const seen = known.current;
     if (seen === null) {
       known.current = new Map(items.map((n) => [n.id, n.held]));
@@ -267,7 +263,7 @@ export function useArrivalToasts(
         title: `방송 중 알림 ${released}개`,
         description: '방송하는 동안 쌓아 둔 알림이에요',
         dedupeKey: 'notifications-released',
-        action: { label: '모아 보기', onClick: () => openPanel.current() },
+        action: { label: '모아 보기', onClick: openPanel },
       });
     }
     if (fresh.length > MAX_SINGLE_TOASTS) {
@@ -275,7 +271,7 @@ export function useArrivalToasts(
         tone: 'info',
         title: `새 알림 ${fresh.length}개`,
         dedupeKey: 'notifications-many',
-        action: { label: '알림 보기', onClick: () => openPanel.current() },
+        action: { label: '알림 보기', onClick: openPanel },
       });
       return;
     }
@@ -290,9 +286,9 @@ export function useArrivalToasts(
         dedupeKey: `notification-${n.id}`,
         ...(sticky ? { duration: 0 } : {}),
         action: view.goLabel
-          ? { label: view.goLabel, onClick: () => openItem.current(n) }
-          : { label: '알림 보기', onClick: () => openPanel.current() },
+          ? { label: view.goLabel, onClick: () => send({ kind: 'item', notification: n }) }
+          : { label: '알림 보기', onClick: openPanel },
       });
     }
-  }, [items, loaded, toast]);
+  }, [items, loaded, toast, send]);
 }

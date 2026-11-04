@@ -3,7 +3,7 @@
 // 헤더 · 사이드바의 종과 알림 창(POK-540, 시안 A · A-1 확정).
 // 종을 누르면 바로 아래(사이드바면 오른쪽)에 창이 열린다. 창은 열 때마다 「안 읽음」 탭부터, 읽음은 누를 때만.
 
-import { useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Bell,
@@ -42,6 +42,7 @@ import {
   useRespondInvitation,
   type NotificationsState,
 } from './useNotifications';
+import { useNotificationRequests } from './notificationRequests';
 import styles from './NotificationBell.module.css';
 
 const KIND_ICON: Record<NotificationKind, LucideIcon> = {
@@ -94,7 +95,23 @@ export function NotificationBell({ place, anchorRef, offset = 8 }: NotificationB
     goTo(n, href);
   }
 
-  useArrivalToasts(state, openItem, openPanel);
+  useArrivalToasts(state);
+
+  // 토스트 단추의 부탁을 받는다(notificationRequests). 떠오를 때 이미 있던 부탁은 앞 종 몫이라 건너뛴다. 처리는 최신 함수로:
+  // 구독은 한 번만 걸고 함수는 ref로 넘긴다
+  const handlers = useRef({ openPanel, openItem });
+  useEffect(() => {
+    handlers.current = { openPanel, openItem };
+  });
+  useEffect(() => {
+    let seen = useNotificationRequests.getState().seq;
+    return useNotificationRequests.subscribe((s) => {
+      if (s.seq === seen || s.request === null) return;
+      seen = s.seq;
+      if (s.request.kind === 'panel') handlers.current.openPanel();
+      else handlers.current.openItem(s.request.notification);
+    });
+  }, []);
 
   const label = state.unread > 0 ? `알림 · 안 읽음 ${state.unread}개` : '알림';
   return (
