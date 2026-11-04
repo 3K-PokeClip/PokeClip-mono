@@ -79,25 +79,29 @@ export function useNotifications() {
   const data = query.data;
   const items = useMemo(() => visibleNotifications(data?.items ?? [], Date.now()), [data]);
 
-  // 읽음은 화면에 바로 그리고(낙관적) 실패하면 다시 읽는다 — 읽음 하나 실패로 토스트를 띄울 일은 아니다
+  // 읽음은 화면에 바로 그린다(낙관적) — 읽음 하나 실패로 토스트를 띄울 일은 아니다. 그리기 전에 나가 있던 재조회를 멈춘다:
+  // 누르기 직전에 나간 응답(readAt null)이 늦게 오면 방금 그린 읽음을 덮어 점 · 숫자가 다음 재조회까지 되살아난다.
+  // 끝나면(성공 · 실패 모두) 서버 값으로 다시 맞춘다
   const markRead = useSessionMutation({
     mutationFn: (id: string) => (mockMode !== null ? markMockRead(id) : markNotificationRead(id)),
-    onMutate: (id: string) => {
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: key });
       const at = new Date().toISOString();
       patchCache(queryClient, key, (n) =>
         n.id === id && n.readAt === null ? { ...n, readAt: at } : n,
       );
     },
-    onError: () => void queryClient.invalidateQueries({ queryKey: key }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: key }),
   });
 
   const markAllRead = useSessionMutation({
     mutationFn: () => (mockMode !== null ? markAllMockRead() : markAllNotificationsRead()),
-    onMutate: () => {
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: key });
       const at = new Date().toISOString();
       patchCache(queryClient, key, (n) => (n.held || n.readAt !== null ? n : { ...n, readAt: at }));
     },
-    onError: () => void queryClient.invalidateQueries({ queryKey: key }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: key }),
   });
 
   return {

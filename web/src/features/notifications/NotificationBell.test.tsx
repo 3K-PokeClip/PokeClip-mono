@@ -107,12 +107,37 @@ function seed() {
   ];
 }
 
+/** 켜 두면 다음 목록 요청 하나를 붙잡아, 요청이 나간 때의(옛) 값으로 releaseList()에 늦게 답한다 */
+let holdList = false;
+let releaseList: (() => void) | null = null;
+/** 켜 두면 다음 읽음 요청 하나를 붙잡아 releaseRead()에 처리하고 답한다 */
+let holdRead = false;
+let releaseRead: (() => void) | null = null;
+
 /** 서버 흉내: 읽음 · 모두 읽음 · 초대 답을 받으면 목록 상태를 실제처럼 바꾼다(다시 읽으면 바뀐 값이 온다) */
 function stub() {
   return stubFetch((url, init) => {
     if (url === '/api/auth/me') return jsonResponse(200, ME);
     if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, []);
+    if (url === '/api/notifications' && holdList) {
+      holdList = false;
+      const then = items;
+      return new Promise<Response>((resolve) => {
+        releaseList = () => resolve(jsonResponse(200, { items: then }));
+      });
+    }
     if (url === '/api/notifications') return jsonResponse(200, { items });
+    if (init?.method === 'POST' && holdRead && url.endsWith('/read')) {
+      holdRead = false;
+      const id = /^\/api\/notifications\/([^/]+)\/read$/.exec(url)?.[1];
+      return new Promise<Response>((resolve) => {
+        releaseRead = () => {
+          const at = new Date().toISOString();
+          items = items.map((w) => (w.id === id ? { ...w, readAt: w.readAt ?? at } : w));
+          resolve(new Response(null, { status: 204 }));
+        };
+      });
+    }
     if (init?.method === 'POST') {
       const at = new Date().toISOString();
       const read = /^\/api\/notifications\/([^/]+)\/read$/.exec(url);
@@ -152,6 +177,10 @@ async function openPanel(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   seed();
+  holdList = false;
+  releaseList = null;
+  holdRead = false;
+  releaseRead = null;
   push.mockReset();
   track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
@@ -227,6 +256,40 @@ describe('NotificationBell', () => {
       within(panel).queryByRole('button', { name: '읽음으로 표시: 클립을 올렸어요' }),
     ).toBeNull();
     expect(within(panel).getByText('유튜브 연동이 끊겼어요')).toBeInTheDocument();
+  });
+
+  it('읽음을 누르기 직전에 나간 재조회가 옛 값으로 늦게 와도 읽음 표시를 되돌리지 않는다', async () => {
+    const { user, queryClient, spy } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+    const listCalls = () => spy.mock.calls.filter(([url]) => url === '/api/notifications').length;
+
+    // 주기 재조회가 나간 사이(아직 응답 전)에 읽음을 누르고, 읽음 응답도 붙잡아 둔다
+    holdList = true;
+    act(() => void queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    await waitFor(() => expect(releaseList).not.toBeNull());
+    holdRead = true;
+    await user.click(within(panel).getByRole('button', { name: '읽음으로 표시: 클립을 올렸어요' }));
+    await waitFor(() => expect(releaseRead).not.toBeNull());
+
+    // 늦게 온 옛 응답(readAt null)이 방금 그린 읽음을 덮지 않는다 — 그 응답 처리가 다 끝난 뒤에 본다
+    await act(async () => releaseList?.());
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['notifications'] })).toBe(0));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 2개' })).toBeInTheDocument();
+
+    // 읽음이 끝나면 서버 값으로 다시 맞춘다 — 그 값도 읽음이다
+    const before = listCalls();
+    await act(async () => releaseRead?.());
+    await waitFor(() => expect(listCalls()).toBe(before + 1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '알림 · 안 읽음 2개' })).toBeInTheDocument(),
+    );
+    expect(
+      within(panel).queryByRole('button', { name: '읽음으로 표시: 클립을 올렸어요' }),
+    ).toBeNull();
   });
 
   it('14일이 지난 알림은 안 보이고, 풀리지 않은 할 일은 기간이 지나도 남는다', async () => {
@@ -352,10 +415,11 @@ describe('NotificationBell', () => {
     expect(posts(spy)).toEqual([]);
 
     await user.click(within(panel).getByRole('button', { name: '수락' }));
+    // 읽음은 재조회를 먼저 멈추고 보내서 두 요청의 순서는 정해져 있지 않다
     await waitFor(() =>
-      expect(posts(spy)).toEqual([
-        '/api/notifications/n-invite/read',
+      expect(posts(spy).sort()).toEqual([
         '/api/editor-invitations/7/accept',
+        '/api/notifications/n-invite/read',
       ]),
     );
     expect(await screen.findByText('초대를 수락했어요')).toBeInTheDocument();
@@ -380,9 +444,9 @@ describe('NotificationBell', () => {
     await user.click(within(panel).getByRole('button', { name: '거절하기' }));
 
     await waitFor(() =>
-      expect(posts(spy)).toEqual([
-        '/api/notifications/n-invite/read',
+      expect(posts(spy).sort()).toEqual([
         '/api/editor-invitations/7/decline',
+        '/api/notifications/n-invite/read',
       ]),
     );
     expect(await screen.findByText('초대를 거절했어요')).toBeInTheDocument();
