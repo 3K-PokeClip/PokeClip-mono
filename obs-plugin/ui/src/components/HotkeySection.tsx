@@ -4,6 +4,7 @@ import type { Bridge } from '../lib/bridge';
 import { reasonText } from '../lib/copy';
 import { captureStep, isMacPlatform } from '../lib/hotkey';
 import styles from './dock.module.css';
+import { useNotify } from './notify';
 import { Button } from './ui';
 
 // POK-494 — 「순간 표시」 단축키를 OBS 설정에 들어가지 않고 여기서 바로 바꾼다. 「바꾸기」를 누르고 새 조합을 누르면
@@ -15,13 +16,15 @@ import { Button } from './ui';
 // (다른 곳을 눌러 끝났으면 그 자리를 존중해 돌려주지 않는다).
 const CAPTURE_MAX_MS = 25_000; // 플러그인 mark-policy.hpp kHotkeyCaptureUiMs와 같은 값 — 막기 30초보다 먼저
 const CHANGE_BUTTON_ID = 'hotkey-change';
-type Message = { tone: 'ok' | 'error' | 'info'; text: string };
+// 키 아래 줄 — 받기 중 오류·시간 초과만. 바꾼 결과는 아래 토스트로 알린다(notify).
+type Message = { tone: 'error' | 'info'; text: string };
 
 export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge: Bridge; bare?: boolean }) {
   const [capturing, setCapturing] = useState(false);
   const [preview, setPreview] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  const notify = useNotify();
   const boxRef = useRef<HTMLDivElement>(null);
   const busyRef = useRef(false);
   const capturingRef = useRef(false); // 상자가 사라질 때도 blur가 온다 — 이미 끝난 받기를 「다른 곳을 눌러 끝남」으로 덮지 않게
@@ -131,7 +134,8 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
       const shared = r.conflict ? ` OBS 「${r.conflict}」 단축키와 같은 키라 둘 다 눌려요.` : '';
       // 프로필에 못 적었다 — 지금은 바뀌었지만 다음 실행은 프로필의 예전 키를 먼저 읽는다
       const unsaved = r.saved === false ? ' 다만 OBS 설정 파일에 저장하지 못해, OBS를 다시 켜면 예전 키로 돌아갈 수 있어요.' : '';
-      setMessage({ tone: unsaved ? 'error' : 'ok', text: shared || unsaved ? `바꿨어요.${shared}${unsaved}` : '바꿨어요' });
+      const done = `단축키를 바꿨어요 (${r.label || step.label})`;
+      notify(shared || unsaved ? 'warning' : 'success', shared || unsaved ? `${done}.${shared}${unsaved}` : done);
     } else {
       void queue(() => bridge.hotkeyCapture(false));
       setMessage({ tone: 'error', text: reasonText(r.reason) });
@@ -168,10 +172,7 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
         </div>
       )}
       {message ? (
-        <p
-          class={message.tone === 'ok' ? styles.saved : message.tone === 'error' ? styles.inlineError : styles.note}
-          role="status"
-        >
+        <p class={message.tone === 'error' ? styles.inlineError : styles.note} role="status">
           {message.text}
         </p>
       ) : (

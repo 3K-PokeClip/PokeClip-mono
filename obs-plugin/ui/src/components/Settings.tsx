@@ -7,6 +7,7 @@ import type { PluginSettings, ServerEnv } from '../lib/types';
 import { ConfirmDialog } from './ConfirmDialog';
 import { HotkeySection } from './HotkeySection';
 import styles from './dock.module.css';
+import { useNotify } from './notify';
 import { Button } from './ui';
 
 // 바로 저장하는 스위치(설정 한 개씩 PUT /api/config — 플러그인은 보낸 키만 바꾼다)
@@ -15,9 +16,7 @@ type RowKey = Flag | 'server_env';
 // 수신 서버 — 거의 안 바꾸는 값이라 안쪽에 접어 두고 「서버 설정 저장」으로 한 번에 보낸다
 type ServerDraft = Pick<PluginSettings, 'ingest_host' | 'ingest_port' | 'latency_ms' | 'send_passphrase'>;
 type Fold = 'api' | 'ingest';
-type Message = { ok: boolean; text: string };
 
-const SAVED_MS = 1500;
 const UNPAIR_DESC = '지금 연결이 해제돼요. 바꾼 서버에서 새 8자리 코드를 발급받아 다시 연결해야 해요.';
 
 // waiting — 어느 스위치든 저장 중이라 잠깐 못 누른다. disabled로 잠그면 키보드로 누른 그 스위치의 포커스가 body로
@@ -65,7 +64,7 @@ export interface SettingsPanelProps {
 }
 
 // 설정 탭 안쪽(general) · 연결 전 개발자 칸(DevCard). 맨 위에 순간 표시 단축키(연결됐을 때만), 그 아래 스위치는 누르는 즉시
-// 저장되고 그 줄에 「저장됨」이 잠깐 뜬다 — 아래 「저장」을 또 누르지 않는다. 방송 중엔 플러그인이 동기화·독 표시 방식·서버
+// 저장되고 아래 토스트로 「저장했어요」를 알린다(오류는 그 줄에) — 아래 「저장」을 또 누르지 않는다. 방송 중엔 플러그인이 동기화·독 표시 방식·서버
 // 환경·인증 서버·수신 서버를 거절하므로(409 streaming) 그 줄은 잠그고, 오디오 자동 배정만 바꿀 수 있다(배정은 방송·녹화가
 // 끝난 뒤 적용).
 // 개발자 모드(devVisible) — 로고를 연달아 눌러 켰거나(app.tsx) 이미 개발 환경일 때만 「개발 서버 사용」·인증 서버·수신
@@ -86,18 +85,17 @@ export function SettingsPanel({
   const [settings, setSettings] = useState<PluginSettings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState<RowKey | ''>('');
-  const [saved, setSaved] = useState<RowKey | ''>('');
   const [rowError, setRowError] = useState<{ key: RowKey; text: string } | null>(null);
   const [confirmEnv, setConfirmEnv] = useState<ServerEnv | null>(null);
   const [open, setOpen] = useState<Record<Fold, boolean>>({ api: false, ingest: false });
   const [server, setServer] = useState<ServerDraft | null>(null);
   const [serverSaving, setServerSaving] = useState(false);
-  const [serverMessage, setServerMessage] = useState<Message | null>(null);
+  const [serverError, setServerError] = useState('');
   const [apiDraft, setApiDraft] = useState<string | null>(null);
   const [apiSaving, setApiSaving] = useState(false);
-  const [apiMessage, setApiMessage] = useState<Message | null>(null);
+  const [apiError, setApiError] = useState('');
   const [confirmApi, setConfirmApi] = useState<string | null>(null);
-  const savedTimer = useRef<number>();
+  const notify = useNotify();
   const devSection = useRef<HTMLDivElement>(null);
   const scrolledFor = useRef(0);
 
@@ -130,14 +128,6 @@ export function SettingsPanel({
     devSection.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [focusDev, devVisible, settings]);
 
-  useEffect(() => () => window.clearTimeout(savedTimer.current), []);
-
-  const flashSaved = (key: RowKey) => {
-    setSaved(key);
-    window.clearTimeout(savedTimer.current);
-    savedTimer.current = window.setTimeout(() => setSaved(''), SAVED_MS);
-  };
-
   if (!settings) {
     return (
       <div class={styles.settingsPanel}>
@@ -147,7 +137,7 @@ export function SettingsPanel({
     );
   }
 
-  const toggle = async (key: Flag) => {
+  const toggle = async (key: Flag, label: string) => {
     if (busy) return;
     const next = !settings[key];
     setRowError(null);
@@ -157,7 +147,7 @@ export function SettingsPanel({
     setBusy('');
     if (r.ok) {
       if (r.settings) setSettings(r.settings);
-      flashSaved(key);
+      notify('success', `「${label}」 ${next ? '켬' : '끔'} · 저장했어요`);
     } else {
       setSettings((s) => (s ? { ...s, [key]: !next } : s));
       setRowError({ key, text: reasonText(r.reason) });
@@ -173,7 +163,7 @@ export function SettingsPanel({
       if (r.settings) setSettings(r.settings);
       setServer(null);
       setApiDraft(null);
-      flashSaved('server_env');
+      notify('success', target === 'dev' ? '개발 서버로 바꿨어요' : '운영 서버로 바꿨어요');
     } else {
       setRowError({ key: 'server_env', text: reasonText(r.reason) });
     }
@@ -183,10 +173,10 @@ export function SettingsPanel({
     setOpen((o) => ({ ...o, [fold]: !o[fold] }));
     if (fold === 'api') {
       setApiDraft(null);
-      setApiMessage(null);
+      setApiError('');
     } else {
       setServer(null);
-      setServerMessage(null);
+      setServerError('');
     }
   };
 
@@ -197,7 +187,7 @@ export function SettingsPanel({
   const apiChanged = apiTarget !== settings.api_base;
   const applyApi = async (target: string) => {
     setApiSaving(true);
-    setApiMessage(null);
+    setApiError('');
     const r = await bridge.putSettings({ api_base: target });
     setApiSaving(false);
     setConfirmApi(null);
@@ -206,12 +196,10 @@ export function SettingsPanel({
       if (r.settings) setSettings(r.settings);
       setApiDraft(null);
       // 다른 환경의 기본 주소를 적으면 플러그인이 지금 환경 짝으로 맞춘다 — 왜 다른 주소가 됐는지 알린다
-      setApiMessage({
-        ok: true,
-        text: savedBase === target ? '저장했어요' : `운영·개발 주소는 「개발 서버 사용」을 따라가요 (${savedBase})`,
-      });
+      if (savedBase === target) notify('success', '인증 서버를 바꿨어요');
+      else notify('warning', `운영·개발 주소는 「개발 서버 사용」을 따라가요 (${savedBase})`);
     } else {
-      setApiMessage({ ok: false, text: reasonText(r.reason) });
+      setApiError(reasonText(r.reason));
     }
   };
   const saveApi = (e: Event) => {
@@ -229,7 +217,7 @@ export function SettingsPanel({
   };
   const setField = <K extends keyof ServerDraft>(key: K, value: ServerDraft[K]) => {
     setServer({ ...draft, [key]: value });
-    setServerMessage(null);
+    setServerError('');
   };
   const saveServer = async (e: Event) => {
     e.preventDefault();
@@ -240,13 +228,13 @@ export function SettingsPanel({
     if (r.ok) {
       if (r.settings) setSettings(r.settings);
       setServer(null);
-      setServerMessage({ ok: true, text: '저장했어요' });
+      notify('success', '수신 서버를 저장했어요');
     } else {
-      setServerMessage({ ok: false, text: reasonText(r.reason) });
+      setServerError(reasonText(r.reason));
     }
   };
 
-  const row = (key: RowKey, label: string, hint: string, opts: { checked: boolean; lockedRow: boolean; savedText?: string; onChange: () => void }) => {
+  const row = (key: RowKey, label: string, hint: string, opts: { checked: boolean; lockedRow: boolean; onChange: () => void }) => {
     const id = `setting-${key}`;
     const error = rowError?.key === key ? rowError.text : '';
     return (
@@ -257,11 +245,6 @@ export function SettingsPanel({
             {error || (opts.lockedRow ? '방송 중에는 바꿀 수 없어요' : hint)}
           </span>
         </span>
-        {saved === key ? (
-          <span class={styles.savedTag} role="status">
-            {opts.savedText ?? '저장됨'}
-          </span>
-        ) : null}
         {/* 하나가 저장되는 동안은 모든 스위치를 흐리게 잠근다(포커스는 둔다) — 다른 줄 클릭을 조용히 버리면 눌렀는데 아무 일도 없어 보인다 */}
         <Switch id={id} checked={opts.checked} disabled={opts.lockedRow} waiting={busy !== ''} onChange={opts.onChange} />
       </div>
@@ -299,18 +282,18 @@ export function SettingsPanel({
           {row('sync_start', '본 방송과 함께 시작·정지', '잠깐 끊겨도 PokeClip 전송은 이어가요', {
             checked: settings.sync_start,
             lockedRow: locked,
-            onChange: () => void toggle('sync_start'),
+            onChange: () => void toggle('sync_start', '본 방송과 함께 시작·정지'),
           })}
           {/* A2 — 트랙 2~6을 소스별 스템으로 나눈다. 끄면 처음 켤 때 기억한 트랙 체크로 되돌린다(README 「오디오 트랙」). */}
           {row('audio_auto_assign', '오디오 트랙 자동 배정', '소리 나는 소스를 트랙 2~6에 나눠 실어요', {
             checked: settings.audio_auto_assign,
             lockedRow: false,
-            onChange: () => void toggle('audio_auto_assign'),
+            onChange: () => void toggle('audio_auto_assign', '오디오 트랙 자동 배정'),
           })}
           {row('force_fallback', '기본 패널로 표시', '다음에 OBS를 켤 때부터', {
             checked: settings.force_fallback,
             lockedRow: locked,
-            onChange: () => void toggle('force_fallback'),
+            onChange: () => void toggle('force_fallback', '기본 패널로 표시'),
           })}
         </>
       ) : null}
@@ -324,7 +307,6 @@ export function SettingsPanel({
           {row('server_env', '개발 서버 사용', paired ? '바꾸면 연결이 해제돼 새 코드로 다시 연결해요' : '바꾼 서버에서 받은 코드로 연결해요', {
             checked: serverEnv === 'dev',
             lockedRow: locked,
-            savedText: serverEnv === 'dev' ? '개발 서버' : '운영 서버',
             onChange: () => {
               setRowError(null);
               const target = serverEnv === 'dev' ? 'prod' : 'dev';
@@ -346,7 +328,7 @@ export function SettingsPanel({
                   placeholder={defaultApi}
                   onInput={(e) => {
                     setApiDraft((e.currentTarget as HTMLInputElement).value);
-                    setApiMessage(null);
+                    setApiError('');
                   }}
                   inputMode="url"
                   autoComplete="off"
@@ -357,9 +339,9 @@ export function SettingsPanel({
               <span id="setting-api-base-hint" class={styles.toggleHint}>
                 비우면 기본 주소예요. 직접 적는 주소는 이 PC(http://localhost:포트)만 돼요.
               </span>
-              {apiMessage ? (
-                <span class={apiMessage.ok ? styles.saved : styles.inlineError} role="status">
-                  {apiMessage.text}
+              {apiError ? (
+                <span class={styles.inlineError} role="alert">
+                  {apiError}
                 </span>
               ) : null}
               <Button
@@ -427,9 +409,9 @@ export function SettingsPanel({
                   onClick={() => setField('send_passphrase', !draft.send_passphrase)}
                 />
               </div>
-              {serverMessage ? (
-                <span class={serverMessage.ok ? styles.saved : styles.inlineError} role="status">
-                  {serverMessage.text}
+              {serverError ? (
+                <span class={styles.inlineError} role="alert">
+                  {serverError}
                 </span>
               ) : null}
               <Button type="submit" variant="soft" size="sm" block loading={serverSaving} disabled={locked} title={lockedTitle}>

@@ -4,6 +4,7 @@ import { AudioAssignPrompt } from './components/AudioAssignPrompt';
 import styles from './components/dock.module.css';
 import { DockTabs } from './components/DockTabs';
 import { Logo } from './components/Logo';
+import { NotifyContext } from './components/notify';
 import { PairCard } from './components/PairCard';
 import { DevCard } from './components/Settings';
 import { StatusCard } from './components/StatusCard';
@@ -48,8 +49,9 @@ export function App({ bridge }: { bridge: Bridge }) {
   const [confirmUnpair, setConfirmUnpair] = useState(false);
   const [actionError, setActionError] = useState('');
   const [toastDismissed, setToastDismissed] = useState(false);
-  // 마크 결과와 개발자 모드 켜고 끔을 알리는 토스트
+  // 마크 결과·개발자 모드 켜고 끔·단축키와 설정 저장(NotifyContext)을 알리는 토스트 — 새 알림이 앞 알림을 갈아 끼운다
   const [notice, setNotice] = useState<{ tone: ToastTone; message: string } | null>(null);
+  const notify = useCallback((tone: ToastTone, message: string) => setNotice({ tone, message }), []);
   const seenMarkSeq = useRef<number | null>(null);
   // null = 고르지 않음(개발 환경이면 켜짐). devFocus는 켤 때마다 올라 그 칸으로 데려간다.
   const [devMode, setDevMode] = useState<boolean | null>(null);
@@ -151,89 +153,91 @@ export function App({ bridge }: { bridge: Bridge }) {
   const showNoKeyToast = !state.paired && state.errorCode === 'no_key' && state.obsStreaming && !toastDismissed;
 
   return (
-    <main class={styles.dock}>
-      <header class={styles.header}>
-        <div class={styles.brand} onClick={tapBrand}>
-          <Logo className={styles.logo} />
-          <span class={styles.brandName}>PokeClip</span>
-          {state.serverEnv === 'dev' ? (
-            <span class={styles.envTag} title={`${state.apiBase} · ${state.ingest}`}>
-              개발 서버
-            </span>
-          ) : null}
-        </div>
-        <span class={styles.badge} data-tone={badge.tone}>
-          <badge.Icon size={13} strokeWidth={2.2} aria-hidden="true" />
-          {badge.label}
-        </span>
-      </header>
+    <NotifyContext.Provider value={notify}>
+      <main class={styles.dock}>
+        <header class={styles.header}>
+          <div class={styles.brand} onClick={tapBrand}>
+            <Logo className={styles.logo} />
+            <span class={styles.brandName}>PokeClip</span>
+            {state.serverEnv === 'dev' ? (
+              <span class={styles.envTag} title={`${state.apiBase} · ${state.ingest}`}>
+                개발 서버
+              </span>
+            ) : null}
+          </div>
+          <span class={styles.badge} data-tone={badge.tone}>
+            <badge.Icon size={13} strokeWidth={2.2} aria-hidden="true" />
+            {badge.label}
+          </span>
+        </header>
 
-      {!connected ? (
-        <div class={styles.banner} role="status">
-          <WifiOff size={14} aria-hidden="true" /> 플러그인과 연결이 끊겼어요. 다시 붙는 중…
-        </div>
-      ) : null}
+        {!connected ? (
+          <div class={styles.banner} role="status">
+            <WifiOff size={14} aria-hidden="true" /> 플러그인과 연결이 끊겼어요. 다시 붙는 중…
+          </div>
+        ) : null}
 
-      {actionError ? (
-        <div class={styles.banner} role="alert">
-          {actionError}
-        </div>
-      ) : null}
+        {actionError ? (
+          <div class={styles.banner} role="alert">
+            {actionError}
+          </div>
+        ) : null}
 
-      {state.paired ? (
-        <StatusCard
-          state={state}
-          onAskUnpair={() => {
-            setActionError('');
-            setConfirmUnpair(true);
-          }}
-          onMark={mark}
-          onSendNow={sendNow}
-          onStopRetry={stopRetry}
-        />
-      ) : (
-        <PairCard onPair={(code) => bridge.pair(code)} onPasteCode={() => bridge.pasteCode()} />
-      )}
+        {state.paired ? (
+          <StatusCard
+            state={state}
+            onAskUnpair={() => {
+              setActionError('');
+              setConfirmUnpair(true);
+            }}
+            onMark={mark}
+            onSendNow={sendNow}
+            onStopRetry={stopRetry}
+          />
+        ) : (
+          <PairCard onPair={(code) => bridge.pair(code)} onPasteCode={() => bridge.pasteCode()} />
+        )}
 
-      {state.paired && state.audio.prompt ? <AudioAssignPrompt state={state} bridge={bridge} /> : null}
+        {state.paired && state.audio.prompt ? <AudioAssignPrompt state={state} bridge={bridge} /> : null}
 
-      {/* 연결되면 송출 점검·오디오 트랙·설정(맨 위에 순간 표시 단축키)을 탭 하나씩. 연결 전엔 코드 입력만 — 개발자 모드일
-          때만 그 아래에 서버(환경·인증·수신)를 고르는 칸을 둔다. */}
-      {state.paired ? (
-        <DockTabs state={state} bridge={bridge} locked={locked} devVisible={devOn} focusDev={devFocus} />
-      ) : devOn ? (
-        <DevCard
-          bridge={bridge}
-          locked={locked}
-          autoAssign={state.audio.autoAssign}
-          serverEnv={state.serverEnv}
-          apiBase={state.apiBase}
-          paired={false}
-          focusDev={devFocus}
-        />
-      ) : null}
+        {/* 연결되면 송출 점검·오디오 트랙·설정(맨 위에 순간 표시 단축키)을 탭 하나씩. 연결 전엔 코드 입력만 — 개발자 모드일
+            때만 그 아래에 서버(환경·인증·수신)를 고르는 칸을 둔다. */}
+        {state.paired ? (
+          <DockTabs state={state} bridge={bridge} locked={locked} devVisible={devOn} focusDev={devFocus} />
+        ) : devOn ? (
+          <DevCard
+            bridge={bridge}
+            locked={locked}
+            autoAssign={state.audio.autoAssign}
+            serverEnv={state.serverEnv}
+            apiBase={state.apiBase}
+            paired={false}
+            focusDev={devFocus}
+          />
+        ) : null}
 
-      <footer class={styles.footer}>
-        <span>PokeClip for OBS {version && `v${version}`}</span>
-      </footer>
+        <footer class={styles.footer}>
+          <span>PokeClip for OBS {version && `v${version}`}</span>
+        </footer>
 
-      {confirmUnpair ? (
-        <UnpairDialog
-          onCancel={closeDialog}
-          onConfirm={async () => {
-            // CEF 독에서 window.alert는 막히거나 OBS를 멈추는 네이티브 창이 된다 — 인라인으로 알린다.
-            const r = await bridge.unpair();
-            setConfirmUnpair(false);
-            setActionError(r.ok ? '' : reasonText(r.reason));
-          }}
-        />
-      ) : null}
+        {confirmUnpair ? (
+          <UnpairDialog
+            onCancel={closeDialog}
+            onConfirm={async () => {
+              // CEF 독에서 window.alert는 막히거나 OBS를 멈추는 네이티브 창이 된다 — 인라인으로 알린다.
+              const r = await bridge.unpair();
+              setConfirmUnpair(false);
+              setActionError(r.ok ? '' : reasonText(r.reason));
+            }}
+          />
+        ) : null}
 
-      {showNoKeyToast ? (
-        <Toast message={noKeyToast(state.checks.gop2s === true)} onDismiss={() => setToastDismissed(true)} />
-      ) : notice ? (
-        <Toast tone={notice.tone} message={notice.message} onDismiss={() => setNotice(null)} />
-      ) : null}
-    </main>
+        {showNoKeyToast ? (
+          <Toast message={noKeyToast(state.checks.gop2s === true)} onDismiss={() => setToastDismissed(true)} />
+        ) : notice ? (
+          <Toast tone={notice.tone} message={notice.message} onDismiss={() => setNotice(null)} />
+        ) : null}
+      </main>
+    </NotifyContext.Provider>
   );
 }

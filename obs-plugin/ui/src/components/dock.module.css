@@ -897,11 +897,6 @@
   justify-content: flex-end;
   gap: var(--pc-space-2);
 }
-.saved {
-  margin-right: auto;
-  font-size: var(--pc-font-size-2xs);
-  color: var(--pc-color-success);
-}
 
 /* ---------- 연결 끊김 배너·바닥글 ---------- */
 .banner {
@@ -1033,12 +1028,6 @@
 .divider {
   height: 1px;
   background: var(--pc-color-border-subtle);
-}
-.savedTag {
-  flex: none;
-  font-size: var(--pc-font-size-2xs);
-  color: var(--pc-color-success);
-  white-space: nowrap;
 }
 .subFold {
   display: flex;
