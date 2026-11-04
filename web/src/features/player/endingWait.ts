@@ -102,7 +102,7 @@ function onEndingStreamPoll(
   if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
   const sameRound = isThisRound(session, currentX);
   // 되감기의 자동 이음은 같은 방송(X = 이 회차)이 끊겼다 돌아온 경우뿐이다 — 다른 방송 · 모름은 버튼 규칙으로.
-  // 막힌 세션은 잇지 않는다 — 회차별 조회의 vod · 종국 · 20분과 사람 단추로만 풀린다(POK-528 U1)
+  // 막힌 세션은 잇지 않는다 — 회차별 조회의 겹치는 vod · 종국 · 20분과 사람 단추로만 풀린다(POK-528 U1)
   const joinable = !phase.blocked && (phase.origin === 'live' || sameRound);
   const join = joinPoint(session, phase);
   if (joinable && within(join, live.firstPdtMs, live.headPdtMs)) {
