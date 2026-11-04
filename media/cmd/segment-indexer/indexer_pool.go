@@ -35,7 +35,8 @@ const dbStepTimeout = 20 * time.Second
 //     FreezeVOD 등)은 발행자 풀에서 연결을 쥔다.
 //   - /dvr 하한 Writer(POK-525 — edge_bounds.go) — Run 고루틴 하나가 원장 문장(DeleteReleased · ClosedUnreleased ·
 //     MarkReleased · Raise)을 차례로 불러 동시 1 이다. KVS 호출 동안에는 연결을 쥐지 않는다. Writer 가 없으면(ARN 빔 ·
-//     강등) 미해제 감시 조회(ClosedUnreleased)가 30초마다 하나라 역시 동시 1 이다.
+//     강등) 미해제 감시가 30초마다 유예가 지난 해제 행 삭제(DeleteReleased)와 닫힌 미해제 조회(ClosedUnreleased)를
+//     차례로 불러 역시 동시 1 이다.
 //   - 기동 걸음 — 스키마 보장 · 확인(EnsureSchema · requireLedgerSchema · MissingExpiryPrivileges)과 상태판 적재
 //     (newPlaybackSeed)는 업로더 · 만료 · 제어면이 뜨기 전에 동기로 끝나 수요가 겹치지 않는다.
 //

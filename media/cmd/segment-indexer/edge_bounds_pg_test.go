@@ -8,11 +8,26 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 )
+
+// edgeBoundsCleanupTimeout 은 시험 뒤 원장 비우기의 시한이다.
+const edgeBoundsCleanupTimeout = 10 * time.Second
+
+// truncateEdgeBounds 는 시험이 남긴 원장 행을 비운다(t.Cleanup 용). t.Context() 는 Cleanup 직전에 취소되므로 따로 시한을
+// 둔 컨텍스트를 쓰고, 실패하면 시험을 실패로 둔다 — 남은 행이 다음 시험의 감시 신호를 바꾼다.
+func truncateEdgeBounds(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), edgeBoundsCleanupTimeout)
+	defer cancel()
+	if _, err := pool.Exec(ctx, "TRUNCATE stream_edge_bounds"); err != nil {
+		t.Errorf("원장 비우기(정리): %v", err)
+	}
+}
 
 // 세션 행이 없는 원장 행(만료 · 탈퇴 — 닫힘으로 본다)이 있으면 기동 직후 set 한 줄(rows=1)이다. 그 행에 해제를 적은 뒤
 // 다시 기동하면 줄이 없다 — 감시는 닫힌 미해제 행만 센다.
@@ -22,7 +37,7 @@ func TestStartEdgeBoundsWithoutARNReportsLedgerRowsPG(t *testing.T) {
 	if _, err := pool.Exec(ctx, "TRUNCATE stream_edge_bounds"); err != nil {
 		t.Fatalf("원장 비우기: %v", err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "TRUNCATE stream_edge_bounds") })
+	t.Cleanup(func() { truncateEdgeBounds(t, pool) })
 	if _, err := pool.Exec(ctx,
 		"INSERT INTO stream_edge_bounds (stream_id, round_id, dvr_floor) VALUES ('s1', 'R1', 3)"); err != nil {
 		t.Fatalf("원장 행 넣기: %v", err)
@@ -79,7 +94,7 @@ func TestStartEdgeBoundsWithoutARNDeletesSettledReleasedRowsPG(t *testing.T) {
 	if _, err := pool.Exec(ctx, "TRUNCATE stream_edge_bounds"); err != nil {
 		t.Fatalf("원장 비우기: %v", err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "TRUNCATE stream_edge_bounds") })
+	t.Cleanup(func() { truncateEdgeBounds(t, pool) })
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO stream_edge_bounds (stream_id, round_id, dvr_floor, released_at) VALUES
 		  ('s1', 'R-settled', 3, pg_catalog.now() - interval '200 seconds'),

@@ -1,18 +1,23 @@
 package main
 
 // /dvr 하한 Writer 배선(POK-525 계획 Ⓒ-6 · 설계 3-3 · 8-1 · E10 · E11)의 시험. 실 AWS · DB 를 부르지 않는다 — 원장 ·
-// KVS 는 가짜이고, 운영 KVS 클라이언트는 조립한 값(재시도 · 끝점)만 본다.
+// KVS 는 가짜이고, 운영 KVS 클라이언트는 조립한 값(재시도 · 끝점)과 전송 가짜에 닿은 요청의 호스트만 본다(망에 나가지 않는다).
 
 import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudfrontkeyvaluestore"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
@@ -21,7 +26,8 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
 )
 
-const testKVSARN = "arn:aws:cloudfront::123456789012:key-value-store/a1b2c3d4-5678-90ab-cdef-EXAMPLE11111"
+// testKVSARN 은 설정이 받는 꼴(소문자 UUID 자원 ID — config.kvsResourcePattern)의 시험 ARN 이다.
+const testKVSARN = "arn:aws:cloudfront::123456789012:key-value-store/a1b2c3d4-5678-90ab-cdef-0123456789ab"
 
 // observed 는 하한 관측 한 번이다.
 type observed struct {
@@ -155,6 +161,29 @@ func TestObservePublishedWithoutWriterKeepsTick(t *testing.T) {
 	}
 }
 
+// run 의 발행 조립 자리(assembleObservedPublishing)는 발행 몫을 조립한 뒤 그 틱을 하한 관측으로 감싼다 — 조립이 채운 틱이
+// 새 판을 발행하면 observe 가 불린다. 조립보다 먼저 감싸면 조립이 작업 칸을 통째로 덮어 감싼 것이 사라진다. 변이 = 감싸는 줄
+// 삭제 · 조립 앞으로 옮기기 → Observe 0번 FAIL(줄이 지워져도 엣지는 통과라 조용하다 — Ⓒ-6 cc 설계 M2).
+func TestAssembleObservedPublishingWrapsAssembledTick(t *testing.T) {
+	rec := &observeRecorder{}
+	r := &rewindLoop{}
+	pool := assembleObservedPublishing(r, rec.observe, func() *pgxpool.Pool {
+		r.work = laneWork{tick: publishedTick}
+		return nil
+	})
+
+	if pool != nil {
+		t.Errorf("풀 = %v, want 조립이 돌려준 nil 그대로", pool)
+	}
+	if r.work.tick == nil {
+		t.Fatal("틱이 nil 이다 — 조립이 채운 틱을 잃었다")
+	}
+	r.work.tick(t.Context(), publish.State{}, tickWith(rowsOf(4, "dvr/s1/R1/seg/000004.m4s")))
+	if got, want := rec.calls(), []observed{{"s1", "R1", 4}}; !slices.Equal(got, want) {
+		t.Errorf("Observe = %v, want %v — 발행 틱에 하한 관측이 끼지 않았다", got, want)
+	}
+}
+
 // fakeLedger 는 원장 가짜다 — ClosedUnreleased · DeleteReleased 만 값을 지어내고 나머지는 빈 결과다.
 type fakeLedger struct {
 	mu     sync.Mutex
@@ -211,7 +240,7 @@ func (l *fakeLedger) DeleteReleased(_ context.Context, olderThan time.Duration) 
 	return l.deleted, l.delErr
 }
 
-// fakeStore 는 KVS 가짜다 — 판 하나로 Describe 만 답한다.
+// fakeKVS 는 KVS 가짜다 — 판 하나로 Describe 만 답한다.
 type fakeKVS struct{}
 
 func (fakeKVS) Describe(context.Context) (edgebounds.Stat, error) {
@@ -288,8 +317,9 @@ func TestEdgeBoundsWithoutARNReportsUnreleasedRows(t *testing.T) {
 	if a := logs.attrs(signalUnreleasedWithoutWriter); a["value"] != int64(0) {
 		t.Errorf("clear 줄 속성 = %v, want value=0", a)
 	}
+	// 다음 감시 한 번이면 된다 — 몇 주기가 도는지에 기대지 않는다(느린 CI 에서도 한 주기만 기다린다).
 	before := l.probes()
-	waitFor(t, "다음 감시", func() bool { return l.probes() > before+2 })
+	waitFor(t, "다음 감시", func() bool { return l.probes() > before })
 	if n := logs.count(signalUnreleasedWithoutWriter); n != 2 {
 		t.Errorf("%s %d줄, want 2 — 같은 상태가 이어지면 줄을 다시 내지 않는다", signalUnreleasedWithoutWriter, n)
 	}
@@ -348,9 +378,11 @@ func TestEdgeBoundsWithoutWriterDeletesSettledReleasedRows(t *testing.T) {
 		t.Errorf("rows = %v, want 2", a["rows"])
 	}
 
+	// 지운 행 0 으로 바꾼 뒤의 감시 한 번이면 된다 — 몇 주기가 도는지에 기대지 않는다. setDelete 뒤에 센 호출은 모두 0 을
+	// 받는다(가짜가 같은 잠금 안에서 적고 답한다).
 	l.setDelete(0, nil)
 	before := len(l.deleteCalls())
-	waitFor(t, "다음 감시의 삭제", func() bool { return len(l.deleteCalls()) > before+2 })
+	waitFor(t, "다음 감시의 삭제", func() bool { return len(l.deleteCalls()) > before })
 	for _, d := range l.deleteCalls() {
 		if d != deps.opt.ReleaseSettle {
 			t.Errorf("DeleteReleased olderThan = %v, want %v", d, deps.opt.ReleaseSettle)
@@ -501,6 +533,19 @@ func TestEdgeBoundsWithARNStartsWriter(t *testing.T) {
 	}
 }
 
+// 로거가 nil 이면 기본 로거를 쓴다(edgebounds.New 와 같다) — 배선의 첫 줄(edge_bounds_disabled 등)이 nil 로거에서 패닉하지
+// 않는다. 변이 = 가드 제거 → FAIL.
+func TestEdgeBoundsOptionsDefaultsNilLogger(t *testing.T) {
+	opt := edgeBoundsOptions("w-test", nil, time.Now)
+	if opt.Log == nil {
+		t.Fatal("Log = nil, want 기본 로거")
+	}
+	opt.ReleaseEvery = 10 * time.Millisecond
+
+	_, stop := launchEdgeBounds(t.Context(), config.Config{}, edgeBoundsDeps{ledger: &fakeLedger{}, newStore: (&storeOpener{}).open, opt: opt})
+	stop()
+}
+
 // KVS 를 열지 못하면 ERROR edge_bounds_degraded 한 줄이고 Writer 없이 미해제 감시가 돈다(기동은 계속).
 func TestEdgeBoundsStoreFailureDegrades(t *testing.T) {
 	logs := &logCapture{}
@@ -545,5 +590,67 @@ func TestNewKVSClientPinsRetryAndEndpoint(t *testing.T) {
 	}
 	if o.BaseEndpoint != nil {
 		t.Errorf("BaseEndpoint = %q, want nil(ARN 끝점)", *o.BaseEndpoint)
+	}
+}
+
+// kvsRequestHost 는 newKVSClient 의 클라이언트로 DescribeKeyValueStore 한 번을 보내되 망에 나가지 않고, SDK 가 끝점 해결 ·
+// 서명까지 마친 요청의 호스트를 돌려준다(전송 가짜가 요청을 받아 적고 실패로 답한다). 해결 · 서명이 실패하면 그 오류다.
+// 클라이언트의 지역이 region 이 아니면 시험이 멈춘다(전제 — 바깥 셸 · 공유 설정이 지역을 채우지 않았다).
+func kvsRequestHost(t *testing.T, region string) (string, error) {
+	t.Helper()
+	client, err := newKVSClient(t.Context())
+	if err != nil {
+		t.Fatalf("newKVSClient: %v", err)
+	}
+	if got := client.Options().Region; got != region {
+		t.Fatalf("클라이언트 지역 = %q, want %q", got, region)
+	}
+	var host string
+	errSent := errors.New("전송 가짜 — 망에 나가지 않는다")
+	_, err = client.DescribeKeyValueStore(t.Context(), &cloudfrontkeyvaluestore.DescribeKeyValueStoreInput{
+		KvsARN: aws.String(testKVSARN),
+	}, func(o *cloudfrontkeyvaluestore.Options) {
+		o.HTTPClient = httpClientFunc(func(r *http.Request) (*http.Response, error) {
+			host = r.URL.Host
+			return nil, errSent
+		})
+	})
+	if errors.Is(err, errSent) {
+		return host, nil
+	}
+	return "", err
+}
+
+// httpClientFunc 는 함수 하나로 된 SDK 전송이다.
+type httpClientFunc func(*http.Request) (*http.Response, error)
+
+func (f httpClientFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
+
+// kvsClientEnv 는 SDK 가 시험용 정적 자격증명 · 빈 공유 설정만 보게 하고 AWS 지역을 region 으로 둔다(빈 값이면 지역 없음).
+func kvsClientEnv(t *testing.T, region string) {
+	t.Helper()
+	assemblyCredentialsEnv(t)
+	t.Setenv("AWS_ENDPOINT_URL_CLOUDFRONT_KEYVALUESTORE", "")
+	t.Setenv("AWS_REGION", region)
+	t.Setenv("AWS_DEFAULT_REGION", "")
+}
+
+// 끝점은 ARN 의 계정 번호로 정해지는 전역 끝점이다(<계정>.cloudfront-kvs.global.api.aws) — SDK 끝점 규칙이 지역을 보지
+// 않으므로 상자의 AWS 지역이 비어도 기동(newKVSClient) · 호출의 끝점 해결 · 서명(SigV4A 지역 *)이 모두 선다. 그래서 지역 빔은
+// edge_bounds_degraded 로 강등할 갈래가 아니다(Ⓒ-6 보안 설계 M2 — 이 시험이 그 전제를 고정한다). 지역이 있어도 같은 호스트다.
+func TestNewKVSClientResolvesGlobalARNHost(t *testing.T) {
+	for name, region := range map[string]string{"지역 빔": "", "지역 있음": "ap-northeast-2"} {
+		t.Run(name, func(t *testing.T) {
+			kvsClientEnv(t, region)
+
+			host, err := kvsRequestHost(t, region)
+
+			if err != nil {
+				t.Fatalf("끝점 해결 · 서명 실패: %v", err)
+			}
+			if want := "123456789012.cloudfront-kvs.global.api.aws"; host != want {
+				t.Errorf("요청 호스트 = %q, want %q", host, want)
+			}
+		})
 	}
 }

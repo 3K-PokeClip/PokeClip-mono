@@ -74,8 +74,12 @@ func startEdgeBounds(ctx context.Context, cfg config.Config, pool *pgxpool.Pool,
 	})
 }
 
-// edgeBoundsOptions 는 Writer 의 설계값이다. writerID 는 해제 표지 값의 앞머리라 프로세스마다 새 토큰이다.
+// edgeBoundsOptions 는 Writer 의 설계값이다. writerID 는 해제 표지 값의 앞머리라 프로세스마다 새 토큰이다. log 가 nil 이면
+// 기본 로거다(edgebounds.New 와 같다 — 배선 · 미해제 감시도 이 로거로 쓴다).
 func edgeBoundsOptions(writerID string, log *slog.Logger, now func() time.Time) edgebounds.Options {
+	if log == nil {
+		log = slog.Default()
+	}
 	return edgebounds.Options{
 		FlushEvery:    edgeBoundsFlushEvery,
 		ReleaseEvery:  edgeBoundsReleaseEvery,
@@ -254,6 +258,15 @@ func (p *unreleasedProbe) reportFailure(err error) {
 		p.failing = true
 		p.log.Warn(signalUnreleasedCheckFailed, "err", err.Error())
 	}
+}
+
+// assembleObservedPublishing 은 run 의 발행 조립 자리다 — assemble(assemblePublishing)로 발행 몫을 조립한 뒤 r 의 발행 틱을
+// observe 로 감싸고, 조립이 돌려준 발행자 풀을 그대로 돌려준다. 감싸기는 조립 뒤여야 한다 — 조립이 작업 칸(r.work)을 통째로
+// 채운다. 감싸는 줄이 빠지면 Observe 가 조용히 0 이 된다(하한 키가 없어 엣지는 통과 — 안전 쪽이지만 발견이 늦다).
+func assembleObservedPublishing(r *rewindLoop, observe observeFloor, assemble func() *pgxpool.Pool) *pgxpool.Pool {
+	pool := assemble()
+	r.work.tick = observePublished(r.work.tick, observe)
+	return pool
 }
 
 // observePublished 는 발행 틱 tick 을 감싸, 새 판을 발행한 틱마다 그 목록의 회차 하한 후보를 observe 에 알린다(설계
