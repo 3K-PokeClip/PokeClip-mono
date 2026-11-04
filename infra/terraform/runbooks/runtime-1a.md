@@ -1550,32 +1550,46 @@ fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
 
 ### POK-525 원장 질의
 
-/dvr 하한 원장(`stream_edge_bounds`)의 행을 상태별로 봅니다. 교체 걸음이
-아니라 사람 복구(media README 「/dvr 하한 사람 복구」)가 씁니다. 위 Q 와
-달리 시험이 뽑아 돌리는 표지 블록이 아니고, 「M6 읽기 질의」 의 하한 질의와
-같은 손 질의입니다(일회용 PG17 에 원장 표 · 세션 표를 깔고 다섯 상태를 한
-행씩 넣어 돌려 봄 · 2026-11-04). 보내는 꼴은 `make_read` 입니다.
+/dvr 하한 원장(`stream_edge_bounds`)의 행을 상태별로 셉니다. 교체 걸음이
+아니라 사람 복구(media README 「/dvr 하한 사람 복구」)와 「POK-525 롤백」 의
+120초 대기가 씁니다. 위 Q 와 달리 시험이 뽑아 돌리는 표지 블록이 아니고, 「M6
+읽기 질의」 의 하한 질의와 같은 손 질의입니다(일회용 PG17 에 원장 표 · 세션
+표를 깔고 상태마다 행을 넣어 돌려 봄 · 2026-11-04). 보내는 꼴은 `make_read`
+입니다.
 
 ```shell
 cat >"${payload}/edge_bounds.sql" <<'SQL'
 SET TRANSACTION READ ONLY;
 SET ROLE media_owner;
-SELECT b.stream_id, b.round_id, b.dvr_floor, b.released_at,
-       CASE
-         WHEN b.released_at < pg_catalog.now() - interval '120 seconds' THEN 'released_stuck'
-         WHEN b.released_at IS NOT NULL THEN 'released_settling'
-         WHEN NOT EXISTS (SELECT 1 FROM stream_sessions s
-                           WHERE s.stream_id = b.stream_id AND s.round_id = b.round_id
-                             AND s.round_closed_at IS NULL) THEN 'closed_unreleased'
-         ELSE 'open'
-       END AS state
-  FROM stream_edge_bounds b
- ORDER BY state, b.stream_id, b.round_id
- LIMIT 100;
+WITH classified AS (
+  SELECT b.stream_id || '/' || b.round_id AS floor_key,
+         CASE
+           WHEN b.released_at < pg_catalog.now() - interval '120 seconds' THEN 'released_stuck'
+           WHEN b.released_at IS NOT NULL THEN 'released_settling'
+           WHEN NOT EXISTS (SELECT 1 FROM stream_sessions s
+                             WHERE s.stream_id = b.stream_id AND s.round_id = b.round_id
+                               AND s.round_closed_at IS NULL) THEN 'closed_unreleased'
+           ELSE 'open'
+         END AS state
+    FROM stream_edge_bounds b
+)
+SELECT state,
+       pg_catalog.count(*) AS rows,
+       (pg_catalog.array_agg(floor_key ORDER BY floor_key))[1:10] AS sample
+  FROM classified
+ GROUP BY state
+ ORDER BY state;
 RESET ROLE;
 SQL
 make_read edge_bounds "${payload}/edge_bounds.sql" && send_step edge_bounds
 ```
+
+*   **판정은 `rows` 로 합니다.** `rows` 는 그 상태의 행 전부를 셉니다(행
+    수 상한 없음). 행이 없는 상태는 결과에 줄이 나오지 않습니다 — 그 상태의
+    줄이 없으면 0 입니다. 예: 「`released_settling` 0」 은 `released_settling`
+    줄이 없는 것입니다.
+*   `sample` 은 상태마다 이름순 앞 10개의 `{스트림}/{회차}`(KVS 키와 같은
+    꼴)뿐입니다. 어느 회차인지 보는 단서이고 판정에 쓰지 않습니다.
 
 | `state` | 뜻 | 누가 거두나 |
 |---|---|---|
@@ -1591,7 +1605,8 @@ make_read edge_bounds "${payload}/edge_bounds.sql" && send_step edge_bounds
 *   120초는 사이드카의 해제 유예(`edgeBoundsReleaseSettle` —
     `media/cmd/segment-indexer/edge_bounds.go`)와 같은 값입니다. 그 값을
     바꾸면 이 질의도 고칩니다.
-*   기록에 옮기는 것은 `state` 별 행 수입니다. 회차 id 는 옮기지 않습니다.
+*   기록에 옮기는 것은 `state` 별 `rows` 입니다. `sample`(회차 id)은
+    옮기지 않습니다.
 
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기
 

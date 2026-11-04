@@ -691,7 +691,15 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 
 *   **경보 대상**은 ERROR 다섯(`_config_invalid` · `_degraded` ·
     `dvr_floor_release_overdue` · `dvr_floor_blocks_list` ·
-    `_unreleased_without_writer`)과 오래 풀리지 않는 `_write_failing` 이다.
+    `_unreleased_without_writer`)과 WARN 둘이다.
+    *   `_write_failing` — 같은 `pass` 의 `_write_recovered` 가 오래 오지
+        않으면 경보다.
+    *   `_unreleased_check_failed` — **줄 하나가 곧 경보다.** 실패 구간의
+        첫 확인에만 한 줄이고 회복 줄이 없어, 「안 풀림」 을 다음 줄로 알 수
+        없다. Writer 없는 상자에서 해제 행 삭제만 계속 실패하고 미해제
+        조회는 0 행이면 이 줄 말고는 아무 신호가 없는데, 그동안 남은 해제
+        행이 그 회차를 `ending` 에 묶는다. 풀렸는지는 runtime-1a 「POK-525
+        원장 질의」 에서 `released_stuck` 줄이 없는지로 본다.
 *   **clear 도 ERROR 다.** `value=0` 줄을 set 과 같은 등급으로 내야
     `LOG_LEVEL=warn` 수집에서도 회복이 보인다(janitor 게이지 관례).
 *   ending → vod 전이는 기존 `playback_state_sent`(`phase`)로 본다.
@@ -835,12 +843,21 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
   세션 · GAP · outbox 행과 컷오프를 지울 수 있다. 하한 트리거는 지운 뒤의
   seq 재사용만 막고(불변식 4), 지운 행 자체는 되살리지 못한다 — 복구는 백업
   뿐이다. 만료 전용 계정으로 나누는 안은 기각했다(ADR-0006 개정).
-  /dvr 하한 원장(`stream_edge_bounds`)도 표 단위 UPDATE · DELETE 로 하한을
-  내리거나 행을 지울 수 있다(하한이 줄지 않는 성질은 SQL 문장에만 있고
-  트리거가 없다). 위험은 장부 행보다 작다 — 열린 회차는 Writer 가 기억한
-  관측값으로 다음 올림(5분)에서 다시 쓰고, 그 값이 KVS 를 내리지도 않는다.
-  남는 것은 닫힌 회차다. 해제 전에 행이 지워지면 그 회차의 KVS 키를 Writer 가
-  찾지 못해 키가 남는다(위 「/dvr 하한 사람 복구」).
+- **/dvr 하한도 자격이 새면 내리거나 지울 수 있다.** 원장
+  (`stream_edge_bounds`)의 하한이 줄지 않는 성질은 Writer 의 SQL 문장
+  (`GREATEST`)에만 있고 트리거가 없다. 그래서 사이드카 DB 자격이 새면 표 단위
+  UPDATE · DELETE 로 원장 하한을 낮추거나 행을 지울 수 있다. 상자를 침해해
+  인스턴스 역할 자격(IMDS)을 얻으면 KVS `UpdateKeys` 로 하한 키를 낮추거나
+  지우거나 높일 수도 있다(이 동작 하나가 쓰기 · 지우기를 다 한다). 원장을
+  고친 것도 KVS 로 번진다 — 열린 회차의 행이 지워지거나 낮아지면 다음
+  올림(5분)이 그 Writer 가 기억한 후보로 행을 다시 쓰고 그 값을 KVS 에 쓴다.
+  그 후보가 KVS 의 지금 값보다 작으면(예: 그 스트림을 더는 받지 않는 다른
+  상자 Writer 가 기억한 옛 후보) KVS 하한이 내려간다. 판(ETag)은 동시 쓰기만
+  가르고 값이 줄어드는 것은 막지 않는다. 하한이 내려가거나 키가 지워지면 그
+  회차의 /dvr 창 밖 조각이 엣지를 지나고, 높아지면 시청자가 404 를 받는다.
+  닫힌 회차의 행이 해제 전에 지워지면 KVS 키를 Writer 가 찾지 못해 키가
+  남는다(위 「/dvr 하한 사람 복구」). 엣지 함수가 키 없음 · 값 이상을 어떻게
+  다룰지는 엣지 PR(Ⓓ) 몫이다.
 - **하한 갱신 함수는 정의자(`media_owner`) 권한으로 돈다.** 다른 표에 붙이면
   그 표의 행으로 남의 하한을 올릴 수 있으므로, EXECUTE 를 PUBLIC 에서 회수해
   새 부착을 막고(42501) 함수가 `stream_segments` 밖에서는 멈춘다(TG_RELID

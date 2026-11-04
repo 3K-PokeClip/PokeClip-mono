@@ -785,10 +785,10 @@ SH
     뽑아 가짜 docker · journalctl · systemctl 로 돌립니다(사례 R16 · R17).
 
 **하한 Writer 판정**(`edge-check.sh` — 인자 없음). 실행 중 사이드카 하나의
-태그 저널에서 /dvr 하한 Writer 의 마지막 기동 줄을 읽습니다. 기동 줄은 넷
-가운데 하나입니다 — `edge_bounds_started`(Writer 켜짐) · `_disabled`(ARN 빔)
-· `_config_invalid`(ARN 꼴 밖 — 뒤이어 `_disabled`) · `_degraded`(KVS
-클라이언트를 못 엶).
+**지금 프로세스**가 낸 /dvr 하한 Writer 기동 줄을 읽습니다. 기동 줄은
+프로세스마다 넷 가운데 하나입니다 — `edge_bounds_started`(Writer 켜짐) ·
+`_disabled`(ARN 빔) · `_config_invalid`(ARN 꼴 밖 — 뒤이어 `_disabled`) ·
+`_degraded`(KVS 클라이언트를 못 엶).
 
 ```shell
 cat > "${work}/edge-check.sh" <<'SH'
@@ -798,12 +798,23 @@ ids="$(docker ps -q --no-trunc --filter status=running \
   --filter label=com.docker.compose.service=sidecar)" || fail docker
 running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
 [ "${running}" = 1 ] || fail "running ${running}"
+# 같은 컨테이너가 다시 시작하면(on-failure) 앞 프로세스의 줄이 그 컨테이너
+# 저널에 남는다 — 지금 프로세스의 시작 시각(State.StartedAt) 뒤 줄만 본다.
+started_at="$(docker inspect --format '{{.State.StartedAt}}' "${ids}")" \
+  || fail inspect
+since="$(date -d "${started_at}" +%s)" || fail started-at
 log="$(journalctl -t pokeclip-media-sidecar "CONTAINER_ID_FULL=${ids}" \
-  -q --no-pager -o cat)" || fail journal
-msg="$(printf '%s\n' "${log}" \
-  | grep -oE '"msg":"edge_bounds_(started|disabled|config_invalid|degraded)"' \
-  | tail -n 1 | sed 's/^"msg":"//; s/"$//')"
-echo "EDGE ${msg:-none}"
+  --since "@${since}" -q --no-pager -o cat)" || fail journal
+# 마지막 줄이 아니라 있는 줄로 고른다 — 꼴 밖 ARN 은 config_invalid 뒤
+# disabled 를 낸다. 뒤에 오는 이름이 앞 이름을 덮는다.
+msg=none
+for m in disabled degraded config_invalid started; do
+  if printf '%s\n' "${log}" | grep -qF "\"msg\":\"edge_bounds_${m}\""; then
+    msg="edge_bounds_${m}"
+  fi
+done
+echo "SINCE ${since}"
+echo "EDGE ${msg}"
 if [ "${msg}" = edge_bounds_started ]; then echo "EDGE STARTED OK"; exit 0; fi
 echo "EDGE STARTED NOT OK"
 exit 1
@@ -812,7 +823,13 @@ SH
 
 *   통과 = `EDGE STARTED OK`(`EDGE edge_bounds_started`). 그 밖 낱말이면
     NOT OK 이고, 뜻과 처리는 media README 「/dvr 하한 신호」 입니다.
-    `EDGE CHECK FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
+    `EDGE none` 은 지금 프로세스가 아직 그 줄까지 오지 못했거나(갓 뜸 ·
+    기동 단계에서 죽음) 줄을 내기 전에 다시 시작한 것입니다 — 잠시 뒤
+    다시 봅니다.
+*   시작 시각은 `lifecycle-check.sh`(「O8a 당김 — 운영 감시」)와 같은 꼴로
+    초 단위로 자릅니다. 앞 프로세스가 지금 프로세스와 같은 초에 기동 줄을
+    냈으면 그 줄도 들어옵니다.
+*   `EDGE CHECK FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
 *   이 스크립트는 아직 시험이 뽑아 돌리지 않습니다(위 둘과 다름).
 
 ### POK-525 교체 걸음
@@ -913,9 +930,13 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         5분마다 원장에 올리므로, 시험 방송은 **10분 넘게** 보내 그 회차에
         원장 행이 생기게 합니다. 그러면 B 사이드카 저널에 그 회차의
         `dvr_floor_released`(KVS 하한 키를 지움) 한 줄이 나오고, 120초 유예
-        뒤 원장 행이 지워져야 넘어갑니다. 넘어가는 시각은
-        해제 · 재조회 주기의 합(약 2–3.5분) 뒤이고 상한이 아닙니다 — 읽기
-        상한에 걸리면 다음 주기로 밀립니다. 10분이 넘도록 `ending` 이면
+        뒤 원장 행이 지워져야 넘어갑니다. 넘어가는 시각은 해제 · 재조회
+        주기의 합(약 2–3.5분) 뒤이고 상한이 아닙니다. 재조회는 30초마다
+        `ending` 스트림을 이름순으로 한 묶음에 담고, 보류 틱마다 커밋 표지가
+        쓰고 남은 상태 읽기 칸(`REWIND_PLAYBACK_READ_MAX`)만큼 묶음 앞에서
+        읽습니다. 칸이 모자라면 남은 스트림은 다음 보류 틱에 이어 읽고, 묶음을
+        다 읽기 전에는 새 묶음을 담지 않습니다 — `ending` 스트림이 많으면 그만큼
+        늦어집니다. 10분이 넘도록 `ending` 이면
         runtime-1a 「POK-525 원장 질의」 로 그 회차 행의 `state` 를 봅니다.
     1.  **업로드 · 발행 정상 · VOD 문서 URI 새 꼴** — 국면이 `vod` 가 된 뒤
         Q4(`<on>` · `<test>`)의 `pass` 가 `t`: 그 회차 조각(컷오프 이상)의
