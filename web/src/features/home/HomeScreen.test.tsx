@@ -7,7 +7,12 @@ import { HomeScreen } from '@/features/home/HomeScreen';
 import { LiveNowBand } from '@/features/home/LiveNowBand';
 import { LiveUptime } from '@/features/home/LiveUptime';
 import { TipCard, TIPS } from '@/features/home/TipCard';
-import { daysAgoLabel, weekStarts, type LiveNow } from '@/features/home/useHomeMockState';
+import {
+  daysAgoLabel,
+  vodWhenLabel,
+  weekStarts,
+  type LiveNow,
+} from '@/features/home/useHomeMockState';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
@@ -1004,15 +1009,45 @@ describe('HomeScreen', () => {
     ).toBeInTheDocument();
   });
 
-  it('지난 방송 카드는 「카드 N개」를 단다(POK-254)', async () => {
+  it('지난 방송 카드는 시작 시각 · 찾은 카드 수 · 만든 클립 수를 단다(POK-254)', async () => {
+    const rendered = { status: 'rendered', createdAt: new Date('2026-10-08T09:00:00Z') };
     serve({
       past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))],
       cards: { 'past-1': [card(35)] },
+      // 클립은 「가장 최근 영상이 완성」인 이 방송의 편집본만 센다(라이브 띠의 클립 완료와 같다)
+      library: [
+        entry(1, rendered),
+        entry(2, rendered),
+        entry(3, null),
+        { ...entry(4, rendered), streamId: 'other' },
+      ],
     });
     renderWithProviders(<HomeScreen />);
 
-    expect(await screen.findByText(/10월 8일 · 카드 1개/)).toBeInTheDocument();
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (await within(grid).findByText('10월 8일 (목) 오후 2:41')).closest('li')!;
+    expect(tile).toHaveTextContent('카드 1');
+    await waitFor(() => expect(tile).toHaveTextContent('클립 2'));
     expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
+  });
+
+  it('지난 방송 카드: 보관함을 못 읽으면 클립 수는 「–」, 카드가 없으면 「찾은 장면 없음」', async () => {
+    serve({
+      past: [
+        pastRow('past-1', new Date('2026-10-08T05:41:00Z')),
+        pastRow('past-2', new Date('2026-10-07T05:41:00Z')),
+      ],
+      cards: { 'past-1': [card(35)] },
+      library: 'fail',
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (title: string) => within(grid).getByText(title).closest('li')!;
+    await within(grid).findByText('past-2');
+    expect(tile('past-1')).toHaveTextContent('클립 –');
+    expect(within(tile('past-2')).getByText('찾은 장면 없음')).toBeInTheDocument();
+    expect(within(tile('past-2')).getByText('장면 사진 없음')).toBeInTheDocument();
   });
 
   it('「전체 보기」는 지난 방송 목록으로 가는 진짜 링크다', async () => {
@@ -1023,6 +1058,15 @@ describe('HomeScreen', () => {
       'href',
       '/broadcast/vod',
     );
+  });
+
+  it('지난 방송 시작 시각은 오늘 · 어제를 달력으로 말하고, 그 전은 날짜 · 요일이다', () => {
+    const now = new Date('2026-11-04T09:00:00+09:00');
+    expect(vodWhenLabel('2026-11-04T08:02:00+09:00', now)).toBe('오늘 오전 8:02');
+    // 어젯밤 늦게 켠 방송은 아침에 「어제」다 — 시각 차가 24시간 안이어도 「오늘」이 아니다
+    expect(vodWhenLabel('2026-11-03T23:50:00+09:00', now)).toBe('어제 오후 11:50');
+    expect(vodWhenLabel('2026-11-02T21:00:00+09:00', now)).toBe('11월 2일 (월) 오후 9:00');
+    expect(vodWhenLabel('2026-11-01T12:05:00+09:00', now)).toBe('11월 1일 (일) 오후 12:05');
   });
 
   it('지난 방송 격자: 만료된 방송은 열리지 않고 「보관 만료」, 「준비 중」은 끝난 지 한 시간 안만(POK-254)', async () => {

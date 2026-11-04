@@ -81,7 +81,12 @@ export type VodBadge =
 export interface HomeVod {
   id: string;
   title: string;
-  meta: string;
+  /** 방송 시작 — 「어제 오후 8:10」 · 「11월 2일 (일) 오후 9:00」. 같은 제목의 방송을 이것으로 가른다 */
+  when: string;
+  /** 이 방송에서 찾은 카드 수 */
+  cards: number;
+  /** 이 방송으로 영상까지 만든 편집본 수(라이브 띠의 클립 완료와 같은 기준). 보관함을 못 읽었으면 null(「–」) */
+  clips: number | null;
   /** 보관이 끝난 방송은 열 것이 없어 null(지난 방송 목록과 같다, POK-254) */
   href: string | null;
   badge?: VodBadge;
@@ -194,6 +199,17 @@ function daysLeft(iso: string, now: number): number {
 
 function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+/** 지난 방송 카드의 시작 시각 — 「오늘 오전 8:02」 · 「어제 오후 8:10」 · 「11월 2일 (일) 오후 9:00」. 날짜는 달력으로 뺀다 */
+export function vodWhenLabel(iso: string, now: Date): string {
+  const d = new Date(iso);
+  const days = Math.round((startOfDay(now).getTime() - startOfDay(d).getTime()) / DAY_MS);
+  const day =
+    days === 0 ? '오늘' : days === 1 ? '어제' : `${dateLabel(iso)} (${WEEKDAYS[d.getDay()]})`;
+  return `${day} ${clockLabel(iso)}`;
 }
 
 /** 이번 주(월요일 0시, 로컬)와 지난주의 시작 시각(ms). 지난주 = [lastWeekStart, weekStart) */
@@ -359,11 +375,6 @@ async function loadHome(
   }
 
   const vods: HomeVod[] = past.map((b) => {
-    const cardCount = cardCountOf(b.streamId);
-    const metaParts = [
-      b.startedAt ? dateLabel(b.startedAt) : '날짜 정보 없음',
-      `카드 ${cardCount}개`,
-    ];
     let badge: VodBadge | undefined;
     // 지난 방송 목록과 같은 규칙: 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안만이다(POK-254). 그 뒤에는 녹화가 없어도
     // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다
@@ -373,10 +384,7 @@ async function loadHome(
       if (isJustEnded(b.endedAt, new Date(now))) badge = { kind: 'preparing' };
     } else if (b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now) {
       const d = daysLeft(b.vodExpiresAt, now);
-      if (d <= EXPIRING_WINDOW_DAYS) {
-        badge = { kind: 'dday', label: `D-${d}` };
-        metaParts.push('곧 만료');
-      }
+      if (d <= EXPIRING_WINDOW_DAYS) badge = { kind: 'dday', label: `D-${d}` };
     }
     const duration =
       b.startedAt && b.endedAt
@@ -385,7 +393,10 @@ async function loadHome(
     return {
       id: b.streamId,
       title: broadcastTitle(b),
-      meta: metaParts.join(' · '),
+      when: b.startedAt ? vodWhenLabel(b.startedAt, new Date(now)) : '날짜 정보 없음',
+      cards: cardCountOf(b.streamId),
+      // 보관함은 따로 읽는다 — 훅이 붙인다
+      clips: null,
       href: expired ? null : `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
       badge,
       duration,
@@ -482,7 +493,7 @@ export function useHomeMockState(): HomeMockState {
   return {
     userName: me?.name?.trim() || me?.email || null,
     live,
-    vods: data.vods,
+    vods: data.vods.map((v) => ({ ...v, clips: completedClipsOf(library, v.id) })),
     hasHistory: data.hasHistory,
     week: { ...data.week, ...libraryWeekOf(library, weekStart, Infinity) },
     lastWeek: { ...data.lastWeek, ...libraryWeekOf(library, lastWeekStart, weekStart) },
