@@ -47,6 +47,8 @@ import {
 
 /** 서버가 실시간 전달(SSE 등)을 열기 전까지는 탭이 보이는 동안 이 주기로 다시 읽는다(react-query가 숨은 탭에선 멈춘다) */
 const POLL_MS = 30_000;
+/** 읽음 · 모두 읽음이 함께 쓰는 뮤테이션 키 — 겹친 읽음 중 마지막 것만 다시 읽게 센다 */
+const READ_MUTATION_KEY = ['notifications', 'read'] as const;
 const MOCK_POLL_MS = 3_000;
 
 function patchCache(
@@ -85,7 +87,16 @@ export function useNotifications() {
   // 읽음은 화면에 바로 그린다(낙관적) — 읽음 하나 실패로 토스트를 띄울 일은 아니다. 그리기 전에 나가 있던 재조회를 멈춘다:
   // 누르기 직전에 나간 응답(readAt null)이 늦게 오면 방금 그린 읽음을 덮어 점 · 숫자가 다음 재조회까지 되살아난다.
   // 끝나면(성공 · 실패 모두) 서버 값으로 다시 맞춘다
+  // 끝나면 서버 값으로 다시 맞추되, 다른 읽음이 아직 날아가고 있으면 맞추지 않는다: 먼저 끝난 쪽이 다시 읽은 서버 값(아직
+  // 처리 안 된 쪽은 readAt null)이 그쪽의 낙관 갱신을 덮는다. 마지막으로 끝나는 읽음이 한 번만 다시 읽는다(PR #481 2차 리뷰).
+  // onSettled 때 끝나는 그 읽음은 아직 진행 중으로 세어진다 — 그래서 1이면 마지막이다
+  const resyncIfLast = () => {
+    if (queryClient.isMutating({ mutationKey: READ_MUTATION_KEY }) <= 1)
+      void queryClient.invalidateQueries({ queryKey: key });
+  };
+
   const markRead = useSessionMutation({
+    mutationKey: READ_MUTATION_KEY,
     mutationFn: (id: string) => (mockMode !== null ? markMockRead(id) : markNotificationRead(id)),
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: key });
@@ -94,17 +105,18 @@ export function useNotifications() {
         n.id === id && n.readAt === null ? { ...n, readAt: at } : n,
       );
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: key }),
+    onSettled: resyncIfLast,
   });
 
   const markAllRead = useSessionMutation({
+    mutationKey: READ_MUTATION_KEY,
     mutationFn: () => (mockMode !== null ? markAllMockRead() : markAllNotificationsRead()),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: key });
       const at = new Date().toISOString();
       patchCache(queryClient, key, (n) => (n.held || n.readAt !== null ? n : { ...n, readAt: at }));
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: key }),
+    onSettled: resyncIfLast,
   });
 
   return {

@@ -329,6 +329,38 @@ describe('NotificationBell', () => {
     expect(screen.queryByText(/^새 알림/)).toBeNull();
   });
 
+  it('읽음 둘이 겹쳐도 먼저 끝난 쪽의 다시 읽기가 아직 날아가는 쪽의 읽음을 되돌리지 않는다 (PR #481 2차)', async () => {
+    const { user, queryClient, spy } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+
+    // A의 읽음 요청은 붙잡아 두고, 바로 이어 B를 누른다(B는 곧장 끝난다)
+    holdRead = true;
+    await user.click(within(panel).getByRole('button', { name: '읽음으로 표시: 클립을 올렸어요' }));
+    await waitFor(() => expect(releaseRead).not.toBeNull());
+    await user.click(
+      within(panel).getByRole('button', {
+        name: '읽음으로 표시: 민트초코 님이 내 채널에 올렸어요',
+      }),
+    );
+    await waitFor(() => expect(posts(spy)).toContain('/api/notifications/n-editor/read'));
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['notifications'] })).toBe(0));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // B가 끝났어도 A는 아직 날아가는 중이라 다시 읽지 않는다 — A의 읽음이 되살아나지 않는다
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 1개' })).toBeInTheDocument();
+
+    // A가 끝나면 마지막이라 한 번 다시 읽고, 서버 값도 둘 다 읽음이다
+    await act(async () => releaseRead?.());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '알림 · 안 읽음 1개' })).toBeInTheDocument(),
+    );
+    await act(() => queryClient.refetchQueries({ queryKey: ['notifications'] }));
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 1개' })).toBeInTheDocument();
+  });
+
   it('14일이 지난 알림은 안 보이고, 풀리지 않은 할 일은 기간이 지나도 남는다', async () => {
     items.push(
       wire('n-old', 15 * 24 * 60, 'CLIP_UPLOADED', { clipTitle: '옛날 클립', count: 1 }),
