@@ -6,7 +6,9 @@ import type { AppNotification } from '@/api/notifications';
 // 토스트 단추가 「지금 떠 있는 종」에게 일을 맡기는 우편함(POK-540, PR #481 리뷰).
 // 토스트는 앱 전체의 ToastProvider에 남는데 종은 화면마다 바뀐다(홈 헤더 ↔ 사이드바). 토스트를 띄운 종의 함수를 그대로 쥐고 있으면
 // 화면을 옮겨 그 종이 사라진 뒤 「알림 보기」를 눌러도 아무 창이 안 열린다. 그래서 단추는 여기에 부탁만 넣고, 지금 떠 있는 종이 받아 처리한다.
-// 종이 떠오를 때 이미 들어와 있던 부탁은 앞 종 몫이라 처리하지 않는다(나중에 뜬 종이 엉뚱하게 창을 열지 않게).
+// 종이 떠오를 때 이미 들어와 있던 부탁은 앞 종 몫이라 처리하지 않는다(나중에 뜬 종이 엉뚱하게 창을 열지 않게). 단 종이 하나도
+// 없을 때(전체 화면 편집기) 온 부탁은 「기다리는 부탁」으로 남겨, 다음에 뜨는 종이 한 번 처리한다 — 보낸 쪽은 종이 있는 홈으로
+// 옮긴다(PR #481 2차 리뷰).
 
 export type NotificationRequest =
   /** 알림 창 열기(「알림 보기」 · 「모아 보기」) */
@@ -18,11 +20,31 @@ interface NotificationRequestState {
   /** 부탁마다 오르는 번호 — 종은 자기가 본 번호보다 큰 것만 처리한다 */
   seq: number;
   request: NotificationRequest | null;
+  /** 받을 종이 없을 때 온 부탁이 남아 있다 — 다음에 뜨는 종이 take()로 한 번 처리한다 */
+  pending: boolean;
+  /** 지금 떠 있는 종 수 */
+  bells: number;
   send: (request: NotificationRequest) => void;
+  /** 종이 뜰 때 부른다. 돌려받은 함수로 떼어 낸다 */
+  attach: () => () => void;
+  /** 기다리는 부탁을 꺼낸다(없으면 null). 한 번 꺼내면 비운다 */
+  take: () => NotificationRequest | null;
 }
 
-export const useNotificationRequests = create<NotificationRequestState>()((set) => ({
+export const useNotificationRequests = create<NotificationRequestState>()((set, get) => ({
   seq: 0,
   request: null,
-  send: (request) => set((s) => ({ seq: s.seq + 1, request })),
+  pending: false,
+  bells: 0,
+  send: (request) => set((s) => ({ seq: s.seq + 1, request, pending: s.bells === 0 })),
+  attach: () => {
+    set((s) => ({ bells: s.bells + 1 }));
+    return () => set((s) => ({ bells: Math.max(0, s.bells - 1) }));
+  },
+  take: () => {
+    const { pending, request } = get();
+    if (!pending) return null;
+    set({ pending: false });
+    return request;
+  },
 }));

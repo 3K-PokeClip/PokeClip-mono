@@ -42,7 +42,7 @@ import {
   useRespondInvitation,
   type NotificationsState,
 } from './useNotifications';
-import { useNotificationRequests } from './notificationRequests';
+import { useNotificationRequests, type NotificationRequest } from './notificationRequests';
 import styles from './NotificationBell.module.css';
 
 const KIND_ICON: Record<NotificationKind, LucideIcon> = {
@@ -110,13 +110,23 @@ export function NotificationBell({ place, anchorRef, offset = 8 }: NotificationB
     handlers.current = { openPanel, openItem };
   });
   useEffect(() => {
+    const requests = useNotificationRequests.getState();
+    const handle = (r: NotificationRequest) =>
+      r.kind === 'panel' ? handlers.current.openPanel() : handlers.current.openItem(r.notification);
+    // 종이 없던 화면에서 눌러 남은 부탁이 있으면 이 종이 한 번 받는다
+    const detach = requests.attach();
+    const waiting = requests.take();
+    if (waiting) handle(waiting);
     let seen = useNotificationRequests.getState().seq;
-    return useNotificationRequests.subscribe((s) => {
+    const unsubscribe = useNotificationRequests.subscribe((s) => {
       if (s.seq === seen || s.request === null) return;
       seen = s.seq;
-      if (s.request.kind === 'panel') handlers.current.openPanel();
-      else handlers.current.openItem(s.request.notification);
+      handle(s.request);
     });
+    return () => {
+      unsubscribe();
+      detach();
+    };
   }, []);
 
   const label = state.unread > 0 ? `알림 · 안 읽음 ${state.unread}개` : '알림';

@@ -9,6 +9,7 @@ import { useSwitchCurtain } from '@/features/channel/switchCurtain';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { NotificationBell } from './NotificationBell';
+import { useNotificationRequests } from './notificationRequests';
 
 const { push, track } = vi.hoisted(() => ({ push: vi.fn(), track: vi.fn() }));
 
@@ -188,6 +189,8 @@ beforeEach(() => {
   holdRead = false;
   releaseRead = null;
   useSwitchCurtain.getState().reset();
+  // 앞 시험에서 남은 부탁이 다음 시험의 종에 닿지 않게(종 수는 시험이 끝나며 떼어져 0이다)
+  useNotificationRequests.setState({ seq: 0, request: null, pending: false });
   push.mockReset();
   track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
@@ -594,6 +597,51 @@ describe('NotificationBell', () => {
     await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
     await user.click(screen.getByRole('button', { name: '알림 보기' }));
 
+    expect(await screen.findByRole('dialog', { name: '알림' })).toBeInTheDocument();
+  });
+
+  it('종이 없는 화면(전체 화면 편집기)에서 토스트를 누르면 홈으로 옮기고, 다음에 뜬 종이 그 부탁을 받는다 (PR #481 2차)', async () => {
+    function Screens() {
+      const [screenName, setScreen] = useState<'home' | 'editor' | 'back'>('home');
+      return (
+        <>
+          {screenName === 'home' ? <NotificationBell key="header" place="header" /> : null}
+          {screenName === 'back' ? <NotificationBell key="header-2" place="header" /> : null}
+          <button type="button" onClick={() => setScreen('editor')}>
+            편집기로
+          </button>
+          <button type="button" onClick={() => setScreen('back')}>
+            홈 도착
+          </button>
+        </>
+      );
+    }
+    stub();
+    const { queryClient } = renderWithProviders(<Screens />);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+
+    items = [
+      wire(
+        'n-invite',
+        0,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+      ...items,
+    ];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    expect(await screen.findByText('라면왕 채널이 편집자로 초대했어요')).toBeInTheDocument();
+
+    // 종이 없는 화면에서 누른다 → 아무도 받지 않으니 홈으로 옮긴다
+    await user.click(screen.getByRole('button', { name: '편집기로' }));
+    await user.click(screen.getByRole('button', { name: '알림 보기' }));
+    expect(push).toHaveBeenCalledWith('/home');
+    expect(screen.queryByRole('dialog', { name: '알림' })).toBeNull();
+
+    // 홈에 닿아 종이 뜨면 남은 부탁을 받아 창을 연다
+    await user.click(screen.getByRole('button', { name: '홈 도착' }));
     expect(await screen.findByRole('dialog', { name: '알림' })).toBeInTheDocument();
   });
 

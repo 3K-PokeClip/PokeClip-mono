@@ -3,7 +3,7 @@
 // 알림 목록 · 읽음 처리 · 초대 답 · 누르면 그 화면으로(POK-540).
 // 서버가 없으면(NOTIFICATIONS_SERVER_READY=false) 목록을 읽지 않고 빈 목록이다. 개발 서버의 ?mock=notifications는 가짜 저장소를 쓴다.
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
@@ -248,7 +248,16 @@ const MAX_SINGLE_TOASTS = 2;
  */
 export function useArrivalToasts(state: NotificationsState) {
   const { toast } = useToast();
-  const send = useNotificationRequests((s) => s.send);
+  const sendRequest = useNotificationRequests((s) => s.send);
+  const router = useRouter();
+  // 받을 종이 없는 화면(전체 화면 편집기)에서 누르면 종이 있는 홈으로 옮긴다 — 부탁은 남아 홈의 종이 처리한다
+  const send = useCallback(
+    (request: Parameters<typeof sendRequest>[0]) => {
+      sendRequest(request);
+      if (useNotificationRequests.getState().bells === 0) router.push('/home');
+    },
+    [sendRequest, router],
+  );
   const known = useRef<Map<string, boolean> | null>(null);
 
   // 판정은 자르기 전 목록으로: 보이는 목록으로 하면 상한 밖에 있던 옛 알림이 자리가 나서 들어올 때 「새 알림」으로 울린다
