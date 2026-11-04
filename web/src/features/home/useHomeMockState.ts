@@ -51,8 +51,11 @@ export interface LiveNow {
   /** 이 방송 대시보드를 지금 연 편집자 수(POK-398, 스트리머 본인과 나는 뺌). 0이거나 모르면(null·없음) 띠에 안 적는다 */
   editorsOnline?: number | null;
   startedNote: string;
-  /** 방송 경과 표기 — LIVE 배지 옆에 그대로 붙는다 */
-  uptimeLabel: string;
+  /**
+   * 방송 시작 시각(epoch ms). LIVE 배지가 이것으로 경과를 매초 센다(LiveUptime). 읽은 시각으로 미리 적어 두면 방송 목록을 다시 읽는
+   * 10초마다 숫자가 건너뛴다. 모르면 null(「--:--:--」)
+   */
+  startedAtMs: number | null;
   /** 시청자 수 — 수집기가 아직 못 쟀으면 null */
   viewers: string | null;
   /**
@@ -65,6 +68,11 @@ export interface LiveNow {
   completedClips: number | null;
   /** 최신 방송 화면 사진(POK-277). 아직 없으면 null */
   thumbnailUrl?: string | null;
+  /**
+   * 방송 시작에서 PHOTO_WAIT_MS가 지났다. 그 전에 사진이 없으면 첫 사진을 찍는 중이라 영상 칸을 반짝이는 회색으로 두고, 지난 뒤에도
+   * 없으면 방송 아이콘 자리표시로 돌아간다(끝없이 번쩍이면 곧 온다고 읽힌다, POK-449와 같은 판단). 없으면(옛 값) 기다리지 않는다
+   */
+  photoLate?: boolean;
 }
 
 export type VodBadge =
@@ -140,6 +148,11 @@ const PAST_LIST_MS = 60_000;
 const LIBRARY_POLL_MS = 60_000;
 /** 방송마다 카드를 읽는 동시 수 */
 const CARD_READ_PARALLEL = 6;
+/**
+ * 라이브 첫 사진을 기다리는 시한. 서버는 조각이 올라온 뒤(약 33초) 1분 순회로 사진을 찍고(일꾼 약 4초), 홈은 10초마다 읽는다.
+ * 그래서 방송 시작에서 2분 가까이 걸릴 수 있어 방송 정보 시한(2분)보다 넉넉히 잡는다
+ */
+const PHOTO_WAIT_MS = 3 * 60_000;
 const PAST_LIMIT = 8;
 const EXPIRING_WINDOW_DAYS = 7;
 const DAY_MS = 86_400_000;
@@ -153,7 +166,7 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T | null>
   }
 }
 
-function msToClock(ms: number): string {
+export function msToClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -322,6 +335,8 @@ async function loadHome(
     const latest = info === null ? null : primaryInfo(info, now).latest;
     const title = latest?.title?.trim() || liveBroadcast.title?.trim() || null;
     const startedAt = liveBroadcast.startedAt;
+    const parsedStart = startedAt ? Date.parse(startedAt) : NaN;
+    const startedAtMs = Number.isNaN(parsedStart) ? null : parsedStart;
     live = {
       streamId: liveBroadcast.streamId,
       title,
@@ -330,7 +345,7 @@ async function loadHome(
       platform: onAirLabel(info?.platforms ?? liveBroadcast.platforms, now),
       editorsOnline: liveBroadcast.editorsOnline ?? null,
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
-      uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
+      startedAtMs,
       // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
       viewers: typeof latest?.viewers === 'number' ? latest.viewers.toLocaleString('ko-KR') : null,
       // 시작 시각을 모르는 방송(자리표시)은 기다릴 기준이 없어 처음부터 글자로 적는다: 막대가 끝없이 번쩍이지 않게(로컬 리뷰 1라운드)
@@ -338,6 +353,8 @@ async function loadHome(
       detectedCards: cardCountOf(liveBroadcast.streamId),
       completedClips: null,
       thumbnailUrl: liveBroadcast.thumbnailUrl ?? null,
+      // 시작 시각을 모르면 기다릴 기준이 없어 처음부터 자리표시다(infoLate와 같은 갈래)
+      photoLate: startedAtMs === null || now - startedAtMs >= PHOTO_WAIT_MS,
     };
   }
 
