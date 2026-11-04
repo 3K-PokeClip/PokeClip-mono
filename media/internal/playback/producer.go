@@ -47,7 +47,8 @@ type Request struct {
 	// **호출자가 이미 루트 안전하게 연 fd 를 그대로 넘긴다**(이 패키지는 파일을 열지 않는다).
 	Input io.ReadSeeker
 	// PlaybackPos 는 이 조각의 시간 도장 위치다 — pos = mtxi + offset(계획 4.2-R R3).
-	// 평소에는 조각 자기 mtxi 값 그대로이고(offset 0), 회차 안 리셋·구멍 뒤에만 offset 이 붙는다.
+	// 평소에는 조각 자기 mtxi 값 그대로이고(offset 0), 회차 첫 조각의 mtxi 가 음수였거나(첫 도장을
+	// 0 에 둔다) 회차 안 리셋·구멍 뒤에만 offset 이 붙는다.
 	PlaybackPos time.Duration
 }
 
