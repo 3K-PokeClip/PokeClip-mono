@@ -299,6 +299,25 @@ describe('NotificationBell', () => {
     expect(within(panel).getByText('유튜브 연동이 끊겼어요')).toBeInTheDocument();
   });
 
+  it('읽음이 날아가는 사이 새로 나간 주기 · 포커스 재조회가 옛 값을 가져와도 읽음 표시를 되돌리지 않는다 (PR #481 5차)', async () => {
+    const { user, queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+
+    holdRead = true;
+    await user.click(within(panel).getByRole('button', { name: '읽음으로 표시: 클립을 올렸어요' }));
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 2개' })).toBeInTheDocument();
+    // 읽음 POST가 아직 날아가는 중에 30초 주기가 돌았다 — 서버는 아직 readAt null을 준다. 화면 알림은 다음 틱이라 한 틱 기다린다
+    await act(() => queryClient.refetchQueries({ queryKey: ['notifications'] }));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 2개' })).toBeInTheDocument();
+
+    act(() => releaseRead?.());
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 2개' })).toBeInTheDocument();
+  });
+
   it('읽음을 누르기 직전에 나간 재조회가 옛 값으로 늦게 와도 읽음 표시를 되돌리지 않는다', async () => {
     const { user, queryClient, spy } = renderBell();
     await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });

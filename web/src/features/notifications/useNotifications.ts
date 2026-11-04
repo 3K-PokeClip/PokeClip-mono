@@ -5,7 +5,12 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useMutationState,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query';
 import {
   NOTIFICATIONS_QUERY_KEY,
   NOTIFICATIONS_SERVER_READY,
@@ -77,10 +82,29 @@ export function useNotifications() {
     refetchInterval: mockMode !== null ? MOCK_POLL_MS : POLL_MS,
   });
 
+  // 날아가는 읽음은 받은 목록 위에 읽음으로 덧그린다: 읽음을 누른 순간 나가 있던 재조회는 cancelQueries가 멈추지만, POST가
+  // 날아가는 사이 새로 나간 재조회(30초 주기 · 창 포커스)가 readAt null을 들고 오면 캐시의 낙관 갱신을 덮어 종 숫자가
+  // 되살아난다(PR #481 5차). id가 null이면 「모두 읽음」
+  const pendingReads = useMutationState({
+    filters: { mutationKey: READ_MUTATION_KEY, status: 'pending' },
+    select: (m) => ({
+      id: typeof m.state.variables === 'string' ? m.state.variables : null,
+      at: m.state.submittedAt,
+    }),
+  });
+
   // 최근 14일 · 최대 50개만 남긴다(풀리지 않은 할 일은 남김). 받은 목록이 바뀔 때만 다시 거른다 — 그래야 새 알림 토스트가
   // 렌더마다 목록을 다시 훑지 않는다
   const data = query.data;
-  const allItems = useMemo(() => data?.items ?? [], [data]);
+  const allItems = useMemo(() => {
+    const received = data?.items ?? [];
+    if (pendingReads.length === 0) return received;
+    const ids = new Set(pendingReads.map((r) => r.id));
+    const at = new Date(Math.min(...pendingReads.map((r) => r.at))).toISOString();
+    return received.map((n) =>
+      n.readAt === null && (ids.has(n.id) || (ids.has(null) && !n.held)) ? { ...n, readAt: at } : n,
+    );
+  }, [data, pendingReads]);
   const items = useMemo(() => visibleNotifications(allItems, Date.now()), [allItems]);
 
   // 읽음은 화면에 바로 그린다(낙관적) — 읽음 하나 실패로 토스트를 띄울 일은 아니다. 그리기 전에 나가 있던 재조회를 멈춘다:
@@ -94,16 +118,27 @@ export function useNotifications() {
       void queryClient.invalidateQueries({ queryKey: key });
   };
 
+  // 캐시에도 읽음을 적는다: 누를 때 한 번, 성공했을 때 한 번 더 — 그 사이 재조회가 캐시를 덮었으면 덧그림이 빠지는 순간
+  // (성공 직후, 다시 읽기가 오기 전) 안 읽음으로 깜빡인다
+  const readOne = (id: string) => {
+    const at = new Date().toISOString();
+    patchCache(queryClient, key, (n) =>
+      n.id === id && n.readAt === null ? { ...n, readAt: at } : n,
+    );
+  };
+  const readAll = () => {
+    const at = new Date().toISOString();
+    patchCache(queryClient, key, (n) => (n.held || n.readAt !== null ? n : { ...n, readAt: at }));
+  };
+
   const markRead = useSessionMutation({
     mutationKey: READ_MUTATION_KEY,
     mutationFn: (id: string) => (mockMode !== null ? markMockRead(id) : markNotificationRead(id)),
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: key });
-      const at = new Date().toISOString();
-      patchCache(queryClient, key, (n) =>
-        n.id === id && n.readAt === null ? { ...n, readAt: at } : n,
-      );
+      readOne(id);
     },
+    onSuccess: (_data, id) => readOne(id),
     onSettled: resyncIfLast,
   });
 
@@ -112,9 +147,9 @@ export function useNotifications() {
     mutationFn: () => (mockMode !== null ? markAllMockRead() : markAllNotificationsRead()),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: key });
-      const at = new Date().toISOString();
-      patchCache(queryClient, key, (n) => (n.held || n.readAt !== null ? n : { ...n, readAt: at }));
+      readAll();
     },
+    onSuccess: readAll,
     onSettled: resyncIfLast,
   });
 
