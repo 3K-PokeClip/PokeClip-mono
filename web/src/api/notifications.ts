@@ -73,16 +73,18 @@ export const TODO_KINDS: ReadonlySet<NotificationKind> = new Set<NotificationKin
   'EDITOR_INVITED',
 ]);
 
+// 비어 있는 칸(readAt · resolvedAt = null, important · held = false)은 빼고 보내도 같게 읽는다: auth 서버 DTO가
+// `@JsonInclude(NON_NULL)` 관례라 같은 꼴로 오면 undefined가 남아 `=== null` 판정(안 읽음 · 확인 필요)이 모두 갈린다(PR #481 3차)
 interface NotificationWire {
   id: string;
   kind: string;
   createdAt: string;
-  readAt: string | null;
-  resolvedAt: string | null;
+  readAt?: string | null;
+  resolvedAt?: string | null;
   /** 받는 사람이 이 종류를 「중요」로 둔 채 생겼다(방해 금지를 뚫는다 · 할 일이면 토스트를 닫을 때까지 둔다) */
-  important: boolean;
+  important?: boolean;
   /** 방송 중 방해 금지로 쌓아 둔 것 — 방송이 끝나면 서버가 false로 푼다 */
-  held: boolean;
+  held?: boolean;
   /** 이 일이 일어난 채널. 남의 채널(편집을 맡은 곳)이면 눌렀을 때 그 채널로 바꾼 뒤 간다 */
   channelId: number;
   channelName: string;
@@ -187,10 +189,10 @@ export function fromWire(wire: NotificationWire): AppNotification | null {
   return {
     id: wire.id,
     createdAt: wire.createdAt,
-    readAt: wire.readAt,
-    resolvedAt: wire.resolvedAt,
-    important: wire.important,
-    held: wire.held,
+    readAt: wire.readAt ?? null,
+    resolvedAt: wire.resolvedAt ?? null,
+    important: wire.important === true,
+    held: wire.held === true,
     channel: { id: wire.channelId, name: wire.channelName },
     payload,
   };

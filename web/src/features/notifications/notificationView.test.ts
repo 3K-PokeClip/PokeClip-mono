@@ -227,6 +227,20 @@ describe('fromWire', () => {
     });
   });
 
+  it('비어 있는 칸을 빼고 보내도(NON_NULL) null · false로 읽는다 — 안 읽은 할 일이 「처리됨」이 되지 않게 (PR #481 3차)', () => {
+    const got = fromWire({
+      id: 'w2',
+      kind: 'YOUTUBE_LINK_EXPIRED',
+      createdAt: new Date(NOW).toISOString(),
+      channelId: 1,
+      channelName: '포키왕',
+      data: { youtubeChannelName: '포키왕 TV' },
+    });
+    expect(got).toMatchObject({ readAt: null, resolvedAt: null, important: false, held: false });
+    expect(unreadCount([got!])).toBe(1);
+    expect(buildPanelView([got!], 'unread', new Set(), NOW).todos.map((x) => x.id)).toEqual(['w2']);
+  });
+
   it('종류가 정한 칸만 옮기고 모르는 칸은 버린다', () => {
     const got = fromWire({
       ...base,
