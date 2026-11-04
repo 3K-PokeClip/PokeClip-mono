@@ -667,6 +667,24 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 *   **여러 상자:** 같은 DB 의 Writer 둘이 함께 돌아도 된다. 원장이
     정본이고 KVS 쓰기는 판(ETag)에 묶여, 엇갈리면 한쪽이 판을 다시 보고
     다시 보낸다.
+*   **ending 재조회(30초마다):** 원장 행은 다른 상자의 Writer 도 지우므로,
+    사이드카는 종료 항목이 `ending` 인 스트림을 30초마다 DB 에서 다시 읽어
+    국면을 맞춘다(`cmd/segment-indexer/rewind_status.go`).
+    *   값이 그대로여도 스트림 · 상자당 분당 약 4줄의 INFO
+        (`playback_state_sent` · `rewind_final_applied`)를 낸다. 이 줄이 오래
+        이어지면 그 자체가 그 회차가 아직 `ending` 이라는 표지다(kty
+        2026-11-04).
+    *   30초는 주기이지 상한이 아니다. 재조회 읽기는 상태 전달 읽기 칸
+        (`REWIND_PLAYBACK_READ_MAX`) 가운데 커밋 표지(장부가 바뀔 때
+        들어오는 상태 표지)가 쓰고 남은 칸만 쓴다. 그래서 커밋 표지가 칸을
+        계속 다 쓰는 동안은 재조회가 기다린다. 한 묶음을 담은 직후 `ending`
+        이 된 스트림은 다음 묶음(주기 + 앞 묶음을 다 읽는 시간)까지
+        기다린다.
+*   **첫 실패에서 멈춤:** 올림 · 해제는 회차를 (스트림, 회차) 순 묶음(KVS
+    요청 하나 — 올림 50개 · 해제 49개)으로 보내고, 첫 실패에서 그 패스를
+    멈춘다. 다음 틱은 처음부터 다시 한다. 그래서 앞 묶음이 계속 거부되면
+    그 뒤 회차는 그동안 올리지도 풀지도 못한다. 신호는 그 패스의
+    `edge_bounds_write_failing` 하나다.
 
 ### /dvr 하한 신호
 
@@ -680,7 +698,7 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 | `edge_bounds_config_invalid` | ERROR | 기동 — ARN 꼴 밖 | 사건 · `reason`(원문 없음) · 뒤이어 `_disabled` |
 | `edge_bounds_degraded` | ERROR | 기동 — KVS 클라이언트 초기화 실패 | 사건 · `err` · 미해제 감시만 돈다. 회복은 재기동이다 |
 | `edge_bounds_write_failing` | WARN | 올림 · 해제 패스 실패 | **set** · `reason`(`conflict` · `failed`) · `pass`(`raise` · `release`) · `err` — 패스마다 실패 구간의 첫 줄만 |
-| `edge_bounds_write_recovered` | INFO | 그 패스의 다음 성공 | **clear** · `pass` |
+| `edge_bounds_write_recovered` | WARN | 그 패스의 다음 성공 | **clear** · `pass` — set 과 같은 등급(kty 2026-11-04) |
 | `dvr_floor_released` | INFO | KVS 키를 지우고 해제를 적음 | 사건 · `stream` · `round` · `waited_ms` · `settle_ms` |
 | `dvr_floor_release_overdue` | ERROR | 닫힌 회차를 처음 본 뒤 10분 넘게 못 풂 | `value=1` **set** · 풀리면 같은 등급 `value=0` **clear** · `stream` · `round` · `since`(set 만) — 처음 본 시각은 프로세스 기억이라 재기동하면 다시 잰다 |
 | `dvr_floor_blocks_list` | ERROR | 원장 하한 > 그 회차 최근 발행 목록의 첫 조각 seq | `value=1` **set** · 풀리면 `value=0` **clear** · `stream` · `round` · `floor` · `msn`(set 만) |
@@ -707,8 +725,13 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
         *   **원장에 남은 행**은 runtime-1a 「POK-525 원장 질의」 로 본다.
             해제 행 적체는 `released_stuck` 줄이 없어야 풀린 것이고,
             `closed_unreleased` 가 남아 있으면 Writer 가 있어야 풀린다.
-*   **clear 도 ERROR 다.** `value=0` 줄을 set 과 같은 등급으로 내야
-    `LOG_LEVEL=warn` 수집에서도 회복이 보인다(janitor 게이지 관례).
+*   **clear 도 set 과 같은 등급이다.** ERROR 게이지의 `value=0` 은 ERROR,
+    `_write_recovered` 는 WARN 이다. 같은 등급으로 내야 `LOG_LEVEL=warn`
+    수집에서도 회복이 보인다(janitor 게이지 관례).
+*   **KVS 판 읽기(Describe)가 계속 실패하면 `dvr_floor_release_overdue` 가
+    나오지 않는다.** 해제 패스는 판을 읽은 뒤에 원장의 닫힌 회차를 읽고,
+    그때 기한(10분)을 잰다. 판 읽기가 막힌 동안 신호는
+    `edge_bounds_write_failing`(`pass=release`) 하나다.
 *   ending → vod 전이는 기존 `playback_state_sent`(`phase`)로 본다.
 
 ### /dvr 하한 사람 복구
@@ -722,8 +745,9 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 | 증상 | 먼저 | 원인 수정 | 다시 켬 |
 |---|---|---|---|
 | 시청자 404 · `dvr_floor_blocks_list` set(엣지 PR 뒤) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
-| `edge_bounds_write_failing` 이 풀리지 않음 · `dvr_floor_release_overdue` | 엣지를 끈다(엣지 PR 뒤) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
-| `edge_bounds_degraded` | — | 그 줄의 `err` 를 고친다 | 사이드카 재기동 |
+| `edge_bounds_write_failing` 이 풀리지 않음 | 엣지를 끈다(엣지 PR 뒤) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
+| `dvr_floor_release_overdue` | — 엣지는 끄지 않는다. 피해는 그 회차 VOD 가 열리지 않는 것뿐이다(`pass=release` 의 `_write_failing` 이 함께 나와도 같다) | 위 행과 같다 | 위 행과 같다 |
+| `edge_bounds_degraded` | — | 그 줄의 `err` 를 고친다. 못 고치면 위 행처럼 스위치를 끄고 교체한다(Media 교체 런북 「POK-525 롤백」 의 「Writer 만 문제」) | 고쳤으면 사이드카 재기동 — 기동 줄이 `edge_bounds_started` 면 된다. 스위치를 껐으면 위 행처럼 켜 교체 |
 | `edge_bounds_unreleased_without_writer` set(E10 — ARN 없이 뜬 상자) | — | 스위치 · 런타임 출력 ARN 을 고친다(`_config_invalid` 면 꼴) | 켠 설정으로 교체 → Writer 가 풀면 clear |
 | 원장 질의의 `released_stuck` | — | 사이드카가 돌고 있는지, `edge_bounds_unreleased_check_failed` · `edge_bounds_write_failing`(`pass=release`)이 있는지 본다 | 사이드카가 돌면 다음 확인(30초)이 지운다 |
 
@@ -758,10 +782,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer;
   outbox 행을 지운다. `stream_cutoffs` 의 UPDATE · DELETE 는 만료의 컷오프
   전진 · 제거 몫이다 — 주조는 여전히 한 번 넣고(`ON CONFLICT DO NOTHING`)
   고치지 않는다. 쓰는 문장은 M6-4 · M6-8 이 들이고, 권한은 미리 준다.
-- **`stream_edge_bounds` 넷은 /dvr 하한 원장 몫이다(POK-525).** 하한
-  Writer 가 열린 회차의 하한을 올리고(INSERT · UPDATE), 닫힌 회차의 해제를
-  적고(UPDATE), 해제 유예가 지난 행을 지운다(DELETE). `app_clip` 은 이 표에
-  권한이 없다 — 세션 행이 지워진 회차는 Writer 가 닫힌 것으로 보고 거둔다.
+- **`stream_edge_bounds` 넷은 /dvr 하한 원장 몫이다(POK-525 · ADR-0006
+  둘째 개정 — `docs/decisions/2026-11-04-media-indexer-edge-bounds-grants.md`).**
+  하한 Writer 가 열린 회차의 하한을 올리고(INSERT · UPDATE), 닫힌 회차의
+  해제를 적고(UPDATE), 해제 유예가 지난 행을 지운다(DELETE). `app_clip` 은 이
+  표에 권한이 없다 — 세션 행이 지워진 회차는 Writer 가 닫힌 것으로 보고
+  거둔다.
 - **TRUNCATE 없음 · `stream_seq_floors` 는 SELECT 만.** seq 하한은
   `stream_segments` 의 `AFTER DELETE` 트리거가 정의자(표 소유자) 권한으로
   올린다. 사이드카가 하한을 내리거나 지울 수 없다.
@@ -850,6 +876,8 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
   세션 · GAP · outbox 행과 컷오프를 지울 수 있다. 하한 트리거는 지운 뒤의
   seq 재사용만 막고(불변식 4), 지운 행 자체는 되살리지 못한다 — 복구는 백업
   뿐이다. 만료 전용 계정으로 나누는 안은 기각했다(ADR-0006 개정).
+  원장(`stream_edge_bounds`) 행도 지울 수 있다. 그 결과는 장부 손실이 아니라
+  하한 훼손이다 — 바로 아래 항목.
 - **/dvr 하한도 자격이 새면 내리거나 지울 수 있다.** 원장
   (`stream_edge_bounds`)의 하한이 줄지 않는 성질은 Writer 의 SQL 문장
   (`GREATEST`)에만 있고 트리거가 없다. 그래서 사이드카 DB 자격이 새면 표 단위
@@ -859,12 +887,18 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
   고친 것도 KVS 로 번진다 — 열린 회차의 행이 지워지거나 낮아지면 다음
   올림(5분)이 그 Writer 가 기억한 후보로 행을 다시 쓰고 그 값을 KVS 에 쓴다.
   그 후보가 KVS 의 지금 값보다 작으면(예: 그 스트림을 더는 받지 않는 다른
-  상자 Writer 가 기억한 옛 후보) KVS 하한이 내려간다. 판(ETag)은 동시 쓰기만
-  가르고 값이 줄어드는 것은 막지 않는다. 하한이 내려가거나 키가 지워지면 그
+  상자 Writer 가 기억한 옛 후보) KVS 하한이 내려간다. 이 예는 그 상자
+  사이드카가 살아 있고 그 회차 후보를 아직 들고 있을 때만 성립한다. Writer 는
+  원장이 그 회차를 열린 회차로 돌려주지 않으면 후보를 잊는다. 판(ETag)은
+  동시 쓰기만 가르고 값이 줄어드는 것은 막지 않는다. 하한이 내려가거나 키가 지워지면 그
   회차의 /dvr 창 밖 조각이 엣지를 지나고, 높아지면 시청자가 404 를 받는다.
   닫힌 회차의 행이 해제 전에 지워지면 KVS 키를 Writer 가 찾지 못해 키가
   남는다(위 「/dvr 하한 사람 복구」). 엣지 함수가 키 없음 · 값 이상을 어떻게
   다룰지는 엣지 PR(Ⓓ) 몫이다.
+  **이 위험은 받아들였다(kty 2026-11-04).** 하한은 창 정책이지 접근 통제가
+  아니다. 1차 통제는 서명 쿠키(시청 권한을 엣지가 확인하는 값)이고, 상자 ·
+  자격이 침해되면 하한을 우회할 수 있다는 것을 받아들였다. DB 트리거로
+  단조성을 더 강제해도 KVS 를 직접 고치는 길이 남는다(ADR-0006 둘째 개정).
 - **하한 갱신 함수는 정의자(`media_owner`) 권한으로 돈다.** 다른 표에 붙이면
   그 표의 행으로 남의 하한을 올릴 수 있으므로, EXECUTE 를 PUBLIC 에서 회수해
   새 부착을 막고(42501) 함수가 `stream_segments` 밖에서는 멈춘다(TG_RELID

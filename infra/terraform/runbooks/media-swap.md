@@ -928,7 +928,9 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
     1.  키 새 꼴 — Q3(`<on>` 그대로)의 `matched` 가 늘고 `mismatched` 0.
     1.  방송을 끝낸 뒤 그 회차의 국면이 `vod` 로 넘어감. 하한 Writer 는
         5분마다 원장에 올리므로, 시험 방송은 **10분 넘게** 보내 그 회차에
-        원장 행이 생기게 합니다. 그러면 B 사이드카 저널에 그 회차의
+        원장 행이 생기게 합니다. 원장 행은 첫 발행 뒤 Margin(60초)이 지난
+        다음 올림 틱(5분 주기)에 생겨 늦어도 약 6분이고, 10분은 여기에
+        여유를 둔 값입니다. 그러면 B 사이드카 저널에 그 회차의
         `dvr_floor_released`(KVS 하한 키를 지움) 한 줄이 나오고, 120초 유예
         뒤 원장 행이 지워져야 넘어갑니다. 넘어가는 시각은 해제 · 재조회
         주기의 합(약 2–3.5분) 뒤이고 상한이 아닙니다. 재조회는 30초마다
@@ -938,6 +940,8 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         다 읽기 전에는 새 묶음을 담지 않습니다 — `ending` 스트림이 많으면 그만큼
         늦어집니다. 10분이 넘도록 `ending` 이면
         runtime-1a 「POK-525 원장 질의」 로 그 회차 행의 `state` 를 봅니다.
+        `sample` 은 상태마다 앞 10개뿐이라 그 회차가 빠질 수 있으므로, 그
+        절의 「한 스트림만 보기」 대로 `<test>` 로 좁혀 돌립니다.
     1.  **업로드 · 발행 정상 · VOD 문서 URI 새 꼴** — 국면이 `vod` 가 된 뒤
         Q4(`<on>` · `<test>`)의 `pass` 가 `t`: 그 회차 조각(컷오프 이상)의
         ③(되감기 조각) 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0 · 최신 세션
@@ -1063,11 +1067,17 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         apply). 원인을 고친 뒤 다시 켭니다.
 *   **Writer 만 문제**(`edge_bounds_write_failing` 이 풀리지 않음 ·
     `dvr_floor_release_overdue` · `edge_bounds_degraded`)
+    *   `edge_bounds_degraded` 는 먼저 그 줄의 `err` 를 고치고 사이드카를
+        재기동합니다(media README 「/dvr 하한 사람 복구」). 못 고칠 때만
+        아래 방법으로 갑니다.
     *   방법: 엣지를 먼저 끔(엣지 PR 뒤) → `edge_bounds_writer_enabled =
         false` 로 「설정 반영 교체」 → 고친 뒤 `true` 로 다시 교체. 꺼진
         동안 닫힌 미해제 회차는 `ending` 에 묶이고
         (`edge_bounds_unreleased_without_writer`) Writer 가 돌아오면
         풀립니다.
+    *   `dvr_floor_release_overdue` 만이면(`pass=release` 의
+        `edge_bounds_write_failing` 이 함께 나와도) 엣지는 끄지 않습니다 —
+        피해는 그 회차 VOD 가 열리지 않는 것뿐입니다.
     *   **Writer 없는 상자로 바꾸기 전에 해제 뒤 120초를 기다립니다.**
         옛 상자의 Writer 가 KVS 키를 지우고 해제를 적은 행은 120초 유예 뒤에
         지워집니다. 그 안에 옛 상자를 멈추면 지울 몫이 Writer 없는 상자의

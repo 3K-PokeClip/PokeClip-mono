@@ -832,7 +832,8 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     열린 회차마다 /dvr 하한(엣지가 그 아래 조각을 막는 seq) 하나를 적는
     정본이고, CloudFront KVS 는 그 사본입니다. 그 판이 더한 문장은 셋입니다.
     *   `stream_schema.sql` 끝의 `CREATE TABLE IF NOT EXISTS
-        stream_edge_bounds`(PK `(stream_id, round_id)` · FK · 인덱스 없음).
+        stream_edge_bounds`(PK `(stream_id, round_id)` · FK 없음 · 보조
+        인덱스 없음).
     *   `30_grants.sql` 의 `media_indexer` 권한 넷(SELECT · INSERT · UPDATE
         · DELETE — DELETE 는 해제 유예가 지난 행 정리).
     *   `40_verify.sql` 의 표 목록 한 줄과 권한 행렬 네 행.
@@ -1564,11 +1565,14 @@ SET ROLE media_owner;
 WITH classified AS (
   SELECT b.stream_id || '/' || b.round_id AS floor_key,
          CASE
-           WHEN b.released_at < pg_catalog.now() - interval '120 seconds' THEN 'released_stuck'
+           WHEN b.released_at < pg_catalog.now() - interval '120 seconds'
+             THEN 'released_stuck'
            WHEN b.released_at IS NOT NULL THEN 'released_settling'
            WHEN NOT EXISTS (SELECT 1 FROM stream_sessions s
-                             WHERE s.stream_id = b.stream_id AND s.round_id = b.round_id
-                               AND s.round_closed_at IS NULL) THEN 'closed_unreleased'
+                             WHERE s.stream_id = b.stream_id
+                               AND s.round_id = b.round_id
+                               AND s.round_closed_at IS NULL)
+             THEN 'closed_unreleased'
            ELSE 'open'
          END AS state
     FROM stream_edge_bounds b
@@ -1590,6 +1594,10 @@ make_read edge_bounds "${payload}/edge_bounds.sql" && send_step edge_bounds
     줄이 없는 것입니다.
 *   `sample` 은 상태마다 이름순 앞 10개의 `{스트림}/{회차}`(KVS 키와 같은
     꼴)뿐입니다. 어느 회차인지 보는 단서이고 판정에 쓰지 않습니다.
+*   **한 스트림만 보기.** 특정 회차가 앞 10개 밖이면 `sample` 에 나오지
+    않습니다. 그때는 `FROM stream_edge_bounds b` 바로 아래에
+    `WHERE b.stream_id = '<스트림>'` 한 줄을 더해 그 스트림의 행만 셉니다.
+    그 스트림의 회차가 상태마다 10개 이하면 `sample` 에 모두 나옵니다.
 
 | `state` | 뜻 | 누가 거두나 |
 |---|---|---|
