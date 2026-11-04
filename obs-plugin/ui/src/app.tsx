@@ -53,10 +53,12 @@ export function App({ bridge }: { bridge: Bridge }) {
   const [notice, setNotice] = useState<{ tone: ToastTone; message: string } | null>(null);
   const notify = useCallback((tone: ToastTone, message: string) => setNotice({ tone, message }), []);
   const seenMarkSeq = useRef<number | null>(null);
-  // null = 고르지 않음(개발 환경이면 켜짐). devFocus는 켤 때마다 올라 그 칸으로 데려간다.
+  // null = 아직 정하지 않음 — 처음 받은 상태가 개발 환경이면 켠다(아래 효과가 고정한다). devFocus — 켠 순간 그 칸으로 데려가라는
+  // 한 번짜리 신호. 데려간 쪽(SettingsPanel)이 내린다 — 남겨 두면 연결·재연결로 화면이 새로 붙을 때마다 다시 데려간다.
   const [devMode, setDevMode] = useState<boolean | null>(null);
-  const [devFocus, setDevFocus] = useState(0);
+  const [devFocus, setDevFocus] = useState(false);
   const devOn = devMode ?? (state?.serverEnv === 'dev');
+  const clearDevFocus = useCallback(() => setDevFocus(false), []);
   const brandTaps = useRef<number[]>([]);
   const tapBrand = () => {
     const now = Date.now();
@@ -68,9 +70,15 @@ export function App({ bridge }: { bridge: Bridge }) {
     brandTaps.current = [];
     const next = !devOn;
     setDevMode(next);
-    if (next) setDevFocus((n) => n + 1);
+    setDevFocus(next);
     setNotice({ tone: 'success', message: next ? '개발자 모드를 켰어요.' : '개발자 모드를 껐어요.' });
   };
+
+  // 개발자 모드를 처음 상태로 고정한다 — 서버 환경을 따라가게 두면 개발 빌드에서 「개발 서버 사용」을 끄는 순간 그 스위치가 든
+  // 개발자 칸이 통째로 사라져, 되돌리려면 안내 없는 로고 5번만 남는다.
+  useEffect(() => {
+    if (state && devMode === null) setDevMode(state.serverEnv === 'dev');
+  }, [state?.serverEnv, devMode]);
 
   useEffect(() => {
     bridge
@@ -204,7 +212,14 @@ export function App({ bridge }: { bridge: Bridge }) {
         {/* 연결되면 송출 점검·오디오 트랙·설정(맨 위에 순간 표시 단축키)을 탭 하나씩. 연결 전엔 코드 입력만 — 개발자 모드일
             때만 그 아래에 서버(환경·인증·수신)를 고르는 칸을 둔다. */}
         {state.paired ? (
-          <DockTabs state={state} bridge={bridge} locked={locked} devVisible={devOn} focusDev={devFocus} />
+          <DockTabs
+            state={state}
+            bridge={bridge}
+            locked={locked}
+            devVisible={devOn}
+            focusDev={devFocus}
+            onDevFocused={clearDevFocus}
+          />
         ) : devOn ? (
           <DevCard
             bridge={bridge}
@@ -214,6 +229,7 @@ export function App({ bridge }: { bridge: Bridge }) {
             apiBase={state.apiBase}
             paired={false}
             focusDev={devFocus}
+            onDevFocused={clearDevFocus}
           />
         ) : null}
 

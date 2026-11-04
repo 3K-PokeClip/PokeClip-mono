@@ -59,7 +59,8 @@ export interface SettingsPanelProps {
   paired: boolean; // 연결돼 있을 때만 서버를 바꾸기 전에 「연결이 해제돼요」를 묻는다
   general: boolean; // 일반 설정(스위치 셋) — 연결 전 코드 입력 화면에는 두지 않는다
   devVisible: boolean;
-  focusDev: number; // 로고로 개발자 모드를 켤 때마다 오른다 — 그 칸이 보이게 내린다
+  focusDev: boolean; // 로고로 개발자 모드를 막 켰다 — 그 칸이 보이게 내리고 onDevFocused로 신호를 내린다
+  onDevFocused: () => void;
   hotkey: string | null; // 연결 전엔 null — 단축키 칸을 두지 않는다
 }
 
@@ -80,6 +81,7 @@ export function SettingsPanel({
   general,
   devVisible,
   focusDev,
+  onDevFocused,
   hotkey,
 }: SettingsPanelProps) {
   const [settings, setSettings] = useState<PluginSettings | null>(null);
@@ -97,7 +99,6 @@ export function SettingsPanel({
   const [confirmApi, setConfirmApi] = useState<string | null>(null);
   const notify = useNotify();
   const devSection = useRef<HTMLDivElement>(null);
-  const scrolledFor = useRef(0);
 
   useEffect(() => {
     if (settings) return;
@@ -142,9 +143,9 @@ export function SettingsPanel({
   }, [stale, serverEnv, apiBase]);
 
   useEffect(() => {
-    if (!devVisible || !settings || focusDev <= scrolledFor.current) return;
-    scrolledFor.current = focusDev;
+    if (!focusDev || !devVisible || !settings) return;
     devSection.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    onDevFocused();
   }, [focusDev, devVisible, settings]);
 
   if (!settings) {
