@@ -6,6 +6,7 @@ import {
   formatPairingInput,
   formatUptime,
   isCompletePairingCode,
+  resolveApiBase,
   sparklinePath,
   takeSseFrames,
 } from './format';
@@ -95,5 +96,15 @@ describe('takeSseFrames', () => {
   it('CRLF 도 받는다', () => {
     const { frames } = takeSseFrames('event: state\r\ndata: x\r\n\r\n');
     expect(frames).toEqual([{ event: 'state', data: 'x' }]);
+  });
+});
+
+describe('resolveApiBase', () => {
+  it('앞뒤 공백과 끝의 / 를 뗀다', () => {
+    expect(resolveApiBase('  http://localhost:8082//  ', 'https://api.pokeclip.com')).toBe('http://localhost:8082');
+  });
+  it('비우면 기본 주소', () => {
+    expect(resolveApiBase('   ', 'https://api.pokeclip.com')).toBe('https://api.pokeclip.com');
+    expect(resolveApiBase('/', 'https://dev.pokeclip.com')).toBe('https://dev.pokeclip.com');
   });
 });

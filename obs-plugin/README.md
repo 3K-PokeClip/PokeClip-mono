@@ -16,8 +16,8 @@
 | GOP 2s 강제 | 시작 직전 방송 비디오 인코더 `keyint_sec`를 2로 바꾸고 `x264opts`/`opts`의 keyint 계열 토큰을 걷는다 (ADR-020). 동기화가 켜져 있으면 페어링 전이어도 적용한다 — 인코더가 돌기 시작한 뒤에는 못 바꾸므로, 방송 중에 페어링해도 이어 보낼 수 있게 미리 해 둔다. 이때 독은 「연결되지 않아…」 토스트에 「키프레임 간격은 2초로 맞춰 뒀어요.」를 붙여 알린다 |
 | 해상도 점검 | 방송 인코더 출력이 1920×1080이 아니면 독 「송출 점검」·Qt 폴백 패널에 경고와 「1080p를 권장해요. 다른 해상도여도 전송을 막지 않아요.」를 띄우고 **그대로 보낸다**(점검값은 다음 본방 시작까지 남으므로 전송 중을 단정하는 말은 쓰지 않는다). 1080p는 권장값이다(ADR-020, POK-268) — 인코더를 본방과 공유해 우리 출력만 다른 해상도로 보낼 수 없으므로 막지 않는다. 송출 중 해상도·FPS 변경은 OBS가 막는다(출력이 도는 동안 `obs_reset_video`가 거절하고 설정 창 비디오 탭이 잠긴다) |
 | 페어링 | 독에 8자리 코드 → `POST /api/stream-keys/pairing-codes/exchange` → streamid·passphrase 저장 (ADR-019). 독 입력칸의 ⌘V·Ctrl+V와 「복사한 코드 붙여넣기」는 플러그인이 OS 클립보드에서 **코드만** 골라 채운다(POK-495 — 독은 OBS 안의 CEF라 macOS ⌘V가 OBS 「편집 › 붙여넣기(소스)」에 먹힌다) |
-| 서버 환경 (POK-267) | 배포 빌드는 운영(`api.pokeclip.com` · `ingest.pokeclip.com`), 개발 빌드는 개발(`dev.pokeclip.com` · `media-dev.pokeclip.com`)을 기본으로 쓴다. 페어링·마크 주소와 SRT 수신은 늘 같은 환경 짝이다(종료 신호는 짝 밖 — 운영 고정). 독 숨은 스위치로 바꾸면 연결이 해제된다 — 아래 「2. 배포 빌드」·「설정 파일」 |
-| 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태 카드(전송 시간·비트레이트·순간 표시·연결 해제) 아래에 **탭 셋 — 점검(송출 점검) · 오디오(트랙 배정, 처음 탭) · 설정(맨 위에 순간 표시 단축키)**. 다른 탭에 확인할 것(점검 실패·트랙 없는 소스)이 있으면 그 탭에 점이 붙는다. 연결 전엔 탭 없이 접는 「고급 설정」 칸 하나. 화면은 claude.ai/design 시안 「PokeClip Plugin UI」 기준이고, web 디자인 토큰·브랜드 심볼을 그대로 쓴다 |
+| 서버 환경 (POK-267) | 배포 빌드는 운영(`api.pokeclip.com` · `ingest.pokeclip.com`), 개발 빌드는 개발(`dev.pokeclip.com` · `media-dev.pokeclip.com`)을 기본으로 쓴다. 페어링·마크 주소와 SRT 수신은 늘 같은 환경 짝이다(종료 신호는 짝 밖 — 운영 고정). 독 개발자 모드(로고 5번)에서 바꾸면 연결이 해제된다 — 아래 「2. 배포 빌드」·「설정 파일」 |
+| 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태 카드(전송 시간·비트레이트·순간 표시·연결 해제) 아래에 **탭 셋 — 점검(송출 점검) · 오디오(트랙 배정, 처음 탭) · 설정(맨 위에 순간 표시 단축키)**. 다른 탭에 확인할 것(점검 실패·트랙 없는 소스)이 있으면 그 탭에 점이 붙는다. 연결 전엔 탭 없이 코드 입력만 — 개발자 모드일 때만 그 아래에 서버(환경·인증·수신)를 고르는 칸이 붙는다. 화면은 claude.ai/design 시안 「PokeClip Plugin UI」 기준이고, web 디자인 토큰·브랜드 심볼을 그대로 쓴다 |
 | Qt 폴백 | obs-browser가 없거나(일부 Linux·Wayland) 페이지가 붙지 않으면 최소 Qt 패널 — 기능은 같다 |
 | 자동 재연결 (A5) | 우리 SRT가 송출 중에 끊기거나 처음부터 붙지 못하면 플러그인이 정책 표(300초 안 5초 → 30초 → 60초, 65분에 포기)대로 다시 붙인다. 본방은 그대로다. 독에 「M초 뒤 다시 시도해요 · N번째」와 「다시 시도」·「재시도 중지」·「다시 연결」 — 아래 「자동 재연결」 |
 | 핫키 마킹 (A4) | 단축키(기본 Ctrl+Shift+M)·독 버튼으로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다(재시도·중복 방지 포함). 받는 서버 창구는 clip `POST /api/clip/marks`(POK-391). 단축키는 독 설정 탭 맨 위에서 바로 바꾼다(POK-494). macOS는 송출 중 시스템 전역 단축키로도 받아 OBS가 뒤에 있어도·보안 입력 중에도 된다(POK-496). 아래 「핫키 마킹」 |
@@ -103,7 +103,7 @@ Chrome이 아티팩트를 「위험한 파일」로 막으면 `gh run download <
 | `prod` 운영 | `https://api.pokeclip.com` | `ingest.pokeclip.com:8890` | 배포 빌드(CI 템플릿 경로) |
 | `dev` 개발 | `https://dev.pokeclip.com` | `media-dev.pokeclip.com:8890` | 개발 빌드(`macos-local`) |
 
-- 운영 이름은 엣지 8단계([POK-300](https://xodbs9810.atlassian.net/browse/POK-300))에서 한 이름씩 열린다. 그 전에 배포 빌드로 시험하려면 **독 로고를 3초 안에 5번 눌러** 「설정 탭 › 개발 서버 사용 (관리자)」을 켠다(연결 전엔 「고급 설정」 칸). 바꾸면 연결이 해제되므로 그 서버에서 새 코드를 받아 다시 연결한다.
+- 운영 이름은 엣지 8단계([POK-300](https://xodbs9810.atlassian.net/browse/POK-300))에서 한 이름씩 열린다. 그 전에 배포 빌드로 시험하려면 **독 로고를 3초 안에 5번 눌러** 개발자 모드를 켜고 「개발 서버 사용」을 켠다(연결 전엔 코드 입력 아래 칸, 연결 뒤엔 설정 탭 아래쪽). 바꾸면 연결이 해제되므로 그 서버에서 새 코드를 받아 다시 연결한다.
 - 운영 SRT 수신 호스트는 `ingest.pokeclip.com`(NLB — ADR-020·021, POK-300)이다.
   `media.pokeclip.com`은 CloudFront라 SRT가 닿지 않는다 — 2026-10-14부터 0.2.1
   전까지의 빌드가 이 값을 운영 수신으로 썼고, 지금 판은 옛 기본값으로 보고 올린다(「설정 파일」
@@ -168,9 +168,9 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 
 | 키 | 기본값 | 뜻 |
 |---|---|---|
-| `server_env` | 배포 빌드 `prod` · 개발 빌드 `dev` | 서버 환경(POK-267). `api_base`·수신 주소의 짝과 스트림 키가 이 환경에 속한다. 독 숨은 스위치나 브리지 `PUT`으로 바꾸면 **연결이 해제된다**. 이 키가 없는 옛 파일은 `api_base`로 짐작한다 — `https://dev.pokeclip.com`(옛 `http://…` 포함)이면 `dev`라서 dev 키로 페어링된 설치는 배포 빌드로 올려도 그대로 이어진다 |
-| `api_base` | 운영 `https://api.pokeclip.com` · 개발 `https://dev.pokeclip.com` | 페어링 교환·마크 API (로컬 auth 직결: `http://localhost:8082`). **알려진 기본값**(두 환경 값·옛 `http://dev.pokeclip.com`)이면 읽을 때 `server_env`의 값으로 맞춘다. 직접 적은 값은 그대로 둔다 |
-| `ingest_host` · `ingest_port` | 운영 `ingest.pokeclip.com` · 개발 `media-dev.pokeclip.com` · `8890` | SRT 수신부. 알려진 기본 호스트(두 환경 값·옛 `ingest.pokeclip.com`·옛 운영 `media.pokeclip.com`)면 `api_base`처럼 맞춘다(포트는 8890일 때만) — 읽을 때와 독에서 저장할 때 모두. 그래서 다른 환경의 기본 호스트를 적어 저장하면 지금 환경의 호스트로 바뀐다(환경은 숨은 스위치로 바꾼다). 호스트는 이름·IPv4 또는 `[IPv6]` — 포트는 `ingest_port`로만(`host:포트`는 400). `ingest.pokeclip.com`은 POK-267 이전 옛 기본값이자 지금 운영 값이고, `media.pokeclip.com`은 2026-10-14부터 0.2.1 전까지의 운영 값이다(CloudFront라 SRT가 닿지 않아 직접 적은 값으로 보지 않는다) |
+| `server_env` | 배포 빌드 `prod` · 개발 빌드 `dev` | 서버 환경(POK-267). `api_base`·수신 주소의 짝과 스트림 키가 이 환경에 속한다. 독 개발자 모드 「개발 서버 사용」이나 브리지 `PUT`으로 바꾸면 **연결이 해제된다**. 이 키가 없는 옛 파일은 `api_base`로 짐작한다 — `https://dev.pokeclip.com`(옛 `http://…` 포함)이면 `dev`라서 dev 키로 페어링된 설치는 배포 빌드로 올려도 그대로 이어진다 |
+| `api_base` | 운영 `https://api.pokeclip.com` · 개발 `https://dev.pokeclip.com` | 페어링 교환·마크 API — 독에서는 「인증 서버」 (로컬 auth 직결: `http://localhost:8082`). **알려진 기본값**(두 환경 값·옛 `http://dev.pokeclip.com`)이면 읽을 때와 독에서 저장할 때 `server_env`의 값으로 맞춘다. 직접 적은 값은 그대로 둔다. 독 개발자 모드에서 바꾸면 **연결이 해제된다**(키는 그 서버가 발급했다) — 독이 직접 적을 수 있는 주소는 이 PC 안(localhost·127.x·[::1])뿐이고, PC 밖의 다른 주소는 설정 파일로만 바꾼다 |
+| `ingest_host` · `ingest_port` | 운영 `ingest.pokeclip.com` · 개발 `media-dev.pokeclip.com` · `8890` | SRT 수신부. 알려진 기본 호스트(두 환경 값·옛 `ingest.pokeclip.com`·옛 운영 `media.pokeclip.com`)면 `api_base`처럼 맞춘다(포트는 8890일 때만) — 읽을 때와 독에서 저장할 때 모두. 그래서 다른 환경의 기본 호스트를 적어 저장하면 지금 환경의 호스트로 바뀐다(환경은 개발자 모드 「개발 서버 사용」으로 바꾼다). 호스트는 이름·IPv4 또는 `[IPv6]` — 포트는 `ingest_port`로만(`host:포트`는 400). `ingest.pokeclip.com`은 POK-267 이전 옛 기본값이자 지금 운영 값이고, `media.pokeclip.com`은 2026-10-14부터 0.2.1 전까지의 운영 값이다(CloudFront라 SRT가 닿지 않아 직접 적은 값으로 보지 않는다) |
 | `streamid` · `passphrase` | — | 페어링이 채운다. **passphrase는 로그·브리지 응답에 싣지 않는다** |
 | `send_passphrase` | `true` | 로컬 compose MediaMTX는 passphrase 미설정이라 `false`여야 붙는다 (암호가 서로 안 맞으면 서버가 거절하고, 독에는 `connect_failed`로 보인다) |
 | `latency_ms` | `1000` | SRT latency. URL에는 마이크로초로 들어간다 |
@@ -185,9 +185,15 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 | `end_signal_base` | 빈 값(= `https://media.pokeclip.com`) | 종료 신호(A3·4D) 기준 주소 덮어쓰기. **루프백(localhost·127.x·[::1])일 때만 인정**하고 아니면 운영 주소로 간다 — 규약 「개발 빌드만 루프백」을 빌드 플래그 없이 지킨다. 개발용(목 수신부) — 독 화면·브리지에 없다 |
 | `mark_hotkey` | — | 마지막으로 쓴 단축키 사본 `{"bindings":[…]}`(내부용). 프로필에 단축키가 없을 때 쓴다 |
 
-독 설정 탭(연결 전엔 「고급 설정」 칸)에서는 스위치 셋(본방 동기·오디오 자동 배정·기본 패널)을 **누르는 즉시** 그 값 하나만 저장하고(그 줄에 「저장됨」), 수신 호스트·포트·SRT 지연·암호 사용은 접힌 「수신 서버」 안에서 「서버 설정 저장」으로 한 번에 바꾼다. 송출 중에는 오디오 자동 배정만 바꿀 수 있고(배정은 방송·녹화가 끝난 뒤 적용) 나머지는 「방송 중에는 바꿀 수 없어요」로 잠긴다 — 자동 재시도 중에도 잠기므로 「재시도 중지」 뒤에 바꾼다. `api_base`·`clip_api_base`·`end_signal_base`는 스트리머가 바꿀 값이 아니라 화면에 없고, **브리지 `PUT /api/config`로도 바꿀 수 없다** — 마크가 스트림 키 파생 값을 싣고 가는 곳이라 브리지 토큰만으로 목적지를 바꾸게 두지 않는다. 개발 중에는 설정 파일로 바꾼다(OBS를 끄고 고친다).
+독 설정 탭(연결 뒤에만 있다)에서는 스위치 셋(본방 동기·오디오 자동 배정·기본 패널)을 **누르는 즉시** 그 값 하나만 저장한다(그 줄에 「저장됨」). 연결 전 코드 입력 화면에는 이 스위치들이 없다. 송출 중에는 오디오 자동 배정만 바꿀 수 있고(배정은 방송·녹화가 끝난 뒤 적용) 나머지는 「방송 중에는 바꿀 수 없어요」로 잠긴다 — 자동 재시도 중에도 잠기므로 「재시도 중지」 뒤에 바꾼다. `clip_api_base`·`end_signal_base`는 스트리머가 바꿀 값이 아니라 화면에 없고, **브리지 `PUT /api/config`로도 바꿀 수 없다** — 마크·종료 신호가 스트림 키 파생 값을 싣고 가는 곳이라 브리지 토큰만으로 목적지를 바꾸게 두지 않는다. 개발 중에는 설정 파일로 바꾼다(OBS를 끄고 고친다).
 
-**서버 환경만 독에서 바꿀 수 있다.** 로고를 3초 안에 5번 누르면 설정 탭(연결 전엔 「고급 설정」 칸)이 열리며 「개발 서버 사용 (관리자)」 스위치가 보인다(그 독 세션 동안. 이미 개발 환경이면 늘 보인다). 확인 창을 거쳐 `PUT /api/config {"server_env": …}`를 보내고, 머리에 「개발 서버」 표시가 붙는다. 목적지는 컴파일된 두 짝 중 하나뿐이고 바꾸면 키를 지우므로, 브리지 토큰만으로 스트림 키나 그 파생 값을 다른 곳에 보내게 할 수 없다. 코드를 넣고 교환 응답을 기다리는 사이(최대 15초) 환경이 바뀌면 받은 키는 버리고 `server_changed`로 답한다 — 옛 환경의 키를 새 짝에 붙이지 않는다. Qt 폴백 패널에는 이 스위치가 없다 — 설정 파일의 `server_env`를 고치고 `streamid`·`passphrase`도 지운다(OBS를 끄고 고친다).
+**서버는 개발자 모드에서만 고른다.** 로고를 3초 안에 5번 누르면 개발자 모드가 켜지고(한 번 더 그러면 꺼진다 — 그 독 세션 동안. 고르지 않았으면 개발 환경일 때 켜져 있다), 연결 전엔 코드 입력 아래 칸, 연결 뒤엔 설정 탭 아래쪽에 셋이 보인다. 개발자 모드가 꺼져 있으면 서버를 고르는 칸은 어디에도 없다.
+
+- **개발 서버 사용** — `PUT /api/config {"server_env": …}`. 머리에 「개발 서버」 표시가 붙는다. 목적지는 컴파일된 두 짝 중 하나뿐이다.
+- **인증 서버** — 8자리 코드를 확인하고 스트림 키를 발급하는 곳(`api_base`). `PUT {"api_base": …}`는 비움(지금 환경의 기본 주소)·두 환경의 기본 주소(지금 환경 짝으로 맞춘다)·**이 PC 안의 주소**(`http(s)://localhost|127.x.x.x|[::1][:포트]` — 경로·`@` 없이)만 받고, 그 밖은 400 `invalid_api_base`. PC 밖의 다른 주소는 설정 파일로만 바꾼다.
+- **수신 서버** — 수신 호스트·포트·SRT 지연·암호 사용을 「서버 설정 저장」으로 한 번에 바꾼다. 키와 무관해 연결은 그대로다.
+
+서버 환경·인증 서버는 바뀌면 키를 지우므로(키는 그 인증 서버가 발급했다) 연결돼 있으면 확인 창을 거친다 — 연결 전이면 묻지 않는다. 그래서 브리지 토큰만으로는 지금 키나 그 파생 값을 다른 곳에 보내게 할 수 없고, 새로 페어링할 곳도 컴파일된 두 짝과 이 PC 밖으로는 못 고른다. 코드를 넣고 교환 응답을 기다리는 사이(최대 15초) 환경이나 인증 서버가 바뀌면 받은 키는 버리고 `server_changed`로 답한다 — 옛 서버의 키를 새 짝에 붙이지 않는다. Qt 폴백 패널에는 이 칸이 없다 — 설정 파일의 `server_env`·`api_base`를 고치고 `streamid`·`passphrase`도 지운다(OBS를 끄고 고친다).
 
 ## 오디오 트랙 (A2)
 
@@ -323,7 +329,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | `POST /api/pair` `{code}` | Bearer | 200 / 400 invalid_format / 404 not_found / 410 expired / 409 already_used·streaming·server_changed(기다리는 사이 서버 환경이 바뀜) / 429 rate_limited / 502 network·server_error |
 | `POST /api/unpair` | Bearer | 송출 중이면 409 |
 | `POST /api/audio/assign` `{key, track}` | Bearer | 독 손 배정 — `track` 2~6은 그 트랙으로 옮긴다(찬 트랙이면 묶인다), 없으면 트랙에서 뺀다(본방 믹스에만). 200 적용됨(결과는 상태 `audio`로 온다 — 소스마다 `key`, 트랙에 없는 소스는 `mixOnly`) / 202 UI 스레드가 1.5초 안에 답하지 않음(결과는 상태로) / 409 audio_off(자동 배정이 적용 중이 아님)·main_stream_track / 404 unknown_source / 400 bad_track / 500 save_failed(설정 파일을 못 써 기억도 되돌렸다). 방송 중에도 받는다 |
-| `GET·PUT /api/config` | Bearer | 위 설정 표의 비밀 아닌 키. PUT은 `api_base`·`clip_api_base`를 무시한다. `server_env`(`prod`·`dev`)가 지금과 다르면 알려진 기본 주소를 그 짝으로 바꾸고 **연결을 해제한다** — 같은 본문의 `ingest_host`·`ingest_port`는 무시하고, 그 밖의 값은 400 invalid_server_env. 전환이 아니면 알려진 기본 호스트를 지금 짝으로 맞춰 저장한다(다른 환경의 기본 호스트·낡은 초안). 요청 값은 잠금 아래 지금 설정에 얹는다 — 그사이 바뀐 환경·키를 되살리지 않는다. 송출 중이면 409 streaming — 단 `audio_auto_assign`·`audio_assign_prompted`만 바뀐 요청은 받는다(배정은 방송·녹화가 끝난 뒤 적용) |
+| `GET·PUT /api/config` | Bearer | 위 설정 표의 비밀 아닌 키(+ 읽기 전용 `default_api_base` — 지금 환경의 기본 인증 서버). PUT은 `clip_api_base`를 무시하고, `api_base`는 비움·두 환경의 기본 주소·이 PC 안의 주소만 받는다(그 밖은 400 invalid_api_base) — 바뀌면 **연결을 해제한다**. `server_env`(`prod`·`dev`)가 지금과 다르면 알려진 기본 주소를 그 짝으로 바꾸고 **연결을 해제한다** — 같은 본문의 `ingest_host`·`ingest_port`는 무시하고, 그 밖의 값은 400 invalid_server_env. 전환이 아니면 알려진 기본 호스트를 지금 짝으로 맞춰 저장한다(다른 환경의 기본 호스트·낡은 초안). 요청 값은 잠금 아래 지금 설정에 얹는다 — 그사이 바뀐 환경·키를 되살리지 않는다. 송출 중이면 409 streaming — 단 `audio_auto_assign`·`audio_assign_prompted`만 바뀐 요청은 받는다(배정은 방송·녹화가 끝난 뒤 적용) |
 | `POST /api/mark` | Bearer | 독 「순간 표시」 — 202 받음 / 409 mark_not_live·no_key·invalid_key·mark_insecure(거절도 상태 `marks`로 온다) / 429 mark_too_soon. 보낸 결과는 상태 `marks`로 온다 |
 | `POST /api/send-now` | Bearer | 독 「다시 연결」·「다시 시도」 — 202 받음(붙었는지는 상태로 온다) / 409 main_not_live·no_key·send_unavailable |
 | `POST /api/stop-retry` | Bearer | 독 「재시도 중지」 — 202 / 409 not_retrying |
@@ -343,7 +349,7 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 ```
 
 1. `docker compose up -d postgres redis media` · auth `./gradlew :auth:bootRun` · web `pnpm dev`
-2. `pokeclip.json`에 `api_base=http://localhost:8082`, `ingest_host=127.0.0.1`, `send_passphrase=false` — 기본값이 원격 서버라 반드시 바꾼다. 직접 적은 주소는 `server_env`와 무관하게 그대로 쓴다
+2. 독 로고를 5번 눌러 개발자 모드를 켜고 인증 서버 `http://localhost:8082`, 수신 서버 `127.0.0.1` · SRT 암호 끔으로 바꾼다(또는 `pokeclip.json`에 `api_base`·`ingest_host`·`send_passphrase=false`) — 기본값이 원격 서버라 반드시 바꾼다. 직접 적은 주소는 `server_env`와 무관하게 그대로 쓴다
 3. 웹 설정 › 플러그인에서 코드 발급 → 독에 입력
 4. OBS 방송 시작 → OBS 로그 `[pokeclip-obs] stream encoder … keyint_sec 0 -> 2` · `SRT output started`
 5. 녹화 조각의 키프레임: `docker cp pokeclip-media-1:/recordings/<token> ./rec` 후

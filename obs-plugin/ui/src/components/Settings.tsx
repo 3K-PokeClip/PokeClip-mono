@@ -1,7 +1,8 @@
-import { ChevronDown, ChevronRight, Server, SlidersHorizontal } from 'lucide-preact';
+import { ChevronDown, ChevronRight, KeyRound, Server, Wrench } from 'lucide-preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Bridge } from '../lib/bridge';
 import { reasonText } from '../lib/copy';
+import { resolveApiBase } from '../lib/format';
 import type { PluginSettings, ServerEnv } from '../lib/types';
 import { ConfirmDialog } from './ConfirmDialog';
 import { HotkeySection } from './HotkeySection';
@@ -13,8 +14,11 @@ type Flag = 'sync_start' | 'audio_auto_assign' | 'force_fallback';
 type RowKey = Flag | 'server_env';
 // 수신 서버 — 거의 안 바꾸는 값이라 안쪽에 접어 두고 「서버 설정 저장」으로 한 번에 보낸다
 type ServerDraft = Pick<PluginSettings, 'ingest_host' | 'ingest_port' | 'latency_ms' | 'send_passphrase'>;
+type Fold = 'api' | 'ingest';
+type Message = { ok: boolean; text: string };
 
 const SAVED_MS = 1500;
+const UNPAIR_DESC = '지금 연결이 해제돼요. 바꾼 서버에서 새 8자리 코드를 발급받아 다시 연결해야 해요.';
 
 // waiting — 어느 스위치든 저장 중이라 잠깐 못 누른다. disabled로 잠그면 키보드로 누른 그 스위치의 포커스가 body로
 // 빠져(Chromium) 처음부터 다시 Tab해야 한다 — aria-disabled로 흐리게만 하고 누름은 버린다(3차 리뷰).
@@ -47,41 +51,55 @@ function Switch({
   );
 }
 
-// 설정 탭(연결 전엔 「고급 설정」 칸) 안쪽. 맨 위에 순간 표시 단축키(연결됐을 때만), 그 아래 스위치는 누르는 즉시 저장되고
-// 그 줄에 「저장됨」이 잠깐 뜬다 — 아래 「저장」을 또 누르지 않는다. 방송 중엔 플러그인이 동기화·독 표시 방식·서버 환경·수신 서버를
-// 거절하므로(409 streaming) 그 줄은 잠그고, 오디오 자동 배정만 바꿀 수 있다(배정은 방송·녹화가 끝난 뒤 적용).
-// devVisible — POK-267 「개발 서버」 숨은 스위치. 로고를 연달아 눌러 풀었거나(app.tsx) 이미 개발 환경일 때만 보인다.
-// 바꾸면 플러그인이 연결을 해제하므로(키가 환경별이다) 확인 창을 거친다. focusDev — 방금 풀었으면 그 줄이 보이게 내린다.
+export interface SettingsPanelProps {
+  bridge: Bridge;
+  locked: boolean;
+  autoAssign: boolean;
+  serverEnv: ServerEnv;
+  apiBase: string; // state.apiBase — 다른 곳에서 인증 서버가 바뀌면 다시 불러온다
+  paired: boolean; // 연결돼 있을 때만 서버를 바꾸기 전에 「연결이 해제돼요」를 묻는다
+  general: boolean; // 일반 설정(스위치 셋) — 연결 전 코드 입력 화면에는 두지 않는다
+  devVisible: boolean;
+  focusDev: number; // 로고로 개발자 모드를 켤 때마다 오른다 — 그 칸이 보이게 내린다
+  hotkey: string | null; // 연결 전엔 null — 단축키 칸을 두지 않는다
+}
+
+// 설정 탭 안쪽(general) · 연결 전 개발자 칸(DevCard). 맨 위에 순간 표시 단축키(연결됐을 때만), 그 아래 스위치는 누르는 즉시
+// 저장되고 그 줄에 「저장됨」이 잠깐 뜬다 — 아래 「저장」을 또 누르지 않는다. 방송 중엔 플러그인이 동기화·독 표시 방식·서버
+// 환경·인증 서버·수신 서버를 거절하므로(409 streaming) 그 줄은 잠그고, 오디오 자동 배정만 바꿀 수 있다(배정은 방송·녹화가
+// 끝난 뒤 적용).
+// 개발자 모드(devVisible) — 로고를 연달아 눌러 켰거나(app.tsx) 이미 개발 환경일 때만 「개발 서버 사용」·인증 서버·수신
+// 서버가 보인다. 서버 환경·인증 서버는 바꾸면 플러그인이 연결을 해제하므로(키는 그 서버가 발급했다) 연결돼 있으면 확인 창을
+// 거친다. 수신 서버는 키와 무관해 연결을 끊지 않는다.
 export function SettingsPanel({
   bridge,
   locked,
   autoAssign,
   serverEnv,
+  apiBase,
+  paired,
+  general,
   devVisible,
   focusDev,
   hotkey,
-}: {
-  bridge: Bridge;
-  locked: boolean;
-  autoAssign: boolean;
-  serverEnv: ServerEnv;
-  devVisible: boolean;
-  focusDev: boolean;
-  hotkey: string | null; // 연결 전엔 null — 단축키 칸을 두지 않는다
-}) {
+}: SettingsPanelProps) {
   const [settings, setSettings] = useState<PluginSettings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState<RowKey | ''>('');
   const [saved, setSaved] = useState<RowKey | ''>('');
   const [rowError, setRowError] = useState<{ key: RowKey; text: string } | null>(null);
   const [confirmEnv, setConfirmEnv] = useState<ServerEnv | null>(null);
-  const [serverOpen, setServerOpen] = useState(false);
+  const [open, setOpen] = useState<Record<Fold, boolean>>({ api: false, ingest: false });
   const [server, setServer] = useState<ServerDraft | null>(null);
   const [serverSaving, setServerSaving] = useState(false);
-  const [serverMessage, setServerMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [serverMessage, setServerMessage] = useState<Message | null>(null);
+  const [apiDraft, setApiDraft] = useState<string | null>(null);
+  const [apiSaving, setApiSaving] = useState(false);
+  const [apiMessage, setApiMessage] = useState<Message | null>(null);
+  const [confirmApi, setConfirmApi] = useState<string | null>(null);
   const savedTimer = useRef<number>();
-  const devRow = useRef<HTMLDivElement>(null);
-  const scrolledToDev = useRef(false);
+  const devSection = useRef<HTMLDivElement>(null);
+  const scrolledFor = useRef(0);
 
   useEffect(() => {
     if (settings) return;
@@ -99,17 +117,18 @@ export function SettingsPanel({
     setSettings((s) => (s && s.audio_auto_assign !== autoAssign ? { ...s, audio_auto_assign: autoAssign } : s));
   }, [autoAssign]);
 
-  // 서버 환경이 다른 곳(다른 브리지 클라이언트)에서 바뀌었으면 수신 주소는 옛 짝이다 — 버리고 다시 불러온다.
+  // 서버 환경·인증 서버가 다른 곳(다른 브리지 클라이언트)에서 바뀌었으면 수신 주소·기본 주소는 옛 짝이다 — 버리고 다시 불러온다.
   useEffect(() => {
-    setSettings((s) => (s && s.server_env !== serverEnv ? null : s));
+    setSettings((s) => (s && (s.server_env !== serverEnv || s.api_base !== apiBase) ? null : s));
     setServer(null);
-  }, [serverEnv]);
+    setApiDraft(null);
+  }, [serverEnv, apiBase]);
 
   useEffect(() => {
-    if (!focusDev || !settings || scrolledToDev.current) return;
-    scrolledToDev.current = true;
-    devRow.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [focusDev, settings]);
+    if (!devVisible || !settings || focusDev <= scrolledFor.current) return;
+    scrolledFor.current = focusDev;
+    devSection.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [focusDev, devVisible, settings]);
 
   useEffect(() => () => window.clearTimeout(savedTimer.current), []);
 
@@ -153,10 +172,53 @@ export function SettingsPanel({
     if (r.ok) {
       if (r.settings) setSettings(r.settings);
       setServer(null);
+      setApiDraft(null);
       flashSaved('server_env');
     } else {
       setRowError({ key: 'server_env', text: reasonText(r.reason) });
     }
+  };
+
+  const toggleFold = (fold: Fold) => {
+    setOpen((o) => ({ ...o, [fold]: !o[fold] }));
+    if (fold === 'api') {
+      setApiDraft(null);
+      setApiMessage(null);
+    } else {
+      setServer(null);
+      setServerMessage(null);
+    }
+  };
+
+  // 인증 서버 — 비우면 지금 환경의 기본 주소. 지금과 같은 주소면 저장할 게 없다.
+  const defaultApi = settings.default_api_base ?? '';
+  const apiValue = apiDraft ?? settings.api_base;
+  const apiTarget = resolveApiBase(apiValue, defaultApi);
+  const apiChanged = apiTarget !== settings.api_base;
+  const applyApi = async (target: string) => {
+    setApiSaving(true);
+    setApiMessage(null);
+    const r = await bridge.putSettings({ api_base: target });
+    setApiSaving(false);
+    setConfirmApi(null);
+    if (r.ok) {
+      const savedBase = r.settings?.api_base ?? target;
+      if (r.settings) setSettings(r.settings);
+      setApiDraft(null);
+      // 다른 환경의 기본 주소를 적으면 플러그인이 지금 환경 짝으로 맞춘다 — 왜 다른 주소가 됐는지 알린다
+      setApiMessage({
+        ok: true,
+        text: savedBase === target ? '저장했어요' : `운영·개발 주소는 「개발 서버 사용」을 따라가요 (${savedBase})`,
+      });
+    } else {
+      setApiMessage({ ok: false, text: reasonText(r.reason) });
+    }
+  };
+  const saveApi = (e: Event) => {
+    e.preventDefault();
+    if (locked || !apiChanged || apiSaving) return;
+    if (paired) setConfirmApi(apiTarget);
+    else void applyApi(apiTarget);
   };
 
   const draft: ServerDraft = server ?? {
@@ -188,7 +250,7 @@ export function SettingsPanel({
     const id = `setting-${key}`;
     const error = rowError?.key === key ? rowError.text : '';
     return (
-      <div class={styles.toggleRow} ref={key === 'server_env' ? devRow : undefined}>
+      <div class={styles.toggleRow}>
         <span class={styles.toggleText}>
           <span id={`${id}-label`}>{label}</span>
           <span id={`${id}-hint`} class={styles.toggleHint} data-tone={error ? 'error' : undefined}>
@@ -206,6 +268,23 @@ export function SettingsPanel({
     );
   };
 
+  const foldButton = (fold: Fold, Icon: typeof Server, label: string, value: string) => (
+    <button
+      type="button"
+      class={styles.subFold}
+      aria-expanded={open[fold]}
+      aria-controls={open[fold] ? `${fold}-fields` : undefined}
+      onClick={() => toggleFold(fold)}
+    >
+      <Icon size={13} strokeWidth={2} aria-hidden="true" />
+      <span>{label}</span>
+      <span class={styles.subFoldValue}>{value}</span>
+      {open[fold] ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+    </button>
+  );
+
+  const lockedTitle = locked ? '방송 중에는 바꿀 수 없어요' : undefined;
+
   return (
     <div class={styles.settingsPanel}>
       {hotkey !== null ? (
@@ -214,181 +293,182 @@ export function SettingsPanel({
           <div class={styles.divider} />
         </>
       ) : null}
-      {/* 동기화 = 본방의 시작·정지만 따라간다. 본방이 잠시 끊겨 재연결 중일 땐 우리 송출을 유지한다(녹화 구멍 방지). */}
-      {row('sync_start', '본 방송과 함께 시작·정지', '잠깐 끊겨도 PokeClip 전송은 이어가요', {
-        checked: settings.sync_start,
-        lockedRow: locked,
-        onChange: () => void toggle('sync_start'),
-      })}
-      {/* A2 — 트랙 2~6을 소스별 스템으로 나눈다. 끄면 처음 켤 때 기억한 트랙 체크로 되돌린다(README 「오디오 트랙」). */}
-      {row('audio_auto_assign', '오디오 트랙 자동 배정', '소리 나는 소스를 트랙 2~6에 나눠 실어요', {
-        checked: settings.audio_auto_assign,
-        lockedRow: false,
-        onChange: () => void toggle('audio_auto_assign'),
-      })}
-      {row('force_fallback', '기본 패널로 표시', '다음에 OBS를 켤 때부터', {
-        checked: settings.force_fallback,
-        lockedRow: locked,
-        onChange: () => void toggle('force_fallback'),
-      })}
-      {devVisible
-        ? row('server_env', '개발 서버 사용 (관리자)', '바꾸면 연결이 해제돼 새 코드로 다시 연결해요', {
+      {general ? (
+        <>
+          {/* 동기화 = 본방의 시작·정지만 따라간다. 본방이 잠시 끊겨 재연결 중일 땐 우리 송출을 유지한다(녹화 구멍 방지). */}
+          {row('sync_start', '본 방송과 함께 시작·정지', '잠깐 끊겨도 PokeClip 전송은 이어가요', {
+            checked: settings.sync_start,
+            lockedRow: locked,
+            onChange: () => void toggle('sync_start'),
+          })}
+          {/* A2 — 트랙 2~6을 소스별 스템으로 나눈다. 끄면 처음 켤 때 기억한 트랙 체크로 되돌린다(README 「오디오 트랙」). */}
+          {row('audio_auto_assign', '오디오 트랙 자동 배정', '소리 나는 소스를 트랙 2~6에 나눠 실어요', {
+            checked: settings.audio_auto_assign,
+            lockedRow: false,
+            onChange: () => void toggle('audio_auto_assign'),
+          })}
+          {row('force_fallback', '기본 패널로 표시', '다음에 OBS를 켤 때부터', {
+            checked: settings.force_fallback,
+            lockedRow: locked,
+            onChange: () => void toggle('force_fallback'),
+          })}
+        </>
+      ) : null}
+      {devVisible ? (
+        <>
+          {general ? <div class={styles.divider} /> : null}
+          <div ref={devSection} class={styles.devLabel}>
+            <Wrench size={12} strokeWidth={2} aria-hidden="true" />
+            <span>개발자 모드</span>
+          </div>
+          {row('server_env', '개발 서버 사용', paired ? '바꾸면 연결이 해제돼 새 코드로 다시 연결해요' : '바꾼 서버에서 받은 코드로 연결해요', {
             checked: serverEnv === 'dev',
             lockedRow: locked,
             savedText: serverEnv === 'dev' ? '개발 서버' : '운영 서버',
             onChange: () => {
               setRowError(null);
-              setConfirmEnv(serverEnv === 'dev' ? 'prod' : 'dev');
+              const target = serverEnv === 'dev' ? 'prod' : 'dev';
+              // 연결 전이면 끊을 연결이 없다 — 묻지 않고 바꾼다
+              if (paired) setConfirmEnv(target);
+              else void switchEnv(target);
             },
-          })
-        : null}
-      <div class={styles.divider} />
-      <button
-        type="button"
-        class={styles.subFold}
-        aria-expanded={serverOpen}
-        aria-controls={serverOpen ? 'server-fields' : undefined}
-        onClick={() => {
-          setServerOpen((o) => !o);
-          setServer(null);
-          setServerMessage(null);
-        }}
-      >
-        <Server size={13} strokeWidth={2} aria-hidden="true" />
-        <span>수신 서버</span>
-        <span class={styles.subFoldValue}>
-          {settings.ingest_host}:{settings.ingest_port}
-        </span>
-        {serverOpen ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-      </button>
-      {serverOpen ? (
-        <form id="server-fields" class={styles.settingsPanel} onSubmit={saveServer}>
-          <div class={styles.fieldRow}>
-            <label class={styles.field}>
-              <span class={styles.fieldLabel}>수신 호스트</span>
-              <input
-                id="setting-ingest-host"
-                class={styles.textInput}
-                value={draft.ingest_host}
-                onInput={(e) => setField('ingest_host', (e.currentTarget as HTMLInputElement).value)}
-                spellcheck={false}
-              />
-            </label>
-            <label class={styles.field}>
-              <span class={styles.fieldLabel}>포트</span>
-              <input
-                id="setting-ingest-port"
-                class={styles.textInput}
-                type="number"
-                min={1}
-                max={65535}
-                value={draft.ingest_port}
-                onInput={(e) => setField('ingest_port', Number((e.currentTarget as HTMLInputElement).value))}
-              />
-            </label>
-          </div>
-          <label class={styles.field}>
-            <span class={styles.fieldLabel}>SRT 지연 (ms)</span>
-            <input
-              id="setting-latency"
-              class={styles.textInput}
-              type="number"
-              min={20}
-              max={8000}
-              step={10}
-              value={draft.latency_ms}
-              onInput={(e) => setField('latency_ms', Number((e.currentTarget as HTMLInputElement).value))}
-            />
-          </label>
-          <div class={styles.toggleRow}>
-            <span id="setting-passphrase-label">SRT 암호 사용</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={draft.send_passphrase}
-              aria-labelledby="setting-passphrase-label"
-              class={styles.switch}
-              onClick={() => setField('send_passphrase', !draft.send_passphrase)}
-            />
-          </div>
-          {serverMessage ? (
-            <span class={serverMessage.ok ? styles.saved : styles.inlineError} role="status">
-              {serverMessage.text}
-            </span>
+          })}
+          {/* 인증 서버 — 8자리 코드를 확인하고 스트림 키를 발급하는 곳(페어링 교환·마크) */}
+          {foldButton('api', KeyRound, '인증 서버', settings.api_base)}
+          {open.api ? (
+            <form id="api-fields" class={styles.settingsPanel} onSubmit={saveApi}>
+              <label class={styles.field}>
+                <span class={styles.fieldLabel}>연결 코드를 확인하는 주소</span>
+                <input
+                  id="setting-api-base"
+                  class={styles.textInput}
+                  value={apiValue}
+                  placeholder={defaultApi}
+                  onInput={(e) => {
+                    setApiDraft((e.currentTarget as HTMLInputElement).value);
+                    setApiMessage(null);
+                  }}
+                  inputMode="url"
+                  autoComplete="off"
+                  spellcheck={false}
+                  aria-describedby="setting-api-base-hint"
+                />
+              </label>
+              <span id="setting-api-base-hint" class={styles.toggleHint}>
+                비우면 기본 주소예요. 직접 적는 주소는 이 PC(http://localhost:포트)만 돼요.
+              </span>
+              {apiMessage ? (
+                <span class={apiMessage.ok ? styles.saved : styles.inlineError} role="status">
+                  {apiMessage.text}
+                </span>
+              ) : null}
+              <Button
+                type="submit"
+                variant="soft"
+                size="sm"
+                block
+                loading={apiSaving}
+                disabled={locked || !apiChanged}
+                title={lockedTitle}
+              >
+                인증 서버 저장
+              </Button>
+            </form>
           ) : null}
-          <Button
-            type="submit"
-            variant="soft"
-            size="sm"
-            block
-            loading={serverSaving}
-            disabled={locked}
-            title={locked ? '방송 중에는 바꿀 수 없어요' : undefined}
-          >
-            서버 설정 저장
-          </Button>
-        </form>
+          {/* 수신 서버 — 우리 SRT 송출이 가는 곳. 키와 무관해 바꿔도 연결은 그대로다 */}
+          {foldButton('ingest', Server, '수신 서버', `${settings.ingest_host}:${settings.ingest_port}`)}
+          {open.ingest ? (
+            <form id="ingest-fields" class={styles.settingsPanel} onSubmit={saveServer}>
+              <div class={styles.fieldRow}>
+                <label class={styles.field}>
+                  <span class={styles.fieldLabel}>수신 호스트</span>
+                  <input
+                    id="setting-ingest-host"
+                    class={styles.textInput}
+                    value={draft.ingest_host}
+                    onInput={(e) => setField('ingest_host', (e.currentTarget as HTMLInputElement).value)}
+                    spellcheck={false}
+                  />
+                </label>
+                <label class={styles.field}>
+                  <span class={styles.fieldLabel}>포트</span>
+                  <input
+                    id="setting-ingest-port"
+                    class={styles.textInput}
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={draft.ingest_port}
+                    onInput={(e) => setField('ingest_port', Number((e.currentTarget as HTMLInputElement).value))}
+                  />
+                </label>
+              </div>
+              <label class={styles.field}>
+                <span class={styles.fieldLabel}>SRT 지연 (ms)</span>
+                <input
+                  id="setting-latency"
+                  class={styles.textInput}
+                  type="number"
+                  min={20}
+                  max={8000}
+                  step={10}
+                  value={draft.latency_ms}
+                  onInput={(e) => setField('latency_ms', Number((e.currentTarget as HTMLInputElement).value))}
+                />
+              </label>
+              <div class={styles.toggleRow}>
+                <span id="setting-passphrase-label">SRT 암호 사용</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.send_passphrase}
+                  aria-labelledby="setting-passphrase-label"
+                  class={styles.switch}
+                  onClick={() => setField('send_passphrase', !draft.send_passphrase)}
+                />
+              </div>
+              {serverMessage ? (
+                <span class={serverMessage.ok ? styles.saved : styles.inlineError} role="status">
+                  {serverMessage.text}
+                </span>
+              ) : null}
+              <Button type="submit" variant="soft" size="sm" block loading={serverSaving} disabled={locked} title={lockedTitle}>
+                서버 설정 저장
+              </Button>
+            </form>
+          ) : null}
+        </>
       ) : null}
       {confirmEnv ? (
         <ConfirmDialog
           id="server-env"
           title={confirmEnv === 'dev' ? '개발 서버로 바꿀까요?' : '운영 서버로 바꿀까요?'}
-          description="지금 연결이 해제돼요. 바꾼 서버에서 새 8자리 코드를 발급받아 다시 연결해야 해요."
+          description={UNPAIR_DESC}
           confirmLabel="바꾸기"
           onCancel={() => setConfirmEnv(null)}
           onConfirm={() => switchEnv(confirmEnv)}
+        />
+      ) : null}
+      {confirmApi !== null ? (
+        <ConfirmDialog
+          id="api-base"
+          title="인증 서버를 바꿀까요?"
+          description={UNPAIR_DESC}
+          confirmLabel="바꾸기"
+          onCancel={() => setConfirmApi(null)}
+          onConfirm={() => applyApi(confirmApi)}
         />
       ) : null}
     </div>
   );
 }
 
-// 연결 전 — 탭이 없으니 지금처럼 접는 「고급 설정」 칸 하나. 로고로 개발자 모드를 풀면 저절로 펼친다.
-export function Settings({
-  bridge,
-  locked,
-  autoAssign,
-  serverEnv,
-  devVisible,
-  focusDev,
-}: {
-  bridge: Bridge;
-  locked: boolean;
-  autoAssign: boolean;
-  serverEnv: ServerEnv;
-  devVisible: boolean;
-  focusDev: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (focusDev) setOpen(true);
-  }, [focusDev]);
+// 연결 전(코드 입력 화면) — 개발자 모드일 때만 코드 입력 아래에 둔다. 서버(환경·인증·수신)만 고른다 — 나머지 설정은
+// 연결 뒤 설정 탭에 있다.
+export function DevCard(props: Omit<SettingsPanelProps, 'general' | 'devVisible' | 'hotkey'>) {
   return (
-    <div class={styles.settings}>
-      <button
-        type="button"
-        class={styles.settingsToggle}
-        aria-expanded={open}
-        aria-controls={open ? 'settings-body' : undefined}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <SlidersHorizontal size={13} strokeWidth={2} aria-hidden="true" />
-        <span>고급 설정</span>
-        <ChevronDown class={styles.chevron} size={14} strokeWidth={2} aria-hidden="true" />
-      </button>
-      {open ? (
-        <div id="settings-body" class={styles.settingsBody}>
-          <SettingsPanel
-            bridge={bridge}
-            locked={locked}
-            autoAssign={autoAssign}
-            serverEnv={serverEnv}
-            devVisible={devVisible}
-            focusDev={focusDev}
-            hotkey={null}
-          />
-        </div>
-      ) : null}
-    </div>
+    <section class={styles.devCard} aria-label="개발자 모드">
+      <SettingsPanel {...props} general={false} devVisible hotkey={null} />
+    </section>
   );
 }

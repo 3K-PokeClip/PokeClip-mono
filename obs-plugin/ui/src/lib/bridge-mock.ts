@@ -15,7 +15,8 @@ import type {
 // ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_grouped|audio_live|audio_manual|
 //       audio_main_stream|audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
 //       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream|audio_other_scene
-// &env=dev — 개발 서버로 붙은 상태(머리 「개발 서버」 표시·고급 설정 스위치). 기본은 운영(POK-267).
+// &env=dev — 개발 서버로 붙은 상태(머리 「개발 서버」 표시·개발자 모드 켜짐). 기본은 운영(POK-267) — 개발자 모드는 로고를
+//            3초 안에 5번 눌러 켠다.
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
 const src = (key: string, name: string, kind: AudioKind, showing = true): AudioSource => ({ key, name, kind, showing });
 const MIC = src('ch:3', '마이크/보조', 'mic');
@@ -50,6 +51,9 @@ const MOCK_SERVERS: Record<ServerEnv, Pick<PluginSettings, 'api_base' | 'ingest_
   dev: { api_base: 'https://dev.pokeclip.com', ingest_host: 'media-dev.pokeclip.com', ingest_port: 8890 },
 };
 const BUSY: Phase[] = ['starting', 'live', 'reconnecting', 'stopping'];
+// 플러그인 server-env IsLoopbackApiBase·IsAcceptedDockApiBase를 흉내 낸다(미리보기용 — 정본 시험은 C++ 쪽)
+const isLoopbackApiBase = (base: string) => /^https?:\/\/(localhost|127(\.\d{1,3}){3}|\[::1\])(:\d{1,5})?$/i.test(base);
+const isKnownApiBase = (base: string) => Object.values(MOCK_SERVERS).some((s) => s.api_base === base);
 
 export function createMockBridge(scenario: string): Bridge {
   const env: ServerEnv = new URLSearchParams(location.search).get('env') === 'dev' ? 'dev' : 'prod';
@@ -238,6 +242,7 @@ export function createMockBridge(scenario: string): Bridge {
   let settings: PluginSettings = {
     server_env: env,
     ...servers,
+    default_api_base: servers.api_base,
     send_passphrase: true,
     latency_ms: 1000,
     sync_start: true,
@@ -298,19 +303,37 @@ export function createMockBridge(scenario: string): Bridge {
       return settings;
     },
     async putSettings(next) {
-      // 플러그인처럼 API 주소는 브리지로 안 바뀐다 — passphrase가 가는 곳이다
-      const { api_base: _api, clip_api_base: _clip, server_env: nextEnv, ...editable } = next;
-      if (nextEnv && nextEnv !== settings.server_env) {
-        // 플러그인처럼: 환경을 바꾸면 짝째로 바뀌고(같은 본문의 수신 주소는 무시) 연결이 해제된다. 방송 중엔 거절.
+      // 플러그인처럼 마크 주소(clip_api_base)는 브리지로 안 바뀐다
+      const { api_base: nextApi, clip_api_base: _clip, default_api_base: _default, server_env: nextEnv, ...editable } = next;
+      const unpairedState = { paired: false, keyHint: '', retry: { ...state.retry, keySuspect: false } };
+      if (nextApi !== undefined) {
+        // 플러그인처럼: 비움·기본 주소는 지금 환경의 기본 주소, 직접 적는 주소는 이 PC만. 바뀌면 연결이 해제된다.
+        const trimmed = nextApi.trim().replace(/\/+$/, '');
+        if (trimmed && !isKnownApiBase(trimmed) && !isLoopbackApiBase(trimmed)) return { ok: false, reason: 'invalid_api_base' };
+        const target = isLoopbackApiBase(trimmed) ? trimmed : MOCK_SERVERS[settings.server_env].api_base;
+        if (target === settings.api_base) return { ok: true, settings };
         if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
-        settings = { ...settings, server_env: nextEnv, ...MOCK_SERVERS[nextEnv] };
+        settings = { ...settings, api_base: target };
+        emit({ apiBase: target, ...unpairedState });
+        return { ok: true, settings };
+      }
+      if (nextEnv && nextEnv !== settings.server_env) {
+        // 플러그인처럼: 환경을 바꾸면 짝째로 바뀌고(같은 본문의 수신 주소는 무시·직접 적은 이 PC 인증 서버는 남는다) 연결이
+        // 해제된다. 방송 중엔 거절.
+        if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
+        const pair = MOCK_SERVERS[nextEnv];
+        settings = {
+          ...settings,
+          server_env: nextEnv,
+          ...pair,
+          api_base: isLoopbackApiBase(settings.api_base) ? settings.api_base : pair.api_base,
+          default_api_base: pair.api_base,
+        };
         emit({
           serverEnv: nextEnv,
           apiBase: settings.api_base,
           ingest: `${settings.ingest_host}:${settings.ingest_port}`,
-          paired: false,
-          keyHint: '',
-          retry: { ...state.retry, keySuspect: false },
+          ...unpairedState,
         });
         return { ok: true, settings };
       }

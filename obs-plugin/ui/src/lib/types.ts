@@ -104,8 +104,11 @@ export interface Hello {
 }
 
 export interface PluginSettings {
-  server_env: ServerEnv; // 독 숨은 스위치로만 바꾼다 — 고급 설정 저장은 보내지 않는다
+  server_env: ServerEnv; // 개발자 모드 「개발 서버 사용」으로만 바꾼다 — 다른 저장은 보내지 않는다
+  // 인증 서버(페어링 코드 교환·마크). 개발자 모드 「인증 서버」로만 바꾼다 — 비움·운영·개발 기본 주소·이 PC 주소만 받고,
+  // 바뀌면 플러그인이 연결을 해제한다(키는 그 서버가 발급했다)
   api_base: string;
+  default_api_base?: string; // 지금 환경의 기본 인증 서버 — 「인증 서버」 칸을 비우고 저장하면 이 주소가 된다
   ingest_host: string;
   ingest_port: number;
   send_passphrase: boolean;

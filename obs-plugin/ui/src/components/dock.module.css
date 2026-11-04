@@ -788,39 +788,22 @@
   border: 0;
 }
 
-/* ---------- 고급 설정 ---------- */
-.settings {
+/* ---------- 설정 · 개발자 모드 ---------- */
+/* 연결 전 코드 입력 아래 — 개발자 모드일 때만. 점선 테두리로 스트리머용 칸이 아님을 드러낸다 */
+.devCard {
+  padding: var(--pc-space-3) var(--pc-space-4) var(--pc-space-4);
   border-radius: var(--pc-radius-lg);
-  border: 1px solid var(--pc-color-border-subtle);
+  border: 1px dashed var(--pc-color-border-default);
   background: var(--pc-color-bg-surface);
 }
-.settingsToggle {
+/* 개발자 칸의 머리 — 개발자 모드일 때만 */
+.devLabel {
   display: flex;
   align-items: center;
-  gap: var(--pc-space-1);
-  width: 100%;
-  padding: var(--pc-space-2) var(--pc-space-4);
-  border: 0;
-  border-radius: var(--pc-radius-lg);
-  background: transparent;
-  font-size: var(--pc-font-size-xs);
+  gap: 6px;
+  font-size: var(--pc-font-size-2xs);
   font-weight: var(--pc-weight-semibold);
   color: var(--pc-color-text-secondary);
-  cursor: pointer;
-  user-select: none;
-}
-.chevron {
-  margin-left: auto;
-  transition: transform var(--pc-duration-normal) var(--pc-ease-standard);
-}
-.settingsToggle[aria-expanded='true'] .chevron {
-  transform: rotate(180deg);
-}
-.settingsBody {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pc-space-2);
-  padding: 0 var(--pc-space-4) var(--pc-space-4);
 }
 .field {
   display: flex;

@@ -18,7 +18,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 // 상태 카드 아래 — 송출 점검·오디오 트랙·설정(맨 위에 순간 표시 단축키)을 탭 하나씩 보여 준다. 네 칸을 세로로 쌓으니
 // 설정까지 한참 내려가야 했다(2026-10-29 B안). 처음엔 방송 중 자주 보는 오디오. 다른 탭에 확인할 게 있으면 그 탭에 점을 찍는다.
-// 로고로 개발자 모드를 풀면(focusDev) 설정 탭으로 넘어가 그 줄을 보인다.
+// 로고로 개발자 모드를 켜면(focusDev가 오른다) 설정 탭으로 넘어가 개발자 칸을 보인다.
 export function DockTabs({
   state,
   bridge,
@@ -30,13 +30,13 @@ export function DockTabs({
   bridge: Bridge;
   locked: boolean;
   devVisible: boolean;
-  focusDev: boolean;
+  focusDev: number;
 }) {
   const [tab, setTab] = useState<Tab>('audio');
   const buttons = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
 
   useEffect(() => {
-    if (focusDev) setTab('settings');
+    if (focusDev > 0) setTab('settings');
   }, [focusDev]);
 
   const attention: Record<Tab, boolean> = {
@@ -104,6 +104,9 @@ export function DockTabs({
             locked={locked}
             autoAssign={state.audio.autoAssign}
             serverEnv={state.serverEnv}
+            apiBase={state.apiBase}
+            paired={state.paired}
+            general
             devVisible={devVisible}
             focusDev={focusDev}
             hotkey={state.marks.hotkey}
