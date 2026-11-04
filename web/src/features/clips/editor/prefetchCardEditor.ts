@@ -111,8 +111,7 @@ export async function cardFromList(streamId: string, cardId: string): Promise<Ju
   return find(await cardLists.read(streamId, LIST_REUSE_MS, load).value);
 }
 
-/** 방송의 녹화(잠깐 기억). 카드에서 보관함 저장(saveCardDraft)이 편집기와 같은 기준점을 잡으려고 같이 쓴다 */
-export function recordingOf(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
+function recordingOf(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
   const live = broadcast.endedAt === null;
   return recordings.read(
     `${broadcast.streamId}:${broadcast.endedAt ?? 'live'}`,

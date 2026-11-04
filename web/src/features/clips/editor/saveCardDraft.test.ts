@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRecipe, fetchBroadcast, type BroadcastRow, type JumpCard } from '@/api/clipEditor';
 import { lookupRecordingSpans } from '@/api/mediaPlayback';
-import { cardFromList, recordingOf } from './prefetchCardEditor';
+import { ensurePlaybackAccess } from '@/api/playbackAccess';
+import { cardFromList } from './prefetchCardEditor';
 import { outputsFor } from './recipeLook';
 import { CardDraftNotReadyError, cardDraftDocument, saveCardDraft } from './saveCardDraft';
 import { initialRecipe } from './useClipEditorMockState';
@@ -15,7 +16,12 @@ vi.mock('@/api/mediaPlayback', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/mediaPlayback')>()),
   lookupRecordingSpans: vi.fn(),
 }));
-vi.mock('./prefetchCardEditor', () => ({ cardFromList: vi.fn(), recordingOf: vi.fn() }));
+vi.mock('@/api/playbackAccess', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/playbackAccess')>()),
+  ensurePlaybackAccess: vi.fn(),
+  isPlaybackExpired: vi.fn(() => false),
+}));
+vi.mock('./prefetchCardEditor', () => ({ cardFromList: vi.fn() }));
 
 const BASE = Date.parse('2026-11-04T01:00:00Z');
 
@@ -67,7 +73,8 @@ describe('saveCardDraft', () => {
     vi.mocked(lookupRecordingSpans).mockReset();
     vi.mocked(cardFromList).mockResolvedValue(card);
     vi.mocked(fetchBroadcast).mockResolvedValue(broadcast);
-    vi.mocked(recordingOf).mockResolvedValue(null);
+    // 출입증이 필요 없는 재생 서버(로컬) — 녹화 목록은 lookupRecordingSpans 목이 답한다
+    vi.mocked(ensurePlaybackAccess).mockReset().mockReturnValue(null);
   });
 
   it('카드 번호를 출처로 실어 편집본을 만든다(서버 기준점이 있으면 녹화가 없어도 그 기준점)', async () => {
@@ -90,9 +97,10 @@ describe('saveCardDraft', () => {
   });
 
   it('서버 기준점이 있으면 녹화를 묻지 않는다 — 녹화 읽기 실패(출입증 등)가 저장을 막지 않게', async () => {
-    vi.mocked(recordingOf).mockRejectedValue(new Error('access failed'));
+    vi.mocked(ensurePlaybackAccess).mockReturnValue(Promise.resolve({ kind: 'failed' }));
     await expect(saveCardDraft('S-1', '23')).resolves.toEqual({ id: 31 });
-    expect(recordingOf).not.toHaveBeenCalled();
+    expect(ensurePlaybackAccess).not.toHaveBeenCalled();
+    expect(lookupRecordingSpans).not.toHaveBeenCalled();
     expect(savedCut()).toEqual({ inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 });
   });
 
@@ -104,10 +112,11 @@ describe('saveCardDraft', () => {
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
-  it('서버 기준점이 없는 끝난 방송에서 녹화를 못 읽으면 저장하지 않는다', async () => {
+  it('서버 기준점이 없는 끝난 방송에서 영상 출입증을 못 받으면 저장하지 않는다', async () => {
     vi.mocked(fetchBroadcast).mockResolvedValue(ended);
-    vi.mocked(recordingOf).mockRejectedValueOnce(new Error('503'));
-    await expect(saveCardDraft('S-1', '23')).rejects.toThrow('503');
+    vi.mocked(ensurePlaybackAccess).mockReturnValue(Promise.resolve({ kind: 'failed' }));
+    await expect(saveCardDraft('S-1', '23')).rejects.toThrow('출입증');
+    expect(lookupRecordingSpans).not.toHaveBeenCalled();
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
@@ -119,16 +128,15 @@ describe('saveCardDraft', () => {
 
   it('방송 중 서버 기준점이 없으면 녹화가 있어도 기다리게 한다 — 서버 기준점(pdt − pts)은 녹화 시작과 다를 수 있다', async () => {
     vi.mocked(fetchBroadcast).mockResolvedValue(noOrigin);
-    vi.mocked(recordingOf).mockResolvedValue({
-      startMs: BASE + 5_000,
-      durationSeconds: 600,
-      pieces: [{ fromSeconds: 0, toSeconds: 600 }],
-    });
+    vi.mocked(lookupRecordingSpans).mockResolvedValue([
+      { startMs: BASE + 5_000, durationSeconds: 600 },
+    ]);
     await expect(saveCardDraft('S-1', '23')).rejects.toBeInstanceOf(CardDraftNotReadyError);
+    expect(lookupRecordingSpans).not.toHaveBeenCalled();
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
-  it('끝난 방송에서 녹화 목록 묻기가 실패하면(recordingOf는 null로 접는다) 저장하지 않는다', async () => {
+  it('끝난 방송에서 녹화 목록 묻기가 실패하면(편집기는 「녹화 없음」으로 접는다) 저장하지 않는다', async () => {
     vi.mocked(fetchBroadcast).mockResolvedValue(ended);
     vi.mocked(lookupRecordingSpans).mockResolvedValue(null);
     await expect(saveCardDraft('S-1', '23')).rejects.toThrow('recording lookup failed');
@@ -140,9 +148,11 @@ describe('saveCardDraft', () => {
     vi.mocked(lookupRecordingSpans).mockResolvedValue([]);
     await saveCardDraft('S-1', '23');
     expect(savedCut()).toEqual({ inAtMs: startedAtMs + 40_000, outAtMs: startedAtMs + 100_000 });
+    // 녹화 목록은 한 번만 묻는다: 「없음」을 다시 확인하려 같은 목록을 또 묻지 않는다(실패면 두 배 기다렸다)
+    expect(lookupRecordingSpans).toHaveBeenCalledTimes(1);
   });
 
-  it('기억해 둔 「녹화 없음」이 낡았으면 방금 물은 목록의 녹화 시작이 기준점이다', async () => {
+  it('끝난 방송에 녹화가 있으면 방금 물은 목록의 녹화 시작이 기준점이다', async () => {
     vi.mocked(fetchBroadcast).mockResolvedValue(ended);
     vi.mocked(lookupRecordingSpans).mockResolvedValue([
       { startMs: BASE + 5_000, durationSeconds: 600 },
