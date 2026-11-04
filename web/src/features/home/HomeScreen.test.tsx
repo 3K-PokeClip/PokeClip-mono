@@ -708,7 +708,7 @@ describe('HomeScreen', () => {
     expect(tips).toHaveTextContent(`${TIPS.length} / ${TIPS.length}`);
   });
 
-  it('방송 번호 대신 방송 제목을 보이고, 제목이 없는 방송만 번호다(POK-259)', async () => {
+  it('방송 번호 대신 방송 제목을 보이고, 제목이 없는 지난 방송은 「제목 없는 방송」이다(POK-259)', async () => {
     const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
     serve({
       live: [
@@ -751,7 +751,9 @@ describe('HomeScreen', () => {
 
     expect(await screen.findByText('롤 마스터 승급전')).toBeInTheDocument();
     expect(await screen.findAllByText('새벽 랭크')).not.toHaveLength(0);
-    expect(screen.getAllByText('S-past-2')).not.toHaveLength(0);
+    // 번호는 사람이 읽을 수 없다 — 같은 제목은 카드의 시작 시각으로 가른다
+    expect(screen.getAllByText('제목 없는 방송')).not.toHaveLength(0);
+    expect(screen.queryByText('S-past-2')).toBeNull();
     expect(screen.queryByText('S-live-1')).toBeNull();
     expect(screen.queryByText('S-past-1')).toBeNull();
   });

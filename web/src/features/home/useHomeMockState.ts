@@ -8,7 +8,6 @@ import { chzzkLinkQueryOptions, type ChzzkLinkState } from '@/api/chzzkLink';
 import { soopLinkQueryOptions, type SoopLinkState } from '@/api/soopLink';
 import { streamKeyStatusQueryOptions } from '@/api/streamKeys';
 import { youtubeLinkQueryOptions, type YoutubeLinkState } from '@/api/youtubeLink';
-import { broadcastTitle } from '@/api/clipEditor';
 import { infoWaitOver } from '@/features/broadcast/infoWait';
 import { onAirLabel, primaryInfo, type PlatformLatest } from '@/features/broadcast/platformView';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
@@ -80,7 +79,8 @@ export type VodBadge =
 
 export interface HomeVod {
   id: string;
-  title: string;
+  /** 수집기가 본 방송 제목. 없으면 null — 화면이 「제목 없는 방송」으로 적는다(방송 번호는 보이지 않는다) */
+  title: string | null;
   /** 방송 시작 — 「어제 오후 8:10」 · 「11월 2일 (일) 오후 9:00」. 같은 제목의 방송을 이것으로 가른다 */
   when: string;
   /** 이 방송에서 찾은 카드 수 */
@@ -392,7 +392,7 @@ async function loadHome(
         : undefined;
     return {
       id: b.streamId,
-      title: broadcastTitle(b),
+      title: b.title?.trim() || null,
       when: b.startedAt ? vodWhenLabel(b.startedAt, new Date(now)) : '날짜 정보 없음',
       cards: cardCountOf(b.streamId),
       // 보관함은 따로 읽는다 — 훅이 붙인다

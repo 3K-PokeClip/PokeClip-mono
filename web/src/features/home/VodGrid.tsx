@@ -82,7 +82,9 @@ function VodCardBody({ vod }: { vod: HomeVod }) {
         {vod.duration ? <span className={styles.durationPill}>{vod.duration}</span> : null}
       </Thumb>
       <div className={styles.vodText}>
-        <div className={styles.vodTitle}>{vod.title}</div>
+        <div className={clsx(styles.vodTitle, vod.title === null && styles.vodUntitled)}>
+          {vod.title ?? '제목 없는 방송'}
+        </div>
         <div className={styles.vodMeta}>{vod.when}</div>
         <VodStats vod={vod} />
       </div>

@@ -667,6 +667,11 @@
   transition: color 0.15s;
 }
 
+.vodUntitled {
+  color: var(--pc-color-text-muted);
+  font-weight: 600;
+}
+
 .vodMeta {
   font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
