@@ -872,6 +872,33 @@ describe('NotificationBell', () => {
     expect(within(panel).getByRole('button', { name: '거절' })).toHaveFocus();
   });
 
+  it('초대 답이 먼저 끝나도 아직 날아가는 읽음을 다시 읽기가 되돌리지 않는다 (PR #481 4차)', async () => {
+    items.push(
+      wire(
+        'n-invite',
+        1,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+    );
+    const { user, queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    holdRead = true;
+    await user.click(within(panel).getByRole('button', { name: '수락' }));
+    expect(await screen.findByText('초대를 수락했어요')).toBeInTheDocument();
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    // 서버엔 아직 읽음이 안 닿았지만 화면의 읽음 표시는 그대로다
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 3개' })).toBeInTheDocument();
+
+    act(() => releaseRead?.());
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(screen.getByRole('button', { name: '알림 · 안 읽음 3개' })).toBeInTheDocument();
+  });
+
   it('거절이 일시 장애로 실패하면 확인을 남겨 「거절하기」만 다시 누르게 한다 (PR #481 4차)', async () => {
     items.push(
       wire(

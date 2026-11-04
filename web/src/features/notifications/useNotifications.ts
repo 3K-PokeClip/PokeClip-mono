@@ -154,8 +154,11 @@ export function useRespondInvitation(state: NotificationsState) {
       respond.onSuccess(answer === 'accept' ? 'accepted' : 'declined'),
     onError: respond.onError,
     onSettled: (_data, error) => {
-      if (respond.onSettled(error))
-        void queryClient.invalidateQueries({ queryKey: state.queryKey });
+      if (!respond.onSettled(error)) return;
+      // 같이 보낸 읽음이 아직 날아가는 중이면 다시 읽기는 읽음 쪽(resyncIfLast)에 맡긴다: 먼저 다시 읽으면 읽음이 반영되기
+      // 전 목록(readAt null)이 낙관 갱신을 덮어 종 숫자가 1 올랐다 내려간다(PR #481 4차)
+      if (queryClient.isMutating({ mutationKey: READ_MUTATION_KEY }) > 0) return;
+      void queryClient.invalidateQueries({ queryKey: state.queryKey });
     },
   });
 }
