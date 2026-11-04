@@ -140,7 +140,7 @@ func run() error {
 	}
 	defer root.Close()
 
-	up, err := newUploader(ctx, cfg, root, index.NewUploadStore(pool), log)
+	up, err := newUploader(ctx, cfg, root, newUploadStore(pool), log)
 	if err != nil {
 		return err
 	}

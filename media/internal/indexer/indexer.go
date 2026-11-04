@@ -36,17 +36,6 @@ type Adopter interface {
 	Adopt(seg recording.Segment)
 }
 
-// UploadRequester 는 인덱서가 업로더에게 일을 넘기는 유일한 통로다.
-//
-// 인터페이스를 쓰는 쪽인 여기에 둔 이유는 Adopter 와 같다. *upload.Uploader 가 그대로
-// 만족하며, 그래서 indexer 는 upload 패키지를 임포트하지 않는다 — "이 조각이 지금 올릴
-// 대상인가"의 판정(여기)과 "어떻게 올리는가"의 정책(거기)은 변경 이유가 다르다.
-//
-// 반드시 논블로킹이어야 한다. 여기서 막히면 D10 메인 루프가 통째로 선다.
-type UploadRequester interface {
-	RequestUpload(t index.UploadTarget) (accepted bool)
-}
-
 // StateObserver 는 인덱서가 "지금 이 스트림이 송출 중인가"를 읽는 유일한 통로다.
 //
 // 인터페이스를 쓰는 쪽인 여기에 둔 이유는 Adopter·UploadRequester 와 같다: 관측을
@@ -914,7 +903,7 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 
 	// ③ 도장 사슬은 로그보다 먼저 전진한다 — 판독 실패로 도장을 고정했다는 신호가 아래 로그의
 	// mtxi_pinned 속성이다(계획 4.2-R 규칙 ④ⓐ — 새 로그 키 0).
-	playbackTarget, pinned := ix.advanceChain(seg.StreamID, prev, rec, res, read.mtxi())
+	playbackTarget, pinned := ix.advanceChain(seg.StreamID, prev, rec, res, read)
 
 	// reason 은 채널별 기여도(훅 vs 파일)를 재는 유일한 창이다.
 	// 이 값의 분포가 무너지는 것이 "훅 채널이 무징후로 죽었다"의 유일한 신호다.

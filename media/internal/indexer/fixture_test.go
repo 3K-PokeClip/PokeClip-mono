@@ -608,6 +608,8 @@ type fakeUploadRequester struct {
 	mu     sync.Mutex
 	accept bool
 	got    []index.UploadTarget
+	// restored 는 회차별 복원 링크다(RestoredLink — 시험이 setRestored 로 정한다). 없으면 복원 전이다.
+	restored map[string]playback.Link
 }
 
 func (f *fakeUploadRequester) RequestUpload(t index.UploadTarget) bool {
@@ -615,6 +617,23 @@ func (f *fakeUploadRequester) RequestUpload(t index.UploadTarget) bool {
 	defer f.mu.Unlock()
 	f.got = append(f.got, t)
 	return f.accept
+}
+
+func (f *fakeUploadRequester) RestoredLink(sessionID string) (playback.Link, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.restored[sessionID]
+	return l, ok
+}
+
+// setRestored 는 그 회차의 복원 링크를 정한다(업로더의 복원이 끝난 꼴).
+func (f *fakeUploadRequester) setRestored(sessionID string, l playback.Link) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.restored == nil {
+		f.restored = map[string]playback.Link{}
+	}
+	f.restored[sessionID] = l
 }
 
 func (f *fakeUploadRequester) targets() []index.UploadTarget {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
 // sessionMemory 는 업로더가 회차(세션)마다 메모리에 드는 셋이다(계획 2.1 · 4.2-R R3):
@@ -19,11 +20,21 @@ import (
 // tick)에서 치운다. 한 뮤텍스가 전부를 지키고, 뮤텍스 안에서는 I/O 도 접수(enqueue)도 하지
 // 않는다 — 인덱서 루프가 RequestUpload 로 여기 기록하므로 막히면 루프가 선다
 // (indexer.UploadRequester 논블로킹 계약).
+//
+// ③ 사슬 복원(POK-196 PDT 계획 4절 c10b · 설계 r6 2.10)의 몫도 여기 든다 — 표의 끊김 줄 · 복원 링크 · 불일치 구멍 · 깨움 ·
+// 세션 단위 백오프. 복원 작업 자체(DB · S3 · 파일)는 이 뮤텍스 밖에서 돈다(restore.go).
 type sessionMemory struct {
 	mu      sync.Mutex
 	byID    map[string]*sessionEntry
 	heldMax int
 	ttl     time.Duration
+
+	// wakes 는 복원을 기다리는 회차다(세션 → 스트림). 깨움은 회차마다 하나로 합쳐진다.
+	wakes map[string]string
+	// wakeSig 는 복원 고루틴을 깨우는 신호다(용량 1 — 보내기가 막히지 않는다).
+	wakeSig chan struct{}
+	// backoffBase · backoffMax 는 복원 실패의 세션 단위 백오프다(SweepEvery · 2^n · 상한 BackoffMax — 게이트와 같은 꼴).
+	backoffBase, backoffMax time.Duration
 }
 
 // sessionEntry 는 한 회차의 몫이다. 셋의 수명 기준 시각은 서로 다르다.
@@ -50,10 +61,38 @@ type sessionEntry struct {
 	uploaded map[int64]struct{}
 	// overflowWarned 는 이 회차의 보류 목록 넘침을 이미 WARN 으로 알렸는가다(세션당 첫 번만 WARN).
 	overflowWarned bool
+
+	// breaks 는 끊김 줄이다(seq 집합) — 인덱서가 위치 모름(PosUnknown)으로 요청한 조각이다. 그 seq 부터 다음 줄 전까지 표가 없다.
+	// 보정값 표와 수명 · 청소를 같이한다.
+	breaks map[int64]struct{}
+	// restored 는 복원이 마지막으로 정한 링크다 — 인덱서가 RestoredLink 로 읽어 사슬을 다시 안다.
+	restored *restoredLink
+	// mismatches 는 불일치로 판정한 구멍과 그때의 입력 지문이다 — 같은 입력이면 다시 판정하지 않는다.
+	mismatches map[holeSpan]string
+	// restoreFails · restoreNext 는 복원 실패 횟수와 다음 시도 시각이다(세션 단위 백오프).
+	restoreFails int
+	restoreNext  time.Time
 }
 
+// restoredLink 는 복원이 정한 링크 하나와 그 행을 읽을 때의 장부 크기다 — 크기가 바뀌었으면(꼬리 교정) 그 행부터 다시 읽는다.
+// exact 는 링크의 도장이 실제 값인가다(닻을 ③ 객체 범위 가운데로 골랐으면 거짓 — 범위 폭만큼 다를 수 있다).
+type restoredLink struct {
+	link  playback.Link
+	bytes int64
+	exact bool
+	// slackLo · slackHi 는 exact 가 거짓일 때 실제 값이 도장에서 [−slackLo, +slackHi] 안이라는 범위다.
+	slackLo, slackHi time.Duration
+}
+
+// holeSpan 은 구멍 한 무리다 — 구멍 첫 · 끝 seq, 닻 seq(없으면 −1), 구멍 뒤 대조한 uploaded 행 seq.
+type holeSpan struct{ from, to, anchor, check int64 }
+
+// restoreWake 는 깨운 복원 한 건이다.
+type restoreWake struct{ streamID, sessionID string }
+
 func newSessionMemory(opt Options) *sessionMemory {
-	return &sessionMemory{byID: map[string]*sessionEntry{}, heldMax: opt.HeldPerSession, ttl: opt.SessionTTL}
+	return &sessionMemory{byID: map[string]*sessionEntry{}, heldMax: opt.HeldPerSession, ttl: opt.SessionTTL,
+		wakes: map[string]string{}, wakeSig: make(chan struct{}, 1), backoffBase: opt.SweepEvery, backoffMax: opt.BackoffMax}
 }
 
 // entry 는 세션의 몫을 돌려준다(없으면 만든다). 락을 잡은 채로 부른다.
@@ -71,10 +110,20 @@ func (m *sessionMemory) entry(sessionID string) *sessionEntry {
 //	표 생성   그 회차의 첫 요청이 첫 줄 {seq → StitchOffset} 을 만든다(별도 개시 표식 없음)
 //	offset 줄 그 seq 에 적용되는 줄과 보정값이 다를 때만 더한다 — 요청은 seq 순이라 곧 "마지막 줄과 다를 때"다
 //	고정 줄   PosPinned 면 {seq → PlaybackPos}
+//	끊김 줄   PosUnknown 이면 {seq} — 그 seq 부터 표가 없다. 그 회차의 복원을 깨운다
 func (m *sessionMemory) recordLive(t index.UploadTarget, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e := m.entry(t.SessionID)
+	if t.PosUnknown {
+		if e.breaks == nil {
+			e.breaks = map[int64]struct{}{}
+		}
+		e.breaks[t.Seq] = struct{}{}
+		e.tableSeen = now
+		m.wakeLocked(t.StreamID, t.SessionID)
+		return
+	}
 	if off, ok := e.offsetAt(t.Seq); !ok || off != t.StitchOffset {
 		if e.offsets == nil {
 			e.offsets = map[int64]time.Duration{}
@@ -114,7 +163,8 @@ func (m *sessionMemory) offsetAt(sessionID string, seq int64) (time.Duration, bo
 	return e.offsetAt(seq)
 }
 
-// offsetAt 은 sessionMemory.offsetAt 의 본체다. 락을 잡은 채로 부른다.
+// offsetAt 은 sessionMemory.offsetAt 의 본체다. 락을 잡은 채로 부른다. 그 줄보다 뒤에(같은 seq 는 아니고) 끊김 줄이 있으면
+// 표가 없다 — 끊김 줄 뒤 조각은 앞 줄의 보정값이 맞는지 모른다.
 func (e *sessionEntry) offsetAt(seq int64) (time.Duration, bool) {
 	var (
 		from   int64
@@ -124,6 +174,11 @@ func (e *sessionEntry) offsetAt(seq int64) (time.Duration, bool) {
 	for f, off := range e.offsets {
 		if f <= seq && (!found || f > from) {
 			from, offset, found = f, off, true
+		}
+	}
+	for b := range e.breaks {
+		if b <= seq && (!found || b > from) {
+			return 0, false
 		}
 	}
 	return offset, found
@@ -272,7 +327,8 @@ func (m *sessionMemory) evict(now time.Time) {
 	defer m.mu.Unlock()
 	for id, e := range m.byID {
 		if m.expired(e.tableSeen, now) {
-			e.offsets, e.pinned = nil, nil
+			e.offsets, e.pinned, e.breaks, e.restored, e.mismatches = nil, nil, nil, nil, nil
+			e.restoreFails, e.restoreNext = 0, time.Time{}
 		}
 		if m.expired(later(e.initSeen, e.tableSeen), now) {
 			e.initSHA = nil
@@ -300,5 +356,197 @@ func later(a, b time.Time) time.Time {
 
 // empty 는 이 몫에 든 것이 없는가다 — 없으면 맵에서 지운다.
 func (e *sessionEntry) empty() bool {
-	return len(e.offsets) == 0 && len(e.pinned) == 0 && e.initSHA == nil && len(e.held) == 0
+	return len(e.offsets) == 0 && len(e.pinned) == 0 && e.initSHA == nil && len(e.held) == 0 &&
+		len(e.breaks) == 0 && e.restored == nil && len(e.mismatches) == 0 && e.restoreFails == 0
+}
+
+// recordRestored 는 복원이 정한 링크들로 표를 채운다(설계 r6 2.10 「구멍 하나의 처리」). 표가 이미 아는 seq(끊김 줄 뒤가 아닌
+// 줄이 있다)는 덮지 않는다 — 실시간이 적은 줄이 정본이다. 모르는 seq 에는 그 링크의 offset 줄을, 고정 링크면 고정 줄도 적고
+// 같은 seq 의 끊김 줄을 걷는다. 표를 이 복원이 처음 만들면 수명을 지금부터 센다 — 실시간 요청이 없는 회차(재기동 뒤 스위퍼가
+// 깨운 복원)의 표가 다음 tick 에 바로 치워지지 않게 한다.
+//
+// 공용 뮤텍스는 인덱서 루프의 RestoredLink · RequestUpload 도 잡으므로 짧게 쥔다(c10b 확인 패스 2회차 cx H — 21,600 링크를 잠금 안에서
+// 링크마다 표 전체로 견주면 O(n²) 로 다른 회차가 2.5초 멈췄다). 표의 열쇠만 잠금 안에서 베끼고, 아는가는 잠금 밖에서 정렬 · 이분
+// 탐색으로 가르고, 쓰기는 restoredChunk 링크씩 잠근다.
+func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, now time.Time) {
+	lines, breaks := m.tableKeys(sessionID)
+	unknown := unknownLinks(links, lines, breaks)
+	for from := 0; from < len(unknown); from += restoredChunk {
+		m.writeRestored(sessionID, unknown[from:min(from+restoredChunk, len(unknown))], now)
+	}
+	if len(unknown) == 0 {
+		m.writeRestored(sessionID, nil, now)
+	}
+}
+
+// restoredChunk 는 복원 줄을 한 번 잠가 쓰는 링크 수다 — 맵 쓰기 이만큼은 수백 µs 안이다.
+const restoredChunk = 1024
+
+// tableKeys 는 그 회차 표의 offset 줄 · 끊김 줄 seq 를 정렬해 돌려준다(잠금 안에서는 베끼기만 한다).
+func (m *sessionMemory) tableKeys(sessionID string) (lines, breaks []int64) {
+	m.mu.Lock()
+	if e, ok := m.byID[sessionID]; ok {
+		lines = make([]int64, 0, len(e.offsets))
+		for f := range e.offsets {
+			lines = append(lines, f)
+		}
+		breaks = make([]int64, 0, len(e.breaks))
+		for b := range e.breaks {
+			breaks = append(breaks, b)
+		}
+	}
+	m.mu.Unlock()
+	slices.Sort(lines)
+	slices.Sort(breaks)
+	return lines, breaks
+}
+
+// unknownLinks 는 표가 모르는 seq 의 링크다 — offsetAt 과 같은 판정(seq 이하 마지막 줄이 있고 그 뒤 끊김 줄이 없으면 안다)을 정렬한
+// 열쇠의 이분 탐색으로 한다. 아는가는 채우기 전의 표로 가른다 — 앞 링크의 줄을 적고 나면 뒤 seq 가 그 줄로 「아는」 것처럼 보인다.
+func unknownLinks(links []playback.Link, lines, breaks []int64) []playback.Link {
+	lastAtOrBefore := func(keys []int64, seq int64) (int64, bool) {
+		i, found := slices.BinarySearch(keys, seq)
+		if found {
+			return seq, true
+		}
+		if i == 0 {
+			return 0, false
+		}
+		return keys[i-1], true
+	}
+	unknown := make([]playback.Link, 0, len(links))
+	for _, l := range links {
+		f, hasLine := lastAtOrBefore(lines, l.Seq)
+		b, hasBreak := lastAtOrBefore(breaks, l.Seq)
+		if !hasLine || (hasBreak && b > f) {
+			unknown = append(unknown, l)
+		}
+	}
+	return unknown
+}
+
+// writeRestored 는 복원 줄 한 묶음을 쓴다. 베낀 뒤 실시간 요청이 그 seq 에 줄을 적었으면 그 줄을 둔다(실시간 값이 정본이다).
+func (m *sessionMemory) writeRestored(sessionID string, links []playback.Link, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entry(sessionID)
+	for _, l := range links {
+		if _, live := e.offsets[l.Seq]; live {
+			continue
+		}
+		if e.offsets == nil {
+			e.offsets = map[int64]time.Duration{}
+		}
+		e.offsets[l.Seq] = l.Offset
+		delete(e.breaks, l.Seq)
+		if l.Pinned {
+			if e.pinned == nil {
+				e.pinned = map[int64]time.Duration{}
+			}
+			e.pinned[l.Seq] = l.Pos
+		}
+	}
+	if e.tableSeen.IsZero() {
+		e.tableSeen = now
+	}
+}
+
+// setRestored 는 복원이 정한 그 회차의 마지막 링크를 적는다.
+func (m *sessionMemory) setRestored(sessionID string, rl restoredLink) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.entry(sessionID).restored = &rl
+}
+
+// restoredLink 는 그 회차의 복원 링크다 — 맵 읽기 하나라 인덱서 루프에서 불러도 막히지 않는다.
+func (m *sessionMemory) restoredLink(sessionID string) (restoredLink, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.byID[sessionID]
+	if !ok || e.restored == nil {
+		return restoredLink{}, false
+	}
+	return *e.restored, true
+}
+
+// recordMismatch 는 불일치로 판정한 구멍을 그 입력 지문(판정에 쓴 행들의 장부 크기)과 함께 적는다.
+func (m *sessionMemory) recordMismatch(sessionID string, span holeSpan, fingerprint string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entry(sessionID)
+	if e.mismatches == nil {
+		e.mismatches = map[holeSpan]string{}
+	}
+	e.mismatches[span] = fingerprint
+}
+
+// knownMismatch 는 같은 입력으로 이미 불일치 판정한 구멍인가다.
+func (m *sessionMemory) knownMismatch(sessionID string, span holeSpan, fingerprint string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.byID[sessionID]
+	if !ok {
+		return false
+	}
+	fp, ok := e.mismatches[span]
+	return ok && fp == fingerprint
+}
+
+// wake 는 그 회차의 복원을 깨운다 — 스위퍼의 표 없는 ③ 작업이 부른다. 막히지 않는다.
+func (m *sessionMemory) wake(streamID, sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.wakeLocked(streamID, sessionID)
+}
+
+// wakeLocked 는 wake 의 본체다. 락을 잡은 채로 부른다 — 신호 보내기는 용량 1 채널의 비차단 보내기라 락 안에서도 막히지 않는다.
+func (m *sessionMemory) wakeLocked(streamID, sessionID string) {
+	m.wakes[sessionID] = streamID
+	select {
+	case m.wakeSig <- struct{}{}:
+	default:
+	}
+}
+
+// wakeCh 는 복원 고루틴이 기다리는 신호다.
+func (m *sessionMemory) wakeCh() <-chan struct{} { return m.wakeSig }
+
+// takeWakes 는 기다리던 깨움을 비우고, 백오프가 끝난 회차만 seq 와 무관하게 세션 순서로 돌려준다. 백오프 안의 깨움은 버린다 —
+// 위치 모름 요청(조각마다)과 스위퍼(30초마다)가 다시 깨운다.
+func (m *sessionMemory) takeWakes(now time.Time) []restoreWake {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]restoreWake, 0, len(m.wakes))
+	for session, stream := range m.wakes {
+		if e, ok := m.byID[session]; ok && now.Before(e.restoreNext) {
+			continue
+		}
+		out = append(out, restoreWake{streamID: stream, sessionID: session})
+	}
+	clear(m.wakes)
+	slices.SortFunc(out, func(a, b restoreWake) int { return cmp.Compare(a.sessionID, b.sessionID) })
+	return out
+}
+
+// restoreFailed 는 그 회차의 복원 실패를 센다 — 다음 시도는 SweepEvery · 2^(n−1) 뒤다(상한 BackoffMax).
+func (m *sessionMemory) restoreFailed(sessionID string, now time.Time) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entry(sessionID)
+	wait := m.backoffBase << min(e.restoreFails, 30)
+	if wait <= 0 || wait > m.backoffMax {
+		wait = m.backoffMax
+	}
+	e.restoreFails++
+	e.restoreNext = now.Add(wait)
+	return e.restoreNext
+}
+
+// restoreSucceeded 는 그 회차의 백오프를 푼다.
+func (m *sessionMemory) restoreSucceeded(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.byID[sessionID]; ok {
+		e.restoreFails, e.restoreNext = 0, time.Time{}
+	}
 }

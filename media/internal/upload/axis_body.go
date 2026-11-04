@@ -163,6 +163,12 @@ func (u *Uploader) playbackPos(j job, f io.ReadSeeker, lg *slog.Logger) (time.Du
 	}
 	offset, ok := u.sessions.offsetAt(t.SessionID, t.Seq)
 	if !ok {
+		// 표가 없거나 끊김 줄 뒤다 — 복원하는 업로더면 그 회차의 ③ 사슬 복원을 깨우고 기다린다(POK-196 PDT 계획 4절 c10b ·
+		// 설계 r6 2.10 「복원하는 곳」 2). 복원이 표를 채우면 다음 스위프가 같은 경로로 만든다.
+		if u.wakeRestore(t.StreamID, t.SessionID) {
+			lg.Debug("upload_mark_skipped", "reason", "chain_restore_pending", "session_id", t.SessionID)
+			return 0, attemptResult{outcome: outcomeNeutral}, false
+		}
 		return 0, u.refuseWithoutTable(j, lg), false
 	}
 	m, err := playback.ReadMtxi(f)
@@ -172,8 +178,8 @@ func (u *Uploader) playbackPos(j job, f io.ReadSeeker, lg *slog.Logger) (time.Du
 	return m.DTS + offset, attemptResult{}, true
 }
 
-// refuseWithoutTable 은 스위퍼 ③ 작업의 위치를 표로 정할 수 없을 때다 — 도장을 합성하지 않는다
-// (결정 B′: 재기동 복구는 범위 밖 · 계획 4.2-R R3 「알려진 한계」). 그 조각은 failed(GAP)가 되고
+// refuseWithoutTable 은 스위퍼 ③ 작업의 위치를 표로 정할 수 없고 복원도 없을 때다(복원 재료 — 장부 조회 · S3 읽기 — 가 배선되지
+// 않은 업로더) — 도장을 합성하지 않는다(결정 B′ · 계획 4.2-R R3 「알려진 한계」). 그 조각은 failed(GAP)가 되고
 // 재수집 대상으로 남는다(계약 5-5). 보류하지 않는다 — 보류 목록에는 위치를 확정한 작업만 든다.
 func (u *Uploader) refuseWithoutTable(j job, lg *slog.Logger) attemptResult {
 	t := j.target

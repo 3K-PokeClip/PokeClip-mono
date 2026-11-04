@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -99,15 +100,25 @@ func (f *fixture) injectReads() *fakeReads {
 // 실시간과 같은 chainEnd 다. 회차는 ③ 요청에서 읽는다 — 요청이 없는 행(비귀속 · 사슬 없이 mtxi 를 못 읽은 행)은
 // 접기에서도 링크가 없다(비귀속으로 둬도 같은 결과다 — 다음 행이 어느 쪽이든 비인접이다).
 //
-// 재기동(ix 가 바뀜)한 시험은 대조하지 않는다 — 실시간 사슬이 재기동에서 끊긴다(E18 — 복원 배선은 c10b 몫).
+// 재기동(ix 가 바뀜)한 시험은 대조하지 않는다 — 실시간 사슬이 재기동에서 끊긴다(E18 — 복원은 업로더 몫). 사슬을 모르게 된
+// 행(위치 모름 요청 — POK-196 PDT 계획 4절 c10b)부터는 실시간 도장이 없으므로 그 앞까지만 견준다.
 func (f *fixture) requireFoldMatchesLive(r *fakeReads, ix *Indexer) {
 	f.t.Helper()
 	if f.ix != ix {
 		return
 	}
 	live := map[int64]index.UploadTarget{}
+	firstUnknown := int64(math.MaxInt64)
 	for _, tg := range f.upload.targetsOf(index.AxisPlayback) {
 		live[tg.Seq] = tg
+		if tg.PosUnknown {
+			firstUnknown = min(firstUnknown, tg.Seq)
+		}
+	}
+	for seq := range live {
+		if seq >= firstUnknown {
+			delete(live, seq)
+		}
 	}
 	paths := map[int64]string{}
 	var rows []playback.SourceTiming
@@ -123,7 +134,12 @@ func (f *fixture) requireFoldMatchesLive(r *fakeReads, ix *Indexer) {
 		return ix.chainEnd(playbackChain{link: prev, path: paths[prev.Seq]})
 	}
 
-	links := playback.RestoreChain(nil, rows, rule, sameInstance)
+	var links []playback.Link
+	for _, l := range playback.RestoreChain(nil, rows, rule, sameInstance) {
+		if l.Seq < firstUnknown {
+			links = append(links, l)
+		}
+	}
 
 	if len(links) != len(live) {
 		f.t.Errorf("접기 링크 %d개, 실시간 ③ 요청 행 %d개 — 같아야 한다", len(links), len(live))

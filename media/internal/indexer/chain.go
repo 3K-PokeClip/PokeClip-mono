@@ -31,35 +31,47 @@ type playbackChain struct {
 	path string
 	// pdt 는 playback_pdt 다 — G7 skew 재료(부기 30). 영값이면 NULL 이다.
 	pdt time.Time
+	// unknown 은 사슬을 모르는 상태다(POK-196 PDT 계획 4절 c10b — chain_restore.go). link 에는 모르는 마지막 행의 seq · 회차만
+	// 있고, unknownFrom 은 모름이 시작된 행이다.
+	unknown     bool
+	unknownFrom int64
+	// awaiting 은 이 프로세스가 회차를 연 행을 봤으나 mtxi 가 없어 아직 도장을 못 연 상태다(④ⓑ) — 다음 정상 판독 행이 연다.
+	awaiting bool
 }
 
 // advanceChain 은 장부 행 하나만큼 사슬을 전진시키고 그 행의 ③ 작업을 만든다(계획 4.2-R 규칙 ①).
 // 작업이 nil 이면 이 행에는 ③ 요청이 없다 — 비귀속 행(⑥)이거나, 회차의 보관값 없이 mtxi 를 못 읽은
-// 행(④ⓑ)이다. pinned 는 판독 실패로 도장을 기대값에 고정했는가다(④ⓐ).
+// 행(④ⓑ)이다. pinned 는 판독 실패로 도장을 기대값에 고정했는가다(④ⓐ). 사슬을 모르는 행이면 위치 모름 작업이다(chain_restore.go).
 //
 // 접수 게이트보다 앞에서 부른다 — 요청이 거부돼도 사슬은 이어져야 다음 행이 리셋을 오판하지 않는다.
-func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) (target *index.UploadTarget, pinned bool) {
+func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.Record, res index.InsertCommit, read timingRead) (target *index.UploadTarget, pinned bool) {
 	c, hasChain := ix.chains[streamID]
-	// adjacent 는 직전 장부 행이 곧 사슬 행인가다 — 아니면 사이에 비귀속 행이 끼었다(⑥).
-	adjacent := hasChain && prev != nil && prev.Seq == c.link.Seq
+	if hasChain && c.unknown && c.link.SessionID == res.SessionID {
+		c = ix.resumeChain(streamID, c)
+	}
+	// adjacent 는 직전 장부 행이 곧 사슬 행인가다 — 아니면 사이에 비귀속 행이 끼었다(⑥). 모름 · 연 행 대기 상태에는 사슬 행이 없다.
+	adjacent := hasChain && !c.unknown && !c.awaiting && prev != nil && prev.Seq == c.link.Seq
 	if adjacent {
-		// ② 꼬리 교정은 그 행이 꼬리인 동안만 일어나므로, 꼬리에서 물러나는 지금의 길이가 최종값이다.
-		// 사슬 행이 아닌 prev(비귀속 행)의 길이로는 어떤 필드도 덮지 않는다. 영상 끝도 같은 교정을 받는
-		// 유일한 사실 칸이다(설계 r7 2.3 — 옛 값이 있을 때만 바뀐다). 기대값 행(영상 칸 없음)은 그대로 둔다.
-		c.link.Dur = time.Duration(prev.DurationMS) * time.Millisecond
-		if c.link.VideoEnd != nil && prev.Timing.VideoEnd != nil {
-			c.link.VideoEnd = prev.Timing.VideoEnd
-		}
+		c.link = withTailCorrection(c.link, prev)
 		ix.chains[streamID] = c
 	}
 	if res.SessionID == "" {
 		return nil, false
 	}
-	src := sourceOf(rec, res.SessionID, res.DurationMS, mtxi)
-	if !hasChain || c.link.SessionID != res.SessionID {
+	src := sourceOf(rec, res.SessionID, res.DurationMS, read.mtxi())
+	sameSession := hasChain && c.link.SessionID == res.SessionID
+	switch {
+	case sameSession && c.unknown:
+		return ix.stayUnknown(streamID, c, rec, res), false
+	case read.failure == partialReadFailed:
+		return ix.markUnknown(streamID, rec, res, chainUnknownReadFailed), false
+	case !sameSession && !res.SessionOpened:
+		return ix.markUnknown(streamID, rec, res, chainUnknownRestart), false
+	}
+	if !sameSession || c.awaiting {
 		// 인덱서가 직전 회차의 끝(TD 분할·새 개시)을 관측하는 자리다. 업로더의 회차 상태 정리
 		// (Uploader.ForgetSession — sessionInit·보류 목록, 계획 2.1)는 여기서 부르지 않는다:
-		// 인덱서가 아는 업로더 통로는 RequestUpload 하나뿐이다(새 인터페이스 0). TD 분할은 루프가
+		// 인덱서가 아는 업로더 통로는 RequestUpload · RestoredLink 둘뿐이다. TD 분할은 루프가
 		// 관측하지 못해 업로더의 수명(SessionTTL)이 치운다 — 분리 · 오프라인은 루프가 부른다(판단 J86).
 		// 사슬 쪽 정리는 이 교체가 전부다(보관값은 회차별 — 규칙 ⑥).
 		return ix.startChain(streamID, rec, res, src), false
@@ -76,11 +88,25 @@ func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.
 	return playbackTargetOf(streamID, link, rec, res), link.link.Pinned
 }
 
+// withTailCorrection 은 꼬리에서 물러나는 사슬 행 prev 의 교정 뒤 값으로 링크를 덮는다. ② 꼬리 교정은 그 행이 꼬리인 동안만
+// 일어나므로, 꼬리에서 물러나는 지금의 길이가 최종값이다. 사슬 행이 아닌 prev(비귀속 행)의 길이로는 어떤 필드도 덮지 않는다
+// (부르는 쪽이 인접일 때만 부른다). 영상 끝도 같은 교정을 받는 유일한 사실 칸이다(설계 r7 2.3 — 옛 값이 있을 때만 바뀐다).
+// 기대값 행(영상 칸 없음)은 그대로 둔다.
+func withTailCorrection(l playback.Link, prev *index.TailRow) playback.Link {
+	l.Dur = time.Duration(prev.DurationMS) * time.Millisecond
+	if l.VideoEnd != nil && prev.Timing.VideoEnd != nil {
+		l.VideoEnd = prev.Timing.VideoEnd
+	}
+	return l
+}
+
 // startChain 은 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(⑥ · 결정 B′). mtxi 를 못 읽었으면
 // 도장을 지어내지 않는다(④ⓑ): ③ 요청 없이 두고, 다음 정상 판독 행이 사슬을 연다.
 func (ix *Indexer) startChain(streamID string, rec index.Record, res index.InsertCommit, src playback.SourceTiming) *index.UploadTarget {
 	first, ok := playback.StartLink(src)
 	if !ok {
+		// 회차의 시작을 이 프로세스가 봤다 — 다음 행은 모름이 아니라 여기서처럼 연다.
+		ix.chains[streamID] = playbackChain{link: playback.Link{Seq: rec.Seq, SessionID: res.SessionID}, awaiting: true}
 		return nil
 	}
 	link := playbackChain{link: first, path: rec.LocalPath, pdt: res.PlaybackPDT}
@@ -139,11 +165,14 @@ func (ix *Indexer) recordSkew(streamID string, c, link playbackChain, adjacent b
 // playbackTargetOf 는 행의 ③ 작업이다. ExpectedInitSHA 는 비운다 — 실시간 작업의 기대 init 은 워커의
 // sessionInit 이 채운다(계획 2.1). IsTail 은 요청하는 시점이 정한다.
 func playbackTargetOf(streamID string, c playbackChain, rec index.Record, res index.InsertCommit) *index.UploadTarget {
-	return &index.UploadTarget{
+	t := &index.UploadTarget{
 		StreamID: streamID, Axis: index.AxisPlayback, Seq: rec.Seq, SessionID: res.SessionID,
-		S3Key: res.PlaybackS3Key, LocalPath: rec.LocalPath, Bytes: rec.Bytes,
-		PlaybackPos: c.link.Pos, StitchOffset: c.link.Offset, PosPinned: c.link.Pinned,
+		S3Key: res.PlaybackS3Key, LocalPath: rec.LocalPath, Bytes: rec.Bytes, PosUnknown: c.unknown,
 	}
+	if !c.unknown {
+		t.PlaybackPos, t.StitchOffset, t.PosPinned = c.link.Pos, c.link.Offset, c.link.Pinned
+	}
+	return t
 }
 
 // timingT 는 조각 시각 판독(playback.ReadTiming — mtxi · 트랙별 시작 · 끝)의 유일한 관문이다(계획 4.2-R 규칙 ③ — m2 ·

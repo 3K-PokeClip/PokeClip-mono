@@ -79,6 +79,10 @@ type UploadTarget struct {
 	// PosPinned 는 mtxi 판독에 실패해 PlaybackPos 를 기대값(직전 pos + 장부 길이)으로 고정했는가다.
 	// 참이면 보정값 표에 고정 줄 {seq → pos} 을 적어, 스위퍼가 판독 없이 같은 값을 쓰게 한다.
 	PosPinned bool
+	// PosUnknown 은 인덱서의 ③ 사슬이 이 조각의 도장 위치를 모른다는 뜻이다(POK-196 PDT 계획 4절 c10b · 설계 r6 2.10 「사슬
+	// 모름」 — 재기동 뒤 이어지는 회차 · 판독 포기 행). 위의 세 칸은 비어 있다. 업로더는 올리지 않고 그 회차의 보정값 표에
+	// 끊김 줄을 적어 ③ 사슬 복원을 깨운다.
+	PosUnknown bool
 }
 
 // SweepCursor 는 스위퍼 키셋 페이징의 위치이며, 뜻은 정확히 "여기까지 검사를 마쳤다"이다.

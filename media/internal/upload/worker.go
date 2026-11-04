@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -79,6 +80,10 @@ type attemptResult struct {
 // ctx 를 보지 않고 workerStop 만 본다 — 종료 순서를 Shutdown 이 단독으로 쥐기 위해서다.
 func (u *Uploader) worker() {
 	defer close(u.workerDone)
+	// ③ 사슬 복원 고루틴은 워커가 띄우고 워커가 끝나기 전에 기다린다 — Shutdown 의 워커 join 이 복원도 덮는다(POK-196 PDT
+	// 계획 4절 c10b). 멈춤 신호는 같은 workerStop 이다.
+	joinRestore := u.startRestore()
+	defer joinRestore()
 	for {
 		select {
 		case <-u.workerStop:
@@ -99,6 +104,11 @@ func (u *Uploader) worker() {
 func (u *Uploader) runJob(j job) {
 	defer u.drainHeld()
 	defer u.gate.releaseInflight(j.key())
+	if j.target.PosUnknown {
+		// 위치 모름 ③ 은 올릴 도장이 없다 — 접수(RequestUpload)가 이미 끊김 줄을 적고 복원을 깨웠다(POK-196 PDT 계획 4절 c10b).
+		// 복원이 위치를 정하면 그 행을 도장을 실은 작업으로 다시 넣는다. 판정 재료가 아니라 브레이커에 싣지 않는다.
+		return
+	}
 	u.lastAttemptErr = nil
 	o := u.processTarget(j)
 	if brk := u.brk.of(j.target.Axis); brk != nil {
@@ -354,17 +364,13 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	t := j.target
 	k := j.key()
 
-	// (a) 열기
-	f, err := u.opt.Root.Open(rel)
-	if err != nil {
-		return u.classifyOpenError(err, t, k, lg)
-	}
-	defer f.Close()
-
-	// (b) 입력 크기
-	in, r, ok := u.measureInput(j, f, lg)
+	// (a) 열기 · (b) 입력 크기 — 로컬 ② 가 없는 ③ 작업은 ② 객체가 입력이다(f 가 nil).
+	in, f, r, ok := u.openInput(j, rel, lg)
 	if !ok {
 		return r
+	}
+	if f != nil {
+		defer f.Close()
 	}
 	// (c) 장부 크기 대조
 	if r, ok := u.checkInputSize(j, in, lg); !ok {
@@ -395,14 +401,11 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	//     「③ 축 크기 계약」). init 은 재도 멈추지 않는다 — 올린 머리말 바이트는 입력의 꼬리와
 	//     무관하다(checkInputSize). 이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는
 	//     양의 증거를 본 경우이고, M-1 표에 없는 분기다(C10).
-	fi2, err := u.statFile(f)
-	if err != nil {
-		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
-		return attemptResult{outcome: outcomeNeutral}
-	}
-	if fi2.Size() != in.size && t.Axis != index.AxisInit {
-		lg.Warn("file_changed_during_put", "put_size", in.size, "after_size", fi2.Size())
-		return attemptResult{outcome: outcomeNeutral}
+	//     ② 객체 입력(f 가 nil)은 자라지 않으므로 다시 재지 않는다(설계 r6 2.10 「입력 꼴」).
+	if f != nil {
+		if r, ok := u.recheckInput(f, in, t, lg); !ok {
+			return r
+		}
 	}
 
 	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다. init 축은 CAS 판정을 함께 돌려주고, 그 판정이
@@ -417,6 +420,66 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	u.gate.clearBackoff(k)
 	u.afterUploaded(j, p, im)
 	return attemptResult{outcome: outcomeSuccess}
+}
+
+// recheckInput 은 (e) PUT 뒤 같은 fd 로 입력 파일을 다시 잰다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) recheckInput(f *os.File, in input, t index.UploadTarget, lg *slog.Logger) (attemptResult, bool) {
+	fi2, err := u.statFile(f)
+	if err != nil {
+		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
+		return attemptResult{outcome: outcomeNeutral}, false
+	}
+	if fi2.Size() != in.size && t.Axis != index.AxisInit {
+		lg.Warn("file_changed_during_put", "put_size", in.size, "after_size", fi2.Size())
+		return attemptResult{outcome: outcomeNeutral}, false
+	}
+	return attemptResult{}, true
+}
+
+// openInput 은 (a) 입력을 열고 (b) 크기를 잰다. 열린 파일이면 f 로 돌려주고(부르는 쪽이 닫는다), 로컬 ② 가 없어 ② 객체를
+// 받았으면 f 가 nil 이다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) openInput(j job, rel string, lg *slog.Logger) (in input, f *os.File, r attemptResult, ok bool) {
+	t := j.target
+	f, err := u.opt.Root.Open(rel)
+	if errors.Is(err, fs.ErrNotExist) && archiveFallback(t) {
+		in, r, ok = u.archiveInput(t, lg)
+		return in, nil, r, ok
+	}
+	if err != nil {
+		return input{}, nil, u.classifyOpenError(err, t, j.key(), lg), false
+	}
+	if in, r, ok = u.measureInput(j, f, lg); !ok {
+		_ = f.Close()
+		return input{}, nil, r, false
+	}
+	return in, f, attemptResult{}, true
+}
+
+// archiveFallback 은 로컬 ② 가 없을 때 ② 객체를 ③ 재포장 입력으로 쓸 수 있는가다(설계 r6 2.10 r2 — cx-N3): ③ 축이고 ② 가
+// 올라가 있다(로컬 정리는 ② uploaded 를 요구하므로, 로컬이 지워졌으면 ② 는 올라가 있다). ② 가 안 올라갔으면 지금처럼 파일
+// 없음이다.
+func archiveFallback(t index.UploadTarget) bool {
+	return t.Axis == index.AxisPlayback && t.ArchiveUploadState == index.UploadStateUploaded && t.ArchiveS3Key != ""
+}
+
+// archiveInput 은 ② 객체를 메모리 입력으로 받는다. 객체가 없으면 파일 없음(attemptFileMissing)이고, 그 밖의 실패는 PUT 실패와
+// 같은 재시도 사다리를 탄다. S3 를 읽을 수 없는 배선(Getter 없음)이면 파일 없음이다.
+func (u *Uploader) archiveInput(t index.UploadTarget, lg *slog.Logger) (input, attemptResult, bool) {
+	getter, ok := u.put.(Getter)
+	if !ok {
+		return input{}, attemptResult{kind: attemptFileMissing, outcome: outcomeNeutral}, false
+	}
+	ctx, cancel := context.WithTimeout(u.putCtx, getTimeout)
+	defer cancel()
+	body, err := getter.Get(ctx, t.ArchiveS3Key)
+	switch {
+	case errors.Is(err, ErrObjectNotFound):
+		return input{}, attemptResult{kind: attemptFileMissing, outcome: outcomeNeutral}, false
+	case err != nil:
+		return input{}, attemptResult{kind: attemptRetryable, err: err}, false
+	}
+	lg.Info("playback_input_from_archive", "archive_key", t.ArchiveS3Key, "bytes", len(body))
+	return input{r: bytes.NewReader(body), size: int64(len(body))}, attemptResult{}, true
 }
 
 // input 은 한 시도의 입력이다 — 본문 단계((c′) 이후)가 읽는 리더와 (b) 에서 잰 크기다(POK-196 PDT 계획 4절 c10a ·

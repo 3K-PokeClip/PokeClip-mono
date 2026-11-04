@@ -8,7 +8,16 @@ package playback
 // 조각 k 의 도장은 pos(k) = mtxi(k) + offset 이다. 평소 offset 은 0 이고, 회차 안에서 리셋(같은 녹화기 이어짐이 아님 ∨
 // 역행)이나 같은 녹화기 안 구멍이 나면 직전 조각 끝에 이어 붙이도록 바뀐다.
 
-import "time"
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"math"
+	"math/big"
+	"time"
+
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
+)
 
 // mtxiGapTolerance 는 같은 녹화기 안에서 구멍으로 보지 않는 이웃 차 d 의 상한이다(kty 결정 G).
 // d 는 직전 조각의 끝(영상 축이면 영상 끝, 아니면 mtxi + 장부 길이)부터 이 조각 시작까지다 — 이 값을
@@ -149,31 +158,174 @@ func expectedInstance(prev Link) (*[16]byte, *int64) {
 // anchor 의 행이다. 돌려주는 것은 도장을 찍은 행의 링크뿐이다(비귀속 행 · 사슬 없이 mtxi 를 못 읽은 행은 없다).
 // rows 의 Dur · VideoEnd 는 교정이 끝난 장부 값이라고 본다 — 실시간 사슬이 꼬리에서 물러날 때 덮는 값과 같다.
 func RestoreChain(anchor *Link, rows []SourceTiming, rule StitchRule, same Continues) []Link {
-	var (
-		links    []Link
-		chain    Link
-		hasChain = anchor != nil
-		prevSeq  int64
-	)
-	if hasChain {
-		chain, prevSeq = *anchor, anchor.Seq
-	}
+	fold := NewChainFold(anchor, rule, same)
+	var links []Link
 	for _, cur := range rows {
-		// 인접 = 바로 앞 장부 행이 사슬 행이다(실시간의 prev.Seq == c.seq).
-		adjacent := hasChain && prevSeq == chain.Seq
-		prevSeq = cur.Seq
-		switch {
-		case cur.SessionID == "":
-			continue
-		case !hasChain || chain.SessionID != cur.SessionID:
-			if l, ok := StartLink(cur); ok {
-				chain, hasChain = l, true
-				links = append(links, l)
-			}
-			continue
+		if l, ok := fold.Step(cur); ok {
+			links = append(links, l)
 		}
-		chain = NextLink(chain, adjacent && same(chain, cur), cur, rule)
-		links = append(links, chain)
 	}
 	return links
+}
+
+// ChainFold 는 RestoreChain 의 한 걸음씩 판이다(POK-196 PDT 계획 4절 c10b) — 복원이 행마다 원천을 읽어 가며 접고, 이미 있는 ③
+// 객체를 채택하면 그 행의 링크를 객체의 도장으로 바꿔(Replace) 다음 행을 잇는다.
+type ChainFold struct {
+	rule     StitchRule
+	same     Continues
+	chain    Link
+	hasChain bool
+	prevSeq  int64
+}
+
+// NewChainFold 는 anchor 뒤에서 접기 시작한다. anchor 가 nil 이면 첫 귀속 행이 사슬을 연다.
+func NewChainFold(anchor *Link, rule StitchRule, same Continues) *ChainFold {
+	f := &ChainFold{rule: rule, same: same}
+	if anchor != nil {
+		f.chain, f.hasChain, f.prevSeq = *anchor, true, anchor.Seq
+	}
+	return f
+}
+
+// Step 은 장부 행 cur 하나만큼 접는다. ok 가 거짓이면 그 행에는 도장이 없다(비귀속 행 · 사슬 없이 mtxi 를 못 읽은 행).
+func (f *ChainFold) Step(cur SourceTiming) (Link, bool) {
+	// 인접 = 바로 앞 장부 행이 사슬 행이다(실시간의 prev.Seq == c.seq).
+	adjacent := f.hasChain && f.prevSeq == f.chain.Seq
+	f.prevSeq = cur.Seq
+	switch {
+	case cur.SessionID == "":
+		return Link{}, false
+	case !f.hasChain || f.chain.SessionID != cur.SessionID:
+		l, ok := StartLink(cur)
+		if ok {
+			f.chain, f.hasChain = l, true
+		}
+		return l, ok
+	}
+	f.chain = NextLink(f.chain, adjacent && f.same(f.chain, cur), cur, f.rule)
+	return f.chain, true
+}
+
+// Replace 는 방금 접은 행의 링크를 l 로 바꾼다 — 다음 행은 l 에서 잇는다.
+func (f *ChainFold) Replace(l Link) {
+	f.chain, f.hasChain = l, true
+}
+
+// ErrStampMismatch 는 ③ 객체가 그 ② 조각을 어떤 도장 위치로 재포장해도 나올 수 없는 바이트라는 뜻이다(다른 조각 · 다른 판본의
+// 입력으로 만든 객체).
+var ErrStampMismatch = errors.New("playback: ③ 객체가 이 ② 조각의 재포장이 아니다")
+
+// StampWindow 는 ③ 객체의 도장 위치 범위 [Lo, Hi] 다 — 이 안의 어느 위치로 재포장해도 객체와 같은 바이트다(트랙마다 위치를
+// 그 트랙의 틱으로 반올림해 더하므로 한 점으로 되짚을 수 없다 — 폭은 영상 90kHz 반 틱 안쪽이다).
+type StampWindow struct{ Lo, Hi time.Duration }
+
+// Contains 는 p 가 범위 안인가다.
+func (w StampWindow) Contains(p time.Duration) bool { return w.Lo <= p && p <= w.Hi }
+
+// Pick 은 범위 안의 첫 힌트를, 없으면 범위 가운데를 고른다. 힌트는 보정값 후보로 만든 위치다(보정값 0 · 표의 줄) — 범위
+// 안의 어느 값이든 이 행의 바이트는 같지만, 다음 행의 보정값(pos − mtxi)이 실시간과 같으려면 실제 값을 골라야 한다.
+//
+// exact 는 고른 값을 실제 값으로 볼 수 있는가다 — 힌트가 범위 안에 들었다. 범위 폭(수 µs)보다 작은 보정값 차는 리셋 · 구멍
+// 이음(ms 단위)에서 나오지 않으므로 힌트가 들면 그것이 실제 값이다. 가운데를 고른 값은 실제 값과 범위 폭만큼 다를 수 있다.
+func (w StampWindow) Pick(hints ...time.Duration) (p time.Duration, exact bool) {
+	for _, h := range hints {
+		if w.Contains(h) {
+			return h, true
+		}
+	}
+	return w.Lo + (w.Hi-w.Lo)/2, w.Lo == w.Hi
+}
+
+// StampOf 는 ③ 객체 obj(moof+mdat)가 ② 조각 src 를 어느 도장 위치로 재포장한 것인지의 범위다(설계 r6 2.10 「닻 되살리기」).
+// 남긴 두 트랙(첫 영상 · 첫 소리 — Produce 와 같은 선택)마다 첫 표본 파트의 BaseTime 차를 그 트랙의 틱으로 읽고, 그 틱으로
+// 반올림되는 위치 범위들의 교집합을 낸다. 녹화기 인스턴스 첫 조각은 첫 파트에 영상이 없을 수 있어(소리가 먼저 쌓인다) 트랙마다
+// 표본이 있는 첫 파트를 본다. 표본 열이 다르거나 교집합이 비면 ErrStampMismatch 다.
+func StampOf(src, obj []byte) (StampWindow, error) {
+	rec, err := parseRecording(src)
+	if err != nil {
+		return StampWindow{}, err
+	}
+	var parts fmp4.Parts
+	if err := parts.Unmarshal(obj); err != nil {
+		return StampWindow{}, fmt.Errorf("%w: 객체 본문: %v", ErrStampMismatch, err)
+	}
+	w := StampWindow{Lo: 0, Hi: math.MaxInt64}
+	for _, tr := range rec.tracks {
+		shift, err := trackShift(rec.parts, parts, tr.ID)
+		if err != nil {
+			return StampWindow{}, err
+		}
+		lo, hi := tickWindow(shift, tr.TimeScale)
+		w.Lo, w.Hi = max(w.Lo, lo), min(w.Hi, hi)
+	}
+	if w.Lo > w.Hi {
+		return StampWindow{}, fmt.Errorf("%w: 트랙별 도장 범위가 겹치지 않는다", ErrStampMismatch)
+	}
+	return w, nil
+}
+
+// trackShift 는 한 트랙의 객체 BaseTime − 원천 BaseTime 이다(표본이 있는 첫 파트끼리). 표본 열(개수 · 길이 · 내용)이 다르면
+// 같은 원천의 재포장이 아니다.
+func trackShift(src, obj fmp4.Parts, trackID int) (uint64, error) {
+	a, b := firstSampled(src, trackID), firstSampled(obj, trackID)
+	if a == nil || b == nil || b.BaseTime < a.BaseTime || !sameSamples(src, obj, trackID) {
+		return 0, fmt.Errorf("%w: 트랙 %d", ErrStampMismatch, trackID)
+	}
+	return b.BaseTime - a.BaseTime, nil
+}
+
+// firstSampled 는 표본이 있는 그 트랙의 첫 파트 트랙이다.
+func firstSampled(parts fmp4.Parts, trackID int) *fmp4.PartTrack {
+	for _, p := range parts {
+		for _, tr := range p.Tracks {
+			if tr.ID == trackID && len(tr.Samples) > 0 {
+				return tr
+			}
+		}
+	}
+	return nil
+}
+
+// sameSamples 는 두 파트 열에서 한 트랙의 표본(길이 · 내용)이 순서대로 같은가다.
+func sameSamples(a, b fmp4.Parts, trackID int) bool {
+	sa, sb := samplesOf(a, trackID), samplesOf(b, trackID)
+	if len(sa) != len(sb) {
+		return false
+	}
+	for i := range sa {
+		if sa[i].Duration != sb[i].Duration || !bytes.Equal(sa[i].Payload, sb[i].Payload) {
+			return false
+		}
+	}
+	return true
+}
+
+func samplesOf(parts fmp4.Parts, trackID int) []*fmp4.Sample {
+	var out []*fmp4.Sample
+	for _, p := range parts {
+		for _, tr := range p.Tracks {
+			if tr.ID == trackID {
+				out = append(out, tr.Samples...)
+			}
+		}
+	}
+	return out
+}
+
+// tickWindow 는 ticks(p, ts) = t 인 위치 p 의 범위 [lo, hi] 다 — ticks 가 ⌊(p·ts + 10^9/2) ÷ 10^9⌋ 이므로
+//
+//	lo = ⌈(t·10^9 − 10^9/2) ÷ ts⌉ · hi = ⌈((t+1)·10^9 − 10^9/2) ÷ ts⌉ − 1
+//
+// 곱이 int64 를 넘을 수 있어(t·10^9 — 90kHz 에서 약 28시간) 큰 수로 계산한다. 음수 위치는 없다(Produce 가 막는다).
+func tickWindow(t uint64, ts uint32) (lo, hi time.Duration) {
+	half, sec, scale := big.NewInt(int64(time.Second/2)), big.NewInt(int64(time.Second)), big.NewInt(int64(ts))
+	at := func(n uint64) *big.Int { // ⌈(n·10^9 − 10^9/2) ÷ ts⌉
+		v := new(big.Int).Mul(new(big.Int).SetUint64(n), sec)
+		v.Sub(v, half)
+		v.Add(v, new(big.Int).Sub(scale, big.NewInt(1)))
+		return v.Div(v, scale) // 제수가 양수라 Div(유클리드)는 내림이다 — 음수(n = 0)는 아래에서 0 으로 자른다
+	}
+	l, h := at(t), at(t+1)
+	h.Sub(h, big.NewInt(1))
+	return time.Duration(max(l.Int64(), 0)), time.Duration(h.Int64())
 }
