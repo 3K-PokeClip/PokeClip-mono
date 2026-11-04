@@ -698,8 +698,15 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
         첫 확인에만 한 줄이고 회복 줄이 없어, 「안 풀림」 을 다음 줄로 알 수
         없다. Writer 없는 상자에서 해제 행 삭제만 계속 실패하고 미해제
         조회는 0 행이면 이 줄 말고는 아무 신호가 없는데, 그동안 남은 해제
-        행이 그 회차를 `ending` 에 묶는다. 풀렸는지는 runtime-1a 「POK-525
-        원장 질의」 에서 `released_stuck` 줄이 없는지로 본다.
+        행이 그 회차를 `ending` 에 묶는다. 풀렸는지는 둘을 따로 본다.
+        *   **감시 자체의 회복**은 로그로 알 수 없다(회복 줄이 없다). 원인을
+            고친 뒤 사이드카를 재기동하면 기동 때 확인이 한 번 바로 돌고,
+            실패면 이 줄이 다시 나온다 — 재기동 뒤 다시 나오지 않아야 감시가
+            돈다. `released_stuck` 이 0 이어도 감시가 돈다는 뜻은 아니다
+            (닫힌 미해제 행만 있고 조회가 계속 실패해도 0 이다).
+        *   **원장에 남은 행**은 runtime-1a 「POK-525 원장 질의」 로 본다.
+            해제 행 적체는 `released_stuck` 줄이 없어야 풀린 것이고,
+            `closed_unreleased` 가 남아 있으면 Writer 가 있어야 풀린다.
 *   **clear 도 ERROR 다.** `value=0` 줄을 set 과 같은 등급으로 내야
     `LOG_LEVEL=warn` 수집에서도 회복이 보인다(janitor 게이지 관례).
 *   ending → vod 전이는 기존 `playback_state_sent`(`phase`)로 본다.
