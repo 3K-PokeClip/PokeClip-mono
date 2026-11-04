@@ -138,6 +138,30 @@ func (r *rewindLoop) provisionalEnding(s, owner string) {
 	r.logFinal(s, f, "forget_provisional", "")
 }
 
+// endingRecheckEvery 는 ending 재조회 주기다(POK-525 설계 5-3). 주기이지 상한이 아니다 — 읽기는 상태 읽기 차선의 전체 동시
+// 상한(REWIND_PLAYBACK_READ_MAX) 안에서만 나가고, 넘친 표지는 다음 holdTick 으로 밀린다(startPlayback).
+const endingRecheckEvery = 30 * time.Second
+
+// recheckEnding 은 재조회 주기마다 종료 항목이 ending(Forget 잠정 항목 포함)인 스트림을 상태 표지로 되넣는다(설계 5-3 (가)).
+// 상태 표지는 프로세스 안의 맵이라 다른 상자가 장부를 바꾸면(하한 원장 행 삭제 · 회차 닫힘 · VOD 동결) 이 상자에 오지 않고,
+// Board 적중이면 회차 경로는 DB 를 보지 않는다 — 그래서 ending 사본을 주기마다 DB 에 다시 맞춘다. 읽기는 기존 상태 읽기
+// 차선이 하고 결과는 M5 받은편지함 → drainFinals 로 돌아온다. 부하는 ending 스트림 수 × 주기당 1회이고 매니페스트 합성 경로
+// 밖이다(프로필 4절). 정산 몫이 없으면(차선 없음) 하지 않는다.
+func (r *rewindLoop) recheckEnding(now time.Time) {
+	if r.fin == nil {
+		return
+	}
+	if !r.recheckedAt.IsZero() && now.Sub(r.recheckedAt) < endingRecheckEvery {
+		return
+	}
+	r.recheckedAt = now
+	for s, f := range r.final {
+		if f.Status.Mode == status.ModeEnding {
+			r.fin.inbox.Changed(s)
+		}
+	}
+}
+
 // publishStatus 는 holdTick 끝에서 Board 를 새로 만든다(꺼짐이면 하지 않는다 — DisabledBoard 그대로). 캐시가 든 스트림마다
 // 개시 삭제를 평가하고 Derive 로 답을 정한 뒤, 캐시 밖 종료 항목을 더한다. warm 은 부팅 감시가 끝났거나 발행 몫이 없을
 // 때(강등 — 기다릴 감시가 없다) 참이다.

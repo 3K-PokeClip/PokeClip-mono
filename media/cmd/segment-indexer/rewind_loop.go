@@ -84,6 +84,8 @@ type rewindLoop struct {
 	invalid     map[string]index.PlaybackState
 	rangeWarned map[string]string
 	alarms      map[string]*readyAlarm
+	// recheckedAt 은 ending 재조회(recheckEnding)를 마지막으로 낸 holdTick 시각이다(영값 = 아직 — 첫 holdTick 에 낸다).
+	recheckedAt time.Time
 
 	// endGapRun 은 L3 종료 손잡이다(gap_run.go — 운영은 index.EndGapRun). nil 이면 스위치 끔이라 셈만 하고 끝내지 않는다.
 	endGapRun func(ctx context.Context, streamID, sessionID string) (string, error)
@@ -178,13 +180,15 @@ const (
 // 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
 //
 // 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → endGapRuns(L3) → endStallSeals(L2′ —
-// 둘 다 스위치 켬일 때만) → 받은편지함 비우기(상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5
-// Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식 EndLive · L3 · L2′ 가 남긴 표지는 같은 틱의
-// 받은편지함 비우기에서 읽힌다. L2′ 의 봉인은 발행 몫의 사다리가 스트림 차선에 낸다(stall_seal.go).
+// 둘 다 스위치 켬일 때만) → ending 재조회(주기마다 표지 되넣기 — POK-525) → 받은편지함 비우기(상태 표지 → 차선 발사) →
+// finalizeTick(빠른 길 · 스캔 주기) → M5 Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식
+// EndLive · L3 · L2′ 가 남긴 표지 · 재조회가 되넣은 표지는 같은 틱의 받은편지함 비우기에서 읽힌다. L2′ 의 봉인은 발행 몫의
+// 사다리가 스트림 차선에 낸다(stall_seal.go).
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 	r.endOfflineSessions(ctx, now)
 	r.endGapRuns(ctx, now)
 	r.endStallSeals(ctx, now)
+	r.recheckEnding(now)
 	r.drainInboxes(ctx)
 	r.finalizeTick(ctx, now)
 	r.drainFinals()
