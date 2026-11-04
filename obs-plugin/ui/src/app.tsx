@@ -8,7 +8,7 @@ import { NotifyContext } from './components/notify';
 import { PairCard } from './components/PairCard';
 import { DevCard } from './components/Settings';
 import { StatusCard } from './components/StatusCard';
-import { Toast } from './components/Toast';
+import { LiveAnnouncer, Toast } from './components/Toast';
 import { UnpairDialog } from './components/UnpairDialog';
 import type { Bridge } from './lib/bridge';
 import { markToast, noKeyToast, PHASE_LABEL, reasonText, type ToastTone } from './lib/copy';
@@ -151,6 +151,7 @@ export function App({ bridge }: { bridge: Bridge }) {
   const badge = badgeFor(state);
   const locked = ['starting', 'live', 'reconnecting', 'stopping'].includes(state.phase);
   const showNoKeyToast = !state.paired && state.errorCode === 'no_key' && state.obsStreaming && !toastDismissed;
+  const noKeyText = noKeyToast(state.checks.gop2s === true);
 
   return (
     <NotifyContext.Provider value={notify}>
@@ -232,11 +233,14 @@ export function App({ bridge }: { bridge: Bridge }) {
           />
         ) : null}
 
-        {showNoKeyToast ? (
-          <Toast message={noKeyToast(state.checks.gop2s === true)} onDismiss={() => setToastDismissed(true)} />
-        ) : notice ? (
+        {/* 지나가는 알림(저장·마크·개발자 모드)이 먼저 — 4초 뒤 사라지면 닫을 때까지 남는 no_key 안내가 다시 보인다.
+            no_key가 먼저면 미연결·방송 중에 개발자 칸을 저장해도 알림이 가려진 채 사라진다. */}
+        {notice ? (
           <Toast tone={notice.tone} message={notice.message} onDismiss={() => setNotice(null)} />
+        ) : showNoKeyToast ? (
+          <Toast message={noKeyText} onDismiss={() => setToastDismissed(true)} />
         ) : null}
+        <LiveAnnouncer message={notice ? notice.message : showNoKeyToast ? noKeyText : ''} nonce={notice ?? 'no_key'} />
       </main>
     </NotifyContext.Provider>
   );
