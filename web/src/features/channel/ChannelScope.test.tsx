@@ -189,6 +189,55 @@ describe('ChannelScope', () => {
     await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/home'));
   });
 
+  it('갈 주소가 실린 전환이면(알림을 눌러 바꿈) 방송에 묶인 화면에서도 홈 대신 그 주소로 간다 (PR #481)', async () => {
+    nav.pathname = '/broadcast/vod/s-1';
+    stub();
+    renderScope();
+    await screen.findByText('채널 7');
+
+    act(() => {
+      useSwitchCurtain
+        .getState()
+        .cover(
+          { name: '별하', relation: 'EDITOR', photo: null, destination: '/broadcast/livenow' },
+          () => {},
+        );
+      useChannelStore.getState().select(7, 3);
+    });
+
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/broadcast/livenow'));
+    expect(nav.replace).not.toHaveBeenCalledWith('/home');
+  });
+
+  it('갈 주소도 방송에 묶인 화면이면 그곳에 닿는 순간 떠나기를 끝내고 새 채널로 선다', async () => {
+    nav.pathname = '/broadcast/vod/s-1';
+    stub();
+    renderWithProviders(
+      <ChannelScope fallback={<p>본문 뼈대</p>}>
+        <Probe />
+      </ChannelScope>,
+    );
+    await screen.findByText('채널 7');
+
+    act(() => {
+      useSwitchCurtain
+        .getState()
+        .cover(
+          { name: '별하', relation: 'EDITOR', photo: null, destination: '/broadcast/vod/s-9' },
+          () => {},
+        );
+      useChannelStore.getState().select(7, 3);
+    });
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/broadcast/vod/s-9'));
+    expect(screen.getByText('본문 뼈대')).toBeInTheDocument();
+
+    // 주소가 바뀌어 다시 그려지면(라우터가 도착) 그 화면을 새 채널로 세운다 — 뼈대에 갇히지 않는다
+    nav.pathname = '/broadcast/vod/s-9';
+    act(() => useChannelStore.setState({ selectedAt: Date.now() }));
+    expect(await screen.findByText('채널 3')).toBeInTheDocument();
+    expect(nav.replace).not.toHaveBeenCalledWith('/home');
+  });
+
   it('?stream=으로 방송을 못 박은 화면에서 바꿔도 홈으로 간다', async () => {
     nav.pathname = '/broadcast/livenow';
     window.history.pushState({}, '', '/broadcast/livenow?stream=s-1');

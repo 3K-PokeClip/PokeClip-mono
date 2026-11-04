@@ -141,17 +141,20 @@ export function ChannelScope({
   // 방송을 못 박은 화면에서 채널이 바뀌면 홈으로 가고, 가는 동안 자식을 새 채널로 세우지 않는다(감사 2회차 지적 3):
   // 세우면 앞 채널의 방송을 새 채널 이름 아래에서 한 번 더 읽는다. 렌더 중에 가른다: 효과에서 가르면 이미 섰다.
   // 앞 번호는 준비 안 됨(null)을 건너 기억한다: 다른 탭 선택은 7 → 준비 안 됨 → 3으로 온다.
+  // 떠날 곳은 보통 홈이지만, 전환에 갈 주소가 실려 있으면(알림을 눌러 그 채널로 바꿈) 그리로 간다: 홈으로 보내면 그 화면으로
+  // 가는 이동과 부딪쳐 홈에 떨어진다(PR #481 리뷰). 그 주소가 또 방송에 묶인 화면이면 도착한 순간 떠나기를 끝낸다.
   const streamerId = active.ready ? active.streamerId : null;
   const pinned = pinnedToBroadcast(pathname);
   const [shownId, setShownId] = useState<number | null>(streamerId);
-  const [leaving, setLeaving] = useState(false);
+  const [leaving, setLeaving] = useState<string | null>(null);
   if (streamerId !== null && streamerId !== shownId) {
     setShownId(streamerId);
-    if (shownId !== null && pinned) setLeaving(true);
+    if (shownId !== null && pinned)
+      setLeaving(useSwitchCurtain.getState().curtain?.destination ?? '/home');
   }
-  if (leaving && !pinned) setLeaving(false);
+  if (leaving !== null && (!pinned || pathname === leaving.split('?')[0])) setLeaving(null);
   useEffect(() => {
-    if (leaving) router.replace('/home');
+    if (leaving !== null) router.replace(leaving);
   }, [leaving, router]);
 
   // 나를 못 읽으면 채널을 정할 수 없다: 화면을 통째로 막지 않고 번호 없이(섞어서) 그린다(이 카드 전과 같은 동작).
@@ -160,7 +163,7 @@ export function ChannelScope({
       <ChannelStreamerIdContext.Provider value={null}>{children}</ChannelStreamerIdContext.Provider>
     );
   }
-  if (!active.ready || leaving) return <>{fallback}</>;
+  if (!active.ready || leaving !== null) return <>{fallback}</>;
   return (
     <ChannelStreamerIdContext.Provider value={active.streamerId}>
       <ChannelRelationContext.Provider value={active.relation}>
