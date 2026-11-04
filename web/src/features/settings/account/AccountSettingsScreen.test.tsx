@@ -638,6 +638,12 @@ describe('AccountSettingsScreen — 탈퇴', () => {
 
     // 보관함·구독 수치는 백엔드가 없다 — 숫자 대신 안내가 선다
     expect(dialog.getAllByText('준비 중')).toHaveLength(3);
+
+    // 진행이 어려울 때 문의할 곳 — 도움말 문의 카드와 같은 주소다
+    expect(dialog.getByRole('link', { name: 'support@pokeclip.com' })).toHaveAttribute(
+      'href',
+      'mailto:support@pokeclip.com',
+    );
   });
 
   it('취소는 아무 일 없이 이탈한다', async () => {
