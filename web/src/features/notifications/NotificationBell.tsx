@@ -458,23 +458,16 @@ function TodoCard({
   now,
   state,
   onOpen,
-  dim,
 }: {
   n: AppNotification;
   now: number;
   state: NotificationsState;
   onOpen: () => void;
-  dim?: boolean;
 }) {
   const view = describeNotification(n, now);
   const unread = n.readAt === null;
   return (
-    <div
-      className={styles.todo}
-      data-notification-id={n.id}
-      data-unread={unread || undefined}
-      data-dim={dim || undefined}
-    >
+    <div className={styles.todo} data-notification-id={n.id} data-unread={unread || undefined}>
       <button
         type="button"
         className={styles.todoTop}

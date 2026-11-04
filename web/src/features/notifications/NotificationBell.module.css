@@ -260,8 +260,7 @@
   color: var(--pc-color-text-secondary);
 }
 
-.rowWrap[data-dim],
-.todo[data-dim] {
+.rowWrap[data-dim] {
   opacity: 0.6;
 }
 

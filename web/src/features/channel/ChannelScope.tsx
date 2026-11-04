@@ -51,12 +51,15 @@ export function useChannelStreamerId(): number | null {
   return useContext(ChannelStreamerIdContext);
 }
 
-/** 방송 하나를 못 박은 화면인가(지난 방송 상세 · ?stream=). 그 방송은 앞 채널 것이라 채널을 바꾸면 홈으로 간다. */
 /** 지금 주소(경로+쿼리). 쿼리는 pinnedToBroadcast와 같은 까닭으로 주소창에서 읽는다 */
 function currentUrl(pathname: string | null): string {
   return `${pathname ?? ''}${typeof window === 'undefined' ? '' : window.location.search}`;
 }
 
+/**
+ * 방송 하나를 못 박은 화면인가(지난 방송 상세 · ?stream=). 그 방송은 앞 채널 것이라 채널을 바꾸면 떠난다 — 전환에 갈 주소
+ * (destination)가 실려 있으면 그리로, 없으면 홈으로.
+ */
 function pinnedToBroadcast(pathname: string | null): boolean {
   if ((pathname ?? '').startsWith('/broadcast/vod/')) return true;
   // ?stream=은 useSearchParams 대신 주소창에서 읽는다: 레이아웃에서 그것을 쓰면 Suspense 경계가 필요하고,
