@@ -101,8 +101,8 @@ export function WithdrawDialog({
           <div className={styles.footnoteDivider} />
           <p className={styles.footnote}>
             탈퇴 진행이 어려우신 경우 고객센터(
-            <a className={styles.footnoteLink} href="mailto:3k.pokeclip@gmail.com">
-              3k.pokeclip@gmail.com
+            <a className={styles.footnoteLink} href="mailto:support@pokeclip.com">
+              support@pokeclip.com
             </a>
             )로 문의해 주세요.
           </p>

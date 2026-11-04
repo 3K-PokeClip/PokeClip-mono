@@ -27,7 +27,7 @@ import styles from './HelpSettingsScreen.module.css';
 // 문의 API는 없다 — 1:1 문의는 디스코드로, 그 밖은 메일로 받는다(메일은 처리방침·탈퇴 창과 같은 주소).
 // 메일 버튼은 메일 앱을 여는데, 메일 앱이 없는 사람도 옮겨 적을 수 있게 주소를 글로도 보인다.
 
-const SUPPORT_EMAIL = '3k.pokeclip@gmail.com';
+const SUPPORT_EMAIL = 'support@pokeclip.com';
 const DISCORD_INVITE_URL = 'https://discord.gg/rJM9egeuwr';
 
 const TOPIC_ICONS: Record<FaqTopic, LucideIcon> = {

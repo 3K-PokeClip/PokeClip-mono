@@ -164,9 +164,9 @@ describe('HelpSettingsScreen', () => {
     expect(discord).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.getByRole('link', { name: '이메일' })).toHaveAttribute(
       'href',
-      'mailto:3k.pokeclip@gmail.com',
+      'mailto:support@pokeclip.com',
     );
-    expect(screen.getByText('3k.pokeclip@gmail.com')).toBeInTheDocument();
+    expect(screen.getByText('support@pokeclip.com')).toBeInTheDocument();
   });
 
   it('문의 창구를 누르면 어느 창구인지만 센다 — 바깥으로 떠나 결과는 웹이 모른다 (POK-357)', () => {
