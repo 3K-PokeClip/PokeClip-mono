@@ -294,7 +294,9 @@ func TestRepairTimeoutKeepsTickMovingAndWaitsForNextCycle(t *testing.T) {
 	if err := lock.Rollback(ctx); err != nil {
 		t.Fatalf("잠금 풀기: %v", err)
 	}
-	p.repairEvery = 0
+	// 셋째 tick 은 시한이 아니라 회수를 본다 — 첫 tick 용 200ms 를 그대로 두면 부하에서 고르기 · 넣기 둘이 시한을 넘겨
+	// 그 주기를 멈춘다(설계대로의 동작이라 시험만 고친다).
+	p.repairEvery, p.repairTimeout = 0, 5*time.Second
 	tickWithin(t, p, 5*time.Second)
 	requireRepairedEnded(t, pool, "R-E1", now.Add(-2*time.Hour))
 	requireRepairedEnded(t, pool, "R-E2", now.Add(-time.Hour))
