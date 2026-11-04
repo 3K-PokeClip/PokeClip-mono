@@ -678,6 +678,27 @@ describe('NotificationBell', () => {
     expect(tracked('editor_invitation_responded')).toEqual([{ outcome: 'accepted' }]);
   });
 
+  it('키보드로 거절을 누르면 확인의 「취소」로, 취소하면 「거절」로 포커스가 간다 (PR #481 3차)', async () => {
+    items.push(
+      wire(
+        'n-invite',
+        1,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+    );
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    within(panel).getByRole('button', { name: '거절' }).focus();
+    await user.keyboard('{Enter}');
+    expect(within(panel).getByRole('button', { name: '취소' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(within(panel).getByRole('button', { name: '거절' })).toHaveFocus();
+  });
+
   it('초대를 거절해도 읽음을 같이 보낸다 — 「처리됨」 줄이 안 읽음으로 남지 않는다', async () => {
     items.push(
       wire(

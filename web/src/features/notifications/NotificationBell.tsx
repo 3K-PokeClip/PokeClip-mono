@@ -469,6 +469,23 @@ function InviteActions({ n, state }: { n: AppNotification; state: NotificationsS
   const respond = useRespondInvitation(state);
   const [asking, setAsking] = useState(false);
   const busy = respond.isPending;
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const declineRef = useRef<HTMLButtonElement>(null);
+  const asked = useRef(false);
+  // 누른 단추가 확인 칸으로 바뀌며 사라지면 포커스가 body로 떨어진다(다음 Tab이 창 맨 앞, 확인 문구도 안 읽힘) — 채널 스위처의
+  // 거절 확인과 같은 규칙: 열리면 「취소」(Enter 한 번에 거절되지 않게), 닫히면 「거절」로 돌린다. 그 사이 다른 곳으로 옮겼으면
+  // 빼앗지 않는다(PR #481 3차)
+  useEffect(() => {
+    if (asking) {
+      asked.current = true;
+      cancelRef.current?.focus();
+      return;
+    }
+    if (!asked.current) return;
+    asked.current = false;
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (lost) declineRef.current?.focus();
+  }, [asking]);
   // 수락 · 거절 모두 읽음을 같이 보낸다: 서버는 답한 초대에 resolvedAt만 채우므로, 안 보내면 거절한 알림이 「확인 필요」에서
   // 빠진 뒤 안 읽은 「처리됨」 줄로 남고 종 숫자도 그대로다
   function answer(kind: 'accept' | 'decline', options?: { onSettled?: () => void }) {
@@ -480,7 +497,13 @@ function InviteActions({ n, state }: { n: AppNotification; state: NotificationsS
       <div className={styles.confirm}>
         <span>거절하면 {n.channel.name} 채널이 다시 초대해야 참여할 수 있어요</span>
         <div className={styles.actions} data-count="2">
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => setAsking(false)}>
+          <Button
+            ref={cancelRef}
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setAsking(false)}
+          >
             취소
           </Button>
           <Button
@@ -497,7 +520,13 @@ function InviteActions({ n, state }: { n: AppNotification; state: NotificationsS
   }
   return (
     <div className={styles.actions} data-count="2">
-      <Button size="sm" variant="outline" disabled={busy} onClick={() => setAsking(true)}>
+      <Button
+        ref={declineRef}
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        onClick={() => setAsking(true)}
+      >
         거절
       </Button>
       <Button size="sm" variant="solid" disabled={busy} onClick={() => answer('accept')}>
