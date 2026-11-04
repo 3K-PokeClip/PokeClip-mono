@@ -750,3 +750,116 @@ run "rejects_fractional_deployment_percent" {
 
   expect_failures = [var.deployment_minimum_healthy_percent]
 }
+
+# 포트 없는 서비스(웹 서버 없는 일꾼 — POK-408). 빈 목록이 아니라 키 자체를
+# 내지 않는다 — ECS 가 빈 목록을 어떻게 돌려주는지에 기대지 않는다.
+run "omits_port_mapping_without_port" {
+  command = apply
+
+  variables {
+    port              = null
+    target_group_arns = []
+  }
+
+  assert {
+    condition     = !contains(keys(jsondecode(aws_ecs_task_definition.this.container_definitions)[0]), "portMappings")
+    error_message = "port 가 없는데 컨테이너 정의에 portMappings 키가 있다."
+  }
+
+  assert {
+    condition     = length(aws_ecs_service.this.load_balancer) == 0
+    error_message = "port 가 없는데 load_balancer 연결이 있다."
+  }
+}
+
+# Cloud Map A 레코드는 포트와 무관해 포트 없는 서비스도 그대로 등록한다.
+run "registers_service_in_cloud_map_without_port" {
+  command = plan
+
+  variables {
+    port              = null
+    target_group_arns = []
+  }
+
+  assert {
+    condition = (
+      length(aws_ecs_service.this.service_registries) == 1 &&
+      aws_service_discovery_service.this.name == "auth"
+    )
+    error_message = "port 가 없을 때 서비스가 Cloud Map 등록 하나를 갖지 않는다."
+  }
+}
+
+run "rejects_target_groups_without_port" {
+  command = plan
+
+  variables {
+    port = null
+  }
+
+  expect_failures = [var.port]
+}
+
+# 키가 하나라도 늘거나 줄면 태스크 정의가 교체돼 platform 서비스가 재기동된다.
+run "keeps_container_definition_keys_with_port" {
+  command = apply
+
+  assert {
+    condition = toset(keys(jsondecode(aws_ecs_task_definition.this.container_definitions)[0])) == toset([
+      "environment", "essential", "image", "logConfiguration", "name", "portMappings", "secrets",
+    ])
+    error_message = "port 를 준 컨테이너 정의의 키 집합이 environment · essential · image · logConfiguration · name · portMappings · secrets 가 아니다."
+  }
+}
+
+run "omits_ephemeral_storage_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_ecs_task_definition.this.ephemeral_storage) == 0
+    error_message = "ephemeral_storage_gib 을 주지 않았는데 ephemeral_storage 블록이 있다."
+  }
+}
+
+run "sets_ephemeral_storage_when_given" {
+  command = plan
+
+  variables {
+    ephemeral_storage_gib = 40
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.this.ephemeral_storage[0].size_in_gib == 40
+    error_message = "ephemeral_storage 크기가 입력 ephemeral_storage_gib(40)이 아니다."
+  }
+}
+
+run "rejects_ephemeral_storage_out_of_range" {
+  command = plan
+
+  variables {
+    ephemeral_storage_gib = 20
+  }
+
+  expect_failures = [var.ephemeral_storage_gib]
+}
+
+run "rejects_ephemeral_storage_above_200" {
+  command = plan
+
+  variables {
+    ephemeral_storage_gib = 201
+  }
+
+  expect_failures = [var.ephemeral_storage_gib]
+}
+
+run "rejects_fractional_ephemeral_storage" {
+  command = plan
+
+  variables {
+    ephemeral_storage_gib = 40.5
+  }
+
+  expect_failures = [var.ephemeral_storage_gib]
+}
