@@ -638,7 +638,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_inde
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer;
 ```
 
-- **DELETE 는 M6 만료 · outbox 몫만이다(ADR-0006 개정 —
+- **`stream_edge_bounds` 밖의 DELETE 는 M6 만료 · outbox 몫만이다(ADR-0006 개정 —
   `docs/decisions/2026-10-26-media-indexer-m6-delete-grants.md`).** 60일
   만료가 조각 · GAP · 세션 행과 그 회차 outbox 행을 지우고, 발행기가 끝난
   outbox 행을 지운다. `stream_cutoffs` 의 UPDATE · DELETE 는 만료의 컷오프

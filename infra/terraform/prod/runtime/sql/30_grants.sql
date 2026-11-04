@@ -8,7 +8,8 @@
 --
 -- media_indexer 의 DELETE(조각 · 세션 · GAP · outbox) · stream_cutoffs UPDATE · DELETE 는 M6 만료 · outbox 몫이다
 -- (ADR-0006 개정 — docs/decisions/2026-10-26-media-indexer-m6-delete-grants.md). TRUNCATE · DDL 은 없고, seq 하한
--- 표는 SELECT 만이다(하한은 stream_segments 트리거가 정의자 권한으로 올린다).
+-- 표는 SELECT 만이다(하한은 stream_segments 트리거가 정의자 권한으로 올린다). stream_edge_bounds 의 넷
+-- (SELECT · INSERT · UPDATE · DELETE)은 /dvr 하한 원장 몫이다(POK-525 — DELETE 는 해제 유예가 지난 행 정리).
 --
 -- 목록 정본은 media 쪽이다. media_indexer = media/internal/pgtest/role.go 의 mediaIndexerGrants,
 -- media_janitor = media/internal/index/local_cleanup_role_pg_test.go 의 lcRoleGrants. 이 파일의 GRANT 가
