@@ -99,9 +99,9 @@ onSessionAdvance(forgetPrefetchLists);
 
 /**
  * 카드 하나. 기억한 목록에 없으면 낡은 목록일 수 있다(방송 중 새로 생긴 카드)고 보고 한 번 다시 읽는다 — 방금 읽은 목록에도 없으면
- * 정말 없는 카드다
+ * 정말 없는 카드다. 카드에서 보관함 저장(saveCardDraft)도 같은 목록을 쓴다
  */
-async function cardFromList(streamId: string, cardId: string): Promise<JumpCard | null> {
+export async function cardFromList(streamId: string, cardId: string): Promise<JumpCard | null> {
   const load = () => fetchAllJumpCards(streamId, undefined, { includeHidden: true });
   const find = (cards: JumpCard[]) => cards.find((card) => String(card.id) === cardId) ?? null;
   const first = cardLists.read(streamId, LIST_REUSE_MS, load);

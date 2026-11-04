@@ -25,7 +25,6 @@ function highlight(overrides: Partial<LiveHighlight> = {}): LiveHighlight {
     id: 'hl-1',
     timestamp: '1:07:50',
     title: '시청자 참여 미션 성공',
-    meta: '채팅 ×4.2 급증 · 42초 · 방금',
     status: 'scored',
     source: 'auto',
     ...overrides,
@@ -33,18 +32,17 @@ function highlight(overrides: Partial<LiveHighlight> = {}): LiveHighlight {
 }
 
 describe('cardViewFor: 계약 status 5종 → 시안 카드 상태', () => {
-  const cases: Array<[HighlightStatus, string, string]> = [
-    ['scored', 'ready', '검토 대기'],
-    ['manual', 'manual', '수동 마킹'],
-    ['clipped', 'ready', '클립 완료'],
-    ['unprocessed', 'ready', '미처리'],
-    ['expired', 'ready', '만료'],
+  // 상태 배지는 카드에서 뺐다(시안 B2-1) — 상태 · 흐림 · 버튼줄만 정한다
+  const cases: Array<[HighlightStatus, string]> = [
+    ['scored', 'ready'],
+    ['manual', 'manual'],
+    ['clipped', 'ready'],
+    ['unprocessed', 'ready'],
+    ['expired', 'ready'],
   ];
 
-  it.each(cases)('%s → %s 상태에 "%s" 배지', (status, state, label) => {
-    const view = cardViewFor(highlight({ status }));
-    expect(view.state).toBe(state);
-    expect(view.badgeLabel).toBe(label);
+  it.each(cases)('%s → %s 상태', (status, state) => {
+    expect(cardViewFor(highlight({ status })).state).toBe(state);
   });
 
   it('만료 카드만 흐리고 버튼줄이 없다', () => {
@@ -108,6 +106,19 @@ describe('cardVisualFor — 모르는 카드는 계약 필드에서 세운다', 
     ).toBe(100);
   });
 
+  it('길이 · 경과는 카드 목록이 실어 준 값을 쓴다(사진 위 「1:00」 · 「3분 전」)', () => {
+    const resolved = cardVisualFor(
+      highlight({ id: 'unknown', lengthSec: 60, ago: '3분 전' }),
+      STREAM,
+      {},
+    );
+    expect(resolved.duration).toBe('1:00');
+    expect(resolved.timeAgo).toBe('3분 전');
+    expect(cardVisualFor(highlight({ id: 'unknown', lengthSec: 45 }), STREAM, {}).duration).toBe(
+      '0:45',
+    );
+  });
+
   it('알 수 없는 값은 지어내지 않고 감춘다 — 실연동 뒤 거짓 표기로 남는다', () => {
     const resolved = cardVisualFor(highlight({ id: 'unknown' }), STREAM, {});
     expect(resolved.duration).toBeNull();
@@ -156,16 +167,16 @@ describe('reuseHighlights', () => {
   });
 
   it('표기가 바뀐 카드만 새 객체다: 나머지 카드는 다시 그리지 않는다', () => {
-    const prev = [highlight({ id: 'a', meta: '5초 전' }), highlight({ id: 'b', meta: '3분 전' })];
+    const prev = [highlight({ id: 'a', ago: '5초 전' }), highlight({ id: 'b', ago: '3분 전' })];
 
     const next = reuseHighlights(
       prev,
-      [highlight({ id: 'a', meta: '6초 전' }), highlight({ id: 'b', meta: '3분 전' })],
+      [highlight({ id: 'a', ago: '6초 전' }), highlight({ id: 'b', ago: '3분 전' })],
       NOW,
     );
 
     expect(next).not.toBe(prev);
-    expect(next[0]?.meta).toBe('6초 전');
+    expect(next[0]?.ago).toBe('6초 전');
     expect(next[1]).toBe(prev[1]);
   });
 

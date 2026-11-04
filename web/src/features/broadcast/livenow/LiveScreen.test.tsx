@@ -2156,10 +2156,11 @@ describe('LiveScreen — 방송 정보 바', () => {
 });
 
 describe('LiveScreen — 하이라이트 카드', () => {
-  it('상태 배지는 점수와 검토 대기다: 「편집 중」 배지가 없다 (POK-393)', async () => {
+  it('점수는 사진 위에 있고 상태 배지(검토 대기 · 「편집 중」)는 없다 (POK-393 · 시안 B2-1)', async () => {
     await renderLive();
 
     expect(screen.getByText('97점')).toBeInTheDocument();
+    expect(screen.queryByText('검토 대기')).not.toBeInTheDocument();
     expect(screen.queryByText(/편집 중/)).not.toBeInTheDocument();
   });
 
@@ -2171,8 +2172,8 @@ describe('LiveScreen — 하이라이트 카드', () => {
     fireEvent.click(edits[0] as HTMLElement);
     await settle();
     expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/claim'))).toHaveLength(0);
-    // 업로드 라우트는 아직 없다: 자리만 두고 비활성
-    expect(screen.getAllByRole('button', { name: '원클릭 업로드' })[0]).toBeDisabled();
+    // 원클릭 업로드는 카드에서 뺐다(2026-11-04 사용자 결정): 자리도 두지 않는다
+    expect(screen.queryAllByRole('button', { name: '원클릭 업로드' })).toHaveLength(0);
   });
 
   it('모든 카드에 편집·가리기가 있고 놓기는 없다: 숨김 칸은 처음엔 0이다 (POK-393 · POK-463)', async () => {
@@ -2297,14 +2298,14 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getByText(/^97점 · /)).toBeInTheDocument();
   });
 
-  it('카드는 방송 시각이 늦은 것부터다: 순번이 큰 옛 숨김 카드가 맨 앞에 와서 강조를 받지 않는다 (POK-393)', async () => {
+  it('카드는 방송 시각이 늦은 것부터다: 순번이 큰 옛 숨김 카드가 맨 앞에 오지 않는다 (POK-393)', async () => {
     // 옛 숨김 카드는 숨길 때 트리거가 순번을 올려 놓았다: 방송 시각은 가장 이른데 순번은 가장 크다
     // 같은 방송 시각이면 번호가 큰 쪽이 앞이다(10번은 8번과 시각이 같고 순번은 작다)
     server.extraCards = [
       card(9, { eventSeq: 999, streamTimestampMs: 30_000 }),
       card(10, { eventSeq: 1, streamTimestampMs: 5_000_000 }),
     ];
-    const { container } = await renderLive();
+    await renderLive();
 
     const titles = screen
       .getAllByRole('article')
@@ -2312,14 +2313,6 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(titles[0]).toBe('채팅이 튄 순간 #10');
     expect(titles[1]).toBe('채팅이 튄 순간 #8');
     expect(titles[titles.length - 1]).toBe('채팅이 튄 순간 #9');
-    const emphasized = container.querySelectorAll('[class*="cardEmphasized"]');
-    expect(emphasized).toHaveLength(1);
-    expect(emphasized[0]).toHaveTextContent('채팅이 튄 순간 #10');
-  });
-
-  it('강조는 맨 앞 카드 하나뿐이다: 여럿이면 「방금」이라는 뜻을 잃는다', async () => {
-    const { container } = await renderLive();
-    expect(container.querySelectorAll('[class*="cardEmphasized"]')).toHaveLength(1);
   });
 
   it('필터 칩이 실제 카드 수를 센다 — 전체 8 · 자동 6 · 수동 2', async () => {
@@ -5664,7 +5657,10 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     await settle();
 
     expect(screen.getByText('방송 중이 아니에요')).toBeInTheDocument();
-    expect(screen.queryByText(/^1:2\d:\d\d$/)).toBeNull();
+    // 카드 사진 위의 방송 시각(시안 B2-1)은 경과 시계가 아니다: 카드 밖에서만 센다
+    expect(
+      screen.queryAllByText(/^1:2\d:\d\d$/).filter((el) => el.closest('article') === null),
+    ).toHaveLength(0);
     expect(screen.queryByText(/명 시청 중/)).toBeNull();
   });
 

@@ -10,6 +10,7 @@ import {
   forgetBroadcastRows,
   fetchJumpCard,
   fetchLibraryAll,
+  forgetLibraryList,
   libraryQueryOptions,
   mediaStreamId,
   openJumpCard,
@@ -467,6 +468,23 @@ describe('방송 한 줄 기억', () => {
     expect((await fetchBroadcast('x', undefined, { fresh: true }))?.status).toBe('ended');
   });
 
+  it('fresh가 조건이면 기억해 둔 줄이 그 조건에 맞을 때만 다시 읽는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('state=live')
+        ? listOf()
+        : listOf(finishedRow('a'), { ...finishedRow('b'), timelineOriginAt: null }),
+    );
+
+    await fetchBroadcast('a');
+    const calls = spy.mock.calls.length;
+    // 기준점이 찬 줄은 기억한 것을 쓴다(목록을 다시 걷지 않는다)
+    await fetchBroadcast('a', undefined, { fresh: (row) => !row.timelineOriginAt });
+    expect(spy).toHaveBeenCalledTimes(calls);
+    // 기준점 없는 줄은 다시 읽는다
+    await fetchBroadcast('b', undefined, { fresh: (row) => !row.timelineOriginAt });
+    expect(spy.mock.calls.length).toBeGreaterThan(calls);
+  });
+
   it('기다리는 쪽이 끊어도 같이 기다리던 다른 쪽은 답을 받는다', async () => {
     stubFetch((url) => (url.includes('state=live') ? listOf(liveRow('x')) : listOf()));
     const abort = new AbortController();
@@ -551,6 +569,48 @@ describe('보관함 목록 쿼리: 탭으로 돌아올 때', () => {
 
     unsubscribe();
     client.unmount();
+    client.clear();
+  });
+});
+
+describe('forgetLibraryList', () => {
+  it('보고 있는 보관함 목록은 다시 읽고, 안 보이는 목록은 버린다', async () => {
+    // 카드 저장이 끝나기 전에 보관함으로 옮기면 목록이 먼저 떠 있다: 버리기만 하면 그 관찰자는 다시 읽지 않았다(PR #480 2차 리뷰)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const reads = vi.fn(async () => ['편집본']);
+    const observer = new QueryObserver(client, { queryKey: ['library', 1], queryFn: reads });
+    const unsubscribe = observer.subscribe(() => undefined);
+    // 첫 읽기가 끝난 뒤라야 한다: 데이터가 없는 채 진행 중이면 무효화가 그 읽기를 같이 쓴다
+    await vi.waitFor(() => expect(client.getQueryData(['library', 1])).toEqual(['편집본']));
+    client.setQueryData(['library', 2], ['다른 채널']);
+
+    forgetLibraryList(client);
+
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
+    expect(client.getQueryState(['library', 1])).toBeDefined();
+    expect(client.getQueryState(['library', 2])).toBeUndefined();
+    unsubscribe();
+    client.clear();
+  });
+
+  it('첫 읽기가 걸려 있으면 그 읽기를 접고 다시 읽는다 — 저장 전에 나간 요청의 옛 목록이 서지 않게', async () => {
+    // 받아 둔 데이터 없이 읽는 중인 쿼리는 다시 읽으라 해도 그 요청을 같이 썼다(PR #480 3차 리뷰)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const answers: ((list: string[]) => void)[] = [];
+    const reads = vi.fn(() => new Promise<string[]>((resolve) => answers.push(resolve)));
+    const observer = new QueryObserver(client, { queryKey: ['library', 1], queryFn: reads });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+
+    forgetLibraryList(client);
+
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
+    answers[0]!([]); // 저장 전에 나간 요청 — 새 편집본이 없다
+    answers[1]!(['편집본']);
+    await vi.waitFor(() => expect(client.getQueryData(['library', 1])).toEqual(['편집본']));
+    // 접은 읽기가 오류로 보이지 않는다
+    expect(observer.getCurrentResult().isError).toBe(false);
+    unsubscribe();
     client.clear();
   });
 });
