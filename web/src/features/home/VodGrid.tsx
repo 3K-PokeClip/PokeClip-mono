@@ -93,15 +93,18 @@ function VodCardBody({ vod }: { vod: HomeVod }) {
   );
 }
 
-/** 찾은 카드 · 만든 클립 — 클립이 0이면 아직 손대지 않은 방송이 눈에 띈다 */
+/**
+ * 찾은 카드 · 만든 클립 — 클립이 0이면 아직 손대지 않은 방송이 눈에 띈다. 모르는 수는 「–」.
+ * 「찾은 장면 없음」은 카드가 0이고 만든 클립도 없을 때만이다: 카드를 다 가려도(POK-463) 그 카드로 만든 클립은 남는다
+ */
 function VodStats({ vod }: { vod: HomeVod }) {
-  if (vod.cards === 0)
+  if (vod.cards === 0 && !vod.clips)
     return <div className={clsx(styles.vodStats, styles.vodStatsEmpty)}>찾은 장면 없음</div>;
   return (
     <div className={styles.vodStats}>
       <span className={styles.vodStat}>
         <Sparkles size={12} aria-hidden className={styles.vodStatCardIcon} />
-        카드 <b>{vod.cards}</b>
+        카드 <b>{vod.cards ?? '–'}</b>
       </span>
       <span className={styles.vodStat}>
         <Clapperboard size={12} aria-hidden className={styles.vodStatClipIcon} />

@@ -35,8 +35,8 @@ const LIVE: LiveNow = {
 interface Server {
   live?: unknown[];
   past?: unknown[];
-  /** streamId → 카드 */
-  cards?: Record<string, unknown[]>;
+  /** streamId → 카드. 'fail'이면 그 방송의 카드 읽기가 503이다 */
+  cards?: Record<string, unknown[] | 'fail'>;
   library?: unknown[] | 'fail';
   info?: unknown;
   chzzk?: unknown;
@@ -62,7 +62,12 @@ function route(url: string, s: Server): Response {
   if (url.includes('state=live')) return ok({ broadcasts: s.live ?? [], nextCursor: null });
   if (url.includes('state=past')) return ok({ broadcasts: s.past ?? [], nextCursor: null });
   const cards = url.match(/\/broadcasts\/([^/]+)\/jump-cards/);
-  if (cards) return ok({ cards: s.cards?.[decodeURIComponent(cards[1]!)] ?? [], nextCursor: null });
+  if (cards) {
+    const listed = s.cards?.[decodeURIComponent(cards[1]!)];
+    return listed === 'fail'
+      ? new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 })
+      : ok({ cards: listed ?? [], nextCursor: null });
+  }
   if (url.endsWith('/broadcast-info')) return ok(s.info ?? { latest: null, series: [] });
   if (url.startsWith('/api/chzzk-link')) return ok(s.chzzk ?? { linked: false });
   if (url.startsWith('/api/soop-link')) return ok(s.soop ?? { linked: false });
@@ -1050,6 +1055,37 @@ describe('HomeScreen', () => {
     expect(tile('past-1')).toHaveTextContent('클립 –');
     expect(within(tile('past-2')).getByText('찾은 장면 없음')).toBeInTheDocument();
     expect(within(tile('past-2')).getByText('장면 사진 없음')).toBeInTheDocument();
+  });
+
+  it('지난 방송 카드: 카드를 다 가려 0장이어도 만든 클립 수는 보이고, 「찾은 장면 없음」이라 하지 않는다(POK-463)', async () => {
+    const rendered = { status: 'rendered', createdAt: new Date('2026-10-08T09:00:00Z') };
+    serve({
+      past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))],
+      // 카드 목록은 가린 카드를 빼고 준다 — 다 가리면 빈 목록이다
+      cards: { 'past-1': [] },
+      library: [entry(1, rendered), entry(2, rendered)],
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (await within(grid).findByText('past-1')).closest('li')!;
+    await waitFor(() => expect(tile).toHaveTextContent('클립 2'));
+    expect(tile).toHaveTextContent('카드 0');
+    expect(within(tile).queryByText('찾은 장면 없음')).toBeNull();
+  });
+
+  it('지난 방송 카드: 카드를 못 읽으면 카드 수는 「–」이고, 장면이 없다고 단정하지 않는다', async () => {
+    serve({
+      past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))],
+      cards: { 'past-1': 'fail' },
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (await within(grid).findByText('past-1')).closest('li')!;
+    expect(tile).toHaveTextContent('카드 –');
+    expect(within(tile).queryByText('찾은 장면 없음')).toBeNull();
+    expect(within(tile).queryByText('장면 사진 없음')).toBeNull();
   });
 
   it('「전체 보기」는 지난 방송 목록으로 가는 진짜 링크다', async () => {

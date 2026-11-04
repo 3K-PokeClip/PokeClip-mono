@@ -84,8 +84,11 @@ export interface HomeVod {
   title: string | null;
   /** 방송 시작 — 「어제 오후 8:10」 · 「11월 2일 (일) 오후 9:00」. 같은 제목의 방송을 이것으로 가른다 */
   when: string;
-  /** 이 방송에서 찾은 카드 수 */
-  cards: number;
+  /**
+   * 이 방송에서 찾은 카드 수(가린 카드는 목록에서 빠져 세지 않는다, POK-463). 카드를 못 읽었고 기억해 둔 값도 없으면 null(「–」) —
+   * 0으로 접으면 「찾은 장면 없음」이라고 단정하게 된다
+   */
+  cards: number | null;
   /** 이 방송으로 영상까지 만든 편집본 수(라이브 띠의 클립 완료와 같은 기준). 보관함을 못 읽었으면 null(「–」) */
   clips: number | null;
   /** 보관이 끝난 방송은 열 것이 없어 null(지난 방송 목록과 같다, POK-254) */
@@ -390,7 +393,8 @@ async function loadHome(
       id: b.streamId,
       title: b.title?.trim() || null,
       when: b.startedAt ? vodWhenLabel(b.startedAt, new Date(now)) : '날짜 정보 없음',
-      cards: cardCountOf(b.streamId),
+      // 주 합계(cardCountOf)는 못 읽은 방송을 0으로 더하지만, 카드 한 장은 모름과 0을 가른다
+      cards: cardCounts[b.streamId]?.count ?? null,
       // 보관함은 따로 읽는다 — 훅이 붙인다
       clips: null,
       href: expired ? null : `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
