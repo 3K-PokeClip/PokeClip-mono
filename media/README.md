@@ -428,8 +428,8 @@ INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거
 *   **적재 건너뜀:** 켜진 게이트가 적재 직전 권한 판정에서 거짓이면 그 적재를
     건너뛰고 ERROR `lifecycle_enqueue_skipped` 를 남긴다 — 그 역할의 outbox
     권한을 확인한다. 판정 줄이 아니고, 그 사이 시작된 방송의 started 는 되살릴
-    수 없다. ended 쪽 줄은 완결 여부와 무관하게 완결 평가(회차 닫힘 · 세션
-    ended 전이)마다 남으므로 한 회차에 여러 줄일 수 있다.
+    수 없다. ended 쪽 줄은 완결 여부 · 허용 목록과 무관하게 완결 평가(회차
+    닫힘 · 세션 ended 전이)마다 남으므로 한 회차에 여러 줄일 수 있다.
 *   **보정:** 닫혔는데 ended 가 없는 회차는 같은 DB 의 발행 사이드카(발행기가
     떠 있는 사이드카 — 마지막 `lifecycle_degraded` 가 `value=0`)가 보정으로
     거둔다(WARN `lifecycle_ended_repaired`). 30초마다 시도하고 주기당 20회차를
@@ -498,10 +498,16 @@ INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거
 **실행 신분과 시한.** 마스터 계정으로 돌리지 않는다 — 마스터에는
 `statement_timeout` 이 없다. 지금 두 표를 읽을 수 있는 운영 역할은 쓰기 권한도
 가진 `media_indexer` 뿐이라(SELECT 전용 감시 역할은 아직 없다), 쓰기는 트랜잭션으로
-막는다. 세 질의는 `BEGIN READ ONLY` 트랜잭션 안에서 `SET LOCAL statement_timeout`
-· `SET LOCAL lock_timeout` 을 건 뒤 돌리고, 끝나면 바로 닫는다 — 열린 트랜잭션은
-그 표의 DDL 을 줄 세운다. `media_indexer` 의 역할 기본 `statement_timeout` 은
-60초다(`10_roles.sql`).
+막는다. 세 질의는 `BEGIN READ ONLY` 트랜잭션 안에서 시한 셋을 건 뒤 돌리고,
+끝나면 바로 닫는다 — 열린 트랜잭션은 그 표의 DDL 을 줄 세운다. 예시 값은
+`SET LOCAL statement_timeout = '10s'` · `SET LOCAL lock_timeout = '3s'`(선례
+`60_round_frozen.sql`) ·
+`SET LOCAL idle_in_transaction_session_timeout = '30s'`(선례 janitor 연결 설정
+`cmd/janitor/main.go`)다. `media_indexer` 의 역할
+기본 `statement_timeout` 은 60초다(`10_roles.sql`). 그 역할의 연결 상한 20
+(`10_roles.sql`)은 사이드카와 나눠 쓴다 — 연결 하나로 돌리고 바로 끊으며, A · B
+상자가 겹쳐 합이 20 인 Media 교체 창(아래 「교체 창의 여유는 0 이다」)에는
+돌리지 않는다.
 
 **D1 밀린 끝 알림(정상 0).** 보정 후보(`internal/broadcast/repair.go` 의
 `missingEndedSQL`)와 같은 술어에, 완결 시각(구성원의 `round_closed_at` ·
