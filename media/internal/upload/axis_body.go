@@ -288,11 +288,13 @@ func (u *Uploader) produce(j job, f *os.File, pos time.Duration, lg *slog.Logger
 }
 
 // sameInputFailsAgain 은 다시 만들어도 같은 이유로 실패할 산출 오류인가다 — 무결성 ⓑ 트랙 부족 · ⓒ
-// 빈 트랙 · ⓓ 크기 상한(playback 오류값). 워커가 재포장하는 입력은 닫혔거나 장부 크기 그대로라
-// 다시 읽어도 같다. ⓐ 입력 해석 실패는 넣지 않는다 — 쓰는 중에 잘린 입력일 수 있어 다시 읽으면 달라진다.
+// 빈 트랙 · ⓓ 크기 상한과 요청 경계의 음수 도장(playback 오류값). 워커가 재포장하는 입력은 닫혔거나
+// 장부 크기 그대로라 다시 읽어도 같다. 도장 위치도 실시간이면 작업에 실려 고정이고, 스위퍼면 같은 표 ·
+// 같은 파일에서 다시 만들어 같다. ⓐ 입력 해석 실패는 넣지 않는다 — 쓰는 중에 잘린 입력일 수 있어
+// 다시 읽으면 달라진다.
 func sameInputFailsAgain(err error) bool {
 	return errors.Is(err, playback.ErrMissingTracks) || errors.Is(err, playback.ErrEmptyTrack) ||
-		errors.Is(err, playback.ErrInputTooLarge)
+		errors.Is(err, playback.ErrInputTooLarge) || errors.Is(err, playback.ErrNegativePos)
 }
 
 // failUnproducible 은 같은 입력이면 늘 같은 산출 실패다(cc r3 #1). 사다리 없이 첫 시도에서 끝낸다 —

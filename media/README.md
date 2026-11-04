@@ -1019,8 +1019,12 @@ init 작업은 꼬리 크기 불일치에 `upload_size_mismatch` 경고만 남�
 | `ErrMissingTracks` | 영상 1 + 소리 1 을 남길 수 없다 | 첫 시도에서 ③ `failed` + 키 백오프 |
 | `ErrEmptyTrack` | 남긴 트랙에 샘플이 없다 | 첫 시도에서 ③ `failed` + 키 백오프 |
 | `ErrInputTooLarge` | 입력이 16MiB 를 넘는다(읽기 전에 거른다) | 첫 시도에서 ③ `failed` + 키 백오프 |
+| `ErrNegativePos` | 도장 위치가 음수다 — 요청 경계 | 첫 시도에서 ③ `failed` + 키 백오프 |
 
-- `ErrMalformedInput` 을 뺀 셋은 같은 입력이면 늘 같은 결과라 사다리(1+2+4초)를 태우지 않는다.
+- `ErrNegativePos` 는 무결성 항이 아니라 요청 경계 오류다. 입력이 아니라 요청이 틀렸다. 인덱서는
+  회차 첫 조각을 0 에 열므로(위 시간 도장 절) 평소에는 나지 않는 방어선이다. 나면 로그
+  `upload_failed` 의 `err` 에 「pos 가 음수다」와 그 도장 값이 실린다.
+- `ErrMalformedInput` 을 뺀 넷은 같은 입력이면 늘 같은 결과라 사다리(1+2+4초)를 태우지 않는다.
   하나뿐인 업로드 워커가 조각마다 7초씩 묶이면 모든 스트림의 ②·③ 이 큐에서 넘친다. S3 에 닿지
   않았으므로 브레이커(연속 실패 차단기) 판정에도 넣지 않는다(`failUnproducible`).
 - init 도 같은 규칙이다. 다만 init 에는 실패 CAS 가 없어 장부는 그대로 두고 백오프만 건다.

@@ -36,6 +36,11 @@ var (
 	ErrInputTooLarge = errors.New("playback: 입력이 크기 상한을 넘는다")
 )
 
+// ErrNegativePos 는 도장 위치(Request.PlaybackPos)가 음수라는 요청 경계 오류다 — 도장은 뒤로 가지
+// 않는다. 입력이 아니라 요청이 틀린 것이라 무결성 4항과 따로 두지만, 같은 요청이면 늘 같은 실패라
+// 호출자는 ⓑ·ⓒ·ⓓ 처럼 첫 시도에서 끝낸다.
+var ErrNegativePos = errors.New("playback: pos 가 음수다 — 도장은 뒤로 가지 않는다")
+
 // maxInputBytes 는 입력 크기 상한이다(kty 확정 2026-09-23). 조각을 통째로 메모리에 올리므로
 // 점유 = 동시 워커 수 × 입력의 약 4.5배다. 근거: 영상 8Mbps + 소리 6트랙의 6초 조각이
 // 6.5MiB 이고 그 2.4배다(계획 4.2-R 「상수」, 71_ ④).
@@ -48,7 +53,8 @@ type Request struct {
 	Input io.ReadSeeker
 	// PlaybackPos 는 이 조각의 시간 도장 위치다 — pos = mtxi + offset(계획 4.2-R R3).
 	// 평소에는 조각 자기 mtxi 값 그대로이고(offset 0), 회차 첫 조각의 mtxi 가 음수였거나(첫 도장을
-	// 0 에 둔다) 회차 안 리셋·구멍 뒤에만 offset 이 붙는다.
+	// 0 에 둔다) 회차 안 리셋·구멍 뒤에만 offset 이 붙는다. 0 이상이어야 한다 — 음수면
+	// ErrNegativePos 로 거부한다.
 	PlaybackPos time.Duration
 }
 
@@ -97,7 +103,7 @@ func (Remuxer) Produce(ctx context.Context, req Request) (Output, error) {
 		return Output{}, errors.New("playback: 입력 핸들이 없다")
 	}
 	if req.PlaybackPos < 0 {
-		return Output{}, fmt.Errorf("playback: pos 가 음수다(%v) — 도장은 뒤로 가지 않는다", req.PlaybackPos)
+		return Output{}, fmt.Errorf("%w: %v", ErrNegativePos, req.PlaybackPos)
 	}
 	if err := ctx.Err(); err != nil {
 		return Output{}, err
