@@ -171,7 +171,9 @@ func run() error {
 	defer stopLifecycle()
 	// /dvr 하한 Writer(POK-525) — REWIND_EDGE_BOUNDS_KVS_ARN 이 비거나 꼴 밖이면 띄우지 않고, 원장의 닫힌 미해제 행을 감시하며
 	// 유예가 지난 해제 행을 지운다(KVS 는 부르지 않는다).
-	// 기동은 막지 않는다. ★ pool.Close 보다 뒤에 등록해 Writer 가 먼저 멈춘다(원장이 인덱서 풀 위에 있다).
+	// 어느 갈래가 실패해도 기동은 이어진다. 다만 Writer 없는 갈래는 기동 때 감시 한 번을 동기로 돌려 기동이 최대 약 10초
+	// (삭제 · 조회 각 CallTimeout 5초) 늦어질 수 있다. ★ pool.Close 보다 뒤에 등록해 Writer 가 먼저 멈춘다(원장이 인덱서 풀
+	// 위에 있다).
 	observeEdgeFloor, stopEdgeBounds := startEdgeBounds(ctx, cfg, pool, log)
 	defer stopEdgeBounds()
 

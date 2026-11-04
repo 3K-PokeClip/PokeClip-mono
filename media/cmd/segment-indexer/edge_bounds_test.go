@@ -360,16 +360,22 @@ func TestEdgeBoundsUnreleasedProbeFailureWarnsOnce(t *testing.T) {
 
 // 감시는 확인마다 유예(ReleaseSettle)가 지난 해제 행을 지운다 — 해제 뒤 유예 안에 Writer 가 멈추고 Writer 없는 상자로
 // 넘어가도 해제된 행이 원장에 남아 그 회차를 끝남 대기에 묶지 않는다. 지운 행이 있을 때만 INFO 한 줄(rows)이다.
+//
+// 「정확히 한 번」 을 세는 시험이라 감시 타이머가 끼지 않게 한다 — 배선 몫은 주기를 시험보다 길게 두고 멈춘 뒤 세어 기동
+// 동기 확인 하나만 보고, 주기 몫(지운 행 0 이면 줄 없음)은 감시 한 번(check)을 직접 부른다. 10ms 타이머를 둔 채 세면 단언 전에 틱이 한 번
+// 더 돌아 정상 코드도 FAIL 한다(종결 r1 codex 설계 M1). 주기마다 확인이 도는 것은 probes 를 세는 이웃 시험이 본다.
+// 변이 = 삭제 호출 제거 · 유예 0 → FAIL.
 func TestEdgeBoundsWithoutWriterDeletesSettledReleasedRows(t *testing.T) {
 	logs := &logCapture{}
 	l := &fakeLedger{deleted: 2}
 	deps := testEdgeBoundsDeps(l, &storeOpener{}, logs)
+	deps.opt.ReleaseEvery = time.Hour // 시험 동안 감시 타이머가 돌지 않는다
 
 	_, stop := launchEdgeBounds(t.Context(), config.Config{}, deps)
-	defer stop()
+	stop()
 
-	if got := l.deleteCalls(); len(got) != 1 || got[0] != deps.opt.ReleaseSettle {
-		t.Fatalf("기동 직후 DeleteReleased = %v, want [%v] 한 번", got, deps.opt.ReleaseSettle)
+	if got, want := l.deleteCalls(), []time.Duration{deps.opt.ReleaseSettle}; !slices.Equal(got, want) {
+		t.Fatalf("기동 동기 확인의 DeleteReleased = %v, want %v", got, want)
 	}
 	if n := logs.countLevel(slog.LevelInfo, signalReleasedRowsDeleted); n != 1 {
 		t.Fatalf("%s INFO %d줄, want 1", signalReleasedRowsDeleted, n)
@@ -378,15 +384,12 @@ func TestEdgeBoundsWithoutWriterDeletesSettledReleasedRows(t *testing.T) {
 		t.Errorf("rows = %v, want 2", a["rows"])
 	}
 
-	// 지운 행 0 으로 바꾼 뒤의 감시 한 번이면 된다 — 몇 주기가 도는지에 기대지 않는다. setDelete 뒤에 센 호출은 모두 0 을
-	// 받는다(가짜가 같은 잠금 안에서 적고 답한다).
+	p := &unreleasedProbe{ledger: l, timeout: time.Second, settle: deps.opt.ReleaseSettle, log: slog.New(logs)}
 	l.setDelete(0, nil)
-	before := len(l.deleteCalls())
-	waitFor(t, "다음 감시의 삭제", func() bool { return len(l.deleteCalls()) > before })
-	for _, d := range l.deleteCalls() {
-		if d != deps.opt.ReleaseSettle {
-			t.Errorf("DeleteReleased olderThan = %v, want %v", d, deps.opt.ReleaseSettle)
-		}
+	p.check(t.Context())
+
+	if got, want := l.deleteCalls(), []time.Duration{deps.opt.ReleaseSettle, deps.opt.ReleaseSettle}; !slices.Equal(got, want) {
+		t.Errorf("DeleteReleased = %v, want %v", got, want)
 	}
 	if n := logs.count(signalReleasedRowsDeleted); n != 1 {
 		t.Errorf("지운 행 0 인 감시에도 %s 가 났다(%d줄, want 1)", signalReleasedRowsDeleted, n)

@@ -559,7 +559,17 @@ func TestMissingLedgerSchemaNamesEdgeBounds(t *testing.T) {
 	}
 }
 
-// 운영 SQL 이 원장 표를 만들고 media_indexer 에 넷만 준다 — 40 이 그 권한 · 소유자 어긋남을 식별자로 잡는다.
+// replaceEdgeBoundsTable 은 원장 표를 ddl 로 갈아 끼우는 조작이다 — 소유자 · media_indexer 넷은 운영 SQL 과 같게 되돌려,
+// 40 이 표 모양 어긋남만 식별자로 내는지 본다.
+func replaceEdgeBoundsTable(ddl string) string {
+	return "DROP TABLE stream_edge_bounds;\n" + ddl + ";\n" +
+		"ALTER TABLE stream_edge_bounds OWNER TO media_owner;\n" +
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer"
+}
+
+// 운영 SQL 이 원장 표를 만들고 media_indexer 에 넷만 준다 — 40 이 그 권한 · 소유자 어긋남을 식별자로 잡는다. 표 모양
+// (PK (stream_id, round_id) · CHECK dvr_floor >= 1 · 열의 NOT NULL)도 잡는다 — 같은 이름 다른 모양 표가 지나가면 올림의
+// ON CONFLICT 가 42P10 으로 실패해 write_failing 으로만 드러난다(종결 r1 db 설계 M1).
 func TestProdSQLVerifyCatchesEdgeBoundsDrift(t *testing.T) {
 	env := newProdSQLEnv(t)
 	env.mustApplyAll(t)
@@ -587,6 +597,56 @@ func TestProdSQLVerifyCatchesEdgeBoundsDrift(t *testing.T) {
 			name:   "table dropped",
 			tamper: "DROP TABLE stream_edge_bounds",
 			want:   []string{"owner:stream_edge_bounds"},
+		},
+		{
+			name: "same name table without primary key",
+			tamper: replaceEdgeBoundsTable(`CREATE TABLE stream_edge_bounds (
+    stream_id   text        NOT NULL,
+    round_id    text        NOT NULL,
+    dvr_floor   bigint      NOT NULL CHECK (dvr_floor >= 1),
+    released_at timestamptz,
+    updated_at  timestamptz NOT NULL DEFAULT pg_catalog.now()
+)`),
+			want: []string{"primary_key:stream_edge_bounds"},
+		},
+		{
+			name: "same name table without floor check",
+			tamper: replaceEdgeBoundsTable(`CREATE TABLE stream_edge_bounds (
+    stream_id   text        NOT NULL,
+    round_id    text        NOT NULL,
+    dvr_floor   bigint      NOT NULL,
+    released_at timestamptz,
+    updated_at  timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    PRIMARY KEY (stream_id, round_id)
+)`),
+			want: []string{"check:stream_edge_bounds.dvr_floor"},
+		},
+		{
+			name: "primary key reordered",
+			tamper: "ALTER TABLE stream_edge_bounds DROP CONSTRAINT stream_edge_bounds_pkey;\n" +
+				"ALTER TABLE stream_edge_bounds ADD PRIMARY KEY (round_id, stream_id)",
+			want: []string{"primary_key:stream_edge_bounds"},
+		},
+		{
+			name: "floor check loosened",
+			tamper: "ALTER TABLE stream_edge_bounds DROP CONSTRAINT stream_edge_bounds_dvr_floor_check;\n" +
+				"ALTER TABLE stream_edge_bounds ADD CHECK (dvr_floor >= 0)",
+			want: []string{"check:stream_edge_bounds.dvr_floor"},
+		},
+		{
+			name:   "floor nullable",
+			tamper: "ALTER TABLE stream_edge_bounds ALTER COLUMN dvr_floor DROP NOT NULL",
+			want:   []string{"not_null:stream_edge_bounds.dvr_floor"},
+		},
+		{
+			name:   "updated_at nullable",
+			tamper: "ALTER TABLE stream_edge_bounds ALTER COLUMN updated_at DROP NOT NULL",
+			want:   []string{"not_null:stream_edge_bounds.updated_at"},
+		},
+		{
+			name:   "released_at not null",
+			tamper: "ALTER TABLE stream_edge_bounds ALTER COLUMN released_at SET NOT NULL",
+			want:   []string{"not_null:stream_edge_bounds.released_at"},
 		},
 	}
 	for _, tt := range tests {
