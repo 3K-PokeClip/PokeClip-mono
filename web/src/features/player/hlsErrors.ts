@@ -23,7 +23,7 @@ export function isPlaylistLoadError(
  * hls.js 는 첫 목록의 받기 오류 · 시한 · 파싱 오류를 늘 치명으로 올린다 — 다시 받기(manifestLoadPolicy: 5xx 는 1초 뒤 한 번
  * · 시한은 두 번 · 4xx 는 다시 받지 않음)는 그 앞 로더 안에서 끝난다(loader/playlist-loader.ts 611-615 · 653-665). 응답
  * 코드는 보지 않는다: 첫 목록이 없으면 변이가 없어 앱이 startLoad 해도 목록을 다시 청하지 않는 것(playlist-loader.ts 86 ·
- * stream-controller.ts 191-193)은 코드와 무관하다. 변이 목록 · 조각 오류는 아니다 — 그것은 startLoad 로 다시 받는다.
+ * stream-controller.ts 191-193)은 코드와 무관하다. 변이 목록 · 조각 오류는 이 판별 대상이 아니다.
  * 파싱 오류(MANIFEST_PARSING_ERROR)는 멀티변이 목록을 읽을 때만 난다(hls.js 1.7.3 playlist-loader.ts 346-358 · 415-417 ·
  * 614). 변이 목록의 파싱 오류는 이 꼴로 오지 않는다 — LEVEL_PARSING_ERROR · LEVEL_EMPTY_ERROR 비치명이다(같은 파일 742 · 764)
  * @param types hls.js 의 ErrorTypes

@@ -342,8 +342,8 @@ describe('다시보기 · 되감기 첫 목록 치명 → 곧바로 끊김(POK-5
   });
 
   // 다시 받는 중이 아닌 되감기의 조각 404 뒤 세션은 같은 url 로 세대를 올려 재생기를 새로 세운다(목록 다시 받기 —
-  // 계획 1절 1). 그 새 재생기의
-  // 첫 목록이 치명이면 막힘이 아니라 끊김이다(계획 0-2 의 3 — 자동 회복 없음). 세션 층(relist 'list' 유지)은 c7 뒤 몫이다
+  // 계획 1절 1). 그 새 재생기의 첫 목록이 치명이면 막힘이 아니라 끊김이다(계획 0-2 의 3 — 자동 회복 없음). 세션
+  // 층(relist 'list' 유지)은 c7 뒤 몫이다
   it.each<[string, string, number | null]>([
     ['404', FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR, 404],
     ['503', FakeHls.ErrorDetails.MANIFEST_LOAD_ERROR, 503],

@@ -90,7 +90,10 @@ function needsX(s: PlaybackSessionState): boolean {
   return (kind === 'live' && s.boundLive) || kind === 'ending-wait' || kind === 'rewind';
 }
 
-/** 마지막 확인 중인가 — 회차별 조회를 한 번만 하고 시한 뒤 녹화로 닫는다(POK-528 W6 · 정본 r7 1151) */
+/**
+ * 마지막 확인 중인가 — 회차별 조회는 처음 물음의 답 또는 시한(8초)이 끝낸다: 본 구간과 겹치는 다시보기 답이면 같은 자리
+ * 다시보기, 그 밖 답이면 곧바로 녹화, 시한까지 답이 없으면 녹화다(POK-528 W6 · 정본 r7 1151)
+ */
 function inFinalCheck(s: PlaybackSessionState | null): boolean {
   return s !== null && s.phase.kind === 'ending-wait' && s.phase.finalCheck === true;
 }

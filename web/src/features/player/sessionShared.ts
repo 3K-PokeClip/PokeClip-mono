@@ -136,8 +136,8 @@ export function vodStartAt(session: PlaybackSessionState, atMs: number, vod: Rew
 }
 
 /**
- * 같은 자리 다시보기로 옮긴다 — 끝난 회차의 되감기 조각이 사라졌을 때(POK-528 W4 제안 중 404 · W5 막힌 뒤
- * 회차별 다시보기 · W6 마지막 확인의 다시보기 답).
+ * 같은 자리 다시보기로 옮긴다 — 끝난 회차의 되감기 조각이 사라졌을 때(POK-528 W4 제안 중 404 ·
+ * W5 막힌 뒤 · W6 마지막 확인에서 회차별 답이 본 구간과 겹치는 다시보기일 때).
  * 자리는 이어 볼 자리다 — 모르면 처음부터, 자리를 범위 안으로 가뒀으면 알린다. 제안 단추는 거둔다
  */
 export function openVodHere(session: PlaybackSessionState, vod: RewindRange): Transition {
