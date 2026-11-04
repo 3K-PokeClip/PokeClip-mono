@@ -209,7 +209,11 @@ bool ApplyPutServerEnv(PluginConfig &c, const PluginConfig &before, std::optiona
 	}
 	if (requestedApiBase && IsAcceptedDockApiBase(*requestedApiBase)) {
 		// 비움·알려진 기본 주소는 환경의 기본 주소로 — 바로 아래 ApplyServerEnv가 target 짝으로 맞춘다.
-		c.apiBase = IsLoopbackApiBase(*requestedApiBase) ? *requestedApiBase : ServersFor(target).apiBase;
+		const std::string next = IsLoopbackApiBase(*requestedApiBase) ? *requestedApiBase : ServersFor(target).apiBase;
+		// 끝 '/'만 다른 같은 주소면 저장된 값을 둔다 — Load는 직접 적은 주소(http://localhost:8082/)를 정리하지 않고,
+		// 교환 요청은 끝 '/'를 떼어 목적지가 같다. 바꾼 것으로 치면 같은 서버인데 키를 지운다.
+		if (NormalizeApiBase(next) != NormalizeApiBase(c.apiBase))
+			c.apiBase = next;
 	}
 	ApplyServerEnv(c, target);
 	if (!envSwitch && c.apiBase == before.apiBase)

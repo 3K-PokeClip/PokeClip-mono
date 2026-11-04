@@ -2106,6 +2106,14 @@ TEST(put_api_base_change_clears_key)
 	CHECK(!ApplyPutServerEnv(c, before, std::nullopt, std::string("https://api.pokeclip.com")));
 	CHECK_EQ(c.streamId, std::string(kStreamId));
 
+	// 끝 '/'만 다른 같은 주소(설정 파일에 직접 적은 값 — Load는 정리하지 않는다)도 바뀐 게 아니다. 저장된 값을 두고 키도 그대로
+	PluginConfig slash = before;
+	slash.apiBase = "http://localhost:8082/";
+	c = slash;
+	CHECK(!ApplyPutServerEnv(c, slash, std::nullopt, std::string("http://localhost:8082")));
+	CHECK_EQ(c.apiBase, std::string("http://localhost:8082/"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
 	// 비움 = 지금 환경의 기본 주소로 돌아간다
 	PluginConfig local = before;
 	local.apiBase = "http://localhost:8082";

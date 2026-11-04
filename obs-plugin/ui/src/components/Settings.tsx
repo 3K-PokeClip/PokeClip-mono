@@ -184,7 +184,8 @@ export function SettingsPanel({
   const defaultApi = settings.default_api_base ?? '';
   const apiValue = apiDraft ?? settings.api_base;
   const apiTarget = resolveApiBase(apiValue, defaultApi);
-  const apiChanged = apiTarget !== settings.api_base;
+  // 저장된 값도 같은 정리를 거쳐 비교한다 — 설정 파일에 끝 '/'를 붙여 적은 주소는 손대지 않았는데 바뀐 것으로 보인다
+  const apiChanged = apiTarget !== resolveApiBase(settings.api_base, defaultApi);
   const applyApi = async (target: string) => {
     setApiSaving(true);
     setApiError('');
