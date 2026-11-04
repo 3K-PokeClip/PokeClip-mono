@@ -565,8 +565,9 @@ export function useHlsPlayback(
       pausedAtMsRef.current = null;
       // 사용자가 다시 틀었다 — 멈춘 채 넘긴 것이 교체로 이어지지 않았어도 다음 재생기의 자동 재생을 막지 않는다
       swap.userPlayed();
-      // 멈춘 동안 붙잡은 404 가 있으면 이 목록은 낡았다 — 하한 안팎을 보지 않고 세션에 올려 목록을 다시 받게 한다. 옛
-      // 자리 시크 · 제자리 다시 받기(startLoad)는 하지 않는다(계획 4-3)
+      // 멈춘 동안 붙잡은 404 가 있으면 이 목록은 낡았다 — 하한 안팎을 보지 않고 세션에 올려 그때 국면의 404 행으로
+      // 잇게 한다(되감기면 같은 목록 다시 받기 · 끝남 대기면 막힘 또는 마지막 확인 · 다시보기 제안이면 같은 자리
+      // 다시보기). 옛 자리 시크 · 제자리 다시 받기(startLoad)는 하지 않는다(계획 4-3)
       if (goneWhilePaused) {
         goneWhilePaused = false;
         hooksRef.current.onDvrSegmentGone?.(generation);
