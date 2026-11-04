@@ -4,6 +4,7 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
+import { useSwitchCurtain } from '@/features/channel/switchCurtain';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { NotificationBell } from './NotificationBell';
@@ -107,6 +108,8 @@ function seed() {
   ];
 }
 
+/** 켜 두면 참여 채널 목록(as-editor)이 끝내 안 온다 — 새로고침 직후 채널이 아직 안 선 상태 */
+let asEditorPending = false;
 /** 켜 두면 다음 목록 요청 하나를 붙잡아, 요청이 나간 때의(옛) 값으로 releaseList()에 늦게 답한다 */
 let holdList = false;
 let releaseList: (() => void) | null = null;
@@ -118,7 +121,8 @@ let releaseRead: (() => void) | null = null;
 function stub() {
   return stubFetch((url, init) => {
     if (url === '/api/auth/me') return jsonResponse(200, ME);
-    if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, []);
+    if (url === '/api/editor-delegations/as-editor')
+      return asEditorPending ? new Promise<Response>(() => {}) : jsonResponse(200, []);
     if (url === '/api/notifications' && holdList) {
       holdList = false;
       const then = items;
@@ -177,10 +181,12 @@ async function openPanel(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   seed();
+  asEditorPending = false;
   holdList = false;
   releaseList = null;
   holdRead = false;
   releaseRead = null;
+  useSwitchCurtain.getState().reset();
   push.mockReset();
   track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
@@ -338,6 +344,27 @@ describe('NotificationBell', () => {
     expect(within(panel).getByText('새 알림이 없어요')).toBeInTheDocument();
     // 할 일은 읽어도 남는다
     expect(within(panel).getByText('유튜브 연동이 끊겼어요')).toBeInTheDocument();
+  });
+
+  it('채널이 아직 안 섰으면 저장된 선택으로 판단해, 남의 채널을 고른 상태면 내 채널로 바꾼 뒤 간다', async () => {
+    // 새로고침 직후: 이 회원으로 읽힌 저장값은 남의 채널(9), 참여 목록은 아직 안 왔다
+    asEditorPending = true;
+    useChannelStore.setState({ userId: ME.id, selected: 9 });
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+
+    await user.click(within(panel).getByRole('button', { name: '다시 연결' }));
+
+    // 바로 가지 않고, 갈 주소를 실은 채 내 채널로 바꾸는 덮개를 세운다
+    expect(push).not.toHaveBeenCalled();
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({
+      name: '포키왕',
+      relation: 'OWNER',
+      destination: '/settings/channels',
+    });
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/settings/channels'));
+    expect(useChannelStore.getState().selected).toBeNull();
   });
 
   it('확인 필요 카드의 버튼은 그 일을 하는 화면으로 간다', async () => {

@@ -25,6 +25,7 @@ import {
 } from '@/api/editors';
 import { useMe } from '@/features/auth/useSession';
 import { useActiveChannel, useSwitchChannel } from '@/features/channel/useActiveChannel';
+import { useChannelStore } from '@/stores/channel';
 import { track } from '@/lib/analytics';
 import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
 import { useToast, type ToastTone } from '@/ui';
@@ -156,7 +157,13 @@ export function useRespondInvitation(state: NotificationsState) {
 
 /**
  * 알림이 가리키는 화면으로 간다. 알림이 다른 채널 일이면(내 채널 알림을 남의 채널을 보던 중에 눌렀거나, 맡은 채널 방송 시작)
- * 그 채널로 바꾼 다음 간다 — 채널 연동 같은 화면은 내 채널에서만 열린다. 참여 목록에 없는 채널(위임이 끊김)이면 바꾸지 않고 간다.
+ * 그 채널로 바꾼 다음 간다 — 채널 연동 같은 화면은 내 채널에서만 열린다.
+ *
+ * - 지금 채널이 아직 안 섰으면(새로고침 직후 참여 목록을 읽는 중) 저장된 선택으로 판단한다: 내 채널로 치면 전환을 건너뛰었다가
+ *   목록이 선 뒤 남의 채널로 서서 내 채널 전용 화면이 막힌다(PR #481 리뷰).
+ * - 전환에 갈 주소를 같이 싣는다: 방송에 묶인 화면에서 바꾸면 ChannelScope가 떠나는데, 홈이 아니라 그 주소로 가게 한다.
+ * - 참여 목록을 이미 받았는데 그 채널이 없으면(위임이 끊김) 바꾸지 않고 간다. 목록을 아직 못 받았으면 알림의 채널 정보로
+ *   바꾼다 — 정말 끊겼으면 ChannelScope가 내 채널로 되돌리며 알린다.
  */
 export function useGoToNotification() {
   const router = useRouter();
@@ -165,12 +172,21 @@ export function useGoToNotification() {
   const switchTo = useSwitchChannel();
   const queryClient = useQueryClient();
   return (n: AppNotification, href: string) => {
-    const current = active.ready ? active.streamerId : me?.id;
-    if (!me || n.channel.id === current) {
+    if (!me) {
       router.push(href);
       return;
     }
-    const go = { onSwitched: () => router.push(href) };
+    const store = useChannelStore.getState();
+    const current = active.ready
+      ? active.streamerId
+      : store.userId === me.id
+        ? (store.selected ?? me.id)
+        : me.id;
+    if (n.channel.id === current) {
+      router.push(href);
+      return;
+    }
+    const go = { destination: href, onSwitched: () => router.push(href) };
     if (n.channel.id === me.id) {
       switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' }, go);
       return;
@@ -179,19 +195,19 @@ export function useGoToNotification() {
       delegationsAsEditorQueryOptions.queryKey,
     );
     const target = list?.find((d) => d.streamerId === n.channel.id);
-    if (target) {
-      switchTo(
-        {
-          streamerId: target.streamerId,
-          name: target.streamerName,
-          relation: 'EDITOR',
-          photo: target.streamerProfileImageUrl,
-        },
-        go,
-      );
+    if (list && !target) {
+      router.push(href);
       return;
     }
-    router.push(href);
+    switchTo(
+      {
+        streamerId: n.channel.id,
+        name: target?.streamerName ?? n.channel.name,
+        relation: 'EDITOR',
+        photo: target?.streamerProfileImageUrl ?? null,
+      },
+      go,
+    );
   };
 }
 
