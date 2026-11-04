@@ -635,6 +635,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stream_cutoffs TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_published_gaps TO media_indexer;
 GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer;
 ```
 
 - **DELETE 는 M6 만료 · outbox 몫만이다(ADR-0006 개정 —
@@ -643,6 +644,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_inde
   outbox 행을 지운다. `stream_cutoffs` 의 UPDATE · DELETE 는 만료의 컷오프
   전진 · 제거 몫이다 — 주조는 여전히 한 번 넣고(`ON CONFLICT DO NOTHING`)
   고치지 않는다. 쓰는 문장은 M6-4 · M6-8 이 들이고, 권한은 미리 준다.
+- **`stream_edge_bounds` 넷은 /dvr 하한 원장 몫이다(POK-525).** 하한
+  Writer 가 열린 회차의 하한을 올리고(INSERT · UPDATE), 닫힌 회차의 해제를
+  적고(UPDATE), 해제 유예가 지난 행을 지운다(DELETE). `app_clip` 은 이 표에
+  권한이 없다 — 세션 행이 지워진 회차는 Writer 가 닫힌 것으로 보고 거둔다.
 - **TRUNCATE 없음 · `stream_seq_floors` 는 SELECT 만.** seq 하한은
   `stream_segments` 의 `AFTER DELETE` 트리거가 정의자(표 소유자) 권한으로
   올린다. 사이드카가 하한을 내리거나 지울 수 없다.

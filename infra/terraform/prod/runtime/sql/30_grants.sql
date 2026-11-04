@@ -29,6 +29,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stream_cutoffs TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_published_gaps TO media_indexer;
 GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer;
 
 GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
 GRANT SELECT ON stream_published_gaps TO media_janitor;

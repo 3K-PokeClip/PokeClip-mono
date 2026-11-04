@@ -44,6 +44,9 @@ type tableGrant struct {
 // M6 몫은 선부여다(ADR-0006 개정 2026-10-26). segments · sessions · gaps DELETE 와 cutoffs UPDATE · DELETE 는
 // M6-4(60일 만료)가, outbox 의 네 권한은 M6-8(계약9 발행기)과 M6-4(만료가 그 회차 행을 지움)가 쓰고, 쓰는 문장은
 // 그 PR 이 들인다. 지금 쓰는 M6 권한은 stream_seq_floors SELECT 하나다 — LoadCursor 와 하한 검사 트리거가 읽는다.
+//
+// stream_edge_bounds 의 넷은 /dvr 하한 Writer(POK-525 설계 3-3)의 원장 문장 넷(index/edge_bounds.go — 올림 INSERT ·
+// ON CONFLICT UPDATE · 해제 기록 UPDATE · 해제 행 DELETE · 조회 SELECT) 몫이다.
 var mediaIndexerGrants = []tableGrant{
 	{table: "stream_segments", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 	{table: "stream_sessions", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
@@ -51,6 +54,7 @@ var mediaIndexerGrants = []tableGrant{
 	{table: "stream_published_gaps", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 	{table: "stream_seq_floors", privileges: []string{"SELECT"}},
 	{table: "broadcast_lifecycle_outbox", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
+	{table: "stream_edge_bounds", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 }
 
 // MediaIndexerGrantSQL 은 role 에게 media_indexer 권한을 주는 GRANT 문장들이다(끝 ; 없음).

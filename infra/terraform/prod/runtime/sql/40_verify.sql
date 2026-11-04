@@ -144,7 +144,8 @@ BEGIN
     ),
     tables(t) AS (
         VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps'),
-               ('stream_seq_floors'), ('broadcast_lifecycle_outbox')
+               ('stream_seq_floors'), ('broadcast_lifecycle_outbox'),
+               ('stream_edge_bounds')
     ),
     -- M6 장부 열(ledger_column:<표>.<열>).
     ledger_columns(t, c) AS (
@@ -187,6 +188,10 @@ BEGIN
                ('media_indexer', 'broadcast_lifecycle_outbox', 'INSERT'),
                ('media_indexer', 'broadcast_lifecycle_outbox', 'UPDATE'),
                ('media_indexer', 'broadcast_lifecycle_outbox', 'DELETE'),
+               ('media_indexer', 'stream_edge_bounds', 'SELECT'),
+               ('media_indexer', 'stream_edge_bounds', 'INSERT'),
+               ('media_indexer', 'stream_edge_bounds', 'UPDATE'),
+               ('media_indexer', 'stream_edge_bounds', 'DELETE'),
                ('media_janitor', 'stream_segments', 'SELECT'),
                ('media_janitor', 'stream_sessions', 'SELECT'),
                ('media_janitor', 'stream_cutoffs', 'SELECT'),
