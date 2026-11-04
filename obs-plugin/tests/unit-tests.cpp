@@ -2065,7 +2065,8 @@ TEST(dock_api_base_accepts_defaults_and_loopback_only)
 	CHECK(!IsLoopbackApiBase("http://localhost.evil.example"));
 	CHECK(!IsLoopbackApiBase("http://127.0.0.1.evil.example"));
 	CHECK(!IsLoopbackApiBase("http://127.0.0"));
-	CHECK(!IsLoopbackApiBase("http://127.0.0.256"));
+	// 127.x 판정은 정본(IsLoopbackBase)을 따른다 — 칸마다 0~255인지는 보지 않는다(어디로 가도 이 PC 밖이 아니다)
+	CHECK(IsLoopbackApiBase("http://127.0.0.256"));
 	CHECK(!IsLoopbackApiBase("http://128.0.0.1"));
 	CHECK(!IsLoopbackApiBase("http://[::2]:8082"));
 	CHECK(!IsLoopbackApiBase("http://localhost:0"));
@@ -2085,6 +2086,14 @@ TEST(dock_api_base_accepts_defaults_and_loopback_only)
 	CHECK(IsAcceptedDockApiBase("http://localhost:8082"));
 	CHECK(!IsAcceptedDockApiBase("https://evil.example")); // PC 밖 다른 주소는 설정 파일로만
 	CHECK(!IsAcceptedDockApiBase("http://api.pokeclip.com"));
+
+	// 독이 받는 이 PC 주소는 마크(IsSecureMarkBase)·종료 신호(IsLoopbackBase)도 받는다 — 판정이 한 곳이라 어긋나지 않는다
+	for (const char *base : {"http://localhost:8082", "HTTP://LocalHost:8082", "http://127.0.0.1:8082", "http://127.1.2.3:1",
+				 "https://localhost:8443", "http://[::1]:8082", "http://[::1]"}) {
+		CHECK(IsLoopbackApiBase(base));
+		CHECK(IsLoopbackBase(base));
+		CHECK(IsSecureMarkBase(base));
+	}
 }
 
 TEST(put_api_base_change_clears_key)
@@ -2356,6 +2365,7 @@ TEST(mark_secure_base_allows_https_and_loopback_only)
 	CHECK(!IsSecureMarkBase("http://localhost@evil.test"));
 	CHECK(!IsSecureMarkBase("http://127.0.0.1.nip.io"));
 	CHECK(!IsSecureMarkBase("http://localhost:80x"));
+	CHECK(!IsSecureMarkBase("http://localhost:")); // 포트 없이 ':'만 — 종료 신호 판정과 같게(정본 하나)
 	CHECK(!IsSecureMarkBase("ftp://localhost"));
 	CHECK(!IsSecureMarkBase("https://"));
 	CHECK(!IsSecureMarkBase(""));

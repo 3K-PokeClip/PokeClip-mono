@@ -1,7 +1,6 @@
 #include "server-env.hpp"
 
-#include <algorithm>
-#include <cctype>
+#include "end-signal-policy.hpp"
 
 namespace pokeclip {
 
@@ -25,41 +24,6 @@ bool IsKnownDefaultIngestPort(int port)
 	return port == kProdServers.ingestPort || port == kDevServers.ingestPort || port == kLegacyDefaultIngestPort;
 }
 
-bool StartsWithNoCase(std::string_view s, std::string_view prefix)
-{
-	if (s.size() < prefix.size())
-		return false;
-	for (size_t i = 0; i < prefix.size(); i++) {
-		if (std::tolower(static_cast<unsigned char>(s[i])) != prefix[i])
-			return false;
-	}
-	return true;
-}
-
-bool AllDigits(std::string_view s)
-{
-	return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char ch) { return std::isdigit(ch); });
-}
-
-// 127.0.0.0/8 — 점으로 나뉜 숫자 넷, 첫 칸이 127, 칸마다 0~255.
-bool IsLoopbackIpv4(std::string_view host)
-{
-	int parts = 0;
-	while (true) {
-		const size_t dot = host.find('.');
-		const std::string_view part = host.substr(0, dot);
-		if (!AllDigits(part) || part.size() > 3 || std::stoi(std::string(part)) > 255)
-			return false;
-		if (parts == 0 && part != "127")
-			return false;
-		parts++;
-		if (dot == std::string_view::npos)
-			break;
-		host.remove_prefix(dot + 1);
-	}
-	return parts == 4;
-}
-
 } // namespace
 
 std::string NormalizeApiBase(std::string_view text)
@@ -74,41 +38,21 @@ std::string NormalizeApiBase(std::string_view text)
 
 bool IsLoopbackApiBase(std::string_view base)
 {
-	if (StartsWithNoCase(base, "https://"))
-		base.remove_prefix(8);
-	else if (StartsWithNoCase(base, "http://"))
-		base.remove_prefix(7);
-	else
+	// 호스트 판정(localhost · 127.x · [::1], 사용자 정보 '@' 거절, 포트는 숫자)은 종료 신호·마크와 같은 정본 하나를 쓴다.
+	const std::string text(base);
+	if (!IsLoopbackBase(text))
 		return false;
-
-	// 경로·물음표·#·사용자 정보(http://localhost@다른호스트 — 실제로는 뒤쪽 호스트로 간다)는 받지 않는다.
-	if (base.empty() || base.find_first_of("/?#@\\") != std::string_view::npos)
+	// 독이 적는 인증 서버는 scheme://host[:port]만 — 경로·물음표·#·역슬래시 없이(교환 경로를 뒤에 붙인다).
+	const std::string authority = text.substr(text.find("://") + 3);
+	if (authority.find_first_of("/?#\\") != std::string::npos)
 		return false;
-	std::string_view port;
-	bool loopback = false;
-	if (base.front() == '[') {
-		const size_t close = base.find(']');
-		if (close == std::string_view::npos)
-			return false;
-		loopback = base.substr(1, close - 1) == "::1";
-		port = base.substr(close + 1);
-	} else {
-		const size_t colon = base.find(':');
-		std::string host(base.substr(0, colon));
-		std::transform(host.begin(), host.end(), host.begin(),
-			       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-		loopback = host == "localhost" || IsLoopbackIpv4(host);
-		port = colon == std::string_view::npos ? std::string_view{} : base.substr(colon);
-	}
-	if (!loopback)
-		return false;
-	if (port.empty())
+	// 포트 범위 — 정본은 숫자인지만 본다. [::1]의 ':'는 포트가 아니다.
+	const size_t close = authority.find(']');
+	const size_t colon = authority.find(':', close == std::string::npos ? 0 : close);
+	if (colon == std::string::npos)
 		return true;
-	if (port.front() != ':')
-		return false;
-	port.remove_prefix(1);
-	return AllDigits(port) && port.size() <= 5 && std::stoi(std::string(port)) >= 1 &&
-	       std::stoi(std::string(port)) <= 65535;
+	const std::string port = authority.substr(colon + 1);
+	return port.size() <= 5 && std::stoi(port) >= 1 && std::stoi(port) <= 65535;
 }
 
 bool IsAcceptedDockApiBase(const std::string &normalized)
