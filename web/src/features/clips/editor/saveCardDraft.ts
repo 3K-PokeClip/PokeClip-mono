@@ -9,23 +9,15 @@ import { lookupRecordingSpans } from '@/api/mediaPlayback';
 import { recordingTimeline, type RecordingTimeline } from '@/features/player/recordingTimeline';
 import { editorTimelineOf } from './editorMedia';
 import { cardFromList, recordingOf } from './prefetchCardEditor';
+import { CardDraftNotReadyError } from './cardDraftErrors';
 import { recipeDocumentOf } from './recipeDocument';
 import { initialRecipe } from './useClipEditorMockState';
+
+export { CardDraftNotReadyError };
 
 // 하이라이트 카드에서 바로 보관함에 저장한다 — 편집기를 열지 않고, 편집기를 카드에서 처음 열었을 때와 같은 편집본(카드 구간 ·
 // 기본 모양 · 첫 소리 트랙)을 만든다. 보관함에는 「편집 중」 편집본으로 서고, 출처 카드를 남긴다(POK-338과 같은 쿼리).
 // 영상을 받지 않으므로 편집 미리 받기(POK-499)가 끝나기 전에도 된다.
-
-/**
- * 아직 저장할 수 없다 — 시각 기준점을 모른다(서버 기준점이 없고 녹화도 아직 없다). 방송 시작 직후의 카드다: 녹화가 올라오면 된다.
- * 부르는 쪽은 실패와 달리 「녹화가 올라온 뒤 다시」로 알린다
- */
-export class CardDraftNotReadyError extends Error {
-  constructor() {
-    super('timeline origin not known yet');
-    this.name = 'CardDraftNotReadyError';
-  }
-}
 
 /**
  * 카드 구간으로 만든 처음 편집본. 편집기가 카드에서 처음 열렸을 때의 화면값(initialRecipe — 모양 · 트랙 0만 켬)을 편집기와 같은

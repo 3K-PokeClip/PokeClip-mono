@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { prefetchCardEditor } from '@/features/clips/editor/prefetchCardEditor';
-import { CardDraftNotReadyError, saveCardDraft } from '@/features/clips/editor/saveCardDraft';
+import { saveCardDraft } from '@/features/clips/editor/saveCardDraft';
+import { CardDraftNotReadyError } from '@/features/clips/editor/cardDraftErrors';
 import type { RecipeSnapshot } from '@/api/clipEditor';
 import { forgetCardSaves } from './cardSave';
 import { HighlightCard } from './HighlightCard';
@@ -12,11 +13,7 @@ import { PENDING_MAX_RECHECKS, PENDING_RECHECK_MS } from './useCardEditorReady';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 
 vi.mock('@/features/clips/editor/prefetchCardEditor', () => ({ prefetchCardEditor: vi.fn() }));
-vi.mock('@/features/clips/editor/saveCardDraft', () => ({
-  saveCardDraft: vi.fn(),
-  // 카드가 「아직 못 저장」을 실패와 가르는 데 쓴다: 목 모듈에도 같은 이름의 오류 종류를 둔다
-  CardDraftNotReadyError: class CardDraftNotReadyError extends Error {},
-}));
+vi.mock('@/features/clips/editor/saveCardDraft', () => ({ saveCardDraft: vi.fn() }));
 const routerPush = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: routerPush }) }));
 
@@ -288,9 +285,12 @@ describe('HighlightCard: 보관함 저장', () => {
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
-    expect(saveCardDraft).toHaveBeenCalledWith(expect.any(String), '23', {
-      stillCurrent: expect.any(Function),
-    });
+    // 저장 모듈은 누를 때 불러온다(import()) — 부르기까지 한 박자 기다린다
+    await vi.waitFor(() =>
+      expect(saveCardDraft).toHaveBeenCalledWith(expect.any(String), '23', {
+        stillCurrent: expect.any(Function),
+      }),
+    );
     // 저장 중엔 disabled가 아니라 aria-disabled로 막는다(초점을 잃지 않게) — 또 눌러도 다시 보내지 않는다
     const saving = screen.getByRole('button', { name: '보관함에 저장하는 중' });
     expect(saving).toHaveAttribute('aria-disabled', 'true');

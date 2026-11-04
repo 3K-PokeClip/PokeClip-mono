@@ -518,18 +518,21 @@
   position: absolute;
   top: 0;
   bottom: 0;
+  left: 0;
   width: 35%;
   background: var(--pc-color-point);
   animation: card-sweep 1.4s ease-in-out infinite;
 }
 
+/* transform으로 옮긴다(합성만 탄다): left를 움직이면 준비 중 카드마다 매 프레임 레이아웃이 돈다 — 화면 밖 카드도 준비 중이다(PR #480 2차 리뷰).
+   띠 폭이 줄의 35%라 줄 왼쪽 밖(-100%)에서 오른쪽 밖(100/35 ≈ 286%)까지 간다 */
 @keyframes card-sweep {
   from {
-    left: -35%;
+    transform: translateX(-100%);
   }
 
   to {
-    left: 100%;
+    transform: translateX(286%);
   }
 }
 

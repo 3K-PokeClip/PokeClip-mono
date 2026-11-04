@@ -2,12 +2,12 @@
 
 import { useCallback, useSyncExternalStore } from 'react';
 import type { RecipeSnapshot } from '@/api/clipEditor';
-import { saveCardDraft } from '@/features/clips/editor/saveCardDraft';
 import { captureSession, onSessionAdvance } from '@/stores/auth';
 
 // 카드의 「보관함 저장」 상태 — 이 탭에서 저장한 카드만 기억한다. 🔴 새로고침하면 잊는다: 보관함 목록이 출처 카드 번호를 싣지
 // 않아(LibraryEntry) 어느 카드가 이미 저장됐는지 서버에서 알 길이 없다. 서버가 그 칸을 실으면 목록으로 채운다(후속).
 // 카드가 다시 그려져도(목록 3초마다) · 패널 필터를 바꿔도 남게 컴포넌트 밖에 둔다.
+// 저장 모듈(saveCardDraft)은 누를 때 불러온다: 정적으로 가져오면 편집기 상태 훅 묶음이 라이브 라우트 첫 로드에 실린다(PR #480 2차 리뷰).
 
 export type CardSaveState = 'idle' | 'saving' | 'saved';
 
@@ -59,6 +59,7 @@ export function useCardSave(streamId: string, cardId: string) {
     const stillCurrent = captureSession();
     set(key, { state: 'saving' });
     try {
+      const { saveCardDraft } = await import('@/features/clips/editor/saveCardDraft');
       const snap = await saveCardDraft(streamId, cardId, { stillCurrent });
       if (!stillCurrent()) return null;
       set(key, { state: 'saved', recipeId: snap.id });

@@ -25,7 +25,7 @@ import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import { useLiveField } from './liveDataStore';
 import { useCardEditorReady } from './useCardEditorReady';
 import { useCardSave, type CardSaveState } from './cardSave';
-import { CardDraftNotReadyError } from '@/features/clips/editor/saveCardDraft';
+import { CardDraftNotReadyError } from '@/features/clips/editor/cardDraftErrors';
 
 // 하이라이트 카드(시안 B2-1, 2026-11-04) — 사진이 카드의 몸통이다. 왼쪽 위 점수(수동은 「수동」), 오른쪽 위 「저장」 알약,
 // 아래 그늘에 방송 시각 · 길이(왼쪽)와 경과(오른쪽). 사진 밑은 「편집」과 가리기만. 감지 사유 · 상태 배지 · 원클릭 업로드는 뺐다.
