@@ -107,4 +107,12 @@ describe('resolveApiBase', () => {
     expect(resolveApiBase('   ', 'https://api.pokeclip.com')).toBe('https://api.pokeclip.com');
     expect(resolveApiBase('/', 'https://dev.pokeclip.com')).toBe('https://dev.pokeclip.com');
   });
+  it('운영·개발 기본 주소는 지금 환경의 기본 주소로 맞춰진다', () => {
+    const known = ['https://api.pokeclip.com', 'https://dev.pokeclip.com', 'http://dev.pokeclip.com'];
+    expect(resolveApiBase('https://dev.pokeclip.com/', 'https://api.pokeclip.com', known)).toBe('https://api.pokeclip.com');
+    expect(resolveApiBase('http://dev.pokeclip.com', 'https://api.pokeclip.com', known)).toBe('https://api.pokeclip.com');
+    // 이 PC 주소·모르는 주소는 그대로 — 받을지는 플러그인이 정한다
+    expect(resolveApiBase('http://localhost:8082', 'https://api.pokeclip.com', known)).toBe('http://localhost:8082');
+    expect(resolveApiBase('https://evil.example', 'https://api.pokeclip.com', known)).toBe('https://evil.example');
+  });
 });

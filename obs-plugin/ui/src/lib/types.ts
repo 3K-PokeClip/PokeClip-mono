@@ -109,6 +109,7 @@ export interface PluginSettings {
   // 바뀌면 플러그인이 연결을 해제한다(키는 그 서버가 발급했다)
   api_base: string;
   default_api_base?: string; // 지금 환경의 기본 인증 서버 — 「인증 서버」 칸을 비우고 저장하면 이 주소가 된다
+  known_api_bases?: { url: string }[]; // 적어도 위 기본 주소로 맞춰지는 주소(운영·개발·옛 기본값)
   ingest_host: string;
   ingest_port: number;
   send_passphrase: boolean;

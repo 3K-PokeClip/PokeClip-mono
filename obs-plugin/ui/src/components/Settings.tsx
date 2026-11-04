@@ -180,12 +180,16 @@ export function SettingsPanel({
     }
   };
 
-  // 인증 서버 — 비우면 지금 환경의 기본 주소. 지금과 같은 주소면 저장할 게 없다.
+  // 인증 서버 — 비우면 지금 환경의 기본 주소. 운영·개발 기본 주소도 플러그인이 지금 환경 짝으로 맞추니 기본 주소로 본다
+  // (그래야 아무것도 안 바뀌는 입력에 「연결이 해제돼요」를 묻지 않는다). 지금과 같은 주소면 저장할 게 없다.
   const defaultApi = settings.default_api_base ?? '';
+  const knownApis = (settings.known_api_bases ?? []).map((known) => known.url);
   const apiValue = apiDraft ?? settings.api_base;
-  const apiTarget = resolveApiBase(apiValue, defaultApi);
+  const apiTarget = resolveApiBase(apiValue, defaultApi, knownApis);
   // 저장된 값도 같은 정리를 거쳐 비교한다 — 설정 파일에 끝 '/'를 붙여 적은 주소는 손대지 않았는데 바뀐 것으로 보인다
-  const apiChanged = apiTarget !== resolveApiBase(settings.api_base, defaultApi);
+  const apiChanged = apiTarget !== resolveApiBase(settings.api_base, defaultApi, knownApis);
+  // 적은 주소가 기본 주소로 맞춰진다(다른 환경의 기본 주소) — 왜 그 주소가 되는지(또는 왜 저장할 게 없는지) 칸 아래에 적는다
+  const apiFollowsEnv = apiTarget === defaultApi && resolveApiBase(apiValue, '') !== '' && resolveApiBase(apiValue, '') !== defaultApi;
   const applyApi = async (target: string) => {
     setApiSaving(true);
     setApiError('');
@@ -339,7 +343,9 @@ export function SettingsPanel({
                 />
               </label>
               <span id="setting-api-base-hint" class={styles.toggleHint}>
-                비우면 기본 주소예요. 직접 적는 주소는 이 PC(http://localhost:포트)만 돼요.
+                {apiFollowsEnv
+                  ? `운영·개발 주소는 「개발 서버 사용」을 따라가요 — 지금은 ${defaultApi}`
+                  : '비우면 기본 주소예요. 직접 적는 주소는 이 PC(http://localhost:포트)만 돼요.'}
               </span>
               {apiError ? (
                 <span class={styles.inlineError} role="alert">

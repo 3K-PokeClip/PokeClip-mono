@@ -130,6 +130,16 @@ std::string ConfigJson()
 	obs_data_set_string(d, "api_base", c.apiBase.c_str());
 	// 독 「인증 서버」 칸이 비웠을 때 돌아갈 주소(지금 환경 짝) — 자리 글자와 「바뀌는가」 판단에 쓴다
 	obs_data_set_string(d, "default_api_base", ServersFor(c.serverEnv).apiBase);
+	// 적으면 위 기본 주소로 맞춰지는 주소들(두 환경·옛 기본값) — 독이 아무것도 안 바뀌는 입력에 「연결이 해제돼요」를 묻지 않게
+	obs_data_array_t *known = obs_data_array_create();
+	for (const char *base : KnownDefaultApiBases()) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "url", base);
+		obs_data_array_push_back(known, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(d, "known_api_bases", known);
+	obs_data_array_release(known);
 	obs_data_set_string(d, "ingest_host", c.ingestHost.c_str());
 	obs_data_set_int(d, "ingest_port", c.ingestPort);
 	obs_data_set_bool(d, "send_passphrase", c.sendPassphrase);

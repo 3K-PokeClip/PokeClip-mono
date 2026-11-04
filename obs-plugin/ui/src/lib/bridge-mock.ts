@@ -53,7 +53,9 @@ const MOCK_SERVERS: Record<ServerEnv, Pick<PluginSettings, 'api_base' | 'ingest_
 const BUSY: Phase[] = ['starting', 'live', 'reconnecting', 'stopping'];
 // 플러그인 server-env IsLoopbackApiBase·IsAcceptedDockApiBase를 흉내 낸다(미리보기용 — 정본 시험은 C++ 쪽)
 const isLoopbackApiBase = (base: string) => /^https?:\/\/(localhost|127(\.\d{1,3}){3}|\[::1\])(:\d{1,5})?$/i.test(base);
-const isKnownApiBase = (base: string) => Object.values(MOCK_SERVERS).some((s) => s.api_base === base);
+// 플러그인 KnownDefaultApiBases — 두 짝의 기본 주소 + 옛 기본값
+const MOCK_KNOWN_API_BASES = [...Object.values(MOCK_SERVERS).map((s) => s.api_base), 'http://dev.pokeclip.com'];
+const isKnownApiBase = (base: string) => MOCK_KNOWN_API_BASES.includes(base);
 
 export function createMockBridge(scenario: string): Bridge {
   const env: ServerEnv = new URLSearchParams(location.search).get('env') === 'dev' ? 'dev' : 'prod';
@@ -243,6 +245,7 @@ export function createMockBridge(scenario: string): Bridge {
     server_env: env,
     ...servers,
     default_api_base: servers.api_base,
+    known_api_bases: MOCK_KNOWN_API_BASES.map((url) => ({ url })),
     send_passphrase: true,
     latency_ms: 1000,
     sync_start: true,

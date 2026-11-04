@@ -3,6 +3,7 @@
 #include "config.hpp"
 #include "constants.hpp"
 
+#include <array>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +20,9 @@ const char *ServerEnvName(ServerEnv env);
 // "prod"·"dev"만 받는다. 그 밖이면 false이고 out은 그대로다.
 bool ParseServerEnv(std::string_view text, ServerEnv &out);
 
+// 알려진 기본 api_base(두 환경 값·옛 기본값). 이 값들은 손대지 않은 기본값으로 보고 지금 환경 짝으로 맞춘다 —
+// IsKnownDefaultApiBase와 브리지 GET known_api_bases(독이 같은 규칙으로 「바뀌는가」를 미리 본다)가 같이 쓴다.
+std::array<const char *, 3> KnownDefaultApiBases();
 bool IsKnownDefaultApiBase(const std::string &base);
 bool IsKnownDefaultIngestHost(const std::string &host);
 

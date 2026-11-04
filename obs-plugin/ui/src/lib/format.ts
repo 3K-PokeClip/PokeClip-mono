@@ -97,8 +97,10 @@ export function takeSseFrames(buffer: string): { frames: SseFrame[]; rest: strin
 }
 
 // 개발자 모드 「인증 서버」 칸 → 저장하면 될 주소. 플러그인 NormalizeApiBase처럼 앞뒤 공백·끝의 '/'를 떼고, 비우면
-// 지금 환경의 기본 주소다. 바뀌는지(연결 해제를 물을지) 미리 가리는 데 쓴다 — 받을지는 플러그인이 정한다.
-export function resolveApiBase(input: string, defaultBase: string): string {
+// 지금 환경의 기본 주소다. 운영·개발 기본 주소(knownBases)도 플러그인이 지금 환경 짝으로 맞추므로 기본 주소로 본다.
+// 바뀌는지(연결 해제를 물을지) 미리 가리는 데 쓴다 — 받을지는 플러그인이 정한다.
+export function resolveApiBase(input: string, defaultBase: string, knownBases: readonly string[] = []): string {
   const trimmed = input.trim().replace(/\/+$/, '');
-  return trimmed || defaultBase;
+  if (!trimmed) return defaultBase;
+  return knownBases.some((known) => known.replace(/\/+$/, '') === trimmed) ? defaultBase : trimmed;
 }

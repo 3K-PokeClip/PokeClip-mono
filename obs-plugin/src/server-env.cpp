@@ -139,10 +139,18 @@ bool ParseServerEnv(std::string_view text, ServerEnv &out)
 	return false;
 }
 
+std::array<const char *, 3> KnownDefaultApiBases()
+{
+	return {kProdServers.apiBase, kDevServers.apiBase, kLegacyDefaultApiBase};
+}
+
 bool IsKnownDefaultApiBase(const std::string &base)
 {
-	return SameBase(base, kProdServers.apiBase) || SameBase(base, kDevServers.apiBase) ||
-	       SameBase(base, kLegacyDefaultApiBase);
+	for (const char *known : KnownDefaultApiBases()) {
+		if (SameBase(base, known))
+			return true;
+	}
+	return false;
 }
 
 bool IsKnownDefaultIngestHost(const std::string &host)
