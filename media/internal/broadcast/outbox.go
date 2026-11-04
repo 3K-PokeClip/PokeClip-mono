@@ -198,9 +198,10 @@ ON CONFLICT (event_id) DO NOTHING`
 // EnqueueStarted 와 같이 커밋 전 「적재 시도」 신호다. started 행을 FOR SHARE 로 잠그므로 문장에는 outbox UPDATE
 // 권한이 요건이다(30_grants.sql). 켜진 게이트는 문장 전에 같은 트랜잭션에서 outboxWritable 을 묻고, 거짓이면 문장
 // 없이 (false, nil) · ERROR lifecycle_enqueue_skipped 다 — 닫힘 · phase 4 트랜잭션을 42501 로 롤백하지 않는다.
-// 이렇게 건너뛴 완결 평가와 꺼진 게이트의 완결 평가는 발행기 보정(repair.go)이 거둔다 — started 가 적재된 회차이고,
-// 같은 DB 에 이 판 이상의 발행기가 떠 있고, 회차 시작이 보정 창(repairHorizon) 안일 때다. 꺼진 사이드카가 연 회차는
-// started 가 없어 ended 도 없다.
+// 이렇게 건너뛴 완결 평가와 꺼진 게이트의 완결 평가는 발행기 보정(repair.go)이 거둔다 — 보정 후보(started 가 살아
+// 있고(abandoned 아님) · 닫힘 ∧ 전원 ended · ended 없음 · 회차 시작이 보정 창(repairHorizon) 안)이고, 같은 DB 에 발행
+// 사이드카(마지막 lifecycle_degraded 가 value=0 인 사이드카 — 그 줄을 내지 않는 옛 판은 보정하지 않는다)가 떠 있을
+// 때다. 꺼진 사이드카가 연 회차는 started 가 없어 ended 도 없다.
 func EnqueueEndedIfComplete(ctx context.Context, tx pgx.Tx, g Gate, round string) (bool, error) {
 	if round == "" || !g.Enabled() {
 		return false, nil
