@@ -1101,11 +1101,33 @@ describe('HomeScreen', () => {
     await within(grid).findByText('gone');
     const tile = (title: string) => within(grid).getByText(title).closest('li')!;
     // 썸네일 자리표시 「썸네일 준비 중」과 가르려고 배지 글자만 정확히 찾는다
-    expect(within(tile('fresh')).getByText('준비 중')).toBeInTheDocument();
-    expect(within(tile('stale')).queryByText('준비 중')).toBeNull();
+    expect(within(tile('fresh')).getByText('다시 보기 준비 중')).toBeInTheDocument();
+    expect(within(tile('stale')).queryByText('다시 보기 준비 중')).toBeNull();
     expect(within(tile('gone')).getByText('보관 만료')).toBeInTheDocument();
     expect(tile('gone').querySelector('a')).toBeNull();
     expect(tile('fresh').querySelector('a')).not.toBeNull();
+  });
+
+  it('지난 방송 격자: 보관 기한은 3일 이하일 때만 「D-n 삭제」로 말한다', async () => {
+    const DAY = 86_400_000;
+    const inDays = (d: number) => new Date(Date.now() + d * DAY - 60_000).toISOString();
+    serve({
+      past: [
+        pastRow('soon', new Date(Date.now() - 2 * DAY), { vodExpiresAt: inDays(2) }),
+        pastRow('edge', new Date(Date.now() - 3 * DAY), { vodExpiresAt: inDays(3) }),
+        pastRow('later', new Date(Date.now() - 4 * DAY), { vodExpiresAt: inDays(5) }),
+      ],
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    await within(grid).findByText('later');
+    const tile = (title: string) => within(grid).getByText(title).closest('li')!;
+    expect(within(tile('soon')).getByText('D-2 삭제')).toBeInTheDocument();
+    expect(within(tile('edge')).getByText('D-3 삭제')).toBeInTheDocument();
+    // 그보다 먼 기한은 홈이 말하지 않는다(옛 「D-5 · 곧 만료」)
+    expect(tile('later')).not.toHaveTextContent(/D-\d/);
+    expect(tile('later')).not.toHaveTextContent('곧 만료');
   });
 
   it('방송 목록을 잠깐 못 읽어도 지난 화면을 지우지 않는다 — 라이브 띠가 그대로다', async () => {

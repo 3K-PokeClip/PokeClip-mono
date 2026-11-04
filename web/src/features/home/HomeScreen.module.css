@@ -615,7 +615,10 @@
   top: calc(7 * var(--pc-u));
   left: calc(7 * var(--pc-u));
   z-index: 2;
-  padding: calc(2 * var(--pc-u)) calc(7 * var(--pc-u));
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
   border-radius: calc(99 * var(--pc-u));
   background: rgb(0 0 0 / 0.6); /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
@@ -642,6 +645,45 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: #fff; /* 테마 고정 */
+}
+
+/* 다시 보기 준비 중 — 기다리는 중임을 점이 깜빡여 말한다 */
+.vodPulse {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-point);
+  animation: pc-home-vod-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pc-home-vod-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vodPulse {
+    animation: none;
+  }
+}
+
+/* 보관이 끝난 방송 — 사진을 흑백 · 흐리게 하고 가운데 「보관 만료」. 받는 중(data-pending)의 숨김이 더 세다 */
+.vodThumbOff img {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+.vodOffCover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
 }
 
 .vodNoPhoto {
@@ -987,4 +1029,14 @@
   .vodLink:hover .thumb img {
     transform: scale(1.04);
   }
+}
+
+/* 열 것이 없는 카드(보관 만료) — 눌리는 척하지 않는다 */
+.vodLinkOff {
+  display: block;
+  cursor: default;
+}
+
+.vodLinkOff .vodText {
+  opacity: 0.55;
 }

@@ -74,6 +74,7 @@ export interface LiveNow {
   photoLate?: boolean;
 }
 
+/** 사진 위 왼쪽 위 표시 하나. D-n은 곧 지워질 때(VOD_EXPIRY_URGENT_DAYS 이하)만 단다 */
 export type VodBadge =
   { kind: 'preparing' } | { kind: 'dday'; label: string } | { kind: 'expired' };
 
@@ -159,7 +160,6 @@ const CARD_READ_PARALLEL = 6;
  */
 const PHOTO_WAIT_MS = 3 * 60_000;
 const PAST_LIMIT = 8;
-const EXPIRING_WINDOW_DAYS = 7;
 const DAY_MS = 86_400_000;
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T | null> {
@@ -190,11 +190,6 @@ function clockLabel(iso: string): string {
 function dateLabel(iso: string): string {
   const d = new Date(iso);
   return `${d.getMonth() + 1}월 ${d.getDate()}일`;
-}
-
-/** 만료까지 남은 일수 (올림). 지났으면 0 */
-function daysLeft(iso: string, now: number): number {
-  return Math.max(0, Math.ceil((Date.parse(iso) - now) / DAY_MS));
 }
 
 function startOfDay(d: Date): Date {
@@ -377,14 +372,15 @@ async function loadHome(
   const vods: HomeVod[] = past.map((b) => {
     let badge: VodBadge | undefined;
     // 지난 방송 목록과 같은 규칙: 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안만이다(POK-254). 그 뒤에는 녹화가 없어도
-    // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다
-    const expired = ddayFor(b.vodExpiresAt, new Date(now)).kind === 'expired';
+    // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다. D-n은 지난 방송 목록이 붉게 다는 경계(3일) 안에서만 단다 —
+    // 그보다 먼 기한은 홈이 말하지 않고 「60일 보관」 한 줄과 지난 방송 목록이 맡는다
+    const dday = ddayFor(b.vodExpiresAt, new Date(now));
+    const expired = dday.kind === 'expired';
     if (expired) badge = { kind: 'expired' };
     else if (b.status === 'ended') {
       if (isJustEnded(b.endedAt, new Date(now))) badge = { kind: 'preparing' };
-    } else if (b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now) {
-      const d = daysLeft(b.vodExpiresAt, now);
-      if (d <= EXPIRING_WINDOW_DAYS) badge = { kind: 'dday', label: `D-${d}` };
+    } else if (dday.kind === 'active' && dday.urgent) {
+      badge = { kind: 'dday', label: dday.label };
     }
     const duration =
       b.startedAt && b.endedAt

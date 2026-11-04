@@ -9,6 +9,7 @@ import type { HomeVod } from './useHomeMockState';
 
 // 디자인 1a ③ — 지난 방송 격자. clip `state=past` 실값이다.
 // 카드 한 장이 그 방송을 말한다: 장면 사진 · 제목 · 시작 시각(같은 제목을 가른다) · 찾은 카드와 만든 클립 수.
+// 사진 위 왼쪽 위 표시는 하나만 — 다시 보기 준비 중 · 곧 지워짐(D-n) · 보관 만료.
 // 첫 응답 전엔 홈이 큰 칸 스켈레톤만 그려 이 격자는 늘 읽은 뒤에 선다 — 「불러오는 중」 칸이 없다(POK-378).
 export function VodGrid({ vods }: { vods: HomeVod[] }) {
   return (
@@ -32,8 +33,8 @@ export function VodGrid({ vods }: { vods: HomeVod[] }) {
                   <VodCardBody vod={vod} />
                 </Link>
               ) : (
-                // 보관이 끝나 열 것이 없다: 링크를 안 만든다(지난 방송 목록과 같다, POK-254)
-                <div className={styles.vodLink}>
+                // 보관이 끝나 열 것이 없다: 링크를 안 만들고 흐리게 둔다 — 눌리는 척하지 않는다(지난 방송 목록과 같다, POK-254)
+                <div className={styles.vodLinkOff}>
                   <VodCardBody vod={vod} />
                 </div>
               )}
@@ -46,6 +47,7 @@ export function VodGrid({ vods }: { vods: HomeVod[] }) {
 }
 
 function VodCardBody({ vod }: { vod: HomeVod }) {
+  const expired = vod.badge?.kind === 'expired';
   return (
     <>
       <Thumb
@@ -61,24 +63,22 @@ function VodCardBody({ vod }: { vod: HomeVod }) {
           )
         }
         src={vod.thumbnailUrl}
+        className={clsx(expired && styles.vodThumbOff)}
       >
         {vod.badge?.kind === 'preparing' ? (
-          <span className={styles.overlayPillTopLeft}>준비 중</span>
+          <span className={styles.overlayPillTopLeft}>
+            <span className={styles.vodPulse} aria-hidden />
+            다시 보기 준비 중
+          </span>
         ) : null}
         {vod.badge?.kind === 'dday' ? (
           <span className={styles.overlayTopLeft}>
             <Badge tone="danger" variant="solid" size="sm">
-              {vod.badge.label}
+              {vod.badge.label} 삭제
             </Badge>
           </span>
         ) : null}
-        {vod.badge?.kind === 'expired' ? (
-          <span className={styles.overlayTopLeft}>
-            <Badge tone="danger" variant="soft" size="sm">
-              보관 만료
-            </Badge>
-          </span>
-        ) : null}
+        {expired ? <span className={styles.vodOffCover}>보관 만료</span> : null}
         {vod.duration ? <span className={styles.durationPill}>{vod.duration}</span> : null}
       </Thumb>
       <div className={styles.vodText}>
