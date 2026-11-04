@@ -76,6 +76,15 @@ describe('saveCardDraft', () => {
     expect(streamId).toBe('S-1');
     expect(sourceCardId).toBe('23');
     expect(savedCut()).toEqual({ inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 });
+    // 방송 줄은 기억해 둔 것이 아니라 새로 읽는다: 기준점 없는 줄을 20초 동안 다시 쓰는 동안 녹화가 생기면 기준점이 어긋난다
+    expect(fetchBroadcast).toHaveBeenCalledWith('S-1', undefined, { fresh: true });
+  });
+
+  it('서버 기준점이 있으면 녹화를 묻지 않는다 — 녹화 읽기 실패(출입증 등)가 저장을 막지 않게', async () => {
+    vi.mocked(recordingOf).mockRejectedValue(new Error('access failed'));
+    await expect(saveCardDraft('S-1', '23')).resolves.toEqual({ id: 31 });
+    expect(recordingOf).not.toHaveBeenCalled();
+    expect(savedCut()).toEqual({ inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 });
   });
 
   it('카드가 없거나 시작 안 한 방송이면 저장하지 않고 던진다', async () => {
@@ -86,7 +95,8 @@ describe('saveCardDraft', () => {
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
-  it('녹화를 못 읽으면 저장하지 않는다', async () => {
+  it('서버 기준점이 없는 끝난 방송에서 녹화를 못 읽으면 저장하지 않는다', async () => {
+    vi.mocked(fetchBroadcast).mockResolvedValue(ended);
     vi.mocked(recordingOf).mockRejectedValueOnce(new Error('503'));
     await expect(saveCardDraft('S-1', '23')).rejects.toThrow('503');
     expect(createRecipe).not.toHaveBeenCalled();
@@ -98,15 +108,15 @@ describe('saveCardDraft', () => {
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
-  it('방송 중 서버 기준점이 없어도 녹화가 있으면 녹화 시작이 기준점이다(편집기와 같다)', async () => {
+  it('방송 중 서버 기준점이 없으면 녹화가 있어도 기다리게 한다 — 서버 기준점(pdt − pts)은 녹화 시작과 다를 수 있다', async () => {
     vi.mocked(fetchBroadcast).mockResolvedValue(noOrigin);
     vi.mocked(recordingOf).mockResolvedValue({
       startMs: BASE + 5_000,
       durationSeconds: 600,
       pieces: [{ fromSeconds: 0, toSeconds: 600 }],
     });
-    await saveCardDraft('S-1', '23');
-    expect(savedCut()).toEqual({ inAtMs: BASE + 45_000, outAtMs: BASE + 105_000 });
+    await expect(saveCardDraft('S-1', '23')).rejects.toBeInstanceOf(CardDraftNotReadyError);
+    expect(createRecipe).not.toHaveBeenCalled();
   });
 
   it('끝난 방송에서 녹화 목록 묻기가 실패하면(recordingOf는 null로 접는다) 저장하지 않는다', async () => {
