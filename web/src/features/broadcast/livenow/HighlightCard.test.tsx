@@ -6,6 +6,7 @@ import { prefetchCardEditor } from '@/features/clips/editor/prefetchCardEditor';
 import { saveCardDraft } from '@/features/clips/editor/saveCardDraft';
 import { CardDraftNotReadyError } from '@/features/clips/editor/cardDraftErrors';
 import type { RecipeSnapshot } from '@/api/clipEditor';
+import { useAuthStore } from '@/stores/auth';
 import { forgetCardSaves } from './cardSave';
 import { HighlightCard } from './HighlightCard';
 import { reuseHighlights } from './highlightCardView';
@@ -370,6 +371,19 @@ describe('HighlightCard: 보관함 저장', () => {
     expect(screen.getByRole('button', { name: '보관함에 저장' })).not.toHaveAttribute(
       'aria-disabled',
     );
+  });
+
+  it('계정이 바뀌면(로그아웃) 저장한 카드도 「저장」으로 돌아간다 — 앞 계정의 「저장됨」이 다음 사람 화면에 남지 않게', async () => {
+    // 실제 세션 스토어로 돌린다: cardSave의 onSessionAdvance(forgetCardSaves) 배선을 지나는 유일한 시험이다(PR #480 2차 리뷰)
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    vi.mocked(saveCardDraft).mockResolvedValue(snapshot);
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+    expect(
+      await screen.findByRole('button', { name: '보관함에 저장됨 · 보관함 열기' }),
+    ).toBeInTheDocument();
+    act(() => useAuthStore.getState().clearTokens());
+    expect(screen.getByRole('button', { name: '보관함에 저장' })).toBeInTheDocument();
   });
 
   it('가린 카드에는 저장이 없다', () => {
