@@ -18,19 +18,26 @@ const STORAGE_KEY = 'pc-mock-notifications';
 const ARRIVE_AFTER_MS = 12_000;
 const LIVE_ENDS_AFTER_MS = 40_000;
 
+const mockAllowed = () => process.env.NODE_ENV !== 'production' && typeof window !== 'undefined';
+
+/** 주소의 ?mock= 값. 없으면 undefined(주소가 말하지 않음), ?mock=off면 null */
+function modeFromUrl(): NotificationsMockMode | null | undefined {
+  const param = new URLSearchParams(window.location.search).get('mock');
+  if (param === 'notifications') return 'normal';
+  if (param === 'notifications-live') return 'live';
+  if (param === 'off') return null;
+  return undefined;
+}
+
+/**
+ * 지금 가짜 모드. 읽기만 한다 — 렌더 중에(useSyncExternalStore의 getSnapshot) 여러 번 불리므로 저장소에 쓰지 않는다.
+ * 주소가 말하면 주소, 아니면 이 탭에 기억해 둔 값.
+ */
 export function readNotificationsMockMode(): NotificationsMockMode | null {
-  if (process.env.NODE_ENV === 'production' || typeof window === 'undefined') return null;
+  if (!mockAllowed()) return null;
   try {
-    const param = new URLSearchParams(window.location.search).get('mock');
-    if (param === 'notifications' || param === 'notifications-live') {
-      const mode: NotificationsMockMode = param === 'notifications-live' ? 'live' : 'normal';
-      window.sessionStorage.setItem(STORAGE_KEY, mode);
-      return mode;
-    }
-    if (param === 'off') {
-      window.sessionStorage.removeItem(STORAGE_KEY);
-      return null;
-    }
+    const fromUrl = modeFromUrl();
+    if (fromUrl !== undefined) return fromUrl;
     const saved = window.sessionStorage.getItem(STORAGE_KEY);
     return saved === 'normal' || saved === 'live' ? saved : null;
   } catch {
@@ -38,11 +45,27 @@ export function readNotificationsMockMode(): NotificationsMockMode | null {
   }
 }
 
-const noopSubscribe = () => () => {};
+/** 주소의 값을 이 탭에 기억한다(알림을 눌러 다른 화면으로 가도 유지되게). 렌더 밖 — 구독할 때 — 한다 */
+function rememberUrlMode() {
+  if (!mockAllowed()) return;
+  try {
+    const fromUrl = modeFromUrl();
+    if (fromUrl === undefined) return;
+    if (fromUrl === null) window.sessionStorage.removeItem(STORAGE_KEY);
+    else window.sessionStorage.setItem(STORAGE_KEY, fromUrl);
+  } catch {
+    /* 저장이 막혀도 이번 화면에선 주소 값으로 돈다 */
+  }
+}
+
+const subscribe = () => {
+  rememberUrlMode();
+  return () => {};
+};
 
 /** 가짜 알림 모드 — 서버 렌더와 첫 수화에선 늘 null(꺼짐)이라 숫자 배지가 어긋나지 않는다 */
 export function useNotificationsMockMode(): NotificationsMockMode | null {
-  return useSyncExternalStore(noopSubscribe, readNotificationsMockMode, () => null);
+  return useSyncExternalStore(subscribe, readNotificationsMockMode, () => null);
 }
 
 interface Owner {
