@@ -1,7 +1,7 @@
 'use client';
 
 import { useId } from 'react';
-import { LEGAL_URLS } from '@/features/legal/legalInfo';
+import { LEGAL_URLS, SUPPORT_EMAIL } from '@/features/legal/legalInfo';
 import { Button, Dialog } from '@/ui';
 import type { WITHDRAW_FACTS } from './useAccountMockState';
 import styles from './AccountSettingsScreen.module.css';
@@ -101,8 +101,8 @@ export function WithdrawDialog({
           <div className={styles.footnoteDivider} />
           <p className={styles.footnote}>
             탈퇴 진행이 어려우신 경우 고객센터(
-            <a className={styles.footnoteLink} href="mailto:3k.pokeclip@gmail.com">
-              3k.pokeclip@gmail.com
+            <a className={styles.footnoteLink} href={`mailto:${SUPPORT_EMAIL}`}>
+              {SUPPORT_EMAIL}
             </a>
             )로 문의해 주세요.
           </p>
