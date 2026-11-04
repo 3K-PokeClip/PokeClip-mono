@@ -163,8 +163,8 @@ func TestRaiseReadsETagBeforeLedgerAndSendsLedgerValue(t *testing.T) {
 	}
 }
 
-// 웹 계약 불변식(86 공통 지시 · 설계 1절): floor 는 「Margin 전까지 발행에 성공한 목록 MSN 의 최댓값」을 넘지 않는다 —
-// 그래서 CDN 이 주는 목록의 첫 조각을 엣지가 막지 않는다. 무작위 관측(MSN 되돌림 · 늦게 도착한 시각 · 0 이하 포함)과
+// floor 정의(설계 1절 · D2): floor 는 「Margin 전까지 발행에 성공한 목록 MSN 의 최댓값」을 넘지 않는다. 웹 계약
+// 불변식(최신 사슬 목록의 첫 조각 — kty (가))은 floor_bound_test.go 가 본다. 무작위 관측(MSN 되돌림 · 늦게 도착한 시각 · 0 이하 포함)과
 // 무작위 올림 시각마다 원장 하한을 그 시각의 상한과 견준다. 투영 이력이 넘치지 않는 한 같아야 한다(덜 막는 것도 결함 —
 // 설계 D2 하한 정의). 잡는 결함: Margin 을 안 기다리고 올리거나(첫 조각 404), 발행 시각 대신 Observe 를 부른 시각을 쓰거나,
 // 더 늦게 관측된 작은 MSN 이 큰 MSN 의 성숙을 가리는 것.
@@ -695,7 +695,7 @@ func TestOverdueClearsWhenAnotherWriterReleases(t *testing.T) {
 
 // 차단 상태(Writer 계약 6): 원장 하한이 그 회차의 최근 발행 목록 MSN 보다 크면 dvr_floor_blocks_list 가 서고(ERROR ·
 // value=1 · 회차 단위) 아니게 되면 같은 이름 value=0 으로 풀린다. 그 동안에도 KVS 에는 원장 값을 보낸다(값을 내리지
-// 않는다 — E4).
+// 않는다 — E4). E15 경우다 — 웹 불변식은 최신 사슬 목록만 보장한다(kty (가)).
 func TestBlocksListSetWhenLedgerFloorExceedsLatestListAndClears(t *testing.T) {
 	clock := newTestClock()
 	rec := &logRecorder{}
