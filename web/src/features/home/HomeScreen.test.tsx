@@ -1157,6 +1157,11 @@ describe('HomeScreen', () => {
         pastRow('soon', new Date(Date.now() - 2 * DAY), { vodExpiresAt: inDays(2) }),
         pastRow('edge', new Date(Date.now() - 3 * DAY), { vodExpiresAt: inDays(3) }),
         pastRow('later', new Date(Date.now() - 4 * DAY), { vodExpiresAt: inDays(5) }),
+        // 녹화 없이 `ended`에 머문 방송 — 끝난 지 한참이라 「준비 중」이 아니고, 기한이 지나면 카드·채팅이 지워진다
+        pastRow('noRec', new Date(Date.now() - 58 * DAY), {
+          status: 'ended',
+          vodExpiresAt: inDays(2),
+        }),
       ],
     });
     renderWithProviders(<HomeScreen />);
@@ -1166,6 +1171,8 @@ describe('HomeScreen', () => {
     const tile = (title: string) => within(grid).getByText(title).closest('li')!;
     expect(within(tile('soon')).getByText('D-2 삭제')).toBeInTheDocument();
     expect(within(tile('edge')).getByText('D-3 삭제')).toBeInTheDocument();
+    expect(within(tile('noRec')).getByText('D-2 삭제')).toBeInTheDocument();
+    expect(within(tile('noRec')).queryByText('다시 보기 준비 중')).toBeNull();
     // 그보다 먼 기한은 홈이 말하지 않는다(옛 「D-5 · 곧 만료」)
     expect(tile('later')).not.toHaveTextContent(/D-\d/);
     expect(tile('later')).not.toHaveTextContent('곧 만료');

@@ -376,15 +376,14 @@ async function loadHome(
     let badge: VodBadge | undefined;
     // 지난 방송 목록과 같은 규칙: 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안만이다(POK-254). 그 뒤에는 녹화가 없어도
     // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다. D-n은 지난 방송 목록이 붉게 다는 경계(3일) 안에서만 단다 —
-    // 그보다 먼 기한은 홈이 말하지 않고 「60일 보관」 한 줄과 지난 방송 목록이 맡는다
+    // 그보다 먼 기한은 홈이 말하지 않고 「60일 보관」 한 줄과 지난 방송 목록이 맡는다. 녹화 없이 `ended`에 머문 방송도 단다 —
+    // 기한이 지나면 카드·채팅이 함께 지워지고, 지난 방송 목록도 행 상태와 상관없이 D-day를 단다
     const dday = ddayFor(b.vodExpiresAt, new Date(now));
     const expired = dday.kind === 'expired';
     if (expired) badge = { kind: 'expired' };
-    else if (b.status === 'ended') {
-      if (isJustEnded(b.endedAt, new Date(now))) badge = { kind: 'preparing' };
-    } else if (dday.kind === 'active' && dday.urgent) {
-      badge = { kind: 'dday', label: dday.label };
-    }
+    else if (b.status === 'ended' && isJustEnded(b.endedAt, new Date(now)))
+      badge = { kind: 'preparing' };
+    else if (dday.kind === 'active' && dday.urgent) badge = { kind: 'dday', label: dday.label };
     const duration =
       b.startedAt && b.endedAt
         ? msToClock(Date.parse(b.endedAt) - Date.parse(b.startedAt))
