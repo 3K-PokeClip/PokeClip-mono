@@ -572,6 +572,18 @@ run "accepts_edge_bounds_kvs_arn_in_other_partition" {
   }
 }
 
+# 파티션은 aws 와 「-」 로 이은 소문자 조각(aws-us-gov · aws-cn)뿐이다 — aws 뒤에
+# 바로 글자가 붙은 꼴은 파티션이 아니다.
+run "rejects_edge_bounds_kvs_arn_with_unknown_partition" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:awsfoo:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
 run "rejects_wildcard_edge_bounds_kvs_arn" {
   command = plan
 

@@ -155,8 +155,8 @@ RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
   ':::pokeclip-prod-profile-photos-apne2/?*'
   ':::pokeclip-prod-chat-archive-apne2'
   ':::pokeclip-prod-chat-archive-apne2/?*'
-  ':key-value-store/sample-edge-bounds-kvs'
-  ':key-value-store/sample-edge-bounds-kvs')
+  ':key-value-store/00000000-0000-0000-0000-0000000000e1'
+  ':key-value-store/00000000-0000-0000-0000-0000000000e1')
 readonly RUNTIME_ARN_TAILS
 # 값 넣기(put-secret-from-file.sh — 1단-다)의 직전 점검이 쓰는 runtime-1a
 # 묶음 행(동작 · 리전 · 자원 패턴 — 5 묶음의 같은 행과 같은 꼴).

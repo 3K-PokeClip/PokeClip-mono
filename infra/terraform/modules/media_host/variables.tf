@@ -523,8 +523,9 @@ variable "edge_bounds_kvs_arn" {
 
   # 전역 CloudFront KVS 하나 — 리전 빔 · 12자리 계정 · id 는 생성 때 정해지는
   # 소문자 UUID 다. 와일드카드 · 다른 자원 · 뒤 경로를 막는다(Resource 가 넓어짐).
+  # 파티션은 aws 와 「-」 로 이은 소문자 조각(aws-us-gov · aws-cn)뿐이다.
   validation {
-    condition     = can(regex("^arn:aws[a-z-]*:cloudfront::[0-9]{12}:key-value-store/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.edge_bounds_kvs_arn))
+    condition     = can(regex("^arn:aws(-[a-z]+)*:cloudfront::[0-9]{12}:key-value-store/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.edge_bounds_kvs_arn))
     error_message = "edge_bounds_kvs_arn 은 CloudFront KVS ARN(arn:<파티션>:cloudfront::<12자리 계정>:key-value-store/<소문자 UUID>)이어야 한다."
   }
 }

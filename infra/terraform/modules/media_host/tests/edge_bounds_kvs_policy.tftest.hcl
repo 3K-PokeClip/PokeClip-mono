@@ -6,8 +6,15 @@
 # 모두에 override_resource 를 더한다(빠지면 apply 가 가짜 자격으로 AWS 를 불러
 # 실패한다).
 #
-# 두 run 의 assert 넷은 일부러 같다 — Writer 스위치가 IAM 을 바꾸지 않는다는
+# 두 run 의 assert 다섯은 일부러 같다 — Writer 스위치가 IAM 을 바꾸지 않는다는
 # 것을 두 상태에서 본다(run 끼리 식을 나눌 수단이 없다 — 같은 머리 주석).
+#
+# 크기 assert 의 한도는 IAM 할당량이다 — 역할 하나의 인라인 정책 합은
+# 10,240자를 넘을 수 없고 공백은 세지 않는다(「IAM and AWS STS quotas」
+# https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html
+# 대조 2026-11-04). 이 역할의 인라인 정책은 aws_iam_role_policy.media 하나다
+# (관리형 붙임은 따로 센다). 값은 아래 가짜 입력으로 낸 정책이다 — 실제 입력
+# (비밀 ARN 목록 등)이 길면 그만큼 커진다.
 #
 # 계정 ID · ARN · id 는 모두 가짜 값이다.
 
@@ -197,6 +204,12 @@ run "edge_bounds_statement_in_policy_json_writer_off" {
     condition     = length(flatten([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : [for action in flatten([statement.Action]) : action if startswith(action, "cloudfront:")]])) == 0
     error_message = "정책 JSON 에 CloudFront 제어면 동작이 있다 — 상자는 KVS 그릇을 만들거나 바꾸지 않는다."
   }
+
+  # 문을 더해도 역할 인라인 정책 한도(10,240자 · 공백은 세지 않음) 밑이다.
+  assert {
+    condition     = length(replace(aws_iam_role_policy.media.policy, "/\\s/", "")) < 10240
+    error_message = "정책 JSON(공백 뺌)이 10240자 미만이 아니다 — 역할 인라인 정책 한도를 넘는다."
+  }
 }
 
 # Writer 켬 — IAM 은 끔과 같다(바뀌는 것은 사이드카 env 하나).
@@ -229,5 +242,11 @@ run "edge_bounds_statement_in_policy_json_writer_on" {
   assert {
     condition     = length(flatten([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : [for action in flatten([statement.Action]) : action if startswith(action, "cloudfront:")]])) == 0
     error_message = "정책 JSON 에 CloudFront 제어면 동작이 있다 — 상자는 KVS 그릇을 만들거나 바꾸지 않는다."
+  }
+
+  # 문을 더해도 역할 인라인 정책 한도(10,240자 · 공백은 세지 않음) 밑이다.
+  assert {
+    condition     = length(replace(aws_iam_role_policy.media.policy, "/\\s/", "")) < 10240
+    error_message = "정책 JSON(공백 뺌)이 10240자 미만이 아니다 — 역할 인라인 정책 한도를 넘는다."
   }
 }
