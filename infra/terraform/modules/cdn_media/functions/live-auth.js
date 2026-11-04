@@ -5,6 +5,14 @@
  * Authorization 은 원본에 닿지 않는다. 값을 못 얻으면(KVS 예외 · 키 없음 ·
  * 빈 값) 원본으로 넘기지 않고 503 을 낸다(fail-closed). 로그에는 값을 남기지
  * 않고 고정 문자열만 남긴다.
+ *
+ * 그보다 먼저 경로 조작 표지가 있는 요청을 403 으로 거절한다. KVS 를 읽기
+ * 전이라 KVS 장애 때도 나쁜 경로는 403 이고, 거절 갈래는 비밀 값에 닿지
+ * 않는다. CloudFront 가 함수에 원문 경로를 주는지 정규화본을 주는지는
+ * 미확정이다(G1 · POK-548). 그래서 원문이면 모든 표지로 막고, 정규화본이면
+ * 정규화 뒤에도 남는 표지(`%` · 역슬래시)로 막는다. 정규화로 사라진 점 구간
+ * · 빈 구간은 함수가 보지 못한다. `event.request.uri` 에는 쿼리가 없어 쿼리는
+ * 검사하지 않는다.
  */
 
 import cf from 'cloudfront';
@@ -18,11 +26,18 @@ const CDN_SECRET_KEY = 'cdn-secret';
 /** 값을 못 얻었을 때 남기는 고정 문자열(경보 · 시험 T6b 가 찾는다). */
 const UNAVAILABLE_LOG = 'CDN SECRET UNAVAILABLE';
 
+/** 경로를 거절할 때 남기는 고정 문자열(경보 · 시험 T2 가 찾는다). */
+const PATH_DENY_LOG = 'LIVE PATH DENY';
+
 /**
  * @param {!Object} event CloudFront Functions viewer-request 이벤트.
- * @return {!Promise<!Object>} Bearer 를 붙인 요청 또는 503 응답.
+ * @return {!Promise<!Object>} Bearer 를 붙인 요청 또는 403 · 503 응답.
  */
 async function handler(event) {
+  const request = event.request;
+  if (hasUnsafePath(request.uri)) {
+    return forbidden();
+  }
   let secret;
   try {
     secret = await kvs.get(CDN_SECRET_KEY);
@@ -32,7 +47,6 @@ async function handler(event) {
   if (!secret) {
     return unavailable();
   }
-  const request = event.request;
   // 중복 헤더의 multiValue 가 남지 않게 객체를 통째로 바꾼다.
   request.headers.authorization = {value: `Bearer ${secret}`};
   return request;
@@ -45,4 +59,36 @@ async function handler(event) {
 function unavailable() {
   console.log(UNAVAILABLE_LOG);
   return {statusCode: 503, statusDescription: 'Service Unavailable'};
+}
+
+/**
+ * 경로 조작 표지가 있는지 본다. 정상 /live 경로(스트림 ID [A-Za-z0-9_-] ·
+ * gohlslib 파일 이름)에는 `%` 가 없으므로 이스케이프는 종류 · 대소문자를
+ * 가리지 않고 모두 표지로 본다.
+ * @param {string} uri 쿼리 없는 요청 경로.
+ * @return {boolean} `%` · 역슬래시 · 빈 구간(`//`) · 점 구간(`.` · `..`)
+ *     가운데 하나라도 있으면 참.
+ */
+function hasUnsafePath(uri) {
+  if (uri.indexOf('%') !== -1 || uri.indexOf('\\') !== -1 ||
+      uri.indexOf('//') !== -1) {
+    return true;
+  }
+  // 런타임 2.0 문장 목록에 for-of 가 없어 인덱스로 돈다.
+  const segments = uri.split('/');
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i] === '.' || segments[i] === '..') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 고정 문자열을 남기고 원본으로 넘기지 않는 본문 없는 403 응답을 만든다.
+ * @return {!Object}
+ */
+function forbidden() {
+  console.log(PATH_DENY_LOG);
+  return {statusCode: 403, statusDescription: 'Forbidden'};
 }
