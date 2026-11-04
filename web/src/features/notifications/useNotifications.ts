@@ -170,10 +170,12 @@ export function useRespondInvitation(state: NotificationsState) {
  * - 지금 채널이 아직 안 섰으면(새로고침 직후 참여 목록을 읽는 중) 저장된 선택으로 판단한다: 내 채널로 치면 전환을 건너뛰었다가
  *   목록이 선 뒤 남의 채널로 서서 내 채널 전용 화면이 막힌다(PR #481 리뷰).
  * - 전환에 갈 주소를 같이 싣는다: 방송에 묶인 화면에서 바꾸면 ChannelScope가 떠나는데, 홈이 아니라 그 주소로 가게 한다.
- * - 받아 둔 참여 목록에 그 채널이 없으면 한 번 새로 받아 다시 본다: 다른 기기에서 막 수락한 채널은 이 탭의 목록(staleTime
- *   60초)에 아직 없다. 새로 받아도 없으면(위임이 끊김) 가지 않고 알린다 — 채널 화면(라이브 · 보관함 · 다시보기)은 지금 채널
- *   기준이라, 바꾸지 않고 가면 엉뚱한 채널의 것이 뜬다(PR #481 3차). 목록을 못 받았으면(아직 안 옴 · 다시 받기 실패) 알림의
- *   채널 정보로 바꾼다 — 정말 끊겼으면 ChannelScope가 내 채널로 되돌리며 알린다.
+ * - 내 채널 알림인데 저장된 선택이 남의 채널이면(참여 목록 첫 읽기가 실패해 내 채널로 풀려 보이는 상태) 내 채널로 바꾼 뒤
+ *   간다: 그냥 가면 목록이 나중에 읽혀 남의 채널로 돌아가 내 채널 전용 화면(채널 연동)이 막힌다(PR #481 4차).
+ * - 남의 채널은 참여 목록에서 확인된 때만 바꾼다. 받아 둔 목록에 없거나 아직 없으면 새로 받아 본다: 다른 기기에서 막 수락한
+ *   채널은 이 탭의 목록(staleTime 60초)에 아직 없다. 새로 받아도 없으면(위임이 끊김) · 받지 못했으면 가지 않고 알린다 —
+ *   확인 못 한 채널로 바꾸면 useActiveChannel이 내 채널로 풀고, 채널 화면(라이브 · 보관함 · 다시보기)은 지금 채널 기준이라
+ *   엉뚱한 채널의 것이 뜬다(PR #481 3 · 4차).
  */
 export function useGoToNotification() {
   const router = useRouter();
@@ -188,35 +190,45 @@ export function useGoToNotification() {
       return;
     }
     const store = useChannelStore.getState();
-    const current = active.ready
-      ? active.streamerId
-      : store.userId === me.id
-        ? (store.selected ?? me.id)
-        : me.id;
+    // 이 회원으로 저장된 남의 채널 선택(없으면 null) — 내 채널로 풀려 보여도 남아 있을 수 있다. 끊긴 것으로 판정된
+    // 선택(gone)은 ChannelScope가 곧 지우며 알리므로 남은 선택으로 치지 않는다
+    const gone = active.ready && active.gone;
+    const saved =
+      store.userId === me.id && store.selected !== me.id && !gone ? store.selected : null;
+    const current = active.ready ? active.streamerId : (saved ?? me.id);
+    const go = { destination: href, onSwitched: () => router.push(href) };
+    if (n.channel.id === me.id) {
+      if (current === me.id && saved === null) router.push(href);
+      else switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' }, go);
+      return;
+    }
     if (n.channel.id === current) {
       router.push(href);
       return;
     }
-    const go = { destination: href, onSwitched: () => router.push(href) };
-    if (n.channel.id === me.id) {
-      switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' }, go);
-      return;
-    }
     const find = (list: StreamerDelegation[] | null | undefined) =>
       list?.find((d) => d.streamerId === n.channel.id);
-    const cached = queryClient.getQueryData<StreamerDelegation[]>(
-      delegationsAsEditorQueryOptions.queryKey,
+    let target = find(
+      queryClient.getQueryData<StreamerDelegation[]>(delegationsAsEditorQueryOptions.queryKey),
     );
-    let target = find(cached);
-    if (cached && !target) {
+    if (!target) {
       const isSameSession = captureSession();
       const fresh = await queryClient
         .fetchQuery({ ...delegationsAsEditorQueryOptions, staleTime: 0 })
         .catch(() => null);
       // 기다리는 사이 계정이 바뀌었으면 앞 계정의 알림으로 움직이지 않는다
       if (!isSameSession()) return;
+      if (fresh === null) {
+        toast({
+          tone: 'error',
+          title: '채널 정보를 확인하지 못했어요',
+          description: '잠시 뒤 다시 눌러 주세요',
+          dedupeKey: 'notification-channel-unknown',
+        });
+        return;
+      }
       target = find(fresh);
-      if (fresh && !target) {
+      if (!target) {
         toast({
           tone: 'warning',
           title: `${n.channel.name} 채널의 편집 권한이 없어요`,
@@ -229,9 +241,9 @@ export function useGoToNotification() {
     switchTo(
       {
         streamerId: n.channel.id,
-        name: target?.streamerName ?? n.channel.name,
+        name: target.streamerName,
         relation: 'EDITOR',
-        photo: target?.streamerProfileImageUrl ?? null,
+        photo: target.streamerProfileImageUrl,
       },
       go,
     );

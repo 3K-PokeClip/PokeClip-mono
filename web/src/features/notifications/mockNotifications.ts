@@ -85,7 +85,10 @@ interface MockStore {
 let store: MockStore | null = null;
 
 const MIN = 60_000;
-/** 편집을 맡은 남의 채널(가짜) — 참여 채널 목록에 없어서 눌러도 채널을 바꾸지 않고 화면만 옮긴다 */
+/**
+ * 편집을 맡은 남의 채널(가짜). 참여 채널 목록에 없어서, 누르면 목록을 새로 받아 보고 그래도 없으니 「라면왕 채널의 편집 권한이
+ * 없어요」만 알리고 이동하지 않는다(useGoToNotification). 그 채널로 바꿔 가는 흐름은 NotificationBell 시험이 본다
+ */
 const OTHER_CHANNEL = { id: -540, name: '라면왕' };
 
 function make(
