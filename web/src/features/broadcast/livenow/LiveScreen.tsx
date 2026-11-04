@@ -135,6 +135,13 @@ function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
   return kind === 'pending' || kind === 'found';
 }
 
+/** 지난 방송 정보 바의 방송한 날짜 — 「2026.10.20」(이 기기 시간대) */
+export function broadcastDateLabel(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
+}
+
 /**
  * 출입증을 이 간격으로 다시 본다. 받아 둔 것이 쓸 만하면 요청이 없고(만료 5분 전에 새로 받는 것은 playbackAccess가 정한다), 실패했거나
  * 쿠키가 지워져(403) 버려졌으면 이 간격 안에 다시 받는다
@@ -639,14 +646,18 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     lockWord === null &&
     (viewStatus === 'live' || viewStatus === 'unknown') &&
     !infoWaitOver(clock.startedAt ?? firstSeen.at, Date.now());
-  const viewersLabel =
-    v === null
+  // 끝난 방송은 시청자 수 대신 방송한 날짜다(2026-11-04 사용자 결정: 「끝날 때 N명 시청」 → 「2026.10.20」). 시청자 수는 통계의 평균 ·
+  // 최고가 말한다. 시작 시각을 모르면 끝난 날, 둘 다 모르면(명부 답 전) 확인 중이다
+  const broadcastDay = clock.startedAt ?? clock.endedAt;
+  const viewersLabel = ended
+    ? broadcastDay === null
+      ? '날짜 확인 중'
+      : broadcastDateLabel(broadcastDay)
+    : v === null
       ? infoPending
         ? ''
         : `시청자 수 ${lockWord ?? stats.noViewers}`
-      : ended
-        ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
-        : `${v.toLocaleString('ko-KR')}명 시청 중`;
+      : `${v.toLocaleString('ko-KR')}명 시청 중`;
 
   // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다. 라이브는 경과의 1% 단위로 묶는다
   // (cardPositionUptime): 그대로 넘기면 카드 전부가 매초 다시 그려진다

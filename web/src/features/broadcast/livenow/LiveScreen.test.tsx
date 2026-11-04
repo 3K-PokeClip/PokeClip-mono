@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { forgetBroadcastRows } from '@/api/clipEditor';
 import { reportPlaybackForbidden, forgetPlaybackAccess } from '@/api/playbackAccess';
-import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
+import { LiveScreen, broadcastDateLabel } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
 import { CHAT_PAGE_MAX, LIVE_REREAD_MS } from '@/features/broadcast/livenow/chatCollector';
 import { LINK_RECHECK_MS } from '@/features/broadcast/livenow/linkLock';
@@ -4620,7 +4620,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
       events: vodCalls('events'),
     };
     expect(before.chart).toBeGreaterThan(0);
-    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('1,884');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(125_000);
@@ -4763,13 +4763,14 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(screen.getByText(/분당 평균 48\.0$/)).toBeInTheDocument();
   });
 
-  it('끝난 방송의 시청자 수는 비어 있는 마지막 관측이 아니라 마지막으로 잰 값이다', async () => {
-    // 수집기는 목록에서 채널을 못 찾은 회차를 빈 값으로 남긴다. 그 값으로 「기록 없음」이라 하면 통계와 모순이다
+  it('끝난 방송의 시청자 수는 비어 있는 마지막 관측을 빼고 센다', async () => {
+    // 수집기는 목록에서 채널을 못 찾은 회차를 빈 값으로 남긴다. 그 값으로 「기록 없음」이라 하면 통계와 모순이다.
+    // 평균은 잰 두 값(1,500 · 2,310)이다
     server.infoLastNull = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('끝날 때 2,310명 시청').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('1,905');
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
   });
 
@@ -4778,7 +4779,9 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
+    expect(
+      within(screen.getByRole('region', { name: '방송 정보' })).queryByText(/시청자 수/),
+    ).toBeNull();
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
     // 태그 자리도 같다: 받기 전이다(「수집 전」은 앞으로 모으겠다는 라이브 말이다, 리뷰 4라운드)
     expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
@@ -4853,12 +4856,14 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(statValue('평균 시청자')).toHaveTextContent('확인 중');
   });
 
-  it('시청자 기록이 전부 빈 지난 방송은 정보 바와 통계가 같은 말이다: 「기록 없음」', async () => {
+  it('시청자 기록이 전부 빈 지난 방송은 통계가 「기록 없음」이다: 정보 바는 시청자 수 대신 방송한 날짜다', async () => {
     server.infoNoViewers = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('시청자 수 기록 없음').length).toBeGreaterThan(0);
+    expect(
+      within(screen.getByRole('region', { name: '방송 정보' })).queryByText(/시청자 수/),
+    ).toBeNull();
     expect(screen.queryByText('수집 전')).toBeNull();
     expect(statValue('평균 시청자')).toHaveTextContent('기록 없음');
   });
@@ -4870,7 +4875,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('확인 중');
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
   });
 
@@ -4895,7 +4900,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('확인 중');
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
     const vodCalls = (part: string) =>
       fetchSpy.mock.calls
@@ -4920,7 +4925,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
       release();
     });
     await settle();
-    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('1,884');
   });
 
   it('명부 답 전에 보낸 옛 창의 답이 늦게 와도 끝난 방송의 시청자 수를 덮지 않는다', async () => {
@@ -4933,14 +4938,14 @@ describe('LiveScreen — 지난 방송 상세', () => {
     nav.search = `?stream=${VOD_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
     await renderLive();
-    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('1,884');
 
     await act(async () => {
       releaseInfo();
     });
     await settle();
 
-    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('1,884');
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
   });
 
@@ -4976,7 +4981,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
       .map((u) => u.searchParams.get('since'));
     // 명부 답 전에는 제목·카테고리를 위해 최근 창으로도 읽는다(그 시청자 기록은 끝난 방송의 것으로 보지 않는다)
     expect(sinces).toContain(new Date(VOD_ENDED - 12 * 3_600_000).toISOString());
-    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
+    expect(statValue('평균 시청자')).toHaveTextContent('1,884');
   });
 
   it('명부 답을 받기 전에도 지난 방송 주소면 지난 방송 문구다: 조회가 늦거나 실패해도 「실시간」이라 하지 않는다', async () => {
@@ -4989,12 +4994,20 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(screen.queryByText(/자동 감지 중/)).toBeNull();
   });
 
-  it('끝난 방송의 시청자 수는 「시청 중」이 아니라 끝날 때 값이다', async () => {
+  it('끝난 방송의 정보 바는 시청자 수가 아니라 방송한 날짜다: 시청자 수는 통계가 말한다', async () => {
+    // 「끝날 때 N명 시청」은 며칠 전 방송의 끝 무렵 숫자라 쓸모가 적었다(2026-11-04 사용자 결정)
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/명 시청 중/)).toBeNull();
+    const bar = screen.getByRole('region', { name: '방송 정보' });
+    expect(within(bar).getByText(broadcastDateLabel(VOD_STARTED))).toBeInTheDocument();
+    expect(within(bar).queryByText(/명 시청/)).toBeNull();
+    expect(statValue('평균 시청자')).toHaveTextContent('1,884');
+  });
+
+  it('방송한 날짜는 2026.10.20 꼴이다(월 · 일 두 자리)', () => {
+    expect(broadcastDateLabel(new Date(2026, 9, 20, 23, 59).getTime())).toBe('2026.10.20');
+    expect(broadcastDateLabel(new Date(2026, 0, 5, 0, 0).getTime())).toBe('2026.01.05');
   });
 
   it('방송 전체를 읽은 그래프의 채팅 수는 「최근 N분」이 아니다', async () => {

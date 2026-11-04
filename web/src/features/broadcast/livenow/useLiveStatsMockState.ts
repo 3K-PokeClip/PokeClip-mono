@@ -131,7 +131,7 @@ export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockS
           }
         : { label: '분당 평균 채팅', value: '확인 중', sub: null, muted: true };
 
-    // 라이브는 지금 값(정보 바 「N명 시청 중」과 같은 수), 끝난 방송은 평균이다: 끝날 때 값은 정보 바가 말한다
+    // 라이브는 지금 값(정보 바 「N명 시청 중」과 같은 수), 끝난 방송은 평균이다(정보 바는 끝난 방송에 시청자 수 대신 방송한 날짜를 쓴다)
     const ended = view === 'ended';
     const headline = ended ? avg : lastViewers;
     const viewerCell: StatsCell = {
