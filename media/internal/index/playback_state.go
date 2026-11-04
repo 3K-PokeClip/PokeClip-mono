@@ -12,7 +12,7 @@ type PlaybackPhase int
 const (
 	PhaseUnknown PlaybackPhase = iota + 1 // 장부에 없음 · 만료로 조회 제외
 	PhaseLive                             // LookupRoundPlayback 전용 — 그 회차에 live 세션 있음
-	PhaseEnding                           // 회차 완결 전(닫힘 전 · 닫힘 뒤 정산 · VOD 동결 중)
+	PhaseEnding                           // 회차 완결 전(닫힘 전 · 닫힘 뒤 정산 · VOD 동결 중) · /dvr 하한 해제 전 · 해제 뒤 유예 중
 	PhaseVOD                              // 회차 완결 · 꼬리 사슬 VOD 문서 있음
 	PhaseEnded                            // 회차 완결 · VOD 없음(freeze_failed · 빈 동결)
 )

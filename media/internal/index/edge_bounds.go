@@ -18,7 +18,11 @@ import (
 // 내장 함수는 pg_catalog 로 한정한다(search_path 가로채기, media/README.md). 비교 연산자는 text · bigint ·
 // timestamptz 라 pg_catalog 에 정확한 판이 있다. 배열 여럿을 나란히 펴는 것은 ROWS FROM 에 한 인자 unnest 를 늘어놓는다
 // (rewind_read.go 와 같은 꼴) — 여러 인자 unnest 는 FROM 의 한정하지 않은 이름에서만 풀리는 문법이라 pg_catalog 로
-// 한정하면 42883 이고, 한정하지 않으면 public 에 심은 unnest(text[]) 가 다형 판보다 먼저 골린다.
+// 한정하면 42883 이다. 한정하지 않으면 PG 가 그것을 한정하지 않은 한 인자 호출 여럿으로 풀고, 가로채기는 그 한 인자
+// 호출에서 생긴다 — public 에 심은 unnest(text[]) 가 다형 판 unnest(anyarray) 보다 먼저 골린다. 나란히 펴는 배열은 길이가
+// 같아야 한다 — ROWS FROM 은 짧은 쪽을 NULL 로 채운다. 하한 값이 NULL 이면 NOT NULL 위반(23502)으로 묶음 전체가
+// 실패하고(충돌 행도 — 제안 행을 먼저 검사한다), 열쇠가 NULL 이면 열린 회차 · 원장 행 조인에 걸리지 않아 조용히 빠진다.
+// Raise · MarkReleased 는 배열을 한 루프에서 함께 채운다.
 
 // raiseSQL ($1 stream_id[] · $2 round_id[] · $3 dvr_floor[]) — 열린 회차만 · 해제된 행은 건드리지 않음 · 잠금 순서 고정.
 const raiseSQL = `
@@ -47,12 +51,20 @@ SELECT b.stream_id, b.round_id, b.dvr_floor
  ORDER BY b.stream_id, b.round_id
  LIMIT $1`
 
-// markReleasedSQL ($1 stream_id[] · $2 round_id[])
+// markReleasedSQL ($1 stream_id[] · $2 round_id[]) — 잠금 순서 고정. 바깥 UPDATE 의 조인은 행을 잡는 순서를 정하지
+// 않으므로(입력 순서 · 표의 물리 순서 · 해시 조인), 안쪽 질의가 (stream, round) 순으로 먼저 잠근다 — ORDER BY 뒤에
+// FOR UPDATE 가 돈다. 두 상자의 Writer 가 겹치는 행을 다른 순서로 넘겨도 한쪽이 줄을 설 뿐 교착(40P01)은 없다.
 const markReleasedSQL = `
 UPDATE stream_edge_bounds b
    SET released_at = pg_catalog.now(), updated_at = pg_catalog.now()
-  FROM ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::text[])) AS u(stream_id, round_id)
- WHERE b.stream_id = u.stream_id AND b.round_id = u.round_id AND b.released_at IS NULL`
+  FROM (SELECT t.stream_id, t.round_id
+          FROM stream_edge_bounds t
+          JOIN ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::text[])) AS u(stream_id, round_id)
+            ON t.stream_id = u.stream_id AND t.round_id = u.round_id
+         WHERE t.released_at IS NULL
+         ORDER BY t.stream_id, t.round_id
+           FOR UPDATE OF t) k
+ WHERE b.stream_id = k.stream_id AND b.round_id = k.round_id AND b.released_at IS NULL`
 
 // deleteReleasedSQL ($1 초)
 const deleteReleasedSQL = `

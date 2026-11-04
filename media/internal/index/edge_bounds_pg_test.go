@@ -8,17 +8,18 @@ package index
 //	문장                   메서드              표 · 동작
 //	raiseSQL               Raise               edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT(RETURNING) · sessions SELECT
 //	closedUnreleasedSQL    ClosedUnreleased    edge_bounds · sessions SELECT
-//	markReleasedSQL        MarkReleased        edge_bounds UPDATE(+ SELECT)
+//	markReleasedSQL        MarkReleased        edge_bounds SELECT FOR UPDATE · UPDATE
 //	deleteReleasedSQL      DeleteReleased      edge_bounds DELETE(+ SELECT)
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
@@ -296,50 +297,160 @@ func TestEdgeBoundsLedgerDeleteReleasedRejectsNegativeAge(t *testing.T) {
 }
 
 // E4 동시성 몫 — 두 연결(상자 둘의 Writer)이 같은 회차들을 서로 반대 순서로 동시에 올려도 교착(40P01) 없이 끝나고,
-// 원장 값은 둘이 보낸 값의 최댓값이다. 잠금 순서는 문장의 ORDER BY 가 고정한다.
+// 원장 값은 둘이 보낸 값의 최댓값이다. 경합은 운에 맡기지 않는다 — 세 번째 연결이 가운데 행(R10)을 쥔 채(시작 장벽) 앞
+// Writer 가 R00–R09 를 잡고 R10 에서 줄을 선 것을 본 뒤 뒤 Writer 를 보내고, 뒤 Writer 도 줄을 선 것을 본 뒤 놓는다.
+// 잠금 순서가 고정이면 뒤 Writer 는 R00 에서 앞 Writer 를 기다리다 앞 Writer 가 커밋한 값 위에서 돈다. 변이 = GREATEST
+// 제거 → 뒤 Writer 의 작은 값이 남아 FAIL · 문장의 ORDER BY 제거 → 뒤 Writer 가 R19–R11 을 쥐고 R10 에서 앞 Writer 와
+// 서로 기다려 40P01 로 FAIL.
 func TestEdgeBoundsLedgerConcurrentRaiseConverges(t *testing.T) {
 	pool := edgeBoundsPool(t)
-	const rounds, iterations = 20, 30
-	var forward []edgebounds.Floor
+	ctx := context.Background()
+	const rounds = 20
+	var first, second, seed []edgebounds.Floor
 	for i := range rounds {
 		r := fmt.Sprintf("R%02d", i)
 		plantOpenRound(t, pool, "s"+r, r)
-		forward = append(forward, edgebounds.Floor{StreamID: "s" + r, RoundID: r})
+		// 짝수 회차는 앞 Writer 가, 홀수 회차는 뒤 Writer 가 큰 값을 보낸다 — 어느 쪽이 덮어써도 틀린 회차가 남는다.
+		big, small := int64(100+i), int64(10+i)
+		if i%2 == 1 {
+			big, small = small, big
+		}
+		first = append(first, edgebounds.Floor{StreamID: "s" + r, RoundID: r, Value: big})
+		second = append(second, edgebounds.Floor{StreamID: "s" + r, RoundID: r, Value: small})
+		seed = append(seed, edgebounds.Floor{StreamID: "s" + r, RoundID: r, Value: 1})
 	}
-	writers := []*EdgeBoundsLedger{NewEdgeBoundsLedger(pool), NewEdgeBoundsLedger(pool)}
-	var wg sync.WaitGroup
-	errs := make(chan error, len(writers)*iterations)
-	for w, l := range writers {
-		wg.Add(1)
+	if _, err := NewEdgeBoundsLedger(pool).Raise(ctx, seed); err != nil {
+		t.Fatalf("행 심기 Raise 오류 = %v", err)
+	}
+	firstPool, firstPID := singleConnPool(t, pool)
+	secondPool, secondPID := singleConnPool(t, pool)
+	holder := holdEdgeBoundsRows(t, pool, "sR10")
+	errs := make(chan error, 2)
+	raise := func(p *pgxpool.Pool, rows []edgebounds.Floor) {
 		go func() {
-			defer wg.Done()
-			for it := range iterations {
-				batch := make([]edgebounds.Floor, 0, rounds)
-				for i, f := range forward {
-					f.Value = int64(1 + it*rounds + (i+w*7)%rounds)
-					batch = append(batch, f)
-				}
-				if w == 1 {
-					slices.Reverse(batch)
-				}
-				if _, err := l.Raise(context.Background(), batch); err != nil {
-					errs <- err
-				}
-			}
+			_, err := NewEdgeBoundsLedger(p).Raise(ctx, rows)
+			errs <- err
 		}()
 	}
-	wg.Wait()
-	close(errs)
 
-	for err := range errs {
-		t.Errorf("동시 Raise 오류 = %v, want nil", err)
+	raise(firstPool, first)
+	waitLockWait(t, pool, firstPID)
+	reversed := slices.Clone(second)
+	slices.Reverse(reversed)
+	raise(secondPool, reversed)
+	waitLockWait(t, pool, secondPID)
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("시작 장벽 풀기 실패: %v", err)
 	}
-	last := iterations - 1
-	for i, f := range forward {
-		want := int64(1 + last*rounds + max(i%rounds, (i+7)%rounds))
+
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("동시 Raise 오류 = %v, want nil", err)
+		}
+	}
+	for i, f := range first {
+		want := max(f.Value, second[i].Value)
 		if got, _, _ := edgeBoundsRow(t, pool, f.StreamID, f.RoundID); got != want {
 			t.Errorf("%s 원장 값 = %d, want %d(두 Writer 의 최댓값)", f.RoundID, got, want)
 		}
+	}
+}
+
+// 해제 기록도 행 잠금을 (stream, round) 순으로 잡는다 — 두 상자의 Writer 가 겹치는 행을 다른 순서로 넘겨도 교착이 없다.
+// 앞 열쇠(a)를 뒤 열쇠(z) 뒤에 넘기고 물리 순서도 z 먼저로 심어, 입력 순서 · 표 순서 어느 쪽을 따라도 z 를 먼저 잡게
+// 해 둔다. z 를 다른 연결이 쥐었을 때 MarkReleased 가 기다리는 동안 a 는 이미 잠겨 있어야 한다(NOWAIT 이 55P03).
+// 변이 = 문장의 ORDER BY … FOR UPDATE 제거 → z 에서 먼저 멈춰 a 가 비어 FAIL.
+func TestEdgeBoundsLedgerMarkReleasedLocksInKeyOrder(t *testing.T) {
+	pool := edgeBoundsPool(t)
+	ctx := context.Background()
+	l := NewEdgeBoundsLedger(pool)
+	a := edgebounds.Floor{StreamID: "a", RoundID: "Ra", Value: 1}
+	z := edgebounds.Floor{StreamID: "z", RoundID: "Rz", Value: 1}
+	for _, f := range []edgebounds.Floor{z, a} {
+		plantOpenRound(t, pool, f.StreamID, f.RoundID)
+		if _, err := l.Raise(ctx, floors(f)); err != nil {
+			t.Fatalf("%s Raise 오류 = %v", f.StreamID, err)
+		}
+	}
+	writer, writerPID := singleConnPool(t, pool)
+	holder := holdEdgeBoundsRows(t, pool, "z")
+	done := make(chan error, 1)
+	go func() { done <- NewEdgeBoundsLedger(writer).MarkReleased(ctx, floors(z, a)) }()
+	waitLockWait(t, pool, writerPID)
+
+	_, err := pool.Exec(ctx, `SELECT 1 FROM stream_edge_bounds WHERE stream_id = 'a' FOR UPDATE NOWAIT`)
+
+	if !isSQLState(err, pgLockNotAvailable) {
+		t.Errorf("z 를 기다리는 MarkReleased 옆에서 a 의 NOWAIT 잠금 오류 = %v, want 55P03(a 를 먼저 잡았다)", err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("z 잠금 풀기 실패: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("MarkReleased 오류 = %v, want nil", err)
+	}
+	for _, f := range []edgebounds.Floor{a, z} {
+		if _, released, ok := edgeBoundsRow(t, pool, f.StreamID, f.RoundID); !ok || released == nil {
+			t.Errorf("%s 해제 시각 = %v (행 있음 %t), want 적힘", f.StreamID, released, ok)
+		}
+	}
+}
+
+// singleConnPool 은 pool 과 같은 DB 의 연결 하나짜리 풀(상자 하나의 Writer 연결)과 그 연결의 백엔드 pid 다.
+func singleConnPool(t *testing.T, pool *pgxpool.Pool) (*pgxpool.Pool, int32) {
+	t.Helper()
+	ctx := context.Background()
+	cfg := pool.Config()
+	cfg.MinConns, cfg.MaxConns = 0, 1
+	p, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("연결 하나짜리 풀 만들기 실패: %v", err)
+	}
+	t.Cleanup(p.Close)
+	var pid int32
+	if err := p.QueryRow(ctx, "SELECT pg_catalog.pg_backend_pid()").Scan(&pid); err != nil {
+		t.Fatalf("백엔드 pid 조회 실패: %v", err)
+	}
+	return p, pid
+}
+
+// holdEdgeBoundsRows 는 streams 의 원장 행을 FOR UPDATE 로 쥔 트랜잭션이다 — 커밋할 때까지 그 행을 건드리는 문장은
+// 줄을 선다. 시험이 커밋하지 않고 끝나면 되돌린다.
+func holdEdgeBoundsRows(t *testing.T, pool *pgxpool.Pool, streams ...string) pgx.Tx {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("잠금 트랜잭션 시작 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("잠금 트랜잭션 되돌리기 실패: %v", err)
+		}
+	})
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM stream_edge_bounds WHERE stream_id = ANY($1) FOR UPDATE`, streams); err != nil {
+		t.Fatalf("원장 행 잠금 실패: %v", err)
+	}
+	return tx
+}
+
+// waitLockWait 는 백엔드 pid 가 잠금을 기다리기 시작할 때까지 기다린다(5초).
+func waitLockWait(t *testing.T, pool *pgxpool.Pool, pid int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err := pool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity
+			WHERE pid = $1 AND wait_event_type = 'Lock')`, pid).Scan(&waiting); err != nil {
+			t.Fatalf("잠금 대기 조회 실패: %v", err)
+		}
+		if waiting {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("백엔드 %d 가 5초 안에 잠금 대기에 들지 않았다", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

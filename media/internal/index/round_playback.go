@@ -3,6 +3,10 @@ package index
 // 회차 상태 읽기 셋(POK-196 M6-3a · 설계 M6 2.2 판정식 · 경계 확정 2 · 3 · 4). 세 함수는 대상 회차를 고르는 앞머리만
 // 다르고 판정식(playbackVerdictSQL)은 한 글자다 — 그래서 회차 하나 · 스트림 최신 회차 · 기동 적재가 같은 회차에 같은
 // 값을 낸다. 판정은 한 SQL 문장이다(READ COMMITTED 에서 스냅숏 하나 — 두 문장으로 나누면 그 사이 커밋이 섞인다).
+//
+// 세 읽기는 부르는 계정에 stream_edge_bounds SELECT 가 있어야 한다(판정식의 원장 줄 — 운영에서는 media_indexer 에만
+// 준다). PG 는 실행 시작 때 문장 전체의 표 권한을 보므로, 그 권한이 없는 계정(app_clip 등)으로 부르면 원장이 비어 있어도
+// 세 읽기 모두 42501 이다. 다른 계정에 이 읽기를 다시 쓰려면 그 권한부터 준다.
 
 import (
 	"context"
@@ -139,6 +143,9 @@ func LoadStreamPlayback(ctx context.Context, pool *pgxpool.Pool, streamID string
 // LoadPlaybackStates 는 기동 때 한 번이다(경계 확정 3). 판정은 LoadStreamPlayback 과 같다. Ending · VOD · Ended 만 내고,
 // within 은 완결 값(VOD · Ended)에만 건다 — 완결 안 된 회차의 Ending 에는 걸지 않는다(오프라인 종료 뒤 회차 닫힘은 360초
 // 뒤라, 그 앞에 재기동하면 부팅 캐시와 적재 둘 다에서 빠지기 때문이다 — D67). live · Unknown 은 내지 않는다.
+// 하한 원장(stream_edge_bounds)에 행이 남은 회차도 판정이 Ending 이라 완결 시각 · within 과 무관하게 싣는다 — Writer 가
+// 없거나 해제가 계속 실패해 행이 오래 남으면 그 회차는 기동마다 Ending 으로 실린다(그 상태는 사이드카의
+// edge_bounds_unreleased_without_writer · dvr_floor_release_overdue 신호가 알린다).
 func LoadPlaybackStates(ctx context.Context, pool *pgxpool.Pool, within time.Duration) (map[string]PlaybackState, error) {
 	vs, err := queryVerdicts(ctx, pool, loadPlaybackStatesSQL)
 	if err != nil {

@@ -33,9 +33,14 @@ package index
 //	  rewindCutoffSQL · rewindFloorSQL · rewindRowsSQL · rewindSessionsSQL  LoadRewindLedger(읽기 전용 RR)  cutoffs · segments · gaps · sessions SELECT
 //	  rewindWatchSQL                          LoadRewindWatch                      sessions · cutoffs · segments · gaps SELECT
 //	round_playback.go(M6-3a — 역할 시험은 round_playback_role_pg_test.go TestRoundPlaybackReadsRunUnderMediaIndexerRole)
-//	  lookupRoundPlaybackSQL                  LookupRoundPlayback                  sessions · segments SELECT
-//	  loadStreamPlaybackSQL                   LoadStreamPlayback                   sessions · segments SELECT
-//	  loadPlaybackStatesSQL                   LoadPlaybackStates                   sessions · segments SELECT
+//	  lookupRoundPlaybackSQL                  LookupRoundPlayback                  sessions · segments · edge_bounds SELECT
+//	  loadStreamPlaybackSQL                   LoadStreamPlayback                   sessions · segments · edge_bounds SELECT
+//	  loadPlaybackStatesSQL                   LoadPlaybackStates                   sessions · segments · edge_bounds SELECT
+//	edge_bounds.go(POK-525 — 역할 시험은 edge_bounds_pg_test.go TestEdgeBoundsLedgerRunsUnderMediaIndexerRole)
+//	  raiseSQL                                Raise                                edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT · sessions SELECT
+//	  closedUnreleasedSQL                     ClosedUnreleased                     edge_bounds · sessions SELECT
+//	  markReleasedSQL                         MarkReleased                         edge_bounds SELECT FOR UPDATE · UPDATE
+//	  deleteReleasedSQL                       DeleteReleased                       edge_bounds DELETE(+ SELECT)
 //
 //	expiry_store.go(M6-4 — 역할 시험은 expiry_store_pg_test.go TestExpiryStatementsRunUnderMediaIndexerRole)
 //	  markExpiredSQL                          MarkExpired                          sessions UPDATE(+ segments SELECT)
@@ -57,7 +62,8 @@ package index
 // 문장(fence · P0 · P2′ · P4 · R3 · R4 · GAP)은 rewind/publish 역할 시험이 잰다. 여기 Insert 는 실물 결정자를
 // 끼우므로 그 문장들도 이 역할로 함께 돈다.
 //
-// FOR UPDATE 주의: 사이드카의 FOR UPDATE 는 stream_sessions(markInitUploadedSQL)에 있고 UPDATE 권한이 필요하다.
+// FOR UPDATE 주의: 사이드카의 FOR UPDATE 는 stream_sessions(markInitUploadedSQL) · stream_edge_bounds(markReleasedSQL)에
+// 있고 UPDATE 권한이 필요하다.
 // stream_segments 의 FOR UPDATE NOWAIT 은 janitor(local_cleanup.go) 몫이다.
 
 import (
@@ -326,7 +332,8 @@ func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 }
 
 // 음성 대조 — 목록 밖 권한(TRUNCATE · DDL · 하한 표 쓰기)은 처음부터 42501 이다. 사이드카의 DELETE 는 M6 만료 ·
-// outbox 몫으로만 열렸고(ADR-0006 개정 2026-10-26), 표를 통째로 비우거나 스키마를 만들거나(ENSURE_SCHEMA=false)
+// outbox 몫(ADR-0006 개정 2026-10-26)과 /dvr 하한 원장의 해제 유예 지난 행 몫(POK-525 — edge_bounds.go
+// deleteReleasedSQL)으로만 열렸고, 표를 통째로 비우거나 스키마를 만들거나(ENSURE_SCHEMA=false)
 // seq 하한을 내리지는 못한다 — EnsureSchema 를 이 역할로 부르면 막힌다.
 // CREATE TABLE · EnsureSchema 의 42501 은 PG15+ 기본값 전제다 — PG15 부터 public 스키마 CREATE 가 PUBLIC 에서
 // 빠졌다. PG14 이하이거나 그 권한을 되돌린 DB 에서는 이 역할도 표를 만들 수 있다(README 운영 DB 사전 확인).

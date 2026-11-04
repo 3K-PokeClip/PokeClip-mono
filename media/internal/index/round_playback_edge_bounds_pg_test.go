@@ -19,11 +19,18 @@ import (
 // plantFrozenRound 는 stream 의 완결 · 동결 회차 round 다(원장 줄이 없으면 vod).
 func plantFrozenRound(t *testing.T, pool *pgxpool.Pool, stream, round string) {
 	t.Helper()
-	now := time.Now().UTC()
+	plantFrozenRoundAt(t, pool, stream, round, 1, time.Minute)
+}
+
+// plantFrozenRoundAt 은 completedAgo 전에 닫힌 완결 · 동결 회차 round 다(조각 seq 하나 · 한 시간 방송). 한 스트림에 회차
+// 여럿을 심으면 seq 를 달리 준다 — 늦게 닫힌 회차가 최신 회차다.
+func plantFrozenRoundAt(t *testing.T, pool *pgxpool.Pool, stream, round string, seq int64, completedAgo time.Duration) {
+	t.Helper()
+	end := time.Now().UTC().Add(-completedAgo)
 	plantRound(t, pool, roundFixture{id: round, stream: stream, state: "ended", roundID: round,
-		startedAt: now.Add(-time.Hour), endedAt: now.Add(-time.Minute), closedAt: now.Add(-time.Minute),
-		vodState: "frozen", vodKey: "vod/" + stream + "/" + round + ".m3u8", vodFirst: 1, vodLast: 1})
-	plantPDT(t, pool, stream, round, 1, now.Add(-time.Hour), 4000)
+		startedAt: end.Add(-time.Hour), endedAt: end, closedAt: end,
+		vodState: "frozen", vodKey: "vod/" + stream + "/" + round + ".m3u8", vodFirst: seq, vodLast: seq})
+	plantPDT(t, pool, stream, round, seq, end.Add(-time.Hour), 4000)
 }
 
 // plantEdgeBoundsRow 는 원장 한 행이다. released 가 영값이면 해제 전(released_at NULL)이다. 열린 회차만 올리는 Raise 를
@@ -91,6 +98,65 @@ func TestRoundPlaybackHoldsEndingWhileEdgeBoundsRowRemains(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 원장 줄의 경계 — 만료가 원장 줄보다 앞이고(unknown), 원장 줄은 그 회차 열쇠만 본다(M6 전 세션의 NULL 회차는 빈 문자열
+// 회차 행에 걸리지 않고, 같은 스트림의 다른 회차 행은 최신 회차의 vod 를 막지 않는다). 기동 적재는 원장 행 회차를 완결
+// 시각과 무관하게(within 밖이어도) Ending 으로 싣는다 — 행이 오래 남으면 기동마다 실린다. 변이 = 판정식의 원장 줄 제거 →
+// 「다른 회차 · 원장 행 회차」 · 「within 밖」 FAIL · 원장 줄을 만료 줄 위로 → 「만료」 FAIL · 원장 줄의 회차 조건 제거 →
+// 「NULL 회차」 · 「다른 회차」 둘 FAIL(앞 시험의 「다른 스트림」 사례는 이 변이에서 통과한다).
+func TestRoundPlaybackEdgeBoundsBoundaries(t *testing.T) {
+	none := PlaybackPhase(0) // 기동 적재에 없음
+	for _, c := range []struct {
+		name  string
+		plant func(t *testing.T, pool *pgxpool.Pool)
+		round string
+		want  [3]PlaybackPhase
+	}{
+		{"만료 + 원장 행", func(t *testing.T, pool *pgxpool.Pool) {
+			now := time.Now().UTC()
+			plantRound(t, pool, roundFixture{id: "R", stream: "s", state: "ended", roundID: "R",
+				startedAt: now.Add(-time.Hour), endedAt: now.Add(-time.Minute), closedAt: now.Add(-time.Minute),
+				expiredAt: now, vodState: "frozen", vodKey: "vod/s/R.m3u8", vodFirst: 1, vodLast: 1})
+			plantPDT(t, pool, "s", "R", 1, now.Add(-time.Hour), 4000)
+			plantEdgeBoundsRow(t, pool, "s", "R", time.Time{})
+		}, "R", [3]PlaybackPhase{PhaseUnknown, PhaseUnknown, none}},
+		{"NULL 회차(M6 전 세션) + 빈 문자열 회차 행", func(t *testing.T, pool *pgxpool.Pool) {
+			now := time.Now().UTC()
+			plantRound(t, pool, roundFixture{id: "L", stream: "s", state: "ended", startedAt: now.Add(-time.Hour),
+				endedAt: now.Add(-time.Minute), vodState: "frozen", vodKey: "vod/s/L.m3u8", vodFirst: 1, vodLast: 1})
+			plantPDT(t, pool, "s", "L", 1, now.Add(-time.Hour), 4000)
+			plantEdgeBoundsRow(t, pool, "s", "", time.Time{})
+		}, "L", [3]PlaybackPhase{PhaseVOD, PhaseVOD, PhaseVOD}},
+		{"같은 스트림 다른 회차 · 원장 행 회차", plantTwoRoundsWithOlderHeld, "R1",
+			[3]PlaybackPhase{PhaseEnding, PhaseVOD, PhaseVOD}},
+		{"같은 스트림 다른 회차 · 최신 회차", plantTwoRoundsWithOlderHeld, "R2",
+			[3]PlaybackPhase{PhaseVOD, PhaseVOD, PhaseVOD}},
+		{"within 밖 완결 + 원장 행", func(t *testing.T, pool *pgxpool.Pool) {
+			plantFrozenRoundAt(t, pool, "s", "R", 1, 2*time.Hour) // 기동 적재 within 30분 밖
+			plantEdgeBoundsRow(t, pool, "s", "R", time.Time{})
+		}, "R", [3]PlaybackPhase{PhaseEnding, PhaseEnding, PhaseEnding}},
+		{"within 밖 완결 · 행 없음(대조)", func(t *testing.T, pool *pgxpool.Pool) {
+			plantFrozenRoundAt(t, pool, "s", "R", 1, 2*time.Hour)
+		}, "R", [3]PlaybackPhase{PhaseVOD, PhaseVOD, none}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := edgeBoundsPool(t)
+			c.plant(t, pool)
+
+			if got := readAllPhases(t, pool, "s", c.round); got != c.want {
+				t.Errorf("%s 국면(회차 · 스트림 · 기동) = %v, want %v", c.round, got, c.want)
+			}
+		})
+	}
+}
+
+// plantTwoRoundsWithOlderHeld 는 스트림 s 의 완결 회차 둘(R1 이 먼저 · R2 가 최신)과 R1 의 해제 전 원장 행이다.
+func plantTwoRoundsWithOlderHeld(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	plantFrozenRoundAt(t, pool, "s", "R1", 1, 3*time.Hour)
+	plantFrozenRoundAt(t, pool, "s", "R2", 2, time.Minute)
+	plantEdgeBoundsRow(t, pool, "s", "R1", time.Time{})
 }
 
 // E3 앞 몫의 이음 — 유예가 지나 Writer 의 DeleteReleased 가 행을 지우면 같은 회차가 ending 에서 vod 로 넘어간다. 유예
