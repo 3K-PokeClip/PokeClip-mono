@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ChevronRight } from 'lucide-react';
 import { Badge } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
@@ -9,12 +10,13 @@ import type { HomeVod } from './useHomeMockState';
 // 첫 응답 전엔 홈이 큰 칸 스켈레톤만 그려 이 격자는 늘 읽은 뒤에 선다 — 「불러오는 중」 칸이 없다(POK-378).
 export function VodGrid({ vods }: { vods: HomeVod[] }) {
   return (
-    <section aria-label="지난 방송 · VOD" data-tour-id={TOUR_TARGET.vodGrid}>
+    <section aria-label="지난 방송" data-tour-id={TOUR_TARGET.vodGrid}>
       <div className={styles.vodHeader}>
-        <h2 className={styles.sectionLabel}>지난 방송 · VOD</h2>
+        <h2 className={styles.sectionLabel}>지난 방송</h2>
         <span className={styles.vodKeepNote}>60일 보관</span>
-        <Link href="/broadcast/vod" className={styles.mutedLink}>
-          지난 방송 목록
+        <Link href="/broadcast/vod" className={styles.vodAllLink} aria-label="지난 방송 전체 보기">
+          전체 보기
+          <ChevronRight size={14} aria-hidden />
         </Link>
       </div>
       {vods.length === 0 ? (

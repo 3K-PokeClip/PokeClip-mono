@@ -541,7 +541,7 @@
   background: var(--pc-color-accent-hover);
 }
 
-/* ---------- 지난 방송 · VOD ---------- */
+/* ---------- 지난 방송 ---------- */
 
 .vodHeader {
   display: flex;
@@ -559,13 +559,20 @@
   color: var(--pc-color-text-muted);
 }
 
-/* 목적지 화면이 아직 없는 링크 자리 (M2) — Side 비활성 항목 선례 */
-.mutedLink {
+.vodAllLink {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(1 * var(--pc-u));
   font-size: calc(12 * var(--pc-u));
-  font-weight: 600;
+  font-weight: 650;
   color: var(--pc-color-accent-text);
-  opacity: 0.6;
+  text-decoration: none;
+}
+
+.vodAllLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .vodGrid {

@@ -241,7 +241,7 @@ describe('HomeScreen', () => {
         '/settings/plugin',
       );
       expect(screen.getByRole('region', { name: '포키가 해 주는 일' })).toBeInTheDocument();
-      expect(screen.queryByRole('region', { name: '지난 방송 · VOD' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: '지난 방송' })).not.toBeInTheDocument();
       expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
     });
 
@@ -319,7 +319,7 @@ describe('HomeScreen', () => {
       ).toBeInTheDocument();
       expect(hero).toHaveTextContent('만든 클립2개');
       expect(hero).toHaveTextContent('유튜브 발행1개');
-      expect(screen.getByRole('region', { name: '지난 방송 · VOD' })).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: '지난 방송' })).toBeInTheDocument();
     });
 
     it('기록은 있지만 이번 주엔 아직 — 마지막 방송이 며칠 전인지와 흐린 지난주 기록을 보인다', async () => {
@@ -533,7 +533,7 @@ describe('HomeScreen', () => {
         await screen.findByRole('heading', { level: 1, name: '방송 1번에서 카드 0장을 찾았어요' }),
       ).toBeInTheDocument();
       const live = screen.getByRole('region', { name: '라이브' });
-      const vod = screen.getByRole('region', { name: '지난 방송 · VOD' });
+      const vod = screen.getByRole('region', { name: '지난 방송' });
       expect(live.compareDocumentPosition(vod) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
   });
@@ -545,7 +545,7 @@ describe('HomeScreen', () => {
     });
     renderWithProviders(<HomeScreen />);
 
-    await screen.findByRole('region', { name: '지난 방송 · VOD' });
+    await screen.findByRole('region', { name: '지난 방송' });
     expect(screen.queryByRole('region', { name: '이어서 편집' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '발행 현황' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '만료 임박 VOD' })).not.toBeInTheDocument();
@@ -1015,6 +1015,16 @@ describe('HomeScreen', () => {
     expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
   });
 
+  it('「전체 보기」는 지난 방송 목록으로 가는 진짜 링크다', async () => {
+    serve({ past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))] });
+    renderWithProviders(<HomeScreen />);
+
+    expect(await screen.findByRole('link', { name: '지난 방송 전체 보기' })).toHaveAttribute(
+      'href',
+      '/broadcast/vod',
+    );
+  });
+
   it('지난 방송 격자: 만료된 방송은 열리지 않고 「보관 만료」, 「준비 중」은 끝난 지 한 시간 안만(POK-254)', async () => {
     const at = (ms: number) => new Date(Date.now() + ms).toISOString();
     const HOUR = 3_600_000;
@@ -1041,7 +1051,7 @@ describe('HomeScreen', () => {
     });
     renderWithProviders(<HomeScreen />);
 
-    const grid = await screen.findByRole('region', { name: '지난 방송 · VOD' });
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
     await within(grid).findByText('gone');
     const tile = (title: string) => within(grid).getByText(title).closest('li')!;
     // 썸네일 자리표시 「썸네일 준비 중」과 가르려고 배지 글자만 정확히 찾는다
