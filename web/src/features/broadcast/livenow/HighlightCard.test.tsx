@@ -276,7 +276,9 @@ describe('HighlightCard: 보관함 저장', () => {
     renderCard();
 
     fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
-    expect(saveCardDraft).toHaveBeenCalledWith(expect.any(String), '23');
+    expect(saveCardDraft).toHaveBeenCalledWith(expect.any(String), '23', {
+      stillCurrent: expect.any(Function),
+    });
     expect(screen.getByRole('button', { name: '보관함에 저장하는 중' })).toBeDisabled();
     await act(async () => finish(snapshot));
 
