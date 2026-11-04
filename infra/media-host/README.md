@@ -209,11 +209,14 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
 |---|---|---|
 | 옛 모드 | 없음 — 목록을 채우면 modules/media_host 가 plan 에서 거부 | `lifecycle_disabled reason=no_topic`(INFO) |
 | 응답기 모드 · 빈 목록 | 없음 | `lifecycle_disabled reason=no_topic`(INFO) |
-| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | 준비되면 ERROR `lifecycle_degraded value=0 reason=ready` 와 INFO `lifecycle_started`. 발행기 준비가 실패하면 ERROR `lifecycle_degraded value=1` 이고 `reason` 은 `privilege_check` · `privilege` · `sns_client` · `assembly` 가운데 하나다 — 게이트를 켠 채 두고, 적재 직전 권한 판정이 참이면 적재를 계속한다(거짓이면 ERROR `lifecycle_enqueue_skipped` 로 건너뛰며 그 started 는 되살릴 수 없고, 건너뛴 것이 ended 면, 그 회차가 보정 후보(started 가 살아 있고(abandoned 아님) · 회차가 닫혀 구성원 전원 ended · ended 없음 · 회차 시작 뒤 1392시간 안 — media/README 「계약9 발행」 의 보정)일 때 같은 DB 의 발행 사이드카가 보정으로 거둔다). 30초마다 다시 준비하며, 회복하면 `value=0 reason=recovered` 와 `lifecycle_started` 가 더 나온다. `lifecycle_disabled` 는 `no_topic` · `no_streams`(INFO)와 `no_resolver`(ERROR — `STREAM_KEY_RESOLVE_URL` · `STREAM_KEY_RESOLVE_TOKEN_FILE` 이 둘 다 비어 4C 클라이언트가 없음 · 설정 결함이라 재시도 없음)에만 나온다 |
+| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | 준비 성공: ERROR `lifecycle_degraded value=0 reason=ready` · INFO `lifecycle_started`. 준비 실패: ERROR `lifecycle_degraded value=1`, `reason` = `privilege_check` · `privilege` · `sns_client` · `assembly` — 30초마다 다시 준비하고, 회복하면 `value=0 reason=recovered` · `lifecycle_started`. `lifecycle_disabled` 는 `no_topic` · `no_streams`(INFO) · `no_resolver`(ERROR · 설정 결함)에만. 적재 · 보정 동작은 아래 「게이트 공존 규칙」 · 「재기동 강등」 |
 
 *   목록 항목(`*` 또는 26자 Crockford base32) · 주제 ARN 꼴은
     modules/media_host 가 plan 에서 봅니다. 인스턴스 역할의 `sns:Publish`
     (그 주제 하나)는 목록과 무관하게 늘 있습니다.
+*   **`no_resolver`:** `STREAM_KEY_RESOLVE_URL` ·
+    `STREAM_KEY_RESOLVE_TOKEN_FILE` 이 둘 다 비어 4C 클라이언트가 없다는
+    뜻이다. 설정 결함이라 재시도하지 않는다.
 *   **게이트 공존 규칙:** 같은 DB 에 붙은 사이드카는 모두 게이트가 켜져
     있어야 한다. 목록은 좁혀도 되지만 꺼진 사이드카는 안 된다. 꺼졌을 수 있는
     사이드카(옛 모드 · 빈 목록 · 기동 판정 전)를 DB 에 붙이기 전에는 송출 금지
