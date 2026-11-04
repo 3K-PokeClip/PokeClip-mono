@@ -6,7 +6,6 @@
 // 오른쪽 눈금과 층 이름은 제자리다. 방송 중이면 처음에 오른쪽 끝(지금)을 보여 주고, 끝에 붙어 있으면 새 칸이 와도 끝을 따라간다.
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import {
-  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -633,39 +632,29 @@ function Timeline({
               if (items.length > 1) {
                 const open = openGroup?.first.card.id === first.card.id;
                 return (
-                  <Fragment key={first.card.id}>
-                    {/* 묶인 카드 자리마다 핀 줄 바닥에 점을 찍는다: 묶음 하나만 서면 몇 장이 어디 있는지 안 보였다 */}
-                    {items.map((it) => (
-                      <span
-                        key={it.card.id}
-                        className={it.card.manual ? styles.pinMarkManual : styles.pinMark}
-                        style={{ left: it.x }}
-                        aria-hidden
-                      />
-                    ))}
-                    <button
-                      type="button"
-                      className={styles.pinGroup}
-                      style={{ left: x }}
-                      aria-expanded={open}
-                      aria-controls={open ? pinListId : undefined}
-                      onPointerMove={(e) =>
-                        onPinPointerMove(
-                          e,
-                          items.map((p) => p.card),
-                        )
-                      }
-                      onClick={(e) => {
-                        if (drag.current?.moved) return;
-                        pinOpenerRef.current = e.currentTarget;
-                        setOpenPin(open ? null : first.card.id);
-                      }}
-                      aria-label={`하이라이트 ${items.length}개 묶음 · ${first.card.timestamp}부터 · 눌러서 고르기`}
-                    >
-                      {/* 숫자만 쓰면 자동 카드 번호(#12)처럼 읽혔다 */}
-                      {`${items.length}장`}
-                    </button>
-                  </Fragment>
+                  <button
+                    key={first.card.id}
+                    type="button"
+                    className={styles.pinGroup}
+                    style={{ left: x }}
+                    aria-expanded={open}
+                    aria-controls={open ? pinListId : undefined}
+                    onPointerMove={(e) =>
+                      onPinPointerMove(
+                        e,
+                        items.map((p) => p.card),
+                      )
+                    }
+                    onClick={(e) => {
+                      if (drag.current?.moved) return;
+                      pinOpenerRef.current = e.currentTarget;
+                      setOpenPin(open ? null : first.card.id);
+                    }}
+                    aria-label={`하이라이트 ${items.length}개 묶음 · ${first.card.timestamp}부터 · 눌러서 고르기`}
+                  >
+                    {/* 숫자만 쓰면 자동 카드 번호(#12)처럼 읽혔다 */}
+                    {`${items.length}장`}
+                  </button>
                 );
               }
               return (
@@ -685,6 +674,21 @@ function Timeline({
                 </button>
               );
             })}
+            {/* 묶인 카드 자리마다 핀 줄 바닥에 점을 찍는다: 묶음 하나만 서면 몇 장이 어디 있는지 안 보였다. 모든 핀 뒤에 그린다 —
+                점과 알약은 같은 층(z-index 1)이라 뒤에 그린 점이 알약 테두리 위에 서고, 그보다 뒤에 그리는 가장자리 그림자는 둘을 함께
+                덮는다(PR #482 2차 리뷰: z-index 2로 올렸을 때는 그림자 위로 점만 떠 보였다) */}
+            {pins.flatMap(({ items }) =>
+              items.length > 1
+                ? items.map((it) => (
+                    <span
+                      key={`mark-${it.card.id}`}
+                      className={it.card.manual ? styles.pinMarkManual : styles.pinMark}
+                      style={{ left: it.x }}
+                      aria-hidden
+                    />
+                  ))
+                : [],
+            )}
           </div>
           <svg
             className={styles.svg}

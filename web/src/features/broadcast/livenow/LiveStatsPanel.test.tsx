@@ -473,6 +473,16 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     expect(parseFloat(group.style.left)).toBeCloseTo((a! + b!) / 2, 5);
   });
 
+  it('점은 모든 핀 뒤에 그린다: 같은 층(z-index 1)이라 순서가 알약 테두리 위 · 가장자리 그림자 아래를 정한다(PR #482 2차 리뷰)', () => {
+    const { container } = panel({ cards: near });
+    const pinButtons = screen.getAllByRole('button', { name: /^하이라이트 / });
+    const lastPin = pinButtons.at(-1)!;
+    const marks = [...container.querySelectorAll<HTMLElement>(`.${styles.pinMark}`)];
+    expect(marks.length).toBeGreaterThan(0);
+    for (const mark of marks)
+      expect(lastPin.compareDocumentPosition(mark) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('겹치는 핀은 개수 하나로 묶고, 떨어진 핀은 하나짜리 그대로다', () => {
     panel({ cards: near });
     const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
