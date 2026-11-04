@@ -256,7 +256,10 @@ export function App({ bridge }: { bridge: Bridge }) {
         ) : showNoKeyToast ? (
           <Toast message={noKeyText} onDismiss={() => setToastDismissed(true)} />
         ) : null}
-        <LiveAnnouncer message={notice ? notice.message : showNoKeyToast ? noKeyText : ''} nonce={notice ?? 'no_key'} />
+        {/* 낭독 영역은 둘 — 지나가는 알림과 no_key 안내를 한 영역에 두면, 알림이 끝나 no_key 문구로 돌아올 때마다 같은
+            안내를 다시 읽는다. no_key 영역은 안내가 떠 있는 동안 글이 그대로라 한 번만 읽힌다. */}
+        <LiveAnnouncer message={notice?.message ?? ''} nonce={notice} />
+        <LiveAnnouncer message={showNoKeyToast ? noKeyText : ''} nonce="no_key" />
       </main>
     </NotifyContext.Provider>
   );
