@@ -206,6 +206,28 @@ function NotificationPanel({
   const bodyRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   const lastFocusedId = useRef<string | null>(null);
+  // 어디에 포커스를 두었는지는 문서 전체에서 본다: 줄 밖(탭 · 머리 단추 · 창 밖)으로 옮기거나 포인터를 누르면(빈 곳을 눌러
+  // 뗀 포커스) 잊는다 — 안 그러면 다음 다시 그리기(30초 재조회)가 일부러 뗀 포커스를 마지막 줄로 끌어온다(PR #481 5차).
+  // 포인터로 줄 단추를 누르면 뒤이은 focusin이 다시 적는다. 단추가 사라져 잃은 포커스에는 어느 쪽 이벤트도 없어 남는다
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent) => {
+      const at =
+        e.target instanceof Element
+          ? e.target.closest<HTMLElement>('[data-notification-id]')
+          : null;
+      lastFocusedId.current =
+        at && bodyRef.current?.contains(at) ? (at.dataset.notificationId ?? null) : null;
+    };
+    const forget = () => {
+      lastFocusedId.current = null;
+    };
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('pointerdown', forget, true);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('pointerdown', forget, true);
+    };
+  }, []);
   useEffect(() => {
     const id = lastFocusedId.current;
     if (id === null || document.activeElement !== document.body) return;
@@ -250,14 +272,7 @@ function NotificationPanel({
           전체
         </button>
       </div>
-      <div
-        ref={bodyRef}
-        className={styles.body}
-        onFocus={(e) => {
-          const at = e.target.closest<HTMLElement>('[data-notification-id]');
-          lastFocusedId.current = at?.dataset.notificationId ?? null;
-        }}
-      >
+      <div ref={bodyRef} className={styles.body}>
         <PanelBody
           state={state}
           view={view}

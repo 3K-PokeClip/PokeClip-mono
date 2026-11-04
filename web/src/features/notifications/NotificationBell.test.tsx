@@ -1069,6 +1069,29 @@ describe('NotificationBell', () => {
     ).toHaveFocus();
   });
 
+  it('포커스를 줄 밖으로 옮긴 뒤 잃은 포커스는 다음 다시 그리기 때 줄로 끌어오지 않는다 (PR #481 5차)', async () => {
+    const { user, queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+
+    within(panel)
+      .getByRole('button', { name: /^안 읽음 · 클립을 올렸어요/ })
+      .focus();
+    // 탭 단추로 옮겼다가(줄 밖) 포커스를 잃는다 — 사라진 단추 때문이 아니니 되돌릴 일이 아니다
+    within(panel).getByRole('button', { name: '전체' }).focus();
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+
+    // 30초 재조회로 새 알림이 와서 창이 다시 그려진다
+    items = [
+      wire('n-new', 0, 'CLIP_UPLOADED', { clipTitle: '드래곤 스틸', count: 1, privacy: 'PRIVATE' }),
+      ...items,
+    ];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it('초대 답이 먼저 끝나도 아직 날아가는 읽음을 다시 읽기가 되돌리지 않는다 (PR #481 4차)', async () => {
     items.push(
       wire(
