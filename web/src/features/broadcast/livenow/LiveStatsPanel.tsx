@@ -38,6 +38,7 @@ import {
   rangeScale,
   smoothPath,
   timeTicks,
+  viewerTail,
   viewerWindow,
   viewersAt,
   xOf,
@@ -395,8 +396,14 @@ function Timeline({
     const top = 10 * u;
     const y = (v: number) =>
       scale ? base - ((v - scale.min) / (scale.max - scale.min)) * (base - top) : base;
-    const pts = vw.map((p) => [xOf(view, p.t, contentW), y(p.v)] as const);
-    const line = smoothPath(pts);
+    const measured = vw.map((p) => [xOf(view, p.t, contentW), y(p.v)] as const);
+    // 마지막 관측에서 그래프 끝까지는 그 값 그대로 곧게 잇는다(viewerTail). 곡선에는 넣지 않는다: 넣으면 마지막 관측 앞 곡선 모양이
+    // 바뀌어 새 관측이 올 때마다 앞 선이 출렁인다
+    const tail = viewerTail(vw, view.t1);
+    const end = tail ? ([xOf(view, tail.t, contentW), y(tail.v)] as const) : null;
+    const curve = smoothPath(measured);
+    const line = end ? `${curve}L${end[0].toFixed(1)},${end[1].toFixed(1)}` : curve;
+    const pts = end ? [...measured, end] : measured;
     return { scale, y, pts, line, area: areaPath(pts, base, line) };
   }, [stats.viewers, view, contentW, u]);
   const vScale = viewer.scale;

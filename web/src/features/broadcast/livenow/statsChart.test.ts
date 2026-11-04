@@ -11,6 +11,7 @@ import {
   rebucketTo,
   smoothPath,
   timeTicks,
+  viewerTail,
   viewerWindow,
   viewersAt,
   zeroScale,
@@ -171,6 +172,24 @@ describe('statsChart: 선', () => {
     expect(viewerWindow(v, T0, T0 + 600_000).map((p) => p.v)).toEqual([2, 3]);
     expect(viewersAt(v, T0)).toBe(2);
     expect(viewersAt(v, T0 - 200_000)).toBeNull();
+  });
+
+  it('마지막 관측을 그래프 끝까지 그 값 그대로 잇는다: 0명도 잇는다', () => {
+    const v = [
+      { t: T0, v: 3 },
+      { t: T0 + 60_000, v: 0 },
+    ];
+    // 관측은 1분마다라 「지금」이 마지막 관측보다 늘 조금 뒤다
+    expect(viewerTail(v, T0 + 100_000)).toEqual({ t: T0 + 100_000, v: 0 });
+    // 수집기가 두 번 놓쳐도(3분) 잇는다
+    expect(viewerTail(v, T0 + 60_000 + 3 * 60_000)).toEqual({ t: T0 + 240_000, v: 0 });
+  });
+
+  it('마지막 관측이 3분보다 오래됐거나 끝에 닿았거나 관측이 없으면 잇지 않는다', () => {
+    const v = [{ t: T0, v: 5 }];
+    expect(viewerTail(v, T0 + 3 * 60_000 + 1)).toBeNull();
+    expect(viewerTail(v, T0)).toBeNull();
+    expect(viewerTail([], T0 + 60_000)).toBeNull();
   });
 });
 

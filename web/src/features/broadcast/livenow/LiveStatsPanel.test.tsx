@@ -377,6 +377,42 @@ describe('LiveStatsPanel: 그래프', () => {
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
     expect(container.querySelector('circle[data-single]')).not.toBeNull();
   });
+
+  /** 시청자 선 path의 마지막 점 x와 그래프 폭 */
+  const lineEnd = (container: HTMLElement) => {
+    const d = container.querySelector(`.${styles.viewerLine}`)!.getAttribute('d')!;
+    const last = d
+      .split(/[MLC ]/)
+      .filter(Boolean)
+      .at(-1)!;
+    const width = Number(container.querySelector(`svg.${styles.svg}`)!.getAttribute('width'));
+    return { x: Number(last.split(',')[0]), width };
+  };
+
+  it('라이브 시청자 선은 마지막 관측에서 「지금」까지 이어진다: 0명이어도 끊기지 않는다', () => {
+    const c = chart(268);
+    // 1분마다 잰 0명. 마지막 관측은 「지금」 40초 전이다
+    const viewers = Array.from({ length: 134 }, (_, k) => ({
+      t: c.t0 + k * 60_000 + 20_000,
+      v: 0,
+    }));
+    const { container } = panel({ stats: stats({ viewers, lastViewers: 0 }) });
+    const { x, width } = lineEnd(container);
+    expect(x).toBeCloseTo(width, 0);
+    // 맥박 점도 끝에 선다
+    expect(Number(container.querySelector(`.${styles.livePulse}`)!.getAttribute('cx'))).toBeCloseTo(
+      width,
+      0,
+    );
+  });
+
+  it('마지막 관측이 3분보다 오래됐으면 「지금」까지 잇지 않는다: 그 뒤는 모른다', () => {
+    const c = chart(268);
+    const viewers = Array.from({ length: 120 }, (_, k) => ({ t: c.t0 + k * 60_000, v: 10 }));
+    const { container } = panel({ stats: stats({ viewers, lastViewers: 10 }) });
+    const { x, width } = lineEnd(container);
+    expect(x).toBeLessThan(width - 10);
+  });
 });
 
 describe('LiveStatsPanel: 열쇠', () => {

@@ -4,6 +4,8 @@
 // 눈금에 겹치지 않는다(옛 패널은 둘을 각자 최대값에 맞춰 한 칸에 겹쳐 두 선의 높낮이가 아무 뜻이 없었다).
 // 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다 — 언제 스크롤하는지는 layoutFor.
 
+import { ON_AIR_WINDOW_MS } from '@/features/broadcast/platformView';
+
 /** 차트 한 칸(epoch ms). 서버 칸(chat-chart)을 그대로 옮기거나 묶은 것이다 */
 export interface StatsBucket {
   start: number;
@@ -205,6 +207,18 @@ export function viewerWindow(viewers: readonly ViewerPoint[], t0: number, t1: nu
   const inside = viewers.filter((p) => p.t >= t0 && p.t <= t1);
   const before = viewers.filter((p) => p.t < t0).at(-1);
   return before ? [before, ...inside] : inside;
+}
+
+/**
+ * 시청자 선 끝을 그래프 끝(t1, 라이브면 「지금」)까지 잇는 점. 수집기는 1분마다 재므로 선 끝이 「지금」보다 1분쯤 뒤처진 채, 10초마다
+ * 자라는 그래프 안에서 선만 1분마다 툭툭 늘어나 끊겨 보였다(시청자 0명 방송에서 바닥에 붙은 선이 「지금」에 못 닿았다). 그 사이는
+ * 마지막으로 잰 값 그대로다(viewersAt · 툴팁과 같은 값). 마지막 관측이 ON_AIR_WINDOW_MS(수집기가 두 번 놓쳐도 켜짐)보다 오래되면
+ * 잇지 않는다: 그 뒤는 모른다
+ */
+export function viewerTail(viewers: readonly ViewerPoint[], t1: number): ViewerPoint | null {
+  const last = viewers.at(-1);
+  if (!last || last.t >= t1 || t1 - last.t > ON_AIR_WINDOW_MS) return null;
+  return { t: t1, v: last.v };
 }
 
 /** 창 [t0, t1] 안의 카테고리 구간 — 창 앞에서 시작한 카테고리는 창 왼쪽 끝에서 자른다 */
