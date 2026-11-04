@@ -1,5 +1,8 @@
 #include "server-env.hpp"
 
+#include <algorithm>
+#include <cctype>
+
 namespace pokeclip {
 
 namespace {
@@ -22,7 +25,96 @@ bool IsKnownDefaultIngestPort(int port)
 	return port == kProdServers.ingestPort || port == kDevServers.ingestPort || port == kLegacyDefaultIngestPort;
 }
 
+bool StartsWithNoCase(std::string_view s, std::string_view prefix)
+{
+	if (s.size() < prefix.size())
+		return false;
+	for (size_t i = 0; i < prefix.size(); i++) {
+		if (std::tolower(static_cast<unsigned char>(s[i])) != prefix[i])
+			return false;
+	}
+	return true;
+}
+
+bool AllDigits(std::string_view s)
+{
+	return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char ch) { return std::isdigit(ch); });
+}
+
+// 127.0.0.0/8 — 점으로 나뉜 숫자 넷, 첫 칸이 127, 칸마다 0~255.
+bool IsLoopbackIpv4(std::string_view host)
+{
+	int parts = 0;
+	while (true) {
+		const size_t dot = host.find('.');
+		const std::string_view part = host.substr(0, dot);
+		if (!AllDigits(part) || part.size() > 3 || std::stoi(std::string(part)) > 255)
+			return false;
+		if (parts == 0 && part != "127")
+			return false;
+		parts++;
+		if (dot == std::string_view::npos)
+			break;
+		host.remove_prefix(dot + 1);
+	}
+	return parts == 4;
+}
+
 } // namespace
+
+std::string NormalizeApiBase(std::string_view text)
+{
+	auto space = [](char ch) { return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
+	while (!text.empty() && space(text.front()))
+		text.remove_prefix(1);
+	while (!text.empty() && (space(text.back()) || text.back() == '/'))
+		text.remove_suffix(1);
+	return std::string(text);
+}
+
+bool IsLoopbackApiBase(std::string_view base)
+{
+	if (StartsWithNoCase(base, "https://"))
+		base.remove_prefix(8);
+	else if (StartsWithNoCase(base, "http://"))
+		base.remove_prefix(7);
+	else
+		return false;
+
+	// 경로·물음표·#·사용자 정보(http://localhost@다른호스트 — 실제로는 뒤쪽 호스트로 간다)는 받지 않는다.
+	if (base.empty() || base.find_first_of("/?#@\\") != std::string_view::npos)
+		return false;
+	std::string_view port;
+	bool loopback = false;
+	if (base.front() == '[') {
+		const size_t close = base.find(']');
+		if (close == std::string_view::npos)
+			return false;
+		loopback = base.substr(1, close - 1) == "::1";
+		port = base.substr(close + 1);
+	} else {
+		const size_t colon = base.find(':');
+		std::string host(base.substr(0, colon));
+		std::transform(host.begin(), host.end(), host.begin(),
+			       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+		loopback = host == "localhost" || IsLoopbackIpv4(host);
+		port = colon == std::string_view::npos ? std::string_view{} : base.substr(colon);
+	}
+	if (!loopback)
+		return false;
+	if (port.empty())
+		return true;
+	if (port.front() != ':')
+		return false;
+	port.remove_prefix(1);
+	return AllDigits(port) && port.size() <= 5 && std::stoi(std::string(port)) >= 1 &&
+	       std::stoi(std::string(port)) <= 65535;
+}
+
+bool IsAcceptedDockApiBase(const std::string &normalized)
+{
+	return normalized.empty() || IsKnownDefaultApiBase(normalized) || IsLoopbackApiBase(normalized);
+}
 
 const ServerDefaults &ServersFor(ServerEnv env)
 {
@@ -102,20 +194,26 @@ ServerEnvChange ApplyServerEnv(PluginConfig &c, ServerEnv target)
 	return change;
 }
 
-bool ApplyPutServerEnv(PluginConfig &c, const PluginConfig &before, std::optional<ServerEnv> requested)
+bool ApplyPutServerEnv(PluginConfig &c, const PluginConfig &before, std::optional<ServerEnv> requested,
+		       const std::optional<std::string> &requestedApiBase)
 {
 	c.serverEnv = before.serverEnv;
 	c.apiBase = before.apiBase;
 	c.streamId = before.streamId;
 	c.passphrase = before.passphrase;
 	const ServerEnv target = requested.value_or(before.serverEnv);
-	if (target == before.serverEnv) {
-		ApplyServerEnv(c, target);
-		return false;
+	const bool envSwitch = target != before.serverEnv;
+	if (envSwitch) {
+		c.ingestHost = before.ingestHost;
+		c.ingestPort = before.ingestPort;
 	}
-	c.ingestHost = before.ingestHost;
-	c.ingestPort = before.ingestPort;
+	if (requestedApiBase && IsAcceptedDockApiBase(*requestedApiBase)) {
+		// 비움·알려진 기본 주소는 환경의 기본 주소로 — 바로 아래 ApplyServerEnv가 target 짝으로 맞춘다.
+		c.apiBase = IsLoopbackApiBase(*requestedApiBase) ? *requestedApiBase : ServersFor(target).apiBase;
+	}
 	ApplyServerEnv(c, target);
+	if (!envSwitch && c.apiBase == before.apiBase)
+		return false;
 	c.streamId.clear();
 	c.passphrase.clear();
 	return true;
