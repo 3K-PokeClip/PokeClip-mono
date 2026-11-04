@@ -238,6 +238,38 @@ describe('ChannelScope', () => {
     expect(nav.replace).not.toHaveBeenCalledWith('/home');
   });
 
+  it('?stream= 화면에서 경로가 같은 주소로 가는 전환이면 쿼리가 지워질 때까지 기다렸다가 새 채널로 선다 (PR #481 2차)', async () => {
+    nav.pathname = '/broadcast/livenow';
+    window.history.pushState({}, '', '/broadcast/livenow?stream=s-1');
+    stub();
+    renderWithProviders(
+      <ChannelScope fallback={<p>본문 뼈대</p>}>
+        <Probe />
+      </ChannelScope>,
+    );
+    await screen.findByText('채널 7');
+
+    act(() => {
+      useSwitchCurtain
+        .getState()
+        .cover(
+          { name: '별하', relation: 'EDITOR', photo: null, destination: '/broadcast/livenow' },
+          () => {},
+        );
+      useChannelStore.getState().select(7, 3);
+    });
+
+    // 경로는 이미 같지만 옛 ?stream=이 남아 있는 동안은 새 채널로 세우지 않는다
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/broadcast/livenow'));
+    expect(screen.getByText('본문 뼈대')).toBeInTheDocument();
+    expect(screen.queryByText('채널 3')).not.toBeInTheDocument();
+
+    // 라우터가 쿼리를 지우면(경로는 그대로라 다시 그릴 계기가 없어도) 새 채널로 선다
+    window.history.pushState({}, '', '/broadcast/livenow');
+    expect(await screen.findByText('채널 3')).toBeInTheDocument();
+    expect(nav.replace).not.toHaveBeenCalledWith('/home');
+  });
+
   it('?stream=으로 방송을 못 박은 화면에서 바꿔도 홈으로 간다', async () => {
     nav.pathname = '/broadcast/livenow';
     window.history.pushState({}, '', '/broadcast/livenow?stream=s-1');

@@ -5,6 +5,7 @@ import {
   Fragment,
   useContext,
   useEffect,
+  useReducer,
   useRef,
   useState,
   type ReactNode,
@@ -51,6 +52,11 @@ export function useChannelStreamerId(): number | null {
 }
 
 /** 방송 하나를 못 박은 화면인가(지난 방송 상세 · ?stream=). 그 방송은 앞 채널 것이라 채널을 바꾸면 홈으로 간다. */
+/** 지금 주소(경로+쿼리). 쿼리는 pinnedToBroadcast와 같은 까닭으로 주소창에서 읽는다 */
+function currentUrl(pathname: string | null): string {
+  return `${pathname ?? ''}${typeof window === 'undefined' ? '' : window.location.search}`;
+}
+
 function pinnedToBroadcast(pathname: string | null): boolean {
   if ((pathname ?? '').startsWith('/broadcast/vod/')) return true;
   // ?stream=은 useSearchParams 대신 주소창에서 읽는다: 레이아웃에서 그것을 쓰면 Suspense 경계가 필요하고,
@@ -152,9 +158,17 @@ export function ChannelScope({
     if (shownId !== null && pinned)
       setLeaving(useSwitchCurtain.getState().curtain?.destination ?? '/home');
   }
-  if (leaving !== null && (!pinned || pathname === leaving.split('?')[0])) setLeaving(null);
+  // 도착은 전체 주소(경로+쿼리)로 본다: 경로만 보면 `/broadcast/livenow?stream=…`에서 `/broadcast/livenow`로 갈 때 쿼리가
+  // 지워지기 전에 풀려, 옛 ?stream=을 단 채 자식이 새 채널로 선다(PR #481 2차 리뷰)
+  if (leaving !== null && (!pinned || currentUrl(pathname) === leaving)) setLeaving(null);
+  const [, recheck] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
-    if (leaving !== null) router.replace(leaving);
+    if (leaving === null) return;
+    router.replace(leaving);
+    // 경로는 그대로 두고 쿼리만 지우는 이동은 이 레이아웃을 다시 그릴 계기가 없다(쿼리는 주소창에서 읽는다) — 도착할 때까지
+    // 짧게 다시 본다. 떠나는 동안에만 돈다
+    const id = window.setInterval(recheck, 50);
+    return () => window.clearInterval(id);
   }, [leaving, router]);
 
   // 나를 못 읽으면 채널을 정할 수 없다: 화면을 통째로 막지 않고 번호 없이(섞어서) 그린다(이 카드 전과 같은 동작).
