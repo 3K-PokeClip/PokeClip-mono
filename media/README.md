@@ -410,10 +410,12 @@ NULL 도 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바�
 outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만
 2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 4C resolve 설정이다. 하나라도
 빠지면 `lifecycle_disabled` 한 줄(`reason` = `no_topic` · `no_streams` 는 INFO,
-`no_resolver` 는 ERROR)을 남기고 outbox 행을 넣지 않는다. 셋이 차 있으면 발행기
-준비(`30_grants.sql` 의 outbox 네 권한 · SNS 클라이언트 · 조립)가 실패해도
-started · ended 를 계속 적재하고(강등), 30초마다 다시 준비해 회복하면 쌓인 행을
-늦게 낸다. 기동마다 ERROR `lifecycle_degraded` 기동 줄이 하나 나온다 — 준비되면
+`no_resolver` 는 ERROR)을 남기고 outbox 행을 넣지 않는다. 셋이 차 있으면 게이트가
+켜진다. 발행기 준비(`30_grants.sql` 의 outbox 네 권한 · SNS 클라이언트 · 조립)가
+실패하면 발행기 없이 강등하고, 30초마다 다시 준비해 회복하면 쌓인 행을 늦게
+낸다. 적재 여부는 강등 사유와 무관하게 적재 직전의 권한 판정(outbox SELECT ·
+INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거짓이면 아래 「적재
+건너뜀」 이다. 기동마다 ERROR `lifecycle_degraded` 기동 줄이 하나 나온다 — 준비되면
 `value=0` `reason=ready`, 실패면 `value=1` 과 `reason` = `privilege_check` ·
 `privilege` · `sns_client` · `assembly` 가운데 하나다. 회복하면 `value=0`
 `reason=recovered` 가 더 나온다. 마지막 줄이 발행기 준비 상태다(outbox 쓰기 가능
@@ -426,20 +428,29 @@ started · ended 를 계속 적재하고(강등), 30초마다 다시 준비해 �
 *   **적재 건너뜀:** 켜진 게이트가 적재 직전 권한 판정에서 거짓이면 그 적재를
     건너뛰고 ERROR `lifecycle_enqueue_skipped` 를 남긴다 — 그 역할의 outbox
     권한을 확인한다. 판정 줄이 아니고, 그 사이 시작된 방송의 started 는 되살릴
-    수 없다.
-*   **보정:** 닫혔는데 ended 가 없는 회차는 같은 DB 의 발행 사이드카가 보정으로
+    수 없다. ended 쪽 줄은 완결 여부와 무관하게 완결 평가(회차 닫힘 · 세션
+    ended 전이)마다 남으므로 한 회차에 여러 줄일 수 있다.
+*   **보정:** 닫혔는데 ended 가 없는 회차는 같은 DB 의 발행 사이드카(발행기가
+    떠 있는 사이드카 — 마지막 `lifecycle_degraded` 가 `value=0`)가 보정으로
     거둔다(WARN `lifecycle_ended_repaired`). 30초마다 시도하고 주기당 20회차를
-    거둔다 — 정상이면 완결 뒤 약 30–35초, 후보가 N 개면 ⌈N/20⌉ 주기에 걸친다.
+    거둔다 — 후보가 20 이하면 완결 뒤 길어야 약 35초, N 개면 약 ⌈N/20⌉ × 30초다.
     회차 시작 뒤 1392시간(58일)이 지난 회차는 만료와 겹치지 않게 보정하지
     않는다 — 그런 회차를 꺼진 · 권한 없는 사이드카가 닫았으면 ended 가 나가지
     않는다(D4). 여러 발행 사이드카가 같은 회차를 동시에 보정하면
     `UNIQUE (round_id, sequence)` 경합으로 드물게 23505 가 날 수 있다. 무해하다
     — 보정 쪽에 WARN `lifecycle_store_failed` 한 줄이 남고 다음 주기에 회복한다.
+    한계: 외부 트랜잭션이 어느 회차의 started 행을 오래 잠그면, 보정은 주기마다
+    그 회차의 넣기에서 시한(10초)까지 기다린 뒤 WARN `lifecycle_store_failed`
+    (`stage=repair`)를 남기고 그 주기를 멈춘다. 잠금이 이어지는 동안 뒤 회차가
+    밀리고, D1 이 그것을 드러낸다. 시한을 넘겨 포기한 넣기가 드물게 서버에서
+    나중에 커밋되면 ended 는 정상으로 나가지만, 그 회차에는 WARN
+    `lifecycle_store_failed` 만 남고 `lifecycle_ended_repaired` 는 남지 않는다.
 *   **끌 때:** 끄더라도 회차는 닫힌다. 발행 사이드카가 하나도 없으면 ended 도
     생기지 않고, 위 1392시간 경계 안에 다음 발행 사이드카가 뜨면 보정으로
     나간다.
 *   **공존:** 이 판 이상의 발행 사이드카가 같은 DB 에 하나라도 떠 있으면, 옛 판
-    · 꺼진 사이드카가 닫은 회차도 보정으로 ended 가 나간다.
+    · 꺼진 사이드카가 닫은 회차도 started 가 적재된 회차라면 보정으로 ended 가
+    나간다. 꺼진 사이드카가 연 회차는 started 가 없어 ended 도 없다.
 *   **기동 때만 읽는다.** 바꾸려면 사이드카를 재기동한다.
 
 | 이름 | 기본값 | 의미 |
@@ -462,23 +473,35 @@ started · ended 를 계속 적재하고(강등), 30초마다 다시 준비해 �
     `lifecycle_degraded` 가운데 `value=1` 이거나 `value=0` `reason=ready` 인
     줄이다. 발행 의도가 켜진 컨테이너는 기동마다 기동 줄을 정확히 하나 남기므로
     기동 줄 수가 기동 횟수 N 과 같아야 한다. 어긋나면(그 줄 전에 죽은 기동)
-    불통과다.
+    불통과다. env 를 바꾸면 컨테이너를 다시 만들어 id 가 달라지므로 N 을 다시
+    센다. `lifecycle_degraded` 줄이 하나도 없으면 발행 의도가 꺼진 컨테이너다 —
+    그런데 ERROR `lifecycle_disabled reason=no_resolver` 가 있으면 설정
+    결함이므로 불통과로 적는다.
 *   **통과:** 기동 줄 수 = N 이고, 그 컨테이너의 마지막 `lifecycle_degraded` 가
     `value=0` 이며, D1 = 0 · D2 = 0 · D4 완결 = 0 이다. 마지막 줄이 `value=1`
     이면 `reason` 과 무관하게 불통과다. 특히 `privilege` · `privilege_check` 는
-    새 방송의 started 를 건너뛰어 되살릴 수 없는 갈래인데, 장부에 흔적이 남지
-    않아 D1 · D2 · D4 로는 보이지 않는다.
+    새 방송의 started 를 건너뛸 수 있는 갈래다 — 적재 직전 판정이 거짓이어서
+    건너뛴 started 는 장부에 흔적이 남지 않아 D1 · D2 · D4 로는 보이지 않고
+    되살릴 수 없다.
 *   **문턱 10분:** 상한에서 끌어낸 값이 아니라 운영 선택값이다. 정상 전제에서
-    회복 지연은 길어야 약 35초다(후보가 N 개면 ⌈N/20⌉ 주기). D1 · D2 > 0 은 유실
-    확정이 아니라 조사를 시작하라는 신호다 — 보정 창 안이면 원인이 풀리는 대로
-    보정 · 발행이 거둔다. D4 완결 > 0 은 손 복구로 회부한다. D4 미완결 > 0 은
-    불통과가 아니라 장기 방송이 있다는 정보다.
+    회복 지연은 후보가 20 이하면 길어야 약 35초, N 개면 약 ⌈N/20⌉ × 30초다.
+    D1 · D2 > 0 은 유실 확정이 아니라 조사를 시작하라는 신호다 — 보정 창
+    안이면 원인이 풀리는 대로 보정 · 발행이 거둔다. D4 완결 > 0 은 손 복구로
+    회부한다. D4 미완결 > 0 은 불통과가 아니라 장기 방송이 있다는 정보다.
 
 세 질의는 읽기 전용이고 모두 started 행이 살아 있는 회차에서 출발한다. 그래서
 정상 정리(ended 발행 7일 뒤 두 행을 함께 지움)된 회차는 어디에도 들지 않는다.
 판정 스크립트는 건수만 읽는다. 표지 사이의 블록은
 `internal/broadcast/opsquery_pg_test.go` 가 그대로 뽑아 실행해 보정 술어 · 보정
 창과 맞춰 본다 — 고치면 그 시험을 돌린다.
+
+**실행 신분과 시한.** 마스터 계정으로 돌리지 않는다 — 마스터에는
+`statement_timeout` 이 없다. 지금 두 표를 읽을 수 있는 운영 역할은 쓰기 권한도
+가진 `media_indexer` 뿐이라(SELECT 전용 감시 역할은 아직 없다), 쓰기는 트랜잭션으로
+막는다. 세 질의는 `BEGIN READ ONLY` 트랜잭션 안에서 `SET LOCAL statement_timeout`
+· `SET LOCAL lock_timeout` 을 건 뒤 돌리고, 끝나면 바로 닫는다 — 열린 트랜잭션은
+그 표의 DDL 을 줄 세운다. `media_indexer` 의 역할 기본 `statement_timeout` 은
+60초다(`10_roles.sql`).
 
 **D1 밀린 끝 알림(정상 0).** 보정 후보(`internal/broadcast/repair.go` 의
 `missingEndedSQL`)와 같은 술어에, 완결 시각(구성원의 `round_closed_at` ·

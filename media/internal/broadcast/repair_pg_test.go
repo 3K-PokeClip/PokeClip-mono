@@ -275,7 +275,7 @@ func TestRepairTimeoutKeepsTickMovingAndWaitsForNextCycle(t *testing.T) {
 		t.Fatalf("started 행 잠금: %v", err)
 	}
 
-	tickWithin(t, p, 5*time.Second)
+	tickWithin(t, p, p.repairTimeout+time.Second) // 설정 시한 + 발행 한 행 몫 — 시한을 설정값보다 길게 쓰면 넘는다
 
 	if msgs := sns.sent(); len(msgs) != 1 || msgs[0].DeduplicationID != StartedEventID("S-O") {
 		t.Errorf("SNS 편지 %d 통, want S-O.started 한 통 — 보정 잠금 대기가 발행을 막았다", len(msgs))

@@ -628,10 +628,10 @@ func TestRuntimeRevokeEndedRepairedAfterRegrantJ3(t *testing.T) {
 	}
 }
 
-// repairFailed 는 보정 문장 실패 줄이 남았는지다.
+// repairFailed 는 보정 문장이 권한 거부(42501)로 실패한 줄이 남았는지다 — 시한 초과 같은 다른 실패는 세지 않는다.
 func repairFailed(t *testing.T, buf *lockedLog) bool {
 	for _, l := range buf.lines(t, "lifecycle_store_failed") {
-		if l["stage"] == "repair" {
+		if l["stage"] == "repair" && strings.Contains(fmt.Sprint(l["err"]), "(SQLSTATE 42501)") {
 			return true
 		}
 	}

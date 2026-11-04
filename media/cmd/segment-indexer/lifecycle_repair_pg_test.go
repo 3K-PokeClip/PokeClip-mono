@@ -53,8 +53,9 @@ func (c *outboxCounter) counts() (total, outbox, denied int) {
 	return c.total, c.outbox, c.denied
 }
 
-// J6′ — no_topic 사이드카 A(영값 게이트 · outbox 권한 0)가 회차 R 을 닫은 뒤 발행 사이드카 B 를 띄우면, B 의 첫 tick
-// 보정(기동 뒤 곧바로)이 R.ended 를 넣어 내고 WARN lifecycle_ended_repaired 가 한 줄이다. A 는 outbox 문장 0 · 42501 0 이다.
+// J6′ — no_topic 사이드카 A(영값 게이트 · outbox 권한 0)가 회차 R 을 닫은 뒤 발행 사이드카 B(media_indexer 역할)를
+// 띄우면, B 의 첫 tick 보정(기동 뒤 곧바로)이 R.ended 를 넣어 내고 WARN lifecycle_ended_repaired 가 한 줄이다. A 는
+// outbox 문장 0 · 42501 0 이다.
 // cmd 시험은 보정 주기를 바꿀 수 없어 「닫힘 뒤 기동」 순서로 30초 기다림을 없앤다.
 // 잡는 결함: 발행기 보정이 없으면 꺼진 쪽이 닫은 회차의 ended 가 영영 없다(P0 · V1).
 func TestOffSidecarClosedRoundIsRepairedByPublisherJ6(t *testing.T) {
@@ -78,7 +79,8 @@ VALUES ($1, $2, $3, 1, $4, $5, '42', 'published')`, broadcast.StartedEventID(rou
 	log, buf := expiryLog()
 	var sent sync.Map
 	publish := func(_ context.Context, m broadcast.Message) error { sent.Store(m.DeduplicationID, true); return nil }
-	stop, err := runLifecyclePublisher(t.Context(), admin, broadcast.PublisherOptions{Publish: publish, Log: log})
+	b := pgtest.NewMediaIndexerRole(t, admin) // B 도 운영 역할 권한(30_grants.sql)으로 보정한다
+	stop, err := runLifecyclePublisher(t.Context(), b.Pool, broadcast.PublisherOptions{Publish: publish, Log: log})
 	if err != nil {
 		t.Fatalf("발행기 기동 실패: %v", err)
 	}

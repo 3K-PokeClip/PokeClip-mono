@@ -28,7 +28,7 @@ import (
 const lifecyclePrepareRetryEvery = 30 * time.Second
 
 // resolveFunc 는 계약4 4C 다(keyresolve.Client.Resolve).
-type resolveFunc = func(ctx context.Context, token string) (keyresolve.Verdict, error)
+type resolveFunc func(ctx context.Context, token string) (keyresolve.Verdict, error)
 
 // publisherSteps 는 발행기 준비의 바깥 걸음 셋과 재시도 주기다. 운영은 defaultSteps 가 채우고, 시험은 가짜 걸음을 끼운다.
 type publisherSteps struct {

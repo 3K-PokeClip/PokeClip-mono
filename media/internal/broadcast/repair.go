@@ -24,9 +24,11 @@ const (
 	repairEvery        = 30 * time.Second // 정산 · 회차 스캔과 같은 주기 — 시도 간격의 하한
 	repairTimeout      = 10 * time.Second // publishTimeout 과 같은 값 — 보정 한 번이 발행 tick 을 이만큼만 세운다
 	repairBatch        = batchSize        // 주기당 쪽 크기
-	repairExpiryMargin = 24 * time.Hour   // 만료 루프 · DB · 조각 벽시계 사이 시계 차와 고르기 ↔ 넣기 사이를 받는 여유
+	repairExpiryMargin = 24 * time.Hour   // 만료 루프 · DB · 조각 벽시계 사이 시계 차와 고르기 ↔ 넣기 문장 시작 사이를 받는 여유
 	// repairHorizon 은 보정 창(58일)이다 — 만료가 지울 수 있는 조각(시작 < 지금 − (보존 − 여유))과 서로 배타가 되게
-	// 만료 상수에서 끌어 온다. 보존 기간을 바꾸면 같이 움직인다.
+	// 만료 상수에서 끌어 온다. 보존 기간을 바꾸면 같이 움직인다. 고르기 ↔ 넣기 문장 시작 사이는 repairTimeout 안이다.
+	// 넣기 문장은 시작할 때의 스냅숏으로 장부를 읽고 잠금 대기 뒤에는 started 행만 다시 보므로, 서버에서 잠금을 기다린
+	// 시간은 여유에 들지 않는다.
 	repairHorizon = index.ExpiryRetention - index.ExpiryUntilSlack - repairExpiryMargin
 )
 

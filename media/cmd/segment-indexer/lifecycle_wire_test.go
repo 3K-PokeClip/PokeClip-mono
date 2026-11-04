@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -98,17 +99,17 @@ func TestStartLifecycleDegradedWhenOutboxPrivilegeMissingD50(t *testing.T) {
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	role.Revoke(t, "INSERT", "broadcast_lifecycle_outbox")
 	t.Cleanup(func() { role.RequireNoneDenied(t) })
-	log, buf := expiryLog()
+	log, buf := newLockedLog(slog.LevelInfo) // 30초 재시도 고루틴과 함께 쓰는 버퍼라 잠근다
 
 	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, lifecycleResolver(t), log)
 	defer stop()
 
-	lines := logLines(t, buf, "lifecycle_degraded")
+	lines := buf.lines(t, "lifecycle_degraded")
 	if !gate.Enabled() || len(lines) != 1 || lines[0]["value"] != float64(1) || lines[0]["reason"] != "privilege" ||
 		lines[0]["level"] != "ERROR" || !strings.Contains(fmt.Sprint(lines[0]["missing"]), "broadcast_lifecycle_outbox:INSERT") {
 		t.Fatalf("게이트 켬 %v · lifecycle_degraded %v · 전체 %s", gate.Enabled(), lines, buf.String())
 	}
-	if disabled := logLines(t, buf, "lifecycle_disabled"); len(disabled) != 0 {
+	if disabled := buf.lines(t, "lifecycle_disabled"); len(disabled) != 0 {
 		t.Fatalf("lifecycle_disabled %v, want 없음 — 준비 실패는 강등 줄 하나로만 알린다", disabled)
 	}
 	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, gate, log)

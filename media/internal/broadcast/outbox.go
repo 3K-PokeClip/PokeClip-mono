@@ -62,8 +62,11 @@ func (g Gate) logger() *slog.Logger {
 }
 
 // outboxWritableSQL 은 이 역할이 outbox 에 적재할 수 있는지다 — insertStartedSQL · insertEndedSQL 이 쓰는 권한
-// (SELECT · INSERT 와, started 행 FOR SHARE 가 요구하는 UPDATE)을 묻는다. FOR SHARE 는 어느 한 열의 UPDATE 로도
-// 통과하므로 UPDATE 는 has_any_column_privilege 로 묻는다. 권한 판정 함수는 권한이 없어도 오류를 내지 않는다.
+// (SELECT · INSERT 와, started 행 FOR SHARE 가 요구하는 UPDATE)을 묻는다. SELECT 는 insertStartedSQL 의
+// ON CONFLICT (event_id) 도 요구한다. FOR SHARE 는 어느 한 열의 UPDATE 로도 통과하므로 UPDATE 는
+// has_any_column_privilege 로 묻고, SELECT · INSERT 는 표 단위로 묻는다 — 운영 권한(30_grants.sql)이 표 단위로 준다는
+// 전제다. 열 단위로만 받은 역할은 문장이 성공할 수 있어도 판정이 거짓이라 건너뛴다. 권한 판정 함수는 권한이 없으면
+// 오류 대신 거짓을 내지만, 표 이름을 풀지 못하면(표 없음 · 스키마 USAGE 없음) 42P01 오류다.
 const outboxWritableSQL = `
 SELECT pg_catalog.has_table_privilege('broadcast_lifecycle_outbox', 'SELECT')
    AND pg_catalog.has_table_privilege('broadcast_lifecycle_outbox', 'INSERT')
@@ -191,11 +194,12 @@ ON CONFLICT (event_id) DO NOTHING`
 // 선행 조건: 부르는 쪽은 그 ingest stream 의 위상 잠금(pc_topology_<stream> advisory · 설계 3.3)을 쥔 트랜잭션 끝에서
 // 부르고, 회차 세션을 ended 로 바꾸거나 회차를 닫는 모든 트랜잭션이 같은 잠금 아래에서 부른다. 판정은 stream_sessions
 // 를 잠그지 않고 읽으므로, 잠금 없이 같은 회차의 두 사슬이 따로 ended 가 되면 두 트랜잭션 모두 상대를 아직 ended 가
-// 아닌 것으로 보아 ended 행이 영영 생기지 않는다. lifecycle_enqueued 는 EnqueueStarted 와 같이 커밋 전 「적재 시도」
-// 신호다. started 행을 FOR SHARE 로 잠그므로 문장에는 outbox UPDATE 권한이 요건이다(30_grants.sql). 켜진 게이트는
-// 문장 전에 같은 트랜잭션에서 outboxWritable 을 묻고, 거짓이면 문장 없이 (false, nil) · ERROR
-// lifecycle_enqueue_skipped 다 — 닫힘 · phase 4 트랜잭션을 42501 로 롤백하지 않는다. 이렇게 건너뛴 완결 평가와 꺼진
-// 게이트의 완결 평가는 같은 DB 의 발행기 보정(repair.go)이 거둔다.
+// 아닌 것으로 보아 닫는 쪽은 ended 행을 넣지 못한다 — 아래 보정이 거둘 때까지 ended 가 없다. lifecycle_enqueued 는
+// EnqueueStarted 와 같이 커밋 전 「적재 시도」 신호다. started 행을 FOR SHARE 로 잠그므로 문장에는 outbox UPDATE
+// 권한이 요건이다(30_grants.sql). 켜진 게이트는 문장 전에 같은 트랜잭션에서 outboxWritable 을 묻고, 거짓이면 문장
+// 없이 (false, nil) · ERROR lifecycle_enqueue_skipped 다 — 닫힘 · phase 4 트랜잭션을 42501 로 롤백하지 않는다.
+// 이렇게 건너뛴 완결 평가와 꺼진 게이트의 완결 평가는 발행기 보정(repair.go)이 거둔다 — 같은 DB 에 이 판 이상의
+// 발행기가 떠 있고, 회차 시작이 보정 창(repairHorizon) 안일 때다.
 func EnqueueEndedIfComplete(ctx context.Context, tx pgx.Tx, g Gate, round string) (bool, error) {
 	if round == "" || !g.Enabled() {
 		return false, nil

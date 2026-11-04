@@ -95,17 +95,17 @@ func newWritableRolePool(t *testing.T, admin *pgxpool.Pool, tt writableRole) *pg
 		})
 	}
 	member := pgtest.NewLoginRole(t, admin)
-	execAdmin(t, admin, "GRANT SELECT ON stream_sessions, stream_segments TO "+member.Name)
-	for _, s := range tt.grants(member.Name, group) {
-		execAdmin(t, admin, s)
-	}
-	t.Cleanup(func() {
+	t.Cleanup(func() { // GRANT 보다 먼저 등록 — 중간 GRANT 가 실패해도 이미 준 권한을 거둬 멤버 DROP 이 막히지 않는다
 		stmts := []string{"REVOKE ALL ON broadcast_lifecycle_outbox, stream_sessions, stream_segments FROM " + member.Name}
 		if group != "" {
 			stmts = append(stmts, "REVOKE "+group+" FROM "+member.Name)
 		}
 		cleanupAdmin(t, admin, stmts...)
 	})
+	execAdmin(t, admin, "GRANT SELECT ON stream_sessions, stream_segments TO "+member.Name)
+	for _, s := range tt.grants(member.Name, group) {
+		execAdmin(t, admin, s)
+	}
 
 	cfg := admin.Config()
 	cfg.ConnConfig.User, cfg.ConnConfig.Password = member.Name, member.Password

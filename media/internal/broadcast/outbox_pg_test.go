@@ -619,9 +619,10 @@ func TestEnqueueOffGateSendsNoOutboxStatement(t *testing.T) {
 // J4′(b)(브로드캐스트 층) — 켜진 게이트 × outbox 권한 하나씩 회수(SELECT · INSERT · UPDATE): 개시 · 완결 평가가 오류
 // 없이 돌고 42501 0 · 그 INSERT 문장 0 · ERROR lifecycle_enqueue_skipped 1(event_type 일치) · started 행 0 ·
 // 완결 평가 (false, nil).
-// 잡는 결함: 판정이 없으면 INSERT 회수에서 42501 로 부르는 쪽 트랜잭션이 롤백되고(V2 · V3), SELECT · UPDATE 회수의
-// started 는 판정 없이 행이 생겨 started 와 ended 가 함께 서지 않는다. skipped 를 INFO 로 내리면 LOG_LEVEL=error
-// 에서 안 보인다(V21).
+// 잡는 결함: 완결 평가의 판정이 없으면 세 회수 모두 42501 로 부르는 쪽 트랜잭션이 롤백된다(V2). started 판정이
+// 없으면 INSERT · SELECT 회수(ON CONFLICT 가 SELECT 를 요구)는 42501 롤백이고, UPDATE 회수는 판정 없이 행이 생겨
+// skipped 0 이라 started 와 ended 가 함께 서지 않는다(V3). skipped 를 INFO 로 내리면 LOG_LEVEL=error 에서 안
+// 보인다(V21).
 func TestEnqueueSkipsWithoutOutboxPrivilege(t *testing.T) {
 	for _, privilege := range []string{"SELECT", "INSERT", "UPDATE"} {
 		t.Run("개시_"+privilege+"_회수", func(t *testing.T) {

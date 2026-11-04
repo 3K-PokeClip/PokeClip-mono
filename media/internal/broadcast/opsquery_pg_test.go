@@ -66,10 +66,22 @@ type opsVerdict struct {
 	d1, d2, d4Complete, d4Open int64
 }
 
-// runOps 는 README 의 D1 · D2 · D4 를 그대로 돌린다.
+// beginReadOnly 는 운영 질의를 돌릴 읽기 전용 트랜잭션이다 — README 블록에 쓰기가 섞이면 25006 으로 실패한다.
+func beginReadOnly(t *testing.T, pool *pgxpool.Pool) pgx.Tx {
+	t.Helper()
+	tx, err := pool.BeginTx(context.Background(), pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatalf("읽기 전용 트랜잭션 시작: %v", err)
+	}
+	return tx
+}
+
+// runOps 는 README 의 D1 · D2 · D4 를 읽기 전용 트랜잭션 하나에서 그대로 돌린다.
 func runOps(t *testing.T, pool *pgxpool.Pool) opsVerdict {
 	t.Helper()
 	ctx := context.Background()
+	tx := beginReadOnly(t, pool)
+	defer tx.Rollback(ctx)
 	var v opsVerdict
 	for _, q := range []struct {
 		name string
@@ -79,7 +91,7 @@ func runOps(t *testing.T, pool *pgxpool.Pool) opsVerdict {
 		{"D2", []any{&v.d2}},
 		{"D4", []any{&v.d4Complete, &v.d4Open}},
 	} {
-		if err := pool.QueryRow(ctx, opsQuery(t, q.name)).Scan(q.dest...); err != nil {
+		if err := tx.QueryRow(ctx, opsQuery(t, q.name)).Scan(q.dest...); err != nil {
 			t.Fatalf("운영 질의 %s 실행: %v", q.name, err)
 		}
 	}
@@ -105,6 +117,7 @@ func TestOpsQueriesIgnoreSettledRounds(t *testing.T) {
 	}
 
 	got := runOps(t, pool)
+	p.repairEvery = 0 // 둘째 tick 도 보정을 돈다 — 주기 안이면 보정을 건너뛰어 아래 repaired 0 이 실패할 수 없다
 	p.tick(ctx)
 
 	if got != (opsVerdict{}) {
@@ -121,8 +134,9 @@ func TestOpsQueriesIgnoreSettledRounds(t *testing.T) {
 func TestOpsD1CountsMissingEndedUntilRepaired(t *testing.T) {
 	pool := newTestPool(t)
 	now := dbNow(t, pool)
-	// seedRepairRound 의 완결 시각은 start + 10분(round_closed_at)이다.
-	seedRepairRound(t, pool, repairRound{id: "R-OLD", kind: roundComplete, start: now.Add(-21 * time.Minute)})
+	// seedRepairRound 의 완결 시각은 start + 11분이다 — start + 1분에 합류한 세션의 round_closed_at(+10분). R-OLD 의
+	// 완결은 now − 10분 30초라 문턱 위 30초이고, 문턱이 11분으로 밀리면 세지 않는다.
+	seedRepairRound(t, pool, repairRound{id: "R-OLD", kind: roundComplete, start: now.Add(-21*time.Minute - 30*time.Second)})
 	seedRepairRound(t, pool, repairRound{id: "R-NEW", kind: roundComplete, start: now.Add(-15 * time.Minute)})
 	p, _, _ := newRepairPublisher(t, pool)
 
@@ -239,7 +253,9 @@ func TestOpsD1MatchesRepairCandidates(t *testing.T) {
 		d1 = strings.Replace(d1, s.old, s.repl, 1)
 	}
 
-	rows, err := pool.Query(ctx, d1)
+	tx := beginReadOnly(t, pool)
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, d1)
 	if err != nil {
 		t.Fatalf("문턱 0 D1 실행: %v", err)
 	}
