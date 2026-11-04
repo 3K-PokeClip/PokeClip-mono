@@ -34,7 +34,6 @@ const HIGHLIGHT: LiveHighlight = {
   id: 'card-23',
   timestamp: '1:07:50',
   title: '채팅이 튄 순간',
-  meta: '채팅 ×4.2 급증 · 42초 · 방금',
   status: 'scored',
   source: 'auto',
   score: 97,

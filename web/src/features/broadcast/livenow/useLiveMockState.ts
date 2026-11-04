@@ -69,7 +69,6 @@ export interface LiveHighlight {
   id: string;
   timestamp: string;
   title: string;
-  meta: string;
   status: HighlightStatus;
   source: HighlightSource;
   /** 채점 점수 — 채점 전(unprocessed)·수동 카드에는 없다 */
@@ -260,7 +259,6 @@ function toHighlight(c: Snapshot, now: number, base: number | null): LiveHighlig
     id: `card-${c.id}`,
     timestamp: msToClock(c.streamTimestampMs),
     title: manual ? '핫키로 남긴 순간' : `채팅이 튄 순간 #${c.id}`,
-    meta: `${reason} · ${winSec}초 · ${ago}`,
     status,
     source: manual ? 'manual' : 'auto',
     score: c.score ?? undefined,

@@ -25,7 +25,6 @@ function highlight(overrides: Partial<LiveHighlight> = {}): LiveHighlight {
     id: 'hl-1',
     timestamp: '1:07:50',
     title: '시청자 참여 미션 성공',
-    meta: '채팅 ×4.2 급증 · 42초 · 방금',
     status: 'scored',
     source: 'auto',
     ...overrides,
@@ -168,16 +167,16 @@ describe('reuseHighlights', () => {
   });
 
   it('표기가 바뀐 카드만 새 객체다: 나머지 카드는 다시 그리지 않는다', () => {
-    const prev = [highlight({ id: 'a', meta: '5초 전' }), highlight({ id: 'b', meta: '3분 전' })];
+    const prev = [highlight({ id: 'a', ago: '5초 전' }), highlight({ id: 'b', ago: '3분 전' })];
 
     const next = reuseHighlights(
       prev,
-      [highlight({ id: 'a', meta: '6초 전' }), highlight({ id: 'b', meta: '3분 전' })],
+      [highlight({ id: 'a', ago: '6초 전' }), highlight({ id: 'b', ago: '3분 전' })],
       NOW,
     );
 
     expect(next).not.toBe(prev);
-    expect(next[0]?.meta).toBe('6초 전');
+    expect(next[0]?.ago).toBe('6초 전');
     expect(next[1]).toBe(prev[1]);
   });
 
