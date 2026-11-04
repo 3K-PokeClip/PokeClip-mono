@@ -213,6 +213,20 @@ describe('fromWire', () => {
     expect(fromWire({ ...base, kind: 'SOMETHING_NEW', data: {} })).toBeNull();
   });
 
+  it('data가 비었거나(null) 빠져도 던지지 않고 빈 칸으로 옮긴다 — 한 건 때문에 목록 전체가 깨지지 않게', () => {
+    expect(fromWire({ ...base, kind: 'CHAT_LINK_BROKEN', data: null })?.payload).toEqual({
+      kind: 'CHAT_LINK_BROKEN',
+      platform: 'CHZZK',
+    });
+    expect(fromWire({ ...base, kind: 'BROADCAST_ENDED' })?.payload).toEqual({
+      kind: 'BROADCAST_ENDED',
+      streamId: '',
+      broadcastTitle: '',
+      durationSec: 0,
+      cardCount: 0,
+    });
+  });
+
   it('종류가 정한 칸만 옮기고 모르는 칸은 버린다', () => {
     const got = fromWire({
       ...base,

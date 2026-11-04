@@ -86,7 +86,8 @@ interface NotificationWire {
   /** 이 일이 일어난 채널. 남의 채널(편집을 맡은 곳)이면 눌렀을 때 그 채널로 바꾼 뒤 간다 */
   channelId: number;
   channelName: string;
-  data: Record<string, unknown>;
+  /** 종류별 칸. 서버가 비워(null) 보내거나 빼먹어도 그 한 건 때문에 목록 전체가 깨지지 않게 받는다 */
+  data?: Record<string, unknown> | null;
 }
 
 export interface AppNotification {
@@ -122,7 +123,8 @@ const KINDS: ReadonlySet<string> = new Set<NotificationKind>([
  */
 export function fromWire(wire: NotificationWire): AppNotification | null {
   if (!KINDS.has(wire.kind)) return null;
-  const d = wire.data;
+  const d: Record<string, unknown> =
+    wire.data !== null && typeof wire.data === 'object' ? wire.data : {};
   const str = (k: string) => (typeof d[k] === 'string' ? (d[k] as string) : '');
   const num = (k: string) => (typeof d[k] === 'number' ? (d[k] as number) : 0);
   const privacy = (): ClipPrivacy =>
