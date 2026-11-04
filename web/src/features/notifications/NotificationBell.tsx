@@ -78,6 +78,12 @@ export function NotificationBell({ place, anchorRef, offset = 8 }: NotificationB
   const [openedAt, setOpenedAt] = useState(0);
   const [snapshot, setSnapshot] = useState<ReadonlySet<string>>(() => new Set());
   const [tab, setTab] = useState<PanelTab>('unread');
+  // 창이 열린 동안 새로 온(또는 방송이 끝나 풀린) 안 읽은 알림도 snapshot에 더한다: 열 때 한 번만 찍으면 그 줄은 읽는 순간
+  // 바로 사라지고, 목록을 읽는 중에 연 창은 snapshot이 비어 모든 줄이 그렇다(PR #481 리뷰)
+  if (open) {
+    const missing = state.items.filter((n) => !n.held && n.readAt === null && !snapshot.has(n.id));
+    if (missing.length > 0) setSnapshot(new Set([...snapshot, ...missing.map((n) => n.id)]));
+  }
 
   function openPanel() {
     setOpenedAt(Date.now());
@@ -177,11 +183,14 @@ function NotificationPanel({
     <>
       <div className={styles.head}>
         <h2 className={styles.title}>알림</h2>
+        {/* disabled 대신 aria-disabled: 누른 뒤 비활성이 돼도 포커스가 이 단추에 남는다(disabled면 body로 떨어진다) */}
         <button
           type="button"
           className={styles.textButton}
-          onClick={state.markAllRead}
-          disabled={state.unread === 0}
+          onClick={() => {
+            if (state.unread > 0) state.markAllRead();
+          }}
+          aria-disabled={state.unread === 0}
         >
           모두 읽음
         </button>
@@ -377,7 +386,12 @@ function MarkReadButton({ title, onRead }: { title: string; onRead: () => void }
     <button
       type="button"
       className={styles.markRead}
-      onClick={onRead}
+      onClick={(e) => {
+        // 누르면 이 단추가 사라진다: 포커스가 body로 떨어지지 않게 바로 앞의 그 알림 줄(형제 단추)로 옮긴다
+        const row = e.currentTarget.previousElementSibling;
+        onRead();
+        if (row instanceof HTMLElement) row.focus();
+      }}
       aria-label={`읽음으로 표시: ${title}`}
       title="읽음으로 표시"
     >

@@ -368,6 +368,77 @@ describe('NotificationBell', () => {
     expect(useChannelStore.getState().selected).toBeNull();
   });
 
+  it('창을 다시 열면 「전체」를 보다 닫았어도 「안 읽음」 탭부터 보인다', async () => {
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    let panel = await openPanel(user);
+    await user.click(within(panel).getByRole('button', { name: '전체' }));
+    expect(within(panel).getByRole('button', { name: '전체' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '알림' })).toBeNull());
+    panel = await openPanel(user);
+
+    expect(within(panel).getByRole('button', { name: '안 읽음 3개' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(within(panel).queryByText('방송이 끝났어요 · 다시보기 준비됨')).toBeNull();
+  });
+
+  it('키보드로 「읽음으로 표시」 · 「모두 읽음」을 눌러도 포커스가 창 안 그 자리에 남는다', async () => {
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+
+    within(panel).getByRole('button', { name: '읽음으로 표시: 클립을 올렸어요' }).focus();
+    await user.keyboard('{Enter}');
+    // 단추가 사라진 자리 대신 그 알림 줄로 옮긴다
+    expect(document.activeElement).toBe(
+      within(panel).getByRole('button', { name: /^클립을 올렸어요/ }),
+    );
+
+    const readAll = within(panel).getByRole('button', { name: '모두 읽음' });
+    readAll.focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(readAll).toHaveAttribute('aria-disabled', 'true'));
+    expect(document.activeElement).toBe(readAll);
+  });
+
+  it('창이 열린 동안 온 알림도 읽었을 때 닫기 전까지 「안 읽음」 탭에 남는다', async () => {
+    const { user, queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    const panel = await openPanel(user);
+
+    items = [
+      wire('n-new', 0, 'EDITOR_UPLOADED', {
+        editorName: '새봄',
+        clipTitle: '드래곤 스틸',
+        privacy: 'PRIVATE',
+      }),
+      ...items,
+    ];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    await user.click(
+      await within(panel).findByRole('button', {
+        name: '읽음으로 표시: 새봄 님이 내 채널에 올렸어요',
+      }),
+    );
+
+    // 방금 온 줄이 읽은 뒤에도 흐리게 남는다(점 단추만 사라짐)
+    await waitFor(() =>
+      expect(
+        within(panel).queryByRole('button', {
+          name: '읽음으로 표시: 새봄 님이 내 채널에 올렸어요',
+        }),
+      ).toBeNull(),
+    );
+    expect(within(panel).getByText('새봄 님이 내 채널에 올렸어요')).toBeInTheDocument();
+  });
+
   it('확인 필요 카드의 버튼은 그 일을 하는 화면으로 간다', async () => {
     const { user } = renderBell();
     await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });

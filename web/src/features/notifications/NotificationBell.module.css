@@ -88,9 +88,14 @@
   background: var(--pc-color-bg-surface-hover);
 }
 
-.textButton:disabled {
+.textButton:disabled,
+.textButton[aria-disabled='true'] {
   color: var(--pc-color-text-disabled);
   cursor: default;
+}
+
+.textButton[aria-disabled='true']:hover {
+  background: none;
 }
 
 .textButton:focus-visible {
