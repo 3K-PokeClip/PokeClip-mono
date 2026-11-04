@@ -104,11 +104,20 @@ export function NotificationBell({ place, anchorRef, offset = 8 }: NotificationB
 
   useArrivalToasts(state);
 
+  // 토스트(「알림 보기」 · 「모아 보기」)로 열면 FocusScope가 닫을 때 돌아갈 자리로 그 토스트 단추를 기억하는데, 토스트는 누르는
+  // 즉시 사라져 닫으면 포커스가 body로 떨어진다. 종 단추에 먼저 포커스를 두고 연다 — Toast는 모달이 포커스를 잡았으면 빼앗지
+  // 않는다(PR #481 4차)
+  const bellRef = useRef<HTMLSpanElement>(null);
+  function openFromOutside() {
+    bellRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    openPanel();
+  }
+
   // 토스트 단추의 부탁을 받는다(notificationRequests). 떠오를 때 이미 있던 부탁은 앞 종 몫이라 건너뛴다. 처리는 최신 함수로:
   // 구독은 한 번만 걸고 함수는 ref로 넘긴다
-  const handlers = useRef({ openPanel, openItem });
+  const handlers = useRef({ openPanel: openFromOutside, openItem });
   useEffect(() => {
-    handlers.current = { openPanel, openItem };
+    handlers.current = { openPanel: openFromOutside, openItem };
   });
   useEffect(() => {
     const requests = useNotificationRequests.getState();
@@ -140,7 +149,7 @@ export function NotificationBell({ place, anchorRef, offset = 8 }: NotificationB
       anchorRef={anchorRef}
       offset={offset}
     >
-      <span className={styles.bell} data-place={place}>
+      <span ref={bellRef} className={styles.bell} data-place={place}>
         <Popover.Trigger>
           <IconButton variant="ghost" size={place === 'header' ? 'md' : 'sm'} aria-label={label}>
             <Bell aria-hidden />
@@ -190,6 +199,25 @@ function NotificationPanel({
   onSettings,
 }: PanelProps) {
   const view = buildPanelView(state.items, tab, snapshot, now);
+
+  // 누른 단추가 다시 그려지며 사라지면(초대에 답해 「확인 필요」 카드가 일반 줄로 바뀜) 포커스가 body로 떨어져 다음 Tab이 창
+  // 맨 앞에서 시작한다. 마지막으로 포커스가 있던 알림을 적어 두었다가, 잃었으면 같은 알림의 새 줄로 — 없으면 지금 탭 단추로
+  // 옮긴다(PR #481 4차)
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const lastFocusedId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = lastFocusedId.current;
+    if (id === null || document.activeElement !== document.body) return;
+    const row = [
+      ...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-notification-id]') ?? []),
+    ].find((el) => el.dataset.notificationId === id);
+    const target =
+      row?.querySelector<HTMLButtonElement>('button') ??
+      tabsRef.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]');
+    target?.focus();
+  });
+
   return (
     <>
       <div className={styles.head}>
@@ -209,7 +237,7 @@ function NotificationPanel({
           <Settings aria-hidden />
         </IconButton>
       </div>
-      <div className={styles.tabs} role="group" aria-label="보기">
+      <div ref={tabsRef} className={styles.tabs} role="group" aria-label="보기">
         <button
           type="button"
           aria-pressed={tab === 'unread'}
@@ -222,7 +250,14 @@ function NotificationPanel({
           전체
         </button>
       </div>
-      <div className={styles.body}>
+      <div
+        ref={bodyRef}
+        className={styles.body}
+        onFocus={(e) => {
+          const at = e.target.closest<HTMLElement>('[data-notification-id]');
+          lastFocusedId.current = at?.dataset.notificationId ?? null;
+        }}
+      >
         <PanelBody
           state={state}
           view={view}
@@ -359,7 +394,12 @@ function NotificationRow({
   const view = describeNotification(n, now);
   const unread = n.readAt === null;
   return (
-    <div className={styles.rowWrap} data-unread={unread || undefined} data-dim={dim || undefined}>
+    <div
+      className={styles.rowWrap}
+      data-notification-id={n.id}
+      data-unread={unread || undefined}
+      data-dim={dim || undefined}
+    >
       <button
         type="button"
         className={styles.row}
@@ -429,7 +469,12 @@ function TodoCard({
   const view = describeNotification(n, now);
   const unread = n.readAt === null;
   return (
-    <div className={styles.todo} data-unread={unread || undefined} data-dim={dim || undefined}>
+    <div
+      className={styles.todo}
+      data-notification-id={n.id}
+      data-unread={unread || undefined}
+      data-dim={dim || undefined}
+    >
       <button
         type="button"
         className={styles.todoTop}

@@ -872,6 +872,54 @@ describe('NotificationBell', () => {
     expect(within(panel).getByRole('button', { name: '거절' })).toHaveFocus();
   });
 
+  it('토스트의 「알림 보기」로 연 창을 Esc로 닫으면 포커스가 종으로 돌아간다 (PR #481 4차)', async () => {
+    const { user, queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    items = [
+      wire(
+        'n-invite',
+        0,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+      ...items,
+    ];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    await screen.findByText('라면왕 채널이 편집자로 초대했어요');
+
+    screen.getByRole('button', { name: '알림 보기' }).focus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('dialog', { name: '알림' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '알림' })).toBeNull());
+    expect(screen.getByRole('button', { name: /^알림 · 안 읽음/ })).toHaveFocus();
+  });
+
+  it('키보드로 초대를 수락해 「확인 필요」 카드가 줄로 바뀌면 포커스가 그 줄로 간다 (PR #481 4차)', async () => {
+    items.push(
+      wire(
+        'n-invite',
+        1,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+    );
+    const { user, queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    within(panel).getByRole('button', { name: '수락' }).focus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('초대를 수락했어요')).toBeInTheDocument();
+    await waitFor(() => expect(within(panel).queryByRole('button', { name: '수락' })).toBeNull());
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(
+      within(panel).getByRole('button', { name: /^라면왕 채널이 편집자로 초대했어요/ }),
+    ).toHaveFocus();
+  });
+
   it('초대 답이 먼저 끝나도 아직 날아가는 읽음을 다시 읽기가 되돌리지 않는다 (PR #481 4차)', async () => {
     items.push(
       wire(
