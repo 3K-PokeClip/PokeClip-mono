@@ -209,7 +209,7 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
 |---|---|---|
 | 옛 모드 | 없음 — 목록을 채우면 modules/media_host 가 plan 에서 거부 | `lifecycle_disabled reason=no_topic`(INFO) |
 | 응답기 모드 · 빈 목록 | 없음 | `lifecycle_disabled reason=no_topic`(INFO) |
-| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | 준비 성공: ERROR `lifecycle_degraded value=0 reason=ready` · INFO `lifecycle_started`. 준비 실패: ERROR `lifecycle_degraded value=1`, `reason` = `privilege_check` · `privilege` · `sns_client` · `assembly` — 30초마다 다시 준비하고, 회복하면 `value=0 reason=recovered` · `lifecycle_started`. `lifecycle_disabled` 는 `no_topic` · `no_streams`(INFO) · `no_resolver`(ERROR · 설정 결함)에만. 적재 · 보정 동작은 아래 「게이트 공존 규칙」 · 「재기동 강등」 |
+| 응답기 모드 · 목록 | `BROADCAST_TOPIC_ARN` · `LIFECYCLE_PUBLISH_STREAMS`(쉼표로 이은 한 값 · 따옴표) | 준비 성공: ERROR `lifecycle_degraded value=0 reason=ready` · INFO `lifecycle_started`. 준비 실패: ERROR `lifecycle_degraded value=1`, `reason` = `privilege_check` · `privilege` · `sns_client` · `assembly` — 30초마다 다시 준비하고, 회복하면 `value=0 reason=recovered` · `lifecycle_started`. `lifecycle_disabled` 는 `no_topic` · `no_streams`(INFO) · `no_resolver`(ERROR · 설정 결함)에만. 적재 · 보정 동작은 아래 「게이트 공존 규칙」 · 「기동 강등」 |
 
 *   목록 항목(`*` 또는 26자 Crockford base32) · 주제 ARN 꼴은
     modules/media_host 가 plan 에서 봅니다. 인스턴스 역할의 `sns:Publish`
@@ -231,7 +231,7 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
     내는 판이고 마지막 `lifecycle_degraded`(회복 줄 `reason=recovered`
     포함)가 `value=0` 인 사이드카다 — 그 줄이 없는 옛 판은 보정하지 않는다.
     꺼진 사이드카가 연 회차는 started 가 없어 ended 도 없다.
-*   **재기동 강등:** 발행 설정이 찬 사이드카도 재기동 때 발행기
+*   **기동 강등:** 발행 설정이 찬 사이드카도 기동(재기동 포함) 때 발행기
     준비(`privilege_check` · `privilege` · `sns_client` · `assembly`)가
     실패하면 게이트를 켠 채 강등한다(기동 줄 `lifecycle_degraded` 를 내는
     판). 적재 직전 권한 판정이 참이면 적재를 계속하고(거짓이면 ERROR
