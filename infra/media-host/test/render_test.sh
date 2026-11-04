@@ -26,6 +26,9 @@
 #   - 사이드카 계약9 발행 env: 갈래 p1 · p2 · p3 · p4 · p6(응답기 · 옛 모드 ×
 #     목록 — p5 는 비밀 0 사례가 갈래 없이 전부를 봐서 없다). 사례(48 – 53)는
 #     test/lib/render_publish_cases.sh 에 있다.
+#   - sidecar.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(모든 갈래 사이드카의
+#     required env_file). 스위치 파일 사례(54 · 55)는
+#     test/lib/render_sidecar_env_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -62,6 +65,8 @@ source "${TEST_DIR}/lib/render_mtx_cases.sh"
 source "${TEST_DIR}/lib/render_auth_cases.sh"
 # shellcheck source=lib/render_publish_cases.sh
 source "${TEST_DIR}/lib/render_publish_cases.sh"
+# shellcheck source=lib/render_sidecar_env_cases.sh
+source "${TEST_DIR}/lib/render_sidecar_env_cases.sh"
 # shellcheck source=../bin/lib/render_files.sh
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
@@ -81,7 +86,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=53
+readonly CASE_COUNT=55
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -533,7 +538,8 @@ check_case_10() {
        MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
        S3_BUCKET: .rewind_bucket_name,
        REWIND_PUBLIC_BASE_URL: .rewind_public_base_url,
-       CONTROL_LISTEN: "127.0.0.1:8086"}
+       CONTROL_LISTEN: "127.0.0.1:8086",
+       PLAYBACK_ROUND_KEYS: (.playback_round_keys | tostring)}
        + (if .ingest_auth_image != "" then sc_resolve_env else {} end))}
     + (if .janitor_enabled
        then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
@@ -909,6 +915,7 @@ main() {
     render_all || true
     auth_cases::prepare || true
     publish_cases::prepare || true
+    sidecar_cases::prepare || true
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
@@ -1016,6 +1023,11 @@ main() {
     publish_cases::check_52
   harness::run_case 53 '발행 env — 목록 둘은 쉼표 하나로 이은 한 값' \
     publish_cases::check_53
+  harness::run_case 54 'sidecar.env 렌더 = 정확히 한 줄(true · false)' \
+    sidecar_cases::check_54
+  harness::run_case 55 \
+    '사이드카 env_file — compose 파일 옆 · required · environment 에 같은 키 없음' \
+    sidecar_cases::check_55
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/control"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
@@ -22,7 +24,6 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
-	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
@@ -72,6 +73,46 @@ func validateObservationWindow(obsFresh time.Duration) error {
 		obsFresh, index.TxnDeadline, index.TxnDeadline)
 }
 
+// reportPlaybackKeyLayout 은 기동 신호 playback_key_layout 한 줄을 낸다 — 새 꼴 쓰기 스위치(PLAYBACK_ROUND_KEYS)와 회차
+// 불변 트리거가 있는가(POK-525 설계 r9.4 2-2 (다) · 8-1). 트리거는 기동 필수가 아니라(운영은 새 판이 뜬 뒤에 깐다) 조회가
+// 실패해도 기동을 멈추지 않는다 — 그래서 오류를 돌려주지 않는다. 조회는 기동 DB 단계 하나라 dbStepTimeout 상한 안에서
+// 끝난다(답하지 않는 DB 에 기동이 걸리지 않는다).
+func reportPlaybackKeyLayout(ctx context.Context, pool *pgxpool.Pool, roundKeys bool, log *slog.Logger) {
+	cctx, cancel := context.WithTimeout(ctx, dbStepTimeout)
+	present, err := index.RoundFrozenTriggerPresent(cctx, pool)
+	cancel()
+	logPlaybackKeyLayout(ctx, log, roundKeys, present, err)
+}
+
+// logPlaybackKeyLayout 은 신호 줄을 쓴다. 꼴 `playback_key_layout layout=legacy|round round_frozen=present|absent|unknown`
+// (unknown 이면 끝에 err)은 운영 스크립트(sidecar-round-keys.sh)와 런북(media-swap.md)이 사이드카 저널에서 세는 계약이다.
+//
+// 켬인데 트리거가 있다고 확인되지 않으면 WARN 이다 — 켬 재생성 직후 · 운영 SQL 2(60_round_frozen.sql) 적용 전에는 한 줄이
+// 예상된다(설계 9-3 7). 그 뒤 기동의 WARN 은 값으로 갈린다: absent 면 조회가 성공했고 트리거가 없다(깔지 않았다). unknown 이면
+// 조회가 실패한 것이라 트리거가 있는지 모른다(깔려 있어도 나온다) — err 를 보고 DB 를 확인한다. 끔은 트리거와 무관하게 INFO 다.
+func logPlaybackKeyLayout(ctx context.Context, log *slog.Logger, roundKeys, present bool, lookupErr error) {
+	layout := "legacy"
+	if roundKeys {
+		layout = "round"
+	}
+	frozen := "absent"
+	switch {
+	case lookupErr != nil:
+		frozen = "unknown"
+	case present:
+		frozen = "present"
+	}
+	level := slog.LevelInfo
+	if roundKeys && frozen != "present" {
+		level = slog.LevelWarn
+	}
+	args := []any{"layout", layout, "round_frozen", frozen}
+	if lookupErr != nil {
+		args = append(args, "err", lookupErr)
+	}
+	log.Log(ctx, level, "playback_key_layout", args...)
+}
+
 func run() error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -118,6 +159,8 @@ func run() error {
 	if err := requireLedgerSchema(ctx, pool, log); err != nil {
 		return err
 	}
+	// 새 꼴 쓰기 스위치 상태 신호(POK-525) — 운영 스크립트가 켬 · 끔 재생성 뒤 이 줄로 판정한다. 기동은 막지 않는다.
+	reportPlaybackKeyLayout(ctx, pool, cfg.PlaybackRoundKeys, log)
 	// 연결 폐기 관측(POK-388). 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
 	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
 	defer stopIndexerStats()
@@ -128,9 +171,10 @@ func run() error {
 	defer stopLifecycle()
 
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
-	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
+	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다. 키 꼴은 상자 스위치가 고른다(POK-525).
 	store := index.NewPGStore(pool,
-		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log), playback.SegKey)
+		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log),
+		playbackKeyFor(cfg.PlaybackRoundKeys, log))
 
 	// 업로더가 파일을 여는 유일한 손잡이다. 루트를 못 열면 기동 실패다 —
 	// 그 상태로 진행하면 모든 PUT 이 열기 단계에서 실패한다.

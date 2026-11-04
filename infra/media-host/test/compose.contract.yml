@@ -9,7 +9,8 @@
 #     8890/udp 는 게시하지 않는다.
 #   - 로깅: 설정하지 않는다(엔진 기본값 — 로컬 엔진에 journald 가 없다).
 #   - env: 두지 않는다(prod 의 TZ · DB · 관리 API 자격 env 는 에코가 읽지
-#     않는다).
+#     않는다). 사이드카 env_file(상자 스위치 파일)도 두지 않는다 — 이 파일 옆
+#     sidecar.env(끔)는 start-media.sh 의 시작 점검만 본다.
 #   - bind 원본: 렌더 두 파일은 RUNTIME_DIR, nginx 설정은 PCBENCH_NGINX_CONF.
 #   - 시험 전용: 라벨 · 프로젝트 이름 · pull_policy · probe 서비스(사례 12).
 #

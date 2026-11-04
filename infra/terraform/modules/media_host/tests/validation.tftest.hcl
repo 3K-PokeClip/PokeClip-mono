@@ -474,6 +474,43 @@ run "rejects_unknown_ingest_auth_ip_limit" {
   expect_failures = [var.ingest_auth_ip_limit]
 }
 
+# 새 꼴 쓰기 스위치(sidecar.env 의 PLAYBACK_ROUND_KEYS)는 bool 이고 기본 끔이다
+# (결정 9 — 켬은 prod tfvars 의 몫). null 은 기본값으로 떨어진다(nullable = false).
+run "defaults_playback_round_keys_false" {
+  command = plan
+
+  assert {
+    condition     = output.template_vars.playback_round_keys == false
+    error_message = "playback_round_keys 기본값이 false 가 아니다."
+  }
+}
+
+run "accepts_playback_round_keys_true" {
+  command = plan
+
+  variables {
+    playback_round_keys = true
+  }
+
+  assert {
+    condition     = output.template_vars.playback_round_keys == true
+    error_message = "playback_round_keys 가 템플릿 변수로 그대로 넘어가지 않았다."
+  }
+}
+
+run "null_playback_round_keys_falls_back_to_false" {
+  command = plan
+
+  variables {
+    playback_round_keys = null
+  }
+
+  assert {
+    condition     = output.template_vars.playback_round_keys == false
+    error_message = "playback_round_keys = null 이 기본값 false 로 떨어지지 않았다(nullable = false)."
+  }
+}
+
 # 4C 토큰 비밀 ARN 은 다른 비밀 ARN 과 같은 꼴만 받는다(옛 모드는 빈 값).
 run "rejects_wildcard_stream_key_resolve_token_secret_arn" {
   command = plan

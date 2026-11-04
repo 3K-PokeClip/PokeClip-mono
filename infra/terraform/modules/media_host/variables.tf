@@ -509,3 +509,10 @@ variable "lifecycle_publish_streams" {
     error_message = "옛 모드(ingest_auth_image 빈 값)에서는 lifecycle_publish_streams 를 채우지 않는다 — 발행 env 가 렌더되지 않아 사이드카가 발행을 끈다."
   }
 }
+
+variable "playback_round_keys" {
+  description = "새 꼴 쓰기 스위치(sidecar.env 의 PLAYBACK_ROUND_KEYS — 두 모드 공통). user_data 가 첫 부팅에 한 번 쓰고, 그 뒤의 정본은 상자 안 파일이다. 기본 끔(결정 9 — 켬은 prod tfvars 의 몫)."
+  type        = bool
+  default     = false
+  nullable    = false
+}

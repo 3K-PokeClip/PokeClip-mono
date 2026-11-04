@@ -69,7 +69,7 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
 | 설치 묶음 이미지(`infra/media-host/bundle/Dockerfile` — `pokeclip-prod/media-host-bundle`) | `bin/*.sh` → `/opt/pokeclip-media/bin/` | `root:root` · 0755 |
 | 같은 이미지 | `bin/lib/*` → `/opt/pokeclip-media/bin/lib/` | `root:root` · 0644(디렉터리 0755) |
 | 같은 이미지 | `mediamtx.yml.tmpl` → `/etc/pokeclip-media/mediamtx.yml.tmpl` | `root:root` · 0644 |
-| user_data | `compose.yml` · `nginx.conf` · `ingest-auth.env`(Terraform 렌더) · `media.env` | `root:root` · 0644 |
+| user_data | `compose.yml` · `nginx.conf` · `ingest-auth.env` · `sidecar.env`(Terraform 렌더) · `media.env` | `root:root` · 0644 |
 | user_data | `/root/.docker/config.json`(`credHelpers` → `ecr-login`) | `root:root` · 0600 |
 | user_data | 유닛 `pokeclip-media.service`(저장소 파일 그대로) · drop-in `10-bundle.conf` | `root:root` · 0644 |
 | user_data | journald 설정(`Storage=persistent`) | `root:root` · 0644 |
@@ -90,10 +90,10 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     합니다.
 *   부트스트랩의 판정 줄(`MEDIA BOOTSTRAP OK|FAIL <단계>`)은 cloud-init 출력
     (`/var/log/cloud-init-output.log`)에 남습니다.
-*   압축 user_data 크기(시험값 기준): 기본 약 12.9 KB · 가장 큰 렌더(응답기
-    · janitor · 제어면 상류 모두 켬) 약 13.7 KB — 여유 약 2.6 KB 입니다. 주석을
-    고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은 16 KiB 게이트 시험이 매번
-    다시 잽니다.
+*   압축 user_data 크기(시험값 기준 · 2026-11-03 실측): 기본 13,293 바이트 ·
+    가장 큰 렌더(응답기 · janitor · 제어면 상류 모두 켬) 14,193 바이트 — 여유
+    약 2.1 KiB 입니다. 주석을 고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은
+    16 KiB 게이트 시험이 매번 다시 잽니다.
 
 묶음 내용이 저장소와 같은지는 묶음 Dockerfile 이 저장소 경로를 그대로 COPY
 하는 것으로 갈음합니다. 2026-10-23 로컬 빌드(arm64)에서 꺼낸 9개 파일의
@@ -154,6 +154,12 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     오류 없이 버립니다. 옛 모드(`ingest_auth_image` 빈 값)에서 채우면 plan 이
     멈춥니다. 사이드카 env 두 줄은 응답기 모드이고 목록이 찰 때만
     렌더합니다.
+*   `playback_round_keys`(bool · 기본 `false` · null 은 기본값으로)는 새 꼴
+    쓰기 스위치입니다. `/etc/pokeclip-media/sidecar.env` 에 정확히 한 줄
+    `PLAYBACK_ROUND_KEYS=true|false` 로 렌더해 첫 부팅에 한 번 씁니다(두 모드
+    공통 — compose 사이드카의 required `env_file`). 그 뒤의 정본은 상자 안
+    파일이라(user_data `ignore_changes`) 값을 바꿔도 떠 있는 상자는 그대로이고
+    다음 상자부터 그 값으로 뜹니다. 켬은 prod tfvars 의 몫입니다(결정 9).
 *   응답기 거부 목록 파라미터 이름은 `/pokeclip/prod/media/ingest-auth-deny-tokens`
     로 확정입니다(M15 계획 · ingest-auth `CONTRACT.md` K5 · `media.env` 의
     `INGEST_AUTH_DENYLIST_PARAM`). 값은 운영자가 고치고 Terraform 은 첫 줄만

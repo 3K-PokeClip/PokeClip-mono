@@ -102,6 +102,11 @@ tfvars 에 둡니다.
     늘 있습니다. 켜기 · 넓히기 · 끄기는 설정 반영 교체이고, 순서는
     [교체 런북](/infra/terraform/runbooks/media-swap.md) 「O8a 당김 교체」를
     따릅니다.
+*   `playback_round_keys`(새 꼴 쓰기 스위치 — 상자의
+    `/etc/pokeclip-media/sidecar.env`)는 기본 `false` 입니다(모듈 기본도
+    `false`). prod 값은 POK-525 교체 걸음 4.12(A 회수 4.11 뒤)부터 `true` 입니다(결정 9 (가)).
+    첫 부팅에만 쓰이므로 바꿔도 plan 의 상자 변경은 0 이고, 다음 상자부터 그
+    값으로 뜹니다. 떠 있는 상자의 값은 상자 안 파일이 정본입니다.
 
 적용은 O7e 의 1(kty 승인)입니다. 백엔드는 `backend.hcl.example` 을
 `backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를

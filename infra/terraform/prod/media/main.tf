@@ -67,6 +67,8 @@ module "media_host" {
   broadcast_topic_arn       = local.runtime.broadcast_topic_arn
   lifecycle_publish_streams = var.lifecycle_publish_streams
 
+  playback_round_keys = var.playback_round_keys
+
   rds_endpoint      = local.runtime.rds_endpoint
   rds_db_name       = local.runtime.rds_db_name
   rds_resource_id   = local.runtime.rds_resource_id
