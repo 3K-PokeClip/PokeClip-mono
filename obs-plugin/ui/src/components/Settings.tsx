@@ -143,10 +143,16 @@ export function SettingsPanel({
   }, [stale, serverEnv, apiBase]);
 
   useEffect(() => {
-    if (!focusDev || !devVisible || !settings) return;
+    if (!focusDev) return;
+    // 설정을 못 읽었으면 데려갈 칸이 없다 — 신호만 내린다. 남겨 두면 다음 연결 때 설정 탭으로 또 데려간다.
+    if (loadFailed) {
+      onDevFocused();
+      return;
+    }
+    if (!devVisible || !settings) return;
     devSection.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     onDevFocused();
-  }, [focusDev, devVisible, settings]);
+  }, [focusDev, devVisible, settings, loadFailed]);
 
   if (!settings) {
     return (

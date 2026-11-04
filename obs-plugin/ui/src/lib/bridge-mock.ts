@@ -20,6 +20,7 @@ import type {
 //            3초 안에 5번 눌러 켠다.
 // &putdelay=ms — 설정 저장(PUT)이 상태(SSE)를 먼저 보내고 응답은 이만큼 늦게 돌려준다(플러그인은 저장 → 상태 → 응답 순이고
 //               둘은 다른 연결이라 상태가 먼저 닿는다). 저장 중 패널 깜빡임 같은 순서 문제를 볼 때 쓴다.
+// &configfail=1 — 설정 읽기(GET /api/config)가 늘 실패한다 — 「설정을 불러오지 못했어요」 길을 볼 때 쓴다.
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
 const src = (key: string, name: string, kind: AudioKind, showing = true): AudioSource => ({ key, name, kind, showing });
 const MIC = src('ch:3', '마이크/보조', 'mic');
@@ -63,6 +64,7 @@ const isKnownApiBase = (base: string) => MOCK_KNOWN_API_BASES.includes(base);
 export function createMockBridge(scenario: string): Bridge {
   const env: ServerEnv = new URLSearchParams(location.search).get('env') === 'dev' ? 'dev' : 'prod';
   const putDelayMs = Number(new URLSearchParams(location.search).get('putdelay') ?? 0) || 0;
+  const configFail = new URLSearchParams(location.search).get('configfail') === '1';
   const servers = MOCK_SERVERS[env];
   const base: BridgeState = {
     version: 1,
@@ -361,6 +363,7 @@ export function createMockBridge(scenario: string): Bridge {
       return { ok: true };
     },
     async getSettings() {
+      if (configFail) throw new Error('config 503');
       return settings;
     },
     async putSettings(next) {
