@@ -4905,6 +4905,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(statValue('평균 시청자')).toHaveTextContent('확인 중');
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
+    // 정보 바의 방송한 날짜도 모른다: 시작 · 끝 시각은 명부 답에 온다
+    expect(
+      within(screen.getByRole('region', { name: '방송 정보' })).getByText('날짜 확인 중'),
+    ).toBeInTheDocument();
     const vodCalls = (part: string) =>
       fetchSpy.mock.calls
         .map(([url]) => new URL(String(url), 'http://localhost'))
@@ -5006,6 +5010,32 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(within(bar).getByText(broadcastDateLabel(VOD_STARTED))).toBeInTheDocument();
     expect(within(bar).queryByText(/명 시청/)).toBeNull();
     expect(statValue('평균 시청자')).toHaveTextContent('1,884');
+  });
+
+  // 위 시험의 방송은 같은 날 시작해 끝나 「시작 날 먼저, 없으면 끝난 날」을 가르지 못한다(PR #482 리뷰). 15시간 방송은
+  // 09-26 11:00(KST, 시험 시간대)에 시작해 09-27 02:00에 끝난다
+  const LONG_ENDED = VOD_STARTED + 15 * 3_600_000;
+
+  it('자정을 넘긴 지난 방송은 시작한 날짜를 쓴다', async () => {
+    expect(broadcastDateLabel(VOD_STARTED)).not.toBe(broadcastDateLabel(LONG_ENDED));
+    server.vodLong = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    const bar = screen.getByRole('region', { name: '방송 정보' });
+    expect(within(bar).getByText(broadcastDateLabel(VOD_STARTED))).toBeInTheDocument();
+    expect(within(bar).queryByText(broadcastDateLabel(LONG_ENDED))).toBeNull();
+  });
+
+  it('시작 시각을 모르는 지난 방송은 끝난 날짜를 쓴다', async () => {
+    server.vodLong = true;
+    server.vodStartUnknown = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    const bar = screen.getByRole('region', { name: '방송 정보' });
+    expect(within(bar).getByText(broadcastDateLabel(LONG_ENDED))).toBeInTheDocument();
+    expect(within(bar).queryByText('날짜 확인 중')).toBeNull();
   });
 
   it('방송한 날짜는 2026.10.20 꼴이다(월 · 일 두 자리)', () => {
