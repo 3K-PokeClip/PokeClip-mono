@@ -7,12 +7,22 @@ import { createTestQueryClient, makeQueryWrapper } from '@/test/testProviders';
 const api = vi.hoisted(() => ({
   reads: 0,
   timeline: { segments: [], truncated: false } as BroadcastTimeline,
+  /** 참이면 다음 읽기는 release()까지 답하지 않는다. 답은 떠난 때의 기록이다 */
+  holdNext: false,
+  release: null as (() => void) | null,
 }));
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/clipEditor')>()),
   fetchBroadcastTimeline: async () => {
     api.reads += 1;
-    return api.timeline;
+    const snapshot = api.timeline;
+    if (api.holdNext) {
+      api.holdNext = false;
+      await new Promise<void>((resolve) => {
+        api.release = resolve;
+      });
+    }
+    return snapshot;
   },
 }));
 
@@ -21,6 +31,7 @@ import {
   TIMELINE_FIRST_IMAGE_TRIES,
   TIMELINE_LIVE_MS,
   liveTimelineIntervalMs,
+  refetchTimelineForFirstImage,
   useBroadcastTimeline,
 } from './useBroadcastTimeline';
 
@@ -64,6 +75,8 @@ describe('useBroadcastTimeline: 방송 중 다시 읽는 주기', () => {
     vi.useFakeTimers();
     api.reads = 0;
     api.timeline = timelineOf();
+    api.holdNext = false;
+    api.release = null;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -109,6 +122,51 @@ describe('useBroadcastTimeline: 방송 중 다시 읽는 주기', () => {
     expect(api.reads).toBe(TIMELINE_FIRST_IMAGE_TRIES);
     await advance(1_000);
     expect(api.reads).toBe(TIMELINE_FIRST_IMAGE_TRIES + 1);
+  });
+
+  it('통로가 사진을 싣고 오면 기록에 사진이 없을 때만 바로 다시 읽는다', async () => {
+    const client = createTestQueryClient();
+    renderHook(() => useBroadcastTimeline('s1', 'live'), { wrapper: makeQueryWrapper(client) });
+    await advance(0);
+    expect(api.reads).toBe(1);
+
+    // 사진을 안 실은 관측(SOOP이 사진을 못 빌림 · 옛 서버)은 다시 읽어도 사진이 없다
+    act(() => refetchTimelineForFirstImage(client, 's1', null));
+    act(() => refetchTimelineForFirstImage(client, 's1', undefined));
+    await advance(0);
+    expect(api.reads).toBe(1);
+
+    // 첫 관측: 수집기가 기록에 적은 뒤 통로로 민다
+    api.timeline = timelineOf(segment('https://img/talk.png'));
+    act(() => refetchTimelineForFirstImage(client, 's1', 'https://img/talk.png'));
+    await advance(0);
+    expect(api.reads).toBe(2);
+
+    // 사진이 생긴 뒤로는 통로가 와도 30초 주기를 따른다: 첫 사진만 앞당긴다
+    act(() => refetchTimelineForFirstImage(client, 's1', 'https://img/game.png'));
+    await advance(0);
+    expect(api.reads).toBe(2);
+  });
+
+  it('첫 답을 기다리는 사이 통로가 오면 떠난 읽기를 버리고 다시 읽는다: 그 읽기는 관측이 적히기 전 기록일 수 있다', async () => {
+    api.holdNext = true;
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useBroadcastTimeline('s1', 'live'), {
+      wrapper: makeQueryWrapper(client),
+    });
+    await advance(0);
+    expect(api.reads).toBe(1);
+
+    api.timeline = timelineOf(segment('https://img/talk.png'));
+    act(() => refetchTimelineForFirstImage(client, 's1', 'https://img/talk.png'));
+    await advance(0);
+    expect(api.reads).toBe(2);
+    expect(result.current?.segments[0]?.categoryImageUrl).toBe('https://img/talk.png');
+
+    // 버린 읽기의 늦은 답(관측 전 기록)은 사진을 지우지 못한다
+    act(() => api.release?.());
+    await advance(0);
+    expect(result.current?.segments[0]?.categoryImageUrl).toBe('https://img/talk.png');
   });
 
   it('끝난 방송은 한 번만 읽는다(그대로)', async () => {
