@@ -299,6 +299,36 @@ describe('NotificationBell', () => {
     ).toBeNull();
   });
 
+  it('50개 상한 밖에 있던 옛 알림이 자리가 나서 창에 들어와도 「새 알림」 토스트로 울리지 않는다', async () => {
+    // 20일 된 풀리지 않은 할 일 1개 + 최근 알림 50개 → 보이는 것은 할 일 + 최근 49개(가장 옛 「옛 49」는 밖)
+    items = [
+      ...Array.from({ length: 50 }, (_, i) =>
+        wire(`old-${i}`, 2 + i, 'CLIP_UPLOADED', {
+          clipTitle: `옛 ${i}`,
+          count: 1,
+          privacy: 'PRIVATE',
+        }),
+      ),
+      wire('todo-old', 20 * 24 * 60, 'CHAT_LINK_BROKEN', { platform: 'CHZZK' }),
+    ];
+    const { queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 50개' });
+
+    // 할 일이 풀린다 → 기간 밖이라 빠지고 자리가 나 「옛 49」가 들어온다
+    items = items.map((w) =>
+      w.id === 'todo-old' ? { ...w, resolvedAt: new Date().toISOString() } : w,
+    );
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['notifications'] })).toBe(0));
+    // 받은 목록이 그려지고 새 알림 판정 효과가 돈 뒤에 본다
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(screen.queryByText('「옛 49」 · 비공개')).toBeNull();
+    expect(screen.queryByText(/^새 알림/)).toBeNull();
+  });
+
   it('14일이 지난 알림은 안 보이고, 풀리지 않은 할 일은 기간이 지나도 남는다', async () => {
     items.push(
       wire('n-old', 15 * 24 * 60, 'CLIP_UPLOADED', { clipTitle: '옛날 클립', count: 1 }),

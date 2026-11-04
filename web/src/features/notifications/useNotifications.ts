@@ -79,7 +79,8 @@ export function useNotifications() {
   // 최근 14일 · 최대 50개만 남긴다(풀리지 않은 할 일은 남김). 받은 목록이 바뀔 때만 다시 거른다 — 그래야 새 알림 토스트가
   // 렌더마다 목록을 다시 훑지 않는다
   const data = query.data;
-  const items = useMemo(() => visibleNotifications(data?.items ?? [], Date.now()), [data]);
+  const allItems = useMemo(() => data?.items ?? [], [data]);
+  const items = useMemo(() => visibleNotifications(allItems, Date.now()), [allItems]);
 
   // 읽음은 화면에 바로 그린다(낙관적) — 읽음 하나 실패로 토스트를 띄울 일은 아니다. 그리기 전에 나가 있던 재조회를 멈춘다:
   // 누르기 직전에 나간 응답(readAt null)이 늦게 오면 방금 그린 읽음을 덮어 점 · 숫자가 다음 재조회까지 되살아난다.
@@ -108,6 +109,8 @@ export function useNotifications() {
 
   return {
     items,
+    /** 서버가 준 그대로(14일 · 50개로 자르기 전) — 새 알림 판정은 이것으로 한다 */
+    allItems,
     unread: unreadCount(items),
     /** 서버가 없어 읽지 않는 중이면 false — 창은 빈 안내만 */
     enabled,
@@ -236,7 +239,8 @@ export function useArrivalToasts(state: NotificationsState) {
   const send = useNotificationRequests((s) => s.send);
   const known = useRef<Map<string, boolean> | null>(null);
 
-  const { items, enabled } = state;
+  // 판정은 자르기 전 목록으로: 보이는 목록으로 하면 상한 밖에 있던 옛 알림이 자리가 나서 들어올 때 「새 알림」으로 울린다
+  const { allItems: items, enabled } = state;
   const loaded = enabled && !state.isPending && !state.isError;
   useEffect(() => {
     if (!loaded) return;
