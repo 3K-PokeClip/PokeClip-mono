@@ -155,12 +155,28 @@ func TestObservePublishedWithoutWriterKeepsTick(t *testing.T) {
 	}
 }
 
-// fakeLedger 는 원장 가짜다 — ClosedUnreleased 만 값을 지어내고 나머지는 빈 결과다.
+// fakeLedger 는 원장 가짜다 — ClosedUnreleased · DeleteReleased 만 값을 지어내고 나머지는 빈 결과다.
 type fakeLedger struct {
 	mu     sync.Mutex
 	closed []edgebounds.Floor
 	err    error
 	calls  int
+	// deleted · delErr 는 DeleteReleased 의 답이고 deletes 는 받은 olderThan 이다(부른 순서).
+	deleted int64
+	delErr  error
+	deletes []time.Duration
+}
+
+func (l *fakeLedger) setDelete(n int64, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.deleted, l.delErr = n, err
+}
+
+func (l *fakeLedger) deleteCalls() []time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.deletes)
 }
 
 func (l *fakeLedger) setClosed(rows []edgebounds.Floor, err error) {
@@ -188,7 +204,12 @@ func (l *fakeLedger) ClosedUnreleased(_ context.Context, limit int) ([]edgebound
 
 func (l *fakeLedger) MarkReleased(context.Context, []edgebounds.Floor) error { return nil }
 
-func (l *fakeLedger) DeleteReleased(context.Context, time.Duration) (int64, error) { return 0, nil }
+func (l *fakeLedger) DeleteReleased(_ context.Context, olderThan time.Duration) (int64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.deletes = append(l.deletes, olderThan)
+	return l.deleted, l.delErr
+}
 
 // fakeStore 는 KVS 가짜다 — 판 하나로 Describe 만 답한다.
 type fakeKVS struct{}
@@ -307,6 +328,109 @@ func TestEdgeBoundsUnreleasedProbeFailureWarnsOnce(t *testing.T) {
 	}
 }
 
+// 감시는 확인마다 유예(ReleaseSettle)가 지난 해제 행을 지운다 — 해제 뒤 유예 안에 Writer 가 멈추고 Writer 없는 상자로
+// 넘어가도 해제된 행이 원장에 남아 그 회차를 끝남 대기에 묶지 않는다. 지운 행이 있을 때만 INFO 한 줄(rows)이다.
+func TestEdgeBoundsWithoutWriterDeletesSettledReleasedRows(t *testing.T) {
+	logs := &logCapture{}
+	l := &fakeLedger{deleted: 2}
+	deps := testEdgeBoundsDeps(l, &storeOpener{}, logs)
+
+	_, stop := launchEdgeBounds(t.Context(), config.Config{}, deps)
+	defer stop()
+
+	if got := l.deleteCalls(); len(got) != 1 || got[0] != deps.opt.ReleaseSettle {
+		t.Fatalf("기동 직후 DeleteReleased = %v, want [%v] 한 번", got, deps.opt.ReleaseSettle)
+	}
+	if n := logs.countLevel(slog.LevelInfo, signalReleasedRowsDeleted); n != 1 {
+		t.Fatalf("%s INFO %d줄, want 1", signalReleasedRowsDeleted, n)
+	}
+	if a := logs.attrs(signalReleasedRowsDeleted); a["rows"] != int64(2) {
+		t.Errorf("rows = %v, want 2", a["rows"])
+	}
+
+	l.setDelete(0, nil)
+	before := len(l.deleteCalls())
+	waitFor(t, "다음 감시의 삭제", func() bool { return len(l.deleteCalls()) > before+2 })
+	for _, d := range l.deleteCalls() {
+		if d != deps.opt.ReleaseSettle {
+			t.Errorf("DeleteReleased olderThan = %v, want %v", d, deps.opt.ReleaseSettle)
+		}
+	}
+	if n := logs.count(signalReleasedRowsDeleted); n != 1 {
+		t.Errorf("지운 행 0 인 감시에도 %s 가 났다(%d줄, want 1)", signalReleasedRowsDeleted, n)
+	}
+}
+
+// 삭제가 실패하면 실패가 이어지는 동안 check_failed WARN 한 줄이다. 미해제 조회는 그대로 돌아 set · clear 를 맞춘다 —
+// 삭제 실패가 미해제 신호를 막거나 지우지 않는다.
+func TestEdgeBoundsReleasedDeleteFailureKeepsUnreleasedSignal(t *testing.T) {
+	logs := &logCapture{}
+	l := &fakeLedger{closed: twoClosed(), delErr: errors.New("db down")}
+
+	_, stop := launchEdgeBounds(t.Context(), config.Config{}, testEdgeBoundsDeps(l, &storeOpener{}, logs))
+	defer stop()
+
+	if n := logs.countLevel(slog.LevelError, signalUnreleasedWithoutWriter); n != 1 {
+		t.Fatalf("삭제 실패 + 미해제 행에 %s %d줄, want 1(set)", signalUnreleasedWithoutWriter, n)
+	}
+	waitFor(t, "감시 셋", func() bool { return l.probes() >= 3 })
+	if n := logs.countLevel(slog.LevelWarn, signalUnreleasedCheckFailed); n != 1 {
+		t.Errorf("%s WARN %d줄, want 1 — 실패 구간당 한 줄", signalUnreleasedCheckFailed, n)
+	}
+	if msg, _ := logs.attrs(signalUnreleasedCheckFailed)["err"].(string); !strings.Contains(msg, "DeleteReleased") {
+		t.Errorf("err = %q, want DeleteReleased 실패가 드러남", msg)
+	}
+	if n := logs.count(signalUnreleasedWithoutWriter); n != 1 {
+		t.Errorf("삭제 실패가 이어지는데 %s %d줄, want 1(set 유지)", signalUnreleasedWithoutWriter, n)
+	}
+
+	l.setClosed(nil, nil)
+
+	waitFor(t, "clear 한 줄", func() bool { return logs.countLevel(slog.LevelError, signalUnreleasedWithoutWriter) == 2 })
+	if a := logs.attrs(signalUnreleasedWithoutWriter); a["value"] != int64(0) {
+		t.Errorf("clear 줄 속성 = %v, want value=0", a)
+	}
+	if n := logs.countLevel(slog.LevelWarn, signalUnreleasedCheckFailed); n != 1 {
+		t.Errorf("%s WARN %d줄, want 1", signalUnreleasedCheckFailed, n)
+	}
+	if n := logs.count(signalReleasedRowsDeleted); n != 0 {
+		t.Errorf("삭제가 실패했는데 %s %d줄, want 0", signalReleasedRowsDeleted, n)
+	}
+}
+
+// 삭제가 회복되면 실패 구간이 끝난다 — 다음 실패에 WARN 이 다시 한 줄 난다.
+func TestEdgeBoundsReleasedDeleteRecoveryEndsFailureInterval(t *testing.T) {
+	logs := &logCapture{}
+	l := &fakeLedger{delErr: errors.New("db down")}
+	p := &unreleasedProbe{ledger: l, timeout: time.Second, settle: edgeBoundsReleaseSettle, log: slog.New(logs)}
+
+	p.check(t.Context())
+	p.check(t.Context())
+	l.setDelete(0, nil)
+	p.check(t.Context())
+	l.setDelete(0, errors.New("db down again"))
+	p.check(t.Context())
+
+	if n := logs.countLevel(slog.LevelWarn, signalUnreleasedCheckFailed); n != 2 {
+		t.Errorf("%s WARN %d줄, want 2(실패 구간 둘)", signalUnreleasedCheckFailed, n)
+	}
+}
+
+// ctx 가 끝나 실패한 삭제 · 조회는 알리지 않는다(종료는 장애가 아니다).
+func TestEdgeBoundsProbeCanceledIsNotFailure(t *testing.T) {
+	logs := &logCapture{}
+	l := &fakeLedger{err: context.Canceled, delErr: context.Canceled}
+	p := &unreleasedProbe{ledger: l, timeout: time.Second, settle: edgeBoundsReleaseSettle, log: slog.New(logs)}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	p.check(ctx)
+
+	if n := logs.count(signalUnreleasedCheckFailed); n != 0 {
+		t.Errorf("ctx 취소에 %s %d줄, want 0", signalUnreleasedCheckFailed, n)
+	}
+}
+
 // ARN 이 꼴 밖이면(설정이 비우고 이유를 남김) ERROR edge_bounds_config_invalid 한 줄(원문 없음)이고 Writer 없이 미해제
 // 감시만 돈다.
 func TestEdgeBoundsConfigInvalidLogsReasonOnly(t *testing.T) {
@@ -340,6 +464,9 @@ func TestEdgeBoundsConfigInvalidLogsReasonOnly(t *testing.T) {
 	logs.mu.Unlock()
 	if n := logs.countLevel(slog.LevelError, signalUnreleasedWithoutWriter); n != 1 {
 		t.Errorf("설정 거부 + 미해제 행에 %s %d줄, want 1", signalUnreleasedWithoutWriter, n)
+	}
+	if n := len(l.deleteCalls()); n == 0 {
+		t.Error("설정 거부 갈래의 감시가 해제 행을 지우지 않았다")
 	}
 }
 
@@ -391,6 +518,9 @@ func TestEdgeBoundsStoreFailureDegrades(t *testing.T) {
 	}
 	if n := logs.countLevel(slog.LevelError, signalUnreleasedWithoutWriter); n != 1 {
 		t.Errorf("%s %d줄, want 1", signalUnreleasedWithoutWriter, n)
+	}
+	if n := len(l.deleteCalls()); n == 0 {
+		t.Error("강등 갈래의 감시가 해제 행을 지우지 않았다")
 	}
 }
 
