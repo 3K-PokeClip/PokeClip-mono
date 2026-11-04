@@ -317,16 +317,17 @@ async function findBroadcast(streamId: string): Promise<BroadcastRow | null> {
  * 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. 다른 화면이 이미 읽은 줄이면 네트워크 없이
  * 답한다(끝난 줄 5분 · 그 밖 20초). 같은 방송을 동시에 물으면 목록 걷기는 하나다.
  * @param signal 이 호출만 기다림을 접는다. 걷기 자체는 같이 기다리는 쪽이 있어 끝까지 가고 읽은 줄은 기억된다
- * @param fresh 기억해 둔 줄을 건너뛰고 다시 읽는다: 상태가 바뀌었는지 보는 호출(방송 시계의 주기)
+ * @param fresh 기억해 둔 줄을 건너뛰고 다시 읽는다: 상태가 바뀌었는지 보는 호출(방송 시계의 주기). 함수면 기억해 둔 줄이 그 조건에
+ *   맞을 때만 다시 읽는다(카드 저장: 기준점 없는 줄만)
  */
 export function fetchBroadcast(
   streamId: string,
   signal?: AbortSignal,
-  { fresh = false }: { fresh?: boolean } = {},
+  { fresh = false }: { fresh?: boolean | ((remembered: BroadcastRow) => boolean) } = {},
 ): Promise<BroadcastRow | null> {
-  if (!fresh) {
+  if (fresh !== true) {
     const known = rememberedRow(streamId);
-    if (known !== null) return Promise.resolve(known);
+    if (known !== null && (fresh === false || !fresh(known))) return Promise.resolve(known);
   }
   let lookup = rowLookups.get(streamId);
   if (lookup === undefined) {

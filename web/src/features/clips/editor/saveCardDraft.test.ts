@@ -76,8 +76,17 @@ describe('saveCardDraft', () => {
     expect(streamId).toBe('S-1');
     expect(sourceCardId).toBe('23');
     expect(savedCut()).toEqual({ inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 });
-    // 방송 줄은 기억해 둔 것이 아니라 새로 읽는다: 기준점 없는 줄을 20초 동안 다시 쓰는 동안 녹화가 생기면 기준점이 어긋난다
-    expect(fetchBroadcast).toHaveBeenCalledWith('S-1', undefined, { fresh: true });
+  });
+
+  it('기준점 없는 방송 줄만 새로 읽고, 기준점이 찬 줄은 기억해 둔 것을 쓴다', async () => {
+    await saveCardDraft('S-1', '23');
+    const [streamId, , options] = vi.mocked(fetchBroadcast).mock.lastCall!;
+    expect(streamId).toBe('S-1');
+    const fresh = options?.fresh as (row: BroadcastRow) => boolean;
+    // 기준점 없는 줄을 20초 동안 다시 쓰는 사이 녹화가 생기면 녹화 시작이 기준점이 되어 서버 기준점과 어긋난다
+    expect(fresh(noOrigin)).toBe(true);
+    // 기준점이 찬 줄은 더 바뀌지 않는다 — 끝난 옛 방송을 다시 읽으려 지난 방송 목록을 여러 쪽 넘기지 않는다
+    expect(fresh(broadcast)).toBe(false);
   });
 
   it('서버 기준점이 있으면 녹화를 묻지 않는다 — 녹화 읽기 실패(출입증 등)가 저장을 막지 않게', async () => {

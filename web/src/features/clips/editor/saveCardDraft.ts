@@ -38,9 +38,10 @@ export function cardDraftDocument(
  * 카드를 보관함에 저장한다(편집본 하나를 새로 만든다). 카드 목록 · 녹화는 편집 미리 받기가 기억해 둔 것을 같이 쓴다.
  *
  * 시각 기준점을 확실히 알 때만 저장한다: 기준점이 물러난 채 저장하면 편집기에서 열 때 기준점이 바뀌어 구간이 밀린다(렌더도 그 절대
- * 시각을 자른다). 방송 줄은 기억해 둔 것이 아니라 새로 읽는다: 기준점 없는 줄은 20초 동안 다시 쓰이는데, 그 사이 녹화가 생기면
- * 녹화 시작이 기준점이 된다 — 서버 기준점은 `playback_pdt − start_pts_ms`라 pts가 앞 방송에서 이어지면 녹화 시작과 몇 시간씩
- * 갈린다(PR #480 2차 리뷰, 1시간 재현).
+ * 시각을 자른다). 기준점 없는 방송 줄은 기억해 둔 것을 쓰지 않고 새로 읽는다: 그 줄은 20초 동안 다시 쓰이는데, 그 사이 녹화가
+ * 생기면 녹화 시작이 기준점이 된다 — 서버 기준점은 `playback_pdt − start_pts_ms`라 pts가 앞 방송에서 이어지면 녹화 시작과 몇
+ * 시간씩 갈린다(PR #480 2차 리뷰, 1시간 재현). 기준점이 찬 줄은 기억해 둔 것을 그대로 쓴다(편집기도 그 줄로 연다): 끝난 옛 방송은
+ * 다시 읽으려면 지난 방송 목록을 여러 쪽 넘겨야 한다(3차 리뷰).
  * - 서버 기준점(timelineOriginAt)이 있으면 그것이다. 녹화는 묻지 않는다(기준점 계산에 안 쓰이고, 그 실패가 저장을 막지 않게)
  * - 없는데 방송 중이면 녹화가 있어도 기다리게 한다(CardDraftNotReadyError): 조각이 생기면 곧 서버 기준점이 생긴다
  * - 없는 끝난 방송이면(조각 장부가 없다 — 편집기도 녹화 시작이나 방송 시작을 쓴다) 녹화를 묻는다. 목록을 못 물은 것(실패)과
@@ -56,7 +57,7 @@ export async function saveCardDraft(
 ): Promise<RecipeSnapshot> {
   const [card, broadcast] = await Promise.all([
     cardFromList(streamId, cardId),
-    fetchBroadcast(streamId, undefined, { fresh: true }),
+    fetchBroadcast(streamId, undefined, { fresh: (row) => !row.timelineOriginAt }),
   ]);
   if (card === null) throw new Error(`card ${cardId} not found`);
   if (broadcast === null || broadcast.startedAt === null) throw new Error('broadcast not started');
