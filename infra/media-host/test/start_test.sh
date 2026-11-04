@@ -8,7 +8,8 @@
 # 응답기 모드 외부 입력(4C 토큰 · 거부 목록 · 상태 디렉터리 · IP 한도 env 파일 ·
 # 모드 원천 꼴 · 거부 목록 가드 — 사례 51 – 61 은 lib/start_ingest_input_cases.sh)
 # 과 모드 블록(운영 템플릿 원본 그대로 두 모드 기동 · 표지 꼴 — 사례 62 · 63 은
-# lib/start_mode_cases.sh).
+# lib/start_mode_cases.sh)과 상자 스위치 파일(sidecar.env — 사례 64 는
+# lib/start_sidecar_env_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -48,6 +49,8 @@ source "${TEST_DIR}/lib/start_ingest_auth_cases.sh"
 source "${TEST_DIR}/lib/start_ingest_input_cases.sh"
 # shellcheck source=lib/start_mode_cases.sh
 source "${TEST_DIR}/lib/start_mode_cases.sh"
+# shellcheck source=lib/start_sidecar_env_cases.sh
+source "${TEST_DIR}/lib/start_sidecar_env_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -64,7 +67,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=63
+readonly CASE_COUNT=64
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -404,20 +407,22 @@ case_prod_default_prereq() {
 }
 
 #######################################
-# 사례 9 — prod 기본값으로 모든 점검을 통과시키면 -f · -p 가 prod 기본값이다.
+# 사례 9 — prod 기본값(MEDIA_COMPOSE_FILE 주입 없음)이면 상자 스위치 파일을 prod
+# compose 자리 옆(/etc/pokeclip-media/sidecar.env)에서 찾는다. 시험 기계에는
+# 그 파일이 없으므로 up 전에 막힌다. -f · -p 의 prod 기본값은 정지 쪽(사례
+# 17)이 down argv 로 본다 — 시작은 그 파일 없이 up 에 닿지 않는다.
 #######################################
 case_prod_default_up() {
-  local argv
+  local prod_env="${PROD_COMPOSE_FILE%/*}/sidecar.env"
+  if [[ -e "${prod_env}" || -L "${prod_env}" ]]; then
+    harness::add_reason "이 기계에 ${prod_env} 가 있어 판정 불가"
+    return 1
+  fi
   fixture::new_case
   fixture::base_env MEDIA_COMPOSE_FILE MEDIA_COMPOSE_PROJECT
   fixture::run start-media.sh || return 1
-  argv="$(up_argv)" || return 1
-  if [[ "${argv}" != "compose --ansi never -p ${PROD_PROJECT} -f \
-${PROD_COMPOSE_FILE} up "* ]]; then
-    harness::add_reason "up argv 「${argv}」(기대 -p ${PROD_PROJECT} -f \
-${PROD_COMPOSE_FILE})"
-    return 1
-  fi
+  fixture::expect_blocked 'MEDIA START BLOCKED: sidecar settings unavailable' \
+    || return 1
   fixture::common_checks
 }
 
@@ -784,7 +789,8 @@ main() {
     case_cred_helpers_missing
   harness::run_case 8 'prod 기본값 — 실패 줄에 기본 config 경로' \
     case_prod_default_prereq
-  harness::run_case 9 'prod 기본값 — -p · -f 기본값으로 up' case_prod_default_up
+  harness::run_case 9 'prod 기본값 — compose 기본 자리 옆 sidecar.env 를 봄' \
+    case_prod_default_up
   harness::run_case 10 'CDN 비밀 조회 실패 → 기동 차단' case_secret_fail
   harness::run_case 11 'CDN 비밀 빈 값 · None · ARN 없음 → 기동 차단' \
     case_secret_empty
@@ -883,6 +889,8 @@ main() {
     mode_cases::case_raw_template
   harness::run_case 63 '표지 꼴 깨짐 → template-mode 로 막음' \
     mode_cases::case_shape_table
+  harness::run_case 64 '상자 스위치 파일 없음 · 링크 · 두 줄 · 꼴 밖 → 기동 차단' \
+    sidecar_env::case_switch_file
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

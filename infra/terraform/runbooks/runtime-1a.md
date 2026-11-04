@@ -994,6 +994,534 @@ make_read backlog "${payload}/backlog.sql" && send_step backlog
     「한 창 절차」 에서는 그 자리의 갈래를 따르고, 사고 확인이면 Media 교체
     런북 「M6 운영 SQL 경계 · 롤백 하한」 의 복구로 갑니다.
 
+### 발행 잔여 질의
+
+[Media 교체 런북](media-swap.md) 「O8a 당김 교체」 의 계약9 발행 판정 질의
+입니다(kty 2026-11-03). 흐름 · 승인 · 기록 규칙은 위 「M6 읽기 질의」 와
+같습니다 — 읽기 전용 트랜잭션에서 표 주인으로 읽고, `make_read` 로 보내고,
+`VERIFY OK` 를 함께 봅니다.
+
+**시험 회차**는 머리 세션(`session_id = round_id`)의 `stream_id` 가 시험
+ID 이고 `started_at` 이 「O8a 당김 교체」 걸음 8 시각 이후인 회차 전부입니다.
+
+| 행 | 뜻 | 쓰는 자리 · 통과 |
+|---|---|---|
+| `Q1` | 시험 회차의 started 행(sequence 1 · `abandoned` 아님) 가운데 같은 회차의 ended 행(sequence 2)이 없는 수 | 종료 판정 · 롤백 · 교체 전 — 0 |
+| `Q2` | 시험 회차 outbox 행 가운데 `pending` 수(SNS 재시도 중 포함) | 종료 판정 · 롤백 — 0 |
+| `Q3` | 시험 회차 세션 가운데 `round_closed_at` 이 비었거나 `ended` 아닌 수 | 종료 판정 — 0 |
+| `Q3_all` | 시험 ID 의 모든 세션 가운데 `ended` 아니거나 회차가 열린 수(`started_at` 조건 없음) | 걸음 13 직전 — 0 |
+| `abandoned` | 시험 ID 의 outbox `abandoned` 행 수 | 종료 판정 — 0 |
+| `rounds` | 시험 회차 수 | 종료 판정 · 롤백 · 교체 전 — 1 이상(회차 수는 고정하지 않음). 걸음 13 전, 또는 걸음 13 루프백이 회차를 만들지 못하고 실패했을 때(`LOOPBACK FAIL test-key` · `pull`, 인증 거부 · 연결 실패)는 시험 회차가 없어 0 이고, 그때는 Q4 로 봄 — 회차가 하나라도 생겼으면 1 이상 |
+| `Q4_<상태>` | 상태별 outbox 행 수(전체) — 행이 없으면 이 줄도 없음 | 걸음 0 · 8 · 12 의 기준선 — `Q4_` 줄 0 |
+
+*   `Q1 > 0 ∧ Q3 = 0` 은 자동 복구 경로가 없는 갈래입니다(Media 교체 런북
+    「O8a 당김 — 롤백」 — kty 회부).
+*   **`rounds` 가 0 이면 Q1 · Q2 · Q3 · `abandoned` 의 0 은 판정이
+    아닙니다.** Q1 · Q2 · Q3 는 시험 회차 안에서만 세므로, 시험 회차를 하나도
+    잡지 못하면 실제 상태와 무관하게 0 이 됩니다. `abandoned` 는 시험 ID 로만
+    거르고 시각 조건이 없어 `rounds` 가 0 이어도 0 이 아닐 수 있지만(걸음 8
+    전의 행도 셈), 시험 ID 가 틀리면 역시 0 이 됩니다.
+*   걸음 13 뒤인데 `rounds` 가 0 이면 멈추고 시험 ID · 걸음 8 시각을 다시
+    봅니다. 이 멈춤은 입력을 바로잡아 질의를 다시 보내는 자리라, Media 교체
+    런북 「O8a 당김 교체 걸음」 의 **멈춤 자리**(kty 회부 · 보고 — 대안을
+    고르지 않는 자리) 목록에는 들지 않습니다. 걸음 13 루프백이 회차를 만들지
+    못하고 실패했으면 0 이 맞고, 그때는 걸음 13 전과 같이 Q4 로 봅니다(위
+    `rounds` 행).
+*   시험 ID · 걸음 8 시각을 질의에 넣기 전에 꼴을 봅니다 — 시험 ID 는 26자
+    Crockford base32 대문자, 시각은 10자리 epoch 초입니다(밀리초 13자리는 꼴
+    밖). 꼴 밖이면 함수가 「멈춤」 을 내고 질의를 만들지도 보내지도 않습니다
+    (질의에 따옴표 · 문장이 끼지 않게).
+
+```shell
+make_publish_rest() {  # make_publish_rest <시험 ID> <걸음 8 시각 — epoch 초>
+  local test_id="$1" since="$2"
+  [[ "${test_id}" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ && "${since}" =~ ^[0-9]{10}$ ]] ||
+    { echo "멈춤: 시험 ID 또는 시각의 꼴이 틀림" >&2; return 1; }
+  cat >"${payload}/publish-rest.tmpl" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+WITH test_rounds AS (
+  SELECT h.round_id
+    FROM stream_sessions h
+   WHERE h.session_id = h.round_id AND h.stream_id = '@@TEST_ID@@'
+     AND h.started_at >= pg_catalog.to_timestamp(@@SINCE@@)
+)
+SELECT 'Q1' AS q, pg_catalog.count(*) AS n
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.round_id IN (SELECT round_id FROM test_rounds)
+   AND o.sequence = 1 AND o.state <> 'abandoned'
+   AND NOT EXISTS (SELECT 1 FROM broadcast_lifecycle_outbox e
+                    WHERE e.round_id = o.round_id AND e.sequence = 2)
+UNION ALL
+SELECT 'Q2', pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.round_id IN (SELECT round_id FROM test_rounds) AND o.state = 'pending'
+UNION ALL
+SELECT 'Q3', pg_catalog.count(*)
+  FROM stream_sessions s
+ WHERE s.round_id IN (SELECT round_id FROM test_rounds)
+   AND (s.round_closed_at IS NULL OR s.state <> 'ended')
+UNION ALL
+SELECT 'Q3_all', pg_catalog.count(*)
+  FROM stream_sessions s
+ WHERE s.stream_id = '@@TEST_ID@@'
+   AND (s.state <> 'ended' OR (s.round_id IS NOT NULL AND s.round_closed_at IS NULL))
+UNION ALL
+SELECT 'abandoned', pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.ingest_stream_id = '@@TEST_ID@@' AND o.state = 'abandoned'
+UNION ALL
+SELECT 'rounds', pg_catalog.count(*) FROM test_rounds
+UNION ALL
+(SELECT 'Q4_' || o.state, pg_catalog.count(*)
+   FROM broadcast_lifecycle_outbox o GROUP BY o.state ORDER BY o.state);
+RESET ROLE;
+SQL
+  sed -e "s/@@TEST_ID@@/${test_id}/g" -e "s/@@SINCE@@/${since}/g" \
+    "${payload}/publish-rest.tmpl" >"${payload}/publish-rest.sql" ||
+    { echo "멈춤: 질의 파일을 만들지 못함" >&2; return 1; }
+  make_read publish-rest "${payload}/publish-rest.sql"
+}
+make_publish_rest '<시험 ingestStreamId>' '<걸음 8 시각 — epoch 초>' &&
+  send_step publish-rest
+```
+
+*   기록에 옮기는 것은 `== read` 뒤 `q | n` 줄뿐입니다. 회차 id · 행 원문은
+    옮기지 않습니다.
+
+## POK-525 운영 SQL 2 · 읽기 질의
+
+POK-525(조각 키를 업로드 때부터 회차 경로에) 교체의 DB 몫입니다. 걸음
+순서와 판정은 [Media 교체 런북](media-swap.md) 「POK-525 교체」 가 정본이고,
+이 절은 그 걸음이 보내는 SQL 과 보내는 법입니다. 실행자 · 승인 규칙과 흐름은
+「M6 읽기 질의」 와 같습니다 — 4(켬) → 5-1(아래 SHA) → 5-2 → 5-3 의 준비만 →
+아래 보냄 → 7(끔). 보낼 때마다 SQL 원문을 kty 에게 보이고 승인을 받습니다.
+
+용어:
+
+*   **새 꼴 · 옛 꼴**: 되감기 조각 키의 두 꼴입니다 — 새 꼴
+    `dvr/{stream}/{round}/seg/{seq}.m4s`(회차 경로) · 옛 꼴
+    `dvr/{stream}/seg/{seq}.m4s`. 사이드카의 새 꼴 쓰기 스위치
+    (`PLAYBACK_ROUND_KEYS`)가 켜져 있을 때만 새 꼴을 씁니다.
+*   **② · ③ · init**: 사이드카 업로더가 올리는 세 갈래(축)입니다 — ② 는
+    녹화 파일 그대로(`upload_state` · 질의의 `archive` 행), ③ 은 되감기용으로
+    다시 짠 조각(`playback_upload_state` · `playback` 행), init 은 회차의 머리
+    조각(`init_uploaded_at` · `init` 행)입니다. 뜻은 media README 「M4 ⓐ 용어」 의
+    「②·③·init 축」 과 같습니다.
+*   **운영 SQL 2**(`60_round_frozen.sql`): `stream_sessions.round_id` 를
+    다른 값으로 바꾸는 UPDATE 를 거부하는 트리거(회차 불변 트리거
+    `stream_sessions_round_frozen`)를 깝니다. 운영 SQL 1(00–40 — 「M6 스키마
+    재실행」)과 다른 때, 스위치를 켜고 첫 새 꼴 행이 생긴 뒤(교체 걸음 4.9)
+    혼자 돌립니다. 그 앞에 깔면 옛 상자 A 가 늦은 4D 를 처리하던 문장이
+    거부돼 그 4D 가 사라집니다.
+*   **SHA**: 이 절의 5-1 은 교체 걸음 3(운영 SQL 1 — 「M6 스키마 재실행」)에
+    쓴 재실행 SHA 로 돕니다. 8 에 기록된 최신 SQL 적용 SHA 이고, 그 SHA 에
+    `60_round_frozen.sql` 이 있어야 합니다(없으면 아래 `git show` 가
+    실패합니다). 뒤따르는 `40_verify.sql` 도 그 SHA 의 판이라 DB 와 맞습니다.
+
+### POK-525 SQL 걸음 페이로드
+
+운영 SQL 2 와 롤백 짝은 같은 꼴로 보냅니다 — 적용 페이로드의 접속 명령
+(`apply.json` 에서 마지막 명령을 뺀 것) 뒤에 SQL 파일 하나를 `psql -X -1 -v
+ON_ERROR_STOP=1` 로 돌리고 이어서 `40_verify.sql` 을 돌립니다(「실패 · 시간
+초과」 의 손 SQL 꼴). SQL 은 base64 로 실어 상자에서 풀고, 로컬에서 잰
+sha256 과 상자에서 잰 값이 다르면 psql 을 부르기 전에 멈춥니다(`set -eu`).
+
+```shell
+make_sql_step() {  # make_sql_step <걸음 이름> <SQL 파일>
+  local sum
+  sum="$(shasum -a 256 "$2" | cut -d ' ' -f 1)" ||
+    { echo "멈춤: $2 의 sha256 을 재지 못함" >&2; return 1; }
+  jq --rawfile sql "$2" --arg sum "${sum}" '
+    .commands = .commands[:-1] + [
+      "printf %s " + ($sql | @base64 | @sh) + " | base64 -d >/root/rt1a/step.sql",
+      "echo " + (($sum + "  /root/rt1a/step.sql") | @sh) + " | sha256sum -c -",
+      "echo == step",
+      "psql -X -1 -v ON_ERROR_STOP=1 -f /root/rt1a/step.sql",
+      "echo == 40_verify.sql",
+      "psql -X -1 -v ON_ERROR_STOP=1 -f 40_verify.sql"
+    ]
+    | .executionTimeout = ["300"]' \
+    "${payload}/apply.json" >"${payload}/$1.json" || return 1
+  printf 'STEP %s sha256 %s\n' "$1" "${sum}"
+}
+```
+
+### POK-525 운영 SQL 2 적용
+
+교체 걸음 4.9 입니다. 선행은 4.8 통과(켬 뒤 루프백 · Q3)와 **B 방송 경로 0**
+(Media 교체 런북 「상자 스크립트」 의 `paths.sh` 로 B `PATHS 0` — 보내기
+직전)입니다. 트리거를 만드는 동안 `stream_sessions` 쓰기가 잠깐 막히므로
+방송 없는 창에서만 돌립니다.
+
+```shell
+git show "<SHA>:infra/terraform/prod/runtime/sql/60_round_frozen.sql" \
+  >"${payload}/60_round_frozen.sql" &&
+  make_sql_step round_frozen "${payload}/60_round_frozen.sql" &&
+  send_step round_frozen
+```
+
+*   통과 = 상태 `Success` · 표준 출력의 `ROUND FROZEN OK` 와 그 뒤
+    `VERIFY OK`. `40_verify.sql` 은 트리거를 단언하지 않습니다(운영 SQL 1
+    뒤에도 돌기 때문) — 트리거 모양은 60 끝의 DO 블록이 단언합니다.
+*   잠금 대기 상한은 60 파일이 스스로 겁니다(`SET LOCAL lock_timeout =
+    '3s'`). `make_sql_step` 은 `apply.json` 의 마지막 명령만 빼고 나머지를
+    물려받는데, 이 흐름의 5-1 이 새로 만든 `apply.json` 에는 「재실행
+    걸음」 의 `PGOPTIONS` 줄이 없습니다(그 줄은 「재실행 걸음」 의 jq 가 끼울
+    때만 생김). 표준 오류에
+    `lock timeout`(SQLSTATE 55P03)이 있으면 파일 전체가 롤백돼 트리거는
+    없습니다. 「실패 · 시간 초과」 대로 끄고, 다음 흐름에서 B `PATHS 0` 을
+    다시 본 뒤 4(켬)부터 다시 합니다.
+*   `round frozen failed: <식별자>` 면 같은 이름의 다른 모양 트리거가 이미
+    있는 것입니다(식별자 뜻은 60 파일 머리). 지우지 않고 멈춰 kty 에게
+    보고합니다.
+*   다시 돌려도 같습니다 — 트리거는 이름이 없을 때만 만들고, 수렴한
+    재실행은 표를 잠그지 않습니다.
+*   B 를 다시 띄우지 않습니다. 다음 기동부터 사이드카의 기동 신호가
+    `round_frozen=present` 입니다.
+*   기록(8)에 SHA · 60 의 sha256(`STEP` 줄) · 통과 시각을 더합니다.
+
+### POK-525 트리거 롤백 짝
+
+트리거 결함 대응 전용입니다 — 교체 걸음 4.9 뒤 정당한 세션 UPDATE(상태
+전이 · 표식 · 동결처럼 `round_id` 를 바꾸지 않는 문장)가 SQLSTATE 23514
+`stream_sessions.round_id is frozen` 으로 거부될 때만 씁니다. **A 복귀
+수단이 아닙니다** — 새 꼴 행이 생긴 뒤에는 트리거를 지워도 옛 이미지가 새
+꼴 키를 읽지 못합니다(Media 교체 런북 「POK-525 롤백」).
+
+```shell
+cat >"${payload}/round_frozen_drop.sql" <<'SQL'
+SET ROLE media_owner;
+SET LOCAL lock_timeout = '3s';
+DROP TRIGGER IF EXISTS stream_sessions_round_frozen ON stream_sessions;
+RESET ROLE;
+SQL
+make_sql_step round_frozen_drop "${payload}/round_frozen_drop.sql" &&
+  send_step round_frozen_drop
+```
+
+*   통과 = 상태 `Success` · `VERIFY OK`. 트리거 함수
+    (`stream_sessions_reject_round_change`)는 지우지 않습니다.
+*   `DROP TRIGGER` 는 `stream_sessions` 에 `AccessExclusiveLock`(읽기도
+    막음)을 잡습니다(PG17 `pg_locks` 실측). 그래서 B `PATHS 0` 인 방송
+    없는 창에서 보내고, 잠금 대기는 3초로
+    끊습니다. `lock timeout` 이면 아무것도 지워지지 않습니다 — 「실패 ·
+    시간 초과」 대로 끄고 다음 흐름에서 다시 합니다.
+*   지운 뒤에는 고친 60 파일을 담은 PR 을 머지하고, 그 머지 SHA 로 위
+    「POK-525 운영 SQL 2 적용」 을 다시 돕니다.
+*   이 짝은 Media 교체 런북 「M6 운영 SQL 경계 · 롤백 하한」 의 「하지 않는
+    것 셋」 과 대상이 다릅니다. 그 셋은 **seq 하한** 트리거
+    (`seq_below_floor`) · 하한 행 · 하한 아래 이미지이고 지금도 하지
+    않습니다. 이 짝은 **회차 불변** 트리거 하나만 지웁니다.
+*   로컬(`ENSURE_SCHEMA` 켬)은 사이드카가 뜰 때마다 같은 트리거를 다시
+    깝니다. 로컬에서 지운 것은 다음 기동까지만 가는 시험용이고 이 절차가
+    아닙니다.
+
+### POK-525 읽기 질의
+
+이 절의 Q1 – Q4 는 위 「발행 잔여 질의」 의 Q1 – Q4 와 이름만 같고 다른
+질의입니다. media-swap 「POK-525 교체」 · 롤백 · 다음 교체의 Q 는 이 절을
+가리킵니다.
+
+교체 걸음이 DB 를 읽어 판정하는 질의 다섯입니다. Q1 · Q2 · Q3 은 설계
+(POK-525 r9.4 6절) 문장 그대로이고(Q2 init 행의 셋째 칸만 NULL), Q2-B 는
+계획(r2 4-7)이, Q4 는 교체 걸음 4.10 의 「업로드 · 발행 정상 · VOD 문서 URI
+새 꼴」(설계 9-3) 판정으로 더한 것입니다. 각 질의는 `-- BEGIN <이름>` · `-- END <이름>`
+표지 안에 있고, `media/internal/index/runbook_query_pg_test.go` 가 표지 사이
+글자를 그대로 뽑아 PG 에서 돌립니다 — 질의를 고치면 그 시험이 고친 글자를
+잽니다. 보내는 꼴은 「M6 읽기 질의」 의 `make_read` 입니다(첫 줄
+`SET TRANSACTION READ ONLY;` · 뒤이어 `40_verify.sql`).
+
+| 질의 | 쓰는 자리(교체 걸음) | 통과 |
+|---|---|---|
+| Q1 새 꼴 행 수(`q1.sql`) | 4.2 · 4.6 · 「켜기 전」 선언 판정(롤백) | `round_keys` 0 |
+| Q2 A 배출(`q2.sql`) | 4.4 · 4.11 · media-swap.md 「POK-525 다음 교체」 8 · 10(옛 상자 B 배출) | 세 행 모두 `waiting` 0 |
+| Q2-B B 배출(`q2b.sql`) | 롤백 「켜기 전」 의 B 회수 앞 | 세 행 모두 `waiting` 0 |
+| Q3 켬 뒤 키 꼴 대조(`q3.sql`) | 4.8 · 4.10 | `matched` 1 이상 · `mismatched` 0 |
+| Q4 시험 방송 회차(`q4.sql`) | 4.10(방송을 끝내고 국면이 `vod` 가 된 뒤) | `pass` 가 `t` |
+
+자리 표시는 그 걸음에서 적어 둔 값으로 채웁니다. 시각은 UTC 로 적습니다
+(`date -u +%Y-%m-%dT%H:%M:%SZ`).
+
+| 자리 | 값 |
+|---|---|
+| `<since>` | B 기동(교체 걸음 4.1)의 apply 를 시작한 시각 — 그 앞에는 새 꼴을 쓰는 이미지가 없다. 더 이른 값은 더 많이 셀 뿐이다 |
+| `<cut>` | ingest 전환(4.3)에서 `tg_health` 의 `ingest` 가 B 한 대 healthy 가 된 시각 + 30초(등록 해제 지연). 「POK-525 다음 교체」 에서는 새 상자 C 한 대 |
+| `<cut2>` | 롤백에서 ingest 를 A 로 되돌린 뒤 `ingest` 가 A 한 대 healthy 가 된 시각 + 30초 |
+| `<on>` | `SIDECAR ROUND KEYS OK on` 을 본 시각(4.7) |
+| `<test>` | 루프백 시험 스트림의 `ingestStreamId` |
+
+```shell
+cat >"${payload}/q1.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+-- BEGIN Q1
+-- Q1 새 꼴 행 수 — <since> = B 기동 시각(그 앞에는 새 꼴을 쓰는 이미지가 없다). 켜기 전 = 0 이어야 한다.
+SELECT pg_catalog.count(*) AS round_keys
+  FROM stream_segments
+ WHERE start_wall_utc >= '<since>'::timestamptz
+   AND playback_s3_key ~ '^dvr/[^/]+/[^/]+/seg/';
+-- END Q1
+RESET ROLE;
+SQL
+cat >"${payload}/q2.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+-- BEGIN Q2
+-- Q2 A 배출 — <cut> = ingest 전환 완료(tg_health B healthy) + 30초(등록 해제 지연), <test> = 루프백 시험 스트림.
+-- 통과 = 세 행 모두 waiting 0. bytes_null 은 업로더가 집지 않는 행(참고 — 0 이 아니면 kty 보고). init 행은 bytes 개념이 없어 NULL.
+SELECT 'archive' AS axis,
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NOT NULL) AS waiting,
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NULL)     AS bytes_null
+  FROM stream_segments t
+ WHERE t.upload_state IN ('pending','failed') AND t.local_path IS NOT NULL
+   AND t.stream_id <> '<test>'
+   AND t.start_wall_utc <  '<cut>'::timestamptz
+   AND t.start_wall_utc >= pg_catalog.now() - interval '24 hours'
+UNION ALL
+SELECT 'playback',
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NOT NULL),
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NULL)
+  FROM stream_segments t
+  JOIN stream_sessions sess ON sess.session_id = t.session_id
+  JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
+ WHERE t.playback_upload_state IN ('pending','failed') AND t.local_path IS NOT NULL
+   AND t.playback_s3_key IS NOT NULL AND t.playback_pdt IS NOT NULL
+   AND sess.state <> 'ended' AND t.seq >= cut.cutoff_seq
+   AND t.stream_id <> '<test>'
+   AND t.start_wall_utc <  '<cut>'::timestamptz
+   AND t.start_wall_utc >= pg_catalog.now() - interval '24 hours'
+UNION ALL
+SELECT 'init', pg_catalog.count(*), NULL::bigint AS bytes_null
+  FROM stream_sessions s
+ WHERE s.init_uploaded_at IS NULL AND s.state <> 'ended'
+   AND s.stream_id <> '<test>'
+   AND s.started_at < '<cut>'::timestamptz;
+-- END Q2
+RESET ROLE;
+SQL
+cat >"${payload}/q2b.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+-- BEGIN Q2-B
+-- Q2-B B 배출 — <cut2> = ingest 를 A 로 되돌린 시각(tg_health A healthy) + 30초, <test> = 루프백 시험 스트림.
+-- 아래쪽 시각 경계가 없다 — ingest 를 B 로 옮기기 전(Q2 의 cut 앞)에 B 가 만든 조각도 센다(② · ③ 은 녹화 보존
+-- 24시간 창 안만). A 몫 행도 함께 세어 보수적이다(A 가 살아 있어 곧 0). init 은 세션의 최신 조각에서 다시 만들므로
+-- 시작 시각 창을 두지 않는다(오래 이어진 방송의 init 도 B 디스크에 기댄다). 통과 = 세 행 모두 waiting 0.
+SELECT 'archive' AS axis,
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NOT NULL) AS waiting,
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NULL)     AS bytes_null
+  FROM stream_segments t
+ WHERE t.upload_state IN ('pending','failed') AND t.local_path IS NOT NULL
+   AND t.stream_id <> '<test>'
+   AND t.start_wall_utc <  '<cut2>'::timestamptz
+   AND t.start_wall_utc >= pg_catalog.now() - interval '24 hours'
+UNION ALL
+SELECT 'playback',
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NOT NULL),
+       pg_catalog.count(*) FILTER (WHERE t.bytes IS NULL)
+  FROM stream_segments t
+  JOIN stream_sessions sess ON sess.session_id = t.session_id
+  JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
+ WHERE t.playback_upload_state IN ('pending','failed') AND t.local_path IS NOT NULL
+   AND t.playback_s3_key IS NOT NULL AND t.playback_pdt IS NOT NULL
+   AND sess.state <> 'ended' AND t.seq >= cut.cutoff_seq
+   AND t.stream_id <> '<test>'
+   AND t.start_wall_utc <  '<cut2>'::timestamptz
+   AND t.start_wall_utc >= pg_catalog.now() - interval '24 hours'
+UNION ALL
+SELECT 'init', pg_catalog.count(*), NULL::bigint AS bytes_null
+  FROM stream_sessions s
+ WHERE s.init_uploaded_at IS NULL AND s.state <> 'ended'
+   AND s.stream_id <> '<test>'
+   AND s.started_at < '<cut2>'::timestamptz;
+-- END Q2-B
+RESET ROLE;
+SQL
+cat >"${payload}/q3.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+-- BEGIN Q3
+-- Q3 켬 뒤 키 꼴 대조 — <on> = 켬 OK 시각. 통과 = matched 1 이상 · mismatched 0.
+SELECT pg_catalog.count(*) FILTER (WHERE pg_catalog.split_part(t.playback_s3_key, '/', 3) = s.round_id) AS matched,
+       pg_catalog.count(*) FILTER (WHERE pg_catalog.split_part(t.playback_s3_key, '/', 3) IS DISTINCT FROM s.round_id) AS mismatched
+  FROM stream_segments t
+  JOIN stream_sessions s ON s.session_id = t.session_id
+ WHERE t.start_wall_utc >= '<on>'::timestamptz
+   AND t.playback_s3_key ~ '^dvr/[^/]+/[^/]+/seg/';
+-- END Q3
+RESET ROLE;
+SQL
+cat >"${payload}/q4.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+-- BEGIN Q4
+-- Q4 시험 방송 회차 — <test> = 시험 스트림, <on> = 켬 OK 시각. <on> 뒤 시작한 그 스트림의 가장 늦은 회차 하나를 본다.
+-- 국면 vod 는 frozen_with_gaps 도 포함하고 미업로드 조각은 정산 기한 뒤 GAP 으로 마감되므로, 국면이 아니라 아래를 모두 본다.
+-- 통과 = pass t — 회차 있음 · 끝나지 않은 세션(live · ending) 0 · 회차 닫힘 · 최신 세션 vod_state frozen(frozen_with_gaps 아님)과
+-- VOD 문서 키 · 조각(컷오프 이상) 1 이상 · ③ 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0.
+WITH r AS (
+  SELECT s.round_id
+    FROM stream_sessions s
+   WHERE s.stream_id = '<test>' AND s.round_id IS NOT NULL
+     AND s.started_at >= '<on>'::timestamptz
+   ORDER BY s.started_at DESC, s.session_id DESC
+   LIMIT 1
+),
+sess AS (
+  SELECT s.session_id, s.state, s.started_at, s.round_closed_at, s.vod_state, s.vod_s3_key
+    FROM stream_sessions s
+    JOIN r ON s.round_id = r.round_id
+   WHERE s.stream_id = '<test>'
+),
+latest AS (
+  SELECT vod_state, vod_s3_key
+    FROM sess
+   ORDER BY (state = 'live') DESC, started_at DESC, session_id DESC
+   LIMIT 1
+),
+seg AS (
+  SELECT t.playback_upload_state, t.playback_s3_key
+    FROM stream_segments t
+    JOIN sess ON sess.session_id = t.session_id
+    LEFT JOIN stream_cutoffs cut ON cut.stream_id = t.stream_id
+   WHERE t.stream_id = '<test>' AND t.seq >= COALESCE(cut.cutoff_seq, 0)
+),
+v AS (
+  SELECT (SELECT round_id FROM r) AS round_id,
+         (SELECT pg_catalog.count(*) FROM sess WHERE state <> 'ended') AS not_ended,
+         (SELECT pg_catalog.count(*) FROM sess WHERE round_closed_at IS NULL) AS not_closed,
+         (SELECT vod_state FROM latest) AS vod_state,
+         (SELECT vod_s3_key IS NOT NULL FROM latest) AS vod_doc,
+         (SELECT pg_catalog.count(*) FROM seg) AS segments,
+         (SELECT pg_catalog.count(*) FROM seg WHERE playback_upload_state <> 'uploaded') AS not_uploaded,
+         (SELECT pg_catalog.count(*) FROM seg
+           WHERE playback_s3_key IS NULL OR playback_s3_key !~ '^dvr/[^/]+/[^/]+/seg/'
+              OR pg_catalog.split_part(playback_s3_key, '/', 3) IS DISTINCT FROM (SELECT round_id FROM r)) AS not_round_keys,
+         (SELECT pg_catalog.count(*) FROM stream_published_gaps g
+            JOIN sess ON sess.session_id = g.session_id
+           WHERE g.stream_id = '<test>') AS gaps
+)
+SELECT v.*,
+       COALESCE(v.round_id IS NOT NULL AND v.not_ended = 0 AND v.not_closed = 0
+                AND v.vod_state = 'frozen' AND v.vod_doc
+                AND v.segments > 0 AND v.not_uploaded = 0 AND v.not_round_keys = 0 AND v.gaps = 0, false) AS pass
+  FROM v;
+-- END Q4
+RESET ROLE;
+SQL
+```
+
+자리를 채운 사본을 만들어 보냅니다. `fill_read` 는 자리마다 받는 꼴이
+정해져 있고, 아래 가운데 하나면 멈춥니다. `<SHA>` 처럼 꺾쇠로 적은 자리는
+실제 값으로 바꿔 부릅니다.
+
+*   시각 자리(`since` · `cut` · `cut2` · `on`) 값이 UTC 시각 꼴
+    (`2026-11-03T01:02:03Z`)이 아님. PG 가 시각으로 받는 `infinity` ·
+    `epoch` · `now` 도 멈춥니다 — 그런 값이 들어가면 Q1 · Q2 가 0 을 내
+    「켜기 전」 · 배출을 거짓으로 통과시킬 수 있습니다.
+*   `test` 값이 스트림 ID 꼴(`[A-Za-z0-9_-]`, 64자 이하)이 아님.
+*   값에 개행 · 제어 문자가 있음(조건을 끼우는 여러 줄 값을 막음).
+*   위 다섯이 아닌 자리 이름.
+*   채운 뒤에도 채우지 않은 자리가 남음.
+
+`fill_read` 는 꼴만 보고 범위는 보지 않습니다. `9999-12-31T00:00:00Z` ·
+`0001-01-01T00:00:00Z` 같은 먼 시각도 꼴로는 통과해 Q1 · Q2 가 0 을 내
+거짓으로 통과시킬 수 있습니다. 시각 값은 위 자리 표대로 그 걸음에서 처음 적어
+둔 시각을 그대로 옮깁니다. 다음 창에서 이어 할 때도 그 값을 씁니다 — 특히
+`<since>` 를 이어 하는 시각으로 새로 적지 않습니다(앞 창의 새 꼴 행을 놓칩니다).
+보내기 전에는 값이 이번 교체 작업 기록에 적힌 시각과 같은지만 봅니다.
+
+```shell
+fill_read() {  # fill_read <원본> <결과> <자리=값> …
+  local src="$1" out="$2" pair key val form
+  shift 2
+  cp -- "${src}" "${out}" || return 1
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    val="${pair#*=}"
+    case "${key}" in
+      since | cut | cut2 | on)
+        form='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' ;;
+      test) form='[A-Za-z0-9_-]{1,64}' ;;
+      *) echo "멈춤: 모르는 자리 「${key}」" >&2; return 1 ;;
+    esac
+    case "${val}" in
+      *[[:cntrl:]]*) echo "멈춤: ${key} 값에 개행 · 제어 문자" >&2; return 1 ;;
+    esac
+    printf '%s\n' "${val}" | grep -Eqx -- "${form}" ||
+      { echo "멈춤: ${key} 값이 그 자리의 꼴(${form})이 아님" >&2; return 1; }
+    sed "s/<${key}>/${val}/g" "${out}" >"${out}.new" &&
+      mv -- "${out}.new" "${out}" || return 1
+  done
+  if grep -En '<[a-z][a-z0-9]*>' "${out}"; then
+    echo "멈춤: ${out} 에 채우지 않은 자리가 남음" >&2
+    return 1
+  fi
+}
+fill_read "${payload}/q1.sql" "${payload}/q1-fill.sql" "since=<since 값>" &&
+  make_read q1 "${payload}/q1-fill.sql" && send_step q1
+fill_read "${payload}/q2.sql" "${payload}/q2-fill.sql" \
+  "cut=<cut 값>" "test=<test 값>" &&
+  make_read q2 "${payload}/q2-fill.sql" && send_step q2
+fill_read "${payload}/q2b.sql" "${payload}/q2b-fill.sql" \
+  "cut2=<cut2 값>" "test=<test 값>" &&
+  make_read q2b "${payload}/q2b-fill.sql" && send_step q2b
+fill_read "${payload}/q3.sql" "${payload}/q3-fill.sql" "on=<on 값>" &&
+  make_read q3 "${payload}/q3-fill.sql" && send_step q3
+fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
+  "on=<on 값>" "test=<test 값>" &&
+  make_read q4 "${payload}/q4-fill.sql" && send_step q4
+```
+
+*   한 흐름에서 그 걸음에 필요한 질의만 보냅니다(예: 4.4 는 `q2` 하나).
+*   **Q2 · Q2-B 의 `waiting`** 은 업로더 스위퍼가 실제로 집는 술어
+    (`media/internal/index/upload_store.go` 의 `pending*UploadsSQL`)를 그
+    상자 몫으로 좁힌 것입니다. 꼬리 유예를 빼고 세어(마지막 조각도 셈)
+    실제 대기보다 크거나 같습니다. 0 이 아니면 기다렸다 다시 잽니다.
+*   **`bytes_null`** 은 크기가 없어 업로더가 집지 않는 행입니다. 배출로는
+    0 이 되지 않으니 0 이 아니면 kty 에게 보고합니다. init 행은 크기
+    개념이 없어 NULL 입니다.
+*   **init 행이 줄지 않을 때.** init 행은 안 끝난 세션을 모두 셉니다.
+    업로더는 경로 · 크기가 있는 조각이 하나도 없는 세션(만들 재료가 없음)은
+    집지 않으므로, 그런 세션이 있으면 배출로는 0 이 되지 않습니다(질의는
+    설계 원문 그대로 둡니다 — 막히는 쪽으로 틀림). 기다려도 같은 값이면 같은
+    흐름에서 「M6 읽기 질의」 의 업로드 적체(`make_read backlog`)를 보냅니다.
+    그 `init` 행의 셋째 값이 조각 없는 안 끝난 세션 수입니다(스트림 · 시각
+    구분 없이 전체). 0 이 아니든 0 이든 기다림을 멈추고 두 결과를 kty 에게
+    보고합니다 — 끝나지 못하고 남은 세션일 수 있습니다.
+*   **색인 안 된 녹화는 세지 못합니다.** 상자 디스크에 녹화 파일이 있어도
+    색인기가 행을 만들기 전이면(색인 지연 · 사이드카 정지 중) Q2 · Q2-B 에
+    나오지 않습니다. 사이드카가 도는 상자를 방송 없는 창에서 재는 까닭입니다.
+*   **Q1 · Q3 의 새 꼴 판별**은 키 앞부분(`dvr/` 뒤 경로 성분이 둘인지)만
+    봅니다. Q3 은 회차 성분(셋째 성분)을 그 조각 세션의 `round_id` 와
+    견줍니다.
+*   **Q3 은 세션 없는 행을 세지 않습니다.** 조각을 세션과 이어 붙여(inner
+    JOIN) 보므로 `session_id` 가 NULL 인 새 꼴 행은 `matched` 에도
+    `mismatched` 에도 들지 않습니다. 새 꼴 행 전수는 Q1 이 셉니다(시각 하한이
+    `<since>` 라 Q3 의 `<on>` 보다 넓음).
+*   **Q1 · Q3 은 `stream_segments` 를 전부 훑습니다**(Q2 · Q2-B 의 ② · ③ 축도
+    시작 시각 조건만 써서 같은 꼴일 수 있습니다 — 상한도 같습니다). 시작 시각만으로 거르는
+    인덱스가 없고(`stream_segments_wall_idx` 는 `stream_id` 가 앞 열), 마스터
+    계정에는 `statement_timeout` 이 없습니다(60초 상한은 `media_indexer` 역할
+    몫 — `10_roles.sql`). 질의의 상한은 페이로드의 `executionTimeout` 300초뿐
+    입니다. 읽기라 사이드카 쓰기를 막지는 않습니다. 시간 초과면 「실패 · 시간
+    초과」 대로 끄고 kty 에게 보고합니다.
+*   **Q4 가 국면을 쓰지 않는 까닭.** 국면 `vod` 는 `vod_state` 가 `frozen`
+    이든 `frozen_with_gaps` 든 같고(`media/internal/index/round_playback.go`),
+    정산 기한까지 올라가지 않은 조각은 GAP 줄로 마감됩니다
+    (`media/internal/rewind/publish/vod.go` 의 `settle_deadline`). 그래서
+    업로드 일부가 실패해도 국면은 `vod` 가 됩니다. Q4 는 회차 조각(컷오프
+    이상)의 ③ 상태 · 키 꼴 · GAP 기록(`stream_published_gaps`) ·
+    `vod_state = 'frozen'` 을 직접 봅니다. VOD 문서의 조각 URI 는 장부의 ③
+    키 그대로라(`media/internal/rewind/render.go` — 기준 주소 뒤에 키를
+    붙임) 키가 모두 그 회차 새 꼴이고 GAP 이 없으면 문서의 URI 도 새
+    꼴입니다. `pass` 가 `f` 면 나머지 열(`not_uploaded` · `not_round_keys` ·
+    `gaps` · `vod_state` 등)이 무엇이 어긋났는지 보여 줍니다.
+*   기록(8)에 옮기는 것은 `== read` 뒤 결과 줄과 채운 자리 값입니다. Q4 는
+    `round_id` 열을 빼고 옮깁니다(회차 id 를 옮기지 않는 「발행 잔여 질의」 와
+    같은 규칙).
+
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기
 
 `prod/runtime` 의 1단-다(POK-427 · POK-408 의 1번 몫)를 적용하고, 앱 비밀

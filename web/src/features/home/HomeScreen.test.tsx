@@ -1,22 +1,25 @@
 import { act } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { LiveNowBand } from '@/features/home/LiveNowBand';
+import { LiveUptime } from '@/features/home/LiveUptime';
 import { TipCard, TIPS } from '@/features/home/TipCard';
 import { daysAgoLabel, weekStarts, type LiveNow } from '@/features/home/useHomeMockState';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
+// LiveNowBand 시험의 시계. 시작에서 1:24:03 지난 때로 고정한다(LIVE 배지가 시작 시각으로 매초 센다)
+const LIVE_NOW = Date.parse('2026-10-20T11:36:03Z');
 const LIVE: LiveNow = {
   streamId: 'stream-1',
   title: '롤 랭크 방송',
   platform: '치지직',
   startedNote: '오후 7:12 시작',
-  uptimeLabel: '1:24:03',
+  startedAtMs: LIVE_NOW - (1 * 3600 + 24 * 60 + 3) * 1000,
   viewers: '1,842',
   infoLate: false,
   detectedCards: 8,
@@ -1272,17 +1275,159 @@ describe('주 경계·며칠 전', () => {
 });
 
 describe('LiveNowBand', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: LIVE_NOW });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const SHOT =
+    'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
+
   it('라이브 사진이 있으면 칸을 채우고, 없으면 자리표시를 보인다(POK-277)', () => {
-    const src =
-      'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
-    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: src }} />);
-    expect(container.querySelector('img')).toHaveAttribute('src', src);
+    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />);
+    expect(container.querySelector('img')).toHaveAttribute('src', SHOT);
 
     rerender(<LiveNowBand live={LIVE} />);
     expect(container.querySelector('img')).toBeNull();
     // 자리표시는 방송 아이콘이다: 「라이브 방송 화면」 같은 글자는 진짜 값처럼 읽혔다(POK-449)
     expect(container.querySelector('svg')).not.toBeNull();
     expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
+  });
+
+  describe('사진 로딩', () => {
+    it('사진을 다 받기 전에는 칸이 반짝이는 회색이고 사진은 숨는다. 받으면 사진이 다 나타난 뒤 걷힌다', () => {
+      const { container } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />);
+      const img = container.querySelector('img')!;
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      expect(img).toHaveAttribute('data-pending');
+
+      fireEvent.load(img);
+      expect(img).not.toHaveAttribute('data-pending');
+      // 사진이 나타나는 0.2초 동안은 아래에 남는다: 바로 걷으면 칸 바탕이 비쳐 한 번 꺼졌다 켜진다
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+    });
+
+    it('1분 갱신으로 주소가 바뀌어도 다시 반짝이지 않는다: 새 사진을 받는 동안 앞 사진을 그대로 둔다', () => {
+      const { container, rerender } = render(
+        <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />,
+      );
+      fireEvent.load(container.querySelector('img')!);
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+
+      const next = SHOT.replace('stream-1.jpg', 'stream-1-b.jpg');
+      rerender(<LiveNowBand live={{ ...LIVE, thumbnailUrl: next }} />);
+      expect(container.querySelector('img')).toHaveAttribute('src', next);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
+    });
+
+    it('방송 직후 첫 사진을 찍는 동안(시한 전)은 아이콘 대신 반짝이는 회색, 시한이 지나면 아이콘이다', () => {
+      const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, photoLate: false }} />);
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      expect(container.querySelector('svg')).toBeNull();
+
+      rerender(<LiveNowBand live={{ ...LIVE, photoLate: true }} />);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('svg')).not.toBeNull();
+    });
+
+    it('첫 사진 주소가 오면 기다리던 반짝이는 칸을 그대로 이어 쓴다: 아이콘을 거쳐 새로 붙지 않는다', () => {
+      const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, photoLate: false }} />);
+      const awaiting = screen.getByTestId('thumb-loading');
+
+      rerender(<LiveNowBand live={{ ...LIVE, photoLate: false, thumbnailUrl: SHOT }} />);
+      expect(container.querySelector('img')).toHaveAttribute('data-pending');
+      // 같은 노드여야 반짝임이 처음부터 다시 돌지 않는다
+      expect(screen.getByTestId('thumb-loading')).toBe(awaiting);
+    });
+
+    it('사진을 못 받으면 반짝이지 않고 아이콘으로 돌아간다', () => {
+      const { container } = render(
+        <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT, photoLate: false }} />,
+      );
+      fireEvent.error(container.querySelector('img')!);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('svg')).not.toBeNull();
+    });
+  });
+
+  describe('LIVE 경과', () => {
+    it('목록을 다시 읽지 않아도 매초 1초씩 오른다(건너뛰지 않는다)', () => {
+      // 초 경계에서 0.6초 지난 때 연다. 1초 간격(setInterval)으로 세면 1초 뒤에야 바뀌어 아래 0.415초 단언에서 걸린다
+      vi.setSystemTime(LIVE_NOW + 600);
+      render(<LiveNowBand live={LIVE} />);
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      // 다음 초 경계(0.4초 뒤) 바로 뒤에 깬다: 경계 전에는 그대로다
+      act(() => {
+        vi.advanceTimersByTime(399);
+      });
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+      expect(screen.getByText('LIVE 1:24:04')).toBeInTheDocument();
+      for (const label of ['1:24:05', '1:24:06', '1:24:07']) {
+        act(() => {
+          vi.advanceTimersByTime(1_000);
+        });
+        expect(screen.getByText(`LIVE ${label}`)).toBeInTheDocument();
+      }
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByText('LIVE 1:25:07')).toBeInTheDocument();
+    });
+
+    it('탭이 숨으면 멈추고, 돌아오면 바로 지금 경과로 맞춘다', () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get');
+      render(<LiveNowBand live={LIVE} />);
+      visibility.mockReturnValue('hidden');
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+
+      visibility.mockReturnValue('visible');
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      expect(screen.getByText('LIVE 1:24:33')).toBeInTheDocument();
+      visibility.mockRestore();
+    });
+
+    it('시작 시각을 모르면 「--:--:--」이고 세지 않는다', () => {
+      render(<LiveNowBand live={{ ...LIVE, startedAtMs: null }} />);
+      expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(3_000);
+      });
+      expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
+    });
+
+    it('시작 시각을 모르면 타이머를 걸지 않는다: 글자가 그대로여도 매초 다시 그리지 않게', () => {
+      // 띠의 다른 부품이 건 타이머와 섞이지 않게 배지 글자만 연다
+      render(<LiveUptime startedAtMs={null} />);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('시작 시각이 나중에 와도(모름 → 앎) 다음 초를 기다리지 않고 바로 지금 경과로 적는다', () => {
+      const { rerender } = render(<LiveNowBand live={{ ...LIVE, startedAtMs: null }} />);
+      act(() => {
+        vi.advanceTimersByTime(120_000);
+      });
+      rerender(<LiveNowBand live={LIVE} />);
+      // 마운트 때 시각으로 세면 2분 적은 1:24:03이 1초 가까이 보인다
+      expect(screen.getByText('LIVE 1:26:03')).toBeInTheDocument();
+    });
   });
 
   it('플랫폼을 모르면 플랫폼 태그를 달지 않는다 — 치지직·SOOP·씨미 중 무엇인지 지어내지 않는다', () => {

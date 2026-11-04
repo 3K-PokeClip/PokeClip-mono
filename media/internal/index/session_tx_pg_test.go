@@ -60,6 +60,7 @@ func (d registryDecider) Decide(ctx context.Context, tx pgx.Tx, in SessionInput,
 		BaseSessionID:      dec.BaseSessionID,
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		RoundID:            dec.RoundID,
 		Plan:               dec,
 	}, nil
 }
@@ -69,6 +70,7 @@ func (d registryDecider) Open(ctx context.Context, tx pgx.Tx, dec SessionDecisio
 	if !ok {
 		return "", fmt.Errorf("테스트 어댑터: 개시 계획이 session.Decision 이 아니다(%T)", dec.Plan)
 	}
+	plan.RoundID = dec.RoundID // 장부가 든 회차를 Open 이 대조한다(프로덕션 어댑터와 같은 꼴)
 	return d.reg.Open(ctx, tx, plan, firstPDT)
 }
 
@@ -84,11 +86,18 @@ func sessionOpForTest(op SessionOp) (session.Op, error) {
 	return 0, fmt.Errorf("테스트 어댑터: 알 수 없는 연산 %d", op)
 }
 
+// legacySegKey 는 실물 키 파생(playback.SegKey)을 PlaybackKeyFunc 에 입힌 옛 꼴 어댑터다 — 회차를 버린다(스위치 끔 상자와
+// 같은 꼴). 이 패키지 시험은 세션 · PDT · 키 유무를 재고, 회차 꼴 선택은 조립 지점 시험(cmd/segment-indexer
+// playback_key_wire_test.go)이 잰다.
+func legacySegKey(streamID, _ string, seq int64) (string, error) {
+	return playback.SegKey(streamID, seq)
+}
+
 // newSessionStore 는 실물 세션 결정자와 실물 키 파생을 끼운 store 다(M3 형상).
 // 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초 · 재접속 계승 창 300초.
 func newSessionStore(pool *pgxpool.Pool) Store {
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
-	return NewPGStore(pool, registryDecider{reg: reg}, playback.SegKey)
+	return NewPGStore(pool, registryDecider{reg: reg}, legacySegKey)
 }
 
 // newKeylessStore 는 키 파생만 실패하는 store 다 — 설계 5.2 "파생 실패는
@@ -96,7 +105,7 @@ func newSessionStore(pool *pgxpool.Pool) Store {
 func newKeylessStore(pool *pgxpool.Pool) Store {
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
 	return NewPGStore(pool, registryDecider{reg: reg},
-		func(string, int64) (string, error) { return "", errors.New("키 파생 실패(픽스처)") })
+		func(string, string, int64) (string, error) { return "", errors.New("키 파생 실패(픽스처)") })
 }
 
 // 유입별 per-call 입력. 관측이 없는 것이 이 단계의 전제다(폴러 배선은 단계 4) —
@@ -703,7 +712,7 @@ func TestSessionDecisionDatabaseErrorPropagatesInsteadOfDeclining(t *testing.T) 
 			ctx := context.Background()
 			stream := sessionStream("decide-err-" + c.name)
 			boom := errors.New("세션 표 접근 실패(픽스처)")
-			store := NewPGStore(pool, failingDecider{err: boom, opens: c.opens}, playback.SegKey)
+			store := NewPGStore(pool, failingDecider{err: boom, opens: c.opens}, legacySegKey)
 
 			_, res, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000),
 				eligibleSeed(time.Now().UTC()), liveIngress())
@@ -763,5 +772,110 @@ func TestStaleObservationStillAttributesToCurrentLiveSession(t *testing.T) {
 	}
 	if _, _, _, ok := cutoffRow(t, pool, stream); ok {
 		t.Fatal("낡은 방증으로 주조됐다")
+	}
+}
+
+// roundProbeDecider 는 실물 어댑터를 감싸 마지막 결정을 last 에 남긴다. tamper 가 비지 않으면 개시 결정의 RoundID 를
+// 그 값으로 바꾼다 — index 가 들고 있는 RoundID 와 Open 이 쓸 회차가 갈린 배선 결함의 흉내다.
+type roundProbeDecider struct {
+	registryDecider
+	last   *SessionDecision
+	tamper string
+}
+
+func (d roundProbeDecider) Decide(ctx context.Context, tx pgx.Tx, in SessionInput, now time.Time) (SessionDecision, error) {
+	dec, err := d.registryDecider.Decide(ctx, tx, in, now)
+	if err != nil {
+		return dec, err
+	}
+	if dec.Opens && d.tamper != "" {
+		dec.RoundID = d.tamper
+	}
+	*d.last = dec
+	return dec, nil
+}
+
+// sessionRoundOf 는 세션의 round_id 다. NULL 이면 "" 다.
+func sessionRoundOf(t *testing.T, pool *pgxpool.Pool, sessionID string) string {
+	t.Helper()
+	var round *string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT round_id FROM stream_sessions WHERE session_id = $1`, sessionID).Scan(&round); err != nil {
+		t.Fatalf("세션 회차 조회 실패 %s: %v", sessionID, err)
+	}
+	if round == nil {
+		return ""
+	}
+	return *round
+}
+
+// POK-525 Ⓑ2-3 — 결정의 RoundID 가 어댑터를 건너 장부까지 오고, 그 값이 조각이 귀속된 세션의 round_id 와 같다
+// (새 회차 개시 · 계속 · TD 분할). 「새 회차를 여는가」 는 RoundID == 개시된 session_id 다. 변이: 어댑터의 RoundID 옮김
+// 제거 → 세 걸음 모두 FAIL.
+func TestDecisionRoundIDReachesStoreAndMatchesSessionRound(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	stream := sessionStream("round-id")
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
+	var last SessionDecision
+	store := NewPGStore(pool, roundProbeDecider{registryDecider: registryDecider{reg: reg}, last: &last}, legacySegKey)
+
+	var head string
+	for _, c := range []struct {
+		name       string
+		seq        int64
+		durationMS int32
+		opens      bool
+	}{
+		{"새_회차_개시", 0, 4000, true},
+		{"계속", 1, 4000, false},
+		{"TD_분할", 2, 9000, true},
+	} {
+		wall := sessionBase.Add(time.Duration(c.seq) * 4 * time.Second)
+		if _, _, err := store.Insert(ctx, segAt(stream, c.seq, wall, c.durationMS), Seed{}, liveIngress()); err != nil {
+			t.Fatalf("%s: Insert 실패: %v", c.name, err)
+		}
+		sess := carrierOf(t, pool, stream, c.seq).SessionID
+		if sess == nil || last.Opens != c.opens {
+			t.Fatalf("%s: (귀속 세션, Opens) = (%v, %v), want (값, %v)", c.name, sess, last.Opens, c.opens)
+		}
+		if head == "" {
+			head = *sess
+		}
+		if got := sessionRoundOf(t, pool, *sess); last.RoundID != got || last.RoundID != head {
+			t.Errorf("%s: 결정의 RoundID = %q, 세션 %s 의 round_id = %q, want 둘 다 %q", c.name, last.RoundID, *sess, got, head)
+		}
+		if isNew := last.Opens && last.RoundID == *sess; isNew != (c.seq == 0) {
+			t.Errorf("%s: 「새 회차를 여는가」 = %v, want %v", c.name, isNew, c.seq == 0)
+		}
+	}
+}
+
+// POK-525 Ⓑ2-3 · E31 — 장부가 든 RoundID 가 Open 이 쓸 회차와 다르면 Insert 는 오류이고 트랜잭션이 통째로 되돌려진다
+// (조각 행 0 · 세션 행 0). 변이: 어댑터 Open 이 결정의 RoundID 를 넘기지 않음 → 성공해 FAIL.
+func TestInsertRollsBackWhenDecisionRoundIDDiffersFromOpen(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	stream := sessionStream("round-id-tampered")
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
+	var last SessionDecision
+	store := NewPGStore(pool, roundProbeDecider{registryDecider: registryDecider{reg: reg}, last: &last, tamper: "S-elsewhere"}, legacySegKey)
+
+	_, _, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
+
+	if err == nil {
+		t.Fatal("결정과 다른 회차로 개시가 커밋됐다")
+	}
+	for _, q := range []string{
+		`SELECT count(*) FROM stream_segments WHERE stream_id = $1`,
+		`SELECT count(*) FROM stream_sessions WHERE stream_id = $1`,
+	} {
+		var rows int
+		if err := pool.QueryRow(ctx, q, stream).Scan(&rows); err != nil {
+			t.Fatalf("행 수 조회 실패: %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("%s = %d, want 0(되돌려졌어야 한다)", q, rows)
+		}
 	}
 }

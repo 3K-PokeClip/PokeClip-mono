@@ -77,13 +77,15 @@ func (d sessionDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionI
 	}
 	// 결정 자체(개시 계획 포함)를 불투명 값으로 되돌려 준다 — Open 이 그대로 되받으므로
 	// 결정과 쓰기가 같은 입력을 본다는 것이 구조로 보장된다. 개시 결과 두 칸은 index 가 계획을 열지 않고
-	// 받을 수 있게 따로 옮긴다 — 필드별 복사라 빠뜨리면 여기서 탈락한다.
+	// 받을 수 있게 따로 옮긴다 — 필드별 복사라 빠뜨리면 여기서 탈락한다. 회차(RoundID)도 결정이 정한 값을 옮긴다 —
+	// ⑹ 키의 회차 성분이다(POK-525). 빠뜨리면 Open 이 대조에서 막는다(아래).
 	return index.SessionDecision{
 		Opens:              dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
 		SessionID:          dec.SessionID,
 		BaseSessionID:      dec.BaseSessionID,
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		RoundID:            dec.RoundID,
 		Plan:               dec,
 	}, nil
 }
@@ -93,6 +95,9 @@ func (d sessionDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDe
 	if !ok {
 		return "", fmt.Errorf("세션 개시 계획이 이 결정자의 것이 아니다(%T) — Decide 가 준 값을 그대로 넘겨야 한다", dec.Plan)
 	}
+	// 장부가 들고 있는 회차(⑹ 키가 쓸 값)를 Open 이 대조하게 넘긴다 — 계획 안의 값이 아니라 이 값이어야 장부 쪽에서
+	// 갈린 회차(옮김 누락 · 덮어씀)까지 개시 오류로 드러난다.
+	plan.RoundID = dec.RoundID
 	id, err := d.reg.Open(ctx, tx, plan, firstPDT)
 	if errors.Is(err, session.ErrLiveLost) {
 		// 끝내려던 live 를 잃은 개시는 경합이다 — 되돌리고 다음 시도가 다시 판정한다(M6 3.3). 장부의 재시도 갈래로 옮긴다.

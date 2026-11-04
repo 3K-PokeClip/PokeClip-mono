@@ -140,6 +140,7 @@ override_data {
       media_secret_arns = ["arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"]
 
       ingest_auth_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-token-StUvWx"
+      broadcast_topic_arn                  = "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo"
     }
   }
 }
@@ -293,6 +294,42 @@ run "passes_ingest_auth_settings_in_responder_mode" {
   }
 }
 
+# --- 새 꼴 쓰기 스위치(sidecar.env — 결정 9: 모듈 기본 끔 · prod tfvars 만 켬) ---
+
+run "defaults_playback_round_keys_false" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.playback_round_keys == false &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+      ] == ["PLAYBACK_ROUND_KEYS=false\n"]
+    )
+    error_message = "기본값이 sidecar.env 한 줄 PLAYBACK_ROUND_KEYS=false 가 아니다."
+  }
+}
+
+run "passes_playback_round_keys_true" {
+  command = plan
+
+  variables {
+    playback_round_keys = true
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.playback_round_keys == true &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+      ] == ["PLAYBACK_ROUND_KEYS=true\n"]
+    )
+    error_message = "playback_round_keys = true 가 모듈(sidecar.env)로 그대로 가지 않는다."
+  }
+}
+
 # 포트 · 헬스 경로의 정본은 platform 이다(대상 그룹과 같은 값 — CONTRACT-runtime.md).
 run "reads_proxy_ports_and_health_path_from_platform" {
   command = plan
@@ -374,6 +411,57 @@ run "passes_rewind_public_base_url_input" {
   assert {
     condition     = module.media_host.template_vars.rewind_public_base_url == "https://cdn.example.com/rewind"
     error_message = "rewind_public_base_url 입력이 모듈에 그대로 가지 않는다."
+  }
+}
+
+# --- 계약9 발행(O8a 당김 — 주제는 런타임 1단 출력, 목록은 이 루트 입력) ---
+
+# 주제 ARN 은 tfvars 가 아니라 런타임 상태 출력에서만 온다 — 손으로 넣은 값이
+# 다른 주제로 발행하거나 비어 발행이 꺼지지 않게.
+run "passes_broadcast_topic_from_runtime_state" {
+  command = plan
+
+  variables {
+    image_digests = {
+      bundle          = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      mediamtx        = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+    stream_key_resolve_url    = "http://auth.pokeclip.internal:28082"
+    lifecycle_publish_streams = ["01ARZ3NDEKTSV4RRFFQ69G5FAV"]
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.broadcast_topic_arn == "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo" &&
+      module.media_host.template_vars.lifecycle_publish_streams == tolist(["01ARZ3NDEKTSV4RRFFQ69G5FAV"])
+    )
+    error_message = "런타임 상태의 broadcast_topic_arn · 입력 lifecycle_publish_streams 가 모듈 템플릿 변수로 그대로 가지 않는다."
+  }
+
+  assert {
+    condition = strcontains(one([
+      for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]), "BROADCAST_TOPIC_ARN: \"arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo\"")
+    error_message = "compose.yml 사이드카 env 의 BROADCAST_TOPIC_ARN 이 런타임 상태 출력이 아니다."
+  }
+}
+
+# 기본 입력(옛 모드 · 빈 목록)에서도 주제는 런타임 상태에서 온다.
+run "keeps_broadcast_topic_out_of_tfvars" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.broadcast_topic_arn == "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo" &&
+      !strcontains(file("variables.tf"), "variable \"broadcast_topic_arn\"") &&
+      !strcontains(file("terraform.tfvars.example"), "broadcast_topic_arn")
+    )
+    error_message = "기본 입력에서 주제가 런타임 상태 출력이 아니거나, broadcast_topic_arn 이 이 루트의 변수 · tfvars 예시에 있다(정본은 런타임 1단 출력)."
   }
 }
 

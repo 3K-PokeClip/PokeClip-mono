@@ -11,12 +11,18 @@
 #     종료는 compose 를 멈추지 않는다).
 #   - nginx: 공식 이미지(images.json 핀) + 시험이 쓰는 최소 설정 — 헬스 포트 · 경로
 #     하나만 고정 200(사례 9 재통과 판정).
-#   - sidecar: 에코 sidecar — 시작마다 표식 줄, 지정 지연 뒤 종료 1.
+#   - sidecar: 에코 sidecar — 시작마다 표식 줄(상자 스위치를 받았으면 기동 신호 줄
+#     playback_key_layout 도), 지정 지연 뒤 종료 1.
 #
 # 값은 모두 시험 env 파일(유닛 EnvironmentFile)이 넣는다(빈 값이면 compose 가 멈춘다):
 #   PCBENCH_ECHO_IMAGE · PCBENCH_NGINX_IMAGE · PCBENCH_NGINX_CONF ·
 #   PCBENCH_HEALTH_PORT · PCBENCH_ECHO_ADMIN_PORT · PCBENCH_SIDECAR_EXIT_DELAY ·
 #   RUNTIME_DIR(유닛 drop-in — start-media.sh 가 렌더하는 자리).
+#
+# 이 파일 옆 sidecar.env(상자 스위치 파일 · 끔)는 start-media.sh 의 시작 점검이
+# 보고, 사이드카가 prod 처럼 env_file(required)로 받는다 — 에코 사이드카가 그
+# 값으로 기동 신호 줄을 내어 운영 스크립트 bin/sidecar-round-keys.sh 의 실유닛
+# 사례(lib/unit_sidecar_keys_cases.sh)가 판정한다.
 #
 # 실험 식별: 프로젝트 pcbench-edge-proxy · 라벨 com.pokeclip.bench=edge-proxy(컨테이너 ·
 # 망 · 볼륨). 호스트 게시는 127.0.0.1 의 헬스 포트 하나다.
@@ -108,6 +114,9 @@ services:
       - ALL
     ulimits:
       core: 0
+    env_file:
+      - path: sidecar.env
+        required: true
     volumes:
       - recordings:/recordings:ro
       - hooks:/hooks:ro

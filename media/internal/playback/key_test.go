@@ -3,7 +3,16 @@ package playback
 // ③(재생 렌디션) 키 파생의 단위 검증(POK-195 M3 — 설계 5.2).
 // 순수 함수라 DB·파일시스템이 없다 — 형상이 계약이므로 리터럴로 못 박는다.
 
-import "testing"
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 // 설계 5.2 의 조각 키 형상 그대로다: dvr/{streamID}/seg/{NNNNNN}.m4s.
 // 세션 축이 없는 것이 결정 자체다(계약 ⓑ "s3_key 에서 결정적 파생" 준수).
@@ -40,10 +49,11 @@ func TestSegKeyPadsToSixDigitsAndGrowsBeyond(t *testing.T) {
 
 // 키는 되감기 URL 경로에 그대로 실린다 — 경로 구분자·상위 참조·공백이 들어오면
 // 다른 객체를 가리키거나 URL 이 깨진다. 파생 실패는 오류로 알리고 호출자가 NULL 로 남긴다.
+// 성분 128자 상한(엣지 정규식과 같다 — POK-525 설계 3-1)은 모든 성분에 같이 걸린다.
 func TestSegKeyRejectsStreamIDThatIsNotURLSafe(t *testing.T) {
-	for _, streamID := range []string{"", "a/b", "..", "a b", "a?b", "a#b", "한글"} {
+	for _, streamID := range []string{"", "a/b", "..", "a b", "a?b", "a#b", "한글", strings.Repeat("s", 129)} {
 		if got, err := SegKey(streamID, 0); err == nil {
-			t.Errorf("stream_id=%q 가 통과했다: %q", streamID, got)
+			t.Errorf("stream_id=%.40q 가 통과했다: %q", streamID, got)
 		}
 	}
 }
@@ -74,32 +84,54 @@ func TestParseSegKeyInvertsSegKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SegKey(%q, %d) 가 거부됐다: %v", tc.streamID, tc.seq, err)
 		}
-		gotStream, gotSeq, err := ParseSegKey(key)
-		if err != nil || gotStream != tc.streamID || gotSeq != tc.seq {
-			t.Errorf("ParseSegKey(%q) = (%q, %d, %v), want (%q, %d, nil)", key, gotStream, gotSeq, err, tc.streamID, tc.seq)
+		want := SegRef{StreamID: tc.streamID, Seq: tc.seq}
+		if got, err := ParseSegKey(key); err != nil || got != want {
+			t.Errorf("ParseSegKey(%q) = (%+v, %v), want (%+v, nil)", key, got, err, want)
+		}
+	}
+}
+
+// 회차 꼴도 같다 — RoundSegKey 가 만든 키는 만든 세 값 그대로 풀린다(왕복). 회차 성분 128자는 상한 안이다.
+func TestParseSegKeyInvertsRoundSegKey(t *testing.T) {
+	for _, tc := range []SegRef{
+		{StreamID: "demo-stream", RoundID: "S-20261103-101530-demo-stream-42", Seq: 123},
+		{StreamID: "s", RoundID: "r", Seq: 0},
+		{StreamID: "s", RoundID: "r", Seq: 1000000},
+		{StreamID: "a.b", RoundID: "c.d", Seq: 7},
+		{StreamID: "s", RoundID: "seg", Seq: 7},
+		{StreamID: "s", RoundID: strings.Repeat("r", 128), Seq: 7},
+	} {
+		key, err := RoundSegKey(tc.StreamID, tc.RoundID, tc.Seq)
+		if err != nil {
+			t.Fatalf("RoundSegKey(%q, %q, %d) 가 거부됐다: %v", tc.StreamID, tc.RoundID, tc.Seq, err)
+		}
+		if got, err := ParseSegKey(key); err != nil || got != tc {
+			t.Errorf("ParseSegKey(%q) = (%+v, %v), want (%+v, nil)", key, got, err, tc)
 		}
 	}
 }
 
 // ③ 키 문법 한 벌(계획 B #10 · 〔r37〕 ⑴) — 업로드 워커의 [0] 대상 검증과 목록 발행 전 검사 S5 가 이 함수를 함께 부른다.
-// 수락 집합은 워커가 쓰던 정규식(dvr/{스트림}/seg/{십진 6자리 이상}.m4s)과 같다 — 앞자리 0 으로 늘린 seq 도 받는다. 스트림
-// 성분만 SegKey 와 같은 검사로 본다(워커는 성분을 대상의 stream_id 와 견주고, 그 값은 이미 [A-Za-z0-9_-]{1,64} 다). seq 가
-// int64 를 넘는 키는 풀 수 없어 거부한다 — SegKey 가 만들 수 없는 모양이다.
+// 수락 집합은 두 꼴이다(POK-525 설계 2-1) — 옛 꼴 dvr/{스트림}/seg/{십진 6자리 이상}.m4s(워커가 쓰던 정규식과 같다)와
+// 회차 꼴 dvr/{스트림}/{회차}/seg/{십진 6자리 이상}.m4s. 앞자리 0 으로 늘린 seq 도 받는다. 성분은 SegKey 와 같은 검사로
+// 본다(워커는 스트림 성분을 대상의 stream_id 와 견주고, 그 값은 이미 [A-Za-z0-9_-]{1,64} 다). seq 가 int64 를 넘는 키는
+// 풀 수 없어 거부한다 — SegKey 가 만들 수 없는 모양이다. 줄 문법이 실을 수 없는 글자(개행 · CR · NUL · 빈 키)는 여기서
+// 보고, 나머지 경계는 공유 골든(TestParseSegKeyMatchesSharedGolden)이 본다.
 func TestParseSegKeyAcceptsOnlyTheSegmentKeyGrammar(t *testing.T) {
 	for _, tc := range []struct {
-		key      string
-		streamID string
-		seq      int64
+		key  string
+		want SegRef
 	}{
-		{"dvr/demo-stream/seg/000123.m4s", "demo-stream", 123},
-		{"dvr/s/seg/000000.m4s", "s", 0},
-		{"dvr/s/seg/1000000.m4s", "s", 1000000},
-		{"dvr/s/seg/0000007.m4s", "s", 7},
-		{"dvr/s/seg/9223372036854775807.m4s", "s", 9223372036854775807},
+		{"dvr/demo-stream/seg/000123.m4s", SegRef{StreamID: "demo-stream", Seq: 123}},
+		{"dvr/s/seg/000000.m4s", SegRef{StreamID: "s", Seq: 0}},
+		{"dvr/s/seg/1000000.m4s", SegRef{StreamID: "s", Seq: 1000000}},
+		{"dvr/s/seg/0000007.m4s", SegRef{StreamID: "s", Seq: 7}},
+		{"dvr/s/seg/9223372036854775807.m4s", SegRef{StreamID: "s", Seq: 9223372036854775807}},
+		{"dvr/a/b/seg/000007.m4s", SegRef{StreamID: "a", RoundID: "b", Seq: 7}},
+		{"dvr/s/r/seg/0000007.m4s", SegRef{StreamID: "s", RoundID: "r", Seq: 7}},
 	} {
-		gotStream, gotSeq, err := ParseSegKey(tc.key)
-		if err != nil || gotStream != tc.streamID || gotSeq != tc.seq {
-			t.Errorf("ParseSegKey(%q) = (%q, %d, %v), want (%q, %d, nil)", tc.key, gotStream, gotSeq, err, tc.streamID, tc.seq)
+		if got, err := ParseSegKey(tc.key); err != nil || got != tc.want {
+			t.Errorf("ParseSegKey(%q) = (%+v, %v), want (%+v, nil)", tc.key, got, err, tc.want)
 		}
 	}
 	for _, key := range []string{
@@ -109,6 +141,8 @@ func TestParseSegKeyAcceptsOnlyTheSegmentKeyGrammar(t *testing.T) {
 		"dvr/s/seg/000007.M4S",              // 확장자 대소문자
 		"dvr/s/seg/000007.m4s\n",            // 끝 개행
 		"dvr/s/seg/000007.m4s\r",            // 끝 CR
+		"dvr/s/r/seg/000007.m4s\n",          // 회차 꼴 끝 개행
+		"dvr/s/r\x00/seg/000007.m4s",        // 회차 성분의 NUL
 		"dvr/s/seg/000007.m4s?x=1",          // 질의
 		"dvr/s/seg/+00007.m4s",              // 부호
 		"dvr/s/seg/-000007.m4s",             // 음수
@@ -117,16 +151,154 @@ func TestParseSegKeyAcceptsOnlyTheSegmentKeyGrammar(t *testing.T) {
 		"dvr/../seg/000007.m4s",             // 상위 경로 참조
 		"dvr/./seg/000007.m4s",              // 현재 경로 참조
 		"dvr//seg/000007.m4s",               // 빈 스트림
-		"dvr/a/b/seg/000007.m4s",            // 경로 구분자가 든 스트림
+		"dvr/a/b/c/seg/000007.m4s",          // 성분 여섯
 		"dvr/s b/seg/000007.m4s",            // 공백
 		"dvr/s\"/seg/000007.m4s",            // 따옴표
 		"dvr/s/init/000007.m4s",             // 다른 축(init) 자리
 		"streams/s/seg/000007.m4s",          // 다른 접두
 		"/dvr/s/seg/000007.m4s",             // 앞 구분자
 	} {
-		if gotStream, gotSeq, err := ParseSegKey(key); err == nil {
-			t.Errorf("ParseSegKey(%q) = (%q, %d, nil), want 오류", key, gotStream, gotSeq)
+		if got, err := ParseSegKey(key); err == nil {
+			t.Errorf("ParseSegKey(%q) = (%+v, nil), want 오류", key, got)
 		}
+	}
+}
+
+// 공유 골든 testdata/seg_key.golden.txt — Go 의 ParseSegKey 와 엣지 함수(dvr-floor.js) 시험이 같은 파일을 읽는다(설계
+// 3-1 · 4-2 · E6 · E22). 줄 문법: `#` 로 시작하는 줄과 빈 줄은 건너뛰고, 나머지 줄은 탭 두 개로 나뉜 세 열이다 — 입력 키 ·
+// 기대(ok 면 `스트림,회차,seq` · 옛 꼴은 회차가 빈 값 · err 면 `-`) · 판정(ok | err). 잡는 결함: 회차 꼴 갈래 · 옛 꼴 갈래 ·
+// 성분 128자 상한 가운데 하나가 빠지거나 넓어지면 그 행이 갈린다.
+func TestParseSegKeyMatchesSharedGolden(t *testing.T) {
+	rows := readSegKeyGolden(t)
+	if len(rows) == 0 {
+		t.Fatal("골든에 행이 없다")
+	}
+	for _, r := range rows {
+		got, err := ParseSegKey(r.input)
+		switch r.verdict {
+		case "ok":
+			if err != nil {
+				t.Errorf("줄 %d: ParseSegKey(%.40q…) = 오류 %v, want ok %s", r.line, r.input, err, r.want)
+				continue
+			}
+			if s := fmt.Sprintf("%s,%s,%d", got.StreamID, got.RoundID, got.Seq); s != r.want {
+				t.Errorf("줄 %d: ParseSegKey(%.40q…) = %s, want %s", r.line, r.input, s, r.want)
+			}
+		case "err":
+			if err == nil {
+				t.Errorf("줄 %d: ParseSegKey(%.40q…) = %+v, want err", r.line, r.input, got)
+			}
+		}
+	}
+}
+
+// 골든의 줄 규약(머리말)을 어긴 파일은 읽기 오류다 — 두 시험(Go · node)이 같은 바이트를 같은 행으로 읽어야 하기 때문이다.
+// 잡는 결함: BOM · CR · NUL · UTF-8 아닌 바이트 · 열 수 · 판정 값 가운데 하나라도 그냥 지나가면 node 의 줄 나누기와 Go 의
+// 줄 나누기가 다른 행을 볼 수 있다(CRLF 파일이면 node 쪽 판정 열 끝에 \r 이 남는다).
+func TestParseSegKeyGoldenRejectsLineRuleViolations(t *testing.T) {
+	const ok = "dvr/s/seg/000007.m4s\ts,,7\tok\n"
+	if rows, err := parseSegKeyGolden([]byte("# 머리\n\n" + ok)); err != nil || len(rows) != 1 {
+		t.Fatalf("규약을 지킨 골든 = (%d행, %v), want (1행, nil)", len(rows), err)
+	}
+	for _, c := range []struct {
+		name string
+		data string
+	}{
+		{"BOM", "\uFEFF" + ok},
+		{"CRLF", strings.TrimSuffix(ok, "\n") + "\r\n"},
+		{"CR_머리줄", "# 머리\r\n" + ok},
+		{"NUL", "dvr/s/seg/000007.m4s\x00\ts,,7\tok\n"},
+		{"UTF-8_아님", "dvr/s/seg/\xff.m4s\t-\terr\n"},
+		{"열_둘", "dvr/s/seg/000007.m4s\tok\n"},
+		{"열_넷", "dvr/s/seg/000007.m4s\ts,,7\tok\tx\n"},
+		{"빈_입력", "\ts,,7\tok\n"},
+		{"판정_값", "dvr/s/seg/000007.m4s\ts,,7\tOK\n"},
+		{"err_기대_값", "dvr/s/seg/000007.m4s\ts,,7\terr\n"},
+		{"ok_기대_대시", "dvr/s/seg/000007.m4s\t-\tok\n"},
+	} {
+		if _, err := parseSegKeyGolden([]byte(c.data)); err == nil {
+			t.Errorf("%s: 규약을 어긴 골든이 읽혔다", c.name)
+		}
+	}
+}
+
+// segKeyGoldenRow 는 공유 골든의 한 행이다.
+type segKeyGoldenRow struct {
+	line                 int
+	input, want, verdict string
+}
+
+// readSegKeyGolden 은 공유 골든을 읽는다. 줄 규약을 어긴 파일은 시험 실패다 — 엣지 함수 시험이 같은 파일을 같은 문법으로
+// 읽으므로 여기서 문법을 못 박는다.
+func readSegKeyGolden(t *testing.T) []segKeyGoldenRow {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "seg_key.golden.txt"))
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	rows, err := parseSegKeyGolden(data)
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	return rows
+}
+
+// parseSegKeyGolden 은 골든 바이트 data 를 머리말의 줄 규약대로 행으로 푼다 — UTF-8 · BOM 없음 · LF 전용 · NUL 없음이고,
+// `#` 줄과 빈 줄을 뺀 줄은 탭 두 개로 나뉜 세 열(비지 않은 입력 · 기대 · 판정)이며 ok 는 기대 값과, err 는 기대 `-` 와
+// 짝이다. 어기면 줄 번호를 실은 오류다.
+func parseSegKeyGolden(data []byte) ([]segKeyGoldenRow, error) {
+	switch {
+	case !utf8.Valid(data):
+		return nil, errors.New("골든이 UTF-8 이 아니다")
+	case bytes.HasPrefix(data, []byte("\uFEFF")):
+		return nil, errors.New("골든 앞에 BOM 이 있다")
+	case bytes.ContainsAny(data, "\r\x00"):
+		return nil, errors.New("골든에 CR 또는 NUL 이 있다 — LF 전용 · NUL 없음")
+	}
+	var rows []segKeyGoldenRow
+	for i, line := range strings.Split(string(data), "\n") {
+		n := i + 1
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		cols := strings.Split(line, "\t")
+		if len(cols) != 3 || cols[0] == "" {
+			return nil, fmt.Errorf("골든 줄 %d: 열 %d개 — 비지 않은 입력 · 기대 · 판정 세 열이어야 한다", n, len(cols))
+		}
+		r := segKeyGoldenRow{line: n, input: cols[0], want: cols[1], verdict: cols[2]}
+		if (r.verdict != "ok" && r.verdict != "err") || (r.verdict == "err") != (r.want == "-") {
+			return nil, fmt.Errorf("골든 줄 %d: 기대 %q · 판정 %q — ok 는 기대 값과, err 는 기대 `-` 와 짝이어야 한다", n, r.want, r.verdict)
+		}
+		rows = append(rows, r)
+	}
+	return rows, nil
+}
+
+// 설계 2-1 의 회차 꼴 형상 그대로다: dvr/{streamID}/{roundID}/seg/{NNNNNN}.m4s. 자릿수 규칙은 SegKey 와 같다.
+func TestRoundSegKeyMatchesContractShape(t *testing.T) {
+	got, err := RoundSegKey("demo-stream", "S-20261103-101530-demo-stream-42", 123)
+	if err != nil {
+		t.Fatalf("정상 입력이 거부됐다: %v", err)
+	}
+	if want := "dvr/demo-stream/S-20261103-101530-demo-stream-42/seg/000123.m4s"; got != want {
+		t.Fatalf("RoundSegKey = %q, want %q", got, want)
+	}
+}
+
+// 회차 성분도 URL 경로에 그대로 실린다 — SegKey 의 스트림 성분과 같은 검사를 받고, 엣지 정규식과 같은 128자 상한을
+// 넘으면 거부한다(설계 3-1 · E22). 빈 회차도 거부한다 — 회차가 없으면 호출자가 옛 꼴(SegKey)을 고른다. 두 성분을 각각
+// 본다: 한쪽만 검사하면 다른 쪽이 경로를 벗어난다.
+func TestRoundSegKeyRejectsComponentThatIsNotURLSafe(t *testing.T) {
+	for _, roundID := range []string{"", "a/b", ".", "..", "a b", "한글", strings.Repeat("r", 129)} {
+		if got, err := RoundSegKey("s", roundID, 0); err == nil {
+			t.Errorf("round_id=%.40q 가 통과했다: %q", roundID, got)
+		}
+	}
+	if got, err := RoundSegKey("a/b", "r", 0); err == nil {
+		t.Errorf("stream_id 가 경로를 벗어났는데 통과했다: %q", got)
+	}
+	if got, err := RoundSegKey("s", "r", -1); err == nil {
+		t.Errorf("음수 seq 가 통과했다: %q", got)
 	}
 }
 

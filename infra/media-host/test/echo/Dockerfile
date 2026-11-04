@@ -12,6 +12,9 @@
 FROM golang:1.27-alpine3.24 AS build
 WORKDIR /src
 COPY go.mod *.go ./
+# 단위 시험(main_test.go)은 빌드 전에 여기서 돈다 — 실패하면 빌드가 실패한다. CI 에서는
+# media-host-systemd 잡의 unit_restart_test 준비가 이 이미지를 빌드한다(따로 도는 Go 잡이 없다).
+RUN CGO_ENABLED=0 go test ./...
 # CGO_ENABLED=0 = 순수 정적 바이너리. 실행 스테이지가 scratch 라 동적 링커가 없다.
 RUN CGO_ENABLED=0 go build -trimpath -o /out/echo .
 

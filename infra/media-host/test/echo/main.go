@@ -16,6 +16,7 @@
 //
 // sidecar 는 망 칸에 붙는 비부착 서비스(사이드카)를 흉내 낸다. 시작할 때마다 표식 줄과 주인
 // 루프백 접속 결과 줄을 내고, 지정한 지연 뒤 종료 코드 1 로 끝난다(엔진 재시작 관찰용).
+// 상자 스위치(PLAYBACK_ROUND_KEYS)를 받았으면 표식 줄 뒤에 기동 신호 줄도 낸다.
 // SIGTERM 을 받으면 실제 사이드카처럼 0 으로 끝난다.
 //
 // probe 는 TCP 접속만 시도해 주소마다 OPEN 또는 CLOSED 한 줄을 낸다. fetch 는 HTTP 요청 하나를
@@ -297,6 +298,9 @@ func runSidecar(args []string) int {
 	defer stop()
 
 	fmt.Printf("SIDECAR START at=%s\n", time.Now().UTC().Format(time.RFC3339Nano))
+	if line, ok := keyLayoutLine(os.Getenv("PLAYBACK_ROUND_KEYS")); ok {
+		fmt.Println(line)
+	}
 	reportOwnerDial(*ownerAddr)
 
 	select {
@@ -307,6 +311,23 @@ func runSidecar(args []string) int {
 		fmt.Println("SIDECAR EXIT 1")
 		return exitFail
 	}
+}
+
+// keyLayoutLine 은 상자 스위치 값(env_file 의 PLAYBACK_ROUND_KEYS)에 맞는 기동 신호 줄을
+// 낸다 — 실물 사이드카의 playback_key_layout 과 msg · layout 칸이 같아, 운영 스크립트
+// (bin/sidecar-round-keys.sh)가 그 줄을 기다려 대조할 수 있다. 값이 true · false 가 아니면
+// 줄을 내지 않는다(스위치 파일을 받지 않은 compose).
+func keyLayoutLine(value string) (string, bool) {
+	var layout string
+	switch value {
+	case "true":
+		layout = "round"
+	case "false":
+		layout = "legacy"
+	default:
+		return "", false
+	}
+	return fmt.Sprintf(`{"level":"INFO","msg":"playback_key_layout","layout":%q}`, layout), true
 }
 
 // reportOwnerDial 은 주인 루프백 주소에 TCP 접속만 해 보고 결과 한 줄을 낸다. HTTP 요청을

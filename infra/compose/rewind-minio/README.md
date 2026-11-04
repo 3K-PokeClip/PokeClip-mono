@@ -1,9 +1,9 @@
 # rewind-minio — 로컬 되감기 바이트 원천
 
 팀 compose 에 덧붙여 켜는 로컬 S3(MinIO · https)와 로컬 엣지다. 켜면
-`segment-indexer` 가 되감기 목록 · 조각을 이 MinIO 로 발행 · 업로드하고, 브라우저는
-로컬 엣지(`http://127.0.0.1:28480/dvr/…`)로 받는다. 실버킷은 쓰지 않는다
-(POK-200 · 설계 M5 9.4.1 · 9.4.2).
+`segment-indexer` 가 되감기 목록 · 조각 · VOD 문서를 이 MinIO 로 발행 · 업로드하고,
+브라우저는 로컬 엣지(`http://127.0.0.1:28480/dvr/…` · `/vod/…`)로 받는다. 실버킷은
+쓰지 않는다(POK-200 · 설계 M5 9.4.1 · 9.4.2).
 
 기본 `docker compose up` 은 바뀌지 않는다 — 발행은 꺼져 있고 제어면은 모든 스트림에
 404 를 낸다. 바이트까지 보려면 이 폴더를 덧붙인다.
@@ -14,8 +14,8 @@
 |---|---|---|
 | `minio-certs` | 로컬 CA · `minio` SAN 서버 인증서를 만든다(있으면 건너뜀) | 없음 · 한 번 돌고 끝 |
 | `minio` | S3 API(https) · 데이터 볼륨 | 망 안 `https://minio:9000` 만 |
-| `minio-init` | 버킷 `pokeclip-rewind-local` · 익명 정책(`dvr/*` GetObject 만) | 없음 · 한 번 돌고 끝 |
-| `dvr-edge` | `/dvr/` 만 MinIO 로 넘기는 nginx · CORS · 목록 거부 | 호스트 `127.0.0.1:28480` |
+| `minio-init` | 버킷 `pokeclip-rewind-local` · 익명 정책(`dvr/*` · `vod/*` GetObject 만) | 없음 · 한 번 돌고 끝 |
+| `dvr-edge` | `/dvr/` 경로와 `/vod/` 의 VOD 문서만 MinIO 로 넘기는 nginx · CORS · 목록 거부 | 호스트 `127.0.0.1:28480` |
 | `minio-check` | 공통 수용 시험(아래) — 평소 up 에는 안 뜬다 | 프로필 `rewind-minio-check` |
 
 사이드카에는 `S3_*` · `REWIND_PUBLIC_BASE_URL` · `SSL_CERT_DIR` 를 덧붙인다. 사이드카와
@@ -131,6 +131,10 @@ linux/arm64 · 같은 이미지에 `mc` 가 들어 `minio-init` 도 이것을 �
 *   엣지 캐시(TTL 합치기 · 오류 캐시)는 흉내 내지 않는다.
 *   `x-amz-*` 응답 머리와 MinIO 의 CORS 머리를 지운다. MinIO 도 CORS 머리를 스스로
     실어 그대로 두면 `Access-Control-Allow-Origin` 이 두 번 나간다(브라우저가 거부한다).
+*   `/vod/` 는 VOD 문서 꼴(`/vod/{streamID}/{head}/index.m3u8`)만 넘기고 그 밖
+    경로는 엣지가 404 로 끊는다. prod `/vod/*` 는 경로를 가리지 않고 원본까지
+    가며, 버킷의 `vod/` 아래에는 VOD 문서만 있어 없는 키는 403 이다. VOD 조각은
+    `/dvr/…/seg/…` 로 받는다(POK-525).
 *   제어면은 이 엣지를 거치지 않는다 — 브라우저가 `http://localhost:8086` 을 직접
     부르고 CORS 는 `CONTROL_CORS_ORIGIN` 이 낸다.
 
