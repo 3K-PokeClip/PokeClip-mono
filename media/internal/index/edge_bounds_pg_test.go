@@ -6,7 +6,7 @@ package index
 // 없음 = 닫힘)과 권한(media_indexer 넷 · app_clip 없음) · 운영 SQL 사본(30 · 40)을 잰다.
 //
 //	문장                   메서드              표 · 동작
-//	raiseSQL               Raise               edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT(RETURNING) · sessions SELECT
+//	raiseSQL               Raise               edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT(RETURNING) · sessions FOR SHARE
 //	closedUnreleasedSQL    ClosedUnreleased    edge_bounds · sessions SELECT
 //	markReleasedSQL        MarkReleased        edge_bounds SELECT FOR UPDATE · UPDATE
 //	deleteReleasedSQL      DeleteReleased      edge_bounds DELETE(+ SELECT)
@@ -396,6 +396,284 @@ func TestEdgeBoundsLedgerMarkReleasedLocksInKeyOrder(t *testing.T) {
 	}
 }
 
+// E3 — 회차 닫힘이 커밋된 뒤에는 그 회차에 원장 행이 새로 생기지 않는다. 닫힘 커밋 순간 원장 행이 안 보이면 판정식이
+// 곧바로 vod 를 내므로, 그 뒤에 생긴 행(과 KVS 하한 키)은 이미 공개한 VOD 앞부분을 막는다(종결 r2 codex 설계 H1).
+// 경합은 운에 맡기지 않는다 — 다른 연결이 묶음 앞 회차(RA)의 원장 행을 쥐어 Raise([RA, RB]) 를 RA 에서 세운 뒤, 원장
+// 행이 없는 뒤 회차(RB · 동결 끝난 VOD)를 닫는다. 닫힘이 끝났으면(커밋) 그때의 원장 행 · 판정식을 적고, 잠금 대기에
+// 들었으면 Raise 를 먼저 끝내게 둔다. 변이 = raiseSQL 의 FOR SHARE 제거 → 닫힘이 Raise 를 기다리지 않고 커밋해 판정식이
+// vod 를 낸 뒤 RB 행이 생겨 FAIL.
+func TestEdgeBoundsLedgerRaiseSerializesWithRoundClose(t *testing.T) {
+	pool := edgeBoundsPool(t)
+	ctx := context.Background()
+	plantOpenRound(t, pool, "a", "RA")
+	now := time.Now().UTC()
+	plantRound(t, pool, roundFixture{id: "RB", stream: "b", state: "ended", roundID: "RB", vodState: "frozen",
+		vodKey: "vod/b/RB/index.m3u8", startedAt: now.Add(-time.Hour), endedAt: now.Add(-time.Minute)})
+	seed := edgebounds.Floor{StreamID: "a", RoundID: "RA", Value: 1}
+	if _, err := NewEdgeBoundsLedger(pool).Raise(ctx, floors(seed)); err != nil {
+		t.Fatalf("RA 행 심기 Raise 오류 = %v", err)
+	}
+	writer, writerPID := singleConnPool(t, pool)
+	closer, closerPID := singleConnPool(t, pool)
+	holder := holdEdgeBoundsRows(t, pool, "a")
+	raised := make(chan error, 1)
+	go func() {
+		_, err := NewEdgeBoundsLedger(writer).Raise(ctx, floors(
+			edgebounds.Floor{StreamID: "a", RoundID: "RA", Value: 5},
+			edgebounds.Floor{StreamID: "b", RoundID: "RB", Value: 5}))
+		raised <- err
+	}()
+	waitLockWait(t, pool, writerPID)
+	closed := make(chan error, 1)
+	go func() {
+		_, err := closer.Exec(ctx, closeRoundSQL, "RB")
+		closed <- err
+	}()
+
+	closedFirst := waitDoneOrLockWait(t, pool, closerPID, closed)
+	var rowAtClose bool
+	var phaseAtClose PlaybackPhase
+	if closedFirst {
+		_, _, rowAtClose = edgeBoundsRow(t, pool, "b", "RB")
+		phaseAtClose = lookupPhase(t, pool, "b", "RB")
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("RA 잠금 풀기 실패: %v", err)
+	}
+	if err := <-raised; err != nil {
+		t.Fatalf("Raise 오류 = %v, want nil", err)
+	}
+	if !closedFirst {
+		if err := <-closed; err != nil {
+			t.Fatalf("회차 닫힘 오류 = %v, want nil", err)
+		}
+		_, _, rowAtClose = edgeBoundsRow(t, pool, "b", "RB")
+		phaseAtClose = lookupPhase(t, pool, "b", "RB")
+	}
+
+	if _, _, rowAtEnd := edgeBoundsRow(t, pool, "b", "RB"); rowAtEnd && !rowAtClose {
+		t.Errorf("닫힘 커밋 때 RB 원장 행 없음(판정식 vod = %t) → Raise 뒤 행 있음, want 닫힌 회차에 새 행 없음",
+			phaseAtClose == PhaseVOD)
+	}
+	if !rowAtClose && phaseAtClose != PhaseVOD || rowAtClose && phaseAtClose != PhaseEnding {
+		t.Errorf("닫힘 커밋 뒤 RB 판정식 = %d (원장 행 %t), want 행 있으면 ending(%d) · 없으면 vod(%d)",
+			phaseAtClose, rowAtClose, PhaseEnding, PhaseVOD)
+	}
+}
+
+// 닫힘이 회차 행을 먼저 잠갔으면(TryCloseRound 의 ③ 잠금 뒤 닫힘 UPDATE · 커밋 전) Raise 는 그 커밋을 기다렸다가
+// 최신 행을 다시 보고(EvalPlanQual) 그 회차를 뺀다 — 닫힘 커밋 뒤에 원장 행이 생기지 않는다. 변이 = FOR SHARE 제거 →
+// Raise 가 기다리지 않고 옛 스냅숏의 「열림」 으로 행을 만들어, 닫힘 커밋 뒤 닫힌 회차에 미해제 행이 남아 FAIL.
+func TestEdgeBoundsLedgerRaiseWaitsForLockedRoundClose(t *testing.T) {
+	pool := edgeBoundsPool(t)
+	ctx := context.Background()
+	plantOpenRound(t, pool, "b", "RB")
+	writer, writerPID := singleConnPool(t, pool)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("닫힘 트랜잭션 시작 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("닫힘 트랜잭션 되돌리기 실패: %v", err)
+		}
+	})
+	for _, sql := range []string{lockRoundRowsSQL, closeRoundSQL} {
+		if _, err := tx.Exec(ctx, sql, "RB"); err != nil {
+			t.Fatalf("회차 잠금 · 닫힘 실패: %v", err)
+		}
+	}
+	raised := make(chan error, 1)
+	var got []edgebounds.Floor
+	go func() {
+		var err error
+		got, err = NewEdgeBoundsLedger(writer).Raise(ctx, floors(edgebounds.Floor{StreamID: "b", RoundID: "RB", Value: 5}))
+		raised <- err
+	}()
+
+	raisedFirst := waitDoneOrLockWait(t, pool, writerPID, raised)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("회차 닫힘 커밋 실패: %v", err)
+	}
+	if !raisedFirst {
+		if err := <-raised; err != nil {
+			t.Fatalf("Raise 오류 = %v, want nil", err)
+		}
+	}
+
+	if _, _, ok := edgeBoundsRow(t, pool, "b", "RB"); ok || len(got) != 0 {
+		t.Errorf("닫힘 커밋 뒤 RB 원장 행 있음 = %t · Raise = %v (기다렸음 %t), want 행 없음 · 빈 목록", ok, got, !raisedFirst)
+	}
+}
+
+// 한 스트림에 열린 회차가 둘일 때(옛 회차 RO 가 닫힘을 기다리는 사이 새 회차 RN 이 live) 회차 닫힘(TryCloseRound — ②
+// 소속 행 = RN 의 live → ③ RO 의 회차 행)과 Raise([RO, RN]) 가 겹쳐도 교착(40P01)이 없다. 위상 트랜잭션끼리는 ① 위상
+// 잠금으로 줄을 서 잠금 순서가 제각각이어도 되지만 Raise 는 그 밖이다 — 한 문장이 한 스트림의 두 회차 행을 쥐면 순환이
+// 생긴다. 닫힘 쪽이 소속 행을 쥔 채 Raise 가 그 행에서 줄을 선 것을 본 뒤 RO 회차 행을 잠근다. 변이 = 스트림별 문장
+// 나누기 제거 → Raise 가 RO 행을 FOR SHARE 로 쥔 채 RN 에서 기다려, 닫힘의 ③ 과 서로 기다리다 한쪽이 40P01 로 FAIL.
+func TestEdgeBoundsLedgerRaiseNoDeadlockWithRoundCloseAcrossRounds(t *testing.T) {
+	pool := edgeBoundsPool(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	plantRound(t, pool, roundFixture{id: "RO", stream: "s", state: "ended", roundID: "RO",
+		startedAt: now.Add(-time.Hour), endedAt: now.Add(-time.Minute)})
+	plantRound(t, pool, roundFixture{id: "RN", stream: "s", state: "live", roundID: "RN", startedAt: now.Add(-time.Second)})
+	writer, writerPID := singleConnPool(t, pool)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("닫힘 트랜잭션 시작 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("닫힘 트랜잭션 되돌리기 실패: %v", err)
+		}
+	})
+	if _, err := tx.Exec(ctx, lockSessionSQL, "RN"); err != nil {
+		t.Fatalf("소속 행 잠금 실패: %v", err)
+	}
+	raised := make(chan error, 1)
+	go func() {
+		_, err := NewEdgeBoundsLedger(writer).Raise(ctx, floors(
+			edgebounds.Floor{StreamID: "s", RoundID: "RO", Value: 5},
+			edgebounds.Floor{StreamID: "s", RoundID: "RN", Value: 5}))
+		raised <- err
+	}()
+	waitLockWait(t, pool, writerPID)
+
+	_, lockErr := tx.Exec(ctx, lockRoundRowsSQL, "RO")
+	if lockErr == nil {
+		_, lockErr = tx.Exec(ctx, closeRoundSQL, "RO")
+	}
+	if lockErr == nil {
+		lockErr = tx.Commit(ctx)
+	}
+
+	if lockErr != nil {
+		t.Errorf("닫힘의 ③ · 닫힘 · 커밋 오류 = %v, want nil", lockErr)
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Fatalf("닫힘 트랜잭션 되돌리기 실패: %v", err)
+		}
+	}
+	if err := <-raised; err != nil {
+		t.Errorf("Raise 오류 = %v, want nil", err)
+	}
+	if _, _, ok := edgeBoundsRow(t, pool, "s", "RN"); !ok {
+		t.Error("새 회차 RN 의 원장 행이 없다")
+	}
+}
+
+// raisePasses 는 스트림의 k 번째 회차를 k 번째 문장에 싣는다 — 같은 (stream, round) 는 같은 문장(둘이면 21000 그대로) ·
+// 1 보다 작은 값은 빠짐 · 입력 순서 유지 · 스트림마다 회차가 하나면 문장 하나.
+func TestRaisePassesPutsOneRoundPerStreamInEachStatement(t *testing.T) {
+	f := func(stream, round string, v int64) edgebounds.Floor {
+		return edgebounds.Floor{StreamID: stream, RoundID: round, Value: v}
+	}
+	tests := []struct {
+		name string
+		give []edgebounds.Floor
+		want []raiseArgs
+	}{
+		{name: "empty", give: nil, want: nil},
+		{name: "all below one", give: floors(f("a", "R1", 0), f("b", "R1", -1)), want: nil},
+		{
+			name: "one round per stream",
+			give: floors(f("a", "R1", 1), f("b", "R2", 2)),
+			want: []raiseArgs{{streams: []string{"a", "b"}, rounds: []string{"R1", "R2"}, values: []int64{1, 2}}},
+		},
+		{
+			name: "two rounds of one stream",
+			give: floors(f("a", "R1", 1), f("a", "R2", 2), f("b", "R3", 0), f("b", "R4", 4), f("a", "R1", 5)),
+			want: []raiseArgs{
+				{streams: []string{"a", "b", "a"}, rounds: []string{"R1", "R4", "R1"}, values: []int64{1, 4, 5}},
+				{streams: []string{"a"}, rounds: []string{"R2"}, values: []int64{2}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := raisePasses(tt.give)
+			eq := func(a, b raiseArgs) bool {
+				return slices.Equal(a.streams, b.streams) && slices.Equal(a.rounds, b.rounds) &&
+					slices.Equal(a.values, b.values)
+			}
+			if !slices.EqualFunc(got, tt.want, eq) {
+				t.Errorf("raisePasses(%v) = %+v, want %+v", tt.give, got, tt.want)
+			}
+		})
+	}
+}
+
+// 문장이 여럿으로 나뉘어도 Raise 는 (stream, round) 순 한 목록을 돌려준다(입력은 뒤섞음).
+func TestEdgeBoundsLedgerRaiseAcrossPassesReturnsSorted(t *testing.T) {
+	pool := edgeBoundsPool(t)
+	now := time.Now().UTC()
+	// a 의 옛 회차 R1 · R2 는 끝난 채 닫힘을 기다리고 R3 이 live 다(스트림마다 live 하나).
+	for i, round := range []string{"R1", "R2"} {
+		started := now.Add(time.Duration(i-3) * time.Hour)
+		plantRound(t, pool, roundFixture{id: "a-" + round, stream: "a", state: "ended", roundID: round,
+			startedAt: started, endedAt: started.Add(time.Minute)})
+	}
+	plantRound(t, pool, roundFixture{id: "a-R3", stream: "a", state: "live", roundID: "R3", startedAt: now.Add(-time.Minute)})
+	plantRound(t, pool, roundFixture{id: "b-R1", stream: "b", state: "live", roundID: "R1", startedAt: now.Add(-time.Minute)})
+	l := NewEdgeBoundsLedger(pool)
+
+	got, err := l.Raise(context.Background(), floors(
+		edgebounds.Floor{StreamID: "a", RoundID: "R3", Value: 3},
+		edgebounds.Floor{StreamID: "b", RoundID: "R1", Value: 4},
+		edgebounds.Floor{StreamID: "a", RoundID: "R1", Value: 1},
+		edgebounds.Floor{StreamID: "a", RoundID: "R2", Value: 2},
+	))
+
+	want := floors(
+		edgebounds.Floor{StreamID: "a", RoundID: "R1", Value: 1},
+		edgebounds.Floor{StreamID: "a", RoundID: "R2", Value: 2},
+		edgebounds.Floor{StreamID: "a", RoundID: "R3", Value: 3},
+		edgebounds.Floor{StreamID: "b", RoundID: "R1", Value: 4},
+	)
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("Raise = (%v, %v), want (%v, nil)", got, err, want)
+	}
+}
+
+// waitDoneOrLockWait 는 done 이 오거나(참 — 오류가 있으면 시험 실패) 백엔드 pid 가 잠금 대기에 들 때까지(거짓)
+// 기다린다(5초). 거짓이면 done 은 아직 비어 있다.
+func waitDoneOrLockWait(t *testing.T, pool *pgxpool.Pool, pid int32, done <-chan error) bool {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("백엔드 %d 의 문장 오류 = %v", pid, err)
+			}
+			return true
+		default:
+		}
+		var waiting bool
+		if err := pool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity
+			WHERE pid = $1 AND wait_event_type = 'Lock')`, pid).Scan(&waiting); err != nil {
+			t.Fatalf("잠금 대기 조회 실패: %v", err)
+		}
+		if waiting {
+			return false
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("백엔드 %d 가 5초 안에 끝나지도 잠금 대기에 들지도 않았다", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// lookupPhase 는 회차 (stream, round) 의 판정식 국면이다.
+func lookupPhase(t *testing.T, pool *pgxpool.Pool, stream, round string) PlaybackPhase {
+	t.Helper()
+	st, err := LookupRoundPlayback(context.Background(), pool, stream, round)
+	if err != nil {
+		t.Fatalf("판정식 조회 실패: %v", err)
+	}
+	return st.Phase
+}
+
 // singleConnPool 은 pool 과 같은 DB 의 연결 하나짜리 풀(상자 하나의 Writer 연결)과 그 연결의 백엔드 pid 다.
 func singleConnPool(t *testing.T, pool *pgxpool.Pool) (*pgxpool.Pool, int32) {
 	t.Helper()
@@ -631,6 +909,15 @@ func TestProdSQLVerifyCatchesEdgeBoundsDrift(t *testing.T) {
 			name: "floor check loosened",
 			tamper: "ALTER TABLE stream_edge_bounds DROP CONSTRAINT stream_edge_bounds_dvr_floor_check;\n" +
 				"ALTER TABLE stream_edge_bounds ADD CHECK (dvr_floor >= 0)",
+			want: []string{"check:stream_edge_bounds.dvr_floor"},
+		},
+		// NOT VALID 는 40 의 두 조건(k.convalidated · 정의 문자열 — pg_get_constraintdef 가 끝에 NOT VALID 를 붙인다)이
+		// 함께 잡는다. 한쪽만 지워도 이 사례는 잡힌다.
+		{
+			name: "floor check not validated",
+			tamper: "ALTER TABLE stream_edge_bounds DROP CONSTRAINT stream_edge_bounds_dvr_floor_check;\n" +
+				"ALTER TABLE stream_edge_bounds ADD CONSTRAINT stream_edge_bounds_dvr_floor_check\n" +
+				"    CHECK (dvr_floor >= 1) NOT VALID",
 			want: []string{"check:stream_edge_bounds.dvr_floor"},
 		},
 		{

@@ -1,8 +1,10 @@
 package index
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +27,14 @@ import (
 // Raise · MarkReleased 는 배열을 한 루프에서 함께 채운다.
 
 // raiseSQL ($1 stream_id[] · $2 round_id[] · $3 dvr_floor[]) — 열린 회차만 · 해제된 행은 건드리지 않음 · 잠금 순서 고정.
+//
+// 열린 회차 확인은 그 회차의 열린 세션 행 하나를 FOR SHARE 로 잠근다 — 회차 닫힘(closeRoundSQL · lockRoundRowsSQL)은 그
+// 회차의 열린 행 전부를 고치므로 이 잠금과 줄을 선다. 닫힘이 먼저 커밋했으면 잠금이 최신 행을 다시 봐(READ COMMITTED
+// 재평가 · PG 17 13.2.1) 그 회차를 빼고, 이 문장이 먼저 잠갔으면 닫힘이 이 커밋을 기다려 판정식은 원장 행을 보고
+// ending 을 낸다. 잠금이 없으면 문장 스냅숏의 「열림」 으로 닫힘 커밋 뒤에 행이 생겨, 이미 vod 를 낸 회차에 하한 키가
+// 늦게 붙는다(E3 · 종결 r2 codex 설계 H1). FOR KEY SHARE 는 비키 UPDATE 와 충돌하지 않아 이 몫을 못 한다. 세션 잠금은
+// EXISTS 하위 계획이 정렬 전 입력 순서로 모두 잡고 원장 행 잠금은 그 뒤 (stream, round) 순이다. 부르는 쪽(Raise)은 한
+// 문장에 스트림마다 회차 하나만 실어, 이 문장이 쥐는 세션 행은 스트림마다 하나다.
 const raiseSQL = `
 INSERT INTO stream_edge_bounds AS b (stream_id, round_id, dvr_floor)
 SELECT u.stream_id, u.round_id, u.dvr_floor
@@ -32,7 +42,8 @@ SELECT u.stream_id, u.round_id, u.dvr_floor
        AS u(stream_id, round_id, dvr_floor)
  WHERE EXISTS (SELECT 1 FROM stream_sessions s
                 WHERE s.stream_id = u.stream_id AND s.round_id = u.round_id
-                  AND s.round_closed_at IS NULL)
+                  AND s.round_closed_at IS NULL
+                  FOR SHARE OF s)
  ORDER BY u.stream_id, u.round_id
 ON CONFLICT (stream_id, round_id) DO UPDATE
    SET dvr_floor  = GREATEST(b.dvr_floor, EXCLUDED.dvr_floor),
@@ -84,27 +95,59 @@ func NewEdgeBoundsLedger(pool *pgxpool.Pool) *EdgeBoundsLedger {
 	return &EdgeBoundsLedger{pool: pool}
 }
 
-// Raise 는 rows 가운데 열린 회차 · 미해제 행만 GREATEST 로 올리고(없으면 만든다) 올린 뒤의 행을 돌려준다. 1 보다 작은
-// 값은 문장에 싣기 전에 거른다(CHECK dvr_floor >= 1 — 한 행이 묶음 전체를 23514 로 만들지 않게). 다 걸러지면 문장을
-// 보내지 않는다. 한 묶음 안 같은 (stream, round) 는 부른 쪽이 하나로 모은다 — 둘이면 문장 오류(21000)다.
+// Raise 는 rows 가운데 열린 회차 · 미해제 행만 GREATEST 로 올리고(없으면 만든다) 올린 뒤의 행을 (stream, round) 순으로
+// 돌려준다. 1 보다 작은 값은 문장에 싣기 전에 거른다(CHECK dvr_floor >= 1 — 한 행이 묶음 전체를 23514 로 만들지 않게).
+// 다 걸러지면 문장을 보내지 않는다. 한 묶음 안 같은 (stream, round) 는 부른 쪽이 하나로 모은다 — 둘이면 문장 오류(21000)다.
+//
+// 한 스트림의 회차가 여럿이면 문장을 나눠 한 문장에 스트림마다 회차 하나만 싣는다(raisePasses). 위상 트랜잭션(회차 닫힘 ·
+// 사슬 닫힘 · EndLive · 4D)은 ① 스트림별 위상 잠금으로 줄을 서서 세션 행 잠금 순서가 제각각이다(닫힘은 새 회차의 소속
+// 행 → 옛 회차 행). 그 잠금 밖의 이 문장이 한 스트림의 두 회차 행을 함께 쥐면 그 순서와 엇갈려 교착(40P01)이 된다. 앞
+// 문장이 커밋한 뒤 뒤 문장이 실패하면 오류만 돌려준다 — 원장은 GREATEST 라 다음 올림이 같은 값으로 다시 맞춘다.
 func (l *EdgeBoundsLedger) Raise(ctx context.Context, rows []edgebounds.Floor) ([]edgebounds.Floor, error) {
-	streams := make([]string, 0, len(rows))
-	rounds := make([]string, 0, len(rows))
-	values := make([]int64, 0, len(rows))
+	var out []edgebounds.Floor
+	for _, p := range raisePasses(rows) {
+		got, err := l.collectFloors(ctx, raiseSQL, p.streams, p.rounds, p.values)
+		if err != nil {
+			return nil, fmt.Errorf("하한 원장 올림 실패: %w", err)
+		}
+		out = append(out, got...)
+	}
+	slices.SortFunc(out, func(a, b edgebounds.Floor) int {
+		return cmp.Or(cmp.Compare(a.StreamID, b.StreamID), cmp.Compare(a.RoundID, b.RoundID))
+	})
+	return out, nil
+}
+
+// raiseArgs 는 raiseSQL 한 번의 인자 배열 셋이다(같은 길이).
+type raiseArgs struct {
+	streams, rounds []string
+	values          []int64
+}
+
+// raisePasses 는 rows 의 1 이상 값을 문장 묶음으로 나눈다 — 스트림의 k 번째 회차는 k 번째 묶음에 들고, 같은
+// (stream, round) 는 같은 묶음에 든다. 스트림마다 회차가 하나면(보통) 묶음도 하나다. 순서는 입력 순서를 지킨다.
+func raisePasses(rows []edgebounds.Floor) []raiseArgs {
+	var passes []raiseArgs
+	slot := make(map[[2]string]int)
+	next := make(map[string]int)
 	for _, r := range rows {
 		if r.Value < 1 {
 			continue
 		}
-		streams, rounds, values = append(streams, r.StreamID), append(rounds, r.RoundID), append(values, r.Value)
+		key := [2]string{r.StreamID, r.RoundID}
+		i, ok := slot[key]
+		if !ok {
+			i = next[r.StreamID]
+			slot[key], next[r.StreamID] = i, i+1
+		}
+		if i == len(passes) {
+			passes = append(passes, raiseArgs{})
+		}
+		p := &passes[i]
+		p.streams, p.rounds = append(p.streams, r.StreamID), append(p.rounds, r.RoundID)
+		p.values = append(p.values, r.Value)
 	}
-	if len(streams) == 0 {
-		return nil, nil
-	}
-	out, err := l.collectFloors(ctx, raiseSQL, streams, rounds, values)
-	if err != nil {
-		return nil, fmt.Errorf("하한 원장 올림 실패: %w", err)
-	}
-	return out, nil
+	return passes
 }
 
 // ClosedUnreleased 는 해제 안 된 행 가운데 회차가 닫혔거나 세션 행이 없는 것을 (stream, round) 순으로 limit 개
