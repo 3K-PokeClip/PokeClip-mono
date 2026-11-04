@@ -20,6 +20,8 @@ import {
 } from './statsChart';
 
 const T0 = Date.parse('2026-09-26T10:00:00+09:00');
+/** 시청자 선 꼬리를 잇는 폭 — 패널이 넘기는 켜짐 판정 폭(ON_AIR_WINDOW_MS)과 같은 3분 */
+const HOLD = 3 * 60_000;
 
 /** 30초 칸 n개짜리 차트(채팅은 칸 번호, 후원은 10칸마다 하나) */
 function chart(n: number, bucketSeconds = 30): StatsChart {
@@ -181,16 +183,16 @@ describe('statsChart: 선', () => {
       { t: T0 + 60_000, v: 0 },
     ];
     // 관측은 1분마다라 「지금」이 마지막 관측보다 늘 조금 뒤다
-    expect(viewerTail(v, T0 + 100_000)).toEqual({ t: T0 + 100_000, v: 0 });
+    expect(viewerTail(v, T0 + 100_000, HOLD)).toEqual({ t: T0 + 100_000, v: 0 });
     // 수집기가 두 번 놓쳐도(3분) 잇는다
-    expect(viewerTail(v, T0 + 60_000 + 3 * 60_000)).toEqual({ t: T0 + 240_000, v: 0 });
+    expect(viewerTail(v, T0 + 60_000 + 3 * 60_000, HOLD)).toEqual({ t: T0 + 240_000, v: 0 });
   });
 
   it('마지막 관측이 3분보다 오래됐거나 끝에 닿았거나 관측이 없으면 잇지 않는다', () => {
     const v = [{ t: T0, v: 5 }];
-    expect(viewerTail(v, T0 + 3 * 60_000 + 1)).toBeNull();
-    expect(viewerTail(v, T0)).toBeNull();
-    expect(viewerTail([], T0 + 60_000)).toBeNull();
+    expect(viewerTail(v, T0 + 3 * 60_000 + 1, HOLD)).toBeNull();
+    expect(viewerTail(v, T0, HOLD)).toBeNull();
+    expect(viewerTail([], T0 + 60_000, HOLD)).toBeNull();
   });
 });
 

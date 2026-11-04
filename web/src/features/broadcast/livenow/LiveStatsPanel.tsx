@@ -19,6 +19,7 @@ import {
   type PointerEvent,
 } from 'react';
 import { LoadingRegion, Skeleton } from '@/ui';
+import { ON_AIR_WINDOW_MS } from '@/features/broadcast/platformView';
 import styles from './LiveStatsPanel.module.css';
 import {
   BAR_MAX,
@@ -401,7 +402,7 @@ function Timeline({
     const measured = vw.map((p) => [xOf(view, p.t, contentW), y(p.v)] as const);
     // 마지막 관측에서 그래프 끝까지는 그 값 그대로 곧게 잇는다(viewerTail). 곡선에는 넣지 않는다: 넣으면 마지막 관측 앞 곡선 모양이
     // 바뀌어 새 관측이 올 때마다 앞 선이 출렁인다
-    const tail = viewerTail(vw, view.t1);
+    const tail = viewerTail(vw, view.t1, ON_AIR_WINDOW_MS);
     const end = tail ? ([xOf(view, tail.t, contentW), y(tail.v)] as const) : null;
     const curve = smoothPath(measured);
     const line = end ? `${curve}L${end[0].toFixed(1)},${end[1].toFixed(1)}` : curve;
