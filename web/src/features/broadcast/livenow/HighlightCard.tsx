@@ -25,6 +25,7 @@ import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import { useLiveField } from './liveDataStore';
 import { useCardEditorReady } from './useCardEditorReady';
 import { useCardSave, type CardSaveState } from './cardSave';
+import { CardDraftNotReadyError } from '@/features/clips/editor/saveCardDraft';
 
 // 하이라이트 카드(시안 B2-1, 2026-11-04) — 사진이 카드의 몸통이다. 왼쪽 위 점수(수동은 「수동」), 오른쪽 위 「저장」 알약,
 // 아래 그늘에 방송 시각 · 길이(왼쪽)와 경과(오른쪽). 사진 밑은 「편집」과 가리기만. 감지 사유 · 상태 배지 · 원클릭 업로드는 뺐다.
@@ -34,30 +35,39 @@ const LIBRARY_HREF = '/clips/library';
 
 /**
  * 사진 오른쪽 위 「보관함 저장」 알약 — 글자가 붙어 무엇인지 바로 읽힌다. 저장되면 강조색 「저장됨」이 되고 누르면 보관함으로 간다
- * (같은 카드를 또 저장해 편집본이 둘 생기지 않게)
+ * (같은 카드를 또 저장해 편집본이 둘 생기지 않게).
+ * 세 상태 모두 같은 단추 하나다: 저장 중에 disabled로 막거나 저장 뒤 링크로 바꾸면 요소가 초점을 잃어 키보드 초점이 문서로 떨어진다
+ * (PR #480 리뷰). 저장 중엔 aria-disabled로만 막는다
  */
-function SavePill({ state, onSave }: { state: CardSaveState; onSave: () => void }) {
-  if (state === 'saved')
-    return (
-      <Link
-        href={LIBRARY_HREF}
-        className={clsx(styles.cardSave, styles.cardSaveDone)}
-        aria-label="보관함에 저장됨 · 보관함 열기"
-      >
-        <BookmarkCheck size={13} aria-hidden />
-        저장됨
-      </Link>
-    );
+function SavePill({
+  state,
+  onSave,
+  onOpen,
+}: {
+  state: CardSaveState;
+  onSave: () => void;
+  onOpen: () => void;
+}) {
+  const saved = state === 'saved';
+  const saving = state === 'saving';
   return (
     <button
       type="button"
-      className={styles.cardSave}
-      disabled={state === 'saving'}
-      onClick={onSave}
-      aria-label={state === 'saving' ? '보관함에 저장하는 중' : '보관함에 저장'}
+      className={clsx(styles.cardSave, saved && styles.cardSaveDone)}
+      aria-disabled={saving || undefined}
+      onClick={saving ? undefined : saved ? onOpen : onSave}
+      aria-label={
+        saved ? '보관함에 저장됨 · 보관함 열기' : saving ? '보관함에 저장하는 중' : '보관함에 저장'
+      }
     >
-      {state === 'saving' ? <Spinner size="sm" /> : <Bookmark size={13} aria-hidden />}
-      {state === 'saving' ? '저장 중' : '저장'}
+      {saving ? (
+        <Spinner size="sm" />
+      ) : saved ? (
+        <BookmarkCheck size={13} aria-hidden />
+      ) : (
+        <Bookmark size={13} aria-hidden />
+      )}
+      {saving ? '저장 중' : saved ? '저장됨' : '저장'}
     </button>
   );
 }
@@ -112,7 +122,13 @@ export const HighlightCard = memo(function HighlightCard({
           action: { label: '보관함 열기', onClick: () => router.push(LIBRARY_HREF) },
         });
       },
-      () => toast({ tone: 'error', title: '보관함에 저장하지 못했어요' }),
+      (error: unknown) =>
+        toast(
+          // 방송 시작 직후라 시각 기준점을 아직 모른다 — 실패가 아니라 기다릴 일이다
+          error instanceof CardDraftNotReadyError
+            ? { tone: 'info', title: '녹화가 올라온 뒤 다시 저장해 주세요' }
+            : { tone: 'error', title: '보관함에 저장하지 못했어요' },
+        ),
     );
   };
   // 가리기·되살리기(POK-463). 실패는 카드가 제 칸에 그대로 남으니 토스트로만 알린다
@@ -153,9 +169,16 @@ export const HighlightCard = memo(function HighlightCard({
             }
           />
           <span className={styles.cardShade} aria-hidden />
-          <span className={styles.cardScore} aria-hidden>
-            {highlight.score !== undefined ? `${highlight.score}점` : '수동'}
-          </span>
+          {/* 수동 카드는 출처로 가린다: 점수 칸은 자동 카드도 비어 있을 수 있다(서버 score nullable) — 점수 없는 자동 카드는 칩을 안 그린다 */}
+          {highlight.source === 'manual' ? (
+            <span className={styles.cardScore} aria-hidden>
+              수동
+            </span>
+          ) : highlight.score !== undefined ? (
+            <span className={styles.cardScore} aria-hidden>
+              {highlight.score}점
+            </span>
+          ) : null}
           <span className={styles.cardCaption} aria-hidden>
             <span className={styles.cardTime}>
               {highlight.timestamp}
@@ -181,7 +204,9 @@ export const HighlightCard = memo(function HighlightCard({
             <Play size={16} fill="currentColor" /> 여기부터 보기
           </span>
         </button>
-        {canSave ? <SavePill state={cardSave.state} onSave={save} /> : null}
+        {canSave ? (
+          <SavePill state={cardSave.state} onSave={save} onOpen={() => router.push(LIBRARY_HREF)} />
+        ) : null}
       </div>
       <div className={styles.cardBody}>
         {/* 제목 · 점수 · 감지 사유는 사진 위에 안 쓰거나 aria-hidden이다(단추 이름이 덮는다). 듣는 쪽에는 남긴다 */}

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { prefetchCardEditor } from '@/features/clips/editor/prefetchCardEditor';
-import { saveCardDraft } from '@/features/clips/editor/saveCardDraft';
+import { CardDraftNotReadyError, saveCardDraft } from '@/features/clips/editor/saveCardDraft';
 import type { RecipeSnapshot } from '@/api/clipEditor';
 import { forgetCardSaves } from './cardSave';
 import { HighlightCard } from './HighlightCard';
@@ -12,7 +12,11 @@ import { PENDING_MAX_RECHECKS, PENDING_RECHECK_MS } from './useCardEditorReady';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 
 vi.mock('@/features/clips/editor/prefetchCardEditor', () => ({ prefetchCardEditor: vi.fn() }));
-vi.mock('@/features/clips/editor/saveCardDraft', () => ({ saveCardDraft: vi.fn() }));
+vi.mock('@/features/clips/editor/saveCardDraft', () => ({
+  saveCardDraft: vi.fn(),
+  // 카드가 「아직 못 저장」을 실패와 가르는 데 쓴다: 목 모듈에도 같은 이름의 오류 종류를 둔다
+  CardDraftNotReadyError: class CardDraftNotReadyError extends Error {},
+}));
 const routerPush = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: routerPush }) }));
 
@@ -258,6 +262,14 @@ describe('HighlightCard: 시안 B2-1 모양', () => {
     expect(screen.getByRole('button', { name: '1:07:50 시점으로 이동' })).toHaveTextContent('수동');
   });
 
+  it('점수 없는 자동 카드에는 「수동」을 쓰지 않는다 — 점수 칸은 자동 카드도 비어 있을 수 있다', async () => {
+    renderCard({ ...HIGHLIGHT, score: undefined });
+    await screen.findByRole('link', { name: '편집' });
+    const thumb = screen.getByRole('button', { name: '1:07:50 시점으로 이동' });
+    expect(thumb).not.toHaveTextContent('수동');
+    expect(thumb).not.toHaveTextContent('점');
+  });
+
   it('만료 카드는 버튼줄 · 저장 대신 곧 사라진다고 쓴다', () => {
     renderCard({ ...HIGHLIGHT, status: 'expired' });
     expect(screen.getByText('되감기 범위를 지나 곧 사라져요')).toBeInTheDocument();
@@ -279,14 +291,45 @@ describe('HighlightCard: 보관함 저장', () => {
     expect(saveCardDraft).toHaveBeenCalledWith(expect.any(String), '23', {
       stillCurrent: expect.any(Function),
     });
-    expect(screen.getByRole('button', { name: '보관함에 저장하는 중' })).toBeDisabled();
+    // 저장 중엔 disabled가 아니라 aria-disabled로 막는다(초점을 잃지 않게) — 또 눌러도 다시 보내지 않는다
+    const saving = screen.getByRole('button', { name: '보관함에 저장하는 중' });
+    expect(saving).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(saving);
+    expect(saveCardDraft).toHaveBeenCalledTimes(1);
     await act(async () => finish(snapshot));
 
-    const done = screen.getByRole('link', { name: '보관함에 저장됨 · 보관함 열기' });
-    expect(done).toHaveAttribute('href', '/clips/library');
     expect(await screen.findByText('보관함에 저장했어요')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '보관함 열기' }));
     expect(routerPush).toHaveBeenCalledWith('/clips/library');
+    // 「저장됨」 알약을 눌러도 보관함으로 간다
+    routerPush.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: '보관함에 저장됨 · 보관함 열기' }));
+    expect(routerPush).toHaveBeenCalledWith('/clips/library');
+  });
+
+  it('키보드로 저장해도 초점이 「저장됨」에 남는다 — 단추가 바뀌어 초점이 문서로 떨어지지 않게', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    let finish: (value: RecipeSnapshot) => void = () => undefined;
+    vi.mocked(saveCardDraft).mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    renderCard();
+    const pill = screen.getByRole('button', { name: '보관함에 저장' });
+    pill.focus();
+    fireEvent.click(pill);
+    expect(document.activeElement).toBe(pill);
+    await act(async () => finish(snapshot));
+    expect(document.activeElement).toHaveAccessibleName('보관함에 저장됨 · 보관함 열기');
+  });
+
+  it('방송 시작 직후라 아직 못 저장하면 실패가 아니라 「녹화가 올라온 뒤 다시」로 알린다', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    vi.mocked(saveCardDraft).mockRejectedValue(new CardDraftNotReadyError());
+    renderCard();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+    });
+    expect(await screen.findByText('녹화가 올라온 뒤 다시 저장해 주세요')).toBeInTheDocument();
+    expect(screen.queryByText('보관함에 저장하지 못했어요')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '보관함에 저장' })).toBeInTheDocument();
   });
 
   it('편집 준비 중이어도 저장된다: 저장은 영상을 받지 않는다', async () => {
@@ -297,7 +340,9 @@ describe('HighlightCard: 보관함 저장', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
     });
-    expect(screen.getByRole('link', { name: '보관함에 저장됨 · 보관함 열기' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '보관함에 저장됨 · 보관함 열기' }),
+    ).toBeInTheDocument();
   });
 
   it('저장된 카드는 다시 그려져도(목록이 새로 와도) 「저장됨」이다 — 두 번 눌러 편집본이 둘 생기지 않게', async () => {
@@ -309,7 +354,9 @@ describe('HighlightCard: 보관함 저장', () => {
     });
     first.unmount();
     renderCard();
-    expect(screen.getByRole('link', { name: '보관함에 저장됨 · 보관함 열기' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '보관함에 저장됨 · 보관함 열기' }),
+    ).toBeInTheDocument();
     expect(saveCardDraft).toHaveBeenCalledTimes(1);
   });
 
@@ -321,7 +368,9 @@ describe('HighlightCard: 보관함 저장', () => {
       fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
     });
     expect(await screen.findByText('보관함에 저장하지 못했어요')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '보관함에 저장' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '보관함에 저장' })).not.toHaveAttribute(
+      'aria-disabled',
+    );
   });
 
   it('가린 카드에는 저장이 없다', () => {

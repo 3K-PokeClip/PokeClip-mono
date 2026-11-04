@@ -586,7 +586,7 @@
   transition: background-color 0.15s;
 }
 
-.cardSave:hover:not(:disabled) {
+.cardSave:hover:not([aria-disabled='true']) {
   background: rgb(0 0 0 / 0.8); /* 테마 고정 */
 }
 
@@ -595,13 +595,14 @@
   outline-offset: 2px;
 }
 
-.cardSave:disabled {
+/* 저장 중 — disabled 대신 aria-disabled로 막는다(초점을 잃지 않게) */
+.cardSave[aria-disabled='true'] {
   cursor: default;
 }
 
-/* 올렸을 때도 강조색 그대로(.cardSave:hover:not(:disabled)와 같은 무게라 뒤에 둔다) */
+/* 올렸을 때도 강조색 그대로(.cardSave:hover:not(…)와 같은 무게라 뒤에 둔다) */
 .cardSaveDone,
-.cardSaveDone:hover:not(:disabled) {
+.cardSaveDone:hover:not([aria-disabled='true']) {
   background: var(--pc-color-accent);
   color: var(--pc-color-text-on-accent);
 }
