@@ -52,6 +52,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.LongStream;
@@ -111,6 +112,9 @@ final class JoinedRenderer {
         timeline.notes().forEach(note -> logNote(jobId, note));
         logFramePick(jobId, job.plan(), timeline);
         long ts = timings.get(job.plan().mediaSeqs().getFirst()).videoTimescale();
+        long[] frameTicks = resultFrameTicks(timeline, timings);
+        Captions captions = captions(jobId, recipe.subtitles(), timeline, frameTicks, ts);
+        requireAssFrames(jobId, recipe.subtitles(), captions, timeline, timings, ts);
 
         PeakRss peak = new PeakRss();
         long midBegan = System.nanoTime();
@@ -130,7 +134,6 @@ final class JoinedRenderer {
 
         SegmentTiming frame = timings.get(job.plan().mediaSeqs().getFirst());
         long finalBegan = System.nanoTime();
-        Captions captions = captions(jobId, recipe.subtitles(), timeline, resultFrameTicks(timeline, timings), ts);
         FinalStage stage = new FinalStage(frame, ts, runs, recipe.tracks(), loudnessFix);
         List<Produced> produced = encode(recipe, captions, stage, dir, deadline, progress, peak);
         long finalStageMs = millisSince(finalBegan);
@@ -376,19 +379,70 @@ final class JoinedRenderer {
     }
 
     /**
+     * 자리가 있는 번인(ASS)을 태울 주문이면 결과 프레임이 ASS 시각으로 갈리는지 본다(D59 · kty 2026-11-04 「90fps 초과 원본」).
+     * 조각(영상 자르기 하나) 안 원본 프레임 간격의 최솟값이 {@value AssWriter#MIN_FRAME_GAP_MS}ms 보다 짧으면 ASS 10ms 격자로는
+     * 계획 프레임만 덮을 수 없어 주문을 거절한다. 원본 성질이라 다시 해도 같으므로 종결({@link ErrorCode#VALIDATION} — 원본을 본
+     * 뒤에야 가를 수 있는 레시피 거절은 {@code CropGeometry} 처럼 이 코드다)이고, 문장은 입력 값 · 잰 간격을 싣지 않는 고정
+     * 글자다(11ms 는 코드 상수). 잰 최소 간격은 신호에만 남긴다. 자막 없음 · CC 만 · 자리 없는 번인(SRT)은 ASS 를 쓰지 않으므로
+     * 그대로 간다.
+     *
+     * <p>조각 이음 자리 간격은 거절 사유가 아니다. 재접속 이음은 두 녹화의 첫 프레임 시차(c)가 달라 30fps 끼리도 이음 간격이
+     * 2ms 까지 줄 수 있다(실제 OBS 판독 c 6000 · 3180 → 180틱 — D59 1라운드 cx H). 그 두 프레임은 같은 10ms 칸에 들 수 있어,
+     * 자막 경계가 정확히 그 사이에 걸리면 이웃 프레임 하나를 더 덮거나 덜 덮는 한계가 남는다.
+     */
+    static void requireAssFrames(UUID jobId, Subtitles spec, Captions captions, RenderTimeline timeline,
+                                 Map<Long, SegmentTiming> timings, long timescale) {
+        requireAssFrames(jobId, spec, captions, cutFrameTicks(timeline, timings), timescale);
+    }
+
+    /**
+     * {@link #requireAssFrames(UUID, Subtitles, Captions, RenderTimeline, Map, long)} 의 판정 — 조각마다 따로 잰다.
+     *
+     * @param pieces 조각마다 결과 프레임 시각({@link #cutFrameTicks})
+     */
+    static void requireAssFrames(UUID jobId, Subtitles spec, Captions captions, List<long[]> pieces,
+                                 long timescale) {
+        if (!burns(spec, captions) || spec.position() == null) {
+            return;
+        }
+        OptionalLong gap = OptionalLong.empty();
+        for (long[] piece : pieces) {
+            OptionalLong mine = AssWriter.denseGap(piece, timescale);
+            if (mine.isPresent() && (gap.isEmpty() || mine.getAsLong() < gap.getAsLong())) {
+                gap = mine;
+            }
+        }
+        if (gap.isEmpty()) {
+            return;
+        }
+        log.warn("render.burn_rejected jobId={} minGapUs={}", jobId,
+                Math.floorDiv(Math.multiplyExact(gap.getAsLong(), 1_000_000L), timescale));
+        throw RenderFailure.permanent(ErrorCode.VALIDATION,
+                "프레임 간격이 " + AssWriter.MIN_FRAME_GAP_MS + "ms 보다 짧은 원본에는 자리가 있는 번인 자막을 넣을 수 없다");
+    }
+
+    /** 남은 자막을 태우나(옛 꼴과 같은 갈래 — 남은 자막이 없으면 태우지 않는다 · 빈 파일 금지 · 계약1 3절). */
+    private static boolean burns(Subtitles spec, Captions captions) {
+        return spec != null && spec.mode().burns() && !captions.cues().isEmpty();
+    }
+
+    /**
      * 결과 영상 프레임 시각(결과 축 틱 · 오름차순) — 조각 단계가 남기는 프레임(PTS ∈ [startPts, endPts))에 그 조각 이동량을
      * 더한 값이다. 최종 단계가 이 틱 그대로 내보낸다(설계 16.2 P7 · P32).
      */
     static long[] resultFrameTicks(RenderTimeline timeline, Map<Long, SegmentTiming> timings) {
-        LongStream.Builder ticks = LongStream.builder();
+        return cutFrameTicks(timeline, timings).stream().flatMapToLong(LongStream::of).sorted().toArray();
+    }
+
+    /** {@link #resultFrameTicks} 를 조각({@link VideoCut})마다 나눈 것(조각 차례 · 조각 안 오름차순). */
+    static List<long[]> cutFrameTicks(RenderTimeline timeline, Map<Long, SegmentTiming> timings) {
+        List<long[]> pieces = new ArrayList<>();
         for (VideoCut c : timeline.videoCuts()) {
-            for (long pts : timings.get(c.seq()).videoPtsSorted()) {
-                if (pts >= c.startPts() && pts < c.endPts()) {
-                    ticks.add(pts + c.deltaTicks());
-                }
-            }
+            pieces.add(LongStream.of(timings.get(c.seq()).videoPtsSorted())
+                    .filter(pts -> pts >= c.startPts() && pts < c.endPts())
+                    .map(pts -> pts + c.deltaTicks()).sorted().toArray());
         }
-        return ticks.build().sorted().toArray();
+        return pieces;
     }
 
     // ── 최종 단계(설계 7.5 (3)) ──
@@ -410,7 +464,7 @@ final class JoinedRenderer {
     private List<Produced> encode(Recipe recipe, Captions captions, FinalStage stage, Path dir, Instant deadline,
                                   Progress progress, PeakRss peak) {
         Subtitles spec = recipe.subtitles();
-        boolean burn = spec != null && spec.mode().burns() && !captions.cues().isEmpty();
+        boolean burn = burns(spec, captions);
         boolean cc = spec != null && spec.mode().cc() && !captions.cues().isEmpty();
         String srt = SrtWriter.render(captions.cues());
         if (burn && spec.position() == null) {
@@ -452,8 +506,11 @@ final class JoinedRenderer {
     }
 
     /**
-     * 태울 자막 파일 이름. 자리가 있는 자막(v2)은 출력 해상도가 출력마다 달라 ASS 를 출력마다 쓴다 — 시각은 결과 프레임 위 격자
-     * 값이라 SRT 와 같은 프레임을 덮는다.
+     * 태울 자막 파일 이름. 자리가 있는 자막(v2)은 출력 해상도가 출력마다 달라 ASS 를 출력마다 쓴다. 시각은 결과 프레임 위 격자
+     * 값이라, 이웃 프레임 간격이 {@value AssWriter#MIN_FRAME_GAP_MS}ms 이상이면 계획이 고른 프레임과 정확히 같은 프레임을
+     * 덮는다({@link AssWriter#onFrames}). 조각 안 원본 간격이 그보다 촘촘하면 여기 오기 전에 {@link #requireAssFrames} 가
+     * 주문을 거절한다. 조각 이음 자리 두 프레임이 그보다 가까우면(재접속) 자막 경계가 정확히 그 사이일 때만 이웃 프레임
+     * 하나가 어긋날 수 있다.
      */
     private static String burnFile(Subtitles spec, List<SubtitleSegment> framed, Output output, Path dir) {
         if (spec.position() == null) {

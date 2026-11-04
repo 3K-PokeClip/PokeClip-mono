@@ -4,7 +4,9 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.pokeclip.render.job.EnvelopeParser;
+import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.JobEnvelope;
+import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.media.MediaProbe;
 import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.media.RenderCommands;
@@ -44,6 +46,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -67,6 +70,9 @@ class JoinedSubtitleTest {
     private static final long END_US = 533_333;
     /** ms 안쪽 자막 시작 — 조각 11 머리에서 2,000,100µs(300µs 길이라 결과에서도 한 ms 안에 든다). */
     private static final long SUB_MS_START_US = 2_000_100;
+    /** 200fps(5ms · 450틱 간격) 4초 조각 하나 — ASS 10ms 격자보다 촘촘한 원본(D59). */
+    private static final long DENSE_SEQ = 40;
+    private static final long DENSE_FRAME_TICKS = 450;
 
     @TempDir
     static Path fixtures;
@@ -90,6 +96,7 @@ class JoinedSubtitleTest {
         FILES.put(11L, sa.pieces().get(1));
         FILES.put(20L, sb.pieces().get(0));
         FILES.put(21L, sb.pieces().get(1));
+        FILES.put(DENSE_SEQ, denseSegment(fixtures));
     }
 
     @BeforeEach
@@ -223,6 +230,39 @@ class JoinedSubtitleTest {
                 .contains("render.subtitle_dropped jobId=" + run.job().jobId() + " index=1 reason=empty_ms");
     }
 
+    /**
+     * 프레임 간격이 11ms 보다 짧은 원본(200fps)에 자리가 있는 번인 자막을 붙인 주문은 종결 거절이다(D59 — ASS 10ms 격자로는
+     * 계획 프레임만 덮도록 가를 수 없다). 결과 프레임 시각이 정해진 뒤 · 조각 단계 전에 멈추므로 중간 파일을 쓰지 않는다.
+     */
+    @Test
+    void 촘촘한_원본에_자리_있는_번인_자막이면_조각_단계_전에_거절한다() {
+        ObjectNode envelope = dense().json();
+        envelope.set("recipe", Fixtures.recipeV2("s1"));
+
+        RenderFailure f = catchThrowableOfType(RenderFailure.class, () -> render(envelope, true));
+
+        assertThat(f).as("거절").isNotNull();
+        assertThat(f.code()).isEqualTo(ErrorCode.VALIDATION);
+        assertThat(f.retryable()).isFalse();
+        assertThat(f.getMessage()).isEqualTo("프레임 간격이 11ms 보다 짧은 원본에는 자리가 있는 번인 자막을 넣을 수 없다");
+        assertThat(messages()).anySatisfy(m -> assertThat(m).startsWith("render.burn_rejected jobId=")
+                .endsWith(" minGapUs=5000"));
+        assertThat(runner.commands()).as("조각 단계를 돌리지 않는다")
+                .noneMatch(cmd -> cmd.contains(RenderCommands.midFile(0)));
+    }
+
+    /** 같은 촘촘한 원본이어도 자리가 없는 번인(SRT) · CC 는 그대로 렌더한다 — 거절은 ASS 갈래만이다. */
+    @Test
+    void 촘촘한_원본도_자리가_없는_번인_자막이면_렌더한다() throws IOException {
+        Run run = render(dense().json(), true);
+
+        assertThat(run.files()).extracting(Produced::kind).containsExactly("video", "srt");
+        assertThat(finalGraph()).contains(",subtitles=" + RenderCommands.BURN_SRT + ":force_style='");
+        assertThat(cues(Files.readString(run.srt()))).extracting(SubtitleSegment::text)
+                .containsExactly("컷에 걸친 자막");
+        assertThat(messages()).noneMatch(m -> m.startsWith("render.burn_rejected"));
+    }
+
     // ---------------------------------------------------------------- 실행
 
     record Run(JobEnvelope job, List<Produced> files, RenderTimeline timeline, Map<Long, SegmentTiming> timings) {
@@ -275,6 +315,39 @@ class JoinedSubtitleTest {
 
     private PlanOrder order() {
         return PlanOrder.of(UUID.randomUUID());
+    }
+
+    /** 촘촘한 원본 한 조각에서 1.0–2.0초를 자르고 자막 하나(1.1–1.6초)를 붙인 주문. */
+    private PlanOrder dense() {
+        return order().segment(DENSE_SEQ, false, false).in(DENSE_SEQ, 1_000_000).out(DENSE_SEQ, 2_000_000)
+                .subtitleAtMedia(0, DENSE_SEQ, 1_100_000, DENSE_SEQ, 1_600_000)
+                .lengthMs(1_000);
+    }
+
+    /**
+     * 200fps 4초 fMP4 조각 하나(ftyp + moov + moof + mdat — {@link DirectSegments} 조각과 같은 꼴 · 영상 틱만 450 간격). 소리는
+     * 같은 네 트랙이다.
+     */
+    private static Path denseSegment(Path dir) {
+        Path out = dir.resolve("dense_0.m4s");
+        List<String> cmd = new ArrayList<>(List.of("ffmpeg", "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=200"));
+        for (int t = 0; t < 4; t++) {
+            cmd.addAll(List.of("-f", "lavfi", "-i", "anoisesrc=color=pink:seed=" + (51 + t) + ":sample_rate=48000"));
+        }
+        cmd.addAll(List.of("-t", String.valueOf(DirectSegments.SEGMENT_SECONDS), "-map", "0:v"));
+        for (int t = 0; t < 4; t++) {
+            cmd.addAll(List.of("-map", (t + 1) + ":a"));
+        }
+        cmd.addAll(List.of("-vf", "settb=1/" + DirectSegments.TIMESCALE + ",setpts=N*" + DENSE_FRAME_TICKS,
+                "-fps_mode", "passthrough", "-enc_time_base:v", "1/" + DirectSegments.TIMESCALE,
+                "-c:v", "libx264", "-preset", "ultrafast", "-bf", "0", "-g", "800", "-keyint_min", "800",
+                "-sc_threshold", "0", "-pix_fmt", "yuv420p",
+                "-af", "asetpts=PTS+1024", "-c:a", "aac", "-ac", "2", "-b:a", "96k", "-threads", "1",
+                "-video_track_timescale", String.valueOf(DirectSegments.TIMESCALE),
+                "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", out.toString()));
+        new ProcessRunner().run(cmd, dir, Instant.now().plus(Duration.ofMinutes(2)));
+        return out;
     }
 
     /**

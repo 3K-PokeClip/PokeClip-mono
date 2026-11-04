@@ -7,6 +7,7 @@ import com.pokeclip.render.recipe.Recipe.SubtitleSegment;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * 자리가 있는 번인 자막(계약6 7절 {@code subtitles.position})을 ASS로 쓴다.
@@ -28,6 +29,11 @@ public final class AssWriter {
     static final double NOTO_CJK_LINE = 1.448;
     /** ASS 시각의 격자(100분의 1초). */
     static final long GRID_MS = 10;
+    /**
+     * 결과 프레임을 ASS 시각으로 가를 수 있는 가장 짧은 프레임 간격(ms). 간격이 이 값 이상이면 {@link #onFrames} 가 계획
+     * 프레임만 덮는다 — 격자 한 칸(10ms)에, 정수 ms 에 놓인 프레임이 1ms 아래로 읽힐 수 있는 몫(1ms)을 더한 값이다.
+     */
+    public static final long MIN_FRAME_GAP_MS = 11;
     private static final long MICROS = 1_000_000;
 
     private AssWriter() {
@@ -64,9 +70,12 @@ public final class AssWriter {
      *       시작하면 앞 자막의 끝과 그 시작이 같은 값이라 한 프레임을 둘이 함께 덮지 않는다.</li>
      *   <li>프레임 시각이 정수 ms 에 딱 놓이면 실수 곱셈이 그 아래로 떨어져 1ms 작게 읽힐 수 있다(90000 틱 200초 안 정수 ms
      *       프레임 자리 200,000곳 중 136곳 — 계산 확인). 그래서 첫 프레임은 1ms 작게 읽혀도 덮이게 본다.</li>
-     *   <li>프레임 간격이 약 11ms 이상(90fps 이하)이면 위 값이 늘 그 프레임들만 덮는다. 더 촘촘하면 시작을 첫 프레임의 ms 아래
-     *       격자로 내려 계획 프레임은 늘 덮고, 경계 쪽 10ms 안의 이웃 프레임을 함께 덮을 수 있다(격자보다 촘촘한 프레임은 ASS
-     *       시각으로 가를 수 없다).</li>
+     *   <li>이웃 프레임 간격이 {@value #MIN_FRAME_GAP_MS}ms 이상이면 위 값이 늘 그 프레임들만 덮는다. 더 촘촘하면 격자보다
+     *       촘촘한 프레임을 ASS 시각으로 가를 수 없다 — 그래서 새 꼴 렌더는 조각 안 원본 간격이 그만큼 촘촘한 주문에 자리
+     *       있는 번인이 붙으면 {@link #denseGap} 으로 거절하고(D59), 이 함수가 촘촘한 갈래로 낸 값은 최종 번인에 쓰이지
+     *       않는다(값은 낸 뒤 거절된다). 그 갈래는 시작을 첫 프레임의 ms 아래 격자로 내려 계획 프레임은 늘 덮지만, 경계마다
+     *       이웃 프레임을 함께 덮을 수 있다(200fps 에서 앞 이웃 둘 · 이어진 두 자막이 두 프레임을 함께 덮음). 조각 이음
+     *       자리는 거절하지 않으므로, 이음 두 프레임이 촘촘하고 자막 경계가 정확히 그 사이면 이 갈래가 그대로 쓰인다.</li>
      * </ul>
      *
      * <p>덮을 프레임이 없거나 글자가 비었거나 공백뿐이면 빈 값.
@@ -85,6 +94,27 @@ public final class AssWriter {
         start = Math.min(start, floorDiv10(readMs(frameTicks[first], timescale)));
         long end = gridAbove(frameMs(frameTicks[next - 1], timescale));
         return Optional.of(new SubtitleSegment(start, end, text));
+    }
+
+    /**
+     * 프레임 열에서 이웃 프레임 간격의 최솟값(틱)이 {@value #MIN_FRAME_GAP_MS}ms 보다 짧으면 그 값. 그만큼 촘촘한 프레임은
+     * ASS 시각(10ms 격자)으로 가를 수 없어 {@link #onFrames} 가 계획 프레임만 덮는다고 보장하지 못한다(PDT 설계 r7 7.6 · D59).
+     * 비교는 정수로 한다 — {@code 간격 × 1000 < 11 × timescale}.
+     *
+     * @param frameTicks 프레임 시각(오름차순) — 새 꼴 렌더는 조각 하나 안의 결과 프레임만 넘긴다(이음 자리 간격은 재지 않음)
+     * @return 촘촘하지 않거나 프레임이 둘 미만이면 빈 값
+     */
+    public static OptionalLong denseGap(long[] frameTicks, long timescale) {
+        if (frameTicks.length < 2) {
+            return OptionalLong.empty();
+        }
+        long min = Long.MAX_VALUE;
+        for (int i = 1; i < frameTicks.length; i++) {
+            min = Math.min(min, frameTicks[i] - frameTicks[i - 1]);
+        }
+        // min < 11 × timescale ÷ 1000 을 넘침 없이: 정수 min 에 대해 min < ⌈11 × timescale ÷ 1000⌉ 와 같다
+        long limit = Math.ceilDiv(Math.multiplyExact(MIN_FRAME_GAP_MS, timescale), 1_000L);
+        return min < limit ? OptionalLong.of(min) : OptionalLong.empty();
     }
 
     /**

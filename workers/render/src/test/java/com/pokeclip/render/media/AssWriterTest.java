@@ -162,6 +162,50 @@ class AssWriterTest {
         assertThat(got.getLast()).isLessThanOrEqualTo(1_663);
     }
 
+    /** 30 · 60 · 90fps(33.3 · 16.7 · 11.1ms)는 ASS 시각으로 갈린다 — 촘촘한 간격이 없다. */
+    @Test
+    void 간격이_11ms_이상이면_촘촘한_간격이_없다() {
+        assertThat(AssWriter.denseGap(grid(3_000, 300), TS)).isEmpty();
+        assertThat(AssWriter.denseGap(grid(1_500, 600), TS)).isEmpty();
+        assertThat(AssWriter.denseGap(grid(1_000, 900), TS)).isEmpty();
+    }
+
+    /** 경계: 정확히 11ms(90000 틱에서 990틱)는 갈리고, 그 바로 아래(989틱)부터 촘촘하다. */
+    @Test
+    void 정확히_11ms_는_갈리고_그_아래는_촘촘하다() {
+        assertThat(AssWriter.denseGap(grid(990, 100), TS)).isEmpty();
+        assertThat(AssWriter.denseGap(grid(989, 100), TS)).hasValue(989);
+        assertThat(AssWriter.denseGap(grid(11, 100), 1_000)).as("1000 틱 단위의 11ms").isEmpty();
+        assertThat(AssWriter.denseGap(grid(10, 100), 1_000)).hasValue(10);
+        // 11ms 가 정수 틱이 아닌 단위(600 틱 = 1초 · 11ms = 6.6틱): 7틱(11.67ms)은 갈리고 6틱(10ms)은 촘촘하다
+        assertThat(AssWriter.denseGap(grid(7, 100), 600)).isEmpty();
+        assertThat(AssWriter.denseGap(grid(6, 100), 600)).hasValue(6);
+    }
+
+    /** 100 · 144 · 200fps(10 · 6.9 · 5ms)는 촘촘하다 — 그 간격(틱)을 낸다. */
+    @Test
+    void 간격이_11ms_보다_짧으면_그_간격을_낸다() {
+        assertThat(AssWriter.denseGap(grid(900, 400), TS)).hasValue(900);
+        assertThat(AssWriter.denseGap(grid(625, 576), TS)).hasValue(625);
+        assertThat(AssWriter.denseGap(grid(450, 800), TS)).hasValue(450);
+    }
+
+    /** 평균이 아니라 이웃 간격의 최솟값을 본다 — 30fps 열 안에 한 곳만 촘촘해도 촘촘하다. */
+    @Test
+    void 한_곳만_촘촘해도_가장_짧은_간격을_낸다() {
+        long[] frames = LongStream.concat(LongStream.range(0, 100).map(i -> i * 3_000),
+                LongStream.of(300_000, 300_500, 303_500)).toArray();
+
+        assertThat(AssWriter.denseGap(frames, TS)).hasValue(500);
+    }
+
+    /** 프레임이 둘 미만이면 이웃이 없어 촘촘한 간격도 없다. */
+    @Test
+    void 프레임이_둘_미만이면_촘촘한_간격이_없다() {
+        assertThat(AssWriter.denseGap(new long[0], TS)).isEmpty();
+        assertThat(AssWriter.denseGap(new long[] {450}, TS)).isEmpty();
+    }
+
     @Test
     void 덮을_프레임이_없거나_글자가_비면_뺀다() {
         long[] frames = grid(3_000, 30);
