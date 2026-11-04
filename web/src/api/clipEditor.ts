@@ -909,11 +909,14 @@ export function libraryQueryOptions(streamerId: number | null) {
 }
 
 /**
- * 받아 둔 보관함 목록을 버린다. 편집기는 보관함과 같이 서 있지 않아 저장 · 영상 요청의 답을 목록에 얹을 수 없다: 남겨 두면 보관함으로
- * 돌아갈 때 방금 만든 편집본이 없는 옛 목록이 먼저 보인다.
+ * 받아 둔 보관함 목록을 낡은 것으로 돌린다. 편집기는 보관함과 같이 서 있지 않아 저장 · 영상 요청의 답을 목록에 얹을 수 없다: 남겨 두면
+ * 보관함으로 돌아갈 때 방금 만든 편집본이 없는 옛 목록이 먼저 보인다 — 안 보이는 목록은 버린다.
+ * 보고 있는 목록은 버리지 않고 다시 읽는다: 카드에서 저장을 누르고 끝나기 전에 보관함으로 옮기면 목록이 먼저 떠 있는데, 버리기만
+ * 하면 그 관찰자는 다시 읽지 않아 다음 주기(최대 5분)까지 새 편집본이 안 보였다(PR #480 2차 리뷰)
  */
 export function forgetLibraryList(queryClient: QueryClient): void {
-  queryClient.removeQueries({ queryKey: ['library'] });
+  void queryClient.invalidateQueries({ queryKey: ['library'], refetchType: 'active' });
+  queryClient.removeQueries({ queryKey: ['library'], type: 'inactive' });
 }
 
 export function fetchLibraryDetail(recipeId: number): Promise<LibraryDetail> {

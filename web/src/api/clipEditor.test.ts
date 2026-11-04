@@ -10,6 +10,7 @@ import {
   forgetBroadcastRows,
   fetchJumpCard,
   fetchLibraryAll,
+  forgetLibraryList,
   libraryQueryOptions,
   mediaStreamId,
   openJumpCard,
@@ -551,6 +552,27 @@ describe('보관함 목록 쿼리: 탭으로 돌아올 때', () => {
 
     unsubscribe();
     client.unmount();
+    client.clear();
+  });
+});
+
+describe('forgetLibraryList', () => {
+  it('보고 있는 보관함 목록은 다시 읽고, 안 보이는 목록은 버린다', async () => {
+    // 카드 저장이 끝나기 전에 보관함으로 옮기면 목록이 먼저 떠 있다: 버리기만 하면 그 관찰자는 다시 읽지 않았다(PR #480 2차 리뷰)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const reads = vi.fn(async () => ['편집본']);
+    const observer = new QueryObserver(client, { queryKey: ['library', 1], queryFn: reads });
+    const unsubscribe = observer.subscribe(() => undefined);
+    // 첫 읽기가 끝난 뒤라야 한다: 데이터가 없는 채 진행 중이면 무효화가 그 읽기를 같이 쓴다
+    await vi.waitFor(() => expect(client.getQueryData(['library', 1])).toEqual(['편집본']));
+    client.setQueryData(['library', 2], ['다른 채널']);
+
+    forgetLibraryList(client);
+
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
+    expect(client.getQueryState(['library', 1])).toBeDefined();
+    expect(client.getQueryState(['library', 2])).toBeUndefined();
+    unsubscribe();
     client.clear();
   });
 });
