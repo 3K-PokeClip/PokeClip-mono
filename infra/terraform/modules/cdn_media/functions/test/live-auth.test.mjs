@@ -6,8 +6,9 @@
 // 계약: KVS 키 cdn-secret 의 값(MediaMTX hlsCDNSecret 원문)으로 원본 요청의
 // Authorization 을 `Bearer <값>` 으로 항상 덮어쓴다. 값을 못 얻으면(KVS 예외 ·
 // 빈 값) 원본으로 넘기지 않고 503 을 내며 고정 문자열을 남긴다(fail-closed).
-// 그보다 먼저, 경로 조작 표지(`%` · 역슬래시 · 빈 구간 · 점 구간)가 있는
-// 경로는 KVS 를 읽지 않고 본문 없는 403 과 고정 문자열로 거절한다.
+// 그보다 먼저, 경로 조작 표지(`%` · 역슬래시 · 빈 구간 · 점 구간)가 있거나
+// `.m3u8` · `.mp4` 로 끝나지 않는 경로는 KVS 를 읽지 않고 본문 없는 403 과
+// 고정 문자열로 거절한다.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
@@ -267,11 +268,11 @@ const PATH_PAIRS = [
     normalized: '/live/abc123/index.m3u8',
     normalizedDenied: false,
   },
-  // 정규화본 `/live/` 는 경로 위생만으로는 거절할 표지가 없다.
+  // 정규화본 `/live/` 는 경로 위생 표지가 없지만 확장자 규칙으로 403 이다.
   {
     raw: '/live/abc123/..',
     normalized: '/live/',
-    normalizedDenied: false,
+    normalizedDenied: true,
   },
 ];
 
@@ -314,6 +315,31 @@ for (const uri of NORMAL_URIS) {
     const before = structuredClone(event.request);
 
     assertForwarded(await run(event, {[SECRET_KEY]: FAKE_SECRET}), before);
+  });
+}
+
+// T7: 미디어 파일이 아닌 /live 요청. 원본(MediaMTX)은 끝 슬래시 없는 경로에
+// `/live` 가 빠진 Location 으로 302 를 내고, `.mp` 에는 `4` 를 덧붙여 답한다.
+// 확장자 비교는 원본(strings.HasSuffix)처럼 대소문자를 구분한다.
+const NON_MEDIA_URIS = [
+  '/live',
+  '/live/',
+  '/live/abc123',
+  '/live/abc123/',
+  '/live/abc123/nope',
+  '/live/abc123/hls.min.js',
+  '/live/favicon.ico',
+  '/live/abc123/x.ts',
+  '/live/abc123/x.mp',
+  '/live/abc123/index.M3U8',
+  '/live/abc123/x.MP4',
+  '/live/abc123/index.m3u8x',
+  '/live/abc123/index.m3u8;p',
+];
+
+for (const uri of NON_MEDIA_URIS) {
+  test(`미디어 파일이 아닌 ${uri} 는 KVS 를 읽지 않고 403 이다`, async () => {
+    assertPathDenied(await run(eventWithUri(uri), {[SECRET_KEY]: FAKE_SECRET}));
   });
 }
 
