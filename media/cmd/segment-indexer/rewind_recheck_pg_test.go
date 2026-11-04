@@ -95,7 +95,7 @@ func awaitRoundMode(t *testing.T, from time.Time, limit time.Duration, want stat
 
 // E19 — 다른 상자의 Writer 가 해제 행을 지워도, 상태 표지를 받지 못한 두 상자의 Board 가 재조회 주기 몇 번 안에 vod 로
 // 넘어간다(읽기 상한 넉넉 — 2). 지운 직후 주기 안에서는 ending 에 머문다(재조회 말고 알리는 길이 없다). 판정식의 「원장 행이
-// 있으면 ending」 줄(Ⓒ-3)에 기댄다. 변이 = 재조회 제거 → 두 주기가 지나도 ending 고착 FAIL.
+// 있으면 ending」 줄(Ⓒ-3)에 기댄다. 변이 = 재조회 제거 → 주기 몇 번이 지나도 ending 고착 FAIL.
 func TestEndingRecheckE19LedgerDeleteByOtherBoxTurnsBoardsVOD(t *testing.T) {
 	pool := newWireTestPool(t)
 	execSQL(t, pool, `DELETE FROM stream_edge_bounds`)
