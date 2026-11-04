@@ -98,7 +98,7 @@ export function NotificationBell({ place, anchorRef, offset = 8 }: NotificationB
     const href = describeNotification(n, Date.now()).href;
     if (href === null) return;
     setOpen(false);
-    goTo(n, href);
+    void goTo(n, href);
   }
 
   useArrivalToasts(state);

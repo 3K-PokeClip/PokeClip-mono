@@ -112,6 +112,8 @@ function seed() {
 
 /** 켜 두면 참여 채널 목록(as-editor)이 끝내 안 온다 — 새로고침 직후 채널이 아직 안 선 상태 */
 let asEditorPending = false;
+/** 참여 채널 목록(as-editor)이 지금 돌려주는 값(서버 꼴) */
+let asEditor: unknown[] = [];
 /** 켜 두면 다음 목록 요청 하나를 붙잡아, 요청이 나간 때의(옛) 값으로 releaseList()에 늦게 답한다 */
 let holdList = false;
 let releaseList: (() => void) | null = null;
@@ -124,7 +126,7 @@ function stub() {
   return stubFetch((url, init) => {
     if (url === '/api/auth/me') return jsonResponse(200, ME);
     if (url === '/api/editor-delegations/as-editor')
-      return asEditorPending ? new Promise<Response>(() => {}) : jsonResponse(200, []);
+      return asEditorPending ? new Promise<Response>(() => {}) : jsonResponse(200, asEditor);
     if (url === '/api/notifications' && holdList) {
       holdList = false;
       const then = items;
@@ -184,6 +186,7 @@ async function openPanel(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => {
   seed();
   asEditorPending = false;
+  asEditor = [];
   holdList = false;
   releaseList = null;
   holdRead = false;
@@ -431,6 +434,67 @@ describe('NotificationBell', () => {
     });
     await waitFor(() => expect(push).toHaveBeenCalledWith('/settings/channels'));
     expect(useChannelStore.getState().selected).toBeNull();
+  });
+
+  it('받아 둔 참여 목록에 없는 채널이면 새로 받아 보고, 막 수락한 채널이면 그 채널로 바꾼 뒤 간다 (PR #481 3차)', async () => {
+    items.push(
+      wire(
+        'n-live',
+        1,
+        'MANAGED_BROADCAST_STARTED',
+        { broadcastTitle: '솔랭' },
+        { channelId: 9, channelName: '라면왕' },
+      ),
+    );
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+    // 이 탭이 받아 둔 목록은 빈 채로, 다른 기기에서 막 수락했다
+    asEditor = [
+      {
+        id: 1,
+        counterpartId: 9,
+        counterpartName: '라면왕',
+        counterpartProfileImageUrl: null,
+        grantedAt: new Date().toISOString(),
+      },
+    ];
+
+    await user.click(
+      within(panel).getByRole('button', { name: /^안 읽음 · 라면왕 채널이 방송을 시작했어요/ }),
+    );
+
+    await waitFor(() =>
+      expect(useSwitchCurtain.getState().curtain).toMatchObject({
+        name: '라면왕',
+        relation: 'EDITOR',
+        destination: '/broadcast/livenow',
+      }),
+    );
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/broadcast/livenow'));
+  });
+
+  it('새로 받아도 참여 목록에 없는 채널이면 지금 채널 화면으로 가지 않고 알린다 (PR #481 3차)', async () => {
+    items.push(
+      wire(
+        'n-live',
+        1,
+        'MANAGED_BROADCAST_STARTED',
+        { broadcastTitle: '솔랭' },
+        { channelId: 9, channelName: '라면왕' },
+      ),
+    );
+    const { user } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    await user.click(
+      within(panel).getByRole('button', { name: /^안 읽음 · 라면왕 채널이 방송을 시작했어요/ }),
+    );
+
+    expect(await screen.findByText('라면왕 채널의 편집 권한이 없어요')).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
   });
 
   it('창을 다시 열면 「전체」를 보다 닫았어도 「안 읽음」 탭부터 보인다', async () => {
