@@ -1,8 +1,8 @@
 # ADR-0006 개정 노트: 사이드카 계정에 /dvr 하한 원장 stream_edge_bounds 의 넷을 준다
 
 날짜: 2026-11-04 / 상태: 확정 / supersedes: ADR-0006 개정 노트
-(`2026-10-26-media-indexer-m6-delete-grants.md`)의 권한 목록 — 표 하나를
-더한다. 나머지 절은 그대로 산다 / 관련: POK-525(/dvr 하한), POK-525 설계
+(`2026-10-26-media-indexer-m6-delete-grants.md`)의 Decision 1항 — 나머지
+절은 그대로 산다 / 관련: POK-525(/dvr 하한), POK-525 설계
 3-3(원장 · 권한) · 8-3(위협 모델), ADR-0006(`2026-10-23-rds-iam-db-auth.md`),
 프로필 4절 불변식 4(seq 재사용 금지)
 
@@ -11,7 +11,8 @@
 앞 개정 노트는 사이드카 계정 `media_indexer` 의 권한을 표 여섯으로 정했다.
 DELETE 는 M6 만료 · outbox 몫뿐이다.
 
-POK-525 가 표를 하나 더한다. `stream_edge_bounds` 는 /dvr 하한 원장이다.
+POK-525 가 그 목록에 표를 하나 더한다. `stream_edge_bounds` 는 /dvr 하한
+원장이다.
 
 *   **무엇을 적나.** 열린 회차마다 /dvr 하한(엣지가 그 아래 seq 의 되감기
     조각을 막는 값 — 방송 중 시청자가 1시간 DVR 창 밖 조각을 받지 못하게
