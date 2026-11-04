@@ -1,9 +1,10 @@
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
-import { relistGuard, revisitGuard, step } from './dvr404TestKit';
-import { pos, startRun, streamPoll } from './handoffTestKit';
+import { holeGuard, relistGuard, revisitGuard, step } from './dvr404TestKit';
+import { nextSegment, pos, startRun, streamPoll } from './handoffTestKit';
 import {
   SESSION_NOTICES,
   openSession,
+  type DvrSegment,
   type PlaybackSessionState,
   type SessionEffect,
   type SessionEvent,
@@ -80,12 +81,16 @@ export function loaded(url: string, cut?: boolean, firstMs = T0, lastEndMs = NOW
   return cut === undefined ? list : { ...list, startFloorCut: cut };
 }
 
-/** 지금 되감기 재생기(지금 세대)의 /dvr 미디어 조각 404 */
+/**
+ * 지금 되감기 재생기(지금 세대)의 /dvr 미디어 조각 404 — 조각을 적지 않으면 부를 때마다 다른
+ * 조각이다(nextSegment)
+ */
 export function gone(
   state: PlaybackSessionState,
   generation = state.source.generation,
+  segment: DvrSegment = nextSegment(),
 ): SessionEvent {
-  return { type: 'dvr-segment-gone', generation };
+  return { type: 'dvr-segment-gone', generation, segment };
 }
 
 export interface Fed {
@@ -95,10 +100,10 @@ export interface Fed {
 
 /**
  * 사건을 차례로 감싸개로 먹이고 마지막 상태와 모든 효과를 돌려준다. 사건열마다 다시 받기 ·
- * 재방문 계수기를 새로 건다(계획 3-1)
+ * 재방문 · 구멍 계수기를 새로 건다(계획 3-1 · POK-528 후속)
  */
 export function feed(start: PlaybackSessionState, events: readonly SessionEvent[], now = R): Fed {
-  const guards = [relistGuard(), revisitGuard()];
+  const guards = [relistGuard(), revisitGuard(), holeGuard()];
   let state = start;
   const effects: SessionEffect[] = [];
   for (const event of events) {

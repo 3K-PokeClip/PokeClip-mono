@@ -1,5 +1,6 @@
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
 import type {
+  DvrSegment,
   PlaybackSessionState,
   PlaybackSource,
   SeekView,
@@ -250,4 +251,42 @@ export function liveFromAway(
     },
     effects: [],
   };
+}
+
+// ── 목록 안 구멍(POK-528 후속) ──
+// 같은 url 을 같은 조각으로 두 번 다시 받지 않는다 — 갓 받은 목록의 조각이 또 404 면 다시 받아도 낫지
+// 않는다(「목록 첫 조각은 엣지가 막지 않는다」 계약 밖). 기억(dvrHoles)은 url 별이고 세션 안에서 지우지
+// 않는다 — 화면 붙음 · 리마운트 · 같은 url 폴링 · 시크 · url 교체 뒤에도 그 url 에 남는다.
+
+/** 구멍 기억의 키 — 소리 · 영상 목록이 따로면 sn 이 겹칠 수 있어 type 을 함께 든다 */
+export function dvrSegmentKey(segment: DvrSegment): string {
+  return `${segment.type}:${segment.sn}`;
+}
+
+/** url 의 기억에 조각을 더한 새 기억(새 Map · 새 Set — 앞 기억은 그대로) */
+export function withDvrHole(
+  holes: ReadonlyMap<string, ReadonlySet<string>>,
+  url: string,
+  segment: DvrSegment,
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const next = new Map(holes);
+  next.set(url, new Set([...(holes.get(url) ?? []), dvrSegmentKey(segment)]));
+  return next;
+}
+
+/**
+ * 그 세대 재생기의 조각이 아는 구멍인가 — 되감기 국면의 지금 세대 되감기 재생기이고, 지금 url 을 이미
+ * 그 조각으로 다시 받았다. 다시 받는 중(relist)인지는 보지 않는다 — 화면을 붙이기 전이든 뒤든 같은
+ * 답이다. 끝남 대기 · 다시보기 제안은 아니다 — 그 국면의 404 행(막힘 · 마지막 확인 · 같은 자리
+ * 다시보기)이 출구다
+ */
+export function dvrHoleKnown(
+  session: PlaybackSessionState,
+  generation: number,
+  segment: DvrSegment,
+): boolean {
+  const { source, phase } = session;
+  if (source.kind !== 'rewind' || generation !== source.generation) return false;
+  if (phase.kind !== 'rewind') return false;
+  return session.dvrHoles.get(source.url)?.has(dvrSegmentKey(segment)) === true;
 }

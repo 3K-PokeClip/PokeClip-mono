@@ -174,7 +174,7 @@ function fragError(
     type: FakeHls.ErrorTypes.NETWORK_ERROR,
     details: patch.details ?? FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
     fatal: patch.fatal ?? false,
-    frag: { sn: 7, initSegment: { url: INIT_SEGMENT } },
+    frag: { type: 'main', sn: 7, initSegment: { url: INIT_SEGMENT } },
     response: { url: patch.url ?? MEDIA_SEGMENT, code, text: '' },
   };
 }
@@ -184,13 +184,13 @@ function raise(hls: FakeHls, data: unknown) {
 }
 
 describe('되감기 조각 404 가로채기 배선(POK-528 c5 · 계획 4절 · 8-3)', () => {
-  it('rewind + 고리 — 비치명 미디어 404 면 받기를 멈추고 이 재생기 세대로 고리를 한 번 부른다', async () => {
+  it('rewind + 고리 — 비치명 미디어 404 면 받기를 멈추고 이 재생기 세대 · 그 조각으로 고리를 한 번 부른다', async () => {
     const onDvrSegmentGone = vi.fn();
     const { result } = await mount(sourceOf('rewind', 3), { onDvrSegmentGone });
     const hls = lastHls();
     raise(hls, fragError(404));
     expect(hls.stopLoad).toHaveBeenCalledTimes(1);
-    expect(onDvrSegmentGone.mock.calls).toEqual([[3]]);
+    expect(onDvrSegmentGone.mock.calls).toEqual([[3, { type: 'main', sn: 7 }]]);
     expect(hls.startLoad).not.toHaveBeenCalled();
     expect(hls.destroy).not.toHaveBeenCalled();
     expect(result.current.playbackError).toBeNull();
@@ -202,7 +202,7 @@ describe('되감기 조각 404 가로채기 배선(POK-528 c5 · 계획 4절 · 
     const hls = lastHls();
     raise(hls, fragError(404, { fatal: true }));
     expect(hls.stopLoad).toHaveBeenCalledTimes(1);
-    expect(onDvrSegmentGone.mock.calls).toEqual([[3]]);
+    expect(onDvrSegmentGone.mock.calls).toEqual([[3, { type: 'main', sn: 7 }]]);
     expect(hls.startLoad).not.toHaveBeenCalled();
     expect(hls.destroy).not.toHaveBeenCalled();
     expect(result.current.playbackError).toBeNull();
@@ -461,7 +461,7 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
     ['하한 밖(영상 0초)', 0],
     ['하한 안(영상 36초)', 36],
   ])(
-    '멈춘 동안 404 · 자리 %s → 받기만 멈춤(고리 0 · 교체 0 · 화면 그대로) → 다시 틀면 이 세대로 고리 1 · 시크 요청 0 · startLoad 0',
+    '멈춘 동안 404 · 자리 %s → 받기만 멈춤(고리 0 · 교체 0 · 화면 그대로) → 다시 틀면 이 세대 · 그 조각으로 고리 1 · 시크 요청 0 · startLoad 0',
     async (_name, atS) => {
       const { video, hooks, hls } = await pausedAt(atS);
       raise(hls, fragError(404));
@@ -471,7 +471,7 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
       expect(pauseCalls()).toBe(0);
       expect(media.paused).toBe(true);
       resume(video);
-      expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1]]);
+      expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1, { type: 'main', sn: 7 }]]);
       expect(hooks.onSeekRequest).not.toHaveBeenCalled();
       expect(hls.startLoad).not.toHaveBeenCalled();
       expect(video.currentTime).toBe(atS);
@@ -500,7 +500,7 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
     expect(hls.startLoad).not.toHaveBeenCalled();
   });
 
-  it('앱이 건 멈춤(holdFrame) 뒤의 404 는 미루지 않는다 — 곧바로 이 세대로 고리 1(사람 멈춤만 기다린다)', async () => {
+  it('앱이 건 멈춤(holdFrame) 뒤의 404 는 미루지 않는다 — 곧바로 이 세대 · 그 조각으로 고리 1(사람 멈춤만 기다린다)', async () => {
     const hooks = resumeHooks();
     const { result } = await mount(sourceOf('rewind', 1), hooks);
     const hls = lastHls();
@@ -508,7 +508,7 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
     act(() => result.current.holdFrame());
     expect(media.paused).toBe(true);
     raise(hls, fragError(404));
-    expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1]]);
+    expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1, { type: 'main', sn: 7 }]]);
   });
 
   it('다시보기 재생기의 재개는 지금 비교 그대로다 — 녹화 첫 조각 뒤 자리면 그대로 튼다', async () => {
@@ -528,7 +528,7 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
     expect(hls.startLoad).not.toHaveBeenCalled();
     expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
     resume(video);
-    expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1]]);
+    expect(hooks.onDvrSegmentGone.mock.calls).toEqual([[1, { type: 'main', sn: 7 }]]);
     expect(hooks.onSeekRequest).not.toHaveBeenCalled();
     expect(hls.startLoad).not.toHaveBeenCalled();
   });

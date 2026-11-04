@@ -35,7 +35,12 @@ import { nextLivePosition, playedRunMs, type LivePosition } from './livePosition
 import { trackPlaybackStartOnce } from './playbackStarts';
 import { guardRewindFloor } from './rewindFloor';
 import { useSourcePosition, type PositionHooks } from './sourcePosition';
-import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
+import {
+  SESSION_NOTICES,
+  type DvrSegment,
+  type PlaybackSource,
+  type SeekView,
+} from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import { trackVideoStarts, type VideoStarts } from './videoStarts';
 import {
@@ -128,10 +133,15 @@ export interface PlaybackHooks extends PositionHooks {
   /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 라이브 재생기의 시크바가 라이브 창 밖까지 넓어진다 */
   axisLowerMs?: number | null;
   /**
-   * 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다(POK-528). 인자는 그 404 를 낸 재생기의 세대 — 세션이
-   * 옛 재생기의 늦은 404 를 버린다. 없으면 가로채지 않는다(지금 동작)
+   * 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다(POK-528). 인자는 그 404 를 낸 재생기의 세대(세션이
+   * 옛 재생기의 늦은 404 를 버린다)와 받지 못한 조각이다. 없으면 가로채지 않는다(지금 동작)
    */
-  onDvrSegmentGone?: (generation: number) => void;
+  onDvrSegmentGone?: (generation: number, segment: DvrSegment) => void;
+  /**
+   * 그 세대 재생기의 조각이 세션이 아는 목록 안 구멍(이미 한 번 다시 받게 한 조각)인가(POK-528 후속) — 세션에 묻는다.
+   * 재생기는 아직 읽지 않는다
+   */
+  isKnownDvrHole?: (generation: number, segment: DvrSegment) => boolean;
   /**
    * 새로 서는 재생기는 hls.js 를 만들지 않는다(받지도 틀지도 않음 · POK-528 U2). 재생기가 설 때(세대가 오를 때) 한 번
    * 읽는다 — 풀리는 전이는 세대를 올리므로 그때 정상 기동한다
@@ -526,15 +536,18 @@ export function useHlsPlayback(
       waiting = false;
     };
     // 사람이 멈춘 동안의 되감기 조각 404 는 받기만 멈추고 세션에 올리지 않는다 — 다시 틀 때(onPlay) 올린다(POK-528 c9 ·
-    // 계획 4-3). 사람 멈춤 = 멈춰 있고 멈춘 자리 기록이 있다(앱이 건 멈춤은 기록을 남기지 않는다). 재생기 하나의 상태라
-    // 세대가 바뀌면 옛 재생기와 함께 버린다
-    let goneWhilePaused = false;
-    const reportGone = (gone: (generation: number) => void) => {
+    // 계획 4-3). 사람 멈춤 = 멈춰 있고 멈춘 자리 기록이 있다(앱이 건 멈춤은 기록을 남기지 않는다). 붙잡은 값은 받지 못한
+    // 조각이다. 재생기 하나의 상태라 세대가 바뀌면 옛 재생기와 함께 버린다
+    let goneWhilePaused: DvrSegment | null = null;
+    const reportGone = (
+      gone: (generation: number, segment: DvrSegment) => void,
+      segment: DvrSegment,
+    ) => {
       if (video.paused && pausedAtMsRef.current !== null) {
-        goneWhilePaused = true;
+        goneWhilePaused = segment;
         return;
       }
-      gone(generation);
+      gone(generation, segment);
     };
     let recoveredNetwork = false;
     let recoveredMedia = false;
@@ -569,9 +582,10 @@ export function useHlsPlayback(
       // 잇게 한다(되감기면 다시 받는 중이 아닐 때 같은 목록 다시 받기 · 다시 받는 중(화면 전)이면 막힘 · 끝남 대기면
       // 녹화로 정하기 전이면 막힘 · 정한 뒤면 마지막 확인 · 다시보기 제안이면 같은 자리 다시보기). 옛 자리 시크 · 제자리
       // 다시 받기(startLoad)는 하지 않는다(계획 4-3)
-      if (goneWhilePaused) {
-        goneWhilePaused = false;
-        hooksRef.current.onDvrSegmentGone?.(generation);
+      if (goneWhilePaused !== null) {
+        const segment = goneWhilePaused;
+        goneWhilePaused = null;
+        hooksRef.current.onDvrSegmentGone?.(generation, segment);
         return;
       }
       const axis = sessionActive() ? readAxis() : null;
@@ -770,7 +784,8 @@ export function useHlsPlayback(
           // 되감기 조각 404 는 세션 고리가 있으면 첫 비치명에서 가로챈다 — hls.js 가 예약한 다시 받기를 끊고 세션에
           // 올린다(POK-528 · 사람이 멈춘 동안이면 다시 틀 때 — reportGone). 고리가 없으면 지금 동작 그대로다
           const gone = hooksRef.current.onDvrSegmentGone;
-          const onGone = gone === undefined ? undefined : () => reportGone(gone);
+          const onGone =
+            gone === undefined ? undefined : (segment: DvrSegment) => reportGone(gone, segment);
           if (
             kind === 'rewind' &&
             consumeDvrSegmentGone(hls, data, HlsCtor.ErrorTypes, HlsCtor.ErrorDetails, onGone)

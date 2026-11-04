@@ -20,6 +20,7 @@ import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
 import {
   SESSION_NOTICES,
   close,
+  dvrHoleKnown,
   isThisRound,
   liveFromAway,
   openVodHere,
@@ -32,6 +33,7 @@ import {
   stateOnly,
   vodStartAt,
   within,
+  withDvrHole,
   withUrl,
   type RewindRange,
 } from './sessionShared';
@@ -75,6 +77,16 @@ export interface StreamAsk {
 export interface RelistState {
   stage: 'list' | 'paint';
   noticed: boolean;
+}
+
+/**
+ * 되감기 재생기가 404 로 받지 못한 미디어 조각(POK-528 후속). type 은 hls.js PlaylistLevelType 의 값과 같다(main 영상 ·
+ * audio 소리 · subtitle) — 소리 · 영상 목록이 따로면 sn 이 겹칠 수 있어 함께 든다. 이 파일은 hls.js 를 읽지 않는다.
+ * 그 조각을 틈으로 넘길지(목록 가운데인지)는 hls.js 가 정한다 — 소리 조각도 영상 목록의 끝 순번(endSN)으로 본다
+ */
+export interface DvrSegment {
+  type: 'main' | 'audio' | 'subtitle';
+  sn: number;
 }
 
 /** 재생 세션의 국면 — 명부 상태(broadcastStatus)와 따로 움직인다 */
@@ -156,6 +168,11 @@ export interface PlaybackSessionState extends HandoffFields {
   foreignLive: string | null;
   /** 명부 ended 를 받았다 — 덮개의 「녹화 보기」를 기본 강조로 둔다 */
   rosterEnded: boolean;
+  /**
+   * 목록 안 구멍(POK-528 후속) — 되감기 url 마다 그 목록을 다시 받게 한 조각의 키(dvrSegmentKey). 다시 받기에
+   * 들어갈 때만 더하고 세션 안에서는 지우지 않는다 — 같은 url · 같은 조각으로는 두 번 다시 받지 않는다
+   */
+  dvrHoles: ReadonlyMap<string, ReadonlySet<string>>;
   closed: SessionClose | null;
 }
 
@@ -209,8 +226,11 @@ export type SessionEvent =
   | { type: 'live-start-truncated' }
   /** 라이브 창 탐침의 결과 — seq 는 probe-live 효과의 순번 */
   | { type: 'live-probe'; seq: number; result: LiveProbeResult }
-  /** 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다. generation = 그 재생기의 소스 세대(POK-528) */
-  | { type: 'dvr-segment-gone'; generation: number }
+  /**
+   * 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다. generation = 그 재생기의 소스 세대 · segment = 받지 못한
+   * 조각(POK-528)
+   */
+  | { type: 'dvr-segment-gone'; generation: number; segment: DvrSegment }
   | { type: 'leave' };
 
 export type SessionEffect =
@@ -270,6 +290,7 @@ export function openSession(init: {
     boundLive: false,
     foreignLive: null,
     rosterEnded: false,
+    dvrHoles: new Map(),
     closed: null,
     ...openHandoffFields(),
   };
@@ -420,7 +441,7 @@ function onRewind(
     case 'stream-poll':
       return onRewindStreamPoll(session, phase, event, now);
     case 'dvr-segment-gone':
-      return onRewindSegmentGone(session, phase, now);
+      return onRewindSegmentGone(session, phase, event.segment, now);
     case 'endlist':
       // 다시 받은 목록의 ENDLIST 도 같다 — pendingNext 가 있으면 relist 를 남긴 채 refresh(POK-528 계획 3-3 (3))
       return phase.pendingNext !== null
@@ -497,29 +518,44 @@ function onRewindStreamPoll(
 }
 
 /**
- * 되감기 조각 404(POK-528 계획 3-2) — 다시 받는 중이 아니면 보던 목록(같은 url)을 다시 받는다.
- * 다시 받은 재생기가 화면을 붙이기 전에 또 404 면 막힌 끝남 대기다(되풀이 상한 — 3-3 (5))
+ * 되감기 조각 404(POK-528 계획 3-2) — 처음 맞는 행 하나. ① 다시 받은 재생기가 화면을 붙이기 전에 또
+ * 404 면 막힌 끝남 대기다(되풀이 상한 — 3-3 (5)). ② 이 url 을 이미 그 조각으로 다시 받았으면(아는
+ * 구멍 — POK-528 후속) 또 다시 받아도 낫지 않으니 막는다 — 같은 url · 같은 조각 다시 받기는 많아야
+ * 한 번이다. 재생기가 hls.js 의 틈 넘김에 맡겨 올리지 않은 조각은 여기 오지 않으므로, 오는 것은 넘기지
+ * 못한 같은 조각이다(끝난 목록 · 마지막 조각 · 같은 조각 재시도 예약 · 배선 누락 · hls.js 가 문맥
+ * 변경(fragContextChanged)으로 버려 틈 판정 없이 올린 늦은 404). ③ 그 밖이면 보던 목록(같은 url)을
+ * 다시 받고 그 조각을 기억한다
  */
 function onRewindSegmentGone(
   session: PlaybackSessionState,
   phase: RewindPhase,
+  segment: DvrSegment,
   now: number,
 ): Transition {
   if (phase.relist !== undefined) return enterBlocked(session, false, now);
-  return relistSameList(session, phase);
+  if (dvrHoleKnown(session, session.source.generation, segment)) {
+    return enterBlocked(session, false, now);
+  }
+  return relistSameList(session, phase, segment);
 }
 
 /**
  * 목록 다시 받기 — 같은 url 을 세대 + 1 로 다시 세운다. 재생기가 새 목록 창 하한 아래를 자르고,
  * 시작은 이어 볼 자리(모르면 목록 하한에서)다. pendingNext · entry 는 url 이 같아 그대로 둔다.
- * 멈춤 자리 기록은 옛 목록 축이라 버리게 한다(첫 목록 판정이 한 번 더 버린다 — P37)
+ * 멈춤 자리 기록은 옛 목록 축이라 버리게 한다(첫 목록 판정이 한 번 더 버린다 — P37). 다시 받게 한
+ * 조각은 그 url 의 구멍으로 기억한다 — 구멍 기억을 더하는 곳은 여기 하나다
  */
-function relistSameList(session: PlaybackSessionState, phase: RewindPhase): Transition {
+function relistSameList(
+  session: PlaybackSessionState,
+  phase: RewindPhase,
+  segment: DvrSegment,
+): Transition {
   return {
     state: {
       ...session,
       phase: { ...phase, relist: { stage: 'list', noticed: false } },
       source: replace(session, 'rewind', session.source.url, restartAtMs(session)),
+      dvrHoles: withDvrHole(session.dvrHoles, session.source.url, segment),
     },
     effects: [{ kind: 'drop-pause-mark' }],
   };

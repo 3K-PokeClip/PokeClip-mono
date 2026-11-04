@@ -1,11 +1,18 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { assertTransitionInvariants, relistGuard, revisitGuard } from './dvr404TestKit';
+import {
+  assertTransitionInvariants,
+  holeGuard,
+  relistGuard,
+  resumeBySpec,
+  revisitGuard,
+} from './dvr404TestKit';
 import type * as rewindSwitchModule from './rewindSwitch';
 import {
   SESSION_NOTICES,
   transition,
+  type DvrSegment,
   type SessionEffect,
   type SessionEvent,
   type Transition,
@@ -69,11 +76,36 @@ interface StreamAnswer {
 /** n 번째(0 부터) 스트림 물음의 답 */
 type Answers = (n: number) => StreamAnswer;
 
+/** 재생기가 404 로 올리는 조각의 sn 바탕 — 정상 경우는 세대마다 다른 조각이다(segmentOf) */
+const BASE_SN = 100;
+
+/** 그 세대 재생기의 404 조각 — 세대마다 다르다(서로 다른 조각의 404) */
+function segmentOf(generation: number): DvrSegment {
+  return { type: 'main', sn: BASE_SN + generation };
+}
+
 /**
- * 새 세대(재생기)가 설 때마다 시험이 넣는 것 — 화면 전 404 · 첫 목록 뒤 화면 붙음 → 404 · 첫 목록 뒤
- * 화면 붙음(404 없음) · 아무것도
+ * 새 재생기가 차례로 내는 것 — 첫 목록(list) · 화면 붙음(paint) · 그 세대 조각의 404(own) · 적은
+ * 조각의 404
  */
-type OnSwap = 'gone' | 'list-then-gone' | 'paint-then-gone' | 'paint' | 'none';
+type PlayerStep = 'list' | 'paint' | 'own' | DvrSegment;
+
+/** 각본 — offset 번째로 선 새 재생기(1 = 첫 404 뒤 다시 받은 재생기)가 낼 것 */
+type Script = (offset: number) => PlayerStep[];
+
+/**
+ * 새 세대(재생기)가 설 때마다 시험이 넣는 것 — 화면 전 404 · 첫 목록 뒤 404 · 화면 붙음 → 404 · 첫
+ * 목록 뒤 화면 붙음(404 없음) · 아무것도 · 각본
+ */
+type OnSwap = 'gone' | 'list-then-gone' | 'paint-then-gone' | 'paint' | 'none' | Script;
+
+const NAMED_SWAPS: Record<Exclude<OnSwap, Script>, PlayerStep[]> = {
+  gone: ['own'],
+  'list-then-gone': ['list', 'own'],
+  'paint-then-gone': ['list', 'paint', 'own'],
+  paint: ['list', 'paint'],
+  none: [],
+};
 
 let streamStarts: number[];
 /**
@@ -149,7 +181,7 @@ interface Checked {
  */
 function checkedTransitions(): Checked[] {
   const { calls, results } = vi.mocked(transition).mock;
-  const guards = [relistGuard(), revisitGuard()];
+  const guards = [relistGuard(), revisitGuard(), holeGuard()];
   return calls.map(([before, event, now], i) => {
     const result = results[i];
     if (result?.type !== 'return') throw new Error(`transition ${i} 이 돌려주지 않았다`);
@@ -170,6 +202,8 @@ interface Run {
   remounts: number;
   /** 막힌 끝남 대기로 든 전이 수 */
   blocked: number;
+  /** 세션에 들어간 404 사건 수 */
+  gones: number;
   effects: SessionEffect[];
   notices: string[];
   session: () => PlaybackSession;
@@ -199,8 +233,15 @@ async function openLive(answers: Answers, liveAt: number | null) {
   return { session, dispatch, onNotice };
 }
 
-/** 지금 세대 재생기의 사건들 — 첫 목록(잘림 cut) · 화면 · 404 */
-function playerEvents(session: () => PlaybackSession, onSwap: OnSwap): SessionEvent[] {
+/**
+ * 지금 세대 재생기가 낼 것 — 첫 목록(잘림 cut) · 화면은 사건으로, 404 는 조각으로(올릴지는 재생기가
+ * 정한다 — runRelist). offset = 몇 번째로 선 새 재생기인가
+ */
+function playerSteps(
+  session: () => PlaybackSession,
+  onSwap: OnSwap,
+  offset: number,
+): Array<SessionEvent | DvrSegment> {
   const { state } = session();
   const listLoaded: SessionEvent = {
     type: 'list-loaded',
@@ -218,24 +259,19 @@ function playerEvents(session: () => PlaybackSession, onSwap: OnSwap): SessionEv
     runMs: 0,
     epoch: session().positionEpoch(),
   };
-  const gone: SessionEvent = { type: 'dvr-segment-gone', generation: state.source.generation };
-  switch (onSwap) {
-    case 'gone':
-      return [gone];
-    case 'list-then-gone':
-      return [listLoaded, gone];
-    case 'paint-then-gone':
-      return [listLoaded, painted, gone];
-    case 'paint':
-      return [listLoaded, painted];
-    case 'none':
-      return [];
-  }
+  const steps = typeof onSwap === 'function' ? onSwap(offset) : NAMED_SWAPS[onSwap];
+  return steps.map((step) => {
+    if (step === 'list') return listLoaded;
+    if (step === 'paint') return painted;
+    return step === 'own' ? segmentOf(state.source.generation) : step;
+  });
 }
 
 /**
- * 세션을 열어 라이브 답을 받고(liveAt 이 있으면 라이브 자리도) targetMs 로 되감은 뒤 404 하나를
- * 넣고, 시계를 60초 stepMs 씩 밀며 세대가 오를 때마다 onSwap 대로 사건을 넣는다
+ * 세션을 열어 라이브 답을 받고(liveAt 이 있으면 라이브 자리도) targetMs 로 되감은 뒤 404 하나(조각
+ * first — 없으면 그 세대 조각)를 넣고, 시계를 60초 stepMs 씩 밀며 세대가 오를 때마다 onSwap 대로
+ * 사건을 넣는다. asks = 재생기가 404 를 올리기 전에 세션에 아는 구멍인지 묻고, 그러면 올리지
+ * 않는다(hls.js 가 그 조각을 틈으로 넘긴 것처럼)
  */
 async function runRelist(
   answers: Answers,
@@ -244,7 +280,15 @@ async function runRelist(
     liveAt = null,
     targetMs = NOW - 10 * MIN,
     stepMs = STEP_MS,
-  }: { liveAt?: number | null; targetMs?: number; stepMs?: number } = {},
+    first,
+    asks = false,
+  }: {
+    liveAt?: number | null;
+    targetMs?: number;
+    stepMs?: number;
+    first?: DvrSegment;
+    asks?: boolean;
+  } = {},
 ): Promise<Run> {
   const mine = testState;
   const stopIfEnded = () => {
@@ -253,9 +297,15 @@ async function runRelist(
   const { session, dispatch, onNotice } = await openLive(answers, liveAt);
   dispatch({ type: 'seek', targetMs, view: { lowerMs: NOW - 16_000, endMs: NOW } });
   expect(session().state.phase.kind).toBe('rewind');
+  const raise = (generation: number, segment: DvrSegment) => {
+    // 옛 판 세션에는 질의가 없다 — 모르는 구멍으로 친다(음성 대조)
+    if (asks && (session().isKnownDvrHole?.(generation, segment) ?? false)) return;
+    dispatch({ type: 'dvr-segment-gone', generation, segment });
+  };
   let seen = session().state.source.generation;
-  dispatch({ type: 'dvr-segment-gone', generation: seen });
+  raise(seen, first ?? segmentOf(seen));
   await flush();
+  let offset = 0;
   for (let t = 0; t < WINDOW_MS; t += stepMs) {
     stopIfEnded();
     await act(async () => vi.advanceTimersByTime(stepMs));
@@ -264,8 +314,10 @@ async function runRelist(
     const { generation } = session().state.source;
     if (generation === seen) continue;
     seen = generation;
-    for (const event of playerEvents(session, onSwap)) {
-      dispatch(event);
+    offset += 1;
+    for (const step of playerSteps(session, onSwap, offset)) {
+      if ('sn' in step) raise(generation, step);
+      else dispatch(step);
     }
   }
   // 마지막 반복에 넣은 사건이 띄운 비동기 일(라이브 창 탐침 등)을 act 안에서 끝낸 뒤에 센다
@@ -284,6 +336,7 @@ async function runRelist(
     pollSwaps: raisedBy('stream-poll'),
     remounts: raisedBy('remount'),
     blocked,
+    gones: all.filter(({ event }) => event.type === 'dvr-segment-gone').length,
     effects: all.flatMap(({ next }) => next.effects),
     notices: onNotice.mock.calls.map(([text]) => String(text)),
     session,
@@ -315,7 +368,7 @@ describe('목록 다시 받기의 되풀이 상한 — 세션 훅 층(계획 3-3
     expect(run.notices.filter((text) => text === SESSION_NOTICES.oldest)).toHaveLength(1);
   });
 
-  it('정상: 404 → 다시 받기 → 화면 → 404 … — 404 마다 다시 받기 · 막힘 0 · refresh 0 · 매번 판정 알림', async () => {
+  it('정상(서로 다른 조각): 404(sn k) → 다시 받기 → 화면 → 404(sn k+1) … — 404 마다 다시 받기 · 막힘 0 · refresh 0 · 매번 판정 알림', async () => {
     const run = await runRelist(steady, 'paint-then-gone', { stepMs: PAINT_CYCLE_STEP_MS });
     expect(run.relists).toBeGreaterThanOrEqual(2);
     expect(run.blocked).toBe(0);
@@ -390,8 +443,10 @@ describe('재생기 명령 배선 — hold-frame · drop-pause-mark(POK-528 c5 �
       view: { lowerMs: NOW - 16_000, endMs: NOW },
     });
     expect(session().state.phase.kind).toBe('rewind');
-    const gone = () =>
-      dispatch({ type: 'dvr-segment-gone', generation: session().state.source.generation });
+    const gone = () => {
+      const { generation } = session().state.source;
+      dispatch({ type: 'dvr-segment-gone', generation, segment: segmentOf(generation) });
+    };
     return { session, player, gone };
   }
 
@@ -423,5 +478,42 @@ describe('재생기 명령 배선 — hold-frame · drop-pause-mark(POK-528 c5 �
     expect(player.dropPauseMark).toHaveBeenCalledTimes(1);
     expect(epochs).toEqual([epochBefore]);
     expect(player.holdFrame).not.toHaveBeenCalled();
+  });
+});
+
+// 목록 안 구멍(POK-528 후속 계획 r3 5절) — 재생기는 404 를 올리기 전에 세션에 아는 구멍인지 묻고,
+// 그러면 올리지 않는다(뒤 커밋의 재생기 몫 — 여기서는 시험의 흉내 재생기가 한다). 옛 판 세션은
+// 질의가 없어 늘 올리므로 음성 대조 트리에서는 다시 받기 · 막힘 수 단언으로 FAIL 한다.
+describe('세션 층 계약 — 재생기가 아는 구멍을 넘기면', () => {
+  const S: DvrSegment = { type: 'main', sn: 41 };
+  const T: DvrSegment = { type: 'main', sn: 42 };
+  /** 정기 물음만 — 열 때 1 · 10초 주기 */
+  const POLLS_ONLY = 1 + WINDOW_MS / POLL_MS;
+
+  it('같은 조각이 화면 전 · 뒤로 거듭 404 → 60초 동안 다시 받기 1 · 세션 404 사건 1 · 막힘 0 · refresh 0 · 끝은 화면 자리의 되감기', async () => {
+    const targetMs = NOW - 10 * MIN;
+    const script: Script = (offset) => (offset === 1 ? [S, 'list', S, 'paint', S] : []);
+    const run = await runRelist(steady, script, { first: S, asks: true, targetMs });
+    expect(run).toMatchObject({ relists: 1, pollSwaps: 0, remounts: 0, blocked: 0, gones: 1 });
+    expect(refreshes(run)).toBe(0);
+    const { state } = run.session();
+    expect(state.phase).toEqual({ kind: 'rewind', pendingNext: null });
+    expect(resumeBySpec(state)).toBe(targetMs + 4_000);
+    expect(streamStarts.length).toBeLessThanOrEqual(POLLS_ONLY);
+  });
+
+  it('s · s · t · t → 다시 받기 2(조각마다 1) · 막힘 0', async () => {
+    const script: Script = (offset) =>
+      offset === 1 ? ['list', 'paint', S, T] : offset === 2 ? ['list', 'paint', T] : [];
+    const run = await runRelist(steady, script, { first: S, asks: true });
+    expect(run).toMatchObject({ relists: 2, pollSwaps: 0, remounts: 0, blocked: 0, gones: 2 });
+    expect(run.session().state.phase).toEqual({ kind: 'rewind', pendingNext: null });
+  });
+
+  it('이 커밋의 재생기(묻지 않음)가 화면 뒤 같은 조각을 다시 올리면 → 다시 받기 1 · 막힘 1', async () => {
+    const script: Script = (offset) => (offset === 1 ? ['list', 'paint', S] : []);
+    const run = await runRelist(steady, script, { first: S });
+    expect(run).toMatchObject({ relists: 1, pollSwaps: 0, remounts: 0, blocked: 1, gones: 2 });
+    expect(run.session().state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
   });
 });

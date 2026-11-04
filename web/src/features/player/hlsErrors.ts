@@ -1,5 +1,6 @@
 import type Hls from 'hls.js';
 import type { ErrorData, ErrorDetails, ErrorTypes } from 'hls.js';
+import type { DvrSegment } from './rewindSwitch';
 
 /**
  * 목록(멀티변이 · 변이 · 오디오 목록)을 받지 못한 오류인가. 조각 · 키 받기 오류는 아니다 — 목록이 살아 있어도 조각 하나는
@@ -81,13 +82,17 @@ function failedOnInitSegment(data: Pick<ErrorData, 'response' | 'frag'>): boolea
 
 /**
  * 되감기 재생기의 미디어 조각 404(isMediaSegmentNotFound)를 앱이 먼저 가로챈다(POK-528) — 받기를 멈추고 세션에
- * 올린다. hls.js 는 앱 처리기보다 먼저 돌아(hls.ts 351-357) 이미 다음 받기를 예약해 둔 뒤다: 마지막 · ENDLIST 조각은
+ * 그 조각을 올린다. hls.js 처리기는 앱 처리기보다 먼저 돈다 — 스트림 컨트롤러의 ERROR 처리기는 생성자에서 달리고
+ * (stream-controller.ts 94 · 97-98 · base-stream-controller.ts 150-157) 오류 컨트롤러의 최종 처리기(onErrorOut)도 생성자에서
+ * 달린다(hls.ts 351-356). 그래서 앱 처리기는 onErrorOut 뒤이고, 이미 다음 받기를 예약해 둔 뒤다: 마지막 · ENDLIST 조각은
  * 같은 조각 재시도, 방송 중 가운데 조각은 틈 넘김 뒤 다음 tick(base-stream-controller.ts 2153-2187). stopLoad 가
  * 그 예약과 목록 재요청을 함께 끊는다(176-194). 다시 받기 · 재생기 내리기는 하지 않는다 — 복구(새 재생기 · 다시보기 ·
  * 닫기)는 세션이 정한다
- * @param onGone 세션 고리. 없으면 가로채지 않는다(지금 동작 — hls.js 재시도와 앱의 한 번 다시 받기)
+ * @param onGone 세션 고리 — 받지 못한 조각(frag 의 type · sn)을 받는다. 없으면 가로채지 않는다(지금 동작 — hls.js
+ *     재시도와 앱의 한 번 다시 받기)
  * @param types hls.js 의 ErrorTypes
  * @param details hls.js 의 ErrorDetails
+ * @param _passHole 세션이 아는 목록 안 구멍인가 — 자리만 둔다(아직 읽지 않는다 · 넘김 판정은 뒤 커밋)
  * @returns 가로챘나 — 참이면 오류 처리기는 여기서 끝난다
  */
 export function consumeDvrSegmentGone(
@@ -95,10 +100,20 @@ export function consumeDvrSegmentGone(
   data: Pick<ErrorData, 'type' | 'details' | 'response' | 'frag'>,
   types: typeof ErrorTypes,
   details: typeof ErrorDetails,
-  onGone?: () => void,
+  onGone?: (segment: DvrSegment) => void,
+  _passHole?: (segment: DvrSegment) => boolean,
 ): boolean {
   if (onGone === undefined || !isMediaSegmentNotFound(data, types, details)) return false;
+  const segment = goneSegment(data);
+  if (segment === null) return false;
   hls.stopLoad();
-  onGone();
+  onGone(segment);
   return true;
+}
+
+/** 오류의 미디어 조각(type · sn). 조각이 없거나 init 조각이면 null — isMediaSegmentNotFound 뒤에는 늘 있다 */
+function goneSegment(data: Pick<ErrorData, 'frag'>): DvrSegment | null {
+  const { frag } = data;
+  if (frag === undefined || frag.sn === 'initSegment') return null;
+  return { type: frag.type, sn: frag.sn };
 }

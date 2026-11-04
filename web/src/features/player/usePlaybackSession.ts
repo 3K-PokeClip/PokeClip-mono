@@ -8,6 +8,7 @@ import {
   openSession,
   pollTargets,
   transition,
+  type DvrSegment,
   type PlaybackSessionState,
   type SessionClose,
   type SessionEffect,
@@ -15,6 +16,7 @@ import {
   type XAnswer,
 } from './rewindSwitch';
 import { probeLiveWindow } from './liveWindowProbe';
+import { dvrHoleKnown } from './sessionShared';
 import { sessionView, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
@@ -82,6 +84,11 @@ export interface PlaybackSession {
   notice: (text: string) => void;
   /** 지금 위치 시대(상태기계에 이미 반영된 값) — 재생기가 자리를 잴 때 찍는다 */
   positionEpoch: () => number;
+  /**
+   * 그 세대 재생기의 조각이 이 세션이 아는 목록 안 구멍인가(POK-528 후속) — 같은 url 을 이미 그 조각으로 다시 받았다.
+   * 지금 상태(상태기계에 이미 반영된 값)를 읽는다
+   */
+  isKnownDvrHole: (generation: number, segment: DvrSegment) => boolean;
 }
 
 /** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
@@ -262,6 +269,11 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
 
   const notice = useCallback((text: string) => optionsRef.current.onNotice?.(text), []);
   const positionEpoch = useCallback(() => stateRef.current?.positionEpoch ?? 0, []);
+  const isKnownDvrHole = useCallback(
+    (generation: number, segment: DvrSegment) =>
+      stateRef.current !== null && dvrHoleKnown(stateRef.current, generation, segment),
+    [],
+  );
 
   const bindPlayer = useCallback(
     (player: SessionPlayer | null) => {
@@ -375,5 +387,5 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [state, now],
   );
   if (state === null || view === null || state.closed !== null) return null;
-  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch };
+  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch, isKnownDvrHole };
 }

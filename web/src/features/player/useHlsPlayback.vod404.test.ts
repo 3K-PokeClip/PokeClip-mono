@@ -149,7 +149,7 @@ function fragGone(fatal: boolean): unknown {
     type: FakeHls.ErrorTypes.NETWORK_ERROR,
     details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
     fatal,
-    frag: { sn: 7, initSegment: { url: INIT_SEGMENT } },
+    frag: { type: 'main', sn: 7, initSegment: { url: INIT_SEGMENT } },
     response: { url: MEDIA_SEGMENT, code: 404, text: '' },
   };
 }
@@ -264,7 +264,7 @@ describe('다시보기 조각 404 의 앱 한 번 다시 받기(POK-528 c6 · W8
     const { hls } = await mount(sourceOf('rewind', 3), { onDvrSegmentGone });
     raise(hls, fragGone(false));
     expect(consumeDvrSegmentGone).toHaveBeenCalledTimes(1);
-    expect(onDvrSegmentGone.mock.calls).toEqual([[3]]);
+    expect(onDvrSegmentGone.mock.calls).toEqual([[3, { type: 'main', sn: 7 }]]);
     expect(hls.stopLoad).toHaveBeenCalledTimes(1);
   });
 

@@ -2,6 +2,7 @@ import { expect } from 'vitest';
 import { stamped } from './handoffTestKit';
 import {
   transition,
+  type DvrSegment,
   type PlaybackSessionState,
   type SessionEvent,
   type Transition,
@@ -10,7 +11,7 @@ import {
 // 되감기 조각 404 시험의 전이 감싸개(POK-528 계획 8-0). 모든 전이 직후 상태
 // 불변식(계획 3-1 의 I1–I3 · 막힘 몫)과 전이 불변식(T1–T6 — 「새 재생기를 세우지
 // 않음」 이 풀리면 세대가 오르거나 세션이 닫힌다 · 다시 받기의 시작 · 이어 볼 자리
-// 보존)을 단언한다. 막힘은 다음 사건에서 닫혀 끝 상태에 흔적이 남지 않을 수 있어,
+// 보존 · T7–T9 — 목록 안 구멍의 기억, POK-528 후속)을 단언한다. 막힘은 다음 사건에서 닫혀 끝 상태에 흔적이 남지 않을 수 있어,
 // 끝 상태만 보는 단언으로는 중간의 위반을 못 잡는다.
 //
 // 제품 모듈에서는 옛 판에도 있는 transition 과 타입만 읽는다 — 제품 파일을 되돌린
@@ -19,6 +20,8 @@ import {
 // 3-6 의 정의를 여기 옮겨 둔다. 이 사본과 제품 함수가 같다는 보장은 없다 —
 // rewindSwitch.dvr404*.test.ts 의 국면별 표와 sessionShared.test.ts 의 이어 볼 자리
 // 표가 고른 상태에서만 제품 함수를 대조한다. 그래서 정의를 바꿀 때는 둘을 함께 고친다.
+// 구멍 기억(dvrSegmentKey · dvrHoles)도 같다 — 키 꼴과 읽기를 여기 옮겨 두고 옛 판
+// 상태(칸 없음)는 빈 기억으로 읽는다.
 
 /** 계획 3-2 의 「목록 하한에서」 — 자리를 모를 때 다시 받기의 시작(자리로 읽지 않는다) */
 const FROM_FLOOR_MS = 0;
@@ -37,6 +40,21 @@ function startHeldBySpec(state: PlaybackSessionState): boolean {
 /** 다시 받는 중인 되감기의 칸 — 아니면 undefined(옛 판 상태에는 늘 없다) */
 function relistOf(state: PlaybackSessionState) {
   return state.phase.kind === 'rewind' ? state.phase.relist : undefined;
+}
+
+/** 구멍 기억의 키 — sessionShared 의 dvrSegmentKey 사본(소리 · 영상 목록의 sn 이 겹칠 수 있어 type 을 함께) */
+function holeKeyBySpec(segment: DvrSegment): string {
+  return `${segment.type}:${segment.sn}`;
+}
+
+/** 그 url 의 구멍 기억. 없으면(옛 판 상태 · 기록 없음) 빈 집합 */
+function holesBySpec(state: PlaybackSessionState, url: string): ReadonlySet<string> {
+  return state.dvrHoles?.get(url) ?? new Set();
+}
+
+/** 다시 받기에 들어간 전이인가 — 앞에는 relist 가 없고 뒤에는 있다 */
+function enteredRelist(before: PlaybackSessionState, after: PlaybackSessionState): boolean {
+  return relistOf(before) === undefined && relistOf(after) !== undefined;
 }
 
 /** 계획 3-2 의 확인된 위치 — 지금 소스 세대가 낸 마지막 위치. 아니면 null */
@@ -144,8 +162,48 @@ function assertResume(before: PlaybackSessionState, event: SessionEvent, next: T
   }
 }
 
+/** 구멍 기억에서 url 하나를 뺀 나머지 — url 순으로 [url, 정렬한 키] */
+function otherHoles(state: PlaybackSessionState, url: string): Array<[string, string[]]> {
+  const entries = [...(state.dvrHoles ?? new Map<string, ReadonlySet<string>>())];
+  return entries
+    .filter(([key]) => key !== url)
+    .map(([key, holes]): [string, string[]] => [key, [...holes].sort()])
+    .sort(([a], [b]) => a.localeCompare(b));
+}
+
 /**
- * 전이 하나의 앞 · 뒤에 상태 불변식과 전이 불변식(T1–T6)을 단언한다 — 세션 훅 시험이
+ * T7 · T8 · T9 — 목록 안 구멍의 기억(POK-528 후속 계획 3절). T7 아는 구멍의 404 는 같은
+ * 목록을 다시 받게 하지 않는다 · T8 다시 받기에 들어가면 그 조각이 그 url 에 적히고 다른
+ * url 의 기억은 그대로다 · T9 다시 받기 진입이 아니면 기억은 같은 객체다
+ */
+function assertHoles(
+  before: PlaybackSessionState,
+  event: SessionEvent,
+  after: PlaybackSessionState,
+): void {
+  const entered = enteredRelist(before, after);
+  if (event.type === 'dvr-segment-gone') {
+    const known = holesBySpec(before, before.source.url).has(holeKeyBySpec(event.segment));
+    const relistedAgain = entered && after.source.generation > before.source.generation;
+    if (known) expect(relistedAgain, 'T7 아는 구멍의 404 ⇒ 다시 받기 아님').toBe(false);
+  }
+  if (!entered) {
+    expect(after.dvrHoles, `T9 다시 받기 진입 아님 ⇒ 구멍 기억 그대로(${event.type})`).toBe(
+      before.dvrHoles,
+    );
+    return;
+  }
+  expect(event.type, 'T8 다시 받기 진입은 404 사건으로만').toBe('dvr-segment-gone');
+  if (event.type !== 'dvr-segment-gone') return;
+  const key = holeKeyBySpec(event.segment);
+  expect(holesBySpec(after, after.source.url).has(key), `T8 다시 받기 ⇒ ${key} 기록`).toBe(true);
+  expect(otherHoles(after, after.source.url), 'T8 다른 url 기억 그대로').toEqual(
+    otherHoles(before, after.source.url),
+  );
+}
+
+/**
+ * 전이 하나의 앞 · 뒤에 상태 불변식과 전이 불변식(T1–T9)을 단언한다 — 세션 훅 시험이
  * 감싼 transition 에서 부른다(계획 8-0)
  */
 export function assertTransitionInvariants(
@@ -157,6 +215,7 @@ export function assertTransitionInvariants(
   assertPhaseInvariants(after);
   assertRestart(before, event, after);
   assertResume(before, event, next);
+  assertHoles(before, event, after);
   if (!startHeldBySpec(before) || startHeldBySpec(after)) return;
   const regenerated = after.source.generation > before.source.generation;
   const released = regenerated || after.closed !== null;
@@ -187,6 +246,23 @@ export function relistGuard(): TransitionGuard {
       const count = (entered.get(url) ?? 0) + 1;
       entered.set(url, count);
       expect(count, `화면 없이 같은 url 다시 받기 ≤ 1(${url})`).toBeLessThanOrEqual(1);
+    },
+  };
+}
+
+/**
+ * url · 조각마다 다시 받기에 들어간 수를 세션 수명 내내 센다(POK-528 후속 — 같은 url 을 같은
+ * 조각으로 두 번 다시 받지 않는다). 지우는 때가 없다 — 사건열 하나(세션 하나)마다 새로 건다
+ */
+export function holeGuard(): TransitionGuard {
+  const entered = new Map<string, number>();
+  return {
+    observe(before, event, after) {
+      if (event.type !== 'dvr-segment-gone' || !enteredRelist(before, after)) return;
+      const hole = `${after.source.url} ${holeKeyBySpec(event.segment)}`;
+      const count = (entered.get(hole) ?? 0) + 1;
+      entered.set(hole, count);
+      expect(count, `같은 url · 같은 조각 다시 받기 ≤ 1(${hole})`).toBeLessThanOrEqual(1);
     },
   };
 }

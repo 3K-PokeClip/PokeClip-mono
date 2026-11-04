@@ -19,6 +19,7 @@ import {
   isMediaSegmentNotFound,
   isPlaylistLoadError,
 } from './hlsErrors';
+import type { DvrSegment } from './rewindSwitch';
 
 // 진짜 hls.js 1.7.3(dist)의 오류 처리가 받기 오류 404 를 언제 치명으로 올리는지와, 앱이 그 오류를 목록 오류로 가르는지를
 // 함께 본다(cx H1). error-helper retryForHttpStatus 는 4xx 를 다시 받지 않지만 조각 오류는 stream-controller
@@ -394,7 +395,7 @@ function fragError(overrides: Partial<ErrorData> = {}): ErrorData {
     type: ErrorTypes.NETWORK_ERROR,
     details: ErrorDetails.FRAG_LOAD_ERROR,
     fatal: false,
-    frag: { sn: 7, initSegment: { url: INIT_URL } },
+    frag: { type: 'main', sn: 7, initSegment: { url: INIT_URL } },
     response: httpStatus(404),
     ...overrides,
   } as unknown as ErrorData;
@@ -624,7 +625,7 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
   );
 
   /** 가로채기 판정을 앱 처리기 자리에 단다 — 판정 결과를 차례로 모은다 */
-  function intercept(player: LoadingPlayer, onGone: () => void): boolean[] {
+  function intercept(player: LoadingPlayer, onGone: (segment: DvrSegment) => void): boolean[] {
     const consumed: boolean[] = [];
     player.hls.on(Events.ERROR, (_event, data) => {
       consumed.push(consumeDvrSegmentGone(player.hls, data, ErrorTypes, ErrorDetails, onGone));
@@ -633,7 +634,7 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
   }
 
   it.each<GoneBranch>(['live-middle', 'live-last', 'endlist'])(
-    '%s 404 를 가로채면 STOPPED · 주기 tick 없음 · 다음 tick 없음 · 고리 1',
+    '%s 404 를 가로채면 STOPPED · 주기 tick 없음 · 다음 tick 없음 · 고리 1(그 조각의 type · sn)',
     (branch) => {
       fakeClock();
       const player = rewindPlayerLoading(branch);
@@ -642,7 +643,7 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
       raiseMedia404(player.hls, player.frag);
       // 상태 단언(1차 증거)
       expect(consumed).toEqual([true]);
-      expect(onGone).toHaveBeenCalledTimes(1);
+      expect(onGone.mock.calls).toEqual([[{ type: 'main', sn: 1 }]]);
       expect(player.streamController.state).toBe('STOPPED');
       expect(player.streamController.hasInterval()).toBe(false);
       expect(player.streamController.hasNextTick()).toBe(false);
@@ -691,7 +692,7 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
     // 가로채기가 부르는 stopLoad 만 센다 — 변이가 없는 이 차림에서는 hls.js 오류 처리가 치명으로 올리며 스스로
     // stopLoad 를 부를 수 있다(error-controller)
     const interceptor = { stopLoad: vi.fn() };
-    const onGone = vi.fn();
+    const onGone = vi.fn<(segment: DvrSegment) => void>();
     const consumed: boolean[] = [];
     hls.on(Events.ERROR, (_event, data) => {
       consumed.push(consumeDvrSegmentGone(interceptor, data, ErrorTypes, ErrorDetails, onGone));

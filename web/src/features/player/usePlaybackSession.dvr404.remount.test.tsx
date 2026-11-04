@@ -251,15 +251,18 @@ function oldestNotices(onNotice: ReturnType<typeof vi.fn>): number {
   return onNotice.mock.calls.filter(([text]) => text === SESSION_NOTICES.oldest).length;
 }
 
-/** 되감기 재생기가 미디어 조각 404 를 받았다 — hls.js 가 앱에 올리는 꼴 */
-function segmentGone(hls: FakeHls) {
+/**
+ * 되감기 재생기가 영상 조각 sn 의 404 를 받았다 — hls.js 가 앱에 올리는 꼴. gap = hls.js 가 그
+ * 조각을 틈으로 넘기기로 했다(frag.gap)
+ */
+function segmentGone(hls: FakeHls, sn = 7, gap = false) {
   act(() =>
     hls.trigger(FakeHls.Events.ERROR, {
       type: FakeHls.ErrorTypes.NETWORK_ERROR,
       details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
       fatal: false,
-      frag: { sn: 7, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
-      response: { url: `${BASE}/dvr/key-1/a1/seg7.mp4`, code: 404, text: '' },
+      frag: { type: 'main', sn, gap, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
+      response: { url: `${BASE}/dvr/key-1/a1/seg${sn}.mp4`, code: 404, text: '' },
     }),
   );
 }
@@ -382,7 +385,8 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     const relistHls = lastHls();
     expect(relistHls).not.toBe(rewindHls);
     expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'paint' } });
-    segmentGone(relistHls);
+    // 화면 전 다른 조각의 404 — 다시 받는 중이라 막힘(같은 조각이면 뒤 커밋에서 hls.js 건너뜀이다)
+    segmentGone(relistHls, 8);
     expect(relistHls.stopLoad).toHaveBeenCalledTimes(1);
     await settle();
     expect(current().state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
@@ -574,7 +578,7 @@ describe('404 → 목록 다시 받기 · 사람 멈춤 — 옛 축의 멈춘 �
         type: FakeHls.ErrorTypes.NETWORK_ERROR,
         details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
         fatal: false,
-        frag: { sn: 7, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
+        frag: { type: 'main', sn: 7, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
         response: { url: `${BASE}/dvr/key-1/a1/seg7.mp4`, code: 404, text: '' },
       });
       userPause(view);
