@@ -1038,7 +1038,7 @@ describe('HomeScreen', () => {
     expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
   });
 
-  it('지난 방송 카드: 보관함을 못 읽으면 클립 수는 「–」, 카드가 없으면 「찾은 장면 없음」', async () => {
+  it('지난 방송 카드: 보관함을 못 읽으면 클립 수는 「–」이고, 카드가 0이어도 「찾은 장면 없음」이라 단정하지 않는다', async () => {
     serve({
       past: [
         pastRow('past-1', new Date('2026-10-08T05:41:00Z')),
@@ -1053,25 +1053,34 @@ describe('HomeScreen', () => {
     const tile = (title: string) => within(grid).getByText(title).closest('li')!;
     await within(grid).findByText('past-2');
     expect(tile('past-1')).toHaveTextContent('클립 –');
-    expect(within(tile('past-2')).getByText('찾은 장면 없음')).toBeInTheDocument();
+    // 카드를 다 가린 방송일 수 있다 — 그 카드로 만든 클립이 남았는지 모르니 장면이 없다고 하지 않는다(POK-463)
+    expect(tile('past-2')).toHaveTextContent('카드 0');
+    expect(tile('past-2')).toHaveTextContent('클립 –');
+    expect(within(tile('past-2')).queryByText('찾은 장면 없음')).toBeNull();
     expect(within(tile('past-2')).getByText('장면 사진 없음')).toBeInTheDocument();
   });
 
-  it('지난 방송 카드: 카드를 다 가려 0장이어도 만든 클립 수는 보이고, 「찾은 장면 없음」이라 하지 않는다(POK-463)', async () => {
+  it('지난 방송 카드: 카드를 다 가려 0장이어도 만든 클립 수는 보이고, 카드 · 클립이 둘 다 0일 때만 「찾은 장면 없음」(POK-463)', async () => {
     const rendered = { status: 'rendered', createdAt: new Date('2026-10-08T09:00:00Z') };
     serve({
-      past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))],
+      past: [
+        pastRow('past-1', new Date('2026-10-08T05:41:00Z')),
+        pastRow('past-2', new Date('2026-10-07T05:41:00Z')),
+      ],
       // 카드 목록은 가린 카드를 빼고 준다 — 다 가리면 빈 목록이다
-      cards: { 'past-1': [] },
+      cards: { 'past-1': [], 'past-2': [] },
       library: [entry(1, rendered), entry(2, rendered)],
     });
     renderWithProviders(<HomeScreen />);
 
     const grid = await screen.findByRole('region', { name: '지난 방송' });
-    const tile = (await within(grid).findByText('past-1')).closest('li')!;
-    await waitFor(() => expect(tile).toHaveTextContent('클립 2'));
-    expect(tile).toHaveTextContent('카드 0');
-    expect(within(tile).queryByText('찾은 장면 없음')).toBeNull();
+    const tile = (title: string) => within(grid).getByText(title).closest('li')!;
+    await within(grid).findByText('past-2');
+    await waitFor(() => expect(tile('past-1')).toHaveTextContent('클립 2'));
+    expect(tile('past-1')).toHaveTextContent('카드 0');
+    expect(within(tile('past-1')).queryByText('찾은 장면 없음')).toBeNull();
+    // 보관함을 읽었고 이 방송으로 만든 클립이 없다 — 이제야 장면이 없다고 말한다
+    expect(within(tile('past-2')).getByText('찾은 장면 없음')).toBeInTheDocument();
   });
 
   it('지난 방송 카드: 카드를 못 읽으면 카드 수는 「–」이고, 장면이 없다고 단정하지 않는다', async () => {

@@ -95,10 +95,11 @@ function VodCardBody({ vod }: { vod: HomeVod }) {
 
 /**
  * 찾은 카드 · 만든 클립 — 클립이 0이면 아직 손대지 않은 방송이 눈에 띈다. 모르는 수는 「–」.
- * 「찾은 장면 없음」은 카드가 0이고 만든 클립도 없을 때만이다: 카드를 다 가려도(POK-463) 그 카드로 만든 클립은 남는다
+ * 「찾은 장면 없음」은 카드가 0이고 만든 클립도 0이라고 알 때만이다: 카드를 다 가려도(POK-463) 그 카드로 만든 클립은 남는다.
+ * 보관함을 못 읽은 클립(null)을 0으로 접으면 가린 카드로 만든 클립이 「찾은 장면 없음」 뒤로 숨는다
  */
 function VodStats({ vod }: { vod: HomeVod }) {
-  if (vod.cards === 0 && !vod.clips)
+  if (vod.cards === 0 && vod.clips === 0)
     return <div className={clsx(styles.vodStats, styles.vodStatsEmpty)}>찾은 장면 없음</div>;
   return (
     <div className={styles.vodStats}>
