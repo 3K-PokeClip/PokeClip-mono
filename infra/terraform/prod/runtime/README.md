@@ -65,6 +65,13 @@ platform · media · edge · 일꾼 배치 루트는 이 루트의 상태(키
 `pokeclip-tfstate-prod-apne2` 로 고친 뒤 `init -backend-config=backend.hcl` 로
 엽니다(운영 단계 · kty 승인).
 
+POK-525(PR Ⓒ)가 더한 /dvr 하한 KVS 그릇(`edge_bounds_kvs.tf`)은 머지 뒤 이
+루트를 다시 apply 해야 생깁니다. 그 전에는 `prod/media` 가 출력
+`edge_bounds_kvs_arn` 이 없어 어떤 plan 이든 멈추므로, 머지 뒤 이 apply 를
+먼저 합니다 — 순서는 [Media 교체 런북](../../runbooks/media-swap.md)
+「POK-525 교체 선행」 입니다. 원장 표 `stream_edge_bounds` 는 이 apply 가
+아니라 runtime-1a 런북 「M6 스키마 재실행」 의 SQL 이 만듭니다.
+
 provider 의 `default_tags` 네 키는 태그를 받는 자원에 붙습니다. mock 시험은
 `tags_all` 을 보지 못하므로 plan 으로 확인합니다. RDS 관리형 마스터 비밀에
 default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서 봅니다.

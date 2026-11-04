@@ -583,6 +583,7 @@ umask 077
 | registry 저장소 둘 | M9 코드를 되돌리지 않을 때 | 다음 registry apply 가 다시 만듦 |
 | `prod/records` · `prod/edge` · `prod/media` · `prod/platform` 상태 객체(빈 상태) | 늘 | 다시 apply 할 때 그대로 씀(「정리」) |
 | CDN 비밀 원본(`pokeclip/prod/cdn-secret`) | 늘 | `prod/secrets` 소유 — 다시 edge 를 apply 하면 그 값으로 KVS 를 채움(엣지 시험 런북 「KVS 값 입력」) |
+| /dvr 하한 KVS 그릇 · 원장 표 `stream_edge_bounds`(POK-525) | 늘 | 런타임 1단 소유 — 이 런북이 내리지 않음. media 를 내릴 때 남은 하한 키는 원장 행과 함께 남고, 다시 apply 한 상자의 Writer(`edge_bounds_writer_enabled = true`)가 닫힌 회차부터 이어 풂 |
 | 증거 디렉터리 | 늘 | 결과 원문(「정리」) |
 
 ## 6. (b) 파라미터 삭제

@@ -49,7 +49,10 @@ prod Media 상자[^box]를 띄우는 루트입니다(설계 3-1 의 ⑨). 자원
 2026-10-25 (나))과 함께 더한 출력이라, 그 전에 apply 한 platform 상태면
 platform 을 다시 apply 한 뒤에 plan 이 통과합니다. 런타임 1단의
 `edge_bounds_kvs_arn`(POK-525)도 같습니다 — prod/runtime 을 다시 apply 해 KVS
-그릇을 만든 뒤에 plan 이 통과합니다(POK-525 교체 걸음 4 → 4.1).
+그릇을 만든 뒤에 plan 이 통과합니다. PR Ⓒ 머지 뒤 그 apply 전에는 이 루트의
+어떤 plan 이든(긴급 apply 포함) 그 출력 이름으로 멈춥니다. 순서는
+[교체 런북](/infra/terraform/runbooks/media-swap.md) 「POK-525 교체 선행」
+입니다.
 
 ## 이미지
 

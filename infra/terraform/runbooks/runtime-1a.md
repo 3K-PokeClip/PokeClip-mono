@@ -827,6 +827,32 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     재실행 SQL 은 끝까지 돌아 `VERIFY OK` 를 낼 수 있습니다 — `VERIFY OK`
     가 사이드카 무영향을 뜻하지 않습니다. 사이드카는 그 쓰기를 백오프
     재시도로 다시 해 회복합니다(클래스 40 재시도 — insert.go).
+*   **POK-525 판 — /dvr 하한 원장 표.** PR Ⓒ(하한 원장 · Writer)의 머지
+    커밋 이상으로 돌리면 표 `stream_edge_bounds` 가 하나 늡니다. 원장은
+    열린 회차마다 /dvr 하한(엣지가 그 아래 조각을 막는 seq) 하나를 적는
+    정본이고, CloudFront KVS 는 그 사본입니다. 그 판이 더한 문장은 셋입니다.
+    *   `stream_schema.sql` 끝의 `CREATE TABLE IF NOT EXISTS
+        stream_edge_bounds`(PK `(stream_id, round_id)` · FK · 인덱스 없음).
+    *   `30_grants.sql` 의 `media_indexer` 권한 넷(SELECT · INSERT · UPDATE
+        · DELETE — DELETE 는 해제 유예가 지난 행 정리).
+    *   `40_verify.sql` 의 표 목록 한 줄과 권한 행렬 네 행.
+
+    그 판의 사이드카는 기동 스키마 확인에서 이 표를 보므로, 이 재실행 전의
+    DB 에서는 `schema_not_ready` 로 뜨지 않습니다.
+*   **POK-525 판이 잠그는 기존 표 — 없음.** 직전 재실행 SHA 까지 수렴한
+    DB 에서 이 판의 20 · 30 을 다시 돌리면, 기존 표 여섯(`stream_segments` ·
+    `stream_sessions` · `stream_cutoffs` · `stream_published_gaps` ·
+    `stream_seq_floors` · `broadcast_lifecycle_outbox`)에는 표 잠금이 하나도
+    남지 않고 새 표만 잠급니다(일회용 PG17 에서 한 트랜잭션으로 돌린 뒤
+    `pg_locks` 를 본 실측 · 2026-11-04 — GRANT 도 대상 표를 잠그지 않음). 8
+    의 직전 SHA 와 이 SHA 사이에 다른 SQL 변경이 있으면 그 변경은 처음
+    적용이라 위 항목의 잠금을 따릅니다. 보내기 전에 아래로 봅니다 — 바뀐
+    줄이 위 세 문장과 주석뿐이면 기존 표 잠금이 없습니다. `60_round_frozen.sql` 이
+    보여도 이 재실행은 그 파일을 돌리지 않습니다(00 → 40 만).
+
+    ```shell
+    git diff "<8 의 직전 SHA>" "<재실행 SHA>" -- infra/terraform/prod/runtime/sql/
+    ```
 
 ### 재실행 걸음
 
@@ -1521,6 +1547,51 @@ fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
 *   기록(8)에 옮기는 것은 `== read` 뒤 결과 줄과 채운 자리 값입니다. Q4 는
     `round_id` 열을 빼고 옮깁니다(회차 id 를 옮기지 않는 「발행 잔여 질의」 와
     같은 규칙).
+
+### POK-525 원장 질의
+
+/dvr 하한 원장(`stream_edge_bounds`)의 행을 상태별로 봅니다. 교체 걸음이
+아니라 사람 복구(media README 「/dvr 하한 사람 복구」)가 씁니다. 위 Q 와
+달리 시험이 뽑아 돌리는 표지 블록이 아니고, 「M6 읽기 질의」 의 하한 질의와
+같은 손 질의입니다(일회용 PG17 에 원장 표 · 세션 표를 깔고 다섯 상태를 한
+행씩 넣어 돌려 봄 · 2026-11-04). 보내는 꼴은 `make_read` 입니다.
+
+```shell
+cat >"${payload}/edge_bounds.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+SELECT b.stream_id, b.round_id, b.dvr_floor, b.released_at,
+       CASE
+         WHEN b.released_at < pg_catalog.now() - interval '120 seconds' THEN 'released_stuck'
+         WHEN b.released_at IS NOT NULL THEN 'released_settling'
+         WHEN NOT EXISTS (SELECT 1 FROM stream_sessions s
+                           WHERE s.stream_id = b.stream_id AND s.round_id = b.round_id
+                             AND s.round_closed_at IS NULL) THEN 'closed_unreleased'
+         ELSE 'open'
+       END AS state
+  FROM stream_edge_bounds b
+ ORDER BY state, b.stream_id, b.round_id
+ LIMIT 100;
+RESET ROLE;
+SQL
+make_read edge_bounds "${payload}/edge_bounds.sql" && send_step edge_bounds
+```
+
+| `state` | 뜻 | 누가 거두나 |
+|---|---|---|
+| `open` | 열린 회차의 하한 — 정상 | 회차가 닫히면 Writer 가 해제 |
+| `closed_unreleased` | 회차가 닫혔는데(열린 세션 없음 · 세션 행 없음 포함) KVS 키를 아직 안 지움 | Writer 만(KVS 키를 지워야 함). Writer 없는 상자는 `edge_bounds_unreleased_without_writer` 로 알리기만 |
+| `released_settling` | 키를 지웠고 유예(120초) 안 | 유예가 지나면 다음 확인이 지움 |
+| `released_stuck` | 키를 지운 지 120초가 넘었는데 행이 남음 | 사이드카가 하나라도 돌면 30초 안에 지움(Writer 의 해제 틱 · Writer 없는 감시 모두) — 남아 있으면 사이드카가 안 돌거나 지우기가 실패 중(`edge_bounds_unreleased_check_failed` · `edge_bounds_write_failing`) |
+
+*   원장 행이 남은 회차는 국면이 `vod` 로 넘어가지 않고 `ending` 에
+    머뭅니다(판정식 — `media/internal/index/round_playback.go`). 그래서
+    `closed_unreleased` · `released_stuck` 이 오래 남으면 그 회차 VOD 가
+    열리지 않습니다.
+*   120초는 사이드카의 해제 유예(`edgeBoundsReleaseSettle` —
+    `media/cmd/segment-indexer/edge_bounds.go`)와 같은 값입니다. 그 값을
+    바꾸면 이 질의도 고칩니다.
+*   기록에 옮기는 것은 `state` 별 행 수입니다. 회차 id 는 옮기지 않습니다.
 
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기
 
