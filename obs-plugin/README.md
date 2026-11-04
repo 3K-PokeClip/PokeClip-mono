@@ -349,7 +349,7 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 ```
 
 1. `docker compose up -d postgres redis media` · auth `./gradlew :auth:bootRun` · web `pnpm dev`
-2. 독 로고를 5번 눌러 개발자 모드를 켜고 인증 서버 `http://localhost:8082`, 수신 서버 `127.0.0.1` · SRT 암호 끔으로 바꾼다(또는 `pokeclip.json`에 `api_base`·`ingest_host`·`send_passphrase=false`) — 기본값이 원격 서버라 반드시 바꾼다. 직접 적은 주소는 `server_env`와 무관하게 그대로 쓴다
+2. 독 개발자 칸(개발 빌드는 기본 서버 환경이 dev라 처음부터 켜져 있다 — 로고 5번은 오히려 끈다. 안 보이면 그때 로고를 3초 안에 5번)에서 인증 서버 `http://localhost:8082`, 수신 서버 `127.0.0.1` · SRT 암호 끔으로 바꾼다(또는 `pokeclip.json`에 `api_base`·`ingest_host`·`send_passphrase=false`) — 기본값이 원격 서버라 반드시 바꾼다. 직접 적은 주소는 `server_env`와 무관하게 그대로 쓴다
 3. 웹 설정 › 플러그인에서 코드 발급 → 독에 입력
 4. OBS 방송 시작 → OBS 로그 `[pokeclip-obs] stream encoder … keyint_sec 0 -> 2` · `SRT output started`
 5. 녹화 조각의 키프레임: `docker cp pokeclip-media-1:/recordings/<token> ./rec` 후
