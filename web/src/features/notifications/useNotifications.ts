@@ -25,6 +25,7 @@ import {
 } from '@/api/editors';
 import { useMe } from '@/features/auth/useSession';
 import { useActiveChannel, useSwitchChannel } from '@/features/channel/useActiveChannel';
+import { track } from '@/lib/analytics';
 import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
 import { useToast, type ToastTone } from '@/ui';
 import {
@@ -129,11 +130,16 @@ export function useRespondInvitation(state: NotificationsState) {
       if (state.mockMode !== null) return resolveMock(n.id);
       await (answer === 'accept' ? acceptInvitation : declineInvitation)(n.payload.invitationId);
     },
-    onSuccess: (_data, { answer }) =>
+    onSuccess: (_data, { answer }) => {
+      // 채널 스위처에서 답한 것과 같은 이벤트 — 경로가 달라도 응답률 집계가 갈리지 않게(상대 이름 · 초대 번호는 싣지 않는다)
+      track('editor_invitation_responded', {
+        outcome: answer === 'accept' ? 'accepted' : 'declined',
+      });
       toast({
         tone: 'success',
         title: answer === 'accept' ? '초대를 수락했어요' : '초대를 거절했어요',
-      }),
+      });
+    },
     onError: (e: unknown) => toast({ tone: 'error', ...respondFailureMessage(e) }),
     onSettled: (_data, error) => {
       void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });

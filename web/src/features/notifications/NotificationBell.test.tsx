@@ -8,7 +8,16 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { NotificationBell } from './NotificationBell';
 
-const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+const { push, track } = vi.hoisted(() => ({ push: vi.fn(), track: vi.fn() }));
+
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
+
+/** 사용 통계로 나간 그 이벤트의 속성들 */
+const tracked = (name: string) =>
+  track.mock.calls.filter(([n]) => n === name).map(([, props]) => props as Record<string, unknown>);
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push, replace: vi.fn() }),
@@ -98,12 +107,27 @@ function seed() {
   ];
 }
 
+/** 서버 흉내: 읽음 · 모두 읽음 · 초대 답을 받으면 목록 상태를 실제처럼 바꾼다(다시 읽으면 바뀐 값이 온다) */
 function stub() {
   return stubFetch((url, init) => {
     if (url === '/api/auth/me') return jsonResponse(200, ME);
     if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, []);
     if (url === '/api/notifications') return jsonResponse(200, { items });
-    if (init?.method === 'POST') return new Response(null, { status: 204 });
+    if (init?.method === 'POST') {
+      const at = new Date().toISOString();
+      const read = /^\/api\/notifications\/([^/]+)\/read$/.exec(url);
+      if (read) items = items.map((w) => (w.id === read[1] ? { ...w, readAt: w.readAt ?? at } : w));
+      if (url === '/api/notifications/read-all')
+        items = items.map((w) => (w.held ? w : { ...w, readAt: w.readAt ?? at }));
+      const answered = /^\/api\/editor-invitations\/(\d+)\/(accept|decline)$/.exec(url);
+      if (answered)
+        items = items.map((w) =>
+          w.kind === 'EDITOR_INVITED' && w.data.invitationId === Number(answered[1])
+            ? { ...w, resolvedAt: at }
+            : w,
+        );
+      return new Response(null, { status: 204 });
+    }
     return jsonResponse(404);
   });
 }
@@ -129,6 +153,7 @@ async function openPanel(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => {
   seed();
   push.mockReset();
+  track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
   useChannelStore.setState({ userId: null, selected: null });
 });
@@ -334,6 +359,38 @@ describe('NotificationBell', () => {
       ]),
     );
     expect(await screen.findByText('초대를 수락했어요')).toBeInTheDocument();
+    expect(tracked('editor_invitation_responded')).toEqual([{ outcome: 'accepted' }]);
+  });
+
+  it('초대를 거절해도 읽음을 같이 보낸다 — 「처리됨」 줄이 안 읽음으로 남지 않는다', async () => {
+    items.push(
+      wire(
+        'n-invite',
+        1,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+    );
+    const { user, spy } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 4개' });
+    const panel = await openPanel(user);
+
+    await user.click(within(panel).getByRole('button', { name: '거절' }));
+    await user.click(within(panel).getByRole('button', { name: '거절하기' }));
+
+    await waitFor(() =>
+      expect(posts(spy)).toEqual([
+        '/api/notifications/n-invite/read',
+        '/api/editor-invitations/7/decline',
+      ]),
+    );
+    expect(await screen.findByText('초대를 거절했어요')).toBeInTheDocument();
+    expect(tracked('editor_invitation_responded')).toEqual([{ outcome: 'declined' }]);
+    // 서버가 다시 준 목록에서도 그 알림은 읽음 · 처리됨이라 종 숫자에 안 센다
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '알림 · 안 읽음 3개' })).toBeInTheDocument(),
+    );
   });
 
   it('열린 창은 접근성 위반이 없다', async () => {
