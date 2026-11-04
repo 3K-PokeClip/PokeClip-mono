@@ -170,7 +170,7 @@ function expectStillBlocked(
   expect(kinds(result.effects)).not.toContain('probe-live');
 }
 
-describe('끝남 대기의 되감기 조각 404 → blocked(계획 3-2)', () => {
+describe('끝남 대기의 되감기 조각 404 → 녹화로 정하기 전이면 blocked(계획 3-2)', () => {
   it('ENDLIST 뒤 404 는 막힘을 세우고 지금 프레임에서 멈춘다(cc 시나리오 A 셋째)', () => {
     const s = endedByEndlist();
     const done = feed(s, [gone(s)]);

@@ -34,9 +34,9 @@ import {
 import { SESSION_NOTICES, type PlaybackSessionState, type SessionEvent } from './rewindSwitch';
 
 // 이어 볼 자리(resumeAtMs)의 보존(POK-528 c7 — 계획 3-1 T4 · T5 · 3-4 · 18절 · Q1). 첫
-// 위치 전 · 시크 중의 폴링 교체 · 끝남 대기 이음 · 같은 자리 다시보기는 앞 재생기의
-// 마지막 자리(lastAtMs)가 아니라 시청자가 청한 자리를 쓰고, 이미 본 되감기 url 로는 다시
-// 잇지 않는다. 옛 판 표는 lastAtMs 를 읽으므로 음성 대조 트리에서는 단언으로 FAIL 한다.
+// 위치 전 · 시크 중의 폴링 교체 · 끝남 대기 이음 · 같은 자리 다시보기는 되감기 소스면 앞
+// 재생기의 마지막 자리(lastAtMs)가 아니라 시청자가 청한 자리를 쓰고(라이브 소스는 lastAtMs
+// 그대로), 이미 본 되감기 url 로는 다시 잇지 않는다. 옛 판 표는 lastAtMs 를 읽으므로 음성 대조 트리에서는 단언으로 FAIL 한다.
 
 beforeEach(resetEventKit);
 

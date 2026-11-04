@@ -4,7 +4,7 @@ import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
 // 목록 다시 받기로 선 새 되감기 재생기의 시작(POK-528 c7 — 계획 3-3 (2) · 8-3a). 세션은 같은
-// url 을 세대 + 1 로 다시 세우고 이어 볼 자리를 넘긴다. 재생기는 첫 LEVEL_LOADED 에서 새 목록
+// url 을 세대 + 1 로 다시 세우고 이어 볼 자리(모르면 목록 하한에서)를 넘긴다. 재생기는 첫 LEVEL_LOADED 에서 새 목록
 // 창 하한 아래를 자르고(armStart · startCut), 첫 LEVEL_UPDATED 에서 같은 함수로 「하한으로
 // 잘랐는가」 를 onListLoaded 의 startFloorCut 에 싣는다 — 세션의 하한 알림 판정 재료다.
 // hls.js 흉내는 useHlsPlayback.dvr404.test.ts 꼴이다(처음부터 off() 를 둔다).

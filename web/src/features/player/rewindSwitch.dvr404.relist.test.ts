@@ -38,8 +38,8 @@ import {
 import { isPlayerStartHeld, sessionView } from './sessionView';
 
 // 방송 중 되감기 조각 404 → 보던 목록 다시 받기(POK-528 c7 — 계획 3-2 · 3-3 · 3-4 · 3-5 ·
-// 8-1). 404 를 받은 되감기는 제어면을 묻지 않고 같은 url 의 재생기를 세대 + 1 로 다시
-// 세운다(relist). 새 재생기가 화면을 붙이기 전에 또 404 면 막힘이다. 옛 판 표는 404 에서
+// 8-1). 다시 받는 중이 아닌 되감기가 404 를 받으면 제어면을 묻지 않고 같은 url 의 재생기를
+// 세대 + 1 로 다시 세운다(relist). 새 재생기가 화면을 붙이기 전에 또 404 면 막힘이다. 옛 판 표는 404 에서
 // 제어면을 다시 읽으므로(recheck), 음성 대조 트리에서는 단언으로 FAIL 한다.
 // rewindSwitch.dvr404.recheck.test.ts(c3)를 대체한다.
 
@@ -62,7 +62,7 @@ function laterA2(): SessionEvent {
 
 const laterA2Range = { url: A2, firstPdtMs: T0 + 50 * MIN, headPdtMs: NOW + MIN };
 
-describe('되감기 조각 404 → 같은 목록을 다시 받는다(계획 3-2)', () => {
+describe('다시 받는 중이 아닌 되감기의 조각 404 → 같은 목록을 다시 받는다(계획 3-2)', () => {
   it('지금 세대 404 는 같은 url 을 세대 + 1 로 다시 세운다 — 확인된 자리에서 · 효과 [drop-pause-mark] · refresh 0', () => {
     const s = feed(rewindAt(P20), [laterA2()]).state;
     const done = feed(s, [gone(s)]);
