@@ -448,9 +448,9 @@ describe('LiveStatsPanel: 열쇠', () => {
     const { rerender, props } = panel({ cards: near(0) });
     rerender(<LiveStatsPanel {...props} cards={near(10_000)} />);
     rerender(<LiveStatsPanel {...props} cards={near(20_000)} />);
-    // 붙은 둘은 묶음 하나(개수 2)로, 떨어진 하나는 따로
+    // 붙은 둘은 묶음 하나(「2장」)로, 떨어진 하나는 따로
     expect(screen.getAllByRole('button', { name: /^하이라이트 / })).toHaveLength(2);
-    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2장$/);
   });
 });
 
@@ -463,10 +463,20 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     CARDS[1]!,
   ];
 
+  it('묶음은 묶인 카드들 가운데에 서고, 카드 자리마다 점을 찍는다: 첫 카드 자리에만 서면 카드가 빠져 보였다', () => {
+    const { container } = panel({ cards: near });
+    const marks = [...container.querySelectorAll<HTMLElement>(`.${styles.pinMark}`)];
+    expect(marks).toHaveLength(2);
+    const [a, b] = marks.map((m) => parseFloat(m.style.left));
+    const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
+    expect(a).toBeLessThan(b!);
+    expect(parseFloat(group.style.left)).toBeCloseTo((a! + b!) / 2, 5);
+  });
+
   it('겹치는 핀은 개수 하나로 묶고, 떨어진 핀은 하나짜리 그대로다', () => {
     panel({ cards: near });
     const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
-    expect(group).toHaveTextContent(/^2$/);
+    expect(group).toHaveTextContent(/^2장$/);
     expect(group).toHaveAttribute('aria-expanded', 'false');
     // 묶인 카드는 따로 핀이 없다
     expect(screen.queryByRole('button', { name: /^하이라이트 #12/ })).toBeNull();
@@ -571,7 +581,7 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     act(() =>
       resize([{ contentRect: { width: 1000 } } as ResizeObserverEntry], {} as ResizeObserver),
     );
-    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2장$/);
     act(() =>
       resize([{ contentRect: { width: 1092 } } as ResizeObserverEntry], {} as ResizeObserver),
     );

@@ -2,10 +2,11 @@
 
 // 실시간 통계 — 위쪽 숫자 줄 + 한 상자 두 층 그래프(위 시청자 선 · 아래 채팅 막대) + 카테고리 띠 + 시간축.
 // 하이라이트는 그래프 위 핀(누르면 그 카드 시점으로 간다)과 막대 색(포인트색)으로, 후원은 숫자 줄과 툴팁에만 둔다(막대 아래 후원
-// 줄은 사용자 결정으로 뺐다). 겹치는 핀은 개수 묶음이고, 누르면 카드 목록을 띄운다(POK-500). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
+// 줄은 사용자 결정으로 뺐다). 겹치는 핀은 「N장」 묶음(묶인 카드 가운데 + 카드 자리마다 점)이고, 누르면 카드 목록을 띄운다(POK-500). 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다(statsChart.layoutFor). 스크롤해도
 // 오른쪽 눈금과 층 이름은 제자리다. 방송 중이면 처음에 오른쪽 끝(지금)을 보여 주고, 끝에 붙어 있으면 새 칸이 와도 끝을 따라간다.
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -195,7 +196,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
         </span>
         {cards.length > 0 ? (
           <span className={styles.headHint}>
-            핀을 누르면 그 카드로, 숫자 묶음은 목록에서 골라요
+            핀을 누르면 그 카드로, 「N장」 묶음은 목록에서 골라요
           </span>
         ) : null}
       </div>
@@ -354,9 +355,12 @@ function Timeline({
     return {
       inView: cardsIn,
       hot: new Set(cardsIn.map((c) => bucketIndexAt(view, c.atMs))),
+      // 묶음은 묶인 카드들 가운데에 선다(x). 첫 카드 자리에 세우면 나머지 카드 자리가 비어, 카드가 빠진 것처럼 보였다(2026-11-04)
       pins: clusterPins(
         cardsIn.map((c) => ({ card: c, x: xOf(view, c.atMs, contentW) })),
         PIN_GAP * u,
+      ).map((g) =>
+        g.items.length > 1 ? { ...g, x: (g.items[0]!.x + g.items[g.items.length - 1]!.x) / 2 } : g,
       ),
     };
   }, [cards, view, contentW, u]);
@@ -630,28 +634,39 @@ function Timeline({
               if (items.length > 1) {
                 const open = openGroup?.first.card.id === first.card.id;
                 return (
-                  <button
-                    key={first.card.id}
-                    type="button"
-                    className={styles.pinGroup}
-                    style={{ left: x }}
-                    aria-expanded={open}
-                    aria-controls={open ? pinListId : undefined}
-                    onPointerMove={(e) =>
-                      onPinPointerMove(
-                        e,
-                        items.map((p) => p.card),
-                      )
-                    }
-                    onClick={(e) => {
-                      if (drag.current?.moved) return;
-                      pinOpenerRef.current = e.currentTarget;
-                      setOpenPin(open ? null : first.card.id);
-                    }}
-                    aria-label={`하이라이트 ${items.length}개 묶음 · ${first.card.timestamp}부터 · 눌러서 고르기`}
-                  >
-                    {items.length}
-                  </button>
+                  <Fragment key={first.card.id}>
+                    {/* 묶인 카드 자리마다 핀 줄 바닥에 점을 찍는다: 묶음 하나만 서면 몇 장이 어디 있는지 안 보였다 */}
+                    {items.map((it) => (
+                      <span
+                        key={it.card.id}
+                        className={it.card.manual ? styles.pinMarkManual : styles.pinMark}
+                        style={{ left: it.x }}
+                        aria-hidden
+                      />
+                    ))}
+                    <button
+                      type="button"
+                      className={styles.pinGroup}
+                      style={{ left: x }}
+                      aria-expanded={open}
+                      aria-controls={open ? pinListId : undefined}
+                      onPointerMove={(e) =>
+                        onPinPointerMove(
+                          e,
+                          items.map((p) => p.card),
+                        )
+                      }
+                      onClick={(e) => {
+                        if (drag.current?.moved) return;
+                        pinOpenerRef.current = e.currentTarget;
+                        setOpenPin(open ? null : first.card.id);
+                      }}
+                      aria-label={`하이라이트 ${items.length}개 묶음 · ${first.card.timestamp}부터 · 눌러서 고르기`}
+                    >
+                      {/* 숫자만 쓰면 자동 카드 번호(#12)처럼 읽혔다 */}
+                      {`${items.length}장`}
+                    </button>
+                  </Fragment>
                 );
               }
               return (
