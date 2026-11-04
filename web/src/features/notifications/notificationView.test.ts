@@ -140,6 +140,11 @@ describe('시각 표기', () => {
     expect(dayLabel(new Date(2026, 10, 2, 23, 59).toISOString(), NOW)).toBe('이전');
   });
 
+  it('시각을 못 읽으면 비우고 날짜 묶음은 「이전」 — 「NaN월 NaN일」이 그려지지 않게 (PR #481 5차)', () => {
+    expect(notificationTime('', NOW)).toBe('');
+    expect(dayLabel('', NOW)).toBe('이전');
+  });
+
   it('지난 기한은 0일', () => {
     expect(daysUntil(new Date(2026, 10, 1).toISOString(), NOW)).toBe(0);
   });

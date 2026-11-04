@@ -179,6 +179,8 @@ export function describeNotification(n: AppNotification, now: number): Notificat
 /** 오늘이면 「n분 전」, 어제면 「어제 오후 7:45」, 그 전이면 「11월 2일 (월)」 */
 export function notificationTime(iso: string, now: number): string {
   const t = Date.parse(iso);
+  // 못 읽으면(서버가 createdAt을 빼먹음) 비운다 — 「NaN월 NaN일 (undefined)」가 그려지지 않게. 날짜 묶음은 「이전」으로 간다(PR #481 5차)
+  if (Number.isNaN(t)) return '';
   const today = startOfDay(now);
   if (t >= today) {
     const min = Math.max(0, Math.floor((now - t) / 60_000));

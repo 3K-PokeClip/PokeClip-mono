@@ -404,7 +404,14 @@ function NotificationRow({
         type="button"
         className={styles.row}
         onClick={onOpen}
-        aria-label={`${unread ? '안 읽음 · ' : ''}${view.title} · ${view.detail} · ${notificationTime(n.createdAt, now)}`}
+        aria-label={[
+          unread ? '안 읽음' : '',
+          view.title,
+          view.detail,
+          notificationTime(n.createdAt, now),
+        ]
+          .filter(Boolean)
+          .join(' · ')}
       >
         <KindIcon kind={n.payload.kind} tone={view.tone} />
         <span className={styles.text}>
