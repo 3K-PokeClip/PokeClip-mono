@@ -123,13 +123,26 @@ export function describeNotification(n: AppNotification, now: number): Notificat
         deadline: null,
       };
     case 'VOD_EXPIRING': {
-      const days = daysUntil(p.deletesAt, now);
-      return {
-        title: days === 0 ? '다시보기가 오늘 삭제돼요' : `다시보기가 ${days}일 뒤 삭제돼요`,
-        detail: `${quoted(p.broadcastTitle, '제목 없는 방송')} · ${dateText(new Date(p.deletesAt))} 삭제 · 60일 보관`,
+      const broadcast = quoted(p.broadcastTitle, '제목 없는 방송');
+      const where = {
         tone: 'warning',
         href: `/broadcast/vod/${encodeURIComponent(p.streamId)}`,
         goLabel: '카드 보기',
+      } as const;
+      // 날짜를 못 읽으면(서버가 deletesAt을 빼먹어 ''로 옴) 날짜 없이 쓴다 — 「NaN일 뒤」 · 「NaN월 NaN일」이 그려지지 않게(PR #481 3차)
+      if (Number.isNaN(Date.parse(p.deletesAt))) {
+        return {
+          ...where,
+          title: '다시보기가 곧 삭제돼요',
+          detail: `${broadcast} · 60일 보관`,
+          deadline: null,
+        };
+      }
+      const days = daysUntil(p.deletesAt, now);
+      return {
+        ...where,
+        title: days === 0 ? '다시보기가 오늘 삭제돼요' : `다시보기가 ${days}일 뒤 삭제돼요`,
+        detail: `${broadcast} · ${dateText(new Date(p.deletesAt))} 삭제 · 60일 보관`,
         deadline: days === 0 ? '오늘' : `${days}일 남음`,
       };
     }

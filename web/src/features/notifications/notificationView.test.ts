@@ -80,6 +80,20 @@ describe('describeNotification', () => {
     expect(v.href).toBe('/broadcast/vod/s%201');
   });
 
+  it('삭제 날짜가 비었으면 날짜 없이 쓴다 — 「NaN일」이 그려지지 않게 (PR #481 3차)', () => {
+    const v = describeNotification(
+      n('a', 1, { kind: 'VOD_EXPIRING', streamId: 's1', broadcastTitle: '롤 랭크', deletesAt: '' }),
+      NOW,
+    );
+    expect(v).toMatchObject({
+      title: '다시보기가 곧 삭제돼요',
+      detail: '「롤 랭크」 · 60일 보관',
+      deadline: null,
+      href: '/broadcast/vod/s1',
+    });
+    expect(JSON.stringify(v)).not.toContain('NaN');
+  });
+
   it('방송 종료는 길이와 카드 수를 쓴다', () => {
     const v = describeNotification(
       n('a', 1, {
