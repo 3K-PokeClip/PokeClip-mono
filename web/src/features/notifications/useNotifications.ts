@@ -24,10 +24,10 @@ import {
 import { useMe } from '@/features/auth/useSession';
 import { useActiveChannel, useSwitchChannel } from '@/features/channel/useActiveChannel';
 import { useInvitationResponse } from '@/features/channel/useInvitationResponse';
-import { captureSession } from '@/stores/auth';
+import { captureSession, onSessionAdvance } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { useSessionMutation } from '@/lib/useSessionMutation';
-import { useToast, type ToastTone } from '@/ui';
+import { useToast, type ToastOptions, type ToastTone } from '@/ui';
 import {
   fetchMockNotifications,
   markAllMockRead,
@@ -246,16 +246,26 @@ const TOAST_TONE: Record<NotificationTone, ToastTone> = {
 /** 한 번에 이보다 많이 오면 하나씩 띄우지 않고 「새 알림 n개」 하나로 */
 const MAX_SINGLE_TOASTS = 2;
 
+// 새 알림 토스트가 떠 있는 채 계정이 바뀌면(로그아웃 · 다른 탭 로그인) 앞 계정의 알림(채널 이름 · 단추)이 다음 사람 화면에
+// 남는다 — 「중요」 할 일은 닫을 때까지 남는다(PR #481 3차). 띄운 토스트를 적어 두었다가 세션이 바뀌면 닫는다. 종이 없는
+// 화면에서 바뀌어도 닫히게 모듈에 둔다: 토스트 묶음(ToastProvider)은 앱 전체에 살아 있어 마지막 종이 넘긴 dismiss를 그대로 쓴다
+const raisedToasts = new Set<string>();
+let dismissRaised: ((id: string) => void) | null = null;
+onSessionAdvance(() => {
+  raisedToasts.forEach((id) => dismissRaised?.(id));
+  raisedToasts.clear();
+});
+
 /**
  * 새로 온 알림을 오른쪽 아래 토스트로 알린다. 처음 읽은 목록은 알리지 않는다(창을 열 때마다 쌓인 걸 다시 울리지 않게).
  * 쌓여 있던 것(held)이 풀리면(방송이 끝남) 하나씩이 아니라 「방송 중 알림 n개」 하나로 — 디자인 1n ②.
  * 「중요」로 받은 할 일(연동 만료 · 초대)은 닫을 때까지 남긴다.
  *
  * 토스트 단추는 이 훅을 부른 종의 함수를 쥐지 않고 우편함(notificationRequests)에 부탁만 넣는다: 화면을 옮겨 종이 바뀐 뒤에
- * 눌러도 지금 떠 있는 종이 받아 처리한다.
+ * 눌러도 지금 떠 있는 종이 받아 처리한다. 계정이 바뀌면 띄운 토스트를 닫고, 단추도 띄운 세션에서만 움직인다.
  */
 export function useArrivalToasts(state: NotificationsState) {
-  const { toast } = useToast();
+  const { toast: showToast, dismiss } = useToast();
   const sendRequest = useNotificationRequests((s) => s.send);
   const router = useRouter();
   // 받을 종이 없는 화면(전체 화면 편집기)에서 누르면 종이 있는 홈으로 옮긴다 — 부탁은 남아 홈의 종이 처리한다
@@ -268,12 +278,37 @@ export function useArrivalToasts(state: NotificationsState) {
   );
   const known = useRef<Map<string, boolean> | null>(null);
 
+  useEffect(() => {
+    dismissRaised = dismiss;
+  }, [dismiss]);
+  // 계정이 바뀌면 처음 읽는 목록부터 다시: 앞 계정 id 맵과 대조하면 새 계정의 기존 알림이 모두 「새 알림」으로 울린다
+  // (종은 그대로 마운트된 채 Providers가 캐시만 비운다). 바뀐 순간 들고 있던 목록(앞 계정 것)은 기준으로도 쓰지 않는다 —
+  // 캐시가 비기 전에 다시 그려지면 그 목록이 기준이 되어 새 계정 목록 전체가 새 알림이 된다
+  const lastItems = useRef<AppNotification[] | null>(null);
+  const staleItems = useRef<AppNotification[] | null>(null);
+  useEffect(
+    () =>
+      onSessionAdvance(() => {
+        known.current = null;
+        staleItems.current = lastItems.current;
+      }),
+    [],
+  );
+
   // 판정은 자르기 전 목록으로: 보이는 목록으로 하면 상한 밖에 있던 옛 알림이 자리가 나서 들어올 때 「새 알림」으로 울린다
   const { allItems: items, enabled } = state;
   const loaded = enabled && !state.isPending && !state.isError;
   useEffect(() => {
-    if (!loaded) return;
-    const openPanel = () => send({ kind: 'panel' });
+    lastItems.current = items;
+    if (!loaded || items === staleItems.current) return;
+    staleItems.current = null;
+    const isSameSession = captureSession();
+    const toast = (options: ToastOptions) => {
+      raisedToasts.add(showToast(options));
+    };
+    const openPanel = () => {
+      if (isSameSession()) send({ kind: 'panel' });
+    };
     const seen = known.current;
     if (seen === null) {
       known.current = new Map(items.map((n) => [n.id, n.held]));
@@ -319,9 +354,14 @@ export function useArrivalToasts(state: NotificationsState) {
         dedupeKey: `notification-${n.id}`,
         ...(sticky ? { duration: 0 } : {}),
         action: view.goLabel
-          ? { label: view.goLabel, onClick: () => send({ kind: 'item', notification: n }) }
+          ? {
+              label: view.goLabel,
+              onClick: () => {
+                if (isSameSession()) send({ kind: 'item', notification: n });
+              },
+            }
           : { label: '알림 보기', onClick: openPanel },
       });
     }
-  }, [items, loaded, toast, send]);
+  }, [items, loaded, showToast, send]);
 }

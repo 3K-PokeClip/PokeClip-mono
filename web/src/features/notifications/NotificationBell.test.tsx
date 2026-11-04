@@ -709,6 +709,81 @@ describe('NotificationBell', () => {
     expect(await screen.findByRole('dialog', { name: '알림' })).toBeInTheDocument();
   });
 
+  it('계정이 바뀌면 앞 계정의 토스트를 닫고, 새 계정의 기존 알림은 새 알림으로 울리지 않는다 (PR #481 3차)', async () => {
+    const { queryClient } = renderBell();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    // 앞 계정에 「중요」 할 일이 와서 닫을 때까지 남는 토스트가 뜬다
+    items = [
+      wire('n-chat', 0, 'CHAT_LINK_BROKEN', { platform: 'SOOP' }, { important: true }),
+      ...items,
+    ];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    expect(await screen.findByText('SOOP 채팅을 못 모으고 있어요')).toBeInTheDocument();
+
+    // 다른 탭에서 다른 계정으로 로그인: 세션이 바뀌고, 종은 그대로인 채 목록을 새 계정 것으로 다시 읽는다
+    act(() =>
+      useAuthStore.getState().setTokens({ accessToken: 'access-2', refreshToken: 'refresh-2' }),
+    );
+    await waitFor(() => expect(screen.queryByText('SOOP 채팅을 못 모으고 있어요')).toBeNull());
+    items = [
+      wire('m-1', 1, 'CLIP_UPLOADED', { clipTitle: '새 계정 클립', count: 1, privacy: 'PUBLIC' }),
+      wire('m-2', 2, 'CLIP_UPLOADED', { clipTitle: '새 계정 둘째', count: 1, privacy: 'PUBLIC' }),
+    ];
+    await act(() => queryClient.resetQueries());
+    await screen.findByRole('button', { name: '알림 · 안 읽음 2개' });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByText('「새 계정 클립」 · 공개')).toBeNull();
+    expect(screen.queryByText('「새 계정 둘째」 · 공개')).toBeNull();
+  });
+
+  it('종이 없는 화면에서 계정이 바뀌어도 앞 계정의 토스트를 닫고, 남은 부탁은 다음 종이 처리하지 않는다 (PR #481 3차)', async () => {
+    function Screens() {
+      const [screenName, setScreen] = useState<'home' | 'editor' | 'back'>('home');
+      return (
+        <>
+          {screenName === 'home' ? <NotificationBell key="header" place="header" /> : null}
+          {screenName === 'back' ? <NotificationBell key="header-2" place="header" /> : null}
+          <button type="button" onClick={() => setScreen('editor')}>
+            편집기로
+          </button>
+          <button type="button" onClick={() => setScreen('back')}>
+            홈 도착
+          </button>
+        </>
+      );
+    }
+    stub();
+    const { queryClient } = renderWithProviders(<Screens />);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: '알림 · 안 읽음 3개' });
+    items = [
+      wire(
+        'n-invite',
+        0,
+        'EDITOR_INVITED',
+        { invitationId: 7 },
+        { channelId: 9, channelName: '라면왕', important: true },
+      ),
+      wire('n-chat', 0, 'CHAT_LINK_BROKEN', { platform: 'SOOP' }, { important: true }),
+      ...items,
+    ];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+    expect(await screen.findByText('SOOP 채팅을 못 모으고 있어요')).toBeInTheDocument();
+
+    // 종이 없는 화면에서 초대 토스트의 「알림 보기」를 눌러 부탁이 남은 채 다른 계정으로 바뀐다
+    await user.click(screen.getByRole('button', { name: '편집기로' }));
+    await user.click(screen.getByRole('button', { name: '알림 보기' }));
+    act(() =>
+      useAuthStore.getState().setTokens({ accessToken: 'access-2', refreshToken: 'refresh-2' }),
+    );
+    await waitFor(() => expect(screen.queryByText('SOOP 채팅을 못 모으고 있어요')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: '홈 도착' }));
+    await screen.findByRole('button', { name: /^알림/ });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByRole('dialog', { name: '알림' })).toBeNull();
+  });
+
   it('편집자 초대는 수락을 바로 보내고, 거절은 카드 안에서 한 번 더 묻는다', async () => {
     items.push(
       wire(

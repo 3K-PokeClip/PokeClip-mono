@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import type { AppNotification } from '@/api/notifications';
+import { onSessionAdvance } from '@/stores/auth';
 
 // 토스트 단추가 「지금 떠 있는 종」에게 일을 맡기는 우편함(POK-540, PR #481 리뷰).
 // 토스트는 앱 전체의 ToastProvider에 남는데 종은 화면마다 바뀐다(홈 헤더 ↔ 사이드바). 토스트를 띄운 종의 함수를 그대로 쥐고 있으면
@@ -48,3 +49,7 @@ export const useNotificationRequests = create<NotificationRequestState>()((set, 
     return request;
   },
 }));
+
+// 계정이 바뀌면(로그아웃 · 다른 탭 로그인) 남은 부탁을 버린다: 앞 계정의 알림을 다음 계정의 종이 열어 남의 id로 읽음을 보내거나
+// 앞 계정 채널로 바꾸지 않게(PR #481 3차). 종 수(bells)는 화면에 떠 있는 종의 것이라 그대로 둔다
+onSessionAdvance(() => useNotificationRequests.setState({ request: null, pending: false }));
