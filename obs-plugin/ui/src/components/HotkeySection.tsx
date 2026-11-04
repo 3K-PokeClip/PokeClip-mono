@@ -16,8 +16,9 @@ import { Button } from './ui';
 // (다른 곳을 눌러 끝났으면 그 자리를 존중해 돌려주지 않는다).
 const CAPTURE_MAX_MS = 25_000; // 플러그인 mark-policy.hpp kHotkeyCaptureUiMs와 같은 값 — 막기 30초보다 먼저
 const CHANGE_BUTTON_ID = 'hotkey-change';
-// 키 아래 줄 — 받기 중 오류·시간 초과만. 바꾼 결과는 아래 토스트로 알린다(notify).
-type Message = { tone: 'error' | 'info'; text: string };
+// 키 아래 줄 — 받기 중 오류·시간 초과, 그리고 바꾼 뒤에도 알아야 할 경고(다른 OBS 단축키와 겹침·설정 파일 저장 실패).
+// 「바꿨어요」 자체는 아래 토스트로 알린다(notify) — 경고는 토스트가 사라진 뒤에도 남아야 해서 여기 둔다.
+type Message = { tone: 'error' | 'info' | 'warn'; text: string };
 
 export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge: Bridge; bare?: boolean }) {
   const [capturing, setCapturing] = useState(false);
@@ -131,11 +132,13 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
     setCapturing(false);
     setPreview('');
     if (r.ok) {
-      const shared = r.conflict ? ` OBS 「${r.conflict}」 단축키와 같은 키라 둘 다 눌려요.` : '';
+      const shared = r.conflict ? `OBS 「${r.conflict}」 단축키와 같은 키라 둘 다 눌려요.` : '';
       // 프로필에 못 적었다 — 지금은 바뀌었지만 다음 실행은 프로필의 예전 키를 먼저 읽는다
-      const unsaved = r.saved === false ? ' 다만 OBS 설정 파일에 저장하지 못해, OBS를 다시 켜면 예전 키로 돌아갈 수 있어요.' : '';
-      const done = `단축키를 바꿨어요 (${r.label || step.label})`;
-      notify(shared || unsaved ? 'warning' : 'success', shared || unsaved ? `${done}.${shared}${unsaved}` : done);
+      const unsaved = r.saved === false ? 'OBS 설정 파일에 저장하지 못해, OBS를 다시 켜면 예전 키로 돌아갈 수 있어요.' : '';
+      notify('success', `단축키를 바꿨어요 (${r.label || step.label})`);
+      // 경고가 있으면 키 아래 남기고, 없으면 받는 중에 뜬 오류(쓸 수 없는 키 등)를 지운다
+      const warning = [shared, unsaved].filter(Boolean).join(' ');
+      setMessage(warning ? { tone: 'warn', text: warning } : null);
     } else {
       void queue(() => bridge.hotkeyCapture(false));
       setMessage({ tone: 'error', text: reasonText(r.reason) });
@@ -172,7 +175,11 @@ export function HotkeySection({ hotkey, bridge, bare }: { hotkey: string; bridge
         </div>
       )}
       {message ? (
-        <p class={message.tone === 'error' ? styles.inlineError : styles.note} role="status">
+        <p
+          class={message.tone === 'error' ? styles.inlineError : styles.note}
+          data-tone={message.tone === 'warn' ? 'warn' : undefined}
+          role="status"
+        >
           {message.text}
         </p>
       ) : (

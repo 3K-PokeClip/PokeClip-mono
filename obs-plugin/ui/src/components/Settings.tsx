@@ -223,6 +223,7 @@ export function SettingsPanel({
     e.preventDefault();
     if (locked) return;
     setServerSaving(true);
+    setServerError(''); // 값을 그대로 두고 다시 눌러 성공하면 옛 오류가 남지 않게
     const r = await bridge.putSettings(draft);
     setServerSaving(false);
     if (r.ok) {
