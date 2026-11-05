@@ -709,7 +709,12 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
                   ].slice(-720),
                 });
                 // 정보 바의 카테고리 사진은 시점별 기록에서 온다. 첫 사진은 기록의 다음 주기를 기다리지 않고 바로 읽는다(POK-552)
-                refetchTimelineForFirstImage(queryClient, streamId, ev.categoryImageUrl);
+                refetchTimelineForFirstImage(
+                  queryClient,
+                  streamId,
+                  ev.categoryImageUrl,
+                  ev.platform,
+                );
               } catch {
                 /* 무시 */
               }

@@ -35,8 +35,11 @@ import {
   useBroadcastTimeline,
 } from './useBroadcastTimeline';
 
-const segment = (categoryImageUrl: string | null): BroadcastTimeline['segments'][number] => ({
-  platform: 'CHZZK',
+const segment = (
+  categoryImageUrl: string | null,
+  platform = 'CHZZK',
+): BroadcastTimeline['segments'][number] => ({
+  platform,
   from: '2026-11-04T00:00:00Z',
   until: null,
   title: '제목',
@@ -56,10 +59,20 @@ describe('liveTimelineIntervalMs', () => {
     expect(liveTimelineIntervalMs(timelineOf(segment(null)), 1)).toBe(TIMELINE_FIRST_IMAGE_MS);
   });
 
-  it('사진이 하나라도 있으면 30초다: 바뀐 카테고리는 지금처럼 1분 안에 따라온다', () => {
+  it('사진이 생기면 30초다: 바뀐 카테고리는 지금처럼 1분 안에 따라온다', () => {
     expect(
       liveTimelineIntervalMs(timelineOf(segment(null), segment('https://img/talk.png')), 1),
     ).toBe(TIMELINE_LIVE_MS);
+  });
+
+  it('동시 송출이면 기록에 오른 플랫폼마다 사진이 생겨야 30초다: 정보 바는 시청자가 많은 플랫폼 사진을 쓴다', () => {
+    const chzzkOnly = timelineOf(segment('https://img/talk.png'), segment(null, 'SOOP'));
+    expect(liveTimelineIntervalMs(chzzkOnly, 1)).toBe(TIMELINE_FIRST_IMAGE_MS);
+    const both = timelineOf(
+      segment('https://img/talk.png'),
+      segment('https://img/talk.png', 'SOOP'),
+    );
+    expect(liveTimelineIntervalMs(both, 1)).toBe(TIMELINE_LIVE_MS);
   });
 
   it('짧은 간격을 다 쓰면 사진이 없어도 30초다: 사진을 끝내 못 받는 방송이 5초로 계속 묻지 않게', () => {
@@ -144,6 +157,29 @@ describe('useBroadcastTimeline: 방송 중 다시 읽는 주기', () => {
 
     // 사진이 생긴 뒤로는 통로가 와도 30초 주기를 따른다: 첫 사진만 앞당긴다
     act(() => refetchTimelineForFirstImage(client, 's1', 'https://img/game.png'));
+    await advance(0);
+    expect(api.reads).toBe(2);
+  });
+
+  it('동시 송출이면 그 관측의 플랫폼 구간에 사진이 없을 때 다시 읽는다: 다른 플랫폼 사진으로 갈음하지 않는다', async () => {
+    const client = createTestQueryClient();
+    // 치지직 관측이 먼저 적혔다. SOOP은 아직 사진이 없다
+    api.timeline = timelineOf(segment('https://img/talk.png'), segment(null, 'SOOP'));
+    renderHook(() => useBroadcastTimeline('s1', 'live'), { wrapper: makeQueryWrapper(client) });
+    await advance(0);
+    expect(api.reads).toBe(1);
+
+    // 치지직 관측은 이미 사진이 있다
+    act(() => refetchTimelineForFirstImage(client, 's1', 'https://img/talk.png', 'CHZZK'));
+    await advance(0);
+    expect(api.reads).toBe(1);
+
+    // SOOP 관측이 빌린 사진을 싣고 왔다: 정보 바가 SOOP을 보면 이 사진을 기다린다
+    api.timeline = timelineOf(
+      segment('https://img/talk.png'),
+      segment('https://img/talk.png', 'SOOP'),
+    );
+    act(() => refetchTimelineForFirstImage(client, 's1', 'https://img/talk.png', 'SOOP'));
     await advance(0);
     expect(api.reads).toBe(2);
   });

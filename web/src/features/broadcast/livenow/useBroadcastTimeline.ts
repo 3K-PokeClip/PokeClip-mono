@@ -19,17 +19,34 @@ export const TIMELINE_FIRST_IMAGE_MS = 5_000;
  */
 export const TIMELINE_FIRST_IMAGE_TRIES = 36;
 
-/** 기록에 카테고리 사진이 하나라도 있나. 기록을 못 읽었으면(undefined) 없다 */
-export function hasCategoryImage(timeline: BroadcastTimeline | undefined): boolean {
-  return timeline?.segments.some((s) => s.categoryImageUrl !== null) ?? false;
+/**
+ * 기록에 그 플랫폼의 카테고리 사진이 있나. 플랫폼을 모르면(null · 옛 서버) 아무 플랫폼이나 본다. 기록을 못 읽었으면(undefined) 없다.
+ * 동시 송출이면 정보 바는 시청자가 많은 플랫폼의 구간 사진을 쓰므로(categoryAt · primaryPlatform), 다른 플랫폼 사진으로 갈음하지 않는다
+ */
+export function hasCategoryImage(
+  timeline: BroadcastTimeline | undefined,
+  platform?: string | null,
+): boolean {
+  return (
+    timeline?.segments.some(
+      (s) => s.categoryImageUrl !== null && (platform == null || s.platform === platform),
+    ) ?? false
+  );
+}
+
+/** 기록에 오른 플랫폼마다 사진이 있나. 구간이 없으면 거짓이다 */
+function everyPlatformHasImage(timeline: BroadcastTimeline | undefined): boolean {
+  const platforms = new Set(timeline?.segments.map((s) => s.platform));
+  return platforms.size > 0 && [...platforms].every((p) => hasCategoryImage(timeline, p));
 }
 
 /**
  * 방송 중 기록을 다시 읽는 간격. 첫 사진 전에는 TIMELINE_FIRST_IMAGE_MS, 사진이 생기거나 짧은 간격을 tries번 다 쓰면 TIMELINE_LIVE_MS다.
+ * 동시 송출이면 기록에 오른 플랫폼마다 사진이 생겨야 첫 사진이 왔다고 본다: 정보 바가 어느 플랫폼 사진을 쓸지는 시청자 수로 바뀐다.
  * tries는 그 기록을 읽은 횟수(성공 + 실패)다
  */
 export function liveTimelineIntervalMs(timeline: BroadcastTimeline | undefined, tries: number) {
-  return hasCategoryImage(timeline) || tries >= TIMELINE_FIRST_IMAGE_TRIES
+  return everyPlatformHasImage(timeline) || tries >= TIMELINE_FIRST_IMAGE_TRIES
     ? TIMELINE_LIVE_MS
     : TIMELINE_FIRST_IMAGE_MS;
 }
@@ -40,16 +57,18 @@ const timelineKey = (streamId: string, status: LiveBroadcastStatus) =>
 /**
  * 통로(SSE broadcast-info)가 카테고리 사진을 싣고 왔는데 방송 중 기록에 아직 사진이 없으면 기록을 바로 다시 읽는다(POK-552). 수집기는
  * 관측을 기록에 적은 뒤 통로로 밀어서(치지직 · SOOP 모두), 이때 읽으면 사진이 있다. 첫 사진만 앞당긴다: 기록에 사진이 생긴 뒤 바뀐
- * 카테고리는 지금처럼 30초 주기로 따라온다. 사진을 안 실은 관측이면 다시 읽어도 사진이 없으니 그대로 둔다
+ * 카테고리는 지금처럼 30초 주기로 따라온다. 사진을 안 실은 관측이면 다시 읽어도 사진이 없으니 그대로 둔다. 사진은 그 관측의 플랫폼
+ * 구간에서 본다: 동시 송출이면 다른 플랫폼 사진이 먼저 있어도 정보 바(시청자가 많은 플랫폼)는 이 플랫폼 사진을 기다릴 수 있다
  */
 export function refetchTimelineForFirstImage(
   queryClient: QueryClient,
   streamId: string,
   categoryImageUrl: string | null | undefined,
+  platform?: string | null,
 ): void {
   if (!categoryImageUrl || streamId === '') return;
   const queryKey = timelineKey(streamId, 'live');
-  if (hasCategoryImage(queryClient.getQueryData<BroadcastTimeline>(queryKey))) return;
+  if (hasCategoryImage(queryClient.getQueryData<BroadcastTimeline>(queryKey), platform)) return;
   // 읽는 중이면 그 읽기를 버리고 새로 읽는다. 그냥 다시 읽기만 걸면 첫 답을 기다리는 쿼리는 이미 떠난 읽기를 그대로 돌려준다
   // (react-query는 데이터가 있을 때만 떠난 읽기를 끊는다). 그 읽기는 관측이 적히기 전에 떠났을 수 있어 사진이 없다
   void queryClient
