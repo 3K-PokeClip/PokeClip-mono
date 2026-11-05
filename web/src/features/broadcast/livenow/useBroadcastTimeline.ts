@@ -102,7 +102,8 @@ export function useBroadcastTimelineQuery(
   const live = status === 'live';
   return useQuery({
     queryKey: timelineKey(streamId, status),
-    queryFn: () => fetchBroadcastTimeline(streamId),
+    // signal을 넘겨 버린 읽기(refetchTimelineForFirstImage의 cancelQueries)는 요청까지 끊는다
+    queryFn: ({ signal }) => fetchBroadcastTimeline(streamId, signal),
     enabled: active && streamId !== '' && (live || status === 'ended'),
     staleTime: live ? TIMELINE_LIVE_MS : Infinity,
     // 간격은 읽을 때마다 다시 정해진다(react-query가 쿼리가 바뀔 때마다 타이머를 다시 건다): 첫 사진이 오는 순간 30초로 돌아간다

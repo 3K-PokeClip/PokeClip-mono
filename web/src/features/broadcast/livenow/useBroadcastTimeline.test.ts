@@ -10,11 +10,14 @@ const api = vi.hoisted(() => ({
   /** 참이면 다음 읽기는 release()까지 답하지 않는다. 답은 떠난 때의 기록이다 */
   holdNext: false,
   release: null as (() => void) | null,
+  /** 읽기마다 받은 signal(요청을 끊는 데 쓴다) */
+  signals: [] as (AbortSignal | undefined)[],
 }));
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/clipEditor')>()),
-  fetchBroadcastTimeline: async () => {
+  fetchBroadcastTimeline: async (_streamId: string, signal?: AbortSignal) => {
     api.reads += 1;
+    api.signals.push(signal);
     const snapshot = api.timeline;
     if (api.holdNext) {
       api.holdNext = false;
@@ -90,6 +93,7 @@ describe('useBroadcastTimeline: 방송 중 다시 읽는 주기', () => {
     api.timeline = timelineOf();
     api.holdNext = false;
     api.release = null;
+    api.signals = [];
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -198,6 +202,9 @@ describe('useBroadcastTimeline: 방송 중 다시 읽는 주기', () => {
     await advance(0);
     expect(api.reads).toBe(2);
     expect(result.current?.segments[0]?.categoryImageUrl).toBe('https://img/talk.png');
+    // 버린 읽기는 요청까지 끊는다: 답만 버리면 요청은 clip · 수집기까지 끝까지 돈다
+    expect(api.signals[0]?.aborted).toBe(true);
+    expect(api.signals[1]?.aborted).toBe(false);
 
     // 버린 읽기의 늦은 답(관측 전 기록)은 사진을 지우지 못한다
     act(() => api.release?.());
