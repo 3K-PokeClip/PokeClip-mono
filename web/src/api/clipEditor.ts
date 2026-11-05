@@ -358,10 +358,17 @@ export interface BroadcastTimeline {
   truncated: boolean;
 }
 
-/** 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다 */
-export async function fetchBroadcastTimeline(streamId: string): Promise<BroadcastTimeline> {
+/**
+ * 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다.
+ * signal: 부른 쪽이 읽기를 버리면 요청도 끊는다(첫 사진을 바로 다시 읽을 때 떠난 읽기, POK-552)
+ */
+export async function fetchBroadcastTimeline(
+  streamId: string,
+  signal?: AbortSignal,
+): Promise<BroadcastTimeline> {
   const res = await apiFetch(
     `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info/timeline`,
+    signal ? { signal } : undefined,
   );
   return (await res.json()) as BroadcastTimeline;
 }

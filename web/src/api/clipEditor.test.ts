@@ -7,6 +7,7 @@ import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
   fetchBroadcast,
+  fetchBroadcastTimeline,
   forgetBroadcastRows,
   fetchJumpCard,
   fetchLibraryAll,
@@ -194,6 +195,24 @@ describe('방송 목록 쪽 넘기기', () => {
         : jsonResponse(200, { broadcasts: [row('a')], nextCursor: 'p2' }),
     );
     expect((await fetchAllBroadcasts('past')).map((b) => b.streamId)).toEqual(['a', 'b']);
+  });
+});
+
+describe('fetchBroadcastTimeline: 받은 signal로 요청을 끊는다(POK-552)', () => {
+  it('부른 쪽이 읽기를 버리면 나간 요청도 끊긴다: 답만 버리면 요청은 clip · 수집기까지 끝까지 돈다', async () => {
+    const spy = stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+    const ctrl = new AbortController();
+    const read = fetchBroadcastTimeline('s1', ctrl.signal);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+    ctrl.abort();
+    await expect(read).rejects.toBeTruthy();
+    expect(spy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 });
 
