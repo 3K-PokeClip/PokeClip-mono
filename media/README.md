@@ -441,9 +441,11 @@ INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거
     = `no_resolver`). 그래서 응답기 모드 뒤에 켠다.
 *   **적재 건너뜀:** 켜진 게이트가 적재 직전 권한 판정에서 거짓이면 그 적재를
     건너뛰고 ERROR `lifecycle_enqueue_skipped` 를 남긴다 — 그 역할의 outbox
-    권한을 확인한다. 판정 줄이 아니고, 그 사이 시작된 방송의 started 는 되살릴
-    수 없다. ended 쪽 줄은 완결 여부 · 허용 목록과 무관하게 완결 평가(회차
-    닫힘 · 세션 ended 전이)마다 남으므로 한 회차에 여러 줄일 수 있다.
+    권한을 확인한다. 그 사이 시작된 방송의 started 는 되살릴 수 없어
+    `event_type=broadcast.started` 줄은 아래 「계약9 운영 판정」 의 통과 조건에
+    든다. ended 쪽 줄(`event_type=broadcast.ended`)은 완결 여부 · 허용 목록과
+    무관하게 완결 평가(회차 닫힘 · 세션 ended 전이)마다 남으므로 한 회차에 여러
+    줄일 수 있다.
 *   **보정:** 보정 후보는 started 가 살아 있고(abandoned 아님), 회차가 닫혀
     구성원 전원이 ended 이고, ended 가 없으며, 회차 시작 뒤 1392시간 안인
     회차다. 같은 DB 의 발행 사이드카(발행기가 떠 있는 사이드카 — 마지막
@@ -486,6 +488,9 @@ INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거
 
 배포 뒤 계약9 발행이 ended 를 잃지 않는지는 사이드카 로그의 `lifecycle_degraded`
 줄과 장부 질의 셋으로 판정한다(`LOG_LEVEL=error` 에서 성립한다).
+사이드카 로그는 JSON 한 줄씩이다. 이 절의 `칸=값` 은 JSON 칸을 뜻한다 — 예를
+들어 `"msg":"lifecycle_enqueue_skipped"` 이고 `"event_type":"broadcast.started"`
+인 줄을 센다. `칸=값` 을 글자 그대로 grep 하면 0줄이라 거짓 통과가 된다.
 
 *   **단위 · 기동 줄:** 단위는 사이드카 컨테이너 하나다. 기동 줄은
     `lifecycle_degraded` 가운데 `value=1` 이거나 `value=0` `reason=ready` 인
@@ -496,11 +501,18 @@ INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거
     그런데 ERROR `lifecycle_disabled reason=no_resolver` 가 있으면 설정
     결함이므로 불통과로 적는다.
 *   **통과:** 기동 줄 수 = N 이고, 그 컨테이너의 마지막 `lifecycle_degraded` 가
-    `value=0` 이며, D1 = 0 · D2 = 0 · D4 완결 = 0 이다. 마지막 줄이 `value=1`
-    이면 `reason` 과 무관하게 불통과다. 특히 `privilege` · `privilege_check` 는
-    새 방송의 started 를 건너뛸 수 있는 갈래다 — 적재 직전 판정이 거짓이어서
-    건너뛴 started 는 장부에 흔적이 남지 않아 D1 · D2 · D4 로는 보이지 않고
-    되살릴 수 없다.
+    `value=0` 이며, 그 컨테이너 로그에 ERROR `lifecycle_enqueue_skipped`
+    `event_type=broadcast.started` 가 0줄이고, D1 = 0 · D2 = 0 · D4 완결 = 0 이다.
+    마지막 줄이 `value=1` 이면 `reason` 과 무관하게 불통과다.
+*   **started 건너뜀 줄:** 적재 직전 판정이 거짓이어서 건너뛴 started 는 장부에
+    흔적이 남지 않아 D1 · D2 · D4 로는 보이지 않고 되살릴 수 없다. 그래서 이
+    줄로만 판정한다 — 기동 때 권한이 없다가 권한을 주어 회복한 컨테이너
+    (`value=0 reason=recovered` 로 끝남)와 실행 중에 권한을 잃은 컨테이너도
+    이 줄이 남으므로 불통과다. 이 줄은 개시 트랜잭션이 커밋되기 전에 남으므로,
+    그 트랜잭션이 롤백돼 회차가 열리지 않은 경우에도 남는다. 그래서 이 불통과도
+    유실 확정이 아니라 조사를 시작하라는 보수적 신호다 — 그 줄의 `round` 회차가
+    장부에 있는지부터 본다. ended 쪽 건너뜀
+    줄(`event_type=broadcast.ended`)은 보정이 거둘 수 있어 판정에 쓰지 않는다.
 *   **문턱 10분:** 상한에서 끌어낸 값이 아니라 운영 선택값이다. 정상 전제에서
     회복 지연은 후보가 20 이하면 길어야 약 35초, N 개면 약 ⌈N/20⌉ × 30초다.
     D1 · D2 > 0 은 유실 확정이 아니라 조사를 시작하라는 신호다 — 보정 창
