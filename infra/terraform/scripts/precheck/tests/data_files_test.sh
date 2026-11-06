@@ -313,6 +313,9 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 규칙 자원의 재조회 읽기다(POK-479 — 묶음마다 SG 규칙 자원이 있는 근거는
 # 그 묶음 파일의 주석). 마지막 둘은 workers 의 Cloud Map 서비스 · 역할 정책
 # 생성 직후 재조회 읽기다(POK-408 — 근거는 workers.tsv 의 그 덩어리 주석).
+# 맨 끝 일곱은 workers 승인 묶음(apply + 긴급 정지 사전 승인)의 운영 동작 —
+# 긴급 정지 쓰기와 apply 직전 읽기 · 감시 읽기다(POK-408 r3 — 근거는
+# workers.tsv 의 그 덩어리 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -341,7 +344,15 @@ STAGE_FOLLOWUP_ROWS=(
   $'workers\tiam:GetRolePolicy\tus-east-1\t'\
 'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
   $'workers\tiam:ListRolePolicies\tus-east-1\t'\
-'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*')
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
+  $'workers\tecs:UpdateService\tap-northeast-2\t*'
+  $'workers\tecs:ListTasks\tap-northeast-2\t*'
+  $'workers\tecs:DescribeTasks\tap-northeast-2\t*'
+  $'workers\tsecretsmanager:DescribeSecret\tap-northeast-2\t'\
+'arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*'
+  $'workers\tsqs:GetQueueUrl\tap-northeast-2\t*'
+  $'workers\tcloudwatch:GetMetricStatistics\tap-northeast-2\t*'
+  $'workers\tlogs:FilterLogEvents\tap-northeast-2\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################

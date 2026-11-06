@@ -80,6 +80,27 @@ s3:GetObject	ap-northeast-2	*
 s3:PutObject	ap-northeast-2	*
 s3:DeleteObject	ap-northeast-2	*
 
+# 승인 묶음 「apply + 긴급 정지 사전 승인」 의 운영 동작(계획 W9–W12 ·
+# README 「apply 직전 읽기」 · 「첫 소비 감시」 · 「긴급 정지와 상태
+# 어긋남」). 같은 (동작, 리전)은 한 행이라 감시 불능 판정의
+# ecs:DescribeServices · 그룹 대기의 logs:DescribeLogGroups(위 덩어리) ·
+# 큐 깊이의 sqs:GetQueueAttributes(아래 2-3 판정 덩어리)는 그 행을 쓴다.
+# 긴급 정지(README 「운영 중 멈출 조건」 — update-service --desired-count 0).
+ecs:UpdateService	ap-northeast-2	*
+# apply 직전 읽기 ③ 회전 창(W9) — clip · auth 지금 태스크의 startedAt.
+ecs:ListTasks	ap-northeast-2	*
+ecs:DescribeTasks	ap-northeast-2	*
+# apply 직전 읽기 ③ 회전 창(W9) — 그릇의 LastChangedDate(describe-secret).
+secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+# apply 직전 읽기 ① · 큐 깊이 감시(W9 · W11) — 큐 주소 찾기(get-queue-url).
+sqs:GetQueueUrl	ap-northeast-2	*
+# apply 직전 읽기 ①(W9) — 가장 오래된 메시지 나이(AWS/SQS 지표
+# ApproximateAgeOfOldestMessage — get-metric-statistics).
+cloudwatch:GetMetricStatistics	ap-northeast-2	*
+# 감시(W11) — aws logs tail 은 FilterLogEvents 를 부른다(awscli 2.38.1
+# customizations/logs/tail.py 의 filter_log_events — 대조 2026-11-07).
+logs:FilterLogEvents	ap-northeast-2	*
+
 # 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
 # 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1)이고,
 # principal-check.sh 가 부르는 리전과 같다(2026-10-19 확인).
