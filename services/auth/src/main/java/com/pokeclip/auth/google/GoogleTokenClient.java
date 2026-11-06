@@ -24,7 +24,8 @@ public class GoogleTokenClient {
 
     /**
      * codeVerifier는 PKCE 원문이다(POK-483) — 구글이 동의 때 받은 challenge와 대조한다.
-     * null이면 싣지 않는다: 과도기에는 PKCE 이전 web의 요청도 받는다(GoogleLoginRequest javadoc).
+     * null이면 싣지 않는다: 요청 DTO가 필수로 걸러 지금은 오지 않지만, 선택값으로 되돌릴 때
+     * 빈 code_verifier가 실려 구글이 거부하지 않게 남긴다(GoogleLoginRequest javadoc).
      */
     public String exchangeCodeForIdToken(String code, String codeVerifier) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();

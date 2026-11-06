@@ -104,23 +104,19 @@ class AuthControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 과도기(POK-483 1단계): auth는 web과 따로 배포되므로, PKCE 이전의 web이 보낸 code만 있는
-     * 요청도 예전처럼 교환한다. 교환에는 verifier 없음(null)이 그대로 넘어가 구글 요청에 실리지 않는다.
+     * PKCE 없는 교환은 받지 않는다(POK-483). web이 항상 보내므로 빠진 요청은 계약 위반이다.
+     * 400인 이유: 자격이 틀린 것이 아니라 요청 모양이 계약과 다르다. 구글까지 가지도 않는다.
      */
     @Test
-    void codeVerifier가_없으면_예전처럼_교환하고_verifier는_null로_넘긴다() throws Exception {
-        given(googleTokenClient.exchangeCodeForIdToken("code-1", null)).willReturn("id-token-1");
-        given(googleIdTokenVerifier.verify("id-token-1"))
-                .willReturn(new GoogleUser("sub-1", "a@example.com", "김태현", null));
-
+    void codeVerifier가_없으면_400이고_구글에_가지_않는다() throws Exception {
         mockMvc.perform(post("/api/auth/google")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                  {"code":"code-1"}
                                  """))
-                .andExpect(status().isOk());
+                .andExpect(status().isBadRequest());
 
-        then(googleTokenClient).should().exchangeCodeForIdToken("code-1", null);
+        then(googleTokenClient).should(never()).exchangeCodeForIdToken(any(), any());
     }
 
     /** RFC 7636 4.1 — 43–128자, unreserved 문자([A-Za-z0-9-._~])만. */
@@ -137,7 +133,7 @@ class AuthControllerTest extends IntegrationTestSupport {
 
     static Stream<String> malformedVerifiers() {
         return Stream.of(
-                "", // 누락으로 치는 것은 null뿐이다 — 빈 값·공백은 형식 위반이다
+                "", // 빈 값·공백은 @NotBlank보다 먼저 생성자의 형식 검사가 거른다
                 "   ",
                 "a".repeat(42), // 하한보다 한 글자 짧다
                 "a".repeat(129), // 상한보다 한 글자 길다
