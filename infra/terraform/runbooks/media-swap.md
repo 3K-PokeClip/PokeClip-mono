@@ -1180,11 +1180,11 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
     다음 셋은 하지 않습니다 — ① `/run/pokeclip-media/mediamtx.yml` 고치기
     ② Control API 의 설정 변경(`/v3/config/…`) ③ 그 밖의 핫 리로드(설정을
     떠 있는 프로세스에 다시 읽히는 것). `hlsAlwaysRemux`(시청자가 없어도
-    송출 시점부터 HLS 목록을 만드는 설정)가 켜진 상태에서 설정 변경으로
-    muxer(HLS 목록 · 조각을 만드는 MediaMTX 내부 부품)가 다시 만들어지면,
-    그 경로는 muxer 가 없는 채 500 을 계속 냅니다
-    (bluenviron/mediamtx#6315 — 열림 · 우리 판 해당). 요청이 와도 스스로
-    복구하지 않습니다. 새 상자는 기동이 곧 재시작이고, 제자리 전환도 stop →
+    송출 시점부터 HLS 목록을 만드는 설정)가 켜진 상태에서 설정을 바꿔
+    경로를 다시 만들면, 그 중의 경합으로 muxer(HLS 목록 · 조각을 만드는
+    MediaMTX 내부 부품)가 없어져 그 경로에 500 이 이어질 수 있습니다
+    (bluenviron/mediamtx#6315 — 열림 · 우리 판 해당). 그렇게 되면 요청이
+    와도 스스로 복구하지 않습니다. 새 상자는 기동이 곧 재시작이고, 제자리 전환도 stop →
     교체 → start 로 이 규칙을 지킵니다.
 
 ## 제자리 전환 — 떠 있는 상자의 설정을 바꿀 때
@@ -1240,13 +1240,23 @@ ended 없이 닫힐 수 있습니다. 그 구성이면 제자리 전환을 하�
     그 구성의 선행 조건과 판정을 그대로 따릅니다. 송출 금지 구간을 열고
     Q1 = 0 · `rounds` ≥ 1(시험 회차 전이면 Q4 0 행)을 보는 「O8a 당김
     교체」 의 게이트 공존 규칙과, 기동 뒤의 M-B 판정입니다.
-1.  **전환 뒤.** 걸음 3 의 기동 판정과 함께 M-B(`lifecycle-check.sh` —
-    「O8a 당김 — 상자 스크립트」)를 봅니다. `M-B NOT OK` 면 걸음 3 의 실패
-    갈래로 갑니다. 루프백은 시험 회차를 새로 만들므로, 그 뒤에는 「O8a
-    당김 — 운영 감시」 의 종료 감시를 돕니다. 위 1 의 질의가
-    Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 이고 ended 가 발행될 때까지입니다. 상한(30분)을
-    넘기거나 Q1 > 0 ∧ Q3 = 0 이면 kty 회부입니다. 송출이 다시 붙으면 그 절의
-    송출 감시 주기로 돌아갑니다.
+1.  **전환 뒤.** 걸음 3 의 기동 판정 · 관찰 판정 뒤에 M-B(`lifecycle-check.sh`
+    — 「O8a 당김 — 상자 스크립트」)를 봅니다. **M-B 통과가 루프백의 선행
+    조건입니다** — 루프백은 시험 회차를 새로 만들므로, 게이트가 꺼진
+    사이드카 앞에서 회차를 열지 않습니다(「O8a 당김 교체」 걸음 13 과 같은
+    순서). `M-B NOT OK` 면 루프백 없이 걸음 3 의 실패 갈래로 갑니다. 루프백
+    뒤에는 「O8a 당김 — 운영 감시」 의 종료 감시를 돕니다. 위 1 의 질의가
+    Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 이고 ended 가 발행될 때까지입니다.
+    상한(30분)을 넘기거나 Q1 > 0 ∧ Q3 = 0 이면 kty 회부입니다. 송출이 다시
+    붙으면 그 절의 송출 감시 주기로 돌아갑니다.
+    *   **이 절의 감시는 M-B 만 봅니다.** 운영 감시 절의 주기는 M-B · M-A
+        를 함께 보지만, M-A(옛 상자 정지 유지)는 정지 · 차단한 별도 퇴역
+        상자가 있을 때의 판정입니다. 제자리 전환은 상자 하나(`a_key`)를 그
+        자리에서 바꾸므로 퇴역 상자가 없습니다. 그래서 M-B 는 지금
+        `a_key` 에서 보고, M-A 는 보지 않습니다. 운영 감시 절의 「M-A
+        불통과 → 정지 · 차단」 갈래를 떠 있는 A 에 적용하지 않습니다 — A 는
+        활성 상자입니다. 별도 퇴역 상자가 따로 있을 때만 그 상자에 M-A 를
+        봅니다.
 
 이 절은 그 판정들을 가리키기만 합니다. 질의 본문 · 입력(시험 ID · 시각)과
 시험 회차의 뜻은 런타임 1단-가 런북 「발행 잔여 질의」 가, M-B 의 통과 조건
@@ -1326,7 +1336,7 @@ a_key="<A>"   # 제자리로 바꿀 상자의 키(예: a)
 
 # render_files <디렉터리> — 상자 a_key 의 렌더본을 파일별로 쓴다.
 render_files() {
-  local path expr
+  local file_path expr
   expr='base64encode(jsonencode({for f in yamldecode('
   expr+="module.media_host.rendered_user_data[\"${a_key}\"]).write_files"
   expr+=' : f.path => f}))'
@@ -1335,9 +1345,9 @@ render_files() {
     | terraform -chdir=infra/terraform/prod/media console | tr -d '"\n' \
     | base64 -d >"$1.json" || return 2
   jq -e 'length > 0' "$1.json" >/dev/null || return 2
-  while IFS= read -r path; do
-    jq -j --arg p "${path}" '.[$p].content' "$1.json" \
-      >"$1/$(printf '%s' "${path#/}" | sed 's|/|__|g')" || return 2
+  while IFS= read -r file_path; do
+    jq -j --arg p "${file_path}" '.[$p].content' "$1.json" \
+      >"$1/$(printf '%s' "${file_path#/}" | sed 's|/|__|g')" || return 2
   done < <(jq -r 'keys[]' "$1.json")
 }
 
@@ -1360,8 +1370,8 @@ bundle_sums() {
 돌립니다.
 
 ```shell
-render_files "${work}/render-old"                       # 선행 1
-render_files "${work}/render-new"                       # 선행 3
+render_files "${work}/render-old" || { echo "STOP render-old"; }   # 선행 1
+render_files "${work}/render-new" || { echo "STOP render-new"; }   # 선행 3
 diff -rq "${work}/render-old" "${work}/render-new"      # 허용 집합 안인지
 diff -ru "${work}/render-old" "${work}/render-new"      # kty 가 읽고 승인
 jq -r 'to_entries[]
@@ -1374,19 +1384,27 @@ bundle_of() {
 old_bundle="$(bundle_of "${work}/render-old")"
 new_bundle="$(bundle_of "${work}/render-new")"
 if [ "${old_bundle}" != "${new_bundle}" ]; then          # 선행 4
-  bundle_sums "${old_bundle}" "${work}/bundle-old"
-  bundle_sums "${new_bundle}" "${work}/bundle-new"
+  bundle_sums "${old_bundle}" "${work}/bundle-old" \
+    || { echo "STOP bundle-old"; }
+  bundle_sums "${new_bundle}" "${work}/bundle-new" \
+    || { echo "STOP bundle-new"; }
   cat "${work}/bundle-old.sums" "${work}/bundle-new.sums" | LC_ALL=C sort \
     | uniq -u | awk '{ print $2 }' | LC_ALL=C sort -u \
     >"${work}/bundle-changed.txt"
-  git diff --name-only <옛 묶음 커밋> <빌드 커밋> -- infra/media-host/bin \
-    infra/media-host/mediamtx.yml.tmpl | sed 's|^infra/media-host/||' \
-    | LC_ALL=C sort >"${work}/bundle-git.txt"
+  git diff --name-only --no-renames <옛 묶음 커밋> <빌드 커밋> -- \
+    infra/media-host/bin infra/media-host/mediamtx.yml.tmpl \
+    | sed 's|^infra/media-host/||' | LC_ALL=C sort >"${work}/bundle-git.txt"
   diff "${work}/bundle-changed.txt" "${work}/bundle-git.txt"   # 빈 출력
   diff -ru "${work}/bundle-old" "${work}/bundle-new"          # kty 가 읽고 승인
 fi
 ```
 
+*   **`STOP …` 줄이 나오면 멈춥니다.** 렌더본 · 묶음을 뽑지 못한 것이라 그
+    뒤의 diff · 승인은 빈 입력이나 지난 결과를 볼 수 있습니다. 원인을 고쳐
+    그 함수부터 다시 돌립니다.
+*   `git diff` 의 `--no-renames` 는 옮긴 파일을 옛 이름 삭제 · 새 이름
+    추가 두 줄로 냅니다. 해시 목록 비교(`bundle-changed.txt`)도 두 이름을
+    모두 내므로 같은 꼴로 맞춥니다.
 *   설정 파일의 쓰기 모드는 모두 `0644` 입니다(`user_data.tf` 의
     `write_files`). 위 `jq` 가 빈 출력이 아니면 상자 스크립트의 `0644` 가
     틀린 것이라 멈춥니다.
@@ -1408,6 +1426,15 @@ bash 로 돕니다(위 「SSM 명령 보내기」 의 bash 규칙 — 새 묶음
     대상(`WRITE`)입니다. 둘 다 아니면(없음 포함) 멈추고 kty 에게
     회부합니다(`INPLACE FAIL baseline …`) — 운영 중 상자에서 바뀌는 파일은
     렌더본으로 덮지 않습니다. 병합 규칙은 미리 두지 않습니다.
+    *   `ingest-auth.env` 도 상자에서 바뀌는 파일입니다. IP 한도 끄기 ·
+        켜기(media-host README 「IP 한도 끄기 · 켜기」 의
+        `ingest-auth-ip-limit.sh`)가 이 파일을 다시 씁니다. 그 스크립트를
+        쓴 적이 있으면 이 파일이 `baseline` 에 걸릴 수 있습니다.
+    *   `INPLACE FAIL baseline <이름>` 이면 상자는 그대로입니다(stop 전).
+        그 줄과 상자 파일의 지금 값(비밀 없는 설정 파일만 · `cat`)을 kty
+        에게 보이고, 「지금 값을 살릴지 · 새 렌더본으로 덮을지」 를 kty 가
+        정합니다. 정하기 전에는 다시 보내지 않습니다. 선행 5 의 태그 apply
+        를 이미 했으면 아래 「stop 전에 포기할 때」 도 봅니다.
 1.  **`sidecar.env` 는 따로 다룹니다.** 첫 부팅 뒤 정본은 상자 안
     파일입니다(`PLAYBACK_ROUND_KEYS` — POK-525 스위치 · `prod/media`
     `variables.tf` 의 `playback_round_keys` 설명). 새 `start-media.sh` 는 이
@@ -1636,8 +1663,10 @@ SH
 싣습니다.
 
 ```shell
+# 없는 파일은 - 다. echo - 는 zsh 에서 빈 줄이라 printf 로 낸다.
 sha_of() {
-  if [ -f "$1" ]; then shasum -a 256 "$1" | cut -d' ' -f1; else echo -; fi
+  if [ -f "$1" ]; then shasum -a 256 "$1" | cut -d' ' -f1
+  else printf '%s\n' -; fi
 }
 env_of() { sed -n "s/^$1=//p" "$2/etc__pokeclip-media__media.env"; }
 {
@@ -1665,14 +1694,25 @@ env_of() { sed -n "s/^$1=//p" "$2/etc__pokeclip-media__media.env"; }
   cat "${work}/inplace-body.sh"
   printf 'B\n'
 } >"${work}/inplace.sh"
-bash -n "${work}/inplace-body.sh" && bash -n "${work}/inplace.sh" \
-  && echo SYNTAX OK
+# inplace.sh 는 첫 줄(exec … <<'B')과 끝 줄(B) 사이가 heredoc 이라 그대로
+# bash -n 하면 본문을 보지 않는다. 앞뒤 줄을 떼고 본다.
+bash -n "${work}/inplace-body.sh" \
+  && sed '1d;$d' "${work}/inplace.sh" | bash -n && echo SYNTAX OK
 wc -c "${work}/inplace.sh"   # 결과 기록에 옮긴다
+# 크기 시험용 — 첫 줄 true 뒤에 inplace.sh 전부를 주석으로 단다(더 크다).
+{ printf 'true\n'; sed 's/^/# /' "${work}/inplace.sh"; } \
+  >"${work}/size-probe.sh"
+wc -c "${work}/size-probe.sh"
 ```
 
 *   **SSM 인자 크기:** `inplace.sh` 는 바뀐 파일 내용을 base64 로 실어
-    커집니다. 보내기 전에 위 `wc -c` 값을 기록합니다. `media_ssm` 의
-    `send-command` 가 크기로 거절하면 상자에서는 아무것도 돌지 않습니다.
+    커집니다. 보내기 전에 위 `wc -c` 값을 기록하고, 아래 「제자리 전환
+    걸음」 2 에서 크기 시험(`size-probe.sh`)을 먼저 보냅니다.
+*   `size-probe.sh` 는 상자에서 `true` 만 하고 아무것도 쓰지 않습니다.
+    나머지 줄은 `inplace.sh` 의 줄마다 `# ` 를 붙인 주석이라, 크기와
+    따옴표 · 줄바꿈의 꼴이 `inplace.sh` 이상입니다. 이것이 받아지면
+    `inplace.sh` 도 크기로 거절되지 않습니다.
+*   `send-command` 가 크기로 거절하면 상자에서는 아무것도 돌지 않습니다.
     그때는 나눠 보내지 말고 멈춰 kty 에게 회부합니다. SSM 의 상한 값은 이
     런북에서 확인하지 않았습니다.
 
@@ -1682,21 +1722,30 @@ wc -c "${work}/inplace.sh"   # 결과 기록에 옮긴다
     묶음이 바뀌면 묶음 승인까지).
     발행 목록이 찬 구성이면 이 걸음 바로 뒤에 위 「계약9 회차 확인」 1 · 2
     를 봅니다. 통과하지 않으면 2 로 가지 않습니다.
-1.  `media_ssm "${a_key}" "${work}/inplace.sh"`(승인). 줄마다 읽는 법은
-    위 「제자리 전환 상자 스크립트」 입니다. `BACKUP <경로>` 줄을 결과
-    기록에 옮깁니다. `INPLACE FAIL … stopped` 면 바로 아래 원복으로
-    갑니다. `stopped` 가 없는 `INPLACE FAIL` 은 상자가 그대로이므로 원인을
-    고쳐 다시 만듭니다.
+1.  크기 시험 → 전환입니다(둘 다 실행 직전 승인).
+    *   `media_ssm "${a_key}" "${work}/size-probe.sh"` → 끝 줄이 `SSM
+        Success` 여야 합니다. 거절 · 실패면 `inplace.sh` 를 보내지
+        않고 kty 에게 회부합니다(위 「SSM 인자 크기」).
+    *   `media_ssm "${a_key}" "${work}/inplace.sh"`. 줄마다 읽는 법은 위
+        「제자리 전환 상자 스크립트」 입니다. `BACKUP <경로>` 줄을 결과
+        기록에 옮깁니다. `INPLACE FAIL … stopped` 면 바로 아래 원복으로
+        갑니다. `stopped` 가 없는 `INPLACE FAIL` 은 상자가 그대로이므로
+        원인을 고쳐 다시 만듭니다. 고치지 않고 접으면 아래 「stop 전에
+        포기할 때」 입니다.
 1.  기동 판정 → 5분 뒤 관찰 판정(인자는 그 구성의 서비스 집합 — 위 「정상
-    교체 2」 와 같은 기준). 응답기 모드면 루프백은 `loopback-pp.sh` 입니다
-    (위 「정상 교체 3」). 발행 목록이 찬 구성이면 M-B 와 질의 재확인(위
-    「계약9 회차 확인」 3)도 이 걸음의 판정입니다.
+    교체 2」 와 같은 기준) → (발행 목록이 찬 구성이면) M-B → 루프백
+    차례입니다. 응답기 모드면 루프백은 `loopback-pp.sh` 입니다(위 「정상
+    교체 3」). 발행 목록이 찬 구성이면 M-B 와 질의 재확인(위 「계약9 회차
+    확인」 3)도 이 걸음의 판정이고, **`M-B OK` 가 나와야 루프백을
+    보냅니다.** 루프백 뒤의 종료 감시도 M-B 만 봅니다(위 「계약9 회차 확인」
+    3 — 퇴역 상자가 없어 M-A 없음).
 
     ```shell
     media_ssm "${a_key}" "${work}/start-check.sh" <서비스 집합>
     media_ssm "${a_key}" "${work}/watch-check.sh" <MAINPID> <WATCH FROM>
-    media_ssm "${a_key}" "${work}/loopback-pp.sh" <시험 ingestStreamId>
+    # 발행 목록이 찬 구성만. M-B OK 가 아니면 루프백으로 가지 않는다.
     media_ssm "${a_key}" "${work}/lifecycle-check.sh" <전환 시각 — epoch 초>
+    media_ssm "${a_key}" "${work}/loopback-pp.sh" <시험 ingestStreamId>
     ```
 
     *   **실패 갈래:** 기동 판정 · 관찰 판정 · 루프백 · M-B 가운데 하나라도
@@ -1711,6 +1760,14 @@ wc -c "${work}/inplace.sh"   # 결과 기록에 옮긴다
     같은지, 기동 판정이 다시 통과하는지 봅니다.
 1.  작업 디렉터리의 `render-*` · `bundle-*` 는 아래 「정리」 에서 함께
     지웁니다.
+
+**stop 전에 포기할 때:** 크기 거절 · `stopped` 없는 `INPLACE FAIL` ·
+`baseline` 에서 kty 가 포기를 고른 경우처럼 상자를 바꾸기 전에 전환을
+접으면, 상자는 옛 구성 그대로입니다. 그런데 선행 5 의 apply 로 태그
+`ConfigVersion` 과 tfvars 는 이미 새 판입니다. tfvars 의 `config_version` ·
+다이제스트를 옛 값으로 되돌려 apply 합니다(plan 범위는 「제자리 전환」 태그
+한 줄 · 승인 — 아래 원복 절의 같은 줄과 같음). 상자 원복 · 재기동은 하지
+않습니다.
 
 ### 제자리 전환 원복
 
