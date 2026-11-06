@@ -29,7 +29,7 @@ prod 의 요청 입구와 앱 서비스를 만드는 루트입니다(설계 3-1 
 |---|---|
 | 내부 ALB 인그레스 ← CloudFront VPC origin | edge |
 | 내부 ALB · NLB 이그레스 → Media · Media 대상 등록 · Media ↔ RDS · Media ↔ auth(출력 `service_sg_ids.auth` · `service_ports.auth` 를 씀 — kty 결정 2026-10-25 (나)) | media |
-| 일꾼 서비스 render · upload · clip · auth 인그레스 ← 일꾼 | `prod/workers`(POK-408 — 출력 `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids` · `service_ports` 를 씀) |
+| 일꾼 서비스 render · upload, clip · auth 인그레스 ← 일꾼 | `prod/workers`(POK-408 — 출력 `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids` · `service_ports` 를 씀) |
 
 용어:
 
