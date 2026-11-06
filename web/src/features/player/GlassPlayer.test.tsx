@@ -1524,6 +1524,7 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
       bindPlayer: vi.fn(),
       notice: vi.fn(),
       positionEpoch: () => 0,
+      isKnownDvrHole: () => false,
     };
     await renderVod({ session });
     expect(session.bindPlayer).toHaveBeenCalled();
