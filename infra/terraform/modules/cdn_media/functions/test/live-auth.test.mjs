@@ -296,11 +296,28 @@ for (const {raw, normalized, normalizedDenied} of PATH_PAIRS) {
   });
 }
 
+// 경로 조작에 쓰는 네 이스케이프(`%2e` · `%2f` · `%5c` · `%25`) 밖의 `%` 다.
+// 정상 경로에는 `%` 가 없으므로 종류 · 짝 여부와 상관없이 거절한다 — 이
+// 사례들이 「네 이스케이프만 거절」 로 좁힌 변이를 잡는다. 잘못된 이스케이프의
+// 정규화본은 정해져 있지 않아 원문만 고정한다.
+const PERCENT_URIS = [
+  '/live/%41bc123/index.m3u8',
+  '/live/abc123/%/index.m3u8',
+  '/live/abc123/%zz/index.m3u8',
+];
+
+for (const uri of PERCENT_URIS) {
+  test(`네 이스케이프가 아닌 % 가 든 ${uri} 도 403 이다`, async () => {
+    assertPathDenied(await run(eventWithUri(uri), {[SECRET_KEY]: FAKE_SECRET}));
+  });
+}
+
 // gohlslib 가 내는 실제 이름 꼴이다(접두 = 무작위 12자리 16진, 스트림 = main ·
 // video<N> · audio<N>). 스트림 ID 는 web STREAM_ID_RE([A-Za-z0-9_-]) 를 따른다.
 const NORMAL_URIS = [
   '/live/abc123/index.m3u8',
   '/live/abc_12-3/index.m3u8',
+  '/live/AbC/index.m3u8',
   '/live/abc123/main_stream.m3u8',
   '/live/abc123/audio2_stream.m3u8',
   '/live/abc123/0123456789ab_main_init.mp4',
@@ -334,6 +351,9 @@ const NON_MEDIA_URIS = [
   '/live/abc123/index.M3U8',
   '/live/abc123/x.MP4',
   '/live/abc123/index.m3u8x',
+  // 끝이 `;p` 라 확장자 규칙에 걸린다. 엣지는 `;` 뒤 경로 매개변수를 떼지 않고
+  // 끝 글자 그대로 비교한다 — 떼고 판정하면 원본이 받는 이름(uri 그대로
+  // `index.m3u8;p`)과 엣지가 판정한 이름이 달라진다.
   '/live/abc123/index.m3u8;p',
 ];
 
@@ -342,6 +362,35 @@ for (const uri of NON_MEDIA_URIS) {
     assertPathDenied(await run(eventWithUri(uri), {[SECRET_KEY]: FAKE_SECRET}));
   });
 }
+
+// 함수는 메서드를 보지 않는다. HEAD 도 GET 과 같은 경로 규칙을 탄다.
+test('HEAD 미디어 요청은 메서드 그대로 Bearer 를 붙여 넘긴다', async () => {
+  const event = eventWithUri('/live/abc123/index.m3u8');
+  event.request.method = 'HEAD';
+  const before = structuredClone(event.request);
+
+  const outcome = await run(event, {[SECRET_KEY]: FAKE_SECRET});
+
+  assertForwarded(outcome, before);
+  assert.equal(outcome.result.method, 'HEAD');
+});
+
+// 비미디어 경로는 OPTIONS(CORS 사전 요청)도 403 이다. 지금 웹은 미디어 파일만
+// 요청하므로 막히는 사전 요청이 없다 — 비미디어 경로를 쓰게 되면 다시 본다.
+test('OPTIONS 는 미디어 경로면 넘기고 비미디어 경로면 403 이다', async () => {
+  const media = eventWithUri('/live/abc123/index.m3u8');
+  media.request.method = 'OPTIONS';
+  const before = structuredClone(media.request);
+  const other = eventWithUri('/live/abc123/');
+  other.request.method = 'OPTIONS';
+
+  const forwarded = await run(media, {[SECRET_KEY]: FAKE_SECRET});
+  const denied = await run(other, {[SECRET_KEY]: FAKE_SECRET});
+
+  assertForwarded(forwarded, before);
+  assert.equal(forwarded.result.method, 'OPTIONS');
+  assertPathDenied(denied);
+});
 
 test('쿼리는 검사하지 않는다(값에 %2e · .. 가 있어도 넘긴다)', async () => {
   const event = eventWithUri('/live/abc123/main_stream.m3u8', {

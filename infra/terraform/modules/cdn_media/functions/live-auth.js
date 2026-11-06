@@ -32,7 +32,11 @@ const CDN_SECRET_KEY = 'cdn-secret';
 /** 값을 못 얻었을 때 남기는 고정 문자열(경보 · 시험 T6b 가 찾는다). */
 const UNAVAILABLE_LOG = 'CDN SECRET UNAVAILABLE';
 
-/** 경로를 거절할 때 남기는 고정 문자열(경보 · 시험 T2 가 찾는다). */
+/**
+ * 경로를 거절할 때 남기는 고정 문자열. 런북 edge-tests.md 「경로 우회 시험」
+ * 의 T2(방송 쿠키로 다른 방송 경로를 노리는 시험) 명령이 함수 로그에서 이
+ * 문자열을 센다. 이 문자열을 보는 경보는 아직 없다.
+ */
 const PATH_DENY_LOG = 'LIVE PATH DENY';
 
 /**
