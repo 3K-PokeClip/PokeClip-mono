@@ -50,6 +50,10 @@ iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 # 래퍼의 dev 역할 해석(get-role) 둘 다 덮는다(같은 (동작, 리전)은 한 행).
 iam:GetRole	us-east-1	*
 iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# 역할 인라인 정책 재조회 — provider 6.68.0 internal/service/iam/role_policy.go
+# 의 resourceRolePolicyPut 은 PutRolePolicy(107행) 뒤 resourceRolePolicyRead
+# (125행)로 GetRolePolicy(205행)를 부른다(대조 2026-11-07).
+iam:GetRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 

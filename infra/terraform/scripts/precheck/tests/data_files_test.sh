@@ -311,8 +311,8 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가). 끝의 셋(로그 그룹 태그
 # 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR). 맨 끝 다섯은 SG
 # 규칙 자원의 재조회 읽기다(POK-479 — 묶음마다 SG 규칙 자원이 있는 근거는
-# 그 묶음 파일의 주석). 마지막 하나는 workers 의 Cloud Map 서비스 생성 직후
-# 재조회 읽기다(POK-408 — 근거는 workers.tsv 의 그 덩어리 주석).
+# 그 묶음 파일의 주석). 마지막 둘은 workers 의 Cloud Map 서비스 · 역할 정책
+# 생성 직후 재조회 읽기다(POK-408 — 근거는 workers.tsv 의 그 덩어리 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -337,7 +337,9 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
   $'9\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
   $'ci-followup\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
-  $'workers\tservicediscovery:GetService\tap-northeast-2\t*')
+  $'workers\tservicediscovery:GetService\tap-northeast-2\t*'
+  $'workers\tiam:GetRolePolicy\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################
