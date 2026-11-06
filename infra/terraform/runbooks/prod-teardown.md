@@ -221,7 +221,7 @@ umask 077
   aws resourcegroupstaggingapi get-resources --region "${region}" \
     --tag-filters Key=TerraformRoot,Values=prod/workers \
     --query 'ResourceTagMappingList[].ResourceARN' --output json \
-    | jq -r '.[]'
+    | jq -r '.[]' | sed -E 's/[0-9]{12}/<계정>/g'
   echo "## ecs services (not INACTIVE)"
   aws ecs describe-services --region "${region}" --cluster pokeclip-prod \
     --services pokeclip-prod-render pokeclip-prod-upload \
@@ -251,7 +251,7 @@ umask 077
 
 | 줄 | 통과 값 |
 |---|---|
-| `tagged prod/workers` | 빈 목록 |
+| `tagged prod/workers` | 빈 목록(남은 ARN 이 있으면 계정 ID 를 `<계정>` 으로 가려 찍힘) |
 | `ecs services` · `security groups · rules` | 모두 `0` |
 | `log groups` | 두 줄 모두 `0` |
 | `iam roles` | 네 줄(`pokeclip-prod-{render,upload}-{execution,task}`) 모두 `1`(NoSuchEntity) |
@@ -548,7 +548,7 @@ umask 077
     aws resourcegroupstaggingapi get-resources --region "${region}" \
       --tag-filters "Key=TerraformRoot,Values=${root}" \
       --query 'ResourceTagMappingList[].ResourceARN' --output json \
-      | jq -r '.[]'
+      | jq -r '.[]' | sed -E 's/[0-9]{12}/<계정>/g'
   done
   echo "## instances (not terminated)"
   aws ec2 describe-instances --region "${region}" \
@@ -597,7 +597,7 @@ umask 077
     aws resourcegroupstaggingapi get-resources --region "${r}" \
       --tag-filters Key=TerraformRoot,Values=prod/edge \
       --query 'ResourceTagMappingList[].ResourceARN' --output json \
-      | jq -r '.[]'
+      | jq -r '.[]' | sed -E 's/[0-9]{12}/<계정>/g'
   done
   echo "## cloudfront (us-east-1 · 이름 접두)"
   aws cloudfront list-functions --region us-east-1 \

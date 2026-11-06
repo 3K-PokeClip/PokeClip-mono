@@ -57,7 +57,9 @@ aws ecr get-login-password --region ap-northeast-2 \
 ```
 
 `prod/registry` 를 `init -backend-config=backend.hcl` 로 연 체크아웃에서
-돌립니다(출력은 prod 상태에서 읽습니다).
+돌립니다(출력은 prod 상태에서 읽습니다). 이 블록은 kty 로컬 터미널용입니다 —
+에이전트 세션에서는 쓰지 말고 아래 「세션 푸시 갈래」 를 씁니다(이 블록에는
+호스트 확인 · 출력 가림 · 로그아웃이 없음).
 
 ## 세션 푸시 갈래
 
@@ -74,6 +76,9 @@ kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · �
     세션에 남깁니다.
 *   푸시마다 실행 직전에 kty 가 승인합니다. 끝나면 성공 · 실패와 무관하게
     로그아웃합니다.
+*   `docker push --platform linux/arm64` 로 arm64 한 변형만 올립니다 — 아래
+    nginx · 루프백 송출기 푸시와 같은 꼴입니다. containerd 이미지 저장소를
+    켠 Docker 가 인덱스를 통째로 올리는 것을 막습니다(결정 146).
 
 ```shell
 (
@@ -92,7 +97,8 @@ kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · �
     aws ecr get-login-password --region ap-northeast-2 \
       | docker login --username AWS --password-stdin "${registry_host}" &&
       docker tag <로컬 이미지> "${registry_host}/pokeclip-prod/<키>:<태그>" &&
-      docker push "${registry_host}/pokeclip-prod/<키>:<태그>"
+      docker push --platform linux/arm64 \
+        "${registry_host}/pokeclip-prod/<키>:<태그>"
     rc=$?
     docker logout "${registry_host}"
     exit "${rc}"

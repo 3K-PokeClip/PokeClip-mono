@@ -2419,7 +2419,9 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     받고, 사진 보고가 401 을 받으면 그 주문 메시지가 그 자리에서 지워집니다
     (DLQ 를 거치지 않는 손실). 일꾼을 clip 보다 먼저 재배포해도 clip 의 롤링
     자체가 겹침을 만들어 이 창은 없어지지 않습니다. 멈춘 동안 주문은 큐에
-    남고(보관 4일) 받은 횟수도 오르지 않습니다.
+    남고(보관 4일) 받은 횟수도 오르지 않습니다. 단 멈추는 순간 처리 중이던
+    메시지는 처분 없이 남아 숨김 시간 뒤 다시 보이고, 되살린 뒤 다시 받을 때
+    받은 횟수가 한 번 오릅니다(SQS 는 받을 때마다 셈).
 
     먼저 두 서비스의 지금 상태와 원하는 수를 기록합니다(읽기). 긴급 정지로
     이미 0 인 서비스를 복원 때 되살리지 않으려는 기록입니다.
@@ -2560,12 +2562,22 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         「긴급 정지와 상태 어긋남」 의 어긋남 · 시각 · 사유)이 없습니다.
         이 절차가 이미 0 으로 내렸으므로, 그사이의 긴급 정지는 원하는 수로는
         보이지 않습니다 — 기록이 있으면 0 을 유지하고 그 정지의 절차를
-        따릅니다.
+        따릅니다. 보조 신호로 멈춘 시각 뒤 그 서비스의 `UpdateService`
+        호출을 CloudTrail 에서 봅니다(아래 읽기 — `stopped_at` 은 멈춘
+        시각(UTC · ISO 8601), 몇 분 늦게 보임). ECS
+        서비스 이벤트는 원하는 수 변경 자체를 적지 않고 태스크 시작 · 정지만
+        적어, 원하는 수 변경의 기록은 이쪽입니다. 이 절차가 낸 호출(멈춤 한
+        번) 밖의 호출이 있으면 기록이 없어도 0 을 유지하고 kty 회부입니다.
 
     ```shell
     aws ecs describe-services --region ap-northeast-2 \
       --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
       --query 'services[0].[status,desiredCount]' --output text
+    aws cloudtrail lookup-events --region ap-northeast-2 \
+      --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateService \
+      --start-time "${stopped_at}" \
+      --query "Events[?contains(CloudTrailEvent, 'pokeclip-prod-<키>')].EventTime" \
+      --output text | tr '\t' '\n'
     ```
 
     ```shell
