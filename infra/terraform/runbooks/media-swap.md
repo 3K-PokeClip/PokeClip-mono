@@ -40,7 +40,7 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
 | 처음 기동(O7e) | 「O7e — 처음 기동」 | 없음 |
 | 상자 교체 · AMI 갱신 | 「정상 교체」 | 없는 시간대 |
 | 설정을 바꿈(M15 · O8a · I1-6 반영 · 다이제스트 · 판 · janitor) | 「설정 반영 교체」 → 「정상 교체」 | 없는 시간대 |
-| 새 상자를 띄울 수 없거나 설정 · 이미지만 바꿈 — 공개(O8) 전 한정 · 공개 뒤에는 1–2분 중단을 kty 가 감수할 때만 | 「제자리 전환」 | 없는 시간대 · 송출 금지 구간 |
+| 새 상자를 띄울 수 없거나 설정 · 이미지만 바꿈 — 공개(O8) 전 한정 · 공개 뒤에는 1–2분 중단을 kty 가 감수할 때만 · 발행 목록(`lifecycle_publish_streams`) ID ≤ 1(옛 · 새 구성 각각 · 둘 다 차 있으면 같은 ID) | 「제자리 전환」 | 없는 시간대 · 송출 금지 구간 |
 | O8 앞에 응답기 모드로 바꾸며 계약9 발행을 켬(kty 2026-11-03) | 「O8a 당김 교체」 — 정상 교체와 순서가 다름 | 없는 시간대 · 송출 금지 구간 |
 | 방송이 있는데 바꿔야 함 | 「force」 | 있음 |
 | apply 가 중간에 실패함 | 「부분 실패 복구」 | — |
@@ -1221,7 +1221,9 @@ MediaMTX 템플릿이 든 이미지)을 그 자리에서 바꾼 뒤 유닛을 �
 시험 ID 하나만 담을 때만 이 절차로 전환합니다. 목록에 ID 가 둘 이상이거나
 `*` 가 있으면, 다른 ID 의 열린 회차가 질의에 잡히지 않은 채 재기동 강등으로
 ended 없이 닫힐 수 있습니다. 그 구성이면 제자리 전환을 하지 않고 kty 에게
-회부합니다(멈춤 자리).
+회부합니다(멈춤 자리). 옛 구성과 새 구성이 서로 다른 시험 ID 를 하나씩
+담을 때(예: 옛 `[X]` · 새 `[Y]`)도 같습니다. 질의 한 번은 시험 ID 하나만
+보므로 어느 ID 로 물을지 정할 수 없습니다 — kty 회부입니다.
 
 1.  **재기동 전 — 걸음 2 직전 · 원복 직전.** 발행 잔여 질의
     ([런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md) 「발행
@@ -1281,6 +1283,13 @@ ended 없이 닫힐 수 있습니다. 그 구성이면 제자리 전환을 하�
     *   `etc__systemd__system__pokeclip-media.service` · 그 drop-in
     *   `usr__local__sbin__pokeclip-media-bootstrap` — 묶음이 바뀔 때만
         다릅니다. 첫 부팅에만 도는 파일이라 제자리에 쓰지 않습니다.
+    *   **허용 집합 안이어도 내용 diff 는 kty 가 읽고 승인합니다.**
+        compose · nginx · media.env 처럼 상자에 실제로 쓰는 파일의 바뀐 줄을
+        `diff -ru` 로 보입니다(아래 명령). tfvars PR 리뷰로 갈음하지
+        않습니다 — PR 은 tfvars 줄만 보이고, 템플릿을 거친 렌더 결과는
+        보이지 않기 때문입니다. 렌더본에는 계정 ID 가 든 ARN 이 있어 diff 는
+        이 기계 화면에서만 보이고 채팅 · 티켓에 붙이지 않습니다. 승인 전에는
+        apply · 상자 스크립트로 가지 않습니다.
 1.  **묶음이 바뀌면 무엇을 싣는지 확인하고 kty 가 승인합니다.** 새
     렌더본의 `MEDIA_BUNDLE_IMAGE` 가 옛 렌더본과 다르면 묶음이 바뀌는
     것입니다.
@@ -1354,6 +1363,7 @@ bundle_sums() {
 render_files "${work}/render-old"                       # 선행 1
 render_files "${work}/render-new"                       # 선행 3
 diff -rq "${work}/render-old" "${work}/render-new"      # 허용 집합 안인지
+diff -ru "${work}/render-old" "${work}/render-new"      # kty 가 읽고 승인
 jq -r 'to_entries[]
   | select(.key | test("^/etc/(pokeclip-media|systemd/system)/"))
   | select(.value.permissions != "0644") | .key' \
@@ -1367,7 +1377,8 @@ if [ "${old_bundle}" != "${new_bundle}" ]; then          # 선행 4
   bundle_sums "${old_bundle}" "${work}/bundle-old"
   bundle_sums "${new_bundle}" "${work}/bundle-new"
   cat "${work}/bundle-old.sums" "${work}/bundle-new.sums" | LC_ALL=C sort \
-    | uniq -u | awk '{ print $2 }' | LC_ALL=C sort -u >"${work}/bundle-changed.txt"
+    | uniq -u | awk '{ print $2 }' | LC_ALL=C sort -u \
+    >"${work}/bundle-changed.txt"
   git diff --name-only <옛 묶음 커밋> <빌드 커밋> -- infra/media-host/bin \
     infra/media-host/mediamtx.yml.tmpl | sed 's|^infra/media-host/||' \
     | LC_ALL=C sort >"${work}/bundle-git.txt"
@@ -1413,8 +1424,12 @@ bash 로 돕니다(위 「SSM 명령 보내기」 의 bash 규칙 — 새 묶음
         sidecar-env` — kty 회부).
     *   새 묶음의 `start-media.sh` 에서 함수를 찾지 못하면 멈춥니다
         (`INPLACE FAIL check-env-line` — 함수 꼴이 바뀐 것이라 본문의 `sed`
-        를 고칩니다). 묶음이 그대로이고 지금 시작 스크립트에 이 판정이
-        없으면 판정 없이 둡니다(`KEEP … unchecked`).
+        를 고칩니다). 꺼낸 함수를 `eval` 로 읽지 못한 때도 같습니다.
+    *   묶음이 그대로이면 지금 시작 스크립트를 봅니다. `check_env_line`
+        이라는 이름이 파일에 아예 없을 때만 판정 없이 둡니다(`KEEP …
+        unchecked` — 이 판정이 없는 구판). 이름은 있는데 함수를 꺼내지
+        못했거나, 파일이 없거나 읽지 못하면 구판인지 추출 실패인지 가를 수
+        없으므로 멈춥니다(`INPLACE FAIL check-env-line`).
 1.  **묶음이 바뀌면** 표지가 옛 묶음인지, 상자의 `bin/` 트리 ·
     `mediamtx.yml.tmpl` 해시가 옛 묶음과 같은지 봅니다. 어긋나면
     멈춥니다. 그다음 새 묶음을 `docker pull` · `docker create` ·
@@ -1442,6 +1457,16 @@ stop 뒤의 실패는 `INPLACE FAIL <단계> stopped` 입니다 — 유닛이 �
 채이므로 바로 「제자리 전환 원복」 으로 갑니다(`BACKUP` 줄이 없으면 백업
 전 실패라 바뀐 파일이 없습니다 — `systemctl start` 만 합니다).
 
+`BACKUP` 줄이 없는 `stopped` 실패의 명령입니다(실행 직전 승인).
+`start.sh` 는 「한 창 절차」 준비와 같은 한 줄 파일입니다. 기동 판정은 옛
+구성의 서비스 집합으로 봅니다.
+
+```shell
+printf 'systemctl start pokeclip-media\n' > "${work}/start.sh"
+media_ssm "${a_key}" "${work}/start.sh"
+media_ssm "${a_key}" "${work}/start-check.sh" <옛 구성의 서비스 집합>
+```
+
 ```shell
 cat > "${work}/inplace-body.sh" <<'SH'
 set -u
@@ -1449,10 +1474,12 @@ readonly C=/etc/pokeclip-media
 readonly BIN=/opt/pokeclip-media/bin
 readonly MARKER=/var/lib/pokeclip-media/bundle-installed
 export DOCKER_CONFIG=/root/.docker   # SSM 환경에 HOME 이 없을 수 있음
-# fail — 임시 디렉터리를 지우고 판정 줄을 낸다(stop 뒤면 원본은 백업에 있다).
+# fail — 임시 디렉터리(prep · stage · new_root)를 지우고 판정 줄을 낸다(stop
+# 뒤면 원본은 백업에 있다).
 fail() {
   [ -z "${prep:-}" ] || rm -rf -- "${prep}"
   [ -z "${stage:-}" ] || rm -rf -- "${stage}"
+  [ -z "${new_root:-}" ] || rm -rf -- "${new_root}"
   echo "INPLACE FAIL $1"
   exit 2
 }
@@ -1528,15 +1555,22 @@ else
 fi
 
 if [ -n "${sidecar}" ]; then
-  fn="$(sed -n '/^check_env_line() {$/,/^}$/p' \
-    "${stage:-/opt/pokeclip-media}/bin/start-media.sh" </dev/null)"
+  start="${stage:-/opt/pokeclip-media}/bin/start-media.sh"
+  [ -f "${start}" ] || fail check-env-line
+  fn="$(sed -n '/^check_env_line() {$/,/^}$/p' "${start}" </dev/null)" \
+    || fail check-env-line
+  # 0 = 이름이 있음 · 1 = 이름이 없음 · 그 밖 = 읽기 실패.
+  grep -q check_env_line "${start}" </dev/null
+  named=$?
   if [ -n "${fn}" ]; then
-    eval "${fn}"
+    { eval "${fn}" && declare -F check_env_line >/dev/null; } \
+      || fail check-env-line
     check_env_line "${C}/sidecar.env" PLAYBACK_ROUND_KEYS=true \
       PLAYBACK_ROUND_KEYS=false || fail sidecar-env
     echo "KEEP etc__pokeclip-media__sidecar.env"
-  elif [ -z "${stage}" ]; then
-    # 묶음이 그대로이고 지금 시작 스크립트에 이 판정이 없다 — 막히지 않는다.
+  elif [ -z "${stage}" ] && [ "${named}" -eq 1 ]; then
+    # 묶음이 그대로이고 지금 시작 스크립트에 이 판정이 아예 없다 — 막히지
+    # 않는다. 이름은 있는데 함수를 못 꺼냈으면 아래 fail 이다.
     echo "KEEP etc__pokeclip-media__sidecar.env unchecked"
   else
     fail check-env-line
@@ -1579,7 +1613,7 @@ if [ -n "${stage}" ]; then
   rm -rf -- "${BIN}" && mv "${new_root}/bin" "${BIN}" \
     && mv -f "${new_root}/mediamtx.yml.tmpl" "${C}/mediamtx.yml.tmpl" \
     && printf '%s\n' "${NEW_BUNDLE}" >"${MARKER}" || fail "bundle-swap stopped"
-  rmdir "${new_root}"; rm -rf -- "${stage}"; stage=""
+  rmdir "${new_root}"; new_root=""; rm -rf -- "${stage}"; stage=""
   echo "BUNDLE INSTALLED"
 fi
 case "${writes}" in
@@ -1633,11 +1667,19 @@ env_of() { sed -n "s/^$1=//p" "$2/etc__pokeclip-media__media.env"; }
 } >"${work}/inplace.sh"
 bash -n "${work}/inplace-body.sh" && bash -n "${work}/inplace.sh" \
   && echo SYNTAX OK
+wc -c "${work}/inplace.sh"   # 결과 기록에 옮긴다
 ```
+
+*   **SSM 인자 크기:** `inplace.sh` 는 바뀐 파일 내용을 base64 로 실어
+    커집니다. 보내기 전에 위 `wc -c` 값을 기록합니다. `media_ssm` 의
+    `send-command` 가 크기로 거절하면 상자에서는 아무것도 돌지 않습니다.
+    그때는 나눠 보내지 말고 멈춰 kty 에게 회부합니다. SSM 의 상한 값은 이
+    런북에서 확인하지 않았습니다.
 
 ### 제자리 전환 걸음
 
-1.  「제자리 전환 선행」 1–5 를 끝냅니다(묶음이 바뀌면 kty 승인까지).
+1.  「제자리 전환 선행」 1–5 를 끝냅니다(렌더본 내용 diff 의 kty 승인 ·
+    묶음이 바뀌면 묶음 승인까지).
     발행 목록이 찬 구성이면 이 걸음 바로 뒤에 위 「계약9 회차 확인」 1 · 2
     를 봅니다. 통과하지 않으면 2 로 가지 않습니다.
 1.  `media_ssm "${a_key}" "${work}/inplace.sh"`(승인). 줄마다 읽는 법은
