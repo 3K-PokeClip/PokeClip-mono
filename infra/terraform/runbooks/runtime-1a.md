@@ -2436,22 +2436,61 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     done | tee "${work}/workers-before.txt"
     ```
 
-    *   `<키> ACTIVE 1` → 0 으로 내립니다(쓰기 — **kty 승인**):
-        `aws ecs update-service --region ap-northeast-2 --cluster
-        pokeclip-prod --service pokeclip-prod-<키> --desired-count 0
-        --query service.serviceName --output text`. 그 뒤 아래 `wait_zero`.
+    먼저 키마다 지금 태스크 ARN 을 기록합니다(읽기). 서비스의 실행 수는
+    `RUNNING` 만 세어, 내려가는 중(`DEACTIVATING` · `STOPPING`)인 태스크는
+    `0 0 0` 뒤에도 남을 수 있습니다 — 그 태스크가 옛 값으로 보고하다 401 을
+    받으면 메시지가 지워집니다([태스크 수명 주기](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle-explanation.html)).
+    목록은 서비스가 아니라 태스크 정의 family 로 뽑아 서비스가 사라진
+    뒤에도 잡히게 하고, 원하는 상태 `RUNNING` · `STOPPED` 둘 다 받습니다(내려가는
+    중인 태스크의 원하는 상태는 `STOPPED`). ARN 에 계정 ID 가 있어 화면에
+    내지 않고 파일에만 둡니다.
+
+    ```shell
+    record_tasks() {  # record_tasks <키>
+      local d out list="${work}/workers-tasks-$1.txt"
+      : >"${list}"
+      for d in RUNNING STOPPED; do
+        out="$(aws ecs list-tasks --region ap-northeast-2 \
+          --cluster pokeclip-prod --family "pokeclip-prod-$1" \
+          --desired-status "${d}" --query 'taskArns[]' --output text)" ||
+          return 1
+        printf '%s\n' "${out}" | tr '\t' '\n' |
+          sed -n '/^arn:aws:ecs:/p' >>"${list}"
+      done
+      sort -u -o "${list}" "${list}"
+      printf '%s 태스크 %s개 기록\n' "$1" "$(wc -l <"${list}" | tr -d ' ')"
+    }
+    ```
+
+    *   `<키> ACTIVE 1` → `record_tasks <키>` 뒤 0 으로 내립니다(쓰기 —
+        **kty 승인**). 내리기 직전 시각을 키와 함께 남깁니다(복원 때
+        CloudTrail 읽기의 시작 시각).
+
+        ```shell
+        stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '%s %s\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
+        aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+          --service pokeclip-prod-<키> --desired-count 0 \
+          --query service.serviceName --output text
+        ```
+
     *   `<키> ACTIVE 0` → 이미 멈춤(긴급 정지 등)입니다. 원하는 수는
-        그대로 두고 기록합니다. 정지 직후면 태스크가 아직 내려가는 중일 수
-        있어(남은 render 가 옛 값으로 보고하다 401 → 메시지 삭제) 이
-        갈래도 아래 `wait_zero` 를 돌립니다.
-    *   `<키> None` → 서비스 없음(`prod/workers` 를 apply 하지 않았거나
-        내림)입니다. 기록만 합니다.
+        그대로 두고 `record_tasks <키>` 만 합니다. 정지 직후면 태스크가
+        아직 내려가는 중일 수 있어(남은 render 가 옛 값으로 보고하다 401 →
+        메시지 삭제) 이 갈래도 아래 확인을 돌립니다.
+    *   `<키> INACTIVE 0` → 서비스가 지워졌습니다(`prod/workers` 를 내린 뒤
+        한동안 이 값입니다). `record_tasks <키>` 를 하고 아래 확인으로 남은
+        태스크가 없는지만 봅니다. 복원 대상이 아닙니다.
+    *   `<키> None` → 서비스 없음(`prod/workers` 를 apply 한 적이 없거나
+        지운 지 오래됨)입니다. 기록만 합니다.
     *   그 밖의 값(`ACTIVE 2` · `DRAINING` 등) → 멈춤 · kty 회부.
 
-    `wait_zero` 는 원하는 수 · 실행 수 · 대기 수가 모두 0 이 될 때까지
-    10초마다 읽습니다(읽기 · 10분 상한). 기록이 `ACTIVE` 인 서비스가 모두
-    종료 0 일 때만 값을 넣습니다. 종료 1(상한 · 읽기 실패)이면 멈춤 · kty
-    회부입니다.
+    확인은 둘입니다(읽기 · 10초 간격 · 각 10분 상한). `wait_zero` 는 원하는
+    수 · 실행 수 · 대기 수가 모두 0 이 될 때까지(`ACTIVE` 만), `wait_stopped`
+    는 기록한 태스크가 모두 `lastStatus=STOPPED` 이고 그 family 에 원하는
+    상태 `RUNNING` 인 태스크가 새로 없을 때까지 읽습니다. `workers-before.txt`
+    에서 기록이 `ACTIVE` · `INACTIVE` 인 키만 돌고, 모두 통과해야 값을
+    넣습니다. 하나라도 종료 1(상한 · 읽기 실패)이면 멈춤 · kty 회부입니다.
 
     ```shell
     wait_zero() {  # wait_zero <키>
@@ -2470,7 +2509,43 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       printf '멈춤: %s 이 10분 안에 0 0 0 이 되지 않음\n' "$1"
       return 1
     }
-    wait_zero render && wait_zero upload   # 기록이 ACTIVE 인 키만
+
+    wait_stopped() {  # wait_stopped <키>
+      local i=0 left fresh list="${work}/workers-tasks-$1.txt"
+      while [ "${i}" -lt 60 ]; do
+        left=0
+        if [ -s "${list}" ]; then
+          # shellcheck disable=SC2046 # ARN 은 공백 없는 한 낱말씩이다.
+          left="$(aws ecs describe-tasks --region ap-northeast-2 \
+            --cluster pokeclip-prod --tasks $(cat "${list}") \
+            --query 'length(tasks[?lastStatus!=`STOPPED`])' \
+            --output text)" || return 1
+        fi
+        fresh="$(aws ecs list-tasks --region ap-northeast-2 \
+          --cluster pokeclip-prod --family "pokeclip-prod-$1" \
+          --desired-status RUNNING --query 'length(taskArns)' \
+          --output text)" || return 1
+        printf '%s 안 멈춘 기록 태스크 %s · 새 RUNNING %s\n' "$1" "${left}" "${fresh}"
+        [ "${left}" = 0 ] && [ "${fresh}" = 0 ] && return 0
+        i=$((i + 1))
+        sleep 10
+      done
+      printf '멈춤: %s 의 태스크가 10분 안에 모두 STOPPED 가 되지 않음\n' "$1"
+      return 1
+    }
+
+    ok=1
+    while read -r k state _; do
+      case "${state}" in
+        ACTIVE) { wait_zero "${k}" && wait_stopped "${k}"; } || ok=0 ;;
+        INACTIVE) wait_stopped "${k}" || ok=0 ;;
+      esac
+    done <"${work}/workers-before.txt"
+    if [ "${ok}" = 1 ]; then
+      printf '일꾼 멈춤 확인 — 값 넣기로\n'
+    else
+      printf '멈춤: 일꾼 멈춤 확인 실패 — kty 회부\n'
+    fi
     ```
 
 *   **값 넣기**(실행 직전 **kty 승인**): 4 와 같은 꼴로 종류
@@ -2529,7 +2604,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         next · auth · clip · chat-collector · chat-detector 를 두므로(O7d
         뒤) 앱 서버 키는 이 갈래가 아닙니다. 일꾼은 위 필터가 대상에서
         빼고, `prod/workers` 를 내렸을 때 일꾼이 이 갈래입니다(「일꾼 멈춤」
-        기록의 `None`).
+        기록의 `INACTIVE` · `None`).
     *   그 밖의 값(`DRAINING` · `INACTIVE` 등) → 멈춤 · kty 회부.
     *   규칙의 전제: 클러스터는 platform 의 `pokeclip-prod` 하나이고,
         서비스 정의는 platform(앱 서버)과 `prod/workers`(일꾼 render ·
@@ -2563,8 +2638,9 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         이 절차가 이미 0 으로 내렸으므로, 그사이의 긴급 정지는 원하는 수로는
         보이지 않습니다 — 기록이 있으면 0 을 유지하고 그 정지의 절차를
         따릅니다. 보조 신호로 멈춘 시각 뒤 그 서비스의 `UpdateService`
-        호출을 CloudTrail 에서 봅니다(아래 읽기 — `stopped_at` 은 멈춘
-        시각(UTC · ISO 8601), 몇 분 늦게 보임). ECS
+        호출을 CloudTrail 에서 봅니다(아래 읽기 — `stopped_at` 은 「일꾼
+        멈춤」 이 `workers-stopped-at.txt` 에 남긴 그 키의 시각, 몇 분 늦게
+        보임). ECS
         서비스 이벤트는 원하는 수 변경 자체를 적지 않고 태스크 시작 · 정지만
         적어, 원하는 수 변경의 기록은 이쪽입니다. 이 절차가 낸 호출(멈춤 한
         번) 밖의 호출이 있으면 기록이 없어도 0 을 유지하고 kty 회부입니다.
@@ -2573,6 +2649,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     aws ecs describe-services --region ap-northeast-2 \
       --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
       --query 'services[0].[status,desiredCount]' --output text
+    stopped_at="$(awk '$1 == "<키>" { print $2 }' "${work}/workers-stopped-at.txt")"
     aws cloudtrail lookup-events --region ap-northeast-2 \
       --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateService \
       --start-time "${stopped_at}" \
@@ -2588,7 +2665,8 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 
     *   기록이 `ACTIVE 0` 이던 서비스는 0 을 유지하고 기록합니다(다시
         띄우는 것은 그 정지의 절차 · 승인 몫).
-    *   기록이 `None` 이던 서비스는 할 일이 없습니다.
+    *   기록이 `INACTIVE` · `None` 이던 서비스는 할 일이 없습니다(지워졌거나
+        없음 — 복원 대상 아님).
     *   완료: 올린 서비스마다 `wait_zero` 와 같은 읽기
         (`services[0].[desiredCount,runningCount,pendingCount]`)가 `1 1 0`
         입니다. 새 태스크가 새 값을 읽습니다.
