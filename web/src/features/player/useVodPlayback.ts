@@ -114,6 +114,18 @@ function clampToView(targetMs: number, view: SeekView): number {
 }
 
 /**
+ * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. 목록 끝(마지막 조각
+ * PDT + 길이)은 실제로 받는 영상 끝보다 조금 뒤일 수 있어, 그 자리에 놓으면 WebKit 이 받아 둔 끝에 놓고 멎었다(V0-c Home/End).
+ * 마지막 1초를 틀어 끝에 닿는다
+ */
+const END_TAIL_MS = 1_000;
+
+/** 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 목록이 1초보다 짧으면 첫 조각이다 */
+function tailMs(list: VodList): number {
+  return Math.max(list.firstMs, list.lastEndMs - END_TAIL_MS);
+}
+
+/**
  * 재생기 국면. 기본 HLS 는 조각 목록이 없고, hls.js · 기본 HLS 가 모두 없으면 틀 수 없다 — 둘 다 unsupported 다. 화면
  * 위치를 한 번 냈으면 그 뒤 멎어도 showing 이다(채팅은 마지막 자리 · 영상 위 알림). 그 전에 멎으면 failed, 아니면 첫 목록
  * 유무로 listed · loading 이다
@@ -281,16 +293,32 @@ export function useVodPlayback(
       ? windowSeconds
       : Math.min(windowSeconds, Math.max(0, Math.round((list.lastEndMs - axisPdtMs) / 1000)));
 
+  // 시크바 · 키가 옮길 자리 — 첫 조각부터 꼬리(끝 1초 앞)까지로 가둔다. 다 본 뒤 꼬리로 가면 옮기지 않는다: 옮기면 seeking 이
+  // 다 봤나를 풀어 「처음부터」 단추가 깜빡이거나 끝 1초를 또 돈다(녹화 다시보기 jumpTo 와 같은 뜻 — POK-518)
+  const moveWithinList = useCallback(
+    (targetMs: number) => {
+      if (list === null) {
+        return;
+      }
+      const tail = tailMs(list);
+      const atMs = clampToView(targetMs, { lowerMs: list.firstMs, endMs: tail });
+      if (atMs === tail && ended) {
+        return;
+      }
+      seekToMs(atMs);
+    },
+    [list, ended, seekToMs],
+  );
+
   const seekToFraction = useCallback(
     (fraction: number) => {
       const nowMs = currentProgramDateMs();
       if (list === null || nowMs === null) {
         return;
       }
-      const targetMs = list.lastEndMs - behindFromSeekFraction(fraction, windowSeconds) * 1000;
-      seekToMs(clampToView(targetMs, { lowerMs: list.firstMs, endMs: list.lastEndMs }));
+      moveWithinList(list.lastEndMs - behindFromSeekFraction(fraction, windowSeconds) * 1000);
     },
-    [list, windowSeconds, currentProgramDateMs, seekToMs],
+    [list, windowSeconds, currentProgramDateMs, moveWithinList],
   );
 
   // 양수가 과거 쪽이다(playerKeys 의 부호). 명령 순간의 재생 위치로 센다 — timeupdate 표본은 연달아 누르면 낡았다
@@ -300,13 +328,12 @@ export function useVodPlayback(
       if (list === null || nowMs === null) {
         return;
       }
-      const targetMs = nowMs - deltaSeconds * 1000;
-      seekToMs(clampToView(targetMs, { lowerMs: list.firstMs, endMs: list.lastEndMs }));
+      moveWithinList(nowMs - deltaSeconds * 1000);
     },
-    [list, currentProgramDateMs, seekToMs],
+    [list, currentProgramDateMs, moveWithinList],
   );
 
-  // 다시보기의 오른쪽 끝은 목록 끝이다(실시간이 아니다)
+  // 다시보기의 오른쪽 끝은 목록 끝 1초 앞(꼬리)이다(실시간이 아니다). 시크바는 시차 1초라 끝으로 보인다(isAtEdge)
   const returnToLive = useCallback(() => seekToFraction(1), [seekToFraction]);
 
   // 카드처럼 정확한 자리 — 옮기지 못하면(시각 축을 모름 · 목록 앞) false 로 알려 부른 쪽이 「옮기지 못했어요」를 고른다. 이

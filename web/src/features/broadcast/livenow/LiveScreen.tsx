@@ -228,8 +228,9 @@ const BLOCKED_NOTICE: Record<PastBlockReason, string> = {
 type CardSeekResult = 'moved' | 'outside' | 'none' | 'queued';
 
 /**
- * 끝난 뒤 들어온 화면(A)에서 사람이 누른 카드의 알림(계획 9절 · 설계 3절 카드 표). 받아 두었거나(waiting) 서지 않으면(blocked) 채팅이
- * 카드 시각으로 갔다고 덧붙인다(채팅이 그 시점을 따를 때만). 옮겼으면 알리지 않는다
+ * 끝난 뒤 들어온 화면(A)에서 사람이 누른 카드의 알림(계획 9절 · 설계 3절 카드 표). 받아 두었거나(waiting) 서지 않거나(blocked) 선
+ * 재생기가 옮기지 못하면(playable 의 none) 채팅이 카드 시각으로 갔다고 덧붙인다(채팅이 그 시점을 따를 때만). 목록 밖(outside)은
+ * 채팅도 옮기지 않아 덧붙이지 않고, 옮겼으면 알리지 않는다
  * @returns 알림 제목. 알릴 것이 없으면 null
  */
 function pastCardNotice(
@@ -247,7 +248,7 @@ function pastCardNotice(
       if (result === 'outside') {
         return '이 시점은 다시보기에 없어요';
       }
-      return result === 'none' ? '그 시점으로 옮기지 못했어요' : null;
+      return result === 'none' ? `그 시점으로 옮기지 못했어요${chatMoved}` : null;
   }
 }
 

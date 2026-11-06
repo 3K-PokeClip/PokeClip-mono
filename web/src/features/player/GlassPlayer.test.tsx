@@ -1543,8 +1543,9 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     fireEvent.keyDown(play, { key: 'ArrowLeft' });
     expect(video.currentTime).toBe(590);
     sit(container, 600);
+    // End 는 목록 끝이 아니라 끝 1초 앞(마지막 조각 안쪽)이다 — 녹화 다시보기의 꼬리와 같다
     fireEvent.keyDown(play, { key: 'End' });
-    expect(video.currentTime).toBe(7_200);
+    expect(video.currentTime).toBe(7_199);
   });
 
   it('바깥 이동(seekToUptime)은 옮겼으면 true, 재생기가 멎어 그 시각의 자리를 모르면 false 다', async () => {

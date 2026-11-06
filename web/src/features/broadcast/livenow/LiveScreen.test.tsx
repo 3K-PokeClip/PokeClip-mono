@@ -4293,8 +4293,8 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
     fireEvent.keyDown(player, { key: 'End' });
     await settle();
-    // 다시보기의 끝은 목록 끝(방송 2시간 반)이다
-    expect(within(panel).getByText(/^2:30:00 시점까지 보는 중/)).toBeInTheDocument();
+    // 다시보기의 끝으로는 목록 끝(방송 2시간 반) 1초 앞이다 — 마지막 1초를 틀어 끝에 닿는다
+    expect(within(panel).getByText(/^2:29:59 시점까지 보는 중/)).toBeInTheDocument();
   });
 
   it('옮긴 자리를 처음부터 다시 읽으면 앞서 보낸 채팅 요청을 끊는다: 답하지 않는 요청을 기다리다 갇히지 않는다', async () => {
@@ -7238,8 +7238,8 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
   });
 
   describe('T4-12 실패를 실패로', () => {
-    it('화면 위치를 낸 뒤 재생이 멈추면(목록은 남음) 카드는 옮기지 못했다고 알린다', async () => {
-      const { container } = await openPastVod();
+    /** 화면 위치를 10초에 낸 뒤 재생이 멈춘다(목록은 남음 — 카드 갈래는 playable 그대로) */
+    async function stopAfterShowing(container: HTMLElement) {
       await playTo(container, 10);
       for (let i = 0; i < 2; i += 1) {
         await act(async () => {
@@ -7253,11 +7253,17 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       }
       await settle();
       expect(lastPastCard()?.kind).toBe('playable');
+    }
+
+    it('화면 위치를 낸 뒤 재생이 멈추면(목록은 남음) 카드는 옮기지 못했다고 알리고 채팅 이동을 덧붙인다', async () => {
+      const { container } = await openPastVod();
+      await stopAfterShowing(container);
       fireEvent.click(screen.getByRole('button', { name: CARD4 }));
       await settle();
 
-      expect(screen.getByText(CANNOT_MOVE)).toBeInTheDocument();
+      expect(screen.getByText(`${CANNOT_MOVE}${CHAT_MOVED}`)).toBeInTheDocument();
       expect(videoAt(container)).toBe(10);
+      expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
     });
 
     it('기본 HLS(hls.js 없음)면 카드는 옮기지 못했다고 알리고 카드 추가는 보내지 않는다', async () => {

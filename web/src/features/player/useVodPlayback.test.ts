@@ -346,13 +346,47 @@ describe('시크바 — 다시보기 전체 길이 축(1시간에서 자르지 �
     expect(video.currentTime).toBe(610);
   });
 
-  it('끝으로(returnToLive) · 막대 맨 오른쪽은 목록 끝이다', async () => {
+  it('끝으로(returnToLive) · 막대 맨 오른쪽 · 끝 쪽 화살표는 목록 끝이 아니라 1초 앞(마지막 조각 안쪽)이다', async () => {
     const { view, video } = await atTenMinutes();
     act(() => view.result.current.returnToLive());
-    expect(video.currentTime).toBe(7_200);
+    expect(video.currentTime).toBe(7_199);
     sit(video, 600);
     act(() => view.result.current.seekToFraction(1));
+    expect(video.currentTime).toBe(7_199);
+    sit(video, 7_195);
+    act(() => view.result.current.seekBy(-10));
+    expect(video.currentTime).toBe(7_199);
+  });
+
+  it('끝 1초 앞에 서면 시크바는 끝이다(시차 1초 · atEdge) — 녹화 다시보기의 꼬리와 같다', async () => {
+    const { view, video } = await atTenMinutes();
+    act(() => view.result.current.returnToLive());
+    sit(video, 7_199, 4, 'seeking');
+    expect(view.result.current.behindSeconds).toBe(1);
+    expect(view.result.current.atEdge).toBe(true);
+  });
+
+  it('목록이 1초보다 짧으면 끝으로는 첫 조각이다(목록 앞으로 나가지 않는다)', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(vodDetails(1, 0.5)));
+    sit(video, 0.25);
+    act(() => view.result.current.returnToLive());
+    expect(video.currentTime).toBe(0);
+  });
+
+  it('다 봤으면(ended) 끝으로 · 막대 맨 오른쪽 · 끝 쪽 화살표는 옮기지 않고 다 본 채 둔다 — 끝이 아닌 자리로는 옮긴다', async () => {
+    const { view, video, onSeek } = await atTenMinutes();
+    sit(video, 7_200, 4, 'ended');
+    act(() => view.result.current.returnToLive());
+    act(() => view.result.current.seekToFraction(1));
+    act(() => view.result.current.seekBy(-10));
     expect(video.currentTime).toBe(7_200);
+    expect(onSeek).not.toHaveBeenCalled();
+    expect(view.result.current.ended).toBe(true);
+
+    act(() => view.result.current.seekToFraction(0.5));
+    expect(video.currentTime).toBe(3_600);
+    expect(onSeek).toHaveBeenCalledOnce();
   });
 
   it('timeupdate 없이 ← 를 두 번 누르면 9분 40초다 — 명령 순간의 재생 위치로 센다', async () => {
@@ -520,6 +554,14 @@ describe('카드 · 다 본 뒤 — 그 밖의 계약', () => {
     expect(view.result.current.ended).toBe(true);
     // 다 본 뒤 재생(처음부터) — 브라우저가 play 를 낸다
     sit(video, 0, 4, 'play');
+    expect(view.result.current.ended).toBe(false);
+  });
+
+  it('일시정지 · 버퍼링(pause · waiting)만으로는 다 봤다고 내지 않는다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(vodDetails()));
+    sit(video, 7_200, 4, 'pause');
+    sit(video, 7_200, 4, 'waiting');
     expect(view.result.current.ended).toBe(false);
   });
 
