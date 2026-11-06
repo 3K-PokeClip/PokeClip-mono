@@ -330,8 +330,9 @@ const LivePlayer = memo(function LivePlayer({
    */
   onRecordingLookup: (kind: RecordingLookup['kind']) => void;
   /**
-   * 녹화 조회를 새로 시작했다(끝난 방송으로 밝혀졌거나 끝 시각·기준점·영상 키가 바뀜). 조회 결과는 확인 중 그대로라 onRecordingLookup이
-   * 다시 불리지 않는다: 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 이 조회부터 다시 센다
+   * 녹화 조회를 새로 시작했다(끝난 방송으로 밝혀졌거나 끝 시각·기준점·영상 키가 바뀜). 끝난 뒤 들어온 화면(A)은 회차 경로를 묻기
+   * 시작할 때와 회차 다시보기 소스가 설 때 부른다(POK-546). 조회 결과는 확인 중 그대로라 onRecordingLookup이 다시 불리지 않는다:
+   * 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 이 조회부터 다시 센다
    */
   onRecordingLookupStart: () => void;
   /** 녹화의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
@@ -344,8 +345,9 @@ const LivePlayer = memo(function LivePlayer({
    */
   onSeek: () => void;
   /**
-   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 녹화가 서 있고 그 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는
-   * 녹화 소스 하나에서 읽는다(계획 검증 m11): 녹화 조회 결과와 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
+   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 녹화(끝난 뒤 들어온 화면은 회차 다시보기 — POK-546)가 서 있고 그
+   * 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는 소스(녹화 · 회차 다시보기)에서 읽는다(계획 검증 m11): 녹화 조회 결과와
+   * 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
    */
   onMarkableChange: (markable: boolean) => void;
   /** 재생 보유 중의 다시 고르기(useLiveStreamSelection — POK-200 M5). 보던 방송과 다른 답이면 「새 방송」 띠다 */
@@ -809,9 +811,13 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     return () => window.clearTimeout(timer);
   }, [recordingLookup, lookupStarts]);
   // 끝난 뒤 들어온 화면(A — 갈래가 notPast 아님)은 재생 서버 주소와 무관하게 다시보기가 곧 설 수 있는 동안 기다린다(dev · 운영은
-  // 재생 서버 주소가 비어 있다 — 계획 4절 D). 제어면 주소가 없으면 그 상태가 「물을 수 없음」으로 와 기다리지 않는다
+  // 재생 서버 주소가 비어 있다 — 계획 4절 D). 제어면 주소가 없으면 그 상태가 「물을 수 없음」으로 와 기다리지 않는다. 보관 기간이
+  // 지난 방송(410)은 다시보기를 묻지 않아 지금 그대로 재생 서버 주소로 가른다(설계 3절 표): 갈래만 보면 dev · 운영에서 채팅이 10초
+  // 「확인 중」이었다(c4 리뷰 F1)
+  const pastAwaits =
+    pastCard.kind !== 'notPast' && !(pastCard.kind === 'blocked' && pastCard.reason === 'expired');
   const awaitPlayhead =
-    (pastCard.kind !== 'notPast' || playbackConfigured()) &&
+    (pastAwaits || playbackConfigured()) &&
     recordingMayPlay(recordingLookup) &&
     !(recordingLookup === 'pending' && chatWaitOver);
   // 채팅 창이 그 시점(맨 아래)을 따라가는 횟수. 사람이 옮긴 것(영상 없이 누른 카드, 녹화의 시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤

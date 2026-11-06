@@ -224,12 +224,11 @@ const hlsFake = vi.hoisted(() => ({
   /** 마지막으로 선 재생기의 목록 갱신 처리기(LEVEL_UPDATED — POK-200 M5). 시험이 목록을 쏜다 */
   levelUpdated: null as ((event: string, data: unknown) => void) | null,
   /**
-   * 회차 다시보기 꼴(POK-546 — ENDLIST · 조각 여럿 · ms PDT). 켜면 재생기의 목록(latestLevelDetails)은 시험이 vodListed 로 쏜
-   * 목록이고, 쏘기 전(첫 LEVEL_UPDATED 지연)과 재생기를 내린 뒤에는 null 이다. 끄면 위의 라이브 꼴이다
+   * 회차 다시보기 꼴(POK-546 — ENDLIST · 조각 여럿 · ms PDT). 켜면 재생기의 목록(latestLevelDetails)은 그 재생기가 받은
+   * LEVEL_UPDATED 의 목록이다: 실제 hls.js 처럼 재생기마다 따로라, 새로 선 재생기는 첫 LEVEL_UPDATED 전(지연)에 null 이고
+   * 재생기를 내린 뒤에도 null 이다(옛 재생기의 목록을 읽지 않는다 — c4 리뷰 F3). 끄면 위의 라이브 꼴이다
    */
   vodMode: false,
-  /** vodMode 에서 시험이 마지막으로 쏜 목록 */
-  vodList: null as unknown,
   /** 재생기가 읽기 시작한 목록 주소들(loadSource) */
   sources: [] as string[],
 }));
@@ -255,11 +254,18 @@ vi.mock('hls.js', () => {
       LEVEL_LOAD_ERROR: 'levelLoadError',
       AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
     };
-    private readonly handlers = new Map<string, () => void>();
-    on(event: string, handler: () => void) {
+    private readonly handlers = new Map<string, (event?: string, data?: unknown) => void>();
+    /** 이 재생기가 마지막으로 받은 목록(vodMode) */
+    private levelDetails: unknown = null;
+    on(event: string, handler: (event?: string, data?: unknown) => void) {
       this.handlers.set(event, handler);
       if (event === 'hlsError') hlsFake.error = handler;
-      if (event === 'hlsLevelUpdated') hlsFake.levelUpdated = handler;
+      if (event === 'hlsLevelUpdated') {
+        hlsFake.levelUpdated = (name, data) => {
+          this.levelDetails = (data as { details?: unknown }).details ?? null;
+          handler(name, data);
+        };
+      }
     }
     private destroyed = false;
     off() {}
@@ -279,7 +285,7 @@ vi.mock('hls.js', () => {
       return hlsFake.sync ?? liveSyncSeconds();
     }
     get latestLevelDetails() {
-      if (hlsFake.vodMode) return this.destroyed ? null : hlsFake.vodList;
+      if (hlsFake.vodMode) return this.destroyed ? null : this.levelDetails;
       if (hlsFake.sliding) {
         const last = Math.floor((Date.now() - MEDIA_ZERO) / 4_000) * 4;
         const fragments = [];
@@ -1151,7 +1157,6 @@ beforeEach(() => {
   hlsFake.frags = true;
   hlsFake.levelUpdated = null;
   hlsFake.vodMode = false;
-  hlsFake.vodList = null;
   hlsFake.sources = [];
   control.stream = null;
   control.round = null;
@@ -1332,7 +1337,6 @@ function vodList(firstMs = VOD_STARTED, endMs = VOD_ENDED, durationS = 4) {
 
 /** 다시보기 재생기가 첫 목록을 받는다(첫 LEVEL_UPDATED) */
 async function vodListed(details: unknown = vodList()) {
-  hlsFake.vodList = details;
   await act(async () => {
     hlsFake.levelUpdated?.('hlsLevelUpdated', { details });
   });
@@ -1363,23 +1367,26 @@ function stubVodPlayer() {
 /**
  * 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부 ended)으로 지난 방송을 연다(POK-546). 회차 경로가 round 로 답하고(null 이면
  * 404), listed 면 다시보기 재생기가 첫 목록까지 받는다. 서버 기준점은 기본으로 방송 시작(= 목록 첫 조각)이라 영상 초 = 기준점
- * 축 초다. 녹화 재생 서버도 있고 녹화도 있다 — 녹화 길로 새면 녹화 조회가 잡힌다. strict 면 개발 서버처럼 StrictMode 로 그린다
+ * 축 초다. 녹화 재생 서버도 있고 녹화도 있다 — 녹화 길로 새면 녹화 조회가 잡힌다. configured 를 끄면 재생 서버 주소가 빈 dev ·
+ * 운영 설정이다. strict 면 개발 서버처럼 StrictMode 로 그린다
  */
 async function openPastVod({
   origin = VOD_STARTED as number | null,
   round = roundVod() as Record<string, unknown> | null,
   listed = true,
   strict = false,
+  configured = true,
 }: {
   origin?: number | null;
   round?: Record<string, unknown> | null;
   listed?: boolean;
   strict?: boolean;
+  configured?: boolean;
 } = {}) {
   stubVodPlayer();
   server.vodChat = true;
   server.vodOrigin = origin;
-  mediaCalls.configured = true;
+  mediaCalls.configured = configured;
   mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
   control.round = round;
   window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
@@ -6644,13 +6651,16 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
   const videoAt = (container: HTMLElement) => videoOf(container)?.currentTime ?? null;
 
   describe('T4-1 재생기 · 녹화 조회 길의 /playback 0(K5 범위 — 편집기 미리 받기는 이 시험 파일 머리에서 흉내 낸다)', () => {
-    it.each([
+    /** 회차 경로의 답 다섯 — 이름 · 본문(null 이면 404) · 본문 대신 낼 응답 코드 */
+    const ROUND_ANSWERS = [
       ['vod ∧ ready', roundVod(), null],
       ['ending', roundNotReady('ending'), null],
       ['ended', roundNotReady('ended'), null],
       ['404(제어면이 모르는 회차)', null, null],
       ['503', null, 503],
-    ] as const)(
+    ] as const;
+
+    it.each(ROUND_ANSWERS)(
       '지난 방송 주소 · 회차 답 %s — 녹화를 묻지도 틀지도 않는다',
       async (_, round, status) => {
         control.roundStatus = status;
@@ -6663,6 +6673,56 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
         expect(hlsFake.sources).toEqual(round !== null && round.ready ? [VOD_LIST_URL] : []);
       },
     );
+
+    /**
+     * 세션을 연 적 없는 끝난 방송을 라이브 주소(?stream=)로 연다. 재생 서버도 있고 녹화도 있다 — 녹화 길로 새면 녹화 조회가
+     * 잡힌다. 대시보드 A 는 라이브를 보다 끝난 화면인데, 시험이 제어면 주소를 방송이 끝난 뒤에야 넣는 인공 구성이다: 방송 중에
+     * 제어면 주소가 있으면 재생 세션을 열어 세션을 연 화면(B)이 된다
+     */
+    async function openEndedByStream(entry: 'stream' | 'dashboard') {
+      mediaCalls.configured = true;
+      mediaCalls.answer = Promise.resolve([{ startMs: STARTED_AT, durationSeconds: 5_100 }]);
+      nav.search = `?stream=${STREAM_ID}`;
+      window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+      if (entry === 'stream') {
+        stubVodPlayer();
+        server.liveEnded = true;
+      }
+      const result = await renderLive();
+      if (entry === 'dashboard') {
+        server.liveEnded = true;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        await settle();
+        stubVodPlayer();
+      }
+      await nextRoundPoll();
+      return result;
+    }
+
+    it.each(
+      (
+        [
+          ['?stream= 주소', 'stream'],
+          ['대시보드 A', 'dashboard'],
+        ] as const
+      ).flatMap(([label, entry]) =>
+        ROUND_ANSWERS.map(([name, round, status]) => [label, name, entry, round, status] as const),
+      ),
+    )('%s · 회차 답 %s — 녹화를 묻지도 틀지도 않는다', async (_, __, entry, round, status) => {
+      control.round = round;
+      control.roundStatus = status;
+      const { container } = await openEndedByStream(entry);
+
+      // 끝난 뒤 들어온 화면(A)이다 — 세션을 연 화면(B) · 라이브는 지금 길(notPast)이다
+      expect(lastPastCard()?.kind).not.toBe('notPast');
+      expect(control.calls).toContain(`/api/streams/${STREAM_ID}/rounds/${STREAM_ID}/rewind`);
+      expect(mediaCalls.spans).toEqual([]);
+      expect(playbackFetches()).toBe(0);
+      expect(videoOf(container)?.getAttribute('src') ?? '').not.toContain('/playback/');
+      expect(hlsFake.sources).toEqual(round !== null && round.ready ? [VOD_LIST_URL] : []);
+    });
 
     it('?stream= 로 고정한 끝난 방송(세션을 연 적 없음)도 회차 다시보기를 튼다', async () => {
       stubMediaElement();
@@ -6764,6 +6824,30 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
       expect(mediaCalls.spans).toEqual([]);
     });
+
+    // 보관 기간이 지난 방송(410)은 설계 3절 표대로 채팅이 지금 그대로다: 재생 서버 주소가 없는 dev · 운영 설정이면 곧바로 방송
+    // 끝이고, 있으면 지금처럼 녹화 확인 한도(10초)까지 기다린다. 끝난 뒤 들어온 화면이라는 것만으로 기다리게 하면 dev · 운영에서
+    // 채팅이 10초 「확인 중」이었다(c4 리뷰 F1)
+    it.each([
+      ['재생 서버 주소가 없으면 기다리지 않고 곧바로', false],
+      ['재생 서버 주소가 있으면 10초를 기다린 뒤', true],
+    ] as const)(
+      '보관 기간이 지났으면(410) %s 방송 끝을 보인다 — 지금 그대로',
+      async (_, configured) => {
+        server.playback = 'expired';
+        await openPastVod({ listed: false, configured });
+        expect(
+          screen.getByText(configured ? /^시점을 확인하는 중/ : /^마지막 메시지까지 보는 중/),
+        ).toBeInTheDocument();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000);
+        });
+        await settle();
+        expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
+        expect(mediaCalls.spans).toEqual([]);
+      },
+    );
 
     it('출입증을 못 받으면 기다리지 않고 곧바로 방송 끝을 보인다', async () => {
       server.playback = 'fail';
@@ -7009,6 +7093,32 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       expect(pastCardLog.slice(reset).some((c) => c.phase === 'showing')).toBe(false);
     });
 
+    // 실제 hls.js 는 새 재생기의 목록(latestLevelDetails)이 첫 LEVEL_UPDATED 전에 비어 있다. 다시 선 재생기의 영상 노드가 그 전에
+    // 재생 사건을 내도 화면 위치로 셈하지 않고, 누른 카드는 받아 두었다가 첫 목록 뒤 그 자리로 간다(c4 리뷰 F3)
+    it('403 으로 다시 선 재생기가 첫 목록 전에 재생 사건을 내도 위치를 지어내지 않고, 누른 카드는 받아 두었다가 첫 목록 뒤 그 자리다', async () => {
+      server.playback = 'grant';
+      const { container } = await openPastVod();
+      await playTo(container, 10);
+      expect(lastPastCard()?.phase).toBe('showing');
+
+      reportPlaybackForbidden(VOD_ID);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await settle();
+      await playTo(container, 12);
+      expect(lastPastCard()).toEqual({ phase: 'loading', kind: 'waiting', reason: null });
+
+      fireEvent.click(screen.getByRole('button', { name: CARD4 }));
+      await settle();
+      expect(screen.getByText(WAITING_NOTICE)).toBeInTheDocument();
+      expect(screen.queryByText(CANNOT_MOVE)).toBeNull();
+
+      await vodListed();
+      expect(videoAt(container)).toBe(CARD4_S);
+      expect(lastPastCard()?.kind).toBe('playable');
+    });
+
     it('재생기 층이 내려가면 부모의 갈래는 notPast 로 돌아간다 — 카드는 지금 길(영상 없음)로 간다', async () => {
       await openPastVod({ listed: false });
       expect(lastPastCard()?.kind).toBe('waiting');
@@ -7107,7 +7217,6 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
         const details = vodList();
         await act(async () => {
           if (order === 'card-first') fireEvent.click(screen.getByRole('button', { name: CARD4 }));
-          hlsFake.vodList = details;
           hlsFake.levelUpdated?.('hlsLevelUpdated', { details });
           if (order === 'list-first') fireEvent.click(screen.getByRole('button', { name: CARD4 }));
         });
