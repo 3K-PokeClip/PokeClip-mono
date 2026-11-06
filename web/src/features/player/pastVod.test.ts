@@ -46,8 +46,8 @@ const STATES = {
 type StateName = keyof typeof STATES;
 
 /** ready 가 아닌 직전 상태 — 「답이 상태를 정한다」 사례는 이 모두에서 같은 결과다 */
-const NOT_READY_PREVS: readonly [StateName, PastVodState][] = (
-  Object.entries(STATES) as [StateName, PastVodState][]
+const NOT_READY_PREVS: ReadonlyArray<[StateName, PastVodState]> = (
+  Object.entries(STATES) as Array<[StateName, PastVodState]>
 ).filter(([name]) => name !== 'ready');
 
 /** 200 답. ready 면 범위가 다 있고, vod 미준비면 url 만 있다(parseRewindStatus 가 받는 꼴) */
@@ -109,7 +109,7 @@ describe('nextPastVodState — 설계 4-5 답 처리 표의 일곱 줄', () => {
 
 describe('nextPastVodState — T1-1 답 × 직전 상태', () => {
   /** 답이 상태를 정하는 200 답 — ready 가 아닌 직전이면 어느 것이든 이 결과다 */
-  const DECIDING: readonly [string, StateName, RewindStatusResult][] = [
+  const DECIDING: ReadonlyArray<[string, StateName, RewindStatusResult]> = [
     ['live · ready', 'preparing', ok('live', true)],
     ['live · 미준비', 'preparing', ok('live', false)],
     ['ending', 'preparing', ok('ending', false)],
@@ -126,7 +126,7 @@ describe('nextPastVodState — T1-1 답 × 직전 상태', () => {
   });
 
   /** ready 뒤에 올 수 있는 답 전부 — 이름 · 답 · 시계 */
-  const AFTER_READY: readonly [string, RewindStatusResult, PastVodClock][] = [
+  const AFTER_READY: ReadonlyArray<[string, RewindStatusResult, PastVodClock]> = [
     ...DECIDING.map(([label, , result]): [string, RewindStatusResult, PastVodClock] => [
       `200 ${label}`,
       result,
@@ -314,6 +314,12 @@ describe('pastCardMode — T1-4 판정표 10줄(위에서부터 처음 맞는 �
 
     it('보관 만료가 vod ready · 재생 중(showing)보다 이긴다', () => {
       expect(pastCardMode(inputWith({ expired: true }))).toEqual(blocked('expired'));
+    });
+
+    it.each(NOT_READY_PREVS)('보관 만료가 다시보기 상태 %s 보다 이긴다', (_name, vod) => {
+      expect(pastCardMode(inputWith({ expired: true, vod, phase: null }))).toEqual(
+        blocked('expired'),
+      );
     });
 
     it('vod 가 ready 가 아니면 출입증 · 국면을 보지 않는다', () => {

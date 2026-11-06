@@ -276,9 +276,11 @@ function VodGlassPlayer(props: GlassPlayerProps & { vod: VodSource }) {
   useEffect(() => {
     onVodPhase?.(phase);
   }, [phase, onVodPhase]);
+  // 녹화는 몸통에 넘기지 않는다 — 지금 자리(currentPositionMs)의 축 판정이 이 재생기의 축(vod.originAxis)만 보게 한다
   return (
     <GlassPlayerBody
       {...props}
+      recorded={null}
       sim={sim}
       buffering={buffering}
       videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}

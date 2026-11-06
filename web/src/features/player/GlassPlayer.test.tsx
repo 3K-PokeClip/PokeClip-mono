@@ -1586,6 +1586,22 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     expect(controllerRef.current?.currentPositionMs?.()).toBeNull();
   });
 
+  it('지금 자리는 다시보기의 축만 본다 — 녹화가 기준점 축이어도 다시보기가 아니면 null 이다', async () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    const { container } = await renderVod({
+      controllerRef,
+      vod: { ...VOD, originAxis: false },
+      recorded: {
+        streamId: 'x',
+        ...recordingTimeline([{ startMs: 0, durationSeconds: 60 }], 0, null)!,
+        originAxis: true,
+      },
+    });
+    listTwoHours();
+    sit(container, 600.25);
+    expect(controllerRef.current?.currentPositionMs?.()).toBeNull();
+  });
+
   it('화면에 붙은 자리를 모르면(readyState 1) 지금 자리는 null 이다 — 지어내지 않는다', async () => {
     const controllerRef = createRef<GlassPlayerController>();
     const { container } = await renderVod({ controllerRef });

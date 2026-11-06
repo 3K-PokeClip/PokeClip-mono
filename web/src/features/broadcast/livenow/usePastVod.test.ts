@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { Suspense, createElement, startTransition, useLayoutEffect } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PastVodState } from '@/features/player/pastVod';
 import { RESUME_WAIT_MS } from '@/features/player/sessionShared';
@@ -391,12 +391,29 @@ describe('usePastVod: 경로를 바꾼 커밋 직후 · passive 전에 온 옛 �
   let previousActEnvironment: boolean | undefined;
   const actScope = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
+  /**
+   * 이 묶음이 세운 뿌리. createRoot 는 Testing Library 의 자동 정리 밖이라 afterEach 가 내린다 — 중간 단언이 깨져도 실제
+   * 시계로 도는 폴러가 뒤 시험에 남지 않게
+   */
+  let roots: Root[] = [];
+
+  /** 뿌리를 세우고 정리 대상으로 적는다 */
+  function mountRoot(): Root {
+    const root = createRoot(document.createElement('div'));
+    roots = [...roots, root];
+    return root;
+  }
+
   beforeEach(() => {
     vi.useRealTimers();
     previousActEnvironment = actScope.IS_REACT_ACT_ENVIRONMENT;
     actScope.IS_REACT_ACT_ENVIRONMENT = false;
   });
   afterEach(() => {
+    for (const root of roots) {
+      root.unmount();
+    }
+    roots = [];
     actScope.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
   });
 
@@ -468,7 +485,7 @@ describe('usePastVod: 경로를 바꾼 커밋 직후 · passive 전에 온 옛 �
     };
     // 명부 ended 는 정산 뒤라 유예 밖이다 — 옛 404 가 새 경로로 접히면 곧바로 none 으로 굳는다
     const vod = input({ endedAtMs: Date.now() - 20 * 60_000 });
-    const root = createRoot(document.createElement('div'));
+    const root = mountRoot();
     root.render(createElement(Probe, { vod, record }));
     await waitUntil(() => requests.length >= 1);
     expect(requests.map((r) => r.url)).toEqual([ROUND_1]);
@@ -482,11 +499,11 @@ describe('usePastVod: 경로를 바꾼 커밋 직후 · passive 전에 온 옛 �
     );
     // 고친 코드는 새 경로를 묻는다(두 번째 요청). 옛 답이 새 경로로 접히면 폴링이 멈춰 두 번째 요청이 끝내 나가지 않는다
     await waitUntil(() => requests.length >= 2);
-    return { requests, committed: () => committed, root };
+    return { requests, committed: () => committed };
   }
 
   it('옛 경로의 404 는 새 경로를 none 으로 굳히지 않고, 새 경로 요청이 나간다', async () => {
-    const { requests, committed, root } = await runRace(404);
+    const { requests, committed } = await runRace(404);
     expect(committed()).toEqual({ kind: 'checking', answered: false });
     expect(requests.map((r) => r.url)).toEqual([ROUND_1, ROUND_REAL]);
 
@@ -494,14 +511,12 @@ describe('usePastVod: 경로를 바꾼 커밋 직후 · passive 전에 온 옛 �
     requests[1]!.answer(503);
     await waitUntil(() => committed()?.kind === 'unavailable');
     expect(committed()).toEqual({ kind: 'unavailable' });
-    root.unmount();
   });
 
   it('옛 경로의 ready 는 옛 방송 목록을 새 자리에 세우지 않고, 새 경로 요청이 나간다', async () => {
-    const { requests, committed, root } = await runRace(200, READY_BODY);
+    const { requests, committed } = await runRace(200, READY_BODY);
     expect(committed()).toEqual({ kind: 'checking', answered: false });
     expect(requests.map((r) => r.url)).toEqual([ROUND_1, ROUND_REAL]);
-    root.unmount();
   });
 
   // 전이(startTransition)로 B 경로를 렌더하다 형제가 멈춰(Suspense) 그 렌더가 버려지고, 처음 A 요소를 그대로 다시 렌더해
@@ -571,7 +586,7 @@ describe('usePastVod: 경로를 바꾼 커밋 직후 · passive 전에 온 옛 �
       };
       const committed = (): PastVodState | null => latest;
       const stageA = createElement(Stage, { vod: input(), suspend: false, record });
-      const root = createRoot(document.createElement('div'));
+      const root = mountRoot();
       root.render(stageA);
       await waitUntil(() => requests.length >= 1);
       expect(requests.map((r) => r.url)).toEqual([ROUND_1]);
@@ -600,7 +615,41 @@ describe('usePastVod: 경로를 바꾼 커밋 직후 · passive 전에 온 옛 �
       requests[1]!.answer(200, READY_BODY);
       await waitUntil(() => committed()?.kind === 'ready');
       expect(committed()?.kind).toBe('ready');
-      root.unmount();
+    }, 10_000);
+
+    it('A → 전이로 B 렌더가 멈춘 동안(복귀 전) 온 A 의 503 은 unavailable 이고, A 요소로 복귀한 뒤 ready 도 받는다', async () => {
+      renderedKeys = [];
+      const requests = stubQuickFetch();
+      let latest: PastVodState | null = null;
+      const record = (state: PastVodState) => {
+        latest = state;
+      };
+      const committed = (): PastVodState | null => latest;
+      const stageA = createElement(Stage, { vod: input(), suspend: false, record });
+      const root = mountRoot();
+      root.render(stageA);
+      await waitUntil(() => requests.length >= 1);
+
+      startTransition(() => {
+        root.render(
+          createElement(Stage, { vod: input({ controlKey: 'key-real' }), suspend: true, record }),
+        );
+      });
+      await waitUntil(() => renderedKeys.includes('key-real'));
+      expect(renderedKeys).toContain('key-real');
+      // B 렌더는 멈춘 채 커밋되지 않았다 — 커밋된 A 의 답이라 접힌다
+      requests[0]!.answer(503);
+      await waitUntil(() => committed()?.kind === 'unavailable');
+      expect(committed()).toEqual({ kind: 'unavailable' });
+      expect(requests.map((r) => r.url)).toEqual([ROUND_1]);
+
+      root.render(stageA);
+      askAgainOnVisible();
+      await waitUntil(() => requests.length >= 2);
+      expect(requests.map((r) => r.url)).toEqual([ROUND_1, ROUND_1]);
+      requests[1]!.answer(200, READY_BODY);
+      await waitUntil(() => committed()?.kind === 'ready');
+      expect(committed()?.kind).toBe('ready');
     }, 10_000);
   });
 });

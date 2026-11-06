@@ -5,8 +5,8 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
-  useState,
   type RefObject,
 } from 'react';
 import type { VodPhase } from './pastVod';
@@ -37,22 +37,64 @@ const HAVE_CURRENT_DATA = 2;
 
 /** 재생기가 받은 목록의 범위 — 소스가 바뀔 때까지 지우지 않는다(재생기를 내린 뒤에도 시크바 폭이 남는다) */
 interface VodList {
-  url: string;
   firstMs: number;
   lastEndMs: number;
 }
 
 /**
- * 사건(timeupdate · seeking · seeked) 때 잰 두 자리. axisPdtMs 는 재생 위치의 PDT(막대 값), shownPdtMs 는 화면에 붙은
- * 자리의 PDT(알리는 위치)다. 새 값이 null 이면 그 칸만 직전 값을 둔다
+ * 사건(SAMPLE_EVENTS) 때 잰 두 자리. axisPdtMs 는 재생 위치의 PDT(막대 값), shownPdtMs 는 화면에 붙은 자리의 PDT(알리는
+ * 위치)다. 새 값이 null 이면 그 칸만 직전 값을 둔다
  */
 interface VodSample {
-  url: string;
   axisPdtMs: number | null;
   shownPdtMs: number | null;
 }
 
-const SAMPLE_EVENTS = ['timeupdate', 'seeking', 'seeked'] as const;
+/**
+ * 소스 하나로 쌓은 것 — 받은 목록과 잰 자리를 한 묶음으로 둔다. 주소가 바뀌면 묶음째 새로 세워, 다른 주소로 갔다 돌아와도
+ * 옛 목록 · 옛 자리가 되살아나지 않는다(설계 2-3 「소스가 바뀔 때까지」)
+ */
+interface VodHeld {
+  forUrl: string;
+  list: VodList | null;
+  sample: VodSample | null;
+}
+
+/** 주소 하나의 새 묶음 — 목록도 잰 자리도 아직 없다 */
+function freshHeld(url: string): VodHeld {
+  return { forUrl: url, list: null, sample: null };
+}
+
+/** 묶음을 바꾸는 일 — 주소가 바뀜 · 재생기가 받은 목록 · 사건 때 잰 자리. 목록 · 자리는 그것을 낸 주소를 싣는다 */
+type VodHeldAction =
+  | { type: 'source'; url: string }
+  | ({ type: 'list'; url: string } & VodList)
+  | ({ type: 'sample'; url: string } & VodSample);
+
+/** 주소가 바뀌면 묶음째 새로 세우고, 목록 · 자리는 묶음의 주소와 낸 주소가 같을 때만 받는다(앞 주소의 것은 버린다) */
+function heldReducer(held: VodHeld, action: VodHeldAction): VodHeld {
+  if (action.type === 'source') {
+    return held.forUrl === action.url ? held : freshHeld(action.url);
+  }
+  if (held.forUrl !== action.url) {
+    return held;
+  }
+  if (action.type === 'list') {
+    return { ...held, list: { firstMs: action.firstMs, lastEndMs: action.lastEndMs } };
+  }
+  const axisPdtMs = action.axisPdtMs ?? held.sample?.axisPdtMs ?? null;
+  const shownPdtMs = action.shownPdtMs ?? held.sample?.shownPdtMs ?? null;
+  if (held.sample?.axisPdtMs === axisPdtMs && held.sample.shownPdtMs === shownPdtMs) {
+    return held;
+  }
+  return { ...held, sample: { axisPdtMs, shownPdtMs } };
+}
+
+/**
+ * 다시 그리는 계기. loadeddata · canplay 는 자동 재생이 막혀 첫 프레임 뒤 timeupdate · seeking · seeked 가 나지 않는
+ * 브라우저에서도 화면에 붙은 첫 자리를 재게 한다
+ */
+const SAMPLE_EVENTS = ['timeupdate', 'seeking', 'seeked', 'loadeddata', 'canplay'] as const;
 
 /** 목표 실제 시각을 목록 범위(첫 조각 · 끝) 안으로 가둔다 */
 function clampToView(targetMs: number, view: SeekView): number {
@@ -83,7 +125,7 @@ function vodPhase(input: {
 }
 
 /**
- * @param vod 틀 목록과 카드 · 채팅 축. 주소가 바뀌면 받은 목록 · 잰 자리를 버린다
+ * @param vod 틀 목록과 카드 · 채팅 축. 주소가 바뀌면 받은 목록 · 잰 자리를 버린다(앞 주소로 돌아와도 되살리지 않는다)
  * @param onSeek 사람이 옮겼다(시크바 · 키 · 카드 · 다 본 뒤 처음부터). 재생으로 흐를 때는 부르지 않는다
  * @param mediaKey 영상 키(출입증 쿠키의 경로) — useHlsPlayback 과 같다
  * @param afterForbidden 403 으로 출입증을 다시 받은 뒤 새로 선 재생기다 — useHlsPlayback 과 같다
@@ -103,8 +145,15 @@ export function useVodPlayback(
   startAtSeconds: number | null = null,
   onStartApplied?: () => void,
 ): PlayerSimulation & { positionSeconds: number | null; phase: VodPhase } {
-  const [loaded, setLoaded] = useState<VodList | null>(null);
-  const [sampled, setSampled] = useState<VodSample | null>(null);
+  // useState 가 아니라 useReducer 다(usePastVod 와 같은 까닭). useState 의 갱신은 마지막으로 렌더한 상태로 결과를 미리 셈해
+  // 같으면 렌더를 건너뛰는데, 그 상태가 버려진 렌더의 것이면 지금 주소의 목록 · 자리를 「다른 주소」로 셈해 버린다
+  const [held, dispatchHeld] = useReducer(heldReducer, vod.url, freshHeld);
+  // 주소가 바뀐 렌더에서 곧바로 새 묶음으로 바꾼다(렌더 중 갱신 — 다음 렌더 전에 반영되고, 렌더가 버려지면 함께 버려진다)
+  let current = held;
+  if (held.forUrl !== vod.url) {
+    current = freshHeld(vod.url);
+    dispatchHeld({ type: 'source', url: vod.url });
+  }
   // 훅 고리는 재생기보다 먼저 만든다 — 그래서 고리가 부를 seekToMs 는 ref 로 잇는다
   const seekToMsRef = useRef<(atMs: number) => void>(() => undefined);
   const hooks = useMemo<PlaybackHooks>(
@@ -112,7 +161,8 @@ export function useVodPlayback(
       // 세션 모드: 카드의 실제 시각 옮기기(seekToDate)가 범위 밖 판정을 하고 여기로 넘긴다. VOD 하한은 첫 조각이라 그 앞은 첫
       // 조각으로 조용히 자르고, 끝 뒤는 끝이다
       onSeekRequest: (targetMs, view) => seekToMsRef.current(clampToView(targetMs, view)),
-      onListLoaded: ({ url, firstMs, lastEndMs }) => setLoaded({ url, firstMs, lastEndMs }),
+      onListLoaded: ({ url, firstMs, lastEndMs }) =>
+        dispatchHeld({ type: 'list', url, firstMs, lastEndMs }),
     }),
     [],
   );
@@ -129,8 +179,7 @@ export function useVodPlayback(
   const { seekToMs, seekToDate, currentProgramDateMs, togglePlay: toggleHlsPlay } = sim;
   seekToMsRef.current = seekToMs;
 
-  const list = loaded !== null && loaded.url === vod.url ? loaded : null;
-  const sample = sampled !== null && sampled.url === vod.url ? sampled : null;
+  const { list, sample } = current;
   const axisPdtMs = sample?.axisPdtMs ?? null;
   const shownPdtMs = sample?.shownPdtMs ?? null;
 
@@ -151,23 +200,13 @@ export function useVodPlayback(
     if (video === null) {
       return;
     }
-    const measure = () => {
-      const axisNow = currentProgramDateMs();
-      const shownNow = readShownPdtMs();
-      setSampled((prev) => {
-        const own = prev !== null && prev.url === url ? prev : null;
-        const next = {
-          url,
-          axisPdtMs: axisNow ?? own?.axisPdtMs ?? null,
-          shownPdtMs: shownNow ?? own?.shownPdtMs ?? null,
-        };
-        return own !== null &&
-          own.axisPdtMs === next.axisPdtMs &&
-          own.shownPdtMs === next.shownPdtMs
-          ? own
-          : next;
+    const measure = () =>
+      dispatchHeld({
+        type: 'sample',
+        url,
+        axisPdtMs: currentProgramDateMs(),
+        shownPdtMs: readShownPdtMs(),
       });
-    };
     for (const type of SAMPLE_EVENTS) {
       video.addEventListener(type, measure);
     }

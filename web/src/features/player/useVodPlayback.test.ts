@@ -261,7 +261,8 @@ describe('위치 계약 — 위치를 모르면 끝까지 null', () => {
     expect(view.result.current.positionSeconds).toBe(9);
     // 재생기 자리(livePosition)는 실제 초로 묶여 같은 초(첫 PDT + 8초) 안에서는 그대로다 — 그것에 기대면 바뀌지 않는다
     const live = (view.result.current as { livePosition?: unknown }).livePosition;
-    expect(live).not.toBeNull();
+    // 칸 이름이 바뀌거나 반환에서 빠지면 undefined 다 — 아래 무변경 단언이 빈 단언이 되지 않게 모양까지 본다
+    expect(live).toEqual(expect.objectContaining({ atMs: expect.any(Number) }));
     sit(video, 8.64);
     expect((view.result.current as { livePosition?: unknown }).livePosition).toBe(live);
     expect(view.result.current.positionSeconds).toBe(10);
@@ -277,6 +278,17 @@ describe('위치 계약 — 위치를 모르면 끝까지 null', () => {
     // 부르는 순간 읽는 지금 자리는 모른다
     expect(view.result.current.currentPositionSeconds?.()).toBeNull();
   });
+
+  it.each(['loadeddata', 'canplay'])(
+    '자동 재생이 막혀 timeupdate 가 없어도 첫 프레임(%s)에서 화면 위치를 낸다',
+    async (event) => {
+      const { view, video } = await renderVod();
+      act(() => lastHls().list(vodDetails()));
+      sit(video, 0, 4, event);
+      expect(view.result.current.positionSeconds).toBe(0);
+      expect(view.result.current.phase).toBe('showing');
+    },
+  );
 });
 
 describe('시크바 — 다시보기 전체 길이 축(1시간에서 자르지 않는다)', () => {
@@ -481,5 +493,27 @@ describe('카드 · 다 본 뒤 — 그 밖의 계약', () => {
     expect(view.result.current.windowSeconds).toBe(0);
     expect(view.result.current.positionSeconds).toBeNull();
     expect(view.result.current.phase).toBe('loading');
+  });
+
+  it('A → B(목록 전) → A 로 돌아와도 버린 A 의 목록 · 위치를 되살리지 않는다 — 새 A 재생기의 목록부터 다시 선다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(vodDetails()));
+    sit(video, 600);
+    for (const url of [`${VOD_URL}?b`, VOD_URL]) {
+      act(() => view.rerender({ vod: vodSource({ url }), startAtSeconds: null }));
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+    }
+    expect(view.result.current.windowSeconds).toBe(0);
+    expect(view.result.current.behindSeconds).toBe(0);
+    expect(view.result.current.positionSeconds).toBeNull();
+    expect(view.result.current.phase).toBe('loading');
+
+    // 새 A 재생기의 목록이 오면 폭이 서고, 화면 위치는 새 사건이 낼 때까지 모른다
+    act(() => lastHls().list(vodDetails()));
+    expect(view.result.current.windowSeconds).toBe(7_200);
+    expect(view.result.current.positionSeconds).toBeNull();
+    expect(view.result.current.phase).toBe('listed');
   });
 });

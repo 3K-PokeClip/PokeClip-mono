@@ -24,7 +24,9 @@ export type PastVodState =
   /** 잠시 불가 — 아직 아무 답도 없을 때 받은 503 · 그 밖 응답 · 망 · 형식 오류 · 시한 */
   | { kind: 'unavailable' };
 
+/** 404 유예를 잴 시계 — 답을 받은 때와 유예의 원점(nextPastVodState 가 404 에서만 본다) */
 export interface PastVodClock {
+  /** 답을 받은 시각(epoch ms) */
   nowMs: number;
   /** 404 유예의 원점 — 명부 endedAt, 없으면 이 화면이 처음 404 를 받은 시각 */
   unknownSinceMs: number;
@@ -35,7 +37,7 @@ export interface PastVodClock {
  * - loading: 재생기가 섰고 첫 목록 전
  * - listed: 첫 목록을 받음 · 화면에 붙은 위치는 아직
  * - showing: 화면에 붙은 위치를 한 번 이상 냄
- * - unsupported: hls.js 없음(기본 HLS — 조각 목록 · PDT 축 없음)
+ * - unsupported: hls.js 없음 — 기본 HLS 로 틀면 조각 목록 · PDT 축이 없고, 기본 HLS 도 없으면 틀 수 없다(둘 다)
  * - failed: 위치를 한 번도 못 낸 채 멈춤(loading · listed 중 재생 오류)
  */
 export type VodPhase = 'loading' | 'listed' | 'showing' | 'unsupported' | 'failed';
@@ -62,7 +64,12 @@ export type PastCardMode =
   /** A · 끝내 서지 않음(또는 멈춤) — 까닭을 알린다 */
   | { kind: 'blocked'; reason: PastBlockReason };
 
+/** 카드 갈래를 가르는 입력(pastCardMode) — 화면 · 다시보기 상태 · 출입증 · 재생기 국면을 한데 모은다 */
 export interface PastCardInput {
+  /**
+   * 끝난 뒤 들어온 화면(A)인가 — 세션을 연 적 없이 명부가 ended 다(useLiveSession 이 정한다). 라이브 · B(세션을 연 화면) ·
+   * 명부 상태 모름은 거짓이다
+   */
   enteredAfterEnd: boolean;
   /** 410 보관 만료(accessExpiredFor === accessKey) */
   expired: boolean;
