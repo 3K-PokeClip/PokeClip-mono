@@ -1839,8 +1839,8 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
     둘 다 `0` 이 되고, 그 뒤 clip 로그 그룹에 `clip.purge.*` 줄이 새로
     생기지 않는지 봅니다. 도는 중에 끊긴 정리는 다음에 부르면 이어집니다.
 1.  **진행 중 주문**: 먼저 갈래를 정합니다 — 일꾼이 배치돼 받고 있는가
-    (일꾼 배치 PR 의 apply 기록 · 일꾼 서비스 desired count. 보는 명령은
-    배치 PR 이 채웁니다).
+    (`prod/workers` 의 apply 기록 · 일꾼 서비스 desired count. 보는 명령은
+    「1단-나 ② 8」 의 「일꾼 멈춤」 기록 블록과 같습니다).
     *   **배치 갈래**: 원 큐 셋의 두 지표
         `ApproximateNumberOfMessages` · `ApproximateNumberOfMessagesNotVisible`
         가 둘 다 0 이 될 때까지 기다립니다(하나만 보면 일꾼이 쥔 메시지를
@@ -2122,7 +2122,7 @@ Media 상자가 읽는 auth 출입증을 공용 `INTERNAL_API_TOKEN` 에서 reso
 | 5 | platform(O7d 또는 그 뒤) | plan 승인 |
 | 6 | prod/media 적용 모드 확인 | — |
 | 7 | prod/media plan · apply(권한 축소) · 실물 확인 | plan 승인 |
-| 8 | 공용 토큰 1회 회전(조건 없음) | send-command · 값 입력 · 재배포 |
+| 8 | 공용 토큰 1회 회전(조건 없음) · 일꾼은 멈춘 채 | send-command · 일꾼 멈춤 · 값 입력 · 재배포 · 일꾼 복원 |
 | 9 | 응답기 기동 · 교체 | send-command |
 | 10 | 음성 확인(전용 토큰 · 옛 공용 토큰 401) | send-command · 포트 포워딩 |
 | 11 | 기록 | — |
@@ -2413,22 +2413,65 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     셋째 측정 시각에서 끝납니다. AWS 는 IAM 변경이 모든 곳에 보이기까지
     시간이 걸린다고만 하고 수치를 주지 않습니다 — 30분 · 3회 · 5분은 kty
     확정 값입니다.
+*   **일꾼 멈춤**(쓰기 — 실행 직전 **kty 승인**): 일꾼 render · upload 를
+    값 넣기 전에 멈추고, 앱 서버 재배포가 끝난 뒤에 되살립니다. 앱 서버
+    롤링 동안 옛 값 · 새 값 태스크가 겹쳐 일꾼의 내부 호출 일부가 401 을
+    받고, 사진 보고가 401 을 받으면 그 주문 메시지가 그 자리에서 지워집니다
+    (DLQ 를 거치지 않는 손실). 일꾼을 clip 보다 먼저 재배포해도 clip 의 롤링
+    자체가 겹침을 만들어 이 창은 없어지지 않습니다. 멈춘 동안 주문은 큐에
+    남고(보관 4일) 받은 횟수도 오르지 않습니다.
+
+    먼저 두 서비스의 지금 상태와 원하는 수를 기록합니다(읽기). 긴급 정지로
+    이미 0 인 서비스를 복원 때 되살리지 않으려는 기록입니다.
+
+    ```shell
+    umask 077
+    for k in render upload; do
+      printf '%s %s\n' "${k}" "$(aws ecs describe-services \
+        --region ap-northeast-2 --cluster pokeclip-prod \
+        --services "pokeclip-prod-${k}" \
+        --query 'services[0].[status,desiredCount]' --output text)"
+    done | tee "${work}/workers-before.txt"
+    ```
+
+    *   `<키> ACTIVE 1` → 0 으로 내립니다(쓰기 — **kty 승인**):
+        `aws ecs update-service --region ap-northeast-2 --cluster
+        pokeclip-prod --service pokeclip-prod-<키> --desired-count 0
+        --query service.serviceName --output text`. 아래 읽기가 `0 0 0`
+        (원하는 수 · 실행 수 · 대기 수)이 될 때까지 기다린 뒤 값을 넣습니다.
+    *   `<키> ACTIVE 0` → 이미 멈춤(긴급 정지 등)입니다. 그대로 두고
+        기록합니다.
+    *   `<키> None` → 서비스 없음(`prod/workers` 를 apply 하지 않았거나
+        내림)입니다. 기록만 합니다.
+    *   그 밖의 값(`ACTIVE 2` · `DRAINING` 등) → 멈춤 · kty 회부.
+
+    ```shell
+    aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
+      --query 'services[0].[desiredCount,runningCount,pendingCount]' \
+      --output text
+    ```
+
 *   **값 넣기**(실행 직전 **kty 승인**): 4 와 같은 꼴로 종류
     `internal-api-token` 에 `openssl rand -hex 32` 값을 넣습니다. 전용 토큰
     값과 달라야 합니다. 옛 값은 `AWSPREVIOUS` 로 남고 10 이 그것을 씁니다.
     종료 4(DENIED)는 다시 시도하지 않고 멈춥니다.
-*   **앱 전원 강제 재배포**: 대상 = 공용 그릇을 읽는 서비스 키 전부.
-    손으로 적지 않고 출력에서 뽑습니다(키만 냄 · ARN 은 내지 않음).
+*   **앱 전원 강제 재배포**: 대상 = 공용 그릇을 읽는 서비스 키 중 일꾼
+    render · upload 를 뺀 전부입니다(일꾼은 「일꾼 멈춤」 · 「일꾼 복원」 이
+    맡습니다). 손으로 적지 않고 출력에서 뽑습니다(키만 냄 · ARN 은 내지
+    않음).
 
     ```shell
     # 값 넣기가 저장소 뿌리로 왔다 — 출력은 하위 셸에서 runtime 으로 가 읽고,
     # 9 · 10 의 media_ssm 이 쓰는 뿌리 cwd 는 그대로 둔다. 출력 실패나 auth ·
-    # clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로 멈춘다.
+    # clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로 멈춘다. 일꾼 둘은
+    # 멈춘 채 두므로 필터가 걸러 낸다.
     (
       set -o pipefail
       cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime" ||
         exit 1
       filter='to_entries[] | select(.value | has("INTERNAL_API_TOKEN")) | .key'
+      filter+=' | select(. != "render" and . != "upload")'
       keys="$(terraform output -json app_secret_arns | jq -r "${filter}")" ||
         exit 1
       for want in auth clip; do
@@ -2463,11 +2506,14 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     *   `None`(서비스 없음 — 응답의 `failures` 에 들어감) → 다음에 뜨는
         태스크가 새 값을 받습니다. 키와 함께 기록합니다. platform 은
         next · auth · clip · chat-collector · chat-detector 를 두므로(O7d
-        뒤) 일꾼(render · upload)이 이 갈래입니다.
+        뒤) 앱 서버 키는 이 갈래가 아닙니다. 일꾼은 위 필터가 대상에서
+        빼고, `prod/workers` 를 내렸을 때 일꾼이 이 갈래입니다(「일꾼 멈춤」
+        기록의 `None`).
     *   그 밖의 값(`DRAINING` · `INACTIVE` 등) → 멈춤 · kty 회부.
-    *   규칙의 전제: ECS 서비스 · 클러스터 자원은 `modules/ecs_service` 와
-        platform 의 클러스터 하나뿐입니다. 다른 클러스터 · 배치 루트가
-        생기면 이 규칙을 그 판으로 고칩니다.
+    *   규칙의 전제: 클러스터는 platform 의 `pokeclip-prod` 하나이고,
+        서비스 정의는 platform(앱 서버)과 `prod/workers`(일꾼 render ·
+        upload) 두 루트가 `modules/ecs_service` 로 만듭니다. 다른 클러스터 ·
+        루트가 생기면 이 규칙을 그 판으로 고칩니다.
 *   **완료 조건**: ① `ACTIVE` 였던 서비스마다 옛 태스크 교체 완료 — 아래
     읽기가 `1 COMPLETED <n> <n>`(배포 하나 · 완료 상태 · 실행 수 = 원하는
     수 — 옛 배포의 태스크가 남지 않음)이어야 합니다 ② 옛 공용 토큰
@@ -2481,6 +2527,23 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       --query 'services[0].[length(deployments),deployments[0].rolloutState,deployments[0].runningCount,desiredCount]' \
       --output text
     ```
+
+*   **일꾼 복원**(쓰기 — 실행 직전 **kty 승인**): 앱 서버 키가 모두 완료
+    조건 ① 의 `1 COMPLETED <n> <n>` 이 된 뒤에 합니다. `workers-before.txt`
+    의 기록값으로 되돌립니다 — 이 절차가 내린 것(`<키> ACTIVE 1`)만 1 로
+    올립니다.
+
+    ```shell
+    aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+      --service "pokeclip-prod-<키>" --desired-count 1 \
+      --query service.serviceName --output text
+    ```
+
+    *   기록이 `ACTIVE 0` 이던 서비스는 0 을 유지하고 기록합니다(다시
+        띄우는 것은 그 정지의 절차 · 승인 몫).
+    *   기록이 `None` 이던 서비스는 할 일이 없습니다.
+    *   완료: 올린 서비스마다 「일꾼 멈춤」 의 읽기가 `1 1 0`(원하는 수 ·
+        실행 수 · 대기 수)입니다. 새 태스크가 새 값을 읽습니다.
 
 ### 1단-나 ② 9. 응답기 기동 · 교체
 
@@ -2592,6 +2655,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 *   볼트 raw(비밀 값 훑기 뒤 · 계정 ID · ARN 은 가림): 각 걸음의 명령 ·
     출력 · 판정, 8 (b) 판정, (b2) 측정마다 시각 · 종료 코드 · 오류 코드,
     (c) 대기 시작 · 끝 시각, 서비스 키마다 재배포 또는 「서비스 없음」,
+    일꾼의 멈춤 전 기록(`workers-before.txt`) · 멈춘 시각 · 복원 결과,
     거부 창 길이, 옛 공용 토큰 401.
 *   POK-429 코멘트와 완료 전이.
 

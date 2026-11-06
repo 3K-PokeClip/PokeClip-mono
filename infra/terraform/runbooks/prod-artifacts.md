@@ -4,11 +4,15 @@ prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니
 운영 단계 O7c(이미지)와 O7f 의 5(랜딩 업로드)에 해당합니다. CI 자동 푸시는
 아직 없어서(설계 8절 후속 승인 지점 · 40차) 이 런북이 기본 경로입니다.
 
-*   실행자는 kty 입니다. kty 의 IAM 사용자 프로필로 **kty 로컬 터미널**에서
-    돌립니다. 에이전트 세션이나 세션의 `!` 로 돌리지 않습니다 — 레지스트리
+*   기본 실행자는 kty 입니다. kty 의 IAM 사용자 프로필로 **kty 로컬
+    터미널**에서 돌립니다. 에이전트 세션이나 세션의 `!` 로 돌리지 않습니다 — 레지스트리
     호스트 · 버킷 이름에 계정 ID 가 들어 있어 세션 기록에 남습니다.
     `docker tag` · `docker push` 출력에도 같은 호스트가 찍히므로 터미널
     출력을 세션 · 문서 · 채팅에 붙여 넣지 않습니다.
+*   **세션 푸시 갈래**: kty 가 고르면 에이전트 세션이 이미지를 푸시합니다
+    (아래 「세션 푸시 갈래」). 출력의 계정 ID 를 가린 줄만 세션에 남기고,
+    푸시 직전 kty 승인은 같습니다. POK-408 의 일꾼 render · upload 가 이
+    갈래입니다(kty 결정 2026-11-04).
 *   쓰기(푸시 · 업로드 · 무효화)마다 실행 직전에 kty 가 승인합니다.
 
 용어:
@@ -23,11 +27,12 @@ prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니
 
 | 단계 | 하는 일 | 선행 |
 |---|---|---|
-| O7c | 이미지 8종(응답기 · 워커 이미지를 하면 그만큼 더 — 최대 11종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
+| O7c | 이미지 8종(응답기 · 워커 이미지(`prod/workers` 용)를 하면 그만큼 더 — 최대 11종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
 | O7f 의 5 | apex 랜딩 업로드 · 무효화 | `prod/edge` 적용 · 2번의 업로드 제외 경로 확인(I2-8) |
 
 O7c 는 O7d(next · auth · clip · chat-collector · chat-detector 태스크 정의가
-다이제스트를 씀)와 O7e(Media 셋)보다 먼저 끝냅니다.
+다이제스트를 씀)와 O7e(Media 셋)보다 먼저 끝냅니다. 워커 이미지 둘은
+`prod/workers` apply(POK-408)보다 먼저 올립니다 — O7c 와 따로 해도 됩니다.
 
 ## 시작 전
 
@@ -54,6 +59,37 @@ aws ecr get-login-password --region ap-northeast-2 \
 `prod/registry` 를 `init -backend-config=backend.hcl` 로 연 체크아웃에서
 돌립니다(출력은 prod 상태에서 읽습니다).
 
+## 세션 푸시 갈래
+
+kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · 푸시를 한 묶음으로
+돌립니다. 레지스트리 호스트에 계정 ID 가 들어 있으므로 셋을 지킵니다.
+
+*   레지스트리 호스트는 위 「ECR 로그인」 의 셸 변수로만 다루고 화면에
+    내지 않습니다. 로그인 토큰은 파이프로만 넘깁니다.
+*   묶음의 출력(오류 포함)은 12자리 숫자열을 `<계정>` 으로 가린 줄만
+    세션에 남깁니다.
+*   푸시마다 실행 직전에 kty 가 승인합니다. 끝나면 성공 · 실패와 무관하게
+    로그아웃합니다.
+
+```shell
+(
+  set -o pipefail
+  {
+    aws ecr get-login-password --region ap-northeast-2 \
+      | docker login --username AWS --password-stdin "${registry_host}" &&
+      docker tag <로컬 이미지> "${registry_host}/pokeclip-prod/<키>:<태그>" &&
+      docker push "${registry_host}/pokeclip-prod/<키>:<태그>"
+    rc=$?
+    docker logout "${registry_host}"
+    exit "${rc}"
+  } 2>&1 | sed -E 's/[0-9]{12}/<계정>/g'
+)
+```
+
+종료 코드가 0 이 아니면 푸시 실패입니다. 같은 태그 재푸시 실패는 정상이고
+(태그 불변), `AccessDenied` 면 다시 시도하지 않고 멈춥니다(「시작 전」 2).
+다이제스트는 가린 출력이 아니라 「기록」 의 `describe-images` 로 읽습니다.
+
 ## 이미지
 
 | 저장소 키 | 원천 | 선행 |
@@ -64,8 +100,8 @@ aws ecr get-login-password --region ap-northeast-2 \
 | `media-mediamtx` | `media/Dockerfile.mtxhook`(1번 빌드 · 컨텍스트 `media/`) | 아래 「MediaMTX 확인」 |
 | `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 · 1단-가(3K-PokeClip/PokeClip-mono#365) 머지본 이후 — 사이드카 SQL 의 내장 함수 `pg_catalog` 한정(앱 사용자 `public` CREATE 가로채기 차단). 그 앞 커밋으로 빌드한 사이드카는 가로채기에 열린다 · **롤백 하한(POK-196)** — M6-0 머지본 이후 커밋은 M6 운영 SQL(런타임 1단-가 런북 「M6 스키마 재실행」) 적용 뒤에만 기동하고, 적용 뒤에는 그 앞 커밋 이미지로 되돌리지 않는다(아래 「사이드카 재푸시(M6-0 뒤)」 · [Media 교체 런북](media-swap.md) 「M6 운영 SQL 경계 · 롤백 하한」) |
 | `media-ingest-auth` | `media/Dockerfile.ingest-auth`(1번 빌드 · 컨텍스트 `media/`) | 응답기 코드가 준비됐을 때만 |
-| `render` | `workers/render/Dockerfile`(3번 빌드 · 컨텍스트 `workers/render/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
-| `upload` | `workers/upload/Dockerfile`(3번 빌드 · 컨텍스트 `workers/upload/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
+| `render` | `workers/render/Dockerfile`(3번 소유 · 컨텍스트 `workers/render/`) — 첫 배치(POK-408)는 1번 세션이 빌드(kty 결정) | 3번의 준비 · clip 이미지와 같은 커밋에서 빌드(일꾼 ↔ clip 의 주문서 · 보고 꼴이 맞게) · 돌리는 태스크 정의 = `prod/workers` |
+| `upload` | `workers/upload/Dockerfile`(3번 소유 · 컨텍스트 `workers/upload/`) — 첫 배치(POK-408)는 1번 세션이 빌드(kty 결정) | `render` 와 같음 |
 | `chat-collector` | `services/chat-collector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비(I3-8) — platform `image_digests` 의 키라 O7d 전에 필수(POK-306) |
 | `chat-detector` | `services/chat-detector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비(I3-8) — platform `image_digests` 의 키라 O7d 전에 필수(POK-306) |
 
@@ -73,9 +109,19 @@ aws ecr get-login-password --region ap-northeast-2 \
     O7d 를 시작하지 않습니다.
 *   응답기가 준비되지 않았으면 건너뛰고, tfvars 의 응답기 다이제스트를 비워
     둡니다(compose 렌더에서 빠짐). M15 · O8a 에서 다시 합니다.
-*   워커 이미지 둘(`render` · `upload`)은 ECS 로 돌릴 이미지입니다. 돌릴
-    태스크 정의가 아직 없으면 건너뜁니다 — O7c 의 조건이 아닙니다. 채팅
-    이미지 둘은 platform 이 돌리므로 위 표대로 O7d 전에 푸시합니다.
+*   워커 이미지 둘(`render` · `upload`)은 `prod/workers` 의 ECS 태스크
+    정의가 돌립니다(POK-408). O7c 의 조건이 아니라 workers apply 의
+    조건입니다. 채팅 이미지 둘은 platform 이 돌리므로 위 표대로 O7d 전에
+    푸시합니다.
+*   워커 이미지는 증명(attestation) 매니페스트를 끄고 빌드합니다. 켜 두면
+    인덱스가 되어 arm64 한 변형 정책과 어긋납니다(아래 「설치 묶음」 과
+    같은 이유). upload 도 같은 꼴입니다.
+
+    ```shell
+    git status --porcelain -- workers/render   # 빈 출력이어야 함
+    docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
+      --load -t pokeclip-render:<태그> workers/render
+    ```
 *   제어면 서버(I1-6)는 O7c 의 조건이 아닙니다. 없으면 nginx 가 404 를
     냅니다.
 *   **태그 = 빌드한 커밋 SHA 의 짧은 꼴**입니다. 저장소가 태그 불변이라 같은
@@ -246,8 +292,11 @@ docker push --platform linux/arm64 \
 푸시한 이미지마다 저장소 · 태그 · 다이제스트 · 빌드한 커밋 SHA(next 는 mono
 develop 커밋)를 적습니다. 사이드카는 롤백 하한 판정(「하한 이상」 · 「하한
 아래」)과 그 판정에 쓴 M6-0 머지 SHA 도 적습니다 — 되돌릴 다이제스트를 고를
-때 이 칸을 봅니다. 다이제스트는 푸시 출력의 `digest:` 이거나 아래
-명령의 값입니다.
+때 이 칸을 봅니다. 워커 이미지는 `java -version` · `ffmpeg -version`(render)
+판도 적습니다 — 베이스 이미지 · apt 판이 고정되지 않아 같은 커밋이어도 빌드
+날짜마다 다른 판이 들어갑니다. 다이제스트는 푸시 출력의 `digest:` 이거나 아래
+명령의 값입니다. 세션 푸시 갈래는 아래 명령의 값을 씁니다(가린 푸시 출력의
+다이제스트는 숫자 12자리가 이어진 자리가 가려졌을 수 있음).
 
 ```shell
 aws ecr describe-images --region ap-northeast-2 \
@@ -255,9 +304,10 @@ aws ecr describe-images --region ap-northeast-2 \
   --query 'imageDetails[0].imageDigest' --output text
 ```
 
-다이제스트는 `prod/platform` · `prod/media` 의 tfvars(추적하지 않음)에
-넣습니다. O7c 의 통과 조건은 푸시한 8종(응답기 · 워커 이미지를 했으면
-그것까지)의 다이제스트가 모두 기록 · 기입된 것입니다.
+다이제스트는 `prod/platform` · `prod/media` · `prod/workers`(`image_digests`
+의 `render` · `upload`)의 tfvars(추적하지 않음)에 넣습니다. O7c 의 통과
+조건은 푸시한 8종(응답기 · 워커 이미지를 했으면 그것까지)의 다이제스트가
+모두 기록 · 기입된 것입니다.
 
 푸시가 다 끝나면 로그아웃합니다. `docker login` 은 토큰(12시간)을 Docker
 자격 증명 저장소(설정에 따라 `~/.docker/config.json`)에 남깁니다.
