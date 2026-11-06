@@ -24,9 +24,16 @@ logs:ListTagsForResource	ap-northeast-2	*
 logs:DescribeLogGroups	ap-northeast-2	*
 
 # Cloud Map 서비스(모듈 ecs_service 의 aws_service_discovery_service).
+# provider 6.68.0(v6.68.0 태그) internal/service/servicediscovery/service.go
+# 의 resourceServiceCreate 는 CreateService(198행) 뒤 바로 resourceServiceRead
+# 로 findServiceByID 의 GetService(392행)를 부르고, 태그는 @Tags 가로채기가
+# ListTagsForResource(아래 네임스페이스 덩어리의 행)로 읽는다. GetOperation 은
+# resourceServiceUpdate 의 UpdateService 대기(283행)에서만 불러 생성 · 재조회
+# 경로에 없어 넣지 않는다 — O7d 묶음은 네임스페이스 생성(작업 대기)이 있어
+# 갖는다(대조 2026-11-07).
 servicediscovery:CreateService	ap-northeast-2	*
+servicediscovery:GetService	ap-northeast-2	*
 servicediscovery:TagResource	ap-northeast-2	*
-servicediscovery:GetOperation	ap-northeast-2	*
 # 네임스페이스 조회 — data "aws_service_discovery_dns_namespace"(prod/workers
 # 계약 검사 6). provider 6.68.0(v6.68.0 태그)의 Read 는
 # internal/service/servicediscovery/dns_namespace_data_source.go 의
