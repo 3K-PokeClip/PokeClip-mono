@@ -1,7 +1,8 @@
 package broadcast
 
-// 발행 게이트 권한 확인(POK-196 M6-8 ④ · 설계 M6 7절 활성화 선행 조건 · D50). outbox 권한이 하나라도 없으면 기동 조립이
-// 게이트를 끈다 — 개시 · phase 4 가 outbox 문장에서 42501 로 막히지 않게 하는 fail-closed 다.
+// 발행기 준비의 권한 확인(POK-196 M6-8 ④ · 설계 M6 7절 활성화 선행 조건 · D50). outbox 권한이 하나라도 없으면 발행기
+// 준비가 실패해 강등한다(lifecycle_degraded value=1 reason=privilege) — 게이트는 켜진 채이고, 개시 · phase 4 가 42501 로
+// 막히지 않게 하는 것은 적재 직전 판정 outboxWritable 이다.
 
 import (
 	"context"
