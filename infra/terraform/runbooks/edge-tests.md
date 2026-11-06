@@ -759,8 +759,10 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
         200 이 아니면(쿠키 무효 · A 송출 끊김 · 통신 실패) 여덟 경로의 403 이
         경로 규칙 때문인지 가를 수 없으므로 그 회차는 판정을 적지 않습니다.
         `control` 줄은 헤더를 싣지 않아 `Location` 건수에 들지 않습니다.
-    *   판정 줄은 명령 끝의 셋입니다 — `control 200` 2건 · ` 403` 으로 끝나는
-        경로 줄 8건 · `Location` 0건. 셋이 모두 맞아야 통과입니다.
+    *   판정 줄은 명령 끝의 넷입니다 — `control 200` 2건 · ` 403` 으로 끝나는
+        경로 줄 8건 · `server: CloudFront` 8건 · `Location` 0건. 넷이 모두
+        맞아야 통과입니다. `control` 줄은 헤더를 싣지 않아 `server` 건수에도
+        들지 않습니다.
 
     ```shell
     t7_control() {
@@ -780,6 +782,7 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
     t7_control | tee -a "${evidence}/t7-deny.txt"
     grep -cx 'control 200' "${evidence}/t7-deny.txt"   # 2
     grep -c ' 403$' "${evidence}/t7-deny.txt"          # 8
+    grep -ci '^server: cloudfront' "${evidence}/t7-deny.txt"   # 8
     grep -ci '^location:' "${evidence}/t7-deny.txt"    # 0
     rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
     ```
