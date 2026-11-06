@@ -422,22 +422,55 @@ NULL 도 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바�
 **계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
 `broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
 outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만
-2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 4C resolve 설정 · 운영
-권한(`30_grants.sql` 의 outbox 네 권한)이다. 하나라도 빠지면
-`lifecycle_disabled` 한 줄(`reason` = `no_topic` · `no_streams` 는 INFO,
-`no_resolver` · `privilege` · `privilege_check` · `sns_client` · `assembly` 는
-ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도 넣지 않는다. 켜지면
-`lifecycle_started` 가 나온다.
+2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 4C resolve 설정이다. 하나라도
+빠지면 `lifecycle_disabled` 한 줄(`reason` = `no_topic` · `no_streams` 는 INFO,
+`no_resolver` 는 ERROR)을 남기고 outbox 행을 넣지 않는다. 셋이 차 있으면 게이트가
+켜진다. 발행기 준비(`30_grants.sql` 의 outbox 네 권한 · SNS 클라이언트 · 조립)가
+실패하면 발행기 없이 강등하고, 30초마다 다시 준비해 회복하면 쌓인 행을 늦게
+낸다. 적재 여부는 강등 사유와 무관하게 적재 직전의 권한 판정(outbox SELECT ·
+INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거짓이면 아래 「적재
+건너뜀」 이다. 기동마다 ERROR `lifecycle_degraded` 기동 줄이 하나 나온다 — 준비되면
+`value=0` `reason=ready`, 실패면 `value=1` 과 `reason` = `privilege_check` ·
+`privilege` · `sns_client` · `assembly` 가운데 하나다. 회복하면 `value=0`
+`reason=recovered` 가 더 나온다. 마지막 줄이 발행기 준비 상태다(outbox 쓰기 가능
+여부는 아니다). 준비될 때(기동 · 회복) `lifecycle_started` 도 INFO 로 나온다.
+판정은 아래 「계약9 운영 판정」 절을 따른다.
 
 *   **streamerId:** started 의 `streamerId` 는 위 4C resolve 설정으로 얻는다.
     resolve 설정이 비면 모든 회차를 버리게 되므로 발행을 켜지 않는다(`reason`
     = `no_resolver`). 그래서 응답기 모드 뒤에 켠다.
-*   **완전히 끌 때는 진행 중 회차가 없을 때 끈다.** 주제나 허용 목록을 비우면
-    ended 판정 문장도 보내지 않는다. 그러면 started 만 나간 회차의 ended 는
-    영영 적재되지 않는다. 허용 목록을 좁히기만 하면 생기지 않는다.
-    게이트가 꺼진 사이드카가 같은 DB 에 함께 떠 있어도 같은 누락이 생긴다(꺼진
-    쪽이 회차를 닫으면 ended 를 넣지 않는다). 발행 설정이 찬 사이드카가 재기동
-    때 강등돼도 같다 — 후속 수정 전까지 운영 감시.
+*   **적재 건너뜀:** 켜진 게이트가 적재 직전 권한 판정에서 거짓이면 그 적재를
+    건너뛰고 ERROR `lifecycle_enqueue_skipped` 를 남긴다 — 그 역할의 outbox
+    권한을 확인한다. 그 사이 시작된 방송의 started 는 되살릴 수 없어
+    `event_type=broadcast.started` 줄은 아래 「계약9 운영 판정」 의 통과 조건에
+    든다. ended 쪽 줄(`event_type=broadcast.ended`)은 완결 여부 · 허용 목록과
+    무관하게 완결 평가(회차 닫힘 · 세션 ended 전이)마다 남으므로 한 회차에 여러
+    줄일 수 있다.
+*   **보정:** 보정 후보는 started 가 살아 있고(abandoned 아님), 회차가 닫혀
+    구성원 전원이 ended 이고, ended 가 없으며, 회차 시작 뒤 1392시간 안인
+    회차다. 같은 DB 의 발행 사이드카(발행기가 떠 있는 사이드카 — 마지막
+    `lifecycle_degraded` 가 `value=0`)가 이를 보정으로 거둔다(WARN
+    `lifecycle_ended_repaired`). 30초마다 시도하고 주기당 20회차를
+    거둔다 — 정상 전제에서 후보가 20 이하면 완결 뒤 길어야 약 35초, N 개면 약
+    ⌈N/20⌉ × 30초다. 회차 시작 뒤 1392시간(58일)이 지난 회차는 만료와 겹치지
+    않게 보정하지 않는다 — 그런 회차를 꺼진 · 권한 없는 사이드카가 닫았으면
+    ended 가 나가지 않는다(D4). 여러 발행 사이드카가 같은 회차를 동시에 보정하면
+    `UNIQUE (round_id, sequence)` 경합으로 드물게 23505 가 날 수 있다. 무해하다
+    — 보정 쪽에 WARN `lifecycle_store_failed` 한 줄이 남고 다음 주기에 회복한다.
+    한계: 외부 트랜잭션이 어느 회차의 started 행을 오래 잠그면, 보정은 주기마다
+    그 회차의 넣기에서 시한(10초)까지 기다린 뒤 WARN `lifecycle_store_failed`
+    (`stage=repair`)를 남기고 그 주기를 멈춘다. 잠금이 이어지는 동안 뒤 회차가
+    밀리고, D1 이 그것을 드러낸다. 시한을 넘겨 포기한 넣기가 드물게 서버에서
+    나중에 커밋되면 ended 는 정상으로 나가지만, 그 회차에는 WARN
+    `lifecycle_store_failed` 만 남고 `lifecycle_ended_repaired` 는 남지 않는다.
+*   **끌 때:** 끄더라도 회차는 닫힌다. 발행 사이드카가 하나도 없으면 ended 도
+    생기지 않고, 위 1392시간 경계 안에 다음 발행 사이드카가 뜨면 보정으로
+    나간다.
+*   **공존:** 발행 사이드카(위 「보정」 의 정의 — 마지막 `lifecycle_degraded` 가
+    `value=0` 인 사이드카 · 그 줄을 내지 않는 옛 판은 보정하지 않는다)가 같은
+    DB 에 하나라도 떠 있으면, 옛 판 · 꺼진 사이드카가 닫은 회차도 보정
+    후보(위 「보정」)라면 보정으로 ended 가 나간다. 꺼진 사이드카가 연 회차는
+    started 가 없어 ended 도 없다.
 *   **기동 때만 읽는다.** 바꾸려면 사이드카를 재기동한다.
 
 | 이름 | 기본값 | 의미 |
@@ -450,6 +483,125 @@ ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도 넣지 않는�
 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자, 음수, 파싱 불가한 기간)은
 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
+
+### 계약9 운영 판정 — D1 · D2 · D4
+
+배포 뒤 계약9 발행이 ended 를 잃지 않는지는 사이드카 로그의 `lifecycle_degraded`
+줄과 장부 질의 셋으로 판정한다(`LOG_LEVEL=error` 에서 성립한다).
+사이드카 로그는 JSON 한 줄씩이다. 이 절의 `칸=값` 은 JSON 칸을 뜻한다 — 예를
+들어 `"msg":"lifecycle_enqueue_skipped"` 이고 `"event_type":"broadcast.started"`
+인 줄을 센다. `칸=값` 을 글자 그대로 grep 하면 0줄이라 거짓 통과가 된다.
+
+*   **단위 · 기동 줄:** 단위는 사이드카 컨테이너 하나다. 기동 줄은
+    `lifecycle_degraded` 가운데 `value=1` 이거나 `value=0` `reason=ready` 인
+    줄이다. 발행 의도가 켜진 컨테이너는 기동마다 기동 줄을 정확히 하나 남기므로
+    기동 줄 수가 기동 횟수 N 과 같아야 한다. 어긋나면(그 줄 전에 죽은 기동)
+    불통과다. env 를 바꾸면 컨테이너를 다시 만들어 id 가 달라지므로 N 을 다시
+    센다. `lifecycle_degraded` 줄이 하나도 없으면 발행 의도가 꺼진 컨테이너다 —
+    그런데 ERROR `lifecycle_disabled reason=no_resolver` 가 있으면 설정
+    결함이므로 불통과로 적는다.
+*   **통과:** 기동 줄 수 = N 이고, 그 컨테이너의 마지막 `lifecycle_degraded` 가
+    `value=0` 이며, 그 컨테이너 로그에 ERROR `lifecycle_enqueue_skipped`
+    `event_type=broadcast.started` 가 0줄이고, D1 = 0 · D2 = 0 · D4 완결 = 0 이다.
+    마지막 줄이 `value=1` 이면 `reason` 과 무관하게 불통과다.
+*   **started 건너뜀 줄:** 적재 직전 판정이 거짓이어서 건너뛴 started 는 장부에
+    흔적이 남지 않아 D1 · D2 · D4 로는 보이지 않고 되살릴 수 없다. 그래서 이
+    줄로만 판정한다 — 기동 때 권한이 없다가 권한을 주어 회복한 컨테이너
+    (`value=0 reason=recovered` 로 끝남)와 실행 중에 권한을 잃은 컨테이너도
+    이 줄이 남으므로 불통과다. 이 줄은 개시 트랜잭션이 커밋되기 전에 남으므로,
+    그 트랜잭션이 롤백돼 회차가 열리지 않은 경우에도 남는다. 그래서 이 불통과도
+    유실 확정이 아니라 조사를 시작하라는 보수적 신호다 — 그 줄의 `round` 회차가
+    장부에 있는지부터 본다. ended 쪽 건너뜀
+    줄(`event_type=broadcast.ended`)은 보정이 거둘 수 있어 판정에 쓰지 않는다.
+*   **문턱 10분:** 상한에서 끌어낸 값이 아니라 운영 선택값이다. 정상 전제에서
+    회복 지연은 후보가 20 이하면 길어야 약 35초, N 개면 약 ⌈N/20⌉ × 30초다.
+    D1 · D2 > 0 은 유실 확정이 아니라 조사를 시작하라는 신호다 — 보정 창
+    안이면 원인이 풀리는 대로 보정 · 발행이 거둔다. D4 완결 > 0 은 손 복구로
+    회부한다. D4 미완결 > 0 은 불통과가 아니라 장기 방송이 있다는 정보다.
+
+세 질의는 읽기 전용이고 모두 started 행이 살아 있는 회차에서 출발한다. 그래서
+정상 정리(ended 발행 7일 뒤 두 행을 함께 지움)된 회차는 어디에도 들지 않는다.
+판정 스크립트는 건수만 읽는다. 표지 사이의 블록은
+`internal/broadcast/opsquery_pg_test.go` 가 그대로 뽑아 실행해 보정 술어 · 보정
+창과 맞춰 본다 — 고치면 그 시험을 돌린다.
+
+**실행 신분과 시한.** 마스터 계정으로 돌리지 않는다 — 마스터에는
+`statement_timeout` 이 없다. 지금 두 표를 읽을 수 있는 운영 역할은 쓰기 권한도
+가진 `media_indexer` 뿐이라(SELECT 전용 감시 역할은 아직 없다), 쓰기는 트랜잭션으로
+막는다. 세 질의는 `BEGIN READ ONLY` 트랜잭션 안에서 시한 셋을 건 뒤 돌리고,
+끝나면 바로 닫는다 — 열린 트랜잭션은 그 표의 DDL 을 줄 세운다. 예시 값은
+`SET LOCAL statement_timeout = '10s'` · `SET LOCAL lock_timeout = '3s'`(선례
+`60_round_frozen.sql`) ·
+`SET LOCAL idle_in_transaction_session_timeout = '30s'`(선례 janitor 연결 설정
+`cmd/janitor/main.go`)다. `media_indexer` 의 역할
+기본 `statement_timeout` 은 60초다(`10_roles.sql`). 그 역할의 연결 상한 20
+(`10_roles.sql`)은 사이드카와 나눠 쓴다 — 연결 하나로 돌리고 바로 끊으며, A · B
+상자가 겹쳐 합이 20 인 Media 교체 창(아래 「교체 창의 여유는 0 이다」)에는
+돌리지 않는다.
+
+**D1 밀린 끝 알림(정상 0).** 보정 후보(`internal/broadcast/repair.go` 의
+`missingEndedSQL`)와 같은 술어에, 완결 시각(구성원의 `round_closed_at` ·
+`ended_at` 가운데 늦은 값)이 10분보다 오래됐다는 조건을 더한 회차 수다.
+
+<!-- lifecycle-ops:D1:begin -->
+
+```sql
+SELECT pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.sequence = 1 AND o.state <> 'abandoned'
+   AND o.occurred_at >= pg_catalog.now() - interval '1392 hours'
+   AND NOT EXISTS (SELECT 1 FROM broadcast_lifecycle_outbox e
+                    WHERE e.round_id = o.round_id AND e.sequence = 2)
+   AND EXISTS (SELECT 1 FROM stream_sessions s
+                WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id)
+   AND NOT EXISTS (SELECT 1 FROM stream_sessions s
+                    WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id
+                      AND (s.state <> 'ended' OR s.round_closed_at IS NULL))
+   AND (SELECT pg_catalog.max(GREATEST(s.round_closed_at, s.ended_at))
+          FROM stream_sessions s
+         WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id)
+       < pg_catalog.now() - interval '10 minutes';
+```
+
+<!-- lifecycle-ops:D1:end -->
+
+**D2 밀린 발행(정상 0).** 만든 지 10분이 넘은 pending 행 수다. ERROR
+`lifecycle_backlog` 와 같은 사실을 장부로 보므로, 떠 있는 발행기가 없어도 센다.
+
+<!-- lifecycle-ops:D2:begin -->
+
+```sql
+SELECT pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox
+ WHERE state = 'pending' AND created_at < pg_catalog.now() - interval '10 minutes';
+```
+
+<!-- lifecycle-ops:D2:end -->
+
+**D4 창 밖 미종결(정상 0 · 0).** started 가 살아 있는데 ended 가 없고, 회차
+시작이 보정 창(1392시간) 밖인 회차 수다. 구성원이 모두 ended 이고 닫혔으면 D4
+완결(보정이 다시 보지 않는 포기 확정), 아니면 D4 미완결로 센다. D4 는 감시
+순간의 장부만 본다 — 만료가 회차 세션을 모두 지우면 started 행도 함께 지워져
+세지 않으므로 감시 주기는 하루보다 짧게 둔다.
+
+<!-- lifecycle-ops:D4:begin -->
+
+```sql
+SELECT pg_catalog.count(*) FILTER (WHERE r.complete) AS d4_complete,
+       pg_catalog.count(*) FILTER (WHERE NOT r.complete) AS d4_open
+  FROM (SELECT EXISTS (SELECT 1 FROM stream_sessions s
+                        WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id)
+               AND NOT EXISTS (SELECT 1 FROM stream_sessions s
+                                WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id
+                                  AND (s.state <> 'ended' OR s.round_closed_at IS NULL)) AS complete
+          FROM broadcast_lifecycle_outbox o
+         WHERE o.sequence = 1 AND o.state <> 'abandoned'
+           AND o.occurred_at < pg_catalog.now() - interval '1392 hours'
+           AND NOT EXISTS (SELECT 1 FROM broadcast_lifecycle_outbox e
+                            WHERE e.round_id = o.round_id AND e.sequence = 2)) r;
+```
+
+<!-- lifecycle-ops:D4:end -->
 
 ### DB 연결 성공 줄 `db_connected` (POK-311)
 
