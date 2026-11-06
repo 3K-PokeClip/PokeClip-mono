@@ -97,23 +97,33 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     기록합니다.
 1.  **푸시(kty 승인):** 태그 = 커밋 짧은 SHA ·
     [prod 산출물 런북](/infra/terraform/runbooks/prod-artifacts.md) 대로.
-    다이제스트를 `terraform.tfvars` 에 넣습니다.
+    다이제스트를 `terraform.tfvars` 에 넣습니다. 태그가 이미 있어 재푸시가
+    거부되면(태그 불변 — 정상) 그 태그가 이번 빌드인지 봅니다. ECR 의 그
+    다이제스트를 `docker pull --platform linux/arm64 <저장소>@<다이제스트>` 로
+    받아 로컬 빌드와 `docker image inspect --format '{{json .RootFS.Layers}}'`
+    가 같은지 대조하고, 다르면 멈추고 kty 에게 넘깁니다(다른 빌드가 같은
+    태그를 먼저 차지함).
 1.  **PR · CI · 리뷰.**
 1.  **관문 ① — platform 무변경:** develop 체크아웃과 PR 머리 체크아웃에서
     `terraform -chdir=infra/terraform/prod/platform plan -detailed-exitcode
     -input=false` 가 둘 다 종료 0 이어야 합니다. 두 체크아웃의 platform
-    `terraform.tfvars` sha256 을 먼저 맞춥니다. develop 쪽이 0 이 아니면
-    무관한 드리프트라 멈추고 kty 에게 넘깁니다.
+    `terraform.tfvars` sha256 을 먼저 맞춥니다. 두 plan 은 같은 상태 잠금을
+    쓰므로 develop 쪽을 끝낸 뒤 PR 머리 쪽을 돌립니다(동시에 돌리면 한쪽이
+    잠금에 걸림). develop 쪽이 0 이 아니면 무관한 드리프트라 멈추고 kty 에게
+    넘깁니다.
 1.  **런타임 출력 · 첫 plan:** `terraform -chdir=infra/terraform/prod/runtime
     output -json app_env | jq 'keys'` 에 `render` · `upload` 가 있는지 보고,
-    이 루트를 `plan -out` 해 아래 「plan 요지」 를 kty 가 봅니다.
+    이 루트를 `plan -out` 해 아래 「plan 요지」 를 kty 가 봅니다. 이 루트의
+    `terraform.tfvars` · `backend.hcl` sha256 을 기록합니다.
 1.  **머지(kty 승인).**
 1.  **단계 직전 점검:** 머지된 develop 체크아웃에서
     [단계 직전 점검](/infra/terraform/runbooks/stage-precheck.md) 의
     `workers` 단계를 돌립니다.
 1.  **apply 직전 읽기**(아래 절).
-1.  **plan 과 승인 한 묶음:** 머지 체크아웃에서 다시 `plan -out` 하고 요지가
-    앞의 것과 같은지 봅니다. kty 가 apply(조건 = 요지 줄 수 · 주소 집합 ·
+1.  **plan 과 승인 한 묶음:** 머지 체크아웃의 `terraform.tfvars` ·
+    `backend.hcl` sha256 이 첫 plan 때 기록과 같은지 먼저 대조합니다(다르면
+    멈춤). 그 체크아웃에서 다시 `plan -out` 하고 요지가 앞의 것과 같은지
+    봅니다. kty 가 apply(조건 = 요지 줄 수 · 주소 집합 ·
     plan 파일 sha256)와 긴급 정지 명령 둘의 조건부 실행을 한 번에 승인합니다
     (범위는 아래 「긴급 정지와 상태 어긋남」).
 1.  **감시를 먼저 띄웁니다**(아래 「첫 소비 감시」). 띄웠다는 것을 알린 뒤
@@ -159,10 +169,12 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     기록합니다. 사진 DLQ 가 이미 0 이 아니면 그 수를 기준으로 적습니다.
 1.  렌더 · 업로드 큐가 0 인지 봅니다. 아니면 누구의 주문인지 보고, 실사용자
     주문이 있으면 멈춥니다 — 기동하자마자 처리돼 사용자 채널에 영상이 올라갑니다.
+    주문자를 확인할 길이 없으면(읽기 경로 없음) 확인 불가로 보고 멈춥니다.
 1.  **회전 창:** `aws secretsmanager describe-secret --secret-id
-    pokeclip/prod/internal-api-token --query LastChangedDate` 가 clip 의
-    지금 태스크 `startedAt` 보다 앞이어야 합니다. 뒤면 clip 이 회전 전 값을
-    들고 있어 일꾼의 보고가 401 입니다.
+    pokeclip/prod/internal-api-token --query LastChangedDate` 가 clip 과
+    auth 의 지금 태스크 `startedAt` 모두보다 앞이어야 합니다. 뒤면 그
+    서비스가 회전 전 값을 들고 있어 일꾼의 보고(clip) · upload 의 연동
+    조회(auth resolve — 같은 토큰)가 401 입니다.
 1.  관문 ① 을 머지 체크아웃에서 다시 돌려 종료 0 인지 봅니다.
 
 ### 첫 소비 감시
@@ -179,20 +191,27 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     ap-northeast-2 --follow --since 1m --format short` 를 아래 가림 필터를
     거쳐 기록 파일에 씁니다. 로그 줄에 큐 URL(계정 ID 포함)이 찍히고, 유출
     신호가 잡힌 줄에 토큰 값이 남으면 안 됩니다. 머리 이름(`Bearer ` ·
-    `X-Internal-Token`)은 남겨 정지 신호로 잡히게 하고 값만 가립니다.
+    `X-Internal-Token`)은 남겨 정지 신호로 잡히게 하고 값만 가립니다. 값의
+    끝은 공백 · `"` · `,` · `}` 라 JSON 꼴(`{"X-Internal-Token":"값"}`)도
+    가립니다.
 
     ```
     mask() {
       sed -l -E \
         -e 's/[0-9]{12}/<계정>/g' \
-        -e 's/([Bb]earer[[:space:]]+)[^[:space:]]+/\1<가림>/g' \
-        -e 's/([Xx]-[Ii]nternal-[Tt]oken[:=][[:space:]]*)[^[:space:]]+/\1<가림>/g'
+        -e 's/([Bb]earer[[:space:]]+)[^"[:space:],}]+/\1<가림>/g' \
+        -e 's/([Xx]-[Ii]nternal-[Tt]oken"?[[:space:]]*[:=][[:space:]]*"?)[^"[:space:],}]+/\1<가림>/g'
     }
     ```
 
 *   큐 깊이(사진 · DLQ 셋)를 30초마다 읽습니다.
 *   apply 를 시작하고 120초 안에 기록 파일 하나라도 줄이 0 이거나 따라 읽기
-    프로세스가 끝났으면 **감시 불능**입니다. 정지 신호와 같이 다룹니다.
+    프로세스가 끝났으면 **감시 불능**입니다. 정지 신호와 같이 다룹니다. 단
+    120초가 지났는데 그 서비스의 서비스 이벤트(`aws ecs describe-services`)에
+    태스크 시작(「has started 1 tasks」)이 아직 없으면(이미지 받기가 느림)
+    그 서비스의 빈 기록은 감시 불능으로 보지 않고, 시작 이벤트가 나온 뒤
+    120초가 지나도 0 줄이면 감시 불능입니다. 따라 읽기 프로세스가 끝난 것은
+    언제든 감시 불능입니다.
 
 **정지 신호** — 하나라도 나오면 긴급 정지합니다.
 
@@ -276,11 +295,19 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     「0a. prod/workers 먼저 내리기」 를 따릅니다. 요지는 모두 delete 이고 이
     루트 주소만 나옵니다. platform 은 건드리지 않고, 주문은 큐에 남습니다.
 *   **revert 전에 내립니다** — 되돌리면 이 루트의 코드가 사라져 destroy 할
-    구성이 없어집니다. `modules/ecs_service` 의 포트 없는 꼴을 되돌리는 것도
+    구성이 없어집니다. PR 은 머지 커밋이라 `git revert -m 1 <머지 커밋>` 으로
+    되돌립니다. `modules/ecs_service` 의 포트 없는 꼴을 되돌리는 것도
     이 루트를 내린 뒤에만 합니다.
 *   토큰을 회전할 때는 일꾼을 멈춘 채 회전합니다
     ([runtime-1a 런북](/infra/terraform/runbooks/runtime-1a.md)) — clip 의
     롤링이 옛 값 · 새 값 태스크를 겹쳐 두기 때문입니다.
+
+## 알려진 한계
+
+*   실행 · 작업 역할의 신뢰 정책은 혼동된 대리인 조건으로 `aws:SourceAccount`
+    하나만 둡니다(모듈 공통). `aws:SourceArn`(이 클러스터의 ECS 자원)으로 더
+    좁히는 것은 platform 다섯 서비스의 역할도 함께 바뀌는 모듈 변경이라
+    platform apply 가 들어, 이 PR 에 넣지 않고 후속 후보로 둡니다.
 
 ## 시험
 
@@ -292,6 +319,9 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     서비스 이름.
 *   env 맵 · 비밀 맵 · 작업 역할 문장 · 이그레스가 계약과 정확히 같음.
 *   인그레스 셋의 대상 SG · 포트 · 상대 SG(apply).
+*   모듈 블록 배선 — 모듈이 만든 태스크 정의 · 작업 역할 정책 · 이그레스가
+    같은 일꾼의 지역값인지(apply · 모듈 출력 `task_definition` ·
+    `task_role_policy` · `egress_rules`).
 *   계약 검사 1 부터 6 이 어긋난 출력에서 plan 을 멈춤 · 태그 다이제스트와
     모르는 일꾼 키를 변수 검증이 막음.
 
