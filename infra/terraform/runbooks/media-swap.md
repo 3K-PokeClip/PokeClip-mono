@@ -1288,7 +1288,11 @@ ended 없이 닫힐 수 있습니다. 그 구성이면 제자리 전환을 하�
     (사이드카 · 묶음 `image_digests.bundle` 등)를 넣습니다.
 1.  **새 렌더본을 뽑아 비교합니다.** 다른 파일은 아래 허용 집합 안이어야
     합니다. 그 밖의 파일(journald 설정 · docker 설정)이 다르거나 한쪽에만
-    있으면 멈추고 kty 에게 회부합니다.
+    있으면 멈추고 kty 에게 회부합니다. 허용 집합 안이어도 **옛 렌더본에만
+    있는 파일**(`diff -rq` 의 `Only in …/render-old`)이면 멈추고 kty 에게
+    회부합니다 — 상자 스크립트는 새 렌더본에 있는 파일만 쓰므로 그 파일은
+    상자에 옛 내용 그대로 남습니다(아래 `only_old` 가 `STOP only-old` 를
+    냄).
     *   `etc__pokeclip-media__*`(compose · media.env · nginx · env 파일들)
     *   `etc__systemd__system__pokeclip-media.service` · 그 drop-in
     *   `usr__local__sbin__pokeclip-media-bootstrap` — 묶음이 바뀔 때만
@@ -1373,6 +1377,15 @@ bundle_sums() {
 render_files "${work}/render-old" || { echo "STOP render-old"; }   # 선행 1
 render_files "${work}/render-new" || { echo "STOP render-new"; }   # 선행 3
 diff -rq "${work}/render-old" "${work}/render-new"      # 허용 집합 안인지
+# only_old — 옛 렌더본에만 있는 허용 집합 파일마다 STOP 줄을 낸다.
+only_old() {
+  local f
+  for f in "${work}/render-old"/etc__pokeclip-media__* \
+    "${work}/render-old"/etc__systemd__system__pokeclip-media.service*; do
+    [ -e "${work}/render-new/${f##*/}" ] || echo "STOP only-old ${f##*/}"
+  done
+}
+only_old                                                # 빈 출력
 diff -ru "${work}/render-old" "${work}/render-new"      # kty 가 읽고 승인
 jq -r 'to_entries[]
   | select(.key | test("^/etc/(pokeclip-media|systemd/system)/"))
@@ -1401,7 +1414,9 @@ fi
 
 *   **`STOP …` 줄이 나오면 멈춥니다.** 렌더본 · 묶음을 뽑지 못한 것이라 그
     뒤의 diff · 승인은 빈 입력이나 지난 결과를 볼 수 있습니다. 원인을 고쳐
-    그 함수부터 다시 돌립니다.
+    그 함수부터 다시 돌립니다. 다시 돌리기 전에 그 함수가 만든
+    `<디렉터리>` 와 `<디렉터리>.json` · `<디렉터리>.sums` 를 지웁니다 —
+    `mkdir -m 0700` 에 `-p` 가 없어, 남아 있으면 다시 돌려도 실패합니다.
 *   `git diff` 의 `--no-renames` 는 옮긴 파일을 옛 이름 삭제 · 새 이름
     추가 두 줄로 냅니다. 해시 목록 비교(`bundle-changed.txt`)도 두 이름을
     모두 내므로 같은 꼴로 맞춥니다.
@@ -1485,7 +1500,8 @@ stop 뒤의 실패는 `INPLACE FAIL <단계> stopped` 입니다 — 유닛이 �
 전 실패라 바뀐 파일이 없습니다 — `systemctl start` 만 합니다).
 
 `BACKUP` 줄이 없는 `stopped` 실패의 명령입니다(실행 직전 승인).
-`start.sh` 는 「한 창 절차」 준비와 같은 한 줄 파일입니다. 기동 판정은 옛
+`start.sh` 는 「POK-525 교체 상자 스크립트」 가 만드는 것과 같은 한 줄
+파일입니다. 기동 판정은 옛
 구성의 서비스 집합으로 봅니다.
 
 ```shell
@@ -1698,6 +1714,7 @@ env_of() { sed -n "s/^$1=//p" "$2/etc__pokeclip-media__media.env"; }
 # bash -n 하면 본문을 보지 않는다. 앞뒤 줄을 떼고 본다.
 bash -n "${work}/inplace-body.sh" \
   && sed '1d;$d' "${work}/inplace.sh" | bash -n && echo SYNTAX OK
+only_old   # 빈 출력 — STOP only-old 가 나오면 inplace.sh 를 보내지 않는다
 wc -c "${work}/inplace.sh"   # 결과 기록에 옮긴다
 # 크기 시험용 — 첫 줄 true 뒤에 inplace.sh 전부를 주석으로 단다(더 크다).
 { printf 'true\n'; sed 's/^/# /' "${work}/inplace.sh"; } \
@@ -1722,7 +1739,8 @@ wc -c "${work}/size-probe.sh"
     묶음이 바뀌면 묶음 승인까지).
     발행 목록이 찬 구성이면 이 걸음 바로 뒤에 위 「계약9 회차 확인」 1 · 2
     를 봅니다. 통과하지 않으면 2 로 가지 않습니다.
-1.  크기 시험 → 전환입니다(둘 다 실행 직전 승인).
+1.  크기 시험 → 전환입니다(둘 다 실행 직전 승인). 위 만드는 블록에서
+    `SYNTAX OK` 가 나오고 `STOP only-old` 가 없어야 여기로 옵니다.
     *   `media_ssm "${a_key}" "${work}/size-probe.sh"` → 끝 줄이 `SSM
         Success` 여야 합니다. 거절 · 실패면 `inplace.sh` 를 보내지
         않고 kty 에게 회부합니다(위 「SSM 인자 크기」).
@@ -1745,6 +1763,8 @@ wc -c "${work}/size-probe.sh"
     media_ssm "${a_key}" "${work}/watch-check.sh" <MAINPID> <WATCH FROM>
     # 발행 목록이 찬 구성만. M-B OK 가 아니면 루프백으로 가지 않는다.
     media_ssm "${a_key}" "${work}/lifecycle-check.sh" <전환 시각 — epoch 초>
+    # 옛 모드(ingest_auth_image 빈 구성)면 loopback-pp.sh 대신 loopback.sh
+    # (passphrase 없음 — 위 「정상 교체 3」).
     media_ssm "${a_key}" "${work}/loopback-pp.sh" <시험 ingestStreamId>
     ```
 
