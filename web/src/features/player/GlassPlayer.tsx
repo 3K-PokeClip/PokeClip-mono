@@ -31,6 +31,8 @@ import type { PlaybackSession } from './usePlaybackSession';
 import { usePlayerShortcuts } from './usePlayerShortcuts';
 import { useSoundToggle } from './useSoundToggle';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
+import { useVodPlayback, type VodSource } from './useVodPlayback';
+import type { VodPhase } from './pastVod';
 import {
   usePlayerSimulation,
   type DateSeekResult,
@@ -40,8 +42,8 @@ import {
 import { useSimulatedChat } from './useSimulatedChat';
 
 // 리퀴드 글래스 라이브 플레이어 (시안 "영상 플레이어 글래스").
-// 고르는 순서: session(라이브 · 되감기 · 끝남 대기 재생 세션, useLiveRewindPlayback — POK-200 M5) → recorded(끝난 방송 녹화)
-// → src(hls.js 실재생, useHlsPlayback) → simulate(목업,
+// 고르는 순서: session(라이브 · 되감기 · 끝남 대기 재생 세션, useLiveRewindPlayback — POK-200 M5) → vod(끝난 뒤 들어온 화면의
+// 회차 다시보기, useVodPlayback — POK-546) → recorded(끝난 방송 녹화) → src(hls.js 실재생, useHlsPlayback) → simulate(목업,
 // usePlayerSimulation — 스토리북·시험용) → 그 밖엔 「영상 신호 없음」 자리 표시(NoSignalGlassPlayer).
 // 실제 화면에서 영상이 없을 때 흐르는 진행바·시간·채팅을 지어내지 않는다(POK-251).
 // 훅 규칙상 조건부 호출이 안 되므로 컴포넌트 단위로 갈라 태운다. Body는 어느 쪽인지 모른다.
@@ -94,13 +96,26 @@ export interface GlassPlayerProps {
    * `streamId`는 물리 키(지금은 스트림 키)라 한 스트리머의 방송이 모두 같아 쓰지 않는다(PR #382 2차 리뷰). 없으면 세지 않는다
    */
   broadcastId?: string;
+  /**
+   * 끝난 뒤 들어온 화면의 회차 다시보기(VOD 목록 · 카드 축, POK-546) — 있으면 녹화 · src 대신 이것으로 튼다(세션이 있으면 세션이
+   * 먼저다)
+   */
+  vod?: VodSource | null;
+  /** 다시보기 재생기의 국면이 바뀔 때마다 알린다 — 부른 쪽이 카드 갈래를 고른다(POK-546) */
+  onVodPhase?: (phase: VodPhase) => void;
+  /** 다시보기가 받아 둔 자리(startAtSeconds)를 적용했다 — 부른 쪽이 받아 둔 자리를 비운다(POK-546) */
+  onStartApplied?: () => void;
   /** 끝난 방송의 녹화(재생 서버) — 있으면 HLS 대신 이것으로 다시보기를 튼다 */
   recorded?: RecordedSource | null;
-  /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
+  /**
+   * 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화는 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback). 회차 다시보기는
+   * 목록이 서 있을 때마다 읽어 그 자리로 옮기고 onStartApplied 로 알린다(useVodPlayback)
+   */
   startAtSeconds?: number | null;
   /**
-   * 녹화 다시보기의 재생 위치(방송 기준 초, 내림)가 바뀔 때마다 알린다. 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324).
-   * 녹화를 틀 때만 부른다: 라이브 재생기의 자리는 onLivePosition이 알린다(POK-326)
+   * 녹화 · 회차 다시보기의 재생 위치(방송 기준 초, 내림)가 바뀔 때마다 알린다. 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324).
+   * 다시보기를 틀 때만 부른다: 라이브 재생기의 자리는 onLivePosition이 알린다(POK-326). 회차 다시보기는 화면에 붙은 자리를
+   * 모르면 알리지 않는다(직전 값을 둔다 — POK-546)
    */
   onPlaybackPosition?: (seconds: number) => void;
   /**
@@ -150,6 +165,7 @@ const TopOverlay = memo(PlayerTopOverlay);
 
 export function GlassPlayer(props: GlassPlayerProps) {
   if (props.session) return <SessionGlassPlayer {...props} session={props.session} />;
+  if (props.vod) return <VodGlassPlayer {...props} vod={props.vod} />;
   if (props.recorded) return <RecordedGlassPlayer {...props} recorded={props.recorded} />;
   if (props.src) return <HlsGlassPlayer {...props} src={props.src} />;
   return props.simulate ? <SimulatedGlassPlayer {...props} /> : <NoSignalGlassPlayer {...props} />;
@@ -224,6 +240,42 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
   useEffect(() => {
     onPlaybackPosition?.(second);
   }, [second, onPlaybackPosition]);
+  return (
+    <GlassPlayerBody
+      {...props}
+      sim={sim}
+      buffering={buffering}
+      videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}
+    />
+  );
+}
+
+/** 끝난 뒤 들어온 화면의 회차 다시보기 — 같은 몸통에 VOD 재생 훅을 끼운다(POK-546) */
+function VodGlassPlayer(props: GlassPlayerProps & { vod: VodSource }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const sim = useVodPlayback(
+    videoRef,
+    props.vod,
+    props.simulationOptions,
+    props.onSeek,
+    props.mediaKey,
+    props.afterForbidden,
+    props.broadcastId,
+    props.startAtSeconds ?? null,
+    props.onStartApplied,
+  );
+  const buffering = useMediaBuffering(videoRef);
+  // 화면에 붙은 자리를 모르면 알리지 않는다: 채팅은 직전 자리를 둔다
+  const { onPlaybackPosition, onVodPhase } = props;
+  const { positionSeconds, phase } = sim;
+  useEffect(() => {
+    if (positionSeconds !== null) {
+      onPlaybackPosition?.(positionSeconds);
+    }
+  }, [positionSeconds, onPlaybackPosition]);
+  useEffect(() => {
+    onVodPhase?.(phase);
+  }, [phase, onVodPhase]);
   return (
     <GlassPlayerBody
       {...props}
@@ -332,6 +384,7 @@ function GlassPlayerBody({
   controllerRef,
   onUptimeChange,
   recorded,
+  vod,
   sim,
   videoNode,
   buffering = false,
@@ -423,9 +476,13 @@ function GlassPlayerBody({
       seekToUptime: (target: number) => {
         // 옮겼다고 하면 고른 시점이 알림도 없이 사라진다(리뷰 2라운드)
         if (sim.windowSeconds <= 0) return false;
-        // 녹화 다시보기는 그 자리로 바로 간다. 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(POK-324)
-        if (sim.seekToPosition) sim.seekToPosition(target);
-        else {
+        // 녹화 다시보기는 그 자리로 바로 간다. 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(POK-324).
+        // 회차 다시보기는 그 시각의 영상 자리를 모르면 false 다 — 옮겼다고 하지 않는다(POK-546)
+        if (sim.seekToPosition) {
+          if (sim.seekToPosition(target) === false) {
+            return false;
+          }
+        } else {
           const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
           sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
         }
@@ -439,12 +496,16 @@ function GlassPlayerBody({
         if (result === 'moved') sim.wake();
         return result;
       },
-      currentPositionMs: () =>
-        recorded?.originAxis === true && sim.currentPositionSeconds
-          ? Math.round(sim.currentPositionSeconds() * 1000)
-          : null,
+      currentPositionMs: () => {
+        if (recorded?.originAxis !== true && vod?.originAxis !== true) {
+          return null;
+        }
+        // 회차 다시보기는 화면에 붙은 자리를 모르면 null 이다 — 수동 마킹이 알리고 보내지 않는다(POK-546)
+        const seconds = sim.currentPositionSeconds?.() ?? null;
+        return seconds === null || !Number.isFinite(seconds) ? null : Math.round(seconds * 1000);
+      },
     }),
-    [sim, recorded],
+    [sim, recorded, vod],
   );
 
   // 설정 팝오버는 Portal로 document.body에 붙지만, React는 DOM이 아니라 React 트리를 따라

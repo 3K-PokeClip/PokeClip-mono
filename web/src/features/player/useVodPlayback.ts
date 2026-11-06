@@ -1,0 +1,277 @@
+'use client';
+
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
+import type { VodPhase } from './pastVod';
+import { behindFromSeekFraction, isAtEdge } from './playerMath';
+import type { SeekView } from './rewindSwitch';
+import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
+import type { PlayerSimulation, PlayerSimulationOptions } from './usePlayerSimulation';
+
+// 끝난 뒤 들어온 화면(A)의 다시보기 재생기(POK-546 설계 2-3) — 회차 경로가 답한 VOD 목록 하나를 PDT 축으로 튼다.
+// useHlsPlayback 을 세션 모드(onSeekRequest)로 세워 카드의 실제 시각 옮기기가 PDT 와 범위 밖 판정을 쓰게 하고, 그 반환을
+// 펼쳐 세 가지를 덮는다: 시크바(목록 전체 길이 축 — 세션 축의 1시간 상한을 거치지 않는다) · 위치(화면에 붙은 자리를
+// 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른 카드). PlayerSimulation 계약 그대로라 GlassPlayer 몸통은
+// 어느 훅인지 모른다.
+
+/** 회차 VOD 목록 하나(회차 경로의 vod ∧ ready 답)와 카드 · 채팅 축 */
+export interface VodSource {
+  url: string;
+  firstPdtMs: number;
+  headPdtMs: number;
+  /** 카드 · 채팅 축 0초 = 서버 기준점(originMs) ?? 첫 PDT */
+  axisZeroMs: number;
+  /** axisZeroMs 가 서버 기준점이다(카드 추가가 이 축이어야 보낸다 — POK-392) */
+  originAxis: boolean;
+}
+
+/** 재생 위치에 영상 자료가 있다(HTMLMediaElement.HAVE_CURRENT_DATA — useHlsPlayback 의 문턱과 같다) */
+const HAVE_CURRENT_DATA = 2;
+
+/** 재생기가 받은 목록의 범위 — 소스가 바뀔 때까지 지우지 않는다(재생기를 내린 뒤에도 시크바 폭이 남는다) */
+interface VodList {
+  url: string;
+  firstMs: number;
+  lastEndMs: number;
+}
+
+/**
+ * 사건(timeupdate · seeking · seeked) 때 잰 두 자리. axisPdtMs 는 재생 위치의 PDT(막대 값), shownPdtMs 는 화면에 붙은
+ * 자리의 PDT(알리는 위치)다. 새 값이 null 이면 그 칸만 직전 값을 둔다
+ */
+interface VodSample {
+  url: string;
+  axisPdtMs: number | null;
+  shownPdtMs: number | null;
+}
+
+const SAMPLE_EVENTS = ['timeupdate', 'seeking', 'seeked'] as const;
+
+/** 목표 실제 시각을 목록 범위(첫 조각 · 끝) 안으로 가둔다 */
+function clampToView(targetMs: number, view: SeekView): number {
+  return Math.min(view.endMs, Math.max(view.lowerMs, targetMs));
+}
+
+/**
+ * 재생기 국면. 기본 HLS 는 조각 목록이 없고, hls.js · 기본 HLS 가 모두 없으면 틀 수 없다 — 둘 다 unsupported 다. 화면
+ * 위치를 한 번 냈으면 그 뒤 멎어도 showing 이다(채팅은 마지막 자리 · 영상 위 알림). 그 전에 멎으면 failed, 아니면 첫 목록
+ * 유무로 listed · loading 이다
+ */
+function vodPhase(input: {
+  engine: 'hlsjs' | 'native' | 'none' | null;
+  listed: boolean;
+  shown: boolean;
+  stopped: boolean;
+}): VodPhase {
+  if (input.engine === 'native' || input.engine === 'none') {
+    return 'unsupported';
+  }
+  if (input.shown) {
+    return 'showing';
+  }
+  if (input.stopped) {
+    return 'failed';
+  }
+  return input.listed ? 'listed' : 'loading';
+}
+
+/**
+ * @param vod 틀 목록과 카드 · 채팅 축. 주소가 바뀌면 받은 목록 · 잰 자리를 버린다
+ * @param onSeek 사람이 옮겼다(시크바 · 키 · 카드 · 다 본 뒤 처음부터). 재생으로 흐를 때는 부르지 않는다
+ * @param mediaKey 영상 키(출입증 쿠키의 경로) — useHlsPlayback 과 같다
+ * @param afterForbidden 403 으로 출입증을 다시 받은 뒤 새로 선 재생기다 — useHlsPlayback 과 같다
+ * @param broadcastId 방송 번호(회차) — 사용 통계 「방송마다 한 번」의 기억 키
+ * @param startAtSeconds 받아 둔 자리(기준점 축 초 — 화면의 pendingStart). 목록이 서 있으면 그 커밋에 한 번 옮긴다
+ * @param onStartApplied 받아 둔 자리를 적용했다(옮김 · 범위 밖이라 첫 조각으로 자름) — 부른 쪽이 받아 둔 자리를 비운다. 그
+ *   시각의 영상 자리를 모르면 부르지 않고 남겨 둔다(다음 목록에서 다시 해 본다)
+ */
+export function useVodPlayback(
+  videoRef: RefObject<HTMLVideoElement | null>,
+  vod: VodSource,
+  options: PlayerSimulationOptions = {},
+  onSeek?: () => void,
+  mediaKey?: string,
+  afterForbidden = false,
+  broadcastId?: string,
+  startAtSeconds: number | null = null,
+  onStartApplied?: () => void,
+): PlayerSimulation & { positionSeconds: number | null; phase: VodPhase } {
+  const [loaded, setLoaded] = useState<VodList | null>(null);
+  const [sampled, setSampled] = useState<VodSample | null>(null);
+  // 훅 고리는 재생기보다 먼저 만든다 — 그래서 고리가 부를 seekToMs 는 ref 로 잇는다
+  const seekToMsRef = useRef<(atMs: number) => void>(() => undefined);
+  const hooks = useMemo<PlaybackHooks>(
+    () => ({
+      // 세션 모드: 카드의 실제 시각 옮기기(seekToDate)가 범위 밖 판정을 하고 여기로 넘긴다. VOD 하한은 첫 조각이라 그 앞은 첫
+      // 조각으로 조용히 자르고, 끝 뒤는 끝이다
+      onSeekRequest: (targetMs, view) => seekToMsRef.current(clampToView(targetMs, view)),
+      onListLoaded: ({ url, firstMs, lastEndMs }) => setLoaded({ url, firstMs, lastEndMs }),
+    }),
+    [],
+  );
+  const sim = useHlsPlayback(
+    videoRef,
+    { kind: 'vod', url: vod.url, startAtMs: null, generation: 0, strictStart: false },
+    options,
+    onSeek,
+    mediaKey,
+    afterForbidden,
+    broadcastId,
+    hooks,
+  );
+  const { seekToMs, seekToDate, currentProgramDateMs, togglePlay: toggleHlsPlay } = sim;
+  seekToMsRef.current = seekToMs;
+
+  const list = loaded !== null && loaded.url === vod.url ? loaded : null;
+  const sample = sampled !== null && sampled.url === vod.url ? sampled : null;
+  const axisPdtMs = sample?.axisPdtMs ?? null;
+  const shownPdtMs = sample?.shownPdtMs ?? null;
+
+  /** 화면에 붙은 자리의 PDT — 재생 위치에 영상이 없으면 모른다 */
+  const readShownPdtMs = useCallback((): number | null => {
+    const video = videoRef.current;
+    if (video === null || video.readyState < HAVE_CURRENT_DATA) {
+      return null;
+    }
+    return currentProgramDateMs();
+  }, [videoRef, currentProgramDateMs]);
+
+  // 다시 그리는 계기를 직접 듣는다 — 재생기 자리(livePosition)는 실제 초로 묶여, 기준점 축(ms 자리가 있다)의 초 경계를
+  // 넘어도 바뀌지 않을 수 있다
+  const url = vod.url;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video === null) {
+      return;
+    }
+    const measure = () => {
+      const axisNow = currentProgramDateMs();
+      const shownNow = readShownPdtMs();
+      setSampled((prev) => {
+        const own = prev !== null && prev.url === url ? prev : null;
+        const next = {
+          url,
+          axisPdtMs: axisNow ?? own?.axisPdtMs ?? null,
+          shownPdtMs: shownNow ?? own?.shownPdtMs ?? null,
+        };
+        return own !== null &&
+          own.axisPdtMs === next.axisPdtMs &&
+          own.shownPdtMs === next.shownPdtMs
+          ? own
+          : next;
+      });
+    };
+    for (const type of SAMPLE_EVENTS) {
+      video.addEventListener(type, measure);
+    }
+    return () => {
+      for (const type of SAMPLE_EVENTS) {
+        video.removeEventListener(type, measure);
+      }
+    };
+  }, [videoRef, url, currentProgramDateMs, readShownPdtMs]);
+
+  // 받아 둔 자리 — 첫 목록 때 이미 있었든 목록 뒤에 들어왔든 같은 규칙이다(부모 · 자식 국면이 한 박자 엇갈려도 다음 커밋에
+  // 적용된다). 칠하기 전에 돈다: 첫 조각이 화면에 붙은 뒤로 늦으면 0초 장면이 한 번 비칠 수 있다(V0 실측)
+  const startRef = useRef({ seekToDate, seekToMs, axisZeroMs: vod.axisZeroMs, onStartApplied });
+  startRef.current = { seekToDate, seekToMs, axisZeroMs: vod.axisZeroMs, onStartApplied };
+  useLayoutEffect(() => {
+    if (list === null || startAtSeconds === null) {
+      return;
+    }
+    const current = startRef.current;
+    const result = current.seekToDate?.(current.axisZeroMs + startAtSeconds * 1000) ?? 'unknown';
+    // 시각 축을 읽지 못했다 — 받아 둔 자리를 남겨 다음 목록에서 다시 해 본다(K2 (iii))
+    if (result === 'unknown') {
+      return;
+    }
+    if (result === 'outside') {
+      current.seekToMs(list.firstMs);
+    }
+    current.onStartApplied?.();
+  }, [list, startAtSeconds]);
+
+  // 시크바 — 목록 첫 조각부터 끝까지(이 표가 정본: 설계 2-3). 막대 값은 재생 위치의 PDT 로 센다(놓은 직후에도 놓은 자리)
+  const windowSeconds = list === null ? 0 : Math.round((list.lastEndMs - list.firstMs) / 1000);
+  const behindSeconds =
+    list === null || axisPdtMs === null
+      ? windowSeconds
+      : Math.min(windowSeconds, Math.max(0, Math.round((list.lastEndMs - axisPdtMs) / 1000)));
+
+  const seekToFraction = useCallback(
+    (fraction: number) => {
+      const nowMs = currentProgramDateMs();
+      if (list === null || nowMs === null) {
+        return;
+      }
+      const targetMs = list.lastEndMs - behindFromSeekFraction(fraction, windowSeconds) * 1000;
+      seekToMs(clampToView(targetMs, { lowerMs: list.firstMs, endMs: list.lastEndMs }));
+    },
+    [list, windowSeconds, currentProgramDateMs, seekToMs],
+  );
+
+  // 양수가 과거 쪽이다(playerKeys 의 부호). 명령 순간의 재생 위치로 센다 — timeupdate 표본은 연달아 누르면 낡았다
+  const seekBy = useCallback(
+    (deltaSeconds: number) => {
+      const nowMs = currentProgramDateMs();
+      if (list === null || nowMs === null) {
+        return;
+      }
+      const targetMs = nowMs - deltaSeconds * 1000;
+      seekToMs(clampToView(targetMs, { lowerMs: list.firstMs, endMs: list.lastEndMs }));
+    },
+    [list, currentProgramDateMs, seekToMs],
+  );
+
+  // 다시보기의 오른쪽 끝은 목록 끝이다(실시간이 아니다)
+  const returnToLive = useCallback(() => seekToFraction(1), [seekToFraction]);
+
+  // 카드처럼 정확한 자리 — 옮기지 못하면(시각 축을 모름 · 목록 앞) false 로 알려 부른 쪽이 「옮기지 못했어요」를 고른다
+  const seekToPosition = useCallback(
+    (seconds: number): boolean => seekToDate?.(vod.axisZeroMs + seconds * 1000) === 'moved',
+    [seekToDate, vod.axisZeroMs],
+  );
+
+  // 부르는 순간 화면에 붙은 자리로 센다(카드 추가가 ms 로 보낸다). 모르면 null — 지어내지 않는다
+  const currentPositionSeconds = useCallback((): number | null => {
+    const shownNow = readShownPdtMs();
+    return shownNow === null ? null : (shownNow - vod.axisZeroMs) / 1000;
+  }, [readShownPdtMs, vod.axisZeroMs]);
+
+  // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(녹화 다시보기와 같은 뜻)
+  const togglePlay = useCallback(() => {
+    const restarts = videoRef.current?.ended === true;
+    toggleHlsPlay();
+    if (restarts) {
+      onSeek?.();
+    }
+  }, [videoRef, toggleHlsPlay, onSeek]);
+
+  return {
+    ...sim,
+    windowSeconds,
+    behindSeconds,
+    atEdge: isAtEdge(behindSeconds),
+    seekToFraction,
+    seekBy,
+    returnToLive,
+    seekToPosition,
+    currentPositionSeconds,
+    togglePlay,
+    replay: true,
+    positionSeconds: shownPdtMs === null ? null : Math.floor((shownPdtMs - vod.axisZeroMs) / 1000),
+    phase: vodPhase({
+      engine: sim.engine,
+      listed: list !== null,
+      shown: shownPdtMs !== null,
+      stopped: sim.playbackError != null,
+    }),
+  };
+}
