@@ -129,7 +129,7 @@ describe('useLiveSession: 띠는 하나만(cc L)', () => {
 
 // 화면 갈래(POK-546 설계 3절 「라이브 · B 가 모두 notPast 인 근거」 표 다섯 줄 + A). 무변경 대조와 새 칸을 서로 다른 it 로 둔다 —
 // 무변경 it 는 develop 에도 있는 관측(recordedRequest · session · canOpen)만 보고, 새 칸 enteredAfterEnd 는 새 동작 it 만 본다.
-// A(끝난 뒤 들어온 화면)의 recordedRequest 는 여기서 보지 않는다 — 다음 커밋에서 녹화 조회를 떼어 null 로 바뀌는 임시 값이다.
+// A(끝난 뒤 들어온 화면)의 recordedRequest 는 아래 T4-9 묶음이 본다(녹화를 묻지 않는다 — 새 동작).
 describe('useLiveSession: 끝난 뒤 들어온 화면 판정(POK-546 T3-6)', () => {
   const STARTED_AT = Date.parse('2026-11-04T01:00:00.000Z');
   const ENDED_AT = Date.parse('2026-11-04T02:00:00.000Z');
@@ -255,5 +255,22 @@ describe('useLiveSession: 끝난 뒤 들어온 화면 판정(POK-546 T3-6)', () 
       );
       expect(view.result.current.enteredAfterEnd).toBe(true);
     });
+  });
+});
+
+// 끝난 뒤 들어온 화면(A)은 녹화를 묻지 않는다(POK-546 c4 · T4-9) — 회차 다시보기를 튼다. 녹화 조회는 세션이 녹화로 닫힌 화면(B)만이다
+describe('useLiveSession: 끝난 뒤 들어온 화면은 녹화를 묻지 않는다(POK-546 T4-9)', () => {
+  it('A — 세션을 연 적 없이 명부 ended 면 녹화 조회가 없다', () => {
+    const view = renderHook(() =>
+      useLiveSession(
+        input({
+          startedAt: Date.parse('2026-11-04T01:00:00.000Z'),
+          broadcastStatus: 'ended',
+          endedAt: Date.parse('2026-11-04T02:00:00.000Z'),
+        }),
+      ),
+    );
+    expect(view.result.current.enteredAfterEnd).toBe(true);
+    expect(view.result.current.recordedRequest).toBeNull();
   });
 });

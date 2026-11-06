@@ -2,7 +2,7 @@
 
 import { trackApiActivity } from './client';
 
-// 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 끝난 방송 다시보기와 편집기 미리보기가 쓴다.
+// 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 라이브를 끝까지 본 시청자의 녹화 보기(POK-547 전까지)와 편집기 미리보기가 쓴다.
 //   GET {base}/playback/<키>/list?path=<키>                                       녹화된 구간들(시작 시각·길이)
 //   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4&path=<키>   그 구간의 영상 한 덩어리
 // 🔴 주소는 출입증 쿠키 경로(/playback/<키>) 아래다(POK-317). 재생 서버가 읽는 path 쿼리는 웹이 경로의 키와 같은 값으로 하나 싣는다
