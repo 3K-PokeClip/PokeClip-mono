@@ -863,3 +863,61 @@ run "rejects_fractional_ephemeral_storage" {
 
   expect_failures = [var.ephemeral_storage_gib]
 }
+
+# 호출 루트 시험이 모듈 블록 배선(다른 서비스의 값을 받지 않았는지)을 보는 출력
+# 셋 — 만든 자원의 값 그대로다(POK-408).
+run "exposes_task_definition_policy_and_egress" {
+  command = apply
+
+  variables {
+    ephemeral_storage_gib = 40
+  }
+
+  assert {
+    condition = output.task_definition == {
+      family                = "example-auth"
+      cpu                   = "512"
+      memory                = "1024"
+      ephemeral_storage_gib = 40
+      container_definitions = aws_ecs_task_definition.this.container_definitions
+    }
+    error_message = "task_definition 출력이 태스크 정의의 family · cpu · 메모리 · 임시 디스크 · 컨테이너 정의가 아니다."
+  }
+
+  assert {
+    condition     = output.task_role_policy == aws_iam_role_policy.task[0].policy
+    error_message = "task_role_policy 출력이 작업 역할 정책 JSON 이 아니다."
+  }
+
+  assert {
+    condition     = sort(keys(output.egress_rules)) == sort(keys(var.egress_targets))
+    error_message = "egress_rules 출력의 키가 egress_targets 의 키가 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, rule in aws_vpc_security_group_egress_rule.this :
+      output.egress_rules[key] == {
+        port              = rule.from_port
+        cidr_ipv4         = rule.cidr_ipv4
+        prefix_list_id    = rule.prefix_list_id
+        security_group_id = rule.referenced_security_group_id
+        description       = rule.description
+      }
+    ])
+    error_message = "egress_rules 출력이 이그레스 규칙의 포트 · 상대 · 설명이 아니다."
+  }
+}
+
+run "omits_task_role_policy_without_statements" {
+  command = plan
+
+  variables {
+    task_role_statements = []
+  }
+
+  assert {
+    condition     = output.task_role_policy == null
+    error_message = "작업 역할 문장이 없는데 task_role_policy 출력이 null 이 아니다."
+  }
+}

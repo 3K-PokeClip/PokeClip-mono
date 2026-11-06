@@ -289,6 +289,69 @@ run "egress_targets_per_worker" {
   }
 }
 
+# 위 run 들은 지역값만 본다. 모듈 블록이 다른 일꾼의 값을 받으면(예: upload 에
+# render 작업 역할) 지역값은 맞아도 서비스가 틀린다 — 모듈이 실제로 만든 태스크
+# 정의 · 작업 역할 정책 · 이그레스를 그 일꾼의 지역값과 맞춘다. 컨테이너 정의의
+# 로그 리전이 apply 때 정해져 apply 로 돈다.
+run "modules_receive_their_own_worker_inputs" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for key, task in { render = module.render.task_definition, upload = module.upload.task_definition } :
+      task.cpu == tostring(var.workers[key].cpu) &&
+      task.memory == tostring(var.workers[key].memory) &&
+      task.ephemeral_storage_gib == var.workers[key].ephemeral_storage_gib
+    ])
+    error_message = "모듈 태스크 정의의 cpu · 메모리 · 임시 디스크가 같은 일꾼의 workers 값이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, task in { render = module.render.task_definition, upload = module.upload.task_definition } :
+      jsonencode(jsondecode(task.container_definitions)[0].image) == jsonencode(local.worker_images[key]) &&
+      jsonencode(jsondecode(task.container_definitions)[0].environment) == jsonencode([
+        for name, value in local.worker_env[key] : { name = name, value = value }
+      ]) &&
+      jsonencode(jsondecode(task.container_definitions)[0].secrets) == jsonencode([
+        for name, arn in local.worker_secrets[key] : { name = name, valueFrom = arn }
+      ])
+    ])
+    error_message = "모듈 컨테이너 정의의 이미지 · env · 비밀이 같은 일꾼의 지역값이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, policy in { render = module.render.task_role_policy, upload = module.upload.task_role_policy } :
+      jsonencode(jsondecode(policy).Statement) == jsonencode([
+        for statement in local.task_role_statements[key] : {
+          Sid      = statement.sid
+          Effect   = "Allow"
+          Action   = statement.actions
+          Resource = statement.resources
+        }
+      ])
+    ])
+    error_message = "모듈 작업 역할 정책이 같은 일꾼의 task_role_statements 가 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, rules in { render = module.render.egress_rules, upload = module.upload.egress_rules } :
+      jsonencode(rules) == jsonencode({
+        for name, target in local.egress_targets[key] : name => {
+          port              = target.port
+          cidr_ipv4         = try(target.cidr_ipv4, null)
+          prefix_list_id    = try(target.prefix_list_id, null)
+          security_group_id = try(target.security_group_id, null)
+          description       = target.description
+        }
+      })
+    ])
+    error_message = "모듈 SG 이그레스 규칙이 같은 일꾼의 egress_targets 가 아니다."
+  }
+}
+
 # SG id 가 apply 때 정해져 apply 로 돈다.
 run "ingress_rules_pair_workers_to_clip_and_auth" {
   command = apply
