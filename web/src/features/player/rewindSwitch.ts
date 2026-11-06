@@ -585,7 +585,8 @@ function relistNotice(
 /**
  * 화면 붙음 — 지금 시대의 위치 사건은 다시 받은 재생기가 그 자리에 화면을 붙였다는 뜻이다(재생기는
  * 재생 위치에 영상이 있을 때만 위치를 낸다 — useHlsPlayback 의 HAVE_CURRENT_DATA 가드). 다시 받기를
- * 끝낸다 — 그 뒤의 404 는 새 사건이라 다시 받고 다시 판정한다
+ * 끝낸다 — 그 뒤 처음 보는 조각의 404 는 새 사건이라 다시 받고 다시 판정한다. 이미 다시 받은 조각이면 재생기가
+ * hls.js 건너뜀에 맡기거나(틈으로 넘길 때) 세션 2 행이 막는다
  */
 function settleRelist(phase: SessionPhase): SessionPhase {
   if (phase.kind !== 'rewind' || phase.relist === undefined) return phase;

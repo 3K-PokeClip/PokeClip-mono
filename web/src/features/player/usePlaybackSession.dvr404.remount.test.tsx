@@ -385,7 +385,8 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     const relistHls = lastHls();
     expect(relistHls).not.toBe(rewindHls);
     expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'paint' } });
-    // 화면 전 다른 조각의 404 — 다시 받는 중이라 막힘(같은 조각이면 뒤 커밋에서 hls.js 건너뜀이다)
+    // 화면 전 다른 조각의 404 — 다시 받는 중이라 막힘(같은 조각이고 hls.js 가 틈으로 넘기면 재생기가 넘긴다 — 같은
+    // 파일 끝 describe 「아는 구멍 넘김」)
     segmentGone(relistHls, 8);
     expect(relistHls.stopLoad).toHaveBeenCalledTimes(1);
     await settle();

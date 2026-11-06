@@ -481,8 +481,9 @@ describe('재생기 명령 배선 — hold-frame · drop-pause-mark(POK-528 c5 �
   });
 });
 
-// 목록 안 구멍(POK-528 후속 계획 r3 5절) — 재생기는 404 를 올리기 전에 세션에 아는 구멍인지 묻고,
-// 그러면 올리지 않는다(뒤 커밋의 재생기 몫 — 여기서는 시험의 흉내 재생기가 한다). 옛 판 세션은
+// 목록 안 구멍(POK-528 후속 계획 r3 5절) — 재생기는 404 를 올리기 전에 세션에 아는 구멍인지 묻고, 아는 구멍이고
+// hls.js 가 틈으로 넘기기로 했으면 올리지 않는다(실제 판정은 useHlsPlayback · hlsErrors 몫 — 여기서는 시험의 흉내
+// 재생기가 아는 구멍이면 늘 넘긴다). 옛 판 세션은
 // 질의가 없어 늘 올리므로 음성 대조 트리에서는 다시 받기 · 막힘 수 단언으로 FAIL 한다.
 describe('세션 층 계약 — 재생기가 아는 구멍을 넘기면', () => {
   const S: DvrSegment = { type: 'main', sn: 41 };
@@ -510,7 +511,7 @@ describe('세션 층 계약 — 재생기가 아는 구멍을 넘기면', () => 
     expect(run.session().state.phase).toEqual({ kind: 'rewind', pendingNext: null });
   });
 
-  it('이 커밋의 재생기(묻지 않음)가 화면 뒤 같은 조각을 다시 올리면 → 다시 받기 1 · 막힘 1', async () => {
+  it('묻지 않는 재생기(질의 배선 누락 · gap 거짓과 같은 결과)가 화면 뒤 같은 조각을 다시 올리면 → 다시 받기 1 · 막힘 1', async () => {
     const script: Script = (offset) => (offset === 1 ? ['list', 'paint', S] : []);
     const run = await runRelist(steady, script, { first: S });
     expect(run).toMatchObject({ relists: 1, pollSwaps: 0, remounts: 0, blocked: 1, gones: 2 });
