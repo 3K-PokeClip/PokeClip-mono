@@ -1,4 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
+import { Suspense, createElement, startTransition, useLayoutEffect, type RefObject } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useVodPlayback, type VodSource } from './useVodPlayback';
 
@@ -74,6 +76,10 @@ class FakeHls {
 const PDT0 = Date.parse('2026-11-04T10:00:00.000Z');
 const MIN = 60_000;
 const VOD_URL = 'https://media.pokeclip.com/vod/key-1/r-A/index.m3u8';
+/** 다른 회차의 목록(소스 전환 시험의 B) */
+const OTHER_VOD_URL = 'https://media.pokeclip.com/vod/key-1/r-B/index.m3u8';
+
+type VodPlayback = ReturnType<typeof useVodPlayback>;
 
 /** ENDLIST 목록 — 기본은 4초 조각 1 800개(2시간). 조각 시작 · PDT 는 앞 조각 끝에 붙는다 */
 function vodDetails(count = 1_800, durationS = 4): Details {
@@ -112,6 +118,20 @@ function lastHls(): FakeHls {
 interface HookProps {
   vod: VodSource;
   startAtSeconds: number | null;
+  /** 이 속성으로 세운 렌더가 커밋되면(layout — passive 효과 전) 부른다 */
+  onCommit?: (sim: VodPlayback) => void;
+}
+
+/** 한 번만 도는 커밋 고리 — 고리 안에서 낸 사건이 다시 그려 커밋해도 두 번 돌지 않는다 */
+function onFirstCommit(run: (sim: VodPlayback) => void): (sim: VodPlayback) => void {
+  let ran = false;
+  return (sim) => {
+    if (ran) {
+      return;
+    }
+    ran = true;
+    run(sim);
+  };
 }
 
 /** 재생기를 세우고 hls.js 읽기까지 마친다(목록은 아직 없다) */
@@ -121,8 +141,8 @@ async function renderVod(initial: Partial<HookProps> = {}) {
   const onSeek = vi.fn();
   const onStartApplied = vi.fn();
   const view = renderHook(
-    ({ vod, startAtSeconds }: HookProps) =>
-      useVodPlayback(
+    ({ vod, startAtSeconds, onCommit }: HookProps) => {
+      const sim = useVodPlayback(
         ref,
         vod,
         {},
@@ -132,7 +152,10 @@ async function renderVod(initial: Partial<HookProps> = {}) {
         undefined,
         startAtSeconds,
         onStartApplied,
-      ),
+      );
+      useLayoutEffect(() => onCommit?.(sim));
+      return sim;
+    },
     { initialProps: { vod: vodSource(), startAtSeconds: null, ...initial } },
   );
   await act(async () => {
@@ -516,4 +539,261 @@ describe('카드 · 다 본 뒤 — 그 밖의 계약', () => {
     expect(view.result.current.positionSeconds).toBeNull();
     expect(view.result.current.phase).toBe('listed');
   });
+});
+
+// 주소를 바꾼 렌더가 커밋된 직후 · passive 효과 전의 틈(c5 리뷰 E1 · E2). act 는 layout 효과를 커밋 안에서 돌리고 passive 효과는
+// 그 뒤에 비우므로, 새 주소 렌더의 layout 효과(onCommit)는 옛 재생기(hls · 사건 처리기)가 아직 붙어 있는 자리다
+describe('소스 전환 — 주소를 바꾼 커밋 직후 · passive 전(옛 재생기가 아직 붙어 있다)', () => {
+  it('주소 · 기준점이 다른 B 의 지금 자리는 null 이다 — 옛 A 재생기의 자리를 B 기준점으로 환산하지 않는다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(vodDetails()));
+    sit(video, 600);
+    expect(view.result.current.currentPositionSeconds?.()).toBe(600);
+
+    // B 의 기준점은 A 첫 PDT 보다 1시간 늦다 — 옛 A 의 600초 자리를 B 축으로 셈하면 -3 000초다
+    let atCommit: number | null | undefined;
+    act(() =>
+      view.rerender({
+        vod: vodSource({ url: OTHER_VOD_URL, axisZeroMs: PDT0 + 60 * MIN }),
+        startAtSeconds: null,
+        onCommit: onFirstCommit((sim) => {
+          atCommit = sim.currentPositionSeconds?.();
+        }),
+      }),
+    );
+    expect(atCommit).toBeNull();
+  });
+
+  it('B 의 자리로 옮기기는 false 이고 옛 A 재생기를 옮기지 않는다 — B 축의 자리를 A 목록에서 찾지 않는다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(vodDetails()));
+    sit(video, 600);
+
+    // 기준점이 같아 B 축 60초는 A 목록 안이다 — A 목록에서 찾으면 옛 재생기를 60초로 옮기고 true 를 낸다
+    let moved: boolean | void = undefined;
+    act(() =>
+      view.rerender({
+        vod: vodSource({ url: OTHER_VOD_URL }),
+        startAtSeconds: null,
+        onCommit: onFirstCommit((sim) => {
+          moved = sim.seekToPosition?.(60);
+        }),
+      }),
+    );
+    expect(moved).toBe(false);
+    expect(video.currentTime).toBe(600);
+  });
+
+  it('그 틈에 온 옛 A 의 목록 · 사건은 B 묶음에 들지 않는다 — 폭 0 · 위치 null · loading', async () => {
+    const { view, video } = await renderVod();
+    const hlsA = lastHls();
+    act(() => hlsA.list(vodDetails()));
+    sit(video, 600);
+
+    act(() =>
+      view.rerender({
+        vod: vodSource({ url: OTHER_VOD_URL }),
+        startAtSeconds: null,
+        onCommit: onFirstCommit(() => {
+          hlsA.list(vodDetails());
+          video.currentTime = 900;
+          video.dispatchEvent(new Event('timeupdate'));
+        }),
+      }),
+    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    // B 재생기는 섰지만 목록은 아직이다
+    expect(fake.instances).toHaveLength(2);
+    expect(view.result.current.windowSeconds).toBe(0);
+    expect(view.result.current.positionSeconds).toBeNull();
+    expect(view.result.current.phase).toBe('loading');
+  });
+});
+
+// 전이(startTransition)로 B 를 렌더하다 형제가 멈춰(Suspense) 그 렌더가 버려지고, 처음 A 요소를 그대로 다시 렌더해 돌아오는
+// 경우(c5 리뷰 E2 · E3 — usePastVod 시험과 같은 꼴). A 는 다시 렌더하지 않고 건너뛸 수 있어, 버려진 B 렌더가 남긴 것(상태
+// 갱신의 미리 셈 · 렌더 중에 쓴 ref)이 그 뒤 A 를 오염시키는지 본다. act 는 전이 · 중단을 한 번에 비워 이 틈을 지우므로
+// createRoot 를 act 없이 쓰고 실제 시계로 기다린다
+describe('버려진 전이 렌더 뒤 복귀', () => {
+  const NEVER = new Promise<never>(() => {});
+  const actScope = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  let previousActEnvironment: boolean | undefined;
+
+  /**
+   * 이 묶음이 세운 뿌리. createRoot 는 Testing Library 의 자동 정리 밖이라 afterEach 가 내린다 — 중간 단언이 깨져도 재생기가
+   * 뒤 시험에 남지 않게
+   */
+  let roots: Root[] = [];
+
+  /** 렌더한 재생기 이름 — 버려지는 렌더까지 적는다(커밋된 것은 record 가 받는다) */
+  let renderedLabels: string[] = [];
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    previousActEnvironment = actScope.IS_REACT_ACT_ENVIRONMENT;
+    actScope.IS_REACT_ACT_ENVIRONMENT = false;
+    renderedLabels = [];
+  });
+  afterEach(() => {
+    for (const root of roots) {
+      root.unmount();
+    }
+    roots = [];
+    actScope.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  });
+
+  interface StageProps {
+    /** 렌더 기록에 남길 이름 */
+    label: string;
+    videoRef: RefObject<HTMLVideoElement | null>;
+    vod: VodSource;
+    onSeek: () => void;
+    /** 커밋된 재생기 반환을 받는다 */
+    record: (sim: VodPlayback) => void;
+    /** 형제가 영원히 멈춘다 — 그 렌더는 커밋되지 않고 버려진다 */
+    suspend: boolean;
+  }
+
+  function Probe({ label, videoRef, vod, onSeek, record }: StageProps) {
+    renderedLabels.push(label);
+    const sim = useVodPlayback(videoRef, vod, {}, onSeek);
+    useLayoutEffect(() => record(sim));
+    return null;
+  }
+
+  function Stall({ suspend }: { suspend: boolean }) {
+    if (suspend) {
+      throw NEVER;
+    }
+    return null;
+  }
+
+  function Stage(props: StageProps) {
+    return createElement(
+      Suspense,
+      { fallback: null },
+      createElement(Probe, props),
+      createElement(Stall, { suspend: props.suspend }),
+    );
+  }
+
+  /**
+   * 조건이 설 때까지(최대 2초) 실제 시계로 기다린다. 서지 않아도 그대로 돌아온다 — 판정은 뒤의 단언이 한다
+   * @param ready 기다릴 조건
+   */
+  async function waitUntil(ready: () => boolean) {
+    const deadline = Date.now() + 2_000;
+    while (!ready() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    // 조건을 세운 렌더 뒤의 효과까지 한 번 더 비운다
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  /** A 재생기를 세운다(목록은 아직 없다) — B 전이는 같은 영상 노드 · 기록을 쓴다 */
+  async function mountA() {
+    const videoRef = { current: document.createElement('video') };
+    let latest: VodPlayback | null = null;
+    const record = (sim: VodPlayback) => {
+      latest = sim;
+    };
+    const onSeekA = vi.fn();
+    const stageA = createElement(Stage, {
+      label: 'A',
+      videoRef,
+      vod: vodSource(),
+      onSeek: onSeekA,
+      record,
+      suspend: false,
+    });
+    const root = createRoot(document.createElement('div'));
+    roots = [...roots, root];
+    root.render(stageA);
+    await waitUntil(() => fake.instances.length >= 1);
+    expect(fake.instances).toHaveLength(1);
+    /** B 를 전이로 렌더하다 멈추게 하고, 그 렌더가 B 까지 닿을 때까지 기다린다 */
+    const stallOn = async (patch: Partial<StageProps>) => {
+      startTransition(() => {
+        root.render(
+          createElement(Stage, {
+            label: 'B',
+            videoRef,
+            vod: vodSource(),
+            onSeek: onSeekA,
+            record,
+            suspend: true,
+            ...patch,
+          }),
+        );
+      });
+      await waitUntil(() => renderedLabels.includes('B'));
+      expect(renderedLabels).toContain('B');
+    };
+    const returnToA = async () => {
+      root.render(stageA);
+      await waitUntil(() => true);
+    };
+    return {
+      video: videoRef.current,
+      committed: (): VodPlayback | null => latest,
+      onSeekA,
+      stallOn,
+      returnToA,
+    };
+  }
+
+  /** 영상 노드가 그 자리에 붙었다는 사건 하나(act 밖 — 렌더는 스케줄러가 돈다) */
+  function showAt(video: HTMLVideoElement, seconds: number) {
+    media.readyState = 4;
+    video.currentTime = seconds;
+    video.dispatchEvent(new Event('timeupdate'));
+  }
+
+  it('A → 전이로 B(다른 주소) 렌더 중단 → A 요소로 복귀한 뒤 A 의 목록 · 사건을 받는다', async () => {
+    const { video, committed, stallOn, returnToA } = await mountA();
+    await stallOn({ vod: vodSource({ url: OTHER_VOD_URL }) });
+    await returnToA();
+    // 버려진 B 렌더는 커밋되지 않았다 — 재생기도 A 하나뿐이다
+    expect(fake.instances).toHaveLength(1);
+    expect(committed()?.windowSeconds).toBe(0);
+
+    lastHls().list(vodDetails());
+    await waitUntil(() => committed()?.windowSeconds === 7_200);
+    expect(committed()?.windowSeconds).toBe(7_200);
+    showAt(video, 600);
+    await waitUntil(() => committed()?.positionSeconds === 600);
+    expect(committed()?.positionSeconds).toBe(600);
+  }, 10_000);
+
+  it('A → 전이로 B(다른 주소) 렌더가 멈춘 동안(복귀 전) 온 A 의 목록 · 사건을 받고, 복귀 뒤에도 그대로다', async () => {
+    const { video, committed, stallOn, returnToA } = await mountA();
+    await stallOn({ vod: vodSource({ url: OTHER_VOD_URL }) });
+    // B 렌더는 멈춘 채 커밋되지 않았다 — 커밋된 A 의 목록 · 사건이라 받는다
+    lastHls().list(vodDetails());
+    await waitUntil(() => committed()?.windowSeconds === 7_200);
+    expect(committed()?.windowSeconds).toBe(7_200);
+    showAt(video, 600);
+    await waitUntil(() => committed()?.positionSeconds === 600);
+    expect(committed()?.positionSeconds).toBe(600);
+
+    await returnToA();
+    expect(committed()?.windowSeconds).toBe(7_200);
+    expect(committed()?.positionSeconds).toBe(600);
+  }, 10_000);
+
+  it('A → 전이로 B(다른 onSeek) 렌더 중단 → A 요소로 복귀한 뒤 카드 이동은 A 의 onSeek 만 부른다', async () => {
+    const { video, committed, onSeekA, stallOn, returnToA } = await mountA();
+    lastHls().list(vodDetails());
+    await waitUntil(() => committed()?.windowSeconds === 7_200);
+    const onSeekB = vi.fn();
+    await stallOn({ onSeek: onSeekB });
+    await returnToA();
+
+    expect(committed()?.seekToPosition?.(50)).toBe(true);
+    expect(video.currentTime).toBe(50);
+    expect(onSeekA).toHaveBeenCalledOnce();
+    expect(onSeekB).not.toHaveBeenCalled();
+  }, 10_000);
 });

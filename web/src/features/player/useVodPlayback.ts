@@ -149,9 +149,9 @@ export function useVodPlayback(
   // 같으면 렌더를 건너뛰는데, 그 상태가 버려진 렌더의 것이면 지금 주소의 목록 · 자리를 「다른 주소」로 셈해 버린다
   const [held, dispatchHeld] = useReducer(heldReducer, vod.url, freshHeld);
   // 주소가 바뀐 렌더에서 곧바로 새 묶음으로 바꾼다(렌더 중 갱신 — 다음 렌더 전에 반영되고, 렌더가 버려지면 함께 버려진다)
-  let current = held;
+  let sourceHeld = held;
   if (held.forUrl !== vod.url) {
-    current = freshHeld(vod.url);
+    sourceHeld = freshHeld(vod.url);
     dispatchHeld({ type: 'source', url: vod.url });
   }
   // 훅 고리는 재생기보다 먼저 만든다 — 그래서 고리가 부를 seekToMs 는 ref 로 잇는다
@@ -177,9 +177,12 @@ export function useVodPlayback(
     hooks,
   );
   const { seekToMs, seekToDate, currentProgramDateMs, togglePlay: toggleHlsPlay } = sim;
-  seekToMsRef.current = seekToMs;
+  // 커밋된 렌더의 것만 잇는다 — 렌더 중에 쓰면 버려진 렌더(전이 중단)의 seekToMs · onSeek 가 남아 카드 이동이 그것을 부른다
+  useLayoutEffect(() => {
+    seekToMsRef.current = seekToMs;
+  }, [seekToMs]);
 
-  const { list, sample } = current;
+  const { list, sample } = sourceHeld;
   const axisPdtMs = sample?.axisPdtMs ?? null;
   const shownPdtMs = sample?.shownPdtMs ?? null;
 
@@ -225,16 +228,17 @@ export function useVodPlayback(
     if (list === null || startAtSeconds === null) {
       return;
     }
-    const current = startRef.current;
-    const result = current.seekToDate?.(current.axisZeroMs + startAtSeconds * 1000) ?? 'unknown';
+    const startInputs = startRef.current;
+    const result =
+      startInputs.seekToDate?.(startInputs.axisZeroMs + startAtSeconds * 1000) ?? 'unknown';
     // 시각 축을 읽지 못했다 — 받아 둔 자리를 남겨 다음 목록에서 다시 해 본다(K2 (iii))
     if (result === 'unknown') {
       return;
     }
     if (result === 'outside') {
-      current.seekToMs(list.firstMs);
+      startInputs.seekToMs(list.firstMs);
     }
-    current.onStartApplied?.();
+    startInputs.onStartApplied?.();
   }, [list, startAtSeconds]);
 
   // 시크바 — 목록 첫 조각부터 끝까지(이 표가 정본: 설계 2-3). 막대 값은 재생 위치의 PDT 로 센다(놓은 직후에도 놓은 자리)
@@ -272,17 +276,24 @@ export function useVodPlayback(
   // 다시보기의 오른쪽 끝은 목록 끝이다(실시간이 아니다)
   const returnToLive = useCallback(() => seekToFraction(1), [seekToFraction]);
 
-  // 카드처럼 정확한 자리 — 옮기지 못하면(시각 축을 모름 · 목록 앞) false 로 알려 부른 쪽이 「옮기지 못했어요」를 고른다
+  // 카드처럼 정확한 자리 — 옮기지 못하면(시각 축을 모름 · 목록 앞) false 로 알려 부른 쪽이 「옮기지 못했어요」를 고른다. 이
+  // 주소의 목록이 아직 없으면 붙어 있는 재생기가 이 주소의 것인지 모른다 — 지금 자리(currentPositionSeconds)와 같은 까닭
   const seekToPosition = useCallback(
-    (seconds: number): boolean => seekToDate?.(vod.axisZeroMs + seconds * 1000) === 'moved',
-    [seekToDate, vod.axisZeroMs],
+    (seconds: number): boolean =>
+      list !== null && seekToDate?.(vod.axisZeroMs + seconds * 1000) === 'moved',
+    [list, seekToDate, vod.axisZeroMs],
   );
 
-  // 부르는 순간 화면에 붙은 자리로 센다(카드 추가가 ms 로 보낸다). 모르면 null — 지어내지 않는다
+  // 부르는 순간 화면에 붙은 자리로 센다(카드 추가가 ms 로 보낸다). 모르면 null — 지어내지 않는다. 이 주소의 목록이 아직
+  // 없으면 붙어 있는 재생기가 이 주소의 것인지 모른다(주소를 바꾼 커밋 직후 · passive 전에는 옛 재생기가 남아 있다) — 그
+  // 자리를 이 주소의 기준점으로 셈하지 않는다. 목록은 이 주소로 선 재생기만 싣는다(heldReducer)
   const currentPositionSeconds = useCallback((): number | null => {
+    if (list === null) {
+      return null;
+    }
     const shownNow = readShownPdtMs();
     return shownNow === null ? null : (shownNow - vod.axisZeroMs) / 1000;
-  }, [readShownPdtMs, vod.axisZeroMs]);
+  }, [list, readShownPdtMs, vod.axisZeroMs]);
 
   // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(녹화 다시보기와 같은 뜻)
   const togglePlay = useCallback(() => {
