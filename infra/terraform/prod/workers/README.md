@@ -227,7 +227,10 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     (일시 실패가 늘 이 코드).
 1.  **업로드:** 서로 다른 두 주문에서 같은 갈래 — `upload.unavailable …
     what=` 의 값이 같음(clip 문 경로 · auth `/internal/youtube-link/resolve` ·
-    `S3 <예외>`), 또는 `upload.loop_error` 1건(clip · auth 4xx). 사용자 ·
+    `S3 <예외>`). clip 문 경로에는 주문 번호가 들어가므로
+    (`/internal/uploads/<번호>/start`) 숫자 경로 조각을 `<id>` 로 바꾼 뒤
+    비교합니다(`sed -E 's#/[0-9]+(/|$)#/<id>\1#g'`). 또는
+    `upload.loop_error` 1건(clip · auth 4xx). 사용자 ·
     외부 탓 결과(`FAILED YOUTUBE_{NOT_LINKED,UNLINKED,BROKEN}` ·
     `QUOTA_EXCEEDED` · `YOUTUBE_REJECTED`)는 세지 않습니다.
 1.  **사진:** `thumbnail.report_unavailable` 이 서로 다른 대상으로 **연속
