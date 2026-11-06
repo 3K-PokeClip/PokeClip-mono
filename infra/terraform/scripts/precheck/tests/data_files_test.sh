@@ -339,6 +339,8 @@ STAGE_FOLLOWUP_ROWS=(
   $'ci-followup\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
   $'workers\tservicediscovery:GetService\tap-northeast-2\t*'
   $'workers\tiam:GetRolePolicy\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
+  $'workers\tiam:ListRolePolicies\tus-east-1\t'\
 'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*')
 readonly STAGE_FOLLOWUP_ROWS
 

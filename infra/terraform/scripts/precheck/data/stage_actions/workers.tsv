@@ -54,6 +54,12 @@ iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 # 의 resourceRolePolicyPut 은 PutRolePolicy(107행) 뒤 resourceRolePolicyRead
 # (125행)로 GetRolePolicy(205행)를 부른다(대조 2026-11-07).
 iam:GetRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# 역할 인라인 정책 이름 조회 — provider 6.68.0 internal/service/iam/role.go
+# 의 resourceRoleCreate 는 끝에 resourceRoleRead(290행)를 부르고, 그것이
+# readRoleInlinePolicies(322행) → findRolePolicyNames(998–999행) →
+# ListRolePoliciesPaginator(807–813행)로 ListRolePolicies 를 부른다(대조
+# 2026-11-07).
+iam:ListRolePolicies	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 
