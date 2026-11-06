@@ -114,7 +114,8 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
 1.  **apply 직전 읽기**(아래 절).
 1.  **plan 과 승인 한 묶음:** 머지 체크아웃에서 다시 `plan -out` 하고 요지가
     앞의 것과 같은지 봅니다. kty 가 apply(조건 = 요지 줄 수 · 주소 집합 ·
-    plan 파일 sha256)와 긴급 정지 명령 둘의 조건부 실행을 한 번에 승인합니다.
+    plan 파일 sha256)와 긴급 정지 명령 둘의 조건부 실행을 한 번에 승인합니다
+    (범위는 아래 「긴급 정지와 상태 어긋남」).
 1.  **감시를 먼저 띄웁니다**(아래 「첫 소비 감시」). 띄웠다는 것을 알린 뒤
     kty 가 `terraform apply <plan 파일>` 을 돌립니다.
 1.  **첫 소비 판정(2분)** · 정지 신호면 긴급 정지.
@@ -175,9 +176,20 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     생길 때까지 5초마다 `aws logs describe-log-groups --region
     ap-northeast-2 --log-group-name-prefix <그룹> --query
     'length(logGroups)'` 를 보고, 1 이 되면 `aws logs tail <그룹> --region
-    ap-northeast-2 --follow --since 1m --format short` 를 가림 필터
-    (`sed -l -E 's/[0-9]{12}/<계정>/g'`)를 거쳐 기록 파일에 씁니다. 로그 줄에
-    큐 URL(계정 ID 포함)이 찍힙니다.
+    ap-northeast-2 --follow --since 1m --format short` 를 아래 가림 필터를
+    거쳐 기록 파일에 씁니다. 로그 줄에 큐 URL(계정 ID 포함)이 찍히고, 유출
+    신호가 잡힌 줄에 토큰 값이 남으면 안 됩니다. 머리 이름(`Bearer ` ·
+    `X-Internal-Token`)은 남겨 정지 신호로 잡히게 하고 값만 가립니다.
+
+    ```
+    mask() {
+      sed -l -E \
+        -e 's/[0-9]{12}/<계정>/g' \
+        -e 's/([Bb]earer[[:space:]]+)[^[:space:]]+/\1<가림>/g' \
+        -e 's/([Xx]-[Ii]nternal-[Tt]oken[:=][[:space:]]*)[^[:space:]]+/\1<가림>/g'
+    }
+    ```
+
 *   큐 깊이(사진 · DLQ 셋)를 30초마다 읽습니다.
 *   apply 를 시작하고 120초 안에 기록 파일 하나라도 줄이 0 이거나 따라 읽기
     프로세스가 끝났으면 **감시 불능**입니다. 정지 신호와 같이 다룹니다.
@@ -203,6 +215,33 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 실패 뒤 DLQ 로 갑니다. 보고 4xx 의 즉시 삭제는 시한이 없어 계약 검사 3 과
 회전 창 읽기가 주된 방어이고, 감시는 피해를 첫 몇 건으로 묶는 몫입니다.
 
+**운영 중 멈출 조건** — 하나라도 나오면 긴급 정지합니다. 첫 소비 뒤에도
+시험 · 관찰이 끝날 때까지 계속 적용합니다. 렌더 · 업로드 일꾼 결함이 보이면
+소비를 멈추고 3번에 넘깁니다 — 띄워 둔 채 두면 렌더는 마지막 시도의 실패를
+종결 보고하고 메시지를 지워, 들어오는 주문이 세 번씩 돈 뒤 「실패」 로
+닫힙니다.
+
+1.  **렌더:** 서로 다른 두 주문이 같은 `render.failed … code=<코드>` 로
+    실패. 사용자 입력 탓 코드(`VALIDATION` · `SOURCE_*` · `SCHEMA_VERSION` ·
+    `ENVELOPE_VALIDATION`)는 세지 않습니다. `INTERNAL` 은 세는 코드입니다
+    (일시 실패가 늘 이 코드).
+1.  **업로드:** 서로 다른 두 주문에서 같은 갈래 — `upload.unavailable …
+    what=` 의 값이 같음(clip 문 경로 · auth `/internal/youtube-link/resolve` ·
+    `S3 <예외>`), 또는 `upload.loop_error` 1건(clip · auth 4xx). 사용자 ·
+    외부 탓 결과(`FAILED YOUTUBE_{NOT_LINKED,UNLINKED,BROKEN}` ·
+    `QUOTA_EXCEEDED` · `YOUTUBE_REJECTED`)는 세지 않습니다.
+1.  **사진:** `thumbnail.report_unavailable` 이 서로 다른 대상으로 **연속
+    3건**, 또는 `thumbnail.report_rejected` 1건(카드 · 클립이면 그 자리
+    손실이라 운영 중에도 1건).
+1.  `*.loop_error` · `render.unexpected` · `render.report_rejected` 가 한
+    번이라도.
+1.  DLQ 셋(사진 · 렌더 · 업로드) 중 하나라도 깊이 > 0.
+1.  비밀 유출 신호 — 이때는 정지와 함께 토큰 회전 판단을 kty 에게 넘깁니다.
+
+정지 대상은 첫 소비 정지 신호와 같습니다 — 사진 · 렌더 조건(렌더 DLQ
+포함)이면 render, 업로드 조건(업로드 DLQ 포함)이면 upload, 사진 DLQ · 비밀
+유출은 둘 다입니다.
+
 ### 긴급 정지와 상태 어긋남
 
 ```
@@ -211,14 +250,18 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
   --query service.serviceName --output text
 ```
 
-*   apply 승인과 함께 받은 사전 승인은 그 apply 부터 시험 · 관찰이 끝날
-    때까지 한 번의 흐름에만 유효합니다. 그 뒤의 정지는 매번 kty 승인입니다.
+*   **사전 승인 범위:** apply 승인과 한 묶음으로 받는 긴급 정지 두 명령의
+    조건부 실행 승인은 세 목록 모두에 걸립니다 — 첫 소비 정지 신호 하나 ·
+    감시 불능 · 운영 중 멈출 조건 하나. 유효 범위는 그 apply 부터 시험 ·
+    관찰이 끝날 때까지 한 번의 흐름이고, 시험 · 관찰이 끝나면 승인도
+    끝납니다. 그 뒤의 운영 중 정지는 매번 kty 승인입니다.
 *   상태는 `desired_count = 1` 고정이라 정지 뒤 상태와 실물이 어긋납니다.
     **어긋남 · 시각 · 사유를 기록합니다.** 다음 apply 가 1 로 되돌리므로,
     정지한 채로 이 루트를 apply 하지 않습니다(plan 에 desired 변경이 보임).
-*   다시 띄우기(`--desired-count 1` 또는 apply)는 원인을 고친 뒤 **한 번만**,
-    매번 kty 승인입니다. 받은 횟수는 메시지에 남아 있어, 또 정지 신호가 나오면
-    더 시도하지 않고 kty 에게 넘깁니다.
+*   다시 띄우기(`--desired-count 1` 또는 apply)는 위 사전 승인에 들지
+    않습니다. 원인을 고친 뒤 **한 번만**, 매번 kty 승인입니다. 받은 횟수는
+    메시지에 남아 있어, 또 정지 신호가 나오면 더 시도하지 않고 kty 에게
+    넘깁니다.
 *   멈춘 동안 주문은 큐에 남습니다(보관 4일).
 
 ### 되돌리기 · 내리기
