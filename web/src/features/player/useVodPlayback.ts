@@ -39,6 +39,8 @@ const HAVE_CURRENT_DATA = 2;
 interface VodList {
   firstMs: number;
   lastEndMs: number;
+  /** 마지막 조각의 시작(LoadedList.lastStartMs) — 끝으로 갈 때 틀 자리의 하한 */
+  lastStartMs?: number;
 }
 
 /**
@@ -86,7 +88,8 @@ function heldReducer(held: VodHeld, action: VodHeldAction): VodHeld {
     return held;
   }
   if (action.type === 'list') {
-    return { ...held, list: { firstMs: action.firstMs, lastEndMs: action.lastEndMs } };
+    const { firstMs, lastEndMs, lastStartMs } = action;
+    return { ...held, list: { firstMs, lastEndMs, lastStartMs } };
   }
   if (action.type === 'ended') {
     return held.ended === action.ended ? held : { ...held, ended: action.ended };
@@ -114,15 +117,27 @@ function clampToView(targetMs: number, view: SeekView): number {
 }
 
 /**
- * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. 목록 끝(마지막 조각
- * PDT + 길이)은 실제로 받는 영상 끝보다 조금 뒤일 수 있어, 그 자리에 놓으면 WebKit 이 받아 둔 끝에 놓고 멎었다(V0-c Home/End).
+ * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. V0-c WebKit 1/3 에서
+ * 목록 끝(마지막 조각 PDT + 길이) 대입이 이어진 버퍼 끝에 놓여 멎었다(원인 미확정 — 마지막 조각을 받기 전 대입과 겹침).
  * 마지막 1초를 틀어 끝에 닿는다
  */
 const END_TAIL_MS = 1_000;
 
-/** 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 목록이 1초보다 짧으면 첫 조각이다 */
+/**
+ * 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 마지막 조각이 1초보다 짧으면 그 조각의 시작이다(앞 조각으로 물러서지 않는다 —
+ * 녹화 다시보기 tailStart 의 하한과 같다). 마지막 조각 시작을 모르면 첫 조각을 하한으로 둔다
+ */
 function tailMs(list: VodList): number {
-  return Math.max(list.firstMs, list.lastEndMs - END_TAIL_MS);
+  return Math.max(list.lastStartMs ?? list.firstMs, list.lastEndMs - END_TAIL_MS);
+}
+
+/**
+ * 카드 · 받아 둔 자리가 옮길 자리 — 첫 조각부터 꼬리까지로 가둔다(녹화 다시보기 forwardTarget 처럼 끝은 꼬리로 모은다). 끝
+ * 이동과 달리 다 본 뒤에도 옮긴다(녹화 다시보기의 카드와 같다). 이 주소의 목록을 아직 모르면 재생기 목록 끝까지다
+ */
+function cardTargetMs(targetMs: number, view: SeekView, list: VodList | null): number {
+  const endMs = list === null ? view.endMs : tailMs(list);
+  return clampToView(targetMs, { lowerMs: view.lowerMs, endMs });
 }
 
 /**
@@ -178,15 +193,17 @@ export function useVodPlayback(
     sourceHeld = freshHeld(vod.url);
     dispatchHeld({ type: 'source', url: vod.url });
   }
-  // 훅 고리는 재생기보다 먼저 만든다 — 그래서 고리가 부를 seekToMs 는 ref 로 잇는다
+  // 훅 고리는 재생기보다 먼저 만든다 — 그래서 고리가 부를 seekToMs 와 꼬리를 셀 목록은 ref 로 잇는다
   const seekToMsRef = useRef<(atMs: number) => void>(() => undefined);
+  const listRef = useRef<VodList | null>(null);
   const hooks = useMemo<PlaybackHooks>(
     () => ({
       // 세션 모드: 카드의 실제 시각 옮기기(seekToDate)가 범위 밖 판정을 하고 여기로 넘긴다. VOD 하한은 첫 조각이라 그 앞은 첫
-      // 조각으로 조용히 자르고, 끝 뒤는 끝이다
-      onSeekRequest: (targetMs, view) => seekToMsRef.current(clampToView(targetMs, view)),
-      onListLoaded: ({ url, firstMs, lastEndMs }) =>
-        dispatchHeld({ type: 'list', url, firstMs, lastEndMs }),
+      // 조각으로 조용히 자르고, 꼬리 뒤는 꼬리다(cardTargetMs)
+      onSeekRequest: (targetMs, view) =>
+        seekToMsRef.current(cardTargetMs(targetMs, view, listRef.current)),
+      onListLoaded: ({ url, firstMs, lastEndMs, lastStartMs }) =>
+        dispatchHeld({ type: 'list', url, firstMs, lastEndMs, lastStartMs }),
     }),
     [],
   );
@@ -207,6 +224,10 @@ export function useVodPlayback(
   }, [seekToMs]);
 
   const { list, sample, ended } = sourceHeld;
+  // 받아 둔 자리(아래 layout 효과)가 같은 커밋에 고리를 부르므로 그보다 먼저 잇는다
+  useLayoutEffect(() => {
+    listRef.current = list;
+  }, [list]);
   const axisPdtMs = sample?.axisPdtMs ?? null;
   const shownPdtMs = sample?.shownPdtMs ?? null;
 

@@ -95,6 +95,13 @@ function vodDetails(count = 1_800, durationS = 4): Details {
   return { fragments, fragmentStart: 0, targetduration: Math.ceil(durationS), live: false };
 }
 
+/** 4초 조각 뒤에 0.5초 조각이 붙은 목록 — 마지막 조각이 꼬리 거리(1초)보다 짧다 */
+function shortTailDetails(): Details {
+  const details = vodDetails(2, 4);
+  const [head, last] = details.fragments;
+  return { ...details, fragments: [head!, { ...last!, duration: 0.5 }] };
+}
+
 function vodSource(patch: Partial<VodSource> = {}): VodSource {
   return {
     url: VOD_URL,
@@ -374,6 +381,14 @@ describe('시크바 — 다시보기 전체 길이 축(1시간에서 자르지 �
     expect(video.currentTime).toBe(0);
   });
 
+  it('마지막 조각이 1초보다 짧아도 끝으로는 그 조각 안이다(앞 조각으로 물러서지 않는다)', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(shortTailDetails()));
+    sit(video, 1);
+    act(() => view.result.current.returnToLive());
+    expect(video.currentTime).toBe(4);
+  });
+
   it('다 봤으면(ended) 끝으로 · 막대 맨 오른쪽 · 끝 쪽 화살표는 옮기지 않고 다 본 채 둔다 — 끝이 아닌 자리로는 옮긴다', async () => {
     const { view, video, onSeek } = await atTenMinutes();
     sit(video, 7_200, 4, 'ended');
@@ -415,14 +430,40 @@ describe('시크바 — 다시보기 전체 길이 축(1시간에서 자르지 �
     expect(view.result.current.windowSeconds).toBe(0);
   });
 
-  it('실제 시각으로 옮기기는 목록 끝 뒤를 목록 끝으로 가둔다', async () => {
-    const { view, video } = await atTenMinutes();
-    let result: string | undefined;
+  it.each([
+    ['목록 끝 뒤', PDT0 + 130 * MIN],
+    ['꼬리와 목록 끝 사이', PDT0 + 7_199_500],
+  ])(
+    '실제 시각으로 옮기기(카드)는 목록 끝이 아니라 꼬리(끝 1초 앞)로 모은다 — %s',
+    async (_where, atMs) => {
+      const { view, video } = await atTenMinutes();
+      let result: string | undefined;
+      act(() => {
+        result = view.result.current.seekToDate?.(atMs);
+      });
+      expect(result).toBe('moved');
+      expect(video.currentTime).toBe(7_199);
+    },
+  );
+
+  it('짧은 마지막 조각이면 카드도 그 조각 시작으로 모은다(앞 조각으로 물러서지 않는다)', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(shortTailDetails()));
+    sit(video, 1);
     act(() => {
-      result = view.result.current.seekToDate?.(PDT0 + 130 * MIN);
+      view.result.current.seekToDate?.(PDT0 + MIN);
     });
-    expect(result).toBe('moved');
-    expect(video.currentTime).toBe(7_200);
+    expect(video.currentTime).toBe(4);
+  });
+
+  it('다 본 뒤에도 카드는 꼬리로 옮긴다 — 끝 이동의 「이미 끝이면 옮기지 않음」을 카드에는 걸지 않는다', async () => {
+    const { view, video, onSeek } = await atTenMinutes();
+    sit(video, 7_200, 4, 'ended');
+    act(() => {
+      view.result.current.seekToDate?.(PDT0 + 130 * MIN);
+    });
+    expect(video.currentTime).toBe(7_199);
+    expect(onSeek).toHaveBeenCalledOnce();
   });
 });
 
@@ -468,6 +509,13 @@ describe('받아 둔 자리(startAtSeconds) — 목록이 서면 그 커밋에 �
     video.currentTime = 33;
     act(() => lastHls().list(vodDetails()));
     expect(video.currentTime).toBe(0);
+    expect(onStartApplied).toHaveBeenCalledOnce();
+  });
+
+  it('받아 둔 자리가 목록 끝이면 꼬리(끝 1초 앞)로 옮기고 적용을 알린다', async () => {
+    const { video, onStartApplied } = await renderVod({ startAtSeconds: 7_200 });
+    act(() => lastHls().list(vodDetails()));
+    expect(video.currentTime).toBe(7_199);
     expect(onStartApplied).toHaveBeenCalledOnce();
   });
 

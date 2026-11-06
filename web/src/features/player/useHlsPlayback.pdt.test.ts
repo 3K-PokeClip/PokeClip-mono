@@ -236,6 +236,7 @@ describe('판 2 목록의 시각 환산 — 영상 축 조각', () => {
       url: 'https://m/rewind/k/index.m3u8',
       firstMs: PDT0,
       lastEndMs: PDT0 + 11_500,
+      lastStartMs: PDT0 + 7_500,
       targetDurationS: 4,
       headSpanMs: 12_000,
     });

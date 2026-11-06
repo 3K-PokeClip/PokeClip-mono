@@ -622,6 +622,8 @@ const server = vi.hoisted(() => ({
   vodChartBusy: false,
   /** 지난 방송의 끝 시각을 이만큼 늦춘다(침묵으로 닫힌 방송에 진짜 종료가 뒤늦게 온 경우) */
   vodEndShiftMs: 0,
+  /** 지난 방송 줄에 끝 시각이 없다(명부의 endedAt 은 null 일 수 있다) — 채팅이 영상 시각을 따르지 않는다 */
+  vodEndUnknown: false,
   /** 라이브 채팅을 liveTimelineResponse로 준다(묻는 창 안의 줄만, 지금보다 앞만, 쪽·커서까지) */
   liveChatTimeline: false,
   /** liveTimelineResponse가 받은 물음: 창 시작·끝·쪽 크기·물은 시각 */
@@ -785,9 +787,11 @@ function listResponse(u: URL): Response {
     status: 'ended',
     relation: 'OWNER',
     startedAt: server.vodStartUnknown ? null : new Date(VOD_STARTED).toISOString(),
-    endedAt: new Date(
-      (server.vodLong ? VOD_STARTED + 15 * 3_600_000 : VOD_ENDED) + server.vodEndShiftMs,
-    ).toISOString(),
+    endedAt: server.vodEndUnknown
+      ? null
+      : new Date(
+          (server.vodLong ? VOD_STARTED + 15 * 3_600_000 : VOD_ENDED) + server.vodEndShiftMs,
+        ).toISOString(),
     vodExpiresAt: null,
     timelineOriginAt: server.vodOrigin === null ? null : new Date(server.vodOrigin).toISOString(),
     ingestStreamId: server.ingest,
@@ -1132,6 +1136,7 @@ beforeEach(() => {
   server.vodChartSparse = false;
   server.vodChartBusy = false;
   server.vodEndShiftMs = 0;
+  server.vodEndUnknown = false;
   server.liveChatTimeline = false;
   server.liveAsks = [];
   server.liveStartUnknown = false;
@@ -7264,6 +7269,18 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       expect(screen.getByText(`${CANNOT_MOVE}${CHAT_MOVED}`)).toBeInTheDocument();
       expect(videoAt(container)).toBe(10);
       expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    });
+
+    it('채팅이 영상 시각을 따르지 않으면(명부에 끝 시각이 없음) 옮기지 못했다는 알림에 채팅 이동을 덧붙이지 않는다', async () => {
+      server.vodEndUnknown = true;
+      const { container } = await openPastVod();
+      await stopAfterShowing(container);
+      fireEvent.click(screen.getByRole('button', { name: CARD4 }));
+      await settle();
+
+      expect(screen.getByText(CANNOT_MOVE)).toBeInTheDocument();
+      expect(screen.queryByText(`${CANNOT_MOVE}${CHAT_MOVED}`)).toBeNull();
+      expect(videoAt(container)).toBe(10);
     });
 
     it('기본 HLS(hls.js 없음)면 카드는 옮기지 못했다고 알리고 카드 추가는 보내지 않는다', async () => {

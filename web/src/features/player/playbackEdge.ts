@@ -22,6 +22,11 @@ export interface LoadedList {
   firstMs: number;
   /** 마지막 조각의 끝(epoch ms) — E */
   lastEndMs: number;
+  /**
+   * 마지막 조각의 시작(epoch ms). 만드는 쪽 loadedList 는 늘 채운다 — 선택인 까닭은 다른 소비자 리터럴을 건드리지 않으려는
+   * 것이다
+   */
+  lastStartMs?: number;
   targetDurationS: number;
   /** 맨 앞 조각 EDGE_MARGIN_SEGMENTS 개(모자라면 있는 만큼)의 EXTINF 합(ms) — 창 하한 여유 */
   headSpanMs: number;
@@ -38,6 +43,7 @@ export function loadedList(
   return {
     firstMs: first.programDateTime,
     lastEndMs: last.programDateTime + last.duration * 1000,
+    lastStartMs: last.programDateTime,
     targetDurationS,
     headSpanMs: fragments
       .slice(0, EDGE_MARGIN_SEGMENTS)
