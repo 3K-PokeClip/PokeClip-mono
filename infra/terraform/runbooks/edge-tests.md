@@ -342,10 +342,16 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     `%2f` · `%5c` 를 정규화하는지. 셋 다 방송 간 우회의 결과를 가르므로
     **T2 사례가 가장 중요한 실측**입니다.
 *   2026-11-04 부터 live-auth(`/live` 요청마다 원본 전에 도는 CloudFront
-    함수)가 받은 경로에 `%2e` · `%2f` · `%5c` · `%25`(대소문자 무시) ·
-    역슬래시 · `//` · 점 구간이 있으면 403 으로 거절합니다. 그중 `%2f` ·
-    `%5c` · `%25` · 역슬래시는 정규화 뒤에도 남으므로 ③ 과 상관없이
-    막힙니다. 함수가 원 경로를 받는지(G1)는
+    함수)는 받은 경로에 아래 가운데 하나라도 있으면 403 으로 거절합니다.
+    *   `%` 한 글자라도(이스케이프 종류 · 대소문자 · 짝 여부 무관 — 정상
+        `/live` 경로에는 `%` 가 없습니다).
+    *   역슬래시.
+    *   빈 구간(`//`).
+    *   점 구간(`/./` · `/../` 처럼 구간 전체가 `.` 이나 `..`).
+*   그중 `%2f` · `%5c` · `%25` 와 역슬래시는 정규화(RFC 3986 기준)가 풀지
+    않아 정규화 뒤에도 남습니다. 그래서 ③ 과 상관없이 막힐 것으로 봅니다
+    — **미확인**입니다. CloudFront 가 실제로 무엇을 정규화하는지가 ③ 이라
+    실측 전에는 확정하지 않습니다. 함수가 원 경로를 받는지(G1)는
     [POK-548](https://xodbs9810.atlassian.net/browse/POK-548) 에서 잽니다.
 
 | 언제 | 요청(쿠키) | 통과 조건 |
@@ -434,8 +440,23 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     정규화한 경로는 A 아래라, 엣지가 어느 경로로 대조하는지를 가르는
     사례입니다. `jar_a` 는 쿠키 Path 가 `/live/<A>/` 라 curl 이 이 요청에
     쿠키를 싣지 않습니다. 그래서 같은 발급의 쿠키 셋을 Path `/live/` 로 담은
-    별도 쿠키 파일 `jar_wide` 로 보냅니다(만드는 법 · 보관 규칙은 `jar_a` 와
-    같습니다 — 값은 명령 줄에 쓰지 않고, 끝에 지웁니다).
+    별도 쿠키 파일 `jar_wide` 로 보냅니다. 보관 규칙은 `jar_a` 와 같습니다
+    — 증거 디렉터리 밖 · 값은 명령 줄에 쓰지 않음 · 끝에 지움.
+*   **`jar_wide` 만드는 법**: 위 T2 명령이 끝에 `jar_a` 를 지웠으므로, 같은
+    발급으로 `jar_a` 를 새로 만듭니다. 그 파일에서 Path 칸(쿠키 파일 한 줄의
+    셋째 칸)만 `/live/` 로 바꿔 `jar_wide` 를 쓰고, `jar_a` 는 바로 지웁니다.
+    `awk` 가 파일을 직접 읽어 값은 화면 · 명령 줄에 나오지 않습니다.
+    마지막 줄은 Path 를 바꾼 쿠키 수입니다(서명 쿠키 셋이라 3).
+
+    ```shell
+    jar_wide="$(mktemp)"   # 0600
+    awk 'BEGIN { FS = OFS = "\t" } NF == 7 { $3 = "/live/" } { print }' \
+      "${jar_a}" > "${jar_wide}"
+    rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
+    grep -c "$(printf '\t')/live/$(printf '\t')" "${jar_wide}"   # 3
+    ```
+
+    판별 사례 명령입니다.
 
     ```shell
     probe_since_ms="$(($(date -u +%s) * 1000))"
@@ -455,13 +476,26 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     결과는 `results.tsv` 의 「경로 우회(T2)」 비고에 코드 · `server` ·
     `x-cache` · `LIVE PATH DENY` 건수로 적고
     [POK-548](https://xodbs9810.atlassian.net/browse/POK-548) 에 넘깁니다.
-    읽는 법은 셋입니다.
+    건수에는 단서가 둘 있습니다.
 
-    *   CloudFront 403 이고 건수 1 이상: live-auth 가 원 경로를 받습니다.
-    *   CloudFront 403 이고 건수 0: 서명이 원 경로로 대조하거나 다른 기제가
-        막았습니다(가르지 못함).
+    *   **요청과 묶이지 않습니다.** 건수는 그 시각 뒤 live-auth 가 경로로
+        거절한 모든 요청의 합입니다. 다른 시청자 · 스캐너의 요청이 섞일 수
+        있습니다.
+    *   **늦게 보일 수 있습니다.** 함수 로그는 몇 분 늦게 보일 수 있습니다.
+        0 이면 몇 분 뒤 마지막 `aws logs` 줄만 다시 돌려 그 값을 씁니다.
+
+    읽는 법은 넷입니다.
+
+    *   CloudFront 403 이고 건수 1 이상: live-auth 가 원 경로를 받은 것으로
+        봅니다. 다른 요청이 섞였을 수 있어 「추정」 으로 적습니다.
+    *   CloudFront 403 이고 다시 센 건수도 0: 서명이 원 경로로 대조했거나
+        다른 기제가 막았습니다(둘 가운데 어느 쪽인지는 이 사례로 가르지
+        못합니다).
     *   엣지를 지난 응답(`server` 가 CloudFront 가 아님 — nginx 가 원 경로를
         400 으로 막을 수 있음): 엣지가 정규화한 경로로 대조했습니다.
+    *   **가르지 못함**: 위 셋에 들지 않는 결과입니다. 통신 실패 · 5xx ·
+        CloudFront 403 이 아닌 엣지 응답 · 건수 조회 실패가 여기에 듭니다.
+        코드 · `server` · `x-cache` · 건수만 적고 해석은 적지 않습니다.
 
     어느 쪽이든 A 쿠키로 A 를 읽는 것이라 노출이 아니고, O8 판정에 쓰지
     않습니다.
@@ -719,8 +753,19 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
         `hlsVariant` 를 mpegts 로 바꾸면 `.ts` 조각이 막혀 재생이 깨집니다.
     *   `jar_a` 는 「경로 우회 시험」 과 같은 발급으로 새로 만듭니다(그
         시험 끝에 지웠습니다).
+    *   **앞뒤 양성 대조**: 여덟 경로 앞과 뒤에 같은 `jar_a` 로 A 자신의
+        `/live/<A>/index.m3u8` 를 요청해 둘 다 200 이어야 합니다. 하나라도
+        200 이 아니면(쿠키 무효 · A 송출 끊김 · 통신 실패) 여덟 경로의 403 이
+        경로 규칙 때문인지 가를 수 없으므로 그 회차는 판정을 적지 않습니다.
+        `control` 줄은 헤더를 싣지 않아 `Location` 건수에 들지 않습니다.
 
     ```shell
+    t7_control() {
+      curl -b "${jar_a}" --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
+        -o /dev/null -w "control %{http_code}\n" \
+        "https://media.pokeclip.com/live/${a_id}/index.m3u8"
+    }
+    t7_control | tee "${evidence}/t7-deny.txt"
     for req_path in "/live/${a_id}" "/live/${a_id}/" "/live/${a_id}/nope" \
       "/live/${a_id}/hls.min.js" /live/favicon.ico \
       "/live/${a_id}/index.M3U8" "/live/${a_id}/x.ts" "/live/${a_id}/x.mp"; do
@@ -728,8 +773,10 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
         -o /dev/null -D - -w "${req_path} %{http_code}\n" \
         "https://media.pokeclip.com${req_path}" |
         grep -iE '^server:|^location:|^/live/'
-    done | tee "${evidence}/t7-deny.txt"
-    grep -ci '^location:' "${evidence}/t7-deny.txt"   # 0
+    done | tee -a "${evidence}/t7-deny.txt"
+    t7_control | tee -a "${evidence}/t7-deny.txt"
+    grep -cx 'control 200' "${evidence}/t7-deny.txt"   # 2
+    grep -ci '^location:' "${evidence}/t7-deny.txt"    # 0
     rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
     ```
 *   **T10**:
