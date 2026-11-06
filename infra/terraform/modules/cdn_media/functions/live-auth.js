@@ -41,7 +41,8 @@ const PATH_DENY_LOG = 'LIVE PATH DENY';
 
 /**
  * 원본으로 넘기는 /live 파일 끝. 원본(strings.HasSuffix)처럼 대소문자를
- * 구분한다.
+ * 구분한다. Object.freeze · String.prototype.endsWith 는 런타임 2.0 문서의
+ * 지원 목록에 있다(2026-11-06 확인).
  */
 const MEDIA_SUFFIXES = Object.freeze(['.m3u8', '.mp4']);
 
