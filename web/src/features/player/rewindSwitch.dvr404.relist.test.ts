@@ -505,6 +505,22 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
     expect(feed(again, [gone(again, undefined, audio)]).state.phase).toEqual(BLOCKED);
   });
 
+  // 재생기가 넘기지 않은(gap 아님 — ENDLIST · 마지막 조각 · 배선 누락) 같은 조각 404 가 다시 받는 중에 오면 1 행이
+  // 막는다. relist 를 둔 채 세대만 다시 올리면 같은 구멍으로 고리가 다시 돈다 — 감싸개 T7 이 전이마다 잡는다(c1 리뷰 W1)
+  it.each<['list' | 'paint']>([['list'], ['paint']])(
+    '⑥b 다시 받는 중(%s) 같은 조각 404(재생기가 넘기지 않음) → 막힘(1 행) · 세대 · 기억 그대로',
+    (stage) => {
+      const s = rewindAt(P20);
+      const list = feed(s, [gone(s, undefined, S)]).state;
+      const relisting = stage === 'list' ? list : feed(list, [loaded(A1)]).state;
+      expect(relisting.phase).toEqual(relistPhase(stage));
+      const done = feed(relisting, [gone(relisting, undefined, S)]).state;
+      expect(done.phase).toEqual(BLOCKED);
+      expect(done.source).toBe(relisting.source);
+      expect(done.dvrHoles).toBe(relisting.dvrHoles);
+    },
+  );
+
   it('⑦ [새 함수 — 음성 대조 제외 · 변이 G5 · G6 · G7 · G12 · G14 로 교정] dvrHoleKnown 표', () => {
     const s = rewindAt(P20);
     const list = feed(s, [gone(s, undefined, S)]).state;

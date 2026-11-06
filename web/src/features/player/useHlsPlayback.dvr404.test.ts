@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlaybackSource } from './rewindSwitch';
+import type { DvrSegment, PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
 // 되감기 조각 404 의 재생기 몫(POK-528 c5 — 계획 4절 · 4-1 · 4-2 · 8-3): 재생기가 되감기
@@ -165,16 +165,27 @@ async function settle() {
   });
 }
 
-/** hls.js 가 앱에 올리는 조각 받기 오류 꼴 — 실패한 파일은 url */
+/**
+ * hls.js 가 앱에 올리는 조각 받기 오류 꼴 — 실패한 파일은 url. gap 은 hls.js 가 그 조각을 틈으로 넘기기로
+ * 했는지(frag.gap — hls.js 처리기가 앱 처리기보다 먼저 적는다). 주지 않으면 칸이 없다
+ */
 function fragError(
   code: number,
-  patch: { fatal?: boolean; url?: string; details?: string } = {},
+  patch: {
+    fatal?: boolean;
+    url?: string;
+    details?: string;
+    gap?: boolean;
+    segment?: DvrSegment;
+  } = {},
 ): unknown {
+  const gap = patch.gap === undefined ? {} : { gap: patch.gap };
+  const segment = patch.segment ?? { type: 'main', sn: 7 };
   return {
     type: FakeHls.ErrorTypes.NETWORK_ERROR,
     details: patch.details ?? FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
     fatal: patch.fatal ?? false,
-    frag: { type: 'main', sn: 7, initSegment: { url: INIT_SEGMENT } },
+    frag: { ...segment, ...gap, initSegment: { url: INIT_SEGMENT } },
     response: { url: patch.url ?? MEDIA_SEGMENT, code, text: '' },
   };
 }
@@ -274,6 +285,53 @@ describe('되감기 조각 404 가로채기 배선(POK-528 c5 · 계획 4절 · 
     raise(hls, fragError(404, { fatal: true }));
     expect(hls.stopLoad).not.toHaveBeenCalled();
     expect(hls.startLoad).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 아는 구멍 넘김의 재생기 몫(POK-528 후속 c2 · 계획 2-1). 세션이 아는 구멍(isKnownDvrHole)이고 hls.js 가 그 조각을
+// 틈으로 넘기기로 했으면(frag.gap) 가로채지 않는다 — stopLoad 0 · 고리 0 이라 hls.js 가 예약한 다음 받기가 그대로 산다.
+// 둘 중 하나라도 거짓이면 지금처럼 가로챈다
+describe('아는 구멍 넘김 배선 — 세션이 아는 구멍 ∧ hls.js 가 틈으로 넘김이면 가로채지 않는다(POK-528 후속 c2)', () => {
+  it.each<[string, DvrSegment]>([
+    ['영상 조각', { type: 'main', sn: 7 }],
+    ['소리 조각(Z2)', { type: 'audio', sn: 41 }],
+  ])(
+    '① %s — 아는 구멍 ∧ frag.gap 참 → stopLoad 0 · 고리 0 · 세션에는 이 세대 · 그 조각으로 묻는다',
+    async (_name, segment) => {
+      const onDvrSegmentGone = vi.fn();
+      const isKnownDvrHole = vi.fn(() => true);
+      const { result } = await mount(sourceOf('rewind', 3), { onDvrSegmentGone, isKnownDvrHole });
+      const hls = lastHls();
+      raise(hls, fragError(404, { gap: true, segment }));
+      expect({
+        asked: isKnownDvrHole.mock.calls,
+        stopLoads: hls.stopLoad.mock.calls.length,
+        gone: onDvrSegmentGone.mock.calls.length,
+        startLoads: hls.startLoad.mock.calls.length,
+        destroyed: hls.destroy.mock.calls.length,
+        error: result.current.playbackError,
+      }).toEqual({
+        asked: [[3, segment]],
+        stopLoads: 0,
+        gone: 0,
+        startLoads: 0,
+        destroyed: 0,
+        error: null,
+      });
+    },
+  );
+
+  it.each<[string, boolean, { gap?: boolean }]>([
+    ['② 아는 구멍이어도 gap 거짓(ENDLIST · 마지막 조각 · 다시 받기 예약)', true, { gap: false }],
+    ['② 아는 구멍이어도 gap 칸 없음', true, {}],
+    ['③ 모르는 구멍이면 gap 참이어도(첫 404 는 다시 받기 재료)', false, { gap: true }],
+  ])('%s → 지금처럼 가로챈다 — stopLoad 1 · 고리 (3, 그 조각)', async (_name, known, patch) => {
+    const onDvrSegmentGone = vi.fn();
+    await mount(sourceOf('rewind', 3), { onDvrSegmentGone, isKnownDvrHole: () => known });
+    const hls = lastHls();
+    raise(hls, fragError(404, patch));
+    expect(hls.stopLoad).toHaveBeenCalledTimes(1);
+    expect(onDvrSegmentGone.mock.calls).toEqual([[3, { type: 'main', sn: 7 }]]);
   });
 });
 
@@ -439,9 +497,16 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
     };
   }
 
-  /** 옛 목록을 쥔 재생기(세대 1)를 세우고, 재생 위치를 atS 초에 둔 채 사람이 멈춘다 */
-  async function pausedAt(atS: number, kind: PlaybackSource['kind'] = 'rewind') {
-    const hooks = resumeHooks();
+  /**
+   * 옛 목록을 쥔 재생기(세대 1)를 세우고, 재생 위치를 atS 초에 둔 채 사람이 멈춘다. isKnownDvrHole 을 주면 세션
+   * 질의로 단다
+   */
+  async function pausedAt(
+    atS: number,
+    kind: PlaybackSource['kind'] = 'rewind',
+    isKnownDvrHole?: PlaybackHooks['isKnownDvrHole'],
+  ) {
+    const hooks = { ...resumeHooks(), isKnownDvrHole };
     const mounted = await mount(sourceOf(kind, 1), hooks);
     const hls = lastHls();
     hls.latestLevelDetails = OLD_LIST;
@@ -480,6 +545,30 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 받기만 멈추�
       userPause(video);
       resume(video);
       expect(hooks.onDvrSegmentGone).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // 넘김 판정은 붙잡기(reportGone)보다 앞이다(POK-528 후속 c2 · 계획 2-3 「멈춘 동안 404」) — 넘기면 받기를 멈추지도
+  // 붙잡지도 않아 다시 틀 때 세션에 올리지 않는다. 넘기지 않으면 지금처럼 다시 틀 때 이 세대 · 그 조각으로 올린다
+  it.each<[string, number, number, boolean]>([
+    ['아는 구멍 ∧ gap 참 → 붙잡지 않음', 0, 0, true],
+    ['모르는 구멍 ∧ gap 참 → 지금처럼 붙잡음', 1, 1, false],
+  ])(
+    '멈춘 동안 404 · %s — stopLoad %i · 다시 틀면 고리 %i',
+    async (_name, stopLoads, gone, known) => {
+      const isKnownDvrHole = vi.fn(() => known);
+      const { video, hooks, hls } = await pausedAt(36, 'rewind', isKnownDvrHole);
+      raise(hls, fragError(404, { gap: true }));
+      expect(isKnownDvrHole.mock.calls).toEqual([[1, { type: 'main', sn: 7 }]]);
+      expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
+      resume(video);
+      expect({
+        stopLoads: hls.stopLoad.mock.calls.length,
+        gone: hooks.onDvrSegmentGone.mock.calls,
+      }).toEqual({
+        stopLoads,
+        gone: gone === 0 ? [] : [[1, { type: 'main', sn: 7 }]],
+      });
     },
   );
 

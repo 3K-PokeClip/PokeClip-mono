@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
 import {
   consumeDvrSegmentGone,
+  hlsSkipsAsGap,
   isFirstListFailure,
   isMediaSegmentNotFound,
   isPlaylistLoadError,
@@ -462,8 +463,11 @@ describe('미디어 조각 404 가르기(POK-528) — 하한 밖으로 밀린 �
   });
 });
 
-/** 404 뒤 hls.js 가 받기를 다시 여는 세 갈래(계획 8-2) — 방송 중 가운데 조각 · 방송 중 마지막 조각 · ENDLIST 목록 */
-type GoneBranch = 'live-middle' | 'live-last' | 'endlist';
+/**
+ * 404 뒤 hls.js 가 받기를 다시 여는 갈래(계획 8-2) — 방송 중 가운데 조각 · 방송 중 마지막 조각 · ENDLIST 목록. ENDLIST
+ * 목록의 가운데 조각(endlist-middle)은 틈으로 넘기지 않는 쪽의 대조다(POK-528 후속 c2)
+ */
+type GoneBranch = 'live-middle' | 'live-last' | 'endlist' | 'endlist-middle';
 
 interface LoadingInternals {
   state: string;
@@ -476,10 +480,12 @@ interface LoadingInternals {
 interface LoadingPlayer {
   hls: Hls;
   streamController: LoadingInternals;
-  /** 404 를 낼, 지금 받는 조각(sn 1) */
+  /** 404 를 낼, 지금 받는 조각(목록 첫 조각) */
   frag: Fragment;
   /** 조각 받기 시도 수(fragmentLoader.load — 네트워크 없이 센다) */
   loads: () => number;
+  /** 받기를 시도한 조각의 sn 차례 */
+  loadedSns: () => Array<Fragment['sn']>;
   /** FRAG_LOADING 사건 수(base-stream-controller.ts 1173 — 받기를 시작할 때마다 난다) */
   fragLoadings: () => number;
 }
@@ -499,20 +505,28 @@ function fragmentAt(sn: number): Fragment {
  * 돌고(stream-controller 기동 꼴), 다음 tick(tickImmediate)도 막지 않는다 — 갈래마다 404 뒤의
  * 예약(틈 넘김의 다음 tick · 같은 조각 재시도)이 판별 신호다. 받기는 끝나지 않는 약속으로
  * 바꿔 시도 수만 센다
+ * @param shape.buffered 첫 버퍼를 채웠나(hls.js 의 _hasEnoughToStart · 기본 참). 거짓이면 다시 받은 재생기가 startLoad
+ *     직후 첫 조각을 받는 꼴이다
+ * @param shape.firstSn 목록 첫 조각이자 지금 받는 조각의 sn(기본 1)
  */
-function rewindPlayerLoading(branch: GoneBranch): LoadingPlayer {
+function rewindPlayerLoading(
+  branch: GoneBranch,
+  shape: { buffered?: boolean; firstSn?: number } = {},
+): LoadingPlayer {
+  const { buffered = true, firstSn = 1 } = shape;
   const hls = new Hls({ ...HLS_REWIND_CONFIG, debug: SILENT });
   instances.push(hls);
-  const frag = fragmentAt(1);
-  const fragments = branch === 'live-middle' ? [frag, fragmentAt(2)] : [frag];
+  const frag = fragmentAt(firstSn);
+  const middle = branch === 'live-middle' || branch === 'endlist-middle';
+  const fragments = middle ? [frag, fragmentAt(firstSn + 1)] : [frag];
   const details = {
-    live: branch !== 'endlist',
-    startSN: 1,
-    endSN: fragments.length,
+    live: branch === 'live-middle' || branch === 'live-last',
+    startSN: firstSn,
+    endSN: firstSn + fragments.length - 1,
     fragments,
-    fragmentStart: 0,
-    fragmentEnd: fragments.length * 4,
-    edge: fragments.length * 4,
+    fragmentStart: frag.start,
+    fragmentEnd: frag.start + fragments.length * 4,
+    edge: frag.start + fragments.length * 4,
     targetduration: 4,
     totalduration: fragments.length * 4,
     partList: null,
@@ -546,7 +560,7 @@ function rewindPlayerLoading(branch: GoneBranch): LoadingPlayer {
   // 미디어가 붙어야 doTickIdle 이 받기까지 간다(stream-controller.ts 245-256)
   const media = document.createElement('video');
   Object.assign(streamController, {
-    _hasEnoughToStart: true,
+    _hasEnoughToStart: buffered,
     levels: [level],
     levelLastLoaded: level,
     fragCurrent: frag,
@@ -567,6 +581,7 @@ function rewindPlayerLoading(branch: GoneBranch): LoadingPlayer {
     streamController,
     frag,
     loads: () => load.mock.calls.length,
+    loadedSns: () => load.mock.calls.map(([loaded]) => loaded.sn),
     fragLoadings: () => fragLoadings,
   };
 }
@@ -710,6 +725,197 @@ describe('되감기 조각 404 가로채기 — 진짜 hls.js 1.7.3 의 받기 �
     expect(consumed).not.toContain(true);
     expect(onGone).not.toHaveBeenCalled();
     expect(interceptor.stopLoad).not.toHaveBeenCalled();
+  });
+});
+
+/** 넘김 뒤 hls.js 가 다음 받기에 이를 만큼의 가짜 시계 — tick 주기(100ms)의 열 배 */
+const NEXT_LOAD_MS = 1_000;
+
+/** 아는 구멍을 넘길 때 재생기가 남기는 글(url 은 싣지 않는다 — 계획 2-1) */
+const PASS_NOTE = '[player] 목록 안 구멍 — hls.js 에 맡김';
+
+/** 따로 낸 소리 목록 */
+const AUDIO_PLAYLIST_URL = 'https://m/dvr/k/a/audio.m3u8';
+
+/**
+ * 소리 목록이 따로인 되감기 재생기가 소리 조각 sn 을 받는 중인 꼴(계획 r3 이월 Z2). 영상 목록은 방송 중 sn · sn + 1
+ * 두 조각이라 소리 조각 sn 은 hls.js 가 보기에 가운데다 — 가운데 판정은 영상 목록의 endSN 으로 한다
+ * (base-stream-controller.ts 2149-2158 · hls.ts latestLevelDetails). 받기는 끝나지 않는 약속으로 바꿔 시도 수만 센다
+ */
+function rewindPlayerLoadingAudio(sn: number): LoadingPlayer {
+  const main = rewindPlayerLoading('live-middle', { firstSn: sn });
+  const frag = new Fragment(PlaylistLevelType.AUDIO, AUDIO_PLAYLIST_URL);
+  frag.sn = sn;
+  frag.level = 0;
+  frag.start = (sn - 1) * 4;
+  frag.duration = 4;
+  frag.relurl = `audio${sn}.mp4`;
+  const track = {
+    details: { live: true, startSN: sn, endSN: sn + 1, fragments: [frag], targetduration: 4 },
+  };
+  const internals = main.hls as unknown as { audioStreamController: LoadingInternals };
+  const { audioStreamController } = internals;
+  const media = document.createElement('video');
+  Object.assign(audioStreamController, {
+    levels: [track],
+    trackId: 0,
+    fragCurrent: frag,
+    media,
+    mediaBuffer: media,
+    state: 'FRAG_LOADING',
+  });
+  const load = vi
+    .spyOn(audioStreamController.fragmentLoader, 'load')
+    .mockImplementation(() => new Promise<FragLoadedData>(() => {}));
+  return {
+    ...main,
+    streamController: audioStreamController,
+    frag,
+    loads: () => load.mock.calls.length,
+    loadedSns: () => load.mock.calls.map(([loaded]) => loaded.sn),
+  };
+}
+
+describe('hls.js 가 틈으로 넘기는 아는 구멍은 가로채지 않는다 — 진짜 hls.js 1.7.3(POK-528 후속 c2 · 계획 2-1)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * 가로채기 판정을 앱 처리기 자리에 달되, 세션은 늘 「아는 구멍」 이라고 답한다. 처리기가 볼 때의 gap(frag.gap)과 판정
+   * 결과를 차례로 모은다
+   */
+  function interceptKnownHole(player: LoadingPlayer) {
+    const onGone = vi.fn<(segment: DvrSegment) => void>();
+    const passHole = vi.fn<(segment: DvrSegment) => boolean>(() => true);
+    const stopLoad = vi.spyOn(player.hls, 'stopLoad');
+    const info = vi.spyOn(console, 'info').mockImplementation(quiet);
+    const seen: Array<{ gap: boolean; consumed: boolean }> = [];
+    player.hls.on(Events.ERROR, (_event, data) => {
+      const gap = data.frag?.gap === true;
+      const consumed = consumeDvrSegmentGone(
+        player.hls,
+        data,
+        ErrorTypes,
+        ErrorDetails,
+        onGone,
+        passHole,
+      );
+      seen.push({ gap, consumed });
+    });
+    return { onGone, passHole, stopLoad, info, seen };
+  }
+
+  it.each<[string, boolean]>([
+    ['첫 버퍼 뒤', true],
+    ['첫 버퍼 전(다시 받은 재생기가 구멍 조각에서 시작)', false],
+  ])(
+    '방송 중 가운데 조각 404 · %s — 처리기가 볼 때 frag.gap 참 · 넘김(stopLoad 0 · 고리 0) · hls.js 가 다음 조각을 받는다',
+    (_name, buffered) => {
+      fakeClock();
+      const player = rewindPlayerLoading('live-middle', { buffered });
+      const probe = interceptKnownHole(player);
+      raiseMedia404(player.hls, player.frag);
+      vi.advanceTimersByTime(NEXT_LOAD_MS);
+      expect({
+        seen: probe.seen,
+        asked: probe.passHole.mock.calls,
+        stopLoads: probe.stopLoad.mock.calls.length,
+        gone: probe.onGone.mock.calls.length,
+        firstLoaded: player.loadedSns()[0],
+        info: probe.info.mock.calls,
+      }).toEqual({
+        seen: [{ gap: true, consumed: false }],
+        asked: [[{ type: 'main', sn: 1 }]],
+        stopLoads: 0,
+        gone: 0,
+        firstLoaded: 2,
+        info: [[PASS_NOTE, 1]],
+      });
+    },
+  );
+
+  it('방송 중 가운데 소리 조각(audio:41) 404 — 처리기가 볼 때 frag.gap 참 · 아는 구멍이면 넘김(stopLoad 0 · 고리 0 · Z2)', () => {
+    fakeClock();
+    const player = rewindPlayerLoadingAudio(41);
+    const probe = interceptKnownHole(player);
+    raiseMedia404(player.hls, player.frag);
+    expect({
+      seen: probe.seen,
+      asked: probe.passHole.mock.calls,
+      stopLoads: probe.stopLoad.mock.calls.length,
+      gone: probe.onGone.mock.calls.length,
+    }).toEqual({
+      seen: [{ gap: true, consumed: false }],
+      asked: [[{ type: 'audio', sn: 41 }]],
+      stopLoads: 0,
+      gone: 0,
+    });
+  });
+
+  it.each<[GoneBranch, string]>([
+    ['endlist-middle', 'ENDLIST 목록의 가운데 조각'],
+    ['live-last', '방송 중 목록의 마지막 조각(sn = endSN)'],
+  ])(
+    '%s 404(%s) — 처리기가 볼 때 gap 거짓 → 아는 구멍이어도 가로챈다(stopLoad 1 · 고리 1 · STOPPED)',
+    (branch) => {
+      fakeClock();
+      const player = rewindPlayerLoading(branch);
+      const probe = interceptKnownHole(player);
+      raiseMedia404(player.hls, player.frag);
+      expect({
+        seen: probe.seen,
+        stopLoads: probe.stopLoad.mock.calls.length,
+        gone: probe.onGone.mock.calls,
+        state: player.streamController.state,
+        info: probe.info.mock.calls.length,
+      }).toEqual({
+        seen: [{ gap: false, consumed: true }],
+        stopLoads: 1,
+        gone: [[{ type: 'main', sn: 1 }]],
+        state: 'STOPPED',
+        info: 0,
+      });
+    },
+  );
+
+  it('세션이 모르는 구멍이면 gap 참이어도 가로챈다 — 첫 404 는 다시 받기 재료다', () => {
+    fakeClock();
+    const player = rewindPlayerLoading('live-middle');
+    const probe = interceptKnownHole(player);
+    probe.passHole.mockReturnValue(false);
+    raiseMedia404(player.hls, player.frag);
+    expect({
+      seen: probe.seen,
+      stopLoads: probe.stopLoad.mock.calls.length,
+      gone: probe.onGone.mock.calls,
+    }).toEqual({
+      seen: [{ gap: true, consumed: true }],
+      stopLoads: 1,
+      gone: [[{ type: 'main', sn: 1 }]],
+    });
+  });
+});
+
+describe('hls.js 가 이 오류를 틈으로 넘기기로 했나(hlsSkipsAsGap — POK-528 후속 c2)', () => {
+  it.each<[string, boolean, Pick<ErrorData, 'frag' | 'part'>]>([
+    ['frag.gap 참', true, { frag: { gap: true } as ErrorData['frag'] }],
+    ['frag.gap 거짓', false, { frag: { gap: false } as ErrorData['frag'] }],
+    ['frag.gap 없음', false, { frag: {} as ErrorData['frag'] }],
+    ['frag 없음', false, {}],
+    [
+      '부분 조각 — part.gap 참(frag.gap 거짓)',
+      true,
+      { frag: { gap: false } as ErrorData['frag'], part: { gap: true } as ErrorData['part'] },
+    ],
+    [
+      '부분 조각 — part.gap 거짓(frag.gap 참이어도 부분 조각이 정한다)',
+      false,
+      { frag: { gap: true } as ErrorData['frag'], part: { gap: false } as ErrorData['part'] },
+    ],
+  ])('%s → %s', (_name, expected, data) => {
+    expect(hlsSkipsAsGap(data)).toBe(expected);
   });
 });
 

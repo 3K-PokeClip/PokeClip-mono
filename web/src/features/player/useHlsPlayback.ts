@@ -139,7 +139,7 @@ export interface PlaybackHooks extends PositionHooks {
   onDvrSegmentGone?: (generation: number, segment: DvrSegment) => void;
   /**
    * 그 세대 재생기의 조각이 세션이 아는 목록 안 구멍(이미 한 번 다시 받게 한 조각)인가(POK-528 후속) — 세션에 묻는다.
-   * 재생기는 아직 읽지 않는다
+   * 참이고 hls.js 가 그 조각을 틈으로 넘기기로 했으면 재생기는 404 를 가로채지 않는다(consumeDvrSegmentGone)
    */
   isKnownDvrHole?: (generation: number, segment: DvrSegment) => boolean;
   /**
@@ -782,13 +782,23 @@ export function useHlsPlayback(
         });
         hls.on(HlsCtor.Events.ERROR, (_event, data) => {
           // 되감기 조각 404 는 세션 고리가 있으면 첫 비치명에서 가로챈다 — hls.js 가 예약한 다시 받기를 끊고 세션에
-          // 올린다(POK-528 · 사람이 멈춘 동안이면 다시 틀 때 — reportGone). 고리가 없으면 지금 동작 그대로다
+          // 올린다(POK-528 · 사람이 멈춘 동안이면 다시 틀 때 — reportGone). 고리가 없으면 지금 동작 그대로다. 세션이 아는
+          // 구멍을 hls.js 가 틈으로 넘기면 가로채지 않는다 — 그 판정은 붙잡기(reportGone)보다 앞이다(POK-528 후속)
           const gone = hooksRef.current.onDvrSegmentGone;
           const onGone =
             gone === undefined ? undefined : (segment: DvrSegment) => reportGone(gone, segment);
+          const passHole = (segment: DvrSegment) =>
+            hooksRef.current.isKnownDvrHole?.(generation, segment) === true;
           if (
             kind === 'rewind' &&
-            consumeDvrSegmentGone(hls, data, HlsCtor.ErrorTypes, HlsCtor.ErrorDetails, onGone)
+            consumeDvrSegmentGone(
+              hls,
+              data,
+              HlsCtor.ErrorTypes,
+              HlsCtor.ErrorDetails,
+              onGone,
+              passHole,
+            )
           ) {
             return;
           }

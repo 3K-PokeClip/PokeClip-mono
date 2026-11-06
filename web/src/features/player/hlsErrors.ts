@@ -88,30 +88,56 @@ function failedOnInitSegment(data: Pick<ErrorData, 'response' | 'frag'>): boolea
  * 같은 조각 재시도, 방송 중 가운데 조각은 틈 넘김 뒤 다음 tick(base-stream-controller.ts 2153-2187). stopLoad 가
  * 그 예약과 목록 재요청을 함께 끊는다(176-194). 다시 받기 · 재생기 내리기는 하지 않는다 — 복구(새 재생기 · 다시보기 ·
  * 닫기)는 세션이 정한다
+ *
+ * 세션이 아는 목록 안 구멍(이미 한 번 다시 받게 한 조각)이고 hls.js 가 이 오류를 틈으로 넘기기로 했으면
+ * (hlsSkipsAsGap) 가로채지 않는다(POK-528 후속) — 받기를 멈추면 hls.js 가 예약한 다음 조각 받기가 끊기므로 판정은
+ * stopLoad · onGone 앞이다. 다시 받은 재생기가 구멍 조각에서 시작해도 첫 버퍼 전 · 뒤 모두 같다. 단 그 뒤 hls.js 가
+ * 재생점을 다음 조각으로 옮기는 것은 재생 중일 때다 — 멈춘 채면 사람이 틀 때 건너뛴다(gap-controller.ts 184-185 ·
+ * 221-231 · 296-297)
  * @param onGone 세션 고리 — 받지 못한 조각(frag 의 type · sn)을 받는다. 없으면 가로채지 않는다(지금 동작 — hls.js
  *     재시도와 앱의 한 번 다시 받기)
  * @param types hls.js 의 ErrorTypes
  * @param details hls.js 의 ErrorDetails
- * @param _passHole 세션이 아는 목록 안 구멍인가 — 자리만 둔다(아직 읽지 않는다 · 넘김 판정은 뒤 커밋)
+ * @param passHole 세션이 아는 목록 안 구멍인가. 없으면 늘 가로챈다
  * @returns 가로챘나 — 참이면 오류 처리기는 여기서 끝난다
  */
 export function consumeDvrSegmentGone(
   hls: Pick<Hls, 'stopLoad'>,
-  data: Pick<ErrorData, 'type' | 'details' | 'response' | 'frag'>,
+  data: Pick<ErrorData, 'type' | 'details' | 'response' | 'frag' | 'part'>,
   types: typeof ErrorTypes,
   details: typeof ErrorDetails,
   onGone?: (segment: DvrSegment) => void,
-  _passHole?: (segment: DvrSegment) => boolean,
+  passHole?: (segment: DvrSegment) => boolean,
 ): boolean {
   if (onGone === undefined || !isMediaSegmentNotFound(data, types, details)) return false;
   const segment = goneSegment(data);
   if (segment === null) return false;
+  if (passHole?.(segment) === true && hlsSkipsAsGap(data)) {
+    console.info('[player] 목록 안 구멍 — hls.js 에 맡김', segment.sn);
+    return false;
+  }
   hls.stopLoad();
   onGone(segment);
   return true;
 }
 
-/** 오류의 미디어 조각(type · sn). 조각이 없거나 init 조각이면 null — isMediaSegmentNotFound 뒤에는 늘 있다 */
+/**
+ * hls.js 가 이 받기 오류를 틈으로 넘기기로 했나(POK-528 후속) — 부분 조각이면 part.gap, 아니면 frag.gap. hls.js 의
+ * 조각 오류 처리기가 앱 처리기보다 먼저 돌아(hls.ts 351-356) 앱이 볼 때는 이미 정해져 있다: 다시 받지 않음 ∧ 갈아탈
+ * 대안 없음 ∧ 방송 중 목록 ∧ 영상 목록 마지막 조각 앞이면 틈으로 적는다(base-stream-controller.ts 2153-2167 →
+ * fragment-tracker.ts 295-296 addAsGap 의 frag.gap). ENDLIST 목록 · 마지막 조각 · 다시 받기 예약 · 문맥이 바뀐 늦은
+ * 오류는 거짓이다. 화질이 여럿인 목록이면 hls.js 가 다른 화질로 갈아타기를 골라 틈이 서지 않는다 — 그러면 지금처럼 가로채 세션의
+ * 404 행으로 간다
+ */
+export function hlsSkipsAsGap(data: Pick<ErrorData, 'frag' | 'part'>): boolean {
+  return data.part ? data.part.gap === true : data.frag?.gap === true;
+}
+
+/**
+ * 오류의 미디어 조각(type · sn). 조각이 없거나 init 조각이면 null — 앞선 판별(isMediaSegmentNotFound)은 frag 없는
+ * 오류도 통과시키므로 여기서 뺀다. hls.js 1.7.3 은 FRAG_LOAD_ERROR 에 frag 를 싣는다(fragment-loader.ts 55 · 123 ·
+ * 265) — 없으면 가로채지 않아 옛 경로(hls.js 재시도와 앱의 한 번 다시 받기)로 간다
+ */
 function goneSegment(data: Pick<ErrorData, 'frag'>): DvrSegment | null {
   const { frag } = data;
   if (frag === undefined || frag.sn === 'initSegment') return null;

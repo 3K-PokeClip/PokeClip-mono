@@ -172,21 +172,23 @@ function otherHoles(state: PlaybackSessionState, url: string): Array<[string, st
 }
 
 /**
- * T7 · T8 · T9 — 목록 안 구멍의 기억(POK-528 후속 계획 3절). T7 아는 구멍의 404 는 같은
- * 목록을 다시 받게 하지 않는다 · T8 다시 받기에 들어가면 그 조각이 그 url 에 적히고 다른
- * url 의 기억은 그대로다 · T9 다시 받기 진입이 아니면 기억은 같은 객체다
+ * T7 · T8 · T9 — 목록 안 구멍의 기억(POK-528 후속 계획 3절). T7 아는 구멍의 404 뒤에는
+ * 「다시 받는 중 ∧ 세대 상승」 이 없다 — 앞에 이미 relist 가 있었어도(다시 받는 중에 세대만
+ * 또 올리는 결함도 잡는다) · T8 다시 받기에 들어가면 그 조각이 그 url 에 적히고 다른 url 의
+ * 기억은 그대로다 · T9 다시 받기 진입이 아니면 기억은 같은 객체다
  */
 function assertHoles(
   before: PlaybackSessionState,
   event: SessionEvent,
   after: PlaybackSessionState,
 ): void {
-  const entered = enteredRelist(before, after);
   if (event.type === 'dvr-segment-gone') {
     const known = holesBySpec(before, before.source.url).has(holeKeyBySpec(event.segment));
-    const relistedAgain = entered && after.source.generation > before.source.generation;
+    const relistedAgain =
+      relistOf(after) !== undefined && after.source.generation > before.source.generation;
     if (known) expect(relistedAgain, 'T7 아는 구멍의 404 ⇒ 다시 받기 아님').toBe(false);
   }
+  const entered = enteredRelist(before, after);
   if (!entered) {
     expect(after.dvrHoles, `T9 다시 받기 진입 아님 ⇒ 구멍 기억 그대로(${event.type})`).toBe(
       before.dvrHoles,
