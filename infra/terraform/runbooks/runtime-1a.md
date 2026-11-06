@@ -2497,12 +2497,25 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     `lastStatus=STOPPED` 일 때까지 읽습니다. 기록 뒤에 떴다가 지금 내려가는
     중인 태스크도 이렇게 잡힙니다. 원하는 상태가 `RUNNING` 인 태스크는
     `lastStatus` 가 아직 `STOPPED` 가 아니므로 「모두 STOPPED」 는 「새
-    RUNNING 0」 을 함께 뜻합니다. `workers-before.txt` 에서 기록이 `ACTIVE`
-    · `INACTIVE` 인 키만 돌고, 모두 통과해야 값을 넣습니다. 하나라도 종료
-    1(상한 · 읽기 실패)이면 멈춤 · kty 회부입니다. describe-tasks 는 한 번에
-    ARN 100 개까지 받습니다 — 모은 수가 100 을 넘으면 API 오류로 종료 1 이
-    되어 같은 회부로 갑니다(일꾼은 원하는 수 1 이라 반복 재기동이 아니면
-    넘지 않습니다).
+    RUNNING 0」 을 함께 뜻합니다.
+
+    응답의 `failures`(태스크별 조회 실패)도 봅니다. 실패가 하나라도 있으면
+    그 반복은 통과로 치지 않고 다음 반복에서 다시 읽습니다. 예외는 하나입니다.
+    이유가 `MISSING` 인 ARN 이 이번 반복에 모은 목록에 없고 처음 기록에만
+    있으면 통과로 칩니다. 멈춘 태스크는 응답에 최소 1시간 남습니다
+    ([DescribeTasks](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html)).
+    목록에서 빠지고 기록에만 남은 ARN 은 그 보관 기간이 지나 사라진, 이미
+    `STOPPED` 인 태스크입니다.
+    「`failures` 가 비어야 통과」 로 하면 승인 대기로 기록 뒤 1시간이 지났을
+    때 이 정상 `MISSING` 때문에 상한까지 돌고 거짓으로 회부됩니다.
+
+    `workers-before.txt` 에서 기록이 `ACTIVE` · `INACTIVE` 인 키만 돌고
+    `None` 은 건너뜁니다. 모두 통과해야 값을 넣습니다. 파일이 없거나
+    비었거나, 상태가 그 밖의 값(빈 값 · `DRAINING` 등)이면 멈춤입니다.
+    하나라도 종료 1(상한 · 읽기 실패)이어도 멈춤 · kty 회부입니다.
+    describe-tasks 는 한 번에 ARN 100 개까지 받습니다 — 모은 수가 100 을
+    넘으면 API 오류로 종료 1 이 되어 같은 회부로 갑니다(일꾼은 원하는 수
+    1 이라 반복 재기동이 아니면 넘지 않습니다).
 
     ```shell
     wait_zero() {  # wait_zero <키>
@@ -2523,22 +2536,36 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     }
 
     wait_stopped() {  # wait_stopped <키>
-      local i=0 left list="${work}/workers-tasks-$1.txt"
+      local i=0 out left other missing fresh_missing
+      local list="${work}/workers-tasks-$1.txt"
+      local fresh="${work}/workers-fresh-$1.txt"
       local seen="${work}/workers-seen-$1.txt"
+      local gone="${work}/workers-missing-$1.txt"
       while [ "${i}" -lt 60 ]; do
-        family_tasks "$1" "${seen}" || return 1
-        sort -u -o "${seen}" "${seen}" "${list}" || return 1
-        left=0
+        family_tasks "$1" "${fresh}" || return 1
+        sort -u -o "${seen}" "${fresh}" "${list}" || return 1
+        left=0 other=0 fresh_missing=0
         if [ -s "${seen}" ]; then
-          # shellcheck disable=SC2046 # ARN 은 공백 없는 한 낱말씩이다.
-          left="$(aws ecs describe-tasks --region ap-northeast-2 \
+          # 백틱은 JMESPath 리터럴이고, ARN 은 공백 없는 한 낱말씩이다.
+          # shellcheck disable=SC2016,SC2046
+          out="$(aws ecs describe-tasks --region ap-northeast-2 \
             --cluster pokeclip-prod --tasks $(cat "${seen}") \
-            --query 'length(tasks[?lastStatus!=`STOPPED`])' \
+            --query '[length(tasks[?lastStatus!=`STOPPED`]),
+              length(failures[?reason!=`MISSING` || !arn]),
+              join(`" "`, failures[?reason==`MISSING`].arn)]' \
             --output text)" || return 1
+          read -r left other missing <<<"${out}"
+          printf '%s\n' "${missing}" | tr ' ' '\n' |
+            sed -n '/^arn:aws:ecs:/p' >"${gone}"
+          if [ -s "${gone}" ]; then
+            fresh_missing="$(grep -Fxc -f "${gone}" "${fresh}")"
+          fi
         fi
-        printf '%s 안 멈춘 태스크 %s · 모은 태스크 %s\n' "$1" "${left}" \
-          "$(wc -l <"${seen}" | tr -d ' ')"
-        [ "${left}" = 0 ] && return 0
+        printf '%s 안 멈춘 태스크 %s · 조회 실패 %s · 방금 모은 MISSING %s' \
+          "$1" "${left}" "${other}" "${fresh_missing}"
+        printf ' · 모은 태스크 %s\n' "$(wc -l <"${seen}" | tr -d ' ')"
+        [ "${left}" = 0 ] && [ "${other}" = 0 ] &&
+          [ "${fresh_missing}" = 0 ] && return 0
         i=$((i + 1))
         sleep 10
       done
@@ -2547,10 +2574,19 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     }
 
     ok=1
+    [ -s "${work}/workers-before.txt" ] || {
+      printf '멈춤: workers-before.txt 가 없거나 비었음\n'
+      ok=0
+    }
     while read -r k state _; do
       case "${state}" in
         ACTIVE) { wait_zero "${k}" && wait_stopped "${k}"; } || ok=0 ;;
         INACTIVE) wait_stopped "${k}" || ok=0 ;;
+        None) ;;
+        *)
+          printf '멈춤: %s 의 기록 상태가 「%s」\n' "${k}" "${state}"
+          ok=0
+          ;;
       esac
     done <"${work}/workers-before.txt"
     if [ "${ok}" = 1 ]; then
@@ -2615,8 +2651,9 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         태스크가 새 값을 받습니다. 키와 함께 기록합니다. platform 은
         next · auth · clip · chat-collector · chat-detector 를 두므로(O7d
         뒤) 앱 서버 키는 이 갈래가 아닙니다. 일꾼은 위 필터가 대상에서
-        빼고, `prod/workers` 를 내렸을 때 일꾼이 이 갈래입니다(「일꾼 멈춤」
-        기록의 `INACTIVE` · `None`).
+        빼므로 이 갈래에 오지 않습니다 — `prod/workers` 를 내려 서비스가
+        없을 때도 일꾼은 「일꾼 멈춤」 기록의 `INACTIVE` · `None` 갈래가
+        맡습니다.
     *   그 밖의 값(`DRAINING` · `INACTIVE` 등) → 멈춤 · kty 회부.
     *   규칙의 전제: 클러스터는 platform 의 `pokeclip-prod` 하나이고,
         서비스 정의는 platform(앱 서버)과 `prod/workers`(일꾼 render ·
