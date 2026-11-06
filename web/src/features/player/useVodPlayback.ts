@@ -18,8 +18,8 @@ import type { PlayerSimulation, PlayerSimulationOptions } from './usePlayerSimul
 // 끝난 뒤 들어온 화면(A)의 다시보기 재생기(POK-546 설계 2-3) — 회차 경로가 답한 VOD 목록 하나를 PDT 축으로 튼다.
 // useHlsPlayback 을 세션 모드(onSeekRequest)로 세워 카드의 실제 시각 옮기기가 PDT 와 범위 밖 판정을 쓰게 하고, 그 반환을
 // 펼쳐 세 가지를 덮는다: 시크바(목록 전체 길이 축 — 세션 축의 1시간 상한을 거치지 않는다) · 위치(화면에 붙은 자리를
-// 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른 카드). PlayerSimulation 계약 그대로라 GlassPlayer 몸통은
-// 어느 훅인지 모른다.
+// 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른 카드). 다 봤나(ended)는 useHlsPlayback 에 없어 더한다.
+// PlayerSimulation 계약 그대로라 GlassPlayer 몸통은 어느 훅인지 모른다.
 
 /** 회차 VOD 목록 하나(회차 경로의 vod ∧ ready 답)와 카드 · 채팅 축 */
 export interface VodSource {
@@ -51,25 +51,31 @@ interface VodSample {
 }
 
 /**
- * 소스 하나로 쌓은 것 — 받은 목록과 잰 자리를 한 묶음으로 둔다. 주소가 바뀌면 묶음째 새로 세워, 다른 주소로 갔다 돌아와도
+ * 소스 하나로 쌓은 것 — 받은 목록 · 잰 자리 · 다 봤나를 한 묶음으로 둔다. 주소가 바뀌면 묶음째 새로 세워, 다른 주소로 갔다 돌아와도
  * 옛 목록 · 옛 자리가 되살아나지 않는다(설계 2-3 「소스가 바뀔 때까지」)
  */
 interface VodHeld {
   forUrl: string;
   list: VodList | null;
   sample: VodSample | null;
+  /** 목록 끝까지 봤다(video ended) — 다시 틀거나 옮기면 푼다 */
+  ended: boolean;
 }
 
 /** 주소 하나의 새 묶음 — 목록도 잰 자리도 아직 없다 */
 function freshHeld(url: string): VodHeld {
-  return { forUrl: url, list: null, sample: null };
+  return { forUrl: url, list: null, sample: null, ended: false };
 }
 
-/** 묶음을 바꾸는 일 — 주소가 바뀜 · 재생기가 받은 목록 · 사건 때 잰 자리. 목록 · 자리는 그것을 낸 주소를 싣는다 */
+/**
+ * 묶음을 바꾸는 일 — 주소가 바뀜 · 재생기가 받은 목록 · 사건 때 잰 자리 · 끝에 닿음과 풀림. 주소 말고는 그것을 낸 주소를
+ * 싣는다
+ */
 type VodHeldAction =
   | { type: 'source'; url: string }
   | ({ type: 'list'; url: string } & VodList)
-  | ({ type: 'sample'; url: string } & VodSample);
+  | ({ type: 'sample'; url: string } & VodSample)
+  | { type: 'ended'; url: string; ended: boolean };
 
 /** 주소가 바뀌면 묶음째 새로 세우고, 목록 · 자리는 묶음의 주소와 낸 주소가 같을 때만 받는다(앞 주소의 것은 버린다) */
 function heldReducer(held: VodHeld, action: VodHeldAction): VodHeld {
@@ -81,6 +87,9 @@ function heldReducer(held: VodHeld, action: VodHeldAction): VodHeld {
   }
   if (action.type === 'list') {
     return { ...held, list: { firstMs: action.firstMs, lastEndMs: action.lastEndMs } };
+  }
+  if (action.type === 'ended') {
+    return held.ended === action.ended ? held : { ...held, ended: action.ended };
   }
   const axisPdtMs = action.axisPdtMs ?? held.sample?.axisPdtMs ?? null;
   const shownPdtMs = action.shownPdtMs ?? held.sample?.shownPdtMs ?? null;
@@ -95,6 +104,9 @@ function heldReducer(held: VodHeld, action: VodHeldAction): VodHeld {
  * 브라우저에서도 화면에 붙은 첫 자리를 재게 한다
  */
 const SAMPLE_EVENTS = ['timeupdate', 'seeking', 'seeked', 'loadeddata', 'canplay'] as const;
+
+/** 다 본 것을 푸는 사건 — 다시 틀기(다 본 뒤 재생은 처음부터) · 옮기기(시크바 · 키 · 카드) */
+const RESUME_EVENTS = ['play', 'seeking'] as const;
 
 /** 목표 실제 시각을 목록 범위(첫 조각 · 끝) 안으로 가둔다 */
 function clampToView(targetMs: number, view: SeekView): number {
@@ -182,7 +194,7 @@ export function useVodPlayback(
     seekToMsRef.current = seekToMs;
   }, [seekToMs]);
 
-  const { list, sample } = sourceHeld;
+  const { list, sample, ended } = sourceHeld;
   const axisPdtMs = sample?.axisPdtMs ?? null;
   const shownPdtMs = sample?.shownPdtMs ?? null;
 
@@ -219,6 +231,27 @@ export function useVodPlayback(
       }
     };
   }, [videoRef, url, currentProgramDateMs, readShownPdtMs]);
+
+  // 다 봤나 — 재생 단추가 「처음부터」가 된다(녹화 다시보기와 같은 뜻, POK-518). useHlsPlayback 의 끝 도달(onEndReached)은
+  // 목록 끝 정체까지 세는 세션 알림이라 쓰지 않고, 브라우저의 ended 만 따른다
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video === null) {
+      return;
+    }
+    const reachEnd = () => dispatchHeld({ type: 'ended', url, ended: true });
+    const resume = () => dispatchHeld({ type: 'ended', url, ended: false });
+    video.addEventListener('ended', reachEnd);
+    for (const type of RESUME_EVENTS) {
+      video.addEventListener(type, resume);
+    }
+    return () => {
+      video.removeEventListener('ended', reachEnd);
+      for (const type of RESUME_EVENTS) {
+        video.removeEventListener(type, resume);
+      }
+    };
+  }, [videoRef, url]);
 
   // 받아 둔 자리 — 첫 목록 때 이미 있었든 목록 뒤에 들어왔든 같은 규칙이다(부모 · 자식 국면이 한 박자 엇갈려도 다음 커밋에
   // 적용된다). 칠하기 전에 돈다: 첫 조각이 화면에 붙은 뒤로 늦으면 0초 장면이 한 번 비칠 수 있다(V0 실측)
@@ -316,6 +349,7 @@ export function useVodPlayback(
     currentPositionSeconds,
     togglePlay,
     replay: true,
+    ended,
     positionSeconds: shownPdtMs === null ? null : Math.floor((shownPdtMs - vod.axisZeroMs) / 1000),
     phase: vodPhase({
       engine: sim.engine,

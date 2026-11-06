@@ -505,6 +505,35 @@ describe('카드 · 다 본 뒤 — 그 밖의 계약', () => {
     expect(video.play).toHaveBeenCalledTimes(2);
   });
 
+  it('끝에 닿으면(ended) 다 봤다고 내고, 다시 틀거나 옮기면 푼다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(vodDetails()));
+    expect(view.result.current.ended).toBe(false);
+
+    sit(video, 7_200, 4, 'ended');
+    expect(view.result.current.ended).toBe(true);
+    // 시크바 · 키 · 카드로 옮기면 브라우저가 seeking 을 낸다
+    sit(video, 600, 4, 'seeking');
+    expect(view.result.current.ended).toBe(false);
+
+    sit(video, 7_200, 4, 'ended');
+    expect(view.result.current.ended).toBe(true);
+    // 다 본 뒤 재생(처음부터) — 브라우저가 play 를 낸다
+    sit(video, 0, 4, 'play');
+    expect(view.result.current.ended).toBe(false);
+  });
+
+  it('다 본 뒤 소스가 바뀌면 새 소스는 다 보지 않은 것으로 선다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(vodDetails()));
+    sit(video, 7_200, 4, 'ended');
+    act(() => view.rerender({ vod: vodSource({ url: OTHER_VOD_URL }), startAtSeconds: null }));
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(view.result.current.ended).toBe(false);
+  });
+
   it('소스가 바뀌면 받아 둔 목록 · 위치를 버린다 — 새 목록 전 폭 0 · 위치 null', async () => {
     const { view, video } = await renderVod();
     act(() => lastHls().list(vodDetails()));

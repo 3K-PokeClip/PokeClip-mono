@@ -1632,4 +1632,20 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     expect(container.querySelector('video')!.currentTime).toBe(1_800);
     expect(onStartApplied).toHaveBeenCalledOnce();
   });
+
+  it('끝까지 보면 재생 단추가 「처음부터」다 — 녹화 다시보기와 같다(POK-518)', async () => {
+    const { container } = await renderVod();
+    listTwoHours();
+    const video = sit(container, 7_199);
+    expect(screen.queryByRole('button', { name: '처음부터' })).toBeNull();
+
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    expect(screen.getByRole('button', { name: '처음부터' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '재생' })).toBeNull();
+  });
 });
