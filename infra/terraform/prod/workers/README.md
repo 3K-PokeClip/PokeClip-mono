@@ -134,10 +134,10 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     을 다시 plan 해 둘 다 종료 0 인지 봅니다. 이 루트가 0 이 아니면 ECS 가
     태스크 정의를 다르게 정규화한 것이고, platform 이 0 이 아니면 이 루트가 단
     인그레스가 platform 에 드리프트로 보이는 것입니다 — 둘 다 kty 에게 넘깁니다.
-1.  **썸네일 대기분 소진 · 시험 잡:** 사진 DLQ 깊이가 apply 직전 기준(0)
-    그대로 · `thumbnail.report_rejected kind=card` · `kind=clip` 0 을 세고,
-    렌더 짧은 컷 하나 · 업로드 비공개 하나(채널은 시험 직전 kty 가 정함)로
-    끝까지 확인합니다.
+1.  **썸네일 대기분 소진 · 시험 잡:** 사진 DLQ 깊이가 「apply 직전 읽기」 ①
+    에서 적은 기준 그대로 · `thumbnail.report_rejected kind=card` ·
+    `kind=clip` 0 을 세고, 렌더 짧은 컷 하나 · 업로드 비공개 하나(채널은
+    시험 직전 kty 가 정함)로 끝까지 확인합니다.
 
 provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 자원에 붙습니다. mock 시험은 태그를 보지 못하므로 plan 의 `tags_all` 로
