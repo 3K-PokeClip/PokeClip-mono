@@ -123,11 +123,13 @@ export function consumeDvrSegmentGone(
 
 /**
  * hls.js 가 이 받기 오류를 틈으로 넘기기로 했나(POK-528 후속) — 부분 조각이면 part.gap, 아니면 frag.gap. hls.js 의
- * 조각 오류 처리기가 앱 처리기보다 먼저 돌아(hls.ts 351-356) 앱이 볼 때는 이미 정해져 있다: 다시 받지 않음 ∧ 갈아탈
- * 대안 없음 ∧ 방송 중 목록 ∧ 영상 목록 마지막 조각 앞이면 틈으로 적는다(base-stream-controller.ts 2153-2167 →
- * fragment-tracker.ts 295-296 addAsGap 의 frag.gap). ENDLIST 목록 · 마지막 조각 · 다시 받기 예약 · 문맥이 바뀐 늦은
- * 오류는 거짓이다. 화질이 여럿인 목록이면 hls.js 가 다른 화질로 갈아타기를 골라 틈이 서지 않는다 — 그러면 지금처럼 가로채 세션의
- * 404 행으로 간다
+ * 조각 오류 처리기가 앱 처리기보다 먼저 돌아 앱이 볼 때는 이미 정해져 있다 — 오류 컨트롤러가 먼저 처리 방침을 정하고
+ * (hls.ts 219 · error-controller.ts 67) 스트림 컨트롤러의 ERROR 처리기가 생성자에서 달린다(stream-controller.ts 94 ·
+ * 97-98 · base-stream-controller.ts 150-157). 다시 받지 않음 ∧ 갈아탈 대안 없음 ∧ 방송 중 목록 ∧ 영상 목록 마지막
+ * 조각 앞이면 틈으로 적는다(base-stream-controller.ts 2153-2167 → fragment-tracker.ts 295-296 addAsGap 의 frag.gap).
+ * ENDLIST 목록 · 마지막 조각 · 다시 받기 예약 · 문맥이 바뀐 늦은 오류는 거짓이다. 화질이 여럿인 목록에서 hls.js 가 다른
+ * 화질로 갈아타기를 고른 경우(갈아탈 화질이 벌점 · 범위 · 코덱으로 막혀 있지 않을 때 — error-controller.ts 396-473)도
+ * 틈이 서지 않는다 — 그러면 지금처럼 가로채 세션의 404 행으로 간다
  */
 export function hlsSkipsAsGap(data: Pick<ErrorData, 'frag' | 'part'>): boolean {
   return data.part ? data.part.gap === true : data.frag?.gap === true;

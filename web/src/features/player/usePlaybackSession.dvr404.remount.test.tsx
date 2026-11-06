@@ -751,7 +751,8 @@ type HoleOrder = 'before-paint' | 'after-paint';
 // 아는 구멍 넘김의 끝단(POK-528 후속 c2 · 계획 5절 통합 · Y1). 실제 useHlsPlayback · 세션에 hls.js 흉내를 묶어, 다시
 // 받은 새 재생기가 같은 조각을 또 404 로 받을 때 hls.js 가 틈으로 넘기기로 했으면(frag.gap — 흉내는 hls.js 가 고른
 // 결과를 자료에 싣는다) 재생기가 가로채지 않는지 본다. (가) 404 가 위치 사건보다 먼저 · (나) 뒤 — 둘 다 같은 결과다.
-// 대조: gap 거짓이면 (가) 는 다시 받는 중이라 막힘(1 행) · (나) 는 아는 구멍이라 막힘(2 행)
+// 대조: gap 거짓이면 (가) · (나) 모두 가로채 막힘 — 어느 행이 막았는지(다시 받는 중 · 아는 구멍)는 이 끝단 시험이 가리지
+// 않는다(행 구분은 rewindSwitch 단위 시험 ② · ⑥b 몫)
 describe('아는 구멍 넘김 — 다시 받은 재생기의 같은 조각 404 는 hls.js 건너뜀에 맡긴다(POK-528 후속 c2 · Y1)', () => {
   /** 다시 받은 재생기의 위치 사건 — 화면이 붙어 다시 받는 중이 끝난다 */
   function painted() {
@@ -815,8 +816,8 @@ describe('아는 구멍 넘김 — 다시 받은 재생기의 같은 조각 404 
   );
 
   it.each<[HoleOrder, string]>([
-    ['before-paint', '(가) 위치 사건 전 — 다시 받는 중이라 1 행'],
-    ['after-paint', '(나) 위치 사건 뒤 — 아는 구멍이라 2 행'],
+    ['before-paint', '(가) 위치 사건 전'],
+    ['after-paint', '(나) 위치 사건 뒤'],
   ])('대조 %s · %s: 같은 조각 404 · gap 거짓 → 가로채 막힘 · 세대 그대로', async (order) => {
     const { relistHls, generation } = await relistedOnce();
     await sameHoleAgain(relistHls, order, false);
