@@ -341,8 +341,9 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     ② 서명 쿠키의 리소스 대조가 원 경로 기준인지 ③ CloudFront 가 `%2e` ·
     `%2f` · `%5c` 를 정규화하는지. 셋 다 방송 간 우회의 결과를 가르므로
     **T2 사례가 가장 중요한 실측**입니다.
-*   2026-11-04 부터 live-auth(`/live` 요청마다 원본 전에 도는 CloudFront
-    함수)는 받은 경로에 아래 가운데 하나라도 있으면 403 으로 거절합니다.
+*   이 거절을 넣은 PR(POK-458 결함 묶음)의 edge apply 뒤부터
+    live-auth(`/live` 요청마다 원본 전에 도는 CloudFront 함수)는 받은
+    경로에 아래 가운데 하나라도 있으면 403 으로 거절합니다.
     *   `%` 한 글자라도(이스케이프 종류 · 대소문자 · 짝 여부 무관 — 정상
         `/live` 경로에는 `%` 가 없습니다).
     *   역슬래시.
@@ -389,7 +390,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     낸 403(`server: CloudFront` 헤더 — nginx 가 낸 응답이면 `server` 가
     nginx)이어야 합니다. 서명 거절과 live-auth 거절은 둘 다 원본 · 캐시
     앞에서 멈추므로 똑같이 통과입니다 — `..%5c` 는 live-auth 가 거절합니다
-    (2026-11-04 전에는 nginx 400 까지 갔습니다). 그 밖의 응답은 모두
+    (그 edge apply 전에는 nginx 400 까지 갔습니다 — 2026-11-04 실측). 그 밖의 응답은 모두
     실패입니다 — nginx 까지 간 응답(400 · 403 · 404 · `Miss`)은 A 쿠키가
     엣지(서명 검사 · live-auth)를 통과했다는 뜻이고, 그러면 캐시가 차 있는
     실제 운영에서 A 쿠키로 B 목록 · 조각(조각은 최대 1시간 캐시)이 나갈 수
@@ -758,6 +759,8 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
         200 이 아니면(쿠키 무효 · A 송출 끊김 · 통신 실패) 여덟 경로의 403 이
         경로 규칙 때문인지 가를 수 없으므로 그 회차는 판정을 적지 않습니다.
         `control` 줄은 헤더를 싣지 않아 `Location` 건수에 들지 않습니다.
+    *   판정 줄은 명령 끝의 셋입니다 — `control 200` 2건 · ` 403` 으로 끝나는
+        경로 줄 8건 · `Location` 0건. 셋이 모두 맞아야 통과입니다.
 
     ```shell
     t7_control() {
@@ -776,6 +779,7 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
     done | tee -a "${evidence}/t7-deny.txt"
     t7_control | tee -a "${evidence}/t7-deny.txt"
     grep -cx 'control 200' "${evidence}/t7-deny.txt"   # 2
+    grep -c ' 403$' "${evidence}/t7-deny.txt"          # 8
     grep -ci '^location:' "${evidence}/t7-deny.txt"    # 0
     rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
     ```
