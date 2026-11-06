@@ -2446,18 +2446,23 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     내지 않고 파일에만 둡니다.
 
     ```shell
-    record_tasks() {  # record_tasks <키>
-      local d out list="${work}/workers-tasks-$1.txt"
-      : >"${list}"
+    family_tasks() {  # family_tasks <키> <파일>
+      local d out
+      : >"$2"
       for d in RUNNING STOPPED; do
         out="$(aws ecs list-tasks --region ap-northeast-2 \
           --cluster pokeclip-prod --family "pokeclip-prod-$1" \
           --desired-status "${d}" --query 'taskArns[]' --output text)" ||
           return 1
         printf '%s\n' "${out}" | tr '\t' '\n' |
-          sed -n '/^arn:aws:ecs:/p' >>"${list}"
+          sed -n '/^arn:aws:ecs:/p' >>"$2"
       done
-      sort -u -o "${list}" "${list}"
+      sort -u -o "$2" "$2"
+    }
+
+    record_tasks() {  # record_tasks <키>
+      local list="${work}/workers-tasks-$1.txt"
+      family_tasks "$1" "${list}" || return 1
       printf '%s 태스크 %s개 기록\n' "$1" "$(wc -l <"${list}" | tr -d ' ')"
     }
     ```
@@ -2486,11 +2491,18 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     *   그 밖의 값(`ACTIVE 2` · `DRAINING` 등) → 멈춤 · kty 회부.
 
     확인은 둘입니다(읽기 · 10초 간격 · 각 10분 상한). `wait_zero` 는 원하는
-    수 · 실행 수 · 대기 수가 모두 0 이 될 때까지(`ACTIVE` 만), `wait_stopped`
-    는 기록한 태스크가 모두 `lastStatus=STOPPED` 이고 그 family 에 원하는
-    상태 `RUNNING` 인 태스크가 새로 없을 때까지 읽습니다. `workers-before.txt`
-    에서 기록이 `ACTIVE` · `INACTIVE` 인 키만 돌고, 모두 통과해야 값을
-    넣습니다. 하나라도 종료 1(상한 · 읽기 실패)이면 멈춤 · kty 회부입니다.
+    수 · 실행 수 · 대기 수가 모두 0 이 될 때까지(`ACTIVE` 만) 읽습니다.
+    `wait_stopped` 는 반복마다 그 family 의 원하는 상태 `RUNNING` ·
+    `STOPPED` 태스크를 다시 모아 기록과 합치고, 그 전부가
+    `lastStatus=STOPPED` 일 때까지 읽습니다. 기록 뒤에 떴다가 지금 내려가는
+    중인 태스크도 이렇게 잡힙니다. 원하는 상태가 `RUNNING` 인 태스크는
+    `lastStatus` 가 아직 `STOPPED` 가 아니므로 「모두 STOPPED」 는 「새
+    RUNNING 0」 을 함께 뜻합니다. `workers-before.txt` 에서 기록이 `ACTIVE`
+    · `INACTIVE` 인 키만 돌고, 모두 통과해야 값을 넣습니다. 하나라도 종료
+    1(상한 · 읽기 실패)이면 멈춤 · kty 회부입니다. describe-tasks 는 한 번에
+    ARN 100 개까지 받습니다 — 모은 수가 100 을 넘으면 API 오류로 종료 1 이
+    되어 같은 회부로 갑니다(일꾼은 원하는 수 1 이라 반복 재기동이 아니면
+    넘지 않습니다).
 
     ```shell
     wait_zero() {  # wait_zero <키>
@@ -2511,22 +2523,22 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     }
 
     wait_stopped() {  # wait_stopped <키>
-      local i=0 left fresh list="${work}/workers-tasks-$1.txt"
+      local i=0 left list="${work}/workers-tasks-$1.txt"
+      local seen="${work}/workers-seen-$1.txt"
       while [ "${i}" -lt 60 ]; do
+        family_tasks "$1" "${seen}" || return 1
+        sort -u -o "${seen}" "${seen}" "${list}" || return 1
         left=0
-        if [ -s "${list}" ]; then
+        if [ -s "${seen}" ]; then
           # shellcheck disable=SC2046 # ARN 은 공백 없는 한 낱말씩이다.
           left="$(aws ecs describe-tasks --region ap-northeast-2 \
-            --cluster pokeclip-prod --tasks $(cat "${list}") \
+            --cluster pokeclip-prod --tasks $(cat "${seen}") \
             --query 'length(tasks[?lastStatus!=`STOPPED`])' \
             --output text)" || return 1
         fi
-        fresh="$(aws ecs list-tasks --region ap-northeast-2 \
-          --cluster pokeclip-prod --family "pokeclip-prod-$1" \
-          --desired-status RUNNING --query 'length(taskArns)' \
-          --output text)" || return 1
-        printf '%s 안 멈춘 기록 태스크 %s · 새 RUNNING %s\n' "$1" "${left}" "${fresh}"
-        [ "${left}" = 0 ] && [ "${fresh}" = 0 ] && return 0
+        printf '%s 안 멈춘 태스크 %s · 모은 태스크 %s\n' "$1" "${left}" \
+          "$(wc -l <"${seen}" | tr -d ' ')"
+        [ "${left}" = 0 ] && return 0
         i=$((i + 1))
         sleep 10
       done
