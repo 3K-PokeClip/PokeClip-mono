@@ -56,6 +56,11 @@ export interface LiveSession {
   session: PlaybackSession | null;
   /** 녹화 조회 요청. null 이면 묻지 않는다 */
   recordedRequest: RecordedRequest | null;
+  /**
+   * 끝난 뒤 들어온 화면(시청자 A) — 이 방송|영상 키로 세션을 연 적 없이 명부가 ended 다(POK-546 설계 2-4). 라이브 · 세션을
+   * 연 화면(열린 채 ended · 녹화로 닫힘) · 명부 상태 모름은 거짓이다
+   */
+  enteredAfterEnd: boolean;
   /** 세션이 녹화로 닫혔다 — 라이브 주소를 다시 붙이지 않고, 재생기 표시는 끝난 방송이다 */
   closedRecorded: boolean;
   /** 「새 방송이 시작됐어요」 띠의 방송 번호 */
@@ -239,5 +244,5 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     dispatch?.({ type: 'leave' });
   }, [accessKey, dispatch]);
 
-  return { session, recordedRequest, closedRecorded, band, onBand };
+  return { session, recordedRequest, enteredAfterEnd: pastOnly, closedRecorded, band, onBand };
 }
