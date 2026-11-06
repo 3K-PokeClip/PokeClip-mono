@@ -177,13 +177,17 @@ async function openRewind(answers: Answers) {
     }),
   );
   expect(session().state.phase.kind).toBe('rewind');
+  // 부를 때마다 다른 조각이다 — 같은 조각의 404 는 이 시험의 대상이 아니다(POK-528 후속)
+  let sn = 0;
   const gone = () =>
-    act(() =>
+    act(() => {
+      sn += 1;
       session().dispatch({
         type: 'dvr-segment-gone',
         generation: session().state.source.generation,
-      }),
-    );
+        segment: { type: 'main', sn },
+      });
+    });
   return { session, gone, onClose };
 }
 

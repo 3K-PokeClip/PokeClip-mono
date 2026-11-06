@@ -1,7 +1,7 @@
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { LivePosition } from './livePosition';
-import { openSession, type SessionEvent } from './rewindSwitch';
+import { openSession, type DvrSegment, type SessionEvent } from './rewindSwitch';
 import { sessionView } from './sessionView';
 import type { PlaybackHooks } from './useHlsPlayback';
 import type { PlaybackSession, SessionPlayer } from './usePlaybackSession';
@@ -62,6 +62,7 @@ function fakeSession(patch: Partial<PlaybackSession> = {}): PlaybackSession {
     bindPlayer: () => {},
     notice: () => {},
     positionEpoch: () => 0,
+    isKnownDvrHole: () => false,
     ...patch,
   };
 }
@@ -118,14 +119,27 @@ describe('재생기 고리 · 명령 묶음 — 연결 통합(설계 r9 11절 ·
 });
 
 describe('되감기 조각 404 의 고리 · 명령 묶음(POK-528 c5 · 계획 4절 · 4-1 · 4-2)', () => {
-  it('재생기의 404 고리(onDvrSegmentGone)를 그 재생기 세대를 실은 dvr-segment-gone 사건으로 올린다', () => {
+  it('재생기의 404 고리(onDvrSegmentGone)를 그 재생기 세대 · 조각을 실은 dvr-segment-gone 사건으로 올린다', () => {
     const dispatch = vi.fn<(event: SessionEvent) => void>();
     renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ dispatch })));
-    player.hooks?.onDvrSegmentGone?.(7);
+    player.hooks?.onDvrSegmentGone?.(7, { type: 'main', sn: 41 });
     expect(dispatch.mock.calls.filter(([e]) => e.type === 'dvr-segment-gone')).toEqual([
-      [{ type: 'dvr-segment-gone', generation: 7 }],
+      [{ type: 'dvr-segment-gone', generation: 7, segment: { type: 'main', sn: 41 } }],
     ]);
   });
+
+  it.each([true, false])(
+    '재생기의 구멍 질의(isKnownDvrHole)를 세션 질의에 그 인자 그대로 한 번 잇고 답(%s)을 그대로 돌려준다(POK-528 후속)',
+    (answer) => {
+      const isKnownDvrHole = vi.fn<(generation: number, segment: DvrSegment) => boolean>(
+        () => answer,
+      );
+      renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ isKnownDvrHole })));
+      const asked = player.hooks?.isKnownDvrHole?.(9, { type: 'audio', sn: 53 });
+      expect(asked).toBe(answer);
+      expect(isKnownDvrHole.mock.calls).toEqual([[9, { type: 'audio', sn: 53 }]]);
+    },
+  );
 
   it('세션에 묶는 재생기 명령의 holdFrame · dropPauseMark 가 재생기의 같은 명령을 부른다', () => {
     const bindPlayer = vi.fn<(p: SessionPlayer | null) => void>();

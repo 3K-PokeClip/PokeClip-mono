@@ -28,13 +28,16 @@ import {
   rewindAt,
   rewindFromLive,
   status,
+  vodReady,
 } from './relistTestKit';
 import {
   SESSION_NOTICES,
   pollTargets,
+  type DvrSegment,
   type PlaybackSessionState,
   type SessionEvent,
 } from './rewindSwitch';
+import { dvrHoleKnown } from './sessionShared';
 import { isPlayerStartHeld, sessionView } from './sessionView';
 
 // 방송 중 되감기 조각 404 → 보던 목록 다시 받기(POK-528 c7 — 계획 3-2 · 3-3 · 3-4 · 3-5 ·
@@ -404,5 +407,180 @@ describe('「세우지 않음」 — 다시 받는 되감기는 세운다(계획
     expect(isPlayerStartHeld(ended)).toBe(false);
     expect(isPlayerStartHeld(feed(ended, [gone(ended)]).state)).toBe(true);
     expect(isPlayerStartHeld(feed(decided, [gone(decided)]).state)).toBe(true);
+  });
+});
+
+// 목록 안 구멍(POK-528 후속 계획 r3 2절) — 같은 url 을 같은 조각으로 이미 다시 받았으면(기억에
+// 그 조각이 있으면) 그 조각의 404 로는 또 다시 받지 않는다(2-2 의 2 행 막힘). 옛 판 표는 화면 뒤
+// 같은 조각 404 를 다시 받기로 받으므로 음성 대조 트리에서는 ② · ⑤ · ⑧ 첫 줄 단언으로 FAIL 한다.
+describe('목록 안 구멍 — 같은 조각(후속)', () => {
+  const S: DvrSegment = { type: 'main', sn: 41 };
+  const T: DvrSegment = { type: 'main', sn: 42 };
+  const BLOCKED = {
+    kind: 'ending-wait',
+    origin: 'rewind',
+    atEnd: false,
+    recordOnEnd: false,
+    blocked: true,
+  } as const;
+
+  /** p 를 보던 되감기가 조각 hole 의 404 로 같은 목록을 다시 받고 새 재생기가 p + 4초에 화면을 붙였다 */
+  function relistedOver(s: PlaybackSessionState, hole: DvrSegment, p = P20): PlaybackSessionState {
+    const r = feed(s, [gone(s, undefined, hole)]).state;
+    return feed(r, [loaded(r.source.url), pos(p + 4_000)]).state;
+  }
+
+  it('① 다시 받기 진입이 그 url 에 그 조각을 적는다 — dvrHoles = { A1 → {main:41} }', () => {
+    const s = rewindAt(P20);
+    const r = feed(s, [gone(s, undefined, S)]).state;
+    expect(r.phase).toEqual(relistPhase('list'));
+    expect(r.dvrHoles).toEqual(new Map([[A1, new Set(['main:41'])]]));
+  });
+
+  it('② 화면 뒤 같은 조각 404 → 막힘(2 행) · 세대 · 기억 그대로', () => {
+    const painted = relistedOver(rewindAt(P20), S);
+    expect(painted.phase).toEqual({ kind: 'rewind', pendingNext: null });
+    const done = feed(painted, [gone(painted, undefined, S)]);
+    expect(done.state.phase).toEqual(BLOCKED);
+    expect(done.effects).toEqual([REFRESH_A1, HOLD]);
+    expect(done.state.source).toBe(painted.source);
+    expect(done.state.dvrHoles).toBe(painted.dvrHoles);
+  });
+
+  it('③ 화면 뒤 다른 조각 404 → 다시 받기 · { A1 → {main:41, main:42} }', () => {
+    const painted = relistedOver(rewindAt(P20), S);
+    const done = feed(painted, [gone(painted, undefined, T)]).state;
+    expect(done.phase).toEqual(relistPhase('list'));
+    expect(done.source.generation).toBe(painted.source.generation + 1);
+    expect(done.dvrHoles).toEqual(new Map([[A1, new Set(['main:41', 'main:42'])]]));
+  });
+
+  it('④ 리마운트 · 같은 url 폴링 · 화면 · 목록 안 시크 뒤에도 기억은 같은 객체 → 같은 조각 404 는 막힘', () => {
+    const s = rewindAt(P20);
+    const r = feed(s, [gone(s, undefined, S)]).state;
+    const kept = feed(r, [
+      { type: 'remount' },
+      poll(liveReady(A1, T0, NOW)),
+      loaded(A1),
+      pos(P20 + 4_000),
+      { type: 'seek', targetMs: T0 + 30 * MIN, view: { lowerMs: T0 + 12_000, endMs: NOW } },
+      pos(T0 + 30 * MIN),
+    ]).state;
+    expect(kept.phase).toEqual({ kind: 'rewind', pendingNext: null });
+    expect(kept.dvrHoles).toBe(r.dvrHoles);
+    expect(feed(kept, [gone(kept, undefined, S)]).state.phase).toEqual(BLOCKED);
+  });
+
+  it('⑤ A1/s → 갈아 끼움 A2 → A2/t → LIVE → A1 재진입 → 화면 → s 404 → 막힘 · 기억 = { A1 → {s}, A2 → {t} }', () => {
+    const onA1 = relistedOver(rewindAt(P20), S);
+    const onA2 = feed(onA1, [poll(liveReady(A2, T0 + 10 * MIN)), loaded(A2), pos(P20 + 8_000)]);
+    expect(onA2.state.source).toMatchObject({ kind: 'rewind', url: A2 });
+    const afterT = relistedOver(onA2.state, T, P20 + 8_000);
+    const back = feed(afterT, [
+      { type: 'live-button', x: X_A, attempt: 0 },
+      poll(liveReady(A1, T0, NOW)),
+      { type: 'seek', targetMs: P20, view: { lowerMs: NOW - 16_000, endMs: NOW } },
+      loaded(A1),
+      pos(P20),
+    ]).state;
+    expect(back.source).toMatchObject({ kind: 'rewind', url: A1 });
+    expect(back.phase).toEqual({ kind: 'rewind', pendingNext: null });
+    const done = feed(back, [gone(back, undefined, S)]).state;
+    expect(done.phase).toEqual(BLOCKED);
+    expect(done.dvrHoles).toEqual(
+      new Map([
+        [A1, new Set(['main:41'])],
+        [A2, new Set(['main:42'])],
+      ]),
+    );
+  });
+
+  it('⑥ A1 에 main:41 이 있어도 audio 41 404 는 다시 받기 · 그 뒤 audio 41 은 막힘', () => {
+    const audio: DvrSegment = { type: 'audio', sn: 41 };
+    const painted = relistedOver(rewindAt(P20), S);
+    const r = feed(painted, [gone(painted, undefined, audio)]).state;
+    expect(r.phase).toEqual(relistPhase('list'));
+    expect(r.dvrHoles).toEqual(new Map([[A1, new Set(['main:41', 'audio:41'])]]));
+    const again = feed(r, [loaded(A1), pos(P20 + 8_000)]).state;
+    expect(feed(again, [gone(again, undefined, audio)]).state.phase).toEqual(BLOCKED);
+  });
+
+  // 재생기가 넘기지 않은(gap 아님 — ENDLIST · 마지막 조각 · 배선 누락) 같은 조각 404 가 다시 받는 중에 오면 1 행이
+  // 막는다. relist 를 둔 채 세대만 다시 올리면 같은 구멍으로 고리가 다시 돈다 — 감싸개 T7 이 전이마다 잡는다(c1 리뷰 W1)
+  it.each<['list' | 'paint']>([['list'], ['paint']])(
+    '⑥b 다시 받는 중(%s) 같은 조각 404(재생기가 넘기지 않음) → 막힘(1 행) · 세대 · 기억 그대로',
+    (stage) => {
+      const s = rewindAt(P20);
+      const list = feed(s, [gone(s, undefined, S)]).state;
+      const relisting = stage === 'list' ? list : feed(list, [loaded(A1)]).state;
+      expect(relisting.phase).toEqual(relistPhase(stage));
+      const done = feed(relisting, [gone(relisting, undefined, S)]).state;
+      expect(done.phase).toEqual(BLOCKED);
+      expect(done.source).toBe(relisting.source);
+      expect(done.dvrHoles).toBe(relisting.dvrHoles);
+    },
+  );
+
+  it('⑦ [새 함수 — 음성 대조 제외 · 변이 G5 · G6 · G7 · G12 · G14 로 교정] dvrHoleKnown 표', () => {
+    const s = rewindAt(P20);
+    const list = feed(s, [gone(s, undefined, S)]).state;
+    const paint = feed(list, [loaded(A1)]).state;
+    const settled = feed(paint, [pos(P20 + 4_000)]).state;
+    const known = (state: PlaybackSessionState, segment = S, generation?: number) =>
+      dvrHoleKnown(state, generation ?? state.source.generation, segment);
+    // 참 — 되감기 국면 · 지금 세대 · 같은 url 의 같은 조각. 다시 받는 중(list · paint)인지와 무관하다(Y1)
+    expect(known(list)).toBe(true);
+    expect(known(paint)).toBe(true);
+    expect(known(settled)).toBe(true);
+    // 거짓 — 세대 다름 · url 다름 · 소스 다시보기 · 라이브 · 기록 없음 · 끝남 대기 · 다시보기 제안
+    expect(known(settled, S, settled.source.generation - 1)).toBe(false);
+    expect(known({ ...settled, source: { ...settled.source, url: A2 } })).toBe(false);
+    expect(known({ ...settled, source: { ...settled.source, kind: 'vod' } })).toBe(false);
+    expect(known({ ...settled, source: { ...settled.source, kind: 'live' } })).toBe(false);
+    expect(known(settled, { type: 'main', sn: 99 })).toBe(false);
+    expect(known(settled, { type: 'audio', sn: 41 })).toBe(false);
+    const ending = feed(settled, [ENDLIST]).state;
+    expect(ending.phase.kind).toBe('ending-wait');
+    expect(known(ending)).toBe(false);
+    const offered = feed(ending, [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
+    expect(offered.phase.kind).toBe('vod-offered');
+    expect(known(offered)).toBe(false);
+  });
+
+  describe('⑧ 기존 출구 보존 — 아는 조각이어도 끝남 대기 · 다시보기 제안의 404 행은 그대로', () => {
+    it('되감기 ∧ pendingNext ∧ 다시 받은 목록의 ENDLIST 뒤 같은 조각 → 막힘(2 행)', () => {
+      const s = feed(rewindAt(P20), [laterA2()]).state;
+      const r = feed(s, [gone(s, undefined, S), loaded(A1), ENDLIST, pos(P20 + 4_000)]).state;
+      expect(r.phase).toEqual({ kind: 'rewind', pendingNext: laterA2Range });
+      const done = feed(r, [gone(r, undefined, S)]);
+      expect(done.state.phase).toEqual(BLOCKED);
+      expect(done.effects).toEqual([REFRESH_A1, HOLD]);
+    });
+
+    it('끝남 대기(녹화로 정하기 전) → 막힘', () => {
+      const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
+      const done = feed(ending, [gone(ending, undefined, S)]);
+      expect(done.state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
+      expect(done.effects).toEqual([HOLD]);
+    });
+
+    it('끝남 대기(녹화로 정한 뒤) → 마지막 확인', () => {
+      const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
+      const decided = feed(ending, [
+        { type: 'round-poll', result: status({ mode: 'ended' }) },
+      ]).state;
+      expect(decided.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+      const done = feed(decided, [gone(decided, undefined, S)]).state;
+      expect(done.phase).toMatchObject({ recordOnEnd: true, finalCheck: true });
+    });
+
+    it('다시보기 제안 → 같은 자리 다시보기', () => {
+      const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
+      const offered = feed(ending, [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
+      expect(offered.phase.kind).toBe('vod-offered');
+      const done = feed(offered, [gone(offered, undefined, S)]).state;
+      expect(done.phase).toEqual({ kind: 'vod' });
+      expect(done.source).toMatchObject({ kind: 'vod', startAtMs: P20 + 4_000 });
+    });
   });
 });

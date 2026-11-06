@@ -22,7 +22,8 @@ export function useLiveRewindPlayback(
   afterForbidden = false,
   broadcastId?: string,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
-  const { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch } = session;
+  const { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch, isKnownDvrHole } =
+    session;
   // 되감기 노출은 최신 폴링의 ready 로만 — 재료(entry)가 남아도 ready:false 면 시크바를 넓히지 않는다(계약3 7-2)
   const axisLowerMs = rewindAxisLowerMs(state);
   const hooks = useMemo<PlaybackHooks>(
@@ -33,7 +34,9 @@ export function useLiveRewindPlayback(
       onLiveClosed: () => dispatch({ type: 'live-closed' }),
       onLive400: () => dispatch({ type: 'live-400' }),
       onListLoaded: (list) => dispatch({ type: 'list-loaded', ...list }),
-      onDvrSegmentGone: (generation) => dispatch({ type: 'dvr-segment-gone', generation }),
+      onDvrSegmentGone: (generation, segment) =>
+        dispatch({ type: 'dvr-segment-gone', generation, segment }),
+      isKnownDvrHole,
       onPlaying: () => dispatch({ type: 'playing' }),
       onSeekRequest: (targetMs, view) => dispatch({ type: 'seek', targetMs, view }),
       onLiveButton: liveButton,
@@ -47,7 +50,16 @@ export function useLiveRewindPlayback(
       // 확인은 끝에 닿기 전에만 서므로 덮개도 함께 바뀐다)
       startHeld: view.startHeld,
     }),
-    [dispatch, liveButton, notice, positionEpoch, axisLowerMs, view.cover, view.startHeld],
+    [
+      dispatch,
+      liveButton,
+      notice,
+      positionEpoch,
+      isKnownDvrHole,
+      axisLowerMs,
+      view.cover,
+      view.startHeld,
+    ],
   );
   const sim = useHlsPlayback(
     videoRef,
