@@ -2437,19 +2437,38 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     *   `<키> ACTIVE 1` → 0 으로 내립니다(쓰기 — **kty 승인**):
         `aws ecs update-service --region ap-northeast-2 --cluster
         pokeclip-prod --service pokeclip-prod-<키> --desired-count 0
-        --query service.serviceName --output text`. 아래 읽기가 `0 0 0`
-        (원하는 수 · 실행 수 · 대기 수)이 될 때까지 기다린 뒤 값을 넣습니다.
-    *   `<키> ACTIVE 0` → 이미 멈춤(긴급 정지 등)입니다. 그대로 두고
-        기록합니다.
+        --query service.serviceName --output text`. 그 뒤 아래 `wait_zero`.
+    *   `<키> ACTIVE 0` → 이미 멈춤(긴급 정지 등)입니다. 원하는 수는
+        그대로 두고 기록합니다. 정지 직후면 태스크가 아직 내려가는 중일 수
+        있어(남은 render 가 옛 값으로 보고하다 401 → 메시지 삭제) 이
+        갈래도 아래 `wait_zero` 를 돌립니다.
     *   `<키> None` → 서비스 없음(`prod/workers` 를 apply 하지 않았거나
         내림)입니다. 기록만 합니다.
     *   그 밖의 값(`ACTIVE 2` · `DRAINING` 등) → 멈춤 · kty 회부.
 
+    `wait_zero` 는 원하는 수 · 실행 수 · 대기 수가 모두 0 이 될 때까지
+    10초마다 읽습니다(읽기 · 10분 상한). 기록이 `ACTIVE` 인 서비스가 모두
+    종료 0 일 때만 값을 넣습니다. 종료 1(상한 · 읽기 실패)이면 멈춤 · kty
+    회부입니다.
+
     ```shell
-    aws ecs describe-services --region ap-northeast-2 \
-      --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
-      --query 'services[0].[desiredCount,runningCount,pendingCount]' \
-      --output text
+    wait_zero() {  # wait_zero <키>
+      local i=0 counts
+      while [ "${i}" -lt 60 ]; do
+        counts="$(aws ecs describe-services --region ap-northeast-2 \
+          --cluster pokeclip-prod --services "pokeclip-prod-$1" \
+          --query 'services[0].[desiredCount,runningCount,pendingCount]' \
+          --output text)" || return 1
+        counts="$(printf '%s' "${counts}" | tr -s '\t ' ' ')"
+        printf '%s %s\n' "$1" "${counts}"
+        [ "${counts}" = '0 0 0' ] && return 0
+        i=$((i + 1))
+        sleep 10
+      done
+      printf '멈춤: %s 이 10분 안에 0 0 0 이 되지 않음\n' "$1"
+      return 1
+    }
+    wait_zero render && wait_zero upload   # 기록이 ACTIVE 인 키만
     ```
 
 *   **값 넣기**(실행 직전 **kty 승인**): 4 와 같은 꼴로 종류
@@ -2533,6 +2552,22 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     의 기록값으로 되돌립니다 — 이 절차가 내린 것(`<키> ACTIVE 1`)만 1 로
     올립니다.
 
+    올리기 직전에 그 서비스를 다시 읽습니다(읽기). 올리는 조건은 둘입니다.
+
+    1.  아래 읽기가 `ACTIVE 0` 입니다. 그 밖이면(누가 다시 띄웠거나 서비스가
+        사라짐) 올리지 않고 멈춤 · kty 회부입니다.
+    1.  멈춘 뒤 그 서비스의 긴급 정지 기록([prod/workers](../prod/workers/README.md)
+        「긴급 정지와 상태 어긋남」 의 어긋남 · 시각 · 사유)이 없습니다.
+        이 절차가 이미 0 으로 내렸으므로, 그사이의 긴급 정지는 원하는 수로는
+        보이지 않습니다 — 기록이 있으면 0 을 유지하고 그 정지의 절차를
+        따릅니다.
+
+    ```shell
+    aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
+      --query 'services[0].[status,desiredCount]' --output text
+    ```
+
     ```shell
     aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
       --service "pokeclip-prod-<키>" --desired-count 1 \
@@ -2542,8 +2577,9 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     *   기록이 `ACTIVE 0` 이던 서비스는 0 을 유지하고 기록합니다(다시
         띄우는 것은 그 정지의 절차 · 승인 몫).
     *   기록이 `None` 이던 서비스는 할 일이 없습니다.
-    *   완료: 올린 서비스마다 「일꾼 멈춤」 의 읽기가 `1 1 0`(원하는 수 ·
-        실행 수 · 대기 수)입니다. 새 태스크가 새 값을 읽습니다.
+    *   완료: 올린 서비스마다 `wait_zero` 와 같은 읽기
+        (`services[0].[desiredCount,runningCount,pendingCount]`)가 `1 1 0`
+        입니다. 새 태스크가 새 값을 읽습니다.
 
 ### 1단-나 ② 9. 응답기 기동 · 교체
 

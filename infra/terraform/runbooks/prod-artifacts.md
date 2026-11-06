@@ -64,8 +64,12 @@ aws ecr get-login-password --region ap-northeast-2 \
 kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · 푸시를 한 묶음으로
 돌립니다. 레지스트리 호스트에 계정 ID 가 들어 있으므로 셋을 지킵니다.
 
-*   레지스트리 호스트는 위 「ECR 로그인」 의 셸 변수로만 다루고 화면에
-    내지 않습니다. 로그인 토큰은 파이프로만 넘깁니다.
+*   레지스트리 호스트는 묶음 안에서 `repo_urls` 로 구해 셸 변수로만 다루고
+    화면에 내지 않습니다. 로그인 토큰은 파이프로만 넘깁니다.
+*   **토큰을 발급하기 전에** 호스트를 확인합니다. 출력 취득이 실패했거나
+    호스트가 ECR 서울 꼴(12자리 계정 뒤에
+    `.dkr.ecr.ap-northeast-2.amazonaws.com`)이 아니면 멈춥니다. 빈 호스트로
+    `docker login` 하면 토큰이 Docker Hub 로 갈 수 있습니다.
 *   묶음의 출력(오류 포함)은 12자리 숫자열을 `<계정>` 으로 가린 줄만
     세션에 남깁니다.
 *   푸시마다 실행 직전에 kty 가 승인합니다. 끝나면 성공 · 실패와 무관하게
@@ -75,6 +79,16 @@ kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · �
 (
   set -o pipefail
   {
+    registry_host="$(terraform -chdir=infra/terraform/prod/registry \
+      output -json repo_urls | jq -re '.next' | cut -d/ -f1)" || {
+      echo '멈춤: registry 출력 취득 실패'
+      exit 1
+    }
+    ecr_host_re='^[0-9]{12}\.dkr\.ecr\.ap-northeast-2\.amazonaws\.com$'
+    [[ "${registry_host}" =~ ${ecr_host_re} ]] || {
+      echo '멈춤: 레지스트리 호스트가 ECR 서울 꼴이 아님'
+      exit 1
+    }
     aws ecr get-login-password --region ap-northeast-2 \
       | docker login --username AWS --password-stdin "${registry_host}" &&
       docker tag <로컬 이미지> "${registry_host}/pokeclip-prod/<키>:<태그>" &&
@@ -86,7 +100,8 @@ kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · �
 )
 ```
 
-종료 코드가 0 이 아니면 푸시 실패입니다. 같은 태그 재푸시 실패는 정상이고
+저장소 뿌리에서 한 번의 호출로 돌립니다. 종료 코드가 0 이 아니면 호스트
+확인의 멈춤 줄이거나 푸시 실패입니다. 같은 태그 재푸시 실패는 정상이고
 (태그 불변), `AccessDenied` 면 다시 시도하지 않고 멈춥니다(「시작 전」 2).
 다이제스트는 가린 출력이 아니라 「기록」 의 `describe-images` 로 읽습니다.
 

@@ -135,7 +135,8 @@ plan 이 그 상태 출력을 읽으므로, 철거가 끝날 때까지 그대로
     처리는 [prod/runtime-2](../prod/runtime-2/README.md) 「내리기」 의
     「남는 상태 객체」 입니다. workers 의 키가 있으면 「0a. prod/workers
     먼저 내리기」 를, edge · records 의 키가 있으면 「0. records · edge 먼저
-    내리기」 를 합니다.
+    내리기」 를 합니다. 일꾼만 내릴 때는 이 허용 검사가 아니라 「0a」 의
+    갈래를 따릅니다.
 1.  방송이 없는지 kty 가 확인합니다. media destroy 는 상자를 종료합니다 —
     상자 디스크의 녹화 · DVR 은 함께 사라집니다(`delete_on_termination`).
 1.  시작 전 상태를 남깁니다.
@@ -176,6 +177,12 @@ render · upload 의 ECS 서비스 · 태스크 정의 · Cloud Map 서비스 ·
 
 *   **일꾼만 내릴 때**(롤백의 기본): 「시작 전」 1–4 · 6 과 이 절만 하고
     「정리」 로 갑니다. T1 에서는 리전 · 의존 루트 확인만 봅니다.
+    *   「시작 전」 4 는 허용 검사(첫 `grep -Ev`)를 하지 않고 workers 키
+        줄만 봅니다 — `1` 이어야 합니다. workers 를 읽는 루트가 없어
+        ([계약](../CONTRACT-runtime.md) 「상태 위치」) 다른 루트의 키(런타임
+        2단의 빈 상태 객체 등)는 일꾼만 내리는 데 걸리지 않습니다.
+    *   「시작 전」 6 의 상태 목록 루프는 `${workers}` 하나만 돌립니다
+        (아래 요지 판정이 `01-workers-state.txt` 를 씀).
 *   큐의 주문은 지워지지 않고 보관 4일 동안 큐에 남습니다. 그 뒤에는
     사라지므로, 다시 띄울지와 그 시점은 kty 가 정합니다.
 *   로그 그룹(`pokeclip-prod-render` · `pokeclip-prod-upload`)은 destroy 와
