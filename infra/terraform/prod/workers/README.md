@@ -322,10 +322,11 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     좁히는 것은 platform 다섯 서비스의 역할도 함께 바뀌는 모듈 변경이라
     platform apply 가 들어, 이 PR 에 넣지 않고 후속 후보로 둡니다.
 *   역할 경로는 루트 지역값(`local.iam_path`)만 단언합니다. 모듈 블록이 실제로
-    받은 경로는 모듈 출력에 경로가 없어 시험이 보지 못합니다. 다른 유효한
-    경로로 잘못 연결돼도 apply 는 성공하고, 그 역할이 2-3 판정의 prod 주체
-    해석에서 빠집니다([단계 직전 점검](/infra/terraform/runbooks/stage-precheck.md)
-    A19). 이 배선은 리뷰가 봅니다.
+    받은 경로는 모듈 출력에 경로가 없어 시험이 보지 못합니다. `/pokeclip/prod/`
+    밖의 유효한 경로로 잘못 연결돼도 apply 는 성공하고, 그 역할이 2-3 판정의
+    prod 역할 대상 해석(`prod-roles` 행)에서 빠집니다
+    ([단계 직전 점검](/infra/terraform/runbooks/stage-precheck.md) A19). 이
+    배선은 리뷰가 봅니다.
 
 ## 시험
 
