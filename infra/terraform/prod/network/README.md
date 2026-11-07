@@ -559,14 +559,18 @@ vpce_new_tasks() {  # 이 배포의 새 태스크마다 "<태스크 id> <started
       | select(.name == "privateIPv4Address") | .value)"' "${evidence}/42-new-tasks.json"
 }
 
-vpce_sqs_sample() {  # vpce_sqs_sample <태스크 id> <IP> <끝 epoch> — 표본을 30초마다
-  local out="${evidence}/50-sqs-$1.txt" tg state
+# 표본을 30초마다 받고, 끝 시각 이상에서 찍힌 표본 하나를 받은 뒤 멈춘다 — 판정이
+# 「마지막 표본 ≥ 끝」 을 요구하기 때문이다(끝 전에 멈추면 늘 「대기」).
+vpce_sqs_sample() {  # vpce_sqs_sample <태스크 id> <IP> <끝 epoch>
+  local out="${evidence}/50-sqs-$1.txt" tg state now
   tg="$(jq -r '.[0]' "${evidence}/40-target-groups.json")"
-  while [ "$(date -u +%s)" -le "$3" ]; do
+  while :; do
+    now="$(date -u +%s)"
     state="$(aws elbv2 describe-target-health --region "${region}" --target-group-arn "${tg}" \
       --targets "Id=$2,Port=8081" --query 'TargetHealthDescriptions[0].TargetHealth.State' \
       --output text)" || state=error
-    printf 'health %s %s\n' "$(date -u +%s)" "${state}" >> "${out}"
+    printf 'health %s %s\n' "${now}" "${state}" >> "${out}"
+    [ "${now}" -lt "$3" ] || break
     sleep 30
   done
 }
@@ -651,8 +655,7 @@ jq -r --arg d "${deployment}" --argjson since "$(cat "${evidence}/40-restart-at.
     ([.events[] | select((.createdAt | epoch) >= $since)
       | select(.message | test("CannotPullContainerError|ResourceInitializationError"))]
       | "오류 이벤트 \(length)")' "${evidence}/41-service.json"
-aws ecs list-tasks --region "${region}" --cluster "${cluster}" --started-by "${deployment}" \
-  --desired-status STOPPED --query 'length(taskArns)' --output text   # 0
+vpce_stopped_tasks
 while read -r task started ip; do
   aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
     --log-stream-name-prefix "clip/clip/${task}" --output json \
@@ -661,8 +664,46 @@ while read -r task started ip; do
 done < "${evidence}/42-new-tasks.txt"
 ```
 
-기대는 `rollout=COMPLETED running=1 desired=1` · `오류 이벤트 0` · `0` · 새
-태스크마다 `생성 뒤=true 첫 이벤트 3분 안=true` 입니다.
+기대는 `rollout=COMPLETED running=1 desired=1` · `오류 이벤트 0` · `멈춘 새
+태스크: 0건` · 새 태스크마다 `생성 뒤=true 첫 이벤트 3분 안=true` 입니다.
+
+멈춘 새 태스크는 ECR · Secrets 실패의 직접 증거(`stoppedReason`)입니다.
+`list-tasks` 의 `--started-by` 는 다른 필터와 함께 쓸 수 없으므로(`aws ecs
+list-tasks help` — 「it must be the only filter that you use」) clip 서비스의
+`STOPPED` 태스크를 받은 뒤 `describe-tasks` 의 `startedBy` 로 이 배포의 것만
+거릅니다. 사유는 `43-stopped.txt` 에 남습니다. 함수는 위 블록보다 먼저
+둡니다.
+
+```shell
+vpce_stopped_tasks() {  # 이 배포의 멈춘 태스크 — 0건 0 · 있음 1 · 판정불가 2
+  local list="${work}/stopped-tasks.json" out="${evidence}/43-stopped.txt" count
+  if ! aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
+      --service-name "${cluster}-clip" --desired-status STOPPED --output json > "${list}"; then
+    echo '멈춘 새 태스크: 판정불가 — list-tasks 실패'
+    return 2
+  fi
+  : > "${out}"
+  if jq -e '.taskArns | length > 0' "${list}" > /dev/null; then
+    if ! aws ecs describe-tasks --region "${region}" --output json --cli-input-json \
+        "$(jq -c --arg c "${cluster}" '{cluster: $c, tasks: .taskArns}' "${list}")" \
+        > "${work}/stopped-described.json"; then
+      echo '멈춘 새 태스크: 판정불가 — describe-tasks 실패'
+      return 2
+    fi
+    if ! jq -er --arg d "${deployment}" '(.tasks | type == "array") and (.tasks | length) > 0
+        and ((.failures // []) | length == 0)' "${work}/stopped-described.json" > /dev/null \
+      || ! jq -r --arg d "${deployment}" '.tasks[] | select(.startedBy == $d)
+        | "\(.taskArn | split("/") | last) \(.stoppedReason // "사유 없음")"' \
+        "${work}/stopped-described.json" > "${out}"; then
+      echo '멈춘 새 태스크: 판정불가 — describe-tasks 결과를 읽지 못함'
+      return 2
+    fi
+  fi
+  count="$(wc -l < "${out}" | tr -d ' ')"
+  echo "멈춘 새 태스크: ${count}건"
+  [ "${count}" -eq 0 ]
+}
+```
 
 ### 확인 (ㄹ) 회귀 감시
 

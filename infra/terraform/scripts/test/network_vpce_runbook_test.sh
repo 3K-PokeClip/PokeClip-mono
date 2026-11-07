@@ -15,6 +15,9 @@
 # 인자는 --secret-id · --services · --service-name · --task-definition 의 값과
 # --dimensions · --cli-input-json 속의 vpce- · task/ id 다. 같은 열쇠의 n 번째
 # 호출은 「<열쇠>.<n>」 이 있으면 그것을, 없으면 「<열쇠>」 를 받는다.
+# 「<열쇠>.by-clock」 이 있으면 가짜 시계(사례의 clock — 있으면 date -u +%s 와
+# sleep 을 덮음) 이하의 첫 칸을 가진 마지막 줄의 나머지를 낸다. ecs list-tasks
+# 가 --started-by 를 다른 필터와 함께 받으면 실제 API 처럼 거부한다(종료 254).
 # 「<열쇠>.fail」 이 있으면 종료 254(조회 실패)다. 응답이 없으면 종료 255 로
 # 실패하고 그 열쇠를 표준 오류에 적는다.
 #
@@ -22,6 +25,10 @@
 #   비밀 관문 — 회전 창 밖 = 진행 · 회전 창 안 = 멈춤 · clip 태스크 정의의 비밀
 #     셋이 다름 = 판정불가 · 조회 실패 = 판정불가 · 확인 중 버전 그대로 = 유효 ·
 #     버전 바뀜 = 무효.
+#   SQS 표본(vpce_sqs_sample 이 가짜 시계로 만든 파일 그대로) — 정상 = 통과 ·
+#     실패 뒤 연장 = 대기 뒤 통과 · 연장 뒤 unhealthy = 실패.
+#   멈춘 새 태스크 — 그 배포의 것만 셈 · 사유 기록 · 없음 = 0 · 조회 실패 =
+#     판정불가.
 #   SQS 판정(대리 — 새 태스크의 대상 상태 표본 · poll_failed 시각) — SQS 실패 ·
 #     첫 2분 healthy = 실패 · 일시 실패 뒤 갱신 = 통과 · 연속 실패 = 실패 ·
 #     창 끝 가까운 실패 = 대기 · 한 번도 healthy 아님 = 실패 · 조회 실패 표본 =
@@ -54,7 +61,9 @@ readonly ANCHORS=(
   'cluster=pokeclip-prod'
   'vpce_task_starts() {'
   'vpce_secret_gate() {'
+  'vpce_new_tasks() {'
   'vpce_sqs_verdict() {'
+  'vpce_stopped_tasks() {'
   'vpce_resolve_verdict() {'
   'vpce_ref_gate() {'
   'vpce_metric_calibrate() {'
@@ -69,6 +78,8 @@ readonly MUTATION_NAMES=(
   'sqs: healthy 뒤 갈래 뒤집기'
   'sqs: 마지막 실패 뒤 창 늘리기 뒤집기'
   'sqs: 창 끝 healthy 판정 늦추기'
+  'sqs: 표본이 창 끝을 넘기기 전에 멈추기'
+  'stopped: 배포 거르기 빼기'
   'resolve: 켬 · 끔 갈래 뒤집기'
   'ref: 자기 인그레스 양성 대조 빼기'
   'ref: 참조 행 대신 SG 의 모든 행 세기'
@@ -85,6 +96,8 @@ readonly MUTATION_FROMS=(
   'else if (seen) {'
   'last_fail + after_fail > need'
   'if (s[n] != "healthy")'
+  '[ "${now}" -lt "$3" ] || break'
+  'select(.startedBy == $d)'
   '(($2 in eni) != (mode == "on"))'
   'any(.GroupId == $sg and .IsEgress == false and .CidrIpv4 != null)'
   'select(.ReferencedGroupInfo.GroupId == $sg)'
@@ -101,6 +114,8 @@ readonly MUTATION_TOS=(
   'else if (!seen) {'
   'last_fail + after_fail < need'
   'if (s[n] == "unhealthy")'
+  '[ "$((now + 30))" -le "$3" ] || break'
+  'select(true)'
   '(($2 in eni) == (mode == "on"))'
   'true'
   'select(.GroupId == $sg)'
@@ -246,8 +261,18 @@ resp() {
 #   aws 인자.
 #######################################
 fake_aws() {
-  local key="$1.$2" arg want="" n file id
+  local key="$1.$2" arg want="" n file id now
   printf '%s\n' "$*" >>"${case_dir}/calls"
+  local others='service-name|desired-status|launch-type|family'
+  others+='|container-instance'
+  if [[ "${key}" == ecs.list-tasks && " $* " == *' --started-by '* ]] &&
+    grep -qE -- " --(${others}) " <<<" $* "; then
+    {
+      printf 'An error occurred (InvalidParameterException) when calling the'
+      printf ' ListTasks operation: startedBy must be the only filter\n'
+    } >&2
+    return 254
+  fi
   for arg in "$@"; do
     if [[ -n "${want}" ]]; then
       if [[ "${want}" == id ]]; then
@@ -267,6 +292,12 @@ fake_aws() {
   if [[ -e "${case_dir}/resp/${key}.fail" ]]; then
     printf 'An error occurred (Throttling) when calling %s\n' "$2" >&2
     return 254
+  fi
+  if [[ -e "${case_dir}/resp/${key}.by-clock" ]]; then
+    now="$(cat -- "${case_dir}/clock")"
+    awk -v now="${now}" '$1 <= now { line = $0; sub(/^[^ ]+ /, "", line) }
+      END { print line }' "${case_dir}/resp/${key}.by-clock"
+    return 0
   fi
   printf '%s\n' "${key}" >>"${case_dir}/keys"
   n="$(grep -cxF -- "${key}" "${case_dir}/keys")"
@@ -307,6 +338,19 @@ run_readme() {
     fi
     vpc_id='vpc-0prod'
     aws() { fake_aws "$@"; }
+    if [[ -e "${case_dir}/clock" ]]; then
+      date() {
+        if [[ "$*" == '-u +%s' ]]; then
+          cat -- "${case_dir}/clock"
+        else
+          command date "$@"
+        fi
+      }
+      sleep() {
+        printf '%s\n' "$(($(cat -- "${case_dir}/clock") + $1))" \
+          >"${case_dir}/clock"
+      }
+    fi
     "$@"
   ) >"${case_dir}/out" 2>"${case_dir}/err" || status=$?
 }
@@ -515,6 +559,155 @@ test_sqs_verdict() {
 }
 
 #######################################
+# 표본 사례의 응답 — 가짜 시계 시작 · 대상 상태 계획(「<시각> <상태>」 줄) ·
+# poll_failed 시각(epoch 초 — 없으면 빈 목록).
+# Globals:
+#   case_dir
+# Arguments:
+#   시계 시작, 대상 상태 계획(줄바꿈으로 이음), poll_failed 시각 ….
+#######################################
+sample_fixture() {
+  local events="" t
+  printf '%s\n' "$1" >"${case_dir}/clock"
+  printf '%s\n' "$2" | resp elbv2.describe-target-health.by-clock
+  shift 2
+  for t in "$@"; do
+    events+="${events:+, }{\"timestamp\": $((t * 1000)), \"message\": \"x\"}"
+  done
+  resp logs.filter-log-events <<JSON
+{"events": [${events}]}
+JSON
+}
+
+#######################################
+# vpce_sqs_sample 로 끝 시각까지 표본을 받고 poll_failed 를 붙여 판정한다. 대상
+# 그룹 기록을 먼저 둔다. 다시 부르면 README 안내대로 poll_failed 줄을 지운
+# 뒤 받는다.
+# Arguments:
+#   끝 시각.
+#######################################
+sample_and_judge() {
+  run_readme eval "printf '[\"tg-clip\"]' \
+      > \"\${evidence}/40-target-groups.json\"
+    if [ -e \"\${evidence}/50-sqs-t1.txt\" ]; then
+      sed -i.bak '/^poll_failed /d' \"\${evidence}/50-sqs-t1.txt\"
+    fi
+    vpce_sqs_sample t1 192.0.2.40 $1 &&
+      vpce_sqs_failures t1 1000 &&
+      vpce_sqs_verdict 1000 \"\${evidence}/50-sqs-t1.txt\""
+}
+
+#######################################
+# SQS 표본 사례 — 표본 파일을 손으로 쓰지 않고 vpce_sqs_sample 이 가짜 시계로
+# 만든 것을 판정한다(기동 1000 · 창 끝 1420 · 시계는 창 끝과 30초 간격이
+# 어긋나게 1035 에서 시작).
+#######################################
+test_sqs_sampled() {
+  local last
+  new_case && sample_fixture 1035 $'0 initial\n1090 healthy'
+  sample_and_judge 1420
+  expect 'sqs-sample: 정상 = 통과' 'SQS: 통과' 0
+  last="$(awk '$1 == "health" { t = $2 } END { print t }' \
+    "$(evidence_dir)/50-sqs-t1.txt")"
+  if [[ "${last}" -lt 1420 ]]; then
+    fail "sqs-sample: 마지막 표본 ${last} 이 창 끝 1420 앞"
+  fi
+
+  new_case && sample_fixture 1035 $'0 initial\n1090 healthy' 1300
+  sample_and_judge 1420
+  expect 'sqs-sample: 실패 뒤 연장 = 대기' 'SQS: 대기 — 표본을 1540 까지' 3
+  sample_and_judge 1540
+  expect 'sqs-sample: 연장 뒤 healthy = 통과' 'SQS: 통과 — poll_failed 1건' 0
+
+  new_case &&
+    sample_fixture 1035 $'0 initial\n1090 healthy\n1480 unhealthy' 1300
+  sample_and_judge 1420
+  sample_and_judge 1540
+  expect 'sqs-sample: 연장 뒤 unhealthy = 실패' \
+    'SQS: 실패 — healthy 뒤 unhealthy' 1
+}
+
+#######################################
+# 멈춘 새 태스크 사례 — 서비스의 STOPPED 태스크 중 이 배포(startedBy)의 것만
+# 세고 사유를 남긴다.
+#######################################
+test_stopped_tasks() {
+  local ours='"startedBy": "ecs-svc/111"' other='"startedBy": "ecs-svc/999"'
+  new_case
+  resp ecs.list-tasks.pokeclip-prod-clip <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/s1", "${TASK_ARN_HEAD}/s2"]}
+JSON
+  resp ecs.describe-tasks.s1 <<JSON
+{"tasks": [{"taskArn": "${TASK_ARN_HEAD}/s1", ${ours},
+  "stoppedReason": "CannotPullContainerError: pull access denied"},
+ {"taskArn": "${TASK_ARN_HEAD}/s2", ${other},
+  "stoppedReason": "Scaling activity initiated by deployment ecs-svc/999"}],
+ "failures": []}
+JSON
+  run_readme eval 'deployment=ecs-svc/111; vpce_stopped_tasks'
+  expect 'stopped: 이 배포의 것만 셈 = 멈춤' '멈춘 새 태스크: 1건' 1
+  if ! grep -q 'CannotPullContainerError' "$(evidence_dir)/43-stopped.txt" ||
+    grep -q 'ecs-svc/999' "$(evidence_dir)/43-stopped.txt"; then
+    fail 'stopped: 사유 기록이 이 배포의 태스크만이 아님'
+  fi
+
+  new_case
+  resp ecs.list-tasks.pokeclip-prod-clip <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/s2"]}
+JSON
+  resp ecs.describe-tasks.s2 <<JSON
+{"tasks": [{"taskArn": "${TASK_ARN_HEAD}/s2", ${other},
+  "stoppedReason": "Scaling activity"}], "failures": []}
+JSON
+  run_readme eval 'deployment=ecs-svc/111; vpce_stopped_tasks'
+  expect 'stopped: 다른 배포만 = 0' '멈춘 새 태스크: 0건' 0
+
+  new_case
+  resp ecs.list-tasks.pokeclip-prod-clip <<JSON
+{"taskArns": []}
+JSON
+  run_readme eval 'deployment=ecs-svc/111; vpce_stopped_tasks'
+  expect 'stopped: 멈춘 태스크 없음 = 0' '멈춘 새 태스크: 0건' 0
+
+  new_case
+  : >"${case_dir}/resp/ecs.list-tasks.pokeclip-prod-clip.fail"
+  run_readme eval 'deployment=ecs-svc/111; vpce_stopped_tasks'
+  expect 'stopped: 조회 실패 = 판정불가' '멈춘 새 태스크: 판정불가' 2
+
+  new_case
+  resp ecs.list-tasks.pokeclip-prod-clip <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/s1"]}
+JSON
+  : >"${case_dir}/resp/ecs.describe-tasks.s1.fail"
+  run_readme eval 'deployment=ecs-svc/111; vpce_stopped_tasks'
+  expect 'stopped: describe 실패 = 판정불가' '멈춘 새 태스크: 판정불가' 2
+
+  new_case
+  resp ecs.list-tasks.pokeclip-prod-clip <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/s1"]}
+JSON
+  resp ecs.describe-tasks.s1 <<JSON
+{"tasks": [], "failures": [{"arn": "${TASK_ARN_HEAD}/s1", "reason": "MISSING"}]}
+JSON
+  run_readme eval 'deployment=ecs-svc/111; vpce_stopped_tasks'
+  expect 'stopped: describe 가 태스크를 못 돌려줌 = 판정불가' \
+    '멈춘 새 태스크: 판정불가' 2
+}
+
+#######################################
+# 가짜 aws 의 started-by 단독 규칙이 README 의 새 태스크 조회를 막지 않는지
+# 본다(started-by 하나만 씀).
+#######################################
+test_new_tasks_filter() {
+  new_case
+  resp ecs.list-tasks <<JSON
+{"taskArns": []}
+JSON
+  run_readme eval 'deployment=ecs-svc/111; vpce_new_tasks; echo "새 태스크 조회 $?"'
+  expect 'new-tasks: started-by 단독 필터' '새 태스크 조회 0' 0
+}
+
+#######################################
 # 이름 해석 판정 사례(상자 출력 · ENI 주소 파일은 사례가 직접 쓴다).
 #######################################
 test_resolve_verdict() {
@@ -699,6 +892,9 @@ JSON
 run_suite() {
   test_secret_gate
   test_sqs_verdict
+  test_sqs_sampled
+  test_stopped_tasks
+  test_new_tasks_filter
   test_resolve_verdict
   test_ref_gate
   test_metric_gate
