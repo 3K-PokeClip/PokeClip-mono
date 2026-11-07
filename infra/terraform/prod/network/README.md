@@ -302,7 +302,7 @@ vpce_work="${work}"
 
 ```shell
 if [ "${work}" != "${vpce_work:?}" ]; then rm -r -- "${work:?}"; fi
-work="${vpce_work}" && unset vpce_work
+work="${vpce_work:?}" && unset vpce_work
 ```
 
 판정 함수입니다. 켬(`on`)은 다섯 이름이 모두 풀리고 모든 주소가 ENI 주소일
@@ -536,8 +536,10 @@ vpce_secret_recheck() {
     `CannotPullContainerError` · `ResourceInitializationError` 없음(ECR ·
     Secrets 성공).
 1.  새 태스크마다 로그 스트림(`clip/clip/<태스크 id>`)이 재기동 명령 시각 뒤에
-    생겼고 첫 이벤트가 명령 시각 뒤 3분 안에 있음(logs 성공 — 로그 경로가
-    깨지면 스트림이 생기지 않습니다).
+    생겼고 첫 이벤트가 그 태스크의 기동 시각(`startedAt`) 뒤 3분 안에 있음
+    (logs 성공 — 로그 경로가 깨지면 스트림이 생기지 않습니다). 기준이 재기동
+    시각이 아닌 것은 새 태스크를 재기동 뒤 4분까지 기다리기 때문입니다 —
+    3분 넘어 뜬 정상 태스크가 실패로 읽히지 않게 합니다.
 1.  새 태스크마다 아래 SQS 판정이 통과.
 1.  판정이 끝난 뒤 `vpce_secret_recheck` 가 `그대로`.
 
@@ -545,7 +547,9 @@ vpce_secret_recheck() {
 목록에서 저절로 참이 되지 않게 합니다. 기다림에는 모두 상한이 있습니다. 새 태스크
 기동은 재기동 명령 시각(`40-restart-at.txt`)부터 4분, 배포 끝은 같은 시각부터
 10분, SQS 표본은 새 태스크 기동 뒤 15분까지입니다. 새 태스크가 끝내 뜨지 않아도
-재기동 뒤 10분 안에 판정불가로 끝납니다.
+재기동 뒤 10분 안에 판정불가로 끝납니다. 재기동 시각 기록이 없거나 비었으면
+(재기동 블록을 돌리지 않은 셸 등) 두 대기는 기다리지 않고 `재기동 시각 기록
+없음` 으로 판정불가입니다.
 
 **SQS 판정의 신호.** clip 헬스는 수신에 한 번도 성공하지 않아도 루프 시작 뒤
 2분 동안 `UP(status=starting)` 이고(`IntakeHealth.java`), ALB 는 첫 헬스 성공으로
@@ -659,6 +663,15 @@ vpce_stopped_tasks() {  # 이 배포의 멈춘 태스크 — 0건 0 · 있음 1 
 판정이 `대기` 로 알려 준 시각)까지 받습니다.
 
 ```shell
+vpce_restart_at() {  # 재기동 명령 시각(epoch) — 기록이 없거나 숫자가 아니면 2
+  local at
+  at="$(cat "${evidence}/40-restart-at.txt" 2> /dev/null)"
+  case "${at}" in
+    '' | *[!0-9]*) return 2 ;;
+  esac
+  echo "${at}"
+}
+
 vpce_new_tasks() {  # 이 배포의 새 태스크마다 "<태스크 id> <startedAt epoch> <IP>"
   aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
     --started-by "${deployment}" --output json > "${work}/new-tasks.json" || return 2
@@ -672,8 +685,12 @@ vpce_new_tasks() {  # 이 배포의 새 태스크마다 "<태스크 id> <started
 # 이 배포의 새 태스크가 기동하기를 15초마다 보되 재기동 명령 뒤 4분까지만
 # 기다린다. 조회가 실패한 회차는 다음 회차에 다시 본다.
 vpce_wait_new_tasks() {  # 기동 0 · 멈춘 새 태스크 1 · 4분 넘음 2 → 42-new-tasks.txt
-  local list="${evidence}/42-new-tasks.txt" deadline rc
-  deadline="$(($(cat "${evidence}/40-restart-at.txt") + 240))"
+  local list="${evidence}/42-new-tasks.txt" restart deadline rc
+  if ! restart="$(vpce_restart_at)"; then
+    echo '새 태스크: 판정불가 — 재기동 시각 기록 없음(40-restart-at.txt)'
+    return 2
+  fi
+  deadline="$((restart + 240))"
   : > "${list}"
   while :; do
     if vpce_new_tasks > "${list}" && [ -s "${list}" ]; then
@@ -825,8 +842,12 @@ clip 을 다시 재기동해 NAT 로 회복시킵니다.
 
 ```shell
 vpce_wait_rollout() {  # 배포 끝 대기 — COMPLETED 0 · FAILED 1 · 재기동 10분 넘음 2
-  local deadline state=''
-  deadline="$(($(cat "${evidence}/40-restart-at.txt") + 600))"
+  local restart deadline state=''
+  if ! restart="$(vpce_restart_at)"; then
+    echo '배포: 판정불가 — 재기동 시각 기록 없음(40-restart-at.txt)'
+    return 2
+  fi
+  deadline="$((restart + 600))"
   while :; do
     if aws ecs describe-services --region "${region}" --cluster "${cluster}" \
         --services "${cluster}-clip" --output json > "${evidence}/41-service.json"; then
@@ -854,7 +875,7 @@ vpce_rollout_summary() {  # 41-service.json 의 이 배포 · 재기동 뒤 ECR 
         | "오류 이벤트 \(length)")' "${evidence}/41-service.json"
 }
 
-vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 생겼고 첫 이벤트가 3분 안인가
+vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 생겼고 첫 이벤트가 기동 뒤 3분 안인가
   local task started ip
   if [ ! -s "${evidence}/42-new-tasks.txt" ]; then
     echo '로그 스트림: 판정불가 — 새 태스크 0개'
@@ -864,7 +885,8 @@ vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 �
     aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
       --log-stream-name-prefix "clip/clip/${task}" --output json < /dev/null \
       | jq -r --argjson since "$(cat "${evidence}/40-restart-at.txt")" --arg t "${task}" \
-        '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $since) <= 180 and (.firstEventTimestamp // 0) > 0)"'
+        --argjson started "${started}" \
+        '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 기동 뒤 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $started) <= 180 and (.firstEventTimestamp // 0) > 0)"'
   done < "${evidence}/42-new-tasks.txt"
 }
 ```
@@ -879,7 +901,8 @@ vpce_log_streams
 ```
 
 기대는 `배포: COMPLETED` · `rollout=COMPLETED running=1 desired=1` · `오류 이벤트
-0` · `멈춘 새 태스크: 0건` · 새 태스크마다 `생성 뒤=true 첫 이벤트 3분 안=true` 입니다.
+0` · `멈춘 새 태스크: 0건` · 새 태스크마다 `생성 뒤=true 기동 뒤 첫 이벤트 3분
+안=true` 입니다.
 `판정불가` · `실패` 가 하나라도 있으면 「확인의 판정과 기록」 으로 갑니다.
 
 ### 확인 (ㄹ) 회귀 감시
@@ -934,7 +957,13 @@ media_ssm "$(vpce_media_box)" "${work}/vpce-sidecar-errors.sh"
 네트워크 실패가 아니므로 되돌리기가 아니라 kty 회부입니다.
 
 판정불가는 통과가 아닙니다. (ㄷ) 의 판정불가(새 태스크 미기동 · 배포 10분 넘음 ·
-새 태스크 0개 · SQS 15분 넘음)는 확인 실패와 같이 「되돌리기 1단계」 회부입니다.
+새 태스크 0개 · SQS 15분 넘음)는 kty 에게 「되돌리기 1단계」 를 제안해
+회부합니다. 사전 승인(Q2)이 있어도 바로 1단계로 가지 않습니다 — 판정불가는
+사전 승인 대상이 아닙니다. 노트북 쪽 조회가 실패해 난 (ㄷ) 의 판정불가(SQS
+대상 상태를 읽지 못한 표본 · `poll_failed` 조회 실패 · 멈춘 태스크 `list-tasks`
+실패나 100개 초과 · 재기동 전 비밀 관문의 조회 실패)는 먼저 다시 조회하고,
+그래도 안 되면 kty 에게 회부합니다 — SQS 상태가 미확인이면 되돌리기 1단계를
+권합니다.
 (ㄴ) 의 판정불가(상자 키 · 계정 · SSM 명령 실패)는 이름을 보지 못한 것이라
 되돌리기가 아니라 kty 회부입니다 — Media 상자의 SSM 은 NAT 로 가므로
 엔드포인트 장애의 증거가 아닙니다. 사전 승인(Q2)은 「실패」 에만 씁니다.
@@ -1137,12 +1166,15 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
         "${evidence}/20-resolve-off.txt"` 로 바꿉니다.
     *   (나) clip 강제 재기동이 NAT 경로로 성공합니다 — 확인 (ㄷ) 와 같은 재기동
         전 비밀 관문 · 같은 판정. 다시 돌리기 전에 앞선 확인의 30–50번 증거를
-        `try1/` 로 옮깁니다 — 같은 이름으로 덮어써 실패 증거가 사라지지 않게
-        합니다(`70-` · `80-` 은 그대로 둡니다).
+        회차 디렉터리(`try-<UTC 시각>/`)로 옮깁니다 — 같은 이름으로 덮어써
+        실패 증거가 사라지지 않게 합니다(`70-` · `80-` 은 그대로 둡니다).
+        셸 글롭 대신 `find` 로 골라 bash · zsh 모두 옮길 파일이 없어도 오류
+        없이 지나갑니다. 회차 디렉터리를 만들지 못하면 옮기지 않습니다.
 
         ```shell
-        mkdir "${evidence}/try1" && find "${evidence}" -maxdepth 1 -type f \
-          -name '[345][0-9]-*' -exec mv -- {} "${evidence}/try1/" \;
+        try_dir="${evidence}/try-$(date -u +%Y%m%dT%H%M%SZ)"
+        mkdir -- "${try_dir}" && find "${evidence}" -maxdepth 1 -type f \
+          -name '[345][0-9]-*' -exec mv -- {} "${try_dir}/" \;
         ```
 
     *   (다) 그 뒤 15분 동안 확인 (ㄹ) 의 오류 줄이 0 으로 떨어집니다. 캐시된 ENI
@@ -1162,7 +1194,15 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
     private_dns_enabled` 이어야 합니다.
 1.  kty 승인으로 apply 하고 「확인 (ㄱ)」 부터 「확인의 판정과 기록」 까지를
     그대로 다시 돕니다. 실패하면 다시 1단계입니다(사전 승인은 새로 받습니다 —
-    처음 것은 한 번 쓰면 끝).
+    처음 것은 한 번 쓰면 끝). 다시 돌기 전에 1단계 (나) 의 회복 증거(30–50번)를
+    1단계 (나) 와 같은 블록으로 새 회차 디렉터리에 옮깁니다.
+
+    ```shell
+    try_dir="${evidence}/try-$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -- "${try_dir}" && find "${evidence}" -maxdepth 1 -type f \
+      -name '[345][0-9]-*' -exec mv -- {} "${try_dir}/" \;
+    ```
+
 1.  workers 를 `render_egress_via_endpoints = false` 로 둔 채였으면, 확인을 지난
     뒤 workers 를 기본값(true)으로 되돌리는 apply 는 workers README 의 절차를
     따릅니다.

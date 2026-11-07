@@ -33,6 +33,10 @@
 #     실패만 이어짐 = 판정불가(가짜 시계로 재기동 시각부터의 상한 단언).
 #   새 태스크 대기 — 기동 = 0 · 멈춘 새 태스크 = 1 · 재기동 4분 안에 기동 없음 =
 #     판정불가(가짜 시계로 상한 단언).
+#   재기동 시각 기록 없음 — 새 태스크 대기 · 배포 대기 모두 기다리지 않고
+#     판정불가.
+#   증거 옮기기 — 되돌리기 1단계 (나) · 다시 켜기 3 의 블록이 같고, 두 번 돌리면
+#     회차마다 새 디렉터리로 옮김.
 #   확인 (ㄷ) 전 절차 — 새 태스크가 끝내 기동하지 않으면 재기동 · SQS · 판정
 #     블록을 README 그대로 이어 돌려 재기동 10분 안에 판정불가로 끝남.
 #   SQS 묶음 판정 — 새 태스크 0개 = 판정불가 · 하나 통과 = 통과.
@@ -41,7 +45,8 @@
 #   사이드카 오류 세기(상자 스크립트를 가짜 journalctl 로) — 0건 = 「0」 종료 0 ·
 #     journalctl 실패 = 숫자 아닌 줄 종료 2.
 #   보조 jq — (ㄱ) 상태 줄 · plan 요지(create 의 before null) · 배포 요약 ·
-#     로그 스트림 신선도.
+#     로그 스트림 신선도(첫 이벤트는 그 태스크의 기동 시각 기준 — 재기동 190초
+#     뒤 기동한 정상 태스크 = 통과).
 #   정의 순서 — README 셸 블록의 vpce_* 첫 등장이 정의(함수 · 변수)다.
 #   SQS 판정(대리 — 새 태스크의 대상 상태 표본 · poll_failed 시각) — SQS 실패 ·
 #     첫 2분 healthy = 실패 · 일시 실패 뒤 갱신 = 통과 · 연속 실패 = 실패 ·
@@ -62,6 +67,12 @@
 #
 # 임시 디렉터리는 한 뿌리($TMPDIR/network_vpce_runbook_test.*) 아래에 두고, 끝에
 # 지운 뒤 남지 않았는지 본다(중단 신호에도 지운다).
+#
+# Shell 가이드의 100줄 권고를 넘지만 셸로 둔다 — 시험 대상이 README 의 셸
+# 블록이라 같은 셸에서 eval 해야 하고, 같은 디렉터리 시험(put_secret_test ·
+# kvs_put_test)과 같은 틀(fail · pass · 임시 디렉터리 잔여 단언)을 쓴다. 그
+# 틀을 공용 함수 파일로 빼면 그 시험들도 함께 바꿔야 해 이 변경의 범위를
+# 넘는다.
 #
 # 사용: bash infra/terraform/scripts/test/network_vpce_runbook_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -120,6 +131,8 @@ readonly MUTATION_NAMES=(
   'resolve: SSM 실패 갈래 빼기'
   'resolve: 상자 키 고르기 빼기'
   'log: 새 태스크 0개 판정불가 빼기'
+  'log: 첫 이벤트 기준을 재기동 시각으로 되돌리기'
+  'restart-at: 기록 없음 갈래 빼기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -145,12 +158,14 @@ readonly MUTATION_FROMS=(
   '([.Datapoints[].Sum] | add // 0) > 0'
   '+ 240))"'
   '[ "${rc}" -eq 1 ]'
-  '$(cat "${evidence}/40-restart-at.txt") + 600'
+  '$((restart + 600))'
   '[ "${total}" -eq 0 ]'
   'if (need > started + cap)'
   '[ "${ssm_rc}" -ne 0 ]'
   "'keys | if length == 1 then .[0] else empty end'"
   'if [ ! -s "${evidence}/42-new-tasks.txt" ]; then'
+  '- $started) <= 180'
+  "'' | *[!0-9]*) return 2 ;;"
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -176,12 +191,14 @@ readonly MUTATION_TOS=(
   '([.Datapoints[].Sum] | add // 0) >= 0'
   '+ 2400))"'
   '[ "${rc}" -eq 9 ]'
-  '$(date -u +%s) + 600'
+  '$(($(date -u +%s) + 600))'
   '[ "${total}" -lt 0 ]'
   'if (0)'
   '[ "${ssm_rc}" -gt 99 ]'
   "'keys | .[0]'"
   'if false; then'
+  '- $since) <= 180'
+  "'' | *[!0-9]*) ;;"
 )
 
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
@@ -1020,6 +1037,72 @@ JSON
 }
 
 #######################################
+# 재기동 시각 기록(40-restart-at.txt)이 없으면 새 태스크 대기 · 배포 대기가
+# 기다리지 않고 그 사유로 판정불가인지 본다(가짜 시계 2000 — 시계가 그대로).
+#######################################
+test_restart_at_missing() {
+  local clock
+  new_case && pending_fixture
+  run_readme eval 'deployment=ecs-svc/111
+    vpce_wait_new_tasks; vpce_wait_rollout'
+  expect 'restart-at: 기록 없음 = 대기 없이 판정불가' \
+    '배포: 판정불가 — 재기동 시각 기록 없음' 2 \
+    '새 태스크: 판정불가 — 재기동 시각 기록 없음'
+  clock="$(cat -- "${case_dir}/clock")"
+  if [[ "${clock}" -ne 2000 ]]; then
+    fail "restart-at: 기록 없음인데 기다림(시계 ${clock})"
+  fi
+}
+
+#######################################
+# 되돌리기 1단계 (나) · 다시 켜기 3 의 증거 옮기기 블록 — 두 곳이 같은 블록인지,
+# 그 블록을 두 번 돌리면 회차마다 새 디렉터리로 30–59번 파일만 옮기는지 본다
+# (date 는 사례가 정한 회차 이름을 낸다).
+#######################################
+test_try_move() {
+  local block ev
+  # shellcheck disable=SC2016 # README 글자 그대로.
+  if ! block="$(awk '
+      match($0, /^[[:space:]]*```shell$/) {
+        inside = 1
+        pad = RLENGTH - 8
+        body = ""
+        next
+      }
+      inside && /^[[:space:]]*```$/ {
+        inside = 0
+        if (index(body, "try_dir=") == 1) { n++; got[n] = body }
+        next
+      }
+      inside { body = body substr($0, pad + 1) "\n" }
+      END { if (n != 2 || got[1] != got[2]) { exit 1 } printf "%s", got[1] }' \
+      "${README}")"; then
+    fail 'try: README 에 같은 증거 옮기기 블록이 두 곳(1단계 (나) · 다시 켜기 3)이 아님'
+    return 1
+  fi
+  new_case
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval 'date() { cat -- "${case_dir}/stamp"; }
+    printf "T1\n" > "${case_dir}/stamp"
+    touch "${evidence}/30-a.txt" "${evidence}/52-b.txt" "${evidence}/70-c.jsonl"
+    '"${block}"'
+    printf "T2\n" > "${case_dir}/stamp"
+    touch "${evidence}/41-d.json"
+    '"${block}"'
+    echo "옮기기 끝"'
+  expect 'try: 옮기기 블록 실행' '옮기기 끝' 0
+  ev="$(evidence_dir)"
+  if [[ ! -f "${ev}/try-T1/30-a.txt" || ! -f "${ev}/try-T1/52-b.txt" ||
+    ! -f "${ev}/try-T2/41-d.json" || ! -f "${ev}/70-c.jsonl" ||
+    -e "${ev}/30-a.txt" || -e "${ev}/41-d.json" ]]; then
+    fail "try: 회차 디렉터리 옮기기 결과가 다름($(cd -- "${ev}" && find . | sort |
+      tr '\n' ' '))"
+    return 1
+  fi
+  pass 'try: 회차마다 새 디렉터리 · 70번대 그대로'
+}
+
+#######################################
 # SQS 묶음 판정 사례 — 새 태스크 목록(42-new-tasks.txt) 전부를 판정한다.
 #######################################
 test_sqs_tasks() {
@@ -1120,12 +1203,31 @@ JSON
   run_readme eval 'printf "1000\n" > "${evidence}/40-restart-at.txt"
     printf "t1 1000 192.0.2.40\n" > "${evidence}/42-new-tasks.txt"
     vpce_log_streams'
-  expect 'jq: 로그 스트림 신선' 't1 생성 뒤=true 첫 이벤트 3분 안=true' 0
+  expect 'jq: 로그 스트림 신선' 't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=true' 0
   resp logs.describe-log-streams <<JSON
 {"logStreams": [{"creationTime": 1001500}]}
 JSON
   run_readme eval 'vpce_log_streams'
-  expect 'jq: 첫 이벤트 없음' 't1 생성 뒤=true 첫 이벤트 3분 안=false' 0
+  expect 'jq: 첫 이벤트 없음' 't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=false' 0
+
+  # 재기동 190초 뒤 기동한 정상 태스크 — 첫 이벤트는 재기동 뒤 195초지만 기동
+  # 뒤 5초다(기준 = 그 태스크의 startedAt).
+  new_case
+  resp logs.describe-log-streams <<JSON
+{"logStreams": [{"creationTime": 1185000, "firstEventTimestamp": 1195000}]}
+JSON
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval 'printf "1000\n" > "${evidence}/40-restart-at.txt"
+    printf "t1 1190 192.0.2.40\n" > "${evidence}/42-new-tasks.txt"
+    vpce_log_streams'
+  expect 'jq: 재기동 190초 뒤 기동 = 첫 이벤트는 기동 기준' \
+    't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=true' 0
+  resp logs.describe-log-streams <<JSON
+{"logStreams": [{"creationTime": 1185000, "firstEventTimestamp": 1371000}]}
+JSON
+  run_readme eval 'vpce_log_streams'
+  expect 'jq: 기동 181초 뒤 첫 이벤트 = 3분 넘음' \
+    't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=false' 0
 
   new_case
   # shellcheck disable=SC2016 # README 셸에서 펼친다.
@@ -1400,6 +1502,8 @@ run_suite() {
     test_new_tasks \
     test_wait_new_tasks \
     test_restart_never_starts \
+    test_restart_at_missing \
+    test_try_move \
     test_sqs_tasks \
     test_rm_guarded \
     test_sidecar_errors \
