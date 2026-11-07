@@ -1372,8 +1372,8 @@ function stubVodPlayer() {
 /**
  * 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부 ended)으로 지난 방송을 연다(POK-546). 회차 경로가 round 로 답하고(null 이면
  * 404), listed 면 다시보기 재생기가 첫 목록까지 받는다. 서버 기준점은 기본으로 방송 시작(= 목록 첫 조각)이라 영상 초 = 기준점
- * 축 초다. 녹화 재생 서버도 있고 녹화도 있다 — 녹화 길로 새면 녹화 조회가 잡힌다. configured 를 끄면 재생 서버 주소가 빈 dev ·
- * 운영 설정이다. strict 면 개발 서버처럼 StrictMode 로 그린다
+ * 축 초다. 녹화 재생 서버도 있고 녹화도 있다 — 녹화 길로 새면 녹화 조회가 잡힌다. configured 를 끄면 재생 서버 주소가 빈
+ * 구성(로컬 등)이다. strict 면 개발 서버처럼 StrictMode 로 그린다
  */
 async function openPastVod({
   origin = VOD_STARTED as number | null,
@@ -6830,9 +6830,9 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       expect(mediaCalls.spans).toEqual([]);
     });
 
-    // 보관 기간이 지난 방송(410)은 설계 3절 표대로 채팅이 지금 그대로다: 재생 서버 주소가 없는 dev · 운영 설정이면 곧바로 방송
-    // 끝이고, 있으면 지금처럼 녹화 확인 한도(10초)까지 기다린다. 끝난 뒤 들어온 화면이라는 것만으로 기다리게 하면 dev · 운영에서
-    // 채팅이 10초 「확인 중」이었다(c4 리뷰 F1)
+    // 보관 기간이 지난 방송(410)은 설계 3절 표대로 채팅이 지금 그대로다: 재생 서버 주소가 없는 구성(로컬 등)이면 곧바로 방송
+    // 끝이고, 있으면(prod) 지금처럼 녹화 확인 한도(10초)까지 기다린다. 끝난 뒤 들어온 화면이라는 것만으로 기다리게 하면 재생 서버
+    // 주소가 없는 구성에서 채팅이 10초 「확인 중」이었다(c4 리뷰 F1)
     it.each([
       ['재생 서버 주소가 없으면 기다리지 않고 곧바로', false],
       ['재생 서버 주소가 있으면 10초를 기다린 뒤', true],
@@ -6886,6 +6886,17 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
 
       expect(screen.getByText(/^0:00:08 시점까지 보는 중/)).toBeInTheDocument();
       expect(screen.getByText('5초 채팅')).toBeInTheDocument();
+      expect(mediaCalls.spans).toEqual([]);
+    });
+
+    // 재생 서버 주소가 없는 구성(로컬 등)에서도 기다림은 재생 서버 주소가 아니라 끝난 뒤 들어온 화면의 다시보기 상태로
+    // 가른다(계획 4절 D): 다시보기는 녹화 재생 서버를 쓰지 않는다
+    it('재생 서버 주소가 없어도 다시보기가 서는 동안은 곧바로 방송 끝을 보이지 않고 그 위치를 기다린다', async () => {
+      const { container } = await openPastVod({ configured: false });
+      expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+
+      await playTo(container, 8.4);
+      expect(screen.getByText(/^0:00:08 시점까지 보는 중/)).toBeInTheDocument();
       expect(mediaCalls.spans).toEqual([]);
     });
   });

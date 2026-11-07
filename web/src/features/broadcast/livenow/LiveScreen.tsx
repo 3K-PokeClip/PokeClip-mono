@@ -811,10 +811,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     const timer = window.setTimeout(() => setChatWaitOver(true), CHAT_WAIT_MS);
     return () => window.clearTimeout(timer);
   }, [recordingLookup, lookupStarts]);
-  // 끝난 뒤 들어온 화면(A — 갈래가 notPast 아님)은 재생 서버 주소와 무관하게 다시보기가 곧 설 수 있는 동안 기다린다(dev · 운영은
-  // 재생 서버 주소가 비어 있다 — 계획 4절 D). 제어면 주소가 없으면 그 상태가 「물을 수 없음」으로 와 기다리지 않는다. 보관 기간이
-  // 지난 방송(410)은 다시보기를 묻지 않아 지금 그대로 재생 서버 주소로 가른다(설계 3절 표): 갈래만 보면 dev · 운영에서 채팅이 10초
-  // 「확인 중」이었다(c4 리뷰 F1)
+  // 끝난 뒤 들어온 화면(A — 갈래가 notPast 아님)은 재생 서버 주소와 무관하게 다시보기가 곧 설 수 있는 동안 기다린다: 다시보기는
+  // 녹화 재생 서버를 쓰지 않는다(계획 4절 D). 이 갈래가 결과를 바꾸는 것은 재생 서버 주소가 없는 구성(로컬 등)뿐이다. 주소가 있는
+  // 구성(prod)은 갈래 없이도 지금처럼 녹화 확인 한도까지 기다린다. 제어면 주소가 없으면 그 상태가 「물을 수 없음」으로 와 기다리지
+  // 않는다. 보관 기간이 지난 방송(410)은 다시보기를 묻지 않아 지금 그대로 재생 서버 주소로 가른다(설계 3절 표): 갈래만 보면 재생
+  // 서버 주소가 없는 구성에서 채팅이 10초 「확인 중」이었다(c4 리뷰 F1)
   const pastAwaits =
     pastCard.kind !== 'notPast' && !(pastCard.kind === 'blocked' && pastCard.reason === 'expired');
   const awaitPlayhead =

@@ -9,6 +9,7 @@ import { useRewindStatus } from '@/features/player/useRewindStatus';
 // useRewindStatus(10초 · 시한 8초 · 늦은 답 버림 · 숨김 복귀 때 묻기)를 그대로 쓰고, 답을 다시보기 상태로 접는 일은 순수
 // 모듈(pastVod.ts)이 맡는다. 이 훅은 경로를 켜고 끄는 조건과 404 유예의 원점만 정한다. 웹은 회차 경로 답만 믿는다.
 
+/** usePastVod 가 회차 경로를 묻는 데 쓰는 입력 — 물을지 여부 · 경로를 만들 주소와 키 · 404 유예의 원점 */
 export interface PastVodInput {
   /** 물을 화면인가 — 끝난 뒤 들어온 화면이고 보관 기간이 지나지 않음 */
   enabled: boolean;

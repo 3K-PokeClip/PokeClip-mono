@@ -119,8 +119,9 @@ function clampToView(targetMs: number, view: SeekView): number {
 /**
  * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. 멈춤 회피가
  * 아니다: 받지 않은 마지막 조각 안으로 옮기면 앞 버퍼 끝에 멎는 일은 Playwright WebKit 26.4 에서 재현됐고 1초를 물러서도
- * 남았으며, macOS Safari 27.0.1 의 앱 밖 최소 재현(hls.js 네 판과 기본 HLS 0/42 · 앱 판 1.7.3 은 0/6)에서는 재현되지
- * 않았다(iOS 는 재지 않았다). 마지막 1초를 틀어 끝에 닿는다
+ * 남았으며, macOS Safari 27.0.1 의 앱 밖 최소 재현(hls.js 네 판과 기본 HLS 0/42 · 앱 판 1.7.3 은 0/6)과 Playwright
+ * 1.65.0 의 WebKit 27.2 의 같은 재현(hls.js 네 판 · 조건 a 0/42)에서는 재현되지 않았다(iOS 는 재지 않았다). 마지막 1초를
+ * 틀어 끝에 닿는다
  */
 const END_TAIL_MS = 1_000;
 
