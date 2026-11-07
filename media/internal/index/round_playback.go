@@ -22,7 +22,7 @@ import (
 //	회차에 live 세션 있음                                      live    (스트림 · 기동 적재는 값 없음)
 //	회차 세션에 expired_at 있음                                unknown
 //	완결 아님(ended 아닌 세션 있음 ∨ round_closed_at 없음)     ending
-//	최신 세션 vod_state ∈ {frozen, frozen_with_gaps} ∧ 키 있음 vod     (꼬리 사슬 VOD — 사슬 전원이 같은 vod_* 를 든다)
+//	최신 세션 vod_state ∈ {frozen, frozen_with_gaps} ∧ 키 있음 vod     (회차 VOD · 사슬 하나면 사슬 VOD — 사슬 전원이 같은 vod_* 를 든다)
 //	그 밖(freeze_failed · 빈 동결)                             ended
 //
 // 완결 시각은 GREATEST(round_closed_at, max(ended_at)) 다. VOD 범위의 첫 조각 PDT 와 마지막 조각 끝(배타)은 그 사슬의
