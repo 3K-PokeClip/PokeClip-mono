@@ -27,8 +27,17 @@
 #     버전 바뀜 = 무효.
 #   SQS 표본(vpce_sqs_sample 이 가짜 시계로 만든 파일 그대로) — 정상 = 통과 ·
 #     실패 뒤 연장 = 대기 뒤 통과 · 연장 뒤 unhealthy = 실패.
-#   멈춘 새 태스크 — 그 배포의 것만 셈 · 사유 기록 · 없음 = 0 · 조회 실패 =
-#     판정불가.
+#   멈춘 새 태스크 — 그 배포의 것만 셈 · 사유 기록 · 없음 = 0 · 조회 실패와
+#     목록 읽기 오류 = 판정불가.
+#   배포 대기 — COMPLETED = 0 · FAILED = 1 · 10분 안에 안 끝남 · 조회 실패만
+#     이어짐 = 판정불가(가짜 시계로 상한 단언).
+#   새 태스크 조회 · 기동 시각 — describe-tasks 의 failures · 반환 수가 요청과
+#     다르거나 목록 읽기 오류면 판정불가.
+#   사이드카 오류 세기(상자 스크립트를 가짜 journalctl 로) — 0건 = 「0」 종료 0 ·
+#     journalctl 실패 = 숫자 아닌 줄 종료 2.
+#   보조 jq — (ㄱ) 상태 줄 · plan 요지(create 의 before null) · 배포 요약 ·
+#     로그 스트림 신선도.
+#   정의 순서 — README 셸 블록의 vpce_* 첫 등장이 정의(함수 · 변수)다.
 #   SQS 판정(대리 — 새 태스크의 대상 상태 표본 · poll_failed 시각) — SQS 실패 ·
 #     첫 2분 healthy = 실패 · 일시 실패 뒤 갱신 = 통과 · 연속 실패 = 실패 ·
 #     창 끝 가까운 실패 = 대기 · 한 번도 healthy 아님 = 실패 · 조회 실패 표본 =
@@ -67,6 +76,10 @@ readonly ANCHORS=(
   'vpce_resolve_verdict() {'
   'vpce_ref_gate() {'
   'vpce_metric_calibrate() {'
+  'vpce_wait_rollout() {'
+  'vpce_endpoint_states() {'
+  'vpce_plan_changes() {'
+  'vpce_sidecar_script() {'
 )
 
 # 변이 — 이름 · 찾을 글자 · 바꿀 글자(같은 차례). 글자는 README 의 셸 · jq ·
@@ -80,6 +93,11 @@ readonly MUTATION_NAMES=(
   'sqs: 창 끝 healthy 판정 늦추기'
   'sqs: 표본이 창 끝을 넘기기 전에 멈추기'
   'stopped: 배포 거르기 빼기'
+  'describe: 목록 읽기 오류를 0건으로'
+  'describe: 반환 수 대조 빼기'
+  'rollout: 대기 상한 늘리기'
+  'sidecar: 0건 종료 코드 삼키기 빼기'
+  'sidecar: journalctl 실패 감지 빼기'
   'resolve: 켬 · 끔 갈래 뒤집기'
   'ref: 자기 인그레스 양성 대조 빼기'
   'ref: 참조 행 대신 SG 의 모든 행 세기'
@@ -98,6 +116,11 @@ readonly MUTATION_FROMS=(
   'if (s[n] != "healthy")'
   '[ "${now}" -lt "$3" ] || break'
   'select(.startedBy == $d)'
+  "length' \"\$1\")\"; then"
+  '((.failures // []) | length) == 0 and (.tasks | length) == $n'
+  '+ 600))"'
+  '| grep -cE "${pattern}" || :'
+  'if ! log="$(journalctl'
   '(($2 in eni) != (mode == "on"))'
   'any(.GroupId == $sg and .IsEgress == false and .CidrIpv4 != null)'
   'select(.ReferencedGroupInfo.GroupId == $sg)'
@@ -116,6 +139,11 @@ readonly MUTATION_TOS=(
   'if (s[n] == "unhealthy")'
   '[ "$((now + 30))" -le "$3" ] || break'
   'select(true)'
+  "length' \"\$1\" || echo 0)\"; then"
+  'true'
+  '+ 6000))"'
+  '| grep -cE "${pattern}"'
+  'if ! : || log="$(journalctl'
   '(($2 in eni) == (mode == "on"))'
   'true'
   'select(.GroupId == $sg)'
@@ -491,6 +519,18 @@ JSON
   expect 'secret: clip 비밀 셋이 다름 = 판정불가' '비밀 관문: 판정불가' 2
 
   new_case && secret_fixture
+  resp ecs.describe-tasks.clip1 <<JSON
+{"tasks": [], "failures": [{"arn": "x", "reason": "MISSING"}]}
+JSON
+  run_readme vpce_secret_gate
+  expect 'secret: 태스크를 못 돌려줌 = 판정불가' '비밀 관문: 판정불가' 2
+
+  new_case && secret_fixture
+  printf 'not json\n' | resp ecs.list-tasks.pokeclip-prod-auth
+  run_readme vpce_secret_gate
+  expect 'secret: 태스크 목록 읽기 오류 = 판정불가' '비밀 관문: 판정불가' 2
+
+  new_case && secret_fixture
   : >"${case_dir}/resp/${jwt_key}.fail"
   run_readme vpce_secret_gate
   expect 'secret: 조회 실패 = 판정불가' '비밀 관문: 판정불가' 2
@@ -675,6 +715,11 @@ JSON
   expect 'stopped: 조회 실패 = 판정불가' '멈춘 새 태스크: 판정불가' 2
 
   new_case
+  printf 'not json\n' | resp ecs.list-tasks.pokeclip-prod-clip
+  run_readme eval 'deployment=ecs-svc/111; vpce_stopped_tasks'
+  expect 'stopped: 목록 읽기 오류 = 판정불가' '멈춘 새 태스크: 판정불가' 2
+
+  new_case
   resp ecs.list-tasks.pokeclip-prod-clip <<JSON
 {"taskArns": ["${TASK_ARN_HEAD}/s1"]}
 JSON
@@ -705,6 +750,218 @@ test_new_tasks_filter() {
 JSON
   run_readme eval 'deployment=ecs-svc/111; vpce_new_tasks; echo "새 태스크 조회 $?"'
   expect 'new-tasks: started-by 단독 필터' '새 태스크 조회 0' 0
+}
+
+#######################################
+# 정의 순서 — README 셸 블록을 문서 순서대로 읽을 때 vpce_* 이름의 첫 등장이
+# 그 함수 · 변수의 정의인지 본다(문서 순서대로 붙여 넣으면 「command not
+# found」 가 나지 않게).
+#######################################
+test_defined_before_use() {
+  local bad
+  if ! bad="$(awk '
+      /^[[:space:]]*```shell$/ { inside = 1; next }
+      inside && /^[[:space:]]*```$/ { inside = 0; next }
+      !inside { next }
+      {
+        rest = $0
+        sub(/^[[:space:]]+/, "", rest)
+        line = $0
+        while (match(line, /vpce_[a-z_]+/)) {
+          name = substr(line, RSTART, RLENGTH)
+          line = substr(line, RSTART + RLENGTH)
+          if (name in seen) { continue }
+          seen[name] = 1
+          if (index(rest, name "() {") != 1 && index(rest, name "=") != 1) {
+            printf "%s(%d행) ", name, NR
+            found = 1
+          }
+        }
+      }
+      END { exit found }' "${README}")"; then
+    fail "order: 정의보다 먼저 쓰인 이름: ${bad}"
+    return 1
+  fi
+  pass 'order: vpce_* 첫 등장 = 정의'
+}
+
+#######################################
+# 배포 대기 사례(가짜 시계 2000 에서 시작 — 상한 600초 · 간격 15초).
+#######################################
+test_wait_rollout() {
+  local key='ecs.describe-services.pokeclip-prod-clip' clock
+  local head='{"services": [{"deployments": [{"id": "ecs-svc/111",'
+  local call='deployment=ecs-svc/111; vpce_wait_rollout'
+
+  new_case && printf '2000\n' >"${case_dir}/clock"
+  resp "${key}.by-clock" <<EOF
+0 ${head} "rolloutState": "IN_PROGRESS"}]}]}
+2045 ${head} "rolloutState": "COMPLETED"}]}]}
+EOF
+  run_readme eval "${call}"
+  expect 'rollout: COMPLETED = 0' '배포: COMPLETED' 0
+
+  new_case && printf '2000\n' >"${case_dir}/clock"
+  resp "${key}.by-clock" <<EOF
+0 ${head} "rolloutState": "FAILED"}]}]}
+EOF
+  run_readme eval "${call}"
+  expect 'rollout: FAILED = 1' '배포: FAILED' 1
+
+  new_case && printf '2000\n' >"${case_dir}/clock"
+  resp "${key}.by-clock" <<EOF
+0 ${head} "rolloutState": "IN_PROGRESS"}]}]}
+EOF
+  run_readme eval "${call}"
+  expect 'rollout: 10분 안에 안 끝남 = 판정불가' '배포: 판정불가' 2
+  clock="$(cat -- "${case_dir}/clock")"
+  if [[ "${clock}" -gt 2615 ]]; then
+    fail "rollout: 상한 600초를 넘겨 기다림(시계 ${clock})"
+  fi
+
+  new_case && printf '2000\n' >"${case_dir}/clock"
+  : >"${case_dir}/resp/${key}.fail"
+  run_readme eval "${call}"
+  expect 'rollout: 조회 실패만 이어짐 = 판정불가' '배포: 판정불가' 2
+}
+
+#######################################
+# 새 태스크 조회 사례 — 정상 줄 · 반환 수 어긋남 · 목록 읽기 오류.
+#######################################
+test_new_tasks() {
+  local task='{"taskArn": "x/t1", "startedAt": "2026-11-07T00:00:00Z",'
+  task+=' "attachments": [{"details": [{"name": "subnetId", "value": "s"},'
+  task+=' {"name": "privateIPv4Address", "value": "192.0.2.40"}]}]}'
+  local call='deployment=ecs-svc/111; vpce_new_tasks; echo "새 태스크 조회 $?"'
+
+  new_case
+  resp ecs.list-tasks <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/t1"]}
+JSON
+  resp ecs.describe-tasks.t1 <<JSON
+{"tasks": [${task}], "failures": []}
+JSON
+  run_readme eval "${call}"
+  expect 'new-tasks: 태스크 id · 기동 · 주소' '새 태스크 조회 0' 0 \
+    't1 1794009600 192.0.2.40'
+
+  new_case
+  resp ecs.list-tasks <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/t1", "${TASK_ARN_HEAD}/t2"]}
+JSON
+  resp ecs.describe-tasks.t1 <<JSON
+{"tasks": [${task}], "failures": [{"arn": "x/t2", "reason": "MISSING"}]}
+JSON
+  run_readme eval "${call}"
+  expect 'new-tasks: 반환 수 어긋남 = 판정불가' '새 태스크 조회 2' 0
+
+  new_case
+  printf 'not json\n' | resp ecs.list-tasks
+  run_readme eval "${call}"
+  expect 'new-tasks: 목록 읽기 오류 = 판정불가' '새 태스크 조회 2' 0
+}
+
+#######################################
+# 사이드카 오류 세기 — README 함수가 낸 상자 스크립트를 가짜 journalctl 로
+# /bin/sh 에서 돌린다(SSM 의 AWS-RunShellScript 꼴).
+# Arguments:
+#   사례 이름, 가짜 journalctl 출력(fail 이면 실패), 기대 출력, 기대 종료.
+#######################################
+sidecar_case() {
+  local name="$1" journal="$2" want="$3" code="$4" got rc=0
+  new_case && mkdir -- "${case_dir}/bin"
+  run_readme eval 'vpce_sidecar_script > sidecar.sh'
+  if [[ "${journal}" == fail ]]; then
+    printf '#!/bin/sh\necho "Failed to open journal" >&2\nexit 1\n' \
+      >"${case_dir}/bin/journalctl"
+  else
+    printf '%s\n' "${journal}" >"${case_dir}/journal.txt"
+    printf '#!/bin/sh\ncat "%s"\n' "${case_dir}/journal.txt" \
+      >"${case_dir}/bin/journalctl"
+  fi
+  chmod +x "${case_dir}/bin/journalctl"
+  got="$(env -i "PATH=${case_dir}/bin:/usr/bin:/bin" /bin/sh \
+    "${case_dir}/sidecar.sh" 2>/dev/null)" || rc=$?
+  if [[ "${got}" != "${want}" || "${rc}" -ne "${code}" ]]; then
+    fail "${name}: 출력 「${got}」 종료 ${rc} (기대 「${want}」 종료 ${code})"
+    return 1
+  fi
+  pass "${name}"
+}
+
+test_sidecar_errors() {
+  sidecar_case 'sidecar: 오류 0건 = 0' $'segment uploaded\nok' 0 0
+  sidecar_case 'sidecar: 오류 둘' \
+    $'dial tcp 10.0.0.1:443: i/o timeout\nok\nAccessDenied: x' 2 0
+  sidecar_case 'sidecar: journalctl 실패 = 판정불가' fail \
+    'journalctl 실패 — 판정불가' 2
+}
+
+#######################################
+# 보조 jq 사례 — (ㄱ) 상태 · plan 요지 · 배포 요약 · 로그 스트림.
+#######################################
+test_helper_jq() {
+  local i list="" plan
+  new_case
+  for i in 0 1 2 3 4; do
+    list+="${list:+, }{\"ServiceName\":"
+    list+=" \"${SERVICE_HEAD}.${ENDPOINT_SERVICES[i]}\","
+    list+=' "State": "available", "PrivateDnsEnabled": true,'
+    list+=" \"NetworkInterfaceIds\": [\"eni-${i}\"]}"
+  done
+  run_readme eval "printf '%s' '{\"VpcEndpoints\": [${list}]}' \
+    > \"\${evidence}/10-endpoints.json\"; vpce_endpoint_states | grep -c ."
+  expect 'jq: (ㄱ) 상태 다섯 줄' '5' 0
+  run_readme eval 'vpce_endpoint_states'
+  expect 'jq: (ㄱ) 상태 줄 꼴' 'sqs available dns=true eni=1' 0 \
+    'ecr.api available dns=true eni=1'
+
+  plan='{"resource_changes": ['
+  plan+='{"address": "a.ep", "change": {"actions": ["update"],'
+  plan+=' "before": {"private_dns_enabled": true, "tags": {"k": "v"}},'
+  plan+=' "after": {"private_dns_enabled": false, "tags": {"k": "v"}},'
+  plan+=' "after_unknown": {}}},'
+  plan+='{"address": "b.sg", "change": {"actions": ["create"],'
+  plan+=' "before": null, "after": {"name": "x"},'
+  plan+=' "after_unknown": {"id": true, "arn": false}}},'
+  plan+='{"address": "c.keep", "change": {"actions": ["no-op"],'
+  plan+=' "before": {}, "after": {}, "after_unknown": {}}}]}'
+  new_case && printf '%s\n' "${plan}" >"${case_dir}/plan.json"
+  run_readme eval 'vpce_plan_changes < plan.json'
+  expect 'jq: plan 요지(create 의 before null 포함)' \
+    'update a.ep private_dns_enabled' 0 \
+    'create b.sg id,name'
+
+  new_case
+  resp logs.describe-log-streams <<JSON
+{"logStreams": [{"creationTime": 1001500, "firstEventTimestamp": 1002000}]}
+JSON
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval 'printf "1000\n" > "${evidence}/40-restart-at.txt"
+    printf "t1 1000 192.0.2.40\n" > "${evidence}/42-new-tasks.txt"
+    vpce_log_streams'
+  expect 'jq: 로그 스트림 신선' 't1 생성 뒤=true 첫 이벤트 3분 안=true' 0
+  resp logs.describe-log-streams <<JSON
+{"logStreams": [{"creationTime": 1001500}]}
+JSON
+  run_readme eval 'vpce_log_streams'
+  expect 'jq: 첫 이벤트 없음' 't1 생성 뒤=true 첫 이벤트 3분 안=false' 0
+
+  new_case
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval 'deployment=ecs-svc/111
+    printf "1000\n" > "${evidence}/40-restart-at.txt"
+    cat > "${evidence}/41-service.json" <<JSON
+{"services": [{"deployments": [{"id": "ecs-svc/111",
+  "rolloutState": "COMPLETED",
+  "runningCount": 1, "desiredCount": 1}, {"id": "ecs-svc/000"}],
+  "events": [{"createdAt": 1100.5, "message": "CannotPullContainerError: x"},
+   {"createdAt": 900, "message": "ResourceInitializationError: old"},
+   {"createdAt": "1970-01-01T09:20:00+09:00", "message": "steady state"}]}]}
+JSON
+    vpce_rollout_summary'
+  expect 'jq: 배포 요약' '오류 이벤트 1' 0 \
+    'rollout=COMPLETED running=1 desired=1'
 }
 
 #######################################
@@ -888,16 +1145,31 @@ JSON
 
 #######################################
 # 사례 묶음 전부를 지금 readme_text 로 돈다.
+# Globals:
+#   quiet, suite_failures
 #######################################
 run_suite() {
-  test_secret_gate
-  test_sqs_verdict
-  test_sqs_sampled
-  test_stopped_tasks
-  test_new_tasks_filter
-  test_resolve_verdict
-  test_ref_gate
-  test_metric_gate
+  local test_name
+  for test_name in \
+    test_defined_before_use \
+    test_secret_gate \
+    test_wait_rollout \
+    test_new_tasks \
+    test_sidecar_errors \
+    test_helper_jq \
+    test_sqs_verdict \
+    test_sqs_sampled \
+    test_stopped_tasks \
+    test_new_tasks_filter \
+    test_resolve_verdict \
+    test_ref_gate \
+    test_metric_gate; do
+    # 변이 묶음은 첫 실패에서 멈춘다 — 잡혔는지만 보면 되고 시간이 준다.
+    if [[ -n "${quiet}" && "${suite_failures}" -gt 0 ]]; then
+      return 0
+    fi
+    "${test_name}"
+  done
 }
 
 #######################################
@@ -926,7 +1198,7 @@ test_mutations() {
     if [[ "${suite_failures}" -eq 0 ]]; then
       fail "변이 「${MUTATION_NAMES[i]}」: 사례가 하나도 실패하지 않음"
     else
-      pass "변이 「${MUTATION_NAMES[i]}」 잡힘(실패 ${suite_failures}건)"
+      pass "변이 「${MUTATION_NAMES[i]}」 잡힘"
     fi
   done
   readme_text="${base}"

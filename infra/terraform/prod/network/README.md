@@ -124,11 +124,16 @@ PR-N(이 루트의 엔드포인트) 머지 전후의 절차입니다. 확인은 
 
 *   실행자는 kty 입니다. **kty 로컬 터미널**에서 돌립니다. plan · 상태 · 조회
     출력에 계정 ID 가 든 ARN 이 섞이므로, 원문은 증거 디렉터리의 파일로만
-    두고 화면 · 세션 · 채팅에는 판정 줄만 옮깁니다.
+    두고 화면 · 세션 · 채팅에는 판정 줄만 옮깁니다. 명령의 오류 출력
+    (`AccessDenied` 등)에도 ARN 이 나옵니다 — 오류 줄도 그대로 붙여 넣지
+    않고, 계정 ID 를 가린 뒤 옮깁니다.
 *   판정 함수는 마지막 줄에 판정을 내고 종료 코드로도 돌려줍니다 — 0 통과 ·
     1 멈춤(실패) · 2 판정불가. **판정불가는 통과가 아닙니다.**
 *   아래 셸 블록은 `scripts/test/network_vpce_runbook_test.sh` 가 그대로 뽑아
     가짜 aws 로 시험합니다. 블록을 고치면 그 시험을 다시 돌립니다.
+*   함수 정의 블록(`vpce_…() {`)은 절마다 그 함수를 부르는 블록보다 앞에
+    있습니다 — 문서 순서대로 붙여 넣으면 됩니다(시험이 단언). 셸을 새로
+    열었으면 「준비」 의 블록부터 다시 둡니다.
 
 ### 준비
 
@@ -155,7 +160,11 @@ nat_az="$(echo 'var.nat_az' | terraform -chdir="${network}" console | tr -d '"')
 
 판정 함수가 함께 쓰는 것입니다. `vpce_task_starts` 는 서비스의 실행 중
 태스크마다 기동 시각(epoch 초)을 한 줄씩 냅니다 — 서비스가 없으면(MISSING ·
-INACTIVE) 종료 3, 조회가 실패하면 종료 2 입니다.
+INACTIVE) 종료 3, 조회가 실패하면 종료 2 입니다. `vpce_describe_tasks` 는
+`list-tasks` 출력의 태스크를 읽어, 목록 · 결과를 읽지 못하거나 결과가 요청과
+다르면(`failures` 가 있거나 돌려준 수가 다름) 종료 2 입니다 — 빠진 태스크를
+조용히 건너뛰면 관문이 그 태스크를 보지 않고 통과합니다. `describe-tasks` 는
+한 번에 100개까지라, 그보다 많으면 거부돼 판정불가입니다(kty 회부).
 
 ```shell
 # ISO 8601(소수 초 · Z 또는 ±hh:mm) 또는 epoch 초를 epoch 초로 바꾸는 jq 정의.
@@ -180,6 +189,23 @@ vpce_endpoints() {  # 인터페이스 엔드포인트 → ${evidence}/10-endpoin
     --output json > "${evidence}/10-endpoints.json"
 }
 
+vpce_describe_tasks() {  # vpce_describe_tasks <list-tasks 출력> <결과 파일>
+  local n
+  if ! n="$(jq -er '.taskArns | length' "$1")"; then
+    return 2
+  fi
+  if [ "${n}" -eq 0 ]; then
+    echo '{"tasks": [], "failures": []}' > "$2"
+    return 0
+  fi
+  aws ecs describe-tasks --region "${region}" --output json --cli-input-json \
+    "$(jq -c --arg c "${cluster}" '{cluster: $c, tasks: .taskArns}' "$1")" \
+    > "$2" || return 2
+  jq -e --argjson n "${n}" \
+    '((.failures // []) | length) == 0 and (.tasks | length) == $n' "$2" > /dev/null \
+    || return 2
+}
+
 vpce_task_starts() {  # vpce_task_starts <서비스 짧은 이름(clip 등)>
   local name="${cluster}-$1" dir="${work}/tasks-$1"
   mkdir -p "${dir}" || return 2
@@ -193,10 +219,7 @@ vpce_task_starts() {  # vpce_task_starts <서비스 짧은 이름(clip 등)>
   aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
     --service-name "${name}" --desired-status RUNNING --output json \
     > "${dir}/tasks.json" || return 2
-  jq -e '.taskArns | length > 0' "${dir}/tasks.json" > /dev/null || return 0
-  aws ecs describe-tasks --region "${region}" --output json --cli-input-json \
-    "$(jq -c --arg c "${cluster}" '{cluster: $c, tasks: .taskArns}' "${dir}/tasks.json")" \
-    > "${dir}/described.json" || return 2
+  vpce_describe_tasks "${dir}/tasks.json" "${dir}/described.json" || return 2
   jq -r "${vpce_jq_epoch}"' .tasks[] | select(.startedAt != null) | .startedAt | epoch' \
     "${dir}/described.json" || return 2
 }
@@ -245,9 +268,15 @@ kty 가 수용) → `terraform -chdir="${network}" apply "${work}/network.tfplan
 ### 확인 (ㄱ) 상태
 
 ```shell
+vpce_endpoint_states() {  # 엔드포인트마다 「<서비스> <상태> dns=… eni=…」
+  jq -r '.VpcEndpoints[] | "\(.ServiceName | split(".")[3:] | join(".")) \(.State) dns=\(.PrivateDnsEnabled) eni=\(.NetworkInterfaceIds | length)"' \
+    "${evidence}/10-endpoints.json" | sort
+}
+```
+
+```shell
 vpce_endpoints
-jq -r '.VpcEndpoints[] | "\(.ServiceName | split(".")[3:] | join(".")) \(.State) dns=\(.PrivateDnsEnabled) eni=\(.NetworkInterfaceIds | length)"' \
-  "${evidence}/10-endpoints.json" | sort
+vpce_endpoint_states
 ```
 
 기대는 다섯 줄 `ecr.api available dns=true eni=1` 꼴(서비스 다섯)입니다.
@@ -261,26 +290,6 @@ Media 상자에서 다섯 이름을 풀어, 모두 엔드포인트 ENI 주소로
 [Media 교체 런북](/infra/terraform/runbooks/media-swap.md) 「준비」 의 두 블록
 (작업 디렉터리와 상태 · SSM 명령 보내기)을 먼저 둡니다. 상자 키는 떠 있는
 상자(`a`)입니다. 이름의 캐시(TTL 60초)가 지나게 apply 뒤 1분 넘어 돌립니다.
-
-```shell
-aws ec2 describe-network-interfaces --region "${region}" \
-  --network-interface-ids $(jq -r '.VpcEndpoints[].NetworkInterfaceIds[]' "${evidence}/10-endpoints.json") \
-  --query 'NetworkInterfaces[].PrivateIpAddress' --output text \
-  | tr '\t' '\n' > "${evidence}/12-eni-ips.txt"
-wc -l < "${evidence}/12-eni-ips.txt"   # 5
-cat > "${work}/vpce-resolve.sh" <<'SH'
-for name in "api.ecr.$1.amazonaws.com" "$2.dkr.ecr.$1.amazonaws.com" \
-  "logs.$1.amazonaws.com" "secretsmanager.$1.amazonaws.com" \
-  "sqs.$1.amazonaws.com"; do
-  getent ahostsv4 "${name}" | awk -v n="${name}" '{ print n, $1 }' | sort -u
-done
-SH
-account="$(aws sts get-caller-identity --query Account --output text)"
-media_ssm a "${work}/vpce-resolve.sh" "${region}" "${account}" \
-  > "${evidence}/20-resolve-on.txt"
-unset account
-vpce_resolve_verdict on "${evidence}/20-resolve-on.txt" "${evidence}/12-eni-ips.txt"
-```
 
 판정 함수입니다. 켬(`on`)은 다섯 이름이 모두 풀리고 모든 주소가 ENI 주소일
 때, 끔(`off`)은 다섯 이름이 모두 풀리고 어느 주소도 ENI 주소가 아닐 때
@@ -310,6 +319,26 @@ vpce_resolve_verdict() {  # vpce_resolve_verdict on|off <상자 출력> <ENI 주
       exit failed
     }' "$3" "$2"
 }
+```
+
+```shell
+aws ec2 describe-network-interfaces --region "${region}" \
+  --network-interface-ids $(jq -r '.VpcEndpoints[].NetworkInterfaceIds[]' "${evidence}/10-endpoints.json") \
+  --query 'NetworkInterfaces[].PrivateIpAddress' --output text \
+  | tr '\t' '\n' > "${evidence}/12-eni-ips.txt"
+wc -l < "${evidence}/12-eni-ips.txt"   # 5
+cat > "${work}/vpce-resolve.sh" <<'SH'
+for name in "api.ecr.$1.amazonaws.com" "$2.dkr.ecr.$1.amazonaws.com" \
+  "logs.$1.amazonaws.com" "secretsmanager.$1.amazonaws.com" \
+  "sqs.$1.amazonaws.com"; do
+  getent ahostsv4 "${name}" | awk -v n="${name}" '{ print n, $1 }' | sort -u
+done
+SH
+account="$(aws sts get-caller-identity --query Account --output text)"
+media_ssm a "${work}/vpce-resolve.sh" "${region}" "${account}" \
+  > "${evidence}/20-resolve-on.txt"
+unset account
+vpce_resolve_verdict on "${evidence}/20-resolve-on.txt" "${evidence}/12-eni-ips.txt"
 ```
 
 ### 확인 (ㄷ) clip 강제 재기동
@@ -550,13 +579,11 @@ aws ecs describe-services --region "${region}" --cluster "${cluster}" \
 vpce_new_tasks() {  # 이 배포의 새 태스크마다 "<태스크 id> <startedAt epoch> <IP>"
   aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
     --started-by "${deployment}" --output json > "${work}/new-tasks.json" || return 2
-  jq -e '.taskArns | length > 0' "${work}/new-tasks.json" > /dev/null || return 0
-  aws ecs describe-tasks --region "${region}" --output json --cli-input-json \
-    "$(jq -c --arg c "${cluster}" '{cluster: $c, tasks: .taskArns}' "${work}/new-tasks.json")" \
-    > "${evidence}/42-new-tasks.json" || return 2
+  vpce_describe_tasks "${work}/new-tasks.json" "${evidence}/42-new-tasks.json" || return 2
   jq -r "${vpce_jq_epoch}"' .tasks[] | select(.startedAt != null)
     | "\(.taskArn | split("/") | last) \(.startedAt | epoch) \(.attachments[].details[]
-      | select(.name == "privateIPv4Address") | .value)"' "${evidence}/42-new-tasks.json"
+      | select(.name == "privateIPv4Address") | .value)"' "${evidence}/42-new-tasks.json" \
+    || return 2
 }
 
 # 표본을 30초마다 받고, 끝 시각 이상에서 찍힌 표본 하나를 받은 뒤 멈춘다 — 판정이
@@ -584,21 +611,6 @@ vpce_sqs_failures() {  # vpce_sqs_failures <태스크 id> <startedAt epoch> — 
     >> "${evidence}/50-sqs-$1.txt"
 }
 ```
-
-```shell
-vpce_new_tasks | tee "${evidence}/42-new-tasks.txt"   # 비면 15초 뒤 다시
-while read -r task started ip; do
-  vpce_sqs_sample "${task}" "${ip}" "$((started + 420))" &
-done < "${evidence}/42-new-tasks.txt"
-wait
-while read -r task started ip; do
-  vpce_sqs_failures "${task}" "${started}" && vpce_sqs_verdict "${started}" "${evidence}/50-sqs-${task}.txt"
-done < "${evidence}/42-new-tasks.txt"
-```
-
-`대기` 가 나오면 그 태스크만 `vpce_sqs_sample` 을 알려 준 시각까지 더 돌리고,
-`poll_failed` 줄을 지운 뒤(`sed -i.bak '/^poll_failed /d'`) 다시
-`vpce_sqs_failures` · `vpce_sqs_verdict` 합니다.
 
 ```shell
 vpce_sqs_verdict() {  # vpce_sqs_verdict <startedAt epoch> <관찰 파일> — 통과 0 · 실패 1 · 판정불가 2 · 대기 3
@@ -635,44 +647,80 @@ vpce_sqs_verdict() {  # vpce_sqs_verdict <startedAt epoch> <관찰 파일> — �
 }
 ```
 
+```shell
+vpce_new_tasks | tee "${evidence}/42-new-tasks.txt"   # 비면 15초 뒤 다시
+while read -r task started ip; do
+  vpce_sqs_sample "${task}" "${ip}" "$((started + 420))" &
+done < "${evidence}/42-new-tasks.txt"
+wait
+while read -r task started ip; do
+  vpce_sqs_failures "${task}" "${started}" && vpce_sqs_verdict "${started}" "${evidence}/50-sqs-${task}.txt"
+done < "${evidence}/42-new-tasks.txt"
+```
+
+`대기` 가 나오면 그 태스크만 `vpce_sqs_sample` 을 알려 준 시각까지 더 돌리고,
+`poll_failed` 줄을 지운 뒤(`sed -i.bak '/^poll_failed /d'`) 다시
+`vpce_sqs_failures` · `vpce_sqs_verdict` 합니다.
+
 SQS 판정이 실패하면, 롤링이 판정보다 먼저 옛 태스크를 내리므로 운영 clip 의
 수명 주기 수신이 끊긴 상태입니다. 바로 「되돌리기 1단계」 로 가고, DNS 를 끈 뒤
 clip 을 다시 재기동해 NAT 로 회복시킵니다.
 
-배포 · 로그 판정(1 · 2)은 다음으로 읽습니다.
+배포 · 로그 판정(1 · 2)의 함수입니다. `vpce_wait_rollout` 은 배포가
+`COMPLETED`(0) · `FAILED`(1) 가 되기를 15초마다 보되 **10분까지만** 기다립니다.
+clip 서비스는 배포 회로 차단기(circuit breaker)를 켜지 않아 새 태스크가 계속
+실패해도 `FAILED` 가 오지 않을 수 있습니다 — 10분이 지나면 판정불가(2)이고
+확인 실패와 같이 「되돌리기 1단계」 회부로 갑니다. 조회가 실패한 회차는 다음
+회차에 다시 봅니다.
 
 ```shell
-until aws ecs describe-services --region "${region}" --cluster "${cluster}" \
-    --services "${cluster}-clip" --output json > "${evidence}/41-service.json" \
-  && jq -e --arg d "${deployment}" \
-    '.services[0].deployments | any(.id == $d and (.rolloutState == "COMPLETED" or .rolloutState == "FAILED"))' \
-    "${evidence}/41-service.json" > /dev/null; do
-  sleep 15
-done
-jq -r --arg d "${deployment}" --argjson since "$(cat "${evidence}/40-restart-at.txt")" \
-  "${vpce_jq_epoch}"' .services[0]
-  | (.deployments[] | select(.id == $d) | "rollout=\(.rolloutState) running=\(.runningCount) desired=\(.desiredCount)"),
-    ([.events[] | select((.createdAt | epoch) >= $since)
-      | select(.message | test("CannotPullContainerError|ResourceInitializationError"))]
-      | "오류 이벤트 \(length)")' "${evidence}/41-service.json"
-vpce_stopped_tasks
-while read -r task started ip; do
-  aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
-    --log-stream-name-prefix "clip/clip/${task}" --output json \
-    | jq -r --argjson since "$(cat "${evidence}/40-restart-at.txt")" --arg t "${task}" \
-      '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $since) <= 180 and (.firstEventTimestamp // 0) > 0)"'
-done < "${evidence}/42-new-tasks.txt"
-```
+vpce_wait_rollout() {  # 배포 끝 대기 — COMPLETED 0 · FAILED 1 · 10분 넘음 2
+  local deadline state=''
+  deadline="$(($(date -u +%s) + 600))"
+  while :; do
+    if aws ecs describe-services --region "${region}" --cluster "${cluster}" \
+        --services "${cluster}-clip" --output json > "${evidence}/41-service.json"; then
+      state="$(jq -r --arg d "${deployment}" '.services[0].deployments[]?
+        | select(.id == $d) | .rolloutState' "${evidence}/41-service.json")"
+      case "${state}" in
+        COMPLETED) echo '배포: COMPLETED'; return 0 ;;
+        FAILED) echo '배포: FAILED'; return 1 ;;
+      esac
+    fi
+    if [ "$(date -u +%s)" -ge "${deadline}" ]; then
+      echo "배포: 판정불가 — 10분 안에 끝나지 않음(마지막 ${state:-조회 실패}) · 되돌리기 회부"
+      return 2
+    fi
+    sleep 15
+  done
+}
 
-기대는 `rollout=COMPLETED running=1 desired=1` · `오류 이벤트 0` · `멈춘 새
-태스크: 0건` · 새 태스크마다 `생성 뒤=true 첫 이벤트 3분 안=true` 입니다.
+vpce_rollout_summary() {  # 41-service.json 의 이 배포 · 재기동 뒤 ECR · Secrets 오류 이벤트
+  jq -r --arg d "${deployment}" --argjson since "$(cat "${evidence}/40-restart-at.txt")" \
+    "${vpce_jq_epoch}"' .services[0]
+    | (.deployments[] | select(.id == $d) | "rollout=\(.rolloutState) running=\(.runningCount) desired=\(.desiredCount)"),
+      ([.events[] | select((.createdAt | epoch) >= $since)
+        | select(.message | test("CannotPullContainerError|ResourceInitializationError"))]
+        | "오류 이벤트 \(length)")' "${evidence}/41-service.json"
+}
+
+vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 생겼고 첫 이벤트가 3분 안인가
+  local task started ip
+  while read -r task started ip; do
+    aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
+      --log-stream-name-prefix "clip/clip/${task}" --output json < /dev/null \
+      | jq -r --argjson since "$(cat "${evidence}/40-restart-at.txt")" --arg t "${task}" \
+        '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $since) <= 180 and (.firstEventTimestamp // 0) > 0)"'
+  done < "${evidence}/42-new-tasks.txt"
+}
+```
 
 멈춘 새 태스크는 ECR · Secrets 실패의 직접 증거(`stoppedReason`)입니다.
 `list-tasks` 의 `--started-by` 는 다른 필터와 함께 쓸 수 없으므로(`aws ecs
 list-tasks help` — 「it must be the only filter that you use」) clip 서비스의
 `STOPPED` 태스크를 받은 뒤 `describe-tasks` 의 `startedBy` 로 이 배포의 것만
-거릅니다. 사유는 `43-stopped.txt` 에 남습니다. 함수는 위 블록보다 먼저
-둡니다.
+거릅니다. 사유는 `43-stopped.txt` 에 남습니다. 멈춘 태스크가 100개를 넘으면
+`describe-tasks` 가 거부해 판정불가입니다(kty 회부).
 
 ```shell
 vpce_stopped_tasks() {  # 이 배포의 멈춘 태스크 — 0건 0 · 있음 1 · 판정불가 2
@@ -683,27 +731,33 @@ vpce_stopped_tasks() {  # 이 배포의 멈춘 태스크 — 0건 0 · 있음 1 
     return 2
   fi
   : > "${out}"
-  if jq -e '.taskArns | length > 0' "${list}" > /dev/null; then
-    if ! aws ecs describe-tasks --region "${region}" --output json --cli-input-json \
-        "$(jq -c --arg c "${cluster}" '{cluster: $c, tasks: .taskArns}' "${list}")" \
-        > "${work}/stopped-described.json"; then
-      echo '멈춘 새 태스크: 판정불가 — describe-tasks 실패'
-      return 2
-    fi
-    if ! jq -er --arg d "${deployment}" '(.tasks | type == "array") and (.tasks | length) > 0
-        and ((.failures // []) | length == 0)' "${work}/stopped-described.json" > /dev/null \
-      || ! jq -r --arg d "${deployment}" '.tasks[] | select(.startedBy == $d)
-        | "\(.taskArn | split("/") | last) \(.stoppedReason // "사유 없음")"' \
-        "${work}/stopped-described.json" > "${out}"; then
-      echo '멈춘 새 태스크: 판정불가 — describe-tasks 결과를 읽지 못함'
-      return 2
-    fi
+  if ! vpce_describe_tasks "${list}" "${work}/stopped-described.json"; then
+    echo '멈춘 새 태스크: 판정불가 — 목록 · describe-tasks 를 읽지 못했거나 결과가 목록과 다름'
+    return 2
+  fi
+  if ! jq -r --arg d "${deployment}" '.tasks[] | select(.startedBy == $d)
+      | "\(.taskArn | split("/") | last) \(.stoppedReason // "사유 없음")"' \
+      "${work}/stopped-described.json" > "${out}"; then
+    echo '멈춘 새 태스크: 판정불가 — describe-tasks 결과를 읽지 못함'
+    return 2
   fi
   count="$(wc -l < "${out}" | tr -d ' ')"
   echo "멈춘 새 태스크: ${count}건"
   [ "${count}" -eq 0 ]
 }
 ```
+
+판정을 읽습니다.
+
+```shell
+vpce_wait_rollout
+vpce_rollout_summary
+vpce_stopped_tasks
+vpce_log_streams
+```
+
+기대는 `배포: COMPLETED` · `rollout=COMPLETED running=1 desired=1` · `오류 이벤트
+0` · `멈춘 새 태스크: 0건` · 새 태스크마다 `생성 뒤=true 첫 이벤트 3분 안=true` 입니다.
 
 ### 확인 (ㄹ) 회귀 감시
 
@@ -726,13 +780,26 @@ done   # 다섯 줄 모두 0
 ```
 
 Media 상자는 아래 스크립트를 `media_ssm` 으로 보냅니다(SSM 이라 실행 직전 kty
-승인). 출력의 숫자가 0 이어야 합니다.
+승인). 출력의 숫자가 0 이어야 합니다. journalctl 이 실패하면 숫자가 아닌 줄
+(`journalctl 실패 — 판정불가`)과 종료 2 가 나옵니다 — 0건과 섞이지 않게
+`grep -c` 의 「0건이면 종료 1」 은 삼키고 journalctl 의 종료 코드는 따로
+봅니다.
 
 ```shell
-cat > "${work}/vpce-sidecar-errors.sh" <<'SH'
-journalctl -q -t pokeclip-media-sidecar --since '-15 min' -o cat --no-pager \
-  | grep -cE 'no such host|i/o timeout|dial tcp|AccessDenied'
+vpce_sidecar_script() {  # 상자에 보낼 사이드카 오류 세기 스크립트(sh)를 낸다
+  cat <<'SH'
+pattern='no such host|i/o timeout|dial tcp|AccessDenied'
+if ! log="$(journalctl -q -t pokeclip-media-sidecar --since '-15 min' -o cat --no-pager)"; then
+  echo 'journalctl 실패 — 판정불가'
+  exit 2
+fi
+printf '%s\n' "${log}" | grep -cE "${pattern}" || :
 SH
+}
+```
+
+```shell
+vpce_sidecar_script > "${work}/vpce-sidecar-errors.sh"
 media_ssm a "${work}/vpce-sidecar-errors.sh"
 ```
 
@@ -751,118 +818,27 @@ media_ssm a "${work}/vpce-sidecar-errors.sh"
 「인터페이스 엔드포인트」 가 이리로 옵니다. 되돌리기 apply 는 network 쓰기라
 kty 승인입니다.
 
-### 되돌리기 1단계 — private DNS 끄기
+### 되돌리기 판정 함수
 
-1.  render 가 엔드포인트 이그레스로 떠 있으면 먼저 긴급 정지하고(workers
-    README 「긴급 정지와 상태 어긋남」), 기록한 태스크가 모두 `STOPPED` 인지
-    봅니다(runtime-1a 의 `wait_stopped` 와 같은 확인). render 이그레스엔 NAT
-    길이 없어 DNS 를 끄면 AWS 에 닿지 못합니다. PR 488 전이면 render 가 없어
-    건너뜁니다. 2단계 1 뒤에 부를 때도 render 가 이미 NAT 이그레스라
-    건너뜁니다.
-1.  **교정(2단계 삭제 관문 (나) 의 앞몫 — 트래픽이 있는 지금 합니다).**
-    `vpce_endpoints` 를 돌린 뒤 지난 60분으로 교정합니다. 교정이 판정불가여도
-    1단계는 멈추지 않습니다 — 2단계에서 DNS 를 끈 시각 직전 60분으로 다시
-    교정할 수 있습니다(1분 해상도 점은 15일 보존).
+되돌리기는 확인과 다른 날 · 다른 셸에서 할 수 있습니다. 그때는 「준비」 의
+블록과 이 절의 함수 블록을 **먼저** 읽습니다. 「준비」 는 증거 디렉터리를 새로
+만들므로, 앞선 기록(`70-calibration.jsonl` · `80-dns-off-at.txt`)을 이어
+쓰려면 그다음에 `evidence` 를 그 디렉터리로 다시 둡니다.
 
-    ```shell
-    vpce_endpoints
-    vpce_metric_calibrate "$(jq -rn 'now - 3600 | todate')" "$(jq -rn 'now | todate')"
-    ```
+`vpce_plan_changes` 는 plan 의 `show -json` 을 받아 바뀌는 자원마다 「<동작>
+<주소> <바뀌는 속성>」 을 냅니다. 새로 만드는 자원은 `before` 가 null 이라 빈
+객체로 읽습니다.
 
-1.  `terraform.tfvars` 에 `interface_endpoint_private_dns = false` 한 줄을 넣고
-    plan 합니다. 요지는 엔드포인트 다섯의 `update` 이고, 바뀌는 속성은
-    `private_dns_enabled` 하나여야 합니다. 다르면 사전 승인이 무효이고 kty
-    에게 넘깁니다.
-
-    ```shell
-    terraform -chdir="${network}" plan -input=false -out="${work}/dns-off.tfplan" \
-      > "${evidence}/80-plan.txt"
-    terraform -chdir="${network}" show -json "${work}/dns-off.tfplan" \
-      | jq -r '.resource_changes[] | select(.change.actions != ["no-op"])
-          | . as $c
-          | [($c.change.after_unknown // {} | to_entries[] | select(.value == true) | .key),
-            ($c.change.before | keys[] | select($c.change.before[.] != $c.change.after[.]))]
-          | unique | "\($c.change.actions | join(",")) \($c.address) \(join(","))"' \
-      | sort | tee "${evidence}/80-plan-summary.txt"
-    ```
-
-    기대는 다섯 줄 `update module.network.aws_vpc_endpoint.interface["<서비스>"]
-    private_dns_enabled` 입니다.
-1.  kty 가 apply 합니다. 끝난 시각을 남깁니다 — 2단계의 교정 · 판정 창이 이
-    시각을 씁니다.
-
-    ```shell
-    date -u +%Y-%m-%dT%H:%M:%SZ > "${evidence}/80-dns-off-at.txt"
-    ```
-
-1.  **복구 완료 조건 — 셋 다 만족해야 복구입니다.**
-    *   (가) Media 상자에서 다섯 이름이 ENI 밖(공용) 주소로 풀립니다 — 확인
-        (ㄴ) 의 블록을 `20-resolve-off.txt` 로 받아 `vpce_resolve_verdict off`.
-    *   (나) clip 강제 재기동이 NAT 경로로 성공합니다 — 확인 (ㄷ) 와 같은 재기동
-        전 비밀 관문 · 같은 판정.
-    *   (다) 그 뒤 15분 동안 확인 (ㄹ) 의 오류 줄이 0 으로 떨어집니다. 캐시된 ENI
-        주소나 기존 연결로 가는 호출은 엔드포인트 SG 가 원인인 장애라면 계속
-        실패할 수 있습니다. 캐시 · 연결이 만료돼 다시 풀 때 공용으로 넘어가므로,
-        15분 안에 0 이 되는지가 복구 판정입니다. 0 이 되지 않으면 kty 에게
-        회부합니다(그 서비스 강제 재기동 등).
-
-### 다시 켜기
-
-1단계 뒤 원인을 고쳐 다시 켤 때입니다. 켜는 것은 처음 apply 와 같은 VPC 전역
-전환이라 확인도 처음과 같습니다.
-
-1.  원인을 고친 PR 이 있으면 머지합니다(엔드포인트 SG · 모듈 등).
-1.  `terraform.tfvars` 의 `interface_endpoint_private_dns = false` 줄을 지우고
-    plan 합니다. 요지는 1단계 3 과 같은 jq 로 다섯 줄 `update …
-    private_dns_enabled` 이어야 합니다.
-1.  kty 승인으로 apply 하고 「확인 (ㄱ)」 부터 「확인의 판정과 기록」 까지를
-    그대로 다시 돕니다. 실패하면 다시 1단계입니다(사전 승인은 새로 받습니다 —
-    처음 것은 한 번 쓰면 끝).
-1.  workers 를 `render_egress_via_endpoints = false` 로 둔 채였으면, 확인을 지난
-    뒤 workers 를 기본값(true)으로 되돌리는 apply 는 workers README 의 절차를
-    따릅니다.
-
-### 되돌리기 2단계 — 엔드포인트 철거
-
-엔드포인트를 지우는 길입니다. 순서를 지키고 단계마다 관문을 지납니다.
-
-1.  render 가 엔드포인트 SG 를 쓰지 않게 합니다 — workers 를
-    `render_egress_via_endpoints = false` 로 apply(render 이그레스가 NAT 로
-    돌아가 엔드포인트 SG 참조가 사라짐)하거나 workers 를 철거합니다. 이 걸음은
-    DNS 가 꺼진 동안에도 workers 계약 검사에 막히지 않습니다. workers apply 는
-    원하는 수 1 을 되살려 긴급 정지한 render 가 NAT 이그레스로 다시 뜹니다 —
-    다시 띄우기는 매번 kty 승인이며 이 걸음의 승인이 그것을 겸한다는 것을 승인
-    요청에 적습니다. 다시 띄우지 않으려면 apply 직후 긴급 정지를 함께
-    승인받습니다.
-1.  **교정이 없으면 DNS 를 끄기 전에 합니다.** 1단계 2 의 교정 기록
-    (`70-calibration.jsonl`)이 없으면 지금 트래픽이 있을 때 교정합니다. DNS 가
-    이미 꺼져 있으면 끈 시각 직전 60분으로 교정합니다(끈 지 15일 안).
-
-    ```shell
-    off_at="$(cat "${evidence}/80-dns-off-at.txt")"
-    vpce_metric_calibrate "$(jq -rn --arg t "${off_at}" '$t | fromdateiso8601 - 3600 | todate')" \
-      "${off_at}"
-    ```
-
-1.  1단계가 아직이면 1단계(DNS 끄기)와 그 복구 완료 조건을 먼저 지납니다. DNS
-    를 켠 채 엔드포인트를 지우면 캐시 · 연결이 지워진 ENI 로 가는 실패 창이
-    platform · media 전체에 생깁니다.
-1.  **삭제 관문 — 둘 다 통과해야 지웁니다. 판정불가는 통과가 아닙니다.**
-    *   (가) 참조 0 — 아래 `vpce_ref_gate`.
-    *   (나) 트래픽 0 — DNS 를 끈 뒤 60분이 지난 다음, 지난 60분을 교정과 같은
-        차원 집합 · 같은 명령으로 `vpce_metric_judge` 합니다.
-    *   (다) 풀리지 않을 때의 출구 — (나) 에 트래픽이 남으면 DNS 를 끈 뒤에도
-        남은 ENI 로 성공하는 기존 연결(SDK 연결 풀 · 긴 폴링)이 있다는
-        뜻입니다. VPC 호출자(platform 다섯 · Media 사이드카 · sql_runner)를
-        재기동해 연결을 다시 맺게 한 뒤(각각 kty 승인 · 재기동 전 비밀 관문
-        같음) 60분을 다시 잽니다.
-    *   판정불가가 이어지거나(트래픽이 없던 엔드포인트는 양성 대조가 없어
-        교정이 안 됩니다) (다) 를 kty 가 원하지 않으면, kty 에게 회부하고
-        **ENI 를 보존합니다** — 엔드포인트를 지우지 않고 DNS 끈 상태로 둡니다
-        (비용은 남지만 장애는 없습니다).
-1.  두 관문을 지난 뒤에만 `main.tf` 의 `interface_endpoint_services` 를 `[]`
-    로 바꾼 PR(또는 PR-N 의 revert)을 머지하고 network apply 합니다(kty 승인 ·
-    plan 요지 = 「적용 1」 의 일곱 줄이 모두 `delete`).
+```shell
+vpce_plan_changes() {  # terraform show -json <plan> | vpce_plan_changes
+  jq -r '.resource_changes[] | select(.change.actions != ["no-op"])
+      | . as $c | ($c.change.before // {}) as $b | ($c.change.after // {}) as $a
+      | [($c.change.after_unknown // {} | to_entries[] | select(.value == true) | .key),
+        (($b | keys) + ($a | keys) | unique[] | select($b[.] != $a[.]))]
+      | unique | "\($c.change.actions | join(",")) \($c.address) \(join(","))"' \
+    | sort
+}
+```
 
 ```shell
 vpce_ref_gate() {  # vpce_ref_gate <엔드포인트 SG id> — 통과 0 · 멈춤 1 · 판정불가 2
@@ -898,8 +874,8 @@ vpce_ref_gate() {  # vpce_ref_gate <엔드포인트 SG id> — 통과 0 · 멈�
 }
 ```
 
-엔드포인트 SG id 는 `terraform -chdir="${network}" output -raw
-interface_endpoint_sg_id` 입니다. 지표 관문은 `BytesProcessed` 가 `Endpoint
+`vpce_ref_gate` 의 엔드포인트 SG id 는 `terraform -chdir="${network}" output
+-raw interface_endpoint_sg_id` 입니다. 지표 관문은 `BytesProcessed` 가 `Endpoint
 Type` · `Service Name` · `VPC Endpoint Id` · `VPC Id` 차원 조합으로 게시되고,
 CloudWatch 가 게시되지 않은 조합을 물으면 오류 대신 빈 결과를 준다는 점을
 막습니다. 그래서 `list-metrics` 로 실제 차원 집합을 받아 그 집합으로 양성
@@ -978,6 +954,114 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
   echo '트래픽 관문: 통과 — 다섯 모두 합 0 또는 데이터 점 없음'
 }
 ```
+
+### 되돌리기 1단계 — private DNS 끄기
+
+1.  render 가 엔드포인트 이그레스로 떠 있으면 먼저 긴급 정지하고(workers
+    README 「긴급 정지와 상태 어긋남」), 기록한 태스크가 모두 `STOPPED` 인지
+    봅니다(runtime-1a 의 `wait_stopped` 와 같은 확인). render 이그레스엔 NAT
+    길이 없어 DNS 를 끄면 AWS 에 닿지 못합니다. PR 488 전이면 render 가 없어
+    건너뜁니다. 2단계 1 뒤에 부를 때도 render 가 이미 NAT 이그레스라
+    건너뜁니다.
+1.  **교정(2단계 삭제 관문 (나) 의 앞몫 — 트래픽이 있는 지금 합니다).**
+    `vpce_endpoints` 를 돌린 뒤 지난 60분으로 교정합니다. 교정이 판정불가여도
+    1단계는 멈추지 않습니다 — 2단계에서 DNS 를 끈 시각 직전 60분으로 다시
+    교정할 수 있습니다(1분 해상도 점은 15일 보존).
+
+    ```shell
+    vpce_endpoints
+    vpce_metric_calibrate "$(jq -rn 'now - 3600 | todate')" "$(jq -rn 'now | todate')"
+    ```
+
+1.  `terraform.tfvars` 에 `interface_endpoint_private_dns = false` 한 줄을 넣고
+    plan 합니다. 요지는 엔드포인트 다섯의 `update` 이고, 바뀌는 속성은
+    `private_dns_enabled` 하나여야 합니다. 다르면 사전 승인이 무효이고 kty
+    에게 넘깁니다.
+
+    ```shell
+    terraform -chdir="${network}" plan -input=false -out="${work}/dns-off.tfplan" \
+      > "${evidence}/80-plan.txt"
+    terraform -chdir="${network}" show -json "${work}/dns-off.tfplan" \
+      | vpce_plan_changes | tee "${evidence}/80-plan-summary.txt"
+    ```
+
+    기대는 다섯 줄 `update module.network.aws_vpc_endpoint.interface["<서비스>"]
+    private_dns_enabled` 입니다.
+1.  kty 가 apply 합니다. 끝난 시각을 남깁니다 — 2단계의 교정 · 판정 창이 이
+    시각을 씁니다.
+
+    ```shell
+    date -u +%Y-%m-%dT%H:%M:%SZ > "${evidence}/80-dns-off-at.txt"
+    ```
+
+1.  **복구 완료 조건 — 셋 다 만족해야 복구입니다.**
+    *   (가) Media 상자에서 다섯 이름이 ENI 밖(공용) 주소로 풀립니다 — 확인
+        (ㄴ) 의 블록을 `20-resolve-off.txt` 로 받아 `vpce_resolve_verdict off`.
+    *   (나) clip 강제 재기동이 NAT 경로로 성공합니다 — 확인 (ㄷ) 와 같은 재기동
+        전 비밀 관문 · 같은 판정.
+    *   (다) 그 뒤 15분 동안 확인 (ㄹ) 의 오류 줄이 0 으로 떨어집니다. 캐시된 ENI
+        주소나 기존 연결로 가는 호출은 엔드포인트 SG 가 원인인 장애라면 계속
+        실패할 수 있습니다. 캐시 · 연결이 만료돼 다시 풀 때 공용으로 넘어가므로,
+        15분 안에 0 이 되는지가 복구 판정입니다. 0 이 되지 않으면 kty 에게
+        회부합니다(그 서비스 강제 재기동 등).
+
+### 다시 켜기
+
+1단계 뒤 원인을 고쳐 다시 켤 때입니다. 켜는 것은 처음 apply 와 같은 VPC 전역
+전환이라 확인도 처음과 같습니다.
+
+1.  원인을 고친 PR 이 있으면 머지합니다(엔드포인트 SG · 모듈 등).
+1.  `terraform.tfvars` 의 `interface_endpoint_private_dns = false` 줄을 지우고
+    plan 합니다. 요지는 1단계 3 과 같은 `vpce_plan_changes` 로 다섯 줄 `update …
+    private_dns_enabled` 이어야 합니다.
+1.  kty 승인으로 apply 하고 「확인 (ㄱ)」 부터 「확인의 판정과 기록」 까지를
+    그대로 다시 돕니다. 실패하면 다시 1단계입니다(사전 승인은 새로 받습니다 —
+    처음 것은 한 번 쓰면 끝).
+1.  workers 를 `render_egress_via_endpoints = false` 로 둔 채였으면, 확인을 지난
+    뒤 workers 를 기본값(true)으로 되돌리는 apply 는 workers README 의 절차를
+    따릅니다.
+
+### 되돌리기 2단계 — 엔드포인트 철거
+
+엔드포인트를 지우는 길입니다. 순서를 지키고 단계마다 관문을 지납니다.
+
+1.  render 가 엔드포인트 SG 를 쓰지 않게 합니다 — workers 를
+    `render_egress_via_endpoints = false` 로 apply(render 이그레스가 NAT 로
+    돌아가 엔드포인트 SG 참조가 사라짐)하거나 workers 를 철거합니다. 이 걸음은
+    DNS 가 꺼진 동안에도 workers 계약 검사에 막히지 않습니다. workers apply 는
+    원하는 수 1 을 되살려 긴급 정지한 render 가 NAT 이그레스로 다시 뜹니다 —
+    다시 띄우기는 매번 kty 승인이며 이 걸음의 승인이 그것을 겸한다는 것을 승인
+    요청에 적습니다. 다시 띄우지 않으려면 apply 직후 긴급 정지를 함께
+    승인받습니다.
+1.  **교정이 없으면 DNS 를 끄기 전에 합니다.** 1단계 2 의 교정 기록
+    (`70-calibration.jsonl`)이 없으면 지금 트래픽이 있을 때 교정합니다. DNS 가
+    이미 꺼져 있으면 끈 시각 직전 60분으로 교정합니다(끈 지 15일 안).
+
+    ```shell
+    off_at="$(cat "${evidence}/80-dns-off-at.txt")"
+    vpce_metric_calibrate "$(jq -rn --arg t "${off_at}" '$t | fromdateiso8601 - 3600 | todate')" \
+      "${off_at}"
+    ```
+
+1.  1단계가 아직이면 1단계(DNS 끄기)와 그 복구 완료 조건을 먼저 지납니다. DNS
+    를 켠 채 엔드포인트를 지우면 캐시 · 연결이 지워진 ENI 로 가는 실패 창이
+    platform · media 전체에 생깁니다.
+1.  **삭제 관문 — 둘 다 통과해야 지웁니다. 판정불가는 통과가 아닙니다.**
+    *   (가) 참조 0 — `vpce_ref_gate`(「되돌리기 판정 함수」).
+    *   (나) 트래픽 0 — DNS 를 끈 뒤 60분이 지난 다음, 지난 60분을 교정과 같은
+        차원 집합 · 같은 명령으로 `vpce_metric_judge` 합니다.
+    *   (다) 풀리지 않을 때의 출구 — (나) 에 트래픽이 남으면 DNS 를 끈 뒤에도
+        남은 ENI 로 성공하는 기존 연결(SDK 연결 풀 · 긴 폴링)이 있다는
+        뜻입니다. VPC 호출자(platform 다섯 · Media 사이드카 · sql_runner)를
+        재기동해 연결을 다시 맺게 한 뒤(각각 kty 승인 · 재기동 전 비밀 관문
+        같음) 60분을 다시 잽니다.
+    *   판정불가가 이어지거나(트래픽이 없던 엔드포인트는 양성 대조가 없어
+        교정이 안 됩니다) (다) 를 kty 가 원하지 않으면, kty 에게 회부하고
+        **ENI 를 보존합니다** — 엔드포인트를 지우지 않고 DNS 끈 상태로 둡니다
+        (비용은 남지만 장애는 없습니다).
+1.  두 관문을 지난 뒤에만 `main.tf` 의 `interface_endpoint_services` 를 `[]`
+    로 바꾼 PR(또는 PR-N 의 revert)을 머지하고 network apply 합니다(kty 승인 ·
+    plan 요지 = 「적용 1」 의 일곱 줄이 모두 `delete`).
 
 판정 창은 DNS 를 끈 지 60분이 지난 뒤의 지난 60분입니다.
 
