@@ -2,9 +2,10 @@ package publish
 
 // VOD 동결 — M6 설계 2.1 FreezeVOD · 3.1 phase 3 · 비귀속 행(POK-196 M6-2 커밋 ③).
 //
-// 닫힌 사슬 하나에 VOD 문서 하나다(K1 — 키는 머리 세션). 새 URL 의 새 문서라 기존 목록의 변경이 아니고, 한 번만 쓴다
-// (IfAbsent · RFC 8216 4.3.3.5 VOD 불변). 412 면 Head 의 pc-body-sha256 이 다시 렌더한 본문과 같을 때만 그 판을 채택한다
-// (D7 — 쓰고 확정 전에 멈춘 시도의 판). 다시 렌더가 같은 본문을 내도록, 렌더 전에 GAP 으로 실을 행을 원장에 먼저 적는다
+// 회차 하나에 VOD 문서 하나다(POK-549 가 M6 K1 「사슬 하나에 문서 하나」를 회차로 넓혔다 — vod_round.go). 사슬이 하나면
+// 그 사슬 범위 · 머리 세션 키이고, 사슬이 여럿이면 마지막 사슬의 동결이 회차 범위 · 회차 키로 쓴다. 새 URL 의 새 문서라
+// 기존 목록의 변경이 아니고, 한 번만 쓴다(IfAbsent · RFC 8216 4.3.3.5 VOD 불변). 412 면 Head 의 pc-body-sha256 이 다시
+// 렌더한 본문과 같을 때만 그 판을 채택한다(D7 — 쓰고 확정 전에 멈춘 시도의 판). 다시 렌더가 같은 본문을 내도록, 렌더 전에 GAP 으로 실을 행을 원장에 먼저 적는다
 // (포기 등재는 추가만 — D17 4.5.4 재현 가능성). 그 뒤 ③ 이 늦게 닿아도 원장 우선이라 같은 GAP 줄이다. 그래서 정산 창
 // 안에서는 ③ 미착지 행을 GAP 원장 유무와 무관하게 기다린다 — 창 안에 닿을 조각을 VOD 에 영구 GAP 으로 굳히지 않는다.
 //
@@ -110,19 +111,58 @@ const vodStateSQL = `SELECT vod_state FROM stream_sessions WHERE session_id = $1
 // 새 URL 의 새 문서라 기존 목록의 변경이 아니다. 412 면 Head 의 pc-body-sha256 이
 // 재렌더 값과 같을 때만 채택한다.
 //
-// chain 의 StreamID · Tail · SessionIDs 를 쓴다(SessionIDs 는 사슬을 닫은 집합 — 장부와 다르면 실패). abandon 은 정산 창이
-// 끝났는가다 — 참이면 미착지 행을 GAP 줄로 싣고(settle_deadline) 거짓이면 미착지 행이 있을 때 재시도다. 문서는
-// 사슬 범위(사슬 세션 행의 첫 seq 부터 끝 seq · 컷오프 아래는 뺀다) 전체 · KindVOD · Ended 다. 행이 없으면 빈 동결이다.
-// GAP 줄이 하나라도 있으면 frozen_with_gaps 다.
+// chain 의 StreamID · RoundID · Tail · SessionIDs 를 쓴다(SessionIDs 는 사슬을 닫은 집합 — 장부와 다르면 실패). abandon 은
+// 정산 창이 끝났는가다 — 참이면 미착지 행을 GAP 줄로 싣고(settle_deadline) 거짓이면 미착지 행이 있을 때 재시도다.
+//
+// 범위는 판정(decideScope)이 정한다 — 사슬 범위(사슬 세션 행의 첫 seq 부터 끝 seq · 지금 키) 또는 회차 범위(회차 세션 행의
+// 첫 seq 부터 끝 seq · 회차 키 · 앞 사슬 행은 정산을 끝낸 것으로 본다). 둘 다 컷오프 아래는 빼고 KindVOD · Ended 다. 회차
+// 대기면 Retry + 대기 사유(round_open · front_pending)다. 회차 경로가 결정적으로 실패하면 같은 호출에서 사슬 범위로
+// 물러서고, 이때 Result · Retry · Reason · Err 는 그 사슬 호출의 것이며 회차 쪽 원인은 FallbackCause · FallbackErr 에
+// 싣는다. 행이 없으면 빈 동결이다. GAP 줄이 하나라도 있으면 frozen_with_gaps 다.
 func (p *Publisher) FreezeVOD(ctx context.Context, chain index.Chain, abandon bool) FreezeOutcome {
 	if len(chain.SessionIDs) == 0 {
-		return vodFailed(vodChainChanged, errors.New("publish: 사슬 세션 목록이 비었다"))
+		return vodFailed(vodChainChanged, errEmptyChain)
 	}
-	key, err := vodKey(chain.StreamID, chain.SessionIDs[0])
+	if chain.RoundID == "" {
+		return p.freezeChain(ctx, chain, abandon, "") // M6 전 세션 — 판정 재료를 읽지 않는다
+	}
+	g, err := index.LoadRoundGate(ctx, p.pool, chain.StreamID, chain.RoundID)
 	if err != nil {
-		return vodFailed(freezeRender, err)
+		return vodRetry(freezeLedger, err)
 	}
-	v := &vodJob{p: p, chain: chain, key: key}
+	return p.freezeScoped(ctx, chain, abandon, decideScope(chain, g))
+}
+
+// errEmptyChain 은 부른 쪽 사슬의 세션 목록이 비었다는 뜻이다.
+var errEmptyChain = errors.New("publish: 사슬 세션 목록이 비었다")
+
+// vodJob 은 VOD 동결 한 번의 문맥이다. round 가 참이면 회차 범위(회차 장부 · 회차 키)다.
+type vodJob struct {
+	p     *Publisher
+	chain index.Chain
+	key   string
+	round bool
+}
+
+// vodInput 은 VOD 렌더 입력이다 — 사슬 장부(사슬 경로)나 회차 장부(회차 경로)에서 온 같은 칸이다.
+type vodInput struct {
+	// chain 은 다시 읽은 사슬(회차 경로는 마지막 사슬)의 세션이다.
+	chain     []string
+	cutoffSeq int64
+	hasCutoff bool
+	rows      []index.RewindRow
+	sessions  []index.RewindSession
+	// front 는 회차 경로의 앞 회원(마지막 사슬 밖 회차 세션)이다 — 사슬 경로는 비어 있다.
+	front map[string]bool
+}
+
+// chainInput 은 사슬 장부 l 의 렌더 입력이다.
+func chainInput(l index.ChainLedger) vodInput {
+	return vodInput{chain: l.Chain.SessionIDs, cutoffSeq: l.CutoffSeq, hasCutoff: l.HasCutoff, rows: l.Rows, sessions: l.Sessions}
+}
+
+// freeze 는 동결 한 번이다 — 잠금 밖 첫 읽기 · 꼬리 잠금 아래 재독과 원장 적기 · 렌더와 PUT · 확정.
+func (v *vodJob) freeze(ctx context.Context, abandon bool) FreezeOutcome {
 	// 잠금 밖 첫 읽기 — 재시도 · 실패 · 빈 동결은 꼬리를 잠그지 않고 가른다(정산 창 동안 스캔이 되풀이해 부른다).
 	_, plan, out, ok := v.load(ctx, abandon)
 	if !ok {
@@ -131,21 +171,14 @@ func (p *Publisher) FreezeVOD(ctx context.Context, chain index.Chain, abandon bo
 	if len(plan.rows) == 0 {
 		return v.confirm(ctx, ResultEmpty, nil, "", nil)
 	}
-	l, plan, out, ok := v.markGaps(ctx, abandon)
+	in, plan, out, ok := v.markGaps(ctx, abandon)
 	switch {
 	case !ok:
 		return out
 	case len(plan.rows) == 0:
 		return v.confirm(ctx, ResultEmpty, nil, "", nil)
 	}
-	return v.write(ctx, l, plan)
-}
-
-// vodJob 은 VOD 동결 한 번의 문맥이다.
-type vodJob struct {
-	p     *Publisher
-	chain index.Chain
-	key   string
+	return v.write(ctx, in, plan)
 }
 
 // vodPlan 은 장부에서 고른 VOD 렌더 행과 렌더 전에 원장에 적을 GAP 이다.
@@ -153,8 +186,13 @@ type vodPlan struct {
 	rows []boundary.Row
 	// marks 는 렌더 전에 원장에 넣을 GAP 행이다(seq · 회차 · 사유).
 	marks []vodMark
-	// abandon 은 정산 창이 끝났는가다 — 참일 때만 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다.
+	// abandon 은 정산 창이 끝났는가다 — 참일 때만 [abandonFirst, abandonLast] 의 미착지 GAP 원장 행을 vod_abandoned 로
+	// 바꾼다.
 	abandon bool
+	// abandonFirst · abandonLast 는 마지막 사슬 회원 행의 첫 · 끝 seq 다(사슬 경로는 rows 의 첫 · 끝과 같다). lastChain 이
+	// 거짓이면 마지막 사슬 행이 없어 바꿀 범위도 없다(K28).
+	lastChain                 bool
+	abandonFirst, abandonLast int64
 }
 
 type vodMark struct {
@@ -163,28 +201,31 @@ type vodMark struct {
 	reason  string
 }
 
-// plan 은 장부 l 의 행을 VOD 렌더 행으로 바꾼다(설계 3.1 비귀속 행 · D57).
+// plan 은 사슬 장부 l 의 행을 VOD 렌더 행으로 바꾼다(planInput).
+func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome, bool) {
+	return v.planInput(chainInput(l), abandon)
+}
+
+// planInput 은 입력 in 의 행을 VOD 렌더 행으로 바꾼다(설계 3.1 비귀속 행 · D57 · POK-549 설계 2.2). 회원은 사슬 세션과
+// 앞 회원(회차 경로)이고, 앞 회원 행은 포기 참으로 본다 — 앞 사슬은 정산을 끝냈다(R3).
 //
-//	사슬 세션 행 · ③ 미착지 · 포기 아님  재시도(정산 전 — DVR GAP 원장이 있어도 · 설계 3.1 phase 2)
-//	사슬 세션 행 · settled               그대로(포기면 DVR GAP 원장 행도 여기 — markGaps 가 vod_abandoned 로 바꾼다)
-//	사슬 세션 행 · 미착지 · 포기          GAP(settle_deadline)
-//	비귀속 행(세션 NULL)         GAP(mixed_boundary) — 회차는 앞 사슬 세션 · PDT 는 앞 행 PDT + 길이 · URI 는 ③ 키 이름
-//	사슬 밖 회차 행              실패(foreign_session)
+//	회원 행 · ③ 미착지 · 포기 아님   재시도(정산 전 — DVR GAP 원장이 있어도 · 설계 3.1 phase 2)
+//	회원 행 · settled                그대로(포기면 DVR GAP 원장 행도 여기 — markGaps 가 vod_abandoned 로 바꾼다)
+//	회원 행 · 미착지 · 포기           GAP(settle_deadline)
+//	비귀속 행(세션 NULL)         GAP(mixed_boundary) — 회차는 앞 행 세션 · PDT 는 앞 행 PDT + 길이 · URI 는 ③ 키 이름
+//	회원 밖 회차 행              실패(foreign_session)
 //
 // 실을 행이 vodMaxRows 를 넘으면 렌더 전에 too_large 실패다.
-func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome, bool) {
-	members := map[string]bool{}
-	for _, id := range l.Chain.SessionIDs {
-		members[id] = true
-	}
+func (v *vodJob) planInput(in vodInput, abandon bool) (vodPlan, FreezeOutcome, bool) {
 	plan := vodPlan{abandon: abandon}
-	for _, lr := range l.Rows {
-		if l.HasCutoff && lr.Seq < l.CutoffSeq {
+	for _, lr := range in.rows {
+		if in.hasCutoff && lr.Seq < in.cutoffSeq {
 			continue
 		}
 		r := boundaryRow(lr)
+		chain, settled := slices.Contains(in.chain, r.SessionID), abandon || in.front[r.SessionID]
 		switch {
-		case r.SessionID != "" && !members[r.SessionID]:
+		case r.SessionID != "" && !chain && !in.front[r.SessionID]:
 			return vodPlan{}, vodFailed(vodForeign, fmt.Errorf("publish: seq %d 는 사슬 밖 회차 %q 의 행이다", r.Seq, r.SessionID)), false
 		case r.SessionID == "":
 			if len(plan.rows) == 0 {
@@ -192,14 +233,17 @@ func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome
 			}
 			r = v.fillGap(r, plan.rows[len(plan.rows)-1])
 			plan.marks = append(plan.marks, vodMark{seq: r.Seq, session: r.SessionID, reason: "mixed_boundary"})
-		case !abandon && !r.PlaybackUploaded:
+		case !settled && !r.PlaybackUploaded:
 			return vodPlan{}, vodRetry(vodUnsettled, nil), false
-		case !boundary.Settled(r, l.CutoffSeq):
-			if !abandon {
+		case !boundary.Settled(r, in.cutoffSeq):
+			if !settled {
 				return vodPlan{}, vodRetry(vodUnsettled, nil), false
 			}
 			r = v.fillGap(r, r)
 			plan.marks = append(plan.marks, vodMark{seq: r.Seq, session: r.SessionID, reason: "settle_deadline"})
+		}
+		if chain {
+			plan = plan.withLastChainRow(r.Seq)
 		}
 		plan.rows = append(plan.rows, r)
 	}
@@ -207,6 +251,15 @@ func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome
 		return vodPlan{}, vodFailed(vodTooLarge, fmt.Errorf("publish: VOD 행 %d 개가 적재 상한 %d 개를 넘는다", len(plan.rows), vodMaxRows)), false
 	}
 	return plan, FreezeOutcome{}, true
+}
+
+// withLastChainRow 는 마지막 사슬 회원 행 seq 를 abandon 갱신 범위에 넣은 plan 이다(행은 seq 오름차순으로 온다).
+func (p vodPlan) withLastChainRow(seq int64) vodPlan {
+	if !p.lastChain {
+		p.lastChain, p.abandonFirst = true, seq
+	}
+	p.abandonLast = seq
+	return p
 }
 
 // fillGap 은 행 r 을 GAP 줄로 실을 값으로 채운다 — 회차가 없으면 앞 행 prev 의 회차, PDT 가 없으면 앞 행 PDT + 길이, ③ 키가
@@ -255,16 +308,17 @@ func (v *vodJob) gapKey(seq int64, prevKey string) string {
 // 행을 넣고 포기면 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다. 돌려준 장부 · plan 이 렌더 입력이다(잠금 밖의
 // 첫 읽기는 재시도 · 실패를 일찍 가르는 데만 쓴다).
 //
-// 다시 읽기는 같은 트랜잭션 · 같은 연결이다(index.ReadChainLedger — 잠금을 쥔 채 풀에서 연결을 더 받지 않는다). 등재
-// 트랜잭션은 READ COMMITTED 라 문장마다 잠금 뒤의 새 스냅숏이고 다섯 문장이 한 스냅숏은 아니다. 다른 VOD writer · 사슬
-// 닫힘은 꼬리 잠금으로 직렬이라 원장 · 사슬은 그대로이고, 문장 사이에 끼어드는 것은 ③ 착지와 꼬리 잠금이 막지 않는 늦은
-// 조각 INSERT 뿐이다 — 행 범위는 범위 문장이 정하고 뒤 문장은 더 늦은 착지를 볼 뿐이다. 꼬리 행을 쥔 트랜잭션이 있으면
-// lock_timeout 5초 뒤 재시도다.
-func (v *vodJob) markGaps(ctx context.Context, abandon bool) (index.ChainLedger, vodPlan, FreezeOutcome, bool) {
+// 다시 읽기는 같은 트랜잭션 · 같은 연결이다(index.ReadChainLedger · ReadRoundLedger — 잠금을 쥔 채 풀에서 연결을 더 받지
+// 않는다). 등재 트랜잭션은 READ COMMITTED 라 문장마다 잠금 뒤의 새 스냅숏이고 다섯(회차는 여섯) 문장이 한 스냅숏은 아니다.
+// 다른 VOD writer · 사슬 닫힘은 꼬리 잠금으로 직렬이라 원장 · 사슬은 그대로이고, 문장 사이에 끼어드는 것은 ③ 착지와 꼬리
+// 잠금이 막지 않는 늦은 조각 INSERT 뿐이다 — 행 범위는 범위 문장이 정하고 뒤 문장은 더 늦은 착지를 볼 뿐이다. 회차 경로의
+// 앞 회원은 재판정(rejudge)이 종국 · 회차 닫힘을 확인한 뒤라 그 원장 · 상태가 더 바뀌지 않는다. 꼬리 행을 쥔 트랜잭션이
+// 있으면 lock_timeout 5초 뒤 재시도다.
+func (v *vodJob) markGaps(ctx context.Context, abandon bool) (vodInput, vodPlan, FreezeOutcome, bool) {
 	dctx, cancel := v.p.stmtCtx(ctx)
 	defer cancel()
 	var (
-		l    index.ChainLedger
+		in   vodInput
 		plan vodPlan
 		out  FreezeOutcome
 		ok   bool
@@ -276,27 +330,48 @@ func (v *vodJob) markGaps(ctx context.Context, abandon bool) (index.ChainLedger,
 		if _, err := tx.Exec(dctx, vodLockTailSQL, v.chain.Tail, v.chain.StreamID); err != nil {
 			return err
 		}
-		reread, err := index.ReadChainLedger(dctx, tx, v.chain, vodMaxRows)
-		if l, plan, out, ok = v.judge(reread, err, abandon); !ok || len(plan.rows) == 0 {
+		if in, plan, out, ok = v.reread(dctx, tx, abandon); !ok || len(plan.rows) == 0 {
 			return nil // 적을 것이 없다 — 커밋이 잠금만 푼다(재독 오류로 깨진 트랜잭션이면 되돌린다)
 		}
 		return v.insertMarks(dctx, tx, plan)
 	})
 	switch {
 	case !ok && out.Result != "": // 재독이 갈랐다 — 쓴 것이 없어 커밋 오류는 더할 것이 없다
-		return index.ChainLedger{}, vodPlan{}, out, false
+		return vodInput{}, vodPlan{}, out, false
 	case index.IsLockTimeout(err):
-		return index.ChainLedger{}, vodPlan{}, vodRetry(vodContended, err), false
+		return vodInput{}, vodPlan{}, vodRetry(vodContended, err), false
 	case err != nil:
-		return index.ChainLedger{}, vodPlan{}, vodRetry(vodLedgerWrite, err), false
+		return vodInput{}, vodPlan{}, vodRetry(vodLedgerWrite, err), false
 	}
-	return l, plan, out, ok
+	return in, plan, out, ok
 }
 
-// load 는 사슬 장부를 풀의 읽기 전용 스냅숏으로 읽어 plan 을 세운다(judge).
-func (v *vodJob) load(ctx context.Context, abandon bool) (index.ChainLedger, vodPlan, FreezeOutcome, bool) {
+// reread 는 꼬리 잠금 트랜잭션 tx 안의 장부 재독과 plan 이다. 회차 경로는 다시 읽은 판정 재료로 범위를 다시 판정하고
+// (rejudge), 회차 범위가 아니면 plan 없이 그 결과를 돌려준다.
+func (v *vodJob) reread(ctx context.Context, tx pgx.Tx, abandon bool) (vodInput, vodPlan, FreezeOutcome, bool) {
+	if !v.round {
+		l, err := index.ReadChainLedger(ctx, tx, v.chain, vodMaxRows)
+		l, plan, out, ok := v.judge(l, err, abandon)
+		return chainInput(l), plan, out, ok
+	}
+	l, err := index.ReadRoundLedger(ctx, tx, v.chain, vodMaxRows)
+	if err == nil {
+		if out, ok := rejudge(v.chain, l.Gate); !ok {
+			return vodInput{}, vodPlan{}, out, false
+		}
+	}
+	return v.judgeRound(l, err, abandon)
+}
+
+// load 는 장부(사슬 경로는 사슬 장부 · 회차 경로는 회차 장부)를 풀의 읽기 전용 스냅숏으로 읽어 plan 을 세운다.
+func (v *vodJob) load(ctx context.Context, abandon bool) (vodInput, vodPlan, FreezeOutcome, bool) {
+	if v.round {
+		l, err := index.LoadRoundLedger(ctx, v.p.pool, v.chain, vodMaxRows)
+		return v.judgeRound(l, err, abandon)
+	}
 	l, err := index.LoadChainLedger(ctx, v.p.pool, v.chain, vodMaxRows)
-	return v.judge(l, err, abandon)
+	l, plan, out, ok := v.judge(l, err, abandon)
+	return chainInput(l), plan, out, ok
 }
 
 // judge 는 읽은 장부 l(읽기 오류 err)로 plan 을 세운다 — 장부의 사슬이 v.chain 과 다르거나 꼬리가 없으면 실패다.
@@ -313,24 +388,24 @@ func (v *vodJob) judge(l index.ChainLedger, err error, abandon bool) (index.Chai
 	return l, plan, out, ok
 }
 
-// insertMarks 는 plan 의 GAP 행을 넣고, 포기면 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다.
+// insertMarks 는 plan 의 GAP 행을 넣고, 포기면 마지막 사슬 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다 — 회차
+// 경로에서 앞 범위의 원장은 앞 사슬 동결이 이미 정했다(R26).
 func (v *vodJob) insertMarks(ctx context.Context, tx pgx.Tx, plan vodPlan) error {
 	for _, m := range plan.marks {
 		if _, err := tx.Exec(ctx, vodMarkGapSQL, v.chain.StreamID, m.seq, m.session, m.reason); err != nil {
 			return err
 		}
 	}
-	if !plan.abandon {
+	if !plan.abandon || !plan.lastChain {
 		return nil
 	}
-	first, last := plan.rows[0].Seq, plan.rows[len(plan.rows)-1].Seq
-	_, err := tx.Exec(ctx, vodAbandonGapsSQL, v.chain.StreamID, first, last)
+	_, err := tx.Exec(ctx, vodAbandonGapsSQL, v.chain.StreamID, plan.abandonFirst, plan.abandonLast)
 	return err
 }
 
-// write 는 렌더 · 검사 · IfAbsent PUT · 확정이다.
-func (v *vodJob) write(ctx context.Context, l index.ChainLedger, plan vodPlan) FreezeOutcome {
-	pl := v.playlist(l, plan.rows)
+// write 는 렌더 · 검사 · IfAbsent PUT · 확정이다. 회차 경로면 확정 결과에 마지막 사슬 범위의 GAP 유무를 싣는다.
+func (v *vodJob) write(ctx context.Context, in vodInput, plan vodPlan) FreezeOutcome {
+	pl := v.playlistInput(in, plan.rows)
 	body, err := rewind.Render(pl)
 	if err != nil {
 		return vodFailed(freezeRender, err)
@@ -339,7 +414,11 @@ func (v *vodJob) write(ctx context.Context, l index.ChainLedger, plan vodPlan) F
 		return vodFailed(vodValidateReason(err), err)
 	}
 	sum := sha256.Sum256(body)
-	meta := map[string]string{metaSession: v.chain.SessionIDs[0], metaBodySHA256: encodeSHA(sum)}
+	session := v.chain.SessionIDs[0]
+	if v.round {
+		session = v.chain.RoundID
+	}
+	meta := map[string]string{metaSession: session, metaBodySHA256: encodeSHA(sum)}
 	pctx, cancel := context.WithTimeout(ctx, v.p.opt.PublishTimeout)
 	etag, err := v.p.store.Put(pctx, v.key, IfAbsent(), body, meta)
 	cancel()
@@ -358,7 +437,11 @@ func (v *vodJob) write(ctx context.Context, l index.ChainLedger, plan vodPlan) F
 	if slices.ContainsFunc(plan.rows, func(r boundary.Row) bool { return r.IsGap }) {
 		result = ResultFrozenWithGaps
 	}
-	return v.confirm(ctx, result, &plan, etag, sum[:])
+	out := v.confirm(ctx, result, &plan, etag, sum[:])
+	if v.round {
+		out.LastChainHasGaps = plan.lastChainHasGaps()
+	}
+	return out
 }
 
 // errVODConflict 는 412 뒤 Head 의 본문 sha 가 다시 렌더한 본문과 다르다는 뜻이다(D7 vod_conflict).
@@ -395,25 +478,51 @@ func (v *vodJob) adoptFailed(err error) FreezeOutcome {
 	return vodRetry(freezeHeadFailed, err)
 }
 
-// playlist 는 VOD 렌더 값이다. 소유 회차는 첫 행의 회차다 — 그래야 첫 행 앞이 계승 접두가 아니고(S4) 범위 검사(S3)의
-// 「회차 첫 조각부터」가 선다. 머리는 새 문서의 것이다 — TARGETDURATION 은 사슬의 최댓값(계승은 TD 를 내리지 않아 꼬리
-// 값과 같다), DISC-SEQ 는 0 이다. 첫 회차의 계승은 지운다 — 그 앞 회차는 이 문서에 없어 첫 행 앞 끊김 표시가 뜻이 없다.
+// playlist 는 사슬 장부 l 의 VOD 렌더 값이다(playlistInput).
 func (v *vodJob) playlist(l index.ChainLedger, rows []boundary.Row) rewind.Playlist {
+	return v.playlistInput(chainInput(l), rows)
+}
+
+// playlistInput 은 VOD 렌더 값이다. 소유 회차는 첫 행의 회차다 — 그래야 첫 행 앞이 계승 접두가 아니고(S4) 범위 검사(S3)의
+// 「회차 첫 조각부터」가 선다. 머리는 새 문서의 것이다 — TARGETDURATION 은 입력 세션 전부의 최댓값(사슬은 계승이 TD 를
+// 내리지 않아 꼬리 값과 같고, 회차는 TD 분할로 사슬마다 다를 수 있다), DISC-SEQ 는 0 이다. 첫 회차의 계승은 지운다 — 그 앞
+// 회차는 이 문서에 없어 첫 행 앞 끊김 표시가 뜻이 없다.
+//
+// 계승이 빈 다른 세션(회차 경로의 뒤 사슬 머리)은 렌더에서만 앞 행 세션을 계승한 것으로 둔다 — 사슬 경계 첫 조각 앞에 끊김
+// 표시가 서고(R1 · 발행 전 검사 S5 VOD 세션 경계), 장부의 inherits_session 은 바꾸지 않는다. 사슬 경로에는 그런 세션이
+// 없어(사슬 = 계승) 본문이 그대로다.
+func (v *vodJob) playlistInput(in vodInput, rows []boundary.Row) rewind.Playlist {
 	owner := rows[0].SessionID
 	var td int32
-	for _, s := range l.Sessions {
+	for _, s := range in.sessions {
 		td = max(td, s.TargetDuration)
 	}
-	pl := rewind.Playlist{StreamID: v.chain.StreamID, BaseURL: v.p.opt.BaseURL, Cutoff: l.CutoffSeq, Owner: owner,
+	pl := rewind.Playlist{StreamID: v.chain.StreamID, BaseURL: v.p.opt.BaseURL, Cutoff: in.cutoffSeq, Owner: owner,
 		Rows: rows, Kind: rewind.KindVOD, Ended: true}
-	for _, s := range l.Sessions {
+	before := sessionPredecessors(rows)
+	for _, s := range in.sessions {
 		rs := renderSession(s)
-		if rs.ID == owner {
+		switch {
+		case rs.ID == owner:
 			rs.InheritsSession, rs.DiscontinuityBase, rs.TargetDuration = "", 0, td
+		case rs.InheritsSession == "":
+			rs.InheritsSession = before[rs.ID]
 		}
 		pl.Sessions = append(pl.Sessions, rs)
 	}
 	return pl
+}
+
+// sessionPredecessors 는 rows 에서 세션마다 그 세션 첫 행 바로 앞 행의 세션이다(첫 행의 세션은 없다).
+func sessionPredecessors(rows []boundary.Row) map[string]string {
+	before := map[string]string{}
+	for i := 1; i < len(rows); i++ {
+		id, prev := rows[i].SessionID, rows[i-1].SessionID
+		if _, seen := before[id]; !seen && id != prev && id != rows[0].SessionID {
+			before[id] = prev
+		}
+	}
+	return before
 }
 
 // confirm 은 사슬 전원의 VOD 확정이다 — 한 트랜잭션에서 바꾼 행 수가 사슬 수와 같을 때만 확정한다. 0행이면 다른 writer
@@ -483,7 +592,7 @@ func vodValidateReason(err error) string {
 	return freezeValidate
 }
 
-// vodKey 는 사슬 머리 head 의 VOD 객체 키다(K1).
+// vodKey 는 사슬 머리 head 의 VOD 객체 키다(사슬 범위 — 회차 범위는 vodRoundKey).
 //
 //	vod/{streamID}/{head}/index.m3u8
 //

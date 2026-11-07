@@ -198,12 +198,12 @@ func (r finalStep) ledger(ok bool, err error) finalStep {
 	return r
 }
 
-// outcomeOf 는 발행 층 결과를 판정의 결과로 줄인다 — 정산 대기(unsettled)는 장애 재시도와 가른다.
+// outcomeOf 는 발행 층 결과를 판정의 결과로 줄인다 — 정산 · 회차 대기(publish.IsSettleWait)는 장애 재시도와 가른다.
 func outcomeOf(o publish.FreezeOutcome) finalize.Outcome {
 	switch {
 	case o.Result == publish.ResultFrozen, o.Result == publish.ResultFrozenWithGaps, o.Result == publish.ResultEmpty:
 		return finalize.OutcomeDone
-	case o.Retry && o.Reason == publish.ReasonUnsettled:
+	case o.Retry && publish.IsSettleWait(o.Reason):
 		return finalize.OutcomeUnsettled
 	case o.Retry:
 		return finalize.OutcomeRetry

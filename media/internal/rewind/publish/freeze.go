@@ -43,12 +43,31 @@ const (
 // Retry 가 참이면 같은 걸음을 4초 뒤 다시 한다(상한 3회는 판정부가 센다). Result 가 failed 면 같은 입력으로 다시 해도
 // 서지 않는다 — DVR 은 봉인(Endlist)으로, 봉인도 실패면 freeze_failed 로 간다. Reason 은 retry · failed 의 사유(로그
 // 속성 reason 값)다. Err 는 사유에 딸린 원인 오류다(없을 수 있다).
+//
+// VOD 는 Reason 이 최종 사슬 호출의 제어 사유다 — 회차 경로가 실패해 같은 호출에서 사슬 범위로 물러서면 Result · Retry ·
+// Reason · Err 는 그 사슬 호출의 것이고 회차 쪽 원인은 FallbackCause · FallbackErr 에 있다(POK-549 Z3 — 판정부는 Result ·
+// Retry · Reason 만 본다).
 type FreezeOutcome struct {
 	Axis   string
 	Result string
 	Retry  bool
 	Reason string
 	Err    error
+
+	// 아래는 VOD 만이다(POK-549 설계 r4 2.2).
+
+	// Scope 는 동결의 범위다 — ScopeChain · ScopeRound(판정 전에 끝난 결과는 빈 값).
+	Scope string
+	// Fallback 은 사슬 범위로 물러선 까닭이다(Fallback* 상수 · 평시 빈 값).
+	Fallback string
+	// FallbackCause 는 Fallback 이 round_render_failed 일 때 회차 경로의 실패 사유(too_large · validate · foreign_session ·
+	// render)다. 앞 사슬 까닭(front_*)이면 빈 값이다.
+	FallbackCause string
+	// FallbackErr 는 그 원인 오류다(없을 수 있다) — Err 는 최종 사슬 호출의 것이라 따로 둔다.
+	FallbackErr error
+	// LastChainHasGaps 는 회차 경로(Scope round)에서 마지막 사슬 범위 안에 GAP 줄이 있는가다 — 정산 포기 경보가 앞 사슬
+	// GAP 으로 붙지 않게 한다(R19). 사슬 경로에서는 쓰지 않는다.
+	LastChainHasGaps bool
 }
 
 // 재시도 · 실패 사유 — FreezeOutcome.Reason 값이다.
