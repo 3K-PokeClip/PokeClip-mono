@@ -8,6 +8,7 @@ package publish
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -239,5 +240,116 @@ func TestRoundPlaybackEndedWhenLastChainFreezeFailed(t *testing.T) {
 
 	if err != nil || st.Phase != index.PhaseEnded || st.LatestSessionID != "B" {
 		t.Errorf("판정식 = (%+v, %v), want ended · 최신 B", st, err)
+	}
+}
+
+// round_vod_golden_td_split(R1 · R11 · R12 · R20 · 설계 10.1 · 완료 조건 ①) — prod 의 TD 분할 회차(앞 사슬 1,623조각 · GAP
+// 셋 · TD 6 / 마지막 사슬 107조각 · TD 8)를 장부로 되살려, 앞 사슬을 사슬 문서로 동결한 뒤 마지막 사슬을 동결하면 회차 문서가
+// 골든과 바이트로 같다. 앞 사슬 문서는 골든 앞 범위와 바이트로 같고(R20) 차이는 설계 10.1 의 셋뿐이다. 판정식은 그 문서를
+// mode vod · firstPdt = 앞 사슬 첫 조각(GAP 줄) PDT 로 낸다. 기준 트리는 마지막 사슬을 사슬 키로 동결해 FAIL.
+func TestFreezeVODRoundMatchesTDSplitGolden(t *testing.T) {
+	golden, segs := readRoundGolden(t)
+	p, store := newRoundGolden(t, segs)
+
+	wantOutcome(t, p.FreezeVOD(t.Context(), goldenChain(goldenFront), true), AxisVOD, ResultFrozenWithGaps, false)
+	front, _ := stored(store, goldenFrontKey)
+	begin := time.Now()
+	out := p.FreezeVOD(t.Context(), goldenChain(goldenLast), false)
+	t.Logf("T_vod(회차 %d조각 동결 한 번) = %v", len(segs), time.Since(begin))
+
+	wantOutcome(t, out, AxisVOD, ResultFrozenWithGaps, false)
+	body := wantGoldenBody(t, store, golden)
+	wantGoldenSplice(t, front, golden)
+	sum := sha256Of(body)
+	if v := readVOD(t, p, goldenLast); v.state != ResultFrozenWithGaps || strOrNil(v.key) != goldenRoundKey ||
+		!bytes.Equal(v.sha, sum[:]) || v.first == nil || *v.first != 4 || v.last == nil || *v.last != 1733 {
+		t.Errorf("마지막 사슬 VOD 열 = %+v(키 %s), want frozen_with_gaps · %s · 범위 4–1733", v, strOrNil(v.key), goldenRoundKey)
+	}
+
+	endRound(t, p, goldenFront, goldenLast)
+	st, err := index.LookupRoundPlayback(t.Context(), p.pool, goldenStream, goldenFront)
+	first, tail := segs[0].row, segs[len(segs)-1].row
+	head := tail.PlaybackPDT.Add(time.Duration(tail.DurationMS) * time.Millisecond)
+	if err != nil || st.Phase != index.PhaseVOD || st.VODKey != goldenRoundKey || st.LatestSessionID != goldenLast ||
+		!st.FirstPDT.Equal(first.PlaybackPDT) || !st.HeadPDT.Equal(head) {
+		t.Errorf("판정식 = (%+v, %v), want vod · %s · 최신 %s · firstPdt %v · headPdt %v", st, err, goldenRoundKey, goldenLast,
+			first.PlaybackPDT, head)
+	}
+}
+
+// round_vod_target_duration_front_larger(R12 변형) — 앞 사슬 TD 가 마지막 사슬보다 큰 회차(앞 8 · 마지막 6)도 회차 문서의
+// TARGETDURATION 은 회차 세션 최댓값 8 이다(조각 길이 상한 위반 없음). 기준 트리는 사슬 키 · TD 6 이라 FAIL.
+func TestFreezeVODRoundTargetDurationTakesLargerFront(t *testing.T) {
+	ss := twoChainRound()
+	ss[0].td, ss[1].td = 8, 6
+	p, store := newRoundVOD(t, ss, twoChainRows())
+
+	wantOutcome(t, p.FreezeVOD(t.Context(), chainOf("A", "B"), false), AxisVOD, ResultFrozen, false)
+
+	body := wantRoundFrozen(t, p, store, ResultFrozen, 0, 9, "B")
+	if !bytes.Contains(body, []byte("#EXT-X-TARGETDURATION:8\n")) {
+		t.Errorf("회차 문서 머리에 TARGETDURATION 8 이 없다:\n%s", body)
+	}
+}
+
+// round_vod_single_chain_unchanged(R7 · 설계 10.2 · 완료 조건 ②) — 렌더할 행이 있는 사슬이 하나뿐인 회차는 지금과 바이트로
+// 같다: 키 = 머리 세션 키 · 본문 sha = 같은 장부를 기준(a9c39331) 판이 낸 값(리터럴) · 대기 사유 없음 · 열린 회차도 닫힘을
+// 기다리지 않고 확정한다. 네 경우 — 회원 하나 · 앞 세션이 행 없음 · 앞 사슬 행이 컷오프 아래뿐 · 열린 회차의 사슬 하나. 앞
+// 세션은 freezing 이고 TD 가 더 커서, 그 세션을 앞 회원으로 세면 대기(front_pending)나 TD 차이로 갈린다. 두 트리에서 PASS
+// 하는 회귀 고정이다.
+func TestFreezeVODSingleChainRoundKeepsChainDocument(t *testing.T) {
+	solo := make([]vodRow, 10)
+	for i := range solo {
+		solo[i] = vodRow{session: "A", state: "uploaded"}
+	}
+	onlyB := twoChainRows()
+	for i := range onlyB {
+		onlyB[i].session = "B"
+	}
+	frontFreezing := []roundSess{{id: "A", round: "A", td: 8, vod: "freezing"}, {id: "B", round: "A", td: 6, vod: "freezing"}}
+	tests := []struct {
+		name        string
+		ss          []roundSess
+		rows        []vodRow
+		cutoff      int64
+		chain       index.Chain
+		key         string
+		first, last int64
+		sha         string
+	}{
+		{name: "회원_하나", ss: []roundSess{{id: "A", round: "A", td: 6, vod: "freezing"}}, rows: solo,
+			chain: chainOf("A", "A"), key: "vod/str/A/index.m3u8", first: 0, last: 9, sha: "c099e912c1927ce8604f9cd7d51b2bece14059695a25da306c49e40c9d341257"},
+		{name: "앞_세션_행_없음", ss: frontFreezing, rows: onlyB,
+			chain: chainOf("A", "B"), key: "vod/str/B/index.m3u8", first: 0, last: 9, sha: "f0953d2dbd0cf87da8303864dc7d112a9a8c6f4b42a4ce7397a46190a08a0625"},
+		{name: "앞_사슬_컷오프_아래", ss: frontFreezing, rows: twoChainRows(), cutoff: 5,
+			chain: chainOf("A", "B"), key: "vod/str/B/index.m3u8", first: 5, last: 9, sha: "514d056aa2fe8870bf55b055e7fde57ecc0b99c31d6c313011e39c193f529b41"},
+		{name: "열린_회차_사슬_하나", ss: []roundSess{{id: "A", round: "A", td: 6, vod: "freezing", open: true}}, rows: solo,
+			chain: chainOf("A", "A"), key: "vod/str/A/index.m3u8", first: 0, last: 9, sha: "c099e912c1927ce8604f9cd7d51b2bece14059695a25da306c49e40c9d341257"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, store := newRoundVOD(t, tt.ss, tt.rows)
+			exec(t, p.pool, `UPDATE stream_cutoffs SET cutoff_seq = $2 WHERE stream_id = $1`, fxStream, tt.cutoff)
+
+			out := p.FreezeVOD(t.Context(), tt.chain, false)
+
+			wantOutcome(t, out, AxisVOD, ResultFrozen, false)
+			if out.Reason != "" {
+				t.Errorf("동결 사유 = %q, want 없음", out.Reason)
+			}
+			if puts := store.putCalls(); len(puts) != 1 || puts[0].key != tt.key {
+				t.Errorf("PUT %d번(%+v), want %s 한 번", len(puts), puts, tt.key)
+			}
+			body, _ := stored(store, tt.key)
+			sum := sha256Of(body)
+			if got := hex.EncodeToString(sum[:]); got != tt.sha {
+				t.Errorf("본문 sha = %s, want 기준 판 %s:\n%s", got, tt.sha, body)
+			}
+			if v := readVOD(t, p, tt.chain.Tail); v.state != ResultFrozen || strOrNil(v.key) != tt.key ||
+				!bytes.Equal(v.sha, sum[:]) || v.first == nil || *v.first != tt.first || v.last == nil || *v.last != tt.last {
+				t.Errorf("꼬리 %s VOD 열 = %+v(키 %s), want frozen · %s · 범위 %d–%d", tt.chain.Tail, v, strOrNil(v.key), tt.key,
+					tt.first, tt.last)
+			}
+		})
 	}
 }
