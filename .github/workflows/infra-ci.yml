@@ -307,6 +307,13 @@ jobs:
             exit 1
           fi
 
+      # terraform test 가 볼 수 없는 의존 계약(modules/network 의 엔드포인트 → SG 인그레스 규칙
+      # depends_on)을 terraform graph 로 단언한다. 위 「init · validate」가 init 한 모듈 디렉터리를
+      # 그대로 쓴다 — 다시 init 하지 않는다. 이름이 *_test.sh 가 아니라 shell 잡의 「스크립트 시험」
+      # 글롭에 들지 않고 여기서만 돈다(scripts/test 이름 규칙의 예외 — 시험 머리 주석).
+      - name: network 의존 그래프
+        run: bash infra/terraform/scripts/test/network_graph_check.sh </dev/null
+
   guard:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

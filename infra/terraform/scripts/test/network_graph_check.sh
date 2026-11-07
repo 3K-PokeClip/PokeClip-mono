@@ -4,28 +4,35 @@
 # 엔드포인트가 SG 인그레스 규칙 뒤에 생긴다(`depends_on`, POK-408 설계 보강 3-1) —
 # 을 고정한다. terraform test 는 의존 그래프를 볼 수 없어 여기서 본다.
 #
+# terraform init 이 필요해 terraform 잡에서 돈다 — scripts/test 이름 규칙의
+# 예외(kty 2026-11-07). 그래서 이름이 `*_test.sh` 가 아니다 — shell 잡의
+# 「스크립트 시험」 글롭에 들지 않는다.
+#
 # 사례는 두 묶음이다.
 #   - 합성 그래프: 직접 간선 · 추이 경로 · 역방향 간선만 · 경로 없음 · 노드 없음 ·
 #     빈 입력 · DOT 가 아닌 입력 · 인자 개수. 종료 코드와 출력 줄을 본다.
-#   - 실제 모듈: modules/network 의 사본을 init(-backend=false)해 `terraform graph`
-#     를 그리고, 엔드포인트 → 인그레스 규칙 경로가 있는지 본다. 같은 사본에서
-#     `depends_on` 한 줄을 지우면(변이) 경로가 없어지는지(종료 1 — 노드 없음이
-#     아님)도 본다. init 은 provider 를 받는다(호출자의 TF_PLUGIN_CACHE_DIR 이
-#     있으면 그것을 쓴다). PATH 에 terraform 이 없으면 skip 으로 센다.
+#   - 실제 모듈: init 된 모듈 디렉터리에서 `terraform graph` 를 그려 엔드포인트 →
+#     인그레스 규칙 경로가 있는지 본다. 그 모듈의 .tf · lock 사본에서 `depends_on`
+#     한 줄을 지우면(변이) 경로가 없어지는지(종료 1 — 노드 없음이 아님)도 본다.
+#     사본은 원본의 데이터 디렉터리(TF_DATA_DIR, 없으면 <모듈>/.terraform)를 그대로
+#     써서 다시 init 하지 않는다 — 네트워크에 닿지 않는다. 모듈이 init 되지 않았으면
+#     두 사례 모두 실패다.
 #
-# 임시 디렉터리는 한 뿌리($TMPDIR/network_endpoint_order_test.*) 아래에 두고, 끝에
-# 지운 뒤 남지 않았는지 확인한다(중단 신호에도 지운다). 끝에 통과 + skip 건수가
-# 사례 수(EXPECTED_CASES)와 같은지 본다.
+# 임시 디렉터리는 한 뿌리($TMPDIR/network_graph_check.*) 아래에 두고, 끝에 지운 뒤
+# 남지 않았는지 확인한다(중단 신호에도 지운다). 끝에 통과 건수가 사례
+# 수(EXPECTED_CASES)와 같은지 본다.
 #
-# 사용: bash infra/terraform/scripts/test/network_endpoint_order_test.sh
-# 종료 코드: 0 전부 통과 / 1 하나라도 실패
+# 사용: terraform -chdir=infra/terraform/modules/network init -backend=false
+#       bash infra/terraform/scripts/test/network_graph_check.sh [모듈 디렉터리]
+#       모듈 디렉터리를 주지 않으면 이 저장소의 modules/network 다.
+# 종료 코드: 0 전부 통과 / 1 하나라도 실패 · 모듈 디렉터리 없음
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly GRAPH_PATH="${SCRIPT_DIR}/../assert-graph-path.sh"
-readonly NETWORK_MODULE="${SCRIPT_DIR}/../../modules/network"
+readonly DEFAULT_NETWORK_MODULE="${SCRIPT_DIR}/../../modules/network"
 
 readonly ENDPOINT='aws_vpc_endpoint.interface'
 readonly INGRESS_RULE='aws_vpc_security_group_ingress_rule.interface_endpoints_https'
@@ -39,7 +46,6 @@ readonly EXPECTED_CASES=10
 
 failures=0
 passes=0
-skips=0
 tmp_root=""
 out=""
 err=""
@@ -78,18 +84,6 @@ fail() {
 pass() {
   printf 'ok: %s\n' "$1"
   passes=$((passes + 1))
-}
-
-#######################################
-# 돌리지 못한 사례를 적고 센다(실패가 아님 — 건수 단언에 들어감).
-# Globals:
-#   skips
-# Arguments:
-#   사례 이름(과 이유).
-#######################################
-skip() {
-  printf 'skip: %s\n' "$1"
-  skips=$((skips + 1))
 }
 
 #######################################
@@ -176,18 +170,31 @@ test_synthetic_graphs() {
 }
 
 #######################################
-# 사본 디렉터리에서 terraform 을 돌린다. 입력을 받지 않고 갱신 확인을 끈다.
-# Globals:
-#   tmp_root
+# 모듈(또는 그 사본) 디렉터리에서 terraform 을 돌린다. 데이터 디렉터리는 init 된
+# 원본의 것이다. 입력을 받지 않고 갱신 확인을 끈다.
 # Arguments:
-#   사본 디렉터리, terraform 인자.
+#   디렉터리, 데이터 디렉터리, terraform 인자.
 #######################################
 run_terraform() {
   local dir="$1"
-  shift
-  CHECKPOINT_DISABLE=1 TF_IN_AUTOMATION=1 TF_INPUT=0 \
-    TF_DATA_DIR="${tmp_root}/tf-data" \
+  local data_dir="$2"
+  shift 2
+  CHECKPOINT_DISABLE=1 TF_IN_AUTOMATION=1 TF_INPUT=0 TF_DATA_DIR="${data_dir}" \
     terraform -chdir="${dir}" "$@" </dev/null
+}
+
+#######################################
+# 모듈의 데이터 디렉터리 경로를 낸다 — terraform 과 같게 TF_DATA_DIR 이 상대
+# 경로면 모듈 디렉터리 기준이고, 비었거나 없으면 <모듈>/.terraform 이다.
+# Arguments:
+#   모듈 디렉터리(절대 경로).
+#######################################
+data_dir_of() {
+  local data_dir="${TF_DATA_DIR:-.terraform}"
+  if [[ "${data_dir}" != /* ]]; then
+    data_dir="$1/${data_dir}"
+  fi
+  printf '%s\n' "${data_dir}"
 }
 
 #######################################
@@ -209,29 +216,26 @@ remove_depends_on() {
 }
 
 #######################################
-# 실제 모듈: 사본의 그래프에 엔드포인트 → 인그레스 규칙 경로가 있고, depends_on
-# 을 지운 사본에는 없다(노드는 그대로라 종료 1). terraform 이 없으면 둘 다 skip.
+# 실제 모듈: 그래프에 엔드포인트 → 인그레스 규칙 경로가 있고, depends_on 을 지운
+# 사본에는 없다(노드는 그대로라 종료 1).
 # Globals:
 #   tmp_root
+# Arguments:
+#   init 된 모듈 디렉터리(절대 경로).
 #######################################
 test_network_module() {
-  if ! command -v terraform >/dev/null 2>&1; then
-    skip "module-endpoint-after-ingress (terraform 없음)"
-    skip "module-without-depends-on (terraform 없음)"
-    return
-  fi
-  local copy="${tmp_root}/network"
-  local graph
-  if ! mkdir -- "${copy}" || ! cp -- "${NETWORK_MODULE}"/*.tf "${copy}/" ||
-    ! run_terraform "${copy}" init -backend=false -no-color \
-      >"${tmp_root}/init.log" 2>&1; then
-    fail "module-endpoint-after-ingress: 모듈 사본 init 실패" \
-      "$(cat -- "${tmp_root}/init.log" 2>/dev/null)"
-    fail "module-without-depends-on: 모듈 사본 init 실패"
+  local module="$1"
+  local data_dir copy graph
+  data_dir="$(data_dir_of "${module}")"
+  if [[ ! -d "${data_dir}" || ! -f "${module}/.terraform.lock.hcl" ]]; then
+    fail "module-endpoint-after-ingress: 모듈이 init 되지 않음(${module})" \
+      "— 먼저 terraform -chdir=<모듈> init -backend=false"
+    fail "module-without-depends-on: 모듈이 init 되지 않음"
     return
   fi
 
-  if ! graph="$(run_terraform "${copy}" graph 2>"${tmp_root}/graph.err")"; then
+  if ! graph="$(run_terraform "${module}" "${data_dir}" graph \
+    2>"${tmp_root}/graph.err")"; then
     fail "module-endpoint-after-ingress: terraform graph 실패" \
       "$(<"${tmp_root}/graph.err")"
   else
@@ -240,12 +244,19 @@ test_network_module() {
       "graph-path: ${ENDPOINT} -> ${INGRESS_RULE} 경로 있음" ''
   fi
 
+  copy="${tmp_root}/network"
+  if ! mkdir -- "${copy}" ||
+    ! cp -- "${module}"/*.tf "${module}/.terraform.lock.hcl" "${copy}/"; then
+    fail "module-without-depends-on: 모듈 사본을 만들지 못함"
+    return
+  fi
   if ! remove_depends_on "${copy}/main.tf"; then
     fail "module-without-depends-on: main.tf 에 지울 줄이 정확히 하나가 아님" \
       "[${DEPENDS_ON_LINE}]"
     return
   fi
-  if ! graph="$(run_terraform "${copy}" graph 2>"${tmp_root}/graph.err")"; then
+  if ! graph="$(run_terraform "${copy}" "${data_dir}" graph \
+    2>"${tmp_root}/graph.err")"; then
     fail "module-without-depends-on: terraform graph 실패" \
       "$(<"${tmp_root}/graph.err")"
     return
@@ -256,33 +267,43 @@ test_network_module() {
 }
 
 main() {
+  local module
+  if [[ "$#" -gt 1 ]]; then
+    printf '%s\n' "사용: network_graph_check.sh [모듈 디렉터리]" >&2
+    exit 1
+  fi
+  module="$(cd -- "${1:-${DEFAULT_NETWORK_MODULE}}" 2>/dev/null && pwd)" || {
+    printf 'network_graph_check: 모듈 디렉터리가 없음: %s\n' \
+      "${1:-${DEFAULT_NETWORK_MODULE}}" >&2
+    exit 1
+  }
   # 트랩을 먼저 건다 — 뿌리를 만든 직후에 신호가 와도 남지 않게.
   trap remove_tmp_root EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   tmp_root="$(mktemp -d \
-    "${TMPDIR:-/tmp}/network_endpoint_order_test.XXXXXX")" || {
-    printf '%s\n' "network_endpoint_order_test: 임시 디렉터리를 만들지 못함" >&2
+    "${TMPDIR:-/tmp}/network_graph_check.XXXXXX")" || {
+    printf '%s\n' "network_graph_check: 임시 디렉터리를 만들지 못함" >&2
     exit 1
   }
   test_synthetic_graphs
-  test_network_module
+  test_network_module "${module}"
 
   remove_tmp_root
   if [[ -e "${tmp_root}" ]]; then
     fail "임시 디렉터리가 남음: ${tmp_root}"
   fi
   tmp_root=""
-  if [[ $((passes + skips)) -ne "${EXPECTED_CASES}" ]]; then
-    fail "사례 수가 다름 — 통과 ${passes} + skip ${skips} ≠ ${EXPECTED_CASES}"
+  if [[ "${passes}" -ne "${EXPECTED_CASES}" ]]; then
+    fail "사례 수가 다름 — 통과 ${passes} ≠ ${EXPECTED_CASES}"
   fi
   if [[ "${failures}" -ne 0 ]]; then
-    printf 'network_endpoint_order_test: %s건 실패(통과 %s건 · skip %s건)\n' \
-      "${failures}" "${passes}" "${skips}" >&2
+    printf 'network_graph_check: %s건 실패(통과 %s건)\n' \
+      "${failures}" "${passes}" >&2
     exit 1
   fi
-  printf 'network_endpoint_order_test: 전부 통과(%s건 · skip %s건 · 임시 디렉터리 잔여 0)\n' \
-    "${passes}" "${skips}"
+  printf 'network_graph_check: 전부 통과(%s건 · 임시 디렉터리 잔여 0)\n' \
+    "${passes}"
 }
 
 main "$@"

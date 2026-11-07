@@ -193,6 +193,7 @@ terraform fmt -check -recursive infra/terraform
 terraform -chdir=<루트·모듈> init -backend=false -input=false
 terraform -chdir=<루트·모듈> validate
 terraform -chdir=<tests/ 가 있는 루트·모듈> test
+bash infra/terraform/scripts/test/network_graph_check.sh
 conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
   --policy infra/terraform/policy/guard --namespace main
 bash infra/terraform/scripts/guard_test.sh
@@ -216,6 +217,10 @@ shellcheck -x infra/terraform/scripts/precheck/*.sh \
 tflint(`brew install terraform-linters/tap/tflint` · 설정 파일 없음 — 기본
 terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` 는
 `scripts/testdata` 의 guard fixture 까지 읽어 늘 실패합니다.
+`network_graph_check.sh` 는 init 된 `modules/network` 의 `terraform graph`
+로 terraform test 가 볼 수 없는 의존 계약(`depends_on`)을 봅니다.
+`scripts/test` 이름 규칙의 예외입니다 — terraform init 이 필요해 이름을
+`*_test.sh` 로 두지 않고 CI 의 terraform 잡이 돌립니다.
 `put_secret_test.sh` · `kvs_put_test.sh` 는 PATH 에 진짜 aws 가 있으면
 닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
 에 닿지 않음), 없으면 skip 으로 셉니다.
