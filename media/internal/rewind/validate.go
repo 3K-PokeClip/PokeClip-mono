@@ -134,7 +134,7 @@ type Published struct {
 //	ErrHaltPublication    그 밖의 여섯 — 이번 발행을 내지 않는다
 //
 // 처음 걸린 검사 하나만 돌려준다. 순서는 빈 목록(S3) → 본문 = 목록 값(S5 — 행과 본문 조각을 짝지어야
-// 나머지를 잴 수 있다) → S4(까닭은 checkInheritedPrefix) → S1 → S2 → S3 → S5(형식·TD·MAP) → S6 → S7 이다.
+// 나머지를 잴 수 있다) → S4(까닭은 checkInheritedPrefix) → S1 → S2 → S3 → S5(형식·TD·MAP·VOD 세션 경계) → S6 → S7 이다.
 // 본문이 목록 값과 다르면 그 목록이 계승 취소 대상이어도(예: 본문에서만 접두 URI 가 상대) 발행 중단이
 // 먼저다 — 접두를 빼고 다시 렌더해도 고쳐지지 않는 렌더·호출자 결함이기 때문이다. 단 MAP 의 있고
 // 없음·값은 이 순서 밖이다: 「본문 = 목록 값」 조항은 MAP 줄의 개수·위치만 보고, 있고 없음·값은 S4
@@ -181,9 +181,9 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 //
 // 나머지 검사는 행 값으로 판정한다. 그 판정이 발행되는 바이트에도 참이려면 본문이 행 값을 그대로
 // 적었어야 하고, 이 조항이 그것을 확인한다 — 없으면 행과 다른 EXTINF·PDT·URI 를 적은 본문이 검사를
-// 통과한다. 검사가 읽는 값 가운데 본문에도 적히는 것은 이 여섯이 전부다: MSN(S1·S2) · URI(S3 가
+// 통과한다. 검사가 읽는 값 가운데 본문에도 적히는 것은 이 일곱이 전부다: MSN(S1·S2) · URI(S3 가
 // 올라갔다고 본 객체) · GAP 줄(S3 가 GAP 원장으로 settled 라고 본 행) · EXTINF(S3·S4 길이 합 · S5 TD) ·
-// PDT(S7) · TD(S5 상한). 남는 차이는 해상도 하나다 — PDT 줄은 ms 로 잘려 적히므로 S7 은 ms 로 자른 값으로
+// PDT(S7) · TD(S5 상한) · DISCONTINUITY 줄(VOD 만 — S5 VOD 세션 경계). 남는 차이는 해상도 하나다 — PDT 줄은 ms 로 잘려 적히므로 S7 은 ms 로 자른 값으로
 // 잰다. 머리 줄과 MAP 줄은 개수·위치까지 본다 — 렌더가 쓰는 자리 한 곳만 읽으면 중복·이동한 줄이 지나간다.
 // MAP 의 있고 없음·값과 URI 의 절대성은 S4·S5 가 본문에서 읽는다. DISCONTINUITY 는 VOD 목록에서만 본다 — 여기서
 // 줄 수가 행 값(HasDiscontinuityTag)과 같은지를, S5 VOD 세션 경계 조항(checkBody)이 그 값이 세션 경계와 맞는지를
@@ -488,8 +488,8 @@ func totalMS(rows []boundary.Row) int64 {
 //	다른 스트림의 객체를 가리키는 줄을 막는다 — 「본문 = 목록 값」 조항은 본문이 키를 그대로 적었는지만 본다
 //	VOD 세션 경계(KindVOD 만) — 끊김 표시는 세션이 바뀌는 줄에만 선다(vodBoundaryProblem)
 //
-// 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · 종류·닫힘 줄 · URI · PDT · EXTINF · GAP · MAP 개수·위치)은 checkBodyMatchesRows
-// 가 빈 목록 검사 다음, S4 보다 앞서 본다.
+// 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · 종류·닫힘 줄 · URI · PDT · EXTINF · GAP · MAP 개수·위치 · VOD DISCONTINUITY
+// 줄 수)은 checkBodyMatchesRows 가 빈 목록 검사 다음, S4 보다 앞서 본다.
 func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) error {
 	switch {
 	case !bytes.HasPrefix(body, []byte(headerLine)):

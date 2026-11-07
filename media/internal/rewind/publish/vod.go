@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -309,7 +310,8 @@ func (v *vodJob) gapKey(seq int64, prevKey string) string {
 // 첫 읽기는 재시도 · 실패를 일찍 가르는 데만 쓴다).
 //
 // 다시 읽기는 같은 트랜잭션 · 같은 연결이다(index.ReadChainLedger · ReadRoundLedger — 잠금을 쥔 채 풀에서 연결을 더 받지
-// 않는다). 등재 트랜잭션은 READ COMMITTED 라 문장마다 잠금 뒤의 새 스냅숏이고 다섯(회차는 여섯) 문장이 한 스냅숏은 아니다.
+// 않는다). 등재 트랜잭션은 READ COMMITTED 라 문장마다 잠금 뒤의 새 스냅숏이고 재독 문장(사슬 장부 다섯 · 회차 장부 여섯)이
+// 한 스냅숏은 아니다.
 // 다른 VOD writer · 사슬 닫힘은 꼬리 잠금으로 직렬이라 원장 · 사슬은 그대로이고, 문장 사이에 끼어드는 것은 ③ 착지와 꼬리
 // 잠금이 막지 않는 늦은 조각 INSERT 뿐이다 — 행 범위는 범위 문장이 정하고 뒤 문장은 더 늦은 착지를 볼 뿐이다. 회차 경로의
 // 앞 회원은 재판정(rejudge)이 종국 · 회차 닫힘을 확인한 뒤라 그 원장 · 상태가 더 바뀌지 않는다. 꼬리 행을 쥔 트랜잭션이
@@ -389,7 +391,9 @@ func (v *vodJob) judge(l index.ChainLedger, err error, abandon bool) (index.Chai
 }
 
 // insertMarks 는 plan 의 GAP 행을 넣고, 포기면 마지막 사슬 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다 — 회차
-// 경로에서 앞 범위의 원장은 앞 사슬 동결이 이미 정했다(R26).
+// 경로에서 앞 범위의 원장은 앞 사슬 동결이 이미 정했다(R26). 회차 문서의 사슬 사이 비귀속 행도 이 갱신 범위 밖이다 — 그
+// 행은 mixed_boundary GAP 으로 처음 vod_abandoned 로 들고(R22), 이미 원장에 있던 행(DVR GAP · recorded)은 원장 우선으로
+// 그대로 둔다. 그대로 남은 행은 janitor 의 ③ 포기 갈래가 고르지 않아 로컬 원본을 지우지 않는 쪽이다.
 func (v *vodJob) insertMarks(ctx context.Context, tx pgx.Tx, plan vodPlan) error {
 	for _, m := range plan.marks {
 		if _, err := tx.Exec(ctx, vodMarkGapSQL, v.chain.StreamID, m.seq, m.session, m.reason); err != nil {
@@ -596,12 +600,21 @@ func vodValidateReason(err error) string {
 //
 //	vod/{streamID}/{head}/index.m3u8
 //
-// 성분 검사는 목록 키(manifestKey)와 같다.
+// 성분 검사는 목록 키(manifestKey)와 같고, head 에 점이 있으면 거부한다 — 회차 키의 둘째 성분({round}.round)과 겹치는 사슬
+// 키를 「세션 id 에 점이 없다」는 바깥 가정에 기대지 않고 여기서 막는다(security C3 L2).
 func vodKey(streamID, head string) (string, error) {
-	if _, err := manifestKey(streamID, head); err != nil {
+	if strings.Contains(head, ".") {
+		return "", fmt.Errorf("publish: session_id=%q 는 사슬 VOD 키에 쓸 수 없다(점 — 회차 키 성분과 겹친다)", head)
+	}
+	return vodObjectKey(streamID, head)
+}
+
+// vodObjectKey 는 VOD 객체 키 vod/{streamID}/{component}/index.m3u8 이다 — 성분 검사는 목록 키(manifestKey)와 같다.
+func vodObjectKey(streamID, component string) (string, error) {
+	if _, err := manifestKey(streamID, component); err != nil {
 		return "", err
 	}
-	return vodKeyPrefix + streamID + "/" + head + "/index.m3u8", nil
+	return vodKeyPrefix + streamID + "/" + component + "/index.m3u8", nil
 }
 
 // msDuration 은 ms 정수 길이다.

@@ -14,6 +14,7 @@ package publish
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
@@ -71,6 +72,10 @@ type scopeDecision struct {
 //	5 앞 회원 VOD 가 종국 전                          대기 front_pending
 //	6 앞 회원이 freeze_failed · 문서 없는 종국        사슬 범위 + Fallback front_freeze_failed · front_no_document
 //	7 그 밖                                           회차 범위
+//
+// 회차 세션은 seq 순으로 개시한다(앞 세션의 행이 뒤 세션의 행보다 앞) — 그래서 컷오프가 앞 사슬을 넘으면 그 회원은 HasRows
+// 거짓이라 앞 회원이 아니고, 뒤 사슬의 첫 렌더 행은 max(MinSeq, 컷오프)다. 이 불변식이 깨진 입력은 발행 전 검사 S5 (b)
+// 위반 → validate 실패 → 사슬 범위 물러섬(안전 쪽)으로 간다.
 func decideScope(c index.Chain, g index.RoundGate) scopeDecision {
 	if c.RoundID == "" || g.Latest != c.Tail {
 		return scopeDecision{}
@@ -117,12 +122,12 @@ func roundFallsBack(o FreezeOutcome) bool {
 //
 //	vod/{streamID}/{roundID}.round/index.m3u8
 //
-// 세션 id 에는 점이 없어 둘째 성분은 어떤 사슬 키(vodKey — 머리 세션)와도 겹치지 않는다(R6). 성분 검사는 목록 키와 같다.
+// 둘째 성분에 점이 들어 어떤 사슬 키(vodKey — 점 든 머리를 거부한다)와도 겹치지 않는다(R6). 성분 검사는 목록 키와 같다.
 func vodRoundKey(streamID, roundID string) (string, error) {
 	if roundID == "" {
 		return "", errors.New("publish: 회차가 없어 회차 VOD 키를 지을 수 없다")
 	}
-	return vodKey(streamID, roundID+".round")
+	return vodObjectKey(streamID, roundID+".round")
 }
 
 // FreezeChainVOD 는 회차 판정 없이 사슬 범위 · 지금 키로 동결한다 — 물러섬을 이미 겪은 세션에 루프가 부른다.
@@ -210,6 +215,8 @@ func roundInput(l index.RoundLedger) vodInput {
 
 // judgeRound 는 읽은 회차 장부 l(읽기 오류 err)로 plan 을 세운다. 상한을 넘은 적재(ErrRoundTooLarge)는 too_large 실패라
 // 물러섬 대상이고, 사슬 변경 · 꼬리 없음은 chain_changed 실패 · 그 밖 읽기 오류는 재시도다(사슬 경로 judge 와 같은 사다리).
+// 다시 읽은 회차가 키를 지은 회차(v.chain.RoundID)와 다르면 chain_changed 실패다 — 회차 불변 트리거로 닿지 않는 방어다
+// (security C3 L1).
 func (v *vodJob) judgeRound(l index.RoundLedger, err error, abandon bool) (vodInput, vodPlan, FreezeOutcome, bool) {
 	switch {
 	case errors.Is(err, index.ErrChainChanged), errors.Is(err, index.ErrChainNotFound):
@@ -218,6 +225,9 @@ func (v *vodJob) judgeRound(l index.RoundLedger, err error, abandon bool) (vodIn
 		return vodInput{}, vodPlan{}, vodFailed(vodTooLarge, err), false
 	case err != nil:
 		return vodInput{}, vodPlan{}, vodRetry(freezeLedger, err), false
+	case l.Chain.RoundID != v.chain.RoundID:
+		return vodInput{}, vodPlan{}, vodFailed(vodChainChanged, fmt.Errorf("publish: 다시 읽은 회차 %q 가 키의 회차 %q 와 다르다",
+			l.Chain.RoundID, v.chain.RoundID)), false
 	}
 	in := roundInput(l)
 	plan, out, ok := v.planInput(in, abandon)

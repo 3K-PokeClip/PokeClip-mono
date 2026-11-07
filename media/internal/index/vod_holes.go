@@ -12,7 +12,8 @@ package index
 // 강제 · seq 재사용 없음 — 설계 5절 P12). 그래서 범위 안 행 수가 범위 길이보다 작으면 그 뒤에 지워진 것이다. 문서는 사슬
 // 회원 전원이 같은 키 · 범위를 가지므로 구멍 하나에 회원 수만큼 행이 나온다 — vod_s3_key 로 묶어 읽는다. state =
 // 'ended' 만 본다 — 문서를 확정했지만 phase 4 전(ending)인 창은 못 본다. 빈 동결(키 없음)과 조회 제외 표시(expired_at)가
-// 있는 문서는 빠진다. 내장 함수는 pg_catalog 로 한정한다.
+// 있는 문서는 빠진다. 키는 있는데 범위(vod_first_seq · vod_last_seq)가 NULL 인 이상 행도 비교가 NULL 이라 조용히 빠진다 —
+// 확정 문장은 키와 범위를 함께 쓰므로 정상 장부에는 없다. 내장 함수는 pg_catalog 로 한정한다.
 const VODDocumentHolesSQL = `
 -- 읽기 전용. 조회 제외 표시가 없는 ended 문서 가운데, 확정 범위 안 seq 가 장부에서 빠진 것(문서 구멍)을 찾는다.
 SELECT s.stream_id, s.session_id, s.vod_s3_key, s.vod_first_seq, s.vod_last_seq,

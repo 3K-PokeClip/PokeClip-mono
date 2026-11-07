@@ -40,7 +40,8 @@ const (
 
 // FreezeOutcome 은 동결 · 봉인 한 번의 결과다(설계 2.1).
 //
-// Retry 가 참이면 같은 걸음을 4초 뒤 다시 한다(상한 3회는 판정부가 센다). Result 가 failed 면 같은 입력으로 다시 해도
+// Retry 가 참이면 같은 걸음을 4초 뒤 다시 한다(상한 3회는 판정부가 센다). 단 Reason 이 정산 · 회차 대기(IsSettleWait —
+// unsettled · round_open · front_pending)면 장애가 아니라 횟수를 올리지 않고 정산 스캔 · 깨우기가 다시 부른다. Result 가 failed 면 같은 입력으로 다시 해도
 // 서지 않는다 — DVR 은 봉인(Endlist)으로, 봉인도 실패면 freeze_failed 로 간다. Reason 은 retry · failed 의 사유(로그
 // 속성 reason 값)다. Err 는 사유에 딸린 원인 오류다(없을 수 있다).
 //

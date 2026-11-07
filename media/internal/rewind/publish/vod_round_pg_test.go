@@ -375,6 +375,72 @@ func TestFreezeVODWithPreM6ChainHead(t *testing.T) {
 	})
 }
 
+// round_cutoff_inside_later_chain(cx C3 컷오프 경계 · cc C2 축 2) — 컷오프가 뒤 사슬 중간이어도 발행 전 검사 S5 (b)(세션이
+// 바뀌는 줄에만 끊김 표시)를 지키며 확정한다. 컷오프 아래 행만 있는 세션은 앞 회원이 아니다(HasRows 거짓). 두 경우:
+//
+//	A · B 사슬 · 컷오프 7(B 중간)       앞 회원 없음 → 사슬 범위 · B 키 · 범위 7–9 · 끊김 표시 없음(첫 행 B 가 소유)
+//	A · B · C 사슬 · 컷오프 5(B 중간)   앞 회원 B → 회차 범위 · 회차 키 · 범위 5–9 · 끊김 표시는 C 의 첫 행(seq 7) 앞에만
+//
+// 판별: 회차 행 적재가 컷오프 아래부터 싣거나, 계승 칸 채움이 소유 세션까지 덮으면 끊김 표시 위치 · 범위로 FAIL.
+func TestFreezeVODCutoffInsideLaterChain(t *testing.T) {
+	tests := []struct {
+		name        string
+		ss          []roundSess
+		sessions    string // seq 0..9 의 세션(한 글자씩)
+		cutoff      int64
+		chain       index.Chain
+		key, scope  string
+		first       int64
+		discAt      []int64 // 끊김 표시가 서는 seq
+		frozenTails []string
+	}{
+		{name: "AB_사슬_B_중간", ss: twoChainRound(), sessions: "AAAAABBBBB", cutoff: 7, chain: chainOf("A", "B"),
+			key: "vod/str/B/index.m3u8", scope: ScopeChain, first: 7, frozenTails: []string{"B"}},
+		{name: "ABC_사슬_B_중간", ss: []roundSess{
+			{id: "A", round: "A", td: 6, vod: ResultFrozen, doc: true},
+			{id: "B", round: "A", td: 6, vod: ResultFrozen, doc: true},
+			{id: "C", round: "A", td: 8, vod: "freezing"},
+		}, sessions: "AAAABBBCCC", cutoff: 5, chain: chainOf("A", "C"), key: roundDocKey, scope: ScopeRound, first: 5,
+			discAt: []int64{7}, frozenTails: []string{"C"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := make([]vodRow, len(tt.sessions))
+			for i, c := range tt.sessions {
+				rows[i] = vodRow{session: string(c), state: "uploaded"}
+			}
+			p, store := newRoundVOD(t, tt.ss, rows)
+			exec(t, p.pool, `UPDATE stream_cutoffs SET cutoff_seq = $2 WHERE stream_id = $1`, fxStream, tt.cutoff)
+
+			out := p.FreezeVOD(t.Context(), tt.chain, false)
+
+			wantOutcome(t, out, AxisVOD, ResultFrozen, false)
+			if out.Scope != tt.scope || out.Fallback != "" {
+				t.Errorf("동결 = %+v, want Scope %s · 물러섬 없음", out, tt.scope)
+			}
+			body, _ := stored(store, tt.key)
+			if body == nil {
+				t.Fatalf("문서 %s 가 없다", tt.key)
+			}
+			lines := vodLines(body)
+			if len(lines) != int(10-tt.first) {
+				t.Fatalf("문서 조각 %d 개, want %d(컷오프 %d 이상):\n%s", len(lines), 10-tt.first, tt.cutoff, body)
+			}
+			for i, line := range lines {
+				seq := tt.first + int64(i)
+				if got := strings.HasPrefix(line, "#EXT-X-DISCONTINUITY "); got != slices.Contains(tt.discAt, seq) {
+					t.Errorf("seq %d 줄 %q — 끊김 표시는 seq %v 앞에만", seq, line, tt.discAt)
+				}
+			}
+			for _, id := range tt.frozenTails {
+				if v := readVOD(t, p, id); strOrNil(v.key) != tt.key || v.first == nil || *v.first != tt.first || v.last == nil || *v.last != 9 {
+					t.Errorf("%s VOD 열 = %+v(키 %s), want %s · 범위 %d–9", id, v, strOrNil(v.key), tt.key, tt.first)
+				}
+			}
+		})
+	}
+}
+
 // vodDocHole 은 진단 질의(index.VODDocumentHolesSQL) 결과 한 행이다.
 type vodDocHole struct {
 	stream, session, key string

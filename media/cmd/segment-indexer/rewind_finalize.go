@@ -75,7 +75,8 @@ type finalizer struct {
 	gauge    map[string]int           // 사유 → 마지막으로 낸 게이지 값
 	reading  map[string]bool          // 도는 상태 읽기(스트림)
 	readMax  int                      // 도는 상태 읽기의 전체 상한
-	// seen 은 이번 스캔 한 바퀴에서 본 회차다 — 바퀴가 끝나면 보지 않은 회차의 메모리를 지운다.
+	// seen 은 이번 스캔 한 바퀴에서 본 회차다 — 바퀴가 끝나면 보지 않은 회차의 메모리를 지운다. 걸음 결과가 온 회차도
+	// 센다 — 결과보다 먼저 시작한 스캔 쪽이 그 회차를 보지 못했어도 결과가 적은 기억(물러섬 · 경보 · 횟수)이 그 바퀴 끝에 남는다.
 	seen map[string]bool
 	// vodChainOnly 는 회차 경로에서 물러선 적 있는 회차 → 그 까닭이다 — 다음 걸음부터 stepChain 을 낸다(POK-549 설계 r4 2.4).
 	vodChainOnly map[string]string
@@ -278,8 +279,8 @@ func (r *rewindLoop) noteSaturation(full bool) {
 	}
 }
 
-// pruneUnseen 은 스캔 한 바퀴에서 보지 않은 회차의 메모리를 지운다 — ended 가 됐거나 다른 writer 가 거둔 회차다. 도는 작업 ·
-// 빠른 길 대기가 있는 회차는 남긴다.
+// pruneUnseen 은 스캔 한 바퀴에서 보지 않은 회차(seen)의 메모리를 지운다 — ended 가 됐거나 다른 writer 가 거둔 회차다. 도는
+// 작업 · 빠른 길 대기가 있는 회차는 남긴다.
 func (r *rewindLoop) pruneUnseen() {
 	f := r.fin
 	for id := range f.attempts {
@@ -354,7 +355,7 @@ func (r *rewindLoop) finalLoadDone(ctx context.Context, res publish.Result, now 
 	}
 }
 
-// finalStepDone 은 걸음 결과를 반영한다 — 실패 횟수 · 신호 · 물러섬 기억 · 상태 표지 · 다음 걸음(섰으면 곧바로 다시 읽고,
+// finalStepDone 은 걸음 결과를 반영한다 — 바퀴 생존(seen) · 실패 횟수 · 신호 · 물러섬 기억 · 상태 표지 · 다음 걸음(섰으면 곧바로 다시 읽고,
 // 재시도면 4초 뒤) · 회차 깨우기. 물러섬 기억은 noteStep 뒤에 적는다 — noteStep 이 기억 부재로 그 세션의 첫 물러섬을 안다.
 func (r *rewindLoop) finalStepDone(ctx context.Context, res publish.Result, now time.Time) {
 	f := r.fin
@@ -362,6 +363,7 @@ func (r *rewindLoop) finalStepDone(ctx context.Context, res publish.Result, now 
 	id := out.row.SessionID
 	delete(f.running, id)
 	delete(f.streamOf, id)
+	f.seen[id] = true
 	if out.d.Step == finalize.StepFreezeVOD {
 		f.vod--
 	}
@@ -434,11 +436,11 @@ func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 		r.log.Error("session_freeze_failed", "axis", axis, "step", step, "session_id", id, "reason", out.freeze.Reason)
 	case out.freeze.Result == publish.ResultFailed:
 		// 다음 단(StepFailVOD 등)의 session_freeze_failed 는 장부 문장이라 이 사유를 모른다 — 사유는 이 줄에만 남는다.
-		r.log.Info("session_freeze", "axis", axis, "step", step, "session_id", id, "result", out.freeze.Result,
-			"reason", out.freeze.Reason, "scope", out.freeze.Scope)
+		r.log.Info("session_freeze", append([]any{"axis", axis, "step", step, "session_id", id, "result", out.freeze.Result,
+			"reason", out.freeze.Reason}, scopeAttr(out.freeze)...)...)
 	case out.freeze.Result != "":
-		r.log.Info("session_freeze", "axis", axis, "step", step, "session_id", id, "result", out.freeze.Result,
-			"scope", out.freeze.Scope)
+		r.log.Info("session_freeze", append([]any{"axis", axis, "step", step, "session_id", id, "result", out.freeze.Result},
+			scopeAttr(out.freeze)...)...)
 	}
 	// 회차 경로는 마지막 사슬 범위에 GAP 줄이 있을 때만이다(R19 — 앞 사슬 GAP 은 앞 사슬 동결 때 이미 냈다). 그 GAP 의 출처는
 	// 가리지 않는다 — 사슬 경로의 지금 조건과 같다(K26).
@@ -448,11 +450,22 @@ func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 	}
 }
 
+// scopeAttr 는 session_freeze 의 scope 속성이다 — 범위를 정한 결과(VOD)에만 싣고, DVR · 판정 전에 끝난 결과(빈 값)는 싣지
+// 않는다.
+func scopeAttr(fo publish.FreezeOutcome) []any {
+	if fo.Scope == "" {
+		return nil
+	}
+	return []any{"scope", fo.Scope}
+}
+
 // noteRound 는 회차 신호다(설계 8절) — session_vod_round_fallback(사슬 범위로 물러섬 · 그 세션의 첫 물러섬만 — 물러섬 기억이
 // 아직 없을 때) · session_vod_round_wait_long(회차 대기가 ending 뒤 2 × 정산 창을 넘김 · 세션당 한 번). 시각은 행의 DB 시계
 // 칸이다.
 func (r *rewindLoop) noteRound(out finalStep) {
 	f, id := r.fin, out.row.SessionID
+	// !known 은 방어 가드다 — 지금은 기억이 있으면 stepChain 이라 Fallback 이 오지 않아 닿지 않는다(FB1 등가 변이). 기억 뒤에도
+	// 물러섬을 내는 경로가 생기면 WARN 을 세션당 한 번으로 묶는다.
 	if _, known := f.vodChainOnly[id]; out.freeze.Fallback != "" && !known {
 		r.log.Warn("session_vod_round_fallback", "session_id", id, "round", out.row.RoundID, "reason", out.freeze.Fallback,
 			"cause", out.freeze.FallbackCause, "err", out.freeze.FallbackErr)

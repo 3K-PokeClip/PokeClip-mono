@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -274,6 +275,46 @@ func TestFreezeVODRoundMatchesTDSplitGolden(t *testing.T) {
 		!st.FirstPDT.Equal(first.PlaybackPDT) || !st.HeadPDT.Equal(head) {
 		t.Errorf("판정식 = (%+v, %v), want vod · %s · 최신 %s · firstPdt %v · headPdt %v", st, err, goldenRoundKey, goldenLast,
 			first.PlaybackPDT, head)
+	}
+}
+
+// round_vod_golden_last_chain_document(cc C4 L · cx C4 L · R20 뒤 범위) — 골든에서 마지막 사슬 조각(1627–1733)만 장부로 되살리면
+// 앞 세션에 렌더할 행이 없어 FreezeVOD 가 사슬 하나로 동결한다(마지막 사슬 키 · 범위 1627–1733). 그 사슬 문서는 골든 회차
+// 문서의 뒤 범위(DISCONTINUITY 다음 줄부터 끝까지)와 바이트로 같고, 머리는 골든 머리에서 MEDIA-SEQUENCE 만 1627 이다 — 회차
+// 문서의 마지막 사슬 범위가 지금 코드가 따로 내는 그 사슬 문서와 같다. 사슬 하나는 기준 트리도 같은 동작이라 두 트리에서
+// PASS 하는 회귀 고정이다.
+func TestFreezeVODGoldenLastChainMatchesRoundTail(t *testing.T) {
+	golden, segs := readRoundGolden(t)
+	var last []goldenSeg
+	for _, s := range segs {
+		if s.row.SessionID == goldenLast {
+			last = append(last, s)
+		}
+	}
+	p, store := newRoundGolden(t, last)
+	key := "vod/" + goldenStream + "/" + goldenLast + "/index.m3u8"
+
+	wantOutcome(t, p.FreezeVOD(t.Context(), goldenChain(goldenLast), false), AxisVOD, ResultFrozen, false)
+
+	body, _ := stored(store, key)
+	if body == nil {
+		t.Fatalf("마지막 사슬 문서 %s 가 없다", key)
+	}
+	lines := strings.Split(string(golden), "\n")
+	cut := slices.Index(lines, "#EXT-X-DISCONTINUITY")
+	if cut < 6 || lines[3] != "#EXT-X-MEDIA-SEQUENCE:4" {
+		t.Fatalf("골든 꼴 — DISCONTINUITY %d행 · MSN 줄 %q, want 머리 여섯 줄 뒤 · MSN 4", cut+1, lines[3])
+	}
+	head := append([]string{}, lines[:6]...)
+	head[3] = "#EXT-X-MEDIA-SEQUENCE:1627"
+	want := strings.Join(append(head, lines[cut+1:]...), "\n")
+	if string(body) != want {
+		t.Errorf("마지막 사슬 문서 %dB 가 골든 뒤 범위(머리 MSN 1627) %dB 와 다르다", len(body), len(want))
+	}
+	sum := sha256Of(body)
+	if v := readVOD(t, p, goldenLast); v.state != ResultFrozen || strOrNil(v.key) != key || !bytes.Equal(v.sha, sum[:]) ||
+		v.first == nil || *v.first != 1627 || v.last == nil || *v.last != 1733 {
+		t.Errorf("마지막 사슬 VOD 열 = %+v(키 %s), want frozen · %s · 범위 1627–1733", v, strOrNil(v.key), key)
 	}
 }
 

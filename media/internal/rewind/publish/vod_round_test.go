@@ -136,6 +136,37 @@ func TestVODRoundKeyRejectsBadComponent(t *testing.T) {
 	}
 }
 
+// vod_key_rejects_dot_head(security C3 L2) — 사슬 키의 머리 성분에는 점이 없어야 한다 — 회차 키 둘째 성분({round}.round)과
+// 겹치는 사슬 키를 「세션 id 에 점이 없다」는 바깥 가정 없이 키 함수가 막는다. 점 없는 머리는 지금 키 그대로다(회차 키는 점을
+// 그대로 쓴다). 고치기 전(6fcef57b)은 점 든 머리를 받아 FAIL.
+func TestVODKeyRejectsDotHead(t *testing.T) {
+	for _, head := range []string{"A.round", "S-1.x", "."} {
+		if got, err := vodKey("str", head); err == nil {
+			t.Errorf("vodKey(str, %q) = %q, want 오류(점 든 머리)", head, got)
+		}
+	}
+	if got, err := vodKey("str", "S-20261104-051100-str-4"); err != nil || got != "vod/str/S-20261104-051100-str-4/index.m3u8" {
+		t.Errorf("vodKey(점 없는 머리) = (%q, %v), want 지금 키", got, err)
+	}
+	if got, err := vodRoundKey("str", "A"); err != nil || got != "vod/str/A.round/index.m3u8" {
+		t.Errorf("vodRoundKey(str, A) = (%q, %v), want 회차 키", got, err)
+	}
+}
+
+// judge_round_rejects_other_round(security C3 L1) — 다시 읽은 회차 장부의 회차가 부른 쪽 사슬의 회차(키를 지은 값)와 다르면
+// chain_changed 실패다 — 그 키에 다른 회차의 문서를 쓰지 않는다. 물러섬 대상도 아니다. 고치기 전(6fcef57b)은 plan 을 세워 FAIL.
+func TestJudgeRoundRejectsOtherRound(t *testing.T) {
+	v := &vodJob{chain: roundChain("B"), round: true}
+	l := roundLedgerOf(3, 3)
+	l.Chain.RoundID = "X"
+
+	_, _, out, ok := v.judgeRound(l, nil, false)
+
+	if ok || out.Result != ResultFailed || out.Reason != vodChainChanged || roundFallsBack(out) {
+		t.Errorf("다른 회차 장부 = (%+v, %t), want chain_changed 실패 · 물러섬 아님", out, ok)
+	}
+}
+
 // settle_wait_predicates(설계 2.2 · R21) — 정산 · 회차 대기는 장애가 아닌 재시도다. 판정부는 IsSettleWait 하나로 가른다.
 // 변이 M11(술어에서 사유 하나 제거)은 이 표와 cmd 음성 대조가 잡는다.
 func TestSettleWaitPredicates(t *testing.T) {

@@ -138,8 +138,10 @@ func LoadRoundLedger(ctx context.Context, pool *pgxpool.Pool, last Chain, maxRow
 }
 
 // ReadRoundLedger 는 LoadRoundLedger 의 읽기를 부른 쪽 트랜잭션 tx 안에서 한다 — 꼬리 잠금을 쥔 트랜잭션이 같은 연결로
-// 다시 읽는다(ReadChainLedger 와 같은 까닭). 문장들이 한 스냅숏인지는 tx 의 격리 수준을 따른다. 오류는 LoadRoundLedger 와
-// 같다.
+// 다시 읽는다(ReadChainLedger 와 같은 까닭). 여섯 문장이 한 스냅숏인지는 tx 의 격리 수준을 따른다. READ COMMITTED 면
+// 문장마다 새 스냅숏이라 판정 재료(Gate) · 범위 · 행 · 세션이 서로 다른 시점일 수 있다 — 그 사이에 든 늦은 조각이나 ③
+// 착지가 Rows 와 Sessions(MinSeq) · Gate(HasRows)를 어긋나게 할 수 있다. 부른 쪽(발행 층 꼬리 잠금 재독)이 그 근거를 진다.
+// 오류는 LoadRoundLedger 와 같다.
 func ReadRoundLedger(ctx context.Context, tx pgx.Tx, last Chain, maxRows int) (RoundLedger, error) {
 	return readRoundLedger(ctx, tx, last, maxRows)
 }

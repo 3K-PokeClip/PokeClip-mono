@@ -682,6 +682,36 @@ func TestSettleAbandonedFollowsLastChainGaps(t *testing.T) {
 	}
 }
 
+// cc C5 L2 — session_freeze 의 scope 는 범위를 정한 결과(VOD)에만 싣는다 — DVR 걸음 · 판정 전에 끝난 결과(Scope 빈 값)에는
+// 그 속성이 없다. 고치기 전(6fcef57b)은 빈 scope 를 실어 FAIL.
+func TestSessionFreezeOmitsEmptyScope(t *testing.T) {
+	tests := []struct {
+		name   string
+		step   finalize.Step
+		freeze publish.FreezeOutcome
+	}{
+		{name: "DVR_섬", step: finalize.StepFreezeDVR, freeze: publish.FreezeOutcome{Axis: publish.AxisDVR, Result: publish.ResultFrozen}},
+		{name: "VOD_판정_전_실패", step: finalize.StepFreezeVOD,
+			freeze: publish.FreezeOutcome{Axis: publish.AxisVOD, Result: publish.ResultFailed, Reason: "chain_changed"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := newRoundLoop(t, newRoundWorld(1), time.Second)
+
+			l.rewind.noteStep(finalStep{row: roundRow("T", nil), d: finalize.Decision{Step: tt.step}, out: finalize.OutcomeDone,
+				progressed: true, freeze: tt.freeze}, finalize.Attempts{})
+
+			rec := l.logs.last("session_freeze")
+			if rec == nil || rec.attrs["result"] != tt.freeze.Result {
+				t.Fatalf("session_freeze = %+v, want result=%s", rec, tt.freeze.Result)
+			}
+			if v, ok := rec.attrs["scope"]; ok {
+				t.Fatalf("session_freeze scope = %q, want 속성 없음(범위를 정하지 않은 결과)", v)
+			}
+		})
+	}
+}
+
 // P4 · M24 — ended(phase 4 섰음) 뒤 forget 이 물러섬 기억 · 오래 기다림 기억도 지운다(장기 실행 맵이 자라지 않는다).
 func TestForgetClearsRoundMemory(t *testing.T) {
 	w := newRoundWorld(1)
