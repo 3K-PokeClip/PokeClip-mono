@@ -302,7 +302,7 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가). 끝의 셋(로그 그룹 태그
 # 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR). 맨 끝 다섯은 SG
 # 규칙 자원의 재조회 읽기다(POK-479 — 묶음마다 SG 규칙 자원이 있는 근거는
-# 그 묶음 파일의 주석). O7a 의 스물넷은 network 의 인터페이스 엔드포인트 ·
+# 그 묶음 파일의 주석). O7a 의 스물셋은 network 의 인터페이스 엔드포인트 ·
 # 엔드포인트 SG 를 만들고 되돌릴 때 provider 가 부르는 동작과, 확인 ·
 # 되돌리기 절차가 부르는 동작이다. 그 뒤의 둘은 엔드포인트 생성의 Route 53
 # 종속 동작(두 리전), 맨 끝 하나는 확인 절차의 로그 검색이다(POK-408 —
@@ -351,7 +351,6 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7a\tsecretsmanager:DescribeSecret\tap-northeast-2\t'\
 'arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*'
   $'O7a\tlogs:DescribeLogStreams\tap-northeast-2\t*'
-  $'O7a\tlogs:GetLogEvents\tap-northeast-2\t*'
   $'O7a\tcloudwatch:GetMetricStatistics\tap-northeast-2\t*'
   $'O7a\tcloudwatch:ListMetrics\tap-northeast-2\t*'
   $'O7a\tssm:SendCommand\tap-northeast-2\t*'

@@ -118,13 +118,12 @@ elasticloadbalancing:DescribeTargetHealth	ap-northeast-2	*
 # 확인 (ㄷ) 재기동 전 관문 — 비밀의 LastChangedDate · AWSCURRENT 버전
 # ID(describe-secret).
 secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
-# 확인 (ㄷ) 새 태스크의 로그 스트림 생성 시각 · 수신 루프 시작 줄 ·
-# poll_failed 줄(describe-log-streams · get-log-events).
+# 확인 (ㄷ) 새 태스크의 로그 스트림 생성 시각 · 첫 이벤트 시각
+# (describe-log-streams — prod/network README 의 vpce_log_streams).
 logs:DescribeLogStreams	ap-northeast-2	*
-logs:GetLogEvents	ap-northeast-2	*
 # 확인 (ㄷ) SQS 판정의 poll_failed 시각 · (ㄹ) 회귀 감시의 오류 줄
 # 세기(filter-log-events — prod/network README). 리전 · 자원 꼴은 바로 위
-# 확인 (ㄷ) 의 logs 행 둘과 같다.
+# 확인 (ㄷ) 의 logs 행과 같다.
 logs:FilterLogEvents	ap-northeast-2	*
 # 되돌리기 2단계 관문 (나) 의 BytesProcessed 교정 · 판정(list-metrics ·
 # get-metric-statistics — AWS/PrivateLinkEndpoints).
