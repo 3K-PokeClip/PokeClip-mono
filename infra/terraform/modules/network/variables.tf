@@ -55,3 +55,25 @@ variable "enable_s3_gateway_endpoint" {
   type        = bool
   default     = true
 }
+
+variable "interface_endpoint_services" {
+  description = "인터페이스 엔드포인트를 둘 AWS 서비스 접미(예: ecr.api · sqs — com.amazonaws.<리전>. 뒤). 비면 엔드포인트 · 엔드포인트 SG 를 만들지 않는다."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(distinct(var.interface_endpoint_services)) == length(var.interface_endpoint_services)
+    error_message = "interface_endpoint_services 에 같은 서비스가 두 번 있다."
+  }
+
+  validation {
+    condition     = alltrue([for service in var.interface_endpoint_services : can(regex("^[a-z0-9]+(\\.[a-z0-9]+)*$", service))])
+    error_message = "interface_endpoint_services 는 서비스 접미(소문자 · 숫자를 점으로 이음, 예: ecr.api)만 받는다 — 전체 서비스 이름이 아니다."
+  }
+}
+
+variable "interface_endpoint_private_dns" {
+  description = "인터페이스 엔드포인트의 private DNS. 되돌리기 스위치다 — false 면 엔드포인트 · SG 는 남고 VPC 의 호출이 공용 이름(NAT)으로 돌아간다."
+  type        = bool
+  default     = true
+}
