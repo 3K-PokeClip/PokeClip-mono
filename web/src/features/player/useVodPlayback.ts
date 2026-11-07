@@ -117,9 +117,9 @@ function clampToView(targetMs: number, view: SeekView): number {
 }
 
 /**
- * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. V0-c WebKit 1/3 에서
- * 목록 끝(마지막 조각 PDT + 길이) 대입이 이어진 버퍼 끝에 놓여 멎었다(원인 미확정 — 마지막 조각을 받기 전 대입과 겹침).
- * 마지막 1초를 틀어 끝에 닿는다
+ * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. 멈춤 회피가
+ * 아니다: 받지 않은 마지막 조각 안으로 옮기면 앞 버퍼 끝에 멎는 일은 Playwright WebKit 26.4 에서 재현됐고 1초를 물러서도
+ * 남았으며, macOS Safari 27.0.1 실측 0/42 에서는 재현되지 않았다(iOS 는 재지 않았다). 마지막 1초를 틀어 끝에 닿는다
  */
 const END_TAIL_MS = 1_000;
 
