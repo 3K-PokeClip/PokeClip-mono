@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# assert-graph-path.sh 를 시험하고, 그것으로 network 모듈의 의존 계약 — 인터페이스
+# assert_graph_path.sh 를 시험하고, 그것으로 network 모듈의 의존 계약 — 인터페이스
 # 엔드포인트가 SG 인그레스 규칙 뒤에 생긴다(`depends_on`, POK-408 설계 보강 3-1) —
 # 을 고정한다. terraform test 는 의존 그래프를 볼 수 없어 여기서 본다.
 #
@@ -8,9 +8,14 @@
 # 예외(kty 2026-11-07). 그래서 이름이 `*_test.sh` 가 아니다 — shell 잡의
 # 「스크립트 시험」 글롭에 들지 않는다.
 #
+# Shell 가이드의 100줄 권고를 넘지만 셸로 둔다 — 같은 디렉터리 시험
+# (put_secret_test · kvs_put_test)과 같은 틀(fail · pass · 사례 수 · 임시
+# 디렉터리 잔여 단언)을 쓰고, 그 틀을 공용 함수 파일로 빼면 두 시험도 함께
+# 바꿔야 해 이 변경의 범위를 넘는다.
+#
 # 사례는 두 묶음이다.
-#   - 합성 그래프: 직접 간선 · 추이 경로 · 역방향 간선만 · 경로 없음 · 노드 없음 ·
-#     빈 입력 · DOT 가 아닌 입력 · 인자 개수. 종료 코드와 출력 줄을 본다.
+#   - 합성 그래프: 직접 간선 · 추이 경로 · 역방향 간선만 · 경로 없음 · 간선 없는
+#     노드 · 노드 없음 · 빈 입력 · DOT 가 아닌 입력 · 인자 개수. 종료 코드와 출력 줄을 본다.
 #   - 실제 모듈: init 된 모듈 디렉터리에서 `terraform graph` 를 그려 엔드포인트 →
 #     인그레스 규칙 경로가 있는지 본다. 그 모듈의 .tf · lock 사본에서 `depends_on`
 #     한 줄을 지우면(변이) 경로가 없어지는지(종료 1 — 노드 없음이 아님)도 본다.
@@ -31,7 +36,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
-readonly GRAPH_PATH="${SCRIPT_DIR}/../assert-graph-path.sh"
+readonly GRAPH_PATH="${SCRIPT_DIR}/../assert_graph_path.sh"
 readonly DEFAULT_NETWORK_MODULE="${SCRIPT_DIR}/../../modules/network"
 
 readonly ENDPOINT='aws_vpc_endpoint.interface'
@@ -42,7 +47,7 @@ readonly DEPENDS_ON_LINE="  depends_on = [${INGRESS_RULE}]"
 readonly EXIT_NO_PATH=1
 readonly EXIT_USAGE=2
 
-readonly EXPECTED_CASES=10
+readonly EXPECTED_CASES=11
 
 failures=0
 passes=0
@@ -87,11 +92,11 @@ pass() {
 }
 
 #######################################
-# 그래프(표준 입력)를 assert-graph-path.sh 에 넘겨 돌리고 결과를 받는다.
+# 그래프(표준 입력)를 assert_graph_path.sh 에 넘겨 돌리고 결과를 받는다.
 # Globals:
 #   tmp_root, out, err, status
 # Arguments:
-#   assert-graph-path.sh 에 넘길 인자.
+#   assert_graph_path.sh 에 넘길 인자.
 #######################################
 run_graph_path() {
   bash "${GRAPH_PATH}" "$@" >"${tmp_root}/out" 2>"${tmp_root}/err"
@@ -135,7 +140,7 @@ dot_graph() {
 }
 
 #######################################
-# 합성 그래프: 경로 있음 둘 · 경로 없음 둘 · 사용법 오류(종료 2) 넷.
+# 합성 그래프: 경로 있음 둘 · 경로 없음 셋 · 사용법 오류(종료 2) 넷.
 #######################################
 test_synthetic_graphs() {
   run_graph_path A B < <(dot_graph 'A>B')
@@ -152,6 +157,10 @@ test_synthetic_graphs() {
   run_graph_path A D < <(dot_graph 'A>B' 'B>C' 'D>C')
   expect_result no-path "${EXIT_NO_PATH}" '' 'graph-path: A -> D 경로 없음'
 
+  # C 는 노드 줄로만 있고 간선이 없다 — 「노드 없음」(종료 2)이 아니다.
+  run_graph_path A C < <(dot_graph 'A>B')
+  expect_result isolated-node "${EXIT_NO_PATH}" '' 'graph-path: A -> C 경로 없음'
+
   run_graph_path A E < <(dot_graph 'A>B')
   expect_result missing-node "${EXIT_USAGE}" '' \
     'graph-path: 그래프에 노드가 없다: A 또는 E'
@@ -166,7 +175,7 @@ test_synthetic_graphs() {
 
   run_graph_path A </dev/null
   expect_result usage "${EXIT_USAGE}" '' \
-    '사용: terraform graph | assert-graph-path.sh <출발 주소> <도착 주소>'
+    '사용: terraform graph | assert_graph_path.sh <출발 주소> <도착 주소>'
 }
 
 #######################################

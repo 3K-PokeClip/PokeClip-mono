@@ -8,7 +8,7 @@
 # 경로로 이미 이어진 직접 간선을 지운다 — 직접 간선만 보면 의존이 그대로인데도
 # 실패할 수 있다.
 #
-# 사용: terraform graph | bash infra/terraform/scripts/assert-graph-path.sh \
+# 사용: terraform graph | bash infra/terraform/scripts/assert_graph_path.sh \
 #         <출발 주소> <도착 주소>
 #       주소는 그래프의 노드 이름 그대로다(예: aws_vpc_endpoint.interface).
 # 종료 코드: 0 경로 있음 / 1 경로 없음 / 2 사용법 오류 · 입력이 DOT 그래프가 아님 ·
@@ -28,8 +28,9 @@ readonly FIND_NO_NODE=3
 
 #######################################
 # 표준 입력의 DOT 그래프에서 출발 → 도착 경로를 너비 우선으로 찾는다. 노드 줄은
-# `"이름" [label=...]`, 간선 줄은 `"출발" -> "도착";` 꼴이다(Terraform 1.16 의
-# `terraform graph` 출력).
+# `"이름" [label="이름"];`, 간선 줄은 `"출발" -> "도착";` 꼴이다(Terraform 1.16 의
+# `terraform graph` 출력). 줄을 큰따옴표로 나누면 둘 다 칸이 다섯이고 셋째 칸으로
+# 가른다 — 간선이 없는 노드도 노드 줄로 센다.
 # Arguments:
 #   출발 주소, 도착 주소.
 # Returns:
@@ -39,7 +40,7 @@ find_path() {
   awk -v from="$1" -v to="$2" '
     BEGIN { FS = "\"" }
     NR == 1 { is_graph = match($0, /^digraph [^ ]+ \{$/) }
-    NF == 3 && match($3, /^ \[label=/) { node[$2] = 1 }
+    NF == 5 && $3 == " [label=" { node[$2] = 1 }
     NF == 5 && $3 == " -> " && $5 == ";" {
       node[$2] = 1
       node[$4] = 1
@@ -70,7 +71,7 @@ find_path() {
 main() {
   if [[ "$#" -ne 2 || -z "$1" || -z "$2" ]]; then
     printf '%s\n' \
-      "사용: terraform graph | assert-graph-path.sh <출발 주소> <도착 주소>" >&2
+      "사용: terraform graph | assert_graph_path.sh <출발 주소> <도착 주소>" >&2
     exit "${EXIT_USAGE}"
   fi
   local from="$1"
