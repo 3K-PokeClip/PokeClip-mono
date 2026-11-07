@@ -1914,23 +1914,27 @@ expect_apex_object_asked() {
 #   FAKE_USER, FAKE_ACCOUNT, run_status, run_out
 #######################################
 expect_network_endpoint_targets_asked() {
-  local case_dir dir prefix endpoints groups arn actions action request
+  local case_dir dir prefix arn action request endpoint_cell group_cell
+  local -a endpoints groups actions
   case_dir="$(testlib::new_case)" || {
     testlib::fail "network-endpoints: 시험 준비 실패"
     return
   }
   prefix="arn:aws:ec2:ap-northeast-2:${FAKE_ACCOUNT}"
-  endpoints="${prefix}:vpc-endpoint/vpce-0a1s3gw"
-  endpoints+=" ${prefix}:vpc-endpoint/vpce-0b2sqs"
-  endpoints+=" ${prefix}:vpc-endpoint/vpce-0c3ecr"
-  groups="${prefix}:security-group/sg-0d4vpce"
-  groups+=" ${prefix}:security-group/sg-0e5box"
+  endpoints=("${prefix}:vpc-endpoint/vpce-0a1s3gw"
+    "${prefix}:vpc-endpoint/vpce-0b2sqs"
+    "${prefix}:vpc-endpoint/vpce-0c3ecr")
+  groups=("${prefix}:security-group/sg-0d4vpce"
+    "${prefix}:security-group/sg-0e5box")
+  # 읽기 표의 응답 칸은 ARN 들을 글자 \t 로 잇는다.
+  printf -v endpoint_cell '%s\\t' "${endpoints[@]}"
+  printf -v group_cell '%s\\t' "${groups[@]}"
   {
     principal_reads_table
     testlib::tsv get-resources ec2:vpc-endpoint@ap-northeast-2 \
-      "${endpoints// /\\t}"
+      "${endpoint_cell%\\t}"
     testlib::tsv get-resources ec2:security-group@ap-northeast-2 \
-      "${groups// /\\t}"
+      "${group_cell%\\t}"
   } >"${case_dir}/in/reads.tsv"
   testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
   testlib::run "${case_dir}" principal-O7a env \
@@ -1942,13 +1946,13 @@ expect_network_endpoint_targets_asked() {
       "$(cat -- "${run_out}.stderr")"
     return
   fi
-  for arn in ${endpoints} ${groups}; do
-    actions='ec2:AuthorizeSecurityGroupIngress ec2:RevokeSecurityGroupIngress'
-    actions+=' ec2:DeleteSecurityGroup'
+  for arn in "${endpoints[@]}" "${groups[@]}"; do
+    actions=(ec2:AuthorizeSecurityGroupIngress ec2:RevokeSecurityGroupIngress
+      ec2:DeleteSecurityGroup)
     if [[ "${arn}" == *:vpc-endpoint/* ]]; then
-      actions='ec2:ModifyVpcEndpoint ec2:DeleteVpcEndpoints'
+      actions=(ec2:ModifyVpcEndpoint ec2:DeleteVpcEndpoints)
     fi
-    for action in ${actions}; do
+    for action in "${actions[@]}"; do
       request="\"ActionNames\":[\"${action}\"],"
       request+="\"ResourceArns\":[\"${arn}\"]"
       if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
