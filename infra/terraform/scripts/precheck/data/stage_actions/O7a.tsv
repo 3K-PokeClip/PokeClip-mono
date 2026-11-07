@@ -65,15 +65,21 @@ ec2:DescribeAvailabilityZones	ap-northeast-2	*
 # *   ModifySecurityGroupRules — 인그레스 규칙의 속성이 바뀔 때만
 #     부른다(vpc_security_group_ingress_rule.go 351행). 설계는 규칙을 바꾸지
 #     않는다.
-# *   route53:AssociateVPCWithHostedZone 류 — AWS 서비스 엔드포인트의 private
-#     DNS 는 AWS 가 관리하는 숨은 사설 호스팅 영역이다(PrivateLink 안내서
+# Route 53(이 덩어리 끝의 route53:AssociateVPCWithHostedZone 행):
+# *   공식 권한 표의 CreateVpcEndpoint 종속 동작(cx 대조 — ec2:CreateTags ·
+#     DescribeSecurityGroups · DescribeSubnets · DescribeVpcs ·
+#     route53:AssociateVPCWithHostedZone)이다. 그 원문은 미확인인 채
+#     보수적으로 넣는다 — 빼 두었는데 필요하면 점검은 통과하고 apply 가
+#     network 를 반쯤 만든 채 실패한다. apply 직전 O7a 재판정이 실물로
+#     확정한다.
+# *   반대 근거도 남긴다: iann0036/iam-dataset 의 aws/iam_definition.json
+#     (2026-11-06 판) 사본에는 이 종속 동작이 없다. PrivateLink 안내서
 #     「Access an AWS service using an interface VPC endpoint」 의 Private
-#     DNS 절 —
+#     DNS 절은 AWS 가 관리하는 숨은 사설 호스팅 영역이라고 적는다(확인
+#     2026-11-07 —
 #     https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-access-aws-services.html
-#     · 확인 2026-11-07). 서비스 승인 참조의 CreateVpcEndpoint 종속 동작은
-#     ec2:CreateTags 하나이고 ModifyVpcEndpoint 는 종속 동작이 없다
-#     (iann0036/iam-dataset 의 aws/iam_definition.json · 2026-11-06 판).
-#     provider 의 생성 · 수정 경로는 EC2 클라이언트만 부른다.
+#     ). provider 의 생성 · 수정 경로는 EC2 클라이언트만 부른다.
+# *   리전 · 자원 꼴은 다른 묶음의 route53 행(us-east-1 · *)을 따른다.
 ec2:CreateSecurityGroup	ap-northeast-2	*
 ec2:RevokeSecurityGroupEgress	ap-northeast-2	*
 ec2:DescribeSecurityGroups	ap-northeast-2	*
@@ -89,6 +95,8 @@ ec2:ModifyVpcEndpoint	ap-northeast-2	*
 ec2:DeleteVpcEndpoints	ap-northeast-2	*
 ec2:RevokeSecurityGroupIngress	ap-northeast-2	*
 ec2:DeleteSecurityGroup	ap-northeast-2	*
+# CreateVpcEndpoint 의 종속 동작(위 「Route 53」 주석).
+route53:AssociateVPCWithHostedZone	us-east-1	*
 
 # 확인 · 되돌리기 절차가 부르는 동작(POK-408 설계 3-4 · 3-5 — r3 cx 부수).
 # 리전 · 자원 꼴은 workers 묶음(PR 488)의 같은 동작 행과 같다.
