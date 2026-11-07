@@ -28,9 +28,10 @@ public class SegmentAudioAccessController {
     public SegmentAudioAccess issue(@PathVariable String streamId,
                                     @RequestParam long fromMs,
                                     @RequestParam long toMs,
+                                    @RequestParam(required = false) String axis,
                                     @AuthenticationPrincipal Jwt jwt,
                                     HttpServletRequest request) {
         NotFoundFloor.mark(request);
-        return service.issue(jwt.getSubject(), streamId, fromMs, toMs);
+        return service.issue(jwt.getSubject(), streamId, fromMs, toMs, axis);
     }
 }

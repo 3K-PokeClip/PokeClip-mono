@@ -100,7 +100,8 @@ class WebMarkControllerTest extends IntegrationTestSupport {
         broadcasts.save(Broadcast.startedNow(지난_방송, 주인, 지난_방송_키, 1L, T0.minusSeconds(30), null));
         jdbc.update("UPDATE broadcasts SET status = 'ended', ended_at = ? WHERE stream_id = ?",
                 Timestamp.from(ENDED), 지난_방송);
-        조각(지난_방송_키, T0);
+        // 지난 방송 위치는 녹화 안 조각 자리로 옮겨 저장한다(POK-196) — 위치 상한(4,200,000)까지 덮는 녹화를 심는다.
+        조각(지난_방송_키, T0, 4_300_000);
         doReturn(RECEIVED).when(webMarks).now();
         볼_수_있다("EDITOR");
     }
@@ -186,7 +187,10 @@ class WebMarkControllerTest extends IntegrationTestSupport {
 
     // ── 지난 방송: 재생 위치 ────────────────────────────────────
 
-    /** 위치가 곧 카드 ms다(브라우저가 반올림해 정수로 보낸다: 91.39초 → 91,390). */
+    /**
+     * 녹화가 한 조각이라 목록 시각으로 되살려 고른 자리가 곧 위치다(브라우저가 반올림해 정수로 보낸다: 91.39초 → 91,390).
+     * 행별로 갈리는 회차는 {@code MarkSceneP31Test}.
+     */
     @Test
     void 지난_방송은_재생_위치_그대로_201() throws Exception {
         mvc.perform(마킹(지난_방송, 위치_본문(eventId(), "91390")))
@@ -504,10 +508,14 @@ class WebMarkControllerTest extends IntegrationTestSupport {
     }
 
     private void 조각(String ingestKey, Instant wall) {
+        조각(ingestKey, wall, 4000);
+    }
+
+    private void 조각(String ingestKey, Instant wall, int durationMs) {
         jdbc.update("""
                         INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
-                        VALUES (?, 1, 0, ?, 4000, ?, 'uploaded')""",
-                ingestKey, Timestamp.from(wall), "seg/" + ingestKey + "/1");
+                        VALUES (?, 1, 0, ?, ?, ?, 'uploaded')""",
+                ingestKey, Timestamp.from(wall), durationMs, "seg/" + ingestKey + "/1");
     }
 
     private long cardCount() {
