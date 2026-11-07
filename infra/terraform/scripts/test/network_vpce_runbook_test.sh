@@ -29,8 +29,13 @@
 #     실패 뒤 연장 = 대기 뒤 통과 · 연장 뒤 unhealthy = 실패.
 #   멈춘 새 태스크 — 그 배포의 것만 셈 · 사유 기록 · 없음 = 0 · 조회 실패와
 #     목록 읽기 오류 = 판정불가.
-#   배포 대기 — COMPLETED = 0 · FAILED = 1 · 10분 안에 안 끝남 · 조회 실패만
-#     이어짐 = 판정불가(가짜 시계로 상한 단언).
+#   배포 대기 — COMPLETED = 0 · FAILED = 1 · 재기동 10분 안에 안 끝남 · 조회
+#     실패만 이어짐 = 판정불가(가짜 시계로 재기동 시각부터의 상한 단언).
+#   새 태스크 대기 — 기동 = 0 · 멈춘 새 태스크 = 1 · 재기동 4분 안에 기동 없음 =
+#     판정불가(가짜 시계로 상한 단언).
+#   확인 (ㄷ) 전 절차 — 새 태스크가 끝내 기동하지 않으면 재기동 · SQS · 판정
+#     블록을 README 그대로 이어 돌려 재기동 10분 안에 판정불가로 끝남.
+#   SQS 묶음 판정 — 새 태스크 0개 = 판정불가 · 하나 통과 = 통과.
 #   새 태스크 조회 · 기동 시각 — describe-tasks 의 failures · 반환 수가 요청과
 #     다르거나 목록 읽기 오류면 판정불가.
 #   사이드카 오류 세기(상자 스크립트를 가짜 journalctl 로) — 0건 = 「0」 종료 0 ·
@@ -40,9 +45,11 @@
 #   정의 순서 — README 셸 블록의 vpce_* 첫 등장이 정의(함수 · 변수)다.
 #   SQS 판정(대리 — 새 태스크의 대상 상태 표본 · poll_failed 시각) — SQS 실패 ·
 #     첫 2분 healthy = 실패 · 일시 실패 뒤 갱신 = 통과 · 연속 실패 = 실패 ·
-#     창 끝 가까운 실패 = 대기 · 한 번도 healthy 아님 = 실패 · 조회 실패 표본 =
-#     판정불가.
-#   이름 해석 — 켬 · 끔 판정.
+#     창 끝 가까운 실패 = 대기 · 기동 15분 뒤까지 미뤄지는 실패 = 판정불가 · 한
+#     번도 healthy 아님 = 실패 · 조회 실패 표본 = 판정불가.
+#   이름 해석 — 켬 · 끔 판정 · 상자 키는 media_ids 에서 · 상자가 하나가 아님 ·
+#     SSM 실패 = 판정불가.
+#   rm — README 셸 블록의 변수 rm 경로는 모두 ${X:?} · work 정리 블록 있음.
 #   삭제 관문 (가) — 참조 행만 셈(자기 인그레스 제외) · 조회 실패와 자기 인그레스
 #     없음 = 판정불가.
 #   삭제 관문 (나) — 교정 성공 · 양성 대조 없음 = 판정불가 · 교정된 조회 + 점
@@ -105,6 +112,14 @@ readonly MUTATION_NAMES=(
   'metric: 차원 집합 고르기 빼기'
   'metric: 교정 양성 대조 빼기'
   'metric: 트래픽 판정 뒤집기'
+  'new-tasks: 대기 상한 늘리기'
+  'new-tasks: 멈춘 태스크 갈래 빼기'
+  'rollout: 마감을 재기동 시각 대신 지금부터'
+  'sqs-tasks: 새 태스크 0개 판정불가 빼기'
+  'sqs: 15분 상한 빼기'
+  'resolve: SSM 실패 갈래 빼기'
+  'resolve: 상자 키 고르기 빼기'
+  'log: 새 태스크 0개 판정불가 빼기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -128,6 +143,14 @@ readonly MUTATION_FROMS=(
   '| select(map(.Name) | sort == $want)'
   '(.Datapoints | length) > 0'
   '([.Datapoints[].Sum] | add // 0) > 0'
+  '+ 240))"'
+  '[ "${rc}" -eq 1 ]'
+  '$(cat "${evidence}/40-restart-at.txt") + 600'
+  '[ "${total}" -eq 0 ]'
+  'if (need > started + cap)'
+  '[ "${ssm_rc}" -ne 0 ]'
+  "'keys | if length == 1 then .[0] else empty end'"
+  'if [ ! -s "${evidence}/42-new-tasks.txt" ]; then'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -151,6 +174,14 @@ readonly MUTATION_TOS=(
   ''
   '(.Datapoints | length) >= 0'
   '([.Datapoints[].Sum] | add // 0) >= 0'
+  '+ 2400))"'
+  '[ "${rc}" -eq 9 ]'
+  '$(date -u +%s) + 600'
+  '[ "${total}" -lt 0 ]'
+  'if (0)'
+  '[ "${ssm_rc}" -gt 99 ]'
+  "'keys | .[0]'"
+  'if false; then'
 )
 
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
@@ -220,14 +251,15 @@ pass() {
 }
 
 #######################################
-# README 에서 줄 머리가 같은 줄을 품은 shell 블록 하나의 본문을 낸다.
+# README 에서 줄 머리가 같은 줄(exact 면 그 줄 그대로)을 품은 shell 블록 하나의
+# 본문을 낸다.
 # Arguments:
-#   줄 머리.
+#   줄 머리, exact(선택).
 # Returns:
 #   0 / 1 그 블록이 하나가 아님.
 #######################################
 readme_block() {
-  awk -v anchor="$1" '
+  awk -v anchor="$1" -v exact="${2-}" '
     /^```shell$/ { inside = 1; body = ""; hit = 0; next }
     inside && /^```$/ {
       inside = 0
@@ -236,7 +268,7 @@ readme_block() {
     }
     inside {
       body = body $0 "\n"
-      if (index($0, anchor) == 1) { hit = 1 }
+      if (exact ? $0 == anchor : index($0, anchor) == 1) { hit = 1 }
     }
     END { if (found != 1) { exit 1 } printf "%s", out }' "${README}"
 }
@@ -588,6 +620,10 @@ test_sqs_verdict() {
   run_readme vpce_sqs_verdict 1000 obs.txt
   expect 'sqs: 창 끝 가까운 실패 = 대기' 'SQS: 대기 — 표본을 1640 까지' 3
 
+  new_case && sqs_obs 1750 1090 0 0 1700
+  run_readme vpce_sqs_verdict 1000 obs.txt
+  expect 'sqs: 기동 15분 뒤까지 미뤄지는 실패 = 판정불가' 'SQS: 판정불가' 2
+
   new_case && sqs_obs 1450 9999 0 0
   run_readme vpce_sqs_verdict 1000 obs.txt
   expect 'sqs: 한 번도 healthy 아님 = 실패' 'SQS: 실패 — 창 끝에 healthy 아님' 1
@@ -791,7 +827,9 @@ test_defined_before_use() {
 test_wait_rollout() {
   local key='ecs.describe-services.pokeclip-prod-clip' clock
   local head='{"services": [{"deployments": [{"id": "ecs-svc/111",'
-  local call='deployment=ecs-svc/111; vpce_wait_rollout'
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  local call='printf "2000\n" > "${evidence}/40-restart-at.txt"
+    deployment=ecs-svc/111; vpce_wait_rollout'
 
   new_case && printf '2000\n' >"${case_dir}/clock"
   resp "${key}.by-clock" <<EOF
@@ -817,6 +855,18 @@ EOF
   clock="$(cat -- "${case_dir}/clock")"
   if [[ "${clock}" -gt 2615 ]]; then
     fail "rollout: 상한 600초를 넘겨 기다림(시계 ${clock})"
+  fi
+
+  # 재기동(1800)이 대기 시작(2000)보다 앞 — 마감은 재기동 뒤 600초.
+  new_case && printf '2000\n' >"${case_dir}/clock"
+  resp "${key}.by-clock" <<EOF
+0 ${head} "rolloutState": "IN_PROGRESS"}]}]}
+EOF
+  run_readme eval "${call/2000/1800}"
+  expect 'rollout: 마감 = 재기동 시각 + 10분' '배포: 판정불가' 2
+  clock="$(cat -- "${case_dir}/clock")"
+  if [[ "${clock}" -gt 2415 ]]; then
+    fail "rollout: 재기동 뒤 600초를 넘겨 기다림(시계 ${clock})"
   fi
 
   new_case && printf '2000\n' >"${case_dir}/clock"
@@ -859,6 +909,136 @@ JSON
   printf 'not json\n' | resp ecs.list-tasks
   run_readme eval "${call}"
   expect 'new-tasks: 목록 읽기 오류 = 판정불가' '새 태스크 조회 2' 0
+}
+
+#######################################
+# 새 태스크 대기의 기본 응답 — 재기동 2000 · 가짜 시계 2000 · 새 태스크 t1 은
+# 기동 전(PENDING) · 멈춘 태스크 없음.
+# Globals:
+#   case_dir
+#######################################
+pending_fixture() {
+  printf '2000\n' >"${case_dir}/clock"
+  resp ecs.list-tasks <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/t1"]}
+JSON
+  resp ecs.describe-tasks.t1 <<JSON
+{"tasks": [{"taskArn": "x/t1", "lastStatus": "PENDING", "attachments": []}],
+ "failures": []}
+JSON
+  resp ecs.list-tasks.pokeclip-prod-clip <<JSON
+{"taskArns": []}
+JSON
+}
+
+#######################################
+# 새 태스크 대기 사례(상한 = 재기동 뒤 240초 · 간격 15초).
+#######################################
+test_wait_new_tasks() {
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  local call='printf "2000\n" > "${evidence}/40-restart-at.txt"
+    deployment=ecs-svc/111; vpce_wait_new_tasks' clock
+  local running='{"tasks": [{"taskArn": "x/t1", "startedAt": 2030,'
+  running+=' "attachments": [{"details": [{"name": "privateIPv4Address",'
+  running+=' "value": "192.0.2.40"}]}]}], "failures": []}'
+
+  new_case && pending_fixture
+  resp ecs.describe-tasks.t1.by-clock <<EOF
+0 {"tasks": [{"taskArn": "x/t1", "attachments": []}], "failures": []}
+2030 ${running}
+EOF
+  run_readme eval "${call}"
+  expect 'new-tasks: 기동 = 0' '새 태스크: 1개 기동' 0 't1 2030 192.0.2.40'
+  if ! grep -qx 't1 2030 192.0.2.40' "$(evidence_dir)/42-new-tasks.txt"; then
+    fail 'new-tasks: 42-new-tasks.txt 에 새 태스크 줄이 없음'
+  fi
+
+  new_case && pending_fixture
+  resp ecs.list-tasks.pokeclip-prod-clip <<JSON
+{"taskArns": ["${TASK_ARN_HEAD}/s1"]}
+JSON
+  resp ecs.describe-tasks.s1 <<JSON
+{"tasks": [{"taskArn": "${TASK_ARN_HEAD}/s1", "startedBy": "ecs-svc/111",
+  "stoppedReason": "CannotPullContainerError: x"}], "failures": []}
+JSON
+  run_readme eval "${call}"
+  expect 'new-tasks: 멈춘 새 태스크 = 실패' '새 태스크: 실패' 1
+
+  new_case && pending_fixture
+  run_readme eval "${call}"
+  expect 'new-tasks: 4분 안에 기동 없음 = 판정불가' '새 태스크: 판정불가' 2
+  clock="$(cat -- "${case_dir}/clock")"
+  if [[ "${clock}" -gt 2255 ]]; then
+    fail "new-tasks: 재기동 뒤 240초를 넘겨 기다림(시계 ${clock})"
+  fi
+  if [[ -s "$(evidence_dir)/42-new-tasks.txt" ]]; then
+    fail 'new-tasks: 기동 없음인데 42-new-tasks.txt 가 비지 않음'
+  fi
+}
+
+#######################################
+# 확인 (ㄷ) 전 절차 — 새 태스크가 끝내 기동하지 않을 때 재기동 블록 · SQS 블록 ·
+# 판정 블록을 README 그대로 이어 돌려 재기동 뒤 10분 안에 판정불가로 끝나는지
+# 본다(가짜 시계 2000 에서 시작 · 배포는 IN_PROGRESS 그대로).
+#######################################
+test_restart_never_starts() {
+  local blocks="" block anchor clock
+  local key='ecs.describe-services.pokeclip-prod-clip'
+  # shellcheck disable=SC2016 # README 글자 그대로.
+  for anchor in 'date -u +%s > "${evidence}/40-restart-at.txt"' \
+    '  vpce_sqs_sample "${task}"'; do
+    if ! block="$(readme_block "${anchor}")"; then
+      fail "procedure: README 에 「${anchor}」 블록이 하나가 아님"
+      return 1
+    fi
+    blocks+="${block}"$'\n'
+  done
+  if ! block="$(readme_block vpce_wait_rollout exact)"; then
+    fail 'procedure: README 에 판정 블록이 하나가 아님'
+    return 1
+  fi
+  blocks+="${block}"
+
+  new_case && pending_fixture
+  resp ecs.update-service <<JSON
+{"service": {"deployments": [{"id": "ecs-svc/111", "status": "PRIMARY"}]}}
+JSON
+  printf '["tg-clip"]\n' | resp "${key}.1"
+  resp "${key}" <<JSON
+{"services": [{"deployments": [{"id": "ecs-svc/111",
+  "rolloutState": "IN_PROGRESS", "runningCount": 0, "desiredCount": 1}],
+  "events": []}]}
+JSON
+  run_readme eval "${blocks}"
+  expect 'procedure: 새 태스크 미기동 = 재기동 10분 안 판정불가' \
+    '로그 스트림: 판정불가' 2 '새 태스크: 판정불가' \
+    'SQS 판정: 판정불가 — 새 태스크 0개' '배포: 판정불가'
+  clock="$(cat -- "${case_dir}/clock")"
+  if [[ "${clock}" -gt 2615 ]]; then
+    fail "procedure: 재기동 뒤 600초를 넘겨 끝남(시계 ${clock})"
+  fi
+}
+
+#######################################
+# SQS 묶음 판정 사례 — 새 태스크 목록(42-new-tasks.txt) 전부를 판정한다.
+#######################################
+test_sqs_tasks() {
+  new_case
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval ': > "${evidence}/42-new-tasks.txt"; vpce_sqs_tasks'
+  expect 'sqs-tasks: 새 태스크 0개 = 판정불가' \
+    'SQS 판정: 판정불가 — 새 태스크 0개' 2
+
+  new_case && sqs_obs 1450 1090 0 0
+  resp logs.filter-log-events <<JSON
+{"events": []}
+JSON
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval 'printf "t1 1000 192.0.2.40\n" \
+      > "${evidence}/42-new-tasks.txt"
+    cp obs.txt "${evidence}/50-sqs-t1.txt"; vpce_sqs_tasks'
+  expect 'sqs-tasks: 하나 통과 = 통과' 'SQS 판정: 통과 — 새 태스크 1개' 0 \
+    'SQS: 통과 — poll_failed 0건'
 }
 
 #######################################
@@ -999,6 +1179,69 @@ test_resolve_verdict() {
   run_readme vpce_resolve_verdict off on.txt eni.txt
   expect 'resolve: 끔 · ENI 로 풀림 = 실패' '이름 해석(off): 실패' 1 \
     '어긋남 <계정>.dkr.ecr.ap-northeast-2.amazonaws.com'
+
+  resolve_case 'resolve: 상자 키는 media_ids 에서 = 통과' '{"b": "i-0b"}' ok \
+    '이름 해석(on): 통과' 0
+  resolve_case 'resolve: SSM 실패 = 판정불가' '{"b": "i-0b"}' ssm-fail \
+    '이름 해석(on): 판정불가' 2
+  # 둘째 상자 c 는 b 뒤에 정렬된다 — 첫 키를 고르면 응답하는 b 가 뽑힌다.
+  resolve_case 'resolve: 상자가 둘 = 판정불가' '{"b": "i-0b", "c": "i-0c"}' ok \
+    '이름 해석(on): 판정불가' 2
+  resolve_case 'resolve: 계정 조회 실패 = 판정불가' '{"b": "i-0b"}' sts-fail \
+    '이름 해석(on): 판정불가' 2
+}
+
+#######################################
+# vpce_resolve 사례 하나 — 가짜 media_ids · media_ssm(상자 b 에만 on.txt 로 응답,
+# ssm-fail 이면 SSM 상태 Failed 로 종료 1). 지금 사례 디렉터리의 on.txt ·
+# eni.txt 를 쓴다.
+# Globals:
+#   case_dir
+# Arguments:
+#   사례 이름, media_ids 출력, ok|ssm-fail|sts-fail, 기대 마지막 줄 머리, 기대
+#   종료.
+#######################################
+resolve_case() {
+  local sts="${case_dir}/resp/sts.get-caller-identity"
+  rm -f -- "${sts}.fail"
+  printf '%s\n' "${FAKE_ACCOUNT}" >"${sts}"
+  if [[ "$3" == sts-fail ]]; then
+    : >"${sts}.fail"
+  fi
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval "media_ids() { printf '%s' '$2'; }
+    media_ssm() {
+      if [ \"\$1\" != b ] || [ '$3' = ssm-fail ]; then
+        echo 'SSM Failed'
+        return 1
+      fi
+      cat on.txt
+    }"'
+    cp eni.txt "${evidence}/12-eni-ips.txt"
+    vpce_resolve on resolve-on.txt'
+  expect "$1" "$4" "$5"
+}
+
+#######################################
+# README 셸 블록의 rm 이 변수 경로를 모두 ${X:?} 로 쓰는지, work 정리 블록이
+# 둘(확인 끝 · 되돌리기 끝) 이상 있는지 본다.
+#######################################
+test_rm_guarded() {
+  local bad
+  bad="$(awk '
+      /^[[:space:]]*```shell$/ { inside = 1; next }
+      inside && /^[[:space:]]*```$/ { inside = 0; next }
+      !inside { next }
+      /rm -[a-z]+ (-- )?"[$][{][A-Za-z_]+[}]/ { printf "%d행 ", NR }
+      index($0, "rm -r -- \"${work:?}\" && unset work") { guarded++ }
+      END { if (guarded < 2) { printf "work 정리 %d곳 ", guarded } }' \
+    "${README}")"
+  if [[ -n "${bad}" ]]; then
+    fail "rm: 가드 없는 변수 rm 경로 또는 정리 블록 부족: ${bad}"
+    return 1
+  fi
+  # shellcheck disable=SC2016 # 글자 그대로.
+  pass 'rm: 변수 경로 ${X:?} · work 정리 블록 둘'
 }
 
 #######################################
@@ -1155,6 +1398,10 @@ run_suite() {
     test_secret_gate \
     test_wait_rollout \
     test_new_tasks \
+    test_wait_new_tasks \
+    test_restart_never_starts \
+    test_sqs_tasks \
+    test_rm_guarded \
     test_sidecar_errors \
     test_helper_jq \
     test_sqs_verdict \

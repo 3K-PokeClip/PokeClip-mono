@@ -287,13 +287,33 @@ Media 상자에서 다섯 이름을 풀어, 모두 엔드포인트 ENI 주소로
 엔드포인트 SG 의 인그레스 출처가 VPC CIDR 하나이고 모든 호출자의 이그레스가
 `0.0.0.0/0:443` 이므로, 이 해석이 VPC 의 모든 호출자에 같다는 것이 R1(VPC
 전역 전환)의 주된 근거입니다. SSM 명령이라 **실행 직전 kty 승인**입니다.
+이름의 캐시(TTL 60초)가 지나게 apply 뒤 1분 넘어 돌립니다.
+
 [Media 교체 런북](/infra/terraform/runbooks/media-swap.md) 「준비」 의 두 블록
-(작업 디렉터리와 상태 · SSM 명령 보내기)을 먼저 둡니다. 상자 키는 떠 있는
-상자(`a`)입니다. 이름의 캐시(TTL 60초)가 지나게 apply 뒤 1분 넘어 돌립니다.
+(작업 디렉터리와 상태 · SSM 명령 보내기)을 먼저 둡니다. 그 첫 블록이 `work`
+를 새로 만들므로, 이 절의 작업 디렉터리를 먼저 보관합니다.
+
+```shell
+vpce_work="${work}"
+```
+
+두 블록을 둔 뒤, 그 블록이 만든 작업 디렉터리를 지우고 이 절의 것으로
+되돌립니다. `media_ssm` 은 되돌린 `work` 에 씁니다.
+
+```shell
+if [ "${work}" != "${vpce_work:?}" ]; then rm -r -- "${work:?}"; fi
+work="${vpce_work}" && unset vpce_work
+```
 
 판정 함수입니다. 켬(`on`)은 다섯 이름이 모두 풀리고 모든 주소가 ENI 주소일
 때, 끔(`off`)은 다섯 이름이 모두 풀리고 어느 주소도 ENI 주소가 아닐 때
 통과입니다. 출력의 계정 ID 는 `<계정>` 으로 가립니다.
+
+`vpce_resolve` 는 상자에 탐침을 보내고 판정합니다. 상자 키는 `media_ids` 의
+상자 하나에서 고릅니다(`vpce_media_box`) — 교체 중이라 상자가 둘이면 어느
+상자인지 정하지 못해 판정불가(2)입니다. 계정 조회나 SSM 명령이 실패해도
+판정불가입니다. 이름을 보지 못한 것이지 이름이 틀리게 풀린 것이 아니므로
+「실패」(1)로 세지 않습니다.
 
 ```shell
 vpce_resolve_verdict() {  # vpce_resolve_verdict on|off <상자 출력> <ENI 주소>
@@ -319,6 +339,29 @@ vpce_resolve_verdict() {  # vpce_resolve_verdict on|off <상자 출력> <ENI 주
       exit failed
     }' "$3" "$2"
 }
+
+vpce_media_box() {  # 떠 있는 상자 키 — media_ids 의 상자가 하나가 아니면 실패
+  media_ids | jq -er 'keys | if length == 1 then .[0] else empty end'
+}
+
+vpce_resolve() {  # vpce_resolve on|off <결과 파일> — 통과 0 · 실패 1 · 판정불가 2
+  local box account ssm_rc
+  if ! box="$(vpce_media_box)"; then
+    echo "이름 해석($1): 판정불가 — media_ids 의 상자가 하나가 아님"
+    return 2
+  fi
+  if ! account="$(aws sts get-caller-identity --query Account --output text)"; then
+    echo "이름 해석($1): 판정불가 — 계정 조회 실패"
+    return 2
+  fi
+  media_ssm "${box}" "${work}/vpce-resolve.sh" "${region}" "${account}" > "$2"
+  ssm_rc=$?
+  if [ "${ssm_rc}" -ne 0 ]; then
+    echo "이름 해석($1): 판정불가 — SSM 명령 실패(상자 ${box} · 종료 ${ssm_rc})"
+    return 2
+  fi
+  vpce_resolve_verdict "$1" "$2" "${evidence}/12-eni-ips.txt"
+}
 ```
 
 ```shell
@@ -334,11 +377,7 @@ for name in "api.ecr.$1.amazonaws.com" "$2.dkr.ecr.$1.amazonaws.com" \
   getent ahostsv4 "${name}" | awk -v n="${name}" '{ print n, $1 }' | sort -u
 done
 SH
-account="$(aws sts get-caller-identity --query Account --output text)"
-media_ssm a "${work}/vpce-resolve.sh" "${region}" "${account}" \
-  > "${evidence}/20-resolve-on.txt"
-unset account
-vpce_resolve_verdict on "${evidence}/20-resolve-on.txt" "${evidence}/12-eni-ips.txt"
+vpce_resolve on "${evidence}/20-resolve-on.txt"
 ```
 
 ### 확인 (ㄷ) clip 강제 재기동
@@ -502,6 +541,12 @@ vpce_secret_recheck() {
 1.  새 태스크마다 아래 SQS 판정이 통과.
 1.  판정이 끝난 뒤 `vpce_secret_recheck` 가 `그대로`.
 
+2 · 3 은 새 태스크가 0개면 판정불가(2)입니다 — 「새 태스크마다」 가 빈
+목록에서 저절로 참이 되지 않게 합니다. 기다림에는 모두 상한이 있습니다. 새 태스크
+기동은 재기동 명령 시각(`40-restart-at.txt`)부터 4분, 배포 끝은 같은 시각부터
+10분, SQS 표본은 새 태스크 기동 뒤 15분까지입니다. 새 태스크가 끝내 뜨지 않아도
+재기동 뒤 10분 안에 판정불가로 끝납니다.
+
 **SQS 판정의 신호.** clip 헬스는 수신에 한 번도 성공하지 않아도 루프 시작 뒤
 2분 동안 `UP(status=starting)` 이고(`IntakeHealth.java`), ALB 는 첫 헬스 성공으로
 대상을 healthy 로 올립니다. 그래서 「배포 COMPLETED · 대상 healthy」 는 SQS
@@ -571,151 +616,9 @@ aws ecs describe-services --region "${region}" --cluster "${cluster}" \
   --output json > "${evidence}/40-target-groups.json"
 ```
 
-새 태스크가 뜨면(`list-tasks` 가 비지 않으면) 바로 표본을 받기 시작합니다 —
-대상 상태는 지금 값만 읽히므로 나중에 거슬러 받을 수 없습니다. 태스크마다
-따로 돌리고, 표본은 창 끝(또는 판정이 `대기` 로 알려 준 시각)까지 받습니다.
 
-```shell
-vpce_new_tasks() {  # 이 배포의 새 태스크마다 "<태스크 id> <startedAt epoch> <IP>"
-  aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
-    --started-by "${deployment}" --output json > "${work}/new-tasks.json" || return 2
-  vpce_describe_tasks "${work}/new-tasks.json" "${evidence}/42-new-tasks.json" || return 2
-  jq -r "${vpce_jq_epoch}"' .tasks[] | select(.startedAt != null)
-    | "\(.taskArn | split("/") | last) \(.startedAt | epoch) \(.attachments[].details[]
-      | select(.name == "privateIPv4Address") | .value)"' "${evidence}/42-new-tasks.json" \
-    || return 2
-}
-
-# 표본을 30초마다 받고, 끝 시각 이상에서 찍힌 표본 하나를 받은 뒤 멈춘다 — 판정이
-# 「마지막 표본 ≥ 끝」 을 요구하기 때문이다(끝 전에 멈추면 늘 「대기」).
-vpce_sqs_sample() {  # vpce_sqs_sample <태스크 id> <IP> <끝 epoch>
-  local out="${evidence}/50-sqs-$1.txt" tg state now
-  tg="$(jq -r '.[0]' "${evidence}/40-target-groups.json")"
-  while :; do
-    now="$(date -u +%s)"
-    state="$(aws elbv2 describe-target-health --region "${region}" --target-group-arn "${tg}" \
-      --targets "Id=$2,Port=8081" --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-      --output text)" || state=error
-    printf 'health %s %s\n' "${now}" "${state}" >> "${out}"
-    [ "${now}" -lt "$3" ] || break
-    sleep 30
-  done
-}
-
-vpce_sqs_failures() {  # vpce_sqs_failures <태스크 id> <startedAt epoch> — poll_failed 시각을 덧붙임
-  aws logs filter-log-events --region "${region}" --log-group-name "${cluster}-clip" \
-    --log-stream-names "clip/clip/$1" --start-time "$(($2 * 1000))" \
-    --filter-pattern '"broadcast.intake.poll_failed"' --output json \
-    > "${work}/poll-failed-$1.json" || return 2
-  jq -r '.events[] | "poll_failed \(.timestamp / 1000 | floor)"' "${work}/poll-failed-$1.json" \
-    >> "${evidence}/50-sqs-$1.txt"
-}
-```
-
-```shell
-vpce_sqs_verdict() {  # vpce_sqs_verdict <startedAt epoch> <관찰 파일> — 통과 0 · 실패 1 · 판정불가 2 · 대기 3
-  awk -v started="$1" -v base=420 -v after_fail=240 '
-    $1 == "health" {
-      n++
-      t[n] = $2
-      s[n] = $3
-      if ($3 == "error") { err = 1 }
-    }
-    $1 == "poll_failed" {
-      fails++
-      if ($2 > last_fail) { last_fail = $2 }
-    }
-    END {
-      if (err) { print "SQS: 판정불가 — 대상 상태를 읽지 못한 표본이 있음"; exit 2 }
-      for (i = 1; i <= n; i++) {
-        if (s[i] == "healthy") {
-          seen = 1
-        } else if (seen) {
-          printf "SQS: 실패 — healthy 뒤 %s(%d)\n", s[i], t[i]
-          exit 1
-        }
-      }
-      need = started + base
-      if (fails && last_fail + after_fail > need) { need = last_fail + after_fail }
-      if (n == 0 || t[n] < need) {
-        printf "SQS: 대기 — 표본을 %d 까지 더 받음(poll_failed %d건)\n", need, fails
-        exit 3
-      }
-      if (s[n] != "healthy") { print "SQS: 실패 — 창 끝에 healthy 아님"; exit 1 }
-      printf "SQS: 통과 — poll_failed %d건 · 창 끝 healthy\n", fails
-    }' "$2"
-}
-```
-
-```shell
-vpce_new_tasks | tee "${evidence}/42-new-tasks.txt"   # 비면 15초 뒤 다시
-while read -r task started ip; do
-  vpce_sqs_sample "${task}" "${ip}" "$((started + 420))" &
-done < "${evidence}/42-new-tasks.txt"
-wait
-while read -r task started ip; do
-  vpce_sqs_failures "${task}" "${started}" && vpce_sqs_verdict "${started}" "${evidence}/50-sqs-${task}.txt"
-done < "${evidence}/42-new-tasks.txt"
-```
-
-`대기` 가 나오면 그 태스크만 `vpce_sqs_sample` 을 알려 준 시각까지 더 돌리고,
-`poll_failed` 줄을 지운 뒤(`sed -i.bak '/^poll_failed /d'`) 다시
-`vpce_sqs_failures` · `vpce_sqs_verdict` 합니다.
-
-SQS 판정이 실패하면, 롤링이 판정보다 먼저 옛 태스크를 내리므로 운영 clip 의
-수명 주기 수신이 끊긴 상태입니다. 바로 「되돌리기 1단계」 로 가고, DNS 를 끈 뒤
-clip 을 다시 재기동해 NAT 로 회복시킵니다.
-
-배포 · 로그 판정(1 · 2)의 함수입니다. `vpce_wait_rollout` 은 배포가
-`COMPLETED`(0) · `FAILED`(1) 가 되기를 15초마다 보되 **10분까지만** 기다립니다.
-clip 서비스는 배포 회로 차단기(circuit breaker)를 켜지 않아 새 태스크가 계속
-실패해도 `FAILED` 가 오지 않을 수 있습니다 — 10분이 지나면 판정불가(2)이고
-확인 실패와 같이 「되돌리기 1단계」 회부로 갑니다. 조회가 실패한 회차는 다음
-회차에 다시 봅니다.
-
-```shell
-vpce_wait_rollout() {  # 배포 끝 대기 — COMPLETED 0 · FAILED 1 · 10분 넘음 2
-  local deadline state=''
-  deadline="$(($(date -u +%s) + 600))"
-  while :; do
-    if aws ecs describe-services --region "${region}" --cluster "${cluster}" \
-        --services "${cluster}-clip" --output json > "${evidence}/41-service.json"; then
-      state="$(jq -r --arg d "${deployment}" '.services[0].deployments[]?
-        | select(.id == $d) | .rolloutState' "${evidence}/41-service.json")"
-      case "${state}" in
-        COMPLETED) echo '배포: COMPLETED'; return 0 ;;
-        FAILED) echo '배포: FAILED'; return 1 ;;
-      esac
-    fi
-    if [ "$(date -u +%s)" -ge "${deadline}" ]; then
-      echo "배포: 판정불가 — 10분 안에 끝나지 않음(마지막 ${state:-조회 실패}) · 되돌리기 회부"
-      return 2
-    fi
-    sleep 15
-  done
-}
-
-vpce_rollout_summary() {  # 41-service.json 의 이 배포 · 재기동 뒤 ECR · Secrets 오류 이벤트
-  jq -r --arg d "${deployment}" --argjson since "$(cat "${evidence}/40-restart-at.txt")" \
-    "${vpce_jq_epoch}"' .services[0]
-    | (.deployments[] | select(.id == $d) | "rollout=\(.rolloutState) running=\(.runningCount) desired=\(.desiredCount)"),
-      ([.events[] | select((.createdAt | epoch) >= $since)
-        | select(.message | test("CannotPullContainerError|ResourceInitializationError"))]
-        | "오류 이벤트 \(length)")' "${evidence}/41-service.json"
-}
-
-vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 생겼고 첫 이벤트가 3분 안인가
-  local task started ip
-  while read -r task started ip; do
-    aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
-      --log-stream-name-prefix "clip/clip/${task}" --output json < /dev/null \
-      | jq -r --argjson since "$(cat "${evidence}/40-restart-at.txt")" --arg t "${task}" \
-        '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $since) <= 180 and (.firstEventTimestamp // 0) > 0)"'
-  done < "${evidence}/42-new-tasks.txt"
-}
-```
-
-멈춘 새 태스크는 ECR · Secrets 실패의 직접 증거(`stoppedReason`)입니다.
+멈춘 새 태스크는 ECR · Secrets 실패의 직접 증거(`stoppedReason`)입니다. 새
+태스크 대기(`vpce_wait_new_tasks`)와 판정이 함께 씁니다.
 `list-tasks` 의 `--started-by` 는 다른 필터와 함께 쓸 수 없으므로(`aws ecs
 list-tasks help` — 「it must be the only filter that you use」) clip 서비스의
 `STOPPED` 태스크를 받은 뒤 `describe-tasks` 의 `startedBy` 로 이 배포의 것만
@@ -747,6 +650,225 @@ vpce_stopped_tasks() {  # 이 배포의 멈춘 태스크 — 0건 0 · 있음 1 
 }
 ```
 
+새 태스크를 기다리는 것은 `vpce_wait_new_tasks` 입니다. 15초마다 보되 재기동
+명령 시각부터 **4분까지만** 기다립니다 — ECR 풀 · 비밀 주입 · awslogs 가
+실패하면 태스크가 RUNNING 에 가지 못해(`startedAt` 없음) 목록이 계속 빕니다.
+그동안 이 배포의 멈춘 태스크가 생기면 실패(1), 4분이 지나면 판정불가(2)입니다.
+새 태스크가 뜨면 바로 표본을 받기 시작합니다 — 대상 상태는 지금 값만 읽히므로
+나중에 거슬러 받을 수 없습니다. 태스크마다 따로 돌리고, 표본은 창 끝(또는
+판정이 `대기` 로 알려 준 시각)까지 받습니다.
+
+```shell
+vpce_new_tasks() {  # 이 배포의 새 태스크마다 "<태스크 id> <startedAt epoch> <IP>"
+  aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
+    --started-by "${deployment}" --output json > "${work}/new-tasks.json" || return 2
+  vpce_describe_tasks "${work}/new-tasks.json" "${evidence}/42-new-tasks.json" || return 2
+  jq -r "${vpce_jq_epoch}"' .tasks[] | select(.startedAt != null)
+    | "\(.taskArn | split("/") | last) \(.startedAt | epoch) \(.attachments[].details[]
+      | select(.name == "privateIPv4Address") | .value)"' "${evidence}/42-new-tasks.json" \
+    || return 2
+}
+
+# 이 배포의 새 태스크가 기동하기를 15초마다 보되 재기동 명령 뒤 4분까지만
+# 기다린다. 조회가 실패한 회차는 다음 회차에 다시 본다.
+vpce_wait_new_tasks() {  # 기동 0 · 멈춘 새 태스크 1 · 4분 넘음 2 → 42-new-tasks.txt
+  local list="${evidence}/42-new-tasks.txt" deadline rc
+  deadline="$(($(cat "${evidence}/40-restart-at.txt") + 240))"
+  : > "${list}"
+  while :; do
+    if vpce_new_tasks > "${list}" && [ -s "${list}" ]; then
+      cat "${list}"
+      echo "새 태스크: $(grep -c . "${list}")개 기동"
+      return 0
+    fi
+    : > "${list}"
+    vpce_stopped_tasks > /dev/null
+    rc=$?
+    if [ "${rc}" -eq 1 ]; then
+      echo '새 태스크: 실패 — 이 배포의 멈춘 태스크가 있음(사유는 43-stopped.txt)'
+      return 1
+    fi
+    if [ "$(date -u +%s)" -ge "${deadline}" ]; then
+      echo '새 태스크: 판정불가 — 재기동 4분 안에 기동한 새 태스크가 없음'
+      return 2
+    fi
+    sleep 15
+  done
+}
+
+# 표본을 30초마다 받고, 끝 시각 이상에서 찍힌 표본 하나를 받은 뒤 멈춘다 — 판정이
+# 「마지막 표본 ≥ 끝」 을 요구하기 때문이다(끝 전에 멈추면 늘 「대기」).
+vpce_sqs_sample() {  # vpce_sqs_sample <태스크 id> <IP> <끝 epoch>
+  local out="${evidence}/50-sqs-$1.txt" tg state now
+  tg="$(jq -r '.[0]' "${evidence}/40-target-groups.json")"
+  while :; do
+    now="$(date -u +%s)"
+    state="$(aws elbv2 describe-target-health --region "${region}" --target-group-arn "${tg}" \
+      --targets "Id=$2,Port=8081" --query 'TargetHealthDescriptions[0].TargetHealth.State' \
+      --output text)" || state=error
+    printf 'health %s %s\n' "${now}" "${state}" >> "${out}"
+    [ "${now}" -lt "$3" ] || break
+    sleep 30
+  done
+}
+
+vpce_sqs_failures() {  # vpce_sqs_failures <태스크 id> <startedAt epoch> — poll_failed 시각을 덧붙임
+  aws logs filter-log-events --region "${region}" --log-group-name "${cluster}-clip" \
+    --log-stream-names "clip/clip/$1" --start-time "$(($2 * 1000))" \
+    --filter-pattern '"broadcast.intake.poll_failed"' --output json \
+    > "${work}/poll-failed-$1.json" || return 2
+  jq -r '.events[] | "poll_failed \(.timestamp / 1000 | floor)"' "${work}/poll-failed-$1.json" \
+    >> "${evidence}/50-sqs-$1.txt"
+}
+```
+
+```shell
+vpce_sqs_verdict() {  # vpce_sqs_verdict <startedAt epoch> <관찰 파일> — 통과 0 · 실패 1 · 판정불가 2 · 대기 3
+  awk -v started="$1" -v base=420 -v after_fail=240 -v cap=900 '
+    $1 == "health" {
+      n++
+      t[n] = $2
+      s[n] = $3
+      if ($3 == "error") { err = 1 }
+    }
+    $1 == "poll_failed" {
+      fails++
+      if ($2 > last_fail) { last_fail = $2 }
+    }
+    END {
+      if (err) { print "SQS: 판정불가 — 대상 상태를 읽지 못한 표본이 있음"; exit 2 }
+      for (i = 1; i <= n; i++) {
+        if (s[i] == "healthy") {
+          seen = 1
+        } else if (seen) {
+          printf "SQS: 실패 — healthy 뒤 %s(%d)\n", s[i], t[i]
+          exit 1
+        }
+      }
+      need = started + base
+      if (fails && last_fail + after_fail > need) { need = last_fail + after_fail }
+      if (need > started + cap) {
+        printf "SQS: 판정불가 — 실패가 이어져 기동 뒤 %d초 안에 판정하지 못함\n", cap
+        exit 2
+      }
+      if (n == 0 || t[n] < need) {
+        printf "SQS: 대기 — 표본을 %d 까지 더 받음(poll_failed %d건)\n", need, fails
+        exit 3
+      }
+      if (s[n] != "healthy") { print "SQS: 실패 — 창 끝에 healthy 아님"; exit 1 }
+      printf "SQS: 통과 — poll_failed %d건 · 창 끝 healthy\n", fails
+    }' "$2"
+}
+
+vpce_sqs_tasks() {  # 새 태스크 전부의 SQS 판정 — 통과 0 · 실패 1 · 판정불가 2 · 대기 3
+  local task started total=0 rc worst=0
+  while read -r task started _; do
+    total=$((total + 1))
+    if ! vpce_sqs_failures "${task}" "${started}" < /dev/null; then
+      echo "SQS ${task}: 판정불가 — poll_failed 조회 실패"
+      rc=2
+    else
+      vpce_sqs_verdict "${started}" "${evidence}/50-sqs-${task}.txt"
+      rc=$?
+    fi
+    # 나쁜 쪽이 이긴다: 실패 1 > 판정불가 2 > 대기 3 > 통과 0.
+    case "${worst}:${rc}" in
+      1:* | *:0) ;;
+      *:1 | 0:*) worst="${rc}" ;;
+      3:2) worst=2 ;;
+    esac
+  done < "${evidence}/42-new-tasks.txt"
+  if [ "${total}" -eq 0 ]; then
+    echo 'SQS 판정: 판정불가 — 새 태스크 0개'
+    return 2
+  fi
+  case "${worst}" in
+    0) echo "SQS 판정: 통과 — 새 태스크 ${total}개" ;;
+    1) echo 'SQS 판정: 실패' ;;
+    2) echo 'SQS 판정: 판정불가' ;;
+    3) echo 'SQS 판정: 대기' ;;
+  esac
+  return "${worst}"
+}
+```
+
+```shell
+vpce_wait_new_tasks
+while read -r task started ip; do
+  vpce_sqs_sample "${task}" "${ip}" "$((started + 420))" &
+done < "${evidence}/42-new-tasks.txt"
+wait
+vpce_sqs_tasks
+```
+
+`vpce_wait_new_tasks` 가 0 이 아니면(멈춘 새 태스크 · 4분 넘음) 표본 줄은 빈
+목록이라 돌지 않고, `vpce_sqs_tasks` 가 `판정불가 — 새 태스크 0개` 를 냅니다.
+그대로 아래 「판정을 읽습니다」 블록으로 가서 배포 · 멈춘 태스크 · 로그 판정을
+읽습니다.
+
+`대기` 가 나오면 그 태스크만 `vpce_sqs_sample` 을 알려 준 시각까지 더 돌리고,
+`poll_failed` 줄을 지운 뒤(`sed -i.bak '/^poll_failed /d'`) 다시
+`vpce_sqs_failures` · `vpce_sqs_verdict` 합니다. 기다릴 끝(마지막 `poll_failed`
+뒤 240초)이 기동 뒤 900초(15분)를 넘으면 `판정불가` 입니다 — 실패가 그만큼
+이어지면 일시 실패가 아니므로 더 미루지 않습니다.
+
+SQS 판정이 실패하면, 롤링이 판정보다 먼저 옛 태스크를 내리므로 운영 clip 의
+수명 주기 수신이 끊긴 상태입니다. 바로 「되돌리기 1단계」 로 가고, DNS 를 끈 뒤
+clip 을 다시 재기동해 NAT 로 회복시킵니다.
+
+배포 · 로그 판정(1 · 2)의 함수입니다. `vpce_wait_rollout` 은 배포가
+`COMPLETED`(0) · `FAILED`(1) 가 되기를 15초마다 보되 재기동 명령 시각부터
+**10분까지만** 기다립니다. clip 서비스는 배포 회로 차단기(circuit breaker)를
+켜지 않아 새 태스크가 계속 실패해도 `FAILED` 가 오지 않을 수 있습니다 — 10분이
+지나면 판정불가(2)이고 확인 실패와 같이 「되돌리기 1단계」 회부로 갑니다. 조회가
+실패한 회차는 다음 회차에 다시 봅니다.
+
+```shell
+vpce_wait_rollout() {  # 배포 끝 대기 — COMPLETED 0 · FAILED 1 · 재기동 10분 넘음 2
+  local deadline state=''
+  deadline="$(($(cat "${evidence}/40-restart-at.txt") + 600))"
+  while :; do
+    if aws ecs describe-services --region "${region}" --cluster "${cluster}" \
+        --services "${cluster}-clip" --output json > "${evidence}/41-service.json"; then
+      state="$(jq -r --arg d "${deployment}" '.services[0].deployments[]?
+        | select(.id == $d) | .rolloutState' "${evidence}/41-service.json")"
+      case "${state}" in
+        COMPLETED) echo '배포: COMPLETED'; return 0 ;;
+        FAILED) echo '배포: FAILED'; return 1 ;;
+      esac
+    fi
+    if [ "$(date -u +%s)" -ge "${deadline}" ]; then
+      echo "배포: 판정불가 — 재기동 10분 안에 끝나지 않음(마지막 ${state:-조회 실패}) · 되돌리기 회부"
+      return 2
+    fi
+    sleep 15
+  done
+}
+
+vpce_rollout_summary() {  # 41-service.json 의 이 배포 · 재기동 뒤 ECR · Secrets 오류 이벤트
+  jq -r --arg d "${deployment}" --argjson since "$(cat "${evidence}/40-restart-at.txt")" \
+    "${vpce_jq_epoch}"' .services[0]
+    | (.deployments[] | select(.id == $d) | "rollout=\(.rolloutState) running=\(.runningCount) desired=\(.desiredCount)"),
+      ([.events[] | select((.createdAt | epoch) >= $since)
+        | select(.message | test("CannotPullContainerError|ResourceInitializationError"))]
+        | "오류 이벤트 \(length)")' "${evidence}/41-service.json"
+}
+
+vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 생겼고 첫 이벤트가 3분 안인가
+  local task started ip
+  if [ ! -s "${evidence}/42-new-tasks.txt" ]; then
+    echo '로그 스트림: 판정불가 — 새 태스크 0개'
+    return 2
+  fi
+  while read -r task started ip; do
+    aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
+      --log-stream-name-prefix "clip/clip/${task}" --output json < /dev/null \
+      | jq -r --argjson since "$(cat "${evidence}/40-restart-at.txt")" --arg t "${task}" \
+        '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $since) <= 180 and (.firstEventTimestamp // 0) > 0)"'
+  done < "${evidence}/42-new-tasks.txt"
+}
+```
+
 판정을 읽습니다.
 
 ```shell
@@ -758,6 +880,7 @@ vpce_log_streams
 
 기대는 `배포: COMPLETED` · `rollout=COMPLETED running=1 desired=1` · `오류 이벤트
 0` · `멈춘 새 태스크: 0건` · 새 태스크마다 `생성 뒤=true 첫 이벤트 3분 안=true` 입니다.
+`판정불가` · `실패` 가 하나라도 있으면 「확인의 판정과 기록」 으로 갑니다.
 
 ### 확인 (ㄹ) 회귀 감시
 
@@ -800,7 +923,7 @@ SH
 
 ```shell
 vpce_sidecar_script > "${work}/vpce-sidecar-errors.sh"
-media_ssm a "${work}/vpce-sidecar-errors.sh"
+media_ssm "$(vpce_media_box)" "${work}/vpce-sidecar-errors.sh"
 ```
 
 ### 확인의 판정과 기록
@@ -808,8 +931,22 @@ media_ssm a "${work}/vpce-sidecar-errors.sh"
 (ㄱ) · (ㄴ) · (ㄷ) 중 하나라도 실패하면 「되돌리기 1단계」 를 kty 에게
 회부합니다. kty 가 조건부 사전 승인을 줬으면(설계 7절 Q2 — 그 apply 부터 확인이
 끝날 때까지 한 번) 바로 1단계로 갑니다. (ㄷ) 의 재기동 전 관문에서 멈춘 것은
-네트워크 실패가 아니므로 되돌리기가 아니라 kty 회부입니다. 다 통과하면 판정
-줄(가린 것)을 PR-N 에 남기고 PR 488 로 넘어갑니다.
+네트워크 실패가 아니므로 되돌리기가 아니라 kty 회부입니다.
+
+판정불가는 통과가 아닙니다. (ㄷ) 의 판정불가(새 태스크 미기동 · 배포 10분 넘음 ·
+새 태스크 0개 · SQS 15분 넘음)는 확인 실패와 같이 「되돌리기 1단계」 회부입니다.
+(ㄴ) 의 판정불가(상자 키 · 계정 · SSM 명령 실패)는 이름을 보지 못한 것이라
+되돌리기가 아니라 kty 회부입니다 — Media 상자의 SSM 은 NAT 로 가므로
+엔드포인트 장애의 증거가 아닙니다. 사전 승인(Q2)은 「실패」 에만 씁니다.
+
+다 통과하면 판정 줄(가린 것)을 PR-N 에 남기고 PR 488 로 넘어갑니다. 그렇게
+확인을 마치면 여기서 작업 디렉터리를 지웁니다 — plan 파일에 계정 ID 가 든 ARN
+이 있습니다. 증거 디렉터리는 남깁니다. 되돌리기로 가면 1단계가 `work` 를
+쓰므로 「되돌리기 정리」 에서 지웁니다.
+
+```shell
+rm -r -- "${work:?}" && unset work
+```
 
 ## 되돌리기
 
@@ -996,9 +1133,18 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
 
 1.  **복구 완료 조건 — 셋 다 만족해야 복구입니다.**
     *   (가) Media 상자에서 다섯 이름이 ENI 밖(공용) 주소로 풀립니다 — 확인
-        (ㄴ) 의 블록을 `20-resolve-off.txt` 로 받아 `vpce_resolve_verdict off`.
+        (ㄴ) 의 블록을 돌리되 마지막 줄을 `vpce_resolve off
+        "${evidence}/20-resolve-off.txt"` 로 바꿉니다.
     *   (나) clip 강제 재기동이 NAT 경로로 성공합니다 — 확인 (ㄷ) 와 같은 재기동
-        전 비밀 관문 · 같은 판정.
+        전 비밀 관문 · 같은 판정. 다시 돌리기 전에 앞선 확인의 30–50번 증거를
+        `try1/` 로 옮깁니다 — 같은 이름으로 덮어써 실패 증거가 사라지지 않게
+        합니다(`70-` · `80-` 은 그대로 둡니다).
+
+        ```shell
+        mkdir "${evidence}/try1" && find "${evidence}" -maxdepth 1 -type f \
+          -name '[345][0-9]-*' -exec mv -- {} "${evidence}/try1/" \;
+        ```
+
     *   (다) 그 뒤 15분 동안 확인 (ㄹ) 의 오류 줄이 0 으로 떨어집니다. 캐시된 ENI
         주소나 기존 연결로 가는 호출은 엔드포인트 SG 가 원인인 장애라면 계속
         실패할 수 있습니다. 캐시 · 연결이 만료돼 다시 풀 때 공용으로 넘어가므로,
@@ -1034,8 +1180,17 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
     요청에 적습니다. 다시 띄우지 않으려면 apply 직후 긴급 정지를 함께
     승인받습니다.
 1.  **교정이 없으면 DNS 를 끄기 전에 합니다.** 1단계 2 의 교정 기록
-    (`70-calibration.jsonl`)이 없으면 지금 트래픽이 있을 때 교정합니다. DNS 가
-    이미 꺼져 있으면 끈 시각 직전 60분으로 교정합니다(끈 지 15일 안).
+    (`70-calibration.jsonl`)이 없으면 지금 트래픽이 있을 때 교정합니다.
+    *   DNS 를 아직 끄지 않았으면 1단계 2 의 블록(지난 60분)으로 교정합니다.
+        `ecr.api` · `ecr.dkr` · `secretsmanager` 는 태스크가 뜰 때만 트래픽이
+        있어, 지난 60분에 기동이 없었으면 그 셋이 비어 판정불가입니다. 그때는
+        교정 전에 clip 을 재기동해 다섯 경로에 트래픽을 만듭니다 — 확인 (ㄷ) 의
+        재기동 전 비밀 관문 · 재기동 블록 그대로(kty 승인)이고, 배포가
+        `COMPLETED` 가 된 뒤 교정합니다. 데이터 점이 아직 게시되지 않았으면
+        판정불가이니 몇 분 뒤 다시 교정합니다.
+    *   DNS 가 이미 꺼져 있으면 끈 시각 직전 60분으로 교정합니다(끈 지 15일
+        안 · 아래 블록 — `80-dns-off-at.txt` 를 읽습니다). 이때의 재기동은 NAT
+        로 가 엔드포인트 트래픽을 만들지 못합니다.
 
     ```shell
     off_at="$(cat "${evidence}/80-dns-off-at.txt")"
@@ -1056,9 +1211,10 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
         재기동해 연결을 다시 맺게 한 뒤(각각 kty 승인 · 재기동 전 비밀 관문
         같음) 60분을 다시 잽니다.
     *   판정불가가 이어지거나(트래픽이 없던 엔드포인트는 양성 대조가 없어
-        교정이 안 됩니다) (다) 를 kty 가 원하지 않으면, kty 에게 회부하고
-        **ENI 를 보존합니다** — 엔드포인트를 지우지 않고 DNS 끈 상태로 둡니다
-        (비용은 남지만 장애는 없습니다).
+        교정이 안 됩니다 — DNS 를 끄기 전이면 2 의 재기동 출구를 먼저 씁니다)
+        (다) 를 kty 가 원하지 않으면, kty 에게 회부하고 **ENI 를 보존합니다** —
+        엔드포인트를 지우지 않고 DNS 끈 상태로 둡니다(비용은 남지만 장애는
+        없습니다).
 1.  두 관문을 지난 뒤에만 `main.tf` 의 `interface_endpoint_services` 를 `[]`
     로 바꾼 PR(또는 PR-N 의 revert)을 머지하고 network apply 합니다(kty 승인 ·
     plan 요지 = 「적용 1」 의 일곱 줄이 모두 `delete`).
@@ -1076,6 +1232,15 @@ render 가 엔드포인트 SG 를 참조하는 채 `[]` 를 apply 하면 「막�
 지워져** render 는 그 순간 AWS 에 닿지 못하고, SG 삭제만 `DependencyViolation`
 으로 시한까지 다시 시도하다 실패해 network 가 「엔드포인트 없음 · SG 남음」 으로
 반쯤 적용됩니다. 그래서 삭제 관문 (가) 를 둡니다.
+
+### 되돌리기 정리
+
+이 셸에서 할 되돌리기(1단계 · 다시 켜기 · 2단계)가 끝나면 작업 디렉터리를
+지웁니다 — plan 파일에 계정 ID 가 든 ARN 이 있습니다. 증거 디렉터리는 남깁니다.
+
+```shell
+rm -r -- "${work:?}" && unset work
+```
 
 ## See also
 
