@@ -134,6 +134,7 @@ func (f *finalizer) forget(id string) {
 	delete(f.held, id)
 	delete(f.vodChainOnly, id)
 	delete(f.waitWarned, id)
+	delete(f.seen, id) // 스캔 오류로 바퀴 끝이 미뤄지는 동안 끝난 회차 id 가 쌓이지 않게
 }
 
 // inFlight 는 도는 정산 작업 수다(행 읽기 포함 — 동시 상한이 센다).

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,5 +91,35 @@ func TestStaleScanKeepsMemoryMadeDuringScan(t *testing.T) {
 				t.Error("T 를 보지도 걸음을 내지도 않은 바퀴가 끝났는데 장애 횟수 기억이 남았다")
 			}
 		})
+	}
+}
+
+// cx fix1 L1 — 스캔 결과에 오류가 이어져 바퀴 끝(pruneUnseen)이 오지 않는 동안 빠른 길에서 ended 로 끝난(StepMarkEnded 섬)
+// 세션은 forget 이 생존 표시(seen)까지 지운다 — 끝난 세션 id 가 seen 에 쌓이지 않는다. 고치기 전(5456416f)은 걸음 결과가 적은
+// seen 이 남아 FAIL.
+func TestForgetClearsSeenWhileScanFails(t *testing.T) {
+	w := newRoundWorld(1)
+	// T 는 스캔 쪽에 없고 빠른 길 행 읽기에만 있다 — VOD 종국이라 다음 걸음은 StepMarkEnded 다.
+	w.rows["T"] = roundRow("T", func(s *index.EndingSession) { s.VODState = "frozen" })
+	w.scanWake[0] = []roundWake{wakeT}
+	l := newRoundLoop(t, w, time.Second)
+	fin := l.rewind.fin
+	scan := fin.work.scan
+	fin.work.scan = func(ctx context.Context, after index.ScanCursor) finalScan {
+		out := scan(ctx, after)
+		out.err = errors.New("다른 회차 CloseRound 실패")
+		return out
+	}
+
+	l.run(3) // 틱 0 오류 바퀴가 T 를 깨움 · 틱 1 T 걸음 StepMarkEnded(섬) · 틱 2 도 오류 바퀴
+
+	if s := w.stepsOf("T"); len(s) != 1 || s[0].d.Step != finalize.StepMarkEnded {
+		t.Fatalf("T 걸음 = %+v, want StepMarkEnded 한 번(시험 전제)", s)
+	}
+	if fin.seen["T"] {
+		t.Error("ended 로 끝난 T 가 seen 에 남았다 — 오류 바퀴가 이어지면 끝난 세션 id 가 쌓인다")
+	}
+	if _, ok := fin.attempts["T"]; ok {
+		t.Error("ended 로 끝난 T 의 장애 횟수 기억이 남았다")
 	}
 }
