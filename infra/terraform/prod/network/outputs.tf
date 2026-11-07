@@ -39,3 +39,18 @@ output "s3_prefix_list_id" {
   description = "S3 Gateway 엔드포인트 접두사 목록 id — media 의 SG 이그레스(rewind 업로드)."
   value       = module.network.s3_prefix_list_id
 }
+
+output "interface_endpoint_sg_id" {
+  description = "인터페이스 엔드포인트 SG id — workers 의 render 이그레스 대상(PR 488 뒤)."
+  value       = module.network.interface_endpoint_sg_id
+}
+
+output "interface_endpoint_services" {
+  description = "인터페이스 엔드포인트를 둔 서비스 접미(정렬) — workers 의 계약 검사."
+  value       = module.network.interface_endpoint_services
+}
+
+output "interface_endpoint_private_dns" {
+  description = "인터페이스 엔드포인트의 private DNS 가 켜져 있는가 — workers 의 계약 검사."
+  value       = module.network.interface_endpoint_private_dns
+}
