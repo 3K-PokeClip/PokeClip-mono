@@ -6,6 +6,7 @@ package publish
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -372,4 +373,62 @@ func TestFreezeVODWithPreM6ChainHead(t *testing.T) {
 		}
 		wantRoundFrozen(t, p, store, ResultFrozen, 3, 8, "H", "T")
 	})
+}
+
+// vodDocHole 은 진단 질의(index.VODDocumentHolesSQL) 결과 한 행이다.
+type vodDocHole struct {
+	stream, session, key string
+	first, last, missing int64
+}
+
+// vodDocumentHoles 는 p 의 DB 에서 진단 질의 원본을 읽기 전용 트랜잭션으로 돌린다.
+func vodDocumentHoles(t *testing.T, p *Publisher) []vodDocHole {
+	t.Helper()
+	tx, err := p.pool.BeginTx(t.Context(), pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatalf("읽기 전용 트랜잭션 시작 실패: %v", err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	rows, err := tx.Query(t.Context(), index.VODDocumentHolesSQL)
+	if err != nil {
+		t.Fatalf("VODDocumentHolesSQL 실행 실패: %v", err)
+	}
+	holes, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (vodDocHole, error) {
+		var h vodDocHole
+		err := r.Scan(&h.stream, &h.session, &h.key, &h.first, &h.last, &h.missing)
+		return h, err
+	})
+	if err != nil {
+		t.Fatalf("VODDocumentHolesSQL 결과 읽기 실패: %v", err)
+	}
+	return holes
+}
+
+// round_documents_have_no_holes(P12 · 설계 10.8 ⑤ · 계획 C6) — 실제 확정 경로로 앞 사슬 A 의 사슬 문서(범위 0–4)와 마지막
+// 사슬 B 의 회차 문서(범위 0–9)를 확정하고 회차를 ended 로 두면, 진단 질의는 0행이다(확정 순간 문서 범위의 seq 가 모두
+// 장부 행이었다). 그 0행이 헛것이 아님을 보이려고 같은 DB 에서 A 의 행 하나(seq 2)를 지우면 두 문서가 missing 1 로 나온다.
+func TestRoundDocumentsHaveNoHolesAfterFreeze(t *testing.T) {
+	ss := twoChainRound()
+	ss[0].vod, ss[0].doc = "freezing", false
+	p, store := newRoundVOD(t, ss, twoChainRows())
+
+	if front := p.FreezeVOD(t.Context(), chainOf("A", "A"), false); front.Result != ResultFrozen || front.Scope != ScopeChain {
+		t.Fatalf("앞 사슬 A 동결 = %+v, want 사슬 범위 frozen", front)
+	}
+	wantOutcome(t, p.FreezeVOD(t.Context(), chainOf("A", "B"), false), AxisVOD, ResultFrozen, false)
+	wantRoundFrozen(t, p, store, ResultFrozen, 0, 9, "B")
+	endRound(t, p, "A", "B")
+
+	if holes := vodDocumentHoles(t, p); len(holes) != 0 {
+		t.Errorf("확정 직후 VODDocumentHolesSQL = %+v, want 0행", holes)
+	}
+
+	exec(t, p.pool, `DELETE FROM stream_segments WHERE stream_id = $1 AND seq = 2`, fxStream)
+	want := []vodDocHole{
+		{fxStream, "A", "vod/str/A/index.m3u8", 0, 4, 1},
+		{fxStream, "B", roundDocKey, 0, 9, 1},
+	}
+	if holes := vodDocumentHoles(t, p); !slices.Equal(holes, want) {
+		t.Errorf("seq 2 삭제 뒤 VODDocumentHolesSQL = %+v, want %+v", holes, want)
+	}
 }
