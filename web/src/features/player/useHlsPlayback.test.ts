@@ -251,6 +251,7 @@ describe('사건 올림 — ENDLIST 와 끝 도달을 따로(cx H1)', () => {
       url: 'https://m/dvr/k/a/index.m3u8',
       firstMs: PDT0,
       lastEndMs: PDT0 + 40_000,
+      lastStartMs: PDT0 + 36_000,
       targetDurationS: 4,
       headSpanMs: 12_000,
     });

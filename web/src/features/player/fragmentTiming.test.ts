@@ -279,6 +279,7 @@ describe('datedFragments — 겹침(B8) 목록', () => {
     expect(loadedList(fragments, 4)).toEqual({
       firstMs: PDT0,
       lastEndMs: PDT0 + 11_500,
+      lastStartMs: PDT0 + 7_500,
       targetDurationS: 4,
       headSpanMs: 12_000,
     });
