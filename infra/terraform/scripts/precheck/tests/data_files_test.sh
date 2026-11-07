@@ -352,7 +352,11 @@ STAGE_FOLLOWUP_ROWS=(
 'arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*'
   $'workers\tsqs:GetQueueUrl\tap-northeast-2\t*'
   $'workers\tcloudwatch:GetMetricStatistics\tap-northeast-2\t*'
-  $'workers\tlogs:FilterLogEvents\tap-northeast-2\t*')
+  $'workers\tlogs:FilterLogEvents\tap-northeast-2\t*'
+  $'runtime-1a\tecs:DescribeServices\tap-northeast-2\t*'
+  $'runtime-1a\tecs:UpdateService\tap-northeast-2\t*'
+  $'runtime-1a\tecs:ListTasks\tap-northeast-2\t*'
+  $'runtime-1a\tecs:DescribeTasks\tap-northeast-2\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################
