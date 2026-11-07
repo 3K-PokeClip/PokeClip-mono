@@ -321,6 +321,9 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     하나만 둡니다(모듈 공통). `aws:SourceArn`(이 클러스터의 ECS 자원)으로 더
     좁히는 것은 platform 다섯 서비스의 역할도 함께 바뀌는 모듈 변경이라
     platform apply 가 들어, 이 PR 에 넣지 않고 후속 후보로 둡니다.
+*   역할 경로는 루트 지역값(`local.iam_path`)만 단언합니다. 모듈 블록이 실제로
+    받은 경로는 모듈 출력에 경로가 없어 시험이 보지 못합니다. 잘못 연결되면
+    apply 의 CreateRole 거부로 드러납니다.
 
 ## 시험
 
