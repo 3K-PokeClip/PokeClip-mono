@@ -304,8 +304,9 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 규칙 자원의 재조회 읽기다(POK-479 — 묶음마다 SG 규칙 자원이 있는 근거는
 # 그 묶음 파일의 주석). O7a 의 스물넷은 network 의 인터페이스 엔드포인트 ·
 # 엔드포인트 SG 를 만들고 되돌릴 때 provider 가 부르는 동작과, 확인 ·
-# 되돌리기 절차가 부르는 동작이다. 맨 끝 하나는 엔드포인트 생성의 Route 53
-# 종속 동작이다(POK-408 — 근거는 O7a 묶음 파일의 주석).
+# 되돌리기 절차가 부르는 동작이다. 그 뒤의 둘은 엔드포인트 생성의 Route 53
+# 종속 동작(두 리전), 맨 끝 하나는 확인 절차의 로그 검색이다(POK-408 —
+# 근거는 O7a 묶음 파일의 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -355,7 +356,9 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7a\tcloudwatch:ListMetrics\tap-northeast-2\t*'
   $'O7a\tssm:SendCommand\tap-northeast-2\t*'
   $'O7a\tssm:GetCommandInvocation\tap-northeast-2\t*'
-  $'O7a\troute53:AssociateVPCWithHostedZone\tus-east-1\t*')
+  $'O7a\troute53:AssociateVPCWithHostedZone\tus-east-1\t*'
+  $'O7a\troute53:AssociateVPCWithHostedZone\tap-northeast-2\t*'
+  $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################
