@@ -2140,7 +2140,9 @@ kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순
 돌리고 ⑤ 보고를 합니다.
 
 *   ① 종료 3(CHANGED)은 예상됩니다 — 묶음에 `ec2:DescribeSubnets` 행이
-    늘었습니다(런타임 `data "aws_subnet"`). ⑤ 보고와 함께 묻고, 답을 들은 뒤
+    늘었고(런타임 `data "aws_subnet"`), 회전의 일꾼 멈춤 · 확인 · 복원에 쓰는
+    ECS 네 행(`ecs:DescribeServices` · `ecs:UpdateService` · `ecs:ListTasks` ·
+    `ecs:DescribeTasks`)도 늘었습니다. ⑤ 보고와 함께 묻고, 답을 들은 뒤
     `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다. 종료 1(DENIED) ·
     2(검사 불가)면 2 로 가지 않습니다.
 *   ② 는 1단-가 apply 뒤 기준입니다(4 의 첫 걸음 — 1 의 「apply 전이라
