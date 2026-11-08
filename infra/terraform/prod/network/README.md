@@ -893,19 +893,42 @@ vpce_rollout_summary() {  # 41-service.json 의 이 배포 · 재기동 뒤 ECR 
         | "오류 이벤트 \(length)")' "${evidence}/41-service.json"
 }
 
-vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 생겼고 첫 이벤트가 기동 뒤 3분 안인가
-  local task started ip
+vpce_log_streams() {  # 새 태스크마다 로그 스트림이 재기동 뒤 생겼고 첫 이벤트가 기동 뒤 3분 안인가 — 통과 0 · 실패 1 · 판정불가 2
+  local task started ip line rc worst=0 total=0
   if [ ! -s "${evidence}/42-new-tasks.txt" ]; then
     echo '로그 스트림: 판정불가 — 새 태스크 0개'
     return 2
   fi
   while read -r task started ip; do
-    aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
-      --log-stream-name-prefix "clip/clip/${task}" --output json < /dev/null \
+    total=$((total + 1))
+    # aws 가 실패하면 jq 는 빈 입력으로 줄 없이 0 을 낸다 — 빈 줄도 판정불가다.
+    if ! line="$(aws logs describe-log-streams --region "${region}" --log-group-name "${cluster}-clip" \
+        --log-stream-name-prefix "clip/clip/${task}" --output json < /dev/null \
       | jq -r --argjson since "$(cat "${evidence}/40-restart-at.txt")" --arg t "${task}" \
         --argjson started "${started}" \
-        '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 기동 뒤 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $started) <= 180 and (.firstEventTimestamp // 0) > 0)"'
+        '.logStreams[0] // {} | "\($t) 생성 뒤=\((.creationTime // 0) / 1000 > $since) 기동 뒤 첫 이벤트 3분 안=\(((.firstEventTimestamp // 0) / 1000 - $started) <= 180 and (.firstEventTimestamp // 0) > 0)"')" \
+        || [ -z "${line}" ]; then
+      echo "로그 스트림 ${task}: 판정불가 — 조회 실패 또는 줄 없음"
+      rc=2
+    else
+      echo "${line}"
+      case "${line}" in
+        *=false*) rc=1 ;;
+        *) rc=0 ;;
+      esac
+    fi
+    # 나쁜 쪽이 이긴다: 실패 1 > 판정불가 2 > 통과 0.
+    case "${worst}:${rc}" in
+      1:* | *:0) ;;
+      *) worst="${rc}" ;;
+    esac
   done < "${evidence}/42-new-tasks.txt"
+  case "${worst}" in
+    0) echo "로그 스트림: 통과 — 새 태스크 ${total}개" ;;
+    1) echo '로그 스트림: 실패' ;;
+    2) echo '로그 스트림: 판정불가' ;;
+  esac
+  return "${worst}"
 }
 ```
 
@@ -920,7 +943,7 @@ vpce_log_streams
 
 기대는 `배포: COMPLETED` · `rollout=COMPLETED running=1 desired=1` · `오류 이벤트
 0` · `멈춘 새 태스크: 0건` · 새 태스크마다 `생성 뒤=true 기동 뒤 첫 이벤트 3분
-안=true` 입니다.
+안=true` 와 마지막 줄 `로그 스트림: 통과 — 새 태스크 N개` 입니다.
 `판정불가` · `실패` 가 하나라도 있으면 「확인의 판정과 기록」 으로 갑니다.
 
 ### 확인 (ㄹ) 회귀 감시
@@ -932,9 +955,10 @@ chat 두 서비스의 로그와 Media 상자의 사이드카 로그에 AWS 호�
 않습니다 — 호출자 구분이 없고 (ㄴ) 탐침이 스스로 만듭니다.
 
 ```shell
-vpce_error_pattern='?UnknownHostException ?SdkClientException ?ConnectTimeoutException
-  ?"Unable to execute HTTP request" ?AccessDenied ?ENOTFOUND ?ETIMEDOUT
-  ?"broadcast.intake.poll_failed"'
+vpce_error_pattern='?UnknownHostException ?SdkClientException'
+vpce_error_pattern+=' ?ConnectTimeoutException ?"Unable to execute HTTP request"'
+vpce_error_pattern+=' ?AccessDenied ?ENOTFOUND ?ETIMEDOUT'
+vpce_error_pattern+=' ?"broadcast.intake.poll_failed"'
 since_ms="$(( $(date -u +%s) * 1000 - 15 * 60 * 1000 ))"
 for svc in clip auth next chat-collector chat-detector; do
   printf '%s %s\n' "${svc}" "$(aws logs filter-log-events --region "${region}" \

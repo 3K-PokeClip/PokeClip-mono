@@ -46,7 +46,9 @@
 #     journalctl 실패 = 숫자 아닌 줄 종료 2.
 #   보조 jq — (ㄱ) 상태 줄 · plan 요지(create 의 before null) · 배포 요약 ·
 #     로그 스트림 신선도(첫 이벤트는 그 태스크의 기동 시각 기준 — 재기동 190초
-#     뒤 기동한 정상 태스크 = 통과).
+#     뒤 기동한 정상 태스크 = 통과 · false = 실패 · 조회 실패 = 판정불가 · 실패와
+#     판정불가가 섞이면 실패).
+#   (ㄹ) 오류 패턴 — 값에 줄바꿈이 없음.
 #   정의 순서 — README 셸 블록의 vpce_* 첫 등장이 정의(함수 · 변수)다.
 #   SQS 판정(대리 — 새 태스크의 대상 상태 표본 · poll_failed 시각) — SQS 실패 ·
 #     첫 2분 healthy = 실패 · 일시 실패 뒤 갱신 = 통과 · 연속 실패 = 실패 ·
@@ -67,7 +69,8 @@
 # 한다.
 #
 # 임시 디렉터리는 한 뿌리($TMPDIR/network_vpce_runbook_test.*) 아래에 두고, 끝에
-# 지운 뒤 남지 않았는지 본다(중단 신호에도 지운다).
+# 지운 뒤 남지 않았는지 본다(중단 신호에도 지운다). 끝에 통과 건수가 사례와
+# 변이를 더한 수(EXPECTED_CASES)와 같은지 본다.
 #
 # Shell 가이드의 100줄 권고를 넘지만 셸로 둔다 — 시험 대상이 README 의 셸
 # 블록이라 같은 셸에서 eval 해야 하고, 같은 디렉터리 시험(put_secret_test ·
@@ -135,6 +138,7 @@ readonly MUTATION_NAMES=(
   'log: 첫 이벤트 기준을 재기동 시각으로 되돌리기'
   'restart-at: 기록 없음 갈래 빼기'
   'resolve: ENI 주소 기록 다섯 아님 갈래 빼기'
+  'log: false 를 실패로 세지 않기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -169,6 +173,7 @@ readonly MUTATION_FROMS=(
   '- $started) <= 180'
   "'' | *[!0-9]*) return 2 ;;"
   'if [ "$(grep -c . "${evidence}/12-eni-ips.txt" 2> /dev/null)" != 5 ]; then'
+  '*=false*) rc=1 ;;'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -203,6 +208,7 @@ readonly MUTATION_TOS=(
   '- $since) <= 180'
   "'' | *[!0-9]*) ;;"
   'if false; then'
+  '*=false*) rc=0 ;;'
 )
 
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
@@ -218,6 +224,8 @@ readonly SERVICE_HEAD='com.amazonaws.ap-northeast-2'
 readonly VPCE_SG='sg-0vpce'
 readonly ENDPOINT_IDS=(vpce-0a vpce-0b vpce-0c vpce-0d vpce-0e)
 readonly ENDPOINT_SERVICES=(ecr.api ecr.dkr logs secretsmanager sqs)
+# 사례 87 + 변이 32. 사례나 변이를 더하거나 빼면 함께 고친다.
+readonly EXPECTED_CASES=119
 
 failures=0
 passes=0
@@ -1207,12 +1215,32 @@ JSON
   run_readme eval 'printf "1000\n" > "${evidence}/40-restart-at.txt"
     printf "t1 1000 192.0.2.40\n" > "${evidence}/42-new-tasks.txt"
     vpce_log_streams'
-  expect 'jq: 로그 스트림 신선' 't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=true' 0
+  expect 'jq: 로그 스트림 신선 = 통과' '로그 스트림: 통과 — 새 태스크 1개' 0 \
+    't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=true'
   resp logs.describe-log-streams <<JSON
 {"logStreams": [{"creationTime": 1001500}]}
 JSON
   run_readme eval 'vpce_log_streams'
-  expect 'jq: 첫 이벤트 없음' 't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=false' 0
+  expect 'jq: 첫 이벤트 없음 = 실패' '로그 스트림: 실패' 1 \
+    't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=false'
+  touch -- "${case_dir}/resp/logs.describe-log-streams.fail"
+  run_readme eval 'vpce_log_streams'
+  expect 'jq: 로그 스트림 조회 실패 = 판정불가' '로그 스트림: 판정불가' 2 \
+    '로그 스트림 t1: 판정불가 — 조회 실패 또는 줄 없음'
+
+  # 실패가 판정불가보다 이긴다 — t1 은 첫 이벤트 없음, t2 는 응답을 읽지 못함.
+  new_case
+  resp logs.describe-log-streams.1 <<JSON
+{"logStreams": [{"creationTime": 1001500}]}
+JSON
+  printf 'not json\n' | resp logs.describe-log-streams.2
+  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  run_readme eval 'printf "1000\n" > "${evidence}/40-restart-at.txt"
+    printf "t1 1000 192.0.2.40\nt2 1000 192.0.2.41\n" \
+      > "${evidence}/42-new-tasks.txt"
+    vpce_log_streams'
+  expect 'jq: 실패와 판정불가가 섞이면 실패' '로그 스트림: 실패' 1 \
+    '로그 스트림 t2: 판정불가 — 조회 실패 또는 줄 없음'
 
   # 재기동 190초 뒤 기동한 정상 태스크 — 첫 이벤트는 재기동 뒤 195초지만 기동
   # 뒤 5초다(기준 = 그 태스크의 startedAt).
@@ -1225,13 +1253,13 @@ JSON
     printf "t1 1190 192.0.2.40\n" > "${evidence}/42-new-tasks.txt"
     vpce_log_streams'
   expect 'jq: 재기동 190초 뒤 기동 = 첫 이벤트는 기동 기준' \
-    't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=true' 0
+    '로그 스트림: 통과' 0 't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=true'
   resp logs.describe-log-streams <<JSON
 {"logStreams": [{"creationTime": 1185000, "firstEventTimestamp": 1371000}]}
 JSON
   run_readme eval 'vpce_log_streams'
-  expect 'jq: 기동 181초 뒤 첫 이벤트 = 3분 넘음' \
-    't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=false' 0
+  expect 'jq: 기동 181초 뒤 첫 이벤트 = 3분 넘음' '로그 스트림: 실패' 1 \
+    't1 생성 뒤=true 기동 뒤 첫 이벤트 3분 안=false'
 
   new_case
   # shellcheck disable=SC2016 # README 셸에서 펼친다.
@@ -1382,6 +1410,27 @@ test_rm_guarded() {
   fi
   # shellcheck disable=SC2016 # 글자 그대로.
   pass 'rm: 변수 경로 ${X:?} · work 정리 블록 둘'
+}
+
+#######################################
+# (ㄹ) 오류 패턴 — README 블록에서 since_ms 앞까지(패턴 대입)를 읽어 값에
+# 줄바꿈이 없고 마지막 낱말까지 이어졌는지 본다.
+#######################################
+test_error_pattern() {
+  local block value
+  if ! block="$(readme_block 'vpce_error_pattern=')"; then
+    fail 'pattern: README 에 「vpce_error_pattern=」 블록이 하나가 아님'
+    return 1
+  fi
+  # shellcheck disable=SC2154 # eval 한 README 대입이 정한다.
+  value="$(eval "$(sed -n '/^since_ms=/q;p' <<<"${block}")" &&
+    printf '%s' "${vpce_error_pattern}")"
+  if [[ "${value}" == *$'\n'* ||
+    "${value}" != *' ?"broadcast.intake.poll_failed"' ]]; then
+    fail "pattern: 값에 줄바꿈이 있거나 끝 낱말이 없음 「${value}」"
+    return 1
+  fi
+  pass 'pattern: (ㄹ) 오류 패턴 한 줄'
 }
 
 #######################################
@@ -1544,6 +1593,7 @@ run_suite() {
     test_try_move \
     test_sqs_tasks \
     test_rm_guarded \
+    test_error_pattern \
     test_sidecar_errors \
     test_helper_jq \
     test_sqs_verdict \
@@ -1615,6 +1665,9 @@ main() {
     fail "임시 디렉터리가 남음: ${tmp_root}"
   fi
   tmp_root=""
+  if [[ "${passes}" -ne "${EXPECTED_CASES}" ]]; then
+    fail "사례 수가 다름 — 통과 ${passes} ≠ ${EXPECTED_CASES}"
+  fi
   if [[ "${failures}" -ne 0 ]]; then
     printf 'network_vpce_runbook_test: %s건 실패(통과 %s건)\n' \
       "${failures}" "${passes}" >&2
