@@ -313,7 +313,10 @@ work="${vpce_work:?}" && unset vpce_work
 상자 하나에서 고릅니다(`vpce_media_box`) — 교체 중이라 상자가 둘이면 어느
 상자인지 정하지 못해 판정불가(2)입니다. 계정 조회나 SSM 명령이 실패해도
 판정불가입니다. 이름을 보지 못한 것이지 이름이 틀리게 풀린 것이 아니므로
-「실패」(1)로 세지 않습니다.
+「실패」(1)로 세지 않습니다. ENI 주소 기록(`12-eni-ips.txt`)이 다섯 줄이
+아니어도(노트북 쪽 조회가 실패해 비었거나 없음) 상자에 보내기 전에
+판정불가입니다 — 대조할 주소가 없으면 판정 함수가 상자 출력을 ENI 주소로
+잘못 읽어 「실패」 를 냅니다.
 
 ```shell
 vpce_resolve_verdict() {  # vpce_resolve_verdict on|off <상자 출력> <ENI 주소>
@@ -346,6 +349,10 @@ vpce_media_box() {  # 떠 있는 상자 키 — media_ids 의 상자가 하나�
 
 vpce_resolve() {  # vpce_resolve on|off <결과 파일> — 통과 0 · 실패 1 · 판정불가 2
   local box account ssm_rc
+  if [ "$(grep -c . "${evidence}/12-eni-ips.txt" 2> /dev/null)" != 5 ]; then
+    echo "이름 해석($1): 판정불가 — ENI 주소 기록이 다섯이 아님(12-eni-ips.txt)"
+    return 2
+  fi
   if ! box="$(vpce_media_box)"; then
     echo "이름 해석($1): 판정불가 — media_ids 의 상자가 하나가 아님"
     return 2
@@ -369,7 +376,7 @@ aws ec2 describe-network-interfaces --region "${region}" \
   --network-interface-ids $(jq -r '.VpcEndpoints[].NetworkInterfaceIds[]' "${evidence}/10-endpoints.json") \
   --query 'NetworkInterfaces[].PrivateIpAddress' --output text \
   | tr '\t' '\n' > "${evidence}/12-eni-ips.txt"
-wc -l < "${evidence}/12-eni-ips.txt"   # 5
+wc -l < "${evidence}/12-eni-ips.txt"   # 5 — 아니면 vpce_resolve 가 판정불가
 cat > "${work}/vpce-resolve.sh" <<'SH'
 for name in "api.ecr.$1.amazonaws.com" "$2.dkr.ecr.$1.amazonaws.com" \
   "logs.$1.amazonaws.com" "secretsmanager.$1.amazonaws.com" \
@@ -620,6 +627,13 @@ aws ecs describe-services --region "${region}" --cluster "${cluster}" \
   --output json > "${evidence}/40-target-groups.json"
 ```
 
+`update-service` 가 실패하거나 응답에 PRIMARY 배포가 없으면 `deployment` 가
+빕니다. 이 값을 쓰는 함수 넷(`vpce_new_tasks` · `vpce_stopped_tasks` ·
+`vpce_wait_rollout` · `vpce_rollout_summary`)은 머리의 `${deployment:?}` 에서
+aws 를 부르지 않고 멈춥니다 — 빈 값으로 `list-tasks --started-by ""` 를 보내거나
+멈춘 태스크 0건을 통과로 읽지 않게 합니다. 재기동 시각(`40-restart-at.txt`)은
+`update-service` 앞에서 이미 쓰였으므로, 재기동을 다시 할 때는 이 블록을
+처음부터 다시 돌려 시각을 새로 씁니다.
 
 멈춘 새 태스크는 ECR · Secrets 실패의 직접 증거(`stoppedReason`)입니다. 새
 태스크 대기(`vpce_wait_new_tasks`)와 판정이 함께 씁니다.
@@ -632,6 +646,7 @@ list-tasks help` — 「it must be the only filter that you use」) clip 서비�
 ```shell
 vpce_stopped_tasks() {  # 이 배포의 멈춘 태스크 — 0건 0 · 있음 1 · 판정불가 2
   local list="${work}/stopped-tasks.json" out="${evidence}/43-stopped.txt" count
+  : "${deployment:?}"
   if ! aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
       --service-name "${cluster}-clip" --desired-status STOPPED --output json > "${list}"; then
     echo '멈춘 새 태스크: 판정불가 — list-tasks 실패'
@@ -673,6 +688,7 @@ vpce_restart_at() {  # 재기동 명령 시각(epoch) — 기록이 없거나 �
 }
 
 vpce_new_tasks() {  # 이 배포의 새 태스크마다 "<태스크 id> <startedAt epoch> <IP>"
+  : "${deployment:?}"
   aws ecs list-tasks --region "${region}" --cluster "${cluster}" \
     --started-by "${deployment}" --output json > "${work}/new-tasks.json" || return 2
   vpce_describe_tasks "${work}/new-tasks.json" "${evidence}/42-new-tasks.json" || return 2
@@ -843,6 +859,7 @@ clip 을 다시 재기동해 NAT 로 회복시킵니다.
 ```shell
 vpce_wait_rollout() {  # 배포 끝 대기 — COMPLETED 0 · FAILED 1 · 재기동 10분 넘음 2
   local restart deadline state=''
+  : "${deployment:?}"
   if ! restart="$(vpce_restart_at)"; then
     echo '배포: 판정불가 — 재기동 시각 기록 없음(40-restart-at.txt)'
     return 2
@@ -867,6 +884,7 @@ vpce_wait_rollout() {  # 배포 끝 대기 — COMPLETED 0 · FAILED 1 · 재기
 }
 
 vpce_rollout_summary() {  # 41-service.json 의 이 배포 · 재기동 뒤 ECR · Secrets 오류 이벤트
+  : "${deployment:?}"
   jq -r --arg d "${deployment}" --argjson since "$(cat "${evidence}/40-restart-at.txt")" \
     "${vpce_jq_epoch}"' .services[0]
     | (.deployments[] | select(.id == $d) | "rollout=\(.rolloutState) running=\(.runningCount) desired=\(.desiredCount)"),

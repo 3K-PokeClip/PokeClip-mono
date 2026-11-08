@@ -53,7 +53,8 @@
 #     창 끝 가까운 실패 = 대기 · 기동 15분 뒤까지 미뤄지는 실패 = 판정불가 · 한
 #     번도 healthy 아님 = 실패 · 조회 실패 표본 = 판정불가.
 #   이름 해석 — 켬 · 끔 판정 · 상자 키는 media_ids 에서 · 상자가 하나가 아님 ·
-#     SSM 실패 = 판정불가.
+#     SSM 실패 · ENI 주소 기록 빔(켬 · 끔) = 판정불가.
+#   배포 id 빔 — 그것을 쓰는 함수 넷이 aws 를 부르지 않고 멈춤.
 #   rm — README 셸 블록의 변수 rm 경로는 모두 ${X:?} · work 정리 블록 있음.
 #   삭제 관문 (가) — 참조 행만 셈(자기 인그레스 제외) · 조회 실패와 자기 인그레스
 #     없음 = 판정불가.
@@ -133,6 +134,7 @@ readonly MUTATION_NAMES=(
   'log: 새 태스크 0개 판정불가 빼기'
   'log: 첫 이벤트 기준을 재기동 시각으로 되돌리기'
   'restart-at: 기록 없음 갈래 빼기'
+  'resolve: ENI 주소 기록 다섯 아님 갈래 빼기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -166,6 +168,7 @@ readonly MUTATION_FROMS=(
   'if [ ! -s "${evidence}/42-new-tasks.txt" ]; then'
   '- $started) <= 180'
   "'' | *[!0-9]*) return 2 ;;"
+  'if [ "$(grep -c . "${evidence}/12-eni-ips.txt" 2> /dev/null)" != 5 ]; then'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -199,6 +202,7 @@ readonly MUTATION_TOS=(
   'if false; then'
   '- $since) <= 180'
   "'' | *[!0-9]*) ;;"
+  'if false; then'
 )
 
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
@@ -1291,36 +1295,70 @@ test_resolve_verdict() {
     '이름 해석(on): 판정불가' 2
   resolve_case 'resolve: 계정 조회 실패 = 판정불가' '{"b": "i-0b"}' sts-fail \
     '이름 해석(on): 판정불가' 2
+  resolve_case 'resolve: 끔 · 상자 출력 공용 = 통과' '{"b": "i-0b"}' ok \
+    '이름 해석(off): 통과' 0 off
+  # 노트북 쪽 ENI 조회가 실패해 기록이 비면 이름을 보기 전이라 「실패」 가 아니다.
+  resolve_case 'resolve: 켬 · ENI 주소 기록 빔 = 판정불가' '{"b": "i-0b"}' \
+    eni-empty '이름 해석(on): 판정불가 — ENI 주소 기록이 다섯이 아님' 2
+  resolve_case 'resolve: 끔 · ENI 주소 기록 빔 = 판정불가' '{"b": "i-0b"}' \
+    eni-empty '이름 해석(off): 판정불가 — ENI 주소 기록이 다섯이 아님' 2 off
 }
 
 #######################################
-# vpce_resolve 사례 하나 — 가짜 media_ids · media_ssm(상자 b 에만 on.txt 로 응답,
-# ssm-fail 이면 SSM 상태 Failed 로 종료 1). 지금 사례 디렉터리의 on.txt ·
-# eni.txt 를 쓴다.
+# 재기동 블록이 배포 id 를 받지 못하면(deployment 빔) 그것을 쓰는 함수가 aws 를
+# 부르지 않고 멈추는지 본다 — list-tasks --started-by "" 로 이어지지 않게.
+# Globals:
+#   case_dir, status
+#######################################
+test_deployment_empty() {
+  local fn
+  for fn in vpce_new_tasks vpce_stopped_tasks vpce_wait_rollout \
+    vpce_rollout_summary; do
+    new_case && pending_fixture
+    # shellcheck disable=SC2016 # README 셸에서 펼친다.
+    run_readme eval 'printf "2000\n" > "${evidence}/40-restart-at.txt"
+      deployment=""; '"${fn}"'; echo "이어짐"'
+    if [[ "${status}" -eq 0 || -s "${case_dir}/calls" ]] ||
+      grep -q '이어짐' "${case_dir}/out"; then
+      fail "deployment: 빈 배포 id 인데 ${fn} 가 멈추지 않음(종료 ${status})"
+    else
+      pass "deployment: 빈 배포 id = ${fn} 가 aws 없이 멈춤"
+    fi
+  done
+}
+
+#######################################
+# vpce_resolve 사례 하나 — 가짜 media_ids · media_ssm(상자 b 에만 on.txt 또는
+# off.txt 로 응답, ssm-fail 이면 SSM 상태 Failed 로 종료 1). 지금 사례
+# 디렉터리의 on.txt · off.txt · eni.txt 를 쓴다(eni-empty 면 빈 ENI 주소 기록).
 # Globals:
 #   case_dir
 # Arguments:
-#   사례 이름, media_ids 출력, ok|ssm-fail|sts-fail, 기대 마지막 줄 머리, 기대
-#   종료.
+#   사례 이름, media_ids 출력, ok|ssm-fail|sts-fail|eni-empty, 기대 마지막 줄
+#   머리, 기대 종료, on|off(없으면 on).
 #######################################
 resolve_case() {
-  local sts="${case_dir}/resp/sts.get-caller-identity"
+  local sts="${case_dir}/resp/sts.get-caller-identity" mode="${6:-on}"
+  local eni=eni.txt
   rm -f -- "${sts}.fail"
   printf '%s\n' "${FAKE_ACCOUNT}" >"${sts}"
   if [[ "$3" == sts-fail ]]; then
     : >"${sts}.fail"
   fi
-  # shellcheck disable=SC2016 # README 셸에서 펼친다.
+  if [[ "$3" == eni-empty ]]; then
+    eni='eni-empty.txt'
+    : >"${case_dir}/${eni}"
+  fi
   run_readme eval "media_ids() { printf '%s' '$2'; }
     media_ssm() {
       if [ \"\$1\" != b ] || [ '$3' = ssm-fail ]; then
         echo 'SSM Failed'
         return 1
       fi
-      cat on.txt
-    }"'
-    cp eni.txt "${evidence}/12-eni-ips.txt"
-    vpce_resolve on resolve-on.txt'
+      cat ${mode}.txt
+    }
+    cp ${eni} \"\${evidence}/12-eni-ips.txt\"
+    vpce_resolve ${mode} resolve-${mode}.txt"
   expect "$1" "$4" "$5"
 }
 
@@ -1513,6 +1551,7 @@ run_suite() {
     test_stopped_tasks \
     test_new_tasks_filter \
     test_resolve_verdict \
+    test_deployment_empty \
     test_ref_gate \
     test_metric_gate; do
     # 변이 묶음은 첫 실패에서 멈춘다 — 잡혔는지만 보면 되고 시간이 준다.
