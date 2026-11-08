@@ -476,7 +476,22 @@ run "rejects_duplicate_interface_endpoint_services" {
   expect_failures = [var.interface_endpoint_services]
 }
 
-# 서비스 접미만 받는다 — 전체 서비스 이름(리전의 하이픈)은 꼴 위반이다.
+# 서비스 접미의 라벨은 하이픈을 품을 수 있다(ecs-agent · execute-api ·
+# ssm-contacts).
+run "accepts_hyphenated_interface_endpoint_service_suffix" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["ecs-agent", "execute-api", "ssm-contacts"]
+  }
+
+  assert {
+    condition     = toset(keys(aws_vpc_endpoint.interface)) == toset(["ecs-agent", "execute-api", "ssm-contacts"])
+    error_message = "하이픈 든 서비스 접미 셋의 엔드포인트 키 집합이 넘긴 것과 다르다."
+  }
+}
+
+# 서비스 접미만 받는다 — 전체 서비스 이름(com.amazonaws. 머리)은 꼴 위반이다.
 run "rejects_full_interface_endpoint_service_name" {
   command = plan
 
@@ -492,6 +507,37 @@ run "rejects_empty_interface_endpoint_service_segment" {
 
   variables {
     interface_endpoint_services = ["ecr..api"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+run "rejects_uppercase_interface_endpoint_service" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["SQS"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+# 라벨의 첫 · 끝 글자는 영숫자다.
+run "rejects_interface_endpoint_service_label_leading_hyphen" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["-ecs.agent"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+run "rejects_interface_endpoint_service_label_trailing_hyphen" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["ecs-.agent"]
   }
 
   expect_failures = [var.interface_endpoint_services]

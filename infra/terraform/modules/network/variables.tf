@@ -66,9 +66,15 @@ variable "interface_endpoint_services" {
     error_message = "interface_endpoint_services 에 같은 서비스가 두 번 있다."
   }
 
+  # 라벨은 소문자 · 숫자 · 하이픈이고 첫 · 끝 글자는 영숫자다. 하이픈을 받으면
+  # 전체 이름(com.amazonaws.<리전>.<접미>)도 꼴에 맞으므로 머리를 따로 막는다.
   validation {
-    condition     = alltrue([for service in var.interface_endpoint_services : can(regex("^[a-z0-9]+(\\.[a-z0-9]+)*$", service))])
-    error_message = "interface_endpoint_services 는 서비스 접미(소문자 · 숫자를 점으로 이음, 예: ecr.api)만 받는다 — 전체 서비스 이름이 아니다."
+    condition = alltrue([
+      for service in var.interface_endpoint_services :
+      can(regex("^[a-z0-9]+(-[a-z0-9]+)*(\\.[a-z0-9]+(-[a-z0-9]+)*)*$", service)) &&
+      !startswith(service, "com.amazonaws.")
+    ])
+    error_message = "interface_endpoint_services 는 서비스 접미(소문자 · 숫자 · 하이픈 라벨을 점으로 이음, 라벨의 첫 · 끝은 영숫자, 예: ecr.api · ecs-agent)만 받는다 — com.amazonaws. 로 시작하는 전체 서비스 이름이 아니다."
   }
 }
 

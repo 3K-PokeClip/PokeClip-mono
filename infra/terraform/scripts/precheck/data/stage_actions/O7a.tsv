@@ -113,7 +113,10 @@ ecs:UpdateService	ap-northeast-2	*
 ecs:DescribeServices	ap-northeast-2	*
 ecs:ListTasks	ap-northeast-2	*
 ecs:DescribeTasks	ap-northeast-2	*
-# 확인 (ㄷ) 5분 창 끝의 대상 그룹 healthy(describe-target-health).
+# 확인 (ㄷ) 의 대상 그룹 상태 표본(describe-target-health) — 30초마다, 새
+# 태스크 startedAt 뒤 420초(7분) 창 끝까지. poll_failed 가 있으면 마지막
+# 것 뒤 240초까지 늘리고, 그 끝이 기동 뒤 900초를 넘으면 판정불가(prod/network
+# README).
 elasticloadbalancing:DescribeTargetHealth	ap-northeast-2	*
 # 확인 (ㄷ) 재기동 전 관문 — 비밀의 LastChangedDate · AWSCURRENT 버전
 # ID(describe-secret).
@@ -130,7 +133,7 @@ logs:FilterLogEvents	ap-northeast-2	*
 cloudwatch:GetMetricStatistics	ap-northeast-2	*
 cloudwatch:ListMetrics	ap-northeast-2	*
 # 확인 (ㄴ) · 되돌리기 1단계 복구 조건 (가) — media 상자에서 다섯 이름을
-# getent hosts 로 풀기(SSM).
+# getent ahostsv4 로 풀기(SSM).
 ssm:SendCommand	ap-northeast-2	*
 ssm:GetCommandInvocation	ap-northeast-2	*
 
