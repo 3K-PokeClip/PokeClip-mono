@@ -36,7 +36,7 @@ func TestOutcomeOfRoundWaitIsUnsettled(t *testing.T) {
 
 // round_wait_never_fails_vod(R21 ②) — 마지막 사슬 VOD 동결이 회차 대기를 MaxAttempts 보다 많이 내도 장애 횟수는 0 이고 다음
 // 판정은 그대로 StepFreezeVOD 다(StepFailVOD 로 가 회차 VOD 를 통째로 잃지 않는다). session_freeze_retry 도 남지 않는다.
-// 기준 트리는 3번째에 StepFailVOD 로 간다.
+// 기준 트리는 StepFreezeVOD 세 번(MaxAttempts) 뒤 네 번째 걸음에서 StepFailVOD 로 간다.
 func TestRoundWaitDoesNotCountVODAttempts(t *testing.T) {
 	f := newFinalLoop(t, finalize.ModePublishing)
 	row := endingRow("S1", func(s *index.EndingSession) { s.DVRState, s.VODState = "frozen", "freezing" })
