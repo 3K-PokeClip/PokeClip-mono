@@ -35,10 +35,14 @@
 #   지표 판정 — 기동 앞 분의 점은 세지 않음 · 20분 넘어 점 없음 = 판정불가 ·
 #     조회 실패 = 판정불가.
 #   기동 시각 — 첫 worker_started 의 초 · 없음 = 판정불가.
-#   대화형 zsh — 블록을 `zsh -f -i` 에 표준 입력으로 넣은 것과 PTY 의 bracketed
-#     paste(python3)로 블록마다 붙여 넣은 것 둘에서, 판정 함수 여덟이 모두
+#   대화형 zsh — 블록을 `zsh -f -i -s` 에 표준 입력으로 넣은 것(제어 터미널
+#     없음 · 새 PTY 를 제어 터미널로 준 것 둘)과 PTY 의 bracketed
+#     paste(python3)로 블록마다 붙여 넣은 것, 셋에서 판정 함수 여덟이 모두
 #     whence -w 로 function 이고 정의하는 동안 가짜 aws 가 한 번도 불리지 않음.
-#     zsh(PTY 는 python3 도)가 없으면 skip 으로 센다. 대화형 zsh 의 기본값
+#     -s 는 제어 터미널이 있어도 명령을 표준 입력에서 읽게 한다 — 없으면 zsh 가
+#     터미널에서 읽어, 사람이 터미널에서 시험을 돌릴 때 프롬프트를 띄운 채
+#     멈춘다(터미널을 준 사례가 20초 상한으로 잡는다). zsh(PTY 둘은 python3
+#     도)가 없으면 skip 으로 센다. 대화형 zsh 의 기본값
 #     (interactivecomments 꺼짐 · 이력 확장 켜짐)이라 블록에 `#` 주석 · `<…>` ·
 #     `!` 가 있으면 여기서 잡힌다 — bash eval 과 `zsh -n` 은 못 잡는다.
 #
@@ -119,9 +123,13 @@ readonly T0=1794268800
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
 FAKE_ACCOUNT="$(printf '%012d' 42)"
 readonly FAKE_ACCOUNT
-# 사례 32(대화형 zsh 둘 포함) + 변이 11. 사례나 변이를 더하거나 빼면 함께
+# 사례 33(대화형 zsh 셋 포함) + 변이 11. 사례나 변이를 더하거나 빼면 함께
 # 고친다.
-readonly EXPECTED_CASES=43
+readonly EXPECTED_CASES=44
+# 블록을 표준 입력으로 넣는 대화형 zsh 의 옵션(터미널 없음 · 있음 두 사례가
+# 같이 쓴다). -s 가 없으면 제어 터미널이 있을 때 zsh 가 표준 입력 대신
+# 터미널에서 읽어 멈춘다.
+readonly ZSH_STDIN_FLAGS=(-f -i -s)
 # 대화형 zsh 사례가 정의를 확인하는 판정 함수(README 블록이 정의하는 전부).
 readonly ZSH_FUNCTIONS=(
   workers_iso
@@ -142,6 +150,8 @@ case_dir=""
 readme_text=""
 # README 블록 하나씩(ANCHORS 차례) — 대화형 zsh 의 블록별 붙여 넣기에 쓴다.
 readme_blocks=()
+# 대화형 zsh 사례에서 zsh 를 띄울 환경(env -i …) — new_zsh_case 가 둔다.
+zsh_env=()
 status=0
 # quiet 이면 사례 결과를 적지 않고 실패만 센다(변이 묶음).
 quiet=""
@@ -752,13 +762,77 @@ PY
 )"
 readonly PTY_DRIVER
 
+# 새 PTY 를 제어 터미널로 준 채 명령 하나를 띄우는 python3 프로그램. 표준
+# 입력 · 출력 · 오류는 파일이다 — 사람이 터미널에서 이 시험을 돌릴 때 zsh 가
+# 보는 꼴이다. 그때처럼 PTY 의 슬레이브를 이 프로그램이 열어 둔다(아무도 열어
+# 두지 않으면 zsh 가 터미널을 쓰지 못해 멈춤이 재현되지 않는다). PTY 에 나오는
+# 것(프롬프트 등)은 읽어 버린다. 20초 안에 끝나지 않으면 그 세션을 죽이고
+# 종료 1 이다.
+# 사용: python3 -I -c "${TTY_RUNNER}" <표준 입력 파일> <표준 출력 파일>
+#   <표준 오류 파일> <명령> <인자> ….
+TTY_RUNNER="$(
+  cat <<'PY'
+import fcntl
+import os
+import select
+import signal
+import sys
+import termios
+import time
+
+RUN_SECONDS = 20
+
+
+def redirect(path, target, flags):
+    fd = os.open(path, flags, 0o600)
+    os.dup2(fd, target)
+    os.close(fd)
+
+
+def main():
+    stdin_path, out_path, err_path = sys.argv[1:4]
+    fd, slave = os.openpty()
+    pid = os.fork()
+    if pid == 0:
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        written = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        redirect(stdin_path, 0, os.O_RDONLY)
+        redirect(out_path, 1, written)
+        redirect(err_path, 2, written)
+        os.close(fd)
+        os.close(slave)
+        os.execvp(sys.argv[4], sys.argv[4:])
+    deadline = time.monotonic() + RUN_SECONDS
+    while time.monotonic() < deadline:
+        if os.waitpid(pid, os.WNOHANG)[0]:
+            return 0
+        readable, _, _ = select.select([fd], [], [], 0.1)
+        if not readable:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            chunk = b""
+        if not chunk:
+            time.sleep(0.1)
+    os.killpg(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    return 1
+
+
+sys.exit(main())
+PY
+)"
+readonly TTY_RUNNER
+
 #######################################
-# 대화형 zsh 사례의 입력 파일(가짜 aws · 꼬리 명령)을 사례 디렉터리에 쓴다.
-# 가짜 aws 는 받은 인자를 calls 에 적고 실패한다. 꼬리 명령은 함수마다
-# 「whence: <whence -w 출력>」 을 찍는다. 둘 다 대화형 zsh 에 들어가므로
-# `#` · `!` 를 쓰지 않는다.
+# 대화형 zsh 사례의 입력 파일(가짜 aws · 꼬리 명령 · 둘 사이에 블록을 이은
+# 표준 입력 전체)을 사례 디렉터리에 쓴다. 가짜 aws 는 받은 인자를 calls 에
+# 적고 실패한다. 꼬리 명령은 함수마다 「whence: <whence -w 출력>」 을 찍는다.
+# 둘 다 대화형 zsh 에 들어가므로 `#` · `!` 를 쓰지 않는다.
 # Globals:
-#   case_dir, ZSH_FUNCTIONS
+#   case_dir, readme_text, ZSH_FUNCTIONS
 #######################################
 write_zsh_inputs() {
   # shellcheck disable=SC2016
@@ -768,7 +842,24 @@ write_zsh_inputs() {
   # shellcheck disable=SC2016
   printf 'for f in %s; do print -r -- "whence: $(whence -w $f)"; done\n' \
     "${ZSH_FUNCTIONS[*]}" >"${case_dir}/tail"
+  printf '%s%s' "$(cat -- "${case_dir}/fake")"$'\n' "${readme_text}" |
+    cat - "${case_dir}/tail" >"${case_dir}/stdin"
   mkdir -- "${case_dir}/home"
+}
+
+#######################################
+# 대화형 zsh 사례 디렉터리를 새로 만들어 입력 파일을 쓰고, 그 사례에서 zsh 를
+# 띄울 환경(env -i …)을 zsh_env 에 둔다. HOME · TMPDIR 은 사례 디렉터리이고
+# AWS 설정 파일은 /dev/null 이다.
+# Globals:
+#   case_dir, zsh_env
+#######################################
+new_zsh_case() {
+  new_case && write_zsh_inputs || return 1
+  zsh_env=(env -i "PATH=${PATH}" "HOME=${case_dir}/home" "TERM=xterm-256color"
+    "LANG=${LANG:-C.UTF-8}" "TMPDIR=${case_dir}/tmp"
+    "AWS_CONFIG_FILE=/dev/null" "AWS_SHARED_CREDENTIALS_FILE=/dev/null"
+    "WORKERS_ZSH_CALLS=${case_dir}/calls")
 }
 
 #######################################
@@ -802,39 +893,40 @@ expect_zsh_functions() {
 
 #######################################
 # 대화형 zsh(interactivecomments 꺼짐 · 이력 확장 켜짐)에서 README 블록이
-# 판정 함수를 모두 정의하는지 본다. 표준 입력 · PTY bracketed paste 두 사례.
-# HOME · TMPDIR 은 사례 디렉터리이고 AWS 설정 파일은 /dev/null 이다.
+# 판정 함수를 모두 정의하는지 본다. 표준 입력(터미널 없음 · 있음)과 PTY
+# bracketed paste 세 사례.
 # Globals:
-#   case_dir, readme_text, readme_blocks
+#   case_dir, zsh_env, readme_blocks
 #######################################
 test_zsh_interactive() {
   local zsh i pastes=()
-  local -a zsh_env
   if ! zsh="$(command -v zsh)"; then
     skip 'zsh: 표준 입력 붙여 넣기(zsh 없음)'
+    skip 'zsh: 터미널 + 표준 입력(zsh 없음)'
     skip 'zsh: PTY 붙여 넣기(zsh 없음)'
     return 0
   fi
 
-  new_case && write_zsh_inputs
-  zsh_env=(env -i "PATH=${PATH}" "HOME=${case_dir}/home" "TERM=xterm-256color"
-    "LANG=${LANG:-C.UTF-8}" "TMPDIR=${case_dir}/tmp"
-    "AWS_CONFIG_FILE=/dev/null" "AWS_SHARED_CREDENTIALS_FILE=/dev/null"
-    "WORKERS_ZSH_CALLS=${case_dir}/calls")
-  printf '%s%s' "$(cat -- "${case_dir}/fake")"$'\n' "${readme_text}" |
-    cat - "${case_dir}/tail" |
-    "${zsh_env[@]}" "${zsh}" -f -i >"${case_dir}/out" 2>"${case_dir}/err"
+  new_zsh_case
+  cat -- "${case_dir}/stdin" |
+    "${zsh_env[@]}" "${zsh}" "${ZSH_STDIN_FLAGS[@]}" \
+      >"${case_dir}/out" 2>"${case_dir}/err"
   expect_zsh_functions 'zsh: 표준 입력 붙여 넣기 = 함수 여덟 정의 · aws 0회'
 
   if ! command -v python3 >/dev/null; then
+    skip 'zsh: 터미널 + 표준 입력(python3 없음)'
     skip 'zsh: PTY 붙여 넣기(python3 없음)'
     return 0
   fi
-  new_case && write_zsh_inputs
-  zsh_env=(env -i "PATH=${PATH}" "HOME=${case_dir}/home" "TERM=xterm-256color"
-    "LANG=${LANG:-C.UTF-8}" "TMPDIR=${case_dir}/tmp"
-    "AWS_CONFIG_FILE=/dev/null" "AWS_SHARED_CREDENTIALS_FILE=/dev/null"
-    "WORKERS_ZSH_CALLS=${case_dir}/calls")
+  new_zsh_case
+  if python3 -I -c "${TTY_RUNNER}" "${case_dir}/stdin" "${case_dir}/out" \
+    "${case_dir}/err" "${zsh_env[@]}" "${zsh}" "${ZSH_STDIN_FLAGS[@]}"; then
+    expect_zsh_functions 'zsh: 터미널 + 표준 입력 = 20초 안에 끝남 · 함수 여덟'
+  else
+    fail 'zsh: 터미널 + 표준 입력이 20초 안에 끝나지 않음(터미널 입력 대기)'
+  fi
+
+  new_zsh_case
   pastes=("${case_dir}/fake")
   for i in "${!readme_blocks[@]}"; do
     printf '%s' "${readme_blocks[i]}" >"${case_dir}/block.${i}"

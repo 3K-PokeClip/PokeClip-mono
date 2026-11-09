@@ -397,8 +397,8 @@ jobs:
           "${bin}/shellcheck" --version
           echo "${bin}" >>"${GITHUB_PATH}"
 
-      # 「스크립트 시험」의 대화형 zsh 두 사례(workers_watch_runbook_test 의 표준 입력 · PTY 붙여 넣기)가
-      # 쓴다. 러너 이미지에는 zsh가 없고, 없으면 두 사례가 skip이 되어 그 단계가 실패한다. zsh는
+      # 「스크립트 시험」의 대화형 zsh 세 사례(workers_watch_runbook_test 의 표준 입력 · 터미널 + 표준 입력 · PTY 붙여 넣기)가
+      # 쓴다. 러너 이미지에는 zsh가 없고, 없으면 세 사례가 skip이 되어 그 단계가 실패한다. zsh는
       # 소스만 배포해 apt로 깔고 판으로 고정한다 — 5.9-6ubuntu2는 noble 릴리스 포켓의 판이다
       # (2026-11-10 — noble-updates · noble-security에 새 판 없음). 릴리스 포켓은 얼어 있어 새 판이
       # 나와도 이 판을 그대로 깔 수 있다. sha256은 적지 않는다 — apt가 서명된 색인(InRelease →
