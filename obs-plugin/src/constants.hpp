@@ -67,6 +67,8 @@ inline constexpr int kMaxLatencyMs = 8000;
 inline constexpr int kDefaultLatencyMs = 3000;
 // POK-556 이전 기본값 — 1초 넘는 막힘이면 늦은 패킷을 수신부가 버렸다. 이관 표지 없는 파일의 이 값은 지금 기본값으로 올린다.
 inline constexpr int kLegacyDefaultLatencyMs = 1000;
+// 설정 파일의 이관 표지 키 — Save가 늘 쓰고, Load는 이 키가 있으면 저장된 1000을 고른 값으로 본다.
+inline constexpr const char *kLatencyMigratedKey = "latency_migrated";
 
 // ADR-020: 세그먼트 4s가 GOP의 정수배여야 한다 — 플러그인이 2s로 강제한다.
 inline constexpr int kForcedKeyintSec = 2;

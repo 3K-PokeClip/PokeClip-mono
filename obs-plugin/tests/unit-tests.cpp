@@ -206,35 +206,56 @@ TEST(srt_latency_valid_range_matches_dock_check)
 	CHECK(!IsValidLatencyMs(8001));
 	CHECK(!IsValidLatencyMs(0));
 	CHECK(!IsValidLatencyMs(-1));
+	// 64비트로 본다 — int로 먼저 좁히면 아래 둘이 2000으로 감겨 통과한다
+	CHECK(!IsValidLatencyMs(int64_t(4294969296)));
+	CHECK(!IsValidLatencyMs(int64_t(-4294965296)));
+	CHECK(!IsValidLatencyMs(int64_t(2147483648)));  // int 최댓값 + 1
+	CHECK(!IsValidLatencyMs(int64_t(-2147483649))); // int 최솟값 - 1
 }
 
 TEST(srt_latency_lifts_unmigrated_legacy_default)
 {
+	const std::optional<bool> none;
 	// 새 설치(파일에 latency_ms 없음) — 표지와 무관하게 지금 기본값
-	CHECK_EQ(LoadedLatencyMs(std::nullopt, false), 3000);
+	CHECK_EQ(LoadedLatencyMs(std::nullopt, none), 3000);
 	CHECK_EQ(LoadedLatencyMs(std::nullopt, true), 3000);
 	// 표지 없는 옛 파일의 옛 기본값 → 지금 기본값으로 올린다
-	CHECK_EQ(LoadedLatencyMs(1000, false), 3000);
+	CHECK_EQ(LoadedLatencyMs(1000, none), 3000);
 	// 표지 없는 옛 파일이라도 옛 기본값이 아니면 고른 값이다 — 그대로
-	CHECK_EQ(LoadedLatencyMs(500, false), 500);
-	CHECK_EQ(LoadedLatencyMs(2000, false), 2000);
-	CHECK_EQ(LoadedLatencyMs(20, false), 20);
-	CHECK_EQ(LoadedLatencyMs(8000, false), 8000);
+	CHECK_EQ(LoadedLatencyMs(500, none), 500);
+	CHECK_EQ(LoadedLatencyMs(2000, none), 2000);
+	CHECK_EQ(LoadedLatencyMs(20, none), 20);
+	CHECK_EQ(LoadedLatencyMs(8000, none), 8000);
 	// 이관 뒤 다시 1000을 골랐다(표지 있음) — 그대로
 	CHECK_EQ(LoadedLatencyMs(1000, true), 1000);
 	CHECK_EQ(LoadedLatencyMs(3000, true), 3000);
 	// 한 번 올린 값을 표지와 함께 다시 읽어도 같다
-	CHECK_EQ(LoadedLatencyMs(LoadedLatencyMs(1000, false), true), 3000);
+	CHECK_EQ(LoadedLatencyMs(LoadedLatencyMs(1000, none), true), 3000);
+}
+
+TEST(srt_latency_marker_is_key_presence_not_value)
+{
+	// 표지는 키가 있는가로 본다 — 값이 false여도 이관이 끝난 파일이다
+	CHECK_EQ(LoadedLatencyMs(1000, std::nullopt), 3000);
+	CHECK_EQ(LoadedLatencyMs(1000, false), 1000);
+	CHECK_EQ(LoadedLatencyMs(1000, true), 1000);
 }
 
 TEST(srt_latency_out_of_range_falls_back_to_default)
 {
 	// 독·브리지가 받지 않는 값(20–8000 밖)은 파일을 손으로 고친 것 — 표지와 무관하게 기본값
-	for (bool migrated : {false, true}) {
-		CHECK_EQ(LoadedLatencyMs(19, migrated), 3000);
-		CHECK_EQ(LoadedLatencyMs(8001, migrated), 3000);
-		CHECK_EQ(LoadedLatencyMs(0, migrated), 3000);
-		CHECK_EQ(LoadedLatencyMs(-1000, migrated), 3000);
+	const std::optional<bool> markers[] = {std::nullopt, false, true}; // 표지 없음 · false · true
+	for (const std::optional<bool> &marker : markers) {
+		CHECK_EQ(LoadedLatencyMs(19, marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(8001, marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(0, marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(-1000, marker), 3000);
+		// int로 먼저 좁히면 2000·1000으로 감기는 값
+		CHECK_EQ(LoadedLatencyMs(int64_t(4294969296), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(-4294965296), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(4294968296), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(2147483648), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(-2147483649), marker), 3000);
 	}
 }
 

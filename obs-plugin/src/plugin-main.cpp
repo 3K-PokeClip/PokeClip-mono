@@ -194,7 +194,13 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	str("ingest_host", next.ingestHost);
 	num("ingest_port", next.ingestPort);
 	flag("send_passphrase", next.sendPassphrase);
-	num("latency_ms", next.latencyMs);
+	// latency_ms는 64비트로 받아 범위를 본 뒤에 좁힌다 — int로 먼저 감기면 4294969296이 2000으로 통과한다. 범위 밖이면
+	// next에 얹지 않고 아래 invalid_latency로 거절한다.
+	int64_t latency = next.latencyMs;
+	if (obs_data_has_user_value(d, "latency_ms"))
+		latency = obs_data_get_int(d, "latency_ms");
+	if (IsValidLatencyMs(latency))
+		next.latencyMs = static_cast<int>(latency);
 	flag("sync_start", next.syncStart);
 	flag("force_fallback", next.forceFallback);
 	flag("audio_auto_assign", next.audioAutoAssign);
@@ -226,7 +232,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		return {400, JsonReason(false, "invalid_ingest_host")};
 	if (next.ingestPort < 1 || next.ingestPort > 65535)
 		return {400, JsonReason(false, "invalid_ingest_port")};
-	if (!IsValidLatencyMs(next.latencyMs))
+	if (!IsValidLatencyMs(latency))
 		return {400, JsonReason(false, "invalid_latency")};
 
 	// 잠금 아래 지금 설정에 독 값만 얹는다 — 키·배정 기억·독 첫 실행 표시·단축키 사본은 페어링·UI 스레드가 따로

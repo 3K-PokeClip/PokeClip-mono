@@ -9,6 +9,7 @@
 #include <plugin-support.h>
 #include <util/platform.h>
 
+#include <cstdint>
 #include <optional>
 
 namespace pokeclip {
@@ -83,12 +84,19 @@ void ConfigStore::Load()
 	config_.sendPassphrase = GetBoolOr(data, "send_passphrase", d.sendPassphrase);
 	// SRT 지연(POK-556) — 이관 표지 없는 파일의 옛 기본값(1000)은 지금 기본값으로 올리고, 범위 밖 값은 기본값으로
 	// 둔다(srt-latency.hpp). 올린 값은 다음 저장 때 표지와 함께 파일에 남는다.
-	const std::optional<int> storedLatency = obs_data_has_user_value(data, "latency_ms")
-							 ? std::optional<int>((int)obs_data_get_int(data, "latency_ms"))
-							 : std::nullopt;
-	config_.latencyMs = LoadedLatencyMs(storedLatency, GetBoolOr(data, "latency_migrated", false));
+	// 64비트 그대로 넘긴다 — 범위는 LoadedLatencyMs가 좁히기 전에 본다.
+	const std::optional<int64_t> storedLatency =
+		obs_data_has_user_value(data, "latency_ms")
+			? std::optional<int64_t>(static_cast<int64_t>(obs_data_get_int(data, "latency_ms")))
+			: std::nullopt;
+	const std::optional<bool> latencyMarker =
+		obs_data_has_user_value(data, kLatencyMigratedKey)
+			? std::optional<bool>(obs_data_get_bool(data, kLatencyMigratedKey))
+			: std::nullopt;
+	config_.latencyMs = LoadedLatencyMs(storedLatency, latencyMarker);
 	if (storedLatency && *storedLatency != config_.latencyMs)
-		obs_log(LOG_INFO, "config: latency_ms %d -> %d", *storedLatency, config_.latencyMs);
+		obs_log(LOG_INFO, "config: latency_ms %lld -> %d", static_cast<long long>(*storedLatency),
+			config_.latencyMs);
 	config_.syncStart = GetBoolOr(data, "sync_start", d.syncStart);
 	config_.forceFallback = GetBoolOr(data, "force_fallback", d.forceFallback);
 	config_.dockIntroShown = GetBoolOr(data, "dock_intro_shown", d.dockIntroShown);
@@ -202,7 +210,7 @@ bool ConfigStore::SaveLocked(SaveBackup backupMode)
 	obs_data_set_bool(data, "send_passphrase", config_.sendPassphrase);
 	obs_data_set_int(data, "latency_ms", config_.latencyMs);
 	// 이관 표지(POK-556) — 이 뒤로 파일에 1000이 있으면 사용자가 고른 값이다. 다음 Load가 올리지 않는다.
-	obs_data_set_bool(data, "latency_migrated", true);
+	obs_data_set_bool(data, kLatencyMigratedKey, true);
 	obs_data_set_bool(data, "sync_start", config_.syncStart);
 	obs_data_set_bool(data, "force_fallback", config_.forceFallback);
 	obs_data_set_bool(data, "dock_intro_shown", config_.dockIntroShown);

@@ -4,18 +4,20 @@
 
 namespace pokeclip {
 
-bool IsValidLatencyMs(int ms)
+bool IsValidLatencyMs(int64_t ms)
 {
 	return ms >= kMinLatencyMs && ms <= kMaxLatencyMs;
 }
 
-int LoadedLatencyMs(std::optional<int> stored, bool migrated)
+int LoadedLatencyMs(std::optional<int64_t> stored, std::optional<bool> marker)
 {
 	if (!stored || !IsValidLatencyMs(*stored))
 		return kDefaultLatencyMs;
-	if (!migrated && *stored == kLegacyDefaultLatencyMs)
+	// 범위 안이라 int로 좁혀도 값이 그대로다.
+	const int ms = static_cast<int>(*stored);
+	if (!marker.has_value() && ms == kLegacyDefaultLatencyMs)
 		return kDefaultLatencyMs;
-	return *stored;
+	return ms;
 }
 
 } // namespace pokeclip
