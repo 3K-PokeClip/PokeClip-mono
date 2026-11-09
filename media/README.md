@@ -747,7 +747,7 @@ IP 속도 제한(WAF 후속)이다.
 | 신호 | 등급 | 언제 | 속성 |
 |---|---|---|---|
 | `session_freeze` | INFO | VOD 확정(기존) | `scope=chain\|round` 를 더했다. 다른 writer 의 확정을 채택했으면 그 문서의 범위다 |
-| `session_freeze_retry` | WARN | 장애 재시도(기존). 회차 대기는 남기지 않는다 | `scope=chain\|round` 를 더했다. `reason` = 물러섰으면 이어서 돈 사슬 동결의 사유, 물러서지 않았으면 그 동결(회차 경로 포함)의 사유. 회차 쪽 결정적 원인은 `session_vod_round_fallback` 의 `cause` 에만 |
+| `session_freeze_retry` | WARN | 장애 재시도(기존). 회차 대기는 남기지 않는다 | `scope=chain\|round` 를 더했다(범위 판정 전에 끝난 재시도 — 회차 판정 재료 읽기 실패 — 에는 scope 가 없다). `reason` = 물러섰으면 이어서 돈 사슬 동결의 사유, 물러서지 않았으면 그 동결(회차 경로 포함)의 사유. 회차 쪽 결정적 원인은 `session_vod_round_fallback` 의 `cause` 에만 |
 | `session_vod_round_fallback` | WARN | 물러섬 — 세션당 한 번(재기동하면 한 번 더). 결과가 섰음 · 대기 · 재시도 어느 것이든 낸다 | `session_id` · `round` · `reason` · `cause` · `err` |
 | `session_vod_round_wait_long` | WARN | 회차 대기가 그 세션 `ending` 뒤 30분(정산 창 15분 × 2)을 넘김 — 세션당 한 번 | `session_id` · `round` · `wait=round_open\|front_pending` |
 | `finalize_round_wake_failed` | WARN | 깨우기 질의 오류 — 정산 스캔이 거둔다 | `session_id` · `round` · `err` |
@@ -783,7 +783,7 @@ IP 속도 제한(WAF 후속)이다.
 
 | 한계 | 언제 · 크기 | 보는 법 |
 |---|---|---|
-| 깨우기를 못 받음 | ① 이미지 교체 겹침 동안 옛 writer 가 앞 사슬 종국을 썼다 ② 마지막 사슬이 `round_open` 판정을 받은 뒤 4D(의도적 종료 신호)가 회차를 닫았고, 그때 앞 사슬이 이미 모두 종국이다(빈도 미확인) ③ 깨우기 질의가 실패했다. 셋 다 정산 스캔이 다시 돌아올 때까지 늦는다 — ⌈N/50⌉ × 30초 + K × T_vod(N 은 스캔이 고르는 정산 대상 행 수라 적체 때 수 분 이상) | 30분을 넘으면 `session_vod_round_wait_long` · ③ 은 `finalize_round_wake_failed` · ② 는 `intentional_end` 의 `effect=upgraded\|forwarded` 시각과 그 회차 `session_freeze scope=round` 시각의 차가 30초를 넘는다 |
+| 깨우기를 못 받음 | ① 이미지 교체 겹침 동안 옛 writer 가 앞 사슬 종국을 썼다 ② 마지막 사슬이 `round_open` 판정을 받은 뒤 4D(의도적 종료 신호)가 회차를 닫았고, 그때 앞 사슬이 이미 모두 종국이다(빈도 미확인) ③ 깨우기 질의가 실패했다. 셋 다 정산 스캔이 다시 돌아올 때까지 늦는다 — ⌈N/50⌉ × 30초 + K × T_vod(N 은 스캔이 고르는 정산 대상 행 수라 적체 때 수 분 이상) | 30분 뒤 재판정에서도 회차 대기(`round_open` · `front_pending`)이면 `session_vod_round_wait_long` — 그사이 대기가 풀렸으면 경보 없이 그 스캔에서 동결되므로 늦음 자체를 늘 잡지는 않는다 · ③ 은 `finalize_round_wake_failed` · ② 는 `intentional_end` 의 `effect=upgraded\|forwarded` 시각과 그 회차 `session_freeze scope=round` 시각의 차가 30초를 넘는다 |
 | 합류로 앞 사슬이 된 대기 사슬 | 사슬 A 가 마지막 사슬로 `round_open` 을 기다리는 동안 새 사슬 D 가 같은 회차에 합류하면 A 는 앞 사슬이 된다. A 를 깨우는 사건이 없어 A 의 사슬 문서가 스캔 재방문(⌈N/50⌉ × 30초)까지 늦고, D 의 회차 문서도 그만큼 `front_pending` 으로 늦는다 | 30분을 넘으면 `session_vod_round_wait_long wait=front_pending` |
 | 교체 겹침 고아 문서 | 이미지 교체가 겹칠 때 옛 writer 가 먼저 확정하면 지금 동작(마지막 사슬의 사슬 문서)이고, 새 writer 가 먼저면 회차 문서다. `vod_conflict` 는 없고, 확정되지 못한 쪽 문서 객체가 많아야 하나 남는다 | 없다 — 버킷 LIST 를 쓰지 않아 감사가 보지 않는다 |
 | 큰 회차의 장부 적재 시한 | 회차 장부 읽기(첫 적재 · 꼬리 잠금 아래 재독)는 10초(`index.TxnDeadline`) 안에 끝나야 한다. 넘으면 일시 오류라 물러서지 않고 재시도하고, 3회면 마지막 사슬 VOD 가 실패로 확정된다(회차 경로는 `ended` — 다시보기 없음). 실측은 1,730조각 동결 전체 48–107ms 뿐이고 적재 상한(약 6만 행) 근처는 재지 않았다 | `session_freeze_retry`(`reason=ledger_failed` 등) 세 줄 뒤 `session_freeze_failed` |
