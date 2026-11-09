@@ -253,7 +253,7 @@ export function createMockBridge(scenario: string): Bridge {
     default_api_base: servers.api_base,
     known_api_bases: MOCK_KNOWN_API_BASES.map((url) => ({ url })),
     send_passphrase: true,
-    latency_ms: 1000,
+    latency_ms: 3000,
     sync_start: true,
     force_fallback: false,
     audio_auto_assign: state.audio.autoAssign,
