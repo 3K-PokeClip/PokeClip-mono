@@ -183,6 +183,7 @@ describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)
           url: URL,
           firstMs: F,
           lastEndMs: F + 40_000,
+          lastStartMs: F + 36_000,
           targetDurationS: 4,
           headSpanMs: 12_000,
           startFloorCut: true,

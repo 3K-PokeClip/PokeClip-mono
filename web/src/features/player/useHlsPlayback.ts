@@ -186,6 +186,17 @@ export function useHlsPlayback(
   holdFrame: () => void;
   /** 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(세션의 drop-pause-mark · POK-528) */
   dropPauseMark: () => void;
+  /**
+   * 선 재생기의 갈래 — hls.js · 브라우저 기본 HLS. 둘 다 없어 이 브라우저에서 틀 수 없으면 none 이다. 서기 전(읽는 중 ·
+   * 세우지 않음)이면 null
+   */
+  engine: 'hlsjs' | 'native' | 'none' | null;
+  /**
+   * 재생 위치(currentTime)를 지금 로드한 목록 축으로 본 실제 시각(PDT · epoch ms) — 다시보기 재생기(useVodPlayback)가 읽는다.
+   * 화면에 영상이 붙었는지(readyState)는 보지 않는다. 영상 노드 · 목록(목록 전 · 재생기를 내린 뒤 · 기본 HLS) · 시각 표시가
+   * 없으면 null
+   */
+  currentProgramDateMs: () => number | null;
 } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
@@ -207,6 +218,8 @@ export function useHlsPlayback(
   const [stopped, setStopped] = useState<{ src: string; why: keyof typeof STOPPED_NOTES } | null>(
     null,
   );
+  /** 선 재생기의 갈래 — 재생기를 세울 때 정하고 소스가 바뀌면 비운다 */
+  const [engine, setEngine] = useState<'hlsjs' | 'native' | 'none' | null>(null);
   // 키가 늦게 와도 재생기를 다시 세우지 않는다(효과는 src에만 걸린다): 오류가 난 그때의 키를 읽는다
   const mediaKeyRef = useRef(mediaKey);
   mediaKeyRef.current = mediaKey;
@@ -285,6 +298,13 @@ export function useHlsPlayback(
     });
     if (axis !== null && kind === 'live') lagMsRef.current = Math.max(0, Date.now() - axis.edgeMs);
     return axis;
+  }, [videoRef, fragmentsOf]);
+
+  const currentProgramDateMs = useCallback((): number | null => {
+    const video = videoRef.current;
+    const details = hlsRef.current?.latestLevelDetails;
+    if (!video || !details) return null;
+    return programDateAt(fragmentsOf(details), video.currentTime);
   }, [videoRef, fragmentsOf]);
 
   /** 세션 모드: 목표 실제 시각을 세션에 넘긴다. 축을 모르면 false */
@@ -570,6 +590,7 @@ export function useHlsPlayback(
     setWindowSeconds(0);
     // 이전 스트림의 자리도 남기지 않는다: 새 스트림 채팅이 앞 방송 시각을 따른다
     measure(generation, () => null);
+    setEngine(null);
 
     const onPlay = () => {
       setPlaying(true);
@@ -746,6 +767,7 @@ export function useHlsPlayback(
       if (held) return;
 
       if (HlsCtor.isSupported()) {
+        setEngine('hlsjs');
         const base = kind === 'live' ? HLS_LIVE_CONFIG : HLS_REWIND_CONFIG;
         // 시작 시각이 있으면 자동 시작을 끄고 첫 목록에서 그 자리를 한 번만 정한다(RC-7 · R15). 라이브는 기동 문지기가
         // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
@@ -890,6 +912,7 @@ export function useHlsPlayback(
         // index.m3u8의 302(세션 파라미터)는 기본 로더가 따라간다 — 커스텀 loader 금지 (.env.example 참조)
         hls.loadSource(src);
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        setEngine('native');
         // Safari 네이티브 HLS — liveSyncPosition이 없어 엣지 스냅은 백오프 경로를 탄다
         // <video>는 응답 코드를 못 읽어 첫 바이트를 물어 403인지 본다(다시보기와 같은 길). 403이면 출입증을 버리고 다시 받아 둔다:
         // 라이브 화면이 1분 안에 재생기를 새로 세운다. 기본 재생은 스스로 다시 해 보므로 error가 왔으면 멎은 것이다(PR #347 codex)
@@ -914,6 +937,7 @@ export function useHlsPlayback(
         video.src = src;
         video.play().catch(() => {});
       } else {
+        setEngine('none');
         console.warn('[player] HLS 재생 불가 — hls.js 미지원 + 네이티브 HLS 없음 (Chrome 권장)');
       }
     })();
@@ -988,5 +1012,7 @@ export function useHlsPlayback(
     markClip,
     wake,
     sleep,
+    engine,
+    currentProgramDateMs,
   };
 }
