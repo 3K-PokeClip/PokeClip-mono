@@ -101,3 +101,27 @@ func TestFreezeVODRoundAndChainWritersOverlap(t *testing.T) {
 		})
 	}
 }
+
+// round_doc_adopted_keeps_last_chain_gaps(PR 점검 r1) — 사슬 writer 가 먼저 확정된 회차 문서를 채택하면 결과는 Scope round
+// 이고, LastChainHasGaps 는 제 사슬 범위(그 회차 문서의 마지막 사슬 범위와 같다)의 GAP 유무다 — Scope round 면 정산 포기
+// 경보가 이 값을 보므로 경보가 꺼지지 않는다. 변이(write 가 회차 경로에서만 이 값을 싣기)는 늦은 쪽이 거짓이라 FAIL.
+func TestFreezeChainVODAdoptingRoundDocKeepsLastChainGaps(t *testing.T) {
+	p, store := overlapRound(t)
+	exec(t, p.pool, `INSERT INTO stream_published_gaps (stream_id, seq, session_id, reason) VALUES ($1, 7, 'B', 'upload_stall')`,
+		fxStream)
+	chain := chainOf("A", "B", "C")
+	a, reached, release := blockedWriter(t, p, store, vodLockChainSQL)
+	done := make(chan FreezeOutcome, 1)
+	go func() { done <- a.FreezeChainVOD(t.Context(), chain, false) }()
+	waitReached(t, reached, "멈춤 문장")
+
+	first := p.FreezeVOD(t.Context(), chain, false)
+	release()
+	late := <-done
+
+	for name, out := range map[string]FreezeOutcome{"먼저(회차 writer)": first, "늦은 쪽(사슬 writer)": late} {
+		if out.Result != ResultFrozenWithGaps || out.Scope != ScopeRound || !out.LastChainHasGaps {
+			t.Errorf("%s = %+v, want frozen_with_gaps · Scope round · LastChainHasGaps 참", name, out)
+		}
+	}
+}
