@@ -14,6 +14,11 @@
     없습니다. render 는 한 프로세스에서 렌더 줄과 사진 줄을 같이 돌립니다.
 *   **주소:** `CLIP_BASE_URL` · upload 의 `AUTH_BASE_URL` 은 Cloud Map 이름
     `http://<clip|auth>.pokeclip.internal:<platform service_ports>` 입니다.
+*   **이그레스:** render 는 AWS API 를 network 의 VPC 인터페이스 엔드포인트
+    다섯(`ecr.api` · `ecr.dkr` · `logs` · `secretsmanager` · `sqs`)의 SG 443
+    으로만 부르고, 그 밖에는 S3 게이트웨이 · clip 뿐입니다 — 사용자 영상을 다루는
+    ffmpeg 가 인터넷의 아무 호스트로나 나가지 못하게 합니다. upload 는 YouTube
+    때문에 NAT(`0.0.0.0/0:443`)를 그대로 씁니다.
 *   **SG 짝 규칙:** 일꾼 이그레스와 clip 인그레스 ← render · upload, auth
     인그레스 ← upload 를 이 루트의 apply 가 만듭니다. Media ↔ auth 짝을 media
     루트가 갖는 것과 같은 꼴입니다(kty 결정 2026-10-25 (나)).
@@ -38,7 +43,7 @@
 
 | 루트 | 출력 |
 |---|---|
-| network | `vpc_id` · `private_subnet_ids` · `s3_prefix_list_id` |
+| network | `vpc_id` · `private_subnet_ids` · `s3_prefix_list_id` · `interface_endpoint_sg_id` · `interface_endpoint_services` · `interface_endpoint_private_dns` |
 | platform | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids` 의 `clip` · `auth` · `service_ports` 의 `clip` · `auth` |
 | registry | `repo_urls` 의 `render` · `upload` |
 | 런타임 1단 | `app_env` · `app_task_resource_arns` 의 `render` · `upload`, `app_secret_arns` 의 `render` · `upload` · `clip`(clip 은 대조에만) |
@@ -66,6 +71,17 @@
 1.  사설 DNS 네임스페이스 `pokeclip.internal` 의 id 가 platform
     `discovery_namespace_id` 와 같다. platform 이 도메인 이름을 출력하지 않아
     주소의 도메인을 상수로 두고, 조회로 실물과 묶습니다.
+1.  network `interface_endpoint_sg_id` 가 SG id(`sg-<16진수>`)다.
+1.  network `interface_endpoint_services` 가 다섯을 모두 갖고
+    `interface_endpoint_private_dns` 가 `true` 다. 하나라도 빠지거나 DNS 가
+    꺼지면 render 가 기동 · 수신하지 못하는데 plan 은 조용히 통과하므로, 그
+    전에 멈춥니다.
+
+7 · 8 은 `render_egress_via_endpoints = true`(기본)일 때만 봅니다. network
+출력은 `try()` 로 읽어 키가 없으면(엔드포인트 앞의 network 상태) 속성 오류가
+아니라 이 검사의 문구로 멈춥니다. 검사가 멈추면 upload 를 포함한 이 루트
+전체가 plan 불가입니다 — DNS 를 끈 동안 이 루트를 바꿔야 하면 아래
+「render 이그레스 되돌리기」 대로 `false` 로 둡니다.
 
 같은 그릇이어도 값을 회전한 직후면 clip 태스크와 일꾼의 값이 다를 수
 있습니다. 그 창은 plan 이 볼 수 없어 아래 「apply 직전 읽기」 가 막습니다.
@@ -88,6 +104,9 @@
 plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(출력에 계정 ID 가
 든 ARN 이 찍힘). 세션에 옮기는 줄은 12자리 숫자열을 가립니다. 순서는 이렇습니다.
 
+1.  **network 엔드포인트 먼저:** network 의 인터페이스 엔드포인트가 apply 되고
+    [prod/network](/infra/terraform/prod/network/README.md) 의 확인을 통과한
+    뒤에만 이 루트를 plan 합니다. 그 전에는 계약 검사 7 이 멈춥니다(의도).
 1.  **이미지 동일성:** clip 이 실제로 도는 이미지와 같은 커밋인지 다이제스트로
     확인합니다. `workers/` 가 그 커밋 뒤에 바뀌었으면 env 이름 · 로그 키 ·
     작업 역할 근거를 그 판으로 대조합니다.
@@ -134,6 +153,9 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     을 다시 plan 해 둘 다 종료 0 인지 봅니다. 이 루트가 0 이 아니면 ECS 가
     태스크 정의를 다르게 정규화한 것이고, platform 이 0 이 아니면 이 루트가 단
     인그레스가 platform 에 드리프트로 보이는 것입니다 — 둘 다 kty 에게 넘깁니다.
+    `worker_started` 만으로는 기동을 판정하지 않습니다 — 아래 「수신 · 진행
+    판정」 의 **로그 판정**(기동 뒤 2분 — 잠정 통과면 다음 걸음으로)과 **지표
+    판정**(기동 뒤 20분 안)을 줄(render · thumbnail · upload)마다 함께 봅니다.
 1.  **썸네일 대기분 소진 · 시험 잡:** 사진 DLQ 깊이가 「apply 직전 읽기」 ①
     에서 적은 기준 그대로 · `thumbnail.report_rejected kind=card` ·
     `kind=clip` 0 을 세고, 렌더 짧은 컷 하나 · 업로드 비공개 하나(채널은
@@ -149,7 +171,7 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 
 | 주소 | 수 |
 |---|---|
-| `module.render` — 서비스 · 태스크 정의 · Cloud Map 서비스 · SG · 이그레스 셋 · 실행 · 작업 역할과 정책 넷 · 로그 그룹 | 12 |
+| `module.render` — 서비스 · 태스크 정의 · Cloud Map 서비스 · SG · 이그레스 셋(엔드포인트 SG · S3 · clip) · 실행 · 작업 역할과 정책 넷 · 로그 그룹 | 12 |
 | `module.upload` — 같은 꼴 · 이그레스 넷 | 13 |
 | `aws_vpc_security_group_ingress_rule.clip_from_worker` 둘 · `auth_from_upload` | 3 |
 | `terraform_data.runtime_contract` | 1 |
@@ -161,7 +183,7 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 
 ### apply 직전 읽기
 
-넷 다 읽기라 승인이 필요 없습니다. 하나라도 어긋나면 멈추고 kty 에게
+다섯 다 읽기라 승인이 필요 없습니다. 하나라도 어긋나면 멈추고 kty 에게
 넘깁니다.
 
 1.  사진 · 렌더 · 업로드 큐와 DLQ 셋의 `ApproximateNumberOfMessages` ·
@@ -180,6 +202,9 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     서비스가 회전 전 값을 들고 있어 일꾼의 보고(clip) · upload 의 연동
     조회(auth resolve — 같은 토큰)가 401 입니다.
 1.  관문 ① 을 머지 체크아웃에서 다시 돌려 종료 0 인지 봅니다.
+1.  머지 체크아웃의 `terraform.tfvars` 에 `render_egress_via_endpoints` 줄이
+    없어야 합니다(`grep -n render_egress_via_endpoints terraform.tfvars` 출력이
+    빔). `false` 는 되돌리기 전용이라, 남아 있으면 render 가 NAT 로 나갑니다.
 
 ### 첫 소비 감시
 
@@ -230,14 +255,18 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 *   렌더 줄: `render.started_rejected` · `render.report_rejected` ·
     `render.report_unavailable` · `render.unexpected`.
 *   업로드: `upload.loop_error` · `upload.unavailable`.
-*   공통: `*.receive_failed` 의 `AccessDenied` 가 1분 넘게 이어짐(처음 몇
-    초는 IAM 전파 지연일 수 있음) · `status=401` · 사진 DLQ 깊이가 apply
-    직전 기준보다 커짐.
+*   공통: **수신 불능** — `*.receive_failed` 가 오류 종류와 상관없이 1분
+    넘게 이어짐(아래 `workers_receive_verdict` 가 정지 — 처음 몇 초의
+    `AccessDenied` 는 IAM 전파 지연일 수 있어 1분을 기다립니다) · `status=401`
+    · 사진 DLQ 깊이가 apply 직전 기준보다 커짐.
+*   사진 · 렌더 큐: **무완료** — 아래 `workers_nodone_verdict` 가 정지(기동
+    20분 뒤부터 판정합니다).
 *   비밀 유출: `X-Internal-Token` · `Bearer ` · `upload_id=` 꼴이 로그에
     보이면 정지와 함께 토큰 회전 판단을 kty 에게 넘깁니다.
 
 정지 대상은 사진 · 렌더 신호면 render, 업로드 신호면 upload, `status=401` ·
-비밀 유출 · 사진 DLQ 는 둘 다입니다. 감시 불능은 그 기록 파일의 서비스이고,
+비밀 유출 · 사진 DLQ 는 둘 다입니다. 수신 불능은 그 줄의 서비스(render ·
+thumbnail 줄 = render, upload 줄 = upload)입니다. 감시 불능은 그 기록 파일의 서비스이고,
 따라 읽기가 둘 다 죽었으면 둘 다입니다. 첫 실패 신호에서 **2분 안**(늦어도
 240초)에 정지합니다 — 실패한 메시지는 약 120초마다 다시 받히고 세 번째
 실패 뒤 DLQ 로 갑니다. 보고 4xx 의 즉시 삭제는 시한이 없어 계약 검사 3 과
@@ -271,10 +300,279 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     그 직전 깊이를 새 기준으로 기록합니다 — 정지 사유가 된 증가분은 이미
     다뤘으므로, 새로 늘어난 것만 셉니다.
 1.  비밀 유출 신호 — 이때는 정지와 함께 토큰 회전 판단을 kty 에게 넘깁니다.
+1.  수신 불능(`workers_receive_verdict` 정지) · 사진 · 렌더 큐의
+    무완료(`workers_nodone_verdict` 정지).
 
 정지 대상은 첫 소비 정지 신호와 같습니다 — 사진 · 렌더 조건(렌더 DLQ
 포함)이면 render, 업로드 조건(업로드 DLQ 포함)이면 upload, 사진 DLQ · 비밀
 유출은 둘 다입니다.
+
+### 수신 · 진행 판정
+
+이그레스를 엔드포인트로 좁히면 render 가 실패하는 주된 모양은 「AWS 에 연결하지
+못함」 입니다. 그것은 오류 줄이 아니라 `*.receive_failed` 의 반복으로만
+보이고, `*.worker_started` 는 그와 상관없이 찍힙니다. 아래 판정은 **수신
+불능** 과 **진행 중인 긴 작업** 을 가릅니다 — render 는 큐마다 스레드 하나로 한
+통씩 처리하고 작업 상한은 15분(`job-timeout`)이며, `*.message_done` 은 처리가
+끝난 뒤에 찍힙니다.
+
+판정 함수는 kty 로컬 터미널(bash · zsh)에서 이 절의 블록을 차례로 붙여 넣어
+씁니다. 종료 코드는 0 통과 · 1 정지(또는 실패) · 2 판정불가 · 3 대기이고, 판정은
+마지막 줄입니다. 판정불가는 정지와 같이 kty 에게 넘깁니다. 로그 · 큐 · 지표
+읽기만 하고(`logs:FilterLogEvents` · `sqs:GetQueueUrl` ·
+`sqs:GetQueueAttributes` · `cloudwatch:GetMetricStatistics`) 큐 URL(계정 ID
+포함)은 변수에만 담아 찍지 않습니다.
+
+```shell
+region=ap-northeast-2
+work="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-workers.XXXXXX")"
+```
+
+공용 함수입니다. `workers_events` 는 로그 사건을 「초 메시지」 줄로 내고, 시작
+시각과 줄 이름을 CloudWatch 거르기와 별개로 한 번 더 거릅니다.
+`workers_started_at` 은 판정의 기준 시각(그 줄의 첫 `worker_started`)을,
+`workers_queue_depth` 는 **보이는 깊이**(`ApproximateNumberOfMessages` — DELAY
+처분으로 숨긴 메시지는 세지 않음)를 냅니다.
+
+```shell
+workers_iso() {  # workers_iso <epoch> — ISO 8601(UTC)
+  jq -rn --argjson t "$1" '$t | todate'
+}
+
+workers_events() {  # workers_events <로그 그룹> <시작 epoch> <거르기 식> <줄 정규식>
+  aws logs filter-log-events --region "${region}" --log-group-name "$1" \
+    --start-time "$(($2 * 1000))" --filter-pattern "$3" --output json \
+    > "${work}/events.json" < /dev/null || return 2
+  jq -r --argjson from "$(($2 * 1000))" --arg re "$4" \
+    '.events | sort_by(.timestamp) | .[] | select(.timestamp >= $from)
+      | select(.message | test($re)) | "\(.timestamp / 1000 | floor) \(.message)"' \
+    "${work}/events.json" || return 2
+}
+
+workers_started_at() {  # workers_started_at <로그 그룹> <줄 이름> <apply 시작 epoch>
+  local first
+  first="$(workers_events "$1" "$3" "\"$2.worker_started\"" \
+    "$2\\.worker_started " | head -n 1 | cut -d ' ' -f 1)"
+  if [ -z "${first}" ]; then
+    echo "기동 $2: 판정불가 — $1 에 $2.worker_started 가 없거나 조회 실패"
+    return 2
+  fi
+  echo "${first}"
+}
+
+workers_queue_depth() {  # workers_queue_depth <큐 이름> — 보이는 깊이
+  local url
+  url="$(aws sqs get-queue-url --region "${region}" --queue-name "$1" \
+    --query QueueUrl --output text < /dev/null)" || return 2
+  aws sqs get-queue-attributes --region "${region}" --queue-url "${url}" \
+    --attribute-names ApproximateNumberOfMessages \
+    --query Attributes.ApproximateNumberOfMessages --output text < /dev/null
+}
+```
+
+**수신 불능(W12 · 운영 중).** 같은 줄 이름(render · thumbnail · upload)의
+`receive_failed` 가 120초 이하의 틈으로 이어지며 첫 줄부터 60초를 넘으면
+정지입니다. 오류 종류는 보지 않습니다. 틈 120초는 수신 한 번의 최악(소켓 시간
+초과 30초 × 3회 · 재시도 대기 · 루프의 5초 쉼)보다 길고, 성공한 빈 수신은
+로그를 남기지 않아 틈이 120초를 넘으면 사이에 성공이 있었다고 봅니다. 수신은
+처리 중인 작업과 무관하게 따로 돌므로 긴 렌더와 섞이지 않습니다.
+
+```shell
+workers_receive_verdict() {  # workers_receive_verdict <로그 그룹> <시작 epoch> — 통과 0 · 정지 1 · 판정불가 2
+  if ! workers_events "$1" "$2" '"receive_failed"' '[a-z]+\.receive_failed ' \
+      > "${work}/receive-failed.txt"; then
+    echo "수신: 판정불가 — $1 로그 조회 실패"
+    return 2
+  fi
+  awk -v gap=120 -v limit=60 '
+    match($0, /[a-z]+\.receive_failed /) {
+      name = substr($0, RSTART, RLENGTH - 16)
+      if ((name in last) && $1 - last[name] <= gap) {
+        if ($1 - first[name] > limit) {
+          printf "수신: 정지 — %s.receive_failed 가 %d초 이어짐\n", name, $1 - first[name]
+          stop = 1
+          exit 1
+        }
+      } else {
+        first[name] = $1
+      }
+      last[name] = $1
+      n++
+    }
+    END {
+      if (stop) { exit 1 }
+      printf "수신: 통과 — receive_failed %d건 · 1분 넘게 이어진 줄 없음\n", n
+    }' "${work}/receive-failed.txt"
+}
+```
+
+**무완료(W12 · 운영 중).** 사진 · 렌더 큐마다, 보이는 깊이 > 0 이고 가장 오래된
+메시지 나이(`AWS/SQS` `ApproximateAgeOfOldestMessage` 의 최근 점)가 20분
+(`job-timeout` 15분 + 5분)을 넘었는데 그 줄의 `message_done` · `failed` 가 지난
+20분 동안 0 이면 정지입니다. 정상 장기 렌더(최대 15분)는 이 창 안에서 끝나
+`message_done` 을 내므로 정지하지 않습니다. 기동 뒤 20분이 안 됐으면 대기입니다.
+첫 소비 판정(2분)은 그대로 두고, 이 판정은 기동 20분 뒤부터 첫 소비 감시와
+운영 중에 5분마다 돌립니다.
+
+```shell
+workers_nodone_verdict() {  # workers_nodone_verdict <로그 그룹> <줄 이름> <큐 이름> <기동 epoch> <지금 epoch>
+  local depth age finished
+  if [ "$(($5 - $4))" -lt 1200 ]; then
+    echo "무완료 $2: 대기 — 기동 뒤 20분이 안 됨"
+    return 3
+  fi
+  depth="$(workers_queue_depth "$3")"
+  case "${depth}" in
+    '' | *[!0-9]*)
+      echo "무완료 $2: 판정불가 — $3 깊이 조회 실패"
+      return 2
+      ;;
+  esac
+  if [ "${depth}" -eq 0 ]; then
+    echo "무완료 $2: 통과 — $3 의 보이는 깊이 0(숨긴 메시지는 세지 않음)"
+    return 0
+  fi
+  if ! aws cloudwatch get-metric-statistics --region "${region}" \
+      --namespace AWS/SQS --metric-name ApproximateAgeOfOldestMessage \
+      --dimensions "Name=QueueName,Value=$3" \
+      --start-time "$(workers_iso "$(($5 - 600))")" \
+      --end-time "$(workers_iso "$5")" --period 60 --statistics Maximum \
+      --output json > "${work}/age-$3.json" < /dev/null; then
+    echo "무완료 $2: 판정불가 — $3 나이 지표 조회 실패"
+    return 2
+  fi
+  age="$(jq -r '.Datapoints | sort_by(.Timestamp) | last | .Maximum // empty
+    | floor' "${work}/age-$3.json")"
+  if [ -z "${age}" ]; then
+    echo "무완료 $2: 판정불가 — $3 의 나이 지표가 최근 10분에 없음"
+    return 2
+  fi
+  if [ "${age}" -le 1200 ]; then
+    echo "무완료 $2: 통과 — 깊이 ${depth} · 가장 오래된 메시지 ${age}초"
+    return 0
+  fi
+  if ! workers_events "$1" "$(($5 - 1200))" \
+      "?\"$2.message_done\" ?\"$2.failed\"" "$2\\.(message_done|failed) " \
+      > "${work}/finished-$2.txt"; then
+    echo "무완료 $2: 판정불가 — $1 로그 조회 실패"
+    return 2
+  fi
+  finished="$(grep -c . "${work}/finished-$2.txt")"
+  if [ "${finished}" -eq 0 ]; then
+    echo "무완료 $2: 정지 — 깊이 ${depth} · 나이 ${age}초 · 지난 20분 완료 0"
+    return 1
+  fi
+  echo "무완료 $2: 통과 — 지난 20분 완료 ${finished}건"
+}
+```
+
+**로그 판정(W13 — 기동 뒤 2분).** 기동 뒤 `receive_failed` 가 0건이어야 하고,
+보이는 깊이 > 0 이면 그 줄의 처리 시작 줄 또는 `message_done` 이 1건 이상이어야
+합니다. 처리 시작 줄은 render 줄이 `render.started`(clip 의 시작 보고가 받아진
+뒤 — 긴 렌더도 이 줄은 곧 찍힘)이고, 사진 · 업로드 줄은 작업이 짧아
+`message_done` 으로 봅니다. 통과는 **잠정 통과** 입니다 — 빈 큐면 수신이
+성공했는지를 로그가 보여 주지 않기 때문입니다.
+
+```shell
+workers_start_log_verdict() {  # workers_start_log_verdict <로그 그룹> <줄 이름> <큐 이름> <기동 epoch> <지금 epoch>
+  local depth
+  if [ "$(($5 - $4))" -lt 120 ]; then
+    echo "로그 $2: 대기 — 기동 뒤 2분이 안 됨"
+    return 3
+  fi
+  if ! workers_events "$1" "$4" "\"$2.receive_failed\"" \
+      "$2\\.receive_failed " > "${work}/start-failed-$2.txt"; then
+    echo "로그 $2: 판정불가 — $1 로그 조회 실패"
+    return 2
+  fi
+  if [ "$(grep -c . "${work}/start-failed-$2.txt")" -ne 0 ]; then
+    echo "로그 $2: 실패 — 기동 뒤 receive_failed 가 있음"
+    return 1
+  fi
+  depth="$(workers_queue_depth "$3")"
+  case "${depth}" in
+    '' | *[!0-9]*)
+      echo "로그 $2: 판정불가 — $3 깊이 조회 실패"
+      return 2
+      ;;
+  esac
+  if ! workers_events "$1" "$4" "?\"$2.started\" ?\"$2.message_done\"" \
+      "$2\\.(started|message_done) " > "${work}/progress-$2.txt"; then
+    echo "로그 $2: 판정불가 — $1 로그 조회 실패"
+    return 2
+  fi
+  if [ "${depth}" -gt 0 ] && [ "$(grep -c . "${work}/progress-$2.txt")" -eq 0 ]; then
+    echo "로그 $2: 실패 — $3 깊이 ${depth} 인데 시작 · 완료 줄이 없음"
+    return 1
+  fi
+  echo "로그 $2: 잠정 통과 — receive_failed 0건 · 깊이 ${depth}"
+}
+```
+
+**지표 판정(W13 — 기동 뒤 20분 안).** 빈 큐의 수신 성공은 render 코드가 로그를
+남기지 않아 `AWS/SQS` `NumberOfEmptyReceives` 로만 봅니다. 기동한 분의 **다음
+분부터** 0 보다 큰 점이 하나라도 있으면 통과입니다(기동한 분의 점은 옛 태스크의
+빈 수신일 수 있어 세지 않음). SQS 지표는 1분 주기지만 쉬던 큐가 다시 움직이면
+최대 15분 늦게 오므로, 점이 아직 없으면 대기이고 20분이 지나도 없으면
+판정불가(수신 경로 미확인 — kty 회부)입니다. 큐가 비지 않았으면 로그 판정의
+시작 · 완료 줄이 수신을 보여 주므로 이 판정은 빈 큐에만 씁니다.
+
+```shell
+workers_empty_receive_verdict() {  # workers_empty_receive_verdict <큐 이름> <기동 epoch> <지금 epoch> — 통과 0 · 판정불가 2 · 대기 3
+  local from=$(((($2 + 59) / 60) * 60))
+  if ! aws cloudwatch get-metric-statistics --region "${region}" \
+      --namespace AWS/SQS --metric-name NumberOfEmptyReceives \
+      --dimensions "Name=QueueName,Value=$1" \
+      --start-time "$(workers_iso "${from}")" --end-time "$(workers_iso "$3")" \
+      --period 60 --statistics Sum --output json \
+      > "${work}/empty-$1.json" < /dev/null \
+    || ! jq -e '.Datapoints | type == "array"' "${work}/empty-$1.json" \
+      > /dev/null; then
+    echo "지표 $1: 판정불가 — NumberOfEmptyReceives 조회 실패"
+    return 2
+  fi
+  if jq -e --argjson from "${from}" '[.Datapoints[]
+      | select((.Timestamp | sub("(\\.[0-9]+)?(Z|\\+00:00)$"; "Z")
+        | fromdateiso8601) >= $from) | .Sum] | any(. > 0)' \
+      "${work}/empty-$1.json" > /dev/null; then
+    echo "지표 $1: 통과 — 기동 뒤 분에 빈 수신이 있음"
+    return 0
+  fi
+  if [ "$(($3 - $2))" -lt 1200 ]; then
+    echo "지표 $1: 대기 — 기동 뒤 분의 빈 수신 점이 아직 없음"
+    return 3
+  fi
+  echo "지표 $1: 판정불가 — 기동 20분 뒤에도 빈 수신 점이 없음"
+  return 2
+}
+```
+
+`NumberOfEmptyReceives` 는 큐 단위라 그 큐를 받는 태스크가 여럿이면 섞입니다.
+render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다시 띄우기 — 롤링
+겹침 없음)만 이 지표를 단독 신호로 쓰고, 이미지 교체처럼 옛 태스크와 겹치는
+동안에는 보조로만 둡니다 — 그때는 로그 판정과 수신 불능 판정이 주 신호입니다.
+
+쓰는 예입니다. `apply_at` 은 kty 가 apply 를 시작하기 직전에
+`apply_at="$(date -u +%s)"` 로 적어 둔 값입니다. 사진 줄은 `thumbnail` ·
+`pokeclip-prod-jobs-thumbnail`, upload 는 `pokeclip-prod-upload` · `upload` ·
+`pokeclip-prod-jobs-upload` 로 바꿔 부릅니다.
+
+```
+started="$(workers_started_at pokeclip-prod-render render "${apply_at}")"
+workers_start_log_verdict pokeclip-prod-render render \
+  pokeclip-prod-jobs-render "${started}" "$(date -u +%s)"
+workers_receive_verdict pokeclip-prod-render "${started}"
+workers_empty_receive_verdict pokeclip-prod-jobs-render "${started}" \
+  "$(date -u +%s)"
+workers_nodone_verdict pokeclip-prod-render render \
+  pokeclip-prod-jobs-render "${started}" "$(date -u +%s)"
+```
+
+끝나면 작업 디렉터리를 지웁니다.
+
+```shell
+rm -rf -- "${work:?}"
+```
 
 ### 긴급 정지와 상태 어긋남
 
@@ -311,6 +609,16 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     구성이 없어집니다. PR 은 머지 커밋이라 `git revert -m 1 <머지 커밋>` 으로
     되돌립니다. `modules/ecs_service` 의 포트 없는 꼴을 되돌리는 것도
     이 루트를 내린 뒤에만 합니다.
+*   **render 이그레스 되돌리기:** `render_egress_via_endpoints = false` 는
+    되돌리기 전용입니다. network 의 되돌리기
+    ([prod/network](/infra/terraform/prod/network/README.md) 「되돌리기」)가
+    부를 때 이 루트를 `-var render_egress_via_endpoints=false` 로 plan · apply
+    합니다(kty 승인 — 요지는 render SG 의 엔드포인트 규칙 삭제 · NAT 규칙
+    생성). `terraform.tfvars` 에는 적지 않습니다 — 「apply 직전 읽기」 가 그
+    줄이 없음을 봅니다. 이 값이면 계약 검사 7 · 8 을 보지 않아 DNS 가 꺼진
+    동안에도 plan 이 돕니다. 엔드포인트가 다시 켜지고 network 의 확인을 지난
+    뒤 `-var` 없이(기본 true) plan · apply 해 되돌립니다. apply 는 원하는 수 1
+    을 되살리므로, 긴급 정지 중이었으면 다시 띄우기 승인을 함께 받습니다.
 *   토큰을 회전할 때는 일꾼을 멈춘 채 회전합니다
     ([runtime-1a 런북](/infra/terraform/runbooks/runtime-1a.md)) — clip 의
     롤링이 옛 값 · 새 값 태스크를 겹쳐 두기 때문입니다.
@@ -327,6 +635,20 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     prod 역할 대상 해석(`prod-roles` 행)에서 빠집니다
     ([단계 직전 점검](/infra/terraform/runbooks/stage-precheck.md) A19). 이
     배선은 리뷰가 봅니다.
+*   render 의 엔드포인트 이그레스가 닫는 것은 render 가 인터넷의 임의 HTTPS
+    호스트에 직접 연결하는 길(SSRF · 원격 조종 서버 연결)입니다. 남는 길이
+    둘 있습니다.
+    *   **(a)** 공격자가 자기 자격 증명으로 서명한 요청을 허용된 AWS
+        서비스(엔드포인트 다섯 · S3 게이트웨이)로 보내 **다른 계정** 의 자원에
+        쓰는 길. 엔드포인트와 게이트웨이의 기본 정책은 `Principal *` ·
+        `Action *` · `Resource *` 이고, S3 접두사 목록은 리전의 서비스 IP
+        범위일 뿐 계정 허용 목록이 아닙니다. 엔드포인트 정책(데이터 경계)이
+        막으며 후속 후보입니다.
+    *   **(b)** VPC 리졸버에 보내는 DNS 질의 이름에 데이터를 실어 보내는 길.
+        SG 는 Route 53 Resolver 질의를 거르지 못합니다. Route 53 DNS
+        Firewall 이 막으며 후속 후보입니다.
+*   `NumberOfEmptyReceives` 는 큐 단위 지표라 롤링 겹침 동안 옛 태스크의 빈
+    수신과 섞입니다(「수신 · 진행 판정」 의 지표 판정 끝 문단).
 
 ## 시험
 
@@ -343,8 +665,19 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     `task_role_policy` · `egress_rules`).
 *   계약 검사 1 부터 6 이 어긋난 출력에서 plan 을 멈춤 · 태그 다이제스트와
     모르는 일꾼 키를 변수 검증이 막음.
+*   render 이그레스 — 모듈이 만든 render 규칙에 CIDR 이 없고 AWS API 는
+    엔드포인트 SG 443(apply) · upload 는 NAT 그대로 · 계약 검사 7(문자열 ·
+    null · 키 없음) · 8(서비스 하나 빠짐 · DNS 꺼짐 · 키 없음)이 멈춤 ·
+    `false` 는 엔드포인트 출력이 없거나 DNS 가 꺼져도 plan 이 돌고 render
+    이그레스가 엔드포인트 앞의 값.
 
 자원 수(create 29)는 `terraform test` 가 셀 수 없어 위 「plan 요지」 가 셉니다.
+
+「수신 · 진행 판정」 의 셸 블록은
+`bash infra/terraform/scripts/test/workers_watch_runbook_test.sh` 가 README
+글자 그대로 뽑아 가짜 aws 로 봅니다 — 정상 6분 렌더 · 연결 시간 초과 반복 ·
+빈 큐 + 지표 지연 · 빈 큐 연결 불능 · DELAY 숨김의 다섯과 경계 사례, 판정 한
+줄을 뒤집은 변이.
 
 ## See also
 

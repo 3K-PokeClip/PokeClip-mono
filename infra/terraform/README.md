@@ -205,6 +205,7 @@ bash infra/terraform/scripts/guard.sh
 bash infra/terraform/scripts/test/put_secret_test.sh
 bash infra/terraform/scripts/test/kvs_put_test.sh
 bash infra/terraform/scripts/test/network_vpce_runbook_test.sh
+bash infra/terraform/scripts/test/workers_watch_runbook_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
   infra/terraform/scripts/test/fakebin/aws \
   infra/terraform/scripts/test/kvs_fakebin/*
