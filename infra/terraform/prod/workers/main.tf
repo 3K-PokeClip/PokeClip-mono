@@ -66,16 +66,39 @@ locals {
     })
   }
 
-  # platform common_egress 와 같은 값. SQS · CloudWatch Logs · ECR API · STS 는
-  # NAT 로 나가고(인터페이스 엔드포인트 없음), 조각 · 영상 · ECR 레이어는 S3
-  # 게이트웨이로 간다.
+  # 앞 루트 출력에 키가 없으면(엔드포인트 앞의 network 상태) 속성 오류가 아니라
+  # 계약 검사 7 · 8 의 문구로 멈추게 null 로 둔다.
+  interface_endpoint_sg_id       = try(local.network.interface_endpoint_sg_id, null)
+  interface_endpoint_services    = try(local.network.interface_endpoint_services, null)
+  interface_endpoint_private_dns = try(local.network.interface_endpoint_private_dns, null)
+
+  # render 의 AWS API(SQS · CloudWatch Logs · ECR API · ECR 등록소 · Secrets
+  # Manager)가 가는 VPC 인터페이스 엔드포인트(prod/network). 하나라도 빠지면
+  # render 가 기동 · 수신하지 못한다.
+  render_endpoint_services = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+
+  # platform common_egress 와 같은 값. upload 의 AWS API 는 NAT 로 나가고, 조각 ·
+  # 영상 · ECR 레이어는 S3 게이트웨이로 간다.
   common_egress = {
     aws_api = { port = 443, cidr_ipv4 = "0.0.0.0/0", description = "AWS APIs via NAT" }
     s3      = { port = 443, prefix_list_id = local.network.s3_prefix_list_id, description = "S3 gateway endpoint" }
   }
 
+  # render 는 인터넷에 나갈 일이 없다 — AWS API 는 엔드포인트 SG 로만 보낸다
+  # (true). false 는 NAT 로 되돌리는 되돌리기 전용 갈래다. 두 갈래의 꼴이 달라
+  # 조건식 대신 문자열 키로 고른다.
+  render_aws_egress = {
+    "true" = {
+      aws_endpoints = { port = 443, security_group_id = local.interface_endpoint_sg_id, description = "AWS APIs via VPC interface endpoints" }
+    }
+    "false" = {
+      aws_api = local.common_egress.aws_api
+    }
+  }[tostring(var.render_egress_via_endpoints)]
+
   egress_targets = {
-    render = merge(local.common_egress, {
+    render = merge(local.render_aws_egress, {
+      s3   = local.common_egress.s3
       clip = { port = local.platform.service_ports.clip, security_group_id = local.platform.service_sg_ids.clip, description = "render to clip" }
     })
     # googleapis 443 도 aws_api 규칙으로 나간다 — SG 는 FQDN 을 거르지 못한다.
@@ -221,6 +244,23 @@ resource "terraform_data" "runtime_contract" {
     precondition {
       condition     = data.aws_service_discovery_dns_namespace.internal.id == try(local.platform.discovery_namespace_id, "")
       error_message = "사설 DNS 네임스페이스 pokeclip.internal 의 id 가 platform 출력 discovery_namespace_id 와 다르다 — 일꾼 주소(CLIP_BASE_URL · AUTH_BASE_URL)가 다른 이름 공간을 가리킨다."
+    }
+
+    # 검사 7 — render 이그레스의 엔드포인트 SG(true 일 때만 — false 는 되돌리기
+    # 갈래라 엔드포인트 출력이 없어도 plan 이 돌아야 한다).
+    precondition {
+      condition     = !var.render_egress_via_endpoints || can(regex("^sg-[0-9a-f]+$", local.interface_endpoint_sg_id))
+      error_message = "network 출력 interface_endpoint_sg_id 가 없거나 SG id(sg-<16진수>)가 아니다 — network 의 인터페이스 엔드포인트를 apply 한 뒤에 돌린다. 되돌리는 중이면 render_egress_via_endpoints = false 로 둔다."
+    }
+
+    # 검사 8 — 엔드포인트 다섯과 private DNS(true 일 때만). 하나라도 빠지거나 DNS 가
+    # 꺼지면 render 가 기동 · 수신하지 못하는데 plan 은 조용히 통과한다.
+    precondition {
+      condition = !var.render_egress_via_endpoints || (
+        try(length(setsubtract(local.render_endpoint_services, local.interface_endpoint_services)) == 0, false) &&
+        local.interface_endpoint_private_dns == true
+      )
+      error_message = "network 출력 interface_endpoint_services 가 ecr.api · ecr.dkr · logs · secretsmanager · sqs 를 모두 갖지 않거나 interface_endpoint_private_dns 가 true 가 아니다. 되돌리는 중이면 render_egress_via_endpoints = false 로 둔다."
     }
   }
 }

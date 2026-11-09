@@ -1,5 +1,6 @@
-# 앞 루트 상태 위치 · 일꾼 이미지 다이제스트 · 크기. 다이제스트는 기본값이 없어
-# 추적하지 않는 terraform.tfvars 에 둔다(terraform.tfvars.example).
+# 앞 루트 상태 위치 · 일꾼 이미지 다이제스트 · 크기 · render 이그레스 경로.
+# 다이제스트는 기본값이 없어 추적하지 않는 terraform.tfvars 에 둔다
+# (terraform.tfvars.example).
 
 variable "region" {
   description = "prod 환경 리전(리스 계정)."
@@ -62,4 +63,13 @@ variable "workers" {
     condition     = sort(keys(var.workers)) == sort(["render", "upload"])
     error_message = "workers 의 키는 render · upload 정확히 둘이어야 한다."
   }
+}
+
+# 되돌리기 전용 스위치(README 「되돌리기 · 내리기」). terraform.tfvars 에 false 를
+# 두지 않는다 — apply 직전 읽기가 그것을 본다.
+variable "render_egress_via_endpoints" {
+  description = "render 의 AWS API 이그레스를 network 의 VPC 인터페이스 엔드포인트 SG 로 둔다(true). false 는 NAT(0.0.0.0/0:443)로 되돌리는 되돌리기 전용 값이다."
+  type        = bool
+  default     = true
+  nullable    = false
 }

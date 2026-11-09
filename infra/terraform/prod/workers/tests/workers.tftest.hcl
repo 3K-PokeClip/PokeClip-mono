@@ -59,9 +59,12 @@ override_data {
   target = data.terraform_remote_state.network
   values = {
     outputs = {
-      vpc_id             = "vpc-0example"
-      private_subnet_ids = ["subnet-0priva", "subnet-0privc"]
-      s3_prefix_list_id  = "pl-0example"
+      vpc_id                         = "vpc-0example"
+      private_subnet_ids             = ["subnet-0priva", "subnet-0privc"]
+      s3_prefix_list_id              = "pl-0example"
+      interface_endpoint_sg_id       = "sg-0123456789abcdef0"
+      interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+      interface_endpoint_private_dns = true
     }
   }
 }
@@ -271,11 +274,11 @@ run "egress_targets_per_worker" {
 
   assert {
     condition = local.egress_targets.render == {
-      aws_api = { port = 443, cidr_ipv4 = "0.0.0.0/0", description = "AWS APIs via NAT" }
-      s3      = { port = 443, prefix_list_id = "pl-0example", description = "S3 gateway endpoint" }
-      clip    = { port = 28081, security_group_id = "sg-0clip", description = "render to clip" }
+      aws_endpoints = { port = 443, security_group_id = "sg-0123456789abcdef0", description = "AWS APIs via VPC interface endpoints" }
+      s3            = { port = 443, prefix_list_id = "pl-0example", description = "S3 gateway endpoint" }
+      clip          = { port = 28081, security_group_id = "sg-0clip", description = "render to clip" }
     }
-    error_message = "render 이그레스가 aws_api · s3(platform common_egress 와 같은 값) · clip 셋이 아니다."
+    error_message = "render 이그레스가 aws_endpoints(network 의 엔드포인트 SG) · s3 · clip 셋이 아니다 — 0.0.0.0/0 이 남으면 ffmpeg 가 아무 호스트로나 나간다."
   }
 
   assert {
@@ -883,6 +886,207 @@ run "runtime_contract_rejects_namespace_id_mismatch" {
   }
 
   expect_failures = [terraform_data.runtime_contract]
+}
+
+# 모듈이 실제로 만든 render 이그레스에 인터넷(0.0.0.0/0)이 없고 AWS API 는
+# network 의 엔드포인트 SG 443 으로만 나간다(설계 3-3). upload 는 YouTube 때문에
+# NAT 규칙을 그대로 갖는다. SG id 가 apply 때 정해져 apply 로 돈다.
+run "render_egress_rules_reach_endpoints_not_internet" {
+  command = apply
+
+  assert {
+    condition = (
+      length([for rule in values(module.render.egress_rules) : rule if rule.cidr_ipv4 != null]) == 0 &&
+      module.render.egress_rules.aws_endpoints.security_group_id == "sg-0123456789abcdef0" &&
+      module.render.egress_rules.aws_endpoints.port == 443
+    )
+    error_message = "render 모듈 이그레스에 CIDR 규칙이 있거나 AWS API 규칙이 엔드포인트 SG 443 이 아니다."
+  }
+
+  assert {
+    condition     = module.upload.egress_rules.aws_api.cidr_ipv4 == "0.0.0.0/0"
+    error_message = "upload 이그레스가 NAT(0.0.0.0/0:443)를 잃었다 — YouTube 업로드가 막힌다."
+  }
+}
+
+# 엔드포인트 SG 자리에 SG 가 아닌 값이 오면 render 이그레스가 엉뚱한 곳을
+# 가리킨다(계약 검사 7).
+run "endpoint_contract_rejects_non_sg_endpoint_sg" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id                         = "vpc-0example"
+        private_subnet_ids             = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id              = "pl-0example"
+        interface_endpoint_sg_id       = "vpc-0example"
+        interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+        interface_endpoint_private_dns = true
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 엔드포인트가 없는 network(목록이 빔)는 SG 출력이 null 이다(계약 검사 7).
+run "endpoint_contract_rejects_null_endpoint_sg" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id                         = "vpc-0example"
+        private_subnet_ids             = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id              = "pl-0example"
+        interface_endpoint_sg_id       = null
+        interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+        interface_endpoint_private_dns = true
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# PR-N 앞의 network 상태에는 출력 키가 없다 — 속성 오류가 아니라 계약 검사
+# 문구로 멈춘다(계약 검사 7).
+run "endpoint_contract_rejects_missing_endpoint_sg_key" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id                         = "vpc-0example"
+        private_subnet_ids             = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id              = "pl-0example"
+        interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+        interface_endpoint_private_dns = true
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 다섯 중 하나(sqs)라도 빠지면 render 가 수신하지 못하는데 plan 은 조용히
+# 통과한다 — 그 전에 멈춘다(계약 검사 8).
+run "endpoint_contract_rejects_missing_service" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id                         = "vpc-0example"
+        private_subnet_ids             = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id              = "pl-0example"
+        interface_endpoint_sg_id       = "sg-0123456789abcdef0"
+        interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager"]
+        interface_endpoint_private_dns = true
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# private DNS 가 꺼지면 SDK 가 공용 이름으로 나가 SG 에 막힌다(계약 검사 8).
+run "endpoint_contract_rejects_private_dns_off" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id                         = "vpc-0example"
+        private_subnet_ids             = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id              = "pl-0example"
+        interface_endpoint_sg_id       = "sg-0123456789abcdef0"
+        interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+        interface_endpoint_private_dns = false
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 서비스 · DNS 출력 키가 없으면 속성 오류가 아니라 계약 검사 문구로
+# 멈춘다(계약 검사 8).
+run "endpoint_contract_rejects_missing_service_and_dns_keys" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id                   = "vpc-0example"
+        private_subnet_ids       = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id        = "pl-0example"
+        interface_endpoint_sg_id = "sg-0123456789abcdef0"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 되돌리기 2단계의 첫걸음(false)은 엔드포인트 출력이 없어도 plan 이 돈다 — 계약
+# 검사 7 · 8 은 true 일 때만 본다. render 이그레스는 엔드포인트 앞의 값이다.
+run "rollback_false_restores_nat_without_endpoint_outputs" {
+  command = plan
+
+  variables {
+    render_egress_via_endpoints = false
+  }
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id             = "vpc-0example"
+        private_subnet_ids = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id  = "pl-0example"
+      }
+    }
+  }
+
+  assert {
+    condition = local.egress_targets.render == {
+      aws_api = { port = 443, cidr_ipv4 = "0.0.0.0/0", description = "AWS APIs via NAT" }
+      s3      = { port = 443, prefix_list_id = "pl-0example", description = "S3 gateway endpoint" }
+      clip    = { port = 28081, security_group_id = "sg-0clip", description = "render to clip" }
+    }
+    error_message = "되돌리기(false)의 render 이그레스가 엔드포인트 앞의 값(aws_api · s3 · clip)이 아니다."
+  }
+}
+
+# DNS 를 끈 동안(되돌리기 1단계)에도 false 면 workers 를 plan 할 수 있다.
+run "rollback_false_passes_with_private_dns_off" {
+  command = plan
+
+  variables {
+    render_egress_via_endpoints = false
+  }
+
+  override_data {
+    target = data.terraform_remote_state.network
+    values = {
+      outputs = {
+        vpc_id                         = "vpc-0example"
+        private_subnet_ids             = ["subnet-0priva", "subnet-0privc"]
+        s3_prefix_list_id              = "pl-0example"
+        interface_endpoint_sg_id       = "sg-0123456789abcdef0"
+        interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+        interface_endpoint_private_dns = false
+      }
+    }
+  }
 }
 
 run "rejects_tag_instead_of_digest" {
