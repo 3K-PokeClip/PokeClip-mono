@@ -44,7 +44,8 @@ func wantOneVersion(t *testing.T, p *Publisher, store *fakeStore, key string, fi
 // round_vs_chain_writer_overlap(R15 · cx C3 M) — 한 writer(w-a)를 꼬리 잠금 문장 앞(등재 전) 또는 사슬 잠금 문장 앞(PUT 뒤
 // 확정 전)에 세운 사이 다른 writer 가 동결을 끝내면, 선 writer 는 풀린 뒤 제 키에 문서를 쓰더라도 확정 0행으로 먼저 확정한
 // 결과를 받는다. 마지막 사슬 전원(B · C)이 먼저 확정한 판 하나(키 · ETag · SHA · 범위)로 수렴하고, 늦은 쪽 문서는 제 키의 고아
-// 하나다. 변이(확정 문장의 vod_state = 'freezing' 조건 제거)는 늦은 쪽이 덮어써 FAIL.
+// 하나다. 변이(확정 문장의 vod_state = 'freezing' 조건 제거)는 늦은 쪽이 덮어써 FAIL. 늦은 쪽 결과의 범위(Scope)는 제 경로가
+// 아니라 채택한 문서의 범위다(PR 점검 r1 cx M1) — 고치기 전(92749335)은 늦은 쪽이 제 경로 범위를 돌려 FAIL.
 func TestFreezeVODRoundAndChainWritersOverlap(t *testing.T) {
 	const chainKey = "vod/str/B/index.m3u8"
 	tests := []struct {
@@ -80,11 +81,15 @@ func TestFreezeVODRoundAndChainWritersOverlap(t *testing.T) {
 			}
 			wantOutcome(t, first, AxisVOD, ResultFrozen, false)
 			release()
-			wantOutcome(t, <-done, AxisVOD, ResultFrozen, false)
+			late := <-done
+			wantOutcome(t, late, AxisVOD, ResultFrozen, false)
 
-			key, lo := roundDocKey, int64(0)
+			key, lo, scope := roundDocKey, int64(0), ScopeRound
 			if tt.roundWaits {
-				key, lo = chainKey, 5
+				key, lo, scope = chainKey, 5, ScopeChain
+			}
+			if first.Scope != scope || late.Scope != scope {
+				t.Errorf("범위 = 먼저 %q · 늦은 쪽 %q, want 둘 다 %q(늦은 쪽은 채택한 문서의 범위)", first.Scope, late.Scope, scope)
 			}
 			wantOneVersion(t, p, store, key, lo, 9, "B", "C")
 			if puts := store.putCalls(); len(puts) != 2 {

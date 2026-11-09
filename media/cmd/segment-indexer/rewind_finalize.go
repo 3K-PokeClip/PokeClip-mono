@@ -78,9 +78,9 @@ type finalizer struct {
 	// seen 은 이번 스캔 한 바퀴에서 본 회차다 — 바퀴가 끝나면 보지 않은 회차의 메모리를 지운다. 걸음 결과가 온 회차도
 	// 센다 — 결과보다 먼저 시작한 스캔 쪽이 그 회차를 보지 못했어도 결과가 적은 기억(물러섬 · 경보 · 횟수)이 그 바퀴 끝에 남는다.
 	seen map[string]bool
-	// vodChainOnly 는 회차 경로에서 물러선 적 있는 회차 → 그 까닭이다 — 다음 걸음부터 stepChain 을 낸다(POK-549 설계 r4 2.4).
+	// vodChainOnly 는 회차 경로에서 물러선 적 있는 세션 → 그 까닭이다 — 다음 걸음부터 stepChain 을 낸다(POK-549 설계 r4 2.4).
 	vodChainOnly map[string]string
-	// waitWarned 는 회차 대기 오래 기다림 경보(session_vod_round_wait_long)를 이미 낸 회차다(세션당 한 번).
+	// waitWarned 는 회차 대기 오래 기다림 경보(session_vod_round_wait_long)를 이미 낸 세션이다(세션당 한 번).
 	waitWarned map[string]bool
 }
 
@@ -425,8 +425,8 @@ func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 	r.noteRound(out)
 	switch out.out {
 	case finalize.OutcomeRetry:
-		r.log.Warn("session_freeze_retry", "axis", axis, "step", step, "session_id", id,
-			"attempt", attemptOf(out.d.Step, a), "reason", out.freeze.Reason, "err", out.freeze.Err)
+		r.log.Warn("session_freeze_retry", append([]any{"axis", axis, "step", step, "session_id", id,
+			"attempt", attemptOf(out.d.Step, a), "reason", out.freeze.Reason, "err", out.freeze.Err}, scopeAttr(out.freeze)...)...)
 		return
 	case finalize.OutcomeUnsettled:
 		return

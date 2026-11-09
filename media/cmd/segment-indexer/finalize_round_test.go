@@ -565,7 +565,7 @@ func TestRoundFallbackIsRememberedPerSession(t *testing.T) {
 
 // R29 cmd · K2 — 장애 횟수 VOD 2 인 마지막 사슬에서 회차 경로가 물러서고 사슬 경로가 정산 대기(unsettled)로 끝나면 장애로
 // 세지 않는다(2 유지 · 다음도 StepFreezeVOD · session_freeze_retry 없음) — 회차 원인은 Fallback* 칸에만 있다. 대조: 사슬 경로가
-// 일시 오류(db)면 3 이 되어 다음은 StepFailVOD 다.
+// 일시 오류(db)면 3 이 되어 다음은 StepFailVOD 다. 그 session_freeze_retry 에는 scope 를 싣는다(PR 점검 r1 cc L1).
 func TestRoundFallbackUnsettledDoesNotCountAttempts(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -604,6 +604,9 @@ func TestRoundFallbackUnsettledDoesNotCountAttempts(t *testing.T) {
 			}
 			if n := l.logs.count("session_freeze_retry"); n != tt.wantWarn {
 				t.Fatalf("session_freeze_retry %d 줄, want %d", n, tt.wantWarn)
+			}
+			if rec := l.logs.last("session_freeze_retry"); rec != nil && rec.attrs["scope"] != tt.freeze.Scope {
+				t.Fatalf("session_freeze_retry scope = %v, want %s", rec.attrs["scope"], tt.freeze.Scope)
 			}
 		})
 	}

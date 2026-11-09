@@ -66,8 +66,8 @@ type FreezeOutcome struct {
 	FallbackCause string
 	// FallbackErr 는 그 원인 오류다(없을 수 있다) — Err 는 최종 사슬 호출의 것이라 따로 둔다.
 	FallbackErr error
-	// LastChainHasGaps 는 회차 경로(Scope round)에서 마지막 사슬 범위 안에 GAP 줄이 있는가다 — 정산 포기 경보가 앞 사슬
-	// GAP 으로 붙지 않게 한다(R19). 사슬 경로에서는 쓰지 않는다.
+	// LastChainHasGaps 는 마지막 사슬 범위 안에 GAP 줄이 있는가다 — Scope round 일 때 정산 포기 경보가 앞 사슬 GAP 으로
+	// 붙지 않게 한다(R19). Scope chain 이면 쓰지 않는다.
 	LastChainHasGaps bool
 }
 

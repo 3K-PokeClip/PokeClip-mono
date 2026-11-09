@@ -153,6 +153,32 @@ func TestVODKeyRejectsDotHead(t *testing.T) {
 	}
 }
 
+// vod_key_scope(PR 점검 r1 cx M1) — 채택한 확정의 범위는 꼬리에 확정된 문서 키로 가린다. 그 사슬 회차의 회차 키만 round 고,
+// 사슬 키 · 다른 회차의 회차 키 · 회차 없는 사슬은 chain, 문서가 없으면(빈 동결) 빈 값이라 부른 쪽 경로의 범위가 선다.
+func TestVODKeyScope(t *testing.T) {
+	str := func(s string) *string { return &s }
+	tests := []struct {
+		name  string
+		round string
+		key   *string
+		want  string
+	}{
+		{name: "회차_키", round: "A", key: str("vod/str/A.round/index.m3u8"), want: ScopeRound},
+		{name: "사슬_키", round: "A", key: str("vod/str/B/index.m3u8"), want: ScopeChain},
+		{name: "다른_회차_키", round: "A", key: str("vod/str/Z.round/index.m3u8"), want: ScopeChain},
+		{name: "회차_없는_사슬", round: "", key: str("vod/str/B/index.m3u8"), want: ScopeChain},
+		{name: "문서_없음", round: "A", key: nil, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := index.Chain{StreamID: "str", RoundID: tt.round, Head: "B", Tail: "B", SessionIDs: []string{"B"}}
+			if got := vodKeyScope(c, tt.key); got != tt.want {
+				t.Errorf("vodKeyScope = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // judge_round_rejects_other_round(security C3 L1) — 다시 읽은 회차 장부의 회차가 부른 쪽 사슬의 회차(키를 지은 값)와 다르면
 // chain_changed 실패다 — 그 키에 다른 회차의 문서를 쓰지 않는다. 물러섬 대상도 아니다. 고치기 전(6fcef57b)은 plan 을 세워 FAIL.
 func TestJudgeRoundRejectsOtherRound(t *testing.T) {

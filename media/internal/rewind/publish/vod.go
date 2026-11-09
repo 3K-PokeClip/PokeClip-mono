@@ -105,8 +105,8 @@ WITH upd AS (
 )
 SELECT pg_catalog.count(*) FROM upd`
 
-// vodStateSQL 은 확정이 0행일 때 꼬리의 VOD 상태를 읽는다 — 다른 writer 가 먼저 확정했는가.
-const vodStateSQL = `SELECT vod_state FROM stream_sessions WHERE session_id = $1 AND stream_id = $2`
+// vodStateSQL 은 확정이 0행일 때 꼬리의 VOD 상태와 문서 키를 읽는다 — 다른 writer 가 먼저 확정했는가.
+const vodStateSQL = `SELECT vod_state, vod_s3_key FROM stream_sessions WHERE session_id = $1 AND stream_id = $2`
 
 // FreezeVOD 는 닫힌 사슬의 VOD 문서를 IfAbsent 로 한 번 쓰고 사슬 전 세션의 vod_* 를 확정한다(phase 3).
 // 새 URL 의 새 문서라 기존 목록의 변경이 아니다. 412 면 Head 의 pc-body-sha256 이
@@ -407,7 +407,8 @@ func (v *vodJob) insertMarks(ctx context.Context, tx pgx.Tx, plan vodPlan) error
 	return err
 }
 
-// write 는 렌더 · 검사 · IfAbsent PUT · 확정이다. 회차 경로면 확정 결과에 마지막 사슬 범위의 GAP 유무를 싣는다.
+// write 는 렌더 · 검사 · IfAbsent PUT · 확정이다. 확정 결과에 마지막 사슬 범위의 GAP 유무를 싣는다 — 사슬 경로도 싣는 것은
+// 회차 writer 가 먼저 확정한 회차 문서를 채택하면(Scope round) 정산 포기 경보가 이 값을 보기 때문이다.
 func (v *vodJob) write(ctx context.Context, in vodInput, plan vodPlan) FreezeOutcome {
 	pl := v.playlistInput(in, plan.rows)
 	body, err := rewind.Render(pl)
@@ -442,9 +443,7 @@ func (v *vodJob) write(ctx context.Context, in vodInput, plan vodPlan) FreezeOut
 		result = ResultFrozenWithGaps
 	}
 	out := v.confirm(ctx, result, &plan, etag, sum[:])
-	if v.round {
-		out.LastChainHasGaps = plan.lastChainHasGaps()
-	}
+	out.LastChainHasGaps = plan.lastChainHasGaps()
 	return out
 }
 
@@ -480,6 +479,11 @@ func (v *vodJob) adoptFailed(err error) FreezeOutcome {
 		return vodFailed(vodConflict, err)
 	}
 	return vodRetry(freezeHeadFailed, err)
+}
+
+// playlist 는 사슬 장부 l 의 VOD 렌더 값이다(playlistInput). 기존 시험 파일이 기준 코드에서도 컴파일되게 남긴다(음성 대조).
+func (v *vodJob) playlist(l index.ChainLedger, rows []boundary.Row) rewind.Playlist {
+	return v.playlistInput(chainInput(l), rows)
 }
 
 // playlistInput 은 VOD 렌더 값이다. 소유 회차는 첫 행의 회차다 — 그래야 첫 행 앞이 계승 접두가 아니고(S4) 범위 검사(S3)의
@@ -566,17 +570,19 @@ func (v *vodJob) confirm(ctx context.Context, result string, plan *vodPlan, etag
 // errPartialChain 은 사슬 일부만 freezing 이라 확정을 되돌렸다는 뜻이다.
 var errPartialChain = errors.New("publish: 사슬 일부만 VOD freezing 이다")
 
-// alreadyConfirmed 는 확정 0행의 까닭이다 — 꼬리가 이미 VOD 종국이면 그 결과(멱등), 아니면 재시도다.
+// alreadyConfirmed 는 확정 0행의 까닭이다 — 꼬리가 이미 VOD 종국이면 그 결과(멱등), 아니면 재시도다. 채택한 결과의 범위는
+// 제 경로가 아니라 확정된 문서의 범위다(vodKeyScope — 회차 writer 와 사슬 writer 가 겹치면 먼저 확정한 쪽 문서다).
 func (v *vodJob) alreadyConfirmed(ctx context.Context) FreezeOutcome {
 	dctx, cancel := v.p.stmtCtx(ctx)
 	defer cancel()
 	var state string
-	if err := v.p.pool.QueryRow(dctx, vodStateSQL, v.chain.Tail, v.chain.StreamID).Scan(&state); err != nil {
+	var key *string
+	if err := v.p.pool.QueryRow(dctx, vodStateSQL, v.chain.Tail, v.chain.StreamID).Scan(&state, &key); err != nil {
 		return vodRetry(freezeDB, err)
 	}
 	switch state {
 	case ResultFrozen, ResultFrozenWithGaps:
-		return FreezeOutcome{Axis: AxisVOD, Result: state}
+		return FreezeOutcome{Axis: AxisVOD, Result: state, Scope: vodKeyScope(v.chain, key)}
 	case freezeStateFailed:
 		return vodFailed(freezeStateFailed, nil)
 	}

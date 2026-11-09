@@ -130,6 +130,18 @@ func vodRoundKey(streamID, roundID string) (string, error) {
 	return vodObjectKey(streamID, roundID+".round")
 }
 
+// vodKeyScope 는 사슬 c 꼬리에 확정된 VOD 문서 키 key 의 범위다 — c 의 회차 키면 ScopeRound, 그 밖 문서면 ScopeChain,
+// 문서가 없으면(빈 동결 — nil) 빈 값이라 부른 쪽 경로의 범위가 선다.
+func vodKeyScope(c index.Chain, key *string) string {
+	if key == nil {
+		return ""
+	}
+	if rk, err := vodRoundKey(c.StreamID, c.RoundID); err == nil && *key == rk {
+		return ScopeRound
+	}
+	return ScopeChain
+}
+
 // FreezeChainVOD 는 회차 판정 없이 사슬 범위 · 지금 키로 동결한다 — 물러섬을 이미 겪은 세션에 루프가 부른다.
 func (p *Publisher) FreezeChainVOD(ctx context.Context, chain index.Chain, abandon bool) FreezeOutcome {
 	if len(chain.SessionIDs) == 0 {
@@ -160,17 +172,23 @@ func (p *Publisher) freezeScoped(ctx context.Context, chain index.Chain, abandon
 	return out
 }
 
-// freezeChain 은 사슬 범위 · 지금 키의 동결이다 — fallback 은 물러선 까닭(평시 빈 값)이다.
+// freezeChain 은 사슬 범위 · 지금 키의 동결이다 — fallback 은 물러선 까닭(평시 빈 값)이다. 다른 writer 의 확정을 채택한
+// 결과는 그 문서의 범위를 그대로 둔다(alreadyConfirmed).
 func (p *Publisher) freezeChain(ctx context.Context, chain index.Chain, abandon bool, fallback string) FreezeOutcome {
 	out := p.runVOD(ctx, chain, abandon, false)
-	out.Scope, out.Fallback = ScopeChain, fallback
+	if out.Scope == "" {
+		out.Scope = ScopeChain
+	}
+	out.Fallback = fallback
 	return out
 }
 
-// freezeRound 는 회차 범위 · 회차 키의 동결이다.
+// freezeRound 는 회차 범위 · 회차 키의 동결이다. 다른 writer 의 확정을 채택한 결과는 그 문서의 범위를 그대로 둔다.
 func (p *Publisher) freezeRound(ctx context.Context, chain index.Chain, abandon bool) FreezeOutcome {
 	out := p.runVOD(ctx, chain, abandon, true)
-	out.Scope = ScopeRound
+	if out.Scope == "" {
+		out.Scope = ScopeRound
+	}
 	return out
 }
 

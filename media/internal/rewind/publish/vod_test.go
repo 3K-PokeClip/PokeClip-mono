@@ -129,7 +129,7 @@ func TestVODGapKeyFollowsPrevRowForm(t *testing.T) {
 			if !ok {
 				t.Fatalf("plan = %+v, want 통과", out)
 			}
-			pl := v.playlistInput(chainInput(l), plan.rows)
+			pl := v.playlist(l, plan.rows)
 			body := mustRender(t, pl)
 
 			if err := rewind.Validate(pl, body, 1, nil); err != nil {
@@ -183,8 +183,7 @@ func TestVODSettleDeadlineGapWithNullKeyIsLegacyForm(t *testing.T) {
 	if fmt.Sprint(plan.marks) != fmt.Sprint(wantMarks) {
 		t.Errorf("GAP 원장 = %+v, want %+v", plan.marks, wantMarks)
 	}
-	pl := v.playlistInput(chainInput(l), plan.rows)
-	if err := rewind.Validate(pl, mustRender(t, pl), 1, nil); err != nil {
+	if err := rewind.Validate(v.playlist(l, plan.rows), mustRender(t, v.playlist(l, plan.rows)), 1, nil); err != nil {
 		t.Errorf("발행 전 검사(S5) 실패: %v", err)
 	}
 }
