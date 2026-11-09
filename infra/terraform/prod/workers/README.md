@@ -147,14 +147,14 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     (범위는 아래 「긴급 정지와 상태 어긋남」).
 1.  **감시를 먼저 띄웁니다**(아래 「첫 소비 감시」). 띄웠다는 것을 알린 뒤
     kty 가 `terraform apply <plan 파일>` 을 돌립니다.
-1.  **첫 소비 판정(2분)** · 정지 신호면 긴급 정지.
+1.  **첫 소비 판정(3분)** · 정지 신호면 긴급 정지.
 1.  **기동 신호 · 관문 ②:** 서비스마다 실행 수 1 · 배포 하나 COMPLETED ·
     `*.worker_started`(render · thumbnail · upload)를 보고, 이 루트와 platform
     을 다시 plan 해 둘 다 종료 0 인지 봅니다. 이 루트가 0 이 아니면 ECS 가
     태스크 정의를 다르게 정규화한 것이고, platform 이 0 이 아니면 이 루트가 단
     인그레스가 platform 에 드리프트로 보이는 것입니다 — 둘 다 kty 에게 넘깁니다.
     `worker_started` 만으로는 기동을 판정하지 않습니다 — 아래 「수신 · 진행
-    판정」 의 **로그 판정**(기동 뒤 2분 — 잠정 통과면 다음 걸음으로)과 **지표
+    판정」 의 **로그 판정**(기동 뒤 3분 — 잠정 통과면 다음 걸음으로)과 **지표
     판정**(기동 뒤 20분 안)을 줄(render · thumbnail · upload)마다 함께 봅니다.
 1.  **썸네일 대기분 소진 · 시험 잡:** 사진 DLQ 깊이가 「apply 직전 읽기」 ①
     에서 적은 기준 그대로 · `thumbnail.report_rejected kind=card` ·
@@ -317,8 +317,12 @@ thumbnail 줄 = render, upload 줄 = upload)입니다. 감시 불능은 그 기�
 끝난 뒤에 찍힙니다.
 
 판정 함수는 kty 로컬 터미널(bash · zsh)에서 이 절의 블록을 차례로 붙여 넣어
-씁니다. 종료 코드는 0 통과 · 1 정지(또는 실패) · 2 판정불가 · 3 대기이고, 판정은
-마지막 줄입니다. 판정불가는 정지와 같이 kty 에게 넘깁니다. 로그 · 큐 · 지표
+씁니다. 블록 안에는 `#` 주석 · 꺾쇠 자리표시 · 글자가 바로 붙은 `!`(예:
+`[!0-9]`)를 두지 않습니다 — 대화형 zsh 는 기본값으로 `#` 를 주석으로 읽지
+않고(`interactivecomments` 꺼짐) 그런 `!` 를 이력 확장으로 읽어, 붙여 넣은
+함수가 정의되지 않습니다. `if ! …` 처럼 공백이 뒤따르는 `!` 는 확장되지
+않습니다. 함수의 인자는 블록 앞 본문에 적습니다. 종료 코드는 0 통과 · 1
+정지(또는 실패) · 2 판정불가 · 3 대기이고, 판정은 마지막 줄입니다. 판정불가는 정지와 같이 kty 에게 넘깁니다. 로그 · 큐 · 지표
 읽기만 하고(`logs:FilterLogEvents` · `sqs:GetQueueUrl` ·
 `sqs:GetQueueAttributes` · `cloudwatch:GetMetricStatistics`) 큐 URL(계정 ID
 포함)은 변수에만 담아 찍지 않습니다.
@@ -328,18 +332,24 @@ region=ap-northeast-2
 work="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-workers.XXXXXX")"
 ```
 
-공용 함수입니다. `workers_events` 는 로그 사건을 「초 메시지」 줄로 내고, 시작
-시각과 줄 이름을 CloudWatch 거르기와 별개로 한 번 더 거릅니다.
-`workers_started_at` 은 판정의 기준 시각(그 줄의 첫 `worker_started`)을,
-`workers_queue_depth` 는 **보이는 깊이**(`ApproximateNumberOfMessages` — DELAY
-처분으로 숨긴 메시지는 세지 않음)를 냅니다.
+공용 함수입니다. 부르는 꼴은 다음과 같습니다.
+
+*   `workers_iso <epoch>` — ISO 8601(UTC) 시각을 냅니다.
+*   `workers_events <로그 그룹> <시작 epoch> <거르기 식> <줄 정규식>` — 로그
+    사건을 「초 메시지」 줄로 냅니다. 시작 시각과 줄 이름을 CloudWatch
+    거르기와 별개로 한 번 더 거릅니다.
+*   `workers_started_at <로그 그룹> <줄 이름> <apply 시작 epoch>` — 판정의
+    기준 시각(그 줄의 첫 `worker_started`)을 냅니다.
+*   `workers_queue_depth <큐 이름>` — **보이는 깊이**
+    (`ApproximateNumberOfMessages` — DELAY 처분으로 숨긴 메시지는 세지 않음)를
+    냅니다.
 
 ```shell
-workers_iso() {  # workers_iso <epoch> — ISO 8601(UTC)
+workers_iso() {
   jq -rn --argjson t "$1" '$t | todate'
 }
 
-workers_events() {  # workers_events <로그 그룹> <시작 epoch> <거르기 식> <줄 정규식>
+workers_events() {
   aws logs filter-log-events --region "${region}" --log-group-name "$1" \
     --start-time "$(($2 * 1000))" --filter-pattern "$3" --output json \
     > "${work}/events.json" < /dev/null || return 2
@@ -349,7 +359,7 @@ workers_events() {  # workers_events <로그 그룹> <시작 epoch> <거르기 �
     "${work}/events.json" || return 2
 }
 
-workers_started_at() {  # workers_started_at <로그 그룹> <줄 이름> <apply 시작 epoch>
+workers_started_at() {
   local first
   first="$(workers_events "$1" "$3" "\"$2.worker_started\"" \
     "$2\\.worker_started " | head -n 1 | cut -d ' ' -f 1)"
@@ -360,7 +370,7 @@ workers_started_at() {  # workers_started_at <로그 그룹> <줄 이름> <apply
   echo "${first}"
 }
 
-workers_queue_depth() {  # workers_queue_depth <큐 이름> — 보이는 깊이
+workers_queue_depth() {
   local url
   url="$(aws sqs get-queue-url --region "${region}" --queue-name "$1" \
     --query QueueUrl --output text < /dev/null)" || return 2
@@ -371,20 +381,29 @@ workers_queue_depth() {  # workers_queue_depth <큐 이름> — 보이는 깊이
 ```
 
 **수신 불능(W12 · 운영 중).** 같은 줄 이름(render · thumbnail · upload)의
-`receive_failed` 가 120초 이하의 틈으로 이어지며 첫 줄부터 60초를 넘으면
-정지입니다. 오류 종류는 보지 않습니다. 틈 120초는 수신 한 번의 최악(소켓 시간
-초과 30초 × 3회 · 재시도 대기 · 루프의 5초 쉼)보다 길고, 성공한 빈 수신은
-로그를 남기지 않아 틈이 120초를 넘으면 사이에 성공이 있었다고 봅니다. 수신은
-처리 중인 작업과 무관하게 따로 돌므로 긴 렌더와 섞이지 않습니다.
+`receive_failed` 가 180초 이하의 틈으로 이어지며 첫 줄부터 60초를 넘으면
+정지입니다. 오류 종류는 보지 않습니다. 틈 180초는 실패 줄 사이의 최악보다
+깁니다. render 의 SQS 클라이언트는 AWS SDK 2.46.7 의 기본 재시도(LEGACY)라
+수신 한 번에 최대 4번 시도하고(연결 시간 초과 2초 · 소켓 시간 초과 30초 ·
+재시도 사이 대기 최대 약 1.4초), 실패를 찍은 뒤 5초 쉬고 다시 받습니다. 그래서
+읽기 시간 초과 꼴이면 실패 줄 간격이 최악 약 134초이고, 실측은 125초였습니다.
+재시도 쿼터(500 · 재시도마다 5)가 바닥나면 시도가 1번으로 줄어 간격이 약
+35초가 됩니다. `AWS_NEW_RETRIES_2026` 처럼 SDK 의 기본 재시도가 바뀌면 이
+상한도 달라지므로 SDK 판을 올릴 때 다시 잽니다. 성공한 빈 수신은 로그를
+남기지 않아 틈이 180초를 넘으면 사이에 성공이 있었다고 봅니다. 긴 렌더와는
+섞이지 않습니다 — render 는 받은 작업을 수신과 같은 스레드에서 끝까지
+처리하므로(`pollOnce` 가 처리를 바로 부름) 처리하는 동안에는 실패 줄이 없고,
+이 판정은 실패 줄만 봅니다. 인자는 로그 그룹 · 시작 epoch 이고, 종료 코드는
+통과 0 · 정지 1 · 판정불가 2 입니다.
 
 ```shell
-workers_receive_verdict() {  # workers_receive_verdict <로그 그룹> <시작 epoch> — 통과 0 · 정지 1 · 판정불가 2
+workers_receive_verdict() {
   if ! workers_events "$1" "$2" '"receive_failed"' '[a-z]+\.receive_failed ' \
       > "${work}/receive-failed.txt"; then
     echo "수신: 판정불가 — $1 로그 조회 실패"
     return 2
   fi
-  awk -v gap=120 -v limit=60 '
+  awk -v gap=180 -v limit=60 '
     match($0, /[a-z]+\.receive_failed /) {
       name = substr($0, RSTART, RLENGTH - 16)
       if ((name in last) && $1 - last[name] <= gap) {
@@ -411,11 +430,12 @@ workers_receive_verdict() {  # workers_receive_verdict <로그 그룹> <시작 e
 (`job-timeout` 15분 + 5분)을 넘었는데 그 줄의 `message_done` · `failed` 가 지난
 20분 동안 0 이면 정지입니다. 정상 장기 렌더(최대 15분)는 이 창 안에서 끝나
 `message_done` 을 내므로 정지하지 않습니다. 기동 뒤 20분이 안 됐으면 대기입니다.
-첫 소비 판정(2분)은 그대로 두고, 이 판정은 기동 20분 뒤부터 첫 소비 감시와
-운영 중에 5분마다 돌립니다.
+첫 소비 판정(3분)은 그대로 두고, 이 판정은 기동 20분 뒤부터 첫 소비 감시와
+운영 중에 5분마다 돌립니다. 인자는 로그 그룹 · 줄 이름 · 큐 이름 · 기동 epoch ·
+지금 epoch 입니다.
 
 ```shell
-workers_nodone_verdict() {  # workers_nodone_verdict <로그 그룹> <줄 이름> <큐 이름> <기동 epoch> <지금 epoch>
+workers_nodone_verdict() {
   local depth age finished
   if [ "$(($5 - $4))" -lt 1200 ]; then
     echo "무완료 $2: 대기 — 기동 뒤 20분이 안 됨"
@@ -423,7 +443,7 @@ workers_nodone_verdict() {  # workers_nodone_verdict <로그 그룹> <줄 이름
   fi
   depth="$(workers_queue_depth "$3")"
   case "${depth}" in
-    '' | *[!0-9]*)
+    '' | *[^0-9]*)
       echo "무완료 $2: 판정불가 — $3 깊이 조회 실패"
       return 2
       ;;
@@ -466,18 +486,21 @@ workers_nodone_verdict() {  # workers_nodone_verdict <로그 그룹> <줄 이름
 }
 ```
 
-**로그 판정(W13 — 기동 뒤 2분).** 기동 뒤 `receive_failed` 가 0건이어야 하고,
+**로그 판정(W13 — 기동 뒤 3분).** 기동 뒤 `receive_failed` 가 0건이어야 하고,
 보이는 깊이 > 0 이면 그 줄의 처리 시작 줄 또는 `message_done` 이 1건 이상이어야
 합니다. 처리 시작 줄은 render 줄이 `render.started`(clip 의 시작 보고가 받아진
 뒤 — 긴 렌더도 이 줄은 곧 찍힘)이고, 사진 · 업로드 줄은 작업이 짧아
 `message_done` 으로 봅니다. 통과는 **잠정 통과** 입니다 — 빈 큐면 수신이
-성공했는지를 로그가 보여 주지 않기 때문입니다.
+성공했는지를 로그가 보여 주지 않기 때문입니다. 3분을 기다리는 것은 수신이
+처음부터 막히면 첫 `receive_failed` 가 시도 4번이 끝난 뒤(기동 뒤 약 120초)에야
+찍히기 때문입니다. 인자는 로그 그룹 · 줄 이름 · 큐 이름 · 기동 epoch · 지금
+epoch 입니다.
 
 ```shell
-workers_start_log_verdict() {  # workers_start_log_verdict <로그 그룹> <줄 이름> <큐 이름> <기동 epoch> <지금 epoch>
+workers_start_log_verdict() {
   local depth
-  if [ "$(($5 - $4))" -lt 120 ]; then
-    echo "로그 $2: 대기 — 기동 뒤 2분이 안 됨"
+  if [ "$(($5 - $4))" -lt 180 ]; then
+    echo "로그 $2: 대기 — 기동 뒤 3분이 안 됨"
     return 3
   fi
   if ! workers_events "$1" "$4" "\"$2.receive_failed\"" \
@@ -491,7 +514,7 @@ workers_start_log_verdict() {  # workers_start_log_verdict <로그 그룹> <줄 
   fi
   depth="$(workers_queue_depth "$3")"
   case "${depth}" in
-    '' | *[!0-9]*)
+    '' | *[^0-9]*)
       echo "로그 $2: 판정불가 — $3 깊이 조회 실패"
       return 2
       ;;
@@ -515,10 +538,12 @@ workers_start_log_verdict() {  # workers_start_log_verdict <로그 그룹> <줄 
 빈 수신일 수 있어 세지 않음). SQS 지표는 1분 주기지만 쉬던 큐가 다시 움직이면
 최대 15분 늦게 오므로, 점이 아직 없으면 대기이고 20분이 지나도 없으면
 판정불가(수신 경로 미확인 — kty 회부)입니다. 큐가 비지 않았으면 로그 판정의
-시작 · 완료 줄이 수신을 보여 주므로 이 판정은 빈 큐에만 씁니다.
+시작 · 완료 줄이 수신을 보여 주므로 이 판정은 빈 큐에만 씁니다. 인자는 큐
+이름 · 기동 epoch · 지금 epoch 이고, 종료 코드는 통과 0 · 판정불가 2 · 대기
+3 입니다.
 
 ```shell
-workers_empty_receive_verdict() {  # workers_empty_receive_verdict <큐 이름> <기동 epoch> <지금 epoch> — 통과 0 · 판정불가 2 · 대기 3
+workers_empty_receive_verdict() {
   local from=$(((($2 + 59) / 60) * 60))
   if ! aws cloudwatch get-metric-statistics --region "${region}" \
       --namespace AWS/SQS --metric-name NumberOfEmptyReceives \
@@ -677,7 +702,8 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 `bash infra/terraform/scripts/test/workers_watch_runbook_test.sh` 가 README
 글자 그대로 뽑아 가짜 aws 로 봅니다 — 정상 6분 렌더 · 연결 시간 초과 반복 ·
 빈 큐 + 지표 지연 · 빈 큐 연결 불능 · DELAY 숨김의 다섯과 경계 사례, 판정 한
-줄을 뒤집은 변이.
+줄을 뒤집은 변이, 대화형 zsh(표준 입력 · PTY 붙여 넣기)에서 함수 여덟이 모두
+정의되는지.
 
 ## See also
 

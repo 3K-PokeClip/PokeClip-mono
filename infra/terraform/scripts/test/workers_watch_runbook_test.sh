@@ -25,22 +25,30 @@
 #   설계 — 빈 큐 정상 + 지표 10분 지연 = 로그 잠정 통과 → 지표 대기 → 통과.
 #   설계 — 빈 큐 연결 불능 = 수신 정지 · 로그 판정 실패.
 #   설계 — DELAY 로 숨긴 메시지만 = 무완료 통과.
-#   수신 — 줄 이름이 다른 실패는 잇지 않음 · 120초 넘는 틈은 끊김 · 조회 실패.
+#   수신 — 줄 이름이 다른 실패는 잇지 않음 · 180초 넘는 틈(0 · 190)은 끊김 ·
+#     SDK 재시도 상한 꼴의 틈(0 · 126 · 252 · 378 과 0 · 134 · 268)은 정지 ·
+#     조회 실패.
 #   무완료 — 20분 무완료 = 정지 · 창 밖 완료는 세지 않음 · 기동 20분 전 = 대기 ·
 #     나이 20분 이하 = 통과 · 나이 지표 없음 · 깊이 조회 실패 = 판정불가.
-#   로그 판정 — 깊이 > 0 인데 시작 · 완료 줄 없음 = 실패 · 2분 전 = 대기 ·
-#     시작 줄로 통과.
+#   로그 판정 — 깊이 > 0 인데 시작 · 완료 줄 없음 = 실패 · 3분 전(150초) =
+#     대기 · 시작 줄로 통과.
 #   지표 판정 — 기동 앞 분의 점은 세지 않음 · 20분 넘어 점 없음 = 판정불가 ·
 #     조회 실패 = 판정불가.
 #   기동 시각 — 첫 worker_started 의 초 · 없음 = 판정불가.
+#   대화형 zsh — 블록을 `zsh -f -i` 에 표준 입력으로 넣은 것과 PTY 의 bracketed
+#     paste(python3)로 블록마다 붙여 넣은 것 둘에서, 판정 함수 여덟이 모두
+#     whence -w 로 function 이고 정의하는 동안 가짜 aws 가 한 번도 불리지 않음.
+#     zsh(PTY 는 python3 도)가 없으면 skip 으로 센다. 대화형 zsh 의 기본값
+#     (interactivecomments 꺼짐 · 이력 확장 켜짐)이라 블록에 `#` 주석 · `<…>` ·
+#     `!` 가 있으면 여기서 잡힌다 — bash eval 과 `zsh -n` 은 못 잡는다.
 #
 # 변이: 판정 규칙 한 줄을 뒤집은 README 사본(MUTATIONS)마다 사례 묶음을 다시
 # 돌려 하나라도 실패해야 한다. 바꿀 글자가 README 블록에 정확히 한 번 있어야
-# 한다.
+# 한다. 대화형 zsh 사례는 변이 묶음에 넣지 않는다(한 번만 돈다).
 #
 # 임시 디렉터리는 한 뿌리($TMPDIR/workers_watch_runbook_test.*) 아래에 두고, 끝에
-# 지운 뒤 남지 않았는지 본다(중단 신호에도 지운다). 끝에 통과 건수가 사례와
-# 변이를 더한 수(EXPECTED_CASES)와 같은지 본다. 틀은 같은 디렉터리의
+# 지운 뒤 남지 않았는지 본다(중단 신호에도 지운다). 끝에 통과와 skip 건수의
+# 합이 사례와 변이를 더한 수(EXPECTED_CASES)와 같은지 본다. 틀은 같은 디렉터리의
 # network_vpce_runbook_test 와 같다.
 #
 # 사용: bash infra/terraform/scripts/test/workers_watch_runbook_test.sh
@@ -68,6 +76,7 @@ readonly MUTATION_NAMES=(
   'receive: 이어짐 판정 뒤집기'
   'receive: 줄 이름별로 나누기 빼기'
   'receive: 틈 판정 빼기'
+  'receive: 틈 상한을 120초로 되돌리기'
   'events: 시작 시각 거르기 빼기'
   'nodone: 보이는 깊이 대신 숨긴 깊이'
   'nodone: 기동 뒤 20분 대기 빼기'
@@ -81,6 +90,7 @@ readonly MUTATION_FROMS=(
   '$1 - first[name] > limit'
   'name = substr($0, RSTART, RLENGTH - 16)'
   '$1 - last[name] <= gap'
+  '-v gap=180 '
   'select(.timestamp >= $from)'
   '--attribute-names ApproximateNumberOfMessages '
   '[ "$(($5 - $4))" -lt 1200 ]'
@@ -94,6 +104,7 @@ readonly MUTATION_TOS=(
   '$1 - first[name] < limit'
   'name = "all"'
   '1'
+  '-v gap=120 '
   'select(true)'
   '--attribute-names ApproximateNumberOfMessagesNotVisible '
   'false'
@@ -108,14 +119,29 @@ readonly T0=1794268800
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
 FAKE_ACCOUNT="$(printf '%012d' 42)"
 readonly FAKE_ACCOUNT
-# 사례 28 + 변이 10. 사례나 변이를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=38
+# 사례 32(대화형 zsh 둘 포함) + 변이 11. 사례나 변이를 더하거나 빼면 함께
+# 고친다.
+readonly EXPECTED_CASES=43
+# 대화형 zsh 사례가 정의를 확인하는 판정 함수(README 블록이 정의하는 전부).
+readonly ZSH_FUNCTIONS=(
+  workers_iso
+  workers_events
+  workers_started_at
+  workers_queue_depth
+  workers_receive_verdict
+  workers_nodone_verdict
+  workers_start_log_verdict
+  workers_empty_receive_verdict
+)
 
 failures=0
 passes=0
+skips=0
 tmp_root=""
 case_dir=""
 readme_text=""
+# README 블록 하나씩(ANCHORS 차례) — 대화형 zsh 의 블록별 붙여 넣기에 쓴다.
+readme_blocks=()
 status=0
 # quiet 이면 사례 결과를 적지 않고 실패만 센다(변이 묶음).
 quiet=""
@@ -164,6 +190,18 @@ pass() {
 }
 
 #######################################
+# 사례 하나를 건너뛰었다고 적고 센다.
+# Globals:
+#   skips
+# Arguments:
+#   사례 이름(건너뛴 이유 포함).
+#######################################
+skip() {
+  printf 'skip: %s\n' "$1"
+  skips=$((skips + 1))
+}
+
+#######################################
 # README 에서 줄 머리가 같은 줄을 품은 shell 블록 하나의 본문을 낸다.
 # Arguments:
 #   줄 머리.
@@ -186,21 +224,24 @@ readme_block() {
 }
 
 #######################################
-# ANCHORS 의 블록을 차례대로 이어 readme_text 에 둔다.
+# ANCHORS 의 블록을 차례대로 이어 readme_text 에 두고, 하나씩 readme_blocks
+# 에도 둔다.
 # Globals:
-#   readme_text
+#   readme_text, readme_blocks
 # Returns:
 #   0 / 1 블록 하나라도 못 찾음.
 #######################################
 load_readme() {
   local anchor block
   readme_text=""
+  readme_blocks=()
   for anchor in "${ANCHORS[@]}"; do
     if ! block="$(readme_block "${anchor}")"; then
       fail "README 에 「${anchor}」 블록이 하나가 아님"
       return 1
     fi
     readme_text+="${block}"$'\n'
+    readme_blocks+=("${block}"$'\n')
   done
 }
 
@@ -414,13 +455,13 @@ test_design_cases() {
   run_readme workers_receive_verdict "${G}" "${T0}"
   expect '설계: 연결 시간 초과 48초 = 수신 통과' '수신: 통과' 0
 
-  # 빈 큐 정상 + 지표 10분 지연: 2분 로그 = 잠정 통과, 5분 = 대기(점 없음),
+  # 빈 큐 정상 + 지표 10분 지연: 3분 로그 = 잠정 통과, 5분 = 대기(점 없음),
   # 11분 = 통과(기동 뒤 분의 점).
   new_case && log_resp "${G}" '0 render.worker_started queue=x' &&
     queue_resp "${RQ}" 0 0 &&
     metric_resp NumberOfEmptyReceives "${RQ}" Sum
   run_readme workers_start_log_verdict "${G}" render "${RQ}" "${T0}" \
-    "$((T0 + 120))"
+    "$((T0 + 180))"
   expect '설계: 빈 큐 정상 = 로그 잠정 통과' '로그 render: 잠정 통과' 0
   run_readme workers_empty_receive_verdict "${RQ}" "${T0}" "$((T0 + 300))"
   expect '설계: 빈 큐 + 지표 지연 5분 = 대기' '지표 '"${RQ}"': 대기' 3
@@ -437,7 +478,7 @@ test_design_cases() {
   run_readme workers_receive_verdict "${G}" "${T0}"
   expect '설계: 빈 큐 연결 불능 = 수신 정지' '수신: 정지' 1
   run_readme workers_start_log_verdict "${G}" render "${RQ}" "${T0}" \
-    "$((T0 + 120))"
+    "$((T0 + 180))"
   expect '설계: 빈 큐 연결 불능 = 로그 판정 실패' '로그 render: 실패' 1
 
   # DELAY 로 숨긴 메시지만: 보이는 0 · 숨긴 3 · 나이 40분 · 완료 0.
@@ -459,17 +500,33 @@ test_receive() {
   run_readme workers_receive_verdict "${G}" "${T0}"
   expect 'receive: 다른 줄 이름은 잇지 않음' '수신: 통과' 0
 
-  # 같은 줄이지만 틈이 130초(사이에 성공한 수신이 있었다고 본다).
+  # 같은 줄이지만 틈이 190초(사이에 성공한 수신이 있었다고 본다).
   new_case && log_resp "${G}" '0 render.receive_failed err=x' \
-    '130 render.receive_failed err=x'
+    '190 render.receive_failed err=x'
   run_readme workers_receive_verdict "${G}" "${T0}"
-  expect 'receive: 120초 넘는 틈은 끊김' '수신: 통과' 0
+  expect 'receive: 180초 넘는 틈은 끊김' '수신: 통과' 0
 
-  # 소켓 시간 초과(30초 × 3)라 틈이 100초여도 이어진 실패다.
+  # 틈 100초도 이어진 실패다.
   new_case && log_resp "${G}" '0 render.receive_failed err=x' \
     '100 render.receive_failed err=x'
   run_readme workers_receive_verdict "${G}" "${T0}"
   expect 'receive: 100초 틈 두 번 = 정지' '수신: 정지' 1
+
+  # 읽기 시간 초과 꼴의 실측 간격(125.3초 — SDK LEGACY 시도 4회 · 소켓 30초 ·
+  # 재시도 대기 · 루프 5초 쉼)으로 이어진 실패.
+  new_case && log_resp "${G}" '0 render.receive_failed err=Read timed out' \
+    '126 render.receive_failed err=Read timed out' \
+    '252 render.receive_failed err=Read timed out' \
+    '378 render.receive_failed err=Read timed out'
+  run_readme workers_receive_verdict "${G}" "${T0}"
+  expect 'receive: 126초 간격(실측) 연속 = 정지' '수신: 정지' 1
+
+  # 같은 꼴의 최악 간격(약 134초).
+  new_case && log_resp "${G}" '0 render.receive_failed err=Read timed out' \
+    '134 render.receive_failed err=Read timed out' \
+    '268 render.receive_failed err=Read timed out'
+  run_readme workers_receive_verdict "${G}" "${T0}"
+  expect 'receive: 134초 간격(상한) 연속 = 정지' '수신: 정지' 1
 
   new_case && : >"${case_dir}/resp/logs.filter-log-events.${G}.fail"
   run_readme workers_receive_verdict "${G}" "${T0}"
@@ -528,28 +585,29 @@ test_nodone() {
 }
 
 #######################################
-# 로그 판정(2분)의 경계.
+# 로그 판정(3분)의 경계.
 #######################################
 test_start_log() {
   new_case && log_resp "${G}" '0 render.worker_started queue=x' \
     '30 render.started_rejected jobId=j1 status=503' &&
     queue_resp "${RQ}" 1 0
   run_readme workers_start_log_verdict "${G}" render "${RQ}" "${T0}" \
-    "$((T0 + 120))"
+    "$((T0 + 180))"
   expect 'start-log: 깊이 > 0 · 시작 줄 없음 = 실패' '로그 render: 실패' 1
 
   new_case && log_resp "${G}" '0 render.worker_started queue=x' \
     '30 render.started jobId=j1 clipId=c1 attempt=1' &&
     queue_resp "${RQ}" 1 0
   run_readme workers_start_log_verdict "${G}" render "${RQ}" "${T0}" \
-    "$((T0 + 120))"
+    "$((T0 + 180))"
   expect 'start-log: 긴 렌더의 시작 줄 = 잠정 통과' '로그 render: 잠정 통과' 0
 
+  # 첫 receive_failed 는 기동 뒤 약 120.5초에 찍힌다 — 150초는 아직 이르다.
   new_case && log_resp "${G}" '0 render.worker_started queue=x' &&
     queue_resp "${RQ}" 0 0
   run_readme workers_start_log_verdict "${G}" render "${RQ}" "${T0}" \
-    "$((T0 + 60))"
-  expect 'start-log: 2분 전 = 대기' '로그 render: 대기' 3
+    "$((T0 + 150))"
+  expect 'start-log: 3분 전(150초) = 대기' '로그 render: 대기' 3
 }
 
 #######################################
@@ -579,6 +637,217 @@ test_empty_and_started() {
   new_case && log_resp "${G}" '43 thumbnail.worker_started queue=y'
   run_readme workers_started_at "${G}" render "${T0}"
   expect 'started: 없음 = 판정불가' '기동 render: 판정불가' 2
+}
+
+# PTY 에 띄운 대화형 zsh 에 파일마다 bracketed paste(ESC[200~ … ESC[201~ 와
+# Enter)로 붙여 넣는 python3 프로그램. 붙여 넣은 뒤마다 print 로 표지를 찍어
+# 끝났는지 보고, 쓰는 동안 출력을 읽어 PTY 버퍼가 차 멈추지 않게 한다. 한 걸음
+# 20초를 넘기면 그만두고 종료 1 이다.
+# 사용: python3 -I -c "${PTY_DRIVER}" <zsh> <기록 파일> <꼬리 명령 파일>
+#   <붙여 넣을 파일> ….
+PTY_DRIVER="$(
+  cat <<'PY'
+import fcntl
+import os
+import pty
+import select
+import struct
+import sys
+import termios
+import time
+
+PASTE_START = b"\x1b[200~"
+PASTE_END = b"\x1b[201~"
+STEP_SECONDS = 20
+
+
+class Session:
+    """PTY 의 zsh 하나. 쓰는 동안에도 출력을 읽는다."""
+
+    def __init__(self, fd):
+        self.fd = fd
+        self.seen = bytearray()
+        self.closed = False
+
+    def _step(self, pending, deadline):
+        left = deadline - time.monotonic()
+        if left <= 0 or self.closed:
+            return False
+        writers = [self.fd] if pending else []
+        readable, writable, _ = select.select([self.fd], writers, [], left)
+        if readable:
+            try:
+                chunk = os.read(self.fd, 65536)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                self.closed = True
+                return False
+            self.seen.extend(chunk)
+        if writable and pending:
+            try:
+                del pending[:os.write(self.fd, bytes(pending[:512]))]
+            except BlockingIOError:
+                pass
+        return True
+
+    def send(self, data):
+        pending = bytearray(data)
+        deadline = time.monotonic() + STEP_SECONDS
+        while pending:
+            if not self._step(pending, deadline):
+                return False
+        return True
+
+    def wait_for(self, token):
+        deadline = time.monotonic() + STEP_SECONDS
+        while token not in self.seen:
+            if not self._step(None, deadline):
+                return False
+        return True
+
+    def sync(self, n):
+        return (self.send(b"print -r -- Z$((%d+100))Z\r" % n)
+                and self.wait_for(b"Z%dZ" % (n + 100)))
+
+
+def main():
+    zsh, transcript, tail_file = sys.argv[1:4]
+    pastes = []
+    for path in sys.argv[4:]:
+        with open(path, "rb") as f:
+            pastes.append(f.read())
+    with open(tail_file, "rb") as f:
+        tail = f.read()
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(zsh, [zsh, "-f", "-i"])
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    session = Session(fd)
+    ok = session.sync(0)
+    for i, text in enumerate(pastes, 1):
+        if not ok:
+            break
+        paste = PASTE_START + text.replace(b"\n", b"\r") + PASTE_END + b"\r"
+        ok = session.send(paste) and session.sync(i)
+    if ok:
+        ok = (session.send(tail.replace(b"\n", b"\r"))
+              and session.sync(len(pastes) + 1))
+        session.send(b"exit\r")
+        session.wait_for(b"\x00")
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
+    os.waitpid(pid, 0)
+    with open(transcript, "wb") as f:
+        f.write(bytes(session.seen))
+    return 0 if ok else 1
+
+
+sys.exit(main())
+PY
+)"
+readonly PTY_DRIVER
+
+#######################################
+# 대화형 zsh 사례의 입력 파일(가짜 aws · 꼬리 명령)을 사례 디렉터리에 쓴다.
+# 가짜 aws 는 받은 인자를 calls 에 적고 실패한다. 꼬리 명령은 함수마다
+# 「whence: <whence -w 출력>」 을 찍는다. 둘 다 대화형 zsh 에 들어가므로
+# `#` · `!` 를 쓰지 않는다.
+# Globals:
+#   case_dir, ZSH_FUNCTIONS
+#######################################
+write_zsh_inputs() {
+  # shellcheck disable=SC2016
+  printf '%s\n' \
+    'aws() { print -r -- "$*" >> "${WORKERS_ZSH_CALLS}"; return 1; }' \
+    >"${case_dir}/fake"
+  # shellcheck disable=SC2016
+  printf 'for f in %s; do print -r -- "whence: $(whence -w $f)"; done\n' \
+    "${ZSH_FUNCTIONS[*]}" >"${case_dir}/tail"
+  mkdir -- "${case_dir}/home"
+}
+
+#######################################
+# 대화형 zsh 의 결과(out)에서 판정 함수 여덟이 모두 function 이고 가짜 aws 가
+# 불리지 않았는지 본다.
+# Globals:
+#   case_dir, ZSH_FUNCTIONS
+# Arguments:
+#   사례 이름.
+#######################################
+expect_zsh_functions() {
+  local name="$1" fn missing=()
+  for fn in "${ZSH_FUNCTIONS[@]}"; do
+    if ! grep -aq "whence: ${fn}: function" "${case_dir}/out"; then
+      missing+=("${fn}")
+    fi
+  done
+  if [[ "${#missing[@]}" -ne 0 ]]; then
+    fail "${name}: 정의 안 된 함수 ${#missing[@]}개(${missing[*]}) / 오류: $(
+      grep -aoh 'zsh: [^[:cntrl:]]*' "${case_dir}/out" "${case_dir}/err" |
+        sort | uniq -c | tr '\n' '|')"
+    return 1
+  fi
+  if [[ -s "${case_dir}/calls" ]]; then
+    fail "${name}: 정의하는 동안 가짜 aws 가 불림 — $(tr '\n' '|' \
+      <"${case_dir}/calls")"
+    return 1
+  fi
+  pass "${name}"
+}
+
+#######################################
+# 대화형 zsh(interactivecomments 꺼짐 · 이력 확장 켜짐)에서 README 블록이
+# 판정 함수를 모두 정의하는지 본다. 표준 입력 · PTY bracketed paste 두 사례.
+# HOME · TMPDIR 은 사례 디렉터리이고 AWS 설정 파일은 /dev/null 이다.
+# Globals:
+#   case_dir, readme_text, readme_blocks
+#######################################
+test_zsh_interactive() {
+  local zsh i pastes=()
+  local -a zsh_env
+  if ! zsh="$(command -v zsh)"; then
+    skip 'zsh: 표준 입력 붙여 넣기(zsh 없음)'
+    skip 'zsh: PTY 붙여 넣기(zsh 없음)'
+    return 0
+  fi
+
+  new_case && write_zsh_inputs
+  zsh_env=(env -i "PATH=${PATH}" "HOME=${case_dir}/home" "TERM=xterm-256color"
+    "LANG=${LANG:-C.UTF-8}" "TMPDIR=${case_dir}/tmp"
+    "AWS_CONFIG_FILE=/dev/null" "AWS_SHARED_CREDENTIALS_FILE=/dev/null"
+    "WORKERS_ZSH_CALLS=${case_dir}/calls")
+  printf '%s%s' "$(cat -- "${case_dir}/fake")"$'\n' "${readme_text}" |
+    cat - "${case_dir}/tail" |
+    "${zsh_env[@]}" "${zsh}" -f -i >"${case_dir}/out" 2>"${case_dir}/err"
+  expect_zsh_functions 'zsh: 표준 입력 붙여 넣기 = 함수 여덟 정의 · aws 0회'
+
+  if ! command -v python3 >/dev/null; then
+    skip 'zsh: PTY 붙여 넣기(python3 없음)'
+    return 0
+  fi
+  new_case && write_zsh_inputs
+  zsh_env=(env -i "PATH=${PATH}" "HOME=${case_dir}/home" "TERM=xterm-256color"
+    "LANG=${LANG:-C.UTF-8}" "TMPDIR=${case_dir}/tmp"
+    "AWS_CONFIG_FILE=/dev/null" "AWS_SHARED_CREDENTIALS_FILE=/dev/null"
+    "WORKERS_ZSH_CALLS=${case_dir}/calls")
+  pastes=("${case_dir}/fake")
+  for i in "${!readme_blocks[@]}"; do
+    printf '%s' "${readme_blocks[i]}" >"${case_dir}/block.${i}"
+    pastes+=("${case_dir}/block.${i}")
+  done
+  if ! "${zsh_env[@]}" python3 -I -c "${PTY_DRIVER}" "${zsh}" \
+    "${case_dir}/out" "${case_dir}/tail" "${pastes[@]}" \
+    2>"${case_dir}/err"; then
+    fail "zsh: PTY 붙여 넣기가 끝나지 않음(이어 쓰기 대기 등) / 오류: $(
+      grep -ao 'zsh: [^[:cntrl:]]*' "${case_dir}/out" | tr '\n' '|')"
+    return 1
+  fi
+  expect_zsh_functions 'zsh: PTY bracketed paste = 함수 여덟 정의 · aws 0회'
 }
 
 #######################################
@@ -647,6 +916,7 @@ main() {
 
   if load_readme; then
     run_suite
+    test_zsh_interactive
     test_mutations
   fi
 
@@ -655,16 +925,16 @@ main() {
     fail "임시 디렉터리가 남음: ${tmp_root}"
   fi
   tmp_root=""
-  if [[ "${passes}" -ne "${EXPECTED_CASES}" ]]; then
-    fail "사례 수가 다름 — 통과 ${passes} ≠ ${EXPECTED_CASES}"
+  if [[ $((passes + skips)) -ne "${EXPECTED_CASES}" ]]; then
+    fail "사례 수가 다름 — 통과 ${passes} + skip ${skips} ≠ ${EXPECTED_CASES}"
   fi
   if [[ "${failures}" -ne 0 ]]; then
-    printf 'workers_watch_runbook_test: %s건 실패(통과 %s건)\n' \
-      "${failures}" "${passes}" >&2
+    printf 'workers_watch_runbook_test: %s건 실패(통과 %s건 · skip %s건)\n' \
+      "${failures}" "${passes}" "${skips}" >&2
     exit 1
   fi
-  printf 'workers_watch_runbook_test: 전부 통과(%s건 · 임시 디렉터리 잔여 0)\n' \
-    "${passes}"
+  printf 'workers_watch_runbook_test: 전부 통과(%s건 · skip %s건 · %s\n' \
+    "${passes}" "${skips}" '임시 디렉터리 잔여 0)'
 }
 
 main "$@"
