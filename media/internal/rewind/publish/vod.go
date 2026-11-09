@@ -482,11 +482,6 @@ func (v *vodJob) adoptFailed(err error) FreezeOutcome {
 	return vodRetry(freezeHeadFailed, err)
 }
 
-// playlist 는 사슬 장부 l 의 VOD 렌더 값이다(playlistInput).
-func (v *vodJob) playlist(l index.ChainLedger, rows []boundary.Row) rewind.Playlist {
-	return v.playlistInput(chainInput(l), rows)
-}
-
 // playlistInput 은 VOD 렌더 값이다. 소유 회차는 첫 행의 회차다 — 그래야 첫 행 앞이 계승 접두가 아니고(S4) 범위 검사(S3)의
 // 「회차 첫 조각부터」가 선다. 머리는 새 문서의 것이다 — TARGETDURATION 은 입력 세션 전부의 최댓값(사슬은 계승이 TD 를
 // 내리지 않아 꼬리 값과 같고, 회차는 TD 분할로 사슬마다 다를 수 있다), DISC-SEQ 는 0 이다. 첫 회차의 계승은 지운다 — 그 앞
