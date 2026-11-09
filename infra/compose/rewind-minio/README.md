@@ -131,7 +131,8 @@ linux/arm64 · 같은 이미지에 `mc` 가 들어 `minio-init` 도 이것을 �
 *   엣지 캐시(TTL 합치기 · 오류 캐시)는 흉내 내지 않는다.
 *   `x-amz-*` 응답 머리와 MinIO 의 CORS 머리를 지운다. MinIO 도 CORS 머리를 스스로
     실어 그대로 두면 `Access-Control-Allow-Origin` 이 두 번 나간다(브라우저가 거부한다).
-*   `/vod/` 는 VOD 문서 꼴(`/vod/{streamID}/{head}/index.m3u8`)만 넘기고 그 밖
+*   `/vod/` 는 VOD 문서 꼴(`/vod/{streamID}/{head}/index.m3u8` · 회차 문서
+    `/vod/{streamID}/{roundID}.round/index.m3u8` — POK-549)만 넘기고 그 밖
     경로는 엣지가 404 로 끊는다. prod `/vod/*` 는 경로를 가리지 않고 원본까지
     가며, 버킷의 `vod/` 아래에는 VOD 문서만 있어 없는 키는 403 이다. VOD 조각은
     `/dvr/…/seg/…` 로 받는다(POK-525).
