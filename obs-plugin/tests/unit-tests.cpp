@@ -1,7 +1,7 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
 // 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5) · 종료 신호 규칙(A3·4D) ·
-// 서버 환경 짝과 기본값 이관(POK-267).
+// 서버 환경 짝과 기본값 이관(POK-267) · SRT 지연 기본값 이관(POK-556).
 #include "app-state.hpp"
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
@@ -15,6 +15,7 @@
 #include "post-and-wait.hpp"
 #include "retry-policy.hpp"
 #include "server-env.hpp"
+#include "srt-latency.hpp"
 #include "srt-url.hpp"
 
 #include <httplib.h>
@@ -184,6 +185,57 @@ TEST(srt_server_url_has_no_secrets)
 
 	c.sendPassphrase = false;
 	CHECK_EQ(BuildSrtServerUrl(c), "srt://ingest.pokeclip.com:8890?latency=1000000&pkt_size=1316");
+}
+
+// ---------------------------------------------------------------- SRT 지연 기본값 이관 (POK-556)
+
+TEST(srt_latency_default_is_3000)
+{
+	// 송출 쪽 망이 1초 넘게 막히면 재전송이 1000ms 안에 못 와 수신부가 늦은 패킷을 버렸다(2026-11-08–09 실측)
+	CHECK_EQ(kDefaultLatencyMs, 3000);
+	CHECK_EQ(kLegacyDefaultLatencyMs, 1000);
+	CHECK(IsValidLatencyMs(kDefaultLatencyMs));
+}
+
+TEST(srt_latency_valid_range_matches_dock_check)
+{
+	// 독 「지연은 20–8000ms」·브리지 PUT invalid_latency와 같은 범위
+	CHECK(IsValidLatencyMs(20));
+	CHECK(IsValidLatencyMs(8000));
+	CHECK(!IsValidLatencyMs(19));
+	CHECK(!IsValidLatencyMs(8001));
+	CHECK(!IsValidLatencyMs(0));
+	CHECK(!IsValidLatencyMs(-1));
+}
+
+TEST(srt_latency_lifts_unmigrated_legacy_default)
+{
+	// 새 설치(파일에 latency_ms 없음) — 표지와 무관하게 지금 기본값
+	CHECK_EQ(LoadedLatencyMs(std::nullopt, false), 3000);
+	CHECK_EQ(LoadedLatencyMs(std::nullopt, true), 3000);
+	// 표지 없는 옛 파일의 옛 기본값 → 지금 기본값으로 올린다
+	CHECK_EQ(LoadedLatencyMs(1000, false), 3000);
+	// 표지 없는 옛 파일이라도 옛 기본값이 아니면 고른 값이다 — 그대로
+	CHECK_EQ(LoadedLatencyMs(500, false), 500);
+	CHECK_EQ(LoadedLatencyMs(2000, false), 2000);
+	CHECK_EQ(LoadedLatencyMs(20, false), 20);
+	CHECK_EQ(LoadedLatencyMs(8000, false), 8000);
+	// 이관 뒤 다시 1000을 골랐다(표지 있음) — 그대로
+	CHECK_EQ(LoadedLatencyMs(1000, true), 1000);
+	CHECK_EQ(LoadedLatencyMs(3000, true), 3000);
+	// 한 번 올린 값을 표지와 함께 다시 읽어도 같다
+	CHECK_EQ(LoadedLatencyMs(LoadedLatencyMs(1000, false), true), 3000);
+}
+
+TEST(srt_latency_out_of_range_falls_back_to_default)
+{
+	// 독·브리지가 받지 않는 값(20–8000 밖)은 파일을 손으로 고친 것 — 표지와 무관하게 기본값
+	for (bool migrated : {false, true}) {
+		CHECK_EQ(LoadedLatencyMs(19, migrated), 3000);
+		CHECK_EQ(LoadedLatencyMs(8001, migrated), 3000);
+		CHECK_EQ(LoadedLatencyMs(0, migrated), 3000);
+		CHECK_EQ(LoadedLatencyMs(-1000, migrated), 3000);
+	}
 }
 
 TEST(ingest_host_rejects_port_outside_brackets)

@@ -32,6 +32,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "pairing.hpp"
 #include "post-and-wait.hpp"
 #include "server-env.hpp"
+#include "srt-latency.hpp"
 #include "srt-target.hpp"
 #include "stream-control.hpp"
 #include "stream-target.hpp"
@@ -225,7 +226,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		return {400, JsonReason(false, "invalid_ingest_host")};
 	if (next.ingestPort < 1 || next.ingestPort > 65535)
 		return {400, JsonReason(false, "invalid_ingest_port")};
-	if (next.latencyMs < 20 || next.latencyMs > 8000)
+	if (!IsValidLatencyMs(next.latencyMs))
 		return {400, JsonReason(false, "invalid_latency")};
 
 	// 잠금 아래 지금 설정에 독 값만 얹는다 — 키·배정 기억·독 첫 실행 표시·단축키 사본은 페어링·UI 스레드가 따로

@@ -22,6 +22,7 @@ add_executable(
   "${PLUGIN_DIR}/src/private-file.cpp"
   "${PLUGIN_DIR}/src/retry-policy.cpp"
   "${PLUGIN_DIR}/src/server-env.cpp"
+  "${PLUGIN_DIR}/src/srt-latency.cpp"
   "${PLUGIN_DIR}/src/srt-url.cpp"
 )
 target_include_directories(pokeclip-unit-tests PRIVATE "${PLUGIN_DIR}/src")
