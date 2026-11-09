@@ -746,7 +746,7 @@ IP 속도 제한(WAF 후속)이다.
 | 신호 | 등급 | 언제 | 속성 |
 |---|---|---|---|
 | `session_freeze` | INFO | VOD 확정(기존) | `scope=chain\|round` 를 더했다 |
-| `session_freeze_retry` | WARN | 장애 재시도(기존). 회차 대기는 남기지 않는다 | `reason` = 마지막에 돈 사슬 동결의 사유(회차 원인이 아니다) |
+| `session_freeze_retry` | WARN | 장애 재시도(기존). 회차 대기는 남기지 않는다 | `scope=chain\|round` 를 더했다. `reason` = 물러섰으면 이어서 돈 사슬 동결의 사유, 물러서지 않았으면 그 동결(회차 경로 포함)의 사유. 회차 쪽 결정적 원인은 `cause` 에만 |
 | `session_vod_round_fallback` | WARN | 물러섬 — 세션당 한 번(재기동하면 한 번 더). 결과가 섰음 · 대기 · 재시도 어느 것이든 낸다 | `session_id` · `round` · `reason` · `cause` · `err` |
 | `session_vod_round_wait_long` | WARN | 회차 대기가 그 세션 `ending` 뒤 30분(정산 창 15분 × 2)을 넘김 — 세션당 한 번 | `session_id` · `round` · `wait=round_open\|front_pending` |
 | `finalize_round_wake_failed` | WARN | 깨우기 질의 오류 — 정산 스캔이 거둔다 | `session_id` · `round` · `err` |
