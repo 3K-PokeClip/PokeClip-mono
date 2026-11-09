@@ -62,8 +62,8 @@ inline constexpr const char *kPairingExchangePath = "/api/stream-keys/pairing-co
 // SRT 지연 허용치(latency, ms) — 독·브리지가 받는 범위와 기본값. 읽을 때의 이관 규칙은 srt-latency.hpp.
 inline constexpr int kMinLatencyMs = 20;
 inline constexpr int kMaxLatencyMs = 8000;
-// 3000 = 송출 쪽 망이 1.5초 막혀도 재전송이 제때 와 녹화가 깨지지 않는 값(2026-11-08–09 실측, POK-556) — 대가는
-// 평소 라이브 지연 +2초. 수신부(gosrt)는 송출·수신 latency 중 큰 값으로 합의하므로 서버는 그대로다.
+// 3000 = 송출 쪽 망이 1.5초 막히고 손실 2% 일 때 재정렬 오류 · 녹화기 교체가 0 이었던 값(2026-11-08–09 실험대, POK-556 —
+// 복호 오류 조각은 일부 남음 · 실제 인터넷 경로 미검증) — 대가는 평소 라이브 지연 +2초. 수신부(gosrt)는 송출·수신 latency 중 큰 값으로 합의하므로 서버는 그대로다.
 inline constexpr int kDefaultLatencyMs = 3000;
 // POK-556 이전 기본값 — 1초 넘는 막힘이면 늦은 패킷을 수신부가 버렸다. 이관 표지 없는 파일의 이 값은 지금 기본값으로 올린다.
 inline constexpr int kLegacyDefaultLatencyMs = 1000;
