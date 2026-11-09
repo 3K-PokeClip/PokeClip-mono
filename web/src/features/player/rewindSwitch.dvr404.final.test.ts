@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
 import { step } from './dvr404TestKit';
-import { pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
+import { nextSegment, pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
 import {
   ENDING_WAIT_MS,
   RESUME_WAIT_MS,
   openSession,
   pollTargets,
+  type DvrSegment,
   type PlaybackSessionState,
   type SessionEffect,
   type SessionEvent,
@@ -69,9 +70,13 @@ function loaded(url: string, firstMs: number, lastEndMs: number): SessionEvent {
   };
 }
 
-/** 지금 되감기 재생기(지금 세대)의 /dvr 미디어 조각 404 */
-function gone(state: PlaybackSessionState, generation = state.source.generation): SessionEvent {
-  return { type: 'dvr-segment-gone', generation };
+/** 지금 되감기 재생기(지금 세대)의 /dvr 미디어 조각 404 — 조각을 적지 않으면 부를 때마다 다른 조각 */
+function gone(
+  state: PlaybackSessionState,
+  generation = state.source.generation,
+  segment: DvrSegment = nextSegment(),
+): SessionEvent {
+  return { type: 'dvr-segment-gone', generation, segment };
 }
 
 /** 사건을 차례로 감싸개로 먹이고 마지막 상태와 모든 효과를 돌려준다 */

@@ -182,6 +182,84 @@ func TestPosIsSegmentMtxiWithoutReset(t *testing.T) {
 	}
 }
 
+// chain_opens_at_zero_when_first_mtxi_is_negative — 새 연결에서 소리가 영상보다 먼저 시작하면 회차
+// 첫 조각의 mtxi 가 음수다(prod 실측 −44ms). 사슬은 보정값 −mtxi 로 열어 첫 도장을 0 에 두고, 그
+// 보정값은 리셋 · 구멍이 바꾸기 전까지 이어진다. 사슬 보관값의 mtxi 는 원값이라 다음 행의 구멍 술어가
+// 실제 미디어 끝을 기준으로 선다. 단언은 인덱서가 업로더에 넘기는 ③ 작업(보정값 표의 재료)이다.
+// 잡는 결함: 음수 도장을 그대로 보내면 생산자가 거부해 그 조각의 ③ 이 영영 올라가지 않는다 /
+// 도장만 0 으로 자르면 뒤 조각이 44ms 겹친다 / 보관값에 pos 를 넣으면 50–94ms 구멍을 놓친다.
+func TestChainOpensAtZeroWhenFirstMtxiIsNegative(t *testing.T) {
+	const firstMtxi = -44 * time.Millisecond
+	tests := []struct {
+		name       string
+		first      time.Duration
+		next       time.Duration // 0 이면 다음 행이 없다
+		wantOffset time.Duration // 첫 행의 보정값
+		wantNext   index.UploadTarget
+	}{
+		{
+			name:  "연속_조각은_같은_보정값으로_잇는다",
+			first: firstMtxi, next: 5_929_333_333, wantOffset: 44 * time.Millisecond,
+			wantNext: index.UploadTarget{PlaybackPos: 5_973_333_333, StitchOffset: 44 * time.Millisecond},
+		},
+		{
+			// 예상 끝 = −44ms + 5977ms = 5.933s. 60ms 늦게 시작하면 구멍이다 → pos(0) + dur(0) 에 잇는다.
+			name:  "구멍은_원값_mtxi_기준으로_판정한다",
+			first: firstMtxi, next: firstMtxi + 5977*time.Millisecond + 60*time.Millisecond, wantOffset: 44 * time.Millisecond,
+			wantNext: index.UploadTarget{PlaybackPos: 5_977 * time.Millisecond, StitchOffset: -16 * time.Millisecond},
+		},
+		{name: "1ns_음수도_0_에_연다", first: -1, wantOffset: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, 5977, 4000)
+			r := f.injectReads()
+			f.store.scriptSessions("S1", "S1")
+			f.row(r, 0, mtxiOf(recA, tt.first))
+			if tt.next != 0 {
+				f.row(r, 6*time.Second, mtxiOf(recA, tt.next))
+			}
+
+			if got := f.playbackOf(0); got.PlaybackPos != 0 || got.StitchOffset != tt.wantOffset || got.PosPinned {
+				t.Errorf("첫 도장 = pos %v · offset %v · 고정 %v, want pos 0 · offset %v · 고정 false",
+					got.PlaybackPos, got.StitchOffset, got.PosPinned, tt.wantOffset)
+			}
+			if tt.next == 0 {
+				return
+			}
+			if got := f.playbackOf(1); got.PlaybackPos != tt.wantNext.PlaybackPos || got.StitchOffset != tt.wantNext.StitchOffset {
+				t.Errorf("다음 도장 = pos %v · offset %v, want pos %v · offset %v",
+					got.PlaybackPos, got.StitchOffset, tt.wantNext.PlaybackPos, tt.wantNext.StitchOffset)
+			}
+			if len(r.endsCalls) != 0 {
+				t.Errorf("리셋이 없는데 트랙 끝을 %d번 다시 읽었다", len(r.endsCalls))
+			}
+		})
+	}
+}
+
+// 알려진 한계의 지금 동작을 고정한다(결정 B′ — 재기동 복구는 범위 밖 · kty 2026-09-19). 음수 mtxi 로
+// 연 회차 도중 사이드카가 재기동하면 새 프로세스는 사슬 기억이 없어 다음 행(양수 mtxi)을 보정값 0 으로
+// 연다 — 그 지점 도장이 첫 mtxi 크기(44ms)만큼 뒤로 간다. 재기동 복구가 들어오면 이 시험이 뒤집힌다.
+func TestRestartAfterNegativeFirstMtxiReopensAtZeroOffset(t *testing.T) {
+	f := newFixture(t, 5977, 4000)
+	r := f.injectReads()
+	f.store.scriptSessions("S1", "S1")
+	f.row(r, 0, mtxiOf(recA, -44*time.Millisecond)) // 옛 프로세스 — 하한으로 연 회차
+
+	f.reload() // 재기동: 사슬은 메모리라 사라지고 장부는 남는다
+	r = f.injectReads()
+	f.row(r, 6*time.Second, mtxiOf(recA, 5_929_333_333))
+
+	if got := f.playbackOf(0); got.StitchOffset != 44*time.Millisecond {
+		t.Fatalf("재기동 전 첫 행 offset = %v, want 44ms(전제)", got.StitchOffset)
+	}
+	if got := f.playbackOf(1); got.PlaybackPos != 5_929_333_333 || got.StitchOffset != 0 {
+		t.Errorf("재기동 뒤 첫 행 = pos %v · offset %v, want pos 5.929333333s · offset 0(알려진 한계)",
+			got.PlaybackPos, got.StitchOffset)
+	}
+}
+
 // playback_request_absent_without_session — 비귀속 행(InsertCommit.SessionID 빈 값)은 ③·init 을 만들지
 // 않는다(settled 조건상 목록에 실릴 수 없다). ② 는 형제 분기라 그대로 요청된다.
 func TestPlaybackRequestAbsentWithoutSession(t *testing.T) {

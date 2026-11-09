@@ -62,6 +62,10 @@ type Publisher struct {
 	warned      map[string]bool // lifecycle_publish_retry 를 이미 찍은 eventId(같은 행 연속은 한 줄)
 	backlogOn   bool
 	lastCleanup time.Time
+	// 보정(repair.go) — 주기 · 시한은 NewPublisher 가 상수로 채우고, 같은 패키지 시험만 바꾼다.
+	lastRepair    time.Time
+	repairEvery   time.Duration
+	repairTimeout time.Duration
 }
 
 // NewPublisher 는 풀과 발행 칸이 없으면 거부한다.
@@ -79,7 +83,8 @@ func NewPublisher(pool *pgxpool.Pool, o PublisherOptions) (*Publisher, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Publisher{pool: pool, opt: o, log: log, warned: map[string]bool{}}, nil
+	return &Publisher{pool: pool, opt: o, log: log, warned: map[string]bool{},
+		repairEvery: repairEvery, repairTimeout: repairTimeout}, nil
 }
 
 // Run 은 ctx 가 끝날 때까지 Interval 마다 outbox 를 비운다. 첫 회차는 곧바로 돈다. 돌려주는 값은 ctx 의 오류다. 진행
@@ -99,8 +104,10 @@ func (p *Publisher) Run(ctx context.Context) error {
 	}
 }
 
-// tick 은 한 회차다 — 대상 행을 차례로 내고, 적체 게이지와 정리를 돈다.
+// tick 은 한 회차다 — 놓친 ended 를 보정하고, 대상 행을 차례로 내고, 적체 게이지와 정리를 돈다. 보정이 머리라
+// 보정한 ended 는 같은 회차에 나간다.
 func (p *Publisher) tick(ctx context.Context) {
+	p.repair(ctx)
 	rows, err := selectDue(ctx, p.pool, batchSize)
 	if err != nil {
 		p.storeFailed(ctx, "select", err)

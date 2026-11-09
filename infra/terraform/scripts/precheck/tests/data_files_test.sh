@@ -311,11 +311,17 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가). 끝의 셋(로그 그룹 태그
 # 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR). 맨 끝 다섯은 SG
 # 규칙 자원의 재조회 읽기다(POK-479 — 묶음마다 SG 규칙 자원이 있는 근거는
-# 그 묶음 파일의 주석). 마지막 둘은 workers 의 Cloud Map 서비스 · 역할 정책
-# 생성 직후 재조회 읽기다(POK-408 — 근거는 workers.tsv 의 그 덩어리 주석).
-# 맨 끝 일곱은 workers 승인 묶음(apply + 긴급 정지 사전 승인)의 운영 동작 —
-# 긴급 정지 쓰기와 apply 직전 읽기 · 감시 읽기다(POK-408 r3 — 근거는
-# workers.tsv 의 그 덩어리 주석).
+# 그 묶음 파일의 주석). 그 뒤 workers 의 셋은 workers 의 Cloud Map 서비스 ·
+# 역할 정책 생성 직후 재조회 읽기다(POK-408 — 근거는 workers.tsv 의 그
+# 덩어리 주석). 그 뒤 workers 의 일곱은 workers 승인 묶음(apply + 긴급 정지
+# 사전 승인)의 운영 동작 — 긴급 정지 쓰기와 apply 직전 읽기 · 감시 읽기다
+# (POK-408 r3 — 근거는 workers.tsv 의 그 덩어리 주석). runtime-1a 의 넷은
+# 회전의 일꾼 멈춤 · 확인 · 복원 ECS 동작이다(POK-408 — 근거는 runtime-1a.tsv
+# 의 그 덩어리 주석). O7a 의 스물셋은
+# network 의 인터페이스 엔드포인트 · 엔드포인트 SG 를 만들고 되돌릴 때
+# provider 가 부르는 동작과, 확인 · 되돌리기 절차가 부르는 동작이다. 그 뒤의
+# 둘은 엔드포인트 생성의 Route 53 종속 동작(두 리전), 맨 끝 하나는 확인
+# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -356,7 +362,34 @@ STAGE_FOLLOWUP_ROWS=(
   $'runtime-1a\tecs:DescribeServices\tap-northeast-2\t*'
   $'runtime-1a\tecs:UpdateService\tap-northeast-2\t*'
   $'runtime-1a\tecs:ListTasks\tap-northeast-2\t*'
-  $'runtime-1a\tecs:DescribeTasks\tap-northeast-2\t*')
+  $'runtime-1a\tecs:DescribeTasks\tap-northeast-2\t*'
+  $'O7a\tec2:CreateSecurityGroup\tap-northeast-2\t*'
+  $'O7a\tec2:RevokeSecurityGroupEgress\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeSecurityGroups\tap-northeast-2\t*'
+  $'O7a\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeVpcEndpoints\tap-northeast-2\t*'
+  $'O7a\tec2:DescribePrefixLists\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeNetworkInterfaces\tap-northeast-2\t*'
+  $'O7a\tec2:ModifyVpcEndpoint\tap-northeast-2\t*'
+  $'O7a\tec2:DeleteVpcEndpoints\tap-northeast-2\t*'
+  $'O7a\tec2:RevokeSecurityGroupIngress\tap-northeast-2\t*'
+  $'O7a\tec2:DeleteSecurityGroup\tap-northeast-2\t*'
+  $'O7a\tecs:UpdateService\tap-northeast-2\t*'
+  $'O7a\tecs:DescribeServices\tap-northeast-2\t*'
+  $'O7a\tecs:ListTasks\tap-northeast-2\t*'
+  $'O7a\tecs:DescribeTasks\tap-northeast-2\t*'
+  $'O7a\telasticloadbalancing:DescribeTargetHealth\tap-northeast-2\t*'
+  $'O7a\tsecretsmanager:DescribeSecret\tap-northeast-2\t'\
+'arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*'
+  $'O7a\tlogs:DescribeLogStreams\tap-northeast-2\t*'
+  $'O7a\tcloudwatch:GetMetricStatistics\tap-northeast-2\t*'
+  $'O7a\tcloudwatch:ListMetrics\tap-northeast-2\t*'
+  $'O7a\tssm:SendCommand\tap-northeast-2\t*'
+  $'O7a\tssm:GetCommandInvocation\tap-northeast-2\t*'
+  $'O7a\troute53:AssociateVPCWithHostedZone\tus-east-1\t*'
+  $'O7a\troute53:AssociateVPCWithHostedZone\tap-northeast-2\t*'
+  $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################
@@ -1949,6 +1982,69 @@ expect_apex_object_asked() {
 }
 
 #######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7a 에 돌려(주체 넷과, 태그로
+# 풀리는 엔드포인트 셋 · SG 둘), 태그 해석 행 network-s3-endpoint ·
+# network-sg 가 S3 게이트웨이 엔드포인트만이 아니라 인터페이스 엔드포인트 ·
+# 엔드포인트 SG 도 동작마다 묻는지 본다(POK-408 설계 3-5 의 2-3 판정). 묻는
+# 동작은 되돌리기가 쓰는 것이다: private DNS 끄기 · 엔드포인트 지우기 · SG
+# 규칙 바꾸기 · SG 지우기.
+# Globals:
+#   FAKE_USER, FAKE_ACCOUNT, run_status, run_out
+#######################################
+expect_network_endpoint_targets_asked() {
+  local case_dir dir prefix arn action request endpoint_cell group_cell
+  local -a endpoints groups actions
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "network-endpoints: 시험 준비 실패"
+    return
+  }
+  prefix="arn:aws:ec2:ap-northeast-2:${FAKE_ACCOUNT}"
+  endpoints=("${prefix}:vpc-endpoint/vpce-0a1s3gw"
+    "${prefix}:vpc-endpoint/vpce-0b2sqs"
+    "${prefix}:vpc-endpoint/vpce-0c3ecr")
+  groups=("${prefix}:security-group/sg-0d4vpce"
+    "${prefix}:security-group/sg-0e5box")
+  # 읽기 표의 응답 칸은 ARN 들을 글자 \t 로 잇는다.
+  printf -v endpoint_cell '%s\\t' "${endpoints[@]}"
+  printf -v group_cell '%s\\t' "${groups[@]}"
+  {
+    principal_reads_table
+    testlib::tsv get-resources ec2:vpc-endpoint@ap-northeast-2 \
+      "${endpoint_cell%\\t}"
+    testlib::tsv get-resources ec2:security-group@ap-northeast-2 \
+      "${group_cell%\\t}"
+  } >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  testlib::run "${case_dir}" principal-O7a env \
+    FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+    FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" O7a
+  dir="$(compgen -G "${case_dir}/home/.pokeclip-precheck/principal-O7a-*")"
+  if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+    testlib::fail "network-endpoints: O7a 실행이 종료 ${run_status} —" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  for arn in "${endpoints[@]}" "${groups[@]}"; do
+    actions=(ec2:AuthorizeSecurityGroupIngress ec2:RevokeSecurityGroupIngress
+      ec2:DeleteSecurityGroup)
+    if [[ "${arn}" == *:vpc-endpoint/* ]]; then
+      actions=(ec2:ModifyVpcEndpoint ec2:DeleteVpcEndpoints)
+    fi
+    for action in "${actions[@]}"; do
+      request="\"ActionNames\":[\"${action}\"],"
+      request+="\"ResourceArns\":[\"${arn}\"]"
+      if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
+        testlib::fail "network-endpoints: ${arn##*:} 에 ${action} 이" \
+          "물어지지 않음"
+        return
+      fi
+    done
+  done
+  testlib::ok "network-endpoints → 태그로 푼 엔드포인트 셋(게이트웨이 ·" \
+    "인터페이스) · SG 둘을 되돌리기 동작마다 물음"
+}
+
+#######################################
 # runtime-1a 묶음에 런타임 루트의 Terraform 이 호출자 권한으로 부르는 읽기가
 # 정확한 행으로 있는지 본다(계획 rt1d c2 · 설계 K4 — data "aws_subnet" 의
 # ec2:DescribeSubnets). 다른 단언은 행의 꼴 · 중복만 보고 누락은 못 잡는다.
@@ -2033,6 +2129,7 @@ main() {
   expect_runtime_rows_asked
   expect_log_group_forms_asked
   expect_apex_object_asked
+  expect_network_endpoint_targets_asked
   expect_acm_validation_asked
   expect_ecs_role_pass_asked
   expect_runtime_terraform_reads

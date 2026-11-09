@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { assertTransitionInvariants, relistGuard, revisitGuard } from './dvr404TestKit';
+import { assertTransitionInvariants, holeGuard, relistGuard, revisitGuard } from './dvr404TestKit';
 import type * as rewindSwitchModule from './rewindSwitch';
 import { SESSION_NOTICES, transition, type XAnswer } from './rewindSwitch';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
@@ -251,15 +251,18 @@ function oldestNotices(onNotice: ReturnType<typeof vi.fn>): number {
   return onNotice.mock.calls.filter(([text]) => text === SESSION_NOTICES.oldest).length;
 }
 
-/** 되감기 재생기가 미디어 조각 404 를 받았다 — hls.js 가 앱에 올리는 꼴 */
-function segmentGone(hls: FakeHls) {
+/**
+ * 되감기 재생기가 영상 조각 sn 의 404 를 받았다 — hls.js 가 앱에 올리는 꼴. gap = hls.js 가 그
+ * 조각을 틈으로 넘기기로 했다(frag.gap)
+ */
+function segmentGone(hls: FakeHls, sn = 7, gap = false) {
   act(() =>
     hls.trigger(FakeHls.Events.ERROR, {
       type: FakeHls.ErrorTypes.NETWORK_ERROR,
       details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
       fatal: false,
-      frag: { sn: 7, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
-      response: { url: `${BASE}/dvr/key-1/a1/seg7.mp4`, code: 404, text: '' },
+      frag: { type: 'main', sn, gap, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
+      response: { url: `${BASE}/dvr/key-1/a1/seg${sn}.mp4`, code: 404, text: '' },
     }),
   );
 }
@@ -317,7 +320,7 @@ async function rewindScreen(watched = true) {
 /** 감싼 transition 의 모든 호출에 감싸개 불변식을 단언하고 사건 꼴을 돌려준다(계획 8-0) */
 function checkedEvents(): string[] {
   const { calls, results } = vi.mocked(transition).mock;
-  const guards = [relistGuard(), revisitGuard()];
+  const guards = [relistGuard(), revisitGuard(), holeGuard()];
   return calls.map(([before, event], i) => {
     const result = results[i];
     if (result?.type !== 'return') throw new Error(`transition ${i} 이 돌려주지 않았다`);
@@ -382,7 +385,9 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     const relistHls = lastHls();
     expect(relistHls).not.toBe(rewindHls);
     expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'paint' } });
-    segmentGone(relistHls);
+    // 화면 전 다른 조각의 404 — 다시 받는 중이라 막힘(같은 조각이고 hls.js 가 틈으로 넘기면 재생기가 넘긴다 — 같은
+    // 파일 끝 describe 「아는 구멍 넘김」)
+    segmentGone(relistHls, 8);
     expect(relistHls.stopLoad).toHaveBeenCalledTimes(1);
     await settle();
     expect(current().state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
@@ -574,7 +579,7 @@ describe('404 → 목록 다시 받기 · 사람 멈춤 — 옛 축의 멈춘 �
         type: FakeHls.ErrorTypes.NETWORK_ERROR,
         details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
         fatal: false,
-        frag: { sn: 7, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
+        frag: { type: 'main', sn: 7, initSegment: { url: `${BASE}/dvr/key-1/a1/init.mp4` } },
         response: { url: `${BASE}/dvr/key-1/a1/seg7.mp4`, code: 404, text: '' },
       });
       userPause(view);
@@ -738,5 +743,88 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 다시 틀 때 세
     expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: TARGET });
     expect(fake.instances).toHaveLength(created + 1);
     checkedEvents();
+  });
+});
+
+/** 다시 받은 새 재생기의 같은 조각 404 가 그 재생기의 위치 사건(화면이 붙음)보다 먼저인가 뒤인가 */
+type HoleOrder = 'before-paint' | 'after-paint';
+
+// 아는 구멍 넘김의 끝단(POK-528 후속 c2 · 계획 5절 통합 · Y1). 실제 useHlsPlayback · 세션에 hls.js 흉내를 묶어, 다시
+// 받은 새 재생기가 같은 조각을 또 404 로 받을 때 hls.js 가 틈으로 넘기기로 했으면(frag.gap — 흉내는 hls.js 가 고른
+// 결과를 자료에 싣는다) 재생기가 가로채지 않는지 본다. (가) 404 가 위치 사건보다 먼저 · (나) 뒤 — 둘 다 같은 결과다.
+// 대조: gap 거짓이면 (가) · (나) 모두 가로채 막힘 — 어느 행이 막았는지(다시 받는 중 · 아는 구멍)는 이 끝단 시험이 가리지
+// 않는다(행 구분은 rewindSwitch 단위 시험 ② · ⑥b 몫)
+describe('아는 구멍 넘김 — 다시 받은 재생기의 같은 조각 404 는 hls.js 건너뜀에 맡긴다(POK-528 후속 c2 · Y1)', () => {
+  /** 다시 받은 재생기의 위치 사건 — 화면이 붙어 다시 받는 중이 끝난다 */
+  function painted() {
+    act(() =>
+      current().dispatch({
+        type: 'position',
+        atMs: TARGET,
+        playing: true,
+        runMs: 0,
+        epoch: current().positionEpoch(),
+      }),
+    );
+  }
+
+  /** 404(sn 7) → 같은 목록 다시 받기 — 새 재생기와 그 세대 */
+  async function relistedOnce() {
+    const { rewindHls } = await rewindScreen();
+    segmentGone(rewindHls);
+    await settle();
+    const relistHls = lastHls();
+    expect(relistHls).not.toBe(rewindHls);
+    expect(current().state.phase).toMatchObject({ kind: 'rewind', relist: { stage: 'paint' } });
+    return { relistHls, generation: current().state.source.generation };
+  }
+
+  /** 새 재생기가 같은 조각(sn 7)을 또 404 로 받는다 — order 차례로 위치 사건과 함께 */
+  async function sameHoleAgain(relistHls: FakeHls, order: HoleOrder, gap: boolean) {
+    if (order === 'before-paint') {
+      segmentGone(relistHls, 7, gap);
+      await settle();
+      painted();
+    } else {
+      painted();
+      segmentGone(relistHls, 7, gap);
+    }
+    await settle();
+  }
+
+  it.each<[HoleOrder, string]>([
+    ['before-paint', '(가) 위치 사건 전'],
+    ['after-paint', '(나) 위치 사건 뒤'],
+  ])(
+    '%s · %s 같은 조각 404 · gap 참 → 새 재생기 stopLoad 0 · 세대 그대로 · 새 재생기 0 · 막힘 0 · 위치가 다시 받기를 끝낸다',
+    async (order) => {
+      const { relistHls, generation } = await relistedOnce();
+      const created = fake.instances.length;
+      await sameHoleAgain(relistHls, order, true);
+      expect({
+        stopLoads: relistHls.stopLoad.mock.calls.length,
+        generation: current().state.source.generation,
+        created: fake.instances.length - created,
+        phase: current().state.phase,
+      }).toEqual({
+        stopLoads: 0,
+        generation,
+        created: 0,
+        phase: { kind: 'rewind', pendingNext: null },
+      });
+      expect(checkedEvents().filter((event) => event === 'dvr-segment-gone')).toHaveLength(1);
+    },
+  );
+
+  it.each<[HoleOrder, string]>([
+    ['before-paint', '(가) 위치 사건 전'],
+    ['after-paint', '(나) 위치 사건 뒤'],
+  ])('대조 %s · %s: 같은 조각 404 · gap 거짓 → 가로채 막힘 · 세대 그대로', async (order) => {
+    const { relistHls, generation } = await relistedOnce();
+    await sameHoleAgain(relistHls, order, false);
+    expect(relistHls.stopLoad).toHaveBeenCalledTimes(1);
+    expect(current().state.source.generation).toBe(generation);
+    expect(current().state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
+    expect(checkedEvents().filter((event) => event === 'dvr-segment-gone')).toHaveLength(2);
   });
 });

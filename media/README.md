@@ -194,7 +194,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `FS_OP_TIMEOUT` | `5s` | 개별 파일시스템 호출(stat·프로브) 하나의 상한. 멈춘 파일시스템에서 메인 루프가 이 시간 이상 붙잡히지 않게 한다 — 넘긴 파일은 건너뛰고 다음 재스캔이 회수한다 |
 | `SCAN_COLLECT_BUDGET` | `45s` | 전수 수집(디렉토리 순회)의 soft 예산. 넘기면 걷은 데까지만 처리하고 절단한다. 정지 판정(`scan_collect_stalled`)은 이 값의 배수로 따로 본다 |
 | `REWIND_SEED_ENABLED` | `true` | 되감기 컷오프 **주조** 스위치(계약 6항 2단계). 켜져 있으면 각 스트림의 첫 자격 유입이 컷오프 하나를 만든다. M4 ⓒ 부터 기본 켜짐이다(kty 결정 2026-09-02 — 발행 층과 함께 켠다). **명시 `false` 가 롤백 손잡이다** — 컷오프를 새로 만들지 않는다. 빈 값은 기본값(켜짐)으로 읽힌다. 되돌려 꺼도 **이미 기록된 컷오프는 유효하고 그 스트림은 계속 발행된다** — 판정은 이 플래그가 아니라 장부를 읽는다 |
-| `REWIND_GAP_RUN_END` | `false` | 정체 사다리 L3 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차에서 업로드 정체 GAP 이 조각 번호로 이어서 셋 서면(약 12초) 그 회차를 `ending`(사유 `gap_run`)으로 끝낸다. 재접속 창 안의 다음 조각은 새 회차를 열어 이어받는다. **켜는 조건**: 운영 송출의 종단 지연 실측(F-7)과 S3 짧은 장애 주입 실측이 둘 다 참이고 kty 가 승인한 뒤다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값(Go `strconv.ParseBool` 규칙)은 기동 거부다 |
+| `REWIND_GAP_RUN_END` | `false` | 정체 사다리 L3 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차에서 업로드 정체 GAP 이 조각 번호로 이어서 셋 서면(약 12초) 그 회차를 `ending`(사유 `gap_run`)으로 끝낸다. 재접속 창 안의 다음 조각은 새 세션을 열어(같은 `round_id` — 계승) 이어받는다. **켜는 조건**: 운영 송출의 종단 지연 실측(F-7)과 S3 짧은 장애 주입 실측이 둘 다 참이고 kty 가 승인한 뒤다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값(Go `strconv.ParseBool` 규칙)은 기동 거부다 |
 | `REWIND_STALL_SEAL` | `false` | 정체 사다리 L2′(정체 마감) 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차의 되감기 목록이 5.5초(D_act = 갱신 의무 9초 − 엣지 1.5초 − 발행 예산 2초) 넘게 자라지 못했는데 GAP 도 설 수 없을 때(다음 조각이 없음 · 부적격 · 직전 GAP 실패) 목록 끝에 `#EXT-X-ENDLIST` 를 붙여 봉인하고, 봉인이 서면 그 회차를 `ending`(사유 `stall_seal`)으로 끝낸다(kty 결정 2026-10-27). 재접속 창 안의 다음 조각은 새 세션을 열어(같은 `round_id` — 봉인한 세션을 계승 · 4D 표식이 있어 사유가 `intentional` 이면 계승 · 합류하지 않는다) 그 새 세션의 목록으로 이어받는다. **켜는 조건**은 `REWIND_GAP_RUN_END` 와 같다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
 | `PLAYBACK_ROUND_KEYS` | `false` | 새 꼴(회차) ③ 키 쓰기 스위치(POK-525 — 기본 끔). 켜면 회차가 있는 세션의 조각 키를 `dvr/{stream}/{round}/seg/{NNNNNN}.m4s` 로 쓰고, 끄면 회차가 있어도 옛 꼴 `dvr/{stream}/seg/{NNNNNN}.m4s` 로 쓴다. 회차가 없는 세션(M6 전)은 켜도 옛 꼴이다. 켬에서 회차 성분이 키 문법(URL 안전 문자 · 128자 이하)을 못 지나면 그 조각의 ③ 키만 비고(NULL) 옛 꼴로 물러서지 않는다. 키 파생이 실패하면 `playback_key_derive_failed` WARN 한 줄(stream_id · round_id · seq · err)을 남긴다 — 같은 스트림 · 같은 회차의 실패는 첫 번만 알린다. 키를 읽는 쪽(업로드 · 목록 발행)은 스위치와 무관하게 두 꼴을 다 받는다. 기동 때만 읽는다(바꾸려면 사이드카를 다시 만든다). prod 상자는 `/etc/pokeclip-media/sidecar.env` 한 줄이 값을 주고, 로컬 compose 는 `true` 다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
 | `REWIND_PLAYBACK_READ_MAX` | `2` | 상태 전달 읽기(되감기 상태판에 넘길 스트림 상태를 장부에서 읽는 일)의 전체 동시 상한(POK-196 M6 · kty 결정 2026-10-29). 읽기 하나가 인덱서 풀 연결 하나를 쥐므로, 일제 종료 때 스트림 수만큼 읽기가 겹쳐 핫 경로와 풀을 다투지 않게 묶는다. 넘친 스트림은 버리지 않고 다음 보류 틱에 다시 읽는다. 이미 읽고 있는 스트림의 새 표지는 상한과 무관하게 그 읽기에 합쳐진다. 양의 정수만 받는다(0 · 음수 · 문자는 기동 거부) |
@@ -335,6 +335,17 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
 *   **한계 — CDN 캐시본:** 만료는 장부 행과 S3 객체만 지우고 CloudFront 캐시를
     무효화하지 않는다. 서명 쿠키가 살아 있는 시청자에게는 지운 조각 · 목록의
     엣지 캐시본이 캐시 TTL 동안 더 보일 수 있다.
+*   **한계 — 방송 가운데만 만료(POK-551):** 만료 구간은 clip 이 준 방송의
+    벽시계 구간으로 정하고 장부의 사슬 · 회차 경계를 보지 않는다(계약-세그먼트
+    인덱스 6-2). 그래서 방송 가운데만
+    만료되면 남은 VOD 문서(회차 문서 · 지금의 사슬 문서 둘 다)가 지운 조각을
+    가리킨 채 `mode:vod` 로 나갈 수 있다. 만료를 prod 에 연결하기 전에
+    POK-551 로 막는다 — 만료를 prod 에 연결하는 변경은 POK-551 보다 먼저
+    들어가면 안 된다. 지금 prod 에는 `CLIP_INTERNAL_URL` 을 넣는 공급 경로가
+    없다(`infra/media-host/bin/start-media.sh` 가 상자 스위치 파일
+    `sidecar.env` 에 `PLAYBACK_ROUND_KEYS` 한 줄만 받는다). prod 공급 경로와
+    끄기 스위치도 POK-551 몫이다. 그런 문서를 찾는 법은 아래 「회차 VOD 문서
+    구멍 진단」 이다.
 *   **첫 적용 때 쓰기 정지:** M6 운영 SQL(`stream_schema.sql` ·
     `20_schema.sql`)의 인덱스는 `CREATE INDEX` 이고 `CONCURRENTLY` 가 아니다.
     처음 적용하거나 인덱스가 빠진 DB 에서는 인덱스를 만드는 동안 그 표의 쓰기가
@@ -422,22 +433,55 @@ NULL 도 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바�
 **계약9 발행(POK-196 M6-8) — 방송 생명주기 이벤트.** 사이드카가 회차마다
 `broadcast.started` · `broadcast.ended` 를 SNS FIFO 주제로 낸다. 장부 트랜잭션이
 outbox 표(`broadcast_lifecycle_outbox`)에 행을 넣고, 발행 고루틴이 커밋된 행만
-2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 4C resolve 설정 · 운영
-권한(`30_grants.sql` 의 outbox 네 권한)이다. 하나라도 빠지면
-`lifecycle_disabled` 한 줄(`reason` = `no_topic` · `no_streams` 는 INFO,
-`no_resolver` · `privilege` · `privilege_check` · `sns_client` · `assembly` 는
-ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도 넣지 않는다. 켜지면
-`lifecycle_started` 가 나온다.
+2초마다 낸다. 켜는 조건은 주제 ARN · 허용 목록 · 4C resolve 설정이다. 하나라도
+빠지면 `lifecycle_disabled` 한 줄(`reason` = `no_topic` · `no_streams` 는 INFO,
+`no_resolver` 는 ERROR)을 남기고 outbox 행을 넣지 않는다. 셋이 차 있으면 게이트가
+켜진다. 발행기 준비(`30_grants.sql` 의 outbox 네 권한 · SNS 클라이언트 · 조립)가
+실패하면 발행기 없이 강등하고, 30초마다 다시 준비해 회복하면 쌓인 행을 늦게
+낸다. 적재 여부는 강등 사유와 무관하게 적재 직전의 권한 판정(outbox SELECT ·
+INSERT · UPDATE)이 정한다 — 참이면 강등 중에도 행을 넣고, 거짓이면 아래 「적재
+건너뜀」 이다. 기동마다 ERROR `lifecycle_degraded` 기동 줄이 하나 나온다 — 준비되면
+`value=0` `reason=ready`, 실패면 `value=1` 과 `reason` = `privilege_check` ·
+`privilege` · `sns_client` · `assembly` 가운데 하나다. 회복하면 `value=0`
+`reason=recovered` 가 더 나온다. 마지막 줄이 발행기 준비 상태다(outbox 쓰기 가능
+여부는 아니다). 준비될 때(기동 · 회복) `lifecycle_started` 도 INFO 로 나온다.
+판정은 아래 「계약9 운영 판정」 절을 따른다.
 
 *   **streamerId:** started 의 `streamerId` 는 위 4C resolve 설정으로 얻는다.
     resolve 설정이 비면 모든 회차를 버리게 되므로 발행을 켜지 않는다(`reason`
     = `no_resolver`). 그래서 응답기 모드 뒤에 켠다.
-*   **완전히 끌 때는 진행 중 회차가 없을 때 끈다.** 주제나 허용 목록을 비우면
-    ended 판정 문장도 보내지 않는다. 그러면 started 만 나간 회차의 ended 는
-    영영 적재되지 않는다. 허용 목록을 좁히기만 하면 생기지 않는다.
-    게이트가 꺼진 사이드카가 같은 DB 에 함께 떠 있어도 같은 누락이 생긴다(꺼진
-    쪽이 회차를 닫으면 ended 를 넣지 않는다). 발행 설정이 찬 사이드카가 재기동
-    때 강등돼도 같다 — 후속 수정 전까지 운영 감시.
+*   **적재 건너뜀:** 켜진 게이트가 적재 직전 권한 판정에서 거짓이면 그 적재를
+    건너뛰고 ERROR `lifecycle_enqueue_skipped` 를 남긴다 — 그 역할의 outbox
+    권한을 확인한다. 그 사이 시작된 방송의 started 는 되살릴 수 없어
+    `event_type=broadcast.started` 줄은 아래 「계약9 운영 판정」 의 통과 조건에
+    든다. ended 쪽 줄(`event_type=broadcast.ended`)은 완결 여부 · 허용 목록과
+    무관하게 완결 평가(회차 닫힘 · 세션 ended 전이)마다 남으므로 한 회차에 여러
+    줄일 수 있다.
+*   **보정:** 보정 후보는 started 가 살아 있고(abandoned 아님), 회차가 닫혀
+    구성원 전원이 ended 이고, ended 가 없으며, 회차 시작 뒤 1392시간 안인
+    회차다. 같은 DB 의 발행 사이드카(발행기가 떠 있는 사이드카 — 마지막
+    `lifecycle_degraded` 가 `value=0`)가 이를 보정으로 거둔다(WARN
+    `lifecycle_ended_repaired`). 30초마다 시도하고 주기당 20회차를
+    거둔다 — 정상 전제에서 후보가 20 이하면 완결 뒤 길어야 약 35초, N 개면 약
+    ⌈N/20⌉ × 30초다. 회차 시작 뒤 1392시간(58일)이 지난 회차는 만료와 겹치지
+    않게 보정하지 않는다 — 그런 회차를 꺼진 · 권한 없는 사이드카가 닫았으면
+    ended 가 나가지 않는다(D4). 여러 발행 사이드카가 같은 회차를 동시에 보정하면
+    `UNIQUE (round_id, sequence)` 경합으로 드물게 23505 가 날 수 있다. 무해하다
+    — 보정 쪽에 WARN `lifecycle_store_failed` 한 줄이 남고 다음 주기에 회복한다.
+    한계: 외부 트랜잭션이 어느 회차의 started 행을 오래 잠그면, 보정은 주기마다
+    그 회차의 넣기에서 시한(10초)까지 기다린 뒤 WARN `lifecycle_store_failed`
+    (`stage=repair`)를 남기고 그 주기를 멈춘다. 잠금이 이어지는 동안 뒤 회차가
+    밀리고, D1 이 그것을 드러낸다. 시한을 넘겨 포기한 넣기가 드물게 서버에서
+    나중에 커밋되면 ended 는 정상으로 나가지만, 그 회차에는 WARN
+    `lifecycle_store_failed` 만 남고 `lifecycle_ended_repaired` 는 남지 않는다.
+*   **끌 때:** 끄더라도 회차는 닫힌다. 발행 사이드카가 하나도 없으면 ended 도
+    생기지 않고, 위 1392시간 경계 안에 다음 발행 사이드카가 뜨면 보정으로
+    나간다.
+*   **공존:** 발행 사이드카(위 「보정」 의 정의 — 마지막 `lifecycle_degraded` 가
+    `value=0` 인 사이드카 · 그 줄을 내지 않는 옛 판은 보정하지 않는다)가 같은
+    DB 에 하나라도 떠 있으면, 옛 판 · 꺼진 사이드카가 닫은 회차도 보정
+    후보(위 「보정」)라면 보정으로 ended 가 나간다. 꺼진 사이드카가 연 회차는
+    started 가 없어 ended 도 없다.
 *   **기동 때만 읽는다.** 바꾸려면 사이드카를 재기동한다.
 
 | 이름 | 기본값 | 의미 |
@@ -450,6 +494,125 @@ ERROR)을 남기고 발행만 끈다 — 꺼지면 outbox 행도 넣지 않는�
 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자, 음수, 파싱 불가한 기간)은
 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
+
+### 계약9 운영 판정 — D1 · D2 · D4
+
+배포 뒤 계약9 발행이 ended 를 잃지 않는지는 사이드카 로그의 `lifecycle_degraded`
+줄과 장부 질의 셋으로 판정한다(`LOG_LEVEL=error` 에서 성립한다).
+사이드카 로그는 JSON 한 줄씩이다. 이 절의 `칸=값` 은 JSON 칸을 뜻한다 — 예를
+들어 `"msg":"lifecycle_enqueue_skipped"` 이고 `"event_type":"broadcast.started"`
+인 줄을 센다. `칸=값` 을 글자 그대로 grep 하면 0줄이라 거짓 통과가 된다.
+
+*   **단위 · 기동 줄:** 단위는 사이드카 컨테이너 하나다. 기동 줄은
+    `lifecycle_degraded` 가운데 `value=1` 이거나 `value=0` `reason=ready` 인
+    줄이다. 발행 의도가 켜진 컨테이너는 기동마다 기동 줄을 정확히 하나 남기므로
+    기동 줄 수가 기동 횟수 N 과 같아야 한다. 어긋나면(그 줄 전에 죽은 기동)
+    불통과다. env 를 바꾸면 컨테이너를 다시 만들어 id 가 달라지므로 N 을 다시
+    센다. `lifecycle_degraded` 줄이 하나도 없으면 발행 의도가 꺼진 컨테이너다 —
+    그런데 ERROR `lifecycle_disabled reason=no_resolver` 가 있으면 설정
+    결함이므로 불통과로 적는다.
+*   **통과:** 기동 줄 수 = N 이고, 그 컨테이너의 마지막 `lifecycle_degraded` 가
+    `value=0` 이며, 그 컨테이너 로그에 ERROR `lifecycle_enqueue_skipped`
+    `event_type=broadcast.started` 가 0줄이고, D1 = 0 · D2 = 0 · D4 완결 = 0 이다.
+    마지막 줄이 `value=1` 이면 `reason` 과 무관하게 불통과다.
+*   **started 건너뜀 줄:** 적재 직전 판정이 거짓이어서 건너뛴 started 는 장부에
+    흔적이 남지 않아 D1 · D2 · D4 로는 보이지 않고 되살릴 수 없다. 그래서 이
+    줄로만 판정한다 — 기동 때 권한이 없다가 권한을 주어 회복한 컨테이너
+    (`value=0 reason=recovered` 로 끝남)와 실행 중에 권한을 잃은 컨테이너도
+    이 줄이 남으므로 불통과다. 이 줄은 개시 트랜잭션이 커밋되기 전에 남으므로,
+    그 트랜잭션이 롤백돼 회차가 열리지 않은 경우에도 남는다. 그래서 이 불통과도
+    유실 확정이 아니라 조사를 시작하라는 보수적 신호다 — 그 줄의 `round` 회차가
+    장부에 있는지부터 본다. ended 쪽 건너뜀
+    줄(`event_type=broadcast.ended`)은 보정이 거둘 수 있어 판정에 쓰지 않는다.
+*   **문턱 10분:** 상한에서 끌어낸 값이 아니라 운영 선택값이다. 정상 전제에서
+    회복 지연은 후보가 20 이하면 길어야 약 35초, N 개면 약 ⌈N/20⌉ × 30초다.
+    D1 · D2 > 0 은 유실 확정이 아니라 조사를 시작하라는 신호다 — 보정 창
+    안이면 원인이 풀리는 대로 보정 · 발행이 거둔다. D4 완결 > 0 은 손 복구로
+    회부한다. D4 미완결 > 0 은 불통과가 아니라 장기 방송이 있다는 정보다.
+
+세 질의는 읽기 전용이고 모두 started 행이 살아 있는 회차에서 출발한다. 그래서
+정상 정리(ended 발행 7일 뒤 두 행을 함께 지움)된 회차는 어디에도 들지 않는다.
+판정 스크립트는 건수만 읽는다. 표지 사이의 블록은
+`internal/broadcast/opsquery_pg_test.go` 가 그대로 뽑아 실행해 보정 술어 · 보정
+창과 맞춰 본다 — 고치면 그 시험을 돌린다.
+
+**실행 신분과 시한.** 마스터 계정으로 돌리지 않는다 — 마스터에는
+`statement_timeout` 이 없다. 지금 두 표를 읽을 수 있는 운영 역할은 쓰기 권한도
+가진 `media_indexer` 뿐이라(SELECT 전용 감시 역할은 아직 없다), 쓰기는 트랜잭션으로
+막는다. 세 질의는 `BEGIN READ ONLY` 트랜잭션 안에서 시한 셋을 건 뒤 돌리고,
+끝나면 바로 닫는다 — 열린 트랜잭션은 그 표의 DDL 을 줄 세운다. 예시 값은
+`SET LOCAL statement_timeout = '10s'` · `SET LOCAL lock_timeout = '3s'`(선례
+`60_round_frozen.sql`) ·
+`SET LOCAL idle_in_transaction_session_timeout = '30s'`(선례 janitor 연결 설정
+`cmd/janitor/main.go`)다. `media_indexer` 의 역할
+기본 `statement_timeout` 은 60초다(`10_roles.sql`). 그 역할의 연결 상한 20
+(`10_roles.sql`)은 사이드카와 나눠 쓴다 — 연결 하나로 돌리고 바로 끊으며, A · B
+상자가 겹쳐 합이 20 인 Media 교체 창(아래 「교체 창의 여유는 0 이다」)에는
+돌리지 않는다.
+
+**D1 밀린 끝 알림(정상 0).** 보정 후보(`internal/broadcast/repair.go` 의
+`missingEndedSQL`)와 같은 술어에, 완결 시각(구성원의 `round_closed_at` ·
+`ended_at` 가운데 늦은 값)이 10분보다 오래됐다는 조건을 더한 회차 수다.
+
+<!-- lifecycle-ops:D1:begin -->
+
+```sql
+SELECT pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox o
+ WHERE o.sequence = 1 AND o.state <> 'abandoned'
+   AND o.occurred_at >= pg_catalog.now() - interval '1392 hours'
+   AND NOT EXISTS (SELECT 1 FROM broadcast_lifecycle_outbox e
+                    WHERE e.round_id = o.round_id AND e.sequence = 2)
+   AND EXISTS (SELECT 1 FROM stream_sessions s
+                WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id)
+   AND NOT EXISTS (SELECT 1 FROM stream_sessions s
+                    WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id
+                      AND (s.state <> 'ended' OR s.round_closed_at IS NULL))
+   AND (SELECT pg_catalog.max(GREATEST(s.round_closed_at, s.ended_at))
+          FROM stream_sessions s
+         WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id)
+       < pg_catalog.now() - interval '10 minutes';
+```
+
+<!-- lifecycle-ops:D1:end -->
+
+**D2 밀린 발행(정상 0).** 만든 지 10분이 넘은 pending 행 수다. ERROR
+`lifecycle_backlog` 와 같은 사실을 장부로 보므로, 떠 있는 발행기가 없어도 센다.
+
+<!-- lifecycle-ops:D2:begin -->
+
+```sql
+SELECT pg_catalog.count(*)
+  FROM broadcast_lifecycle_outbox
+ WHERE state = 'pending' AND created_at < pg_catalog.now() - interval '10 minutes';
+```
+
+<!-- lifecycle-ops:D2:end -->
+
+**D4 창 밖 미종결(정상 0 · 0).** started 가 살아 있는데 ended 가 없고, 회차
+시작이 보정 창(1392시간) 밖인 회차 수다. 구성원이 모두 ended 이고 닫혔으면 D4
+완결(보정이 다시 보지 않는 포기 확정), 아니면 D4 미완결로 센다. D4 는 감시
+순간의 장부만 본다 — 만료가 회차 세션을 모두 지우면 started 행도 함께 지워져
+세지 않으므로 감시 주기는 하루보다 짧게 둔다.
+
+<!-- lifecycle-ops:D4:begin -->
+
+```sql
+SELECT pg_catalog.count(*) FILTER (WHERE r.complete) AS d4_complete,
+       pg_catalog.count(*) FILTER (WHERE NOT r.complete) AS d4_open
+  FROM (SELECT EXISTS (SELECT 1 FROM stream_sessions s
+                        WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id)
+               AND NOT EXISTS (SELECT 1 FROM stream_sessions s
+                                WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id
+                                  AND (s.state <> 'ended' OR s.round_closed_at IS NULL)) AS complete
+          FROM broadcast_lifecycle_outbox o
+         WHERE o.sequence = 1 AND o.state <> 'abandoned'
+           AND o.occurred_at < pg_catalog.now() - interval '1392 hours'
+           AND NOT EXISTS (SELECT 1 FROM broadcast_lifecycle_outbox e
+                            WHERE e.round_id = o.round_id AND e.sequence = 2)) r;
+```
+
+<!-- lifecycle-ops:D4:end -->
 
 ### DB 연결 성공 줄 `db_connected` (POK-311)
 
@@ -581,7 +744,7 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
 
 | 상태 | 회차 경로에서 언제 |
 |---|---|
-| 200 | 그 회차에 송출 중인 세션이 있다(`mode:"live"` · `url` null) · 끝남 대기(`ending`) · 다시보기 있음(`vod` — url 과 범위는 그 회차 VOD 목록) · 다시보기 없음(`ended`) |
+| 200 | 그 회차에 송출 중인 세션이 있다(`mode:"live"` · `url` null) · 끝남 대기(`ending`) · 다시보기 있음(`vod` — url 과 범위는 그 회차 VOD 목록 · 사슬이 여럿이면 회차 전체 문서 — 아래 「회차 단위 VOD (POK-549)」) · 다시보기 없음(`ended`) |
 | 404 | DB 도 그 회차를 모른다 — 없는 회차 · 다른 스트림의 회차 · 60일 만료 |
 | 503 | DB 읽기 실패 · 2초 시한 초과 · 전역 예산(동시 2 · 초당 20) 초과 · 장부 값을 응답으로 옮기지 못함(아래 `control_round_lookup_invalid`) — 같은 회차 키로 동시에 온 요청은 lookup 하나의 답을 함께 받는다(singleflight). 503 은 내부 1초 캐시에 저장하지 않으며, 예산이 허용된 다음 miss 에서 다시 읽는다 |
 
@@ -621,6 +784,270 @@ IP 속도 제한(WAF 후속)이다.
 *   **로컬에서 바이트까지 보기:** 기본 compose 는 발행이 꺼져 있어 모든 스트림이 404 다.
     [`infra/compose/rewind-minio/`](../infra/compose/rewind-minio/README.md) 를 덧붙이면 MinIO 로
     발행하고 `ready:false` → `true` 전이와 url 200 을 볼 수 있다.
+
+## 회차 단위 VOD (POK-549)
+
+사슬이 둘 이상인 회차는 다시보기(VOD) 문서 하나가 회차 전체를 덮는다. 사슬이
+하나인 회차는 지금과 키 · 본문 · 시각이 바이트까지 같다. 핵심은 마지막
+사슬의 VOD 동결이 렌더하는 범위와 키다. 그것을 받치는 발행 전 검사(S5 끊김
+표시 대조) · 깨우기 · 새 신호 · `session_freeze` · `session_freeze_retry` 의
+`scope` 속성도 새로 생겼다. DDL · 권한 · 제어면 판정식 SQL · 엣지 규칙 · 만료
+코드는 그대로다.
+
+### 회차 단위 VOD 용어
+
+*   **회차:** 시청자가 방송 한 번으로 보는 단위다. id 는 머리 세션 id 이고
+    계약9 `streamId` 다.
+*   **사슬:** 계승(`inherits_session` — 끊긴 송출을 앞 세션에 이어 붙이는 것)
+    으로 이어진 세션들이다. TD 분할, 또는 재접속 창(300초) 안의 init 불일치
+    재접속(합류)으로 끊기면 같은 회차 안에 새 사슬이 생긴다. 재접속 창을
+    넘긴 재접속은 계승도 합류도 하지 않고 새 회차를 연다
+    (`session/round_rule.go` `openFromPrevious` 7행).
+*   **마지막 사슬 · 앞 사슬:** 회차 최신 세션이 든 사슬이 마지막 사슬이고,
+    나머지가 앞 사슬이다.
+*   **종국:** `vod_state` 가 `frozen` · `frozen_with_gaps` · `freeze_failed`
+    가운데 하나가 되어 더는 바뀌지 않는 상태다.
+*   **회차 대기:** 회차 문서를 아직 만들 수 없어 기다리는 재시도다. 장애로
+    세지 않는다.
+*   **물러섬:** 회차 범위를 포기하고 마지막 사슬 범위 · 사슬 키로 동결하는
+    것이다.
+*   **빠른 길 · 깨우기:** 빠른 길은 30초 정산 스캔을 기다리지 않고 세션 하나의
+    행을 곧바로 다시 읽어 다음 걸음을 내는 길이다. 깨우기는 어떤 걸음의 결과로
+    다른 세션(마지막 사슬)을 빠른 길에 올리는 일이다.
+*   **문서 구멍:** 확정된 VOD 문서 범위 `[vod_first_seq, vod_last_seq]` 안의
+    조각 행이 지워져, 문서가 없는 조각을 가리키는 상태다.
+
+### 회차 단위 VOD 가 바꾸는 것
+
+| 회차 모양 | 문서 키 | 문서 범위 | 언제 서나 |
+|---|---|---|---|
+| 사슬 하나(M6 전 세션 · 앞 사슬에 컷오프 이상 행이 없는 회차 포함) | `vod/{streamId}/{머리 세션}/index.m3u8` — 지금과 같다 | 그 사슬 | 지금과 같다(회차 닫힘을 기다리지 않는다) |
+| 사슬 여럿 | `vod/{streamId}/{roundId}.round/index.m3u8` | 회차 전체 | 회차 닫힘과 앞 사슬 전원의 VOD 종국 뒤 |
+
+*   회차 문서는 사슬 경계마다 `#EXT-X-DISCONTINUITY` 를 단다.
+    `#EXT-X-DISCONTINUITY-SEQUENCE` 는 0 이고, `#EXT-X-TARGETDURATION` 은 회차
+    세션 값의 최댓값이며, `#EXT-X-MAP` 은 세션이 바뀌는 줄마다 선다. 발행 전
+    검사(`rewind.Validate`)가 VOD 에서 끊김 표시 줄을 목록 값과 정확히
+    대조하고, 세션이 바뀌는 줄과 끊김 표시가 짝인지 본다.
+*   문서를 쓰는 쪽은 마지막 사슬이다. 확정되면 마지막 사슬 회원 전원의
+    `vod_s3_key` 가 회차 키이고 `vod_first_seq` 가 회차 첫 seq 다. 앞 사슬의
+    사슬 문서와 장부 값은 그대로 남는다.
+*   제어면 판정식은 바뀌지 않는다. 회차 최신 세션의 `vod_*` 를 읽으므로 회차
+    경로 응답이 회차 문서 url 과 회차 시작 `firstPdt` 를 낸다.
+*   `.round` 접미는 사슬 키와 겹치지 않는다 — 세션 id 에는 점이 없다. 성분
+    규칙(`[A-Za-z0-9._-]` 1–128자)은 그대로라 prod 엣지와 로컬 엣지
+    (`infra/compose/rewind-minio/dvr-edge.conf`)가 그대로 받는다.
+
+### 회차 VOD 동결 시점과 대기
+
+마지막 사슬이 VOD 동결 걸음에 오면 판정(`publish` 의 `decideScope`)이 범위를
+정한다. 위에서부터 처음 맞는 줄을 쓴다. 「앞 회원」은 회차 세션 가운데 마지막
+사슬 밖에 있고 렌더할 행(컷오프 이상)이 있는 세션이다.
+
+| 줄 | 조건 | 결과 |
+|---|---|---|
+| 1 | 세션에 회차가 없다(M6 전) | 사슬 범위 |
+| 2 | 이 사슬이 회차 최신 세션을 담지 않는다(앞 사슬이다) | 사슬 범위 |
+| 3 | 앞 회원이 없다 | 사슬 범위 — 회차 닫힘을 기다리지 않는다 |
+| 4 | 회차가 아직 열려 있다 | 회차 대기 `round_open` |
+| 5 | 앞 회원 가운데 VOD 가 종국 전인 것이 있다 | 회차 대기 `front_pending` |
+| 6 | 앞 회원 가운데 `freeze_failed` 이거나 문서 없는 종국이 있다 | 물러섬(아래) |
+| 7 | 그 밖 | 회차 범위 · 회차 키 |
+
+*   회차는 최신 세션이 끝났고 의도적 종료 · 멈춘 시각 표식 · 마지막 조각
+    끝에서 360초(300초 + 60초) 가운데 하나가 참일 때 닫힌다
+    (`internal/index/round_close.go`).
+*   회차 대기는 정산 대기(`unsettled`)와 같게 다룬다. 실패 횟수를 세지 않고
+    로그도 남기지 않는다(판정부의 `publish.IsSettleWait`). GAP 포기를 정하는
+    정산 창 15분은 그대로다. 회차 대기 자체에는 상한이 없고, 30분 경보
+    (`session_vod_round_wait_long`)만 있다.
+*   꼬리 행을 잠근 트랜잭션 안에서 장부를 다시 읽어 한 번 더 판정한다. 그새
+    회차 범위가 아니게 됐으면 등재 없이 그 결과(대기 또는 사슬 범위)를 따른다.
+*   **깨우기 세 사건:** 다음 사건이 기다리는 마지막 사슬을 빠른 길로 깨운다.
+    1.  앞 사슬 VOD 종국(동결 섰음 · VOD 실패 확정 · 빈 동결).
+    1.  앞 사슬 `ended`(phase 4).
+    1.  30초 회차 스캔이 회차를 닫음.
+
+    깨우기는 재시도 예약(4초)을 앞당기지도 지우지도 않는다
+    (`rewind_finalize.go` 의 `wakeFast`).
+
+### 회차 VOD 물러섬
+
+물러서면 같은 호출 안에서 마지막 사슬 범위 · 사슬 키(`vod/{streamId}/{마지막
+사슬 머리}/index.m3u8`)로 동결한다. 앞 사슬 문서와 합쳐 POK-549 전과 같은
+모양이 된다.
+
+| 까닭(`reason`) | 언제 | `cause` |
+|---|---|---|
+| `front_freeze_failed` | 앞 회원 VOD 가 `freeze_failed` 다 | 빈 값 |
+| `front_no_document` | 앞 회원이 문서 없이 종국에 닿았다 | 빈 값 |
+| `round_render_failed` | 회차 경로가 결정적으로 실패했다 | `too_large`(행 수 · 본문 4MiB 상한) · `validate`(발행 전 검사 위반) · `foreign_session`(범위 안 다른 회차 행) · `render`(렌더할 수 없는 입력) |
+
+*   일시 오류(DB · PUT · Head · 잠금 경합 · 장부 읽기)는 물러서지 않는다.
+    지금처럼 재시도(4초 × 3 → VOD 실패 확정)다.
+*   그 호출의 결과(`Result` · `Reason`)는 이어서 돈 사슬 동결의 것이다.
+    마지막 사슬이 아직 정산 창 안이면 `unsettled` 로 와서 장애로 세지 않는다.
+    회차 쪽 원인은 `cause` · `err` 에만 남는다.
+*   물러선 세션은 기억해 두고 다음 걸음부터 회차 판정 없이 사슬 범위로
+    간다(`FreezeChainVOD`). 기억은 메모리라, 사이드카가 재기동하면 회차 경로를
+    한 번 더 시도하고 경보도 한 번 더 난다.
+*   본문 상한(`MaxVODBodyBytes` 4MiB — 4초 조각 약 36,000개)을 넘는 회차는
+    마지막 사슬 범위로 물러선다. 사슬 하나로도 넘으면 지금의 한계 그대로다.
+
+### 회차 VOD 신호
+
+| 신호 | 등급 | 언제 | 속성 |
+|---|---|---|---|
+| `session_freeze` | INFO | VOD 확정(기존) | `scope=chain\|round` 를 더했다. 다른 writer 의 확정을 채택했으면 그 문서의 범위다 |
+| `session_freeze_retry` | WARN | 장애 재시도(기존). 회차 대기는 남기지 않는다 | `scope=chain\|round` 를 더했다(VOD 재시도 가운데 범위 판정 전에 끝난 것 — 회차 판정 재료 읽기 실패 — 과 DVR 축 재시도에는 scope 가 없다). `reason` = 물러섰으면 이어서 돈 사슬 동결의 사유, 물러서지 않았으면 그 동결(회차 경로 포함)의 사유. 회차 쪽 결정적 원인은 `session_vod_round_fallback` 의 `cause` 에만 |
+| `session_vod_round_fallback` | WARN | 물러섬 — 세션당 한 번(재기동하면 한 번 더). 결과가 섰음 · 대기 · 재시도 어느 것이든 낸다 | `session_id` · `round` · `reason` · `cause` · `err` |
+| `session_vod_round_wait_long` | WARN | 회차 대기가 그 세션 `ending` 뒤 30분(정산 창 15분 × 2)을 넘김 — 세션당 한 번 | `session_id` · `round` · `wait=round_open\|front_pending` |
+| `finalize_round_wake_failed` | WARN | 깨우기 질의 오류 — 정산 스캔이 거둔다 | `session_id` · `round` · `err` |
+| `session_settle_abandoned` | WARN | 정산 창 만료로 GAP 포기(기존). 회차 경로는 마지막 사슬 범위에 GAP 줄이 있을 때만 낸다 | `session_id` · `stream_id` |
+
+### 회차 VOD 추가 지연 상한
+
+사슬 여럿인 회차는 기준 시각 t₀ 부터 아래 상한 안에 회차 동결을 시작한다. t₀
+는 「앞 사슬 전원 VOD 종국」과 「회차 닫힘」 가운데 늦은 사건의 시각이다(그
+사건이 깨우기를 낼 때만 — 못 내는 경우는 아래 한계 표).
+
+```text
+추가 지연 ≤ T_self + R + 1초 + 10초 + M × T_ledger + K × T_vod
+```
+
+*   `T_self`: t₀ 에 마지막 사슬 걸음이 이미 돌고 있으면 그 걸음 하나다.
+*   `R`: 마지막 사슬이 일시 오류 재시도를 기다리는 중이면 남은 예약
+    시간이다(4초 이하).
+*   1초는 루프 틱(holdTick)이다. 10초는 빠른 길의 꼬리 정착 대기 상한이고,
+    캐시에 그 세션의 미정착 행이 있을 때만 든다.
+*   `M × T_ledger`: 같은 스트림 동시 상한이 1 이라 먼저 도는 장부 걸음 수(앞
+    사슬 수 + 그 스트림의 다른 대기 걸음)에 장부 걸음 하나를 곱한다.
+    `T_ledger` 실측은 없다.
+*   `K × T_vod`: 전역 VOD 동시 상한이 1 이라 먼저 도는 다른 동결 수에 동결
+    하나를 곱한다. `T_vod` 실측은 1,730조각 회차에서 48–107ms 다(로컬 PG17 ·
+    `-race` · 8회).
+*   평시(재시도 · 정착 대기 · 다른 동결 없음 · 앞 사슬 하나)는 t₀ + 1–2초 +
+    `T_ledger` + `T_vod` 다.
+*   정산 스캔 크기(50행)와 적체에 기대지 않는다. 회차 `ended`(계약9)도 이만큼만
+    늦는다 — 지금도 회차 `ended` 는 앞 사슬 phase 4(정산 창 끝)를 기다린다.
+
+### 회차 VOD 알려진 한계
+
+| 한계 | 언제 · 크기 | 보는 법 |
+|---|---|---|
+| 깨우기를 못 받음 | ① 이미지 교체 겹침 동안 옛 writer 가 앞 사슬 종국을 썼다 ② 마지막 사슬이 `round_open` 판정을 받은 뒤 4D(의도적 종료 신호)가 회차를 닫았고, 그때 앞 사슬이 이미 모두 종국이다(빈도 미확인) ③ 깨우기 질의가 실패했다. 셋 다 정산 스캔이 다시 돌아올 때까지 늦는다 — ⌈N/50⌉ × 30초 + K × T_vod(N 은 스캔이 고르는 정산 대상 행 수라 적체 때 수 분 이상) | 30분 뒤 재판정에서도 회차 대기(`round_open` · `front_pending`)이면 `session_vod_round_wait_long` — 그사이 대기가 풀렸으면 경보 없이 그 스캔에서 동결되므로 늦음 자체를 늘 잡지는 않는다 · ③ 은 `finalize_round_wake_failed` · ② 는 `intentional_end` 의 `effect=upgraded\|forwarded` 시각과 그 회차 `session_freeze scope=round` 시각의 차가 30초를 넘는다 |
+| 합류로 앞 사슬이 된 대기 사슬 | 사슬 A 가 마지막 사슬로 `round_open` 을 기다리는 동안 새 사슬 D 가 같은 회차에 합류하면 A 는 앞 사슬이 된다. A 를 깨우는 사건이 없어 A 의 사슬 문서가 스캔 재방문(⌈N/50⌉ × 30초)까지 늦고, D 의 회차 문서도 그만큼 `front_pending` 으로 늦는다 | 30분을 넘으면 `session_vod_round_wait_long wait=front_pending` |
+| 교체 겹침 고아 문서 | 이미지 교체가 겹칠 때 옛 writer 가 먼저 확정하면 지금 동작(마지막 사슬의 사슬 문서)이고, 새 writer 가 먼저면 회차 문서다. `vod_conflict` 는 없고, 확정되지 못한 쪽 문서 객체가 많아야 하나 남는다 | 없다 — 버킷 LIST 를 쓰지 않아 감사가 보지 않는다 |
+| 큰 회차의 장부 적재 시한 | 회차 장부 읽기(첫 적재 · 꼬리 잠금 아래 재독)는 10초(`index.TxnDeadline`) 안에 끝나야 한다. 넘으면 일시 오류라 물러서지 않고 재시도하고, 3회면 마지막 사슬 VOD 가 실패로 확정된다(회차 경로는 `ended` — 다시보기 없음). 실측은 1,730조각 동결 전체 48–107ms 뿐이고 적재 상한(약 6만 행) 근처는 재지 않았다 | `session_freeze_retry`(`reason=ledger_failed` 등) 세 줄 뒤 `session_freeze_failed` |
+| 회차 번호 없는 옛 세션이 머리인 마지막 사슬 | 회차 기능(M6) 전 세션(`round_id` 없음)이 마지막 사슬의 머리이고 그 회차에 앞 사슬이 있으면, 그 세션 조각은 회차 범위에 들지 않는데 그 세션 VOD 도 회차 문서를 가리킨다. 지금 개시 규칙(`session/round_rule.go` — 회차 없는 세션을 이으면 새 회차를 연다 · 계승은 직전 세션만)에서는 그런 사슬에 앞 사슬이 생기지 않아 도달하지 않는다 | 개시 규칙을 바꾸는 변경이 이 줄을 다시 본다 |
+| 방송 가운데만 만료 | 위 「60일 만료」 의 한계 줄이다. 만료가 prod 에 연결돼 있지 않아 지금 prod 영향은 0이다 | 아래 「회차 VOD 문서 구멍 진단」 |
+
+### 회차 VOD 문서 구멍 진단
+
+지운 조각을 가리키는 `ended` VOD 문서를 찾는 읽기 전용 질의가
+`internal/index/vod_holes.go` 의 상수 `VODDocumentHolesSQL` 하나다. 제품 코드는
+부르지 않는다. PG 시험(`vod_holes_pg_test.go`)이 원본을 그대로 돌리고, 이
+README 는 본문을 베끼지 않는다. 돌리는 때는 만료를 prod 에 연결하기 전 —
+POK-551 착수 때 한 번이다.
+
+*   열은 `stream_id` · `session_id` · `vod_s3_key` · `vod_first_seq` ·
+    `vod_last_seq` · `missing`(문서 범위 안에서 빠진 행 수)이다.
+*   한 문서는 사슬 회원 전원이 같은 키 · 범위를 들어, 구멍 하나에 회원 수만큼
+    행이 나온다. `vod_s3_key` 로 묶어 읽는다.
+*   `state = 'ended'` 만 본다. 문서를 확정했지만 phase 4 전(`ending`)인 창은
+    못 본다. 빈 동결과 조회 제외 표시(`expired_at`)가 있는 문서는 빠진다.
+*   머리만 지운 문서처럼 제어면이 이미 거르는 모양도 보고한다 — 사람이
+    거른다.
+
+**prod 에서 돌리는 꼴.** prod DB 는
+[prod 런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md)
+「M6 읽기 질의」 로만 읽는다. 흐름 · 승인 · 기록 · 가림 규칙과 신분(마스터
+연결에서 표 주인 `media_owner` 로 바꿔 읽음)은 그 절을 그대로 따른다. 아래
+블록은 저장소 루트에서 원본 상수를 뽑아, 읽기 전용 · 시한 · 검색 경로를 건 질의
+파일을 만들고 `make_read` 로 보낸다.
+
+```shell
+{
+  printf '%s\n' 'SET TRANSACTION READ ONLY;' \
+    "SET LOCAL statement_timeout = '30s';" \
+    "SET LOCAL lock_timeout = '3s';" \
+    'SET LOCAL search_path = pg_catalog, public;' \
+    'SET ROLE media_owner;'
+  sed -n '/^const VODDocumentHolesSQL = `$/,/`$/p' \
+    media/internal/index/vod_holes.go | sed '1d;$s/`$/;/'
+  printf '%s\n' 'RESET ROLE;'
+} >"${payload}/holes.sql"
+make_read holes "${payload}/holes.sql" && send_step holes
+```
+
+*   첫 줄이 `SET TRANSACTION READ ONLY;` 인 까닭: `make_read` 가 그 줄을
+    확인하고, `psql -1` 이 연 트랜잭션에 걸린다. 쓰기 문장이 섞여도 서버가
+    거부한다(SQLSTATE 25006). `BEGIN READ ONLY; … ROLLBACK;` 꼴은 `make_read`
+    가 첫 줄에서 멈춘다 — psql 을 손으로 연 로컬 DB 에서만 쓴다.
+*   `SET LOCAL` 셋은 이 트랜잭션에만 걸린다. `-1` 없이 `-f` 로 돌리면
+    `SET TRANSACTION` · `SET LOCAL` 이 경고만 내고 효과가 없다.
+*   문장 상한 30초에 걸리면 질의가 취소될 뿐 아무것도 바뀌지 않는다(SQLSTATE
+    57014). 회당 시간은 미확인이다(문서 범위 행 수에 비례한다).
+*   `search_path` 를 `pg_catalog, public` 으로 고정해, 질의 속 표 이름이 다른
+    스키마의 같은 이름으로 가로채지지 않게 한다.
+*   0행이면 구멍이 없다. 행이 나오면 POK-551 에 남긴다.
+
+### 회차 VOD 재생 실측
+
+prod 회차 하나(TD 분할 · 사슬 둘)의 경계 부근 조각 seq 1600–1660 을 읽기
+전용으로 받았다. 회차 문서와 같은 꼴(경계에 DISCONTINUITY 있음)과 교정용
+「없음」 판 두 벌을 헤드리스 브라우저에서 재생했다(2026-11-07 · hls.js 1.7.3 ·
+1.7.4 · Chromium 158 · Chrome 157 · WebKit 27.2).
+
+| 판별 | 결과 |
+|---|---|
+| 자극 도달(H.264 · AAC 를 풂 · 첫 조각 buffered > 0) | 세 브라우저 모두 참 |
+| ① 「없음」 판에서 경계 구멍 · 멈춤(측정 교정) | 판정불가 — 「없음」 판에서도 28.46초 구멍이 나지 않았다. hls.js 가 initPTS 를 다시 잡아 흡수한다(`src/remux/passthrough-remuxer.ts` 의 `isInvalidInitPts`) |
+| ② 「있음」 판에서 buffered 가 이어지고 경계 + 10초를 벽시계 15초 안에 지남 | 통과 — hls.js 6/6 · 네이티브 3/3 · 9.5–9.9초. 경계의 0.41초 구멍은 hls.js 가 건너뛴다 |
+| ③ 경계 조각(seq 1627)에서 `FRAG_CHANGED` cc 가 0→1 | 통과 6/6 |
+| ④ 경계 조각 PDT 05:11:00.342Z · 웹 환산 오차 한 조각 미만 | 통과 6/6 — 영상 첫 표본 기준 0 · 목록 위치 기준 409.8ms |
+| ⑤ video-dev/hls.js#8064(fMP4 끊김마다 시각 어긋남 누적) 재현 | 미재현 — 경계 다섯 번 합성 판에서 오프셋 333.4–333.5ms 일정 8/8 |
+
+*   ① 이 교정되지 않아, 측정이 결함을 잡는다는 것은 보이지 못했다. 재생 완료
+    조건 전체가 닫힌 것은 아니다.
+*   미확인: 실 Safari · 화면 있는 Chrome.
+*   별건(범위 밖): 같은 회차 seq 1624 조각에서 Chromium 계열이 복호 오류로
+    멈췄다(있음 · 없음 판 모두 · WebKit 은 통과). prod 조각 자체의 H.264
+    결함이라 이 변경과 무관하다. 화면 있는 Chrome(하드웨어 복호)은
+    미확인이다.
+
+### 회차 VOD 되돌리기
+
+*   `git revert -m 1 <머지 커밋>` 뒤 이미지를 다시 배포한다. 스위치는 없다.
+*   회차 키로 확정된 행은 옛 코드에도 불투명 키라 판정식 · 감사가 그대로
+    돈다(키로 고르고 Head · sha 만 견준다).
+*   대기 중이던 사슬 여럿 회차는 옛 코드가 마지막 사슬의 사슬 문서로
+    동결한다.
+*   깨우기 · 물러섬 기억은 메모리라 남는 상태가 없다. 만료는 이 변경이 바꾸지
+    않아 판 사이 비호환이 새로 생기지 않는다.
+*   이미지 교체가 겹치는 동안의 모양은 위 한계 표 「교체 겹침 고아 문서」다.
+
+### 회차 VOD 출처
+
+*   설계 · 계획: POK-549 작업 산출물 — 설계 r4(1.1 · 2.2 – 2.5 · 3.2 · 8 ·
+    9절) · 계획(C7 · 5절 K17 · K18 · K20 · K31 · 7절).
+*   결정: kty K-a · K-b · K-c · K-d(2026-11-04 — 물러섬 둘 · 회차 키 · VOD
+    한정 검사) · 만료 일 분리 (가)(2026-11-04) · POK-551 은 v1 조건이 아니고
+    기한은 2027-01-02 전(2026-11-06).
+*   실측: 렌더 골든 E1 · 재생 E2(2026-11-07) · `T_vod`(2026-11-08 — 커밋 4
+    개발 보고) · 진단 질의 실행 꼴(2026-11-08 — 일회용 postgres:17 · 합성 표:
+    `transaction_read_only on` · `statement_timeout 30s` · `search_path
+    pg_catalog, public` · `current_user media_owner` · 같은 머리 뒤 DELETE 는
+    `cannot execute DELETE in a read-only transaction`).
+*   코드: `internal/rewind/publish/vod_round.go` · `vod.go` · `freeze.go` ·
+    `internal/rewind/validate.go` · `internal/index/round_ledger.go` ·
+    `vod_holes.go` · `cmd/segment-indexer/rewind_finalize.go` ·
+    `finalize_work.go`.
+*   외부: hls.js 1.7.3 소스 `src/remux/passthrough-remuxer.ts` ·
+    video-dev/hls.js#8064.
+*   설계와 다르게 적은 것: 설계 r4 8절은 `session_freeze_retry` 를 INFO 로
+    적었으나 코드(`rewind_finalize.go` 의 `noteStep`)는 WARN 이라 코드대로
+    적었다.
 
 ## 사이드카 DB 계정 media_indexer 권한
 
@@ -945,7 +1372,8 @@ MediaMTX 녹화 파일(영상 1 + 소리 6)
 #### 시간 도장 — mtxi 에 보정값을 더한다
 
 ③ 조각의 도장은 **그 조각의 mtxi + 보정값**이다(`internal/indexer/chain.go` `advanceChain`).
-평소 보정값은 0 이라 조각 사이 빈틈이 없다. 보정값이 바뀌는 때는 둘이다(`stitchOffset`).
+평소 보정값은 0 이라 조각 사이 빈틈이 없다. 회차를 열 때 첫 mtxi 가 음수면 0 이 아닌
+보정값으로 시작한다(아래 사슬 규칙 첫째). 보정값이 바뀌는 때는 둘이다(`stitchOffset`).
 
 - **리셋** — 녹화기 표식이 바뀌거나(송출자 재접속·녹화기 드리프트 리셋) mtxi 가 뒤로 가면,
   직전 조각의 **먼저 끝난 트랙 끝**에 잇는다. 늦게 끝난 쪽에 이으면 소리 빈틈이 남는다(실측).
@@ -962,7 +1390,11 @@ MediaMTX 녹화 파일(영상 1 + 소리 6)
 전진한다. 규칙은 넷이다.
 
 - 회차가 바뀌면 보정값 0 에서 새로 연다. 그래서 TD 분할(목표 길이 초과로 회차를 가른 것)로
-  연결 도중 열린 회차의 첫 도장은 0 이 아니라 그 시점의 mtxi 다.
+  연결 도중 열린 회차의 첫 도장은 0 이 아니라 그 시점의 mtxi 다. 다만 그 행의 mtxi 가
+  음수면 보정값 −mtxi 로 열어 첫 도장을 0 에 두고, 그 보정값은 리셋·구멍이 바꾸기 전까지
+  이어진다(`startChain`). 새 연결에서 소리가 영상보다 먼저 시작하면 첫 조각의 mtxi 가
+  음수가 되는데(prod 실측 −44ms), 생산자는 음수 도장을 거부해 그 조각의 ③ 이 올라가지
+  않았다. 구멍 판정은 보정 전 원래 mtxi 를 기준으로 한다.
 - 회차에 귀속되지 않은 행은 사슬을 움직이지 않고, ③ 요청도 없다.
 - mtxi 를 못 읽은 행은 직전 보관값이 있으면 기대값(직전 도장 + 장부 길이)에 고정해 올리고
   `segment_indexed` 로그에 `mtxi_pinned=true` 를 싣는다. 보관값이 없으면(회차 첫 행·재기동 뒤
@@ -1005,7 +1437,8 @@ init 작업은 꼬리 크기 불일치에 `upload_size_mismatch` 경고만 남�
 
 #### 무결성 4항과 재시도 부류
 
-재포장은 아래 넷 중 하나면 산출 없이 실패한다. 부분 산출이 없으므로 잘린 ③ 이 굳지 않는다
+재포장은 아래 표의 무결성 4항(위 네 행)이나 요청 경계 오류(`ErrNegativePos`) 가운데 하나면
+산출 없이 실패한다. 부분 산출이 없으므로 잘린 ③ 이 굳지 않는다
 (`internal/playback/producer.go`). 재시도는 부류별이다(`axis_body.go` `produce`·`sameInputFailsAgain`).
 
 | 오류 | 뜻 | 처리 |
@@ -1014,8 +1447,12 @@ init 작업은 꼬리 크기 불일치에 `upload_size_mismatch` 경고만 남�
 | `ErrMissingTracks` | 영상 1 + 소리 1 을 남길 수 없다 | 첫 시도에서 ③ `failed` + 키 백오프 |
 | `ErrEmptyTrack` | 남긴 트랙에 샘플이 없다 | 첫 시도에서 ③ `failed` + 키 백오프 |
 | `ErrInputTooLarge` | 입력이 16MiB 를 넘는다(읽기 전에 거른다) | 첫 시도에서 ③ `failed` + 키 백오프 |
+| `ErrNegativePos` | 도장 위치가 음수다 — 요청 경계 | 첫 시도에서 ③ `failed` + 키 백오프 |
 
-- `ErrMalformedInput` 을 뺀 셋은 같은 입력이면 늘 같은 결과라 사다리(1+2+4초)를 태우지 않는다.
+- `ErrNegativePos` 는 무결성 항이 아니라 요청 경계 오류다. 입력이 아니라 요청이 틀렸다. 인덱서는
+  첫 mtxi 가 음수인 회차 첫 조각을 0 에 열므로(위 시간 도장 절) 평소에는 나지 않는 방어선이다. 나면 로그
+  `upload_failed` 의 `err` 에 「pos 가 음수다」와 그 도장 값이 실린다.
+- `ErrMalformedInput` 을 뺀 넷은 같은 입력 · 같은 요청이면 늘 같은 결과라 사다리(1+2+4초)를 태우지 않는다.
   하나뿐인 업로드 워커가 조각마다 7초씩 묶이면 모든 스트림의 ②·③ 이 큐에서 넘친다. S3 에 닿지
   않았으므로 브레이커(연속 실패 차단기) 판정에도 넣지 않는다(`failUnproducible`).
 - init 도 같은 규칙이다. 다만 init 에는 실패 CAS 가 없어 장부는 그대로 두고 백오프만 건다.
@@ -1154,9 +1591,9 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 
 | 한계 | 영향 | 수리안 후보 |
 |---|---|---|
-| 한 회차 안에서 **보정값이 0 이 아니게 된 사건**(송출자 재접속 리셋·녹화기 드리프트 리셋·같은 녹화기 안 구멍)과 **사이드카 재기동이 둘 다** 일어난 경우. 사건 뒤에 재기동하면 보정값을 잃고, 재기동해 있는 동안 사건이 나면 사건 자체를 못 본다. 재기동 뒤 스위퍼 재생성은 표가 없어 거부한다(GAP). mtxi 는 MediaMTX 가 살아 있어도 송출자 연결이 바뀌면 0 으로 돌아간다(0.728초 재접속 실측) | 재기동 지점에서 도장이 뒤로 가 그 회차 되감기가 그 지점에서 깨질 수 있다 — 규격상 끊김 표시가 필요한 "시간 도장 순서 변경"인데 달지 못한다. 회차가 바뀌면 복구된다. **둘 중 하나만 일어난 회차는 도장 역행이 없다.** 다만 재기동만 일어나도 재기동 전 실패분은 GAP 이 될 수 있다(셋째 행) | 마지막으로 올린 ③ 의 첫 도장을 읽어 역산한다(보정값 = 그 도장 − 그 조각의 mtxi). 회차당 객체 1개 |
+| 한 회차 안에서 **보정값이 0 이 아니게 된 사건**(송출자 재접속 리셋·녹화기 드리프트 리셋·같은 녹화기 안 구멍·회차 첫 조각 하한)과 **사이드카 재기동이 둘 다** 일어난 경우. 사건 뒤에 재기동하면 보정값을 잃고, 재기동해 있는 동안 사건이 나면 사건 자체를 못 본다. 재기동 뒤 스위퍼 재생성은 표가 없어 거부한다(GAP). mtxi 는 MediaMTX 가 살아 있어도 송출자 연결이 바뀌면 0 으로 돌아간다(0.728초 재접속 실측) | 재기동 지점에서 도장이 뒤로 가 그 회차 되감기가 그 지점에서 깨질 수 있다 — 규격상 끊김 표시가 필요한 "시간 도장 순서 변경"인데 달지 못한다. 회차가 바뀌면 복구된다. **둘 중 하나만 일어난 회차는 도장 역행이 없다.** 다만 첫 mtxi 가 음수라 하한으로 연 회차는 열 때부터 사건이 있는 셈이라, 재기동만으로도 그 지점 도장이 첫 mtxi 크기(실측 44ms)만큼 뒤로 간다. 그 크기는 송출기의 다중화 순서가 정하고 상류 녹화기는 첫 조각에 상한을 두지 않는다(상류 v1.21.3 소스 — 제품 핀 v1.21.1 포크와 대조함: 두 판의 차이는 드리프트 표본 길이 0 처리와 AAC LATM 설정 읽기뿐이고 원점 · 첫 조각 시작 규칙은 같다: 시간 원점은 트랙 공용 `TimeDecoder` 가 처음 푼 시각 · 첫 조각 시작은 먼저 쓴 표본의 시각 · 1초 상한 `maxBasetime` 은 둘째 조각부터) — 표본이 하나라 ADR-073 의 무오류 실측 범위(겹침 0.22초) 안에 늘 드는지는 미확인이다. 재기동만 일어나도 재기동 전 실패분은 GAP 이 될 수 있다(셋째 행) | 마지막으로 올린 ③ 의 첫 도장을 읽어 역산한다(보정값 = 그 도장 − 그 조각의 mtxi). 회차당 객체 1개 |
 | **mtxi 를 읽지 못한 조각**(상자 부재·해석 실패). 직전 보관값이 있으면 고정 도장(직전 도장 + 장부 길이)으로 올리고, 없으면(회차 첫 조각·재기동 뒤 첫 행) ③ 요청이 없다(GAP) | 고정 발행: 그 조각 자리에 실제 구멍·리셋이 있었다면 그 이음매만 장부 길이로 잇는다(최대 0.2초 소리 빈틈, 역행 없음). 다음 조각에서 술어가 잡는다. 첫 조각 GAP: 회차 첫 조각 하나를 잃는다. 실측상 판독 실패는 154조각 중 0건 | 못 읽는 파일의 트랙 끝은 알 수 없으므로 지금 처방이 상한이다 — 기록용 |
-| **재기동만 일어난 회차** — 재기동 전 조각의 업로드 실패분과 재기동 뒤 첫 행의 판독 실패는 표 줄이 없어 GAP 이 된다(도장 역행은 없다) | 그 조각들만 GAP. 실시간 경로는 영향이 없다. 컷오프가 있는 스트림이면 스위퍼가 파일이 지워질 때까지 그 행을 다시 집고 거부한다(잔량 잡음) | 표 영속화(재기동 복구 — kty 결정 B′ 로 범위 밖, 다음 버전) |
+| **재기동만 일어난 회차** — 재기동 전 조각의 업로드 실패분과 재기동 뒤 첫 행의 판독 실패는 표 줄이 없어 GAP 이 된다(도장 역행은 없다 — 첫 mtxi 가 음수라 하한으로 연 회차는 첫째 행에 든다) | 그 조각들만 GAP. 실시간 경로는 영향이 없다. 컷오프가 있는 스트림이면 스위퍼가 파일이 지워질 때까지 그 행을 다시 집고 거부한다(잔량 잡음) | 표 영속화(재기동 복구 — kty 결정 B′ 로 범위 밖, 다음 버전) |
 | **모호한 커밋** — INSERT 는 커밋됐는데 드라이버 오류로 실패처럼 보여 재시도하면 `InsertDuplicatePath` 로 끝나고 사슬 전진(`advance`)이 불리지 않는다. 다음 행이 seq 충돌 재적재를 거치면 사슬이 빠진 행을 비귀속 행처럼 보고 압축한다 | 빠진 행을 스위퍼가 표 줄(보정값 0)로 재생성하면 두 조각이 그 길이만큼 겹친다(회차 안·표시 없음). 창은 극히 좁다 | `TailRow` 에 회차 정보가 없어 구분할 수 없다 — 「빠진 행」 판정을 넣으려면 장부 재조회가 필요하다(다음 버전) |
 | 재기동 뒤 이어지는 회차에서 **접수된 init 작업이 확정 없이 끝나면**(CAS DB 오류·`Missing`·산출 실패(사다리 소진·즉시 실패 3종)·PUT 사다리 소진·브레이커 거부·EMFILE·stat 실패·S3 일시 장애 등) 그 프로세스의 `sessionInit` 은 되살아나지 않는다. 루프는 접수 여부만 알고, 장부에 init 이 이미 확정된 회차는 스위퍼 init 조회도 집지 않는다 | 그 회차 실시간 ③ 은 대조 보류(회차당 64개) 뒤 스위퍼 몫이다. ⓐ 단독 국면(컷오프 없음)에서는 올라가지 않고, ⓒ 가 스위치를 켠 뒤로는 스위퍼(30초 주기)가 회차 기대값을 실어 올린다 | 워커→루프 결과 통로(`Dirty`)로 미복원을 감지해 재요청한다 — ⓒ 착지 뒤 검토 |
 | **init 잔량이 M4 동안 영구히 남을 수 있다.** M4 에는 `ended` 전이가 없어 「`ended` 제외」가 실제로 거르는 것이 없고, init 조회·잔량 조건이 `init_uploaded_at IS NULL AND state <> 'ended'` 뿐이다(보존 창·컷오프 한정 없음). M3 로 운영된 DB 의 회차(init NULL), 원본이 1일 보존을 넘긴 회차, 확정 못 한 회차가 여기 쌓인다 | 데이터·재생 영향은 없고 경보 소음이다(M6 까지). 원본이 없는 회차는 프로세스가 뜰 때마다 `upload_file_missing` WARN + 격리되고, 30건을 넘으면 스위퍼 회차(30초)마다 `upload_backlog axis=init` WARN 이 난다 | **kty 회부**(계획 부기 31 후보와 같은 축): init 조회·잔량을 원본 보존 창(`start_wall_utc > now() − SessionTTL`)으로 한정하거나, 설계 5.5.4 2번 「컷오프-인지」를 init 에도 적용 〔추기 2026-09-25 — 부기 31 은 닫혔다(위 「M4 ⓐ 로 켜진 것과 아직 없는 것」의 추기). 이 회부는 그와 별개라 아직 판단 대기다.〕 〔추기 2026-10-19 — ⓒ 에서 닫혔다: kty K3 결정으로 한계 유지 · M6 이월(아래 「M4 ⓒ 에서 M5/M6 로 넘긴 것」 표).〕 |
@@ -1167,6 +1604,9 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 그 밖의 한계:
 
 - PDT(벽시계 축)와 도장(미디어 시계)은 이제 다른 축이다. 둘의 어긋남은 G7 skew 가 계속 본다.
+  다만 skew 는 인접 쌍의 차분이라, 회차를 열 때 정한 보정값(첫 mtxi 하한)처럼 회차 내내
+  같은 보정값은 상쇄돼 보이지 않는다. 회차 첫 조각의 mtxi 가 손상으로 큰 음수면 첫 도장이
+  0 이 되고 PDT 와 크게 어긋나도 잡는 신호가 없다(상한 근거가 없어 기록만 한다).
 - mtxi 는 상류가 문서화하지 않은 녹화기 내부 상자다(문서화 요청 `bluenviron/mediamtx#6153` 은
   종료됐다). 같은 연결 안에서 mtxi 는 미디어 시계 그 자체라(tfdt 2,770개 재기입 오차 0.000초
   실측 — ADR-042, 상류 재생 서버도 같은 축을 쓴다) 도장 재료로 쓴다. 배치(44바이트·판 0)가
@@ -1187,6 +1627,8 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
    연 회차는 계승하지 않아(`inherits_session` NULL) 첫 조각에 끊김 표시가 없고, 그 회차 목록은 앞 회차 조각
    없이 자기 조각과 MAP 으로 시작한다(목록 안에 회차 경계가 없다). 계획 부기 27 은 이 구절을 뺐다 — 아래
    ⓑ 절 「바꾸기 전에 이유를 볼 규칙」.〕
+   〔추기 2026-11-04 — 예외 하나: 회차 첫 조각의 mtxi 가 음수면 보정값 −mtxi 로 열어 첫 도장을
+   0 에 둔다(kty 확정 2026-11-04 — 생산자는 음수 도장을 거부한다). 양수면 위 원점 그대로다.〕
 2. **③ 생산 수단(부기 28 — kty 결정 E, ADR-057 문언 갱신 필요).** ADR-057 결정 1 과 clarifier
    Q2 는 `ffmpeg -map 0:v:0 -map 0:a:0 -c copy` 였다. 착수 실측에서 ffmpeg 산출은 조각마다 init 이
    달랐고(비트레이트 칸 12바이트) 파트를 다시 잘랐다. Go 재포장에는 두 문제가 원인째 없다.
@@ -1333,7 +1775,9 @@ M4 의 둘째 PR(ⓑ 렌더·경계)이 **무엇을 넣었고, 무엇을 일부�
   P 의 첫 조각이 창 안이면 S 목록에는 표시가 둘 선다. 장부 `is_discontinuity` 는 근거가 아니고 캐시 행에
   싣지도 않는다(아래 부기 29).
 - **계승 접두는 계승 회차에만, 직전 회차 하나만 싣는다**(캐시 `Playlist` 의 세션 필터). TD 분할 회차(계승
-  없이 base 만 복사)나 비계승 회차에 앞 회차 조각을 실으면 MAP 만 바뀌고 표시가 빠진다.
+  없이 base 만 복사)나 비계승 회차에 앞 회차 조각을 실으면 MAP 만 바뀌고 표시가 빠진다. 〔추기 2026-11-08 — 이
+  규칙은 DVR 목록의 것이다. VOD 회차 문서는 TD 분할 · init 불일치로 갈린 사슬을 한 문서에 이으므로 사슬 경계마다
+  `#EXT-X-DISCONTINUITY` 를 단다(POK-549 — 위 「회차 단위 VOD (POK-549)」).〕
 - **조각 URI 는 장부 `playback_s3_key` 그대로다** — 회차·티어 축이 없는 영구 URL 이다(ADR-020 「세그먼트당
   정규 URL 단일 고정」). 본문은 순수 HLS 다 — `#PC-` 같은 우리 용도의 줄·주석·빈 줄이 없고, 세대 정보는 본문
   밖 메타데이터로 간다(ⓒ). `#EXT-X-VERSION` 은 6 이다(아래 부기 32).
@@ -2065,7 +2509,7 @@ docker compose up -d --build segment-indexer
 | 넘긴 것 | 어디로 | 까닭 · 자리 |
 |---|---|---|
 | 시청 경로 — 되감기 URL 서빙 · CDN · 제어면의 라이브 전환 | M5 | M4 는 S3 발행까지다(부기 34 의 전제) 〔추기 2026-10-26 — M5 ②a 가 제어면 서버 · 상태 스냅숏을 넣었다(위 「되감기 상태 제어면」). CDN · 웹 전환은 M5 의 다른 PR 몫이다.〕 |
-| `ended` 전이 · ENDLIST 봉인 호출 · 동결 · VOD 전환 · 만료 | M6 | 종결 축이다(부기 34). `rewind.SealEndlist` 는 있지만 운영 코드에서 부르는 곳이 없다 〔추기 2026-10-27 — M6(POK-196)에서 닫혔다: 동결이 DVR 목록을 봉인하고(`publish` 의 `FreezeDVR` · `Endlist` — 여기서 `SealEndlist` 를 부른다) 꼬리 사슬 VOD 를 한 번 만든다(`FreezeVOD`). 회차가 닫히고 정산이 거두면 세션이 `ended` 가 된다. 제어면은 `vod` · `ended` 를 스트림 경로와 회차 경로로 낸다(위 「되감기 상태 제어면」). 만료는 위 환경 변수 절의 「60일 만료」 문단이다.〕 |
+| `ended` 전이 · ENDLIST 봉인 호출 · 동결 · VOD 전환 · 만료 | M6 | 종결 축이다(부기 34). `rewind.SealEndlist` 는 있지만 운영 코드에서 부르는 곳이 없다 〔추기 2026-10-27 — M6(POK-196)에서 닫혔다: 동결이 DVR 목록을 봉인하고(`publish` 의 `FreezeDVR` · `Endlist` — 여기서 `SealEndlist` 를 부른다) 꼬리 사슬 VOD 를 한 번 만든다(`FreezeVOD`). 회차가 닫히고 정산이 거두면 세션이 `ended` 가 된다. 제어면은 `vod` · `ended` 를 스트림 경로와 회차 경로로 낸다(위 「되감기 상태 제어면」). 만료는 위 환경 변수 절의 「60일 만료」 문단이다.〕 〔추기 2026-11-08 — POK-549 에서 VOD 단위가 회차로 넓어졌다: 사슬이 여럿이면 마지막 사슬의 동결이 회차 VOD 를 만들고, 사슬이 하나면 지금처럼 그 사슬 VOD 다(위 「회차 단위 VOD (POK-549)」).〕 |
 | L3(연속 GAP 셋 → ending) · 정산 창 만료 포기 · L2′ | M6 | 부기 10 〔추기 2026-10-27 — M6 에서 셋 다 닫혔다: L3(사유 `gap_run`)는 스위치 `REWIND_GAP_RUN_END` 로, L2′ 는 스위치 `REWIND_STALL_SEAL` 로 들어왔고 둘 다 기본은 끔이다(kty K5 — 위 환경 변수 표). L2′ 는 목록을 봉인하고 그 회차를 `ending`(사유 `stall_seal`)으로 끝낸다(kty 결정 2026-10-27). 정산 창 안에 거두지 못한 사슬은 포기 등재(`vod_abandoned`)로 닫는다.〕 |
 | G8-F · G8-E | M6 | 부기 7 〔추기 2026-10-26 — M6 에서 닫혔다: 동결 · 봉인 경로의 두 writer 시험이다(`internal/rewind/publish` 의 `freeze_pg_test.go` G8-F · `audit_pg_test.go` G8-E).〕 |
 | 의도적 종료와 끊김의 구분(계약4 4D 종료 신호 수신) | PR ⓒ 머지 뒤 별도 티켓 | kty 결정. `internal/session/registry.go` 의 `inheritable` 에 의도적 종료 갈래가 없다 |
@@ -2075,7 +2519,7 @@ docker compose up -d --build segment-indexer
 | 첫 목록 지연 경보(`rewind_ready_delayed`) | M5 | 재기동 ② 뒤 비계승 회차의 무경보(아래 한계 표) 〔추기 2026-10-26 — M5 ②a 에서 닫혔다: 송출 중(4.1 종료 판정과 같은 술어)인데 60초 넘게 준비 안 되면 WARN 이다.〕 |
 | 목록 객체의 Content-Type 값 | M5 회부 | 계획 7절 13 · 위 실측 기록 |
 | 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 〔추기 2026-10-26 — M5 ②c 에서 닫혔다: `SeedResult` → `InsertCommit`(INSERT 트랜잭션의 커밋 사실), `MarkPlaybackFailed` → `SettlePlaybackFailure`(사유에 따라 조각만 또는 조각과 회차를 함께 정리). 동작은 그대로다. 이 문서의 이관 기록 · 부기 표는 그때 이름 그대로 둔다.〕 |
-| 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 〔추기 2026-10-26 — M6 몫은 일부 닫혔다: VOD 는 사슬 전체를 덮는다. DVR 다단 접두의 1시간 상계는 한계 그대로다.〕 |
+| 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 〔추기 2026-10-26 — M6 몫은 일부 닫혔다: VOD 는 사슬 전체를 덮는다. DVR 다단 접두의 1시간 상계는 한계 그대로다.〕 〔추기 2026-11-08 — POK-549 뒤로 VOD 는 회차 전체를 덮는다(사슬이 하나면 그 사슬 전체).〕 |
 | 슬레이트 운영 프로비저닝 · 관측 등급 tier 상수 | 별도 마일스톤 | 계획 8절 kty 확정 (가) |
 | 라이브 창 설정(ADR-056 ③ 대체 예정) 28초 적용 | PR ⓒ 뒤 설정 소PR | 되감기 URL 가동 뒤 · 적용 게이트 셋을 통과한 뒤. 라이브 창은 28초(4초 × 7)로 확정됐다(kty 2026-10-19 — ADR-056 의 14초는 대체 예정). 바뀌는 값은 `hlsSegmentCount` 900 → 7 하나다 |
 | SDK 오류 본문 상한(S-1) · 운영 빌드 그래프 정적 단언(S-2) · HTTP 응답 헤더 상한 | PR ⓒ 밖 — kty 회부 | 계획 커밋 순서 7 — 선재 결함 · 범위 확장 |

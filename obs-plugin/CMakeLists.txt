@@ -71,6 +71,8 @@ target_sources(
     src/retry-policy.hpp
     src/server-env.cpp
     src/server-env.hpp
+    src/srt-latency.cpp
+    src/srt-latency.hpp
     src/srt-target.cpp
     src/srt-target.hpp
     src/srt-url.cpp

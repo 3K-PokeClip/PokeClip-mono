@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   calls: [] as string[],
   /** 이벤트 통로가 보낼 글. null이면 통로가 없다(붙지 못한다) */
   sse: null as string | null,
+  /** 시점별 기록 창구의 답(POK-462) */
+  timeline: { segments: [] as unknown[], truncated: false },
 }));
 vi.mock('@/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/client')>();
@@ -26,6 +28,7 @@ vi.mock('@/api/client', async (importOriginal) => {
           appliedOffsetMs: 0,
           buckets: [{ start: '2026-10-31T00:00:00.000Z', chats: 3, donations: 0 }],
         });
+      if (pathname.endsWith('/broadcast-info/timeline')) return json(api.timeline);
       // 통로를 시험할 때는 정기 조회가 답하지 않는다: 통로로 온 방송 정보만 남는다
       if (pathname.endsWith('/broadcast-info'))
         return api.sse !== null
@@ -43,7 +46,7 @@ vi.mock('@/api/client', async (importOriginal) => {
           }),
         );
       }
-      // 그 밖(이벤트 통로 · 연동 · 시점 기록)은 없다: 훅은 다음 주기에 다시 묻는다
+      // 그 밖(이벤트 통로 · 연동)은 없다: 훅은 다음 주기에 다시 묻는다
       throw new Error(`unexpected ${pathname}`);
     },
   };
@@ -236,5 +239,26 @@ describe('useLiveMockState: 통로로 온 방송 정보', () => {
       errors.mock.calls.some((args) => String(args[0]).includes('Cannot update a component')),
     ).toBe(false);
     errors.mockRestore();
+  });
+
+  it('첫 관측이 카테고리 사진을 싣고 오면 시점별 기록을 바로 다시 읽는다: 기록의 다음 주기를 기다리지 않는다(POK-552)', async () => {
+    api.timeline = { segments: [], truncated: false };
+    const ev = {
+      time: new Date(Date.now() - 5_000).toISOString(),
+      title: '제목',
+      tags: [],
+      category: 'talk',
+      viewers: 3,
+      platform: 'CHZZK',
+      categoryImageUrl: 'https://img/talk.png',
+    };
+    api.sse = `event: broadcast-info\ndata: ${JSON.stringify(ev)}\n\n`;
+    const { unmount } = render(<Body />, {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('3'));
+    // 화면을 열 때 한 번 + 통로가 사진을 알려 한 번. 짧은 주기(5초)는 waitFor 시간(1초) 안에 오지 않는다
+    await waitFor(() => expect(count('/broadcast-info/timeline')).toBe(2));
+    unmount();
   });
 });

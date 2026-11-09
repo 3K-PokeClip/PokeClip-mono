@@ -75,8 +75,13 @@ type finalizer struct {
 	gauge    map[string]int           // 사유 → 마지막으로 낸 게이지 값
 	reading  map[string]bool          // 도는 상태 읽기(스트림)
 	readMax  int                      // 도는 상태 읽기의 전체 상한
-	// seen 은 이번 스캔 한 바퀴에서 본 회차다 — 바퀴가 끝나면 보지 않은 회차의 메모리를 지운다.
+	// seen 은 이번 스캔 한 바퀴에서 본 회차다 — 바퀴가 끝나면 보지 않은 회차의 메모리를 지운다. 걸음 결과가 온 회차도
+	// 센다 — 결과보다 먼저 시작한 스캔 쪽이 그 회차를 보지 못했어도 결과가 적은 기억(물러섬 · 경보 · 횟수)이 그 바퀴 끝에 남는다.
 	seen map[string]bool
+	// vodChainOnly 는 회차 경로에서 물러선 적 있는 세션 → 그 까닭이다 — 다음 걸음부터 stepChain 을 낸다(POK-549 설계 r4 2.4).
+	vodChainOnly map[string]string
+	// waitWarned 는 회차 대기 오래 기다림 경보(session_vod_round_wait_long)를 이미 낸 세션이다(세션당 한 번).
+	waitWarned map[string]bool
 }
 
 // fastEntry 는 빠른 길 대기 하나다 — due 부터 행을 읽고, deadline 전에는 꼬리가 정착했을 때만 읽는다.
@@ -93,6 +98,7 @@ func newFinalizer(o finalizerOptions) *finalizer {
 		running: map[string]finalize.Step{}, loading: map[string]bool{}, streamOf: map[string]string{},
 		held: map[string]string{}, gauge: map[string]int{},
 		reading: map[string]bool{}, readMax: o.PlaybackReadMax, seen: map[string]bool{},
+		vodChainOnly: map[string]string{}, waitWarned: map[string]bool{},
 	}
 }
 
@@ -106,12 +112,29 @@ func (f *finalizer) queueFast(streamID, sessionID string, due time.Time) {
 	f.fast[sessionID] = fastEntry{stream: streamID, due: due, deadline: due.Add(fastSettleWait)}
 }
 
+// wakeFast 는 깨우기를 빠른 길 예약과 병합한다(Y1). 재시도 예약(retryAt)보다 이르게는 읽지 않고, 그보다 늦지 않은
+// 예약이 이미 있으면 그대로 둔다 — 깨우기가 예약을 덮어써 retryAt 앞에서 읽고 버리는 일(dispatchStep 의 retryAt 검사)을 막는다.
+// 그대로 둬도 되는 근거는 불변식 I-fast(항목과 retryAt 이 둘 다 있으면 fast.due ≥ retryAt)다 — 모든 진입점이 지킨다.
+func (f *finalizer) wakeFast(streamID, sessionID string, now time.Time) {
+	due := now
+	if t, ok := f.retryAt[sessionID]; ok && t.After(due) {
+		due = t
+	}
+	if e, ok := f.fast[sessionID]; ok && !e.due.After(due) {
+		return
+	}
+	f.queueFast(streamID, sessionID, due)
+}
+
 // forget 은 끝난(또는 ending 이 아닌) 회차의 메모리를 지운다.
 func (f *finalizer) forget(id string) {
 	delete(f.attempts, id)
 	delete(f.retryAt, id)
 	delete(f.fast, id)
 	delete(f.held, id)
+	delete(f.vodChainOnly, id)
+	delete(f.waitWarned, id)
+	delete(f.seen, id) // 스캔 오류로 바퀴 끝이 미뤄지는 동안 끝난 회차 id 가 쌓이지 않게
 }
 
 // inFlight 는 도는 정산 작업 수다(행 읽기 포함 — 동시 상한이 센다).
@@ -209,13 +232,16 @@ func (r *rewindLoop) startScan(ctx context.Context) {
 	}
 }
 
-// scanDone 은 스캔 결과를 반영한다 — 닫은 회차의 상태 표지 · 커서 · 포화 게이지 · 행마다 판정과 배차 · 보류 게이지.
+// scanDone 은 스캔 결과를 반영한다 — 닫은 회차의 상태 표지 · 깨우기 · 커서 · 포화 게이지 · 행마다 판정과 배차 · 보류 게이지.
 func (r *rewindLoop) scanDone(ctx context.Context, res publish.Result, rerun bool, now time.Time) {
 	f := r.fin
 	f.scanning = false
 	out, _ := res.Value.(finalScan)
 	for _, s := range out.closed {
 		f.inbox.Changed(s)
+	}
+	for _, w := range out.wake {
+		f.wakeFast(w.stream, w.session, now)
 	}
 	if out.err != nil && !contended(out.err) {
 		r.log.Warn("finalize_scan_failed", "err", out.err)
@@ -254,8 +280,8 @@ func (r *rewindLoop) noteSaturation(full bool) {
 	}
 }
 
-// pruneUnseen 은 스캔 한 바퀴에서 보지 않은 회차의 메모리를 지운다 — ended 가 됐거나 다른 writer 가 거둔 회차다. 도는 작업 ·
-// 빠른 길 대기가 있는 회차는 남긴다.
+// pruneUnseen 은 스캔 한 바퀴에서 보지 않은 회차(seen)의 메모리를 지운다 — ended 가 됐거나 다른 writer 가 거둔 회차다. 도는
+// 작업 · 빠른 길 대기가 있는 회차는 남긴다.
 func (r *rewindLoop) pruneUnseen() {
 	f := r.fin
 	for id := range f.attempts {
@@ -276,7 +302,7 @@ func (r *rewindLoop) pruneUnseen() {
 }
 
 // dispatchStep 은 행 row 의 다음 걸음을 판정해 낸다 — 도는 작업이 있거나 재시도 시각 전이면 건너뛴다. 보류는 게이지에만
-// 적고, 동시 상한에 걸리면 빠른 길에 올려 다음 틱에 다시 읽는다.
+// 적고, 동시 상한에 걸리면 빠른 길에 올려 다음 틱에 다시 읽는다. 회차 경로에서 물러선 적 있는 회차는 stepChain 으로 낸다.
 func (r *rewindLoop) dispatchStep(ctx context.Context, row index.EndingSession, now time.Time) {
 	f, id := r.fin, row.SessionID
 	if _, run := f.running[id]; run || f.loading[id] {
@@ -300,6 +326,9 @@ func (r *rewindLoop) dispatchStep(ctx context.Context, row index.EndingSession, 
 		return
 	}
 	step := f.work.step
+	if _, ok := f.vodChainOnly[id]; ok {
+		step = f.work.stepChain
+	}
 	if !r.lanes.Start(ctx, finalLanePrefix+id, func(ctx context.Context) publish.Result {
 		return publish.Result{Kind: publish.KindFinalize, Value: step(ctx, row, d)}
 	}) {
@@ -327,19 +356,24 @@ func (r *rewindLoop) finalLoadDone(ctx context.Context, res publish.Result, now 
 	}
 }
 
-// finalStepDone 은 걸음 결과를 반영한다 — 실패 횟수 · 신호 · 상태 표지 · 다음 걸음(섰으면 곧바로 다시 읽고, 재시도면 4초 뒤).
+// finalStepDone 은 걸음 결과를 반영한다 — 바퀴 생존(seen) · 실패 횟수 · 신호 · 물러섬 기억 · 상태 표지 · 다음 걸음(섰으면 곧바로 다시 읽고,
+// 재시도면 4초 뒤) · 회차 깨우기. 물러섬 기억은 noteStep 뒤에 적는다 — noteStep 이 기억 부재로 그 세션의 첫 물러섬을 안다.
 func (r *rewindLoop) finalStepDone(ctx context.Context, res publish.Result, now time.Time) {
 	f := r.fin
 	out, _ := res.Value.(finalStep)
 	id := out.row.SessionID
 	delete(f.running, id)
 	delete(f.streamOf, id)
+	f.seen[id] = true
 	if out.d.Step == finalize.StepFreezeVOD {
 		f.vod--
 	}
 	a := f.attempts[id].After(out.d.Step, out.out, f.opt.MaxAttempts)
 	f.attempts[id] = a
 	r.noteStep(out, a)
+	if out.freeze.Fallback != "" {
+		f.vodChainOnly[id] = out.freeze.Fallback
+	}
 	if out.hold != "" {
 		f.held[id] = out.hold
 	}
@@ -355,6 +389,12 @@ func (r *rewindLoop) finalStepDone(ctx context.Context, res publish.Result, now 
 	case out.progressed:
 		delete(f.retryAt, id)
 		f.queueFast(out.row.StreamID, id, now)
+	}
+	if out.wakeErr != nil {
+		r.log.Warn("finalize_round_wake_failed", "session_id", id, "round", out.wake.round, "err", out.wakeErr)
+	}
+	if out.wake.session != "" {
+		f.wakeFast(out.wake.stream, out.wake.session, now)
 	}
 	r.publishHeld()
 }
@@ -372,7 +412,8 @@ func stepAxis(s finalize.Step) string {
 
 // noteStep 은 걸음 신호다(설계 8절) — session_freeze(섰다 · INFO) · session_freeze_retry(재시도 · WARN · 정산 대기는 남기지
 // 않음) · session_freeze_failed(freeze_failed 종국 · ERROR) · session_settle_abandoned(정산 창 만료로 GAP 포기 · WARN) ·
-// finalize_step_failed(장부 문장 오류 · 경합 제외 · WARN).
+// finalize_step_failed(장부 문장 오류 · 경합 제외 · WARN) · 회차 신호 둘(noteRound — 결과 갈래보다 먼저: 회차 대기는 언제나
+// Unsettled 로 온다).
 func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 	axis, id, step := stepAxis(out.d.Step), out.row.SessionID, out.d.Step.String()
 	if out.err != nil {
@@ -381,10 +422,11 @@ func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 		}
 		return
 	}
+	r.noteRound(out)
 	switch out.out {
 	case finalize.OutcomeRetry:
-		r.log.Warn("session_freeze_retry", "axis", axis, "step", step, "session_id", id,
-			"attempt", attemptOf(out.d.Step, a), "reason", out.freeze.Reason, "err", out.freeze.Err)
+		r.log.Warn("session_freeze_retry", append([]any{"axis", axis, "step", step, "session_id", id,
+			"attempt", attemptOf(out.d.Step, a), "reason", out.freeze.Reason, "err", out.freeze.Err}, scopeAttr(out.freeze)...)...)
 		return
 	case finalize.OutcomeUnsettled:
 		return
@@ -395,13 +437,43 @@ func (r *rewindLoop) noteStep(out finalStep, a finalize.Attempts) {
 		r.log.Error("session_freeze_failed", "axis", axis, "step", step, "session_id", id, "reason", out.freeze.Reason)
 	case out.freeze.Result == publish.ResultFailed:
 		// 다음 단(StepFailVOD 등)의 session_freeze_failed 는 장부 문장이라 이 사유를 모른다 — 사유는 이 줄에만 남는다.
-		r.log.Info("session_freeze", "axis", axis, "step", step, "session_id", id, "result", out.freeze.Result,
-			"reason", out.freeze.Reason)
+		r.log.Info("session_freeze", append([]any{"axis", axis, "step", step, "session_id", id, "result", out.freeze.Result,
+			"reason", out.freeze.Reason}, scopeAttr(out.freeze)...)...)
 	case out.freeze.Result != "":
-		r.log.Info("session_freeze", "axis", axis, "step", step, "session_id", id, "result", out.freeze.Result)
+		r.log.Info("session_freeze", append([]any{"axis", axis, "step", step, "session_id", id, "result", out.freeze.Result},
+			scopeAttr(out.freeze)...)...)
 	}
-	if out.d.Abandon && out.freeze.Result == publish.ResultFrozenWithGaps {
+	// 회차 경로는 마지막 사슬 범위에 GAP 줄이 있을 때만이다(R19 — 앞 사슬 GAP 은 앞 사슬 동결 때 이미 냈다). 그 GAP 의 출처는
+	// 가리지 않는다 — 사슬 경로의 지금 조건과 같다(K26).
+	if out.d.Abandon && out.freeze.Result == publish.ResultFrozenWithGaps &&
+		(out.freeze.Scope != publish.ScopeRound || out.freeze.LastChainHasGaps) {
 		r.log.Warn("session_settle_abandoned", "session_id", id, "stream_id", out.row.StreamID)
+	}
+}
+
+// scopeAttr 는 session_freeze 의 scope 속성이다 — 범위를 정한 결과(VOD)에만 싣고, DVR · 판정 전에 끝난 결과(빈 값)는 싣지
+// 않는다.
+func scopeAttr(fo publish.FreezeOutcome) []any {
+	if fo.Scope == "" {
+		return nil
+	}
+	return []any{"scope", fo.Scope}
+}
+
+// noteRound 는 회차 신호다(설계 8절) — session_vod_round_fallback(사슬 범위로 물러섬 · 그 세션의 첫 물러섬만 — 물러섬 기억이
+// 아직 없을 때) · session_vod_round_wait_long(회차 대기가 ending 뒤 2 × 정산 창을 넘김 · 세션당 한 번). 시각은 행의 DB 시계
+// 칸이다.
+func (r *rewindLoop) noteRound(out finalStep) {
+	f, id := r.fin, out.row.SessionID
+	// !known 은 방어 가드다 — 지금은 기억이 있으면 stepChain 이라 Fallback 이 오지 않아 닿지 않는다(FB1 등가 변이). 기억 뒤에도
+	// 물러섬을 내는 경로가 생기면 WARN 을 세션당 한 번으로 묶는다.
+	if _, known := f.vodChainOnly[id]; out.freeze.Fallback != "" && !known {
+		r.log.Warn("session_vod_round_fallback", "session_id", id, "round", out.row.RoundID, "reason", out.freeze.Fallback,
+			"cause", out.freeze.FallbackCause, "err", out.freeze.FallbackErr)
+	}
+	if publish.IsRoundWait(out.freeze.Reason) && out.row.Now.Sub(out.row.EndingAt) > 2*index.SettleWindow && !f.waitWarned[id] {
+		f.waitWarned[id] = true
+		r.log.Warn("session_vod_round_wait_long", "session_id", id, "round", out.row.RoundID, "wait", out.freeze.Reason)
 	}
 }
 

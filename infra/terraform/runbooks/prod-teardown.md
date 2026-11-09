@@ -42,6 +42,9 @@ apply 로 만든 `prod/workers` · `prod/records` · `prod/edge` · `prod/media`
 bootstrap)는 이 런북이 내리지 않습니다. workers · platform · media 의 destroy
 plan 이 그 상태 출력을 읽으므로, 철거가 끝날 때까지 그대로 둡니다.
 
+network 의 인터페이스 엔드포인트(POK-408)만 내릴 때는 아래 「인터페이스
+엔드포인트」 입니다 — VPC 는 그대로 두고 엔드포인트 다섯 · SG 만 지웁니다.
+
 ## 승인 지점
 
 | 지점 | 언제 | kty 가 보는 것 |
@@ -737,6 +740,26 @@ terraform -chdir="${media}" import "${param_addr}" "${param_name}"
 [value]` 라 apply 가 되살린 값을 머리 줄로 덮지 않습니다. 보관 파일이
 없거나 비었으면 apply 하지 않고 kty 에게 보고합니다.
 
+## 인터페이스 엔드포인트
+
+`prod/network` 의 인터페이스 엔드포인트 다섯과 엔드포인트 SG 를 내리는
+순서입니다. 명령 · 판정 함수 · 관문의 정본은 [prod/network
+README](../prod/network/README.md) 「되돌리기 2단계 — 엔드포인트 철거」 이고,
+여기에는 순서와 왜만 적습니다.
+
+| 순서 | 무엇 | 왜 |
+|---|---|---|
+| 1 | workers 를 `render_egress_via_endpoints = false` 로 apply(또는 workers 철거) | render 이그레스가 NAT 로 돌아가 엔드포인트 SG 를 참조하는 규칙이 사라집니다. render 는 엔드포인트 말고는 AWS 로 가는 길이 없습니다 |
+| 2 | private DNS 끄기(`interface_endpoint_private_dns = false` · README 「되돌리기 1단계」)와 그 복구 완료 조건 | DNS 를 켠 채 엔드포인트를 지우면 캐시 · 연결이 지워진 ENI 로 가는 실패 창이 platform · media 전체에 생깁니다. 교정(삭제 관문 (나) 의 앞몫)은 DNS 를 끄기 전에 합니다 |
+| 3 | 삭제 관문 — (가) 참조 0 · (나) 교정된 `BytesProcessed` 60분 0 | 판정불가는 통과가 아닙니다. 풀리지 않으면 VPC 호출자 재기동 뒤 다시 재거나, kty 회부 뒤 ENI 를 보존합니다(DNS 끈 채 둠) |
+| 4 | `interface_endpoint_services = []`(또는 PR-N revert)로 network apply | plan 요지는 일곱 줄이 모두 `delete` 입니다 |
+
+순서를 어기고 render 가 엔드포인트 SG 를 참조하는 채 4 를 apply 하면 막히지
+않습니다. 엔드포인트 다섯과 인그레스 규칙이 먼저 지워져 render 가 그 순간 AWS
+에 닿지 못하고, SG 삭제만 `DependencyViolation` 으로 시한까지 다시 시도하다
+실패해 network 가 「엔드포인트 없음 · SG 남음」 으로 반쯤 적용됩니다. 그때는
+다시 돌리지 말고 kty 에게 보고합니다(「부분 실패」).
+
 ## 부분 실패
 
 *   destroy apply 가 중간에 실패하면 다시 돌리기 전에 오류를 kty 에게
@@ -774,6 +797,8 @@ rm -r -- "${work}" && unset work
     [prod/records](../prod/records/README.md) · [prod/edge](../prod/edge/README.md) ·
     [prod/media](../prod/media/README.md) · [prod/platform](../prod/platform/README.md) ·
     [prod/registry](../prod/registry/README.md)
+*   [prod/network](../prod/network/README.md) — 「되돌리기 2단계 — 엔드포인트
+    철거」
 *   [엣지 시험 런북](edge-tests.md) — 「KVS 값 입력」(다시 apply 할 때)
 *   [Media 교체 런북](media-swap.md) — 「plan 범위」 · 「부분 실패 복구」
 *   [단계 직전 점검 런북](stage-precheck.md) — 「증거」

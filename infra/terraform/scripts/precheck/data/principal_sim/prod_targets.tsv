@@ -73,6 +73,8 @@ secrets	5	tag:secretsmanager:secret	secret	ap-northeast-2	secretsmanager:GetSecr
 ecr-repository	O7c	tag:ecr:repository	repository	ap-northeast-2	ecr:PutImage,ecr:BatchDeleteImage,ecr:SetRepositoryPolicy,ecr:DeleteRepositoryPolicy,ecr:DeleteRepository,ecr:TagResource,ecr:UntagResource	ecr	-
 
 # prod/network — 태그 없는 기본 네트워크 자원은 범위 밖(결정 3)
+# network-sg 는 태그 해석(Environment = prod 인 SG 전부)이라 인터페이스
+# 엔드포인트 SG(<name>-vpce — POK-408 설계 3-1)도 덮는다.
 network-sg	O7a	tag:ec2:security-group	security-group	ap-northeast-2	ec2:AuthorizeSecurityGroupIngress,ec2:AuthorizeSecurityGroupEgress,ec2:RevokeSecurityGroupIngress,ec2:RevokeSecurityGroupEgress,ec2:DeleteSecurityGroup,ec2:CreateTags,ec2:DeleteTags	none	-
 network-vpc	O7a	tag:ec2:vpc	vpc	ap-northeast-2	ec2:DeleteVpc,ec2:ModifyVpcAttribute,ec2:CreateTags,ec2:DeleteTags	none	-
 network-subnet	O7a	tag:ec2:subnet	subnet	ap-northeast-2	ec2:DeleteSubnet,ec2:AssociateRouteTable,ec2:CreateTags,ec2:DeleteTags	none	-
@@ -80,6 +82,11 @@ network-route-table	O7a	tag:ec2:route-table	route-table	ap-northeast-2	ec2:Creat
 network-igw	O7a	tag:ec2:internet-gateway	internet-gateway	ap-northeast-2	ec2:DetachInternetGateway,ec2:DeleteInternetGateway,ec2:CreateTags,ec2:DeleteTags	none	-
 network-nat	O7a	tag:ec2:natgateway	natgateway	ap-northeast-2	ec2:DeleteNatGateway,ec2:CreateTags,ec2:DeleteTags	none	-
 network-eip	O7a	tag:ec2:elastic-ip	elastic-ip	ap-northeast-2	ec2:ReleaseAddress,ec2:DisassociateAddress,ec2:CreateTags,ec2:DeleteTags	none	-
+# network-s3-endpoint 는 이름과 달리 태그 해석(유형 ec2:vpc-endpoint ·
+# Environment = prod 전부)이라 S3 게이트웨이만이 아니라 인터페이스 엔드포인트
+# (POK-408 설계 3-1)도 덮는다. 행 이름은 바꾸지 않는다(설계 3-5). 두 행이
+# 새 자원을 묻는 것은 data_files_test.sh 의
+# expect_network_endpoint_targets_asked 가 본다.
 network-s3-endpoint	O7a	tag:ec2:vpc-endpoint	vpc-endpoint	ap-northeast-2	ec2:ModifyVpcEndpoint,ec2:DeleteVpcEndpoints,ec2:CreateTags,ec2:DeleteTags	none	-
 
 # prod/certs — 인증서 두 벌(서울 · us-east-1)

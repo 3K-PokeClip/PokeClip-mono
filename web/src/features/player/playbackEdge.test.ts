@@ -24,6 +24,7 @@ const FRAGS: DatedFragment[] = [0, 1, 2, 3, 4].map((i) => ({
 const LIST: LoadedList = {
   firstMs: PDT0,
   lastEndMs: PDT0 + 20_000,
+  lastStartMs: PDT0 + 16_000,
   targetDurationS: 4,
   headSpanMs: 12_000,
 };
@@ -42,7 +43,7 @@ function fragsOf(durations: readonly number[]): DatedFragment[] {
 }
 
 describe('loadedList', () => {
-  it('첫 조각 시각 · 마지막 조각 끝 · TD · 맨 앞 조각 셋의 길이 합을 낸다', () => {
+  it('첫 조각 시각 · 마지막 조각 끝 · 마지막 조각 시작 · TD · 맨 앞 조각 셋의 길이 합을 낸다', () => {
     expect(loadedList(FRAGS, 4)).toEqual(LIST);
   });
 
