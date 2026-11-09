@@ -142,7 +142,8 @@ func vodKeyScope(c index.Chain, key *string) string {
 	return ScopeChain
 }
 
-// FreezeChainVOD 는 회차 판정 없이 사슬 범위 · 지금 키로 동결한다 — 물러섬을 이미 겪은 세션에 루프가 부른다.
+// FreezeChainVOD 는 회차 판정 없이 사슬 범위 · 지금 키로 동결한다 — 물러섬을 이미 겪은 세션에 루프가 부른다. 이미 확정된
+// 회차 문서를 채택하면 결과의 Scope 는 ScopeRound 다(vodKeyScope).
 func (p *Publisher) FreezeChainVOD(ctx context.Context, chain index.Chain, abandon bool) FreezeOutcome {
 	if len(chain.SessionIDs) == 0 {
 		return vodFailed(vodChainChanged, errEmptyChain)

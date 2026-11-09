@@ -57,7 +57,8 @@ type FreezeOutcome struct {
 
 	// 아래는 VOD 만이다(POK-549 설계 r4 2.2).
 
-	// Scope 는 동결의 범위다 — ScopeChain · ScopeRound(판정 전에 끝난 결과는 빈 값).
+	// Scope 는 동결의 범위다 — ScopeChain · ScopeRound(판정 전에 끝난 결과는 빈 값). 다른 writer 의 확정을 채택했으면 그
+	// 문서의 범위다(vodKeyScope).
 	Scope string
 	// Fallback 은 사슬 범위로 물러선 까닭이다(Fallback* 상수 · 평시 빈 값).
 	Fallback string

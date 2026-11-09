@@ -638,8 +638,9 @@ IP 속도 제한(WAF 후속)이다.
 사슬이 둘 이상인 회차는 다시보기(VOD) 문서 하나가 회차 전체를 덮는다. 사슬이
 하나인 회차는 지금과 키 · 본문 · 시각이 바이트까지 같다. 핵심은 마지막
 사슬의 VOD 동결이 렌더하는 범위와 키다. 그것을 받치는 발행 전 검사(S5 끊김
-표시 대조) · 깨우기 · 새 신호 · `session_freeze` 의 `scope` 속성도 새로
-생겼다. DDL · 권한 · 제어면 판정식 SQL · 엣지 규칙 · 만료 코드는 그대로다.
+표시 대조) · 깨우기 · 새 신호 · `session_freeze` · `session_freeze_retry` 의
+`scope` 속성도 새로 생겼다. DDL · 권한 · 제어면 판정식 SQL · 엣지 규칙 · 만료
+코드는 그대로다.
 
 ### 회차 단위 VOD 용어
 
@@ -745,8 +746,8 @@ IP 속도 제한(WAF 후속)이다.
 
 | 신호 | 등급 | 언제 | 속성 |
 |---|---|---|---|
-| `session_freeze` | INFO | VOD 확정(기존) | `scope=chain\|round` 를 더했다 |
-| `session_freeze_retry` | WARN | 장애 재시도(기존). 회차 대기는 남기지 않는다 | `scope=chain\|round` 를 더했다. `reason` = 물러섰으면 이어서 돈 사슬 동결의 사유, 물러서지 않았으면 그 동결(회차 경로 포함)의 사유. 회차 쪽 결정적 원인은 `cause` 에만 |
+| `session_freeze` | INFO | VOD 확정(기존) | `scope=chain\|round` 를 더했다. 다른 writer 의 확정을 채택했으면 그 문서의 범위다 |
+| `session_freeze_retry` | WARN | 장애 재시도(기존). 회차 대기는 남기지 않는다 | `scope=chain\|round` 를 더했다. `reason` = 물러섰으면 이어서 돈 사슬 동결의 사유, 물러서지 않았으면 그 동결(회차 경로 포함)의 사유. 회차 쪽 결정적 원인은 `session_vod_round_fallback` 의 `cause` 에만 |
 | `session_vod_round_fallback` | WARN | 물러섬 — 세션당 한 번(재기동하면 한 번 더). 결과가 섰음 · 대기 · 재시도 어느 것이든 낸다 | `session_id` · `round` · `reason` · `cause` · `err` |
 | `session_vod_round_wait_long` | WARN | 회차 대기가 그 세션 `ending` 뒤 30분(정산 창 15분 × 2)을 넘김 — 세션당 한 번 | `session_id` · `round` · `wait=round_open\|front_pending` |
 | `finalize_round_wake_failed` | WARN | 깨우기 질의 오류 — 정산 스캔이 거둔다 | `session_id` · `round` · `err` |
