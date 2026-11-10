@@ -149,6 +149,18 @@ class RenderPlanCheckTest {
         rejectedBy(twoSegments().mediaSeqs(101, 101).json(), 2);
     }
 
+    /**
+     * 새 꼴 sourceKeys 의 seq 순서는 파서가 보지 않는다(옛 꼴만 본다). 그래서 segment 항목을 오르지 않는 순서로 싣고 매체 열을
+     * 같은 순서로 적은 주문은 맞물림 검사를 지나고 엄격 오름 검사만이 막는다 — 거절 문장으로 그 검사임을 묶는다.
+     */
+    @Test
+    void 규칙2_segment_항목과_맞물려도_매체_열이_엄격히_오르지_않으면_거절한다() {
+        notAscending(PlanOrder.of(jobId).segment(101, false, false).segment(103, false, true).segment(102, false, true)
+                .in(101, 1_000_000).out(102, 2_000_000).json());
+        notAscending(PlanOrder.of(jobId).segment(101, false, false).segment(101, false, true)
+                .in(101, 1_000_000).out(101, 2_000_000).json());
+    }
+
     @Test
     void 규칙2_매체_열이_segment_항목과_하나씩_맞물리지_않으면_거절한다() {
         rejectedBy(twoSegments().mediaSeqs(101).out(101, 0).json(), 2);
@@ -601,5 +613,11 @@ class RenderPlanCheckTest {
                     assertThat(r.failure()).isInstanceOfSatisfying(PlanViolation.class,
                             v -> assertThat(v.rule()).as(r.getMessage()).isEqualTo(rule));
                 });
+    }
+
+    private void notAscending(ObjectNode envelope) {
+        rejectedBy(envelope, 2);
+        assertThatThrownBy(() -> parser.parse(MAPPER.writeValueAsString(envelope)))
+                .hasMessage("plan.mediaSeqs가 엄격히 오르지 않는다");
     }
 }

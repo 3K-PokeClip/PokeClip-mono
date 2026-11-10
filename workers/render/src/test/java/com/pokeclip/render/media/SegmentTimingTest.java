@@ -76,6 +76,23 @@ class SegmentTimingTest {
         assertThat(t.color()).isEqualTo(ColorTags.UNKNOWN);
     }
 
+    /**
+     * 간격이 고르지 않은(가변 프레임률) 조각의 프레임 간격은 가장 짧은 간격이 아니라 이웃 PTS 간격의 중앙값이다 — 짝수 개면 위쪽
+     * 가운데. {@code toSegmentEnd} 끝(마지막 PTS + 간격)이 이 값을 쓴다(설계 7.3 4).
+     */
+    @Test
+    void 프레임_간격은_고르지_않은_이웃_PTS_간격의_중앙값이다() {
+        // 간격 3000 · 1000 · 3000 · 3000 → 정렬 1000 · 3000 · 3000 · 3000 → 3000(최솟값 1000)
+        long[] fourGaps = {0, 3_000, 4_000, 7_000, 10_000};
+        // 간격 1000 · 2000 · 4000 · 5000 · 6000 · 7000(여섯 개) → 위쪽 가운데 5000
+        long[] sixGaps = {0, 1_000, 3_000, 7_000, 12_000, 18_000, 25_000};
+
+        assertThat(SegmentTiming.medianInterval(fourGaps)).isEqualTo(3_000);
+        assertThat(SegmentTiming.medianInterval(sixGaps)).isEqualTo(5_000);
+        assertThat(new SegmentTiming(90_000, 0, 0, fourGaps, 13_000, 0, List.of(MONO)).frameIntervalTicks())
+                .isEqualTo(3_000);
+    }
+
     private static SegmentTiming timing(long[] pts) {
         return new SegmentTiming(90_000, pts[0], 0, pts, 9_000, 100_000, List.of(MONO), 0, 0, 9_000, 3_000, 640, 360,
                 "yuv420p", ColorTags.UNKNOWN);

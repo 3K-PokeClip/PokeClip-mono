@@ -157,7 +157,7 @@ class RenderTimelineAudioTest {
 
     /**
      * 묶음 머리 앞 준비 조각. 파일 [0, 1] · 머리 1 의 흐름 자리 = rnd(133,333.33) = 133,333µs. 시작 = 0.133333 + 0.1 −
-     * 0.05 = 0.183333초 → 8799.98 → 8800 · 끝 = E(0.06666700) − Δ(0) + 0.133333 − 0.05 = 0.25초 → 12000 · 결과 3200.
+     * 0.05 = 0.183333초 → 8799.98 → 8800 · 끝 = E(0.06666700) − Δ(−0.1) + 0.133333 − 0.05 = 0.25초 → 12000 · 결과 3200.
      */
     @Test
     void 준비_조각은_그_머리_묶음_맨_앞에만_넣고_자를_구간_앞에_둔다() {
@@ -185,6 +185,25 @@ class RenderTimelineAudioTest {
 
         assertThat(t.audioRuns()).last().isEqualTo(new AudioRun(1, 2L, List.of(3L), null, List.of(133_333L), 8_800,
                 12_000, List.of(new TrackStart(0, false, 0)), 4_800, 8_000));
+    }
+
+    /**
+     * 준비 조각의 영상 시간 단위가 결과 조각과 다르면 흐름 간격(σ · V 를 결과 시간 단위로 센다)에 섞지 않고 빼서 열화로 남긴다
+     * (설계 7.4 소리 묶음 7). 그 묶음은 준비 없는 단일 조각과 같다 — 시작 = f_in(0.1) − st(0.05) = 0.05초 → 2400 · 끝 =
+     * E(0.0666670) − Δ(−0.1 · 첫 조각 Δ = −f_in) − st(0.05) = 0.116667초 → 5600 · 결과 [0, 3200). 시간 단위를 보지 않으면 45000 조각이
+     * 흐름 맨 앞에 들어 시작이 8800 으로 밀린다.
+     */
+    @Test
+    void 준비_조각의_영상_시간_단위가_다르면_빼고_열화로_남긴다() {
+        SegmentTiming otherTs = timing(45_000, grid(0, FRAME, 4), 12_000, track(2_400, 10));
+        RenderTimeline t = RenderTimeline.of(
+                plan(OffsetOrigin.VIDEO_START, at(1, 0), end(1, 66_667), List.of(1L)),
+                List.of(prime(0, 1), media(1, false)), Map.of(0L, otherTs, 1L, standard(4)), List.of(0));
+
+        assertThat(t.audioRuns()).containsExactly(new AudioRun(0, null, List.of(1L), null, List.of(), 2_400, 5_600,
+                List.of(new TrackStart(0, false, 0)), 0, 3_200));
+        assertThat(t.notes()).filteredOn(n -> n.event().equals("render.prime_skipped")).singleElement()
+                .satisfies(n -> assertThat(n.fields()).isEqualTo("seq=0 ownerSeq=1 reason=mismatch degraded=true"));
     }
 
     /** 고른 트랙이 묶음 모든 조각에서 패킷 0 이면 그 트랙은 무음 대체(anullsrc · 설계 7.4 소리 묶음 6). */
