@@ -2,7 +2,8 @@ package indexer
 
 // ③ 시간 도장 사슬(계획 4.2-R R3 — kty 결정 B′·G). 조각 k 의 도장은 pos(k) = mtxi(k) + offset 이다.
 // 평소 offset 은 0 이고, 회차 안에서 mtxi 가 리셋되거나(녹화기 표식 변경 ∨ mtxi 역행) 같은 표식
-// 안에 구멍이 나면 직전 조각 끝에 이어 붙이도록 바뀐다.
+// 안에 구멍이 나면 직전 조각 끝에 이어 붙이도록 바뀐다. 회차 첫 조각의 mtxi 가 음수면 첫 도장을
+// 0 에 두는 보정값으로 회차를 연다(startChain).
 //
 // 이 파일이 루프 쪽 전부다 — 보관값(사슬)을 전진시키고 그 행의 ③ 작업 메타를 만든다. 회차별
 // 보정값 표(스위퍼 재생성용)는 업로더 소유이고, 루프는 작업에 메타를 실어 보낼 뿐이다.
@@ -75,14 +76,21 @@ func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.
 	return playbackTargetOf(streamID, link, rec, res, pinned), pinned
 }
 
-// startChain 은 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(⑥ · 결정 B′). mtxi 를 못 읽었으면
-// 도장을 지어내지 않는다(④ⓑ): ③ 요청 없이 두고, 다음 정상 판독 행이 사슬을 연다.
+// startChain 은 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(⑥ · 결정 B′). 다만 mtxi 가 음수면
+// (새 연결에서 소리가 영상보다 먼저 시작 — prod 실측 −44ms) 보정값 −mtxi 로 열어 도장을 0 에 둔다.
+// 도장은 뒤로 가지 않으므로(producer) 0 이 하한이고, 보정값은 리셋·구멍이 바꾸기 전까지 이어진다.
+// 보관값 mtxi 는 원값이다 — 다음 행의 구멍 술어가 실제 미디어 끝을 기준으로 서야 한다.
+// mtxi 를 못 읽었으면 도장을 지어내지 않는다(④ⓑ): ③ 요청 없이 두고, 다음 정상 판독 행이 사슬을 연다.
 func (ix *Indexer) startChain(streamID string, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) *index.UploadTarget {
 	if mtxi == nil {
 		return nil
 	}
 	link := linkOf(rec, res)
-	link.recorder, link.mtxi, link.pos = mtxi.RecorderID, mtxi.DTS, mtxi.DTS
+	link.recorder, link.mtxi = mtxi.RecorderID, mtxi.DTS
+	if mtxi.DTS < 0 {
+		link.offset = -mtxi.DTS
+	}
+	link.pos = mtxi.DTS + link.offset
 	ix.chains[streamID] = link
 	return playbackTargetOf(streamID, link, rec, res, false)
 }

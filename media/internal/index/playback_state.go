@@ -13,7 +13,7 @@ const (
 	PhaseUnknown PlaybackPhase = iota + 1 // 장부에 없음 · 만료로 조회 제외
 	PhaseLive                             // LookupRoundPlayback 전용 — 그 회차에 live 세션 있음
 	PhaseEnding                           // 회차 완결 전(닫힘 전 · 닫힘 뒤 정산 · VOD 동결 중) · /dvr 하한 해제 전 · 해제 뒤 유예 중
-	PhaseVOD                              // 회차 완결 · 꼬리 사슬 VOD 문서 있음
+	PhaseVOD                              // 회차 완결 · 회차 VOD 문서 있음(사슬 하나면 그 사슬 문서)
 	PhaseEnded                            // 회차 완결 · VOD 없음(freeze_failed · 빈 동결)
 )
 
@@ -24,7 +24,7 @@ type PlaybackState struct {
 	RoundID string // 계약9 streamId(장부에 없는 스트림의 Unknown 이면 빈 값)
 	// LatestSessionID 는 그 회차의 최신 세션이다 — 회차에 live 가 있으면 그 live, 없으면 started_at 최대
 	// (3.3 선택 규칙 · ClosableRound.LatestSessionID 와 같은 값 — 경계 확정 2).
-	// M5 Final.LatestSessionID 가 이 값을 받는다. 꼬리 사슬 머리는 VODKey 안에만 있고 M5 는 읽지 않는다.
+	// M5 Final.LatestSessionID 가 이 값을 받는다. 문서를 가리키는 id(사슬 머리 · 회차 문서면 회차)는 VODKey 안에만 있고 M5 는 읽지 않는다.
 	LatestSessionID string
 	VODKey          string    // PhaseVOD 일 때만
 	FirstPDT        time.Time // PhaseVOD 일 때만 — 그 VOD 문서 첫 조각 PDT

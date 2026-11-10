@@ -3,6 +3,7 @@
 // 그래프는 한 상자 두 층이다: 위층 = 시청자 선, 아래층 = 채팅 막대(하이라이트 칸은 포인트색). 층마다 눈금이 따로라 두 값을 한
 // 눈금에 겹치지 않는다(옛 패널은 둘을 각자 최대값에 맞춰 한 칸에 겹쳐 두 선의 높낮이가 아무 뜻이 없었다).
 // 방송 중에도 처음부터 지금까지 그리고, 길면 가로 스크롤이다 — 언제 스크롤하는지는 layoutFor.
+// 이 모듈은 아무것도 가져오지 않는 순수 계산이다(화면 · API 모듈을 가져오지 않는다).
 
 /** 차트 한 칸(epoch ms). 서버 칸(chat-chart)을 그대로 옮기거나 묶은 것이다 */
 export interface StatsBucket {
@@ -207,6 +208,23 @@ export function viewerWindow(viewers: readonly ViewerPoint[], t0: number, t1: nu
   return before ? [before, ...inside] : inside;
 }
 
+/**
+ * 시청자 선 끝을 그래프 끝(t1, 라이브면 「지금」)까지 잇는 점. 수집기는 1분마다 재므로 선 끝이 「지금」보다 1분쯤 뒤처진 채, 10초마다
+ * 자라는 그래프 안에서 선만 1분마다 툭툭 늘어나 끊겨 보였다(시청자 0명 방송에서 바닥에 붙은 선이 「지금」에 못 닿았다). 그 사이는
+ * 마지막으로 잰 값 그대로다(viewersAt · 툴팁과 같은 값). 마지막 관측이 holdMs보다 오래되면 잇지 않는다: 그 뒤는 모른다.
+ * @param holdMs 마지막 값을 믿는 폭. 그리는 쪽이 켜짐 판정 폭(platformView.ON_AIR_WINDOW_MS, 수집기가 두 번 놓쳐도 켜짐)을 넘긴다 —
+ *   여기서 가져오면 이 순수 계산 모듈이 platformView를 거쳐 API 클라이언트 · 스토어까지 끌어온다(PR #482 리뷰)
+ */
+export function viewerTail(
+  viewers: readonly ViewerPoint[],
+  t1: number,
+  holdMs: number,
+): ViewerPoint | null {
+  const last = viewers.at(-1);
+  if (!last || last.t >= t1 || t1 - last.t > holdMs) return null;
+  return { t: t1, v: last.v };
+}
+
 /** 창 [t0, t1] 안의 카테고리 구간 — 창 앞에서 시작한 카테고리는 창 왼쪽 끝에서 자른다 */
 export function categorySpans(marks: readonly CategoryMark[], t0: number, t1: number) {
   const out: { from: number; to: number; name: string }[] = [];
@@ -297,6 +315,28 @@ export function clusterPins<T extends { x: number }>(pins: readonly T[], gap: nu
       last.more += 1;
       last.items.push(pin);
     } else out.push({ first: pin, x: pin.x, more: 0, items: [pin] });
+  }
+  return out;
+}
+
+/**
+ * 묶음을 묶인 핀들 가운데(첫 핀과 끝 핀 사이)에 세운다 — 첫 핀 자리에 세우면 나머지 카드 자리가 비어 카드가 빠진 것처럼
+ * 보였다. clusterPins는 첫 핀에서 거리를 재므로 가운데로 옮기면 뒤 핀과 다시 gap 안으로 붙을 수 있다(100 · 143이 묶여
+ * 121.5에 서면 144 핀과 22.5, PR #482 리뷰). 옮긴 자리끼리 gap보다 가까운 이웃은 합쳐 다시 가운데에 세운다. 합친 묶음의
+ * 가운데는 앞 묶음보다 오른쪽으로만 가서 앞 이웃과는 멀어지고, 뒤 이웃만 다시 본다 — 끝나면 모든 핀 사이가 gap 이상이다
+ */
+export function clusterPinsCentered<T extends { x: number }>(pins: readonly T[], gap: number) {
+  const center = (items: readonly T[]) => (items[0]!.x + items[items.length - 1]!.x) / 2;
+  const out = clusterPins(pins, gap).map((g) => ({ ...g, x: center(g.items) }));
+  for (let i = 0; i + 1 < out.length;) {
+    const a = out[i]!;
+    const b = out[i + 1]!;
+    if (b.x - a.x >= gap) {
+      i += 1;
+      continue;
+    }
+    const items = [...a.items, ...b.items];
+    out.splice(i, 2, { first: a.first, x: center(items), more: items.length - 1, items });
   }
   return out;
 }

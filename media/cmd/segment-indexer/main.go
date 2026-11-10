@@ -165,8 +165,9 @@ func run() error {
 	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
 	defer stopIndexerStats()
 
-	// 계약9 발행(M6-8) — 게이트 하나를 결정자(새 회차 started) · 정산 조립(완결 평가 ended) · 4D 칸이 함께 쓴다. 꺼지면
-	// 영값 게이트라 outbox 문장이 0 이다. ★ pool.Close 보다 뒤에 등록해 발행기가 먼저 멈춘다(D47).
+	// 계약9 발행(M6-8) — 게이트 하나를 결정자(새 회차 started) · 정산 조립(완결 평가 ended) · 4D 칸이 함께 쓴다. 게이트는
+	// 설정 의도로 정해진다 — 발행기 준비가 실패해도(강등) 켜진 채 적재하고 재시도가 발행기를 띄운다. 설정으로 꺼지면 영값
+	// 게이트라 outbox 문장이 0 이다. ★ pool.Close 보다 뒤에 등록해 재시도 · 발행기가 먼저 멈춘다(D47).
 	lifecycle, stopLifecycle := startLifecycle(ctx, cfg, pool, resolver, log)
 	defer stopLifecycle()
 	// /dvr 하한 Writer(POK-525) — REWIND_EDGE_BOUNDS_KVS_ARN 이 비거나 꼴 밖이면 띄우지 않고, 원장의 닫힌 미해제 행을 감시하며

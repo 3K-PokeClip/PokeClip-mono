@@ -76,6 +76,8 @@ function fakePlayer(): SessionPlayer & { seeks: number[] } {
     seekToMs: (ms) => seeks.push(ms),
     seekToLiveEdge: () => seeks.push(-1),
     keepPausedOnSwap: vi.fn(),
+    holdFrame: vi.fn(),
+    dropPauseMark: vi.fn(),
   };
 }
 

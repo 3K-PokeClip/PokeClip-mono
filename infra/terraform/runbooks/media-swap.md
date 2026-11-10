@@ -27,7 +27,11 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
     것과 정확히 같은지 보는 확인입니다(아래 「plan 범위」).
 *   **설정 반영 교체**: 상자 설정(이미지 · 제어면 상류 · janitor · 판 등)을
     바꿀 때 떠 있는 상자를 고치지 않고 새 키의 상자로 바꾸는 교체입니다.
-    떠 있는 상자의 user_data 는 `ignore_changes` 로 바뀌지 않습니다.
+    떠 있는 상자의 user_data 는 `ignore_changes` 로 바뀌지 않습니다. 예외는
+    아래 「제자리 전환」 하나입니다(공개 전 한정).
+*   **제자리 전환**: 새 상자를 띄우지 않고, 떠 있는 상자 A 의 설정 파일 ·
+    설치 묶음을 그 자리에서 바꾼 뒤 유닛을 다시 띄우는 절차입니다(아래
+    「제자리 전환」). 재시작하는 동안 1–2분 끊깁니다.
 
 ## 언제 쓰나
 
@@ -36,6 +40,7 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
 | 처음 기동(O7e) | 「O7e — 처음 기동」 | 없음 |
 | 상자 교체 · AMI 갱신 | 「정상 교체」 | 없는 시간대 |
 | 설정을 바꿈(M15 · O8a · I1-6 반영 · 다이제스트 · 판 · janitor) | 「설정 반영 교체」 → 「정상 교체」 | 없는 시간대 |
+| 새 상자를 띄울 수 없거나 설정 · 이미지만 바꿈 — 공개(O8) 전 한정 · 공개 뒤에는 1–2분 중단을 kty 가 감수할 때만 · 발행 목록(`lifecycle_publish_streams`) ID ≤ 1(옛 · 새 구성 각각 · 둘 다 차 있으면 같은 ID) | 「제자리 전환」 | 없는 시간대 · 송출 금지 구간 |
 | O8 앞에 응답기 모드로 바꾸며 계약9 발행을 켬(kty 2026-11-03) | 「O8a 당김 교체」 — 정상 교체와 순서가 다름 | 없는 시간대 · 송출 금지 구간 |
 | 방송이 있는데 바꿔야 함 | 「force」 | 있음 |
 | apply 가 중간에 실패함 | 「부분 실패 복구」 | — |
@@ -97,6 +102,29 @@ media_ssm() {  # media_ssm <상자 키> <스크립트 파일> [인자 …]
 *   `media.env` 를 쓰는 상자 스크립트는 첫 줄에서 읽어 들입니다
     (`set -a; . /etc/pokeclip-media/media.env; set +a`). 그 파일에는 비밀 값이
     없습니다.
+*   **`-` 로 시작하는 인자는 `media_ssm` 에 넘기지 않습니다.** jq 의
+    `--args` 가 그 인자를 jq 옵션으로 읽어 실패합니다(2026-11-04
+    `--passphrase` 실사고). 그런 인자는 상자 스크립트 안에 고정합니다(예:
+    아래 「정상 교체 3」 의 `loopback-pp.sh`).
+*   **`bin/lib/ops.sh` 를 읽는 상자 스크립트는 bash 로 넘깁니다.**
+    `AWS-RunShellScript` 는 스크립트를 `sh` 로 돌립니다. `ops.sh` 의 함수
+    이름(`ops::say` 꼴)은 sh(POSIX 모드)에서 쓸 수 없는 이름이라, 읽는
+    순간 `not a valid identifier` 로 실패합니다(2026-11-04 상자에서 확인).
+
+그런 스크립트는 본문을 아래 꼴로 감싸 bash 에 넘깁니다. `media_ssm` 이 첫
+줄로 넣은 `set --` 인자가 그대로 bash 의 `$1` … 이 됩니다. 끝 줄 `B` 는
+들여 쓰지 않습니다.
+
+```shell
+exec /bin/bash -s -- "$@" <<'B'
+. /opt/pokeclip-media/bin/lib/ops.sh
+# 본문
+B
+```
+
+*   이 꼴에서는 표준 입력이 스크립트 본문 자체입니다. 표준 입력을 읽을 수
+    있는 명령에는 `</dev/null` 을 붙입니다 — 붙이지 않으면 그 명령이 남은
+    본문을 읽어 버려 뒤 명령이 깨집니다.
 
 ### plan 범위
 
@@ -120,12 +148,14 @@ terraform -chdir=infra/terraform/prod/media apply "${work}/media.plan"
 | http 전환 | `delete,create module.media_host.aws_lb_target_group_attachment.http["live"]` · `["control"]` · `["playback"]` 세 줄 — ALB 대상 등록 교체 3건만 |
 | A 회수 | `delete module.media_host.aws_instance.this["<A>"]` 한 줄 |
 | O8a 당김 B 기동 | `create module.media_host.aws_instance.this["<B>"]` 한 줄 + `update module.media_host.aws_iam_role_policy.media` 한 줄(`BroadcastPublish` — 「O8a 당김 교체」 걸음 0 의 Sid 목록에 `RewindDelete` 가 없으면 그 문도). user_data 차분은 「변경 있음」 만, 정책 차분은 Sid · 동작만 옮깁니다(주제 ARN 원문 금지) |
+| 제자리 전환 | `update module.media_host.aws_instance.this["<A>"]` 한 줄 — 태그 `ConfigVersion` 만(user_data 는 `ignore_changes` 라 차분 없음). 그 밖의 속성이 바뀌면 apply 하지 않습니다 |
 
 *   설정 반영 교체의 B 기동에서 공유 자원(인스턴스 역할 정책 · SG 규칙 ·
     거부 목록 파라미터)이 함께 바뀌면, 그 변경이 이번 설정 변경의 의도인지
     kty 가 보고 승인합니다. 공유 자원은 A 에도 곧바로 걸립니다.
 *   A 의 `aws_instance` 에 `update` 가 보이면 apply 하지 않습니다 — 교체
-    모델(`ignore_changes`) 밖의 변경입니다.
+    모델(`ignore_changes`) 밖의 변경입니다. 유일한 예외는 위 표의 「제자리
+    전환」 태그 한 줄입니다.
 
 ### 대상 그룹 상태 읽기
 
@@ -517,15 +547,21 @@ cat > "${work}/loopback.sh" <<'SH'
 set -a; . /etc/pokeclip-media/media.env; set +a
 /opt/pokeclip-media/bin/loopback-health.sh "$@"
 SH
-media_ssm b "${work}/loopback.sh" <시험 ingestStreamId>
+cat > "${work}/loopback-pp.sh" <<'SH'
+set -a; . /etc/pokeclip-media/media.env; set +a
+/opt/pokeclip-media/bin/loopback-health.sh --passphrase "$1"
+SH
+media_ssm b "${work}/loopback.sh" <시험 ingestStreamId>      # 옛 모드
+media_ssm b "${work}/loopback-pp.sh" <시험 ingestStreamId>   # 응답기 모드
 ```
 
-*   인자는 B 의 송출 인증 모드로 고릅니다(위 2 의 서비스 집합과 같은 기준).
-    `ingest_auth_image` 가 빈 구성(옛 모드 — O7 · 되돌리기 포함)은 passphrase
-    없이, 찬 구성(응답기 모드)은 `--passphrase` 를 앞에 붙입니다
-    (`media_ssm b "${work}/loopback.sh" --passphrase <ID>` — media-host README
-    「송출 인증 두 모드」 · 「루프백 헬스」). 응답기 모드에서는 기본 갈래가
-    거부되는 것이 정상입니다.
+*   스크립트는 B 의 송출 인증 모드로 고릅니다(위 2 의 서비스 집합과 같은
+    기준). `ingest_auth_image` 가 빈 구성(옛 모드 — O7 · 되돌리기 포함)은
+    passphrase 없이 `loopback.sh` 를, 찬 구성(응답기 모드)은
+    `--passphrase` 를 붙이는 `loopback-pp.sh` 를 씁니다(media-host README
+    「송출 인증 두 모드」 · 「루프백 헬스」). `--passphrase` 를 `media_ssm`
+    인자로 넘기지 않습니다(위 「SSM 명령 보내기」). 응답기 모드에서는 기본
+    갈래가 거부되는 것이 정상입니다.
 *   `LOOPBACK FAIL <단계>` 면 교체를 멈추고 B 를 회수합니다(A 는 그대로).
 
 ### 정상 교체 4 — 방송 경로 수
@@ -1241,7 +1277,8 @@ media_ssm b "${work}/disabled-check.sh"
 ## 설정 반영 교체
 
 M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 · 도구 판 ·
-`janitor_enabled` 를 바꿀 때입니다. 떠 있는 상자는 고치지 않습니다.
+`janitor_enabled` 를 바꿀 때입니다. 떠 있는 상자는 고치지 않습니다. 예외는
+아래 「제자리 전환」 입니다(공개 전 한정).
 
 1.  tfvars 의 설정을 바꿉니다.
 1.  B 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를 따릅니다 — README
@@ -1257,6 +1294,677 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
 *   compose 판을 바꾸면 `compose_sha256` 도 함께 바꿉니다. 하나만 바꾸면 B 가
     `MEDIA PREREQ FAIL compose-version` 으로 막힙니다 — 그대로 B 를 회수하고
     고칩니다.
+*   **MediaMTX 설정은 컨테이너 재시작(유닛 stop · start)으로만 바꿉니다.**
+    다음 셋은 하지 않습니다 — ① `/run/pokeclip-media/mediamtx.yml` 고치기
+    ② Control API 의 설정 변경(`/v3/config/…`) ③ 그 밖의 핫 리로드(설정을
+    떠 있는 프로세스에 다시 읽히는 것). `hlsAlwaysRemux`(시청자가 없어도
+    송출 시점부터 HLS 목록을 만드는 설정)가 켜진 상태에서 설정을 바꿔
+    경로를 다시 만들면, 그 중의 경합으로 muxer(HLS 목록 · 조각을 만드는
+    MediaMTX 내부 부품)가 없어져 그 경로에 500 이 이어질 수 있습니다
+    (bluenviron/mediamtx#6315 — 열림(2026-11-07 확인) · 우리 판 해당). 그렇게 되면 요청이
+    와도 스스로 복구하지 않습니다. 새 상자는 기동이 곧 재시작이고, 제자리 전환도 stop →
+    교체 → start 로 이 규칙을 지킵니다.
+
+## 제자리 전환 — 떠 있는 상자의 설정을 바꿀 때
+
+새 상자를 띄우지 않고, 떠 있는 상자 A 의 설정 파일 · 설치 묶음(스크립트 ·
+MediaMTX 템플릿이 든 이미지)을 그 자리에서 바꾼 뒤 유닛을 다시 띄웁니다.
+2026-11-04 O8a 때 새 상자 재고가 없어 A 를 제자리에서 바꾼 일(kty 「그냥
+바로 여기다가 prod 띄워」)을 일반화한 절차입니다. 실행자 · 승인 규칙은 이
+런북 머리와 같습니다.
+
+**쓰는 조건:**
+
+*   **공개(O8) 전에만 씁니다.** 공개 뒤에는 재시작 동안 1–2분 끊기는 것을
+    kty 가 감수할 때만 씁니다.
+*   새 상자를 띄울 수 없을 때(재고 부족 등)나, 설정 · 이미지만 바꿀 때
+    (POK-529 사이드카 배포 등)입니다. AMI · 인스턴스 유형 · 공유 자원(역할
+    정책 · SG 규칙 · 거부 목록 파라미터) 변경은 이 절로 하지 않습니다 —
+    「설정 반영 교체」 입니다.
+*   방송 0(A 의 `PATHS 0`) · 송출 금지 구간을 지킵니다.
+*   MediaMTX 설정의 반영도 이 절의 재시작으로만 합니다(「설정 반영 교체」
+    의 bluenviron/mediamtx#6315 규칙).
+*   계약9 발행(broadcast.started · ended)이 켜진 구성이면 아래 「계약9 회차
+    확인」 을 지킵니다.
+
+**계약9 회차 확인:** `PATHS 0` 이어도, started 를 발행한 회차가 아직
+닫히는 중(정산 창 15분)일 수 있습니다. 그때 사이드카를 재기동하면 게이트
+준비가 실패해 꺼진 게이트로 강등되고, 그 회차가 ended 없이 닫힐 수
+있습니다(「O8a 당김 — 운영 감시」 의 재기동 강등). 그래서 옛 구성이나 새
+구성의 발행 목록(`lifecycle_publish_streams`)이 차 있으면 아래 셋을
+지킵니다. 둘 다 비어 있으면 이 확인은 하지 않습니다.
+
+**적용 범위 — 시험 ID 하나일 때만.** 발행 잔여 질의는 시험 ID 하나의
+회차만 셉니다. 그래서 옛 구성 · 새 구성의 발행 목록이 각각 비었거나 그
+시험 ID 하나만 담을 때만 이 절차로 전환합니다. 목록에 ID 가 둘 이상이거나
+`*` 가 있으면, 다른 ID 의 열린 회차가 질의에 잡히지 않은 채 재기동 강등으로
+ended 없이 닫힐 수 있습니다. 그 구성이면 제자리 전환을 하지 않고 kty 에게
+회부합니다(멈춤 자리). 옛 구성과 새 구성이 서로 다른 시험 ID 를 하나씩
+담을 때(예: 옛 `[X]` · 새 `[Y]`)도 같습니다. 질의 한 번은 시험 ID 하나만
+보므로 어느 ID 로 물을지 정할 수 없습니다 — kty 회부입니다.
+
+1.  **재기동 전 — 걸음 2 직전 · 원복 직전.** 발행 잔여 질의
+    ([런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md) 「발행
+    잔여 질의」)로 Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 을 봅니다. 시험 회차가
+    생기기 전이면 Q4 0 행입니다. 「O8a 당김 교체」 의 종료 감시 · 롤백과
+    같은 판정입니다. 하나라도 아니면 멈춥니다.
+    *   Q3 > 0(회차가 아직 열림): 재기동하지 않습니다. 게이트가 켜진 지금
+        사이드카(M-B 통과)가 회차를 닫고 ended 를 발행할 때까지 기다렸다가
+        다시 봅니다.
+    *   Q1 > 0 ∧ Q3 = 0(회차 닫힘 · ended 없음): kty 회부(멈춤 자리 —
+        「O8a 당김 — 롤백」 표의 같은 행).
+    *   Q2 > 0(SNS 재시도 중): 「O8a 당김 — 롤백」 표의 Q2 행을 따릅니다.
+1.  **POK-529 사이드카가 배포되기 전 구성**(재기동 강등이 남은 판)이면,
+    그 구성의 선행 조건과 판정을 그대로 따릅니다. 송출 금지 구간을 열고
+    Q1 = 0 · `rounds` ≥ 1(시험 회차 전이면 Q4 0 행)을 보는 「O8a 당김
+    교체」 의 게이트 공존 규칙과, 기동 뒤의 M-B 판정입니다.
+1.  **전환 뒤.** 걸음 3 의 기동 판정 · 관찰 판정 뒤에 M-B(`lifecycle-check.sh`
+    — 「O8a 당김 — 상자 스크립트」)를 봅니다. **M-B 통과가 루프백의 선행
+    조건입니다** — 루프백은 시험 회차를 새로 만들므로, 게이트가 꺼진
+    사이드카 앞에서 회차를 열지 않습니다(「O8a 당김 교체」 걸음 13 과 같은
+    순서). `M-B NOT OK` 면 루프백 없이 걸음 3 의 실패 갈래로 갑니다. 루프백
+    뒤에는 「O8a 당김 — 운영 감시」 의 종료 감시를 돕니다. 위 1 의 질의가
+    Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 이고 ended 가 발행될 때까지입니다.
+    상한(30분)을 넘기거나 Q1 > 0 ∧ Q3 = 0 이면 kty 회부입니다. 송출이 다시
+    붙으면 그 절의 송출 감시 주기로 돌아갑니다.
+    *   **이 절의 감시는 M-B 만 봅니다.** 운영 감시 절의 주기는 M-B · M-A
+        를 함께 보지만, M-A(옛 상자 정지 유지)는 정지 · 차단한 별도 퇴역
+        상자가 있을 때의 판정입니다. 제자리 전환은 상자 하나(`a_key`)를 그
+        자리에서 바꾸므로 퇴역 상자가 없습니다. 그래서 M-B 는 지금
+        `a_key` 에서 보고, M-A 는 보지 않습니다. 운영 감시 절의 「M-A
+        불통과 → 정지 · 차단」 갈래를 떠 있는 A 에 적용하지 않습니다 — A 는
+        활성 상자입니다. 별도 퇴역 상자가 따로 있을 때만 그 상자에 M-A 를
+        봅니다.
+
+이 절은 그 판정들을 가리키기만 합니다. 질의 본문 · 입력(시험 ID · 시각)과
+시험 회차의 뜻은 런타임 1단-가 런북 「발행 잔여 질의」 가, M-B 의 통과 조건
+· `lifecycle-check.sh` 본문은 「O8a 당김 — 운영 감시」 · 「O8a 당김 — 상자
+스크립트」 가 정본입니다.
+
+**기록과 실물의 어긋남:** A 의 user_data 는 첫 부팅 판 그대로입니다
+(`ignore_changes`). 제자리 전환 뒤에는 상자 안 파일 · 태그 `ConfigVersion`
+과 user_data 가 어긋납니다. 이 어긋남의 정본은 이월 기록(K11 — 2026-11-04
+첫 제자리 전환)과 이 절차의 실행 기록입니다.
+
+**재부팅해도 바꾼 파일이 남는 근거:** user_data 는 cloud-init
+`#cloud-config` 의 `write_files` · `runcmd` 입니다
+(`modules/media_host/user_data.tf`). cloud-init 은 이 둘을 인스턴스당 한 번만
+돕니다. `ignore_changes = [ami, user_data_base64]`(`modules/media_host/main.tf`)
+라 인스턴스 속성도 바뀌지 않습니다. 「인스턴스당 한 번」 은 cloud-init 문서
+근거이고, 이 상자에서 재부팅으로 확인한 실측은 아직 없습니다 — 첫 실행 뒤
+여유가 있으면 재부팅해 해시를 대조합니다(kty 선택).
+
+### 제자리 전환 선행
+
+1.  **바꾸기 전 렌더본을 뽑습니다.** tfvars 를 고치기 **전에** A 의 지금
+    렌더본(user_data 가 상자에 쓰는 `write_files` 파일)을 파일별로 씁니다.
+    `terraform console` 이 모듈 출력 `rendered_user_data` 를 읽습니다(읽는
+    동안 상태를 잠그고 바로 풉니다). 파일 이름은 경로의 `/` 를 `__` 로 바꾼
+    것입니다. 값에 비밀은 없지만 ARN 이 있어 작업 디렉터리 밖에 두지
+    않습니다.
+1.  tfvars 에서 `instances.<A>.config_version` 을 올리고, 바뀐 다이제스트
+    (사이드카 · 묶음 `image_digests.bundle` 등)를 넣습니다.
+1.  **새 렌더본을 뽑아 비교합니다.** 다른 파일은 아래 허용 집합 안이어야
+    합니다. 그 밖의 파일(journald 설정 · docker 설정)이 다르거나 한쪽에만
+    있으면 멈추고 kty 에게 회부합니다. 허용 집합 안이어도 **옛 렌더본에만
+    있는 파일**(`diff -rq` 의 `Only in …/render-old`)이면 멈추고 kty 에게
+    회부합니다 — 상자 스크립트는 새 렌더본에 있는 파일만 쓰므로 그 파일은
+    상자에 옛 내용 그대로 남습니다(아래 `only_old` 가 `STOP only-old` 를
+    냄).
+    *   `etc__pokeclip-media__*`(compose · media.env · nginx · env 파일들)
+    *   `etc__systemd__system__pokeclip-media.service` · 그 drop-in
+    *   `usr__local__sbin__pokeclip-media-bootstrap` — 묶음이 바뀔 때만
+        다릅니다. 첫 부팅에만 도는 파일이라 제자리에 쓰지 않습니다.
+    *   **허용 집합 안이어도 내용 diff 는 kty 가 읽고 승인합니다.**
+        compose · nginx · media.env 처럼 상자에 실제로 쓰는 파일의 바뀐 줄을
+        `diff -ru` 로 보입니다(아래 명령). tfvars PR 리뷰로 갈음하지
+        않습니다 — PR 은 tfvars 줄만 보이고, 템플릿을 거친 렌더 결과는
+        보이지 않기 때문입니다. 렌더본에는 계정 ID 가 든 ARN 이 있어 diff 는
+        이 기계 화면에서만 보이고 채팅 · 티켓에 붙이지 않습니다. 승인 전에는
+        apply · 상자 스크립트로 가지 않습니다.
+1.  **묶음이 바뀌면 무엇을 싣는지 확인하고 kty 가 승인합니다.** 새
+    렌더본의 `MEDIA_BUNDLE_IMAGE` 가 옛 렌더본과 다르면 묶음이 바뀌는
+    것입니다.
+    *   빌드 커밋은 이 변경의 머지 커밋(또는 kty 가 정한 커밋)으로
+        고정합니다. 고정해야 아래 diff · 승인한 내용과 실제로 싣는 내용이
+        같아집니다. 머지 커밋도 그 앞 develop 이력을 다 담으므로, 실제
+        방어선은 아래 diff · 승인입니다.
+    *   빌드 · 필수 파일 대조는
+        [prod 산출물 런북](/infra/terraform/runbooks/prod-artifacts.md)
+        「media-host-bundle」 그대로입니다. 필수 파일 목록의 정본은
+        `modules/media_host/templates/bootstrap.sh.tftpl` 의
+        `REQUIRED_FILES` 이고, 이 절은 사본을 두지 않습니다.
+    *   옛 묶음(옛 렌더본의 `MEDIA_BUNDLE_IMAGE` — 상자 표지
+        `bundle-installed` 와 같아야 함)과 새 묶음을 이 기계에서 꺼내
+        설치 범위의 해시 목록을 만듭니다(아래 `bundle_sums`).
+    *   바뀐 파일 목록이 「옛 묶음 커밋 → 빌드 커밋」 의 git 누적 변경과
+        같아야 합니다. 옛 묶음 커밋은 그 다이제스트를 빌드한 커밋입니다
+        (prod 산출물 런북 「기록」 — 2026-11-04 의 A 는 `8e7b329c`). 다르면
+        멈춥니다.
+    *   **승인 범위는 그 누적 변경 전부입니다.** 예: 2026-11-04 develop
+        기준으로 이미 POK-525 몫(`bin/lib/ops.sh` · `bin/start-media.sh` ·
+        새 `bin/sidecar-round-keys.sh` — 3파일 366줄)이 있고, 여기에 O8a
+        결함 묶음의 `mediamtx.yml.tmpl` 한 줄(`hlsAlwaysRemux`)이
+        더해집니다. POK-529 가 그보다 먼저 머지됐으면 그 몫도 더해지고,
+        늦게 머지되면 그 몫은 없습니다. kty 가 diff 를 읽고 승인하기 전에는
+        묶음을 바꾸지 않습니다.
+1.  plan 범위 = 「제자리 전환」 한 줄(위 「plan 범위」 표) → apply(승인).
+    그 밖의 차분은 공유 자원 주의를 따릅니다.
+
+렌더본 · 묶음을 뽑는 함수입니다. 저장소 뿌리에서 돌립니다.
+
+```shell
+a_key="<A>"   # 제자리로 바꿀 상자의 키(예: a)
+
+# render_files <디렉터리> — 상자 a_key 의 렌더본을 파일별로 쓴다.
+render_files() {
+  local file_path expr
+  expr='base64encode(jsonencode({for f in yamldecode('
+  expr+="module.media_host.rendered_user_data[\"${a_key}\"]).write_files"
+  expr+=' : f.path => f}))'
+  mkdir -m 0700 "$1" || return 2
+  printf '%s\n' "${expr}" \
+    | terraform -chdir=infra/terraform/prod/media console | tr -d '"\n' \
+    | base64 -d >"$1.json" || return 2
+  jq -e 'length > 0' "$1.json" >/dev/null || return 2
+  while IFS= read -r file_path; do
+    jq -j --arg p "${file_path}" '.[$p].content' "$1.json" \
+      >"$1/$(printf '%s' "${file_path#/}" | sed 's|/|__|g')" || return 2
+  done < <(jq -r 'keys[]' "$1.json")
+}
+
+# bundle_sums <묶음 이미지> <디렉터리> — 묶음을 꺼내 설치 범위(bin · bin/lib
+# 의 파일 · 템플릿)의 해시 목록을 <디렉터리>.sums 에 쓴다.
+bundle_sums() {
+  local cid rc
+  docker pull --quiet --platform linux/arm64 "$1" >/dev/null || return 2
+  cid="$(docker create --platform linux/arm64 "$1" /bundle-not-run)" || return 2
+  mkdir -m 0700 "$2" && docker cp "${cid}:/bundle/." "$2/"
+  rc=$?
+  docker rm "${cid}" >/dev/null
+  [ "${rc}" -eq 0 ] || return 2
+  (cd "$2" && find bin bin/lib -maxdepth 1 -type f | LC_ALL=C sort \
+    | xargs shasum -a 256 && shasum -a 256 mediamtx.yml.tmpl) >"$2.sums"
+}
+```
+
+선행 1 · 3 · 4 의 명령입니다. 1 은 tfvars 를 고치기 전, 3 · 4 는 고친 뒤에
+돌립니다.
+
+```shell
+render_files "${work}/render-old" || { echo "STOP render-old"; }   # 선행 1
+render_files "${work}/render-new" || { echo "STOP render-new"; }   # 선행 3
+diff -rq "${work}/render-old" "${work}/render-new"      # 허용 집합 안인지
+# only_old — 옛 렌더본에만 있는 허용 집합 파일마다 STOP 줄을 낸다.
+only_old() {
+  local f
+  for f in "${work}/render-old"/etc__pokeclip-media__* \
+    "${work}/render-old"/etc__systemd__system__pokeclip-media.service*; do
+    [ -e "${work}/render-new/${f##*/}" ] || echo "STOP only-old ${f##*/}"
+  done
+}
+only_old                                                # 빈 출력
+diff -ru "${work}/render-old" "${work}/render-new"      # kty 가 읽고 승인
+jq -r 'to_entries[]
+  | select(.key | test("^/etc/(pokeclip-media|systemd/system)/"))
+  | select(.value.permissions != "0644") | .key' \
+  "${work}/render-new.json"                             # 빈 출력
+bundle_of() {
+  sed -n 's/^MEDIA_BUNDLE_IMAGE=//p' "$1/etc__pokeclip-media__media.env"
+}
+old_bundle="$(bundle_of "${work}/render-old")"
+new_bundle="$(bundle_of "${work}/render-new")"
+if [ "${old_bundle}" != "${new_bundle}" ]; then          # 선행 4
+  bundle_sums "${old_bundle}" "${work}/bundle-old" \
+    || { echo "STOP bundle-old"; }
+  bundle_sums "${new_bundle}" "${work}/bundle-new" \
+    || { echo "STOP bundle-new"; }
+  cat "${work}/bundle-old.sums" "${work}/bundle-new.sums" | LC_ALL=C sort \
+    | uniq -u | awk '{ print $2 }' | LC_ALL=C sort -u \
+    >"${work}/bundle-changed.txt"
+  git diff --name-only --no-renames <옛 묶음 커밋> <빌드 커밋> -- \
+    infra/media-host/bin infra/media-host/mediamtx.yml.tmpl \
+    | sed 's|^infra/media-host/||' | LC_ALL=C sort >"${work}/bundle-git.txt"
+  diff "${work}/bundle-changed.txt" "${work}/bundle-git.txt"   # 빈 출력
+  diff -ru "${work}/bundle-old" "${work}/bundle-new"          # kty 가 읽고 승인
+fi
+```
+
+*   **`STOP …` 줄이 나오면 멈춥니다.** 렌더본 · 묶음을 뽑지 못한 것이라 그
+    뒤의 diff · 승인은 빈 입력이나 지난 결과를 볼 수 있습니다. 원인을 고쳐
+    그 함수부터 다시 돌립니다. 다시 돌리기 전에 그 함수가 만든
+    `<디렉터리>` 와 `<디렉터리>.json` · `<디렉터리>.sums` 를 지웁니다 —
+    `mkdir -m 0700` 에 `-p` 가 없어, 남아 있으면 다시 돌려도 실패합니다.
+*   `git diff` 의 `--no-renames` 는 옮긴 파일을 옛 이름 삭제 · 새 이름
+    추가 두 줄로 냅니다. 해시 목록 비교(`bundle-changed.txt`)도 두 이름을
+    모두 내므로 같은 꼴로 맞춥니다.
+*   설정 파일의 쓰기 모드는 모두 `0644` 입니다(`user_data.tf` 의
+    `write_files`). 위 `jq` 가 빈 출력이 아니면 상자 스크립트의 `0644` 가
+    틀린 것이라 멈춥니다.
+*   묶음 이미지는 ECR 에 있습니다. 꺼내기 전에 ECR 에 로그인합니다(prod
+    산출물 런북과 같은 방법).
+
+### 제자리 전환 상자 스크립트
+
+상자 스크립트는 둘로 만듭니다. 본문(`inplace-body.sh`)은 고정이고, 이
+기계가 렌더본 · 해시 목록을 머리에 붙여 `inplace.sh` 를 만듭니다. 본문은
+bash 로 돕니다(위 「SSM 명령 보내기」 의 bash 규칙 — 새 묶음의
+`check_env_line` 이 bash 함수입니다).
+
+본문이 하는 일은 차례대로 이렇습니다.
+
+1.  `PATHS 0` 이 아니면 멈춥니다.
+1.  **설정 파일 기준 대조.** 허용 집합의 파일마다 상자 파일의 해시를 봅니다.
+    새 렌더본과 같으면 그대로(`SAME`), 옛 렌더본과 같으면 바꿀
+    대상(`WRITE`)입니다. 둘 다 아니면(없음 포함) 멈추고 kty 에게
+    회부합니다(`INPLACE FAIL baseline …`) — 운영 중 상자에서 바뀌는 파일은
+    렌더본으로 덮지 않습니다. 병합 규칙은 미리 두지 않습니다.
+    *   `ingest-auth.env` 도 상자에서 바뀌는 파일입니다. IP 한도 끄기 ·
+        켜기(media-host README 「IP 한도 끄기 · 켜기」 의
+        `ingest-auth-ip-limit.sh`)가 이 파일을 다시 씁니다. 그 스크립트를
+        쓴 적이 있으면 이 파일이 `baseline` 에 걸릴 수 있습니다.
+    *   `INPLACE FAIL baseline <이름>` 이면 상자는 그대로입니다(stop 전).
+        그 줄과 상자 파일의 지금 값(비밀 없는 설정 파일만 · `cat`)을 kty
+        에게 보이고, 「지금 값을 살릴지 · 새 렌더본으로 덮을지」 를 kty 가
+        정합니다. 정하기 전에는 다시 보내지 않습니다. 선행 5 의 태그 apply
+        를 이미 했으면 아래 「stop 전에 포기할 때」 도 봅니다.
+1.  **`sidecar.env` 는 따로 다룹니다.** 첫 부팅 뒤 정본은 상자 안
+    파일입니다(`PLAYBACK_ROUND_KEYS` — POK-525 스위치 · `prod/media`
+    `variables.tf` 의 `playback_round_keys` 설명). 새 `start-media.sh` 는 이
+    파일이 `check_env_line` 을 통과하지 않으면
+    `MEDIA START BLOCKED: sidecar settings unavailable` 로 기동을 막습니다.
+    통과 조건은 링크 아닌 일반 파일 · 64바이트 이하 · 내용이 정확히
+    `PLAYBACK_ROUND_KEYS=true` 또는 `=false` 한 줄입니다. 본문은 기동할
+    `start-media.sh`(묶음이 바뀌면 새 묶음의 것)에서 그 함수를 그대로 꺼내
+    stop 전에 같은 판정을 합니다.
+    *   있고 통과: 건드리지 않습니다(`KEEP`).
+    *   없음: 새 렌더본 값으로 씁니다(`WRITE … absent`). 다른 파일처럼
+        백업 · 원복을 탑니다.
+    *   있는데 통과하지 않음: 쓰기 전에 멈춥니다(`INPLACE FAIL
+        sidecar-env` — kty 회부).
+    *   새 묶음의 `start-media.sh` 에서 함수를 찾지 못하면 멈춥니다
+        (`INPLACE FAIL check-env-line` — 함수 꼴이 바뀐 것이라 본문의 `sed`
+        를 고칩니다). 꺼낸 함수를 `eval` 로 읽지 못한 때도 같습니다.
+    *   묶음이 그대로이면 지금 시작 스크립트를 봅니다. `check_env_line`
+        이라는 이름이 파일에 아예 없을 때만 판정 없이 둡니다(`KEEP …
+        unchecked` — 이 판정이 없는 구판). 이름은 있는데 함수를 꺼내지
+        못했거나, 파일이 없거나 읽지 못하면 구판인지 추출 실패인지 가를 수
+        없으므로 멈춥니다(`INPLACE FAIL check-env-line`).
+1.  **묶음이 바뀌면** 표지가 옛 묶음인지, 상자의 `bin/` 트리 ·
+    `mediamtx.yml.tmpl` 해시가 옛 묶음과 같은지 봅니다. 어긋나면
+    멈춥니다. 그다음 새 묶음을 `docker pull` · `docker create` ·
+    `docker cp` 로 꺼내, 해시 목록이 이 기계에서 승인한 새 묶음과 같은지
+    봅니다(`BUNDLE CHANGE`).
+1.  바꿀 설정 파일을 같은 파일 시스템의 임시 디렉터리에 써서 해시를
+    확인합니다. 여기까지 실패하면 상자는 그대로입니다. 바꿀 것이 하나도
+    없으면 `INPLACE NOTHING` 으로 끝납니다(재시작 없음).
+1.  `systemctl stop pokeclip-media`(옛 `stop-media.sh` 로 멈춤).
+1.  **백업** `/etc/pokeclip-media/rollback-v<옛 판>-<UTC>/`(0700) — 바꿀
+    파일(없던 파일은 `<이름>.absent` 표지) · 묶음이 바뀌면
+    `/opt/pokeclip-media/bin` 트리 · `mediamtx.yml.tmpl` ·
+    `bundle-installed`. `BACKUP <경로>` 줄을 기록해 둡니다(원복에 씁니다).
+1.  임시 파일을 `mv` 로 제자리에 놓습니다. 묶음은 bootstrap 과 같은 소유 ·
+    모드(bin 0755/0755 · lib 0755/0644 · 템플릿 0644)로 새 트리에 설치해
+    해시를 다시 본 뒤 바꾸고, 표지에 새 이미지를 씁니다. 유닛 · drop-in 이
+    바뀌었으면 `systemctl daemon-reload`.
+1.  `systemctl start pokeclip-media` → 5초 뒤 `UNIT <상태>`. `active` 일
+    때만 `INPLACE OK` 이고, 그 밖의 상태면 `INPLACE FAIL unit stopped` 로
+    0 이 아니게 끝납니다. 유닛이 `Type=simple` 이라 `systemctl start` 는
+    성공한 뒤에도 곧 죽을 수 있기 때문입니다. 5초 뒤에 죽는 경우는 걸음 3
+    의 판정이 잡습니다.
+
+stop 뒤의 실패는 `INPLACE FAIL <단계> stopped` 입니다 — 유닛이 멈춘
+채이므로 바로 「제자리 전환 원복」 으로 갑니다(`BACKUP` 줄이 없으면 백업
+전 실패라 바뀐 파일이 없습니다 — `systemctl start` 만 합니다).
+
+`BACKUP` 줄이 없는 `stopped` 실패의 명령입니다(실행 직전 승인).
+`start.sh` 는 「POK-525 교체 상자 스크립트」 가 만드는 것과 같은 한 줄
+파일입니다. 기동 판정은 옛
+구성의 서비스 집합으로 봅니다.
+
+```shell
+printf 'systemctl start pokeclip-media\n' > "${work}/start.sh"
+media_ssm "${a_key}" "${work}/start.sh"
+media_ssm "${a_key}" "${work}/start-check.sh" <옛 구성의 서비스 집합>
+```
+
+```shell
+cat > "${work}/inplace-body.sh" <<'SH'
+set -u
+readonly C=/etc/pokeclip-media
+readonly BIN=/opt/pokeclip-media/bin
+readonly MARKER=/var/lib/pokeclip-media/bundle-installed
+export DOCKER_CONFIG=/root/.docker   # SSM 환경에 HOME 이 없을 수 있음
+# fail — 임시 디렉터리(prep · stage · new_root)를 지우고 판정 줄을 낸다(stop
+# 뒤면 원본은 백업에 있다).
+fail() {
+  [ -z "${prep:-}" ] || rm -rf -- "${prep}"
+  [ -z "${stage:-}" ] || rm -rf -- "${stage}"
+  [ -z "${new_root:-}" ] || rm -rf -- "${new_root}"
+  echo "INPLACE FAIL $1"
+  exit 2
+}
+sha() { sha256sum "$1" </dev/null | cut -d' ' -f1; }
+# tree_sums <뿌리> <템플릿> — 묶음 설치 범위의 해시 목록(이 기계의
+# bundle_sums 와 같은 꼴).
+tree_sums() {
+  (cd "$1" && find bin bin/lib -maxdepth 1 -type f | LC_ALL=C sort \
+    | xargs sha256sum) </dev/null || return 1
+  (cd "$(dirname "$2")" && sha256sum "$(basename "$2")") </dev/null
+}
+# install_tree <원천> <대상> <디렉터리 모드> <파일 모드> — bootstrap 과 같음.
+install_tree() {
+  local f
+  install -d -o root -g root -m "$3" "$2" || return 1
+  for f in "$1"/*; do
+    [ -f "${f}" ] || continue
+    install -o root -g root -m "$4" "${f}" "$2/${f##*/}" || return 1
+  done
+}
+set -a; . "${C}/media.env" </dev/null || fail media-env; set +a
+p="$("${BIN}/paths-count.sh" </dev/null)"; echo "${p}"
+[ "${p}" = "PATHS 0" ] || fail paths
+
+prep="$(mktemp -d "${C}/.inplace-new.XXXXXX")" || fail prep
+writes="" sidecar=""
+while read -r name old new b64; do
+  [ -n "${name}" ] || continue
+  path="/${name//__//}"
+  if [ "${name}" = etc__pokeclip-media__sidecar.env ] \
+    && { [ -e "${path}" ] || [ -L "${path}" ]; }; then
+    sidecar=present
+    continue
+  fi
+  if [ "${name}" = etc__pokeclip-media__sidecar.env ] && [ ! -e "${path}" ]
+  then
+    echo "WRITE ${name} absent"
+  elif [ ! -f "${path}" ] || [ -L "${path}" ]; then
+    fail "baseline ${name}"
+  elif [ "$(sha "${path}")" = "${new}" ]; then
+    echo "SAME ${name}"
+    continue
+  elif [ "$(sha "${path}")" = "${old}" ]; then
+    echo "WRITE ${name}"
+  else
+    fail "baseline ${name}"
+  fi
+  [ "${b64}" != - ] || fail "content ${name}"
+  printf '%s' "${b64}" | base64 -d >"${prep}/${name}" \
+    && chown 0:0 "${prep}/${name}" && chmod 0644 "${prep}/${name}" \
+    && [ "$(sha "${prep}/${name}")" = "${new}" ] || fail "prep ${name}"
+  writes="${writes} ${name}"
+done <<<"${FILES}"
+
+stage=""
+if [ "${NEW_BUNDLE}" != "$(cat "${MARKER}" </dev/null)" ]; then
+  [ "$(cat "${MARKER}" </dev/null)" = "${OLD_BUNDLE}" ] || fail bundle-marker
+  [ "$(tree_sums /opt/pokeclip-media "${C}/mediamtx.yml.tmpl")" \
+    = "${OLD_SUMS}" ] || fail bundle-baseline
+  stage="$(mktemp -d)" || fail stage
+  docker pull --quiet "${NEW_BUNDLE}" </dev/null >/dev/null || fail pull
+  cid="$(docker create "${NEW_BUNDLE}" /bundle-not-run </dev/null)" \
+    || fail create
+  docker cp "${cid}:/bundle/." "${stage}/" </dev/null
+  rc=$?
+  docker rm "${cid}" </dev/null >/dev/null
+  [ "${rc}" -eq 0 ] || fail copy
+  [ "$(tree_sums "${stage}" "${stage}/mediamtx.yml.tmpl")" = "${NEW_SUMS}" ] \
+    || fail bundle-new
+  echo "BUNDLE CHANGE"
+else
+  echo "BUNDLE SAME"
+fi
+
+if [ -n "${sidecar}" ]; then
+  start="${stage:-/opt/pokeclip-media}/bin/start-media.sh"
+  [ -f "${start}" ] || fail check-env-line
+  fn="$(sed -n '/^check_env_line() {$/,/^}$/p' "${start}" </dev/null)" \
+    || fail check-env-line
+  # 0 = 이름이 있음 · 1 = 이름이 없음 · 그 밖 = 읽기 실패.
+  grep -q check_env_line "${start}" </dev/null
+  named=$?
+  if [ -n "${fn}" ]; then
+    { eval "${fn}" && declare -F check_env_line >/dev/null; } \
+      || fail check-env-line
+    check_env_line "${C}/sidecar.env" PLAYBACK_ROUND_KEYS=true \
+      PLAYBACK_ROUND_KEYS=false || fail sidecar-env
+    echo "KEEP etc__pokeclip-media__sidecar.env"
+  elif [ -z "${stage}" ] && [ "${named}" -eq 1 ]; then
+    # 묶음이 그대로이고 지금 시작 스크립트에 이 판정이 아예 없다 — 막히지
+    # 않는다. 이름은 있는데 함수를 못 꺼냈으면 아래 fail 이다.
+    echo "KEEP etc__pokeclip-media__sidecar.env unchecked"
+  else
+    fail check-env-line
+  fi
+fi
+if [ -z "${writes}" ] && [ -z "${stage}" ]; then
+  rmdir "${prep}"; echo "INPLACE NOTHING"; exit 0
+fi
+
+systemctl stop pokeclip-media </dev/null || fail "stop stopped"
+echo "UNIT_STOPPED $(systemctl is-active pokeclip-media)"
+bk="${C}/rollback-v${OLD_VERSION}-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -m 0700 "${bk}" || fail "backup stopped"
+for name in ${writes}; do
+  path="/${name//__//}"
+  if [ -e "${path}" ]; then
+    cp -p "${path}" "${bk}/${name}" || fail "backup stopped"
+  else
+    : >"${bk}/${name}.absent" || fail "backup stopped"
+  fi
+done
+if [ -n "${stage}" ]; then
+  cp -a "${BIN}" "${bk}/bin" && cp -p "${C}/mediamtx.yml.tmpl" "${bk}/" \
+    && cp -p "${MARKER}" "${bk}/" || fail "backup stopped"
+fi
+echo "BACKUP ${bk}"
+
+for name in ${writes}; do
+  mv -f "${prep}/${name}" "/${name//__//}" || fail "write stopped"
+done
+rmdir "${prep}"; prep=""
+if [ -n "${stage}" ]; then
+  new_root="$(mktemp -d /opt/pokeclip-media/.bin-new.XXXXXX)" \
+    && install_tree "${stage}/bin" "${new_root}/bin" 0755 0755 \
+    && install_tree "${stage}/bin/lib" "${new_root}/bin/lib" 0755 0644 \
+    && install -o root -g root -m 0644 "${stage}/mediamtx.yml.tmpl" \
+      "${new_root}/mediamtx.yml.tmpl" \
+    && [ "$(tree_sums "${new_root}" "${new_root}/mediamtx.yml.tmpl")" \
+      = "${NEW_SUMS}" ] || fail "bundle-install stopped"
+  rm -rf -- "${BIN}" && mv "${new_root}/bin" "${BIN}" \
+    && mv -f "${new_root}/mediamtx.yml.tmpl" "${C}/mediamtx.yml.tmpl" \
+    && printf '%s\n' "${NEW_BUNDLE}" >"${MARKER}" || fail "bundle-swap stopped"
+  rmdir "${new_root}"; new_root=""; rm -rf -- "${stage}"; stage=""
+  echo "BUNDLE INSTALLED"
+fi
+case "${writes}" in
+  *etc__systemd__*)
+    systemctl daemon-reload </dev/null || fail "daemon-reload stopped" ;;
+esac
+echo "WRITE OK"
+systemctl start pokeclip-media </dev/null || fail "start stopped"
+sleep 5
+state="$(systemctl is-active pokeclip-media </dev/null)"
+echo "UNIT ${state}"
+[ "${state}" = active ] || fail "unit stopped"
+echo "INPLACE OK"
+SH
+```
+
+이 기계에서 `inplace.sh` 를 만듭니다. 머리에는 옛 판 · 옛 · 새 묶음 ·
+해시 목록과 허용 집합 파일의 「이름 · 옛 해시 · 새 해시 · 내용」 줄이
+들어갑니다. 내용(base64)은 옛 · 새가 다른 파일과 `sidecar.env` 에만
+싣습니다.
+
+```shell
+# 없는 파일은 - 다. echo - 는 zsh 에서 빈 줄이라 printf 로 낸다.
+sha_of() {
+  if [ -f "$1" ]; then shasum -a 256 "$1" | cut -d' ' -f1
+  else printf '%s\n' -; fi
+}
+env_of() { sed -n "s/^$1=//p" "$2/etc__pokeclip-media__media.env"; }
+{
+  printf '%s\n' "exec /bin/bash -s -- \"\$@\" <<'B'"
+  printf 'OLD_VERSION=%s\n' \
+    "$(env_of MEDIA_CONFIG_VERSION "${work}/render-old")"
+  printf 'OLD_BUNDLE=%s\n' "$(env_of MEDIA_BUNDLE_IMAGE "${work}/render-old")"
+  printf 'NEW_BUNDLE=%s\n' "$(env_of MEDIA_BUNDLE_IMAGE "${work}/render-new")"
+  printf "OLD_SUMS='%s'\n" "$(cat "${work}/bundle-old.sums" 2>/dev/null)"
+  printf "NEW_SUMS='%s'\n" "$(cat "${work}/bundle-new.sums" 2>/dev/null)"
+  printf "FILES='\n"
+  for f in "${work}/render-new"/etc__pokeclip-media__* \
+    "${work}/render-new"/etc__systemd__system__pokeclip-media.service*; do
+    n="${f##*/}"
+    o="$(sha_of "${work}/render-old/${n}")"
+    h="$(sha_of "${f}")"
+    b=-
+    if [ "${o}" != "${h}" ] \
+      || [ "${n}" = etc__pokeclip-media__sidecar.env ]; then
+      b="$(base64 <"${f}" | tr -d '\n')"
+    fi
+    printf '%s %s %s %s\n' "${n}" "${o}" "${h}" "${b}"
+  done
+  printf "'\n"
+  cat "${work}/inplace-body.sh"
+  printf 'B\n'
+} >"${work}/inplace.sh"
+# inplace.sh 는 첫 줄(exec … <<'B')과 끝 줄(B) 사이가 heredoc 이라 그대로
+# bash -n 하면 본문을 보지 않는다. 앞뒤 줄을 떼고 본다.
+bash -n "${work}/inplace-body.sh" \
+  && sed '1d;$d' "${work}/inplace.sh" | bash -n && echo SYNTAX OK
+only_old   # 빈 출력 — STOP only-old 가 나오면 inplace.sh 를 보내지 않는다
+wc -c "${work}/inplace.sh"   # 결과 기록에 옮긴다
+# 크기 시험용 — 첫 줄 true 뒤에 inplace.sh 전부를 주석으로 단다(더 크다).
+{ printf 'true\n'; sed 's/^/# /' "${work}/inplace.sh"; } \
+  >"${work}/size-probe.sh"
+wc -c "${work}/size-probe.sh"
+```
+
+*   **SSM 인자 크기:** `inplace.sh` 는 바뀐 파일 내용을 base64 로 실어
+    커집니다. 보내기 전에 위 `wc -c` 값을 기록하고, 아래 「제자리 전환
+    걸음」 2 에서 크기 시험(`size-probe.sh`)을 먼저 보냅니다.
+*   `size-probe.sh` 는 상자에서 `true` 만 하고 아무것도 쓰지 않습니다.
+    나머지 줄은 `inplace.sh` 의 줄마다 `# ` 를 붙인 주석이라, 크기와
+    따옴표 · 줄바꿈의 꼴이 `inplace.sh` 이상입니다. 이것이 받아지면
+    `inplace.sh` 도 크기로 거절되지 않습니다.
+*   `send-command` 가 크기로 거절하면 상자에서는 아무것도 돌지 않습니다.
+    그때는 나눠 보내지 말고 멈춰 kty 에게 회부합니다. SSM 의 상한 값은 이
+    런북에서 확인하지 않았습니다.
+
+### 제자리 전환 걸음
+
+1.  「제자리 전환 선행」 1–5 를 끝냅니다(렌더본 내용 diff 의 kty 승인 ·
+    묶음이 바뀌면 묶음 승인까지).
+    발행 목록이 찬 구성이면 이 걸음 바로 뒤에 위 「계약9 회차 확인」 1 · 2
+    를 봅니다. 통과하지 않으면 2 로 가지 않습니다.
+1.  크기 시험 → 전환입니다(둘 다 실행 직전 승인). 위 만드는 블록에서
+    `SYNTAX OK` 가 나오고 `STOP only-old` 가 없어야 여기로 옵니다.
+    *   `media_ssm "${a_key}" "${work}/size-probe.sh"` → 끝 줄이 `SSM
+        Success` 여야 합니다. 거절 · 실패면 `inplace.sh` 를 보내지
+        않고 kty 에게 회부합니다(위 「SSM 인자 크기」).
+    *   `media_ssm "${a_key}" "${work}/inplace.sh"`. 줄마다 읽는 법은 위
+        「제자리 전환 상자 스크립트」 입니다. `BACKUP <경로>` 줄을 결과
+        기록에 옮깁니다. `INPLACE FAIL … stopped` 면 바로 아래 원복으로
+        갑니다. `stopped` 가 없는 `INPLACE FAIL` 은 상자가 그대로이므로
+        원인을 고쳐 다시 만듭니다. 고치지 않고 접으면 아래 「stop 전에
+        포기할 때」 입니다.
+1.  기동 판정 → 5분 뒤 관찰 판정(인자는 그 구성의 서비스 집합 — 위 「정상
+    교체 2」 와 같은 기준) → (발행 목록이 찬 구성이면) M-B → 루프백
+    차례입니다. 응답기 모드면 루프백은 `loopback-pp.sh` 입니다(위 「정상
+    교체 3」). 발행 목록이 찬 구성이면 M-B 와 질의 재확인(위 「계약9 회차
+    확인」 3)도 이 걸음의 판정이고, **`M-B OK` 가 나와야 루프백을
+    보냅니다.** 루프백 뒤의 종료 감시도 M-B 만 봅니다(위 「계약9 회차 확인」
+    3 — 퇴역 상자가 없어 M-A 없음).
+
+    ```shell
+    media_ssm "${a_key}" "${work}/start-check.sh" <서비스 집합>
+    media_ssm "${a_key}" "${work}/watch-check.sh" <MAINPID> <WATCH FROM>
+    # 발행 목록이 찬 구성만. M-B OK 가 아니면 루프백으로 가지 않는다.
+    media_ssm "${a_key}" "${work}/lifecycle-check.sh" <전환 시각 — epoch 초>
+    # 옛 모드(ingest_auth_image 빈 구성)면 loopback-pp.sh 대신 loopback.sh
+    # (passphrase 없음 — 위 「정상 교체 3」).
+    media_ssm "${a_key}" "${work}/loopback-pp.sh" <시험 ingestStreamId>
+    ```
+
+    *   **실패 갈래:** 기동 판정 · 관찰 판정 · 루프백 · M-B 가운데 하나라도
+        통과하지 않으면 진행하지 않습니다. 기록한 `BACKUP` 경로를 명시해 아래
+        「제자리 전환 원복」 을 하고, 판정 줄 그대로 kty 에게 보고합니다.
+        `INPLACE FAIL unit stopped` 도 같은 갈래입니다. 원복 전 확인은 그
+        절 머리에 있습니다.
+
+1.  기록: 이월 기록(K11 형식)에 백업 경로 · 옛 판 → 새 판 · 태그 · 묶음
+    다이제스트 · 어긋남(위 「기록과 실물의 어긋남」)을 남깁니다.
+1.  (kty 선택) 재부팅 대조 — 재부팅 뒤 바꾼 파일의 해시가 새 렌더본과
+    같은지, 기동 판정이 다시 통과하는지 봅니다.
+1.  작업 디렉터리의 `render-*` · `bundle-*` 는 아래 「정리」 에서 함께
+    지웁니다.
+
+**stop 전에 포기할 때:** 크기 거절 · `stopped` 없는 `INPLACE FAIL` ·
+`baseline` 에서 kty 가 포기를 고른 경우처럼 상자를 바꾸기 전에 전환을
+접으면, 상자는 옛 구성 그대로입니다. 그런데 선행 5 의 apply 로 태그
+`ConfigVersion` 과 tfvars 는 이미 새 판입니다. tfvars 의 `config_version` ·
+다이제스트를 옛 값으로 되돌려 apply 합니다(plan 범위는 「제자리 전환」 태그
+한 줄 · 승인 — 아래 원복 절의 같은 줄과 같음). 상자 원복 · 재기동은 하지
+않습니다.
+
+### 제자리 전환 원복
+
+**원복 전 확인:** 발행 목록이 찬 구성(옛 · 새 어느 쪽이든)이면 먼저 위
+「계약9 회차 확인」 1 · 2 를 봅니다. 원복도 사이드카를 재기동하기 때문입니다.
+통과하지 않으면 원복하지 않고 그 갈래를 따릅니다. 다만 Q3 > 0 의 「기다림」
+은 게이트가 켜진 사이드카(M-B 통과)가 떠 있을 때만입니다. 전환이 실패해
+그런 사이드카가 없으면 기다리지 않고 kty 에게 회부합니다.
+
+기록해 둔 `BACKUP` 경로를 **명시해서** 되돌립니다. 「가장 최근 백업」 을
+자동으로 고르지 않습니다 — 백업이 여럿이면(2026-11-04 의
+`rollback-v1-…` 등) 틀린 판을 고를 수 있습니다. 순서는 stop → 복원 →
+daemon-reload → start → 기동 판정입니다.
+
+```shell
+cat > "${work}/inplace-rollback.sh" <<'SH'
+exec /bin/bash -s -- "$@" <<'B'
+set -u
+readonly C=/etc/pokeclip-media
+readonly BIN=/opt/pokeclip-media/bin
+readonly MARKER=/var/lib/pokeclip-media/bundle-installed
+fail() { echo "ROLLBACK FAIL $1"; exit 2; }
+[ "$#" -eq 1 ] || fail usage
+bk="$1"
+case "${bk}" in *..*) fail usage ;; "${C}"/rollback-v*) ;; *) fail usage ;; esac
+[ -d "${bk}" ] && [ ! -L "${bk}" ] || fail no-backup
+systemctl stop pokeclip-media </dev/null || fail stop
+for f in "${bk}"/*; do
+  name="${f##*/}"
+  case "${name}" in
+    bin | mediamtx.yml.tmpl | bundle-installed) ;;
+    *.absent)
+      gone="${name%.absent}"
+      rm -f -- "/${gone//__//}" || fail "remove ${name}" ;;
+    *) cp -p "${f}" "/${name//__//}" || fail "copy ${name}" ;;
+  esac
+done
+if [ -d "${bk}/bin" ]; then
+  rm -rf -- "${BIN}" && cp -a "${bk}/bin" "${BIN}" \
+    && cp -p "${bk}/mediamtx.yml.tmpl" "${C}/mediamtx.yml.tmpl" \
+    && cp -p "${bk}/bundle-installed" "${MARKER}" || fail bundle
+fi
+systemctl daemon-reload </dev/null || fail daemon-reload
+systemctl start pokeclip-media </dev/null || fail start
+sleep 5
+echo "RESTORED ${bk}"
+echo "UNIT $(systemctl is-active pokeclip-media)"
+B
+SH
+media_ssm "${a_key}" "${work}/inplace-rollback.sh" <BACKUP 경로>
+```
+
+*   그 뒤 기동 판정 · 관찰 판정을 다시 돕니다(되돌린 구성의 서비스 집합).
+    발행 목록이 찬 구성이면 「계약9 회차 확인」 3 도 봅니다.
+*   tfvars 의 `config_version` · 다이제스트도 되돌려 apply 합니다(plan
+    범위는 「제자리 전환」 태그 한 줄).
+*   되돌린 구성이 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를 따릅니다.
+*   `ROLLBACK FAIL` 이면 유닛이 멈춘 채일 수 있습니다. 그 줄 그대로 kty
+    에게 보고하고, 다음 동작은 kty 가 정합니다.
 
 ## O8a 당김 교체 — 발행 켠 B 로 옮길 때
 

@@ -1,7 +1,7 @@
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { LivePosition } from './livePosition';
-import { openSession, type SessionEvent } from './rewindSwitch';
+import { openSession, type DvrSegment, type SessionEvent } from './rewindSwitch';
 import { sessionView } from './sessionView';
 import type { PlaybackHooks } from './useHlsPlayback';
 import type { PlaybackSession, SessionPlayer } from './usePlaybackSession';
@@ -14,6 +14,8 @@ const player = vi.hoisted(() => ({
   livePosition: null as LivePosition | null,
   hooks: null as PlaybackHooks | null,
   keepPausedOnSwap: () => {},
+  holdFrame: () => {},
+  dropPauseMark: () => {},
 }));
 
 /** 실재생 훅의 인자 — 흉내가 고리(hooks) 자리를 타입으로 집는다 */
@@ -29,6 +31,8 @@ vi.mock('./useHlsPlayback', () => ({
       seekToMs: () => {},
       seekToLiveEdge: () => {},
       keepPausedOnSwap: player.keepPausedOnSwap,
+      holdFrame: player.holdFrame,
+      dropPauseMark: player.dropPauseMark,
     };
   },
 }));
@@ -58,6 +62,7 @@ function fakeSession(patch: Partial<PlaybackSession> = {}): PlaybackSession {
     bindPlayer: () => {},
     notice: () => {},
     positionEpoch: () => 0,
+    isKnownDvrHole: () => false,
     ...patch,
   };
 }
@@ -110,5 +115,59 @@ describe('재생기 고리 · 명령 묶음 — 연결 통합(설계 r9 11절 ·
     renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ bindPlayer })));
     bindPlayer.mock.calls[0]?.[0]?.keepPausedOnSwap();
     expect(keep).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('되감기 조각 404 의 고리 · 명령 묶음(POK-528 c5 · 계획 4절 · 4-1 · 4-2)', () => {
+  it('재생기의 404 고리(onDvrSegmentGone)를 그 재생기 세대 · 조각을 실은 dvr-segment-gone 사건으로 올린다', () => {
+    const dispatch = vi.fn<(event: SessionEvent) => void>();
+    renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ dispatch })));
+    player.hooks?.onDvrSegmentGone?.(7, { type: 'main', sn: 41 });
+    expect(dispatch.mock.calls.filter(([e]) => e.type === 'dvr-segment-gone')).toEqual([
+      [{ type: 'dvr-segment-gone', generation: 7, segment: { type: 'main', sn: 41 } }],
+    ]);
+  });
+
+  it.each([true, false])(
+    '재생기의 구멍 질의(isKnownDvrHole)를 세션 질의에 그 인자 그대로 한 번 잇고 답(%s)을 그대로 돌려준다(POK-528 후속)',
+    (answer) => {
+      const isKnownDvrHole = vi.fn<(generation: number, segment: DvrSegment) => boolean>(
+        () => answer,
+      );
+      renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ isKnownDvrHole })));
+      const asked = player.hooks?.isKnownDvrHole?.(9, { type: 'audio', sn: 53 });
+      expect(asked).toBe(answer);
+      expect(isKnownDvrHole.mock.calls).toEqual([[9, { type: 'audio', sn: 53 }]]);
+    },
+  );
+
+  it('세션에 묶는 재생기 명령의 holdFrame · dropPauseMark 가 재생기의 같은 명령을 부른다', () => {
+    const bindPlayer = vi.fn<(p: SessionPlayer | null) => void>();
+    const hold = vi.fn();
+    const drop = vi.fn();
+    player.holdFrame = hold;
+    player.dropPauseMark = drop;
+    renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ bindPlayer })));
+    const bound = bindPlayer.mock.calls[0]?.[0];
+    bound?.holdFrame();
+    bound?.dropPauseMark();
+    expect(hold).toHaveBeenCalledTimes(1);
+    expect(drop).toHaveBeenCalledTimes(1);
+  });
+
+  // K3 — 덮개 · 주소가 그대로인데 「세우지 않음」 값만 바뀌어도(덮개가 이미 preparing 인 채 막힘이 서는 전이) 고리가 새 값을 싣는다
+  it('세션의 「세우지 않음」(view.startHeld)을 고리 startHeld 로 넘기고, 그 값만 바뀌어도 새 값을 싣는다', () => {
+    const dispatch = vi.fn<(event: SessionEvent) => void>();
+    const base = fakeSession({ dispatch });
+    const held = { ...base, view: { ...base.view, startHeld: true } };
+    const view = renderHook(
+      (session: PlaybackSession) => useLiveRewindPlayback({ current: null }, session),
+      {
+        initialProps: held,
+      },
+    );
+    expect(player.hooks?.startHeld).toBe(true);
+    view.rerender({ ...held, view: { ...held.view, startHeld: false } });
+    expect(player.hooks?.startHeld).toBe(false);
   });
 });

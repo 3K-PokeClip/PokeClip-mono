@@ -3,6 +3,7 @@ import {
   bucketEnd,
   categorySpans,
   clusterPins,
+  clusterPinsCentered,
   fmtDuration,
   fmtSeconds,
   fmtTick,
@@ -11,6 +12,7 @@ import {
   rebucketTo,
   smoothPath,
   timeTicks,
+  viewerTail,
   viewerWindow,
   viewersAt,
   zeroScale,
@@ -18,6 +20,8 @@ import {
 } from './statsChart';
 
 const T0 = Date.parse('2026-09-26T10:00:00+09:00');
+/** 시청자 선 꼬리를 잇는 폭 — 패널이 넘기는 켜짐 판정 폭(ON_AIR_WINDOW_MS)과 같은 3분 */
+const HOLD = 3 * 60_000;
 
 /** 30초 칸 n개짜리 차트(채팅은 칸 번호, 후원은 10칸마다 하나) */
 function chart(n: number, bucketSeconds = 30): StatsChart {
@@ -172,6 +176,24 @@ describe('statsChart: 선', () => {
     expect(viewersAt(v, T0)).toBe(2);
     expect(viewersAt(v, T0 - 200_000)).toBeNull();
   });
+
+  it('마지막 관측을 그래프 끝까지 그 값 그대로 잇는다: 0명도 잇는다', () => {
+    const v = [
+      { t: T0, v: 3 },
+      { t: T0 + 60_000, v: 0 },
+    ];
+    // 관측은 1분마다라 「지금」이 마지막 관측보다 늘 조금 뒤다
+    expect(viewerTail(v, T0 + 100_000, HOLD)).toEqual({ t: T0 + 100_000, v: 0 });
+    // 수집기가 두 번 놓쳐도(3분) 잇는다
+    expect(viewerTail(v, T0 + 60_000 + 3 * 60_000, HOLD)).toEqual({ t: T0 + 240_000, v: 0 });
+  });
+
+  it('마지막 관측이 3분보다 오래됐거나 끝에 닿았거나 관측이 없으면 잇지 않는다', () => {
+    const v = [{ t: T0, v: 5 }];
+    expect(viewerTail(v, T0 + 3 * 60_000 + 1, HOLD)).toBeNull();
+    expect(viewerTail(v, T0, HOLD)).toBeNull();
+    expect(viewerTail([], T0 + 60_000, HOLD)).toBeNull();
+  });
 });
 
 describe('statsChart: 카테고리·핀', () => {
@@ -196,6 +218,36 @@ describe('statsChart: 카테고리·핀', () => {
     ]);
     // 묶인 핀은 묶인 것을 모두 들고 다닌다 — 툴팁이 나머지 카드도 말한다(PR #316 리뷰 3라운드)
     expect(pins[1]!.items.map((p) => p.x)).toEqual([100, 120]);
+  });
+
+  it('묶음은 묶인 핀들 가운데에 서고, 가운데로 옮겨 뒤 핀과 붙으면 그 핀까지 묶는다(PR #482 리뷰)', () => {
+    // 100 · 143은 묶여 121.5에 서는데 144는 첫 핀에서 44라 따로 섰다: 22.5 간격으로 알약이 겹쳤다
+    const pins = clusterPinsCentered([{ x: 100 }, { x: 143 }, { x: 144 }, { x: 300 }], 44);
+    expect(pins.map((p) => [p.x, p.items.length])).toEqual([
+      [122, 3],
+      [300, 1],
+    ]);
+    expect(pins[0]!.more).toBe(2);
+    // 떨어진 핀은 제자리다
+    expect(clusterPinsCentered([{ x: 10 }, { x: 60 }], 44).map((p) => p.x)).toEqual([10, 60]);
+  });
+
+  it('가운데에 세운 핀 사이는 늘 간격 이상이고, 모든 핀이 한 번씩 든다', () => {
+    // 고정 씨앗의 의사 난수: 몰린 곳 · 홀로 선 곳이 섞인 배치를 여러 번 본다
+    let seed = 7;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    for (let round = 0; round < 200; round++) {
+      const xs = Array.from({ length: 2 + Math.floor(rand() * 20) }, () => ({
+        x: Math.round(rand() * 600),
+      }));
+      const pins = clusterPinsCentered(xs, 44);
+      for (let i = 1; i < pins.length; i++)
+        expect(pins[i]!.x - pins[i - 1]!.x).toBeGreaterThanOrEqual(44);
+      expect(pins.flatMap((p) => p.items)).toHaveLength(xs.length);
+    }
   });
 });
 

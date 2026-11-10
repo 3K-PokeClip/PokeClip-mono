@@ -26,13 +26,16 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/testlib.sh"
 readonly DATA_DIR="${PRECHECK_DIR}/data"
 readonly STAGE_DIR="${DATA_DIR}/stage_actions"
 readonly EVENT_NAMES="${DATA_DIR}/event_names.txt"
-# 계획 M17a 「데이터」 의 묶음 이름 전부 + prod 런타임 1단-가(runtime-1a).
+# 계획 M17a 「데이터」 의 묶음 이름 전부 + prod 런타임 1단-가(runtime-1a) +
+# 일꾼 배치(workers — POK-408).
 BUNDLES=(1b 5 O7a O7b O7c O7d O7e O7e-stop1 O7f O7f-stop2 testkey loopback 8
-  8a 9 ci-followup lease-expiry runtime-1a)
+  8a 9 ci-followup lease-expiry runtime-1a workers)
 readonly BUNDLES
 # 2-3 판정을 하는 묶음과 하지 않는 묶음(계획 3절 · 5절 표). runtime-1a 는
-# POK-365 완료로 판정 묶음이다(kty 2026-10-23 — O7c 뒤 · O7d 앞).
-JUDGED_BUNDLES=(5 O7a O7b O7c runtime-1a O7d O7e O7f 8 8a 9 ci-followup)
+# POK-365 완료로 판정 묶음이다(kty 2026-10-23 — O7c 뒤 · O7d 앞). workers 는
+# 일꾼 배치 단계다(POK-408 — O7f 뒤 · 8 앞).
+JUDGED_BUNDLES=(5 O7a O7b O7c runtime-1a O7d O7e O7f workers 8 8a 9
+  ci-followup)
 readonly JUDGED_BUNDLES
 UNJUDGED_BUNDLES=(1b O7e-stop1 O7f-stop2 testkey loopback lease-expiry)
 readonly UNJUDGED_BUNDLES
@@ -203,9 +206,10 @@ readonly LATE_TARGETS
 # 의 ARN 끝(ID)은 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와 같은 방식 —
 # 근거는 prod_targets.tsv 의 platform 덩어리 주석). 끝 덩어리
 # (platform-listener-rule 부터)는 POK-479 가 더한 보안 리뷰 M 다섯과
-# CloudFront 함수 로그 그룹 셋이다. ECS 서비스 로그 그룹은 다섯이다(chat
-# 둘은 POK-306). 런타임 2단 상태 객체(prod/runtime-2 — 첫 단계 O7f)도 여기서
-# 본다.
+# CloudFront 함수 로그 그룹 셋이다. ECS 서비스 로그 그룹은 platform 다섯
+# (chat 둘은 POK-306)과 workers 둘(render · upload — 첫 단계 workers ·
+# POK-408)이다. 런타임 2단 상태 객체(prod/runtime-2 — 첫 단계 O7f)와 일꾼
+# 배치 상태 객체(prod/workers — 첫 단계 workers)도 여기서 본다.
 readonly STATE_OBJECT='arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod'
 # 상태 객체 행의 ARN 끝(루트 이름 뒤)과 반드시 묻는 동작.
 STATE_TAIL='terraform.tfstate s3:GetObject,s3:PutObject,s3:DeleteObject'
@@ -216,6 +220,7 @@ FOLLOWUP_TARGETS=(
   "state-object-platform O7d ${STATE_OBJECT}/platform/${STATE_TAIL}"
   "state-object-media O7e ${STATE_OBJECT}/media/${STATE_TAIL}"
   "state-object-runtime-2 O7f ${STATE_OBJECT}/runtime-2/${STATE_TAIL}"
+  "state-object-workers workers ${STATE_OBJECT}/workers/${STATE_TAIL}"
   'platform-load-balancer O7d tag:elasticloadbalancing:loadbalancer '\
 'elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:CreateListener'
   'platform-target-group O7d tag:elasticloadbalancing:targetgroup '\
@@ -261,6 +266,10 @@ FOLLOWUP_TARGETS=(
 '${ACCOUNT}:log-group:pokeclip-prod-chat-collector logs:DeleteLogGroup'
   'ecs-log-group-chat-detector O7d arn:arn:aws:logs:ap-northeast-2:'\
 '${ACCOUNT}:log-group:pokeclip-prod-chat-detector logs:DeleteLogGroup'
+  'ecs-log-group-render workers arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
+'log-group:pokeclip-prod-render logs:DeleteLogGroup'
+  'ecs-log-group-upload workers arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
+'log-group:pokeclip-prod-upload logs:DeleteLogGroup'
   'cf-distribution O7f tag:cloudfront:distribution '\
 'cloudfront:AllowVendedLogDeliveryForResource'
   'edge-media-delivery-source O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
@@ -310,7 +319,17 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가). 끝의 셋(로그 그룹 태그
 # 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR). 맨 끝 다섯은 SG
 # 규칙 자원의 재조회 읽기다(POK-479 — 묶음마다 SG 규칙 자원이 있는 근거는
-# 그 묶음 파일의 주석).
+# 그 묶음 파일의 주석). 그 뒤 workers 의 셋은 workers 의 Cloud Map 서비스 ·
+# 역할 정책 생성 직후 재조회 읽기다(POK-408 — 근거는 workers.tsv 의 그
+# 덩어리 주석). 그 뒤 workers 의 일곱은 workers 승인 묶음(apply + 긴급 정지
+# 사전 승인)의 운영 동작 — 긴급 정지 쓰기와 apply 직전 읽기 · 감시 읽기다
+# (POK-408 r3 — 근거는 workers.tsv 의 그 덩어리 주석). runtime-1a 의 넷은
+# 회전의 일꾼 멈춤 · 확인 · 복원 ECS 동작이다(POK-408 — 근거는 runtime-1a.tsv
+# 의 그 덩어리 주석). O7a 의 스물셋은
+# network 의 인터페이스 엔드포인트 · 엔드포인트 SG 를 만들고 되돌릴 때
+# provider 가 부르는 동작과, 확인 · 되돌리기 절차가 부르는 동작이다. 그 뒤의
+# 둘은 엔드포인트 생성의 Route 53 종속 동작(두 리전), 맨 끝 하나는 확인
+# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -334,7 +353,51 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7e\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
   $'O7f\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
   $'9\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
-  $'ci-followup\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*')
+  $'ci-followup\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'workers\tservicediscovery:GetService\tap-northeast-2\t*'
+  $'workers\tiam:GetRolePolicy\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
+  $'workers\tiam:ListRolePolicies\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
+  $'workers\tecs:UpdateService\tap-northeast-2\t*'
+  $'workers\tecs:ListTasks\tap-northeast-2\t*'
+  $'workers\tecs:DescribeTasks\tap-northeast-2\t*'
+  $'workers\tsecretsmanager:DescribeSecret\tap-northeast-2\t'\
+'arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*'
+  $'workers\tsqs:GetQueueUrl\tap-northeast-2\t*'
+  $'workers\tcloudwatch:GetMetricStatistics\tap-northeast-2\t*'
+  $'workers\tlogs:FilterLogEvents\tap-northeast-2\t*'
+  $'runtime-1a\tecs:DescribeServices\tap-northeast-2\t*'
+  $'runtime-1a\tecs:UpdateService\tap-northeast-2\t*'
+  $'runtime-1a\tecs:ListTasks\tap-northeast-2\t*'
+  $'runtime-1a\tecs:DescribeTasks\tap-northeast-2\t*'
+  $'O7a\tec2:CreateSecurityGroup\tap-northeast-2\t*'
+  $'O7a\tec2:RevokeSecurityGroupEgress\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeSecurityGroups\tap-northeast-2\t*'
+  $'O7a\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeVpcEndpoints\tap-northeast-2\t*'
+  $'O7a\tec2:DescribePrefixLists\tap-northeast-2\t*'
+  $'O7a\tec2:DescribeNetworkInterfaces\tap-northeast-2\t*'
+  $'O7a\tec2:ModifyVpcEndpoint\tap-northeast-2\t*'
+  $'O7a\tec2:DeleteVpcEndpoints\tap-northeast-2\t*'
+  $'O7a\tec2:RevokeSecurityGroupIngress\tap-northeast-2\t*'
+  $'O7a\tec2:DeleteSecurityGroup\tap-northeast-2\t*'
+  $'O7a\tecs:UpdateService\tap-northeast-2\t*'
+  $'O7a\tecs:DescribeServices\tap-northeast-2\t*'
+  $'O7a\tecs:ListTasks\tap-northeast-2\t*'
+  $'O7a\tecs:DescribeTasks\tap-northeast-2\t*'
+  $'O7a\telasticloadbalancing:DescribeTargetHealth\tap-northeast-2\t*'
+  $'O7a\tsecretsmanager:DescribeSecret\tap-northeast-2\t'\
+'arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*'
+  $'O7a\tlogs:DescribeLogStreams\tap-northeast-2\t*'
+  $'O7a\tcloudwatch:GetMetricStatistics\tap-northeast-2\t*'
+  $'O7a\tcloudwatch:ListMetrics\tap-northeast-2\t*'
+  $'O7a\tssm:SendCommand\tap-northeast-2\t*'
+  $'O7a\tssm:GetCommandInvocation\tap-northeast-2\t*'
+  $'O7a\troute53:AssociateVPCWithHostedZone\tus-east-1\t*'
+  $'O7a\troute53:AssociateVPCWithHostedZone\tap-northeast-2\t*'
+  $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################
@@ -399,7 +462,8 @@ expect_bundle_set() {
       "${got}" | tr '\n' ' ')"
     return
   fi
-  testlib::ok "bundle-set → 묶음 파일 18개 = 계획 M17a 묶음 + runtime-1a"
+  testlib::ok "bundle-set → 묶음 파일 ${#BUNDLES[@]}개 = 계획 M17a 묶음 +" \
+    "runtime-1a + workers"
 }
 
 #######################################
@@ -825,7 +889,8 @@ expect_real_scripts_accept_data() {
     testlib::fail "real-scripts: 증거 루트 밖 유출"
     return
   fi
-  testlib::ok "real-scripts → 묶음 18개 모두 판정됨 · 이벤트 ${rows}행을 그 리전에서 조회"
+  testlib::ok "real-scripts → 묶음 ${#BUNDLES[@]}개 모두 판정됨 · 이벤트" \
+    "${rows}행을 그 리전에서 조회"
 }
 
 #######################################
@@ -1785,55 +1850,100 @@ expect_ecs_role_pass_asked() {
 }
 
 #######################################
-# 실제 principal-check.sh 를 실제 데이터로 O7f 에 돌려(주체 넷이 풀리는 가짜
-# aws), 로그 그룹 ARN 행마다 이름 꼴과 「:log-stream:」 꼴 두 ARN 이 동작마다
-# 시뮬레이터 요청에 실리는지 본다. IAM 정책은 로그 그룹을 대개 「이름:*」 로
-# 적어서(CloudWatch Logs API 참조 LogGroup.arn), 이름 꼴만 물으면
-# 「log-group:*:*」 같은 허용을 놓친다. O7f 는 로그 그룹 행의 첫 단계
-# (runtime-1a · O7d · O7f) 뒤라 넷 모두 묻는다.
+# 로그 그룹 행 하나가 그 단계 실행의 요청(req-*.json)에 이름 꼴 ·
+# 「:log-stream:」 꼴 두 ARN 으로 동작마다 실렸는지(또는 첫 단계 전이라 두 꼴
+# 모두 안 실렸는지) 본다.
 # Globals:
-#   FAKE_USER, FAKE_ACCOUNT, run_status, run_out
+#   FAKE_ACCOUNT
+# Arguments:
+#   증거 디렉터리, 자원 키, 해석 방법, 동작(쉼표 구분), 실려야 하면 1.
+# Outputs:
+#   틀린 까닭(맞으면 빈 출력).
+#######################################
+log_group_row_problem() {
+  local dir="$1" key="$2" method="$3" actions="$4" want="$5" arn action form
+  local request got
+  # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+  arn="$(printf '%s' "${method#arn:}" | sed "s/\${ACCOUNT}/${FAKE_ACCOUNT}/")"
+  for action in ${actions//,/ }; do
+    for form in "${arn}" "${arn}:log-stream:"; do
+      request="\"ActionNames\":[\"${action}\"],"
+      request+="\"ResourceArns\":[\"${form}\"]"
+      grep -qF -- "${request}" "${dir}"/req-*.json
+      got="$?"
+      if [[ "${got}" -gt 1 ]]; then
+        printf '요청 파일을 읽지 못함\n'
+        return
+      fi
+      if [[ "${want}" -eq 1 && "${got}" -ne 0 ]]; then
+        printf '%s 의 %s 이 %s 꼴로 물어지지 않음\n' "${key}" "${action}" \
+          "${form##*:log-group:}"
+        return
+      fi
+      if [[ "${want}" -eq 0 && "${got}" -eq 0 ]]; then
+        printf '%s 의 %s 이 첫 단계 전에 %s 꼴로 물어짐\n' "${key}" \
+          "${action}" "${form##*:log-group:}"
+        return
+      fi
+    done
+  done
+}
+
+#######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7f · workers 에 돌려(주체 넷이
+# 풀리는 가짜 aws), 로그 그룹 ARN 행마다 이름 꼴과 「:log-stream:」 꼴 두
+# ARN 이 동작마다 시뮬레이터 요청에 실리는지 본다. IAM 정책은 로그 그룹을
+# 대개 「이름:*」 로 적어서(CloudWatch Logs API 참조 LogGroup.arn), 이름 꼴만
+# 물으면 「log-group:*:*」 같은 허용을 놓친다. workers 는 로그 그룹 행의 첫
+# 단계(runtime-1a · O7d · O7f · workers) 가운데 마지막이라 모두 묻는다. O7f 는
+# workers 앞이라 첫 단계가 workers 인 행(일꾼 로그 그룹 둘 — POK-408)은 두
+# 꼴 모두 묻지 않는다(래퍼는 첫 단계가 이번 단계 뒤인 행을 묻지 않는다 —
+# principal-check.sh mark_active).
+# Globals:
+#   FAKE_USER, run_status, run_out
 #######################################
 expect_log_group_forms_asked() {
-  local case_dir dir key method actions arn action form request count=0
+  local case_dir stage dir key first method actions want problem
+  local count=0 skipped=0
   case_dir="$(testlib::new_case)" || {
     testlib::fail "log-group-forms: 시험 준비 실패"
     return
   }
   principal_reads_table >"${case_dir}/in/reads.tsv"
   testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
-  testlib::run "${case_dir}" principal-O7f env \
-    FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
-    FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" O7f
-  dir="$(compgen -G "${case_dir}/home/.pokeclip-precheck/principal-O7f-*")"
-  if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
-    testlib::fail "log-group-forms: O7f 실행이 종료 ${run_status} —" \
-      "$(cat -- "${run_out}.stderr")"
+  for stage in O7f workers; do
+    testlib::run "${case_dir}" "principal-${stage}" env \
+      FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+      FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" "${stage}"
+    dir="$(compgen -G \
+      "${case_dir}/home/.pokeclip-precheck/principal-${stage}-*")"
+    if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+      testlib::fail "log-group-forms: ${stage} 실행이 종료 ${run_status} —" \
+        "$(cat -- "${run_out}.stderr")"
+      return
+    fi
+    while IFS=$'\t' read -r key first method _ _ actions _; do
+      [[ "${method}" == arn:arn:aws:logs:*:log-group:* ]] || continue
+      want=1
+      [[ "${stage}" == O7f && "${first}" == workers ]] && want=0
+      problem="$(log_group_row_problem "${dir}" "${key}" "${method}" \
+        "${actions}" "${want}")"
+      if [[ -n "${problem}" ]]; then
+        testlib::fail "log-group-forms: ${stage} — ${problem}"
+        return
+      fi
+      [[ "${want}" -eq 0 ]] && skipped=$((skipped + 1))
+      [[ "${stage}" == workers ]] && count=$((count + 1))
+    done < <(principal_rows prod_targets.tsv)
+  done
+  if [[ "${count}" -eq 0 || "${skipped}" -eq 0 ]]; then
+    testlib::fail "log-group-forms: 로그 그룹 ARN 행(${count}) 또는 첫 단계" \
+      "workers 인 행(${skipped})이 없음"
     return
   fi
-  while IFS=$'\t' read -r key _ method _ _ actions _; do
-    [[ "${method}" == arn:arn:aws:logs:*:log-group:* ]] || continue
-    count=$((count + 1))
-    # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
-    arn="$(printf '%s' "${method#arn:}" | sed "s/\${ACCOUNT}/${FAKE_ACCOUNT}/")"
-    for action in ${actions//,/ }; do
-      for form in "${arn}" "${arn}:log-stream:"; do
-        request="\"ActionNames\":[\"${action}\"],"
-        request+="\"ResourceArns\":[\"${form}\"]"
-        if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
-          testlib::fail "log-group-forms: ${key} 의 ${action} 이" \
-            "${form##*:log-group:} 꼴로 물어지지 않음"
-          return
-        fi
-      done
-    done
-  done < <(principal_rows prod_targets.tsv)
-  if [[ "${count}" -eq 0 ]]; then
-    testlib::fail "log-group-forms: 로그 그룹 ARN 행이 없음"
-    return
-  fi
-  testlib::ok "log-group-forms → 로그 그룹 행 ${count}개가 이름 꼴 ·" \
-    ":log-stream: 꼴 두 ARN 으로 동작마다 물어짐"
+  testlib::ok "log-group-forms → 로그 그룹 행 ${count}개가 workers 에서 이름" \
+    "꼴 · :log-stream: 꼴 두 ARN 으로 동작마다 물어지고, 첫 단계 workers 인" \
+    "${skipped}행은 O7f 에서 두 꼴 모두 물어지지 않음"
 }
 
 #######################################
@@ -1877,6 +1987,69 @@ expect_apex_object_asked() {
   done
   testlib::ok "apex-object → 태그로 푼 버킷에 index.html 을 붙여 객체 동작을" \
     "묻고 버킷 행은 버킷 ARN 그대로"
+}
+
+#######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7a 에 돌려(주체 넷과, 태그로
+# 풀리는 엔드포인트 셋 · SG 둘), 태그 해석 행 network-s3-endpoint ·
+# network-sg 가 S3 게이트웨이 엔드포인트만이 아니라 인터페이스 엔드포인트 ·
+# 엔드포인트 SG 도 동작마다 묻는지 본다(POK-408 설계 3-5 의 2-3 판정). 묻는
+# 동작은 되돌리기가 쓰는 것이다: private DNS 끄기 · 엔드포인트 지우기 · SG
+# 규칙 바꾸기 · SG 지우기.
+# Globals:
+#   FAKE_USER, FAKE_ACCOUNT, run_status, run_out
+#######################################
+expect_network_endpoint_targets_asked() {
+  local case_dir dir prefix arn action request endpoint_cell group_cell
+  local -a endpoints groups actions
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "network-endpoints: 시험 준비 실패"
+    return
+  }
+  prefix="arn:aws:ec2:ap-northeast-2:${FAKE_ACCOUNT}"
+  endpoints=("${prefix}:vpc-endpoint/vpce-0a1s3gw"
+    "${prefix}:vpc-endpoint/vpce-0b2sqs"
+    "${prefix}:vpc-endpoint/vpce-0c3ecr")
+  groups=("${prefix}:security-group/sg-0d4vpce"
+    "${prefix}:security-group/sg-0e5box")
+  # 읽기 표의 응답 칸은 ARN 들을 글자 \t 로 잇는다.
+  printf -v endpoint_cell '%s\\t' "${endpoints[@]}"
+  printf -v group_cell '%s\\t' "${groups[@]}"
+  {
+    principal_reads_table
+    testlib::tsv get-resources ec2:vpc-endpoint@ap-northeast-2 \
+      "${endpoint_cell%\\t}"
+    testlib::tsv get-resources ec2:security-group@ap-northeast-2 \
+      "${group_cell%\\t}"
+  } >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  testlib::run "${case_dir}" principal-O7a env \
+    FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+    FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" O7a
+  dir="$(compgen -G "${case_dir}/home/.pokeclip-precheck/principal-O7a-*")"
+  if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+    testlib::fail "network-endpoints: O7a 실행이 종료 ${run_status} —" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  for arn in "${endpoints[@]}" "${groups[@]}"; do
+    actions=(ec2:AuthorizeSecurityGroupIngress ec2:RevokeSecurityGroupIngress
+      ec2:DeleteSecurityGroup)
+    if [[ "${arn}" == *:vpc-endpoint/* ]]; then
+      actions=(ec2:ModifyVpcEndpoint ec2:DeleteVpcEndpoints)
+    fi
+    for action in "${actions[@]}"; do
+      request="\"ActionNames\":[\"${action}\"],"
+      request+="\"ResourceArns\":[\"${arn}\"]"
+      if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
+        testlib::fail "network-endpoints: ${arn##*:} 에 ${action} 이" \
+          "물어지지 않음"
+        return
+      fi
+    done
+  done
+  testlib::ok "network-endpoints → 태그로 푼 엔드포인트 셋(게이트웨이 ·" \
+    "인터페이스) · SG 둘을 되돌리기 동작마다 물음"
 }
 
 #######################################
@@ -1987,6 +2160,7 @@ main() {
   expect_runtime_rows_asked
   expect_log_group_forms_asked
   expect_apex_object_asked
+  expect_network_endpoint_targets_asked
   expect_acm_validation_asked
   expect_ecs_role_pass_asked
   expect_runtime_terraform_reads

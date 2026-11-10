@@ -7,8 +7,9 @@
 # 첫 단계 = 그 자원을 만드는 루트를 apply 하는 단계(런북 단계 표 ·
 # stage_actions 의 출처 주석): bootstrap · secrets = 5, network = O7a,
 # certs = O7b, registry = O7c, runtime = runtime-1a(rewind 행만 예외 —
-# 그 행 위 주석), platform = O7d, media = O7e, edge = O7f, records = 8. 그
-# 단계부터 뒤 단계마다 묻는다. 추가 문맥 값 ${ACM_VALIDATION} 은 prod ACM
+# 그 행 위 주석), platform = O7d, media = O7e, edge = O7f, workers =
+# workers(POK-408), records = 8. 그 단계부터 뒤 단계마다 묻는다. 추가 문맥
+# 값 ${ACM_VALIDATION} 은 prod ACM
 # 검증 레코드 이름 자리다(prod/certs 덩어리 주석).
 # 상태 객체 키 = 각 루트 backend.hcl.example 의 key, 상태 버킷 이름 =
 # prod/bootstrap 의 state_bucket_name 기본값.
@@ -51,7 +52,8 @@
 
 # 상태 버킷 · 상태 객체(루트마다 · 같은 버킷 정책을 읽는다 — platform ·
 # media 는 POK-460). 런타임 2단(prod/runtime-2)은 edge apply 뒤 O7f 안에서
-# apply 해 첫 단계가 O7f 다(edge-tests 런북 「O7f 순서」 의 6).
+# apply 해 첫 단계가 O7f 다(edge-tests 런북 「O7f 순서」 의 6). 일꾼
+# 배치(prod/workers — POK-408)는 자기 단계 workers 가 첫 단계다.
 state-bucket	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2	bucket	ap-northeast-2	s3:ListBucket,s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:DeleteBucket	s3	-
 state-object-bootstrap	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/bootstrap/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-secrets	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/secrets/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
@@ -63,6 +65,7 @@ state-object-platform	O7d	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/plat
 state-object-media	O7e	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/media/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-edge	O7f	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/edge/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-runtime-2	O7f	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/runtime-2/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-workers	workers	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/workers/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-records	8	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/records/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 
 # 비밀 pokeclip/prod/* · ECR pokeclip-prod/*
@@ -70,6 +73,8 @@ secrets	5	tag:secretsmanager:secret	secret	ap-northeast-2	secretsmanager:GetSecr
 ecr-repository	O7c	tag:ecr:repository	repository	ap-northeast-2	ecr:PutImage,ecr:BatchDeleteImage,ecr:SetRepositoryPolicy,ecr:DeleteRepositoryPolicy,ecr:DeleteRepository,ecr:TagResource,ecr:UntagResource	ecr	-
 
 # prod/network — 태그 없는 기본 네트워크 자원은 범위 밖(결정 3)
+# network-sg 는 태그 해석(Environment = prod 인 SG 전부)이라 인터페이스
+# 엔드포인트 SG(<name>-vpce — POK-408 설계 3-1)도 덮는다.
 network-sg	O7a	tag:ec2:security-group	security-group	ap-northeast-2	ec2:AuthorizeSecurityGroupIngress,ec2:AuthorizeSecurityGroupEgress,ec2:RevokeSecurityGroupIngress,ec2:RevokeSecurityGroupEgress,ec2:DeleteSecurityGroup,ec2:CreateTags,ec2:DeleteTags	none	-
 network-vpc	O7a	tag:ec2:vpc	vpc	ap-northeast-2	ec2:DeleteVpc,ec2:ModifyVpcAttribute,ec2:CreateTags,ec2:DeleteTags	none	-
 network-subnet	O7a	tag:ec2:subnet	subnet	ap-northeast-2	ec2:DeleteSubnet,ec2:AssociateRouteTable,ec2:CreateTags,ec2:DeleteTags	none	-
@@ -77,6 +82,11 @@ network-route-table	O7a	tag:ec2:route-table	route-table	ap-northeast-2	ec2:Creat
 network-igw	O7a	tag:ec2:internet-gateway	internet-gateway	ap-northeast-2	ec2:DetachInternetGateway,ec2:DeleteInternetGateway,ec2:CreateTags,ec2:DeleteTags	none	-
 network-nat	O7a	tag:ec2:natgateway	natgateway	ap-northeast-2	ec2:DeleteNatGateway,ec2:CreateTags,ec2:DeleteTags	none	-
 network-eip	O7a	tag:ec2:elastic-ip	elastic-ip	ap-northeast-2	ec2:ReleaseAddress,ec2:DisassociateAddress,ec2:CreateTags,ec2:DeleteTags	none	-
+# network-s3-endpoint 는 이름과 달리 태그 해석(유형 ec2:vpc-endpoint ·
+# Environment = prod 전부)이라 S3 게이트웨이만이 아니라 인터페이스 엔드포인트
+# (POK-408 설계 3-1)도 덮는다. 행 이름은 바꾸지 않는다(설계 3-5). 두 행이
+# 새 자원을 묻는 것은 data_files_test.sh 의
+# expect_network_endpoint_targets_asked 가 본다.
 network-s3-endpoint	O7a	tag:ec2:vpc-endpoint	vpc-endpoint	ap-northeast-2	ec2:ModifyVpcEndpoint,ec2:DeleteVpcEndpoints,ec2:CreateTags,ec2:DeleteTags	none	-
 
 # prod/certs — 인증서 두 벌(서울 · us-east-1)
@@ -238,7 +248,8 @@ chat-archive-object	O7d	arn:arn:aws:s3:::pokeclip-prod-chat-archive-apne2/chat/C
 # POK-479)은 이름이 고정이라 구체 ARN 이다(rds-log-group 과 같은 꼴 · 같은
 # 동작 · 두 꼴로 묻는다 — 머리 주석). ECS 서비스 로그 그룹 이름은 모듈
 # ecs_service 의 <name_prefix>-<name>(prod/platform services.tf 의 next ·
-# auth · clip · chat-collector · chat-detector — chat 둘은 POK-306)이다.
+# auth · clip · chat-collector · chat-detector — chat 둘은 POK-306, prod/workers
+# main.tf 의 render · upload — POK-408)이다.
 platform-load-balancer	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/,loadbalancer/net/	ap-northeast-2	elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:ModifyLoadBalancerAttributes,elasticloadbalancing:SetSecurityGroups,elasticloadbalancing:SetSubnets,elasticloadbalancing:CreateListener,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-target-group	O7d	tag:elasticloadbalancing:targetgroup	targetgroup	ap-northeast-2	elasticloadbalancing:RegisterTargets,elasticloadbalancing:DeregisterTargets,elasticloadbalancing:ModifyTargetGroup,elasticloadbalancing:ModifyTargetGroupAttributes,elasticloadbalancing:DeleteTargetGroup,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-listener	O7d	tag:elasticloadbalancing:listener	listener/app,listener/net	ap-northeast-2	elasticloadbalancing:ModifyListener,elasticloadbalancing:DeleteListener,elasticloadbalancing:CreateRule,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
@@ -265,6 +276,14 @@ ecs-log-group-auth	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:poke
 ecs-log-group-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-clip	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 ecs-log-group-chat-collector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-collector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 ecs-log-group-chat-detector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-detector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+# prod/workers(POK-408)의 일꾼 로그 그룹 둘 — 첫 단계 workers. 그 루트의
+# 나머지 자원은 행을 더하지 않는다: ECS 서비스 · 작업 정의는 태그 해석 행
+# (ecs-service · ecs-task-definition), 일꾼 역할 넘기기 · 권한 변경은 prod
+# 역할 경로 행(ecs-role-pass · prod-roles), 일꾼 SG 는 network-sg 가 이미
+# 푼다(모두 Environment = prod 태그 · /pokeclip/prod/ 경로). Cloud Map 서비스
+# 는 판정 표에 없다 — platform 의 네임스페이스 · 서비스와 같은 기존 한계다.
+ecs-log-group-render	workers	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-render	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+ecs-log-group-upload	workers	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-upload	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 
 # prod/media(POK-460) — media 상자 역할 · 인스턴스 프로필(modules/media_host
 # 의 이름 · 경로). sql-runner 행과 같은 꼴이다 — 역할 넘기기는 EC2 로 넘기는

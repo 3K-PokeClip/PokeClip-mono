@@ -3004,7 +3004,7 @@ OBS 플러그인의 핫키(계약4 4B/2B)를 받아 **그 회원의 켜진 방�
 
 | 문 | 응답 |
 |---|---|
-| `POST /api/clip/marks` (헤더 `Authorization: Bearer <파생 값>` · `Idempotency-Key: <eventId>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 2A와 같은 카드 모양) · **400** `{"reason":"invalid_request"}`(본문·헤더가 계약 모양이 아니다 · 헤더 eventId ≠ 본문 · auth가 streamid를 못 읽음 · 그 eventId가 남의 카드 · 시각이 넘침·48시간 넘음 · 누른 때가 고른 방송 시작보다 2분 넘게 앞 · 본문 4KB 초과 · streamid 256자 초과) · **401** `{"reason":"invalid_stream_key"}`(키 없음·폐기 · 파생 값 다름 · Bearer 없음) · **404** `{"reason":"broadcast_not_found"}`(이 회원의 켜진 방송이 없다 · 고른 방송이 잠그는 사이 사라졌다) · **503** `{"reason":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없다) · **503** 본문 없음(auth를 못 물었다) |
+| `POST /api/clip/marks` (헤더 `Authorization: Bearer <파생 값>` · `Idempotency-Key: <eventId>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 2A와 같은 카드 모양) · **400** `{"reason":"invalid_request"}`(본문·헤더가 계약 모양이 아니다 · 헤더 eventId ≠ 본문 · auth가 streamid를 못 읽음 · 그 eventId가 남의 카드 · 시각이 넘침·방송 시작 뒤 48시간 넘음 · 누른 때가 고른 방송 시작보다 2분 넘게 앞 · 본문 4KB 초과 · streamid 256자 초과) · **401** `{"reason":"invalid_stream_key"}`(키 없음·폐기 · 파생 값 다름 · Bearer 없음) · **404** `{"reason":"broadcast_not_found"}`(이 회원의 켜진 방송이 없다 · 고른 방송이 잠그는 사이 사라졌다) · **503** `{"reason":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없다) · **503** 본문 없음(auth를 못 물었다) |
 
 본문: `{"streamid":"<원문>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 모르는 칸은 무시한다.
 **키를 확인하기 전에 본문을 읽으므로 상한이 있다**: 본문 4KB(그 넘는 바이트는 안 읽는다)·streamid 256자.
@@ -3056,9 +3056,10 @@ OBS 문(위 절)과 같은 `recordHotkey`라 **두 문의 카드가 한 판정�
 | 지난 방송(방송이 `live`가 아님) | `{"eventId":"<UUID v4>","positionMs":<정수 ms>}`(기준점 축 재생 위치) | 위치 그대로. 기준점 앞 10분까지(음수)는 0으로 접는다 |
 
 **400 `field`**: `body`(JSON 객체가 아님 · 4KB 초과 · 갈래가 없거나 둘 다) · `eventId`(UUID v4가 아님 · 그 eventId가 남의 방송 카드) ·
-`pressedAt`·`sentAt`(0 초과 정수가 아님 · 시각이 넘침·48시간 넘음 · **지난 방송에 보냄**) ·
+`pressedAt`·`sentAt`(0 초과 정수가 아님 · 시각이 넘침·방송 시작 뒤 48시간 넘음 · **지난 방송에 보냄**) ·
 `positionMs`(정수가 아님(소수도 거절, 반올림은 웹이 한다) · −10분 아래 · 상한 넘음 · **라이브에 보냄**).
-위치 상한은 `(종료 시각 − 기준점) + 10분`(녹화가 종료 편지 뒤까지 이어질 수 있다), 종료 시각을 모르면 48시간.
+위치 상한은 `(종료 시각 − 기준점) + 10분`(녹화가 종료 편지 뒤까지 이어질 수 있다), 종료 시각을 모르면 방송 시작 뒤 48시간 =
+`(시작 시각 − 기준점) + 48시간`(기준점은 물리 키 누적 pts 축이라 시작보다 수십 시간 앞일 수 있다, ADR-079).
 
 **처리 순서가 계약이다.** 받은 시각 읽기 → 본문(400) → 자격(404·503, **트랜잭션 밖**) → 방송(404) → 갈래와 방송 상태(400) →
 기준점(503) → 시각·위치(400) → 저장(201·200). 본문이 자격 앞인 것은 형식 오류가 auth 왕복(최대 7초)을 태우지 않게, 자격이

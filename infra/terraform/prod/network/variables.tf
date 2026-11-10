@@ -27,3 +27,9 @@ variable "nat_az" {
   description = "NAT 게이트웨이를 둘 AZ(azs 중 하나 — media_az 와 같게 두기를 권함)."
   type        = string
 }
+
+variable "interface_endpoint_private_dns" {
+  description = "인터페이스 엔드포인트 다섯의 private DNS. 되돌리기 1단계에서만 false 로 둔다(README 「되돌리기」) — 엔드포인트 · SG 는 남고 VPC 의 호출이 NAT 로 돌아간다."
+  type        = bool
+  default     = true
+}

@@ -2,7 +2,8 @@
 # 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
 # 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
 # 출처: 계획 M6 O7a · 5절 7 · 설계 8절 7단계 prod/network(착수 전 dev VPC
-# CIDR 읽기 — DescribeVpcs).
+# CIDR 읽기 — DescribeVpcs). 인터페이스 엔드포인트 · 엔드포인트 SG 와 그
+# 확인 · 되돌리기 동작: POK-408 설계 3-4 · 3-5(그 두 덩어리의 주석).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # prod/network — VPC · 서브넷 · IGW · NAT · EIP · 라우팅 · S3 Gateway EP
@@ -21,6 +22,120 @@ ec2:CreateTags	ap-northeast-2	*
 ec2:DescribeVpcs	ap-northeast-2	*
 ec2:DescribeSubnets	ap-northeast-2	*
 ec2:DescribeAvailabilityZones	ap-northeast-2	*
+
+# 인터페이스 엔드포인트 · 엔드포인트 SG · 인그레스 규칙(POK-408 설계 3-1 ·
+# 3-5 — 모듈 network 의 aws_vpc_endpoint.interface ·
+# aws_security_group.interface_endpoints ·
+# aws_vpc_security_group_ingress_rule.interface_endpoints_https). 동작은
+# provider 6.68.0(v6.68.0 태그) internal/service/ec2 소스에서 뽑았다(대조
+# 2026-11-07). 생성 · 재조회:
+# *   vpc_security_group.go 의 resourceSecurityGroupCreate 는
+#     CreateSecurityGroup(209행) 뒤 waitSecurityGroupCreated(wait.go 1955행 —
+#     find.go findSecurityGroupByID 의 DescribeSecurityGroups)로 기다리고,
+#     기본 이그레스 둘을 RevokeSecurityGroupEgress(240 · 260행)로 지운 뒤
+#     Update(326행)와 Read(275행)로 다시 DescribeSecurityGroups 를 부른다.
+# *   vpc_security_group_ingress_rule.go 의 create 는
+#     AuthorizeSecurityGroupIngress(81행)만 부르고, 재apply 의 refresh 는
+#     findSecurityGroupIngressRuleByID(105행 — find.go 의
+#     DescribeSecurityGroupRules)로 읽는다(O7d 묶음의 같은 행 주석).
+# *   vpc_endpoint.go 의 resourceVPCEndpointCreate 는 CreateVpcEndpoint(339행
+#     — 위 덩어리의 행) 뒤 waitVPCEndpointAvailable(360행 — find.go
+#     findVPCEndpointByID 의 DescribeVpcEndpoints)로 기다리고, Read 의
+#     resourceVPCEndpointFlatten 이 findPrefixListByName(843행 —
+#     DescribePrefixLists · 인터페이스 엔드포인트는 접두 목록이 없어 NotFound
+#     를 받아 넘김)과 findSubnetConfigurationsByNetworkInterfaceIDs(861행 —
+#     ENI 마다 DescribeNetworkInterfaces)를 부른다.
+# *   태그는 세 자원 모두 생성 요청의 TagSpecifications 로 단다 — 서비스 승인
+#     참조의 종속 동작 ec2:CreateTags(위 덩어리의 행).
+# 되돌리기(설계 3-4):
+# *   1단계 private DNS 끄기 — resourceVPCEndpointUpdate 의
+#     ModifyVpcEndpoint(484행) 뒤 waitVPCEndpointAvailable(490행).
+# *   2단계 철거 — resourceVPCEndpointDelete 의 DeleteVpcEndpoints(506행) 뒤
+#     waitVPCEndpointDeleted(520행 — DescribeVpcEndpoints), 인그레스 규칙
+#     delete 의 RevokeSecurityGroupIngress(97행), resourceSecurityGroupDelete
+#     의 deleteLingeringENIs(354행 — vpc_network_interface.go 1738행의
+#     DescribeNetworkInterfaces) · DeleteSecurityGroup(379행) ·
+#     findSecurityGroupByID 재시도(416행).
+# 넣지 않는 것:
+# *   DescribeVpcEndpointServices — 세 파일 어디에서도 부르지 않는다(설계
+#     3-5 의 후보에서 뺌).
+# *   DescribeVpcEndpointServiceConfigurations · AcceptVpcEndpointConnections
+#     — auto_accept 갈래(vpc_endpoint.go 528 · 539행)에서만 부르고 모듈이 그
+#     인자를 두지 않는다.
+# *   ModifySecurityGroupRules — 인그레스 규칙의 속성이 바뀔 때만
+#     부른다(vpc_security_group_ingress_rule.go 351행). 설계는 규칙을 바꾸지
+#     않는다.
+# Route 53(이 덩어리 끝의 route53:AssociateVPCWithHostedZone 두 행):
+# *   공식 권한 표의 CreateVpcEndpoint 종속 동작이다(ec2:CreateTags ·
+#     DescribeSecurityGroups · DescribeSubnets · DescribeVpcs ·
+#     route53:AssociateVPCWithHostedZone — 공식 원문 확인 2026-11-07 · cx).
+#     빼 두었는데 필요하면 점검은 통과하고 apply 가 network 를 반쯤 만든 채
+#     실패하므로 넣는다. apply 직전 O7a 재판정은 정책 시뮬레이터로 그 행의
+#     허용만 본다 — apply 성공까지 확정하지는 않는다.
+# *   반대 근거도 남긴다: iann0036/iam-dataset 의 aws/iam_definition.json
+#     (2026-11-06 판) 사본에는 이 종속 동작이 없다. PrivateLink 안내서
+#     「Access an AWS service using an interface VPC endpoint」 의 Private
+#     DNS 절은 AWS 가 관리하는 숨은 사설 호스팅 영역이라고 적는다(확인
+#     2026-11-07 —
+#     https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-access-aws-services.html
+#     ). provider 의 생성 · 수정 경로는 EC2 클라이언트만 부른다.
+# *   리전은 O7d 처럼 두 리전(서울 · us-east-1)이다 — 리전 조건이
+#     미판정이다(O7d 의 Cloud Map 사설 존 덩어리와 같은 사유). 자원 꼴은 *.
+ec2:CreateSecurityGroup	ap-northeast-2	*
+ec2:RevokeSecurityGroupEgress	ap-northeast-2	*
+ec2:DescribeSecurityGroups	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupIngress	ap-northeast-2	*
+# 확인 · 되돌리기 2단계 관문 (가) 의 참조 0 조회(describe-security-group-rules
+# — 설계 3-4)도 이 행을 쓴다.
+ec2:DescribeSecurityGroupRules	ap-northeast-2	*
+# 확인 (ㄱ) 의 상태 읽기(describe-vpc-endpoints — 설계 3-4)도 이 행을 쓴다.
+ec2:DescribeVpcEndpoints	ap-northeast-2	*
+ec2:DescribePrefixLists	ap-northeast-2	*
+ec2:DescribeNetworkInterfaces	ap-northeast-2	*
+ec2:ModifyVpcEndpoint	ap-northeast-2	*
+ec2:DeleteVpcEndpoints	ap-northeast-2	*
+ec2:RevokeSecurityGroupIngress	ap-northeast-2	*
+ec2:DeleteSecurityGroup	ap-northeast-2	*
+# CreateVpcEndpoint 의 종속 동작(위 「Route 53」 주석).
+route53:AssociateVPCWithHostedZone	ap-northeast-2	*
+route53:AssociateVPCWithHostedZone	us-east-1	*
+
+# 확인 · 되돌리기 절차가 부르는 동작(POK-408 설계 3-4 · 3-5 — r3 cx 부수).
+# 리전 · 자원 꼴은 workers 묶음(PR 488)의 같은 동작 행과 같다.
+# sts:GetCallerIdentity 는 넣지 않는다 — 권한이 필요 없고 명시 거부도
+# 적용되지 않아 IAM · SCP 로 막을 수 없다(STS API 참조 GetCallerIdentity —
+# https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html
+# · 확인 2026-11-07).
+# 확인 (ㄷ) clip 강제 재기동(update-service --force-new-deployment) 과 배포
+# 판정(describe-services) · 새 태스크와 지금 태스크의 startedAt(list-tasks ·
+# describe-tasks).
+ecs:UpdateService	ap-northeast-2	*
+ecs:DescribeServices	ap-northeast-2	*
+ecs:ListTasks	ap-northeast-2	*
+ecs:DescribeTasks	ap-northeast-2	*
+# 확인 (ㄷ) 의 대상 그룹 상태 표본(describe-target-health) — 30초마다, 새
+# 태스크 startedAt 뒤 420초(7분) 창 끝까지. poll_failed 가 있으면 마지막
+# 것 뒤 240초까지 늘리고, 그 끝이 기동 뒤 900초를 넘으면 판정불가(prod/network
+# README).
+elasticloadbalancing:DescribeTargetHealth	ap-northeast-2	*
+# 확인 (ㄷ) 재기동 전 관문 — 비밀의 LastChangedDate · AWSCURRENT 버전
+# ID(describe-secret).
+secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+# 확인 (ㄷ) 새 태스크의 로그 스트림 생성 시각 · 첫 이벤트 시각
+# (describe-log-streams — prod/network README 의 vpce_log_streams).
+logs:DescribeLogStreams	ap-northeast-2	*
+# 확인 (ㄷ) SQS 판정의 poll_failed 시각 · (ㄹ) 회귀 감시의 오류 줄
+# 세기(filter-log-events — prod/network README). 리전 · 자원 꼴은 바로 위
+# 확인 (ㄷ) 의 logs 행과 같다.
+logs:FilterLogEvents	ap-northeast-2	*
+# 되돌리기 2단계 관문 (나) 의 BytesProcessed 교정 · 판정(list-metrics ·
+# get-metric-statistics — AWS/PrivateLinkEndpoints).
+cloudwatch:GetMetricStatistics	ap-northeast-2	*
+cloudwatch:ListMetrics	ap-northeast-2	*
+# 확인 (ㄴ) · 되돌리기 1단계 복구 조건 (가) — media 상자에서 다섯 이름을
+# getent ahostsv4 로 풀기(SSM).
+ssm:SendCommand	ap-northeast-2	*
+ssm:GetCommandInvocation	ap-northeast-2	*
 
 # 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
 s3:ListBucket	ap-northeast-2	*

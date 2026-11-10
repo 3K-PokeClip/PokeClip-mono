@@ -15,16 +15,14 @@ import clsx from 'clsx';
 import { Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
-import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import { Avatar, Button, LoadingRegion, Popover, Skeleton, Slot, useToast } from '@/ui';
 import { ApiError } from '@/api/client';
 import {
   acceptInvitation,
   declineInvitation,
   delegationsAsEditorQueryOptions,
-  isInvitationGone,
   receivedInvitationsQueryOptions,
-  respondFailureMessage,
   revokeDelegation,
   type ReceivedInvitation,
   type StreamerDelegation,
@@ -33,6 +31,7 @@ import { useLogout, useMe } from '@/features/auth/useSession';
 import { expiresLabel } from '@/features/settings/editors/editorDates';
 import { useChannelStore } from '@/stores/channel';
 import { useActiveChannel, useSwitchChannel, type SwitchTarget } from './useActiveChannel';
+import { useInvitationResponse, type InvitationOutcome } from './useInvitationResponse';
 import styles from './ChannelSwitcher.module.css';
 
 // 채널 스위처(POK-390, 시안 1u). 로그인 계정이 아니라 「지금 일하는 채널」을 바꾼다: 내 채널 · 편집 참여 중인 채널 ·
@@ -497,32 +496,22 @@ function InvitesSkeleton({ label }: { label?: string }) {
 }
 
 /**
- * 수락·거절 공통: 끝나면 받은 초대와 참여 채널 목록을 다시 읽는다(수락하면 참여 채널이 는다). 실패해도 읽는다: 실패는 대개
- * 그 사이 스트리머가 취소했거나 다른 곳에서 먼저 답했다는 뜻이라 목록이 낡았다(POK-481). onDone(거절 덮개 닫기)은 그 초대가
- * 끝났을 때만 부른다: 성공 · 이미 처리된 초대 · 세션이 바뀜. 모르는 실패(일시 장애)엔 덮개를 남겨 「거절하기」만 다시 누르면
- * 되게 한다 — 나가기 덮개와 같은 규칙(PR #412 리뷰)
+ * 수락·거절 공통(토스트 · 분석 이벤트 · 다시 읽기는 알림 창과 같이 쓰는 useInvitationResponse). onDone(거절 덮개 닫기)은 그
+ * 초대가 끝났을 때만 부른다: 성공 · 이미 처리된 초대 · 세션이 바뀜. 모르는 실패(일시 장애)엔 덮개를 남겨 「거절하기」만 다시
+ * 누르면 되게 한다 — 나가기 덮개와 같은 규칙(PR #412 리뷰)
  */
 function useInvitationAction(
   send: (id: number) => Promise<void>,
-  doneTitle: string,
-  outcome: 'accepted' | 'declined',
+  outcome: InvitationOutcome,
   onDone?: () => void,
 ) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const respond = useInvitationResponse();
   return useSessionMutation({
     mutationFn: send,
-    onSuccess: () => {
-      track('editor_invitation_responded', { outcome }); // 상대 이름·초대 번호는 싣지 않는다 (POK-357)
-      toast({ tone: 'success', title: doneTitle });
-    },
-    // 서버 사유 코드는 보이지 않는다: 사람 말로 바꾸고 모르는 실패는 폴백 문구로
-    onError: (e: unknown) => toast({ tone: 'error', ...respondFailureMessage(e) }),
+    onSuccess: () => respond.onSuccess(outcome),
+    onError: respond.onError,
     onSettled: (_data, error) => {
-      if (error === null || isInvitationGone(error) || error instanceof StaleSessionError)
-        onDone?.();
-      void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
-      void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
+      if (respond.onSettled(error)) onDone?.();
     },
   });
 }
@@ -540,7 +529,7 @@ function Invitations({
   invitations: ReceivedInvitation[];
   onDecline: (invitation: ReceivedInvitation, opener: HTMLElement) => void;
 }) {
-  const accept = useInvitationAction(acceptInvitation, '초대를 수락했어요', 'accepted');
+  const accept = useInvitationAction(acceptInvitation, 'accepted');
   const title = `받은 초대 ${invitations.length}`;
 
   return (
@@ -604,7 +593,7 @@ function DeclineConfirm({
     () => (finished.current || !opener.isConnected ? fallbackFocus.current : null),
     [opener, fallbackFocus],
   );
-  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', () => {
+  const decline = useInvitationAction(declineInvitation, 'declined', () => {
     finished.current = true;
     onClose();
   });

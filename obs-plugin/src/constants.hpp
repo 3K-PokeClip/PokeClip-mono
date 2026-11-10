@@ -59,7 +59,17 @@ static_assert(std::string_view(kDevServers.ingestHost).find(':') == std::string_
 
 inline constexpr const char *kPairingExchangePath = "/api/stream-keys/pairing-codes/exchange";
 
-inline constexpr int kDefaultLatencyMs = 1000;
+// SRT 지연 허용치(latency, ms) — 독·브리지가 받는 범위와 기본값. 읽을 때의 이관 규칙은 srt-latency.hpp.
+inline constexpr int kMinLatencyMs = 20;
+inline constexpr int kMaxLatencyMs = 8000;
+// 3000 = 송출 쪽 망이 1.5초 막히고(송출→수신 한쪽 지연) 손실 2% 일 때 재정렬 오류 · 녹화기 교체가 0 이었던
+// 값(2026-11-08–09 실험대, POK-556 — 복호 오류 조각은 일부 남음 · 실제 인터넷 경로 미검증) — 대가는 평소 라이브 지연
+// +2초. 수신부(gosrt)는 송출·수신 latency 중 큰 값으로 합의하므로 서버는 그대로다.
+inline constexpr int kDefaultLatencyMs = 3000;
+// POK-556 이전 기본값 — 1초 넘는 막힘이면 늦은 패킷을 수신부가 버렸다. 이관 표지 없는 파일의 이 값은 지금 기본값으로 올린다.
+inline constexpr int kLegacyDefaultLatencyMs = 1000;
+// 설정 파일의 이관 표지 키 — Save가 늘 쓰고, Load는 이 키가 있으면 저장된 1000을 고른 값으로 본다.
+inline constexpr const char *kLatencyMigratedKey = "latency_migrated";
 
 // ADR-020: 세그먼트 4s가 GOP의 정수배여야 한다 — 플러그인이 2s로 강제한다.
 inline constexpr int kForcedKeyintSec = 2;

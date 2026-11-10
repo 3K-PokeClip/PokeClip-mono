@@ -1,0 +1,147 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: POK-408 계획 C3(일꾼 배치 단계 — prod/workers 의 plan · apply) · 설계
+# 6-2. O7d 묶음을 본으로 workers 가 부르는 것만 둔다 — Cloud Map 네임스페이스
+# · 사설 존 생성(CreatePrivateDnsNamespace · route53:*) · CreateServiceLinkedRole
+# · AttachRolePolicy 는 넣지 않는다(platform 이 이미 만들었거나 workers 가
+# 부르지 않음). Cloud Map 네임스페이스 조회 동작은 provider 6.68.0 소스에서
+# 뽑았다(그 덩어리의 주석).
+# 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
+
+# ECS 태스크 정의 · 서비스(클러스터는 platform 것)
+ecs:RegisterTaskDefinition	ap-northeast-2	*
+ecs:CreateService	ap-northeast-2	*
+ecs:DescribeServices	ap-northeast-2	*
+ecs:TagResource	ap-northeast-2	*
+
+# 일꾼 로그 그룹 둘. default_tags 를 받아 생성이 logs:TagResource 도
+# 인가한다(O7d 묶음의 같은 행 주석).
+logs:CreateLogGroup	ap-northeast-2	*
+logs:PutRetentionPolicy	ap-northeast-2	*
+logs:TagResource	ap-northeast-2	*
+logs:ListTagsForResource	ap-northeast-2	*
+logs:DescribeLogGroups	ap-northeast-2	*
+
+# Cloud Map 서비스(모듈 ecs_service 의 aws_service_discovery_service).
+# provider 6.68.0(v6.68.0 태그) internal/service/servicediscovery/service.go
+# 의 resourceServiceCreate 는 CreateService(198행) 뒤 바로 resourceServiceRead
+# 로 findServiceByID 의 GetService(392행)를 부르고, 태그는 @Tags 가로채기가
+# ListTagsForResource(아래 네임스페이스 덩어리의 행)로 읽는다. GetOperation 은
+# resourceServiceUpdate 의 UpdateService 대기(283행)에서만 불러 생성 · 재조회
+# 경로에 없어 넣지 않는다 — O7d 묶음은 네임스페이스 생성(작업 대기)이 있어
+# 갖는다(대조 2026-11-07).
+servicediscovery:CreateService	ap-northeast-2	*
+servicediscovery:GetService	ap-northeast-2	*
+servicediscovery:TagResource	ap-northeast-2	*
+# 네임스페이스 조회 — data "aws_service_discovery_dns_namespace"(prod/workers
+# 계약 검사 6). provider 6.68.0(v6.68.0 태그)의 Read 는
+# internal/service/servicediscovery/dns_namespace_data_source.go 의
+# dataSourceDNSNamespaceRead 에서 findNamespaceByNameAndType(http_namespace.go
+# — ListNamespaces 페이지 넘김) → findNamespaceByID(같은 파일 — GetNamespace)
+# → listTags(tags_gen.go — ListTagsForResource) 를 부른다(대조 2026-11-06).
+servicediscovery:ListNamespaces	ap-northeast-2	*
+servicediscovery:GetNamespace	ap-northeast-2	*
+servicediscovery:ListTagsForResource	ap-northeast-2	*
+
+# 일꾼 실행 · 작업 역할(경로 /pokeclip/prod/ — 모듈 호출의 iam_path)
+iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# iam:GetRole 은 자원을 * 로 둔다 — 이 단계의 prod 역할 경로와 2-3 판정
+# 래퍼의 dev 역할 해석(get-role) 둘 다 덮는다(같은 (동작, 리전)은 한 행).
+iam:GetRole	us-east-1	*
+iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# 역할 인라인 정책 재조회 — provider 6.68.0 internal/service/iam/role_policy.go
+# 의 resourceRolePolicyPut 은 PutRolePolicy(107행) 뒤 resourceRolePolicyRead
+# (125행)로 GetRolePolicy(205행)를 부른다(대조 2026-11-07).
+iam:GetRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# 역할 인라인 정책 이름 조회 — provider 6.68.0 internal/service/iam/role.go
+# 의 resourceRoleCreate 는 끝에 resourceRoleRead(290행)를 부르고, 그것이
+# readRoleInlinePolicies(322행) → findRolePolicyNames(998–999행) →
+# ListRolePoliciesPaginator(807–813행)로 ListRolePolicies 를 부른다(대조
+# 2026-11-07).
+iam:ListRolePolicies	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+
+# 일꾼 SG · 규칙(별도 자원 — 일꾼 이그레스와 clip · auth 인그레스)
+ec2:CreateSecurityGroup	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupIngress	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupEgress	ap-northeast-2	*
+ec2:RevokeSecurityGroupEgress	ap-northeast-2	*
+ec2:DescribeSecurityGroups	ap-northeast-2	*
+ec2:CreateTags	ap-northeast-2	*
+# SG 규칙 재조회 — provider 6.68.0 은 SG 규칙을 Read 에서
+# DescribeSecurityGroupRules 로 읽는다(O7d 묶음의 같은 행 주석).
+ec2:DescribeSecurityGroupRules	ap-northeast-2	*
+
+# 상태 버킷(backend · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
+s3:ListBucket	ap-northeast-2	*
+s3:GetObject	ap-northeast-2	*
+s3:PutObject	ap-northeast-2	*
+s3:DeleteObject	ap-northeast-2	*
+
+# 승인 묶음 「apply + 긴급 정지 사전 승인」 의 운영 동작(계획 W9–W12 ·
+# README 「apply 직전 읽기」 · 「첫 소비 감시」 · 「긴급 정지와 상태
+# 어긋남」). 같은 (동작, 리전)은 한 행이라 감시 불능 판정의
+# ecs:DescribeServices · 그룹 대기의 logs:DescribeLogGroups(위 덩어리) ·
+# 큐 깊이의 sqs:GetQueueAttributes(아래 2-3 판정 덩어리)는 그 행을 쓴다.
+# 긴급 정지(README 「운영 중 멈출 조건」 — update-service --desired-count 0).
+ecs:UpdateService	ap-northeast-2	*
+# apply 직전 읽기 ③ 회전 창(W9) — clip · auth 지금 태스크의 startedAt.
+ecs:ListTasks	ap-northeast-2	*
+ecs:DescribeTasks	ap-northeast-2	*
+# apply 직전 읽기 ③ 회전 창(W9) — 그릇의 LastChangedDate(describe-secret).
+secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+# apply 직전 읽기 ① · 큐 깊이 감시(W9 · W11) — 큐 주소 찾기(get-queue-url).
+sqs:GetQueueUrl	ap-northeast-2	*
+# apply 직전 읽기 ①(W9) — 가장 오래된 메시지 나이(AWS/SQS 지표
+# ApproximateAgeOfOldestMessage — get-metric-statistics).
+cloudwatch:GetMetricStatistics	ap-northeast-2	*
+# 감시(W11) — aws logs tail 은 FilterLogEvents 를 부른다(awscli 2.38.1
+# customizations/logs/tail.py 의 filter_log_events — 대조 2026-11-07).
+logs:FilterLogEvents	ap-northeast-2	*
+
+# 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
+# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1)이고,
+# principal-check.sh 가 부르는 리전과 같다(2026-10-19 확인).
+# ec2:DescribeRegions 는 넣지 않는다(kty 45차). iam:SimulatePrincipalPolicy 는
+# 이 도구 자신의 호출이라 그것이 거부되면 종료 2 로 드러난다.
+iam:GetAccountAuthorizationDetails	us-east-1	*
+iam:GetContextKeysForPrincipalPolicy	us-east-1	*
+iam:SimulateCustomPolicy	us-east-1	*
+iam:GetInstanceProfile	us-east-1	*
+iam:ListAccessKeys	us-east-1	*
+s3:GetBucketPolicy	ap-northeast-2	*
+secretsmanager:GetResourcePolicy	ap-northeast-2	*
+ecr:GetRepositoryPolicy	ap-northeast-2	*
+sns:GetTopicAttributes	ap-northeast-2	*
+sqs:GetQueueAttributes	ap-northeast-2	*
+ec2:DescribeInstances	ap-northeast-2	*
+ec2:DescribeInstances	us-east-1	*
+lambda:ListFunctions	ap-northeast-2	*
+lambda:ListFunctions	us-east-1	*
+ecs:ListTaskDefinitions	ap-northeast-2	*
+ecs:ListTaskDefinitions	us-east-1	*
+ecs:DescribeTaskDefinition	ap-northeast-2	*
+ecs:DescribeTaskDefinition	us-east-1	*
+cloudtrail:LookupEvents	ap-northeast-2	*
+cloudtrail:LookupEvents	us-east-1	*
+tag:GetTagKeys	ap-northeast-2	*
+tag:GetTagKeys	us-east-1	*
+tag:GetResources	ap-northeast-2	*
+tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). 인스턴스 프로필 · 태그 해석 · 자원
+# 정책 읽기는 위 덩어리에 있다. iam:GetRole 은 같은 (동작, 리전)이 한 행이라
+# 위 단계 행(자원 *)을 쓴다.
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*
+# ACM 검증 레코드 이름 해석(POK-484 — prod 인증서의 두 리전).
+acm:DescribeCertificate	ap-northeast-2	*
+acm:DescribeCertificate	us-east-1	*

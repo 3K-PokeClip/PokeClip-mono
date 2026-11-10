@@ -317,16 +317,17 @@ async function findBroadcast(streamId: string): Promise<BroadcastRow | null> {
  * 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. 다른 화면이 이미 읽은 줄이면 네트워크 없이
  * 답한다(끝난 줄 5분 · 그 밖 20초). 같은 방송을 동시에 물으면 목록 걷기는 하나다.
  * @param signal 이 호출만 기다림을 접는다. 걷기 자체는 같이 기다리는 쪽이 있어 끝까지 가고 읽은 줄은 기억된다
- * @param fresh 기억해 둔 줄을 건너뛰고 다시 읽는다: 상태가 바뀌었는지 보는 호출(방송 시계의 주기)
+ * @param fresh 기억해 둔 줄을 건너뛰고 다시 읽는다: 상태가 바뀌었는지 보는 호출(방송 시계의 주기). 함수면 기억해 둔 줄이 그 조건에
+ *   맞을 때만 다시 읽는다(카드 저장: 기준점 없는 줄만)
  */
 export function fetchBroadcast(
   streamId: string,
   signal?: AbortSignal,
-  { fresh = false }: { fresh?: boolean } = {},
+  { fresh = false }: { fresh?: boolean | ((remembered: BroadcastRow) => boolean) } = {},
 ): Promise<BroadcastRow | null> {
-  if (!fresh) {
+  if (fresh !== true) {
     const known = rememberedRow(streamId);
-    if (known !== null) return Promise.resolve(known);
+    if (known !== null && (fresh === false || !fresh(known))) return Promise.resolve(known);
   }
   let lookup = rowLookups.get(streamId);
   if (lookup === undefined) {
@@ -357,10 +358,17 @@ export interface BroadcastTimeline {
   truncated: boolean;
 }
 
-/** 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다 */
-export async function fetchBroadcastTimeline(streamId: string): Promise<BroadcastTimeline> {
+/**
+ * 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다.
+ * signal: 부른 쪽이 읽기를 버리면 요청도 끊는다(첫 사진을 바로 다시 읽을 때 떠난 읽기, POK-552)
+ */
+export async function fetchBroadcastTimeline(
+  streamId: string,
+  signal?: AbortSignal,
+): Promise<BroadcastTimeline> {
   const res = await apiFetch(
     `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info/timeline`,
+    signal ? { signal } : undefined,
   );
   return (await res.json()) as BroadcastTimeline;
 }
@@ -909,11 +917,23 @@ export function libraryQueryOptions(streamerId: number | null) {
 }
 
 /**
- * 받아 둔 보관함 목록을 버린다. 편집기는 보관함과 같이 서 있지 않아 저장 · 영상 요청의 답을 목록에 얹을 수 없다: 남겨 두면 보관함으로
- * 돌아갈 때 방금 만든 편집본이 없는 옛 목록이 먼저 보인다.
+ * 받아 둔 보관함 목록을 낡은 것으로 돌린다. 편집기는 보관함과 같이 서 있지 않아 저장 · 영상 요청의 답을 목록에 얹을 수 없다: 남겨 두면
+ * 보관함으로 돌아갈 때 방금 만든 편집본이 없는 옛 목록이 먼저 보인다 — 안 보이는 목록은 버린다.
+ * 보고 있는 목록은 버리지 않고 다시 읽는다: 카드에서 저장을 누르고 끝나기 전에 보관함으로 옮기면 목록이 먼저 떠 있는데, 버리기만
+ * 하면 그 관찰자는 다시 읽지 않아 다음 주기(최대 5분)까지 새 편집본이 안 보였다(PR #480 2차 리뷰).
+ * 첫 읽기가 걸려 있으면(받아 둔 목록이 없다) 다시 읽으라 해도 새로 읽지 않고 그 요청을 같이 쓴다 — query-core는 받아 둔 데이터가
+ * 있을 때만 걸린 읽기를 접고 새로 읽는다. 그 요청은 저장보다 먼저 나가 새 편집본이 빠져 있으니 먼저 접고(읽기 전 상태로 되돌린다)
+ * 다시 읽는다(PR #480 3차 리뷰)
  */
 export function forgetLibraryList(queryClient: QueryClient): void {
-  queryClient.removeQueries({ queryKey: ['library'] });
+  void queryClient
+    .cancelQueries({
+      queryKey: ['library'],
+      fetchStatus: 'fetching',
+      predicate: (query) => query.state.data === undefined,
+    })
+    .then(() => queryClient.invalidateQueries({ queryKey: ['library'], refetchType: 'active' }));
+  queryClient.removeQueries({ queryKey: ['library'], type: 'inactive' });
 }
 
 export function fetchLibraryDetail(recipeId: number): Promise<LibraryDetail> {

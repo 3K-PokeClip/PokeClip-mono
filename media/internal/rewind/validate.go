@@ -24,10 +24,12 @@ const headerLine = "#EXTM3U\n"
 // 아주 짧아 줄이 많아지면 넘는다 — 0.79초 조각으로 1시간을 채우면 이 크기에 닿는다.
 const MaxBodyBytes = 512 << 10
 
-// MaxVODBodyBytes 는 VOD 목록(KindVOD) 본문의 크기 상한이다 — M6 설계 9절 D29. VOD 는 사슬 전체를 한
-// 문서에 싣는다(K1). 8시간 방송이 4초 조각 7,200개로 약 830KB 라 MaxBodyBytes 를 함께 쓰면 VOD 가 영구히
-// 발행 중단된다. 4MiB 는 4초 조각으로 약 36,000개(약 40시간)이고, 넘는 사슬은 한계로 둔다(문서를 쪼개면 「사슬
-// 하나에 문서 하나」와 어긋난다 — 설계 3.1 phase 3 비귀속 행 절).
+// MaxVODBodyBytes 는 VOD 목록(KindVOD) 본문의 크기 상한이다 — M6 설계 9절 D29. VOD 는 회차 전체를 한
+// 문서에 싣는다 — 사슬이 하나면 그 사슬, 여럿이면 사슬 전부다(POK-549 가 M6 K1 「사슬 하나에 문서 하나」를
+// 회차로 넓혔다). 8시간 방송이 4초 조각 7,200개로 약 830KB 라 MaxBodyBytes 를 함께 쓰면 VOD 가 영구히 발행
+// 중단된다. 4MiB 는 4초 조각으로 약 36,000개(약 40시간)다. 넘는 회차는 마지막 사슬 범위로 물러서고(POK-549
+// K-a), 사슬 하나로도 넘으면 한계로 둔다(문서를 쪼개면 「회차 하나에 문서 하나」와 어긋난다 — 설계 3.1
+// phase 3 비귀속 행 절).
 const MaxVODBodyBytes = 4 << 20
 
 // pdtSlack 은 PDT 엄격 단조 검사(S7)가 이웃한 두 조각의 겹침으로 봐주는 폭이다 — 설계 4.5.5 S7 의
@@ -132,7 +134,7 @@ type Published struct {
 //	ErrHaltPublication    그 밖의 여섯 — 이번 발행을 내지 않는다
 //
 // 처음 걸린 검사 하나만 돌려준다. 순서는 빈 목록(S3) → 본문 = 목록 값(S5 — 행과 본문 조각을 짝지어야
-// 나머지를 잴 수 있다) → S4(까닭은 checkInheritedPrefix) → S1 → S2 → S3 → S5(형식·TD·MAP) → S6 → S7 이다.
+// 나머지를 잴 수 있다) → S4(까닭은 checkInheritedPrefix) → S1 → S2 → S3 → S5(형식·TD·MAP·VOD 세션 경계) → S6 → S7 이다.
 // 본문이 목록 값과 다르면 그 목록이 계승 취소 대상이어도(예: 본문에서만 접두 URI 가 상대) 발행 중단이
 // 먼저다 — 접두를 빼고 다시 렌더해도 고쳐지지 않는 렌더·호출자 결함이기 때문이다. 단 MAP 의 있고
 // 없음·값은 이 순서 밖이다: 「본문 = 목록 값」 조항은 MAP 줄의 개수·위치만 보고, 있고 없음·값은 S4
@@ -174,16 +176,18 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 //	         소유 회차 base(headerMismatch)
 //	종류·닫힘 PLAYLIST-TYPE 줄 = KindVOD 면 VOD 한 줄 · 아니면 0줄 · ENDLIST 줄 있음 = Ended(headerMismatch)
 //	조각마다  URI = BaseURL + "/" + playback_s3_key · PDT 줄 = playback_pdt(ms 로 자름) ·
-//	         EXTINF 줄 = duration_ms · GAP 줄은 GAP 원장에 있는 행에만 · MAP 줄 개수·위치
-//	         (segmentMismatch)
+//	         EXTINF 줄 = duration_ms · GAP 줄은 GAP 원장에 있는 행에만 · MAP 줄 개수·위치 ·
+//	         KindVOD 면 DISCONTINUITY 줄 수 = HasDiscontinuityTag(segmentMismatch)
 //
 // 나머지 검사는 행 값으로 판정한다. 그 판정이 발행되는 바이트에도 참이려면 본문이 행 값을 그대로
 // 적었어야 하고, 이 조항이 그것을 확인한다 — 없으면 행과 다른 EXTINF·PDT·URI 를 적은 본문이 검사를
-// 통과한다. 검사가 읽는 값 가운데 본문에도 적히는 것은 이 여섯이 전부다: MSN(S1·S2) · URI(S3 가
+// 통과한다. 검사가 읽는 값 가운데 본문에도 적히는 것은 이 일곱이 전부다: MSN(S1·S2) · URI(S3 가
 // 올라갔다고 본 객체) · GAP 줄(S3 가 GAP 원장으로 settled 라고 본 행) · EXTINF(S3·S4 길이 합 · S5 TD) ·
-// PDT(S7) · TD(S5 상한). 남는 차이는 해상도 하나다 — PDT 줄은 ms 로 잘려 적히므로 S7 은 ms 로 자른 값으로
+// PDT(S7) · TD(S5 상한) · DISCONTINUITY 줄(VOD 만 — S5 VOD 세션 경계). 남는 차이는 해상도 하나다 — PDT 줄은 ms 로 잘려 적히므로 S7 은 ms 로 자른 값으로
 // 잰다. 머리 줄과 MAP 줄은 개수·위치까지 본다 — 렌더가 쓰는 자리 한 곳만 읽으면 중복·이동한 줄이 지나간다.
-// MAP 의 있고 없음·값과 URI 의 절대성은 S4·S5 가 본문에서 읽고, DISCONTINUITY 는 어느 검사도 읽지 않는다.
+// MAP 의 있고 없음·값과 URI 의 절대성은 S4·S5 가 본문에서 읽는다. DISCONTINUITY 는 VOD 목록에서만 본다 — 여기서
+// 줄 수가 행 값(HasDiscontinuityTag)과 같은지를, S5 VOD 세션 경계 조항(checkBody)이 그 값이 세션 경계와 맞는지를
+// 본다(POK-549 S5 (a)(b)). 되감기 목록에서는 어느 검사도 읽지 않는다 — 4초 발행 경로는 바뀌지 않는다.
 // 서식(EXTINF 소수 셋째 자리 · pdtLayout · URI 결합)은 Render 와 같다 — 둘이 갈리면 모든 목록이 여기서
 // 멈추므로 곧바로 드러난다(g6_f2 검사).
 func checkBodyMatchesRows(p Playlist, body []byte, lines []string, segs []segmentLines) error {
@@ -252,12 +256,21 @@ func (p Playlist) headerMismatch(body []byte, lines []string, first segmentLines
 // MAP 줄은 개수·위치만 본다: 회차가 이어지는 조각 앞 0줄, 바뀌는 조각 앞 1줄 이하(MAP 은 다음 MAP 까지
 // 이어 적용된다 — 4.4.4.5). 있는지·값이 맞는지는 S4(접두)·S5(MAP 도달 가능)가 본다 — 여기서 보면 접두
 // MAP 문제가 계승 취소에서 발행 중단으로 뒤집힌다(이 조항이 S4 보다 먼저 돈다).
+//
+// KindVOD 면 DISCONTINUITY 줄 수도 본다: HasDiscontinuityTag 가 참이면 1줄, 거짓이면 0줄이다. 「#EXT-X-DISCONTINUITY」
+// 와 글자 그대로 같은 줄만 센다 — 접두로 세면 첫 조각 태그에 섞인 머리 줄 #EXT-X-DISCONTINUITY-SEQUENCE: 를 표시로
+// 읽어 모든 VOD 가 멈춘다(POK-549 R2). 되감기 목록은 세지 않는다(checkBodyMatchesRows).
 func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart bool) string {
 	if want := p.BaseURL + "/" + r.PlaybackS3Key; seg.uri != want {
 		return fmt.Sprintf("URI %q — 장부 키로는 %q", seg.uri, want)
 	}
 	if maps := linesWithPrefix(seg.tags, "#EXT-X-MAP:"); len(maps) > 1 || (!runStart && len(maps) > 0) {
 		return fmt.Sprintf("MAP 줄 %d개 — 회차가 이어지는 조각 앞은 0줄, 바뀌는 조각 앞은 1줄까지다", len(maps))
+	}
+	if p.Kind == KindVOD {
+		if got, want := countLine(seg.tags, discontinuityLine), p.discontinuityTags(r); got != want {
+			return fmt.Sprintf("DISCONTINUITY 줄 %d개 — 행 값으로는 %d개", got, want)
+		}
 	}
 	const gap = "#EXT-X-GAP"
 	want := []string{
@@ -274,6 +287,29 @@ func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart boo
 		return fmt.Sprintf("PDT·EXTINF·GAP 줄 %q — 행 값으로는 %q", got, want)
 	}
 	return ""
+}
+
+// discontinuityLine 은 끊김 표시 줄이다(RFC 8216bis-22 4.4.4.3) — Render 가 쓰는 글자 그대로다.
+const discontinuityLine = "#EXT-X-DISCONTINUITY"
+
+// discontinuityTags 는 행 r 의 조각 앞에 서야 할 끊김 표시 줄 수다 — HasDiscontinuityTag 면 1, 아니면 0. r 의
+// 회차를 못 찾으면 영값(계승 없음)이라 0 이다(렌더가 먼저 거르는 입력이다).
+func (p Playlist) discontinuityTags(r boundary.Row) int {
+	if s, _ := p.session(r.SessionID); HasDiscontinuityTag(r.Seq, s, p.Cutoff) {
+		return 1
+	}
+	return 0
+}
+
+// countLine 은 줄 가운데 line 과 글자 그대로 같은 것의 수다.
+func countLine(lines []string, line string) int {
+	n := 0
+	for _, l := range lines {
+		if l == line {
+			n++
+		}
+	}
+	return n
 }
 
 // linesWithPrefix 는 줄 가운데 prefixes 중 하나로 시작하는 것들이다(본문 순서 그대로).
@@ -450,9 +486,10 @@ func totalMS(rows []boundary.Row) int64 {
 //	조각 줄 — 조각마다 duration_ms > 0 이고 조각 키가 ③ 키 문법(playback.ParseSegKey — 업로드 워커와 같은 한 벌)이며
 //	첫 성분이 목록의 스트림이다(계획 B #10). 키는 URI 줄에 그대로 실리므로 CR · 따옴표 · NUL 같은 글자가 줄로 새거나
 //	다른 스트림의 객체를 가리키는 줄을 막는다 — 「본문 = 목록 값」 조항은 본문이 키를 그대로 적었는지만 본다
+//	VOD 세션 경계(KindVOD 만) — 끊김 표시는 세션이 바뀌는 줄에만 선다(vodBoundaryProblem)
 //
-// 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · 종류·닫힘 줄 · URI · PDT · EXTINF · GAP · MAP 개수·위치)은 checkBodyMatchesRows
-// 가 빈 목록 검사 다음, S4 보다 앞서 본다.
+// 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · 종류·닫힘 줄 · URI · PDT · EXTINF · GAP · MAP 개수·위치 · VOD DISCONTINUITY
+// 줄 수)은 checkBodyMatchesRows 가 빈 목록 검사 다음, S4 보다 앞서 본다.
 func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) error {
 	switch {
 	case !bytes.HasPrefix(body, []byte(headerLine)):
@@ -489,7 +526,34 @@ func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) err
 			return violation("S5", "seq %d: %s", r.Seq, problem)
 		}
 	}
+	if p.Kind == KindVOD {
+		for i, r := range p.Rows {
+			if problem := p.vodBoundaryProblem(i); problem != "" {
+				return violation("S5", "seq %d: %s", r.Seq, problem)
+			}
+		}
+	}
 	return nil
+}
+
+// vodBoundaryProblem 은 VOD 목록 i 번째 행의 끊김 표시가 세션 경계와 어긋나는 까닭이다("" = 맞다) — POK-549
+// S5 (b)(K-d).
+//
+//	끊김 표시(i) ⟺ i > 0 ∧ 세션이 i 번째 줄에서 바뀐다
+//
+// 회차 단위 VOD 는 사슬 경계마다 표시를 달아야 플레이어가 시간 도장의 점프를 형식 변경으로 받는다(RFC
+// 8216 4.3.2.3). 「본문 = 목록 값」 조항은 본문이 행 값(HasDiscontinuityTag)을 그대로 적었는지만 보므로,
+// 렌더 입력이 둘째 사슬 머리의 계승 칸을 채우지 않아 경계에 표시가 빠진 목록(R1)이나 사슬 머리의 계승 칸을
+// 지우지 않아 첫 줄에 표시가 선 목록(R17)은 거기서 지나간다. 이 조항이 그 그물이다. 본문의 줄이 행 값과
+// 같다는 것은 checkBodyMatchesRows 가 확인했으므로 여기서는 행 값으로 잰다.
+func (p Playlist) vodBoundaryProblem(i int) string {
+	r := p.Rows[i]
+	atBoundary := i > 0 && r.SessionID != p.Rows[i-1].SessionID
+	if marked := p.discontinuityTags(r) == 1; marked != atBoundary {
+		return fmt.Sprintf("VOD 세션 경계 — 끊김 표시 %t · 세션이 바뀌는 줄 %t(표시는 목록 첫 줄을 뺀 세션 경계에만 선다)",
+			marked, atBoundary)
+	}
+	return ""
 }
 
 // bodyLimit 은 목록 종류의 본문 크기 상한이다 — VOD 는 MaxVODBodyBytes, 되감기 목록은 MaxBodyBytes 다.

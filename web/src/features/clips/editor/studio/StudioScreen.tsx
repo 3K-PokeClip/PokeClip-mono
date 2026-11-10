@@ -21,8 +21,6 @@ import {
   mediaStreamId,
   timelineBaseMs,
   updateRecipe,
-  CUT_MAX_MS,
-  CUT_MIN_MS,
   type BroadcastRow,
   type ClipSnapshot,
   type JumpCard,
@@ -60,13 +58,8 @@ import { editorTimelineOf, holdEditorMedia, loadRecording } from '../editorMedia
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { useTrackPreview } from '../trackAudio/useTrackPreview';
 import type { FilmstripSource } from './VideoFilmstrip';
-import {
-  lookFromDocument,
-  outputFromLook,
-  outputsFor,
-  sameRecipe,
-  subtitlesFor,
-} from '../recipeLook';
+import { lookFromDocument, outputFromLook, sameRecipe } from '../recipeLook';
+import { editorTrackId as trackId, recipeDocumentOf } from '../recipeDocument';
 import { loadUploadDialog } from '../uploadDialogChunk';
 import {
   defaultSceneOffsetMs,
@@ -300,8 +293,6 @@ async function loadTrackLabels(broadcast: BroadcastRow): Promise<TrackLabels | n
     return null;
   }
 }
-
-const trackId = (index: number) => `track-${index}`;
 
 /** 다 읽은 편집 대상. mount는 읽기마다 새 번호다 — 편집기를 읽기마다 새로 마운트하는 열쇠(구간·실행취소 기록은 마운트 값) */
 interface Opened {
@@ -732,34 +723,10 @@ function WiredStudio({
     };
   }, [broadcast.endedAt, base, window, card, saved, startedAt, recording, recordingEndSeconds]);
 
-  /** 타임라인의 구간(방송 시작 기준 초) → 계약6 컷(절대 ms). 5초~3분 밖이면 저장 문이 거절하므로 여기서 맞춘다. */
+  /** 화면값 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가 한다 */
   const documentFor = useCallback(
-    (recipe: EditorRecipe): RecipeDocument => {
-      const inAtMs = base + Math.round(recipe.range.startSeconds * 1000);
-      const rawLength = Math.round((recipe.range.endSeconds - recipe.range.startSeconds) * 1000);
-      const length = Math.min(CUT_MAX_MS, Math.max(CUT_MIN_MS, rawLength));
-      const cut = { inAtMs, outAtMs: inAtMs + length };
-      // 켜 둔 트랙만 믹스된다(계약6). 0(최종 믹스)과 1~5는 같이 못 넣는다 — 소스 트랙을 하나라도 켰으면 0을 뺀다.
-      let selected = Array.from({ length: TRACK_COUNT }, (_, i) => i)
-        .filter((i) => !(recipe.trackMuted[trackId(i)] ?? i !== 0))
-        .map((i) => ({
-          trackId: i,
-          gain: Math.min(2, Math.max(0, (recipe.trackVolumes[trackId(i)] ?? 100) / 100)),
-        }));
-      if (selected.some((t) => t.trackId !== 0)) selected = selected.filter((t) => t.trackId !== 0);
-      if (selected.length === 0) selected = [{ trackId: 0, gain: 1 }];
-      // 모양은 화면 그대로 v2로 싣는다(POK-252) — 저장된 편집본의 옛 출력을 두면 화면과 다른 영상이 나온다.
-      // 자막 줄은 편집기가 만들지 않으므로 저장된 것을 그대로 두고, 방식·자리만 화면 값으로 바꾼다.
-      const subtitles = subtitlesFor(recipe, saved?.document.subtitles?.segments ?? null);
-      return {
-        schemaVersion: 2,
-        streamId,
-        cut,
-        outputs: outputsFor(recipe, saved?.document ?? null),
-        audio: { tracks: selected },
-        ...(subtitles ? { subtitles } : {}),
-      };
-    },
+    (recipe: EditorRecipe): RecipeDocument =>
+      recipeDocumentOf({ streamId, base, recipe, saved: saved?.document ?? null }),
     [base, saved, streamId],
   );
 
