@@ -71,6 +71,8 @@ class WebMarkControllerTest extends IntegrationTestSupport {
     private static final Instant RECEIVED = T0.plusSeconds(600);
     /** 지난 방송의 종료 시각: 기준점 1시간 뒤. 위치 상한은 그 + 10분이다. */
     private static final Instant ENDED = T0.plusSeconds(3600);
+    /** 키를 63시간 전부터 쓴 스트리머의 이번 방송 시작 시각. 기준점은 그대로 {@link #T0}이다(POK-562). */
+    private static final Instant AGED_KEY_STARTED = T0.plus(Duration.ofHours(63));
     /** 브라우저 시계의 보낸 시각: 서버 시계와 아무 관계가 없는 값이다(시계 차를 일부러 크게). */
     private static final long SENT_AT = 1_000_000_000_000L;
 
@@ -184,6 +186,39 @@ class WebMarkControllerTest extends IntegrationTestSupport {
         assertThat(cardCount()).isEqualTo(1);
     }
 
+    /**
+     * POK-562 prod 실사고. 기준점은 물리 키 누적 pts 축이라 키를 63시간 전부터 쓴 스트리머는 이번 방송 시작보다
+     * 기준점이 63시간 앞이다(ADR-079 근거 2항). 시작 10분 뒤 누른 마킹은 카드 ms 63시간 10분 = 227,400,000.
+     */
+    @Test
+    void 키를_쓴_지_48시간이_지나도_라이브_마킹은_201() throws Exception {
+        키를_63시간_앞서_쓰기_시작했다(라이브, 라이브_키);
+        doReturn(AGED_KEY_STARTED.plus(Duration.ofMinutes(10))).when(webMarks).now();
+
+        mvc.perform(마킹(라이브, 라이브_본문(eventId(), SENT_AT, SENT_AT)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.streamTimestampMs").value(227_400_000));
+    }
+
+    /** POK-562 회귀. 키 나이와 상관없이 이번 방송 시작 뒤 48시간이 라이브 경계다: 딱 48시간은 201, 1ms 넘으면 400. */
+    @Test
+    void 키를_오래_쓴_라이브도_시작_뒤_48시간을_넘으면_400() throws Exception {
+        키를_63시간_앞서_쓰기_시작했다(라이브, 라이브_키);
+        Instant limit = AGED_KEY_STARTED.plus(Duration.ofHours(48));
+
+        doReturn(limit.plusMillis(1)).when(webMarks).now();
+        mvc.perform(마킹(라이브, 라이브_본문(eventId(), SENT_AT, SENT_AT)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(invalid("pressedAt")));
+        assertThat(cardCount()).isZero();
+
+        doReturn(limit).when(webMarks).now();
+        mvc.perform(마킹(라이브, 라이브_본문(eventId(), SENT_AT, SENT_AT)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.streamTimestampMs")
+                        .value(Duration.ofHours(63 + 48).toMillis()));
+    }
+
     // ── 지난 방송: 재생 위치 ────────────────────────────────────
 
     /** 위치가 곧 카드 ms다(브라우저가 반올림해 정수로 보낸다: 91.39초 → 91,390). */
@@ -223,11 +258,40 @@ class WebMarkControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.streamTimestampMs").value(4_200_000));
     }
 
-    /** 종료 시각을 모르는 지난 방송은 48시간이 상한이다. */
+    /**
+     * 종료 시각을 모르는 지난 방송은 방송 시작 뒤 48시간이 상한이다(POK-562). 카드 ms 축으로는
+     * (시작 − 기준점) + 48시간 = 48시간 − 30초.
+     */
     @Test
-    void 종료_시각이_없으면_상한은_48시간() throws Exception {
+    void 종료_시각이_없으면_상한은_방송_시작_뒤_48시간() throws Exception {
         jdbc.update("UPDATE broadcasts SET ended_at = NULL WHERE stream_id = ?", 지난_방송);
-        long max = Duration.ofHours(48).toMillis();
+        long max = Duration.ofHours(48).minusSeconds(30).toMillis();
+
+        mvc.perform(마킹(지난_방송, 위치_본문(eventId(), String.valueOf(max + 1))))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(invalid("positionMs")));
+        mvc.perform(마킹(지난_방송, 위치_본문(eventId(), String.valueOf(max))))
+                .andExpect(status().isCreated());
+    }
+
+    /** POK-562. 키를 63시간 전부터 쓴 지난 방송(종료 모름)의 위치 64시간은 이번 방송 1시간 지점이라 201. */
+    @Test
+    void 키를_오래_쓴_지난_방송도_위치로_카드가_된다() throws Exception {
+        키를_63시간_앞서_쓰기_시작했다(지난_방송, 지난_방송_키);
+        jdbc.update("UPDATE broadcasts SET ended_at = NULL WHERE stream_id = ?", 지난_방송);
+        long position = Duration.ofHours(63 + 1).toMillis();
+
+        mvc.perform(마킹(지난_방송, 위치_본문(eventId(), String.valueOf(position))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.streamTimestampMs").value(position));
+    }
+
+    /** POK-562 회귀. 키를 오래 쓴 지난 방송(종료 모름)도 이번 방송 시작 뒤 48시간이 위치 상한이다. */
+    @Test
+    void 키를_오래_쓴_지난_방송도_시작_뒤_48시간을_넘으면_400() throws Exception {
+        키를_63시간_앞서_쓰기_시작했다(지난_방송, 지난_방송_키);
+        jdbc.update("UPDATE broadcasts SET ended_at = NULL WHERE stream_id = ?", 지난_방송);
+        long max = Duration.ofHours(63 + 48).toMillis();
 
         mvc.perform(마킹(지난_방송, 위치_본문(eventId(), String.valueOf(max + 1))))
                 .andExpect(status().isBadRequest())
@@ -501,6 +565,21 @@ class WebMarkControllerTest extends IntegrationTestSupport {
 
     private static String invalid(String field) {
         return "{\"error\":\"invalid_request\",\"field\":\"" + field + "\"}";
+    }
+
+    /**
+     * 키 누적 흉내(media 가 같은 키의 마지막 조각에서 pts 를 이어 받는다): 방송을 {@link #AGED_KEY_STARTED}에 시작하고,
+     * {@code @BeforeEach}가 넣은 첫 조각을 그 30초 뒤 63시간 30초어치 pts 로 바꾼다(seq 1 을 다시 넣으면 PK 가 겹친다).
+     * 기준점 = 벽시계 − pts = {@link #T0}.
+     */
+    private void 키를_63시간_앞서_쓰기_시작했다(String streamId, String ingestKey) {
+        Instant firstWall = AGED_KEY_STARTED.plusSeconds(30);
+        jdbc.update("UPDATE broadcasts SET started_at = ? WHERE stream_id = ?",
+                Timestamp.from(AGED_KEY_STARTED), streamId);
+        jdbc.update("""
+                        UPDATE public.stream_segments SET start_wall_utc = ?, start_pts_ms = ?
+                         WHERE stream_id = ?""",
+                Timestamp.from(firstWall), Duration.between(T0, firstWall).toMillis(), ingestKey);
     }
 
     private void 조각(String ingestKey, Instant wall) {

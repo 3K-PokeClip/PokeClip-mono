@@ -43,8 +43,11 @@ public class MarkService {
      */
     static final Duration LATE_MARK_TOLERANCE = Duration.ofMinutes(2);
 
-    /** 카드 ms 상한(감사 1회차 A2). 이보다 긴 방송은 없다고 본다: 넘으면 시각이 틀린 것이라 400. */
-    static final long MAX_CARD_MS = Duration.ofHours(48).toMillis();
+    /**
+     * 방송 길이 상한(감사 1회차 A2). 이보다 긴 방송은 없다고 본다: 방송 시작에서 이만큼 넘게 뒤의 시각은 틀린 것이라
+     * 400이다. 카드 ms 로 옮기는 식은 {@link #cardUpperMillis}(POK-562).
+     */
+    static final long MAX_BROADCAST_MS = Duration.ofHours(48).toMillis();
 
     private final StreamKeyResolveClient keys;
     private final BroadcastRepository broadcasts;
@@ -119,7 +122,10 @@ public class MarkService {
         if (origin == null) {
             throw MarkErrors.timelineNotReady(TIMELINE_RETRY_AFTER_SECONDS);
         }
-        long cardMs = cardMillis(pressed, origin).orElseThrow(MarkErrors::invalidRequest);
+        // origin 이 있으면 시작 시각도 있다: TimelineOriginReader 가 시작 시각 없는 방송을 맵에서 뺀다.
+        long upperMs = cardUpperMillis(broadcast.getStartedAt(), origin)
+                .orElseThrow(MarkErrors::invalidRequest);
+        long cardMs = cardMillis(pressed, origin, upperMs).orElseThrow(MarkErrors::invalidRequest);
         return cards.recordHotkey(broadcast.getStreamId(), userId, request.eventId(), cardMs);
     }
 
@@ -179,17 +185,38 @@ public class MarkService {
     }
 
     /**
-     * 카드 ms = 누른 시각 − 기준점. 기준점보다 앞이면 0(감사 1회차 A2: {@code recordHotkey}에 음수가 가면 500이다).
-     * 넘치거나 {@link #MAX_CARD_MS}를 넘으면 비어 있다: 시각이 틀린 것이라 부르는 쪽이 400으로 바꾼다(위와 같은 이유로 예외를 안 고른다).
+     * 이번 방송의 카드 ms 상한 = (방송 시작 − 기준점) + {@link #MAX_BROADCAST_MS}. 곧 「방송 시작 뒤 48시간」을 카드 ms
+     * 축으로 옮긴 값이다(POK-562).
+     *
+     * <p>🔴 <b>상한을 기준점이 아니라 방송 시작에서 잰다.</b> 기준점은 물리 키 누적 pts 축이라(media 가 같은 키의 마지막
+     * 조각에서 pts 를 이어 받는다, ADR-079 근거 2항) 키를 오래 쓴 스트리머는 기준점이 이번 시작보다 수십 시간 앞이다.
+     * 기준점에서 재면 키를 쓴 지 48시간 뒤의 정상 마킹이 전부 400 이 된다.
+     *
+     * <p>전제: 기준점이 있으면 시작 시각도 있다({@code TimelineOriginReader#originsOf}가 시작 시각 없는 방송을 뺀다).
+     * 넘치면 비어 있다: 부르는 쪽이 제 봉투의 400으로 바꾼다({@link #serverPressedAt}과 같은 이유로 예외를 안 고른다).
      */
-    static OptionalLong cardMillis(Instant pressed, Instant origin) {
+    static OptionalLong cardUpperMillis(Instant startedAt, Instant origin) {
+        try {
+            long startMs = Math.subtractExact(startedAt.toEpochMilli(), origin.toEpochMilli());
+            return OptionalLong.of(Math.addExact(startMs, MAX_BROADCAST_MS));
+        } catch (ArithmeticException e) {
+            return OptionalLong.empty();
+        }
+    }
+
+    /**
+     * 카드 ms = 누른 시각 − 기준점. 기준점보다 앞이면 0(감사 1회차 A2: {@code recordHotkey}에 음수가 가면 500이다).
+     * 넘치거나 {@code upperMs}({@link #cardUpperMillis})를 넘으면 비어 있다: 시각이 틀린 것이라 부르는 쪽이 400으로
+     * 바꾼다(위와 같은 이유로 예외를 안 고른다).
+     */
+    static OptionalLong cardMillis(Instant pressed, Instant origin, long upperMs) {
         long ms;
         try {
             ms = Math.subtractExact(pressed.toEpochMilli(), origin.toEpochMilli());
         } catch (ArithmeticException e) {
             return OptionalLong.empty();
         }
-        if (ms > MAX_CARD_MS) {
+        if (ms > upperMs) {
             return OptionalLong.empty();
         }
         return OptionalLong.of(Math.max(0, ms));

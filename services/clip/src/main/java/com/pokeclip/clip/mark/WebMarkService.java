@@ -107,7 +107,9 @@ public class WebMarkService {
         if (origin == null) {
             throw new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS);
         }
-        long cardMs = live ? liveMillis(request, receivedAt, origin) : positionMillis(request, broadcast, origin);
+        long cardMs = live
+                ? liveMillis(request, receivedAt, broadcast.getStartedAt(), origin)
+                : positionMillis(request, broadcast, origin);
 
         String owner = broadcast.getStreamerId();
         RecordResult result;
@@ -128,28 +130,38 @@ public class WebMarkService {
         return result;
     }
 
-    /** 라이브: OBS 문과 같은 식(서버 시각 = pressedAt + (받은 − sentAt), 미래면 받은 시각; 카드 ms = 그 − 기준점, 앞이면 0). */
-    private static long liveMillis(WebMarkRequest request, Instant receivedAt, Instant origin) {
+    /**
+     * 라이브: OBS 문과 같은 식(서버 시각 = pressedAt + (받은 − sentAt), 미래면 받은 시각; 카드 ms = 그 − 기준점, 앞이면
+     * 0). 상한은 방송 시작 뒤 48시간({@link MarkService#cardUpperMillis}, POK-562).
+     */
+    private static long liveMillis(
+            WebMarkRequest request, Instant receivedAt, Instant startedAt, Instant origin) {
         Instant pressed;
         try {
             pressed = MarkService.serverPressedAt(request.pressedAt(), request.sentAt(), receivedAt);
         } catch (ArithmeticException e) {
             throw new InvalidHighlightException("pressedAt");
         }
-        return MarkService.cardMillis(pressed, origin).orElseThrow(() -> new InvalidHighlightException("pressedAt"));
+        // origin 이 있으면 시작 시각도 있다: TimelineOriginReader 가 시작 시각 없는 방송을 맵에서 뺀다.
+        long upperMs = MarkService.cardUpperMillis(startedAt, origin)
+                .orElseThrow(() -> new InvalidHighlightException("pressedAt"));
+        return MarkService.cardMillis(pressed, origin, upperMs)
+                .orElseThrow(() -> new InvalidHighlightException("pressedAt"));
     }
 
     /**
      * 지난 방송: 위치가 곧 카드 ms다(계획 검증 m3). 아래는 기준점 앞 10분까지 0으로 접고, 위는 (종료 − 기준점) + 10분,
-     * 종료를 모르면 48시간({@link MarkService#MAX_CARD_MS}).
+     * 종료를 모르면 방송 시작 뒤 48시간 = (시작 − 기준점) + 48시간({@link MarkService#cardUpperMillis}, POK-562).
      */
     private static long positionMillis(WebMarkRequest request, Broadcast broadcast, Instant origin) {
         long position = request.positionMs();
         if (position < -POSITION_BELOW_ORIGIN_MS) {
             throw new InvalidHighlightException("positionMs");
         }
+        // origin 이 있으면 시작 시각도 있다(위 liveMillis 와 같은 전제).
         long upper = broadcast.getEndedAt() == null
-                ? MarkService.MAX_CARD_MS
+                ? MarkService.cardUpperMillis(broadcast.getStartedAt(), origin)
+                        .orElseThrow(() -> new InvalidHighlightException("positionMs"))
                 : broadcast.getEndedAt().toEpochMilli() - origin.toEpochMilli() + POSITION_AFTER_END_MS;
         if (position > upper) {
             throw new InvalidHighlightException("positionMs");
