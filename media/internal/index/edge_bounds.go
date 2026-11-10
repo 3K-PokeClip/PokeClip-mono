@@ -35,6 +35,11 @@ import (
 // 늦게 붙는다(E3 · 종결 r2 codex 설계 H1). FOR KEY SHARE 는 비키 UPDATE 와 충돌하지 않아 이 몫을 못 한다. 세션 잠금은
 // EXISTS 하위 계획이 정렬 전 입력 순서로 모두 잡고 원장 행 잠금은 그 뒤 (stream, round) 순이다. 부르는 쪽(Raise)은 한
 // 문장에 스트림마다 회차 하나만 실어, 이 문장이 쥐는 세션 행은 스트림마다 하나다.
+//
+// 여러 스트림의 세션 행을 한 문장에 잠그는 것은 이 문장과 fence 반납(rewind/publish fenceReleaseSQL — 한 writer 가 쥔
+// fence 전부)이다. 둘은 같은 순서 — (stream, round) 바이트 순 — 로 잠가 서로 기다려도 교착(40P01)이 없다. 이 문장의 입력
+// 순서는 Writer 의 후보 순서(edgebounds candidates — Go 문자열 비교)다. 앞 행을 쥔 채 뒤 행을 기다리는 동안 앞 행의 갱신도
+// 줄을 서므로, 기다림은 raiseTxnLimitsSQL 의 lock_timeout(500ms)에서 끊는다.
 const raiseSQL = `
 INSERT INTO stream_edge_bounds AS b (stream_id, round_id, dvr_floor)
 SELECT u.stream_id, u.round_id, u.dvr_floor
@@ -50,6 +55,18 @@ ON CONFLICT (stream_id, round_id) DO UPDATE
        updated_at = pg_catalog.now()
  WHERE b.released_at IS NULL
 RETURNING b.stream_id, b.round_id, b.dvr_floor`
+
+// raiseTxnLimitsSQL 은 올림 트랜잭션의 지역 상한이다 — lock_timeout 500ms 가 raiseSQL 의 잠금 대기 하나의 상한이다(종결 r3
+// M2 · kty 2026-11-11 결정). 올림은 위상 잠금 밖에서 여러 스트림의 세션 행을 FOR SHARE 로 쥔 채 다음 행을 기다리므로,
+// 상한이 없으면 한 스트림의 대기(다른 연결의 위상 · fence 갱신)가 이미 쥔 다른 스트림의 P0 · P4 · fence · 위상 갱신까지
+// 붙잡는다 — 그 대기의 끝은 Writer 의 CallTimeout(5초)뿐이고, 위상 트랜잭션의 lock_timeout(5초 — setTxnLimitsSQL)에
+// 닿아 ErrTopologyContended 를 낼 수 있다. 500ms 는 그보다 열 배 작고, 정상 경합(다른 상자의 올림 · 해제 · 회차 닫힘 —
+// 짧은 문장 하나)은 넘지 않는다. 넘으면 55P03 으로 문장째 되돌리고 Writer 가 write_failing(reason=failed · pass=raise)을
+// 알린 뒤 다음 올림 틱(FlushEvery)에 GREATEST 로 다시 맞춘다 — 하한이 한 틱 늦게 오를 뿐(엣지가 덜 막는 쪽) 내려가지
+// 않는다. 상한은 잠금 대기 하나마다다 — 한 대기라도 500ms 에 닿으면 그 자리에서 문장이 끝나고, 번진 대기는 문장이 실제로
+// 기다린 대기(저마다 500ms 미만)의 합이다. statement_timeout 은 역할 기본값(60초)과 CallTimeout 에 맡긴다. 지역 설정이라
+// 명시 트랜잭션 안에서만 듣는다(raisePass).
+const raiseTxnLimitsSQL = `SELECT pg_catalog.set_config('lock_timeout','500ms',true)`
 
 // closedUnreleasedSQL ($1 limit) — 그 회차에 열린 세션이 없으면(세션 행 없음 포함) 닫힌 것으로 본다.
 const closedUnreleasedSQL = `
@@ -106,7 +123,7 @@ func NewEdgeBoundsLedger(pool *pgxpool.Pool) *EdgeBoundsLedger {
 func (l *EdgeBoundsLedger) Raise(ctx context.Context, rows []edgebounds.Floor) ([]edgebounds.Floor, error) {
 	var out []edgebounds.Floor
 	for _, p := range raisePasses(rows) {
-		got, err := l.collectFloors(ctx, raiseSQL, p.streams, p.rounds, p.values)
+		got, err := l.raisePass(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("하한 원장 올림 실패: %w", err)
 		}
@@ -116,6 +133,21 @@ func (l *EdgeBoundsLedger) Raise(ctx context.Context, rows []edgebounds.Floor) (
 		return cmp.Or(cmp.Compare(a.StreamID, b.StreamID), cmp.Compare(a.RoundID, b.RoundID))
 	})
 	return out, nil
+}
+
+// raisePass 는 raiseSQL 한 번을 제 트랜잭션에서 잠금 대기 상한(raiseTxnLimitsSQL) 아래 돌린다. 상한에 걸리면 55P03 이고
+// 문장째 되돌린다(쥔 세션 행도 놓는다).
+func (l *EdgeBoundsLedger) raisePass(ctx context.Context, p raiseArgs) ([]edgebounds.Floor, error) {
+	var out []edgebounds.Floor
+	err := pgx.BeginFunc(ctx, l.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, raiseTxnLimitsSQL); err != nil {
+			return err
+		}
+		var err error
+		out, err = collectFloors(ctx, tx, raiseSQL, p.streams, p.rounds, p.values)
+		return err
+	})
+	return out, err
 }
 
 // raiseArgs 는 raiseSQL 한 번의 인자 배열 셋이다(같은 길이).
@@ -156,7 +188,7 @@ func (l *EdgeBoundsLedger) ClosedUnreleased(ctx context.Context, limit int) ([]e
 	if limit < 1 {
 		return nil, fmt.Errorf("하한 원장 해제 대상 조회의 limit = %d, want 1 이상", limit)
 	}
-	out, err := l.collectFloors(ctx, closedUnreleasedSQL, limit)
+	out, err := collectFloors(ctx, l.pool, closedUnreleasedSQL, limit)
 	if err != nil {
 		return nil, fmt.Errorf("하한 원장 해제 대상 조회 실패: %w", err)
 	}
@@ -193,8 +225,8 @@ func (l *EdgeBoundsLedger) DeleteReleased(ctx context.Context, olderThan time.Du
 }
 
 // collectFloors 는 (stream_id, round_id, dvr_floor) 행을 돌려주는 문장 sql 의 결과다.
-func (l *EdgeBoundsLedger) collectFloors(ctx context.Context, sql string, args ...any) ([]edgebounds.Floor, error) {
-	rows, err := l.pool.Query(ctx, sql, args...)
+func collectFloors(ctx context.Context, q rowQuerier, sql string, args ...any) ([]edgebounds.Floor, error) {
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

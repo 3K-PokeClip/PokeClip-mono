@@ -6,6 +6,7 @@ package index
 // 없음 = 닫힘)과 권한(media_indexer 넷 · app_clip 없음) · 운영 SQL 사본(30 · 40)을 잰다.
 //
 //	문장                   메서드              표 · 동작
+//	raiseTxnLimitsSQL      Raise 문장마다 첫 문장  (표 없음 — set_config lock_timeout)
 //	raiseSQL               Raise               edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT(RETURNING) · sessions FOR SHARE
 //	closedUnreleasedSQL    ClosedUnreleased    edge_bounds · sessions SELECT
 //	markReleasedSQL        MarkReleased        edge_bounds SELECT FOR UPDATE · UPDATE
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
@@ -562,6 +564,76 @@ func TestEdgeBoundsLedgerRaiseNoDeadlockWithRoundCloseAcrossRounds(t *testing.T)
 	}
 }
 
+// Raise 가 한 스트림의 세션 행에서 기다리는 동안 같은 문장에서 이미 쥔 다른 스트림의 세션 행 갱신(P0 · P4 · fence ·
+// 위상)도 그 뒤에 줄을 선다 — 기다림이 번진다(종결 r3 M2). 올림은 raiseLockTimeout 에서 55P03 으로 그만두고 쥔 행을
+// 놓는다 — 번진 기다림도 그 안에서 끝난다. 끊긴 문장은 되돌려져 원장 행이 없고, 부르는 쪽(Writer)은 그 오류를
+// write_failing reason=failed pass=raise 로 알린 뒤 다음 올림 틱에 GREATEST 로 다시 맞춘다 — 잠금이 풀린 뒤 다시 부른
+// 올림이 두 회차를 다 올린다. 다른 연결 C 가 sb 의 세션 행을 쥐어(FOR NO KEY UPDATE — 위상 · fence UPDATE 가 거는
+// 잠금) Raise([sa, sb]) 를 sb 에서 세우고, 그동안 sa 한 행 fence UPDATE 가 Raise 에 막혀 기다리는 시간을 잰다. 변이 =
+// 올림의 lock_timeout 제거 → Raise 가 C 의 커밋까지 기다려 sa UPDATE 가 상한(3초)까지 막히고 Raise 가 성공해 FAIL.
+func TestEdgeBoundsLedgerRaiseBoundsLockWaitSpread(t *testing.T) {
+	const updateBound = time.Second
+	pool := edgeBoundsPool(t)
+	ctx := context.Background()
+	plantOpenRound(t, pool, "a", "RA")
+	plantOpenRound(t, pool, "b", "RB")
+	writer, writerPID := singleConnPool(t, pool)
+	updater, updaterPID := singleConnPool(t, pool)
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("잠금 트랜잭션 시작 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := holder.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("잠금 트랜잭션 되돌리기 실패: %v", err)
+		}
+	})
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM stream_sessions WHERE session_id = 'RB' FOR NO KEY UPDATE`); err != nil {
+		t.Fatalf("sb 세션 행 잠금 실패: %v", err)
+	}
+	raised := make(chan error, 1)
+	go func() {
+		_, err := NewEdgeBoundsLedger(writer).Raise(ctx, floors(
+			edgebounds.Floor{StreamID: "a", RoundID: "RA", Value: 5},
+			edgebounds.Floor{StreamID: "b", RoundID: "RB", Value: 5}))
+		raised <- err
+	}()
+	waitLockWait(t, pool, writerPID)
+
+	updated := make(chan time.Duration, 1)
+	go func() {
+		uctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		start := time.Now()
+		_, _ = updater.Exec(uctx, `UPDATE stream_sessions SET writer_fence = NULL WHERE session_id = 'RA'`)
+		updated <- time.Since(start)
+	}()
+	blockedByRaise := waitBlockedBy(t, pool, updaterPID, writerPID)
+	waited := <-updated
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("sb 잠금 풀기 실패: %v", err)
+	}
+	raiseErr := <-raised
+
+	if !blockedByRaise {
+		t.Error("sa UPDATE 가 Raise 에 막히지 않았다 — 시험이 기다림 번짐을 만들지 못했다")
+	}
+	if waited >= updateBound {
+		t.Errorf("sa UPDATE 가 Raise 뒤에서 %v 기다렸다, want %v 미만", waited, updateBound)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(raiseErr, &pgErr) || pgErr.Code != pgLockNotAvailable {
+		t.Errorf("sb 가 잠긴 동안 Raise 오류 = %v, want 55P03(lock_timeout)", raiseErr)
+	}
+	if _, _, ok := edgeBoundsRow(t, pool, "a", "RA"); ok && raiseErr != nil {
+		t.Error("끊긴 Raise 의 sa 원장 행이 남았다, want 문장째 되돌림")
+	}
+	want := floors(edgebounds.Floor{StreamID: "a", RoundID: "RA", Value: 5}, edgebounds.Floor{StreamID: "b", RoundID: "RB", Value: 5})
+	if got, err := NewEdgeBoundsLedger(writer).Raise(ctx, want); err != nil || !slices.Equal(got, want) {
+		t.Errorf("잠금이 풀린 뒤 다시 부른 Raise = (%v, %v), want (%v, nil)", got, err, want)
+	}
+}
+
 // raisePasses 는 스트림의 k 번째 회차를 k 번째 문장에 싣는다 — 같은 (stream, round) 는 같은 문장(둘이면 21000 그대로) ·
 // 1 보다 작은 값은 빠짐 · 입력 순서 유지 · 스트림마다 회차가 하나면 문장 하나.
 func TestRaisePassesPutsOneRoundPerStreamInEachStatement(t *testing.T) {
@@ -732,6 +804,26 @@ func waitLockWait(t *testing.T, pool *pgxpool.Pool, pid int32) {
 	}
 }
 
+// waitBlockedBy 는 백엔드 pid 가 blocker 에 막혀 잠금을 기다리는 것을 5초 안에 보면 참이다.
+func waitBlockedBy(t *testing.T, pool *pgxpool.Pool, pid, blocker int32) bool {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var blocked bool
+		if err := pool.QueryRow(context.Background(), `SELECT $2::int = ANY (pg_catalog.pg_blocking_pids($1::int))`,
+			pid, blocker).Scan(&blocked); err != nil {
+			t.Fatalf("잠금 대기 조회 실패: %v", err)
+		}
+		if blocked {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // 열린 회차 판정은 stream_sessions_round_open_idx 부분 인덱스를 탄다(설계 3-3) — 세션 표가 커도 올림 · 해제 조회가
 // 세션을 처음부터 훑지 않는다.
 func TestEdgeBoundsLedgerOpenRoundCheckUsesPartialIndex(t *testing.T) {
@@ -793,7 +885,7 @@ func TestEdgeBoundsLedgerRunsUnderMediaIndexerRole(t *testing.T) {
 		t.Errorf("DeleteReleased(0) = (%d, %v), want (1, nil)", n, err)
 	}
 	role.RequireSent(t, map[string]string{
-		"raiseSQL": raiseSQL, "closedUnreleasedSQL": closedUnreleasedSQL,
+		"raiseTxnLimitsSQL": raiseTxnLimitsSQL, "raiseSQL": raiseSQL, "closedUnreleasedSQL": closedUnreleasedSQL,
 		"markReleasedSQL": markReleasedSQL, "deleteReleasedSQL": deleteReleasedSQL,
 	})
 	traps.RequireNotCalled(t)

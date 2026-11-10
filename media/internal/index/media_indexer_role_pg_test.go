@@ -37,7 +37,8 @@ package index
 //	  loadStreamPlaybackSQL                   LoadStreamPlayback                   sessions · segments · edge_bounds SELECT
 //	  loadPlaybackStatesSQL                   LoadPlaybackStates                   sessions · segments · edge_bounds SELECT
 //	edge_bounds.go(POK-525 — 역할 시험은 edge_bounds_pg_test.go TestEdgeBoundsLedgerRunsUnderMediaIndexerRole)
-//	  raiseSQL                                Raise                                edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT · sessions SELECT
+//	  raiseTxnLimitsSQL                       Raise 문장마다 첫 문장                (표 없음 — set_config)
+//	  raiseSQL                                Raise                                edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT · sessions SELECT · FOR SHARE(UPDATE 권한)
 //	  closedUnreleasedSQL                     ClosedUnreleased                     edge_bounds · sessions SELECT
 //	  markReleasedSQL                         MarkReleased                         edge_bounds SELECT FOR UPDATE · UPDATE
 //	  deleteReleasedSQL                       DeleteReleased                       edge_bounds DELETE(+ SELECT)
@@ -63,7 +64,8 @@ package index
 // 끼우므로 그 문장들도 이 역할로 함께 돈다.
 //
 // FOR UPDATE 주의: 사이드카의 FOR UPDATE 는 stream_sessions(markInitUploadedSQL) · stream_edge_bounds(markReleasedSQL)에
-// 있고 UPDATE 권한이 필요하다.
+// 있고 UPDATE 권한이 필요하다. raiseSQL 의 stream_sessions FOR SHARE 도 UPDATE 권한(표 단위)이 있어야 돈다 — 나중에
+// stream_sessions UPDATE 를 열 단위로 좁히면 Raise 가 42501 이다.
 // stream_segments 의 FOR UPDATE NOWAIT 은 janitor(local_cleanup.go) 몫이다.
 
 import (
