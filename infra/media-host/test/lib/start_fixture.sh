@@ -14,6 +14,8 @@
 # /usr/bin 에 있다) 가짜를 뺀 사례의 「없음」 이 실물로 가려지지 않는다.
 #   log/            가짜 명령 기록(<명령>.<n>.argv · <명령>.<n>.env).
 #   docker-config/  config.json(credHelpers 에 시험 레지스트리 호스트).
+#   sidecar.env     상자 스위치 파일(PLAYBACK_ROUND_KEYS=false — compose 파일
+#                   옆 자리).
 #   runtime/        RUNTIME_DIR(스크립트가 만든다).
 #   out             스크립트의 stdout · stderr.
 #
@@ -93,6 +95,9 @@ fixture::new_case() {
   fi
   printf '{\n  "credHelpers": {\n    "%s": "ecr-login"\n  }\n}\n' \
     "${FIXTURE_FAKE_ECR_HOST}" >"${fixture_dir}/docker-config/config.json"
+  # compose 파일 옆 상자 스위치 파일 — 없으면 두 모드 모두 기동이 막힌다(사례
+  # 64 가 꼴을 바꾼다).
+  printf 'PLAYBACK_ROUND_KEYS=false\n' >"${fixture_dir}/sidecar.env"
 }
 
 #######################################

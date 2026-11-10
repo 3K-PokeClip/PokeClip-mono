@@ -305,3 +305,240 @@ run "rejects_cidr_larger_than_slash_16" {
 
   expect_failures = [var.cidr]
 }
+
+# 인터페이스 엔드포인트(POK-408 설계 보강 3-1). 기본은 빈 목록이라 아무것도
+# 만들지 않는다 — 모듈의 지금 동작이 그대로다.
+run "omits_interface_endpoints_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(var.interface_endpoint_services) == 0 && var.interface_endpoint_private_dns == true
+    error_message = "interface_endpoint_services 기본이 빈 목록이 아니거나 interface_endpoint_private_dns 기본이 true 가 아니다."
+  }
+
+  assert {
+    condition = (
+      length(aws_vpc_endpoint.interface) == 0 &&
+      try(aws_security_group.interface_endpoints[0].name, null) == null &&
+      try(aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].from_port, null) == null
+    )
+    error_message = "목록이 비었는데 인터페이스 엔드포인트 · 엔드포인트 SG · 인그레스 규칙이 하나라도 있다."
+  }
+
+  assert {
+    condition = (
+      output.interface_endpoint_sg_id == null &&
+      length(output.interface_endpoint_services) == 0 &&
+      output.interface_endpoint_private_dns == true
+    )
+    error_message = "목록이 비었는데 출력이 null · 빈 목록 · true 가 아니다."
+  }
+}
+
+# nat_az 를 azs 의 첫 원소 · media_az 와 다른 값으로 두어, 다른 AZ 의 프라이빗
+# 서브넷을 고르는 구현을 잡는다. 목록은 정렬하지 않은 차례로 넘긴다(출력 정렬).
+run "creates_interface_endpoints_in_nat_az_private_subnet" {
+  command = apply
+
+  variables {
+    nat_az                      = "ap-northeast-2c"
+    interface_endpoint_services = ["sqs", "ecr.api", "logs", "ecr.dkr", "secretsmanager"]
+  }
+
+  assert {
+    condition     = toset(keys(aws_vpc_endpoint.interface)) == toset(["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"])
+    error_message = "인터페이스 엔드포인트 키 집합이 넘긴 서비스 다섯과 다르다."
+  }
+
+  assert {
+    condition = alltrue([
+      for service, endpoint in aws_vpc_endpoint.interface :
+      endpoint.service_name == "com.amazonaws.ap-northeast-2.${service}" &&
+      endpoint.vpc_endpoint_type == "Interface" &&
+      endpoint.vpc_id == aws_vpc.this.id &&
+      endpoint.tags["Name"] == "example-${service}"
+    ])
+    error_message = "인터페이스 엔드포인트가 provider 리전의 서비스 이름 · Interface 형 · 이 VPC · Name <name>-<서비스> 꼴이 아니다."
+  }
+
+  assert {
+    condition     = alltrue([for endpoint in aws_vpc_endpoint.interface : endpoint.private_dns_enabled == true])
+    error_message = "interface_endpoint_private_dns 기본(true)인데 private DNS 가 꺼진 엔드포인트가 있다."
+  }
+
+  assert {
+    condition = alltrue([
+      for endpoint in aws_vpc_endpoint.interface :
+      endpoint.subnet_ids == toset([aws_subnet.private["ap-northeast-2c"].id])
+    ])
+    error_message = "인터페이스 엔드포인트의 서브넷이 nat_az 의 프라이빗 서브넷 하나가 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for endpoint in aws_vpc_endpoint.interface :
+      endpoint.security_group_ids == toset([aws_security_group.interface_endpoints[0].id])
+    ])
+    error_message = "인터페이스 엔드포인트의 SG 가 엔드포인트 SG 하나가 아니다."
+  }
+}
+
+# 엔드포인트 ENI 는 연결을 먼저 열지 않는다 — 인그레스는 VPC CIDR 의 443 하나,
+# 이그레스는 없다(SG 의 인라인 규칙도 없다).
+run "allows_only_vpc_https_into_interface_endpoints" {
+  command = apply
+
+  variables {
+    interface_endpoint_services = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+  }
+
+  assert {
+    condition = (
+      aws_security_group.interface_endpoints[0].name == "example-vpce" &&
+      aws_security_group.interface_endpoints[0].vpc_id == aws_vpc.this.id &&
+      length(aws_security_group.interface_endpoints[0].ingress) == 0 &&
+      length(aws_security_group.interface_endpoints[0].egress) == 0
+    )
+    error_message = "엔드포인트 SG 가 이 VPC 의 <name>-vpce 가 아니거나 인라인 규칙을 가진다."
+  }
+
+  assert {
+    condition = (
+      length(aws_vpc_security_group_ingress_rule.interface_endpoints_https) == 1 &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].security_group_id == aws_security_group.interface_endpoints[0].id &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].ip_protocol == "tcp" &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].to_port == 443
+    )
+    error_message = "엔드포인트 SG 인그레스가 TCP 443 규칙 하나가 아니다."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].cidr_ipv4 == "192.0.2.0/24" &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].cidr_ipv6 == null &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].prefix_list_id == null &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].referenced_security_group_id == null
+    )
+    error_message = "엔드포인트 SG 인그레스 출처가 VPC CIDR 하나가 아니다."
+  }
+
+  assert {
+    condition = (
+      output.interface_endpoint_sg_id == aws_security_group.interface_endpoints[0].id &&
+      output.interface_endpoint_services == tolist(["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]) &&
+      output.interface_endpoint_private_dns == true
+    )
+    error_message = "출력 interface_endpoint_{sg_id,services,private_dns} 가 엔드포인트 SG · 정렬한 서비스 목록 · true 가 아니다."
+  }
+}
+
+# 되돌리기 스위치(설계 3-4) — private DNS 만 끄고 엔드포인트 · SG · 규칙은 둔다.
+run "keeps_endpoints_and_sg_when_private_dns_disabled" {
+  command = plan
+
+  variables {
+    interface_endpoint_services    = ["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sqs"]
+    interface_endpoint_private_dns = false
+  }
+
+  assert {
+    condition = (
+      length(aws_vpc_endpoint.interface) == 5 &&
+      alltrue([for endpoint in aws_vpc_endpoint.interface : endpoint.private_dns_enabled == false])
+    )
+    error_message = "interface_endpoint_private_dns = false 인데 엔드포인트 다섯이 모두 private DNS 를 끄지 않았다."
+  }
+
+  assert {
+    condition = (
+      aws_security_group.interface_endpoints[0].name == "example-vpce" &&
+      length(aws_vpc_security_group_ingress_rule.interface_endpoints_https) == 1 &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].from_port == 443 &&
+      aws_vpc_security_group_ingress_rule.interface_endpoints_https[0].cidr_ipv4 == "192.0.2.0/24"
+    )
+    error_message = "interface_endpoint_private_dns = false 인데 엔드포인트 SG · 인그레스 규칙이 그대로가 아니다."
+  }
+
+  assert {
+    condition     = output.interface_endpoint_private_dns == false
+    error_message = "출력 interface_endpoint_private_dns 가 입력(false)과 다르다."
+  }
+}
+
+run "rejects_duplicate_interface_endpoint_services" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["sqs", "logs", "sqs"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+# 서비스 접미의 라벨은 하이픈을 품을 수 있다(ecs-agent · execute-api ·
+# ssm-contacts).
+run "accepts_hyphenated_interface_endpoint_service_suffix" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["ecs-agent", "execute-api", "ssm-contacts"]
+  }
+
+  assert {
+    condition     = toset(keys(aws_vpc_endpoint.interface)) == toset(["ecs-agent", "execute-api", "ssm-contacts"])
+    error_message = "하이픈 든 서비스 접미 셋의 엔드포인트 키 집합이 넘긴 것과 다르다."
+  }
+}
+
+# 서비스 접미만 받는다 — 전체 서비스 이름(com.amazonaws. 머리)은 꼴 위반이다.
+run "rejects_full_interface_endpoint_service_name" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["com.amazonaws.ap-northeast-2.sqs"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+run "rejects_empty_interface_endpoint_service_segment" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["ecr..api"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+run "rejects_uppercase_interface_endpoint_service" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["SQS"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+# 라벨의 첫 · 끝 글자는 영숫자다.
+run "rejects_interface_endpoint_service_label_leading_hyphen" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["-ecs.agent"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}
+
+run "rejects_interface_endpoint_service_label_trailing_hyphen" {
+  command = plan
+
+  variables {
+    interface_endpoint_services = ["ecs-.agent"]
+  }
+
+  expect_failures = [var.interface_endpoint_services]
+}

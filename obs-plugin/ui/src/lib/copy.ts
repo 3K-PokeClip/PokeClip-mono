@@ -36,7 +36,7 @@ export const REASON: Record<string, string> = {
   output_error: '출력 오류가 났어요.',
   encode_error: '인코더 오류가 났어요.',
   invalid_json: '요청 형식이 올바르지 않아요.',
-  invalid_api_base: 'API 주소는 http:// 또는 https:// 로 시작해야 해요.',
+  invalid_api_base: '인증 서버는 운영·개발 기본 주소나 이 PC 주소(http://localhost:포트)만 쓸 수 있어요.',
   invalid_ingest_host: '수신 호스트 형식이 올바르지 않아요.',
   invalid_ingest_port: '포트는 1–65535 사이여야 해요.',
   invalid_latency: '지연은 20–8000ms 사이여야 해요.',

@@ -1,22 +1,30 @@
 import { act } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { LiveNowBand } from '@/features/home/LiveNowBand';
+import { LiveUptime } from '@/features/home/LiveUptime';
 import { TipCard, TIPS } from '@/features/home/TipCard';
-import { daysAgoLabel, weekStarts, type LiveNow } from '@/features/home/useHomeMockState';
+import {
+  daysAgoLabel,
+  vodWhenLabel,
+  weekStarts,
+  type LiveNow,
+} from '@/features/home/useHomeMockState';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
+// LiveNowBand 시험의 시계. 시작에서 1:24:03 지난 때로 고정한다(LIVE 배지가 시작 시각으로 매초 센다)
+const LIVE_NOW = Date.parse('2026-10-20T11:36:03Z');
 const LIVE: LiveNow = {
   streamId: 'stream-1',
   title: '롤 랭크 방송',
   platform: '치지직',
   startedNote: '오후 7:12 시작',
-  uptimeLabel: '1:24:03',
+  startedAtMs: LIVE_NOW - (1 * 3600 + 24 * 60 + 3) * 1000,
   viewers: '1,842',
   infoLate: false,
   detectedCards: 8,
@@ -27,8 +35,8 @@ const LIVE: LiveNow = {
 interface Server {
   live?: unknown[];
   past?: unknown[];
-  /** streamId → 카드 */
-  cards?: Record<string, unknown[]>;
+  /** streamId → 카드. 'fail'이면 그 방송의 카드 읽기가 503이다 */
+  cards?: Record<string, unknown[] | 'fail'>;
   library?: unknown[] | 'fail';
   info?: unknown;
   chzzk?: unknown;
@@ -54,7 +62,12 @@ function route(url: string, s: Server): Response {
   if (url.includes('state=live')) return ok({ broadcasts: s.live ?? [], nextCursor: null });
   if (url.includes('state=past')) return ok({ broadcasts: s.past ?? [], nextCursor: null });
   const cards = url.match(/\/broadcasts\/([^/]+)\/jump-cards/);
-  if (cards) return ok({ cards: s.cards?.[decodeURIComponent(cards[1]!)] ?? [], nextCursor: null });
+  if (cards) {
+    const listed = s.cards?.[decodeURIComponent(cards[1]!)];
+    return listed === 'fail'
+      ? new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 })
+      : ok({ cards: listed ?? [], nextCursor: null });
+  }
   if (url.endsWith('/broadcast-info')) return ok(s.info ?? { latest: null, series: [] });
   if (url.startsWith('/api/chzzk-link')) return ok(s.chzzk ?? { linked: false });
   if (url.startsWith('/api/soop-link')) return ok(s.soop ?? { linked: false });
@@ -238,7 +251,7 @@ describe('HomeScreen', () => {
         '/settings/plugin',
       );
       expect(screen.getByRole('region', { name: '포키가 해 주는 일' })).toBeInTheDocument();
-      expect(screen.queryByRole('region', { name: '지난 방송 · VOD' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: '지난 방송' })).not.toBeInTheDocument();
       expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
     });
 
@@ -316,7 +329,7 @@ describe('HomeScreen', () => {
       ).toBeInTheDocument();
       expect(hero).toHaveTextContent('만든 클립2개');
       expect(hero).toHaveTextContent('유튜브 발행1개');
-      expect(screen.getByRole('region', { name: '지난 방송 · VOD' })).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: '지난 방송' })).toBeInTheDocument();
     });
 
     it('기록은 있지만 이번 주엔 아직 — 마지막 방송이 며칠 전인지와 흐린 지난주 기록을 보인다', async () => {
@@ -530,7 +543,7 @@ describe('HomeScreen', () => {
         await screen.findByRole('heading', { level: 1, name: '방송 1번에서 카드 0장을 찾았어요' }),
       ).toBeInTheDocument();
       const live = screen.getByRole('region', { name: '라이브' });
-      const vod = screen.getByRole('region', { name: '지난 방송 · VOD' });
+      const vod = screen.getByRole('region', { name: '지난 방송' });
       expect(live.compareDocumentPosition(vod) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
   });
@@ -542,7 +555,7 @@ describe('HomeScreen', () => {
     });
     renderWithProviders(<HomeScreen />);
 
-    await screen.findByRole('region', { name: '지난 방송 · VOD' });
+    await screen.findByRole('region', { name: '지난 방송' });
     expect(screen.queryByRole('region', { name: '이어서 편집' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '발행 현황' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '만료 임박 VOD' })).not.toBeInTheDocument();
@@ -700,7 +713,7 @@ describe('HomeScreen', () => {
     expect(tips).toHaveTextContent(`${TIPS.length} / ${TIPS.length}`);
   });
 
-  it('방송 번호 대신 방송 제목을 보이고, 제목이 없는 방송만 번호다(POK-259)', async () => {
+  it('방송 번호 대신 방송 제목을 보이고, 제목이 없는 지난 방송은 「제목 없는 방송」이다(POK-259)', async () => {
     const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
     serve({
       live: [
@@ -743,7 +756,9 @@ describe('HomeScreen', () => {
 
     expect(await screen.findByText('롤 마스터 승급전')).toBeInTheDocument();
     expect(await screen.findAllByText('새벽 랭크')).not.toHaveLength(0);
-    expect(screen.getAllByText('S-past-2')).not.toHaveLength(0);
+    // 번호는 사람이 읽을 수 없다 — 같은 제목은 카드의 시작 시각으로 가른다
+    expect(screen.getAllByText('제목 없는 방송')).not.toHaveLength(0);
+    expect(screen.queryByText('S-past-2')).toBeNull();
     expect(screen.queryByText('S-live-1')).toBeNull();
     expect(screen.queryByText('S-past-1')).toBeNull();
   });
@@ -1001,15 +1016,104 @@ describe('HomeScreen', () => {
     ).toBeInTheDocument();
   });
 
-  it('지난 방송 카드는 「카드 N개」를 단다(POK-254)', async () => {
+  it('지난 방송 카드는 시작 시각 · 찾은 카드 수 · 만든 클립 수를 단다(POK-254)', async () => {
+    const rendered = { status: 'rendered', createdAt: new Date('2026-10-08T09:00:00Z') };
     serve({
       past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))],
       cards: { 'past-1': [card(35)] },
+      // 클립은 「가장 최근 영상이 완성」인 이 방송의 편집본만 센다(라이브 띠의 클립 완료와 같다)
+      library: [
+        entry(1, rendered),
+        entry(2, rendered),
+        entry(3, null),
+        { ...entry(4, rendered), streamId: 'other' },
+      ],
     });
     renderWithProviders(<HomeScreen />);
 
-    expect(await screen.findByText(/10월 8일 · 카드 1개/)).toBeInTheDocument();
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (await within(grid).findByText('10월 8일 (목) 오후 2:41')).closest('li')!;
+    expect(tile).toHaveTextContent('카드 1');
+    await waitFor(() => expect(tile).toHaveTextContent('클립 2'));
     expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
+  });
+
+  it('지난 방송 카드: 보관함을 못 읽으면 클립 수는 「–」이고, 카드가 0이어도 「찾은 장면 없음」이라 단정하지 않는다', async () => {
+    serve({
+      past: [
+        pastRow('past-1', new Date('2026-10-08T05:41:00Z')),
+        pastRow('past-2', new Date('2026-10-07T05:41:00Z')),
+      ],
+      cards: { 'past-1': [card(35)] },
+      library: 'fail',
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (title: string) => within(grid).getByText(title).closest('li')!;
+    await within(grid).findByText('past-2');
+    expect(tile('past-1')).toHaveTextContent('클립 –');
+    // 카드를 다 가린 방송일 수 있다 — 그 카드로 만든 클립이 남았는지 모르니 장면이 없다고 하지 않는다(POK-463)
+    expect(tile('past-2')).toHaveTextContent('카드 0');
+    expect(tile('past-2')).toHaveTextContent('클립 –');
+    expect(within(tile('past-2')).queryByText('찾은 장면 없음')).toBeNull();
+    expect(within(tile('past-2')).getByText('장면 사진 없음')).toBeInTheDocument();
+  });
+
+  it('지난 방송 카드: 카드를 다 가려 0장이어도 만든 클립 수는 보이고, 카드 · 클립이 둘 다 0일 때만 「찾은 장면 없음」(POK-463)', async () => {
+    const rendered = { status: 'rendered', createdAt: new Date('2026-10-08T09:00:00Z') };
+    serve({
+      past: [
+        pastRow('past-1', new Date('2026-10-08T05:41:00Z')),
+        pastRow('past-2', new Date('2026-10-07T05:41:00Z')),
+      ],
+      // 카드 목록은 가린 카드를 빼고 준다 — 다 가리면 빈 목록이다
+      cards: { 'past-1': [], 'past-2': [] },
+      library: [entry(1, rendered), entry(2, rendered)],
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (title: string) => within(grid).getByText(title).closest('li')!;
+    await within(grid).findByText('past-2');
+    await waitFor(() => expect(tile('past-1')).toHaveTextContent('클립 2'));
+    expect(tile('past-1')).toHaveTextContent('카드 0');
+    expect(within(tile('past-1')).queryByText('찾은 장면 없음')).toBeNull();
+    // 보관함을 읽었고 이 방송으로 만든 클립이 없다 — 이제야 장면이 없다고 말한다
+    expect(within(tile('past-2')).getByText('찾은 장면 없음')).toBeInTheDocument();
+  });
+
+  it('지난 방송 카드: 카드를 못 읽으면 카드 수는 「–」이고, 장면이 없다고 단정하지 않는다', async () => {
+    serve({
+      past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))],
+      cards: { 'past-1': 'fail' },
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (await within(grid).findByText('past-1')).closest('li')!;
+    expect(tile).toHaveTextContent('카드 –');
+    expect(within(tile).queryByText('찾은 장면 없음')).toBeNull();
+    expect(within(tile).queryByText('장면 사진 없음')).toBeNull();
+  });
+
+  it('「전체 보기」는 지난 방송 목록으로 가는 진짜 링크다', async () => {
+    serve({ past: [pastRow('past-1', new Date('2026-10-08T05:41:00Z'))] });
+    renderWithProviders(<HomeScreen />);
+
+    expect(await screen.findByRole('link', { name: '지난 방송 전체 보기' })).toHaveAttribute(
+      'href',
+      '/broadcast/vod',
+    );
+  });
+
+  it('지난 방송 시작 시각은 오늘 · 어제를 달력으로 말하고, 그 전은 날짜 · 요일이다', () => {
+    const now = new Date('2026-11-04T09:00:00+09:00');
+    expect(vodWhenLabel('2026-11-04T08:02:00+09:00', now)).toBe('오늘 오전 8:02');
+    // 어젯밤 늦게 켠 방송은 아침에 「어제」다 — 시각 차가 24시간 안이어도 「오늘」이 아니다
+    expect(vodWhenLabel('2026-11-03T23:50:00+09:00', now)).toBe('어제 오후 11:50');
+    expect(vodWhenLabel('2026-11-02T21:00:00+09:00', now)).toBe('11월 2일 (월) 오후 9:00');
+    expect(vodWhenLabel('2026-11-01T12:05:00+09:00', now)).toBe('11월 1일 (일) 오후 12:05');
   });
 
   it('지난 방송 격자: 만료된 방송은 열리지 않고 「보관 만료」, 「준비 중」은 끝난 지 한 시간 안만(POK-254)', async () => {
@@ -1035,18 +1139,58 @@ describe('HomeScreen', () => {
         row('stale', 'ended', at(-2 * HOUR), null),
         row('gone', 'vod_ready', at(-61 * 24 * HOUR), at(-HOUR)),
       ],
+      // 카드가 있는 만료 방송 — 사진이 없으면 원래 「썸네일 준비 중」 자리표시가 선다
+      cards: { gone: [card(1)] },
     });
     renderWithProviders(<HomeScreen />);
 
-    const grid = await screen.findByRole('region', { name: '지난 방송 · VOD' });
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
     await within(grid).findByText('gone');
     const tile = (title: string) => within(grid).getByText(title).closest('li')!;
     // 썸네일 자리표시 「썸네일 준비 중」과 가르려고 배지 글자만 정확히 찾는다
-    expect(within(tile('fresh')).getByText('준비 중')).toBeInTheDocument();
-    expect(within(tile('stale')).queryByText('준비 중')).toBeNull();
+    expect(within(tile('fresh')).getByText('다시 보기 준비 중')).toBeInTheDocument();
+    expect(within(tile('stale')).queryByText('다시 보기 준비 중')).toBeNull();
+    // 한 시간이 지난 방송은 카드 · 클립이 0이면 그때부터 장면이 없다고 말한다(보관함을 읽은 뒤)
+    expect(await within(tile('stale')).findByText('찾은 장면 없음')).toBeInTheDocument();
+    // 방금 끝난 방송은 마지막 구간 카드가 늦게 뜬다 — 0장이어도 「없다」고 단정하지 않는다
+    expect(within(tile('fresh')).queryByText('찾은 장면 없음')).toBeNull();
+    expect(within(tile('fresh')).queryByText('장면 사진 없음')).toBeNull();
+    expect(within(tile('fresh')).getByText('썸네일 준비 중')).toBeInTheDocument();
     expect(within(tile('gone')).getByText('보관 만료')).toBeInTheDocument();
+    // 만료 카드의 가운데는 「보관 만료」 하나뿐이다 — 사진 자리표시가 같이 서면 두 글이 포개진다
+    expect(within(tile('gone')).queryByText('썸네일 준비 중')).toBeNull();
+    expect(within(tile('gone')).queryByText('장면 사진 없음')).toBeNull();
     expect(tile('gone').querySelector('a')).toBeNull();
     expect(tile('fresh').querySelector('a')).not.toBeNull();
+  });
+
+  it('지난 방송 격자: 보관 기한은 3일 이하일 때만 「D-n 삭제」로 말한다', async () => {
+    const DAY = 86_400_000;
+    const inDays = (d: number) => new Date(Date.now() + d * DAY - 60_000).toISOString();
+    serve({
+      past: [
+        pastRow('soon', new Date(Date.now() - 2 * DAY), { vodExpiresAt: inDays(2) }),
+        pastRow('edge', new Date(Date.now() - 3 * DAY), { vodExpiresAt: inDays(3) }),
+        pastRow('later', new Date(Date.now() - 4 * DAY), { vodExpiresAt: inDays(5) }),
+        // 녹화 없이 `ended`에 머문 방송 — 끝난 지 한참이라 「준비 중」이 아니고, 기한이 지나면 카드·채팅이 지워진다
+        pastRow('noRec', new Date(Date.now() - 58 * DAY), {
+          status: 'ended',
+          vodExpiresAt: inDays(2),
+        }),
+      ],
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    await within(grid).findByText('later');
+    const tile = (title: string) => within(grid).getByText(title).closest('li')!;
+    expect(within(tile('soon')).getByText('D-2 삭제')).toBeInTheDocument();
+    expect(within(tile('edge')).getByText('D-3 삭제')).toBeInTheDocument();
+    expect(within(tile('noRec')).getByText('D-2 삭제')).toBeInTheDocument();
+    expect(within(tile('noRec')).queryByText('다시 보기 준비 중')).toBeNull();
+    // 그보다 먼 기한은 홈이 말하지 않는다(옛 「D-5 · 곧 만료」)
+    expect(tile('later')).not.toHaveTextContent(/D-\d/);
+    expect(tile('later')).not.toHaveTextContent('곧 만료');
   });
 
   it('방송 목록을 잠깐 못 읽어도 지난 화면을 지우지 않는다 — 라이브 띠가 그대로다', async () => {
@@ -1272,17 +1416,159 @@ describe('주 경계·며칠 전', () => {
 });
 
 describe('LiveNowBand', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: LIVE_NOW });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const SHOT =
+    'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
+
   it('라이브 사진이 있으면 칸을 채우고, 없으면 자리표시를 보인다(POK-277)', () => {
-    const src =
-      'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
-    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: src }} />);
-    expect(container.querySelector('img')).toHaveAttribute('src', src);
+    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />);
+    expect(container.querySelector('img')).toHaveAttribute('src', SHOT);
 
     rerender(<LiveNowBand live={LIVE} />);
     expect(container.querySelector('img')).toBeNull();
     // 자리표시는 방송 아이콘이다: 「라이브 방송 화면」 같은 글자는 진짜 값처럼 읽혔다(POK-449)
     expect(container.querySelector('svg')).not.toBeNull();
     expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
+  });
+
+  describe('사진 로딩', () => {
+    it('사진을 다 받기 전에는 칸이 반짝이는 회색이고 사진은 숨는다. 받으면 사진이 다 나타난 뒤 걷힌다', () => {
+      const { container } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />);
+      const img = container.querySelector('img')!;
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      expect(img).toHaveAttribute('data-pending');
+
+      fireEvent.load(img);
+      expect(img).not.toHaveAttribute('data-pending');
+      // 사진이 나타나는 0.2초 동안은 아래에 남는다: 바로 걷으면 칸 바탕이 비쳐 한 번 꺼졌다 켜진다
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+    });
+
+    it('1분 갱신으로 주소가 바뀌어도 다시 반짝이지 않는다: 새 사진을 받는 동안 앞 사진을 그대로 둔다', () => {
+      const { container, rerender } = render(
+        <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT }} />,
+      );
+      fireEvent.load(container.querySelector('img')!);
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+
+      const next = SHOT.replace('stream-1.jpg', 'stream-1-b.jpg');
+      rerender(<LiveNowBand live={{ ...LIVE, thumbnailUrl: next }} />);
+      expect(container.querySelector('img')).toHaveAttribute('src', next);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
+    });
+
+    it('방송 직후 첫 사진을 찍는 동안(시한 전)은 아이콘 대신 반짝이는 회색, 시한이 지나면 아이콘이다', () => {
+      const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, photoLate: false }} />);
+      expect(screen.getByTestId('thumb-loading')).toBeInTheDocument();
+      expect(container.querySelector('svg')).toBeNull();
+
+      rerender(<LiveNowBand live={{ ...LIVE, photoLate: true }} />);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('svg')).not.toBeNull();
+    });
+
+    it('첫 사진 주소가 오면 기다리던 반짝이는 칸을 그대로 이어 쓴다: 아이콘을 거쳐 새로 붙지 않는다', () => {
+      const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, photoLate: false }} />);
+      const awaiting = screen.getByTestId('thumb-loading');
+
+      rerender(<LiveNowBand live={{ ...LIVE, photoLate: false, thumbnailUrl: SHOT }} />);
+      expect(container.querySelector('img')).toHaveAttribute('data-pending');
+      // 같은 노드여야 반짝임이 처음부터 다시 돌지 않는다
+      expect(screen.getByTestId('thumb-loading')).toBe(awaiting);
+    });
+
+    it('사진을 못 받으면 반짝이지 않고 아이콘으로 돌아간다', () => {
+      const { container } = render(
+        <LiveNowBand live={{ ...LIVE, thumbnailUrl: SHOT, photoLate: false }} />,
+      );
+      fireEvent.error(container.querySelector('img')!);
+      expect(screen.queryByTestId('thumb-loading')).toBeNull();
+      expect(container.querySelector('svg')).not.toBeNull();
+    });
+  });
+
+  describe('LIVE 경과', () => {
+    it('목록을 다시 읽지 않아도 매초 1초씩 오른다(건너뛰지 않는다)', () => {
+      // 초 경계에서 0.6초 지난 때 연다. 1초 간격(setInterval)으로 세면 1초 뒤에야 바뀌어 아래 0.415초 단언에서 걸린다
+      vi.setSystemTime(LIVE_NOW + 600);
+      render(<LiveNowBand live={LIVE} />);
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      // 다음 초 경계(0.4초 뒤) 바로 뒤에 깬다: 경계 전에는 그대로다
+      act(() => {
+        vi.advanceTimersByTime(399);
+      });
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+      expect(screen.getByText('LIVE 1:24:04')).toBeInTheDocument();
+      for (const label of ['1:24:05', '1:24:06', '1:24:07']) {
+        act(() => {
+          vi.advanceTimersByTime(1_000);
+        });
+        expect(screen.getByText(`LIVE ${label}`)).toBeInTheDocument();
+      }
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByText('LIVE 1:25:07')).toBeInTheDocument();
+    });
+
+    it('탭이 숨으면 멈추고, 돌아오면 바로 지금 경과로 맞춘다', () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get');
+      render(<LiveNowBand live={LIVE} />);
+      visibility.mockReturnValue('hidden');
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+
+      visibility.mockReturnValue('visible');
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      expect(screen.getByText('LIVE 1:24:33')).toBeInTheDocument();
+      visibility.mockRestore();
+    });
+
+    it('시작 시각을 모르면 「--:--:--」이고 세지 않는다', () => {
+      render(<LiveNowBand live={{ ...LIVE, startedAtMs: null }} />);
+      expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(3_000);
+      });
+      expect(screen.getByText('LIVE --:--:--')).toBeInTheDocument();
+    });
+
+    it('시작 시각을 모르면 타이머를 걸지 않는다: 글자가 그대로여도 매초 다시 그리지 않게', () => {
+      // 띠의 다른 부품이 건 타이머와 섞이지 않게 배지 글자만 연다
+      render(<LiveUptime startedAtMs={null} />);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('시작 시각이 나중에 와도(모름 → 앎) 다음 초를 기다리지 않고 바로 지금 경과로 적는다', () => {
+      const { rerender } = render(<LiveNowBand live={{ ...LIVE, startedAtMs: null }} />);
+      act(() => {
+        vi.advanceTimersByTime(120_000);
+      });
+      rerender(<LiveNowBand live={LIVE} />);
+      // 마운트 때 시각으로 세면 2분 적은 1:24:03이 1초 가까이 보인다
+      expect(screen.getByText('LIVE 1:26:03')).toBeInTheDocument();
+    });
   });
 
   it('플랫폼을 모르면 플랫폼 태그를 달지 않는다 — 치지직·SOOP·씨미 중 무엇인지 지어내지 않는다', () => {

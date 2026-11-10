@@ -167,6 +167,75 @@ func TestSessionDeciderCarriesBaseSessionAndPlanEndToEnd(t *testing.T) {
 	}
 }
 
+// POK-525 Ⓑ2-3 — 결정의 회차(RoundID)가 어댑터를 건너 장부로 오고(계속 · 개시), Open 은 장부가 든 그 값을 대조한다 —
+// 장부 쪽 값이 개시가 쓸 회차와 다르면 개시 오류다. 변이: Decide 의 RoundID 옮김 제거 → 계속 · 개시 FAIL · Open 의
+// 장부 값 넘김 제거 → 갈린_회차 FAIL.
+func TestSessionDeciderCarriesRoundIDEndToEnd(t *testing.T) {
+	const stream = "wireround"
+	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	wall := wireBase.Add(time.Minute)
+	decideOpen := func(t *testing.T, pool *pgxpool.Pool, tamper func(*index.SessionDecision)) (index.SessionDecision, string, error) {
+		t.Helper()
+		tx, err := pool.Begin(t.Context())
+		if err != nil {
+			t.Fatalf("트랜잭션 시작 실패: %v", err)
+		}
+		defer func() { _ = tx.Rollback(t.Context()) }()
+		dec, err := d.Decide(t.Context(), tx, index.SessionInput{
+			StreamID: stream, Seq: 3, StartWallUTC: wall, DurationMS: 4000,
+			SessionSource: index.SessionSource{Op: index.SessionOpenOrCurrent},
+		}, wall)
+		if err != nil {
+			t.Fatalf("Decide 실패: %v", err)
+		}
+		if !dec.Opens {
+			return dec, "", nil
+		}
+		tamper(&dec)
+		id, err := d.Open(t.Context(), tx, dec, wall)
+		if err == nil {
+			if cerr := tx.Commit(t.Context()); cerr != nil {
+				t.Fatalf("커밋 실패: %v", cerr)
+			}
+		}
+		return dec, id, err
+	}
+
+	t.Run("계속", func(t *testing.T) {
+		pool := newWireTestPool(t)
+		if _, err := pool.Exec(t.Context(), `
+			INSERT INTO stream_sessions (session_id, stream_id, started_at, state, first_pdt, round_id)
+			VALUES ('S-live', $1, $2, 'live', $2, 'S-R')`, stream, wireBase); err != nil {
+			t.Fatalf("live 픽스처 실패: %v", err)
+		}
+		dec, _, _ := decideOpen(t, pool, func(*index.SessionDecision) {})
+		if dec.Opens || dec.RoundID != "S-R" {
+			t.Errorf("(Opens, RoundID) = (%v, %q), want (false, \"S-R\")", dec.Opens, dec.RoundID)
+		}
+	})
+	t.Run("개시", func(t *testing.T) {
+		pool := newWireTestPool(t)
+		dec, id, err := decideOpen(t, pool, func(*index.SessionDecision) {})
+		if err != nil {
+			t.Fatalf("개시 실패: %v", err)
+		}
+		var round string
+		if err := pool.QueryRow(t.Context(), `SELECT round_id FROM stream_sessions WHERE session_id = $1`, id).Scan(&round); err != nil {
+			t.Fatalf("회차 조회 실패: %v", err)
+		}
+		if dec.RoundID != id || round != id {
+			t.Errorf("(RoundID, round_id) = (%q, %q), want 둘 다 새 session_id %q", dec.RoundID, round, id)
+		}
+	})
+	t.Run("갈린_회차", func(t *testing.T) {
+		pool := newWireTestPool(t)
+		_, id, err := decideOpen(t, pool, func(dec *index.SessionDecision) { dec.RoundID = "S-elsewhere" })
+		if err == nil {
+			t.Fatalf("장부의 회차가 개시 회차와 다른데 개시가 성공했다 id=%q", id)
+		}
+	})
+}
+
 // Observation 5필드가 그대로 건너간다. 각 필드는 그것이 빠졌을 때 갈래가 뒤집히는
 // 국면으로 잰다 — 긍정 케이스가 Publishing·EpochKnown·ObservedAt 을,
 // 모호 구간과 하한 밖의 짝이 EpochStartedAt·EpochSlack 을 가른다.

@@ -111,6 +111,19 @@ variable "ingest_auth_ip_limit" {
   default     = "on"
 }
 
+variable "lifecycle_publish_streams" {
+  description = "계약9 발행 허용 목록 — ingestStreamId(26자 Crockford base32) 목록, \"*\" 는 전부. 응답기 모드에서만 채운다(꼴 · 모드 검증은 modules/media_host). 비면 발행이 꺼진다. 주제 ARN 은 런타임 1단 출력에서 오므로 칸이 없다. 바꾸면 설정 반영 교체로 들어간다 — 운영 순서는 runbooks/media-swap.md 「O8a 당김 교체」."
+  type        = list(string)
+  default     = []
+}
+
+variable "playback_round_keys" {
+  description = "새 꼴 쓰기 스위치(sidecar.env 의 PLAYBACK_ROUND_KEYS). 첫 부팅에 한 번 쓰이고(user_data 는 ignore_changes) 그 뒤의 정본은 상자 안 파일이라, 바꿔도 떠 있는 상자는 그대로이고 다음 상자부터 그 값으로 뜬다. 기본 끔 — POK-525 교체 뒤 prod 값은 true(결정 9)."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "docker_version" {
   description = "AL2023 arm64 저장소의 docker 패키지 판."
   type        = string

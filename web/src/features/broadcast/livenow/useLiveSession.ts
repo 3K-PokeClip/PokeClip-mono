@@ -54,8 +54,16 @@ export interface LiveSessionInput {
 
 export interface LiveSession {
   session: PlaybackSession | null;
-  /** 녹화 조회 요청. null 이면 묻지 않는다 */
+  /**
+   * 녹화 조회 요청 — 세션이 녹화로 닫힌 화면(시청자 B)만이다(POK-547 전까지 /playback). null 이면 묻지 않는다. 끝난 뒤 들어온
+   * 화면(A)은 녹화를 묻지 않고 회차 다시보기를 튼다(POK-546)
+   */
   recordedRequest: RecordedRequest | null;
+  /**
+   * 끝난 뒤 들어온 화면(시청자 A) — 이 방송|영상 키로 세션을 연 적 없이 명부가 ended 다(POK-546 설계 2-4). 라이브 · 세션을
+   * 연 화면(열린 채 ended · 녹화로 닫힘) · 명부 상태 모름은 거짓이다
+   */
+  enteredAfterEnd: boolean;
   /** 세션이 녹화로 닫혔다 — 라이브 주소를 다시 붙이지 않고, 재생기 표시는 끝난 방송이다 */
   closedRecorded: boolean;
   /** 「새 방송이 시작됐어요」 띠의 방송 번호 */
@@ -121,7 +129,8 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   // recorded 로 닫힌 방송|영상 키 — 같은 키로는 세션을 다시 열지 않는다(cc H1 ②). 키 비교라 지울 필요가 없다
   const [closedRecordedFor, setClosedRecordedFor] = useState<string | null>(null);
   const [recordedReq, setRecordedReq] = useState<(RecordedRequest & { key: string }) | null>(null);
-  // 세션을 연 적 있는 키 — 연 적 없는 화면만 「명부 ended」 로 녹화를 묻는다(지난 방송 화면 · 끝난 뒤 들어온 화면)
+  // 세션을 연 적 있는 키 — 이 키로 연 적 없이 명부가 ended 면 끝난 뒤 들어온 화면(A)이다(지난 방송 화면 포함). A 는 녹화를 묻지
+  // 않고 회차 다시보기를 튼다(POK-546)
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   // 띠를 눌러 보유를 푼 키
   const [releasedFor, setReleasedFor] = useState<string | null>(null);
@@ -216,13 +225,13 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   }, [holding, liveStreamId]);
 
   const pastOnly = openedFor !== accessKey && broadcastStatus === 'ended';
-  const fromMs = recordingSearchFrom(startedAt, endedAt);
-  const recordedRequest = useMemo<RecordedRequest | null>(() => {
-    if (recordedReq !== null && recordedReq.key === accessKey) {
-      return { fromMs: recordedReq.fromMs, untilMs: recordedReq.untilMs };
-    }
-    return pastOnly ? { fromMs, untilMs: endedAt } : null;
-  }, [recordedReq, accessKey, pastOnly, fromMs, endedAt]);
+  const recordedRequest = useMemo<RecordedRequest | null>(
+    () =>
+      recordedReq !== null && recordedReq.key === accessKey
+        ? { fromMs: recordedReq.fromMs, untilMs: recordedReq.untilMs }
+        : null,
+    [recordedReq, accessKey],
+  );
 
   // 세션 덮개가 다른 방송 띠를 세웠으면 화면 띠는 세우지 않는다 — 같은 뜻의 띠가 둘 서지 않게(cc L)
   const coverBanner = session?.view.banner ?? null;
@@ -239,5 +248,5 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     dispatch?.({ type: 'leave' });
   }, [accessKey, dispatch]);
 
-  return { session, recordedRequest, closedRecorded, band, onBand };
+  return { session, recordedRequest, enteredAfterEnd: pastOnly, closedRecorded, band, onBand };
 }

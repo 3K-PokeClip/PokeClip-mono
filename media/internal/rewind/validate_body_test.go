@@ -426,7 +426,7 @@ func withStream(p rewind.Playlist, streamID string) rewind.Playlist {
 }
 
 // S5 조각 줄 조항 — 키(계획 B #10 · 〔r37〕 ⑴ · 뮤테이션 97). 조각 키는 ③ 키 문법(playback.ParseSegKey — 업로드 워커와
-// 같은 한 벌)이어야 하고 첫 성분이 목록의 스트림이어야 한다. 키는 URI 줄에 그대로 실리므로(BaseURL + "/" + 키) 다른
+// 같은 한 벌 · 옛 꼴과 회차 꼴 두 꼴 — POK-525 설계 2-1)이어야 하고 첫 성분이 목록의 스트림이어야 한다. 키는 URI 줄에 그대로 실리므로(BaseURL + "/" + 키) 다른
 // 스트림의 객체를 가리키거나 CR · 따옴표 · NUL 같은 글자를 목록 줄로 내보낼 수 있다. 「본문 = 목록 값」 조항은 본문이 그
 // 키를 그대로 적었는지만 보므로 이것을 막지 못한다 — 개행만 줄이 어긋나 그 조항이 먼저 잡는다. 장부는 INSERT 때 SegKey
 // 로 키를 예약하므로 이런 키는 쓰기 경로 밖 입력이다(발행 직전의 심층 방어).
@@ -441,6 +441,9 @@ func TestValidateRejectsForeignOrMalformedSegmentKey(t *testing.T) {
 	}{
 		{"장부_키_그대로", "dvr/str/seg/000702.m4s", ""},
 		{"다른_스트림의_키", "dvr/other/seg/000702.m4s", "S5"},
+		{"회차_꼴_장부_키", "dvr/str/N/seg/000702.m4s", ""},
+		{"회차_꼴_다른_스트림의_키", "dvr/other/N/seg/000702.m4s", "S5"},
+		{"회차_성분_129자", "dvr/str/" + strings.Repeat("r", 129) + "/seg/000702.m4s", "S5"},
 		{"자릿수_다섯", "dvr/str/seg/00702.m4s", "S5"},
 		{"확장자", "dvr/str/seg/000702.mp4", "S5"},
 		{"상위_경로_참조", "dvr/../seg/000702.m4s", "S5"},

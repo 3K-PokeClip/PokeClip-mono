@@ -315,12 +315,16 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(again.fileHead()).isEqualTo(made.fileHead());
     }
 
-    /** 지난 방송 마크도 저장 위치에 라이브 · OBS 와 같은 카드 ms 상한(48시간)을 건다 — 입력 위치만 보면 상한이 입력 기준이 된다. */
+    /**
+     * 지난 방송 마크도 저장 위치에 라이브 · OBS 와 같은 카드 ms 상한(방송 시작 뒤 48시간 · POK-562)을 건다 — 입력 위치만 보면
+     * 상한이 입력 기준이 된다. 방송 시작 48시간 1초 뒤에 첫 조각이 선 회차라 저장 위치(그 조각 안 1초)가 상한을 2초 넘는다.
+     * 종료 시각이 있어 입력 범위는 종료 기준이라 안 걸린다.
+     */
     @Test
     void 지난_방송_마크의_저장_위치가_카드_ms_상한을_넘으면_400이다() {
-        방송("S-m", "P31M", at(0));
+        방송("S-m", "P31M", at(-MarkService.MAX_BROADCAST_MS));
         seed.session("S-m", "P31M", "S-m", null);
-        seed.row("P31M", 1).pts(MarkService.MAX_CARD_MS).wallAndPdt(1_000).session("S-m").insert();
+        seed.row("P31M", 1).pts(MarkService.MAX_BROADCAST_MS).wallAndPdt(1_000).session("S-m").insert();
         끝낸다("S-m");
         long origin = origins.originsOf(List.of(방송_찾기("S-m"))).get("S-m").toEpochMilli();
 
@@ -459,7 +463,8 @@ class MarkSceneP31Test extends IntegrationTestSupport {
     }
 
     private JumpCardService.RecordResult obs(String streamId, Instant t) {
-        MarkService service = new MarkService(keys, broadcasts, positions, cards, Clock.fixed(t, ZoneOffset.UTC));
+        MarkService service = new MarkService(keys, broadcasts, origins, positions, cards,
+                Clock.fixed(t, ZoneOffset.UTC));
         String eventId = UUID.randomUUID().toString();
         String body = "{\"streamid\":\"" + STREAMID + "\",\"eventId\":\"" + eventId + "\",\"pressedAt\":" + SENT
                 + ",\"sentAt\":" + SENT + "}";

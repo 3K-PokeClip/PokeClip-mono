@@ -29,7 +29,8 @@ import java.util.List;
  * {@link JumpCardService#recordHotkey}라 두 문의 카드가 한 판정을 같이 쓴다.
  *
  * <p><b>순서가 계약이다.</b> 본문(400) → 자격(404·503, 트랜잭션 밖) → 방송(404) → 갈래와 방송 상태(400) → 라이브는 시각(400) →
- * 저장 위치(503 회차 귀속 행 없음 · 400 상한 밖), 지난 방송은 기준점(503) → 위치 범위(400) → 저장 위치 → 저장(201·200).
+ * 저장 위치(503 회차 귀속 행 없음) → 기준점(503) → 상한(400), 지난 방송은 기준점(503) → 위치 범위(400) → 저장 위치(503) →
+ * 상한(400) → 저장(201·200). 상한은 두 갈래 모두 방송 시작 뒤 48시간이고 저장 위치에 건다(POK-562).
  * 본문이 맨 앞인 것은 형식 오류가 auth 왕복을 태우지 않게, 자격이 방송 읽기보다 앞인 것은
  * 남의 방송이 메모리에 안 올라오게 하려는 것이다({@code BroadcastListService}와 같은 순서).
  *
@@ -131,7 +132,8 @@ public class WebMarkService {
 
     /**
      * 라이브: 서버 시각은 OBS 문과 같은 식(pressedAt + (받은 − sentAt), 미래면 받은 시각)이고, 카드 ms 는 회차 귀속 행에서
-     * 행별로 고른다({@link ServerClockPosition} — OBS 문과 같은 함수).
+     * 행별로 고른다({@link ServerClockPosition} — OBS 문과 같은 함수). 상한은 방송 시작 뒤 48시간
+     * ({@link MarkService#cardUpperMillis}, POK-562)이고 저장 위치에 건다.
      */
     private long liveMillis(WebMarkRequest request, Instant receivedAt, Broadcast broadcast) {
         Instant pressed;
@@ -142,7 +144,8 @@ public class WebMarkService {
         }
         Position position = positions.ofServerClock(broadcast, pressed, ServerClockPosition.Source.WEB_LIVE)
                 .orElseThrow(() -> new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS));
-        if (position.cardMs() > MarkService.MAX_CARD_MS) {
+        long upperMs = upperMillis(broadcast, originOf(broadcast), "pressedAt");
+        if (position.cardMs() > upperMs) {
             throw new InvalidHighlightException("pressedAt");
         }
         return position.cardMs();
@@ -150,22 +153,20 @@ public class WebMarkService {
 
     /**
      * 지난 방송: 웹은 「목록 PDT − 기준점」 을 보낸다(계획 검증 m3 의 위치 그대로). 범위는 지금 그대로다 — 아래는 기준점 앞
-     * 10분, 위는 (종료 − 기준점) + 10분, 종료를 모르면 48시간({@link MarkService#MAX_CARD_MS}). 저장 값은 그 위치가 아니라
-     * {@code P = 기준점 + positionMs}(같은 기준점이라 목록 PDT 를 정확히 되살린다)를 회차 귀속 행에서 행별로 옮긴 위치다
-     * (POK-196 · 설계 r7 8.2) — 출시 이미지 판 NULL 행에서는 「목록 PDT − 기준점」 이 재생 위치 축 값이 아니다.
+     * 10분, 위는 (종료 − 기준점) + 10분, 종료를 모르면 방송 시작 뒤 48시간 = (시작 − 기준점) + 48시간
+     * ({@link MarkService#cardUpperMillis}, POK-562). 저장 값은 그 위치가 아니라 {@code P = 기준점 + positionMs}(같은 기준점이라
+     * 목록 PDT 를 정확히 되살린다)를 회차 귀속 행에서 행별로 옮긴 위치다(POK-196 · 설계 r7 8.2) — 출시 이미지 판 NULL
+     * 행에서는 「목록 PDT − 기준점」 이 재생 위치 축 값이 아니다.
      */
     private long positionMillis(WebMarkRequest request, Broadcast broadcast) {
         // 기준점과 저장 위치는 다른 왕복이라 같은 시점 읽기가 아니다. 지난 방송은 장부 행이 더 붙지 않아 두 읽기가 같은 행을 본다.
-        Instant origin = origins.originsOf(List.of(broadcast)).get(broadcast.getStreamId());
-        if (origin == null) {
-            throw new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS);
-        }
+        Instant origin = originOf(broadcast);
         long position = request.positionMs();
         if (position < -POSITION_BELOW_ORIGIN_MS) {
             throw new InvalidHighlightException("positionMs");
         }
         long upper = broadcast.getEndedAt() == null
-                ? MarkService.MAX_CARD_MS
+                ? upperMillis(broadcast, origin, "positionMs")
                 : broadcast.getEndedAt().toEpochMilli() - origin.toEpochMilli() + POSITION_AFTER_END_MS;
         if (position > upper) {
             throw new InvalidHighlightException("positionMs");
@@ -174,9 +175,24 @@ public class WebMarkService {
         Position stored = positions.ofPlayback(broadcast, listed)
                 .orElseThrow(() -> new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS));
         // 상한은 라이브 · OBS 와 같이 저장 위치에 건다 — 위 범위는 입력 위치의 것이다.
-        if (stored.cardMs() > MarkService.MAX_CARD_MS) {
+        if (stored.cardMs() > upperMillis(broadcast, origin, "positionMs")) {
             throw new InvalidHighlightException("positionMs");
         }
         return stored.cardMs();
+    }
+
+    /** 기준점. 없으면 503(첫 조각 · 회차 귀속 행이 아직 없다). */
+    private Instant originOf(Broadcast broadcast) {
+        Instant origin = origins.originsOf(List.of(broadcast)).get(broadcast.getStreamId());
+        if (origin == null) {
+            throw new TimelineNotReadyException(MarkService.TIMELINE_RETRY_AFTER_SECONDS);
+        }
+        return origin;
+    }
+
+    /** 이 방송의 카드 ms 상한(방송 시작 뒤 48시간 · {@link MarkService#cardUpperMillis}). 넘치면 그 칸의 400. */
+    private static long upperMillis(Broadcast broadcast, Instant origin, String field) {
+        return MarkService.cardUpperMillis(broadcast.getStartedAt(), origin)
+                .orElseThrow(() -> new InvalidHighlightException(field));
     }
 }

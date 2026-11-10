@@ -6,6 +6,7 @@ import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardService.RecordResult;
 import com.pokeclip.clip.segment.ServerClockPosition;
 import com.pokeclip.clip.segment.ServerClockPosition.Position;
+import com.pokeclip.clip.segment.TimelineOriginReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,13 +17,15 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * OBS 수동 마킹(계약4 4B/2B)을 그 회원의 켜진 방송의 수동 카드로 만든다(POK-391).
  *
  * <p><b>순서가 계약이다.</b> 본문(400) → 헤더 대조(400) → 키 확인(400·401·503) → 파생 값 대조(401) → eventId 선조회(200·400)
- * → 방송 고르기(404) → 늦은 마크(400) → 저장 위치(503 회차 귀속 행 없음 · 400 상한 밖) → 저장(201·200). 앞 단계가 거절하면
- * 뒤 단계는 안 돈다 : 키를 확인하기 전에 방송·카드를 읽으면 키 없는 사람이 응답으로 남의 방송 상태를 알 수 있다.
+ * → 방송 고르기(404) → 늦은 마크(400) → 저장 위치(503 회차 귀속 행 없음) → 기준점(503) → 상한(400 방송 시작 뒤 48시간
+ * 밖) → 저장(201·200). 앞 단계가 거절하면 뒤 단계는 안 돈다 : 키를 확인하기 전에 방송·카드를 읽으면 키 없는 사람이 응답으로
+ * 남의 방송 상태를 알 수 있다.
  *
  * <p>저장 위치는 「누른 시각 − 기준점」 이 아니라 회차 귀속 행에서 행별로 고른다({@link ServerClockPosition} · POK-196) —
  * 출시 이미지가 쓴 판 NULL 행은 회차 안 기준점이 상수가 아니라 회차 상수 하나를 빼면 다른 조각이 나온다.
@@ -46,26 +49,31 @@ public class MarkService {
      */
     static final Duration LATE_MARK_TOLERANCE = Duration.ofMinutes(2);
 
-    /** 카드 ms 상한(감사 1회차 A2). 이보다 긴 방송은 없다고 본다: 넘으면 시각이 틀린 것이라 400. */
-    static final long MAX_CARD_MS = Duration.ofHours(48).toMillis();
+    /**
+     * 방송 길이 상한(감사 1회차 A2). 이보다 긴 방송은 없다고 본다: 방송 시작에서 이만큼 넘게 뒤의 시각은 틀린 것이라
+     * 400이다. 카드 ms 로 옮기는 식은 {@link #cardUpperMillis}(POK-562).
+     */
+    static final long MAX_BROADCAST_MS = Duration.ofHours(48).toMillis();
 
     private final StreamKeyResolveClient keys;
     private final BroadcastRepository broadcasts;
+    private final TimelineOriginReader origins;
     private final ServerClockPosition positions;
     private final JumpCardService cards;
     private final Clock clock;
 
     @Autowired
-    MarkService(StreamKeyResolveClient keys, BroadcastRepository broadcasts,
+    MarkService(StreamKeyResolveClient keys, BroadcastRepository broadcasts, TimelineOriginReader origins,
                 ServerClockPosition positions, JumpCardService cards) {
-        this(keys, broadcasts, positions, cards, Clock.systemUTC());
+        this(keys, broadcasts, origins, positions, cards, Clock.systemUTC());
     }
 
     /** 시험이 받은 시각을 고정하는 자리(계획 검증 E9: {@code Clock} 빈이 없다. {@code ThumbnailSweeper}와 같은 모양). */
-    MarkService(StreamKeyResolveClient keys, BroadcastRepository broadcasts,
+    MarkService(StreamKeyResolveClient keys, BroadcastRepository broadcasts, TimelineOriginReader origins,
                 ServerClockPosition positions, JumpCardService cards, Clock clock) {
         this.keys = keys;
         this.broadcasts = broadcasts;
+        this.origins = origins;
         this.positions = positions;
         this.cards = cards;
         this.clock = clock;
@@ -120,7 +128,12 @@ public class MarkService {
         }
         Position position = positions.ofServerClock(broadcast, pressed, ServerClockPosition.Source.OBS)
                 .orElseThrow(() -> MarkErrors.timelineNotReady(TIMELINE_RETRY_AFTER_SECONDS));
-        if (position.cardMs() > MAX_CARD_MS) {
+        Instant origin = origins.originsOf(List.of(broadcast)).get(broadcast.getStreamId());
+        if (origin == null) {
+            throw MarkErrors.timelineNotReady(TIMELINE_RETRY_AFTER_SECONDS);
+        }
+        long upperMs = cardUpperMillis(broadcast.getStartedAt(), origin).orElseThrow(MarkErrors::invalidRequest);
+        if (position.cardMs() > upperMs) {
             throw MarkErrors.invalidRequest();
         }
         return cards.recordHotkey(broadcast.getStreamId(), userId, request.eventId(), position.cardMs());
@@ -181,4 +194,30 @@ public class MarkService {
         return Instant.ofEpochMilli(Math.min(pressed, receivedAt.toEpochMilli()));
     }
 
+    /**
+     * 이번 방송의 카드 ms 상한 = (방송 시작 − 기준점) + {@link #MAX_BROADCAST_MS}. 곧 「방송 시작 뒤 48시간」을 카드 ms
+     * 축으로 옮긴 값이다(POK-562).
+     *
+     * <p>🔴 <b>상한을 기준점이 아니라 방송 시작에서 잰다.</b> 기준점은 물리 키 누적 pts 축이라(media 가 같은 키의 마지막
+     * 조각에서 pts 를 이어 받는다, ADR-079 근거 2항) 키를 오래 쓴 스트리머는 기준점이 이번 시작보다 수십 시간 앞이다.
+     * 기준점에서 재면 키를 쓴 지 48시간 뒤의 정상 마킹이 전부 400 이 된다.
+     *
+     * <p>저장 위치는 회차 귀속 행에서 행별로 고르고({@link ServerClockPosition}) 상한은 기준점(회차 첫 귀속 행 · 옛 방송은
+     * 시간창 첫 조각)으로 잰다(POK-196). 판 NULL 회차에서는 두 축이 행마다 조금씩 갈려 그 차만큼 경계가 흔들린다.
+     *
+     * <p>시작 시각을 모르면(종료 편지가 먼저 온 자리표시 — 회차가 있으면 기준점은 선다, POK-196) 방송 시작 대신 기준점에서
+     * 잰다. 넘치면 비어 있다: 부르는 쪽이 제 봉투의 400으로 바꾼다({@link #serverPressedAt}과 같은 이유로 예외를 안
+     * 고른다).
+     */
+    static OptionalLong cardUpperMillis(Instant startedAt, Instant origin) {
+        if (startedAt == null) {
+            return OptionalLong.of(MAX_BROADCAST_MS);
+        }
+        try {
+            long startMs = Math.subtractExact(startedAt.toEpochMilli(), origin.toEpochMilli());
+            return OptionalLong.of(Math.addExact(startMs, MAX_BROADCAST_MS));
+        } catch (ArithmeticException e) {
+            return OptionalLong.empty();
+        }
+    }
 }

@@ -8,6 +8,7 @@ import {
   openSession,
   pollTargets,
   transition,
+  type DvrSegment,
   type PlaybackSessionState,
   type SessionClose,
   type SessionEffect,
@@ -15,6 +16,7 @@ import {
   type XAnswer,
 } from './rewindSwitch';
 import { probeLiveWindow } from './liveWindowProbe';
+import { dvrHoleKnown } from './sessionShared';
 import { sessionView, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
@@ -32,6 +34,10 @@ export interface SessionPlayer {
   seekToLiveEdge: () => void;
   /** 사람이 멈춰 있으면 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다 */
   keepPausedOnSwap: () => void;
+  /** 지금 프레임에서 멈추되 사람의 멈춤으로 적지 않는다(되감기 조각 404 · POK-528) */
+  holdFrame: () => void;
+  /** 재생기가 들고 있는 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(POK-528 목록 다시 받기) */
+  dropPauseMark: () => void;
 }
 
 export interface SessionClosed {
@@ -78,12 +84,25 @@ export interface PlaybackSession {
   notice: (text: string) => void;
   /** 지금 위치 시대(상태기계에 이미 반영된 값) — 재생기가 자리를 잴 때 찍는다 */
   positionEpoch: () => number;
+  /**
+   * 그 세대 재생기의 조각이 이 세션이 아는 목록 안 구멍인가(POK-528 후속) — 같은 url 을 이미 그 조각으로 다시 받았다.
+   * 지금 상태(상태기계에 이미 반영된 값)를 읽는다
+   */
+  isKnownDvrHole: (generation: number, segment: DvrSegment) => boolean;
 }
 
 /** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
 function needsX(s: PlaybackSessionState): boolean {
   const { kind } = s.phase;
   return (kind === 'live' && s.boundLive) || kind === 'ending-wait' || kind === 'rewind';
+}
+
+/**
+ * 마지막 확인 중인가 — 회차별 조회는 처음 물음의 답 또는 시한(8초)이 끝낸다: 본 구간과 겹치는 다시보기 답이면 같은 자리
+ * 다시보기, 그 밖 답이면 곧바로 녹화, 시한까지 답이 없으면 녹화다(POK-528 W6 · 정본 r7 1151)
+ */
+function inFinalCheck(s: PlaybackSessionState | null): boolean {
+  return s !== null && s.phase.kind === 'ending-wait' && s.phase.finalCheck === true;
 }
 
 function canStart(o: SessionOptions): boolean {
@@ -162,6 +181,9 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
         case 'seek-live-edge':
           playerRef.current?.seekToLiveEdge();
           break;
+        case 'hold-frame':
+          playerRef.current?.holdFrame();
+          break;
         case 'notice':
           optionsRef.current.onNotice?.(effect.text);
           break;
@@ -220,6 +242,10 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       if (next.effects.some((e) => e.kind === 'keep-paused-on-swap')) {
         playerRef.current?.keepPausedOnSwap();
       }
+      // 멈춘 자리 기록도 커밋 앞에 버린다 — 새 재생기의 첫 재생이 옛 축의 자리로 시크를 청하지 않게
+      if (next.effects.some((e) => e.kind === 'drop-pause-mark')) {
+        playerRef.current?.dropPauseMark();
+      }
       if (next.state !== current) commit(next.state);
       applyEffects(next.effects, next.state);
     },
@@ -243,6 +269,11 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
 
   const notice = useCallback((text: string) => optionsRef.current.onNotice?.(text), []);
   const positionEpoch = useCallback(() => stateRef.current?.positionEpoch ?? 0, []);
+  const isKnownDvrHole = useCallback(
+    (generation: number, segment: DvrSegment) =>
+      stateRef.current !== null && dvrHoleKnown(stateRef.current, generation, segment),
+    [],
+  );
 
   const bindPlayer = useCallback(
     (player: SessionPlayer | null) => {
@@ -287,7 +318,10 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [dispatch],
   );
   const streamPoll = useRewindStatus(streamUrl, controlBase, onStream);
-  const roundPoll = useRewindStatus(roundUrl, controlBase, onRound);
+  // 마지막 확인의 회차별 조회는 숨김 복귀로 다시 묻지 않는다 — 처음 물음의 답 또는 시한(8초)이 끝낸다
+  const roundPoll = useRewindStatus(roundUrl, controlBase, onRound, {
+    askOnVisible: !inFinalCheck(state),
+  });
   refreshRef.current = {
     stream: (u) => streamPoll.refresh(u),
     round: () => roundPoll.refresh(),
@@ -353,5 +387,5 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [state, now],
   );
   if (state === null || view === null || state.closed !== null) return null;
-  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch };
+  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch, isKnownDvrHole };
 }

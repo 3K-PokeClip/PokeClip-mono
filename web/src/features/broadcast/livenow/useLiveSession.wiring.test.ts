@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlaybackSession, SessionOptions } from '@/features/player/usePlaybackSession';
 import { useLiveSession, type LiveSessionInput } from './useLiveSession';
@@ -124,5 +124,153 @@ describe('useLiveSession: 띠는 하나만(cc L)', () => {
     hoisted.session = sessionWithBanner({ goTo: 'r-B' });
     const covered = renderHook(() => useLiveSession(input({ reselect })));
     expect(covered.result.current.band).toBeNull();
+  });
+});
+
+// 화면 갈래(POK-546 설계 3절 「라이브 · B 가 모두 notPast 인 근거」 표 다섯 줄 + A). 무변경 대조와 새 칸을 서로 다른 it 로 둔다 —
+// 무변경 it 는 develop 에도 있는 관측(recordedRequest · session · canOpen)만 보고, 새 칸 enteredAfterEnd 는 새 동작 it 만 본다.
+// A(끝난 뒤 들어온 화면)의 recordedRequest 는 아래 T4-9 묶음이 본다(녹화를 묻지 않는다 — 새 동작).
+describe('useLiveSession: 끝난 뒤 들어온 화면 판정(POK-546 T3-6)', () => {
+  const STARTED_AT = Date.parse('2026-11-04T01:00:00.000Z');
+  const ENDED_AT = Date.parse('2026-11-04T02:00:00.000Z');
+  const OBSERVED_END = Date.parse('2026-11-04T01:59:30.000Z');
+
+  function openedSession(): PlaybackSession {
+    return { view: { banner: null }, dispatch: vi.fn() } as unknown as PlaybackSession;
+  }
+
+  /** 명부 live 로 세션을 연 화면을 세운다 */
+  function mountOpened() {
+    hoisted.session = openedSession();
+    return renderHook((props: LiveSessionInput) => useLiveSession(props), {
+      initialProps: input({ startedAt: STARTED_AT }),
+    });
+  }
+
+  /** 세션을 연 화면이 녹화로 닫힌다(세션 훅이 recorded 로 닫고 null 을 돌려줌) */
+  function closeRecorded(
+    view: ReturnType<typeof mountOpened>,
+    roster: LiveSessionInput['broadcastStatus'],
+  ) {
+    act(() => {
+      hoisted.options!.onClose({
+        reason: 'recorded',
+        accessKey: 'r-A|key-1',
+        observedEndMs: OBSERVED_END,
+      });
+    });
+    hoisted.session = null;
+    view.rerender(
+      input({
+        startedAt: STARTED_AT,
+        broadcastStatus: roster,
+        endedAt: roster === 'ended' ? ENDED_AT : null,
+      }),
+    );
+    return view;
+  }
+
+  const recorded = { fromMs: STARTED_AT, untilMs: OBSERVED_END };
+
+  describe('무변경 대조 — 라이브 · B · 명부 상태 모름의 지금 관측', () => {
+    it('라이브(명부 live · 세션 열림): 세션을 그대로 내고 녹화를 묻지 않는다', () => {
+      const view = mountOpened();
+      expect(view.result.current.session).toBe(hoisted.session);
+      expect(view.result.current.recordedRequest).toBeNull();
+    });
+
+    it.each(['unknown', 'offline'] as const)(
+      '명부 상태 모름 · 꺼짐(%s): 세션을 열지 않는다',
+      (roster) => {
+        const view = renderHook(() => useLiveSession(input({ broadcastStatus: roster })));
+        expect(hoisted.options!.canOpen).toBe(false);
+        expect(view.result.current.session).toBeNull();
+      },
+    );
+
+    it('B — 세션이 열린 채 명부 ended: 세션을 그대로 두고 녹화를 묻지 않는다', () => {
+      const view = mountOpened();
+      view.rerender(input({ startedAt: STARTED_AT, broadcastStatus: 'ended', endedAt: ENDED_AT }));
+      expect(view.result.current.session).toBe(hoisted.session);
+      expect(view.result.current.recordedRequest).toBeNull();
+    });
+
+    it('B — 세션이 녹화로 닫힌 뒤 명부 ended: 닫힐 때 고정한 녹화 조회를 그대로 낸다', () => {
+      const view = closeRecorded(mountOpened(), 'ended');
+      expect(view.result.current.session).toBeNull();
+      expect(view.result.current.closedRecorded).toBe(true);
+      expect(view.result.current.recordedRequest).toEqual(recorded);
+    });
+
+    it('녹화 재생 중(세션이 녹화로 닫힘 · 명부는 아직 live): 같은 키로 세션을 다시 열지 않고 녹화 조회를 낸다', () => {
+      const view = closeRecorded(mountOpened(), 'live');
+      expect(hoisted.options!.canOpen).toBe(false);
+      expect(view.result.current.recordedRequest).toEqual(recorded);
+    });
+  });
+
+  describe('새 칸 enteredAfterEnd', () => {
+    it('라이브(명부 live · 세션 열림)는 거짓이다', () => {
+      expect(mountOpened().result.current.enteredAfterEnd).toBe(false);
+    });
+
+    it.each(['unknown', 'offline'] as const)('명부 상태 모름 · 꺼짐(%s)은 거짓이다', (roster) => {
+      const view = renderHook(() => useLiveSession(input({ broadcastStatus: roster })));
+      expect(view.result.current.enteredAfterEnd).toBe(false);
+    });
+
+    it('B — 세션이 열린 채 명부 ended 는 거짓이다(명부 ended 는 세션을 닫지 않는다)', () => {
+      const view = mountOpened();
+      view.rerender(input({ startedAt: STARTED_AT, broadcastStatus: 'ended', endedAt: ENDED_AT }));
+      expect(view.result.current.enteredAfterEnd).toBe(false);
+    });
+
+    it('B — 세션이 녹화로 닫힌 뒤 명부 ended 는 거짓이다(세션을 연 키는 닫혀도 남는다)', () => {
+      expect(closeRecorded(mountOpened(), 'ended').result.current.enteredAfterEnd).toBe(false);
+    });
+
+    it('녹화 재생 중(명부는 아직 live)은 거짓이다', () => {
+      expect(closeRecorded(mountOpened(), 'live').result.current.enteredAfterEnd).toBe(false);
+    });
+
+    it('A — 세션을 연 적 없이 명부 ended 면 참이다', () => {
+      const view = renderHook(() =>
+        useLiveSession(
+          input({ startedAt: STARTED_AT, broadcastStatus: 'ended', endedAt: ENDED_AT }),
+        ),
+      );
+      expect(view.result.current.enteredAfterEnd).toBe(true);
+    });
+
+    it('A — 세션을 연 적 있는 키와 다른 방송|영상 키로 명부 ended 를 받으면 참이다', () => {
+      const view = mountOpened();
+      hoisted.session = null;
+      view.rerender(
+        input({
+          liveStreamId: 'r-B',
+          accessKey: 'r-B|key-1',
+          broadcastStatus: 'ended',
+          endedAt: ENDED_AT,
+        }),
+      );
+      expect(view.result.current.enteredAfterEnd).toBe(true);
+    });
+  });
+});
+
+// 끝난 뒤 들어온 화면(A)은 녹화를 묻지 않는다(POK-546 c4 · T4-9) — 회차 다시보기를 튼다. 녹화 조회는 세션이 녹화로 닫힌 화면(B)만이다
+describe('useLiveSession: 끝난 뒤 들어온 화면은 녹화를 묻지 않는다(POK-546 T4-9)', () => {
+  it('A — 세션을 연 적 없이 명부 ended 면 녹화 조회가 없다', () => {
+    const view = renderHook(() =>
+      useLiveSession(
+        input({
+          startedAt: Date.parse('2026-11-04T01:00:00.000Z'),
+          broadcastStatus: 'ended',
+          endedAt: Date.parse('2026-11-04T02:00:00.000Z'),
+        }),
+      ),
+    );
+    expect(view.result.current.enteredAfterEnd).toBe(true);
+    expect(view.result.current.recordedRequest).toBeNull();
   });
 });

@@ -171,7 +171,8 @@ export function trackLoadFrom(video: Playhead): LoadFrom {
  * 멈춘 채 갈아 끼우기 표(설계 5.3.1절 3번 · c13f). 멈춘 채 갈아 끼운 재생기는 스스로
  * 틀지 않는다. 사람이 멈췄는지는 pause · play 사건으로만 안다 — 해체의 media.load() 는
  * pause 사건 없이 video.paused 를 돌린다. 표는 건 때의 세대를 적고, 그보다 새 재생기만
- * 먹는다(옛 재생기가 먼저 먹지 않게)
+ * 먹는다(옛 재생기가 먼저 먹지 않게). 앱이 건 pause(세션의 hold-frame)는 앱 멈춤 표시로
+ * 가려 사람 멈춤으로 적지 않는다(POK-528)
  */
 export interface SwapPause {
   /** pause 사건 — 사람이 멈췄다 */
@@ -184,12 +185,20 @@ export interface SwapPause {
   keep: (generation: number) => void;
   /** MANIFEST_PARSED — 이 세대 재생기가 스스로 틀지 말아야 하나. 표보다 새 세대면 표를 지운다 */
   holds: (generation: number) => boolean;
+  /**
+   * 앱이 곧 pause() 를 부른다(세션의 hold-frame · POK-528) — 다음 pause 사건은 사람 멈춤이 아니다.
+   * 표시는 그 pause 사건(takeAppPause) 또는 play 사건(userPlayed)이 지운다
+   */
+  appPausing: () => void;
+  /** pause 사건 — 앱이 건 멈춤이면 표시를 먹고 참(사람 멈춤으로 적지 않는다) */
+  takeAppPause: () => boolean;
 }
 
 /** 훅 하나(재생기를 갈아 끼워도 남는다)의 멈춤 유지 표를 연다 */
 export function createSwapPause(): SwapPause {
   let paused = false;
   let keepFrom: number | null = null;
+  let appPause = false;
   return {
     userPaused: () => {
       paused = true;
@@ -197,6 +206,7 @@ export function createSwapPause(): SwapPause {
     userPlayed: () => {
       paused = false;
       keepFrom = null;
+      appPause = false;
     },
     keepIfUserPaused: (generation) => {
       if (paused) keepFrom = generation;
@@ -208,6 +218,14 @@ export function createSwapPause(): SwapPause {
       if (keepFrom === null) return false;
       if (generation > keepFrom) keepFrom = null;
       return true;
+    },
+    appPausing: () => {
+      appPause = true;
+    },
+    takeAppPause: () => {
+      const taken = appPause;
+      appPause = false;
+      return taken;
     },
   };
 }

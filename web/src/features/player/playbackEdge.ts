@@ -22,6 +22,11 @@ export interface LoadedList {
   firstMs: number;
   /** 마지막 조각의 끝(epoch ms) — E */
   lastEndMs: number;
+  /**
+   * 마지막 조각의 시작(epoch ms). 만드는 쪽 loadedList 는 늘 채운다 — 선택인 까닭은 다른 소비자 리터럴을 건드리지 않으려는
+   * 것이다
+   */
+  lastStartMs?: number;
   targetDurationS: number;
   /** 맨 앞 조각 EDGE_MARGIN_SEGMENTS 개(모자라면 있는 만큼)의 EXTINF 합(ms) — 창 하한 여유 */
   headSpanMs: number;
@@ -38,6 +43,7 @@ export function loadedList(
   return {
     firstMs: first.programDateTime,
     lastEndMs: last.programDateTime + last.duration * 1000,
+    lastStartMs: last.programDateTime,
     targetDurationS,
     headSpanMs: fragments
       .slice(0, EDGE_MARGIN_SEGMENTS)
@@ -55,17 +61,25 @@ export function windowLowerMs(list: LoadedList, kind: PlaybackSource['kind']): n
   return list.firstMs + edgeMarginMs(list, kind);
 }
 
+/** 첫 목록의 시작 — position = startLoad 할 영상 초 · floorCut = 창 하한으로 잘랐다 */
+export interface StartCut {
+  position: number;
+  floorCut: boolean;
+}
+
 /**
- * 첫 목록에서 startLoad 할 영상 초. 실제 시각 startAtMs 를 창 하한 이상 · 목록 끝 이하로 자른다(5.4절 시작 위치).
- * 시각 표시가 없으면 null — 부르는 쪽이 기본 시작으로 둔다. 첫 목록은 아직 해체한 조각이 없어 판 2 조각도
- * 시작 · 길이가 hls.js 첫 값과 같다(datedFragments 의 해체 전 갈래)
+ * 첫 목록에서 startLoad 할 영상 초와 그것이 창 하한으로 자른 자리인가(POK-528 — 세션의 하한 알림 판정 재료).
+ * 실제 시각 startAtMs 를 창 하한 이상 · 목록 끝 이하로 자른다(5.4절 시작 위치). 영상 시각으로 견주므로 PDT 틈 ·
+ * 겹침에서도 재생기가 실제로 자른 것과 같다. 하한과 같으면 잘리지 않았다. 시각 표시가 없으면 null — 부르는 쪽이
+ * 기본 시작으로 둔다. 첫 목록은 아직 해체한 조각이 없어 판 2 조각도 시작 · 길이가 hls.js 첫 값과 같다
+ * (datedFragments 의 해체 전 갈래)
  */
-export function startLoadPosition(
+export function startCut(
   fragments: readonly DatedFragment[],
   startAtMs: number,
   kind: PlaybackSource['kind'],
   targetDurationS: number,
-): number | null {
+): StartCut | null {
   const list = loadedList(fragments, targetDurationS);
   const first = fragments[0];
   const last = fragments[fragments.length - 1];
@@ -74,7 +88,17 @@ export function startLoadPosition(
   if (target === null) return null;
   const lower = first.start + edgeMarginMs(list, kind) / 1000;
   const end = last.start + last.duration;
-  return Math.min(end, Math.max(lower, target));
+  return { position: Math.min(end, Math.max(lower, target)), floorCut: target < lower };
+}
+
+/** 첫 목록에서 startLoad 할 영상 초(startCut 의 자리). 시각 표시가 없으면 null */
+export function startLoadPosition(
+  fragments: readonly DatedFragment[],
+  startAtMs: number,
+  kind: PlaybackSource['kind'],
+  targetDurationS: number,
+): number | null {
+  return startCut(fragments, startAtMs, kind, targetDurationS)?.position ?? null;
 }
 
 /**

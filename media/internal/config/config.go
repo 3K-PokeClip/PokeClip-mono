@@ -64,6 +64,11 @@ type Config struct {
 	// finalize.DefaultLimits 의 전체 2 와 같은 꼴). 읽기 하나가 인덱서 풀 연결 하나를 쥐어, 일제 종료 때 스트림 수만큼 읽기가
 	// 겹쳐 핫 경로와 풀을 다투지 않게 한다. 넘친 표지는 다음 holdTick 에 다시 낸다.
 	RewindPlaybackReadMax int
+	// PlaybackRoundKeys 는 새 꼴(회차) ③ 키 쓰기 스위치다(PLAYBACK_ROUND_KEYS — POK-525 결정 4 고침). 켜면 회차가 있는
+	// 세션의 조각 키를 dvr/{stream}/{round}/seg/… 로 쓰고, 끄면 회차가 있어도 옛 꼴 dvr/{stream}/seg/… 로 쓴다. 기본 끔이고
+	// 기동 때만 읽는다 — 상자 파일 sidecar.env 가 값을 주며, 바꾸면 사이드카를 다시 만든다(교체 겹침 동안 옛 상자가 못
+	// 읽는 키를 쓰지 않기 위해서다).
+	PlaybackRoundKeys bool
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -302,6 +307,10 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	playbackRoundKeys, err := boolean(env, "PLAYBACK_ROUND_KEYS", false)
+	if err != nil {
+		return Config{}, err
+	}
 	playbackReadMax, err := positiveInt(env, "REWIND_PLAYBACK_READ_MAX", defaultRewindPlaybackReadMax)
 	if err != nil {
 		return Config{}, err
@@ -413,6 +422,7 @@ func Load(env func(string) string) (Config, error) {
 		RewindGapRunEnd:       gapRunEnd,
 		RewindStallSeal:       stallSeal,
 		RewindPlaybackReadMax: playbackReadMax,
+		PlaybackRoundKeys:     playbackRoundKeys,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
 		RewindPublicBaseURL:       rewindBaseURL,
 		RewindPublishPoolMaxConns: publishPoolMaxConns,

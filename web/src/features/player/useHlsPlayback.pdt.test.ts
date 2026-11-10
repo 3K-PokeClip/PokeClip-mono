@@ -236,6 +236,7 @@ describe('판 2 목록의 시각 환산 — 영상 축 조각', () => {
       url: 'https://m/rewind/k/index.m3u8',
       firstMs: PDT0,
       lastEndMs: PDT0 + 11_500,
+      lastStartMs: PDT0 + 7_500,
       targetDurationS: 4,
       headSpanMs: 12_000,
     });
@@ -379,5 +380,116 @@ describe('세션 모드(onSeekRequest)의 시각 축도 영상 축 조각으로 
       lowerMs: PDT0 + 12_000,
       endMs: PDT0 + 11_500,
     });
+  });
+});
+
+describe('재생 위치의 PDT(currentProgramDateMs) · 재생기 갈래(engine) — 다시보기 재생기가 읽는다', () => {
+  const NO_START: Start = { startAtMs: null, strictStart: false };
+
+  /** 기본 HLS 만 있는 브라우저(옛 iOS Safari) — hls.js 가 없다 */
+  function nativeOnly() {
+    vi.spyOn(FakeHls, 'isSupported').mockReturnValue(false);
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+  }
+
+  it('hls.js 를 읽는 동안은 갈래가 null 이고, hls.js 재생기가 서면 hlsjs 다', async () => {
+    const ref = { current: document.createElement('video') };
+    const view = renderHook(() => useHlsPlayback(ref, source('vod', NO_START)));
+    expect(view.result.current.engine).toBeNull();
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(view.result.current.engine).toBe('hlsjs');
+  });
+
+  it('hls.js 가 없고 기본 HLS 로 틀면 갈래가 native 이고 재생 위치의 PDT 는 null 이다 — 조각 목록이 없다', async () => {
+    nativeOnly();
+    const el = document.createElement('video');
+    const ref = { current: el };
+    const view = renderHook(() => useHlsPlayback(ref, source('vod', NO_START)));
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    el.currentTime = 3;
+    expect(view.result.current.engine).toBe('native');
+    expect(view.result.current.currentProgramDateMs()).toBeNull();
+  });
+
+  it('hls.js 도 기본 HLS 도 없으면 갈래가 none 이다 — 이 브라우저에서는 틀 수 없다', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(FakeHls, 'isSupported').mockReturnValue(false);
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('');
+    const ref = { current: document.createElement('video') };
+    const view = renderHook(() => useHlsPlayback(ref, source('vod', NO_START)));
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(view.result.current.engine).toBe('none');
+    expect(view.result.current.currentProgramDateMs()).toBeNull();
+  });
+
+  it('새 소스로 바뀌면 갈래가 null 로 돌아갔다가 새 재생기가 서면 다시 정해진다', async () => {
+    const ref = { current: document.createElement('video') };
+    const view = renderHook(({ url }) => useHlsPlayback(ref, { ...source('vod', NO_START), url }), {
+      initialProps: { url: 'https://m/vod/a/index.m3u8' },
+    });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(view.result.current.engine).toBe('hlsjs');
+    act(() => view.rerender({ url: 'https://m/vod/b/index.m3u8' }));
+    expect(view.result.current.engine).toBeNull();
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(view.result.current.engine).toBe('hlsjs');
+  });
+
+  it('목록을 받으면 재생 위치를 그 목록 축의 PDT 로 읽는다 — 화면에 영상이 붙기 전(readyState 1)에도 읽는다', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(1);
+    const view = await mount('vod');
+    video.el!.currentTime = 5;
+    // 판 2 조각의 v_k 를 모르면 hls.js 조각(4.3초 간격)으로 잇는다 — 둘째 조각(PDT0 + 3.5초)에서 0.7초 뒤
+    expect(view.result.current.currentProgramDateMs()).toBeCloseTo(PDT0 + 4_200, 6);
+  });
+
+  it('목록을 받기 전에는 재생 위치의 PDT 가 null 이다', async () => {
+    const el = document.createElement('video');
+    const ref = { current: el };
+    const view = renderHook(() => useHlsPlayback(ref, source('vod', NO_START)));
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    el.currentTime = 5;
+    expect(view.result.current.currentProgramDateMs()).toBeNull();
+  });
+
+  it('재생기를 내린 뒤(복구 불가)에는 목록이 남아 있어도 재생 위치의 PDT 가 null 이다', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = await mount('vod');
+    const fatal = { fatal: true, type: 'networkError', details: 'fragLoadError', response: {} };
+    act(() => lastHls().trigger('hlsError', fatal));
+    act(() => lastHls().trigger('hlsError', fatal));
+    expect(lastHls().latestLevelDetails).not.toBeNull();
+    expect(view.result.current.currentProgramDateMs()).toBeNull();
+  });
+
+  it('목록 조각에 시각 표시(PDT)가 없으면 null 이다', async () => {
+    const view = await mount('vod');
+    const details = versionTwoDetails();
+    const undated = {
+      ...details,
+      fragments: details.fragments.map((frag) => ({ ...frag, programDateTime: null })),
+    };
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: undated as unknown as Details }));
+    video.el!.currentTime = 5;
+    expect(view.result.current.currentProgramDateMs()).toBeNull();
+  });
+
+  it('영상 노드가 없으면 null 이다', () => {
+    const ref = { current: null };
+    const view = renderHook(() => useHlsPlayback(ref, source('vod', NO_START)));
+    expect(view.result.current.currentProgramDateMs()).toBeNull();
+    expect(view.result.current.engine).toBeNull();
   });
 });

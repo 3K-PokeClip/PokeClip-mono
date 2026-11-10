@@ -12,9 +12,9 @@ import (
 // 실패하는 형(브레이커)은 TestPlaybackHardFailuresOpenOnlyPlaybackBreaker 가 잰다.
 
 // ③ 을 만들지 못한 조각도 그 조각의 ② 클립 소재는 그대로 올라간다. ② 와 ③ 은 형제 축이라(설계
-// 3.3·5.5.3) 게이트 키·장부 열·결과 통지가 축마다 따로다. 무결성 4항과 임의 오류 전부로 잰다 —
-// 재시도 사다리 부류(해석 실패·임의 오류)도, 첫 시도에서 끝나는 부류(트랙 부족·빈 트랙·크기 상한)도
-// 같은 조각의 ② 를 건드리지 않는다.
+// 3.3·5.5.3) 게이트 키·장부 열·결과 통지가 축마다 따로다. 무결성 4항·음수 도장과 임의 오류 전부로
+// 잰다 — 재시도 사다리 부류(해석 실패·임의 오류)도, 첫 시도에서 끝나는 부류(트랙 부족·빈 트랙·크기
+// 상한·음수 도장)도 같은 조각의 ② 를 건드리지 않는다.
 //
 // 잡는 결함: 산출 실패를 조각 전체의 결함으로 보고 ② 까지 막는 변경 — 같은 조각의 ② 키를 격리하거나
 // 백오프에 걸면, ② 장부에 failed 를 적으면, ② 커서에 실패를 통지하면 소리 트랙이 빠진 송출 하나가
@@ -28,6 +28,7 @@ func TestPlaybackProduceFailureLeavesArchiveOfSameSegmentUploading(t *testing.T)
 		{"영상1_소리1_아님", playback.ErrMissingTracks},
 		{"샘플_0", playback.ErrEmptyTrack},
 		{"크기_상한_초과", playback.ErrInputTooLarge},
+		{"음수_도장", playback.ErrNegativePos},
 		{"임의_오류", io.ErrUnexpectedEOF},
 	} {
 		t.Run(c.name, func(t *testing.T) {

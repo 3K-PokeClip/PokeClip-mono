@@ -63,7 +63,8 @@ services:
       timeout: 5s
       retries: 30
 
-  # 버킷을 만들고 익명 정책을 dvr/* 의 GetObject 하나로 둔다(목록 권한 없음 · streams/ 는 닫힘 — R34).
+  # 버킷을 만들고 익명 정책을 dvr/* · vod/* 의 GetObject 하나로 둔다(목록 권한 없음 · streams/ 는 닫힘 — R34). 두 접두는
+  # prod rewind 버킷 정책(prod/runtime-2/rewind_bucket_policy.tf)의 CDN 읽기 접두와 같다 — vod/ 는 로컬 엣지 /vod/ 가 쓴다.
   minio-init:
     image: *minio-image
     profiles: [rewind-minio]
@@ -83,11 +84,11 @@ services:
       - |
         export MC_HOST_local="https://$${MINIO_ROOT_USER}:$${MINIO_ROOT_PASSWORD}@minio:9000"
         mc --config-dir /tmp/mc mb --ignore-existing local/pokeclip-rewind-local
-        printf '%s' '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::pokeclip-rewind-local/dvr/*"]}]}' > /tmp/anon.json
+        printf '%s' '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::pokeclip-rewind-local/dvr/*","arn:aws:s3:::pokeclip-rewind-local/vod/*"]}]}' > /tmp/anon.json
         mc --config-dir /tmp/mc anonymous set-json /tmp/anon.json local/pokeclip-rewind-local
-        echo "버킷 · 익명 정책(dvr/* GetObject) 준비"
+        echo "버킷 · 익명 정책(dvr/* · vod/* GetObject) 준비"
 
-  # 브라우저 대신 MinIO 에 붙는 로컬 엣지 — /dvr/ 만 · CORS · x-amz-* 지움(9.4.2절).
+  # 브라우저 대신 MinIO 에 붙는 로컬 엣지 — /dvr/ · /vod/ 문서만 · CORS · x-amz-* 지움(9.4.2절 · POK-525).
   dvr-edge:
     image: nginx:1-alpine
     profiles: [rewind-minio]

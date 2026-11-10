@@ -466,6 +466,10 @@ func TestKeyGrammarIsPerAxis(t *testing.T) {
 		{"재생_축은_dvr_seg_문법", index.UploadTarget{
 			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: session,
 			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, ""},
+		// ③ 키는 두 꼴이다(POK-525 설계 2-1) — 회차 꼴도 같은 문법 소유자(playback.ParseSegKey)가 풀어 스트림 · seq 를 견준다.
+		{"재생_축은_회차_꼴도_받는다", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: session,
+			S3Key: "dvr/demo/" + session + "/seg/000007.m4s", LocalPath: local, Bytes: 64}, ""},
 		{"init_축은_dvr_init_문법", index.UploadTarget{
 			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
 			S3Key: initKeyOf(t, "demo", session), LocalPath: local, Bytes: 64}, ""},
@@ -485,6 +489,12 @@ func TestKeyGrammarIsPerAxis(t *testing.T) {
 		{"init_축에_재생_키", index.UploadTarget{
 			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
 			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, "bad_key"},
+		{"재생_축_회차_꼴의_stream_이_다르면_거부", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: session,
+			S3Key: "dvr/other/" + session + "/seg/000007.m4s", LocalPath: local, Bytes: 64}, "bad_key"},
+		{"재생_축_회차_꼴의_seq_가_다르면_거부", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: session,
+			S3Key: "dvr/demo/" + session + "/seg/000008.m4s", LocalPath: local, Bytes: 64}, "seq_mismatch"},
 		{"키의_stream_이_다르면_축과_무관하게_거부", index.UploadTarget{
 			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
 			S3Key: initKeyOf(t, "other", session), LocalPath: local, Bytes: 64}, "bad_key"},

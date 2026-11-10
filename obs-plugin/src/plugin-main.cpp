@@ -32,6 +32,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "pairing.hpp"
 #include "post-and-wait.hpp"
 #include "server-env.hpp"
+#include "srt-latency.hpp"
 #include "srt-target.hpp"
 #include "stream-control.hpp"
 #include "stream-target.hpp"
@@ -128,6 +129,18 @@ std::string ConfigJson()
 	obs_data_t *d = obs_data_create();
 	obs_data_set_string(d, "server_env", ServerEnvName(c.serverEnv));
 	obs_data_set_string(d, "api_base", c.apiBase.c_str());
+	// 독 「인증 서버」 칸이 비웠을 때 돌아갈 주소(지금 환경 짝) — 자리 글자와 「바뀌는가」 판단에 쓴다
+	obs_data_set_string(d, "default_api_base", ServersFor(c.serverEnv).apiBase);
+	// 적으면 위 기본 주소로 맞춰지는 주소들(두 환경·옛 기본값) — 독이 아무것도 안 바뀌는 입력에 「연결이 해제돼요」를 묻지 않게
+	obs_data_array_t *known = obs_data_array_create();
+	for (const char *base : KnownDefaultApiBases()) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "url", base);
+		obs_data_array_push_back(known, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(d, "known_api_bases", known);
+	obs_data_array_release(known);
 	obs_data_set_string(d, "ingest_host", c.ingestHost.c_str());
 	obs_data_set_int(d, "ingest_port", c.ingestPort);
 	obs_data_set_bool(d, "send_passphrase", c.sendPassphrase);
@@ -168,17 +181,26 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		if (obs_data_has_user_value(d, key))
 			out = obs_data_get_bool(d, key);
 	};
-	// 서버 환경(POK-267, 독 숨은 스위치) — 목적지를 컴파일된 두 짝(운영·개발) 중에서만 고른다. 키가 환경별이라
+	// 서버 환경(POK-267, 독 개발자 모드) — 목적지를 컴파일된 두 짝(운영·개발) 중에서만 고른다. 키가 환경별이라
 	// 바꾸면 연결을 해제한다(아래 Commit) — 브리지 토큰으로 비밀을 다른 곳에 보내게 할 수 없다.
 	const bool envGiven = obs_data_has_user_value(d, "server_env");
 	const std::string envText = envGiven ? obs_data_get_string(d, "server_env") : "";
-	// api_base·clip_api_base는 여기서 받지 않는다 — 마크가 스트림 키 파생 값을 Bearer로 싣고 가는 곳이라,
-	// 브리지 토큰만으로 목적지를 바꿀 수 있으면 「비밀은 독에 주지 않는다」가 우회된다.
-	// 개발 중에는 설정 파일(pokeclip.json)로 바꾼다.
+	// 인증 서버(api_base, 독 개발자 모드) — 비움·운영·개발 기본 주소(환경 짝을 따른다)와 이 PC 주소(로컬 auth)만 받는다
+	// (IsAcceptedDockApiBase). 마크가 스트림 키 파생 값을 Bearer로 싣고 가는 곳이라 PC 밖의 다른 주소는 브리지 토큰만으로
+	// 고를 수 없고, 바꾸면 키를 지운다(그 서버가 발급한 키가 아니다). clip_api_base는 받지 않는다 — 설정 파일로만 바꾼다.
+	std::optional<std::string> requestedApiBase;
+	if (obs_data_has_user_value(d, "api_base"))
+		requestedApiBase = NormalizeApiBase(obs_data_get_string(d, "api_base"));
 	str("ingest_host", next.ingestHost);
 	num("ingest_port", next.ingestPort);
 	flag("send_passphrase", next.sendPassphrase);
-	num("latency_ms", next.latencyMs);
+	// latency_ms는 64비트로 받아 범위를 본 뒤에 좁힌다 — int로 먼저 감기면 4294969296이 2000으로 통과한다. 범위 밖이면
+	// next에 얹지 않고 아래 invalid_latency로 거절한다.
+	int64_t latency = next.latencyMs;
+	if (obs_data_has_user_value(d, "latency_ms"))
+		latency = obs_data_get_int(d, "latency_ms");
+	if (IsValidLatencyMs(latency))
+		next.latencyMs = static_cast<int>(latency);
 	flag("sync_start", next.syncStart);
 	flag("force_fallback", next.forceFallback);
 	flag("audio_auto_assign", next.audioAutoAssign);
@@ -191,14 +213,17 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 			return {400, JsonReason(false, "invalid_server_env")};
 		requestedEnv = parsed;
 	}
-	// 환경 전환(같은 본문의 수신 주소는 버림·키 지움)과 알려진 기본 호스트 맞추기 — 여기서는 검사용 스냅샷에 얹고,
-	// 저장은 아래 Commit이 잠금 아래 지금 설정에 같은 규칙으로 다시 얹는다(server-env.hpp ApplyPutServerEnv).
-	ApplyPutServerEnv(next, current, requestedEnv);
+	if (requestedApiBase && !IsAcceptedDockApiBase(*requestedApiBase))
+		return {400, JsonReason(false, "invalid_api_base")};
+	// 환경 전환(같은 본문의 수신 주소는 버림)·인증 서버 바꾸기(둘 다 키 지움)와 알려진 기본 호스트 맞추기 — 여기서는
+	// 검사용 스냅샷에 얹고, 저장은 아래 Commit이 잠금 아래 지금 설정에 같은 규칙으로 다시 얹는다(server-env.hpp
+	// ApplyPutServerEnv).
+	ApplyPutServerEnv(next, current, requestedEnv, requestedApiBase);
 	// 스위치를 직접 바꿨으면 답한 것으로 친다 — 처음 안내를 다시 띄우지 않는다.
 	if (next.audioAutoAssign != autoAssignWas)
 		next.audioAssignPrompted = true;
 
-	// 송출 중에는 서버 환경·SRT 출력·동기화·독 표시 방식만 막는다. 오디오 배정 스위치·처음 안내 응답은 AudioRouter가 방송·녹화가
+	// 송출 중에는 서버 환경·인증 서버·SRT 출력·동기화·독 표시 방식만 막는다. 오디오 배정 스위치·처음 안내 응답은 AudioRouter가 방송·녹화가
 	// 끝날 때까지 지금 나가는 트랙을 옮기지 않으므로 받는다 — 막으면 방송 중에 뜬 안내 카드에 답할 수 없다.
 	if (streaming && !next.SameOutputSettings(current))
 		return {409, JsonReason(false, "streaming")};
@@ -207,32 +232,32 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		return {400, JsonReason(false, "invalid_ingest_host")};
 	if (next.ingestPort < 1 || next.ingestPort > 65535)
 		return {400, JsonReason(false, "invalid_ingest_port")};
-	if (next.latencyMs < 20 || next.latencyMs > 8000)
+	if (!IsValidLatencyMs(latency))
 		return {400, JsonReason(false, "invalid_latency")};
 
 	// 잠금 아래 지금 설정에 독 값만 얹는다 — 키·배정 기억·독 첫 실행 표시·단축키 사본은 페어링·UI 스레드가 따로
 	// 저장하므로 이 요청이 읽은 옛 스냅샷으로 덮지 않는다. 환경 전환 여부도 지금 설정을 기준으로 다시 정한다 — 스냅샷을
 	// 읽은 뒤 다른 요청이 환경을 바꿨으면 이 요청이 옛 짝을 되살리거나 새 환경의 키를 옛 짝에 남기지 않게.
-	// server_env를 실은 요청(숨은 스위치 — 고급 설정 저장은 싣지 않는다)은 전환이면 키를 지우는 연결 해제다. 전환인지는
+	// server_env·api_base를 실은 요청(독 개발자 모드 — 다른 저장은 싣지 않는다)은 바뀌면 키를 지우는 연결 해제다. 바뀌는지는
 	// 잠금 아래에서야 정해지므로 그런 요청은 늘 .bak에도 새 판을 쓴다 — 직전 판을 남기면 지운 키가 되살아난다(POK-285).
-	const ConfigStore::SaveBackup backup =
-		requestedEnv ? ConfigStore::SaveBackup::SameAsNew : ConfigStore::SaveBackup::KeepPrevious;
-	bool envSwitch = false;
+	const ConfigStore::SaveBackup backup = (requestedEnv || requestedApiBase) ? ConfigStore::SaveBackup::SameAsNew
+										    : ConfigStore::SaveBackup::KeepPrevious;
+	bool issuerChanged = false;
 	if (!ConfigStore::Instance().Commit(
 		    [&](PluginConfig &c) {
 			    const PluginConfig before = c;
 			    c.TakeDockSettings(next);
-			    envSwitch = ApplyPutServerEnv(c, before, requestedEnv);
+			    issuerChanged = ApplyPutServerEnv(c, before, requestedEnv, requestedApiBase);
 		    },
 		    backup))
 		return {500, JsonReason(false, "save_failed")};
 
 	SyncStateFromConfig();
-	if (envSwitch) {
+	if (issuerChanged) {
 		// Unpair()(pairing.cpp)와 같은 뒷정리 — 키 확인 안내를 내리고 오디오 배정을 미페어링 상태로 다시 본다.
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.retry.keySuspect = false; });
 		PluginConfig saved = ConfigStore::Instance().Get();
-		obs_log(LOG_INFO, "server env switched to %s — unpaired (api %s, ingest %s:%d)",
+		obs_log(LOG_INFO, "key issuer changed to %s — unpaired (api %s, ingest %s:%d)",
 			ServerEnvName(saved.serverEnv), saved.apiBase.c_str(), saved.ingestHost.c_str(), saved.ingestPort);
 		AudioRouter::Instance().Schedule("unpaired");
 	} else if (next.audioAutoAssign != autoAssignWas || next.audioAssignPrompted != promptedWas) {

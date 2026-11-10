@@ -65,7 +65,8 @@ type UploadTarget struct {
 	// 정해 싣고, 스위퍼 작업은 워커가 회차별 보정값 표로 정한다.
 	PlaybackPos time.Duration
 	// StitchOffset 은 이 조각에 적용된 보정값(offset)이다. 실시간 ③ 요청이 이 값으로 회차의
-	// 보정값 표에 offset 줄을 적는다(평소 0 — 리셋·구멍을 이어 붙인 뒤에만 0 이 아니다).
+	// 보정값 표에 offset 줄을 적는다(평소 0 — 회차 첫 조각의 mtxi 가 음수였거나 리셋·구멍을
+	// 이어 붙인 뒤에만 0 이 아니다).
 	StitchOffset time.Duration
 	// PosPinned 는 mtxi 판독에 실패해 PlaybackPos 를 기대값(직전 pos + 장부 길이)으로 고정했는가다.
 	// 참이면 보정값 표에 고정 줄 {seq → pos} 을 적어, 스위퍼가 판독 없이 같은 값을 쓰게 한다.

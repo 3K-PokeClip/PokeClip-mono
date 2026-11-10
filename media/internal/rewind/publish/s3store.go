@@ -29,7 +29,8 @@ const (
 	manifestCacheControl = "public, max-age=1"
 	vodCacheControl      = "public, max-age=3600"
 
-	// vodKeyPrefix 는 VOD 문서 키의 접두다 — vodKey 가 이 접두로 키(vod/{streamID}/{head}/index.m3u8)를 만든다.
+	// vodKeyPrefix 는 VOD 문서 키의 접두다 — 사슬 문서 vod/{streamID}/{head}/index.m3u8(vodKey) · 회차 문서
+	// vod/{streamID}/{roundID}.round/index.m3u8(vodRoundKey).
 	vodKeyPrefix = "vod/"
 )
 

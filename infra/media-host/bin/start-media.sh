@@ -6,19 +6,24 @@
 #   1. 선행 점검 세 항목(compose 판 · ECR 자격 도우미 · DOCKER_CONFIG 의
 #      credHelpers)을 매번 같은 순서로 모두 보고 결과 줄을 낸다. 하나라도
 #      실패하면 「MEDIA PREREQ FAIL <항목>」 을 남기고 끝낸다.
-#   2. CDN 비밀(MediaMTX hlsCDNSecret)을 Secrets Manager 에서 읽는다(argv 에는
+#   2. compose 파일 옆 sidecar.env(상자 스위치 파일 — 사이드카의 새 꼴 쓰기
+#      스위치)가 링크 아닌 일반 파일이고 내용이 정확히 PLAYBACK_ROUND_KEYS=true
+#      또는 =false 한 줄인지 본다(두 모드 공통 — 없으면 compose 의 required
+#      env_file 때문에 판정 줄 없이 재시작이 되풀이된다). 아니면 「MEDIA START
+#      BLOCKED: sidecar settings unavailable」. 비밀을 읽기 전에 본다.
+#   3. CDN 비밀(MediaMTX hlsCDNSecret)을 Secrets Manager 에서 읽는다(argv 에는
 #      ARN 만). 실패 · 빈 값 · 허용 문자([A-Za-z0-9._+=-]) 밖의 글자(줄바꿈
 #      포함)가 있으면 「MEDIA START BLOCKED: CDN secret unavailable」. 허용
 #      문자는 MediaMTX 가 hlsCDNSecret 에 받는 글자(/ · ~ 는 거부 — 기동 실패)와
 #      YAML 큰따옴표 안에서 이스케이프가 필요 없는 글자의 교집합이다. 템플릿은
 #      토큰을 YAML 큰따옴표 안에 둔다.
-#   3. 사이드카가 MediaMTX 관리 API 에 붙을 비밀번호를 새로 만든다(/dev/urandom
+#   4. 사이드카가 MediaMTX 관리 API 에 붙을 비밀번호를 새로 만든다(/dev/urandom
 #      32바이트 → 16진 64자). 저장하지 않는다 — 기동마다 바뀌고, MediaMTX 설정과
 #      사이드카 파일에 같은 실행에서 같이 쓰이므로 둘이 어긋나지 않는다. 만들지
 #      못하면 「MEDIA START BLOCKED: MTX API credential unavailable」.
-#   4. MediaMTX 설정 템플릿(저장소 파일 그대로 — M9 설치 묶음이 렌더 없이
+#   5. MediaMTX 설정 템플릿(저장소 파일 그대로 — M9 설치 묶음이 렌더 없이
 #      깐다)을 읽는다. 읽지 못하면 「MEDIA START FAIL render template」.
-#   5. 송출 인증 모드를 compose 렌더본(MEDIA_COMPOSE_FILE) 하나로 정한다 —
+#   6. 송출 인증 모드를 compose 렌더본(MEDIA_COMPOSE_FILE) 하나로 정한다 —
 #      media.env · 템플릿으로는 정하지 않는다(lib/render_files.sh). 응답기 서비스
 #      키 줄(`  ingest-auth:`)이 0 이면 옛 모드(M2 내부 인증), 1 이면 응답기
 #      모드(송출 인증 응답기)다. 2 이상이거나 같은 키를 다른 꼴로 쓴 줄이
@@ -31,9 +36,9 @@
 #        - 옛 모드: CDN 비밀 · API 비밀번호 각 1, 응답기 토큰 0.
 #        - 응답기 모드: CDN 비밀 · Basic 비밀번호 · SRT 송출 잠금 · SRT 읽기
 #          잠금 각 1, API 비밀번호 0.
-#      모드 판정 줄은 따로 내지 않는다. 응답기 모드의 외부 입력(6)을 받기 전에
+#      모드 판정 줄은 따로 내지 않는다. 응답기 모드의 외부 입력(7)을 받기 전에
 #      본다.
-#   6. 응답기 모드만(옛 모드는 아래 키 · 파일을 읽지 않는다):
+#   7. 응답기 모드만(옛 모드는 아래 키 · 파일을 읽지 않는다):
 #      - compose 파일 옆 ingest-auth.env 가 링크 아닌 일반 파일이고 내용이
 #        정확히 INGEST_AUTH_IP_LIMIT=on 또는 =off 한 줄인지 본다(없으면 compose
 #        의 required env_file 때문에 판정 줄 없이 재시작이 되풀이된다). 아니면
@@ -50,10 +55,10 @@
 #        지우지 · 임시 파일을 만들지 못하면 「MEDIA START FAIL render
 #        deny-dir」, 거부 목록 자리가 링크 · 일반 파일 아님이거나 rename 이
 #        실패하면 「MEDIA START FAIL render deny-install」.
-#      - 생성 셋(Basic 비밀번호 · 잠금 둘 — 각각 3 과 같은 꼴의 새 값)을
+#      - 생성 셋(Basic 비밀번호 · 잠금 둘 — 각각 4 와 같은 꼴의 새 값)을
 #        만든다. 저장하지 않는다. 하나라도 만들지 못하면 「MEDIA START
 #        BLOCKED: generated credential unavailable」.
-#   7. 모드의 토큰(각각 정확히 한 번)을 채워 tmpfs(RUNTIME_DIR)의
+#   8. 모드의 토큰(각각 정확히 한 번)을 채워 tmpfs(RUNTIME_DIR)의
 #      mediamtx.yml(MediaMTX 실행 계정 소유 0400)로, API 비밀번호 한 줄을
 #      mtx_api_pass(사이드카 실행 계정 소유 0400)로 둔다. 응답기 모드면
 #      RUNTIME_DIR/ingest-auth(root 0711)에 Basic 비밀번호 한 줄(ingest_basic_pass)
@@ -71,7 +76,7 @@
 #      그대로 두고, rename 하나가 실패하면 이번에 옮긴 파일을 지워 짝이 어긋난
 #      설정을 남기지 않는다. 치환은 bash 내장 문자열 연산으로만 해서 값이 외부
 #      명령의 argv 에 오르지 않는다.
-#   8. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
+#   9. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
 #      — 둘 중 하나가 끝나면 compose 전체가 끝나고 systemd 가 다시 띄운다.
 #      나머지 서비스(사이드카 등)는 엔진 재시작 정책(on-failure)으로 혼자 다시
 #      뜬다. 컨테이너는 늘 새로 만든다(--force-recreate) — 정지가 compose 를
@@ -99,7 +104,8 @@
 #                                   모드만 쓴다).
 #   MEDIA_COMPOSE_PROJECT           기본 pokeclip-media.
 #   MEDIA_COMPOSE_FILE              기본 /etc/pokeclip-media/compose.yml. 옆의
-#                                   ingest-auth.env 도 본다(응답기 모드).
+#                                   sidecar.env 와 ingest-auth.env(응답기
+#                                   모드)도 본다.
 #   STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN
 #                                   응답기 모드 필수. 4C 토큰 비밀 ARN.
 #   INGEST_AUTH_DENYLIST_PARAM      응답기 모드 필수. 거부 목록 SSM 파라미터
@@ -168,6 +174,9 @@ readonly RESOLVE_TOKEN_MAX_BYTES=4096
 # compose 파일 옆 IP 한도 env 파일(compose 렌더본의 응답기 서비스 키 줄은
 # lib/render_files.sh 의 INGEST_AUTH_SERVICE_LINE).
 readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
+# compose 파일 옆 상자 스위치 파일(사이드카의 env_file)과 그 키.
+readonly SIDECAR_ENV_NAME='sidecar.env'
+readonly ROUND_KEYS_KEY='PLAYBACK_ROUND_KEYS'
 # compose 출력이 붙는 서비스 — 템플릿에서 restart: "no" 인 집합과 같아야 한다.
 readonly ATTACHED_SERVICES=(mediamtx nginx)
 
@@ -518,26 +527,29 @@ render_legacy() {
 }
 
 #######################################
-# IP 한도 env 파일이 링크 아닌 일반 파일이고 내용이 정확히
-# INGEST_AUTH_IP_LIMIT=on 또는 =off 한 줄(끝 줄바꿈은 있어도 없어도)인지
-# 본다. 크기는 원본 바이트로 대조한다(명령 치환은 NUL 을 지운다).
+# 한 줄 env 파일(IP 한도 · 상자 스위치)이 링크 아닌 일반 파일이고 내용이
+# 정확히 허용 줄 가운데 하나(끝 줄바꿈은 있어도 없어도)인지 본다. 크기는 원본
+# 바이트로 대조한다(명령 치환은 NUL 을 지운다).
 # Arguments:
-#   env 파일.
+#   env 파일, 허용 줄 ….
 # Returns:
 #   0 맞음 / 1 없음 · 꼴 밖.
 #######################################
-check_ip_limit_env() {
-  local size content LC_ALL=C
-  [[ -f "$1" && ! -L "$1" ]] || return 1
-  size="$(wc -c <"$1")" || return 1
+check_env_line() {
+  local file="$1" size content line LC_ALL=C
+  shift
+  [[ -f "${file}" && ! -L "${file}" ]] || return 1
+  size="$(wc -c <"${file}")" || return 1
   size=$((size + 0))
   (( size <= 64 )) || return 1
-  content="$(cat -- "$1" && printf x)" || return 1
+  content="$(cat -- "${file}" && printf x)" || return 1
   content="${content%x}"
   (( ${#content} == size )) || return 1
   content="${content%$'\n'}"
-  [[ "${content}" == INGEST_AUTH_IP_LIMIT=on \
-    || "${content}" == INGEST_AUTH_IP_LIMIT=off ]]
+  for line in "$@"; do
+    [[ "${content}" != "${line}" ]] || return 0
+  done
+  return 1
 }
 
 #######################################
@@ -632,7 +644,8 @@ install_denylist() {
 render_ingest_auth() {
   local ia="$1/${INGEST_AUTH_DIR_NAME}" basic_pass publish_lock read_lock
   local rendered resolve_token
-  if ! check_ip_limit_env "$(dirname -- "$4")/${IP_LIMIT_ENV_NAME}"; then
+  if ! check_env_line "$(dirname -- "$4")/${IP_LIMIT_ENV_NAME}" \
+    INGEST_AUTH_IP_LIMIT=on INGEST_AUTH_IP_LIMIT=off; then
     say 'MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable'
     return 1
   fi
@@ -689,6 +702,11 @@ prepare_config() {
   local dir="${RUNTIME_DIR:-/run/pokeclip-media}" secret api_pass status=0
   if [[ "${dir}" != /?* ]]; then
     say 'MEDIA START FAIL render runtime-dir'
+    return 1
+  fi
+  if ! check_env_line "$(dirname -- "$1")/${SIDECAR_ENV_NAME}" \
+    "${ROUND_KEYS_KEY}=true" "${ROUND_KEYS_KEY}=false"; then
+    say 'MEDIA START BLOCKED: sidecar settings unavailable'
     return 1
   fi
   if ! secret="$(read_cdn_secret)"; then

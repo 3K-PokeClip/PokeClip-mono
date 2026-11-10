@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Avatar, IconButton } from '@/ui';
 import { ChannelSwitcher, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
+import { NotificationBell } from '@/features/notifications/NotificationBell';
 import { useSidebarStore } from '@/stores/sidebar';
 import { BrandSymbol } from './BrandSymbol';
 import { isDockHrefActive } from './dockTransition';
@@ -234,10 +235,8 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
           </button>
         </ChannelSwitcher>
         <div className={styles.bellWrap}>
-          <IconButton variant="ghost" size="sm" aria-label="알림">
-            <Bell aria-hidden />
-          </IconButton>
-          <span className={styles.bellDot} />
+          {/* 알림 창은 프로필 블록 기준 오른쪽, 사이드바 경계(블록 오른쪽 12 + 8) 밖에 띄운다: 종에 붙이면 사이드바를 덮는다 */}
+          <NotificationBell place="sidebar" anchorRef={userBlockRef} offset={20} />
         </div>
       </div>
     </aside>

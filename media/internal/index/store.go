@@ -412,7 +412,8 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 	// ⑹ ③ 키 파생. **실패는 오류가 아니라 playback_s3_key NULL 이다**(설계 5.2):
 	// ⓒ 가 주조를 막고 다음 조각이 재시도한다. 세션·PDT 까지 함께 버리면 그 조각이
 	// 되감기 목록에서 통째로 사라지므로, 잃는 것을 키 하나로 좁힌다.
-	if key, keyErr := s.playbackKey(r.StreamID, r.Seq); keyErr == nil {
+	// 회차는 결정의 RoundID 다 — 개시 갈래면 Open 이 같은 값을 대조해 썼으므로 세션의 round_id 와 같다(POK-525 E31).
+	if key, keyErr := s.playbackKey(r.StreamID, dec.RoundID, r.Seq); keyErr == nil {
 		r.PlaybackS3Key = &key
 	}
 	return r, opening, nil

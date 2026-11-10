@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# 운영 스크립트 시험 전용 가짜 flock — argv 와 환경을 기록하고, 받은 파일
+# 기술자에 진짜 잠금(flock(2) LOCK_EX | LOCK_NB)을 건다. macOS 에는 flock
+# 명령이 없어 perl 의 flock 으로 같은 시스템 호출을 부른다 — 잠금은 부르는
+# 쪽이 연 파일 기술자에 걸리므로 이 프로세스가 끝나도 그 기술자가 닫힐 때까지
+# 남는다(util-linux flock 의 기술자 꼴과 같다).
+#
+# 받는 꼴(그 밖은 종료 2): flock -n <기술자 번호>
+#   잡으면 종료 0, 다른 기술자가 쥐고 있거나 걸지 못하면 종료 1(util-linux
+#   flock -n 과 같은 값).
+#
+# 시험이 주는 값: PCBENCH_FAKE_LIB · PCBENCH_FAKE_LOG_DIR.
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+# shellcheck source=record.sh
+source "${PCBENCH_FAKE_LIB:?가짜 flock: PCBENCH_FAKE_LIB 없음}"
+
+main() {
+  fake::record flock "$@"
+  if (( $# != 2 )) || [[ "$1" != -n || ! "$2" =~ ^[0-9]+$ ]]; then
+    fake::unknown flock
+  fi
+  # shellcheck disable=SC2016 # perl 식이다(셸이 펼치지 않는다).
+  exec perl -MFcntl=:flock -e \
+    'open(my $fh, ">&=", $ARGV[0]) or exit 1;
+     flock($fh, LOCK_EX | LOCK_NB) or exit 1;' "$2"
+}
+
+main "$@"

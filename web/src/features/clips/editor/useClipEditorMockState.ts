@@ -333,7 +333,8 @@ export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
   { value: 'image', label: '이미지' },
 ];
 
-function initialRecipe(
+/** 편집기의 처음 값. 카드에서 바로 보관함에 저장하는 편집본(saveCardDraft)도 이 값으로 만든다 — 편집기에서 연 것과 같은 모양 */
+export function initialRecipe(
   range: ClipRange,
   trackMuted: Readonly<Record<string, boolean>> = {},
   trackVolumes: Readonly<Record<string, number>> = {},

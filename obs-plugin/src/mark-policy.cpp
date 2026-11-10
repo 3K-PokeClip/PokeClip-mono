@@ -32,45 +32,15 @@ bool StartsWithNoCase(const std::string &s, const char *prefix)
 	return true;
 }
 
-bool AllOf(const std::string &s, const char *allowed)
-{
-	return s.find_first_not_of(allowed) == std::string::npos;
-}
-
 } // namespace
 
 bool IsSecureMarkBase(const std::string &base)
 {
 	if (StartsWithNoCase(base, "https://"))
 		return base.size() > 8;
-	if (!StartsWithNoCase(base, "http://"))
-		return false;
-
-	// 평문 HTTP는 이 PC 안(루프백)만 — 로컬 목 서버·auth 직결 개발용.
-	size_t end = base.find_first_of("/?#", 7);
-	std::string authority = base.substr(7, end == std::string::npos ? std::string::npos : end - 7);
-	if (authority.find('@') != std::string::npos)
-		return false; // http://localhost@다른호스트 — 실제로는 뒤쪽 호스트로 간다
-	std::string host;
-	std::string port;
-	if (!authority.empty() && authority[0] == '[') {
-		size_t close = authority.find(']');
-		if (close == std::string::npos)
-			return false;
-		host = authority.substr(1, close - 1);
-		port = authority.substr(close + 1);
-	} else {
-		size_t colon = authority.find(':');
-		host = authority.substr(0, colon);
-		port = colon == std::string::npos ? "" : authority.substr(colon);
-	}
-	if (!port.empty() && (port[0] != ':' || !AllOf(port.substr(1), "0123456789")))
-		return false;
-	std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) { return std::tolower(c); });
-	if (host == "localhost" || host == "::1")
-		return true;
-	return host.rfind("127.", 0) == 0 && AllOf(host, "0123456789.") &&
-	       std::count(host.begin(), host.end(), '.') == 3;
+	// 평문 HTTP는 이 PC 안(루프백)만 — 로컬 목 서버·auth 직결 개발용. 판정은 종료 신호·독 인증 서버와 같은 정본 하나
+	// (end-signal-policy IsLoopbackBase) — 셋이 따로 판정하면 한쪽만 고쳐 독이 받은 인증 서버로 마크가 막히는 일이 생긴다.
+	return StartsWithNoCase(base, "http://") && IsLoopbackBase(base);
 }
 
 std::string MarkDerivedValue(const std::string &passphrase)

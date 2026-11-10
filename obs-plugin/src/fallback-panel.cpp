@@ -181,7 +181,7 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	row->addWidget(pair_);
 
 	// 스트리머가 「기본 패널로 표시」를 켠 것(force_fallback)이면 「쓸 수 없어」가 아니라 그 설정 때문이라고 말하고,
-	// 브라우저 패널로 돌아갈 버튼을 둔다 — 그 스위치는 브라우저 독 「고급 설정」에만 있어 여기서 못 돌아왔다.
+	// 브라우저 패널로 돌아갈 버튼을 둔다 — 그 스위치는 브라우저 독 설정 탭에만 있어 여기서 못 돌아왔다.
 	const bool forced = reason == "force_fallback";
 	auto *note = new QLabel(forced ? Text("Fallback.NoteForced")
 				       : Text("Fallback.Note") + (reason.isEmpty() ? QString() : " [" + reason + "]"),
@@ -359,7 +359,7 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	trackRows_->setVisible(showAudio);
 	audioLocked_ = s.audio.locked;
 	// 자동 배정은 기본으로 꺼져 있다 — 켜는 길은 확인 창을 거친다(스템이 왜 필요한지·짜 둔 트랙을 덮어쓴다).
-	// 켜져 있으면 같은 버튼이 끄기다 — 독 「고급 설정」 스위치와 같이 원래 체크로 되돌린다(방송·녹화 중이면 끝난 뒤).
+	// 켜져 있으면 같은 버튼이 끄기다 — 독 설정 탭 스위치와 같이 원래 체크로 되돌린다(방송·녹화 중이면 끝난 뒤).
 	assign_->setText(Text(s.audio.autoAssign ? "Audio.Disable" : "Audio.Enable"));
 	assign_->setVisible(s.paired && s.audio.known);
 	audioCustom_ = s.audio.customRouting;

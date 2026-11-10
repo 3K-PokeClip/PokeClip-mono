@@ -29,6 +29,8 @@ vi.mock('./useHlsPlayback', () => ({
     seekToMs: () => {},
     seekToLiveEdge: () => {},
     keepPausedOnSwap: () => {},
+    holdFrame: () => {},
+    dropPauseMark: () => {},
   }),
 }));
 

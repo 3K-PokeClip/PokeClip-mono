@@ -10,6 +10,60 @@ import { recordingTimeline } from '@/features/player/recordingTimeline';
 import { openSession } from '@/features/player/rewindSwitch';
 import { sessionView, type SessionView } from '@/features/player/sessionView';
 import type { PlaybackSession } from '@/features/player/usePlaybackSession';
+import type { VodSource } from '@/features/player/useVodPlayback';
+
+// hls.js 는 다시보기(VOD) 묶음만 켠다(hlsFake.supported). 나머지 묶음은 꺼진 채라 jsdom 에서처럼 hls.js 없는 갈래를 탄다
+const hlsFake = vi.hoisted(() => ({ supported: false, instances: [] as FakeHls[] }));
+
+vi.mock('hls.js', () => ({ default: FakeHls }));
+
+/** 다시보기 목록 조각 — 4초 조각이 앞 조각 끝에 붙는다 */
+interface FakeFrag {
+  sn: number;
+  start: number;
+  duration: number;
+  programDateTime: number;
+  tagList: string[][];
+}
+
+class FakeHls {
+  static isSupported = () => hlsFake.supported;
+  static Events = { LEVEL_UPDATED: 'hlsLevelUpdated', ERROR: 'hlsError' };
+  static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+  // hls.js 1.7.3 의 값 그대로(errors.ts)
+  static ErrorDetails = {
+    MANIFEST_LOAD_ERROR: 'manifestLoadError',
+    MANIFEST_LOAD_TIMEOUT: 'manifestLoadTimeOut',
+    MANIFEST_PARSING_ERROR: 'manifestParsingError',
+    LEVEL_LOAD_ERROR: 'levelLoadError',
+    AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
+  };
+  readonly handlers = new Map<string, ((event: string, data: unknown) => void)[]>();
+  latestLevelDetails: { fragments: FakeFrag[]; targetduration: number; live: boolean } | null =
+    null;
+  liveSyncPosition: number | null = null;
+  url: string | null = null;
+  constructor() {
+    hlsFake.instances.push(this);
+  }
+  on(event: string, handler: (event: string, data: unknown) => void) {
+    this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+  }
+  off() {}
+  trigger(event: string, data: unknown) {
+    for (const h of this.handlers.get(event) ?? []) {
+      h(event, data);
+    }
+  }
+  attachMedia() {}
+  loadSource(url: string) {
+    this.url = url;
+  }
+  startLoad() {}
+  stopLoad() {}
+  recoverMediaError() {}
+  destroy() {}
+}
 
 type PanelProps = Pick<
   ComponentProps<typeof GlassPlayer>,
@@ -1250,6 +1304,7 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
       bindPlayer: vi.fn(),
       notice: vi.fn(),
       positionEpoch: () => 0,
+      isKnownDvrHole: () => false,
     };
   }
 
@@ -1359,5 +1414,239 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
   it('세션이 없으면 지금 순서(src)다', () => {
     renderWith({ src: 'https://m/live/key-1/index.m3u8' });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toBeInTheDocument();
+  });
+});
+
+describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
+  const PDT0 = Date.parse('2026-11-04T10:00:00.000Z');
+  const VOD_URL = 'https://media.pokeclip.com/vod/key-1/r-A/index.m3u8';
+  const VOD: VodSource = {
+    url: VOD_URL,
+    firstPdtMs: PDT0,
+    headPdtMs: PDT0 + 7_200_000,
+    axisZeroMs: PDT0,
+    originAxis: true,
+  };
+  /** 시험이 정하는 영상 노드 readyState */
+  const media = { readyState: 4 };
+
+  beforeEach(() => {
+    hlsFake.supported = true;
+    hlsFake.instances.length = 0;
+    media.readyState = 4;
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(
+      () => media.readyState,
+    );
+  });
+  afterEach(() => {
+    hlsFake.supported = false;
+    vi.restoreAllMocks();
+  });
+
+  function lastHls(): FakeHls {
+    const h = hlsFake.instances[hlsFake.instances.length - 1];
+    if (h === undefined) throw new Error('재생기가 서지 않았다');
+    return h;
+  }
+
+  async function renderVod(props: Partial<ComponentProps<typeof GlassPlayer>> = {}) {
+    const rendered = render(
+      <ToastProvider>
+        <GlassPlayer
+          channelName="게임하는너구리"
+          viewersNote="시청자 수 수집 전"
+          broadcastStatus="ended"
+          embed
+          vod={VOD}
+          {...props}
+        />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    return rendered;
+  }
+
+  /** 2시간 목록(4초 조각 1 800개)을 받았다 */
+  function listTwoHours() {
+    const fragments = Array.from({ length: 1_800 }, (_, sn) => ({
+      sn,
+      start: sn * 4,
+      duration: 4,
+      programDateTime: PDT0 + sn * 4_000,
+      tagList: [],
+    }));
+    const details = { fragments, targetduration: 4, live: false };
+    act(() => {
+      lastHls().latestLevelDetails = details;
+      lastHls().trigger('hlsLevelUpdated', { details });
+    });
+  }
+
+  /** 영상 노드가 그 자리에 있다(readyState 도 정한다) */
+  function sit(container: HTMLElement, seconds: number, readyState = 4) {
+    const video = container.querySelector('video')!;
+    media.readyState = readyState;
+    act(() => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+    return video;
+  }
+
+  it('고르는 순서는 세션 → 다시보기 → 녹화 → src 다 — 다시보기가 녹화 · src 보다 먼저 선다', async () => {
+    await renderVod({
+      src: 'https://m/live/key-1/index.m3u8',
+      recorded: {
+        streamId: 'x',
+        ...recordingTimeline([{ startMs: 0, durationSeconds: 60 }], 0, null)!,
+        originAxis: true,
+      },
+    });
+    expect(hlsFake.instances.map((h) => h.url)).toEqual([VOD_URL]);
+    expect(screen.getByRole('slider', { name: '다시보기 탐색' })).toBeInTheDocument();
+  });
+
+  it('세션이 있으면 다시보기보다 세션이 먼저다', async () => {
+    const state = openSession({
+      roundId: 'r-A',
+      accessKey: 'r-A|key-1',
+      liveUrl: 'https://m/live/key-1/index.m3u8',
+    });
+    const session: PlaybackSession = {
+      state,
+      view: sessionView(state, Date.now()),
+      dispatch: vi.fn(),
+      liveButton: vi.fn(),
+      bindPlayer: vi.fn(),
+      notice: vi.fn(),
+      positionEpoch: () => 0,
+      isKnownDvrHole: () => false,
+    };
+    await renderVod({ session });
+    expect(session.bindPlayer).toHaveBeenCalled();
+    expect(hlsFake.instances.map((h) => h.url)).not.toContain(VOD_URL);
+  });
+
+  it('Home · End · 화살표는 다시보기 전체 길이 축으로 간다 — 1시간에서 자르지 않는다', async () => {
+    const { container } = await renderVod();
+    listTwoHours();
+    const video = sit(container, 600);
+    const play = screen.getByRole('button', { name: '재생' });
+
+    fireEvent.keyDown(play, { key: 'Home' });
+    expect(video.currentTime).toBe(0);
+    sit(container, 600);
+    fireEvent.keyDown(play, { key: 'ArrowLeft' });
+    expect(video.currentTime).toBe(590);
+    sit(container, 600);
+    // End 는 목록 끝이 아니라 끝 1초 앞(마지막 조각 안쪽)이다 — 녹화 다시보기의 꼬리와 같다
+    fireEvent.keyDown(play, { key: 'End' });
+    expect(video.currentTime).toBe(7_199);
+  });
+
+  it('바깥 이동(seekToUptime)은 옮겼으면 true, 재생기가 멎어 그 시각의 자리를 모르면 false 다', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const controllerRef = createRef<GlassPlayerController>();
+    const { container } = await renderVod({ controllerRef });
+    // 목록 전에는 되감을 구간(폭 0)이 없다
+    expect(controllerRef.current?.seekToUptime(60)).toBe(false);
+    listTwoHours();
+    const video = sit(container, 600);
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(1_200);
+    });
+    expect(moved).toBe(true);
+    expect(video.currentTime).toBe(1_200);
+
+    // 화면 위치를 낸 뒤 복구 불가 — 받은 목록으로 폭은 남지만 재생기의 목록이 없다
+    const broken = { fatal: true, type: 'networkError', details: 'fragLoadError', response: {} };
+    act(() => lastHls().trigger('hlsError', broken));
+    act(() => lastHls().trigger('hlsError', broken));
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(1_800);
+    });
+    expect(moved).toBe(false);
+    expect(video.currentTime).toBe(1_200);
+  });
+
+  it('지금 자리(currentPositionMs)는 기준점 축이면 ms 로, 기준점 축이 아니면 위치를 알아도 null 이다', async () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    const first = await renderVod({ controllerRef });
+    listTwoHours();
+    sit(first.container, 600.25);
+    expect(controllerRef.current?.currentPositionMs?.()).toBe(600_250);
+    first.unmount();
+
+    const other = await renderVod({ controllerRef, vod: { ...VOD, originAxis: false } });
+    listTwoHours();
+    sit(other.container, 600.25);
+    expect(controllerRef.current?.currentPositionMs?.()).toBeNull();
+  });
+
+  it('지금 자리는 다시보기의 축만 본다 — 녹화가 기준점 축이어도 다시보기가 아니면 null 이다', async () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    const { container } = await renderVod({
+      controllerRef,
+      vod: { ...VOD, originAxis: false },
+      recorded: {
+        streamId: 'x',
+        ...recordingTimeline([{ startMs: 0, durationSeconds: 60 }], 0, null)!,
+        originAxis: true,
+      },
+    });
+    listTwoHours();
+    sit(container, 600.25);
+    expect(controllerRef.current?.currentPositionMs?.()).toBeNull();
+  });
+
+  it('화면에 붙은 자리를 모르면(readyState 1) 지금 자리는 null 이다 — 지어내지 않는다', async () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    const { container } = await renderVod({ controllerRef });
+    listTwoHours();
+    sit(container, 600, 1);
+    expect(controllerRef.current?.currentPositionMs?.()).toBeNull();
+  });
+
+  it('국면이 바뀔 때마다 알리고, 재생 위치는 화면에 붙은 자리를 알 때만 알린다', async () => {
+    const onVodPhase = vi.fn();
+    const onPlaybackPosition = vi.fn();
+    const { container } = await renderVod({ onVodPhase, onPlaybackPosition });
+    listTwoHours();
+    sit(container, 600, 1);
+    expect(onPlaybackPosition).not.toHaveBeenCalled();
+    sit(container, 600.4);
+    expect(onVodPhase.mock.calls.map(([phase]) => phase)).toEqual(['loading', 'listed', 'showing']);
+    expect(onPlaybackPosition.mock.calls.map(([seconds]) => seconds)).toEqual([600]);
+  });
+
+  it('받아 둔 자리(startAtSeconds)는 목록이 서면 그 자리로 옮기고 적용을 알린다', async () => {
+    const onStartApplied = vi.fn();
+    const { container } = await renderVod({ startAtSeconds: 1_800, onStartApplied });
+    expect(onStartApplied).not.toHaveBeenCalled();
+    listTwoHours();
+    expect(container.querySelector('video')!.currentTime).toBe(1_800);
+    expect(onStartApplied).toHaveBeenCalledOnce();
+  });
+
+  it('끝까지 보면 재생 단추가 「처음부터」다 — 녹화 다시보기와 같다(POK-518)', async () => {
+    const { container } = await renderVod();
+    listTwoHours();
+    const video = sit(container, 7_199);
+    expect(screen.queryByRole('button', { name: '처음부터' })).toBeNull();
+
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    expect(screen.getByRole('button', { name: '처음부터' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '재생' })).toBeNull();
   });
 });

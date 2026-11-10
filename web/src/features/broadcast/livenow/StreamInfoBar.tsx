@@ -28,7 +28,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
 }: {
   stream: LiveStream;
   meta: StreamMeta;
-  /** 시청자 줄: 「1,842명 시청 중」, 끝난 방송은 「끝날 때 N명 시청」, 값이 없으면 그 까닭(확인 중·기록 없음·수집 전) */
+  /** 시청자 줄: 「1,842명 시청 중」, 값이 없으면 그 까닭(확인 중·수집 전). 끝난 방송은 시청자 수 대신 방송한 날짜(「2026.10.20」)다 */
   viewersLabel: string;
   /**
    * 방송 정보를 받아 오는 중이다(POK-449). 빈 제목 · 시청자 줄 · 카테고리 줄을 번쩍이는 회색 막대로 둔다: 수집기가 방송을 찾기 전이라

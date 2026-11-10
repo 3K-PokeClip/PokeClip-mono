@@ -16,6 +16,7 @@ const QUIET: SessionView = {
   liveChecking: false,
   recordEmphasis: false,
   vodReady: false,
+  startHeld: false,
 };
 
 describe('PlayerSessionOverlay', () => {
