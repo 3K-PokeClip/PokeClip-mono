@@ -80,7 +80,13 @@ kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · �
     nginx · 루프백 송출기 푸시와 같은 꼴입니다. containerd 이미지 저장소를
     켠 Docker 가 인덱스를 통째로 올리는 것을 막습니다(결정 146).
 
+첫 세 줄의 따옴표 안을 올릴 로컬 이미지 · 저장소 키 · 태그로 바꿉니다.
+자리표시를 따옴표 밖에 두면 셸이 `<` · `>` 를 리다이렉션으로 읽습니다.
+
 ```shell
+local_image='<로컬 이미지>'
+repo_key='<키>'
+image_tag='<태그>'
 (
   set -o pipefail
   {
@@ -96,9 +102,10 @@ kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · �
     }
     aws ecr get-login-password --region ap-northeast-2 \
       | docker login --username AWS --password-stdin "${registry_host}" &&
-      docker tag <로컬 이미지> "${registry_host}/pokeclip-prod/<키>:<태그>" &&
+      docker tag "${local_image}" \
+        "${registry_host}/pokeclip-prod/${repo_key}:${image_tag}" &&
       docker push --platform linux/arm64 \
-        "${registry_host}/pokeclip-prod/<키>:<태그>"
+        "${registry_host}/pokeclip-prod/${repo_key}:${image_tag}"
     rc=$?
     docker logout "${registry_host}"
     exit "${rc}"
@@ -136,12 +143,13 @@ kty 가 이 갈래를 고르면 에이전트 세션이 로그인 · 태그 · �
     푸시합니다.
 *   워커 이미지는 증명(attestation) 매니페스트를 끄고 빌드합니다. 켜 두면
     인덱스가 되어 arm64 한 변형 정책과 어긋납니다(아래 「설치 묶음」 과
-    같은 이유). upload 도 같은 꼴입니다.
+    같은 이유). upload 도 같은 꼴입니다. `git status` 의 출력이 비어야
+    빌드합니다(작업 트리가 커밋과 같음).
 
     ```shell
-    git status --porcelain -- workers/render   # 빈 출력이어야 함
+    git status --porcelain -- workers/render
     docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
-      --load -t pokeclip-render:<태그> workers/render
+      --load -t "pokeclip-render:<태그>" workers/render
     ```
 *   제어면 서버(I1-6)는 O7c 의 조건이 아닙니다. 없으면 nginx 가 404 를
     냅니다.

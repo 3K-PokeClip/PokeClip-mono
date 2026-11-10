@@ -99,12 +99,13 @@ network 의 인터페이스 엔드포인트(POK-408)만 내릴 때는 아래 「
       echo "$(basename "${root}") $(echo 'var.region' \
         | terraform -chdir="${root}" console | tr -d '"')"
     done | tee "${evidence}/00-region.txt"
-    cut -d' ' -f2 "${evidence}/00-region.txt" | sort -u | wc -l   # 1
+    cut -d' ' -f2 "${evidence}/00-region.txt" | sort -u | wc -l
     region="$(cut -d' ' -f2 "${evidence}/00-region.txt" | sort -u)"
     export AWS_REGION="${region}" AWS_DEFAULT_REGION="${region}"
     ```
 
-    `1` 이 아니면(루트마다 리전이 다르거나 비었으면) 멈추고 kty 에게
+    루트별 리전 줄 뒤의 수(`wc -l` — 리전 값의 가짓수)가 `1` 이어야
+    합니다. `1` 이 아니면(루트마다 리전이 다르거나 비었으면) 멈추고 kty 에게
     보고합니다. workers 를 apply 하지 않았으면(4 의 상태 키가 없으면) 루프에서
     뺍니다. 셸을 새로 열면 이 블록과 위 변수 블록을 다시 둡니다.
 
@@ -122,12 +123,16 @@ network 의 인터페이스 엔드포인트(POK-408)만 내릴 때는 아래 「
     roots='bootstrap|network|certs|secrets|registry|runtime|platform|media'
     roots+='|edge|records|workers'
     grep -Ev "^prod/(${roots})/terraform\.tfstate(\.tflock)?$" \
-      "${evidence}/00-state-keys.txt"   # 출력 없음
+      "${evidence}/00-state-keys.txt"
     grep -Ec '^prod/(edge|records)/terraform\.tfstate$' \
-      "${evidence}/00-state-keys.txt"   # 0 · 1 · 2 — 「0. records · edge」 대상
+      "${evidence}/00-state-keys.txt"
     grep -Ec '^prod/workers/terraform\.tfstate$' \
-      "${evidence}/00-state-keys.txt"   # 0 · 1 — 「0a. prod/workers」 대상
+      "${evidence}/00-state-keys.txt"
     ```
+
+    출력은 차례로 허용 밖 키(없어야 함) · edge · records 키 수(0 · 1 · 2 —
+    「0. records · edge」 대상) · workers 키 수(0 · 1 — 「0a. prod/workers」
+    대상)입니다.
 
     알려진 열한 루트의 상태 키(`prod/<루트>/terraform.tfstate` 와 그 잠금
     파일 `.tflock`) 밖의 키가 하나라도 나오면 멈추고 kty 에게 보고합니다.
@@ -183,7 +188,7 @@ render · upload 의 ECS 서비스 · 태스크 정의 · Cloud Map 서비스 ·
     「정리」 로 갑니다. T1 에서는 리전 · 의존 루트 확인만 봅니다.
     *   「시작 전」 2 의 리전 루프는 `${workers}` 하나만 돌립니다 — 다른
         루트는 이 흐름에서 열지 않아 `terraform console` 이 실패할 수
-        있습니다. 줄 수 검사(`# 1`)는 그대로입니다.
+        있습니다. 줄 수 검사(`1` 이어야 함)는 그대로입니다.
     *   「시작 전」 4 는 허용 검사(첫 `grep -Ev`)를 하지 않고 workers 키
         줄만 봅니다 — `1` 이어야 합니다. workers 를 읽는 루트가 없어
         ([계약](../CONTRACT-runtime.md) 「상태 위치」) 다른 루트의 키(런타임
@@ -199,25 +204,32 @@ render · upload 의 ECS 서비스 · 태스크 정의 · Cloud Map 서비스 ·
 umask 077
 terraform -chdir="${workers}" plan -destroy -input=false -out="${work}/workers.plan"
 plan_summary "${workers}" "${work}/workers.plan" | tee "${evidence}/05-workers-plan.txt"
-grep -vc '^delete ' "${evidence}/05-workers-plan.txt"   # 0
+grep -vc '^delete ' "${evidence}/05-workers-plan.txt"
 grep -Evc '^delete (module\.(render|upload)\.|aws_vpc_security_group_ingress_rule\.(clip_from_worker|auth_from_upload)|terraform_data\.runtime_contract$)' \
-  "${evidence}/05-workers-plan.txt"   # 0
+  "${evidence}/05-workers-plan.txt"
 wc -l <"${evidence}/05-workers-plan.txt"
-grep -Evc '(^|\.)data\.' "${evidence}/01-workers-state.txt"   # 위 줄 수와 같음
+grep -Evc '(^|\.)data\.' "${evidence}/01-workers-state.txt"
 ```
 
 요지에는 일꾼마다 모듈 자원(서비스 · 태스크 정의 · Cloud Map 서비스 · SG ·
 이그레스 규칙 · 실행 · 작업 역할과 정책 · 로그 그룹), clip · auth SG 의
 인그레스 셋(`clip_from_worker` 둘 · `auth_from_upload`), 원격 출력 확인
-자원(`terraform_data.runtime_contract`)만 나옵니다. 줄 수는 「시작 전」 6 의
-상태 목록에서 `data` 자원을 뺀 수와 같아야 합니다. kty 가 요지를 보고(T0w)
+자원(`terraform_data.runtime_contract`)만 나옵니다. 요지 뒤의 수 넷은
+차례로 `delete` 가 아닌 줄 수(`0`) · 이 루트 밖 주소 수(`0`) · 요지 줄 수 ·
+「시작 전」 6 의 상태 목록에서 `data` 자원을 뺀 수이고, 셋째와 넷째가
+같아야 합니다. kty 가 요지를 보고(T0w)
 승인하면 적용합니다. 서비스 삭제는 태스크가 멈출 때까지 기다려 몇 분 걸릴
 수 있습니다.
 
 ```shell
 terraform -chdir="${workers}" apply -input=false "${work}/workers.plan"
-terraform -chdir="${workers}" state list | wc -l   # 0
+terraform -chdir="${workers}" state list | wc -l
 ```
+
+`wc -l` 이 `0`(남은 상태 주소 없음)이어야 합니다. 이 절과 「시작 전」 2 ·
+4 의 블록은 기대값을 블록 밖에 적습니다 — kty 의 대화형 zsh 는 `#` 를
+주석으로 읽지 않아, 줄 끝 `# 0` 이 `wc` 의 파일 인자가 되면 입력과 상관없이
+`0 total` 이 나옵니다.
 
 **잔여 0**(읽기). 일꾼만 내렸을 때도 여기서 확인합니다.
 
@@ -598,7 +610,6 @@ umask 077
   echo "## denylist parameter"
   aws ssm get-parameter --region "${region}" --name "${param_name}" 2>&1 \
     | grep -c ParameterNotFound
-  # 아래는 「0. records · edge」 를 했을 때만 봅니다.
   for r in us-east-1 "${region}"; do
     echo "## tagged prod/edge ${r}"
     aws resourcegroupstaggingapi get-resources --region "${r}" \
@@ -647,6 +658,9 @@ umask 077
     --query "length(ResourceRecordSets[?(Type=='A' || Type=='AAAA') && contains(['pokeclip.com.', 'www.pokeclip.com.', 'app.pokeclip.com.', 'api.pokeclip.com.', 'media.pokeclip.com.', 'ingest.pokeclip.com.'], Name)])"
 } | tee "${evidence}/50-residue.txt"
 ```
+
+`## tagged prod/edge` 부터 끝까지의 줄은 「0. records · edge」 를 했을 때만
+봅니다.
 
 | 줄 | 통과 값 |
 |---|---|

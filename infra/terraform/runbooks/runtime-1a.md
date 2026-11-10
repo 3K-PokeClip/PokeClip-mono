@@ -2445,10 +2445,16 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     목록은 서비스가 아니라 태스크 정의 family 로 뽑아 서비스가 사라진
     뒤에도 잡히게 하고, 원하는 상태 `RUNNING` · `STOPPED` 둘 다 받습니다(내려가는
     중인 태스크의 원하는 상태는 `STOPPED`). ARN 에 계정 ID 가 있어 화면에
-    내지 않고 파일에만 둡니다.
+    내지 않고 파일에만 둡니다. `family_tasks <키> <파일>` 은 그 키의 ARN 을
+    파일에 모으고, `record_tasks <키>` 는 그것을 `workers-tasks-<키>.txt` 에
+    남깁니다.
+
+    이 절의 블록에는 `#` 주석을 두지 않습니다. kty 의 대화형 zsh 는 `#` 를
+    주석으로 읽지 않아(`interactivecomments` 꺼짐), 함수 머리 줄에 주석이
+    있으면 함수가 정의되지 않고 본문이 셸에서 바로 돕니다.
 
     ```shell
-    family_tasks() {  # family_tasks <키> <파일>
+    family_tasks() {
       local d out
       : >"$2"
       for d in RUNNING STOPPED; do
@@ -2462,7 +2468,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       sort -u -o "$2" "$2"
     }
 
-    record_tasks() {  # record_tasks <키>
+    record_tasks() {
       local list="${work}/workers-tasks-$1.txt"
       family_tasks "$1" "${list}" || return 1
       printf '%s 태스크 %s개 기록\n' "$1" "$(wc -l <"${list}" | tr -d ' ')"
@@ -2477,7 +2483,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf '%s %s\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
         aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
-          --service pokeclip-prod-<키> --desired-count 0 \
+          --service "pokeclip-prod-<키>" --desired-count 0 \
           --query service.serviceName --output text
         ```
 
@@ -2519,8 +2525,12 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     넘으면 API 오류로 종료 1 이 되어 같은 회부로 갑니다(일꾼은 원하는 수
     1 이라 반복 재기동이 아니면 넘지 않습니다).
 
+    두 함수의 인자는 키 하나입니다. `--query` 안의 백틱은 작은따옴표 안의
+    JMESPath 리터럴이고, `$(cat …)` 를 따옴표 없이 둔 것은 ARN(공백 없는 한
+    낱말)을 하나씩 인자로 넘기려는 것입니다.
+
     ```shell
-    wait_zero() {  # wait_zero <키>
+    wait_zero() {
       local i=0 counts
       while [ "${i}" -lt 60 ]; do
         counts="$(aws ecs describe-services --region ap-northeast-2 \
@@ -2537,7 +2547,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       return 1
     }
 
-    wait_stopped() {  # wait_stopped <키>
+    wait_stopped() {
       local i=0 out left other missing fresh_missing
       local list="${work}/workers-tasks-$1.txt"
       local fresh="${work}/workers-fresh-$1.txt"
@@ -2548,8 +2558,6 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         sort -u -o "${seen}" "${fresh}" "${list}" || return 1
         left=0 other=0 fresh_missing=0
         if [ -s "${seen}" ]; then
-          # 백틱은 JMESPath 리터럴이고, ARN 은 공백 없는 한 낱말씩이다.
-          # shellcheck disable=SC2016,SC2046
           out="$(aws ecs describe-tasks --region ap-northeast-2 \
             --cluster pokeclip-prod --tasks $(cat "${seen}") \
             --query '[length(tasks[?lastStatus!=`STOPPED`]),
@@ -2605,13 +2613,12 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 *   **앱 전원 강제 재배포**: 대상 = 공용 그릇을 읽는 서비스 키 중 일꾼
     render · upload 를 뺀 전부입니다(일꾼은 「일꾼 멈춤」 · 「일꾼 복원」 이
     맡습니다). 손으로 적지 않고 출력에서 뽑습니다(키만 냄 · ARN 은 내지
-    않음).
+    않음). 값 넣기가 저장소 뿌리에서 끝나므로 출력은 하위 셸에서 runtime
+    으로 가 읽고, 9 · 10 의 `media_ssm` 이 쓰는 뿌리 cwd 는 그대로 둡니다.
+    출력 실패나 auth · clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로
+    멈춥니다. 일꾼 둘은 멈춘 채 두므로 필터가 걸러 냅니다.
 
     ```shell
-    # 값 넣기가 저장소 뿌리로 왔다 — 출력은 하위 셸에서 runtime 으로 가 읽고,
-    # 9 · 10 의 media_ssm 이 쓰는 뿌리 cwd 는 그대로 둔다. 출력 실패나 auth ·
-    # clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로 멈춘다. 일꾼 둘은
-    # 멈춘 채 두므로 필터가 걸러 낸다.
     (
       set -o pipefail
       cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime" ||
