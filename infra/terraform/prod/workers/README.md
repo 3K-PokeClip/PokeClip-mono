@@ -284,9 +284,10 @@ epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤�
 *   사진 줄: `thumbnail.report_rejected`(보고 4xx — 메시지가 그 자리에서
     지워짐) · `thumbnail.report_unavailable` ·
     `thumbnail.deadline_before_report` · 아래 사진 줄 판정
-    (`workers_thumbnail_verdict`)의 정지 — 카드 · 클립 실패 1건, 처리 중
-    captured 0 이 120초, 절반 넘는 라이브 실패. `kind=live` 의
-    `thumbnail.failed` 한 줄은 정지가 아닙니다(그 판정의 근거).
+    (`workers_thumbnail_verdict`)의 정지 — 카드 · 클립 잠깐 실패 1건,
+    사진을 만들려다 못 만든 처리 3건 이상에 captured 0 이 120초, 절반 넘는
+    라이브 실패. `kind=live` 의 `thumbnail.failed` 한 줄과 카드 · 클립 영구
+    실패(`retryable=false`)는 정지가 아니고 기록만 합니다(그 판정의 근거).
 *   렌더 줄: `render.started_rejected` · `render.report_rejected` ·
     `render.report_unavailable` · `render.unexpected`.
 *   업로드: `upload.loop_error` · `upload.unavailable`.
@@ -304,7 +305,8 @@ epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤�
 비밀 유출 · 사진 DLQ 는 둘 다입니다. 수신 불능은 그 줄의 서비스(render ·
 thumbnail 줄 = render, upload 줄 = upload)입니다. 감시 불능은 그 기록 파일의 서비스이고,
 따라 읽기가 둘 다 죽었으면 둘 다입니다. 첫 실패 신호에서 **2분 안**(늦어도
-240초 — 수신 불능의 셈은 아래 「수신 감시 반복」)에 정지합니다 — 실패한
+240초 — 수신 불능의 셈은 아래 「수신 감시 반복」, 사진 줄 판정의 셈은
+「사진 반복의 셈」)에 정지합니다 — 실패한
 메시지는 약 120초마다 다시 받히고 세 번째 실패 뒤 DLQ 로 갑니다. 보고 4xx 의
 즉시 삭제는 시한이 없어 계약 검사 3 과 회전 창 읽기가 주된 방어이고, 감시는
 피해를 첫 몇 건으로 묶는 몫입니다.
@@ -331,7 +333,8 @@ thumbnail 줄 = render, upload 줄 = upload)입니다. 감시 불능은 그 기�
     3건**, 또는 `thumbnail.report_rejected` 1건(카드 · 클립이면 그 자리
     손실이라 운영 중에도 1건), 또는 사진 줄 판정
     (`workers_thumbnail_verdict`)의 정지. `kind=live` 실패 한 줄은 세지
-    않습니다(그 판정이 비율로 봄).
+    않고(그 판정이 비율로 봄), 카드 · 클립 영구 실패(`retryable=false`)는
+    기록만 합니다.
 1.  `*.loop_error` · `render.unexpected` · `render.report_rejected` 가 한
     번이라도.
 1.  DLQ 셋(사진 · 렌더 · 업로드) 중 하나라도 깊이가 apply 직전 기준보다
@@ -614,7 +617,8 @@ workers_receive_verdict() {
 이어지는 장애의 첫 줄을 늘 품습니다. 스로틀이 나면 조회 실패라 판정불가(닫는
 쪽)이고 거짓 통과는 없습니다. 쉼 · 늦음 상한 · 시간 상한 · 쪽 따라가기 2초 ·
 조회 창 600초 · 수집 지연 가정 · 끊김 10초를 바꾸면 이 셈과 시험의 시한 사례를
-함께 고칩니다.
+함께 고칩니다. 사진 줄 판정의 반복은 따로 셉니다(아래 「사진 반복의 셈」 —
+늦어도 68초).
 
 ```shell
 workers_receive_watch() {
@@ -780,7 +784,9 @@ workers_start_log_verdict() {
 분부터** 0 보다 큰 점이 하나라도 있으면 통과입니다(기동한 분의 점은 옛 태스크의
 빈 수신일 수 있어 세지 않음). SQS 지표는 1분 주기지만 쉬던 큐가 다시 움직이면
 최대 15분 늦게 오므로, 점이 아직 없으면 대기이고 20분이 지나도 없으면
-판정불가(수신 경로 미확인 — kty 회부)입니다. 큐가 비지 않았으면 로그 판정의
+판정불가(수신 경로 미확인 — kty 회부)입니다. 점의 시각이 꼴(시 · 분 · 초 ·
+오프셋의 범위)에 맞지 않거나 없는 날짜(예: 11월 31일 — 변환하면 다음 달로
+넘어감)여도 대기로 흘리지 않고 판정불가입니다. 큐가 비지 않았으면 로그 판정의
 시작 · 완료 줄이 수신을 보여 주므로 이 판정은 빈 큐에만 씁니다. 인자는 큐
 이름 · 기동 epoch · 지금 epoch 이고, 종료 코드는 통과 0 · 판정불가 2 · 대기
 3 입니다.
@@ -795,21 +801,32 @@ workers_empty_receive_verdict() {
       --period 60 --statistics Sum --output json \
       > "${work}/empty-$1.json" < /dev/null \
     || ! jq -e '.Datapoints | type == "array" and all(.[]; .Timestamp
-      | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"))' \
+      | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"))' \
       "${work}/empty-$1.json" > /dev/null; then
     echo "지표 $1: 판정불가 — NumberOfEmptyReceives 조회 실패 · 시각 꼴 모름"
     return 2
   fi
-  if jq -e --argjson from "${from}" '[.Datapoints[]
+  jq -e --argjson from "${from}" '[.Datapoints[]
       | (.Timestamp | sub("\\.[0-9]+"; "")) as $t
-      | select(($t[0:19] + "Z" | fromdateiso8601)
+      | ($t[0:19] + "Z") as $utc
+      | ($utc | fromdateiso8601) as $at
+      | if ($at | todate) == $utc then . else error("없는 날짜 " + $utc) end
+      | select($at
         - ($t[19:] | if . == "Z" then 0 else (if .[0:1] == "-" then -1 else 1 end)
           * ((.[1:3] | tonumber) * 3600 + (.[4:6] | tonumber) * 60) end)
         >= $from) | .Sum] | any(. > 0)' \
-      "${work}/empty-$1.json" > /dev/null; then
-    echo "지표 $1: 통과 — 기동 뒤 분에 빈 수신이 있음"
-    return 0
-  fi
+    "${work}/empty-$1.json" > /dev/null
+  case $? in
+    0)
+      echo "지표 $1: 통과 — 기동 뒤 분에 빈 수신이 있음"
+      return 0
+      ;;
+    1) ;;
+    *)
+      echo "지표 $1: 판정불가 — 시각 변환 실패(없는 날짜 · 시각)"
+      return 2
+      ;;
+  esac
   if [ "$(($3 - $2))" -lt 1200 ]; then
     echo "지표 $1: 대기 — 기동 뒤 분의 빈 수신 점이 아직 없음"
     return 3
@@ -827,13 +844,42 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 **사진 줄 판정(첫 소비 · 운영 중).** 지난 120초(기동이 더 늦으면 기동부터)의
 사진 결과로 가릅니다. 하나라도 서면 정지입니다(정지 대상 render).
 
-*   `kind=card` · `kind=clip` 의 `thumbnail.failed` 1건 — 카드 · 클립 사진은
-    잠깐 안 된 실패면 메시지를 두어(`LEAVE`) 다시 받히고 세 번째 뒤 DLQ 로
-    가는 손실입니다.
-*   그 창에 처리(`thumbnail.message_done`)가 있는데 `thumbnail.captured` 0 —
-    사진을 하나도 올리지 못하는 채 처리만 돕니다.
+*   `kind=card` · `kind=clip` 의 **잠깐 실패** 1건 — `thumbnail.failed` 중
+    `retryable=false` 가 아닌 줄(`reason=…` 또는 `retryable=true`)입니다.
+    카드 · 클립 사진은 잠깐 안 된 실패면 메시지를 두어(`LEAVE`) 다시 받히고
+    세 번째 뒤 DLQ 로 가는 손실입니다.
+*   기동 뒤 120초가 지나 창이 다 찼고, 그 창에서 **사진을 만들려다 못 만든
+    처리** 가 3건 이상인데 `thumbnail.captured` 0 — 사진을 하나도 올리지
+    못하는 채 처리만 돕니다. 창이 차기 전(기동 직후)과 한두 건에는 서지
+    않습니다.
 *   `kind=live` 실패가 3건 이상이고 같은 창의 `captured` 보다 많음 — 절반
     넘게 실패하는 것은 대상 탓이 아니라 일꾼 · 저장소 쪽 탓입니다.
+
+**못 만든 처리** 는 처리(`thumbnail.message_done` — 메시지 하나에 한 줄,
+`work/QueueWorker.java` 128행)에서 아래 다섯을 뺀 수입니다. 남는 것은 보고를
+못 한 처리(`report_unavailable` · `deadline_before_report` ·
+`report_rejected`) · 주문서가 깨진 처리(`invalid_job`)와 결과 줄을 모르는
+처리입니다.
+
+*   `thumbnail.captured` — 만든 것.
+*   `kind=live` 실패 — 셋째 조건이 비율로 봅니다(라이브 전부 실패도 셋째가
+    잡음).
+*   카드 · 클립 영구 실패 — 아래 「영구 실패는 기록만」.
+*   `thumbnail.target_gone` — 사진을 만들어 올린 뒤 clip 이 대상이 그 사이
+    지워졌다고 답해(탈퇴 — POK-256) 올린 사진을 지운 정상 경로입니다
+    (`thumbnail/ThumbnailProcessor.java` 119–124행).
+*   `thumbnail.live_redelivered_dropped` — 다시 받은 라이브 주문을 찍지 않고
+    지운 정상 경로입니다(같은 파일 81–84행 — 그 사이 뒤 주문이 올린 새
+    장면을 옛 장면으로 덮지 않으려고).
+
+**카드 · 클립 영구 실패는 기록만 합니다(kty 결정 2026-11-11).**
+`retryable=false` 줄 — 원본이 저장소에 없음(`code=SOURCE_EXPIRED` —
+`storage/S3Store.java` 41–45행)과 장면을 못 뽑음(`code=SOURCE_MISMATCH` —
+`ThumbnailProcessor` 155행) — 은 다시 해도 같은 실패라 메시지를 그 자리에서
+지우고(96–98행) DLQ 로 가지 않습니다. 대상(지워진 조각 · 원본 내용) 탓이라
+일꾼을 멈춰도 나아지지 않으므로, 통과 줄의 「카드 · 클립 영구 실패 N건」 으로
+남깁니다. 잠깐 실패를 `retryable=true` 로 찍은 줄(S3 403 · 끊김)은 `LEAVE`
+라 첫째 조건으로 정지입니다.
 
 **`kind=live` 실패 한 줄은 정지가 아닙니다.** `workers/render` 의
 `ThumbnailProcessor` 는 라이브 주문을 실패의 갈래와 상관없이 지웁니다 —
@@ -848,12 +894,13 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 `retryable=false code=SOURCE_EXPIRED`, S3 403 · 끊김이면 `retryable=true` 로
 따로 찍힙니다. 같은 대상의 다른 분 주문은 captured 였으므로 그 조각의 내용
 탓으로 봅니다. 저장소 · 망 쪽 실패는 모든 대상에 함께 오므로 위 둘째 · 셋째
-조건이 잡습니다. 이 판정은 첫 소비 감시 동안 30초마다, 운영 중 1분마다 돌립니다.
-인자는 로그 그룹 · 기동 epoch · 지금 epoch 입니다.
+조건이 잡습니다. 이 판정은 아래 「쓰는 예」 의 **사진 반복** 블록으로 첫 소비
+감시부터 시험 · 관찰이 끝날 때까지 30초마다 돌립니다. 인자는 로그 그룹 · 기동
+epoch · 지금 epoch 입니다.
 
 ```shell
 workers_thumbnail_verdict() {
-  local from="${2-}"
+  local from="${2-}" full=0
   case "${from}" in
     '' | *[^0-9]*)
       echo "사진: 판정불가 — 기동 epoch(둘째 인자)가 숫자가 아님"
@@ -866,36 +913,43 @@ workers_thumbnail_verdict() {
       return 2
       ;;
   esac
+  if [ "$(($3 - $2))" -ge 120 ]; then
+    full=1
+  fi
   if [ "$(($3 - 120))" -gt "${from}" ]; then
     from="$(($3 - 120))"
   fi
   if ! workers_events "$1" "${from}" \
-      '?"thumbnail.captured" ?"thumbnail.failed" ?"thumbnail.message_done"' \
-      'thumbnail\.(captured|failed|message_done) ' \
+      '?"thumbnail.captured" ?"thumbnail.failed" ?"thumbnail.message_done" ?"thumbnail.target_gone" ?"thumbnail.live_redelivered_dropped"' \
+      'thumbnail\.(captured|failed|message_done|target_gone|live_redelivered_dropped) ' \
       > "${work}/thumbnail.txt"; then
     echo "사진: 판정불가 — $1 로그 조회 실패"
     return 2
   fi
-  awk -v least=3 '
+  awk -v least=3 -v full="${full}" '
     / thumbnail\.captured / { captured++ }
     / thumbnail\.message_done / { finished++ }
+    / thumbnail\.(target_gone|live_redelivered_dropped) / { skipped++ }
     / thumbnail\.failed / {
-      if ($0 ~ / kind=live /) { live++ } else { other++ }
+      if ($0 ~ / kind=live /) { live++ }
+      else if ($0 ~ / retryable=false /) { permanent++ }
+      else { other++ }
     }
     END {
+      unmade = finished - captured - live - permanent - skipped
       if (other > 0) {
-        printf "사진: 정지 — kind=card · clip 실패 %d건\n", other
+        printf "사진: 정지 — kind=card · clip 잠깐 실패 %d건\n", other
         exit 1
       }
-      if (finished > 0 && captured == 0) {
-        printf "사진: 정지 — 지난 120초 처리 %d건에 captured 0\n", finished
+      if (full && unmade >= least && captured == 0) {
+        printf "사진: 정지 — 지난 120초 못 만든 처리 %d건에 captured 0\n", unmade
         exit 1
       }
       if (live >= least && live > captured) {
         printf "사진: 정지 — live 실패 %d건이 captured %d건보다 많음\n", live, captured
         exit 1
       }
-      printf "사진: 통과 — captured %d건 · live 실패 %d건(라이브는 지우고 다음 분이 다시 찍음)\n", captured, live
+      printf "사진: 통과 — captured %d건 · live 실패 %d건 · 카드 · 클립 영구 실패 %d건(라이브는 지우고 다음 분이 다시 찍음 · 영구 실패는 기록만)\n", captured, live, permanent
     }' "${work}/thumbnail.txt"
 }
 ```
@@ -977,6 +1031,45 @@ workers_nodone_verdict pokeclip-prod-render render \
   pokeclip-prod-jobs-render "${started}" "$(date -u +%s)"
 workers_thumbnail_verdict pokeclip-prod-render "${started}" "$(date -u +%s)"
 ```
+
+**사진 반복.** 사진 줄 판정은 수신 감시 반복과 다른 감시 터미널에서 아래
+블록으로 30초 쉼마다 되풀이합니다. 그 터미널에도 이 절의 블록(`region` ·
+`work` 와 함수 열)을 먼저 붙여 넣고, 쓰는 예가 찍은 `기동 epoch:` 줄의 숫자를
+`started` 에, `watch_end` 를 숫자 그대로 옮겨 적은 뒤 붙여 넣습니다. 줄마다
+앞에 판정이 끝난 시각(ISO 8601 UTC)이 붙습니다. 정지(1)나 판정불가(2)면 그
+줄에서 멈추고, 정지와 같이 다룹니다. `watch_end` 를 옮겨 적지 않았으면 돌지
+않고 `watch_end` 오류 줄을 찍습니다.
+
+```
+until [ "$(date -u +%s)" -ge "${watch_end:?}" ]; do
+  verdict="$(workers_thumbnail_verdict pokeclip-prod-render "${started}" \
+    "$(date -u +%s)")"
+  rc=$?
+  echo "$(workers_iso "$(date -u +%s)") ${verdict}"
+  [ "${rc}" -eq 0 ] || break
+  sleep 30
+done
+```
+
+**사진 반복의 셈(늦어도 68초 — 240초 안).** 정지 조건이 로그에 선 때(카드 ·
+클립 잠깐 실패 줄, 또는 못 만든 처리가 3건이 되고 captured 0 이 120초가 된
+때)를 0초로 둡니다.
+
+1.  **판정이 볼 수 있는 때 — 10초.** 수집 지연 10초 이하 가정은 「정지
+    시한의 셈」 과 같습니다.
+1.  **판정이 정지를 내는 때 — 52초.** 10초 바로 앞에 시작한 판정은 그 줄을
+    못 보고 늦어도 16초에 끝납니다(판정 한 번의 최악 6초 — 「정지 시한의
+    셈」 셋째 항과 같은 조회). 쉼 30초 뒤 시작한 판정이 처음 보고 늦어도
+    52초에 정지 줄을 찍습니다. 그 판정이 조회 실패면 판정불가 줄로
+    멈춥니다.
+1.  **줄이 끊기는 때 — 56초.** 평소 줄 사이는 판정 6초 미만 + 쉼 30초라
+    36초를 넘지 않습니다. 앞 줄(16초)에서 **40초** 가 지나도 새 줄이 없으면
+    판정불가로 봅니다.
+
+최악 56초에 명령 여유 12초를 더해 68초입니다. captured 0 조건은 마지막
+captured 줄에서 120초가 지나야 서므로, 그 줄에서 세면 늦어도 188초입니다
+(그 120초 안에 못 만든 처리가 3건 찼을 때). 쉼 30초 · 끊김 40초를 바꾸면 이
+셈과 시험의 사진 반복 사례를 함께 고칩니다.
 
 끝나면 감시 터미널마다(블록을 붙여 넣은 셸마다 `mktemp -d` 가 하나씩
 만들었음) 작업 디렉터리를 지웁니다. `events.json` · `events.all` 에는 가림
@@ -1131,14 +1224,20 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 조회 실패 · 늦은 판정(조회 실패도) · 판정 줄의 시각 · 숫자가 아닌 시각 인자 ·
 반복의 600초 조회 창), 이어 받기 표(빈 쪽 + 표 뒤의 기동 신호 · 세 쪽에 나뉜
 실패 · 끝나지 않는 표는 2초 상한에서 판정불가), 지표 시각의 `+09:00` 꼴(이
-맥의 aws CLI 출력)과 모르는 꼴, 사진 줄 판정(2026-11-11 꼴 — 옛 `kind=live`
-실패 넷 + captured 다수는 통과 · 처리 중 captured 0 · 절반 넘는 라이브 실패 ·
-카드 · 클립 실패 1건은 정지 · 창 밖 실패는 세지 않음), 본문의 따라 읽기
+맥의 aws CLI 출력)과 모르는 꼴 · 쌍점 없는 시각 · 범위 밖 오프셋 · 없는
+날짜(판정불가), 사진 줄 판정(2026-11-11 꼴 — 옛 `kind=live` 실패 넷 + captured
+다수 · 라이브 실패 한 줄 · 기동 직후 단일 실패 · 창이 차기 전의 못 만든 처리
+셋 · 못 만든 처리 둘 · `target_gone` 셋 · `live_redelivered_dropped` 셋 ·
+카드 영구 실패 셋은 통과, 120초 지속 captured 0 · 절반 넘는 라이브 실패 ·
+카드 · 클립 잠깐 실패 1건은 정지 · 창 밖 실패는 세지 않음), 사진 반복
+블록(카드 실패 줄에서 52초 안에 정지 줄 · 끝 시각까지 30초 쉼 · 블록 글자 ·
+대화형 zsh 붙여 넣기), 본문의 따라 읽기
 `PYTHONUNBUFFERED=1` · `caffeinate -i` 안내, 「쓰는 예」 의 기동 대기 블록, 「다시 띄우기」
 블록(이어지던 장애 한가운데서 띄운 r4 의 두 시간열이 240초 안에 정지 · 600초를
 빼는 변이), 정지 시한(가짜 aws 가 CLI 의 시간 상한 · 시도 수를 따름 — r2 의 두
 시간열 · 판정마다 5초 · r3 의 시간열 · 조회가 상한까지 걸려 실패 · 상한 밖에서
-멈춰 줄이 끊김이 판정 줄의 시각 + 명령 여유 12초로 240초 안), 판정 한 줄을
+멈춰 줄이 끊김이 판정 줄의 시각 + 명령 여유 12초로 240초 안 — 뒤 둘은 조회
+셋을 다 타고, 끊김 사례는 끊김이 실제로 있어야 함), 판정 한 줄을
 뒤집은 변이, 블록에 `#` 주석이 없는지, 대화형 zsh(표준 입력 · PTY 붙여 넣기)에서
 함수 열이 모두 정의되고, 그중 여덟을 불렀을 때(나머지 둘 `workers_events` ·
 `workers_queue_depth` 는 그 안에서 불림) bash 와 같은 결과를 내는지(본문에 `#`
