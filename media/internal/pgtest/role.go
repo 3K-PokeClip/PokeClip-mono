@@ -48,7 +48,7 @@ type tableGrant struct {
 // stream_edge_bounds 의 권한 넷(SELECT · INSERT · UPDATE · DELETE)은 /dvr 하한 Writer(POK-525 설계 3-3)의 원장 문장
 // 넷(index/edge_bounds.go) 몫이다. 문장과 권한은 일대일이 아니다:
 //
-//	raiseSQL             올림 — INSERT · ON CONFLICT DO UPDATE 의 UPDATE(+ stream_sessions FOR SHARE · 그 표 UPDATE 권한 필요)
+//	raiseSQL             올림 — INSERT · ON CONFLICT DO UPDATE 의 UPDATE(+ sessions FOR SHARE — 열 하나 이상 UPDATE)
 //	closedUnreleasedSQL  조회 — SELECT
 //	markReleasedSQL      해제 기록 — UPDATE(안쪽 FOR UPDATE 잠금 포함)
 //	deleteReleasedSQL    해제 행 정리 — DELETE
