@@ -144,7 +144,8 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     멈춤). 그 체크아웃에서 다시 `plan -out` 하고 요지가 앞의 것과 같은지
     봅니다. kty 가 apply(조건 = 요지 줄 수 · 주소 집합 ·
     plan 파일 sha256)와 긴급 정지 명령 둘의 조건부 실행을 한 번에 승인합니다
-    (범위는 아래 「긴급 정지와 상태 어긋남」).
+    (범위는 아래 「긴급 정지와 상태 어긋남」). 승인 전에 이 plan 파일로
+    「apply 직전 읽기」 의 이그레스 스위치를 봅니다.
 1.  **감시를 먼저 띄웁니다**(아래 「첫 소비 감시」). 띄웠다는 것을 알린 뒤
     kty 가 `terraform apply <plan 파일>` 을 돌립니다.
 1.  **첫 소비 판정(3분)** · 정지 신호면 긴급 정지.
@@ -202,9 +203,23 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     서비스가 회전 전 값을 들고 있어 일꾼의 보고(clip) · upload 의 연동
     조회(auth resolve — 같은 토큰)가 401 입니다.
 1.  관문 ① 을 머지 체크아웃에서 다시 돌려 종료 0 인지 봅니다.
-1.  머지 체크아웃의 `terraform.tfvars` 에 `render_egress_via_endpoints` 줄이
-    없어야 합니다(`grep -n render_egress_via_endpoints terraform.tfvars` 출력이
-    빔). `false` 는 되돌리기 전용이라, 남아 있으면 render 가 NAT 로 나갑니다.
+1.  **이그레스 스위치:** apply 할 저장 plan 에서 봅니다 — 이 읽기만 다음
+    걸음 「plan 과 승인 한 묶음」 의 `plan -out` 뒤, 승인 전에 합니다.
+    `terraform.tfvars` 줄만 보면 `TF_VAR_render_egress_via_endpoints` ·
+    `*.auto.tfvars` · `-var` 로 들어온 `false` 를 놓치므로, plan 이 실제로 쓴
+    값과 그 값이 만든 render 이그레스를 봅니다. `plan` 은 그 plan 파일의
+    경로입니다. 첫 줄이 `true` 를 내고 종료 0 이어야 하고, 둘째 줄의 출력이
+    정확히 `aws_endpoints` · `clip` · `s3` 셋이어야 합니다(`aws_api` 가 보이면
+    render 가 NAT 로 나감). 어긋나면 멈춥니다. `false` 는 되돌리기 전용입니다.
+
+    ```
+    terraform -chdir=infra/terraform/prod/workers show -json "${plan}" \
+      | jq -e '.variables.render_egress_via_endpoints.value == true'
+    terraform -chdir=infra/terraform/prod/workers show -json "${plan}" \
+      | jq -r '.resource_changes[] | select(.change.after)
+          | select(.address | startswith("module.render.aws_vpc_security_group_egress_rule.this["))
+          | .index' | sort
+    ```
 
 ### 첫 소비 감시
 
@@ -237,6 +252,8 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     ```
 
 *   큐 깊이(사진 · DLQ 셋)를 30초마다 읽습니다.
+*   수신 불능 판정을 30초마다 돌립니다(아래 「수신 · 진행 판정」 의
+    `workers_receive_watch` — 로그 그룹마다 하나, 시험 · 관찰이 끝날 때까지).
 *   apply 를 시작하고 120초 안에 기록 파일 하나라도 줄이 0 이거나 따라 읽기
     프로세스가 끝났으면 **감시 불능**입니다. 정지 신호와 같이 다룹니다. 단
     120초가 지났는데 그 서비스의 서비스 이벤트(`aws ecs describe-services`)에
@@ -256,7 +273,8 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     `render.report_unavailable` · `render.unexpected`.
 *   업로드: `upload.loop_error` · `upload.unavailable`.
 *   공통: **수신 불능** — `*.receive_failed` 가 오류 종류와 상관없이 1분
-    넘게 이어짐(아래 `workers_receive_verdict` 가 정지 — 처음 몇 초의
+    넘게 이어짐(아래 `workers_receive_watch` 가 30초마다 돌리는
+    `workers_receive_verdict` 가 정지 — 처음 몇 초의
     `AccessDenied` 는 IAM 전파 지연일 수 있어 1분을 기다립니다) · `status=401`
     · 사진 DLQ 깊이가 apply 직전 기준보다 커짐.
 *   사진 · 렌더 큐: **무완료** — 아래 `workers_nodone_verdict` 가 정지(기동
@@ -381,47 +399,125 @@ workers_queue_depth() {
 ```
 
 **수신 불능(W12 · 운영 중).** 같은 줄 이름(render · thumbnail · upload)의
-`receive_failed` 가 180초 이하의 틈으로 이어지며 첫 줄부터 60초를 넘으면
-정지입니다. 오류 종류는 보지 않습니다. 틈 180초는 실패 줄 사이의 최악보다
-깁니다. render 의 SQS 클라이언트는 AWS SDK 2.46.7 의 기본 재시도(LEGACY)라
-수신 한 번에 최대 4번 시도하고(연결 시간 초과 2초 · 소켓 시간 초과 30초 ·
-재시도 사이 대기 최대 약 1.4초), 실패를 찍은 뒤 5초 쉬고 다시 받습니다. 그래서
-읽기 시간 초과 꼴이면 실패 줄 간격이 최악 약 134초이고, 실측은 125초였습니다.
-재시도 쿼터(500 · 재시도마다 5)가 바닥나면 시도가 1번으로 줄어 간격이 약
-35초가 됩니다. `AWS_NEW_RETRIES_2026` 처럼 SDK 의 기본 재시도가 바뀌면 이
-상한도 달라지므로 SDK 판을 올릴 때 다시 잽니다. 성공한 빈 수신은 로그를
-남기지 않아 틈이 180초를 넘으면 사이에 성공이 있었다고 봅니다. 긴 렌더와는
-섞이지 않습니다 — render 는 받은 작업을 수신과 같은 스레드에서 끝까지
-처리하므로(`pollOnce` 가 처리를 바로 부름) 처리하는 동안에는 실패 줄이 없고,
-이 판정은 실패 줄만 봅니다. 인자는 로그 그룹 · 시작 epoch 이고, 종료 코드는
-통과 0 · 정지 1 · 판정불가 2 입니다.
+`receive_failed` 가 180초 이하의 틈으로 이어지며 첫 줄부터 60초를 넘었고, 그
+이어짐이 **지금 진행 중** 이면 정지입니다. 진행 중이란 마지막 실패가 지금부터
+180초 안이고 그 뒤 같은 줄의 정상 신호가 없다는 뜻입니다. 오류 종류는 보지
+않습니다.
+
+*   **정상 신호는 이어짐을 끊습니다.** 같은 줄의 처리 시작(`render.started` ·
+    `upload.begin`)이나 완료(`*.message_done`)가 두 실패 사이에 있으면 그
+    사이에 받기가 성공한 것이라, 뒤 실패부터 새로 셉니다. 일꾼은 큐마다 스레드
+    하나로 받기 → 처리 → `message_done` → 다음 받기를 차례로 하므로(render 는
+    `pollOnce` 가 처리를 바로 부름) 처리하는 동안에는 실패 줄이 없고, 줄
+    이름이 다른 신호(예: 사진 줄의 완료)는 렌더 줄을 끊지 않습니다.
+*   **틈 180초** 는 실패 줄 사이의 최악보다 깁니다. render 의 SQS
+    클라이언트는 AWS SDK 2.46.7 의 기본 재시도(LEGACY)라 수신 한 번에 최대
+    4번 시도하고(연결 시간 초과 2초 · 소켓 시간 초과 30초 · 재시도 사이 대기
+    최대 약 1.4초), 실패를 찍은 뒤 5초 쉬고 다시 받습니다. 그래서 읽기 시간
+    초과 꼴이면 실패 줄 간격이 최악 약 134초이고, 실측은 125초였습니다.
+    재시도 쿼터(500 · 재시도마다 5)가 바닥나면 시도가 1번으로 줄어 간격이 약
+    35초가 됩니다. thumbnail 줄은 render 와 같은 클라이언트이고, upload 도 같은
+    SDK 판 · 기본 재시도 · 소켓 30초 · 실패 뒤 5초 쉼이라
+    (`workers/upload` 의 `WorkerConfiguration.java` 46–50행 ·
+    `QueueWorker.java` 102–103행) 상한이 같습니다. `AWS_NEW_RETRIES_2026`
+    처럼 SDK 의 기본 재시도가 바뀌면 이 상한도 달라지므로 SDK 판을 올릴 때
+    다시 잽니다.
+*   **사이 신호가 없는 두 실패** 는 틈이 180초 이하면 이어진 것으로 보고
+    정지합니다(예: 0초 · 170초). 성공한 빈 수신은 로그를 남기지 않아 사이의
+    성공을 볼 길이 없습니다. 틈 134–180초는 SDK 모형으로는 사이에 성공이
+    있었겠지만, 모형 밖의 지연을 위한 여유라 닫는 쪽으로 판정합니다 — 거짓
+    정지의 값은 kty 승인 재기동 한 번이고 메시지 손실은 없습니다. 틈이
+    180초를 넘으면 사이에 성공이 있었다고 봅니다.
+*   **회복:** 마지막 실패 뒤 180초 동안 그 줄의 실패가 없으면 끝난 장애라
+    정지하지 않습니다 — 이어지는 장애는 늦어도 약 134초마다 실패 줄을 남기기
+    때문입니다. 그래서 기동 시각부터 조회해도 회복한 옛 장애로 정지가 다시
+    나오지 않습니다. 기동 직후에는 기동 뒤의 실패가 모두 「지금」 안이라
+    판정이 같습니다.
+
+인자는 로그 그룹 · 시작 epoch · 지금 epoch 이고(지금 epoch 가 없으면
+판정불가), 종료 코드는 통과 0 · 정지 1 · 판정불가 2 입니다.
 
 ```shell
 workers_receive_verdict() {
-  if ! workers_events "$1" "$2" '"receive_failed"' '[a-z]+\.receive_failed ' \
-      > "${work}/receive-failed.txt"; then
+  case "${3-}" in
+    '' | *[^0-9]*)
+      echo "수신: 판정불가 — 지금 epoch(셋째 인자)가 없음"
+      return 2
+      ;;
+  esac
+  if ! workers_events "$1" "$2" \
+      '?"receive_failed" ?"started" ?"begin" ?"message_done"' \
+      '[a-z]+\.(receive_failed|started|begin|message_done) ' \
+      > "${work}/receive.txt"; then
     echo "수신: 판정불가 — $1 로그 조회 실패"
     return 2
   fi
-  awk -v gap=180 -v limit=60 '
-    match($0, /[a-z]+\.receive_failed /) {
-      name = substr($0, RSTART, RLENGTH - 16)
-      if ((name in last) && $1 - last[name] <= gap) {
-        if ($1 - first[name] > limit) {
-          printf "수신: 정지 — %s.receive_failed 가 %d초 이어짐\n", name, $1 - first[name]
-          stop = 1
-          exit 1
+  awk -v gap=180 -v limit=60 -v now="$3" '
+    match($0, /[a-z]+\.(receive_failed|started|begin|message_done) /) {
+      dot = index(substr($0, RSTART), ".")
+      name = substr($0, RSTART, dot - 1)
+      event = substr($0, RSTART + dot, RLENGTH - dot - 1)
+      if (event == "receive_failed") {
+        n++
+        if ((name in last) && $1 - last[name] <= gap) {
+          last[name] = $1
+          next
         }
-      } else {
         first[name] = $1
+        last[name] = $1
+        next
       }
-      last[name] = $1
-      n++
+      delete last[name]
     }
     END {
+      for (name in last) {
+        if (now - last[name] <= gap && last[name] - first[name] > limit) {
+          printf "수신: 정지 — %s.receive_failed 가 %d초 이어지는 중\n", name, last[name] - first[name]
+          stop = 1
+        }
+      }
       if (stop) { exit 1 }
-      printf "수신: 통과 — receive_failed %d건 · 1분 넘게 이어진 줄 없음\n", n
-    }' "${work}/receive-failed.txt"
+      printf "수신: 통과 — receive_failed %d건 · 지금 1분 넘게 이어지는 줄 없음\n", n
+    }' "${work}/receive.txt"
+}
+```
+
+**수신 감시 반복(W12).** 위 판정을 **30초마다** 돌립니다. 첫 소비 감시를
+띄울 때부터 시험 · 관찰이 끝날 때까지 서비스(로그 그룹)마다 하나씩, 터미널을
+따로 두고 돌립니다. 판정이 정지(1)면 바로 끝나고 1 을 냅니다 — 긴급 정지
+신호입니다. 조회 실패(판정불가)는 다음 주기에 한 번 더 보고, 두 번 이어지면
+판정불가(2)로 끝납니다 — 정지와 같이 kty 에게 넘깁니다. 끝 시각이 지난 뒤
+판정이 통과하면 「끝」 과 함께 0 으로 끝납니다(끝 시각의 판정이 조회 실패면
+한 주기 더 봅니다). 이 주기면 첫 실패 줄에서 정지 판정까지
+최악이 약 200초(두 실패 줄 간격 134초 + 주기 30초 + 조회 실패 한 번의 30초 +
+로그 수집 지연 수 초)라 정지 시한(늦어도 240초) 안입니다. 인자는 로그 그룹 ·
+시작 epoch · 끝 epoch 입니다.
+
+```shell
+workers_receive_watch() {
+  local now rc misses=0
+  while :; do
+    now="$(date -u +%s)"
+    workers_receive_verdict "$1" "$2" "${now}"
+    rc=$?
+    if [ "${rc}" -eq 1 ]; then
+      return 1
+    fi
+    if [ "${rc}" -eq 0 ]; then
+      misses=0
+    else
+      misses=$((misses + 1))
+    fi
+    if [ "${misses}" -ge 2 ]; then
+      echo "수신 감시: 판정불가 — 두 주기 이어 판정하지 못함"
+      return 2
+    fi
+    if [ "${misses}" -eq 0 ] && [ "${now}" -ge "$3" ]; then
+      echo "수신 감시: 끝 — $(workers_iso "$3") 에 이름"
+      return 0
+    fi
+    sleep 30
+  done
 }
 ```
 
@@ -489,8 +585,12 @@ workers_nodone_verdict() {
 **로그 판정(W13 — 기동 뒤 3분).** 기동 뒤 `receive_failed` 가 0건이어야 하고,
 보이는 깊이 > 0 이면 그 줄의 처리 시작 줄 또는 `message_done` 이 1건 이상이어야
 합니다. 처리 시작 줄은 render 줄이 `render.started`(clip 의 시작 보고가 받아진
-뒤 — 긴 렌더도 이 줄은 곧 찍힘)이고, 사진 · 업로드 줄은 작업이 짧아
-`message_done` 으로 봅니다. 통과는 **잠정 통과** 입니다 — 빈 큐면 수신이
+뒤 — 긴 렌더도 이 줄은 곧 찍힘)이고, upload 줄이 `upload.begin`(clip 시작 ·
+연동 조회 · S3 받기가 끝나고 유튜브로 보내기 직전 — `UploadProcessor.java`
+179행)입니다. 업로드는 조각 하나에 최대 5분을 기다리므로
+(`ResumableUploader.java` 179행) 정상 업로드도 3분 안에 `message_done` 을
+내지 못할 수 있어, 시작 줄로 봅니다. 사진 줄은 작업이 짧아 `message_done` 으로
+봅니다. 통과는 **잠정 통과** 입니다 — 빈 큐면 수신이
 성공했는지를 로그가 보여 주지 않기 때문입니다. 3분을 기다리는 것은 수신이
 처음부터 막히면 첫 `receive_failed` 가 시도 4번이 끝난 뒤(기동 뒤 약 120초)에야
 찍히기 때문입니다. 인자는 로그 그룹 · 줄 이름 · 큐 이름 · 기동 epoch · 지금
@@ -519,8 +619,9 @@ workers_start_log_verdict() {
       return 2
       ;;
   esac
-  if ! workers_events "$1" "$4" "?\"$2.started\" ?\"$2.message_done\"" \
-      "$2\\.(started|message_done) " > "${work}/progress-$2.txt"; then
+  if ! workers_events "$1" "$4" \
+      "?\"$2.started\" ?\"$2.begin\" ?\"$2.message_done\"" \
+      "$2\\.(started|begin|message_done) " > "${work}/progress-$2.txt"; then
     echo "로그 $2: 판정불가 — $1 로그 조회 실패"
     return 2
   fi
@@ -578,15 +679,22 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 동안에는 보조로만 둡니다 — 그때는 로그 판정과 수신 불능 판정이 주 신호입니다.
 
 쓰는 예입니다. `apply_at` 은 kty 가 apply 를 시작하기 직전에
-`apply_at="$(date -u +%s)"` 로 적어 둔 값입니다. 사진 줄은 `thumbnail` ·
+`apply_at="$(date -u +%s)"` 로 적어 둔 값이고, `watch_end` 는 시험 · 관찰을
+끝낼 시각(예: `watch_end=$((apply_at + 7200))`)입니다. 사진 줄은 `thumbnail` ·
 `pokeclip-prod-jobs-thumbnail`, upload 는 `pokeclip-prod-upload` · `upload` ·
-`pokeclip-prod-jobs-upload` 로 바꿔 부릅니다.
+`pokeclip-prod-jobs-upload` 로 바꿔 부릅니다. 수신 감시 반복은 로그 그룹마다
+따로 띄운 터미널에서 돌리고(render 그룹 하나가 render · thumbnail 줄을 함께
+봄), 관찰을 늘리면 끝 시각을 새로 주어 다시 띄웁니다.
 
 ```
 started="$(workers_started_at pokeclip-prod-render render "${apply_at}")"
+workers_receive_watch pokeclip-prod-render "${started}" "${watch_end}"
+```
+
+```
 workers_start_log_verdict pokeclip-prod-render render \
   pokeclip-prod-jobs-render "${started}" "$(date -u +%s)"
-workers_receive_verdict pokeclip-prod-render "${started}"
+workers_receive_verdict pokeclip-prod-render "${started}" "$(date -u +%s)"
 workers_empty_receive_verdict pokeclip-prod-jobs-render "${started}" \
   "$(date -u +%s)"
 workers_nodone_verdict pokeclip-prod-render render \
@@ -639,8 +747,8 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     ([prod/network](/infra/terraform/prod/network/README.md) 「되돌리기」)가
     부를 때 이 루트를 `-var render_egress_via_endpoints=false` 로 plan · apply
     합니다(kty 승인 — 요지는 render SG 의 엔드포인트 규칙 삭제 · NAT 규칙
-    생성). `terraform.tfvars` 에는 적지 않습니다 — 「apply 직전 읽기」 가 그
-    줄이 없음을 봅니다. 이 값이면 계약 검사 7 · 8 을 보지 않아 DNS 가 꺼진
+    생성). `terraform.tfvars` 에는 적지 않습니다 — 첫 apply 의 「apply 직전
+    읽기」 는 저장 plan 의 이 값이 `true` 인지 봅니다. 이 값이면 계약 검사 7 · 8 을 보지 않아 DNS 가 꺼진
     동안에도 plan 이 돕니다. 엔드포인트가 다시 켜지고 network 의 확인을 지난
     뒤 `-var` 없이(기본 true) plan · apply 해 되돌립니다. apply 는 원하는 수 1
     을 되살리므로, 긴급 정지 중이었으면 다시 띄우기 승인을 함께 받습니다.
@@ -672,6 +780,9 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     *   **(b)** VPC 리졸버에 보내는 DNS 질의 이름에 데이터를 실어 보내는 길.
         SG 는 Route 53 Resolver 질의를 거르지 못합니다. Route 53 DNS
         Firewall 이 막으며 후속 후보입니다.
+*   이미지 교체(롤링 겹침) 동안 로그 · 수신 판정은 로그 그룹 전체를 보아 옛 ·
+    새 태스크의 줄이 섞입니다. 태스크(로그 스트림)별로 가르는 것은 후속
+    POK-560 입니다.
 *   `NumberOfEmptyReceives` 는 큐 단위 지표라 롤링 겹침 동안 옛 태스크의 빈
     수신과 섞입니다(「수신 · 진행 판정」 의 지표 판정 끝 문단).
 
@@ -701,9 +812,11 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 「수신 · 진행 판정」 의 셸 블록은
 `bash infra/terraform/scripts/test/workers_watch_runbook_test.sh` 가 README
 글자 그대로 뽑아 가짜 aws 로 봅니다 — 정상 6분 렌더 · 연결 시간 초과 반복 ·
-빈 큐 + 지표 지연 · 빈 큐 연결 불능 · DELAY 숨김의 다섯과 경계 사례, 판정 한
-줄을 뒤집은 변이, 대화형 zsh(표준 입력 · PTY 붙여 넣기)에서 함수 여덟이 모두
-정의되는지.
+빈 큐 + 지표 지연 · 빈 큐 연결 불능 · DELAY 숨김의 다섯과 경계 사례(정상
+신호로 끊김 · 회복한 옛 장애 · 진행 중 업로드 · 감시 반복의 주기 · 종료 ·
+조회 실패), 판정 한 줄을 뒤집은 변이, 블록에 `#` 주석이 없는지, 대화형
+zsh(표준 입력 · PTY 붙여 넣기)에서 함수 아홉이 모두 정의되고 불렀을 때 bash 와
+같은 결과를 내는지(본문에 `#` 주석을 되돌린 음성 대조 포함).
 
 ## See also
 
