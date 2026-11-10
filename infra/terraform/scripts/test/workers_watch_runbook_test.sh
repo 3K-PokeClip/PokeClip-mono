@@ -17,9 +17,12 @@
 # 종료 254(조회 실패)다. 응답이 없으면 종료 255 로 실패하고 그 열쇠를 표준
 # 오류에 적는다. 가짜 aws 는 --start-time · --filter-pattern 으로 거르지 않는다 —
 # 판정 함수가 시각 · 줄 이름을 다시 거르는지도 이 시험이 본다. 사례에 가짜
-# 시계(clock)가 있으면 가짜 aws 는 시계를 따른다 — delay 초만큼 시계를 옮기고
-# (조회 시간), fail_from 시각 이후 첫 호출을 한 번 실패시키고, lag 가 있으면
-# 호출 시각에서 lag 초 앞까지의 로그 사건만 낸다(수집 지연).
+# 시계(clock)가 있으면 가짜 aws 는 시계를 따른다 — 조회 시간만큼 시계를 옮기고
+# (delays 의 줄마다 한 호출 · 없으면 delay · 「기다림+상한 밖」 꼴), 기다림이
+# --cli-connect-timeout + --cli-read-timeout 을 넘으면 AWS_MAX_ATTEMPTS 번
+# 그 상한까지 걸린 뒤 실패하고(없으면 CLI 기본 60 · 60 · 3), fail_from 시각
+# 이후 첫 호출을 한 번 실패시키고, lag 가 있으면 호출 시각에서 lag 초 앞까지의
+# 로그 사건만 낸다(수집 지연).
 #
 # 사례(판정 줄 = 표준 출력의 마지막 줄 · 종료 코드 0 통과 · 1 정지 · 2
 # 판정불가 · 3 대기). 설계 3-6 의 다섯은 「설계」 를 붙인다.
@@ -33,16 +36,20 @@
 #     같은 줄의 시작 · 완료(0 실패 · 10 started · 145 message_done · 160 실패)와
 #     upload.begin 은 이어짐을 끊음 · 다른 줄의 완료는 끊지 않음 · 사이 신호
 #     없는 고립 실패 0 · 170 은 정지 · 회복한 지난 장애(0–72초 · 지금 3600초)는
-#     통과 · 지금 epoch 없음 · 시작 epoch 가 문장 · 조회 실패 = 판정불가.
-#   감시 반복 — 정지면 첫 주기에 1(기다리지 않음) · 5초마다 보고 끝 시각에 0 ·
+#     통과 · 지금 epoch 없음 · 시작 epoch 가 문장 · 조회 실패 · 이어 받기
+#     표(nextToken)가 있는 조회 = 판정불가.
+#   감시 반복 — 정지면 첫 주기에 1(기다리지 않음) · 2초 쉬며 보고 끝 시각에 0 ·
 #     조회 실패 두 번 이어짐 = 판정불가 · 한 번은 다음 주기에 다시 · 끝 시각의
-#     조회 실패는 한 주기 더 · 5초 넘긴 판정 두 번 = 판정불가 · 시작 epoch 가
+#     조회 실패는 한 주기 더 · 5초 넘긴 판정 두 번 = 판정불가 · 판정 줄마다
+#     끝난 시각(UTC) · 늦은 조회 실패도 늦음 줄 · 시작 epoch 가
 #     판정불가 문장이거나 끝 epoch 가 빈 값 = 판정불가(반복하지 않음) · README
 #     「쓰는 예」 블록을 기동 신호 전에 띄우면 기다렸다가 돎. date · sleep 은
 #     사례의 가짜 시계다(sleep 200번을 넘으면 끊음).
 #   정지 시한 — 실패 0 · 59 · 193(r2 cx) · 0–52 · 186 + 수집 지연 2초(r2 cc) ·
-#     최악 예산(60 · 194 · 지연 10초 · 판정마다 5초)에 정지 조건이 보인 뒤 첫
-#     조회가 실패해도 첫 실패 줄에서 240초 안에 정지.
+#     60 · 194 · 지연 10초 · 판정마다 5초 · r3 cx(조회 2 · 14 · 14초) · 조회가
+#     상한까지 걸려 실패 둘 · 셋째 조회가 상한 밖에서 100초 멈춤(줄 끊김) —
+#     판정 줄의 시각(끊김이면 앞 줄 + 10초)에 명령 여유 12초를 더해 첫 실패
+#     줄에서 240초 안. 끊김 사례 밖에서는 줄 사이 10초 넘는 끊김도 실패.
 #   무완료 — 20분 무완료 = 정지 · 창 밖 완료는 세지 않음 · 기동 20분 전 = 대기 ·
 #     나이 20분 이하 = 통과 · 나이 지표 없음 · 깊이 조회 실패 = 판정불가.
 #   로그 판정 — 깊이 > 0 인데 시작 · 완료 줄 없음 = 실패 · 3분 전(150초) =
@@ -117,12 +124,18 @@ readonly MUTATION_NAMES=(
   'receive: 지금 이어지는 중인지(최근성) 빼기'
   'start-log: upload.begin 을 진행 신호에서 빼기'
   'watch: 판정불가 한 번에 멈추기'
-  'watch: 주기 5초를 30초로'
+  'watch: 쉼 2초를 5초로(옛 주기)'
   'watch: 끝 시각의 조회 실패에도 끝내기'
   'watch: 시각 인자의 숫자 검사 빼기'
   'receive: 시작 epoch 의 숫자 검사 빼기'
   'started: apply 시작 epoch 의 숫자 검사 빼기'
   'watch: 판정 한 번의 시간 상한 빼기'
+  'watch: 늦음 검사를 통과에만(옛 꼴)'
+  'watch: 판정 줄의 시각 빼기'
+  'events: 시도 1번 빼기'
+  'events: 연결 시간 상한 빼기'
+  'events: 읽기 시간 상한 빼기'
+  'events: 이어 받기 표 검사 빼기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -141,12 +154,18 @@ readonly MUTATION_FROMS=(
   'now - last[name] <= gap'
   '"$2\\.(started|begin|message_done) "'
   '[ "${misses}" -ge 2 ]'
-  'sleep 5'
+  'sleep 2'
   '[ "${misses}" -eq 0 ] && [ "${begin}" -ge "$3" ]'
   'for arg in "${2-}" "${3-}"; do'
   'case "${2-}" in'
   $'local first\n  case "${3-}" in'
   '[ "$((now - begin))" -gt 5 ]'
+  'if [ "$((now - begin))" -gt 5 ]'
+  'sed "s/^/${stamp} /"'
+  'AWS_MAX_ATTEMPTS=1 '
+  '--cli-connect-timeout 2 '
+  '--cli-read-timeout 3 '
+  "'.nextToken == null'"
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -165,12 +184,18 @@ readonly MUTATION_TOS=(
   '1'
   '"$2\\.(started|message_done) "'
   '[ "${misses}" -ge 1 ]'
-  'sleep 30'
+  'sleep 5'
   '[ "${begin}" -ge "$3" ]'
   'for arg in 0; do'
   'case 0 in'
   $'local first\n  case 0 in'
   'false'
+  'if [ "${rc}" -eq 0 ] && [ "$((now - begin))" -gt 5 ]'
+  'cat'
+  ''
+  ''
+  ''
+  'true'
 )
 
 # 사례 시각의 기준(2026-11-10T00:00:00Z) — 사례는 여기서 몇 초 뒤로 적는다.
@@ -178,9 +203,13 @@ readonly T0=1794268800
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
 FAKE_ACCOUNT="$(printf '%012d' 42)"
 readonly FAKE_ACCOUNT
-# 사례 65(대화형 zsh 넷 · 블록 글자 하나 포함) + 변이 21. 사례나 변이를
+# 사례 72(대화형 zsh 넷 · 블록 글자 하나 포함) + 변이 27. 사례나 변이를
 # 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=86
+readonly EXPECTED_CASES=99
+# kty 가 판정 줄 끊김으로 판정불가를 보는 줄 사이(초) · 정지를 본 뒤 정지
+# 명령을 돌리는 여유(초) — README 「정지 시한의 셈」 과 같은 값이다.
+readonly WATCH_GAP_SECONDS=10
+readonly STOP_COMMAND_SECONDS=12
 # 블록을 표준 입력으로 넣는 대화형 zsh 의 옵션(터미널 없음 · 있음 두 사례가
 # 같이 쓴다). -s 가 없으면 제어 터미널이 있을 때 zsh 가 표준 입력 대신
 # 터미널에서 읽어 멈춘다.
@@ -370,7 +399,7 @@ fake_aws() {
       --dimensions) want=dims ;;
     esac
   done
-  if ! fake_aws_clock; then
+  if ! fake_aws_clock "$@"; then
     timed_fail=1
   fi
   if [[ -e "${case_dir}/resp/${key}.fail" || -n "${timed_fail}" ]]; then
@@ -392,29 +421,79 @@ fake_aws() {
 }
 
 #######################################
-# 가짜 aws 의 시계 효과 — 호출을 시작한 시각을 called 에 적고, delay 가 있으면
-# 시계를 그만큼 옮긴다(조회 시간). fail_from 의 시각 이후 첫 호출은 한 번 실패한다.
+# 가짜 aws 의 조회 시간을 「망 쪽 기다림 · 상한 밖 시간」 두 수(초)로 낸다.
+# delays 가 있으면 그 첫 줄(「기다림」 또는 「기다림+상한 밖」)을 꺼내 쓰고,
+# 비었으면 delay, 그것도 없으면 0 이다. 상한 밖 시간은 CLI 기동 · DNS 처럼
+# --cli-*-timeout 이 자르지 못하는 몫이다.
 # Globals:
 #   case_dir
+#######################################
+fake_aws_wait() {
+  local entry=0
+  if [[ -s "${case_dir}/delays" ]]; then
+    entry="$(head -n 1 -- "${case_dir}/delays")"
+    tail -n +2 -- "${case_dir}/delays" >"${case_dir}/delays.rest"
+    mv -- "${case_dir}/delays.rest" "${case_dir}/delays"
+  elif [[ -e "${case_dir}/delay" ]]; then
+    entry="$(cat -- "${case_dir}/delay")"
+  fi
+  if [[ "${entry}" == *+* ]]; then
+    printf '%s %s\n' "${entry%%+*}" "${entry#*+}"
+  else
+    printf '%s 0\n' "${entry}"
+  fi
+}
+
+#######################################
+# 가짜 aws 의 시계 효과 — 호출을 시작한 시각을 called 에 적고, 조회 시간만큼
+# 시계를 옮긴다. 조회 시간은 awscli 의 상한을 따른다: 시도마다 연결
+# (--cli-connect-timeout) + 읽기(--cli-read-timeout) 초가 상한(없으면 각 60 —
+# CLI 기본)이고, 시도 수는 AWS_MAX_ATTEMPTS(없으면 3 — CLI 기본)다. 망 쪽
+# 기다림이 시도 상한을 넘으면 시도마다 상한까지 걸린 뒤 실패하고, 실패하는
+# 호출(fail_from 의 시각 이후 첫 호출 — 한 번)은 시도마다 기다림만큼 걸린다.
+# 상한 밖 시간(over)은 늘 더한다.
+# Globals:
+#   case_dir
+# Arguments:
+#   aws 인자.
 # Returns:
 #   0 / 1 이번 호출을 조회 실패로 낸다.
 #######################################
 fake_aws_clock() {
-  local now
+  local now wait over cap connect=60 read_timeout=60 want="" arg spent failed=""
   if [[ ! -e "${case_dir}/clock" ]]; then
     return 0
   fi
   now="$(cat -- "${case_dir}/clock")"
   printf '%s\n' "${now}" >"${case_dir}/called"
-  if [[ -e "${case_dir}/delay" ]]; then
-    printf '%s\n' "$((now + $(cat -- "${case_dir}/delay")))" \
-      >"${case_dir}/clock"
-  fi
+  for arg in "$@"; do
+    case "${want}" in
+      connect) connect="${arg}" ;;
+      read_timeout) read_timeout="${arg}" ;;
+    esac
+    want=""
+    case "${arg}" in
+      --cli-connect-timeout) want=connect ;;
+      --cli-read-timeout) want=read_timeout ;;
+    esac
+  done
+  cap=$((connect + read_timeout))
+  read -r wait over < <(fake_aws_wait)
   if [[ -e "${case_dir}/fail_from" ]] &&
     ((now >= $(cat -- "${case_dir}/fail_from"))); then
     rm -f -- "${case_dir}/fail_from"
-    return 1
+    failed=1
   fi
+  if ((wait > cap)); then
+    spent=$((${AWS_MAX_ATTEMPTS:-3} * cap))
+    failed=1
+  elif [[ -n "${failed}" ]]; then
+    spent=$((${AWS_MAX_ATTEMPTS:-3} * wait))
+  else
+    spent="${wait}"
+  fi
+  printf '%s\n' "$((now + spent + over))" >"${case_dir}/clock"
+  [[ -z "${failed}" ]]
 }
 
 #######################################
@@ -468,6 +547,8 @@ run_readme() {
   # shellcheck disable=SC2030,SC2329
   (
     export TMPDIR="${case_dir}/tmp"
+    # 시도 수는 README 블록이 정한다 — 시험을 돌리는 셸의 값을 들이지 않는다.
+    unset AWS_MAX_ATTEMPTS AWS_RETRY_MODE
     cd -- "${case_dir}" || exit 99
     eval "${readme_text}" || exit 98
     aws() { fake_aws "$@"; }
@@ -488,8 +569,34 @@ expect() {
   local name="$1" last="$2" want="$3" got
   got="$(tail -n 1 -- "${case_dir}/out")"
   if [[ "${got}" != "${last}"* ]]; then
-    fail "${name}: 마지막 줄 「${got}」 (기대 「${last}…」) / 오류: $(tr '\n' '|' \
-      <"${case_dir}/err")"
+    fail "${name}: 마지막 줄 「${got}」 (기대 「${last}…」) / 오류: $(LC_ALL=C \
+      tr '\n' '|' <"${case_dir}/err")"
+    return 1
+  fi
+  if [[ "${status}" -ne "${want}" ]]; then
+    fail "${name}: 종료 코드 ${status} (기대 ${want})"
+    return 1
+  fi
+  pass "${name}"
+}
+
+#######################################
+# 감시 반복의 판정 줄 · 종료 코드를 본다. 마지막 줄은 「HH:MM:SS UTC 」 시각으로
+# 시작해야 하고, 시각을 뗀 나머지를 expect 와 같이 본다.
+# Globals:
+#   case_dir, status
+# Arguments:
+#   사례 이름, 기대 마지막 줄 머리(시각 뒤), 기대 종료 코드.
+#######################################
+expect_watch() {
+  local name="$1" last="$2" want="$3" got
+  got="$(tail -n 1 -- "${case_dir}/out")"
+  if [[ "${got}" != [0-9][0-9]:[0-9][0-9]:[0-9][0-9]' UTC '* ]]; then
+    fail "${name}: 마지막 줄에 시각이 없음 「${got}」"
+    return 1
+  fi
+  if [[ "${got#* UTC }" != "${last}"* ]]; then
+    fail "${name}: 마지막 줄 「${got}」 (기대 「HH:MM:SS UTC ${last}…」)"
     return 1
   fi
   if [[ "${status}" -ne "${want}" ]]; then
@@ -881,7 +988,7 @@ clock_at() {
 expect_sleeps() {
   local got=""
   if [[ -e "${case_dir}/sleeps" ]]; then
-    got="$(tr '\n' ' ' <"${case_dir}/sleeps")"
+    got="$(LC_ALL=C tr '\n' ' ' <"${case_dir}/sleeps")"
     got="${got% }"
   fi
   if [[ "${got}" != "$2" ]]; then
@@ -901,41 +1008,77 @@ test_watch() {
   while IFS= read -r line; do lines+=("${line}"); done < <(timeouts render 0 72)
   log_resp "${G}" "${lines[@]}"
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 600))"
-  expect 'watch: 정지면 첫 주기에 1' '수신: 정지' 1
+  expect_watch 'watch: 정지면 첫 주기에 1' '수신: 정지' 1
   expect_sleeps 'watch: 정지면 기다리지 않음' ''
 
-  # 실패가 없으면 5초마다 보고 끝 시각에 0 — 0 · 5 · 10초에 판정.
+  # 실패가 없으면 2초 쉬며 보고 끝 시각에 0 — 0 · 2 · 4 · 6 · 8 · 10초에 판정.
   new_case && clock_at 0 && log_resp "${G}"
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 10))"
-  expect 'watch: 끝 시각까지 보면 0' '수신 감시: 끝' 0
-  expect_sleeps 'watch: 5초마다 두 번 기다림' '5 5'
+  expect_watch 'watch: 끝 시각까지 보면 0' '수신 감시: 끝' 0
+  expect_sleeps 'watch: 2초씩 다섯 번 기다림' '2 2 2 2 2'
 
   # 조회 실패가 두 주기 이어지면 판정불가.
   new_case && clock_at 0 &&
     : >"${case_dir}/resp/logs.filter-log-events.${G}.fail"
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 600))"
-  expect 'watch: 조회 실패 두 번 이어짐 = 판정불가' '수신 감시: 판정불가' 2
+  expect_watch 'watch: 조회 실패 두 번 이어짐 = 판정불가' '수신 감시: 판정불가' 2
 
   # 조회 실패 한 번은 다음 주기에 다시 본다.
   new_case && clock_at 0 && log_resp "${G}" &&
     : >"${case_dir}/resp/logs.filter-log-events.${G}.fail" &&
     : >"${case_dir}/heal"
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 60))"
-  expect 'watch: 조회 실패 한 번은 다음 주기에 다시' '수신 감시: 끝' 0
+  expect_watch 'watch: 조회 실패 한 번은 다음 주기에 다시' '수신 감시: 끝' 0
 
   # 끝 시각의 판정이 조회 실패면 끝내지 않고 한 주기 더 본다.
   new_case && clock_at 0 && log_resp "${G}" &&
     : >"${case_dir}/resp/logs.filter-log-events.${G}.fail" &&
     : >"${case_dir}/heal"
   run_readme workers_receive_watch "${G}" "${T0}" "${T0}"
-  expect 'watch: 끝 시각의 조회 실패 뒤 통과 = 끝' '수신 감시: 끝' 0
-  expect_sleeps 'watch: 끝 시각의 조회 실패는 한 주기 더' '5'
+  expect_watch 'watch: 끝 시각의 조회 실패 뒤 통과 = 끝' '수신 감시: 끝' 0
+  expect_sleeps 'watch: 끝 시각의 조회 실패는 한 주기 더' '2'
 
-  # 판정 한 번이 상한(5초)을 넘기면 통과여도 판정하지 못한 주기로 센다.
-  new_case && clock_at 0 && log_resp "${G}" && echo 6 >"${case_dir}/delay"
+  # 판정 한 번이 상한(5초)을 넘기면 통과여도 판정하지 못한 주기로 센다 —
+  # CLI 상한 밖(기동 · DNS)에서 6초가 걸린 꼴.
+  new_case && clock_at 0 && log_resp "${G}" &&
+    printf '0+6\n0+6\n' >"${case_dir}/delays"
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 600))"
-  expect 'watch: 판정이 5초를 넘긴 주기 두 번 = 판정불가' '수신 감시: 판정불가' 2
-  expect_sleeps 'watch: 늦은 판정 한 번은 다음 주기에 다시' '5'
+  expect_watch 'watch: 판정이 5초를 넘긴 주기 두 번 = 판정불가' \
+    '수신 감시: 판정불가' 2
+  expect_sleeps 'watch: 늦은 판정 한 번은 다음 주기에 다시' '2'
+}
+
+#######################################
+# 감시 반복의 판정 줄 시각과, 조회 실패에도 거는 늦음 검사.
+# Globals:
+#   case_dir, G, T0
+#######################################
+test_watch_stamps() {
+  local stamps
+  # 판정 줄마다 판정이 끝난 때의 UTC 시각(T0 = 00:00:00)이 앞에 붙는다.
+  new_case && clock_at 0 && log_resp "${G}"
+  run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 4))"
+  stamps="$(cut -d ' ' -f 1-2 -- "${case_dir}/out" | LC_ALL=C tr '\n' '|')"
+  if [[ "${stamps}" != '00:00:00 UTC|00:00:02 UTC|00:00:04 UTC|00:00:04 UTC|' ]]
+  then
+    fail "watch: 판정 줄마다 끝난 시각 — 「${stamps}」"
+  else
+    pass 'watch: 판정 줄마다 끝난 시각(UTC)'
+  fi
+
+  # 조회 실패가 6초 걸리면(상한 밖) 실패여도 「늦음」 을 시각과 함께 찍는다.
+  new_case && clock_at 0 && log_resp "${G}" &&
+    : >"${case_dir}/resp/logs.filter-log-events.${G}.fail" &&
+    printf '0+6\n0+6\n' >"${case_dir}/delays"
+  run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 600))"
+  if ! grep -q '^00:00:06 UTC 수신 감시: 늦음 — 판정에 6초' "${case_dir}/out"
+  then
+    fail "watch: 늦은 조회 실패에 늦음 줄 없음 — $(LC_ALL=C tr '\n' '|' \
+      <"${case_dir}/out")"
+  else
+    expect_watch 'watch: 늦은 조회 실패도 늦음 · 두 번이면 판정불가' \
+      '수신 감시: 판정불가' 2
+  fi
 }
 
 #######################################
@@ -975,32 +1118,60 @@ test_watch_usage() {
   new_case && clock_at 0 && echo 0 >"${case_dir}/lag" &&
     log_resp "${G}" '40 render.worker_started queue=x'
   run_readme eval "apply_at=${T0}; watch_end=$((T0 + 60)); ${usage}"
-  expect 'usage: 기동 신호 전에 띄운 쓰는 예 = 기다렸다가 끝 시각에 끝' \
+  expect_watch 'usage: 기동 신호 전에 띄운 쓰는 예 = 기다렸다가 끝 시각에 끝' \
     '수신 감시: 끝' 0
-  expect_sleeps 'usage: 기동 대기 10초 넷 뒤 5초 주기' '10 10 10 10 5 5 5 5'
+  expect_sleeps 'usage: 기동 대기 10초 넷 뒤 2초 쉼 열' \
+    '10 10 10 10 2 2 2 2 2 2 2 2 2 2'
 }
 
 #######################################
-# 가짜 시계가 정지 시한(첫 실패 줄 = T0 에서 240초) 안인지 본다.
+# 정지 시한(첫 실패 줄 = T0 에서 240초)을 kty 가 보는 판정 줄로 본다. 판정 줄의
+# 시각을 차례로 읽어, 줄 사이가 WATCH_GAP_SECONDS 를 넘는 첫 자리에서는 앞 줄
+# 시각 + WATCH_GAP_SECONDS(끊김 — 판정불가로 봄)에, 없으면 마지막 줄 시각에
+# kty 가 움직인다. 그 시각 + 명령 여유(STOP_COMMAND_SECONDS)가 240초 안이어야
+# 한다. 끊김은 둘째 인자가 gap 일 때(CLI 상한 밖에서 멈춘 사례)만 받는다 —
+# 아니면 반복이 상한 안에서 스스로 판정을 내야 해 끊김 자체가 실패다. 시각은
+# T0(00:00:00 UTC) 뒤 초다.
 # Globals:
-#   case_dir, T0
+#   case_dir, T0, WATCH_GAP_SECONDS, STOP_COMMAND_SECONDS
 # Arguments:
-#   사례 이름.
+#   사례 이름, gap(끊김을 받음 — 없으면 빈 글자).
 #######################################
 expect_stop_by_deadline() {
-  local at
-  at="$(($(cat -- "${case_dir}/clock") - T0))"
-  if ((at > 240)); then
-    fail "$1: ${at}초에 끝남(시한 240초)"
+  local stamp rest at="" prev="" act="" clock
+  clock="$(($(cat -- "${case_dir}/clock") - T0))"
+  while read -r stamp rest; do
+    if [[ "${stamp}" != [0-9][0-9]:[0-9][0-9]:[0-9][0-9] ]]; then
+      continue
+    fi
+    at=$((10#${stamp:0:2} * 3600 + 10#${stamp:3:2} * 60 + 10#${stamp:6:2}))
+    if [[ -n "${prev}" ]] && ((at - prev > WATCH_GAP_SECONDS)); then
+      if [[ "${2-}" != gap ]]; then
+        fail "$1: 판정 줄이 ${prev}초 → ${at}초로 끊김(${WATCH_GAP_SECONDS}초 넘음)"
+        return 1
+      fi
+      act=$((prev + WATCH_GAP_SECONDS))
+      break
+    fi
+    prev="${at}"
+  done <"${case_dir}/out"
+  act="${act:-${prev}}"
+  if [[ -z "${act}" ]]; then
+    fail "$1: 판정 줄에 시각이 없음(시계 ${clock}초 + 명령 여유 $((clock + \
+      STOP_COMMAND_SECONDS))초)"
     return 1
   fi
-  pass "$1 — ${at}초"
+  if ((act + STOP_COMMAND_SECONDS > 240)); then
+    fail "$1: 판정 ${act}초 + 명령 여유 ${STOP_COMMAND_SECONDS}초 > 240초"
+    return 1
+  fi
+  pass "$1 — 판정 ${act}초 + 명령 여유 ${STOP_COMMAND_SECONDS}초"
 }
 
 #######################################
-# 수신 감시 반복의 정지 시한(늦어도 240초). 첫 실패 줄을 0초로 두고, 가짜
-# aws 가 시계에 맞춰 사건을 보이며(lag — 수집 지연), 정지 조건이 선 뒤 첫 조회를
-# 한 번 실패시킨다(fail_from). 셋째는 판정마다 5초(delay)가 걸리는 최악 예산.
+# 수신 감시 반복의 정지 시한(판정 + 명령 여유가 240초 안). 첫 실패 줄을 0초로
+# 두고, 가짜 aws 가 시계에 맞춰 사건을 보이며(lag — 수집 지연), 조회 시간
+# (delay · delays)은 awscli 의 시간 상한 · 시도 수를 따른다(fake_aws_clock).
 #######################################
 test_watch_deadline() {
   # r2 cx 시간열 — 0 · 59 · 193초 실패, 감시는 12초부터, 193초 뒤 첫 조회
@@ -1010,8 +1181,8 @@ test_watch_deadline() {
     log_resp "${G}" '0 render.receive_failed err=x' \
       '59 render.receive_failed err=x' '193 render.receive_failed err=x'
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 3600))"
-  expect 'deadline: 0 · 59 · 193 + 조회 실패 한 번 = 정지' '수신: 정지' 1
-  expect_stop_by_deadline 'deadline: 0 · 59 · 193 + 조회 실패 한 번은 240초 안'
+  expect_watch 'deadline: 0 · 59 · 193 + 조회 실패 한 번 = 정지' '수신: 정지' 1
+  expect_stop_by_deadline 'deadline: 0 · 59 · 193 + 조회 실패 한 번'
 
   # r2 cc 시간열 — 13초 간격 다섯 뒤 186초, 수집 지연 2초, 186초 실패가 보인
   # 뒤(188초) 첫 조회 실패(옛 30초 주기에서는 그것이 217초 조회 — 247초 정지).
@@ -1022,19 +1193,70 @@ test_watch_deadline() {
       '39 render.receive_failed err=x' '52 render.receive_failed err=x' \
       '186 render.receive_failed err=x'
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 3600))"
-  expect 'deadline: 0–52 · 186 + 지연 2초 · 조회 실패 = 정지' '수신: 정지' 1
-  expect_stop_by_deadline 'deadline: 0–52 · 186 + 지연 2초 · 조회 실패는 240초 안'
+  expect_watch 'deadline: 0–52 · 186 + 지연 2초 · 조회 실패 = 정지' '수신: 정지' 1
+  expect_stop_by_deadline 'deadline: 0–52 · 186 + 지연 2초 · 조회 실패'
 
-  # 최악 예산 — 둘째 실패가 60초(넘지 않음) · 셋째 194초(간격 134초) · 수집
-  # 지연 10초 · 판정마다 5초 · 정지 조건이 보이기 바로 앞(203초)에 판정을 시작.
-  new_case && clock_at 3 && echo 10 >"${case_dir}/lag" &&
+  # 판정마다 5초 — 둘째 실패 60초(넘지 않음) · 셋째 194초 · 수집 지연 10초 ·
+  # 정지 조건이 보이기 바로 앞(203초)에 판정을 시작 · 그 뒤 첫 조회 실패.
+  new_case && clock_at 0 && echo 10 >"${case_dir}/lag" &&
     echo 5 >"${case_dir}/delay" &&
     echo "$((T0 + 204))" >"${case_dir}/fail_from" &&
     log_resp "${G}" '0 render.receive_failed err=x' \
       '60 render.receive_failed err=x' '194 render.receive_failed err=x'
   run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 3600))"
-  expect 'deadline: 최악 예산(60 · 194 · 지연 10 · 판정 5초) = 정지' '수신: 정지' 1
-  expect_stop_by_deadline 'deadline: 최악 예산은 240초 안'
+  expect_watch 'deadline: 판정마다 5초(60 · 194 · 지연 10) = 정지' '수신: 정지' 1
+  expect_stop_by_deadline 'deadline: 판정마다 5초'
+}
+
+#######################################
+# 정지 시한 — 느리거나 멈춘 조회. 조회 시간이 awscli 의 시간 상한 · 시도 수를
+# 따르므로, 상한이 느린 조회를 잘라 판정 줄이 끊기지 않고 시한 안에 판정을
+# 낸다. 상한 밖에서 멈추면 kty 가 줄 끊김(10초)으로 본다.
+#######################################
+test_watch_deadline_caps() {
+  # r3 cx 시간열 — 0 · 60 · 194초 실패 · 수집 지연 10초 · 조회가 196초에 2초,
+  # 그 뒤 둘이 14초씩(옛 꼴: 196→198 · 203→217 · 222→236 정지 — 명령 여유를
+  # 넣으면 248초). 상한이 14초 조회를 잘라 판정불가로 끝난다.
+  new_case && clock_at 196 && echo 10 >"${case_dir}/lag" &&
+    printf '2\n14\n14\n' >"${case_dir}/delays" &&
+    log_resp "${G}" '0 render.receive_failed err=x' \
+      '60 render.receive_failed err=x' '194 render.receive_failed err=x'
+  run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 3600))"
+  expect_stop_by_deadline 'deadline: r3 cx 시간열(조회 2 · 14 · 14초)'
+
+  # 조회가 상한까지 걸려 실패 — 203초에 시작한 판정이 5초(그 줄을 못 봄),
+  # 그 뒤 둘이 망 쪽에서 멈춰 시간 상한까지 걸린 뒤 실패(상한 밖 1초씩).
+  new_case && clock_at 203 && echo 10 >"${case_dir}/lag" &&
+    printf '4+1\n999+1\n999+1\n' >"${case_dir}/delays" &&
+    log_resp "${G}" '0 render.receive_failed err=x' \
+      '60 render.receive_failed err=x' '194 render.receive_failed err=x'
+  run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 3600))"
+  expect_watch 'deadline: 조회가 상한까지 걸려 두 번 실패 = 판정불가' \
+    '수신 감시: 판정불가' 2
+  expect_stop_by_deadline 'deadline: 조회가 상한까지 걸려 실패'
+
+  # 판정 줄이 끊김 — 위와 같다가 셋째 조회가 상한 밖(DNS 등)에서 100초 멈춤.
+  # kty 는 줄 사이 10초 끊김에서 판정불가로 본다.
+  new_case && clock_at 203 && echo 10 >"${case_dir}/lag" &&
+    printf '4+1\n999+1\n0+100\n' >"${case_dir}/delays" &&
+    log_resp "${G}" '0 render.receive_failed err=x' \
+      '60 render.receive_failed err=x' '194 render.receive_failed err=x'
+  run_readme workers_receive_watch "${G}" "${T0}" "$((T0 + 3600))"
+  expect_stop_by_deadline 'deadline: 셋째 조회가 상한 밖에서 멈춤(줄 끊김)' gap
+}
+
+#######################################
+# 이어 받기 표(nextToken)가 있는 조회는 결과를 다 보지 못한 것이라 판정불가.
+# Globals:
+#   case_dir, G, T0
+#######################################
+test_events_page() {
+  new_case && log_resp "${G}" '0 render.worker_started queue=x' &&
+    jq '. + {nextToken: "t"}' "${case_dir}/resp/logs.filter-log-events.${G}" \
+      >"${case_dir}/page" &&
+    mv -- "${case_dir}/page" "${case_dir}/resp/logs.filter-log-events.${G}"
+  run_readme workers_receive_verdict "${G}" "${T0}" "$((T0 + 600))"
+  expect 'events: 이어 받기 표가 있는 조회 = 판정불가' '수신: 판정불가' 2
 }
 
 # PTY 에 띄운 대화형 zsh 에 파일마다 bracketed paste(ESC[200~ … ESC[201~ 와
@@ -1214,9 +1436,10 @@ PY
 )"
 readonly TTY_RUNNER
 
-# 대화형 zsh 와 bash 에 같이 넣는 가짜 aws. 받은 인자를 WORKERS_ZSH_CALLS 에
-# 적고, 응답은 WORKERS_ZSH_RESP 에서 fake_aws 와 같은 열쇠로 고른다(없으면
-# cat 이 실패). 대화형 zsh 에 들어가므로 `#` · `!` 를 쓰지 않는다. 명령 치환
+# 대화형 zsh 와 bash 에 같이 넣는 가짜 aws · date. aws 는 받은 인자를
+# WORKERS_ZSH_CALLS 에 적고, 응답은 WORKERS_ZSH_RESP 에서 fake_aws 와 같은
+# 열쇠로 고른다(없으면 cat 이 실패). date 는 WORKERS_ZSH_NOW 를 내 감시 반복의
+# 판정 줄 시각을 두 셸에서 같게 한다. 대화형 zsh 에 들어가므로 `#` · `!` 를 쓰지 않는다. 명령 치환
 # 안의 here-doc 은 bash 3.2 가 case 의 `)` 를 치환의 끝으로 읽어 read 로 받는다.
 IFS= read -r -d '' SHARED_FAKE_AWS <<'SH'
 aws() {
@@ -1239,16 +1462,20 @@ aws() {
   done
   cat -- "${WORKERS_ZSH_RESP}/${key}"
 }
+date() {
+  printf '%s\n' "${WORKERS_ZSH_NOW}"
+}
 SH
 readonly SHARED_FAKE_AWS
 
 #######################################
-# 대화형 zsh 사례의 입력 파일을 사례 디렉터리에 쓴다 — fake(가짜 aws) · run
-# (판정 함수 일곱을 차례로 한 번씩 불러 결과와 종료 코드를 WORKERS_ZSH_RUN 에
-# 적음 — 나머지 둘은 그 안에서 불림) · tail(함수마다 「whence: <whence -w
-# 출력>」) · stdin(fake · 블록 · run · tail) · bash.stdin(fake · 블록 · run — bash 기준 실행). run 의 첫 줄이
-# 가짜 aws 의 기록 파일을 바꿔, 정의하는 동안의 호출과 부른 뒤의 호출을
-# 가른다. 모두 대화형 zsh 에 들어가므로 `#` · `!` 를 쓰지 않는다.
+# 대화형 zsh 사례의 입력 파일을 사례 디렉터리에 쓴다 — fake(가짜 aws · 가짜
+# date — WORKERS_ZSH_NOW 를 냄) · run(판정 함수 일곱을 차례로 한 번씩 불러
+# 결과와 종료 코드를 WORKERS_ZSH_RUN 에 적음 — 나머지 둘은 그 안에서 불림) ·
+# tail(함수마다 「whence: <whence -w 출력>」) · stdin(fake · 블록 · run · tail) ·
+# bash.stdin(fake · 블록 · run — bash 기준 실행). run 의 첫 줄이 가짜 aws 의
+# 기록 파일을 바꿔, 정의하는 동안의 호출과 부른 뒤의 호출을 가른다. 모두 대화형
+# zsh 에 들어가므로 `#` · `!` 를 쓰지 않는다.
 # Globals:
 #   case_dir, readme_text, ZSH_FUNCTIONS, SHARED_FAKE_AWS, G, RQ, T0
 # Arguments:
@@ -1304,7 +1531,7 @@ new_zsh_case() {
     "LANG=${LANG:-C.UTF-8}" "TMPDIR=${case_dir}/tmp"
     "AWS_CONFIG_FILE=/dev/null" "AWS_SHARED_CREDENTIALS_FILE=/dev/null"
     "WORKERS_ZSH_CALLS=${case_dir}/calls" "WORKERS_ZSH_RESP=${case_dir}/resp"
-    "WORKERS_ZSH_RUN=${case_dir}/run.out")
+    "WORKERS_ZSH_RUN=${case_dir}/run.out" "WORKERS_ZSH_NOW=${T0}")
   "${zsh_env[@]}" "WORKERS_ZSH_RUN=${case_dir}/run.bash" bash -s \
     <"${case_dir}/bash.stdin" >/dev/null 2>&1
 }
@@ -1327,18 +1554,18 @@ zsh_problems() {
   if [[ "${#missing[@]}" -ne 0 ]]; then
     printf '정의 안 된 함수 %s개(%s) / 오류: %s\n' "${#missing[@]}" \
       "${missing[*]}" "$(grep -aoh 'zsh: [^[:cntrl:]]*' "${case_dir}/out" \
-        "${case_dir}/err" | sort | uniq -c | tr '\n' '|')"
+        "${case_dir}/err" | sort | uniq -c | LC_ALL=C tr '\n' '|')"
   fi
   if [[ -s "${case_dir}/calls" ]]; then
     printf '정의하는 동안 가짜 aws 가 불림 — %s\n' \
-      "$(tr '\n' '|' <"${case_dir}/calls")"
+      "$(LC_ALL=C tr '\n' '|' <"${case_dir}/calls")"
   fi
   if [[ "$(grep -c '^rc=' "${case_dir}/run.bash" 2>/dev/null)" -ne 7 ]]; then
     printf 'bash 기준 실행의 결과가 일곱 줄이 아님\n'
   fi
   if ! cmp -s -- "${case_dir}/run.bash" "${case_dir}/run.out"; then
     printf '부른 결과가 bash 와 다름 — zsh 「%s」\n' \
-      "$(tr '\n' '|' <"${case_dir}/run.out" 2>/dev/null)"
+      "$(LC_ALL=C tr '\n' '|' <"${case_dir}/run.out" 2>/dev/null)"
   fi
   if grep -aqi 'command not found' -- "${case_dir}/out" "${case_dir}/err" \
     "${case_dir}/run.out" 2>/dev/null; then
@@ -1388,7 +1615,7 @@ test_no_comment_in_blocks() {
   local hits
   hits="$(printf '%s' "${readme_text}" | grep -nE '(^|[[:space:]])#')"
   if [[ -n "${hits}" ]]; then
-    fail "블록에 # 주석: $(printf '%s' "${hits}" | tr '\n' '|')"
+    fail "블록에 # 주석: $(printf '%s' "${hits}" | LC_ALL=C tr '\n' '|')"
     return 1
   fi
   pass '블록: 줄 머리 · 공백 뒤 # 0개'
@@ -1458,7 +1685,7 @@ test_zsh_interactive() {
     "${case_dir}/out" "${case_dir}/tail" "${pastes[@]}" \
     2>"${case_dir}/err"; then
     fail "zsh: PTY 붙여 넣기가 끝나지 않음(이어 쓰기 대기 등) / 오류: $(
-      grep -ao 'zsh: [^[:cntrl:]]*' "${case_dir}/out" | tr '\n' '|')"
+      grep -ao 'zsh: [^[:cntrl:]]*' "${case_dir}/out" | LC_ALL=C tr '\n' '|')"
     return 1
   fi
   expect_zsh_clean 'zsh: PTY bracketed paste = 함수 아홉 정의 · aws 0회 · bash 와 같은 결과'
@@ -1477,10 +1704,13 @@ run_suite() {
     test_nodone \
     test_start_log \
     test_empty_and_started \
+    test_events_page \
     test_watch \
+    test_watch_stamps \
     test_watch_inputs \
     test_watch_usage \
-    test_watch_deadline; do
+    test_watch_deadline \
+    test_watch_deadline_caps; do
     # 변이 묶음은 첫 실패에서 멈춘다 — 잡혔는지만 보면 되고 시간이 준다.
     if [[ -n "${quiet}" && "${suite_failures}" -gt 0 ]]; then
       return 0
