@@ -86,8 +86,9 @@ SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly DATA_DIR="${SCRIPT_DIR}/data/principal_sim"
 # 2-3 판정이 있는 단계와 그 순서(data_files_test.sh 의 JUDGED_BUNDLES 와
-# 순서까지 같다 — 첫 단계 비교는 이 색인으로 한다).
-STAGE_ORDER=(5 O7a O7b O7c runtime-1a O7d O7e O7f 8 8a 9 ci-followup)
+# 순서까지 같다 — 첫 단계 비교는 이 색인으로 한다). workers 는 일꾼 배치
+# 단계다(POK-408 — O7f 뒤 · 8 앞).
+STAGE_ORDER=(5 O7a O7b O7c runtime-1a O7d O7e O7f workers 8 8a 9 ci-followup)
 readonly STAGE_ORDER
 readonly DIR_PREFIX='principal'
 readonly STAGE_PATTERN='^[A-Za-z0-9][A-Za-z0-9-]*$'

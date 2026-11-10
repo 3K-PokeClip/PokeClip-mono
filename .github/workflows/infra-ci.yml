@@ -22,6 +22,7 @@
 # 시간 상한을 둔다. 판은 로컬에서 쓰는 판과 같다(2026-10-17 확인 · compose는 2026-10-20 · node는
 # 2026-10-24). 도구마다 RUNNER_TEMP 아래 제 디렉터리에 두고 GITHUB_PATH로 PATH 앞에 붙인다 —
 # compose만 docker CLI 플러그인 자리에 둔다(media-host 잡 「docker compose 설치」 주석).
+# zsh만은 배포처가 바이너리를 내지 않아 apt로 깔고 판으로 고정한다(shell 잡 「zsh 설치」 주석).
 #
 # 판을 올릴 때:
 #   - 옛 판이 적힌 곳을 `git grep -n '<옛 판>'`으로 모두 찾아 함께 바꾼다. terraform · tflint ·
@@ -58,6 +59,8 @@
 #                   SHASUMS256.txt.asc를 nodejs/release-keys 저장소의 gpg/pubring.kbx로
 #                   gpgv --keyring <pubring.kbx> --output - SHASUMS256.txt.asc
 #                   로 확인한 본문에서 옮긴다(서명 키가 node README 「Release keys」 목록에 있는지도 본다).
+#   - zsh는 shell 잡 설치 단계의 version 한 곳에 있다. 새 판은 ubuntu:24.04 컨테이너의
+#     `apt-cache policy zsh zsh-common`으로 보고, 둘이 같은 판인지 확인해 바꾼다.
 #
 # 저장소가 공개라 이 로그도 공개다. 시험은 가짜 계정 ID · 가짜 이름만 쓴다.
 #
@@ -394,6 +397,21 @@ jobs:
           "${bin}/shellcheck" --version
           echo "${bin}" >>"${GITHUB_PATH}"
 
+      # 「스크립트 시험」의 대화형 zsh 네 사례(workers_watch_runbook_test 의 표준 입력 · 터미널 + 표준 입력 · PTY 붙여 넣기 ·
+      # 본문 주석 음성 대조)가 쓴다. 러너 이미지에는 zsh가 없고, 없으면 네 사례가 skip이 되어 그 단계가 실패한다. zsh는
+      # 소스만 배포해 apt로 깔고 판으로 고정한다 — 5.9-6ubuntu2는 noble 릴리스 포켓의 판이다
+      # (2026-11-10 — noble-updates · noble-security에 새 판 없음). 릴리스 포켓은 얼어 있어 새 판이
+      # 나와도 이 판을 그대로 깔 수 있다. sha256은 적지 않는다 — apt가 서명된 색인(InRelease →
+      # Packages)의 sha256과 대조하고, 같은 판 번호로 내용이 바뀌지 않는다. zsh는 같은 판의
+      # zsh-common에 기대어 둘 다 고정한다. PTY 사례의 python3(pty · termios)와 jq는 러너 이미지에 있다.
+      - name: zsh 5.9 설치(apt 판 고정)
+        run: |
+          version=5.9-6ubuntu2
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -qq \
+            --no-install-recommends "zsh=${version}" "zsh-common=${version}"
+          zsh --version
+
       # 앞 세 명령은 infra/terraform README 「검증」 절 그대로다(저장소 루트에서 — source 경로가 루트
       # 기준이다). 넷째는 infra/media-host 의 셸 파일 전부(실행 스크립트 · 라이브러리 · 운영 스크립트 ·
       # 시험 · 시험 부품 · 가짜 명령)다. 그 시험 파일들은 source-path=SCRIPTDIR 지시를 두어 루트에서
@@ -461,11 +479,11 @@ jobs:
           fi
 
       # scripts/ 의 실행 스크립트 시험(scripts/test/*_test.sh — 지금은 put_secret_test · kvs_put_test ·
-      # network_vpce_runbook_test)을 모두 돌린다. 규칙은 위 단계와 같다(끝까지 돌림 · 0개 · 돈 수 = 찾은
+      # network_vpce_runbook_test · workers_watch_runbook_test)을 모두 돌린다. 규칙은 위 단계와 같다(끝까지 돌림 · 0개 · 돈 수 = 찾은
       # 수 · stdin /dev/null). 더해서 건너뛴 사례가 하나라도 있으면 실패로 본다 — 러너(비root · C.utf8 ·
-      # AWS CLI 있음)에서는 다 돌아야 하고, 특히 put_secret_test · kvs_put_test 의 실물 CLI 계약
-      # 사례(real-cli-contract)는 진짜 aws가 없으면 건너뛰어 초록이 되기 때문이다. 「skip:」이 든 줄은
-      # 대소문자 · 들여쓰기 · 괄호 유무와 상관없이 센다.
+      # AWS CLI 있음 · zsh는 앞 단계가 깖)에서는 다 돌아야 하고, 특히 put_secret_test · kvs_put_test 의
+      # 실물 CLI 계약 사례(real-cli-contract)는 진짜 aws가 없으면 건너뛰어 초록이 되기 때문이다.
+      # 「skip:」이 든 줄은 대소문자 · 들여쓰기 · 괄호 유무와 상관없이 센다.
       - name: 스크립트 시험(scripts/test)
         run: |
           log="${RUNNER_TEMP}/script_tests.log"

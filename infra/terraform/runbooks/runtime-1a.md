@@ -1839,8 +1839,8 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
     둘 다 `0` 이 되고, 그 뒤 clip 로그 그룹에 `clip.purge.*` 줄이 새로
     생기지 않는지 봅니다. 도는 중에 끊긴 정리는 다음에 부르면 이어집니다.
 1.  **진행 중 주문**: 먼저 갈래를 정합니다 — 일꾼이 배치돼 받고 있는가
-    (일꾼 배치 PR 의 apply 기록 · 일꾼 서비스 desired count. 보는 명령은
-    배치 PR 이 채웁니다).
+    (`prod/workers` 의 apply 기록 · 일꾼 서비스 desired count. 보는 명령은
+    「1단-나 ② 8」 의 「일꾼 멈춤」 기록 블록과 같습니다).
     *   **배치 갈래**: 원 큐 셋의 두 지표
         `ApproximateNumberOfMessages` · `ApproximateNumberOfMessagesNotVisible`
         가 둘 다 0 이 될 때까지 기다립니다(하나만 보면 일꾼이 쥔 메시지를
@@ -2122,7 +2122,7 @@ Media 상자가 읽는 auth 출입증을 공용 `INTERNAL_API_TOKEN` 에서 reso
 | 5 | platform(O7d 또는 그 뒤) | plan 승인 |
 | 6 | prod/media 적용 모드 확인 | — |
 | 7 | prod/media plan · apply(권한 축소) · 실물 확인 | plan 승인 |
-| 8 | 공용 토큰 1회 회전(조건 없음) | send-command · 값 입력 · 재배포 |
+| 8 | 공용 토큰 1회 회전(조건 없음) · 일꾼은 멈춘 채 | send-command · 일꾼 멈춤 · 값 입력 · 재배포 · 일꾼 복원 |
 | 9 | 응답기 기동 · 교체 | send-command |
 | 10 | 음성 확인(전용 토큰 · 옛 공용 토큰 401) | send-command · 포트 포워딩 |
 | 11 | 기록 | — |
@@ -2140,7 +2140,9 @@ kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순
 돌리고 ⑤ 보고를 합니다.
 
 *   ① 종료 3(CHANGED)은 예상됩니다 — 묶음에 `ec2:DescribeSubnets` 행이
-    늘었습니다(런타임 `data "aws_subnet"`). ⑤ 보고와 함께 묻고, 답을 들은 뒤
+    늘었고(런타임 `data "aws_subnet"`), 회전의 일꾼 멈춤 · 확인 · 복원에 쓰는
+    ECS 네 행(`ecs:DescribeServices` · `ecs:UpdateService` · `ecs:ListTasks` ·
+    `ecs:DescribeTasks`)도 늘었습니다. ⑤ 보고와 함께 묻고, 답을 들은 뒤
     `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다. 종료 1(DENIED) ·
     2(검사 불가)면 2 로 가지 않습니다.
 *   ② 는 1단-가 apply 뒤 기준입니다(4 의 첫 걸음 — 1 의 「apply 전이라
@@ -2413,22 +2415,216 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     셋째 측정 시각에서 끝납니다. AWS 는 IAM 변경이 모든 곳에 보이기까지
     시간이 걸린다고만 하고 수치를 주지 않습니다 — 30분 · 3회 · 5분은 kty
     확정 값입니다.
+*   **일꾼 멈춤**(쓰기 — 실행 직전 **kty 승인**): 일꾼 render · upload 를
+    값 넣기 전에 멈추고, 앱 서버 재배포가 끝난 뒤에 되살립니다. 앱 서버
+    롤링 동안 옛 값 · 새 값 태스크가 겹쳐 일꾼의 내부 호출 일부가 401 을
+    받고, 사진 보고가 401 을 받으면 그 주문 메시지가 그 자리에서 지워집니다
+    (DLQ 를 거치지 않는 손실). 일꾼을 clip 보다 먼저 재배포해도 clip 의 롤링
+    자체가 겹침을 만들어 이 창은 없어지지 않습니다. 멈춘 동안 주문은 큐에
+    남고(보관 4일) 받은 횟수도 오르지 않습니다. 단 멈추는 순간 처리 중이던
+    메시지는 처분 없이 남아 숨김 시간 뒤 다시 보이고, 되살린 뒤 다시 받을 때
+    받은 횟수가 한 번 오릅니다(SQS 는 받을 때마다 셈).
+
+    먼저 두 서비스의 지금 상태와 원하는 수를 기록합니다(읽기). 긴급 정지로
+    이미 0 인 서비스를 복원 때 되살리지 않으려는 기록입니다.
+
+    ```shell
+    umask 077
+    for k in render upload; do
+      printf '%s %s\n' "${k}" "$(aws ecs describe-services \
+        --region ap-northeast-2 --cluster pokeclip-prod \
+        --services "pokeclip-prod-${k}" \
+        --query 'services[0].[status,desiredCount]' --output text)"
+    done | tee "${work}/workers-before.txt"
+    ```
+
+    먼저 키마다 지금 태스크 ARN 을 기록합니다(읽기). 서비스의 실행 수는
+    `RUNNING` 만 세어, 내려가는 중(`DEACTIVATING` · `STOPPING`)인 태스크는
+    `0 0 0` 뒤에도 남을 수 있습니다 — 그 태스크가 옛 값으로 보고하다 401 을
+    받으면 메시지가 지워집니다([태스크 수명 주기](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle-explanation.html)).
+    목록은 서비스가 아니라 태스크 정의 family 로 뽑아 서비스가 사라진
+    뒤에도 잡히게 하고, 원하는 상태 `RUNNING` · `STOPPED` 둘 다 받습니다(내려가는
+    중인 태스크의 원하는 상태는 `STOPPED`). ARN 에 계정 ID 가 있어 화면에
+    내지 않고 파일에만 둡니다. `family_tasks <키> <파일>` 은 그 키의 ARN 을
+    파일에 모으고, `record_tasks <키>` 는 그것을 `workers-tasks-<키>.txt` 에
+    남깁니다.
+
+    이 절의 블록에는 `#` 주석을 두지 않습니다. kty 의 대화형 zsh 는 `#` 를
+    주석으로 읽지 않아(`interactivecomments` 꺼짐), 함수 머리 줄에 주석이
+    있으면 함수가 정의되지 않고 본문이 셸에서 바로 돕니다.
+
+    ```shell
+    family_tasks() {
+      local d out
+      : >"$2"
+      for d in RUNNING STOPPED; do
+        out="$(aws ecs list-tasks --region ap-northeast-2 \
+          --cluster pokeclip-prod --family "pokeclip-prod-$1" \
+          --desired-status "${d}" --query 'taskArns[]' --output text)" ||
+          return 1
+        printf '%s\n' "${out}" | tr '\t' '\n' |
+          sed -n '/^arn:aws:ecs:/p' >>"$2"
+      done
+      sort -u -o "$2" "$2"
+    }
+
+    record_tasks() {
+      local list="${work}/workers-tasks-$1.txt"
+      family_tasks "$1" "${list}" || return 1
+      printf '%s 태스크 %s개 기록\n' "$1" "$(wc -l <"${list}" | tr -d ' ')"
+    }
+    ```
+
+    *   `<키> ACTIVE 1` → `record_tasks <키>` 뒤 0 으로 내립니다(쓰기 —
+        **kty 승인**). 내리기 직전 시각을 키와 함께 남깁니다(복원 때
+        CloudTrail 읽기의 시작 시각).
+
+        ```shell
+        stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '%s %s\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
+        aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+          --service "pokeclip-prod-<키>" --desired-count 0 \
+          --query service.serviceName --output text
+        ```
+
+    *   `<키> ACTIVE 0` → 이미 멈춤(긴급 정지 등)입니다. 원하는 수는
+        그대로 두고 `record_tasks <키>` 만 합니다. 정지 직후면 태스크가
+        아직 내려가는 중일 수 있어(남은 render 가 옛 값으로 보고하다 401 →
+        메시지 삭제) 이 갈래도 아래 확인을 돌립니다.
+    *   `<키> INACTIVE 0` → 서비스가 지워졌습니다(`prod/workers` 를 내린 뒤
+        한동안 이 값입니다). `record_tasks <키>` 를 하고 아래 확인으로 남은
+        태스크가 없는지만 봅니다. 복원 대상이 아닙니다.
+    *   `<키> None` → 서비스 없음(`prod/workers` 를 apply 한 적이 없거나
+        지운 지 오래됨)입니다. 기록만 합니다.
+    *   그 밖의 값(`ACTIVE 2` · `DRAINING` 등) → 멈춤 · kty 회부.
+
+    확인은 둘입니다(읽기 · 10초 간격 · 각 10분 상한). `wait_zero` 는 원하는
+    수 · 실행 수 · 대기 수가 모두 0 이 될 때까지(`ACTIVE` 만) 읽습니다.
+    `wait_stopped` 는 반복마다 그 family 의 원하는 상태 `RUNNING` ·
+    `STOPPED` 태스크를 다시 모아 기록과 합치고, 그 전부가
+    `lastStatus=STOPPED` 일 때까지 읽습니다. 기록 뒤에 떴다가 지금 내려가는
+    중인 태스크도 이렇게 잡힙니다. 원하는 상태가 `RUNNING` 인 태스크는
+    `lastStatus` 가 아직 `STOPPED` 가 아니므로 「모두 STOPPED」 는 「새
+    RUNNING 0」 을 함께 뜻합니다.
+
+    응답의 `failures`(태스크별 조회 실패)도 봅니다. 실패가 하나라도 있으면
+    그 반복은 통과로 치지 않고 다음 반복에서 다시 읽습니다. 예외는 하나입니다.
+    이유가 `MISSING` 인 ARN 이 이번 반복에 모은 목록에 없고 처음 기록에만
+    있으면 통과로 칩니다. 멈춘 태스크는 응답에 최소 1시간 남습니다
+    ([DescribeTasks](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html)).
+    목록에서 빠지고 기록에만 남은 ARN 은 그 보관 기간이 지나 사라진, 이미
+    `STOPPED` 인 태스크입니다.
+    「`failures` 가 비어야 통과」 로 하면 승인 대기로 기록 뒤 1시간이 지났을
+    때 이 정상 `MISSING` 때문에 상한까지 돌고 거짓으로 회부됩니다.
+
+    `workers-before.txt` 에서 기록이 `ACTIVE` · `INACTIVE` 인 키만 돌고
+    `None` 은 건너뜁니다. 모두 통과해야 값을 넣습니다. 파일이 없거나
+    비었거나, 상태가 그 밖의 값(빈 값 · `DRAINING` 등)이면 멈춤입니다.
+    하나라도 종료 1(상한 · 읽기 실패)이어도 멈춤 · kty 회부입니다.
+    describe-tasks 는 한 번에 ARN 100 개까지 받습니다 — 모은 수가 100 을
+    넘으면 API 오류로 종료 1 이 되어 같은 회부로 갑니다(일꾼은 원하는 수
+    1 이라 반복 재기동이 아니면 넘지 않습니다).
+
+    두 함수의 인자는 키 하나입니다. `--query` 안의 백틱은 작은따옴표 안의
+    JMESPath 리터럴이고, `$(cat …)` 를 따옴표 없이 둔 것은 ARN(공백 없는 한
+    낱말)을 하나씩 인자로 넘기려는 것입니다.
+
+    ```shell
+    wait_zero() {
+      local i=0 counts
+      while [ "${i}" -lt 60 ]; do
+        counts="$(aws ecs describe-services --region ap-northeast-2 \
+          --cluster pokeclip-prod --services "pokeclip-prod-$1" \
+          --query 'services[0].[desiredCount,runningCount,pendingCount]' \
+          --output text)" || return 1
+        counts="$(printf '%s' "${counts}" | tr -s '\t ' ' ')"
+        printf '%s %s\n' "$1" "${counts}"
+        [ "${counts}" = '0 0 0' ] && return 0
+        i=$((i + 1))
+        sleep 10
+      done
+      printf '멈춤: %s 이 10분 안에 0 0 0 이 되지 않음\n' "$1"
+      return 1
+    }
+
+    wait_stopped() {
+      local i=0 out left other missing fresh_missing
+      local list="${work}/workers-tasks-$1.txt"
+      local fresh="${work}/workers-fresh-$1.txt"
+      local seen="${work}/workers-seen-$1.txt"
+      local gone="${work}/workers-missing-$1.txt"
+      while [ "${i}" -lt 60 ]; do
+        family_tasks "$1" "${fresh}" || return 1
+        sort -u -o "${seen}" "${fresh}" "${list}" || return 1
+        left=0 other=0 fresh_missing=0
+        if [ -s "${seen}" ]; then
+          out="$(aws ecs describe-tasks --region ap-northeast-2 \
+            --cluster pokeclip-prod --tasks $(cat "${seen}") \
+            --query '[length(tasks[?lastStatus!=`STOPPED`]),
+              length(failures[?reason!=`MISSING` || !arn]),
+              join(`" "`, failures[?reason==`MISSING`].arn)]' \
+            --output text)" || return 1
+          read -r left other missing <<<"${out}"
+          printf '%s\n' "${missing}" | tr ' ' '\n' |
+            sed -n '/^arn:aws:ecs:/p' >"${gone}"
+          if [ -s "${gone}" ]; then
+            fresh_missing="$(grep -Fxc -f "${gone}" "${fresh}")"
+          fi
+        fi
+        printf '%s 안 멈춘 태스크 %s · 조회 실패 %s · 방금 모은 MISSING %s' \
+          "$1" "${left}" "${other}" "${fresh_missing}"
+        printf ' · 모은 태스크 %s\n' "$(wc -l <"${seen}" | tr -d ' ')"
+        [ "${left}" = 0 ] && [ "${other}" = 0 ] &&
+          [ "${fresh_missing}" = 0 ] && return 0
+        i=$((i + 1))
+        sleep 10
+      done
+      printf '멈춤: %s 의 태스크가 10분 안에 모두 STOPPED 가 되지 않음\n' "$1"
+      return 1
+    }
+
+    ok=1
+    [ -s "${work}/workers-before.txt" ] || {
+      printf '멈춤: workers-before.txt 가 없거나 비었음\n'
+      ok=0
+    }
+    while read -r k state _; do
+      case "${state}" in
+        ACTIVE) { wait_zero "${k}" && wait_stopped "${k}"; } || ok=0 ;;
+        INACTIVE) wait_stopped "${k}" || ok=0 ;;
+        None) ;;
+        *)
+          printf '멈춤: %s 의 기록 상태가 「%s」\n' "${k}" "${state}"
+          ok=0
+          ;;
+      esac
+    done <"${work}/workers-before.txt"
+    if [ "${ok}" = 1 ]; then
+      printf '일꾼 멈춤 확인 — 값 넣기로\n'
+    else
+      printf '멈춤: 일꾼 멈춤 확인 실패 — kty 회부\n'
+    fi
+    ```
+
 *   **값 넣기**(실행 직전 **kty 승인**): 4 와 같은 꼴로 종류
     `internal-api-token` 에 `openssl rand -hex 32` 값을 넣습니다. 전용 토큰
     값과 달라야 합니다. 옛 값은 `AWSPREVIOUS` 로 남고 10 이 그것을 씁니다.
     종료 4(DENIED)는 다시 시도하지 않고 멈춥니다.
-*   **앱 전원 강제 재배포**: 대상 = 공용 그릇을 읽는 서비스 키 전부.
-    손으로 적지 않고 출력에서 뽑습니다(키만 냄 · ARN 은 내지 않음).
+*   **앱 전원 강제 재배포**: 대상 = 공용 그릇을 읽는 서비스 키 중 일꾼
+    render · upload 를 뺀 전부입니다(일꾼은 「일꾼 멈춤」 · 「일꾼 복원」 이
+    맡습니다). 손으로 적지 않고 출력에서 뽑습니다(키만 냄 · ARN 은 내지
+    않음). 값 넣기가 저장소 뿌리에서 끝나므로 출력은 하위 셸에서 runtime
+    으로 가 읽고, 9 · 10 의 `media_ssm` 이 쓰는 뿌리 cwd 는 그대로 둡니다.
+    출력 실패나 auth · clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로
+    멈춥니다. 일꾼 둘은 멈춘 채 두므로 필터가 걸러 냅니다.
 
     ```shell
-    # 값 넣기가 저장소 뿌리로 왔다 — 출력은 하위 셸에서 runtime 으로 가 읽고,
-    # 9 · 10 의 media_ssm 이 쓰는 뿌리 cwd 는 그대로 둔다. 출력 실패나 auth ·
-    # clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로 멈춘다.
     (
       set -o pipefail
       cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime" ||
         exit 1
       filter='to_entries[] | select(.value | has("INTERNAL_API_TOKEN")) | .key'
+      filter+=' | select(. != "render" and . != "upload")'
       keys="$(terraform output -json app_secret_arns | jq -r "${filter}")" ||
         exit 1
       for want in auth clip; do
@@ -2463,11 +2659,15 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     *   `None`(서비스 없음 — 응답의 `failures` 에 들어감) → 다음에 뜨는
         태스크가 새 값을 받습니다. 키와 함께 기록합니다. platform 은
         next · auth · clip · chat-collector · chat-detector 를 두므로(O7d
-        뒤) 일꾼(render · upload)이 이 갈래입니다.
+        뒤) 앱 서버 키는 이 갈래가 아닙니다. 일꾼은 위 필터가 대상에서
+        빼므로 이 갈래에 오지 않습니다 — `prod/workers` 를 내려 서비스가
+        없을 때도 일꾼은 「일꾼 멈춤」 기록의 `INACTIVE` · `None` 갈래가
+        맡습니다.
     *   그 밖의 값(`DRAINING` · `INACTIVE` 등) → 멈춤 · kty 회부.
-    *   규칙의 전제: ECS 서비스 · 클러스터 자원은 `modules/ecs_service` 와
-        platform 의 클러스터 하나뿐입니다. 다른 클러스터 · 배치 루트가
-        생기면 이 규칙을 그 판으로 고칩니다.
+    *   규칙의 전제: 클러스터는 platform 의 `pokeclip-prod` 하나이고,
+        서비스 정의는 platform(앱 서버)과 `prod/workers`(일꾼 render ·
+        upload) 두 루트가 `modules/ecs_service` 로 만듭니다. 다른 클러스터 ·
+        루트가 생기면 이 규칙을 그 판으로 고칩니다.
 *   **완료 조건**: ① `ACTIVE` 였던 서비스마다 옛 태스크 교체 완료 — 아래
     읽기가 `1 COMPLETED <n> <n>`(배포 하나 · 완료 상태 · 실행 수 = 원하는
     수 — 옛 배포의 태스크가 남지 않음)이어야 합니다 ② 옛 공용 토큰
@@ -2481,6 +2681,53 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       --query 'services[0].[length(deployments),deployments[0].rolloutState,deployments[0].runningCount,desiredCount]' \
       --output text
     ```
+
+*   **일꾼 복원**(쓰기 — 실행 직전 **kty 승인**): 앱 서버 키가 모두 완료
+    조건 ① 의 `1 COMPLETED <n> <n>` 이 된 뒤에 합니다. `workers-before.txt`
+    의 기록값으로 되돌립니다 — 이 절차가 내린 것(`<키> ACTIVE 1`)만 1 로
+    올립니다.
+
+    올리기 직전에 그 서비스를 다시 읽습니다(읽기). 올리는 조건은 둘입니다.
+
+    1.  아래 읽기가 `ACTIVE 0` 입니다. 그 밖이면(누가 다시 띄웠거나 서비스가
+        사라짐) 올리지 않고 멈춤 · kty 회부입니다.
+    1.  멈춘 뒤 그 서비스의 긴급 정지 기록([prod/workers](../prod/workers/README.md)
+        「긴급 정지와 상태 어긋남」 의 어긋남 · 시각 · 사유)이 없습니다.
+        이 절차가 이미 0 으로 내렸으므로, 그사이의 긴급 정지는 원하는 수로는
+        보이지 않습니다 — 기록이 있으면 0 을 유지하고 그 정지의 절차를
+        따릅니다. 보조 신호로 멈춘 시각 뒤 그 서비스의 `UpdateService`
+        호출을 CloudTrail 에서 봅니다(아래 읽기 — `stopped_at` 은 「일꾼
+        멈춤」 이 `workers-stopped-at.txt` 에 남긴 그 키의 시각, 몇 분 늦게
+        보임). ECS
+        서비스 이벤트는 원하는 수 변경 자체를 적지 않고 태스크 시작 · 정지만
+        적어, 원하는 수 변경의 기록은 이쪽입니다. 이 절차가 낸 호출(멈춤 한
+        번) 밖의 호출이 있으면 기록이 없어도 0 을 유지하고 kty 회부입니다.
+
+    ```shell
+    aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
+      --query 'services[0].[status,desiredCount]' --output text
+    stopped_at="$(awk '$1 == "<키>" { print $2 }' "${work}/workers-stopped-at.txt")"
+    aws cloudtrail lookup-events --region ap-northeast-2 \
+      --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateService \
+      --start-time "${stopped_at}" \
+      --query "Events[?contains(CloudTrailEvent, 'pokeclip-prod-<키>')].EventTime" \
+      --output text | tr '\t' '\n'
+    ```
+
+    ```shell
+    aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+      --service "pokeclip-prod-<키>" --desired-count 1 \
+      --query service.serviceName --output text
+    ```
+
+    *   기록이 `ACTIVE 0` 이던 서비스는 0 을 유지하고 기록합니다(다시
+        띄우는 것은 그 정지의 절차 · 승인 몫).
+    *   기록이 `INACTIVE` · `None` 이던 서비스는 할 일이 없습니다(지워졌거나
+        없음 — 복원 대상 아님).
+    *   완료: 올린 서비스마다 `wait_zero` 와 같은 읽기
+        (`services[0].[desiredCount,runningCount,pendingCount]`)가 `1 1 0`
+        입니다. 새 태스크가 새 값을 읽습니다.
 
 ### 1단-나 ② 9. 응답기 기동 · 교체
 
@@ -2592,6 +2839,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 *   볼트 raw(비밀 값 훑기 뒤 · 계정 ID · ARN 은 가림): 각 걸음의 명령 ·
     출력 · 판정, 8 (b) 판정, (b2) 측정마다 시각 · 종료 코드 · 오류 코드,
     (c) 대기 시작 · 끝 시각, 서비스 키마다 재배포 또는 「서비스 없음」,
+    일꾼의 멈춤 전 기록(`workers-before.txt`) · 멈춘 시각 · 복원 결과,
     거부 창 길이, 옛 공용 토큰 401.
 *   POK-429 코멘트와 완료 전이.
 
