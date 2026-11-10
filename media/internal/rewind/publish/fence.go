@@ -28,11 +28,12 @@ UPDATE stream_sessions
 //
 // 잠금 순서 고정(POK-525 종결 r3 M1). 여러 스트림의 세션 행을 한 문장에 잠그는 것은 이 문장뿐이고, 하한 원장 올림(index
 // raiseSQL)은 열린 회차의 세션 행을 FOR SHARE 로 (stream, round) 순 — edgebounds Writer 가 Go 의 바이트 비교로 정렬한
-// 입력 순서 — 으로 잠근다. 순서 없는 UPDATE 는 힙(물리) 순서로 잠가 그 순서와 엇갈리면 교착(40P01)이다. 바깥 UPDATE 의
-// 조인은 순서를 정하지 않으므로 안쪽 질의가 같은 순서로 먼저 잠근다 — ORDER BY 뒤에 FOR NO KEY UPDATE 가 돌고(비키 열
-// UPDATE 와 같은 강도 — 조각 INSERT 의 FK FOR KEY SHARE 는 막지 않는다), 정렬은 바이트 순(COLLATE "C")이다. DB 기본
-// 정렬(en_US 등)은 대소문자 섞인 스트림 id 에서 바이트 순과 갈린다. 회차가 없는(round_id NULL — M6 전) 행은 그 스트림 끝에
-// 서고 올림은 그 행을 잡지 않는다.
+// 입력 순서 — 으로 잠근다. 순서 없는 UPDATE 는 힙(물리) 순서로 잠가 그 순서와 엇갈리면 순환 대기다 — 올림의
+// lock_timeout(500ms — index raiseTxnLimitsSQL)이 deadlock_timeout(1초)보다 먼저 끊어 올림이 55P03 으로 끝나고, 그
+// 상한이 없으면 교착(40P01)이다. 바깥 UPDATE 의 조인은 순서를 정하지 않으므로 안쪽 질의가 같은 순서로 먼저 잠근다 —
+// ORDER BY 뒤에 FOR NO KEY UPDATE 가 돌고(비키 열 UPDATE 와 같은 강도 — 조각 INSERT 의 FK FOR KEY SHARE 는 막지
+// 않는다), 정렬은 바이트 순(COLLATE "C")이다. DB 기본 정렬(en_US 등)은 대소문자 섞인 스트림 id 에서 바이트 순과
+// 갈린다. 회차가 없는(round_id NULL — M6 전) 행은 그 스트림 끝에 서고 올림은 그 행을 잡지 않는다.
 const fenceReleaseSQL = `
 UPDATE stream_sessions s
    SET writer_fence = NULL

@@ -823,8 +823,10 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
         같은 순서(스트림 → 회차 · 바이트 순)로 잡아 서로 막지 않는다. 올림
         문장마다 `lock_timeout` 500ms 를 걸어, 못 잡으면 그 문장을 되돌리고
         `edge_bounds_write_failing`(`pass=raise` · `reason=failed`)을 낸 뒤
-        다음 올림 틱(5분)에 다시 한다 — 한 스트림의 대기가 이미 쥔 다른
-        스트림 행의 갱신을 붙잡는 시간도 그만큼으로 묶인다.
+        다음 올림 틱(5분)에 다시 한다. `lock_timeout` 은 잠금 대기
+        하나마다 걸린다 — 올림이 이미 쥔 다른 스트림 행의 갱신을 붙잡는
+        시간은 그 문장이 실제로 기다린 대기(저마다 500ms 미만)의 합이고,
+        많아야 Writer 의 호출 상한(5초)이다.
 *   **해제(30초마다):** 회차가 닫히면(열린 세션 없음 · 세션 행 없음 포함)
     KVS 키를 지우고 원장 행에 해제 시각을 적는다. 120초 유예 뒤 그 행을
     지운다.
@@ -887,8 +889,18 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 *   **경보 대상**은 ERROR 다섯(`_config_invalid` · `_degraded` ·
     `dvr_floor_release_overdue` · `dvr_floor_blocks_list` ·
     `_unreleased_without_writer`)과 WARN 둘이다.
-    *   `_write_failing` — 같은 `pass` 의 `_write_recovered` 가 오래 오지
-        않으면 경보다.
+    *   `_write_failing` — 회복 줄(같은 `pass` 의 `_write_recovered`)은
+        그 패스가 다음에 성공할 때 나온다. 실패가 한 번뿐이어도 회복은 다음
+        틱에야 오므로, 문턱은 그 패스 주기의 두 번이다.
+        *   `pass=raise` — 올림은 5분(`FlushEvery` 300초)마다라 실패 한
+            번에도 회복이 5분 뒤에 온다. 실패 줄 뒤 **10분**(올림 주기 두
+            번) 안에 회복 줄이 없으면 경보다 — 다음 올림도 실패했거나 그만큼
+            밀렸다는 뜻이다.
+        *   `pass=release` — 해제는 30초마다라 문턱은 **1분**(해제 주기 두
+            번)이다. 다만 올림 틱에는 다음 해제가 올림 패스가 끝날 때까지
+            밀리므로(위 「해제」), 그 시간을 더한다. 올림 후보 회차가
+            400개 이하면 올림 패스는 많아야 4분이라 **5분**이면 덮인다
+            (runtime-1a 「`released_stuck` 판정」 과 같은 셈).
     *   `_unreleased_check_failed` — **줄 하나가 곧 경보다.** 실패 구간의
         첫 확인에만 한 줄이고 회복 줄이 없어, 「안 풀림」 을 다음 줄로 알 수
         없다. Writer 없는 상자에서 해제 행 삭제만 계속 실패하고 미해제

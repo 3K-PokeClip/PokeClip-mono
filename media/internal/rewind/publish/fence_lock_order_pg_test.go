@@ -3,7 +3,8 @@ package publish
 // 반납의 잠금 순서(POK-525 종결 r3 M1) — 반납(fenceReleaseSQL)은 이 writer 가 쥔 세션 행을 여러 스트림에 걸쳐 한
 // 문장에 잠그고, 하한 원장 올림(index raiseSQL)은 열린 회차의 세션 행을 FOR SHARE 로 (stream, round) 순 — 부르는
 // 쪽(edgebounds Writer)이 바이트 순으로 정렬한 입력 순서 — 으로 잠근다. 두 문장이 같은 행 둘을 다른 순서로 쥐면
-// 교착(40P01)이다. PG 통합이다(PG_DSN 이 없으면 skip).
+// 순환 대기다 — 올림의 lock_timeout(500ms)이 deadlock_timeout(1초)보다 먼저 걸려 올림이 55P03 으로 끝나고, 그
+// 상한이 없으면 교착(40P01)이다. PG 통합이다(PG_DSN 이 없으면 skip).
 
 import (
 	"context"
@@ -29,7 +30,9 @@ import (
 //  3. 반납이 기다리는 것을 pg_stat_activity 로 확인한 뒤 Raise([first, second]) 를 보낸다. FOR SHARE 는 쥔 쪽이
 //     공유 잠금뿐이면 줄(튜플 잠금)을 서지 않고 바로 얻는다(heap_lock_tuple) — 올림이 first 를 얻는다. 순서 없는
 //     반납이면 올림은 반납이 쥔 second 에서 기다리고, 정렬한 반납이면 second 도 얻어 끝난다.
-//  4. 쥔 것을 풀면 순서 없는 반납은 first 에서 올림을 기다려 순환이 닫힌다 — deadlock_timeout 뒤 한쪽이 40P01 이다.
+//  4. 쥔 것을 풀면 순서 없는 반납은 first 에서 올림을 기다려 순환이 닫힌다. 올림의 lock_timeout(500ms — index
+//     raiseTxnLimitsSQL)이 deadlock_timeout(1초)보다 먼저라 올림이 55P03 으로 끝나 쥔 것을 놓고, 반납은 그 뒤
+//     끝난다. 상한이 빠지면 deadlock_timeout 뒤 한쪽이 40P01 이다. 시험은 둘 다 순서가 엇갈린 것으로 본다.
 //
 // 대소문자 섞인 스트림은 정렬 기준을 가른다 — 올림의 입력 순서는 Go 의 바이트 비교(edgebounds compareFloor)라 DB
 // 기본 정렬(en_US 등)의 ORDER BY 와 다를 수 있다("Zb" < "aa" 는 바이트 순에서만 참).
@@ -87,8 +90,8 @@ func TestReleaseLocksInRaiseOrder(t *testing.T) {
 				var pgErr *pgconn.PgError
 				switch {
 				case err == nil:
-				case errors.As(err, &pgErr) && pgErr.Code == "40P01":
-					t.Errorf("%s 이 교착(40P01)으로 끝났다 — 반납과 올림의 잠금 순서가 엇갈린다: %v", r.name, err)
+				case errors.As(err, &pgErr) && (pgErr.Code == "40P01" || pgErr.Code == "55P03"):
+					t.Errorf("%s 이 %s(교착 · 잠금 시간 초과)로 끝났다 — 반납과 올림의 잠금 순서가 엇갈린다: %v", r.name, pgErr.Code, err)
 				default:
 					t.Errorf("%s 오류: %v", r.name, err)
 				}
@@ -157,8 +160,8 @@ func shareRow(t *testing.T, pool *pgxpool.Pool, id string) (release func()) {
 	return release
 }
 
-// waitStmtLockWait 는 문장 텍스트에 marker 가 든 이 DB 의 연결이 행 잠금을 기다릴 때까지 기다린다. done 이 닫히면(그 문장이
-// 기다리지 않고 끝났다) 바로 돌아온다. 10초 안에 둘 다 아니면 실패다.
+// waitStmtLockWait 는 문장 텍스트에 marker 가 든 이 DB 의 연결이 행 잠금을 기다릴 때까지 기다린다. done 이
+// 닫히면(그 문장이 기다리지 않고 끝났다) 바로 돌아온다. 10초 안에 둘 다 아니면 실패다.
 func waitStmtLockWait(t *testing.T, pool *pgxpool.Pool, marker string, done <-chan struct{}) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
