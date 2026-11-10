@@ -133,8 +133,12 @@ final class JoinedRenderer {
         }
         progress.report(30, "loudness");
 
-        SegmentTiming frame = timings.get(job.plan().mediaSeqs().getFirst());
-        logColorMixed(jobId, job.plan().mediaSeqs(), timings);
+        // 화면 크기 · 되살릴 색 표지는 결과 영상의 첫 조각에서 읽는다(계획 첫 조각은 시작 쪽에서 빠질 수 있다 · P34).
+        // 화면 크기는 결과 조각 모두 같다(requireUniform).
+        List<Long> videoSeqs = videoSeqs(timeline);
+        SegmentTiming frame = timings.get(videoSeqs.getFirst());
+        logColorDropped(jobId, videoSeqs.getFirst(), frame.color());
+        logColorMixed(jobId, videoSeqs, timings);
         long finalBegan = System.nanoTime();
         FinalStage stage = new FinalStage(frame, ts, runs, recipe.tracks(), loudnessFix);
         List<Produced> produced = encode(recipe, captions, stage, dir, deadline, progress, peak);
@@ -390,7 +394,8 @@ final class JoinedRenderer {
      *
      * <p>조각 이음 자리 간격은 거절 사유가 아니다. 재접속 이음은 두 녹화의 첫 프레임 시차(c)가 달라 30fps 끼리도 이음 간격이
      * 2ms 까지 줄 수 있다(실제 OBS 판독 c 6000 · 3180 → 180틱 — D59 1라운드 cx H). 그 두 프레임은 같은 10ms 칸에 들 수 있어,
-     * 자막 경계가 정확히 그 사이에 걸리면 이웃 프레임 하나를 더 덮거나 덜 덮는 한계가 남는다.
+     * 자막 경계가 정확히 그 사이에 걸리면 이웃 프레임 하나를 더 덮거나 덜 덮는 한계가 남는다. 「하나」 는 단독 이음 기준이다 — 한
+     * 장짜리 조각이 연달아 이어지면 셋 이상이 한 10ms 칸에 들 수 있다.
      */
     static void requireAssFrames(UUID jobId, Subtitles spec, Captions captions, RenderTimeline timeline,
                                  Map<Long, SegmentTiming> timings, long timescale) {
@@ -512,7 +517,7 @@ final class JoinedRenderer {
      * 값이라, 이웃 프레임 간격이 {@value AssWriter#MIN_FRAME_GAP_MS}ms 이상이면 계획이 고른 프레임과 정확히 같은 프레임을
      * 덮는다({@link AssWriter#onFrames}). 조각 안 원본 간격이 그보다 촘촘하면 여기 오기 전에 {@link #requireAssFrames} 가
      * 주문을 거절한다. 조각 이음 자리 두 프레임이 그보다 가까우면(재접속) 자막 경계가 정확히 그 사이일 때만 이웃 프레임
-     * 하나가 어긋날 수 있다.
+     * 하나가 어긋날 수 있다. 「하나」 는 단독 이음 기준이다 — 한 장짜리 조각이 연달아 이어지면 셋 이상이 한 10ms 칸에 들 수 있다.
      */
     private static String burnFile(Subtitles spec, List<SubtitleSegment> framed, Output output, Path dir) {
         if (spec.position() == null) {
@@ -564,31 +569,48 @@ final class JoinedRenderer {
     }
 
     /**
+     * 결과 영상에 프레임이 든 조각 seq(결과 차례 · 겹침 없음). 시작 쪽에서 빠진 조각({@code render.in_advanced}) · 끝 쪽에서 빠진
+     * 조각 · 소리만 남은 끝 조각은 들지 않는다 — 계획 {@code mediaSeqs} 와 다를 수 있다.
+     */
+    private static List<Long> videoSeqs(RenderTimeline timeline) {
+        return timeline.videoCuts().stream().map(VideoCut::seq).distinct().toList();
+    }
+
+    /**
      * 결과 조각 사이 색 표지가 다르면 경고한다(설계 13.5 「색 표지」 · P34). 결과에 되살리는 표지는 첫 결과 조각 값 하나다 — 출력
      * 표지는 영상 전체에 하나뿐이고, 옛 꼴도 인코더가 첫 프레임 값으로 열린다. 화면 크기 · 시간 단위와 달리 표지가 달라도 이음은
-     * 깨지지 않아 거절하지 않는다. 다른 조각이 여럿이어도 첫 하나만 남긴다.
+     * 깨지지 않아 거절하지 않는다. 다른 조각이 여럿이어도 첫 하나만 남긴다. 표지 글자는 받는 값 목록을 지난 것만 싣는다({@link
+     * RenderCommands#colorLabel}). 판독이 없는 조각은 건너뛴다 — 앞 단계가 보장하는 것이라 신호 하나로 렌더를 깨지 않는다.
+     *
+     * @param videoSeqs 결과 영상에 프레임이 든 조각(결과 차례 · 첫 조각이 되살리는 표지의 기준)
      */
-    static void logColorMixed(UUID jobId, List<Long> mediaSeqs, Map<Long, SegmentTiming> timings) {
-        long usedSeq = mediaSeqs.getFirst();
-        ColorTags used = timings.get(usedSeq).color();
-        for (long seq : mediaSeqs) {
-            ColorTags color = timings.get(seq).color();
-            if (!color.equals(used)) {
-                log.warn("render.color_mixed jobId={} seq={} color={} used={} usedSeq={}", jobId, seq, label(color),
-                        label(used), usedSeq);
+    static void logColorMixed(UUID jobId, List<Long> videoSeqs, Map<Long, SegmentTiming> timings) {
+        long usedSeq = videoSeqs.getFirst();
+        SegmentTiming usedTiming = timings.get(usedSeq);
+        if (usedTiming == null) {
+            return;
+        }
+        ColorTags used = usedTiming.color();
+        for (long seq : videoSeqs) {
+            SegmentTiming t = timings.get(seq);
+            if (t != null && !t.color().equals(used)) {
+                log.warn("render.color_mixed jobId={} seq={} color={} used={} usedSeq={}", jobId, seq,
+                        RenderCommands.colorLabel(t.color()), RenderCommands.colorLabel(used), usedSeq);
                 return;
             }
         }
     }
 
-    /** 신호용 색 표지 글자 — 범위/행렬/전달/원색(ffprobe 칸 차례 · 미지정은 unknown). */
-    private static String label(ColorTags color) {
-        return String.join("/", known(color.range()), known(color.space()), known(color.transfer()),
-                known(color.primaries()));
-    }
-
-    private static String known(String value) {
-        return value == null ? "unknown" : value;
+    /**
+     * 되살릴 표지에서 원본에 값이 있는데 받는 값 목록 밖이라 버리는 칸이 있으면 DEBUG 한 줄을 남긴다(그 칸은 결과에서 미지정).
+     * ffmpeg 를 올려 받는 이름이 늘었는데 목록을 고치지 않은 경우를 찾는 진단이다. 값 글자는 싣지 않고 버린 칸의 {@code setparams}
+     * 옵션 이름(코드 상수)만 싣는다.
+     */
+    static void logColorDropped(UUID jobId, long seq, ColorTags color) {
+        List<String> dropped = RenderCommands.droppedColorOptions(color);
+        if (!dropped.isEmpty()) {
+            log.debug("render.color_dropped jobId={} seq={} options={}", jobId, seq, String.join(",", dropped));
+        }
     }
 
     /** 계획 길이와 결과 길이의 차(렌더 때 하한 없음 · 설계 9.3). */

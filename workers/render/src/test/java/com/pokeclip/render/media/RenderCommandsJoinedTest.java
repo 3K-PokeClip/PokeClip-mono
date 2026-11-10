@@ -213,6 +213,23 @@ class RenderCommandsJoinedTest {
         assertThat(some.get(some.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]setparams=colorspace=bt709,");
     }
 
+    /** 신호 글자는 받는 값만 그대로 · 미지정은 unknown · 목록 밖(문법 글자 · 줄바꿈 · 대문자 포함)은 other 다. */
+    @Test
+    void 색_신호_글자는_받는_값_목록_밖이면_other_다() {
+        assertThat(RenderCommands.colorLabel(new ColorTags("pc", "bt2020nc", "arib-std-b67", "bt2020")))
+                .isEqualTo("pc/bt2020nc/arib-std-b67/bt2020");
+        assertThat(RenderCommands.colorLabel(new ColorTags("pc\nx=1", null, "BT709", "bt709[x];[x]null")))
+                .isEqualTo("other/unknown/other/other");
+    }
+
+    /** 버리는 칸은 값이 있는데 받는 값 목록 밖인 칸뿐이다(setparams 옵션 이름 · 그래프에 싣는 차례). */
+    @Test
+    void 버리는_색_칸은_값이_있는데_받는_값_목록_밖인_칸이다() {
+        assertThat(RenderCommands.droppedColorOptions(new ColorTags("unknown", "vgamut", "bt709", "reserved")))
+                .containsExactly("range", "color_primaries", "colorspace");
+        assertThat(RenderCommands.droppedColorOptions(new ColorTags("tv", null, null, "bt709"))).isEmpty();
+    }
+
     @Test
     void 영상_사슬이_원본_영상_입력에서_시작하지_않으면_색_표지를_붙이지_못해_거부한다() {
         Composition.Plan odd = new Composition.Plan("[0:v]null", List.of(), 2);

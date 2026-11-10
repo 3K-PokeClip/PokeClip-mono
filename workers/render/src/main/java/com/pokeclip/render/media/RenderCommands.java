@@ -75,6 +75,12 @@ public final class RenderCommands {
     /** 새 꼴 영상 사슬이 시작하는 이름표({@link Composition.Plan#graph} 의 계약). 색 표지는 이 바로 뒤에 붙인다. */
     private static final String SOURCE_VIDEO = "[0:v:0]";
 
+    // setparams 의 색 칸 옵션 이름(ffmpeg n8.0.1 `ffmpeg -h filter=setparams`).
+    private static final String RANGE_OPTION = "range";
+    private static final String PRIMARIES_OPTION = "color_primaries";
+    private static final String TRANSFER_OPTION = "color_trc";
+    private static final String SPACE_OPTION = "colorspace";
+
     // setparams 가 받는 색 칸 값(ffmpeg n8.0.1 `ffmpeg -h filter=setparams`). ffprobe 가 내는 libavutil 이름과 같은 글자다.
     // 모름 · 미지정 · 예약은 넣지 않는다 — 그 칸은 붙이지 않아 지금처럼 미지정으로 남는다.
     private static final Set<String> COLOR_RANGES = Set.of("tv", "pc");
@@ -402,10 +408,10 @@ public final class RenderCommands {
      */
     private static String withColor(String chain, ColorTags color) {
         List<String> params = new ArrayList<>();
-        addColor(params, "range", color.range(), COLOR_RANGES);
-        addColor(params, "color_primaries", color.primaries(), COLOR_PRIMARIES);
-        addColor(params, "color_trc", color.transfer(), COLOR_TRANSFERS);
-        addColor(params, "colorspace", color.space(), COLOR_SPACES);
+        addColor(params, RANGE_OPTION, color.range(), COLOR_RANGES);
+        addColor(params, PRIMARIES_OPTION, color.primaries(), COLOR_PRIMARIES);
+        addColor(params, TRANSFER_OPTION, color.transfer(), COLOR_TRANSFERS);
+        addColor(params, SPACE_OPTION, color.space(), COLOR_SPACES);
         if (params.isEmpty()) {
             return chain;
         }
@@ -419,6 +425,41 @@ public final class RenderCommands {
     private static void addColor(List<String> params, String option, String value, Set<String> accepted) {
         if (value != null && accepted.contains(value)) {
             params.add(option + "=" + value);
+        }
+    }
+
+    /**
+     * 신호용 색 칸 글자 — 범위/행렬/전달/원색(ffprobe 칸 차례). 받는 값 목록에 있는 글자만 그대로 싣고, 미지정은 {@code unknown},
+     * 목록 밖은 {@code other} 로 바꾼다 — 원본 파일 머리에서 온 글자를 로그 줄에 그대로 싣지 않는다.
+     */
+    public static String colorLabel(ColorTags color) {
+        return String.join("/", colorName(color.range(), COLOR_RANGES), colorName(color.space(), COLOR_SPACES),
+                colorName(color.transfer(), COLOR_TRANSFERS), colorName(color.primaries(), COLOR_PRIMARIES));
+    }
+
+    private static String colorName(String value, Set<String> accepted) {
+        if (value == null) {
+            return "unknown";
+        }
+        return accepted.contains(value) ? value : "other";
+    }
+
+    /**
+     * 원본에 값이 있는데 받는 값 목록 밖이라 {@link #renderJoined} 가 싣지 않는 칸의 {@code setparams} 옵션 이름({@link
+     * #withColor} 차례). 미지정 칸은 버리는 것이 아니라 넣지 않는다.
+     */
+    public static List<String> droppedColorOptions(ColorTags color) {
+        List<String> dropped = new ArrayList<>();
+        addDropped(dropped, RANGE_OPTION, color.range(), COLOR_RANGES);
+        addDropped(dropped, PRIMARIES_OPTION, color.primaries(), COLOR_PRIMARIES);
+        addDropped(dropped, TRANSFER_OPTION, color.transfer(), COLOR_TRANSFERS);
+        addDropped(dropped, SPACE_OPTION, color.space(), COLOR_SPACES);
+        return List.copyOf(dropped);
+    }
+
+    private static void addDropped(List<String> dropped, String option, String value, Set<String> accepted) {
+        if (value != null && !accepted.contains(value)) {
+            dropped.add(option);
         }
     }
 
