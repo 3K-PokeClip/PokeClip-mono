@@ -31,7 +31,8 @@ type ledgerState struct {
 // 안 같은 행 두 번은 문장 오류다(CHECK · ON CONFLICT 가 같은 행을 두 번 못 고침). ClosedUnreleased 는 열린 세션이 없는
 // 미해제 행을 (stream, round) 순으로 limit 개, MarkReleased 는 미해제 행에만 시각을 적고, DeleteReleased 는 해제 뒤
 // olderThan 이 지난 행을 지운다. 여러 고루틴이 함께 불러도 된다. 운영 원장(index.EdgeBoundsLedger.Raise)은 1 보다
-// 작은 값을 문장에 싣기 전에 걸러 오류 없이 넘기고, 가짜는 오류로 드러낸다 — Writer 는 1 이상만 보내 실경로 차이는 없다.
+// 작은 값을 문장에 싣기 전에 걸러 오류 없이 넘기고, 가짜는 오류로 드러낸다 — Writer 는 1 이상만 보내 실경로 차이는
+// 없다.
 type fakeLedger struct {
 	mu   sync.Mutex
 	now  func() time.Time

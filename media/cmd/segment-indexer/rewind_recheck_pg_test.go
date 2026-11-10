@@ -1,8 +1,9 @@
 package main
 
 // ending 재조회 × 실 장부(POK-525 Ⓒ-7 — 설계 5-3 · 8-2 E19). 상자 둘이 한 DB 를 본다. 각 상자는 상태 몫(Board · M5
-// 받은편지함)과 운영 상태 읽기 몸체(index.LoadStreamPlayback)를 들고, 정산 스캔은 비워 스스로 장부를 바꾸지 않는다 — 전이는
-// 다른 상자(또는 Writer)가 DB 에서 일으키고, 상태 표지는 어느 상자에도 오지 않는다. 루프 고루틴 자리는 시험 고루틴이다.
+// 받은편지함)과 운영 상태 읽기 몸체(index.LoadStreamPlayback)를 들고, 정산 스캔은 비워 스스로 장부를 바꾸지 않는다 —
+// 전이는 다른 상자(또는 Writer)가 DB 에서 일으키고, 상태 표지는 어느 상자에도 오지 않는다. 루프 고루틴 자리는 시험
+// 고루틴이다.
 
 import (
 	"context"
@@ -19,7 +20,8 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
-// newRecheckBox 는 실 장부 pool 위의 상자 하나다. 상태 전달 sink 는 그 상자의 M5 받은편지함이라 읽기 결과가 Board 까지 간다.
+// newRecheckBox 는 실 장부 pool 위의 상자 하나다. 상태 전달 sink 는 그 상자의 M5 받은편지함이라 읽기 결과가 Board 까지
+// 간다.
 func newRecheckBox(t *testing.T, pool *pgxpool.Pool) *finalLoop {
 	t.Helper()
 	f := &finalLoop{offlineLoop: newOfflineLoop(t, nil), lanes: publish.NewLanes(), inbox: session.NewPlaybackInbox(),
@@ -72,8 +74,8 @@ VALUES ($1, 1, 0, $2, 4000, 'k1', 'uploaded', 'S19', $2), ($1, 2, 4000, $3, 4000
 		recheckStream, now.Add(-time.Hour), now.Add(-time.Hour+4*time.Second))
 }
 
-// awaitRoundMode 는 from 부터 1초 간격으로 상자들을 돌려, 회차 경로가 상자마다 want 가 되는 시각을 돌려준다. limit 안에 닿지
-// 않은 상자가 있으면 FAIL 이다.
+// awaitRoundMode 는 from 부터 1초 간격으로 상자들을 돌려, 회차 경로가 상자마다 want 가 되는 시각을 돌려준다. limit 안에
+// 닿지 않은 상자가 있으면 FAIL 이다.
 func awaitRoundMode(t *testing.T, from time.Time, limit time.Duration, want status.Mode, boxes ...*finalLoop) time.Time {
 	t.Helper()
 	for now := from; !now.After(from.Add(limit)); now = now.Add(time.Second) {
@@ -94,8 +96,8 @@ func awaitRoundMode(t *testing.T, from time.Time, limit time.Duration, want stat
 }
 
 // E19 — 다른 상자의 Writer 가 해제 행을 지워도, 상태 표지를 받지 못한 두 상자의 Board 가 재조회 주기 몇 번 안에 vod 로
-// 넘어간다(읽기 상한 넉넉 — 2). 지운 직후 주기 안에서는 ending 에 머문다(재조회 말고 알리는 길이 없다). 판정식의 「원장 행이
-// 있으면 ending」 줄(Ⓒ-3)에 기댄다. 변이 = 재조회 제거 → 주기 몇 번이 지나도 ending 고착 FAIL.
+// 넘어간다(읽기 상한 넉넉 — 2). 지운 직후 주기 안에서는 ending 에 머문다(재조회 말고 알리는 길이 없다). 판정식의 「원장
+// 행이 있으면 ending」 줄(Ⓒ-3)에 기댄다. 변이 = 재조회 제거 → 주기 몇 번이 지나도 ending 고착 FAIL.
 func TestEndingRecheckE19LedgerDeleteByOtherBoxTurnsBoardsVOD(t *testing.T) {
 	pool := newWireTestPool(t)
 	execSQL(t, pool, `DELETE FROM stream_edge_bounds`)

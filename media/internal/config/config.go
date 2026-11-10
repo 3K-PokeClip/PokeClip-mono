@@ -500,9 +500,10 @@ func validateRewindPublicBaseURL(raw string) (string, error) {
 // UUID 다 — 테라폼 모듈 media_host 의 edge_bounds_kvs_arn 검사와 같다.
 var kvsResourcePattern = regexp.MustCompile(`^key-value-store/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// loadEdgeBoundsKVSARN 은 REWIND_EDGE_BOUNDS_KVS_ARN 을 읽어 KVS ARN 꼴(arn:aws:cloudfront::<12자리 계정>:key-value-store/<ID>
-// — 지역 칸이 빈 전역 자원 · aws 파티션만 · SDK 끝점 규칙과 같다)을 본다. 빈 값이면 끔이다. 꼴 밖이면 오류가 아니라 빈
-// ARN 과 거부 이유를 돌려준다(Config.EdgeBoundsConfigInvalid). 이유에는 원문을 싣지 않는다.
+// loadEdgeBoundsKVSARN 은 REWIND_EDGE_BOUNDS_KVS_ARN 을 읽어 KVS ARN
+// 꼴(arn:aws:cloudfront::<12자리 계정>:key-value-store/<ID> — 지역 칸이 빈 전역 자원 · aws 파티션만 · SDK 끝점 규칙과
+// 같다)을 본다. 빈 값이면 끔이다. 꼴 밖이면 오류가 아니라 빈 ARN 과 거부 이유를
+// 돌려준다(Config.EdgeBoundsConfigInvalid). 이유에는 원문을 싣지 않는다.
 func loadEdgeBoundsKVSARN(env func(string) string) (kvsARN, invalid string) {
 	raw := strings.TrimSpace(env("REWIND_EDGE_BOUNDS_KVS_ARN"))
 	if raw == "" {

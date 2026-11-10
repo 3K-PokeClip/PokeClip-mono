@@ -117,8 +117,8 @@ func runInterleaved(actors []actor, choose func(n int) int) {
 	}
 }
 
-// eachInterleaving 은 run 을 가능한 모든 고름 열로 한 번씩 부르고 그 수를 돌려준다(깊이 우선 — 고름 열의 앞부분이 같으면
-// 상태가 같다는 것에 기댄다. 시계는 멈춰 있다).
+// eachInterleaving 은 run 을 가능한 모든 고름 열로 한 번씩 부르고 그 수를 돌려준다(깊이 우선 — 고름 열의 앞부분이
+// 같으면 상태가 같다는 것에 기댄다. 시계는 멈춰 있다).
 func eachInterleaving(run func(choose func(n int) int)) int {
 	var script []int
 	for count := 1; ; count++ {
@@ -170,9 +170,10 @@ func (w *world) actorWriter(t *testing.T, name string) (*Writer, *gate) {
 }
 
 // 한 번 지운 키는 되살아나지 않는다(Writer 계약 3 · E1). 올림(상자 A) · 해제(상자 B) · 회차 닫기의 모든 차례에서, 끝에
-// 해제 한 번을 더 돌리면 KVS 에 키가 없고 원장 행은 해제돼 있다. 「첫 올림 전」 은 KVS 에 키가 아직 없는 자리다 — 거기서
-// 해제가 지우기만 보내면 판이 그대로라 옛 판으로 보낸 put 이 통과해 키가 되살아난다(H3-4). 해제 표지(_release)가 그
-// 판을 바꾼다. 잡는 결함: 표지 put 을 빼거나, 판보다 원장을 먼저 읽거나, 실패 뒤 원장을 다시 읽지 않고 옛 값을 보내는 것.
+// 해제 한 번을 더 돌리면 KVS 에 키가 없고 원장 행은 해제돼 있다. 「첫 올림 전」 은 KVS 에 키가 아직 없는 자리다 —
+// 거기서 해제가 지우기만 보내면 판이 그대로라 옛 판으로 보낸 put 이 통과해 키가 되살아난다(H3-4). 해제 표지(_release)가
+// 그 판을 바꾼다. 잡는 결함: 표지 put 을 빼거나, 판보다 원장을 먼저 읽거나, 실패 뒤 원장을 다시 읽지 않고 옛 값을
+// 보내는 것.
 func TestReleasedKeyNeverReappearsUnderAnyInterleaving(t *testing.T) {
 	for _, seeded := range []bool{false, true} {
 		name := map[bool]string{false: "첫 올림 전", true: "올림 뒤"}[seeded]

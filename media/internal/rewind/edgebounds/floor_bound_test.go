@@ -39,8 +39,8 @@ func (c *chainLists) oldestServed(now time.Time, margin time.Duration) int64 {
 }
 
 // 최신 사슬의 목록 MSN 이 줄지 않게 발행될 때, 매 걸음 뒤 floor 는 CDN 이 지금 줄 수 있는 최신 사슬 목록의 첫 조각
-// seq(= MSN) 이하다 — 지금 최신 목록뿐 아니라 Margin 전에 최신이던 목록까지(무작위 발행 간격 · 올림 시각 · Margin 60초 ·
-// 0초). 잡는 결함: Margin 을 기다리지 않고 가장 새 관측을 하한으로 올리는 것 — CDN 이 아직 주는 바로 앞 목록의 첫
+// seq(= MSN) 이하다 — 지금 최신 목록뿐 아니라 Margin 전에 최신이던 목록까지(무작위 발행 간격 · 올림 시각 · Margin 60초
+// · 0초). 잡는 결함: Margin 을 기다리지 않고 가장 새 관측을 하한으로 올리는 것 — CDN 이 아직 주는 바로 앞 목록의 첫
 // 조각이 404 가 된다.
 func TestFloorNeverBlocksFirstSegmentOfLatestChainList(t *testing.T) {
 	for _, margin := range []time.Duration{60 * time.Second, 0} {

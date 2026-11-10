@@ -1,5 +1,6 @@
 // Package edgebounds 는 열린 회차의 /dvr 하한(floor)을 원장(PG)에서 CloudFront KeyValueStore(KVS)로 올리고, 회차가
-// 닫히면 KVS 키를 지워 푼다(POK-525 설계 2-3 · 3-3). 엣지 함수 dvr-floor.js 가 그 키로 하한보다 앞선 /dvr 조각을 막는다.
+// 닫히면 KVS 키를 지워 푼다(POK-525 설계 2-3 · 3-3). 엣지 함수 dvr-floor.js 가 그 키로 하한보다 앞선 /dvr 조각을
+// 막는다.
 //
 // 원장이 정본이고 KVS 는 사본이다. 이 파일은 계약(원장 · KVS 의 인터페이스와 값 타입)이고, key.go · value.go 가 엣지
 // 함수와 공유 골든으로 맞추는 KVS 키 · 값 원문이다.

@@ -53,9 +53,9 @@ func TestReleaseMarkerKeyNeverCollidesWithFloorKey(t *testing.T) {
 	}
 }
 
-// 골든의 줄 규약(머리말)을 어긴 파일은 읽기 오류다 — 두 시험(Go · node)이 같은 바이트를 같은 행으로 읽어야 하기 때문이다.
-// 잡는 결함: BOM · CR · NUL · UTF-8 아닌 바이트 · 열 수 · 빈 열 · 열 앞뒤 공백 가운데 하나라도 그냥 지나가면 node 의 줄
-// 나누기와 Go 의 줄 나누기가 다른 행을 볼 수 있다(CRLF 파일이면 node 쪽 마지막 열 끝에 \r 이 남는다).
+// 골든의 줄 규약(머리말)을 어긴 파일은 읽기 오류다 — 두 시험(Go · node)이 같은 바이트를 같은 행으로 읽어야 하기
+// 때문이다. 잡는 결함: BOM · CR · NUL · UTF-8 아닌 바이트 · 열 수 · 빈 열 · 열 앞뒤 공백 가운데 하나라도 그냥 지나가면
+// node 의 줄 나누기와 Go 의 줄 나누기가 다른 행을 볼 수 있다(CRLF 파일이면 node 쪽 마지막 열 끝에 \r 이 남는다).
 func TestParseGoldenRejectsLineRuleViolations(t *testing.T) {
 	const ok = "s\tr\ts/r\n"
 	if rows, err := parseGolden([]byte("# 머리\n\n" + ok)); err != nil || len(rows) != 1 {

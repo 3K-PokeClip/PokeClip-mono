@@ -3,8 +3,8 @@ package index
 // 판정식의 하한 원장 줄(POK-525 설계 4-3 · 계획 Ⓒ-3 · E3 앞 몫)의 실 PG 시험. 원장(stream_edge_bounds)에 그 회차 행이
 // 남아 있는 동안은 엣지 KVS 에 하한 키가 남았거나 지운 지 유예(ReleaseSettle)가 안 지난 때라, 완결된 회차도 vod 가
 // 아니라 ending 이다 — VOD 가 해제 · 유예보다 먼저 열리면 갓 연 VOD 의 하한 아래 조각이 엣지에서 404 다. 행이 지워진
-// 뒤(DeleteReleased)에야 vod 다. 세 읽기(회차 하나 · 스트림 최신 회차 · 기동 적재)가 판정식 한 글자를 쓰므로 셋 다 본다.
-// 변이 = 판정식의 원장 줄 제거 → 행 있음 · 유예 안 갈래가 vod 를 내 FAIL.
+// 뒤(DeleteReleased)에야 vod 다. 세 읽기(회차 하나 · 스트림 최신 회차 · 기동 적재)가 판정식 한 글자를 쓰므로 셋 다
+// 본다. 변이 = 판정식의 원장 줄 제거 → 행 있음 · 유예 안 갈래가 vod 를 내 FAIL.
 
 import (
 	"context"
@@ -22,8 +22,8 @@ func plantFrozenRound(t *testing.T, pool *pgxpool.Pool, stream, round string) {
 	plantFrozenRoundAt(t, pool, stream, round, 1, time.Minute)
 }
 
-// plantFrozenRoundAt 은 completedAgo 전에 닫힌 완결 · 동결 회차 round 다(조각 seq 하나 · 한 시간 방송). 한 스트림에 회차
-// 여럿을 심으면 seq 를 달리 준다 — 늦게 닫힌 회차가 최신 회차다.
+// plantFrozenRoundAt 은 completedAgo 전에 닫힌 완결 · 동결 회차 round 다(조각 seq 하나 · 한 시간 방송). 한 스트림에
+// 회차 여럿을 심으면 seq 를 달리 준다 — 늦게 닫힌 회차가 최신 회차다.
 func plantFrozenRoundAt(t *testing.T, pool *pgxpool.Pool, stream, round string, seq int64, completedAgo time.Duration) {
 	t.Helper()
 	end := time.Now().UTC().Add(-completedAgo)
@@ -102,9 +102,9 @@ func TestRoundPlaybackHoldsEndingWhileEdgeBoundsRowRemains(t *testing.T) {
 
 // 원장 줄의 경계 — 만료가 원장 줄보다 앞이고(unknown), 원장 줄은 그 회차 열쇠만 본다(M6 전 세션의 NULL 회차는 빈 문자열
 // 회차 행에 걸리지 않고, 같은 스트림의 다른 회차 행은 최신 회차의 vod 를 막지 않는다). 기동 적재는 원장 행 회차를 완결
-// 시각과 무관하게(within 밖이어도) Ending 으로 싣는다 — 행이 오래 남으면 기동마다 실린다. 변이 = 판정식의 원장 줄 제거 →
-// 「다른 회차 · 원장 행 회차」 · 「within 밖」 FAIL · 원장 줄을 만료 줄 위로 → 「만료」 FAIL · 원장 줄의 회차 조건 제거 →
-// 「NULL 회차」 · 「다른 회차」 둘 FAIL(앞 시험의 「다른 스트림」 사례는 이 변이에서 통과한다).
+// 시각과 무관하게(within 밖이어도) Ending 으로 싣는다 — 행이 오래 남으면 기동마다 실린다. 변이 = 판정식의 원장 줄 제거
+// → 「다른 회차 · 원장 행 회차」 · 「within 밖」 FAIL · 원장 줄을 만료 줄 위로 → 「만료」 FAIL · 원장 줄의 회차 조건
+// 제거 → 「NULL 회차」 · 「다른 회차」 둘 FAIL(앞 시험의 「다른 스트림」 사례는 이 변이에서 통과한다).
 func TestRoundPlaybackEdgeBoundsBoundaries(t *testing.T) {
 	none := PlaybackPhase(0) // 기동 적재에 없음
 	for _, c := range []struct {

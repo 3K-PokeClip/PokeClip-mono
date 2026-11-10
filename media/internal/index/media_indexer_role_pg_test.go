@@ -63,10 +63,10 @@ package index
 // 문장(fence · P0 · P2′ · P4 · R3 · R4 · GAP)은 rewind/publish 역할 시험이 잰다. 여기 Insert 는 실물 결정자를
 // 끼우므로 그 문장들도 이 역할로 함께 돈다.
 //
-// FOR UPDATE 주의: 사이드카의 FOR UPDATE 는 stream_sessions(markInitUploadedSQL) · stream_edge_bounds(markReleasedSQL)에
-// 있고 UPDATE 권한이 필요하다. raiseSQL 의 stream_sessions FOR SHARE 도 UPDATE 권한이 있어야 돈다 — 열 하나라도
-// UPDATE 가 있으면 FOR SHARE · FOR NO KEY UPDATE 가 통과하고(PG 17 실측), 모든 열에서 UPDATE 를 거두면 Raise 가
-// 42501 이다.
+// FOR UPDATE 주의: 사이드카의 FOR UPDATE 는 stream_sessions(markInitUploadedSQL) ·
+// stream_edge_bounds(markReleasedSQL)에 있고 UPDATE 권한이 필요하다. raiseSQL 의 stream_sessions FOR SHARE 도 UPDATE
+// 권한이 있어야 돈다 — 열 하나라도 UPDATE 가 있으면 FOR SHARE · FOR NO KEY UPDATE 가 통과하고(PG 17 실측), 모든 열에서
+// UPDATE 를 거두면 Raise 가 42501 이다.
 // stream_segments 의 FOR UPDATE NOWAIT 은 janitor(local_cleanup.go) 몫이다.
 
 import (

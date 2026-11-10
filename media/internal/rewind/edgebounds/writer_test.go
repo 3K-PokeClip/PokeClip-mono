@@ -165,10 +165,10 @@ func TestRaiseReadsETagBeforeLedgerAndSendsLedgerValue(t *testing.T) {
 }
 
 // floor 정의(설계 1절 · D2): floor 는 「Margin 전까지 발행에 성공한 목록 MSN 의 최댓값」을 넘지 않는다. 웹 계약
-// 불변식(최신 사슬 목록의 첫 조각 — kty (가))은 floor_bound_test.go 가 본다. 무작위 관측(MSN 되돌림 · 늦게 도착한 시각 · 0 이하 포함)과
-// 무작위 올림 시각마다 원장 하한을 그 시각의 상한과 견준다. 투영 이력이 넘치지 않는 한 같아야 한다(덜 막는 것도 결함 —
-// 설계 D2 하한 정의). 잡는 결함: Margin 을 안 기다리고 올리거나(첫 조각 404), 발행 시각 대신 Observe 를 부른 시각을 쓰거나,
-// 더 늦게 관측된 작은 MSN 이 큰 MSN 의 성숙을 가리는 것.
+// 불변식(최신 사슬 목록의 첫 조각 — kty (가))은 floor_bound_test.go 가 본다. 무작위 관측(MSN 되돌림 · 늦게 도착한 시각
+// · 0 이하 포함)과 무작위 올림 시각마다 원장 하한을 그 시각의 상한과 견준다. 투영 이력이 넘치지 않는 한 같아야 한다(덜
+// 막는 것도 결함 — 설계 D2 하한 정의). 잡는 결함: Margin 을 안 기다리고 올리거나(첫 조각 404), 발행 시각 대신
+// Observe 를 부른 시각을 쓰거나, 더 늦게 관측된 작은 MSN 이 큰 MSN 의 성숙을 가리는 것.
 func TestFloorNeverExceedsMSNPublishedMarginAgo(t *testing.T) {
 	for _, margin := range []time.Duration{60 * time.Second, 0} {
 		for seed := uint64(1); seed <= 100; seed++ {
@@ -268,9 +268,9 @@ func TestRaiseSkipsClosedRoundAndForgetsIt(t *testing.T) {
 	}
 }
 
-// 실패 분류(Writer 계약 4 · E20): 선행 조건 실패는 실측 그대로 ValidationException · HTTP 400 이다. Writer 는 오류 종류가
-// 아니라 Describe 로 판을 다시 봐 가르고, 판이 바뀌었으면 원장을 다시 읽어 새 판으로 한 번 더 보낸다. 잡는 결함: 409 ·
-// 412 를 기다리는 분기라 400 경합을 실패로 보고 하한을 5분 늦게 올리는 것.
+// 실패 분류(Writer 계약 4 · E20): 선행 조건 실패는 실측 그대로 ValidationException · HTTP 400 이다. Writer 는 오류
+// 종류가 아니라 Describe 로 판을 다시 봐 가르고, 판이 바뀌었으면 원장을 다시 읽어 새 판으로 한 번 더 보낸다. 잡는 결함:
+// 409 · 412 를 기다리는 분기라 400 경합을 실패로 보고 하한을 5분 늦게 올리는 것.
 func TestPreconditionFailureIsRetriedOnceOnNewETag(t *testing.T) {
 	for _, pass := range []string{"raise", "release"} {
 		t.Run(pass, func(t *testing.T) {

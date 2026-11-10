@@ -7,7 +7,8 @@ package index
 //
 //	문장                   메서드              표 · 동작
 //	raiseTxnLimitsSQL      Raise 문장마다 첫 문장  (표 없음 — set_config lock_timeout)
-//	raiseSQL               Raise               edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT(RETURNING) · sessions FOR SHARE
+//	raiseSQL               Raise               edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT(RETURNING) ·
+//	                                           sessions FOR SHARE
 //	closedUnreleasedSQL    ClosedUnreleased    edge_bounds · sessions SELECT
 //	markReleasedSQL        MarkReleased        edge_bounds SELECT FOR UPDATE · UPDATE
 //	deleteReleasedSQL      DeleteReleased      edge_bounds DELETE(+ SELECT)
@@ -28,7 +29,8 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/edgebounds"
 )
 
-// edgeBoundsPool 은 원장 시험 전용 DB 의 풀이다. 패키지 공용 resetTables 는 원장 표를 비우지 않으므로 여기서 함께 비운다.
+// edgeBoundsPool 은 원장 시험 전용 DB 의 풀이다. 패키지 공용 resetTables 는 원장 표를 비우지 않으므로 여기서 함께
+// 비운다.
 func edgeBoundsPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	return pgtest.Pool(t, "edgebounds", EnsureSchema, func(ctx context.Context, pool *pgxpool.Pool) error {
@@ -574,8 +576,10 @@ func TestEdgeBoundsLedgerRaiseNoDeadlockWithRoundCloseAcrossRounds(t *testing.T)
 // 세우고 sa 한 행 fence UPDATE 를 그 뒤에 세운다. 판정은 C 를 쥔 채로 한다 — Raise 가 55P03 으로 끝나고 sa UPDATE 가
 // C 를 놓기 전에 끝나야 한다(번진 기다림을 끝낸 것이 C 의 커밋이 아니라 Raise 의 상한이다). sa UPDATE 를 세울 창은
 // Raise 가 sb 에서 기다리는 500ms 안이라, 부하로 그 창을 놓치면(막힌 것을 보기 전에 Raise 가 끝남) 판정 없이 다시
-// 한다. 변이 = 올림의 lock_timeout 제거(set_config 제거 · 트랜잭션 밖 설정) → Raise 가 C 를 lockSpreadBound 넘게
-// 기다려 FAIL.
+// 한다. 시도마다 Raise 호출 시간이 lock_timeout 500ms 언저리(lockSpreadRaiseWait)인지도 본다 — 창을 놓친 시도도
+// 500ms 를 기다린 뒤에 끝나므로, 그보다 빨리 끝난 시도는 놓친 창이 아니라 상한이 틀린 것이다. 변이 = 올림의
+// lock_timeout 제거(set_config 제거 · 트랜잭션 밖 설정 · 0) → Raise 가 C 를 lockSpreadBound 넘게 기다려 FAIL · 값
+// 키움(4s) → 상한에서 FAIL · 값 줄임(1ms) → 하한에서 FAIL.
 func TestEdgeBoundsLedgerRaiseBoundsLockWaitSpread(t *testing.T) {
 	pool := edgeBoundsPool(t)
 	ctx := context.Background()
@@ -588,7 +592,13 @@ func TestEdgeBoundsLedgerRaiseBoundsLockWaitSpread(t *testing.T) {
 
 	var got lockSpreadResult
 	for i := range lockSpreadAttempts {
-		if got = r.attempt(t); got.blocked {
+		got = r.attempt(t)
+		if got.raiseTook < lockSpreadRaiseWaitMin || got.raiseTook >= lockSpreadRaiseWaitMax {
+			t.Errorf("시도 %d: Raise 호출 = %v(%v), want [%v, %v) — sb 대기를 끊은 것이 lock_timeout 500ms 가 아니다",
+				i+1, got.raiseTook, got.raiseErr, lockSpreadRaiseWaitMin, lockSpreadRaiseWaitMax)
+			break
+		}
+		if got.blocked {
 			break
 		}
 		t.Logf("시도 %d: sa UPDATE 가 Raise 에 막힌 것을 보기 전에 Raise 가 끝났다(%v) — 판정 없이 다시", i+1, got.raiseErr)
@@ -627,6 +637,15 @@ const lockSpreadAttempts = 10
 // lock_timeout(500ms 미만) 안이라 열 배 여유다.
 const lockSpreadBound = 5 * time.Second
 
+// lockSpreadRaiseWaitMin · lockSpreadRaiseWaitMax 는 기다림 번짐 시험에서 Raise 호출 한 번이 걸려야 하는 범위다. sb
+// 대기를 끊는 것은 raiseTxnLimitsSQL 의 lock_timeout(500ms)이라 호출은 그보다 짧을 수 없다(하한은 타이머 오차 여유
+// 50ms). 그 위로는 왕복 몇 번(BEGIN · set_config · 되돌림)만 더해진다 — 상한은 네 배 여유이고 lockSpreadBound 아래다.
+// 값이 작아지면(1ms) 하한에, 커지면(4s) 상한에 걸린다.
+const (
+	lockSpreadRaiseWaitMin = 450 * time.Millisecond
+	lockSpreadRaiseWaitMax = 2 * time.Second
+)
+
 // lockSpreadFloors 는 기다림 번짐 시험의 올림 입력이다 — sa 를 먼저, sb 를 뒤에 잠근다(바이트 순).
 func lockSpreadFloors() []edgebounds.Floor {
 	return floors(edgebounds.Floor{StreamID: "a", RoundID: "RA", Value: 5}, edgebounds.Floor{StreamID: "b", RoundID: "RB", Value: 5})
@@ -645,6 +664,7 @@ type lockSpreadRig struct {
 type lockSpreadResult struct {
 	blocked       bool // sa UPDATE 가 Raise 에 막힌 것을 보았다
 	raiseErr      error
+	raiseTook     time.Duration // Raise 호출이 걸린 시간 — 창을 놓친 시도에서도 잰다
 	updateErr     error
 	waited        time.Duration // sa UPDATE 가 기다린 시간
 	doneWhileHeld bool          // Raise · sa UPDATE 가 C 가 sb 를 쥔 동안 끝났다
@@ -655,13 +675,16 @@ func (r *lockSpreadRig) attempt(t *testing.T) lockSpreadResult {
 	t.Helper()
 	ctx := context.Background()
 	var raiseErr error
+	var raiseTook time.Duration
 	raiseDone := make(chan struct{})
 	go func() {
 		defer close(raiseDone)
+		start := time.Now()
 		_, raiseErr = NewEdgeBoundsLedger(r.writer).Raise(ctx, lockSpreadFloors())
+		raiseTook = time.Since(start)
 	}()
 	if !pollUntil(t, r.pool, raiseDone, lockWaitingSQL, r.writerPID) {
-		return lockSpreadResult{raiseErr: raiseErr}
+		return lockSpreadResult{raiseErr: raiseErr, raiseTook: raiseTook}
 	}
 	var waited time.Duration
 	var updateErr error
@@ -677,7 +700,8 @@ func (r *lockSpreadRig) attempt(t *testing.T) lockSpreadResult {
 	blocked := pollUntil(t, r.pool, raiseDone, blockedBySQL, r.updaterPID, r.writerPID)
 	held := r.waitHeld(t, raiseDone)
 	held = r.waitHeld(t, updateDone) && held
-	return lockSpreadResult{blocked: blocked, raiseErr: raiseErr, updateErr: updateErr, waited: waited, doneWhileHeld: held}
+	return lockSpreadResult{blocked: blocked, raiseErr: raiseErr, raiseTook: raiseTook, updateErr: updateErr,
+		waited: waited, doneWhileHeld: held}
 }
 
 // waitHeld 는 C 가 sb 를 쥔 채 done 이 닫히기를 lockSpreadBound 까지 기다린다 — 그 안에 닫히면 참이다. 넘으면 C 를
@@ -814,8 +838,7 @@ func waitDoneOrLockWait(t *testing.T, pool *pgxpool.Pool, pid int32, done <-chan
 		default:
 		}
 		var waiting bool
-		if err := pool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity
-			WHERE pid = $1 AND wait_event_type = 'Lock')`, pid).Scan(&waiting); err != nil {
+		if err := pool.QueryRow(context.Background(), lockWaitingSQL, pid).Scan(&waiting); err != nil {
 			t.Fatalf("잠금 대기 조회 실패: %v", err)
 		}
 		if waiting {
@@ -882,8 +905,7 @@ func waitLockWait(t *testing.T, pool *pgxpool.Pool, pid int32) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var waiting bool
-		if err := pool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity
-			WHERE pid = $1 AND wait_event_type = 'Lock')`, pid).Scan(&waiting); err != nil {
+		if err := pool.QueryRow(context.Background(), lockWaitingSQL, pid).Scan(&waiting); err != nil {
 			t.Fatalf("잠금 대기 조회 실패: %v", err)
 		}
 		if waiting {
@@ -1032,8 +1054,8 @@ func TestMissingLedgerSchemaNamesEdgeBounds(t *testing.T) {
 	}
 }
 
-// replaceEdgeBoundsTable 은 원장 표를 ddl 로 갈아 끼우는 조작이다 — 소유자 · media_indexer 넷은 운영 SQL 과 같게 되돌려,
-// 40 이 표 모양 어긋남만 식별자로 내는지 본다.
+// replaceEdgeBoundsTable 은 원장 표를 ddl 로 갈아 끼우는 조작이다 — 소유자 · media_indexer 넷은 운영 SQL 과 같게
+// 되돌려, 40 이 표 모양 어긋남만 식별자로 내는지 본다.
 func replaceEdgeBoundsTable(ddl string) string {
 	return "DROP TABLE stream_edge_bounds;\n" + ddl + ";\n" +
 		"ALTER TABLE stream_edge_bounds OWNER TO media_owner;\n" +

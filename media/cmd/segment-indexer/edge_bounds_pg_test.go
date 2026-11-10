@@ -18,8 +18,8 @@ import (
 // edgeBoundsCleanupTimeout 은 시험 뒤 원장 비우기의 시한이다.
 const edgeBoundsCleanupTimeout = 10 * time.Second
 
-// truncateEdgeBounds 는 시험이 남긴 원장 행을 비운다(t.Cleanup 용). t.Context() 는 Cleanup 직전에 취소되므로 따로 시한을
-// 둔 컨텍스트를 쓰고, 실패하면 시험을 실패로 둔다 — 남은 행이 다음 시험의 감시 신호를 바꾼다.
+// truncateEdgeBounds 는 시험이 남긴 원장 행을 비운다(t.Cleanup 용). t.Context() 는 Cleanup 직전에 취소되므로 따로
+// 시한을 둔 컨텍스트를 쓰고, 실패하면 시험을 실패로 둔다 — 남은 행이 다음 시험의 감시 신호를 바꾼다.
 func truncateEdgeBounds(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), edgeBoundsCleanupTimeout)

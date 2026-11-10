@@ -2,7 +2,8 @@ package main
 
 // ending 재조회(POK-525 Ⓒ-7 — 설계 4-3 · 5-3 · E19)의 루프 층 시험이다. 종료 항목이 ending(잠정 포함)인 스트림은 재조회
 // 주기마다 이름순 묶음으로 담기고, 기존 상태 읽기 차선이 받은편지함 비우기가 쓰고 남은 칸만큼 묶음 앞에서 DB 를 다시
-// 읽는다 — 상태 표지(받은편지함)로 되넣지 않고, 묶음을 다 읽기 전에는 다시 담지 않는다. 차선 몸체는 가짜(fakeFinalWork)다.
+// 읽는다 — 상태 표지(받은편지함)로 되넣지 않고, 묶음을 다 읽기 전에는 다시 담지 않는다. 차선 몸체는
+// 가짜(fakeFinalWork)다.
 
 import (
 	"fmt"
@@ -38,8 +39,8 @@ func (l *readLog) all() []string {
 // sorted 는 읽은 스트림을 정렬해 돌려준다 — 상한 안의 읽기는 동시에 돌아 차례가 정해지지 않는다.
 func (l *readLog) sorted() []string { return slices.Sorted(slices.Values(l.all())) }
 
-// recheckLoop 은 종료 항목 finals 를 든 정산 루프 픽스처다 — 상태 읽기를 reads 에 적는다. sink 는 가짜라 읽기 결과가 종료
-// 항목을 바꾸지 않는다(시험이 정한 종료 항목이 그대로 남는다).
+// recheckLoop 은 종료 항목 finals 를 든 정산 루프 픽스처다 — 상태 읽기를 reads 에 적는다. sink 는 가짜라 읽기 결과가
+// 종료 항목을 바꾸지 않는다(시험이 정한 종료 항목이 그대로 남는다).
 func recheckLoop(t *testing.T, finals map[string]status.Final) (*finalLoop, *readLog) {
 	t.Helper()
 	f := newFinalLoop(t, finalize.ModeOff)
@@ -55,8 +56,8 @@ func endingFinal(round string) status.Final {
 }
 
 // 5-3 (가): 재조회는 종료 항목이 ending 인 스트림(잠정 포함)만 되넣고, 주기(30초)마다 한 번이다 — vod · ended 는 읽지
-// 않고, 주기 안의 holdTick 은 되넣지 않는다. 변이 = 재조회 제거 → 읽기 0 FAIL · 국면 조건 제거 → vod · ended 읽기 FAIL ·
-// 주기 무시 → 29초 틱 읽기 FAIL.
+// 않고, 주기 안의 holdTick 은 되넣지 않는다. 변이 = 재조회 제거 → 읽기 0 FAIL · 국면 조건 제거 → vod · ended 읽기 FAIL
+// · 주기 무시 → 29초 틱 읽기 FAIL.
 func TestRecheckEndingRereadsOnlyEndingFinalsEachPeriod(t *testing.T) {
 	f, reads := recheckLoop(t, map[string]status.Final{
 		"e": endingFinal("R"),
@@ -85,9 +86,9 @@ func TestRecheckEndingRereadsOnlyEndingFinalsEachPeriod(t *testing.T) {
 	}
 }
 
-// 5-3 「30초는 주기이지 상한이 아니다」: 읽기 상한이 1 이고 ending 스트림이 셋이면, 첫 틱에 하나만 읽고 나머지는 묶음에 남아
-// 다음 holdTick 에 하나씩 읽힌다 — 다음 재조회 주기(30초)를 기다리지 않는다. 변이 = 묶음 이어 읽기 제거(담은 틱에만 낸다) →
-// 둘째 · 셋째 스트림이 다음 주기까지 밀려 FAIL.
+// 5-3 「30초는 주기이지 상한이 아니다」: 읽기 상한이 1 이고 ending 스트림이 셋이면, 첫 틱에 하나만 읽고 나머지는 묶음에
+// 남아 다음 holdTick 에 하나씩 읽힌다 — 다음 재조회 주기(30초)를 기다리지 않는다. 변이 = 묶음 이어 읽기 제거(담은
+// 틱에만 낸다) → 둘째 · 셋째 스트림이 다음 주기까지 밀려 FAIL.
 func TestRecheckEndingOverReadMaxSlipsToNextHoldTick(t *testing.T) {
 	f, reads := recheckLoop(t, map[string]status.Final{"a": endingFinal("A"), "b": endingFinal("B"), "c": endingFinal("C")})
 	f.rewind.fin.readMax = 1
@@ -102,8 +103,8 @@ func TestRecheckEndingOverReadMaxSlipsToNextHoldTick(t *testing.T) {
 	}
 }
 
-// recheckBoardLoop 은 읽기 결과가 M5 받은편지함을 거쳐 종료 항목에 돌아오는 정산 루프 픽스처다 — streams 를 모두 ending 으로
-// 두고, 상태 읽기는 read 가 정한다.
+// recheckBoardLoop 은 읽기 결과가 M5 받은편지함을 거쳐 종료 항목에 돌아오는 정산 루프 픽스처다 — streams 를 모두
+// ending 으로 두고, 상태 읽기는 read 가 정한다.
 func recheckBoardLoop(t *testing.T, streams []string, read func(stream string) (index.PlaybackState, bool, error)) *finalLoop {
 	t.Helper()
 	f := newFinalLoop(t, finalize.ModeOff)
@@ -116,9 +117,9 @@ func recheckBoardLoop(t *testing.T, streams []string, read func(stream string) (
 	return f
 }
 
-// 공정한 진행(cx 설계 HIGH): ending 스트림이 주기당 처리량(상한 2 × 30틱 = 60)보다 하나 많고, 이름이 가장 뒤인 스트림의 원장
-// 행이 첫 주기 뒤에 지워져도, 그 스트림은 유한한 주기 안에 다시 읽혀 vod 가 된다. 앞 60개는 계속 ending 이다. 변이 = 묶음
-// 완결 조건 제거(묶음이 남아도 주기마다 처음부터 다시 담기) → 마지막 스트림이 읽히지 않아 ending 고착 FAIL.
+// 공정한 진행(cx 설계 HIGH): ending 스트림이 주기당 처리량(상한 2 × 30틱 = 60)보다 하나 많고, 이름이 가장 뒤인 스트림의
+// 원장 행이 첫 주기 뒤에 지워져도, 그 스트림은 유한한 주기 안에 다시 읽혀 vod 가 된다. 앞 60개는 계속 ending 이다. 변이
+// = 묶음 완결 조건 제거(묶음이 남아도 주기마다 처음부터 다시 담기) → 마지막 스트림이 읽히지 않아 ending 고착 FAIL.
 func TestRecheckEndingReachesLastStreamBeyondPeriodCapacity(t *testing.T) {
 	perPeriod := 2 * int(endingRecheckEvery/time.Second)
 	streams := make([]string, perPeriod+1)
@@ -159,9 +160,9 @@ func TestRecheckEndingReachesLastStreamBeyondPeriodCapacity(t *testing.T) {
 		f.rewind.final[last].Status.Mode, limit.Sub(deleteAt), perPeriod)
 }
 
-// 실제 커밋 표지 우선: 재조회 묶음은 받은편지함 비우기가 쓰고 남은 읽기 칸만 쓴다 — 상한 1 에서 재조회 묶음이 남아 있어도,
-// 다음 틱에 들어온 커밋 표지(이름이 가장 뒤)가 묶음의 다음 스트림보다 먼저 읽힌다. 변이 = 재조회를 받은편지함 표지로 되넣기 →
-// 이름순 Drain 에서 묶음 스트림이 먼저 읽혀 FAIL.
+// 실제 커밋 표지 우선: 재조회 묶음은 받은편지함 비우기가 쓰고 남은 읽기 칸만 쓴다 — 상한 1 에서 재조회 묶음이 남아
+// 있어도, 다음 틱에 들어온 커밋 표지(이름이 가장 뒤)가 묶음의 다음 스트림보다 먼저 읽힌다. 변이 = 재조회를 받은편지함
+// 표지로 되넣기 → 이름순 Drain 에서 묶음 스트림이 먼저 읽혀 FAIL.
 func TestRecheckEndingYieldsReadSlotsToCommitMarkers(t *testing.T) {
 	f, reads := recheckLoop(t, map[string]status.Final{"a": endingFinal("A"), "b": endingFinal("B"), "c": endingFinal("C")})
 	f.rewind.fin.readMax = 1

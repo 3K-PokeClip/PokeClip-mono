@@ -21,12 +21,13 @@ import (
 // timestamptz 라 pg_catalog 에 정확한 판이 있다. 배열 여럿을 나란히 펴는 것은 ROWS FROM 에 한 인자 unnest 를 늘어놓는다
 // (rewind_read.go 와 같은 꼴) — 여러 인자 unnest 는 FROM 의 한정하지 않은 이름에서만 풀리는 문법이라 pg_catalog 로
 // 한정하면 42883 이다. 한정하지 않으면 PG 가 그것을 한정하지 않은 한 인자 호출 여럿으로 풀고, 가로채기는 그 한 인자
-// 호출에서 생긴다 — public 에 심은 unnest(text[]) 가 다형 판 unnest(anyarray) 보다 먼저 골린다. 나란히 펴는 배열은 길이가
-// 같아야 한다 — ROWS FROM 은 짧은 쪽을 NULL 로 채운다. 하한 값이 NULL 이면 NOT NULL 위반(23502)으로 묶음 전체가
+// 호출에서 생긴다 — public 에 심은 unnest(text[]) 가 다형 판 unnest(anyarray) 보다 먼저 골린다. 나란히 펴는 배열은
+// 길이가 같아야 한다 — ROWS FROM 은 짧은 쪽을 NULL 로 채운다. 하한 값이 NULL 이면 NOT NULL 위반(23502)으로 묶음 전체가
 // 실패하고(충돌 행도 — 제안 행을 먼저 검사한다), 열쇠가 NULL 이면 열린 회차 · 원장 행 조인에 걸리지 않아 조용히 빠진다.
 // Raise · MarkReleased 는 배열을 한 루프에서 함께 채운다.
 
-// raiseSQL ($1 stream_id[] · $2 round_id[] · $3 dvr_floor[]) — 열린 회차만 · 해제된 행은 건드리지 않음 · 잠금 순서 고정.
+// raiseSQL ($1 stream_id[] · $2 round_id[] · $3 dvr_floor[]) — 열린 회차만 · 해제된 행은 건드리지 않음 · 잠금 순서
+// 고정.
 //
 // 열린 회차 확인은 그 회차의 열린 세션 행 하나를 FOR SHARE 로 잠근다 — 회차 닫힘(closeRoundSQL · lockRoundRowsSQL)은 그
 // 회차의 열린 행 전부를 고치므로 이 잠금과 줄을 선다. 닫힘이 먼저 커밋했으면 잠금이 최신 행을 다시 봐(READ COMMITTED
@@ -114,10 +115,11 @@ func NewEdgeBoundsLedger(pool *pgxpool.Pool) *EdgeBoundsLedger {
 
 // Raise 는 rows 가운데 열린 회차 · 미해제 행만 GREATEST 로 올리고(없으면 만든다) 올린 뒤의 행을 (stream, round) 순으로
 // 돌려준다. 1 보다 작은 값은 문장에 싣기 전에 거른다(CHECK dvr_floor >= 1 — 한 행이 묶음 전체를 23514 로 만들지 않게).
-// 다 걸러지면 문장을 보내지 않는다. 한 묶음 안 같은 (stream, round) 는 부른 쪽이 하나로 모은다 — 둘이면 문장 오류(21000)다.
+// 다 걸러지면 문장을 보내지 않는다. 한 묶음 안 같은 (stream, round) 는 부른 쪽이 하나로 모은다 — 둘이면 문장
+// 오류(21000)다.
 //
-// 한 스트림의 회차가 여럿이면 문장을 나눠 한 문장에 스트림마다 회차 하나만 싣는다(raisePasses). 위상 트랜잭션(회차 닫힘 ·
-// 사슬 닫힘 · EndLive · 4D)은 ① 스트림별 위상 잠금으로 줄을 서서 세션 행 잠금 순서가 제각각이다(닫힘은 새 회차의 소속
+// 한 스트림의 회차가 여럿이면 문장을 나눠 한 문장에 스트림마다 회차 하나만 싣는다(raisePasses). 위상 트랜잭션(회차 닫힘
+// · 사슬 닫힘 · EndLive · 4D)은 ① 스트림별 위상 잠금으로 줄을 서서 세션 행 잠금 순서가 제각각이다(닫힘은 새 회차의 소속
 // 행 → 옛 회차 행). 그 잠금 밖의 이 문장이 한 스트림의 두 회차 행을 함께 쥐면 그 순서와 엇갈려 교착(40P01)이 된다. 앞
 // 문장이 커밋한 뒤 뒤 문장이 실패하면 오류만 돌려준다 — 원장은 GREATEST 라 다음 올림이 같은 값으로 다시 맞춘다.
 func (l *EdgeBoundsLedger) Raise(ctx context.Context, rows []edgebounds.Floor) ([]edgebounds.Floor, error) {

@@ -1,7 +1,8 @@
 package main
 
 // /dvr 하한 Writer 배선(POK-525 계획 Ⓒ-6 · 설계 3-3 · 8-1 · E10 · E11)의 시험. 실 AWS · DB 를 부르지 않는다 — 원장 ·
-// KVS 는 가짜이고, 운영 KVS 클라이언트는 조립한 값(재시도 · 끝점)과 전송 가짜에 닿은 요청의 호스트만 본다(망에 나가지 않는다).
+// KVS 는 가짜이고, 운영 KVS 클라이언트는 조립한 값(재시도 · 끝점)과 전송 가짜에 닿은 요청의 호스트만 본다(망에 나가지
+// 않는다).
 
 import (
 	"context"
@@ -161,9 +162,9 @@ func TestObservePublishedWithoutWriterKeepsTick(t *testing.T) {
 	}
 }
 
-// run 의 발행 조립 자리(assembleObservedPublishing)는 발행 몫을 조립한 뒤 그 틱을 하한 관측으로 감싼다 — 조립이 채운 틱이
-// 새 판을 발행하면 observe 가 불린다. 조립보다 먼저 감싸면 조립이 작업 칸을 통째로 덮어 감싼 것이 사라진다. 변이 = 감싸는 줄
-// 삭제 · 조립 앞으로 옮기기 → Observe 0번 FAIL(줄이 지워져도 엣지는 통과라 조용하다 — Ⓒ-6 cc 설계 M2).
+// run 의 발행 조립 자리(assembleObservedPublishing)는 발행 몫을 조립한 뒤 그 틱을 하한 관측으로 감싼다 — 조립이 채운
+// 틱이 새 판을 발행하면 observe 가 불린다. 조립보다 먼저 감싸면 조립이 작업 칸을 통째로 덮어 감싼 것이 사라진다. 변이 =
+// 감싸는 줄 삭제 · 조립 앞으로 옮기기 → Observe 0번 FAIL(줄이 지워져도 엣지는 통과라 조용하다 — Ⓒ-6 cc 설계 M2).
 func TestAssembleObservedPublishingWrapsAssembledTick(t *testing.T) {
 	rec := &observeRecorder{}
 	r := &rewindLoop{}
@@ -361,10 +362,10 @@ func TestEdgeBoundsUnreleasedProbeFailureWarnsOnce(t *testing.T) {
 // 감시는 확인마다 유예(ReleaseSettle)가 지난 해제 행을 지운다 — 해제 뒤 유예 안에 Writer 가 멈추고 Writer 없는 상자로
 // 넘어가도 해제된 행이 원장에 남아 그 회차를 끝남 대기에 묶지 않는다. 지운 행이 있을 때만 INFO 한 줄(rows)이다.
 //
-// 「정확히 한 번」 을 세는 시험이라 감시 타이머가 끼지 않게 한다 — 배선 몫은 주기를 시험보다 길게 두고 멈춘 뒤 세어 기동
-// 동기 확인 하나만 보고, 주기 몫(지운 행 0 이면 줄 없음)은 감시 한 번(check)을 직접 부른다. 10ms 타이머를 둔 채 세면 단언 전에 틱이 한 번
-// 더 돌아 정상 코드도 FAIL 한다(종결 r1 codex 설계 M1). 주기마다 확인이 도는 것은 probes 를 세는 이웃 시험이 본다.
-// 변이 = 삭제 호출 제거 · 유예 0 → FAIL.
+// 「정확히 한 번」 을 세는 시험이라 감시 타이머가 끼지 않게 한다 — 배선 몫은 주기를 시험보다 길게 두고 멈춘 뒤 세어
+// 기동 동기 확인 하나만 보고, 주기 몫(지운 행 0 이면 줄 없음)은 감시 한 번(check)을 직접 부른다. 10ms 타이머를 둔 채
+// 세면 단언 전에 틱이 한 번 더 돌아 정상 코드도 FAIL 한다(종결 r1 codex 설계 M1). 주기마다 확인이 도는 것은 probes 를
+// 세는 이웃 시험이 본다. 변이 = 삭제 호출 제거 · 유예 0 → FAIL.
 func TestEdgeBoundsWithoutWriterDeletesSettledReleasedRows(t *testing.T) {
 	logs := &logCapture{}
 	l := &fakeLedger{deleted: 2}
@@ -536,8 +537,8 @@ func TestEdgeBoundsWithARNStartsWriter(t *testing.T) {
 	}
 }
 
-// 로거가 nil 이면 기본 로거를 쓴다(edgebounds.New 와 같다) — 배선의 첫 줄(edge_bounds_disabled 등)이 nil 로거에서 패닉하지
-// 않는다. 변이 = 가드 제거 → FAIL.
+// 로거가 nil 이면 기본 로거를 쓴다(edgebounds.New 와 같다) — 배선의 첫 줄(edge_bounds_disabled 등)이 nil 로거에서
+// 패닉하지 않는다. 변이 = 가드 제거 → FAIL.
 func TestEdgeBoundsOptionsDefaultsNilLogger(t *testing.T) {
 	opt := edgeBoundsOptions("w-test", nil, time.Now)
 	if opt.Log == nil {
@@ -596,9 +597,9 @@ func TestNewKVSClientPinsRetryAndEndpoint(t *testing.T) {
 	}
 }
 
-// kvsRequestHost 는 newKVSClient 의 클라이언트로 DescribeKeyValueStore 한 번을 보내되 망에 나가지 않고, SDK 가 끝점 해결 ·
-// 서명까지 마친 요청의 호스트를 돌려준다(전송 가짜가 요청을 받아 적고 실패로 답한다). 해결 · 서명이 실패하면 그 오류다.
-// 클라이언트의 지역이 region 이 아니면 시험이 멈춘다(전제 — 바깥 셸 · 공유 설정이 지역을 채우지 않았다).
+// kvsRequestHost 는 newKVSClient 의 클라이언트로 DescribeKeyValueStore 한 번을 보내되 망에 나가지 않고, SDK 가 끝점
+// 해결 · 서명까지 마친 요청의 호스트를 돌려준다(전송 가짜가 요청을 받아 적고 실패로 답한다). 해결 · 서명이 실패하면 그
+// 오류다. 클라이언트의 지역이 region 이 아니면 시험이 멈춘다(전제 — 바깥 셸 · 공유 설정이 지역을 채우지 않았다).
 func kvsRequestHost(t *testing.T, region string) (string, error) {
 	t.Helper()
 	client, err := newKVSClient(t.Context())
@@ -629,7 +630,8 @@ type httpClientFunc func(*http.Request) (*http.Response, error)
 
 func (f httpClientFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
-// kvsClientEnv 는 SDK 가 시험용 정적 자격증명 · 빈 공유 설정만 보게 하고 AWS 지역을 region 으로 둔다(빈 값이면 지역 없음).
+// kvsClientEnv 는 SDK 가 시험용 정적 자격증명 · 빈 공유 설정만 보게 하고 AWS 지역을 region 으로 둔다(빈 값이면 지역
+// 없음).
 func kvsClientEnv(t *testing.T, region string) {
 	t.Helper()
 	assemblyCredentialsEnv(t)
@@ -639,8 +641,9 @@ func kvsClientEnv(t *testing.T, region string) {
 }
 
 // 끝점은 ARN 의 계정 번호로 정해지는 전역 끝점이다(<계정>.cloudfront-kvs.global.api.aws) — SDK 끝점 규칙이 지역을 보지
-// 않으므로 상자의 AWS 지역이 비어도 기동(newKVSClient) · 호출의 끝점 해결 · 서명(SigV4A 지역 *)이 모두 선다. 그래서 지역 빔은
-// edge_bounds_degraded 로 강등할 갈래가 아니다(Ⓒ-6 보안 설계 M2 — 이 시험이 그 전제를 고정한다). 지역이 있어도 같은 호스트다.
+// 않으므로 상자의 AWS 지역이 비어도 기동(newKVSClient) · 호출의 끝점 해결 · 서명(SigV4A 지역 *)이 모두 선다. 그래서
+// 지역 빔은 edge_bounds_degraded 로 강등할 갈래가 아니다(Ⓒ-6 보안 설계 M2 — 이 시험이 그 전제를 고정한다). 지역이
+// 있어도 같은 호스트다.
 func TestNewKVSClientResolvesGlobalARNHost(t *testing.T) {
 	for name, region := range map[string]string{"지역 빔": "", "지역 있음": "ap-northeast-2"} {
 		t.Run(name, func(t *testing.T) {

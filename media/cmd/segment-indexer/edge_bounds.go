@@ -1,8 +1,8 @@
 package main
 
-// /dvr 하한 Writer 의 배선(POK-525 설계 3-3 · 8-1 · 계획 Ⓒ-6) — 기동 때 KVS ARN 설정으로 Writer 를 띄우거나 끄고, 되감기
-// 발행 성공을 Writer 에 알린다. 정책(올림 · 해제 · 신호)은 rewind/edgebounds 에, 원장은 index.EdgeBoundsLedger 에, KVS 는
-// edgebounds/kvsstore 에 있다.
+// /dvr 하한 Writer 의 배선(POK-525 설계 3-3 · 8-1 · 계획 Ⓒ-6) — 기동 때 KVS ARN 설정으로 Writer 를 띄우거나 끄고,
+// 되감기 발행 성공을 Writer 에 알린다. 정책(올림 · 해제 · 신호)은 rewind/edgebounds 에, 원장은
+// index.EdgeBoundsLedger 에, KVS 는 edgebounds/kvsstore 에 있다.
 
 import (
 	"context"
@@ -74,8 +74,8 @@ func startEdgeBounds(ctx context.Context, cfg config.Config, pool *pgxpool.Pool,
 	})
 }
 
-// edgeBoundsOptions 는 Writer 의 설계값이다. writerID 는 해제 표지 값의 앞머리라 프로세스마다 새 토큰이다. log 가 nil 이면
-// 기본 로거다(edgebounds.New 와 같다 — 배선 · 미해제 감시도 이 로거로 쓴다).
+// edgeBoundsOptions 는 Writer 의 설계값이다. writerID 는 해제 표지 값의 앞머리라 프로세스마다 새 토큰이다. log 가
+// nil 이면 기본 로거다(edgebounds.New 와 같다 — 배선 · 미해제 감시도 이 로거로 쓴다).
 func edgeBoundsOptions(writerID string, log *slog.Logger, now func() time.Time) edgebounds.Options {
 	if log == nil {
 		log = slog.Default()
@@ -154,11 +154,11 @@ func openKVSStore(ctx context.Context, kvsARN string) (edgebounds.Store, error) 
 
 // newKVSClient 는 KVS 데이터 평면 클라이언트다. 자격 · 지역은 SDK 기본 체인이다(업로더와 같다).
 //
-//	재시도   시도 1 — SDK 재시도를 끈다. UpdateKeys 는 판(If-Match)에 묶인 쓰기라 SDK 가 다시 보내면 어느 시도가 닿았는지
-//	         가려진다. 재시도는 Writer 하나가 맡는다 — 실패 뒤 Describe 판 대조(경합이면 원장을 다시 읽어 한 번 더 ·
-//	         아니면 다음 틱 — Writer 계약 4 · Ⓒ-5 보안 L3). 발행 · 업로드의 S3 클라이언트와 같은 처분이다
-//	끝점     SDK 표준 끝점 덮어쓰기(AWS_ENDPOINT_URL · AWS_ENDPOINT_URL_CLOUDFRONT_KEYVALUESTORE · 공유 설정 endpoint_url)를
-//	         받지 않는다 — 끝점은 ARN 의 계정 번호로만 정해진다(<계정>.cloudfront-kvs.global.api.aws)
+//	재시도   시도 1 — SDK 재시도를 끈다. UpdateKeys 는 판(If-Match)에 묶인 쓰기라 SDK 가 다시 보내면 어느 시도가
+//	         닿았는지 가려진다. 재시도는 Writer 하나가 맡는다 — 실패 뒤 Describe 판 대조(경합이면 원장을 다시 읽어
+//	         한 번 더 · 아니면 다음 틱 — Writer 계약 4 · Ⓒ-5 보안 L3). 발행 · 업로드의 S3 클라이언트와 같은 처분이다
+//	끝점     SDK 표준 끝점 덮어쓰기(AWS_ENDPOINT_URL · AWS_ENDPOINT_URL_CLOUDFRONT_KEYVALUESTORE · 공유 설정
+//	         endpoint_url)를 받지 않는다 — 끝점은 ARN 의 계정 번호로만 정해진다(<계정>.cloudfront-kvs.global.api.aws)
 func newKVSClient(ctx context.Context) (*cloudfrontkeyvaluestore.Client, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -204,10 +204,11 @@ type unreleasedProbe struct {
 }
 
 // check 는 감시 한 번이다 — 유예가 지난 해제 행을 지우고(Writer 해제 틱 앞머리와 같은 순서) 닫힌 미해제 행을 센다.
-// 행이 있으면 set(rows) 한 줄, 0 이 되면 clear 한 줄 — 상태가 이어지면 줄을 다시 내지 않는다. 삭제 · 조회 가운데 하나라도
-// 실패하면 실패가 이어지는 동안 WARN 한 줄이다(둘 다 성공한 확인이 구간을 끝낸다 — Writer 가 삭제 실패를 해제 패스의
-// write_failing 에 싣는 것과 같다). 조회가 실패하면 set 상태는 그대로 둔다(모르는 것을 clear 로 읽지 않는다) — 삭제
-// 실패는 조회를 막지 않으므로 set · clear 를 바꾸지 않는다. ctx 가 끝나 실패한 것은 알리지 않는다(종료는 장애가 아니다).
+// 행이 있으면 set(rows) 한 줄, 0 이 되면 clear 한 줄 — 상태가 이어지면 줄을 다시 내지 않는다. 삭제 · 조회 가운데
+// 하나라도 실패하면 실패가 이어지는 동안 WARN 한 줄이다(둘 다 성공한 확인이 구간을 끝낸다 — Writer 가 삭제 실패를 해제
+// 패스의 write_failing 에 싣는 것과 같다). 조회가 실패하면 set 상태는 그대로 둔다(모르는 것을 clear 로 읽지 않는다) —
+// 삭제 실패는 조회를 막지 않으므로 set · clear 를 바꾸지 않는다. ctx 가 끝나 실패한 것은 알리지 않는다(종료는 장애가
+// 아니다).
 func (p *unreleasedProbe) check(ctx context.Context) {
 	delErr := p.deleteReleased(ctx)
 	cctx, cancel := context.WithTimeout(ctx, p.timeout)
@@ -260,9 +261,10 @@ func (p *unreleasedProbe) reportFailure(err error) {
 	}
 }
 
-// assembleObservedPublishing 은 run 의 발행 조립 자리다 — assemble(assemblePublishing)로 발행 몫을 조립한 뒤 r 의 발행 틱을
-// observe 로 감싸고, 조립이 돌려준 발행자 풀을 그대로 돌려준다. 감싸기는 조립 뒤여야 한다 — 조립이 작업 칸(r.work)을 통째로
-// 채운다. 감싸는 줄이 빠지면 Observe 가 조용히 0 이 된다(하한 키가 없어 엣지는 통과 — 안전 쪽이지만 발견이 늦다).
+// assembleObservedPublishing 은 run 의 발행 조립 자리다 — assemble(assemblePublishing)로 발행 몫을 조립한 뒤 r 의 발행
+// 틱을 observe 로 감싸고, 조립이 돌려준 발행자 풀을 그대로 돌려준다. 감싸기는 조립 뒤여야 한다 — 조립이 작업
+// 칸(r.work)을 통째로 채운다. 감싸는 줄이 빠지면 Observe 가 조용히 0 이 된다(하한 키가 없어 엣지는 통과 — 안전 쪽이지만
+// 발견이 늦다).
 func assembleObservedPublishing(r *rewindLoop, observe observeFloor, assemble func() *pgxpool.Pool) *pgxpool.Pool {
 	pool := assemble()
 	r.work.tick = observePublished(r.work.tick, observe)
@@ -273,8 +275,8 @@ func assembleObservedPublishing(r *rewindLoop, observe observeFloor, assemble fu
 // 4-1 · E11). 차선 고루틴에서 돈다 — Writer.Observe 는 여러 고루틴에서 불러도 된다. tick 이나 observe 가 nil 이면
 // tick 을 그대로 돌려준다(발행 몫 없음 · Writer 없음).
 //
-// 관측 시각은 틱이 돌아온 뒤 Writer 시계로 찍는다 — 실제 발행 성공보다 조금 늦어 하한 후보가 Margin 을 늦게 지난다(안전한
-// 쪽 · 웹 계약 불변식).
+// 관측 시각은 틱이 돌아온 뒤 Writer 시계로 찍는다 — 실제 발행 성공보다 조금 늦어 하한 후보가 Margin 을 늦게
+// 지난다(안전한 쪽 · 웹 계약 불변식).
 func observePublished(tick tickFunc, observe observeFloor) tickFunc {
 	if tick == nil || observe == nil {
 		return tick
