@@ -891,16 +891,18 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
     `_unreleased_without_writer`)과 WARN 둘이다.
     *   `_write_failing` — 회복 줄(같은 `pass` 의 `_write_recovered`)은
         그 패스가 다음에 성공할 때 나온다. 실패가 한 번뿐이어도 회복은 다음
-        틱에야 오므로, 문턱은 그 패스 주기의 두 번이다.
-        *   `pass=raise` — 올림은 5분(`FlushEvery` 300초)마다라 실패 한
-            번에도 회복이 5분 뒤에 온다. 실패 줄 뒤 **10분**(올림 주기 두
-            번) 안에 회복 줄이 없으면 경보다 — 다음 올림도 실패했거나 그만큼
-            밀렸다는 뜻이다.
-        *   `pass=release` — 해제는 30초마다라 문턱은 **1분**(해제 주기 두
-            번)이다. 다만 올림 틱에는 다음 해제가 올림 패스가 끝날 때까지
-            밀리므로(위 「해제」), 그 시간을 더한다. 올림 후보 회차가
-            400개 이하면 올림 패스는 많아야 4분이라 **5분**이면 덮인다
-            (runtime-1a 「`released_stuck` 판정」 과 같은 셈).
+        패스가 끝나야 온다. 그래서 문턱은 패스마다 하나이고, 실패 줄 뒤
+        그 안에 회복 줄이 없으면 경보다. 아래 셈은 올림 후보 회차가
+        400개(묶음 8개) 이하일 때다.
+        *   `pass=raise` — 문턱 **10분**. 올림은 5분(`FlushEvery` 300초)
+            마다다. 실패 한 번이면 회복은 5분 뒤 틱의 해제(많아야 40초)와
+            올림(많아야 4분)이 끝날 때라 늦어도 약 9분 40초다. 10분이
+            지나면 다음 올림도 실패했거나 그보다 밀렸다는 뜻이다.
+        *   `pass=release` — 문턱 **5분**. 해제는 30초마다라 보통은 30초
+            뒤에 회복이 온다. 그 근거인 해제 주기 두 번(1분)에, 올림 틱에서
+            다음 해제가 올림 패스 끝까지 밀리는 시간(많아야 4분 — 위
+            「해제」)을 더한 값이다(runtime-1a 「`released_stuck` 판정」 과
+            같은 셈).
     *   `_unreleased_check_failed` — **줄 하나가 곧 경보다.** 실패 구간의
         첫 확인에만 한 줄이고 회복 줄이 없어, 「안 풀림」 을 다음 줄로 알 수
         없다. Writer 없는 상자에서 해제 행 삭제만 계속 실패하고 미해제
@@ -934,7 +936,7 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 | 증상 | 먼저 | 원인 수정 | 다시 켬 |
 |---|---|---|---|
 | 시청자 404 · `dvr_floor_blocks_list` set(엣지 PR 뒤) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
-| `edge_bounds_write_failing` 이 풀리지 않음 | 엣지를 끈다(엣지 PR 뒤) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
+| `edge_bounds_write_failing` 이 위 신호 절의 문턱(올림 10분 · 해제 5분) 안에 풀리지 않음 | 엣지를 끈다(엣지 PR 뒤) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
 | `dvr_floor_release_overdue` | — 엣지는 끄지 않는다. 피해는 그 회차 VOD 가 열리지 않는 것뿐이다(`pass=release` 의 `_write_failing` 이 함께 나와도 같다) | 위 행과 같다 | 위 행과 같다 |
 | `edge_bounds_degraded` | — | 그 줄의 `err` 를 고친다. 못 고치면 위 행처럼 스위치를 끄고 교체한다(Media 교체 런북 「POK-525 롤백」 의 「Writer 만 문제」) | 고쳤으면 사이드카 재기동 — 기동 줄이 `edge_bounds_started` 면 된다. 스위치를 껐으면 위 행처럼 켜 교체 |
 | `edge_bounds_unreleased_without_writer` set(E10 — ARN 없이 뜬 상자) | — | 스위치 · 런타임 출력 ARN 을 고친다(`_config_invalid` 면 꼴) | 켠 설정으로 교체 → Writer 가 풀면 clear |
