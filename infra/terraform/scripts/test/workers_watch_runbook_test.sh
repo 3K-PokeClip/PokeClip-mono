@@ -45,6 +45,10 @@
 #     판정불가 문장이거나 끝 epoch 가 빈 값 = 판정불가(반복하지 않음) · README
 #     「쓰는 예」 블록을 기동 신호 전에 띄우면 기다렸다가 돎. date · sleep 은
 #     사례의 가짜 시계다(sleep 200번을 넘으면 끊음).
+#   다시 띄우기 — README 「다시 띄우기」 블록을 이어지던 장애 한가운데서 띄운
+#     r4 cx(실패 0 · 134 · 268 · 133초에 다시 · 기동 10초 전)와 r4 cc(실패
+#     0 · 134 · 194 · 328 · 1초에 다시 · 기동 1시간 전 · 수집 지연 10초)
+#     시간열 — 첫 실패 줄에서 240초 안에 정지(위 정지 시한과 같은 셈).
 #   정지 시한 — 실패 0 · 59 · 193(r2 cx) · 0–52 · 186 + 수집 지연 2초(r2 cc) ·
 #     60 · 194 · 지연 10초 · 판정마다 5초 · r3 cx(조회 2 · 14 · 14초) · 조회가
 #     상한까지 걸려 실패 둘 · 셋째 조회가 상한 밖에서 100초 멈춤(줄 끊김) —
@@ -136,6 +140,7 @@ readonly MUTATION_NAMES=(
   'events: 연결 시간 상한 빼기'
   'events: 읽기 시간 상한 빼기'
   'events: 이어 받기 표 검사 빼기'
+  'restart: 시작을 600초 앞으로 당기기 빼기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -166,6 +171,7 @@ readonly MUTATION_FROMS=(
   '--cli-connect-timeout 2 '
   '--cli-read-timeout 3 '
   "'.nextToken == null'"
+  ' - 600 ))"'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -196,6 +202,7 @@ readonly MUTATION_TOS=(
   ''
   ''
   'true'
+  ' ))"'
 )
 
 # 사례 시각의 기준(2026-11-10T00:00:00Z) — 사례는 여기서 몇 초 뒤로 적는다.
@@ -203,9 +210,9 @@ readonly T0=1794268800
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
 FAKE_ACCOUNT="$(printf '%012d' 42)"
 readonly FAKE_ACCOUNT
-# 사례 72(대화형 zsh 넷 · 블록 글자 하나 포함) + 변이 27. 사례나 변이를
+# 사례 76(대화형 zsh 넷 · 블록 글자 하나 포함) + 변이 28. 사례나 변이를
 # 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=99
+readonly EXPECTED_CASES=104
 # kty 가 판정 줄 끊김으로 판정불가를 보는 줄 사이(초) · 정지를 본 뒤 정지
 # 명령을 돌리는 여유(초) — README 「정지 시한의 셈」 과 같은 값이다.
 readonly WATCH_GAP_SECONDS=10
@@ -235,6 +242,9 @@ case_dir=""
 readme_text=""
 # README 블록 하나씩(ANCHORS 차례) — 대화형 zsh 의 블록별 붙여 넣기에 쓴다.
 readme_blocks=()
+# README 「다시 띄우기」 블록(언어 없는 블록 — 판정 함수를 부르므로
+# readme_text 에 넣지 않는다). 변이는 이 블록에도 건다.
+restart_block=""
 # 대화형 zsh 사례에서 zsh 를 띄울 환경(env -i …) — new_zsh_case 가 둔다.
 zsh_env=()
 status=0
@@ -328,9 +338,9 @@ readme_block() {
 
 #######################################
 # ANCHORS 의 블록을 차례대로 이어 readme_text 에 두고, 하나씩 readme_blocks
-# 에도 둔다.
+# 에도 둔다. 「다시 띄우기」 블록은 restart_block 에 둔다.
 # Globals:
-#   readme_text, readme_blocks
+#   readme_text, readme_blocks, restart_block
 # Returns:
 #   0 / 1 블록 하나라도 못 찾음.
 #######################################
@@ -338,6 +348,10 @@ load_readme() {
   local anchor block
   readme_text=""
   readme_blocks=()
+  if ! restart_block="$(readme_block 'watch_from=' '')"; then
+    fail 'README 에 「다시 띄우기」 블록(watch_from=)이 하나가 아님'
+    return 1
+  fi
   for anchor in "${ANCHORS[@]}"; do
     if ! block="$(readme_block "${anchor}")"; then
       fail "README 에 「${anchor}」 블록이 하나가 아님"
@@ -979,11 +993,11 @@ clock_at() {
 }
 
 #######################################
-# 가짜 sleep 이 받은 초를 한 줄로 이어 본다(5초마다 · 몇 번).
+# 가짜 sleep 이 받은 초를 한 줄로 이어 본다(쉼마다 몇 초 · 몇 번).
 # Globals:
 #   case_dir
 # Arguments:
-#   사례 이름, 기대(「5 5」 꼴 · 없으면 빈 글자).
+#   사례 이름, 기대(「2 2」 꼴 · 없으면 빈 글자).
 #######################################
 expect_sleeps() {
   local got=""
@@ -1110,8 +1124,7 @@ test_watch_inputs() {
 #######################################
 test_watch_usage() {
   local usage
-  if ! usage="$(readme_block 'workers_receive_watch pokeclip-prod-render' '')"
-  then
+  if ! usage="$(readme_block 'until started=' '')"; then
     fail 'usage: README 에 수신 감시 쓰는 예 블록이 하나가 아님'
     return 1
   fi
@@ -1122,6 +1135,40 @@ test_watch_usage() {
     '수신 감시: 끝' 0
   expect_sleeps 'usage: 기동 대기 10초 넷 뒤 2초 쉼 열' \
     '10 10 10 10 2 2 2 2 2 2 2 2 2 2'
+}
+
+#######################################
+# README 「다시 띄우기」 블록을 글자 그대로 돌린다 — 이어지던 장애 한가운데서
+# 감시를 다시 띄워도 정지가 첫 실패 줄(T0)에서 240초(명령 여유 포함) 안에
+# 나야 한다. started 는 앞 감시 터미널에서 옮겨 적은 기동 시각이다.
+# Globals:
+#   case_dir, G, T0, restart_block
+#######################################
+test_watch_restart() {
+  local env
+  # r4 cx 시간열 — 실패 0 · 134 · 268초, 133초에 다시 띄움(기동은 10초 전).
+  # 시작을 그때 시각으로 주면 0초 줄을 못 봐 269초에 정지(+12 = 281초).
+  new_case && clock_at 133 && echo 0 >"${case_dir}/lag" &&
+    log_resp "${G}" '0 render.receive_failed err=x' \
+      '134 render.receive_failed err=x' '268 render.receive_failed err=x'
+  env="started=$((T0 - 10)); watch_end=$((T0 + 3600))"
+  run_readme eval "${env}; ${restart_block}"
+  expect_watch 'restart: r4 cx 시간열(0 · 134 · 268 · 133초에) = 정지' \
+    '수신: 정지' 1
+  expect_stop_by_deadline 'restart: r4 cx 시간열(0 · 134 · 268 · 133초에)'
+
+  # r4 cc 시간열 — 실패 0 · 134 · 194 · 328초, 1초에 다시 띄움(기동은 1시간
+  # 전) · 수집 지연 10초. 시작을 그때 시각으로 주면 134 · 194 가 60초를 넘지
+  # 않아 339초에 정지(+12 = 351초).
+  new_case && clock_at 1 && echo 10 >"${case_dir}/lag" &&
+    log_resp "${G}" '0 render.receive_failed err=x' \
+      '134 render.receive_failed err=x' '194 render.receive_failed err=x' \
+      '328 render.receive_failed err=x'
+  env="started=$((T0 - 3600)); watch_end=$((T0 + 3600))"
+  run_readme eval "${env}; ${restart_block}"
+  expect_watch 'restart: r4 cc 시간열(0 · 134 · 194 · 328 · 1초에) = 정지' \
+    '수신: 정지' 1
+  expect_stop_by_deadline 'restart: r4 cc 시간열(0 · 134 · 194 · 328 · 1초에)'
 }
 
 #######################################
@@ -1439,8 +1486,9 @@ readonly TTY_RUNNER
 # 대화형 zsh 와 bash 에 같이 넣는 가짜 aws · date. aws 는 받은 인자를
 # WORKERS_ZSH_CALLS 에 적고, 응답은 WORKERS_ZSH_RESP 에서 fake_aws 와 같은
 # 열쇠로 고른다(없으면 cat 이 실패). date 는 WORKERS_ZSH_NOW 를 내 감시 반복의
-# 판정 줄 시각을 두 셸에서 같게 한다. 대화형 zsh 에 들어가므로 `#` · `!` 를 쓰지 않는다. 명령 치환
-# 안의 here-doc 은 bash 3.2 가 case 의 `)` 를 치환의 끝으로 읽어 read 로 받는다.
+# 판정 줄 시각을 두 셸에서 같게 한다. 대화형 zsh 에 들어가므로 `#` · `!` 를
+# 쓰지 않는다. 명령 치환 안의 here-doc 은 bash 3.2 가 case 의 `)` 를 치환의
+# 끝으로 읽어 read 로 받는다.
 IFS= read -r -d '' SHARED_FAKE_AWS <<'SH'
 aws() {
   printf '%s\n' "$*" >> "${WORKERS_ZSH_CALLS}"
@@ -1709,6 +1757,7 @@ run_suite() {
     test_watch_stamps \
     test_watch_inputs \
     test_watch_usage \
+    test_watch_restart \
     test_watch_deadline \
     test_watch_deadline_caps; do
     # 변이 묶음은 첫 실패에서 멈춘다 — 잡혔는지만 보면 되고 시간이 준다.
@@ -1720,24 +1769,41 @@ run_suite() {
 }
 
 #######################################
-# 변이마다 README 사본으로 사례 묶음을 돌려 실패가 나오는지 본다.
+# 글자 안에 찾을 글자가 몇 번 있는지 낸다.
+# Arguments:
+#   글자, 찾을 글자.
+#######################################
+count_of() {
+  local replaced="${1//"$2"/}"
+  echo "$(((${#1} - ${#replaced}) / ${#2}))"
+}
+
+#######################################
+# 변이마다 README 사본으로 사례 묶음을 돌려 실패가 나오는지 본다. 바꿀 글자는
+# 판정 함수 블록(readme_text)과 「다시 띄우기」 블록(restart_block)을 합쳐
+# 정확히 한 번 있어야 하고, 있는 쪽만 바꾼다.
 # Globals:
-#   readme_text, quiet, suite_failures
+#   readme_text, restart_block, quiet, suite_failures
 #######################################
 test_mutations() {
-  local base="${readme_text}" i from to replaced count
+  local base="${readme_text}" restart_base="${restart_block}" i from to
+  local in_base count
   for i in "${!MUTATION_NAMES[@]}"; do
     from="${MUTATION_FROMS[i]}"
     to="${MUTATION_TOS[i]}"
-    replaced="${base//"${from}"/}"
-    count=$(((${#base} - ${#replaced}) / ${#from}))
+    in_base="$(count_of "${base}" "${from}")"
+    count=$((in_base + $(count_of "${restart_base}" "${from}")))
     if [[ "${count}" -ne 1 ]]; then
       fail "변이 「${MUTATION_NAMES[i]}」: 바꿀 글자가 ${count}번 있음"
       continue
     fi
     # bash 3.2 의 ${base/…/…} 따옴표 문제를 피해 앞 · 뒤로 잇는다
     # (network_vpce_runbook_test 와 같은 이유).
-    readme_text="${base%%"${from}"*}${to}${base#*"${from}"}"
+    if [[ "${in_base}" -eq 1 ]]; then
+      readme_text="${base%%"${from}"*}${to}${base#*"${from}"}"
+    else
+      restart_block="${restart_base%%"${from}"*}${to}${restart_base#*"${from}"}"
+    fi
     quiet=1
     suite_failures=0
     run_suite
@@ -1747,8 +1813,9 @@ test_mutations() {
     else
       pass "변이 「${MUTATION_NAMES[i]}」 잡힘"
     fi
+    readme_text="${base}"
+    restart_block="${restart_base}"
   done
-  readme_text="${base}"
 }
 
 main() {
