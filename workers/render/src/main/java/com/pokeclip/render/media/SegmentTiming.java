@@ -27,13 +27,15 @@ import java.util.Objects;
  * @param frameIntervalTicks 영상 PTS 간격 중앙값(틱). {@code toSegmentEnd} 끝 = 마지막 PTS + 이 값(7.3 4)
  * @param width              표시 폭(회전 반영)
  * @param height             표시 높이(회전 반영)
+ * @param pixelFormat        영상 화소 꼴 이름(ffprobe {@code pix_fmt} · 예 {@code yuv420p}). 판독이 내지 않으면 null. 조각 단계
+ *                           중간 파일 바이트 상한이 화소당 크기를 여기서 낸다({@link PixelFormats} · D35)
  * @param color              영상 색 표지. 새 꼴 최종 단계가 첫 결과 조각 값을 결과 영상에 되살린다
  *                           ({@link RenderCommands#renderJoined} · 13.5 「색 표지」 · P34)
  */
 public record SegmentTiming(long videoTimescale, long videoFirstDts, long fileHeadUs, long[] videoPtsSorted,
                             long videoLengthTicks, long streamDurationUs, List<TrackRange> audio, long formatStartUs,
                             long headLeadUs, long videoPacketTicks, long frameIntervalTicks, int width, int height,
-                            ColorTags color) {
+                            String pixelFormat, ColorTags color) {
 
     /** 조각 길이 대조의 허용 차(ms · 7.2 · 옛 경로 {@code ClipRenderer.TOLERANCE_MS} 와 같은 값). */
     public static final long LENGTH_TOLERANCE_MS = 100;
@@ -48,13 +50,13 @@ public record SegmentTiming(long videoTimescale, long videoFirstDts, long fileHe
 
     /**
      * 설계 3.3 의 일곱 칸으로 만든다. 나머지는 판독 정의에서 낸다 — {@code st} = Hd · {@code m} = D0 − Hd · 패킷 길이 합 = V ·
-     * 간격 = PTS 간격 중앙값 · 화면 0 · 색 모름. 실제 조각은 {@link MediaProbe#timing} 이 모든 칸을 판독으로 채운다.
+     * 간격 = PTS 간격 중앙값 · 화면 0 · 화소 꼴 모름 · 색 모름. 실제 조각은 {@link MediaProbe#timing} 이 모든 칸을 판독으로 채운다.
      */
     public SegmentTiming(long videoTimescale, long videoFirstDts, long fileHeadUs, long[] videoPtsSorted,
                          long videoLengthTicks, long streamDurationUs, List<TrackRange> audio) {
         this(videoTimescale, videoFirstDts, fileHeadUs, videoPtsSorted, videoLengthTicks, streamDurationUs, audio,
                 fileHeadUs, ticksToMicros(videoFirstDts, videoTimescale) - fileHeadUs, videoLengthTicks,
-                medianInterval(videoPtsSorted), 0, 0, ColorTags.UNKNOWN);
+                medianInterval(videoPtsSorted), 0, 0, null, ColorTags.UNKNOWN);
     }
 
     @Override

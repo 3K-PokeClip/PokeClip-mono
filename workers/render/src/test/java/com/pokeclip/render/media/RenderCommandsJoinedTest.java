@@ -23,6 +23,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class RenderCommandsJoinedTest {
 
     private static final long TS = 90_000;
+    /** 조각 단계에 넘기는 중간 파일 바이트 상한(명령 꼴만 보는 임의 값 · 산식은 {@code JoinedDiskGuardTest}). */
+    private static final long CAP = 864_000;
     private static final List<AudioTrack> TWO_TRACKS = List.of(new AudioTrack(1, 1.0), new AudioTrack(3, 0.6));
 
     /** 첫 묶음: 같은 녹화 두 조각 · 준비 · 확보 없음. 트랙 3 은 자를 구간 시작보다 64ms(3072표본) 늦게 시작한다. */
@@ -42,30 +44,37 @@ class RenderCommandsJoinedTest {
 
     @Test
     void 조각_단계는_원래_틱으로_잘라_FFV1_NUT_중간_파일에_쓴다() {
-        assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("seg_12.mp4", 183_003, 540_004, 0), 0, TS))
-                .containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-benchmark", "-y", "-copyts", "-threads", "1",
-                        "-i", "seg_12.mp4", "-map", "0:v:0", "-an", "-sn", "-dn", "-vf",
-                        "trim=start_pts=183003:end_pts=540004,setpts=PTS-183003", "-fps_mode", "passthrough",
-                        "-enc_time_base", "1/90000", "-c:v", "ffv1", "-level", "3", "-g", "1", "-f", "nut",
-                        "mid_000.nut");
+        assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("seg_12.mp4", 183_003, 540_004, 0), 0, TS,
+                CAP)).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-benchmark", "-y", "-copyts", "-threads",
+                "1", "-i", "seg_12.mp4", "-map", "0:v:0", "-an", "-sn", "-dn", "-vf",
+                "trim=start_pts=183003:end_pts=540004,setpts=PTS-183003", "-fps_mode", "passthrough",
+                "-enc_time_base", "1/90000", "-c:v", "ffv1", "-level", "3", "-g", "1", "-fs", "864000", "-f", "nut",
+                "mid_000.nut");
+    }
+
+    /** 중간 파일 바이트 상한(D35)은 출력 옵션이다 — 출력 이름 바로 앞 꼴 옵션 앞에 그대로 싣는다. */
+    @Test
+    void 조각_단계_출력에는_준_바이트_상한이_실린다() {
+        assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 0, TS, 12_345_678_901L))
+                .containsSequence("-fs", "12345678901", "-f", "nut", "mid_000.nut");
     }
 
     @Test
     void 조각_단계_중간_파일_이름은_차례_번호다() {
-        assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 12, TS))
+        assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 12, TS, CAP))
                 .last().isEqualTo("mid_012.nut");
         assertThat(RenderCommands.midFile(12)).isEqualTo("mid_012.nut");
     }
 
     @Test
     void 조각_단계는_음수_시작_틱도_0_으로_옮긴다() {
-        assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", -3_003, 3_001, 0), 0, TS))
+        assertThat(RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", -3_003, 3_001, 0), 0, TS, CAP))
                 .contains("trim=start_pts=-3003:end_pts=3001,setpts=PTS+3003");
     }
 
     @Test
     void 조각_단계에는_시간_창_옵션이_없다() {
-        List<String> cmd = RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 0, TS);
+        List<String> cmd = RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 0, TS, CAP);
         assertThat(cmd).doesNotContain("-ss", "-t", "-to");
         assertThat(String.join(" ", cmd)).doesNotContain("tpad");
     }
@@ -412,7 +421,7 @@ class RenderCommandsJoinedTest {
     void 새_꼴_명령은_셋_다_최대_RSS_를_남긴다() {
         List<List<String>> joined = List.of(finalCommand(),
                 RenderCommands.measureLoudnessJoined("ffmpeg", List.of(RUN_0), TWO_TRACKS),
-                RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 0, TS));
+                RenderCommands.cutPiece("ffmpeg", new VideoPiece("a.mp4", 0, 3_001, 0), 0, TS, CAP));
         assertThat(joined).allSatisfy(c -> assertThat(c.subList(0, 4))
                 .containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-benchmark"));
     }

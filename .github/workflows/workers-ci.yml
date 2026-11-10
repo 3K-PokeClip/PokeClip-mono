@@ -30,8 +30,8 @@ jobs:
   test:
     name: test (${{ matrix.worker }})
     runs-on: ${{ matrix.runner }}
-    # 실측(2026-10-16, 두 번): render 2분~2분 30초 · upload 1분~1분 45초(꾸러미 설치 포함). 네 배쯤으로 둔다.
-    timeout-minutes: 10
+    # 실측(2026-11-11, PR-A 3553cbb7): render 6분 3초 · upload 1분 38초(꾸러미 설치 포함). 렌더의 두 배 반쯤으로 둔다.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

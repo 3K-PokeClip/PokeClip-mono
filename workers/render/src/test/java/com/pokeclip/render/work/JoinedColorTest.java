@@ -330,7 +330,7 @@ class JoinedColorTest {
 
     private static SegmentTiming timing(ColorTags color) {
         return new SegmentTiming(90_000, 0, 0, new long[] {0}, 3_000, 33_333, List.of(), 0, 0, 3_000, 3_000, 160, 90,
-                color);
+                "yuv420p", color);
     }
 
     private List<String> messages() {
@@ -369,14 +369,15 @@ class JoinedColorTest {
         return changed(seq, t -> new SegmentTiming(t.videoTimescale(), t.videoFirstDts(), t.fileHeadUs(),
                 t.videoPtsSorted(), t.videoLengthTicks() - t.frameIntervalTicks(), t.streamDurationUs(), t.audio(),
                 t.formatStartUs(), t.headLeadUs(), t.videoPacketTicks() - t.frameIntervalTicks(),
-                t.frameIntervalTicks(), t.width(), t.height(), t.color()));
+                t.frameIntervalTicks(), t.width(), t.height(), t.pixelFormat(), t.color()));
     }
 
     /** 조각 {@code seq} 판독의 색 표지만 {@code color} 로 바꿔 내는 판독기. */
     private MediaProbe recolored(long seq, ColorTags color) {
         return changed(seq, t -> new SegmentTiming(t.videoTimescale(), t.videoFirstDts(), t.fileHeadUs(),
                 t.videoPtsSorted(), t.videoLengthTicks(), t.streamDurationUs(), t.audio(), t.formatStartUs(),
-                t.headLeadUs(), t.videoPacketTicks(), t.frameIntervalTicks(), t.width(), t.height(), color));
+                t.headLeadUs(), t.videoPacketTicks(), t.frameIntervalTicks(), t.width(), t.height(), t.pixelFormat(),
+                color));
     }
 
     /** 실제 판독 뒤 조각 {@code seq} 판독만 {@code change} 로 바꾼다. */

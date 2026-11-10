@@ -78,6 +78,6 @@ class SegmentTimingTest {
 
     private static SegmentTiming timing(long[] pts) {
         return new SegmentTiming(90_000, pts[0], 0, pts, 9_000, 100_000, List.of(MONO), 0, 0, 9_000, 3_000, 640, 360,
-                ColorTags.UNKNOWN);
+                "yuv420p", ColorTags.UNKNOWN);
     }
 }

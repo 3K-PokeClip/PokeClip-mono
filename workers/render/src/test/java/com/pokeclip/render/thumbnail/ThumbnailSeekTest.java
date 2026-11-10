@@ -46,7 +46,7 @@ class ThumbnailSeekTest {
         long lengthTicks = frames * FRAME;
         return new SegmentTiming(TS, d0, headUs, pts, lengthTicks, lengthTicks * 1_000_000 / TS,
                 List.of(new TrackRange(0, 48_000, 0, 192_000, 188)), startUs, d0 * 1_000_000 / TS - headUs, lengthTicks,
-                FRAME, 640, 360, ColorTags.UNKNOWN);
+                FRAME, 640, 360, "yuv420p", ColorTags.UNKNOWN);
     }
 
     private static ThumbnailJob job(String kind, long offsetMs, OffsetOrigin origin) {

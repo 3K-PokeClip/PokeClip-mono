@@ -283,18 +283,22 @@ public final class RenderCommands {
      *
      * <p>{@code -copyts}로 입력 시각을 옮기지 않아 trim 값이 파일의 원래 틱 정수 그대로다(시간 창 번역 · 반올림 없음).
      * {@code -enc_time_base}로 중간 파일 시간 단위를 원래 틱에 두고 {@code -fps_mode passthrough}로 프레임을 복제 · 버림 없이
-     * 넘긴다. 입력 {@code -threads 1}은 디코더 프레임 스레드 버퍼를 줄인다.
+     * 넘긴다. 입력 {@code -threads 1}은 디코더 프레임 스레드 버퍼를 줄인다. {@code -fs}는 출력 바이트 상한이다(D35) — 닿으면
+     * ffmpeg 가 파일을 잘라 쓰고 정상 종료하므로 부른 쪽이 크기로 가른다.
      *
      * @param timescale 그 조각 영상 time_base 분모(틱/초)
+     * @param maxBytes  중간 파일 바이트 상한
      */
-    public static List<String> cutPiece(String ffmpeg, VideoPiece piece, int index, long timescale) {
+    public static List<String> cutPiece(String ffmpeg, VideoPiece piece, int index, long timescale,
+                                        long maxBytes) {
         long start = piece.startPts();
         String shift = start >= 0 ? "-" + start : "+" + (-start);
         return List.of(ffmpeg, "-hide_banner", "-nostdin", BENCHMARK, "-y", "-copyts", "-threads", "1",
                 "-i", piece.sourceFile(), "-map", "0:v:0", "-an", "-sn", "-dn",
                 "-vf", "trim=start_pts=" + start + ":end_pts=" + piece.endPts() + ",setpts=PTS" + shift,
                 "-fps_mode", "passthrough", "-enc_time_base", "1/" + timescale,
-                "-c:v", "ffv1", "-level", "3", "-g", "1", "-f", "nut", midFile(index));
+                "-c:v", "ffv1", "-level", "3", "-g", "1", "-fs", Long.toString(maxBytes), "-f", "nut",
+                midFile(index));
     }
 
     /**

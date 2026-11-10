@@ -366,7 +366,7 @@ class MediaProbeTimingTest {
     }
 
     @Test
-    void 판독_명령은_설계_7_2_칸에_색_표지_코덱_설정을_더한_것이다() {
+    void 판독_명령은_설계_7_2_칸에_화소_꼴_색_표지_코덱_설정을_더한_것이다() {
         List<List<String>> commands = new ArrayList<>();
         MediaProbe probe = new MediaProbe(new Recording(commands, standard().toString()), Fixtures.MAPPER, "ffprobe");
 
@@ -374,9 +374,24 @@ class MediaProbeTimingTest {
 
         assertThat(commands).containsExactly(List.of("ffprobe", "-v", "error", "-show_data_hash", "SHA256",
                 "-show_entries", "format=start_time:stream=index,codec_type,codec_name,time_base,start_time,duration,"
-                        + "width,height,sample_rate,channels,extradata_hash,color_range,color_space,color_transfer,"
-                        + "color_primaries:stream_side_data=rotation:packet=stream_index,pts,dts,duration",
+                        + "width,height,pix_fmt,sample_rate,channels,extradata_hash,color_range,color_space,"
+                        + "color_transfer,color_primaries:stream_side_data=rotation:"
+                        + "packet=stream_index,pts,dts,duration",
                 "-of", "json", "seg.m4s"));
+    }
+
+    /** 화소 꼴은 조각 단계 중간 파일 바이트 상한의 화소당 크기다(D35). */
+    @Test
+    void 영상_화소_꼴을_읽는다() {
+        assertThat(MediaProbe.parseTiming(standard()).pixelFormat()).isEqualTo("yuv444p10le");
+    }
+
+    @Test
+    void 화소_꼴이_없으면_null_이다() {
+        ObjectNode root = standard();
+        ((ObjectNode) root.get("streams").get(0)).remove("pix_fmt");
+
+        assertThat(MediaProbe.parseTiming(root).pixelFormat()).isNull();
     }
 
     @Test
@@ -524,7 +539,8 @@ class MediaProbeTimingTest {
 
     private static void video(ObjectNode root, int index, String timeBase, String startTime, String duration) {
         ((ArrayNode) root.get("streams")).addObject().put("index", index).put("codec_name", "h264")
-                .put("codec_type", "video").put("width", 640).put("height", 360).put("time_base", timeBase)
+                .put("codec_type", "video").put("width", 640).put("height", 360).put("pix_fmt", "yuv444p10le")
+                .put("time_base", timeBase)
                 .put("start_time", startTime).put("duration", duration).put("extradata_hash", "SHA256:vv");
     }
 

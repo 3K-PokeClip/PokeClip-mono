@@ -32,10 +32,13 @@ import java.util.regex.Pattern;
  */
 public class MediaProbe {
 
-    /** 7.2 판독 칸 + 준비 조각 설정 대조 칸(코덱 · 채널 · 설정 바이트 — 7.4 7) + 색 표지 넷(13.5 「색 표지」). */
+    /**
+     * 7.2 판독 칸 + 화소 꼴(조각 단계 중간 파일 상한 · D35) + 준비 조각 설정 대조 칸(코덱 · 채널 · 설정 바이트 — 7.4 7) + 색 표지
+     * 넷(13.5 「색 표지」).
+     */
     static final String TIMING_ENTRIES = "format=start_time:stream=index,codec_type,codec_name,time_base,start_time,"
-            + "duration,width,height,sample_rate,channels,extradata_hash,color_range,color_space,color_transfer,"
-            + "color_primaries:stream_side_data=rotation:packet=stream_index,pts,dts,duration";
+            + "duration,width,height,pix_fmt,sample_rate,channels,extradata_hash,color_range,color_space,"
+            + "color_transfer,color_primaries:stream_side_data=rotation:packet=stream_index,pts,dts,duration";
 
     private static final Logger log = LoggerFactory.getLogger(MediaProbe.class);
     private static final BigInteger MICROS = BigInteger.valueOf(1_000_000);
@@ -165,7 +168,7 @@ public class MediaProbe {
         int[] size = displaySize(video);
         return new SegmentTiming(ts, d0, head.micros(), pts, videoLength, micros(video, "duration"), audio,
                 micros(root.path("format"), "start_time"), head.leadMicros(d0, ts), packetTicks, interval, size[0],
-                size[1], colorTags(video));
+                size[1], text(video, "pix_fmt"), colorTags(video));
     }
 
     /**

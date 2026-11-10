@@ -49,6 +49,22 @@ clip이 `isFinalAttempt:true`(세 번째)를 준 실행의 실패는 다시 하�
 
 **한 일꾼은 한 번에 한 주문만** 한다. 렌더는 CPU를 다 쓰는 일이라 겹치면 둘 다 느려진다. 늘리려면 일꾼 수를 늘린다.
 
+## 새 꼴 주문: 렌더 계획이 있는 주문 (PDT 개정, POK-196)
+
+주문서에 계획(`plan`)이 있으면 새 꼴이다. 위 표의 4 · 7단계(구간 덮음 확인 · 한 파일로 잇기)를 거치지 않는다. 계획이 없는 옛 꼴은 위 표 그대로 간다(판별은 `work/ClipRenderer`).
+
+- **계획 검사**: 결과에 드는 조각 열 · 시작 좌표 · 끝 경계 · 자막 끝점 · 예상 길이를 검사 규칙 1–6으로 본다. 어기면 `ENVELOPE_VALIDATION`(규칙 1은 읽으면서 `job/EnvelopeParser` · `job/PlanReader`, 2–6은 `job/PlanCheck`).
+- **두 단계 자르기(A′)**: 조각마다 ffmpeg를 한 번 돌려 고른 첫 프레임부터 남는 마지막 프레임까지 정수 틱으로 잘라 무손실 중간 파일(FFV1 · NUT)을 만든다. 마지막에 중간 파일과 소리 묶음을 입력으로 받아 한 번 인코딩한다(`work/JoinedRenderer` · `media/RenderCommands.cutPiece` · `renderJoined`).
+- **자리는 한 곳에서**: 영상 이동량 · 소리 자리 · 배치표 · 자막 자리는 모두 `work/RenderTimeline`이 같은 계획 시각에서 낸다.
+- **중간 파일 디스크**: 무손실이라 크다. 바쁜 1080p30 화면 180초 한 창에 약 10GB였다(실측 2026-11-04).
+    - 조각 크기 상한(`-fs`) = 그 조각 프레임 수 × 폭 × 높이 × 화소당 날 바이트 × 5/4 + 1MiB. 화소당 날 바이트는 원본 `pix_fmt`로 정한다(4:2:0 1.5 · 4:2:2 2 · 4:4:4(평면 `gbrp` 포함) 3 · 회색 1 · 8비트 넘으면 두 배 · 알파 · 묶음 RGB(`rgb24` 등) · 모르는 꼴은 6 — `media/PixelFormats`). 5/4는 잡음 화면에서 FFV1이 날 크기를 조금 넘는 몫, 1MiB는 용기 머리 몫이다. 1080p30 4초 yuv420p 조각이면 약 468MB다.
+    - 조각마다 쓰기 전에 남은 디스크가 상한 + 1GiB보다 적으면 `render.disk_short`(WARN)를 남기고 일시 실패로 다시 받는다(마지막 시도면 위 규칙대로 종결).
+    - 상한까지 찼으면 잘린 파일로 보고 `render.piece_capped`(WARN)를 남긴 뒤 `SOURCE_MISMATCH`로 끝낸다(ffmpeg는 `-fs`에 닿아도 정상 종료하므로 크기로 가른다).
+    - 가드는 조각 단계에만 있다. 최종 인코딩 출력과 사진 줄은 남겨 둔 1GiB 여유에 기댄다. 처음부터 디스크에 안 들어가는 주문은 뒤쪽 조각에서야 `disk_short`가 난다.
+    - 중간 파일은 성공 · 실패 · 재시도 모든 갈래에서 지운다.
+- **보고**: 성공 보고에 배치표 `placements`와 결과 길이 `lengthUs`를 싣는다.
+- **운영에서 먼저 볼 로그 줄(전체 목록 아님)**: `render.graph_size`(단계별 시간 · 중간 파일 바이트 `midBytes` · 최대 RSS) · `render.audio_run` · `render.end_owned` · `render.prime_skipped` · `render.signal_skipped` · `render.burn_rejected` · `render.color_mixed` · `render.disk_short` · `render.piece_capped`. 옛 꼴 주문은 `render.legacy_order` 한 줄을 남긴다.
+
 ## 잇기: 조각 경계에 빈틈이 생기지 않게 (실측 2026-09-24)
 
 MediaMTX 조각은 **조각마다 머리(`ftyp+moov`)가 있는 완전한 fMP4**라 ffmpeg concat demuxer로 재인코딩 없이 잇는다.

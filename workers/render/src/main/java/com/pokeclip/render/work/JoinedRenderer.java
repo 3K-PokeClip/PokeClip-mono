@@ -10,6 +10,7 @@ import com.pokeclip.render.media.AssWriter;
 import com.pokeclip.render.media.Composition;
 import com.pokeclip.render.media.Loudness;
 import com.pokeclip.render.media.MediaProbe;
+import com.pokeclip.render.media.PixelFormats;
 import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.media.RenderCommands;
 import com.pokeclip.render.media.RenderCommands.AudioRunInput;
@@ -75,21 +76,47 @@ final class JoinedRenderer {
     /** {@code render.length_drift} 를 WARN 으로 올리는 차(ms · 설계 15절). */
     static final long DRIFT_WARN_MS = 1_000;
 
+    /** 조각 단계에서 중간 파일 상한 위에 늘 남겨 둘 디스크(같은 작업 디스크를 쓰는 사진 줄 몫 · D35). */
+    static final long DISK_RESERVE_BYTES = 1L << 30;
+
+    /** 중간 파일 상한의 잡음 여유 분자 · 분모(날 바이트 × 5/4) — FFV1 은 잡음에서 날 크기를 조금 넘는다(실측 1.07배 · D35). */
+    private static final long NOISE_MARGIN_NUMERATOR = 5;
+    private static final long NOISE_MARGIN_DENOMINATOR = 4;
+
+    /** 중간 파일 하나의 담는 꼴(NUT 머리 등) 몫 — 작은 화면이면 머리가 날 화소 바이트를 넘는다(D35). */
+    static final long PIECE_CONTAINER_BYTES = 1L << 20;
+
+    /** 작업 폴더가 놓인 파일 저장소에서 지금 쓸 수 있는 바이트(조각 단계 디스크 확인). */
+    @FunctionalInterface
+    interface UsableSpace {
+
+        UsableSpace FILE_STORE = dir -> Files.getFileStore(dir).getUsableSpace();
+
+        long bytes(Path dir) throws IOException;
+    }
+
     private final S3Store store;
     private final MediaProbe probe;
     private final ProcessRunner runner;
     private final ObjectMapper mapper;
     private final String ffmpeg;
     private final String fontsDir;
+    private final UsableSpace space;
 
     JoinedRenderer(S3Store store, MediaProbe probe, ProcessRunner runner, ObjectMapper mapper, String ffmpeg,
                    String fontsDir) {
+        this(store, probe, runner, mapper, ffmpeg, fontsDir, UsableSpace.FILE_STORE);
+    }
+
+    JoinedRenderer(S3Store store, MediaProbe probe, ProcessRunner runner, ObjectMapper mapper, String ffmpeg,
+                   String fontsDir, UsableSpace space) {
         this.store = store;
         this.probe = probe;
         this.runner = runner;
         this.mapper = mapper;
         this.ffmpeg = ffmpeg;
         this.fontsDir = fontsDir;
+        this.space = space;
     }
 
     /** 조각 파일 이름(작업 폴더 안 · seq 로). */
@@ -119,7 +146,7 @@ final class JoinedRenderer {
 
         PeakRss peak = new PeakRss();
         long midBegan = System.nanoTime();
-        List<VideoPiece> pieces = cut(timeline, ts, dir, deadline, peak);
+        List<VideoPiece> pieces = cut(jobId, timeline, timings, ts, dir, deadline, peak);
         long midStageMs = millisSince(midBegan);
         long midBytes = sizeOf(dir, pieces.size());
         progress.report(20, "cut");
@@ -286,17 +313,89 @@ final class JoinedRenderer {
 
     // ── 조각 단계 · 목록(설계 7.5 (1) · (2)) ──
 
-    /** 영상이 남는 조각마다 차례로 중간 파일을 쓰고, 이음 목록을 쓴다. */
-    private List<VideoPiece> cut(RenderTimeline timeline, long ts, Path dir, Instant deadline, PeakRss peak) {
+    /**
+     * 영상이 남는 조각마다 차례로 중간 파일을 쓰고, 이음 목록을 쓴다. 조각마다 바이트 상한(그 조각이 쓰는 프레임 수로 · {@link
+     * #pieceCapBytes})을 정해, 쓰기 전에 남은 디스크를 보고({@link #requireDisk}) 출력에 상한을 걸고 쓴 뒤 상한에 닿았는지 본다
+     * ({@link #requireUncapped} · D35).
+     */
+    private List<VideoPiece> cut(UUID jobId, RenderTimeline timeline, Map<Long, SegmentTiming> timings, long ts,
+                                 Path dir, Instant deadline, PeakRss peak) {
+        List<VideoCut> cuts = timeline.videoCuts();
+        List<long[]> frames = cutFrameTicks(timeline, timings);
         List<VideoPiece> pieces = new ArrayList<>();
-        for (VideoCut c : timeline.videoCuts()) {
+        for (VideoCut c : cuts) {
             pieces.add(new VideoPiece(sourceFile(c.seq()), c.startPts(), c.endPts(), c.resultTicks()));
         }
         for (int j = 0; j < pieces.size(); j++) {
-            peak.see(runner.run(RenderCommands.cutPiece(ffmpeg, pieces.get(j), j, ts), dir, deadline));
+            long seq = cuts.get(j).seq();
+            SegmentTiming source = timings.get(seq);
+            long cap = pieceCapBytes(frames.get(j).length, source.width(), source.height(), source.pixelFormat());
+            requireDisk(jobId, seq, cap, dir);
+            peak.see(runner.run(RenderCommands.cutPiece(ffmpeg, pieces.get(j), j, ts, cap), dir, deadline));
+            requireUncapped(jobId, seq, cap, dir.resolve(RenderCommands.midFile(j)));
         }
         write(dir.resolve(RenderCommands.JOIN_LIST), RenderCommands.joinList(pieces, ts));
         return pieces;
+    }
+
+    /**
+     * 중간 파일 하나의 바이트 상한 = 프레임 수 × 폭 × 높이 × 화소당 날 바이트(판독한 화소 꼴 · {@link PixelFormats}) × 5/4 +
+     * {@link #PIECE_CONTAINER_BYTES}. 정수로만 세고 나머지는 올린다. 정수식이 넘치면(판독 값이 터무니없음) 다시 받아도 같은 값이라
+     * {@code SOURCE_MISMATCH} 종결이다.
+     */
+    static long pieceCapBytes(long frames, int width, int height, String pixelFormat) {
+        try {
+            long halfBytes = Math.multiplyExact(Math.multiplyExact(Math.multiplyExact(frames, width), height),
+                    PixelFormats.rawHalfBytesPerPixel(pixelFormat));
+            // 반바이트 → 바이트(÷ 2)와 잡음 여유(× 5/4)를 한 나눗셈으로
+            long raw = Math.ceilDiv(Math.multiplyExact(halfBytes, NOISE_MARGIN_NUMERATOR),
+                    2 * NOISE_MARGIN_DENOMINATOR);
+            return Math.addExact(raw, PIECE_CONTAINER_BYTES);
+        } catch (ArithmeticException e) {
+            throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "원본 조각 화면이 너무 커 중간 파일을 쓸 수 없다");
+        }
+    }
+
+    /** 조각 하나를 쓰기 전에 있어야 할 디스크 = 상한 + {@link #DISK_RESERVE_BYTES}. 넘침은 {@link #pieceCapBytes} 와 같다. */
+    static long diskNeedBytes(long capBytes) {
+        try {
+            return Math.addExact(capBytes, DISK_RESERVE_BYTES);
+        } catch (ArithmeticException e) {
+            throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "원본 조각 화면이 너무 커 중간 파일을 쓸 수 없다");
+        }
+    }
+
+    /**
+     * 남은 디스크가 상한 + 여유분보다 적으면 자르지 않는다. 다른 일이 디스크를 비우면 될 수 있어 일시 실패(재시도)다 — ffmpeg 가
+     * 쓰다 디스크가 차 실패하는 것과 같은 갈래({@code INTERNAL} · 재시도)이고 새 실패 코드는 없다(계약1 불변). 문장은 값을 싣지
+     * 않는 고정 글자이고, 값은 신호에만 남긴다.
+     */
+    private void requireDisk(UUID jobId, long seq, long capBytes, Path dir) {
+        long need = diskNeedBytes(capBytes);
+        long usable;
+        try {
+            usable = space.bytes(dir);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        if (usable >= need) {
+            return;
+        }
+        log.warn("render.disk_short jobId={} seq={} needBytes={} usableBytes={}", jobId, seq, need, usable);
+        throw RenderFailure.transientFailure("작업 디스크 남은 공간이 모자라 영상 조각을 자르지 못했다", null);
+    }
+
+    /**
+     * 중간 파일이 상한에 닿았으면({@code -fs} 로 잘려 쓰임) 종결한다. 잘린 파일은 결과를 짧게 만들고 싱크를 깨므로 그대로 넘기지
+     * 않는다. 상한은 그 원본 조각에서 낸 값이라 다시 해도 같아 {@code SOURCE_MISMATCH} 다.
+     */
+    private static void requireUncapped(UUID jobId, long seq, long capBytes, Path file) {
+        long bytes = size(file);
+        if (bytes < capBytes) {
+            return;
+        }
+        log.warn("render.piece_capped jobId={} seq={} capBytes={} bytes={}", jobId, seq, capBytes, bytes);
+        throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "영상 조각 중간 파일이 크기 상한에 닿았다");
     }
 
     /**
@@ -648,13 +747,17 @@ final class JoinedRenderer {
     private static long sizeOf(Path dir, int pieces) {
         long total = 0;
         for (int j = 0; j < pieces; j++) {
-            try {
-                total += Files.size(dir.resolve(RenderCommands.midFile(j)));
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
+            total += size(dir.resolve(RenderCommands.midFile(j)));
         }
         return total;
+    }
+
+    private static long size(Path file) {
+        try {
+            return Files.size(file);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private static long millisSince(long nanos) {

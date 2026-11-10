@@ -100,7 +100,7 @@ class MediaProbeTimingFfprobeTest {
     }
 
     @Test
-    void 바로_쓴_조각의_B_프레임_순서와_색_표지() throws IOException {
+    void 바로_쓴_조각의_B_프레임_순서와_화소_꼴_색_표지() throws IOException {
         Path seg = dir.resolve("direct.m4s");
         ffmpeg("-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i",
                 "sine=frequency=440:sample_rate=48000", "-f", "lavfi", "-i", "anoisesrc=color=pink:sample_rate=48000",
@@ -121,6 +121,7 @@ class MediaProbeTimingFfprobeTest {
         assertThat(pts[0]).isGreaterThan(t.videoFirstDts());
         assertThat(t.videoLengthTicks()).isEqualTo(120 * 3_000);
         assertThat(t.videoPacketTicks()).isEqualTo(120 * 3_000);
+        assertThat(t.pixelFormat()).isEqualTo("yuv420p");
         assertThat(t.color()).isEqualTo(new ColorTags("tv", "bt709", "bt709", "bt709"));
         assertThat(t.audio()).extracting(TrackRange::channels).containsExactly(1, 2);
         assertThat(t.audio().get(0).sameConfig(t.audio().get(1))).isFalse();
