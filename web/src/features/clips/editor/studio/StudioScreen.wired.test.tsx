@@ -566,6 +566,33 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     });
   });
 
+  // POK-562: 머리의 출처 줄(「…방송 · 카드 h:mm:ss」)은 이번 방송 시작부터 잰다. 기준점은 같은 송출 키로 한 앞 방송들의 길이만큼
+  // 시작보다 앞설 수 있다(prod 181시간) — 카드 ms 그대로 쓰면 「카드 181:01:05」였다
+  it('기준점이 방송 시작보다 181시간 앞서도 출처 줄의 카드 시각은 방송 시작부터다 — 저장하는 구간은 그대로다', async () => {
+    const ahead = 181 * 3_600_000;
+    server.origin = STARTED_AT - ahead;
+    server.cardWindow = { startMs: ahead + 60_000, endMs: ahead + 72_400 };
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    expect(screen.getByText(/방송 · 카드 1:05 · /)).toBeInTheDocument();
+    await user.click(save);
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 60_000,
+      outAtMs: STARTED_AT + 72_400,
+    });
+  });
+
+  it('기준점을 모르면 출처 줄에 카드 시각을 싣지 않는다 — 방송 시작으로 대신 재지 않는다(POK-562)', async () => {
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    expect(screen.getByText(/방송 · /)).toBeInTheDocument();
+    expect(screen.queryByText(/방송 · 카드 /)).toBeNull();
+  });
+
   it('방송 트랙을 하나라도 켜면 최종 믹스(0)는 빼고 보낸다 — 같은 소리가 두 번 섞이면 안 된다', async () => {
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);

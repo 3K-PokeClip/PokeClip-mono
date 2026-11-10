@@ -11,7 +11,7 @@ import { forgetCardSaves } from './cardSave';
 import { HighlightCard } from './HighlightCard';
 import { reuseHighlights } from './highlightCardView';
 import { PENDING_MAX_RECHECKS, PENDING_RECHECK_MS } from './useCardEditorReady';
-import type { LiveHighlight, LiveStream } from './useLiveMockState';
+import { UNKNOWN_CLOCK, type LiveHighlight, type LiveStream } from './useLiveMockState';
 
 vi.mock('@/features/clips/editor/prefetchCardEditor', () => ({ prefetchCardEditor: vi.fn() }));
 vi.mock('@/features/clips/editor/saveCardDraft', () => ({ saveCardDraft: vi.fn() }));
@@ -34,6 +34,7 @@ const STREAM: LiveStream = {
 const HIGHLIGHT: LiveHighlight = {
   id: 'card-23',
   timestamp: '1:07:50',
+  seekSeconds: 4070,
   title: '채팅이 튄 순간',
   status: 'scored',
   source: 'auto',
@@ -272,6 +273,37 @@ describe('HighlightCard: 시안 B2-1 모양', () => {
     expect(screen.getByText('되감기 범위를 지나 곧 사라져요')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '보관함에 저장' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '이 카드 가리기' })).not.toBeInTheDocument();
+  });
+});
+
+describe('HighlightCard: 카드 시각과 옮길 자리(POK-562)', () => {
+  it('사진을 누르면 시각 표기를 되읽지 않고 카드가 실어 준 자리(초)로 옮긴다', () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    const onSeek = vi.fn();
+    // 서버 기준점이 방송 시작보다 181시간 앞서면 옮길 자리(기준점 축)와 표기(방송 시작부터)가 다르다
+    const seekSeconds = 181 * 3600 + 4070;
+    renderWithProviders(
+      <HighlightCard
+        highlight={{ ...HIGHLIGHT, seekSeconds }}
+        stream={STREAM}
+        visuals={{}}
+        onSeek={onSeek}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '1:07:50 시점으로 이동' }));
+    expect(onSeek).toHaveBeenCalledWith(seekSeconds);
+  });
+
+  it('시각을 모르면(「--:--:--」) 단추 이름은 제목이고 저장 알림에도 시각을 싣지 않는다', async () => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    vi.mocked(saveCardDraft).mockResolvedValue({ id: 31 } as RecipeSnapshot);
+    renderCard({ ...HIGHLIGHT, timestamp: UNKNOWN_CLOCK });
+
+    expect(
+      screen.getByRole('button', { name: '채팅이 튄 순간 시점으로 이동' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
+    expect(await screen.findByText('편집본 #31')).toBeInTheDocument();
   });
 });
 

@@ -26,7 +26,7 @@ import {
   type PastVodState,
   type VodPhase,
 } from '@/features/player/pastVod';
-import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
+import { formatUptime } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LinkLockAnnouncer, LockedChatPanel, LockedStatsPanel } from './LinkLockedPanels';
@@ -41,6 +41,7 @@ import { ensureLiveAccess, takePlaybackDrop } from '@/api/playbackAccess';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
+import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
@@ -58,14 +59,14 @@ import {
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { chatFollowsPlayhead, useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
-import { useLiveMockState, type LiveStream } from './useLiveMockState';
+import { msToClock, UNKNOWN_CLOCK, useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection, type Reselect } from './useLiveStreamSelection';
 import { useLiveSession } from './useLiveSession';
 import { usePastVod } from './usePastVod';
 import { LINK_LOCK_WORD, useLinkLock, type LinkLock } from './linkLock';
-import { useManualMarking } from './useManualMarking';
+import { useManualMarking, withMarkLabel } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
 import { cardPositionUptime } from './highlightCardView';
 
@@ -704,6 +705,7 @@ function LiveChatColumn({
       ratePerMinute={chat.ratePerMinute}
       mode={mode}
       replayClock={chat.replayClock}
+      replayClockHidden={chat.replayClockHidden}
       replayWaiting={chat.replayWaiting}
       statusNote={chat.statusNote}
       followJump={followJump}
@@ -765,6 +767,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     mode: markMode,
     clockLabel: uptimeLabel,
     positionMs: () => playerRef.current?.currentPositionMs?.() ?? null,
+    // 만드는 중 자리 · 결과 줄의 시각도 카드 표기와 같이 이번 방송 시작부터다(POK-562). 모르면 시각 없이 쓴다
+    positionLabel: (position) => {
+      const elapsed = elapsedSinceStartMs(position, originMs, startedAtMs);
+      return elapsed === null ? null : msToClock(elapsed);
+    },
     onCard: mergeCard,
     onExistingCard: (card) => {
       seekTo(card.streamTimestampMs / 1000);
@@ -772,9 +779,10 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   });
   const markDisabled = markMode === 'unknown' || (markMode === 'past' && !pastMarkable);
   // 같은 값이면 같은 객체: 플레이어(memo)가 대시보드가 다시 그려질 때마다 새 mark를 받아 같이 다시 그려지지 않는다
-  const markStatus = marking.pendingLabel
-    ? `${marking.pendingLabel} 마킹됨 · 카드 생성 중`
-    : marking.notice;
+  const markStatus =
+    marking.pendingLabel !== null
+      ? withMarkLabel(marking.pendingLabel, '마킹됨 · 카드 생성 중')
+      : marking.notice;
   const playerMark = useMemo<PlayerMark>(
     () => ({
       mode: ended ? 'past' : 'live',
@@ -911,7 +919,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             {
               id: card.id,
               atMs: card.atMs,
-              timestamp: card.timestamp,
+              timestamp: card.timestamp === UNKNOWN_CLOCK ? null : card.timestamp,
+              seekSeconds: card.seekSeconds,
               label: card.source === 'manual' ? '수동' : `#${card.id.replace('card-', '')}`,
               manual: card.source === 'manual',
               reason: card.reason ?? card.title,
@@ -919,7 +928,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
           ],
     );
     const key = next
-      .map((c) => `${c.id}|${c.atMs}|${c.timestamp}|${c.label}|${c.reason}`)
+      .map((c) => `${c.id}|${c.atMs}|${c.timestamp}|${c.seekSeconds}|${c.label}|${c.reason}`)
       .join('\n');
     if (key !== pinCache.current.key) pinCache.current = { key, cards: next };
     return pinCache.current.cards;
@@ -943,7 +952,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const holdChatAt = useCallback(
     (seconds: number) => {
       playheadFromRecording.current = false;
-      publishLiveData({ playheadMs: seconds * 1000 });
+      publishLiveData({ playheadMs: seconds * 1000, playheadFromCard: true });
       if (followsPlayhead) bumpChatJump();
     },
     [followsPlayhead, bumpChatJump],
@@ -1003,7 +1012,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       // 없는 자리표시)이면 채팅이 그대로이니 위로 올려 읽던 자리도 그대로 둔다(리뷰 2라운드)
       if (!moved) {
         playheadFromRecording.current = false;
-        publishLiveData({ playheadMs: seconds * 1000 });
+        publishLiveData({ playheadMs: seconds * 1000, playheadFromCard: true });
         if (followsPlayhead) bumpChatJump();
       }
       setPendingStart(moved ? null : seconds);
@@ -1015,7 +1024,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 녹화는 끝난 방송에만 서므로 라이브 채팅은 영향이 없다
   const handlePlaybackPosition = useCallback((seconds: number) => {
     playheadFromRecording.current = true;
-    publishLiveData({ playheadMs: seconds * 1000 });
+    publishLiveData({ playheadMs: seconds * 1000, playheadFromCard: false });
   }, []);
   // 방송 중으로 밝혀지면 모르는 동안 고른 시점을 버린다(위와 같은 이유)
   useEffect(() => {
@@ -1064,18 +1073,15 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     if (linkedCardId === null || linkedDoneRef.current === linkedCardId) return;
     // 가린 카드도 찾는다(POK-463): 주소를 받은 뒤 누가 가렸어도 그 시점으로는 간다
     const card = [...highlights, ...hiddenHighlights].find((h) => h.id === `card-${linkedCardId}`);
-    const seconds = card ? parseClockLabel(card.timestamp) : null;
-    if (seconds === null) return;
+    if (card === undefined) return;
     linkedDoneRef.current = linkedCardId;
     // 재생기 층이 갈래를 올리기 전 첫 커밋의 seekTo(notPast)로 돌 수 있다. 그 길도 받아 둔 자리를 남기고 알리지 않아 waiting 과
     // 결과가 같다(POK-546 계획 4절 E)
-    seekTo(seconds);
+    seekTo(card.seekSeconds);
   }, [highlights, hiddenHighlights, linkedCardId, seekTo]);
 
   const handleSeek = useCallback(
-    (timestamp: string, from: 'card' | 'stats_pin') => {
-      const seconds = parseClockLabel(timestamp);
-      if (seconds === null) return;
+    (seconds: number, from: 'card' | 'stats_pin') => {
       // 사람이 누른 이동만 센다(주소의 카드로 옮기는 것은 위 효과) — 카드 번호·시각은 싣지 않는다 (POK-357)
       track('highlight_card_seeked', { from, mode: live ? 'live' : 'past' });
       linkedDoneRef.current = linkedCardId;
@@ -1111,12 +1117,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   );
   /** 하이라이트 카드 목록에서 누른 이동 */
   const handleCardSeek = useCallback(
-    (timestamp: string) => handleSeek(timestamp, 'card'),
+    (seconds: number) => handleSeek(seconds, 'card'),
     [handleSeek],
   );
   /** 실시간 통계의 카드 핀에서 누른 이동 */
   const handlePinSeek = useCallback(
-    (timestamp: string) => handleSeek(timestamp, 'stats_pin'),
+    (seconds: number) => handleSeek(seconds, 'stats_pin'),
     [handleSeek],
   );
 

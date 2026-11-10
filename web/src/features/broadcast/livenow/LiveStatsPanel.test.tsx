@@ -42,11 +42,15 @@ function stats(over: Partial<LiveStatsMockState> = {}): LiveStatsMockState {
   };
 }
 
+/** 서버 기준점이 방송 시작보다 181시간 앞선 방송(POK-562). 핀이 옮기는 자리(초)는 그 축이라 핀의 시각 표기와 다르다 */
+const AHEAD_S = 181 * 3600;
+
 const CARDS: TimelineCard[] = [
   {
     id: 'card-12',
     atMs: T0 + 20 * 60_000,
     timestamp: '0:20:00',
+    seekSeconds: AHEAD_S + 20 * 60,
     label: '#12',
     manual: false,
     reason: '채팅 ×3.2 급증 (120건)',
@@ -55,6 +59,7 @@ const CARDS: TimelineCard[] = [
     id: 'card-15',
     atMs: T0 + 70 * 60_000,
     timestamp: '1:10:00',
+    seekSeconds: AHEAD_S + 70 * 60,
     label: '수동',
     manual: true,
     reason: '수동 마킹',
@@ -150,11 +155,21 @@ describe('LiveStatsPanel: 그래프', () => {
   it('하이라이트 핀을 누르면 그 카드 시점으로 간다 — 자동은 카드 번호, 수동은 「수동」', () => {
     const { onSeekCard } = panel();
     fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #12 — 채팅 ×3\.2 급증/ }));
-    expect(onSeekCard).toHaveBeenCalledWith('0:20:00');
+    // 시각 표기를 되읽지 않고 카드가 실어 준 옮길 자리(서버 기준점 축)로 간다(POK-562)
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60);
     const manual = screen.getByRole('button', { name: /^하이라이트 수동 — 수동 마킹/ });
     expect(manual).toHaveTextContent('수동');
     fireEvent.click(manual);
-    expect(onSeekCard).toHaveBeenLastCalledWith('1:10:00');
+    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 70 * 60);
+  });
+
+  it('카드 시각을 모르면(null) 핀 이름에 시각을 싣지 않는다 — 누르면 그래도 옮긴다(POK-562)', () => {
+    const { onSeekCard } = panel({ cards: [{ ...CARDS[0]!, timestamp: null }] });
+    const pin = screen.getByRole('button', {
+      name: '하이라이트 #12 — 채팅 ×3.2 급증 (120건) 시점으로 이동',
+    });
+    fireEvent.click(pin);
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60);
   });
 
   it('막대 아래 후원 줄은 없다: 「후원」은 숫자 줄 한 칸뿐이다', () => {
@@ -459,7 +474,14 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
   /** #12와 #13이 붙어 있고 수동은 멀리 떨어진 카드 셋 */
   const near: TimelineCard[] = [
     twelve,
-    { ...twelve, id: 'card-13', label: '#13', atMs: twelve.atMs + 60_000, timestamp: '0:21:00' },
+    {
+      ...twelve,
+      id: 'card-13',
+      label: '#13',
+      atMs: twelve.atMs + 60_000,
+      timestamp: '0:21:00',
+      seekSeconds: AHEAD_S + 21 * 60,
+    },
     CARDS[1]!,
   ];
 
@@ -524,7 +546,8 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     const list = screen.getByRole('group', { name: '묶인 하이라이트 2개' });
     fireEvent.click(within(list).getByRole('button', { name: /^하이라이트 #13 — / }));
     expect(onSeekCard).toHaveBeenCalledTimes(1);
-    expect(onSeekCard).toHaveBeenCalledWith('0:21:00');
+    // 시각 표기가 아니라 옮길 자리(서버 기준점 축)로 간다(POK-562)
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 21 * 60);
     expect(screen.queryByRole('group', { name: '묶인 하이라이트 2개' })).toBeNull();
     expect(group).toHaveAttribute('aria-expanded', 'false');
   });

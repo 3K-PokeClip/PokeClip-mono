@@ -38,7 +38,14 @@ export function ClipSourceCard({
         .join(' · ')
     : '';
   const kind = [source?.category, source?.platform].filter(Boolean).join(' · ');
-  const scene = entry?.cut && baseMs !== null ? sceneLabel(entry.cut, baseMs) : null;
+  const scene =
+    entry?.cut && baseMs !== null
+      ? sceneLabel(
+          entry.cut,
+          baseMs,
+          entry.broadcast.startedAt ? Date.parse(entry.broadcast.startedAt) : null,
+        )
+      : null;
   const sceneWaiting = basePending && entry?.cut != null;
   const link = entry ? sourceLinkOf(entry, now) : null;
 
