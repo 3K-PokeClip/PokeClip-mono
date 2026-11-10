@@ -22,6 +22,7 @@ function highlight(id: number, overrides: Partial<LiveHighlight> = {}): LiveHigh
   return {
     id: `card-${id}`,
     timestamp: '1:07:50',
+    seekSeconds: 4070,
     title: `채팅이 튄 순간 #${id}`,
     status: 'scored',
     source: 'auto',

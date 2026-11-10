@@ -53,8 +53,10 @@ export interface TimelineCard {
   id: string;
   /** 카드가 가리키는 절대 시각(epoch ms) */
   atMs: number;
-  /** 카드의 방송 시점(h:mm:ss) — 누르면 카드를 누른 것과 같이 그 시점으로 간다 */
-  timestamp: string;
+  /** 카드의 방송 시점(h:mm:ss, 이번 방송 시작부터 — POK-562). 모르면 null이고 핀 이름 · 툴팁에 시각을 싣지 않는다 */
+  timestamp: string | null;
+  /** 누르면 카드를 누른 것과 같이 옮길 자리(초, 서버 기준점 축 — LiveHighlight.seekSeconds) */
+  seekSeconds: number;
   /** 핀 글자 — 자동 카드는 카드 제목의 번호(#12), 수동 카드는 「수동」(제목에 번호가 없다) */
   label: string;
   manual: boolean;
@@ -110,7 +112,9 @@ function useWidth<T extends HTMLElement>() {
 
 /** 핀과 묶음 목록의 카드가 같이 쓰는 이름 — 어디서 고르든 같은 카드는 같게 읽힌다 */
 function pinLabel(card: TimelineCard) {
-  return `하이라이트 ${card.label} — ${card.reason} · ${card.timestamp}로 이동`;
+  return card.timestamp === null
+    ? `하이라이트 ${card.label} — ${card.reason} 시점으로 이동`
+    : `하이라이트 ${card.label} — ${card.reason} · ${card.timestamp}로 이동`;
 }
 
 function Cell({ cell, keyClass }: { cell: StatsCell; keyClass: string | undefined }) {
@@ -169,7 +173,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
   live: boolean;
   /** 끝난 방송: 실시간이 아니라 그 방송의 통계다(QA 2026-10-11) */
   ended: boolean;
-  onSeekCard: (timestamp: string) => void;
+  onSeekCard: (seconds: number) => void;
 }) {
   const heading = ended ? '방송 통계' : '실시간 통계';
   const u = usePcUnit();
@@ -309,7 +313,7 @@ function Timeline({
   nowEdge: boolean;
   live: boolean;
   clipId: string;
-  onSeekCard: (timestamp: string) => void;
+  onSeekCard: (seconds: number) => void;
 }) {
   // 무거운 계산(칸 묶기·핀 묶기·선 보간·막대 모양·눈금)은 그래프 값이나 폭이 바뀔 때만 한다. 마우스·스크롤마다 다시 그리는 것은
   // 십자선·툴팁·스크롤 위치뿐이다 — 전에는 이동 이벤트마다 12시간 그래프 전체를 다시 계산했다(PR #316 리뷰 2라운드)
@@ -563,7 +567,7 @@ function Timeline({
         key: 'dot',
         value: c.label,
         label: `${c.manual ? '수동' : '자동'} · ${c.reason}${
-          bucketIndexAt(view, c.atMs) === i ? '' : ` · ${c.timestamp}`
+          bucketIndexAt(view, c.atMs) === i || c.timestamp === null ? '' : ` · ${c.timestamp}`
         }`,
       });
     if (b.donations > 0)
@@ -650,7 +654,9 @@ function Timeline({
                       pinOpenerRef.current = e.currentTarget;
                       setOpenPin(open ? null : first.card.id);
                     }}
-                    aria-label={`하이라이트 ${items.length}개 묶음 · ${first.card.timestamp}부터 · 눌러서 고르기`}
+                    aria-label={`하이라이트 ${items.length}개 묶음 · ${
+                      first.card.timestamp === null ? '' : `${first.card.timestamp}부터 · `
+                    }눌러서 고르기`}
                   >
                     {/* 숫자만 쓰면 자동 카드 번호(#12)처럼 읽혔다 */}
                     {`${items.length}장`}
@@ -666,7 +672,7 @@ function Timeline({
                   onPointerMove={(e) => onPinPointerMove(e, [first.card])}
                   onClick={() => {
                     if (drag.current?.moved) return;
-                    onSeekCard(first.card.timestamp);
+                    onSeekCard(first.card.seekSeconds);
                   }}
                   aria-label={pinLabel(first.card)}
                 >
@@ -864,7 +870,7 @@ function Timeline({
                   type="button"
                   className={styles.pinListItem}
                   onClick={() => {
-                    onSeekCard(card.timestamp);
+                    onSeekCard(card.seekSeconds);
                     closePinList(true);
                   }}
                   aria-label={pinLabel(card)}

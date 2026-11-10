@@ -5,7 +5,7 @@ import { ClipApiError, postWebMark, type WebMarkBody } from '@/api/clipEditor';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { blocksMarkHotkey, isMarkHotkey } from './markKey';
-import { msToClock, type LiveCardSnapshot } from './useLiveMockState';
+import type { LiveCardSnapshot } from './useLiveMockState';
 
 /** 마킹 결과 한 줄을 두는 시간 */
 const NOTICE_MS = 3000;
@@ -21,6 +21,14 @@ const NOTICE_MS = 3000;
 // 화면 컨테이너에 달면 포커스가 밖에 있을 때 죽는다. 대신 가드가 둘 붙는다 —
 // 입력 중인 곳(blocksMarkHotkey)과 이미 누군가 처리한 키(defaultPrevented).
 
+/**
+ * 마킹 시각을 앞에 붙인 한 줄(「0:00:08 마킹됨 · 카드 생성 중」). 시각을 모르면(빈 글자) 시각 없이 쓴다: 「--:--:--」 같은 자리표시는
+ * 읽히지 않는다(POK-562)
+ */
+export function withMarkLabel(label: string, text: string): string {
+  return label === '' ? text : `${label} ${text}`;
+}
+
 /** live·past는 명부가 답한 방송 상태다. 모르면 unknown이고 어느 갈래도 보내지 않는다 */
 export type MarkMode = 'live' | 'past' | 'unknown';
 
@@ -32,6 +40,8 @@ export interface ManualMarkingOptions {
   clockLabel: string | null;
   /** 지난 방송: 지금 재생 위치(서버 기준점 축 ms). 그 축의 자리가 없으면 null */
   positionMs: () => number | null;
+  /** 지난 방송: 그 재생 위치의 카드 표기(이번 방송 시작부터 — 카드 목록과 같은 글자). 모르면 null이고 시각 없이 쓴다 */
+  positionLabel: (positionMs: number) => string | null;
   /** 답으로 받은 카드(201 새 카드 · 200 앞 카드) */
   onCard: (card: LiveCardSnapshot) => void;
   /** 200(같은 eventId이거나 20초 안 앞 카드)에서 지난 방송이면 그 카드로 옮긴다. 라이브는 되감지 않는다 */
@@ -40,7 +50,7 @@ export interface ManualMarkingOptions {
 
 export function useManualMarking(options: ManualMarkingOptions): {
   mark: () => void;
-  /** 만드는 중인 카드의 시각. 보내는 동안만 있다 */
+  /** 만드는 중인 카드의 시각. 보내는 동안만 있다. 시각을 모르면 빈 글자다(withMarkLabel) */
   pendingLabel: string | null;
   /** 마킹 결과 한 줄. 토스트와 영상 아래 줄이 안 보이는 전체 화면에서 플레이어가 띄운다. 잠깐 있다 사라진다 */
   notice: string | null;
@@ -79,7 +89,8 @@ export function useManualMarking(options: ManualMarkingOptions): {
   }, []);
 
   const mark = useCallback(() => {
-    const { streamId, mode, clockLabel, positionMs, onCard, onExistingCard } = latest.current;
+    const { streamId, mode, clockLabel, positionMs, positionLabel, onCard, onExistingCard } =
+      latest.current;
     if (!streamId || sending.current) return;
     if (mode === 'unknown') {
       say('info', '방송 정보를 확인하고 있어요. 잠시 뒤 다시 눌러 주세요');
@@ -96,7 +107,7 @@ export function useManualMarking(options: ManualMarkingOptions): {
       }
       body = { eventId, positionMs: position };
       // 카드 목록과 같은 표기(카드가 서면 그 카드의 시각과 같은 글자다)
-      label = msToClock(Math.max(0, position));
+      label = positionLabel(position) ?? '';
     } else {
       const pressedAt = Date.now();
       body = { eventId, pressedAt, sentAt: pressedAt };
@@ -122,7 +133,7 @@ export function useManualMarking(options: ManualMarkingOptions): {
           if (mode === 'past') onExistingCard(card);
         } else {
           // 성공은 토스트를 안 띄운다: 평소엔 카드가 목록에 서는 것이 답이고, 전체 화면엔 그 목록이 없다
-          showNotice(`${label} 카드를 만들었어요`);
+          showNotice(withMarkLabel(label, '카드를 만들었어요'));
         }
       } catch (e) {
         if (!stillHere()) return;

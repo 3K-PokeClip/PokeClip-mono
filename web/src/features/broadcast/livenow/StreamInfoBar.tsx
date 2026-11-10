@@ -5,6 +5,7 @@ import { CirclePlus, Pencil, Zap } from 'lucide-react';
 import { Avatar, Button, IconButton, Skeleton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { MARK_HOTKEY } from './markKey';
+import { withMarkLabel } from './useManualMarking';
 import type { StreamMeta } from './useLiveDetailsMockState';
 import type { LiveStream } from './useLiveMockState';
 
@@ -49,7 +50,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
    * 「수집 전」, 지난 방송 「기록 없음」
    */
   metaNote: string;
-  /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다 */
+  /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다. 시각을 모르면 빈 글자다(withMarkLabel) */
   pendingLabel: string | null;
   /**
    * 라이브는 시안 1b 「수동 마킹 F8」, 지난 방송은 시안 1c 「이 시점 카드 추가」(재생 위치에 카드를 세운다, POK-392). 화면 상태로
@@ -173,7 +174,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
         {/* 눌렀다는 사실이 화면에만 남으면 스크린리더 사용자는 마킹됐는지 알 수 없다.
             쉴 때는 비운다 — CSS가 빈 요소를 접어 버튼이 바의 가운데에 그대로 선다. */}
         <span className={styles.markFeedback} role="status">
-          {pendingLabel ? `${pendingLabel} 마킹됨 · 카드 생성 중` : null}
+          {pendingLabel !== null ? withMarkLabel(pendingLabel, '마킹됨 · 카드 생성 중') : null}
         </span>
       </div>
     </section>

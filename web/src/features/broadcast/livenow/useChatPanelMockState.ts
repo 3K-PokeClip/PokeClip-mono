@@ -31,9 +31,11 @@ import {
   timeBaseOf,
   useLiveData,
   type LiveChart,
+  type LiveData,
   type RelayEvent,
 } from './liveDataStore';
 import { msToClock } from './useLiveMockState';
+import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
 // 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
@@ -101,6 +103,11 @@ export interface ChatPanelMockState {
    * 보일지 모른다(replayWaiting 참). 라이브는 실시간에 있으면 null이다(최신 채팅)
    */
   replayClock: string | null;
+  /**
+   * 채팅이 어느 시점까지만 보이는데 그 시각을 숨겼다(replayClock은 null). 서버 기준점 없이 카드로 옮긴 자리는 카드 초가 키 누적
+   * 축일 수 있어(181시간) 숫자를 쓰지 않는다. 기준점은 있는데 방송 시작을 몰라도 그렇다(POK-562)
+   */
+  replayClockHidden: boolean;
   /** 끝난 방송인데 채팅을 보일 영상 시점을 아직 모른다(명부 답 전, 녹화가 자리를 알리기 전) */
   replayWaiting: boolean;
   /**
@@ -248,6 +255,38 @@ function panelOf(
     hit !== undefined && hit.src === src ? hit : { src, panel: { ...toPanel(src), id } };
   kept.set(id, entry);
   return entry.panel;
+}
+
+/**
+ * 채팅 바닥의 시점 표기(이번 방송 시작부터 — POK-562). 라이브는 실제로 보이는 끝이다(실시간에 가까우면 되감은 자리보다 몇 초 앞):
+ * 바닥은 어디까지 보는지만 말한다(ChatPanel). 서버 기준점이 있으면 카드와 같은 셈이다. 없으면 0초가 녹화 시작 · 목록 첫 조각 ·
+ * 방송 시작이라 이미 방송 시작 무렵이다 — 그 축이 확실한 자리(되감은 영상 · 녹화 · 다시보기가 알린 자리)만 그 값을 쓴다. 기준점
+ * 없이 카드로 옮긴 자리는 카드 초가 키 누적 축일 수 있어 숨긴다(따라 보는 중이라는 말은 남긴다)
+ */
+function replayClockOf(
+  live: Pick<LiveData, 'originMs' | 'startedAt' | 'playheadMs' | 'playheadFromCard'>,
+  liveRewind: LiveData['liveRewind'],
+  replayCursor: number | null,
+  vodBase: number | null,
+  followsPlayhead: boolean,
+): { label: string | null; hidden: boolean } {
+  const axisMs =
+    liveRewind !== null && replayCursor !== null && vodBase !== null
+      ? replayCursor - vodBase
+      : followsPlayhead && live.playheadMs !== null
+        ? live.playheadMs
+        : null;
+  if (axisMs === null) return { label: null, hidden: false };
+  if (live.originMs === null) {
+    return liveRewind === null && live.playheadFromCard
+      ? { label: null, hidden: true }
+      : { label: msToClock(axisMs), hidden: false };
+  }
+  // 재생 위치 · 되감은 자리는 vodBase(서버 기준점이 있으면 그 축) 축이다
+  const elapsed = elapsedSinceStartMs(axisMs, vodBase, live.startedAt);
+  return elapsed === null
+    ? { label: null, hidden: true }
+    : { label: msToClock(elapsed), hidden: false };
 }
 
 /**
@@ -645,18 +684,14 @@ export function useChatPanelMockState(
   // 지난 방송만이다: 라이브는 고른 시점이 아니라 재생기가 알린 자리(되감은 영상의 시각)를 따른다
   const followsPlayhead =
     replayUpper !== null && chatFollowsPlayhead(live.status, live.endedAt, vodBase);
+  const clock = replayClockOf(live, liveRewind, replayCursor, vodBase, followsPlayhead);
   return {
     surges,
     messages,
     ratePerMinute,
     followsPlayhead,
-    // 라이브는 실제로 보이는 끝이다(실시간에 가까우면 되감은 자리보다 몇 초 앞): 바닥은 어디까지 보는지만 말한다(ChatPanel)
-    replayClock:
-      liveRewind !== null && replayCursor !== null && vodBase !== null
-        ? msToClock(replayCursor - vodBase)
-        : followsPlayhead && live.playheadMs !== null
-          ? msToClock(live.playheadMs)
-          : null,
+    replayClock: clock.label,
+    replayClockHidden: clock.hidden,
     replayWaiting,
     statusNote,
     placeholder,

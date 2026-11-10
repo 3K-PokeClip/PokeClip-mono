@@ -16,6 +16,7 @@ import {
 import { timeAgo } from '@/lib/timeAgo';
 import { setVisibleInterval } from '@/lib/visibleInterval';
 import { reuseHighlights } from './highlightCardView';
+import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
   onAirLabel,
@@ -67,7 +68,13 @@ export type HighlightSource = 'auto' | 'manual';
 
 export interface LiveHighlight {
   id: string;
+  /** 카드 시각 표기(h:mm:ss) — 이번 방송 시작부터 잰다(POK-562). 서버 기준점이나 시작을 모르면 UNKNOWN_CLOCK */
   timestamp: string;
+  /**
+   * 카드로 옮길 자리(초, 서버 기준점 축) — 카드 · 통계 핀 · 주소의 카드(?card=)가 이 값으로 옮긴다. 표기(timestamp)를 되읽지 않는다:
+   * 표기는 방송 시작부터라 기준점 축과 다르고, 모르면 숨긴다
+   */
+  seekSeconds: number;
   title: string;
   status: HighlightStatus;
   source: HighlightSource;
@@ -208,11 +215,11 @@ export function chartWindows(from: number, to: number): [number, number][] {
 }
 
 /**
- * 카드가 가리키는 방송 시점의 절대 시각. 카드를 만든 시각(createdAt)은 감지가 늦거나 다시 처리되면 급증보다
- * 뒤에 찍혀 마커가 엇나간다(PR #200 codex). 방송 시작 시각을 모르면 만든 시각으로 대신한다.
- * 기준점은 방송 시작 편지 시각이라 녹화 첫 조각과 수십 초 어긋날 수 있다(README 「시각 기준점」).
+ * 카드가 가리키는 방송 시점의 절대 시각 — 통계 그래프의 핀 자리다. 카드 ms는 서버 시각 기준점 축이라 그 0초(timeBaseOf: 틀고 있는
+ * 녹화 → 서버 기준점 → 방송 시작)에 더한다. 기준점이 없어 방송 시작으로 대신하면 수십 초 어긋날 수 있다(README 「시각 기준점」).
+ * 0초를 모르면 카드를 만든 시각(createdAt)으로 대신한다: 감지가 늦거나 다시 처리되면 급증보다 뒤에 찍혀 핀이 엇나간다(PR #200
+ * codex). 카드 시각 표기에는 쓰지 않는다(cardClock): 표기는 기준점을 모르면 대신 재지 않고 숨긴다
  */
-/** 카드가 가리키는 절대 시각. 카드 ms는 시각 기준점(녹화 첫 조각) 축이다 — 방송 시작 시각에 더하면 수십 초 어긋난다 */
 function cardAt(c: { streamTimestampMs: number; createdAt: string }, base: number | null): number {
   return base !== null ? base + c.streamTimestampMs : Date.parse(c.createdAt);
 }
@@ -236,7 +243,27 @@ export function msToClock(ms: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function toHighlight(c: Snapshot, now: number, base: number | null): LiveHighlight {
+/** 방송 시작부터 몇 초인지 모를 때의 카드 시각 표기(홈 방송 시계 LiveUptime과 같은 꼴). 단추 이름 · 알림 글에는 싣지 않는다 */
+export const UNKNOWN_CLOCK = '--:--:--';
+
+/** 카드 시각 표기의 0초를 정하는 두 시각(epoch ms) — 서버 기준점(카드 ms의 0초)과 이번 방송 시작. 모르면 null */
+interface ClockZero {
+  originMs: number | null;
+  startedAt: number | null;
+}
+
+/** 카드 ms(서버 기준점 축) → 이번 방송 시작부터의 시계. 기준점이나 시작을 모르면 UNKNOWN_CLOCK */
+function cardClock(streamTimestampMs: number, zero: ClockZero): string {
+  const elapsed = elapsedSinceStartMs(streamTimestampMs, zero.originMs, zero.startedAt);
+  return elapsed === null ? UNKNOWN_CLOCK : msToClock(elapsed);
+}
+
+function toHighlight(
+  c: Snapshot,
+  now: number,
+  base: number | null,
+  zero: ClockZero,
+): LiveHighlight {
   const ev = c.evidence ?? {};
   const ratio = typeof ev.ratio === 'number' ? ev.ratio : null;
   const count =
@@ -257,7 +284,9 @@ function toHighlight(c: Snapshot, now: number, base: number | null): LiveHighlig
   const ago = timeAgo(c.createdAt, now);
   return {
     id: `card-${c.id}`,
-    timestamp: msToClock(c.streamTimestampMs),
+    timestamp: cardClock(c.streamTimestampMs, zero),
+    // 시계 표기를 되읽어 옮기던 값과 같다(초 내림): 표기는 이제 방송 시작부터라 되읽으면 기준점과 시작의 차만큼 어긋난다
+    seekSeconds: Math.max(0, Math.floor(c.streamTimestampMs / 1000)),
     title: manual ? '핫키로 남긴 순간' : `채팅이 튄 순간 #${c.id}`,
     status,
     source: manual ? 'manual' : 'auto',
@@ -338,6 +367,9 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
   const live = useLiveData();
   // 카드 ms의 0초(서버 기준점 → 녹화 재생 서버 → 방송 시작, POK-255)
   const base = timeBaseOf(live);
+  // 카드 시각 표기의 0초(POK-562). 값이 같으면 같은 객체라 카드 목록을 다시 세우지 않는다
+  const { originMs, startedAt } = live;
+  const zero = useMemo<ClockZero>(() => ({ originMs, startedAt }), [originMs, startedAt]);
   // 방송 번호는 화면 맨 위(useLiveStreamSelection)가 정한다. 정해지기 전(빈 문자열)에는 아무것도 안 받는다
   const streamId = live.streamId;
   const streamIdRef = useRef(streamId);
@@ -792,22 +824,22 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       .sort(byLatest);
     shownHighlights.current = reuseHighlights(
       shownHighlights.current,
-      list.map((c) => toHighlight(c, now, base)),
+      list.map((c) => toHighlight(c, now, base, zero)),
       now,
     );
     return shownHighlights.current;
-  }, [cards, now, base]);
+  }, [cards, now, base, zero]);
   const hiddenHighlights = useMemo(() => {
     const list = Object.values(cards)
       .filter((c) => c.hidden)
       .sort(byLatest);
     shownHiddenHighlights.current = reuseHighlights(
       shownHiddenHighlights.current,
-      list.map((c) => toHighlight(c, now, base)),
+      list.map((c) => toHighlight(c, now, base, zero)),
       now,
     );
     return shownHiddenHighlights.current;
-  }, [cards, now, base]);
+  }, [cards, now, base, zero]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: soop } = useQuery(soopLinkQueryOptions);
