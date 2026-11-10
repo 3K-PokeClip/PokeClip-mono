@@ -796,13 +796,16 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 
 아래 첫 줄은 `worker_started` 가 보여 `started` 에 숫자가 담길 때까지 10초마다
 기다리며 아직인 까닭(판정불가 문장)을 찍으므로, apply 를 시작한 바로 뒤에 붙여
-넣어도 됩니다.
+넣어도 됩니다. 기다림이 끝나면 반복에 들어가기 전에 `기동 epoch: <초>` 줄을
+찍습니다. 반복이 이 터미널을 차지하므로, 다른 터미널(W13 로그 판정 · 지표 ·
+무완료 판정, 아래 다시 띄우기)은 이 줄의 숫자를 옮겨 적어 씁니다.
 
 ```
 until started="$(workers_started_at pokeclip-prod-render render "${apply_at}")"; do
   echo "기동 대기 — ${started}"
   sleep 10
 done
+echo "기동 epoch: ${started}"
 workers_receive_watch pokeclip-prod-render "${started}" "${watch_end}"
 ```
 
@@ -821,19 +824,30 @@ r4 시간열 — 269초 · 339초).
     안의 회복한 옛 장애는 회복 규칙(180초)이 거르고, 조회 창은 다시 띄운 때
     600초로 줄어듭니다.
 *   **인계.** 그 사이를 비우지 않도록 앞 반복이 끝나기 전에 다른 감시
-    터미널에서(블록을 붙여 넣고 `started` · 새 `watch_end` 를 숫자 그대로
-    옮겨 적은 뒤) 아래 블록으로 새 반복을 띄우고, 새 반복의 첫 판정 줄이
-    나온 뒤 앞 반복을 끝냅니다. 새 반복은 첫 판정부터 앞 반복과 같은 실패를
-    보므로 인계에 구멍이 없습니다.
+    터미널에서(블록을 붙여 넣고, 쓰는 예가 찍은 `기동 epoch:` 줄의 숫자를
+    `started` 에, 새 `watch_end` 를 숫자 그대로 옮겨 적은 뒤) 아래 블록으로
+    새 반복을 띄우고, 새 반복의 첫 판정 줄이 나온 뒤 앞 반복을 끝냅니다. 새
+    반복은 첫 판정부터 앞 반복과 같은 실패를 보므로 인계에 구멍이 없습니다.
+*   **빈 `started`.** 블록은 먼저 `started` 가 숫자인지 봅니다. 옮겨 적지
+    않았거나 숫자가 아니면 반복을 띄우지 않고 `다시 띄우기: 판정불가` 줄을
+    찍고 멈춥니다 — zsh 의 `[ … -gt "" ]` 는 빈 값을 0 으로 읽어 시작 맞춤을
+    조용히 건너뛰기 때문입니다.
 
 ```
-watch_from="$(( $(date -u +%s) - 600 ))"
-[ "${watch_from}" -gt "${started}" ] || watch_from="${started}"
-workers_receive_watch pokeclip-prod-render "${watch_from}" "${watch_end}"
+case "${started-}" in
+  '' | *[^0-9]*)
+    echo "다시 띄우기: 판정불가 — started 「${started-}」 가 숫자가 아님"
+    ;;
+  *)
+    watch_from="$(( $(date -u +%s) - 600 ))"
+    [ "${watch_from}" -gt "${started}" ] || watch_from="${started}"
+    workers_receive_watch pokeclip-prod-render "${watch_from}" "${watch_end}"
+    ;;
+esac
 ```
 
-판정 함수를 하나씩 부를 때도 `started` 가 숫자일 때(위 기다림이 끝난 뒤)
-부릅니다.
+판정 함수를 하나씩 부를 때도(반복이 도는 터미널이 아닌 다른 터미널) 쓰는
+예가 찍은 `기동 epoch:` 줄의 숫자를 `started` 에 옮겨 적은 뒤 부릅니다.
 
 ```
 workers_start_log_verdict pokeclip-prod-render render \

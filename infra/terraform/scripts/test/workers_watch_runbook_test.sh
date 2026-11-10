@@ -43,12 +43,14 @@
 #     조회 실패는 한 주기 더 · 5초 넘긴 판정 두 번 = 판정불가 · 판정 줄마다
 #     끝난 시각(UTC) · 늦은 조회 실패도 늦음 줄 · 시작 epoch 가
 #     판정불가 문장이거나 끝 epoch 가 빈 값 = 판정불가(반복하지 않음) · README
-#     「쓰는 예」 블록을 기동 신호 전에 띄우면 기다렸다가 돎. date · sleep 은
-#     사례의 가짜 시계다(sleep 200번을 넘으면 끊음).
+#     「쓰는 예」 블록을 기동 신호 전에 띄우면 기다렸다가 기동 epoch 를 찍고
+#     돎. date · sleep 은 사례의 가짜 시계다(sleep 200번을 넘으면 끊음).
 #   다시 띄우기 — README 「다시 띄우기」 블록을 이어지던 장애 한가운데서 띄운
 #     r4 cx(실패 0 · 134 · 268 · 133초에 다시 · 기동 10초 전)와 r4 cc(실패
 #     0 · 134 · 194 · 328 · 1초에 다시 · 기동 1시간 전 · 수집 지연 10초)
 #     시간열 — 첫 실패 줄에서 240초 안에 정지(위 정지 시한과 같은 셈).
+#     started 를 옮겨 적지 않은 꼴(미설정)은 bash · 대화형 zsh 모두 감시를
+#     띄우지 않고 판정불가로 멈춤(zsh 는 [ … -gt "" ] 가 빈 값을 0 으로 읽음).
 #   정지 시한 — 실패 0 · 59 · 193(r2 cx) · 0–52 · 186 + 수집 지연 2초(r2 cc) ·
 #     60 · 194 · 지연 10초 · 판정마다 5초 · r3 cx(조회 2 · 14 · 14초) · 조회가
 #     상한까지 걸려 실패 둘 · 셋째 조회가 상한 밖에서 100초 멈춤(줄 끊김) —
@@ -141,6 +143,7 @@ readonly MUTATION_NAMES=(
   'events: 읽기 시간 상한 빼기'
   'events: 이어 받기 표 검사 빼기'
   'restart: 시작을 600초 앞으로 당기기 빼기'
+  'restart: started 의 숫자 검사 빼기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -172,6 +175,7 @@ readonly MUTATION_FROMS=(
   '--cli-read-timeout 3 '
   "'.nextToken == null'"
   ' - 600 ))"'
+  'case "${started-}" in'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -203,6 +207,7 @@ readonly MUTATION_TOS=(
   ''
   'true'
   ' ))"'
+  'case 0 in'
 )
 
 # 사례 시각의 기준(2026-11-10T00:00:00Z) — 사례는 여기서 몇 초 뒤로 적는다.
@@ -210,9 +215,9 @@ readonly T0=1794268800
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
 FAKE_ACCOUNT="$(printf '%012d' 42)"
 readonly FAKE_ACCOUNT
-# 사례 76(대화형 zsh 넷 · 블록 글자 하나 포함) + 변이 28. 사례나 변이를
+# 사례 79(대화형 zsh 다섯 · 블록 글자 하나 포함) + 변이 29. 사례나 변이를
 # 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=104
+readonly EXPECTED_CASES=108
 # kty 가 판정 줄 끊김으로 판정불가를 보는 줄 사이(초) · 정지를 본 뒤 정지
 # 명령을 돌리는 여유(초) — README 「정지 시한의 셈」 과 같은 값이다.
 readonly WATCH_GAP_SECONDS=10
@@ -348,8 +353,9 @@ load_readme() {
   local anchor block
   readme_text=""
   readme_blocks=()
-  if ! restart_block="$(readme_block 'watch_from=' '')"; then
-    fail 'README 에 「다시 띄우기」 블록(watch_from=)이 하나가 아님'
+  # shellcheck disable=SC2016
+  if ! restart_block="$(readme_block 'case "${started-}" in' '')"; then
+    fail 'README 에 「다시 띄우기」 블록(case "${started-}" in)이 하나가 아님'
     return 1
   fi
   for anchor in "${ANCHORS[@]}"; do
@@ -1118,12 +1124,13 @@ test_watch_inputs() {
 #######################################
 # README 「쓰는 예」 의 수신 감시 블록(언어 없는 블록)을 글자 그대로 돌린다 —
 # 기동 신호(40초) 전에 띄워도 숫자가 나올 때까지 기다렸다가 반복을 띄우고 끝
-# 시각(60초)에 끝난다.
+# 시각(60초)에 끝난다. 기다림이 끝나면 반복 전에 「기동 epoch: <초>」 를
+# 찍는다 — 다른 감시 터미널이 옮겨 적을 숫자다.
 # Globals:
 #   case_dir, G, T0
 #######################################
 test_watch_usage() {
-  local usage
+  local usage got
   if ! usage="$(readme_block 'until started=' '')"; then
     fail 'usage: README 에 수신 감시 쓰는 예 블록이 하나가 아님'
     return 1
@@ -1135,6 +1142,13 @@ test_watch_usage() {
     '수신 감시: 끝' 0
   expect_sleeps 'usage: 기동 대기 10초 넷 뒤 2초 쉼 열' \
     '10 10 10 10 2 2 2 2 2 2 2 2 2 2'
+  # 다른 감시 터미널에 옮겨 적을 기동 epoch 가 반복 전에 화면에 남는다.
+  got="$(grep -av '^기동 대기' -- "${case_dir}/out" | head -n 1)"
+  if [[ "${got}" != "기동 epoch: $((T0 + 40))" ]]; then
+    fail "usage: 기다림 뒤 첫 줄 「${got}」 (기대 「기동 epoch: $((T0 + 40))」)"
+  else
+    pass 'usage: 기다림이 끝나면 반복 전에 기동 epoch 를 찍음'
+  fi
 }
 
 #######################################
@@ -1169,6 +1183,35 @@ test_watch_restart() {
   expect_watch 'restart: r4 cc 시간열(0 · 134 · 194 · 328 · 1초에) = 정지' \
     '수신: 정지' 1
   expect_stop_by_deadline 'restart: r4 cc 시간열(0 · 134 · 194 · 328 · 1초에)'
+
+  # started 를 옮겨 적지 않은 꼴(미설정) — 감시를 띄우지 않고 판정불가로 멈춘다.
+  new_case && clock_at 133 && echo 0 >"${case_dir}/lag" &&
+    log_resp "${G}" '0 render.receive_failed err=x'
+  run_readme eval "unset started; watch_end=$((T0 + 3600)); ${restart_block}"
+  expect_restart_refused 'restart: started 미설정 = 판정불가로 멈춤(bash)'
+}
+
+#######################################
+# 「다시 띄우기」 블록이 감시를 띄우지 않고 판정불가로 멈췄는지 본다 — 마지막
+# 줄이 「다시 띄우기: 판정불가」 이고 aws · sleep 이 한 번도 불리지 않음.
+# Globals:
+#   case_dir
+# Arguments:
+#   사례 이름.
+#######################################
+expect_restart_refused() {
+  local got
+  got="$(tail -n 1 -- "${case_dir}/out")"
+  if [[ "${got}" != '다시 띄우기: 판정불가'* ]]; then
+    fail "$1: 마지막 줄 「${got}」 (기대 「다시 띄우기: 판정불가…」) / 오류: $(
+      LC_ALL=C tr '\n' '|' <"${case_dir}/err")"
+    return 1
+  fi
+  if [[ -s "${case_dir}/calls" || -e "${case_dir}/sleeps" ]]; then
+    fail "$1: 감시를 띄움 — aws $(grep -c . "${case_dir}/calls" 2>/dev/null)번"
+    return 1
+  fi
+  pass "$1"
 }
 
 #######################################
@@ -1740,6 +1783,45 @@ test_zsh_interactive() {
 }
 
 #######################################
+# 대화형 zsh 에 판정 함수 블록과 「다시 띄우기」 블록을 넣되 started 를 옮겨
+# 적지 않은 꼴 — zsh 의 [ … -gt "" ] 는 빈 값을 0 으로 읽어 오류 없이 시작
+# 맞춤을 건너뛰므로, 블록 앞의 숫자 검사가 감시를 띄우지 않고 판정불가로
+# 멈추는지 본다. 끝 epoch 는 지금(가짜 date)이라 검사가 없으면 판정 한 번
+# 뒤 끝난다. 가짜 aws 의 기록은 calls.restart 다(new_zsh_case 의 bash 기준
+# 실행이 calls.run 을 씀).
+# Globals:
+#   case_dir, zsh_env, restart_block, ZSH_STDIN_FLAGS, T0
+#######################################
+test_zsh_restart_unset() {
+  local zsh name='restart: started 미설정 = 판정불가로 멈춤(대화형 zsh)'
+  if ! zsh="$(command -v zsh)"; then
+    skip "${name}(zsh 없음)"
+    return 0
+  fi
+  new_zsh_case || return 1
+  # shellcheck disable=SC2016
+  {
+    cat -- "${case_dir}/fake" "${case_dir}/blocks"
+    printf '%s\n' 'WORKERS_ZSH_CALLS="${WORKERS_ZSH_CALLS}.restart"' \
+      "watch_end=${T0}"
+    printf '%s' "${restart_block}"
+  } >"${case_dir}/restart.stdin"
+  "${zsh_env[@]}" "${zsh}" "${ZSH_STDIN_FLAGS[@]}" \
+    <"${case_dir}/restart.stdin" >"${case_dir}/out" 2>"${case_dir}/err"
+  if ! grep -aq '^다시 띄우기: 판정불가' "${case_dir}/out"; then
+    fail "${name}: 판정불가 줄 없음 — $(LC_ALL=C tr '\n' '|' \
+      <"${case_dir}/out")"
+    return 1
+  fi
+  if [[ -s "${case_dir}/calls.restart" ]]; then
+    fail "${name}: 감시를 띄움 — $(LC_ALL=C tr '\n' '|' \
+      <"${case_dir}/calls.restart")"
+    return 1
+  fi
+  pass "${name}"
+}
+
+#######################################
 # 사례 묶음 전부를 지금 readme_text 로 돈다.
 # Globals:
 #   quiet, suite_failures
@@ -1833,6 +1915,7 @@ main() {
     run_suite
     test_no_comment_in_blocks
     test_zsh_interactive
+    test_zsh_restart_unset
     test_mutations
   fi
 
