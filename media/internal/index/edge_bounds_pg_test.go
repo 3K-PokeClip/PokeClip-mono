@@ -604,6 +604,9 @@ func TestEdgeBoundsLedgerRaiseBoundsLockWaitSpread(t *testing.T) {
 		t.Logf("시도 %d: sa UPDATE 가 Raise 에 막힌 것을 보기 전에 Raise 가 끝났다(%v) — 판정 없이 다시", i+1, got.raiseErr)
 	}
 	r.release(t)
+	if t.Failed() {
+		return // 호출 시간 범위에서 이미 실패했다 — 아래 「막히지 않았다」 로 원인을 흐리지 않는다
+	}
 
 	if !got.blocked {
 		t.Fatalf("%d 번 모두 sa UPDATE 가 Raise 에 막히지 않았다 — 시험이 기다림 번짐을 만들지 못했다", lockSpreadAttempts)
@@ -660,7 +663,8 @@ type lockSpreadRig struct {
 	released              bool
 }
 
-// lockSpreadResult 는 시도 한 번의 관측이다. blocked 가 거짓이면 창을 놓친 시도라 나머지는 판정하지 않는다.
+// lockSpreadResult 는 시도 한 번의 관측이다. raiseTook 은 시도마다 판정한다. blocked 가 거짓이면 창을 놓친 시도라
+// 나머지는 판정하지 않는다.
 type lockSpreadResult struct {
 	blocked       bool // sa UPDATE 가 Raise 에 막힌 것을 보았다
 	raiseErr      error
