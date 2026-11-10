@@ -540,7 +540,8 @@ export function broadcastLengthLabel(broadcast: LibraryEntry['broadcast']): stri
  * 같은 0초다. 기준점(sceneBaseMs)이 없으면 부르지 않는다(2026-10-31 사용자 결정 — 위치를 안 보인다). 방송 시작보다 앞선 자리는
  * 0:00이다(2026-11-11 사용자 결정: 음수는 0). 방송 시작을 모르면 null이다
  *
- * @param baseMs 서버 시각 기준점(epoch ms, sceneBaseMs)
+ * @param baseMs 서버 시각 기준점(epoch ms, sceneBaseMs). 값은 결과를 바꾸지 않는다(구간을 그 축으로 옮겼다 되돌린다) —
+ *     이 값이 있다는 것이 「기준점이 없으면 장면 위치를 숨긴다」(2026-10-31 사용자 결정)의 관문이다
  * @param startedAtMs 이번 방송 시작(epoch ms) — entry.broadcast.startedAt
  */
 export function sceneLabel(

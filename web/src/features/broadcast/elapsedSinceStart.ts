@@ -9,7 +9,7 @@
  * @param originMs 그 축의 0초인 절대 시각(epoch ms). 모르면 null
  * @param startedAtMs 이번 방송 시작(epoch ms). 모르면 null
  * @returns 방송 시작부터의 ms. 시작보다 앞서면 0이다. 기준점이나 시작을 모르면 null이다: 다른 값으로 대신 재면 어긋난 값이 정확한
- *   값처럼 보인다(2026-10-31 사용자 결정)
+ *     값처럼 보인다(2026-10-31 사용자 결정)
  */
 export function elapsedSinceStartMs(
   axisMs: number,
