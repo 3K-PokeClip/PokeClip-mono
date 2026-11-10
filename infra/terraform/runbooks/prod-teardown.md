@@ -167,11 +167,16 @@ destroy 마다 plan 파일을 만들고 요지를 남깁니다. 판정은 둘입
 `delete` 가 아닌 줄 0, 그 루트 밖 주소 0. 하나라도 어긋나면 apply 하지
 않고 kty 에게 보고합니다.
 
+`plan_summary <루트> <plan 파일>` 은 그 plan 의 관리 자원 중 바뀌는 것을
+`<동작> <주소>` 한 줄씩 냅니다. 이 블록에는 `#` 주석 · `!` 를 두지 않습니다.
+kty 의 대화형 zsh 는 `#` 를 주석으로 읽지 않아(`interactivecomments` 꺼짐),
+함수 머리 줄에 주석이 있으면 함수가 정의되지 않고 본문이 셸에서 바로 돕니다.
+
 ```shell
-plan_summary() {  # plan_summary <루트> <plan 파일>
+plan_summary() {
   terraform -chdir="$1" show -json "$2" \
     | jq -r '.resource_changes[] | select(.mode == "managed")
-        | select(.change.actions != ["no-op"])
+        | select(.change.actions == ["no-op"] | not)
         | "\(.change.actions | join(",")) \(.address)"'
 }
 ```
