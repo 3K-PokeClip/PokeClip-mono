@@ -65,13 +65,20 @@
 #   지표 판정 — 기동 앞 분의 점은 세지 않음 · 20분 넘어 점 없음 = 판정불가 ·
 #     조회 실패 · 쌍점 없는 시각 · 범위 밖 오프셋 · 없는 날짜(변환 오류) =
 #     판정불가.
-#   사진 판정 — 옛 라이브 실패 넷 + captured 다수 · 라이브 실패 한 줄 · 기동
-#     직후 단일 실패 · 창이 차기 전 못 만든 처리 셋 · 못 만든 처리 둘 ·
-#     target_gone 셋 · live_redelivered_dropped 셋 · 카드 영구 실패 셋 = 통과,
-#     120초 지속 captured 0 · 절반 넘는 라이브 실패 · 카드 · 클립 잠깐 실패
-#     1건 = 정지.
-#   사진 반복 — README 사진 반복 블록이 카드 실패 줄에서 52초 안에 정지 줄로
-#     멈추고, 실패가 없으면 30초 쉼으로 끝 시각에 끝남.
+#   사진 판정 — 옛 라이브 실패 넷 + captured 다수 · 라이브 실패 한 줄 · 세션
+#     끝 라이브 실패 둘 · 기동 직후 단일 실패 · 창이 차기 전 못 만든 처리 셋 ·
+#     영구 실패 셋 · 못 만든 처리 둘 · target_gone 셋 ·
+#     live_redelivered_dropped 셋 · 카드 영구 실패 하나 · 사이에 captured 가
+#     있는 영구 실패 셋 · 볼 창 바로 앞 captured 의 message_done = 통과,
+#     120초 지속 captured 0 · r2 cx 시간열 · captured 로 닫힌 지난 구간 · 61초
+#     간격 라이브 실패 셋 · 영구 실패 셋 · 절반 넘는 라이브 실패 · 앞 120초
+#     구간의 비율 · 카드 · 클립 잠깐 실패 1건 = 정지.
+#   사진 반복 — README 사진 반복 블록이 카드 실패 줄에서 52초 안(그 판정이
+#     조회 실패면 88초 안)에, r2 cx 시간열(위상 다섯) · 60초마다 못 만든 처리 ·
+#     61초마다 라이브 실패(위상 둘씩)는 조건이 선 때에서 52초 안에 정지 줄로
+#     멈추고, 실패가 없으면 30초 쉼으로 끝 시각에 끝 줄(끝 시각의 조회 실패는
+#     한 주기 더) · 조회 실패 둘 이어짐 = 판정불가 · started · watch_end 없음 =
+#     판정불가(판정하지 않음).
 #   기동 시각 — 첫 worker_started 의 초 · 없음 · apply 시작 epoch 빈 값 =
 #     판정불가.
 #   블록 글자 — 줄 머리나 공백 뒤의 `#` 가 0개(부르지 않는 갈래의 주석까지) ·
@@ -125,6 +132,10 @@ readonly ANCHORS=(
   'workers_thumbnail_verdict() {'
 )
 
+# 「사진 반복」 블록(언어 없는 블록)을 찾는 줄(줄 머리).
+# shellcheck disable=SC2016
+readonly LOOP_ANCHOR='for arg in "${started-}" "${watch_end-}"; do'
+
 # 변이 — 이름 · 찾을 글자 · 바꿀 글자(같은 차례). 글자는 README 의 셸 · jq ·
 # awk 코드 그대로라 펼치지 않는다.
 readonly MUTATION_NAMES=(
@@ -166,18 +177,30 @@ readonly MUTATION_NAMES=(
   'thumb: 처리 중 captured 0 정지 빼기'
   'thumb: 라이브 실패 비율 정지 빼기'
   'thumb: kind=live 실패도 한 줄로 정지(옛 규칙)'
-  'thumb: 120초 창 빼기'
+  'thumb: 볼 창 빼기(기동부터 다 봄)'
   'thumb: 기동 epoch 숫자 검사 빼기'
   'thumb: 관찰 기간(창이 120초를 채움) 검사 빼기'
   'thumb: 못 만든 처리의 최소 건수 빼기'
   'thumb: 의도된 지우기(target_gone · 다시 받은 라이브)도 못 만든 처리로 셈'
   'thumb: 줄 정규식에서 의도된 지우기 빼기'
-  'thumb: 카드 · 클립 영구 실패도 정지(kty 결정 「가」 전 꼴)'
+  'thumb: 카드 · 클립 영구 실패 한 건도 정지(kty 결정 「가」 전 꼴)'
   'thumb: 영구 실패를 못 만든 처리로 셈'
   'empty: 시 · 분 · 초 범위 검사 빼기'
   'empty: 오프셋 범위 검사 빼기'
   'empty: 없는 날짜를 되돌려 보는 검사 빼기'
   'empty: 시각 변환 오류를 대기로(옛 꼴)'
+  'thumb: 볼 창 240초를 120초로(한 창 — 옛 꼴)'
+  'thumb: 짝짓기 여유(볼 창 앞 5초) 빼기'
+  'thumb: captured 로 닫힌 지난 구간 보지 않기'
+  'thumb: 비율 · 영구 실패를 지금 120초 한 창으로(옛 꼴)'
+  'thumb: captured 0 구간의 live 실패 셋 정지 빼기'
+  'thumb: 영구 실패 셋 정지 빼기'
+  'thumb: 영구 실패 정지의 captured 0 검사 빼기'
+  'thumb: 영구 실패 정지의 120초 채움 검사 빼기'
+  'thumb: 처리(message_done)와 결과 줄 짝짓기 빼기'
+  'thumb-loop: 조회 실패 한 번에 멈추기'
+  'thumb-loop: 끝 시각의 조회 실패에도 끝내기'
+  'thumb-loop: started · watch_end 숫자 검사 빼기'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_FROMS=(
@@ -195,7 +218,7 @@ readonly MUTATION_FROMS=(
   'delete last[name]'
   'now - last[name] <= gap'
   '"$2\\.(started|begin|message_done) "'
-  '[ "${misses}" -ge 2 ]'
+  $'[ "${misses}" -ge 2 ]; then\n      echo "${stamp} 수신'
   'sleep 2'
   '[ "${misses}" -eq 0 ] && [ "${begin}" -ge "$3" ]'
   'for arg in "${2-}" "${3-}"; do'
@@ -216,21 +239,33 @@ readonly MUTATION_FROMS=(
   '- ($t[19:] |'
   'type == "array" and all('
   'if (other > 0) {'
-  'if (full && unmade >= least && captured == 0) {'
-  'if (live >= least && live > captured) {'
-  'if ($0 ~ / kind=live /) { live++ }'
-  '    from="$(($3 - 120))"'
+  'if (n["unmade"] >= least) {'
+  'if (w["live"] >= least && w["live"] > w["captured"]) {'
+  'if ($0 ~ / kind=live /) { pending[tail++] = "live" }'
+  'lo="$(($3 - 240))"'
   '  case "${from}" in'
-  'if (full && unmade'
-  'unmade >= least && captured == 0'
-  '{ skipped++ }'
+  'end - start >= span'
+  'n["unmade"] >= least'
+  '{ pending[tail++] = "skipped" }'
   "|target_gone|live_redelivered_dropped) '"
-  $'      else if ($0 ~ / retryable=false /) { permanent++ }\n'
-  'finished - captured - live - permanent - skipped'
+  $'      else if ($0 ~ / retryable=false /) { pending[tail++] = "permanent" }\n'
+  '{ pending[tail++] = "permanent" }'
   'T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
   '|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$'
   'if ($at | todate) == $utc then . else'
   '    1) ;;'
+  'lo="$(($3 - 240))"'
+  '    from="$((lo - 5))"'
+  $'          close_span(t - 1)\n'
+  'for (s = lo; s <= last; s++) {'
+  '} else if (n["live"] >= least) {'
+  'w["permanent"] >= least && w["captured"] == 0'
+  ' && w["captured"] == 0) {'
+  'if (e - s >= span && '
+  'if (head < tail) { got = pending[head++] }'
+  '    *) misses=$((misses + 1)) ;;'
+  'elif [ "${misses}" -eq 0 ] && [ "${begin}" -ge "${watch_end}" ]; then'
+  $'      misses=2\n'
 )
 # shellcheck disable=SC2016
 readonly MUTATION_TOS=(
@@ -248,7 +283,7 @@ readonly MUTATION_TOS=(
   'n = n'
   '1'
   '"$2\\.(started|message_done) "'
-  '[ "${misses}" -ge 1 ]'
+  $'[ "${misses}" -ge 1 ]; then\n      echo "${stamp} 수신'
   'sleep 5'
   '[ "${begin}" -ge "$3" ]'
   'for arg in 0; do'
@@ -271,19 +306,31 @@ readonly MUTATION_TOS=(
   'if (0) {'
   'if (0) {'
   'if (0) {'
-  'if (0) { live++ }'
-  '      from="$2"'
+  'if (0) { pending[tail++] = "live" }'
+  'lo="$2"'
   '  case 0 in'
-  'if (1 && unmade'
-  'unmade > 0 && captured == 0'
+  '1'
+  'n["unmade"] > 0'
   '{ }'
   ") '"
   ''
-  'finished - captured - live - skipped'
+  '{ pending[tail++] = "unmade" }'
   'T[0-9:]{8}'
   '|[+-][0-9]{2}:[0-9]{2})$'
   'if true then . else'
   '    *) ;;'
+  'lo="$(($3 - 120))"'
+  '    from="${lo}"'
+  $'          split("", n)\n'
+  'for (s = last; s <= last; s++) {'
+  '} else if (0) {'
+  '0'
+  ') {'
+  'if ('
+  ''
+  '    *) misses=2 ;;'
+  'elif [ "${begin}" -ge "${watch_end}" ]; then'
+  $'      :\n'
 )
 
 # 사례 시각의 기준(2026-11-10T00:00:00Z) — 사례는 여기서 몇 초 뒤로 적는다.
@@ -291,9 +338,9 @@ readonly T0=1794268800
 # 가짜 계정 ID(12자리 — 0 으로 채운 값이라 실제 계정이 아니다).
 FAKE_ACCOUNT="$(printf '%012d' 42)"
 readonly FAKE_ACCOUNT
-# 사례 116(대화형 zsh 여섯 · 블록 글자 둘 · 본문 안내 둘 포함) + 변이 50.
+# 사례 139(대화형 zsh 여섯 · 블록 글자 둘 · 본문 안내 둘 포함) + 변이 62.
 # 사례나 변이를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=166
+readonly EXPECTED_CASES=201
 # kty 가 판정 줄 끊김으로 판정불가를 보는 줄 사이(초) · 정지를 본 뒤 정지
 # 명령을 돌리는 여유(초) — README 「정지 시한의 셈」 과 같은 값이다.
 readonly WATCH_GAP_SECONDS=10
@@ -327,6 +374,9 @@ readme_blocks=()
 # README 「다시 띄우기」 블록(언어 없는 블록 — 판정 함수를 부르므로
 # readme_text 에 넣지 않는다). 변이는 이 블록에도 건다.
 restart_block=""
+# README 「사진 반복」 블록(언어 없는 블록 — 위와 같은 까닭). 변이는 이
+# 블록에도 건다.
+loop_block=""
 # 대화형 zsh 사례에서 zsh 를 띄울 환경(env -i …) — new_zsh_case 가 둔다.
 zsh_env=()
 status=0
@@ -420,9 +470,10 @@ readme_block() {
 
 #######################################
 # ANCHORS 의 블록을 차례대로 이어 readme_text 에 두고, 하나씩 readme_blocks
-# 에도 둔다. 「다시 띄우기」 블록은 restart_block 에 둔다.
+# 에도 둔다. 「다시 띄우기」 블록은 restart_block 에, 「사진 반복」 블록은
+# loop_block 에 둔다.
 # Globals:
-#   readme_text, readme_blocks, restart_block
+#   readme_text, readme_blocks, restart_block, loop_block
 # Returns:
 #   0 / 1 블록 하나라도 못 찾음.
 #######################################
@@ -433,6 +484,11 @@ load_readme() {
   # shellcheck disable=SC2016
   if ! restart_block="$(readme_block 'case "${started-}" in' '')"; then
     fail 'README 에 「다시 띄우기」 블록(case "${started-}" in)이 하나가 아님'
+    return 1
+  fi
+  # shellcheck disable=SC2016
+  if ! loop_block="$(readme_block "${LOOP_ANCHOR}" '')"; then
+    fail "README 에 「사진 반복」 블록(${LOOP_ANCHOR})이 하나가 아님"
     return 1
   fi
   for anchor in "${ANCHORS[@]}"; do
@@ -1208,7 +1264,7 @@ test_thumbnail() {
     "$(thumb_line 90 report_unavailable)" "$(done_line 90)"
   run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 120))"
   expect 'thumb: 120초 지속 captured 0(못 만든 처리 셋) = 정지' \
-    '사진: 정지 — 지난 120초 못 만든 처리 3건에 captured 0' 1
+    '사진: 정지 — captured 0 인 240초 구간에 못 만든 처리 3건' 1
 
   # 라이브 실패 한 줄과 그 message_done 만 — 라이브는 지우고 다음 분이 다시
   # 찍는다(창이 다 참).
@@ -1260,8 +1316,14 @@ test_thumbnail() {
   done
 
   # 카드 · 클립 영구 실패(retryable=false — 원본이 저장소에 없음 · 지움 ·
-  # DLQ 아님)는 기록만 한다(kty 결정 「가」 2026-11-11). 창이 다 차도 못 만든
-  # 처리로 세지 않는다.
+  # DLQ 아님)는 따로 떨어진 것이면 기록만 하고, 120초 안 3건 이상에 captured
+  # 0 이면 정지한다(kty 결정 「가-1」 2026-11-11). 창이 다 참.
+  new_case && log_resp "${G}" "50 thumbnail.failed kind=card targetId=50 \
+${permanent}" "$(done_line 50)"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 120))"
+  expect 'thumb: 카드 영구 실패 하나 = 통과(기록만)' \
+    '사진: 통과 — 지난 120초 captured 0건 · live 실패 0건 · 카드 · 클립 영구 실패 1건' 0
+
   new_case && lines=()
   for t in 10 50 90; do
     lines+=(
@@ -1271,8 +1333,21 @@ test_thumbnail() {
   done
   log_resp "${G}" "${lines[@]}"
   run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 120))"
-  expect 'thumb: 카드 영구 실패(SOURCE_EXPIRED) 셋 = 통과(기록만)' \
-    '사진: 통과 — captured 0건 · live 실패 0건 · 카드 · 클립 영구 실패 3건' 0
+  expect 'thumb: 카드 영구 실패 셋 · captured 0 = 정지(가-1)' \
+    '사진: 정지 — 150초 전부터 120초 동안 카드 · 클립 영구 실패 3건에 captured 0' 1
+
+  # 같은 셋이 기동 뒤 120초가 차기 전(기동 0초 · 지금 100초) — 창이 다 차야
+  # 정지한다.
+  new_case && log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "${T0}" "$((T0 + 100))"
+  expect 'thumb: 기동 직후 카드 영구 실패 셋(창 미충족) = 통과' '사진: 통과' 0
+
+  # 같은 셋 사이(50초)에 captured — 셋을 품는 120초 구간마다 captured 가 있다.
+  while IFS= read -r line; do lines+=("${line}"); done < <(thumb 50 captured \
+    clip 500)
+  new_case && log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 120))"
+  expect 'thumb: 카드 영구 실패 셋 + 사이의 captured = 통과' '사진: 통과' 0
 
   # 잠깐 실패를 retryable=true 로 찍은 줄(S3 403 등 — LEAVE → DLQ 손실)은
   # 1건이어도 정지.
@@ -1335,6 +1410,94 @@ test_thumbnail() {
   new_case && log_resp "${G}"
   run_readme workers_thumbnail_verdict "${G}" '' "$((T0 + 60))"
   expect 'thumb: 기동 epoch 가 숫자가 아님 = 판정불가' '사진: 판정불가' 2
+
+  test_thumbnail_spans
+}
+
+#######################################
+# 사진 줄 판정이 한 번의 120초 창이 아니라 지난 240초 안의 어느 구간이든
+# 조건이 섰는지 보는지 — 판정 한 번으로 본다(반복은 test_thumbnail_loop).
+# Globals:
+#   case_dir, G, T0
+#######################################
+test_thumbnail_spans() {
+  local lines=() line t
+  # r2 cx 시간열 — 0초 captured 뒤 1 · 2 · 3초 못 만든 처리(주문서 거절)와
+  # 조용함. 150초의 120초 창([30, 150])은 비었지만 captured 0 인 구간
+  # [1, 150] 이 120초를 넘고 셋을 품는다.
+  new_case && lines=()
+  while IFS= read -r line; do lines+=("${line}"); done < <(thumb 0 captured \
+    live S-0)
+  for t in 1 2 3; do
+    lines+=("$(thumb_line "${t}" invalid_job)" "$(done_line "${t}")")
+  done
+  log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 150))"
+  expect 'thumb: r2 cx — captured 뒤 못 만든 처리 셋 · 조용함 = 정지' \
+    '사진: 정지 — captured 0 인 149초 구간에 못 만든 처리 3건' 1
+
+  # 같은 셋 뒤 130초에 captured — captured 로 닫힌 지난 구간 [1, 129] 도 본다.
+  while IFS= read -r line; do lines+=("${line}"); done < <(thumb 130 \
+    captured live S-130)
+  new_case && log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 145))"
+  expect 'thumb: captured 로 닫힌 지난 구간(128초)의 못 만든 처리 셋 = 정지' \
+    '사진: 정지 — captured 0 인 128초 구간에 못 만든 처리 3건' 1
+
+  # 라이브 세션 하나가 통째로 실패(61초 간격 — 어느 120초 창에도 둘뿐).
+  new_case && lines=()
+  for t in 0 61 122; do
+    while IFS= read -r line; do lines+=("${line}"); done < <(thumb "${t}" \
+      failed live "S-${t}")
+  done
+  log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 132))"
+  expect 'thumb: 라이브 세션 하나 통째 실패(61초 간격 셋) = 정지' \
+    '사진: 정지 — captured 0 인 240초 구간에 live 실패 3건' 1
+
+  # 세션 끝의 라이브 실패 둘(2026-11-11 옛 세션 꼴 — 세션마다 둘) 뒤 조용함.
+  new_case && lines=()
+  while IFS= read -r line; do lines+=("${line}"); done < <(thumb -30 captured \
+    live S-30)
+  for t in 0 60; do
+    while IFS= read -r line; do lines+=("${line}"); done < <(thumb "${t}" \
+      failed live "S-${t}")
+  done
+  log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 200))"
+  expect 'thumb: 세션 끝 라이브 실패 둘 뒤 조용함 = 통과' '사진: 통과' 0
+
+  # 라이브 실패 넷(0–3초)이 지금 120초 창([-20, 100])에서는 captured 열에
+  # 묻히지만, 그 앞 120초 구간([-118, 2])에서는 captured 하나보다 많다.
+  new_case && lines=()
+  while IFS= read -r line; do lines+=("${line}"); done < <(thumb -80 captured \
+    live S-80)
+  for t in 0 1 2 3; do
+    while IFS= read -r line; do lines+=("${line}"); done < <(thumb "${t}" \
+      failed live "S-${t}")
+  done
+  for ((t = 30; t < 40; t++)); do
+    while IFS= read -r line; do lines+=("${line}"); done < <(thumb "${t}" \
+      captured live "S-${t}")
+  done
+  log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 100))"
+  expect 'thumb: 앞 120초 구간의 라이브 실패 비율 = 정지' \
+    '사진: 정지 — 218초 전부터 120초 동안 live 실패 3건이 captured 1건보다 많음' 1
+
+  # 볼 창(지난 240초 — 60초부터)의 바로 앞 59초에 찍힌 captured 셋의
+  # message_done 이 60초에 찍힘. 창 앞 5초까지 읽어 짝을 지으므로 못 만든
+  # 처리가 아니다(짝 없이 세면 [60, 300] 이 captured 0 에 셋).
+  new_case && lines=()
+  for t in 1 2 3; do
+    lines+=("59 thumbnail.captured kind=live targetId=S-${t}"
+      "60 thumbnail.message_done messageId=m${t} receiveCount=1 \
+disposition=DELETE")
+  done
+  log_resp "${G}" "${lines[@]}"
+  run_readme workers_thumbnail_verdict "${G}" "$((T0 - 600))" "$((T0 + 300))"
+  expect 'thumb: 볼 창 바로 앞 captured 의 message_done = 통과(짝지음)' \
+    '사진: 통과' 0
 }
 
 #######################################
@@ -1520,33 +1683,53 @@ test_watch_usage() {
 }
 
 #######################################
-# README 「사진 줄 판정」 의 반복 블록(언어 없는 블록)을 낸다.
-# Returns:
-#   0 / 1 그 블록이 하나가 아님.
+# 사진 반복 블록을 글자 그대로 돌린다(started 는 기동 600초 뒤 · 끝 시각은
+# 인자). 판정마다 5초(망 쪽 상한 3초 + 상한 밖 2초)에 수집 지연 10초다.
+# Globals:
+#   case_dir, loop_block, T0
+# Arguments:
+#   시계의 첫 초(T0 뒤), 끝 시각(T0 뒤 초).
 #######################################
-thumbnail_loop_block() {
-  # shellcheck disable=SC2016
-  readme_block 'until [ "$(date -u +%s)" -ge "${watch_end:?}" ]; do' ''
+run_thumbnail_loop() {
+  clock_at "$1" && echo 10 >"${case_dir}/lag" && echo 3+2 >"${case_dir}/delay"
+  run_readme eval "started=$((T0 - 600)); watch_end=$((T0 + $2)); \
+${loop_block}"
 }
 
 #######################################
-# 사진 반복 블록을 글자 그대로 돌린다 — 판정마다 끝난 시각(ISO)을 앞에 붙여
-# 30초 쉼으로 되풀이하고, 정지면 그 줄에서 멈추며, 끝 시각이 지나면 끝난다.
-# 정지 줄은 카드 실패 줄(100초)에서 수집 지연 10초 + 앞 판정 6초 + 쉼 30초 +
-# 판정 6초 = 52초 안이다(README 「사진 반복의 셈」).
+# 사진 반복이 정지 줄로 멈췄고 그 줄의 시각(T0 뒤 초)이 상한 안인지 본다.
 # Globals:
-#   case_dir, G, T0
+#   case_dir, T0
+# Arguments:
+#   사례 이름, 상한(T0 뒤 초).
+#######################################
+expect_loop_stop() {
+  local got at
+  got="$(tail -n 1 -- "${case_dir}/out")"
+  at="$(jq -rn --arg s "${got%% *}" '$s | fromdateiso8601' 2>/dev/null)"
+  if [[ "${got#* }" != '사진: 정지'* || -z "${at}" ]]; then
+    fail "$1: 마지막 줄 「${got}」 (기대 「<ISO 시각> 사진: 정지…」)"
+  elif ((at - T0 > $2)); then
+    fail "$1: 정지 줄 $((at - T0))초 > 상한 $2초"
+  else
+    pass "$1 — $((at - T0))초 정지 줄(상한 $2초)"
+  fi
+}
+
+#######################################
+# 사진 반복 블록 — 판정마다 끝난 시각(ISO)을 앞에 붙여 30초 쉼으로 되풀이하고,
+# 정지면 그 줄에서 멈추며, 끝 시각이 지나면 「끝」 줄로 끝난다. 정지 줄은
+# 조건이 선 때에서 수집 지연 10초 + 앞 판정 6초 + 쉼 30초 + 판정 6초 = 52초
+# 안이고, 그 판정이 조회 실패면 한 주기 더(88초) 안이다(README 「사진 반복의
+# 셈」).
+# Globals:
+#   case_dir, G, T0, loop_block
 #######################################
 test_thumbnail_loop() {
-  local loop t lines=() line got at
-  if ! loop="$(thumbnail_loop_block)"; then
-    fail 'thumb-loop: README 에 사진 반복 블록이 하나가 아님'
-    return 1
-  fi
-  # 판정마다 5초(망 쪽 상한 3초 + 상한 밖 2초) · 판정 줄 5 · 40 · 75 · 110 ·
-  # 145초 — 145초 판정이 처음으로 100초 실패 줄을 본다(130초까지 보임).
-  new_case && clock_at 0 && echo 10 >"${case_dir}/lag" &&
-    echo 3+2 >"${case_dir}/delay"
+  local t lines=() line phase
+  # 카드 실패 100초 — 판정 줄 5 · 40 · 75 · 110 · 145초, 145초 판정이 처음으로
+  # 본다(130초까지 보임).
+  new_case
   for t in 0 20 40 60 80 120; do
     while IFS= read -r line; do lines+=("${line}"); done < <(thumb "${t}" \
       captured live "S-${t}")
@@ -1554,29 +1737,120 @@ test_thumbnail_loop() {
   while IFS= read -r line; do lines+=("${line}"); done < <(thumb 100 failed \
     card 77)
   log_resp "${G}" "${lines[@]}"
-  run_readme eval "started=$((T0 - 600)); watch_end=$((T0 + 3600)); ${loop}"
-  got="$(tail -n 1 -- "${case_dir}/out")"
-  at="$(jq -rn --arg s "${got%% *}" '$s | fromdateiso8601' 2>/dev/null)"
-  if [[ "${got#* }" != '사진: 정지'* || -z "${at}" ]]; then
-    fail "thumb-loop: 마지막 줄 「${got}」 (기대 「<ISO 시각> 사진: 정지…」)"
-  elif ((at - T0 > 100 + 52)); then
-    fail "thumb-loop: 정지 줄 $((at - T0))초 > 실패 줄 100초 + 52초"
+  run_thumbnail_loop 0 3600
+  expect_loop_stop 'thumb-loop: 카드 실패 100초' 152
+
+  # 같은 입력에 140초 판정이 조회 실패 — 판정불가 줄을 찍고 이어 가 175초
+  # 판정이 정지를 낸다(수신 반복처럼 이어진 두 번에서만 멈춤).
+  new_case && log_resp "${G}" "${lines[@]}" && echo "$((T0 + 140))" \
+    >"${case_dir}/fail_from"
+  run_thumbnail_loop 0 3600
+  if ! grep -q '사진: 판정불가' -- "${case_dir}/out"; then
+    fail 'thumb-loop: 조회 실패 한 번 — 판정불가 줄이 없음'
   else
-    pass "thumb-loop: 카드 실패 = $((at - T0))초 정지 줄에서 멈춤(152초 안)"
+    expect_loop_stop 'thumb-loop: 조회 실패 한 번 뒤 이어 가 정지' 188
   fi
 
-  # 실패 없이 끝 시각(90초)까지 — 0 · 30 · 60초에 판정하고 90초에 끝난다.
-  new_case && clock_at 0 && lines=()
+  # r2 cx 시간열(0초 captured · 1 · 2 · 3초 못 만든 처리 · 뒤 조용) — 조건은
+  # 121초에 서고 121초 한 초 뒤 지금 120초 창에서는 사라진다. 반복의 위상(첫
+  # 판정 시각)마다 121 + 52초 안에 정지.
+  for phase in 0 9 18 25 34; do
+    new_case && lines=()
+    while IFS= read -r line; do lines+=("${line}"); done < <(thumb 0 captured \
+      live S-0)
+    for t in 1 2 3; do
+      lines+=("$(thumb_line "${t}" invalid_job)" "$(done_line "${t}")")
+    done
+    log_resp "${G}" "${lines[@]}"
+    run_thumbnail_loop "${phase}" 600
+    expect_loop_stop "thumb-loop: r2 cx 시간열 · 위상 ${phase}초" 173
+  done
+
+  # 60초마다 이어지는 못 만든 처리(0 · 60 · 120 …) — 셋째가 120초에 서고
+  # 130초부터 보임. 61초마다 이어지는 라이브 실패 — 셋째가 122초.
+  for phase in 0 17; do
+    new_case && lines=()
+    for ((t = 0; t <= 600; t += 60)); do
+      lines+=("$(thumb_line "${t}" invalid_job)" "$(done_line "${t}")")
+    done
+    log_resp "${G}" "${lines[@]}"
+    run_thumbnail_loop "${phase}" 900
+    expect_loop_stop "thumb-loop: 60초마다 못 만든 처리 · 위상 ${phase}초" 172
+
+    new_case && lines=()
+    for ((t = 0; t <= 600; t += 61)); do
+      while IFS= read -r line; do lines+=("${line}"); done < <(thumb "${t}" \
+        failed live "S-${t}")
+    done
+    log_resp "${G}" "${lines[@]}"
+    run_thumbnail_loop "${phase}" 900
+    expect_loop_stop "thumb-loop: 61초마다 라이브 실패 · 위상 ${phase}초" 174
+  done
+
+  test_thumbnail_loop_ends
+}
+
+#######################################
+# 사진 반복 블록이 끝나는 길 — 끝 시각 · 이어진 조회 실패 둘 · 끝 시각의 조회
+# 실패 · 옮겨 적지 않은 started · watch_end.
+# Globals:
+#   case_dir, G, T0, loop_block
+#######################################
+test_thumbnail_loop_ends() {
+  local lines=() line got name end_iso='2026-11-10T00:01:30Z'
+  # 실패 없이 끝 시각(90초)까지 — 0 · 30 · 60 · 90초에 판정하고 90초 판정
+  # 뒤 「끝」 줄.
+  new_case && clock_at 0
   while IFS= read -r line; do lines+=("${line}"); done < <(thumb 1 captured \
     live S-1)
   log_resp "${G}" "${lines[@]}"
-  run_readme eval "started=$((T0 - 600)); watch_end=$((T0 + 90)); ${loop}"
+  run_readme eval "started=$((T0 - 600)); watch_end=$((T0 + 90)); \
+${loop_block}"
   got="$(tail -n 1 -- "${case_dir}/out")"
-  if [[ "${got}" != '2026-11-10T00:01:00Z 사진: 통과'* ]]; then
+  if [[ "${got}" != "2026-11-10T00:01:30Z 사진 반복: 끝 — ${end_iso}"* ]]; then
     fail "thumb-loop: 끝 시각 사례의 마지막 줄 「${got}」"
   else
-    expect_sleeps 'thumb-loop: 끝 시각까지 30초마다 통과 · 끝' '30 30 30'
+    expect_sleeps 'thumb-loop: 끝 시각까지 30초마다 통과 · 끝 줄' '30 30 30'
   fi
+
+  # 끝 시각(60초) 판정이 조회 실패 — 한 주기 더 돌아 90초 판정 뒤 끝.
+  new_case && clock_at 0 && log_resp "${G}" "${lines[@]}" &&
+    echo "$((T0 + 60))" >"${case_dir}/fail_from"
+  run_readme eval "started=$((T0 - 600)); watch_end=$((T0 + 60)); \
+${loop_block}"
+  got="$(tail -n 1 -- "${case_dir}/out")"
+  if [[ "${got}" != '2026-11-10T00:01:30Z 사진 반복: 끝'* ]]; then
+    fail "thumb-loop: 끝 시각 조회 실패 사례의 마지막 줄 「${got}」"
+  else
+    expect_sleeps 'thumb-loop: 끝 시각의 조회 실패는 한 주기 더' '30 30 30'
+  fi
+
+  # 조회 실패가 이어짐 — 둘째에서 판정불가로 멈춤(쉼 한 번).
+  new_case && clock_at 0 &&
+    : >"${case_dir}/resp/logs.filter-log-events.${G}.fail"
+  run_readme eval "started=$((T0 - 600)); watch_end=$((T0 + 3600)); \
+${loop_block}"
+  got="$(tail -n 1 -- "${case_dir}/out")"
+  if [[ "${got}" != *' 사진 반복: 판정불가 — 두 주기 이어 판정하지 못함' ]]; then
+    fail "thumb-loop: 이어진 조회 실패의 마지막 줄 「${got}」"
+  else
+    expect_sleeps 'thumb-loop: 조회 실패 두 번 이어짐 = 판정불가' '30'
+  fi
+
+  # 옮겨 적지 않은 started · watch_end — 판정하지 않고 판정불가 줄.
+  for name in started watch_end; do
+    new_case && clock_at 0 && log_resp "${G}" "${lines[@]}"
+    run_readme eval "started=$((T0 - 600)); watch_end=$((T0 + 90)); \
+unset ${name}; ${loop_block}"
+    got="$(tail -n 1 -- "${case_dir}/out")"
+    if [[ "${got}" != '사진 반복: 판정불가 — started · watch_end 중'* ]]; then
+      fail "thumb-loop: ${name} 없음 — 마지막 줄 「${got}」"
+    elif [[ -e "${case_dir}/calls" ]]; then
+      fail "thumb-loop: ${name} 없음 — 판정을 부름"
+    else
+      pass "thumb-loop: ${name} 없음 = 판정불가(반복하지 않음)"
+    fi
+  done
 }
 
 #######################################
@@ -1589,13 +1863,10 @@ test_thumbnail_loop() {
 #   case_dir, zsh_env, ZSH_STDIN_FLAGS, G, T0
 #######################################
 test_thumbnail_loop_paste() {
-  local loop zsh hits lines=() line
+  local zsh hits lines=() line
   local name='zsh: 사진 반복 블록 붙여 넣기 = bash 와 같은 결과'
-  if ! loop="$(thumbnail_loop_block)"; then
-    fail 'thumb-loop 블록: README 에 사진 반복 블록이 하나가 아님'
-    return 1
-  fi
-  hits="$(printf '%s' "${loop}" | grep -nE '(^|[[:space:]])#|<|![^[:space:]]')"
+  hits="$(printf '%s' "${loop_block}" |
+    grep -nE '(^|[[:space:]])#|<|![^[:space:]]')"
   if [[ -n "${hits}" ]]; then
     fail "thumb-loop 블록: 막는 글자 $(printf '%s' "${hits}" | LC_ALL=C \
       tr '\n' '|')"
@@ -1615,7 +1886,7 @@ test_thumbnail_loop_paste() {
     cat -- "${case_dir}/fake" "${case_dir}/blocks"
     printf '%s\n' 'WORKERS_ZSH_CALLS="${WORKERS_ZSH_CALLS}.loop"' \
       "started=$((T0 - 600))" "watch_end=$((T0 + 3600))"
-    printf '%s\n' "${loop}"
+    printf '%s\n' "${loop_block}"
   } >"${case_dir}/loop.stdin"
   "${zsh_env[@]}" bash -s <"${case_dir}/loop.stdin" >"${case_dir}/loop.bash" \
     2>&1
@@ -2468,19 +2739,20 @@ count_of() {
 
 #######################################
 # 변이마다 README 사본으로 사례 묶음을 돌려 실패가 나오는지 본다. 바꿀 글자는
-# 판정 함수 블록(readme_text)과 「다시 띄우기」 블록(restart_block)을 합쳐
-# 정확히 한 번 있어야 하고, 있는 쪽만 바꾼다.
+# 판정 함수 블록(readme_text) · 「다시 띄우기」 블록(restart_block) · 「사진
+# 반복」 블록(loop_block)을 합쳐 정확히 한 번 있어야 하고, 있는 쪽만 바꾼다.
 # Globals:
-#   readme_text, restart_block, quiet, suite_failures
+#   readme_text, restart_block, loop_block, quiet, suite_failures
 #######################################
 test_mutations() {
-  local base="${readme_text}" restart_base="${restart_block}" i from to
-  local in_base count
+  local base="${readme_text}" restart_base="${restart_block}"
+  local loop_base="${loop_block}" i from to in_base in_restart count
   for i in "${!MUTATION_NAMES[@]}"; do
     from="${MUTATION_FROMS[i]}"
     to="${MUTATION_TOS[i]}"
     in_base="$(count_of "${base}" "${from}")"
-    count=$((in_base + $(count_of "${restart_base}" "${from}")))
+    in_restart="$(count_of "${restart_base}" "${from}")"
+    count=$((in_base + in_restart + $(count_of "${loop_base}" "${from}")))
     if [[ "${count}" -ne 1 ]]; then
       fail "변이 「${MUTATION_NAMES[i]}」: 바꿀 글자가 ${count}번 있음"
       continue
@@ -2489,8 +2761,10 @@ test_mutations() {
     # (network_vpce_runbook_test 와 같은 이유).
     if [[ "${in_base}" -eq 1 ]]; then
       readme_text="${base%%"${from}"*}${to}${base#*"${from}"}"
-    else
+    elif [[ "${in_restart}" -eq 1 ]]; then
       restart_block="${restart_base%%"${from}"*}${to}${restart_base#*"${from}"}"
+    else
+      loop_block="${loop_base%%"${from}"*}${to}${loop_base#*"${from}"}"
     fi
     quiet=1
     suite_failures=0
@@ -2503,6 +2777,7 @@ test_mutations() {
     fi
     readme_text="${base}"
     restart_block="${restart_base}"
+    loop_block="${loop_base}"
   done
 }
 

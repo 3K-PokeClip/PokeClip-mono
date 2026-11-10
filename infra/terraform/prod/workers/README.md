@@ -285,9 +285,11 @@ epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤�
     지워짐) · `thumbnail.report_unavailable` ·
     `thumbnail.deadline_before_report` · 아래 사진 줄 판정
     (`workers_thumbnail_verdict`)의 정지 — 카드 · 클립 잠깐 실패 1건,
-    사진을 만들려다 못 만든 처리 3건 이상에 captured 0 이 120초, 절반 넘는
-    라이브 실패. `kind=live` 의 `thumbnail.failed` 한 줄과 카드 · 클립 영구
-    실패(`retryable=false`)는 정지가 아니고 기록만 합니다(그 판정의 근거).
+    captured 0 이 120초 넘게 이어진 구간의 못 만든 처리 3건 이상이나
+    라이브 실패 3건 이상, 절반 넘는 라이브 실패, 120초 안 카드 · 클립 영구
+    실패 3건 이상에 captured 0. `kind=live` 의 `thumbnail.failed` 한두 줄과
+    따로 떨어진 카드 · 클립 영구 실패(`retryable=false`)는 정지가 아니고
+    기록만 합니다(그 판정의 근거).
 *   렌더 줄: `render.started_rejected` · `render.report_rejected` ·
     `render.report_unavailable` · `render.unexpected`.
 *   업로드: `upload.loop_error` · `upload.unavailable`.
@@ -332,9 +334,10 @@ thumbnail 줄 = render, upload 줄 = upload)입니다. 감시 불능은 그 기�
 1.  **사진:** `thumbnail.report_unavailable` 이 서로 다른 대상으로 **연속
     3건**, 또는 `thumbnail.report_rejected` 1건(카드 · 클립이면 그 자리
     손실이라 운영 중에도 1건), 또는 사진 줄 판정
-    (`workers_thumbnail_verdict`)의 정지. `kind=live` 실패 한 줄은 세지
-    않고(그 판정이 비율로 봄), 카드 · 클립 영구 실패(`retryable=false`)는
-    기록만 합니다.
+    (`workers_thumbnail_verdict`)의 정지. `kind=live` 실패 한두 줄은 세지
+    않고(그 판정이 구간 · 비율로 봄), 카드 · 클립 영구 실패
+    (`retryable=false`)는 그 판정이 120초 안 3건 이상에 captured 0 일 때만
+    정지로 보고 따로 떨어진 것은 기록만 합니다.
 1.  `*.loop_error` · `render.unexpected` · `render.report_rejected` 가 한
     번이라도.
 1.  DLQ 셋(사진 · 렌더 · 업로드) 중 하나라도 깊이가 apply 직전 기준보다
@@ -618,7 +621,7 @@ workers_receive_verdict() {
 쪽)이고 거짓 통과는 없습니다. 쉼 · 늦음 상한 · 시간 상한 · 쪽 따라가기 2초 ·
 조회 창 600초 · 수집 지연 가정 · 끊김 10초를 바꾸면 이 셈과 시험의 시한 사례를
 함께 고칩니다. 사진 줄 판정의 반복은 따로 셉니다(아래 「사진 반복의 셈」 —
-늦어도 68초).
+늦어도 104초).
 
 ```shell
 workers_receive_watch() {
@@ -841,30 +844,48 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 겹침 없음)만 이 지표를 단독 신호로 쓰고, 이미지 교체처럼 옛 태스크와 겹치는
 동안에는 보조로만 둡니다 — 그때는 로그 판정과 수신 불능 판정이 주 신호입니다.
 
-**사진 줄 판정(첫 소비 · 운영 중).** 지난 120초(기동이 더 늦으면 기동부터)의
-사진 결과로 가릅니다. 하나라도 서면 정지입니다(정지 대상 render).
+**사진 줄 판정(첫 소비 · 운영 중).** 지난 240초(기동이 더 늦으면 기동부터)의
+사진 결과로 가립니다. 하나라도 서면 정지입니다(정지 대상 render). 한 번의
+120초 창이 아니라 그 240초 안의 **어느 구간이든** 조건이 섰는지 봅니다 — 30초
+쉼으로 도는 반복의 두 판정 사이에 섰다 사라진 조건(예: 마지막 captured 뒤 못
+만든 처리 셋이 몰리고 조용해져, 지금 120초 창으로는 121초 한 초 동안만 서는
+조건)도 다음 판정이 잡습니다.
 
 *   `kind=card` · `kind=clip` 의 **잠깐 실패** 1건 — `thumbnail.failed` 중
     `retryable=false` 가 아닌 줄(`reason=…` 또는 `retryable=true`)입니다.
     카드 · 클립 사진은 잠깐 안 된 실패면 메시지를 두어(`LEAVE`) 다시 받히고
     세 번째 뒤 DLQ 로 가는 손실입니다.
-*   기동 뒤 120초가 지나 창이 다 찼고, 그 창에서 **사진을 만들려다 못 만든
-    처리** 가 3건 이상인데 `thumbnail.captured` 0 — 사진을 하나도 올리지
-    못하는 채 처리만 돕니다. 창이 차기 전(기동 직후)과 한두 건에는 서지
+*   **captured 0 이 120초 넘게 이어진 구간** 에 **못 만든 처리** 3건 이상,
+    또는 `kind=live` 실패 3건 이상 — 사진을 하나도 올리지 못하는 채 처리만
+    돕니다. 구간은 captured 와 captured 사이(양 끝은 240초 창의 시작 · 지금)
+    이고 기동 뒤만 보므로, 기동 직후 120초 안과 한두 건에는 서지 않습니다.
+    captured 가 다시 찍혀 닫힌 지난 구간도 봅니다. 라이브 세션 하나가 통째로
+    실패하는 꼴(1분마다 한 건)은 240초 창의 구간에 셋 넘게 들어 잡히고,
+    세션 끝에 한두 건 실패하는 꼴(2026-11-11 옛 세션 둘이 두 건씩)은 서지
     않습니다.
-*   `kind=live` 실패가 3건 이상이고 같은 창의 `captured` 보다 많음 — 절반
+*   어느 120초 구간(기동 뒤 120초가 안 됐으면 기동부터 지금까지)에서
+    `kind=live` 실패가 3건 이상이고 같은 구간의 captured 보다 많음 — 절반
     넘게 실패하는 것은 대상 탓이 아니라 일꾼 · 저장소 쪽 탓입니다.
+*   기동 뒤 어느 120초 구간에서 카드 · 클립 **영구 실패** 3건 이상에
+    captured 0 — 아래 「영구 실패」(kty 결정 「가-1」).
 
-**못 만든 처리** 는 처리(`thumbnail.message_done` — 메시지 하나에 한 줄,
-`work/QueueWorker.java` 128행)에서 아래 다섯을 뺀 수입니다. 남는 것은 보고를
-못 한 처리(`report_unavailable` · `deadline_before_report` ·
-`report_rejected`) · 주문서가 깨진 처리(`invalid_job`)와 결과 줄을 모르는
-처리입니다.
+결과는 그 메시지의 처리 시각(`thumbnail.message_done` — 메시지 하나에 한 줄,
+`work/QueueWorker.java` 128행)으로 셉니다. 사진 줄은 한 스레드가 메시지를
+하나씩 처리하고(`maxNumberOfMessages(1)`) 결과 줄(`captured` · `failed` ·
+`target_gone` · `live_redelivered_dropped`) 바로 뒤에 `message_done` 을
+찍으므로, `message_done` 마다 그 앞의 아직 짝이 없는 결과 줄을 차례로
+짝짓습니다. 창 앞 5초까지 읽어 창 바로 앞에 찍힌 결과 줄도 짝을 찾습니다 —
+줄 시각으로 세면 창 경계에 결과 줄만 걸려, 몰아 처리한 직후 조용해질 때 짝 없는
+`message_done` 이 못 만든 처리로 잘못 셉니다.
+
+**못 만든 처리** 는 결과 줄과 짝이 없는 `message_done` 입니다. 보고를 못 한
+처리(`report_unavailable` · `deadline_before_report` · `report_rejected`) ·
+주문서가 깨진 처리(`invalid_job`)와 결과 줄을 모르는 처리입니다. 아래 다섯은
+짝이 있어 세지 않습니다.
 
 *   `thumbnail.captured` — 만든 것.
-*   `kind=live` 실패 — 셋째 조건이 비율로 봅니다(라이브 전부 실패도 셋째가
-    잡음).
-*   카드 · 클립 영구 실패 — 아래 「영구 실패는 기록만」.
+*   `kind=live` 실패 — 구간 · 비율 조건이 따로 셉니다.
+*   카드 · 클립 영구 실패 — 아래 「영구 실패」.
 *   `thumbnail.target_gone` — 사진을 만들어 올린 뒤 clip 이 대상이 그 사이
     지워졌다고 답해(탈퇴 — POK-256) 올린 사진을 지운 정상 경로입니다
     (`thumbnail/ThumbnailProcessor.java` 119–124행).
@@ -872,16 +893,18 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
     지운 정상 경로입니다(같은 파일 81–84행 — 그 사이 뒤 주문이 올린 새
     장면을 옛 장면으로 덮지 않으려고).
 
-**카드 · 클립 영구 실패는 기록만 합니다(kty 결정 2026-11-11).**
-`retryable=false` 줄 — 원본이 저장소에 없음(`code=SOURCE_EXPIRED` —
+**영구 실패 — 따로 떨어진 것은 기록만, 몰리면 정지(kty 결정 2026-11-11
+「가-1」).** `retryable=false` 줄 — 원본이 저장소에 없음(`code=SOURCE_EXPIRED` —
 `storage/S3Store.java` 41–45행)과 장면을 못 뽑음(`code=SOURCE_MISMATCH` —
 `ThumbnailProcessor` 155행) — 은 다시 해도 같은 실패라 메시지를 그 자리에서
-지우고(96–98행) DLQ 로 가지 않습니다. 대상(지워진 조각 · 원본 내용) 탓이라
-일꾼을 멈춰도 나아지지 않으므로, 통과 줄의 「카드 · 클립 영구 실패 N건」 으로
-남깁니다. 잠깐 실패를 `retryable=true` 로 찍은 줄(S3 403 · 끊김)은 `LEAVE`
-라 첫째 조건으로 정지입니다.
+지우고(96–98행) DLQ 로 가지 않습니다. 한 건은 대상(지워진 조각 · 원본 내용)
+탓이라 일꾼을 멈춰도 나아지지 않으므로, 통과 줄의 「카드 · 클립 영구 실패
+N건」 으로 남깁니다. 그러나 120초 안에 3건 이상인데 captured 가 하나도 없으면
+대상마다의 탓이 아니라 일꾼 · 저장소 쪽(원본을 읽는 길 · ffmpeg)이 통째로
+못 하는 것으로 보고 정지합니다. 잠깐 실패를 `retryable=true` 로 찍은 줄(S3
+403 · 끊김)은 `LEAVE` 라 첫째 조건으로 정지입니다.
 
-**`kind=live` 실패 한 줄은 정지가 아닙니다.** `workers/render` 의
+**`kind=live` 실패 한두 줄은 정지가 아닙니다.** `workers/render` 의
 `ThumbnailProcessor` 는 라이브 주문을 실패의 갈래와 상관없이 지웁니다 —
 잠깐 안 된 실패는 `retryOrDrop` 이 `live` 면 `DELETE` 를 내고, 다시 해도 같은
 실패(`retryable=false`)도 `DELETE` 입니다. 라이브는 같은 키에 1분마다 덮어쓰고
@@ -895,12 +918,12 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 따로 찍힙니다. 같은 대상의 다른 분 주문은 captured 였으므로 그 조각의 내용
 탓으로 봅니다. 저장소 · 망 쪽 실패는 모든 대상에 함께 오므로 위 둘째 · 셋째
 조건이 잡습니다. 이 판정은 아래 「쓰는 예」 의 **사진 반복** 블록으로 첫 소비
-감시부터 시험 · 관찰이 끝날 때까지 30초마다 돌립니다. 인자는 로그 그룹 · 기동
-epoch · 지금 epoch 입니다.
+감시부터 시험 · 관찰이 끝날 때까지 30초 쉼마다 돌립니다. 인자는 로그 그룹 ·
+기동 epoch · 지금 epoch 입니다.
 
 ```shell
 workers_thumbnail_verdict() {
-  local from="${2-}" full=0
+  local from="${2-}" lo
   case "${from}" in
     '' | *[^0-9]*)
       echo "사진: 판정불가 — 기동 epoch(둘째 인자)가 숫자가 아님"
@@ -913,11 +936,12 @@ workers_thumbnail_verdict() {
       return 2
       ;;
   esac
-  if [ "$(($3 - $2))" -ge 120 ]; then
-    full=1
+  lo="$(($3 - 240))"
+  if [ "${from}" -gt "${lo}" ]; then
+    lo="${from}"
   fi
-  if [ "$(($3 - 120))" -gt "${from}" ]; then
-    from="$(($3 - 120))"
+  if [ "$((lo - 5))" -gt "${from}" ]; then
+    from="$((lo - 5))"
   fi
   if ! workers_events "$1" "${from}" \
       '?"thumbnail.captured" ?"thumbnail.failed" ?"thumbnail.message_done" ?"thumbnail.target_gone" ?"thumbnail.live_redelivered_dropped"' \
@@ -926,30 +950,75 @@ workers_thumbnail_verdict() {
     echo "사진: 판정불가 — $1 로그 조회 실패"
     return 2
   fi
-  awk -v least=3 -v full="${full}" '
-    / thumbnail\.captured / { captured++ }
-    / thumbnail\.message_done / { finished++ }
-    / thumbnail\.(target_gone|live_redelivered_dropped) / { skipped++ }
+  awk -v lo="${lo}" -v now="$3" -v least=3 -v span=120 '
+    function close_span(end) {
+      if (length(stop) == 0 && end - start >= span) {
+        if (n["unmade"] >= least) {
+          stop = sprintf("못 만든 처리 %d건", n["unmade"])
+        } else if (n["live"] >= least) {
+          stop = sprintf("live 실패 %d건", n["live"])
+        }
+        if (length(stop) > 0) {
+          stop = sprintf("captured 0 인 %d초 구간에 %s", end - start, stop)
+        }
+      }
+      split("", n)
+    }
+    / thumbnail\.captured / { pending[tail++] = "captured" }
+    / thumbnail\.(target_gone|live_redelivered_dropped) / { pending[tail++] = "skipped" }
     / thumbnail\.failed / {
-      if ($0 ~ / kind=live /) { live++ }
-      else if ($0 ~ / retryable=false /) { permanent++ }
-      else { other++ }
+      if ($0 ~ / kind=live /) { pending[tail++] = "live" }
+      else if ($0 ~ / retryable=false /) { pending[tail++] = "permanent" }
+      else { pending[tail++] = "other"; other += ($1 >= lo) }
+    }
+    / thumbnail\.message_done / {
+      got = "unmade"
+      if (head < tail) { got = pending[head++] }
+      if ($1 >= lo) { done_at[++outcomes] = $1; done_as[outcomes] = got }
     }
     END {
-      unmade = finished - captured - live - permanent - skipped
       if (other > 0) {
         printf "사진: 정지 — kind=card · clip 잠깐 실패 %d건\n", other
         exit 1
       }
-      if (full && unmade >= least && captured == 0) {
-        printf "사진: 정지 — 지난 120초 못 만든 처리 %d건에 captured 0\n", unmade
+      start = lo
+      for (i = 1; i <= outcomes; i++) {
+        t = done_at[i]
+        at[done_as[i], t]++
+        recent[done_as[i]] += (t >= now - span)
+        if (done_as[i] == "captured") {
+          close_span(t - 1)
+          start = t + 1
+        } else {
+          n[done_as[i]]++
+        }
+      }
+      close_span(now)
+      if (length(stop) > 0) {
+        printf "사진: 정지 — %s\n", stop
         exit 1
       }
-      if (live >= least && live > captured) {
-        printf "사진: 정지 — live 실패 %d건이 captured %d건보다 많음\n", live, captured
-        exit 1
+      last = now - span
+      if (last < lo) { last = lo }
+      for (s = lo; s <= last; s++) {
+        e = s + span
+        if (e > now) { e = now }
+        split("", w)
+        for (t = s; t <= e; t++) {
+          w["captured"] += at["captured", t]
+          w["live"] += at["live", t]
+          w["permanent"] += at["permanent", t]
+        }
+        if (w["live"] >= least && w["live"] > w["captured"]) {
+          printf "사진: 정지 — %d초 전부터 %d초 동안 live 실패 %d건이 captured %d건보다 많음\n", now - s, e - s, w["live"], w["captured"]
+          exit 1
+        }
+        if (e - s >= span && w["permanent"] >= least && w["captured"] == 0) {
+          printf "사진: 정지 — %d초 전부터 %d초 동안 카드 · 클립 영구 실패 %d건에 captured 0\n", now - s, e - s, w["permanent"]
+          exit 1
+        }
       }
-      printf "사진: 통과 — captured %d건 · live 실패 %d건 · 카드 · 클립 영구 실패 %d건(라이브는 지우고 다음 분이 다시 찍음 · 영구 실패는 기록만)\n", captured, live, permanent
+      printf "사진: 통과 — 지난 120초 captured %d건 · live 실패 %d건 · 카드 · 클립 영구 실패 %d건(라이브는 지우고 다음 분이 다시 찍음 · 따로 떨어진 영구 실패는 기록만)\n", recent["captured"], recent["live"], recent["permanent"]
     }' "${work}/thumbnail.txt"
 }
 ```
@@ -1000,6 +1069,11 @@ r4 시간열 — 269초 · 339초).
     `started` 에, 새 `watch_end` 를 숫자 그대로 옮겨 적은 뒤) 아래 블록으로
     새 반복을 띄우고, 새 반복의 첫 판정 줄이 나온 뒤 앞 반복을 끝냅니다. 새
     반복은 첫 판정부터 앞 반복과 같은 실패를 보므로 인계에 구멍이 없습니다.
+*   **사진 반복도 다시 띄웁니다.** 아래 「사진 반복」 블록도 같은 때 다른
+    감시 터미널에서 새 `watch_end` 로 다시 띄웁니다(블록을 붙여 넣고
+    `started` · 새 `watch_end` 를 숫자 그대로 옮겨 적은 뒤). 시작을 당기지
+    않고 `started` 그대로 둡니다 — 사진 판정이 볼 창을 스스로 지난 240초로
+    묶습니다. 앞 사진 반복이 `사진 반복: 끝` 줄을 찍기 전에 띄웁니다.
 *   **빈 `started`.** 블록은 먼저 `started` 가 숫자인지 봅니다. 옮겨 적지
     않았거나 숫자가 아니면 반복을 띄우지 않고 `다시 띄우기: 판정불가` 줄을
     찍고 멈춥니다 — zsh 의 `[ … -gt "" ]` 는 빈 값을 0 으로 읽어 시작 맞춤을
@@ -1036,40 +1110,76 @@ workers_thumbnail_verdict pokeclip-prod-render "${started}" "$(date -u +%s)"
 블록으로 30초 쉼마다 되풀이합니다. 그 터미널에도 이 절의 블록(`region` ·
 `work` 와 함수 열)을 먼저 붙여 넣고, 쓰는 예가 찍은 `기동 epoch:` 줄의 숫자를
 `started` 에, `watch_end` 를 숫자 그대로 옮겨 적은 뒤 붙여 넣습니다. 줄마다
-앞에 판정이 끝난 시각(ISO 8601 UTC)이 붙습니다. 정지(1)나 판정불가(2)면 그
-줄에서 멈추고, 정지와 같이 다룹니다. `watch_end` 를 옮겨 적지 않았으면 돌지
-않고 `watch_end` 오류 줄을 찍습니다.
+앞에 판정이 끝난 시각(ISO 8601 UTC)이 붙습니다. 정지(1)면 그 줄에서
+멈춥니다. 판정불가(2 — 조회 실패 등)는 그 줄을 찍고 다음 주기에 다시
+판정하고, **두 주기 이어** 판정불가면 `사진 반복: 판정불가` 줄을 찍고
+멈춥니다 — 그 줄은 정지와 같이 다룹니다(수신 감시 반복과 같은 규칙). 끝
+시각이 지난 판정이 통과하면 `사진 반복: 끝` 줄을 찍고 끝납니다(끝 시각의
+판정이 판정불가면 한 주기 더 봅니다). `started` · `watch_end` 를 옮겨 적지
+않았거나 숫자가 아니면 판정하지 않고 판정불가 줄만 찍습니다.
 
 ```
-until [ "$(date -u +%s)" -ge "${watch_end:?}" ]; do
+misses=0
+for arg in "${started-}" "${watch_end-}"; do
+  case "${arg}" in
+    '' | *[^0-9]*)
+      misses=2
+      ;;
+  esac
+done
+if [ "${misses}" -ge 2 ]; then
+  echo "사진 반복: 판정불가 — started · watch_end 중 숫자가 아닌 것이 있음"
+fi
+while [ "${misses}" -lt 2 ]; do
+  begin="$(date -u +%s)"
   verdict="$(workers_thumbnail_verdict pokeclip-prod-render "${started}" \
-    "$(date -u +%s)")"
+    "${begin}")"
   rc=$?
-  echo "$(workers_iso "$(date -u +%s)") ${verdict}"
-  [ "${rc}" -eq 0 ] || break
-  sleep 30
+  stamp="$(workers_iso "$(date -u +%s)")"
+  echo "${stamp} ${verdict}"
+  case "${rc}" in
+    0) misses=0 ;;
+    1) break ;;
+    *) misses=$((misses + 1)) ;;
+  esac
+  if [ "${misses}" -ge 2 ]; then
+    echo "${stamp} 사진 반복: 판정불가 — 두 주기 이어 판정하지 못함"
+  elif [ "${misses}" -eq 0 ] && [ "${begin}" -ge "${watch_end}" ]; then
+    echo "${stamp} 사진 반복: 끝 — $(workers_iso "${watch_end}") 에 이름"
+    break
+  else
+    sleep 30
+  fi
 done
 ```
 
-**사진 반복의 셈(늦어도 68초 — 240초 안).** 정지 조건이 로그에 선 때(카드 ·
-클립 잠깐 실패 줄, 또는 못 만든 처리가 3건이 되고 captured 0 이 120초가 된
-때)를 0초로 둡니다.
+**사진 반복의 셈(늦어도 104초 — 240초 안).** 정지 조건이 선 때를 0초로
+둡니다 — 카드 · 클립 잠깐 실패 줄이 찍힌 때, 또는 조건을 채운 구간의
+끝(captured 0 인 구간이 120초를 채운 때와 셋째 실패가 찍힌 때 중 늦은 때 ·
+120초 구간의 끝).
 
 1.  **판정이 볼 수 있는 때 — 10초.** 수집 지연 10초 이하 가정은 「정지
-    시한의 셈」 과 같습니다.
+    시한의 셈」 과 같습니다. 판정은 지난 240초를 보므로 0초 뒤 120초 안에
+    시작한 판정은 조건을 채운 120초 구간을 통째로 봅니다.
 1.  **판정이 정지를 내는 때 — 52초.** 10초 바로 앞에 시작한 판정은 그 줄을
     못 보고 늦어도 16초에 끝납니다(판정 한 번의 최악 6초 — 「정지 시한의
-    셈」 셋째 항과 같은 조회). 쉼 30초 뒤 시작한 판정이 처음 보고 늦어도
-    52초에 정지 줄을 찍습니다. 그 판정이 조회 실패면 판정불가 줄로
-    멈춥니다.
-1.  **줄이 끊기는 때 — 56초.** 평소 줄 사이는 판정 6초 미만 + 쉼 30초라
-    36초를 넘지 않습니다. 앞 줄(16초)에서 **40초** 가 지나도 새 줄이 없으면
-    판정불가로 봅니다.
+    셈」 셋째 항과 같은 조회). 쉼 30초 뒤(늦어도 46초) 시작한 판정이 처음
+    보고 늦어도 52초에 정지 줄을 찍습니다.
+1.  **그 판정이 조회 실패면 — 88초.** 판정불가 줄을 찍고 쉼 30초 뒤(늦어도
+    82초 — 첫 항의 120초 안) 한 번 더 판정해, 늦어도 88초에 정지 줄이나 두
+    번째 판정불가로 멈춘 줄을 찍습니다.
+1.  **줄이 끊기는 때 — 92초.** 평소 줄 사이는 판정 6초 미만 + 쉼 30초라
+    36초를 넘지 않습니다. 앞 줄(늦어도 52초)에서 **40초** 가 지나도 새 줄이
+    없으면 판정불가로 봅니다.
 
-최악 56초에 명령 여유 12초를 더해 68초입니다. captured 0 조건은 마지막
-captured 줄에서 120초가 지나야 서므로, 그 줄에서 세면 늦어도 188초입니다
-(그 120초 안에 못 만든 처리가 3건 찼을 때). 쉼 30초 · 끊김 40초를 바꾸면 이
-셈과 시험의 사진 반복 사례를 함께 고칩니다.
+최악 92초에 명령 여유 12초를 더해 104초입니다. captured 0 구간의 조건은
+마지막 captured 다음 초부터 120초가 찬 때(그 줄에서 121초)에 가장 일찍
+서므로, 그 120초 안에 실패가 3건 찼으면 마지막 captured 줄에서 늦어도
+225초입니다. 셋이 120초보다 띄엄띄엄 찍혀도 첫째부터 셋째까지 158초(240 −
+82) 안이면 같은 셈입니다 — 82초의 판정까지 240초 창이 첫째를 품습니다.
+1분마다 이어지는 실패(60초 · 61초 간격 — 셋째가 첫째에서 122초)가 여기에
+듭니다. 볼 창 240초 · 쉼 30초 · 끊김 40초를 바꾸면 이 셈과 시험의 사진 반복
+사례를 함께 고칩니다.
 
 끝나면 감시 터미널마다(블록을 붙여 넣은 셸마다 `mktemp -d` 가 하나씩
 만들었음) 작업 디렉터리를 지웁니다. `events.json` · `events.all` 에는 가림
@@ -1226,12 +1336,19 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 실패 · 끝나지 않는 표는 2초 상한에서 판정불가), 지표 시각의 `+09:00` 꼴(이
 맥의 aws CLI 출력)과 모르는 꼴 · 쌍점 없는 시각 · 범위 밖 오프셋 · 없는
 날짜(판정불가), 사진 줄 판정(2026-11-11 꼴 — 옛 `kind=live` 실패 넷 + captured
-다수 · 라이브 실패 한 줄 · 기동 직후 단일 실패 · 창이 차기 전의 못 만든 처리
-셋 · 못 만든 처리 둘 · `target_gone` 셋 · `live_redelivered_dropped` 셋 ·
-카드 영구 실패 셋은 통과, 120초 지속 captured 0 · 절반 넘는 라이브 실패 ·
-카드 · 클립 잠깐 실패 1건은 정지 · 창 밖 실패는 세지 않음), 사진 반복
-블록(카드 실패 줄에서 52초 안에 정지 줄 · 끝 시각까지 30초 쉼 · 블록 글자 ·
-대화형 zsh 붙여 넣기), 본문의 따라 읽기
+다수 · 라이브 실패 한 줄 · 세션 끝 라이브 실패 둘 · 기동 직후 단일 실패 ·
+창이 차기 전의 못 만든 처리 셋 · 영구 실패 셋 · 못 만든 처리 둘 ·
+`target_gone` 셋 · `live_redelivered_dropped` 셋 · 카드 영구 실패 하나 · 사이에
+captured 가 있는 영구 실패 셋 · 볼 창 바로 앞 captured 의 `message_done` 은
+통과, 120초 지속 captured 0 · r2 cx 시간열(0초 captured 뒤 1 · 2 · 3초 못 만든
+처리 · 조용함) · captured 로 닫힌 지난 구간 · 61초 간격 라이브 실패 셋 · 영구
+실패 셋 · 절반 넘는 라이브 실패 · 앞 120초 구간의 라이브 실패 비율 · 카드 ·
+클립 잠깐 실패 1건은 정지 · 창 밖 실패는 세지 않음), 사진 반복 블록(카드 실패
+줄에서 52초 안 · 그 판정이 조회 실패면 88초 안에 정지 줄 · r2 cx 시간열의 위상
+다섯 · 60초마다 못 만든 처리와 61초마다 라이브 실패의 위상 둘씩이 조건이 선
+때에서 52초 안 · 끝 시각까지 30초 쉼과 끝 줄 · 끝 시각의 조회 실패는 한 주기
+더 · 조회 실패 두 번 이어짐 = 판정불가 · 옮겨 적지 않은 `started` ·
+`watch_end` · 블록 글자 · 대화형 zsh 붙여 넣기), 본문의 따라 읽기
 `PYTHONUNBUFFERED=1` · `caffeinate -i` 안내, 「쓰는 예」 의 기동 대기 블록, 「다시 띄우기」
 블록(이어지던 장애 한가운데서 띄운 r4 의 두 시간열이 240초 안에 정지 · 600초를
 빼는 변이), 정지 시한(가짜 aws 가 CLI 의 시간 상한 · 시도 수를 따름 — r2 의 두
