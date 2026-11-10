@@ -76,7 +76,23 @@
 #      그대로 두고, rename 하나가 실패하면 이번에 옮긴 파일을 지워 짝이 어긋난
 #      설정을 남기지 않는다. 치환은 bash 내장 문자열 연산으로만 해서 값이 외부
 #      명령의 argv 에 오르지 않는다.
-#   9. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
+#   9. 기동 전 검사(POK-196 PDT 설계 r7 9.4 — 판 2 를 못 읽는 사이드카로 내린
+#      상자를 막는다). compose 렌더본의 sidecar 서비스 image 를 받아(docker pull)
+#      라벨 com.pokeclip.timing.readable 을 읽는다. 받기가 실패하면 다이제스트로
+#      고정한 참조에 한해 로컬 이미지의 라벨을 읽는다. 라벨이 꼴에 맞고 판 2 가
+#      있으면 DB 를 보지 않고 지나간다 — c0 이후 사이드카의 기동은 이미지를
+#      받았거나 로컬에 있으면 이 걸음에서 DB 에 기대지 않는다. 그 밖(라벨 없는
+#      출시 이미지 · 꼴 밖 라벨 · 받기 실패에 로컬에도 없음 · image 줄 없음
+#      포함)은 검사 서비스 timing-preflight(검사 핀 이미지의 timing-gate-check)를
+#      compose run --rm --no-deps 로 한 번 돌린다 — 사이드카 판 목록(꼴 맞는
+#      라벨 글자, 그 밖은 null)을 넘기고, 장부 판 게이트가 그 판 목록으로 띄워도
+#      되면 0 이다. 0 이 아니면(3 거부 · 4 검사 못 함 · 검사 명령 없는 하한 아래
+#      검사 핀의 다른 코드) 「MEDIA START BLOCKED: sidecar cannot read ledger
+#      timing v2 label=<라벨|none|invalid> check=<코드>」 를 남기고 끝낸다 —
+#      compose 를 올리지 않으므로 하한 아래 사이드카 프로세스가 생기지 않는다
+#      (읽기 실패도 막는다 · fail-closed). 검사 서비스의 판정 줄(JSON)은 이
+#      스크립트 출력에 그대로 붙는다(비밀 없음).
+#  10. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
 #      — 둘 중 하나가 끝나면 compose 전체가 끝나고 systemd 가 다시 띄운다.
 #      나머지 서비스(사이드카 등)는 엔진 재시작 정책(on-failure)으로 혼자 다시
 #      뜬다. 컨테이너는 늘 새로 만든다(--force-recreate) — 정지가 compose 를
@@ -114,7 +130,8 @@
 #                                   (절대 경로 — 응답기 모드만).
 #
 # 출력: 판정 줄(MEDIA PREREQ OK|FAIL · MEDIA START BLOCKED · MEDIA START FAIL)만
-# 낸다. 비밀 값은 어디에도 쓰지 않는다.
+# 낸다 — 예외는 순서 9 의 검사 서비스가 내는 판정 줄(JSON)이다. 비밀 값은
+# 어디에도 쓰지 않는다.
 
 # 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
 # shellcheck source-path=SCRIPTDIR
@@ -177,8 +194,23 @@ readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
 # compose 파일 옆 상자 스위치 파일(사이드카의 env_file)과 그 키.
 readonly SIDECAR_ENV_NAME='sidecar.env'
 readonly ROUND_KEYS_KEY='PLAYBACK_ROUND_KEYS'
-# compose 출력이 붙는 서비스 — 템플릿에서 restart: "no" 인 집합과 같아야 한다.
+# compose 출력이 붙는 서비스 — 템플릿에서 restart: "no" 인 집합(profiles 로만
+# 뜨는 서비스 제외)과 같아야 한다.
 readonly ATTACHED_SERVICES=(mediamtx nginx)
+# 기동 전 검사 — 사이드카 이미지 라벨 · 검사 서비스 · 그 서비스가 받는 판 목록
+# 환경 변수 · 막힘 줄 앞머리. 라벨 글자 꼴은 사이드카 index.ParseTimingVersions
+# 와 같다(null 또는 1 이상 정수를 쉼표로 이음).
+readonly TIMING_LABEL='com.pokeclip.timing.readable'
+readonly TIMING_LABEL_PATTERN='^(null|[1-9][0-9]*)(,(null|[1-9][0-9]*))*$'
+readonly TIMING_PREFLIGHT_SERVICE='timing-preflight'
+readonly TIMING_READABLE_ENV='SIDECAR_TIMING_READABLE'
+readonly TIMING_BLOCKED='MEDIA START BLOCKED: sidecar cannot read ledger'\
+' timing v2'
+# compose 렌더본의 사이드카 서비스 키 줄과 그 image 줄 머리(compose.yml.tmpl
+# 꼴), 받는 이미지 참조의 꼴(argv 에 오르는 글자를 좁힌다).
+readonly SIDECAR_SERVICE_LINE='  sidecar:'
+readonly SERVICE_IMAGE_PREFIX='    image: '
+readonly IMAGE_REF_PATTERN='^[A-Za-z0-9][A-Za-z0-9._/:@-]*$'
 
 render_tmps=()
 staged_tmp=""
@@ -737,6 +769,91 @@ prepare_config() {
   return "${status}"
 }
 
+#######################################
+# compose 렌더본에서 sidecar 서비스의 image 값을 낸다 — 서비스 키 줄 바로 아래
+# 블록(다음 서비스 키 줄 앞)의 image 줄 하나. 없거나 꼴 밖이면 실패다.
+# Globals:
+#   SIDECAR_SERVICE_LINE, SERVICE_IMAGE_PREFIX, IMAGE_REF_PATTERN
+# Arguments:
+#   compose 파일.
+# Outputs:
+#   이미지 참조.
+# Returns:
+#   0 / 1 없음 · 꼴 밖.
+#######################################
+sidecar_image_of() {
+  local image
+  [[ -f "$1" && -r "$1" ]] || return 1
+  image="$(awk -v key="${SIDECAR_SERVICE_LINE}" \
+    -v head="${SERVICE_IMAGE_PREFIX}" '
+    $0 == key { insvc = 1; next }
+    insvc && /^  [^ ]/ { exit }
+    insvc && index($0, head) == 1 { print substr($0, length(head) + 1); exit }
+    ' "$1")" || return 1
+  [[ "${image}" =~ ${IMAGE_REF_PATTERN} ]] || return 1
+  printf '%s' "${image}"
+}
+
+#######################################
+# 사이드카 이미지를 받아 라벨 com.pokeclip.timing.readable 값을 낸다. 라벨이
+# 없으면 빈 값이다. 받기 · 읽기 실패면 실패다.
+# Globals:
+#   TIMING_LABEL
+# Arguments:
+#   이미지 참조.
+# Outputs:
+#   라벨 값.
+# Returns:
+#   0 / 1 받기 · 읽기 실패.
+#######################################
+timing_label_of() {
+  local format="{{ index .Config.Labels \"${TIMING_LABEL}\" }}"
+  # 받기가 실패해도(ECR 장애 등) 다이제스트로 고정한 참조면 로컬 이미지를 읽는다
+  # — 같은 다이제스트는 같은 이미지다. 태그 참조의 로컬 사본은 다른 이미지일 수
+  # 있어 읽지 않는다.
+  if ! docker pull --quiet "$1" >/dev/null; then
+    [[ "$1" == *@sha256:* ]] || return 1
+  fi
+  docker image inspect --format "${format}" "$1"
+}
+
+#######################################
+# 기동 전 검사(머리 주석 순서 9). 사이드카 라벨에 판 2 가 있으면 지나가고, 없으면
+# 검사 서비스를 한 번 돌려 0 일 때만 지나간다. 막힘 줄은 여기서 낸다.
+# Globals:
+#   TIMING_LABEL_PATTERN, TIMING_PREFLIGHT_SERVICE, TIMING_READABLE_ENV,
+#   TIMING_BLOCKED
+# Arguments:
+#   compose 프로젝트, compose 파일.
+# Returns:
+#   0 통과 / 1 막힘.
+#######################################
+check_timing_preflight() {
+  local image label="" readable=null shown=none status=0
+  if ! image="$(sidecar_image_of "$2")" \
+    || ! label="$(timing_label_of "${image}")"; then
+    label=""
+  fi
+  # 꼴 검사가 지름길보다 먼저다 — 꼴 밖 라벨(abc,2 등)은 2 가 들어 있어도 검사
+  # 서비스로 간다.
+  if [[ "${label}" =~ ${TIMING_LABEL_PATTERN} ]]; then
+    if [[ ",${label}," == *,2,* ]]; then
+      return 0
+    fi
+    readable="${label}"
+    shown="${label}"
+  elif [[ -n "${label}" ]]; then
+    shown=invalid
+  fi
+  docker compose --ansi never -p "$1" -f "$2" run --rm --no-deps -T \
+    -e "${TIMING_READABLE_ENV}=${readable}" "${TIMING_PREFLIGHT_SERVICE}" \
+    || status=$?
+  if (( status != 0 )); then
+    say "${TIMING_BLOCKED} label=${shown} check=${status}"
+    return 1
+  fi
+}
+
 main() {
   local project="${MEDIA_COMPOSE_PROJECT:-pokeclip-media}"
   local compose_file="${MEDIA_COMPOSE_FILE:-/etc/pokeclip-media/compose.yml}"
@@ -759,6 +876,9 @@ main() {
     exit 1
   fi
   if ! prepare_config "${compose_file}"; then
+    exit 1
+  fi
+  if ! check_timing_preflight "${project}" "${compose_file}"; then
     exit 1
   fi
   for service in "${ATTACHED_SERVICES[@]}"; do

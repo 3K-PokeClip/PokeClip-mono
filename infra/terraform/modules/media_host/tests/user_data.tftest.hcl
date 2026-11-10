@@ -88,6 +88,7 @@ variables {
   mediamtx_image                = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   nginx_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222"
   sidecar_image                 = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  timing_guard_image            = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:6666666666666666666666666666666666666666666666666666666666666666"
   loopback_sender_image         = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-loopback-sender@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   rds_endpoint                  = "pokeclip-prod-db.example.ap-northeast-2.rds.amazonaws.com"
   rds_db_name                   = "pokeclip"
@@ -203,6 +204,12 @@ run "renders_compose_and_nginx_from_repository_templates" {
   assert {
     condition     = toset(keys(output.template_vars)) == toset(keys(jsondecode(file("../../../media-host/test/render_vars.json"))))
     error_message = "템플릿 변수 키 집합이 infra/media-host/test/render_vars.json 과 다르다."
+  }
+
+  # 기동 전 검사 서비스(POK-196 PDT)의 이미지는 검사 핀 변수 그대로다.
+  assert {
+    condition     = output.template_vars.timing_guard_image == var.timing_guard_image
+    error_message = "template_vars.timing_guard_image 가 var.timing_guard_image 가 아니다."
   }
 
   # README 「후속」: 문자 그대로 "journald" · janitor_enabled 는 bool(기본 true).

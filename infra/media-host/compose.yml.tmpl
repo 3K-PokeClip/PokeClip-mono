@@ -9,6 +9,9 @@
 #   mediamtx_image · nginx_image · sidecar_image
 #                        이미지 참조 <저장소 URL>@<다이제스트>. 이름은 이미지
 #                        핀 정본 images.json 의 키 + _image 다.
+#   timing_guard_image   같은 꼴. 기동 전 검사 서비스 timing-preflight 의 이미지
+#                        (검사 핀 — c0 하한 이상의 사이드카 이미지). 비울 수
+#                        없다.
 #   ingest_auth_image    같은 꼴. 비면 송출 인증 응답기 서비스를 렌더하지 않는다
 #                        (옛 모드). 차면 응답기 모드 — 시작 스크립트가 렌더본의
 #                        이 서비스 키 줄로 모드를 정하고 mediamtx.yml.tmpl 의
@@ -278,6 +281,52 @@ services:
       driver: journald
       options:
         tag: pokeclip-media-sidecar
+%{ endif ~}
+
+  # 기동 전 검사(POK-196 PDT 설계 r7 9.4) — up 으로 뜨지 않는다(profiles). 시작
+  # 스크립트가 사이드카 이미지 라벨 com.pokeclip.timing.readable 에 판 2 가
+  # 없을 때만(라벨 없는 출시 이미지 포함) compose up 앞에서 run --rm --no-deps
+  # 로 한 번 돌려, 장부 판 게이트(래치 · 스위치)가 그 사이드카를 띄워도 되는지
+  # 종료 코드로 받는다(0 통과 · 3 거부 · 4 검사 못 함). 이미지는 검사 핀
+  # timing_guard_image — c0 하한 이상의 사이드카 이미지이고, entrypoint 로 검사
+  # 명령을 고른다. 하한 아래 이미지를 핀에 두면 그 명령을 몰라 사이드카로
+  # 기동하려다 녹화 루트가 없어(볼륨을 붙이지 않는다) 0 아닌 코드로 끝나고, 상자는
+  # 막힌다(fail-closed). DB 환경은 사이드카와 같다(IAM · media_indexer ·
+  # verify-full). 망 칸은 mediamtx 가 아니라 compose 기본 망이다 — mediamtx 를
+  # 띄우기 전에 돈다(IMDS 홉 상한 2 · RDS 보안 그룹은 상자 ENI 출발이라 같은
+  # 길로 닿는다). 장부에 쓰지 않고 파일도 쓰지 않는다.
+  timing-preflight:
+    image: ${timing_guard_image}
+    entrypoint: ["/usr/local/bin/segment-indexer", "timing-gate-check"]
+    profiles: ["preflight"]
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
+    environment:
+      POSTGRES_AUTH: iam
+      POSTGRES_HOST: ${rds_endpoint}
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${rds_db_name}
+      POSTGRES_USER: media_indexer
+      POSTGRES_SSLMODE: verify-full
+      # verify-full 의 CA — 이미지에 든 RDS 통합 번들(media/Dockerfile).
+      POSTGRES_SSLROOTCERT: /etc/pokeclip/rds-ca/global-bundle.pem
+      TZ: UTC
+      AWS_REGION: ap-northeast-2
+      # 토큰 없는 옛 메타데이터 요청(IMDSv1)으로 내려가는 길을 막는다.
+      AWS_EC2_METADATA_V1_DISABLED: "true"
+%{ if detached_log_driver == "json-file" ~}
+    logging: *attached-logging
+%{ else ~}
+    logging:
+      driver: journald
+      options:
+        tag: pokeclip-media-timing-preflight
 %{ endif ~}
 %{ if ingest_auth_image != "" ~}
 

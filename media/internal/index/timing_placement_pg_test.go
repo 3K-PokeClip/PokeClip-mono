@@ -318,4 +318,10 @@ func TestLegacyPDTCarriesUnattributedLength(t *testing.T) {
 	if !res.PlaybackPDT.Equal(want) || res.StartPTSMS != 9500 {
 		t.Errorf("계승 첫 행 (PDT, start) = (%v, %d), want (%v — 기저 + 길이 + U, 9500)", res.PlaybackPDT, res.StartPTSMS, want)
 	}
+	// U 는 커밋 결과로도 돌아온다 — 신호 legacy_unattributed_sum 의 재료다(설계 r7 8절 · c11). 비귀속 행 없이 잇는 다음
+	// 귀속 행은 0 이다.
+	next := mustInsert(t, store, segAt(stream, 4, sessionBase.Add(9*time.Second), 4000), liveIngress())
+	if res.LegacyUnattributedMS != 5500 || next.LegacyUnattributedMS != 0 {
+		t.Errorf("커밋 U = (%d, %d), want (5500, 0)", res.LegacyUnattributedMS, next.LegacyUnattributedMS)
+	}
 }

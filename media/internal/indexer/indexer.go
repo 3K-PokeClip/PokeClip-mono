@@ -195,6 +195,8 @@ type Indexer struct {
 	// Scan 재호출 시 ExistingPaths 결과로 맵을 교체하지만, 그것이 C3 를 해소하지는 않는다 —
 	// DB 행 자체가 계속 늘면 맵도 늘기 때문이다.
 	indexed map[string]map[string]struct{}
+	// unattributed 는 E28 누산기다(unattributed_run.go) — 스트림마다 지난 귀속 행과 그 뒤 비귀속 행 묶음.
+	unattributed map[string]*unattributedTally
 
 	samples         map[string][]int64
 	learnedMS       map[string]int64
@@ -342,6 +344,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, readTiming func(io.Rea
 		log:             log,
 		cursors:         map[string]*index.Cursor{},
 		indexed:         map[string]map[string]struct{}{},
+		unattributed:    map[string]*unattributedTally{},
 		samples:         map[string][]int64{},
 		learnedMS:       map[string]int64{},
 		failStreak:      map[string]int{},
@@ -923,6 +926,8 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 			"stream_id", seg.StreamID, "seq", rec.Seq, "round_id", res.TimingRoundID,
 			"timing_version", versionText(res.TimingVersion), "gate_changed_at", res.TimingGateRead.ChangedAt)
 	}
+	// 판 NULL 귀속 U · E28 비귀속 묶음 신호(unattributed_run.go).
+	ix.tallyUnattributed(seg.StreamID, prev != nil, rec, res)
 
 	ix.requestRowUploads(seg, prev, cur.Tail, res, playbackTarget)
 }

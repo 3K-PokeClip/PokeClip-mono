@@ -34,6 +34,10 @@ import (
 )
 
 func main() {
+	// 기동 전 검사 명령(timing_gate_check.go)은 사이드카를 띄우지 않고 종료 코드만 낸다.
+	if len(os.Args) > 1 && os.Args[1] == timingGateCheckCommand {
+		os.Exit(runTimingGateCheck(os.Args[2:], os.Getenv, os.Stdout))
+	}
 	err := run()
 	// SIGTERM 으로 끝난 것은 정상 종료다. 이것을 실패로 보고하면 오케스트레이터가
 	// 멀쩡한 종료를 장애로 오인하고 재기동 루프에 넣는다.
@@ -158,6 +162,10 @@ func run() error {
 	}
 	// 기동 스키마 확인 — M6 장부 객체가 없으면 schema_not_ready 로 멈춘다(운영은 운영 SQL 적용이 선행 조건).
 	if err := requireLedgerSchema(ctx, pool, log); err != nil {
+		return err
+	}
+	// 기동 검사(POK-196 PDT) — 게이트가 이 이미지가 읽지 못하는 판을 요구하면 timing_downgrade_refused 로 멈춘다.
+	if err := requireTimingGate(ctx, pool, log); err != nil {
 		return err
 	}
 	// 새 꼴 쓰기 스위치 상태 신호(POK-525) — 운영 스크립트가 켬 · 끔 재생성 뒤 이 줄로 판정한다. 기동은 막지 않는다.

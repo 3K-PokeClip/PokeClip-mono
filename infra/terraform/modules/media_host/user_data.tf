@@ -33,6 +33,7 @@ locals {
     rewind_public_base_url = var.rewind_public_base_url
     sidecar_image          = var.sidecar_image
     stream_key_resolve_url = var.stream_key_resolve_url
+    timing_guard_image     = var.timing_guard_image
 
     # 계약9 발행 — 응답기 모드에서 목록이 찰 때만 렌더한다(compose 템플릿).
     broadcast_topic_arn       = var.broadcast_topic_arn

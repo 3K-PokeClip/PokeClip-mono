@@ -138,6 +138,9 @@ type InsertCommit struct {
 	// TimingRoundID 는 이 행의 timing_round_id(이어 계산 회차 — 설계 2.4)다. "" 면 회차 없음이다(신호
 	// segment_indexed.round_id 의 재료).
 	TimingRoundID string
+	// LegacyUnattributedMS 는 판 NULL 귀속 행의 PDT 식이 더한 U(기저 행 뒤 · 이 행 앞 비귀속 행 길이 합 — placement.go)다.
+	// 판 2 행 · 비귀속 행 · 기저 행이나 그 PDT 가 없는 행이면 0 이다(신호 legacy_unattributed_sum 의 재료).
+	LegacyUnattributedMS int64
 	// TimingGateRead 는 이 트랜잭션이 판을 고르려고 읽은 게이트 행이다. 새 회차 개시 · 회차 없는 비귀속 행만 게이트를
 	// 읽고, 그 밖(회차를 이어 가는 행)은 nil 이다(신호 timing_gate_read 의 재료 — 고른 판은 TimingVersion).
 	TimingGateRead *TimingGate

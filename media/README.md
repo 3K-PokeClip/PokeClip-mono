@@ -64,7 +64,7 @@
 | 초고속 재접속·PTS 리셋 미검출(L1) · PTS 누적 오차 상한 미보장(L4) | **POK-36 실측 종결(2026-08-03):** 녹화 fMP4의 tfdt는 파일마다 원점 리셋(파일 기준)이라 **tfdt로는 해소 불가 확정** — tfdt 전환 기각. 남은 경로였던 **MediaMTX 훅이 POK-74로 들어왔다**: `runOnOnline`/`runOnOffline` 한 쌍이 재접속을 알려 주고, 그 사이에 낀 첫 조각에 `is_discontinuity=true`가 붙는다. 벽시계 드리프트 판정은 **제거하지 않고** 안전망으로 남는다 | L1 = **훅이 1차 신호로 해소**(단, 아래 "훅 검출의 사각" 3행 참조). L4는 잔존 |
 | 훅 스풀 무회전 | 훅 이벤트는 `/hooks/events.jsonl` 한 파일에 계속 덧붙기만 하고 회전(rotate)하지 않는다. 스트림 1개 기준 하루 약 4MB로 느리게 자란다. 회전을 넣으면 inode 전환 처리가 읽는 쪽으로 들어와 "어디까지 읽었나"의 계약이 깨지므로 일부러 넣지 않았다 | 이월 — 볼륨 사용량이 문제가 되면 별도 티켓 |
 | 훅 유실은 무징후다 | 훅은 fire-and-forget이다. MediaMTX는 훅 명령의 실패를 재시도하지도, 세그먼트 훅에 대해서는 로그를 남기지도 않는다(세션 훅만 서버 로그에 1줄). 그래서 **파일 감시와 5분 주기 재스캔이 안전망으로 반드시 함께 돌아야 한다** — 훅 채널이 조용히 죽어도 인덱싱 자체는 멈추지 않는다. 채널이 살아 있는지는 `segment_indexed` 로그의 `reason` 분포로 본다(`5` = 훅) | 구조적 — 안전망 제거 금지 |
-| 훅 검출은 사이드카 무중단 구간 한정 | 세션 경계 상태는 사이드카 프로세스 메모리에만 있고, 스풀은 기동 시점 끝(EOF)부터 읽는다. 따라서 **사이드카가 재기동된 창에 걸친 재접속은 훅으로 검출되지 않고** 기존 벽시계 드리프트 판정으로 강등된다. 이미 기록된 행의 `is_discontinuity`를 나중에 고치는 경로는 없다(소급 보정 없음) | 이월 — 체크포인트 파일은 정합 비용이 이득보다 커서 만들지 않았다 |
+| 훅 검출은 사이드카 무중단 구간 한정 | 세션 경계 상태는 사이드카 프로세스 메모리에만 있고, 스풀은 기동 시점 끝(EOF)부터 읽는다. 따라서 **사이드카가 재기동된 창에 걸친 재접속은 훅으로 검출되지 않는다.** POK-196 PDT(c6) 뒤로는 바로 앞 장부 행과 이 조각에 원래 사실 칸(녹화기 표식 · 번호)이 있으면 그 칸으로 판정한다 — 표식이 바뀌었거나 번호를 건너뛰면 끊김이다. 칸이 없는 행(출시 이미지가 쓴 앞 행 · mtxi 없는 조각)만 벽시계 드리프트 판정으로 강등된다. 이미 기록된 행의 `is_discontinuity`를 나중에 고치는 경로는 없다(소급 보정 없음) | 이월 — 체크포인트 파일은 정합 비용이 이득보다 커서 만들지 않았다 |
 | 훅이 이긴 조각은 승격·학습에서 빠진다 | 같은 파일을 훅과 파일 감시가 모두 올리려 하고 먼저 온 쪽이 이긴다. 훅이 이긴 파일은 `ReasonHook`이라 크기 재확인(승격)과 길이 학습 대상에서 제외된다 — 훅 시점의 파일이 이미 최종 크기라는 실측(29/29)에 기댄 결정이다. **업로더(POK-30) 병합 이후 방어선이 옮겨갔다.** `ReasonHook`은 `growthConfirmed`가 참이라 `TailHold` 없이 곧바로 업로드가 요청된다. 그래서 `correctTail`의 유효 창은 "꼬리인 4초"가 아니라 **그 행이 꼬리이면서 아직 `pending`인 구간**(= 워커가 `uploaded`/`failed`로 확정하기 전)이며, 확정된 뒤의 재성장은 교정 없이 `regrow_after_upload_ignored` ERROR로 **관측만** 된다. 실질 방어선은 **업로드 워커의 PUT 직전 크기 재확인**이다 — 꼬리(`IsTail`)의 실물 크기가 장부와 다르면 PUT 자체를 하지 않아 잘린 실물이 S3에 굳지 않고, 마킹은 bytes CAS가 한 번 더 막는다. 다만 쓰기가 PUT 내내 멈춰 있다 재개되는 극단 순서까지는 막지 못한다 | 관측만(YAGNI) — `segment_indexed`의 `duration_ms`·`reason`, 굳음 사고는 `regrow_after_upload_ignored` ERROR로 본다 |
 | 훅 이벤트에 레이트리밋·상태 맵 TTL이 없다 | 스트림별 세션 상태(`pendingOffline`·`lastOnlineAt`·`breaks`)는 경계 큐 상한(64)만 있고 시간 기반 만료가 없다. 스트림 수가 매우 많고 각각 짧게 붙었다 떨어지면 맵 항목이 남는다. 스풀을 폭주시키는 송출자에 대한 방어도 없다 | 이월 — 로컬·소규모에서는 발생하지 않는다. 멀티테넌트 규모에서 재평가 |
 | 스풀·녹화 경로의 심링크 검증 없음 | 인덱서는 훅이 준 경로를 문자열로만 검사한다 — 루트 밖(`..`)이면 거부하지만 심링크를 따라간 결과까지 풀어 보지는 않는다(`EvalSymlinks` 없음). 그 경로로 하는 일은 로컬 `stat`·길이 프로브·인덱스 기록뿐이라 파일이 밖으로 나가지 않는다 | **해소됨** — 파일을 밖으로 내보내는 유일한 지점인 업로더가 `os.Root` 핸들 기반으로만 연다(`cmd/segment-indexer/main.go`의 `os.OpenRoot(SegmentRoot)` → `upload/worker.go`의 `Root.Open(rel)`). 루트 밖으로 풀리는 심링크는 열기 단계에서 거부되고(`path escapes from parent`), 그 실패와 `ELOOP`은 `classifyOpenError`의 기본 갈래에서 거부+격리된다. 정규 파일이 아니면 `IsRegular()`가 따로 막는다 |
@@ -198,6 +198,13 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `REWIND_STALL_SEAL` | `false` | 정체 사다리 L2′(정체 마감) 스위치(POK-196 M6 · kty K5 — 기본 끔). 켜면 송출 중 회차의 되감기 목록이 5.5초(D_act = 갱신 의무 9초 − 엣지 1.5초 − 발행 예산 2초) 넘게 자라지 못했는데 GAP 도 설 수 없을 때(다음 조각이 없음 · 부적격 · 직전 GAP 실패) 목록 끝에 `#EXT-X-ENDLIST` 를 붙여 봉인하고, 봉인이 서면 그 회차를 `ending`(사유 `stall_seal`)으로 끝낸다(kty 결정 2026-10-27). 재접속 창 안의 다음 조각은 새 세션을 열어(같은 `round_id` — 봉인한 세션을 계승 · 4D 표식이 있어 사유가 `intentional` 이면 계승 · 합류하지 않는다) 그 새 세션의 목록으로 이어받는다. **켜는 조건**은 `REWIND_GAP_RUN_END` 와 같다. 기동 때만 읽는다(바꾸려면 재기동). 두 스위치 값은 기동 INFO `rewind_end_switches` 한 줄(`gap_run_end` · `stall_seal`)에 남는다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
 | `PLAYBACK_ROUND_KEYS` | `false` | 새 꼴(회차) ③ 키 쓰기 스위치(POK-525 — 기본 끔). 켜면 회차가 있는 세션의 조각 키를 `dvr/{stream}/{round}/seg/{NNNNNN}.m4s` 로 쓰고, 끄면 회차가 있어도 옛 꼴 `dvr/{stream}/seg/{NNNNNN}.m4s` 로 쓴다. 회차가 없는 세션(M6 전)은 켜도 옛 꼴이다. 켬에서 회차 성분이 키 문법(URL 안전 문자 · 128자 이하)을 못 지나면 그 조각의 ③ 키만 비고(NULL) 옛 꼴로 물러서지 않는다. 키 파생이 실패하면 `playback_key_derive_failed` WARN 한 줄(stream_id · round_id · seq · err)을 남긴다 — 같은 스트림 · 같은 회차의 실패는 첫 번만 알린다. 키를 읽는 쪽(업로드 · 목록 발행)은 스위치와 무관하게 두 꼴을 다 받는다. 기동 때만 읽는다(바꾸려면 사이드카를 다시 만든다). prod 상자는 `/etc/pokeclip-media/sidecar.env` 한 줄이 값을 주고, 로컬 compose 는 `true` 다. 참 · 거짓으로 읽을 수 없는 값은 기동 거부다 |
 | `REWIND_PLAYBACK_READ_MAX` | `2` | 상태 전달 읽기(되감기 상태판에 넘길 스트림 상태를 장부에서 읽는 일)의 전체 동시 상한(POK-196 M6 · kty 결정 2026-10-29). 읽기 하나가 인덱서 풀 연결 하나를 쥐므로, 일제 종료 때 스트림 수만큼 읽기가 겹쳐 핫 경로와 풀을 다투지 않게 묶는다. 넘친 스트림은 버리지 않고 다음 보류 틱에 다시 읽는다. 이미 읽고 있는 스트림의 새 표지는 상한과 무관하게 그 읽기에 합쳐진다. 양의 정수만 받는다(0 · 음수 · 문자는 기동 거부) |
+
+**기동 전 검사 명령 전용(POK-196 PDT).** `segment-indexer timing-gate-check`(아래 「PDT 판 2 생산자」)는
+사이드카를 띄우지 않고 DB 값(`POSTGRES_*` · `AWS_REGION` — 위 표와 같은 규칙)과 아래 하나만 읽는다.
+
+| 이름 | 기본값 | 의미 |
+|---|---|---|
+| `SIDECAR_TIMING_READABLE` | (없음 — 비면 검사 못 함 4) | 검사할 사이드카 이미지의 판 목록 — 그 이미지 라벨 `com.pokeclip.timing.readable` 값이고, 라벨이 없거나 꼴 밖이면 상자 시작 스크립트가 `null` 을 넘긴다. 꼴은 `null` 또는 1 이상 정수를 쉼표로 이은 것(예 `null,2`)이다 |
 
 **되감기 상태 관측(POK-195) — MediaMTX Control API 폴링.**
 용어: **관측**은 "지금 이 스트림이 실제로 송출 중인가"를 Control API(MediaMTX가 자기 상태를
@@ -1348,7 +1355,7 @@ init 조회는 컷오프와 무관하다.
 
 ```text
 MediaMTX 녹화 파일(영상 1 + 소리 6)
-  └ 인덱서: 크기 안정 → mtxi 판독 → 장부 INSERT → 사슬 전진(도장 계산)
+  └ 인덱서: 크기 안정 → 시각 판독(mtxi · 영상) → 장부 INSERT → 사슬 전진(도장 계산)
       └ 업로드 요청 셋 — 형제라 하나가 거부돼도 나머지는 나간다
           ② 녹화 파일 그대로 PUT → ② CAS
           ③ 재포장 → init 대조 → PUT → ③ CAS
@@ -1374,13 +1381,21 @@ MediaMTX 녹화 파일(영상 1 + 소리 6)
 
 ③ 조각의 도장은 **그 조각의 mtxi + 보정값**이다(`internal/indexer/chain.go` `advanceChain`).
 평소 보정값은 0 이라 조각 사이 빈틈이 없다. 회차를 열 때 첫 mtxi 가 음수면 0 이 아닌
-보정값으로 시작한다(아래 사슬 규칙 첫째). 보정값이 바뀌는 때는 둘이다(`stitchOffset`).
+보정값으로 시작한다(아래 사슬 규칙 첫째). 보정값이 바뀌는 때는 둘이다(`internal/playback/restore.go`
+`stitchOffset`). 둘 다 **같은 녹화기 이어짐**을 먼저 본다 — 장부의 원래 사실 칸에서 녹화기 표식이 둘 다 있고
+같으며 이 조각의 번호가 앞 조각 번호 + 1 이다(`index.SameInstance` — POK-196 PDT). 표식이 한쪽이라도 없거나
+(mtxi 없음) 번호를 건너뛰면 이어짐이 아니다. 이웃 차 d 는 두 조각 모두 영상 칸이 있으면 **영상 축**(이 조각 영상
+첫 DTS − 앞 조각 영상 끝)으로, 그 밖(소리만 송출 등 한쪽에 영상 칸이 없음)은 mtxi 축(mtxi − (앞 mtxi + 장부
+길이))으로 잰다(ADR-073 결정 2 개정). 판독 실패로 도장을 고정한 앞 조각은 기대 영상 끝(그 앞 조각 영상 끝 + 장부
+길이)을 이어받으므로, 그 앞 조각에 영상 끝이 있었으면 다음 조각도 영상 축으로 잰다(`internal/playback/restore.go`
+`NextLink` · `TestPinnedRowThenVideoRowHasNoFalseHole` — 소리 머리 조각에서 mtxi 축이면 앞섬만큼 거짓 구멍이 난다).
 
-- **리셋** — 녹화기 표식이 바뀌거나(송출자 재접속·녹화기 드리프트 리셋) mtxi 가 뒤로 가면,
-  직전 조각의 **먼저 끝난 트랙 끝**에 잇는다. 늦게 끝난 쪽에 이으면 소리 빈틈이 남는다(실측).
-  직전 파일을 다시 읽지 못하면 장부 길이로 잇는다 — 최악 0.2초 소리 빈틈이고 역행은 없다.
-- **구멍** — 같은 녹화기인데 mtxi 가 예상 끝보다 50ms 넘게 앞서면, 그 유실을 압축해 직전
-  조각 끝에 잇는다(kty 결정 G).
+- **리셋** — 같은 녹화기 이어짐이 아니거나(송출자 재접속 · 녹화기 드리프트 리셋 · 번호 건너뜀 · mtxi 없음),
+  역행이면(영상 축 d ≤ −1ms `videoRewindLimit` · mtxi 축이면 mtxi 가 뒤로 감) 직전 조각의 **먼저 끝난 트랙
+  끝**에 잇는다. 늦게 끝난 쪽에 이으면 소리 빈틈이 남는다(실측). 직전 파일을 다시 읽지 못하면 장부 길이로
+  잇는다 — 최악 0.2초 소리 빈틈이고 역행은 없다. 사이에 비귀속 행이 끼었으면 술어 없이 리셋이다.
+- **구멍** — 같은 녹화기 이어짐인데 d 가 50ms(`mtxiGapTolerance`)를 넘으면, 그 유실을 압축해 직전 조각
+  끝(도장 + 장부 길이)에 잇는다(kty 결정 G).
 
 **왜 이어 붙이나.** 회차 안에서는 끊김 표시(`EXT-X-DISCONTINUITY`)를 달지 않기로 했다(kty
 결정 F · ADR-073). 표시가 있으면 hls.js 가 우리 도장을 버리고 경계마다 0.16–0.18초 멈췄다
@@ -1393,15 +1408,17 @@ MediaMTX 녹화 파일(영상 1 + 소리 6)
 - 회차가 바뀌면 보정값 0 에서 새로 연다. 그래서 TD 분할(목표 길이 초과로 회차를 가른 것)로
   연결 도중 열린 회차의 첫 도장은 0 이 아니라 그 시점의 mtxi 다. 다만 그 행의 mtxi 가
   음수면 보정값 −mtxi 로 열어 첫 도장을 0 에 두고, 그 보정값은 리셋·구멍이 바꾸기 전까지
-  이어진다(`startChain`). 새 연결에서 소리가 영상보다 먼저 시작하면 첫 조각의 mtxi 가
+  이어진다(`playback.StartLink` — 실시간 사슬과 복원 접기가 같은 하한을 쓴다). 새 연결에서 소리가 영상보다 먼저 시작하면 첫 조각의 mtxi 가
   음수가 되는데(prod 실측 −44ms), 생산자는 음수 도장을 거부해 그 조각의 ③ 이 올라가지
   않았다. 구멍 판정은 보정 전 원래 mtxi 를 기준으로 한다.
 - 회차에 귀속되지 않은 행은 사슬을 움직이지 않고, ③ 요청도 없다.
-- mtxi 를 못 읽은 행은 직전 보관값이 있으면 기대값(직전 도장 + 장부 길이)에 고정해 올리고
+- mtxi 를 못 읽은 행은 직전 보관값이 있으면 기대값(직전 도장 + 장부 길이)에 고정해 올리고 — 표식 · 번호도 기대값(같은
+  녹화기 · 앞 번호 + 1)으로, 영상 끝은 앞 영상 끝 + 장부 길이로 이어받는다 —
   `segment_indexed` 로그에 `mtxi_pinned=true` 를 싣는다. 보관값이 없으면(회차 첫 행·재기동 뒤
   첫 행) ③ 요청을 내지 않는다 — 도장을 지어내지 않는다.
-- mtxi 판독이 `FS_OP_TIMEOUT` 을 넘기면 그 조각은 커밋하지 않고 래치를 세운다(`mtxiT` — 길이
-  판독과 같은 관문). 다음 수집이 다시 찾는다.
+- 시각 판독(`playback.ReadTiming` — mtxi · 영상 · 소리 구간 한 번에)이 일시 실패하거나 `FS_OP_TIMEOUT` 을
+  넘기면 그 조각은 커밋하지 않고(같은 스트림의 뒤 조각도) 다음 재스캔이 다시 읽는다(`timingFn` — 길이 판독과
+  같은 fsop 관문 · POK-196 PDT c5). 한 번 멈추면 최대 재스캔 주기 5분 + 수집 예산 45초다.
 
 Idle·Scan 으로 확정된 꼬리 조각(아직 자랄 수 있는 조각)의 ③ 은 ② 와 같은 때 — 보류 해제·다음
 조각 도착·포기 — 에 한 번만 요청한다. 유휴 추정 직후에 만들면 뒤늦게 써진 마지막 파트가 빠진
@@ -1477,14 +1494,17 @@ init 작업은 꼬리 크기 불일치에 `upload_size_mismatch` 경고만 남�
 
 - 스위퍼가 집은 ③ 작업은 장부에 도장이 없으므로 **회차 보정값 표로 다시 만든다** — 실시간과
   같은 값이다. 표에 그 조각의 줄이 없으면(재기동 뒤·24시간 경과 뒤) 도장을 지어내지 않고
-  `failed` 로 거부한다(`upload_failed reason=no_offset_table`).
+  `failed` 로 거부한다(`upload_failed reason=no_offset_table`). POK-196 PDT 뒤로는 거부하기 전에 먼저 ③ 사슬
+  복원을 깨운다 — 복원이 장부와 S3 로 표 줄을 채우면 다시 넣는다(아래 「PDT 판 2 생산자」 의 「③ 사슬 복원」).
+  복원 재료(장부 조회 · S3 GET)가 없는 업로더만 지금처럼 거부한다.
 - 잔량 지표 `upload_backlog` 는 축마다 한 줄이고, 라벨(`axis=archive|playback|init`)과 수치가
   같은 축에서 나온다. ③ 잔량도 컷오프를 따른다(`countPlaybackBacklogSQL`).
 
 #### 회차별 메모리 — 보정값 표·보류 목록·sessionInit
 
 업로더가 회차마다 세 가지를 메모리에 든다(`internal/upload/sessions.go` `sessionMemory`).
-재기동하면 사라진다 — 재기동 복구는 범위 밖이다(아래 알려진 한계).
+재기동하면 사라진다. 보정값 표는 POK-196 PDT 뒤로 업로더가 장부와 S3 로 되살린다(아래 「PDT 판 2 생산자」 의
+「③ 사슬 복원」). `sessionInit` · 보류 목록의 재기동 복구는 여전히 범위 밖이다(아래 알려진 한계).
 
 | 이름 | 무엇 | 쓰는 자리 | 수명(`SessionTTL`, 기본 24시간)의 기준 |
 |---|---|---|---|
@@ -1545,7 +1565,8 @@ skew(k) = (pdt(k) − pdt(k−1)) − (pos(k) − pos(k−1))
 | `HeldPerSession` | 64 | `upload.Options` 기본값 | 회차마다 보류 목록에 들 수 있는 ③ 작업 수 |
 | `SessionTTL` | 24시간 | `upload.Options` 기본값 | 회차별 메모리의 수명. 녹화 파일 보존(MediaMTX `recordDeleteAfter` 기본 1일)과 같은 창이다 — 그 뒤의 재생성은 어차피 원본이 없다 |
 | `maxInputBytes` | 16MiB | `internal/playback/producer.go` 상수 | 재포장 입력 상한. 조각을 통째로 메모리에 올리므로 점유 = 동시 워커 수 × 입력의 약 4.5배. 영상 8Mbps + 소리 6트랙인 6초 조각(6.5MiB)의 2.4배다 |
-| `mtxiGapTolerance` | 50ms | `internal/indexer/chain.go` 상수 | mtxi 가 예상 끝보다 이 값을 넘게 앞서야 구멍으로 보고 잇는다 |
+| `mtxiGapTolerance` | 50ms | `internal/playback/restore.go` 상수 | 같은 녹화기 이어짐에서 이웃 차 d(영상 축이면 이 조각 영상 첫 DTS − 앞 조각 영상 끝, 아니면 mtxi − (앞 mtxi + 장부 길이))가 이 값을 넘어야 구멍으로 보고 잇는다. 이름과 달리 영상 축 d 의 문턱이기도 하다 |
+| `videoRewindLimit` | 1ms | `internal/playback/restore.go` 상수 | 영상 축 d 가 −1ms 이하면 역행(리셋)이다. 1ms 미만의 음수는 같은 연결 안 경계 어긋남이다 |
 
 #### 로그 변화
 
@@ -1588,7 +1609,9 @@ skew(k) = (pdt(k) − pdt(k−1)) − (pos(k) − pos(k−1))
 
 kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하지 않는다, 나중에 버전업하면서
 고칠 것에 남겨둬"*. 아래 표는 계획 4.2-R 의 알려진 한계 표 전건이다. 공통 배경: 보정값 표·
-사슬·`sessionInit` 은 프로세스 메모리에만 있다.
+사슬·`sessionInit` 은 프로세스 메모리에만 있다. **POK-196 PDT 가 바꾼 것:** 보정값 표 · 사슬은 재기동 뒤 업로더가
+장부와 마지막으로 올린 ③ 객체로 되살린다(「PDT 판 2 생산자」 의 「③ 사슬 복원」) — 아래 표의 보정값 · 사슬
+재기동 행은 그 복원이 영구 실패하는 경우(그 절의 한계)로 좁아진다. `sessionInit` 행은 그대로다.
 
 | 한계 | 영향 | 수리안 후보 |
 |---|---|---|
@@ -2724,6 +2747,79 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 *   코드: 이 절이 인용한 파일 · 함수 · 시험(PR ⓒ 커밋 1–8 개발 보고 · 검수 통합과
     대조).
 
+## PDT 판 2 생산자 (POK-196)
+
+장부 행의 재생 시각(`playback_pdt`) · 위치(`start_pts_ms`) · 길이(`duration_ms`)를 새 규약(**판 2** — 섞기 규칙)으로
+쓰는 사이드카다. 판은 행 칸 `timing_version` 이고(NULL = 지금까지의 식), 한 이어 계산 회차는 끝까지 한 판이다(판 고정).
+새 회차를 어느 판으로 열지는 장부의 **판 게이트**(`stream_timing_gate` 한 행 — 스위치 `new_round_version` · 래치
+`highest_version`)가 정하고, 이 이미지는 판 NULL · 2 를 다 읽고 쓴다(`internal/index/timing_gate.go` `readableVersions`).
+배포 · 되돌리기 · 스위치 절차는 [Media 교체 런북](../infra/terraform/runbooks/media-swap.md) 「PDT 판 2 롤백 하한 · 판
+게이트」, 운영 SQL 은 [런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md) 「PDT 장부 칸 · 판 게이트」 다.
+
+### PDT 기동 검사 · 기동 전 검사
+
+판 2 를 못 읽는 사이드카가 판 2 행이 있는 장부에서 돌면, 동결 감사 · 정산 · 업로드 · 계승이 판 2 행을 옛 식으로 처리한다
+(감사가 DVR 을 옛 렌더로 다시 만들어 「복구 불가」 로 오판하는 등). 그래서 두 자리에서 막는다.
+
+| 자리 | 언제 | 무엇을 보나 | 막으면 |
+|---|---|---|---|
+| **기동 검사**(`cmd/segment-indexer` `requireTimingGate`) | 이 이미지 이후 모든 사이드카 기동 — 기동 스키마 확인(`schema_not_ready`) 다음 | 게이트의 래치 · 스위치가 이 이미지 판 목록 안인가 | ERROR `timing_downgrade_refused` · 종료 코드 1. 게이트 읽기 실패(42501 포함)도 종료 코드 1 |
+| **기동 전 검사**(`start-media.sh` 순서 9 · compose 서비스 `timing-preflight`) | 상자 시작 스크립트를 지나는 기동 — compose up 앞 | 사이드카 이미지 라벨 `com.pokeclip.timing.readable`(이 Dockerfile 이 `null,2` 로 박는다 — 받기가 실패하면 다이제스트로 고정한 로컬 이미지의 라벨). 꼴에 맞고 판 2 가 있으면 DB 를 보지 않고 지나간다. 그 밖(라벨 없는 출시 이미지 · 꼴 밖 라벨 · 받지도 못하고 로컬에도 없음)은 검사 명령으로 게이트를 읽는다 | 유닛 저널 `MEDIA START BLOCKED: sidecar cannot read ledger timing v2 label=… check=…` · compose 를 올리지 않음 |
+
+검사 명령 `segment-indexer timing-gate-check` 는 사이드카를 띄우지 않고 DB 값과 `SIDECAR_TIMING_READABLE`(검사할 사이드카의
+판 목록)만 읽어 게이트를 한 번 본다. 종료 코드는 0 통과 · 3 거부(ERROR `timing_downgrade_refused`) · 4 검사 못 함(ERROR
+`timing_gate_check_failed` — `reason` 은 `usage` · `readable` · `settings` · `connect` · `read`)이다. 검사 서비스의 이미지는
+검사 핀(`image_digests.timing_guard` — c0 하한 이상 사이드카 이미지)이라 사이드카를 출시 이미지로 내려도 그 핀이 검사를
+돈다.
+
+라벨과 `readableVersions` 의 일치는 `TestDockerfileTimingLabelEqualsReadableVersions` 가, 기동 검사의 호출 자리는
+`TestBootChecksTimingGateAfterLedgerSchema` 가 지킨다.
+
+### PDT 신호
+
+모두 slog 이벤트다(설계 r7 8절). 판 NULL 행은 섞기 신호를 내지 않는다.
+
+| 이름 | 자리 | 등급 | 속성 · 뜻 |
+|---|---|---|---|
+| `segment_indexed` | 조각마다 | INFO | 기존 속성 + `timing_version` · `timing_branch` · `round_id` · `head_track` · `head_lead_ms` · `wall_ms` · `comparable` · `same_instance` · `attributed` · `delta_ms`(견줬을 때) |
+| `pdt_new_chapter` · `pdt_overlap` · `timing_reset` · `timing_round_broken` | 판 2 행의 섞기 갈래 | INFO · WARN · ERROR | 새 장 · 겹침 · 회차 첫 행 · 판 고정 위반의 까닭 |
+| `timing_gate_read` | 새 회차 개시 행 | INFO | 회차 · 고른 판 · 게이트 `changed_at` |
+| `timing_facts_partial` · `head_lead_over_1s` | 조각 판독 | WARN | mtxi 없음 · 번호 넘침 · 영상 없음 등 |
+| `discontinuity_hook_mismatch` · `segment_number_skipped` | `is_discontinuity` 판정 | WARN | 판정 시도마다 남는다 — 장부 행과의 대조는 `path` 로 한다(INSERT 재시도면 같은 조각이 두 번 나올 수 있다) |
+| `timing_version_unsupported` | 쓰기 시점 판 검사 | ERROR | 이 이미지가 쓰지 못하는 판(앞날 판 회차를 잇는 행 등) — H9 재시도 뒤 종료 |
+| `timing_downgrade_refused` · `timing_gate_check_failed` | 기동 검사 · 검사 명령 | ERROR | 위 절 |
+| `legacy_unattributed_sum` | 판 NULL 귀속 행 | INFO | `u_ms` — PDT 식이 더한 U(기저 행 뒤 · 이 행 앞 비귀속 행 길이 합). U 가 0 이면 내지 않는다 |
+| `unattributed_run` | 비귀속 행 묶음 뒤 첫 귀속 행 | INFO | 아래 「E28 묶음 신호」 |
+| `chain_*` · `chain_restore_failed` | ③ 사슬 · 업로더 | WARN · INFO | 아래 「③ 사슬 복원」 |
+| DB 오류 `legacy_writer_refused`(23514) | 쓰기자 거부 트리거 | — | 래치 2 장부에 원래 사실 칸 없는 INSERT(출시 이미지) — 출시 이미지는 이 이름을 몰라 INSERT 실패로만 보인다 |
+
+**E28 묶음 신호(`unattributed_run`).** 스트림마다 「지난 귀속 행 뒤 비귀속 행 묶음」 을 메모리에 모았다가 다음 귀속 행
+k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). 묶음 뒤 귀속 행이 끝내 오지 않으면(방송 종료) 줄이 없다.
+속성은 `count` · `duration_ms`(묶음 전체) · `first_seq` · `last_seq` · `prev_session_id`(앞 귀속 행) · `next_session_id`(k) ·
+`same_round`(앞 귀속 행과 k 가 같은 이어 계산 회차) · 녹화기 표식별 `marker_next_*`(k 와 같은 표식) · `marker_prev_*`(앞
+귀속 행과 같은 표식 — 둘 다 같으면 next) · `marker_other_*`(그 밖 · 표식 모름) 의 `_count` · `_ms` · `partial` 이다. 분류는
+로그 집계로 한다 — `same_round` 참이면 `duration_ms` 가 그 회차의 세션 사이 길이(E28 제외 길이), 거짓이면
+`marker_next_ms` 가 새 회차 앞부분 · `marker_prev_ms` 가 닫힌 회차 꼬리 · `marker_other_ms` 가 어느 쪽인지 모르는 길이다.
+`partial` 은 재기동 뒤 첫 묶음이다 — 이 프로세스가 앞 귀속 행을 보지 못해(재적재한 커서는 꼬리가 귀속 행인지 싣지 않는다)
+`prev_session_id` 가 비고 `same_round` 가 거짓이며 묶음 길이도 재기동 앞 몫을 빠뜨렸을 수 있다.
+
+### ③ 사슬 복원
+
+③ 도장 사슬(위 「시간 도장」)을 모르는 행 — 재기동 뒤 · 회차 보정값 표가 없는 스위퍼 작업 — 은 인덱서가 위치 모름으로
+요청하고, 업로더가 장부와 S3 로 사슬을 되살린다(`internal/upload/restore.go` · `playback.RestoreChain`). 인덱서 루프는 S3 를
+기다리지 않는다. 복원은 마지막으로 올린 ③ 객체를 닻으로 그 뒤 구멍 행을 한 걸음 산식(`playback.NextLink`)으로 접고, 결과를
+보정값 표 줄 · 다시 넣은 작업 · 인덱서가 읽는 복원 링크로 남긴다. 실패는 행 상태를 바꾸지 않고 세션 단위 백오프로 다시
+본다(WARN `chain_restore_failed` — `reason` · 다음 시도 시각).
+
+### PDT 알려진 한계
+
+| 한계 | 영향 | 처분 |
+|---|---|---|
+| **③ 사슬 복원의 영구 실패.** 닻이 될 ③ 객체 · ② 원천이 없거나(`anchor_object_missing` · `anchor_source_missing`), 닻 행이 판독 실패로 고정 도장이었거나(`anchor_pinned`), 객체가 장부와 다르거나(`anchor_mismatch`), 다른 세션의 행이 끼었으면(`foreign_session`) 다시 시도해도 같은 답이다 | 그 회차의 구멍 행들이 `pending` 으로 남아 GAP 이다 — 백오프로 거듭 시도하며 `chain_restore_failed` 가 같은 `reason` 으로 되풀이된다. 실시간 경로 · 다른 회차는 무관하다 | 한계(기록) — 회차가 바뀌면 새 사슬이다 |
+| **꼬리 교정의 판독 실패.** 꼬리 조각이 자라 길이를 고칠 때 시각 판독이 일시 실패하면 길이만 고치고 영상 끝 칸은 옛 값이다. 덜 써진 조각을 커밋한 경우도 영상 끝이 INSERT 때 값이다 | 다음 행의 맞닿음 · 판 2 길이 판단이 옛 영상 끝을 본다. MediaMTX 가 닫은 파일만 커밋하므로(길이 0 거부) 우리 송출 흐름에서는 생기지 않는다 | 한계(기록) — 방어안(`UpdateTail` 판 2 길이 재계산)은 두지 않았다 |
+| **판독 일시 실패 동안 그 스트림이 멈춘다.** 실패한 조각과 그 뒤 조각을 커밋하지 않고 다음 재스캔을 기다린다 | 한 번에 최대 약 5분 45초(재스캔 5분 + 수집 예산 45초) 그 스트림의 되감기 목록 · ③ 업로드가 늘지 않는다. 다른 스트림은 무관하다 | 순서 보존의 대가 — 다음 재스캔에서도 실패하면 칸 NULL 로 커밋한다 |
+| **기동 전 검사는 시작 스크립트를 지나는 기동만 본다.** 엔진 재기동(`restart: on-failure`) · 스위치를 올리는 순간 이미 돌던 출시 컨테이너는 보지 않는다 | 이미 돌던 출시 컨테이너는 스위치 2 선행 조건(모든 상자 라벨 2)이 막고, 어겨도 쓰기자 거부가 첫 INSERT 에서 끝낸다 — 그 사이 감사 · 정산이 판 2 행을 옛 식으로 읽을 수 있다 | 런북 「PDT 판 2 롤백 하한 · 판 게이트」 남는 한계 |
+
 ## 테스트
 
 ```bash
@@ -2907,6 +3003,23 @@ discarding`이 송출 연결마다 1줄인 것은 그대로다 — 같은 송출
 [`infra/dev-media/compose.yml`](../infra/dev-media/compose.yml)의 `image` 줄
 (dev-media 서버 핀)은 따로 판단한다 — 서버가 필요로 할 때 서버 기준으로 올리고, 제품
 `FROM`과 같을 필요는 없다(ADR-040 2026-10-12 추기).
+
+### PDT 가 기대는 녹화기 전제 — T-1 버전 닻 (POK-196)
+
+위 9곳과 따로, PDT 판 2 생산자(「PDT 판 2 생산자」 절)가 녹화기 동작 셋에 기댄다. 셋 다 상류 `internal/recorder` 의
+동작이라, 그 패키지가 바뀐 버전으로 올리면 실측(SRT 송출 · 중간 재접속 1회 · `playback.ReadTiming` 판독)으로 다시 본다.
+버전 안내(`version_contract_test.go` 의 `versionUpgradeGuide`)도 이 표를 가리킨다.
+
+| # | 기대는 곳 | 무엇이 참이라고 전제하는가 |
+|---|---|---|
+| A | `internal/playback/mp4box.go` · `timing.go`(`ReadTiming`) | 머리말 `mtxi` 상자 배치 — 녹화기 표식 16바이트 · 조각 번호 · DTS · NTP. 우리 상자 정의의 변경은 `TestMtxiLayoutContract` 가 잡는다 |
+| B | `internal/index/timing_facts.go`(`SameInstance`) | 같은 녹화기 인스턴스 안 조각 번호는 1씩 늘고, 송출자 재접속 · 녹화기 드리프트 리셋이면 표식이 새 값이다 |
+| C | `index.Contiguous` · `internal/playback/restore.go`(`videoRewindLimit` · `mtxiGapTolerance`) | 조각 시작은 먼저 쓴 표본(머리 트랙)이고, 같은 연결 안 영상 경계의 어긋남은 1틱(11µs) 안이다 |
+
+**대조 기록(2026-11-11)**: 제품 핀 `v1.21.1-pokeclip.2` 와 상류 `v1.21.1` 의 차이(`gh api
+repos/bluenviron/mediamtx/compare/v1.21.1...xodbs1021:mediamtx:v1.21.1-pokeclip.2` — 11커밋 앞섬 · 뒤짐 0)에
+`internal/recorder/` 파일이 0개다 — 셋은 상류 v1.21.1 의 녹화기 동작 그대로다. 실물 근거는 PDT c3b 의 실측 조각 판독(같은 녹화기
+번호 59 → 60 · 녹화기 재시작 뒤 다른 표식의 번호 0)이다.
 
 ### 이미지 출처에 묶인 전제 — 우리 포크 라인(`pokeclip`)
 

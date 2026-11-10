@@ -43,4 +43,9 @@ COPY --from=build --chmod=0644 /src/certs/rds-global-bundle.pem /etc/pokeclip/rd
 RUN adduser -D -H -u 10001 sidecar
 USER 10001:10001
 
+# 이 이미지가 읽고 쓰는 장부 PDT 판 목록(null = 판 NULL) — internal/index readableVersions 와 같아야 한다(시험
+# TestDockerfileTimingLabelEqualsReadableVersions). 상자 시작 스크립트(start-media.sh)가 이 라벨에 2 가 있으면 DB 를
+# 보지 않고 사이드카를 띄우고, 없으면(라벨 없는 출시 이미지 포함) 기동 전 검사(timing-gate-check)로 게이트를 본다.
+LABEL com.pokeclip.timing.readable="null,2"
+
 ENTRYPOINT ["/usr/local/bin/segment-indexer"]

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -87,6 +89,86 @@ func scanTimingGate(row pgx.Row) (TimingGate, error) {
 		g.ChangedAt = changed.UTC()
 	}
 	return g, nil
+}
+
+// ErrTimingDowngrade 는 게이트(래치 · 스위치)가 이미지가 읽지 못하는 판을 요구한다는 뜻이다(기동 검사 · 기동 전 검사 —
+// 신호 timing_downgrade_refused). 실제 값은 *TimingDowngradeError 가 싣는다.
+var ErrTimingDowngrade = errors.New("index: 이 이미지가 읽지 못하는 판이 장부에 있다")
+
+// TimingDowngradeError 는 기동 검사가 거부한 게이트 값과 이미지 판 목록(FormatTimingVersions 꼴)이다.
+type TimingDowngradeError struct {
+	Gate     TimingGate
+	Readable string
+}
+
+func (e *TimingDowngradeError) Error() string {
+	return fmt.Sprintf("%v: highest_version=%s new_round_version=%s readable=%s",
+		ErrTimingDowngrade, versionText(e.Gate.Highest), versionText(e.Gate.NewRoundVersion), e.Readable)
+}
+
+func (e *TimingDowngradeError) Unwrap() error { return ErrTimingDowngrade }
+
+// CheckTimingGate 는 기동 검사다(설계 r7 9.3) — MissingLedgerSchema 다음에 부른다. 게이트를 읽어 래치 · 스위치가 이 이미지의
+// 판 목록(readableVersions) 밖이면 *TimingDowngradeError 다. 읽기 실패(권한 42501 · 행 없음 포함)도 오류다 — 부르는 쪽은
+// 둘 다 기동을 멈춘다. 이 이미지는 판 NULL · 2 를 다 읽으므로 거부는 게이트가 모르는 판(3 등)을 요구할 때만 난다.
+func CheckTimingGate(ctx context.Context, pool *pgxpool.Pool) error {
+	return checkTimingGate(ctx, pool, readableVersions)
+}
+
+// checkTimingGate 는 판 목록 readable 을 지닌 이미지의 기동 검사다(시험이 판 목록을 바꿔 부른다).
+func checkTimingGate(ctx context.Context, pool *pgxpool.Pool, readable []*int16) error {
+	g, err := ReadTimingGate(ctx, pool)
+	if err != nil {
+		return err
+	}
+	return RefuseUnreadable(g, readable)
+}
+
+// RefuseUnreadable 은 게이트 g 가 판 목록 readable 의 이미지를 띄워도 되면 nil, 아니면 *TimingDowngradeError 다.
+func RefuseUnreadable(g TimingGate, readable []*int16) error {
+	if AdmitsImage(g, readable) {
+		return nil
+	}
+	return &TimingDowngradeError{Gate: g, Readable: FormatTimingVersions(readable)}
+}
+
+// ParseTimingVersions 는 판 목록 글자를 읽는다 — 쉼표로 이은 판이고 null 은 판 NULL 이다(이미지 라벨
+// com.pokeclip.timing.readable · 기동 전 검사의 SIDECAR_TIMING_READABLE 꼴). 판은 1 이상 smallint 다. 빈 글자 · 빈 칸 ·
+// 공백 · 모르는 글자는 오류다 — 잘못 읽은 목록으로 검사를 통과시키지 않는다.
+func ParseTimingVersions(s string) ([]*int16, error) {
+	if s == "" {
+		return nil, errors.New("index: 판 목록이 비었다")
+	}
+	var out []*int16
+	for field := range strings.SplitSeq(s, ",") {
+		if field == "null" {
+			out = append(out, nil)
+			continue
+		}
+		v, err := strconv.ParseInt(field, 10, 16)
+		if err != nil || v < 1 {
+			return nil, fmt.Errorf("index: 판 목록 %q 의 %q 는 null 도 1 이상 판도 아니다", s, field)
+		}
+		out = append(out, new(int16(v)))
+	}
+	return out, nil
+}
+
+// FormatTimingVersions 는 판 목록을 ParseTimingVersions 꼴 글자로 쓴다(nil = null).
+func FormatTimingVersions(list []*int16) string {
+	parts := make([]string, len(list))
+	for i, v := range list {
+		parts[i] = versionText(v)
+	}
+	return strings.Join(parts, ",")
+}
+
+// versionText 는 판 하나를 판 목록 글자 꼴로 쓴다(nil = null).
+func versionText(v *int16) string {
+	if v == nil {
+		return "null"
+	}
+	return strconv.Itoa(int(*v))
 }
 
 // AdmitsImage 는 판 목록 readable 을 지닌 이미지를 지금 게이트가 띄워도 되는가다 — 래치 · 스위치가 모두 readable

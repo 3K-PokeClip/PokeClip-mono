@@ -19,5 +19,6 @@
   "rewind_bucket_name": "pcbench-edge-proxy-rewind",
   "rewind_public_base_url": "https://media.pcbench-edge-proxy.invalid",
   "sidecar_image": "registry.pcbench-edge-proxy.invalid/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-  "stream_key_resolve_url": "http://auth.pcbench-edge-proxy.invalid:28085"
+  "stream_key_resolve_url": "http://auth.pcbench-edge-proxy.invalid:28085",
+  "timing_guard_image": "registry.pcbench-edge-proxy.invalid/media-sidecar@sha256:4444444444444444444444444444444444444444444444444444444444444444"
 }

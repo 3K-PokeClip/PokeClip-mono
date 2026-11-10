@@ -29,6 +29,9 @@
 #   - sidecar.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(모든 갈래 사이드카의
 #     required env_file). 스위치 파일 사례(54 · 55)는
 #     test/lib/render_sidecar_env_cases.sh 에 있다.
+#   - 기동 전 검사 서비스(timing-preflight — profiles 로만): 갈래 a – d 를
+#     프로필을 켜고 따로 풀어 본다. 사례 56 은 test/lib/render_timing_cases.sh 에
+#     있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -67,6 +70,8 @@ source "${TEST_DIR}/lib/render_auth_cases.sh"
 source "${TEST_DIR}/lib/render_publish_cases.sh"
 # shellcheck source=lib/render_sidecar_env_cases.sh
 source "${TEST_DIR}/lib/render_sidecar_env_cases.sh"
+# shellcheck source=lib/render_timing_cases.sh
+source "${TEST_DIR}/lib/render_timing_cases.sh"
 # shellcheck source=../bin/lib/render_files.sh
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
@@ -86,7 +91,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=55
+readonly CASE_COUNT=56
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -1028,6 +1033,9 @@ main() {
   harness::run_case 55 \
     '사이드카 env_file — compose 파일 옆 · required · environment 에 같은 키 없음' \
     sidecar_cases::check_55
+  harness::run_case 56 \
+    '기동 전 검사 서비스 — 프로필로만 · 검사 핀 · 기본 망 · 볼륨 0 · 사이드카 DB env' \
+    timing_cases::check_56
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

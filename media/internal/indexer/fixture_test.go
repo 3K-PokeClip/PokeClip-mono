@@ -143,6 +143,7 @@ func (s *fakeStore) attribute(r index.Record, res index.InsertCommit) index.Inse
 	}
 	pdt := r.StartWallUTC.UTC()
 	if !res.SessionOpened {
+		res.LegacyUnattributedMS = s.unattributedMS[r.StreamID]
 		carried := s.lastPDT[r.StreamID].Add(time.Duration(int64(s.lastDurMS[r.StreamID])+s.unattributedMS[r.StreamID]) * time.Millisecond)
 		if carried.After(pdt) {
 			pdt = carried

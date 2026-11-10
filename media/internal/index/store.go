@@ -353,6 +353,8 @@ type settlement struct {
 	timing  timingChoice
 	// mix 는 판 2 행의 섞기 결과다. 판 NULL 행이면 nil 이다.
 	mix *v2Mix
+	// legacyU 는 판 NULL 귀속 행의 PDT 식이 더한 U 다(InsertCommit.LegacyUnattributedMS).
+	legacyU int64
 }
 
 // withCommitted 는 커밋된 carrier · 위치 · 판 칸과 세션 개시 결과를 주조 결과에 얹는다.
@@ -371,6 +373,7 @@ func withCommitted(res InsertCommit, r Record, st settlement) InsertCommit {
 	res.DurationMS = r.DurationMS
 	res.StartPTSMS = r.StartPTSMS
 	res.TimingVersion, res.TimingRoundID, res.TimingGateRead = tc.version, tc.roundID, tc.gate
+	res.LegacyUnattributedMS = st.legacyU
 	if r.SessionID != nil {
 		res.SessionID = *r.SessionID
 	}
@@ -506,7 +509,11 @@ func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec
 	if key, keyErr := s.playbackKey(r.StreamID, dec.RoundID, r.Seq); keyErr == nil {
 		r.PlaybackS3Key = &key
 	}
-	return r, settlement{opening: opening, timing: tc, mix: mix}, nil
+	st := settlement{opening: opening, timing: tc, mix: mix}
+	if mix == nil && base != nil && base.PDT != nil {
+		st.legacyU = base.UnattributedMS // legacyPDT 가 더한 항 그대로다
+	}
+	return r, st, nil
 }
 
 // sessionOpening 은 이 트랜잭션이 연 세션 행에 쓰인 값과, 행에 쓰이지 않고 결정이 실어 온 개시 결과 두 값
