@@ -816,9 +816,23 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
     알린다. Writer 는 60초(Margin) 전까지 발행 성공한 후보의 최댓값을, 열린
     회차의 원장 행에만 `GREATEST` 로 올리고 KVS 에 쓴다. 옛 꼴 회차에는
     하한이 없다.
+    *   올림은 그 회차의 열린 세션 행을 `FOR SHARE`(다른 문장이 그 행을
+        고치지 못하게 거는 공유 잠금)로 잠가 회차 닫힘과 차례를 정한다 —
+        닫힘이 먼저면 그 회차는 올리지 않고, 올림이 먼저면 닫힘이 기다린다.
+    *   이 잠금은 writer fence(발행을 상자 하나만 하게 하는 표지) 반납과
+        같은 순서(스트림 → 회차 · 바이트 순)로 잡아 서로 막지 않는다. 올림
+        문장마다 `lock_timeout` 500ms 를 걸어, 못 잡으면 그 문장을 되돌리고
+        `edge_bounds_write_failing`(`pass=raise` · `reason=failed`)을 낸 뒤
+        다음 올림 틱(5분)에 다시 한다 — 한 스트림의 대기가 이미 쥔 다른
+        스트림 행의 갱신을 붙잡는 시간도 그만큼으로 묶인다.
 *   **해제(30초마다):** 회차가 닫히면(열린 세션 없음 · 세션 행 없음 포함)
     KVS 키를 지우고 원장 행에 해제 시각을 적는다. 120초 유예 뒤 그 행을
     지운다.
+    *   30초는 주기이지 상한이 아니다. 해제와 올림은 한 고루틴이 차례로
+        하므로, 올림 틱(5분마다)에는 다음 해제가 올림 패스가 끝날 때까지
+        밀린다. 호출 하나(KVS · DB)는 5초 상한이지만 패스 전체의 상한은 없다
+        — 올림 패스는 묶음(회차 50개)마다 호출이 많아야 6번이라 후보가
+        많을수록 길다. 5초 안에 끝난 느린 호출은 성공이라 신호가 없다.
 *   **국면:** 원장 행이 남은 회차는 국면이 `vod` 로 넘어가지 않고
     `ending` 에 머문다(`internal/index/round_playback.go`). 그래서 해제가
     멈추면 그 회차 VOD 가 열리지 않는다.
@@ -912,7 +926,7 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 | `dvr_floor_release_overdue` | — 엣지는 끄지 않는다. 피해는 그 회차 VOD 가 열리지 않는 것뿐이다(`pass=release` 의 `_write_failing` 이 함께 나와도 같다) | 위 행과 같다 | 위 행과 같다 |
 | `edge_bounds_degraded` | — | 그 줄의 `err` 를 고친다. 못 고치면 위 행처럼 스위치를 끄고 교체한다(Media 교체 런북 「POK-525 롤백」 의 「Writer 만 문제」) | 고쳤으면 사이드카 재기동 — 기동 줄이 `edge_bounds_started` 면 된다. 스위치를 껐으면 위 행처럼 켜 교체 |
 | `edge_bounds_unreleased_without_writer` set(E10 — ARN 없이 뜬 상자) | — | 스위치 · 런타임 출력 ARN 을 고친다(`_config_invalid` 면 꼴) | 켠 설정으로 교체 → Writer 가 풀면 clear |
-| 원장 질의의 `released_stuck` | — | 사이드카가 돌고 있는지, `edge_bounds_unreleased_check_failed` · `edge_bounds_write_failing`(`pass=release`)이 있는지 본다 | 사이드카가 돌면 다음 확인(30초)이 지운다 |
+| 원장 질의의 `released_stuck` — 처음 본 뒤 5분 지나 다시 봐도 같은 회차가 남음 | — 한 번 보인 것은 장애가 아니다. 30초는 해제 확인의 주기이고 Writer 의 올림 패스만큼 밀린다(runtime-1a 「`released_stuck` 판정」) | 사이드카가 돌고 있는지, `edge_bounds_unreleased_check_failed` · `edge_bounds_write_failing`(`pass=release`)이 있는지 본다 | 사이드카가 돌고 지우기가 성공하면 다음 해제 확인이 지운다 |
 
 *   **Writer 없는 상자로 바꾸기 전에 해제 뒤 120초를 기다린다.** 앞
     상자의 Writer 가 해제를 적은 행은 120초 유예 뒤에 지워진다. 그 안에 앞

@@ -1603,9 +1603,45 @@ make_read edge_bounds "${payload}/edge_bounds.sql" && send_step edge_bounds
 |---|---|---|
 | `open` | 열린 회차의 하한 — 정상 | 회차가 닫히면 Writer 가 해제 |
 | `closed_unreleased` | 회차가 닫혔는데(열린 세션 없음 · 세션 행 없음 포함) KVS 키를 아직 안 지움 | Writer 만(KVS 키를 지워야 함). Writer 없는 상자는 `edge_bounds_unreleased_without_writer` 로 알리기만 |
-| `released_settling` | 키를 지웠고 유예(120초) 안 | 유예가 지나면 다음 확인이 지움 |
-| `released_stuck` | 키를 지운 지 120초가 넘었는데 행이 남음 | 사이드카가 하나라도 돌면 30초 안에 지움(Writer 의 해제 틱 · Writer 없는 감시 모두) — 남아 있으면 사이드카가 안 돌거나 지우기가 실패 중(`edge_bounds_unreleased_check_failed` · `edge_bounds_write_failing`) |
+| `released_settling` | 키를 지웠고 유예(120초) 안 | 유예가 지나면 다음 해제 확인이 지움 |
+| `released_stuck` | 키를 지운 지 120초가 넘었는데 행이 아직 남음 | 사이드카가 하나라도 돌면 다음 해제 확인이 지움. 한 번 보인 것은 장애가 아님 — 아래 「`released_stuck` 판정」 |
 
+*   **`released_stuck` 판정 — 30초는 확인 주기이지 지우기의 상한이
+    아닙니다.** 행은 유예 120초가 지나는 순간 `released_stuck` 이 되고,
+    그다음 해제 확인이 시작될 때 지워집니다(Writer 의 해제 패스 ·
+    Writer 없는 감시 모두 맨 앞에서 지움). 그 확인이 언제 오는지는
+    상자에 따라 다릅니다.
+    *   **Writer 없는 감시**는 30초마다 확인합니다. 확인 한 번은 원장
+        호출 둘이고 호출마다 5초 상한이라, 거의 30초 주기 그대로입니다.
+    *   **Writer** 는 해제와 올림을 한 고루틴(사이드카 안의 작업 하나)에서
+        차례로 합니다. 30초 틱마다 해제를 하고, 10번째 틱(5분)마다 그 뒤에
+        올림을 합니다. 올림이 도는 동안 다음 해제는 기다립니다. 기다린 틱은
+        쌓이지 않고 하나로 합쳐져, 패스가 끝나면 바로 다음 해제가 돕니다
+        (`media/internal/rewind/edgebounds/writer.go` 의 `Run`).
+    *   호출 하나(KVS · DB)는 5초 상한(`edgeBoundsCallTimeout`)이지만 패스
+        전체의 상한은 없습니다. 해제 패스는 호출이 많아야 8번(40초)이고,
+        올림 패스는 묶음(회차 50개)마다 많아야 6번(30초)이라 올림 후보
+        회차가 많을수록 길어집니다.
+    *   5초 안에 끝난 느린 호출은 성공이라 아무 신호도 내지 않습니다. 그래서
+        신호 없이 몇 분 밀리는 것이 정상일 수 있습니다.
+*   **장애로 보는 때:** `released_stuck` 을 처음 본 뒤 **5분(올림 주기)이
+    지나 다시 돌렸는데 같은 회차가 여전히 `released_stuck`** 이면 장애로
+    봅니다. 올림 후보 회차가 400개(묶음 8개) 이하면 밀림도 5분 안에
+    끝납니다(해제 40초 + 올림 30초 × 8 = 280초 — 호출마다 5초를 거의 다 쓴
+    최악). 같은 회차인지는 위 「한 스트림만 보기」 로 좁혀 봅니다. 장애면
+    다음 순서로 봅니다.
+    1.  **사이드카가 도는가.** 사이드카 저널(`pokeclip-media-sidecar`)에
+        기동 줄이 있고 그 뒤 재기동이 되풀이되지 않는지 봅니다. 기동 줄은
+        Writer 상자면 `edge_bounds_started`, Writer 없는 상자면
+        `edge_bounds_disabled` 또는 `edge_bounds_degraded` 입니다. 어느
+        상자의 사이드카도 안 돌면 지울 주체가 없습니다.
+    1.  **지우기가 실패 중인가.** Writer 상자는
+        `edge_bounds_write_failing`(`pass=release`) 뒤에 같은 `pass` 의
+        `edge_bounds_write_recovered` 가 없는지, Writer 없는 상자는
+        `edge_bounds_unreleased_check_failed` 가 있는지 봅니다. 해제 행
+        지우기의 실패는 이 두 줄에 실립니다.
+    1.  둘 다 아니면 원인을 모릅니다. 상태별 `rows` 와 위 두 축의 신호
+        줄을 kty 에게 보고합니다.
 *   원장 행이 남은 회차는 국면이 `vod` 로 넘어가지 않고 `ending` 에
     머뭅니다(판정식 — `media/internal/index/round_playback.go`). 그래서
     `closed_unreleased` · `released_stuck` 이 오래 남으면 그 회차 VOD 가
