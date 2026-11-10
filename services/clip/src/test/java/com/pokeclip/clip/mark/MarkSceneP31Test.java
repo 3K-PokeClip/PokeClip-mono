@@ -7,6 +7,7 @@ import com.pokeclip.clip.jumpcard.CardPositionReader;
 import com.pokeclip.clip.jumpcard.CardPositionReader.OffsetOrigin;
 import com.pokeclip.clip.jumpcard.CardPositionReader.ThumbnailOrder;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.TimelineNotReadyException;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot.FileHead;
@@ -333,6 +334,45 @@ class MarkSceneP31Test extends IntegrationTestSupport {
                         e -> assertThat(e.field()).isEqualTo("positionMs"));
     }
 
+    /**
+     * 종료 편지가 먼저 온 자리표시(시작 시각 없음)는 회차가 있으면 기준점이 서지만 「방송 시작 뒤 48시간」 을 잴 시작이 없다.
+     * 그때 저장 위치 상한은 기준점 + 48시간이다(POK-196 병합 처분 · kty 11-11) — 기준점 + 48시간 안은 201.
+     */
+    @Test
+    void 시작_시각이_없는_자리표시도_기준점_뒤_48시간_안의_지난_방송_마크는_201이다() {
+        자리표시_시드();
+        long origin = origins.originsOf(List.of(방송_찾기("S-p"))).get("S-p").toEpochMilli();
+
+        JumpCardSnapshot card = webPast("S-p", abs(3_000) - origin).card();
+
+        assertThat(card.streamTimestampMs()).isEqualTo(2_000);
+    }
+
+    /**
+     * 위와 같은 자리표시에서 저장 위치가 기준점 + 48시간을 넘으면 400 {@code positionMs} 다. 종료 + 10분 입력 범위 안이라 입력
+     * 검사는 통과하고 저장 위치 상한에서만 걸린다(그 상한을 생략하면 201 이 되고, 시작 시각으로 재면 NPE 다).
+     */
+    @Test
+    void 시작_시각이_없는_자리표시는_저장_위치가_기준점_뒤_48시간을_넘으면_400이다() {
+        자리표시_시드();
+        long origin = origins.originsOf(List.of(방송_찾기("S-p"))).get("S-p").toEpochMilli();
+
+        assertThatThrownBy(() -> webPast("S-p", abs(1_000 + MarkService.MAX_BROADCAST_MS + 11_000) - origin))
+                .isInstanceOfSatisfying(InvalidHighlightException.class,
+                        e -> assertThat(e.field()).isEqualTo("positionMs"));
+    }
+
+    /** 회차(머리 세션 행)도 시작 시각도 없는 자리표시는 회차가 없어 기준점이 없다 — 503(다시 보내기 간격 5초). */
+    @Test
+    void 회차도_시작_시각도_없는_자리표시의_지난_방송_마크는_503이다() {
+        broadcasts.save(Broadcast.endedPlaceholder("S-q", 주인, "P31Q", 1L, at(60_000)));
+        seed.row("P31Q", 1).pts(0).wallAndPdt(1_000).insert();
+
+        assertThatThrownBy(() -> webPast("S-q", 2_000))
+                .isInstanceOfSatisfying(TimelineNotReadyException.class,
+                        e -> assertThat(e.retryAfterSeconds()).isEqualTo(MarkService.TIMELINE_RETRY_AFTER_SECONDS));
+    }
+
     // ── 신호 ──────────────────────────────────────────────────────────────
 
     @Test
@@ -350,6 +390,18 @@ class MarkSceneP31Test extends IntegrationTestSupport {
     }
 
     // ── 시드 ──────────────────────────────────────────────────────────────
+
+    /**
+     * 종료 선도착 자리표시 S-p(시작 시각 없음 · 회차 S-p). 행 1 은 기준점 자리(위치 0 · 1초), 행 2 는 그보다 48시간 10초 뒤
+     * 위치에 선다. 종료는 행 2 뒤 10초라 행 2 안 위치도 입력 범위(종료 + 10분) 안이다.
+     */
+    private void 자리표시_시드() {
+        long far = MarkService.MAX_BROADCAST_MS + 10_000;
+        broadcasts.save(Broadcast.endedPlaceholder("S-p", 주인, "P31P", 1L, at(1_000 + far + 10_000)));
+        seed.session("S-p", "P31P", "S-p", null);
+        seed.row("P31P", 1).pts(0).wallAndPdt(1_000).session("S-p").insert();
+        seed.row("P31P", 2).pts(far).wallAndPdt(1_000 + far).session("S-p").insert();
+    }
 
     /** (a) 4초 조각 900개 · 파일명 간격 3,800 — 래칫으로 PDT · 위치가 행마다 200ms 씩 앞서 행 881 에서 176,000. */
     private void 시드_a() {
