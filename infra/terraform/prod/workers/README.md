@@ -232,17 +232,20 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤에 시작합니다.
 받기 루프는 기동 신호와 같은 때 돌기 시작하지만 첫 `receive_failed` 는 시도
 넷이 끝난 뒤에 찍히고 — 주된 꼴인 연결 시간 초과면 기동 뒤 약 10초, 읽기 시간
-초과 꼴이면 늦어도 약 120초 — 반복은 기동 시각부터 읽으므로 빠지는 줄이
-없습니다. 기동 뒤 3분은 로그 판정(W13)이 함께 봅니다. 모든 감시 명령에
+초과 꼴이면 늦어도 약 120초 — 반복은 기동 시각부터(지난 600초로 묶어)
+읽으므로 빠지는 줄이 없습니다. 기동 뒤 3분은 로그 판정(W13)이 함께 봅니다. 모든 감시 명령에
 `--region ap-northeast-2` 를 고정합니다 — 기본 리전이 다르면 그룹 조회가
 늘 0 이라 감시가 빈 채로 apply 가 진행됩니다.
 
 *   로그 그룹 `pokeclip-prod-render` · `pokeclip-prod-upload` 마다, 그룹이
     생길 때까지 5초마다 `aws logs describe-log-groups --region
     ap-northeast-2 --log-group-name-prefix <그룹> --query
-    'length(logGroups)'` 를 보고, 1 이 되면 `aws logs tail <그룹> --region
-    ap-northeast-2 --follow --since 1m --format short` 를 아래 가림 필터를
-    거쳐 기록 파일에 씁니다. 로그 줄에 큐 URL(계정 ID 포함)이 찍히고, 유출
+    'length(logGroups)'` 를 보고, 1 이 되면 `PYTHONUNBUFFERED=1 aws logs tail
+    <그룹> --region ap-northeast-2 --follow --since 1m --format short` 를 아래
+    가림 필터를 거쳐 기록 파일에 씁니다. `PYTHONUNBUFFERED=1` 이 없으면 파이프로
+    받는 CLI(파이썬)가 출력을 블록 단위로 모아 내보내, 줄이 늦게 나와 아래
+    120초 「감시 불능」 이 거짓으로 섭니다(2026-11-10 실측 — clip 그룹 289줄이
+    10초 동안 0줄, 켜면 바로 289줄). 로그 줄에 큐 URL(계정 ID 포함)이 찍히고, 유출
     신호가 잡힌 줄에 토큰 값이 남으면 안 됩니다. 이름(`Bearer ` ·
     `X-Internal-Token` · `upload_id=`)은 남겨 정지 신호로 잡히게 하고 값만
     가립니다. `upload_id` 값은 유튜브 업로드 세션 주소의 권한값이라 토큰과
@@ -260,6 +263,10 @@ epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤�
     }
     ```
 
+*   감시 · 점검 터미널은 `caffeinate -i zsh`(bash 면 `caffeinate -i bash`)로
+    연 셸에서 씁니다 — 맥이 잠들면 감시가 멈추고 서명이 만료됩니다(15분 멈춤
+    실측 두 번 · 2026-11-10). `-i` 는 유휴 잠자기만 막으므로 덮개는 열어
+    둡니다.
 *   큐 깊이(사진 · DLQ 셋)를 30초마다 읽습니다.
 *   수신 불능 판정을 2초 쉼으로 되풀이합니다(아래 「수신 · 진행 판정」 의
     `workers_receive_watch` — 로그 그룹마다 하나, 그 그룹의 `worker_started`
@@ -275,10 +282,11 @@ epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤�
 **정지 신호** — 하나라도 나오면 긴급 정지합니다.
 
 *   사진 줄: `thumbnail.report_rejected`(보고 4xx — 메시지가 그 자리에서
-    지워짐) · `thumbnail.report_unavailable` · `thumbnail.failed`(특히
-    `retryable=true code=INTERNAL` — S3 403 · 끊김) ·
-    `thumbnail.deadline_before_report` · 첫 `thumbnail.message_done` 뒤 2분
-    안에 `thumbnail.captured` 0건.
+    지워짐) · `thumbnail.report_unavailable` ·
+    `thumbnail.deadline_before_report` · 아래 사진 줄 판정
+    (`workers_thumbnail_verdict`)의 정지 — 카드 · 클립 실패 1건, 처리 중
+    captured 0 이 120초, 절반 넘는 라이브 실패. `kind=live` 의
+    `thumbnail.failed` 한 줄은 정지가 아닙니다(그 판정의 근거).
 *   렌더 줄: `render.started_rejected` · `render.report_rejected` ·
     `render.report_unavailable` · `render.unexpected`.
 *   업로드: `upload.loop_error` · `upload.unavailable`.
@@ -321,7 +329,9 @@ thumbnail 줄 = render, upload 줄 = upload)입니다. 감시 불능은 그 기�
     `QUOTA_EXCEEDED` · `YOUTUBE_REJECTED`)는 세지 않습니다.
 1.  **사진:** `thumbnail.report_unavailable` 이 서로 다른 대상으로 **연속
     3건**, 또는 `thumbnail.report_rejected` 1건(카드 · 클립이면 그 자리
-    손실이라 운영 중에도 1건).
+    손실이라 운영 중에도 1건), 또는 사진 줄 판정
+    (`workers_thumbnail_verdict`)의 정지. `kind=live` 실패 한 줄은 세지
+    않습니다(그 판정이 비율로 봄).
 1.  `*.loop_error` · `render.unexpected` · `render.report_rejected` 가 한
     번이라도.
 1.  DLQ 셋(사진 · 렌더 · 업로드) 중 하나라도 깊이가 apply 직전 기준보다
@@ -366,13 +376,17 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-workers.XXXXXX")"
 *   `workers_iso <epoch>` — ISO 8601(UTC) 시각을 냅니다.
 *   `workers_events <로그 그룹> <시작 epoch> <거르기 식> <줄 정규식>` — 로그
     사건을 「초 메시지」 줄로 냅니다. 시작 시각과 줄 이름을 CloudWatch
-    거르기와 별개로 한 번 더 거릅니다. 조회 하나에 시간 상한을 겁니다 — 시도
-    1번(`AWS_MAX_ATTEMPTS=1` · 재시도 방식 `standard` 고정) · 연결 2초 · 읽기
-    3초(`--cli-connect-timeout` · `--cli-read-timeout`) · 한 쪽만
-    (`--no-paginate`). 응답에 이어 받기 표(`nextToken` — 결과가 한 쪽에 다
-    담기지 않음)가 있으면 결과를 쓰지 않고 실패(2)로 돌아가므로, 줄을 놓친 채
-    통과하지 않습니다. 이 함수를 쓰는 판정 넷(기동 · 수신 · 로그 · 무완료)이
-    모두 이 상한을 받습니다.
+    거르기와 별개로 한 번 더 거릅니다. 조회 한 쪽마다 시간 상한을 겁니다 —
+    시도 1번(`AWS_MAX_ATTEMPTS=1` · 재시도 방식 `standard` 고정) · 연결 1초 ·
+    읽기 2초(`--cli-connect-timeout` · `--cli-read-timeout`) · 쪽은 CLI 가
+    아니라 함수가 넘깁니다(`--no-paginate`). 응답의 이어 받기 표(`nextToken`)는
+    FilterLogEvents 가 창을 아직 다 훑지 못했다는 표시일 뿐 결과가 많다는
+    뜻이 아니라(빈 쪽에도 붙음 — 2026-11-11 render · upload 그룹), 같은 창
+    (끝 시각을 조회를 시작한 때로 고정)의 다음 쪽을 표가 없어질 때까지
+    따라가 합칩니다. 조회를 시작한 뒤 2초가 지났는데 표가 남았으면 결과를
+    쓰지 않고 실패(2)로 돌아가므로, 줄을 놓친 채 통과하지 않습니다. 이 함수를
+    쓰는 판정 다섯(기동 · 수신 · 로그 · 무완료 · 사진)이 모두 이 상한을
+    받습니다.
 *   `workers_started_at <로그 그룹> <줄 이름> <apply 시작 epoch>` — 판정의
     기준 시각(그 줄의 첫 `worker_started`)을 냅니다.
 *   `workers_queue_depth <큐 이름>` — **보이는 깊이**
@@ -385,19 +399,33 @@ workers_iso() {
 }
 
 workers_events() {
-  AWS_MAX_ATTEMPTS=1 AWS_RETRY_MODE=standard aws logs filter-log-events \
-    --region "${region}" --log-group-name "$1" \
-    --start-time "$(($2 * 1000))" --filter-pattern "$3" --no-paginate \
-    --cli-connect-timeout 2 --cli-read-timeout 3 --output json \
-    > "${work}/events.json" < /dev/null || return 2
-  if ! jq -e '.nextToken == null' "${work}/events.json" > /dev/null; then
-    echo "조회: $1 의 결과가 한 쪽에 다 담기지 않음(nextToken)" >&2
-    return 2
-  fi
-  jq -r --argjson from "$(($2 * 1000))" --arg re "$4" \
-    '.events | sort_by(.timestamp) | .[] | select(.timestamp >= $from)
+  local begin token="" pages=0
+  begin="$(date -u +%s)"
+  : > "${work}/events.all"
+  while :; do
+    AWS_MAX_ATTEMPTS=1 AWS_RETRY_MODE=standard aws logs filter-log-events \
+      --region "${region}" --log-group-name "$1" \
+      --start-time "$(($2 * 1000))" --end-time "$((begin * 1000))" \
+      --filter-pattern "$3" --no-paginate \
+      ${token:+--next-token} ${token:+"${token}"} \
+      --cli-connect-timeout 1 --cli-read-timeout 2 --output json \
+      > "${work}/events.json" < /dev/null || return 2
+    pages=$((pages + 1))
+    jq -c '.events[]' "${work}/events.json" >> "${work}/events.all" \
+      || return 2
+    token="$(jq -r '.nextToken // empty' "${work}/events.json")" || return 2
+    if [ -z "${token}" ]; then
+      break
+    fi
+    if [ "$(($(date -u +%s) - begin))" -ge 2 ]; then
+      echo "조회: $1 을 2초 안에 다 훑지 못함(nextToken · ${pages}쪽)" >&2
+      return 2
+    fi
+  done
+  jq -rs --argjson from "$(($2 * 1000))" --arg re "$4" \
+    'sort_by(.timestamp) | .[] | select(.timestamp >= $from)
       | select(.message | test($re)) | "\(.timestamp / 1000 | floor) \(.message)"' \
-    "${work}/events.json" || return 2
+    "${work}/events.all" || return 2
 }
 
 workers_started_at() {
@@ -557,12 +585,15 @@ workers_receive_verdict() {
     Logs 조회에 보이기까지)을 **10초 이하로 가정** 합니다. prod 24시간
     실측(2026-11-10)은 평소 p99 약 5초이고, 망 전환 순간에는 40–50초까지
     늘었습니다(아래 「알려진 한계」).
-1.  **판정 한 번의 최악 — 6초.** 조회 하나는 시도 1번 · 연결 2초 · 읽기 3초 ·
-    한 쪽만이라 엔드포인트 주소가 하나면 망 쪽이 늦어도 5초에 끝나고(실패면
-    판정불가), CLI 기동 · jq · awk 는 로컬 실측 0.2–0.6초입니다. CLI 의
-    urllib3 는 DNS 가 준 주소마다 연결 상한 2초를 따로 걸어(서울 로그
-    엔드포인트는 A 레코드 6개), 망이 막히면 연결만 약 12초가 걸릴 수
-    있습니다. 그 판정은 줄이 10초 넘게 끊겨 아래 끊김 갈래(228초)가
+1.  **판정 한 번의 최악 — 6초.** 쪽 하나는 시도 1번 · 연결 1초 · 읽기
+    2초라 엔드포인트 주소가 하나면 망 쪽이 늦어도 3초에 끝납니다(실패면
+    판정불가). 다음 쪽은 조회를 시작한 뒤 2초가 지나기 전(`date +%s` 의 차가
+    2 미만 — 실제로 2초 미만)에만 부르므로, 마지막 쪽을 부르기 전까지 2초
+    미만 + 마지막 쪽 3초 + 그 쪽의 CLI 기동 · jq · awk(로컬 실측 0.2–0.6초)로
+    6초 미만입니다 — 쪽을 따라가기 전(한 쪽 · 연결 2초 · 읽기 3초)과 같은
+    최악입니다. CLI 의 urllib3 는 DNS 가 준 주소마다 연결 상한 1초를 따로
+    걸어(서울 로그 엔드포인트는 A 레코드 6개), 망이 막히면 연결만 약 6초가
+    걸릴 수 있습니다. 그 판정은 줄이 10초 넘게 끊겨 아래 끊김 갈래(228초)가
     잡습니다. 「늦음」 은 `date +%s`(초 단위)의 차가 5초를 넘을 때라, 늦음
     없이 지나는 판정은 실제로 6초 미만입니다.
 1.  **kty 가 판단하는 때 — 226초(줄 끊김이면 228초).** 204초 바로 앞에 시작한
@@ -576,14 +607,18 @@ workers_receive_verdict() {
 여유). 옛 꼴(쉼 5초 · 늦음 검사가 통과에만 · 조회 시간 상한 없음 — CLI 기본은
 시도 3번 · 연결 · 읽기 각 60초)은 r3 의 시간열(실패 0 · 60 · 194초 · 수집 지연
 10초 · 조회 196→198 · 203→217 · 222→236초)에서 236초에 정지해 명령 여유를 넣으면
-248초였습니다. 조회 수는 반복 하나가 약 2.5초에 한 번이라, 반복 둘과 따라 읽기
-둘(5초에 한 번씩)을 합쳐 초당 약 1.2건입니다. 스로틀이 나면 조회 실패라
-판정불가(닫는 쪽)이고 거짓 통과는 없습니다. 쉼 · 늦음 상한 · 시간 상한 · 수집
-지연 가정 · 끊김 10초를 바꾸면 이 셈과 시험의 시한 사례를 함께 고칩니다.
+248초였습니다. 조회 수는 판정이 한 쪽이면 반복 하나가 약 2.5초에 한 번이라,
+반복 둘과 따라 읽기 둘(5초에 한 번씩)을 합쳐 초당 약 1.2건이고, 쪽을 따라가는
+만큼 늘어납니다. 반복은 조회 창을 **지난 600초**(시작 epoch 가 더 늦으면
+그것)로 묶어 훑을 양을 줄입니다 — 아래 「다시 띄우기」 의 600초와 같은 셈이라
+이어지는 장애의 첫 줄을 늘 품습니다. 스로틀이 나면 조회 실패라 판정불가(닫는
+쪽)이고 거짓 통과는 없습니다. 쉼 · 늦음 상한 · 시간 상한 · 쪽 따라가기 2초 ·
+조회 창 600초 · 수집 지연 가정 · 끊김 10초를 바꾸면 이 셈과 시험의 시한 사례를
+함께 고칩니다.
 
 ```shell
 workers_receive_watch() {
-  local arg begin now rc verdict stamp misses=0
+  local arg begin from now rc verdict stamp misses=0
   for arg in "${2-}" "${3-}"; do
     case "${arg}" in
       '' | *[^0-9]*)
@@ -594,7 +629,11 @@ workers_receive_watch() {
   done
   while :; do
     begin="$(date -u +%s)"
-    verdict="$(workers_receive_verdict "$1" "$2" "${begin}")"
+    from="$2"
+    if [ "$((begin - 600))" -gt "${from}" ]; then
+      from="$((begin - 600))"
+    fi
+    verdict="$(workers_receive_verdict "$1" "${from}" "${begin}")"
     rc=$?
     now="$(date -u +%s)"
     stamp="$(jq -rn --argjson t "${now}" '$t | strftime("%H:%M:%S UTC")')"
@@ -755,14 +794,18 @@ workers_empty_receive_verdict() {
       --start-time "$(workers_iso "${from}")" --end-time "$(workers_iso "$3")" \
       --period 60 --statistics Sum --output json \
       > "${work}/empty-$1.json" < /dev/null \
-    || ! jq -e '.Datapoints | type == "array"' "${work}/empty-$1.json" \
-      > /dev/null; then
-    echo "지표 $1: 판정불가 — NumberOfEmptyReceives 조회 실패"
+    || ! jq -e '.Datapoints | type == "array" and all(.[]; .Timestamp
+      | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"))' \
+      "${work}/empty-$1.json" > /dev/null; then
+    echo "지표 $1: 판정불가 — NumberOfEmptyReceives 조회 실패 · 시각 꼴 모름"
     return 2
   fi
   if jq -e --argjson from "${from}" '[.Datapoints[]
-      | select((.Timestamp | sub("(\\.[0-9]+)?(Z|\\+00:00)$"; "Z")
-        | fromdateiso8601) >= $from) | .Sum] | any(. > 0)' \
+      | (.Timestamp | sub("\\.[0-9]+"; "")) as $t
+      | select(($t[0:19] + "Z" | fromdateiso8601)
+        - ($t[19:] | if . == "Z" then 0 else (if .[0:1] == "-" then -1 else 1 end)
+          * ((.[1:3] | tonumber) * 3600 + (.[4:6] | tonumber) * 60) end)
+        >= $from) | .Sum] | any(. > 0)' \
       "${work}/empty-$1.json" > /dev/null; then
     echo "지표 $1: 통과 — 기동 뒤 분에 빈 수신이 있음"
     return 0
@@ -781,6 +824,82 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 겹침 없음)만 이 지표를 단독 신호로 쓰고, 이미지 교체처럼 옛 태스크와 겹치는
 동안에는 보조로만 둡니다 — 그때는 로그 판정과 수신 불능 판정이 주 신호입니다.
 
+**사진 줄 판정(첫 소비 · 운영 중).** 지난 120초(기동이 더 늦으면 기동부터)의
+사진 결과로 가릅니다. 하나라도 서면 정지입니다(정지 대상 render).
+
+*   `kind=card` · `kind=clip` 의 `thumbnail.failed` 1건 — 카드 · 클립 사진은
+    잠깐 안 된 실패면 메시지를 두어(`LEAVE`) 다시 받히고 세 번째 뒤 DLQ 로
+    가는 손실입니다.
+*   그 창에 처리(`thumbnail.message_done`)가 있는데 `thumbnail.captured` 0 —
+    사진을 하나도 올리지 못하는 채 처리만 돕니다.
+*   `kind=live` 실패가 3건 이상이고 같은 창의 `captured` 보다 많음 — 절반
+    넘게 실패하는 것은 대상 탓이 아니라 일꾼 · 저장소 쪽 탓입니다.
+
+**`kind=live` 실패 한 줄은 정지가 아닙니다.** `workers/render` 의
+`ThumbnailProcessor` 는 라이브 주문을 실패의 갈래와 상관없이 지웁니다 —
+잠깐 안 된 실패는 `retryOrDrop` 이 `live` 면 `DELETE` 를 내고, 다시 해도 같은
+실패(`retryable=false`)도 `DELETE` 입니다. 라이브는 같은 키에 1분마다 덮어쓰고
+다음 분의 주문이 새로 찍으므로 다시 할 이유가 없고, DLQ 로 가지 않습니다.
+2026-11-11 첫 소비는 대기 217건 중 213 captured · 4 failed 였고, 넷 모두 11-08
+옛 라이브 세션 둘(`kind=live` · `reason=Failed`)이며 모두 `DELETE` · DLQ 0
+이었습니다. `reason=Failed` 는 받은 원본에서 ffmpeg 가 장면을 뽑지 못한
+것입니다(`ProcessRunner.Failed` — 0 이 아닌 종료 코드, 자리가 0 이 아니면 첫
+장면으로 한 번 더 뽑은 뒤에도). 원본이 저장소에 없으면
+`retryable=false code=SOURCE_EXPIRED`, S3 403 · 끊김이면 `retryable=true` 로
+따로 찍힙니다. 같은 대상의 다른 분 주문은 captured 였으므로 그 조각의 내용
+탓으로 봅니다. 저장소 · 망 쪽 실패는 모든 대상에 함께 오므로 위 둘째 · 셋째
+조건이 잡습니다. 이 판정은 첫 소비 감시 동안 30초마다, 운영 중 1분마다 돌립니다.
+인자는 로그 그룹 · 기동 epoch · 지금 epoch 입니다.
+
+```shell
+workers_thumbnail_verdict() {
+  local from="${2-}"
+  case "${from}" in
+    '' | *[^0-9]*)
+      echo "사진: 판정불가 — 기동 epoch(둘째 인자)가 숫자가 아님"
+      return 2
+      ;;
+  esac
+  case "${3-}" in
+    '' | *[^0-9]*)
+      echo "사진: 판정불가 — 지금 epoch(셋째 인자)가 없음"
+      return 2
+      ;;
+  esac
+  if [ "$(($3 - 120))" -gt "${from}" ]; then
+    from="$(($3 - 120))"
+  fi
+  if ! workers_events "$1" "${from}" \
+      '?"thumbnail.captured" ?"thumbnail.failed" ?"thumbnail.message_done"' \
+      'thumbnail\.(captured|failed|message_done) ' \
+      > "${work}/thumbnail.txt"; then
+    echo "사진: 판정불가 — $1 로그 조회 실패"
+    return 2
+  fi
+  awk -v least=3 '
+    / thumbnail\.captured / { captured++ }
+    / thumbnail\.message_done / { finished++ }
+    / thumbnail\.failed / {
+      if ($0 ~ / kind=live /) { live++ } else { other++ }
+    }
+    END {
+      if (other > 0) {
+        printf "사진: 정지 — kind=card · clip 실패 %d건\n", other
+        exit 1
+      }
+      if (finished > 0 && captured == 0) {
+        printf "사진: 정지 — 지난 120초 처리 %d건에 captured 0\n", finished
+        exit 1
+      }
+      if (live >= least && live > captured) {
+        printf "사진: 정지 — live 실패 %d건이 captured %d건보다 많음\n", live, captured
+        exit 1
+      }
+      printf "사진: 통과 — captured %d건 · live 실패 %d건(라이브는 지우고 다음 분이 다시 찍음)\n", captured, live
+    }' "${work}/thumbnail.txt"
+}
+```
+
 쓰는 예입니다. `apply_at` 은 kty 가 apply 를 시작하기 직전에
 `apply_at="$(date -u +%s)"` 로 적어 둔 값이고, `watch_end` 는 시험 · 관찰을
 끝낼 시각(예: `watch_end=$((apply_at + 7200))`)입니다. 사진 줄은 `thumbnail` ·
@@ -789,9 +908,9 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 
 **감시 터미널 준비.** 수신 감시 반복은 로그 그룹마다 따로 연 터미널에서
 돌립니다(render 그룹 하나가 render · thumbnail 줄을 함께 봄). 터미널마다 이 절의
-블록(`region` · `work` 와 함수 아홉)을 먼저 붙여 넣고, apply 터미널의
+블록(`region` · `work` 와 함수 열)을 먼저 붙여 넣고, apply 터미널의
 `apply_at` · `watch_end` 값을 숫자 그대로 옮겨 적습니다. 한 셸에서 `&` 로 여럿을
-띄우지 않습니다 — 같은 `${work}` 의 `events.json` · `receive.txt` 를 함께 써서
+띄우지 않습니다 — 같은 `${work}` 의 `events.all` · `receive.txt` 를 함께 써서
 판정이 섞입니다.
 
 아래 첫 줄은 `worker_started` 가 보여 `started` 에 숫자가 담길 때까지 10초마다
@@ -809,8 +928,7 @@ echo "기동 epoch: ${started}"
 workers_receive_watch pokeclip-prod-render "${started}" "${watch_end}"
 ```
 
-**다시 띄우기.** 관찰을 늘리거나, 관찰이 길어 조회 창(시작 epoch 부터
-지금까지)이 커져 이어 받기 표나 늦음이 잦아지면 반복을 다시 띄웁니다. 시작
+**다시 띄우기.** 관찰을 늘리려면 반복을 다시 띄웁니다. 시작
 epoch 는 **지금보다 600초 앞**(기동 뒤 600초가 안 됐으면 `started` 그대로)으로
 줍니다. 지금 시각으로 주면 그 앞의 실패를 보지 않아, 이미 이어지던 장애를 새
 시작 뒤의 실패부터 다시 세어 정지가 첫 실패 줄에서 240초를 넘깁니다(시험의
@@ -821,8 +939,8 @@ r4 시간열 — 269초 · 339초).
     228초) 안에 정지를 냅니다. 그래서 앞 반복이 아직 정지를 내지 않은
     이어짐은 첫 줄이 지금부터 늦어도 228초 앞이고, 600초 창이 그 첫 줄을
     늘 품습니다. 새 반복의 판정이 앞 반복과 같아 정지 시한도 같습니다. 창
-    안의 회복한 옛 장애는 회복 규칙(180초)이 거르고, 조회 창은 다시 띄운 때
-    600초로 줄어듭니다.
+    안의 회복한 옛 장애는 회복 규칙(180초)이 거릅니다. 반복이 판정마다 조회
+    창을 지난 600초로 묶는 것도 같은 셈입니다.
 *   **인계.** 그 사이를 비우지 않도록 앞 반복이 끝나기 전에 다른 감시
     터미널에서(블록을 붙여 넣고, 쓰는 예가 찍은 `기동 epoch:` 줄의 숫자를
     `started` 에, 새 `watch_end` 를 숫자 그대로 옮겨 적은 뒤) 아래 블록으로
@@ -857,11 +975,12 @@ workers_empty_receive_verdict pokeclip-prod-jobs-render "${started}" \
   "$(date -u +%s)"
 workers_nodone_verdict pokeclip-prod-render render \
   pokeclip-prod-jobs-render "${started}" "$(date -u +%s)"
+workers_thumbnail_verdict pokeclip-prod-render "${started}" "$(date -u +%s)"
 ```
 
 끝나면 감시 터미널마다(블록을 붙여 넣은 셸마다 `mktemp -d` 가 하나씩
-만들었음) 작업 디렉터리를 지웁니다. `events.json` 에는 가림 필터를 거치지 않은
-원 메시지(큐 URL 의 계정 ID 가 들어갈 수 있음)가 남습니다.
+만들었음) 작업 디렉터리를 지웁니다. `events.json` · `events.all` 에는 가림
+필터를 거치지 않은 원 메시지(큐 URL 의 계정 ID 가 들어갈 수 있음)가 남습니다.
 
 ```shell
 rm -rf -- "${work:?}"
@@ -962,7 +1081,7 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     apply · 감시는 network 등 망 변경 apply 와 같은 시간대에 하지
     않습니다.** 첫 apply 의 관찰이 끝나면 작업 디렉터리를 지우기 전에 감시
     터미널에서
-    `jq '[.events[] | .ingestionTime - .timestamp] | max' "${work}/events.json"`
+    `jq -s '[.[] | .ingestionTime - .timestamp] | max' "${work}/events.all"`
     (밀리초 · 마지막 조회의 줄만이라 하한)로 지연을 한 번 재어 기록하고, 10초를
     넘으면 셈과 쉼을 다시 봅니다.
 *   정지 시한은 확인하지 못한 전제 둘을 더 깔고 있습니다. 어느 쪽이든 깨지면
@@ -970,8 +1089,8 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     *   **조회 완전성.** CloudWatch Logs 의 공식 지식 센터 글(AWS re:Post
         Knowledge Center)은 짧은 간격으로 이어 부른 조회가 불완전한 결과를
         낼 수 있다고 경고합니다(수치 상한 없음). 감시 반복은 2초 쉼마다
-        조회하고, `nextToken` 검사는 남은 쪽만 잡을 뿐 이 불완전은 잡지
-        못합니다.
+        조회하고, 이어 받기 표(`nextToken`)를 따라가는 것은 API 가 남았다고
+        알린 쪽만 채울 뿐 이 불완전은 잡지 못합니다.
     *   **로그 전달.** 일꾼의 로그 설정(`modules/ecs_service` 의
         `logConfiguration` — `awslogs` 드라이버)에 `mode` 를 주지 않아, ECS
         문서의 기본인 `non-blocking`(버퍼 `max-buffer-size` 기본 10m)으로
@@ -1010,13 +1129,18 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 빈 큐 + 지표 지연 · 빈 큐 연결 불능 · DELAY 숨김의 다섯과 경계 사례(정상
 신호로 끊김 · 회복한 옛 장애 · 진행 중 업로드 · 감시 반복의 주기 · 종료 ·
 조회 실패 · 늦은 판정(조회 실패도) · 판정 줄의 시각 · 숫자가 아닌 시각 인자 ·
-이어 받기 표가 있는 조회), 「쓰는 예」 의 기동 대기 블록, 「다시 띄우기」
+반복의 600초 조회 창), 이어 받기 표(빈 쪽 + 표 뒤의 기동 신호 · 세 쪽에 나뉜
+실패 · 끝나지 않는 표는 2초 상한에서 판정불가), 지표 시각의 `+09:00` 꼴(이
+맥의 aws CLI 출력)과 모르는 꼴, 사진 줄 판정(2026-11-11 꼴 — 옛 `kind=live`
+실패 넷 + captured 다수는 통과 · 처리 중 captured 0 · 절반 넘는 라이브 실패 ·
+카드 · 클립 실패 1건은 정지 · 창 밖 실패는 세지 않음), 본문의 따라 읽기
+`PYTHONUNBUFFERED=1` · `caffeinate -i` 안내, 「쓰는 예」 의 기동 대기 블록, 「다시 띄우기」
 블록(이어지던 장애 한가운데서 띄운 r4 의 두 시간열이 240초 안에 정지 · 600초를
 빼는 변이), 정지 시한(가짜 aws 가 CLI 의 시간 상한 · 시도 수를 따름 — r2 의 두
 시간열 · 판정마다 5초 · r3 의 시간열 · 조회가 상한까지 걸려 실패 · 상한 밖에서
 멈춰 줄이 끊김이 판정 줄의 시각 + 명령 여유 12초로 240초 안), 판정 한 줄을
 뒤집은 변이, 블록에 `#` 주석이 없는지, 대화형 zsh(표준 입력 · PTY 붙여 넣기)에서
-함수 아홉이 모두 정의되고, 그중 일곱을 불렀을 때(나머지 둘 `workers_events` ·
+함수 열이 모두 정의되고, 그중 여덟을 불렀을 때(나머지 둘 `workers_events` ·
 `workers_queue_depth` 는 그 안에서 불림) bash 와 같은 결과를 내는지(본문에 `#`
 주석을 되돌린 음성 대조 포함).
 
