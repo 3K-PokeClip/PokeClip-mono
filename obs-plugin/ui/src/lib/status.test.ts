@@ -10,7 +10,7 @@ function state(patch: Partial<BridgeState>): BridgeState {
     version: 1,
     paired: true,
     keyHint: 'Q7ZK',
-    ingest: 'media.pokeclip.com:8890',
+    ingest: 'ingest.pokeclip.com:8890',
     apiBase: 'https://api.pokeclip.com',
     serverEnv: 'prod',
     phase: 'idle',

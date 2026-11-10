@@ -1,20 +1,25 @@
 import Link from 'next/link';
+import clsx from 'clsx';
+import { ChevronRight, Clapperboard, Sparkles, VideoOff } from 'lucide-react';
 import { Badge } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import { Thumb } from './Thumb';
 import type { HomeVod } from './useHomeMockState';
 
-// 디자인 1a ③ — 지난 방송·VOD 그리드. clip `state=past` 실값이다 (제목은 아직 streamId).
+// 디자인 1a ③ — 지난 방송 격자. clip `state=past` 실값이다.
+// 카드 한 장이 그 방송을 말한다: 장면 사진 · 제목 · 시작 시각(같은 제목을 가른다) · 찾은 카드와 만든 클립 수.
+// 사진 위 왼쪽 위 표시는 하나만 — 다시 보기 준비 중 · 곧 지워짐(D-n) · 보관 만료.
 // 첫 응답 전엔 홈이 큰 칸 스켈레톤만 그려 이 격자는 늘 읽은 뒤에 선다 — 「불러오는 중」 칸이 없다(POK-378).
 export function VodGrid({ vods }: { vods: HomeVod[] }) {
   return (
-    <section aria-label="지난 방송 · VOD" data-tour-id={TOUR_TARGET.vodGrid}>
+    <section aria-label="지난 방송" data-tour-id={TOUR_TARGET.vodGrid}>
       <div className={styles.vodHeader}>
-        <h2 className={styles.sectionLabel}>지난 방송 · VOD</h2>
+        <h2 className={styles.sectionLabel}>지난 방송</h2>
         <span className={styles.vodKeepNote}>60일 보관</span>
-        <Link href="/broadcast/vod" className={styles.mutedLink}>
-          지난 방송 목록
+        <Link href="/broadcast/vod" className={styles.vodAllLink} aria-label="지난 방송 전체 보기">
+          전체 보기
+          <ChevronRight size={14} aria-hidden />
         </Link>
       </div>
       {vods.length === 0 ? (
@@ -28,8 +33,8 @@ export function VodGrid({ vods }: { vods: HomeVod[] }) {
                   <VodCardBody vod={vod} />
                 </Link>
               ) : (
-                // 보관이 끝나 열 것이 없다: 링크를 안 만든다(지난 방송 목록과 같다, POK-254)
-                <div className={styles.vodLink}>
+                // 보관이 끝나 열 것이 없다: 링크를 안 만들고 사진을 흑백으로 둔다 — 눌리는 척하지 않는다(지난 방송 목록과 같다, POK-254)
+                <div className={styles.vodLinkOff}>
                   <VodCardBody vod={vod} />
                 </div>
               )}
@@ -41,33 +46,79 @@ export function VodGrid({ vods }: { vods: HomeVod[] }) {
   );
 }
 
+/**
+ * 카드 수가 다 찼는가. 방금 끝난 방송(「다시 보기 준비 중」)은 마지막 구간 카드가 늦게 뜬다 — 홈도 그 방송의 카드는 매 주기 다시
+ * 읽는다(useHomeMockState `fresh`). 사진도 그 카드 장면에서 나오니, 그동안은 0이어도 「없다」고 단정하지 않는다
+ */
+function cardsSettled(vod: HomeVod): boolean {
+  return vod.badge?.kind !== 'preparing';
+}
+
 function VodCardBody({ vod }: { vod: HomeVod }) {
+  const expired = vod.badge?.kind === 'expired';
   return (
     <>
-      <Thumb label="썸네일 준비 중" src={vod.thumbnailUrl}>
+      <Thumb
+        // 보관 만료면 가운데는 「보관 만료」 알약 하나만 둔다 — 사진이 없거나 못 받아 자리표시가 같이 서면 두 글이 포개진다.
+        // 카드가 하나도 없으면 사진(가장 크게 터진 장면)도 올 수 없다. 단 방금 끝난 방송은 아직 단정하지 않는다(cardsSettled)
+        label={
+          expired ? null : vod.cards === 0 && cardsSettled(vod) ? (
+            <span className={styles.vodNoPhoto}>
+              <VideoOff size={18} />
+              장면 사진 없음
+            </span>
+          ) : (
+            '썸네일 준비 중'
+          )
+        }
+        src={vod.thumbnailUrl}
+        className={clsx(expired && styles.vodThumbOff)}
+      >
         {vod.badge?.kind === 'preparing' ? (
-          <span className={styles.overlayPillTopLeft}>준비 중</span>
+          <span className={styles.overlayPillTopLeft}>
+            <span className={styles.vodPulse} aria-hidden />
+            다시 보기 준비 중
+          </span>
         ) : null}
         {vod.badge?.kind === 'dday' ? (
           <span className={styles.overlayTopLeft}>
             <Badge tone="danger" variant="solid" size="sm">
-              {vod.badge.label}
+              {vod.badge.label} 삭제
             </Badge>
           </span>
         ) : null}
-        {vod.badge?.kind === 'expired' ? (
-          <span className={styles.overlayTopLeft}>
-            <Badge tone="danger" variant="soft" size="sm">
-              보관 만료
-            </Badge>
-          </span>
-        ) : null}
+        {expired ? <span className={styles.vodOffCover}>보관 만료</span> : null}
         {vod.duration ? <span className={styles.durationPill}>{vod.duration}</span> : null}
       </Thumb>
       <div className={styles.vodText}>
-        <div className={styles.vodTitle}>{vod.title}</div>
-        <div className={styles.vodMeta}>{vod.meta}</div>
+        <div className={clsx(styles.vodTitle, vod.title === null && styles.vodUntitled)}>
+          {vod.title ?? '제목 없는 방송'}
+        </div>
+        <div className={styles.vodMeta}>{vod.when}</div>
+        <VodStats vod={vod} />
       </div>
     </>
+  );
+}
+
+/**
+ * 찾은 카드 · 만든 클립 — 클립이 0이면 아직 손대지 않은 방송이 눈에 띈다. 모르는 수는 「–」.
+ * 「찾은 장면 없음」은 카드가 0이고 만든 클립도 0이라고 알 때만이다: 카드를 다 가려도(POK-463) 그 카드로 만든 클립은 남는다.
+ * 보관함을 못 읽은 클립(null)을 0으로 접으면 가린 카드로 만든 클립이 「찾은 장면 없음」 뒤로 숨는다
+ */
+function VodStats({ vod }: { vod: HomeVod }) {
+  if (vod.cards === 0 && vod.clips === 0 && cardsSettled(vod))
+    return <div className={clsx(styles.vodStats, styles.vodStatsEmpty)}>찾은 장면 없음</div>;
+  return (
+    <div className={styles.vodStats}>
+      <span className={styles.vodStat}>
+        <Sparkles size={12} aria-hidden className={styles.vodStatCardIcon} />
+        카드 <b>{vod.cards ?? '–'}</b>
+      </span>
+      <span className={styles.vodStat}>
+        <Clapperboard size={12} aria-hidden className={styles.vodStatClipIcon} />
+        클립 <b>{vod.clips ?? '–'}</b>
+      </span>
+    </div>
   );
 }

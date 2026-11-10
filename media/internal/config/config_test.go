@@ -1039,6 +1039,36 @@ func TestLoadStallSealSwitchDefaultsOff(t *testing.T) {
 	}
 }
 
+// 새 꼴(회차) ③ 키 쓰기 스위치는 기본 끔이다(POK-525 결정 4 고침 — 상자 sidecar.env 가 값을 준다). 빈 값은 끔이고, 읽을
+// 수 없는 값은 기동 거부다 — 상자 파일의 `=on` 같은 오타가 조용히 끔(옛 꼴)으로 때워지면 켬 전환이 무징후로 실패한다.
+func TestLoadPlaybackRoundKeysSwitchDefaultsOff(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    bool
+		wantErr bool
+	}{
+		{"", false, false},
+		{"false", false, false},
+		{"true", true, false},
+		{"on", false, true},
+		{"켜", false, true},
+	}
+	for _, tt := range tests {
+		env := minimalEnv()
+		if tt.raw != "" {
+			env["PLAYBACK_ROUND_KEYS"] = tt.raw
+		}
+		cfg, err := Load(envOf(env))
+		if (err != nil) != tt.wantErr {
+			t.Errorf("PLAYBACK_ROUND_KEYS=%q: 오류 %v, want 오류 %v", tt.raw, err, tt.wantErr)
+			continue
+		}
+		if err == nil && cfg.PlaybackRoundKeys != tt.want {
+			t.Errorf("PLAYBACK_ROUND_KEYS=%q: PlaybackRoundKeys = %v, want %v", tt.raw, cfg.PlaybackRoundKeys, tt.want)
+		}
+	}
+}
+
 // 상태 읽기 차선의 전체 동시 상한은 기본 2 다(kty 2026-10-29 — 정산 걸음 전체 2 와 같은 꼴). 양의 정수만 받고 0 · 음수 ·
 // 문자는 기동 거부다.
 func TestLoadPlaybackReadMax(t *testing.T) {

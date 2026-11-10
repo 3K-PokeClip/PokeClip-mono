@@ -1,7 +1,7 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
 // 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5) · 종료 신호 규칙(A3·4D) ·
-// 서버 환경 짝과 기본값 이관(POK-267).
+// 서버 환경 짝과 기본값 이관(POK-267) · SRT 지연 기본값 이관(POK-556).
 #include "app-state.hpp"
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
@@ -15,6 +15,7 @@
 #include "post-and-wait.hpp"
 #include "retry-policy.hpp"
 #include "server-env.hpp"
+#include "srt-latency.hpp"
 #include "srt-url.hpp"
 
 #include <httplib.h>
@@ -184,6 +185,78 @@ TEST(srt_server_url_has_no_secrets)
 
 	c.sendPassphrase = false;
 	CHECK_EQ(BuildSrtServerUrl(c), "srt://ingest.pokeclip.com:8890?latency=1000000&pkt_size=1316");
+}
+
+// ---------------------------------------------------------------- SRT 지연 기본값 이관 (POK-556)
+
+TEST(srt_latency_default_is_3000)
+{
+	// 송출 쪽 망이 1초 넘게 막히면 재전송이 1000ms 안에 못 와 수신부가 늦은 패킷을 버렸다(2026-11-08–09 실측)
+	CHECK_EQ(kDefaultLatencyMs, 3000);
+	CHECK_EQ(kLegacyDefaultLatencyMs, 1000);
+	CHECK(IsValidLatencyMs(kDefaultLatencyMs));
+}
+
+TEST(srt_latency_valid_range_matches_dock_check)
+{
+	// 독 「지연은 20–8000ms」·브리지 PUT invalid_latency와 같은 범위
+	CHECK(IsValidLatencyMs(20));
+	CHECK(IsValidLatencyMs(8000));
+	CHECK(!IsValidLatencyMs(19));
+	CHECK(!IsValidLatencyMs(8001));
+	CHECK(!IsValidLatencyMs(0));
+	CHECK(!IsValidLatencyMs(-1));
+	// 64비트로 본다 — int로 먼저 좁히면 아래 둘이 2000으로 감겨 통과한다
+	CHECK(!IsValidLatencyMs(int64_t(4294969296)));
+	CHECK(!IsValidLatencyMs(int64_t(-4294965296)));
+	CHECK(!IsValidLatencyMs(int64_t(2147483648)));  // int 최댓값 + 1
+	CHECK(!IsValidLatencyMs(int64_t(-2147483649))); // int 최솟값 - 1
+}
+
+TEST(srt_latency_lifts_unmigrated_legacy_default)
+{
+	const std::optional<bool> none;
+	// 새 설치(파일에 latency_ms 없음) — 표지와 무관하게 지금 기본값
+	CHECK_EQ(LoadedLatencyMs(std::nullopt, none), 3000);
+	CHECK_EQ(LoadedLatencyMs(std::nullopt, true), 3000);
+	// 표지 없는 옛 파일의 옛 기본값 → 지금 기본값으로 올린다
+	CHECK_EQ(LoadedLatencyMs(1000, none), 3000);
+	// 표지 없는 옛 파일이라도 옛 기본값이 아니면 고른 값이다 — 그대로
+	CHECK_EQ(LoadedLatencyMs(500, none), 500);
+	CHECK_EQ(LoadedLatencyMs(2000, none), 2000);
+	CHECK_EQ(LoadedLatencyMs(20, none), 20);
+	CHECK_EQ(LoadedLatencyMs(8000, none), 8000);
+	// 이관 뒤 다시 1000을 골랐다(표지 있음) — 그대로
+	CHECK_EQ(LoadedLatencyMs(1000, true), 1000);
+	CHECK_EQ(LoadedLatencyMs(3000, true), 3000);
+	// 한 번 올린 값을 표지와 함께 다시 읽어도 같다
+	CHECK_EQ(LoadedLatencyMs(LoadedLatencyMs(1000, none), true), 3000);
+}
+
+TEST(srt_latency_marker_is_key_presence_not_value)
+{
+	// 표지는 키가 있는가로 본다 — 값이 false여도 이관이 끝난 파일이다
+	CHECK_EQ(LoadedLatencyMs(1000, std::nullopt), 3000);
+	CHECK_EQ(LoadedLatencyMs(1000, false), 1000);
+	CHECK_EQ(LoadedLatencyMs(1000, true), 1000);
+}
+
+TEST(srt_latency_out_of_range_falls_back_to_default)
+{
+	// 독·브리지가 받지 않는 값(20–8000 밖)은 파일을 손으로 고친 것 — 표지와 무관하게 기본값
+	const std::optional<bool> markers[] = {std::nullopt, false, true}; // 표지 없음 · false · true
+	for (const std::optional<bool> &marker : markers) {
+		CHECK_EQ(LoadedLatencyMs(19, marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(8001, marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(0, marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(-1000, marker), 3000);
+		// int로 먼저 좁히면 2000·1000으로 감기는 값
+		CHECK_EQ(LoadedLatencyMs(int64_t(4294969296), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(-4294965296), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(4294968296), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(2147483648), marker), 3000);
+		CHECK_EQ(LoadedLatencyMs(int64_t(-2147483649), marker), 3000);
+	}
 }
 
 TEST(ingest_host_rejects_port_outside_brackets)
@@ -1742,7 +1815,7 @@ TEST(build_default_env_is_prod_without_dev_macro)
 	CHECK(PluginConfig{}.serverEnv == ServerEnv::Prod);
 	const ServerDefaults &prod = ServersFor(ServerEnv::Prod);
 	CHECK_EQ(std::string(prod.apiBase), std::string("https://api.pokeclip.com"));
-	CHECK_EQ(std::string(prod.ingestHost), std::string("media.pokeclip.com"));
+	CHECK_EQ(std::string(prod.ingestHost), std::string("ingest.pokeclip.com"));
 	CHECK_EQ(prod.ingestPort, 8890);
 	const ServerDefaults &dev = ServersFor(ServerEnv::Dev);
 	CHECK_EQ(std::string(dev.apiBase), std::string("https://dev.pokeclip.com"));
@@ -1804,7 +1877,8 @@ TEST(apply_server_env_swaps_known_defaults_only)
 	ch = ApplyServerEnv(c, ServerEnv::Dev);
 	CHECK(!ch.env && !ch.api && !ch.ingest);
 
-	// 옛 기본값(POK-267 이전: http dev · ingest.pokeclip.com) → 대상 환경 값으로 올린다
+	// 옛 기본값(POK-267 이전: http dev · ingest.pokeclip.com — 수신은 지금 운영 값과 이름이 같다) → 대상 환경 값으로
+	// 올린다
 	PluginConfig old;
 	old.apiBase = kLegacyDefaultApiBase;
 	old.ingestHost = kLegacyDefaultIngestHost;
@@ -1819,7 +1893,37 @@ TEST(apply_server_env_swaps_known_defaults_only)
 	oldProd.ingestPort = 8890;
 	ApplyServerEnv(oldProd, ServerEnv::Prod);
 	CHECK_EQ(oldProd.apiBase, std::string("https://api.pokeclip.com"));
-	CHECK_EQ(oldProd.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(oldProd.ingestHost, std::string("ingest.pokeclip.com"));
+
+	// 0.2.1 이전 운영 기본 수신(media.pokeclip.com — CloudFront라 SRT가 닿지 않는다)도 옛 기본값이다. 운영에
+	// 남아도 지금 운영 값으로 올리고 키는 그대로 둔다
+	PluginConfig oldMedia;
+	oldMedia.serverEnv = ServerEnv::Prod;
+	oldMedia.apiBase = kProdServers.apiBase;
+	oldMedia.ingestHost = "media.pokeclip.com";
+	oldMedia.ingestPort = 8890;
+	oldMedia.streamId = kStreamId;
+	oldMedia.passphrase = "pass-prod-0123456789";
+	ch = ApplyServerEnv(oldMedia, ServerEnv::Prod);
+	CHECK(!ch.env && !ch.api && ch.ingest);
+	CHECK_EQ(oldMedia.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK_EQ(oldMedia.ingestPort, 8890);
+	CHECK_EQ(oldMedia.streamId, std::string(kStreamId));
+	CHECK_EQ(oldMedia.passphrase, std::string("pass-prod-0123456789"));
+	// 직접 고친 포트는 남기고 호스트만 올린다
+	PluginConfig oldMediaPort = oldMedia;
+	oldMediaPort.ingestHost = "media.pokeclip.com";
+	oldMediaPort.ingestPort = 9000;
+	ApplyServerEnv(oldMediaPort, ServerEnv::Prod);
+	CHECK_EQ(oldMediaPort.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK_EQ(oldMediaPort.ingestPort, 9000);
+	// 개발로 가면 개발 짝으로
+	PluginConfig oldMediaDev;
+	oldMediaDev.apiBase = kProdServers.apiBase;
+	oldMediaDev.ingestHost = "media.pokeclip.com";
+	oldMediaDev.ingestPort = 8890;
+	ApplyServerEnv(oldMediaDev, ServerEnv::Dev);
+	CHECK_EQ(oldMediaDev.ingestHost, std::string("media-dev.pokeclip.com"));
 
 	// 직접 적은 값(로컬 compose·로컬 auth)은 그대로다
 	PluginConfig local;
@@ -1838,7 +1942,7 @@ TEST(apply_server_env_swaps_known_defaults_only)
 	port.ingestHost = kDevServers.ingestHost;
 	port.ingestPort = 9000;
 	ApplyServerEnv(port, ServerEnv::Prod);
-	CHECK_EQ(port.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(port.ingestHost, std::string("ingest.pokeclip.com"));
 	CHECK_EQ(port.ingestPort, 9000);
 }
 
@@ -1856,12 +1960,19 @@ TEST(infer_server_env_from_files_without_key)
 	c.apiBase = "http://localhost:8082";
 	c.ingestHost = "media-dev.pokeclip.com";
 	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	// 0.2.1 이전 운영 짝(media.pokeclip.com)은 운영 흔적이라 운영으로 본다. 배포 빌드는 fallback으로 봐도 결과가
+	// 같고, 개발 빌드에서 운영을 뜻한 값을 dev로 바꾸지 않는다
 	c.ingestHost = "media.pokeclip.com";
 	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Prod);
 	c.ingestHost = "127.0.0.1";
 	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
 	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
 	c.ingestHost = kLegacyDefaultIngestHost; // 옛 기본 수신은 어느 환경의 근거도 아니다
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
+	// 바꾼 뒤 운영 값은 POK-267 이전 옛 값과 같은 이름이다 — 운영의 근거가 아님을 고정한다(server_env 없는 파일의
+	// ingest.pokeclip.com은 dev 키와 운영 수신이 섞였던 설치일 수 있다)
+	c.ingestHost = kProdServers.ingestHost;
 	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
 	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
 }
@@ -1889,7 +2000,7 @@ TEST(put_ordinary_save_keeps_server_pair)
 	c.ingestHost = kDevServers.ingestHost;
 	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
 	CHECK(c.serverEnv == ServerEnv::Prod);
-	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
 	CHECK_EQ(c.streamId, std::string(kStreamId)); // 전환이 아니면 키는 그대로
 	CHECK_EQ(c.passphrase, before.passphrase);
 
@@ -1897,7 +2008,15 @@ TEST(put_ordinary_save_keeps_server_pair)
 	c = before;
 	c.ingestHost = kLegacyDefaultIngestHost;
 	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
-	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
+
+	// 0.2.1 이전 운영 기본 호스트(media.pokeclip.com)를 연 초안을 저장 — 지금 운영 값으로, 키는 그대로
+	c = before;
+	c.ingestHost = "media.pokeclip.com";
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+	CHECK_EQ(c.passphrase, before.passphrase);
 
 	// 직접 적은 호스트·포트는 그대로
 	c = before;
@@ -1998,6 +2117,120 @@ TEST(same_key_issuer_detects_env_switch_during_pairing)
 	ApplyPutServerEnv(localSwitched, local, ServerEnv::Dev);
 	CHECK_EQ(localSwitched.apiBase, local.apiBase);
 	CHECK(!SameKeyIssuer(localSwitched, local));
+}
+
+// 독 개발자 모드 「인증 서버」(PUT api_base) — 비움·두 짝의 기본 주소·이 PC 주소만
+TEST(dock_api_base_accepts_defaults_and_loopback_only)
+{
+	CHECK_EQ(NormalizeApiBase("  http://localhost:8082/  "), std::string("http://localhost:8082"));
+	CHECK_EQ(NormalizeApiBase("https://dev.pokeclip.com//"), std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(NormalizeApiBase(" \t"), std::string());
+
+	CHECK(IsLoopbackApiBase("http://localhost:8082"));
+	CHECK(IsLoopbackApiBase("HTTP://LocalHost:8082"));
+	CHECK(IsLoopbackApiBase("http://localhost"));
+	CHECK(IsLoopbackApiBase("http://127.0.0.1:8082"));
+	CHECK(IsLoopbackApiBase("http://127.1.2.3:1"));
+	CHECK(IsLoopbackApiBase("https://localhost:8443"));
+	CHECK(IsLoopbackApiBase("http://[::1]:8082"));
+	CHECK(!IsLoopbackApiBase("http://localhost@evil.example")); // 실제로는 뒤쪽 호스트로 간다
+	CHECK(!IsLoopbackApiBase("http://localhost:8082@evil.example"));
+	CHECK(!IsLoopbackApiBase("http://localhost.evil.example"));
+	CHECK(!IsLoopbackApiBase("http://127.0.0.1.evil.example"));
+	CHECK(!IsLoopbackApiBase("http://127.0.0"));
+	// 127.x 판정은 정본(IsLoopbackBase)을 따른다 — 칸마다 0~255인지는 보지 않는다(어디로 가도 이 PC 밖이 아니다)
+	CHECK(IsLoopbackApiBase("http://127.0.0.256"));
+	CHECK(!IsLoopbackApiBase("http://128.0.0.1"));
+	CHECK(!IsLoopbackApiBase("http://[::2]:8082"));
+	CHECK(!IsLoopbackApiBase("http://localhost:0"));
+	CHECK(!IsLoopbackApiBase("http://localhost:65536"));
+	CHECK(!IsLoopbackApiBase("http://localhost:80a"));
+	CHECK(!IsLoopbackApiBase("http://localhost:"));
+	CHECK(!IsLoopbackApiBase("http://localhost/api")); // 경로는 받지 않는다 — 교환 경로를 뒤에 붙인다
+	CHECK(!IsLoopbackApiBase("http://localhost?x=1"));
+	CHECK(!IsLoopbackApiBase("ftp://localhost"));
+	CHECK(!IsLoopbackApiBase("localhost:8082"));
+	CHECK(!IsLoopbackApiBase("http://"));
+
+	CHECK(IsAcceptedDockApiBase(""));
+	CHECK(IsAcceptedDockApiBase("https://api.pokeclip.com"));
+	CHECK(IsAcceptedDockApiBase("https://dev.pokeclip.com"));
+	CHECK(IsAcceptedDockApiBase(kLegacyDefaultApiBase));
+	CHECK(IsAcceptedDockApiBase("http://localhost:8082"));
+	CHECK(!IsAcceptedDockApiBase("https://evil.example")); // PC 밖 다른 주소는 설정 파일로만
+	CHECK(!IsAcceptedDockApiBase("http://api.pokeclip.com"));
+
+	// 독이 받는 이 PC 주소는 마크(IsSecureMarkBase)·종료 신호(IsLoopbackBase)도 받는다 — 판정이 한 곳이라 어긋나지 않는다
+	for (const char *base : {"http://localhost:8082", "HTTP://LocalHost:8082", "http://127.0.0.1:8082", "http://127.1.2.3:1",
+				 "https://localhost:8443", "http://[::1]:8082", "http://[::1]"}) {
+		CHECK(IsLoopbackApiBase(base));
+		CHECK(IsLoopbackBase(base));
+		CHECK(IsSecureMarkBase(base));
+	}
+}
+
+TEST(put_api_base_change_clears_key)
+{
+	const PluginConfig before = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+
+	// 로컬 auth로 — 주소를 두고 키를 지운다(그 서버가 발급한 키가 아니다). 수신 주소·환경은 그대로
+	PluginConfig c = before;
+	CHECK(ApplyPutServerEnv(c, before, std::nullopt, std::string("http://localhost:8082")));
+	CHECK_EQ(c.apiBase, std::string("http://localhost:8082"));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.ingestHost, std::string("ingest.pokeclip.com"));
+	CHECK(!c.HasKey());
+	CHECK(c.passphrase.empty());
+	CHECK(!SameKeyIssuer(c, before)); // 교환을 기다리던 키는 버린다
+
+	// 같은 주소를 다시 보내면 바뀐 게 아니다 — 키는 그대로
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt, std::string("https://api.pokeclip.com")));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 끝 '/'만 다른 같은 주소(설정 파일에 직접 적은 값 — Load는 정리하지 않는다)도 바뀐 게 아니다. 저장된 값을 두고 키도 그대로
+	PluginConfig slash = before;
+	slash.apiBase = "http://localhost:8082/";
+	c = slash;
+	CHECK(!ApplyPutServerEnv(c, slash, std::nullopt, std::string("http://localhost:8082")));
+	CHECK_EQ(c.apiBase, std::string("http://localhost:8082/"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 비움 = 지금 환경의 기본 주소로 돌아간다
+	PluginConfig local = before;
+	local.apiBase = "http://localhost:8082";
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, std::nullopt, std::string()));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK(!c.HasKey());
+
+	// 다른 환경의 기본 주소를 적어도 짝이 섞이지 않는다 — 지금 환경의 기본 주소로(환경은 스위치로 바꾼다)
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, std::nullopt, std::string("https://dev.pokeclip.com")));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt, std::string("https://dev.pokeclip.com")));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 받지 않는 주소는 무시한다(부르는 쪽이 400으로 먼저 막는다) — 키도 그대로
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt, std::string("https://evil.example")));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// 같은 본문에 환경 전환이 있으면 비움은 바뀐 환경의 기본 주소다
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, ServerEnv::Dev, std::string()));
+	CHECK(c.serverEnv == ServerEnv::Dev);
+	CHECK_EQ(c.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("media-dev.pokeclip.com"));
+
+	// 방송 중 잠금 — 인증 서버가 바뀌면 출력 설정이 다른 것으로 본다(키가 지워진다)
+	c = before;
+	ApplyPutServerEnv(c, before, std::nullopt, std::string("http://127.0.0.1:8082"));
+	CHECK(!c.SameOutputSettings(before));
 }
 
 // 연결 해제 저장의 순서 규칙(POK-285) — POSIX·Windows 저장이 같이 쓴다. .bak을 먼저 쓰고, 그게 실패하면 본 파일은 건드리지 않는다.
@@ -2205,6 +2438,7 @@ TEST(mark_secure_base_allows_https_and_loopback_only)
 	CHECK(!IsSecureMarkBase("http://localhost@evil.test"));
 	CHECK(!IsSecureMarkBase("http://127.0.0.1.nip.io"));
 	CHECK(!IsSecureMarkBase("http://localhost:80x"));
+	CHECK(!IsSecureMarkBase("http://localhost:")); // 포트 없이 ':'만 — 종료 신호 판정과 같게(정본 하나)
 	CHECK(!IsSecureMarkBase("ftp://localhost"));
 	CHECK(!IsSecureMarkBase("https://"));
 	CHECK(!IsSecureMarkBase(""));

@@ -3,7 +3,8 @@ package indexer
 // ③ 시간 도장 사슬(계획 4.2-R R3 — kty 결정 B′·G). 조각 k 의 도장은 pos(k) = mtxi(k) + offset 이다.
 // 평소 offset 은 0 이고, 회차 안에서 mtxi 가 리셋되거나(같은 녹화기 이어짐이 아님 ∨ 역행) 같은 녹화기
 // 안에 구멍이 나면 직전 조각 끝에 이어 붙이도록 바뀐다. 이어짐 판정은 장부의 원래 사실 칸 위의
-// index.SameInstance 이고 리셋 · 구멍은 영상 축에서 잰다(POK-196 PDT 계획 4절 c8 · ADR-073 결정 2 개정).
+// index.SameInstance 이고 리셋 · 구멍은 영상 축에서 잰다(POK-196 PDT 계획 4절 c8 · ADR-073 결정 2 개정). 회차 첫
+// 조각의 mtxi 가 음수면 첫 도장을 0 에 두는 보정값으로 회차를 연다(playback.StartLink · POK-550).
 //
 // 이 파일이 루프 쪽 전부다 — 보관값(사슬)을 전진시키고 그 행의 ③ 작업 메타를 만든다. 한 걸음의 산식(리셋 · 구멍 ·
 // 고정)은 playback.NextLink 하나이고 복원(playback.RestoreChain)도 그것을 접는다(POK-196 PDT 계획 4절 c10a) — 여기는 인접
@@ -100,8 +101,9 @@ func withTailCorrection(l playback.Link, prev *index.TailRow) playback.Link {
 	return l
 }
 
-// startChain 은 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(⑥ · 결정 B′). mtxi 를 못 읽었으면
-// 도장을 지어내지 않는다(④ⓑ): ③ 요청 없이 두고, 다음 정상 판독 행이 사슬을 연다.
+// startChain 은 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(⑥ · 결정 B′). mtxi 가 음수면 첫 도장을 0 에 두는
+// 보정값으로 연다(playback.StartLink — 복원 접기와 같은 하한 · POK-550). mtxi 를 못 읽었으면 도장을 지어내지
+// 않는다(④ⓑ): ③ 요청 없이 두고, 다음 정상 판독 행이 사슬을 연다.
 func (ix *Indexer) startChain(streamID string, rec index.Record, res index.InsertCommit, src playback.SourceTiming) *index.UploadTarget {
 	first, ok := playback.StartLink(src)
 	if !ok {

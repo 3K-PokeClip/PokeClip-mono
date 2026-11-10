@@ -21,7 +21,7 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 `modules/{cdn_media,cdn_static_site}` · `policy/guard` ·
 `scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}` ·
 `prod/{bootstrap,secrets,network,runtime,certs}` ·
-`prod/{registry,platform,media,edge,records}` 이고, 보류로 표시한 루트
+`prod/{registry,platform,workers,media,edge,records}` 이고, 보류로 표시한 루트
 (`mgmt/*` · `nonprod/dns-dev` · `prod/dns` — 결정 46)는 아직 없습니다.
 
 ```
@@ -52,15 +52,20 @@ infra/terraform/
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
     ├── media/                     # ⑨ Media EC2 · 인스턴스 역할 · Media SG
     ├── edge/                      # ⑩ CloudFront 배포 · WAF · KVS · CF Function
-    └── records/                   # ⑫ 운영 별칭 레코드
+    ├── runtime-2/                 # ⑪ 런타임 2단 — rewind 버킷 정책(media OAC 읽기 허용문)
+    ├── records/                   # ⑫ 운영 별칭 레코드
+    └── workers/                   # ⑬ 일꾼 render · upload ECS 서비스(platform 클러스터 · 런타임 1단 출력)
 ```
 
 ⑤ · ⑪ 은 prod 런타임 트랙이 소유합니다 — ⑤ 런타임 1단은 `prod/runtime` 이고,
-⑪ 런타임 2단(rewind 버킷 정책)은 후속 PR 입니다(Media ↔ auth SG 규칙은 ⑨
-media — kty 결정 2026-10-25 (나), chat ↔ auth · clip SG 규칙은 ⑧ platform —
-POK-306 계약 개정). 그
+⑪ 런타임 2단은 `prod/runtime-2`(rewind 버킷 정책 — edge 뒤 apply)입니다
+(Media ↔ auth SG 규칙은 ⑨ media — kty 결정 2026-10-25 (나), chat ↔ auth ·
+clip SG 규칙은 ⑧ platform — POK-306 계약 개정). 그
 트랙과 주고받는 출력 이름 · 소유 경계는
 [런타임 트랙 인터페이스 계약](CONTRACT-runtime.md)이 정본입니다.
+⑬ `prod/workers` 는 platform 의 클러스터에 일꾼 서비스 둘을 더하고, 런타임
+1단 출력의 render · upload 키를 읽습니다(POK-408 — 같은 계약 「일꾼 작업
+역할 대상」).
 운영 측(ISB)이 만든 것(SCP ·
 OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주체 · GitHub OIDC
 공급자)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는 이 트리 밖이며
@@ -74,7 +79,7 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
 [prod 산출물 올리기(이미지 푸시 · 랜딩 업로드)](runbooks/prod-artifacts.md) ·
 [ALB 교차 영역 실측(O7d)](runbooks/alb-cross-zone-bench.md) ·
 [Media 상자 교체](runbooks/media-swap.md) ·
-[prod 철거(records · edge · media · platform 을 apply 뒤 내리기)](runbooks/prod-teardown.md) ·
+[prod 철거(workers · records · edge · media · platform 을 apply 뒤 내리기)](runbooks/prod-teardown.md) ·
 [prod 런타임 1단-가(apply · SQL 적용)](runbooks/runtime-1a.md) ·
 [엣지 시험(접속법 · T0–T11 · KVS 값 입력)](runbooks/edge-tests.md).
 운영 단계마다 먼저 [단계 직전 점검](runbooks/stage-precheck.md)을 합니다.
@@ -192,12 +197,15 @@ terraform fmt -check -recursive infra/terraform
 terraform -chdir=<루트·모듈> init -backend=false -input=false
 terraform -chdir=<루트·모듈> validate
 terraform -chdir=<tests/ 가 있는 루트·모듈> test
+bash infra/terraform/scripts/test/network_graph_check.sh
 conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
   --policy infra/terraform/policy/guard --namespace main
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
 bash infra/terraform/scripts/test/put_secret_test.sh
 bash infra/terraform/scripts/test/kvs_put_test.sh
+bash infra/terraform/scripts/test/network_vpce_runbook_test.sh
+bash infra/terraform/scripts/test/workers_watch_runbook_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
   infra/terraform/scripts/test/fakebin/aws \
   infra/terraform/scripts/test/kvs_fakebin/*
@@ -215,6 +223,10 @@ shellcheck -x infra/terraform/scripts/precheck/*.sh \
 tflint(`brew install terraform-linters/tap/tflint` · 설정 파일 없음 — 기본
 terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` 는
 `scripts/testdata` 의 guard fixture 까지 읽어 늘 실패합니다.
+`network_graph_check.sh` 는 init 된 `modules/network` 의 `terraform graph`
+로 terraform test 가 볼 수 없는 의존 계약(`depends_on`)을 봅니다.
+`scripts/test` 이름 규칙의 예외입니다 — terraform init 이 필요해 이름을
+`*_test.sh` 로 두지 않고 CI 의 terraform 잡이 돌립니다.
 `put_secret_test.sh` · `kvs_put_test.sh` 는 PATH 에 진짜 aws 가 있으면
 닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
 에 닿지 않음), 없으면 skip 으로 셉니다.

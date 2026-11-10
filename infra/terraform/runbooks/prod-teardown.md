@@ -1,8 +1,9 @@
 # prod 철거 런북
 
-apply 로 만든 `prod/records` · `prod/edge` · `prod/media` · `prod/platform`
-자원을 내리는(destroy) 절차입니다. records · edge 는 apply 했을 때만(상태
-키가 있을 때) 내립니다. M9 에서 `prod/registry` 에 더한 저장소 둘
+apply 로 만든 `prod/workers` · `prod/records` · `prod/edge` · `prod/media` ·
+`prod/platform` 자원을 내리는(destroy) 절차입니다. workers · records · edge
+는 apply 했을 때만(상태 키가 있을 때) 내립니다. 일꾼만 내릴 때도 이 런북의
+「0a」 를 씁니다. M9 에서 `prod/registry` 에 더한 저장소 둘
 (`media-host-bundle` · `media-loopback-sender`)도 필요하면 함께 내립니다. 이
 루트들을 apply 한 뒤 그 코드를 되돌리거나(revert), O7d · O7e · O7f 를
 처음부터 다시 할 때 씁니다.
@@ -32,20 +33,24 @@ apply 로 만든 `prod/records` · `prod/edge` · `prod/media` · `prod/platform
 
 | 순서 | 무엇 | 왜 |
 |---|---|---|
-| 1 | **revert 전에** 내린다(records · edge · platform · media) | revert 하면 루트 코드가 사라져 destroy 할 구성이 없어집니다. 상태만 남고 자원은 관리 밖에 남습니다. registry 저장소 둘은 예외입니다 — 순서 4 |
-| 2 | 앞 루트 출력을 읽는 다른 루트가 먼저 | 런타임 2단 · 일꾼이 platform 출력을 쓰고(platform README 「출력」), 런타임 2단은 edge 출력 `media_distribution_arn` 도 씁니다. 이 런북은 그 루트들을 내리지 않습니다 — 아래 「시작 전」 4 |
-| 3 | 의존 역순 — `prod/records` → `prod/edge` → `prod/media` → `prod/platform` | records 는 edge(배포 별칭)와 platform(공개 ALB · NLB 별칭) 출력을, edge 는 platform 의 내부 ALB 출력을 읽고 그 SG 에 인그레스 규칙을 둡니다. `prod/media/remote_state.tf` 도 platform 상태를 읽고, `main.tf` 가 대상 그룹 ARN · LB SG · nginx 포트를 그 출력에서 받습니다. 앞 루트를 먼저 내리면 뒤 루트의 destroy plan 이 출력 이름으로 실패합니다. Media SG 규칙도 platform 의 LB SG 를 출처로 가리킵니다 |
+| 1 | **revert 전에** 내린다(workers · records · edge · platform · media) | revert 하면 루트 코드가 사라져 destroy 할 구성이 없어집니다. 상태만 남고 자원은 관리 밖에 남습니다. registry 저장소 둘은 예외입니다 — 순서 4 |
+| 2 | 앞 루트 출력을 읽는 다른 루트가 먼저 | 일꾼(`prod/workers`)은 platform 출력을 써서 이 런북의 「0a」 가 맨 먼저 내립니다(순서 3). 런타임 2단(`prod/runtime-2`)은 1단 출력과 edge 출력 `media_distribution_arn` 을 씁니다 — platform 출력은 읽지 않습니다(platform README 「출력」 표가 적은 「런타임 2단」 몫은 이 루트에 아직 없음). 이 런북은 런타임 2단을 내리지 않습니다 — 아래 「시작 전」 4 · [prod/runtime-2](../prod/runtime-2/README.md) 「내리기」 |
+| 3 | 의존 역순 — `prod/workers` → `prod/records` → `prod/edge` → `prod/media` → `prod/platform` | workers 는 platform 의 클러스터 · Cloud Map 네임스페이스에 서비스를 두고 clip · auth SG 에 인그레스 셋을 둡니다 — platform 앞이면 되지만 순서를 하나로 고정해 맨 앞에 둡니다. records 는 edge(배포 별칭)와 platform(공개 ALB · NLB 별칭) 출력을, edge 는 platform 의 내부 ALB 출력을 읽고 그 SG 에 인그레스 규칙을 둡니다. `prod/media/remote_state.tf` 도 platform 상태를 읽고, `main.tf` 가 대상 그룹 ARN · LB SG · nginx 포트를 그 출력에서 받습니다. 앞 루트를 먼저 내리면 뒤 루트의 destroy plan 이 출력 이름으로 실패합니다. Media SG 규칙도 platform 의 LB SG 를 출처로 가리킵니다 |
 | 4 | registry 저장소 둘은 맨 끝 · 필요할 때만 · **revert 뒤가 기본** | 두 저장소의 이미지는 `prod/media` 만 씁니다. `prod/registry` 루트는 revert 뒤에도 남고 두 키만 빠지므로, revert 뒤의 registry apply 로 지우는 것이 기본입니다(「4. registry 저장소 둘」) |
 
 앞 루트(network · certs · secrets · registry 의 저장소 11개 · 런타임 1단 ·
-bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destroy plan 이
-그 상태 출력을 읽으므로, 철거가 끝날 때까지 그대로 둡니다.
+bootstrap)는 이 런북이 내리지 않습니다. workers · platform · media 의 destroy
+plan 이 그 상태 출력을 읽으므로, 철거가 끝날 때까지 그대로 둡니다.
+
+network 의 인터페이스 엔드포인트(POK-408)만 내릴 때는 아래 「인터페이스
+엔드포인트」 입니다 — VPC 는 그대로 두고 엔드포인트 다섯 · SG 만 지웁니다.
 
 ## 승인 지점
 
 | 지점 | 언제 | kty 가 보는 것 |
 |---|---|---|
 | T1 | 시작 | 리전 한 값(「시작 전」 2) · 의존 루트 확인(「시작 전」 4) · 방송 없음 · 거부 목록 파라미터 갈래 (a) · (b) 선택((b) 면 목록 토큰 회수 확인) |
+| T0w | workers destroy(apply 했을 때) | plan 요지 |
 | T1a | records destroy(apply 했을 때) | plan 요지 |
 | T1b | edge destroy(apply 했을 때) | apex 버킷 비우기 · plan 요지 |
 | T2 | 상태 떼기 | `state rm -dry-run` 출력 한 줄 |
@@ -70,6 +75,7 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
     work="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-teardown.XXXXXX")"
     evidence="${HOME}/.pokeclip-precheck/teardown-prod-$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir -p "${evidence}" && chmod 700 "${evidence}"
+    workers=infra/terraform/prod/workers
     records=infra/terraform/prod/records
     edge=infra/terraform/prod/edge
     media=infra/terraform/prod/media
@@ -79,7 +85,9 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
     ```
 
     **리전 고정.** apply 에 쓴 리전(루트마다 `var.region` — tfvars 가 덮지
-    않으면 기본값)을 세 루트에서 읽어, 한 값이면 CLI 의 기본 리전으로 둡니다.
+    않으면 기본값)을 세 루트(workers 를 apply 했으면 넷)에서 읽어, 한 값이면
+    CLI 의 기본 리전으로 둡니다. 일꾼만 내릴 때는 아래 루프를 `${workers}`
+    하나로만 돌립니다(「0a」).
     아래 리전별 aws 명령(ec2 · elbv2 · ecs · Cloud Map · logs · ssm · ecr ·
     wafv2 · 태그 조회)은 모두 `--region "${region}"` 을 붙입니다 — 프로필의
     기본 리전이 다르면 같은 이름의 다른 리전 자원을 지우거나 셉니다.
@@ -87,17 +95,19 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
 
     ```shell
     umask 077
-    for root in "${media}" "${platform}" "${registry}"; do
+    for root in "${workers}" "${media}" "${platform}" "${registry}"; do
       echo "$(basename "${root}") $(echo 'var.region' \
         | terraform -chdir="${root}" console | tr -d '"')"
     done | tee "${evidence}/00-region.txt"
-    cut -d' ' -f2 "${evidence}/00-region.txt" | sort -u | wc -l   # 1
+    cut -d' ' -f2 "${evidence}/00-region.txt" | sort -u | wc -l
     region="$(cut -d' ' -f2 "${evidence}/00-region.txt" | sort -u)"
     export AWS_REGION="${region}" AWS_DEFAULT_REGION="${region}"
     ```
 
-    `1` 이 아니면(루트마다 리전이 다르거나 비었으면) 멈추고 kty 에게
-    보고합니다. 셸을 새로 열면 이 블록과 위 변수 블록을 다시 둡니다.
+    루트별 리전 줄 뒤의 수(`wc -l` — 리전 값의 가짓수)가 `1` 이어야
+    합니다. `1` 이 아니면(루트마다 리전이 다르거나 비었으면) 멈추고 kty 에게
+    보고합니다. workers 를 apply 하지 않았으면(4 의 상태 키가 없으면) 루프에서
+    뺍니다. 셸을 새로 열면 이 블록과 위 변수 블록을 다시 둡니다.
 
 1.  호출 주체가 리스 계정의 kty IAM 사용자인지 `aws sts get-caller-identity`
     로 눈으로 봅니다(값은 파일 · 보고에 옮기지 않음). 단계 직전 점검에는
@@ -111,34 +121,45 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
       --query 'Contents[].Key' --output text | tr '\t' '\n' \
       | tee "${evidence}/00-state-keys.txt"
     roots='bootstrap|network|certs|secrets|registry|runtime|platform|media'
-    roots+='|edge|records'
+    roots+='|edge|records|workers'
     grep -Ev "^prod/(${roots})/terraform\.tfstate(\.tflock)?$" \
-      "${evidence}/00-state-keys.txt"   # 출력 없음
+      "${evidence}/00-state-keys.txt"
     grep -Ec '^prod/(edge|records)/terraform\.tfstate$' \
-      "${evidence}/00-state-keys.txt"   # 0 · 1 · 2 — 「0. records · edge」 대상
+      "${evidence}/00-state-keys.txt"
+    grep -Ec '^prod/workers/terraform\.tfstate$' \
+      "${evidence}/00-state-keys.txt"
     ```
 
-    알려진 열 루트의 상태 키(`prod/<루트>/terraform.tfstate` 와 그 잠금
+    출력은 차례로 허용 밖 키(없어야 함) · edge · records 키 수(0 · 1 · 2 —
+    「0. records · edge」 대상) · workers 키 수(0 · 1 — 「0a. prod/workers」
+    대상)입니다.
+
+    알려진 열한 루트의 상태 키(`prod/<루트>/terraform.tfstate` 와 그 잠금
     파일 `.tflock`) 밖의 키가 하나라도 나오면 멈추고 kty 에게 보고합니다.
-    접두가 아니라 키 전체로 봅니다 — 런타임 2단 · 일꾼의 키가
-    `prod/runtime/` 같은 앞 루트 디렉터리 아래에 있어도 걸리게. 그 루트에
-    자원이 남았으면 그 루트를 먼저 내려야 하고, 그 절차는 이 런북에
-    없습니다(그 루트의 PR 이 정합니다). edge · records 의 키가 있으면
-    「0. records · edge 먼저 내리기」 를 합니다.
+    접두가 아니라 키 전체로 봅니다 — 런타임 2단의 키가 `prod/runtime/` 같은
+    앞 루트 디렉터리 아래에 있어도 걸리게. 그 루트에 자원이 남았으면 그
+    루트를 먼저 내려야 하고, 그 절차는 이 런북에 없습니다(그 루트의
+    README). 런타임 2단은 내린 뒤에도 빈 상태
+    객체 `prod/runtime-2/terraform.tfstate` 가 남아 여기서 멈춥니다 —
+    처리는 [prod/runtime-2](../prod/runtime-2/README.md) 「내리기」 의
+    「남는 상태 객체」 입니다. workers 의 키가 있으면 「0a. prod/workers
+    먼저 내리기」 를, edge · records 의 키가 있으면 「0. records · edge 먼저
+    내리기」 를 합니다. 일꾼만 내릴 때는 이 허용 검사가 아니라 「0a」 의
+    갈래를 따릅니다.
 1.  방송이 없는지 kty 가 확인합니다. media destroy 는 상자를 종료합니다 —
     상자 디스크의 녹화 · DVR 은 함께 사라집니다(`delete_on_termination`).
 1.  시작 전 상태를 남깁니다.
 
     ```shell
     umask 077
-    for root in "${records}" "${edge}" "${media}" "${platform}"; do
+    for root in "${workers}" "${records}" "${edge}" "${media}" "${platform}"; do
       terraform -chdir="${root}" state list > "${evidence}/01-$(basename "${root}")-state.txt"
     done
     wc -l "${evidence}"/01-*-state.txt
     ```
 
-    records · edge 를 apply 하지 않았으면(상태 키 없음) 그 둘은 루프에서
-    뺍니다.
+    workers · records · edge 를 apply 하지 않았으면(상태 키 없음) 그 루트는
+    루프에서 뺍니다.
 
 ### plan 요지
 
@@ -146,14 +167,122 @@ destroy 마다 plan 파일을 만들고 요지를 남깁니다. 판정은 둘입
 `delete` 가 아닌 줄 0, 그 루트 밖 주소 0. 하나라도 어긋나면 apply 하지
 않고 kty 에게 보고합니다.
 
+`plan_summary <루트> <plan 파일>` 은 그 plan 의 관리 자원 중 바뀌는 것을
+`<동작> <주소>` 한 줄씩 냅니다. 이 블록에는 `#` 주석 · `!` 를 두지 않습니다.
+kty 의 대화형 zsh 는 `#` 를 주석으로 읽지 않아(`interactivecomments` 꺼짐),
+함수 머리 줄에 주석이 있으면 함수가 정의되지 않고 본문이 셸에서 바로 돕니다.
+
 ```shell
-plan_summary() {  # plan_summary <루트> <plan 파일>
+plan_summary() {
   terraform -chdir="$1" show -json "$2" \
     | jq -r '.resource_changes[] | select(.mode == "managed")
-        | select(.change.actions != ["no-op"])
+        | select(.change.actions == ["no-op"] | not)
         | "\(.change.actions | join(",")) \(.address)"'
 }
 ```
+
+## 0a. prod/workers 먼저 내리기
+
+「시작 전」 4 에서 `prod/workers` 의 상태 키가 나왔을 때만 합니다. 일꾼
+render · upload 의 ECS 서비스 · 태스크 정의 · Cloud Map 서비스 · SG · 역할 ·
+로그 그룹과 clip · auth SG 의 인그레스 ← 일꾼 셋을 지웁니다. platform · 런타임
+1단의 자원은 건드리지 않습니다. workers 의 리전은 「시작 전」 2 의 루프가 이미
+봤습니다.
+
+*   **일꾼만 내릴 때**(롤백의 기본): 「시작 전」 1–4 · 6 과 이 절만 하고
+    「정리」 로 갑니다. T1 에서는 리전 · 의존 루트 확인만 봅니다.
+    *   「시작 전」 2 의 리전 루프는 `${workers}` 하나만 돌립니다 — 다른
+        루트는 이 흐름에서 열지 않아 `terraform console` 이 실패할 수
+        있습니다. 줄 수 검사(`1` 이어야 함)는 그대로입니다.
+    *   「시작 전」 4 는 허용 검사(첫 `grep -Ev`)를 하지 않고 workers 키
+        줄만 봅니다 — `1` 이어야 합니다. workers 를 읽는 루트가 없어
+        ([계약](../CONTRACT-runtime.md) 「상태 위치」) 다른 루트의 키(런타임
+        2단의 빈 상태 객체 등)는 일꾼만 내리는 데 걸리지 않습니다.
+    *   「시작 전」 6 의 상태 목록 루프는 `${workers}` 하나만 돌립니다
+        (아래 요지 판정이 `01-workers-state.txt` 를 씀).
+*   큐의 주문은 지워지지 않고 보관 4일 동안 큐에 남습니다. 그 뒤에는
+    사라지므로, 다시 띄울지와 그 시점은 kty 가 정합니다.
+*   로그 그룹(`pokeclip-prod-render` · `pokeclip-prod-upload`)은 destroy 와
+    함께 지워집니다. 남길 로그가 있으면 T0w 전에 kty 가 정합니다.
+
+```shell
+umask 077
+terraform -chdir="${workers}" plan -destroy -input=false -out="${work}/workers.plan"
+plan_summary "${workers}" "${work}/workers.plan" | tee "${evidence}/05-workers-plan.txt"
+grep -vc '^delete ' "${evidence}/05-workers-plan.txt"
+grep -Evc '^delete (module\.(render|upload)\.|aws_vpc_security_group_ingress_rule\.(clip_from_worker|auth_from_upload)|terraform_data\.runtime_contract$)' \
+  "${evidence}/05-workers-plan.txt"
+wc -l <"${evidence}/05-workers-plan.txt"
+grep -Evc '(^|\.)data\.' "${evidence}/01-workers-state.txt"
+```
+
+요지에는 일꾼마다 모듈 자원(서비스 · 태스크 정의 · Cloud Map 서비스 · SG ·
+이그레스 규칙 · 실행 · 작업 역할과 정책 · 로그 그룹), clip · auth SG 의
+인그레스 셋(`clip_from_worker` 둘 · `auth_from_upload`), 원격 출력 확인
+자원(`terraform_data.runtime_contract`)만 나옵니다. 요지 뒤의 수 넷은
+차례로 `delete` 가 아닌 줄 수(`0`) · 이 루트 밖 주소 수(`0`) · 요지 줄 수 ·
+「시작 전」 6 의 상태 목록에서 `data` 자원을 뺀 수이고, 셋째와 넷째가
+같아야 합니다. kty 가 요지를 보고(T0w)
+승인하면 적용합니다. 서비스 삭제는 태스크가 멈출 때까지 기다려 몇 분 걸릴
+수 있습니다.
+
+```shell
+terraform -chdir="${workers}" apply -input=false "${work}/workers.plan"
+terraform -chdir="${workers}" state list | wc -l
+```
+
+`wc -l` 이 `0`(남은 상태 주소 없음)이어야 합니다. 이 절과 「시작 전」 2 ·
+4 의 블록은 기대값을 블록 밖에 적습니다 — kty 의 대화형 zsh 는 `#` 를
+주석으로 읽지 않아, 줄 끝 `# 0` 이 `wc` 의 파일 인자가 되면 입력과 상관없이
+`0 total` 이 나옵니다.
+
+**잔여 0**(읽기). 일꾼만 내렸을 때도 여기서 확인합니다.
+
+```shell
+umask 077
+{
+  echo "## tagged prod/workers"
+  aws resourcegroupstaggingapi get-resources --region "${region}" \
+    --tag-filters Key=TerraformRoot,Values=prod/workers \
+    --query 'ResourceTagMappingList[].ResourceARN' --output json \
+    | jq -r '.[]' | sed -E 's/[0-9]{12}/<계정>/g'
+  echo "## ecs services (not INACTIVE)"
+  aws ecs describe-services --region "${region}" --cluster pokeclip-prod \
+    --services pokeclip-prod-render pokeclip-prod-upload \
+    --query 'length(services[?status!=`INACTIVE`])'
+  echo "## security groups · rules"
+  aws ec2 describe-security-groups --region "${region}" \
+    --filters Name=tag:TerraformRoot,Values=prod/workers \
+    --query 'length(SecurityGroups)'
+  aws ec2 describe-security-group-rules --region "${region}" \
+    --filters Name=tag:TerraformRoot,Values=prod/workers \
+    --query 'length(SecurityGroupRules)'
+  echo "## log groups"
+  for g in pokeclip-prod-render pokeclip-prod-upload; do
+    aws logs describe-log-groups --region "${region}" \
+      --log-group-name-prefix "${g}" \
+      --query "length(logGroups[?logGroupName=='${g}'])"
+  done
+  echo "## iam roles"
+  for r in render upload; do
+    for kind in execution task; do
+      aws iam get-role --role-name "pokeclip-prod-${r}-${kind}" 2>&1 \
+        | grep -c NoSuchEntity
+    done
+  done
+} | tee "${evidence}/06-workers-residue.txt"
+```
+
+| 줄 | 통과 값 |
+|---|---|
+| `tagged prod/workers` | 빈 목록(남은 ARN 이 있으면 계정 ID 를 `<계정>` 으로 가려 찍힘) |
+| `ecs services` · `security groups · rules` | 모두 `0` |
+| `log groups` | 두 줄 모두 `0` |
+| `iam roles` | 네 줄(`pokeclip-prod-{render,upload}-{execution,task}`) 모두 `1`(NoSuchEntity) |
+
+*   태스크 정의가 비활성(`INACTIVE`)으로 태그 조회에 남는 꼴이면 「5. 잔여
+    0」 의 같은 항목대로 봅니다.
+*   잔여가 있으면 이름으로 하나씩 확인해 kty 에게 보고합니다.
 
 ## 0. records · edge 먼저 내리기
 
@@ -438,12 +567,12 @@ terraform -chdir="${registry}" apply -input=false "${work}/registry.plan"
 ```shell
 umask 077
 {
-  for root in prod/media prod/platform; do
+  for root in prod/workers prod/media prod/platform; do
     echo "## tagged ${root}"
     aws resourcegroupstaggingapi get-resources --region "${region}" \
       --tag-filters "Key=TerraformRoot,Values=${root}" \
       --query 'ResourceTagMappingList[].ResourceARN' --output json \
-      | jq -r '.[]'
+      | jq -r '.[]' | sed -E 's/[0-9]{12}/<계정>/g'
   done
   echo "## instances (not terminated)"
   aws ec2 describe-instances --region "${region}" \
@@ -452,10 +581,10 @@ umask 077
     --query 'length(Reservations[].Instances[])'
   echo "## security groups · rules"
   aws ec2 describe-security-groups --region "${region}" \
-    --filters Name=tag:TerraformRoot,Values=prod/media,prod/platform \
+    --filters Name=tag:TerraformRoot,Values=prod/workers,prod/media,prod/platform \
     --query 'length(SecurityGroups)'
   aws ec2 describe-security-group-rules --region "${region}" \
-    --filters Name=tag:TerraformRoot,Values=prod/media,prod/platform \
+    --filters Name=tag:TerraformRoot,Values=prod/workers,prod/media,prod/platform \
     --query 'length(SecurityGroupRules)'
   echo "## load balancers · target groups"
   aws elbv2 describe-load-balancers --region "${region}" \
@@ -486,13 +615,12 @@ umask 077
   echo "## denylist parameter"
   aws ssm get-parameter --region "${region}" --name "${param_name}" 2>&1 \
     | grep -c ParameterNotFound
-  # 아래는 「0. records · edge」 를 했을 때만 봅니다.
   for r in us-east-1 "${region}"; do
     echo "## tagged prod/edge ${r}"
     aws resourcegroupstaggingapi get-resources --region "${r}" \
       --tag-filters Key=TerraformRoot,Values=prod/edge \
       --query 'ResourceTagMappingList[].ResourceARN' --output json \
-      | jq -r '.[]'
+      | jq -r '.[]' | sed -E 's/[0-9]{12}/<계정>/g'
   done
   echo "## cloudfront (us-east-1 · 이름 접두)"
   aws cloudfront list-functions --region us-east-1 \
@@ -536,14 +664,17 @@ umask 077
 } | tee "${evidence}/50-residue.txt"
 ```
 
+`## tagged prod/edge` 부터 끝까지의 줄은 「0. records · edge」 를 했을 때만
+봅니다.
+
 | 줄 | 통과 값 |
 |---|---|
-| `tagged prod/platform` | 빈 목록 |
+| `tagged prod/workers` · `tagged prod/platform` | 빈 목록 |
 | `tagged prod/media` | 빈 목록 — 갈래 (a) 면 거부 목록 파라미터 ARN 한 줄만(아래 「보존 목록」) |
 | `instances` · `security groups · rules` · `load balancers · target groups` · `ecs · cloud map · waf` | 모두 `0` |
-| `log groups` | `pokeclip-prod-next` · `pokeclip-prod-auth` · `pokeclip-prod-clip` 이 없음 |
+| `log groups` | `pokeclip-prod-next` · `pokeclip-prod-auth` · `pokeclip-prod-clip` · `pokeclip-prod-render` · `pokeclip-prod-upload` 이 없음 |
 | `waf log groups` | `0`건 — 공개 WAF 로그(접두 `aws-waf-logs-pokeclip-prod-`)를 아직 더하지 않았으면 처음부터 0건이 정상 |
-| `iam roles` | `pokeclip-prod-media` · `pokeclip-prod-{next,auth,clip}-{execution,task}` 가 없음 |
+| `iam roles` | `pokeclip-prod-media` · `pokeclip-prod-{next,auth,clip,render,upload}-{execution,task}` 가 없음 |
 | 인스턴스 프로필 | `1`(NoSuchEntity) |
 | `denylist parameter` | `1`(ParameterNotFound — 갈래 (b) 의 6 뒤) — 갈래 (a) 면 `0`(있음 · 보존 목록) |
 | `tagged prod/edge us-east-1` · `tagged prod/edge <서울>` | 빈 목록(0 을 했을 때) |
@@ -568,7 +699,7 @@ umask 077
     ```
 
 잔여가 있으면 이름으로 하나씩 확인해 kty 에게 보고합니다. 내린 루트
-(records · edge · media · platform)의 잔여 0 과 보존 목록 판정을 끝낸
+(workers · records · edge · media · platform)의 잔여 0 과 보존 목록 판정을 끝낸
 뒤에만 revert 를 머지합니다 — registry 갈래 (r1) 도 같습니다.
 
 **보존 목록** — 잔여 0 과 따로, 일부러 남기는 것입니다. 증거
@@ -578,7 +709,7 @@ umask 077
 |---|---|---|
 | 거부 목록 파라미터 | 갈래 (a) | 다시 apply 할 때 import 해 운영 값을 이어 씀 |
 | registry 저장소 둘 | M9 코드를 되돌리지 않을 때 | 다음 registry apply 가 다시 만듦 |
-| `prod/records` · `prod/edge` · `prod/media` · `prod/platform` 상태 객체(빈 상태) | 늘 | 다시 apply 할 때 그대로 씀(「정리」) |
+| `prod/workers` · `prod/records` · `prod/edge` · `prod/media` · `prod/platform` 상태 객체(빈 상태) | 늘 | 다시 apply 할 때 그대로 씀(「정리」) |
 | CDN 비밀 원본(`pokeclip/prod/cdn-secret`) | 늘 | `prod/secrets` 소유 — 다시 edge 를 apply 하면 그 값으로 KVS 를 채움(엣지 시험 런북 「KVS 값 입력」) |
 | 증거 디렉터리 | 늘 | 결과 원문(「정리」) |
 
@@ -628,14 +759,36 @@ terraform -chdir="${media}" import "${param_addr}" "${param_name}"
 [value]` 라 apply 가 되살린 값을 머리 줄로 덮지 않습니다. 보관 파일이
 없거나 비었으면 apply 하지 않고 kty 에게 보고합니다.
 
+## 인터페이스 엔드포인트
+
+`prod/network` 의 인터페이스 엔드포인트 다섯과 엔드포인트 SG 를 내리는
+순서입니다. 명령 · 판정 함수 · 관문의 정본은 [prod/network
+README](../prod/network/README.md) 「되돌리기 2단계 — 엔드포인트 철거」 이고,
+여기에는 순서와 왜만 적습니다.
+
+| 순서 | 무엇 | 왜 |
+|---|---|---|
+| 1 | workers 를 `render_egress_via_endpoints = false` 로 apply(또는 workers 철거) | render 이그레스가 NAT 로 돌아가 엔드포인트 SG 를 참조하는 규칙이 사라집니다. render 는 엔드포인트 말고는 AWS 로 가는 길이 없습니다 |
+| 2 | private DNS 끄기(`interface_endpoint_private_dns = false` · README 「되돌리기 1단계」)와 그 복구 완료 조건 | DNS 를 켠 채 엔드포인트를 지우면 캐시 · 연결이 지워진 ENI 로 가는 실패 창이 platform · media 전체에 생깁니다. 교정(삭제 관문 (나) 의 앞몫)은 DNS 를 끄기 전에 합니다 |
+| 3 | 삭제 관문 — (가) 참조 0 · (나) 교정된 `BytesProcessed` 60분 0 | 판정불가는 통과가 아닙니다. 풀리지 않으면 VPC 호출자 재기동 뒤 다시 재거나, kty 회부 뒤 ENI 를 보존합니다(DNS 끈 채 둠) |
+| 4 | `interface_endpoint_services = []`(또는 PR-N revert)로 network apply | plan 요지는 일곱 줄이 모두 `delete` 입니다 |
+
+순서를 어기고 render 가 엔드포인트 SG 를 참조하는 채 4 를 apply 하면 막히지
+않습니다. 엔드포인트 다섯과 인그레스 규칙이 먼저 지워져 render 가 그 순간 AWS
+에 닿지 못하고, SG 삭제만 `DependencyViolation` 으로 시한까지 다시 시도하다
+실패해 network 가 「엔드포인트 없음 · SG 남음」 으로 반쯤 적용됩니다. 그때는
+다시 돌리지 말고 kty 에게 보고합니다(「부분 실패」).
+
 ## 부분 실패
 
 *   destroy apply 가 중간에 실패하면 다시 돌리기 전에 오류를 kty 에게
     보고합니다. 거부 목록 파라미터 밖의 자원을 `state rm` 으로 떼어 넘기지
     않습니다 — 떼면 그 자원이 관리 밖에 남습니다.
 *   SG 삭제가 `DependencyViolation` 으로, Cloud Map 네임스페이스 삭제가
-    사용 중으로 막히면 다른 루트(런타임 2단 · 일꾼)의 자원이 아직
-    가리키고 있을 수 있습니다. 멈추고 「시작 전」 4 를 다시 봅니다.
+    사용 중으로 막히면 다른 루트의 자원이 아직 가리키고 있을 수 있습니다 —
+    `prod/workers` 의 clip · auth SG 인그레스 ← 일꾼 셋 · 일꾼 SG · 일꾼의
+    Cloud Map 서비스 둘, 또는 런타임 2단. 멈추고 「시작 전」 4 를 다시 봅니다
+    (workers 키가 있는데 「0a」 를 건너뛰었는지).
 *   다시 할 때는 같은 plan 요지 절차로 plan 을 새로 만듭니다(남은 자원만
     나옴).
 *   멈춘 채 오늘 이어 하지 않으면 작업 디렉터리를 그 자리에서 지웁니다
@@ -644,8 +797,8 @@ terraform -chdir="${media}" import "${param_addr}" "${param_name}"
 
 ## 정리
 
-상태 객체(`prod/records` · `prod/edge` · `prod/media` · `prod/platform` 의 빈
-상태)는 지우지 않습니다 — 다시 apply 할 때 그대로 씁니다. 작업 디렉터리는
+상태 객체(`prod/workers` · `prod/records` · `prod/edge` · `prod/media` ·
+`prod/platform` 의 빈 상태)는 지우지 않습니다 — 다시 apply 할 때 그대로 씁니다. 작업 디렉터리는
 잔여 0 을 확인한 뒤 지웁니다. 증거 디렉터리는 남깁니다.
 
 ```shell
@@ -659,9 +812,12 @@ rm -r -- "${work}" && unset work
 
 ## See also
 
-*   [prod/records](../prod/records/README.md) · [prod/edge](../prod/edge/README.md) ·
+*   [prod/workers](../prod/workers/README.md) ·
+    [prod/records](../prod/records/README.md) · [prod/edge](../prod/edge/README.md) ·
     [prod/media](../prod/media/README.md) · [prod/platform](../prod/platform/README.md) ·
     [prod/registry](../prod/registry/README.md)
+*   [prod/network](../prod/network/README.md) — 「되돌리기 2단계 — 엔드포인트
+    철거」
 *   [엣지 시험 런북](edge-tests.md) — 「KVS 값 입력」(다시 apply 할 때)
 *   [Media 교체 런북](media-swap.md) — 「plan 범위」 · 「부분 실패 복구」
 *   [단계 직전 점검 런북](stage-precheck.md) — 「증거」

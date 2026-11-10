@@ -197,3 +197,44 @@ func TestRestoreChainWithoutAnchorOpensAtFirstReadableRow(t *testing.T) {
 		t.Errorf("접기 = %+v, want seq 1 · pos 604s · offset 0 하나", got)
 	}
 }
+
+// 회차 첫 행의 mtxi 가 음수면(새 연결에서 소리가 영상보다 먼저 시작 — prod 실측 −44ms · POK-550) 첫 도장을 0 에 두는
+// 보정값 −mtxi 로 연다. 보관 mtxi 는 원값이다 — 다음 행의 구멍 술어가 실제 미디어 끝을 기준으로 선다. 실시간 사슬
+// (indexer startChain)과 복원 접기(ChainFold.Step)가 이 한 함수를 부른다. 잡는 결함: 음수 도장을 그대로 내면 생산자가
+// ErrNegativePos 로 거부해 그 행의 ③ 이 첫 시도에 failed 로 끝난다 / 보관 mtxi 에 pos 를 넣으면 다음 행의 구멍을 놓친다.
+func TestStartLinkOpensNegativeMtxiAtZero(t *testing.T) {
+	rec := [16]byte{0xaa}
+	for _, tt := range []struct {
+		name        string
+		dts         time.Duration
+		pos, offset time.Duration
+	}{
+		{"음수_mtxi_는_0_에_연다", -44 * time.Millisecond, 0, 44 * time.Millisecond},
+		{"1ns_음수도_0_에_연다", -1, 0, 1},
+		{"0_은_그대로", 0, 0, 0},
+		{"양수는_자기_mtxi", 604 * time.Second, 604 * time.Second, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			l, ok := StartLink(source(1, rec, 1, tt.dts))
+
+			if !ok || l.Pos != tt.pos || l.Offset != tt.offset || l.Mtxi != tt.dts {
+				t.Errorf("StartLink = (pos %v · offset %v · mtxi %v, %v), want (pos %v · offset %v · mtxi %v 원값, true)",
+					l.Pos, l.Offset, l.Mtxi, ok, tt.pos, tt.offset, tt.dts)
+			}
+		})
+	}
+}
+
+// 닻 없이 회차 첫 행부터 접는 복원도 음수 첫 mtxi 를 0 에 열고, 그 보정값을 연속 행이 잇는다 — 실시간 사슬과 같은 도장이다
+// (POK-550 · 복원 경로). 잡는 결함: 실시간 사슬에만 하한을 두면 재기동 뒤 복원 행이 음수 도장으로 생산자에서 거부된다.
+func TestRestoreChainOpensNegativeFirstMtxiAtZero(t *testing.T) {
+	rec := [16]byte{0xaa}
+	rows := []SourceTiming{source(0, rec, 1, -44*time.Millisecond), source(1, rec, 2, -44*time.Millisecond+4*time.Second)}
+
+	got := RestoreChain(nil, rows, stitchAt(0, new([]int64)), sameRecorder)
+
+	if len(got) != 2 || got[0].Pos != 0 || got[0].Offset != 44*time.Millisecond ||
+		got[1].Pos != 4*time.Second || got[1].Offset != 44*time.Millisecond {
+		t.Errorf("접기 = %+v, want seq 0 · pos 0 · offset 44ms → seq 1 · pos 4s · offset 44ms", got)
+	}
+}

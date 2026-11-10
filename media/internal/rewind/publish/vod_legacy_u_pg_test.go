@@ -39,8 +39,14 @@ func (d registryDecider) Decide(ctx context.Context, tx pgx.Tx, in index.Session
 	return index.SessionDecision{
 		Opens:     dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
 		SessionID: dec.SessionID, BaseSessionID: dec.BaseSessionID, EndingSessionID: dec.EndingSessionID,
-		PrevFirstLocalPath: dec.PrevFirstLocalPath, RoundID: dec.RoundID, FloorRejected: dec.FloorRejected, Plan: dec,
+		PrevFirstLocalPath: dec.PrevFirstLocalPath, RoundID: dec.RoundID, NewRound: dec.NewRound, FloorRejected: dec.FloorRejected, Plan: dec,
 	}, nil
+}
+
+// legacySegKey 는 실물 키 파생(playback.SegKey)을 index.PlaybackKeyFunc 에 입힌 옛 꼴 어댑터다 — 회차를 버린다(스위치 끔
+// 상자와 같은 꼴 · indexer phase_pg_test.go 와 같다).
+func legacySegKey(streamID, _ string, seq int64) (string, error) {
+	return playback.SegKey(streamID, seq)
 }
 
 func (d registryDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDecision, firstPDT time.Time) (string, error) {
@@ -59,7 +65,7 @@ func TestFreezeVODPassesPDTCheckAcrossUnattributedRows(t *testing.T) {
 	pool := newPool(t)
 	ctx := context.Background()
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
-	store := index.NewPGStore(pool, registryDecider{reg: reg}, playback.SegKey)
+	store := index.NewPGStore(pool, registryDecider{reg: reg}, legacySegKey)
 	closeOpts := index.CloseOptions{Window: 300 * time.Second, Slack: 60 * time.Second, Log: slog.New(slog.DiscardHandler)}
 	insert := func(seq int64, at time.Duration, src index.SessionSource) index.InsertCommit {
 		t.Helper()

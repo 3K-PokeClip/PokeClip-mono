@@ -20,9 +20,9 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
-// roundDecider 는 phaseDecider 에 회차 칸 두 개(RoundID · FloorRejected)를 더 옮긴다 — 조립 지점(cmd/segment-indexer
-// session_wire.go)의 변환과 같다. phaseDecider 는 두 칸을 옮기지 않아 이어 가는 행의 회차가 비고, 판 2 에서는 행마다 회차
-// 첫 행이 된다.
+// roundDecider 는 phaseDecider 에 PDT 칸 두 개(NewRound · FloorRejected)를 더 옮긴다 — 조립 지점(cmd/segment-indexer
+// session_wire.go)의 변환과 같다. 회차(RoundID)는 phaseDecider 가 옮긴다(POK-525). NewRound 를 옮기지 않으면 판 2 에서 새
+// 회차 머리 행이 앞 회차 판을 잇는다.
 type roundDecider struct{ phaseDecider }
 
 func (d roundDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInput, now time.Time) (index.SessionDecision, error) {
@@ -31,7 +31,7 @@ func (d roundDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInp
 		return dec, err
 	}
 	plan := dec.Plan.(session.Decision)
-	dec.RoundID, dec.FloorRejected = plan.RoundID, plan.FloorRejected
+	dec.NewRound, dec.FloorRejected = plan.NewRound, plan.FloorRejected
 	return dec, nil
 }
 
@@ -56,7 +56,7 @@ func newV2Fixture(t *testing.T, name string) *phaseFixture {
 		t: t, pool: pool, root: t.TempDir(), stream: "phase-" + name,
 		observer: newObserver(), logs: &logCapture{}, adopt: &fakeAdopter{},
 		degraded: phase{watcher: true},
-		store:    index.NewPGStore(pool, roundDecider{phaseDecider{reg: reg}}, playback.SegKey),
+		store:    index.NewPGStore(pool, roundDecider{phaseDecider{reg: reg}}, legacySegKey),
 	}
 	f.rebuild(4010)
 	return f

@@ -42,11 +42,15 @@ jobs:
               services/auth/build/test-results/
               services/web-support/build/reports/tests/
               services/web-support/build/test-results/
+          # ledger-timeline도 서버가 아니라 라이브러리다(장부 시각 변환 F · 공유 시험 표, POK-196). 그 변환을
+          # 쓰는 clip 잡에 얹는다 — 의존을 걸어도 라이브러리의 test는 저절로 돌지 않는다.
           - module: clip
-            tasks: ':clip:test'
+            tasks: ':clip:test :ledger-timeline:test'
             reports: |
               services/clip/build/reports/tests/
               services/clip/build/test-results/
+              services/ledger-timeline/build/reports/tests/
+              services/ledger-timeline/build/test-results/
           - module: chat-collector
             tasks: ':chat-collector:test'
             reports: |

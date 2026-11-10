@@ -205,8 +205,9 @@ func TestV2RoundBrokenFallsBackToRoundFirst(t *testing.T) {
 			stream := sessionStream("v2-broken-" + tc.name)
 			prev := stream + "-prev"
 			setGateSwitch(t, pool, &versionTwo)
-			putSession(t, pool, fixtureSession{id: prev, stream: stream, startedAt: sessionBase, state: "ending", firstPDT: sessionBase})
-			if _, err := pool.Exec(ctx, `UPDATE stream_sessions SET round_id = $1, end_reason = 'offline', ending_at = $2
+			putSession(t, pool, fixtureSession{id: prev, stream: stream, startedAt: sessionBase, state: "ending", firstPDT: sessionBase,
+				roundID: prev})
+			if _, err := pool.Exec(ctx, `UPDATE stream_sessions SET end_reason = 'offline', ending_at = $2
 			                              WHERE session_id = $1`, prev, v2At(5000)); err != nil {
 				t.Fatalf("앞 세션 회차 픽스처 실패: %v", err)
 			}

@@ -49,12 +49,11 @@ func newResolveClient(cfg config.Config) (*keyresolve.Client, error) {
 
 // endSignalDeps 는 수신부의 바깥 칸이다 — 운영은 newEndSignal 이, 시험은 가짜로 채운다.
 type endSignalDeps struct {
-	resolve    func(context.Context, string) (keyresolve.Verdict, error)
-	apply      func(context.Context, session.IntentionalEnd) (session.IntentionalResult, error)
-	changed    index.PlaybackChanged
-	postIntent func(streamID, sessionID string)
-	log        *slog.Logger
-	now        func() time.Time // 수신 시각 · 두 계수기의 시계 — nil 이면 time.Now(시험이 고정한다)
+	resolve func(context.Context, string) (keyresolve.Verdict, error)
+	apply   func(context.Context, session.IntentionalEnd) (session.IntentionalResult, error)
+	changed index.PlaybackChanged
+	log     *slog.Logger
+	now     func() time.Time // 수신 시각 · 두 계수기의 시계 — nil 이면 time.Now(시험이 고정한다)
 }
 
 // newEndSignalReceiver 는 운영 수치와 자기 계수기 둘로 수신부를 만든다. 계수기는 이 수신부만의 것이라 청소 고루틴 없이
@@ -68,7 +67,7 @@ func newEndSignalReceiver(d endSignalDeps) (*endsignal.Receiver, error) {
 		now = time.Now
 	}
 	return endsignal.New(endsignal.Options{
-		Resolve: d.resolve, Apply: d.apply, Changed: d.changed, PostIntent: d.postIntent, Now: now, Log: d.log,
+		Resolve: d.resolve, Apply: d.apply, Changed: d.changed, Now: now, Log: d.log,
 		BodyTimeout: endSignalBodyTimeout, ResolveTimeout: endSignalResolveTimeout, ApplyTimeout: endSignalApplyTimeout,
 		PerKey: control.NewLimiter(endSignalPerKeyRPS, control.DefaultLimiterCells, now, nil),
 		Global: control.NewLimiter(endSignalGlobalRPS, 1, now, nil),
@@ -78,14 +77,14 @@ func newEndSignalReceiver(d endSignalDeps) (*endsignal.Receiver, error) {
 // newEndSignal 은 client 가 있으면 수신부를 만든다. 없으면 WARN end_signal_disabled reason=no_resolve 를 남기고 (nil, nil)
 // 이다 — prod 에서 조용히 꺼지면 4D 가 모두 404 라 경보 대상이다.
 func newEndSignal(client *keyresolve.Client, apply func(context.Context, session.IntentionalEnd) (session.IntentionalResult, error),
-	changed index.PlaybackChanged, postIntent func(streamID, sessionID string), log *slog.Logger,
+	changed index.PlaybackChanged, log *slog.Logger,
 ) (*endsignal.Receiver, error) {
 	if client == nil {
 		log.Warn("end_signal_disabled", "reason", "no_resolve",
 			"note", "STREAM_KEY_RESOLVE_URL · STREAM_KEY_RESOLVE_TOKEN_FILE 이 비어 있다 — 4D 종료 신호는 404 이고 보장 시간 판정만 돈다")
 		return nil, nil
 	}
-	return newEndSignalReceiver(endSignalDeps{resolve: client.Resolve, apply: apply, changed: changed, postIntent: postIntent, log: log})
+	return newEndSignalReceiver(endSignalDeps{resolve: client.Resolve, apply: apply, changed: changed, log: log})
 }
 
 // intentApplier 는 인덱서 풀로 4D 를 적용하는 Apply 칸이다(session.ApplyIntentionalEnd 를 묶는다).

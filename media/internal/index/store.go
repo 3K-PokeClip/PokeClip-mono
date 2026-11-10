@@ -482,8 +482,11 @@ func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec
 		// 행에 쓰이지 않는 두 값은 결정에서 옮긴다 — Open 이 성공한 뒤라 개시가 실제로 쓴 결정의 값이다.
 		opening.endingSessionID, opening.prevFirstLocalPath = dec.EndingSessionID, dec.PrevFirstLocalPath
 	}
-	if opensNewRound(dec) {
-		tc.roundID = sessionID // 새 회차의 id 는 그 머리 세션의 session_id 다(M6 15.2)
+	if opensNewRound(dec) && dec.RoundID != sessionID {
+		// 새 회차의 id 는 그 머리 세션의 session_id 다(M6 15.2) — 판 · 이어 계산 회차를 그 값으로 이미 정했다. 갈리면 배선
+		// 결함이라 트랜잭션을 되돌린다(행의 timing_round_id 가 세션의 회차와 다르게 저장되지 않게).
+		return r, settlement{}, fmt.Errorf("index: 새 회차 결정의 RoundID %q 가 개시가 연 session_id %q 와 다르다 stream_id=%q seq=%d — 배선 결함",
+			dec.RoundID, sessionID, r.StreamID, r.Seq)
 	}
 	r.SessionID, r.PlaybackPDT = &sessionID, &pdt
 
@@ -499,7 +502,8 @@ func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec
 	// ⑹ ③ 키 파생. **실패는 오류가 아니라 playback_s3_key NULL 이다**(설계 5.2):
 	// ⓒ 가 주조를 막고 다음 조각이 재시도한다. 세션·PDT 까지 함께 버리면 그 조각이
 	// 되감기 목록에서 통째로 사라지므로, 잃는 것을 키 하나로 좁힌다.
-	if key, keyErr := s.playbackKey(r.StreamID, r.Seq); keyErr == nil {
+	// 회차는 결정의 RoundID 다 — 개시 갈래면 Open 이 같은 값을 대조해 썼으므로 세션의 round_id 와 같다(POK-525 E31).
+	if key, keyErr := s.playbackKey(r.StreamID, dec.RoundID, r.Seq); keyErr == nil {
 		r.PlaybackS3Key = &key
 	}
 	return r, settlement{opening: opening, timing: tc, mix: mix}, nil

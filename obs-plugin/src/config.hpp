@@ -43,14 +43,15 @@ struct PluginConfig {
 	std::string markHotkey;
 
 	bool HasKey() const { return !streamId.empty(); }
-	// 송출 중에 바꾸면 안 되는 값(서버 환경·SRT 출력·동기화·독 표시 방식)이 같은가. 오디오 배정 값은 보지 않는다.
+	// 송출 중에 바꾸면 안 되는 값(서버 환경·인증 서버·SRT 출력·동기화·독 표시 방식)이 같은가. 오디오 배정 값은 보지 않는다.
+	// 인증 서버(apiBase)가 바뀌면 키를 지운다 — 방송 중 페어링을 막는 것과 같은 까닭이다(ADR-019).
 	bool SameOutputSettings(const PluginConfig &o) const
 	{
-		return serverEnv == o.serverEnv && ingestHost == o.ingestHost && ingestPort == o.ingestPort &&
-		       sendPassphrase == o.sendPassphrase && latencyMs == o.latencyMs && syncStart == o.syncStart &&
-		       forceFallback == o.forceFallback;
+		return serverEnv == o.serverEnv && apiBase == o.apiBase && ingestHost == o.ingestHost &&
+		       ingestPort == o.ingestPort && sendPassphrase == o.sendPassphrase && latencyMs == o.latencyMs &&
+		       syncStart == o.syncStart && forceFallback == o.forceFallback;
 	}
-	// 브리지 PUT /api/config가 바꾸는 값(독 고급 설정·오디오 스위치)만 o에서 가져온다. 서버 환경·API 주소·키·배정 기억·
+	// 브리지 PUT /api/config가 바꾸는 값(독 설정·오디오 스위치)만 o에서 가져온다. 서버 환경·API 주소·키·배정 기억·
 	// 독 첫 실행 표시·단축키 사본은 가져오지 않는다 — 잠금 아래 지금 설정에 얹어, 요청이 읽은 옛 스냅샷이 그사이 다른 경로
 	// (환경 전환·페어링·UI 스레드 저장)가 바꾼 값을 덮지 않게(POK-267 리뷰).
 	void TakeDockSettings(const PluginConfig &o)

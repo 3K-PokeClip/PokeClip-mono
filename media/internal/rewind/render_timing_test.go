@@ -141,3 +141,51 @@ func TestRenderTimingTagCarriesRowVersion(t *testing.T) {
 		t.Errorf("판 3 목록 첫 조각의 태그 줄 = %q, want [#EXT-X-POKECLIP-TIMING:3]\n%s", tags, got)
 	}
 }
+
+// 회차 단위 VOD(POK-549 — 사슬 여럿인 회차를 한 문서에)의 판 2 목록 골든이다. 판 태그는 첫 조각의 MAP 뒤 · PDT 앞 한 줄이고,
+// 사슬 경계(seq 13 — 끊김 표시 · 새 MAP)에는 다시 서지 않는다 — 앞 행과 판이 같다(계약3 7-6 태그 규칙 2 · 판 고정). 같은
+// 본문이 발행 전 검사를 지난다: S5 의 판 태그 · 끊김 표시 대조와, 사슬 경계 이웃도 같은 회차 목록 안의 판 2 이웃이라 S7 B8
+// 세 조건(계약 r24 「같은 판 · 같은 회차 목록 안」). 기대 본문은 렌더 출력을 줄마다 규칙과 대조해 옮긴 리터럴이다.
+func TestRenderTimingTagOnRoundVODAcrossChains(t *testing.T) {
+	p := twoRunVOD("A")
+	p.Rows = withVersion(p.Rows, timingVersion2)
+	want := `#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:10
+#EXT-X-DISCONTINUITY-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-MAP:URI="https://media.pokeclip.com/dvr/str/init/A.mp4"
+#EXT-X-POKECLIP-TIMING:2
+#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:00.000Z
+#EXTINF:4.000,
+https://media.pokeclip.com/dvr/str/seg/000010.m4s
+#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:04.000Z
+#EXTINF:4.000,
+https://media.pokeclip.com/dvr/str/seg/000011.m4s
+#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:08.000Z
+#EXTINF:4.000,
+https://media.pokeclip.com/dvr/str/seg/000012.m4s
+#EXT-X-DISCONTINUITY
+#EXT-X-MAP:URI="https://media.pokeclip.com/dvr/str/init/B.mp4"
+#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:01:00.000Z
+#EXTINF:4.000,
+https://media.pokeclip.com/dvr/str/seg/000013.m4s
+#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:01:04.000Z
+#EXTINF:4.000,
+https://media.pokeclip.com/dvr/str/seg/000014.m4s
+#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:01:08.000Z
+#EXTINF:4.000,
+https://media.pokeclip.com/dvr/str/seg/000015.m4s
+#EXT-X-ENDLIST
+`
+
+	got := mustRender(t, p)
+
+	if got != want {
+		t.Fatalf("Render 가 골든과 다르다 — %s\n본문:\n%s", firstDiff(got, want), got)
+	}
+	if err := validate0(p, got); err != nil {
+		t.Errorf("회차 VOD 판 2 본문의 발행 전 검사 = %v, want 통과", err)
+	}
+}

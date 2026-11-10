@@ -47,13 +47,13 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
 | 3 | KVS 값 입력(멈춤 자리 ②) | 「KVS 값 입력」 |
 | 4 | 엣지만 시험 — T0 · T8e 해석 · T11 404 · T2b 기본 거절 · T2b 경로 우회 · T12 ⓐ | 「엣지만 시험」 · 「경로 우회 시험」 |
 | 5 | 랜딩 업로드(kty 로컬) | [prod 산출물 런북](prod-artifacts.md) 「랜딩 업로드(O7f 의 5)」 |
-| 6 | 런타임 트랙 2단 | [런타임 트랙 계약](../CONTRACT-runtime.md) |
+| 6 | 런타임 트랙 2단 — rewind 버킷 OAC 허용문 apply(1 뒤 언제든 · Media 무관) | [prod/runtime-2](../prod/runtime-2/README.md) 「적용(O7f 의 6)」 · [런타임 트랙 계약](../CONTRACT-runtime.md) |
 | 7 | auth · clip · next 정상 기동 확인 | 계획 M10 O7f 7 |
 | 8 | 시험 스트림 키 발급 · 입력 | [엣지 비밀 런북](edge-secrets.md) 「O7f」 |
 | 9 | 루프백 헬스 · `secret-count` | 계획 M10 O7f 9 |
 | 10 | clip 쿠키 발급 1회 200 | 계획 M10 O7f 10 |
 | 11 | 7-R(2 에서 403 이었을 때만) | [엣지 비밀 런북](edge-secrets.md) 「T6b 대체 절차」 |
-| 12 | 런타임 뒤 시험(T1–T5 · T7 · T8 · T10 · T11 202 · T12 ⓑ) | 「시험표」 · 「런타임 뒤 시험의 추가 항목」 |
+| 12 | 런타임 뒤 시험(T1–T5 · T7 · T8 · T10 · T11 202 · T12 ⓑ · T13) | 「시험표」 · 「런타임 뒤 시험의 추가 항목」 |
 
 **T6a · T9b 는 prod 에서 하지 않습니다**(kty 20차 · 설계 5-6). 근거는
 [엣지 비밀 런북](edge-secrets.md) 「prod 에서 하지 않는 시험(T6a · T9b)」
@@ -69,9 +69,11 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
     상자의 nginx 가 응답을 냅니다).
 *   **A2(KVS 값 입력 불가)**: 값이 필요 없는 뒤 단계만 합니다 — 엣지만
     시험 · 런타임 2단 · 정상 기동 확인 · 시험 키 · 루프백 헬스 · 쿠키 200 ·
-    T10 · T11 202. `/live` 재생 시험(T1 · T2 의 `/live` 사례 · T3 · T4 · T5 ·
-    T7 · T8a–T8d) · 7-R · 8단계는 값 입력 뒤입니다. 대안은 설계하지
-    않습니다(34차 Q2 — 막히면 kty 회부).
+    T10 · T11 202 · T13. T13 의 `/dvr/*` · `/vod/*` 비헤이비어는 함수가
+    없어 KVS 값과 무관합니다(`modules/cdn_media/main.tf`). `/live` 재생
+    시험(T1 · T2 의 `/live` 사례 · T3 · T4 · T5 · T7 · T8a–T8d) · 7-R ·
+    8단계는 값 입력 뒤입니다. 대안은 설계하지 않습니다(34차 Q2 — 막히면
+    kty 회부).
 *   **T12**: ⓐ 는 Media 상자의 nginx 가 응답을 내므로 A1 이면 Media 가
     뜬 뒤이고, A2 에서는 엣지만 시험과 함께 합니다. ⓑ 는 KVS 값과 무관해
     A2 에서도 합니다(회차 라우트 배포 뒤).
@@ -148,9 +150,10 @@ SNI · Host 를 `media.pokeclip.com` · `api.pokeclip.com` ·
 
 ## 시험표
 
-설계 5-6 의 표에서 T6a · T9b 를 뺀 것입니다. 「언제」 의 「엣지만」 은 송출원
-· 서명 쿠키 없이 O7f 의 2 · 4 에서 하는 시험이고, 「런타임 뒤」 는 런타임
-트랙 2단 · 시험 키 · clip 쿠키 뒤(O7f 의 12)입니다.
+설계 5-6 의 표에서 T6a · T9b 를 빼고, T13(런타임 2단 확인 —
+[prod/runtime-2](../prod/runtime-2/README.md))을 더한 것입니다. 「언제」 의
+「엣지만」 은 송출원 · 서명 쿠키 없이 O7f 의 2 · 4 에서 하는 시험이고,
+「런타임 뒤」 는 런타임 트랙 2단 · 시험 키 · clip 쿠키 뒤(O7f 의 12)입니다.
 
 | # | 시험 | 통과 조건 | 언제 |
 |---|---|---|---|
@@ -161,17 +164,18 @@ SNI · Host 를 `media.pokeclip.com` · `api.pokeclip.com` ·
 | T11 | 종료 신호 경로 | media 이름으로 `POST /api/ingest/end-signal` 이 원본(제어면 서버 배포 전에는 nginx 제어면 포트)에 닿음 · 캐시 안 됨 · 시청자 쿠키 없이 통과 · 표준 로그 · 원본 로그에 Authorization 값 0건 · 4D 수신부 배포 전에는 404 그대로 전달 | 404 는 엣지만, 유효 요청 202 는 제어면 서버 반영 뒤 |
 | T2b | 기본 거절 · 경로 우회 | 아래 「T2b 기본 거절」 · 「경로 우회 시험」(O8 개통 조건) | 엣지만 |
 | T1 | 다른 쿠키 두 시청자 | 목록 종류별 Cache-Control 기록 · 조각 · 파트 두 번째 시청자 적중 · 블로킹 목록은 정상 전달만 · 원본 302 · Set-Cookie · `session` 0건 | 런타임 뒤 |
-| T2 | 쿠키 없음 · 다른 방송 쿠키 · 경로 우회 | 403, 원본 도달 0 · 경로 우회는 「경로 우회 시험」(O8 개통 조건) | 런타임 뒤 |
+| T2 | 쿠키 없음 · 다른 방송 쿠키 · 경로 우회 | CloudFront 가 낸 403(서명 거절 또는 live-auth 경로 거절) · 원본 · 캐시 도달 0 · 경로 우회는 「경로 우회 시험」(O8 개통 조건) | 런타임 뒤 |
 | T3 | 쿠키 만료 | 만료 뒤 403, 재발급 뒤 복구 | 런타임 뒤 |
 | T4 | 블로킹 리로드 | 쿼리마다 다른 캐시 키, 504 0건 | 런타임 뒤 |
 | T5 | Host · Authorization 전달 | 원본에서 Host = `media.pokeclip.com` · Bearer 있음 · 쿠키 미전달. 시청자 임의 Authorization 은 원본에 안 닿음 | 런타임 뒤 |
-| T7 | 경로 변환(ALB transform) | 재생 성공 · 원본 요청 경로에 `/live` 없음 · `_HLS_*` 쿼리 보존 · Location 응답 0건(나오면 viewer-response 보정 착수) | 런타임 뒤 |
+| T7 | 경로 변환(ALB transform) | 재생 성공 · 원본 요청 경로에 `/live` 없음 · `_HLS_*` 쿼리 보존 · `.m3u8` · `.mp4` 로 끝나지 않는 `/live` 요청은 엣지 거절 · Location 0(아래 「런타임 뒤 시험의 추가 항목」 T7) | 런타임 뒤 |
 | T8a | MVP 정상 교체 | 정상 교체 · 새 방송 재생 · CloudFront 무변경 | 런타임 뒤 |
 | T8b | force | 재생 복구 시간 · 연결 종료까지 걸린 시간(30초 안 · A 정지로 줄어드는지) · 재시도 20회 소진 시간 · SRT 가 A 에 남지 않음 · 수동 복구 런북 리허설 | 런타임 뒤 |
 | T8c | 교체 창 중 신규 송출 시도 | 한계 관찰 · 결과 기록(차단 기대 없음) | 런타임 뒤 |
 | T8d | 부분 실패(B 등록 전 실패 포함) | 회복 · force 였다면 런북으로 기존 방송 복구 확인 | 런타임 뒤 |
 | T10 | 재생 API | 아래 「T10」 | 런타임 뒤(2번 · 3번 배포 전이면 보류) |
 | T12 | 회차별 되감기 경로 | ⓐ **원본 도달**: media 이름으로 쿠키 없이 `GET /api/streams/<표식>/rounds/<표식>/rewind`. 원본 로그 = nginx 제어면 접근 로그의 같은 경로 원문 줄. `control_upstream` 반영 전 = 원본 로그 1건 · 상류 호출 0 · nginx 404 / 반영 뒤 · 회차 라우트 등록 전 = 원본 로그 1건 · 상류 도달 · 제어면 ServeMux 404 / 회차 라우트 등록 뒤 = 원본 로그 1건 · 상류 도달 · 제어면 처리기의 JSON 404 `{"error":"not_found"}`(표식 회차는 장부에 없다) 또는 JSON 503 `{"error":"unavailable"}`(기동 직후 · DB 읽기 실패) / 셋 다 응답이 CloudFront 기본 동작(dvr 쿠키 · 403)이 아님. ⓑ **200 JSON**(회차 라우트 — 제어면 서버의 이 경로 처리기 — 배포 뒤 · 실재 시험 회차로): 200 · `application/json` · 제어면 응답 계약(계약3 7-2절)의 키 다섯(`ready` · `mode` · `url` · `firstPdt` · `headPdt`). 실패 = 엣지가 404(원본 로그 0건) · 403 · 5xx · JSON 아닌 200 → 엣지 경로 패턴을 맡은 후속 작업에서 고침 | ⓐ 는 엣지만 · ⓑ 는 런타임 뒤(회차 라우트 배포 뒤) |
+| T13 | rewind 객체 읽기(런타임 2단 OAC 허용문) | 시험 방송의 clip 쿠키로 사이드카가 올린 실재 키의 `/dvr/…/index.m3u8`(되감기 목록) · 조각 각 1건 200 · 같은 경로 쿠키 없음 403. VOD 목록이 있으면 `/vod/…` 1건 200(아직 없으면 「보류」). 실패 = 쿠키가 있는데 403 → 키 실재부터 봄(`s3:ListBucket` 이 없어 없는 키도 403) · 키가 있으면 런타임 2단 정책 · OAC 문제로 kty 에게 보고 | 런타임 뒤 |
 
 런타임 뒤 시험에서 시험 계정 방송은 계약9 이벤트를 내보내지 않거나 시험
 표식으로 거릅니다(설계 5-3 조건).
@@ -337,11 +341,24 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     ② 서명 쿠키의 리소스 대조가 원 경로 기준인지 ③ CloudFront 가 `%2e` ·
     `%2f` · `%5c` 를 정규화하는지. 셋 다 방송 간 우회의 결과를 가르므로
     **T2 사례가 가장 중요한 실측**입니다.
+*   이 거절을 넣은 PR(POK-458 결함 묶음)의 edge apply 뒤부터
+    live-auth(`/live` 요청마다 원본 전에 도는 CloudFront 함수)는 받은
+    경로에 아래 가운데 하나라도 있으면 403 으로 거절합니다.
+    *   `%` 한 글자라도(이스케이프 종류 · 대소문자 · 짝 여부 무관 — 정상
+        `/live` 경로에는 `%` 가 없습니다).
+    *   역슬래시.
+    *   빈 구간(`//`).
+    *   점 구간(`/./` · `/../` 처럼 구간 전체가 `.` 이나 `..`).
+*   그중 `%2f` · `%5c` · `%25` 와 역슬래시는 정규화(RFC 3986 기준)가 풀지
+    않아 정규화 뒤에도 남습니다. 그래서 ③ 과 상관없이 막힐 것으로 봅니다
+    — **미확인**입니다. CloudFront 가 실제로 무엇을 정규화하는지가 ③ 이라
+    실측 전에는 확정하지 않습니다. 함수가 원 경로를 받는지(G1)는
+    [POK-548](https://xodbs9810.atlassian.net/browse/POK-548) 에서 잽니다.
 
 | 언제 | 요청(쿠키) | 통과 조건 |
 |---|---|---|
 | T2b | `/live/../api/ingest/<표식>` · `/playback/../api/ingest/<표식>` · `/live/../api/streams/<표식>/rewind`(쿠키 없음) | 차단 계층 · 응답 코드 기록 · 엣지 차단이면 nginx 도달 0 · nginx 차단이면 거절 응답 + 보호 대상 상류 전달 0 |
-| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키) | 앞뒤 양성 대조가 둘 다 유효(HTTP 응답이 왔고 `server` 가 CloudFront 가 아님 — 아니면 그 회차 무효)하고, 모든 사례가 CloudFront 가 낸 403(`server: CloudFront`)이며, 그 시각대 WAF 차단 로그의 시험 IP 건수가 0 — 사례가 그 밖(nginx 응답 · `Miss` · 2xx · 5xx · 통신 실패)이면 A 쿠키가 엣지를 통과한 것이라 실패 · WAF 건수가 0 이 아니면 403 이 서명 거절인지 가를 수 없어 실패 |
+| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키) | 앞뒤 양성 대조가 둘 다 유효(HTTP 응답이 왔고 `server` 가 CloudFront 가 아님 — 아니면 그 회차 무효)하고, 모든 사례가 CloudFront 가 낸 403(`server: CloudFront`)이며, 그 시각대 WAF 차단 로그의 시험 IP 건수가 0 — 사례가 그 밖(nginx 응답 · `Miss` · 2xx · 5xx · 통신 실패)이면 A 쿠키가 엣지를 통과한 것이라 실패 · WAF 건수가 0 이 아니면 403 이 엣지 거절(서명 · live-auth)인지 가를 수 없어 실패 |
 
 *   **변형**: 각 사례의 `/../` 를 `/%2e%2e/` · `/..%2f` · `/..%5c` ·
     `//../` 로 바꾼 것도 같은 조건입니다.
@@ -367,14 +384,20 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     입니다. `jar_a` 는 방송 A 의 서명 쿠키 셋(O7f 의 10 과 같은 발급)을 담은
     쿠키 파일이고, 증거 디렉터리 밖에 둡니다(`mktemp` — 0600). 쿠키는 이
     파일로만 넘기고 시험 뒤 지웁니다(명령 인자 · 증거에 값이 남지 않게).
-*   **T2 는 엣지 서명 거절만 통과입니다**(kty 2026-10-25). 모든 사례의
-    응답이 CloudFront 가 직접 낸 403(`server: CloudFront` 헤더 — nginx 가 낸
-    응답이면 `server` 가 nginx)이어야 합니다. 그 밖의 응답은 모두
+*   **T2 는 엣지 거절만 통과입니다**(kty 2026-10-25 — 서명 거절.
+    2026-11-04 live-auth 경로 거절을 더함). 이 판정이 지키는 것은 「요청이
+    원본 · 캐시에 닿지 않음」 입니다. 모든 사례의 응답이 CloudFront 가 직접
+    낸 403(`server: CloudFront` 헤더 — nginx 가 낸 응답이면 `server` 가
+    nginx)이어야 합니다. 서명 거절과 live-auth 거절은 둘 다 원본 · 캐시
+    앞에서 멈추므로 똑같이 통과입니다 — `..%5c` 는 live-auth 가 거절할 것으로
+    봅니다(위 「미확인」 — nginx 까지 가면 이 시험이 실패로 잡습니다 · 그
+    edge apply 전에는 nginx 400 까지 갔습니다 — 2026-11-04 실측). 그 밖의
+    응답은 모두
     실패입니다 — nginx 까지 간 응답(400 · 403 · 404 · `Miss`)은 A 쿠키가
-    엣지 서명 검사를 통과했다는 뜻이고, 그러면 캐시가 차 있는 실제 운영에서
-    A 쿠키로 B 목록 · 조각(조각은 최대 1시간 캐시)이 나갈 수 있습니다. 2xx
-    는 노출 그 자체입니다. 판정이 캐시 상태에 기대지 않으므로 예열은 하지
-    않습니다.
+    엣지(서명 검사 · live-auth)를 통과했다는 뜻이고, 그러면 캐시가 차 있는
+    실제 운영에서 A 쿠키로 B 목록 · 조각(조각은 최대 1시간 캐시)이 나갈 수
+    있습니다. 2xx 는 노출 그 자체입니다. 판정이 캐시 상태에 기대지 않으므로
+    예열은 하지 않습니다.
 *   **A 쿠키 양성 대조를 먼저 합니다.** 같은 `jar_a` 로 A 자신의 목록
     `/live/<A>/index.m3u8` 를 한 번 요청합니다. 대조는 HTTP 응답이 왔고
     (`control` 줄의 코드가 `000` 이 아님) `server:` 줄의 값이 CloudFront 가
@@ -387,6 +410,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     뒤에 한 번 더 하고, 앞뒤 대조의 출력도 사례와 같은 증거 파일에 남깁니다.
 
     ```shell
+    t2_since_ms="$(($(date -u +%s) * 1000))"
     control() {
       curl -b "${jar_a}" --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
         -o /dev/null -D - -w "control %{http_code}\n" \
@@ -403,7 +427,81 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     done | tee -a "${evidence}/t2-path.txt"
     control | tee -a "${evidence}/t2-path.txt"
     rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
+    aws logs filter-log-events --region us-east-1 \
+      --log-group-name /aws/cloudfront/function/pokeclip-prod-live-auth \
+      --start-time "${t2_since_ms}" --filter-pattern '"LIVE PATH DENY"' \
+      --query 'length(events)' | tee -a "${evidence}/t2-path.txt"   # 1 이상
     ```
+
+    마지막 줄은 그 시각 뒤 live-auth 가 경로 때문에 거절한 건수입니다(함수
+    로그의 고정 문자열 `LIVE PATH DENY`). `..%5c` 사례가 있으므로 1 이상이
+    기대입니다. 함수 로그는 몇 분 늦게 보일 수 있습니다 — 0 이면 몇 분 뒤
+    다시 셉니다. 이 건수는 판정이 아니라 비고 기록입니다.
+
+*   **판별 사례(기록용 — O8 판정 밖)**: A 쿠키로
+    `/live/<B>/%2e%2e/<A>/index.m3u8` 를 한 번 보냅니다. 원 경로는 B 아래이고
+    정규화한 경로는 A 아래라, 엣지가 어느 경로로 대조하는지를 가르는
+    사례입니다. `jar_a` 는 쿠키 Path 가 `/live/<A>/` 라 curl 이 이 요청에
+    쿠키를 싣지 않습니다. 그래서 같은 발급의 쿠키 셋을 Path `/live/` 로 담은
+    별도 쿠키 파일 `jar_wide` 로 보냅니다. 보관 규칙은 `jar_a` 와 같습니다
+    — 증거 디렉터리 밖 · 값은 명령 줄에 쓰지 않음 · 끝에 지움.
+*   **`jar_wide` 만드는 법**: 위 T2 명령이 끝에 `jar_a` 를 지웠으므로, 같은
+    발급으로 `jar_a` 를 새로 만듭니다. 그 파일에서 Path 칸(쿠키 파일 한 줄의
+    셋째 칸)만 `/live/` 로 바꿔 `jar_wide` 를 쓰고, `jar_a` 는 바로 지웁니다.
+    `awk` 가 파일을 직접 읽어 값은 화면 · 명령 줄에 나오지 않습니다.
+    마지막 줄은 Path 를 바꾼 쿠키 수입니다(서명 쿠키 셋이라 3).
+
+    ```shell
+    jar_wide="$(mktemp)"   # 0600
+    awk 'BEGIN { FS = OFS = "\t" } NF == 7 { $3 = "/live/" } { print }' \
+      "${jar_a}" > "${jar_wide}"
+    rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
+    grep -c "$(printf '\t')/live/$(printf '\t')" "${jar_wide}"   # 3
+    ```
+
+    판별 사례 명령입니다.
+
+    ```shell
+    probe_since_ms="$(($(date -u +%s) * 1000))"
+    req_path="/live/${b_id}/%2e%2e/${a_id}/index.m3u8"
+    curl --path-as-is -b "${jar_wide}" \
+      --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
+      -D - -w "${req_path} %{http_code}\n" \
+      "https://media.pokeclip.com${req_path}" |
+      grep -iE '^server:|^x-cache:|^/live/' | tee "${evidence}/t2-probe.txt"
+    rm -f "${jar_wide}" && test ! -e "${jar_wide}" && echo removed
+    aws logs filter-log-events --region us-east-1 \
+      --log-group-name /aws/cloudfront/function/pokeclip-prod-live-auth \
+      --start-time "${probe_since_ms}" --filter-pattern '"LIVE PATH DENY"' \
+      --query 'length(events)' | tee -a "${evidence}/t2-probe.txt"
+    ```
+
+    결과는 `results.tsv` 의 「경로 우회(T2)」 비고에 코드 · `server` ·
+    `x-cache` · `LIVE PATH DENY` 건수로 적고
+    [POK-548](https://xodbs9810.atlassian.net/browse/POK-548) 에 넘깁니다.
+    건수에는 단서가 둘 있습니다.
+
+    *   **요청과 묶이지 않습니다.** 건수는 그 시각 뒤 live-auth 가 경로로
+        거절한 모든 요청의 합입니다. 다른 시청자 · 스캐너의 요청이 섞일 수
+        있습니다.
+    *   **늦게 보일 수 있습니다.** 함수 로그는 몇 분 늦게 보일 수 있습니다.
+        0 이면 몇 분 뒤 마지막 `aws logs` 줄만 다시 돌려 그 값을 씁니다.
+
+    읽는 법은 넷입니다.
+
+    *   CloudFront 403 이고 건수 1 이상: live-auth 가 원 경로를 받은 것으로
+        봅니다. 다른 요청이 섞였을 수 있어 「추정」 으로 적습니다.
+    *   CloudFront 403 이고 다시 센 건수도 0: 서명이 원 경로로 대조했거나
+        다른 기제가 막았습니다(둘 가운데 어느 쪽인지는 이 사례로 가르지
+        못합니다).
+    *   엣지를 지난 응답(`server` 가 CloudFront 가 아님 — nginx 가 원 경로를
+        400 으로 막을 수 있음): 엣지가 정규화한 경로로 대조했습니다.
+    *   **가르지 못함**: 위 셋에 들지 않는 결과입니다. 통신 실패 · 5xx ·
+        CloudFront 403 이 아닌 엣지 응답 · 건수 조회 실패가 여기에 듭니다.
+        코드 · `server` · `x-cache` · 건수만 적고 해석은 적지 않습니다.
+
+    어느 쪽이든 A 쿠키로 A 를 읽는 것이라 노출이 아니고, O8 판정에 쓰지
+    않습니다.
 
 *   **판정 근거 = 응답 코드 + SSM 판정 줄의 건수**(건수만 · 실행 직전
     승인). Media 상자의 유닛 저널(nginx 접근 로그가 남는 곳 —
@@ -428,13 +526,18 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
         줄은 실패로 세지 않습니다 — `/…/../api/ingest/…` 가 정규화되면
         원래 서명 쿠키 없이 열린 `/api/ingest/…` 와 같은 요청입니다.
     *   T2: 모든 사례가 CloudFront 403(`server: CloudFront`)이어야 통과입니다
-        (위 「T2 는 엣지 서명 거절만 통과」) — 앞뒤 양성 대조가 둘 다
+        (위 「T2 는 엣지 거절만 통과」) — 앞뒤 양성 대조가 둘 다
         유효할 때(HTTP 응답이 왔고 `server` 가 CloudFront 가 아님)만
         판정합니다. `results.tsv` 비고에는 대조 결과 · 응답 코드 · `server` ·
-        `x-cache` 와, 그 시각대 WAF 차단 로그의 시험 IP 건수(0 이어야 「서명
-        거절」 — WAF 403 도 `server: CloudFront`)를 적습니다. 그 건수가 0 이
-        아니면 실패입니다(회차 무효로 다시 돌리지 않습니다). nginx 건수는 T2
-        판정에 쓰지 않습니다.
+        `x-cache` 와, 그 시각대 WAF 차단 로그의 시험 IP 건수(0 이어야 「엣지
+        거절」(서명 · live-auth) — WAF 403 도 `server: CloudFront`)를 적습니다.
+        그 건수가 0 이 아니면 실패입니다(회차 무효로 다시 돌리지 않습니다).
+        nginx 건수는 T2 판정에 쓰지 않습니다.
+    *   T2 비고의 거절 출처: 2026-11-04 POK-458 실측의 CloudFront 403(서명
+        거절로 추정 — 기제는 POK-548)은 `x-cache: Error from cloudfront`
+        였습니다. live-auth 거절의 `x-cache` 값은 첫 실측에서 적습니다(예상
+        `FunctionGeneratedResponse from cloudfront` · 미확인). 함수 로그
+        `LIVE PATH DENY` 건수(위 T2 명령의 마지막 줄)도 함께 적습니다.
 *   **실패면 O8 을 중단합니다.** kty 에게 보고하고, 막는 자리(T2 면
     CloudFront 함수 등 엣지 · T2b 면 Media 상자 nginx)를 정해 고친 뒤 다시
     시험합니다(확인은
@@ -635,6 +738,56 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
         봅니다(`x-edge-result-type`).
     *   없는 파트 URI 가 `Error from cloudfront` 를 받고, 1초 뒤 원본에 다시
         요청하는지 봅니다(오류 캐싱 1초).
+*   **T7**:
+    *   재생 성공 · 원본 요청 경로에 `/live` 없음 · `_HLS_*` 쿼리 보존을
+        봅니다(시험표 T7).
+    *   live-auth 는 `.m3u8` · `.mp4` 로 끝나는(대소문자 구분) `/live`
+        요청만 원본에 넘깁니다. MediaMTX 는 그 밖의 경로(끝 슬래시 없는 방송
+        경로 등)에 리다이렉트를 내고, ALB 경로 변환 때문에 그 `Location` 에
+        `/live` 가 빠집니다(2026-11-04 O8a 제자리 전환 때 관찰). 그래서
+        응답을 고치지 않고(viewer-response 보정 안 함) 요청 단계에서
+        막습니다.
+    *   아래 여덟 경로가 모두 `server: CloudFront` 403 이고 `Location` 헤더가
+        0건이어야 통과입니다. 리다이렉트 코드는 소스상 302 이고 그때 기록은
+        301 입니다 — 판정은 코드와 상관없이 「`Location` 0」 입니다.
+    *   `/live/<A>` · `/live/favicon.ico` 는 쿠키 정책 Resource
+        (`/live/<A>/*`) 밖이라 서명 거절일 수 있습니다. 판정은 같습니다.
+    *   `x.ts` 가 막히는 것은 lowLatency(fMP4 조각) 설정이 전제라서입니다.
+        `hlsVariant` 를 mpegts 로 바꾸면 `.ts` 조각이 막혀 재생이 깨집니다.
+    *   `jar_a` 는 「경로 우회 시험」 과 같은 발급으로 새로 만듭니다(그
+        시험 끝에 지웠습니다).
+    *   **앞뒤 양성 대조**: 여덟 경로 앞과 뒤에 같은 `jar_a` 로 A 자신의
+        `/live/<A>/index.m3u8` 를 요청해 둘 다 200 이어야 합니다. 하나라도
+        200 이 아니면(쿠키 무효 · A 송출 끊김 · 통신 실패) 여덟 경로의 403 이
+        경로 규칙 때문인지 가를 수 없으므로 그 회차는 판정을 적지 않습니다.
+        `control` 줄은 헤더를 싣지 않아 `Location` 건수에 들지 않습니다.
+    *   판정 줄은 명령 끝의 넷입니다 — `control 200` 2건 · ` 403` 으로 끝나는
+        경로 줄 8건 · `server: CloudFront` 8건 · `Location` 0건. 넷이 모두
+        맞아야 통과입니다. `control` 줄은 헤더를 싣지 않아 `server` 건수에도
+        들지 않습니다.
+
+    ```shell
+    t7_control() {
+      curl -b "${jar_a}" --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
+        -o /dev/null -w "control %{http_code}\n" \
+        "https://media.pokeclip.com/live/${a_id}/index.m3u8"
+    }
+    t7_control | tee "${evidence}/t7-deny.txt"
+    for req_path in "/live/${a_id}" "/live/${a_id}/" "/live/${a_id}/nope" \
+      "/live/${a_id}/hls.min.js" /live/favicon.ico \
+      "/live/${a_id}/index.M3U8" "/live/${a_id}/x.ts" "/live/${a_id}/x.mp"; do
+      curl -b "${jar_a}" --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
+        -o /dev/null -D - -w "${req_path} %{http_code}\n" \
+        "https://media.pokeclip.com${req_path}" |
+        grep -iE '^server:|^location:|^/live/'
+    done | tee -a "${evidence}/t7-deny.txt"
+    t7_control | tee -a "${evidence}/t7-deny.txt"
+    grep -cx 'control 200' "${evidence}/t7-deny.txt"   # 2
+    grep -c ' 403$' "${evidence}/t7-deny.txt"          # 8
+    grep -ci '^server: cloudfront' "${evidence}/t7-deny.txt"   # 8
+    grep -ci '^location:' "${evidence}/t7-deny.txt"    # 0
+    rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
+    ```
 *   **T10**:
     *   새 브라우저 세션에서 VOD · 편집기 직접 진입 각각으로 판정합니다.
         쿠키 발급 → `/playback/{id}/list` 200 → `/get` mp4 재생.
@@ -766,6 +919,7 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 | T10 | | | | |
 | T12 ⓑ 200 JSON | | | | |
 | T11 202 | | | | |
+| T13 | | | | |
 | T6a · T9b | — | 하지 않음(kty 20차) | 「O7f 순서」 끝 문단 | |
 
 ## See also

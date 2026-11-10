@@ -11,10 +11,10 @@ package publish
 //	fenceRenewSQL       RenewFence(lazy 갱신)                               sessions UPDATE
 //	fenceReleaseSQL     Release(shutdown 반납)                              sessions UPDATE
 //	p0ReserveSQL        Tick P0 · GAP 트랜잭션 첫 문장                      sessions UPDATE … RETURNING
-//	p2RevokeSQL         Tick P2′ · RevokeInheritance(계승 취소)             sessions UPDATE … RETURNING
+//	p2RevokeSQL         Tick P2′(계승 취소)                                 sessions UPDATE … RETURNING
 //	p4ConfirmSQL        Tick P4                                             sessions UPDATE · gaps UPDATE(recorded → put_confirmed)
 //	r3ReconcileSQL      화해 R3(객체 있음)                                  sessions UPDATE … RETURNING
-//	r4ClearETagSQL      화해 R4(객체 없음) · 동결 준비 · RevokeInheritance  sessions UPDATE … RETURNING
+//	r4ClearETagSQL      화해 R4(객체 없음) · 동결 준비                      sessions UPDATE … RETURNING
 //	gapRecordSQL        GAP 트랜잭션(원장 INSERT)                           sessions · segments · cutoffs · gaps SELECT · gaps INSERT(ON CONFLICT DO NOTHING)
 //	reserveTerminalSQL  FreezeDVR · Endlist F0 · E0(terminal 예약)          sessions UPDATE … RETURNING
 //	dvrStateSQL         예약 · FailDVR 0행의 까닭                           sessions SELECT

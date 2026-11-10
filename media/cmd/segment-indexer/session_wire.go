@@ -45,8 +45,8 @@ func newSessionDecider(floorSlack, obsFresh, reconnectWindow time.Duration, gate
 	})}
 }
 
-// startedEnqueuer 는 게이트 g 의 started outbox 칸이다(설계 M6 15.4 · 15.6) — 레지스트리 개시와 4D round_split 이 같은
-// 것을 쓴다. session 은 broadcast 를 임포트하지 않으므로 여기서 묶는다.
+// startedEnqueuer 는 게이트 g 의 started outbox 칸이다(설계 M6 15.4 · 15.6) — 레지스트리 개시가 쓴다. session 은
+// broadcast 를 임포트하지 않으므로 여기서 묶는다.
 func startedEnqueuer(g broadcast.Gate) func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error {
 	return func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error {
 		return broadcast.EnqueueStarted(ctx, tx, g, round, ingestStreamID, at)
@@ -77,8 +77,8 @@ func (d sessionDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionI
 	}
 	// 결정 자체(개시 계획 포함)를 불투명 값으로 되돌려 준다 — Open 이 그대로 되받으므로
 	// 결정과 쓰기가 같은 입력을 본다는 것이 구조로 보장된다. 개시 결과 두 칸은 index 가 계획을 열지 않고
-	// 받을 수 있게 따로 옮긴다 — 필드별 복사라 빠뜨리면 여기서 탈락한다. 회차 · 하한 거부 두 칸도 같다(장부의 이어 계산
-	// 회차 · 판 정하기 재료 — POK-196 PDT 설계 r7 2.4).
+	// 받을 수 있게 따로 옮긴다 — 필드별 복사라 빠뜨리면 여기서 탈락한다. 회차(RoundID)도 결정이 정한 값을 옮긴다 —
+	// ⑹ 키의 회차 성분이다(POK-525). 빠뜨리면 Open 이 대조에서 막는다(아래).
 	return index.SessionDecision{
 		Opens:              dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
 		SessionID:          dec.SessionID,
@@ -86,6 +86,7 @@ func (d sessionDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionI
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
 		RoundID:            dec.RoundID,
+		NewRound:           dec.NewRound,
 		FloorRejected:      dec.FloorRejected,
 		Plan:               dec,
 	}, nil
@@ -96,6 +97,9 @@ func (d sessionDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDe
 	if !ok {
 		return "", fmt.Errorf("세션 개시 계획이 이 결정자의 것이 아니다(%T) — Decide 가 준 값을 그대로 넘겨야 한다", dec.Plan)
 	}
+	// 장부가 들고 있는 회차(⑹ 키가 쓸 값)를 Open 이 대조하게 넘긴다 — 계획 안의 값이 아니라 이 값이어야 장부 쪽에서
+	// 갈린 회차(옮김 누락 · 덮어씀)까지 개시 오류로 드러난다.
+	plan.RoundID = dec.RoundID
 	id, err := d.reg.Open(ctx, tx, plan, firstPDT)
 	if errors.Is(err, session.ErrLiveLost) {
 		// 끝내려던 live 를 잃은 개시는 경합이다 — 되돌리고 다음 시도가 다시 판정한다(M6 3.3). 장부의 재시도 갈래로 옮긴다.
@@ -127,29 +131,18 @@ const intentShortConn = 4 * time.Second
 // newIntentOptions 는 4D 적용(session.ApplyIntentionalEnd)의 수치와 함수 칸을 묶는다(설계 M6 10절 · 계획 4.12 커밋 ②).
 //
 // 칸이 nil 이면 무동작 + WARN intentional_round_close_unwired 기본값을 끼운다 — 그래서 M6-3a 만 들어간 판에서도
-// 4D 적용이 돈다. 그 판에서 upgraded 는 사유 · 표식만 쓰고 회차 닫힘은 M6-3b 의 회차 스캔이 거두며(사유 intentional 이
-// 닫힘 조건이다), round_split 은 R 닫힘 · round_id 를 직접 쓰고 완결 평가만 건너뛴다. 계약9 outbox 는 M6-8 전까지
-// Gate 꺼짐과 같아 건너뛴 started 가 이벤트 누락이 되지 않는다(D45). M6-3b 가 closeRound 를, M6-8 이 enqueueStarted
-// 를 채운다. POK-472 수신부는 이 조립을 부르기만 한다.
-func newIntentOptions(log *slog.Logger,
-	closeRound func(ctx context.Context, tx pgx.Tx, round string) error,
-	enqueueStarted func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error,
-) session.IntentOptions {
+// 4D 적용이 돈다. 그 판에서 upgraded 는 사유 · 표식만 쓰고 회차 닫힘은 M6-3b 의 회차 스캔이 거둔다(사유 intentional 이
+// 닫힘 조건이다). M6-3b 가 closeRound 를 채운다. POK-472 수신부는 이 조립을 부르기만 한다.
+func newIntentOptions(log *slog.Logger, closeRound func(ctx context.Context, tx pgx.Tx, round string) error) session.IntentOptions {
 	if closeRound == nil {
 		closeRound = func(_ context.Context, _ pgx.Tx, round string) error {
 			log.Warn("intentional_round_close_unwired", "slot", "close_round", "round", round)
 			return nil
 		}
 	}
-	if enqueueStarted == nil {
-		enqueueStarted = func(_ context.Context, _ pgx.Tx, round, ingestStreamID string, _ time.Time) error {
-			log.Warn("intentional_round_close_unwired", "slot", "enqueue_started", "round", round, "stream_id", ingestStreamID)
-			return nil
-		}
-	}
 	return session.IntentOptions{
 		ShortConn: intentShortConn, Slack: intentStopSlack,
-		CloseRound: closeRound, EnqueueStarted: enqueueStarted, Log: log,
+		CloseRound: closeRound, Log: log,
 	}
 }
 

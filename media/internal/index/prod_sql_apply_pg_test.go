@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -49,6 +50,12 @@ const preflightOK = "PREFLIGHT OK"
 
 // verifyOK 는 40_verify.sql 이 모든 단언을 통과했을 때 내는 결과 행이다.
 const verifyOK = "VERIFY OK"
+
+// 60_round_frozen.sql 이 끝 단언을 모두 통과했을 때 내는 결과 행과, 실패한 단언의 식별자를 싣는 오류 문구 머리다.
+const (
+	roundFrozenOK           = "ROUND FROZEN OK"
+	roundFrozenFailedPrefix = "round frozen failed: "
+)
 
 // selfGrantLine 은 10_roles.sql 에서 마스터가 media_owner 로 SET ROLE 할 수 있게 하는 줄이다(H5 대조가 뺀다).
 const selfGrantLine = "GRANT media_owner TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;"
@@ -413,6 +420,174 @@ func TestProdSQLAppliesAsNonSuperuserMasterAndConverges(t *testing.T) {
 	env := newProdSQLEnv(t)
 	env.mustApplyAll(t)
 	env.mustApplyAll(t)
+}
+
+// applyRoundFrozen 은 60_round_frozen.sql 을 대역으로 적용한다. 적용 오류가 나거나 ROUND FROZEN OK 행이 없으면 그
+// 까닭을 오류로 돌려준다 — 60 은 시험 대상이므로 실패 판정은 부르는 Test 가 한다. 파일 읽기 · 연결 상태 같은 환경
+// 실패만 helper 안에서 멈춘다.
+func (e *prodSQLEnv) applyRoundFrozen(t *testing.T) error {
+	t.Helper()
+	results, err := applyProdSQL(t, e.master, expandProdSQL(t, roundFrozenFile))
+	if err != nil {
+		return err
+	}
+	if !hasRow(results, roundFrozenOK) {
+		return fmt.Errorf("결과에 %q 행이 없다", roundFrozenOK)
+	}
+	return nil
+}
+
+// roundFrozenTriggerOIDOn 은 conn 의 DB 에서 회차 불변 트리거의 oid 다(없으면 0).
+func roundFrozenTriggerOIDOn(t *testing.T, conn *pgx.Conn) uint32 {
+	t.Helper()
+	var oid uint32
+	err := conn.QueryRow(context.Background(), `
+SELECT coalesce((SELECT oid FROM pg_trigger
+                  WHERE tgrelid = 'stream_sessions'::regclass::oid AND tgname = $1), 0)`, roundFrozenTrigger).Scan(&oid)
+	if err != nil {
+		t.Fatalf("트리거 조회 실패: %v", err)
+	}
+	return oid
+}
+
+// 분리 단계 실적용(계획 Ⓑ1-3 · r9.1 cx 부수 · E32) — 10 ~ 40(운영 SQL 1)은 트리거를 깔지 않고 VERIFY OK 다. 60(운영
+// SQL 2)을 따로 적용하면 트리거가 생기고 40 은 여전히 VERIFY OK 다. 60 을 다시 돌려도 오류 없이 같은 트리거(oid)다.
+func TestProdSQLRoundFrozenAppliesAsSeparateStep(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	if oid := roundFrozenTriggerOIDOn(t, env.super); oid != 0 {
+		t.Fatalf("10 ~ 40 뒤 회차 불변 트리거 oid = %d, want 없음 — 운영 SQL 1 이 트리거를 깔면 A 복귀 구간에 4D 가 유실된다(K5)", oid)
+	}
+
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Fatalf("%s 첫 적용 = %v, want nil", roundFrozenFile, err)
+	}
+	first := roundFrozenTriggerOIDOn(t, env.super)
+	env.mustVerify(t)
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Fatalf("%s 재적용 = %v, want nil", roundFrozenFile, err)
+	}
+	second := roundFrozenTriggerOIDOn(t, env.super)
+
+	if first == 0 {
+		t.Fatalf("%s 뒤 회차 불변 트리거가 없다", roundFrozenFile)
+	}
+	if second != first {
+		t.Errorf("%s 재적용이 트리거를 다시 만들었다: oid %d → %d", roundFrozenFile, first, second)
+	}
+}
+
+// 잠금 대기 상한(DB 검수 H1) — 다른 연결이 stream_sessions 에 커밋 안 한 쓰기를 쥐고 있으면 60 의 CREATE TRIGGER 는
+// SHARE ROW EXCLUSIVE 를 기다리다 약 3초에 55P03 으로 끊기고, 한 트랜잭션(psql -1 대역)이 통째로 되돌려져 트리거가
+// 없다. 쓰기가 끝난 뒤 다시 적용하면 깔린다. 대역 연결에 statement_timeout 15초를 걸어 둔다 — 상한이 없으면 무한
+// 대기 대신 57014 로 끝나 이 시험이 FAIL 한다.
+func TestProdSQLRoundFrozenGivesUpOnLockWait(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	ctx := context.Background()
+	if _, err := env.super.Exec(ctx, `
+INSERT INTO stream_sessions (session_id, stream_id, started_at, state) VALUES ('S-W', 'lock-wait', now(), 'live')`); err != nil {
+		t.Fatalf("세션 픽스처 실패: %v", err)
+	}
+	writer := connectProdSQL(t, os.Getenv("PG_DSN"), env.dbName, "", "", nil)
+	t.Cleanup(func() { writer.Close(ctx) }) // DB DROP(WITH FORCE)보다 늦게 등록 — 먼저 닫힌다
+	if _, err := writer.Exec(ctx, "BEGIN; UPDATE stream_sessions SET stop_marked_at = now() WHERE session_id = 'S-W'"); err != nil {
+		t.Fatalf("경쟁 쓰기 시작 실패: %v", err)
+	}
+	if _, err := execScript(t, env.master, "SET statement_timeout = '15s'"); err != nil {
+		t.Fatalf("대역 statement_timeout 설정 실패: %v", err)
+	}
+
+	start := time.Now()
+	_, err := applyProdSQL(t, env.master, expandProdSQL(t, roundFrozenFile))
+	took := time.Since(start)
+	if _, rbErr := writer.Exec(ctx, "ROLLBACK"); rbErr != nil {
+		t.Fatalf("경쟁 쓰기 되돌리기 실패: %v", rbErr)
+	}
+
+	if !isSQLState(err, pgLockNotAvailable) || took < 2*time.Second || took > 10*time.Second {
+		t.Errorf("열린 세션 쓰기 뒤 %s = (오류 %v, %v), want 55P03 을 3초 근처에", roundFrozenFile, err, took)
+	}
+	if oid := roundFrozenTriggerOIDOn(t, env.super); oid != 0 {
+		t.Errorf("잠금 대기로 끊긴 뒤 회차 불변 트리거 oid = %d, want 없음(한 트랜잭션 롤백)", oid)
+	}
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Fatalf("쓰기가 끝난 뒤 %s 재적용 = %v, want nil", roundFrozenFile, err)
+	}
+	if oid := roundFrozenTriggerOIDOn(t, env.super); oid == 0 {
+		t.Error("쓰기가 끝난 뒤 다시 적용해도 회차 불변 트리거가 없다")
+	}
+}
+
+// roundFrozenFailuresAfter 는 superuser 가 한 트랜잭션에서 tamper 로 결함 트리거를 미리 깐 뒤 대역 신분으로 60 을
+// 돌렸을 때 실패한 끝 단언 식별자다. 끝에서 ROLLBACK 하므로 상태는 그대로다.
+func (e *prodSQLEnv) roundFrozenFailuresAfter(t *testing.T, tamper string) []string {
+	t.Helper()
+	script := "BEGIN;\n" + tamper + ";\nSET ROLE " + e.masterName + ";\n" +
+		expandProdSQL(t, roundFrozenFile) + "\nROLLBACK;"
+	_, err := execScript(t, e.super, script)
+	return failedChecks(t, err, roundFrozenFailedPrefix)
+}
+
+// mutateRoundFrozenDDL 은 roundFrozenDDL 에서 old 를 new 로 한 번 바꾼 것이다(결함 트리거 만들기). old 가 정확히 한 번
+// 나오지 않으면 멈춘다 — 사례가 조용히 결함 없는 트리거를 깔지 않게.
+func mutateRoundFrozenDDL(t *testing.T, old, new string) string {
+	t.Helper()
+	if n := strings.Count(roundFrozenDDL, old); n != 1 {
+		t.Fatalf("roundFrozenDDL 의 %q 개수 = %d, want 1", old, n)
+	}
+	return strings.Replace(roundFrozenDDL, old, new, 1)
+}
+
+// E33 — 같은 이름의 결함 트리거가 미리 있으면 60 의 생성 블록은 건너뛰지만(멱등) 끝 단언이 그 결함 하나로 실패한다.
+// 결함 트리거는 표 소유자(media_owner)로 깐다 — 60 의 CREATE OR REPLACE FUNCTION 이 소유자 오류로 먼저 멈추지 않게.
+// 변이: 60 끝 단언의 WHEN 검사 제거 → 「WHEN 없음」 사례 FAIL.
+func TestProdSQLRoundFrozenCatchesDefectiveTrigger(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	asOwner := func(ddl string) string { return "SET ROLE media_owner;\n" + ddl + ";\nRESET ROLE" }
+	tests := []struct {
+		name   string
+		tamper string
+		want   []string
+	}{
+		{
+			name:   "no WHEN",
+			tamper: asOwner(mutateRoundFrozenDDL(t, "WHEN (OLD.round_id IS DISTINCT FROM NEW.round_id)", "")),
+			want:   []string{"round_frozen_when"},
+		},
+		{
+			name:   "every column",
+			tamper: asOwner(mutateRoundFrozenDDL(t, "UPDATE OF round_id ON", "UPDATE ON")),
+			want:   []string{"round_frozen_columns"},
+		},
+		{
+			name:   "after update",
+			tamper: asOwner(mutateRoundFrozenDDL(t, "BEFORE UPDATE OF", "AFTER UPDATE OF")),
+			want:   []string{"round_frozen_timing"},
+		},
+		{
+			name:   "disabled",
+			tamper: asOwner(roundFrozenDDL + "ALTER TABLE stream_sessions DISABLE TRIGGER " + roundFrozenTrigger),
+			want:   []string{"round_frozen_enabled"},
+		},
+		{
+			name: "other function",
+			tamper: asOwner(mutateRoundFrozenDDL(t, "EXECUTE FUNCTION stream_sessions_reject_round_change()",
+				"EXECUTE FUNCTION stream_segments_check_seq_floor()")),
+			want: []string{"round_frozen_function"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := env.roundFrozenFailuresAfter(t, tt.tamper); !slices.Equal(got, tt.want) {
+				t.Errorf("%s 뒤 %s 실패 단언 = %q, want %q", tt.name, roundFrozenFile, got, tt.want)
+			}
+		})
+	}
+	if err := env.applyRoundFrozen(t); err != nil {
+		t.Errorf("결함 트리거 사례를 모두 되돌린 뒤 %s 적용 = %v, want nil", roundFrozenFile, err)
+	}
 }
 
 // runtime1aRolesFile 은 1단-가 판 10_roles.sql 의 바이트 사본이다(f1fc0da1 · 9e008743 의 같은 경로). prodSQLDir 의

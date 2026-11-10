@@ -100,6 +100,7 @@ variables {
   ecr_credential_helper_version = "0.12.0-3.amzn2023"
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
+  broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
 }
 
 # EC2 user_data 한도 16 KiB 는 base64 를 풀기 전(압축본) 크기에 걸린다.
@@ -153,6 +154,7 @@ run "writes_files_with_owner_and_mode" {
       "/etc/pokeclip-media/compose.yml"                             = ["root:root", "0644"]
       "/etc/pokeclip-media/nginx.conf"                              = ["root:root", "0644"]
       "/etc/pokeclip-media/ingest-auth.env"                         = ["root:root", "0644"]
+      "/etc/pokeclip-media/sidecar.env"                             = ["root:root", "0644"]
       "/root/.docker/config.json"                                   = ["root:root", "0600"]
       "/etc/systemd/system/pokeclip-media.service"                  = ["root:root", "0644"]
       "/etc/systemd/system/pokeclip-media.service.d/10-bundle.conf" = ["root:root", "0644"]
@@ -529,6 +531,46 @@ run "writes_ingest_auth_env_ip_limit_off_in_responder_mode" {
   }
 }
 
+# 새 꼴 쓰기 스위치(compose 파일 옆 sidecar.env — 사이드카의 required env_file)는
+# 두 모드 모두 깐다. 시작 스크립트는 그 파일이 정확히 PLAYBACK_ROUND_KEYS=true|false
+# 한 줄이 아니면 기동을 막는다(MEDIA START BLOCKED: sidecar settings unavailable).
+# user_data 는 첫 부팅에만 쓰므로 그 뒤의 정본은 상자 안 파일이다.
+run "writes_sidecar_env_as_single_round_keys_line" {
+  command = plan
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+    ] == ["PLAYBACK_ROUND_KEYS=false\n"]
+    error_message = "sidecar.env 가 정확히 한 줄 PLAYBACK_ROUND_KEYS=false(기본 끔)가 아니다."
+  }
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+    ] == [templatefile("../../../media-host/sidecar.env.tmpl", { playback_round_keys = false })]
+    error_message = "sidecar.env 가 저장소 템플릿 sidecar.env.tmpl 의 렌더가 아니다."
+  }
+}
+
+run "writes_sidecar_env_round_keys_true" {
+  command = plan
+
+  variables {
+    playback_round_keys = true
+  }
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+    ] == ["PLAYBACK_ROUND_KEYS=true\n"]
+    error_message = "playback_round_keys = true 인데 sidecar.env 가 정확히 한 줄 PLAYBACK_ROUND_KEYS=true 가 아니다."
+  }
+}
+
 # 판 · 체크섬 고정 설치와 묶음 꺼내기.
 run "bootstrap_pins_tools_and_extracts_bundle" {
   command = plan
@@ -583,6 +625,7 @@ run "bootstrap_requires_every_bundle_file" {
       "bin/secret-count.sh",
       "bin/ingest-auth-deny-sync.sh",
       "bin/ingest-auth-ip-limit.sh",
+      "bin/sidecar-round-keys.sh",
       "bin/lib/ops.sh",
       "bin/lib/mtx_paths.sh",
       "bin/lib/deny_tokens.sh",
@@ -590,7 +633,7 @@ run "bootstrap_requires_every_bundle_file" {
       "bin/lib/render_files.sh",
       "mediamtx.yml.tmpl",
     ]
-    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 14개(bin/ 여덟 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
+    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 15개(bin/ 아홉 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
   }
 }
 

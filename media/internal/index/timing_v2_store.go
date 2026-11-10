@@ -67,7 +67,7 @@ type v2Mix struct {
 }
 
 // settleV2 는 판 2 행 r 의 PDT · 위치 · 길이를 정해 r 에 쓴다. round 는 판 정하기가 고른 회차("" = 회차 없음)이고, newRound
-// 면 r 이 새 회차를 연다 — 새 회차의 id 는 개시(Open) 뒤에 정해져 round 가 빈 채로 오지만 r 은 회차 안에 있다.
+// 면 r 이 새 회차를 연다 — round 는 그 새 회차 id 지만 앞 행이 없으므로 회차 안 앞 행(p)을 읽지 않는다.
 // floorRejected 면 라이브 중 귀속 하한 거부 행이다(회차 없음 · 위치 q.start).
 func settleV2(ctx context.Context, tx pgx.Tx, r *Record, round string, q *lastRow, newRound, floorRejected bool) (*v2Mix, error) {
 	if r.Timing.Facts.Wall.IsZero() {

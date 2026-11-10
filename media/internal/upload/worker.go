@@ -206,14 +206,16 @@ func planMark(a index.Axis, target index.UploadState) markPlan {
 var s3KeyRe = regexp.MustCompile(`^streams/([A-Za-z0-9_-]{1,64})/\d{4}-\d{2}-\d{2}/\d{2}/seg_(\d{6,})\.m4s$`)
 
 // playbackKeyParts 는 ③ 재생 축 키를 regexp.FindStringSubmatch 모양([키, 스트림 성분, seq 십진])으로 푼다 — 문법 밖이면
-// nil 이다. 문법의 소유자는 playback.ParseSegKey 하나다(목록 발행 전 검사 S5 와 같은 한 벌 — 계획 B #10). seq 를 십진으로
-// 되돌려 두므로 식별자 대조(keyIdentityMismatch)는 다른 축과 같은 길을 간다.
+// nil 이다. 문법의 소유자는 playback.ParseSegKey 하나다(목록 발행 전 검사 S5 와 같은 한 벌 — 계획 B #10). 옛 꼴 · 회차 꼴
+// 두 꼴을 모두 받고(POK-525 설계 2-1), 회차 성분은 견주지 않는다 — 업로드 대상에 회차 칸이 없고, 키는 장부가 예약한
+// 그대로 PUT 하는 것이 계약이다. seq 를 십진으로 되돌려 두므로 식별자 대조(keyIdentityMismatch)는 다른 축과 같은 길을
+// 간다.
 func playbackKeyParts(key string) []string {
-	stream, seq, err := playback.ParseSegKey(key)
+	ref, err := playback.ParseSegKey(key)
 	if err != nil {
 		return nil
 	}
-	return []string{key, stream, strconv.FormatInt(seq, 10)}
+	return []string{key, ref.StreamID, strconv.FormatInt(ref.Seq, 10)}
 }
 
 // initKeyRe 는 init(MAP) 축 키의 문법이다 — 설계 5.2·5.3ⓐ(playback.InitKey).

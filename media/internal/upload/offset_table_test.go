@@ -1,7 +1,9 @@
 package upload
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
 // 회차별 보정값 표(계획 4.2-R R3 「보정값 표」·「스위퍼 재생성」)를 잰다. 표는 인덱서의 실시간 ③
@@ -91,6 +94,62 @@ func TestSweeperUsesSessionOffsetTable(t *testing.T) {
 	}
 	if got := lastPos(t, prod); got != fixture4sMtxi {
 		t.Errorf("seq 11 도장 = %v, want mtxi + 0 = %v — 11 은 {10→0} 줄 구간이다", got, fixture4sMtxi)
+	}
+}
+
+// sweepTargetWithMtxi 는 실물 조각의 mtxi 누적 DTS 만 dts 로 바꾼 사본으로 스위퍼 작업을 만든다.
+// 바꾼 값은 ReadMtxi 로 다시 읽어 전제를 단언한다 — 상자 배치가 바뀌면 여기서 멈춘다.
+func sweepTargetWithMtxi(t *testing.T, dir string, seq int64, sessionID string, dts time.Duration) index.UploadTarget {
+	t.Helper()
+	tgt := sweepTarget(t, dir, seq, sessionID)
+	raw, err := os.ReadFile(tgt.LocalPath)
+	if err != nil {
+		t.Fatalf("사본 읽기 실패: %v", err)
+	}
+	// mtxi 상자: 크기 4B · 형식 "mtxi" · FullBox 4B · 녹화기 표식 16B · 조각 번호 8B · 누적 DTS 8B.
+	at := bytes.Index(raw, []byte("mtxi")) + 4 + 4 + 16 + 8
+	if got := time.Duration(binary.BigEndian.Uint64(raw[at:])); got != fixture4sMtxi {
+		t.Fatalf("실물 조각 mtxi DTS 자리 = %v, want %v(전제)", got, fixture4sMtxi)
+	}
+	binary.BigEndian.PutUint64(raw[at:], uint64(dts))
+	if err := os.WriteFile(tgt.LocalPath, raw, 0o644); err != nil {
+		t.Fatalf("사본 쓰기 실패: %v", err)
+	}
+	f, err := os.Open(tgt.LocalPath)
+	if err != nil {
+		t.Fatalf("사본 열기 실패: %v", err)
+	}
+	defer f.Close()
+	if m, err := playback.ReadMtxi(f); err != nil || m.DTS != dts {
+		t.Fatalf("바꾼 사본의 mtxi = %v (%v), want %v(전제)", m.DTS, err, dts)
+	}
+	return tgt
+}
+
+// 회차 첫 조각의 mtxi 가 음수라 인덱서가 보정값 −mtxi 로 연 회차는(첫 도장 0 — indexer startChain)
+// 스위퍼 재생성도 같은 표 줄로 같은 도장을 만든다: 첫 조각 0, 다음 조각 mtxi + 같은 보정값.
+// 잡는 결함: 스위퍼가 표를 안 보면 첫 조각을 음수 도장으로 다시 만들어 생산자가 거부하고, 다음
+// 조각은 실시간보다 44ms 앞에 찍혀 겹친다.
+func TestSweeperRebuildsFlooredFirstPos(t *testing.T) {
+	const lead = 44 * time.Millisecond
+	prod := &fakeProducer{}
+	u, cap, dir, _ := newPlaybackUploader(t, &fakeUploadStore{}, &fakePutter{}, prod, nil)
+	request(u, liveRequest(t, 4, "S-1", lead)) // 인덱서가 하한으로 연 회차의 첫 요청
+
+	for _, tt := range []struct {
+		seq     int64
+		mtxi    time.Duration
+		wantPos time.Duration
+	}{
+		{seq: 4, mtxi: -lead, wantPos: 0},
+		{seq: 5, mtxi: 5_929_333_333, wantPos: 5_973_333_333},
+	} {
+		if got := runTarget(t, u, sweepTargetWithMtxi(t, dir, tt.seq, "S-1", tt.mtxi)); got != outcomeSuccess {
+			t.Fatalf("seq %d outcome = %v (%s)", tt.seq, got, cap.dump())
+		}
+		if got := lastPos(t, prod); got != tt.wantPos {
+			t.Errorf("seq %d 재생성 도장 = %v, want %v — 실시간과 같은 값", tt.seq, got, tt.wantPos)
+		}
 	}
 }
 

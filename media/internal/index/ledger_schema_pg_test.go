@@ -44,8 +44,11 @@ SELECT kind || ':' || name || ':' || oid::text FROM (
 // ledgerSchemaObjectCount 는 위 그림의 객체 수다 — 열 넷 · 표 둘 · 인덱스 여섯 · 트리거 둘.
 const ledgerSchemaObjectCount = 14
 
-// dropLedgerSchemaSQL 은 M6-0 앞 판(develop) 스키마로 되돌린다 — 그 판의 DB 에는 이 객체가 하나도 없다.
+// dropLedgerSchemaSQL 은 M6-0 앞 판(develop) 스키마로 되돌린다 — 그 판의 DB 에는 이 객체가 하나도 없다. 회차 불변
+// 트리거(POK-525)는 round_id 열에 기대므로 열보다 먼저 지운다.
 const dropLedgerSchemaSQL = `
+DROP TRIGGER IF EXISTS stream_sessions_round_frozen ON stream_sessions;
+DROP FUNCTION IF EXISTS stream_sessions_reject_round_change();
 DROP TRIGGER IF EXISTS stream_segments_seq_floor_raise ON stream_segments;
 DROP TRIGGER IF EXISTS stream_segments_seq_floor_guard ON stream_segments;
 DROP FUNCTION IF EXISTS stream_segments_raise_seq_floor();

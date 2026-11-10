@@ -3,10 +3,14 @@
 #include "constants.hpp"
 #include "private-file.hpp"
 #include "server-env.hpp"
+#include "srt-latency.hpp"
 
 #include <obs-module.h>
 #include <plugin-support.h>
 #include <util/platform.h>
+
+#include <cstdint>
+#include <optional>
 
 namespace pokeclip {
 
@@ -78,7 +82,21 @@ void ConfigStore::Load()
 	config_.streamId = GetStringOr(data, "streamid", "");
 	config_.passphrase = GetStringOr(data, "passphrase", "");
 	config_.sendPassphrase = GetBoolOr(data, "send_passphrase", d.sendPassphrase);
-	config_.latencyMs = GetIntOr(data, "latency_ms", d.latencyMs);
+	// SRT 지연(POK-556) — 이관 표지 없는 파일의 옛 기본값(1000)은 지금 기본값으로 올리고, 범위 밖 값은 기본값으로
+	// 둔다(srt-latency.hpp). 올린 값은 다음 저장 때 표지와 함께 파일에 남는다.
+	// 64비트 그대로 넘긴다 — 범위는 LoadedLatencyMs가 좁히기 전에 본다.
+	const std::optional<int64_t> storedLatency =
+		obs_data_has_user_value(data, "latency_ms")
+			? std::optional<int64_t>(static_cast<int64_t>(obs_data_get_int(data, "latency_ms")))
+			: std::nullopt;
+	const std::optional<bool> latencyMarker =
+		obs_data_has_user_value(data, kLatencyMigratedKey)
+			? std::optional<bool>(obs_data_get_bool(data, kLatencyMigratedKey))
+			: std::nullopt;
+	config_.latencyMs = LoadedLatencyMs(storedLatency, latencyMarker);
+	if (storedLatency && *storedLatency != config_.latencyMs)
+		obs_log(LOG_INFO, "config: latency_ms %lld -> %d", static_cast<long long>(*storedLatency),
+			config_.latencyMs);
 	config_.syncStart = GetBoolOr(data, "sync_start", d.syncStart);
 	config_.forceFallback = GetBoolOr(data, "force_fallback", d.forceFallback);
 	config_.dockIntroShown = GetBoolOr(data, "dock_intro_shown", d.dockIntroShown);
@@ -133,8 +151,8 @@ void ConfigStore::Load()
 	}
 
 	// 서버 환경(POK-267). 키가 있으면 그 값, 없거나 모르는 값이면 api_base로 짐작한다(옛 파일 — dev 키로 페어링된
-	// 설치는 개발에 남는다). 그다음 손대지 않은 기본값(옛 http dev · ingest.pokeclip.com 포함)을 그 환경의 짝으로
-	// 올린다 — 직접 적은 주소는 그대로. 올린 값은 다음 저장 때 파일에 남는다.
+	// 설치는 개발에 남는다). 그다음 손대지 않은 기본값(옛 http dev · 0.2.1 이전 운영 media.pokeclip.com 포함)을 그
+	// 환경의 짝으로 올린다 — 직접 적은 주소는 그대로. 올린 값은 다음 저장 때 파일에 남는다.
 	ServerEnv env = kBuildServerEnv;
 	const std::string envText = GetStringOr(data, "server_env", "");
 	if (!ParseServerEnv(envText, env)) {
@@ -191,6 +209,8 @@ bool ConfigStore::SaveLocked(SaveBackup backupMode)
 	obs_data_set_string(data, "passphrase", config_.passphrase.c_str());
 	obs_data_set_bool(data, "send_passphrase", config_.sendPassphrase);
 	obs_data_set_int(data, "latency_ms", config_.latencyMs);
+	// 이관 표지(POK-556) — 이 뒤로 파일에 1000이 있으면 사용자가 고른 값이다. 다음 Load가 올리지 않는다.
+	obs_data_set_bool(data, kLatencyMigratedKey, true);
 	obs_data_set_bool(data, "sync_start", config_.syncStart);
 	obs_data_set_bool(data, "force_fallback", config_.forceFallback);
 	obs_data_set_bool(data, "dock_intro_shown", config_.dockIntroShown);

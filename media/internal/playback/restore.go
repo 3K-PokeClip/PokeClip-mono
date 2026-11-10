@@ -72,15 +72,22 @@ type StitchRule func(prev Link) time.Duration
 // Continues 는 cur 가 prev 와 같은 녹화기의 잇단 조각인가다 — 부르는 쪽이 index.SameInstance 로 정한다(정의는 한 자리).
 type Continues func(prev Link, cur SourceTiming) bool
 
-// StartLink 는 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(규칙 ⑥ · 결정 B′). mtxi 가 없으면 도장을 지어내지
-// 않는다(④ⓑ): ok 가 거짓이고, 다음 정상 판독 행이 사슬을 연다.
+// StartLink 는 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(규칙 ⑥ · 결정 B′). 다만 mtxi 가 음수면(새 연결에서
+// 소리가 영상보다 먼저 시작 — prod 실측 −44ms · POK-550) 보정값 −mtxi 로 열어 도장을 0 에 둔다. 도장은 뒤로 가지 않으므로
+// (Produce 가 ErrNegativePos 로 막는다) 0 이 하한이고, 보정값은 리셋 · 구멍이 바꾸기 전까지 이어진다. 보관 mtxi 는
+// 원값이다 — 다음 행의 구멍 술어가 실제 미디어 끝을 기준으로 서야 한다. 실시간 사슬과 복원 접기가 이 하한을 함께 쓴다.
+// mtxi 가 없으면 도장을 지어내지 않는다(④ⓑ): ok 가 거짓이고, 다음 정상 판독 행이 사슬을 연다.
 func StartLink(cur SourceTiming) (link Link, ok bool) {
 	if cur.Mtxi == nil {
 		return Link{}, false
 	}
+	var offset time.Duration
+	if cur.Mtxi.DTS < 0 {
+		offset = -cur.Mtxi.DTS
+	}
 	return Link{
 		Seq: cur.Seq, SessionID: cur.SessionID, Recorder: cur.Recorder, Number: cur.Number, VideoEnd: cur.VideoEnd,
-		Mtxi: cur.Mtxi.DTS, Dur: cur.Dur, Pos: cur.Mtxi.DTS,
+		Mtxi: cur.Mtxi.DTS, Dur: cur.Dur, Pos: cur.Mtxi.DTS + offset, Offset: offset,
 	}, true
 }
 

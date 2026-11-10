@@ -3,7 +3,7 @@ package index
 // 판 정하기 · 이어 계산 회차 R(k)(설계 r7 2.4 · 9.3 · 계약 6-6-4 판 정하기 1–3항). Insert 트랜잭션 안에서 세션 결정
 // 다음, PDT 산출 앞에 판을 고른다 — 판을 쓰는 식이 판마다 달라 PDT 보다 먼저여야 한다(설계 4절 ⑵⑶).
 //
-//	귀속 · 새 회차를 여는 개시   그때 게이트 행의 스위치(advisory 공유 잠금 아래)        회차 = 새 session_id
+//	귀속 · 새 회차를 여는 개시   그때 게이트 행의 스위치(advisory 공유 잠금 아래)        회차 = 결정의 RoundID(새 session_id)
 //	귀속 · 회차를 이어 가는 행   기저 행(앞 세션의 마지막 귀속 행)의 판 — 「v(s) = v(p)」  회차 = 결정의 RoundID
 //	비귀속                       마지막 귀속 행의 회차가 열려 있으면 그 행의 판 · 그 회차,
 //	                             닫혔거나 귀속 행이 없으면 게이트 판 · 회차 없음
@@ -24,8 +24,8 @@ import (
 type timingChoice struct {
 	// version 은 이 행의 timing_version 이다. nil 이면 판 NULL 이다.
 	version *int16
-	// roundID 는 이 행의 timing_round_id 다. "" 면 회차 없음이다. 새 회차를 여는 행은 Open 이 돌려준 session_id 로
-	// 채운다(settleAttributed).
+	// roundID 는 이 행의 timing_round_id 다. "" 면 회차 없음이다. 새 회차를 여는 행은 결정이 미리 정한 새 session_id 이고,
+	// Open 이 돌려준 id 와 같은지는 settleAttributed 가 단언한다.
 	roundID string
 	// gate 는 판을 고르려고 읽은 게이트 행이다. 게이트를 읽지 않은 행(회차를 이어 가는 행)은 nil 이다.
 	gate *TimingGate
@@ -44,9 +44,10 @@ SELECT g.timing_version, s.round_id, s.round_closed_at IS NULL
          LIMIT 1) g
   LEFT JOIN stream_sessions s ON s.session_id = g.session_id`
 
-// opensNewRound 는 이 결정이 새 회차를 여는 개시인가다 — 개시 갈래인데 이어 갈 회차가 없다(SessionDecision.RoundID).
+// opensNewRound 는 이 결정이 새 회차를 여는 개시인가다(SessionDecision.NewRound). 개시의 RoundID 는 새 회차여도 비지 않아
+// (POK-525 — 새 session_id) RoundID 로는 가릴 수 없고, Open 앞이라 Open 이 돌려줄 id 와 견줄 수도 없다.
 func opensNewRound(dec SessionDecision) bool {
-	return dec.Opens && dec.RoundID == ""
+	return dec.Opens && dec.NewRound
 }
 
 // gateTiming 은 게이트 공유 잠금 아래 스위치의 판을 고른다(새 회차 · 회차 없는 비귀속 행 — 설계 9.3 「읽는 때 · 잠금」).

@@ -610,13 +610,50 @@ BEGIN
 END $do$;
 `
 
-// EnsureSchema 는 표가 없으면 만든다.
+// roundFrozenDDL 은 회차 불변 트리거다(POK-525 설계 r9.3 2-2). 운영 SQL 2(infra/terraform/prod/runtime/sql/
+// 60_round_frozen.sql)의 두 표지 사이가 이 글자와 바이트가 같다 — prod_sql_contract_test.go 가 강제한다.
+//
+// schemaDDL(운영 SQL 1 의 사본)과 따로 두는 이유: 운영 SQL 1 은 교체 전에 다시 돌므로, 거기 넣으면 옛 판(A)으로 돌아갈 수
+// 있는 구간에 트리거가 깔려 A 의 늦은 4D 분리가 거부되고 그 4D 는 유실된다(K5). 운영은 새 꼴 쓰기를 켠 뒤(contract)
+// 운영 SQL 2 로만 깐다. 로컬 · 시험에는 옛 판이 없으므로 EnsureSchema 가 schemaDDL 뒤에 함께 돌린다. 기동 필수 목록
+// (MissingLedgerSchema)에는 넣지 않는다 — 새 판은 트리거보다 먼저 떠야 하고, 정합은 round_id 를 쓰지 않는 코드가
+// 지킨다(round_frozen_static_test.go). 트리거는 다른 길(옛 이미지 · 손 SQL · 앞날 코드)을 막는 울타리다.
+const roundFrozenDDL = `
+-- 회차 불변 — stream_sessions.round_id 를 다른 값으로 바꾸는 UPDATE 를 거부한다(23514 · NULL 에서 값 · 값에서 NULL 도
+-- 바꾸는 것이다). 같은 값을 다시 쓰거나 다른 열만 바꾸는 UPDATE 는 트리거가 돌지 않는다(UPDATE OF round_id + WHEN) —
+-- 그래서 함수는 따지지 않고 거부한다. 하한 검사(seq_below_floor)와 같은 꼴로 search_path 를 고정한다.
+CREATE OR REPLACE FUNCTION stream_sessions_reject_round_change() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+BEGIN
+    RAISE EXCEPTION 'stream_sessions.round_id is frozen'
+        USING ERRCODE = 'check_violation',
+              DETAIL = pg_catalog.format('session=%s old=%s new=%s', OLD.session_id, OLD.round_id, NEW.round_id);
+END $fn$;
+
+-- 이름이 없을 때만 만든다 — 수렴한 재실행은 stream_sessions 를 잠그지 않는다(CREATE TRIGGER 는 SHARE ROW EXCLUSIVE 로
+-- 그 표의 쓰기를 잠깐 막는다). 같은 이름의 다른 모양 트리거가 이미 있으면 건너뛰므로, 운영 SQL 2 는 끝에서 모양을 단언한다.
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger
+                   WHERE tgrelid = 'stream_sessions'::regclass::oid
+                     AND tgname  = 'stream_sessions_round_frozen') THEN
+        CREATE TRIGGER stream_sessions_round_frozen
+            BEFORE UPDATE OF round_id ON stream_sessions
+            FOR EACH ROW
+            WHEN (OLD.round_id IS DISTINCT FROM NEW.round_id)
+            EXECUTE FUNCTION stream_sessions_reject_round_change();
+    END IF;
+END $do$;
+`
+
+// EnsureSchema 는 표가 없으면 만든다. 회차 불변 트리거(roundFrozenDDL)도 schemaDDL 뒤에 같은 트랜잭션으로 깐다 —
+// 질의 하나에 이어 보내므로 판정 표가 보이는 순간 트리거도 있다.
 //
 // Store 인터페이스 밖의 자유 함수인 이유(D7, G7): 스키마 부트스트랩은 영속 계약(Store)과
 // 변경 이유가 다르다(SRP). 나중에 정식 마이그레이션 도구를 도입하게 되면 이 파일만 교체하면 되고,
 // 인터페이스와 테스트용 가짜 구현은 하나도 안 바뀐다.
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, schemaDDL); err != nil {
+	if _, err := pool.Exec(ctx, schemaDDL+roundFrozenDDL); err != nil {
 		return fmt.Errorf("stream_segments 스키마 생성 실패: %w", err)
 	}
 	return nil

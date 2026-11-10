@@ -129,6 +129,13 @@ hlsSegmentDuration: 4s
 hlsPartDuration: 500ms
 hlsSegmentCount: 900 # DVR 1h = 4s x 900
 hlsDirectory: /dvr # 세그먼트 디스크 오프로드(메모리 상주 방지)
+# 시청자가 0명이어도 송출 시점부터 목록 · DVR 을 쌓는다(첫 시청 503 방지 ·
+# 무시청이 hlsMuxerCloseAfter 를 넘기면 muxer 가 닫히는 것 방지 — 이 파일은 그
+# 키를 두지 않아 기본값 60s 다). 이렇게 미리 만든 muxer 에는 hlsMuxerCloseAfter
+# 가 걸리지 않는다. bluenviron/mediamtx#6315 — 설정을 바꿔 경로를 다시 만드는
+# 중의 경합으로 muxer 가 없어져 500 이 이어질 수 있다. 설정은 컨테이너
+# 재시작으로만 바꾼다(런북 「설정 반영 교체」).
+hlsAlwaysRemux: yes
 # CloudFront 응답 헤더 정책이 덮지만 원본도 같은 출처로 둔다.
 hlsAllowOrigins: ["https://app.pokeclip.com"]
 hlsTrustedProxies: []

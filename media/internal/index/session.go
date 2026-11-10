@@ -109,24 +109,33 @@ type SessionDecision struct {
 	// PrevFirstLocalPath 는 재접속 계승 개시가 물려받는 직전 회차의 첫 조각 local_path 다 — init 의 stsd 호환
 	// 게이트 입력이다(계획 2.3 registry 행 ⑵). 계승 개시가 아니면 "" 다. 이것도 결과에 싣기만 한다.
 	PrevFirstLocalPath string
-	// RoundID 는 이 조각의 세션이 드는 회차(stream_sessions.round_id)다 — 이어 계산 회차 R(k) 와 판 정하기 1항(같은
-	// 회차면 앞 세션 판)의 재료다(설계 r7 2.4 · 3절). SessionID 와 짝이다.
-	//   - 계속 갈래: 현 live 의 round_id. "" 면 회차 없는 세션(M6 전 dev)이다.
-	//   - 개시 갈래: 이어 가는 회차(재접속 계승 · 합류 · TD 분할)의 round_id. "" 면 새 회차를 연다 — 그 회차 id 는 Open
-	//     이 돌려주는 새 session_id 다(M6 15.2 「round_id 는 그 회차 머리 세션의 session_id」).
-	//   - 비귀속: "".
+	// RoundID 는 이 조각이 드는 회차다 — ⑹ 키의 회차 성분이고 PDT 의 timing_round_id 가 같은 값을 쓴다(한 트랜잭션에서
+	// 한 번 정한 값 — 설계 r9.4 회차 정본 · 80_pdt (가)). 결정자가 Decide 에서 채운다. 갈래별 뜻:
+	//   - 계속: 그 live 세션의 round_id. NULL(M6 전 세션)이면 "" 다.
+	//   - 개시: 비지 않는다. TD 분할 = 끝낼 live 의 round_id(NULL 이면 새 세션 id) · 표식 분할 = 새 세션 id ·
+	//     직전 회차 합류 · 계승 = 이어 가는 round_id · 새 회차 = 새 세션 id.
+	//   - 비귀속: "" 다.
+	// 「새 회차를 여는가」 는 RoundID == Open 이 돌려준 session_id 로 가린다(Open 뒤에서 쓴다). Open 은 이 값을 대조해
+	// 자기가 쓸 round_id 와 다르면 오류를 낸다 — 트랜잭션이 되돌려져 키가 세션과 다른 회차로 저장되지 않는다.
 	RoundID string
+	// NewRound 는 이 개시가 새 회차를 여는가다 — Open 앞의 판 정하기(새 회차면 게이트 판 · 설계 r7 2.4)가 쓰는 판별이다.
+	// 결정자가 RoundID 와 같은 자리에서 정하며, 참이면 RoundID 는 Open 이 돌려줄 새 session_id 와 같다(장부가 Open 뒤에
+	// 단언한다). 개시가 아니면 거짓이다.
+	NewRound bool
 	// FloorRejected 는 라이브 세션이 있는데 귀속 하한에서 거부된 비귀속 조각인가다(설계 2.4 규칙 2) — 그 행은 판만
 	// 판 정하기 3항을 따르고 이어 계산 회차는 없다. 비귀속의 다른 원인(정책 거부 · 평시 CurrentOnly)은 거짓이다.
 	FloorRejected bool
 	Plan          SessionPlan
 }
 
-// PlaybackKeyFunc 는 ③ 조각 키 파생이다(설계 5.2 — playback.SegKey).
+// PlaybackKeyFunc 는 ③ 조각 키 파생이다(설계 5.2 — playback.SegKey · POK-525 설계 2-1 — playback.RoundSegKey).
 //
-// 함수로 주입하는 이유: 파생은 순수하고 구현이 하나이며 상태가 없다. 이 한 줄을 위해
+// roundID 는 결정의 RoundID(조각이 드는 회차 — 없으면 "")다. 어느 꼴로 쓸지(옛 꼴 · 회차 꼴)는 함수가 정한다 — 상자
+// 스위치 PLAYBACK_ROUND_KEYS 가 기동 때 고른 함수가 들어온다(cmd/segment-indexer playbackKeyFor). 장부는 스위치를 모른다.
+//
+// 함수로 주입하는 이유: 파생은 순수하고 상태가 없다. 이 한 줄을 위해
 // 인터페이스를 만들면 읽는 사람이 구현을 찾아 헤맨다(원칙 5).
-type PlaybackKeyFunc func(streamID string, seq int64) (string, error)
+type PlaybackKeyFunc func(streamID, roundID string, seq int64) (string, error)
 
 // noSessionDecider 는 결정자를 끼우지 않은 프로세스의 널 오브젝트다.
 //
@@ -147,6 +156,6 @@ func (noSessionDecider) Open(context.Context, pgx.Tx, SessionDecision, time.Time
 
 // noPlaybackKey 는 키 파생을 끼우지 않은 프로세스의 널 오브젝트다 —
 // 파생 실패와 같은 갈래로 흘러 playback_s3_key 만 NULL 로 남는다(설계 5.2).
-func noPlaybackKey(string, int64) (string, error) {
+func noPlaybackKey(string, string, int64) (string, error) {
 	return "", errors.New("index: ③ 키 파생 함수가 주입되지 않았다")
 }

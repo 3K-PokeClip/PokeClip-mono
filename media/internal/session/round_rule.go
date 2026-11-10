@@ -4,7 +4,7 @@ package session
 //
 // 개시는 세 가지를 한 트랜잭션에서 정한다: 새 세션이 어느 회차(round_id)에 드는가, 끝내는 live 의 의도적 종료
 // 표식(stop_marked_at)을 물려받는가, 직전 회차의 되감기 목록을 물려받는가(inherits_session). 셋 다 소속 행을
-// 잠근 **뒤** 읽은 값으로만 정한다 — 무잠금으로 본 값은 늦은 4D(분리 · 표식) · 회차 닫힘의 커밋과 겹치면 낡는다.
+// 잠근 **뒤** 읽은 값으로만 정한다 — 무잠금으로 본 값은 늦은 4D 표식 · 회차 닫힘의 커밋과 겹치면 낡는다.
 
 import (
 	"context"
@@ -104,7 +104,7 @@ func (r *Registry) openFromPrevious(in Input, prev previousSession) Decision {
 	case prev.roundID == "": // 3행 — 새 회차(계승은 위 판정 그대로)
 	case d.plan.inheritsSession != "", joinable(prev, in.StartWallUTC, r.opt.ReconnectWindow) && !prev.roundClosed: // 5 · 6행
 		d.plan.roundID = prev.roundID
-		d.RoundID = prev.roundID
+		d.RoundID, d.NewRound = prev.roundID, false
 		if !prev.stopMarkedAt.IsZero() {
 			marked := prev.stopMarkedAt
 			d.plan.stopMarkedAt = &marked

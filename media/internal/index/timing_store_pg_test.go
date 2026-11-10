@@ -167,8 +167,8 @@ func TestContinuingRoundTakesBaseRowVersionNotGate(t *testing.T) {
 	ctx := context.Background()
 	stream := sessionStream("ver-base")
 	prev := stream + "-prev"
-	putSession(t, pool, fixtureSession{id: prev, stream: stream, startedAt: sessionBase, state: "ending", firstPDT: sessionBase})
-	if _, err := pool.Exec(ctx, `UPDATE stream_sessions SET round_id = $1, end_reason = 'offline', ending_at = $2
+	putSession(t, pool, fixtureSession{id: prev, stream: stream, startedAt: sessionBase, state: "ending", firstPDT: sessionBase, roundID: prev})
+	if _, err := pool.Exec(ctx, `UPDATE stream_sessions SET end_reason = 'offline', ending_at = $2
 	                              WHERE session_id = $1`, prev, sessionBase.Add(5*time.Second)); err != nil {
 		t.Fatalf("앞 세션 회차 픽스처 실패: %v", err)
 	}

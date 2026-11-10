@@ -141,6 +141,31 @@ func TestRestoreWithoutAnchorFoldsFromSessionStart(t *testing.T) {
 	}
 }
 
+// 회차 첫 행의 mtxi 가 음수인 회차(새 연결에서 소리가 먼저 — prod 실측 −44ms · POK-550)를 재기동 뒤 닻 없이 되살리면 첫 도장은
+// 0 · 보정값 44ms 이고 다음 행이 같은 보정값을 잇는다 — 실시간 사슬(startChain)과 같은 하한이다. 잡는 결함(음성 대조):
+// 하한을 실시간 사슬에만 두면 복원 작업이 음수 도장으로 나가 생산자가 ErrNegativePos 로 거부하고 첫 시도에 failed → 구멍이다.
+func TestRestoreWithoutAnchorOpensNegativeFirstMtxiAtZero(t *testing.T) {
+	b := newRestoreBench(t)
+	b.add(benchRow{seq: 109, session: "S-0", rec: recB, number: 9, dts: time.Second, playback: up, archive: up})
+	b.contiguous(110, 1, -44*time.Millisecond, pending, pending)
+
+	b.restore()
+
+	jobs := b.queued()
+	if len(jobs) != 2 || jobs[0].Seq != 110 || jobs[1].Seq != 111 {
+		t.Fatalf("작업 = %+v, want seq 110 · 111 (%s)", jobs, b.cap.dump())
+	}
+	want := map[int64]time.Duration{110: 0, 111: b.step()}
+	for _, j := range jobs {
+		if j.PosUnknown || j.PlaybackPos != want[j.Seq] {
+			t.Errorf("seq %d 도장 = %v(모름 %v), want %v", j.Seq, j.PlaybackPos, j.PosUnknown, want[j.Seq])
+		}
+		if off, ok := b.offset(j.Seq); !ok || off != 44*time.Millisecond {
+			t.Errorf("seq %d 표 = (%v, %v), want 보정값 44ms", j.Seq, off, ok)
+		}
+	}
+}
+
 // 닻(③ uploaded 행)이 없는 회차는 구멍 앞 같은 회차 행이 있어도(컷오프 앞 — 구멍 조회 밖) 회차 첫 행부터 접는다(설계 r6 2.10
 // 「세션에 uploaded ③ 이 없으면 세션 첫 행부터 offset 0」 · c10b cx 검수 H4 재현 입력: 119 pending(컷오프 앞) → 120 pending).
 // 잡는 결함: 조회를 첫 구멍 바로 앞에서 시작하고 같은 회차 행을 보면 no_anchor 로 거부해 복원이 영영 돌지 않는다.

@@ -1,5 +1,5 @@
 import { ensurePlaybackAccess, isPlaybackExpired } from '@/api/playbackAccess';
-import { fetchRecordingSpans } from '@/api/mediaPlayback';
+import { fetchRecordingSpans, lookupRecordingSpans } from '@/api/mediaPlayback';
 import { mediaStreamId, timelineBaseMs, type BroadcastRow } from '@/api/clipEditor';
 import { onSessionAdvance } from '@/stores/auth';
 import {
@@ -18,8 +18,14 @@ import type { TrackPiece } from './trackAudio/loadTrackAudio';
  * 이 방송의 녹화 — 방송 시간과 겹치는 구간들(시계 차이 1분까지)을 한 시간축에 놓는다(첫 구간 시작 ~ 마지막 구간 끝, 틈 포함).
  * 재생 서버의 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 오고, 재접속하면 한 방송의 녹화도 여러 구간이 된다(로컬 리뷰
  * 2라운드). 구간 목록은 미리보기 창이 틈에 걸리지 않게 쓴다(POK-253). 재생 서버가 없거나 녹화가 없으면 null
+ *
+ * @param strict 녹화 목록을 못 물었으면(재생 서버 실패 · 시한) 「녹화 없음」으로 접지 않고 던진다. 카드 저장은 없음과 실패를 갈라야
+ *   기준점을 고른다(편집기 · 미리 받기는 미리보기 없이 연다)
  */
-export async function loadRecording(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
+export async function loadRecording(
+  broadcast: BroadcastRow,
+  { strict = false }: { strict?: boolean } = {},
+): Promise<RecordingTimeline | null> {
   // CDN 뒤 녹화 목록·미리보기는 출입증 쿠키가 있어야 열린다(POK-317). 미리보기 창은 이 키로 갱신한다(ensureMediaAccess)
   const access = await ensurePlaybackAccess(broadcast.streamId, mediaStreamId(broadcast));
   // 못 받았는데 녹화를 물으면 CDN 403이 「녹화 없음」으로 접혀 미리보기 없이 열리고 다시 묻지 않는다(PR #320 codex)
@@ -27,9 +33,14 @@ export async function loadRecording(broadcast: BroadcastRow): Promise<RecordingT
     throw new Error('영상 출입증을 받지 못했어요. 잠시 뒤 다시 열어 주세요');
   if (access?.kind === 'expired' || isPlaybackExpired(broadcast.streamId))
     throw new Error('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요');
+  // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
+  const streamKey = mediaStreamId(broadcast);
+  const spans = strict
+    ? await lookupRecordingSpans(streamKey)
+    : await fetchRecordingSpans(streamKey);
+  if (spans === null) throw new Error('recording lookup failed');
   return recordingTimeline(
-    // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
-    await fetchRecordingSpans(mediaStreamId(broadcast)),
+    spans,
     Date.parse(broadcast.startedAt!),
     broadcast.endedAt ? Date.parse(broadcast.endedAt) : null,
   );

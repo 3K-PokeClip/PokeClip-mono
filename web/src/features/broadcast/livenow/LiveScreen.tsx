@@ -17,7 +17,15 @@ import styles from './LiveScreen.module.css';
 import statsStyles from './LiveStatsPanel.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerMark } from '@/features/player/PlayerControls';
-import { useMediaSource } from '@/features/player/mediaSource';
+import { mediaControlBaseUrl, useMediaSource } from '@/features/player/mediaSource';
+import {
+  pastCardMode,
+  type PastBlockReason,
+  type PastCardInput,
+  type PastCardMode,
+  type PastVodState,
+  type VodPhase,
+} from '@/features/player/pastVod';
 import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
@@ -36,6 +44,7 @@ import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
+import type { VodSource } from '@/features/player/useVodPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
 import { holdEditorMedia } from '@/features/clips/editor/editorMedia';
 import { nextLiveFollow } from './chatReplay';
@@ -54,6 +63,7 @@ import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection, type Reselect } from './useLiveStreamSelection';
 import { useLiveSession } from './useLiveSession';
+import { usePastVod } from './usePastVod';
 import { LINK_LOCK_WORD, useLinkLock, type LinkLock } from './linkLock';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
@@ -120,11 +130,16 @@ const RECORDING_RETRY_MS = 60_000;
  */
 const CHAT_WAIT_MS = 10_000;
 
-/** 녹화를 찾은 결과: 확인 중 · 없음 · 물을 수 없음(재생 서버가 없거나 조회 실패) · 찾음 */
+/**
+ * 녹화를 찾은 결과: 확인 중 · 없음 · 물을 수 없음(재생 서버가 없거나 조회 실패) · 찾음. 채팅 기다림 신호이기도 하다 — B 녹화 · A
+ * 다시보기 공용(POK-546): 끝난 뒤 들어온 화면(A)은 다시보기 상태를 이 꼴로 접어 알리고(pastLookupKind), 준비 중(preparing)은 A 만
+ * 낸다
+ */
 type RecordingLookup =
   | { kind: 'pending' }
   | { kind: 'none' }
   | { kind: 'unavailable' }
+  | { kind: 'preparing' }
   | { kind: 'found'; source: RecordedSource };
 
 /**
@@ -133,6 +148,115 @@ type RecordingLookup =
  */
 function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
   return kind === 'pending' || kind === 'found';
+}
+
+/** 카드 누름의 처음 갈래 — 재생기 층이 알리기 전 · 그 층이 내려간 뒤는 지금 길이다 */
+const NOT_PAST: PastCardMode = { kind: 'notPast' };
+
+/** 같은 갈래인가(kind · 까닭) — 부모는 갈래가 바뀔 때만 다시 그린다 */
+function samePastCardMode(a: PastCardMode, b: PastCardMode): boolean {
+  if (a.kind === 'blocked' && b.kind === 'blocked') {
+    return a.reason === b.reason;
+  }
+  return a.kind === b.kind;
+}
+
+/**
+ * 끝난 뒤 들어온 화면(A)의 다시보기 상태 → 녹화 조회 결과 꼴(설계 3절 대응표). 채팅은 확인 중(pending)만 CHAT_WAIT_MS 까지 기다리고,
+ * 찾음(found)은 화면에 붙은 위치를 한 번 받은 때(showing)다
+ */
+function pastLookupKind(
+  vod: PastVodState,
+  access: PastCardInput['access'],
+  phase: VodPhase | null,
+): RecordingLookup['kind'] {
+  switch (vod.kind) {
+    case 'checking':
+      return 'pending';
+    case 'preparing':
+    case 'none':
+      return vod.kind;
+    case 'ready':
+      break;
+    default:
+      // unconfigured · unavailable — 물을 수 없거나 잠시 불가
+      return 'unavailable';
+  }
+  if (access === 'failed' || phase === 'unsupported' || phase === 'failed') {
+    return 'unavailable';
+  }
+  return phase === 'showing' ? 'found' : 'pending';
+}
+
+/**
+ * 끝난 뒤 들어온 화면(A)의 영상 자리 아랫줄(계획 9절). 제어면 주소가 없으면 플레이어 기본 말이고, 재생기가 설 수 있으면(vod ∧ ready ∧
+ * 출입증 받음) 아랫줄이 없다
+ */
+function pastVodNote(vod: PastVodState, access: PastCardInput['access']): string | undefined {
+  switch (vod.kind) {
+    case 'checking':
+      return '다시보기를 확인하고 있어요';
+    case 'preparing':
+      return '다시보기를 준비하고 있어요. 준비되면 여기서 틀어요';
+    case 'unavailable':
+      return '다시보기를 불러오지 못했어요. 10초 뒤 다시 확인해요';
+    case 'none':
+      return '다시보기가 없어요';
+    case 'ready':
+      if (access === 'failed') {
+        return '영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요';
+      }
+      return access === 'pending' ? '다시보기를 확인하고 있어요' : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** 다시보기가 끝내 서지 않는(또는 멈춘) 까닭마다 카드 알림(설계 3절 카드 표) */
+const BLOCKED_NOTICE: Record<PastBlockReason, string> = {
+  none: '다시보기가 없어요',
+  preparing: '다시보기를 준비하고 있어요',
+  unavailable: '다시보기를 불러오지 못했어요',
+  unconfigured: '영상은 아직 없어요',
+  'access-failed': '영상 출입증을 받지 못했어요',
+  expired: '보관 기간이 지나 볼 수 없어요',
+  unsupported: '그 시점으로 옮기지 못했어요',
+  failed: '그 시점으로 옮기지 못했어요',
+};
+
+/** 카드를 옮긴 결과 — 'queued' 는 끝난 뒤 들어온 화면이 곧 설 다시보기에 받아 두었다(POK-546) */
+type CardSeekResult = 'moved' | 'outside' | 'none' | 'queued';
+
+/**
+ * 끝난 뒤 들어온 화면(A)에서 사람이 누른 카드의 알림(계획 9절 · 설계 3절 카드 표). 받아 두었거나(waiting) 서지 않거나(blocked) 선
+ * 재생기가 옮기지 못하면(playable 의 none) 채팅이 카드 시각으로 갔다고 덧붙인다(채팅이 그 시점을 따를 때만). 목록 밖(outside)은
+ * 채팅도 옮기지 않아 덧붙이지 않고, 옮겼으면 알리지 않는다
+ * @returns 알림 제목. 알릴 것이 없으면 null
+ */
+function pastCardNotice(
+  mode: Exclude<PastCardMode, { kind: 'notPast' }>,
+  result: CardSeekResult,
+  followsPlayhead: boolean,
+): string | null {
+  const chatMoved = followsPlayhead ? ' · 채팅을 그 시점으로 옮겼어요' : '';
+  switch (mode.kind) {
+    case 'waiting':
+      return `다시보기를 확인하고 있어요 · 준비되면 그 시점부터 틀어요${chatMoved}`;
+    case 'blocked':
+      return `${BLOCKED_NOTICE[mode.reason]}${chatMoved}`;
+    default:
+      if (result === 'outside') {
+        return '이 시점은 다시보기에 없어요';
+      }
+      return result === 'none' ? `그 시점으로 옮기지 못했어요${chatMoved}` : null;
+  }
+}
+
+/** 지난 방송 정보 바의 방송한 날짜 — 「2026.10.20」(이 기기 시간대) */
+export function broadcastDateLabel(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
 }
 
 /**
@@ -157,7 +281,8 @@ const LivePlayer = memo(function LivePlayer({
   onToggleChatPanel,
   mark,
   startAtSeconds,
-  onRecordedReady,
+  onStartApplied,
+  onPastCardMode,
   onRecordingLookup,
   onRecordingLookupStart,
   onPlaybackPosition,
@@ -188,18 +313,27 @@ const LivePlayer = memo(function LivePlayer({
   onToggleChatPanel: () => void;
   /** 전체 화면의 수동 마킹. 영상 아래 줄이 안 보이는 자리라 재생 막대가 받는다 */
   mark: PlayerMark;
-  /** 녹화가 서면 이 자리(방송 기준 초)부터 튼다. 녹화가 서기 전에 고른 시점이다 */
+  /** 다시보기(녹화 · 회차 다시보기)가 서면 이 자리(방송 기준 초)부터 튼다. 다시보기가 서기 전에 고른 시점이다 */
   startAtSeconds: number | null;
-  /** 녹화 플레이어가 섰다. 시작 위치를 받았으니 부른 쪽이 비운다 */
-  onRecordedReady: () => void;
+  /**
+   * 다시보기가 시작 자리를 가져갔다 — 녹화는 플레이어가 서며 읽었고, 회차 다시보기는 첫 목록 뒤 그 자리로 옮겼다(POK-546). 부른 쪽이
+   * 비운다
+   */
+  onStartApplied: () => void;
+  /**
+   * 카드 누름을 보낼 갈래(POK-546 — 설계 3절 카드 표). 끝난 뒤 들어온 화면인지 · 다시보기 상태 · 출입증 · 재생기 국면은 모두 이
+   * 층에 있어 하나로 합쳐 올린다. 이 층이 내려가면 지금 길(notPast)을 올린다
+   */
+  onPastCardMode: (mode: PastCardMode) => void;
   /**
    * 녹화 조회 결과가 바뀌었다. 카드를 누를 때의 알림이 플레이어와 같은 말을 하고(없음), 지난 방송 채팅이 녹화가 자리를 알려 올
    * 때까지 기다리게(확인 중·찾음) 부른 쪽에 알린다
    */
   onRecordingLookup: (kind: RecordingLookup['kind']) => void;
   /**
-   * 녹화 조회를 새로 시작했다(끝난 방송으로 밝혀졌거나 끝 시각·기준점·영상 키가 바뀜). 조회 결과는 확인 중 그대로라 onRecordingLookup이
-   * 다시 불리지 않는다: 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 이 조회부터 다시 센다
+   * 녹화 조회를 새로 시작했다(끝난 방송으로 밝혀졌거나 끝 시각·기준점·영상 키가 바뀜). 끝난 뒤 들어온 화면(A)은 회차 경로를 묻기
+   * 시작할 때와 회차 다시보기 소스가 설 때 부른다(POK-546). 조회 결과는 확인 중 그대로라 onRecordingLookup이 다시 불리지 않는다:
+   * 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 이 조회부터 다시 센다
    */
   onRecordingLookupStart: () => void;
   /** 녹화의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
@@ -212,8 +346,9 @@ const LivePlayer = memo(function LivePlayer({
    */
   onSeek: () => void;
   /**
-   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 녹화가 서 있고 그 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는
-   * 녹화 소스 하나에서 읽는다(계획 검증 m11): 녹화 조회 결과와 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
+   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 녹화(끝난 뒤 들어온 화면은 회차 다시보기 — POK-546)가 서 있고 그
+   * 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는 소스(녹화 · 회차 다시보기)에서 읽는다(계획 검증 m11): 녹화 조회 결과와
+   * 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
    */
   onMarkableChange: (markable: boolean) => void;
   /** 재생 보유 중의 다시 고르기(useLiveStreamSelection — POK-200 M5). 보던 방송과 다른 답이면 「새 방송」 띠다 */
@@ -250,6 +385,7 @@ const LivePlayer = memo(function LivePlayer({
     reselect,
   });
   const request = live.recordedRequest;
+  const enteredAfterEnd = live.enteredAfterEnd;
   const playerStatus: BroadcastStatus = live.closedRecorded ? 'ended' : displayStatus;
   // 재생기 훅이 이 값의 정체성을 의존성으로 본다: 매 그리기 새 객체면 그때마다 다른 값으로 읽는다
   const simulationOptions = useMemo(
@@ -258,7 +394,9 @@ const LivePlayer = memo(function LivePlayer({
   );
   useEffect(() => {
     setLookup({ kind: 'pending' });
-    publishLiveData({ timeBaseMs: null });
+    // 기준점 칸은 녹화를 다시 찾는 화면(B)과 그 밖(라이브 · 명부 답 전)만 비운다. 끝난 뒤 들어온 화면(A)은 아래 다시보기 효과가
+    // 낸다: 서버 기준점이 바뀌어 이 효과가 다시 돌 때 여기서 비우면 다시보기 축 사이에 null 이 끼어들었다(POK-546 K3 · K11)
+    if (request !== null || !enteredAfterEnd) publishLiveData({ timeBaseMs: null });
     // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다: 출입증 답 뒤에 묻는다(POK-317)
     if (request === null || !mediaKey || !accessReady) return undefined;
     let alive = true;
@@ -298,29 +436,34 @@ const LivePlayer = memo(function LivePlayer({
       alive = false;
       window.clearTimeout(retry);
     };
-  }, [request, mediaKey, accessReady, originMs, onRecordingLookupStart]);
+  }, [request, enteredAfterEnd, mediaKey, accessReady, originMs, onRecordingLookupStart]);
   const recorded = lookup.kind === 'found' ? lookup.source : null;
-  const markable = recorded?.originAxis === true;
-  useEffect(() => {
-    onMarkableChange(markable);
-  }, [markable, onMarkableChange]);
-  useEffect(() => {
-    if (recorded !== null) onRecordedReady();
-  }, [recorded, onRecordedReady]);
-  useEffect(() => {
-    onRecordingLookup(lookup.kind);
-  }, [lookup.kind, onRecordingLookup]);
   // 출입증을 아직 한 번도 못 받아 라이브를 열지 못한 출입증 키(방송|영상 키, 아래 출입증 효과). 키로 두어 방송이나 영상 키가
   // 바뀌면 앞 방송의 실패를 말하지 않는다(로컬 리뷰 1라운드)
   const [accessFailedFor, setAccessFailedFor] = useState<string | null>(null);
   // 출입증을 실제로 받은(쿠키를 실은) 출입증 키. 이 키의 라이브만 403을 쿠키 탓으로 보고 출입증을 버린다: 「필요 없음」을 받은
   // 곳(로컬·dev)은 다시 받을 길이 없어 「다시 받고 있어요」가 거짓말이 된다(로컬 리뷰 1라운드)
   const [cookieFor, setCookieFor] = useState<string | null>(null);
+  // 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부 ended)의 회차 다시보기(POK-546). 녹화를 묻지 않고, 회차 경로 답이 vod ∧ ready 이고
+  // 출입증을 받은 뒤에만 그 목록을 튼다. 보관 기간이 지났으면(410) 묻지 않는다
+  const expired = accessKey !== null && accessExpiredFor === accessKey;
+  const pastVod = usePastVod({
+    enabled: enteredAfterEnd && !expired,
+    controlBase: mediaControlBaseUrl(),
+    controlKey: mediaKey || null,
+    roundId: liveStreamId || null,
+    endedAtMs: endedAt,
+  });
+  const access: PastCardInput['access'] = accessReady
+    ? 'ready'
+    : accessKey !== null && accessFailedFor === accessKey
+      ? 'failed'
+      : 'pending';
   // 끝난 방송의 영상 자리 아랫줄. 확인하는 동안 「확인하고 있어요」, 없으면 「찾지 못했어요」다(「아직 연결되지 않았어요」는
   // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없으면 플레이어의 기본 말 「영상 서버에 아직 연결되지
   // 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다, 리뷰
   // 6라운드). 서버는 있는데 묻지 못했으면(오류·시한·출입증 쿠키 없음 403) 그렇다고 알린다: 1분 뒤 다시 묻는다(POK-337)
-  const noSignalNote =
+  const recordedOrLiveNote =
     playerStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
       ? '보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요'
       : playerStatus === 'live'
@@ -334,6 +477,9 @@ const LivePlayer = memo(function LivePlayer({
             : lookup.kind === 'none'
               ? '녹화 영상을 찾지 못했어요'
               : '녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요';
+  // 끝난 뒤 들어온 화면(A)은 다시보기 상태로 말한다(POK-546 계획 9절). 보관 기간이 지났으면 위의 만료 문구 그대로다
+  const noSignalNote =
+    enteredAfterEnd && !expired ? pastVodNote(pastVod, access) : recordedOrLiveNote;
   // 영상 출입증(POK-122). 방송을 열 때 받고, 1분마다 다시 본다(playbackAccess 한 곳에서 받는다: 만료 5분 전이면 새로 받고,
   // 실패했거나 다른 화면이 403으로 버렸으면 다시 받는다, POK-317). 쿠키 수명(운영 60분)이 지나면 새 조각이 403이 되어 재생이
   // 멈춘다(PR #200 codex P1). 서명 재료가 없는 서버(503)는 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다.
@@ -391,13 +537,74 @@ const LivePlayer = memo(function LivePlayer({
       window.clearTimeout(timer);
     };
   }, [liveStreamId, mediaKey]);
+  // 재생기를 새로 세우는 열쇠. 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다.
+  // 출입증 갱신이 실패하다가 다시 받아져도 다시 세운다(accessRecoveries)
+  const playerKey = `${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`;
+  // A 의 다시보기 소스 — 카드 · 채팅 축의 0초는 서버 기준점, 모르면 목록 첫 조각이다(카드 추가는 서버 기준점 축일 때만 보낸다)
+  const vodSource = useMemo<VodSource | null>(() => {
+    if (!enteredAfterEnd || pastVod.kind !== 'ready' || !accessReady || expired) return null;
+    const { url, firstPdtMs, headPdtMs } = pastVod.vod;
+    return {
+      url,
+      firstPdtMs,
+      headPdtMs,
+      axisZeroMs: originMs ?? firstPdtMs,
+      originAxis: originMs !== null,
+    };
+  }, [enteredAfterEnd, pastVod, accessReady, expired, originMs]);
+  // 다시보기 재생기가 알린 국면. 그 재생기(소스 주소 · 재생기 열쇠)가 알린 것만 쓰고 소스가 내려가면 버린다: 다시 선 재생기의 첫
+  // 그리기에 옛 국면(showing)을 쓰면 목록 없는 재생기로 카드를 옮기려 들었다(POK-546 K2 (i)). 새 재생기는 곧 loading 을 알린다
+  const phaseKey = `${vodSource?.url ?? ''}|${playerKey}`;
+  const [heldPhase, setHeldPhase] = useState<{ key: string; phase: VodPhase } | null>(null);
+  if (vodSource === null && heldPhase !== null) setHeldPhase(null);
+  const vodPhase = vodSource !== null && heldPhase?.key === phaseKey ? heldPhase.phase : null;
+  const handleVodPhase = useCallback(
+    (phase: VodPhase) => setHeldPhase({ key: phaseKey, phase }),
+    [phaseKey],
+  );
+  const pastCard = useMemo(
+    () => pastCardMode({ enteredAfterEnd, expired, vod: pastVod, access, phase: vodPhase }),
+    [enteredAfterEnd, expired, pastVod, access, vodPhase],
+  );
+  // 칠하기 전에 올린다: 레이아웃 효과에서 바꾼 부모 상태는 칠하기 전에 다시 그려져, 사람이 누를 수 있는 그림에는 늘 이 갈래가
+  // 서 있다(계획 4절 E). 이 층이 내려가면(Suspense 로 가려짐 포함) 지금 길로 돌린다(K2 (ii))
+  useLayoutEffect(() => {
+    onPastCardMode(pastCard);
+  }, [pastCard, onPastCardMode]);
+  useLayoutEffect(() => () => onPastCardMode(NOT_PAST), [onPastCardMode]);
+  const lookupKind =
+    enteredAfterEnd && !expired ? pastLookupKind(pastVod, access, vodPhase) : lookup.kind;
+  // 카드 추가는 재생기가 위치를 세는 소스(녹화 · 회차 다시보기)의 0초가 서버 기준점일 때만이다
+  const markable = recorded?.originAxis === true || vodSource?.originAxis === true;
+  useEffect(() => {
+    onMarkableChange(markable);
+  }, [markable, onMarkableChange]);
+  useEffect(() => {
+    if (recorded !== null) onStartApplied();
+  }, [recorded, onStartApplied]);
+  useEffect(() => {
+    onRecordingLookup(lookupKind);
+  }, [lookupKind, onRecordingLookup]);
+  // A 의 기준점 칸 = 다시보기 축의 0초. 다시보기가 내려가면(410 · 영상 키 바뀜) 비운다
+  const axisZeroMs = vodSource?.axisZeroMs ?? null;
+  useEffect(() => {
+    if (enteredAfterEnd) publishLiveData({ timeBaseMs: axisZeroMs });
+  }, [enteredAfterEnd, axisZeroMs]);
+  // 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 A 가 회차 경로를 묻기 시작할 때와 다시보기 소스가 설 때 다시 센다(설계 3절)
+  const pastAskKey =
+    enteredAfterEnd && !expired && pastVod.kind !== 'unconfigured' ? (accessKey ?? '') : null;
+  useEffect(() => {
+    if (pastAskKey !== null) onRecordingLookupStart();
+  }, [pastAskKey, onRecordingLookupStart]);
+  const vodUrl = vodSource?.url ?? null;
+  useEffect(() => {
+    if (vodUrl !== null) onRecordingLookupStart();
+  }, [vodUrl, onRecordingLookupStart]);
   return (
     <>
       {live.band !== null ? <NewBroadcastBand onGo={live.onBand} /> : null}
       <GlassPlayer
-        // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다
-        // 출입증 갱신이 실패하다가 다시 받아져도 다시 세운다(accessRecoveries)
-        key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
+        key={playerKey}
         channelName={stream.channelName}
         viewersNote={viewersNote}
         infoPending={infoPending}
@@ -409,9 +616,13 @@ const LivePlayer = memo(function LivePlayer({
         broadcastId={liveStreamId || undefined}
         // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다
         // (3K-PokeClip/pokeclip-mono#200 codex). 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를
-        // 그린다. 세션이 있으면 세션이 소스를 정하고, 녹화로 닫힌 세션은 닫힌 라이브 주소로 다시 붙지 않는다(설계 5.5절)
+        // 그린다. 세션이 있으면 세션이 소스를 정하고, 녹화로 닫힌 세션은 닫힌 라이브 주소로 다시 붙지 않는다(설계 5.5절).
+        // 끝난 뒤 들어온 화면은 녹화 대신 회차 다시보기(vod)로 튼다(POK-546) — 녹화를 묻지 않아 recorded 는 늘 null 이다
         session={live.session}
         src={broadcastStatus === 'live' && accessReady && !live.closedRecorded ? src : null}
+        vod={vodSource}
+        onVodPhase={handleVodPhase}
+        onStartApplied={onStartApplied}
         recorded={recorded}
         startAtSeconds={startAtSeconds}
         onPlaybackPosition={onPlaybackPosition}
@@ -580,6 +791,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   /** 녹화 조회 결과(플레이어가 알린다). 없다고 확인되면 카드를 누를 때 「아직」이라 하지 않는다 */
   const [recordingLookup, setRecordingLookup] = useState<RecordingLookup['kind']>('pending');
   const recordingMissing = recordingLookup === 'none';
+  /** 카드 누름의 갈래(POK-546) — 재생기 층(LivePlayer)이 정해 올린다. 같은 갈래면 다시 그리지 않는다 */
+  const [pastCard, setPastCard] = useState<PastCardMode>(NOT_PAST);
+  const handlePastCardMode = useCallback(
+    (next: PastCardMode) => setPastCard((prev) => (samePastCardMode(prev, next) ? prev : next)),
+    [],
+  );
   // 재생 서버가 있고 녹화를 찾는 중이면 곧 재생기가 자리를 알려 온다(찾으면 재생기가 서는 그리기에서 알린다). 그때까지 지난 방송
   // 채팅은 기다린다: 방송 끝을 먼저 읽어 끝 채팅이 잠깐 보였다가 0초 빈 창으로 바뀌었다(POK-324 리뷰 1라운드). 찾는 중이 CHAT_WAIT_MS를
   // 넘으면 기다리지 않고 방송 끝을 보인다(재생 서버가 답하지 않거나 느려도 채팅을 비워 두지 않는다, 리뷰 2라운드·PR #230)
@@ -594,8 +811,15 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     const timer = window.setTimeout(() => setChatWaitOver(true), CHAT_WAIT_MS);
     return () => window.clearTimeout(timer);
   }, [recordingLookup, lookupStarts]);
+  // 끝난 뒤 들어온 화면(A — 갈래가 notPast 아님)은 재생 서버 주소와 무관하게 다시보기가 곧 설 수 있는 동안 기다린다: 다시보기는
+  // 녹화 재생 서버를 쓰지 않는다(계획 4절 D). 이 갈래가 결과를 바꾸는 것은 재생 서버 주소가 없는 구성(로컬 등)뿐이다. 주소가 있는
+  // 구성(prod)은 갈래 없이도 지금처럼 녹화 확인 한도까지 기다린다. 제어면 주소가 없으면 그 상태가 「물을 수 없음」으로 와 기다리지
+  // 않는다. 보관 기간이 지난 방송(410)은 다시보기를 묻지 않아 지금 그대로 재생 서버 주소로 가른다(설계 3절 표): 갈래만 보면 재생
+  // 서버 주소가 없는 구성에서 채팅이 10초 「확인 중」이었다(c4 리뷰 F1)
+  const pastAwaits =
+    pastCard.kind !== 'notPast' && !(pastCard.kind === 'blocked' && pastCard.reason === 'expired');
   const awaitPlayhead =
-    playbackConfigured() &&
+    (pastAwaits || playbackConfigured()) &&
     recordingMayPlay(recordingLookup) &&
     !(recordingLookup === 'pending' && chatWaitOver);
   // 채팅 창이 그 시점(맨 아래)을 따라가는 횟수. 사람이 옮긴 것(영상 없이 누른 카드, 녹화의 시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤
@@ -621,12 +845,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 카드 · 통계까지 통째로 다시 그려졌다
   const stats = useLiveStatsMockState(viewStatus);
 
-  // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
-  // 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다: 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 끝난 방송은
-  // 지금 보는 사람이 아니라 끝날 때 값이고(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다), 방송 정보를
-  // 받기 전이면 「기록 없음」이라 단정하지 않는다. 어떤 기록을 믿고(끝난 방송은 방송 창으로 읽은 것만, 리뷰 4라운드) 값이 없을 때
-  // 무엇이라 쓰는지는 통계와 같은 함수 하나가 정한다(리뷰 5라운드). 값과 말은 통계 훅이 센 것을 그대로 쓴다: 두 곳에서 따로
-  // 세면 한쪽 인자만 바뀌어도 다시 갈린다(리뷰 6라운드)
+  // 정보 바의 시청자 수(라이브만 — 끝난 방송은 아래에서 방송한 날짜를 쓴다)는 broadcast-info의 series에서 마지막으로 잰 값이다
+  // (수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다:
+  // 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 어떤 기록을 믿고 값이 없을 때 무엇이라 쓰는지는 통계와 같은 함수 하나가
+  // 정한다(리뷰 5라운드). 값과 말은 통계 훅이 센 것을 그대로 쓴다: 두 곳에서 따로 세면 한쪽 인자만 바뀌어도 다시 갈린다(리뷰
+  // 6라운드). 끝난 방송의 시청자 수는 통계 칸(평균 · 최고)만 말한다: 「끝날 때 N명 시청」은 며칠 전 방송의 끝 무렵 숫자라
+  // 방송한 날짜로 바꿨다(PR #482)
   const v = stats.lastViewers;
   // 방송 정보를 받아 오는 중(POK-449): 방송 중이거나 아직 상태를 모르고, 방송 시작에서 2분이 안 지났다. 이때 빈 칸(채널 이름 · 시청자
   // 수 · 제목 · 카테고리)은 회색 막대다. 그 뒤로는 지금처럼 까닭(확인 중 · 수집 전)을 글자로 적는다
@@ -639,14 +863,18 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     lockWord === null &&
     (viewStatus === 'live' || viewStatus === 'unknown') &&
     !infoWaitOver(clock.startedAt ?? firstSeen.at, Date.now());
-  const viewersLabel =
-    v === null
+  // 끝난 방송은 시청자 수 대신 방송한 날짜다(2026-11-04 사용자 결정: 「끝날 때 N명 시청」 → 「2026.10.20」). 시청자 수는 통계의 평균 ·
+  // 최고가 말한다. 시작 시각을 모르면 끝난 날, 둘 다 모르면(명부 답 전) 확인 중이다
+  const broadcastDay = clock.startedAt ?? clock.endedAt;
+  const viewersLabel = ended
+    ? broadcastDay === null
+      ? '날짜 확인 중'
+      : broadcastDateLabel(broadcastDay)
+    : v === null
       ? infoPending
         ? ''
         : `시청자 수 ${lockWord ?? stats.noViewers}`
-      : ended
-        ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
-        : `${v.toLocaleString('ko-KR')}명 시청 중`;
+      : `${v.toLocaleString('ko-KR')}명 시청 중`;
 
   // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다. 라이브는 경과의 1% 단위로 묶는다
   // (cardPositionUptime): 그대로 넘기면 카드 전부가 매초 다시 그려진다
@@ -709,10 +937,54 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 채팅이 고른 시점을 따라가나: 채팅 훅(useChatPanelMockState)과 같은 함수로 센다
   const followsPlayhead = chatFollowsPlayhead(storeStatus, storeEndedAt, cardBase);
   /**
-   * @returns 'moved' 플레이어가 그 자리로 옮겼다 · 'outside' 라이브에서 되감을 수 있는 범위 밖이라 안 옮겼다 · 'none' 영상이 없다
+   * 영상 없이 채팅만 카드 시각으로 옮긴다(지난 방송 — POK-324). 채팅이 영상 시각을 따르지 않는 방송이면 위로 올려 읽던 자리를
+   * 그대로 둔다
+   */
+  const holdChatAt = useCallback(
+    (seconds: number) => {
+      playheadFromRecording.current = false;
+      publishLiveData({ playheadMs: seconds * 1000 });
+      if (followsPlayhead) bumpChatJump();
+    },
+    [followsPlayhead, bumpChatJump],
+  );
+  /**
+   * 끝난 뒤 들어온 화면(A)의 카드 이동(설계 3절 카드 표 — POK-546). 곧 설 다시보기(waiting)는 받아 두고, 서지 않으면(blocked) 받아
+   * 둔 자리를 건드리지 않는다(앞서 받아 둔 자리가 있으면 다시보기가 설 때 그 자리부터다 — 계획 4절 F). 목록을 받은 재생기(playable)는
+   * 카드의 실제 시각으로 옮기고, 받아 두지 않는다(다시 선 재생기가 옛 카드로 가지 않게)
+   */
+  const seekPast = useCallback(
+    (mode: Exclude<PastCardMode, { kind: 'notPast' }>, seconds: number): CardSeekResult => {
+      if (mode.kind === 'waiting') {
+        holdChatAt(seconds);
+        setPendingStart(seconds);
+        return 'queued';
+      }
+      if (mode.kind === 'blocked') {
+        holdChatAt(seconds);
+        return 'none';
+      }
+      setPendingStart(null);
+      const player = playerRef.current;
+      const byTime =
+        cardBase === null
+          ? 'unknown'
+          : (player?.seekToTime?.(cardBase + seconds * 1000) ?? 'unknown');
+      if (byTime === 'moved' || byTime === 'outside') return byTime;
+      // 시각 축을 읽지 못했다 — 재생기의 정확한 자리로 해 보고, 그것도 못 하면 옮기지 못했다고 알린다
+      if (player?.seekToUptime(seconds) ?? false) return 'moved';
+      holdChatAt(seconds);
+      return 'none';
+    },
+    [cardBase, holdChatAt],
+  );
+  /**
+   * @returns 'moved' 플레이어가 그 자리로 옮겼다 · 'outside' 라이브에서 되감을 수 있는 범위 밖(또는 다시보기 목록 밖)이라 안 옮겼다 ·
+   *   'none' 영상이 없다 · 'queued' 곧 설 다시보기에 받아 두었다(끝난 뒤 들어온 화면)
    */
   const seekTo = useCallback(
-    (seconds: number): 'moved' | 'outside' | 'none' => {
+    (seconds: number): CardSeekResult => {
+      if (pastCard.kind !== 'notPast') return seekPast(pastCard, seconds);
       // 라이브는 카드의 실제 시각(기준점 + 카드 초)으로 옮긴다: 재생기가 조각의 시각 표시로 영상 시각을 센다(POK-326). 방송 경과
       // 시계로 옮기면 숨은 탭에서 그 시계의 타이머가 늦춰져 카드보다 몇 분 늦은 자리(심하면 실시간 끝)로 갔고, 채팅도 그 자리를
       // 따랐다(리뷰 1라운드). 시각 표시가 없으면 경과 시계로 옮긴다. 범위 밖이면 경과 시계로도 옮기지 않는다: 그 길은 창 맨 앞으로
@@ -737,7 +1009,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       setPendingStart(moved ? null : seconds);
       return moved ? 'moved' : 'none';
     },
-    [live, cardBase, followsPlayhead, bumpChatJump],
+    [pastCard, seekPast, live, cardBase, followsPlayhead, bumpChatJump],
   );
   // 녹화가 흐르는 대로 채팅에 알린다: 지난 방송 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다(POK-324).
   // 녹화는 끝난 방송에만 서므로 라이브 채팅은 영향이 없다
@@ -751,7 +1023,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     setPendingStart(null);
     publishLiveData({ playheadMs: null });
   }, [live]);
-  const handleRecordedReady = useCallback(() => setPendingStart(null), []);
+  // 다시보기가 시작 자리를 가져갔다(녹화가 섬 · 회차 다시보기가 그 자리로 옮김) — 받아 둔 자리를 비운다
+  const clearPendingStart = useCallback(() => setPendingStart(null), []);
   // 라이브 되감기(POK-326): 재생기가 실시간에서 10초 이상 뒤면 채팅이 그 자리(영상 시각)까지의 줄만 보이고, 재생기의 「실시간」으로
   // 돌아오면 최신 채팅이다. 그 사이는 앞 상태 그대로다(nextLiveFollow). 따르기 시작하거나 멈추면 채팅 창이 맨 아래를 따라간다:
   // 채팅이 통째로 바뀌어(최신 ↔ 되감은 자리) 위로 올려 읽던 자리가 남으면 엉뚱한 줄이 보인다
@@ -794,6 +1067,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     const seconds = card ? parseClockLabel(card.timestamp) : null;
     if (seconds === null) return;
     linkedDoneRef.current = linkedCardId;
+    // 재생기 층이 갈래를 올리기 전 첫 커밋의 seekTo(notPast)로 돌 수 있다. 그 길도 받아 둔 자리를 남기고 알리지 않아 waiting 과
+    // 결과가 같다(POK-546 계획 4절 E)
     seekTo(seconds);
   }, [highlights, hiddenHighlights, linkedCardId, seekTo]);
 
@@ -808,6 +1083,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       // 영상 없이 채팅만 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 옮긴 영상의 시각을 따르므로(POK-326) 영상이 못 옮기면
       // 최신 그대로라 옮겼다고 하면 거짓이다(리뷰 2라운드)
       const result = seekTo(seconds);
+      // 끝난 뒤 들어온 화면은 갈래마다 알린다(POK-546): 받아 두었으면 준비되면 그 시점부터라고, 서지 않으면 그 까닭을
+      if (pastCard.kind !== 'notPast') {
+        const title = pastCardNotice(pastCard, result, followsPlayhead);
+        if (title !== null) toast({ tone: 'info', title });
+        return;
+      }
       // 라이브 영상은 있지만 그 시점까지 되감을 수 없다(라이브 창 28초 · 되감기 목록 준비 전이거나 그보다 오래된 카드). 되감기가
       // 준비되면(10초 폴링) 1시간 안 카드는 갈 수 있고, 끝나면 녹화로 간다(POK-498)
       if (result === 'outside')
@@ -826,7 +1107,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
           }`,
         });
     },
-    [linkedCardId, seekTo, toast, followsPlayhead, recordingMissing, live],
+    [linkedCardId, seekTo, toast, followsPlayhead, recordingMissing, live, pastCard],
   );
   /** 하이라이트 카드 목록에서 누른 이동 */
   const handleCardSeek = useCallback(
@@ -866,7 +1147,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
                 onToggleChatPanel={toggleChatPanel}
                 mark={playerMark}
                 startAtSeconds={pendingStart}
-                onRecordedReady={handleRecordedReady}
+                onStartApplied={clearPendingStart}
+                onPastCardMode={handlePastCardMode}
                 onRecordingLookup={setRecordingLookup}
                 onRecordingLookupStart={handleRecordingLookupStart}
                 onPlaybackPosition={handlePlaybackPosition}

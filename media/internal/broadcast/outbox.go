@@ -14,8 +14,10 @@ import (
 )
 
 // Gate 는 발행 켜기 게이트다(15.5 · 7절 활성화 선행 조건) — 어느 stream_id 의 회차를 outbox 에 넣는지와, 넣은 행을
-// 알리는 로거를 든다. 영값은 꺼짐이다. 주제 ARN 이 없거나 outbox 권한이 없으면 부르는 쪽(기동 조립)이 영값을 그대로
-// 쓴다 — 그래서 꺼진 판의 개시 · phase 4 는 outbox 문장을 하나도 보내지 않는다(권한이 없어도 42501 로 막히지 않는다).
+// 알리는 로거를 든다. 영값은 꺼짐이다. 기동 조립은 발행 설정 의도(주제 ARN ∧ 허용 목록 ∧ resolver)가 켜지면 발행기 준비
+// 결과와 무관하게 NewGate 로 만들고, 설정으로 꺼지면 영값을 쓴다 — 꺼진 판의 개시 · phase 4 는 outbox 문장을 하나도
+// 보내지 않는다. 켜진 게이트는 적재마다 outbox 권한을 판정해(writable) 권한이 없어도 42501 로 막히지 않고, 놓친 완결
+// 평가는 발행기 보정이 거둔다(repair.go).
 type Gate struct {
 	all     bool
 	streams map[string]struct{}
@@ -59,6 +61,40 @@ func (g Gate) logger() *slog.Logger {
 	return g.log
 }
 
+// outboxWritableSQL 은 이 역할이 outbox 에 적재할 수 있는지다 — insertStartedSQL · insertEndedSQL 이 쓰는 권한
+// (SELECT · INSERT 와, started 행 FOR SHARE 가 요구하는 UPDATE)을 묻는다. SELECT 는 insertStartedSQL 의
+// ON CONFLICT (event_id) 도 요구한다. FOR SHARE 는 어느 한 열의 UPDATE 로도 통과하므로 UPDATE 는
+// has_any_column_privilege 로 묻고, SELECT · INSERT 는 표 단위로 묻는다 — 운영 권한(30_grants.sql)이 표 단위로 준다는
+// 전제다. 열 단위로만 받은 역할은 문장이 성공할 수 있어도 판정이 거짓이라 건너뛴다. 권한 판정 함수는 권한이 없으면
+// 오류 대신 거짓을 내지만, 표 이름을 풀지 못하면(표 없음 · 스키마 USAGE 없음) 42P01 오류다.
+const outboxWritableSQL = `
+SELECT pg_catalog.has_table_privilege('broadcast_lifecycle_outbox', 'SELECT')
+   AND pg_catalog.has_table_privilege('broadcast_lifecycle_outbox', 'INSERT')
+   AND pg_catalog.has_any_column_privilege('broadcast_lifecycle_outbox', 'UPDATE')`
+
+// outboxWritable 은 켜진 게이트의 적재가 문장을 보내기 전에 같은 트랜잭션에서 묻는 판정이다. 거짓인데 INSERT 를
+// 보내면 42501 이 부르는 쪽 트랜잭션(개시 · 닫힘 · phase 4)을 통째로 롤백한다.
+func outboxWritable(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var ok bool
+	if err := tx.QueryRow(ctx, outboxWritableSQL).Scan(&ok); err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+// writable 은 켜진 게이트의 적재 직전 판정이다. 거짓이면 ERROR lifecycle_enqueue_skipped 를 남긴다 — 커밋 전
+// 「적재 시도」 신호와 같은 자리라 부르는 쪽이 롤백하면 줄만 남을 수 있다.
+func (g Gate) writable(ctx context.Context, tx pgx.Tx, eventType, round string) (bool, error) {
+	ok, err := outboxWritable(ctx, tx)
+	if err != nil {
+		return false, fmt.Errorf("broadcast: %s outbox 권한 판정(회차 %s): %w", eventType, round, err)
+	}
+	if !ok {
+		g.logger().Error("lifecycle_enqueue_skipped", "reason", "privilege", "event_type", eventType, "round", round)
+	}
+	return ok, nil
+}
+
 // insertStartedSQL 은 started 행이다. 겹쳐 불려도 행은 하나다(결정적 eventId · 15.5 cc L④).
 const insertStartedSQL = `
 INSERT INTO broadcast_lifecycle_outbox
@@ -66,10 +102,12 @@ INSERT INTO broadcast_lifecycle_outbox
 VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
 ON CONFLICT (event_id) DO NOTHING`
 
-// EnqueueStarted 는 새 회차를 여는 트랜잭션 안에서 started 행을 넣는다(15.4 — registry 개시 · 4D round_split).
+// EnqueueStarted 는 새 회차를 여는 트랜잭션 안에서 started 행을 넣는다(15.4 — registry 개시).
 // startedAt 은 머리 세션 started_at 이다. 게이트가 그 stream_id 를 내지 않거나 round 가 비면(M6 전 세션) 아무 문장도
 // 보내지 않는다(D45). 회차 열쇠가 식별자 규칙(CheckRound)을 어기면 행을 abandoned 로 넣고 ERROR 를 남긴다(D48) —
-// pending 으로 두면 영영 못 나가고, 행이 없으면 ended 를 막을 근거가 없다. 오류는 INSERT 실패뿐이다.
+// pending 으로 두면 영영 못 나가고, 행이 없으면 ended 를 막을 근거가 없다. 게이트가 내는 회차라도 부르는 역할에
+// outbox 권한이 없으면(outboxWritable 거짓) 문장 없이 nil 이고 ERROR lifecycle_enqueue_skipped 를 남긴다 — 개시
+// 트랜잭션을 42501 로 롤백하지 않는다. 오류는 판정 · INSERT 실패뿐이다.
 //
 // 여기서 찍는 lifecycle_enqueued · lifecycle_abandoned 는 부르는 쪽 트랜잭션 안의 「적재 시도」 신호다 — 커밋 전에
 // 찍으므로 부르는 쪽이 롤백하면 행 없이 줄만 남는다. 커밋된 사실은 outbox 행과 발행기의 줄이 정본이다 — 발행기는
@@ -77,6 +115,9 @@ ON CONFLICT (event_id) DO NOTHING`
 func EnqueueStarted(ctx context.Context, tx pgx.Tx, g Gate, round, ingestStreamID string, startedAt time.Time) error {
 	if round == "" || !g.allows(ingestStreamID) {
 		return nil
+	}
+	if ok, err := g.writable(ctx, tx, EventStarted, round); err != nil || !ok {
+		return err
 	}
 	state, reason := "pending", ""
 	if err := CheckRound(round); err != nil {
@@ -146,18 +187,27 @@ SELECT $2, st.round_id, $3, 2, COALESCE(sg.last_end, d.last_ended), st.ingest_st
 ON CONFLICT (event_id) DO NOTHING`
 
 // EnqueueEndedIfComplete 는 회차를 닫거나 회차 세션을 ended 로 바꾸는 트랜잭션 끝에서 부른다(15.2 완결 평가 규칙 —
-// CloseRound · tryCloseRound · 4D round_split · MarkChainEnded). 「닫힘 ∧ 전원 ended」 이고 started 행이 살아 있으면
+// CloseRound · tryCloseRound · MarkChainEnded). 「닫힘 ∧ 전원 ended」 이고 started 행이 살아 있으면
 // ended 행을 넣고 참을 돌려준다. 겹쳐 불려도 행은 하나다. 게이트가 꺼져 있으면 문장을 보내지 않는다. started 를 낸
 // 회차만 ended 를 내므로 허용 목록은 started 쪽에서 이미 걸렀다.
 //
 // 선행 조건: 부르는 쪽은 그 ingest stream 의 위상 잠금(pc_topology_<stream> advisory · 설계 3.3)을 쥔 트랜잭션 끝에서
 // 부르고, 회차 세션을 ended 로 바꾸거나 회차를 닫는 모든 트랜잭션이 같은 잠금 아래에서 부른다. 판정은 stream_sessions
 // 를 잠그지 않고 읽으므로, 잠금 없이 같은 회차의 두 사슬이 따로 ended 가 되면 두 트랜잭션 모두 상대를 아직 ended 가
-// 아닌 것으로 보아 ended 행이 영영 생기지 않는다. lifecycle_enqueued 는 EnqueueStarted 와 같이 커밋 전 「적재 시도」
-// 신호다. started 행을 FOR SHARE 로 잠그므로 부르는 쪽 역할에는 outbox UPDATE 권한이 있어야 한다(30_grants.sql).
+// 아닌 것으로 보아 닫는 쪽은 ended 행을 넣지 못한다 — 아래 보정이 거둘 때까지 ended 가 없다. lifecycle_enqueued 는
+// EnqueueStarted 와 같이 커밋 전 「적재 시도」 신호다. started 행을 FOR SHARE 로 잠그므로 문장에는 outbox UPDATE
+// 권한이 요건이다(30_grants.sql). 켜진 게이트는 문장 전에 같은 트랜잭션에서 outboxWritable 을 묻고, 거짓이면 문장
+// 없이 (false, nil) · ERROR lifecycle_enqueue_skipped 다 — 닫힘 · phase 4 트랜잭션을 42501 로 롤백하지 않는다.
+// 이렇게 건너뛴 완결 평가와 꺼진 게이트의 완결 평가는 발행기 보정(repair.go)이 거둔다 — 보정 후보(started 가 살아
+// 있고(abandoned 아님) · 닫힘 ∧ 전원 ended · ended 없음 · 회차 시작이 보정 창(repairHorizon) 안)이고, 같은 DB 에 발행
+// 사이드카(마지막 lifecycle_degraded 가 value=0 인 사이드카 — 그 줄을 내지 않는 옛 판은 보정하지 않는다)가 떠 있을
+// 때다. 꺼진 사이드카가 연 회차는 started 가 없어 ended 도 없다.
 func EnqueueEndedIfComplete(ctx context.Context, tx pgx.Tx, g Gate, round string) (bool, error) {
 	if round == "" || !g.Enabled() {
 		return false, nil
+	}
+	if ok, err := g.writable(ctx, tx, EventEnded, round); err != nil || !ok {
+		return false, err
 	}
 	tag, err := tx.Exec(ctx, insertEndedSQL, StartedEventID(round), EndedEventID(round), EventEnded)
 	if err != nil {

@@ -1,11 +1,14 @@
 package session
 
-// 의도적 종료 적용(4D — POK-196 M6-3a 커밋 ② · 설계 M6 2.3 · 3.3 · 3.4 · 9절 D10 · D12 · D53 · D55 · D64 · D69 · D73)의
-// 실 PG 시험. 함수 칸(CloseRound · EnqueueStarted)은 가짜로 끼워 「같은 트랜잭션에서 불렸는가」만 잰다 — 실제 회차
-// 닫힘 · 완결 평가는 M6-3b, started outbox 는 M6-8 몫이다(계획 4.R 「앞 몫 · 뒤 몫」).
+// 의도적 종료 적용(4D — POK-196 M6-3a 커밋 ② · 설계 M6 2.3 · 3.3 · 3.4 · 9절 D10 · D12 · D53 · D55 · D69 · D73 · POK-525
+// 설계 r9.3 3-2 · E8)의 실 PG 시험. 함수 칸(CloseRound)은 가짜로 끼워 「어느 회차로 불렸는가」만 잰다 — 실제 회차
+// 닫힘 · 완결 평가(index.TryCloseRound)를 끼운 시험은 close_cross_pg_test.go · media_indexer_role_pg_test.go 에 있다.
+// started 칸 가짜(enqueueStarted)는 forwarded 뒤 레지스트리 개시가 새 회차를 열 때 쓴다.
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -16,42 +19,32 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
-// intentSlots 는 함수 칸 가짜다 — 부른 회차와, 부른 순간 그 회차의 남은 행이 모두 닫혔는지(같은 트랜잭션 안에서 읽음)를 적는다.
+// intentSlots 는 함수 칸 가짜다 — 부른 회차를 적는다. started 칸(enqueueStarted)은 레지스트리 Options 에 끼운다.
 type intentSlots struct {
-	mu          sync.Mutex
-	closed      []string
-	closedShut  []bool
-	started     []string
-	startedAt   []time.Time
-	startedFrom []string
+	mu      sync.Mutex
+	closed  []string
+	started []string
 }
 
 func (s *intentSlots) options() IntentOptions {
 	return IntentOptions{
 		ShortConn: 4 * time.Second,
 		Slack:     8 * time.Second,
-		CloseRound: func(ctx context.Context, tx pgx.Tx, round string) error {
-			var shut bool
-			if err := tx.QueryRow(ctx, `
-SELECT COALESCE(pg_catalog.bool_and(round_closed_at IS NOT NULL), false)
-  FROM stream_sessions WHERE round_id = $1`, round).Scan(&shut); err != nil {
-				return err
-			}
+		CloseRound: func(_ context.Context, _ pgx.Tx, round string) error {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			s.closed = append(s.closed, round)
-			s.closedShut = append(s.closedShut, shut)
-			return nil
-		},
-		EnqueueStarted: func(_ context.Context, _ pgx.Tx, round, ingestStreamID string, at time.Time) error {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			s.started = append(s.started, round)
-			s.startedFrom = append(s.startedFrom, ingestStreamID)
-			s.startedAt = append(s.startedAt, at)
 			return nil
 		},
 	}
+}
+
+// enqueueStarted 는 레지스트리 started 칸 가짜다(session.Options.EnqueueStarted 꼴).
+func (s *intentSlots) enqueueStarted(_ context.Context, _ pgx.Tx, round, _ string, _ time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.started = append(s.started, round)
+	return nil
 }
 
 // stopAt 은 시험의 멈춘 시각(StoppedAt)이다 — 연결은 한 시간 전에 시작했다.
@@ -124,8 +117,8 @@ func TestApplyIntentionalEndSkipsWithoutWriting(t *testing.T) {
 					t.Errorf("미적용인데 %s 를 썼다: 표식 %v · 사유 %s", c.wantT, got.stopMarkedAt, strOf(got.endReason))
 				}
 			}
-			if len(slots.closed)+len(slots.started) != 0 {
-				t.Errorf("미적용인데 함수 칸을 불렀다: close %v · started %v", slots.closed, slots.started)
+			if len(slots.closed) != 0 {
+				t.Errorf("미적용인데 함수 칸을 불렀다: close %v", slots.closed)
 			}
 		})
 	}
@@ -202,7 +195,7 @@ func TestApplyIntentionalEndUpgradesLatestEndedSession(t *testing.T) {
 
 			res := apply(t, pool, endAt("demo"), slots.options())
 
-			if res.Effect != effectUpgraded || res.SessionID != "S-T" || res.RoundID != "S-R" || res.RevokeSession != "" {
+			if res.Effect != effectUpgraded || res.SessionID != "S-T" || res.RoundID != "S-R" {
 				t.Fatalf("결과 = %+v, want upgraded · S-T · S-R", res)
 			}
 			got := roundOf(t, pool, "S-T")
@@ -213,177 +206,258 @@ func TestApplyIntentionalEndUpgradesLatestEndedSession(t *testing.T) {
 			if err := pool.QueryRow(context.Background(), `SELECT vod_state FROM stream_sessions WHERE session_id='S-T'`).Scan(&vodState); err != nil || vodState != vod {
 				t.Errorf("vod_state = (%q, %v), want %q 그대로", vodState, err, vod)
 			}
-			if len(slots.closed) != 1 || slots.closed[0] != "S-R" || len(slots.started) != 0 {
-				t.Errorf("함수 칸 close %v · started %v, want close [S-R] · started 없음", slots.closed, slots.started)
+			if len(slots.closed) != 1 || slots.closed[0] != "S-R" {
+				t.Errorf("함수 칸 close %v, want close [S-R]", slots.closed)
 			}
 		})
 	}
 }
 
-// 효과 표 round_split(D55 넷째 갈래 앞 몫) — 4D 가 새 송출 B 의 합류 뒤 닿음. B(started_at ≥ StoppedAt 최소)와 그 뒤 세션이
-// 새 회차 B 로 옮겨 가고 표식이 지워지며, R 의 남는 행이 닫힌다. 같은 트랜잭션에서 B started 칸과 R 의 CloseRound 칸을
-// 부르고, CloseRound 를 부르는 순간 R 은 이미 닫혀 있다(완결 평가만 남는다). 변이 = 분리 tx 의 CloseRound 호출 제거 → FAIL.
-func TestApplyIntentionalEndSplitsRoundAfterLateJoin(t *testing.T) {
-	pool := newTestPool(t)
-	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ended", endReason: "offline", vodState: "frozen", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
-	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
-	seedLedger(t, pool, ledgerRow{id: "S-B", streamID: "demo", state: "ending", endReason: endReasonTDExceeded, roundID: "S-R", startedAt: stopAt.Add(20 * time.Second), stopMarkedAt: stopAt.Add(-time.Minute)})
-	seedLedger(t, pool, ledgerRow{id: "S-C", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(40 * time.Second)})
-	slots := &intentSlots{}
+// dbNow 는 PG 시계다 — forwarded 표식(도착 순간 DB 시각)의 앞뒤 경계를 잰다.
+func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := pool.QueryRow(context.Background(), `SELECT pg_catalog.now()`).Scan(&now); err != nil {
+		t.Fatalf("PG 시계 조회 실패: %v", err)
+	}
+	return now
+}
 
-	res := apply(t, pool, endAt("demo"), slots.options())
+// applyTimed 는 4D 를 적용하고 그 앞뒤 PG 시계를 함께 돌려준다 — forwarded 표식은 [before, after] 안에 있어야 한다.
+func applyTimed(t *testing.T, pool *pgxpool.Pool, e IntentionalEnd, o IntentOptions) (res IntentionalResult, before, after time.Time) {
+	t.Helper()
+	before = dbNow(t, pool)
+	res = apply(t, pool, e, o)
+	return res, before, dbNow(t, pool)
+}
 
-	if res.Effect != effectRoundSplit || res.SessionID != "S-T" || res.RoundID != "S-R" || res.RevokeSession != "" {
-		t.Fatalf("결과 = %+v, want round_split · S-T · S-R · 해제 없음", res)
+// checkArrivalMark 는 표식 m 이 도착 순간 DB 시각([before, after])인가다 — 4D 의 StoppedAt 이 아니다(E8). 실패 판정은
+// 부른 Test 가 한다.
+func checkArrivalMark(m *time.Time, before, after time.Time) error {
+	if m == nil || m.Before(before) || m.After(after) {
+		return fmt.Errorf("표식 = %v, want 도착 순간 DB 시각 [%v, %v] — StoppedAt(%v) 이 아니다", m, before, after, stopAt)
 	}
-	for _, id := range []string{"S-B", "S-C"} {
-		if got := roundOf(t, pool, id); strOf(got.roundID) != "S-B" || got.stopMarkedAt != nil {
-			t.Errorf("%s (round_id, 표식) = (%s, %v), want (S-B, NULL)", id, strOf(got.roundID), got.stopMarkedAt)
-		}
+	return nil
+}
+
+// checkTUntouched 는 끝난 T 의 행 got 이 그대로인가다 — forwarded 는 T 가 아니라 회차 최신 L 에 표식을 건다. 실패
+// 판정은 부른 Test 가 한다.
+func checkTUntouched(got roundCols, wantReason string) error {
+	if got.stopMarkedAt != nil || strOf(got.endReason) != wantReason || strOf(got.roundID) != "S-R" {
+		return fmt.Errorf("(표식 %v, 사유 %s, 회차 %s), want (NULL, %s, S-R) 그대로", got.stopMarkedAt, strOf(got.endReason), strOf(got.roundID), wantReason)
 	}
-	var closed bool
-	if err := pool.QueryRow(context.Background(), `SELECT round_closed_at IS NOT NULL FROM stream_sessions WHERE session_id='S-T'`).Scan(&closed); err != nil || !closed {
-		t.Errorf("R 의 남는 행 닫힘 = (%v, %v), want true", closed, err)
-	}
-	if len(slots.started) != 1 || slots.started[0] != "S-B" || slots.startedFrom[0] != "demo" || !slots.startedAt[0].Equal(stopAt.Add(20*time.Second)) {
-		t.Errorf("started 칸 = %v · %v · %v, want [S-B] · [demo] · [B 시작]", slots.started, slots.startedFrom, slots.startedAt)
-	}
-	if len(slots.closed) != 1 || slots.closed[0] != "S-R" || !slots.closedShut[0] {
-		t.Errorf("CloseRound 칸 = %v(닫힌 뒤 %v), want [S-R] · R 을 직접 닫은 뒤", slots.closed, slots.closedShut)
+	return nil
+}
+
+// 효과 표 forwarded(설계 r9.3 3-2 · E8) — 끝난 T 가 회차 R 의 최신이 아니고 최신 L 이 live 다. 4D 는 L 에 도착 순간 DB
+// 시각 표식을 걸고 회차는 닫지 않는다(L 이 아직 송출 중). T · round_id 는 그대로다. 멈춘 뒤 합류한 L 과 멈추기 전부터 있던
+// (조각 없는) L 이 같은 효과다. 신호는 INFO intentional_end effect=forwarded · latest · marked_at 이다.
+// 변이: 표식을 T 에 → T 표식 단언 FAIL · 표식 = StoppedAt → 도착 시각 단언 FAIL.
+func TestApplyIntentionalEndForwardsMarkToLiveLatest(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		latestAt time.Duration
+	}{
+		{"멈춘_뒤_합류한_live", 20 * time.Second},
+		{"멈추기_전부터_있던_live", -30 * time.Minute},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ended", endReason: "offline", vodState: "frozen", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+			seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
+			seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(c.latestAt)})
+			slots := &intentSlots{}
+			o := slots.options()
+			sig := &signalLog{}
+			o.Log = slog.New(sig)
+
+			res, before, after := applyTimed(t, pool, endAt("demo"), o)
+
+			if res.Effect != effectForwarded || res.SessionID != "S-T" || res.RoundID != "S-R" {
+				t.Fatalf("결과 = %+v, want forwarded · S-T · S-R", res)
+			}
+			mark := markOf(t, pool, "S-L")
+			if err := checkArrivalMark(mark, before, after); err != nil {
+				t.Fatalf("S-L %v", err)
+			}
+			if got := roundOf(t, pool, "S-L"); got.state != "live" || strOf(got.roundID) != "S-R" || got.endReason != nil {
+				t.Errorf("L = (%s, 회차 %s, 사유 %s), want (live, S-R, NULL) — forwarded 는 live 를 끝내지 않는다", got.state, strOf(got.roundID), strOf(got.endReason))
+			}
+			if err := checkTUntouched(roundOf(t, pool, "S-T"), "offline"); err != nil {
+				t.Errorf("T S-T %v", err)
+			}
+			if len(slots.closed) != 0 {
+				t.Errorf("live L 인데 함수 칸을 불렀다: close %v", slots.closed)
+			}
+			a := sig.attrs("intentional_end")
+			if a["effect"] != effectForwarded || a["latest"] != "S-L" || a["marked_at"] != *mark {
+				t.Errorf("intentional_end 속성 = %v, want effect forwarded · latest S-L · marked_at %v", a, *mark)
+			}
+		})
 	}
 }
 
-// round_split 의 계승 해제 요청(D55 해제 갈래의 계산 몫) — 새 회차 첫 세션 B 가 R 에 남는 세션을 계승 중이고 간선 양 끝이
-// 열린 사슬(vod none)이면 분리하고 RevokeSession = B 다. 해제 작업 자체(Head 화해 → P2′)는 루프 몫이다(M6-3b).
-func TestApplyIntentionalEndRequestsRevokeWhenSplitCutsInheritance(t *testing.T) {
+// 효과 표 forwarded(L 이 ending · ended) — L 에 같은 표식을 걸고 사유 · vod · round_id 는 그대로 두며, 같은 트랜잭션 끝에서
+// CloseRound 칸(회차 닫힘 조건 「표식 있음」 + 완결 평가)을 R 로 한 번 부른다. ending 갈래는 POK-525 전에 round_split_blocked
+// 로 막히던 꼴(동결 중 사슬 A–B)이다 — 행을 옮기지 않으니 막을 까닭이 없다.
+// 변이: ending L 의 CloseRound 생략 → close 단언 FAIL · 표식을 T 에 → T 단언 FAIL.
+func TestApplyIntentionalEndForwardsMarkToEndedLatestAndClosesRound(t *testing.T) {
+	for _, c := range []struct {
+		name, state, reason, vod, inherits string
+	}{
+		{"ending_동결_중_사슬", "ending", endReasonTDExceeded, "freezing", "S-T"},
+		{"ended", "ended", "offline", "frozen", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ending", endReason: "offline", vodState: c.vod, roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+			seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
+			seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: c.state, endReason: c.reason, vodState: c.vod, roundID: "S-R", inherits: c.inherits, startedAt: stopAt.Add(20 * time.Second)})
+			slots := &intentSlots{}
+
+			res, before, after := applyTimed(t, pool, endAt("demo"), slots.options())
+
+			if res.Effect != effectForwarded || res.SessionID != "S-T" || res.RoundID != "S-R" {
+				t.Fatalf("결과 = %+v, want forwarded · S-T · S-R", res)
+			}
+			if err := checkArrivalMark(markOf(t, pool, "S-L"), before, after); err != nil {
+				t.Fatalf("S-L %v", err)
+			}
+			got := roundOf(t, pool, "S-L")
+			if got.state != c.state || strOf(got.endReason) != c.reason || strOf(got.roundID) != "S-R" || vodOf(t, pool, "S-L") != c.vod {
+				t.Errorf("L = (%s, %s, 회차 %s, vod %s), want (%s, %s, S-R, %s) — 사유 · 동결은 그대로", got.state, strOf(got.endReason), strOf(got.roundID), vodOf(t, pool, "S-L"), c.state, c.reason, c.vod)
+			}
+			if err := checkTUntouched(roundOf(t, pool, "S-T"), "offline"); err != nil {
+				t.Errorf("T S-T %v", err)
+			}
+			if len(slots.closed) != 1 || slots.closed[0] != "S-R" {
+				t.Errorf("함수 칸 close %v, want close [S-R]", slots.closed)
+			}
+		})
+	}
+}
+
+// forwarded 뒤의 개시(설계 r9.3 3-2 「그 뒤」 · E8) — live L 의 표식 + 여유(8초) 이상에서 시작한 조각은 표식 분할로 L 을
+// intentional 로 끝내고 새 회차를 연다. 새 회차의 started 편지는 레지스트리 개시가 한 통 넣는다(registry.go newRound 갈래).
+// 그 앞 조각(도착 앞 · 여유 안 · 경계 1µs 전)은 L 에 붙는다 — 이미 녹화된 조각은 옛 회차에 남는다.
+// 변이: 표식 = StoppedAt → 「도착 앞」 · 「여유 안」 조각이 새 회차를 열어 FAIL.
+func TestForwardedMarkOpensNewRoundFromNextSegment(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		off      time.Duration
+		newRound bool
+	}{
+		{"도착_앞", -time.Second, false},
+		{"도착_뒤_여유_안", time.Second, false},
+		{"여유_경계_1µs_전", 8*time.Second - time.Microsecond, false},
+		{"여유_경계", 8 * time.Second, true},
+		{"여유_경계_1µs_뒤", 8*time.Second + time.Microsecond, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ended", endReason: "offline", vodState: "frozen", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+			seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
+			seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(20 * time.Second)})
+			res, before, after := applyTimed(t, pool, endAt("demo"), (&intentSlots{}).options())
+			if res.Effect != effectForwarded {
+				t.Fatalf("4D = %+v, want forwarded", res)
+			}
+			m := markOf(t, pool, "S-L")
+			if err := checkArrivalMark(m, before, after); err != nil {
+				t.Fatalf("S-L %v", err)
+			}
+			mark := *m
+			slots := &intentSlots{}
+			r, _ := newRoundRegistry()
+			r.opt.EnqueueStarted = slots.enqueueStarted
+
+			opened := openOne(t, pool, r, Input{StreamID: "demo", Seq: 9, StartWallUTC: mark.Add(c.off), DurationMS: 4000, Op: OpenOrCurrent})
+
+			if !c.newRound {
+				if opened != "" || len(slots.started) != 0 {
+					t.Fatalf("표식 %+v 조각이 연 세션 = %q · started %v, want L 에 붙음", c.off, opened, slots.started)
+				}
+				if got := roundOf(t, pool, "S-L"); got.state != "live" {
+					t.Errorf("L state = %s, want live", got.state)
+				}
+				return
+			}
+			if opened == "" {
+				t.Fatalf("표식 %+v 조각이 새 세션을 열지 않았다", c.off)
+			}
+			if got := roundOf(t, pool, opened); strOf(got.roundID) != opened || got.stopMarkedAt != nil || got.inherits != nil {
+				t.Errorf("새 세션 = (회차 %s, 표식 %v, 계승 %s), want (자기 회차 %s, NULL, NULL)", strOf(got.roundID), got.stopMarkedAt, strOf(got.inherits), opened)
+			}
+			if got := roundOf(t, pool, "S-L"); got.state != "ending" || strOf(got.endReason) != endReasonIntentional || strOf(got.roundID) != "S-R" {
+				t.Errorf("L = (%s, %s, 회차 %s), want (ending, intentional, S-R)", got.state, strOf(got.endReason), strOf(got.roundID))
+			}
+			if len(slots.started) != 1 || slots.started[0] != opened {
+				t.Errorf("started 편지 = %v, want [%s] 한 통", slots.started, opened)
+			}
+		})
+	}
+}
+
+// forwarded 는 계승 간선 · round_id 를 건드리지 않는다 — 옮기는 세션이 없어 회차를 가로지르는 간선이 생기지 않는다(설계
+// r9.3 3-2). L 이 끝난 T 를 계승 중이어도 L 에 표식만 건다.
+func TestForwardedLeavesInheritanceEdge(t *testing.T) {
 	pool := newTestPool(t)
 	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ending", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
 	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
-	seedLedger(t, pool, ledgerRow{id: "S-B", streamID: "demo", state: "live", roundID: "S-R", inherits: "S-T", startedAt: stopAt.Add(20 * time.Second)})
-	slots := &intentSlots{}
+	seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: "live", roundID: "S-R", inherits: "S-T", startedAt: stopAt.Add(20 * time.Second)})
 
-	res := apply(t, pool, endAt("demo"), slots.options())
+	res := apply(t, pool, endAt("demo"), (&intentSlots{}).options())
 
-	if res.Effect != effectRoundSplit || res.RevokeSession != "S-B" {
-		t.Fatalf("결과 = %+v, want round_split · RevokeSession S-B", res)
+	if res.Effect != effectForwarded {
+		t.Fatalf("결과 = %+v, want forwarded", res)
 	}
-	if got := roundOf(t, pool, "S-B"); strOf(got.roundID) != "S-B" || strOf(got.inherits) != "S-T" {
-		t.Errorf("S-B (round_id, 계승) = (%s, %s), want (S-B, S-T — 간선은 루프의 해제 작업이 끊는다)", strOf(got.roundID), strOf(got.inherits))
+	if got := roundOf(t, pool, "S-L"); strOf(got.roundID) != "S-R" || strOf(got.inherits) != "S-T" || got.stopMarkedAt == nil {
+		t.Errorf("L (round_id, 계승, 표식) = (%s, %s, %v), want (S-R, S-T, 표식)", strOf(got.roundID), strOf(got.inherits), got.stopMarkedAt)
 	}
 }
 
-// D64 (가) — 사슬 A–B 가 이미 닫혔는데(vod freezing) 늦은 4D 가 그 사슬 안에서 회차를 나누려 함 → round_split_blocked ·
-// round_id · vod_* 그대로 · 함수 칸 없음. 변이 = 분리 가능 재검증 제거 → B 의 round_id 가 바뀌어 FAIL.
-func TestApplyIntentionalEndBlocksSplitInsideClosedChain(t *testing.T) {
-	pool := newTestPool(t)
-	seedLedger(t, pool, ledgerRow{id: "S-A", streamID: "demo", state: "ending", endReason: "offline", vodState: "freezing", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
-	seedSegment(t, pool, "demo", "S-A", 1, stopAt.Add(-5*time.Second))
-	seedLedger(t, pool, ledgerRow{id: "S-B", streamID: "demo", state: "ending", endReason: "offline", vodState: "freezing", roundID: "S-R", inherits: "S-A", startedAt: stopAt.Add(20 * time.Second)})
-	slots := &intentSlots{}
+// forwarded 의 첫 표식 유지 — 회차 최신 L 에 이미 표식이 있으면(먼저 닿은 4D 등) 늦은 4D 가 다시 와도 그 표식을 덮지 않는다
+// (forwardMarkSQL 의 COALESCE). 덮으면 live L 은 표식 분할이 뒤로 밀려 회차가 늦게 갈린다. 신호 marked_at 도 남은 첫 표식이다.
+// 변이 = COALESCE 제거 → L 표식이 도착 순간 DB 시각으로 바뀌어 FAIL.
+func TestForwardedKeepsExistingMarkOnLatest(t *testing.T) {
+	first := stopAt.Add(30 * time.Second)
+	for _, c := range []struct {
+		name, state, reason, vod string
+	}{
+		{"live", "live", "", "none"},
+		{"ended", "ended", "offline", "frozen"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ended", endReason: "offline", vodState: "frozen", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+			seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
+			seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: c.state, endReason: c.reason, vodState: c.vod, roundID: "S-R", stopMarkedAt: first, startedAt: stopAt.Add(20 * time.Second)})
+			o := (&intentSlots{}).options()
+			sig := &signalLog{}
+			o.Log = slog.New(sig)
 
-	res := apply(t, pool, endAt("demo"), slots.options())
+			res := apply(t, pool, endAt("demo"), o)
 
-	if res.Effect != "" || res.Skip != skipRoundSplitBlocked {
-		t.Fatalf("결과 = %+v, want round_split_blocked", res)
-	}
-	for _, id := range []string{"S-A", "S-B"} {
-		var round, vod string
-		var closed bool
-		if err := pool.QueryRow(context.Background(), `SELECT round_id, vod_state, round_closed_at IS NOT NULL FROM stream_sessions WHERE session_id=$1`, id).
-			Scan(&round, &vod, &closed); err != nil || round != "S-R" || vod != "freezing" || closed {
-			t.Errorf("%s = (%s, %s, 닫힘 %v, %v), want (S-R, freezing, false) 그대로", id, round, vod, closed, err)
-		}
-	}
-	if len(slots.closed)+len(slots.started) != 0 {
-		t.Errorf("미적용인데 함수 칸을 불렀다: %v · %v", slots.closed, slots.started)
-	}
-}
-
-// kty ⑪ (가) — T 가 R 의 최신이 아니지만(R 에 조각 없는 live L 이 먼저 시작해 있다) 멈춘 뒤 합류한 세션 B 가 없다 →
-// 뗄 세션이 없어 round_split_noop(정상 — 막힌 것이 아니다) · 아무것도 쓰지 않고 함수 칸 없음. 변이 = 사유를
-// round_split_blocked 로 되돌림 → FAIL.
-func TestApplyIntentionalEndSplitNoopWithoutJoinedSession(t *testing.T) {
-	pool := newTestPool(t)
-	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ended", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
-	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
-	seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(-30 * time.Minute)})
-	slots := &intentSlots{}
-
-	res := apply(t, pool, endAt("demo"), slots.options())
-
-	if res.Effect != "" || res.Skip != skipRoundSplitNoop || res.SessionID != "S-T" || res.RoundID != "S-R" {
-		t.Fatalf("결과 = %+v, want round_split_noop · S-T · S-R", res)
-	}
-	for _, id := range []string{"S-T", "S-L"} {
-		var round string
-		var closed bool
-		if err := pool.QueryRow(context.Background(), `SELECT round_id, round_closed_at IS NOT NULL FROM stream_sessions WHERE session_id=$1`, id).
-			Scan(&round, &closed); err != nil || round != "S-R" || closed {
-			t.Errorf("%s = (%s, 닫힘 %v, %v), want (S-R, false) 그대로", id, round, closed, err)
-		}
-	}
-	if len(slots.closed)+len(slots.started) != 0 {
-		t.Errorf("미적용인데 함수 칸을 불렀다: %v · %v", slots.closed, slots.started)
-	}
-}
-
-// D69 (나) — round_split 이 소속 잠금을 기다리는 동안 TD 분할 개시가 커밋 → 분리는 소속 행을 다시 골라 새 live C 까지
-// 보고 옮긴다(C.round_id = B).
-func TestApplyIntentionalEndMovesSessionOpenedWhileWaiting(t *testing.T) {
-	pool := newTestPool(t)
-	ctx := context.Background()
-	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ending", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
-	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
-	seedLedger(t, pool, ledgerRow{id: "S-B", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(20 * time.Second)})
-	r, _ := newRoundRegistry()
-
-	openTx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("개시 트랜잭션 시작 실패: %v", err)
-	}
-	defer func() { _ = openTx.Rollback(ctx) }()
-	split := Input{StreamID: "demo", Seq: 9, StartWallUTC: stopAt.Add(time.Minute), DurationMS: 9000, Op: OpenOrCurrent}
-	d, err := r.Decide(ctx, openTx, split, split.StartWallUTC)
-	if err != nil || d.Outcome != OutcomeOpenFresh {
-		t.Fatalf("TD 분할 결정 = (%v, %v)", d.Outcome, err)
-	}
-	cID, err := r.Open(ctx, openTx, d, split.StartWallUTC)
-	if err != nil {
-		t.Fatalf("TD 분할 개시 실패: %v", err)
-	}
-
-	slots := &intentSlots{}
-	done := make(chan IntentionalResult, 1)
-	go func() {
-		res, _ := ApplyIntentionalEnd(ctx, pool, endAt("demo"), slots.options())
-		done <- res
-	}()
-	waitLockWaiter(t, pool)
-	if err := openTx.Commit(ctx); err != nil {
-		t.Fatalf("개시 커밋 실패: %v", err)
-	}
-	var res IntentionalResult
-	select {
-	case res = <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("4D 적용이 끝나지 않았다")
-	}
-	if res.Effect != effectRoundSplit {
-		t.Fatalf("결과 = %+v, want round_split", res)
-	}
-	for _, id := range []string{"S-B", cID} {
-		if got := roundOf(t, pool, id); strOf(got.roundID) != "S-B" {
-			t.Errorf("%s round_id = %s, want S-B — 기다리는 동안 열린 세션도 옮겨야 한다", id, strOf(got.roundID))
-		}
+			if res.Effect != effectForwarded {
+				t.Fatalf("결과 = %+v, want forwarded", res)
+			}
+			if m := markOf(t, pool, "S-L"); m == nil || !m.Equal(first) {
+				t.Errorf("L 표식 = %v, want 첫 표식 %v 유지(COALESCE)", m, first)
+			}
+			if got, ok := sig.attrs("intentional_end")["marked_at"].(time.Time); !ok || !got.Equal(first) {
+				t.Errorf("intentional_end marked_at = %v, want 첫 표식 %v", got, first)
+			}
+		})
 	}
 }
 
 // D69 (나) 재확인 창 — 소속 잠금 ② 와 회차 행 잠금 ③ 사이에 다른 개시가 끼어드는 경우다. 개시 1(B 의 TD 분할 → C)이
 // B 를 쥔 동안 4D 가 B 를 기다리고, 개시 1 이 커밋하면 4D 는 소속 행을 다시 골라 C 를 잡는다. 그 뒤 ③ 은 셋째
 // 트랜잭션이 S-T(③ 정렬의 첫 행)에 건 FOR SHARE 에서 멈춘다(배리어). 그 사이 개시 2(C 의 TD 분할 → D)가 돈다 —
-// 4D 가 C 를 쥐고 있으므로 개시 2 는 C 에서 기다리다가, 분리가 커밋한 뒤 RETURNING 으로 새 회차 B 를 물려받는다.
-// 변이 = lockMembership 의 재확인 제거 → 4D 는 B 만 쥐고, 개시 2 가 먼저 D 를 R 에 커밋하며, 이미 시작된 ③ 문장의
-// 스냅숏에는 D 가 없어 D 가 닫힌 R 에 남아 FAIL. 제품 코드에 시험 갈래를 두지 않고 행 잠금만으로 결정적으로 재현한다.
+// 4D 가 C 를 쥐고 있으므로 개시 2 는 C 에서 기다리다가, forwarded 가 live C 에 건 표식을 RETURNING 으로 물려받는다.
+// 변이 = lockMembership 의 재확인 제거 → 4D 는 B 만 쥐고, 개시 2 가 먼저 표식 없는 D 를 커밋하며, 이미 시작된 ③ 문장의
+// 스냅숏에는 D 가 없어 표식이 끝난 C 에 걸려 송출 중인 D 에 표식이 없어 FAIL. 제품 코드에 시험 갈래를 두지 않고 행
+// 잠금만으로 결정적으로 재현한다.
 func TestApplyIntentionalEndRelocksMembershipBeforeRoundRows(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
@@ -434,18 +508,19 @@ func TestApplyIntentionalEndRelocksMembershipBeforeRoundRows(t *testing.T) {
 		secondDone = second
 	}
 	waitResult(t, secondDone)
-	if res.Effect != effectRoundSplit {
-		t.Fatalf("결과 = %+v, want round_split", res)
+	if res.Effect != effectForwarded {
+		t.Fatalf("결과 = %+v, want forwarded", res)
 	}
 	var dID string
 	var dRound *string
+	var dMark *time.Time
 	var dClosed bool
-	if err := pool.QueryRow(ctx, `SELECT session_id, round_id, round_closed_at IS NOT NULL FROM stream_sessions WHERE stream_id = 'demo' AND state = 'live'`).
-		Scan(&dID, &dRound, &dClosed); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT session_id, round_id, stop_marked_at, round_closed_at IS NOT NULL FROM stream_sessions WHERE stream_id = 'demo' AND state = 'live'`).
+		Scan(&dID, &dRound, &dMark, &dClosed); err != nil {
 		t.Fatalf("개시 2 의 live D 조회 실패: %v", err)
 	}
-	if dID == cID || strOf(dRound) != "S-B" || dClosed {
-		t.Errorf("D %s (round_id, 닫힘) = (%s, %v), want (S-B, false) — ② 와 ③ 사이에 열린 세션이 닫힌 R 에 남았다", dID, strOf(dRound), dClosed)
+	if dID == cID || strOf(dRound) != "S-R" || dMark == nil || dClosed {
+		t.Errorf("D %s (round_id, 표식, 닫힘) = (%s, %v, %v), want (S-R, 표식, false) — ② 와 ③ 사이에 열린 송출에 표식이 없다", dID, strOf(dRound), dMark, dClosed)
 	}
 }
 
@@ -662,9 +737,8 @@ func TestApplyIntentionalEndRejectsUnwiredOptions(t *testing.T) {
 	seedSegment(t, pool, "demo", "S-X", 1, stopAt.Add(-5*time.Second))
 	full := (&intentSlots{}).options()
 	for name, o := range map[string]IntentOptions{
-		"CloseRound_없음":     {ShortConn: full.ShortConn, Slack: full.Slack, EnqueueStarted: full.EnqueueStarted},
-		"EnqueueStarted_없음": {ShortConn: full.ShortConn, Slack: full.Slack, CloseRound: full.CloseRound},
-		"수치_없음":             {CloseRound: full.CloseRound, EnqueueStarted: full.EnqueueStarted},
+		"CloseRound_없음": {ShortConn: full.ShortConn, Slack: full.Slack},
+		"수치_없음":         {CloseRound: full.CloseRound},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ApplyIntentionalEnd(context.Background(), pool, endAt("demo"), o); err == nil {
@@ -677,44 +751,51 @@ func TestApplyIntentionalEndRejectsUnwiredOptions(t *testing.T) {
 	}
 }
 
-// D71(분리 쪽) — round_split 트랜잭션이 live B 를 소속 잠금 · 회차 행 잠금(FOR NO KEY UPDATE)으로 쥔 채 멈춰 있어도 그
-// 세션의 「계속」 조각 INSERT(FK = FOR KEY SHARE)는 기다리지 않는다. 멈춤은 CloseRound 칸 안(모든 잠금 뒤)이다.
-// 변이 = 회차 행 잠금을 FOR UPDATE 로 → INSERT 가 막혀 시한 FAIL.
-func TestSplitHoldingLiveRowDoesNotBlockSegmentInsert(t *testing.T) {
+// D71(forwarded 쪽) — live L 로의 forwarded 가 회차 행 잠금 ③(lockRoundRowsSQL · FOR NO KEY UPDATE)으로 L 을 쥔 동안에도
+// L 의 「계속」 조각 INSERT(FK 검사 = FOR KEY SHARE)는 기다리지 않는다. live L 갈래는 CloseRound 칸을 부르지 않아 칸 안에서
+// 멈출 수 없으므로, ③ 정렬에서 L 뒤에 오는 같은 회차 행 B(L 보다 늦게 시작한 ending — D73 꼴)를 셋째 트랜잭션이
+// FOR SHARE 로 쥔다. ③ 은 T · L 을 잠근 뒤 B 에서 멈춘다. 변이 = lockRoundRowsSQL 을 FOR UPDATE 로 → L 의 잠금이 FK 잠금과
+// 충돌해 INSERT 시한 FAIL.
+func TestForwardedRoundLockDoesNotBlockSegmentInsert(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
 	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ending", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
 	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
-	seedLedger(t, pool, ledgerRow{id: "S-B", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(20 * time.Second)})
-	o := (&intentSlots{}).options()
-	paused, release := make(chan struct{}), make(chan struct{})
-	o.CloseRound = func(context.Context, pgx.Tx, string) error {
-		close(paused)
-		<-release
-		return nil
+	seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(20 * time.Second)})
+	seedLedger(t, pool, ledgerRow{id: "S-B", streamID: "demo", state: "ending", endReason: endReasonTDExceeded, roundID: "S-R", startedAt: stopAt.Add(30 * time.Second)})
+	barrier, barrierPID := beginWithPID(t, pool)
+	if _, err := barrier.Exec(ctx, `SELECT 1 FROM stream_sessions WHERE session_id = 'S-B' FOR SHARE`); err != nil {
+		t.Fatalf("배리어 잠금 실패: %v", err)
 	}
-	done := make(chan error, 1)
+	type applied struct {
+		res IntentionalResult
+		err error
+	}
+	done := make(chan applied, 1)
 	go func() {
-		_, err := ApplyIntentionalEnd(ctx, pool, endAt("demo"), o)
-		done <- err
+		res, err := ApplyIntentionalEnd(ctx, pool, endAt("demo"), (&intentSlots{}).options())
+		done <- applied{res, err}
 	}()
-	select {
-	case <-paused:
-	case <-time.After(5 * time.Second):
-		t.Fatal("분리 트랜잭션이 CloseRound 칸까지 오지 않았다")
-	}
+	waitBlockedBy(t, pool, barrierPID)
 
 	ictx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	_, err := pool.Exec(ictx, `
 INSERT INTO stream_segments
     (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path, upload_state, bytes, session_id)
-VALUES ('demo', 2, 0, $1, 4000, 'k-2', '/recordings/demo/2.mp4', 'uploaded', 1000, 'S-B')`, stopAt.Add(24*time.Second))
-	close(release)
-	if err != nil {
-		t.Fatalf("분리 중 조각 INSERT 실패: %v — FK 잠금이 소속 · 회차 행 잠금에 막혔다", err)
+VALUES ('demo', 2, 0, $1, 4000, 'k-2', '/recordings/demo/2.mp4', 'uploaded', 1000, 'S-L')`, stopAt.Add(24*time.Second))
+	if rerr := barrier.Rollback(ctx); rerr != nil {
+		t.Fatalf("배리어 해제 실패: %v", rerr)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("분리 실패: %v", err)
+	if err != nil {
+		t.Fatalf("forwarded 의 회차 행 잠금 중 조각 INSERT 실패: %v — FK 잠금이 ③ 에 막혔다", err)
+	}
+	select {
+	case a := <-done:
+		if a.err != nil || a.res.Effect != effectForwarded || a.res.SessionID != "S-T" {
+			t.Fatalf("4D = (%+v, %v), want forwarded · S-T", a.res, a.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("배리어를 푼 뒤에도 4D 적용이 끝나지 않았다")
 	}
 }

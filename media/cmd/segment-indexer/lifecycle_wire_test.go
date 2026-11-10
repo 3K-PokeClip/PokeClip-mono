@@ -4,7 +4,10 @@ package main
 // D45 · D47 · D50).
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,6 +56,7 @@ func TestStartLifecycleOffWithoutTopicOrStreams(t *testing.T) {
 		if gate.Enabled() || len(lines) != 1 || lines[0]["reason"] != c.reason || lines[0]["level"] != "INFO" {
 			t.Errorf("%s: 게이트 켬 %v · lifecycle_disabled %v · 전체 %s", c.reason, gate.Enabled(), lines, buf.String())
 		}
+		requireNoPrepareLines(t, buf)
 	}
 }
 
@@ -74,27 +78,46 @@ func TestStartLifecycleOffWithoutResolver(t *testing.T) {
 	if started := logLines(t, buf, "lifecycle_started"); len(started) != 0 {
 		t.Fatalf("lifecycle_started %v, want 없음", started)
 	}
+	requireNoPrepareLines(t, buf)
 }
 
-// D50 — outbox INSERT 권한이 없는 계정이면 ERROR lifecycle_disabled reason=privilege 이고 게이트는 꺼진다. 그 게이트로
-// 조립한 결정자의 개시는 outbox 문장을 보내지 않아 42501 없이 통과한다. 변이 = 권한 확인 제거 → 개시가 42501 로 FAIL.
-func TestStartLifecycleOffWhenOutboxPrivilegeMissingD50(t *testing.T) {
-	role := pgtest.NewMediaIndexerRole(t, newWireTestPool(t))
+// requireNoPrepareLines 는 설정으로 꺼진 기동이 준비 · 재시도 줄을 내지 않았는지다(재시도 · 기동 줄은 의도 켜진 기동만).
+func requireNoPrepareLines(t *testing.T, buf *bytes.Buffer) {
+	t.Helper()
+	for _, msg := range []string{"lifecycle_degraded", "lifecycle_prepare_retry_failed", "lifecycle_enqueue_skipped"} {
+		if lines := logLines(t, buf, msg); len(lines) != 0 {
+			t.Errorf("설정으로 꺼진 기동에 %s %v, want 없음", msg, lines)
+		}
+	}
+}
+
+// D50 — outbox INSERT 권한이 없는 계정이면 준비가 실패해 강등이다: ERROR lifecycle_degraded value=1 reason=privilege 한
+// 줄이고 lifecycle_disabled 는 없다. 의도 게이트는 켜진 채이고(안 Ⅰ), 그 게이트로 조립한 결정자의 개시는 적재 직전 권한
+// 판정에서 started 를 건너뛰어 42501 없이 통과한다(started 0). 변이 = started 권한 판정 제거 → 개시가 42501 로 FAIL.
+func TestStartLifecycleDegradedWhenOutboxPrivilegeMissingD50(t *testing.T) {
+	admin := newWireTestPool(t)
+	role := pgtest.NewMediaIndexerRole(t, admin)
 	role.Revoke(t, "INSERT", "broadcast_lifecycle_outbox")
 	t.Cleanup(func() { role.RequireNoneDenied(t) })
-	log, buf := expiryLog()
+	log, buf := newLockedLog(slog.LevelInfo) // 30초 재시도 고루틴과 함께 쓰는 버퍼라 잠근다
 
 	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, lifecycleResolver(t), log)
 	defer stop()
 
-	lines := logLines(t, buf, "lifecycle_disabled")
-	if gate.Enabled() || len(lines) != 1 || lines[0]["reason"] != "privilege" || lines[0]["level"] != "ERROR" ||
-		!strings.Contains(lines[0]["missing"].(string), "broadcast_lifecycle_outbox:INSERT") {
-		t.Fatalf("게이트 켬 %v · lifecycle_disabled %v", gate.Enabled(), lines)
+	lines := buf.lines(t, "lifecycle_degraded")
+	if !gate.Enabled() || len(lines) != 1 || lines[0]["value"] != float64(1) || lines[0]["reason"] != "privilege" ||
+		lines[0]["level"] != "ERROR" || !strings.Contains(fmt.Sprint(lines[0]["missing"]), "broadcast_lifecycle_outbox:INSERT") {
+		t.Fatalf("게이트 켬 %v · lifecycle_degraded %v · 전체 %s", gate.Enabled(), lines, buf.String())
+	}
+	if disabled := buf.lines(t, "lifecycle_disabled"); len(disabled) != 0 {
+		t.Fatalf("lifecycle_disabled %v, want 없음 — 준비 실패는 강등 줄 하나로만 알린다", disabled)
 	}
 	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, gate, log)
 	if id := openVia(t, role.Pool, d, "d50", 1, wireBase, 4000); id == "" {
 		t.Fatal("개시가 서지 않았다")
+	}
+	if n := startedTotal(t, admin, "d50"); n != 0 {
+		t.Fatalf("started %d 행, want 0", n)
 	}
 }
 
@@ -108,9 +131,12 @@ func TestStartLifecycleStartsPublisher(t *testing.T) {
 	gate, stop := startLifecycle(t.Context(), lifecycleCfg(lifecycleTopic, "*"), role.Pool, lifecycleResolver(t), log)
 	stop()
 
-	started := logLines(t, buf, "lifecycle_started")
+	started, degraded := logLines(t, buf, "lifecycle_started"), logLines(t, buf, "lifecycle_degraded")
 	if !gate.Enabled() || len(started) != 1 || started[0]["topic"] != lifecycleTopic {
 		t.Fatalf("게이트 켬 %v · lifecycle_started %v · 전체 %s", gate.Enabled(), started, buf.String())
+	}
+	if len(degraded) != 1 || degraded[0]["value"] != float64(0) || degraded[0]["reason"] != "ready" {
+		t.Fatalf("lifecycle_degraded %v, want value=0 reason=ready 한 줄(기동 줄)", degraded)
 	}
 }
 
@@ -252,7 +278,7 @@ func TestRunWiresLifecycleGate(t *testing.T) {
 		"defer stopLifecycle()",
 		"newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log)",
 		"fa := newFinalizeAssembly(cfg, lifecycle, log)",
-		"newIntentOptions(log, fa.closeRound(), startedEnqueuer(lifecycle))",
+		"newIntentOptions(log, fa.closeRound())",
 	}
 	prev := -1
 	for _, want := range order {

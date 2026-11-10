@@ -4,12 +4,13 @@
 
 ## 무엇이 들어가나
 
-**서버 4개**가 여기서 실행된다. `web-support/` · `db-support/`는 서버가 아니다.
+**서버 4개**가 여기서 실행된다. `web-support/` · `db-support/` · `ledger-timeline/`은 서버가 아니다.
 
 | 모듈 | 포트 | 역할 |
 |---|---|---|
 | `web-support/` | — | 여러 서버가 같이 쓰는 **웹 인프라**(CORS·상관 ID). 서버가 아니다 |
 | `db-support/` | — | 서버 넷이 같이 쓰는 **DB 로그인 장치**(비밀번호 · RDS IAM · `db_connected`, POK-407). 서버가 아니다 |
+| `ledger-timeline/` | — | 장부 시각 ↔ 매체 자리 변환 F · 예상 결과 길이(순수 함수 · 의존 없음, POK-196). 공유 시험 표 `src/test/resources/ledger-timeline-cases.json`은 렌더 일꾼 · 웹도 읽는 계약이다. 서버가 아니다 |
 | `clip/` | 8081 | 방송 세션 · **점프카드 저장·SSE 전송** · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
 | `auth/` | 8082 | 로그인 · 스트림 키 · 채널 연동 · 유튜브 토큰 |
 | `chat-collector/` | 8083 | 치지직·SOOP 채팅 실시간 수집 · 시차 보정 · S3 아카이브 |
@@ -81,6 +82,8 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 
 그때 지킬 경계는 전과 같다. **계약만 둔다** — 공유 엔티티·SQS 메시지 형식.
 로직·웹 계층은 두지 않는다. 여기가 두꺼워지면 서버들이 한 덩어리가 되고 나눈 의미가 사라진다.
+`ledger-timeline/`은 이 원칙의 정해 둔 예외다 — 장부 시각 변환(순수 함수)만 두고 운영 의존이 없어 서버들을 한 덩어리로
+묶지 않는다(POK-196 · 설계 r7 3.2).
 
 ## 반대로 채팅 둘은 왜 나눴나
 
@@ -129,7 +132,7 @@ set -a && . ../.env && set +a
 ```
 
 **PR에서는 `services-ci`가 돈다**(`.github/workflows/services-ci.yml`). `services/`를 고친 PR마다
-서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도, chat-detector 잡은 `db-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
+서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도, clip 잡은 `ledger-timeline`도, chat-detector 잡은 `db-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
 건너뛰는 것이 정상이다. 필수 체크는 아니다.
 
 **`.env`를 싣는 줄을 빼먹으면 DB 접속이 실패한다.** `docker compose`는 `.env`를 자동으로
@@ -3001,7 +3004,7 @@ OBS 플러그인의 핫키(계약4 4B/2B)를 받아 **그 회원의 켜진 방�
 
 | 문 | 응답 |
 |---|---|
-| `POST /api/clip/marks` (헤더 `Authorization: Bearer <파생 값>` · `Idempotency-Key: <eventId>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 2A와 같은 카드 모양) · **400** `{"reason":"invalid_request"}`(본문·헤더가 계약 모양이 아니다 · 헤더 eventId ≠ 본문 · auth가 streamid를 못 읽음 · 그 eventId가 남의 카드 · 시각이 넘침·48시간 넘음 · 누른 때가 고른 방송 시작보다 2분 넘게 앞 · 본문 4KB 초과 · streamid 256자 초과) · **401** `{"reason":"invalid_stream_key"}`(키 없음·폐기 · 파생 값 다름 · Bearer 없음) · **404** `{"reason":"broadcast_not_found"}`(이 회원의 켜진 방송이 없다 · 고른 방송이 잠그는 사이 사라졌다) · **503** `{"reason":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없다) · **503** 본문 없음(auth를 못 물었다) |
+| `POST /api/clip/marks` (헤더 `Authorization: Bearer <파생 값>` · `Idempotency-Key: <eventId>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 2A와 같은 카드 모양) · **400** `{"reason":"invalid_request"}`(본문·헤더가 계약 모양이 아니다 · 헤더 eventId ≠ 본문 · auth가 streamid를 못 읽음 · 그 eventId가 남의 카드 · 시각이 넘침·방송 시작 뒤 48시간 넘음 · 누른 때가 고른 방송 시작보다 2분 넘게 앞 · 본문 4KB 초과 · streamid 256자 초과) · **401** `{"reason":"invalid_stream_key"}`(키 없음·폐기 · 파생 값 다름 · Bearer 없음) · **404** `{"reason":"broadcast_not_found"}`(이 회원의 켜진 방송이 없다 · 고른 방송이 잠그는 사이 사라졌다) · **503** `{"reason":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없다) · **503** 본문 없음(auth를 못 물었다) |
 
 본문: `{"streamid":"<원문>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 모르는 칸은 무시한다.
 **키를 확인하기 전에 본문을 읽으므로 상한이 있다**: 본문 4KB(그 넘는 바이트는 안 읽는다)·streamid 256자.
@@ -3053,9 +3056,10 @@ OBS 문(위 절)과 같은 `recordHotkey`라 **두 문의 카드가 한 판정�
 | 지난 방송(방송이 `live`가 아님) | `{"eventId":"<UUID v4>","positionMs":<정수 ms>}`(기준점 축 재생 위치) | 위치 그대로. 기준점 앞 10분까지(음수)는 0으로 접는다 |
 
 **400 `field`**: `body`(JSON 객체가 아님 · 4KB 초과 · 갈래가 없거나 둘 다) · `eventId`(UUID v4가 아님 · 그 eventId가 남의 방송 카드) ·
-`pressedAt`·`sentAt`(0 초과 정수가 아님 · 시각이 넘침·48시간 넘음 · **지난 방송에 보냄**) ·
+`pressedAt`·`sentAt`(0 초과 정수가 아님 · 시각이 넘침·방송 시작 뒤 48시간 넘음 · **지난 방송에 보냄**) ·
 `positionMs`(정수가 아님(소수도 거절, 반올림은 웹이 한다) · −10분 아래 · 상한 넘음 · **라이브에 보냄**).
-위치 상한은 `(종료 시각 − 기준점) + 10분`(녹화가 종료 편지 뒤까지 이어질 수 있다), 종료 시각을 모르면 48시간.
+위치 상한은 `(종료 시각 − 기준점) + 10분`(녹화가 종료 편지 뒤까지 이어질 수 있다), 종료 시각을 모르면 방송 시작 뒤 48시간 =
+`(시작 시각 − 기준점) + 48시간`(기준점은 물리 키 누적 pts 축이라 시작보다 수십 시간 앞일 수 있다, ADR-079).
 
 **처리 순서가 계약이다.** 받은 시각 읽기 → 본문(400) → 자격(404·503, **트랜잭션 밖**) → 방송(404) → 갈래와 방송 상태(400) →
 기준점(503) → 시각·위치(400) → 저장(201·200). 본문이 자격 앞인 것은 형식 오류가 auth 왕복(최대 7초)을 태우지 않게, 자격이

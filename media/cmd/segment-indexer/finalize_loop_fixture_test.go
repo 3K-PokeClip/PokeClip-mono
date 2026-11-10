@@ -44,8 +44,6 @@ type fakeFinalWork struct {
 	readGate  chan struct{}
 	readsGate chan struct{}
 	reads     int
-	revokeOut publish.RevokeOutcome
-	revokes   []string
 }
 
 func (w *fakeFinalWork) work() finalizeWork {
@@ -111,12 +109,6 @@ func (w *fakeFinalWork) work() finalizeWork {
 			}
 			return r
 		},
-		revoke: func(_ context.Context, stream, id string) publish.RevokeOutcome {
-			w.mu.Lock()
-			defer w.mu.Unlock()
-			w.revokes = append(w.revokes, stream+"/"+id)
-			return w.revokeOut
-		},
 	}
 }
 
@@ -152,23 +144,22 @@ func (s *sinkLog) all() []sentState {
 // finalLoop 은 정산 루프 층 픽스처다.
 type finalLoop struct {
 	*offlineLoop
-	lanes   *publish.Lanes
-	work    *fakeFinalWork
-	inbox   *session.PlaybackInbox
-	intents *session.IntentInbox
-	sunk    *sinkLog
+	lanes *publish.Lanes
+	work  *fakeFinalWork
+	inbox *session.PlaybackInbox
+	sunk  *sinkLog
 }
 
 // newFinalLoop 은 발행 모드 mode 의 정산 몫을 얹은 루프 픽스처다. 스캔 주기는 holdTick 하나(시험이 매 틱 스캔을 본다)다.
 func newFinalLoop(t *testing.T, mode finalize.Mode) *finalLoop {
 	t.Helper()
 	f := &finalLoop{offlineLoop: newOfflineLoop(t, nil), lanes: publish.NewLanes(), work: &fakeFinalWork{rows: map[string]index.EndingSession{}},
-		inbox: session.NewPlaybackInbox(), intents: session.NewIntentInbox(), sunk: &sinkLog{}}
+		inbox: session.NewPlaybackInbox(), sunk: &sinkLog{}}
 	r := f.rewind
 	r.lanes, r.holdEvery = f.lanes, time.Second
 	r.fin = newFinalizer(finalizerOptions{
 		Mode: mode, Every: time.Second, CloseAfter: 360 * time.Second, Work: f.work.work(),
-		Inbox: f.inbox, Intents: f.intents, Sink: f.sunk.sink, PlaybackReadMax: 2,
+		Inbox: f.inbox, Sink: f.sunk.sink, PlaybackReadMax: 2,
 	})
 	return f
 }
