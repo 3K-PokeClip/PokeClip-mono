@@ -147,7 +147,9 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     (범위는 아래 「긴급 정지와 상태 어긋남」). 승인 전에 이 plan 파일로
     「apply 직전 읽기」 의 이그레스 스위치를 봅니다.
 1.  **감시를 먼저 띄웁니다**(아래 「첫 소비 감시」). 띄웠다는 것을 알린 뒤
-    kty 가 `terraform apply <plan 파일>` 을 돌립니다.
+    kty 가 `terraform apply <plan 파일>` 을 돌립니다. 수신 감시 반복만은
+    apply 를 시작한 뒤 띄우고, 기동 신호(`worker_started`)를 기다렸다가
+    돕니다(아래 「수신 · 진행 판정」 의 쓰는 예).
 1.  **첫 소비 판정(3분)** · 정지 신호면 긴급 정지.
 1.  **기동 신호 · 관문 ②:** 서비스마다 실행 수 1 · 배포 하나 COMPLETED ·
     `*.worker_started`(render · thumbnail · upload)를 보고, 이 루트와 platform
@@ -208,9 +210,11 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     `terraform.tfvars` 줄만 보면 `TF_VAR_render_egress_via_endpoints` ·
     `*.auto.tfvars` · `-var` 로 들어온 `false` 를 놓치므로, plan 이 실제로 쓴
     값과 그 값이 만든 render 이그레스를 봅니다. `plan` 은 그 plan 파일의
-    경로입니다. 첫 줄이 `true` 를 내고 종료 0 이어야 하고, 둘째 줄의 출력이
-    정확히 `aws_endpoints` · `clip` · `s3` 셋이어야 합니다(`aws_api` 가 보이면
-    render 가 NAT 로 나감). 어긋나면 멈춥니다. `false` 는 되돌리기 전용입니다.
+    경로입니다 — `-chdir` 디렉터리(`infra/terraform/prod/workers`) 기준으로
+    열리므로 절대 경로나 그 디렉터리 기준 경로로 적습니다. 첫 줄이 `true` 를
+    내고 종료 0 이어야 하고, 둘째 줄의 출력이 정확히 `aws_endpoints` · `clip` ·
+    `s3` 셋이어야 합니다(`aws_api` 가 보이면 render 가 NAT 로 나감). 어긋나면
+    멈춥니다. `false` 는 되돌리기 전용입니다.
 
     ```
     terraform -chdir=infra/terraform/prod/workers show -json "${plan}" \
@@ -224,7 +228,11 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 ### 첫 소비 감시
 
 일꾼은 기동하자마자 쌓인 사진 주문부터 처리합니다. 그래서 감시는 apply 보다
-먼저 붙고, apply 뒤의 plan 둘보다 먼저입니다. 모든 감시 명령에
+먼저 붙고, apply 뒤의 plan 둘보다 먼저입니다. 수신 감시 반복만은 시작
+epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤에 시작합니다.
+받기 루프는 기동 신호와 같은 때 돌기 시작하지만 첫 `receive_failed` 는 시도
+넷이 끝난 뒤(기동 뒤 약 120초)에 찍히고, 반복은 기동 시각부터 읽으므로 빠지는
+줄이 없습니다. 기동 뒤 3분은 로그 판정(W13)이 함께 봅니다. 모든 감시 명령에
 `--region ap-northeast-2` 를 고정합니다 — 기본 리전이 다르면 그룹 조회가
 늘 0 이라 감시가 빈 채로 apply 가 진행됩니다.
 
@@ -252,8 +260,9 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     ```
 
 *   큐 깊이(사진 · DLQ 셋)를 30초마다 읽습니다.
-*   수신 불능 판정을 30초마다 돌립니다(아래 「수신 · 진행 판정」 의
-    `workers_receive_watch` — 로그 그룹마다 하나, 시험 · 관찰이 끝날 때까지).
+*   수신 불능 판정을 5초마다 돌립니다(아래 「수신 · 진행 판정」 의
+    `workers_receive_watch` — 로그 그룹마다 하나, 그 그룹의 `worker_started`
+    가 보인 뒤부터 시험 · 관찰이 끝날 때까지 · 띄우는 법은 그 절의 쓰는 예).
 *   apply 를 시작하고 120초 안에 기록 파일 하나라도 줄이 0 이거나 따라 읽기
     프로세스가 끝났으면 **감시 불능**입니다. 정지 신호와 같이 다룹니다. 단
     120초가 지났는데 그 서비스의 서비스 이벤트(`aws ecs describe-services`)에
@@ -273,7 +282,7 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     `render.report_unavailable` · `render.unexpected`.
 *   업로드: `upload.loop_error` · `upload.unavailable`.
 *   공통: **수신 불능** — `*.receive_failed` 가 오류 종류와 상관없이 1분
-    넘게 이어짐(아래 `workers_receive_watch` 가 30초마다 돌리는
+    넘게 이어짐(아래 `workers_receive_watch` 가 5초마다 돌리는
     `workers_receive_verdict` 가 정지 — 처음 몇 초의
     `AccessDenied` 는 IAM 전파 지연일 수 있어 1분을 기다립니다) · `status=401`
     · 사진 DLQ 깊이가 apply 직전 기준보다 커짐.
@@ -286,9 +295,10 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 비밀 유출 · 사진 DLQ 는 둘 다입니다. 수신 불능은 그 줄의 서비스(render ·
 thumbnail 줄 = render, upload 줄 = upload)입니다. 감시 불능은 그 기록 파일의 서비스이고,
 따라 읽기가 둘 다 죽었으면 둘 다입니다. 첫 실패 신호에서 **2분 안**(늦어도
-240초)에 정지합니다 — 실패한 메시지는 약 120초마다 다시 받히고 세 번째
-실패 뒤 DLQ 로 갑니다. 보고 4xx 의 즉시 삭제는 시한이 없어 계약 검사 3 과
-회전 창 읽기가 주된 방어이고, 감시는 피해를 첫 몇 건으로 묶는 몫입니다.
+240초 — 수신 불능의 셈은 아래 「수신 감시 반복」)에 정지합니다 — 실패한
+메시지는 약 120초마다 다시 받히고 세 번째 실패 뒤 DLQ 로 갑니다. 보고 4xx 의
+즉시 삭제는 시한이 없어 계약 검사 3 과 회전 창 읽기가 주된 방어이고, 감시는
+피해를 첫 몇 건으로 묶는 몫입니다.
 
 **운영 중 멈출 조건** — 하나라도 나오면 긴급 정지합니다. 첫 소비 뒤에도
 시험 · 관찰이 끝날 때까지 계속 적용합니다. 렌더 · 업로드 일꾼 결함이 보이면
@@ -379,6 +389,12 @@ workers_events() {
 
 workers_started_at() {
   local first
+  case "${3-}" in
+    '' | *[^0-9]*)
+      echo "기동 $2: 판정불가 — apply 시작 epoch(셋째 인자)가 숫자가 아님"
+      return 2
+      ;;
+  esac
   first="$(workers_events "$1" "$3" "\"$2.worker_started\"" \
     "$2\\.worker_started " | head -n 1 | cut -d ' ' -f 1)"
   if [ -z "${first}" ]; then
@@ -439,6 +455,12 @@ workers_queue_depth() {
 
 ```shell
 workers_receive_verdict() {
+  case "${2-}" in
+    '' | *[^0-9]*)
+      echo "수신: 판정불가 — 시작 epoch(둘째 인자)가 숫자가 아님"
+      return 2
+      ;;
+  esac
   case "${3-}" in
     '' | *[^0-9]*)
       echo "수신: 판정불가 — 지금 epoch(셋째 인자)가 없음"
@@ -482,26 +504,66 @@ workers_receive_verdict() {
 }
 ```
 
-**수신 감시 반복(W12).** 위 판정을 **30초마다** 돌립니다. 첫 소비 감시를
-띄울 때부터 시험 · 관찰이 끝날 때까지 서비스(로그 그룹)마다 하나씩, 터미널을
-따로 두고 돌립니다. 판정이 정지(1)면 바로 끝나고 1 을 냅니다 — 긴급 정지
-신호입니다. 조회 실패(판정불가)는 다음 주기에 한 번 더 보고, 두 번 이어지면
-판정불가(2)로 끝납니다 — 정지와 같이 kty 에게 넘깁니다. 끝 시각이 지난 뒤
-판정이 통과하면 「끝」 과 함께 0 으로 끝납니다(끝 시각의 판정이 조회 실패면
-한 주기 더 봅니다). 이 주기면 첫 실패 줄에서 정지 판정까지
-최악이 약 200초(두 실패 줄 간격 134초 + 주기 30초 + 조회 실패 한 번의 30초 +
-로그 수집 지연 수 초)라 정지 시한(늦어도 240초) 안입니다. 인자는 로그 그룹 ·
-시작 epoch · 끝 epoch 입니다.
+**수신 감시 반복(W12).** 위 판정을 **5초마다**(판정이 끝난 뒤 5초 쉼)
+돌립니다. 서비스(로그 그룹)마다 터미널을 하나씩 따로 두고, 그 그룹의
+`worker_started` 가 보인 뒤부터 시험 · 관찰이 끝날 때까지 돌립니다. 인자는
+로그 그룹 · 시작 epoch · 끝 epoch 입니다.
+
+*   시작 · 끝 epoch 가 숫자가 아니면(기동 전 `workers_started_at` 이 낸
+    판정불가 문장 · 옮겨 적지 않은 빈 값) 판정하지 않고 판정불가(2)로
+    끝납니다.
+*   판정이 정지(1)면 바로 끝나고 1 을 냅니다 — 긴급 정지 신호입니다.
+*   **판정하지 못한 주기** 는 조회 실패(판정불가)와, 판정 한 번이 5초를 넘긴
+    것(「늦음」 — 통과여도 그 사이의 줄을 못 봤을 수 있음)입니다. 한 번은 다음
+    주기에 다시 보고, 두 번 이어지면 판정불가(2)로 끝납니다 — 정지와 같이
+    kty 에게 넘깁니다.
+*   끝 시각이 지난 뒤 판정이 통과하면 「끝」 과 함께 0 으로 끝납니다(끝 시각의
+    주기를 판정하지 못했으면 한 주기 더 봅니다).
+*   조회가 돌아오지 않으면 반복은 아무것도 찍지 못합니다. 판정 줄(「수신: …」 ·
+    「수신 감시: …」)이 **20초** 넘게 새로 나오지 않으면 판정불가로 보고 정지와
+    같이 다룹니다.
+
+**정지 시한의 셈(늦어도 240초).** 첫 `receive_failed` 줄을 0초로 둡니다.
+
+1.  **조건이 서는 때 — 194초.** 정지는 같은 줄의 실패가 60초를 **넘게**
+    이어져야 납니다. 둘째 실패가 60초에 찍히면(넘지 않음) 셋째 실패가 다음
+    간격의 최악(약 134초) 뒤인 194초에 찍힐 때 섭니다.
+1.  **판정이 볼 수 있는 때 — 204초.** 로그 수집 지연(줄이 찍힌 뒤 CloudWatch
+    Logs 조회에 보이기까지)을 **10초 이하로 가정** 합니다(실측하지 않음 —
+    이보다 길면 그만큼 늦어집니다).
+1.  **반복이 정지를 내는 때 — 229초.** 204초 바로 앞에 시작한 판정은 그 줄을
+    못 봅니다. 그 판정(상한 5초)과 쉼 5초 뒤에 시작한 판정이 처음 보고, 그
+    판정이 조회 실패면 쉼 5초 뒤 한 번 더 판정합니다(또 실패하면 판정불가로
+    끝남). 판정 셋 15초 + 쉼 둘 10초 = 25초입니다. 판정 줄이 끊긴 경우는 마지막
+    줄(늦어도 209초) + 20초 = 229초로 같습니다.
+
+남는 11초 안에 kty 가 정지 명령을 돌립니다. 옛 30초 주기는 같은 셈으로
+279초라 시한을 넘었습니다(r2 의 0 · 59 · 193초 실패 + 222초 조회 실패 =
+252초 정지). 주기 · 판정 상한 · 수집 지연 가정 · 재시도 규칙을 바꾸면 이 셈과
+시험의 시한 사례를 함께 고칩니다.
 
 ```shell
 workers_receive_watch() {
-  local now rc misses=0
+  local arg begin now rc misses=0
+  for arg in "${2-}" "${3-}"; do
+    case "${arg}" in
+      '' | *[^0-9]*)
+        echo "수신 감시: 판정불가 — 시작 · 끝 epoch 중 숫자가 아닌 것이 있음"
+        return 2
+        ;;
+    esac
+  done
   while :; do
-    now="$(date -u +%s)"
-    workers_receive_verdict "$1" "$2" "${now}"
+    begin="$(date -u +%s)"
+    workers_receive_verdict "$1" "$2" "${begin}"
     rc=$?
     if [ "${rc}" -eq 1 ]; then
       return 1
+    fi
+    now="$(date -u +%s)"
+    if [ "${rc}" -eq 0 ] && [ "$((now - begin))" -gt 5 ]; then
+      echo "수신 감시: 늦음 — 판정에 $((now - begin))초(상한 5초)"
+      rc=2
     fi
     if [ "${rc}" -eq 0 ]; then
       misses=0
@@ -512,11 +574,11 @@ workers_receive_watch() {
       echo "수신 감시: 판정불가 — 두 주기 이어 판정하지 못함"
       return 2
     fi
-    if [ "${misses}" -eq 0 ] && [ "${now}" -ge "$3" ]; then
+    if [ "${misses}" -eq 0 ] && [ "${begin}" -ge "$3" ]; then
       echo "수신 감시: 끝 — $(workers_iso "$3") 에 이름"
       return 0
     fi
-    sleep 30
+    sleep 5
   done
 }
 ```
@@ -682,14 +744,29 @@ render 가 혼자 받는 때(원하는 수 1 · 첫 기동이나 정지 뒤 다�
 `apply_at="$(date -u +%s)"` 로 적어 둔 값이고, `watch_end` 는 시험 · 관찰을
 끝낼 시각(예: `watch_end=$((apply_at + 7200))`)입니다. 사진 줄은 `thumbnail` ·
 `pokeclip-prod-jobs-thumbnail`, upload 는 `pokeclip-prod-upload` · `upload` ·
-`pokeclip-prod-jobs-upload` 로 바꿔 부릅니다. 수신 감시 반복은 로그 그룹마다
-따로 띄운 터미널에서 돌리고(render 그룹 하나가 render · thumbnail 줄을 함께
-봄), 관찰을 늘리면 끝 시각을 새로 주어 다시 띄웁니다.
+`pokeclip-prod-jobs-upload` 로 바꿔 부릅니다.
+
+**감시 터미널 준비.** 수신 감시 반복은 로그 그룹마다 따로 연 터미널에서
+돌립니다(render 그룹 하나가 render · thumbnail 줄을 함께 봄). 터미널마다 이 절의
+블록(`region` · `work` 와 함수 아홉)을 먼저 붙여 넣고, apply 터미널의
+`apply_at` · `watch_end` 값을 숫자 그대로 옮겨 적습니다. 한 셸에서 `&` 로 여럿을
+띄우지 않습니다 — 같은 `${work}` 의 `events.json` · `receive.txt` 를 함께 써서
+판정이 섞입니다.
+
+아래 첫 줄은 `worker_started` 가 보여 `started` 에 숫자가 담길 때까지 10초마다
+기다리며 아직인 까닭(판정불가 문장)을 찍으므로, apply 를 시작한 바로 뒤에 붙여
+넣어도 됩니다. 관찰을 늘리면 끝 시각을 새로 주어 마지막 줄만 다시 띄웁니다.
 
 ```
-started="$(workers_started_at pokeclip-prod-render render "${apply_at}")"
+until started="$(workers_started_at pokeclip-prod-render render "${apply_at}")"; do
+  echo "기동 대기 — ${started}"
+  sleep 10
+done
 workers_receive_watch pokeclip-prod-render "${started}" "${watch_end}"
 ```
+
+판정 함수를 하나씩 부를 때도 `started` 가 숫자일 때(위 기다림이 끝난 뒤)
+부릅니다.
 
 ```
 workers_start_log_verdict pokeclip-prod-render render \
@@ -709,9 +786,17 @@ rm -rf -- "${work:?}"
 
 ### 긴급 정지와 상태 어긋남
 
+render 와 upload 의 두 명령입니다. 정지 대상인 서비스의 명령만 돌립니다.
+
 ```
 aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
-  --service pokeclip-prod-<render|upload> --desired-count 0 \
+  --service pokeclip-prod-render --desired-count 0 \
+  --query service.serviceName --output text
+```
+
+```
+aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+  --service pokeclip-prod-upload --desired-count 0 \
   --query service.serviceName --output text
 ```
 
@@ -748,8 +833,9 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     부를 때 이 루트를 `-var render_egress_via_endpoints=false` 로 plan · apply
     합니다(kty 승인 — 요지는 render SG 의 엔드포인트 규칙 삭제 · NAT 규칙
     생성). `terraform.tfvars` 에는 적지 않습니다 — 첫 apply 의 「apply 직전
-    읽기」 는 저장 plan 의 이 값이 `true` 인지 봅니다. 이 값이면 계약 검사 7 · 8 을 보지 않아 DNS 가 꺼진
-    동안에도 plan 이 돕니다. 엔드포인트가 다시 켜지고 network 의 확인을 지난
+    읽기」 는 저장 plan 의 이 값이 `true` 인지 봅니다. 값이 `false` 면 계약
+    검사 7 · 8 을 보지 않아(`main.tf` 의 두 검사가 `true` 일 때만 봄) DNS 가
+    꺼진 동안에도 plan 이 돕니다. 엔드포인트가 다시 켜지고 network 의 확인을 지난
     뒤 `-var` 없이(기본 true) plan · apply 해 되돌립니다. apply 는 원하는 수 1
     을 되살리므로, 긴급 정지 중이었으면 다시 띄우기 승인을 함께 받습니다.
 *   토큰을 회전할 때는 일꾼을 멈춘 채 회전합니다
@@ -814,9 +900,12 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 글자 그대로 뽑아 가짜 aws 로 봅니다 — 정상 6분 렌더 · 연결 시간 초과 반복 ·
 빈 큐 + 지표 지연 · 빈 큐 연결 불능 · DELAY 숨김의 다섯과 경계 사례(정상
 신호로 끊김 · 회복한 옛 장애 · 진행 중 업로드 · 감시 반복의 주기 · 종료 ·
-조회 실패), 판정 한 줄을 뒤집은 변이, 블록에 `#` 주석이 없는지, 대화형
-zsh(표준 입력 · PTY 붙여 넣기)에서 함수 아홉이 모두 정의되고 불렀을 때 bash 와
-같은 결과를 내는지(본문에 `#` 주석을 되돌린 음성 대조 포함).
+조회 실패 · 늦은 판정 · 숫자가 아닌 시각 인자), 「쓰는 예」 의 기동 대기
+블록, 정지 시한(r2 의 두 시간열과 최악 예산이 240초 안), 판정 한 줄을 뒤집은
+변이, 블록에 `#` 주석이 없는지, 대화형 zsh(표준 입력 · PTY 붙여 넣기)에서 함수
+아홉이 모두 정의되고, 그중 일곱을 불렀을 때(나머지 둘 `workers_events` ·
+`workers_queue_depth` 는 그 안에서 불림) bash 와 같은 결과를 내는지(본문에 `#`
+주석을 되돌린 음성 대조 포함).
 
 ## See also
 
