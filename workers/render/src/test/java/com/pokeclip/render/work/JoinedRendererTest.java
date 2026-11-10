@@ -14,6 +14,7 @@ import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.media.RenderCommands;
 import com.pokeclip.render.media.SegmentTiming;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
+import com.pokeclip.render.report.ClipReporter;
 import com.pokeclip.render.storage.S3Store;
 import com.pokeclip.render.support.DirectSegments;
 import com.pokeclip.render.support.DirectSegments.Recording;
@@ -33,6 +34,7 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -76,6 +78,8 @@ class JoinedRendererTest {
     private static final Duration DECORATED_DEADLINE = Duration.ofSeconds(60);
     /** 최종 소리 상관 싱크 창 하나의 길이(표본 · 0.5초). */
     private static final long SYNC_WINDOW = 24_000;
+    /** 녹화기 실물 조각 seg_0 · seg_1 · seg_2(리소스 segments/ · 한 녹화로 이어짐)의 첫 seq — 50 · 51 · 52. */
+    private static final long RECORDER_FIRST_SEQ = 50;
 
     @TempDir
     static Path fixtures;
@@ -92,7 +96,7 @@ class JoinedRendererTest {
     private ListAppender<ILoggingEvent> logs;
 
     @BeforeAll
-    static void segments() {
+    static void segments() throws IOException {
         assumeThat(Ffmpeg.available()).as("ffmpeg 필요").isTrue();
         // ra: 12초 · 150번째 프레임(5.0초 · 조각 11 안)부터 +90틱 → 조각 10 · 11 · 12. rb: 8초 · 격자 그대로 → 조각 20 · 21
         ra = DirectSegments.write(fixtures, "ra", "testsrc2=size=160x90:rate=30", 12, 150, 11, 4);
@@ -104,6 +108,14 @@ class JoinedRendererTest {
         for (int i = 0; i < rb.pieces().size(); i++) {
             FILES.put(20L + i, rb.pieces().get(i));
             OWNER.put(20L + i, rb);
+        }
+        // 바로 쓴 조각은 영상 첫 DTS 가 파일 머리라 m = 0 이다. m ≠ 0 인 조각은 녹화기 실물에서 가져온다(OWNER 밖)
+        for (int i = 0; i < 3; i++) {
+            Path file = fixtures.resolve("recorder_" + i + ".m4s");
+            try (InputStream in = JoinedRendererTest.class.getResourceAsStream("/segments/seg_" + i + ".m4s")) {
+                Files.copy(in, file);
+            }
+            FILES.put(RECORDER_FIRST_SEQ + i, file);
         }
     }
 
@@ -392,6 +404,37 @@ class JoinedRendererTest {
         assertThat(JoinedRenderer.primeMatches(t, PlanOrder.DURATION_MS, t, List.of(1))).as("정상 길이").isTrue();
         assertThat(JoinedRenderer.primeMatches(t, Long.MAX_VALUE / 1_000, t, List.of(1))).as("넘치는 장부 길이")
                 .isFalse();
+    }
+
+    /**
+     * 성공 보고의 배치표(설계 7.6)는 계획 배치를 칸마다 그대로 옮긴다. 녹화기 실물 조각 셋(50 · 51 · 52)을 이어 쓰면 뒤 두 조각의
+     * m 이 0 이 아니라 한 줄 안 다섯 칸(seq · zeroAtUs · fromUs · toUs · headLeadUs)이 모두 다른 값이다 — 칸을 바꿔 넣거나 0 으로
+     * 비우면 걸린다.
+     *
+     * <p>기대값(판독 값에서 손으로 낸다 · 시작 · 끝 오프셋은 파일 머리 기준이라 x′ = 오프셋 − m):
+     * <ul>
+     *   <li>50: m = 0 · V = 359,999틱(3,999,988.9µs → 3,999,989). 시작 x′ = 1,000,000 이 결과 0 → zeroAtUs = −1,000,000 ·
+     *       fromUs = 1,000,000 · toUs = 51 의 zeroAtUs − 50 의 zeroAtUs = 3,999,989.
+     *   <li>51: m = 53,333 · V = 360,000틱(4,000,000µs). zeroAtUs = −1,000,000 + 3,999,989 = 2,999,989 · 이어진 조각 몫은
+     *       파일 머리부터라 fromUs = −m = −53,333 · toUs = 52 의 zeroAtUs − 51 의 zeroAtUs = 4,000,000.
+     *   <li>52: m = 64,000. zeroAtUs = 2,999,989 + 4,000,000 = 6,999,989 · fromUs = −64,000 · 끝 x′ = 1,000,000 − m =
+     *       936,000 = toUs.
+     *   <li>lengthUs = 52 의 zeroAtUs + toUs = 7,935,989.
+     * </ul>
+     */
+    @Test
+    void 성공_보고의_배치표는_계획_배치를_칸마다_옮긴다() {
+        String body = order().segment(50, false, false).segment(51, false, true).segment(52, false, true)
+                .in(50, 1_000_000).out(52, 1_000_000).body();
+
+        Run run = render(body);
+
+        assertThat(run.timings().get(51L).headLeadUs()).as("픽스처 조각 51 m").isEqualTo(53_333);
+        assertThat(run.timings().get(52L).headLeadUs()).as("픽스처 조각 52 m").isEqualTo(64_000);
+        assertThat(run.rendered().layout()).isEqualTo(new ClipReporter.ResultLayout(List.of(
+                new ClipReporter.PlacementItem(50, -1_000_000, 1_000_000, 3_999_989, 0),
+                new ClipReporter.PlacementItem(51, 2_999_989, -53_333, 4_000_000, 53_333),
+                new ClipReporter.PlacementItem(52, 6_999_989, -64_000, 936_000, 64_000)), 7_935_989));
     }
 
     // ---------------------------------------------------------------- 실행

@@ -63,7 +63,7 @@ clip이 `isFinalAttempt:true`(세 번째)를 준 실행의 실패는 다시 하�
     - 가드는 조각 단계에만 있다. 최종 인코딩 출력과 사진 줄은 남겨 둔 1GiB 여유에 기댄다. 처음부터 디스크에 안 들어가는 주문은 뒤쪽 조각에서야 `disk_short`가 난다.
     - 중간 파일은 성공 · 실패 · 재시도 모든 갈래에서 지운다.
 - **보고**: 성공 보고에 배치표 `placements`와 결과 길이 `lengthUs`를 싣는다.
-- **운영에서 먼저 볼 로그 줄(전체 목록 아님)**: `render.graph_size`(단계별 시간 · 중간 파일 바이트 `midBytes` · 최대 RSS) · `render.audio_run` · `render.end_owned` · `render.prime_skipped` · `render.signal_skipped` · `render.burn_rejected` · `render.color_mixed` · `render.disk_short` · `render.piece_capped`. 옛 꼴 주문은 `render.legacy_order` 한 줄을 남긴다.
+- **운영에서 먼저 볼 로그 줄(전체 목록 아님)**: `render.graph_size`(단계별 시간 · 중간 파일 바이트 `midBytes` · 최대 RSS — 성공한 작업에만 남는다. 실패한 작업의 소리 묶음 수는 `render.audio_run` 줄 수로 세어 `render.ffmpeg_failed` 와 맞댄다) · `render.audio_run` · `render.end_owned` · `render.prime_skipped` · `render.signal_skipped` · `render.burn_rejected` · `render.color_mixed` · `render.disk_short` · `render.piece_capped`. 옛 꼴 주문은 `render.legacy_order` 한 줄을 남긴다.
 
 ## 잇기: 조각 경계에 빈틈이 생기지 않게 (실측 2026-09-24)
 
