@@ -256,6 +256,7 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 | upload | `UPLOAD_QUEUE_URL` · `UPLOAD_VISIBILITY_TIMEOUT` | `app_env`(`prod/workers` 가 읽음) | 빈 값 · `900s` | 숨김은 render 와 같다 |
 | render · upload | `INTERNAL_API_TOKEN` | `app_secret_arns`(`prod/workers` 가 읽음) | 빈 값 | 비면 부팅 거부. 앱 서버 넷과 같은 그릇 — workers plan 이 이 ARN 이 clip 의 `INTERNAL_API_TOKEN` 과 같은지 검사해, 다르면 멈춘다(사진 보고가 401 을 받으면 메시지가 그 자리에서 지워지기 때문) |
 | render · upload | `CLIP_BASE_URL` · upload 의 `AUTH_BASE_URL` | `prod/workers` | `http://localhost:8081` · `http://localhost:8082` | Cloud Map 이름. 빠뜨리면 localhost 로 붙는다 |
+| render · upload | `AWS_RETRY_MODE` · `AWS_MAX_ATTEMPTS` | `prod/workers` | SDK 기본(2.46.7 은 `legacy` · `4`) | 값 = `legacy` · `4`. 수신 감시의 실패 줄 간격 셈(`prod/workers` README 「수신 불능」)이 기대는 값이라 SDK 판 · 기본이 바뀌어도 그대로이게 고정한다 — 바꾸면 그 셈을 다시 한다 |
 | next | (없음) | 넣지 않음 | — | 서버 주소 · `NEXT_PUBLIC_*` 는 이미지 빌드 인자로 굳는다(`web/Dockerfile`). `MEDIA_PLAYBACK_ORIGIN` 을 넣으면 로컬 전용 녹화 전달 라우트가 열린다 |
 
 *   `*_ENDPOINT` 는 `PROFILE_PHOTO_S3_ENDPOINT` · `BROADCAST_QUEUE_ENDPOINT` ·

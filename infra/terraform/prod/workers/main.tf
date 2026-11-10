@@ -55,12 +55,22 @@ locals {
   # 읽어야 한다(검사 3).
   clip_token_arn = try(local.runtime.app_secret_arns.clip.INTERNAL_API_TOKEN, "")
 
+  # AWS SDK 재시도 방식 · 시도 횟수(SdkSystemSetting 이 읽는 env). 수신 감시의
+  # 실패 줄 간격 셈(README 「수신 불능」 — 최악 약 134초)이 이 값에 기댄다.
+  # 2.46.7 의 미설정 기본과 같은 값이지만, SDK 판이나 기본 재시도
+  # (AWS_NEW_RETRIES_2026)가 바뀌어도 셈이 그대로이게 고정한다. 값을 바꾸면 그
+  # 셈을 다시 한다.
+  sdk_retry_env = {
+    AWS_RETRY_MODE   = "legacy"
+    AWS_MAX_ATTEMPTS = "4"
+  }
+
   # 주소는 Cloud Map 이름이다. 빠뜨리면 일꾼이 localhost 로 붙는다.
   worker_env = {
-    render = merge(local.runtime_env.render, {
+    render = merge(local.runtime_env.render, local.sdk_retry_env, {
       CLIP_BASE_URL = local.clip_base_url
     })
-    upload = merge(local.runtime_env.upload, {
+    upload = merge(local.runtime_env.upload, local.sdk_retry_env, {
       CLIP_BASE_URL = local.clip_base_url
       AUTH_BASE_URL = local.auth_base_url
     })

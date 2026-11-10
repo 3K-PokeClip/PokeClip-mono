@@ -448,9 +448,13 @@ workers_queue_depth() {
     35초가 됩니다. thumbnail 줄은 render 와 같은 클라이언트이고, upload 도 같은
     SDK 판 · 기본 재시도 · 소켓 30초 · 실패 뒤 5초 쉼이라
     (`workers/upload` 의 `WorkerConfiguration.java` 46–50행 ·
-    `QueueWorker.java` 102–103행) 상한이 같습니다. `AWS_NEW_RETRIES_2026`
-    처럼 SDK 의 기본 재시도가 바뀌면 이 상한도 달라지므로 SDK 판을 올릴 때
-    다시 잽니다.
+    `QueueWorker.java` 102–103행) 상한이 같습니다. 두 일꾼의 태스크 정의에
+    `AWS_RETRY_MODE=legacy` · `AWS_MAX_ATTEMPTS=4` 를 고정해(`main.tf` 의
+    `sdk_retry_env` — 2.46.7 의 미설정 기본과 같은 값), SDK 판이나 기본
+    재시도(`AWS_NEW_RETRIES_2026` 기본 전환)가 바뀌어도 이 셈이 유지됩니다.
+    SDK 는 두 이름을 env 로 읽고(`SdkSystemSetting` — 시스템 속성 다음,
+    프로필보다 먼저) `legacy` 는 소문자로 바꿔 비교합니다(`RetryMode`). 값을
+    바꾸면 이 셈을 다시 합니다.
 *   **사이 신호가 없는 두 실패** 는 틈이 180초 이하면 이어진 것으로 보고
     정지합니다(예: 0초 · 170초). 성공한 빈 수신은 로그를 남기지 않아 사이의
     성공을 볼 길이 없습니다. 틈 134–180초는 SDK 모형으로는 사이에 성공이
@@ -933,6 +937,8 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 *   모듈 블록 배선 — 모듈이 만든 태스크 정의 · 작업 역할 정책 · 이그레스가
     같은 일꾼의 지역값인지(apply · 모듈 출력 `task_definition` ·
     `task_role_policy` · `egress_rules`).
+*   두 태스크 정의 env 에 `AWS_RETRY_MODE=legacy` · `AWS_MAX_ATTEMPTS=4`
+    (apply — 수신 판정 셈의 입력).
 *   계약 검사 1 부터 6 이 어긋난 출력에서 plan 을 멈춤 · 태그 다이제스트와
     모르는 일꾼 키를 변수 검증이 막음.
 *   render 이그레스 — 모듈이 만든 render 규칙에 CIDR 이 없고 AWS API 는

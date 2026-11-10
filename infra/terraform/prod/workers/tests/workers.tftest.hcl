@@ -192,8 +192,10 @@ run "render_env_is_runtime_four_plus_clip_url" {
       RENDER_VISIBILITY_TIMEOUT    = "600s"
       THUMBNAIL_VISIBILITY_TIMEOUT = "120s"
       CLIP_BASE_URL                = "http://clip.pokeclip.internal:28081"
+      AWS_RETRY_MODE               = "legacy"
+      AWS_MAX_ATTEMPTS             = "4"
     }
-    error_message = "render env 가 런타임 app_env.render 넷 + CLIP_BASE_URL(clip Cloud Map 이름 · platform service_ports.clip)과 다르다."
+    error_message = "render env 가 런타임 app_env.render 넷 + CLIP_BASE_URL(clip Cloud Map 이름 · platform service_ports.clip) + SDK 재시도 고정 둘(AWS_RETRY_MODE=legacy · AWS_MAX_ATTEMPTS=4)과 다르다."
   }
 }
 
@@ -206,8 +208,10 @@ run "upload_env_is_runtime_two_plus_clip_and_auth_url" {
       UPLOAD_VISIBILITY_TIMEOUT = "900s"
       CLIP_BASE_URL             = "http://clip.pokeclip.internal:28081"
       AUTH_BASE_URL             = "http://auth.pokeclip.internal:28082"
+      AWS_RETRY_MODE            = "legacy"
+      AWS_MAX_ATTEMPTS          = "4"
     }
-    error_message = "upload env 가 런타임 app_env.upload 둘 + CLIP_BASE_URL · AUTH_BASE_URL 과 다르다."
+    error_message = "upload env 가 런타임 app_env.upload 둘 + CLIP_BASE_URL · AUTH_BASE_URL + SDK 재시도 고정 둘(AWS_RETRY_MODE=legacy · AWS_MAX_ATTEMPTS=4)과 다르다."
   }
 }
 
@@ -352,6 +356,24 @@ run "modules_receive_their_own_worker_inputs" {
       })
     ])
     error_message = "모듈 SG 이그레스 규칙이 같은 일꾼의 egress_targets 가 아니다."
+  }
+}
+
+# 수신 감시의 실패 줄 간격 셈(README 「수신 불능」 — LEGACY 4회 · 최악 약
+# 134초)의 입력이 태스크 정의에 실리는지 모듈이 만든 컨테이너 정의에서 본다.
+# 위 run 은 지역값과 컨테이너 정의가 같은지만 봐서, 지역값에서 빠지면 함께
+# 빠진다. 컨테이너 정의의 로그 리전이 apply 때 정해져 apply 로 돈다.
+run "workers_pin_sdk_retry_mode_and_attempts" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for task in [module.render.task_definition, module.upload.task_definition] : (
+        lookup({ for pair in jsondecode(task.container_definitions)[0].environment : pair.name => pair.value }, "AWS_RETRY_MODE", "") == "legacy" &&
+        lookup({ for pair in jsondecode(task.container_definitions)[0].environment : pair.name => pair.value }, "AWS_MAX_ATTEMPTS", "") == "4"
+      )
+    ])
+    error_message = "render · upload 태스크 정의 env 에 AWS_RETRY_MODE=legacy · AWS_MAX_ATTEMPTS=4 가 없다 — SDK 판 · 기본 재시도가 바뀌면 수신 감시의 틈 180초 셈이 깨진다."
   }
 }
 
