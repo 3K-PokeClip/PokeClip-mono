@@ -938,7 +938,7 @@ C′). 걸음마다 실행 직전에 kty 가 승인합니다. 근거는 계획 �
 | `edge_ip` | 「접속법」 2 — C′ · 끄기 확인 직전에 다시 풉니다 |
 | `edge_plan` | 「/dvr 하한 apply」 |
 | `fn` · `stream` · `round` · `fn_etag` · `dvr_case` | 「판정 B′」 첫 블록 |
-| `floor` · `seg` | 「판정 B′」 둘째 블록(`floor` 는 `deny0` 의 `floor=` 값) |
+| `floor` · `seg` | 「판정 B′」 둘째 블록(`floor` 는 `deny0` 의 `floor=` 값 · C′ 부터는 `${evidence}/dvr-floor.txt` 에도 남김 — 닫힌 회차 뒤 새 셸은 이 파일에서) |
 | `topic_arn` · `alarms` · `log_group` | 「판정 K」 |
 | `jar` | 「판정 C′」 머리 — T2 의 `jar_a` 와 같은 발급 |
 | `c_since_ms` · `c_since` · `c_get` · `c_val` · `c_line` · `below` | 「판정 C′」 첫 블록 |
@@ -1292,11 +1292,20 @@ https://app.pokeclip.com`)를 실어 요청합니다. 요청은 「접속법」 
 를, 판정 B′ 와 같은 셸의 `stream` · `round` · `floor` · `seg` 를 씁니다.
 `jar` 는 시험 방송의 서명 쿠키 셋을 담은 쿠키 파일입니다(「경로
 우회 시험」 T2 의 `jar_a` 와 같은 발급 · `mktemp` 0600 · 증거 디렉터리 밖 ·
-시험 뒤 지움). C′ 직전에 판정 B′ 의 `deny0` 를 한 번 더 돌려 그 `floor=` 값을 `floor` 에
-다시 넣습니다.
+시험 뒤 지움). C′ 직전에 판정 B′ 의 `deny0` 를 한 번 더 돌려 그 `floor=`
+값을 `floor` 에 다시 넣고, 같은 값을 증거 파일에 한 줄로 남깁니다.
+
+```shell
+printf '%s\n' "${floor}" > "${evidence}/dvr-floor.txt"   # C′ 의 F
+```
+
+닫힌 회차 뒤에는 Writer 가 키를 지워 `deny0` 가 `floor=` 를 내지 않습니다.
+그 뒤 새 셸에서 `floor` 가 필요하면(「/dvr 하한 끄기」 의 확인) 이 파일에서
+받습니다.
 
 **실패하면 곧바로 「/dvr 하한 끄기」 입니다.** 단, 아래 DENY 로그의 「관측
-불충분」 은 실패가 아닙니다.
+불충분」 은 실패가 아니고, 아래 「`below` 재측정」 한 번을 거친 뒤에야
+`below1`–`below3` 실패가 실패입니다.
 
 **응답 코드 `000`(「응답 없음 — 시험 무효」 줄)은 어느 판정에서도 통과가
 아닙니다.** 엣지 응답을 받지 못한 것이라 「`200` 이 아님」 · 「함수 생성이
@@ -1352,6 +1361,15 @@ below="$(seg "$((floor - 1))")"
 | `old` | 응답이 있고(`000` 아님) `xcache` 가 함수 생성이 아님(함수 통과). 4.2 루프백이 남긴 옛 꼴 키가 있으면 `200`, 없으면 버킷의 `403`(`s3:ListBucket` 이 없어 없는 키도 403) |
 | `live` | `200`(`/live` 무변 — 방송 중) |
 
+**`below` 재측정**: `below1`–`below3` 가 함수 404 가 아니면 곧바로 끄지
+않고 한 번 다시 봅니다. 송출이 1시간을 넘긴 방송은 Writer 가 하한을 5분마다
+올리고, KVS 값이 엣지에 퍼지는 데 1분쯤 걸립니다(실험대 81 E4 — 같은 POP
+에서도 전파 중 `200` · `404` 가 오감). `test-function` 이 새 하한을 내도 엣지는
+아직 옛 하한을 읽을 수 있어, 새 하한 바로 아래 조각이 정상적으로 `200` 이 될
+수 있습니다. 2분 뒤 `deny0` 로 `floor` 를 다시 받아 `dvr-floor.txt` 를
+갱신하고 `below` 를 다시 만든 뒤 위 블록을 한 번 더 돌립니다. 그래도 함수
+404 가 아니면 실패로 끕니다.
+
 **E14 경로 우회**: 우회 경로가 가리키는 조각이 버킷에 있어야 시험이 뜻을
 가집니다. 조각이 없으면 우회가 원본까지 가도 버킷 `403`(`s3:ListBucket` 이
 없어 없는 키도 403)이라 거짓 통과입니다. 그래서 하한 아래 조각이 아니라
@@ -1397,12 +1415,15 @@ e14="$(seg "${e14_seq}")"
   c_get e14-dot "/dvr/${stream}/${round}/seg/./${e14_pad}.m4s"
   c_get e14-pct2e "/dvr/${stream}/x/%2e%2e/${round}/seg/${e14_pad}.m4s"
   c_get e14-dslash "/dvr/${stream}/${round}//seg/${e14_pad}.m4s"
-} | tee -a "${evidence}/dvr-c.txt"
-grep '^e14-direct ' "${evidence}/dvr-c.txt" | grep -c ' 200 '   # 1
-grep '^e14-' "${evidence}/dvr-c.txt" | grep -v '^e14-direct ' |
-  grep -c ' 200 '                                             # 0
-grep '^e14-' "${evidence}/dvr-c.txt" | grep -c ' 000 '        # 0
+} | tee "${evidence}/dvr-c-e14.txt" | tee -a "${evidence}/dvr-c.txt"
+e14_out="${evidence}/dvr-c-e14.txt"      # 이번 시도분만(다시 돌리면 덮어씀)
+grep -c '^e14-direct 200 ' "${e14_out}"                       # 1
+grep -v '^e14-direct ' "${e14_out}" | grep -c ' 200 '         # 0
+grep -c ' 000 ' "${e14_out}"                                  # 0
 ```
+
+세는 줄은 이번 시도분 파일(`dvr-c-e14.txt`)만 봅니다. `000` 으로 블록을 다시
+돌리면 그 파일은 덮어쓰고, 모든 시도는 `dvr-c.txt` 에 남습니다.
 
 | 라벨 | 통과 |
 |---|---|
@@ -1584,15 +1605,17 @@ apply 가 끝나면(Deployed) 확인합니다. 확인에는 유효한 서명 쿠
 
 새 셸이면 아래를 먼저 다시 만듭니다(「/dvr 하한 셸 전제」). `jar` 는 위와
 같고, `edge_ip` 는 「접속법」 2 로 다시 풀고, `c_get` · `c_val` · `c_line` 은
-「판정 C′」 첫 블록의 정의 부분만 붙여 넣습니다. `floor` 는 판정 B′ 의
-`deny0` 로 다시 받습니다(`fn` · `fn_etag` · `dvr_case` 도 B′ 첫 블록의
-정의로 다시 만듦 — 함수는 떼어도 남아 있어 `test-function` 이 됩니다).
+「판정 C′」 첫 블록의 정의 부분만 붙여 넣습니다. `floor` 는 C′ 머리가 남긴
+`dvr-floor.txt` 에서 받습니다. 닫힌 회차 뒤에는 키가 지워져 `deny0` 가
+`floor=` 를 내지 않으므로 이 파일이 유일한 출처입니다(`fn` · `fn_etag` ·
+`dvr_case` 는 아래 재시도에 쓸 때만 B′ 첫 블록의 정의로 다시 만듦 — 함수는
+떼어도 남아 있어 `test-function` 이 됩니다).
 
 ```shell
 evidence='<쓰던 증거 디렉터리>'           # 새로 만들지 않습니다
 stream='<test>'
 round='<회차>'
-floor='<F>'                                # deny0 의 floor= 값
+floor="$(cat "${evidence}/dvr-floor.txt")"   # C′ 머리가 남긴 F
 seg() { printf '/dvr/%s/%s/seg/%06d.m4s' "${stream}" "${round}" "$1"; }
 below="$(seg "$((floor - 1))")"
 ```
@@ -1610,9 +1633,11 @@ below="$(seg "$((floor - 1))")"
 6.6(C′)입니다.
 
 `off-eq` 가 `200` 이 아니면 쿠키 만료와 `floor` 조각 밀림(그 seq 조각을 더
-받을 수 없음)을 가를 수 없습니다. 판정 B′ 의 `deny0` 로 `floor` 를 다시
-받고 `below` 를 다시 만든 뒤 위 블록을 한 번 더 돌립니다. 그래도 `off-eq`
-가 `200` 이 아니면 멈추고 kty 에게 보고합니다.
+받을 수 없음)을 가를 수 없습니다. 열린 회차면 판정 B′ 의 `deny0` 로
+`floor` 를 다시 받고 `below` 를 다시 만든 뒤 위 블록을 한 번 더 돌립니다.
+닫힌 회차 뒤면 `deny0` 가 `floor=` 를 내지 않으니 다시 받지 않고, 쿠키를 새로
+발급해 같은 `floor` 로 한 번 더 돌립니다. 그래도 `off-eq` 가 `200` 이 아니면
+멈추고 kty 에게 보고합니다.
 
 확인이 끝나면(통과든 멈춤이든) 쿠키 파일을 지웁니다.
 
