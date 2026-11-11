@@ -156,8 +156,11 @@ Writer」).
     변경은 0 입니다. 게시된 함수를
     test-function 으로 시험합니다([엣지 시험 런북](../../runbooks/edge-tests.md)).
 1.  2단 — `-var dvr_floor_enabled=true` 로 apply 합니다. plan 은 media 배포
-    하나 변경입니다. 실제 엣지 요청으로 시험하고, 실패하면 곧바로 `false` 로
-    되돌립니다(함수 · 로그 그룹은 남김).
+    하나 변경입니다. 실제 엣지 요청으로 시험합니다(판정 C′ — 결과는 통과 ·
+    끄기 · 보류). 끄기면 곧바로 `false` 로 되돌립니다(함수 · 로그 그룹은
+    남김). 보류면 끄지 않고 걸음 6.6 을 연 채 kty 에게 회부합니다. 끄기는
+    시청자 피해(또는 경로 우회)일 때만입니다([엣지 시험
+    런북](../../runbooks/edge-tests.md) 「판정 C′」).
 
 켠 뒤의 edge apply(표준 로그 끄기 · WAF 속도 조정 포함)는 모두
 `-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에 `/dvr/*` 의

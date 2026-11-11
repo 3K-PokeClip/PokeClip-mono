@@ -132,12 +132,20 @@ apply 마다 plan 파일을 만들고, 바뀌는 관리 자원 목록이 그 걸
 목록과 같을 때만 apply 합니다. 하나라도 다르면 apply 하지 않고 kty 에게
 보고합니다.
 
+plan 과 apply 는 다른 블록입니다. 먼저 plan 블록으로 목록을 냅니다.
+
 ```shell
 terraform -chdir=infra/terraform/prod/media plan -out="${work}/media.plan"
 terraform -chdir=infra/terraform/prod/media show -json "${work}/media.plan" \
   | jq -r '.resource_changes[] | select(.mode == "managed")
       | select(.change.actions != ["no-op"])
       | "\(.change.actions | join(",")) \(.address)"'
+```
+
+목록이 아래 표의 그 걸음 기대 목록과 같은지 대조하고, kty 의 실행 직전
+승인을 받은 뒤에 apply 블록을 돌립니다.
+
+```shell
 terraform -chdir=infra/terraform/prod/media apply "${work}/media.plan"
 ```
 
