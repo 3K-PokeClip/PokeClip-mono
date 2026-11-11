@@ -543,7 +543,8 @@ check_case_10() {
        + (if .ingest_auth_image != "" then sc_resolve_env else {} end))}
     + (if .janitor_enabled
        then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
-         JANITOR_ENABLED: "true", SEGMENT_ROOT: "/recordings"})}
+         JANITOR_ENABLED: "true", JANITOR_GRACE: "23h",
+         SEGMENT_ROOT: "/recordings"})}
        else {} end)' '사이드카 · janitor env'
 }
 

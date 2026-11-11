@@ -33,7 +33,8 @@ readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
 # merge-develop 의 make-golden.sh. 사이드카 CONTROL_LISTEN(제어면 포트 8086)은
 # 두 골든에 그 키 한 줄만 더했다. 사이드카 PLAYBACK_ROUND_KEYS 도 같다 — 스위치
 # 파일(sidecar.env · render_vars.json 의 false)을 compose 가 풀어 넣은 키 한
-# 줄이다(env_file 자체는 구성 JSON 에 남지 않는다).
+# 줄이다(env_file 자체는 구성 JSON 에 남지 않는다). janitor JANITOR_GRACE 는
+# 골든 c 에 그 키 한 줄만 더했다.
 readonly COMPOSE_GOLDEN_PREFIX="${TEST_DIR}/golden/compose.legacy"
 readonly START_SCRIPT="${MEDIA_HOST_DIR}/bin/start-media.sh"
 readonly DENY_SYNC_SCRIPT="${MEDIA_HOST_DIR}/bin/ingest-auth-deny-sync.sh"
