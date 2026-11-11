@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
@@ -32,5 +33,44 @@ func TestPinnedRowThenVideoRowHasNoFalseHole(t *testing.T) {
 	if got := f.playbackOf(2); got.PlaybackPos != 18_226*time.Millisecond || got.StitchOffset != 0 {
 		t.Errorf("고정 행 다음 영상 행 도장 = pos %v · offset %v, want pos 18.226s · offset 0 — 거짓 구멍 %v",
 			got.PlaybackPos, got.StitchOffset, 18_226*time.Millisecond-got.PlaybackPos)
+	}
+}
+
+// 고정 행이 꼬리 교정(장부 길이 2s → 4s)을 받고 물러나면 기대 영상 끝도 그 차만큼 옮긴다 — 실시간 사슬과 복원 접기(교정 뒤 장부
+// 값으로 접는다)가 다음 행에 같은 도장을 낸다(PR 종결 r2 cx — 1회차 cc M1 재판정). 잡는 결함: 기대 영상 끝을 접수 때 길이로 둔 채
+// 두면(16.226s) 다음 영상 행이 d = 2s 의 거짓 구멍으로 이어져 실시간은 18s(offset −226ms) · 복원은 18.226s(offset 0)로 갈린다.
+//
+// 조각 0: mtxi 10s · 영상 끝 14.226s · 장부 길이 4s. 조각 1: 판독 실패(고정) · 접수 때 길이 2s · 꼬리 교정 뒤 4s.
+// 조각 2: 같은 녹화기 다음 번호 · 영상 머리 · mtxi = 영상 첫 = 18.226s.
+func TestPinnedRowTailCorrectionMatchesRestore(t *testing.T) {
+	rec := [16]byte{1}
+	n0, n2 := int64(0), int64(2)
+	end0 := 14_226 * time.Millisecond
+	first2, end2 := 18_226*time.Millisecond, 22_226*time.Millisecond
+	anchor, ok := playback.StartLink(playback.SourceTiming{Seq: 0, SessionID: "S1", Recorder: &rec, Number: &n0,
+		VideoEnd: &end0, Mtxi: &playback.Mtxi{DTS: 10 * time.Second}, Dur: 4 * time.Second})
+	if !ok {
+		t.Fatal("조각 0 이 사슬을 열지 못했다(전제)")
+	}
+	pinned := playback.SourceTiming{Seq: 1, SessionID: "S1", Dur: 2 * time.Second}
+	next := playback.SourceTiming{Seq: 2, SessionID: "S1", Recorder: &rec, Number: &n2, VideoFirst: &first2,
+		VideoEnd: &end2, Mtxi: &playback.Mtxi{DTS: first2}, Dur: 4 * time.Second}
+	rule := func(l playback.Link) time.Duration { return l.Pos + l.Dur }
+
+	live1 := playback.NextLink(anchor, sameInstance(anchor, pinned), pinned, rule)
+	live1 = withTailCorrection(live1, &index.TailRow{Seq: 1, DurationMS: 4000})
+	live2 := playback.NextLink(live1, sameInstance(live1, next), next, rule)
+
+	pinned.Dur = 4 * time.Second
+	restored := playback.RestoreChain(&anchor, []playback.SourceTiming{pinned, next}, rule, sameInstance)
+	if len(restored) != 2 {
+		t.Fatalf("복원 링크 %d개, want 2(전제)", len(restored))
+	}
+	if live2.Pos != restored[1].Pos || live2.Offset != restored[1].Offset {
+		t.Errorf("조각 2 실시간 = pos %v · offset %v, 복원 = pos %v · offset %v — 같아야 한다",
+			live2.Pos, live2.Offset, restored[1].Pos, restored[1].Offset)
+	}
+	if live1.VideoEnd == nil || *live1.VideoEnd != 18_226*time.Millisecond {
+		t.Errorf("교정 뒤 고정 행 기대 영상 끝 = %v, want 18.226s(앞 영상 끝 + 교정 뒤 길이)", live1.VideoEnd)
 	}
 }

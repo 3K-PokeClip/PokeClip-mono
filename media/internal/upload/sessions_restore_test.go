@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -190,5 +191,92 @@ func TestRestoredChunksNeverExposeEarlierChunkOffset(t *testing.T) {
 	}
 	if wrong.Load() > 0 {
 		t.Fatalf("복원 중 틀린 보정값을 %d번 봤다(아는 값 관측 %d번) — 아직 안 쓴 seq 는 「모름」 이어야 한다", wrong.Load(), known.Load())
+	}
+}
+
+// 덩어리를 쓰는 사이 스위퍼가 수명이 지난 표를 치워도(evict) 큰 seq 가 작은 seq 덩어리의 보정값으로 「아는 값」 이 되지 않는다(PR
+// 종결 r2 cx H — 재현 입력: 수명이 막 지난 표 · 앞 줄 seq 0 · 끊김 줄 seq 1 · 구멍 링크 21,600개 · 링크마다 다른 보정값). 잡는
+// 결함: 큰 seq 덩어리를 쓴 뒤 evict 가 표 · 끊김 줄을 지우고 작은 seq 덩어리가 새 표에 적히면, 큰 seq 의 「seq 이하 마지막 줄」 이
+// 작은 덩어리 끝 줄이 되어 스위퍼 ③ 작업이 그 값으로 도장을 굳힌다. 치움 뒤 몫이 지워지는 회차와, 보류 작업이 남아 몫은 그대로
+// 두고 표만 치우는 회차를 둘 다 본다.
+func TestRestoredChunksSurviveTableEvictionBetweenChunks(t *testing.T) {
+	for _, keepEntry := range []bool{false, true} {
+		name := "몫 지움"
+		if keepEntry {
+			name = "몫 남음"
+		}
+		t.Run(name, func(t *testing.T) { checkRestoreWithEviction(t, keepEntry) })
+	}
+}
+
+// checkRestoreWithEviction 은 복원 덩어리 사이에 표 치움을 끼워 틀린 「아는 값」 이 남는지 본다. keepEntry 면 치우는 시각에 보류
+// 작업이 살아 있어 회차 몫은 맵에 남는다.
+func checkRestoreWithEviction(t *testing.T, keepEntry bool) {
+	const (
+		n      = 21_600
+		rounds = 20
+	)
+	before := time.Unix(1_000, 0)
+	now := before.Add(defaultSessionTTL + time.Millisecond)
+	links := make([]playback.Link, 0, n)
+	for s := int64(1); s <= n; s++ {
+		links = append(links, playback.Link{Seq: s, Offset: time.Duration(s) * time.Millisecond})
+	}
+	var wrong, interleaved int
+	for range rounds {
+		m := newMemoryForTest()
+		m.recordLive(index.UploadTarget{SessionID: "S-1", Seq: 0}, before)
+		m.recordLive(unknownRequest(1), before)
+		if keepEntry {
+			m.hold(index.UploadTarget{SessionID: "S-1", Seq: n + 1}, now)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			m.recordRestored("S-1", links, now)
+		}()
+		if evictBetweenChunks(m, n, now, done) {
+			interleaved++
+		}
+		<-done
+		if _, ok := m.byID["S-1"]; keepEntry && !ok {
+			t.Fatal("보류 작업이 남은 회차의 몫이 치움에 지워졌다(전제)")
+		}
+		for s := int64(n); s >= 1; s -= 97 {
+			if off, ok := m.offsetAt("S-1", s); ok && off != time.Duration(s)*time.Millisecond {
+				wrong++
+				t.Logf("seq %d = %v, want %v 또는 모름", s, off, time.Duration(s)*time.Millisecond)
+				break
+			}
+		}
+	}
+	if interleaved == 0 {
+		t.Fatalf("복원 덩어리 사이에 표 치움을 한 번도 끼우지 못했다(%d회) — 시험이 경합을 만들지 못한다", rounds)
+	}
+	if wrong > 0 {
+		t.Fatalf("표 치움이 낀 복원 %d/%d회(끼운 횟수 %d)에서 틀린 보정값이 「아는 값」 으로 남았다", wrong, rounds, interleaved)
+	}
+}
+
+// evictBetweenChunks 는 큰 seq 덩어리만 적힌 순간을 기다려 표를 치운다. 그 순간을 보기 전에 복원이 끝나면 거짓이다.
+func evictBetweenChunks(m *sessionMemory, n int64, now time.Time, done <-chan struct{}) bool {
+	for {
+		m.mu.Lock()
+		var high, low bool
+		if e, ok := m.byID["S-1"]; ok {
+			_, high = e.offsets[n]
+			_, low = e.offsets[1]
+		}
+		m.mu.Unlock()
+		if high && !low {
+			m.evict(now)
+			return true
+		}
+		select {
+		case <-done:
+			return false
+		default:
+			runtime.Gosched()
+		}
 	}
 }

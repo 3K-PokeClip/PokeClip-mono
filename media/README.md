@@ -1598,6 +1598,8 @@ MediaMTX 녹화 파일(영상 1 + 소리 6)
 길이))으로 잰다(ADR-073 결정 2 개정). 판독 실패로 도장을 고정한 앞 조각은 기대 영상 끝(그 앞 조각 영상 끝 + 장부
 길이)을 이어받으므로, 그 앞 조각에 영상 끝이 있었으면 다음 조각도 영상 축으로 잰다(`internal/playback/restore.go`
 `NextLink` · `TestPinnedRowThenVideoRowHasNoFalseHole` — 소리 머리 조각에서 mtxi 축이면 앞섬만큼 거짓 구멍이 난다).
+고정한 조각이 꼬리에서 자라 길이가 교정되면 그 기대 영상 끝도 길이 차만큼 옮긴다 — 복원도 교정 뒤 장부 길이로 같은 값을
+짓는다(`internal/indexer/chain.go` `withTailCorrection` · `TestPinnedRowTailCorrectionMatchesRestore`).
 
 - **리셋** — 같은 녹화기 이어짐이 아니거나(송출자 재접속 · 녹화기 드리프트 리셋 · 번호 건너뜀 · mtxi 없음),
   역행이면(영상 축 d ≤ −1ms `videoRewindLimit` · mtxi 축이면 mtxi 가 뒤로 감) 직전 조각의 **먼저 끝난 트랙
@@ -2990,7 +2992,7 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 
 | 이름 | 자리 | 등급 | 속성 · 뜻 |
 |---|---|---|---|
-| `segment_indexed` | 조각마다 | INFO | 기존 속성 + `timing_version` · `timing_branch` · `round_id` · `head_track` · `head_lead_ms` · `wall_ms` · `comparable` · `same_instance` · `attributed` · `delta_ms`(견줬을 때) |
+| `segment_indexed` | 조각마다 | INFO | 기존 속성 + `timing_version` · `timing_branch` · `round_id` · `head_track` · `head_lead_ms` · `wall_ms` · `comparable` · `same_instance` · `attributed` · `delta_ms`(견줬을 때). `comparable` 은 판마다 뜻이 다르다 — 판 NULL 행은 견줄 조각 술어의 값이라 앞 행과 같은 녹화기 이어짐이 아닌 행(회차 첫 행 포함)이 참이고, 판 2 행은 섞기가 실제로 견줬는가라 회차 첫 행이 거짓이다. 판 사이 `comparable` 비율을 그대로 견주지 않는다 |
 | `pdt_new_chapter` · `pdt_overlap` · `timing_reset` · `timing_round_broken` | 판 2 행의 섞기 갈래 | INFO · WARN · ERROR | 새 장 · 겹침 · 회차 첫 행 · 판 고정 위반의 까닭 |
 | `timing_gate_read` | 새 회차 개시 행 | INFO | 회차 · 고른 판 · 게이트 `changed_at` |
 | `timing_facts_partial` · `head_lead_over_1s` | 조각 판독 | WARN | mtxi 없음 · 번호 넘침 · 영상 없음 등. `head_lead_over_1s` 의 `instance_first` 는 장부 꼬리와 녹화기 표식이 다른가(번호는 보지 않는다 — 같은 녹화기에서 번호만 건너뛴 조각은 첫 조각이 아니다) |
@@ -3048,8 +3050,7 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
 | 한계 | 영향 | 처분 |
 |---|---|---|
 | **③ 사슬 복원의 영구 실패.** 닻이 될 ③ 객체 · ② 원천이 없거나(`anchor_object_missing` · `anchor_source_missing`), 닻 행이 판독 실패로 고정 도장이었거나(`anchor_pinned`), 객체가 장부와 다르거나(`anchor_mismatch`), 다른 세션의 행이 끼었으면(`foreign_session`) 다시 시도해도 같은 답이다 | 그 무리의 구멍 행들이 `pending` 으로 남아 GAP 이다 — 백오프로 거듭 시도하며 `chain_restore_failed` 가 같은 `reason` 으로 되풀이된다. 같은 회차라도 닻이 다른 뒤 무리는 건너뛰어 되살린다(일시 까닭이면 그 자리에서 멈춘다). 실시간 경로 · 다른 회차는 무관하다 | 한계(기록) — 회차가 바뀌면 새 사슬이다 |
-| **고정 행의 기대 영상 끝은 꼬리 교정을 받지 않는다.** mtxi 를 못 읽어 도장을 기대값에 고정한 행은 장부 영상 칸이 없어, 실시간 사슬의 기대 영상 끝이 INSERT 때 길이로 남는다(`withTailCorrection` 은 장부 영상 끝이 있는 칸만 고친다). 복원은 교정 뒤 장부 길이로 같은 값을 다시 계산한다 | 그 고정 행이 꼬리에서 자라면(유휴 확정 뒤 재성장) 다음 행의 맞닿음 판단이 실시간과 복원에서 갈려 같은 행의 ③ 도장이 다를 수 있다 — 복원이 그 자리를 다시 접을 때만 드러나고, 구멍 뒤 이미 올라간 행이 있으면 대조가 `chain_mismatch` 로 그 구멍을 만들지 않는다(대조 행이 없으면 복원 쪽 도장으로 이어진다). 우리 송출에서는 두 조건이 겹쳐야 한다: 고정 행(우리 이미지는 mtxi 를 머리말에 쓰므로 판독이 재스캔까지 실패한 행뿐 · 입력 상한 16MiB 초과) **이면서** 꼬리 재성장(송출이 10초 넘게 멈췄다 같은 조각에 다시 씀) | 한계(기록) — 고칠 길은 교정 때 고정 행의 기대 영상 끝도 길이 차만큼 옮기는 것이다(PR 종결 r1 cc M) |
-| **꼬리 교정의 판독 실패.** 꼬리 조각이 자라 길이를 고칠 때 시각 판독이 일시 실패하면 길이만 고치고 영상 끝 칸은 옛 값이다. 덜 써진 조각을 커밋한 경우도 영상 끝이 INSERT 때 값이다 | 다음 행의 맞닿음 · 판 2 길이 판단이 옛 영상 끝을 본다. MediaMTX 가 닫은 파일만 커밋하므로(길이 0 거부) 우리 송출 흐름에서는 생기지 않는다 | 한계(기록) — 방어안(`UpdateTail` 판 2 길이 재계산)은 두지 않았다 |
+| **꼬리 교정의 판독 실패.** 꼬리 조각이 자라 길이를 고칠 때 시각 판독이 실패하면(WARN `tail_timing_read_failed`) 길이 · 크기만 고치고 영상 끝 칸은 옛 값이다 | 우리 송출에서도 생긴다: 송출이 10초(`SEGMENT_IDLE_TIMEOUT`) 넘게 멈추면 워처가 아직 쓰는 중인 파일을 유휴 확정해 커밋하고(덜 써진 조각 — 영상 끝이 그때 값), 송출이 돌아와 같은 파일이 자라면 꼬리 교정(`tail_corrected`)이 그 파일을 다시 읽는다(`recording/watcher.go` `onIdleTick` · 인덱서 `correctTail`). 이 다시 읽기가 실패하면 장부에는 새 길이 · 크기와 유휴 확정 때의 짧은 영상 끝이 남는다. 다음 행의 맞닿음(영상 축 d = 다음 영상 첫 − 옛 영상 끝)이 자란 만큼 거짓 구멍으로 보여, 그 행의 보정값이 구멍 갈래(앞 도장 + 장부 길이)로 정해진다 — 앞 조각이 소리 머리면 머리 앞섬만큼(실측 최대 226ms) 도장이 앞당겨진다. 판 2 섞기의 길이 판단도 옛 영상 끝을 본다. 실시간과 복원은 같은 장부 값을 보므로 둘이 갈리지는 않는다. 볼 것: 같은 `path` 에 `tail_corrected` 와 `tail_timing_read_failed` 가 함께 남은 조각 — 그 다음 조각의 `segment_indexed`(`timing_branch` · `delta_ms`)와 ③ 도장 | 한계(기록) — 방어안(`UpdateTail` 판 2 길이 재계산)은 두지 않았다 |
 | **판독 일시 실패 동안 그 스트림이 멈춘다.** 실패한 조각과 그 뒤 조각을 커밋하지 않고 다음 재스캔을 기다린다 | 한 번에 최대 약 5분 45초(재스캔 5분 + 수집 예산 45초) 그 스트림의 되감기 목록 · ③ 업로드가 늘지 않는다. 다른 스트림은 무관하다 | 순서 보존의 대가 — 다음 재스캔에서도 실패하면 칸 NULL 로 커밋한다 |
 | **기동 전 검사는 시작 스크립트를 지나는 기동만 본다.** 엔진 재기동(`restart: on-failure`) · 스위치를 올리는 순간 이미 돌던 출시 컨테이너는 보지 않는다 | 이미 돌던 출시 컨테이너는 스위치 2 선행 조건(모든 상자 라벨 2)이 막고, 어겨도 쓰기자 거부가 첫 INSERT 에서 끝낸다 — 그 사이 감사 · 정산이 판 2 행을 옛 식으로 읽을 수 있다 | 런북 「PDT 판 2 롤백 하한 · 판 게이트」 남는 한계 |
 

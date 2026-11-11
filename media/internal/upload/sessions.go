@@ -35,6 +35,8 @@ type sessionMemory struct {
 	wakeSig chan struct{}
 	// backoffBase · backoffMax 는 복원 실패의 세션 단위 백오프다(SweepEvery · 2^n · 상한 BackoffMax — 게이트와 같은 꼴).
 	backoffBase, backoffMax time.Duration
+	// tableGens 는 표 세대를 매기는 셈이다 — 회차 몫마다 따로 세지 않는다(몫이 지워졌다 다시 생겨도 세대가 겹치지 않게).
+	tableGens uint64
 }
 
 // sessionEntry 는 한 회차의 몫이다. 셋의 수명 기준 시각은 서로 다르다.
@@ -46,6 +48,9 @@ type sessionEntry struct {
 	pinned map[int64]time.Duration
 	// tableSeen 은 그 회차의 마지막 실시간 ③ 요청 시각이다 — 표의 수명 기준이다.
 	tableSeen time.Time
+	// tableGen 은 표의 세대다 — 몫이 생길 때와 수명이 표를 치울 때 새 값을 받는다. 복원이 베낀 표가 덩어리를 쓰는 사이 치워졌는가를
+	// 가른다(recordRestored).
+	tableGen uint64
 
 	// initSHA 는 그 세션의 init CAS 가 확정한 해시다(Success·AlreadySame). nil 이면 미확정이다.
 	initSHA  []byte
@@ -99,10 +104,16 @@ func newSessionMemory(opt Options) *sessionMemory {
 func (m *sessionMemory) entry(sessionID string) *sessionEntry {
 	e, ok := m.byID[sessionID]
 	if !ok {
-		e = &sessionEntry{}
+		e = &sessionEntry{tableGen: m.nextTableGen()}
 		m.byID[sessionID] = e
 	}
 	return e
+}
+
+// nextTableGen 은 새 표 세대다. 락을 잡은 채로 부른다.
+func (m *sessionMemory) nextTableGen() uint64 {
+	m.tableGens++
+	return m.tableGens
 }
 
 // recordLive 는 실시간 ③ 요청 하나를 그 회차의 보정값 표에 적고 표의 수명을 다시 센다.
@@ -329,6 +340,7 @@ func (m *sessionMemory) evict(now time.Time) {
 		if m.expired(e.tableSeen, now) {
 			e.offsets, e.pinned, e.breaks, e.restored, e.mismatches = nil, nil, nil, nil, nil
 			e.restoreFails, e.restoreNext = 0, time.Time{}
+			e.tableGen = m.nextTableGen()
 		}
 		if m.expired(later(e.initSeen, e.tableSeen), now) {
 			e.initSHA = nil
@@ -373,16 +385,25 @@ func (e *sessionEntry) empty() bool {
 // 뒤 seq 가 앞 덩어리 끝 줄의 보정값으로 「아는」 것처럼 보이고, 스위퍼 ③ 작업이 그 값으로 만들어 CAS 로 굳힌다. 뒤에서부터
 // 쓰면 아직 안 쓴 seq 의 「seq 이하 마지막 줄 · 그 뒤 끊김 줄」 은 쓰기 전 그대로라(새 줄 · 걷은 끊김 줄은 모두 그보다 뒤다) 읽기는
 // 언제나 「모름」 이거나 다 쓴 뒤와 같은 값이다. 돌려주는 값은 실제로 적은 줄 수다(실시간 줄이 이긴 seq 는 빠진다).
+//
+// 덩어리 사이에 수명이 표를 치우면(evict — 표 세대가 바뀐다) 남은 덩어리를 쓰지 않고 0 을 돌려준다(PR 종결 r2 cx H). 치움은 이미 쓴
+// 큰 seq 줄 · 끊김 줄을 함께 지우므로, 작은 seq 덩어리를 마저 쓰면 큰 seq 가 그 덩어리 끝 줄의 보정값으로 「아는」 것처럼 보인다.
+// 멈추면 이 복원이 쓴 줄은 하나도 남지 않아 모든 seq 가 「모름」 이다 — 스위퍼의 표 없는 ③ 작업이 복원을 다시 깨운다. 세대 대조는
+// 덩어리 잠금 안의 비교 하나라 잠금을 더 오래 쥐지 않는다.
 func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, now time.Time) int {
-	lines, breaks := m.tableKeys(sessionID)
+	lines, breaks, gen := m.tableKeys(sessionID)
 	unknown := unknownLinks(links, lines, breaks)
 	slices.SortStableFunc(unknown, func(a, b playback.Link) int { return cmp.Compare(a.Seq, b.Seq) })
 	written := 0
 	for to := len(unknown); to > 0; to -= restoredChunk {
-		written += m.writeRestored(sessionID, unknown[max(to-restoredChunk, 0):to], now)
+		n, ok := m.writeRestored(sessionID, gen, unknown[max(to-restoredChunk, 0):to], now)
+		if !ok {
+			return 0
+		}
+		written += n
 	}
 	if len(unknown) == 0 {
-		m.writeRestored(sessionID, nil, now)
+		m.writeRestored(sessionID, gen, nil, now)
 	}
 	return written
 }
@@ -390,23 +411,24 @@ func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, 
 // restoredChunk 는 복원 줄을 한 번 잠가 쓰는 링크 수다 — 맵 쓰기 이만큼은 수백 µs 안이다.
 const restoredChunk = 1024
 
-// tableKeys 는 그 회차 표의 offset 줄 · 끊김 줄 seq 를 정렬해 돌려준다(잠금 안에서는 베끼기만 한다).
-func (m *sessionMemory) tableKeys(sessionID string) (lines, breaks []int64) {
+// tableKeys 는 그 회차 표의 offset 줄 · 끊김 줄 seq 를 정렬해 돌려주고, 베낀 표의 세대도 돌려준다(잠금 안에서는 베끼기만 한다).
+// 몫이 없으면 만든다 — 세대를 매길 몫이 있어야 첫 덩어리를 쓰기 전의 치움도 가른다.
+func (m *sessionMemory) tableKeys(sessionID string) (lines, breaks []int64, gen uint64) {
 	m.mu.Lock()
-	if e, ok := m.byID[sessionID]; ok {
-		lines = make([]int64, 0, len(e.offsets))
-		for f := range e.offsets {
-			lines = append(lines, f)
-		}
-		breaks = make([]int64, 0, len(e.breaks))
-		for b := range e.breaks {
-			breaks = append(breaks, b)
-		}
+	e := m.entry(sessionID)
+	lines = make([]int64, 0, len(e.offsets))
+	for f := range e.offsets {
+		lines = append(lines, f)
 	}
+	breaks = make([]int64, 0, len(e.breaks))
+	for b := range e.breaks {
+		breaks = append(breaks, b)
+	}
+	gen = e.tableGen
 	m.mu.Unlock()
 	slices.Sort(lines)
 	slices.Sort(breaks)
-	return lines, breaks
+	return lines, breaks, gen
 }
 
 // unknownLinks 는 표가 모르는 seq 의 링크다 — offsetAt 과 같은 판정(seq 이하 마지막 줄이 있고 그 뒤 끊김 줄이 없으면 안다)을 정렬한
@@ -434,11 +456,14 @@ func unknownLinks(links []playback.Link, lines, breaks []int64) []playback.Link 
 }
 
 // writeRestored 는 복원 줄 한 묶음을 쓰고 적은 줄 수를 돌려준다. 베낀 뒤 실시간 요청이 그 seq 에 줄을 적었으면 그 줄을 둔다(실시간
-// 값이 정본이다).
-func (m *sessionMemory) writeRestored(sessionID string, links []playback.Link, now time.Time) int {
+// 값이 정본이다). 표가 베낀 세대(gen)가 아니면(그사이 치워졌다) 쓰지 않고 거짓이다.
+func (m *sessionMemory) writeRestored(sessionID string, gen uint64, links []playback.Link, now time.Time) (int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e := m.entry(sessionID)
+	e, ok := m.byID[sessionID]
+	if !ok || e.tableGen != gen {
+		return 0, false
+	}
 	written := 0
 	for _, l := range links {
 		if _, live := e.offsets[l.Seq]; live {
@@ -460,7 +485,7 @@ func (m *sessionMemory) writeRestored(sessionID string, links []playback.Link, n
 	if e.tableSeen.IsZero() {
 		e.tableSeen = now
 	}
-	return written
+	return written, true
 }
 
 // setRestored 는 복원이 정한 그 회차의 마지막 링크를 적는다.

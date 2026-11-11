@@ -92,12 +92,20 @@ func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.
 // withTailCorrection 은 꼬리에서 물러나는 사슬 행 prev 의 교정 뒤 값으로 링크를 덮는다. ② 꼬리 교정은 그 행이 꼬리인 동안만
 // 일어나므로, 꼬리에서 물러나는 지금의 길이가 최종값이다. 사슬 행이 아닌 prev(비귀속 행)의 길이로는 어떤 필드도 덮지 않는다
 // (부르는 쪽이 인접일 때만 부른다). 영상 끝도 같은 교정을 받는 유일한 사실 칸이다(설계 r7 2.3 — 옛 값이 있을 때만 바뀐다).
-// 기대값 행(장부 영상 칸 없음 — 기대 영상 끝)은 그대로 둔다.
+//
+// 고정 행의 영상 끝은 장부 칸이 아니라 기대값(앞 영상 끝 + 장부 길이 — playback.NextLink)이라 길이 차만큼 옮긴다(PR 종결 r2 cx —
+// 1회차 cc M1 재판정). 복원 접기는 교정 뒤 장부 길이로 기대값을 다시 짓는다 — 옮기지 않으면 다음 영상 행이 그 차만큼 거짓 구멍으로
+// 이어져 실시간과 복원의 도장이 갈린다. 고정 행은 장부에 영상 칸이 있어도 기대값을 쓴다(복원 접기와 같다).
 func withTailCorrection(l playback.Link, prev *index.TailRow) playback.Link {
-	l.Dur = time.Duration(prev.DurationMS) * time.Millisecond
-	if l.VideoEnd != nil && prev.Timing.VideoEnd != nil {
+	dur := time.Duration(prev.DurationMS) * time.Millisecond
+	switch {
+	case l.Pinned && l.VideoEnd != nil:
+		end := *l.VideoEnd + dur - l.Dur
+		l.VideoEnd = &end
+	case l.VideoEnd != nil && prev.Timing.VideoEnd != nil:
 		l.VideoEnd = prev.Timing.VideoEnd
 	}
+	l.Dur = dur
 	return l
 }
 
