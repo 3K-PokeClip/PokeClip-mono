@@ -33,8 +33,10 @@ type timingChoice struct {
 
 // lastAttributedSQL 은 판 정하기 3항 · 회차 규칙 3 의 조회다 — 그 스트림의 seq < k 최신 귀속 행의 판과 그 세션의 회차 ·
 // 회차 열림을 한 줄로 읽는다. PK (stream_id, seq) 를 역순으로 훑어 첫 귀속 행에서 멈추므로 사이의 비귀속 행 수만큼
-// 힙을 훑는다(anchorSQL 과 같은 위험 · R23 시험이 10⁴ 행으로 잰다). 세션 행이 없으면(FK NOT VALID) 회차를 모르므로
-// 닫힌 것과 같게 다룬다.
+// 힙을 훑는다(anchorSQL 과 같은 위험 · R23 시험이 10⁴ 행으로 잰다). 한계(c4a 보안 L1): 비귀속 꼬리가 길면 행마다
+// O(꼬리)라 누적 O(꼬리²)다 — 실측 꼬리 10만 행(4초 조각 약 4.6일)에서 5 ms 남짓 · 귀속 1행 뒤 30만 행에서 anchorSQL 29 ms 라
+// 상한 · 부분 색인을 두지 않는다. 회차 없는 송출이 며칠 이어질 때만 길어진다. 세션 행이 없으면(FK NOT VALID) 회차를
+// 모르므로 닫힌 것과 같게 다룬다.
 const lastAttributedSQL = `
 SELECT g.timing_version, s.round_id, s.round_closed_at IS NULL
   FROM (SELECT session_id, timing_version

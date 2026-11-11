@@ -157,7 +157,8 @@ type Decision struct {
 	//   - 개시: 비지 않는다. TD 분할 = 끝낼 live 의 round_id(NULL 이면 새 세션 id) · 표식 분할 = 새 세션 id ·
 	//     직전 회차 합류 · 계승 = 이어 가는 round_id · 새 회차 = 새 세션 id.
 	//   - 비귀속: "" 다.
-	// 「새 회차를 여는가」 는 RoundID == Open 이 돌려준 session_id 로 가린다. Open 은 자기가 쓸 round_id 가 이 값과 다르면
+	// Open 뒤에서는 「새 회차를 여는가」 를 RoundID == Open 이 돌려준 session_id 로 가린다(Open 앞의 판별은 NewRound —
+	// 개시에서는 둘이 늘 같고 index store 가 Open 뒤에 대조한다). Open 은 자기가 쓸 round_id 가 이 값과 다르면
 	// 오류를 내 트랜잭션을 되돌린다 — 두 계산이 갈리면 키가 틀리기 전에 멈춘다.
 	RoundID string
 	// NewRound 는 이 개시가 새 회차를 여는가다 — RoundID 가 새 세션 id 인 갈래(새 회차 · 표식 분할 · 회차 없는 live 의

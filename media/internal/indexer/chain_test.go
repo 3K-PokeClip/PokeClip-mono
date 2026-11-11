@@ -352,6 +352,9 @@ func TestRestartAfterNegativeFirstMtxiResumesRestoredOffset(t *testing.T) {
 	r = f.injectReads()
 	f.row(r, 6*time.Second, mtxiNumbered(recA, 2, firstMtxi+5977*time.Millisecond))
 	n2 := int64(2)
+	// 복원 링크는 손으로 넣는다(보정값 정확히 44ms). 실제 복원은 ③ 객체의 도장 범위에서 값을 고르므로 틱 반올림 폭 안에서
+	// 다를 수 있다(cm 검수 cc D2 — 2.777µs · 업로더 대조 허용 폭 안). 이 시험이 보는 것은 그 차가 아니라 「인덱서가 복원
+	// 링크의 보정값을 잇는가」 다.
 	f.upload.setRestored("S1", playback.Link{Seq: 1, SessionID: "S1", Recorder: &recA, Number: &n2,
 		Mtxi: firstMtxi + 5977*time.Millisecond, Dur: 5977 * time.Millisecond, Pos: 5977 * time.Millisecond, Offset: 44 * time.Millisecond})
 	f.row(r, 12*time.Second, mtxiNumbered(recA, 3, firstMtxi+2*5977*time.Millisecond))
@@ -804,7 +807,7 @@ func TestChainAdvancesByLedgerDurationWhenMtxiUnreadable(t *testing.T) {
 	}
 }
 
-// 판독 실패로 고정한 행은 기대 표식(앞 행과 같은 녹화기의 다음 번호)을 사슬 칸으로 든다(c8 expectedFacts) — 그 자리에 실제
+// 판독 실패로 고정한 행은 기대 표식(앞 행과 같은 녹화기의 다음 번호)을 사슬 칸으로 든다(playback.expectedInstance) — 그 자리에 실제
 // 리셋이 없었으면 다음 행은 같은 녹화기 이어짐으로 잇고, 고정 행 파일을 다시 열지 않는다. 고정 행의 실제 칸(nil 표식)을 들면
 // 다음 행이 늘 리셋되어 고정 행 파일의 먼저 끝난 트랙 끝(여기 17.9s)에 잇는다.
 func TestPinnedRowCarriesExpectedRecorderInstance(t *testing.T) {

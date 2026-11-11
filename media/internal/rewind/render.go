@@ -29,6 +29,9 @@ const pdtLayout = "2006-01-02T15:04:05.000Z07:00"
 
 // timingTagName 은 판 태그의 이름이고 timingTagPrefix 는 그 줄의 머리다 — 값(판)이 콜론 뒤에 온다(계약3 7-6
 // 「판 태그」). 값은 행의 timing_version 이고 판 NULL 은 0 이다. 플레이어는 2 만 판 2 로 읽고 그 밖은 판 NULL 로 읽는다.
+// 계약은 값을 2 와 0 으로만 적는다 — 장부에 쓰는 판이 게이트 값 2 뿐이라 렌더가 그 밖의 값을 낼 입력이 지금은 없다.
+// 3 같은 값은 행의 판 그대로 적는다(값을 2 로 굳히면 장부와 본문이 갈린다 — TestRenderTimingTagCarriesRowVersion).
+// 새 판을 쓰기 전에 계약3 7-6 의 값 목록부터 고친다.
 const (
 	timingTagName   = "#EXT-X-POKECLIP-TIMING"
 	timingTagPrefix = timingTagName + ":"
@@ -169,8 +172,9 @@ func Render(p Playlist) ([]byte, error) {
 
 // writeSegment 는 조각 하나(태그 줄들과 URI 줄)를 쓴다. newRun 은 이 행에서 회차가 바뀌는가다 —
 // MAP 은 회차가 바뀌는 줄에만 쓴다(회차 안 init 은 같은 바이트다 — ADR-073). timing 은 이 조각의 판 태그 줄이고
-// "" 면 쓰지 않는다. 자리는 MAP 뒤 · GAP 앞이다 — 계약3 7-6 의 「MAP 뒤 · PDT 앞」 안이고, MAP 앞에 두면 hls.js 1.7.3
-// 이 그 태그를 이 조각이 아니라 초기화 조각의 tagList 로 넘긴다.
+// "" 면 쓰지 않는다. 자리는 MAP 뒤 · GAP 앞이다 — 계약3 7-6 의 「MAP 뒤(MAP 이 없으면 맨 앞) · PDT 앞」 이고(S5 가 같은
+// 자리를 잰다 — timingMismatch), MAP 앞에 두면 hls.js 1.7.3 이 그 태그를 이 조각이 아니라 초기화 조각의 tagList 로
+// 넘긴다.
 func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool, timing string) error {
 	s, ok := p.session(r.SessionID)
 	if !ok {

@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -144,18 +145,6 @@ func runSteps(t *testing.T, steps []step, reload bool) []bool {
 	return out
 }
 
-func equalBools(a, b []bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // 계획 c6 시험 2 · 3 — 기준 행은 seq 바로 앞 행 q 다. 회차 칸 NULL 행 u(하한 거부 꼴)가 끼면 k2 는 u 와의 관계이고, 회차가
 // 바뀌어도 회차와 무관하다. 같은 회차의 최신 행 p 로 판정하면(변이 m-R6) 세 줄 모두 답이 뒤집힌다.
 func TestDiscontinuityIsRelativeToLedgerRowBeforeSeq(t *testing.T) {
@@ -176,7 +165,7 @@ func TestDiscontinuityIsRelativeToLedgerRowBeforeSeq(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := runSteps(t, tt.steps, false); !equalBools(got, tt.want) {
+			if got := runSteps(t, tt.steps, false); !slices.Equal(got, tt.want) {
 				t.Errorf("is_discontinuity = %v, want %v", got, tt.want)
 			}
 		})
@@ -196,10 +185,10 @@ func TestDiscontinuitySameAnswerAfterCursorReload(t *testing.T) {
 		{24 * time.Second, true, markY, 3, "R2"},
 	}
 	want := []bool{false, false, true, true, false, false, false}
-	if got := runSteps(t, steps, false); !equalBools(got, want) {
+	if got := runSteps(t, steps, false); !slices.Equal(got, want) {
 		t.Fatalf("이어서 넣은 답 = %v, want %v", got, want)
 	}
-	if got := runSteps(t, steps, true); !equalBools(got, want) {
+	if got := runSteps(t, steps, true); !slices.Equal(got, want) {
 		t.Errorf("행마다 재적재한 답 = %v, want %v", got, want)
 	}
 }
@@ -257,6 +246,72 @@ func TestDiscontinuityNumberSkipAfterPoison(t *testing.T) {
 	}
 	if attrs["recorder_id"] != "58000000000000000000000000000000" {
 		t.Errorf("recorder_id = %v, want 표식 X 의 16진", attrs["recorder_id"])
+	}
+}
+
+// 판정 신호는 장부에 들어간 행의 것만 남는다(c6 검수 cc L1 · cx M). poison 으로 행이 안 든 시도(X#12 — 꼬리 X#10 과 번호
+// 건너뜀)는 신호가 없고, 다음 조각 X#13 이 실제로 든 행의 건너뜀(2)을 남긴다. 잡는 결함: INSERT 전에 신호를 내면 장부에 없는
+// 시도의 segment_number_skipped(number 12 · seq 1)가 한 줄 더 남고, 운영자는 seq 1 행을 두 번 건너뛴 것으로 읽는다.
+func TestDiscontinuitySignalSkipsPoisonedAttempt(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.store.insertErrs = []error{nil, &pgconn.PgError{Code: "22001", Message: "값이 너무 길다"}}
+	r := markReads{}
+	f.injectMarks(r)
+
+	f.put(r, step{at: 0, marked: true, rec: markX, n: 10})
+	seg := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
+	r[seg.Path] = playback.Mtxi{RecorderID: markX, SegmentNumber: 12, DTS: 4 * time.Second, NTP: baseWall.Add(4 * time.Second)}
+	f.mustHandle(seg) // poison — 행 없음
+	f.put(r, step{at: 8 * time.Second, marked: true, rec: markX, n: 13})
+
+	all := f.logs.attrsAll("segment_number_skipped")
+	if len(all) != 1 || all[0]["number"] != int64(13) || all[0]["skipped"] != int64(2) || all[0]["seq"] != int64(1) {
+		t.Errorf("segment_number_skipped = %v, want 한 건(number 13 · skipped 2 · seq 1)", all)
+	}
+}
+
+// seq 충돌 재적재로 판정이 바뀌면 신호도 재적재 뒤 판정의 것이다(c6 검수 cx M 의 반례). 메모리 꼬리는 X#10 인데 다른 쓰기자가
+// X#11 을 seq 1 로 먼저 넣었다 → X#12 의 첫 시도는 X#10 과 견줘 건너뜀이지만 seq 충돌로 안 들고, 재적재한 꼬리 X#11 과 견준
+// 재시도는 같은 녹화기 이어짐이다. 잡는 결함: 첫 시도의 신호가 남으면 장부에 없는 건너뜀(seq 1)이 경고로 뜬다.
+func TestDiscontinuitySignalFollowsSeqConflictReload(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := markReads{}
+	f.injectMarks(r)
+	f.put(r, step{at: 0, marked: true, rec: markX, n: 10})
+	f.store.seed(index.Record{StreamID: "s1", Seq: 1, StartWallUTC: baseWall.Add(4 * time.Second), DurationMS: 4000,
+		LocalPath: "/다른/쓰기자.mp4", UploadState: index.UploadStatePending, Bytes: 10,
+		Timing: index.TimingInput{Facts: facts(markX, 11)}})
+
+	if f.put(r, step{at: 8 * time.Second, marked: true, rec: markX, n: 12}) {
+		t.Error("재적재한 꼬리(X#11)의 같은 녹화기 이어짐인 행의 is_discontinuity = true, want false")
+	}
+
+	if n := f.logs.count(slog.LevelWarn, "segment_number_skipped"); n != 0 {
+		t.Errorf("segment_number_skipped = %d건(%v), want 0 — 장부에는 건너뜀이 없다", n, f.logs.attrsAll("segment_number_skipped"))
+	}
+}
+
+// I15 「번호 건너뜀(H3)」 — 꼬리보다 이른 파일명 시각의 X#11 이 H3 늦은 조각 검사에서 빠지면, drift 0 인 X#12 는 꼬리 X#10 과
+// 번호가 둘 벌어져 참이고 segment_number_skipped(1)를 남긴다(c6 검수 cx L). 잡는 결함(변이 m-R3 — 늘 drift): drift 0 이라
+// 거짓이 된다.
+func TestDiscontinuityNumberSkipAfterLateSegment(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := markReads{}
+	f.injectMarks(r)
+	f.put(r, step{at: 4 * time.Second, marked: true, rec: markX, n: 10})
+	late := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	r[late.Path] = playback.Mtxi{RecorderID: markX, SegmentNumber: 11, NTP: baseWall}
+	f.mustHandle(late)
+	if n := f.logs.count(slog.LevelError, "late_segment_skipped"); n != 1 {
+		t.Fatalf("late_segment_skipped = %d건, want 1(전제 — X#11 은 H3 에서 빠진다)", n)
+	}
+
+	if !f.put(r, step{at: 8 * time.Second, marked: true, rec: markX, n: 12}) {
+		t.Fatal("번호가 건너뛴 조각의 is_discontinuity = false, want true")
+	}
+	attrs := f.logs.attrs("segment_number_skipped")
+	if attrs["prev_number"] != int64(10) || attrs["number"] != int64(12) || attrs["skipped"] != int64(1) || attrs["seq"] != int64(1) {
+		t.Errorf("segment_number_skipped 속성 = %v, want prev_number 10 · number 12 · skipped 1 · seq 1", attrs)
 	}
 }
 

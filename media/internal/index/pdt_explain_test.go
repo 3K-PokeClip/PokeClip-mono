@@ -18,7 +18,9 @@ type explainRow struct {
 	PrevRow
 	Round *string // timing_round_id · nil: 회차 없음
 	// LegacyMS 는 그 조각의 mvhd 길이다 — 장부에 칸이 없어 재생 입력에서만 채운다(0: 모름 · 영상 길이를 모르는
-	// 행의 길이를 보지 않는다).
+	// 행의 길이를 보지 않는다). 그래서 0 인 행에서는 범위 밖인데 양수로 감긴 길이(2^32 + 1 → 1)를 오라클이 못
+	// 잡는다. 범위 밖 영상을 넣는 곳은 채운다(재생 입력 · TestExplainV2OverlongVideo) — 장부에서 읽는 PG 시험
+	// (ledgerExplainRows)은 0 이지만 그 영상은 범위 안이다(c3b r2 cc L — 한계로 둔다).
 	LegacyMS int32
 }
 

@@ -77,6 +77,9 @@ type Continues func(prev Link, cur SourceTiming) bool
 // (Produce 가 ErrNegativePos 로 막는다) 0 이 하한이고, 보정값은 리셋 · 구멍이 바꾸기 전까지 이어진다. 보관 mtxi 는
 // 원값이다 — 다음 행의 구멍 술어가 실제 미디어 끝을 기준으로 서야 한다. 실시간 사슬과 복원 접기가 이 하한을 함께 쓴다.
 // mtxi 가 없으면 도장을 지어내지 않는다(④ⓑ): ok 가 거짓이고, 다음 정상 판독 행이 사슬을 연다.
+//
+// mtxi 가 math.MinInt64 면 −mtxi 가 넘친다. 막지 않는다(한계 — cm 보안 L-2) — mtxi 는 이 상자의 녹화기가 쓴 누적 DTS 라
+// 그 값(약 −292년)에 닿지 않고, develop 의 옛 사슬도 같은 성질이었다.
 func StartLink(cur SourceTiming) (link Link, ok bool) {
 	if cur.Mtxi == nil {
 		return Link{}, false
@@ -194,6 +197,10 @@ type ChainFold struct {
 }
 
 // NewChainFold 는 anchor 뒤에서 접기 시작한다. anchor 가 nil 이면 첫 귀속 행이 사슬을 연다.
+//
+// anchor 가 있으면 첫 Step 의 행은 장부에서 anchor 바로 뒤 행이어야 한다 — 인접 판정이 anchor.Seq 에서 시작하므로, 닻 행을
+// 다시 넘기면 닻이 자기 자신과 이어지고 사이 행을 건너뛰면 그 행을 인접으로 잘못 본다. 이 함수는 그것을 검사하지 않는다.
+// 부르는 쪽(upload restore_group 의 닻 정하기 셋 — 닻 자리 + 1 에서 접는다)이 지킨다(c10a 검수 cc L3).
 func NewChainFold(anchor *Link, rule StitchRule, same Continues) *ChainFold {
 	f := &ChainFold{rule: rule, same: same}
 	if anchor != nil {

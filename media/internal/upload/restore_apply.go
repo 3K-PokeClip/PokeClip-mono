@@ -162,7 +162,7 @@ func (run *groupRun) commit(anchor *playback.Link) {
 		run.setRestored(last)
 	}
 	run.lg.Info("chain_restored", "hole_from", run.g.first, "hole_to", run.g.last, "anchor_seq", anchorSeq,
-		"links", len(run.links), "exact", run.exact, "waited_at_tail", run.waited)
+		"links", len(run.links), "exact", run.exact, "waited_at_tail", run.waited, "compared", run.compared)
 }
 
 // setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다).

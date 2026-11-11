@@ -150,3 +150,28 @@ func TestUnattributedRunAfterRestartIsPartial(t *testing.T) {
 		t.Errorf("새 스트림 비귀속 머리 partial = %v, want false", got["partial"])
 	}
 }
+
+// 묶음의 끝 행(비귀속 꼬리)이 꼬리 교정으로 길어지면 묶음 길이도 교정 뒤 장부 길이를 따른다(c11 검수 cx M). 2초로 넣은 비귀속
+// 꼬리가 4초로 교정된 뒤 귀속 행이 묶음을 닫으면 duration_ms · 표식별 길이가 4초다. 잡는 결함: 누산기가 INSERT 때 길이만 더하면
+// 장부 · 커서는 4초인데 E28 제외 길이는 2초로 나온다.
+func TestUnattributedRunFollowsTailCorrection(t *testing.T) {
+	f := newFixture(t, 4000, 2000)
+	f.store.scriptSessions("S-1", "", "S-1")
+	f.readMarkers(&markerA, &markerA, &markerA)
+	f.handleRows(2)
+
+	f.probe.vals, f.probe.calls = []int64{4000, 4000}, 0
+	tail := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
+	f.makeFile("s1", segName(baseWall, 4*time.Second), 2500)
+	tail.Reason = recording.ReasonRegrown
+	f.mustHandle(tail)
+	if n := f.logs.count(slog.LevelInfo, "tail_corrected"); n != 1 {
+		t.Fatalf("tail_corrected = %d건, want 1(전제)", n)
+	}
+	f.mustHandle(f.segment("s1", segName(baseWall, 8*time.Second), 1000, recording.ReasonNextFile))
+
+	got := f.logs.attrs("unattributed_run")
+	if got["duration_ms"] != int64(4000) || got["marker_prev_ms"] != int64(0) || got["marker_next_ms"] != int64(4000) {
+		t.Errorf("unattributed_run = %v, want duration_ms 4000 · marker_next_ms 4000(교정 뒤 길이)", got)
+	}
+}

@@ -2784,13 +2784,14 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 | `segment_indexed` | 조각마다 | INFO | 기존 속성 + `timing_version` · `timing_branch` · `round_id` · `head_track` · `head_lead_ms` · `wall_ms` · `comparable` · `same_instance` · `attributed` · `delta_ms`(견줬을 때) |
 | `pdt_new_chapter` · `pdt_overlap` · `timing_reset` · `timing_round_broken` | 판 2 행의 섞기 갈래 | INFO · WARN · ERROR | 새 장 · 겹침 · 회차 첫 행 · 판 고정 위반의 까닭 |
 | `timing_gate_read` | 새 회차 개시 행 | INFO | 회차 · 고른 판 · 게이트 `changed_at` |
-| `timing_facts_partial` · `head_lead_over_1s` | 조각 판독 | WARN | mtxi 없음 · 번호 넘침 · 영상 없음 등 |
-| `discontinuity_hook_mismatch` · `segment_number_skipped` | `is_discontinuity` 판정 | WARN | 판정 시도마다 남는다 — 장부 행과의 대조는 `path` 로 한다(INSERT 재시도면 같은 조각이 두 번 나올 수 있다) |
+| `timing_facts_partial` · `head_lead_over_1s` | 조각 판독 | WARN | mtxi 없음 · 번호 넘침 · 영상 없음 등. `head_lead_over_1s` 의 `instance_first` 는 장부 꼬리와 녹화기 표식이 다른가(번호는 보지 않는다 — 같은 녹화기에서 번호만 건너뛴 조각은 첫 조각이 아니다) |
+| `timing_read_deferred` · `timing_read_blocked` · `timing_read_block_dropped` · `tail_timing_read_failed` | 조각 판독 일시 실패 | WARN · INFO | 판독이 일시 실패한 조각은 커밋하지 않고 다음 재스캔을 기다린다(표지 세움 — `deferred`). 표지보다 늦은 조각은 그 뒤에 선다(`blocked` — `blocked_path` 는 막고 있는 표지 가운데 가장 이른 조각 · 같으면 경로 순). 표지 조각 파일이 사라지면 표지를 내린다(`block_dropped`). 꼬리 교정의 판독 실패는 길이만 고친다(`tail_timing_read_failed`) |
+| `discontinuity_hook_mismatch` · `segment_number_skipped` | `is_discontinuity` 판정 | WARN | 장부 INSERT 가 성공한 시도에서만 남는다 — 조각 격리(poison) · seq 충돌 재적재로 버린 시도의 판정은 내지 않는다. 장부 행과의 대조는 `path` 로 한다 |
 | `timing_version_unsupported` | 쓰기 시점 판 검사 | ERROR | 이 이미지가 쓰지 못하는 판(앞날 판 회차를 잇는 행 등) — H9 재시도 뒤 종료 |
 | `timing_downgrade_refused` · `timing_gate_check_failed` | 기동 검사 · 검사 명령 | ERROR | 위 절 |
 | `legacy_unattributed_sum` | 판 NULL 귀속 행 | INFO | `u_ms` — PDT 식이 더한 U(기저 행 뒤 · 이 행 앞 비귀속 행 길이 합). U 가 0 이면 내지 않는다 |
 | `unattributed_run` | 비귀속 행 묶음 뒤 첫 귀속 행 | INFO | 아래 「E28 묶음 신호」 |
-| `chain_*` · `chain_restore_failed` | ③ 사슬 · 업로더 | WARN · INFO | 아래 「③ 사슬 복원」 |
+| `chain_*` · `chain_restored` · `chain_row_passed` · `chain_restore_failed` | ③ 사슬 · 업로더 | WARN · INFO | 아래 「③ 사슬 복원」 |
 | DB 오류 `legacy_writer_refused`(23514) | 쓰기자 거부 트리거 | — | 래치 2 장부에 원래 사실 칸 없는 INSERT(출시 이미지) — 출시 이미지는 이 이름을 몰라 INSERT 실패로만 보인다 |
 
 **E28 묶음 신호(`unattributed_run`).** 스트림마다 「지난 귀속 행 뒤 비귀속 행 묶음」 을 메모리에 모았다가 다음 귀속 행
@@ -2811,11 +2812,23 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
 보정값 표 줄 · 다시 넣은 작업 · 인덱서가 읽는 복원 링크로 남긴다. 실패는 행 상태를 바꾸지 않고 세션 단위 백오프로 다시
 본다(WARN `chain_restore_failed` — `reason` · 다음 시도 시각).
 
+- 구멍은 닻이 같은 무리로 나눠 차례로 되살린다. 한 무리가 결정적 까닭(닻 · 회차 — 아래 한계 표)으로 실패하면 그 무리만
+  건너뛰고 뒤 무리를 이어 되살린 뒤 첫 실패로 백오프한다. 일시 까닭(`ledger` · `s3_get` · `local_read` · 까닭 모름)은 그
+  자리에서 멈춘다.
+- 되살린 링크가 하나도 없이 끝난 복원(꼬리에서 기다림 · 구멍 없음 등)은 실패가 아니지만, 다음 시도까지 스위퍼 간격
+  `SEGMENT_UPLOAD_SWEEP_EVERY`(기본 30초)만큼 둔다(실패 횟수는 0 으로 돌린다 — 백오프가 늘지 않는다).
+- 행의 ② 원천은 장부 크기로 읽는다 — 객체가 장부보다 길면 장부 크기로 자르고, 짧으면 그 행을 원천 없는 행처럼 다룬다:
+  꼬리면 기다리고, 아니면 WARN `chain_row_passed`(`reason=source_size_mismatch` — 원천이 아예 없으면 `source_missing`)로
+  지나간다.
+- 무리 하나가 끝나면 INFO `chain_restored`(`hole_from` · `hole_to` · `anchor_seq` · `links` · `exact` · `waited_at_tail` ·
+  `compared`). `compared` 는 구멍 뒤 이미 올라간 행의 객체 도장을 실제로 견줬는가다 — 거짓이면 그 대조 없이 끝난
+  무리다(뒤에 올라간 행이 없는 꼬리 무리 등).
+
 ### PDT 알려진 한계
 
 | 한계 | 영향 | 처분 |
 |---|---|---|
-| **③ 사슬 복원의 영구 실패.** 닻이 될 ③ 객체 · ② 원천이 없거나(`anchor_object_missing` · `anchor_source_missing`), 닻 행이 판독 실패로 고정 도장이었거나(`anchor_pinned`), 객체가 장부와 다르거나(`anchor_mismatch`), 다른 세션의 행이 끼었으면(`foreign_session`) 다시 시도해도 같은 답이다 | 그 회차의 구멍 행들이 `pending` 으로 남아 GAP 이다 — 백오프로 거듭 시도하며 `chain_restore_failed` 가 같은 `reason` 으로 되풀이된다. 실시간 경로 · 다른 회차는 무관하다 | 한계(기록) — 회차가 바뀌면 새 사슬이다 |
+| **③ 사슬 복원의 영구 실패.** 닻이 될 ③ 객체 · ② 원천이 없거나(`anchor_object_missing` · `anchor_source_missing`), 닻 행이 판독 실패로 고정 도장이었거나(`anchor_pinned`), 객체가 장부와 다르거나(`anchor_mismatch`), 다른 세션의 행이 끼었으면(`foreign_session`) 다시 시도해도 같은 답이다 | 그 무리의 구멍 행들이 `pending` 으로 남아 GAP 이다 — 백오프로 거듭 시도하며 `chain_restore_failed` 가 같은 `reason` 으로 되풀이된다. 같은 회차라도 닻이 다른 뒤 무리는 건너뛰어 되살린다(일시 까닭이면 그 자리에서 멈춘다). 실시간 경로 · 다른 회차는 무관하다 | 한계(기록) — 회차가 바뀌면 새 사슬이다 |
 | **꼬리 교정의 판독 실패.** 꼬리 조각이 자라 길이를 고칠 때 시각 판독이 일시 실패하면 길이만 고치고 영상 끝 칸은 옛 값이다. 덜 써진 조각을 커밋한 경우도 영상 끝이 INSERT 때 값이다 | 다음 행의 맞닿음 · 판 2 길이 판단이 옛 영상 끝을 본다. MediaMTX 가 닫은 파일만 커밋하므로(길이 0 거부) 우리 송출 흐름에서는 생기지 않는다 | 한계(기록) — 방어안(`UpdateTail` 판 2 길이 재계산)은 두지 않았다 |
 | **판독 일시 실패 동안 그 스트림이 멈춘다.** 실패한 조각과 그 뒤 조각을 커밋하지 않고 다음 재스캔을 기다린다 | 한 번에 최대 약 5분 45초(재스캔 5분 + 수집 예산 45초) 그 스트림의 되감기 목록 · ③ 업로드가 늘지 않는다. 다른 스트림은 무관하다 | 순서 보존의 대가 — 다음 재스캔에서도 실패하면 칸 NULL 로 커밋한다 |
 | **기동 전 검사는 시작 스크립트를 지나는 기동만 본다.** 엔진 재기동(`restart: on-failure`) · 스위치를 올리는 순간 이미 돌던 출시 컨테이너는 보지 않는다 | 이미 돌던 출시 컨테이너는 스위치 2 선행 조건(모든 상자 라벨 2)이 막고, 어겨도 쓰기자 거부가 첫 INSERT 에서 끝낸다 — 그 사이 감사 · 정산이 판 2 행을 옛 식으로 읽을 수 있다 | 런북 「PDT 판 2 롤백 하한 · 판 게이트」 남는 한계 |

@@ -5,16 +5,13 @@ import (
 	"time"
 )
 
-// 파생 3함수는 꼬리 행 하나에서만 계산된다. 필드로 중복 보관하지 않는 설계(2.3절)가
-// 실제로 지켜지는지 — 꼬리를 바꾸면 셋이 동시에 따라오는지 — 를 확인한다.
+// 파생 2함수는 꼬리 행 하나에서만 계산된다. 필드로 중복 보관하지 않는 설계(2.3절)가
+// 실제로 지켜지는지 — 꼬리를 바꾸면 둘이 함께 따라오는지 — 를 확인한다.
 func TestCursorDerivedValues(t *testing.T) {
 	wall := time.Date(2026, 7, 25, 10, 0, 0, 0, time.UTC)
 
 	t.Run("Tail_nil_이면_전부_영값", func(t *testing.T) {
 		var c Cursor
-		if got := c.NextPTSMS(); got != 0 {
-			t.Errorf("NextPTSMS = %d, want 0", got)
-		}
 		if got := c.LastStartWall(); !got.IsZero() {
 			t.Errorf("LastStartWall = %v, want zero", got)
 		}
@@ -27,9 +24,6 @@ func TestCursorDerivedValues(t *testing.T) {
 		c := Cursor{NextSeq: 3, Tail: &TailRow{
 			Seq: 2, StartPTSMS: 8000, StartWallUTC: wall, DurationMS: 4000,
 		}}
-		if got := c.NextPTSMS(); got != 12000 {
-			t.Errorf("NextPTSMS = %d, want 12000", got)
-		}
 		if got := c.LastStartWall(); !got.Equal(wall) {
 			t.Errorf("LastStartWall = %v, want %v", got, wall)
 		}
@@ -38,15 +32,12 @@ func TestCursorDerivedValues(t *testing.T) {
 		}
 	})
 
-	t.Run("꼬리의_DurationMS_만_고쳐도_파생_두_값이_함께_교정된다", func(t *testing.T) {
+	t.Run("꼬리의_DurationMS_만_고쳐도_파생값이_교정된다", func(t *testing.T) {
 		c := Cursor{NextSeq: 3, Tail: &TailRow{
 			Seq: 2, StartPTSMS: 8000, StartWallUTC: wall, DurationMS: 4000,
 		}}
 		c.Tail.DurationMS = 6000 // correctTail 이 하는 일과 같다
 
-		if got := c.NextPTSMS(); got != 14000 {
-			t.Errorf("NextPTSMS = %d, want 14000", got)
-		}
 		if got, want := c.ExpectedNextWall(), wall.Add(6*time.Second); !got.Equal(want) {
 			t.Errorf("ExpectedNextWall = %v, want %v", got, want)
 		}

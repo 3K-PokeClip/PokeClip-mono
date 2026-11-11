@@ -93,6 +93,7 @@ func (d phaseDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInp
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
 		RoundID:            dec.RoundID,
+		NewRound:           dec.NewRound, // 빠뜨리면 store 의 새 회차 판별 단언이 개시를 되돌린다(cm cc D1)
 		Plan:               dec,
 	}, nil
 }

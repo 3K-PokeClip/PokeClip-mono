@@ -510,3 +510,165 @@ func TestRestoreS3FailureBacksOffWithoutTouchingRows(t *testing.T) {
 		t.Errorf("백오프 안 깨움 = %+v, want 없음", got)
 	}
 }
+
+// chain_restored 는 구멍 뒤 대조를 했는가(compared)를 싣는다(c10b 보안 보충 M). 구멍 뒤 uploaded 행이 있으면 참이고, 구멍 뒤
+// 32행 안에 같은 회차 uploaded 행이 없으면 거짓이다 — 대조 없이 굳은 도장을 운영 알림에서 가를 재료다.
+func TestRestoreSignalsWhetherCheckedAfterHole(t *testing.T) {
+	tests := []struct {
+		name   string
+		states []index.UploadState
+		want   bool
+	}{
+		{"구멍 뒤 uploaded 행 대조", []index.UploadState{up, pending, up}, true},
+		{"구멍 뒤 대조 행 없음", []index.UploadState{up, pending}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newRestoreBench(t)
+			b.contiguous(60, 1, 600*time.Second, tt.states...)
+			live := b.liveChain()
+			for i, st := range tt.states {
+				if st == up {
+					b.uploadAt(live, 60+int64(i))
+				}
+			}
+
+			b.restore()
+
+			if got := b.cap.one(t, "chain_restored").attrs["compared"]; got != tt.want {
+				t.Errorf("chain_restored compared = %v, want %v (%s)", got, tt.want, b.cap.dump())
+			}
+		})
+	}
+}
+
+// ② 객체(로컬이 지워진 행의 원천)는 장부 크기만큼만 쓴다 — 로컬 원천과 같은 규칙이다(c10b cc 보충 M · 보안 L). 객체가 장부보다
+// 길면 장부 크기로 자르고, 짧으면 원천 크기 어긋남(source_size_mismatch)으로 그 행을 지나간다. 잡는 결함: 길이를 보지 않으면
+// 긴 객체는 꼬리 쓰레기 때문에 닻을 못 읽고(anchor_unreadable), 파트 경계에서 잘린 짧은 객체는 읽혀 틀린 트랙 끝을 낸다.
+func TestRestoreArchiveObjectFollowsLedgerSize(t *testing.T) {
+	t.Run("긴 객체는 장부 크기로 자른다", func(t *testing.T) {
+		b := newRestoreBench(t)
+		b.contiguous(8, 1, 600*time.Second, up, up, pending)
+		live := b.liveChain()
+		b.uploadAt(live, 8, 9)
+		row := b.ledger.rows[9]
+		if err := os.Remove(row.LocalPath); err != nil {
+			t.Fatal(err)
+		}
+		b.objs.set(row.S3Key, append(bytes.Clone(b.srcs[9]), make([]byte, 64)...))
+
+		b.restore()
+
+		if jobs := b.queued(); len(jobs) != 1 || jobs[0].Seq != 10 || jobs[0].PlaybackPos != live[10].Pos {
+			t.Fatalf("작업 = %+v, want seq 10 · 실시간 도장 %v (%s)", jobs, live[10].Pos, b.cap.dump())
+		}
+	})
+	t.Run("짧은 객체는 지나간다", func(t *testing.T) {
+		b := newRestoreBench(t)
+		b.contiguous(30, 1, 600*time.Second, up, pending, pending)
+		live := b.liveChain()
+		b.uploadAt(live, 30)
+		row := b.ledger.rows[31]
+		if err := os.Remove(row.LocalPath); err != nil {
+			t.Fatal(err)
+		}
+		b.ledger.mu.Lock()
+		row.UploadState = up
+		b.ledger.rows[31] = row
+		b.ledger.mu.Unlock()
+		b.objs.set(row.S3Key, b.srcs[31][:len(b.srcs[31])-1000])
+
+		b.restore()
+
+		if r := b.cap.one(t, "chain_row_passed"); r.attrs["seq"] != int64(31) || r.attrs["reason"] != "source_size_mismatch" {
+			t.Errorf("chain_row_passed = %v, want seq 31 · source_size_mismatch", r.attrs)
+		}
+	})
+}
+
+// 진전 없이 끝난 복원(되살린 링크 0 — 꼬리에서 기다림 · 구멍 없음)은 다음 깨움까지 최소 간격(SweepEvery)을 둔다(c10b 보안 M).
+// 진전이 있으면 바로 다시 깬다. 잡는 결함: 성공이라 백오프를 풀면 위치 모름 요청(조각마다)이 같은 구멍을 매번 다시 읽는다 —
+// 장부 조회 · 닻 GET · ② 재읽기.
+func TestRestoreWithoutProgressWaitsBeforeNextWake(t *testing.T) {
+	t.Run("꼬리에서 기다림", func(t *testing.T) {
+		b := newRestoreBench(t)
+		b.contiguous(40, 1, 600*time.Second, up)
+		half := withMtxi(t, b.raw, recA, 2, 600*time.Second+b.step())
+		b.add(benchRow{seq: 41, session: benchSession, src: half[:len(half)/2], archive: pending})
+		b.uploadAt(b.liveChain(41), 40)
+
+		b.restore()
+		b.u.sessions.wake(benchStream, benchSession)
+
+		if got := b.u.sessions.takeWakes(b.u.now()); len(got) != 0 {
+			t.Errorf("진전 없는 복원 바로 뒤 깨움 = %+v, want 없음", got)
+		}
+		b.u.sessions.wake(benchStream, benchSession)
+		if got := b.u.sessions.takeWakes(b.u.now().Add(b.u.opt.SweepEvery)); len(got) != 1 {
+			t.Errorf("최소 간격 뒤 깨움 = %+v, want 하나", got)
+		}
+		if n := b.cap.count("chain_restore_failed"); n != 0 {
+			t.Errorf("chain_restore_failed = %d줄, want 0 — 실패가 아니다", n)
+		}
+	})
+	t.Run("진전 있음", func(t *testing.T) {
+		b := newRestoreBench(t)
+		b.contiguous(8, 1, 600*time.Second, up, pending)
+		b.uploadAt(b.liveChain(), 8)
+
+		b.restore()
+		b.u.sessions.wake(benchStream, benchSession)
+
+		if got := b.u.sessions.takeWakes(b.u.now()); len(got) != 1 {
+			t.Errorf("진전 있는 복원 뒤 깨움 = %+v, want 하나", got)
+		}
+	})
+}
+
+// 한 무리의 결정적 실패(여기 닻의 ② 원천 없음)는 같은 회차의 뒤 무리를 막지 않는다(c10b 보안 M) — 뒤 무리는 되살리고, 회차는
+// 앞 무리의 까닭으로 백오프한다. 잡는 결함: 첫 오류에서 돌아가면 뒤 무리가 백오프 상한까지 커지는 동안 영영 안 살아난다.
+func TestRestoreDeterministicGroupFailureDoesNotBlockLaterGroups(t *testing.T) {
+	b := newRestoreBench(t)
+	b.contiguous(8, 1, 600*time.Second, up, pending, up, pending)
+	live := b.liveChain()
+	b.uploadAt(live, 8, 10)
+	row := b.ledger.rows[8]
+	if err := os.Remove(row.LocalPath); err != nil {
+		t.Fatal(err)
+	}
+	b.ledger.mu.Lock()
+	row.UploadState = pending
+	b.ledger.rows[8] = row
+	b.ledger.mu.Unlock()
+
+	b.restore()
+
+	if jobs := b.queued(); len(jobs) != 1 || jobs[0].Seq != 11 || jobs[0].PlaybackPos != live[11].Pos {
+		t.Errorf("작업 = %+v, want 뒤 무리 seq 11 · 실시간 도장 (%s)", jobs, b.cap.dump())
+	}
+	if r := b.cap.one(t, "chain_restore_failed"); r.attrs["reason"] != "anchor_source_missing" {
+		t.Errorf("chain_restore_failed = %v, want anchor_source_missing", r.attrs)
+	}
+}
+
+// 일시 실패(장부 · S3 · 로컬 읽기)는 뒤 무리로 넘어가지 않고 바로 백오프한다 — 장애 동안 뒤 무리마다 같은 실패를 되풀이하지 않는다.
+func TestRestoreTransientGroupFailureStopsPass(t *testing.T) {
+	b := newRestoreBench(t)
+	b.contiguous(8, 1, 600*time.Second, up, pending, up, pending)
+	b.uploadAt(b.liveChain(), 8, 10)
+	for _, seq := range []int64{8, 10} {
+		if err := os.Remove(b.ledger.rows[seq].LocalPath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.objs.getErr = errors.New("AccessDenied")
+
+	b.restore()
+
+	if jobs := b.queued(); len(jobs) != 0 {
+		t.Errorf("작업 = %+v, want 없음", jobs)
+	}
+	if gets := b.objs.getCount(); gets != 1 {
+		t.Errorf("S3 GET %d번, want 1 — 첫 무리 일시 실패에서 멈춘다", gets)
+	}
+}

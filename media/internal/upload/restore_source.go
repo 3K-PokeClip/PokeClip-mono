@@ -24,6 +24,8 @@ const (
 	sourceMissing
 	// sourceTooLarge — 장부 크기가 입력 상한을 넘는다. 파일은 자라기만 하므로 결정적이다(실시간의 input_too_large 와 같다).
 	sourceTooLarge
+	// sourceShort — ② 객체가 장부 크기보다 짧다(잘린 업로드 · 다른 객체). 그 바이트를 원천으로 쓰지 않는다.
+	sourceShort
 )
 
 // rowSource 는 행 하나의 ② 원천이다. body 는 sourceRead 일 때만 있다.
@@ -78,7 +80,9 @@ func (u *Uploader) readLocal(streamID, path string, size int64) (body []byte, fo
 	return buf[:n], true, nil
 }
 
-// readArchiveObject 는 ② 객체를 원천으로 읽는다. ② 가 안 올라갔거나 객체가 없으면 원천 부재다.
+// readArchiveObject 는 ② 객체를 원천으로 읽는다. ② 가 안 올라갔거나 객체가 없으면 원천 부재다. 장부 크기만큼만 쓴다 — 로컬
+// 원천과 같은 규칙이다(c10b cc 보충 M · 보안 L): 객체가 더 길면 장부 크기로 자르고, 더 짧으면 sourceShort 다. 짧은 객체를
+// 그대로 쓰면 파트 경계에서 잘린 바이트가 읽혀 틀린 트랙 끝 · 객체 대조 재료가 된다.
 func (u *Uploader) readArchiveObject(r index.PlaybackChainRow) (rowSource, error) {
 	if r.UploadState != index.UploadStateUploaded || r.S3Key == "" {
 		return rowSource{state: sourceMissing}, nil
@@ -92,8 +96,10 @@ func (u *Uploader) readArchiveObject(r index.PlaybackChainRow) (rowSource, error
 		return rowSource{state: sourceMissing}, nil
 	case err != nil:
 		return rowSource{}, failRestore("s3_get", err)
+	case int64(len(body)) < *r.Bytes:
+		return rowSource{state: sourceShort}, nil
 	}
-	return rowSource{state: sourceRead, body: body}, nil
+	return rowSource{state: sourceRead, body: body[:*r.Bytes]}, nil
 }
 
 // sourceTiming 은 행의 사슬 재료다 — 원래 사실 칸 · 길이는 장부 값(실시간 사슬과 같은 재료 — indexer sourceOf), mtxi 는
@@ -105,6 +111,8 @@ func sourceTiming(r index.PlaybackChainRow, src rowSource) (st playback.SourceTi
 	switch src.state {
 	case sourceMissing:
 		return st, "source_missing"
+	case sourceShort:
+		return st, "source_size_mismatch"
 	case sourceTooLarge:
 		return st, ""
 	}

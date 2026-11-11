@@ -13,6 +13,10 @@ package indexer
 import "github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 
 // unattributedTally 는 한 스트림의 E28 누산기다. loop 단일 고루틴만 만진다.
+//
+// 항목은 스트림이 끝나도 지우지 않는다 — 이웃 맵(cursors · samples · indexed)과 같은 수명이다. 귀속 행 없이 길게 이어지는
+// 묶음의 byMarker 는 녹화기 표식이 바뀔 때마다(송출자 재접속) 칸 하나(약 32바이트)씩 는다. 상한은 두지 않았다(한계 — c11
+// 검수 cc L · 보안 L3): 재접속마다 한 칸이라 하루 수천 번 재접속해도 수백 KB 이고, 다음 귀속 행이 묶음을 비운다.
 type unattributedTally struct {
 	// seen 은 이 프로세스가 이 스트림의 귀속 행을 본 적이 있는가다 — 없으면 아래 last 칸이 빈 값이다.
 	seen bool
@@ -76,6 +80,17 @@ func (t *unattributedTally) add(seq int64, marker *[16]byte, l runLength, partia
 		return
 	}
 	r.byMarker[*marker] = r.byMarker[*marker].plus(l)
+}
+
+// correctUnattributed 는 꼬리 교정을 묶음에 반영한다(c11 검수 cx M) — 교정된 행 seq 가 열린 묶음의 끝 행이면 길이 차
+// deltaMS 를 묶음 합과 그 행 표식 칸에 더한다(행 수는 그대로). 꼬리 교정은 그 행이 꼬리인 동안만 일어나므로 묶음의 다른 행은
+// 바뀌지 않는다. 귀속 꼬리의 교정은 묶음과 무관하다.
+func (ix *Indexer) correctUnattributed(streamID string, seq int64, marker *[16]byte, deltaMS int64) {
+	t := ix.unattributed[streamID]
+	if t == nil || t.run == nil || t.run.lastSeq != seq {
+		return
+	}
+	t.add(seq, marker, runLength{ms: deltaMS}, false)
 }
 
 // logRun 은 묶음을 귀속 행 k(res · 표식 next)에서 닫으며 unattributed_run 한 줄을 낸다. 표식이 k 와 같은 행은 next, 지난 귀속

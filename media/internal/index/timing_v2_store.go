@@ -15,8 +15,11 @@ import (
 )
 
 // errV2WallMissing 은 판 2 로 쓸 행에 짐작 w 가 없다는 뜻이다 — 인덱서는 판독 실패에도 파일명 시각으로 w 를 늘 채우므로
-// (indexer timingInputOf) 부르는 쪽의 배선 결함이다. 그대로 쓰면 PDT 가 0001년이 되고 CHECK 넷째(23514)가 상자의 모든 색인을
-// 멈추게 하므로, 그 전에 이 행만 오류로 돌린다.
+// (indexer timingInputOf) 부르는 쪽의 배선 결함이다. 그대로 쓰면 PDT 가 0001년이 되므로 쓰기 전에 오류로 돌린다. 이 오류는
+// 그 행만 건너뛰게 하지 않는다 — PgError 가 아니라 부르는 쪽(indexer H9 classifyInsertError)이 재시도로 접고, 상한을 다 쓰면
+// 프로세스를 끝내 재기동에 맡긴다(D8). 같은 행이 다시 오므로 상자의 색인은 CHECK 넷째(23514 → 종료)일 때처럼 그 행에서
+// 멈춘다. 지키는 것은 장부에 틀린 PDT 를 남기지 않는 것뿐이다(c4b cc 문서 M · cx 설계 M — 정상 배선에서는 생기지 않아
+// 행 격리 분류는 두지 않는다).
 var errV2WallMissing = errors.New("index: 판 2 행에 짐작 w(Timing.Facts.Wall)가 없다")
 
 // prevRoundRowSQL 은 p 한 줄이다 — 부분 색인 stream_segments_timing_round_idx (stream_id, timing_round_id, seq) 역순 첫

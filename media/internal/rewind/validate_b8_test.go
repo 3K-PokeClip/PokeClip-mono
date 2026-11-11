@@ -110,6 +110,36 @@ func TestValidatePDTOverlapOutsideV2KeepsOneMillisecond(t *testing.T) {
 	}
 }
 
+// 세션이 바뀌는 판 2 이웃(계승 접두 P 의 끝 seq 42 → P 를 계승한 S 의 첫 seq 43)도 세 조건으로 잰다 — 검사는 판만 보고
+// 세션을 가르지 않는다(c7b cc M1). 계약 r24 6-6-3 은 세 조건을 「같은 판 · 같은 회차의 목록 안」 에 두는데, 여기서
+// 회차는 세션이 아니라 timing_round_id 다. 한 목록에 두 세션이 실리는 것은 계승 접두뿐이고 계승은 앞 세션의 회차를
+// 잇는다(session.openFromPrevious 5행 — 회차 없는 M6 전 세션을 계승하면 새 회차지만 그 세션은 판 NULL 이라 계승도 판
+// NULL 이다). 그래서 이 이웃은 같은 회차 안이고, 앞 회차 끝보다 뒤로 갈 수 있는 새 회차 첫 행(E24)은 한 목록에 들지
+// 않는다. 앞 세션 끝 E 에서 500ms 겹친 첫 행은 지나고, 1초 겹친 첫 행 · 앞 조각 시작까지 뒤로 간 첫 행은 멈춘다.
+func TestValidatePDTB8AcrossRounds(t *testing.T) {
+	end := day.Add(12 * time.Second) // P seq 42 는 day+8s 에서 4초
+	tests := []struct {
+		name string
+		pdt  time.Time
+		cond int
+	}{
+		{"앞_회차_끝에서_500ms_겹침", end.Add(-500 * time.Millisecond), 0},
+		{"앞_회차_끝에서_1000ms_겹침", end.Add(-time.Second), 2},
+		{"앞_조각_시작까지_뒤로", day.Add(8 * time.Second), 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := prefixed()
+			p.Rows = withVersion(p.Rows, timingVersion2)
+			p.Rows[3].PlaybackPDT = tt.pdt
+
+			err := validate(t, p, 1, nil)
+
+			wantB8(t, err, tt.cond)
+		})
+	}
+}
+
 // 겹침 행 렌더 → Validate(계획 9절 c7b 음성 대조 대상). 생산자 섞기 식(index.MixV2)이 겹침 갈래에서 낸 PDT · 길이를
 // 그대로 목록 행으로 렌더하면 S7 을 통과한다 — 생산자 B8 과 소비자 S7 이 같은 조건이다(설계 P11). 짐작 w 는 앞 끝 E
 // 에서 θ 넘게 이른 범위(Δ = −θ−1 부터 앞 시작 S 보다 1.5초 이른 곳까지)의 점이다 — 네 항이 바뀌는 자리(E − 999 ·

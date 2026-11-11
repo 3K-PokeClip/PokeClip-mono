@@ -227,7 +227,8 @@ func TestTimingFactsAreImmutableAfterInsert(t *testing.T) {
 }
 
 // 영상 끝은 꼬리 교정만 허용한다 — pending ∧ 옛 값 있음 ∧ 늘림(설계 2.3 · 2.14 · P21). 옛 값 NULL 꼬리 · uploaded
-// 행 · 줄이기 · NULL 로 비우기는 거부한다.
+// 행 · 줄이기 · NULL 로 비우기는 거부한다. 거부는 불변 트리거의 P0001 이다 — 아무 PG 오류나 받으면 트리거의 NULL 방어를
+// 빼도 NULL 짝 CHECK 의 23514 로 통과한다(c1 cx M · cc L).
 func TestTimingVideoEndGrowsOnlyOnPendingTail(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
@@ -257,8 +258,8 @@ func TestTimingVideoEndGrowsOnlyOnPendingTail(t *testing.T) {
 			if tt.wantOK && err != nil {
 				t.Errorf("UPDATE %s 오류 = %v, want nil", tt.set, err)
 			}
-			if !tt.wantOK && timingPgError(err) == nil {
-				t.Errorf("UPDATE %s 오류 = nil, want 거부", tt.set)
+			if e := timingPgError(err); !tt.wantOK && (e == nil || e.Code != "P0001") {
+				t.Errorf("UPDATE %s 오류 = %v, want P0001(불변 트리거)", tt.set, err)
 			}
 		})
 	}
@@ -385,6 +386,52 @@ func TestTimingGateTriggerWaitsForSharedGateLock(t *testing.T) {
 	}
 	if after != nil {
 		t.Errorf("공유 잠금을 놓은 뒤 스위치 변경 오류 = %v, want nil", after)
+	}
+}
+
+// 래치 낮추기는 READ COMMITTED 에서만 된다(c1 · c4b 보안 M1). 트랜잭션 스냅숏을 한 번 잡는 격리(REPEATABLE READ ·
+// SERIALIZABLE)에서는 판 2 행 셈이 그 스냅숏으로 돌아, 스냅숏 뒤 커밋된 판 2 행을 못 보고 래치를 내린다 — 판 2 행이 있는데
+// 래치 NULL 이면 쓰기자 거부가 꺼진다. 그래서 그 격리의 낮추기는 판 2 행과 무관하게 23514 로 거부한다. READ COMMITTED
+// 대조군은 같은 순서에서 그 행을 보고 timing_latch_lower_refused 로 거부한다. 잡는 결함: 격리 검사를 빼면 REPEATABLE
+// READ · SERIALIZABLE 낮추기가 지나가 래치가 NULL 이 된다.
+func TestTimingLatchLoweringRefusedOutsideReadCommitted(t *testing.T) {
+	tests := []struct {
+		level   string
+		wantMsg string
+	}{
+		{"repeatable read", "timing_latch_lower_needs_read_committed"},
+		{"serializable", "timing_latch_lower_needs_read_committed"},
+		{"read committed", "timing_latch_lower_refused"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.level, func(t *testing.T) {
+			pool := newTestPool(t)
+			ctx := context.Background()
+			mustTimingExec(t, pool, `UPDATE stream_timing_gate SET new_round_version = 2`)
+			mustTimingExec(t, pool, `UPDATE stream_timing_gate SET new_round_version = NULL`)
+
+			lowerer, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("낮추기 트랜잭션 시작 실패: %v", err)
+			}
+			defer lowerer.Rollback(ctx)
+			if _, err := lowerer.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL "+tt.level); err != nil {
+				t.Fatalf("격리 수준 설정 실패: %v", err)
+			}
+			// 첫 질의 — REPEATABLE READ · SERIALIZABLE 은 여기서 스냅숏을 고정한다.
+			if _, err := lowerer.Exec(ctx, `SELECT 1 FROM stream_timing_gate`); err != nil {
+				t.Fatalf("스냅숏 질의 실패: %v", err)
+			}
+			mustInsertTimingRow(t, pool, v2Row("rr", 0))
+			_, lowered := lowerer.Exec(ctx, `UPDATE stream_timing_gate SET highest_version = NULL`)
+			if err := lowerer.Rollback(ctx); err != nil {
+				t.Fatalf("낮추기 트랜잭션 끝내기 실패: %v", err)
+			}
+
+			if e := timingPgError(lowered); e == nil || e.Code != "23514" || e.Message != tt.wantMsg {
+				t.Errorf("%s 래치 낮추기 오류 = %v, want 23514 %s", tt.level, lowered, tt.wantMsg)
+			}
+		})
 	}
 }
 
@@ -616,12 +663,12 @@ func TestProdSQLVerifyCatchesTimingSchemaDrift(t *testing.T) {
 		tamper string
 		want   []string
 	}{
-		// 판 칸을 지우면 그 칸을 술어로 쓰는 floor 인덱스 둘도 함께 지워진다.
+		// 판 칸을 지우면 그 칸을 술어로 쓰는 floor 인덱스 둘과 판 2 CHECK 도 함께 지워진다(w 칸도 그 CHECK 를 함께 지운다).
 		{"version column dropped", "ALTER TABLE stream_segments DROP COLUMN timing_version",
-			[]string{"index:stream_segments_legacy_wall_idx", "index:stream_segments_v2_seq_idx",
-				"ledger_column:stream_segments.timing_version"}},
+			[]string{"check:stream_segments_timing_v2_chk", "index:stream_segments_legacy_wall_idx",
+				"index:stream_segments_v2_seq_idx", "ledger_column:stream_segments.timing_version"}},
 		{"wall column dropped", "ALTER TABLE stream_segments DROP COLUMN timing_wall_guess",
-			[]string{"ledger_column:stream_segments.timing_wall_guess"}},
+			[]string{"check:stream_segments_timing_v2_chk", "ledger_column:stream_segments.timing_wall_guess"}},
 		{"round index dropped", "DROP INDEX stream_segments_timing_round_idx",
 			[]string{"index:stream_segments_timing_round_idx"}},
 		{"v2 floor index dropped", "DROP INDEX stream_segments_v2_seq_idx",
@@ -642,6 +689,16 @@ func TestProdSQLVerifyCatchesTimingSchemaDrift(t *testing.T) {
 			[]string{"privilege:media_indexer:stream_timing_gate:UPDATE"}},
 		{"shared lock revoked", "REVOKE EXECUTE ON FUNCTION pg_advisory_xact_lock_shared(bigint) FROM PUBLIC",
 			[]string{"advisory_xact_lock_shared_media_indexer"}},
+		// CHECK 는 정의 본문이 아니라 이름 · 대상 표 · 종류로 본다(c1 cx M) — 지우면 그 단언 하나다.
+		{"v2 check dropped", "ALTER TABLE stream_segments DROP CONSTRAINT stream_segments_timing_v2_chk",
+			[]string{"check:stream_segments_timing_v2_chk"}},
+		{"marker check dropped", "ALTER TABLE stream_segments DROP CONSTRAINT stream_segments_timing_marker_chk",
+			[]string{"check:stream_segments_timing_marker_chk"}},
+		{"gate switch check dropped", "ALTER TABLE stream_timing_gate DROP CONSTRAINT stream_timing_gate_switch_chk",
+			[]string{"check:stream_timing_gate_switch_chk"}},
+		// 불변 트리거 함수도 search_path 를 고정한다(c1 보안 L4).
+		{"immutable axes search_path reset", "ALTER FUNCTION stream_segments_immutable_axes() RESET search_path",
+			[]string{"function:stream_segments_immutable_axes"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

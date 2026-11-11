@@ -73,6 +73,11 @@
 --   function:<PDT 함수> · owner:<PDT 함수>
 --                                   두 함수가 정의자 함수가 아니고 search_path 가 pg_catalog, pg_temp 로 고정돼 있으며
 --                                   소유자가 media_owner 다
+--   function:stream_segments_immutable_axes
+--                                   불변 트리거 함수가 정의자 함수가 아니고 search_path 가 pg_catalog, pg_temp 로 고정돼
+--                                   있다
+--   check:<PDT CHECK>               PDT CHECK 넷(stream_segments)과 게이트 CHECK 셋(stream_timing_gate)이 제 표에 그
+--                                   이름의 CHECK 로 있다 — 정의 본문은 위 인덱스와 같은 까닭으로 보지 않는다
 --
 -- advisory 단언 둘은 사이드카 컷오프 잠금(media/internal/index/store.go 의 lockCutoffStreamSQL)과 PDT 회차 개시의 게이트
 -- 공유 잠금(열쇠 pc_timing_gate — 설계 r7 9.3)의 전제다.
@@ -86,7 +91,10 @@
 -- 단언하지 않는 것: 다른 DB(postgres · template1)의 CONNECT · TEMP 는 PUBLIC 기본으로 남는다(K12 — 이 DB 의
 -- TEMP 는 위에서 단언한다). 비밀번호 없음도 보지 못한다 — 마스터는 pg_authid 를 읽지 못하고
 -- pg_roles.rolpassword 는 늘 ******** 다. 앱 사용자가 자기 표에 갖는 권한과 app_chat_detector 의 chat_messages
--- SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 표 행렬은 stream_* 표만 본다.
+-- SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 표 행렬은 stream_* 표만 본다. 게이트 행의 내용(정확히 한 행 ·
+-- 판 2 행이 있으면 래치가 섬)도 보지 않는다 — 마스터는 media_owner 를 상속하지 않아(10 의 INHERIT FALSE) 행을 읽지
+-- 못한다. 행을 없애는 길(소유자의 TRUNCATE · 빈 표 INSERT)은 손 작업뿐이고, 행이 없으면 사이드카는 새 회차를 열지 않는다
+-- (index.errTimingGateMissing — fail-closed).
 --
 -- 내장 함수는 pg_catalog 로 한정하고 연산자는 pg_catalog 에 정확한 판이 있는 형으로 맞춘다(oid 열과 비교하는
 -- regclass · regprocedure · 정수 상수는 ::oid). 배열 비교(text[] = text[])는 pg_catalog 에 다형 판뿐이라
@@ -191,6 +199,16 @@ BEGIN
     timing_triggers(rel, tg, fn, tgtype) AS (
         VALUES ('stream_segments', 'stream_segments_legacy_writer_guard', 'stream_segments_refuse_legacy_writer', 7),
                ('stream_timing_gate', 'stream_timing_gate_guard_tg', 'stream_timing_gate_guard', 27)
+    ),
+    -- PDT CHECK 넷 · 게이트 CHECK 셋(check:<CHECK>).
+    timing_checks(rel, c) AS (
+        VALUES ('stream_segments', 'stream_segments_timing_marker_chk'),
+               ('stream_segments', 'stream_segments_timing_video_chk'),
+               ('stream_segments', 'stream_segments_timing_video_marker_chk'),
+               ('stream_segments', 'stream_segments_timing_v2_chk'),
+               ('stream_timing_gate', 'stream_timing_gate_one_row_chk'),
+               ('stream_timing_gate', 'stream_timing_gate_switch_chk'),
+               ('stream_timing_gate', 'stream_timing_gate_latch_chk')
     ),
     granted(r, t, p) AS (
         VALUES ('media_indexer', 'stream_segments', 'SELECT'),
@@ -365,6 +383,18 @@ BEGIN
                         WHERE oid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid
                           AND pg_catalog.pg_get_userbyid(proowner) = 'media_owner')
           FROM timing_triggers
+        UNION ALL
+        SELECT 'function:stream_segments_immutable_axes',
+               EXISTS (SELECT 1 FROM pg_proc
+                        WHERE oid = pg_catalog.to_regprocedure('public.stream_segments_immutable_axes()')::oid
+                          AND NOT prosecdef
+                          AND proconfig OPERATOR(pg_catalog.=) ARRAY['search_path=pg_catalog, pg_temp'])
+        UNION ALL
+        SELECT 'check:' || c,
+               EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = pg_catalog.to_regclass('public.' || rel)::oid
+                          AND conname = c::name AND contype = 'c'::"char")
+          FROM timing_checks
         UNION ALL
         SELECT 'trigger:' || tg,
                EXISTS (SELECT 1 FROM pg_trigger

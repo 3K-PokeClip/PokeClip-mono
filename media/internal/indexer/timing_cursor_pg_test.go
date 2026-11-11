@@ -70,15 +70,21 @@ func TestCommittedCursorEqualsLedgerCursorPG(t *testing.T) {
 					t.Fatalf("%v 전 조각 뒤 메모리 꼬리 = %+v\n장부 꼬리 = %+v", ago, *mem.Tail, *ledger.Tail)
 				}
 			}
-			var discont bool
+			var discont, steady bool
 			var attributed int
 			var start int64
 			if err := f.pool.QueryRow(ctx, `
 SELECT (SELECT is_discontinuity FROM stream_segments WHERE stream_id = $1 AND seq = 2),
+       (SELECT is_discontinuity FROM stream_segments WHERE stream_id = $1 AND seq = 1),
        (SELECT start_pts_ms FROM stream_segments WHERE stream_id = $1 AND seq = 2),
        (SELECT count(*) FROM stream_segments WHERE stream_id = $1 AND session_id IS NOT NULL)`,
-				f.stream).Scan(&discont, &start, &attributed); err != nil {
+				f.stream).Scan(&discont, &steady, &start, &attributed); err != nil {
 				t.Fatalf("장부 조회 실패: %v", err)
+			}
+			// seq 1 은 drift 0(파일명 간격 = 길이 4초)이라 어느 갈래든 거짓이다. 칸 없음 갈래에서 이 단언이 drift 폴백을 본다 —
+			// 폴백을 지우고 늘 칸으로 정하면(모르는 칸끼리는 이어짐이 아님) 이 행이 참이 된다(c6 확인 패스 cc · cx 부수 M).
+			if steady {
+				t.Errorf("drift 0 행(seq 1)의 is_discontinuity = true, want false")
 			}
 			if want := !tt.marks; discont != want {
 				t.Errorf("6초 drift 행의 is_discontinuity = %v, want %v(칸 있음이면 같은 녹화기 이어짐 · 없으면 drift 폴백)", discont, want)

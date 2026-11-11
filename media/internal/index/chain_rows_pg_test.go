@@ -76,8 +76,8 @@ func TestPendingUploadsCarryArchiveColumnsOnPlaybackAxisOnly(t *testing.T) {
 }
 
 // 구멍 열거는 그 회차의 ③ pending · failed 행 전부를 seq 순으로 내고, 행마다 같은 회차에서 그보다 앞선 ③ uploaded 최신
-// 행(닻)을 싣는다 — uploaded 행으로 갈린 구멍은 닻이 달라 따로 다뤄진다(설계 r6 2.10 cx-N1: #9 uploaded → #10 failed →
-// #11 uploaded → #12 pending 에서 #10 이 빠지지 않는다). 닻이 없으면 nil 이다(회차 첫 행부터). 재수거 조회와 같은 조건이라
+// 행(닻)을 싣는다 — uploaded 행으로 갈린 구멍은 닻이 달라 따로 다뤄진다(설계 r6 2.10 cx-N1: seq 9 uploaded → 10 failed →
+// 11 uploaded → 12 pending 에서 10 이 빠지지 않는다). 닻이 없으면 nil 이다(회차 첫 행부터). 재수거 조회와 같은 조건이라
 // 컷오프 아래 행 · 다른 회차 행은 나오지 않는다.
 func TestLoadPlaybackHolesListsHolesWithTheirAnchors(t *testing.T) {
 	pool := newTestPool(t)

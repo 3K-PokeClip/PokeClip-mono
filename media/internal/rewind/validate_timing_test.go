@@ -56,7 +56,8 @@ func TestValidateTimingTagBody(t *testing.T) {
 }
 
 // 판이 목록 안에서 바뀌는 목록(계승 접두 · GAP 행 포함)도 렌더 그대로면 통과하고, 바뀌는 조각의 태그를 지우면 멈춘다.
-// 태그를 GAP 줄 뒤(PDT 줄 앞)로 옮긴 본문은 계약 자리(MAP 뒤 · PDT 앞) 안이라 통과한다 — 렌더는 GAP 앞에 쓴다.
+// 바뀌는 조각 seq 14 는 MAP 이 없는 GAP 조각이다 — 계약3 7-6 은 MAP 이 없으면 태그를 맨 앞에 둔다. 태그를 GAP 줄
+// 뒤(PDT 줄 앞)로 옮긴 본문은 그 자리를 어겨 멈춘다(c7a cx M — 렌더는 GAP 앞에 쓴다).
 func TestValidateTimingTagOnMixedList(t *testing.T) {
 	body := mustRender(t, mixedTiming())
 	gapTag := timingTag2 + "#EXT-X-GAP\n"
@@ -66,7 +67,7 @@ func TestValidateTimingTagOnMixedList(t *testing.T) {
 
 	wantVerdict(t, validate0(mixedTiming(), body), "")
 	wantVerdict(t, validate0(mixedTiming(), strings.Replace(body, timingTag0, "", 1)), "S5")
-	wantVerdict(t, validate0(mixedTiming(), strings.Replace(body, gapTag, "#EXT-X-GAP\n"+timingTag2, 1)), "")
+	wantVerdict(t, validate0(mixedTiming(), strings.Replace(body, gapTag, "#EXT-X-GAP\n"+timingTag2, 1)), "S5")
 	wantVerdict(t, validate0(mixedTiming(), strings.Replace(body, gapTag, "#EXT-X-GAP\n", 1)), "S5")
 }
 

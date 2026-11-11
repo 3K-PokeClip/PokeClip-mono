@@ -47,6 +47,8 @@ type groupRun struct {
 	adopted map[int64]bool
 	passed  map[int64]bool
 	waited  bool
+	// compared 는 구멍 뒤 uploaded 행의 객체와 도장을 실제로 견줬는가다(chain_restored 의 compared — c10b 보안 보충 M).
+	compared bool
 }
 
 // mismatch 는 구멍 뒤 uploaded 행의 도장 대조 실패다.
@@ -64,26 +66,26 @@ const restoreBackPage = 256
 // 행부터 다시 읽는다.
 var errMemoryStale = errors.New("지난 복원 링크의 행이 바뀌었다")
 
-// restoreGroup 은 무리 g 를 한 번에 끝까지 되살린다 — 장부 구간은 접기 시작점(지난 복원 링크 · 닻 · 회차 첫 행)부터 limit
+// restoreGroup 은 무리 g 를 한 번에 끝까지 되살린다 — progressed 는 되살린 링크가 하나라도 있는가다 — 장부 구간은 접기 시작점(지난 복원 링크 · 닻 · 회차 첫 행)부터 limit
 // 까지다. 구멍 뒤 대조를 마친 뒤에만 표 줄 · 작업을 낸다(c10b 확인 패스 cx H-1 — 판을 나누면 앞 판이 대조 전에 올린다). 메모리는
 // ② 본문을 하나만 쥐어(keepBodyOf) 무리 길이와 무관하다(c10b 보안 검수 H). 행 메타데이터는 행당 수백 바이트다.
-func (u *Uploader) restoreGroup(w restoreWake, g holeGroup, limit int64, lg *slog.Logger) error {
+func (u *Uploader) restoreGroup(w restoreWake, g holeGroup, limit int64, lg *slog.Logger) (progressed bool, err error) {
 	run, err := u.newGroupRun(w, g, limit, lg, true)
 	if errors.Is(err, errMemoryStale) {
 		run, err = u.newGroupRun(w, g, limit, lg, false)
 	}
 	if err != nil || run == nil {
-		return err
+		return false, err
 	}
 	mm, err := run.fold(run.anchorLink, run.start)
 	switch {
 	case err != nil:
-		return err
+		return false, err
 	case mm != nil:
-		return run.settleMismatch(run.span(), run.fingerprint(), *mm)
+		return false, run.settleMismatch(run.span(), run.fingerprint(), *mm)
 	}
 	run.commit(run.anchorLink)
-	return nil
+	return len(run.links) > 0, nil
 }
 
 // newGroupRun 은 무리 하나의 장부 구간을 읽고 닻을 정한다. 같은 입력으로 이미 불일치 판정한 무리면 nil 이다. useMemory 면 같은
@@ -309,7 +311,7 @@ func (run *groupRun) objectAnchor(r index.PlaybackChainRow) (*playback.Link, err
 		return nil, err
 	}
 	if src.state != sourceRead {
-		return nil, anchorErr(seq, "anchor_source_missing", errors.New("② 원천이 없다"))
+		return nil, anchorErr(seq, "anchor_source_missing", errors.New("② 원천이 없거나 쓸 수 없다(장부 크기보다 짧은 객체 · 입력 상한 초과)"))
 	}
 	run.bodies[seq] = src.body
 	timing, err := playback.ReadTiming(bytes.NewReader(src.body))
@@ -499,6 +501,7 @@ func (run *groupRun) compare(r index.PlaybackChainRow, link playback.Link, ok bo
 	case err != nil:
 		return nil, err
 	}
+	run.compared = true
 	win, err := playback.StampOf(body, obj)
 	if err != nil {
 		return &mismatch{seq: r.Seq, expected: link.Pos}, nil

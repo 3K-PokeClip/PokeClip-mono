@@ -109,13 +109,13 @@ func TestReadTimingReadsRecorderFixtures(t *testing.T) {
 	}
 }
 
-// TestReadTimingReportsDeterministicAbsenceAsValues 는 머리말에서 정해지는 부재(mtxi 없음 · 영상 트랙
-// 없음)가 오류가 아니라 값(nil)인지 본다 — 설계 r6 2.2 「결정적」. 잡는 결함: 부재를 오류로 내면 인덱서가
-// 일시 실패로 알고 같은 조각을 끝없이 다시 읽는다.
+// TestReadTimingReportsAbsenceAsValues 는 부재가 오류가 아니라 값(nil)인지 본다. 잡는 결함: 부재를 오류로
+// 내면 인덱서가 일시 실패로 알고 같은 조각을 끝없이 다시 읽는다.
 //
-// 셋째 하위 시험(첫 영상 트랙이 빔)은 결정적 부재가 아니라 읽은 시점의 값이다 — 트랙은 머리말에 있고
-// 본문에 표본이 0 개라 파일이 자라면 바뀔 수 있다(설계 r7 2.14). 같은 값(nil)으로 돌려준다는 것만 본다.
-func TestReadTimingReportsDeterministicAbsenceAsValues(t *testing.T) {
+// 앞 두 하위 시험(mtxi 없음 · 영상 트랙 없음)은 머리말에서 정해지는 결정적 부재다(설계 r6 2.2). 셋째(첫
+// 영상 트랙이 빔)는 읽은 시점의 값이다 — 트랙은 머리말에 있고 본문에 표본이 0 개라 파일이 자라면 바뀔 수
+// 있다(설계 r7 2.14). 같은 값(nil)으로 돌려준다는 것만 본다. 그래서 시험 이름에 「결정적」 을 넣지 않는다.
+func TestReadTimingReportsAbsenceAsValues(t *testing.T) {
 	raw := readFixture(t, fixture4s) // 트랙 1 = 영상, 2 = 소리
 
 	t.Run("mtxi 없음", func(t *testing.T) {
@@ -196,6 +196,31 @@ func TestReadTimingKeepsSubMillisecondVideoSpan(t *testing.T) {
 				t.Errorf("Head = %+v · HeadLead = %v, want %+v · 0", got.Head, got.HeadLead, tt.head)
 			}
 		})
+	}
+}
+
+// TestReadTimingBreaksHeadTieByInitOrder 는 첫 표본 시작이 같은 트랙끼리의 머리를 init 순서로 가르는지 본다 — 머리말의
+// 트랙 순서를 [소리 2, 영상 1] 로 뒤집으면 init 순서가 뒤인 영상(ID 1)이 머리다. 잡는 결함(c2 검수 cx L1): 동률을 「ID 가
+// 큰 쪽」 으로 풀면 머리가 2 가 된다 — 다른 동률 시험은 init 순서와 ID 순서가 같아 이 구현을 가르지 못한다.
+func TestReadTimingBreaksHeadTieByInitOrder(t *testing.T) {
+	reversed := withHeader(t, readFixture(t, fixture4s), func(ini *fmp4.Init) {
+		ini.Tracks = []*fmp4.InitTrack{ini.Tracks[1], ini.Tracks[0]}
+	})
+	in := withParts(t, reversed, fmp4.Parts{{
+		SequenceNumber: 1,
+		Tracks: []*fmp4.PartTrack{
+			{ID: 2, BaseTime: 0, Samples: []*fmp4.Sample{{Duration: 1024, Payload: []byte{2}}}},
+			{ID: 1, BaseTime: 0, Samples: []*fmp4.Sample{{Duration: 3000, Payload: []byte{1}}}},
+		},
+	}})
+
+	got, err := ReadTiming(bytes.NewReader(in))
+	if err != nil {
+		t.Fatalf("ReadTiming 실패: %v", err)
+	}
+
+	if want := (Track{ID: 1, Video: true}); got.Head != want || got.HeadLead != 0 {
+		t.Errorf("Head = %+v · HeadLead = %v, want %+v · 0(init 순서가 뒤인 트랙)", got.Head, got.HeadLead, want)
 	}
 }
 

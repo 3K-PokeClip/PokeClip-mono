@@ -888,6 +888,45 @@ func TestInsertRollsBackWhenDecisionRoundIDDiffersFromOpen(t *testing.T) {
 	}
 }
 
+// newRoundDroppingDecider 는 결정의 NewRound 를 옮기지 않는 어댑터의 흉내다(필드별 복사라 컴파일이 못 잡는다 — cm cc D1 ·
+// 보안 M-1). 계획(session.Decision)은 그대로라 Open 의 회차 대조는 지나간다.
+type newRoundDroppingDecider struct{ registryDecider }
+
+func (d newRoundDroppingDecider) Decide(ctx context.Context, tx pgx.Tx, in SessionInput, now time.Time) (SessionDecision, error) {
+	dec, err := d.registryDecider.Decide(ctx, tx, in, now)
+	dec.NewRound = false
+	return dec, err
+}
+
+// 새 회차 판별은 양방향이다 — 개시가 연 session_id 가 결정의 RoundID 와 같으면(새 회차) NewRound 도 참이어야 한다. NewRound 를
+// 잃은 개시는 판을 게이트가 아니라 기저 행에서 이어 새 회차를 스위치와 다른 판으로 쓸 수 있으므로, store 가 Open 뒤에 단언해
+// Insert 를 통째로 되돌린다. 잡는 결함: 단언이 「NewRound 참인데 회차가 다름」 한 방향뿐이면 이 개시가 커밋된다.
+func TestInsertRollsBackWhenOpenedNewRoundLacksNewRoundFlag(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	stream := sessionStream("new-round-dropped")
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
+	store := NewPGStore(pool, newRoundDroppingDecider{registryDecider{reg: reg}}, legacySegKey)
+
+	_, _, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
+
+	if err == nil || !strings.Contains(err.Error(), "새 회차 판별") {
+		t.Fatalf("Insert = %v, want 새 회차 판별 단언 오류", err)
+	}
+	for _, q := range []string{
+		`SELECT count(*) FROM stream_segments WHERE stream_id = $1`,
+		`SELECT count(*) FROM stream_sessions WHERE stream_id = $1`,
+	} {
+		var rows int
+		if err := pool.QueryRow(ctx, q, stream).Scan(&rows); err != nil {
+			t.Fatalf("행 수 조회 실패: %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("%s = %d, want 0(되돌려졌어야 한다)", q, rows)
+		}
+	}
+}
+
 // planRoundOpener 는 roundProbeDecider 의 Open 을 계획 안의 회차 그대로 부른다 — 장부가 든 RoundID 를 Open 의 대조에 넘기지
 // 않는 배선 결함의 흉내다(session 쪽 checkDecidedRound 를 지나간다).
 type planRoundOpener struct{ roundProbeDecider }
@@ -913,7 +952,7 @@ func TestInsertRollsBackWhenNewRoundIDDiffersFromOpenedSession(t *testing.T) {
 
 	_, _, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
 
-	if err == nil || !strings.Contains(err.Error(), "새 회차 결정의 RoundID") || !last.NewRound {
+	if err == nil || !strings.Contains(err.Error(), "새 회차 판별") || !last.NewRound {
 		t.Fatalf("Insert = %v (NewRound %v), want 새 회차 RoundID 단언 오류", err, last.NewRound)
 	}
 	for _, q := range []string{

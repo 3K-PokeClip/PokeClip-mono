@@ -37,7 +37,7 @@ type timingRead struct {
 }
 
 // mtxi 는 ③ 도장 사슬의 재료다. nil 이면 머리말에 mtxi 가 없거나 판독을 포기한 행이다 — 사슬은 둘을 같게 다룬다(기대값
-// 고정 · chain.go nextLink).
+// 고정 · playback.NextLink).
 func (r timingRead) mtxi() *playback.Mtxi {
 	if r.st == nil {
 		return nil
@@ -66,6 +66,10 @@ func (ix *Indexer) readState(streamID string) *timingReadState {
 }
 
 // settle 은 조각 path 의 판독이 끝났다(성공 · 포기)는 기록이다 — 그 조각의 표지만 내리고 포기 이력을 결과로 바꾼다.
+//
+// 표지를 내릴 때는 따로 신호를 내지 않는다(세울 때의 timing_read_deferred 와 비대칭 — c5 검수 cc L1). 정지가 끝난 시각은 같은
+// 경로의 줄로 읽는다: 성공은 segment_indexed, 포기는 timing_facts_partial(reason read_failed), 소멸은
+// timing_read_block_dropped 다.
 func (st *timingReadState) settle(path string, gaveUp bool) {
 	delete(st.blocked, path)
 	st.gaveUp = gaveUp
@@ -111,24 +115,39 @@ func (st *timingReadState) giveUp(seg recording.Segment, err error) (failure str
 
 // heldBehindBlock 은 seg 가 어느 막힘 표지보다 늦은 같은 스트림 조각인가다. 참이면 그 조각을 커밋하지도 Adopt 하지도 않는다.
 // 표지의 조각 자신과 모든 표지보다 이른 조각은 막지 않는다 — 순서에 필요한 것은 「표지 뒤 조각을 먼저 커밋하지 않는다」 뿐이다.
+// 신호의 blocked_path 는 seg 를 막는 표지 가운데 가장 이른 것이다(같으면 경로 순) — 맵 순회 순서와 무관하게 실행마다 같고,
+// 그 표지가 막힘의 뿌리다(c5 확인 패스 cc 부수 2).
 func (ix *Indexer) heldBehindBlock(seg recording.Segment) bool {
 	st, ok := ix.timingReads[seg.StreamID]
 	if !ok {
 		return false
 	}
+	var root string
+	var rootWall time.Time
 	for path, wall := range st.blocked {
-		if path != seg.Path && !seg.StartWall.Before(wall) {
-			ix.log.Info("timing_read_blocked", "stream_id", seg.StreamID, "path", seg.Path, "blocked_path", path)
-			return true
+		if path == seg.Path || seg.StartWall.Before(wall) {
+			continue
+		}
+		if root == "" || wall.Before(rootWall) || wall.Equal(rootWall) && path < root {
+			root, rootWall = path, wall
 		}
 	}
-	return false
+	if root == "" {
+		return false
+	}
+	ix.log.Info("timing_read_blocked", "stream_id", seg.StreamID, "path", seg.Path, "blocked_path", root)
+	return true
 }
 
 // dropVanishedBlocks 는 재스캔의 미기록 목록에 없는 막힌 조각 가운데, 이미 장부에 있거나 파일이 실제로 지워진(stat
 // ENOENT — statT 관문 · 시간 상한 그대로) 조각의 표지를 내린다. 내리지 않으면 그 스트림이 영구히 선다. 목록 부재만으로는
 // 내리지 않는다 — 표지보다 먼저 디렉터리를 읽은 수집 결과나 부분 수집이면 살아 있는 조각도 목록에 없다(c5 검수 H2). stat 이
 // 그 밖의 오류(정지 포함)면 표지를 그대로 두고 다음 재스캔이 다시 본다.
+//
+// 한계(c5 확인 패스 cc 부수 1): 막힌 조각이 목록에는 계속 나오는데 그 조각의 stat 만 ENOENT 밖 오류(EIO · EACCES)로 계속
+// 실패하면, measure 가 stat_failed 로 끝나 판독까지 가지 못하고 이 함수도 목록에 있는 경로라 건너뛴다 — 뒤 조각이 그
+// 오류가 풀릴 때까지 선다. c5 전에는 그 조각 하나만 빠졌다. 녹화 디렉터리는 녹화기 혼자 쓰는 로컬 볼륨이라 우리 송출
+// 흐름에서 그 꼴이 나는 경로는 없어 막지 않는다 — 나면 stat_failed 가 같은 경로로 되풀이된다.
 func (ix *Indexer) dropVanishedBlocks(streamID string, pending []recording.Segment) {
 	st, ok := ix.timingReads[streamID]
 	if !ok {

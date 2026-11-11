@@ -16,13 +16,14 @@ import (
 // 실측 1 — 문턱 재생 시험(설계 2.9 · 10.4 · 계획 4절 c3b · 9절). r6 실측 표를 mixV2 에 흘려 θ 후보마다
 // (a)–(f) 를 낸다. 결정적이라 한 번 돌리면 답이 정해진다(-count=50 은 결정성 확인).
 //
-// 입력(testdata/pdt_replay/ — 원본 경로 · sha256 은 _workspace/pdt_c3b_bench/ 기록):
+// 입력(testdata/pdt_replay/ — 원본 경로 · sha256 · 재생성 도구는 실험 루트
+// ~/Documents/pokeclip-empirical/runs/2026-11-pdt-producer/c3b/ 기록 · 해시는 원본 CRLF 기준이다):
 //   - 판정 입력: OBS 실송출 조각 표 obs_{x264,vt}_run_table.csv(60_pdt_r6_measure/obs/raw/*/out/
 //     run_table.csv 사본 — 16 접속 · 232 조각). 접속 안은 같은 녹화기 이어짐, 접속 사이는 실제 틈이다.
 //   - 주입표 injections.csv: 접속마다 소리 머리 가운데 행에 표식 바뀜 · mtxi 지움, 소리 머리 · 영상 머리
-//     가운데 행에 구멍 g ∈ {1, 17, 30, 50}ms(뽑는 규칙은 bench tools/make_injections.py).
+//     가운데 행에 구멍 g ∈ {1, 17, 30, 50}ms(뽑는 규칙은 실험 루트 c3b/tools/make_injections.py).
 //   - 사건 단언 · 참고 입력: rec_t9*_table.csv(rec/raw/out 사본 — ffmpeg 합성) · t9vm_*_table.csv
-//     (t9vm scan.jsonl 을 tools/t9vm_to_replay.py 로 run_table 꼴로 바꾼 것 — 머리는 트랙 첫 표본
+//     (t9vm scan.jsonl 을 c3b/tools/t9vm_to_replay.py 로 run_table 꼴로 바꾼 것 — 머리는 트랙 첫 표본
 //     시작에서 ReadTiming 과 같은 규칙으로 정했고 keep 대표 조각 8개의 ReadTiming 판독과 같다).
 //   - 사건 단언표 events.csv.
 //
@@ -368,7 +369,8 @@ func eventFailures(t *testing.T, events []replayEvent, theta int64) []string {
 	return bad
 }
 
-// findEventRow 는 사건이 가리키는 재생 행이다.
+// findEventRow 는 사건이 가리키는 재생 행이다. next_compared 는 사건 행과 같은 녹화기 안에서만 찾는다 — 녹화기가
+// 바뀌면(재시작 경계) 못 찾은 것이다.
 func findEventRow(rows []replayRow, ev replayEvent) (replayRow, bool) {
 	for i, r := range rows {
 		if r.seg.file != ev.file {
@@ -378,12 +380,36 @@ func findEventRow(rows []replayRow, ev replayEvent) (replayRow, bool) {
 			return r, true
 		}
 		for _, n := range rows[i+1:] {
+			if n.seg.recorder != r.seg.recorder {
+				return replayRow{}, false
+			}
 			if n.out.Compared {
 				return n, true
 			}
 		}
 	}
 	return replayRow{}, false
+}
+
+// next_compared 사건은 사건 행과 같은 녹화기 안의 첫 견줄 조각만 본다 — 그 앞에 녹화기가 바뀌면(재시작 경계) 행을
+// 못 찾은 것이다. 바뀐 녹화기의 첫 조각(gap)을 대신 집으면 기대 new_chapter_gap 사건이 헛통과한다(c3b cc L).
+func TestFindEventRowStaysWithinRecorder(t *testing.T) {
+	seg := func(file string, rec [16]byte) replaySeg { return replaySeg{file: file, recorder: rec} }
+	rows := []replayRow{
+		{seg: seg("ev.mp4", recorderX), out: TimingV2{Branch: BranchContinue}},
+		{seg: seg("restart.mp4", recorderY), out: TimingV2{Branch: BranchNewChapterGap, Compared: true}},
+		{seg: seg("later.mp4", recorderY), out: TimingV2{Branch: BranchJoin, Compared: true}},
+	}
+	ev := replayEvent{file: "ev.mp4", at: "next_compared"}
+
+	if r, ok := findEventRow(rows, ev); ok {
+		t.Errorf("findEventRow = %s(%s), want 행 없음 — 사건 행 뒤 녹화기가 바뀌었다", r.seg.file, mixShow(r.out))
+	}
+
+	rows[1].seg.recorder, rows[2].seg.recorder = recorderX, recorderX
+	if r, ok := findEventRow(rows, ev); !ok || r.seg.file != "restart.mp4" {
+		t.Errorf("findEventRow = %s · %v, want restart.mp4(같은 녹화기 첫 견줄 조각)", r.seg.file, ok)
+	}
 }
 
 // 판정 입력(OBS 표 × 주입)을 시험 초기값 θ = MixThreshold 로 흘리면 거짓 새 장 (a) = 0 · 왕복 (d) = 0
@@ -395,6 +421,9 @@ func TestReplayJudgingInput(t *testing.T) {
 			rows := replay(v.segs, theta, modeHead)
 			if bad := explainV2(replayLedger(rows), time.Duration(theta)*time.Millisecond); len(bad) != 0 {
 				t.Errorf("%s/%s θ=%d: 오라클 위반 %d 건 — 첫째 %s", v.table, v.name, theta, len(bad), bad[0])
+			}
+			if bad := replayB8Failures(rows); len(bad) != 0 {
+				t.Errorf("%s/%s θ=%d: 사슬 이웃 B8 위반 %d 건 — 첫째 %s", v.table, v.name, theta, len(bad), bad[0])
 			}
 			if theta != MixThreshold.Milliseconds() {
 				continue
@@ -454,6 +483,9 @@ func TestReplayReferenceExplained(t *testing.T) {
 				if bad := explainV2(replayLedger(rows), time.Duration(theta)*time.Millisecond); len(bad) != 0 {
 					t.Errorf("%s 모드 %d θ=%d: 오라클 위반 %d 건 — 첫째 %s", table, mode, theta, len(bad), bad[0])
 				}
+				if bad := replayB8Failures(rows); len(bad) != 0 {
+					t.Errorf("%s 모드 %d θ=%d: 사슬 이웃 B8 위반 %d 건 — 첫째 %s", table, mode, theta, len(bad), bad[0])
+				}
 			}
 		}
 	}
@@ -464,6 +496,35 @@ var replayReferenceTables = []string{
 	"t9vm_t9clkB_table.csv", "t9vm_t9slow96_table.csv", "t9vm_t9slow98_table.csv", "t9vm_t9slowM2_table.csv", "t9vm_t9slowP2_table.csv",
 	"rec_t9P05_table.csv", "rec_t9P2_table.csv", "rec_t9P6_table.csv", "rec_t9R05_table.csv", "rec_t9R2_table.csv", "rec_t9R6_table.csv",
 	"tovl2_x264_table.csv", "tovl2_vt_table.csv", "tovl2_vtb_table.csv",
+}
+
+// replayB8Failures 는 재생 결과의 사슬 이웃(한 회차 안 seq 로 이어진 두 행)마다 B8 세 조건을 PDT · start 두 축에서
+// 잰 위반이다(계획 c3b 「B8 세 조건(두 축 · 사슬 이웃)」 · 설계 2.7). 섞기 시험(mixCheckB8)은 p · k 한 쌍만 보므로,
+// 갈래가 이어지는 실측 사슬 전체에서 직접 단언한다(c3b cc L). 재생은 한 회차라 첫 행 뒤 모든 이웃이 대상이다.
+func replayB8Failures(rows []replayRow) []string {
+	var bad []string
+	for i := 1; i < len(rows); i++ {
+		p, k := rows[i-1].row, rows[i].out
+		for _, a := range []struct {
+			name        string
+			prevS, curS int64
+		}{{"PDT", *p.PDTMS, k.PDTMS}, {"start", p.StartPTSMS, k.StartPTSMS}} {
+			prevE := a.prevS + int64(p.DurationMS)
+			cond := 0
+			switch {
+			case a.curS <= a.prevS:
+				cond = 1
+			case a.curS <= prevE-1000:
+				cond = 2
+			case a.curS+int64(k.DurationMS) <= prevE:
+				cond = 3
+			default:
+				continue
+			}
+			bad = append(bad, fmt.Sprintf("%s 행 %d(%s) %s 축 조건 %d", rows[i].seg.file, i, mixShow(k), a.name, cond))
+		}
+	}
+	return bad
 }
 
 // replayLedger 는 재생 결과의 장부 행만이다.

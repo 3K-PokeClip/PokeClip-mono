@@ -187,7 +187,7 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 //	조각마다  URI = BaseURL + "/" + playback_s3_key · PDT 줄 = playback_pdt(ms 로 자름) ·
 //	         EXTINF 줄 = duration_ms · GAP 줄은 GAP 원장에 있는 행에만 · MAP 줄 개수·위치 ·
 //	         KindVOD 면 DISCONTINUITY 줄 수 = HasDiscontinuityTag(segmentMismatch)
-//	판 태그   조각마다 timingTag 가 바라는 줄 그대로(개수 0 또는 1 · 값 · 자리 MAP 뒤 · PDT 앞 — timingMismatch) ·
+//	판 태그   조각마다 timingTag 가 바라는 줄 그대로(개수 0 또는 1 · 값 · 자리 MAP 뒤 · GAP · PDT 앞 — timingMismatch) ·
 //	         본문 전체의 판 태그 줄 수 = 줄을 바라는 조각 수(마지막 조각 뒤에 붙은 줄도 센다)
 //
 // 나머지 검사는 행 값으로 판정한다. 그 판정이 발행되는 바이트에도 참이려면 본문이 행 값을 그대로
@@ -313,8 +313,9 @@ func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart boo
 
 // timingMismatch 는 조각 태그 줄 tags 의 판 태그가 바라는 줄 want 와 다른 곳이다("" = 같다 — want "" 는 0줄). 판 태그
 // 줄은 이름(timingTagName)으로 센다 — 값이 깨진 줄(콜론 없음 · 꼬리 글자)도 센다.
-// 한 줄이면 자리도 본다: 그 조각의 MAP 줄 뒤(MAP 이 없으면 어디든) · PDT 줄 앞이다(계약3 7-6). MAP 앞이면 hls.js 1.7.3
-// 이 그 줄을 초기화 조각의 것으로 읽어 이 조각에 판이 없다.
+// 한 줄이면 자리도 본다: 그 조각의 MAP 줄 뒤 · 조각 줄(GAP · PDT · EXTINF) 앞이다(계약3 7-6 「MAP 뒤(MAP 이 없으면 맨
+// 앞)」). MAP 앞이면 hls.js 1.7.3 이 그 줄을 초기화 조각의 것으로 읽어 이 조각에 판이 없다. 「맨 앞」 은 조각 줄보다
+// 앞이라는 뜻으로 잰다 — 첫 조각의 태그에는 목록 머리 줄이 섞이고, 렌더는 끊김 표시 줄을 MAP 앞에 쓴다.
 func timingMismatch(tags []string, want string) string {
 	got := linesWithPrefix(tags, timingTagName)
 	switch {
@@ -327,9 +328,11 @@ func timingMismatch(tags []string, want string) string {
 	}
 	at := slices.Index(tags, want)
 	mapAt := slices.IndexFunc(tags, func(l string) bool { return strings.HasPrefix(l, "#EXT-X-MAP:") })
-	pdtAt := slices.IndexFunc(tags, func(l string) bool { return strings.HasPrefix(l, "#EXT-X-PROGRAM-DATE-TIME:") })
-	if at < mapAt || at > pdtAt {
-		return fmt.Sprintf("판 태그 줄 %q 가 %d번째 태그 줄이다 — MAP 줄(%d번째) 뒤 · PDT 줄(%d번째) 앞이어야 한다", want, at+1, mapAt+1, pdtAt+1)
+	segAt := slices.IndexFunc(tags, func(l string) bool {
+		return l == "#EXT-X-GAP" || strings.HasPrefix(l, "#EXT-X-PROGRAM-DATE-TIME:") || strings.HasPrefix(l, "#EXTINF:")
+	})
+	if at < mapAt || at > segAt {
+		return fmt.Sprintf("판 태그 줄 %q 가 %d번째 태그 줄이다 — MAP 줄(%d번째) 뒤 · 첫 조각 줄 GAP · PDT · EXTINF(%d번째) 앞이어야 한다", want, at+1, mapAt+1, segAt+1)
 	}
 	return ""
 }
@@ -711,8 +714,10 @@ func checkGeneration(p Playlist, body []byte, gen int64, prev *Published) error 
 // 폭을 pdtSlack 로 묶는다(RFC 는 1초 미만 겹침까지 허용하지만 판 NULL PDT 는 재귀식이라 겹치지 않는다).
 // 조각이 pdtSlack 보다 길면 둘째 항이 첫째 항을 함의하므로, 첫째 항이 따로 일하는 것은 길이 1ms
 // 조각 뒤뿐이다. 앞으로 뛰는 PDT(순단·벽시계 전진)는 하한만 보므로 통과한다. 판이 바뀌는 이웃을 이 항으로
-// 재는 까닭: 한 목록의 행은 모두 같은 판이라(계약 I20 · 계승은 앞 세션 판) 그 자리는 평시에 없고, 있으면 더 좁은
-// 쪽이 안전하다.
+// 재는 까닭: 한 목록의 행은 모두 같은 판이라(계약 I20 · 계승은 앞 세션 판) 그 이웃은 생기지 않는다 — 렌더 timingTag
+// 와 S5 가 판이 바뀌는 목록을 다루는 것은 방어이고, 생기면 더 좁은 쪽이 안전하다. 판 2 이웃은 세션이 바뀌어도(계승
+// 접두 → 계승 세션) 세 조건으로 잰다 — 계승 세션은 앞 세션의 회차(timing_round_id)를 이어 계약의 「같은 회차 안」
+// 이고, 새 회차 첫 행은 한 목록에 들지 않는다(I20 · E24 — TestValidatePDTB8AcrossRounds).
 // 위반은 발행 중단이다(설계 4.5.5 처치 저울): 그 줄을 빼면 seq 가 끊겨 MSN 축이 무너지고, 값을
 // 고치는 길은 장부 불변 트리거와 부딪힌다.
 func checkPDT(p Playlist) error {

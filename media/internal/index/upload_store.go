@@ -684,12 +684,13 @@ type PlaybackHole struct {
 }
 
 // playbackHolesSQL ($1 = session_id) — 회차의 ③ 구멍(pending · failed) 전부를 seq 순으로 읽는다(설계 r6 2.10 「구멍은 DB 에서
-// 열거한다」 — 깨운 요청의 seq 를 목표로 병합하면 #9 uploaded → #10 failed → #11 uploaded → #12 pending 에서 #10 을 건너뛴다).
+// 열거한다」 — 깨운 요청의 seq 를 목표로 병합하면 seq 9 uploaded → 10 failed → 11 uploaded → 12 pending 에서 10 을 건너뛴다).
 // 자격 조건은 pendingPlaybackUploadsSQL 과 같다(세션 조인 · 컷오프 · 끝나지 않은 회차 · 키 · PDT · 경로 · 크기). 꼬리
 // 예외 · 키셋 페이징은 없다 — 회차 하나의 구멍이라 작고, 꼬리 행은 복원이 그 자리에서 기다린다.
 //
 // 닻(anchor_seq)은 행마다 같은 회차의 앞선 uploaded 최신 seq 다 — stream_segments_session_idx(stream_id, session_id, seq)
-// 앞 끝을 탄다.
+// 앞 끝을 탄다. 구멍 행마다 부질의가 앞쪽 uploaded 행까지 거슬러 훑으므로 긴 연속 구멍은 행 수의 제곱으로 는다(한계 — c10a
+// 검수 cc L2): S3 장애 1시간 ≈ 900행이면 색인 항목 약 40만이라 받아들였다. 더 긴 장애가 실측되면 창 함수로 바꾼다.
 const playbackHolesSQL = `
 SELECT t.seq, t.playback_upload_state,
        (SELECT pg_catalog.max(p.seq) FROM stream_segments p
@@ -754,7 +755,9 @@ SELECT seq, COALESCE(session_id, ''), COALESCE(local_path, ''), bytes, duration_
  WHERE stream_id = $1 AND seq >= $2 AND seq <= $3
  ORDER BY seq`
 
-// LoadPlaybackChainRows 는 스트림 streamID 의 seq 구간 [from, to] 장부 행을 seq 순으로 읽는다(playbackChainRowsSQL).
+// LoadPlaybackChainRows 는 스트림 streamID 의 seq 구간 [from, to] 장부 행을 seq 순으로 읽는다(playbackChainRowsSQL). 구간
+// 길이 상한은 없다 — 부르는 쪽(upload 복원)이 정한다: 구멍 무리 끝 + 32행, 닻 찾기는 256행씩(행 메타데이터만 — 행당 수백
+// 바이트, c10a 검수 cc L2).
 func LoadPlaybackChainRows(ctx context.Context, pool *pgxpool.Pool, streamID string, from, to int64) ([]PlaybackChainRow, error) {
 	rows, err := pool.Query(ctx, playbackChainRowsSQL, streamID, from, to)
 	if err != nil {

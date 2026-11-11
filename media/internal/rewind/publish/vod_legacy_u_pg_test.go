@@ -104,8 +104,10 @@ func TestFreezeVODPassesPDTCheckAcrossUnattributedRows(t *testing.T) {
 	if tail.InheritsSession != head.SessionID {
 		t.Fatalf("S 개시 계승 = %q, want %q(사슬 P ← S)", tail.InheritsSession, head.SessionID)
 	}
+	// Errorf 다 — U 를 잃은 PDT 도 동결까지 흘려 S7 이 막는지 함께 본다(c4a cx L · cc L1 — 사전 단언에서 끝나면
+	// 「S7 이 잡는다」 는 이 시험의 주장이 확인되지 않는다).
 	if want := fxDay.Add(24 * time.Second); !tail.PlaybackPDT.Equal(want) {
-		t.Fatalf("S 첫 행 PDT = %v, want %v(P 끝 + U)", tail.PlaybackPDT, want)
+		t.Errorf("S 첫 행 PDT = %v, want %v(P 끝 + U)", tail.PlaybackPDT, want)
 	}
 
 	ids := []string{head.SessionID, tail.SessionID}

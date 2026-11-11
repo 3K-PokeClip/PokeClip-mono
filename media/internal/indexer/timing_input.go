@@ -92,11 +92,18 @@ func (ix *Indexer) timingInput(cur *index.Cursor, seg recording.Segment, read ti
 		ix.log.Warn("timing_facts_partial", attrs...)
 	}
 	if read.st != nil && read.st.HeadLead > headLeadWarn {
-		first := cur.Tail == nil || !index.SameInstance(cur.Tail.Timing, in.Facts)
+		first := cur.Tail == nil || !sameRecorder(cur.Tail.Timing, in.Facts)
 		ix.log.Warn("head_lead_over_1s", "stream_id", seg.StreamID, "path", seg.Path,
 			"head_lead_ms", read.st.HeadLead.Milliseconds(), "instance_first", first)
 	}
 	return in
+}
+
+// sameRecorder 는 q 와 k 가 같은 녹화기 인스턴스(표식)의 조각인가다 — 번호는 보지 않는다. head_lead_over_1s 의
+// instance_first 재료다: 같은 녹화기에서 번호가 건너뛴 조각(가운데 조각이 장부에 못 들었다)은 인스턴스 첫 조각이 아니다(c5
+// 검수 cc L2). 표식이 한쪽이라도 없으면 모름이라 거짓이다(첫 조각으로 본다 — 옛 판정과 같다).
+func sameRecorder(q, k index.TimingFacts) bool {
+	return q.Recorder != nil && k.Recorder != nil && *q.Recorder == *k.Recorder
 }
 
 // timingAttrs 는 segment_indexed 의 판 · 이어 계산 속성이다(설계 8절). 견줌 결과(comparable · same_instance · 견줬을 때

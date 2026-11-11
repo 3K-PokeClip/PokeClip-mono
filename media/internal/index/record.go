@@ -92,14 +92,6 @@ type Cursor struct {
 	Tail *TailRow
 }
 
-// NextPTSMS 는 다음 세그먼트가 시작할 재생 위치다 = 마지막 조각의 시작 + 그 길이.
-func (c Cursor) NextPTSMS() int64 {
-	if c.Tail == nil {
-		return 0
-	}
-	return c.Tail.StartPTSMS + int64(c.Tail.DurationMS)
-}
-
 // LastStartWall 은 마지막으로 기록한 세그먼트의 벽시계 시작 시각이다.
 func (c Cursor) LastStartWall() time.Time {
 	if c.Tail == nil {

@@ -119,13 +119,18 @@ func (e *restoreError) Unwrap() error { return e.err }
 func failRestore(reason string, err error) error { return &restoreError{reason: reason, err: err} }
 
 // restoreSession 은 회차 하나의 복원이다. 실패면 행 상태를 바꾸지 않고 세션 단위 백오프를 건다 — 신호
-// chain_restore_failed(까닭 · 다음 시도 시각).
+// chain_restore_failed(까닭 · 다음 시도 시각). 진전 없이 끝났으면(되살린 링크 0 — 꼬리에서 기다림 · 구멍 없음 · 이미 불일치로
+// 판정한 무리) 실패가 아니지만 다음 깨움까지 최소 간격을 둔다(c10b 보안 M — 위치 모름 요청이 조각마다 같은 구멍을 다시 읽지
+// 않게).
 func (u *Uploader) restoreSession(w restoreWake) {
 	lg := u.log.With("stream_id", w.streamID, "session_id", w.sessionID)
-	err := u.restoreHoles(w, lg)
+	progressed, err := u.restoreHoles(w, lg)
 	switch {
-	case err == nil:
+	case err == nil && progressed:
 		u.sessions.restoreSucceeded(w.sessionID)
+		return
+	case err == nil:
+		u.sessions.restoreIdle(w.sessionID, u.now())
 		return
 	case errors.Is(err, errRestoreStopped):
 		lg.Debug("chain_restore_stopped") // 종료 중 — 실패가 아니다(백오프 없음 · 다음 기동이 다시 한다)
@@ -142,29 +147,54 @@ func (u *Uploader) restoreSession(w restoreWake) {
 }
 
 // restoreHoles 는 회차의 구멍을 DB 에서 열거해(r2 — cx-N1: 깨운 요청의 seq 를 목표로 병합하지 않는다) 닻이 같은 무리마다
-// 되살린다. 무리 사이에는 uploaded 행이 끼어 닻이 다르다.
-func (u *Uploader) restoreHoles(w restoreWake, lg *slog.Logger) error {
+// 되살린다. 무리 사이에는 uploaded 행이 끼어 닻이 다르다. progressed 는 되살린 링크가 하나라도 있는가다.
+//
+// 한 무리의 결정적 실패(닻 · 회차 까닭 — transientRestoreFailure 밖)는 그 무리만 건너뛰고 뒤 무리를 이어 되살린 뒤 첫 실패를
+// 돌려준다(c10b 보안 M — 첫 오류에서 돌아가면 뒤 무리가 백오프 상한까지 막힌다). 무리끼리는 닻이 달라 서로의 재료가 아니다.
+// 일시 실패는 바로 돌려준다 — 장애 동안 무리마다 같은 실패를 되풀이하지 않는다.
+func (u *Uploader) restoreHoles(w restoreWake, lg *slog.Logger) (progressed bool, err error) {
 	ledger, _, _ := u.restoreDeps()
 	ctx, cancel := u.dbCtx()
 	holes, err := ledger.PlaybackHoles(ctx, w.sessionID)
 	cancel()
 	if err != nil {
-		return failRestore("ledger", err)
+		return false, failRestore("ledger", err)
 	}
 	groups := groupHoles(holes)
+	var first error
 	for i, g := range groups {
 		if u.restoreStopping() {
-			return errRestoreStopped
+			return progressed, errRestoreStopped
 		}
 		limit := g.last + restoreLookahead
 		if i+1 < len(groups) {
 			limit = min(limit, groups[i+1].first-1)
 		}
-		if err := u.restoreGroup(w, g, limit, lg); err != nil {
-			return err
+		ok, err := u.restoreGroup(w, g, limit, lg)
+		switch {
+		case err == nil:
+			progressed = progressed || ok
+		case errors.Is(err, errRestoreStopped) || transientRestoreFailure(err):
+			return progressed, err
+		case first == nil:
+			first = err
 		}
 	}
-	return nil
+	return progressed, first
+}
+
+// transientRestoreFailure 는 err 가 다시 하면 풀릴 수 있는 실패(장부 · S3 · 로컬 읽기)인가다. 까닭을 모르는 오류도 일시
+// 실패로 친다 — 모르는 실패로 뒤 무리를 돌리지 않는다.
+func transientRestoreFailure(err error) bool {
+	var re *restoreError
+	if !errors.As(err, &re) {
+		return true
+	}
+	switch re.reason {
+	case "ledger", "s3_get", "local_read":
+		return true
+	}
+	return false
 }
 
 // holeGroup 은 닻이 같은 구멍 한 무리다(seq 순).

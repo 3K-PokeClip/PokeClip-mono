@@ -4,14 +4,15 @@ package index
 // 파일 · 시계를 모른다.
 //
 // 「같은 녹화기 이어짐」 의 정의는 여기 하나다. 판 2 섞기(store) · ③ 사슬
-// (indexer/chain.go) · is_discontinuity(indexer buildRecord)가 모두 이 함수를
-// 부른다. 정의가 두 벌이면 한쪽만 고쳐져 같은 행을 두 곳이 다르게 잇는다.
+// (indexer/chain.go · 복원 upload/restore.go) · is_discontinuity(indexer
+// buildRecord)가 모두 SameInstance 를 부른다. 정의가 두 벌이면 한쪽만 고쳐져 같은
+// 행을 두 곳이 다르게 잇는다.
 
 import "time"
 
 // contiguousSlack 은 맞닿음으로 보는 영상 경계 차의 상한(미포함)이다 — 설계 2.1 의
 // |a(k) − b(p)| < 1ms. 같은 연결 안 조각 경계의 어긋남은 영상 ±1틱(11µs)이다
-// (indexer/chain.go mtxiGapTolerance 주석).
+// (playback/restore.go mtxiGapTolerance 주석).
 const contiguousSlack = time.Millisecond
 
 // TimingFacts 는 장부 행의 원래 사실 칸이다. 생산자 기록이고 소비자 계약이
@@ -42,7 +43,9 @@ func SameInstance(prev, cur TimingFacts) bool {
 }
 
 // Contiguous 는 같은 녹화기 이어짐(SameInstance)이면서 cur 의 영상 첫 DTS 와
-// prev 의 영상 끝의 차가 1ms 미만인가다. 길이(설계 2.6)와 ③ 사슬에만 쓴다.
+// prev 의 영상 끝의 차가 1ms 미만인가다. 판 2 길이(설계 2.6 — pdt_mix.go)에만
+// 쓴다. ③ 사슬은 SameInstance 위에서 이웃 차를 따로 잰다(playback.neighborGap —
+// 문턱이 다르다).
 //
 // 영상 칸이 한쪽이라도 nil 이면 거짓이다 — 맞닿았는지 알 재료가 없다.
 func Contiguous(prev, cur TimingFacts) bool {

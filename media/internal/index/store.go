@@ -248,10 +248,11 @@ func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed, src SessionSo
 	out, res, err := s.insertOnce(ctx, r, seed, src)
 	if err != nil && isLockTimeout(err) {
 		// 55P03 → 즉시 1회 재시도(설계 6.5.5 · m1b). 재시도도 락이면 ErrLockContended 로
-		// 올린다 — 처분(일반 재시도 → 소진 시 D8)은 호출자 몫이다.
+		// 올린다 — 처분(일반 재시도 → 소진 시 D8)은 호출자 몫이다. 원 오류도 함께 감싼다 — 어느
+		// 잠금(컷오프 · 판 게이트)에서 끊겼는지가 그 문구에 있다(c4a 보안 L2).
 		out, res, err = s.insertOnce(ctx, r, seed, src)
 		if err != nil && isLockTimeout(err) {
-			return out, res, fmt.Errorf("%w: stream_id=%q seq=%d", ErrLockContended, r.StreamID, r.Seq)
+			return out, res, fmt.Errorf("%w: stream_id=%q seq=%d: %w", ErrLockContended, r.StreamID, r.Seq, err)
 		}
 	}
 	return out, res, err
@@ -295,7 +296,9 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	// 검사에서 미커밋 경합을 만나면 그 대기는 시간 판정 **뒤**가 되어 — 경합이 롤백되면
 	// 낡은 방증으로 주조될 수 있다(cx 리뷰 차단 2). 대기를 여기(판정 앞)로 끌어오면
 	// "락 대기 뒤 재검"(m1a) 의미론이 복원된다. advisory 대기도 lock_timeout 을 따르므로
-	// 55P03 경로(m1b)와 일관된다. 비적격 INSERT 는 컷오프 경쟁이 없으므로 직렬화하지 않는다.
+	// 55P03 경로(m1b)와 일관된다. 비적격 INSERT 는 컷오프 경쟁이 없으므로 직렬화하지 않는다. 한계(c4b 보안 L1): 그래서
+	// 같은 스트림에 쓰기자가 둘이면(롤링 배포가 단일 쓰기자 전제 D10 을 깰 때) 두 비적격 행이 같은 스냅숏의 앞 행(p · q)을
+	// 읽어 위치 · PDT 를 겹쳐 쓸 수 있다 — c4a 부터 그대로이고, 단일 쓰기자에서는 생기지 않는다.
 	//
 	// 세션 결정의 관측 신선도도 **이 대기 뒤의 시각**으로 재야 한다(계획 4.1 ⑶):
 	// 대기 앞에서 굳히면 3초 대기 뒤 32초짜리 관측으로 세션이 열린다.
@@ -485,11 +488,13 @@ func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec
 		// 행에 쓰이지 않는 두 값은 결정에서 옮긴다 — Open 이 성공한 뒤라 개시가 실제로 쓴 결정의 값이다.
 		opening.endingSessionID, opening.prevFirstLocalPath = dec.EndingSessionID, dec.PrevFirstLocalPath
 	}
-	if opensNewRound(dec) && dec.RoundID != sessionID {
-		// 새 회차의 id 는 그 머리 세션의 session_id 다(M6 15.2) — 판 · 이어 계산 회차를 그 값으로 이미 정했다. 갈리면 배선
-		// 결함이라 트랜잭션을 되돌린다(행의 timing_round_id 가 세션의 회차와 다르게 저장되지 않게).
-		return r, settlement{}, fmt.Errorf("index: 새 회차 결정의 RoundID %q 가 개시가 연 session_id %q 와 다르다 stream_id=%q seq=%d — 배선 결함",
-			dec.RoundID, sessionID, r.StreamID, r.Seq)
+	if dec.Opens && dec.NewRound != (dec.RoundID == sessionID) {
+		// 새 회차의 id 는 그 머리 세션의 session_id 다(M6 15.2) — 개시에서는 NewRound ⇔ RoundID == 개시가 연 session_id 다.
+		// 판 · 이어 계산 회차를 Open 앞에서 NewRound · RoundID 로 이미 정했으므로, 한쪽으로든 갈리면 배선 결함이라 트랜잭션을
+		// 되돌린다 — 회차가 다르면 행의 timing_round_id 가 세션의 회차와 다르게, NewRound 를 잃으면 새 회차가 게이트가 아닌
+		// 기저 행의 판으로 저장된다(cm cc D1 · 보안 M-1).
+		return r, settlement{}, fmt.Errorf("index: 새 회차 판별이 어긋난다 — NewRound=%t · 결정의 RoundID %q · 개시가 연 session_id %q stream_id=%q seq=%d — 배선 결함",
+			dec.NewRound, dec.RoundID, sessionID, r.StreamID, r.Seq)
 	}
 	r.SessionID, r.PlaybackPDT = &sessionID, &pdt
 

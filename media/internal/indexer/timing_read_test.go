@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math"
 	"os"
 	"reflect"
+	"syscall"
 	"testing"
 	"time"
 
@@ -301,9 +303,10 @@ func TestOtherSegmentResultKeepsBlock(t *testing.T) {
 	}
 }
 
-// 표지 뒤에 시작하지 않은(낡은) 수집 결과는 표지를 내리지 않는다(c5 검수 H2). 수집 워커가 디렉터리를 읽은 뒤 X 가 생겨
-// 막혔으면, 그 결과의 미기록 목록에 X 가 없어도 X 는 살아 있다 — 목록 부재는 파일 소멸이 아니다. 잡는 결함: 목록 부재만으로
-// 표지를 내리면 뒤 Y 가 먼저 커밋되어 X 가 영구히 빠진다.
+// 목록 부재만으로는 표지를 내리지 않는다(c5 검수 H2). 수집 워커가 디렉터리를 읽은 뒤 X 가 생겨 막혔으면, 그 (낡은) 결과의
+// 미기록 목록에 X 가 없어도 X 는 살아 있다. 이 시험이 재는 것은 「목록 부재 ∧ 파일 생존 → 표지 유지」 다 — 수집 시작
+// 시각으로 낡음을 가리는 조건은 두지 않았다(YAGNI — 파일 stat 이 같은 답을 낸다 · c5 확인 패스 cc 부수 3). 잡는 결함: 목록
+// 부재만으로 표지를 내리면 뒤 Y 가 먼저 커밋되어 X 가 영구히 빠진다.
 func TestStaleCollectKeepsBlockOfLiveFile(t *testing.T) {
 	f := newFixture(t, 4000)
 	r := f.injectFailingReads()
@@ -327,6 +330,93 @@ func TestStaleCollectKeepsBlockOfLiveFile(t *testing.T) {
 	f.scan()
 	if got, want := f.paths("s1"), []string{x.Path, y.Path}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("온전한 재스캔 뒤 장부 = %v, want %v", got, want)
+	}
+}
+
+// 표지가 둘 이상이면 timing_read_blocked 의 blocked_path 는 가장 이른 표지다 — 실행마다 같은 값이고, 운영자가 따라갈 막힘의
+// 뿌리다(c5 확인 패스 cc 부수 2). 잡는 결함: 표지 맵을 순회하다 처음 걸린 표지를 내면 실행마다 속성이 바뀐다.
+func TestBlockedSignalNamesEarliestBlock(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := f.injectFailingReads()
+	x := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonHook)
+	e := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonHook)
+	for _, seg := range []recording.Segment{x, e} {
+		r.fails[seg.Path] = -1
+		f.mustHandle(seg)
+	}
+
+	for range 20 {
+		f.mustHandle(f.segment("s1", segName(baseWall, 8*time.Second), 1000, recording.ReasonHook))
+	}
+
+	for _, attrs := range f.logs.attrsAll("timing_read_blocked") {
+		if attrs["blocked_path"] != e.Path {
+			t.Fatalf("blocked_path = %v, want 가장 이른 표지 %s", attrs["blocked_path"], e.Path)
+		}
+	}
+}
+
+// 늦은 표지의 조각이 이른 표지보다 먼저 재전달되면 그 조각은 이른 표지에 막혀 기다리고, 이른 조각이 커밋된 뒤 다시 와서
+// 커밋된다(c5 확인 패스 cx 부수). X(4초) 막힘 → 이른 E(0초)가 늦게 와서 막힘 → X 가 먼저 재전달(성공 판독이어도 E 뒤라 미기록)
+// → E · X 차례 재전달. 잡는 결함: 자기 표지만 보고 X 를 먼저 커밋하면 다시 읽은 E 가 H3 에서 영구히 빠진다.
+func TestLaterBlockRedeliveredFirstWaitsForEarlierBlock(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := f.injectFailingReads()
+	x := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonHook)
+	e := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonHook)
+	r.fails[x.Path], r.fails[e.Path] = 1, 1
+	f.mustHandle(x)
+	f.mustHandle(e)
+
+	f.mustHandle(x)
+	if n := len(f.store.records("s1")); n != 0 {
+		t.Fatalf("X 먼저 재전달 뒤 행 = %d, want 0 — X 는 E 의 표지에 막힌다", n)
+	}
+	f.mustHandle(e)
+	f.mustHandle(x)
+
+	if got, want := f.paths("s1"), []string{e.Path, x.Path}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("장부 = %v, want %v", got, want)
+	}
+	if n := f.logs.count(slog.LevelError, "late_segment_skipped"); n != 0 {
+		t.Errorf("late_segment_skipped = %d건, want 0", n)
+	}
+}
+
+// 목록에 없는 막힌 조각의 stat 이 ENOENT 밖 오류면 표지를 두고(살아 있을 수 있다), 다음 재스캔의 stat 이 ENOENT 면 내린다 —
+// 정지 뒤 회복의 직접 시험(c5 확인 패스 cx 부수). 잡는 결함: 오류를 소멸로 읽으면 살아 있는 조각 뒤가 먼저 커밋되고, 오류에서
+// 표지를 영구히 굳히면 회복 뒤에도 스트림이 선다.
+func TestBlockSurvivesStatErrorAndDropsOnLaterNotExist(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := f.injectFailingReads()
+	x := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	r.fails[x.Path] = -1
+	f.mustHandle(x)
+	later := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
+	f.mustHandle(later)
+	if err := os.Remove(x.Path); err != nil {
+		t.Fatalf("막힌 조각 지우기 실패: %v", err)
+	}
+	realStat := f.ix.statFn
+	f.ix.statFn = func(p string) (os.FileInfo, error) {
+		if p == x.Path {
+			return nil, &fs.PathError{Op: "stat", Path: p, Err: syscall.EIO}
+		}
+		return realStat(p)
+	}
+
+	f.scan()
+	if n := len(f.store.records("s1")); n != 0 {
+		t.Fatalf("stat EIO 재스캔 뒤 행 = %d, want 0 — 표지를 그대로 둔다", n)
+	}
+
+	f.ix.statFn = realStat
+	f.scan()
+	if got := f.paths("s1"); !reflect.DeepEqual(got, []string{later.Path}) {
+		t.Fatalf("stat 회복 뒤 장부 = %v, want [%s]", got, later.Path)
+	}
+	if n := f.logs.count(slog.LevelWarn, "timing_read_block_dropped"); n != 1 {
+		t.Errorf("timing_read_block_dropped = %d건, want 1", n)
 	}
 }
 
@@ -367,9 +457,11 @@ func TestReadDeferralNeverAdopts(t *testing.T) {
 }
 
 // 계획 c5 시험 5 — 커밋 직후 메모리 커서 = 장부를 다시 읽은 커서(판 NULL). drift 가 톨러런스를 넘어도(6초) 꼬리 위치 ·
-// 길이는 store 가 정한 커밋 값이고 IsDiscontinuity 는 참이다(위치는 인덱서가 정하지 않는다 — 계획 0절 6 · 설계 7.1).
-// 잡는 결함: advance 가 rec 값(drift 가산)으로 전진하면 메모리 꼬리가 장부 꼬리와 갈라져 다음 행의 판단이 재기동 여부에
-// 따라 달라진다.
+// 길이는 store 가 정한 커밋 값이다(위치는 인덱서가 정하지 않는다 — 계획 0절 6 · 설계 7.1). 잡는 결함: advance 가 rec
+// 값(drift 가산)으로 전진하면 메모리 꼬리가 장부 꼬리와 갈라져 다음 행의 판단이 재기동 여부에 따라 달라진다.
+//
+// 두 조각은 같은 판독값(표식 · 번호 7)이라 IsDiscontinuity 의 참은 drift 가 아니라 칸이 정한다 — 번호가 7 → 7 로 역행해 같은
+// 녹화기 이어짐이 아니다(c6 · 칸 우선). drift 폴백은 이 시험이 보지 않는다(timing_cursor_pg_test.go 의 칸 없음 갈래가 본다).
 func TestCommittedCursorEqualsReloadedCursor(t *testing.T) {
 	f := newFixture(t, 4000, 4000)
 	f.ix.timingFn = func(p string) (playback.SegmentTiming, error) { return sampleTiming(), nil }
@@ -378,7 +470,7 @@ func TestCommittedCursorEqualsReloadedCursor(t *testing.T) {
 
 	rows := f.store.records("s1")
 	if !rows[1].IsDiscontinuity {
-		t.Error("6초 drift 행의 is_discontinuity = false, want true")
+		t.Error("번호 역행(7 → 7) 행의 is_discontinuity = false, want true")
 	}
 	reloaded, err := f.store.LoadCursor(t.Context(), "s1")
 	if err != nil {
@@ -551,6 +643,39 @@ func TestHeadLeadOverOneSecondSignals(t *testing.T) {
 	}
 	if all[0]["head_lead_ms"] != int64(1001) || all[0]["instance_first"] != true || all[1]["instance_first"] != false {
 		t.Errorf("head_lead_over_1s 속성 = %v, want m 1001 · 첫 조각 true → false", all)
+	}
+}
+
+// instance_first 는 녹화기 표식만 본다 — 같은 녹화기에서 번호가 건너뛴 조각(가운데 조각이 장부에 못 든 경우)은 인스턴스 첫
+// 조각이 아니다(c5 검수 cc L2). 표식이 바뀐 조각은 첫 조각이다. 잡는 결함: 「같은 녹화기 이어짐(번호 +1)이 아님」 으로 정하면
+// 번호 건너뜀에서 참이 되어, 머리 앞섬 1초 초과가 「첫 조각이라 정상」 으로 읽혀 이상 신호가 묻힌다.
+func TestHeadLeadInstanceFirstLooksAtRecorderOnly(t *testing.T) {
+	tests := []struct {
+		name     string
+		recorder [16]byte
+		number   uint64
+		want     bool
+	}{
+		{"같은 녹화기 번호 건너뜀", recA, 9, false},
+		{"녹화기 바뀜", recB, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, 4000, 4000)
+			st := sampleTiming()
+			st.HeadLead = 1001 * time.Millisecond
+			f.ix.timingFn = func(string) (playback.SegmentTiming, error) { return st, nil }
+			f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+
+			st.Mtxi = &playback.Mtxi{RecorderID: tt.recorder, SegmentNumber: tt.number, DTS: time.Minute + 8*time.Second,
+				NTP: baseWall.Add(4 * time.Second)}
+			f.mustHandle(f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile))
+
+			all := f.logs.attrsAll("head_lead_over_1s")
+			if len(all) != 2 || all[1]["instance_first"] != tt.want {
+				t.Errorf("head_lead_over_1s = %v, want 둘째 instance_first %v", all, tt.want)
+			}
+		})
 	}
 }
 

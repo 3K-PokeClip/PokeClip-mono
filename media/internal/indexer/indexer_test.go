@@ -160,9 +160,6 @@ func TestCase06RegrownCorrectsTailAndDerivedValues(t *testing.T) {
 	if cur.Tail.DurationMS != 6000 {
 		t.Fatalf("커서 꼬리 duration = %d, want 6000", cur.Tail.DurationMS)
 	}
-	if got := cur.NextPTSMS(); got != 6000 {
-		t.Errorf("NextPTSMS = %d, want 6000 — 파생값이 교정되지 않았다", got)
-	}
 	if got, want := cur.ExpectedNextWall(), baseWall.Add(6*time.Second); !got.Equal(want) {
 		t.Errorf("ExpectedNextWall = %v, want %v", got, want)
 	}

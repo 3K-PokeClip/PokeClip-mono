@@ -542,6 +542,14 @@ func (m *sessionMemory) restoreFailed(sessionID string, now time.Time) time.Time
 	return e.restoreNext
 }
 
+// restoreIdle 은 진전 없이 끝난 복원 뒤 다음 시도를 SweepEvery 뒤로 미룬다 — 실패 횟수는 세지 않는다(c10b 보안 M).
+func (m *sessionMemory) restoreIdle(sessionID string, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entry(sessionID)
+	e.restoreFails, e.restoreNext = 0, now.Add(m.backoffBase)
+}
+
 // restoreSucceeded 는 그 회차의 백오프를 푼다.
 func (m *sessionMemory) restoreSucceeded(sessionID string) {
 	m.mu.Lock()

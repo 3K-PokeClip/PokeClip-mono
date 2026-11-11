@@ -76,7 +76,7 @@ func mixV2(v LedgerView, in TimingInput, theta time.Duration) TimingV2 {
 	out.PDTMS, out.Branch = e, BranchContinue
 	if out.Compared {
 		out.DeltaMS = w - e
-		out.PDTMS, out.Branch, out.LimitedBy = compare(out.DeltaMS, theta.Milliseconds(), w, s, e, dur)
+		out.PDTMS, out.Branch, out.LimitedBy = compareToTheta(out.DeltaMS, theta.Milliseconds(), w, s, e, dur)
 	}
 	// 위치 보폭 = PDT 보폭이라 기준점 PDT − start 가 회차 안 상수다(설계 2.11). 앞 끝 하한은 두지
 	// 않는다(예측표 P12).
@@ -119,8 +119,8 @@ func roundFirst(v LedgerView, in TimingInput, w int64) (TimingV2, bool) {
 	return out, true
 }
 
-// compare 는 견줄 조각의 갈래다 — Δ = w − E 를 θ(ms)와 견준다.
-func compare(delta, theta, w, s, e int64, dur int32) (int64, Branch, string) {
+// compareToTheta 는 견줄 조각의 갈래 · PDT · 이긴 항이다 — Δ = w − E 를 θ(ms)와 견준다.
+func compareToTheta(delta, theta, w, s, e int64, dur int32) (int64, Branch, string) {
 	switch {
 	case delta > theta:
 		return w, BranchNewChapterGap, ""
@@ -154,6 +154,8 @@ func overlapPDT(w, s, e int64, dur int32) (int64, string) {
 // B(k) − A(k)(B · A = ns 칸의 ms 내림, mtxi 가 없으면 파일 안 영상 길이). 고른 영상 길이가 1ms
 // 미만이거나 int32 ms 를 넘으면 mvhd 를 쓰고 videoKnown 은 거짓이다 — 상한은 인덱서가 칸을 비우는
 // video_span_invalid 와 같은 경계다(조각 하나의 영상이 24일을 넘을 수 없다 · 좁히면 부호가 뒤집힌다).
+// 인덱서는 그 경계를 B(k) − A(k) 로 재므로 맞닿음 길이 B(k) − B(p) 와는 경계에서 ±1ms 다를 수 있다(A(k) 와
+// B(p) 는 1ms 안에서 어긋난다) — 어느 쪽으로 갈려도 결과는 견줌 · mvhd 쪽이다(c3b r2 cc L — 한계로 둔다).
 // p 가 nil 이면 맞닿음을 보지 않는다.
 func mixDuration(p *PrevRow, in TimingInput) (int32, bool) {
 	f := in.Facts

@@ -504,6 +504,8 @@ END $do$;
 -- DELETE 는 거부한다. 스위치가 판을 가리키면 래치를 같이 세운다. 래치 낮추기(→ NULL)는 스위치 NULL 이고 판 2 행이 0 일
 -- 때만이다(MongoDB CannotDowngrade 꼴) — 판 2 행 셈은 잠금 뒤라 그 사이 커밋한 개시의 행까지 센다. 스위치를 NULL 로 내리는
 -- 것은 늘 된다(판 2 쓰기를 멈추는 길 · 열린 판 2 회차는 판 고정으로 끝까지 판 2). 거부는 23514 다.
+-- 낮추기는 READ COMMITTED 에서만 받는다 — REPEATABLE READ · SERIALIZABLE 은 스냅숏을 잠금 대기 앞에 잡아, 기다리는 동안
+-- 커밋된 판 2 행을 셈에서 놓친다(c1 · c4b 보안 M1 실측). 그 격리의 낮추기는 판 2 행과 무관하게 거부한다.
 -- hashtext 는 integer 를 내고 pg_catalog 의 잠금 함수는 bigint 판뿐이라 ::bigint 로 맞춘다(store.go 의 컷오프 열쇠와 같은 꼴).
 CREATE OR REPLACE FUNCTION stream_timing_gate_guard() RETURNS trigger
     LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
@@ -513,6 +515,12 @@ BEGIN
         RAISE EXCEPTION 'timing_gate_delete_refused' USING ERRCODE = 'check_violation';
     END IF;
     NEW.highest_version := GREATEST(NEW.highest_version, NEW.new_round_version);
+    IF OLD.highest_version IS NOT NULL AND NEW.highest_version IS NULL
+       AND pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'timing_latch_lower_needs_read_committed'
+            USING ERRCODE = 'check_violation',
+                  DETAIL = pg_catalog.format('transaction_isolation=%s', pg_catalog.current_setting('transaction_isolation'));
+    END IF;
     IF OLD.highest_version IS NOT NULL AND NEW.highest_version IS NULL
        AND EXISTS (SELECT 1 FROM public.stream_segments s WHERE s.timing_version = 2) THEN
         RAISE EXCEPTION 'timing_latch_lower_refused'

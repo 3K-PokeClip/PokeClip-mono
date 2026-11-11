@@ -64,6 +64,9 @@ func TestNextLinkBranches(t *testing.T) {
 		{"이어짐이_아니면_리셋", prev, false, source(1, recB, 1, 0), 13_900 * time.Millisecond, true},
 		{"영상_축_맞닿음은_잇는다", videoPrev, true, withVideo(source(1, recA, 2, 14_226*time.Millisecond), 14_226*time.Millisecond), 14_226 * time.Millisecond, false},
 		{"영상_축_1ms_역행은_리셋", videoPrev, true, withVideo(source(1, recA, 2, 14_225*time.Millisecond), 14_225*time.Millisecond), 13_900 * time.Millisecond, true},
+		// 영상 칸이 한쪽에만 있으면 mtxi 축이다(c8 검수 cc L2 — 영상 끝 없는 고정 행 다음 영상 행 · 소리만 송출 행).
+		{"앞만_영상_칸은_mtxi_축", videoPrev, true, source(1, recA, 2, 14_050*time.Millisecond), 14_050 * time.Millisecond, false},
+		{"뒤만_영상_칸은_mtxi_축", prev, true, withVideo(source(1, recA, 2, 14_050*time.Millisecond), 14_226*time.Millisecond), 14_050 * time.Millisecond, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -183,6 +186,21 @@ func TestRestoreChainFoldsLikeLiveChain(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, []int64{4}) {
 		t.Errorf("이음 규칙 호출 = %v, want [4] — 비귀속 행 건너 이음 한 번", calls)
+	}
+}
+
+// 닻의 보정값이 0 이 아니면 닻 바로 뒤 이어짐 행은 그 보정값을 잇는다 — 닻에서 연다(c10a 검수 cc M1). 잡는 결함: 닻을
+// 무시하고 회차 첫 행처럼 열면(StartLink — offset 0) 도장이 닻 보정값(2초)만큼 앞선다. 닻 Offset 0 인 시험은 두 구현이
+// 같은 값을 내 이 결함을 가르지 못한다.
+func TestRestoreChainContinuesAnchorOffset(t *testing.T) {
+	rec := [16]byte{0xaa}
+	anchor := Link{Seq: 3, SessionID: "S1", Recorder: &rec, Number: int64Ptr(3), Mtxi: 10 * time.Second,
+		Dur: 4 * time.Second, Pos: 12 * time.Second, Offset: 2 * time.Second}
+
+	got := RestoreChain(&anchor, []SourceTiming{source(4, rec, 4, 14*time.Second)}, stitchAt(0, new([]int64)), sameRecorder)
+
+	if len(got) != 1 || got[0].Pos != 16*time.Second || got[0].Offset != 2*time.Second {
+		t.Errorf("접기 = %+v, want seq 4 · pos 16s · offset 2s 하나(닻 보정값을 잇는다)", got)
 	}
 }
 

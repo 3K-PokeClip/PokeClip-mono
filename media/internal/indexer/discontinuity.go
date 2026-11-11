@@ -43,9 +43,20 @@ func judgeDiscontinuity(q, k index.TimingFacts, driftMS, toleranceMS int64, brea
 // hasMarks 는 칸 f 에 표식과 번호가 둘 다 있는가다. 장부 CHECK 가 둘을 함께 NULL 로 두지만, 한쪽만 있는 칸도 모름으로 본다.
 func hasMarks(f index.TimingFacts) bool { return f.Recorder != nil && f.Number != nil }
 
-// logDiscontinuity 는 판정 d 의 신호를 남긴다(설계 8절 — 표식 · 번호). seq 는 k 에 줄 seq 다. 칸으로 정하지 않았으면 남길
-// 것이 없다.
-func (ix *Indexer) logDiscontinuity(seg recording.Segment, seq int64, q, k index.TimingFacts, d discontinuity) {
+// verdict 는 한 행의 끊김 판정과 그 신호 재료(꼬리 q · 조각 칸 k)다. 영값은 판정할 꼬리가 없는 첫 행이다(신호 없음).
+//
+// 신호는 INSERT 가 그 행을 넣은 뒤에만 남긴다(commit 의 InsertInserted 갈래). 판정 자리(buildRecord)에서 남기면 poison 이나
+// seq 충돌로 장부에 들지 않은 시도의 신호가 남는다 — 재적재 뒤 재시도는 다른 꼬리와 견줘 다른 답을 낼 수 있다(c6 검수 cc L1 ·
+// cx M).
+type verdict struct {
+	q, k index.TimingFacts
+	d    discontinuity
+}
+
+// logDiscontinuity 는 장부에 들어간 행의 판정 v 의 신호를 남긴다(설계 8절 — 표식 · 번호). seq 는 그 행의 seq 다. 칸으로
+// 정하지 않았으면 남길 것이 없다.
+func (ix *Indexer) logDiscontinuity(seg recording.Segment, seq int64, v verdict) {
+	q, k, d := v.q, v.k, v.d
 	if !d.byMarks {
 		return
 	}

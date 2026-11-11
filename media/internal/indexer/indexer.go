@@ -731,7 +731,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		dec = noBreak
 	}
 
-	rec := ix.buildRecord(cur, seg, d, size, dec.Apply, timing)
+	rec, judged := ix.buildRecord(cur, seg, d, size, dec.Apply, timing)
 
 	outcome, insertCommit, poisoned, err := ix.insertWithRetry(ctx, rec, seed, src)
 	if err != nil {
@@ -773,7 +773,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
 		// 이미 정해졌다 — 여기서 재계산하면 같은 세그먼트의 판정이 재시도 여부에 따라 달라진다.
 		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
-		rec = ix.buildRecord(cur, seg, d, size, dec.Apply, timing)
+		rec, judged = ix.buildRecord(cur, seg, d, size, dec.Apply, timing)
 
 		outcome, insertCommit, poisoned, err = ix.insertWithRetry(ctx, rec, seed, src)
 		if err != nil {
@@ -805,6 +805,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		return nil
 	case index.InsertInserted:
 		ix.logSeed(seg, rec.Seq, seed, insertCommit)
+		ix.logDiscontinuity(seg, rec.Seq, judged)
 		ix.advance(cur, seg, rec, insertCommit, read)
 		if dec.Index >= 0 {
 			ix.releaseBreak(seg.StreamID, dec)
@@ -829,16 +830,16 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 // 돌려준다(POK-196 PDT 설계 r7 7.1 · 계획 0절 6). drift 는 끊김 판정의 재료로만 남는다.
 //
 // 판정의 기준 행은 꼬리 q(seq 바로 앞 장부 행)다 — q · 이 조각 둘 다 표식 · 번호가 있으면 칸으로, 하나라도 없으면 drift 로
-// 정하고 훅 판정을 OR 로 합친다(judgeDiscontinuity · POK-196 PDT 계획 4절 c6). drift 로그 둘은 판정 갈래와 무관하게 파일명
-// 시각의 관측으로 남는다.
-func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size int64, breakHit bool, timing index.TimingInput) index.Record {
-	isDiscont := false
+// 정하고 훅 판정을 OR 로 합친다(judgeDiscontinuity · POK-196 PDT 계획 4절 c6). 판정 신호는 여기서 남기지 않고 판정(judged)을
+// 돌려준다 — 부르는 쪽이 행이 장부에 든 뒤에 남긴다(verdict). drift 로그 둘은 판정 갈래와 무관하게 파일명 시각의 관측으로
+// 남는다.
+func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size int64, breakHit bool, timing index.TimingInput) (index.Record, verdict) {
+	var judged verdict
 
 	if cur.Tail != nil {
 		drift := seg.StartWall.Sub(cur.ExpectedNextWall()).Milliseconds()
-		verdict := judgeDiscontinuity(cur.Tail.Timing, timing.Facts, drift, ix.opt.DriftToleranceMS, breakHit)
-		ix.logDiscontinuity(seg, cur.NextSeq, cur.Tail.Timing, timing.Facts, verdict)
-		isDiscont = verdict.broken
+		judged = verdict{q: cur.Tail.Timing, k: timing.Facts,
+			d: judgeDiscontinuity(cur.Tail.Timing, timing.Facts, drift, ix.opt.DriftToleranceMS, breakHit)}
 		switch outside := abs64(drift) > ix.opt.DriftToleranceMS; {
 		case drift < 0 && !outside:
 			// 톨러런스 이내의 음수 drift 는 무음으로 두지 않되 ERROR 로 올리지도 않는다.
@@ -867,9 +868,9 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 		LocalPath:       seg.Path,
 		UploadState:     index.UploadStatePending,
 		Bytes:           size,
-		IsDiscontinuity: isDiscont,
+		IsDiscontinuity: judged.d.broken,
 		Timing:          timing,
-	}
+	}, judged
 }
 
 // advance 는 커서를 한 칸 전진시킨다.
@@ -1043,9 +1044,11 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 		end := time.Duration(*videoEnd)
 		cur.Tail.Timing.VideoEnd = &end
 	}
-	// 이것으로 파생 NextPTSMS / ExpectedNextWall 이 자동 교정된다.
+	// 이것으로 파생 ExpectedNextWall(drift 재료)이 자동 교정된다. 위치는 store 가 정한다(POK-196 PDT c4a).
 	// 되감기 캐시도 장부가 받은 길이를 따른다(교정 push) — 거절된 교정은 여기 닿지 않는다.
 	ix.rewind.ApplyTailCorrection(seg.StreamID, cur.Tail.Seq, cur.Tail.DurationMS)
+	// E28 묶음도 장부 길이를 따른다 — 비귀속 꼬리면 묶음 길이에 교정 차가 든다.
+	ix.correctUnattributed(seg.StreamID, cur.Tail.Seq, cur.Tail.Timing.Recorder, int64(cur.Tail.DurationMS)-int64(oldDuration))
 
 	// 교정이 보류 시계를 리셋한다 — 방금 자란 것을 확인했으므로 TailHold 를 다시 센다.
 	// eligibleAt 은 start_wall_utc 기반이라 불변이며, 그래야 스위퍼 자격 시점과 계속 맞물린다(R9).

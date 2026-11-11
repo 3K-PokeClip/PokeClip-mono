@@ -2377,7 +2377,7 @@ git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커
 
 | 줄 | 어디 | 뜻 · 할 일 |
 |---|---|---|
-| `MEDIA START BLOCKED: sidecar cannot read ledger timing v2 label=<라벨> check=<코드>` | 유닛 저널(시작 스크립트) | 사이드카 라벨에 판 2 가 없고 검사가 0 이 아님. `check=3` 거부(게이트가 판 2 를 요구) · `4` 검사 못 함(DB 설정 · 연결 · 권한 · 판 목록 꼴) · 그 밖은 검사 핀이 c0 하한 아래. `label=none` 은 라벨 없는 출시 이미지 · `invalid` 는 꼴 밖. 사이드카 다이제스트를 c0 하한 이상으로 고쳐 설정 반영 교체 |
+| `MEDIA START BLOCKED: sidecar cannot read ledger timing v2 label=<라벨> check=<코드>` | 유닛 저널(시작 스크립트) | 사이드카 라벨에 판 2 가 없고 검사가 0 이 아님. `check=3` 거부(게이트가 판 2 를 요구) · `4` 검사 못 함(DB 설정 · 연결 · 권한 · 판 목록 꼴) · 그 밖(`1` · `137` 등)은 검사 컨테이너가 판정까지 못 간 것 — 검사 핀이 c0 하한 아래(검사 명령 없음) · 검사 핀 이미지 받기 실패 · docker 오류 · 로그 드라이버를 못 띄움(journald 없는 엔진 — prod 상자는 journald 가 있어 생기지 않음) · OOM(137) · 시작 스크립트가 받은 TERM. 원인은 같은 저널에서 이 줄 바로 앞의 compose 출력으로 가린다. `label=none` 은 라벨 없는 출시 이미지 · `invalid` 는 꼴 밖. 사이드카 다이제스트를 c0 하한 이상으로 고쳐 설정 반영 교체 |
 | `timing_downgrade_refused` · `timing_gate_check_failed` | 검사 서비스 JSON(같은 저널) · 사이드카 저널 | 게이트 값(`highest_version` · `new_round_version`)과 이미지 판 목록(`readable`). 사이드카가 이것으로 끝나면 판 2 읽기를 지운 앞날 이미지 — 하한 이상으로 되돌림 |
 | `legacy_writer_refused`(SQLSTATE 23514) | 사이드카 저널의 INSERT 실패 · PG 로그 | 래치 2 장부에 출시 이미지가 씀. 그 상자의 모든 스트림 색인이 서고 엔진이 거듭 다시 띄움 — 사이드카를 c0 하한 이상으로 |
 

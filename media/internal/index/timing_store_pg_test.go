@@ -7,9 +7,11 @@ package index
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -430,7 +432,8 @@ func TestInsertCommitCarriesLedgerPosition(t *testing.T) {
 
 // 게이트 열쇠를 다른 연결이 배타로 쥐면 새 회차 개시는 lock_timeout(5초)에서 끊기고, 즉시 한 번 다시 시도한 뒤
 // ErrLockContended 로 올라간다 — 부르는 쪽 H9 이 재시도하는 갈래다(c1 보안 검수 M2 · 계획 R6). 잡는 결함: 대기 상한이
-// 없으면 문장 상한까지 매달리고, 55P03 을 그대로 올리면 같은 분류지만 경합 신호가 사라진다.
+// 없으면 문장 상한까지 매달리고, 55P03 을 그대로 올리면 같은 분류지만 경합 신호가 사라진다. 원 오류도 연쇄에 남는다
+// (c4a 보안 L2) — 어느 잠금(게이트 · 컷오프)에서 끊겼는지가 오류 문구와 55P03 PgError 로 보인다.
 func TestGateLockHeldElsewhereSurfacesLockContended(t *testing.T) {
 	pool := newTestPool(t)
 	store := newSessionStore(pool)
@@ -449,6 +452,13 @@ func TestGateLockHeldElsewhereSurfacesLockContended(t *testing.T) {
 	_, _, err = store.Insert(ctx, timedSeg(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
 	if !errors.Is(err, ErrLockContended) {
 		t.Fatalf("Insert 오류 = %v, want ErrLockContended", err)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != pgLockNotAvailable {
+		t.Errorf("Insert 오류 연쇄의 PgError = %v, want 55P03(원 오류 보존)", err)
+	}
+	if !strings.Contains(err.Error(), "판 게이트 공유 잠금") {
+		t.Errorf("Insert 오류 = %q, want 끊긴 잠금(판 게이트 공유 잠금)이 보인다", err)
 	}
 	t.Logf("게이트 잠금 경합 Insert 소요 %v(5초 × 2회 기대)", time.Since(start))
 	if err := holder.Rollback(ctx); err != nil {

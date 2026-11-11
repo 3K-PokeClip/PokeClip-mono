@@ -25,11 +25,14 @@ func withVideo(f TimingFacts, first, end time.Duration) TimingFacts {
 
 // SameInstance 는 같은 녹화기 이어짐의 단일 정의다(설계 2.1). ③ 사슬(c8) ·
 // is_discontinuity(c6) · 판 2 섞기(c4b)가 이 함수를 부르므로, 이 표가 그 셋의
-// 공통 기준이다. 「nil 표식끼리」 행은 변이 m21(nil 끼리 같다고 봄)을 잡는다.
+// 공통 기준이다. 「nil 표식끼리」 행은 변이 m21(nil 끼리 같다고 봄)을, 「표식만 있고
+// 번호 없음」 두 행은 번호 nil 거부 항을 지우는 변이를 잡는다(c3a 검수 L1 — 장부
+// CHECK 가 막는 꼴이지만 술어는 모름으로 본다).
 func TestSameInstance(t *testing.T) {
 	var unmarked TimingFacts
 	eleven := int64(11)
 	numberOnly := TimingFacts{Number: &eleven}
+	recorderOnly := TimingFacts{Recorder: &recorderX}
 	tests := []struct {
 		name      string
 		prev, cur TimingFacts
@@ -44,6 +47,8 @@ func TestSameInstance(t *testing.T) {
 		{"같은_표식_번호_역행", marked(recorderX, 10), marked(recorderX, 9), false},
 		{"다른_표식_번호_더하기_1", marked(recorderX, 10), marked(recorderY, 11), false},
 		{"표식_없이_번호만_있음", numberOnly, marked(recorderX, 12), false},
+		{"앞만_표식만_있고_번호_없음", recorderOnly, marked(recorderX, 11), false},
+		{"뒤만_표식만_있고_번호_없음", marked(recorderX, 10), recorderOnly, false},
 		{"번호_0_에서_1", marked(recorderX, 0), marked(recorderX, 1), true},
 	}
 	for _, tt := range tests {
