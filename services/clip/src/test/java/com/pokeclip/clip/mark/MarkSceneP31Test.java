@@ -24,6 +24,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -51,6 +52,12 @@ class MarkSceneP31Test extends IntegrationTestSupport {
 
     /** 플러그인 · 브라우저 시계의 보낸 시각 = 누른 시각 — 받은 시각이 곧 서버 시계 T 가 된다. */
     private static final long SENT = 1_000_000_000_000L;
+
+    /**
+     * 카드 ms 상한(방송 시작 뒤 48시간 · POK-562)을 제품 상수({@link MarkService#MAX_BROADCAST_MS})와 따로 적은 값 — 상수를
+     * 바꾸는 변이도 경계 시험이 잡게 한다.
+     */
+    private static final long CAP_MS = Duration.ofHours(48).toMillis();
 
     private final StreamKeyResolveClient keys;
     private final BroadcastRepository broadcasts;
@@ -335,6 +342,73 @@ class MarkSceneP31Test extends IntegrationTestSupport {
     }
 
     /**
+     * 상한 경계 안쪽 — 시작 = 기준점이라 카드 ms 상한이 꼭 48시간인 방송에서 저장 위치 48시간 − 1초는 201(새 카드)이다.
+     * 상한을 1초 넘게 줄이는 변이를 잡는다.
+     */
+    @Test
+    void 지난_방송_마크의_저장_위치가_카드_ms_상한_1초_안이면_201이다() {
+        상한_시드("S-n", "P31N", CAP_MS - 2_000, CAP_MS - 2_000);
+        long origin = origins.originsOf(List.of(방송_찾기("S-n"))).get("S-n").toEpochMilli();
+
+        JumpCardService.RecordResult result = webPast("S-n", abs(1_000 + CAP_MS - 1_000) - origin);
+
+        assertThat(result.created()).as("201 — 새 카드").isTrue();
+        assertThat(result.card().streamTimestampMs()).isEqualTo(CAP_MS - 1_000);
+    }
+
+    /** 위와 같은 방송에서 저장 위치가 상한과 같은 48시간이면 아직 201이다 — 상한을 1ms 라도 줄이는 변이를 잡는다. */
+    @Test
+    void 지난_방송_마크의_저장_위치가_카드_ms_상한과_같으면_201이다() {
+        상한_시드("S-n", "P31N", CAP_MS - 2_000, CAP_MS - 2_000);
+        long origin = origins.originsOf(List.of(방송_찾기("S-n"))).get("S-n").toEpochMilli();
+
+        JumpCardService.RecordResult result = webPast("S-n", abs(1_000 + CAP_MS) - origin);
+
+        assertThat(result.created()).as("201 — 새 카드").isTrue();
+        assertThat(result.card().streamTimestampMs()).isEqualTo(CAP_MS);
+    }
+
+    /** 위와 같은 방송에서 저장 위치가 48시간 + 1ms 면 400 {@code positionMs} 다 — 상한을 늘리는 변이를 잡는다. */
+    @Test
+    void 지난_방송_마크의_저장_위치가_카드_ms_상한을_1ms_넘으면_400이다() {
+        상한_시드("S-n", "P31N", CAP_MS - 2_000, CAP_MS - 2_000);
+        long origin = origins.originsOf(List.of(방송_찾기("S-n"))).get("S-n").toEpochMilli();
+
+        assertThatThrownBy(() -> webPast("S-n", abs(1_000 + CAP_MS + 1) - origin))
+                .isInstanceOfSatisfying(InvalidHighlightException.class,
+                        e -> assertThat(e.field()).isEqualTo("positionMs"));
+    }
+
+    /**
+     * 상한은 입력 위치가 아니라 저장 위치로 잰다. 행 2 의 위치 축이 목록 PDT 축보다 8초 앞서, 입력 48시간 − 4초(상한 안)가
+     * 저장 위치 48시간 + 4초(상한 밖)로 옮겨진다 — 400 {@code positionMs}. 입력에 상한을 걸면 201 이 된다.
+     */
+    @Test
+    void 지난_방송_마크는_입력_위치가_상한_안이어도_저장_위치가_넘으면_400이다() {
+        상한_시드("S-x", "P31X", CAP_MS - 6_000, CAP_MS + 2_000);
+        long origin = origins.originsOf(List.of(방송_찾기("S-x"))).get("S-x").toEpochMilli();
+
+        assertThatThrownBy(() -> webPast("S-x", abs(1_000 + CAP_MS - 4_000) - origin))
+                .isInstanceOfSatisfying(InvalidHighlightException.class,
+                        e -> assertThat(e.field()).isEqualTo("positionMs"));
+    }
+
+    /**
+     * 반대쪽 — 행 2 의 목록 PDT 축이 위치 축보다 8초 앞서(출시 이미지 식 판 NULL 행처럼), 입력 48시간 + 4초(상한 밖)가 저장
+     * 위치 48시간 − 4초(상한 안)로 옮겨진다 — 201. 입력에 상한을 걸면 400 이 된다.
+     */
+    @Test
+    void 지난_방송_마크는_입력_위치가_상한을_넘어도_저장_위치가_안이면_201이다() {
+        상한_시드("S-y", "P31Y", CAP_MS + 2_000, CAP_MS - 6_000);
+        long origin = origins.originsOf(List.of(방송_찾기("S-y"))).get("S-y").toEpochMilli();
+
+        JumpCardService.RecordResult result = webPast("S-y", abs(1_000 + CAP_MS + 4_000) - origin);
+
+        assertThat(result.created()).as("201 — 새 카드").isTrue();
+        assertThat(result.card().streamTimestampMs()).isEqualTo(CAP_MS - 4_000);
+    }
+
+    /**
      * 종료 편지가 먼저 온 자리표시(시작 시각 없음)는 회차가 있으면 기준점이 서지만 「방송 시작 뒤 48시간」 을 잴 시작이 없다.
      * 그때 저장 위치 상한은 기준점 + 48시간이다(POK-196 병합 처분 · kty 11-11) — 기준점 + 48시간 안은 201.
      */
@@ -343,21 +417,23 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         자리표시_시드();
         long origin = origins.originsOf(List.of(방송_찾기("S-p"))).get("S-p").toEpochMilli();
 
-        JumpCardSnapshot card = webPast("S-p", abs(3_000) - origin).card();
+        JumpCardService.RecordResult result = webPast("S-p", abs(3_000) - origin);
 
-        assertThat(card.streamTimestampMs()).isEqualTo(2_000);
+        assertThat(result.created()).as("201 — 새 카드").isTrue();
+        assertThat(result.card().streamTimestampMs()).isEqualTo(2_000);
     }
 
     /**
      * 위와 같은 자리표시에서 저장 위치가 기준점 + 48시간을 넘으면 400 {@code positionMs} 다. 종료 + 10분 입력 범위 안이라 입력
-     * 검사는 통과하고 저장 위치 상한에서만 걸린다(그 상한을 생략하면 201 이 되고, 시작 시각으로 재면 NPE 다).
+     * 검사는 통과하고 저장 위치 상한에서만 걸린다(그 상한을 생략하면 201 이 되고, 시작 시각으로 재면 NPE 다). 입력 위치는
+     * 48시간 − 9초로 상한 안이고 저장 위치만 48시간 + 11초라, 상한을 입력에 걸어도 201 이 된다.
      */
     @Test
     void 시작_시각이_없는_자리표시는_저장_위치가_기준점_뒤_48시간을_넘으면_400이다() {
         자리표시_시드();
         long origin = origins.originsOf(List.of(방송_찾기("S-p"))).get("S-p").toEpochMilli();
 
-        assertThatThrownBy(() -> webPast("S-p", abs(1_000 + MarkService.MAX_BROADCAST_MS + 11_000) - origin))
+        assertThatThrownBy(() -> webPast("S-p", abs(1_000 + MarkService.MAX_BROADCAST_MS - 9_000) - origin))
                 .isInstanceOfSatisfying(InvalidHighlightException.class,
                         e -> assertThat(e.field()).isEqualTo("positionMs"));
     }
@@ -392,15 +468,30 @@ class MarkSceneP31Test extends IntegrationTestSupport {
     // ── 시드 ──────────────────────────────────────────────────────────────
 
     /**
-     * 종료 선도착 자리표시 S-p(시작 시각 없음 · 회차 S-p). 행 1 은 기준점 자리(위치 0 · 1초), 행 2 는 그보다 48시간 10초 뒤
-     * 위치에 선다. 종료는 행 2 뒤 10초라 행 2 안 위치도 입력 범위(종료 + 10분) 안이다.
+     * 종료 선도착 자리표시 S-p(시작 시각 없음 · 회차 S-p). 행 1 은 기준점 자리(위치 0 · 1초), 행 2 는 위치 축으로 그보다
+     * 48시간 10초 뒤에 서고 목록 PDT 축으로는 20초 이른 47시간 59분 50초 뒤에 선다(두 축이 갈린 판 NULL 행). 종료는 행 2
+     * 목록 PDT 뒤 10초라 행 2 안 입력도 입력 범위(종료 + 10분) 안이다.
      */
     private void 자리표시_시드() {
         long far = MarkService.MAX_BROADCAST_MS + 10_000;
-        broadcasts.save(Broadcast.endedPlaceholder("S-p", 주인, "P31P", 1L, at(1_000 + far + 10_000)));
+        long listed = far - 20_000;
+        broadcasts.save(Broadcast.endedPlaceholder("S-p", 주인, "P31P", 1L, at(1_000 + listed + 10_000)));
         seed.session("S-p", "P31P", "S-p", null);
         seed.row("P31P", 1).pts(0).wallAndPdt(1_000).session("S-p").insert();
-        seed.row("P31P", 2).pts(far).wallAndPdt(1_000 + far).session("S-p").insert();
+        seed.row("P31P", 2).pts(far).wallAndPdt(1_000 + listed).session("S-p").insert();
+    }
+
+    /**
+     * 시작 시각 = 기준점(행 1 · 위치 0 · 1초)이라 카드 ms 상한이 꼭 {@link #CAP_MS}인 지난 방송. 행 2 는 목록 PDT 축으로
+     * 기준점 뒤 {@code listedMs}, 위치 축으로 {@code storedMs} 에 선다(두 값이 다르면 그 차만큼 두 축이 갈린 판 NULL 행).
+     * 종료는 행 2 목록 PDT 끝이라 행 2 안 입력은 입력 범위(종료 + 10분) 안이다.
+     */
+    private void 상한_시드(String streamId, String ingestKey, long listedMs, long storedMs) {
+        방송(streamId, ingestKey, at(1_000));
+        seed.session(streamId, ingestKey, streamId, null);
+        seed.row(ingestKey, 1).pts(0).wallAndPdt(1_000).session(streamId).insert();
+        seed.row(ingestKey, 2).pts(storedMs).wallAndPdt(1_000 + listedMs).session(streamId).insert();
+        끝낸다(streamId, at(1_000 + listedMs + 4_000));
     }
 
     /** (a) 4초 조각 900개 · 파일명 간격 3,800 — 래칫으로 PDT · 위치가 행마다 200ms 씩 앞서 행 881 에서 176,000. */
@@ -567,7 +658,11 @@ class MarkSceneP31Test extends IntegrationTestSupport {
     }
 
     private void 끝낸다(String streamId) {
+        끝낸다(streamId, at(10_000_000));
+    }
+
+    private void 끝낸다(String streamId, Instant endedAt) {
         jdbc.update("UPDATE broadcasts SET status = 'ended', ended_at = ? WHERE stream_id = ?",
-                Timestamp.from(at(10_000_000)), streamId);
+                Timestamp.from(endedAt), streamId);
     }
 }
