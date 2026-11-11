@@ -59,6 +59,7 @@ const (
 	pointRequeued                      // 재투입 뒤 — 복원 링크 게시 전
 	pointPublished                     // 복원 링크 게시 뒤
 	pointSettling                      // 불일치 판정 · 장부 적기 뒤 — 불일치 기억 전
+	pointSettled                       // 불일치 기억 뒤 — 끝 대조 전
 )
 
 // reach 는 복원이 자리 p 에 왔음을 손잡이에 알린다.

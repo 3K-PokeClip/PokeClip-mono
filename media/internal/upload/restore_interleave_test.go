@@ -38,6 +38,8 @@ import (
 //	r6 cx H   빈 링크 / 쓴 뒤 자리 · 게시 뒤 자리 / 치움 셋 — 게시할 링크가 없어도 버림 신호(끝 대조)
 //	          · 불일치 / 모든 자리 / 치움 셋 — 불일치 기억 거절도 버림 신호(r6 cc L2 같은 자리)
 //	          · 링크 있는 사례 / *-published / 치움 셋 — 게시 뒤 · 끝 전 만료도 버림
+//	r7 cc L1  불일치 / *-settled / 치움 셋 — 불일치 기억을 적은 뒤 · 끝 전 만료도 버림(끝 대조를 commit 갈래로 좁히는 변이 V14)
+//	r7 보안 L1 치움 셋이 낀 모든 하위 — 버린 복원은 진전이 아니다(다음 시도 시각이 선다 · 변이 V13)
 
 // cutKind 는 복원 한 자리에 끼우는 일이다.
 type cutKind int
@@ -58,7 +60,8 @@ func (c cutKind) String() string {
 func (c cutKind) evicts() bool { return c == cutEvict || c == cutHeld || c == cutRebuild }
 
 func (p restorePoint) String() string {
-	return [...]string{"based", "anchored", "folded", "adopted", "chunk", "written", "requeued", "published", "settling"}[p]
+	return [...]string{"based", "anchored", "folded", "adopted", "chunk", "written", "requeued", "published", "settling",
+		"settled"}[p]
 }
 
 // interleaveCase 는 끼움 시험의 사례 하나다. setup 은 시험대를 차려 끼울 복원 바로 앞까지 가고, 되살릴 구멍 seq 를 돌려준다.
@@ -269,6 +272,11 @@ func checkDiscardSignal(t *testing.T, b *restoreBench, tc interleaveCase, p rest
 		t.Errorf("치움이 낀 복원: discarded %d줄 · chain_restored %d줄, want 1 · 0 (%s)", len(discarded), restored, b.cap.dump())
 		return
 	}
+	// 채택 없이 버린 복원은 진전이 아니다 — 다음 시도를 스위퍼 간격 뒤로 미룬다(restoreIdle). 진전으로 세면 백오프가 풀려 위치 모름
+	// 요청마다 같은 구멍을 다시 접는다(r7 보안 L1). 이 시험의 사례에는 채택이 없다.
+	if next := b.restoreNext(); !next.After(b.u.now()) {
+		t.Errorf("버린 복원 뒤 다음 시도 시각이 없다(%v) — 진전으로 셌다", next)
+	}
 	if got, want := discarded[0].attrs["reason"], expectedDiscardReason(tc, p); got != want {
 		t.Errorf("discarded reason = %v, want %s", got, want)
 	}
@@ -287,8 +295,10 @@ func checkDiscardSignal(t *testing.T, b *restoreBench, tc interleaveCase, p rest
 // expectedDiscardReason 은 자리 p 의 치움을 처음 거절하는 대조의 단계다(S2).
 func expectedDiscardReason(tc interleaveCase, p restorePoint) string {
 	switch {
+	case tc.mismatch && p == pointSettled:
+		return "table_evicted_before_end" // 불일치 기억은 적었다 — 끝 대조가 잡는다
 	case tc.mismatch:
-		return "table_evicted_while_settling" // 불일치 기억 바로 앞이 settling 자리다 — 어느 자리든 그 대조가 처음 거절한다
+		return "table_evicted_while_settling" // 기억을 적기 전 자리 — 그 대조가 처음 거절한다
 	case p == pointPublished, tc.noLinks && (p == pointWritten || p == pointRequeued):
 		return "table_evicted_before_end" // 게시할 링크가 없거나 게시를 마쳤다 — 끝 대조가 잡는다
 	case p == pointWritten || p == pointRequeued:
@@ -300,6 +310,17 @@ func expectedDiscardReason(tc interleaveCase, p restorePoint) string {
 // requeuedBy 는 자리 p 에 오기 전에 구멍 행 작업을 다시 넣었는가다(표 줄을 다 쓴 뒤 자리 · 낼 링크가 있는 commit 갈래).
 func requeuedBy(tc interleaveCase, p restorePoint) bool {
 	return !tc.mismatch && !tc.noLinks && (p == pointWritten || p == pointRequeued || p == pointPublished)
+}
+
+// restoreNext 는 시험 회차의 다음 복원 시도 시각이다(영값이면 바로 다시 깬다).
+func (b *restoreBench) restoreNext() time.Time {
+	m := b.u.sessions
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.byID[benchSession]; ok {
+		return e.restoreNext
+	}
+	return time.Time{}
 }
 
 // saturated 는 큐가 다른 회차 작업으로 차 있는가다(saturate 를 불렀다).

@@ -3003,7 +3003,7 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 | `legacy_unattributed_sum` | 판 NULL 귀속 행 | INFO | `u_ms` — PDT 식이 더한 U(기저 행 뒤 · 이 행 앞 비귀속 행 길이 합). U 가 0 이면 내지 않는다 |
 | `unattributed_run` | 비귀속 행 묶음 뒤 첫 귀속 행 | INFO | 아래 「E28 묶음 신호」 |
 | `chain_*` · `chain_restored` · `chain_row_passed` · `chain_restore_failed` | ③ 사슬 · 업로더 | WARN · INFO | 아래 「③ 사슬 복원」 |
-| `chain_restore_discarded` | ③ 사슬 복원 | INFO | 복원 도중(복원 기준을 잡은 때부터 복원 끝의 마지막 대조까지) 그 회차의 보정값 표가 수명(24시간)으로 치워져 그 복원을 버림 — 끝까지 간 복원 무리마다 결과 신호는 이 줄과 `chain_restored` 중 정확히 하나다(불일치 갈래는 이 줄이거나 결과 신호 없음 — `chain_mismatch` 는 판정 신호라 함께 날 수 있다). `reason` 은 처음 거절된 대조의 단계다: `table_evicted_while_writing`(표 줄 — 재투입 · 게시 없음) · `table_evicted_before_publish`(복원 링크 게시 — 이미 다시 넣은 작업 `requeued` 개는 큐에 남는다) · `table_evicted_while_settling`(불일치 기억 — 구멍 행의 `failed` · 키 백오프는 장부에 남는다) · `table_evicted_before_end`(끝 대조 — 게시할 링크가 없었거나 게시를 마친 뒤, 재투입 작업이 있었으면 큐에 남는다). 오류 · 정지로 끝난 복원은 `chain_restore_failed` · `chain_restore_stopped` 뿐이다. 그 밖 `hole_from` · `hole_to` · `adopted` · `requeued`. 다음 깨움이 지난 링크 없이 장부 닻부터 다시 접는다. 우리 송출에서 빈도는 사실상 0 이다(아래 「③ 사슬 복원」) |
+| `chain_restore_discarded` | ③ 사슬 복원 | INFO | 복원 도중(복원 기준을 잡은 때부터 복원 끝의 마지막 대조까지) 그 회차의 보정값 표가 수명(24시간)으로 치워져 그 복원을 버림 — 끝까지 간 복원 무리마다 결과 신호는 이 줄과 `chain_restored` 중 정확히 하나다(불일치 갈래는 이 줄이거나 결과 신호 없음 — `chain_mismatch` 는 판정 신호라 함께 날 수 있다). `reason` 은 처음 거절된 대조의 단계다: `table_evicted_while_writing`(표 줄 — 재투입 · 게시 없음) · `table_evicted_before_publish`(복원 링크 게시 — 이미 다시 넣은 작업 `requeued` 개는 큐에 남는다) · `table_evicted_while_settling`(불일치 기억 — 구멍 행 `failed`(`chain_mismatch`)는 장부에, 키 백오프는 프로세스 메모리에 남는다 · 재기동하면 백오프만 사라진다) · `table_evicted_before_end`(끝 대조 — 게시할 링크가 없었거나 게시를 마친 뒤면 재투입 작업이 있었을 때 큐에 남고, 불일치 기억을 적은 뒤면 `while_settling` 과 같이 `failed` 행 · 키 백오프가 남는다). 오류 · 정지로 끝난 복원은 `chain_restore_failed` · `chain_restore_stopped` 뿐이다. 그 밖 `hole_from` · `hole_to` · `adopted` · `requeued`. 다음 깨움이 지난 링크 없이 장부 닻부터 다시 접는다. 우리 송출에서 빈도는 사실상 0 이다(아래 「③ 사슬 복원」) |
 | `chain_restore_progress` · `chain_restore_stopped` | ③ 사슬 복원 | INFO · DEBUG | 긴 접기의 진행(1,000행마다 `seq` · `folded_rows` · `hole_to` — 정지와 구별) · 업로더 종료 중 복원을 멈춤(실패 아님 — 백오프 없이 다음 기동이 다시 한다) |
 | DB 오류 `legacy_writer_refused`(23514) | 쓰기자 거부 트리거 | — | 래치 2 장부에 원래 사실 칸 없는 INSERT(출시 이미지) — 출시 이미지는 이 이름을 몰라 INSERT 실패로만 보인다 |
 
@@ -3046,10 +3046,11 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
   복원 링크 · 불일치 기억을 모두 그 세대일 때만 낸다. 버림은 술어 하나로 정한다 — 그 세대가 복원 기준부터 복원 끝의 마지막 대조까지
   그대로였는가. 바뀌었으면(표가 수명으로 치워졌으면) 그 복원은 메모리(표 줄 · 복원 링크 · 불일치 기억)에 아무것도 남기지 않고 INFO
   `chain_restore_discarded` 로 끝난다 — 결과 신호는 복원 끝 한 자리에서만 내므로 `chain_restored` 는 없다. 장부 · 큐에는 남는 것이
-  있다: 채택한 ③ CAS(장부 사실), 불일치 갈래의 구멍 행 `failed` · 키 백오프(장부 판정), 그리고 표 줄을 다 쓴 뒤 치워졌으면 그 전에 다시
+  있다: 채택한 ③ CAS(장부 사실), 불일치 갈래의 구멍 행 `failed`(장부 판정 — 키 백오프는 프로세스 메모리), 그리고 표 줄을 다 쓴 뒤 치워졌으면 그 전에 다시
   넣은 구멍 행 작업(`requeued`). 그 작업은 안전하다 — 도장 위치를 싣고 있어 표 없이 그 위치로 올라가고(실시간 작업은 실린 위치를 그대로
-  쓴다 — `axis_body.go` `playbackPos`. 회차 init 확정값도 수명이 치웠으면 보류 목록에서 init 확정을 기다리다 — `holdForInit` — 다시
-  넣어지고, 보류 목록이 차 들지 못하면 장부 `pending` 으로 남아 스위퍼 · 다음 복원 길로 올라간다), 같은 키는 PUT · CAS 가 끝날 때까지 다시 들지 않으며(`upload.go` `acquireInflight` · `worker.go`
+  쓴다 — `axis_body.go` `playbackPos`. 회차 init 확정값도 수명이 치웠으면 그 작업은 보류 목록에 들지만(`holdForInit`) 표가 치워진
+  끝난 회차라 init 이 다시 확정될 일은 사실상 없다 — 보류에 들든 못 들든 장부는 `pending` 이라, 다음 복원이 표 줄을 적으면 스위퍼
+  작업이 장부의 기대 init(`ExpectedInitSHA`)으로 올린다), 같은 키는 PUT · CAS 가 끝날 때까지 다시 들지 않으며(`upload.go` `acquireInflight` · `worker.go`
   `runJob`), CAS 는 행이 `pending` · `failed` 일 때만 `uploaded` 로 굳는다(확정된 행을 덮지 않는다). 도장은 장부 · S3 로 접은 값이라 표가 치워져도 틀리지 않는다. 다음
   복원은 올라간 행을 구멍으로 보지 않고(닻이 된다), 아직 큐에 있으면 재투입이 중복으로 걸러지며, PUT 뒤 CAS 전에 멈춘 객체는 같은
   바이트면 채택한다. 다음 깨움(스위퍼의 표 없는 ③ 작업, 30초)이 장부 닻부터 다시 접는다. 표 수명의 기준은 그 회차의 마지막 실시간 ③ 요청이라 방송 중인 회차의 표는 치워지지 않는다. 그래서 이
@@ -3064,7 +3065,7 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
 
 | 한계 | 영향 | 처분 |
 |---|---|---|
-| **복원 도중의 표 수명 만료.** 끝난 회차의 구멍이 하루 가까이 올라가지 못한 채(S3 장기 장애 등) 마지막 실시간 ③ 요청 뒤 24시간째 tick 에 그 회차의 복원이 돌고 있으면 표가 치워진다. 방송 중인 회차는 4초마다 수명이 다시 세어져 해당 없다 — 빈도 사실상 0 | 그 복원은 버려지고(`chain_restore_discarded`) 다음 깨움(30초 뒤)이 장부 닻부터 다시 접는다 — 닻 객체 GET 을 한 번 더 할 뿐 구멍은 남지 않는다. 게시 단계에서 버렸으면 이미 다시 넣은 작업은 큐에 남는다(도장을 실은 작업이라 안전 — 위 「③ 사슬 복원」). 버리지 않던 옛 동작에서는 최대 하루 동안 되감기 연속 접두가 섰다(PR 종결 r4) | 한계(기록) — 구조로 닫음(복원 기준 세대) |
+| **복원 도중의 표 수명 만료.** 끝난 회차의 구멍이 하루 가까이 올라가지 못한 채(S3 장기 장애 등) 마지막 실시간 ③ 요청 뒤 24시간째 tick 에 그 회차의 복원이 돌고 있으면 표가 치워진다. 방송 중인 회차는 4초마다 수명이 다시 세어져 해당 없다 — 빈도 사실상 0 | 그 복원은 버려지고(`chain_restore_discarded` — `reason` 넷은 위 신호 표) 다음 깨움(30초 뒤)이 장부 닻부터 다시 접는다 — 닻 객체 GET 을 한 번 더 할 뿐 메모리 산출(표 줄 · 복원 링크 · 불일치 기억)은 남지 않는다. 표 줄을 다 쓴 뒤 버렸으면(`before_publish` · 게시 뒤 `before_end`) 이미 다시 넣은 작업은 큐에 남고(도장을 실은 작업이라 안전 — 위 「③ 사슬 복원」), 불일치 갈래에서 버렸으면(`while_settling` · 기억 뒤 `before_end`) 구멍 행 `failed` 는 장부에 · 키 백오프는 프로세스 메모리에 남는다. 버리지 않던 옛 동작에서는 최대 하루 동안 되감기 연속 접두가 섰다(PR 종결 r4) | 한계(기록) — 구조로 닫음(복원 기준 세대) |
 | **③ 사슬 복원의 영구 실패.** 닻이 될 ③ 객체 · ② 원천이 없거나(`anchor_object_missing` · `anchor_source_missing`), 닻 행이 판독 실패로 고정 도장이었거나(`anchor_pinned`), 객체가 장부와 다르거나(`anchor_mismatch`), 다른 세션의 행이 끼었으면(`foreign_session`) 다시 시도해도 같은 답이다 | 그 무리의 구멍 행들이 `pending` 으로 남아 GAP 이다 — 백오프로 거듭 시도하며 `chain_restore_failed` 가 같은 `reason` 으로 되풀이된다. 같은 회차라도 닻이 다른 뒤 무리는 건너뛰어 되살린다(일시 까닭이면 그 자리에서 멈춘다). 실시간 경로 · 다른 회차는 무관하다 | 한계(기록) — 회차가 바뀌면 새 사슬이다 |
 | **꼬리 교정의 판독 실패.** 꼬리 조각이 자라 길이를 고칠 때 시각 판독이 실패하면(WARN `tail_timing_read_failed`) 길이 · 크기만 고치고 영상 끝 칸은 옛 값이다 | 우리 송출에서도 생긴다: 송출이 10초(`SEGMENT_IDLE_TIMEOUT`) 넘게 멈추면 워처가 아직 쓰는 중인 파일을 유휴 확정해 커밋하고(덜 써진 조각 — 영상 끝이 그때 값), 송출이 돌아와 같은 파일이 자라면 꼬리 교정(`tail_corrected`)이 그 파일을 다시 읽는다(`recording/watcher.go` `onIdleTick` · 인덱서 `correctTail`). 이 다시 읽기가 실패하면 장부에는 새 길이 · 크기와 유휴 확정 때의 짧은 영상 끝이 남는다. 다음 행의 맞닿음(영상 축 d = 다음 영상 첫 − 옛 영상 끝)이 자란 만큼 거짓 구멍으로 보여, 그 행의 보정값이 구멍 갈래(앞 도장 + 장부 길이)로 정해진다 — 앞 조각이 소리 머리면 머리 앞섬만큼(실측 최대 226ms) 도장이 앞당겨진다. 판 2 섞기의 길이 판단도 옛 영상 끝을 본다. 실시간과 복원은 같은 장부 값을 보므로 둘이 갈리지는 않는다. 볼 것: 같은 `path` 에 `tail_corrected` 와 `tail_timing_read_failed` 가 함께 남은 조각 — 그 다음 조각의 `segment_indexed`(`timing_branch` · `delta_ms`)와 ③ 도장 | 한계(기록) — 방어안(`UpdateTail` 판 2 길이 재계산)은 두지 않았다 |
 | **판독 일시 실패 동안 그 스트림이 멈춘다.** 실패한 조각과 그 뒤 조각을 커밋하지 않고 다음 재스캔을 기다린다 | 한 번에 최대 약 5분 45초(재스캔 5분 + 수집 예산 45초) 그 스트림의 되감기 목록 · ③ 업로드가 늘지 않는다. 다른 스트림은 무관하다 | 순서 보존의 대가 — 다음 재스캔에서도 실패하면 칸 NULL 로 커밋한다 |
@@ -3079,6 +3080,12 @@ cd media && go test ./...
 `internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`·`internal/janitor`·`cmd/janitor`의 통합 테스트와
 `internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
+
+**부하 의존 시험(한계).** 벽시계 지연을 재는 시험 셋은 기계 부하가 크면 흔들린다 — `cmd/segment-indexer`
+`TestPublishLoopSteadyStateKeepsLeaseAndTripBound`(POK-195 — 기준 e2d258ec 와 HEAD 가 같은 부하에서 4/4 · 4/4 실패, PR 종결 r6 cc) ·
+`internal/upload` `TestRestoreLongSessionDoesNotStallOtherSessions`(다른 회차 조회 5ms 문턱 — 부하 평균 58 의 전체 race 에서 3번 모두
+문턱 밖, 7–10 에서 3/3 통과, PR 종결 r7 cc). 재는 것이 곧 벽시계라 문턱을 늘리지 않았다 — 실패하면 부하를 낮춰 그 패키지만 다시 돌린다.
+`TestShutdownStopsLongRestoreFold` 는 접기 시작을 3분 안에 못 보면 건너뛴다(`t.Skip` — 전제 미달이지 실패가 아니다).
 
 ```bash
 set -a; . ../.env; set +a

@@ -152,6 +152,7 @@ func (run *groupRun) settleMismatch(span holeSpan, fp string, mm mismatch) error
 	if !run.u.sessions.recordMismatch(run.w.sessionID, run.basis.gen, span, fp) {
 		run.refuse("table_evicted_while_settling")
 	}
+	run.u.sessions.reach(pointSettled)
 	run.lg.Error("chain_mismatch", "hole_from", span.from, "hole_to", span.to, "anchor_seq", span.anchor,
 		"check_seq", mm.seq, "expected_pos_ms", mm.expected.Milliseconds(),
 		"object_pos_lo_ms", mm.window.Lo.Milliseconds(), "object_pos_hi_ms", mm.window.Hi.Milliseconds())
@@ -205,8 +206,10 @@ func (run *groupRun) refuse(stage string) {
 //	그대로      commit 갈래면 INFO chain_restored(진전 = commit 이 낸 것), 불일치 갈래면 결과 신호 없음(chain_mismatch 는 판정 신호다)
 //	바뀌었음    INFO chain_restore_discarded 한 줄 — chain_restored 는 없다. reason 은 처음 거절된 대조의 단계다:
 //	            table_evicted_while_writing(표 줄) · table_evicted_before_publish(복원 링크 게시) · table_evicted_while_settling(불일치
-//	            기억) · table_evicted_before_end(끝 대조 — 게시할 링크가 없었거나 게시를 마친 뒤). 진전은 채택뿐이다(장부 사실 — 표와
-//	            무관). 메모리에는 남는 것이 없고(치움이 쓴 줄 · 링크를 지웠다) 다음 깨움이 링크 없이 장부 닻부터 다시 접는다
+//	            기억) · table_evicted_before_end(끝 대조 — 게시할 링크가 없었거나 게시를 마친 뒤, 또는 불일치 기억을 적은 뒤). 진전은
+//	            채택뿐이다(장부 사실 — 표와 무관). 메모리 산출(표 줄 · 링크 · 불일치 기억)은 남지 않고(치움이 지웠다) 다음 깨움이 링크
+//	            없이 장부 닻부터 다시 접는다. 불일치 갈래면(while_settling · before_end) 구멍 행 failed(chain_mismatch)는 장부에 남고, 키
+//	            백오프(gate.registerFailure)는 프로세스 메모리에 남는다
 func (run *groupRun) finish(committed bool) bool {
 	if run.refused == "" && !run.u.sessions.current(run.w.sessionID, run.basis.gen) {
 		run.refuse("table_evicted_before_end")

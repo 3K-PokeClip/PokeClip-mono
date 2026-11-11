@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,6 +58,8 @@ func TestRestoreLongSessionDoesNotStallOtherSessions(t *testing.T) {
 	}
 	// 벽시계 문턱은 기계 부하(OS 스케줄링 · GC 정지)에 흔들린다 — 부하 평균 90–120 에서 경합 없는 잠금 탐침도 최대 42ms 를 봤다.
 	// 그래서 같은 재접기를 몇 번 재어 한 번이라도 문턱 안이면 통과로 본다. 잡는 결함은 매번 초 단위로 멈추므로 늘 실패한다.
+	// 부하 의존 시험이다(PR 종결 r7 cc L4 — 부하 평균 58 의 전체 race 에서 3번 모두 문턱 밖 · 7–10 에서 3/3 통과). 재는 것(다른 회차
+	// 조회 지연)이 곧 벽시계라 문턱을 부하에 맞춰 늘리면 그 자체를 바꾼다 — 고치지 않고 README 「테스트」 에 한계로 적었다.
 	var worsts []time.Duration
 	for range restoreStallAttempts {
 		before := b.cap.count("chain_restore_progress")
@@ -76,6 +79,8 @@ func TestRestoreLongSessionDoesNotStallOtherSessions(t *testing.T) {
 }
 
 const (
+	// restoreFoldStartWait 는 Shutdown 시험이 접기 시작을 기다리는 상한이다 — 넘으면 잴 수 없어 건너뛴다.
+	restoreFoldStartWait = 3 * time.Minute
 	// restoreStallLimit 은 T-14 인덱서 통로 문턱이다.
 	restoreStallLimit = 5 * time.Millisecond
 	// restoreStallAttempts 는 부하 잡음을 거르려 같은 재접기를 재는 최대 횟수다.
@@ -111,6 +116,11 @@ func worstRestoredLinkDuring(b *restoreBench, sessionID string, run func()) time
 
 // 긴 로컬 접기 중에도 Shutdown 이 기본 유예(4s + 2s) 안에 끝난다 — 접기가 행 사이에서 멈춤 신호를 본다(cx H 2 재현 입력: 0 mtxi
 // 닻 → 1–21599 고정 uploaded → 21600 pending · 로컬 조각당 4.6MB). 잡는 결함: 취소된 뒤에도 마지막 행까지 읽어 16–24초 걸린다.
+//
+// 접기가 시작된 순간(restorePoint anchored)을 손잡이로 받아 그때 멈춘다 — 행 사이 멈춤 확인이 없으면 그 자리에서부터 21,600행을 다
+// 읽으므로 결함이 그대로 드러난다. 그 앞의 뒤로 읽기(고정 행 21,599개)는 부하에 따라 길어진다 — 진행 신호(1,000행 접기)까지 1분을
+// 기다리던 옛 전제는 부하 평균 58 에서 닿지 못해 재야 할 Shutdown(17.9ms) 대신 전제 미달을 실패로 냈다(PR 종결 r7 cc L4). 3분 안에
+// 접기가 시작되지 않으면 잴 수 없으므로 건너뛴다(Skip — 실패가 아니다).
 func TestShutdownStopsLongRestoreFold(t *testing.T) {
 	raw, err := os.ReadFile(fixture4sPath)
 	if err != nil {
@@ -137,17 +147,21 @@ func TestShutdownStopsLongRestoreFold(t *testing.T) {
 		b.ledgerRow(i, p, int64(len(big)), up)
 	}
 	b.ledgerRow(longSessionRows, filepath.Join(dir, benchStream, "p1.mp4"), int64(len(big)), pending)
+	folding := make(chan struct{})
+	var once sync.Once
+	b.u.sessions.pause = func(p restorePoint) { // Start 전에 둔다 — 기동 뒤 바꾸면 복원 고루틴과 경합이다
+		if p == pointAnchored {
+			once.Do(func() { close(folding) })
+		}
+	}
 	b.u.Start(context.Background())
 	b.u.RequestUpload(index.UploadTarget{StreamID: benchStream, Axis: index.AxisPlayback, Seq: longSessionRows,
 		SessionID: benchSession, PosUnknown: true})
-	// 접기가 한창일 때 멈춘다 — 고정 대기는 부하 아래서 접기 앞 단계(뒤로 읽기)에 걸려 접기 안의 멈춤 확인을 재지 못했다.
-	// 수정 전 코드에는 진행 신호가 없어 기다림이 시한까지 간다 — 그래도 Shutdown 을 재어 RED 수치를 남긴다(waitFor 는 Fatal 이다).
-	deadline := time.Now().Add(time.Minute)
-	for b.cap.count("chain_restore_progress") == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if b.cap.count("chain_restore_progress") == 0 {
-		t.Errorf("1분 안에 chain_restore_progress 가 없다 — 접기 중 Shutdown 을 재지 못했다")
+	select {
+	case <-folding:
+	case <-time.After(restoreFoldStartWait):
+		b.u.Shutdown()
+		t.Skipf("%v 안에 접기가 시작되지 않았다(뒤로 읽기가 부하로 길다) — 접기 중 Shutdown 을 잴 수 없다", restoreFoldStartWait)
 	}
 
 	start := time.Now()
