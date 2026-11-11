@@ -19,7 +19,9 @@ import (
 //	불변식 I0  치운 표보다 오래 사는 복원 산출이 없다 — 링크 · 구멍 줄 · 불일치 기억
 //	불변식 I1  표가 「안다」 고 답하는 값은 언제나 실시간 값이다(덩어리 쓰기 — TestRestoredChunksInterleavedWithSweeper)
 //	불변식 I2  치움이 낀 복원 뒤, 끼움 없는 다음 깨움이 모든 구멍 seq 에 보정값을 적고 다시 넣는다
-//	불변식 I3  치울 표가 없는 tick 은 복원을 버리지 않는다 — 같은 차례에 끝난다
+//	불변식 I3  치울 표가 없는 tick · 치움 없는 실시간 요청은 복원을 버리지 않는다 — 같은 차례에 끝난다
+//	신호      치움이 낀 복원은 INFO chain_restore_discarded 한 줄(단계 = reason)이고 chain_restored 는 없다. 게시 단계에서 버린
+//	          복원은 이미 다시 넣은 작업을 큐에 남긴다(requeued) — 그 작업은 자기 도장을 싣고 있다(README 「③ 사슬 복원」)
 //
 // 앞 회차 재현이 어느 하위인가:
 //
@@ -29,6 +31,8 @@ import (
 //	r2 cx H   TestRestoredChunksInterleavedWithSweeper / 1-chunk · 2-chunk / 몫 치움 · 표만 치움(옛 TestRestoredChunksSurvive
 //	          TableEvictionBetweenChunks)
 //	r1 cc H   TestRestoredChunksInterleavedWithSweeper / 관찰
+//	r5 cx H   큐 여유 / 5-written · 6-requeued / 치움 셋 — 게시 거절도 버림 신호 · 남은 재투입 작업
+//	r5 cc M   표 없음 · 모든 사례 / 실시간만 — 실시간 요청이 세대를 바꾸면(변이 V9) 방송 중 복원이 매번 버려진다
 
 // cutKind 는 복원 한 자리에 끼우는 일이다.
 type cutKind int
@@ -38,11 +42,15 @@ const (
 	cutHeld                   // 보류 작업이 살아 있어 몫은 남기고 표만 치운다
 	cutRebuild                // 치운 뒤 실시간 요청이 새 표를 만든다
 	cutTick                   // 치울 표가 없는 tick(세대 그대로)
+	cutLive                   // 치움 없이 실시간 요청 하나(세대 그대로)
 )
 
 func (c cutKind) String() string {
-	return [...]string{"몫 치움", "표만 치움", "재생성", "tick"}[c]
+	return [...]string{"몫 치움", "표만 치움", "재생성", "tick", "실시간만"}[c]
 }
+
+// evicts 는 끼움이 표를 치워 세대를 바꾸는가다(표가 있는 사례에서).
+func (c cutKind) evicts() bool { return c == cutEvict || c == cutHeld || c == cutRebuild }
 
 func (p restorePoint) String() string {
 	return [...]string{"based", "anchored", "folded", "adopted", "chunk", "written", "requeued", "published", "settling"}[p]
@@ -101,6 +109,14 @@ var interleaveCases = []interleaveCase{
 		b.saturate()
 		return b, []int64{1, 2, 3}
 	}},
+	{name: "큐 여유", setup: func(t *testing.T) (*restoreBench, []int64) {
+		// 장부 닻과 같되 큐가 비어 구멍 행 재투입이 들어간다 — 게시 단계에서 버린 복원이 큐에 남기는 작업을 본다(r5 cx 재현 입력).
+		b := newRestoreBench(t)
+		b.contiguous(0, 1, 600*time.Second, up, pending, pending, pending)
+		b.uploadAt(b.liveChain(), 0)
+		b.liveTable()
+		return b, []int64{1, 2, 3}
+	}},
 	{name: "표 없음", noTable: true, setup: func(t *testing.T) (*restoreBench, []int64) {
 		// 재기동 뒤 — 회차 몫이 없다. 복원 동안 tick 이 빈 몫을 지우면 게시할 곳이 없어진다.
 		b := newRestoreBench(t)
@@ -134,6 +150,8 @@ func (b *restoreBench) cut(c cutKind) {
 		b.u.sessions.recordLive(index.UploadTarget{SessionID: benchSession, Seq: 50, StitchOffset: time.Second}, later)
 	case cutTick:
 		b.u.sessions.evict(b.u.now())
+	case cutLive:
+		b.u.sessions.recordLive(index.UploadTarget{SessionID: benchSession, Seq: 50, StitchOffset: time.Second}, b.u.now())
 	}
 }
 
@@ -154,18 +172,19 @@ func TestRestoreInterleavedWithSweeper(t *testing.T) {
 			t.Fatalf("%s: 복원이 자리를 하나도 지나지 않았다", tc.name)
 		}
 		for k, p := range points {
-			for _, c := range []cutKind{cutEvict, cutHeld, cutRebuild, cutTick} {
+			for _, c := range []cutKind{cutEvict, cutHeld, cutRebuild, cutTick, cutLive} {
 				t.Run(fmt.Sprintf("%s/%d-%v/%v", tc.name, k, p, c), func(t *testing.T) {
-					checkInterleaved(t, tc, k, c)
+					checkInterleaved(t, tc, k, p, c)
 				})
 			}
 		}
 	}
 }
 
-// checkInterleaved 는 복원의 k 번째 자리에 끼움 c 를 끼우고 불변식을 본다.
-func checkInterleaved(t *testing.T, tc interleaveCase, k int, c cutKind) {
+// checkInterleaved 는 복원의 k 번째 자리(p)에 끼움 c 를 끼우고 불변식 · 신호를 본다.
+func checkInterleaved(t *testing.T, tc interleaveCase, k int, p restorePoint, c cutKind) {
 	b, holes := tc.setup(t)
+	b.cap.reset() // 앞 복원(기억 닻)의 신호 — 이 복원의 것만 센다
 	n := 0
 	b.u.sessions.pause = func(restorePoint) {
 		if n == k {
@@ -179,25 +198,68 @@ func checkInterleaved(t *testing.T, tc interleaveCase, k int, c cutKind) {
 		t.Fatalf("자리 %d 에 닿지 못했다(지난 자리 %d개)", k, n)
 	}
 	switch {
-	case tc.noTable && c == cutTick:
-		checkNotDiscarded(t, b, holes)
-		return
-	case tc.noTable:
-		return // 표 없는 회차의 치움은 치울 표가 없어 tick 과 같다 — 위 갈래가 본다
-	case c == cutTick && tc.mismatch:
+	case (tc.noTable || !c.evicts()) && tc.mismatch:
 		if !b.u.sessions.knownMismatch(benchSession, interleaveMismatchSpan, b.ledgerFingerprint()) {
-			t.Errorf("tick 이 낀 불일치 판정을 기억하지 않았다 — 치울 표가 없는데 버렸다 (%s)", b.cap.dump())
+			t.Errorf("%v 이 낀 불일치 판정을 기억하지 않았다 — 치울 표가 없는데 버렸다 (%s)", c, b.cap.dump())
 		}
 		return
-	case c == cutTick:
+	case tc.noTable || !c.evicts():
+		// 표 없는 회차는 치울 표가 없어 어떤 끼움도 세대를 바꾸지 않는다.
 		checkNotDiscarded(t, b, holes)
 		return
 	}
 	checkNothingOutlivesTable(t, b, holes, tc.mismatch)
+	if !tc.mismatch {
+		checkDiscardSignal(t, b, p, holes)
+	}
 	b.queued() // 큐를 비운다 — 다음 깨움의 재투입이 들어갈 자리
 	b.restore()
 	checkNextWakeRestores(t, b, holes, tc.mismatch)
 }
+
+// checkDiscardSignal 은 치움이 낀 복원의 신호와 큐다. 게시 뒤의 치움은 복원이 끝난 뒤의 평범한 만료라 버림이 아니다. 게시 단계
+// (표 줄을 다 쓴 뒤)에서 버린 복원만 다시 넣은 작업이 큐에 남고, 그 수가 신호의 requeued 다.
+func checkDiscardSignal(t *testing.T, b *restoreBench, p restorePoint, holes []int64) {
+	t.Helper()
+	discarded, restored := b.cap.find("chain_restore_discarded"), b.cap.count("chain_restored")
+	full := b.saturated() // 큐를 비우기 전에 — 차 있었으면 재투입이 거부됐다
+	var holeJobs int
+	for _, j := range b.queued() {
+		if j.SessionID == benchSession {
+			holeJobs++
+		}
+	}
+	if p == pointPublished {
+		if len(discarded) != 0 || restored != 1 {
+			t.Errorf("게시 뒤 치움: discarded %d줄 · chain_restored %d줄, want 0 · 1", len(discarded), restored)
+		}
+		return
+	}
+	if len(discarded) != 1 || restored != 0 {
+		// Fatal 이 아니다 — 다음 깨움의 I2(구멍이 끝내 남는가)까지 봐야 버림을 놓친 결함의 피해가 드러난다.
+		t.Errorf("치움이 낀 복원: discarded %d줄 · chain_restored %d줄, want 1 · 0 (%s)", len(discarded), restored, b.cap.dump())
+		return
+	}
+	want, wantJobs := "table_evicted_while_writing", 0
+	if p == pointWritten || p == pointRequeued {
+		want = "table_evicted_before_publish"
+		if !full {
+			wantJobs = len(holes)
+		}
+	}
+	if got := discarded[0].attrs["reason"]; got != want {
+		t.Errorf("discarded reason = %v, want %s", got, want)
+	}
+	if got := discarded[0].attrs["requeued"]; got != int64(wantJobs) {
+		t.Errorf("discarded requeued = %v, want %d", got, wantJobs)
+	}
+	if holeJobs != wantJobs {
+		t.Errorf("버린 복원이 큐에 남긴 구멍 작업 %d개, want %d", holeJobs, wantJobs)
+	}
+}
+
+// saturated 는 큐가 다른 회차 작업으로 차 있는가다(saturate 를 불렀다).
+func (b *restoreBench) saturated() bool { return len(b.u.queue) == cap(b.u.queue) }
 
 // checkNothingOutlivesTable 은 I0 이다.
 func checkNothingOutlivesTable(t *testing.T, b *restoreBench, holes []int64, mismatch bool) {

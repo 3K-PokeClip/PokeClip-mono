@@ -163,24 +163,23 @@ func (run *groupRun) settleMismatch(span holeSpan, fp string, mm mismatch) error
 // 다시 넣은 작업은 세지 않는다 — 표 줄을 이미 아는 행은 스위퍼가 같은 도장으로 다시 집는다. 같은 입력으로 다시 접기만 한 복원을
 // 진전으로 세면 지나간 행이 남은 회차가 깨울 때마다 같은 구멍을 다시 읽는다.
 //
-// 표 줄 · 복원 링크는 복원 기준의 세대 대조 아래에서만 낸다(restoreBasis). 표 줄을 다 쓰기 전에 세대가 바뀌었으면(수명이 표를 치웠다)
-// 재투입 · 게시 없이 버린다 — INFO chain_restore_discarded. 진전은 채택뿐이다(장부 사실 — 표와 무관). 다음 깨움은 스위퍼의 표 없는 ③
-// 작업이 걸고, 링크 없이 장부 닻부터 다시 접는다.
+// 표 줄 · 복원 링크는 복원 기준의 세대 대조 아래에서만 낸다(restoreBasis). 세대가 바뀌었으면(수명이 표를 치웠다) 그 복원을 버린다 —
+// INFO chain_restore_discarded 한 줄이고 chain_restored 는 내지 않는다. 진전은 채택뿐이다(장부 사실 — 표와 무관). 다음 깨움은
+// 스위퍼의 표 없는 ③ 작업이 걸고, 링크 없이 장부 닻부터 다시 접는다. 단계는 둘이다:
+//
+//	표 줄을 다 쓰기 전   reason=table_evicted_while_writing — 재투입 · 게시 없음, 메모리에 남는 것 없음(치움이 쓴 줄을 지웠다)
+//	게시할 때            reason=table_evicted_before_publish — 링크는 게시하지 않지만 이미 다시 넣은 작업(requeued)은 큐에 남는다.
+//	                     그 작업은 도장을 싣고 있어 표 없이 올라간다(playbackPos — 실시간 작업은 실린 위치 그대로) · 같은 키는 PUT 과
+//	                     CAS 가 끝날 때까지 다시 들지 않고(acquireInflight · runJob) · CAS 는 pending · failed 일 때만 굳는다. 다음 복원은
+//	                     올라간 행을 구멍으로 보지 않고, 아직 큐에 있으면 재투입이 중복으로 걸러지며, 객체만 있으면 같은 바이트를 채택한다
 func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	now := run.u.now()
 	written, ok := run.u.sessions.recordRestored(run.w.sessionID, run.basis.gen, run.links, now)
 	if !ok {
-		run.lg.Info("chain_restore_discarded", "hole_from", run.g.first, "hole_to", run.g.last, "reason", "table_evicted",
-			"adopted", len(run.adopted))
-		return len(run.adopted) > 0
+		return run.discard("table_evicted_while_writing", 0)
 	}
 	run.u.sessions.reach(pointWritten)
-	for _, l := range run.links {
-		if !run.g.seqs[l.Seq] || run.adopted[l.Seq] || run.passed[l.Seq] {
-			continue
-		}
-		run.u.enqueue(run.target(run.rows[run.rowIndex(l.Seq)], l), OriginLive)
-	}
+	requeued := run.requeue()
 	anchorSeq := int64(-1)
 	if anchor != nil {
 		anchorSeq = anchor.Seq
@@ -189,7 +188,9 @@ func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	moved := false
 	if len(run.links) > 0 {
 		last := run.links[len(run.links)-1]
-		moved = run.setRestored(last)
+		if moved, ok = run.setRestored(last); !ok {
+			return run.discard("table_evicted_before_publish", requeued)
+		}
 	}
 	run.u.sessions.reach(pointPublished)
 	run.lg.Info("chain_restored", "hole_from", run.g.first, "hole_to", run.g.last, "anchor_seq", anchorSeq,
@@ -197,9 +198,31 @@ func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	return written > 0 || len(run.adopted) > 0 || moved
 }
 
+// requeue 는 구멍 행 작업을 다시 넣는다(채택 · 지나간 행 제외 — 도장을 실은 실시간 경로로). 돌려주는 값은 들어간 작업 수다.
+func (run *groupRun) requeue() int {
+	admitted := 0
+	for _, l := range run.links {
+		if !run.g.seqs[l.Seq] || run.adopted[l.Seq] || run.passed[l.Seq] {
+			continue
+		}
+		if run.u.enqueue(run.target(run.rows[run.rowIndex(l.Seq)], l), OriginLive) == EnqueueAdmitted {
+			admitted++
+		}
+	}
+	return admitted
+}
+
+// discard 는 복원 기준의 세대가 치워져 버린 복원의 신호를 남기고 진전(채택이 있었는가)을 돌려준다.
+func (run *groupRun) discard(reason string, requeued int) bool {
+	run.lg.Info("chain_restore_discarded", "hole_from", run.g.first, "hole_to", run.g.last, "reason", reason,
+		"adopted", len(run.adopted), "requeued", requeued)
+	return len(run.adopted) > 0
+}
+
 // setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않고, 복원 기준의 세대가 이미 치워졌으면 게시하지 않는다(둘 다
-// sessionMemory.setRestored 의 한 잠금 안). 돌려주는 값은 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
-func (run *groupRun) setRestored(last playback.Link) bool {
+// sessionMemory.setRestored 의 한 잠금 안). moved 는 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가(진전), ok 는 세대가
+// 그대로였는가다(거짓이면 게시하지 않았다).
+func (run *groupRun) setRestored(last playback.Link) (moved, ok bool) {
 	r := run.rows[run.rowIndex(last.Seq)]
 	var size int64
 	if r.Bytes != nil {

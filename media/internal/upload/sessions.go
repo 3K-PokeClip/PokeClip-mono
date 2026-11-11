@@ -585,20 +585,21 @@ func (m *sessionMemory) writeRestored(sessionID string, gen uint64, links []play
 // setRestored 는 복원이 정한 그 회차의 마지막 링크를 적는다. 표가 그 복원이 베낀 세대(gen)가 아니면(표 줄을 쓰는 사이 · 쓴 뒤 수명이
 // 표를 치웠다) 적지 않고 거짓이다(PR 종결 r3 cx H). 치움이 지운 표 위의 링크를 남기면 다음 복원이 그 링크에서 잇느라 앞 구멍을
 // 건너뛴다 — 그 구멍 행은 줄도 작업도 없이 남는다. 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다) — 세대 대조와 같은
-// 잠금 안이다(따로 읽고 견주면 그 사이 치움이 낀다). 돌려주는 값은 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
-func (m *sessionMemory) setRestored(sessionID string, gen uint64, rl restoredLink) (moved bool) {
+// 잠금 안이다(따로 읽고 견주면 그 사이 치움이 낀다). moved 는 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가(진전), ok 는
+// 표가 아직 세대 gen 인가다.
+func (m *sessionMemory) setRestored(sessionID string, gen uint64, rl restoredLink) (moved, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.currentLocked(sessionID, gen)
 	if !ok {
-		return false
+		return false, false
 	}
 	prev := e.restored
 	if prev != nil && prev.link.Seq > rl.link.Seq {
-		return false
+		return false, true
 	}
 	e.restored = &rl
-	return prev == nil || prev.link.Seq < rl.link.Seq || prev.bytes != rl.bytes
+	return prev == nil || prev.link.Seq < rl.link.Seq || prev.bytes != rl.bytes, true
 }
 
 // restoredLink 는 그 회차의 복원 링크다 — 맵 읽기 하나라 인덱서 루프에서 불러도 막히지 않는다.
