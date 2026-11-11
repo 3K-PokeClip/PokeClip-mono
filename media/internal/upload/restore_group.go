@@ -23,11 +23,13 @@ import (
 
 // groupRun 은 무리 하나의 복원 상태다 — 복원 고루틴 하나만 만진다.
 type groupRun struct {
-	u    *Uploader
-	w    restoreWake
-	g    holeGroup
-	lg   *slog.Logger
-	rows []index.PlaybackChainRow
+	u *Uploader
+	w restoreWake
+	g holeGroup
+	// basis 는 이 복원이 기대는 회차 메모리의 세대 · 지난 복원 링크다 — 메모리에 내는 것은 모두 이 세대 대조 아래다(restoreBasis).
+	basis restoreBasis
+	lg    *slog.Logger
+	rows  []index.PlaybackChainRow
 	// limit 은 읽은 장부 구간의 끝이다 — 마지막 행이 이보다 앞이면 그 행이 스트림 꼬리다.
 	limit int64
 	// bodies 는 읽은 ② 바이트다(seq → 본문 · 원천이 없으면 nil) — 이음 끝 · 객체 검증의 재료다.
@@ -72,15 +74,24 @@ var errMemoryStale = errors.New("지난 복원 링크의 행이 바뀌었다")
 // 까지다. 구멍 뒤 대조를 마친 뒤에만 채택 CAS · 표 줄 · 작업을 낸다(c10b 확인 패스 cx H-1 — 판을 나누면 앞 판이 대조 전에 올린다 ·
 // PR 종결 r1 cx H — 접는 도중 채택하면 대조에 져도 uploaded 가 굳는다). 메모리는
 // ② 본문을 하나만 쥐어(keepBodyOf) 무리 길이와 무관하다(c10b 보안 검수 H). 행 메타데이터는 행당 수백 바이트다.
+//
+// 닻을 고르기 전에 복원 기준(세대 · 지난 복원 링크)을 잡고 그 회차 몫을 붙든다(PR 종결 r4 cx H — 기억 닻을 세대 밖에서 읽으면 그
+// 사이 치움 뒤 새 표에 앞 구멍을 건너뛴 링크가 게시된다). 몫은 이 함수가 어떻게 끝나든(오류 · 정지 · 패닉) 여기 defer 한 자리에서
+// 놓는다.
 func (u *Uploader) restoreGroup(w restoreWake, g holeGroup, limit int64, lg *slog.Logger) (progressed bool, err error) {
-	run, err := u.newGroupRun(w, g, limit, lg, true)
+	basis := u.sessions.beginRestore(w.sessionID)
+	defer u.sessions.endRestore(w.sessionID)
+	u.sessions.reach(pointBased)
+	run, err := u.newGroupRun(w, g, basis, limit, lg, true)
 	if errors.Is(err, errMemoryStale) {
-		run, err = u.newGroupRun(w, g, limit, lg, false)
+		run, err = u.newGroupRun(w, g, basis, limit, lg, false)
 	}
 	if err != nil || run == nil {
 		return false, err
 	}
+	u.sessions.reach(pointAnchored)
 	mm, err := run.fold(run.anchorLink, run.start)
+	u.sessions.reach(pointFolded)
 	switch {
 	case err != nil:
 		return false, err
@@ -90,21 +101,24 @@ func (u *Uploader) restoreGroup(w restoreWake, g holeGroup, limit int64, lg *slo
 	if err := run.adoptVerified(); err != nil {
 		return false, err
 	}
+	u.sessions.reach(pointAdopted)
 	return run.commit(run.anchorLink), nil
 }
 
-// newGroupRun 은 무리 하나의 장부 구간을 읽고 닻을 정한다. 같은 입력으로 이미 불일치 판정한 무리면 nil 이다. useMemory 면 같은
-// 프로세스의 지난 복원 링크가 닻 뒤 · 구멍 끝 이전에 있을 때 그 링크에서 잇는다(따라잡기 — 구간도 그 링크부터 · S3 를 다시 부르지
-// 않는다). 그 링크까지의 구멍은 지난 복원이 표 줄을 적고 다시 넣었다 — 아직 ③ pending 이라 구멍으로 다시 열거될 뿐이다. 그 행의
+// newGroupRun 은 무리 하나의 장부 구간을 읽고 닻을 정한다. 같은 입력으로 이미 불일치 판정한 무리면 nil 이다. useMemory 면 복원
+// 기준(basis)이 잡은 지난 복원 링크가 닻 뒤 · 구멍 끝 이전에 있을 때 그 링크에서 잇는다(따라잡기 — 구간도 그 링크부터 · S3 를
+// 다시 부르지 않는다). 그 링크까지의 구멍은 지난 복원이 표 줄을 적고 다시 넣었다 — 아직 ③ pending 이라 구멍으로 다시 열거될 뿐이다. 그 행의
 // 장부 크기가 바뀌었으면(꼬리 교정) errMemoryStale 이다.
-func (u *Uploader) newGroupRun(w restoreWake, g holeGroup, limit int64, lg *slog.Logger, useMemory bool) (*groupRun, error) {
+func (u *Uploader) newGroupRun(w restoreWake, g holeGroup, basis restoreBasis, limit int64, lg *slog.Logger,
+	useMemory bool) (*groupRun, error) {
 	from := g.first - 1
 	if g.anchor != nil {
 		from = *g.anchor
 	}
-	run := &groupRun{u: u, w: w, g: g, lg: lg, bodies: map[int64][]byte{}, adopted: map[int64]bool{}, passed: map[int64]bool{}}
+	run := &groupRun{u: u, w: w, g: g, basis: basis, lg: lg, bodies: map[int64][]byte{}, adopted: map[int64]bool{},
+		passed: map[int64]bool{}}
 	shifted := false
-	if rl, ok := u.sessions.restoredLink(w.sessionID); useMemory && ok && rl.link.Seq > from && rl.link.Seq <= g.last {
+	if rl := basis.link; useMemory && basis.hasLink && rl.link.Seq > from && rl.link.Seq <= g.last {
 		from, shifted = rl.link.Seq, true
 	}
 	run.limit = limit
@@ -279,9 +293,10 @@ func (run *groupRun) startAt(seq int64) error {
 	return run.fetchFrom(seq)
 }
 
-// memoryAnchor 는 지난 복원 링크를 닻으로 쓸 수 있는가다.
+// memoryAnchor 는 복원 기준의 지난 복원 링크를 닻으로 쓸 수 있는가다 — 표를 다시 읽지 않는다(다시 읽으면 기준과 다른 세대의
+// 링크를 고른다).
 func (run *groupRun) memoryAnchor() (*playback.Link, int, bool) {
-	rl, ok := run.u.sessions.restoredLink(run.w.sessionID)
+	rl, ok := run.basis.link, run.basis.hasLink
 	floor := run.g.first - 1
 	if run.g.anchor != nil {
 		floor = *run.g.anchor

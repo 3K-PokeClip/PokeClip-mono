@@ -148,7 +148,8 @@ func (run *groupRun) settleMismatch(span holeSpan, fp string, mm mismatch) error
 		}
 		run.u.gate.registerFailure(targetKeyOf(t))
 	}
-	run.u.sessions.recordMismatch(run.w.sessionID, span, fp)
+	run.u.sessions.reach(pointSettling)
+	run.u.sessions.recordMismatch(run.w.sessionID, run.basis.gen, span, fp)
 	run.lg.Error("chain_mismatch", "hole_from", span.from, "hole_to", span.to, "anchor_seq", span.anchor,
 		"check_seq", mm.seq, "expected_pos_ms", mm.expected.Milliseconds(),
 		"object_pos_lo_ms", mm.window.Lo.Milliseconds(), "object_pos_hi_ms", mm.window.Hi.Milliseconds())
@@ -161,9 +162,19 @@ func (run *groupRun) settleMismatch(span holeSpan, fp string, mm mismatch) error
 // progressed 는 이 복원이 새로 낸 것이 있는가다 — 새로 적은 표 줄 · 채택 · 앞으로 간(또는 크기가 바뀐) 복원 링크(PR 종결 r1 cx M).
 // 다시 넣은 작업은 세지 않는다 — 표 줄을 이미 아는 행은 스위퍼가 같은 도장으로 다시 집는다. 같은 입력으로 다시 접기만 한 복원을
 // 진전으로 세면 지나간 행이 남은 회차가 깨울 때마다 같은 구멍을 다시 읽는다.
+//
+// 표 줄 · 복원 링크는 복원 기준의 세대 대조 아래에서만 낸다(restoreBasis). 표 줄을 다 쓰기 전에 세대가 바뀌었으면(수명이 표를 치웠다)
+// 재투입 · 게시 없이 버린다 — INFO chain_restore_discarded. 진전은 채택뿐이다(장부 사실 — 표와 무관). 다음 깨움은 스위퍼의 표 없는 ③
+// 작업이 걸고, 링크 없이 장부 닻부터 다시 접는다.
 func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	now := run.u.now()
-	written, gen := run.u.sessions.recordRestored(run.w.sessionID, run.links, now)
+	written, ok := run.u.sessions.recordRestored(run.w.sessionID, run.basis.gen, run.links, now)
+	if !ok {
+		run.lg.Info("chain_restore_discarded", "hole_from", run.g.first, "hole_to", run.g.last, "reason", "table_evicted",
+			"adopted", len(run.adopted))
+		return len(run.adopted) > 0
+	}
+	run.u.sessions.reach(pointWritten)
 	for _, l := range run.links {
 		if !run.g.seqs[l.Seq] || run.adopted[l.Seq] || run.passed[l.Seq] {
 			continue
@@ -174,29 +185,26 @@ func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	if anchor != nil {
 		anchorSeq = anchor.Seq
 	}
+	run.u.sessions.reach(pointRequeued)
 	moved := false
 	if len(run.links) > 0 {
 		last := run.links[len(run.links)-1]
-		moved = run.setRestored(gen, last)
+		moved = run.setRestored(last)
 	}
+	run.u.sessions.reach(pointPublished)
 	run.lg.Info("chain_restored", "hole_from", run.g.first, "hole_to", run.g.last, "anchor_seq", anchorSeq,
 		"links", len(run.links), "exact", run.exact, "waited_at_tail", run.waited, "compared", run.compared)
 	return written > 0 || len(run.adopted) > 0 || moved
 }
 
-// setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다). 표 줄을 쓴 세대(gen)가 이미
-// 치워졌으면 게시하지 않는다(sessionMemory.setRestored). 돌려주는 값은 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
-func (run *groupRun) setRestored(gen uint64, last playback.Link) bool {
-	rl, ok := run.u.sessions.restoredLink(run.w.sessionID)
-	if ok && rl.link.Seq > last.Seq {
-		return false
-	}
+// setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않고, 복원 기준의 세대가 이미 치워졌으면 게시하지 않는다(둘 다
+// sessionMemory.setRestored 의 한 잠금 안). 돌려주는 값은 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
+func (run *groupRun) setRestored(last playback.Link) bool {
 	r := run.rows[run.rowIndex(last.Seq)]
 	var size int64
 	if r.Bytes != nil {
 		size = *r.Bytes
 	}
-	published := run.u.sessions.setRestored(run.w.sessionID, gen, restoredLink{link: last, bytes: size, exact: run.exact,
+	return run.u.sessions.setRestored(run.w.sessionID, run.basis.gen, restoredLink{link: last, bytes: size, exact: run.exact,
 		slackLo: run.slackLo, slackHi: run.slackHi})
-	return published && (!ok || rl.link.Seq < last.Seq || rl.bytes != size)
 }

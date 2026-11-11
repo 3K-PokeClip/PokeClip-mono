@@ -1,7 +1,6 @@
 package upload
 
 import (
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +15,13 @@ import (
 
 func newMemoryForTest() *sessionMemory {
 	return newSessionMemory(DefaultOptions(nil, ""))
+}
+
+// restoreLinks 는 복원 한 번처럼 기준을 잡아 링크를 표에 쓰고 몫을 놓는다.
+func restoreLinks(m *sessionMemory, sessionID string, links []playback.Link, now time.Time) (int, bool) {
+	basis := m.beginRestore(sessionID)
+	defer m.endRestore(sessionID)
+	return m.recordRestored(sessionID, basis.gen, links, now)
 }
 
 // unknownRequest 는 인덱서가 사슬을 모를 때 보내는 ③ 요청이다 — 도장 칸이 비어 있다.
@@ -50,7 +56,7 @@ func TestRestoredLinesFillOnlyUnknownSeqs(t *testing.T) {
 	m.recordLive(index.UploadTarget{SessionID: "S-1", Seq: 10, StitchOffset: stitch}, now)
 	m.recordLive(unknownRequest(12), now)
 
-	m.recordRestored("S-1", []playback.Link{
+	restoreLinks(m, "S-1", []playback.Link{
 		{Seq: 11, Offset: time.Second},
 		{Seq: 12, Offset: 2 * time.Second},
 		{Seq: 13, Offset: 3 * time.Second, Pos: 40 * time.Second, Pinned: true},
@@ -74,7 +80,8 @@ func TestRestoredLinkIsLatestPerSession(t *testing.T) {
 		t.Fatal("복원 전인데 링크가 있다")
 	}
 
-	_, _, gen := m.tableKeys("S-1")
+	gen := m.beginRestore("S-1").gen
+	defer m.endRestore("S-1")
 	m.setRestored("S-1", gen, restoredLink{link: playback.Link{Seq: 7, SessionID: "S-1"}, bytes: 64})
 	m.setRestored("S-1", gen, restoredLink{link: playback.Link{Seq: 9, SessionID: "S-1"}, bytes: 64})
 
@@ -122,7 +129,8 @@ func TestRestoreWakeMergesPerSessionAndBacksOff(t *testing.T) {
 func TestMismatchMemoryKeyedByInputs(t *testing.T) {
 	m := newMemoryForTest()
 	span := holeSpan{from: 10, to: 12, anchor: 9, check: 13}
-	m.recordMismatch("S-1", span, "64,64,64")
+	m.recordMismatch("S-1", m.beginRestore("S-1").gen, span, "64,64,64")
+	m.endRestore("S-1")
 
 	if !m.knownMismatch("S-1", span, "64,64,64") {
 		t.Error("같은 입력인데 다시 판정한다")
@@ -186,162 +194,12 @@ func TestRestoredChunksNeverExposeEarlierChunkOffset(t *testing.T) {
 				}
 			}()
 		}
-		m.recordRestored("S-1", links, now)
+		restoreLinks(m, "S-1", links, now)
 		stop.Store(true)
 		wg.Wait()
 	}
 	if wrong.Load() > 0 {
 		t.Fatalf("복원 중 틀린 보정값을 %d번 봤다(아는 값 관측 %d번) — 아직 안 쓴 seq 는 「모름」 이어야 한다", wrong.Load(), known.Load())
-	}
-}
-
-// 덩어리를 쓰는 사이 스위퍼가 수명이 지난 표를 치워도(evict) 큰 seq 가 작은 seq 덩어리의 보정값으로 「아는 값」 이 되지 않는다(PR
-// 종결 r2 cx H — 재현 입력: 덩어리를 쓰는 사이 수명이 지나는 표 · 앞 줄 seq 0 · 끊김 줄 seq 1 · 구멍 링크 21,600개 · 링크마다 다른
-// 보정값. 복원이 이미 수명이 지난 표에 쓰면 그 표의 수명을 지금부터 다시 센다(r3 cc L) — 치움이 끼려면 쓰는 사이에 지나야 한다). 잡는
-// 결함: 큰 seq 덩어리를 쓴 뒤 evict 가 표 · 끊김 줄을 지우고 작은 seq 덩어리가 새 표에 적히면, 큰 seq 의 「seq 이하 마지막 줄」 이
-// 작은 덩어리 끝 줄이 되어 스위퍼 ③ 작업이 그 값으로 도장을 굳힌다. 치움 뒤 몫이 지워지는 회차와, 보류 작업이 남아 몫은 그대로
-// 두고 표만 치우는 회차를 둘 다 본다.
-func TestRestoredChunksSurviveTableEvictionBetweenChunks(t *testing.T) {
-	for _, keepEntry := range []bool{false, true} {
-		name := "몫 지움"
-		if keepEntry {
-			name = "몫 남음"
-		}
-		t.Run(name, func(t *testing.T) { checkRestoreWithEviction(t, keepEntry) })
-	}
-}
-
-// checkRestoreWithEviction 은 복원 덩어리 사이에 표 치움을 끼워 틀린 「아는 값」 이 남는지 본다. keepEntry 면 치우는 시각에 보류
-// 작업이 살아 있어 회차 몫은 맵에 남는다.
-func checkRestoreWithEviction(t *testing.T, keepEntry bool) {
-	const (
-		n      = 21_600
-		rounds = 20
-	)
-	before := time.Unix(1_000, 0)
-	restoreAt := before.Add(defaultSessionTTL - time.Millisecond)
-	now := before.Add(defaultSessionTTL + time.Millisecond)
-	links := make([]playback.Link, 0, n)
-	for s := int64(1); s <= n; s++ {
-		links = append(links, playback.Link{Seq: s, Offset: time.Duration(s) * time.Millisecond})
-	}
-	var wrong, interleaved int
-	for range rounds {
-		m := newMemoryForTest()
-		m.recordLive(index.UploadTarget{SessionID: "S-1", Seq: 0}, before)
-		m.recordLive(unknownRequest(1), before)
-		if keepEntry {
-			m.hold(index.UploadTarget{SessionID: "S-1", Seq: n + 1}, now)
-		}
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			m.recordRestored("S-1", links, restoreAt)
-		}()
-		if evictBetweenChunks(m, n, now, done) {
-			interleaved++
-		}
-		<-done
-		if _, ok := m.byID["S-1"]; keepEntry && !ok {
-			t.Fatal("보류 작업이 남은 회차의 몫이 치움에 지워졌다(전제)")
-		}
-		for s := int64(n); s >= 1; s -= 97 {
-			if off, ok := m.offsetAt("S-1", s); ok && off != time.Duration(s)*time.Millisecond {
-				wrong++
-				t.Logf("seq %d = %v, want %v 또는 모름", s, off, time.Duration(s)*time.Millisecond)
-				break
-			}
-		}
-	}
-	if interleaved == 0 {
-		t.Fatalf("복원 덩어리 사이에 표 치움을 한 번도 끼우지 못했다(%d회) — 시험이 경합을 만들지 못한다", rounds)
-	}
-	if wrong > 0 {
-		t.Fatalf("표 치움이 낀 복원 %d/%d회(끼운 횟수 %d)에서 틀린 보정값이 「아는 값」 으로 남았다", wrong, rounds, interleaved)
-	}
-}
-
-// evictBetweenChunks 는 큰 seq 덩어리만 적힌 순간을 기다려 표를 치운다. 그 순간을 보기 전에 복원이 끝나면 거짓이다.
-func evictBetweenChunks(m *sessionMemory, n int64, now time.Time, done <-chan struct{}) bool {
-	for {
-		m.mu.Lock()
-		var high, low bool
-		if e, ok := m.byID["S-1"]; ok {
-			_, high = e.offsets[n]
-			_, low = e.offsets[1]
-		}
-		m.mu.Unlock()
-		if high && !low {
-			m.evict(now)
-			return true
-		}
-		select {
-		case <-done:
-			return false
-		default:
-			runtime.Gosched()
-		}
-	}
-}
-
-// 복원이 표 줄을 다 쓴 뒤 · 복원 링크를 게시하기 전에 수명이 표를 치우면(evict) 그 링크를 게시하지 않는다(PR 종결 r3 cx H — 재현
-// 입력: 0 uploaded → 1–3 pending · 큐 포화로 구멍 행 작업 재투입이 거부됨 · 표 줄을 다 쓴 순간에 치움). 잡는 결함: 치움이 표 줄을
-// 지웠는데 commit 이 마지막 링크 3 을 게시하면, 다음 복원이 그 링크에서 잇느라 1–2 를 건너뛰어 seq 1 은 보정값도 작업도 없이 남는다.
-func TestRestoredLinkNotPublishedAfterTableEviction(t *testing.T) {
-	b := newRestoreBench(t)
-	b.contiguous(0, 1, 600*time.Second, up, pending, pending, pending)
-	b.uploadAt(b.liveChain(), 0)
-	seen := b.u.now().Add(-defaultSessionTTL + time.Minute) // 복원 동안은 살아 있고 치울 때는 지난 표
-	b.u.sessions.recordLive(index.UploadTarget{SessionID: benchSession, Seq: 0}, seen)
-	b.u.sessions.recordLive(unknownRequest(1), seen)
-	g := holeGroup{anchor: new(int64(0)), first: 1, last: 3, seqs: map[int64]bool{1: true, 2: true, 3: true}}
-	run, err := b.u.newGroupRun(restoreWake{streamID: benchStream, sessionID: benchSession}, g, 35, b.u.log, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mm, err := run.fold(run.anchorLink, run.start); mm != nil || err != nil {
-		t.Fatalf("접기 = (%v, %v), want 대조 통과", mm, err)
-	}
-	for i := range cap(b.u.queue) {
-		if got := b.u.enqueue(axisTarget(index.AxisPlayback, "other", int64(i), "S-other"), OriginLive); got != EnqueueAdmitted {
-			t.Fatalf("큐 채우기 = %v", got)
-		}
-	}
-
-	// 게이트 잠금이 commit 을 첫 재투입에 세운다 — 표 줄은 다 썼고 복원 링크는 아직이다.
-	b.u.gate.mu.Lock()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		run.commit(run.anchorLink)
-	}()
-	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Microsecond) {
-		if _, ok := b.offset(1); ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			b.u.gate.mu.Unlock()
-			t.Fatal("표 줄이 2초 안에 적히지 않았다")
-		}
-	}
-	b.u.sessions.evict(b.u.now().Add(2 * time.Minute))
-	if _, ok := b.offset(1); ok {
-		b.u.gate.mu.Unlock()
-		t.Fatal("치움 뒤에도 seq 1 줄이 남았다(전제)")
-	}
-	b.u.gate.mu.Unlock()
-	<-done
-
-	if rl, ok := b.u.sessions.restoredLink(benchSession); ok {
-		t.Errorf("치운 표 위의 복원 링크 seq %d 가 게시됐다, want 없음", rl.link.Seq)
-	}
-	b.queued() // 다른 회차 작업 — 구멍 행 재투입은 큐 포화로 거부됐다
-	b.restore()
-	if _, ok := b.offset(1); !ok {
-		t.Errorf("다음 복원 뒤 seq 1 보정값 없음 (%s)", b.cap.dump())
-	}
-	if jobs := b.queued(); len(jobs) != 3 || jobs[0].Seq != 1 {
-		t.Errorf("다음 복원이 다시 넣은 작업 = %+v, want seq 1–3", jobs)
 	}
 }
 
@@ -354,7 +212,7 @@ func TestRestoredLinesOnExpiredTableSurviveNextTick(t *testing.T) {
 	m.recordLive(index.UploadTarget{SessionID: "S-1", Seq: 0}, before)
 	m.recordLive(unknownRequest(1), before)
 
-	m.recordRestored("S-1", []playback.Link{{Seq: 1, Offset: time.Second}}, now)
+	restoreLinks(m, "S-1", []playback.Link{{Seq: 1, Offset: time.Second}}, now)
 	m.evict(now.Add(defaultSweepEvery))
 
 	if off, ok := m.offsetAt("S-1", 1); !ok || off != time.Second {

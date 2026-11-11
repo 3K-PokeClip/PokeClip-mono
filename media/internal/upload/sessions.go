@@ -37,6 +37,35 @@ type sessionMemory struct {
 	backoffBase, backoffMax time.Duration
 	// tableGens 는 표 세대를 매기는 셈이다 — 회차 몫마다 따로 세지 않는다(몫이 지워졌다 다시 생겨도 세대가 겹치지 않게).
 	tableGens uint64
+
+	// pause 는 복원이 회차 메모리를 놓는 자리마다 부르는 손잡이다(restorePoint — 잠금 밖에서 부른다). 프로덕션에서는 언제나
+	// nil 이다.
+	//
+	// 필드로 둔 이유는 오직 시험이다. 복원과 스위퍼(evict) · 인덱서(recordLive)의 경합은 그 사이 자리 하나하나에 끼워야 결정적으로
+	// 재현된다 — 폴링으로 틈을 잡으면 코어가 하나일 때 한 번도 못 낀다(PR 종결 r4). ★ 교체는 복원이 돌기 전에만 한다.
+	pause func(restorePoint)
+}
+
+// restorePoint 는 복원 한 번이 회차 메모리를 놓는 자리다 — 그 사이에 스위퍼 · 인덱서가 낄 수 있다.
+type restorePoint int
+
+const (
+	pointBased     restorePoint = iota // 복원 기준(세대 · 지난 복원 링크)을 잡은 직후 — 닻을 고르기 전
+	pointAnchored                      // 닻을 정한 뒤(지난 복원 링크 · 표 줄 힌트를 읽었다) — 접기 전
+	pointFolded                        // 접기 · 구멍 뒤 대조 뒤 — 채택 전
+	pointAdopted                       // 채택 뒤 — 표 쓰기 전
+	pointChunk                         // 표 덩어리 하나를 쓰기 전
+	pointWritten                       // 표 줄을 다 쓴 뒤 — 재투입 전
+	pointRequeued                      // 재투입 뒤 — 복원 링크 게시 전
+	pointPublished                     // 복원 링크 게시 뒤
+	pointSettling                      // 불일치 판정 · 장부 적기 뒤 — 불일치 기억 전
+)
+
+// reach 는 복원이 자리 p 에 왔음을 손잡이에 알린다.
+func (m *sessionMemory) reach(p restorePoint) {
+	if m.pause != nil {
+		m.pause(p)
+	}
 }
 
 // sessionEntry 는 한 회차의 몫이다. 셋의 수명 기준 시각은 서로 다르다.
@@ -78,6 +107,9 @@ type sessionEntry struct {
 	// restoreFails · restoreNext 는 복원 실패 횟수와 다음 시도 시각이다(세션 단위 백오프).
 	restoreFails int
 	restoreNext  time.Time
+	// restoring 은 이 몫을 붙든 복원 수다(beginRestore · endRestore). 0 이 아니면 비어도 지우지 않는다 — 지웠다 다시 만들면 새
+	// 세대라, 표 없는 회차(재기동 뒤)의 복원이 tick 마다 지워진 몫 때문에 끝내 게시하지 못한다(PR 종결 r4).
+	restoring int
 }
 
 // restoredLink 는 복원이 정한 링크 하나와 그 행을 읽을 때의 장부 크기다 — 크기가 바뀌었으면(꼬리 교정) 그 행부터 다시 읽는다.
@@ -379,7 +411,50 @@ func later(a, b time.Time) time.Time {
 // empty 는 이 몫에 든 것이 없는가다 — 없으면 맵에서 지운다.
 func (e *sessionEntry) empty() bool {
 	return len(e.offsets) == 0 && len(e.pinned) == 0 && e.initSHA == nil && len(e.held) == 0 &&
-		len(e.breaks) == 0 && e.restored == nil && len(e.mismatches) == 0 && e.restoreFails == 0
+		len(e.breaks) == 0 && e.restored == nil && len(e.mismatches) == 0 && e.restoreFails == 0 && e.restoring == 0
+}
+
+// restoreBasis 는 복원 한 번이 기대는 회차 메모리다 — 닻을 고르기 전에 한 잠금 안에서 잡는다(PR 종결 r4 cx H). gen 은 그때의 표
+// 세대이고, 복원이 그 뒤 메모리에 내는 것(표 줄 · 복원 링크 · 불일치 기억)은 모두 이 세대 대조 아래에서만 쓴다. 세대가 바뀌었으면
+// (수명이 표를 치웠다) 그 복원은 메모리에 아무것도 남기지 않는다 — 치움이 지난 복원 링크 · 표 줄 · 끊김 줄을 함께 지웠으므로 다음
+// 깨움은 링크 없이 장부 닻부터 다시 접는다.
+//
+// 세대가 같으면 복원이 그 사이 읽은 줄 · 링크는 아직 표에 있다 — 같은 세대 안에서 줄이 사라지는 길은 복원 자신의 끊김 줄 걷기뿐이고
+// offset 줄은 더해지거나 실시간 값으로 덮일 뿐이다. 그래서 표를 사본으로 쥘 필요 없이 세대 비교 하나로 묶는다(잠금 안 일은 표 크기와
+// 무관하다).
+type restoreBasis struct {
+	gen uint64
+	// link · hasLink 는 같은 잠금에서 읽은 지난 복원 링크다 — 그 링크까지의 구멍 줄은 같은 세대에서 적혔다(setRestored).
+	link    restoredLink
+	hasLink bool
+}
+
+// beginRestore 는 회차의 복원 기준을 잡고 몫을 붙든다(없으면 만든다). 부르는 쪽은 같은 자리에서 defer endRestore 한다.
+func (m *sessionMemory) beginRestore(sessionID string) restoreBasis {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entry(sessionID)
+	e.restoring++
+	b := restoreBasis{gen: e.tableGen}
+	if e.restored != nil {
+		b.link, b.hasLink = *e.restored, true
+	}
+	return b
+}
+
+// endRestore 는 beginRestore 가 붙든 몫을 놓는다. 비어 있으면 다음 tick 의 evict 가 지운다.
+func (m *sessionMemory) endRestore(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.byID[sessionID]; ok && e.restoring > 0 {
+		e.restoring--
+	}
+}
+
+// currentLocked 는 그 회차 몫이 아직 세대 gen 인가다. 락을 잡은 채로 부른다.
+func (m *sessionMemory) currentLocked(sessionID string, gen uint64) (*sessionEntry, bool) {
+	e, ok := m.byID[sessionID]
+	return e, ok && e.tableGen == gen
 }
 
 // recordRestored 는 복원이 정한 링크들로 표를 채운다(설계 r6 2.10 「구멍 하나의 처리」). 표가 이미 아는 seq(끊김 줄 뒤가 아닌
@@ -396,36 +471,45 @@ func (e *sessionEntry) empty() bool {
 // 쓰면 아직 안 쓴 seq 의 「seq 이하 마지막 줄 · 그 뒤 끊김 줄」 은 쓰기 전 그대로라(새 줄 · 걷은 끊김 줄은 모두 그보다 뒤다) 읽기는
 // 언제나 「모름」 이거나 다 쓴 뒤와 같은 값이다. 돌려주는 값은 실제로 적은 줄 수다(실시간 줄이 이긴 seq 는 빠진다).
 //
-// 덩어리 사이에 수명이 표를 치우면(evict — 표 세대가 바뀐다) 남은 덩어리를 쓰지 않고 0 을 돌려준다(PR 종결 r2 cx H). 치움은 이미 쓴
+// 표가 복원 기준의 세대(gen — restoreBasis)가 아니면 하나도 쓰지 않고 거짓이다. 덩어리 사이에 수명이 표를 치우면(evict — 표 세대가
+// 바뀐다) 남은 덩어리를 쓰지 않고 거짓을 돌려준다(PR 종결 r2 cx H). 치움은 이미 쓴
 // 큰 seq 줄 · 끊김 줄을 함께 지우므로, 작은 seq 덩어리를 마저 쓰면 큰 seq 가 그 덩어리 끝 줄의 보정값으로 「아는」 것처럼 보인다.
 // 멈추면 이 복원이 쓴 줄은 하나도 남지 않아 모든 seq 가 「모름」 이다 — 스위퍼의 표 없는 ③ 작업이 복원을 다시 깨운다. 세대 대조는
-// 덩어리 잠금 안의 비교 하나라 잠금을 더 오래 쥐지 않는다. 돌려주는 세대는 베낀 표의 세대다 — 복원 링크도 같은 세대 대조 아래에서만
-// 게시한다(setRestored · PR 종결 r3 cx H).
-func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, now time.Time) (written int, gen uint64) {
-	lines, breaks, gen := m.tableKeys(sessionID)
+// 덩어리 잠금 안의 비교 하나라 잠금을 더 오래 쥐지 않는다. 복원 링크도 같은 세대 대조 아래에서만 게시한다(setRestored · PR 종결
+// r3 cx H).
+func (m *sessionMemory) recordRestored(sessionID string, gen uint64, links []playback.Link, now time.Time) (written int, ok bool) {
+	lines, breaks, ok := m.tableKeys(sessionID, gen)
+	if !ok {
+		return 0, false
+	}
 	unknown := unknownLinks(links, lines, breaks)
 	slices.SortStableFunc(unknown, func(a, b playback.Link) int { return cmp.Compare(a.Seq, b.Seq) })
 	for to := len(unknown); to > 0; to -= restoredChunk {
+		m.reach(pointChunk)
 		n, ok := m.writeRestored(sessionID, gen, unknown[max(to-restoredChunk, 0):to], now)
 		if !ok {
-			return 0, gen
+			return 0, false
 		}
 		written += n
 	}
 	if len(unknown) == 0 {
-		m.writeRestored(sessionID, gen, nil, now)
+		_, ok = m.writeRestored(sessionID, gen, nil, now)
 	}
-	return written, gen
+	return written, ok
 }
 
 // restoredChunk 는 복원 줄을 한 번 잠가 쓰는 링크 수다 — 맵 쓰기 이만큼은 수백 µs 안이다.
 const restoredChunk = 1024
 
-// tableKeys 는 그 회차 표의 offset 줄 · 끊김 줄 seq 를 정렬해 돌려주고, 베낀 표의 세대도 돌려준다(잠금 안에서는 베끼기만 한다).
-// 몫이 없으면 만든다 — 세대를 매길 몫이 있어야 첫 덩어리를 쓰기 전의 치움도 가른다.
-func (m *sessionMemory) tableKeys(sessionID string) (lines, breaks []int64, gen uint64) {
+// tableKeys 는 세대 gen 인 그 회차 표의 offset 줄 · 끊김 줄 seq 를 정렬해 돌려준다(잠금 안에서는 베끼기만 한다). 세대가 다르면
+// 베끼지 않고 거짓이다 — 몫은 beginRestore 가 붙들고 있어 여기서 만들지 않는다.
+func (m *sessionMemory) tableKeys(sessionID string, gen uint64) (lines, breaks []int64, ok bool) {
 	m.mu.Lock()
-	e := m.entry(sessionID)
+	e, ok := m.currentLocked(sessionID, gen)
+	if !ok {
+		m.mu.Unlock()
+		return nil, nil, false
+	}
 	lines = make([]int64, 0, len(e.offsets))
 	for f := range e.offsets {
 		lines = append(lines, f)
@@ -434,11 +518,10 @@ func (m *sessionMemory) tableKeys(sessionID string) (lines, breaks []int64, gen 
 	for b := range e.breaks {
 		breaks = append(breaks, b)
 	}
-	gen = e.tableGen
 	m.mu.Unlock()
 	slices.Sort(lines)
 	slices.Sort(breaks)
-	return lines, breaks, gen
+	return lines, breaks, true
 }
 
 // unknownLinks 는 표가 모르는 seq 의 링크다 — offsetAt 과 같은 판정(seq 이하 마지막 줄이 있고 그 뒤 끊김 줄이 없으면 안다)을 정렬한
@@ -471,8 +554,8 @@ func unknownLinks(links []playback.Link, lines, breaks []int64) []playback.Link 
 func (m *sessionMemory) writeRestored(sessionID string, gen uint64, links []playback.Link, now time.Time) (int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e, ok := m.byID[sessionID]
-	if !ok || e.tableGen != gen {
+	e, ok := m.currentLocked(sessionID, gen)
+	if !ok {
 		return 0, false
 	}
 	written := 0
@@ -501,16 +584,21 @@ func (m *sessionMemory) writeRestored(sessionID string, gen uint64, links []play
 
 // setRestored 는 복원이 정한 그 회차의 마지막 링크를 적는다. 표가 그 복원이 베낀 세대(gen)가 아니면(표 줄을 쓰는 사이 · 쓴 뒤 수명이
 // 표를 치웠다) 적지 않고 거짓이다(PR 종결 r3 cx H). 치움이 지운 표 위의 링크를 남기면 다음 복원이 그 링크에서 잇느라 앞 구멍을
-// 건너뛴다 — 그 구멍 행은 줄도 작업도 없이 남는다.
-func (m *sessionMemory) setRestored(sessionID string, gen uint64, rl restoredLink) bool {
+// 건너뛴다 — 그 구멍 행은 줄도 작업도 없이 남는다. 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다) — 세대 대조와 같은
+// 잠금 안이다(따로 읽고 견주면 그 사이 치움이 낀다). 돌려주는 값은 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
+func (m *sessionMemory) setRestored(sessionID string, gen uint64, rl restoredLink) (moved bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e, ok := m.byID[sessionID]
-	if !ok || e.tableGen != gen {
+	e, ok := m.currentLocked(sessionID, gen)
+	if !ok {
+		return false
+	}
+	prev := e.restored
+	if prev != nil && prev.link.Seq > rl.link.Seq {
 		return false
 	}
 	e.restored = &rl
-	return true
+	return prev == nil || prev.link.Seq < rl.link.Seq || prev.bytes != rl.bytes
 }
 
 // restoredLink 는 그 회차의 복원 링크다 — 맵 읽기 하나라 인덱서 루프에서 불러도 막히지 않는다.
@@ -524,11 +612,15 @@ func (m *sessionMemory) restoredLink(sessionID string) (restoredLink, bool) {
 	return *e.restored, true
 }
 
-// recordMismatch 는 불일치로 판정한 구멍을 그 입력 지문(판정에 쓴 행들의 장부 크기)과 함께 적는다.
-func (m *sessionMemory) recordMismatch(sessionID string, span holeSpan, fingerprint string) {
+// recordMismatch 는 불일치로 판정한 구멍을 그 입력 지문(판정에 쓴 행들의 장부 크기)과 함께 적는다. 표가 복원 기준의 세대(gen)가
+// 아니면(판정하는 사이 수명이 표를 치웠다) 적지 않는다 — 치운 표보다 오래 사는 기억이 다음 판정을 막지 않게(PR 종결 r4).
+func (m *sessionMemory) recordMismatch(sessionID string, gen uint64, span holeSpan, fingerprint string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e := m.entry(sessionID)
+	e, ok := m.currentLocked(sessionID, gen)
+	if !ok {
+		return
+	}
 	if e.mismatches == nil {
 		e.mismatches = map[holeSpan]string{}
 	}
