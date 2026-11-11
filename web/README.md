@@ -662,7 +662,7 @@ rm -rf ./static-check
 - ①은 인자를 아예 주지 않은 것만 잡는다. 빈 값으로 넘긴 인자(`--build-arg 이름="${빈 변수}"`)는 Next가 `""`로
   굳혀 참조가 남지 않는다 — ②~④가 잡는다.
 - KEY·HOST 가운데 하나라도 비면 SDK를 아예 싣지 않아(`analyticsConfigured()`) ③·④가 빈다.
-- ③의 한 줄은 posthog-js 기본값이라 SDK가 실리면 늘 있다. 준 값이 다르면 그 값이 둘째 줄로 나온다.
+- ③의 한 줄은 posthog-js 기본값이라 SDK가 실리면 늘 있다. 준 값이 다르면 그 값이 한 줄 더 나온다.
 - ④는 `enable_recording_console_log`까지 붙여 찾는다. `disable_session_recording:!1`만 찾으면 posthog-js 기본
   설정이 잡혀 녹화를 끈 빌드에서도 나온다. `!` 뒤 글자(`j`)는 빌드마다 다를 수 있다 — `!1`이 아니면 녹화가 꺼진
   빌드다.
