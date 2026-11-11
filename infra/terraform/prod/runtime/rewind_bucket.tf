@@ -99,7 +99,7 @@ output "rewind_bucket_name" {
 }
 
 output "rewind_bucket_arn" {
-  description = "rewind 버킷 ARN(media 업로드 정책 · 런타임 2단 버킷 정책)."
+  description = "rewind 버킷 ARN(media 사이드카 S3 정책 — 올리기 · 읽기 · 만료 삭제 · HeadBucket · 런타임 2단 버킷 정책)."
   value       = aws_s3_bucket.rewind.arn
 }
 

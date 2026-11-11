@@ -41,10 +41,11 @@ network · registry 키를 읽고, 다른 루트는 workers 를 읽지 않습니
 | platform → 런타임 · workers | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) · `service_ports`(auth · clip) | 같은 클러스터 · Cloud Map 네임스페이스(`pokeclip.internal`)에 서비스를 두고, 상대 SG 규칙을 만든다(`prod/workers` — 일꾼 render · upload, POK-408). chat 두 서비스와 그 규칙은 platform 안에 있다(POK-306) | 클러스터 · 네임스페이스 · 서비스 SG · 포트 = platform, 일꾼 서비스 · 그 규칙 = workers |
 | platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
 | platform → media | `service_sg_ids.auth` · `service_ports.auth` | Media 이그레스 → auth · auth 인그레스 ← Media(응답기의 4C resolve) 한 쌍 — kty 결정 2026-10-25 (나) | 서비스 SG · 포트 = platform, SG 규칙 = media |
-| 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · 업로드 정책 = media |
+| 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 정책(올리기 · 읽기 · 만료 삭제는 대상 = `rewind_bucket_arn/*`, 기동 HeadBucket 은 대상 = `rewind_bucket_arn`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · S3 정책 = media |
 | 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. resolve 전용 토큰 `pokeclip/prod/stream-key-resolve-token` 그릇 하나 — auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 ARN. 공용 `INTERNAL_API_TOKEN` 은 없다, POK-429) | Media 인스턴스 역할 읽기 정책. 전용 토큰은 auth 의 `POST /internal/stream-keys/resolve` 하나만 열고, 출발지는 Media 프라이빗 서브넷 대역이어야 한다(auth `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`) | 그릇 · 값 = 런타임, 읽기 정책 = media |
 | 런타임 1단 → media | `ingest_auth_resolve_token_secret_arn`(string — 위 그릇의 전체 ARN, `media_secret_arns` 의 원소와 같은 값) | 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더(M9 user_data). 목록의 순서에 기대지 않으려는 이름 있는 출력이다 | 출력 = 런타임, 키 정의 · 읽기 = M15, 렌더 = M9(user_data) |
 | 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
+| 런타임 1단 → media · edge | `edge_bounds_kvs_arn`(/dvr 하한 KVS ARN — POK-525) | media: 인스턴스 역할 문 `EdgeBoundsKvs`(동작 `cloudfront-keyvaluestore:` DescribeKeyValueStore · UpdateKeys · GetKey — ListKeys · PutKey · DeleteKey 없음, Resource = 이 ARN 하나 · Writer 스위치와 무관하게 늘)와 사이드카 `REWIND_EDGE_BOUNDS_KVS_ARN`(prod/media `edge_bounds_writer_enabled` 가 참일 때만 — 빈 값이면 Writer 꺼짐). tfvars 칸이 없다. edge: `/dvr` 하한 함수의 KVS 연결(POK-525 엣지 PR 이 더한다 — 지금은 읽지 않음). 키 `{스트림}/{회차}` · 값은 Writer 가 쓴다 — 정본은 원장 표 `stream_edge_bounds`(`prod/runtime/sql/`)이고 KVS 는 사본이다 | 그릇 = 런타임(키 · 값 자원 없음 — guard R2), 쓰기 정책 · 값 = media, 함수 연결 = edge |
 | 런타임 1단 → edge | `rewind_bucket_regional_domain_name` | `cdn_media` 의 `rewind-s3` 오리진 도메인. edge 는 이 하나만 읽는다 — `rewind_bucket_name` · `rewind_bucket_arn` 은 런타임 2단 버킷 정책 몫이다 | 버킷 = 런타임 |
 | edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn` · 동작 `s3:GetObject` · 자원 `dvr/*` · `vod/*`) | 버킷 정책 = 런타임 2단(`prod/runtime-2/rewind_bucket_policy.tf`) |
 | 런타임 → 엣지 시험 | 시험 계정 · 계약9 억제 조건 | 루프백 · T1 부터 T3 · T8 | 런타임 |
@@ -308,7 +309,9 @@ M9(user_data)). 시작
 *   Media ↔ RDS 5432 규칙 한 쌍(platform 의 RDS ← auth · clip 과 대칭).
 *   인스턴스 역할의 `rds-db:connect` — dbuser `media_indexer` ·
     `media_janitor` 둘로 한정합니다(와일드카드 없음).
-*   사이드카 S3(rewind) 업로드 정책.
+*   사이드카 S3(rewind) 정책(올리기 · 읽기 · 만료 삭제 · 기동 HeadBucket).
+*   사이드카 /dvr 하한 KVS 쓰기 정책(문 `EdgeBoundsKvs` — 위 「출력과
+    소유 경계」 표의 `edge_bounds_kvs_arn` 행).
 
 ### password 대비 갈래
 
@@ -370,6 +373,7 @@ prod 루트와 같은 규약을 씁니다(계획 3절 「한 계정 규약」). 
 | 앱 비밀 | `pokeclip/prod/<용도>` | `pokeclip/prod/{jwt-secret,secret-store-key,internal-api-token,google-client-secret,youtube-client-secret,chzzk-client-secret,profile-photo-token-secret,soop-client-secret,stream-key-resolve-token}` |
 | IAM 역할 · 정책 · 인스턴스 프로필 | 접두 `pokeclip-prod-` + 경로 `/pokeclip/prod/` | 역할 · 인스턴스 프로필 `/pokeclip/prod/pokeclip-prod-sql-runner` · 인라인 정책 `pokeclip-prod-sql-runner-master-secret`(SQL 실행기가 켜진 동안만) |
 | SQL 실행기(EC2 · SG) | 접두 `pokeclip-prod-` | SG `pokeclip-prod-sql-runner` · 인스턴스 `Name` 태그 `pokeclip-prod-sql-runner`(켜진 동안만) |
+| /dvr 하한 KVS | 접두 `pokeclip-prod-` | `pokeclip-prod-edge-bounds`(ARN 끝은 생성 때 정해지는 ID — 2-3 판정은 표본 ID 로 묻는다) |
 | RDS 관리형 마스터 비밀(규약의 예외) | 이름을 RDS 가 정함 | `rds!db-<식별자>` |
 | RDS 로그 그룹(규약의 예외) | 이름을 RDS 가 정함 | `/aws/rds/instance/pokeclip-prod-db/postgresql`(보관 30일) |
 

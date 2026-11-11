@@ -93,6 +93,10 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
     (CDN 의 `/dvr/*` 가 rewind 버킷 — 설계 4-5)다. 사이드카는 `S3_BUCKET` 이
     있으면 이 값 없이 기동하지 않으므로(재시작 반복) 늘 넘긴다. https 절대
     URL · 끝 `/` 없음은 M9 모듈이 plan 에서 검증한다.
+*   **`edge_bounds_kvs_arn`**(compose 템플릿 변수): 사이드카
+    `REWIND_EDGE_BOUNDS_KVS_ARN` — /dvr 하한 KVS ARN(POK-525). 두 모드 공통으로
+    늘 따옴표 친 한 줄이고, 빈 값이면 하한 Writer 가 꺼진다. M9 은 Writer
+    스위치(`edge_bounds_writer_enabled`)가 켜졌을 때만 ARN 을 넘긴다.
 *   **`detached_log_driver`**(compose 템플릿 변수): prod 는 `"journald"`.
     `"json-file"` 은 journald 가 없는 로컬 엔진에서 띄울 때만 쓴다. 그 밖의 값은
     모두 journald 로 떨어진다.
@@ -1260,8 +1264,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
     정렬한 것이다(사례 43). 이 출력은 compose 판에 기대므로 판 고정(5.5.0)을
     올리면 골든도 다시 만든다. 생성 스크립트는 M15 c4 실험 기록의
     `make-golden.sh` 다. 사이드카 env 의 `CONTROL_LISTEN` · `PLAYBACK_ROUND_KEYS`
-    (상자 스위치 파일을 compose 가 풀어 넣은 값)는 다시 만들지 않고 두 골든에
-    키 한 줄씩만 더했다(사례 43 주석).
+    (상자 스위치 파일을 compose 가 풀어 넣은 값) · `REWIND_EDGE_BOUNDS_KVS_ARN`
+    (빈 값)은 다시 만들지 않고 두 골든에 키 한 줄씩만 더했다(사례 43 주석).
 *   **S-3**(응답기만 재생성할 때 compose 전체가 무사한지 — 버리는 실험):
     통과 5/5 · 양성 대조 2/2. 비부착 서비스 재생성은 주 `up` · 부착 서비스를
     건드리지 않고, `docker restart` 는 env_file 을 다시 읽지 않는다. 원문은

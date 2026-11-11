@@ -69,6 +69,11 @@ module "media_host" {
 
   playback_round_keys = var.playback_round_keys
 
+  # /dvr 하한 Writer — KVS 는 런타임 1단 출력만(tfvars 칸 없음), 스위치는 이
+  # 루트 입력.
+  edge_bounds_kvs_arn        = local.runtime.edge_bounds_kvs_arn
+  edge_bounds_writer_enabled = var.edge_bounds_writer_enabled
+
   rds_endpoint      = local.runtime.rds_endpoint
   rds_db_name       = local.runtime.rds_db_name
   rds_resource_id   = local.runtime.rds_resource_id

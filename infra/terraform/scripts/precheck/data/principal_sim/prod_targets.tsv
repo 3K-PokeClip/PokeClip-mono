@@ -127,6 +127,18 @@ jobs-thumbnail-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip
 jobs-upload-queue	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 jobs-upload-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload-dlq	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 
+# /dvr 하한 KVS(POK-525 — edge_bounds_kvs.tf). ARN 끝은 생성 때 정해지는 ID
+# 라 소문자 UUID 꼴 표본 ID 로 묻는다(아래 prod/edge 덩어리의 cf-kvs 와 같은
+# 방식 · 같은 한계 — 실제 ID 를 적은 정책은 놓친다). 그릇 동작과 값 동작은
+# 서비스가 달라 행을 나눈다. 값은 쓰기만 묻는다 — dev 주체가 하한을 쓰거나
+# 지우면 시청자 조각이 404 가 되거나 하한이 사라진다. 하한 값은 비밀이 아니라
+# 읽기(GetKey · ListKeys)는 묻지 않는다 — cf-kvs-data 가 읽기를 묻는 것은 그
+# 값이 CDN 비밀이라서다. 태그 동작(TagResource · UntagResource)도 cf-kvs 와
+# 달리 묻지 않는다 — 이 덩어리 머리 규칙대로 구체 ARN 행이라 태그를 바꿔도
+# 대상에서 빠지지 않는다.
+edge-bounds-kvs	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000e1	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore	none	-
+edge-bounds-kvs-data	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000e1	key-value-store	us-east-1	cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
+
 # SQL 실행기 역할 · 인스턴스 프로필(켜진 동안만 있다 — 꺼져 있어도 묻는다).
 # 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 이 역할로 새 상자를
 # 띄워 마스터 비밀을 읽는 길). 켜진 실행기 자신에 명령 · 세션을 보내는 길은
@@ -285,10 +297,11 @@ media-profile	O7e	arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/pok
 # (Resource Groups Tagging API 가 distribution 을 받음 — AWS Resource Groups
 # 「Supported resource types」 대조 2026-10-24). 함수는 이름이 ARN 이라 구체
 # ARN 으로 묻는다. 함수 · KVS 는 그 API 의 지원 목록에 없어 태그로 풀지 않는다.
-# KVS 의 ARN 끝은 생성 때 정해지는 ID 라 표본 ID 로 묻는다(rewind-object 의
-# 표본 키와 같은 방식) — 자원 「*」 · 「key-value-store/*」 를 허용한 정책은
-# 잡고, 실제 ID 를 적은 정책은 놓친다(한계). KVS 값 동작(GetKey · ListKeys 는
-# CDN 비밀 값을 읽는다)은 서비스가 달라 행을 나눈다.
+# KVS 의 ARN 끝은 생성 때 정해지는 ID(소문자 UUID)라 그 꼴의 표본 ID 로
+# 묻는다(rewind-object 의 표본 키와 같은 방식) — 자원 「*」 ·
+# 「key-value-store/*」 · UUID 꼴만 받는 글롭(「key-value-store/*-*-*-*-*」
+# 등)을 허용한 정책은 잡고, 실제 ID 를 적은 정책은 놓친다(한계). KVS 값
+# 동작(GetKey · ListKeys 는 CDN 비밀 값을 읽는다)은 서비스가 달라 행을 나눈다.
 # 배포 행은 표준 로그 전달 설정 권한(AllowVendedLogDeliveryForResource —
 # list_cloudfront.html 의 자원 distribution)도 묻는다(POK-479 · 보안 리뷰
 # M). dev 주체가 이것과 아래 전달 행의 동작을 가지면 media 접근 로그를 자기
@@ -297,8 +310,8 @@ cf-distribution	O7f	tag:cloudfront:distribution	distribution	us-east-1	cloudfron
 cf-function-live-auth	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-live-auth	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-deny-default	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-deny-default	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-apex-request	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-apex-request	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
-cf-kvs	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-cdn-secret-kvs	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore,cloudfront:TagResource,cloudfront:UntagResource	none	-
-cf-kvs-data	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-cdn-secret-kvs	key-value-store	us-east-1	cloudfront-keyvaluestore:GetKey,cloudfront-keyvaluestore:ListKeys,cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
+cf-kvs	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000c1	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore,cloudfront:TagResource,cloudfront:UntagResource	none	-
+cf-kvs-data	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000c1	key-value-store	us-east-1	cloudfront-keyvaluestore:GetKey,cloudfront-keyvaluestore:ListKeys,cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
 
 # prod/edge 의 CLOUDFRONT WAF · 로그 그룹 · apex 버킷(POK-460)과 media 접근
 # 로그 전달 · apex 객체 · 함수 로그 그룹(POK-479). WAF 는 REGIONAL WAF 행과

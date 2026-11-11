@@ -170,6 +170,13 @@ func run() error {
 	// 게이트라 outbox 문장이 0 이다. ★ pool.Close 보다 뒤에 등록해 재시도 · 발행기가 먼저 멈춘다(D47).
 	lifecycle, stopLifecycle := startLifecycle(ctx, cfg, pool, resolver, log)
 	defer stopLifecycle()
+	// /dvr 하한 Writer(POK-525) — REWIND_EDGE_BOUNDS_KVS_ARN 이 비거나 꼴 밖이면 띄우지 않고, 원장의 닫힌 미해제 행을
+	// 감시하며 유예가 지난 해제 행을 지운다(KVS 는 부르지 않는다).
+	// 어느 갈래가 실패해도 기동은 이어진다. 다만 Writer 없는 갈래는 기동 때 감시 한 번을 동기로 돌려 기동이 최대 약
+	// 10초 (삭제 · 조회 각 CallTimeout 5초) 늦어질 수 있다. ★ pool.Close 보다 뒤에 등록해 Writer 가 먼저 멈춘다(원장이
+	// 인덱서 풀 위에 있다).
+	observeEdgeFloor, stopEdgeBounds := startEdgeBounds(ctx, cfg, pool, log)
+	defer stopEdgeBounds()
 
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
 	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다. 키 꼴은 상자 스위치가 고른다(POK-525).
@@ -280,7 +287,10 @@ func run() error {
 	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
 	// 상태 표지 받은편지함은 기동 때 하나다 — 만료(아래)와 4D 수신부가 Changed 로 넣고, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
 	inbox := session.NewPlaybackInbox()
-	pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind)
+	// 발행 성공마다 그 목록 마지막 행의 회차 하한 후보를 Writer 에 알린다 — 발행 몫과 Writer 가 둘 다 있을 때만 감싼다.
+	pubPool := assembleObservedPublishing(rewind, observeEdgeFloor, func() *pgxpool.Pool {
+		return assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind)
+	})
 	if pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).

@@ -101,6 +101,7 @@ variables {
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
   broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  edge_bounds_kvs_arn           = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 # EC2 user_data 한도 16 KiB 는 base64 를 풀기 전(압축본) 크기에 걸린다.
@@ -123,7 +124,8 @@ run "user_data_is_gzip_base64_under_16_kib" {
   }
 }
 
-# 가장 큰 렌더(응답기 · janitor · 제어면 상류 모두 켬)도 한도 안이다.
+# 가장 큰 렌더(응답기 · janitor · 제어면 상류 · 발행 목록 둘 · 새 꼴 쓰기 ·
+# 하한 Writer 모두 켬)도 한도 안이다.
 run "largest_user_data_under_16_kib" {
   command = plan
 
@@ -133,6 +135,17 @@ run "largest_user_data_under_16_kib" {
     control_upstream                    = "127.0.0.1:19090"
     stream_key_resolve_url              = "http://auth.pokeclip.internal:18086"
     stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
+    lifecycle_publish_streams           = ["01ARZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ"]
+    playback_round_keys                 = true
+    edge_bounds_writer_enabled          = true
+  }
+
+  assert {
+    condition = strcontains(one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]), "REWIND_EDGE_BOUNDS_KVS_ARN: \"${var.edge_bounds_kvs_arn}\"")
+    error_message = "가장 큰 렌더에 하한 Writer 의 KVS ARN 이 없다 — 크기 단언이 가장 큰 렌더를 재지 않는다."
   }
 
   assert {
@@ -269,6 +282,61 @@ run "renders_rewind_public_base_url_for_sidecar" {
       ]), "REWIND_PUBLIC_BASE_URL: \"https://media.pokeclip.com\"")
     )
     error_message = "사이드카 env 에 REWIND_PUBLIC_BASE_URL(기본 https://media.pokeclip.com)이 없다."
+  }
+}
+
+# /dvr 하한 Writer(POK-525) — 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 은 늘 한 줄이고
+# 따옴표로 렌더한다. 끔(기본)은 빈 값이라 사이드카가 Writer 를 띄우지 않는다.
+run "renders_empty_edge_bounds_kvs_arn_when_writer_off" {
+  command = plan
+
+  assert {
+    condition = length(regexall("(?m)^      REWIND_EDGE_BOUNDS_KVS_ARN: \"\"$", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]))) == 1
+    error_message = "Writer 끔인데 사이드카 env 에 빈 REWIND_EDGE_BOUNDS_KVS_ARN 한 줄이 없다."
+  }
+
+  assert {
+    condition     = !strcontains(output.rendered_user_data["a"], "key-value-store")
+    error_message = "Writer 끔인데 user_data 에 KVS ARN 이 있다."
+  }
+}
+
+# 켬은 두 모드(옛 · 응답기) 모두 같은 한 줄이다 — 4C 설정과 무관하다.
+run "renders_edge_bounds_kvs_arn_when_writer_on" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = true
+  }
+
+  assert {
+    condition = length(regexall("(?m)^      REWIND_EDGE_BOUNDS_KVS_ARN: \"arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1\"$", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]))) == 1
+    error_message = "Writer 켬(옛 모드)인데 사이드카 env 에 KVS ARN 한 줄이 없다."
+  }
+}
+
+run "renders_edge_bounds_kvs_arn_in_responder_mode" {
+  command = plan
+
+  variables {
+    ingest_auth_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    stream_key_resolve_url              = "http://auth.pokeclip.internal:18086"
+    stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
+    edge_bounds_writer_enabled          = true
+  }
+
+  assert {
+    condition = length(regexall("(?m)^      REWIND_EDGE_BOUNDS_KVS_ARN: \"arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1\"$", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]))) == 1
+    error_message = "Writer 켬(응답기 모드)인데 사이드카 env 에 KVS ARN 한 줄이 없다."
   }
 }
 

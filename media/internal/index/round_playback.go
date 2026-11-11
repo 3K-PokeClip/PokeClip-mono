@@ -3,6 +3,10 @@ package index
 // 회차 상태 읽기 셋(POK-196 M6-3a · 설계 M6 2.2 판정식 · 경계 확정 2 · 3 · 4). 세 함수는 대상 회차를 고르는 앞머리만
 // 다르고 판정식(playbackVerdictSQL)은 한 글자다 — 그래서 회차 하나 · 스트림 최신 회차 · 기동 적재가 같은 회차에 같은
 // 값을 낸다. 판정은 한 SQL 문장이다(READ COMMITTED 에서 스냅숏 하나 — 두 문장으로 나누면 그 사이 커밋이 섞인다).
+//
+// 세 읽기는 부르는 계정에 stream_edge_bounds SELECT 가 있어야 한다(판정식의 원장 줄 — 운영에서는 media_indexer 에만
+// 준다). PG 는 실행 시작 때 문장 전체의 표 권한을 보므로, 그 권한이 없는 계정(app_clip 등)으로 부르면 원장이 비어
+// 있어도 세 읽기 모두 42501 이다. 다른 계정에 이 읽기를 다시 쓰려면 그 권한부터 준다.
 
 import (
 	"context"
@@ -22,8 +26,12 @@ import (
 //	회차에 live 세션 있음                                      live    (스트림 · 기동 적재는 값 없음)
 //	회차 세션에 expired_at 있음                                unknown
 //	완결 아님(ended 아닌 세션 있음 ∨ round_closed_at 없음)     ending
+//	/dvr 하한 원장(stream_edge_bounds)에 그 회차 행 있음       ending  (POK-525 — 엣지 하한 키 해제 · 유예 전)
 //	최신 세션 vod_state ∈ {frozen, frozen_with_gaps} ∧ 키 있음 vod     (회차 VOD · 사슬 하나면 사슬 VOD — 사슬 전원이 같은 vod_* 를 든다)
 //	그 밖(freeze_failed · 빈 동결)                             ended
+//
+// 원장 행은 Writer(rewind/edgebounds)가 엣지 KVS 의 하한 키를 지우고 유예(ReleaseSettle)가 지난 뒤에야 지운다 — 그 전에
+// vod 를 내면 갓 연 VOD 의 하한 아래 조각을 엣지가 막는다. 원장 줄은 PK(stream_id, round_id) 조회다.
 //
 // 완결 시각은 GREATEST(round_closed_at, max(ended_at)) 다. VOD 범위의 첫 조각 PDT 와 마지막 조각 끝(배타)은 그 문서의(회차
 // 문서면 회차 첫 조각부터) vod_first_seq · vod_last_seq 조각에서 읽는다(PK 조회). 집계 함수는 pg_catalog 로 한정하고,
@@ -58,6 +66,8 @@ SELECT a.stream_id, a.round_key, l.session_id,
        CASE WHEN a.has_live THEN 'live'
             WHEN a.expired THEN 'unknown'
             WHEN NOT a.all_ended OR (NOT a.legacy AND a.closed_at IS NULL) THEN 'ending'
+            WHEN EXISTS (SELECT 1 FROM stream_edge_bounds b
+                          WHERE b.stream_id = a.stream_id AND b.round_id = a.round_key) THEN 'ending'
             WHEN l.vod_state IN ('frozen', 'frozen_with_gaps') AND l.vod_s3_key IS NOT NULL THEN 'vod'
             ELSE 'ended' END,
        GREATEST(a.closed_at, a.last_ended), pg_catalog.now(),
@@ -133,6 +143,9 @@ func LoadStreamPlayback(ctx context.Context, pool *pgxpool.Pool, streamID string
 // LoadPlaybackStates 는 기동 때 한 번이다(경계 확정 3). 판정은 LoadStreamPlayback 과 같다. Ending · VOD · Ended 만 내고,
 // within 은 완결 값(VOD · Ended)에만 건다 — 완결 안 된 회차의 Ending 에는 걸지 않는다(오프라인 종료 뒤 회차 닫힘은 360초
 // 뒤라, 그 앞에 재기동하면 부팅 캐시와 적재 둘 다에서 빠지기 때문이다 — D67). live · Unknown 은 내지 않는다.
+// 하한 원장(stream_edge_bounds)에 행이 남은 회차도 판정이 Ending 이라 완결 시각 · within 과 무관하게 싣는다 — Writer 가
+// 없거나 해제가 계속 실패해 행이 오래 남으면 그 회차는 기동마다 Ending 으로 실린다(그 상태는 사이드카의
+// edge_bounds_unreleased_without_writer · dvr_floor_release_overdue 신호가 알린다).
 func LoadPlaybackStates(ctx context.Context, pool *pgxpool.Pool, within time.Duration) (map[string]PlaybackState, error) {
 	vs, err := queryVerdicts(ctx, pool, loadPlaybackStatesSQL)
 	if err != nil {

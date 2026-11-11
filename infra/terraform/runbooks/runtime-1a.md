@@ -827,6 +827,33 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     재실행 SQL 은 끝까지 돌아 `VERIFY OK` 를 낼 수 있습니다 — `VERIFY OK`
     가 사이드카 무영향을 뜻하지 않습니다. 사이드카는 그 쓰기를 백오프
     재시도로 다시 해 회복합니다(클래스 40 재시도 — insert.go).
+*   **POK-525 판 — /dvr 하한 원장 표.** PR Ⓒ(하한 원장 · Writer)의 머지
+    커밋 이상으로 돌리면 표 `stream_edge_bounds` 가 하나 늡니다. 원장은
+    열린 회차마다 /dvr 하한(엣지가 그 아래 조각을 막는 seq) 하나를 적는
+    정본이고, CloudFront KVS 는 그 사본입니다. 그 판이 더한 문장은 셋입니다.
+    *   `stream_schema.sql` 끝의 `CREATE TABLE IF NOT EXISTS
+        stream_edge_bounds`(PK `(stream_id, round_id)` · FK 없음 · 보조
+        인덱스 없음).
+    *   `30_grants.sql` 의 `media_indexer` 권한 넷(SELECT · INSERT · UPDATE
+        · DELETE — DELETE 는 해제 유예가 지난 행 정리).
+    *   `40_verify.sql` 의 표 목록 한 줄과 권한 행렬 네 행.
+
+    그 판의 사이드카는 기동 스키마 확인에서 이 표를 보므로, 이 재실행 전의
+    DB 에서는 `schema_not_ready` 로 뜨지 않습니다.
+*   **POK-525 판이 잠그는 기존 표 — 없음.** 직전 재실행 SHA 까지 수렴한
+    DB 에서 이 판의 20 · 30 을 다시 돌리면, 기존 표 여섯(`stream_segments` ·
+    `stream_sessions` · `stream_cutoffs` · `stream_published_gaps` ·
+    `stream_seq_floors` · `broadcast_lifecycle_outbox`)에는 표 잠금이 하나도
+    남지 않고 새 표만 잠급니다(일회용 PG17 에서 한 트랜잭션으로 돌린 뒤
+    `pg_locks` 를 본 실측 · 2026-11-04 — GRANT 도 대상 표를 잠그지 않음). 8
+    의 직전 SHA 와 이 SHA 사이에 다른 SQL 변경이 있으면 그 변경은 처음
+    적용이라 위 항목의 잠금을 따릅니다. 보내기 전에 아래로 봅니다 — 바뀐
+    줄이 위 세 문장과 주석뿐이면 기존 표 잠금이 없습니다. `60_round_frozen.sql` 이
+    보여도 이 재실행은 그 파일을 돌리지 않습니다(00 → 40 만).
+
+    ```shell
+    git diff "<8 의 직전 SHA>" "<재실행 SHA>" -- infra/terraform/prod/runtime/sql/
+    ```
 
 ### 재실행 걸음
 
@@ -1521,6 +1548,109 @@ fill_read "${payload}/q4.sql" "${payload}/q4-fill.sql" \
 *   기록(8)에 옮기는 것은 `== read` 뒤 결과 줄과 채운 자리 값입니다. Q4 는
     `round_id` 열을 빼고 옮깁니다(회차 id 를 옮기지 않는 「발행 잔여 질의」 와
     같은 규칙).
+
+### POK-525 원장 질의
+
+/dvr 하한 원장(`stream_edge_bounds`)의 행을 상태별로 셉니다. 교체 걸음이
+아니라 사람 복구(media README 「/dvr 하한 사람 복구」)와 「POK-525 롤백」 의
+120초 대기가 씁니다. 위 Q 와 달리 시험이 뽑아 돌리는 표지 블록이 아니고, 「M6
+읽기 질의」 의 하한 질의와 같은 손 질의입니다(일회용 PG17 에 원장 표 · 세션
+표를 깔고 상태마다 행을 넣어 돌려 봄 · 2026-11-04). 보내는 꼴은 `make_read`
+입니다.
+
+```shell
+cat >"${payload}/edge_bounds.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+WITH classified AS (
+  SELECT b.stream_id || '/' || b.round_id AS floor_key,
+         CASE
+           WHEN b.released_at < pg_catalog.now() - interval '120 seconds'
+             THEN 'released_stuck'
+           WHEN b.released_at IS NOT NULL THEN 'released_settling'
+           WHEN NOT EXISTS (SELECT 1 FROM stream_sessions s
+                             WHERE s.stream_id = b.stream_id
+                               AND s.round_id = b.round_id
+                               AND s.round_closed_at IS NULL)
+             THEN 'closed_unreleased'
+           ELSE 'open'
+         END AS state
+    FROM stream_edge_bounds b
+)
+SELECT state,
+       pg_catalog.count(*) AS rows,
+       (pg_catalog.array_agg(floor_key ORDER BY floor_key))[1:10] AS sample
+  FROM classified
+ GROUP BY state
+ ORDER BY state;
+RESET ROLE;
+SQL
+make_read edge_bounds "${payload}/edge_bounds.sql" && send_step edge_bounds
+```
+
+*   **판정은 `rows` 로 합니다.** `rows` 는 그 상태의 행 전부를 셉니다(행
+    수 상한 없음). 행이 없는 상태는 결과에 줄이 나오지 않습니다 — 그 상태의
+    줄이 없으면 0 입니다. 예: 「`released_settling` 0」 은 `released_settling`
+    줄이 없는 것입니다.
+*   `sample` 은 상태마다 이름순 앞 10개의 `{스트림}/{회차}`(KVS 키와 같은
+    꼴)뿐입니다. 어느 회차인지 보는 단서이고 판정에 쓰지 않습니다.
+*   **한 스트림만 보기.** 특정 회차가 앞 10개 밖이면 `sample` 에 나오지
+    않습니다. 그때는 `FROM stream_edge_bounds b` 바로 아래에
+    `WHERE b.stream_id = '<스트림>'` 한 줄을 더해 그 스트림의 행만 셉니다.
+    그 스트림의 회차가 상태마다 10개 이하면 `sample` 에 모두 나옵니다.
+
+| `state` | 뜻 | 누가 거두나 |
+|---|---|---|
+| `open` | 열린 회차의 하한 — 정상 | 회차가 닫히면 Writer 가 해제 |
+| `closed_unreleased` | 회차가 닫혔는데(열린 세션 없음 · 세션 행 없음 포함) KVS 키를 아직 안 지움 | Writer 만(KVS 키를 지워야 함). Writer 없는 상자는 `edge_bounds_unreleased_without_writer` 로 알리기만 |
+| `released_settling` | 키를 지웠고 유예(120초) 안 | 유예가 지나면 다음 해제 확인이 지움 |
+| `released_stuck` | 키를 지운 지 120초가 넘었는데 행이 아직 남음 | 사이드카가 하나라도 돌면 다음 해제 확인이 지움. 한 번 보인 것은 장애가 아님 — 아래 「`released_stuck` 판정」 |
+
+*   **`released_stuck` 판정 — 30초는 확인 주기이지 지우기의 상한이
+    아닙니다.** 행은 유예 120초가 지나는 순간 `released_stuck` 이 되고,
+    그다음 해제 확인이 시작될 때 지워집니다(Writer 의 해제 패스 ·
+    Writer 없는 감시 모두 맨 앞에서 지움). 그 확인이 언제 오는지는
+    상자에 따라 다릅니다.
+    *   **Writer 없는 감시**는 30초마다 확인합니다. 확인 한 번은 원장
+        호출 둘이고 호출마다 5초 상한이라, 거의 30초 주기 그대로입니다.
+    *   **Writer** 는 해제와 올림을 한 고루틴(사이드카 안의 작업 하나)에서
+        차례로 합니다. 30초 틱마다 해제를 하고, 10번째 틱(5분)마다 그 뒤에
+        올림을 합니다. 올림이 도는 동안 다음 해제는 기다립니다. 기다린 틱은
+        쌓이지 않고 하나로 합쳐져, 패스가 끝나면 바로 다음 해제가 돕니다
+        (`media/internal/rewind/edgebounds/writer.go` 의 `Run`).
+    *   호출 하나(KVS · DB)는 5초 상한(`edgeBoundsCallTimeout`)이지만 패스
+        전체의 상한은 없습니다. 해제 패스는 호출이 많아야 8번(40초)이고,
+        올림 패스는 묶음(회차 50개)마다 많아야 6번(30초)이라 올림 후보
+        회차가 많을수록 길어집니다.
+    *   5초 안에 끝난 느린 호출은 성공이라 아무 신호도 내지 않습니다. 그래서
+        신호 없이 몇 분 밀리는 것이 정상일 수 있습니다.
+*   **장애로 보는 때:** `released_stuck` 을 처음 본 뒤 **5분(올림 주기)이
+    지나 다시 돌렸는데 같은 회차가 여전히 `released_stuck`** 이면 장애로
+    봅니다. 올림 후보 회차가 400개(묶음 8개) 이하면 밀림도 5분 안에
+    끝납니다(해제 40초 + 올림 30초 × 8 = 280초 — 호출마다 5초를 거의 다 쓴
+    최악). 같은 회차인지는 위 「한 스트림만 보기」 로 좁혀 봅니다. 장애면
+    다음 순서로 봅니다.
+    1.  **사이드카가 도는가.** 사이드카 저널(`pokeclip-media-sidecar`)에
+        기동 줄이 있고 그 뒤 재기동이 되풀이되지 않는지 봅니다. 기동 줄은
+        Writer 상자면 `edge_bounds_started`, Writer 없는 상자면
+        `edge_bounds_disabled` 또는 `edge_bounds_degraded` 입니다. 어느
+        상자의 사이드카도 안 돌면 지울 주체가 없습니다.
+    1.  **지우기가 실패 중인가.** Writer 상자는
+        `edge_bounds_write_failing`(`pass=release`) 뒤에 같은 `pass` 의
+        `edge_bounds_write_recovered` 가 없는지, Writer 없는 상자는
+        `edge_bounds_unreleased_check_failed` 가 있는지 봅니다. 해제 행
+        지우기의 실패는 이 두 줄에 실립니다.
+    1.  둘 다 아니면 원인을 모릅니다. 상태별 `rows` 와 위 두 축의 신호
+        줄을 kty 에게 보고합니다.
+*   원장 행이 남은 회차는 국면이 `vod` 로 넘어가지 않고 `ending` 에
+    머뭅니다(판정식 — `media/internal/index/round_playback.go`). 그래서
+    `closed_unreleased` · `released_stuck` 이 오래 남으면 그 회차 VOD 가
+    열리지 않습니다.
+*   120초는 사이드카의 해제 유예(`edgeBoundsReleaseSettle` —
+    `media/cmd/segment-indexer/edge_bounds.go`)와 같은 값입니다. 그 값을
+    바꾸면 이 질의도 고칩니다.
+*   기록에 옮기는 것은 `state` 별 `rows` 입니다. `sample`(회차 id)은
+    옮기지 않습니다.
 
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기
 

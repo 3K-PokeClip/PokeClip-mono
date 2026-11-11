@@ -2,6 +2,7 @@
   "broadcast_topic_arn": "",
   "control_upstream": "",
   "detached_log_driver": "journald",
+  "edge_bounds_kvs_arn": "",
   "ingest_auth_image": "",
   "ingest_auth_ip_limit": "on",
   "janitor_enabled": false,
