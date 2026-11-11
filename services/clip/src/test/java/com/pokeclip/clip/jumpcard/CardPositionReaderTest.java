@@ -14,7 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 카드 위치 → 장면 하나(POK-196 · 설계 r7 8.2 「카드 장면 함수」 · kty 11:27). 썸네일 주문 값 · 편집기 {@code fileHead} ·
  * 플레이어 {@code playerAtMs} 가 같은 장면에서 나오는지, 틈 안(이어진 · 끊긴 · 비귀속 자리)이 모두 뒤 귀속 행 첫 화면인지
- * 잰다. 회차 행 열만 받는 순수 함수라 DB 없이 잰다 — 왕복 수 · 실행 계획은 {@code CardPositionPlanTest}.
+ * 잰다. 회차 행 열만 받는 순수 함수라 DB 없이 잰다 — 왕복 수는 {@code CardPositionRoundTripTest}, 실행 계획은
+ * {@code segment.RoundRowsPlanTest}.
  */
 class CardPositionReaderTest {
 
