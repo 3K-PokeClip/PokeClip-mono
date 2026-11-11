@@ -631,16 +631,43 @@ POK-546). prod 이미지가 되감기 없이 나가지 않게 필수로 둔다.
 | `NEXT_PUBLIC_POSTHOG_HOST`   | `https://us.i.posthog.com`                      | US 프로젝트([`docs/ANALYTICS.md`](docs/ANALYTICS.md) 「결정」)                                            |
 | `NEXT_PUBLIC_POSTHOG_REPLAY` | `on`                                            | 세션 녹화(POK-358). 콘솔 URL 차단 목록을 넣은 **뒤에** 켠다 — `docs/ANALYTICS.md` 「세션 녹화」 켜는 순서 |
 
-푸시 전에 이미지에 굳었는지 본다(2026-11-11 확인용 빌드에서 잰 값). 빠진 인자가 있으면 둘째 줄이 0이 아니다.
+푸시 전에 이미지에 굳었는지 본다. 네 줄이 모두 주석대로 나와야 한다.
 
 ```bash
 cid="$(docker create pokeclip-web)"
 docker cp "${cid}:/app/.next/static" ./static-check && docker rm "${cid}"
-grep -rl 'phc_' ./static-check | wc -l                              # 1 — 키가 굳은 파일
-grep -rl 'env\.NEXT_PUBLIC_POSTHOG' ./static-check | wc -l          # 0 — 굳지 않은 참조
-grep -rho 'disable_session_recording:!1' ./static-check | sort -u   # 한 줄 — 녹화를 켠 빌드
+# ① 0 — 굳지 않은 참조가 없다
+grep -rl 'env\.NEXT_PUBLIC_POSTHOG' ./static-check | wc -l
+# ② 한 줄 — landing/analytics.js 의 KEY 와 같은 값
+grep -rho 'phc_[A-Za-z0-9]*' ./static-check | sort -u
+# ③ 한 줄 — api_host:"https://us.i.posthog.com"
+grep -rho 'api_host:"[^"]*"' ./static-check | sort -u
+# ④ 한 줄 — disable_session_recording:!1,enable_recording_console_log
+grep -rho 'disable_session_recording:![^,]*,enable_recording_console_log' ./static-check
 rm -rf ./static-check
 ```
+
+2026-11-11에 인자 조합 일곱 가지로 확인용 이미지를 빌드해 잰 값이다. 넷이 다 맞는 것은 셋을 제대로 준 빌드뿐이다.
+
+| 준 인자                         | ①     | ②        | ③                 | ④        |
+| ------------------------------- | ----- | -------- | ----------------- | -------- |
+| 셋 다 제대로                    | 0     | 한 줄    | 한 줄             | `!1`     |
+| `_REPLAY=true` (`on`이 아닌 값) | 0     | 한 줄    | 한 줄             | **`!0`** |
+| `_REPLAY` 없음                  | **1** | 한 줄    | 한 줄             | **`!j`** |
+| `_HOST` 빈 값                   | 0     | 한 줄    | **없음**          | **없음** |
+| `_HOST` 다른 주소               | 0     | 한 줄    | **두 줄**         | `!1`     |
+| `_KEY` 빈 값                    | 0     | **없음** | **없음**          | **없음** |
+| 셋 다 없음                      | **1** | **없음** | 한 줄(SDK 기본값) | **`!j`** |
+
+- ①은 인자를 아예 주지 않은 것만 잡는다. 빈 값으로 넘긴 인자(`--build-arg 이름="${빈 변수}"`)는 Next가 `""`로
+  굳혀 참조가 남지 않는다 — ②~④가 잡는다.
+- KEY·HOST 가운데 하나라도 비면 SDK를 아예 싣지 않아(`analyticsConfigured()`) ③·④가 빈다.
+- ③의 한 줄은 posthog-js 기본값이라 SDK가 실리면 늘 있다. 준 값이 다르면 그 값이 둘째 줄로 나온다.
+- ④는 `enable_recording_console_log`까지 붙여 찾는다. `disable_session_recording:!1`만 찾으면 posthog-js 기본
+  설정이 잡혀 녹화를 끈 빌드에서도 나온다. `!` 뒤 글자(`j`)는 빌드마다 다를 수 있다 — `!1`이 아니면 녹화가 꺼진
+  빌드다.
+- 네 줄은 압축된 번들의 글자를 본다. `src/lib/analytics/client.ts`의 설정 순서나 posthog-js 판을 바꾸면 다시
+  잰다.
 
 - `NEXT_PUBLIC_MEDIA_STUB_URL`은 받지 않는다 — 배포 빌드에서는 반드시 비어야 한다. 같은 이유로
   `.dockerignore`가 `.env*` 파일을 빌드 컨텍스트에서 뺀다(`.env.local`이 섞이면 `next build`가
