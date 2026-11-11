@@ -570,6 +570,8 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
   --build-arg NEXT_PUBLIC_MEDIA_LIVE_BASE_URL=… \
   --build-arg NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL=… \
   --build-arg NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL=… \
+  --build-arg NEXT_PUBLIC_POSTHOG_KEY=… --build-arg NEXT_PUBLIC_POSTHOG_HOST=… \
+  --build-arg NEXT_PUBLIC_POSTHOG_REPLAY=on \
   web
 ```
 
@@ -586,7 +588,7 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | **빌드 실패**          | LL-HLS 베이스                       |
 | `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | **빌드 실패**          | 녹화 재생 서버                      |
 | `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | **빌드 실패**          | 되감기 제어면                       |
-| `NEXT_PUBLIC_POSTHOG_KEY` · `_HOST`   | 사용 통계 꺼짐         | 운영 값은 `.env.example` 주석       |
+| `NEXT_PUBLIC_POSTHOG_KEY` · `_HOST`   | 사용 통계 꺼짐         | 아래 「prod 사용 통계 값」          |
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
 | `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
 
@@ -617,6 +619,28 @@ POK-546). prod 이미지가 되감기 없이 나가지 않게 필수로 둔다.
 요청이 전부 403 이다.
 
 선택 인자는 비어도 빌드가 멈추지 않으므로, 이름을 잘못 적으면 그 기능이 조용히 꺼진 채 빌드된다.
+
+**prod 사용 통계 값.** 선택 인자지만 prod 이미지에는 셋을 꼭 준다. 빠져도 빌드와 화면은 멀쩡하고
+대시보드의 사용 통계만 꺼진다(2026-11-11 확인 — 운영 번들에 키가 굳지 않고
+`process.env.NEXT_PUBLIC_POSTHOG_KEY` 참조로 남아, 로그인 뒤 이벤트가 하나도 나가지 않았다. 랜딩은
+`landing/analytics.js`에 키가 있어 따로 보낸다).
+
+| 빌드 인자                    | prod 값                                         | 출처                                                                                                      |
+| ---------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_POSTHOG_KEY`    | `.env.example` 주석의 프로젝트 공개 키(`phc_…`) | `landing/analytics.js`의 `KEY`와 같은 값 — 한 프로젝트라야 랜딩 → 대시보드가 한 사람으로 이어진다         |
+| `NEXT_PUBLIC_POSTHOG_HOST`   | `https://us.i.posthog.com`                      | US 프로젝트([`docs/ANALYTICS.md`](docs/ANALYTICS.md) 「결정」)                                            |
+| `NEXT_PUBLIC_POSTHOG_REPLAY` | `on`                                            | 세션 녹화(POK-358). 콘솔 URL 차단 목록을 넣은 **뒤에** 켠다 — `docs/ANALYTICS.md` 「세션 녹화」 켜는 순서 |
+
+푸시 전에 이미지에 굳었는지 본다(2026-11-11 확인용 빌드에서 잰 값). 빠진 인자가 있으면 둘째 줄이 0이 아니다.
+
+```bash
+cid="$(docker create pokeclip-web)"
+docker cp "${cid}:/app/.next/static" ./static-check && docker rm "${cid}"
+grep -rl 'phc_' ./static-check | wc -l                              # 1 — 키가 굳은 파일
+grep -rl 'env\.NEXT_PUBLIC_POSTHOG' ./static-check | wc -l          # 0 — 굳지 않은 참조
+grep -rho 'disable_session_recording:!1' ./static-check | sort -u   # 한 줄 — 녹화를 켠 빌드
+rm -rf ./static-check
+```
 
 - `NEXT_PUBLIC_MEDIA_STUB_URL`은 받지 않는다 — 배포 빌드에서는 반드시 비어야 한다. 같은 이유로
   `.dockerignore`가 `.env*` 파일을 빌드 컨텍스트에서 뺀다(`.env.local`이 섞이면 `next build`가
