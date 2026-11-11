@@ -2459,6 +2459,12 @@ git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커
   && echo 'c0 하한 이상' || echo 'c0 하한 아래'
 ```
 
+이 판정은 조상 관계만 봅니다. PDT PR 을 되돌린(revert) 커밋 뒤의 빌드도 머지
+커밋을 조상으로 두므로 「하한 이상」 으로 나옵니다. 그래서 되돌림이 있었으면
+조상 관계와 함께 이미지 라벨 `com.pokeclip.timing.readable` 이 `null,2` 인지
+둘 다 봅니다(아래 「스위치 2 선행 조건」 의 `docker image inspect` 명령). 되돌린 설치 묶음은
+기동 전 검사가 없어 쓰기자 거부 한 겹만 남습니다.
+
 하한이 걸리는 tfvars 칸은 셋입니다.
 
 | 칸 | 규칙 | 어기면 |

@@ -93,3 +93,11 @@ POK-525 가 그 목록에 표를 하나 더한다. `stream_edge_bounds` 는 /dvr
     *   **해제 전에 지운 행의 KVS 키는 남는다.** Writer 는 지울 키를 원장에서
         읽기 때문이다. 사람 복구 절차가 원장 행을 손으로 지우지 않게 한다
         (media README 「/dvr 하한 사람 복구」).
+
+## 추기 — 뒤에 더해진 권한(2026-11-12)
+
+`stream_timing_gate` SELECT(POK-196 PDT 판 게이트)는 이 노트 뒤에 더해졌고,
+결정과 근거는 [M6 개정 노트](2026-10-26-media-indexer-m6-delete-grants.md)의
+「추기 — PDT 판 게이트 SELECT (2026-11-11)」 에 있다. 지금 권한 목록의 정본은
+`role.go` `mediaIndexerGrants` 다(시험이 `30_grants.sql` · `40_verify.sql` 과의
+일치를 강제한다).
