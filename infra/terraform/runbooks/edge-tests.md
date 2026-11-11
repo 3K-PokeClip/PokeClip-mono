@@ -964,12 +964,16 @@ C′). 걸음마다 실행 직전에 kty 가 승인합니다. 근거는 계획 �
 ```
 
 정리는 「판정 C′」 끝과 「/dvr 하한 끄기」 끝의 정리 블록입니다. 새 셸에서는
-옛 셸의 `run_dir` 이름을 모릅니다. 옛 셸을 닫은 뒤 아래로 찾아, 나온 경로를
-하나씩 지웁니다.
+옛 셸의 `run_dir` 이름을 모릅니다. 아래로 찾은 경로에는 다른 터미널에서
+진행 중인 C′ · 끄기 확인의 `run_dir` 도 섞일 수 있습니다. 그래서 **다른
+터미널에서 진행 중인 C′ · 끄기 확인이 없을 때만** 지웁니다. 자동으로 한꺼번에
+지우지 않고, `ls -ld` 의 수정 시각으로 옛 셸의 것인지 보고 하나씩 지웁니다.
+목록에는 지금 셸의 `${run_dir}` 도 나옵니다 — 그것은 지우지 않습니다. zsh
+에서 남은 것이 없으면 `no matches found` 가 나옵니다 — 0 건과 같은 뜻입니다.
 
 ```shell
-ls -d "${TMPDIR:-/tmp}"/pokeclip-dvr.* 2>/dev/null   # 옛 셸이 남긴 것
-rm -r '<위에 나온 경로>'
+ls -ld "${TMPDIR:-/tmp}"/pokeclip-dvr.* 2>/dev/null   # 수정 시각 · 경로
+rm -r '<옛 셸의 것으로 확인한 경로 하나>'
 ```
 
 ### /dvr 하한 걸음
@@ -982,7 +986,7 @@ rm -r '<위에 나온 경로>'
 | 6.3 | 1단 apply(`false`) | 6.2 | plan 범위 = 아래 「1단 기대 목록」 · 배포 변경 0 |
 | 6.4 | 판정 K(방송 전) → 새 시험 방송 6분 넘김 → 판정 B′ | 6.3 · 1단 뒤 주제 판정 | 아래 「판정 K」 · 「판정 B′」 |
 | 6.5 | 2단 apply(`true`) | 6.4 | plan 범위 = media 배포 변경 한 줄 · apply 끝(배포 Deployed) |
-| 6.6 | 판정 C′ | 6.5 | 아래 「판정 C′」 의 결과 셋 가운데 「통과」. 「끄기」 면 곧바로 「/dvr 하한 끄기」, 「보류」 면 6.6 을 닫지 않고 kty 회부(롤아웃 완료로 적지 않음) |
+| 6.6 | 판정 C′ | 6.5 | 아래 「판정 C′」 의 결과 둘(「통과」 · 「보류 · 즉시 kty 보고」) 가운데 「통과」. 보류면 6.6 을 닫지 않고(롤아웃 완료로 적지 않음) 함수를 붙인 채 kty 에게 즉시 보고. 끄기는 kty 가 정하면 「/dvr 하한 끄기」 |
 
 *   **1단 뒤 주제 판정**(6.3 뒤 · 6.4 앞): `principal-check.sh O7f` 를 한 번
     더 돌립니다. 6.2 때는 알림 주제가 없어 `edge-alarm-topic` 행을 정책
@@ -1404,7 +1408,9 @@ https://app.pokeclip.com`)를 실어 요청합니다. 요청은 「접속법」 
 *   **승인 범위**: 걸음 6.6 의 실행 직전 승인은 그 안의 재확인 · 재실행을
     함께 덮습니다 — `floor_gate` 의 `recheck` · `retry`, `below` 2분
     재확인, `000` · 관측 불충분 · 닫힌 회차에서 `c_issue` 째 한 번 더 돌리는
-    것입니다. 새 시험 방송 송출(「새 시험 방송으로 재개」)만 따로
+    것입니다. 보류 보고 재료 수집(아래 「보류 보고」 의 목록 GAP 블록의
+    `c_issue` 발급 `POST` · 목록 `GET`, WAF 차단 건수 조회)도 이 승인
+    범위입니다. 새 시험 방송 송출(「새 시험 방송으로 재개」)만 따로
     승인받습니다.
 *   **조회 권한**: C′ 의 us-east-1 조회 — DENY 로그 · WAF 차단 로그의
     `logs:FilterLogEvents`, 지표 관측의 `cloudwatch:GetMetricStatistics` —
@@ -1450,7 +1456,10 @@ README 「환경 변수」)이라, 이 절의 요청 블록과 「/dvr 하한 �
 띄우지 않고, `printf` 는 셸 내장이라 값이 프로세스 인자(argv)에 나타나지
 않습니다. `mktemp` 가 파일을 0600 으로 만들어 umask 는 따로 바꾸지 않습니다.
 붙여 넣는 데 쓴 클립보드는 끝에서 비웁니다(`pbcopy < /dev/null` — [엣지
-비밀 런북](edge-secrets.md) 의 시험 키 입력과 같은 꼴).
+비밀 런북](edge-secrets.md) 의 시험 키 입력과 같은 꼴). 이것은 시스템
+클립보드만 비웁니다. 클립보드 관리자의 이력 · 기기 사이 범용 클립보드에
+남은 사본은 지우지 못합니다 — 시험 계정의 JWT 이고 수명이 30분이라 이
+한계는 받아들입니다.
 
 JWT 를 받는 한 줄은 **따로** 실행합니다 — 블록으로 붙이면 다음 줄이 JWT 로
 읽힐 수 있습니다(엣지 비밀 런북의 시험 키 입력과 같은 까닭). 기다리면 JWT 를
@@ -1533,44 +1542,64 @@ floor_gate head | tee -a "${evidence}/dvr-c.txt"
     `dvr_case` 호출 실패). `call-failed` 줄이 `dvr-c-gate.txt` 에 있으면
     판정 B′ 의 `call-failed` 처리를, 없으면 같은 재개를 따릅니다.
 
-**C′ 의 결과는 「통과 · 끄기 · 보류」 셋입니다**(kty 2026-11-11). 끄기 줄이
-하나라도 있으면 끄기(곧바로 「/dvr 하한 끄기」), 끄기 없이 보류 줄이 있으면
-보류, 모두 통과 줄이면 통과입니다. **보류는 통과가 아닙니다** — 걸음 6.6 을
-닫지 않고 kty 회부 상태로 둡니다. 하한이 막지 못하는 채로 롤아웃 완료라고
-적지 않습니다. 보류 동안 함수는 붙은 채 둡니다 — 아래 보류 갈래는 함수
-탓이라는 근거가 없어 꺼도 풀린다고 볼 수 없거나, 꺼진 상태보다 나쁘지
-않습니다. 다음 걸음(새 시험 방송으로 다시 · 끄기)은 kty 가 정합니다.
+**C′ 의 결과는 「통과」 와 「보류 · 즉시 kty 보고」 둘뿐입니다**(kty
+2026-11-11 B안). 이 절의 블록(첫 블록 · `below` 재확인 · E14 · 앱 fetch ·
+DENY 로그 · 지표 관측 · 닫힌 회차)마다 정한 통과 줄이 모두 맞으면 통과이고,
+그 밖은 모두 보류입니다. 런북은 관찰로 끄기를 판정하지 않습니다. 끌지는
+kty 가 정하고, 정하면 「/dvr 하한 끄기」(실행 직전 승인 · plan 과 apply 를
+가름 · 확인 둘)로 갑니다.
 
-| 관찰 | 판정 |
+*   **보류는 통과가 아닙니다.** 걸음 6.6 을 닫지 않고, 하한이 막지 못하는
+    채로 롤아웃 완료라고 적지 않습니다. 보류 동안 함수는 붙은 채 둡니다.
+*   **보류는 그 자리에서 kty 에게 보고합니다.** 보고 재료는 아래 「보류
+    보고」 입니다. 원인은 단정하지 않습니다.
+
+| 관찰 | 처리 |
 |---|---|
 | 하한 고정 게이트 `FLOOR CHANGED`(`head` · `tail` · `retry` · `recheck`) | 재개 — 그 C′ 는 판정하지 않고 「새 시험 방송으로 재개」 |
-| 함수를 지나야 할 줄(`eq` · `above` · `old` · `live` · `e14-direct` · `e14-direct2` · 앱 fetch 의 하한 조각)이 함수 404(`xcache=FunctionGeneratedResponse from cloudfront`) | 끄기. 단 끄기 전에 `floor_gate retry` 를 돌려 `FLOOR CHANGED` 면 하한이 오른 탓이라 재개 |
-| CORS 머리(`acao` · `acac`)가 없음 · 두 벌, `5xx`, 함수 실행 오류(지표의 FunctionExecutionErrors 합 0 초과 포함). 단 `eq` · `above` 의 `403` 줄과 `live` 의 비-200 줄은 이 행이 아니라 아래 그 행으로 판정 | 끄기 |
-| E14 조작 경로가 `200`(우회) | 끄기 · D4 회부(아래 「E14 경로 우회」). 시청자 피해가 아니라 우회(보안 회귀)이고, 우회가 확인되면 롤아웃 이전 상태로 되돌립니다(kty 결정 범위 — 하한이 없어질 뿐 시청자에게 더 나빠지지 않음). `200` 이 아니면서 함수 404 도 아니면 아래 「그 밖에」 의 보류 |
-| `eq` · `above` 가운데 `403` 이 있음(`server` 가 CloudFront 든 AmazonS3 든 · 다른 쪽이 `200` 이든 `403` 이든) | 보류 · kty 즉시 보고(아래 「`eq` · `above` 403 보고」). 함수는 403 을 만들지 않고 스위치는 서명 · OAC · 버킷과 무관해, 꺼도 원인이 사라지지 않음 |
-| `live` 가 `200` 이 아니고 함수 404 도 아님 | 보류 · kty 즉시 보고 · 끄기 여부는 kty. 2단은 `/dvr/*` 의 함수 연결만 바꾸고 `/live/*` 비헤이비어는 스위치와 무관해(`modules/cdn_media/main.tf` 20 · 37–51 · 63) 꺼서 풀린다는 근거가 없음. 방송 종료 · 쿠키 만료로도 비-200 이 될 수 있어 원인은 단정하지 않음 |
-| 그 밖에 위 끄기 갈래가 아닌데 통과 줄과 다름 | 보류 · kty 회부(끄기는 시청자 피해일 때만 — kty 2026-11-11) |
-| `below1`–`below3` 가 함수 404 아님 → 2분 뒤 재확인(아래)도 함수 404 아님 · 게이트 `FLOOR SAME` | 보류 · kty 회부(하한 미작동 — 꺼진 상태보다 나쁘지 않음 · 전파 지연이면 재확인에서 풀림) |
-| `e14-vod` 만 `403` · `server=CloudFront` · 함수 생성 아님 | 보류(아래 「E14 경로 우회」 의 예외) |
-| 지표의 FunctionThrottles 합 0 초과 · 표본 20 이상에서 창 평균 50 초과 | 보류(아래 「지표 관측」) |
+| 응답 코드 `000`(아래) — `above` 의 `000` 도 같음 | 시험 무효 — 그 블록을 머리의 `c_issue` 부터 한 번 더. 그래도 `000` 이면 보류 |
+| DENY 로그의 「관측 불충분」(아래) | 새 요청 ID 로 한 번 더 잼 — 두 번째도 모자라면 보류 |
+| `below1`–`below3` 가운데 함수 404 가 아닌 줄 | 「`below` 2분 재확인」(아래) — 그래도 남으면 보류 |
+| 함수를 지나야 할 줄(`eq` · `above` · `old` · `e14-direct` · `e14-direct2`)이 함수 404(`xcache=FunctionGeneratedResponse from cloudfront`) | `floor_gate retry` — `FLOOR CHANGED` 면 재개, `FLOOR SAME` 이면 보류. 닫힌 회차의 `closed-eq` 는 게이트 대신 「닫힌 회차」 의 2분 재확인 |
+| 앱 fetch 의 `TypeError`(아래) | 탭을 새로 고쳐 한 번 더 — 그래도 예외면 보류 |
+| 지표의 표본 부족(아래 「지표 관측」 — 기대값) | 창 값을 기록해 kty 에게 넘김 — 그것만으로는 보류 아님 |
+| 위 처리 뒤 통과 줄이 모두 맞음 | 통과 |
+| 그 밖 모두 | 보류 · 즉시 kty 보고 |
 
-다음은 판정이 아니라 다시 잴 갈래입니다(통과도 끄기도 아님).
+다시 재는 갈래(`000` · DENY 관측 불충분 · 앱 fetch `TypeError` · `closed-eq`
+의 비-200 · `below` 재확인)는 정한 횟수만큼만 다시 잽니다. 그 뒤에도 풀리지
+않으면 보류 · 즉시 kty 보고이고 통과가 아닙니다 — 통과는 통과 줄이 모두
+맞을 때뿐입니다.
 
-*   DENY 로그의 「관측 불충분」(아래).
-*   `000`(아래) — `above` 의 `000` 도 같습니다.
-*   앱 fetch 의 `TypeError`(아래).
+`below1`–`below3` 는 하한이 올라도 여전히 하한 아래라 `floor_gate retry` 를
+거치지 않고, 대신 2분 재확인을 거칩니다(아래 첫 블록 표 뒤).
 
-지표의 표본 부족(아래 「지표 관측」 — 기대값)은 다시 재지 않고 창 값을 기록해
-kty 에게 넘깁니다. 그것만으로는 보류가 아닙니다.
+**kty 판단 안내**(판정이 아니라 보류 보고를 받은 kty 의 참고입니다):
 
-`below1`–`below3` 는 하한이 올라도 여전히 하한 아래라 `floor_gate retry` 예외가
-없고, 대신 2분 재확인을 거칩니다(아래 첫 블록 표 뒤).
+*   **함수를 지나야 할 줄이 함수 404** — `eq` · `above` · `old` ·
+    `e14-direct` · `e14-direct2` · `closed-eq` 처럼 정상 조각이라 함수를
+    지나야 할 줄에 `xcache=FunctionGeneratedResponse from cloudfront` 404 가
+    있으면 함수가 시청자를 막는 것이라 끄기가 첫째 후보입니다.
+*   **E14 조작 경로 `200`** — 우회(보안 회귀 · D4)입니다(아래 「E14 경로
+    우회」).
+*   **그 밖**(403 · 5xx · GAP · CORS 머리 · `live` 의 비-200 · `below`
+    미차단 · 지표) — 원인부터 봅니다. dvr-floor 는 요청을 그대로 넘기거나
+    404 만 내고 403 을 만드는 줄이 없습니다
+    (`modules/cdn_media/functions/dvr-floor.js` 59–86 · 151–152). 스위치
+    `dvr_floor_enabled` 는 `/dvr/*` 의 함수 연결 하나만 바꿉니다
+    (`modules/cdn_media/main.tf` 20 · 63). 서명(키 그룹) · OAC · 버킷 · WAF
+    와 `/live/*` 비헤이비어(같은 파일 37–51 — 함수는 live-auth)는 스위치와
+    무관합니다.
+*   **5xx** — 원본의 일시 장애일 수도 있습니다. 지표의 FunctionExecutionErrors
+    합(아래 「지표 관측」)과 같은 요청을 다시 보내 재현되는지를 보고 재료로
+    붙입니다.
 
 **응답 코드 `000`(「응답 없음 — 시험 무효」 줄)은 어느 판정에서도 통과가
 아닙니다.** 엣지 응답을 받지 못한 것이라 「`200` 이 아님」 · 「함수 생성이
 아님」 같은 음성 기준을 거짓으로 만족합니다. 그 라벨은 시험 무효로 적고 그
-블록을 머리의 `c_issue` 부터 다시 돌립니다(이 절과 「/dvr 하한 끄기」 의
-확인 모두).
+블록을 머리의 `c_issue` 부터 한 번 더 돌립니다(이 절과 「/dvr 하한 끄기」 의
+확인 모두). 그래도 `000` 이면 C′ 에서는 보류 · 즉시 kty 보고이고, 끄기
+확인에서는 멈추고 kty 에게 보고합니다.
 
 아래 `c_get` 은 요청 하나를 보내 머리를 남기고, `c_line` 은 판정에 쓰는
 머리를 한 줄로 냅니다. `acao` 칸에 값이 둘 이상이면 쉼표로 이어져 나옵니다
@@ -1611,6 +1640,7 @@ c_line() {  # c_line <라벨>
     "$(c_val server "$1")"
 }
 below="$(seg "$((floor - 1))")"
+for k in 1 2 3; do rm -f "${evidence}/dvr-c-below${k}.h"; done  # 앞 시도분
 c_issue && {
   c_get below1 "${below}"
   c_get below2 "${below}"
@@ -1630,17 +1660,19 @@ c_issue && {
 | `old` | 응답이 있고(`000` 아님) `xcache` 가 함수 생성이 아님(함수 통과). 4.2 루프백이 남긴 옛 꼴 키가 있으면 `200`, 없으면 버킷의 `403`(`s3:ListBucket` 이 없어 없는 키도 403) |
 | `live` | `200`(`/live` 무변 — 방송 중) |
 
-`eq` · `above` 가 통과 줄과 다르면 위 결과 표로 판정합니다. 둘 가운데
-`403` 이 있으면 `server` 가 무엇이든 끄지 않고 보류 · kty 즉시 보고입니다.
-근거는 둘입니다.
+통과 줄과 다른 줄이 있으면 위 결과 표의 처리를 거쳐 보류 · 즉시 kty
+보고입니다. `eq` · `above` 의 `403` 도 `server` 가 무엇이든 같습니다.
 
-*   dvr-floor 는 요청을 그대로 넘기거나 404 만 냅니다. 403 을 만드는 줄이
-    없고, KVS 읽기 실패도 넘깁니다
-    (`modules/cdn_media/functions/dvr-floor.js` 59–86 · 101–106 ·
-    151–152).
-*   스위치 `dvr_floor_enabled` 는 `/dvr/*` 의 함수 연결 하나만 정합니다
-    (`modules/cdn_media/main.tf` 20 · 63). 서명(키 그룹) · OAC · 버킷 ·
-    WAF 는 스위치와 무관해, 꺼도 그 403 의 원인은 남습니다.
+**보류 보고**: 보류가 나온 블록마다 아래를 모아 kty 에게 보고합니다. 원인은
+단정하지 않습니다.
+
+1.  그 블록의 응답 줄 전체 — `dvr-c.txt` 의 그 블록 줄 그대로(라벨 · 코드
+    · `acao` · `acac` · `cc` · `xcache` · `server`).
+1.  하한 고정 게이트 결과 — `dvr-c.txt` 의 `gate-…` 줄(`head` 와 그 뒤 돌린
+    `retry` · `recheck` · `tail`).
+1.  `403` 이 있으면 WAF 차단 건수 — 아래 「WAF 차단 건수」 블록.
+1.  (선택) 발행 목록에서 F · F+1 조각 줄에 `#EXT-X-GAP` 이 붙었는지 — 아래
+    「목록 GAP」 블록.
 
 403 을 낸 쪽의 후보는 여럿이고 머리만으로는 가르지 못합니다. 발행 목록
 머리에 GAP 줄이 연달아 선 경우(GAP 줄의 URI 는 평범한 조각 주소지만 버킷에
@@ -1648,20 +1680,36 @@ c_issue && {
 `media/internal/rewind/render.go` 177–180), WAF 차단(media 배포에 속도
 제한 · 관리 규칙 — `prod/edge/main.tf` 17–19 · 107 ·
 `modules/waf_acl/main.tf` 58–75 · WAF 403 도 `server: CloudFront`), 서명
-거절, 버킷 읽기입니다. 어느 것인지는 단정하지 않고 아래를 적어 kty 에게
-넘깁니다.
+거절, 버킷 읽기입니다.
 
-**`eq` · `above` 403 보고**:
-
-1.  `dvr-c.txt` 의 `eq` · `above` 줄(코드 · `server` · `xcache`).
-1.  C′ 창(`c_since` 부터) WAF 차단 로그(`aws-waf-logs-pokeclip-prod-cloudfront`
-    · 차단만)의 시험 IP 건수 — 「WAF 속도 제한」 · T2 와 같은 조회입니다.
-    조회 실패는 0 건이 아니라 「조회 실패」 로 적습니다.
-1.  (선택) 발행 목록에서 F · F+1 조각 줄에 `#EXT-X-GAP` 이 붙었는지.
-    아래 블록이 목록(`/dvr/<test>/<회차>/index.m3u8`)을 받아 두 조각을
-    `GAP` · `-` 로 냅니다. 목록에 없는 조각은 줄이 나오지 않습니다.
+**WAF 차단 건수**: C′ 창(`c_since_ms` 부터)의 WAF 로그에서 시험 IP(이
+기계가 엣지에 요청을 보낸 공인 IP — 「WAF 속도 제한」 · T2 의 시험 IP)의
+줄을 셉니다. 로그 그룹 `aws-waf-logs-pokeclip-prod-cloudfront` 에는 차단된
+요청만 남습니다(`modules/waf_acl/main.tf` 116 · 144–153 — `BLOCK` 만
+남기고 나머지는 버림). 조회 주체는 kty 자격입니다(위 「조회 권한」 — `O7f` 묶음 밖).
+`--query 'length(events)'` 로 건수만 내고, 원문 이벤트(요청 머리 · URI 가
+든 JSON)는 화면 · 증거에 남기지 않습니다. 조회 실패(`AccessDenied` 등)는 0
+건이 아니라 「조회 실패」 로 적습니다.
 
 ```shell
+waf_filter='{ $.httpRequest.clientIp = "<시험 IP>" }'
+if waf_n="$(aws logs filter-log-events --region us-east-1 \
+  --log-group-name aws-waf-logs-pokeclip-prod-cloudfront \
+  --start-time "${c_since_ms}" --filter-pattern "${waf_filter}" \
+  --query 'length(events)' --output text)"; then
+  echo "waf-blocks ${waf_n}"
+else
+  echo 'waf-blocks 조회 실패'
+fi | tee -a "${evidence}/dvr-c.txt"
+```
+
+**목록 GAP**: 아래 블록이 목록(`/dvr/<test>/<회차>/index.m3u8`)을 받아 F ·
+F+1 두 조각을 `GAP` · `-` 로 냅니다. 목록에 없는 조각은 줄이 나오지
+않습니다. 받기 전에 옛 목록 파일을 지워, 발급이 실패하면 `awk` 가 읽을
+파일이 없어 오류를 냅니다(앞 시도의 목록으로 답하지 않음).
+
+```shell
+rm -f "${evidence}/dvr-c-list.m3u8"          # 앞 시도의 목록을 읽지 않게
 c_issue && curl --path-as-is -b "${jar}" -H 'Origin: https://app.pokeclip.com' \
   --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
   -o "${evidence}/dvr-c-list.m3u8" -w 'list %{http_code}\n' \
@@ -1676,13 +1724,17 @@ awk -v f="$(printf '%06d.m4s' "${floor}")" \
 ```
 
 **`below` 2분 재확인**: `below1`–`below3` 가운데 함수 404 가 아닌 줄이
-있으면 곧바로 끄지 않습니다. 하한 고정 게이트가 F 그대로임을 보였어도 KVS
+있으면 곧바로 보류로 적지 않고 다시 봅니다. 하한 고정 게이트가 F 그대로임을 보였어도 KVS
 값이 아직 엣지에 덜 퍼졌을 수 있습니다(값 반영 1분쯤 — 실험대 81 E4). 2분
 뒤 같은 셸에서 아래를 돌립니다. 같은 라벨로 다시 보내 머리 파일을 덮어써
-아래 「DENY 로그」 가 새 요청 ID 로 잽니다.
+아래 「DENY 로그」 가 새 요청 ID 로 잽니다. 첫 블록과 같이 먼저 옛 머리
+파일을 지웁니다 — `c_issue` 가 실패하면 머리 파일이 새로 생기지 않아,
+지우지 않으면 DENY 로그가 앞 시도의 요청 ID 를 셉니다. 지웠으므로 그때
+DENY 의 첫 판정 줄은 3 이 아닙니다.
 
 ```shell
 floor_gate recheck | tee -a "${evidence}/dvr-c.txt"
+for k in 1 2 3; do rm -f "${evidence}/dvr-c-below${k}.h"; done  # 앞 시도분
 c_issue && {
   c_get below1 "${below}"
   c_get below2 "${below}"
@@ -1693,8 +1745,8 @@ c_issue && {
 *   `FLOOR CHANGED` — 재개(위 결과 표).
 *   `FLOOR SAME` 이고 셋 다 함수 404 — 전파 지연이 풀린 것이라 `below`
     통과로 보고 다음 블록으로 갑니다.
-*   `FLOOR SAME` 인데 함수 404 가 아닌 줄이 남음 — 보류 · kty 회부(하한
-    미작동). 끄지 않고, C′ 의 나머지 블록은 기록으로 이어 갑니다.
+*   `FLOOR SAME` 인데 함수 404 가 아닌 줄이 남음 — 보류 · 즉시 kty
+    보고(「보류 보고」). C′ 의 나머지 블록은 기록으로 이어 갑니다.
 
 **E14 경로 우회**: 우회 경로가 가리키는 조각이 버킷에 있어야 시험이 뜻을
 가집니다. 조각이 없으면 우회가 원본까지 가도 버킷 `403`(`s3:ListBucket` 이
@@ -1728,7 +1780,7 @@ normalization」 · 2026-11-11 원문 확인 · 함수 쪽은 실험대 (4) 의 
     S3 가 CloudFront 와 다르게 푸는 경우는 미실측입니다.
 
 `eq` 가 `200` 이 아니면 조각이 확인되지 않은 것이라 **E14 시험 무효**입니다
-(통과로 적지 않고 kty 에게 보고). 블록은 `c_issue` 로 쿠키를 새로 받고,
+(통과로 적지 않고 보류 · 즉시 kty 보고). 블록은 `c_issue` 로 쿠키를 새로 받고,
 조작 경로 다섯의 앞뒤에 조작 없는 경로를 한 번씩 보냅니다(`e14-direct` ·
 `e14-direct2`). 둘 다 `200` 이면 그 조각이 있고 쿠키가 블록 끝까지
 유효했습니다. 그래야 조작 경로의 응답이 서명 거절(쿠키 만료)이 아니라
@@ -1738,6 +1790,8 @@ normalization」 · 2026-11-11 원문 확인 · 함수 쪽은 실험대 (4) 의 
 e14_seq="${floor}"                     # eq 가 200 이었던 seq — 하한 조각
 e14_pad="$(printf '%06d' "${e14_seq}")"
 e14="$(seg "${e14_seq}")"
+e14_out="${evidence}/dvr-c-e14.txt"      # 이번 시도분만(블록마다 먼저 비움)
+: > "${e14_out}"
 c_issue && {
   c_get e14-direct "${e14}"
   c_get e14-vod "/vod/${stream}/../..${e14}"
@@ -1746,45 +1800,55 @@ c_issue && {
   c_get e14-pct2e "/dvr/${stream}/x/%2e%2e/${round}/seg/${e14_pad}.m4s"
   c_get e14-dslash "/dvr/${stream}/${round}//seg/${e14_pad}.m4s"
   c_get e14-direct2 "${e14}"
-} | tee "${evidence}/dvr-c-e14.txt" | tee -a "${evidence}/dvr-c.txt"
-e14_out="${evidence}/dvr-c-e14.txt"      # 이번 시도분만(다시 돌리면 덮어씀)
+} | tee "${e14_out}" | tee -a "${evidence}/dvr-c.txt"
 fn404=' 404 .* xcache=FunctionGeneratedResponse from cloudfront( |$)'
 grep -cE '^e14-direct2? 200 ' "${e14_out}"                    # 2
 grep -v '^e14-direct' "${e14_out}" | grep -cE "${fn404}"      # 5
 grep -c ' 000 ' "${e14_out}"                                  # 0
 ```
 
-세는 줄은 이번 시도분 파일(`dvr-c-e14.txt`)만 봅니다. `000` 으로 블록을 다시
-돌리면 그 파일은 덮어쓰고, 모든 시도는 `dvr-c.txt` 에 남습니다. 둘째 줄이
-4 이고 빠진 하나가 `e14-vod` 의 서명 거절이면 아래 「예외」 입니다.
+세는 줄은 이번 시도분 파일(`dvr-c-e14.txt`)만 봅니다. 블록은 요청 전에 그
+파일을 비웁니다 — `c_issue` 가 실패하면 `tee` 가 돌지 않아, 비우지 않으면
+앞 시도의 파일이 남아 낡은 2 · 5 · 0 을 셉니다. 비웠으므로 그때 세는 줄은
+0 · 0 · 0 이고 통과가 아닙니다. 모든 시도는 `dvr-c.txt` 에 남습니다. 둘째 줄이
+4 이고 빠진 하나가 `e14-vod` 의 엣지 `403` 이면 아래 「`e14-vod` 에는 따로
+볼 꼴」 입니다.
 
 | 라벨 | 통과 |
 |---|---|
-| `e14-direct` · `e14-direct2` | 둘 다 `200` · `xcache` 가 함수 생성이 아님(앞뒤 양성 대조 — 하한 조각이 있고 쿠키가 블록 끝까지 유효함. 하나라도 아니면 E14 시험 무효) |
+| `e14-direct` · `e14-direct2` | 둘 다 `200` · `xcache` 가 함수 생성이 아님(앞뒤 양성 대조 — 하한 조각이 있고 쿠키가 블록 끝까지 유효함. 하나라도 아니면 E14 시험 무효 — 보류 · 즉시 kty 보고) |
 | 그 밖 `e14-*` 다섯 | `404` · `xcache=FunctionGeneratedResponse from cloudfront`(함수 MALFORMED 404 — 경로 조작이 함수를 비키지 못함 · E14). 다섯 경로 모두 정규화본이 `/dvr/*` 라 dvr-floor 가 붙은 비헤이비어로 갑니다(AWS 문서 근거). 함수가 원문 표지를 거절하는 것은 실험대 (4) 의 R9 입니다(R9 는 `/vod/…/../..` 꼴은 재지 않음) |
 
 앞뒤 양성 대조가 둘 다 `200` 인데 조작 경로 다섯 가운데 `200` 이 있으면
-경로 조작으로 원본 조각에 닿은 것이라 실패로 끄고, 그 경로와 응답(코드 ·
-`xcache` · `server`)을 kty 에게 보고합니다(D4 회부). 이 `200` 은 시청자
-피해가 아니라 우회(보안 회귀)라 「끄기는 시청자 피해일 때만」 과 갈래가
-다릅니다. 우회가 확인되면 롤아웃 이전 상태로 되돌리는 것이 kty 결정
-범위입니다. 끈다고 그 우회가 막히지는 않습니다 — 하한이 통째로 없어질
-뿐이라 시청자에게 더 나빠지지 않는 쪽으로 되돌리는 것입니다. `200` 이
-아니면서 함수 404 도 아닌 것은 끄지 않고 판정 보류로 적어 그 경로와 응답을
-kty 에게 보고합니다(C′ 결과 표 「그 밖에」).
+경로 조작으로 원본 조각에 닿은 것입니다. **보안 회귀(D4)로 즉시 kty 에게
+보고합니다** — 그 경로와 응답 줄 전체(코드 · `acao` · `acac` · `cc` ·
+`xcache` · `server`)를 적습니다(「보류 보고」). 끌지는 kty 가 정하고, 끄기
+apply 는 「/dvr 하한 끄기」 대로 실행 직전에 따로 승인받습니다. 참고로
+끈다고 그 우회가 막히지는 않습니다 — 하한이 통째로 없어져 롤아웃 이전
+상태로 돌아갈 뿐입니다. `200` 이 아니면서 함수 404 도 아닌 것도 보류 · 즉시
+kty 보고입니다(그 경로와 응답 줄 전체).
 
-예외는 `e14-vod` 하나입니다. 이 요청에는 curl 이 원문 경로 머리
-(`/vod/<test>`)에 맞는 `/vod` 쿠키를 싣습니다. 서명 검사가 정규화본
-(`/dvr/…`)으로 정책을 대조하면 함수 앞에서 서명 거절 `403` 이 됩니다 —
-R9 는 이 꼴을 재지 않았습니다. 그래서 `e14-vod` 만 `403` ·
-`server=CloudFront` · 함수 생성 아님이면 엣지에서 멈춘 것(원본 도달 아님)
-이라 끄지 않고, 판정 보류로 적어 kty 에게 보고합니다.
+`e14-vod` 에는 따로 볼 꼴이 하나 있습니다. 이 요청에는 curl 이 원문 경로
+머리(`/vod/<test>`)에 맞는 `/vod` 쿠키를 싣습니다. 서명 검사가 정규화본
+(`/dvr/…`)으로 정책을 대조하면 함수 앞에서 서명 거절 `403` 이 될 수
+있습니다 — R9 는 이 꼴을 재지 않았습니다. 그래서 `e14-vod` 만 `403` ·
+`server=CloudFront` · 함수 생성 아님이면 엣지에서 멈춘 것(원본 도달
+아님)이라 우회는 아닙니다. 통과로도 적지 않고 보류 · 즉시 kty 보고입니다
+(엣지에서 멈춘 까닭 — 서명 대조 · WAF 등 — 은 단정하지 않음). 이 꼴이 서명
+검사 때문에 늘 나오면 C′ 가 매번 보류가 됩니다. 6.6 전에 한 번 재서
+`e14-vod` 의 기대 줄을 정할지는 kty 가 판단합니다.
 
-**앱 출처 credentials fetch**: 시험 방송을 앱에서 되감기로 연 탭
+**앱 출처 credentials fetch**(보조 확인): 시험 방송을 앱에서 되감기로 연 탭
 (`https://app.pokeclip.com`)의 개발자 도구 콘솔에서 아래를 돌립니다. 하한 아래
 셋은 `404`, 하한 조각은 `200` 이어야 합니다. `<F>` 는 `dvr-floor.txt` 의 값
 (B′ 의 F — C′ 머리의 하한 고정 게이트가 그대로임을 보인 값)입니다.
 
+*   **판정은 위 curl 줄로 합니다.** 앱 fetch 는 「브라우저가 상태 코드를
+    읽고 CORS 로 막히지 않는가」 만 기록합니다. 콘솔 스크립트가 응답 머리
+    `x-cache` 를 읽을 수 있는지는 확인하지 않았습니다 — `media_cors` 정책에
+    `Access-Control-Expose-Headers` 설정이 없습니다
+    (`modules/cdn_media/policies.tf` 201–216). 그래서 이 결과로 함수 생성
+    여부를 가르지 않습니다.
 *   `cache: 'no-store'` 로 브라우저 캐시를 거치지 않습니다. 조각은
     `Cache-Control: public, max-age=31536000, immutable`
     (`media/internal/upload/s3.go` 30줄)이라, 되감기 탭이 앞서 받은 조각을
@@ -1792,8 +1856,8 @@ R9 는 이 꼴을 재지 않았습니다. 그래서 `e14-vod` 만 `403` ·
 *   `TypeError`(예: `Failed to fetch`)는 **시험 무효**이고 CORS 실패로
     확정하지 않습니다. DNS · TLS · 연결 실패와 쿠키 만료 등으로 엣지 응답을
     읽지 못한 경우도 같은 예외입니다. 탭을 새로 고쳐(앱이 쿠키를 다시 받음)
-    한 번 더 돌리고, 그래도 예외면 kty 에게 보고합니다. CORS 판정은 위
-    curl 표의 `acao` · `acac` 한 벌로만 합니다.
+    한 번 더 돌리고, 그래도 예외면 보류 · 즉시 kty 보고입니다. CORS 판정은
+    위 curl 표의 `acao` · `acac` 한 벌로만 합니다.
 
 ```js
 const base = 'https://media.pokeclip.com/dvr/<test>/<회차>/seg/';
@@ -1808,8 +1872,10 @@ for (const seq of ['<F−1 6자리>', '<F−1 6자리>', '<F−1 6자리>', '<F 
 }
 ```
 
-콘솔에 나온 네 줄을 그대로 `${evidence}/dvr-c-app.txt` 에 옮겨 적고, 결과
-표의 「앱 fetch 의 하한 조각」 판정도 이 파일로 합니다.
+콘솔에 나온 네 줄을 그대로 `${evidence}/dvr-c-app.txt` 에 옮겨 적습니다.
+아래 기대와 어긋나면(다른 코드 · 다시 낸 `TypeError`) 보류 · 즉시 kty
+보고입니다 — 보고에는 이 네 줄과 같은 C′ 의 curl 줄(`below1`–`below3` ·
+`eq`)을 함께 붙입니다.
 
 | 줄 | 기대 |
 |---|---|
@@ -1850,12 +1916,13 @@ grep -oFf "${evidence}/dvr-c-ids.txt" "${evidence}/dvr-c-deny.txt" |
 *   첫 줄이 3 이 아니면 머리 파일(`dvr-c-below[123].h`)이 덜 남은 것입니다.
     아래 관측 불충분과 같이 `below1`–`below3` 세 줄만 다시 보내 새 요청
     ID 를 받습니다.
-*   10분 안에 둘째 줄이 3 이 안 됨 — **관측 불충분**입니다(실패 아님 ·
-    끄지 않음). 첫 블록의 `below1`–`below3` 세 줄만 `c_issue && { … }` 꼴로
-    다시 보내 새 요청 ID 로 한 번 더 잽니다. 두 번째도 모자라면 kty 에게
-    보고합니다.
+*   10분 안에 둘째 줄이 3 이 안 됨 — **관측 불충분**입니다(실패 · 보류
+    아님). 첫 블록의 `below1`–`below3` 세 줄만 `c_issue && { … }` 꼴로
+    다시 보내 새 요청 ID 로 한 번 더 잽니다. 두 번째도 모자라면 보류 · 즉시
+    kty 보고입니다(두 번의 판정 줄을 붙임).
 *   로그 수를 요청 수의 대조로 곧바로 쓰지 않습니다. 「로그 수 = 요청 수」
-    가 아니라는 것만으로는 끌 근거가 아닙니다 — 전달이 best-effort 입니다.
+    가 아니라는 것만으로는 판정 근거가 아닙니다 — 전달이 best-effort
+    입니다.
 
 **지표 관측**: C′ 창의 CloudFront 함수 지표를 판정이 아니라 기록으로
 남깁니다. 사용률 합격선(kty (가))은 `test-function` 값에만 씁니다.
@@ -1872,21 +1939,21 @@ grep -oFf "${evidence}/dvr-c-ids.txt" "${evidence}/dvr-c-deny.txt" |
     아님), Maximum 은 점 가운데 최대, FunctionThrottles ·
     FunctionExecutionErrors 는 Sum 의 합입니다. 아래 블록 끝의 `jq` 가 이
     규칙으로 한 줄을 냅니다.
-*   **보는 차례**(위부터 봅니다 · 첫째만 끄기이고 나머지는 끄지
-    않습니다 — 위 C′ 결과 표):
+*   **보는 차례**(위부터 봅니다 · 위 C′ 결과 표):
     1.  FunctionExecutionErrors 합이 0 보다 큼 — SampleCount 와 무관하게
-        끄기(함수가 끝나지 못한 요청은 `/dvr` 503 입니다).
-    1.  FunctionThrottles 합이 0 보다 큼 — SampleCount 와 무관하게 이것만으로
-        판정 보류 · kty 즉시 보고. 스로틀된 요청이 시청자에게 어떻게
-        보이는지는 AWS 문서에 없고(지표 정의만 있음 — AWS 개발자 안내서
+        보류 · 즉시 kty 보고. 함수가 끝나지 못한 요청은 `/dvr` 503 입니다
+        ([prod/edge](../prod/edge/README.md) 「경보(POK-525)」).
+    1.  FunctionThrottles 합이 0 보다 큼 — SampleCount 와 무관하게 보류 ·
+        즉시 kty 보고. 스로틀된 요청이 시청자에게 어떻게 보이는지는 AWS
+        문서에 없고(지표 정의만 있음 — AWS 개발자 안내서
         [View CloudFront and edge function metrics](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/viewing-cloudfront-metrics.html)
-        · 2026-11-11 원문 확인) 미실측이라, 끄기 근거로 쓰지 않습니다.
+        · 2026-11-11 원문 확인) 미실측입니다.
     1.  SampleCount 합이 20 미만 — **관측 불충분**입니다(판정 아님). 이
         갈래가 기대값입니다 — C′ 의 엣지 요청은 첫 블록 7 · E14 7 · 앱
         fetch 4 로 18 건뿐이고(`below` 재확인 · 다시 잰 블록은 더함),
         실험대 (4) 의 1분 창 표본도 2개였습니다. 요청을 더 보내 다시 재지
         않고, 창 값 한 줄을 그대로 기록해 kty 에게 회부합니다(보류 아님).
-    1.  SampleCount 합 20 이상에서 창 평균이 50 을 넘음 — 판정 보류 · kty
+    1.  SampleCount 합 20 이상에서 창 평균이 50 을 넘음 — 보류 · 즉시 kty
         보고.
 *   **20 의 근거**: 한 점 평균이 한두 호출에 휘둘리지 않게 하려는
     보수값입니다. 실측 근거는 없습니다.
@@ -1959,28 +2026,42 @@ c_issue && {
 있습니다(결정 8 — 그동안의 VOD 조각 404 는 웹의 기존 재시도가 약 60초
 가립니다). 2분 뒤 같은 셸에서 위 블록을 다시 돌려(`c_issue` 가 쿠키를 새로
 받음) `closed-eq` 가 `200` 인 채 `closed-below` 를 보고, 그래도 함수 404 면
-끄고 kty 에게 보고합니다.
+보류 · 즉시 kty 보고입니다.
 
 `closed-eq` 가 `200` 이 아니면 그 블록의 닫힌 회차 확인은 무효입니다 — 같은
 쿠키의 `closed-below` 응답이 서명 거절인지 버킷 몫인지 가를 수 없습니다.
-`c_issue` 째 블록을 한 번 더 돌리고, 그래도 같으면 kty 에게 보고합니다(끄지
-않음).
+`c_issue` 째 블록을 한 번 더 돌리고, 그래도 같으면 보류 · 즉시 kty
+보고입니다. 다만 `closed-eq` 가 함수 404
+(`xcache=FunctionGeneratedResponse from cloudfront`)면 쿠키 판별 불가와 다른
+갈래입니다. 삭제 전파일 수 있어 2분 뒤 다시 돌리고, 그래도 함수 404 면
+보고에 그렇게 적습니다(위 「kty 판단 안내」 의 첫째 — 닫힌 회차의 정상
+조각을 함수가 막음).
 
-재측정까지 끝나면 이 셸의 `run_dir` 를 통째로 지웁니다(쿠키 파일 · JWT 머리
-파일이 다 그 안에 있음). C′ 가 보류 · 중단(재개 · kty 회부)으로 멈춰도 그
-자리에서 이 정리를 돌립니다. 끄기로 가면 같은 셸의 `run_dir` 를 「/dvr 하한
-끄기」 확인이 이어 쓰고 그 끝의 정리가 지웁니다. 그 확인은 쿠키를
-`c_issue` 로 새로 받으므로 여기서 지워도 됩니다(`run_dir` · JWT 머리 파일은
-그때 다시 만듭니다).
+재측정 · 보고 재료 수집까지 끝나면 이 셸의 `run_dir` 를 통째로 지웁니다
+(쿠키 파일 · JWT 머리 파일이 다 그 안에 있음). C′ 가 보류 · 재개로 멈춰도 그
+자리에서 이 정리를 돌립니다. kty 가 끄기로 정하면 「/dvr 하한 끄기」 확인이
+`run_dir` · JWT 머리 파일을 다시 만들고 쿠키를 `c_issue` 로 새로 받으므로,
+여기서 지워도 됩니다.
+
+`case` 가 경로 꼴(`…/pokeclip-dvr.…`)을 먼저 봐, 다른 곳을 가리키는
+`run_dir` 는 지우지 않습니다. 지우기가 성공했을 때만 `run_dir` 를 풉니다.
+마지막 줄은 남은 `pokeclip-dvr.*` 수를 보여 주기만 하고 지우지 않습니다 —
+0 이 아니면 「/dvr 하한 셸 전제」 의 새 셸 정리 안내대로 하나씩 봅니다.
 
 ```shell
-[ -n "${run_dir:-}" ] && rm -r "${run_dir}" &&
-  test ! -e "${run_dir}" && echo removed                   # removed
-unset jar auth_hdr run_dir
+case "${run_dir:-}" in
+  */pokeclip-dvr.*)
+    rm -r "${run_dir}" && test ! -e "${run_dir}" && echo removed &&
+      unset run_dir ;;
+  *) echo 'run_dir 없음 · 꼴 다름 — 지우지 않음'; false ;;
+esac
+unset jar auth_hdr
+find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pokeclip-dvr.*' | wc -l |
+  tr -d ' '                                          # 남은 수 — 표시만
 ```
 
 `removed` 가 안 나오면 `run_dir` 가 이미 비었거나 지우지 못한 것입니다.
-「/dvr 하한 셸 전제」 의 `ls -d` 로 남은 것을 봅니다.
+마지막 줄의 수와 「/dvr 하한 셸 전제」 의 `ls -ld` 로 남은 것을 봅니다.
 
 ### /dvr 하한 끄기
 
@@ -2056,9 +2137,10 @@ apply 가 끝나면(Deployed) 두 가지로 확인합니다. 둘 다 하한 값 
     통과는 응답이 있고(`000` 아님) `xcache` 가 함수 생성이 아니며 `server`
     가 CloudFront 가 아닌 것입니다(버킷까지 감 — 없는 키라 버킷 `403` 이
     기대). `xcache=FunctionGeneratedResponse from cloudfront` 이면 함수가
-    아직 붙어 있습니다. `server=CloudFront` 이면서 함수 생성이 아니면 서명
-    거절(쿠키 무효)이라 확인 무효입니다 — `c_issue` 째로 한 번 더 돌리고,
-    그래도 같으면 멈추고 kty 에게 보고합니다.
+    아직 붙어 있습니다. `server=CloudFront` 이면서 함수 생성이 아니면
+    엣지에서 멈춘 것(서명 거절 · WAF 등 — 머리만으로 가르지 않음)이라 확인
+    무효입니다 — `c_issue` 로 쿠키를 새로 받아 한 번 더 돌리고, 그래도
+    같으면 멈추고 kty 에게 보고합니다.
 
 둘 다 통과하면 끄기가 끝난 것입니다. 하나라도 「떼어지지 않음」 이면 plan ·
 apply 를 다시 보고 kty 에게 보고합니다. 다시 켜는 것은 원인을 고친 뒤
@@ -2068,17 +2150,23 @@ apply 를 다시 보고 kty 에게 보고합니다. 다시 켜는 것은 원인�
 않았는지 봅니다(「판정 C′」 끝의 정리와 같은 블록).
 
 ```shell
-[ -n "${run_dir:-}" ] && rm -r "${run_dir}" &&
-  test ! -e "${run_dir}" && echo removed                   # removed
-unset jar auth_hdr run_dir
+case "${run_dir:-}" in
+  */pokeclip-dvr.*)
+    rm -r "${run_dir}" && test ! -e "${run_dir}" && echo removed &&
+      unset run_dir ;;
+  *) echo 'run_dir 없음 · 꼴 다름 — 지우지 않음'; false ;;
+esac
+unset jar auth_hdr
+find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pokeclip-dvr.*' | wc -l |
+  tr -d ' '                                          # 남은 수 — 표시만
 ```
 
 ### /dvr 하한 롤백
 
 | 상황 | 할 일 |
 |---|---|
-| C′ 「끄기」 · 엣지 거절 이상(시청자 404 · `dvr_floor_blocks_list`) · CORS 실패(C′ 결과 표의 CORS 끄기 행 — 브라우저 `TypeError` 만으로는 아님) | 「/dvr 하한 끄기」(1순위) |
-| C′ 「보류」(「판정 C′」 결과 표) | 끄지 않고 걸음 6.6 을 연 채 kty 회부 — 다음 걸음(새 시험 방송으로 다시 · 끄기)은 kty 가 정함 |
+| C′ 「보류 · 즉시 kty 보고」(「판정 C′」 결과 표) | 함수를 붙인 채 걸음 6.6 을 열어 두고 kty 에게 즉시 보고 — 다음 걸음(새 시험 방송으로 다시 · 끄기)은 kty 가 정함(참고: 「판정 C′」 의 「kty 판단 안내」) |
+| 엣지 거절 이상(시청자 404 · `dvr_floor_blocks_list`) · C′ 보류 뒤 kty 가 끄기로 정함 | 「/dvr 하한 끄기」(1순위 · 실행 직전 승인) |
 | 함수 코드 결함 | 고친 PR → 「붙은 채 함수 코드 고치기」 |
 | 경보 오탐 · 무음 | 문턱 · 패턴을 고치는 PR(스위치는 그대로) |
 | Writer 문제(`edge_bounds_write_failing` 이 풀리지 않음 등) | [Media 교체 런북](media-swap.md) 「POK-525 롤백」 의 /dvr 하한 갈래 |
