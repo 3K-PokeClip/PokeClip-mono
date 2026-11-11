@@ -2537,11 +2537,13 @@ PDT 머지 뒤의 모든 사이드카 이미지(다른 수정 · POK-525 뒤 PR 
 **길들이기(4).** c0 가 판 NULL 로 도는 동안 봅니다 — c0 결함 0 ·
 `timing_facts_partial` 비율 · 귀속 행 `timing_round_id` = 세션 `round_id`
 일치(조회) · `segment_indexed` 의 `comparable` 거짓 비율 · 소리 머리 최장
-연속(스트림 안에서 `head_track` 이 `audio` 인 행이 같은 접속으로 잇달아 나온
+연속(스트림 안에서 `head_track` 이 `audio` 인 행이 같은 녹화기로 잇달아 나온
 수 — `audio` 행에서 1 로 시작하고, 다음 행이 `audio` 이며 `same_instance` 가
 참이면 1 을 더하고, `video` 행이면 0, `same_instance` 가 거짓인 `audio` 행이면
-다시 1. 접속 첫 행은 `same_instance` 가 거짓이어도 셈에 든다 — 실측 집계
-`pdt_mix_replay_stats_test.go` 와 같은 셈) · 하한 거부 수(`session_floor_rejected` 의 `stream_id` ·
+다시 1. 견주지 않고 이어지는 구간이라 PDT 가 밀릴 수 있는 길이가 이것이다.
+실측 1 의 (e)(`pdt_mix_replay_stats_test.go`)는 접속이 바뀔 때만 끊으므로,
+같은 접속 안에서 녹화기 표식이 바뀌거나 번호가 건너뛰면 이 값이 그보다 작다
+— 로그에는 접속 경계가 없어 그 셈은 할 수 없다) · 하한 거부 수(`session_floor_rejected` 의 `stream_id` ·
 `seq` 고유 수) · `unattributed_run` 의 세션 사이 길이(`same_round` 참 줄의
 `duration_ms`). 모두 판 NULL 행에서도 나옵니다. 판 2 섞기 신호
 (`timing_reset` · `pdt_new_chapter` 등)는 판 2 행에서만 나오므로 이 기간에는

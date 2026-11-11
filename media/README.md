@@ -2992,7 +2992,7 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 
 | 이름 | 자리 | 등급 | 속성 · 뜻 |
 |---|---|---|---|
-| `segment_indexed` | 조각마다 | INFO | 기존 속성 + `timing_version` · `timing_branch` · `round_id` · `head_track` · `head_lead_ms` · `wall_ms` · `comparable` · `same_instance` · `attributed` · `delta_ms`(견줬을 때). `comparable` 은 판마다 뜻이 다르다 — 판 NULL 행은 견줄 조각 술어의 값이라 앞 행과 같은 녹화기 이어짐이 아닌 행(회차 첫 행 포함)이 참이고, 판 2 행은 섞기가 실제로 견줬는가라 회차 첫 행이 거짓이다. 판 사이 `comparable` 비율을 그대로 견주지 않는다 |
+| `segment_indexed` | 조각마다 | INFO | 기존 속성 + `timing_version` · `timing_branch` · `round_id` · `head_track` · `head_lead_ms` · `wall_ms` · `comparable` · `same_instance` · `attributed` · `delta_ms`(견줬을 때). `comparable` 은 판마다 뜻이 다르다 — 판 NULL 행은 견줄 조각 술어(머리 = 영상 ∨ 앞 행과 같은 녹화기 이어짐 아님 ∨ 영상 모름)의 값이라 거짓은 소리 머리 · 같은 녹화기 이어짐 · 영상 있음 행뿐이고(회차 첫 행은 참), 판 2 행은 섞기가 실제로 견줬는가라 회차 첫 행이 거짓이다. 판 사이 `comparable` 비율을 그대로 견주지 않는다 |
 | `pdt_new_chapter` · `pdt_overlap` · `timing_reset` · `timing_round_broken` | 판 2 행의 섞기 갈래 | INFO · WARN · ERROR | 새 장 · 겹침 · 회차 첫 행 · 판 고정 위반의 까닭 |
 | `timing_gate_read` | 새 회차 개시 행 | INFO | 회차 · 고른 판 · 게이트 `changed_at` |
 | `timing_facts_partial` · `head_lead_over_1s` | 조각 판독 | WARN | mtxi 없음 · 번호 넘침 · 영상 없음 등. `head_lead_over_1s` 의 `instance_first` 는 장부 꼬리와 녹화기 표식이 다른가(번호는 보지 않는다 — 같은 녹화기에서 번호만 건너뛴 조각은 첫 조각이 아니다) |

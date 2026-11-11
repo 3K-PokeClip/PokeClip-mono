@@ -163,7 +163,7 @@ func (run *groupRun) settleMismatch(span holeSpan, fp string, mm mismatch) error
 // 진전으로 세면 지나간 행이 남은 회차가 깨울 때마다 같은 구멍을 다시 읽는다.
 func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	now := run.u.now()
-	written := run.u.sessions.recordRestored(run.w.sessionID, run.links, now)
+	written, gen := run.u.sessions.recordRestored(run.w.sessionID, run.links, now)
 	for _, l := range run.links {
 		if !run.g.seqs[l.Seq] || run.adopted[l.Seq] || run.passed[l.Seq] {
 			continue
@@ -177,16 +177,16 @@ func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	moved := false
 	if len(run.links) > 0 {
 		last := run.links[len(run.links)-1]
-		moved = run.setRestored(last)
+		moved = run.setRestored(gen, last)
 	}
 	run.lg.Info("chain_restored", "hole_from", run.g.first, "hole_to", run.g.last, "anchor_seq", anchorSeq,
 		"links", len(run.links), "exact", run.exact, "waited_at_tail", run.waited, "compared", run.compared)
 	return written > 0 || len(run.adopted) > 0 || moved
 }
 
-// setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다). 돌려주는 값은 링크가 앞으로
-// 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
-func (run *groupRun) setRestored(last playback.Link) bool {
+// setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다). 표 줄을 쓴 세대(gen)가 이미
+// 치워졌으면 게시하지 않는다(sessionMemory.setRestored). 돌려주는 값은 링크가 앞으로 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
+func (run *groupRun) setRestored(gen uint64, last playback.Link) bool {
 	rl, ok := run.u.sessions.restoredLink(run.w.sessionID)
 	if ok && rl.link.Seq > last.Seq {
 		return false
@@ -196,7 +196,7 @@ func (run *groupRun) setRestored(last playback.Link) bool {
 	if r.Bytes != nil {
 		size = *r.Bytes
 	}
-	run.u.sessions.setRestored(run.w.sessionID, restoredLink{link: last, bytes: size, exact: run.exact,
+	published := run.u.sessions.setRestored(run.w.sessionID, gen, restoredLink{link: last, bytes: size, exact: run.exact,
 		slackLo: run.slackLo, slackHi: run.slackHi})
-	return !ok || rl.link.Seq < last.Seq || rl.bytes != size
+	return published && (!ok || rl.link.Seq < last.Seq || rl.bytes != size)
 }

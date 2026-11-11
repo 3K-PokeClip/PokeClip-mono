@@ -44,7 +44,8 @@ func TestRestoreLongSessionDoesNotStallOtherSessions(t *testing.T) {
 	b.contiguous(longSessionRows+1, 2, 600*time.Second+(longSessionRows+1)*step, up, pending)
 	live := b.liveChain(passed...)
 	b.uploadAt(live, 0, longSessionRows+1)
-	b.u.sessions.setRestored("S-other", restoredLink{link: playback.Link{Seq: 1, SessionID: "S-other"}})
+	_, _, gen := b.u.sessions.tableKeys("S-other")
+	b.u.sessions.setRestored("S-other", gen, restoredLink{link: playback.Link{Seq: 1, SessionID: "S-other"}})
 	b.restore()
 	b.queued()
 

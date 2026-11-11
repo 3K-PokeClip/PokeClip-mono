@@ -54,8 +54,11 @@ func TestCommittedCursorEqualsLedgerCursorPG(t *testing.T) {
 				return st, nil
 			}
 			ctx := context.Background()
+			// 조각 파일명 시각은 한 기준(base)에서 잰다 — 조각마다 지금을 다시 잡으면 앞 조각의 Handle · LoadCursor(PG 왕복 · race)
+			// 경과가 파일명 간격에 섞여 귀속 위치가 그만큼 밀린다(PR 종결 r3 cc M — 병렬 전체 실행에서 14315 · 14171).
+			base := time.Now()
 			for _, ago := range []time.Duration{60 * time.Second, 56 * time.Second, 46 * time.Second} { // 셋째는 drift +6초
-				if err := f.ix.Handle(ctx, f.segment(ago, tt.reason)); err != nil {
+				if err := f.ix.Handle(ctx, f.segment(ago+time.Since(base), tt.reason)); err != nil {
 					t.Fatalf("Handle 실패: %v", err)
 				}
 				ledger, err := f.store.LoadCursor(ctx, f.stream)

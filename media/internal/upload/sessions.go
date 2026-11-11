@@ -46,7 +46,8 @@ type sessionEntry struct {
 	offsets map[int64]time.Duration
 	// pinned 는 고정 줄이다(seq → pos) — mtxi 를 못 읽어 도장을 기대값으로 고정한 조각이다.
 	pinned map[int64]time.Duration
-	// tableSeen 은 그 회차의 마지막 실시간 ③ 요청 시각이다 — 표의 수명 기준이다.
+	// tableSeen 은 그 회차의 마지막 실시간 ③ 요청 시각이다 — 표의 수명 기준이다. 복원이 표 없는 · 수명이 지난 표에 쓰면 그 시각이고,
+	// 영값이면 표가 없다(수명이 표를 치우면 영값으로 되돌린다).
 	tableSeen time.Time
 	// tableGen 은 표의 세대다 — 몫이 생길 때와 수명이 표를 치울 때 새 값을 받는다. 복원이 베낀 표가 덩어리를 쓰는 사이 치워졌는가를
 	// 가른다(recordRestored).
@@ -333,14 +334,23 @@ func (m *sessionMemory) forget(sessionID string) {
 //	sessionInit 확정과 마지막 실시간 ③ 요청 중 늦은 쪽 — 회차가 살아 있는 동안은 남는다
 //	            (24시간 넘는 방송에서 확정값이 사라지면 그 뒤 실시간 ③ 이 전부 보류로 샌다)
 //	보류 목록   마지막 보류
+//
+// 표를 치우면 표의 수명 기준도 영값(표 없음)으로 되돌린다. 표가 없는 몫(tableSeen 영값 — 줄이 하나도 없다)은 치울 줄이 없어 세대를
+// 바꾸지 않고, 복원 기억(불일치 · 실패 이력)만 다음 시도 시각부터 센다(PR 종결 r3 보안 L1 · cc L — 영값 · 옛 기준을 그대로 세면 tick
+// 마다 만료라 백오프가 매번 지워진다).
 func (m *sessionMemory) evict(now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, e := range m.byID {
-		if m.expired(e.tableSeen, now) {
+		switch {
+		case e.tableSeen.IsZero():
+			if m.expired(e.restoreNext, now) {
+				e.mismatches, e.restoreFails, e.restoreNext = nil, 0, time.Time{}
+			}
+		case m.expired(e.tableSeen, now):
 			e.offsets, e.pinned, e.breaks, e.restored, e.mismatches = nil, nil, nil, nil, nil
 			e.restoreFails, e.restoreNext = 0, time.Time{}
-			e.tableGen = m.nextTableGen()
+			e.tableSeen, e.tableGen = time.Time{}, m.nextTableGen()
 		}
 		if m.expired(later(e.initSeen, e.tableSeen), now) {
 			e.initSHA = nil
@@ -389,23 +399,23 @@ func (e *sessionEntry) empty() bool {
 // 덩어리 사이에 수명이 표를 치우면(evict — 표 세대가 바뀐다) 남은 덩어리를 쓰지 않고 0 을 돌려준다(PR 종결 r2 cx H). 치움은 이미 쓴
 // 큰 seq 줄 · 끊김 줄을 함께 지우므로, 작은 seq 덩어리를 마저 쓰면 큰 seq 가 그 덩어리 끝 줄의 보정값으로 「아는」 것처럼 보인다.
 // 멈추면 이 복원이 쓴 줄은 하나도 남지 않아 모든 seq 가 「모름」 이다 — 스위퍼의 표 없는 ③ 작업이 복원을 다시 깨운다. 세대 대조는
-// 덩어리 잠금 안의 비교 하나라 잠금을 더 오래 쥐지 않는다.
-func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, now time.Time) int {
+// 덩어리 잠금 안의 비교 하나라 잠금을 더 오래 쥐지 않는다. 돌려주는 세대는 베낀 표의 세대다 — 복원 링크도 같은 세대 대조 아래에서만
+// 게시한다(setRestored · PR 종결 r3 cx H).
+func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, now time.Time) (written int, gen uint64) {
 	lines, breaks, gen := m.tableKeys(sessionID)
 	unknown := unknownLinks(links, lines, breaks)
 	slices.SortStableFunc(unknown, func(a, b playback.Link) int { return cmp.Compare(a.Seq, b.Seq) })
-	written := 0
 	for to := len(unknown); to > 0; to -= restoredChunk {
 		n, ok := m.writeRestored(sessionID, gen, unknown[max(to-restoredChunk, 0):to], now)
 		if !ok {
-			return 0
+			return 0, gen
 		}
 		written += n
 	}
 	if len(unknown) == 0 {
 		m.writeRestored(sessionID, gen, nil, now)
 	}
-	return written
+	return written, gen
 }
 
 // restoredChunk 는 복원 줄을 한 번 잠가 쓰는 링크 수다 — 맵 쓰기 이만큼은 수백 µs 안이다.
@@ -456,7 +466,8 @@ func unknownLinks(links []playback.Link, lines, breaks []int64) []playback.Link 
 }
 
 // writeRestored 는 복원 줄 한 묶음을 쓰고 적은 줄 수를 돌려준다. 베낀 뒤 실시간 요청이 그 seq 에 줄을 적었으면 그 줄을 둔다(실시간
-// 값이 정본이다). 표가 베낀 세대(gen)가 아니면(그사이 치워졌다) 쓰지 않고 거짓이다.
+// 값이 정본이다). 표가 베낀 세대(gen)가 아니면(그사이 치워졌다) 쓰지 않고 거짓이다. 표가 없거나(영값) 수명이 이미 지났으면 수명을
+// 지금부터 센다 — 옛 기준이면 다음 tick 이 방금 쓴 줄을 치워 복원이 tick 마다 되풀이된다(PR 종결 r3 cc L).
 func (m *sessionMemory) writeRestored(sessionID string, gen uint64, links []playback.Link, now time.Time) (int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -482,17 +493,24 @@ func (m *sessionMemory) writeRestored(sessionID string, gen uint64, links []play
 			e.pinned[l.Seq] = l.Pos
 		}
 	}
-	if e.tableSeen.IsZero() {
+	if m.expired(e.tableSeen, now) {
 		e.tableSeen = now
 	}
 	return written, true
 }
 
-// setRestored 는 복원이 정한 그 회차의 마지막 링크를 적는다.
-func (m *sessionMemory) setRestored(sessionID string, rl restoredLink) {
+// setRestored 는 복원이 정한 그 회차의 마지막 링크를 적는다. 표가 그 복원이 베낀 세대(gen)가 아니면(표 줄을 쓰는 사이 · 쓴 뒤 수명이
+// 표를 치웠다) 적지 않고 거짓이다(PR 종결 r3 cx H). 치움이 지운 표 위의 링크를 남기면 다음 복원이 그 링크에서 잇느라 앞 구멍을
+// 건너뛴다 — 그 구멍 행은 줄도 작업도 없이 남는다.
+func (m *sessionMemory) setRestored(sessionID string, gen uint64, rl restoredLink) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.entry(sessionID).restored = &rl
+	e, ok := m.byID[sessionID]
+	if !ok || e.tableGen != gen {
+		return false
+	}
+	e.restored = &rl
+	return true
 }
 
 // restoredLink 는 그 회차의 복원 링크다 — 맵 읽기 하나라 인덱서 루프에서 불러도 막히지 않는다.
