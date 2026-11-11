@@ -1259,6 +1259,9 @@ https://app.pokeclip.com`)를 실어 요청합니다. 요청은 「접속법」 
 c_since_ms="$(($(date -u +%s) * 1000))"
 c_since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 c_get() {  # c_get <라벨> <경로>
+  # 쿠키 파일이 없으면 curl 은 쿠키 없이 보내고, 서명 거절 403 이 「함수
+  # 생성 아님」 판정을 거짓으로 통과시킨다 — 그래서 없으면 멈춘다.
+  test -s "${jar:-}" || { echo "$1 jar 없음 — T2 와 같은 발급으로 다시 만듦"; return 1; }
   curl --path-as-is -b "${jar}" -H 'Origin: https://app.pokeclip.com' \
     --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
     -D "${evidence}/dvr-c-$1.h" -w "$1 %{http_code}" \
@@ -1404,18 +1407,27 @@ id 입니다.
   c_get closed-eq "$(seg "${floor}")"
   c_get vod "/vod/${stream}/<head>/index.m3u8"
 } | tee -a "${evidence}/dvr-c.txt"
-rm -f "${jar}" && test ! -e "${jar}" && echo removed
 ```
 
 | 라벨 | 통과 |
 |---|---|
-| `closed-below` | `xcache` 가 함수 생성이 아님(키가 지워져 함수 통과). 조각이 없으면 버킷 `403` |
-| `closed-eq` | `200` · `acao` · `acac` 한 벌 |
+| `closed-below` | `xcache` 가 함수 생성이 아님(키가 지워져 함수 통과). 조각이 없으면 버킷 `403` — 같은 쿠키로 `closed-eq` 가 `200` 이어야 그 `403` 이 서명 거절이 아니라 버킷 몫입니다 |
+| `closed-eq` | `200` · `acao` · `acac` 한 벌(쿠키가 유효하다는 양성 대조) |
 | `vod` | `200` · `acao` · `acac` 한 벌(`/vod` 무변) |
 
 `closed-below` 가 아직 함수 404 면 KVS 삭제가 엣지에 덜 퍼진 것일 수
 있습니다(결정 8 — 그동안의 VOD 조각 404 는 웹의 기존 재시도가 약 60초
-가립니다). 2분 뒤 다시 보고, 그래도 함수 404 면 끄고 kty 에게 보고합니다.
+가립니다). 2분 뒤 같은 셸에서 위 블록을 다시 돌려(쿠키 파일은 아직
+지우지 않습니다) `closed-eq` 가 `200` 인 채 `closed-below` 를 보고, 그래도
+함수 404 면 끄고 kty 에게 보고합니다.
+
+재측정까지 끝나면 쿠키 파일을 지웁니다. 「/dvr 하한 끄기」 확인도 쿠키가
+필요하므로, 그 전에 끌 일이 생기면 지우지 말고 끄기 확인까지 마친 뒤
+지웁니다.
+
+```shell
+rm -f "${jar}" && test ! -e "${jar}" && echo removed
+```
 
 ### /dvr 하한 끄기
 
@@ -1429,8 +1441,24 @@ edge_plan false dvr-off
 terraform -chdir=infra/terraform/prod/edge apply "${evidence}/dvr-off.plan"
 ```
 
-apply 가 끝나면(Deployed) `c_get below1 "${below}"` 의 `xcache` 가 함수 생성이
-아닌지 봅니다. 다시 켜는 것은 원인을 고친 뒤 6.5(2단) · 6.6(C′)입니다.
+apply 가 끝나면(Deployed) 확인합니다. 확인에는 유효한 서명 쿠키가
+필요합니다 — 쿠키 없는 요청은 함수 전에 서명 거절 `403` 이 되어 「함수
+생성 아님」 을 늘 만족하기 때문입니다. 쿠키 파일이 없거나 새 셸이면
+「경로 우회 시험」 T2 와 같은 발급으로 `jar` 를 다시 만들고(`c_get` 은
+`jar` 가 없으면 멈춥니다), 같은 셸에 `c_get` · `c_line` · `c_val` 을 다시
+정의합니다.
+
+```shell
+{
+  c_get off-eq "$(seg "${floor}")"
+  c_get off-below "${below}"
+} | tee -a "${evidence}/dvr-off.txt"
+rm -f "${jar}" && test ! -e "${jar}" && echo removed
+```
+
+통과: `off-eq` 가 `200` · `acao` · `acac` 한 벌(쿠키가 유효함)이고,
+`off-below` 의 `xcache` 가 함수 생성이 아님(조각이 있으면 `200`, 없으면 버킷
+`403`). 다시 켜는 것은 원인을 고친 뒤 6.5(2단) · 6.6(C′)입니다.
 
 ### /dvr 하한 롤백
 
