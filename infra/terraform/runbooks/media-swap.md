@@ -2461,9 +2461,37 @@ git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커
 
 이 판정은 조상 관계만 봅니다. PDT PR 을 되돌린(revert) 커밋 뒤의 빌드도 머지
 커밋을 조상으로 두므로 「하한 이상」 으로 나옵니다. 그래서 되돌림이 있었으면
-조상 관계와 함께 이미지 라벨 `com.pokeclip.timing.readable` 이 `null,2` 인지
-둘 다 봅니다(아래 「스위치 2 선행 조건」 의 `docker image inspect` 명령). 되돌린 설치 묶음은
-기동 전 검사가 없어 쓰기자 거부 한 겹만 남습니다.
+조상 관계와 함께 다음도 봅니다.
+
+*   **사이드카 · 검사 핀(`sidecar` · `timing_guard` — 둘 다 `media-sidecar`
+    저장소):** **올릴 후보 이미지**를 다이제스트로 받아 라벨
+    `com.pokeclip.timing.readable` 이 `null,2` 인지 봅니다. 아래 「스위치 2
+    선행 조건」 의 명령은 지금 떠 있는 사이드카를 보므로 이 자리에 쓰지
+    않습니다. ECR 로그인은 [prod 산출물 런북](prod-artifacts.md) 「ECR
+    로그인」 그대로입니다.
+
+    ```shell
+    docker pull --platform linux/arm64 <repo_urls["media-sidecar"]>@<후보 다이제스트>
+    docker image inspect --format \
+      '{{ index .Config.Labels "com.pokeclip.timing.readable" }}' \
+      <repo_urls["media-sidecar"]>@<후보 다이제스트>
+    # 기대: null,2 (빈 값 · <no value> 면 되돌린 판 — 올리지 않음)
+    ```
+
+*   **설치 묶음(`bundle`):** 라벨이 없어 이미지로는 되돌린 판인지 가릴 수
+    없습니다. 빌드 출처로 봅니다 — PDT PR 머지 커밋 뒤 빌드 커밋까지 그
+    PR 을 되돌린 커밋이 없어야 하고, 빌드 커밋의 시작 스크립트에 기동 전
+    검사가 있어야 합니다.
+
+    ```shell
+    git log --oneline --grep='^Revert' <PDT PR 머지 커밋 SHA>..<묶음 빌드 커밋 SHA>
+    # 기대: 이 PR 을 되돌린 줄 없음
+    git show <묶음 빌드 커밋 SHA>:infra/media-host/bin/start-media.sh \
+      | grep -c 'timing-preflight'
+    # 기대: 1 이상
+    ```
+
+    되돌린 설치 묶음은 기동 전 검사가 없어 쓰기자 거부 한 겹만 남습니다.
 
 하한이 걸리는 tfvars 칸은 셋입니다.
 
@@ -2564,12 +2592,28 @@ PDT 머지 뒤의 모든 사이드카 · 설치 묶음 이미지(다른 수정 �
 0 이 정상이고 관측값이 아닙니다. 하한 거부 수는 커밋 전 세션 판정에서
 나오는 줄이라 재시도 · 버려진 시도도 섞입니다 — 고유 수는 거부된 행 수의
 상한이고, 판 2 뒤 `timing_reset` 까닭 `floor_rejected` 가 커밋된 행만 셉니다.
+
+**길들이기 동안 하한 거부가 나면(한계 — kty 2026-11-12 (나)).** c0 판 NULL
+귀속 식은 `max(A + U, f)` 입니다(A = 기저 세션 마지막 귀속 행 PDT + 길이 ·
+U = 그 뒤 비귀속 행 길이 합 · f = 파일 이름 벽시각). 방송 중 귀속 하한 거부
+행도 U 에 들어, 다음 귀속 행 PDT 가 그 행 길이만큼 벽시각보다 앞서고 방송
+끝까지 남습니다 — 장부 PDT 를 벽시각으로 읽는 클립 · 채팅 시각이 그만큼
+어긋납니다. 그 행이 계승 개시 행이면 새 세션의 `first_pdt` 에도 같은 차가
+듭니다. 대신 그 사슬의 VOD 동결은 S7 을 지납니다 — U 를 빼면 VOD 가 S7 로
+실패해 이 앞섬을 받아들였습니다. 그래서 이 차는 **c0 결함으로 세지 않습니다**.
+같은 스트림의 `legacy_unattributed_sum`(`u_ms` — U 가 생긴 귀속 행에만) ·
+`session_floor_rejected` 줄과 맞춰 봅니다. prod 9일 · 색인 조각 4,616 에서
+하한 거부는 0 건이었습니다(2026-11-12 측정). 정본은 media README 「PDT 알려진
+한계」 입니다.
 이 동안은 출시 이미지로 되돌려도 됩니다(위 상태 표). 기간은 **방송
 3회 이상(1시간 넘는 방송 1회 · 재접속 또는 TD 분할이 낀 방송 1회 포함)과
 최소 48시간을 둘 다 채운 뒤**입니다(kty 2026-11-11 — K2). 둘 다 채운 뒤에
 스위치 2 로 갑니다.
 
-**스위치 2 선행 조건(5).** 모든 Media 상자의 사이드카 라벨에 2 가 있습니다.
+**스위치 2 선행 조건(5).** 판 2 회차에 하한 거부 행이 끼면 VOD 동결이
+S7(B8 조건 1)로 실패하는 결함(재현 2026-11-12 — media README 「PDT 알려진
+한계」)의 수정이 prod 에 배포되기 전에는 스위치 2 를 올리지 않습니다 — Jira
+후속 티켓 POK-567. 그리고 모든 Media 상자의 사이드카 라벨에 2 가 있습니다.
 상자마다 SSM 읽기 명령으로 확인하고 결과를 기록합니다.
 
 ```shell
