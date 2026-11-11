@@ -15,7 +15,9 @@ import (
 // 이 파일은 ReadTiming(조각 하나의 시각 사실 판독 — 설계 r7 2.2 · 3절)을 본다.
 //
 // 실물 둘을 더 둔다 — 둘 다 r6 실측(t9vm, 포크 v1.21.1-pokeclip.2 녹화 2026-11-02)의 대표 조각을
-// 이름만 바꿔 그대로 옮긴 것이다(`60_pdt_r6_measure/t9vm/raw/keep/index.txt`):
+// 이름만 바꿔 그대로 옮긴 것이다(대응표는 실험 루트
+// `~/Documents/pokeclip-empirical/runs/2026-11-pdt-producer/r6-measure/t9vm/raw/keep/index.txt` —
+// 조각 원본은 실험 루트에 두지 않았다, testdata 가 같은 바이트다):
 //
 //	t9slowP2_c806cfd1_n0_audio_only.mp4    영상 트랙은 있으나 표본이 없는 인스턴스(소리 225ms)
 //	t9slow96_a627ef82_n0_short_instance.mp4 재시작 6초 만에 다시 재시작한 짧은 인스턴스(영상 400ms)

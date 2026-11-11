@@ -27,7 +27,7 @@ prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니
 
 | 단계 | 하는 일 | 선행 |
 |---|---|---|
-| O7c | 이미지 10종(아래 「이미지」 표의 8종 + 설치 묶음 · 루프백 송출기 — 응답기 · 워커 이미지(`prod/workers` 용)를 하면 그만큼 더, 최대 13종) 푸시 · 다이제스트 기록. `media-sidecar` 는 `prod/media` 키 둘(`sidecar` · `timing_guard`)에 들어갑니다(아래 「검사 핀」) | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
+| O7c | 이미지 10종(아래 「이미지」 표의 저장소 키 11개 가운데 응답기 · 워커 셋(`media-ingest-auth` · `render` · `upload`)을 뺀 8종 + 설치 묶음 · 루프백 송출기 — 응답기 · 워커 이미지(`prod/workers` 용)를 하면 그만큼 더, 최대 13종) 푸시 · 다이제스트 기록. `media-sidecar` 는 `prod/media` 키 둘(`sidecar` · `timing_guard`)에 들어갑니다(아래 「검사 핀」) | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
 | O7f 의 5 | apex 랜딩 업로드 · 무효화 | `prod/edge` 적용 · 2번의 업로드 제외 경로 확인(I2-8) |
 
 O7c 는 O7d(next · auth · clip · chat-collector · chat-detector 태스크 정의가
@@ -263,7 +263,7 @@ SQL 적용 뒤에만 띄웁니다.
 M9 에서 `prod/registry` 에 더한 저장소 둘입니다. 둘 다 `prod/media` apply
 (O7e)의 입력이라 O7e 전에 올립니다. 먼저 `prod/registry` 재적용(저장소 둘
 생성)이 끝나야 합니다([prod/registry](../prod/registry/README.md) 「적용」).
-위 「언제」 · 아래 「기록」 의 10종에 든 둘입니다(「이미지」 표의 8종 + 이 둘).
+위 「언제」 · 아래 「기록」 의 10종에 든 둘입니다(「이미지」 표에서 응답기 · 워커 셋을 뺀 8종 + 이 둘).
 
 | 저장소 키 | 원천 | 선행 |
 |---|---|---|

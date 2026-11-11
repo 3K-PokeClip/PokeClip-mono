@@ -18,12 +18,12 @@ import (
 //
 // 입력(testdata/pdt_replay/ — 원본 경로 · sha256 · 재생성 도구는 실험 루트
 // ~/Documents/pokeclip-empirical/runs/2026-11-pdt-producer/c3b/ 기록 · 해시는 원본 CRLF 기준이다):
-//   - 판정 입력: OBS 실송출 조각 표 obs_{x264,vt}_run_table.csv(60_pdt_r6_measure/obs/raw/*/out/
+//   - 판정 입력: OBS 실송출 조각 표 obs_{x264,vt}_run_table.csv(실험 루트 r6-measure/obs/raw/*/out/
 //     run_table.csv 사본 — 16 접속 · 232 조각). 접속 안은 같은 녹화기 이어짐, 접속 사이는 실제 틈이다.
 //   - 주입표 injections.csv: 접속마다 소리 머리 가운데 행에 표식 바뀜 · mtxi 지움, 소리 머리 · 영상 머리
 //     가운데 행에 구멍 g ∈ {1, 17, 30, 50}ms(뽑는 규칙은 실험 루트 c3b/tools/make_injections.py).
-//   - 사건 단언 · 참고 입력: rec_t9*_table.csv(rec/raw/out 사본 — ffmpeg 합성) · t9vm_*_table.csv
-//     (t9vm scan.jsonl 을 c3b/tools/t9vm_to_replay.py 로 run_table 꼴로 바꾼 것 — 머리는 트랙 첫 표본
+//   - 사건 단언 · 참고 입력: rec_t9*_table.csv(r6-measure/rec/raw/out 사본 — ffmpeg 합성) · t9vm_*_table.csv
+//     (r6-measure/t9vm scan.jsonl 을 c3b/tools/t9vm_to_replay.py 로 run_table 꼴로 바꾼 것 — 머리는 트랙 첫 표본
 //     시작에서 ReadTiming 과 같은 규칙으로 정했고 keep 대표 조각 8개의 ReadTiming 판독과 같다).
 //   - 사건 단언표 events.csv.
 //
