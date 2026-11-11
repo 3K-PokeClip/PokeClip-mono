@@ -82,6 +82,7 @@ variables {
   mediamtx_image                = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   nginx_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222"
   sidecar_image                 = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  timing_guard_image            = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:6666666666666666666666666666666666666666666666666666666666666666"
   loopback_sender_image         = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-loopback-sender@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   rds_endpoint                  = "pokeclip-prod-db.example.ap-northeast-2.rds.amazonaws.com"
   rds_db_name                   = "pokeclip"
@@ -172,6 +173,17 @@ run "rejects_image_without_digest" {
   }
 
   expect_failures = [var.sidecar_image]
+}
+
+# 검사 핀(POK-196 PDT 기동 전 검사)도 다이제스트 고정이다 — 태그면 같은 태그 재푸시로 하한 아래 이미지가 핀에 들어온다.
+run "rejects_timing_guard_image_without_digest" {
+  command = plan
+
+  variables {
+    timing_guard_image = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar:latest"
+  }
+
+  expect_failures = [var.timing_guard_image]
 }
 
 run "rejects_bundle_image_without_digest" {

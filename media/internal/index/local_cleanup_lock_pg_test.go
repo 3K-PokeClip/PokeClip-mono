@@ -311,7 +311,7 @@ func lcNonBlockingOps() []lcOp {
 			return err
 		}},
 		{"(b) UpdateTail(T)", both, func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fix lcLockFix) error {
-			ok, err := NewPGStore(pool, nil, nil).UpdateTail(ctx, fix.stream, lcSeqT, 4000, 2000)
+			ok, err := NewPGStore(pool, nil, nil).UpdateTail(ctx, fix.stream, lcSeqT, 4000, 2000, nil)
 			if err == nil && !ok {
 				t.Error("UpdateTail updated = false, want true")
 			}

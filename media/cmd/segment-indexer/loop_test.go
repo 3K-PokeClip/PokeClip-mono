@@ -49,7 +49,7 @@ func (s *fakeStore) LoadCursor(_ context.Context, streamID string) (index.Cursor
 	return index.Cursor{NextSeq: tail.Seq + 1, Tail: &index.TailRow{
 		Seq: tail.Seq, StartPTSMS: tail.StartPTSMS, StartWallUTC: tail.StartWallUTC,
 		DurationMS: tail.DurationMS, Bytes: tail.Bytes, LocalPath: tail.LocalPath,
-		UploadState: tail.UploadState, S3Key: tail.S3Key,
+		UploadState: tail.UploadState, S3Key: tail.S3Key, Timing: tail.Timing.Facts,
 	}}, nil
 }
 
@@ -72,8 +72,16 @@ func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed, _ in
 		return index.InsertInserted, index.InsertCommit{}, err
 	}
 	s.inserts++
+	// 위치 · 길이는 store 가 정해 커밋 값으로 돌려준다(POK-196 PDT c5 — 인덱서 커서는 이 값으로 전진한다). 이 가짜는 판 NULL
+	// 비귀속 행의 위치 식(바로 앞 행 끝)만 흉내 낸다.
+	r.StartPTSMS = 0
+	for _, prev := range s.rows {
+		if prev.StreamID == r.StreamID && prev.Seq == r.Seq-1 {
+			r.StartPTSMS = prev.StartPTSMS + int64(prev.DurationMS)
+		}
+	}
 	s.rows = append(s.rows, r)
-	return index.InsertInserted, index.InsertCommit{}, nil
+	return index.InsertInserted, index.InsertCommit{DurationMS: r.DurationMS, StartPTSMS: r.StartPTSMS}, nil
 }
 
 // rowsOf 는 그 스트림에 들어간 행이다(넣은 차례).
@@ -89,7 +97,7 @@ func (s *fakeStore) rowsOf(streamID string) []index.Record {
 	return out
 }
 
-func (s *fakeStore) UpdateTail(context.Context, string, int64, int32, int64) (bool, error) {
+func (s *fakeStore) UpdateTail(context.Context, string, int64, int32, int64, *int64) (bool, error) {
 	return true, nil
 }
 
@@ -214,7 +222,7 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 	opt.SegmentRoot = f.root
 	// up 은 nil 이다 — 이 파일이 보는 것은 루프의 신호 처리이지 업로드 정책이 아니다.
 	// nil 이면 아무것도 요청하지 않는 기본값이 끼워진다(indexer.New).
-	ix := indexer.New(f.store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, nil, opt, log)
+	ix := indexer.New(f.store, func(string) (int64, error) { return 4000, nil }, noTimingFacts, noopAdopter{}, nil, nil, opt, log)
 
 	f.deps = loopDeps{
 		ix:          ix,

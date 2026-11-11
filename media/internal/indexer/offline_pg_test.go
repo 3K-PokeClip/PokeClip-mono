@@ -45,7 +45,7 @@ func newOfflinePG(t *testing.T, name string, p phase) *offlinePG {
 	opt := testOptions()
 	opt.SeedEnabled = true
 	opt.IdleTimeout = 10 * time.Second
-	f.ix = New(f.store, func(string) (int64, error) { return 4000, nil }, f.adopt, nil, f.observer, opt, slog.New(f.logs))
+	f.ix = New(f.store, func(string) (int64, error) { return 4000, nil }, noTimingFacts, f.adopt, nil, f.observer, opt, slog.New(f.logs))
 	return &offlinePG{phaseFixture: f, base: time.Now().UTC().Add(-30 * time.Second).Truncate(time.Second)}
 }
 

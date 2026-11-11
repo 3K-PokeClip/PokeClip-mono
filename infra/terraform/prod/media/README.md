@@ -66,6 +66,7 @@ tfvars 에 둡니다.
 | `nginx` | `media-nginx` |
 | `sidecar` | `media-sidecar`(janitor 도 이 이미지) |
 | `loopback_sender` | `media-loopback-sender` |
+| `timing_guard` | `media-sidecar` — 기동 전 검사 핀(POK-196 PDT). **필수**입니다(`optional` 아님 — 없으면 plan 이 필수 속성 오류로 멈춥니다). c0 하한 이상 이미지만 두고, 사이드카를 출시 이미지로 내릴 때도 그대로 둡니다([Media 교체 런북](/infra/terraform/runbooks/media-swap.md) 「PDT 하한 판정」) |
 | `ingest_auth` | `media-ingest-auth` — 비우면 렌더하지 않습니다(M15) |
 
 *   `media-host-bundle` · `media-loopback-sender` 는 M9 에서 `prod/registry` 에
@@ -75,6 +76,10 @@ tfvars 에 둡니다.
 *   다이제스트는 O7c 의
     [prod 산출물 올리기 런북](/infra/terraform/runbooks/prod-artifacts.md)이
     푸시하고 기록한 값입니다. 모두 arm64 단일 변형이어야 합니다.
+*   `timing_guard` 는 PDT 머지 뒤 **첫 `prod/media` plan 전에** 채웁니다.
+    Media 교체 런북 「PDT 배포 순서」 3(c0 교체)보다 앞선 다른 작업(POK-525
+    교체 · `instances` 변경 등)의 plan 도 이 키를 요구합니다. 떠 있는 상자는
+    `user_data` 가 `ignore_changes` 라 값을 채워도 바뀌지 않습니다.
 
 ## 값과 적용
 

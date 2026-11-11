@@ -14,6 +14,8 @@ locals {
     sidecar         = "media-sidecar"
     loopback_sender = "media-loopback-sender"
     ingest_auth     = "media-ingest-auth"
+    # 기동 전 검사 핀(POK-196 PDT) — 사이드카 저장소의 다른 다이제스트다.
+    timing_guard = "media-sidecar"
   }
 
   # 다이제스트가 빈 응답기는 `…@` 로 조립하지 않고 빈 값으로 넘긴다(렌더 안 함).
@@ -56,6 +58,7 @@ module "media_host" {
   mediamtx_image        = local.images.mediamtx
   nginx_image           = local.images.nginx
   sidecar_image         = local.images.sidecar
+  timing_guard_image    = local.images.timing_guard
   loopback_sender_image = local.images.loopback_sender
   ingest_auth_image     = local.images.ingest_auth
 

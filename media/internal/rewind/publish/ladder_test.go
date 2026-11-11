@@ -108,6 +108,36 @@ func TestLadderHoldAgeThresholds(t *testing.T) {
 	}
 }
 
+// 판 2 PDT 가 벽시계보다 늦은 송출(POK-196 PDT 설계 r7 예측표 P14 — 흐름 L < 0 · K4 (A) 의 E7) — 사다리는 판을 모르고
+// dueAt = PDT + 길이 + E2E_BUDGET 으로만 잰다. 그래서 행 6 의 PDT 가 140ms(θ 시험 초기값 — kty K3) 앞서 적히면 L1 · L2 가
+// 벽시계로 140ms 일찍 선다(옛 문턱 0.5초 · 2.0초 → dueOf6 + 360ms · + 1860ms). 이 일찍 섬은 고치지 않고 한계로 둔다 —
+// 예측표 P14 의 판별 신호는 GAP 행 가운데 ③ 가 뒤에 uploaded 된 행이다. 이 시험은 그 크기(140ms 그대로 · 더 커지지 않음)를
+// 고정한다.
+func TestLadderStageOneLeadsByPDTLag(t *testing.T) {
+	const lag = 140 * time.Millisecond
+	tests := []struct {
+		name          string
+		sinceDue      time.Duration // 옛 dueOf6 부터의 벽시계
+		expedite, gap bool
+	}{
+		{"L1_바로_앞", 359 * time.Millisecond, false, false},
+		{"L1_문턱_140ms_일찍", 360 * time.Millisecond, true, false},
+		{"L2_바로_앞", 1859 * time.Millisecond, true, false},
+		{"L2_문턱_140ms_일찍", 1860 * time.Millisecond, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snap := stalledRows()
+			snap.rows[6].PlaybackPDT = snap.rows[6].PlaybackPDT.Add(-lag)
+			snap.rows[6].TimingVersion = 2
+
+			_, step := newLadderPublisher(&logRecorder{}).EvaluateLadder(t.Context(), LadderState{}, ladderInput(snap, dueOf6.Add(tt.sinceDue)))
+
+			wantStep(t, step, 6, tt.expedite, tt.gap)
+		})
+	}
+}
+
 // holdAge 가 서지 않는 행(설계 4.6.2 · 체크리스트 A-4 2) — 머리 다음 행이 없거나(그 뒤 행이 먼저 있어도 그 행으로
 // 재지 않는다), PDT · 길이가 없으면(비귀속 NULL 행 포함) holdAge 가 없어 L1 · L2 가 없다.
 func TestLadderNeedsHeadNextRowWithPDTAndLength(t *testing.T) {

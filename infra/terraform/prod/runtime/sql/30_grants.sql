@@ -10,7 +10,8 @@
 -- (ADR-0006 개정 — docs/decisions/2026-10-26-media-indexer-m6-delete-grants.md). TRUNCATE · DDL 은 없고, seq 하한
 -- 표는 SELECT 만이다(하한은 stream_segments 트리거가 정의자 권한으로 올린다). stream_edge_bounds 의 넷
 -- (SELECT · INSERT · UPDATE · DELETE)은 /dvr 하한 원장 몫이다(POK-525 — DELETE 는 해제 유예가 지난 행 정리 ·
--- ADR-0006 둘째 개정 — docs/decisions/2026-11-04-media-indexer-edge-bounds-grants.md).
+-- ADR-0006 둘째 개정 — docs/decisions/2026-11-04-media-indexer-edge-bounds-grants.md). PDT 게이트 표는 SELECT
+-- 만이다(스위치 · 래치는 마스터가 SET ROLE media_owner 로 바꾼다 — 설계 r7 9.3).
 --
 -- 목록 정본은 media 쪽이다. media_indexer = media/internal/pgtest/role.go 의 mediaIndexerGrants,
 -- media_janitor = media/internal/index/local_cleanup_role_pg_test.go 의 lcRoleGrants. 이 파일의 GRANT 가
@@ -32,6 +33,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stream_published_gaps TO media_indexer;
 GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer;
+GRANT SELECT ON stream_timing_gate TO media_indexer;
 
 GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
 GRANT SELECT ON stream_published_gaps TO media_janitor;

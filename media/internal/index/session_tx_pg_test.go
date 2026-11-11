@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +62,8 @@ func (d registryDecider) Decide(ctx context.Context, tx pgx.Tx, in SessionInput,
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
 		RoundID:            dec.RoundID,
+		NewRound:           dec.NewRound,
+		FloorRejected:      dec.FloorRejected,
 		Plan:               dec,
 	}, nil
 }
@@ -140,6 +143,8 @@ type fixtureSession struct {
 	state          string // "" 면 DDL 기본값 'live'
 	firstPDT       time.Time
 	targetDuration int32 // 0 이면 DDL 기본값 6
+	// roundID 는 round_id 다("" 면 NULL). 행을 넣을 때 정한다 — 회차 불변 트리거(roundFrozenDDL)가 뒤 UPDATE 를 막는다.
+	roundID string
 }
 
 func putSession(t *testing.T, pool *pgxpool.Pool, s fixtureSession) {
@@ -158,9 +163,9 @@ func putSession(t *testing.T, pool *pgxpool.Pool, s fixtureSession) {
 		firstPDT = &utc
 	}
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO stream_sessions (session_id, stream_id, started_at, state, first_pdt, target_duration)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		s.id, s.stream, s.startedAt.UTC(), state, firstPDT, td)
+		INSERT INTO stream_sessions (session_id, stream_id, started_at, state, first_pdt, target_duration, round_id)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))`,
+		s.id, s.stream, s.startedAt.UTC(), state, firstPDT, td, s.roundID)
 	if err != nil {
 		t.Fatalf("세션 픽스처 삽입 실패 id=%q: %v", s.id, err)
 	}
@@ -848,6 +853,9 @@ func TestDecisionRoundIDReachesStoreAndMatchesSessionRound(t *testing.T) {
 		if isNew := last.Opens && last.RoundID == *sess; isNew != (c.seq == 0) {
 			t.Errorf("%s: 「새 회차를 여는가」 = %v, want %v", c.name, isNew, c.seq == 0)
 		}
+		if last.NewRound != (c.seq == 0) {
+			t.Errorf("%s: NewRound = %v, want %v — Open 앞 판별(POK-196 PDT)이 Open 뒤 판별과 갈렸다", c.name, last.NewRound, c.seq == 0)
+		}
 	}
 }
 
@@ -865,6 +873,87 @@ func TestInsertRollsBackWhenDecisionRoundIDDiffersFromOpen(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("결정과 다른 회차로 개시가 커밋됐다")
+	}
+	for _, q := range []string{
+		`SELECT count(*) FROM stream_segments WHERE stream_id = $1`,
+		`SELECT count(*) FROM stream_sessions WHERE stream_id = $1`,
+	} {
+		var rows int
+		if err := pool.QueryRow(ctx, q, stream).Scan(&rows); err != nil {
+			t.Fatalf("행 수 조회 실패: %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("%s = %d, want 0(되돌려졌어야 한다)", q, rows)
+		}
+	}
+}
+
+// newRoundDroppingDecider 는 결정의 NewRound 를 옮기지 않는 어댑터의 흉내다(필드별 복사라 컴파일이 못 잡는다 — cm cc D1 ·
+// 보안 M-1). 계획(session.Decision)은 그대로라 Open 의 회차 대조는 지나간다.
+type newRoundDroppingDecider struct{ registryDecider }
+
+func (d newRoundDroppingDecider) Decide(ctx context.Context, tx pgx.Tx, in SessionInput, now time.Time) (SessionDecision, error) {
+	dec, err := d.registryDecider.Decide(ctx, tx, in, now)
+	dec.NewRound = false
+	return dec, err
+}
+
+// 새 회차 판별은 양방향이다 — 개시가 연 session_id 가 결정의 RoundID 와 같으면(새 회차) NewRound 도 참이어야 한다. NewRound 를
+// 잃은 개시는 판을 게이트가 아니라 기저 행에서 이어 새 회차를 스위치와 다른 판으로 쓸 수 있으므로, store 가 Open 뒤에 단언해
+// Insert 를 통째로 되돌린다. 잡는 결함: 단언이 「NewRound 참인데 회차가 다름」 한 방향뿐이면 이 개시가 커밋된다.
+func TestInsertRollsBackWhenOpenedNewRoundLacksNewRoundFlag(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	stream := sessionStream("new-round-dropped")
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
+	store := NewPGStore(pool, newRoundDroppingDecider{registryDecider{reg: reg}}, legacySegKey)
+
+	_, _, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
+
+	if err == nil || !strings.Contains(err.Error(), "새 회차 판별") {
+		t.Fatalf("Insert = %v, want 새 회차 판별 단언 오류", err)
+	}
+	for _, q := range []string{
+		`SELECT count(*) FROM stream_segments WHERE stream_id = $1`,
+		`SELECT count(*) FROM stream_sessions WHERE stream_id = $1`,
+	} {
+		var rows int
+		if err := pool.QueryRow(ctx, q, stream).Scan(&rows); err != nil {
+			t.Fatalf("행 수 조회 실패: %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("%s = %d, want 0(되돌려졌어야 한다)", q, rows)
+		}
+	}
+}
+
+// planRoundOpener 는 roundProbeDecider 의 Open 을 계획 안의 회차 그대로 부른다 — 장부가 든 RoundID 를 Open 의 대조에 넘기지
+// 않는 배선 결함의 흉내다(session 쪽 checkDecidedRound 를 지나간다).
+type planRoundOpener struct{ roundProbeDecider }
+
+func (d planRoundOpener) Open(ctx context.Context, tx pgx.Tx, dec SessionDecision, firstPDT time.Time) (string, error) {
+	plan, ok := dec.Plan.(session.Decision)
+	if !ok {
+		return "", fmt.Errorf("테스트 어댑터: 개시 계획이 session.Decision 이 아니다(%T)", dec.Plan)
+	}
+	return d.reg.Open(ctx, tx, plan, firstPDT)
+}
+
+// POK-196 PDT 병합 맞춤 — 새 회차 개시(NewRound)인데 결정의 RoundID 가 개시가 연 session_id 와 다르면, 판 · 이어 계산 회차를
+// 그 RoundID 로 정한 행이 세션과 다른 회차로 저장된다. store 가 Open 뒤에 단언해 Insert 를 통째로 되돌린다(Open 쪽 대조를
+// 건너뛴 어댑터에서도). 잡는 결함: 옛 꼴처럼 회차를 Open 이 돌려준 id 로 덮으면 단언이 사라져 커밋된다.
+func TestInsertRollsBackWhenNewRoundIDDiffersFromOpenedSession(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	stream := sessionStream("new-round-tampered")
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
+	var last SessionDecision
+	store := NewPGStore(pool, planRoundOpener{roundProbeDecider{registryDecider: registryDecider{reg: reg}, last: &last, tamper: "S-elsewhere"}}, legacySegKey)
+
+	_, _, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
+
+	if err == nil || !strings.Contains(err.Error(), "새 회차 판별") || !last.NewRound {
+		t.Fatalf("Insert = %v (NewRound %v), want 새 회차 RoundID 단언 오류", err, last.NewRound)
 	}
 	for _, q := range []string{
 		`SELECT count(*) FROM stream_segments WHERE stream_id = $1`,

@@ -80,13 +80,14 @@ variable "rewind_public_base_url" {
 }
 
 variable "image_digests" {
-  description = "Media 상자 이미지 다이제스트(sha256:<64자리>) — 저장소는 registry 출력 repo_urls. 응답기(ingest_auth)는 비우면 렌더하지 않는다(M15)."
+  description = "Media 상자 이미지 다이제스트(sha256:<64자리>) — 저장소는 registry 출력 repo_urls. 응답기(ingest_auth)는 비우면 렌더하지 않는다(M15). timing_guard 는 기동 전 검사 핀이다(POK-196 PDT — 사이드카 저장소의 c0 하한 이상 이미지 · 사이드카를 내릴 때도 내리지 않는다). bundle 도 c0 하한 이상만 둔다(runbooks/media-swap.md 「PDT 하한 판정」)."
   type = object({
     bundle          = string
     mediamtx        = string
     nginx           = string
     sidecar         = string
     loopback_sender = string
+    timing_guard    = string
     ingest_auth     = optional(string, "")
   })
 

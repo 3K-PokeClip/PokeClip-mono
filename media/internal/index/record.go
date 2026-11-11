@@ -30,8 +30,10 @@ const (
 
 // Record 는 stream_segments 표의 한 줄이며 필드가 컬럼과 1:1 대응한다.
 type Record struct {
-	StreamID     string
-	Seq          int64
+	StreamID string
+	Seq      int64
+	// StartPTSMS 는 입력이 아니라 Insert 트랜잭션의 산출이다 — 위치는 판과 무관하게 store 가 정한다(placement.go ·
+	// 계획 0절 6). 실어 보낸 값은 쓰이지 않고, 정해진 값은 InsertCommit.StartPTSMS 로 돌아온다.
 	StartPTSMS   int64
 	StartWallUTC time.Time
 	// DurationMS 는 DB 컬럼이 int 라 32비트로 좁혀 담는다. 축소는 H7 과 correctTail 두 지점에서만 한다.
@@ -59,6 +61,10 @@ type Record struct {
 	PlaybackPDT *time.Time
 	// PlaybackS3Key 는 ③(재생 렌디션) 키다. 계약 5-5 착지 컬럼에 INSERT 시점부터 실을 수 있게 한다.
 	PlaybackS3Key *string
+
+	// Timing 은 인덱서가 조각 파일에서 읽어 넘기는 시각 재료다(설계 r7 3절). 원래 사실 칸(Facts)은 그대로 장부의 timing_*
+	// 칸에 쓰인다 — Wall 이 영값이면 timing_wall_guess 가 NULL 이고, 그 행은 출시 이미지가 쓴 행과 같게 읽힌다.
+	Timing TimingInput
 }
 
 // TailRow 는 스트림의 마지막 행이다. 파생값의 단일 출처이며,
@@ -74,6 +80,9 @@ type TailRow struct {
 	// S3Key 는 INSERT 때 예약된 키 그대로다. 업로더는 이 값을 재계산하지 않고 그대로 PUT 한다
 	// — 키 형상이 계약이므로 재계산은 포맷을 바꾸는 순간 옛 행을 전부 어긋나게 한다.
 	S3Key string
+	// Timing 은 꼬리 행의 원래 사실 칸이다(설계 r7 2.14 — 재기동 · 재스캔 뒤에도 같은 답의 재료). 출시 이미지가 쓴
+	// 행이면 영값이다.
+	Timing TimingFacts
 }
 
 // Cursor 는 "이 방송을 어디까지 기록했나"를 기억하는 책갈피다.
@@ -81,14 +90,6 @@ type Cursor struct {
 	NextSeq int64
 	// Tail 이 nil 이면 이 스트림에 행이 없다(= 첫 세그먼트다).
 	Tail *TailRow
-}
-
-// NextPTSMS 는 다음 세그먼트가 시작할 재생 위치다 = 마지막 조각의 시작 + 그 길이.
-func (c Cursor) NextPTSMS() int64 {
-	if c.Tail == nil {
-		return 0
-	}
-	return c.Tail.StartPTSMS + int64(c.Tail.DurationMS)
 }
 
 // LastStartWall 은 마지막으로 기록한 세그먼트의 벽시계 시작 시각이다.

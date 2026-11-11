@@ -371,3 +371,45 @@ func TestSessionDeciderCarriesOpeningResultsEndToEnd(t *testing.T) {
 		}
 	})
 }
+
+// 결정의 회차 · 새 회차 · 하한 거부 세 칸이 어댑터를 지난다(POK-196 PDT 생산자 c4a — 장부의 이어 계산 회차 · 판 정하기
+// 재료). 필드별 복사라 한 칸을 빠뜨려도 컴파일은 통과한다 — 회차가 새면 장부가 모든 귀속 행을 회차 없음으로 쓰고, 새
+// 회차가 새면 새 회차 머리 행이 앞 회차를 이어 계산의 p 로 집으며, 하한 거부가 새면 그 행을 라이브 회차에 넣는다(설계
+// r7 2.4).
+func TestSessionDeciderCarriesRoundAndFloorRejection(t *testing.T) {
+	pool := newWireTestPool(t)
+	ctx := context.Background()
+	stream := "wire-round"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO stream_sessions (session_id, stream_id, started_at, state, first_pdt, round_id)
+		VALUES ($1, $2, $3, 'live', $3, $4)`, stream+"-live", stream, wireBase, stream+"-round"); err != nil {
+		t.Fatalf("live 세션 픽스처 실패: %v", err)
+	}
+	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, broadcast.Gate{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("트랜잭션 시작 실패: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	in := func(seq int64, wall time.Time) index.SessionInput {
+		return index.SessionInput{StreamID: stream, Seq: seq, StartWallUTC: wall, DurationMS: 4000,
+			SessionSource: index.SessionSource{Op: index.SessionOpenOrCurrent}}
+	}
+	cur, err := d.Decide(ctx, tx, in(1, wireBase.Add(4*time.Second)), wireBase.Add(4*time.Second))
+	if err != nil || cur.RoundID != stream+"-round" || cur.FloorRejected {
+		t.Errorf("계속 결정 = (%+v, %v), want RoundID %s · 하한 거부 아님", cur, err, stream+"-round")
+	}
+	floor, err := d.Decide(ctx, tx, in(2, wireBase.Add(-2*time.Second)), wireBase)
+	if err != nil || floor.SessionID != "" || floor.RoundID != "" || !floor.FloorRejected {
+		t.Errorf("하한 거부 결정 = (%+v, %v), want 비귀속 · 회차 없음 · FloorRejected", floor, err)
+	}
+	if cur.NewRound || floor.NewRound {
+		t.Errorf("계속 · 하한 거부의 NewRound = (%t, %t), want 둘 다 거짓", cur.NewRound, floor.NewRound)
+	}
+	fresh, err := d.Decide(ctx, tx, index.SessionInput{StreamID: stream + "-fresh", Seq: 1, StartWallUTC: wireBase,
+		DurationMS: 4000, SessionSource: index.SessionSource{Op: index.SessionOpenOrCurrent}}, wireBase)
+	if err != nil || !fresh.Opens || !fresh.NewRound || fresh.RoundID == "" {
+		t.Errorf("새 회차 개시 결정 = (%+v, %v), want 개시 · NewRound · 회차 있음", fresh, err)
+	}
+}

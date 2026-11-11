@@ -157,9 +157,18 @@ type Decision struct {
 	//   - 개시: 비지 않는다. TD 분할 = 끝낼 live 의 round_id(NULL 이면 새 세션 id) · 표식 분할 = 새 세션 id ·
 	//     직전 회차 합류 · 계승 = 이어 가는 round_id · 새 회차 = 새 세션 id.
 	//   - 비귀속: "" 다.
-	// 「새 회차를 여는가」 는 RoundID == Open 이 돌려준 session_id 로 가린다. Open 은 자기가 쓸 round_id 가 이 값과 다르면
+	// Open 뒤에서는 「새 회차를 여는가」 를 RoundID == Open 이 돌려준 session_id 로 가린다(Open 앞의 판별은 NewRound —
+	// 개시에서는 둘이 늘 같고 index store 가 Open 뒤에 대조한다). Open 은 자기가 쓸 round_id 가 이 값과 다르면
 	// 오류를 내 트랜잭션을 되돌린다 — 두 계산이 갈리면 키가 틀리기 전에 멈춘다.
 	RoundID string
+	// NewRound 는 이 개시가 새 회차를 여는가다 — RoundID 가 새 세션 id 인 갈래(새 회차 · 표식 분할 · 회차 없는 live 의
+	// TD 분할)에서만 참이다. 장부의 판 정하기는 Open 앞에서 이 답이 필요해(POK-196 PDT 설계 r7 2.4 — 새 회차면 게이트
+	// 판) Open 이 돌려줄 id 와 견주는 판별을 쓸 수 없다. 그래서 RoundID 를 정하는 자리가 같이 정한다.
+	NewRound bool
+	// FloorRejected 는 라이브 세션이 있는데 귀속 하한에서 거부됐다는 뜻이다(설계 2.4 규칙 2 — 참은 decide 의 하한 거부
+	// 한 자리). OutcomeNone 의 다른 원인(정책 거부 · 평시 CurrentOnly)은 거짓이다 — 장부 결과가 달라지는 것은 하한
+	// 거부뿐이라 칸 하나만 둔다.
+	FloorRejected bool
 	// plan 은 Open 이 쓸 값이다. 비공개인 이유는 호출자가 다른 조각의 값으로 세션을
 	// 열 수 없게 하기 위해서다 — 결정과 쓰기가 같은 입력을 본다는 것이 구조로 보장된다.
 	plan *openPlan
@@ -462,7 +471,7 @@ func (r *Registry) decide(live *liveSession, in Input, now time.Time) Decision {
 				"stream_id", in.StreamID, "seq", in.Seq,
 				"start_wall_utc", in.StartWallUTC, "session_id", live.id,
 				"started_at", live.startedAt, "slack", r.opt.FloorSlack)
-			return Decision{Outcome: OutcomeNone}
+			return Decision{Outcome: OutcomeNone, FloorRejected: true}
 		}
 		return Decision{Outcome: OutcomeCurrent, SessionID: live.id, BaseSessionID: live.id, RoundID: live.roundID}
 	}
@@ -536,11 +545,11 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 		// 같은 값이다. 닫힘의 유일한 쓰기 index/round_close.go closeRoundSQL 은 소속 잠금 아래 closableRoundsSQL 판정
 		// (`l.state <> 'live'`) 뒤에만 돈다. 그 전제가 깨진 상태(픽스처로만 생김)면 Open 의 checkDecidedRound 가 개시를
 		// 되돌린다(TestTDSplitOnLiveOfClosedRoundFailsClosed). NULL 이면 15.2 표 3행 — 새 회차다.
-		round := split.roundID
-		if round == "" {
+		round, fresh := split.roundID, split.roundID == ""
+		if fresh {
 			round = p.newSessionID()
 		}
-		return Decision{Outcome: OutcomeOpenFresh, BaseSessionID: split.id, EndingSessionID: split.id, RoundID: round, plan: p}
+		return Decision{Outcome: OutcomeOpenFresh, BaseSessionID: split.id, EndingSessionID: split.id, RoundID: round, NewRound: fresh, plan: p}
 	case inherit != nil:
 		// 불연속 기준은 TD 분할과 같은 복사로 잇고, inherits_session 은 이 갈래만 쓴다(TD 분할은 NULL — 계획 2.3
 		// registry 행 ⑶ 대칭 기록 금지). TD 는 직전 회차 TD 아래로 내려가지 않는다 — 계승 목록은 직전 회차 조각을
@@ -549,11 +558,11 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 		p.discontinuityBase = inherit.discontinuityBase
 		p.targetDuration = max(p.targetDuration, inherit.targetDuration)
 		// 회차는 아직 새 회차다 — 직전 회차에 드는지(15.2 표 5 · 6행)는 openFromPrevious 가 정해 덮는다.
-		return Decision{Outcome: OutcomeOpen, PrevFirstLocalPath: inherit.firstLocalPath, RoundID: p.newSessionID(), plan: p}
+		return Decision{Outcome: OutcomeOpen, PrevFirstLocalPath: inherit.firstLocalPath, RoundID: p.newSessionID(), NewRound: true, plan: p}
 	}
 	// discontinuity_base 는 DDL 기본값과 같은 0 이다 — 설계가 비분할 개시의 승계를
 	// 규정하지 않았고 소비자(렌더)가 M4 라 승계 산식을 지어내지 않는다.
-	return Decision{Outcome: OutcomeOpen, RoundID: p.newSessionID(), plan: p}
+	return Decision{Outcome: OutcomeOpen, RoundID: p.newSessionID(), NewRound: true, plan: p}
 }
 
 // newSessionID 는 이 계획으로 열 세션의 id 다 — 새 회차의 round_id 이기도 하다(15.2 표 「자기 → 새 회차」). Decide 와

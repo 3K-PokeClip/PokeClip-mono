@@ -1,8 +1,10 @@
 package upload
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -78,6 +80,10 @@ type attemptResult struct {
 // ctx 를 보지 않고 workerStop 만 본다 — 종료 순서를 Shutdown 이 단독으로 쥐기 위해서다.
 func (u *Uploader) worker() {
 	defer close(u.workerDone)
+	// ③ 사슬 복원 고루틴은 워커가 띄우고 워커가 끝나기 전에 기다린다 — Shutdown 의 워커 join 이 복원도 덮는다(POK-196 PDT
+	// 계획 4절 c10b). 멈춤 신호는 같은 workerStop 이다.
+	joinRestore := u.startRestore()
+	defer joinRestore()
 	for {
 		select {
 		case <-u.workerStop:
@@ -98,6 +104,11 @@ func (u *Uploader) worker() {
 func (u *Uploader) runJob(j job) {
 	defer u.drainHeld()
 	defer u.gate.releaseInflight(j.key())
+	if j.target.PosUnknown {
+		// 위치 모름 ③ 은 올릴 도장이 없다 — 접수(RequestUpload)가 이미 끊김 줄을 적고 복원을 깨웠다(POK-196 PDT 계획 4절 c10b).
+		// 복원이 위치를 정하면 그 행을 도장을 실은 작업으로 다시 넣는다. 판정 재료가 아니라 브레이커에 싣지 않는다.
+		return
+	}
 	u.lastAttemptErr = nil
 	o := u.processTarget(j)
 	if brk := u.brk.of(j.target.Axis); brk != nil {
@@ -355,21 +366,21 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	t := j.target
 	k := j.key()
 
-	// (a) 열기
-	f, err := u.opt.Root.Open(rel)
-	if err != nil {
-		return u.classifyOpenError(err, t, k, lg)
-	}
-	defer f.Close()
-
-	// (b)·(c) 입력 크기
-	size, r, ok := u.measureInput(j, f, lg)
+	// (a) 열기 · (b) 입력 크기 — 로컬 ② 가 없는 ③ 작업은 ② 객체가 입력이다(f 가 nil).
+	in, f, r, ok := u.openInput(j, rel, lg)
 	if !ok {
 		return r
 	}
+	if f != nil {
+		defer f.Close()
+	}
+	// (c) 장부 크기 대조
+	if r, ok := u.checkInputSize(j, in, lg); !ok {
+		return r
+	}
 
-	// (c′) 본문 — ② 는 파일 그대로, ③·init 은 그 파일을 재포장한 메모리 산출이다.
-	p, r, ok := u.payloadFor(j, f, size, lg)
+	// (c′) 본문 — ② 는 입력 그대로, ③·init 은 그 입력을 재포장한 메모리 산출이다.
+	p, r, ok := u.payloadFor(j, in, lg)
 	if !ok {
 		return r
 	}
@@ -390,16 +401,13 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	// (e) 같은 fd 로 **입력 파일**을 다시 잰다. 경로가 아니라 열린 inode 를 재므로 경로 경합이
 	//     없다. ③ 도 입력을 잰다 — 산출 길이는 입력이 같으면 늘 같아 잴 뜻이 없다(계획 2.1
 	//     「③ 축 크기 계약」). init 은 재도 멈추지 않는다 — 올린 머리말 바이트는 입력의 꼬리와
-	//     무관하다(measureInput). 이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는
+	//     무관하다(checkInputSize). 이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는
 	//     양의 증거를 본 경우이고, M-1 표에 없는 분기다(C10).
-	fi2, err := u.statFile(f)
-	if err != nil {
-		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
-		return attemptResult{outcome: outcomeNeutral}
-	}
-	if fi2.Size() != size && t.Axis != index.AxisInit {
-		lg.Warn("file_changed_during_put", "put_size", size, "after_size", fi2.Size())
-		return attemptResult{outcome: outcomeNeutral}
+	//     ② 객체 입력(f 가 nil)은 자라지 않으므로 다시 재지 않는다(설계 r6 2.10 「입력 꼴」).
+	if f != nil {
+		if r, ok := u.recheckInput(f, in, t, lg); !ok {
+			return r
+		}
 	}
 
 	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다. init 축은 CAS 판정을 함께 돌려주고, 그 판정이
@@ -416,32 +424,128 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	return attemptResult{outcome: outcomeSuccess}
 }
 
-// measureInput 은 (b) 입력 파일의 크기를 재고 (c) 장부 크기와 대조한다. ok 가 false 면
-// 이번 시도는 r 로 끝난다.
-func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (size int64, r attemptResult, ok bool) {
+// recheckInput 은 (e) PUT 뒤 같은 fd 로 입력 파일을 다시 잰다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) recheckInput(f *os.File, in input, t index.UploadTarget, lg *slog.Logger) (attemptResult, bool) {
+	fi2, err := u.statFile(f)
+	if err != nil {
+		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
+		return attemptResult{outcome: outcomeNeutral}, false
+	}
+	if fi2.Size() != in.size && t.Axis != index.AxisInit {
+		lg.Warn("file_changed_during_put", "put_size", in.size, "after_size", fi2.Size())
+		return attemptResult{outcome: outcomeNeutral}, false
+	}
+	return attemptResult{}, true
+}
+
+// openInput 은 (a) 입력을 열고 (b) 크기를 잰다. 열린 파일이면 f 로 돌려주고(부르는 쪽이 닫는다), 로컬 ② 가 없어 ② 객체를
+// 받았으면 f 가 nil 이다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) openInput(j job, rel string, lg *slog.Logger) (in input, f *os.File, r attemptResult, ok bool) {
+	t := j.target
+	f, err := u.opt.Root.Open(rel)
+	if errors.Is(err, fs.ErrNotExist) && archiveFallback(t) {
+		in, r, ok = u.archiveInput(j, lg)
+		return in, nil, r, ok
+	}
+	if err != nil {
+		return input{}, nil, u.classifyOpenError(err, t, j.key(), lg), false
+	}
+	if in, r, ok = u.measureInput(j, f, lg); !ok {
+		_ = f.Close()
+		return input{}, nil, r, false
+	}
+	return in, f, attemptResult{}, true
+}
+
+// archiveFallback 은 로컬 ② 가 없을 때 ② 객체를 ③ 재포장 입력으로 쓸 수 있는가다(설계 r6 2.10 r2 — cx-N3): ③ 축이고 ② 가
+// 올라가 있다(로컬 정리는 ② uploaded 를 요구하므로, 로컬이 지워졌으면 ② 는 올라가 있다). ② 가 안 올라갔으면 지금처럼 파일
+// 없음이다.
+func archiveFallback(t index.UploadTarget) bool {
+	return t.Axis == index.AxisPlayback && t.ArchiveUploadState == index.UploadStateUploaded && t.ArchiveS3Key != ""
+}
+
+// archiveInput 은 ② 객체를 메모리 입력으로 받는다. 객체가 없으면 파일 없음(attemptFileMissing)이고, 그 밖의 실패는 PUT 실패와
+// 같은 재시도 사다리를 탄다. S3 를 읽을 수 없는 배선(Getter 없음)이면 파일 없음이다.
+//
+// 장부 크기만큼만 쓴다 — 복원의 ② 원천과 같은 규칙이다(readArchiveObject · PR 종결 r1 cx H). 객체가 더 길면 장부 크기로 자르고,
+// 더 짧으면(파트 경계에서 잘린 업로드 · 다른 객체) 올리지 않고 failed 로 적는다. 객체는 자라지 않으므로 다시 해도 같은 답이다 —
+// 짧은 입력을 재포장하면 잘린 영상이 uploaded 로 굳는다(복원은 그 행을 source_size_mismatch 로 지나간다).
+func (u *Uploader) archiveInput(j job, lg *slog.Logger) (input, attemptResult, bool) {
+	t := j.target
+	getter, ok := u.put.(Getter)
+	if !ok {
+		return input{}, attemptResult{kind: attemptFileMissing, outcome: outcomeNeutral}, false
+	}
+	ctx, cancel := context.WithTimeout(u.putCtx, getTimeout)
+	defer cancel()
+	body, err := getter.Get(ctx, t.ArchiveS3Key)
+	switch {
+	case errors.Is(err, ErrObjectNotFound):
+		return input{}, attemptResult{kind: attemptFileMissing, outcome: outcomeNeutral}, false
+	case err != nil:
+		return input{}, attemptResult{kind: attemptRetryable, err: err}, false
+	case int64(len(body)) < t.Bytes:
+		return input{}, u.refuseShortArchive(j, len(body), lg), false
+	}
+	lg.Info("playback_input_from_archive", "archive_key", t.ArchiveS3Key, "bytes", len(body))
+	body = body[:t.Bytes]
+	return input{r: bytes.NewReader(body), size: int64(len(body))}, attemptResult{}, true
+}
+
+// refuseShortArchive 는 장부 크기보다 짧은 ② 객체를 입력으로 쓰지 않는다 — 그 ③ 은 failed(GAP)로 적고 키에 백오프를 건다
+// (refuseWithoutTable 과 같은 꼴 — 스위퍼가 30초마다 같은 GET 을 하지 않게).
+func (u *Uploader) refuseShortArchive(j job, got int, lg *slog.Logger) attemptResult {
+	t := j.target
+	if !u.markFailedByAxis(j, playbackReasonSourceSizeMismatch, lg) {
+		return attemptResult{outcome: outcomeNeutral}
+	}
+	k := j.key()
+	u.gate.registerFailure(k)
+	nextAt, _ := u.gate.backoffBlocked(k)
+	lg.Error("upload_failed", "s3_key", t.S3Key, "reason", playbackReasonSourceSizeMismatch,
+		"archive_key", t.ArchiveS3Key, "archive_bytes", got, "db_bytes", t.Bytes,
+		"next_attempt_at", nextAt.UTC().Format(time.RFC3339))
+	return attemptResult{outcome: outcomeNeutral}
+}
+
+// input 은 한 시도의 입력이다 — 본문 단계((c′) 이후)가 읽는 리더와 (b) 에서 잰 크기다(POK-196 PDT 계획 4절 c10a ·
+// 설계 r6 2.10 「입력 꼴」). 지금은 열린 녹화 파일뿐이다. 본문 단계를 파일에 묶지 않아, 로컬 ② 가 없는 행은 ② 객체를
+// 같은 자리에 메모리 입력으로 넣을 수 있다(복원 — c10b). (e) 의 다시 재기는 파일을 연 attemptOnce 가 같은 fd 로 한다.
+type input struct {
+	r    io.ReadSeeker
+	size int64
+}
+
+// measureInput 은 (b) 열린 입력 파일의 크기를 잰다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (in input, r attemptResult, ok bool) {
 	t := j.target
 
 	// (b) 크기 — 오류를 버리지 않는다. fi 를 무조건 역참조하면 nil panic 이다.
 	fi, err := u.statFile(f)
 	if err != nil {
 		lg.Warn("upload_stat_failed", "stage", "pre", "err", err.Error())
-		return 0, attemptResult{outcome: outcomeNeutral}, false
+		return input{}, attemptResult{outcome: outcomeNeutral}, false
 	}
 	if !fi.Mode().IsRegular() {
 		lg.Error("upload_target_rejected", "reason", "not_regular",
 			"path", t.LocalPath, "s3_key", t.S3Key)
 		u.gate.quarantine(j.key())
-		return 0, attemptResult{outcome: outcomeNeutral}, false
+		return input{}, attemptResult{outcome: outcomeNeutral}, false
 	}
-	size = fi.Size()
+	return input{r: f, size: fi.Size()}, attemptResult{}, true
+}
+
+// checkInputSize 는 (c) 잰 입력 크기를 장부 크기와 대조한다. ok 가 false 면 이번 시도는 r 로 끝난다.
+func (u *Uploader) checkInputSize(j job, in input, lg *slog.Logger) (r attemptResult, ok bool) {
+	t := j.target
 
 	// (c) 크기 재확인은 경로가 아니라 **대상의 속성**이다(결정 4⁵).
-	if size != t.Bytes {
+	if in.size != t.Bytes {
 		if t.IsTail && t.Axis != index.AxisInit {
 			// 꼬리는 아직 자라는 중일 수 있다. 여기서 올리면(③ 이면 재포장하면) 잘린 실물이
 			// 굳는다(G12‴ · 계획 2.1 「③ 축 크기 계약」).
-			u.logTailGrowing(j, lg, t.Bytes, size)
-			return 0, attemptResult{outcome: outcomeNeutral}, false
+			u.logTailGrowing(j, lg, t.Bytes, in.size)
+			return attemptResult{outcome: outcomeNeutral}, false
 		}
 		// 비꼬리는 correctTail 이 애초에 못 고치므로 막아서 얻을 것이 없고,
 		// 막으면 그 조각이 영원히 안 올라간다. 올리되 장부 어긋남을 남긴다(L14).
@@ -454,9 +558,9 @@ func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (size int64,
 		if t.Axis != index.AxisArchive {
 			sizeKey = "input_bytes"
 		}
-		lg.Warn("upload_size_mismatch", "db_bytes", t.Bytes, sizeKey, size)
+		lg.Warn("upload_size_mismatch", "db_bytes", t.Bytes, sizeKey, in.size)
 	}
-	return size, attemptResult{}, true
+	return attemptResult{}, true
 }
 
 // markUploadedByAxis 는 성공 마킹의 축 분기다. 돌려주는 값은 "후처리(백오프 해제·통지)를

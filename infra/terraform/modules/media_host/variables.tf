@@ -209,7 +209,7 @@ variable "janitor_enabled" {
 }
 
 variable "bundle_image" {
-  description = "설치 묶음 이미지 <ECR 저장소>@sha256:<64자>(스크립트 · 상자에서 렌더하는 템플릿)."
+  description = "설치 묶음 이미지 <ECR 저장소>@sha256:<64자>(스크립트 · 상자에서 렌더하는 템플릿). c0 하한 이상만 둔다(POK-196 PDT — 기동 전 검사가 든 start-media.sh · 판정은 runbooks/media-swap.md 「PDT 하한 판정」) — 하한 아래 묶음으로 설치한 상자는 판 2 를 못 읽는 사이드카로 내려도 막지 못한다."
   type        = string
 
   validation {
@@ -245,6 +245,16 @@ variable "sidecar_image" {
   validation {
     condition     = can(regex("^[^@]+@sha256:[0-9a-f]{64}$", var.sidecar_image))
     error_message = "sidecar_image 는 <저장소>@sha256:<16진 64자> 꼴이어야 한다."
+  }
+}
+
+variable "timing_guard_image" {
+  description = "기동 전 검사 핀 <ECR 저장소>@sha256:<64자> — compose 서비스 timing-preflight 의 이미지(POK-196 PDT 설계 r7 9.4). 사이드카 저장소의 c0 하한 이상 이미지(c0 머지 커밋을 조상으로 둔 커밋의 빌드 — runbooks/media-swap.md 「PDT 하한 판정」)만 둔다. 사이드카를 출시 이미지로 내릴 때도 내리지 않는다 — 하한 아래 이미지를 두면 검사 명령이 없어 상자가 막힌다(fail-closed). 첫 부팅에 한 번 쓰인다(user_data 는 ignore_changes)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@]+@sha256:[0-9a-f]{64}$", var.timing_guard_image))
+    error_message = "timing_guard_image 는 <저장소>@sha256:<16진 64자> 꼴이어야 한다."
   }
 }
 

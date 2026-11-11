@@ -154,8 +154,10 @@ jobs:
       # (초록불 = REQUIRE_PG 가드 미발동, container: 부재 = 비root. 이 PR 의 PG 시험이 환경 탓에 skip 되는 경로는
       # 이 둘뿐이다 — develop 에는 GOMAXPROCS 1 · fd 계수 불가 플랫폼에서 건너뛰는 시험 셋(ingestauth · connlog)이
       # 더 있으나 이 러너(다중 코어 Linux)에서는 발동하지 않는다.
-      # 예외 하나 — G8 동시 writer 시험(rewind/publish g8_race_pg_test.go)은 부하로 경쟁 국면이 서지
-      # 않고 결함 신호도 없으면 스스로 건너뛴다. 그 계보는 같은 패키지의 결정적 교차 시험이 판정한다).
+      # 예외 둘 — G8 동시 writer 시험(rewind/publish g8_race_pg_test.go)은 부하로 경쟁 국면이 서지
+      # 않고 결함 신호도 없으면 스스로 건너뛴다. 그 계보는 같은 패키지의 결정적 교차 시험이 판정한다.
+      # upload TestShutdownStopsLongRestoreFold 는 3분 안에 접기 시작을 못 보면(부하로 뒤로 읽기가 길다)
+      # 건너뛴다 — 그때 초록불은 그 시험이 돌았다는 증거가 아니다(media/README.md 「테스트」 부하 의존 시험)).
       # -p/-parallel도 명시하지 않는다 — 기본값(GOMAXPROCS)이 러너 스펙 변화를 자동 흡수한다.
       # -coverprofile은 -cover를 함께 켠다 — 모든 패키지의 `coverage: NN.N% of statements`가
       # 이 스텝 로그에 전부 찍힌다(티켓의 "다른 패키지는 측정만"이 이걸로 충족된다).

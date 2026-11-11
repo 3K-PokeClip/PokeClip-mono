@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -217,4 +218,68 @@ func classifyPutError(err error) putErrClass {
 		}
 	}
 	return putErrSoft
+}
+
+// ErrObjectNotFound 는 그 키에 객체가 없다는 뜻이다(GET 404 · NoSuchKey). 일시 실패가 아니다 — ③ 사슬 복원은 이것으로 「원천
+// 부재」 를 가르고(설계 r6 2.10 「지나가기」), 그 밖의 오류(접근 거부 · 시한 · 5xx)는 행 상태를 바꾸지 않고 다시 본다.
+var ErrObjectNotFound = errors.New("upload: S3 객체가 없다")
+
+// getLimit 는 GET 한 번에 받는 객체 크기의 상한이다 — ③ 재포장 입력 상한(playback maxInputBytes, 16MiB)과 같다. ② · ③ 객체는
+// 그 입력이거나 그 산출이라 넘지 않는다. 넘으면 다 읽지 않고 오류다.
+const getLimit = 16 << 20
+
+// getTimeout 은 GET · HEAD 한 번의 상한이다(본문 읽기까지 — 설계 r6 2.10 「GetTimeout 10초」).
+const getTimeout = 10 * time.Second
+
+// Getter 는 ③ 사슬 복원이 쓰는 S3 읽기다(POK-196 PDT 계획 4절 c10b · 설계 r6 2.10). Putter 와 따로 둔 이유: PUT 의 계약
+// 셋(되감기 금지 등)과 무관하고, 복원이 없는 배선(시험의 가짜 Putter)은 이것을 갖지 않는다 — 업로더는 Putter 가 이것도
+// 구현할 때만 복원한다(restore.go). S3 LIST 는 쓰지 않는다(인덱스 불변식 — 키는 장부가 준다).
+type Getter interface {
+	// Get 은 객체 본문 전체다. 없으면 ErrObjectNotFound 다.
+	Get(ctx context.Context, key string) ([]byte, error)
+	// Head 는 객체 길이와 있음이다. 없으면 (0, false, nil)이다.
+	Head(ctx context.Context, key string) (size int64, found bool, err error)
+}
+
+// Get 은 객체를 통째로 받는다 — 상한(getLimit)을 넘으면 오류다.
+func (p *s3Putter) Get(ctx context.Context, key string) ([]byte, error) {
+	out, err := p.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(p.bucket), Key: aws.String(key)})
+	if err != nil {
+		if objectMissing(err) {
+			return nil, fmt.Errorf("GET key=%q: %w", key, ErrObjectNotFound)
+		}
+		return nil, fmt.Errorf("GET 실패 key=%q: %w", key, err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(out.Body, getLimit+1))
+	if err != nil {
+		return nil, fmt.Errorf("GET 본문 읽기 실패 key=%q: %w", key, err)
+	}
+	if len(body) > getLimit {
+		return nil, fmt.Errorf("GET 거부 key=%q: 객체가 %d바이트를 넘는다", key, getLimit)
+	}
+	return body, nil
+}
+
+// Head 는 객체 길이와 있음이다.
+func (p *s3Putter) Head(ctx context.Context, key string) (int64, bool, error) {
+	out, err := p.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(p.bucket), Key: aws.String(key)})
+	if err != nil {
+		if objectMissing(err) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("HEAD 실패 key=%q: %w", key, err)
+	}
+	return aws.ToInt64(out.ContentLength), true, nil
+}
+
+// objectMissing 은 키에 객체가 없다는 응답인가다 — 404 이되 버킷이 없다(NoSuchBucket)는 아니다. HEAD 는 본문이 없어 버킷
+// 부재도 404 하나로 오지만, 버킷 이름이 틀렸으면 PUT 이 먼저 hard 실패로 브레이커를 연다(classifyPutError).
+func objectMissing(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchBucket" {
+		return false
+	}
+	var respErr *awshttp.ResponseError
+	return errors.As(err, &respErr) && respErr.HTTPStatusCode() == 404
 }

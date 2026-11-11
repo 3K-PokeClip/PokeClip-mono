@@ -27,8 +27,9 @@ type Store interface {
 	// 쓰이지 않는다. 값을 정하는 자리가 둘이면 어느 쪽이 이겼는지 장부만 보고 알 수 없다.
 	Insert(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, InsertCommit, error)
 	// UpdateTail 은 duration_ms 와 bytes 를 사후 정정한다. 계약상 쓰기 주체가 1번이므로 허용된다.
-	// upload_state 는 건드리지 않는다.
-	UpdateTail(ctx context.Context, streamID string, seq int64, durationMS int32, bytes int64) (updated bool, err error)
+	// upload_state 는 건드리지 않는다. videoEndNS 는 꼬리의 영상 끝(timing_video_end_ns)이다 — nil 이면 그 칸을 건드리지
+	// 않고, 옛 값이 NULL 인 꼬리도 그 칸을 넘기지 않는다(설계 r7 2.14). 줄이는 값은 불변 트리거가 거부해 오류다.
+	UpdateTail(ctx context.Context, streamID string, seq int64, durationMS int32, bytes int64, videoEndNS *int64) (updated bool, err error)
 }
 
 // pgUniqueViolation 은 PostgreSQL 의 unique_violation SQLSTATE 다.
@@ -85,12 +86,17 @@ func NewPGStore(pool *pgxpool.Pool, decider SessionDecider, playbackKey Playback
 //
 // 꼬리 열은 행이 없으면 NULL 이라 포인터로 받는다. SELECT 목록 순서와 아래 Scan 인자 순서는 반드시 같아야 한다 —
 // s3_key 와 local_path 는 둘 다 text 라 순서를 바꿔도 컴파일·실행이 통과한다. store_test.go 의 값 대조가 그 방어선이다.
+// 원래 사실 칸 다섯(설계 r7 2.3)도 꼬리에 싣는다 — 재기동 · 재스캔 뒤에도 꼬리와의 이어짐을 같은 답으로 정하는 재료다.
+// 두 ns 칸도 bigint 라 순서를 바꿔도 통과한다 — timing_store_pg_test.go 의 값 대조가 막는다.
 const loadCursorSQL = `
 SELECT GREATEST(f.next_seq, t.seq + 1::bigint),
-       t.seq, t.start_pts_ms, t.start_wall_utc, t.duration_ms, t.bytes, t.local_path, t.upload_state, t.s3_key
+       t.seq, t.start_pts_ms, t.start_wall_utc, t.duration_ms, t.bytes, t.local_path, t.upload_state, t.s3_key,
+       t.timing_wall_guess, t.timing_recorder_id, t.timing_segment_number, t.timing_video_first_ns, t.timing_video_end_ns
   FROM (SELECT 1) one
   LEFT JOIN LATERAL (SELECT next_seq FROM stream_seq_floors WHERE stream_id = $1) f ON true
-  LEFT JOIN LATERAL (SELECT seq, start_pts_ms, start_wall_utc, duration_ms, bytes, local_path, upload_state, s3_key
+  LEFT JOIN LATERAL (SELECT seq, start_pts_ms, start_wall_utc, duration_ms, bytes, local_path, upload_state, s3_key,
+                            timing_wall_guess, timing_recorder_id, timing_segment_number, timing_video_first_ns,
+                            timing_video_end_ns
                        FROM stream_segments WHERE stream_id = $1 ORDER BY seq DESC LIMIT 1) t ON true`
 
 // cursorRow 는 loadCursorSQL 한 행이다 — 꼬리 열은 행이 없으면 NULL 이다.
@@ -100,6 +106,7 @@ type cursorRow struct {
 	durationMS                      *int32
 	localPath, s3Key                *string
 	uploadState                     *UploadState
+	facts                           factColumns
 }
 
 func (s *pgStore) LoadCursor(ctx context.Context, streamID string) (Cursor, error) {
@@ -107,6 +114,7 @@ func (s *pgStore) LoadCursor(ctx context.Context, streamID string) (Cursor, erro
 	err := s.pool.QueryRow(ctx, loadCursorSQL, streamID).Scan(
 		&r.nextSeq, &r.seq, &r.startPTSMS, &r.startWallUTC, &r.durationMS,
 		&r.bytes, &r.localPath, &r.uploadState, &r.s3Key,
+		&r.facts.wall, &r.facts.recorder, &r.facts.number, &r.facts.videoFirst, &r.facts.videoEnd,
 	)
 	if err != nil {
 		return Cursor{}, fmt.Errorf("커서 적재 실패 stream_id=%q: %w", streamID, err)
@@ -125,6 +133,7 @@ func (s *pgStore) LoadCursor(ctx context.Context, streamID string) (Cursor, erro
 		UploadState: *r.uploadState, S3Key: *r.s3Key,
 		// 저장은 UTC 강제지만 드라이버가 로컬 위치로 실어 올 수 있어 여기서 한 번 못 박는다(D6).
 		StartWallUTC: r.startWallUTC.UTC(),
+		Timing:       r.facts.toFacts(),
 	}
 	// bytes 와 local_path 는 NULL 을 허용하는 컬럼이라 영값으로 편다.
 	if r.bytes != nil {
@@ -186,23 +195,28 @@ const pgLockNotAvailable = "55P03"
 //   - ⓐ 의 시간 항은 clock_timestamp() 로 락 대기 뒤에 재검한다(m1a).
 //   - 기존 컷오프는 ON CONFLICT DO NOTHING 으로 승계한다(기존 승리 — d5).
 //   - 세그먼트 INSERT 의 23505 는 예외 → 롤백 → 컷오프도 남지 않는다(d4).
+//   - PDT 판 칸 일곱($14~$20 — 설계 r7 2.3 · 2.4)은 판 · 원래 사실 · 이어 계산 회차다. 쓰기자 거부 트리거와 CHECK 넷이
+//     이 칸을 본다.
 const insertSeedSQL = `
 WITH ins AS (
     INSERT INTO stream_segments
         (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key,
          local_path, upload_state, bytes, is_discontinuity,
-         session_id, playback_pdt, playback_s3_key)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         session_id, playback_pdt, playback_s3_key,
+         timing_version, timing_wall_guess, timing_recorder_id, timing_segment_number,
+         timing_video_first_ns, timing_video_end_ns, timing_round_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+            $14, $15, $16, $17, $18, $19, $20)
     RETURNING stream_id, seq, session_id, playback_pdt, playback_s3_key
 ), seed AS (
     INSERT INTO stream_cutoffs (stream_id, cutoff_seq, seed_reason, seed_channel)
-    SELECT i.stream_id, i.seq, $14, $15
+    SELECT i.stream_id, i.seq, $21, $22
       FROM ins i
-     WHERE $16::boolean
+     WHERE $23::boolean
        AND i.session_id      IS NOT NULL
        AND i.playback_pdt    IS NOT NULL
        AND i.playback_s3_key IS NOT NULL
-       AND pg_catalog.clock_timestamp() - $17::timestamptz <= $18::interval
+       AND pg_catalog.clock_timestamp() - $24::timestamptz <= $25::interval
     ON CONFLICT (stream_id) DO NOTHING
     RETURNING 1
 )
@@ -234,10 +248,11 @@ func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed, src SessionSo
 	out, res, err := s.insertOnce(ctx, r, seed, src)
 	if err != nil && isLockTimeout(err) {
 		// 55P03 → 즉시 1회 재시도(설계 6.5.5 · m1b). 재시도도 락이면 ErrLockContended 로
-		// 올린다 — 처분(일반 재시도 → 소진 시 D8)은 호출자 몫이다.
+		// 올린다 — 처분(일반 재시도 → 소진 시 D8)은 호출자 몫이다. 원 오류도 함께 감싼다 — 어느
+		// 잠금(컷오프 · 판 게이트)에서 끊겼는지가 그 문구에 있다(c4a 보안 L2).
 		out, res, err = s.insertOnce(ctx, r, seed, src)
 		if err != nil && isLockTimeout(err) {
-			return out, res, fmt.Errorf("%w: stream_id=%q seq=%d", ErrLockContended, r.StreamID, r.Seq)
+			return out, res, fmt.Errorf("%w: stream_id=%q seq=%d: %w", ErrLockContended, r.StreamID, r.Seq, err)
 		}
 	}
 	return out, res, err
@@ -250,7 +265,11 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	txctx, cancel := context.WithTimeout(ctx, TxnDeadline)
 	defer cancel()
 
-	tx, err := s.pool.Begin(txctx)
+	// 격리 수준을 READ COMMITTED 로 못 박는다 — 잠금을 기다린 뒤의 문장이 그 사이 커밋된 값을 보는 것은 이 수준에서만이다
+	// (게이트 공유 잠금 뒤 스위치 읽기 · 세션 소속 잠금 뒤 재판정 · 컷오프 직렬화 락 뒤 시각). DB · 역할의 기본값
+	// (default_transaction_isolation)이 repeatable read 면 첫 문장의 스냅숏으로 낡은 스위치를 읽어 래치 없는 장부에 판 2 행을
+	// 쓴다(broadcast/outbox_rows.go abandon 과 같은 처방).
+	tx, err := s.pool.BeginTx(txctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return InsertInserted, InsertCommit{}, fmt.Errorf("주조 트랜잭션 시작 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
@@ -277,7 +296,9 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	// 검사에서 미커밋 경합을 만나면 그 대기는 시간 판정 **뒤**가 되어 — 경합이 롤백되면
 	// 낡은 방증으로 주조될 수 있다(cx 리뷰 차단 2). 대기를 여기(판정 앞)로 끌어오면
 	// "락 대기 뒤 재검"(m1a) 의미론이 복원된다. advisory 대기도 lock_timeout 을 따르므로
-	// 55P03 경로(m1b)와 일관된다. 비적격 INSERT 는 컷오프 경쟁이 없으므로 직렬화하지 않는다.
+	// 55P03 경로(m1b)와 일관된다. 비적격 INSERT 는 컷오프 경쟁이 없으므로 직렬화하지 않는다. 한계(c4b 보안 L1): 그래서
+	// 같은 스트림에 쓰기자가 둘이면(롤링 배포가 단일 쓰기자 전제 D10 을 깰 때) 두 비적격 행이 같은 스냅숏의 앞 행(p · q)을
+	// 읽어 위치 · PDT 를 겹쳐 쓸 수 있다 — c4a 부터 그대로이고, 단일 쓰기자에서는 생기지 않는다.
 	//
 	// 세션 결정의 관측 신선도도 **이 대기 뒤의 시각**으로 재야 한다(계획 4.1 ⑶):
 	// 대기 앞에서 굳히면 3초 대기 뒤 32초짜리 관측으로 세션이 열린다.
@@ -287,16 +308,18 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 		}
 	}
 
-	// ⑵~⑹ 세션 결정 → 기저 행 → PDT → 세션 쓰기 → 키. carrier 3열이 여기서 정해진다.
-	var opening sessionOpening
-	r, opening, err = s.settleCarrier(txctx, tx, r, src, now.UTC())
+	// ⑵~⑹ 세션 결정 → 판 정하기 → 기저 행 → PDT → 세션 쓰기 → 위치 → 키. carrier 3열 · 위치 · 판 칸이 여기서 정해진다.
+	var st settlement
+	r, st, err = s.settleCarrier(txctx, tx, r, src, now.UTC())
 	if err != nil {
 		return InsertInserted, InsertCommit{}, err
 	}
+	timing := st.timing
 
-	// ⓐ 가 거짓이어도 $14~$18 은 유효한 값으로 내려간다 — seed 의 WHERE 가 막으므로
+	// ⓐ 가 거짓이어도 $21~$25 는 유효한 값으로 내려간다 — seed 의 WHERE 가 막으므로
 	// CHECK 에 닿을 행 자체가 없지만, 드라이버 층에서 놀랄 일을 만들지 않는다.
 	reason, channel, anchor, fresh := seedArgs(seed)
+	facts := factColumnsOf(r.Timing.Facts)
 
 	// inserted 는 CTE 결과 형상(두 열) 유지용이다 — 성공 경로에선 항상 1이라 소비하지 않는다.
 	var inserted, seeded int
@@ -304,6 +327,7 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 		r.StreamID, r.Seq, r.StartPTSMS, r.StartWallUTC.UTC(), r.DurationMS, r.S3Key,
 		r.LocalPath, string(r.UploadState), r.Bytes, r.IsDiscontinuity,
 		r.SessionID, r.PlaybackPDT, r.PlaybackS3Key, // carrier — nil ⇒ NULL(5.4.2)
+		timing.version, facts.wall, facts.recorder, facts.number, facts.videoFirst, facts.videoEnd, nullIfEmpty(timing.roundID),
 		reason, channel, seed.Eligible, anchor, fresh,
 	).Scan(&inserted, &seeded)
 	if err != nil {
@@ -323,14 +347,26 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	// 여기서부터는 삽입이 **이미 커밋됐다** — 귀속 진단의 실패를 Insert 의 에러로 올리면
 	// 성공한 삽입이 실패로 오보고돼 재시도 → 23505 → (진단 실패 지속 시) 크래시루프가
 	// 된다(cc 리뷰 차단 2, 라이브 재현). 진단 실패는 InsertCommit.DiagErr 로만 나른다.
-	return InsertInserted, withCommitted(s.resolveSeed(ctx, r, seed, seeded), r, opening), nil
+	return InsertInserted, withCommitted(s.resolveSeed(ctx, r, seed, seeded), r, st), nil
 }
 
-// withCommitted 는 커밋된 carrier 와 세션 개시 결과를 주조 결과에 얹는다.
+// settlement 는 settleCarrier 가 정한 것 가운데 장부 행 칸 밖의 결과다 — 세션 개시 · 판 정하기 · 판 2 섞기.
+type settlement struct {
+	opening sessionOpening
+	timing  timingChoice
+	// mix 는 판 2 행의 섞기 결과다. 판 NULL 행이면 nil 이다.
+	mix *v2Mix
+	// legacyU 는 판 NULL 귀속 행의 PDT 식이 더한 U 다(InsertCommit.LegacyUnattributedMS).
+	legacyU int64
+}
+
+// withCommitted 는 커밋된 carrier · 위치 · 판 칸과 세션 개시 결과를 주조 결과에 얹는다.
 //
 // 커밋 뒤 이 한 자리에서만 부른다 — 롤백된 트랜잭션의 개시가 결과로 새어 나가지 않게
 // 하는 구조가 이것이다(앞선 반환은 전부 영값 InsertCommit 이다).
-func withCommitted(res InsertCommit, r Record, o sessionOpening) InsertCommit {
+func withCommitted(res InsertCommit, r Record, st settlement) InsertCommit {
+	o, tc := st.opening, st.timing
+	res = withMix(res, st.mix)
 	res.SessionOpened = o.opened
 	res.DiscontinuityBase = o.discontinuityBase
 	res.TargetDuration = o.targetDuration
@@ -338,6 +374,9 @@ func withCommitted(res InsertCommit, r Record, o sessionOpening) InsertCommit {
 	res.EndingSessionID = o.endingSessionID
 	res.PrevFirstLocalPath = o.prevFirstLocalPath
 	res.DurationMS = r.DurationMS
+	res.StartPTSMS = r.StartPTSMS
+	res.TimingVersion, res.TimingRoundID, res.TimingGateRead = tc.version, tc.roundID, tc.gate
+	res.LegacyUnattributedMS = st.legacyU
 	if r.SessionID != nil {
 		res.SessionID = *r.SessionID
 	}
@@ -361,19 +400,22 @@ func withCommitted(res InsertCommit, r Record, o sessionOpening) InsertCommit {
 // 경로(fatal)로 가서 사람을 부른다.
 var ErrSessionContended = errors.New("index: 세션 개시 경합(one_live_uq) — 다른 시도가 먼저 열었다")
 
-// settleCarrier 는 계획 4.1 의 ⑵~⑹ 이다 — 한 트랜잭션 안에서 세션·PDT·키를 정해
-// Record 의 carrier 3열을 채운다. 순서가 곧 계약이다.
+// settleCarrier 는 계획 4.1 의 ⑵~⑹ 이다 — 한 트랜잭션 안에서 세션 · 판 · PDT · 위치 · 키를 정해 Record 의 carrier 3열과
+// start_pts_ms 를 채운다. 순서가 곧 계약이다.
 //
-// **carrier 의 값은 여기서만 정해진다**: 호출자가 Record 에 실어 보낸 값은 지우고 시작한다
+// **carrier 와 위치의 값은 여기서만 정해진다**: 호출자가 Record 에 실어 보낸 값은 지우고 시작한다
 // (Record 는 값으로 받으므로 호출자의 사본은 그대로다). 값을 정하는 자리가 둘이면
 // 장부만 보고 어느 쪽이 이겼는지 알 수 없다.
 //
-// 비귀속·비개시(정책 거부 또는 CurrentOnly 인데 현 세션 부재)면 ⑷⑸ 를 건너뛰고 셋 다
-// nil 로 남는다 — ⓒ 가 주조를 막아 not_settleable 로 귀속된다(설계 6.5.2 · M2 와 결과 동일).
+// 비귀속·비개시(정책 거부 또는 CurrentOnly 인데 현 세션 부재)면 ⑸ 를 건너뛰고 session_id · ③ 키는 nil 로 남는다 — ⓒ 가
+// 주조를 막아 not_settleable 로 귀속된다(설계 6.5.2 · M2 와 결과 동일). PDT 는 판 NULL 이면 nil, 판 2 면 섞기 값이다(설계
+// r7 2.5 — 판 2 회차 안 비귀속 행도 회차의 PDT 를 잇는다).
 //
-// 개시 갈래면 둘째 반환값이 새 세션 행에 쓰인 값을 싣는다(InsertCommit 의 개시 통로).
-func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src SessionSource, now time.Time) (Record, sessionOpening, error) {
+// 개시 갈래면 둘째 반환값의 opening 이 새 세션 행에 쓰인 값을 싣는다(InsertCommit 의 개시 통로). timing 은 판 정하기, mix 는
+// 판 2 섞기의 결과다.
+func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src SessionSource, now time.Time) (Record, settlement, error) {
 	r.SessionID, r.PlaybackPDT, r.PlaybackS3Key = nil, nil, nil
+	r.StartPTSMS = 0
 
 	// ⑵⑶ 갈래와 기저 세션. DB 오류는 삼키지 않는다 — "정책상 안 열었다"와 구분되지 않으면
 	// 재시도가 엉뚱한 방향으로 간다(계획 4.3 ⒉).
@@ -382,16 +424,55 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 		DurationMS: r.DurationMS, SessionSource: src,
 	}, now)
 	if err != nil {
-		return r, sessionOpening{}, sessionError("세션 결정 실패", err, r)
+		return r, settlement{}, sessionError("세션 결정 실패", err, r)
+	}
+	q, err := readLastRow(ctx, tx, r.StreamID, r.Seq)
+	if err != nil {
+		return r, settlement{}, err
 	}
 	if !dec.Opens && dec.SessionID == "" {
-		return r, sessionOpening{}, nil
+		st, err := settleUnattributed(ctx, tx, &r, dec, q)
+		return r, st, err
 	}
+	return s.settleAttributed(ctx, tx, r, dec, q)
+}
 
-	// ⑷ 기저 행 1행 → PDT. 개시 갈래는 이 값이 곧 새 세션의 first_pdt 라 ⑸ 보다 앞이다.
-	pdt, err := s.playbackPDT(ctx, tx, r, dec.BaseSessionID)
+// settleUnattributed 는 비귀속 행의 판 · 회차와 PDT · 위치를 정한다. 판 NULL 이면 PDT 는 NULL 이고 위치는 q 끝이다. 판 2 면
+// 귀속과 같은 섞기로 PDT · 위치 · 길이를 쓰고(설계 2.5 「판 2 비귀속 행」) 세션 · ③ 키만 nil 로 둔다 — 시작점 자격 ⓒ 가
+// 주조를 막아 not_settleable 이고, ③ 업로드 조회는 세션 결합이라 그 행을 집지 않는다.
+func settleUnattributed(ctx context.Context, tx pgx.Tx, r *Record, dec SessionDecision, q *lastRow) (settlement, error) {
+	tc, err := unattributedTiming(ctx, tx, *r, dec.FloorRejected)
 	if err != nil {
-		return r, sessionOpening{}, err
+		return settlement{}, err
+	}
+	if err := checkWritableVersion(tc.version); err != nil {
+		return settlement{}, fmt.Errorf("stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+	}
+	if !isV2(tc.version) {
+		r.StartPTSMS = legacyStart(q, nil, nil)
+		return settlement{timing: tc}, nil
+	}
+	mix, err := settleV2(ctx, tx, r, tc.roundID, q, false, dec.FloorRejected)
+	return settlement{timing: tc, mix: mix}, err
+}
+
+// settleAttributed 는 ⑷~⑹ 이다 — 기저 행 → 판 정하기 → PDT → 세션 쓰기 → 위치 → 키.
+func (s *pgStore) settleAttributed(ctx context.Context, tx pgx.Tx, r Record, dec SessionDecision, q *lastRow) (Record, settlement, error) {
+	// ⑷ 기저 행 1행 → 판 → PDT. 개시 갈래는 이 값이 곧 새 세션의 first_pdt 라 ⑸ 보다 앞이다.
+	base, err := readBaseRow(ctx, tx, r, dec.BaseSessionID)
+	if err != nil {
+		return r, settlement{}, err
+	}
+	tc, err := attributedTiming(ctx, tx, dec, base)
+	if err != nil {
+		return r, settlement{}, err
+	}
+	if err := checkWritableVersion(tc.version); err != nil {
+		return r, settlement{}, fmt.Errorf("stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+	}
+	pdt, mix, err := attributedPDT(ctx, tx, &r, dec, base, q, tc)
+	if err != nil {
+		return r, settlement{}, err
 	}
 
 	// ⑸ 개시 갈래만 세션 표를 쓴다(계속 갈래는 세션 표를 건드리지 않는다).
@@ -399,15 +480,32 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 	var opening sessionOpening
 	if dec.Opens {
 		if sessionID, err = s.decider.Open(ctx, tx, dec, pdt); err != nil {
-			return r, sessionOpening{}, sessionError("세션 개시 실패", err, r)
+			return r, settlement{}, sessionError("세션 개시 실패", err, r)
 		}
 		if opening, err = readOpening(ctx, tx, sessionID); err != nil {
-			return r, sessionOpening{}, err
+			return r, settlement{}, err
 		}
 		// 행에 쓰이지 않는 두 값은 결정에서 옮긴다 — Open 이 성공한 뒤라 개시가 실제로 쓴 결정의 값이다.
 		opening.endingSessionID, opening.prevFirstLocalPath = dec.EndingSessionID, dec.PrevFirstLocalPath
 	}
+	if dec.Opens && dec.NewRound != (dec.RoundID == sessionID) {
+		// 새 회차의 id 는 그 머리 세션의 session_id 다(M6 15.2) — 개시에서는 NewRound ⇔ RoundID == 개시가 연 session_id 다.
+		// 판 · 이어 계산 회차를 Open 앞에서 NewRound · RoundID 로 이미 정했으므로, 한쪽으로든 갈리면 배선 결함이라 트랜잭션을
+		// 되돌린다 — 회차가 다르면 행의 timing_round_id 가 세션의 회차와 다르게, NewRound 를 잃으면 새 회차가 게이트가 아닌
+		// 기저 행의 판으로 저장된다(cm cc D1 · 보안 M-1).
+		return r, settlement{}, fmt.Errorf("index: 새 회차 판별이 어긋난다 — NewRound=%t · 결정의 RoundID %q · 개시가 연 session_id %q stream_id=%q seq=%d — 배선 결함",
+			dec.NewRound, dec.RoundID, sessionID, r.StreamID, r.Seq)
+	}
 	r.SessionID, r.PlaybackPDT = &sessionID, &pdt
+
+	// 판 NULL 위치(I23) — PDT 가 정해진 뒤라 ⑷ 뒤다. q 에 PDT 가 없으면 앵커를 한 줄 더 읽는다. 판 2 위치는 섞기가 정했다.
+	if mix == nil {
+		anchor, err := readAnchor(ctx, tx, r.StreamID, r.Seq, q)
+		if err != nil {
+			return r, settlement{}, err
+		}
+		r.StartPTSMS = legacyStart(q, anchor, &pdt)
+	}
 
 	// ⑹ ③ 키 파생. **실패는 오류가 아니라 playback_s3_key NULL 이다**(설계 5.2):
 	// ⓒ 가 주조를 막고 다음 조각이 재시도한다. 세션·PDT 까지 함께 버리면 그 조각이
@@ -416,7 +514,11 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 	if key, keyErr := s.playbackKey(r.StreamID, dec.RoundID, r.Seq); keyErr == nil {
 		r.PlaybackS3Key = &key
 	}
-	return r, opening, nil
+	st := settlement{opening: opening, timing: tc, mix: mix}
+	if mix == nil && base != nil && base.PDT != nil {
+		st.legacyU = base.UnattributedMS // legacyPDT 가 더한 항 그대로다
+	}
+	return r, st, nil
 }
 
 // sessionOpening 은 이 트랜잭션이 연 세션 행에 쓰인 값과, 행에 쓰이지 않고 결정이 실어 온 개시 결과 두 값
@@ -459,54 +561,43 @@ func sessionError(what string, err error, r Record) error {
 	return fmt.Errorf("%s stream_id=%q seq=%d: %w", what, r.StreamID, r.Seq, err)
 }
 
-// basePDTSQL 은 PDT 재귀식의 k−1 항이다 — **기저 세션에 귀속된** 마지막 행 1행.
+// basePDTSQL 은 PDT 재귀식의 k−1 항이다 — **기저 세션에 귀속된** 마지막 행 1행(j*)과, 그 뒤 k 앞까지 비귀속 행의 길이 합
+// U(판 NULL 식 — placement.go)다. 그 행의 판도 함께 읽는다 — 이어 가는 회차의 판(판 정하기 1항)이 이 값이다.
 //
 // stream_segments_session_idx 는 3열 (stream_id, session_id, seq) 이므로 선행 컬럼
 // stream_id 를 술어에 두지 않으면 인덱스를 벗어나 표 전체를 훑는다.
 // playback_pdt 술어를 두지 않는 것도 의도다 — 그 컬럼은 어떤 인덱스에도 없어
 // NULL 꼬리를 행마다 힙 페치로 훑게 되고, 배포 경계처럼 꼬리가 길면 문장 상한을 넘긴다.
+// U 는 PK (stream_id, seq) 의 (j*.seq, k) 범위 훑기다 — 평시(j* = 바로 앞 행)에는 빈 범위다. duration_ms(integer)의 합은
+// bigint 다.
 const basePDTSQL = `
-SELECT playback_pdt, duration_ms
-  FROM stream_segments
- WHERE stream_id = $1 AND session_id = $2 AND seq < $3
- ORDER BY seq DESC
- LIMIT 1`
+SELECT b.seq, b.playback_pdt, b.duration_ms, b.timing_version,
+       (SELECT COALESCE(pg_catalog.sum(u.duration_ms), 0::bigint)
+          FROM stream_segments u
+         WHERE u.stream_id = $1 AND u.seq > b.seq AND u.seq < $3 AND u.session_id IS NULL)
+  FROM (SELECT seq, playback_pdt, duration_ms, timing_version
+          FROM stream_segments
+         WHERE stream_id = $1 AND session_id = $2 AND seq < $3
+         ORDER BY seq DESC
+         LIMIT 1) b`
 
-// playbackPDT 는 설계 5.1.1 의 장부 재귀식이다.
-//
-//	playback_pdt(k) = max( playback_pdt(k−1) + duration_ms(k−1), start_wall_utc(k) )
-//
-// 누적항이 하한이라 벽시계가 역행해도 단조가 유지되고(S7), 순단이면 벽시계가 이겨
-// 공백만큼 전진한다. 기저항이 없으면(기저 세션 부재 · 그 세션의 앞 행 없음 · 그 행의
-// pdt NULL) 벽시계가 그대로 값이 된다 — 세션 첫 조각의 first_pdt 가 이 값이다.
-func (s *pgStore) playbackPDT(ctx context.Context, tx pgx.Tx, r Record, baseSessionID string) (time.Time, error) {
-	wall := r.StartWallUTC.UTC()
+// readBaseRow 는 기저 세션 baseSessionID 의 마지막 귀속 행과 U 를 읽는다. 기저 세션이 없거나(""), 그 세션의 앞 행이
+// 없으면 nil 이다 — PDT 는 벽시계가 그대로 값이 되고(세션 첫 조각의 first_pdt), 판은 판 정하기가 게이트에서 고른다.
+func readBaseRow(ctx context.Context, tx pgx.Tx, r Record, baseSessionID string) (*baseRow, error) {
 	if baseSessionID == "" {
-		return wall, nil
+		return nil, nil
 	}
-
-	var basePDT *time.Time
-	var baseDurationMS int32
-	err := tx.QueryRow(ctx, basePDTSQL, r.StreamID, baseSessionID, r.Seq).Scan(&basePDT, &baseDurationMS)
+	var b baseRow
+	err := tx.QueryRow(ctx, basePDTSQL, r.StreamID, baseSessionID, r.Seq).
+		Scan(&b.Seq, &b.PDT, &b.DurationMS, &b.Version, &b.UnattributedMS)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return wall, nil
+		return nil, nil
 	}
 	if err != nil {
-		return time.Time{}, fmt.Errorf("PDT 기저 행 조회 실패 stream_id=%q seq=%d base_session_id=%q: %w",
+		return nil, fmt.Errorf("PDT 기저 행 조회 실패 stream_id=%q seq=%d base_session_id=%q: %w",
 			r.StreamID, r.Seq, baseSessionID, err)
 	}
-	// pdt NULL 방어 — "session_id 가 있으면 playback_pdt 도 있다"는 M3 쓰기 경로의 성질이지
-	// DB 가 강제하는 제약이 아니다(불변 트리거는 컬럼별 독립). 그런 행은 기저항 부재로 본다.
-	if basePDT == nil {
-		return wall, nil
-	}
-
-	// 누적은 밀리초 그대로 더한다 — 정수 초 나눗셈은 999ms 까지 잘라 그 손실을 다음 항에
-	// 이월시키고, 조각마다 쌓여 재귀식이 조용히 퇴화한다.
-	if acc := basePDT.UTC().Add(time.Duration(baseDurationMS) * time.Millisecond); acc.After(wall) {
-		return acc, nil
-	}
-	return wall, nil
+	return &b, nil
 }
 
 // resolveSeed 는 Decline 귀속(설계 6.5.5)이다. 커밋 뒤에만 부르며, 어떤 실패도
@@ -566,16 +657,21 @@ func isLockTimeout(err error) bool {
 // updateTailSQL 의 가드 두 조건은 둘 다 필수다.
 // 하나만 빠져도 이미 업로드된 행이나 꼬리가 아닌 행이 수정되어 뒤 행들의 PTS 가 전부 어긋난다.
 // 최종 판정을 DB 가 내리게 하는 것이 요점이다 — 메모리 커서와 DB 가 어긋나 있을 수 있다.
+//
+// 영상 끝($5 — 설계 r7 2.14 · P21)은 옛 값이 있고 넘긴 값이 있을 때만 바꾼다. 옛 값이 NULL 인 꼬리는 그 칸을 넘기지
+// 않는다 — 불변 트리거가 NULL → 값을 거부하므로 넘기면 길이 교정까지 함께 실패한다. 줄이는 값은 트리거가 거부한다.
 const updateTailSQL = `
 UPDATE stream_segments
-   SET duration_ms = $3, bytes = $4
+   SET duration_ms = $3, bytes = $4,
+       timing_video_end_ns = CASE WHEN timing_video_end_ns IS NULL OR $5::bigint IS NULL THEN timing_video_end_ns
+                                  ELSE $5::bigint END
  WHERE stream_id = $1
    AND seq = $2
    AND seq = (SELECT pg_catalog.max(seq) FROM stream_segments WHERE stream_id = $1)
    AND upload_state = 'pending'`
 
-func (s *pgStore) UpdateTail(ctx context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {
-	tag, err := s.pool.Exec(ctx, updateTailSQL, streamID, seq, durationMS, bytes)
+func (s *pgStore) UpdateTail(ctx context.Context, streamID string, seq int64, durationMS int32, bytes int64, videoEndNS *int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, updateTailSQL, streamID, seq, durationMS, bytes, videoEndNS)
 	if err != nil {
 		return false, fmt.Errorf("꼬리 정정 실패 stream_id=%q seq=%d: %w", streamID, seq, err)
 	}

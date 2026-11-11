@@ -90,12 +90,13 @@ SELECT pg_catalog.min(seq), pg_catalog.max(seq)
   FROM stream_segments
  WHERE stream_id = $1 AND session_id = ANY($2)`
 
-// chainRowsSQL 은 사슬 범위 [$2, $3] 의 행을 $4 개까지 싣는다 — 조각 축 열은 되감기 적재(rewindRowsSQL)와 같다. 부른
-// 쪽은 상한보다 하나 더 받아 넘침을 가른다.
+// chainRowsSQL 은 사슬 범위 [$2, $3] 의 행을 $4 개까지 싣는다 — 조각 축 열은 되감기 적재(rewindRowsSQL)와 같다(판
+// timing_version 포함 · 원래 사실 칸은 읽지 않음). 부른 쪽은 상한보다 하나 더 받아 넘침을 가른다.
 const chainRowsSQL = `
 SELECT s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
        (s.playback_upload_state = 'uploaded') AS pb_uploaded,
-       (g.seq IS NOT NULL)                    AS is_gap
+       (g.seq IS NOT NULL)                    AS is_gap,
+       s.timing_version
   FROM stream_segments s
   LEFT JOIN stream_published_gaps g ON g.stream_id = s.stream_id AND g.seq = s.seq
  WHERE s.stream_id = $1 AND s.seq >= $2 AND s.seq <= $3

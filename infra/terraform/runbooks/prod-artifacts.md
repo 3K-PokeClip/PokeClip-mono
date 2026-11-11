@@ -27,7 +27,7 @@ prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니
 
 | 단계 | 하는 일 | 선행 |
 |---|---|---|
-| O7c | 이미지 8종(응답기 · 워커 이미지(`prod/workers` 용)를 하면 그만큼 더 — 최대 11종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
+| O7c | 이미지 10종(아래 「이미지」 표의 저장소 키 11개 가운데 응답기 · 워커 셋(`media-ingest-auth` · `render` · `upload`)을 뺀 8종 + 설치 묶음 · 루프백 송출기 — 응답기 · 워커 이미지(`prod/workers` 용)를 하면 그만큼 더, 최대 13종) 푸시 · 다이제스트 기록. `media-sidecar` 는 `prod/media` 키 둘(`sidecar` · `timing_guard`)에 들어갑니다(아래 「검사 핀」) | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
 | O7f 의 5 | apex 랜딩 업로드 · 무효화 | `prod/edge` 적용 · 2번의 업로드 제외 경로 확인(I2-8) |
 
 O7c 는 O7d(next · auth · clip · chat-collector · chat-detector 태스크 정의가
@@ -244,6 +244,15 @@ M6-0(POK-196 장부 스키마) 머지 뒤 O7e 전에 사이드카를 하한 이�
     더합니다. 그 다이제스트를 `prod/media` tfvars 의 `image_digests.sidecar`
     에 넣은 뒤 O7e 로 갑니다.
 
+**검사 핀(`timing_guard` — POK-196 PDT).** PDT 머지 뒤에는 `prod/media`
+tfvars 의 `image_digests.timing_guard` 도 **필수**입니다(없으면 plan 이 필수
+속성 오류로 멈춥니다). 값은 `media-sidecar` 저장소의 c0 하한 이상 이미지
+다이제스트입니다([Media 교체 런북](media-swap.md) 「PDT 하한 판정」 — PDT PR
+머지 커밋을 조상으로 둔 커밋의 빌드). 위 사이드카가 c0 하한 이상이면 같은
+다이제스트를 넣어도 됩니다. 사이드카를 출시 이미지로 내릴 때도 이 값은 내리지
+않습니다. 아래 「기록」 에 그 다이제스트와 c0 하한 판정(「c0 하한 이상」 ·
+판정에 쓴 PDT 머지 SHA)을 함께 적습니다.
+
 O7e 가 이미 끝났으면(하한 아래 사이드카가 prod 에서 도는 중) Media 교체
 런북 「한 창 절차」 를 따릅니다. 그 절차에서는 1 에서 이 걸음으로 미리
 올리고(선행 기록 없이 — 아직 띄우지 않으므로), 그 다이제스트의 상자는 3 의
@@ -254,7 +263,7 @@ SQL 적용 뒤에만 띄웁니다.
 M9 에서 `prod/registry` 에 더한 저장소 둘입니다. 둘 다 `prod/media` apply
 (O7e)의 입력이라 O7e 전에 올립니다. 먼저 `prod/registry` 재적용(저장소 둘
 생성)이 끝나야 합니다([prod/registry](../prod/registry/README.md) 「적용」).
-위 「언제」 · 아래 「기록」 의 8종에 이 둘을 더해 셉니다.
+위 「언제」 · 아래 「기록」 의 10종에 든 둘입니다(「이미지」 표에서 응답기 · 워커 셋을 뺀 8종 + 이 둘).
 
 | 저장소 키 | 원천 | 선행 |
 |---|---|---|
@@ -324,7 +333,8 @@ docker push --platform linux/arm64 \
 푸시한 이미지마다 저장소 · 태그 · 다이제스트 · 빌드한 커밋 SHA(next 는 mono
 develop 커밋)를 적습니다. 사이드카는 롤백 하한 판정(「하한 이상」 · 「하한
 아래」)과 그 판정에 쓴 M6-0 머지 SHA 도 적습니다 — 되돌릴 다이제스트를 고를
-때 이 칸을 봅니다. 워커 이미지는 `java -version` · `ffmpeg -version`(render)
+때 이 칸을 봅니다. 검사 핀(`timing_guard`)은 c0 하한 판정(「c0 하한 이상」)과
+그 판정에 쓴 PDT 머지 SHA 를 적습니다. 워커 이미지는 `java -version` · `ffmpeg -version`(render)
 판도 적습니다 — 베이스 이미지 · apt 판이 고정되지 않아 같은 커밋이어도 빌드
 날짜마다 다른 판이 들어갑니다. 다이제스트는 푸시 출력의 `digest:` 이거나 아래
 명령의 값입니다. 세션 푸시 갈래는 아래 명령의 값을 씁니다(가린 푸시 출력의
@@ -338,8 +348,8 @@ aws ecr describe-images --region ap-northeast-2 \
 
 다이제스트는 `prod/platform` · `prod/media` · `prod/workers`(`image_digests`
 의 `render` · `upload`)의 tfvars(추적하지 않음)에 넣습니다. O7c 의 통과
-조건은 푸시한 8종(응답기 · 워커 이미지를 했으면 그것까지)의 다이제스트가
-모두 기록 · 기입된 것입니다.
+조건은 푸시한 10종(응답기 · 워커 이미지를 했으면 그것까지)의 다이제스트와
+`prod/media` 의 `image_digests.timing_guard` 가 모두 기록 · 기입된 것입니다.
 
 푸시가 다 끝나면 로그아웃합니다. `docker login` 은 토큰(12시간)을 Docker
 자격 증명 저장소(설정에 따라 `~/.docker/config.json`)에 남깁니다.

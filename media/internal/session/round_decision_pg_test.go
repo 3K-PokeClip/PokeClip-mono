@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -111,6 +112,9 @@ func TestDecisionRoundIDEqualsRoundWrittenByOpen(t *testing.T) {
 				t.Errorf("RoundID = %q, want %q", d.RoundID, want)
 			}
 			if opened == "" {
+				if d.NewRound {
+					t.Errorf("개시 아닌 갈래의 NewRound = true, want false")
+				}
 				return
 			}
 			if got := strOf(roundOf(t, pool, opened).roundID); got != d.RoundID {
@@ -118,6 +122,9 @@ func TestDecisionRoundIDEqualsRoundWrittenByOpen(t *testing.T) {
 			}
 			if isNew := d.RoundID == opened; isNew != c.newRound {
 				t.Errorf("RoundID == 새 session_id(%q) = %v, want %v — 「새 회차를 여는가」 판별식이 틀렸다", opened, isNew, c.newRound)
+			}
+			if d.NewRound != c.newRound {
+				t.Errorf("NewRound = %v, want %v — Open 앞 판별(POK-196 PDT)이 Open 뒤 판별과 갈렸다", d.NewRound, c.newRound)
 			}
 		})
 	}
@@ -223,4 +230,27 @@ func TestTDSplitOnLiveOfClosedRoundFailsClosed(t *testing.T) {
 	if got := roundOf(t, pool, seed.id).state; rows != 1 || got != "live" {
 		t.Errorf("세션 행 = %d · %s 상태 = %s, want 1 · live(되돌려졌어야 한다)", rows, seed.id, got)
 	}
+}
+
+// 결정은 live 행의 round_id 를 읽어 싣는다(currentLiveSQL · lockLiveSQL) — 계속 갈래는 그 회차, 하한 거부는 회차 없이
+// FloorRejected 다(POK-196 PDT 생산자 c4a). 잡는 결함: 하한 거부 칸을 세우지 않으면 장부가 그 행에 라이브 회차를 실어
+// 다음 행이 거짓으로 앞뛴다.
+func TestDecideReadsLiveRoundFromLedger(t *testing.T) {
+	pool := newTestPool(t)
+	r, _ := newRoundRegistry()
+	seedLedger(t, pool, ledgerRow{id: "S-live", streamID: "demo", state: "live", roundID: "S-round", startedAt: wall})
+	ctx := context.Background()
+
+	withTx(t, pool, func(tx pgx.Tx) {
+		cur, err := r.Decide(ctx, tx, Input{StreamID: "demo", Seq: 2, StartWallUTC: wall.Add(4 * time.Second),
+			DurationMS: 4000, Op: OpenOrCurrent}, wall.Add(4*time.Second))
+		if err != nil || cur.Outcome != OutcomeCurrent || cur.RoundID != "S-round" || cur.NewRound || cur.FloorRejected {
+			t.Errorf("계속 결정 = (%+v, %v), want 계속 · S-round · 새 회차 아님 · 하한 거부 아님", cur, err)
+		}
+		floor, err := r.Decide(ctx, tx, Input{StreamID: "demo", Seq: 3, StartWallUTC: wall.Add(-2 * time.Second),
+			DurationMS: 4000, Op: OpenOrCurrent}, wall)
+		if err != nil || floor.Outcome != OutcomeNone || floor.RoundID != "" || floor.NewRound || !floor.FloorRejected {
+			t.Errorf("하한 거부 결정 = (%+v, %v), want 비귀속 · 회차 없음 · 하한 거부", floor, err)
+		}
+	})
 }

@@ -148,7 +148,7 @@ func newAssembly(t *testing.T, cfg config.Config, store index.Store) *assembly {
 	}
 	a := &assembly{logs: &logCapture{}, db: db}
 	log := slog.New(a.logs)
-	a.ix = indexer.New(store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, nil, cfg.Indexer, log)
+	a.ix = indexer.New(store, func(string) (int64, error) { return 4000, nil }, noTimingFacts, noopAdopter{}, nil, nil, cfg.Indexer, log)
 	root, err := os.OpenRoot(cfg.SegmentRoot)
 	if err != nil {
 		t.Fatalf("세그먼트 루트 열기 실패: %v", err)
@@ -456,8 +456,9 @@ func TestAssemblePublishingSharesCacheWithIndexer(t *testing.T) {
 type openingStore struct{ fakeStore }
 
 func (s *openingStore) Insert(ctx context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.InsertCommit, error) {
-	out, _, err := s.fakeStore.Insert(ctx, r, seed, src)
-	return out, index.InsertCommit{SessionOpened: true, SessionID: "S-open"}, err
+	out, res, err := s.fakeStore.Insert(ctx, r, seed, src)
+	res.SessionOpened, res.SessionID = true, "S-open"
+	return out, res, err
 }
 
 // handleOldSegment 는 한 시간 전에 시작해 끝난 조각 파일 하나를 만들어 인덱서에 넣는다(워처 FIFO 가 하는 일).

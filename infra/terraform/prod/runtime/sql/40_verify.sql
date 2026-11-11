@@ -33,7 +33,9 @@
 --   media_owner_schema              media_owner 가 public 스키마에 USAGE · CREATE 를 가진다
 --   owner:<표 · 함수>               소유자가 media_owner 다(없으면 이것이 실패한다)
 --   ledger_column:<표>.<열>         M6 장부 열(stream_sessions 의 round_id · round_closed_at · expired_at ·
---                                   stop_marked_at)이 있다
+--                                   stop_marked_at)과 PDT 판 2 칸 일곱(stream_segments 의 timing_version ·
+--                                   timing_wall_guess · timing_recorder_id · timing_segment_number ·
+--                                   timing_video_first_ns · timing_video_end_ns · timing_round_id)이 있다
 --   primary_key:stream_edge_bounds  원장 표의 PK 가 (stream_id, round_id) 그 순서다 — 올림의 ON CONFLICT 가 이것을
 --                                   충돌 대상으로 쓴다(없으면 42P10 이 write_failing 으로만 드러난다)
 --   check:stream_edge_bounds.dvr_floor
@@ -47,6 +49,9 @@
 --                                   stream_sessions_inherits_idx)과 M6-3b 발행 흔적 인덱스
 --                                   (stream_segments_uploaded_session_idx)는 제 표에 그 이름으로 있는지만 본다 — 정의
 --                                   문자열 비교는 PG 판이 바뀌면 깨진다
+--   index:<PDT 인덱스>              PDT 부분 인덱스 셋(stream_segments_timing_round_idx · stream_segments_v2_seq_idx ·
+--                                   stream_segments_legacy_wall_idx)이 stream_segments 에 그 이름으로 있고 쓸 수 있다
+--                                   (indisvalid · indisready). CHECK 넷의 정의 본문은 같은 까닭으로 보지 않는다
 --   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 일반 연결에서 켜진 채('O' · 'A' — 'R' 은
 --                                   replica 에서만 돈다) 제 함수 · 시점(tgtype — 갱신은 AFTER DELETE 문장 단위 ·
 --                                   검사는 BEFORE INSERT 행 단위) · 전이 표 이름(갱신만 deleted_rows)에 묶여 있다 —
@@ -68,8 +73,21 @@
 --   temp:<계정>                     계정이 이 DB 에 TEMP 를 갖지 않는다
 --   db_create:<계정>                계정이 이 DB 에 CREATE 를 갖지 않는다(남의 "$user" 스키마를 먼저 만들지 못하게)
 --   advisory_xact_lock_media_indexer media_indexer 가 pg_advisory_xact_lock(bigint) 을 실행할 수 있다
+--   advisory_xact_lock_shared_media_indexer
+--                                   media_indexer 가 pg_advisory_xact_lock_shared(bigint) 를 실행할 수 있다
+--   trigger:<PDT 트리거>            쓰기자 거부(stream_segments BEFORE INSERT 행 단위)와 게이트 트리거(stream_timing_gate
+--                                   BEFORE UPDATE OR DELETE 행 단위)가 일반 연결에서 켜진 채 제 함수 · 시점에 묶여 있다
+--   function:<PDT 함수> · owner:<PDT 함수>
+--                                   두 함수가 정의자 함수가 아니고 search_path 가 pg_catalog, pg_temp 로 고정돼 있으며
+--                                   소유자가 media_owner 다
+--   function:stream_segments_immutable_axes
+--                                   불변 트리거 함수가 정의자 함수가 아니고 search_path 가 pg_catalog, pg_temp 로 고정돼
+--                                   있다
+--   check:<PDT CHECK>               PDT CHECK 넷(stream_segments)과 게이트 CHECK 셋(stream_timing_gate)이 제 표에 그
+--                                   이름의 CHECK 로 있다 — 정의 본문은 위 인덱스와 같은 까닭으로 보지 않는다
 --
--- 마지막 단언은 사이드카 컷오프 잠금(media/internal/index/store.go 의 lockCutoffStreamSQL)의 전제다.
+-- advisory 단언 둘은 사이드카 컷오프 잠금(media/internal/index/store.go 의 lockCutoffStreamSQL)과 PDT 회차 개시의 게이트
+-- 공유 잠금(열쇠 pc_timing_gate — 설계 r7 9.3)의 전제다.
 -- 권한 정본(media/internal/pgtest/role.go)은 「advisory 잠금은 PUBLIC 기본으로 충분」 이라 GRANT 를 두지
 -- 않는다. K7 (가) — PUBLIC 에서 회수하지 않는다(kty 2026-10-24). 회수하는 날 media_indexer 에 다시 주지 않으면
 -- 여기서 깨진다(H3). CONNECT 는 PUBLIC 에서 거두고 10 이 계정마다 준다 — 10 의 부여가 빠지면 connect 가 깨진다.
@@ -80,7 +98,10 @@
 -- 단언하지 않는 것: 다른 DB(postgres · template1)의 CONNECT · TEMP 는 PUBLIC 기본으로 남는다(K12 — 이 DB 의
 -- TEMP 는 위에서 단언한다). 비밀번호 없음도 보지 못한다 — 마스터는 pg_authid 를 읽지 못하고
 -- pg_roles.rolpassword 는 늘 ******** 다. 앱 사용자가 자기 표에 갖는 권한과 app_chat_detector 의 chat_messages
--- SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 표 행렬은 stream_* 표만 본다.
+-- SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 표 행렬은 stream_* 표만 본다. 게이트 행의 내용(정확히 한 행 ·
+-- 판 2 행이 있으면 래치가 섬)도 보지 않는다 — 마스터는 media_owner 를 상속하지 않아(10 의 INHERIT FALSE) 행을 읽지
+-- 못한다. 행을 없애는 길(소유자의 TRUNCATE · 빈 표 INSERT)은 손 작업뿐이고, 행이 없으면 사이드카는 새 회차를 열지 않는다
+-- (index.errTimingGateMissing — fail-closed).
 --
 -- 내장 함수는 pg_catalog 로 한정하고 연산자는 pg_catalog 에 정확한 판이 있는 형으로 맞춘다(oid 열과 비교하는
 -- regclass · regprocedure · 정수 상수는 ::oid). 배열 비교(text[] = text[])는 pg_catalog 에 다형 판뿐이라
@@ -152,12 +173,16 @@ BEGIN
     tables(t) AS (
         VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps'),
                ('stream_seq_floors'), ('broadcast_lifecycle_outbox'),
-               ('stream_edge_bounds')
+               ('stream_edge_bounds'), ('stream_timing_gate')
     ),
     -- M6 장부 열(ledger_column:<표>.<열>).
     ledger_columns(t, c) AS (
         VALUES ('stream_sessions', 'round_id'), ('stream_sessions', 'round_closed_at'),
-               ('stream_sessions', 'expired_at'), ('stream_sessions', 'stop_marked_at')
+               ('stream_sessions', 'expired_at'), ('stream_sessions', 'stop_marked_at'),
+               ('stream_segments', 'timing_version'), ('stream_segments', 'timing_wall_guess'),
+               ('stream_segments', 'timing_recorder_id'), ('stream_segments', 'timing_segment_number'),
+               ('stream_segments', 'timing_video_first_ns'), ('stream_segments', 'timing_video_end_ns'),
+               ('stream_segments', 'timing_round_id')
     ),
     -- 원장 표(POK-525)의 oid 다. 표가 없으면 행이 없어 모양 단언(primary_key · check · not_null)을 펼치지 않는다 —
     -- 없는 표는 owner:stream_edge_bounds 하나로 드러난다.
@@ -183,6 +208,26 @@ BEGIN
     floor_triggers(tg, fn, definer, tgtype, oldtable) AS (
         VALUES ('stream_segments_seq_floor_raise', 'stream_segments_raise_seq_floor', true, 8, 'deleted_rows'),
                ('stream_segments_seq_floor_guard', 'stream_segments_check_seq_floor', false, 7, NULL)
+    ),
+    -- PDT 부분 인덱스 셋(index:<인덱스>).
+    timing_indexes(i) AS (
+        VALUES ('stream_segments_timing_round_idx'), ('stream_segments_v2_seq_idx'), ('stream_segments_legacy_wall_idx')
+    ),
+    -- PDT 트리거 둘(trigger:<트리거> · function:<함수> · owner:<함수>). tgtype 비트는 위와 같고 16 = UPDATE 다 — 쓰기자
+    -- 거부 7 = BEFORE INSERT 행 단위 · 게이트 27 = BEFORE UPDATE OR DELETE 행 단위.
+    timing_triggers(rel, tg, fn, tgtype) AS (
+        VALUES ('stream_segments', 'stream_segments_legacy_writer_guard', 'stream_segments_refuse_legacy_writer', 7),
+               ('stream_timing_gate', 'stream_timing_gate_guard_tg', 'stream_timing_gate_guard', 27)
+    ),
+    -- PDT CHECK 넷 · 게이트 CHECK 셋(check:<CHECK>).
+    timing_checks(rel, c) AS (
+        VALUES ('stream_segments', 'stream_segments_timing_marker_chk'),
+               ('stream_segments', 'stream_segments_timing_video_chk'),
+               ('stream_segments', 'stream_segments_timing_video_marker_chk'),
+               ('stream_segments', 'stream_segments_timing_v2_chk'),
+               ('stream_timing_gate', 'stream_timing_gate_one_row_chk'),
+               ('stream_timing_gate', 'stream_timing_gate_switch_chk'),
+               ('stream_timing_gate', 'stream_timing_gate_latch_chk')
     ),
     granted(r, t, p) AS (
         VALUES ('media_indexer', 'stream_segments', 'SELECT'),
@@ -210,6 +255,7 @@ BEGIN
                ('media_indexer', 'stream_edge_bounds', 'INSERT'),
                ('media_indexer', 'stream_edge_bounds', 'UPDATE'),
                ('media_indexer', 'stream_edge_bounds', 'DELETE'),
+               ('media_indexer', 'stream_timing_gate', 'SELECT'),
                ('media_janitor', 'stream_segments', 'SELECT'),
                ('media_janitor', 'stream_sessions', 'SELECT'),
                ('media_janitor', 'stream_cutoffs', 'SELECT'),
@@ -356,6 +402,46 @@ BEGIN
                         WHERE schemaname = 'public' AND tablename = t::name AND indexname = i::name)
           FROM fk_indexes
         UNION ALL
+        SELECT 'index:' || i,
+               EXISTS (SELECT 1 FROM pg_index
+                        WHERE indexrelid = pg_catalog.to_regclass('public.' || i)::oid
+                          AND indrelid = pg_catalog.to_regclass('public.stream_segments')::oid
+                          AND indisvalid AND indisready)
+          FROM timing_indexes
+        UNION ALL
+        SELECT 'trigger:' || tg,
+               EXISTS (SELECT 1 FROM pg_trigger
+                        WHERE tgrelid = pg_catalog.to_regclass('public.' || rel)::oid
+                          AND tgname = tg::name AND tgenabled IN ('O'::"char", 'A'::"char")
+                          AND tgfoid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid
+                          AND pg_trigger.tgtype = timing_triggers.tgtype::int2)
+          FROM timing_triggers
+        UNION ALL
+        SELECT 'function:' || fn,
+               EXISTS (SELECT 1 FROM pg_proc
+                        WHERE oid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid
+                          AND NOT prosecdef
+                          AND proconfig OPERATOR(pg_catalog.=) ARRAY['search_path=pg_catalog, pg_temp'])
+          FROM timing_triggers
+        UNION ALL
+        SELECT 'owner:' || fn,
+               EXISTS (SELECT 1 FROM pg_proc
+                        WHERE oid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid
+                          AND pg_catalog.pg_get_userbyid(proowner) = 'media_owner')
+          FROM timing_triggers
+        UNION ALL
+        SELECT 'function:stream_segments_immutable_axes',
+               EXISTS (SELECT 1 FROM pg_proc
+                        WHERE oid = pg_catalog.to_regprocedure('public.stream_segments_immutable_axes()')::oid
+                          AND NOT prosecdef
+                          AND proconfig OPERATOR(pg_catalog.=) ARRAY['search_path=pg_catalog, pg_temp'])
+        UNION ALL
+        SELECT 'check:' || c,
+               EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = pg_catalog.to_regclass('public.' || rel)::oid
+                          AND conname = c::name AND contype = 'c'::"char")
+          FROM timing_checks
+        UNION ALL
         SELECT 'trigger:' || tg,
                EXISTS (SELECT 1 FROM pg_trigger
                         WHERE tgrelid = pg_catalog.to_regclass('public.stream_segments')::oid
@@ -440,6 +526,11 @@ BEGIN
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_indexer')
                AND pg_catalog.has_function_privilege('media_indexer', 'pg_catalog.pg_advisory_xact_lock(bigint)',
                                                      'EXECUTE')
+        UNION ALL
+        SELECT 'advisory_xact_lock_shared_media_indexer',
+               EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_indexer')
+               AND pg_catalog.has_function_privilege('media_indexer',
+                                                     'pg_catalog.pg_advisory_xact_lock_shared(bigint)', 'EXECUTE')
     )
     SELECT coalesce(pg_catalog.array_agg(id ORDER BY id), '{}') INTO failed FROM checks WHERE ok IS NOT TRUE;
 

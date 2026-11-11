@@ -547,12 +547,12 @@ func renderSession(s index.RewindSession) rewind.Session {
 	}
 }
 
-// boundaryRow 는 장부 행 r 의 경계 행이다(열이 1:1 이다).
+// boundaryRow 는 장부 행 r 의 경계 행이다. 두 행 타입은 필드(이름 · 타입 · 순서)가 같다 — 한쪽에만 열이 생기면 이
+// 변환이 컴파일되지 않는다(rewind/cache 의 reload 와 같은 변환). 이름 붙은 필드 리터럴이면 판(TimingVersion)을 빼먹어도
+// 컴파일되어 동결 DVR · VOD 본문에 판 태그가 빠진다(TestFreezeDVRRowsCarryTimingVersion ·
+// TestVODPlanKeepsTimingVersionThroughFillGap).
 func boundaryRow(r index.RewindRow) boundary.Row {
-	return boundary.Row{
-		Seq: r.Seq, SessionID: r.SessionID, DurationMS: r.DurationMS, PlaybackPDT: r.PlaybackPDT,
-		PlaybackS3Key: r.PlaybackS3Key, PlaybackUploaded: r.PlaybackUploaded, IsGap: r.IsGap,
-	}
+	return boundary.Row(r)
 }
 
 // ledgerSnapshot 은 장부 적재분을 boundary.Snapshot 으로 내보인다(rewind/cache 의 snapshot 과 같은 형).

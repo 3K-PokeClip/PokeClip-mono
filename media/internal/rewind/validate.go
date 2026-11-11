@@ -39,7 +39,16 @@ const MaxVODBodyBytes = 4 << 20
 // 라 누적항이 하한이고(index 의 playbackPDT), ms 로 잘라 적어도 조각 길이가 ms 정수라 부등식이 그대로
 // 선다(floor(t + n ms) = floor(t) + n ms — 앞 행 PDT 가 push 값과 DB 의 µs 절삭값으로 갈려도 ms 로
 // 자르면 같다). 그래서 정상 목록은 여유 없이도 통과한다. 1ms 를 넘는 겹침은 재귀식을 거치지 않은 값이다.
+// 이 폭은 판 2 이웃 밖(판 NULL 이웃 · 판이 바뀌는 이웃)에만 쓴다 — 판 2 이웃은 B8 세 조건이다(checkPDTV2).
 const pdtSlack = time.Millisecond
+
+// pdtOverlapLimit 은 판 2 이웃이 겹칠 수 있는 폭의 상한(제외)이다 — B8 둘째 조건 「겹침이 1초 미만」(계약 r24 6-6-3
+// 이웃 세 조건 · HLS bis-22 6.2.1). 생산자는 한 번에 최대 999ms 를 당기므로(index 의 maxOverlap · K1-c) 그 값이
+// 이 상한 바로 아래의 경계다.
+const pdtOverlapLimit = time.Second
+
+// timingVersionV2 는 B8 세 조건으로 S7 을 재는 판(timing_version)이다 — 계약3 7-6 · 생산자 설계 r7 2.7.
+const timingVersionV2 int16 = 2
 
 // ErrHaltPublication 은 발행 중단 처치다 — S4 를 뺀 여섯 검사의 위반. 이번 발행을 내지 않는다.
 var ErrHaltPublication = errors.New("rewind: 발행 중단")
@@ -178,6 +187,8 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 //	조각마다  URI = BaseURL + "/" + playback_s3_key · PDT 줄 = playback_pdt(ms 로 자름) ·
 //	         EXTINF 줄 = duration_ms · GAP 줄은 GAP 원장에 있는 행에만 · MAP 줄 개수·위치 ·
 //	         KindVOD 면 DISCONTINUITY 줄 수 = HasDiscontinuityTag(segmentMismatch)
+//	판 태그   조각마다 timingTag 가 바라는 줄 그대로(개수 0 또는 1 · 값 · 자리 MAP 뒤 · GAP · PDT 앞 — timingMismatch) ·
+//	         본문 전체의 판 태그 줄 수 = 줄을 바라는 조각 수(마지막 조각 뒤에 붙은 줄도 센다)
 //
 // 나머지 검사는 행 값으로 판정한다. 그 판정이 발행되는 바이트에도 참이려면 본문이 행 값을 그대로
 // 적었어야 하고, 이 조항이 그것을 확인한다 — 없으면 행과 다른 EXTINF·PDT·URI 를 적은 본문이 검사를
@@ -189,7 +200,8 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 // 줄 수가 행 값(HasDiscontinuityTag)과 같은지를, S5 VOD 세션 경계 조항(checkBody)이 그 값이 세션 경계와 맞는지를
 // 본다(POK-549 S5 (a)(b)). 되감기 목록에서는 어느 검사도 읽지 않는다 — 4초 발행 경로는 바뀌지 않는다.
 // 서식(EXTINF 소수 셋째 자리 · pdtLayout · URI 결합)은 Render 와 같다 — 둘이 갈리면 모든 목록이 여기서
-// 멈추므로 곧바로 드러난다(g6_f2 검사).
+// 멈추므로 곧바로 드러난다(g6_f2 검사). 판 태그는 다른 검사가 읽지 않지만 플레이어가 조각마다 환산식을 고르는
+// 재료라(계약3 7-6) 줄 하나가 빠지거나 옮겨 가면 그 뒤 조각 전부의 시각이 틀린다 — 그래서 이 조항이 행 값과 견준다.
 func checkBodyMatchesRows(p Playlist, body []byte, lines []string, segs []segmentLines) error {
 	if len(segs) != len(p.Rows) {
 		return violation("S5", "본문의 조각 %d개가 목록 행 %d개와 다르다 — 본문이 이 목록의 렌더 결과가 아니다",
@@ -198,11 +210,20 @@ func checkBodyMatchesRows(p Playlist, body []byte, lines []string, segs []segmen
 	if problem := p.headerMismatch(body, lines, segs[0]); problem != "" {
 		return violation("S5", "머리 줄이 목록 값과 다르다 — %s", problem)
 	}
+	wantTags := 0
 	for i, r := range p.Rows {
 		runStart := i == 0 || r.SessionID != p.Rows[i-1].SessionID
-		if problem := p.segmentMismatch(r, segs[i], runStart); problem != "" {
+		timing := timingTag(p.Rows, i)
+		if problem := p.segmentMismatch(r, segs[i], runStart, timing); problem != "" {
 			return violation("S5", "seq %d 조각이 행과 다르다 — %s", r.Seq, problem)
 		}
+		if timing != "" {
+			wantTags++
+		}
+	}
+	if got := len(linesWithPrefix(lines, timingTagName)); got != wantTags {
+		return violation("S5", "본문의 판 태그 줄 %d개가 목록 행이 바라는 %d개와 다르다 — 조각 밖(마지막 조각 뒤)에 줄이 있다",
+			got, wantTags)
 	}
 	return nil
 }
@@ -250,8 +271,9 @@ func (p Playlist) headerMismatch(body []byte, lines []string, first segmentLines
 }
 
 // segmentMismatch 는 본문 조각 seg 가 행 r 을 그대로 적지 않은 곳이다("" = 그대로 적었다). runStart 는 이
-// 조각에서 회차가 바뀌는가다(목록 첫 조각 포함). PDT·EXTINF·GAP 줄은 순서를 보지 않고 모음으로 견준다 —
-// 조각 앞 태그는 순서와 무관하게 그 조각에 붙는다(RFC 8216bis-22 4.4.4).
+// 조각에서 회차가 바뀌는가다(목록 첫 조각 포함). timing 은 이 조각이 바라는 판 태그 줄이다("" = 0줄 — timingTag).
+// PDT·EXTINF·GAP 줄은 순서를 보지 않고 모음으로 견준다 — 조각 앞 태그는 순서와 무관하게 그 조각에 붙는다(RFC
+// 8216bis-22 4.4.4). 판 태그 줄만은 자리를 본다(timingMismatch).
 //
 // MAP 줄은 개수·위치만 본다: 회차가 이어지는 조각 앞 0줄, 바뀌는 조각 앞 1줄 이하(MAP 은 다음 MAP 까지
 // 이어 적용된다 — 4.4.4.5). 있는지·값이 맞는지는 S4(접두)·S5(MAP 도달 가능)가 본다 — 여기서 보면 접두
@@ -260,7 +282,7 @@ func (p Playlist) headerMismatch(body []byte, lines []string, first segmentLines
 // KindVOD 면 DISCONTINUITY 줄 수도 본다: HasDiscontinuityTag 가 참이면 1줄, 거짓이면 0줄이다. 「#EXT-X-DISCONTINUITY」
 // 와 글자 그대로 같은 줄만 센다 — 접두로 세면 첫 조각 태그에 섞인 머리 줄 #EXT-X-DISCONTINUITY-SEQUENCE: 를 표시로
 // 읽어 모든 VOD 가 멈춘다(POK-549 R2). 되감기 목록은 세지 않는다(checkBodyMatchesRows).
-func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart bool) string {
+func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart bool, timing string) string {
 	if want := p.BaseURL + "/" + r.PlaybackS3Key; seg.uri != want {
 		return fmt.Sprintf("URI %q — 장부 키로는 %q", seg.uri, want)
 	}
@@ -285,6 +307,32 @@ func (p Playlist) segmentMismatch(r boundary.Row, seg segmentLines, runStart boo
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		return fmt.Sprintf("PDT·EXTINF·GAP 줄 %q — 행 값으로는 %q", got, want)
+	}
+	return timingMismatch(seg.tags, timing)
+}
+
+// timingMismatch 는 조각 태그 줄 tags 의 판 태그가 바라는 줄 want 와 다른 곳이다("" = 같다 — want "" 는 0줄). 판 태그
+// 줄은 이름(timingTagName)으로 센다 — 값이 깨진 줄(콜론 없음 · 꼬리 글자)도 센다.
+// 한 줄이면 자리도 본다: 그 조각의 MAP 줄 뒤 · 조각 줄(GAP · PDT · EXTINF) 앞이다(계약3 7-6 「MAP 뒤(MAP 이 없으면 맨
+// 앞)」). MAP 앞이면 hls.js 1.7.3 이 그 줄을 초기화 조각의 것으로 읽어 이 조각에 판이 없다. 「맨 앞」 은 조각 줄보다
+// 앞이라는 뜻으로 잰다 — 첫 조각의 태그에는 목록 머리 줄이 섞이고, 렌더는 끊김 표시 줄을 MAP 앞에 쓴다.
+func timingMismatch(tags []string, want string) string {
+	got := linesWithPrefix(tags, timingTagName)
+	switch {
+	case want == "" && len(got) == 0:
+		return ""
+	case want == "":
+		return fmt.Sprintf("판 태그 줄 %q — 판 NULL 첫 조각 · 앞 조각과 판이 같은 조각 앞은 0줄이다", got)
+	case !slices.Equal(got, []string{want}):
+		return fmt.Sprintf("판 태그 줄 %q — 행의 판으로는 %q 한 줄이다", got, want)
+	}
+	at := slices.Index(tags, want)
+	mapAt := slices.IndexFunc(tags, func(l string) bool { return strings.HasPrefix(l, "#EXT-X-MAP:") })
+	segAt := slices.IndexFunc(tags, func(l string) bool {
+		return l == "#EXT-X-GAP" || strings.HasPrefix(l, "#EXT-X-PROGRAM-DATE-TIME:") || strings.HasPrefix(l, "#EXTINF:")
+	})
+	if at < mapAt || at > segAt {
+		return fmt.Sprintf("판 태그 줄 %q 가 %d번째 태그 줄이다 — MAP 줄(%d번째) 뒤 · 첫 조각 줄 GAP · PDT · EXTINF(%d번째) 앞이어야 한다", want, at+1, mapAt+1, segAt+1)
 	}
 	return ""
 }
@@ -658,13 +706,18 @@ func checkGeneration(p Playlist, body []byte, gen int64, prev *Published) error 
 
 // checkPDT 는 S7 PDT 엄격 단조다 — 이웃한 두 조각의 PDT 가 뒤로 가거나 겹치지 않는가. 발행되는 PDT 줄
 // (ms 로 자른 값)로 잰다: 원래 값이 1µs 라도 늘었어도 발행 줄 둘이 같으면 발행 목록은 엄격 증가가 아니다.
+// 두 행이 모두 판 2 면 B8 세 조건이다(checkPDTV2). 그 밖의 이웃(판 NULL 끼리 · 판이 바뀌는 자리)은 아래 두 항이다.
 //
 //	PDT[i+1] > PDT[i]  ∧  PDT[i+1] ≥ PDT[i] + duration[i] − pdtSlack      (PDT = ms 로 자른 playback_pdt)
 //
 // 첫째 항은 RFC 8216bis-22 6.2.1 의 「뒤 조각은 앞 조각과 일부만 겹쳐야 한다」이고, 둘째 항이 겹침
-// 폭을 pdtSlack 로 묶는다(RFC 는 1초 미만 겹침까지 허용하지만 우리 PDT 는 재귀식이라 겹치지 않는다).
+// 폭을 pdtSlack 로 묶는다(RFC 는 1초 미만 겹침까지 허용하지만 판 NULL PDT 는 재귀식이라 겹치지 않는다).
 // 조각이 pdtSlack 보다 길면 둘째 항이 첫째 항을 함의하므로, 첫째 항이 따로 일하는 것은 길이 1ms
-// 조각 뒤뿐이다. 앞으로 뛰는 PDT(순단·벽시계 전진)는 하한만 보므로 통과한다.
+// 조각 뒤뿐이다. 앞으로 뛰는 PDT(순단·벽시계 전진)는 하한만 보므로 통과한다. 판이 바뀌는 이웃을 이 항으로
+// 재는 까닭: 한 목록의 행은 모두 같은 판이라(계약 I20 · 계승은 앞 세션 판) 그 이웃은 생기지 않는다 — 렌더 timingTag
+// 와 S5 가 판이 바뀌는 목록을 다루는 것은 방어이고, 생기면 더 좁은 쪽이 안전하다. 판 2 이웃은 세션이 바뀌어도(계승
+// 접두 → 계승 세션) 세 조건으로 잰다 — 계승 세션은 앞 세션의 회차(timing_round_id)를 이어 계약의 「같은 회차 안」
+// 이고, 새 회차 첫 행은 한 목록에 들지 않는다(I20 · E24 — TestValidatePDTB8AcrossRounds).
 // 위반은 발행 중단이다(설계 4.5.5 처치 저울): 그 줄을 빼면 seq 가 끊겨 MSN 축이 무너지고, 값을
 // 고치는 길은 장부 불변 트리거와 부딪힌다.
 func checkPDT(p Playlist) error {
@@ -673,6 +726,12 @@ func checkPDT(p Playlist) error {
 		// 발행되는 PDT 줄로 잰다 — 렌더는 PDT 를 ms 로 잘라 적는다(pdtLayout). 그 줄이 이 절삭값인지는
 		// checkBodyMatchesRows 가 확인했다.
 		prevPDT, curPDT := prev.PlaybackPDT.Truncate(time.Millisecond), cur.PlaybackPDT.Truncate(time.Millisecond)
+		if prev.TimingVersion == timingVersionV2 && cur.TimingVersion == timingVersionV2 {
+			if err := checkPDTV2(prev, cur, prevPDT, curPDT); err != nil {
+				return err
+			}
+			continue
+		}
 		floor := prevPDT.Add(time.Duration(prev.DurationMS)*time.Millisecond - pdtSlack)
 		if !curPDT.After(prevPDT) || curPDT.Before(floor) {
 			return violation("S7", "seq %d 의 PDT 줄 %s 가 앞 조각 seq %d(PDT 줄 %s · %dms)보다 앞서거나 %s 넘게 겹친다",
@@ -680,6 +739,35 @@ func checkPDT(p Playlist) error {
 		}
 	}
 	return nil
+}
+
+// checkPDTV2 는 판 2 이웃의 S7 — B8 세 조건이다(계약 r24 6-6-3 이웃 세 조건 · 생산자 설계 r7 2.7 · 2.10 (나)).
+// prevPDT · curPDT 는 발행되는 PDT 줄(ms 로 자른 값)이다.
+//
+//	조건 1  시작이 앞선다       PDT[i+1] > PDT[i]
+//	조건 2  겹침이 1초 미만이다  PDT[i+1] > PDT[i] + duration[i] − pdtOverlapLimit
+//	조건 3  끝이 앞선다         PDT[i+1] + duration[i+1] > PDT[i] + duration[i]
+//
+// 생산자의 겹침 갈래 max(w, E − 999, E − dur(k) + 1, S + 1) 는 셋을 함께 만족한다 — 네 항이 모두 E 이하이고
+// 둘째 · 셋째 · 넷째 항이 각각 2 · 3 · 1 을 지킨다(index.MixV2). 셋째 조건이 「뒤 조각이 앞 조각 안에 통째로 드는
+// 겹침」을 막아, 겹친 시각을 나중 조각으로 푸는 소비자 규칙(B8 · HLS 6.2.1)이 늘 그 조각에 닿는다. 사이에 목록에
+// 실리지 않는 판 2 비귀속 행이 있어도 셋은 선다(사슬 이웃마다 서면 건너뛴 이웃에도 선다 — 설계 2.7).
+// 까닭에 조건 번호를 적는다(설계 8절 신호표 — S7 속성 「조건 번호(시작 · 1초 · 끝)」).
+func checkPDTV2(prev, cur boundary.Row, prevPDT, curPDT time.Time) error {
+	prevEnd := prevPDT.Add(time.Duration(prev.DurationMS) * time.Millisecond)
+	cond := 0
+	switch {
+	case !curPDT.After(prevPDT):
+		cond = 1
+	case !curPDT.After(prevEnd.Add(-pdtOverlapLimit)):
+		cond = 2
+	case !curPDT.Add(time.Duration(cur.DurationMS) * time.Millisecond).After(prevEnd):
+		cond = 3
+	default:
+		return nil
+	}
+	return violation("S7", "seq %d 의 PDT 줄 %s(%dms)가 앞 조각 seq %d(PDT 줄 %s · %dms)와 B8 조건 %d 을 어긴다 — 판 2 이웃은 시작 · 끝이 앞서고 겹침이 %s 미만이어야 한다",
+		cur.Seq, curPDT.UTC().Format(pdtLayout), cur.DurationMS, prev.Seq, prevPDT.UTC().Format(pdtLayout), prev.DurationMS, cond, pdtOverlapLimit)
 }
 
 // segmentLines 는 본문의 조각 하나다 — URI 줄과 그 앞(직전 URI 줄 다음부터)의 태그 줄들. 첫 조각의

@@ -118,7 +118,14 @@ type SessionDecision struct {
 	// 「새 회차를 여는가」 는 RoundID == Open 이 돌려준 session_id 로 가린다(Open 뒤에서 쓴다). Open 은 이 값을 대조해
 	// 자기가 쓸 round_id 와 다르면 오류를 낸다 — 트랜잭션이 되돌려져 키가 세션과 다른 회차로 저장되지 않는다.
 	RoundID string
-	Plan    SessionPlan
+	// NewRound 는 이 개시가 새 회차를 여는가다 — Open 앞의 판 정하기(새 회차면 게이트 판 · 설계 r7 2.4)가 쓰는 판별이다.
+	// 결정자가 RoundID 와 같은 자리에서 정하며, 참이면 RoundID 는 Open 이 돌려줄 새 session_id 와 같다(장부가 Open 뒤에
+	// 단언한다). 개시가 아니면 거짓이다.
+	NewRound bool
+	// FloorRejected 는 라이브 세션이 있는데 귀속 하한에서 거부된 비귀속 조각인가다(설계 2.4 규칙 2) — 그 행은 판만
+	// 판 정하기 3항을 따르고 이어 계산 회차는 없다. 비귀속의 다른 원인(정책 거부 · 평시 CurrentOnly)은 거짓이다.
+	FloorRejected bool
+	Plan          SessionPlan
 }
 
 // PlaybackKeyFunc 는 ③ 조각 키 파생이다(설계 5.2 — playback.SegKey · POK-525 설계 2-1 — playback.RoundSegKey).

@@ -123,6 +123,12 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed i
 		if event, note, isContention := contentionSignal(insertErr); isContention {
 			ix.log.Warn(event, "stream_id", rec.StreamID, "seq", rec.Seq,
 				"attempt", attempt+1, "err", insertErr, "note", note)
+		} else if errors.Is(insertErr, index.ErrTimingVersionUnsupported) {
+			// 쓰기 시점 판 검사 거부(POK-196 PDT 설계 r7 8절) — 이 이미지가 쓸 수 없는 판을 그 행이 요구한다. PgError 가 아니라
+			// classifyInsertError 가 fateRetry 로 접는 갈래와 같다: 백오프로 다시 시도하고(게이트 스위치를 내리면 풀린다),
+			// 상한을 다 쓰면 아래 소진 경로가 D8 처분(종료 → 재기동)으로 간다 — 판을 모른 채 장부에 쓰지 않는다.
+			ix.log.Error("timing_version_unsupported", "stream_id", rec.StreamID, "seq", rec.Seq,
+				"attempt", attempt+1, "err", insertErr, "note", "이 이미지가 쓰지 못하는 판이다. 게이트 스위치를 확인한다")
 		} else {
 			switch classifyInsertError(insertErr) {
 			case fatePoison:

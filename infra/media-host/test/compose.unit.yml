@@ -13,6 +13,7 @@
 #     하나만 고정 200(사례 9 재통과 판정).
 #   - sidecar: 에코 sidecar — 시작마다 표식 줄(상자 스위치를 받았으면 기동 신호 줄
 #     playback_key_layout 도), 지정 지연 뒤 종료 1.
+#   - timing-preflight: 검사 대역 — 받은 판 목록을 한 줄 내고 0(아래 서비스 주석).
 #
 # 값은 모두 시험 env 파일(유닛 EnvironmentFile)이 넣는다(빈 값이면 compose 가 멈춘다):
 #   PCBENCH_ECHO_IMAGE · PCBENCH_NGINX_IMAGE · PCBENCH_NGINX_CONF ·
@@ -130,6 +131,32 @@ services:
       driver: journald
       options:
         tag: pokeclip-media-sidecar
+    labels: *bench-labels
+
+  # 기동 전 검사 자리(POK-196 PDT) — 시작 스크립트가 compose up 앞에서 `run --rm
+  # --no-deps -T` 로 한 번 부른다. 사이드카 image 줄이 변수 꼴이라 라벨을 읽지
+  # 못해(판 목록 null) 이 서비스를 부른다. 실물 검사는 없고 받은 판 목록을 한 줄
+  # 내고 0 으로 끝난다(nginx 공식 이미지의 sh). 막힘 갈래는 start_test 가 본다.
+  timing-preflight:
+    image: ${PCBENCH_NGINX_IMAGE:?}
+    profiles:
+      - preflight
+    entrypoint:
+      - /bin/sh
+      - -c
+      - echo "TIMING PREFLIGHT readable=$${SIDECAR_TIMING_READABLE:-}"
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
+    logging:
+      driver: journald
+      options:
+        tag: pokeclip-media-timing-preflight
     labels: *bench-labels
 
 networks:

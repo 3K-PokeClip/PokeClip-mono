@@ -13,6 +13,7 @@
 #     sidecar.env(끔)는 start-media.sh 의 시작 점검만 본다.
 #   - bind 원본: 렌더 두 파일은 RUNTIME_DIR, nginx 설정은 PCBENCH_NGINX_CONF.
 #   - 시험 전용: 라벨 · 프로젝트 이름 · pull_policy · probe 서비스(사례 12).
+#   - timing-preflight: 검사 대역(받은 판 목록을 내고 0 — 아래 서비스 주석).
 #
 # 값은 모두 실행하는 쪽이 넣는다(빈 값이면 compose 가 멈춘다):
 #   - PCBENCH_ECHO_IMAGE.
@@ -126,6 +127,29 @@ services:
         read_only: true
         bind:
           create_host_path: false
+    labels: *bench-labels
+
+  # 기동 전 검사 자리(POK-196 PDT) — start-media.sh 가 compose up 앞에서 `run --rm
+  # --no-deps -T` 로 한 번 부른다. 이 파일의 사이드카 image 줄은 변수 꼴이라
+  # 시작 스크립트가 라벨을 읽지 못하고(판 목록 null) 이 서비스를 부른다. 실물
+  # 검사(segment-indexer timing-gate-check · DB)는 없고, 받은 판 목록을 한 줄
+  # 내고 0 으로 끝난다(nginx 공식 이미지의 sh). 막힘 갈래는 start_test 가 본다.
+  timing-preflight:
+    image: ${PCBENCH_NGINX_IMAGE:?}
+    profiles:
+      - preflight
+    entrypoint:
+      - /bin/sh
+      - -c
+      - echo "TIMING PREFLIGHT readable=$${SIDECAR_TIMING_READABLE:-}"
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
     labels: *bench-labels
 
   # 다른 bridge 컨테이너 자리(사례 12) — `docker compose run --rm probe …` 로만 쓴다.

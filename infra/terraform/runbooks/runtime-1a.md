@@ -1116,6 +1116,81 @@ make_publish_rest '<시험 ingestStreamId>' '<걸음 8 시각 — epoch 초>' &&
 *   기록에 옮기는 것은 `== read` 뒤 `q | n` 줄뿐입니다. 회차 id · 행 원문은
     옮기지 않습니다.
 
+## PDT 장부 칸 · 판 게이트(POK-196 PDT)
+
+PDT 판 2 생산자(POK-196 PDT PR)의 DB 몫입니다. 그 PR 의 c1 이 운영 SQL
+(`stream_schema.sql` · `20_schema.sql` · `30_grants.sql` · `40_verify.sql`)에
+`stream_segments` 칸 일곱(`timing_version` · 원래 사실 다섯 ·
+`timing_round_id`) · CHECK 넷 · 게이트 표 `stream_timing_gate`(한 행 —
+스위치 `new_round_version` · 래치 `highest_version`) · 트리거 셋 · 부분
+색인 셋을 더했고, 새 SQL 파일은 없습니다. 적용은 「M6 스키마 재실행」 을
+그대로 돕니다. 이 절은 그 재실행의 조건과, 재실행 밖에서 보내는 게이트
+손 SQL 의 예외를 적습니다. 배포 순서 전체는 [Media 교체 런북](media-swap.md)
+「PDT 판 2 롤백 하한 · 판 게이트」 입니다.
+
+### PDT 재실행 조건
+
+*   **언제**: PDT PR 머리(= c0 이미지의 커밋)의 PG 시험과 P13 연습이 통과한
+    뒤입니다. 재실행 SHA 는 PDT PR 머지 커밋입니다. **방송 없는 시간대**에
+    돕니다 — 칸 추가는 표를 다시 쓰지 않지만 ACCESS EXCLUSIVE 를 잡고
+    `psql -1` 이라 파일 끝 커밋까지 남아, 그동안 장부 표의 읽기 질의도
+    기다립니다(사이드카 INSERT 는 5초 잠금 대기 뒤 백오프로 유실 없음).
+*   **기록**: 적용 직전 `stream_segments` 행 수를 기록에 한 줄 남깁니다(위
+    「M6 스키마 재실행 순서」 의 새 인덱스 재실행과 같은 규칙).
+*   **출시 이미지는 그대로 돕니다.** 새 칸에 쓰지 않아 NULL 이고, CHECK 는 모두
+    NULL 이라 만족하며, 래치가 NULL 이라 쓰기자 거부(`legacy_writer_refused`)가
+    걸리지 않습니다.
+*   **적용 뒤 정의를 고치지 않습니다.** 칸 · CHECK · 색인 DO 블록은 「이름이
+    있으면 건너뜀」 이라, 같은 이름으로 정의를 고친 SHA 로 다시 돌려도 옛
+    정의가 조용히 남고 `MissingLedgerSchema` 도 통과합니다. 적용 뒤의 정의
+    변경은 새 이름 · 전진 SQL PR 로만 합니다.
+*   **소비자 통지**: 적용 직후 렌더 · 웹 세션에 커밋 SHA · 객체 목록 · 「새
+    칸은 c0 가 그 DB 에 쓰기 전까지 NULL」 을 보냅니다.
+
+### PDT 판 게이트 손 SQL
+
+게이트 행을 바꾸는 것은 마스터의 손 SQL 뿐입니다 — 사이드카(`media_indexer`)는
+게이트에 SELECT 만 갖습니다. 「실패 · 시간 초과」 의 손 SQL 규칙의 예외이고(교정이
+아님 — 「M6 읽기 질의」 와 같은 자리), 보내는 꼴은 같습니다: 실행기를 켠 흐름 ·
+새 페이로드 · SQL 원문을 kty 에게 보이고 승인 · 뒤이어 `40_verify.sql` · 판정은
+상태 `Success` 와 `VERIFY OK`.
+
+| 손 SQL | 언제 | 문장(`SET ROLE media_owner;` 뒤 한 문장) |
+|---|---|---|
+| 스위치 2 | Media 교체 런북 「PDT 판 2 롤백 하한 · 판 게이트」 의 스위치 2 선행 조건이 선 뒤 | `UPDATE stream_timing_gate SET new_round_version = 2, changed_at = now(), changed_by = '<사람>';` |
+| 스위치 NULL(판 2 쓰기 멈춤) | 새 회차를 판 NULL 로 되돌리고 싶을 때 — 열린 판 2 회차는 끝까지 판 2 | `UPDATE stream_timing_gate SET new_round_version = NULL, changed_at = now(), changed_by = '<사람>';` |
+
+*   **한 트랜잭션으로 짧게 보냅니다.** 페이로드 파일 하나를 `psql -X -1` 로
+    돌리고 끝냅니다. `-1` 은 파일 전체(`SET ROLE` · UPDATE 한 문장 · 확인
+    SELECT)를 한 트랜잭션으로 싸고 파일 끝에서 바로 커밋합니다 — 자동 커밋이
+    아니라 그 몇 문장 동안만 열린 트랜잭션입니다. `-1` 을 빼거나 `BEGIN` 을
+    덧붙이지 않고, 대화형 psql 에서 `BEGIN` 을 연 채 두지 않습니다.
+    게이트 트리거가 전역 advisory 열쇠 `pc_timing_gate` 의 배타 잠금을 잡으므로,
+    열린 트랜잭션이 그 잠금을 쥔 동안 모든 상자의 새 회차 개시 · 회차 없는
+    비귀속 행이 기다립니다(아래 「전역 열쇠」).
+*   **뒤이어 SELECT 로 확인합니다.** 같은 페이로드 끝에 `SELECT
+    new_round_version, highest_version, changed_at FROM stream_timing_gate;`
+    를 두고 결과를 기록합니다. 래치 낮추기(`highest_version = NULL`)는 스위치가
+    NULL 이고 판 2 행이 0 일 때만 되고, 스위치가 2 인 채 낮추면 트리거가 래치를
+    다시 세워 오류 없이 `UPDATE 1` 이 납니다(조용한 무시) — 응답만 보고 내려간
+    것으로 읽지 않습니다. 판 2 행이 있으면 낮추기는 오류로 거부됩니다.
+    트랜잭션 격리가 READ COMMITTED 가 아니면 판 2 행과 무관하게 낮추기가
+    거부됩니다(23514 `timing_latch_lower_needs_read_committed` — 판 2 행을 세는
+    검사가 잠금 대기 뒤 새 스냅숏을 봐야 해서다). 래치 낮추기는 이 표에
+    걸음으로 두지 않습니다(판 2 행이 생긴 뒤에는 늘 거부).
+*   **게이트 행을 지우거나 비우지 않습니다.** DELETE 는 트리거가 거부합니다.
+    표 비우기(TRUNCATE) · 빈 표에 INSERT 는 트리거를 거치지 않아 래치를 내릴 수
+    있습니다(소유자만 가능 — 범위 밖으로 받아들인 길). 게이트 행이 0 이면
+    사이드카는 회차 개시를 오류로 멈춥니다(fail-closed).
+*   **전역 열쇠.** advisory 열쇠는 PUBLIC 기본이라(K7 (가) — `50_advisory_probe.sql`
+    머리) 접속 계정 아무나 `pc_timing_gate` 를 세션 잠금으로 쥘 수 있습니다.
+    쥐는 동안 피해 범위는 **모든 상자 · 상자 안 모든 스트림**입니다 —
+    회차 개시 · 회차 없는 비귀속 행이 잠금 대기 5초에서 끊겨 재시도하고, 상한
+    (약 30초)을 다 쓰면 사이드카가 끝나 엔진이 다시 띄웁니다(되풀이). 컷오프
+    열쇠(스트림 하나)와 같은 위협 부류이고 K7 (가)로 받아들였습니다. 사이드카
+    로그에 `insert_retry` 가 상자의 모든 스트림에서 함께 늘면 `pg_locks` 에서
+    그 열쇠의 쥔 쪽을 찾습니다.
+
 ## POK-525 운영 SQL 2 · 읽기 질의
 
 POK-525(조각 키를 업로드 때부터 회차 경로에) 교체의 DB 몫입니다. 걸음

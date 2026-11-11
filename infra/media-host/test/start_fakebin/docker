@@ -19,6 +19,12 @@
 #                                   초만큼 머문다(끝나지 않는 ps 흉내 — 그 sleep
 #                                   으로 exec 해 신호가 바로 닿는다).
 #   PCBENCH_FAKE_RM_STATUS          `rm` 의 종료 코드(기본 0).
+#   PCBENCH_FAKE_PULL_STATUS        `pull` 의 종료 코드(기본 0).
+#   PCBENCH_FAKE_TIMING_LABEL       `image inspect` 가 낼 라벨 값(설정하지 않으면
+#                                   null,2 — 빈 값으로 두면 라벨 없는 이미지).
+#   PCBENCH_FAKE_INSPECT_STATUS     `image inspect` 의 종료 코드(기본 0 — 0 아니면
+#                                   출력 없음).
+#   PCBENCH_FAKE_RUN_STATUS         compose `run` 의 종료 코드(기본 0).
 #
 # 모르는 호출 꼴이면 종료 2.
 
@@ -66,7 +72,7 @@ compose_subcommand() {
 }
 
 #######################################
-# compose 가 아닌 호출(ps · rm)에 답한다. 그 밖이면 종료 2.
+# compose 가 아닌 호출(ps · rm · pull · image inspect)에 답한다. 그 밖이면 종료 2.
 # Arguments:
 #   받은 argv.
 #######################################
@@ -87,6 +93,18 @@ answer_engine() {
       done
       ;;
     rm) exit "${PCBENCH_FAKE_RM_STATUS:-0}" ;;
+    pull) exit "${PCBENCH_FAKE_PULL_STATUS:-0}" ;;
+    image)
+      if [[ "${2:-}" != inspect ]]; then
+        printf '가짜 docker: 모르는 호출\n' >&2
+        exit 2
+      fi
+      if [[ "${PCBENCH_FAKE_INSPECT_STATUS:-0}" != 0 ]]; then
+        printf '가짜 docker: image inspect 실패(시험)\n' >&2
+        exit "${PCBENCH_FAKE_INSPECT_STATUS}"
+      fi
+      printf '%s\n' "${PCBENCH_FAKE_TIMING_LABEL-null,2}"
+      ;;
     *)
       printf '가짜 docker: 모르는 호출\n' >&2
       exit 2
@@ -104,6 +122,7 @@ main() {
   case "$(compose_subcommand "$@")" in
     version) printf '%s\n' "${PCBENCH_FAKE_COMPOSE_VERSION:-}" ;;
     up) exit "${PCBENCH_FAKE_UP_STATUS:-0}" ;;
+    run) exit "${PCBENCH_FAKE_RUN_STATUS:-0}" ;;
     down)
       if [[ -n "${PCBENCH_FAKE_DOWN_HOLD:-}" ]]; then
         : >"${PCBENCH_FAKE_LOG_DIR}/docker.down.hold"

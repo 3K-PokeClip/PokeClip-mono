@@ -280,8 +280,17 @@ func (c *Cache) ApplyInsert(streamID string, seq int64, res index.InsertCommit) 
 	}
 	v.rows = append(v.rows, boundary.Row{
 		Seq: seq, SessionID: res.SessionID, DurationMS: res.DurationMS,
-		PlaybackPDT: res.PlaybackPDT, PlaybackS3Key: res.PlaybackS3Key,
+		PlaybackPDT: res.PlaybackPDT, PlaybackS3Key: res.PlaybackS3Key, TimingVersion: timingVersion(res.TimingVersion),
 	})
+}
+
+// timingVersion 은 커밋 결과의 판(nil = 판 NULL)을 행의 판(0 = 판 NULL — boundary.Row.TimingVersion)으로 옮긴다. push 가
+// 판을 버리면 라이브 목록에는 판 태그가 없는데 같은 행을 장부에서 적재한 목록(재기동 · 감사 재렌더)에는 있다.
+func timingVersion(v *int16) int16 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // loadViewless 는 뷰가 없는 스트림(st 는 nil 일 수 있다)의 INSERT push 를 받는다(계획 4.5 A3 결정 6 ⑤) — 주조 push 는

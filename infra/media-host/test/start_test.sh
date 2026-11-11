@@ -9,7 +9,8 @@
 # 모드 원천 꼴 · 거부 목록 가드 — 사례 51 – 61 은 lib/start_ingest_input_cases.sh)
 # 과 모드 블록(운영 템플릿 원본 그대로 두 모드 기동 · 표지 꼴 — 사례 62 · 63 은
 # lib/start_mode_cases.sh)과 상자 스위치 파일(sidecar.env — 사례 64 는
-# lib/start_sidecar_env_cases.sh).
+# lib/start_sidecar_env_cases.sh)과 기동 전 검사(사이드카 라벨 · timing-preflight
+# — 사례 65 – 69 는 lib/start_timing_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -51,6 +52,8 @@ source "${TEST_DIR}/lib/start_ingest_input_cases.sh"
 source "${TEST_DIR}/lib/start_mode_cases.sh"
 # shellcheck source=lib/start_sidecar_env_cases.sh
 source "${TEST_DIR}/lib/start_sidecar_env_cases.sh"
+# shellcheck source=lib/start_timing_cases.sh
+source "${TEST_DIR}/lib/start_timing_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -67,7 +70,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=64
+readonly CASE_COUNT=69
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -87,7 +90,9 @@ up_argv() {
 
 #######################################
 # 템플릿에서 restart: "no" 인 서비스 이름을 정렬해 낸다. restart 가 없는
-# 서비스가 있으면 「MISSING <이름>」 줄을 낸다.
+# 서비스가 있으면 「MISSING <이름>」 줄을 낸다. profiles 로만 뜨는 서비스(기동 전
+# 검사 timing-preflight — up 이 띄우지 않고 run --rm 으로 한 번 돈다)는 출력
+# 연결 대상이 아니라 뺀다.
 # Arguments:
 #   compose 템플릿.
 #######################################
@@ -101,9 +106,11 @@ template_no_restart_services() {
     insvc && svc != "" && /^    restart:/ {
       v = $0; sub(/^    restart:[ ]*/, "", v); gsub(/"/, "", v); r[svc] = v
     }
+    insvc && svc != "" && /^    profiles:/ { prof[svc] = 1 }
     END {
       for (s in seen) {
         if (!(s in r)) print "MISSING " s
+        else if (s in prof) continue
         else if (r[s] == "no") print s
       }
     }' "$1" | LC_ALL=C sort
@@ -891,6 +898,16 @@ main() {
     mode_cases::case_shape_table
   harness::run_case 64 '상자 스위치 파일 없음 · 링크 · 두 줄 · 꼴 밖 → 기동 차단' \
     sidecar_env::case_switch_file
+  harness::run_case 65 '기동 전 검사 — 라벨에 판 2 → 검사 서비스 없이 up' \
+    timing::case_label_two
+  harness::run_case 66 '기동 전 검사 — 판 2 없음 · 읽기 실패 → 검사 0 이면 up' \
+    timing::case_preflight_pass
+  harness::run_case 67 '기동 전 검사 — 3 · 4 · 검사 명령 없음 → BLOCKED · up 0' \
+    timing::case_preflight_blocked
+  harness::run_case 68 '기동 전 검사 걸음 = 렌더 뒤 · up 앞(정적)' \
+    timing::case_order_static
+  harness::run_case 69 '기동 전 검사 — 받기 실패면 고정 다이제스트 로컬 라벨' \
+    timing::case_pull_fallback
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

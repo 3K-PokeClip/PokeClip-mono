@@ -301,7 +301,7 @@ func TestWatcherStartFailureFeedsNullObjectAdopter(t *testing.T) {
 	store := &fakeStore{}
 	opt := indexer.DefaultOptions()
 	opt.SegmentRoot = root
-	ix := indexer.New(store, func(string) (int64, error) { return 4000, nil },
+	ix := indexer.New(store, func(string) (int64, error) { return 4000, nil }, noTimingFacts,
 		adopt, nil, nil, opt, log)
 
 	// 방금 쓰인(유휴가 아닌) 파일의 Idle 판정은 워처에게 되돌려야 하는 조각이다.

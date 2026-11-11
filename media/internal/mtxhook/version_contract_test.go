@@ -57,6 +57,9 @@ const dockerfileRel = "../../../media/Dockerfile.mtxhook"
 // checklistSection 은 실패 메시지가 가리키는 media/README.md 의 절 제목이다.
 const checklistSection = "MediaMTX 버전업 체크리스트"
 
+// pdtRecorderSection 은 PDT(POK-196)가 기대는 녹화기 전제 셋을 적은 media/README.md 의 절 제목이다(T-1 버전 닻).
+const pdtRecorderSection = "PDT 가 기대는 녹화기 전제"
+
 // versionUpgradeGuide 는 실패했을 때 사람이 이것만 읽고 움직일 수 있어야 하는 안내다.
 // 줄 번호는 일부러 적지 않는다 — 금방 낡는다. 대신 grep 으로 바로 찾히는 닻을 적는다.
 const versionUpgradeGuide = `
@@ -94,6 +97,13 @@ const versionUpgradeGuide = `
     1.21.1: 세션 수명을 서버가 관리한다 — 세션이 살아 있는데 muxer 가 닫히면 최대 30초 404,
     세션이 없으면 401(본문 "session not found"), CORS 는 요청 Origin 을 그대로 돌려준다(Vary: Origin).
     이 행은 서빙 경계 상시 리스크라 롤백해도 걷어내지 않는다. 델타 서술만 그 버전 값으로 갱신한다.
+
+위 9곳과 따로, PDT(POK-196)의 장부 원래 사실 칸 · 판 2 섞기 · ③ 사슬이 녹화기 동작 셋에 기댄다 — media/README.md 의
+"` + pdtRecorderSection + `" 표다. 상류 internal/recorder 가 바뀐 버전이면 셋을 실측으로 다시 본다.
+ A. mtxi 상자 배치(녹화기 표식 16바이트 · 조각 번호 · DTS · NTP) — playback.ReadTiming 이 읽는다.
+ B. 같은 녹화기 인스턴스 안 조각 번호는 1씩 늘고, 송출자 재접속 · 드리프트 리셋이면 표식이 바뀐다 — index.SameInstance.
+ C. 조각 시작 = 먼저 쓴 표본(머리 트랙)이고 같은 연결 안 영상 경계 어긋남은 1틱 안이다 — index.Contiguous ·
+    playback 의 videoRewindLimit · mtxiGapTolerance.
 `
 
 // forkPinGuide 는 "버전"이 아니라 **"어느 이미지냐"** 가 어긋났을 때의 안내다.
@@ -227,9 +237,21 @@ func TestVersionUpgradeChecklistSectionExists(t *testing.T) {
 		abs, _ := filepath.Abs(readmeRel)
 		t.Fatalf("media/README.md 를 읽지 못했다(%s): %v", abs, err)
 	}
-	if !strings.Contains(string(raw), checklistSection) {
-		t.Errorf("media/README.md 에 %q 절이 없다 — 버전 드리프트 실패 메시지가 "+
-			"존재하지 않는 곳을 가리키게 된다", checklistSection)
+	for _, section := range []string{checklistSection, pdtRecorderSection} {
+		if !strings.Contains(string(raw), section) {
+			t.Errorf("media/README.md 에 %q 절이 없다 — 버전 드리프트 실패 메시지가 "+
+				"존재하지 않는 곳을 가리키게 된다", section)
+		}
+	}
+}
+
+// 버전 안내는 PDT 녹화기 전제(T-1 닻)도 가리킨다 — 장부 원래 사실 칸 · 판 2 섞기 · ③ 사슬이 기대는 녹화기 동작이라, 버전을
+// 올리는 사람이 그 셋을 함께 재확인해야 한다(POK-196 PDT c11).
+func TestVersionUpgradeGuideNamesPDTRecorderPremises(t *testing.T) {
+	for _, anchor := range []string{pdtRecorderSection, "internal/recorder", "SameInstance", "ReadTiming"} {
+		if !strings.Contains(versionUpgradeGuide, anchor) {
+			t.Errorf("versionUpgradeGuide 에 %q 가 없다 — 버전업 때 PDT 녹화기 전제가 재확인 목록에서 빠진다", anchor)
+		}
 	}
 }
 

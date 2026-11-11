@@ -93,6 +93,7 @@ func (d phaseDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInp
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
 		RoundID:            dec.RoundID,
+		NewRound:           dec.NewRound, // 빠뜨리면 store 의 새 회차 판별 단언이 개시를 되돌린다(cm cc D1)
 		Plan:               dec,
 	}, nil
 }
@@ -179,7 +180,7 @@ func (f *phaseFixture) rebuild(durationMS int64) {
 	f.t.Helper()
 	opt := testOptions()
 	opt.SeedEnabled = true
-	f.ix = New(f.store, func(string) (int64, error) { return durationMS, nil },
+	f.ix = New(f.store, func(string) (int64, error) { return durationMS, nil }, noTimingFacts,
 		f.adopt, nil, f.observer, opt, slog.New(f.logs))
 	if f.degraded.reattached {
 		// 재장착이 실패한 경로 — 같은 널 오브젝트에 다른 가드로 도달한다.

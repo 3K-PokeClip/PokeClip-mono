@@ -1,13 +1,14 @@
 package indexer
 
 // ③ 시간 도장 사슬(chain.go)의 단위 검증이다 — 계획 4.2-R R3 「보관값 전진 규칙」 ①~⑥.
-// mtxi·트랙 끝 판독은 mtxiFn·trackEndsFn 주입으로 대신한다(파일 I/O 없이 산식만 잰다).
+// 시각 판독·트랙 끝 판독은 timingFn·trackEndsFn 주입으로 대신한다(파일 I/O 없이 산식만 잰다).
 // 실물 조각을 fsop 관문으로 읽는 배선은 TestChainReadsRecorderMtxiThroughFsopGate 하나가 본다.
 
 import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,28 +27,56 @@ var (
 	recB = [16]byte{0xbb}
 )
 
-var (
-	errNoMtxi = errors.New("머리말에 mtxi 상자가 없다(주입)")
-	errNoEnds = errors.New("트랙 끝을 읽지 못했다(주입)")
-)
+var errNoEnds = errors.New("트랙 끝을 읽지 못했다(주입)")
 
-// fakeReads 는 경로별 mtxi·트랙 끝 판독 결과다. 등록하지 않은 경로는 판독 실패다.
+// fakeReads 는 경로별 mtxi·영상 구간·트랙 끝 판독 결과다. 등록하지 않은 경로의 조각은 머리말에 mtxi 가 없다(결정적 부재 —
+// 커밋은 그대로 하고 도장을 기대값에 고정한다). 영상 구간을 등록하지 않은 조각은 영상 트랙이 없다(③ 술어는 mtxi 축으로
+// 잰다). 트랙 끝은 등록하지 않으면 판독 실패다.
+//
+// 번호를 정하지 않은(0) mtxi 는 그 경로가 처음 읽힐 때 차례 번호(1 부터)를 받는다 — 녹화기가 같은 인스턴스 안 잇단 조각에
+// 매기는 꼴이라, 같은 표식의 잇단 행은 같은 녹화기 이어짐(index.SameInstance)이 된다. mtxi 없는 조각도 번호 하나를 쓴다
+// (녹화기는 그 조각에도 번호를 매겼다 — 판독만 못 했다). 번호 건너뜀 · 넘침을 보는 시험은 번호를 직접 넣는다.
 type fakeReads struct {
-	mtxi map[string]playback.Mtxi
-	ends map[string]playback.Ends
+	mtxi  map[string]playback.Mtxi
+	video map[string]playback.TrackSpan
+	ends  map[string]playback.Ends
+	// numbers 는 경로별로 매긴 차례 번호다 — 꼬리 교정의 재판독도 같은 번호를 받는다.
+	numbers map[string]uint64
 	// endsCalls 는 트랙 끝을 다시 읽은 경로다 — "리셋 때만 직전 파일을 다시 연다"를 본다.
 	endsCalls []string
 }
 
+// numberOf 는 경로 p 의 차례 번호다(처음 읽힐 때 매긴다).
+func (r *fakeReads) numberOf(p string) uint64 {
+	n, ok := r.numbers[p]
+	if !ok {
+		n = uint64(len(r.numbers) + 1)
+		r.numbers[p] = n
+	}
+	return n
+}
+
 // injectReads 는 두 판독 주입점을 가짜로 바꾼다. 픽스처를 reload 하면 다시 불러야 한다.
 func (f *fixture) injectReads() *fakeReads {
-	r := &fakeReads{mtxi: map[string]playback.Mtxi{}, ends: map[string]playback.Ends{}}
-	f.ix.mtxiFn = func(p string) (playback.Mtxi, error) {
+	r := &fakeReads{
+		mtxi: map[string]playback.Mtxi{}, video: map[string]playback.TrackSpan{},
+		ends: map[string]playback.Ends{}, numbers: map[string]uint64{},
+	}
+	f.ix.timingFn = func(p string) (playback.SegmentTiming, error) {
+		n := r.numberOf(p)
 		m, ok := r.mtxi[p]
 		if !ok {
-			return playback.Mtxi{}, errNoMtxi
+			return playback.SegmentTiming{}, nil
 		}
-		return m, nil
+		if m.SegmentNumber == 0 {
+			m.SegmentNumber = n
+		}
+		st := playback.SegmentTiming{Mtxi: &m}
+		if v, ok := r.video[p]; ok {
+			// 영상 앞의 머리 트랙은 소리다(머리 앞섬 m = 영상 시작).
+			st.Video, st.Head, st.HeadLead = &v, playback.Track{Video: v.Start == 0}, v.Start
+		}
+		return st, nil
 	}
 	f.ix.trackEndsFn = func(p string) (playback.Ends, error) {
 		r.endsCalls = append(r.endsCalls, p)
@@ -57,16 +86,85 @@ func (f *fixture) injectReads() *fakeReads {
 		}
 		return e, nil
 	}
+	// 새 장부에서 시작한 픽스처면 시험 끝에 접기 대조를 건다 — 재기동(reload) 뒤 다시 부른 판독 주입은 건너뛴다.
+	if len(f.store.records("s1")) == 0 {
+		ix := f.ix
+		f.t.Cleanup(func() { f.requireFoldMatchesLive(r, ix) })
+	}
 	return r
 }
 
-// mtxiOf 는 녹화기 표식과 누적 DTS 로 판독값을 만든다.
+// requireFoldMatchesLive 는 장부 행을 seq 순으로 playback.RestoreChain 에 접은 결과가 실시간 ③ 요청의 도장(마지막
+// 요청 기준)과 같은지 본다(POK-196 PDT 계획 4절 c10a 시험 1 — 실시간과 복원이 한 코드). 판독 주입을 쓰는 사슬 시험
+// 전부가 시험 끝에 이 대조를 지난다. 재료는 장부 칸(교정 뒤 길이 · 영상 끝)과 같은 판독 주입의 mtxi 이고, 이음 끝은
+// 실시간과 같은 chainEnd 다. 회차는 ③ 요청에서 읽는다 — 요청이 없는 행(비귀속 · 사슬 없이 mtxi 를 못 읽은 행)은
+// 접기에서도 링크가 없다(비귀속으로 둬도 같은 결과다 — 다음 행이 어느 쪽이든 비인접이다).
+//
+// 재기동(ix 가 바뀜)한 시험은 대조하지 않는다 — 실시간 사슬이 재기동에서 끊긴다(E18 — 복원은 업로더 몫). 사슬을 모르게 된
+// 행(위치 모름 요청 — POK-196 PDT 계획 4절 c10b)부터는 실시간 도장이 없으므로 그 앞까지만 견준다.
+func (f *fixture) requireFoldMatchesLive(r *fakeReads, ix *Indexer) {
+	f.t.Helper()
+	if f.ix != ix {
+		return
+	}
+	live := map[int64]index.UploadTarget{}
+	firstUnknown := int64(math.MaxInt64)
+	for _, tg := range f.upload.targetsOf(index.AxisPlayback) {
+		live[tg.Seq] = tg
+		if tg.PosUnknown {
+			firstUnknown = min(firstUnknown, tg.Seq)
+		}
+	}
+	for seq := range live {
+		if seq >= firstUnknown {
+			delete(live, seq)
+		}
+	}
+	paths := map[int64]string{}
+	var rows []playback.SourceTiming
+	for _, rec := range f.store.records("s1") {
+		paths[rec.Seq] = rec.LocalPath
+		var mtxi *playback.Mtxi
+		if m, ok := r.mtxi[rec.LocalPath]; ok {
+			mtxi = &m
+		}
+		rows = append(rows, sourceOf(rec, live[rec.Seq].SessionID, rec.DurationMS, mtxi))
+	}
+	rule := func(prev playback.Link) time.Duration {
+		return ix.chainEnd(playbackChain{link: prev, path: paths[prev.Seq]})
+	}
+
+	var links []playback.Link
+	for _, l := range playback.RestoreChain(nil, rows, rule, sameInstance) {
+		if l.Seq < firstUnknown {
+			links = append(links, l)
+		}
+	}
+
+	if len(links) != len(live) {
+		f.t.Errorf("접기 링크 %d개, 실시간 ③ 요청 행 %d개 — 같아야 한다", len(links), len(live))
+	}
+	for _, l := range links {
+		tg, ok := live[l.Seq]
+		if !ok || tg.PlaybackPos != l.Pos || tg.StitchOffset != l.Offset || tg.PosPinned != l.Pinned || tg.SessionID != l.SessionID {
+			f.t.Errorf("seq %d 접기 = pos %v · offset %v · 고정 %v · 회차 %q, 실시간 = %+v(있음 %v)",
+				l.Seq, l.Pos, l.Offset, l.Pinned, l.SessionID, tg, ok)
+		}
+	}
+}
+
+// mtxiOf 는 녹화기 표식과 누적 DTS 로 판독값을 만든다. 번호는 fakeReads 가 차례로 매긴다.
 func mtxiOf(rec [16]byte, dts time.Duration) *playback.Mtxi {
 	return &playback.Mtxi{RecorderID: rec, DTS: dts}
 }
 
+// mtxiNumbered 는 번호까지 정한 판독값이다 — 번호 건너뜀 · 넘침(2^63 이상 — 원래 사실 칸 넷이 NULL)을 본다.
+func mtxiNumbered(rec [16]byte, n uint64, dts time.Duration) *playback.Mtxi {
+	return &playback.Mtxi{RecorderID: rec, SegmentNumber: n, DTS: dts}
+}
+
 // row 는 at(baseWall 기준) 자리에 조각 파일을 만들어 훅 유입으로 처리한다. m 이 nil 이면 그 조각의
-// mtxi 판독은 실패한다. 길이는 픽스처 프로브가 차례로 준다(훅 유입은 재프로브가 없다).
+// 머리말에 mtxi 가 없다. 길이는 픽스처 프로브가 차례로 준다(훅 유입은 재프로브가 없다).
 func (f *fixture) row(r *fakeReads, at time.Duration, m *playback.Mtxi) recording.Segment {
 	f.t.Helper()
 	seg := f.segment("s1", segName(baseWall, at), 1000, recording.ReasonHook)
@@ -99,9 +197,9 @@ func TestMtxiReadStallTripsLatchWithoutCommitOrAdopt(t *testing.T) {
 	f := newFixture(t, 4000)
 	seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonHook)
 	calls := 0
-	f.ix.mtxiFn = func(p string) (playback.Mtxi, error) {
+	f.ix.timingFn = func(p string) (playback.SegmentTiming, error) {
 		calls++
-		return playback.Mtxi{}, fmt.Errorf("%w: op=read path=%q", fsop.ErrStalled, p)
+		return playback.SegmentTiming{}, fmt.Errorf("%w: op=read path=%q", fsop.ErrStalled, p)
 	}
 
 	if err := f.handle(seg); err != nil {
@@ -129,9 +227,9 @@ func TestMtxiReadStallTripsLatchWithoutCommitOrAdopt(t *testing.T) {
 // 앞선 FS 호출이 트립시킨 뒤에도 새 워커가 생기지 않게 하는 구조 강제다(statT·probeT 와 같다).
 func TestReadGatesRefuseWhileLatched(t *testing.T) {
 	f := newFixture(t)
-	f.ix.mtxiFn = func(string) (playback.Mtxi, error) {
-		t.Error("래치가 섰는데 mtxi 판독 워커를 만들었다")
-		return playback.Mtxi{}, nil
+	f.ix.timingFn = func(string) (playback.SegmentTiming, error) {
+		t.Error("래치가 섰는데 시각 판독 워커를 만들었다")
+		return playback.SegmentTiming{}, nil
 	}
 	f.ix.trackEndsFn = func(string) (playback.Ends, error) {
 		t.Error("래치가 섰는데 트랙 끝 판독 워커를 만들었다")
@@ -139,8 +237,8 @@ func TestReadGatesRefuseWhileLatched(t *testing.T) {
 	}
 	f.ix.fsLatch.Trip("/p", "measure")
 
-	if _, err := f.ix.mtxiT("/p"); !errors.Is(err, fsop.ErrStalled) {
-		t.Errorf("mtxiT 오류 = %v, want ErrStalled", err)
+	if _, err := f.ix.timingT("/p"); !errors.Is(err, fsop.ErrStalled) {
+		t.Errorf("timingT 오류 = %v, want ErrStalled", err)
 	}
 	if _, err := f.ix.trackEndsT("/p"); !errors.Is(err, fsop.ErrStalled) {
 		t.Errorf("trackEndsT 오류 = %v, want ErrStalled", err)
@@ -238,25 +336,38 @@ func TestChainOpensAtZeroWhenFirstMtxiIsNegative(t *testing.T) {
 	}
 }
 
-// 알려진 한계의 지금 동작을 고정한다(결정 B′ — 재기동 복구는 범위 밖 · kty 2026-09-19). 음수 mtxi 로
-// 연 회차 도중 사이드카가 재기동하면 새 프로세스는 사슬 기억이 없어 다음 행(양수 mtxi)을 보정값 0 으로
-// 연다 — 그 지점 도장이 첫 mtxi 크기(44ms)만큼 뒤로 간다. 재기동 복구가 들어오면 이 시험이 뒤집힌다.
-func TestRestartAfterNegativeFirstMtxiReopensAtZeroOffset(t *testing.T) {
-	f := newFixture(t, 5977, 4000)
+// 음수 mtxi 로 연 회차 도중 사이드카가 재기동하면 새 프로세스는 사슬 기억이 없다. POK-550 이 고정했던 한계(다음 행을 보정값 0
+// 으로 다시 열어 그 지점 도장이 44ms 뒤로 감 — ADR-073 한계 ⑴ 확대)는 PDT 재기동 복원(POK-196 c10b)이 들어와 뒤집힌다: 재기동
+// 뒤 첫 행은 위치 모름이고, 업로더가 장부로 되살린 링크(첫 행 하한 보정값 44ms — upload
+// TestRestoreWithoutAnchorOpensNegativeFirstMtxiAtZero)에 닿으면 그 보정값을 잇는다. 잡는 결함: 재기동 뒤 첫 행을 보정값 0 으로
+// 다시 열면 앞 도장과 44ms 겹친다.
+func TestRestartAfterNegativeFirstMtxiResumesRestoredOffset(t *testing.T) {
+	const firstMtxi = -44 * time.Millisecond
+	f := newFixture(t, 5977, 5977, 5977)
 	r := f.injectReads()
-	f.store.scriptSessions("S1", "S1")
-	f.row(r, 0, mtxiOf(recA, -44*time.Millisecond)) // 옛 프로세스 — 하한으로 연 회차
+	f.store.scriptSessions("S1", "S1", "S1")
+	f.row(r, 0, mtxiNumbered(recA, 1, firstMtxi)) // 옛 프로세스 — 하한으로 연 회차
 
 	f.reload() // 재기동: 사슬은 메모리라 사라지고 장부는 남는다
 	r = f.injectReads()
-	f.row(r, 6*time.Second, mtxiOf(recA, 5_929_333_333))
+	f.row(r, 6*time.Second, mtxiNumbered(recA, 2, firstMtxi+5977*time.Millisecond))
+	n2 := int64(2)
+	// 복원 링크는 손으로 넣는다(보정값 정확히 44ms). 실제 복원은 ③ 객체의 도장 범위에서 값을 고르므로 틱 반올림 폭 안에서
+	// 다를 수 있다(cm 검수 cc D2 — 2.777µs · 업로더 대조 허용 폭 안). 이 시험이 보는 것은 그 차가 아니라 「인덱서가 복원
+	// 링크의 보정값을 잇는가」 다.
+	f.upload.setRestored("S1", playback.Link{Seq: 1, SessionID: "S1", Recorder: &recA, Number: &n2,
+		Mtxi: firstMtxi + 5977*time.Millisecond, Dur: 5977 * time.Millisecond, Pos: 5977 * time.Millisecond, Offset: 44 * time.Millisecond})
+	f.row(r, 12*time.Second, mtxiNumbered(recA, 3, firstMtxi+2*5977*time.Millisecond))
 
-	if got := f.playbackOf(0); got.StitchOffset != 44*time.Millisecond {
-		t.Fatalf("재기동 전 첫 행 offset = %v, want 44ms(전제)", got.StitchOffset)
+	if got := f.playbackOf(0); got.PlaybackPos != 0 || got.StitchOffset != 44*time.Millisecond {
+		t.Fatalf("재기동 전 첫 행 = pos %v · offset %v, want pos 0 · offset 44ms(전제)", got.PlaybackPos, got.StitchOffset)
 	}
-	if got := f.playbackOf(1); got.PlaybackPos != 5_929_333_333 || got.StitchOffset != 0 {
-		t.Errorf("재기동 뒤 첫 행 = pos %v · offset %v, want pos 5.929333333s · offset 0(알려진 한계)",
-			got.PlaybackPos, got.StitchOffset)
+	if got := f.playbackOf(1); !got.PosUnknown || got.StitchOffset != 0 {
+		t.Errorf("재기동 뒤 첫 행 = %+v, want 위치 모름(보정값 0 으로 다시 열지 않는다)", got)
+	}
+	if got := f.playbackOf(2); got.PosUnknown || got.PlaybackPos != 2*5977*time.Millisecond || got.StitchOffset != 44*time.Millisecond {
+		t.Errorf("복원 링크 뒤 행 = pos %v · offset %v · 모름 %v, want pos 11.954s · offset 44ms",
+			got.PlaybackPos, got.StitchOffset, got.PosUnknown)
 	}
 }
 
@@ -512,6 +623,120 @@ func TestPosGapThresholdBoundary(t *testing.T) {
 	})
 }
 
+// ③ N1 — 같은 회차 안에서도 같은 녹화기 이어짐(index.SameInstance — 표식이 둘 다 있고 같으며 번호 +1)이 아니면 리셋이다
+// (POK-196 PDT 계획 4절 c8 · 설계 r7 2.1). 판정 재료는 장부에 실은 원래 사실 칸이고, 정의는 index 한 자리다. 번호가
+// 건너뛰면 사이 조각이 장부에 없으므로 DTS 가 이어져 보여도 직전 조각 끝에 잇는다. 표식이 nil(mtxi 없음 · 번호 넘침)이면
+// 모르는 것끼리를 같다고 보지 않는다(변이 m21 — index.SameInstance 를 깨면 이 시험도 FAIL 해야 한다).
+func TestChainResetsUnlessSameRecorderInstance(t *testing.T) {
+	const overflow = uint64(1) << 63 // 2^63 — 표식 · 번호 · 영상 두 칸이 함께 NULL(설계 2.3)
+	tests := []struct {
+		name       string
+		prev, next *playback.Mtxi
+		wantReset  bool
+	}{
+		{"같은_녹화기_번호_+1_은_잇는다", mtxiNumbered(recA, 5, 10*time.Second), mtxiNumbered(recA, 6, 14*time.Second), false},
+		{"번호_건너뜀은_리셋", mtxiNumbered(recA, 5, 10*time.Second), mtxiNumbered(recA, 7, 14*time.Second), true},
+		{"번호_넘침_nil_표식끼리는_리셋", mtxiNumbered(recA, overflow, 10*time.Second), mtxiNumbered(recA, overflow+1, 14*time.Second), true},
+		{"앞_행만_nil_표식이면_리셋", mtxiNumbered(recA, overflow, 10*time.Second), mtxiNumbered(recA, 6, 14*time.Second), true},
+		{"뒤_행만_nil_표식이면_리셋", mtxiNumbered(recA, 5, 10*time.Second), mtxiNumbered(recA, overflow, 14*time.Second), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, 4000, 4000)
+			r := f.injectReads()
+			f.store.scriptSessions("S1", "S1")
+			prev := f.row(r, 0, tt.prev)
+			r.ends[prev.Path] = playback.Ends{Video: 4 * time.Second, Audio: 3_980 * time.Millisecond}
+
+			f.row(r, 4*time.Second, tt.next)
+
+			// 잇기: 자기 mtxi 14s · offset 0. 리셋: end(0) = pos(0) + min(두 트랙 끝) = 13.98s.
+			wantPos := 14 * time.Second
+			if tt.wantReset {
+				wantPos = 13_980 * time.Millisecond
+			}
+			if got := f.playbackOf(1); got.PlaybackPos != wantPos || got.StitchOffset != wantPos-14*time.Second {
+				t.Errorf("도장 = pos %v · offset %v, want pos %v · offset %v",
+					got.PlaybackPos, got.StitchOffset, wantPos, wantPos-14*time.Second)
+			}
+		})
+	}
+}
+
+// rowWithVideo 는 영상 구간(조각 시작 기준)까지 정한 조각을 넣는다 — 원래 사실 칸의 영상 두 칸은 mtxi.DTS + 구간이다.
+func (f *fixture) rowWithVideo(r *fakeReads, at time.Duration, m *playback.Mtxi, video playback.TrackSpan) recording.Segment {
+	f.t.Helper()
+	seg := f.segment("s1", segName(baseWall, at), 1000, recording.ReasonHook)
+	r.mtxi[seg.Path], r.video[seg.Path] = *m, video
+	f.mustHandle(seg)
+	return seg
+}
+
+// ③ N1 영상 축(ADR-073 결정 2 개정 「이웃 술어는 영상 축이다」) — 같은 녹화기 이어짐 안에서 리셋 · 구멍은 앞 조각 영상 끝
+// b(k−1) 과 이 조각 영상 첫 DTS a(k) 의 차 d 로 판정한다: 리셋 = d ≤ −1ms · 구멍 = d > 50ms. 장부 길이가 영상 길이가 되면
+// (c5) mtxi 시작 + 장부 길이로 재는 옛 판정은 소리 머리 조각의 머리 앞섬만큼 거짓 구멍을 낸다(실측 최대 226ms).
+//
+// 조각 0: mtxi 10s · 소리 머리 · 영상 [226ms, 4226ms) → b = 14.226s · 장부 길이 4s(영상 길이) · 트랙 끝 영상 4.226s · 소리
+// 4.1s(리셋 이음 = 14.1s · 구멍 이음 = pos + 장부 길이 = 14s). 조각 1: 영상 머리라 a = mtxi.
+func TestChainJudgesNeighborOnVideoAxis(t *testing.T) {
+	const b0 = 14_226 * time.Millisecond
+	tests := []struct {
+		name    string
+		a1      time.Duration
+		wantPos time.Duration
+	}{
+		{"영상_맞닿음은_잇는다", b0, b0},
+		{"영상_49ms_틈은_그대로", b0 + 49*time.Millisecond, b0 + 49*time.Millisecond},
+		{"정확히_50ms_는_무보정", b0 + 50*time.Millisecond, b0 + 50*time.Millisecond},
+		{"50ms_를_1ns_넘으면_구멍", b0 + 50*time.Millisecond + 1, 14 * time.Second},
+		{"1ms_미만_역행은_잇는다", b0 - 999*time.Microsecond, b0 - 999*time.Microsecond},
+		{"1ms_역행은_리셋", b0 - time.Millisecond, 14_100 * time.Millisecond},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, 4000, 4000)
+			r := f.injectReads()
+			f.store.scriptSessions("S1", "S1")
+			prev := f.rowWithVideo(r, 0, mtxiOf(recA, 10*time.Second), playback.TrackSpan{Start: 226 * time.Millisecond, End: 4_226 * time.Millisecond})
+			r.ends[prev.Path] = playback.Ends{Video: 4_226 * time.Millisecond, Audio: 4_100 * time.Millisecond}
+
+			f.rowWithVideo(r, 4*time.Second, mtxiOf(recA, tt.a1), playback.TrackSpan{End: 4 * time.Second})
+
+			if got := f.playbackOf(1); got.PlaybackPos != tt.wantPos || got.StitchOffset != tt.wantPos-tt.a1 {
+				t.Errorf("도장 = pos %v · offset %v, want pos %v · offset %v",
+					got.PlaybackPos, got.StitchOffset, tt.wantPos, tt.wantPos-tt.a1)
+			}
+		})
+	}
+}
+
+// ③ N1 영상 축의 b(k−1) 은 그 행이 꼬리에서 물러나는 순간의 장부 영상 끝이다(꼬리 교정 — 설계 r7 2.14). 처음 읽은 값을
+// 쓰면 교정(2.226s → 4.226s) 차이만큼 거짓 구멍이 생겨 장부 길이 끝(14s)에 잇는다.
+func TestChainUsesTailCorrectedVideoEnd(t *testing.T) {
+	f := newFixture(t, 2000, 4000, 4000) // 조각 0 첫 측정 · 교정 재측정 · 조각 1
+	r := f.injectReads()
+	f.store.scriptSessions("S1", "S1")
+	first := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonIdle)
+	r.mtxi[first.Path] = playback.Mtxi{RecorderID: recA, DTS: 10 * time.Second}
+	r.video[first.Path] = playback.TrackSpan{Start: 226 * time.Millisecond, End: 2_226 * time.Millisecond}
+	f.mustHandle(first)
+
+	f.makeFile("s1", segName(baseWall, 0), 2500) // 유휴 판정 뒤에도 파일이 자랐다
+	r.video[first.Path] = playback.TrackSpan{Start: 226 * time.Millisecond, End: 4_226 * time.Millisecond}
+	first.Reason = recording.ReasonRegrown
+	f.mustHandle(first)
+	if end := f.ix.cursors["s1"].Tail.Timing.VideoEnd; end == nil || *end != 14_226*time.Millisecond {
+		t.Fatalf("꼬리 교정 뒤 장부 영상 끝 = %v, want 14.226s(전제)", end)
+	}
+
+	f.rowWithVideo(r, 4*time.Second, mtxiOf(recA, 14_226*time.Millisecond), playback.TrackSpan{End: 4 * time.Second})
+
+	if got := f.playbackOf(1); got.PlaybackPos != 14_226*time.Millisecond || got.StitchOffset != 0 {
+		t.Errorf("교정 뒤 다음 행 도장 = pos %v · offset %v, want pos 14.226s · offset 0 — 교정 전 영상 끝이면 2초 거짓 구멍",
+			got.PlaybackPos, got.StitchOffset)
+	}
+}
+
 // chain_advances_once_per_ledger_row_even_when_enqueue_rejected(뮤테이션 49) — 사슬은 접수 게이트보다
 // 앞에서 장부 행마다 한 번 전진한다. 거부된 행에서 멈추면 다음 행이 "직전 행 ≠ 사슬 행"으로 보여
 // 멀쩡한 조각을 리셋으로 오판한다(도장이 조각 0 의 끝으로 되돌아간다).
@@ -579,6 +804,28 @@ func TestChainAdvancesByLedgerDurationWhenMtxiUnreadable(t *testing.T) {
 	if got := f.playbackOf(2); got.PlaybackPos != 18*time.Second || got.StitchOffset != 0 || got.PosPinned {
 		t.Errorf("다음 행 도장 = pos %v · offset %v · 고정 %v, want pos 18s · offset 0 · 고정 false",
 			got.PlaybackPos, got.StitchOffset, got.PosPinned)
+	}
+}
+
+// 판독 실패로 고정한 행은 기대 표식(앞 행과 같은 녹화기의 다음 번호)을 사슬 칸으로 든다(playback.expectedInstance) — 그 자리에 실제
+// 리셋이 없었으면 다음 행은 같은 녹화기 이어짐으로 잇고, 고정 행 파일을 다시 열지 않는다. 고정 행의 실제 칸(nil 표식)을 들면
+// 다음 행이 늘 리셋되어 고정 행 파일의 먼저 끝난 트랙 끝(여기 17.9s)에 잇는다.
+func TestPinnedRowCarriesExpectedRecorderInstance(t *testing.T) {
+	f := newFixture(t, 4000, 4000, 4000)
+	r := f.injectReads()
+	f.store.scriptSessions("S1", "S1", "S1")
+	f.row(r, 0, mtxiOf(recA, 10*time.Second))
+	pinned := f.row(r, 4*time.Second, nil) // 판독 실패 — 번호 하나를 쓴다(fakeReads)
+	r.ends[pinned.Path] = playback.Ends{Video: 4 * time.Second, Audio: 3_900 * time.Millisecond}
+
+	f.row(r, 8*time.Second, mtxiOf(recA, 18*time.Second))
+
+	if got := f.playbackOf(2); got.PlaybackPos != 18*time.Second || got.StitchOffset != 0 {
+		t.Errorf("고정 행 다음 도장 = pos %v · offset %v, want pos 18s · offset 0 — 기대 표식으로 이어져야 한다",
+			got.PlaybackPos, got.StitchOffset)
+	}
+	if len(r.endsCalls) != 0 {
+		t.Errorf("트랙 끝 재독 = %v, want 없음 — 리셋이 아니다", r.endsCalls)
 	}
 }
 
@@ -751,11 +998,13 @@ func (f *fixture) recorderFragment(name string, at time.Duration) recording.Segm
 	return seg
 }
 
-// 배선 — 기본 판독 관문(fsop.ReadT + playback.ReadMtxi·TrackEnds)이 실물 조각의 mtxi 와 트랙 끝을
+// 배선 — 기본 판독 관문(fsop.ReadT + playback.ReadTiming·TrackEnds)이 실물 조각의 mtxi 와 트랙 끝을
 // 읽어 도장을 만든다. 두 조각은 녹화기 표식이 달라(다른 연결) 둘째 조각이 첫 조각 끝에 이어 붙는다.
 // 기대값은 playback 패키지의 실물 판독 테스트가 고정한 값(mtxi 5,987,981,859ns · 소리 끝 3,994,013,605ns)이다.
 func TestChainReadsRecorderMtxiThroughFsopGate(t *testing.T) {
 	f := newFixture(t, 4000, 2000)
+	// 픽스처의 판독기 대신 실물 판독기로 세운다 — 관문(fsop.ReadT)은 New 가 감싼 그대로다.
+	f.ix = New(f.store, f.probe.fn, playback.ReadTiming, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
 	f.store.scriptSessions("S1", "S1")
 	f.mustHandle(f.recorderFragment("segment_4s.mp4", 0))
 	f.mustHandle(f.recorderFragment("segment_tail_2s.mp4", 4*time.Second)) // 녹화기 표식 cf6d… · mtxi 17,992,993,197ns

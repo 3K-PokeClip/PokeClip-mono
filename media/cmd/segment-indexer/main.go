@@ -24,6 +24,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
@@ -33,6 +34,10 @@ import (
 )
 
 func main() {
+	// 기동 전 검사 명령(timing_gate_check.go)은 사이드카를 띄우지 않고 종료 코드만 낸다.
+	if len(os.Args) > 1 && os.Args[1] == timingGateCheckCommand {
+		os.Exit(runTimingGateCheck(os.Args[2:], os.Getenv, os.Stdout))
+	}
 	err := run()
 	// SIGTERM 으로 끝난 것은 정상 종료다. 이것을 실패로 보고하면 오케스트레이터가
 	// 멀쩡한 종료를 장애로 오인하고 재기동 루프에 넣는다.
@@ -159,6 +164,10 @@ func run() error {
 	if err := requireLedgerSchema(ctx, pool, log); err != nil {
 		return err
 	}
+	// 기동 검사(POK-196 PDT) — 게이트가 이 이미지가 읽지 못하는 판을 요구하면 timing_downgrade_refused 로 멈춘다.
+	if err := requireTimingGate(ctx, pool, log); err != nil {
+		return err
+	}
 	// 새 꼴 쓰기 스위치 상태 신호(POK-525) — 운영 스크립트가 켬 · 끔 재생성 뒤 이 줄로 판정한다. 기동은 막지 않는다.
 	reportPlaybackKeyLayout(ctx, pool, cfg.PlaybackRoundKeys, log)
 	// 연결 폐기 관측(POK-388). 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
@@ -192,7 +201,7 @@ func run() error {
 	}
 	defer root.Close()
 
-	up, err := newUploader(ctx, cfg, root, index.NewUploadStore(pool), log)
+	up, err := newUploader(ctx, cfg, root, newUploadStore(pool), log)
 	if err != nil {
 		return err
 	}
@@ -233,7 +242,7 @@ func run() error {
 	if w != nil {
 		adopt = w
 	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, adopt, up, observer, cfg.Indexer, log)
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, playback.ReadTiming, adopt, up, observer, cfg.Indexer, log)
 
 	// --- 3-1. 훅 어댑터 (선택) ---
 	//

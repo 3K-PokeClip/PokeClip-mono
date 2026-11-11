@@ -86,6 +86,8 @@ func (d sessionDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionI
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
 		RoundID:            dec.RoundID,
+		NewRound:           dec.NewRound,
+		FloorRejected:      dec.FloorRejected,
 		Plan:               dec,
 	}, nil
 }
