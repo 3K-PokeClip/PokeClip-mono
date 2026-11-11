@@ -810,8 +810,9 @@ IP 속도 제한(WAF 후속)이다.
 그 값을 원장 표 `stream_edge_bounds`(정본)에 올리고 CloudFront KVS 에 사본을
 쓴다. KVS 를 읽어 막는 몫은 media 배포 `/dvr/*` 의 엣지 함수
 `pokeclip-prod-dvr-floor` 다 — prod/edge 스위치 `dvr_floor_enabled` 가 참일
-때만 붙고, 끔이면 KVS 를 읽는 쪽이 없다([prod/edge README](/infra/terraform/prod/edge/README.md)
-「/dvr 하한(POK-525)」). 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` 이다.
+때만 붙고, 끔이면 KVS 를 읽는 쪽이 없다
+([prod/edge README](../infra/terraform/prod/edge/README.md) 「/dvr
+하한(POK-525)」). 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` 이다.
 
 *   **올림(5분마다):** 되감기 발행이 성공할 때마다 그 목록 마지막 행이 새
     꼴(회차 경로) 키면 그 회차의 하한 후보(목록 첫 조각 seq)를 Writer 에
@@ -941,8 +942,8 @@ IP 속도 제한(WAF 후속)이다.
 
 | 증상 | 먼저 | 원인 수정 | 다시 켬 |
 |---|---|---|---|
-| 시청자 404 · `dvr_floor_blocks_list` set(엣지 PR 뒤) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
-| `edge_bounds_write_failing` 이 위 신호 절의 문턱(올림 15분 · 해제 5분) 안에 풀리지 않음 | 엣지를 끈다(엣지 PR 뒤) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
+| 시청자 404 · `dvr_floor_blocks_list` set(엣지 하한을 켠 뒤) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge 스위치 `dvr_floor_enabled = false` 로 apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
+| `edge_bounds_write_failing` 이 위 신호 절의 문턱(올림 15분 · 해제 5분) 안에 풀리지 않음 | 엣지를 끈다(켠 뒤라면 — 위 행과 같은 스위치) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
 | `dvr_floor_release_overdue` | — 엣지는 끄지 않는다. 피해는 그 회차 VOD 가 열리지 않는 것뿐이다(`pass=release` 의 `_write_failing` 이 함께 나와도 같다) | 위 행과 같다 | 위 행과 같다 |
 | `edge_bounds_degraded` | — | 그 줄의 `err` 를 고친다. 못 고치면 위 행처럼 스위치를 끄고 교체한다(Media 교체 런북 「POK-525 롤백」 의 「Writer 만 문제」) | 고쳤으면 사이드카 재기동 — 기동 줄이 `edge_bounds_started` 면 된다. 스위치를 껐으면 위 행처럼 켜 교체 |
 | `edge_bounds_unreleased_without_writer` set(E10 — ARN 없이 뜬 상자) | — | 스위치 · 런타임 출력 ARN 을 고친다(`_config_invalid` 면 꼴) | 켠 설정으로 교체 → Writer 가 풀면 clear |
@@ -1362,8 +1363,9 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
     *   **결과.** 하한이 내려가거나 키가 지워지면 그 회차의 /dvr 창 밖
         조각이 엣지를 지나고, 높아지면 시청자가 404 를 받는다. 닫힌 회차의
         행이 해제 전에 지워지면 KVS 키를 Writer 가 찾지 못해 키가 남는다(위
-        「/dvr 하한 사람 복구」). 엣지 함수가 키 없음 · 값 이상을 어떻게
-        다룰지는 엣지 PR(Ⓓ) 몫이다.
+        「/dvr 하한 사람 복구」). 엣지 함수 dvr-floor 는 키 없음 · KVS
+        읽기 실패 · 값 이상을 막지 않고 넘긴다(값 이상 · 읽기 실패는 고정
+        로그와 경보 — prod/edge README 「경보(POK-525)」).
     *   **받아들인 이유(kty 2026-11-04).** 하한은 창 정책이지 접근 통제가
         아니다. 1차 통제는 서명 쿠키(시청 권한을 엣지가 확인하는 값)이고,
         상자 · 자격이 침해되면 하한을 우회할 수 있다는 것을 받아들였다. DB

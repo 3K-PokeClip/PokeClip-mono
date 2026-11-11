@@ -642,7 +642,10 @@ run "dvr_floor_metric_filters_match_function_log_markers" {
       for key, filter in aws_cloudwatch_log_metric_filter.dvr_floor :
       filter.pattern == "\"${module.media.dvr_floor_log_markers[key]}\"" &&
       strcontains(
-        templatefile("../../modules/cdn_media/functions/dvr-floor.js", { app_origin = "https://app.example.com" }),
+        templatefile(
+          "../../modules/cdn_media/functions/dvr-floor.js",
+          { app_origin = "https://app.example.com" },
+        ),
         "'${trim(filter.pattern, "\"")}'",
       )
     ])
@@ -705,7 +708,9 @@ run "dvr_floor_log_alarms_notify_topic_on_first_count" {
   assert {
     condition = alltrue([
       for alarm in aws_cloudwatch_metric_alarm.dvr_floor_log :
-      alarm.alarm_actions == toset(["arn:aws:sns:us-east-1:111122223333:pokeclip-prod-edge-alarms"]) &&
+      alarm.alarm_actions == toset([
+        "arn:aws:sns:us-east-1:111122223333:pokeclip-prod-edge-alarms",
+      ]) &&
       alarm.region == "us-east-1" &&
       strcontains(alarm.alarm_description, "best-effort")
     ])

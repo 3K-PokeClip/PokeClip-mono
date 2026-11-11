@@ -21,8 +21,11 @@
 # 알림(K-D1 (가)): 주제는 여기서 만들고 이메일 구독은 저장소 밖(kty 가 CLI 로
 # 한 번 — README 「경보」)이다. 공개 저장소에 주소를 두지 않고, 확인 대기
 # 구독은 provider 가 지우지 못해 상태에 넣지 않는다. 주제는 암호화하지 않는다
-# (prod/runtime 의 broadcast_events.tf 와 같음) — 고객 관리 키로 암호화하면 키
-# 정책에 CloudWatch 를 따로 열어야 하고, 실리는 내용은 경보 이름 · 상태뿐이다.
+# (prod/runtime 의 broadcast_events.tf 와 같음). 실리는 것은 경보 알림 본문
+# (경보 이름 · 설명 · 계정 ID · 경보 ARN · 상태와 상태 이유 · 지표 설정 —
+# CloudWatch 사용자 안내서 「Notifying users on alarm changes」 의 알림 스키마 ·
+# 2026-11-11 확인)이라 비밀 · 사용자 데이터가 없다. 고객 관리 키(CMK)로
+# 암호화하면 키 정책에 CloudWatch 를 따로 열어야 한다.
 
 locals {
   # K-D4(kty 2026-11-11) — 5분 합이 1 이상이면 한 번에 울린다. 데이터 없음 =
@@ -84,7 +87,10 @@ resource "aws_sns_topic_policy" "edge_alarms" {
         Condition = {
           ArnEquals = {
             "aws:SourceArn" = sort(concat(
-              [for alarm in aws_cloudwatch_metric_alarm.dvr_floor_log : alarm.arn],
+              [
+                for alarm in aws_cloudwatch_metric_alarm.dvr_floor_log :
+                alarm.arn
+              ],
               [aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.arn],
             ))
           }
@@ -118,7 +124,6 @@ resource "aws_cloudwatch_metric_alarm" "dvr_floor_log" {
 
   region              = "us-east-1"
   alarm_name          = each.value.name
-  alarm_description   = "${local.dvr_floor_log_alarm_descriptions[each.key]} ${local.dvr_floor_best_effort_note}"
   namespace           = each.value.metric_transformation[0].namespace
   metric_name         = each.value.metric_transformation[0].name
   statistic           = "Sum"
@@ -129,6 +134,11 @@ resource "aws_cloudwatch_metric_alarm" "dvr_floor_log" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.edge_alarms.arn]
+
+  alarm_description = join(" ", [
+    local.dvr_floor_log_alarm_descriptions[each.key],
+    local.dvr_floor_best_effort_note,
+  ])
 }
 
 # 함수가 잡지 못한 예외(K-D5 (a)) — dvr-floor 는 최상위 catch 를 두지 않아 그

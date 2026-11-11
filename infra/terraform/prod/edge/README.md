@@ -137,7 +137,8 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
 dvr-floor(`pokeclip-prod-dvr-floor`)는 `/dvr/*` viewer-request 함수입니다.
 회차 꼴 조각의 seq 가 그 회차 하한보다 작으면 본문 없는 404 로 막습니다.
 하한은 런타임 1단 KVS(`edge_bounds_kvs_arn`)에서 읽고, 값은 media 사이드카
-Writer 가 씁니다([media README](/media/README.md) 「/dvr 하한 Writer」).
+Writer 가 씁니다([media README](../../../../media/README.md) 「/dvr 하한
+Writer」).
 하한은 되감기 창 정책이고 1차 통제는 서명 쿠키라, 키가 없거나 KVS 읽기가
 실패하거나 값이 이상하면 막지 않고 넘깁니다.
 
@@ -148,8 +149,8 @@ Writer 가 씁니다([media README](/media/README.md) 「/dvr 하한 Writer」).
 1.  선행 — prod/runtime 을 POK-525 판으로 apply 해 출력
     `edge_bounds_kvs_arn` 이 있고, POK-528(하한 404 를 받는 웹)이 prod 에
     반영돼 있어야 합니다. 이 함수를 더한 PR 의 머지도 이 선행이 다 참이 된
-    뒤입니다 — 머지 뒤 첫 edge apply 는 스위치가 꺼져 있어도 함수 · 로그
-    그룹을 만듭니다.
+    뒤입니다 — 머지 뒤 첫 edge apply 는 스위치가 꺼져 있어도 함수 · 함수
+    로그 그룹 · 경보 일곱 자원(「경보(POK-525)」)을 만듭니다.
 1.  1단 — 스위치 기본값(`false`) 그대로 apply 합니다. plan 은 함수 하나 ·
     함수 로그 그룹 하나 · 경보 일곱 자원(「경보(POK-525)」) 생성이고 배포
     변경은 0 입니다. 게시된 함수를
@@ -159,17 +160,29 @@ Writer 가 씁니다([media README](/media/README.md) 「/dvr 하한 Writer」).
     되돌립니다(함수 · 로그 그룹은 남김).
 
 켠 뒤의 edge apply(표준 로그 끄기 · WAF 속도 조정 포함)는 모두
-`-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에 `/dvr/*`
-연결 제거가 끼어듭니다.
+`-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에 `/dvr/*` 의
+`function_association` 제거가 끼고, 그대로 apply 하면 하한이 조용히
+풀립니다(떼어진 함수는 로그를 내지 않아 경보도 울리지 않습니다). **plan 에
+`function_association` 제거가 보이면 apply 하지 않고 멈춥니다.**
 
 붙은 채로 함수 코드를 고칠 때는 먼저 `false` 로 떼고, 1단으로 새 코드를
 게시해 시험한 뒤 다시 켭니다. 게시(PublishFunction)는 그 함수를 쓰는
 비헤이비어에 곧바로 실립니다.
 
-해체 · 교체 순서는 edge 가 먼저입니다. 런타임 1단 KVS 그릇을 교체하거나
-지우려면 dvr-floor 의 연결을 먼저 떼야 합니다 — DeleteKeyValueStore 는 쓰는
-중인 그릇을 `CannotDeleteEntityWhileInUse`(409)로 거절합니다(API 참조
-2026-11-11 확인 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).
+런타임 1단 KVS 그릇의 해체 · 교체는 지금 실행할 수단이 없습니다.
+
+*   스위치는 `/dvr/*` 연결만 뗍니다. dvr-floor 의 KVS 연결은 스위치와
+    무관하게 늘 남습니다.
+*   그 연결을 떼려면 함수를 지워야 하는데, 단계 데이터 O7f
+    (`scripts/precheck/data/stage_actions/O7f.tsv`)에 `cloudfront:DeleteFunction`
+    이 없습니다.
+*   연결이 남은 채로 그릇을 교체하거나 지우면 DeleteKeyValueStore 가 쓰는
+    중인 그릇을 `CannotDeleteEntityWhileInUse`(409)로 거절합니다(API 참조
+    2026-11-11 확인 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).
+
+해체 · 그릇 교체에는 함수 삭제 승인 경로(O7f 에 `DeleteFunction` 행을 더하고
+따로 승인받음)가 먼저 있어야 합니다. 그 경로는 POK-525 범위 밖이라 아직
+없습니다.
 
 ## 경보(POK-525)
 
@@ -196,7 +209,9 @@ CloudFront 지표가 us-east-1 이라).
 시험이 패턴 글자를 고정해 그 변경을 드러냅니다. 필터는 만든 뒤의 로그만
 셉니다. 함수 로그 전달은 best-effort 라(드물게 늦거나 빠짐) 경보 수는 완전한
 수가 아닙니다. test-function 은 CloudWatch 로 로그를 보내지 않아 경보를
-울리지 않습니다. 알림 경로 확인(판정 K)은
+울리지 않습니다 — 로그는 LIVE 단계 함수가 실제 요청에 돌 때만 보냅니다
+([AWS 개발자 안내서 「Edge function logs」](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-functions-logs.html)
+의 주 · 2026-11-11 원문 확인). 알림 경로 확인(판정 K)은
 [엣지 시험 런북](../../runbooks/edge-tests.md)을 따릅니다.
 
 경보 · 주제 · 지표 필터(일곱 자원)는 스위치 `dvr_floor_enabled` 와 무관하게
@@ -207,6 +222,33 @@ CloudFront 지표가 us-east-1 이라).
 정책입니다. 계정 루트에는 읽기(`SNS:GetTopicAttributes`) 하나만 열고, 발행은
 이 루트의 경보 셋이 보내는 CloudWatch(`aws:SourceArn` · `aws:SourceAccount`)
 뿐입니다. 관리 · 구독은 신원 정책(kty IAM 사용자)이 정합니다.
+
+이 발행 문장의 조건 키(`aws:SourceArn` · `aws:SourceAccount`) 때문에 직전
+점검 판정 래퍼(`principal-check.sh` — SimulatePrincipalPolicy)의
+`edge-alarm-topic` 행이 문맥 누락(`MISSING_CONTEXT`)으로 판정 불가
+(`UNDECIDED`)가 될 수 있습니다. prod/runtime `broadcast_events.tf` 는 같은
+이유로 조건 키를 쓰지 않았습니다. 오프라인 시험으로는 가릴 수 없어, 첫 edge
+apply 뒤 그 판정 행을 실제로 한 번 돌려 결과를 봅니다 — `UNDECIDED` 면
+멈추고 kty 에게 회부합니다(걸음은 [엣지 시험 런북](../../runbooks/edge-tests.md)).
+
+### 경보 · 권한 한계
+
+*   `sns:Unsubscribe` 를 묻는 판정 행이 없습니다(`edge-alarm-topic` ·
+    `broadcast-topic` 같음) — dev 주체가 구독을 끊을 수 있는지는 직전 점검이
+    보지 않습니다.
+*   `FunctionValidationErrors` · `FunctionThrottles` 경보는 없습니다. K-D5
+    (a) 가 정한 것은 `FunctionExecutionErrors` 하나입니다.
+*   O7f 의 `cloudfront:UpdateFunction` 은 자원 `*` 입니다. 기존
+    `CreateFunction` · `PublishFunction` 행과 같은 수준입니다.
+*   `edge_bounds_kvs_arn` 꼴 검사(`remote_state.tf` precondition · 모듈 변수
+    검증)는 계정 자리가 12자리 숫자인지만 보고 호출자 계정과 같은지는 보지
+    않습니다. 다른 계정 KVS 는 CloudFront 가 연결을 거절한다고 봅니다(보안
+    리뷰 판단 · 미실측).
+*   R6(KVS 연결에 드는 권한)은 함수 권한만 준 제한 역할로 만들기
+    (CreateFunction — KVS 연결 포함) · 고치기(UpdateFunction)만 쟀습니다
+    (엣지 시험 런북 「/dvr 하한 실험대 결과」 · 2026-11-11). 게시
+    (PublishFunction)와 KVS 연결은 재지 않아, 권한이 모자라면 1단 apply 에서
+    `AccessDenied` 로 드러납니다.
 
 ### 이메일 구독
 
