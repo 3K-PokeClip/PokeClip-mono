@@ -942,7 +942,7 @@ IP 속도 제한(WAF 후속)이다.
 
 | 증상 | 먼저 | 원인 수정 | 다시 켬 |
 |---|---|---|---|
-| 시청자 404 · `dvr_floor_blocks_list` set(엣지 하한을 켠 뒤) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge 스위치 `dvr_floor_enabled = false` 로 apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
+| 시청자 404 · `dvr_floor_blocks_list` set(엣지 하한을 켠 뒤 운영 중 — 판정 C′ 도중이면 엣지 시험 런북의 보류 · 즉시 보고) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge 스위치 `dvr_floor_enabled = false` 로 apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
 | `edge_bounds_write_failing` 이 위 신호 절의 문턱(올림 15분 · 해제 5분) 안에 풀리지 않음 | 엣지를 끈다(켠 뒤라면 — 위 행과 같은 스위치) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
 | `dvr_floor_release_overdue` | — 엣지는 끄지 않는다. 피해는 그 회차 VOD 가 열리지 않는 것뿐이다(`pass=release` 의 `_write_failing` 이 함께 나와도 같다) | 위 행과 같다 | 위 행과 같다 |
 | `edge_bounds_degraded` | — | 그 줄의 `err` 를 고친다. 못 고치면 위 행처럼 스위치를 끄고 교체한다(Media 교체 런북 「POK-525 롤백」 의 「Writer 만 문제」) | 고쳤으면 사이드카 재기동 — 기동 줄이 `edge_bounds_started` 면 된다. 스위치를 껐으면 위 행처럼 켜 교체 |

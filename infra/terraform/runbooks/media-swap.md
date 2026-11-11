@@ -1112,8 +1112,9 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
 판정은 media README 「/dvr 하한 신호」, 절차는 「/dvr 하한 사람 복구」
 입니다.
 
-*   **엣지 거절**(/dvr 하한 함수를 붙인 뒤 — 시청자 404 ·
-    `dvr_floor_blocks_list`)
+*   **엣지 거절**(/dvr 하한 함수를 붙인 뒤 운영 중 — 시청자 404 ·
+    `dvr_floor_blocks_list`. 판정 C′ 도중의 같은 관찰은 엣지 시험 런북의
+    「보류 · 즉시 kty 보고」 이고 끌지는 kty 가 정함)
     *   방법: `dvr_floor_enabled = false` 로 prod/edge apply 해 `/dvr/*` 에서
         함수를 뗍니다(1순위 · 실행 직전 승인). plan 범위는
         `update module.media.aws_cloudfront_distribution.this` 한 줄이고,

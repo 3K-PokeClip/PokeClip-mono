@@ -1563,6 +1563,7 @@ kty 가 정하고, 정하면 「/dvr 하한 끄기」(실행 직전 승인 · pl
 | 함수를 지나야 할 줄(`eq` · `above` · `old` · `e14-direct` · `e14-direct2`)이 함수 404(`xcache=FunctionGeneratedResponse from cloudfront`) | `floor_gate retry` — `FLOOR CHANGED` 면 재개, `FLOOR SAME` 이면 보류. 닫힌 회차의 `closed-eq` 는 게이트 대신 「닫힌 회차」 의 2분 재확인 |
 | 앱 fetch 의 `TypeError`(아래) | 탭을 새로 고쳐 한 번 더 — 그래도 예외면 보류 |
 | 지표의 표본 부족(아래 「지표 관측」 — 기대값) | 창 값을 기록해 kty 에게 넘김 — 그것만으로는 보류 아님 |
+| 어느 줄이든 코드가 `5xx` 이거나, CORS 머리를 내는 요청(`Origin` 을 실은 `c_get` 줄 모두 — 통과 칸에 CORS 를 적지 않은 `e14-*` · `old` · `closed-below` 포함)에서 `acao` · `acac` 가 한 벌이 아님 | 통과 아님 → 보류 · 즉시 kty 보고(끄기 판정 아님 — 아래 표의 통과 칸보다 먼저 봄) |
 | 위 처리 뒤 통과 줄이 모두 맞음 | 통과 |
 | 그 밖 모두 | 보류 · 즉시 kty 보고 |
 
@@ -1570,6 +1571,10 @@ kty 가 정하고, 정하면 「/dvr 하한 끄기」(실행 직전 승인 · pl
 의 비-200 · `below` 재확인)는 정한 횟수만큼만 다시 잽니다. 그 뒤에도 풀리지
 않으면 보류 · 즉시 kty 보고이고 통과가 아닙니다 — 통과는 통과 줄이 모두
 맞을 때뿐입니다.
+
+보류가 나와도 C′ 의 나머지 블록은 보고 재료로 이어 갑니다(같은 6.6 승인
+범위). 방송을 끝내 닫힌 회차 확인으로 갈지, 새 시험 방송으로 다시 할지,
+끌지는 kty 가 정합니다.
 
 `below1`–`below3` 는 하한이 올라도 여전히 하한 아래라 `floor_gate retry` 를
 거치지 않고, 대신 2분 재확인을 거칩니다(아래 첫 블록 표 뒤).
@@ -1691,16 +1696,30 @@ c_issue && {
 든 JSON)는 화면 · 증거에 남기지 않습니다. 조회 실패(`AccessDenied` 등)는 0
 건이 아니라 「조회 실패」 로 적습니다.
 
+`--output text` 로 `length(events)` 를 내면 CLI 가 페이지마다 따로 세어 숫자가
+여러 줄이 될 수 있습니다(AWS CLI 「Filtering output」 — 쿼리는 페이지마다
+적용). 그래서 이벤트 ID 만 JSON 으로 받아 jq 로 한 번에 셉니다. `test_ip` 는
+이 기계의 공인 IP 입니다(자리표시자 그대로면 어느 줄과도 맞지 않아 거짓 0 이
+나오므로, IP 꼴이 아니면 조회하지 않습니다).
+
 ```shell
-waf_filter='{ $.httpRequest.clientIp = "<시험 IP>" }'
-if waf_n="$(aws logs filter-log-events --region us-east-1 \
-  --log-group-name aws-waf-logs-pokeclip-prod-cloudfront \
-  --start-time "${c_since_ms}" --filter-pattern "${waf_filter}" \
-  --query 'length(events)' --output text)"; then
-  echo "waf-blocks ${waf_n}"
-else
-  echo 'waf-blocks 조회 실패'
-fi | tee -a "${evidence}/dvr-c.txt"
+test_ip='<시험 IP>'
+case "${test_ip}" in
+  '' | *[!0-9a-fA-F:.]*) echo 'waf-blocks 시험 IP 꼴 다름 — 조회 안 함' ;;
+  *)
+    waf_filter="{ \$.httpRequest.clientIp = \"${test_ip}\" }"
+    # aws 의 실패를 jq 가 가리지 않게 두 걸음으로 나눈다(파이프의 종료 값은
+    # 끝 명령 것).
+    if waf_ids="$(aws logs filter-log-events --region us-east-1 \
+      --log-group-name aws-waf-logs-pokeclip-prod-cloudfront \
+      --start-time "${c_since_ms}" --filter-pattern "${waf_filter}" \
+      --query 'events[].eventId' --output json)" &&
+      waf_n="$(printf '%s' "${waf_ids}" | jq 'length')"; then
+      echo "waf-blocks ${waf_n}"
+    else
+      echo 'waf-blocks 조회 실패'
+    fi ;;
+esac | tee -a "${evidence}/dvr-c.txt"
 ```
 
 **목록 GAP**: 아래 블록이 목록(`/dvr/<test>/<회차>/index.m3u8`)을 받아 F ·
@@ -2050,7 +2069,7 @@ c_issue && {
 
 ```shell
 case "${run_dir:-}" in
-  */pokeclip-dvr.*)
+  */pokeclip-dvr.??????)
     rm -r "${run_dir}" && test ! -e "${run_dir}" && echo removed &&
       unset run_dir ;;
   *) echo 'run_dir 없음 · 꼴 다름 — 지우지 않음'; false ;;
@@ -2151,7 +2170,7 @@ apply 를 다시 보고 kty 에게 보고합니다. 다시 켜는 것은 원인�
 
 ```shell
 case "${run_dir:-}" in
-  */pokeclip-dvr.*)
+  */pokeclip-dvr.??????)
     rm -r "${run_dir}" && test ! -e "${run_dir}" && echo removed &&
       unset run_dir ;;
   *) echo 'run_dir 없음 · 꼴 다름 — 지우지 않음'; false ;;
@@ -2166,7 +2185,7 @@ find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pokeclip-dvr.*' | wc -l |
 | 상황 | 할 일 |
 |---|---|
 | C′ 「보류 · 즉시 kty 보고」(「판정 C′」 결과 표) | 함수를 붙인 채 걸음 6.6 을 열어 두고 kty 에게 즉시 보고 — 다음 걸음(새 시험 방송으로 다시 · 끄기)은 kty 가 정함(참고: 「판정 C′」 의 「kty 판단 안내」) |
-| 엣지 거절 이상(시청자 404 · `dvr_floor_blocks_list`) · C′ 보류 뒤 kty 가 끄기로 정함 | 「/dvr 하한 끄기」(1순위 · 실행 직전 승인) |
+| 운영 중(C′ 밖) 엣지 거절 이상(시청자 404 · `dvr_floor_blocks_list`) · C′ 보류 뒤 kty 가 끄기로 정함 | 「/dvr 하한 끄기」(1순위 · 실행 직전 승인). C′ 도중의 같은 관찰은 위 행(보류 · 즉시 보고 — 끌지는 kty) |
 | 함수 코드 결함 | 고친 PR → 「붙은 채 함수 코드 고치기」 |
 | 경보 오탐 · 무음 | 문턱 · 패턴을 고치는 PR(스위치는 그대로) |
 | Writer 문제(`edge_bounds_write_failing` 이 풀리지 않음 등) | [Media 교체 런북](media-swap.md) 「POK-525 롤백」 의 /dvr 하한 갈래 |
