@@ -440,7 +440,6 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     /**
      * 표지 {@code axis=fileHead} 를 문으로 받아 메아리와 새 칸을 웹에 알린 이름 그대로 싣는다(POK-196 · 설계 r7 9.6). 이 픽스처는
      * 파일명 시각이 재생 축보다 1시간 뒤라 창을 파일명 시각으로 옮겨 묻는다 — 옛 값({@code startAtMs})은 재생 축 그대로 나온다.
-     * 모르는 표지는 400 이다.
      */
     @Test
     void 원본_조각_주소는_표지가_있으면_파일명_시각_축으로_메아리를_싣는다() throws Exception {
@@ -455,6 +454,7 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
                         .header("Authorization", "Bearer " + TestTokens.access(요청자)))
                 .andExpect(status().isOk())));
 
+        assertThat(응답.has("axis")).as("메아리 칸이 있다").isTrue();
         assertThat(응답.get("axis").asString()).isEqualTo("fileHead");
         JsonNode first = 응답.get("segments").get(0);
         assertThat(first.get("seq").asLong()).isEqualTo(2);
@@ -465,6 +465,14 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         assertThat(first.has("followsLedgerPrevious")).isTrue();
         assertThat(응답.has("audioCapture")).isTrue();
         assertThat(응답.get("gapEvidence").isArray()).isTrue();
+    }
+
+    /** 모르는 표지는 400 {@code axis} 다 — 위 메아리 시험과 따로 두어 메아리가 깨져도 이 판정은 따로 돈다. */
+    @Test
+    void 원본_조각_주소는_모르는_표지면_400이다() throws Exception {
+        볼_수_있다("OWNER");
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
+        long wallIn = RenderFixtures.CUT_IN + 3_600_000;
 
         mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
                         .param("fromMs", Long.toString(wallIn))

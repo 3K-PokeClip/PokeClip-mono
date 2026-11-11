@@ -118,6 +118,7 @@ class SegmentAudioAxisTest extends IntegrationTestSupport {
 
         JsonNode root = mapper.readTree(json(issue(10_000, 22_000, "fileHead")));
 
+        assertThat(root.has("axis")).as("메아리 칸이 있다").isTrue();
         assertThat(root.get("axis").asString()).isEqualTo("fileHead");
         assertThat(seqs(root)).containsExactly(3L, 5L, 6L, 7L);
         JsonNode first = root.get("segments").get(0);
@@ -254,6 +255,7 @@ class SegmentAudioAxisTest extends IntegrationTestSupport {
 
         JsonNode root = mapper.readTree(json(issue(650_000, 700_000, "fileHead")));
 
+        assertThat(root.has("axis")).as("메아리 칸이 있다").isTrue();
         assertThat(root.get("axis").asString()).isEqualTo("fileHead");
         assertThat(seqs(root)).containsExactly(1L, 2L);
     }

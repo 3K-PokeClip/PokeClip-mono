@@ -445,10 +445,12 @@ class CutPlannerTest {
         CutPlanner.CutInput in = new CutPlanner.CutInput("s-1", 7L, oneRow(), 11_000, 13_000, List.of(), true, true,
                 Instant.ofEpochMilli(8_000), NOW);
 
-        Ready ready = (Ready) CutPlanner.plan(in, new FakeLedger().before(10, neighbor(9, 6_000, RoundRow.PENDING)));
+        CutDecision result = CutPlanner.plan(in, new FakeLedger().before(10, neighbor(9, 6_000, RoundRow.PENDING)));
 
-        assertThat(ready.primes()).isEmpty();
-        assertThat(ready.primeSkips()).containsExactly(new PrimeSkip(10, 9, "other_broadcast"));
+        assertThat(result).isInstanceOfSatisfying(Ready.class, ready -> {
+            assertThat(ready.primes()).isEmpty();
+            assertThat(ready.primeSkips()).containsExactly(new PrimeSkip(10, 9, "other_broadcast"));
+        });
     }
 
     /** P30 ⑦ — seq 는 조밀하다고 보장되지 않는다. 장부 바로 앞 행이 h − 3 이어도 그 행이다. */
