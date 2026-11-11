@@ -306,4 +306,6 @@ Budgets 경보 때 1차 대응은 `enable_standard_logs = false` 로 edge apply 
 `backend.hcl.example` 을 `backend.hcl` 로 복사하고 `bucket` 자리표시자
 `<STATE_BUCKET_PROD>` 를 `pokeclip-tfstate-prod-apne2` 로 고친 뒤
 `init -backend-config=backend.hcl` 로 엽니다(운영 단계). 이 루트의 변수는
-모두 기본값이 있어 `terraform.tfvars` 가 필요 없습니다.
+모두 기본값이 있어 `terraform.tfvars` 가 필요 없습니다. 다만 하한을 켠
+뒤에는 apply 마다 `-var dvr_floor_enabled=true` 가 있어야 합니다(위
+「/dvr 하한(POK-525)」 의 경고).

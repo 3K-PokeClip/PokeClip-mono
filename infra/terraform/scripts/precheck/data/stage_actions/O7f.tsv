@@ -60,8 +60,8 @@ cloudfront:TestFunction	us-east-1	*
 # permissions」 · PutMetricAlarm 「you must have the cloudwatch:TagResource
 # permission」), Read 가 ListTagsForResource, 태그를 바꾸는 apply 가
 # TagResource · UntagResource 를 부른다. 지우는 동작은 이 커밋을 되돌린
-# apply 가 부른다. 판정 K(runbooks/edge-tests.md — 2단 apply 뒤 경보 알림
-# 경로 확인)는 TestMetricFilter(자원 없음 — 「*」) · SetAlarmState 를
+# apply 가 부른다. 판정 K(runbooks/edge-tests.md — 1단 apply 뒤 · 2단 전
+# 경보 알림 경로 확인)는 TestMetricFilter(자원 없음 — 「*」) · SetAlarmState 를
 # 부른다(판정 B′ 의 TestFunction 과 같은 까닭으로 이 묶음에 둔다).
 sns:CreateTopic	us-east-1	*
 sns:GetTopicAttributes	us-east-1	*

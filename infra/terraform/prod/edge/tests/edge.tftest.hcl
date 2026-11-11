@@ -372,7 +372,7 @@ run "standard_log_retention_rejects_non_cloudwatch_value" {
 
 # --- CloudFront Function 로그 그룹(POK-469 · PR 387 보안 L2) ---
 
-# 함수 셋의 console.log 가 가는 us-east-1 로그 그룹을 이 루트가 미리 만들어
+# 함수 넷의 console.log 가 가는 us-east-1 로그 그룹을 이 루트가 미리 만들어
 # 보존을 건다. 이름은 /aws/cloudfront/function/<함수 이름>, 보존은 WAF 차단
 # 로그와 같다. 리전은 자원의 region 값으로 본다 — mock 은 provider 리전을
 # 모르므로, 자원이 region 을 적지 않으면 mock 이 지은 값이 나와 실패하고 다른
