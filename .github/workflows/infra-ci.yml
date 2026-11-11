@@ -531,7 +531,7 @@ jobs:
           fi
           echo "러너 HOME에 ${evidence_root##*/} 없음"
 
-  # CloudFront Function 셋(modules/cdn_media/functions · modules/cdn_static_site/functions)의 단위
+  # CloudFront Function 넷(modules/cdn_media/functions · modules/cdn_static_site/functions)의 단위
   # 시험이다. node 표준 라이브러리만 쓰고 패키지를 설치하지 않는다. 함수 원문은 cloudfront-js-2.0 꼴이라
   # 시험 디렉터리의 로더가 원문을 읽어 가짜 cf 를 넣고 평가한다. node 는 실제 CloudFront 런타임이
   # 아니다 — 런타임 거동은 O7f 시험(runbooks/edge-tests.md)이 본다.

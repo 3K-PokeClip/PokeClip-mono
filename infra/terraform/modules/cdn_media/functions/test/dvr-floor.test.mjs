@@ -175,6 +175,32 @@ function segmentUri(seq, stream = 's', round = 'r') {
 // 꼴 · 20자리 이상 seq, Go 가 거절하는 모든 행)은 KVS 를 읽지 않는다.
 const SEG_KEY_ROWS = readGolden(SEG_KEY_GOLDEN);
 
+// err 행이 엣지에서 받는 결과를 함수와 따로 시험 쪽에서 정한다. 경로 조작
+// 표지(%, 역슬래시, //, 점 구간)가 있거나, 엣지 정규식 안인데 seq 가 안전
+// 정수 밖이면 MALFORMED 404 다. 나머지는 정규식 밖이라 통과다. 정규식은
+// 함수의 ROUND_SEGMENT_PATH 와 같은 글자라 한 줄에 둔다.
+const EDGE_SEGMENT_SHAPE =
+    /^\/dvr\/[A-Za-z0-9._-]{1,128}\/[A-Za-z0-9._-]{1,128}\/seg\/([0-9]{6,19})\.m4s$/;
+const PATH_MARKER = /[%\\]|\/\/|\/\.\.?(?=\/|$)/;
+
+/**
+ * @param {string} uri 골든 err 행의 엣지 경로.
+ * @return {string} 'malformed' 또는 'pass'.
+ */
+function expectedErrOutcome(uri) {
+  if (PATH_MARKER.test(uri)) {
+    return 'malformed';
+  }
+  const shape = EDGE_SEGMENT_SHAPE.exec(uri);
+  if (shape === null) {
+    return 'pass';
+  }
+  // 정규식 안 · 안전 정수 seq 인 err 행은 KVS 를 읽게 되어 규칙 둘과 어긋난다.
+  assert.ok(!Number.isSafeInteger(Number(shape[1])),
+      `${SEG_KEY_GOLDEN}: 정규식 안 안전 정수 seq 인 err 행 ${uri}`);
+  return 'malformed';
+}
+
 test('조각 키 골든이 비지 않았다(행 수 하한)', () => {
   assert.ok(SEG_KEY_ROWS.length >= 43, `행 ${SEG_KEY_ROWS.length}개`);
 });
@@ -182,17 +208,21 @@ test('조각 키 골든이 비지 않았다(행 수 하한)', () => {
 for (const [key, expected, verdict] of SEG_KEY_ROWS) {
   const uri = '/' + key;
   if (verdict === 'err') {
-    test(`골든 err ${uri} 는 KVS 를 읽지 않는다(통과 또는 MALFORMED)`,
-        async () => {
-          const outcome = await run(uri, {'s/r': '9007199254740991'});
+    if (expectedErrOutcome(uri) === 'malformed') {
+      test(`골든 err ${uri} 는 KVS 없이 MALFORMED 404 다`, async () => {
+        const outcome = await run(uri, {'s/r': '9007199254740991'});
 
-          assertNoKvsRead(outcome);
-          if (outcome.result.statusCode === 404) {
-            assertNotFound(outcome, MALFORMED_LOG);
-          } else {
-            assertPassed(outcome);
-          }
-        });
+        assertNoKvsRead(outcome);
+        assertNotFound(outcome, MALFORMED_LOG);
+      });
+    } else {
+      test(`골든 err ${uri} 는 정규식 밖이라 KVS 없이 통과한다`, async () => {
+        const outcome = await run(uri, {'s/r': '9007199254740991'});
+
+        assertNoKvsRead(outcome);
+        assertPassed(outcome);
+      });
+    }
     continue;
   }
   assert.equal(verdict, 'ok', `${SEG_KEY_GOLDEN}: 판정 열 ${verdict}`);
@@ -364,6 +394,26 @@ test('exists() 참 뒤 get() 이 실패하면 KVS ERROR 로 남기고 통과한�
       assertPassed(outcome, ['DVR FLOOR KVS ERROR s r']);
     });
 
+// 통과로 바꾸는 것은 KVS 읽기 실패뿐이다(K-D5 (a)). 최상위 catch 가 없어
+// KVS 밖 예외는 그대로 던져져 런타임이 함수 오류로 센다 — 삼켜 통과시키면
+// 그 지표에 드러나지 않는다.
+test('KVS 밖에서 난 예외는 삼키지 않고 그대로 던진다', async () => {
+  const {cf, calls} = fakeCloudfront({'s/r': '100'});
+  const logs = [];
+  const handler = loadHandlerFromSource(RENDERED, FUNCTION_PATH, {cf, logs});
+  const event = viewerRequestEvent(segmentUri(7));
+  const thrown = new Error('uri 를 읽을 수 없다');
+  Object.defineProperty(event.request, 'uri', {
+    get() {
+      throw thrown;
+    },
+  });
+
+  await assert.rejects(handler(event), (err) => err === thrown);
+  assertNoKvsRead({calls});
+  assert.deepEqual(logs, []);
+});
+
 // --- 경로 조작 표지(KVS 읽기 전 MALFORMED) ---
 
 // 정규식 밖 꼴(목록 · init)에도 표지가 있으면 MALFORMED 다 — 표지 검사가
@@ -399,10 +449,10 @@ test('KVS 장애여도 표지가 든 경로는 MALFORMED 404 다', async () => {
 });
 
 // 원문 경로와 RFC 3986 정규화본(이스케이프 대문자화 · 비예약 문자 디코드 · 점
-// 구간 제거)에 CloudFront 의 // 접기를 거친 꼴의 쌍이다. 함수가 어느 쪽을
-// 받는지(G1)는 미확정이라(POK-548) 두 쪽 결과를 모두 고정한다. 하한은 3 이다.
-// 정규화본이 표지 없이 하한 판정을 받는 쌍은 한계 고정이다 — 원본(S3)은 원문
-// 경로를 받는다.
+// 구간 제거)에 CloudFront 의 // 접기를 거친 꼴의 쌍이다. 함수는 원문을
+// 받는다(실험대 (4) R9 · 2026-11-11 — G1 · POK-548). 정규화본 결과도 함수의
+// 거동으로 함께 고정한다. 하한은 3 이다. 정규화본이 표지 없이 하한 판정을
+// 받는 쌍은 한계 고정이다 — 원본(S3)은 원문 경로를 받는다.
 const PATH_PAIRS = [
   {
     raw: '/dvr/s/x/../r/seg/000004.m4s',
@@ -493,6 +543,8 @@ const PASS_THROUGH_URIS = [
   '/dvr/s/r/seg/000001.m4s;p',
   '/dvr/s/a/b/seg/000001.m4s',
   '/dvr/s/r/seg/00000000000000000001.m4s',
+  // 정규식 앞 고정(^)이 빠지면 이 경로가 하한 판정을 받는다.
+  '/x/dvr/s/r/seg/000001.m4s',
 ];
 
 for (const uri of PASS_THROUGH_URIS) {
