@@ -1,6 +1,8 @@
 package upload
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -140,5 +142,53 @@ func TestEvictDropsRestoreFailureHistory(t *testing.T) {
 
 	if n := len(m.byID); n != 0 {
 		t.Errorf("수명 뒤 회차 항목 %d개, want 0", n)
+	}
+}
+
+// 긴 구멍의 복원 줄을 덩어리(restoredChunk)로 나눠 쓰는 동안에도 같은 회차의 읽기는 「모름」 이거나 복원이 정한 값이다 — 앞
+// 덩어리 끝 줄의 보정값이 아직 안 쓴 뒤 seq 에 「아는 값」 으로 보이지 않는다(PR 종결 r1 cc H — 재현 입력: 앞 줄 seq 0 · 끊김
+// 줄 seq 1 · 구멍 링크 21,600개 · 링크마다 다른 보정값). 잡는 결함: 끊김 줄을 첫 덩어리에서 걷고 seq 오름차순으로 쓰면, 그
+// 사이에 스위퍼 ③ 작업이 뒤 seq 를 offsetAt 해 앞 덩어리 끝 줄의 보정값으로 만들고 CAS 로 굳힌다.
+func TestRestoredChunksNeverExposeEarlierChunkOffset(t *testing.T) {
+	const (
+		n      = 21_600
+		rounds = 10
+	)
+	now := time.Unix(1_000, 0)
+	links := make([]playback.Link, 0, n)
+	for s := int64(1); s <= n; s++ {
+		links = append(links, playback.Link{Seq: s, Offset: time.Duration(s) * time.Millisecond})
+	}
+	var wrong, known atomic.Int64
+	for range rounds {
+		m := newMemoryForTest()
+		m.recordLive(index.UploadTarget{SessionID: "S-1", Seq: 0}, now)
+		m.recordLive(unknownRequest(1), now)
+		var (
+			stop atomic.Bool
+			wg   sync.WaitGroup
+		)
+		for g := range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for !stop.Load() {
+					for s := int64(1500 + g); s <= n; s += 97 {
+						if off, ok := m.offsetAt("S-1", s); ok {
+							known.Add(1)
+							if off != time.Duration(s)*time.Millisecond {
+								wrong.Add(1)
+							}
+						}
+					}
+				}
+			}()
+		}
+		m.recordRestored("S-1", links, now)
+		stop.Store(true)
+		wg.Wait()
+	}
+	if wrong.Load() > 0 {
+		t.Fatalf("복원 중 틀린 보정값을 %d번 봤다(아는 값 관측 %d번) — 아직 안 쓴 seq 는 「모름」 이어야 한다", wrong.Load(), known.Load())
 	}
 }

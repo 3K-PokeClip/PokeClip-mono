@@ -368,15 +368,23 @@ func (e *sessionEntry) empty() bool {
 // 공용 뮤텍스는 인덱서 루프의 RestoredLink · RequestUpload 도 잡으므로 짧게 쥔다(c10b 확인 패스 2회차 cx H — 21,600 링크를 잠금 안에서
 // 링크마다 표 전체로 견주면 O(n²) 로 다른 회차가 2.5초 멈췄다). 표의 열쇠만 잠금 안에서 베끼고, 아는가는 잠금 밖에서 정렬 · 이분
 // 탐색으로 가르고, 쓰기는 restoredChunk 링크씩 잠근다.
-func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, now time.Time) {
+//
+// 덩어리는 seq 가 큰 쪽부터 쓴다(PR 종결 r1 cc H). 앞 덩어리부터 쓰면 그 덩어리가 끊김 줄을 걷은 뒤 ~ 뒤 덩어리를 쓰기 전에
+// 뒤 seq 가 앞 덩어리 끝 줄의 보정값으로 「아는」 것처럼 보이고, 스위퍼 ③ 작업이 그 값으로 만들어 CAS 로 굳힌다. 뒤에서부터
+// 쓰면 아직 안 쓴 seq 의 「seq 이하 마지막 줄 · 그 뒤 끊김 줄」 은 쓰기 전 그대로라(새 줄 · 걷은 끊김 줄은 모두 그보다 뒤다) 읽기는
+// 언제나 「모름」 이거나 다 쓴 뒤와 같은 값이다. 돌려주는 값은 실제로 적은 줄 수다(실시간 줄이 이긴 seq 는 빠진다).
+func (m *sessionMemory) recordRestored(sessionID string, links []playback.Link, now time.Time) int {
 	lines, breaks := m.tableKeys(sessionID)
 	unknown := unknownLinks(links, lines, breaks)
-	for from := 0; from < len(unknown); from += restoredChunk {
-		m.writeRestored(sessionID, unknown[from:min(from+restoredChunk, len(unknown))], now)
+	slices.SortStableFunc(unknown, func(a, b playback.Link) int { return cmp.Compare(a.Seq, b.Seq) })
+	written := 0
+	for to := len(unknown); to > 0; to -= restoredChunk {
+		written += m.writeRestored(sessionID, unknown[max(to-restoredChunk, 0):to], now)
 	}
 	if len(unknown) == 0 {
 		m.writeRestored(sessionID, nil, now)
 	}
+	return written
 }
 
 // restoredChunk 는 복원 줄을 한 번 잠가 쓰는 링크 수다 — 맵 쓰기 이만큼은 수백 µs 안이다.
@@ -425,15 +433,18 @@ func unknownLinks(links []playback.Link, lines, breaks []int64) []playback.Link 
 	return unknown
 }
 
-// writeRestored 는 복원 줄 한 묶음을 쓴다. 베낀 뒤 실시간 요청이 그 seq 에 줄을 적었으면 그 줄을 둔다(실시간 값이 정본이다).
-func (m *sessionMemory) writeRestored(sessionID string, links []playback.Link, now time.Time) {
+// writeRestored 는 복원 줄 한 묶음을 쓰고 적은 줄 수를 돌려준다. 베낀 뒤 실시간 요청이 그 seq 에 줄을 적었으면 그 줄을 둔다(실시간
+// 값이 정본이다).
+func (m *sessionMemory) writeRestored(sessionID string, links []playback.Link, now time.Time) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e := m.entry(sessionID)
+	written := 0
 	for _, l := range links {
 		if _, live := e.offsets[l.Seq]; live {
 			continue
 		}
+		written++
 		if e.offsets == nil {
 			e.offsets = map[int64]time.Duration{}
 		}
@@ -449,6 +460,7 @@ func (m *sessionMemory) writeRestored(sessionID string, links []playback.Link, n
 	if e.tableSeen.IsZero() {
 		e.tableSeen = now
 	}
+	return written
 }
 
 // setRestored 는 복원이 정한 그 회차의 마지막 링크를 적는다.

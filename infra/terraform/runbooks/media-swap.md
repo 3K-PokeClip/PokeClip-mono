@@ -2536,9 +2536,16 @@ PDT 머지 뒤의 모든 사이드카 이미지(다른 수정 · POK-525 뒤 PR 
 
 **길들이기(4).** c0 가 판 NULL 로 도는 동안 봅니다 — c0 결함 0 ·
 `timing_facts_partial` 비율 · 귀속 행 `timing_round_id` = 세션 `round_id`
-일치(조회) · `segment_indexed.comparable` · 소리 머리 최장 연속 ·
-`timing_reset` 까닭 `floor_rejected` 수 · `unattributed_run` 의 세션 사이
-길이. 이 동안은 출시 이미지로 되돌려도 됩니다(위 상태 표). 기간은 **방송
+일치(조회) · `segment_indexed` 의 `comparable` 거짓 비율 · 소리 머리 최장
+연속(`head_track` 이 `audio` 이고 `same_instance` 가 참인 행이 스트림 안에서
+잇달아 나온 수) · 하한 거부 수(`session_floor_rejected` 의 `stream_id` ·
+`seq` 고유 수) · `unattributed_run` 의 세션 사이 길이(`same_round` 참 줄의
+`duration_ms`). 모두 판 NULL 행에서도 나옵니다. 판 2 섞기 신호
+(`timing_reset` · `pdt_new_chapter` 등)는 판 2 행에서만 나오므로 이 기간에는
+0 이 정상이고 관측값이 아닙니다. 하한 거부 수는 커밋 전 세션 판정에서
+나오는 줄이라 재시도 · 버려진 시도도 섞입니다 — 고유 수는 거부된 행 수의
+상한이고, 판 2 뒤 `timing_reset` 까닭 `floor_rejected` 가 커밋된 행만 셉니다.
+이 동안은 출시 이미지로 되돌려도 됩니다(위 상태 표). 기간은 **방송
 3회 이상(1시간 넘는 방송 1회 · 재접속 또는 TD 분할이 낀 방송 1회 포함)과
 최소 48시간을 둘 다 채운 뒤**입니다(kty 2026-11-11 — K2). 둘 다 채운 뒤에
 스위치 2 로 갑니다.

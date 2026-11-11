@@ -127,10 +127,12 @@ type ledgerStore struct {
 }
 
 // fakeObjects 는 S3 의 메모리 가짜다(Putter · Getter). getErr 가 있으면 GET · HEAD 가 그 오류다(접근 거부 · 시한 주입).
+// headErr 는 HEAD 만의 오류다.
 type fakeObjects struct {
 	mu      sync.Mutex
 	objs    map[string][]byte
 	getErr  error
+	headErr error
 	gets    []string
 	heads   []string
 	putKeys []string
@@ -170,6 +172,9 @@ func (o *fakeObjects) Head(_ context.Context, key string) (int64, bool, error) {
 	o.heads = append(o.heads, key)
 	if o.getErr != nil {
 		return 0, false, o.getErr
+	}
+	if o.headErr != nil {
+		return 0, false, o.headErr
 	}
 	b, ok := o.objs[key]
 	return int64(len(b)), ok, nil

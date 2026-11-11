@@ -43,7 +43,9 @@ type groupRun struct {
 
 	links []playback.Link
 	// rowAt 은 rows 의 seq → 자리 색인이다(fetchFrom 이 만든다).
-	rowAt   map[int64]int
+	rowAt map[int64]int
+	// toAdopt 는 검증을 마치고 구멍 뒤 대조를 기다리는 채택이다 — adoptVerified 가 대조 뒤에 확정하고 adopted 에 적는다.
+	toAdopt []adoption
 	adopted map[int64]bool
 	passed  map[int64]bool
 	waited  bool
@@ -66,8 +68,9 @@ const restoreBackPage = 256
 // 행부터 다시 읽는다.
 var errMemoryStale = errors.New("지난 복원 링크의 행이 바뀌었다")
 
-// restoreGroup 은 무리 g 를 한 번에 끝까지 되살린다 — progressed 는 되살린 링크가 하나라도 있는가다 — 장부 구간은 접기 시작점(지난 복원 링크 · 닻 · 회차 첫 행)부터 limit
-// 까지다. 구멍 뒤 대조를 마친 뒤에만 표 줄 · 작업을 낸다(c10b 확인 패스 cx H-1 — 판을 나누면 앞 판이 대조 전에 올린다). 메모리는
+// restoreGroup 은 무리 g 를 한 번에 끝까지 되살린다 — progressed 는 새로 낸 것이 있는가다(commit) — 장부 구간은 접기 시작점(지난 복원 링크 · 닻 · 회차 첫 행)부터 limit
+// 까지다. 구멍 뒤 대조를 마친 뒤에만 채택 CAS · 표 줄 · 작업을 낸다(c10b 확인 패스 cx H-1 — 판을 나누면 앞 판이 대조 전에 올린다 ·
+// PR 종결 r1 cx H — 접는 도중 채택하면 대조에 져도 uploaded 가 굳는다). 메모리는
 // ② 본문을 하나만 쥐어(keepBodyOf) 무리 길이와 무관하다(c10b 보안 검수 H). 행 메타데이터는 행당 수백 바이트다.
 func (u *Uploader) restoreGroup(w restoreWake, g holeGroup, limit int64, lg *slog.Logger) (progressed bool, err error) {
 	run, err := u.newGroupRun(w, g, limit, lg, true)
@@ -84,8 +87,10 @@ func (u *Uploader) restoreGroup(w restoreWake, g holeGroup, limit int64, lg *slo
 	case mm != nil:
 		return false, run.settleMismatch(run.span(), run.fingerprint(), *mm)
 	}
-	run.commit(run.anchorLink)
-	return len(run.links) > 0, nil
+	if err := run.adoptVerified(); err != nil {
+		return false, err
+	}
+	return run.commit(run.anchorLink), nil
 }
 
 // newGroupRun 은 무리 하나의 장부 구간을 읽고 닻을 정한다. 같은 입력으로 이미 불일치 판정한 무리면 nil 이다. useMemory 면 같은

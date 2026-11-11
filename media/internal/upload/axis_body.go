@@ -23,6 +23,8 @@ const (
 	playbackReasonFileMissing   = "file_missing"
 	playbackReasonUploadFailed  = "upload_failed"
 	playbackReasonNoOffsetTable = "no_offset_table"
+	// playbackReasonSourceSizeMismatch — 입력으로 받은 ② 객체가 장부 크기보다 짧다(복원의 chain_row_passed 와 같은 이름).
+	playbackReasonSourceSizeMismatch = "source_size_mismatch"
 )
 
 // withInitKey 는 키를 비워 온 init 대상에 세션 축 키를 채운다(설계 5.3ⓐ · 계획 2.1).

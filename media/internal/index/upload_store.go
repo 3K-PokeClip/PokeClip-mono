@@ -688,19 +688,21 @@ type PlaybackHole struct {
 // 자격 조건은 pendingPlaybackUploadsSQL 과 같다(세션 조인 · 컷오프 · 끝나지 않은 회차 · 키 · PDT · 경로 · 크기). 꼬리
 // 예외 · 키셋 페이징은 없다 — 회차 하나의 구멍이라 작고, 꼬리 행은 복원이 그 자리에서 기다린다.
 //
-// 닻(anchor_seq)은 행마다 같은 회차의 앞선 uploaded 최신 seq 다 — stream_segments_session_idx(stream_id, session_id, seq)
-// 앞 끝을 탄다. 구멍 행마다 부질의가 앞쪽 uploaded 행까지 거슬러 훑으므로 긴 연속 구멍은 행 수의 제곱으로 는다(한계 — c10a
-// 검수 cc L2): S3 장애 1시간 ≈ 900행이면 색인 항목 약 40만이라 받아들였다. 더 긴 장애가 실측되면 창 함수로 바꾼다.
+// 닻(anchor_seq)은 행마다 같은 회차의 앞선 uploaded 최신 seq 다 — 회차 행을 seq 순으로 한 번 훑는 창 함수(앞 행들까지의
+// uploaded seq 최댓값)로 정한다. 회차의 모든 행(컷오프 앞 · 자격 밖 행 포함)이 창에 들고, 구멍 자격은 그 뒤에 거른다. 행마다
+// 상관 부질의로 찾으면 구멍 행마다 그 회차의 uploaded 색인 항목을 훑어 구멍 수 × uploaded 수로 늘었다(PR 종결 r1 cc M — 12시간
+// uploaded 뒤 12시간 pending 이면 PG17 4.3초, 24시간씩이면 장부 시한 10초를 넘어 그 회차 복원이 매번 ledger 로 실패한다).
 const playbackHolesSQL = `
-SELECT t.seq, t.playback_upload_state,
-       (SELECT pg_catalog.max(p.seq) FROM stream_segments p
-         WHERE p.stream_id = t.stream_id AND p.session_id = t.session_id AND p.seq < t.seq
-           AND p.playback_upload_state = 'uploaded') AS anchor_seq
-  FROM stream_segments t
+SELECT t.seq, t.playback_upload_state, t.anchor_seq
+  FROM (SELECT s.stream_id, s.seq, s.session_id, s.playback_upload_state, s.local_path, s.bytes, s.playback_s3_key,
+               s.playback_pdt,
+               pg_catalog.max(s.seq) FILTER (WHERE s.playback_upload_state = 'uploaded')
+                 OVER (PARTITION BY s.stream_id ORDER BY s.seq ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS anchor_seq
+          FROM stream_segments s
+         WHERE s.session_id = $1) t
   JOIN stream_sessions sess ON sess.session_id = t.session_id
   JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
- WHERE t.session_id = $1
-   AND t.playback_upload_state IN ('pending','failed')
+ WHERE t.playback_upload_state IN ('pending','failed')
    AND t.local_path IS NOT NULL
    AND t.bytes IS NOT NULL
    AND t.playback_s3_key IS NOT NULL

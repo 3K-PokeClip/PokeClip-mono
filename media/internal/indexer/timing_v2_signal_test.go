@@ -2,7 +2,7 @@ package indexer
 
 // 판 2 섞기 신호의 방출 자리 시험(POK-196 PDT 생산자 c4b · 설계 r7 8절 · 계획 14절). store 가 InsertCommit 으로 돌려준 섞기
 // 결과를 advance 가 행마다 한 번 낸다 — segment_indexed 의 견줌 속성 · timing_reset · timing_round_broken · pdt_new_chapter ·
-// pdt_overlap. 판 NULL 행에서는 어느 것도 나가지 않는다.
+// pdt_overlap. 판 NULL 행에서는 섞기 신호 · 견준 차가 나가지 않고, 견줄 조각 술어(comparable · same_instance)만 실린다.
 
 import (
 	"context"
@@ -130,7 +130,8 @@ func TestV2MixSignalsPerBranch(t *testing.T) {
 	}
 }
 
-// 판 NULL 행은 섞기 신호도 segment_indexed 의 견줌 속성도 내지 않는다 — 견줌은 판 2 섞기가 정하는 값이다.
+// 판 NULL 행은 섞기 신호도 견준 차(delta_ms)도 내지 않는다 — 섞기는 판 2 의 일이다. 견줄 조각 술어(comparable ·
+// same_instance)는 판 NULL 행에도 싣는다(TestLegacyRowCarriesComparable).
 func TestLegacyRowEmitsNoMixSignals(t *testing.T) {
 	f := newFixture(t, 4000, 4000)
 	f.store.scriptSessions("S-1", "S-1")
@@ -142,10 +143,59 @@ func TestLegacyRowEmitsNoMixSignals(t *testing.T) {
 		}
 	}
 	for _, a := range f.logs.attrsAll("segment_indexed") {
-		for _, k := range []string{"comparable", "same_instance", "delta_ms"} {
-			if _, ok := a[k]; ok {
-				t.Errorf("판 NULL 행 segment_indexed 에 %s 가 실렸다: %v", k, a)
-			}
+		if _, ok := a["delta_ms"]; ok {
+			t.Errorf("판 NULL 행 segment_indexed 에 delta_ms 가 실렸다: %v", a)
+		}
+	}
+}
+
+// 판 NULL 행의 segment_indexed 도 견줄 조각 술어 comparable(k) = 머리 = 영상 ∨ ¬sameInstance(q, k) ∨ ¬videoKnown(k) 와
+// same_instance 를 싣는다(설계 r7 2.1 · 8절 「조각마다(판 무관)」 · 2.16 K4 (A) — 길들이기 동안 c0 의 판 NULL 행으로 소리 머리
+// 이어짐을 prod 에서 본다). q 는 스트림의 직전 꼬리 행이다. 잡는 결함: 판 NULL 행에서 빠지면 길들이기 집계가 0 으로 보여
+// 「문제 0」 으로 오판한다(종결 r1 지적 8).
+func TestLegacyRowCarriesComparable(t *testing.T) {
+	f := newFixture(t, 4000, 4000, 4000, 4000, 4000)
+	recX := [16]byte{0x58}
+	// seq 별 녹화기 X 번호 · 머리 · 영상 유무. seq 4 는 번호 3 → 5 로 건너뛴다.
+	type shape struct {
+		number    uint64
+		headVideo bool
+		video     bool
+	}
+	shapes := []shape{{0, false, true}, {1, false, true}, {2, true, true}, {3, false, false}, {5, false, true}}
+	var cur shape
+	f.ix.timingFn = func(string) (playback.SegmentTiming, error) {
+		st := sampleTiming()
+		st.Mtxi.RecorderID, st.Mtxi.SegmentNumber = recX, cur.number
+		st.Head = playback.Track{ID: 2}
+		if cur.headVideo {
+			st.Head = playback.Track{ID: 1, Video: true}
+		}
+		if !cur.video {
+			st.Video, st.HeadLead = nil, 0
+		}
+		return st, nil
+	}
+	for i, sh := range shapes {
+		cur = sh
+		f.mustHandle(f.segment("s1", segName(baseWall.Add(time.Duration(i)*4*time.Second), 0), 1000, recording.ReasonNextFile))
+	}
+
+	indexed := f.logs.attrsAll("segment_indexed")
+	if len(indexed) != len(shapes) {
+		t.Fatalf("segment_indexed = %d건, want %d", len(indexed), len(shapes))
+	}
+	for i, want := range []struct{ comparable, sameInstance bool }{
+		{true, false}, // 스트림 첫 행 — q 없음
+		{false, true}, // 소리 머리 · 같은 녹화기 이어짐 · 영상 앎 — 견주지 않는다
+		{true, true},  // 영상 머리
+		{true, true},  // 영상 없음
+		{true, false}, // 번호 건너뜀
+	} {
+		a := indexed[i]
+		if a["timing_version"] != "NULL" || a["comparable"] != want.comparable || a["same_instance"] != want.sameInstance {
+			t.Errorf("segment_indexed seq %d = %v, want 판 NULL · comparable %v · same_instance %v", i, a, want.comparable,
+				want.sameInstance)
 		}
 	}
 }

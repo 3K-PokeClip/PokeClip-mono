@@ -471,6 +471,35 @@ func TestRestoreMismatchAfterHoleFailsHoleOnce(t *testing.T) {
 	}
 }
 
+// 이미 있는 객체의 채택(③ CAS)은 구멍 뒤 uploaded 행 대조를 지난 뒤에만 한다(PR 종결 r1 cx H — 재현 입력: 60 uploaded → 61
+// pending(현재 ② 를 40ms 뒤 도장으로 재포장한 객체) → 62 uploaded(실시간 도장), init 확정). 채택한 도장에서 이은 62 가 객체와
+// 달라 chain_mismatch 면 61 은 uploaded 가 아니라 failed(chain_mismatch)다. 잡는 결함: 접는 도중 채택 CAS 를 하면 뒤 대조가
+// 실패해도 61 이 uploaded 로 굳는다 — 실패 CAS 는 uploaded 를 되돌리지 못한다.
+func TestRestoreAdoptsOnlyAfterCheckAfterHole(t *testing.T) {
+	b := newRestoreBench(t)
+	b.contiguous(60, 1, 600*time.Second, up, pending, up)
+	live := b.liveChain()
+	b.uploadAt(live, 60, 62)
+	b.confirmInit()
+	b.setPlaybackObject(61, live[61].Pos+40*time.Millisecond)
+
+	b.restore()
+
+	if n := b.cap.count("chain_mismatch"); n != 1 {
+		t.Fatalf("chain_mismatch = %d줄, want 1 — 채택한 도장에서 이은 62 가 객체와 다르다 (%s)", n, b.cap.dump())
+	}
+	marked, failedCalls := b.store.playbackCalls()
+	if len(marked) != 0 {
+		t.Errorf("③ CAS = %+v, want 없음 — 대조에 진 무리의 객체를 채택했다", marked)
+	}
+	if len(failedCalls) != 1 || failedCalls[0].seq != 61 || failedCalls[0].reason != reasonChainMismatch {
+		t.Errorf("③ failed = %+v, want seq 61 · chain_mismatch", failedCalls)
+	}
+	if n := b.cap.count("chain_object_adopted"); n != 0 {
+		t.Errorf("chain_object_adopted = %d줄, want 0", n)
+	}
+}
+
 // 구멍 뒤 uploaded 행이 같은 사슬이면 대조를 지나 구멍을 만든다(위 시험의 짝 — 대조를 늘 실패로 보는 꼴을 막는다).
 func TestRestoreMatchingRowAfterHolePasses(t *testing.T) {
 	b := newRestoreBench(t)
@@ -625,6 +654,35 @@ func TestRestoreWithoutProgressWaitsBeforeNextWake(t *testing.T) {
 	})
 }
 
+// 진전은 새로 낸 것으로 센다 — 같은 입력으로 다시 깨어 이미 아는 링크를 다시 접기만 했으면(새 표 줄 · 새 작업 · 채택 · 복원
+// 링크 전진이 없다) 진전이 아니라 최소 간격을 둔다(PR 종결 r1 cx M — 재현 입력: 8 uploaded → 9 pending(원천 없음 — 지나감)
+// → 10 uploaded → 11 pending, 두 번 복원). 잡는 결함: 다시 접은 링크 개수로 진전을 세면 지나간 행 하나가 남은 회차는
+// 위치 모름 요청마다 같은 구멍을 다시 읽는다.
+func TestRestoreRepeatedPassWithoutNewWorkWaits(t *testing.T) {
+	b := newRestoreBench(t)
+	b.contiguous(8, 1, 600*time.Second, up, pending, up, pending)
+	b.uploadAt(b.liveChain(9), 8, 10)
+	row := b.ledger.rows[9]
+	if err := os.Remove(row.LocalPath); err != nil {
+		t.Fatal(err)
+	}
+	b.ledger.mu.Lock()
+	row.UploadState = pending // ② 도 안 올라갔다 — 원천 없음
+	b.ledger.rows[9] = row
+	b.ledger.mu.Unlock()
+	b.restore()
+	if jobs := b.queued(); len(jobs) != 1 || jobs[0].Seq != 11 {
+		t.Fatalf("첫 복원 작업 = %+v, want seq 11 하나 — 9 는 지나간다 (%s)", jobs, b.cap.dump())
+	}
+
+	b.restore()
+	b.u.sessions.wake(benchStream, benchSession)
+
+	if got := b.u.sessions.takeWakes(b.u.now()); len(got) != 0 {
+		t.Errorf("새로 낸 것 없는 복원 바로 뒤 깨움 = %+v, want 없음", got)
+	}
+}
+
 // 한 무리의 결정적 실패(여기 닻의 ② 원천 없음)는 같은 회차의 뒤 무리를 막지 않는다(c10b 보안 M) — 뒤 무리는 되살리고, 회차는
 // 앞 무리의 까닭으로 백오프한다. 잡는 결함: 첫 오류에서 돌아가면 뒤 무리가 백오프 상한까지 커지는 동안 영영 안 살아난다.
 func TestRestoreDeterministicGroupFailureDoesNotBlockLaterGroups(t *testing.T) {
@@ -670,5 +728,27 @@ func TestRestoreTransientGroupFailureStopsPass(t *testing.T) {
 	}
 	if gets := b.objs.getCount(); gets != 1 {
 		t.Errorf("S3 GET %d번, want 1 — 첫 무리 일시 실패에서 멈춘다", gets)
+	}
+}
+
+// 구멍 객체 검증의 HEAD 실패(시한 초과 등)도 일시 실패다 — 뒤 무리로 넘어가지 않고 바로 백오프한다(PR 종결 r1 cx M — 재현
+// 입력: 구멍 셋이 각자 다른 닻 무리 · HEAD 시한 초과). 잡는 결함: s3_head 를 일시 목록에서 빠뜨리면 무리마다 같은 HEAD 를
+// 시한까지 기다려 공유 복원 고루틴을 붙잡는다.
+func TestRestoreHeadFailureStopsPass(t *testing.T) {
+	b := newRestoreBench(t)
+	b.contiguous(8, 1, 600*time.Second, up, pending, up, pending, up, pending, up)
+	b.uploadAt(b.liveChain(), 8, 10, 12, 14)
+	b.objs.headErr = errors.New("HEAD timeout")
+
+	b.restore()
+
+	b.objs.mu.Lock()
+	heads := len(b.objs.heads)
+	b.objs.mu.Unlock()
+	if heads != 1 {
+		t.Errorf("S3 HEAD %d번, want 1 — 첫 무리 일시 실패에서 멈춘다", heads)
+	}
+	if r := b.cap.one(t, "chain_restore_failed"); r.attrs["reason"] != "s3_head" {
+		t.Errorf("chain_restore_failed = %v, want s3_head", r.attrs)
 	}
 }

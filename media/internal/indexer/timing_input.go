@@ -106,9 +106,10 @@ func sameRecorder(q, k index.TimingFacts) bool {
 	return q.Recorder != nil && k.Recorder != nil && *q.Recorder == *k.Recorder
 }
 
-// timingAttrs 는 segment_indexed 의 판 · 이어 계산 속성이다(설계 8절). 견줌 결과(comparable · same_instance · 견줬을 때
-// delta_ms)는 판 2 섞기가 정하는 값이라 판 2 행에만 싣는다.
-func timingAttrs(in index.TimingInput, read timingRead, res index.InsertCommit) []any {
+// timingAttrs 는 segment_indexed 의 판 · 이어 계산 속성이다(설계 8절). prev 는 이 행 앞의 스트림 꼬리 q 다(없으면 nil).
+// comparable · same_instance 는 판과 무관하게 싣는다(설계 8절 「조각마다(판 무관)」) — 판 2 행은 섞기가 정한 값(회차 첫 행은
+// 거짓)이고, 판 NULL 행은 legacyComparable 이다. 견준 차 delta_ms 는 판 2 섞기가 견줬을 때만 싣는다.
+func timingAttrs(prev *index.TailRow, in index.TimingInput, read timingRead, res index.InsertCommit) []any {
 	head, lead := headTrack(read)
 	attrs := []any{
 		"timing_version", versionText(res.TimingVersion), "timing_branch", string(res.TimingBranch),
@@ -116,13 +117,25 @@ func timingAttrs(in index.TimingInput, read timingRead, res index.InsertCommit) 
 		"wall_ms", in.Facts.Wall.UnixMilli(), "attributed", res.SessionID != "",
 	}
 	if !isV2(res) {
-		return attrs
+		same, comparable := legacyComparable(prev, in)
+		return append(attrs, "comparable", comparable, "same_instance", same)
 	}
 	attrs = append(attrs, "comparable", res.TimingCompared, "same_instance", res.TimingSameInstance)
 	if res.TimingCompared {
 		attrs = append(attrs, "delta_ms", res.DeltaMS)
 	}
 	return attrs
+}
+
+// legacyComparable 은 판 NULL 행의 견줄 조각 술어 comparable(k) = 머리 = 영상 ∨ ¬sameInstance(q, k) ∨ ¬videoKnown(k) 와
+// 그 sameInstance 다(설계 2.1 — 판 2 섞기의 p 자리에 스트림 꼬리 q 를 둔다). 섞기 · 장부 쓰기와 무관한 관측값이다 — c0 가
+// 판 NULL 로 도는 길들이기 동안 소리 머리 이어짐(K4 (A) 의 전제)을 prod 에서 보는 재료다(설계 2.16).
+//
+// 영상 앎은 자기 영상 길이(VideoOwnMS ≥ 1ms)로 본다. 판 2 섞기는 맞닿은 조각이면 길이를 앞 행 영상 끝부터 재지만
+// (index.mixDuration), 맞닿음은 두 경계 차가 1ms 미만이라 두 길이는 1ms 안에서만 다르다.
+func legacyComparable(prev *index.TailRow, in index.TimingInput) (same, comparable bool) {
+	same = prev != nil && index.SameInstance(prev.Timing, in.Facts)
+	return same, in.HeadVideo || !same || in.VideoOwnMS < 1
 }
 
 // headTrack 은 머리 트랙 이름과 머리 앞섬(ms)이다. 판독이 없으면 unknown · 0 이다.

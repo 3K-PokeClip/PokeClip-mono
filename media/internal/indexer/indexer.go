@@ -916,7 +916,7 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", res.DurationMS,
 		"start_pts_ms", res.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
 		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason, "mtxi_pinned", pinned},
-		timingAttrs(rec.Timing, read, res)...)...)
+		timingAttrs(prev, rec.Timing, read, res)...)...)
 	// 판 2 행은 섞기 갈래 신호를 하나 남긴다(POK-196 PDT 설계 r7 8절 — timing_reset · timing_round_broken · pdt_new_chapter ·
 	// pdt_overlap). 판 NULL 행은 아무것도 내지 않는다.
 	ix.logMix(seg, rec, res, read)

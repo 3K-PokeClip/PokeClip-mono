@@ -444,7 +444,7 @@ func (u *Uploader) openInput(j job, rel string, lg *slog.Logger) (in input, f *o
 	t := j.target
 	f, err := u.opt.Root.Open(rel)
 	if errors.Is(err, fs.ErrNotExist) && archiveFallback(t) {
-		in, r, ok = u.archiveInput(t, lg)
+		in, r, ok = u.archiveInput(j, lg)
 		return in, nil, r, ok
 	}
 	if err != nil {
@@ -466,7 +466,12 @@ func archiveFallback(t index.UploadTarget) bool {
 
 // archiveInput 은 ② 객체를 메모리 입력으로 받는다. 객체가 없으면 파일 없음(attemptFileMissing)이고, 그 밖의 실패는 PUT 실패와
 // 같은 재시도 사다리를 탄다. S3 를 읽을 수 없는 배선(Getter 없음)이면 파일 없음이다.
-func (u *Uploader) archiveInput(t index.UploadTarget, lg *slog.Logger) (input, attemptResult, bool) {
+//
+// 장부 크기만큼만 쓴다 — 복원의 ② 원천과 같은 규칙이다(readArchiveObject · PR 종결 r1 cx H). 객체가 더 길면 장부 크기로 자르고,
+// 더 짧으면(파트 경계에서 잘린 업로드 · 다른 객체) 올리지 않고 failed 로 적는다. 객체는 자라지 않으므로 다시 해도 같은 답이다 —
+// 짧은 입력을 재포장하면 잘린 영상이 uploaded 로 굳는다(복원은 그 행을 source_size_mismatch 로 지나간다).
+func (u *Uploader) archiveInput(j job, lg *slog.Logger) (input, attemptResult, bool) {
+	t := j.target
 	getter, ok := u.put.(Getter)
 	if !ok {
 		return input{}, attemptResult{kind: attemptFileMissing, outcome: outcomeNeutral}, false
@@ -479,9 +484,28 @@ func (u *Uploader) archiveInput(t index.UploadTarget, lg *slog.Logger) (input, a
 		return input{}, attemptResult{kind: attemptFileMissing, outcome: outcomeNeutral}, false
 	case err != nil:
 		return input{}, attemptResult{kind: attemptRetryable, err: err}, false
+	case int64(len(body)) < t.Bytes:
+		return input{}, u.refuseShortArchive(j, len(body), lg), false
 	}
 	lg.Info("playback_input_from_archive", "archive_key", t.ArchiveS3Key, "bytes", len(body))
+	body = body[:t.Bytes]
 	return input{r: bytes.NewReader(body), size: int64(len(body))}, attemptResult{}, true
+}
+
+// refuseShortArchive 는 장부 크기보다 짧은 ② 객체를 입력으로 쓰지 않는다 — 그 ③ 은 failed(GAP)로 적고 키에 백오프를 건다
+// (refuseWithoutTable 과 같은 꼴 — 스위퍼가 30초마다 같은 GET 을 하지 않게).
+func (u *Uploader) refuseShortArchive(j job, got int, lg *slog.Logger) attemptResult {
+	t := j.target
+	if !u.markFailedByAxis(j, playbackReasonSourceSizeMismatch, lg) {
+		return attemptResult{outcome: outcomeNeutral}
+	}
+	k := j.key()
+	u.gate.registerFailure(k)
+	nextAt, _ := u.gate.backoffBlocked(k)
+	lg.Error("upload_failed", "s3_key", t.S3Key, "reason", playbackReasonSourceSizeMismatch,
+		"archive_key", t.ArchiveS3Key, "archive_bytes", got, "db_bytes", t.Bytes,
+		"next_attempt_at", nextAt.UTC().Format(time.RFC3339))
+	return attemptResult{outcome: outcomeNeutral}
 }
 
 // input 은 한 시도의 입력이다 — 본문 단계((c′) 이후)가 읽는 리더와 (b) 에서 잰 크기다(POK-196 PDT 계획 4절 c10a ·

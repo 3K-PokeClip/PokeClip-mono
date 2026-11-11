@@ -111,6 +111,52 @@ func TestLoadPlaybackHolesListsHolesWithTheirAnchors(t *testing.T) {
 	}
 }
 
+// 긴 회차의 긴 연속 구멍(앞 12시간 ③ uploaded 뒤 12시간 S3 장애로 쌓인 pending — 24시간 회차)도 구멍 조회가 업로더의 장부
+// 시한(MarkTimeout 10초) 안에 끝난다(PR 종결 r1 cc M). 닻은 그대로 앞선 uploaded 최신 행이다. 잡는 결함: 구멍 행마다 닻을
+// 상관 부질의로 찾으면 행마다 그 회차의 uploaded 행 색인 항목을 훑어(seq 는 색인에 없다) 구멍 수 × uploaded 수로 늘고, 시한을
+// 넘기면 그 회차 복원이 매번 ledger 로 실패한다.
+func TestLoadPlaybackHolesLongRunStaysWithinLedgerTimeout(t *testing.T) {
+	const (
+		uploaded = 10_800
+		holes    = 10_800
+		budget   = 2 * time.Second // 시한 10초의 1/5 — 회차 한 번 훑기는 수십 ms 다
+	)
+	pool := newTestPool(t)
+	ctx := context.Background()
+	openLiveSession(t, pool, "S-long", "longstream")
+	cutoffAt(t, pool, "longstream", 0)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO stream_segments
+    (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path,
+     upload_state, bytes, is_discontinuity, session_id, playback_pdt, playback_s3_key, playback_upload_state)
+SELECT 'longstream', g, g * 4000, now() - interval '10 minutes', 4000,
+       format('streams/longstream/x/seg_%s.mp4', g), format('/recordings/longstream/seg_%s.mp4', g),
+       'uploaded', 1000, false, 'S-long', now() - interval '10 minutes', format('dvr/longstream/seg/%s.m4s', g),
+       CASE WHEN g < $1 THEN 'uploaded' ELSE 'pending' END
+  FROM generate_series(0, $1::bigint + $2::bigint - 1) AS g`, uploaded, holes); err != nil {
+		t.Fatalf("긴 회차 픽스처 실패: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `ANALYZE stream_segments`); err != nil {
+		t.Fatalf("ANALYZE 실패: %v", err)
+	}
+
+	start := time.Now()
+	got, err := LoadPlaybackHoles(ctx, pool, "S-long")
+	took := time.Since(start)
+
+	if err != nil || len(got) != holes {
+		t.Fatalf("LoadPlaybackHoles = (%d행, %v), want (%d행, nil)", len(got), err, holes)
+	}
+	for _, h := range []PlaybackHole{got[0], got[holes-1]} {
+		if h.AnchorSeq == nil || *h.AnchorSeq != uploaded-1 {
+			t.Errorf("seq %d 닻 = %v, want %d", h.Seq, h.AnchorSeq, uploaded-1)
+		}
+	}
+	if took > budget {
+		t.Errorf("구멍 조회 %v, want %v 이하 — 구멍 수 × uploaded 수로 는다", took, budget)
+	}
+}
+
 // 끝난 회차의 구멍은 열거하지 않는다 — 재수거 조회의 sess.state <> 'ended' 그대로다(설계 r6 2.10 「끝난 회차」).
 func TestLoadPlaybackHolesSkipsEndedSession(t *testing.T) {
 	pool := newTestPool(t)

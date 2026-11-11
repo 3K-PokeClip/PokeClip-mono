@@ -1,7 +1,9 @@
 package upload
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,6 +85,80 @@ func TestPlaybackJobUsesArchiveObjectWhenLocalGone(t *testing.T) {
 	if marked, _ := b.store.playbackCalls(); len(marked) != 1 || marked[0].bytes != int64(len(want)) {
 		t.Errorf("③ CAS = %+v, want 산출 길이 한 번", marked)
 	}
+}
+
+// ② 객체 입력도 장부 크기 규칙을 복원과 같이 따른다(PR 종결 r1 cx H — 재현 입력: 로컬 ② 없음 · 장부 143,007바이트 · 마지막
+// 파트 경계에서 잘린 ② 객체). 짧은 객체는 올리지 않고 failed 로 적고, 긴 객체는 장부 크기로 잘라 재포장한다. 잡는 결함: 복원은
+// source_size_mismatch 로 지나간 행을 워커가 크기 경고만 남기고 재포장해 짧은 영상을 uploaded 로 굳힌다.
+func TestPlaybackJobArchiveInputFollowsLedgerSize(t *testing.T) {
+	t.Run("짧은 객체는 올리지 않는다", func(t *testing.T) {
+		b := newRestoreBench(t)
+		b.contiguous(80, 1, 600*time.Second, pending)
+		row := b.ledger.rows[80]
+		if err := os.Remove(row.LocalPath); err != nil {
+			t.Fatal(err)
+		}
+		src := b.srcs[80]
+		b.objs.set(row.S3Key, src[:lastFragmentStart(t, src)])
+		b.confirmInit()
+		tgt := playbackTarget(t, benchStream, 80, benchSession, row.LocalPath, *row.Bytes)
+		tgt.PlaybackPos, tgt.ArchiveS3Key, tgt.ArchiveUploadState = 600*time.Second, row.S3Key, index.UploadStateUploaded
+
+		if got := runLive(b.u, tgt); got == outcomeSuccess {
+			t.Errorf("outcome = success, want 실패 — 잘린 ② 객체를 재포장했다 (%s)", b.cap.dump())
+		}
+
+		if len(b.objs.putKeys) != 0 {
+			t.Errorf("PUT = %v, want 없음", b.objs.putKeys)
+		}
+		marked, failedCalls := b.store.playbackCalls()
+		if len(marked) != 0 || len(failedCalls) != 1 || failedCalls[0].reason != playbackReasonSourceSizeMismatch {
+			t.Errorf("③ CAS = %+v · failed = %+v, want uploaded 없음 · source_size_mismatch 한 번", marked, failedCalls)
+		}
+	})
+	t.Run("긴 객체는 장부 크기로 자른다", func(t *testing.T) {
+		b := newRestoreBench(t)
+		b.contiguous(80, 1, 600*time.Second, pending)
+		row := b.ledger.rows[80]
+		if err := os.Remove(row.LocalPath); err != nil {
+			t.Fatal(err)
+		}
+		b.objs.set(row.S3Key, append(bytes.Clone(b.srcs[80]), make([]byte, 64)...))
+		b.confirmInit()
+		tgt := playbackTarget(t, benchStream, 80, benchSession, row.LocalPath, *row.Bytes)
+		tgt.PlaybackPos, tgt.ArchiveS3Key, tgt.ArchiveUploadState = 600*time.Second, row.S3Key, index.UploadStateUploaded
+
+		if got := runLive(b.u, tgt); got != outcomeSuccess {
+			t.Fatalf("outcome = %v, want success (%s)", got, b.cap.dump())
+		}
+
+		if obj := b.objs.objs[segKeyOf(t, benchStream, 80)]; !bytes.Equal(obj, b.produce(80, 600*time.Second)) {
+			t.Error("③ 객체가 장부 크기만큼의 ② 를 재포장한 바이트가 아니다")
+		}
+		if n := b.cap.count("upload_size_mismatch"); n != 0 {
+			t.Errorf("upload_size_mismatch = %d줄, want 0 — 장부 크기로 잘랐다", n)
+		}
+	})
+}
+
+// lastFragmentStart 는 조각 src 의 마지막 moof 상자 자리다 — 거기서 자르면 파트 경계에서 잘린 업로드의 꼴이다.
+func lastFragmentStart(t *testing.T, src []byte) int {
+	t.Helper()
+	last := -1
+	for i := 0; i+8 <= len(src); {
+		size := int(binary.BigEndian.Uint32(src[i : i+4]))
+		if size < 8 || i+size > len(src) {
+			t.Fatalf("상자 머리가 어긋났다(자리 %d · 크기 %d)", i, size)
+		}
+		if string(src[i+4:i+8]) == "moof" {
+			last = i
+		}
+		i += size
+	}
+	if last <= 0 {
+		t.Fatal("픽스처에 moof 가 없다")
+	}
+	return last
 }
 
 // ② 도 안 올라갔으면 지금처럼 파일 없음이다(attemptFileMissing — failed · 격리).

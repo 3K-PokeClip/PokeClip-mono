@@ -1792,7 +1792,7 @@ skew(k) = (pdt(k) − pdt(k−1)) − (pos(k) − pos(k−1))
 | `upload_size_mismatch` | ③·init 은 크기 속성이 `input_bytes`(입력 파일 크기 — PUT 크기가 아니다). ② 는 종전대로 `put_bytes` | WARN |
 | `upload_mark_skipped` | `reason=init_pending`(대조 보류, DEBUG) · `reason=held_list_full`(보류 목록 초과 — 회차당 첫 번만 WARN, 이후 DEBUG) | DEBUG·WARN |
 | `upload_queue_full` | 보류 재요청(`requeueHeld`)의 포화는 drain(보류 목록을 꺼내 큐에 다시 넣는 한 차례 — init 확정·작업 완료·스위퍼 tick 마다 돈다) 한 번에 요약 1줄이다. 그 줄의 `stream_id`·`seq` 는 포화를 만나 멈춘 작업이고, `held_returned` 는 스트림·회차를 가리지 않은 되돌리는 총수다(그 사이 ③ 확정 표시로 걸러지는 몫은 실제 목록에 안 들어가 목록 수는 이보다 작을 수 있다). 여러 회차를 합친 수라 `session_id` 는 싣지 않는다. 실시간·스위퍼 접수의 포화는 종전대로 요청 1건마다 WARN 1줄이다 | DEBUG(재요청)·WARN(종전) |
-| `upload_failed` | ③·init 산출 실패, 그리고 스위퍼 ③ 을 표 없이 거부(`reason=no_offset_table`) | ERROR |
+| `upload_failed` | ③·init 산출 실패, 그리고 스위퍼 ③ 을 표 없이 거부(`reason=no_offset_table`) · 입력 ② 객체가 장부 크기보다 짧아 거부(`reason=source_size_mismatch` — 아래 「③ 사슬 복원」) | ERROR |
 | `upload_target_rejected` | `reason=no_session` — 회차 없는 ③ 작업(호출자 결함) | ERROR |
 | `upload_cas_rejected` | `init_mark=missing` — init CAS 에 회차 행이 없다 | ERROR |
 | `fs_op_stalled` | `op=read` 에 `site=mtxi` 또는 `site=track_ends` — 도장 재료 판독 시간 초과 | ERROR |
@@ -3001,6 +3001,7 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 | `legacy_unattributed_sum` | 판 NULL 귀속 행 | INFO | `u_ms` — PDT 식이 더한 U(기저 행 뒤 · 이 행 앞 비귀속 행 길이 합). U 가 0 이면 내지 않는다 |
 | `unattributed_run` | 비귀속 행 묶음 뒤 첫 귀속 행 | INFO | 아래 「E28 묶음 신호」 |
 | `chain_*` · `chain_restored` · `chain_row_passed` · `chain_restore_failed` | ③ 사슬 · 업로더 | WARN · INFO | 아래 「③ 사슬 복원」 |
+| `chain_restore_progress` · `chain_restore_stopped` | ③ 사슬 복원 | INFO · DEBUG | 긴 접기의 진행(1,000행마다 `seq` · `folded_rows` · `hole_to` — 정지와 구별) · 업로더 종료 중 복원을 멈춤(실패 아님 — 백오프 없이 다음 기동이 다시 한다) |
 | DB 오류 `legacy_writer_refused`(23514) | 쓰기자 거부 트리거 | — | 래치 2 장부에 원래 사실 칸 없는 INSERT(출시 이미지) — 출시 이미지는 이 이름을 몰라 INSERT 실패로만 보인다 |
 
 **E28 묶음 신호(`unattributed_run`).** 스트림마다 「지난 귀속 행 뒤 비귀속 행 묶음」 을 메모리에 모았다가 다음 귀속 행
@@ -3022,13 +3023,22 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
 본다(WARN `chain_restore_failed` — `reason` · 다음 시도 시각).
 
 - 구멍은 닻이 같은 무리로 나눠 차례로 되살린다. 한 무리가 결정적 까닭(닻 · 회차 — 아래 한계 표)으로 실패하면 그 무리만
-  건너뛰고 뒤 무리를 이어 되살린 뒤 첫 실패로 백오프한다. 일시 까닭(`ledger` · `s3_get` · `local_read` · 까닭 모름)은 그
-  자리에서 멈춘다.
-- 되살린 링크가 하나도 없이 끝난 복원(꼬리에서 기다림 · 구멍 없음 등)은 실패가 아니지만, 다음 시도까지 스위퍼 간격
-  `SEGMENT_UPLOAD_SWEEP_EVERY`(기본 30초)만큼 둔다(실패 횟수는 0 으로 돌린다 — 백오프가 늘지 않는다).
+  건너뛰고 뒤 무리를 이어 되살린 뒤 첫 실패로 백오프한다. 일시 까닭(`ledger` · `s3_get` · `s3_head` · `local_read` · 까닭
+  모름)은 그 자리에서 멈춘다.
+- 새로 낸 것(새 표 줄 · 채택 · 앞으로 간 복원 링크) 없이 끝난 복원(꼬리에서 기다림 · 구멍 없음 · 이미 아는 링크를
+  다시 접기만 함 등)은 실패가 아니지만, 다음 시도까지 스위퍼 간격 `SEGMENT_UPLOAD_SWEEP_EVERY`(기본 30초)만큼
+  둔다(실패 횟수는 0 으로 돌린다 — 백오프가 늘지 않는다). 다시 넣은 작업은 진전으로 세지 않는다 — 표 줄을 이미 아는
+  행은 스위퍼가 같은 도장으로 집는다.
+- 구멍 행의 ③ 키에 이미 객체가 있고 현재 ② 를 재포장한 것과 같은 바이트면 다시 쓰지 않고 채택한다(INFO
+  `chain_object_adopted`). 채택의 ③ CAS 는 구멍 뒤 대조를 지난 뒤에만 한다 — 대조에 진 무리는 채택 없이 `failed`
+  (`chain_mismatch`)다.
 - 행의 ② 원천은 장부 크기로 읽는다 — 객체가 장부보다 길면 장부 크기로 자르고, 짧으면 그 행을 원천 없는 행처럼 다룬다:
   꼬리면 기다리고, 아니면 WARN `chain_row_passed`(`reason=source_size_mismatch` — 원천이 아예 없으면 `source_missing`)로
-  지나간다.
+  지나간다. 로컬 ② 가 없어 ② 객체를 입력으로 쓰는 ③ 작업(워커)도 같은 규칙이다 — 짧은 객체는 올리지 않고 `failed`
+  (ERROR `upload_failed` `reason=source_size_mismatch` · 키 백오프)로 적는다.
+- 긴 접기(닻 없는 긴 회차 등)는 1,000행마다 INFO `chain_restore_progress`(`seq` · `folded_rows` · `hole_to`)를
+  남긴다. 업로더가 멈추는 중이면 접기를 그만두고 DEBUG `chain_restore_stopped` 다 — 실패가 아니라 백오프 없이 다음
+  기동이 다시 한다.
 - 무리 하나가 끝나면 INFO `chain_restored`(`hole_from` · `hole_to` · `anchor_seq` · `links` · `exact` · `waited_at_tail` ·
   `compared`). `compared` 는 구멍 뒤 이미 올라간 행의 객체 도장을 실제로 견줬는가다 — 거짓이면 그 대조 없이 끝난
   무리다(뒤에 올라간 행이 없는 꼬리 무리 등).
@@ -3038,6 +3048,7 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
 | 한계 | 영향 | 처분 |
 |---|---|---|
 | **③ 사슬 복원의 영구 실패.** 닻이 될 ③ 객체 · ② 원천이 없거나(`anchor_object_missing` · `anchor_source_missing`), 닻 행이 판독 실패로 고정 도장이었거나(`anchor_pinned`), 객체가 장부와 다르거나(`anchor_mismatch`), 다른 세션의 행이 끼었으면(`foreign_session`) 다시 시도해도 같은 답이다 | 그 무리의 구멍 행들이 `pending` 으로 남아 GAP 이다 — 백오프로 거듭 시도하며 `chain_restore_failed` 가 같은 `reason` 으로 되풀이된다. 같은 회차라도 닻이 다른 뒤 무리는 건너뛰어 되살린다(일시 까닭이면 그 자리에서 멈춘다). 실시간 경로 · 다른 회차는 무관하다 | 한계(기록) — 회차가 바뀌면 새 사슬이다 |
+| **고정 행의 기대 영상 끝은 꼬리 교정을 받지 않는다.** mtxi 를 못 읽어 도장을 기대값에 고정한 행은 장부 영상 칸이 없어, 실시간 사슬의 기대 영상 끝이 INSERT 때 길이로 남는다(`withTailCorrection` 은 장부 영상 끝이 있는 칸만 고친다). 복원은 교정 뒤 장부 길이로 같은 값을 다시 계산한다 | 그 고정 행이 꼬리에서 자라면(유휴 확정 뒤 재성장) 다음 행의 맞닿음 판단이 실시간과 복원에서 갈려 같은 행의 ③ 도장이 다를 수 있다 — 복원이 그 자리를 다시 접을 때만 드러나고, 구멍 뒤 이미 올라간 행이 있으면 대조가 `chain_mismatch` 로 그 구멍을 만들지 않는다(대조 행이 없으면 복원 쪽 도장으로 이어진다). 우리 송출에서는 두 조건이 겹쳐야 한다: 고정 행(우리 이미지는 mtxi 를 머리말에 쓰므로 판독이 재스캔까지 실패한 행뿐 · 입력 상한 16MiB 초과) **이면서** 꼬리 재성장(송출이 10초 넘게 멈췄다 같은 조각에 다시 씀) | 한계(기록) — 고칠 길은 교정 때 고정 행의 기대 영상 끝도 길이 차만큼 옮기는 것이다(PR 종결 r1 cc M) |
 | **꼬리 교정의 판독 실패.** 꼬리 조각이 자라 길이를 고칠 때 시각 판독이 일시 실패하면 길이만 고치고 영상 끝 칸은 옛 값이다. 덜 써진 조각을 커밋한 경우도 영상 끝이 INSERT 때 값이다 | 다음 행의 맞닿음 · 판 2 길이 판단이 옛 영상 끝을 본다. MediaMTX 가 닫은 파일만 커밋하므로(길이 0 거부) 우리 송출 흐름에서는 생기지 않는다 | 한계(기록) — 방어안(`UpdateTail` 판 2 길이 재계산)은 두지 않았다 |
 | **판독 일시 실패 동안 그 스트림이 멈춘다.** 실패한 조각과 그 뒤 조각을 커밋하지 않고 다음 재스캔을 기다린다 | 한 번에 최대 약 5분 45초(재스캔 5분 + 수집 예산 45초) 그 스트림의 되감기 목록 · ③ 업로드가 늘지 않는다. 다른 스트림은 무관하다 | 순서 보존의 대가 — 다음 재스캔에서도 실패하면 칸 NULL 로 커밋한다 |
 | **기동 전 검사는 시작 스크립트를 지나는 기동만 본다.** 엔진 재기동(`restart: on-failure`) · 스위치를 올리는 순간 이미 돌던 출시 컨테이너는 보지 않는다 | 이미 돌던 출시 컨테이너는 스위치 2 선행 조건(모든 상자 라벨 2)이 막고, 어겨도 쓰기자 거부가 첫 INSERT 에서 끝낸다 — 그 사이 감사 · 정산이 판 2 행을 옛 식으로 읽을 수 있다 | 런북 「PDT 판 2 롤백 하한 · 판 게이트」 남는 한계 |

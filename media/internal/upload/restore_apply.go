@@ -18,8 +18,8 @@ const reasonInitUnconfirmed = "init_unconfirmed"
 const reasonChainMismatch = "chain_mismatch"
 
 // verifyExisting 은 구멍 행의 ③ 키에 이미 객체가 있으면(PUT 뒤 CAS 전에 멈춤 — 어느 이미지가 만들었든) 검증한다. 그 객체의
-// 도장 범위에서 고른 위치로 현재 확정 ② 를 재포장해 바이트가 같고 init 이 세션 init 과 같으면 채택한다 — 다시 쓰지 않고 ③ CAS
-// 만 하고, 그 행의 링크는 객체의 도장이다(다음 행은 거기서 잇는다). 바이트는 같은데 세션 init 이 아직 미확정이면 판정을 미루고
+// 도장 범위에서 고른 위치로 현재 확정 ② 를 재포장해 바이트가 같고 init 이 세션 init 과 같으면 채택한다 — 다시 쓰지 않고 구멍 뒤
+// 대조를 지난 뒤 ③ CAS 만 하고(adoptVerified), 그 행의 링크는 객체의 도장이다(다음 행은 거기서 잇는다). 바이트는 같은데 세션 init 이 아직 미확정이면 판정을 미루고
 // 객체 도장으로 잇는다(작업이 init 확정 뒤 같은 바이트를 올린다). 다르면 채택하지 않는다 — 접은 위치로 다시 쓴다(CAS 전이라 어느
 // 목록에도 실리지 않았다). 꼬리 행 · 원천을 못 읽은 행은 부르는 쪽이 거른다.
 func (run *groupRun) verifyExisting(r index.PlaybackChainRow, link playback.Link) (playback.Link, error) {
@@ -43,7 +43,10 @@ func (run *groupRun) verifyExisting(r index.PlaybackChainRow, link playback.Link
 	adopted, why := run.sameObject(r, link, obj)
 	switch why {
 	case "":
-		return run.adopt(r, link, adopted, int64(len(obj)))
+		// 채택(③ CAS)은 구멍 뒤 대조를 지난 뒤 adoptVerified 가 한다(PR 종결 r1 cx H — 여기서 CAS 하면 뒤 대조가 실패해도
+		// uploaded 가 굳는다). 접기는 객체의 도장으로 잇는다.
+		run.toAdopt = append(run.toAdopt, adoption{seq: r.Seq, folded: link, adopted: adopted, size: int64(len(obj))})
+		return adopted, nil
 	case reasonInitUnconfirmed:
 		// 같은 바이트지만 init 을 아직 견줄 수 없다 — 채택 판정을 미룬다. 그 행은 객체의 도장으로 다시 넣어(CAS 없음) 워커가 init
 		// 확정 뒤 같은 바이트로 올리고, 다음 행도 그 도장에서 잇는다(c10b cx 검수 H1 — 접은 도장으로 덮어쓰지 않는다).
@@ -81,27 +84,37 @@ func (run *groupRun) sameObject(r index.PlaybackChainRow, link playback.Link, ob
 	return adopted, ""
 }
 
-// adopt 는 검증한 객체를 ③ CAS 로 확정한다(크기 = 객체 길이 — 지금 markUploadedByAxis 와 같은 CAS). 결과 통지는 워커 성공과
-// 같다(Dirty · 보류 사본 지움 · 백오프 해제).
-func (run *groupRun) adopt(r index.PlaybackChainRow, link, adopted playback.Link, size int64) (playback.Link, error) {
-	ctx, cancel := run.u.dbCtx()
-	marked, err := run.u.st.MarkPlaybackUploaded(ctx, run.w.streamID, r.Seq, size)
-	cancel()
-	if err != nil {
-		return link, failRestore("ledger", err)
+// adoption 은 검증을 마치고 구멍 뒤 대조를 기다리는 채택 하나다 — folded 는 접은 도장, adopted 는 객체의 도장, size 는 객체 길이다.
+type adoption struct {
+	seq             int64
+	folded, adopted playback.Link
+	size            int64
+}
+
+// adoptVerified 는 구멍 뒤 대조를 지난 무리의 채택들을 ③ CAS 로 확정한다(크기 = 객체 길이 — 지금 markUploadedByAxis 와 같은
+// CAS). 결과 통지는 워커 성공과 같다(Dirty · 보류 사본 지움 · 백오프 해제). CAS 가 거부되면(그사이 행 상태가 바뀜) 채택하지
+// 않는다 — commit 이 그 행을 객체의 도장으로 다시 넣는다(같은 바이트라 다른 도장으로 덮어쓰지 않는다).
+func (run *groupRun) adoptVerified() error {
+	for _, a := range run.toAdopt {
+		ctx, cancel := run.u.dbCtx()
+		marked, err := run.u.st.MarkPlaybackUploaded(ctx, run.w.streamID, a.seq, a.size)
+		cancel()
+		if err != nil {
+			return failRestore("ledger", err)
+		}
+		if !marked {
+			run.lg.Warn("upload_cas_rejected", "seq", a.seq, "target_state", "uploaded", "origin", "restore")
+			continue
+		}
+		run.adopted[a.seq] = true
+		t := run.target(run.rows[run.rowIndex(a.seq)], a.adopted)
+		run.u.gate.clearBackoff(targetKeyOf(t))
+		run.u.dirty.markUploaded(t.StreamID, t.Axis, t.Seq, t.SessionID)
+		run.u.sessions.dropHeld(t.SessionID, t.Seq)
+		run.lg.Info("chain_object_adopted", "seq", a.seq, "pos_ms", a.adopted.Pos.Milliseconds(),
+			"folded_pos_ms", a.folded.Pos.Milliseconds())
 	}
-	if !marked {
-		run.lg.Warn("upload_cas_rejected", "seq", r.Seq, "target_state", "uploaded", "origin", "restore")
-		return link, nil
-	}
-	run.adopted[r.Seq] = true
-	t := run.target(r, adopted)
-	run.u.gate.clearBackoff(targetKeyOf(t))
-	run.u.dirty.markUploaded(t.StreamID, t.Axis, t.Seq, t.SessionID)
-	run.u.sessions.dropHeld(t.SessionID, t.Seq)
-	run.lg.Info("chain_object_adopted", "seq", r.Seq, "pos_ms", adopted.Pos.Milliseconds(),
-		"folded_pos_ms", link.Pos.Milliseconds())
-	return adopted, nil
+	return nil
 }
 
 // target 은 구멍 행의 ③ 작업이다 — 도장은 복원한 링크이고, 로컬 ② 가 없으면 워커가 ② 객체를 입력으로 쓸 키 · 상태를 싣는다.
@@ -144,9 +157,13 @@ func (run *groupRun) settleMismatch(span holeSpan, fp string, mm mismatch) error
 
 // commit 은 복원 결과를 낸다 — 표 줄(모르는 seq 만 — 실시간이 적은 줄이 정본), 구멍 행 작업(채택 · 지나간 행 제외 — 도장을
 // 실은 실시간 경로로), 복원 링크(마지막 링크 — 인덱서가 받는다).
-func (run *groupRun) commit(anchor *playback.Link) {
+//
+// progressed 는 이 복원이 새로 낸 것이 있는가다 — 새로 적은 표 줄 · 채택 · 앞으로 간(또는 크기가 바뀐) 복원 링크(PR 종결 r1 cx M).
+// 다시 넣은 작업은 세지 않는다 — 표 줄을 이미 아는 행은 스위퍼가 같은 도장으로 다시 집는다. 같은 입력으로 다시 접기만 한 복원을
+// 진전으로 세면 지나간 행이 남은 회차가 깨울 때마다 같은 구멍을 다시 읽는다.
+func (run *groupRun) commit(anchor *playback.Link) (progressed bool) {
 	now := run.u.now()
-	run.u.sessions.recordRestored(run.w.sessionID, run.links, now)
+	written := run.u.sessions.recordRestored(run.w.sessionID, run.links, now)
 	for _, l := range run.links {
 		if !run.g.seqs[l.Seq] || run.adopted[l.Seq] || run.passed[l.Seq] {
 			continue
@@ -157,18 +174,22 @@ func (run *groupRun) commit(anchor *playback.Link) {
 	if anchor != nil {
 		anchorSeq = anchor.Seq
 	}
+	moved := false
 	if len(run.links) > 0 {
 		last := run.links[len(run.links)-1]
-		run.setRestored(last)
+		moved = run.setRestored(last)
 	}
 	run.lg.Info("chain_restored", "hole_from", run.g.first, "hole_to", run.g.last, "anchor_seq", anchorSeq,
 		"links", len(run.links), "exact", run.exact, "waited_at_tail", run.waited, "compared", run.compared)
+	return written > 0 || len(run.adopted) > 0 || moved
 }
 
-// setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다).
-func (run *groupRun) setRestored(last playback.Link) {
-	if rl, ok := run.u.sessions.restoredLink(run.w.sessionID); ok && rl.link.Seq > last.Seq {
-		return
+// setRestored 는 복원 링크를 바꾼다 — 지난 링크보다 앞이면 두지 않는다(무리는 seq 순으로 돈다). 돌려주는 값은 링크가 앞으로
+// 갔거나 같은 행의 장부 크기가 바뀌었는가다(진전).
+func (run *groupRun) setRestored(last playback.Link) bool {
+	rl, ok := run.u.sessions.restoredLink(run.w.sessionID)
+	if ok && rl.link.Seq > last.Seq {
+		return false
 	}
 	r := run.rows[run.rowIndex(last.Seq)]
 	var size int64
@@ -177,4 +198,5 @@ func (run *groupRun) setRestored(last playback.Link) {
 	}
 	run.u.sessions.setRestored(run.w.sessionID, restoredLink{link: last, bytes: size, exact: run.exact,
 		slackLo: run.slackLo, slackHi: run.slackHi})
+	return !ok || rl.link.Seq < last.Seq || rl.bytes != size
 }
