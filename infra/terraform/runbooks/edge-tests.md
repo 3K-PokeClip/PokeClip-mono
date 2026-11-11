@@ -4,7 +4,8 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
 절차입니다. 설계서 5-6(시험 계획과 시험 접속법)과 계획 M10 c10 에 해당하고,
 7단계 O7f 의 KVS 값 입력(멈춤 자리 ②)도 여기에 있습니다. 8단계(O8)는
 「경로 우회 시험」 을 통과한 뒤에 시작하고, 개통 뒤 관찰은 이 시험표를
-`--resolve` 없이 다시 돌립니다.
+`--resolve` 없이 다시 돌립니다. /dvr 하한 함수를 켜는 걸음과 그 시험(POK-525)은
+「/dvr 하한 시험(POK-525)」 입니다.
 
 *   실행자는 kty 입니다. **kty 로컬 터미널**에서 kty IAM 사용자 프로필로
     돌립니다. 출력에 계정 ID 가 든 ARN · 엣지 IP 가 섞여 에이전트 세션이나
@@ -69,8 +70,9 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
     상자의 nginx 가 응답을 냅니다).
 *   **A2(KVS 값 입력 불가)**: 값이 필요 없는 뒤 단계만 합니다 — 엣지만
     시험 · 런타임 2단 · 정상 기동 확인 · 시험 키 · 루프백 헬스 · 쿠키 200 ·
-    T10 · T11 202 · T13. T13 의 `/dvr/*` · `/vod/*` 비헤이비어는 함수가
-    없어 KVS 값과 무관합니다(`modules/cdn_media/main.tf`). `/live` 재생
+    T10 · T11 202 · T13. T13 의 `/dvr/*` · `/vod/*` 비헤이비어는 이 KVS
+    값과 무관합니다(`modules/cdn_media/main.tf` — `/dvr/*` 에 붙는 하한
+    함수는 다른 KVS(edge-bounds)를 읽습니다). `/live` 재생
     시험(T1 · T2 의 `/live` 사례 · T3 · T4 · T5 · T7 · T8a–T8d) · 7-R ·
     8단계는 값 입력 뒤입니다. 대안은 설계하지 않습니다(34차 Q2 — 막히면
     kty 회부).
@@ -354,6 +356,9 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     — **미확인**입니다. CloudFront 가 실제로 무엇을 정규화하는지가 ③ 이라
     실측 전에는 확정하지 않습니다. 함수가 원 경로를 받는지(G1)는
     [POK-548](https://xodbs9810.atlassian.net/browse/POK-548) 에서 잽니다.
+    같은 계정의 실험 배포에서는 `/dvr/*` 함수(dvr-floor)가 원 경로를
+    받았습니다(2026-11-11 — 「/dvr 하한 실험대 결과」 의 R9). live-auth 의
+    prod 배포는 따로 봅니다.
 
 | 언제 | 요청(쿠키) | 통과 조건 |
 |---|---|---|
@@ -868,6 +873,8 @@ CLOUDFRONT WAF 의 속도 규칙 기본값 20000(5분 · IP 하나)은 추정입
 
 *   **함수 시험**: live-auth 에 `aws cloudfront test-function` · 콘솔 함수
     시험 탭을 쓰지 않습니다(출력에 KVS 값이 든 Authorization 이 찍힙니다).
+    dvr-floor 는 씁니다 — 연결된 KVS 에 하한 수만 있고 사건에 쿠키 ·
+    Authorization 이 없습니다(「판정 B′」).
 *   **원본 쪽**(nginx · MediaMTX · 사이드카 · 저널): O7f 의 9 의
     `secret-count.sh` 결과(`SECRET COUNT … 0`)를 씁니다.
 *   **증거 디렉터리**: 이 런북이 남긴 파일(`curl -D -` 헤더 포함)에 쿠키 ·
@@ -883,6 +890,606 @@ aws logs filter-log-events --region us-east-1 \
 grep -rlE 'CloudFront-(Signature|Policy)=|Bearer ' "${evidence}" | wc -l   # 0
 ```
 
+## /dvr 하한 시험(POK-525)
+
+/dvr 하한 함수 `pokeclip-prod-dvr-floor`(dvr-floor — 되감기 조각 가운데 그
+회차 하한보다 앞 seq 를 404 로 막는 `/dvr/*` CloudFront 함수)를 prod 에 켜는
+걸음과 시험입니다. 켜는 것은 두 단 apply 입니다. 1단은 함수를 게시만 하고
+(`dvr_floor_enabled = false`), 2단은 `/dvr/*` 에 붙입니다(`true`). 두 단
+사이에 함수만 시험하고(판정 B′ · K), 붙인 뒤 실제 엣지로 시험합니다(판정
+C′). 걸음마다 실행 직전에 kty 가 승인합니다. 근거는 계획 Ⓓ 3절(걸음
+6.0–6.6 · 롤백)과 [prod/edge](../prod/edge/README.md) 「/dvr 하한(POK-525)」
+입니다.
+
+용어:
+
+*   **하한(floor)**: 회차마다 사이드카 Writer(media 사이드카 안에서 하한을
+    원장 표와 KVS 에 쓰는 몫)가 올리는 seq 입니다. KVS 키는
+    `{스트림}/{회차}`, 값은 십진 수 하나입니다. 회차가 닫히면 Writer 가 키를
+    지웁니다([media README](/media/README.md) 「/dvr 하한 Writer」).
+*   **판정 B′ · K · C′**: B′ 는 1단 뒤 게시된 함수를 `test-function`(AWS 가
+    함수를 배포에 붙이지 않고 사건 하나로 한 번 돌려 주는 API)으로 보는
+    판정, K 는 경보 셋의 지표 필터 · 알림 경로 판정, C′ 는 2단 뒤 실제 엣지
+    요청으로 보는 판정입니다.
+*   **계산 사용률**: `test-function` 결과의 `ComputeUtilization`(함수가 쓸 수
+    있는 최대 실행 시간 가운데 실제로 쓴 몫, 0–100)입니다. AWS 는 71 이상이면
+    배포에 붙였을 때 스로틀(실행 거부)할 수 있다고 합니다(AWS 개발자 안내서
+    [Test a function](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/test-function.html)
+    — 2026-11-11 원문 확인).
+*   **fail-open**: 판단 재료(키 · 값 · KVS 읽기)를 못 얻으면 막지 않고
+    넘기는 동작입니다. 하한은 되감기 창 정책이고 1차 통제는 함수보다 먼저
+    검사되는 서명 쿠키라 이렇게 둡니다(kty K5 (가)).
+*   **관측 불충분**: 함수 로그는 best-effort(늦게 오거나 드물게는 아예 오지
+    않을 수 있음)로 전달됩니다(AWS 개발자 안내서
+    [Edge function logs](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-functions-logs.html)
+    — 2026-11-11 원문 확인). 기한 안에 로그가 다 오지 않은 것은 실패가
+    아니라 관측 불충분이고, 다시 잽니다.
+
+### /dvr 하한 걸음
+
+| 걸음 | 무엇 | 선행 | 통과 |
+|---|---|---|---|
+| 6.0 | 선행 확인 | — | 다섯 다 참: ① prod/runtime 을 POK-525 판으로 apply(출력 `edge_bounds_kvs_arn` 있음) ② [Media 교체 런북](media-swap.md) 4.10 시험 방송 통과 ③ POK-528(하한 404 를 받는 웹)의 prod 반영 — 웹 배포 일정이라 kty 가 확인 ④ 실험대 (3) · (4) 통과(아래 「/dvr 하한 실험대 결과」) ⑤ 이 함수를 더한 PR 의 종결 |
+| 6.1 | 그 PR 머지 | 6.0 | 1단 apply 바로 앞에 머지합니다(kty K-D3 (가) — 머지 뒤 첫 edge apply 는 스위치가 꺼져 있어도 함수를 만듭니다). PR 종결 뒤 develop 이 움직였으면 머지 전에 다시 봅니다 — 충돌이 나거나 새 커밋이 `infra/terraform/prod/edge` · `modules/cdn_media` · 공유 골든을 건드렸으면 머지하지 않고 kty 에게 보고 |
+| 6.2 | 단계 직전 점검 | 6.1 | `scp-recheck.sh O7f` · `principal-check.sh O7f` 거부 0([단계 직전 점검 런북](stage-precheck.md)) |
+| 6.3 | 1단 apply(`false`) | 6.2 | plan 범위 = 아래 「1단 기대 목록」 · 배포 변경 0 |
+| 6.4 | 판정 B′ · 판정 K | 6.3 · 새 시험 방송 6분 넘김 | 아래 「판정 B′」 · 「판정 K」 |
+| 6.5 | 2단 apply(`true`) | 6.4 | plan 범위 = media 배포 변경 한 줄 · apply 끝(배포 Deployed) |
+| 6.6 | 판정 C′ | 6.5 | 아래 「판정 C′」. 실패하면 곧바로 「/dvr 하한 끄기」 |
+
+*   **6.4 의 시험 방송은 4.10 과 다른 새 방송입니다.** 송출 직전에 따로
+    승인받습니다. 시험 키 스트림(`<test>` — 4.10 과 같은 시험 키의
+    `ingestStreamId`)으로 6분 넘게 보낸 뒤 판정 B′ 를 합니다. Writer 는 첫
+    발행 뒤 Margin(60초)이 지난 다음 올림 틱(5분 주기)에 하한을 올려, 키가
+    생기기까지 늦어도 약 6분이 걸립니다.
+*   **판정 C′ 도 열린 회차가 필요합니다.** 2단 apply 동안 방송을 이어 가도
+    됩니다. 끊겼으면 C′ 앞에 새 시험 방송을 다시 따로 승인받습니다.
+*   2단 뒤의 edge apply(표준 로그 끄기 · WAF 속도 조정 포함)는 모두
+    `-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에 `/dvr/*`
+    연결 제거가 끼어듭니다([prod/edge](../prod/edge/README.md)
+    「/dvr 하한(POK-525)」).
+
+### /dvr 하한 apply
+
+apply 마다 plan 파일을 만들고, 바뀌는 관리 자원 목록이 그 걸음의 기대
+목록과 같을 때만 apply 합니다([Media 교체 런북](media-swap.md) 「plan 범위」
+와 같은 규칙). 하나라도 다르면 apply 하지 않고 kty 에게 보고합니다. prod/edge
+를 `init -backend-config=backend.hcl` 로 연 체크아웃의 저장소 뿌리에서
+돌리고, plan 파일은 증거 디렉터리에 둡니다(계정 ID 가 든 ARN 이 있습니다).
+
+아래 `edge_plan` 은 plan 파일을 쓰고 바뀌는 자원 목록을 냅니다.
+
+```shell
+edge_plan() {  # edge_plan <true|false> <plan 이름>
+  local dir=infra/terraform/prod/edge
+  terraform -chdir="${dir}" plan -input=false \
+    -var "dvr_floor_enabled=$1" -out="${evidence}/$2.plan" >/dev/null &&
+    terraform -chdir="${dir}" show -json "${evidence}/$2.plan" |
+    jq -r '.resource_changes[] | select(.mode == "managed")
+        | select(.change.actions != ["no-op"])
+        | "\(.change.actions | join(",")) \(.address)"'
+}
+edge_plan false dvr-stage1                    # 6.3 1단
+terraform -chdir=infra/terraform/prod/edge apply "${evidence}/dvr-stage1.plan"
+edge_plan true dvr-stage2                     # 6.5 2단
+terraform -chdir=infra/terraform/prod/edge apply "${evidence}/dvr-stage2.plan"
+```
+
+| 걸음 | 기대 목록 |
+|---|---|
+| 1단 | `create module.media.aws_cloudfront_function.dvr_floor` · `create aws_cloudwatch_log_group.cloudfront_function["dvr_floor"]` · 경보 묶음 `create` 만 — 지표 필터 둘 · 경보 셋(`VALUE INVALID` · `KVS ERROR` · FunctionExecutionErrors) · us-east-1 알림 주제 · 그 주제 정책(`aws_cloudwatch_log_metric_filter.dvr_floor["value_invalid"]` · `["kvs_error"]` · `aws_cloudwatch_metric_alarm.dvr_floor_log["value_invalid"]` · `["kvs_error"]` · `aws_cloudwatch_metric_alarm.dvr_floor_execution_errors` · `aws_sns_topic.edge_alarms` · `aws_sns_topic_policy.edge_alarms`). `module.media.aws_cloudfront_distribution.this` 는 없어야 합니다 |
+| 2단 | `update module.media.aws_cloudfront_distribution.this` 한 줄 |
+| 끄기 | `update module.media.aws_cloudfront_distribution.this` 한 줄 |
+
+apply 는 배포가 Deployed 가 될 때까지 기다립니다(provider 기본
+`wait_for_deployment`). 2단 · 끄기는 몇 분 걸립니다.
+
+### /dvr 하한 1단 도중 실패
+
+1단 apply 가 도중에 멈추면 함수는 생겼는데 로그 그룹 · 경보 가운데 일부가
+없는 상태가 남습니다. 스위치가 꺼져 있어 함수가 `/dvr/*` 에 붙지 않았으므로
+시청자 영향은 없습니다 — 서두르지 않습니다.
+
+1.  오류 원문의 자원 주소 · 오류 코드를 kty 에게 보고합니다. 값 · ARN 원문은
+    옮기지 않습니다.
+1.  갈래를 고릅니다.
+    *   `AccessDenied` — 계획 3절 「SCP 멈춤 규칙」. 다시 시도하지 않습니다.
+    *   함수 로그 그룹의 `ResourceAlreadyExistsException` — 함수가 그룹보다
+        먼저 로그를 낸 것입니다. [prod/edge](../prod/edge/README.md)
+        「적용 순서(O7f)」 의 import(키 `dvr_floor`) 뒤 1단을 다시 plan 합니다.
+    *   그 밖(코드 · 설정 결함) — **고친 PR**(1순위)을 머지한 뒤 1단을 다시
+        plan 합니다. **되돌림 PR**(이 함수를 더한 PR 을 되돌림)은 kty 가
+        고릅니다. 되돌림 PR 의 plan 에는 이미 생긴 함수의 삭제가 끼는데, `O7f`
+        묶음에 `cloudfront:DeleteFunction` 이 없어 그 apply 전에 kty 에게
+        회부합니다.
+1.  **그 사이의 다른 edge apply**(Budgets 경보의 「1차 대응 — 표준 로그
+    끄기」 포함)는 plan 에 1단의 남은 생성이 끼어듭니다. `-target` 으로 원래
+    목적의 자원만 고르지 않습니다 — 상태가 코드와 갈라진 채 남습니다. plan
+    목록을 「원래 기대 목록」 과 「1단의 남은 생성」 둘로 나눠 kty 에게 보이고
+    승인받아 함께 apply 합니다. 남은 생성이 같은 원인으로 다시 실패할 수
+    있으므로, apply 뒤 plan 을 다시 돌려 원래 목적(예: 전달 자원 삭제)이
+    끝났는지 봅니다.
+
+### 판정 B′
+
+1단 뒤 게시된(LIVE) prod 함수를 `test-function` 으로 갈래마다 세 번씩
+돌립니다. 막는 갈래는 6.4 의 시험 방송 중 Writer 가 올린 실제 키로 봅니다.
+**prod KVS 에 손으로 키를 넣지 않습니다**(E49 — 시험 키가 남으면 그 회차를
+막습니다). 그래서 `VALUE INVALID`(값 이상) · `KVS ERROR`(KVS 읽기 실패)
+갈래는 prod 에서 보지 않습니다 — 실험대 (3) · node 시험이 맡았습니다(아래
+「/dvr 하한 실험대 결과」).
+
+dvr-floor 는 `test-function` 을 써도 됩니다. 연결된 KVS(edge-bounds)에는
+하한 수만 있고, 아래 사건에는 쿠키 · Authorization 이 없습니다(live-auth
+와 다릅니다 — 「비밀 · 쿠키 0건 확인」 의 「함수 시험」).
+
+**키 찾기**: 시험 방송을 6분 넘게 보낸 뒤, 런타임 1단-가 런북
+[POK-525 원장 질의](runtime-1a.md) 를 「한 스트림만 보기」(`<test>`)로
+돌립니다. `open` 줄의 `sample` 에 `<test>/<회차>` 가 나와야 합니다. 없으면 5분
+뒤 다시 보고, 그래도 없으면 B 사이드카 저널의 `edge_bounds_write_failing`
+(media README 「/dvr 하한 신호」)을 봅니다.
+
+아래 `dvr_case` 는 사건 JSON 을 만들어 세 번 돌리고, 한 번에 판정 줄 하나를
+냅니다. 줄에는 결과(`pass` 또는 `status=404`) · 사용률 · 함수 오류 · 404
+머리 넷 · 함수 로그가 실립니다.
+
+```shell
+fn=pokeclip-prod-dvr-floor
+stream='<test>'
+round='<회차>'
+fn_etag="$(aws cloudfront describe-function --name "${fn}" --stage LIVE \
+  --query ETag --output text)"
+dvr_case() {  # dvr_case <이름> <메서드> <경로>
+  local k
+  jq -n --arg m "$2" --arg u "$3" '{version: "1.0",
+      context: {eventType: "viewer-request"}, viewer: {ip: "198.51.100.7"},
+      request: {method: $m, uri: $u, querystring: {}, cookies: {},
+        headers: {host: {value: "media.pokeclip.com"},
+          origin: {value: "https://app.pokeclip.com"}}}}' \
+    > "${evidence}/dvr-$1.event.json" || return 1
+  for k in 1 2 3; do
+    if ! aws cloudfront test-function --name "${fn}" --if-match "${fn_etag}" \
+      --stage LIVE --event-object "fileb://${evidence}/dvr-$1.event.json" \
+      --output json > "${evidence}/dvr-$1.r${k}.json"; then
+      echo "$1 r${k} call-failed"
+      continue
+    fi
+    jq -r --arg id "$1 r${k}" '.TestResult
+      | (.FunctionOutput // "{}" | fromjson) as $o
+      | ($o.response.headers // {}) as $h
+      | [$id,
+         (if $o.response then "status=\($o.response.statusCode)"
+          else "pass" end),
+         "util=\(.ComputeUtilization)",
+         "err=\(.FunctionErrorMessage // "")",
+         "cc=\($h["cache-control"].value // "-")",
+         "acao=\($h["access-control-allow-origin"].value // "-")",
+         "acac=\($h["access-control-allow-credentials"].value // "-")",
+         "vary=\($h.vary.value // "-")",
+         "logs=\(.FunctionExecutionLogs // [] | join("|"))"]
+      | join(" ")' "${evidence}/dvr-$1.r${k}.json"
+  done
+}
+```
+
+첫 묶음은 하한 값 없이 갈래를 봅니다. `deny0`(seq 0)은 하한이 1 이상이라
+키가 있으면 늘 막히고, 그 로그의 `floor=` 가 지금 하한입니다.
+
+```shell
+long="$(printf '%0129d' 0 | tr 0 a)"          # 129자 성분 — 정규식 밖
+{
+  dvr_case options OPTIONS "/dvr/${stream}/${round}/seg/000000.m4s"
+  dvr_case nokey GET "/dvr/${stream}/pcnokey/seg/000000.m4s"
+  dvr_case old GET "/dvr/${stream}/seg/000000.m4s"
+  dvr_case long129 GET "/dvr/${long}/${round}/seg/000000.m4s"
+  dvr_case malformed GET "/dvr/${stream}/${round}/seg/../seg/000000.m4s"
+  dvr_case deny0 GET "/dvr/${stream}/${round}/seg/000000.m4s"
+} | tee "${evidence}/dvr-b1.txt"
+```
+
+둘째 묶음은 `deny0` 로그의 하한 `<F>` 앞뒤를 봅니다. 끝의 `deny0b` 는 그
+사이 하한이 바뀌지 않았는지 봅니다.
+
+```shell
+floor='<F>'
+seg() { printf '/dvr/%s/%s/seg/%06d.m4s' "${stream}" "${round}" "$1"; }
+{
+  dvr_case below GET "$(seg "$((floor - 1))")"
+  dvr_case eq GET "$(seg "${floor}")"
+  dvr_case above GET "$(seg "$((floor + 1))")"
+  dvr_case deny0b GET "$(seg 0)"
+} | tee "${evidence}/dvr-b2.txt"
+grep -ho 'util=[0-9]*' "${evidence}"/dvr-b[12].txt | cut -d= -f2 | sort -n |
+  tail -1                                      # 최대 사용률
+```
+
+통과 조건입니다. 사건마다 세 줄이 모두 같아야 하고, 모든 줄이 `err=` 빈
+값입니다. **404 머리 넷**은 `cc=no-store` · `acao=https://app.pokeclip.com` ·
+`acac=true` · `vary=origin` 입니다.
+
+| 사건 | 통과 줄 |
+|---|---|
+| `options` · `nokey` · `old` · `long129` · `eq` · `above` | `pass` · `logs=` 빈 값 · 머리 칸 `-` |
+| `malformed` | `status=404` · 404 머리 넷 · `logs=DVR FLOOR MALFORMED` |
+| `deny0` · `deny0b` | `status=404` · 404 머리 넷 · `logs=DVR FLOOR DENY <test> <회차> 0 floor=<F>` — 두 사건의 `<F>` 가 같음 |
+| `below` | `status=404` · 404 머리 넷 · `logs=DVR FLOOR DENY <test> <회차> <F−1> floor=<F>` |
+
+*   **`deny0` 가 `pass` 면** 키가 아직 엣지에 퍼지지 않은 것일 수 있습니다
+    (KVS 값 반영은 1분쯤 걸립니다 — 81 실험대 E4 의 안정 37–61초).
+    10초 간격으로 여섯 번까지 `deny0` 만 다시 돌립니다. 그래도 `pass` 면
+    멈추고 B 사이드카의 `edge_bounds_write_failing` 을 kty 에게 보고합니다.
+*   **`deny0b` 의 `<F>` 가 다르면** 그 사이 하한이 올랐습니다. 둘째 묶음을
+    새 `<F>` 로 다시 돌립니다.
+*   **`call-failed`** 는 호출 실패입니다. `AccessDenied` 면 계획 3절 「SCP
+    멈춤 규칙」 입니다.
+*   **사용률 합격선**(kty (가) — 실험대 결정 1): 최대 50 이하 합격 · 51–70
+    조건부(2단 apply 전에 kty 가 판단) · 71 이상 불합격(2단 apply 하지 않고
+    함수 최적화 PR). 이 합격선은 `test-function` 값에만 씁니다. 실험대 (3) 은
+    최대 9 였습니다.
+*   **B′ 실패**(통과 줄과 다름 · 불합격)면 2단으로 가지 않습니다. 함수가
+    붙지 않아 시청자 영향은 없습니다 — 원인을 kty 에게 보고하고, 코드
+    결함이면 고친 PR 뒤 6.3 부터 다시 합니다.
+
+### 판정 K
+
+경보 셋이 맞는 줄을 세고 알림이 실제로 오는지 봅니다. `test-function` 은
+CloudWatch 로그를 내지 않아(AWS 개발자 안내서 Edge function logs —
+2026-11-11 원문 확인) B′ 로는 지표 필터가 움직이지 않습니다. 그래서 필터는
+`aws logs test-metric-filter`(표본 줄에 패턴을 대 보는 API)로, 알림 경로는
+`aws cloudwatch set-alarm-state`(경보 상태를 손으로 바꾸는 API)로 봅니다.
+경보 이름 · 주제 출력 이름은 Ⓓ-3 의 것입니다(아래 값은 자리표시자 —
+가칭).
+
+| 경보 | 무엇을 세나 |
+|---|---|
+| `VALUE INVALID` 경보(Ⓓ-3 의 이름 — 가칭) | 함수 로그 `DVR FLOOR VALUE INVALID` 줄 — 5분 합 1 이상(kty K-D4) |
+| `KVS ERROR` 경보(Ⓓ-3 의 이름 — 가칭) | 함수 로그 `DVR FLOOR KVS ERROR` 줄 — 5분 합 1 이상(K-D4) |
+| FunctionExecutionErrors 경보(Ⓓ-3 의 이름 — 가칭) | AWS/CloudFront 기본 지표 FunctionExecutionErrors(잡히지 않은 예외 — `/dvr` 503) · 차원 `FunctionName=pokeclip-prod-dvr-floor` · `Region=Global`(kty K-D5 (a)) |
+
+**1. 알림 구독**(kty K-D1 (가) — 처음 한 번 · 주제를 다시 만든 뒤에도).
+알림 주제는 Terraform 이 만들고, 이메일 구독은 저장소 밖에서 kty 가 CLI 로
+한 번 겁니다. 구독은 Terraform 상태 밖이라 주제가 교체되거나 계정이 지워진
+뒤 다시 만들면 다시 겁니다. 메일 주소는 명령에만 넣고 저장소 · 증거 · 채팅에
+옮기지 않습니다. 필요 권한은 kty IAM 사용자의 `sns:Subscribe` ·
+`sns:ListSubscriptionsByTopic` 입니다.
+
+```shell
+topic_output=edge_alarm_topic_arn
+topic_arn="$(terraform -chdir=infra/terraform/prod/edge \
+  output -raw "${topic_output}")"
+aws sns subscribe --region us-east-1 --topic-arn "${topic_arn}" \
+  --protocol email --notification-endpoint '<kty 메일 주소>' \
+  --query SubscriptionArn --output text      # pending confirmation
+```
+
+받은 확인 메일의 링크를 누른 뒤 확인된 구독 수가 1 이상인지 봅니다.
+
+```shell
+confirmed="length(Subscriptions[?Protocol=='email' && SubscriptionArn!='PendingConfirmation'])"
+aws sns list-subscriptions-by-topic --region us-east-1 \
+  --topic-arn "${topic_arn}" --query "${confirmed}"   # 1 이상
+```
+
+**2. 지표 필터**: 함수 로그 그룹의 필터마다 표본 다섯 줄에 패턴을 대 봅니다.
+표본은 실제 로그 꼴(앞에 요청 ID 가 붙음)입니다.
+
+```shell
+log_group=/aws/cloudfront/function/pokeclip-prod-dvr-floor
+aws logs describe-metric-filters --region us-east-1 \
+  --log-group-name "${log_group}" --output json |
+  jq -r '.metricFilters[] | [.filterName, .filterPattern,
+      .metricTransformations[0].metricNamespace,
+      .metricTransformations[0].metricName] | join(" ")' |
+  tee "${evidence}/dvr-k-filters.txt"
+aws logs describe-metric-filters --region us-east-1 \
+  --log-group-name "${log_group}" --output json |
+  jq -r '.metricFilters[].filterPattern' |
+  while IFS= read -r pattern; do
+    printf '%s => ' "${pattern}"
+    aws logs test-metric-filter --region us-east-1 \
+      --filter-pattern "${pattern}" \
+      --log-event-messages 'req1 DVR FLOOR VALUE INVALID s r' \
+      'req2 DVR FLOOR KVS ERROR s r' 'req3 DVR FLOOR DENY s r 0 floor=3' \
+      'req4 DVR FLOOR MALFORMED' 'req5 START DistributionID: E0000000000000' \
+      --output json | jq -c '[.matches[].eventMessage]'
+  done | tee "${evidence}/dvr-k-match.txt"
+```
+
+통과: 필터 둘이고, `VALUE INVALID` 필터는 `req1` 줄 하나만, `KVS ERROR`
+필터는 `req2` 줄 하나만 고릅니다. 패턴 글자는 함수 상수(`dvr-floor.js` 의
+`VALUE_INVALID_LOG` · `KVS_ERROR_LOG`)와 같습니다.
+
+**3. 경보 설정 · 알림 경로**: 경보 셋의 설정을 읽고, 하나씩 `ALARM` 으로
+바꿔 메일이 오는지 본 뒤 `OK` 로 되돌립니다.
+
+```shell
+alarms=(pokeclip-prod-dvr-floor-value-invalid
+  pokeclip-prod-dvr-floor-kvs-error
+  pokeclip-prod-dvr-floor-execution-errors)
+aws cloudwatch describe-alarms --region us-east-1 --alarm-names "${alarms[@]}" \
+  --query "MetricAlarms[].[AlarmName, Namespace, MetricName,
+    join(',', Dimensions[].Value), Statistic, Period, Threshold,
+    ComparisonOperator, TreatMissingData, StateValue, length(AlarmActions)]" \
+  --output text | tee "${evidence}/dvr-k-alarms.txt"
+for alarm in "${alarms[@]}"; do
+  aws cloudwatch set-alarm-state --region us-east-1 --alarm-name "${alarm}" \
+    --state-value ALARM --state-reason 'POK-525 판정 K 알림 경로 시험'
+done
+```
+
+*   설정 통과: 세 줄 · 로그 경보 둘의 네임스페이스 · 지표 이름이 위 필터의
+    것과 같음 · `Sum` · `300` · `1.0` · `GreaterThanOrEqualToThreshold` ·
+    `notBreaching`(K-D4) · FunctionExecutionErrors 경보는 `AWS/CloudFront` ·
+    차원 `pokeclip-prod-dvr-floor,Global` · 알림 동작 수 1 이상.
+*   알림 통과: 경보마다 메일 한 통(제목에 경보 이름). 받은 시각을 적습니다.
+    15분 안에 오지 않으면 구독(1)부터 다시 봅니다.
+
+메일을 다 받으면 셋 다 `OK` 로 되돌리고 상태를 다시 읽습니다.
+
+```shell
+for alarm in "${alarms[@]}"; do
+  aws cloudwatch set-alarm-state --region us-east-1 --alarm-name "${alarm}" \
+    --state-value OK --state-reason 'POK-525 판정 K 끝 — OK 로 되돌림'
+done
+aws cloudwatch describe-alarms --region us-east-1 --alarm-names "${alarms[@]}" \
+  --query 'MetricAlarms[].StateValue' --output text   # OK OK OK
+```
+
+K 가 실패해도 시청자 영향은 없습니다(경보만의 문제). 2단으로 갈지는 kty 가
+정합니다. 고치는 것은 문턱 · 패턴 · 주제를 고치는 PR 입니다.
+
+### 판정 C′
+
+2단 뒤 실제 엣지에 시험 방송의 서명 쿠키와 앱 출처(`Origin:
+https://app.pokeclip.com`)를 실어 요청합니다. 요청은 「접속법」 의 `edge_ip`
+를, 판정 B′ 와 같은 셸의 `stream` · `round` · `floor` · `seg` 를 씁니다.
+`jar` 는 시험 방송의 서명 쿠키 셋을 담은 쿠키 파일입니다(「경로
+우회 시험」 T2 의 `jar_a` 와 같은 발급 · `mktemp` 0600 · 증거 디렉터리 밖 ·
+시험 뒤 지움). C′ 직전에 판정 B′ 의 `deny0` 를 한 번 더 돌려 그 `floor=` 값을 `floor` 에
+다시 넣습니다.
+
+**실패하면 곧바로 「/dvr 하한 끄기」 입니다.** 단, 아래 DENY 로그의 「관측
+불충분」 은 실패가 아닙니다.
+
+아래 `c_get` 은 요청 하나를 보내 머리를 남기고, `c_line` 은 판정에 쓰는
+머리를 한 줄로 냅니다. `acao` 칸에 값이 둘 이상이면 쉼표로 이어져 나옵니다
+(머리 두 벌 — E48).
+
+```shell
+c_since_ms="$(($(date -u +%s) * 1000))"
+c_since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+c_get() {  # c_get <라벨> <경로>
+  curl --path-as-is -b "${jar}" -H 'Origin: https://app.pokeclip.com' \
+    --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
+    -D "${evidence}/dvr-c-$1.h" -w "$1 %{http_code}" \
+    "https://media.pokeclip.com$2"
+  c_line "$1"
+}
+c_val() {  # c_val <머리 이름> <라벨>
+  grep -i "^$1:" "${evidence}/dvr-c-$2.h" | tr -d '\r' | cut -d' ' -f2- |
+    paste -sd, -
+}
+c_line() {  # c_line <라벨>
+  printf ' acao=%s acac=%s cc=%s xcache=%s\n' \
+    "$(c_val access-control-allow-origin "$1")" \
+    "$(c_val access-control-allow-credentials "$1")" \
+    "$(c_val cache-control "$1")" "$(c_val x-cache "$1")"
+}
+below_seq="$(printf '%06d' "$((floor - 1))")"
+below="$(seg "$((floor - 1))")"
+{
+  c_get below1 "${below}"
+  c_get below2 "${below}"
+  c_get below3 "${below}"
+  c_get eq "$(seg "${floor}")"
+  c_get old "/dvr/${stream}/seg/<옛 꼴 seq>.m4s"
+  c_get live "/live/${stream}/index.m3u8"
+  c_get e14-vod "/vod/${stream}/../..${below}"
+  c_get e14-dotdot "/dvr/${stream}/x/../${round}/seg/${below_seq}.m4s"
+  c_get e14-dot "/dvr/${stream}/${round}/seg/./${below_seq}.m4s"
+  c_get e14-pct2e "/dvr/${stream}/x/%2e%2e/${round}/seg/${below_seq}.m4s"
+  c_get e14-dslash "/dvr/${stream}/${round}//seg/${below_seq}.m4s"
+} | tee "${evidence}/dvr-c.txt"
+grep '^e14-' "${evidence}/dvr-c.txt" | grep -c ' 200 '   # 0
+```
+
+| 라벨 | 통과 |
+|---|---|
+| `below1`–`below3` | `404` · `xcache=FunctionGeneratedResponse from cloudfront` · `acao=https://app.pokeclip.com`(한 벌) · `acac=true`(한 벌) · `cc=no-store` |
+| `eq` | `200` · `acao` · `acac` 한 벌 · `xcache` 가 함수 생성이 아님 |
+| `old` | `xcache` 가 함수 생성이 아님(함수 통과). 4.2 루프백이 남긴 옛 꼴 키가 있으면 `200`, 없으면 버킷의 `403`(`s3:ListBucket` 이 없어 없는 키도 403) |
+| `live` | `200`(`/live` 무변 — 방송 중) |
+| `e14-*` | `200` 이 아님(경로 조작으로 하한을 비켜 가지 못함 — E14). 기대는 함수 MALFORMED 404 입니다(실험대 (4) 의 R9) |
+
+`e14-*` 가운데 `200` 이 하나라도 있으면 실패로 끄고, 그 경로를 kty 에게
+보고합니다(D4 회부). 끈다고 그 우회가 막히지는 않습니다 — 하한이 통째로
+없어질 뿐이라 시청자에게 더 나빠지지 않는 쪽으로 되돌리는 것입니다.
+
+**앱 출처 credentials fetch**: 시험 방송을 앱에서 되감기로 연 탭
+(`https://app.pokeclip.com`)의 개발자 도구 콘솔에서 아래를 돌립니다. 하한 아래
+셋은 `404`, 하한 조각은 `200` 이어야 합니다. `TypeError: Failed to fetch` 면
+CORS 실패(머리 없음 · 두 벌)입니다.
+
+```js
+const base = 'https://media.pokeclip.com/dvr/<test>/<회차>/seg/';
+for (const seq of ['<F−1 6자리>', '<F−1 6자리>', '<F−1 6자리>', '<F 6자리>']) {
+  try {
+    const r = await fetch(`${base}${seq}.m4s`, {credentials: 'include'});
+    console.log(seq, r.status);
+  } catch (err) {
+    console.log(seq, String(err));
+  }
+}
+```
+
+**DENY 로그**: `below1`–`below3` 의 요청 ID(응답 머리 `x-amz-cf-id`)마다 함수
+로그에 DENY 줄이 있는지 봅니다. 함수 로그 줄은 앞에 그 요청 ID 를 답니다.
+마지막 요청부터 **10분**까지 1분마다 아래를 다시 돌립니다. 셋 다 대응하면
+그때 멈춥니다.
+
+```shell
+grep -hi '^x-amz-cf-id:' "${evidence}"/dvr-c-below[123].h | tr -d '\r' |
+  cut -d' ' -f2 > "${evidence}/dvr-c-ids.txt"
+aws logs filter-log-events --region us-east-1 \
+  --log-group-name /aws/cloudfront/function/pokeclip-prod-dvr-floor \
+  --start-time "${c_since_ms}" --filter-pattern '"DVR FLOOR DENY"' \
+  --output json | jq -r '.events[].message' > "${evidence}/dvr-c-deny.txt"
+grep -cFf "${evidence}/dvr-c-ids.txt" "${evidence}/dvr-c-deny.txt"   # 3
+```
+
+*   셋 다 대응 — 통과.
+*   10분 안에 셋이 안 됨 — **관측 불충분**입니다(실패 아님 · 끄지 않음).
+    `below` 요청을 다시 보내 새 요청 ID 로 한 번 더 잽니다. 두 번째도 모자라면
+    kty 에게 보고합니다.
+*   로그 수를 요청 수의 대조로 곧바로 쓰지 않습니다. 「로그 수 = 요청 수」
+    가 아니라는 것만으로는 끌 근거가 아닙니다 — 전달이 best-effort 입니다.
+
+**지표 관측**: C′ 창의 CloudFront 함수 지표를 판정이 아니라 기록으로
+남깁니다. 사용률 합격선(kty (가))은 `test-function` 값에만 씁니다.
+
+*   **남기는 것**: C′ 창 전체를 한 period(창 길이를 60초 단위로 올린 값)로
+    받은 FunctionComputeUtilization 의 Average · Maximum · SampleCount(표본
+    수), FunctionThrottles 합, FunctionExecutionErrors 합입니다. 1분 단위
+    값은 쓰지 않습니다 — 표본이 적은 1분 창의 Average 는 첫 호출 피크 하나로
+    94 가 됩니다(live-auth 의 호출 1번뿐인 날 Average 94 · 실험대 (4) 1분 창
+    표본 2개).
+*   **SampleCount 가 20 미만이면 관측 불충분**입니다(판정 아님). 요청을 더
+    보낸 뒤 다시 잽니다.
+*   **판정을 미루고 kty 에게 보고하는 때**: SampleCount 20 이상에서
+    Average 가 50 을 넘거나, FunctionThrottles 합이 0 보다 클 때입니다. 이
+    조건만으로는 끄지 않습니다.
+*   **Maximum 하나만으로는 보고 조건이 아닙니다.** KVS 를 읽는 다른 prod
+    함수 live-auth 의 7일 지표(2026-11-04–11-11 · 일 단위 · 읽기 전용 조회)에서
+    Maximum 이 매일 94 였습니다(호출이 1번뿐인 날도 94). Average 는
+    16.4–18.8, FunctionThrottles · FunctionExecutionErrors 는 0 이었습니다.
+    94 는 이 계정 CloudFront 함수의 평상 최대(첫 호출 등)이고 스로틀로
+    이어지지 않았습니다. 실험대 (4) 의 dvr-floor 1분 Maximum 94
+    (`test-function` 최대는 9)도 계정 평상 피크(live-auth 대조)로 봅니다.
+*   **FunctionInvocations 는 요청 수 대조 근거가 아닙니다.** 분 단위 짧은
+    창에서는 표본 · 지연 때문에 맞지 않습니다 — 실험대 (4) 에서 요청 49 에
+    합 2 였습니다. 요청 수 대조는 위 「DENY 로그」 처럼 요청 ID 로만 합니다.
+
+아래는 창 끝(지금 + 2분)과 한 period 를 정한 뒤 넷을 받습니다. 창이 분
+경계에 걸쳐 값이 두 개로 나오면 둘을 다 적고, SampleCount 는 합으로
+봅니다.
+
+```shell
+c_end_s="$(($(date -u +%s) + 120))"
+c_period="$(((c_end_s - c_since_ms / 1000 + 59) / 60 * 60))"
+c_end="$(date -u -r "${c_end_s}" '+%Y-%m-%dT%H:%M:%SZ')"   # macOS date
+c_metric() {  # c_metric <지표> <통계>… — C′ 창 전체를 한 period 로.
+  aws cloudwatch get-metric-statistics --region us-east-1 \
+    --namespace AWS/CloudFront --metric-name "$1" \
+    --dimensions Name=FunctionName,Value=pokeclip-prod-dvr-floor \
+    Name=Region,Value=Global --start-time "${c_since}" \
+    --end-time "${c_end}" --period "${c_period}" \
+    --statistics "${@:2}" --output json |
+    jq -c --arg m "$1" '{($m): [.Datapoints[] | del(.Timestamp, .Unit)]}'
+}
+{
+  c_metric FunctionComputeUtilization Average Maximum SampleCount
+  c_metric FunctionThrottles Sum
+  c_metric FunctionExecutionErrors Sum
+} | tee "${evidence}/dvr-c-metrics.txt"
+```
+
+**닫힌 회차**: 시험 방송을 끝내고 그 회차 국면이 `vod` 로 넘어간 뒤(Media
+교체 런북 4.10 의 둘째 통과 조건과 같은 확인 — Writer 가 키를 지우고 120초
+유예가 지남) 아래를 봅니다. `<head>` 는 그 회차 VOD 문서의 머리 세션
+id 입니다.
+
+```shell
+{
+  c_get closed-below "${below}"
+  c_get closed-eq "$(seg "${floor}")"
+  c_get vod "/vod/${stream}/<head>/index.m3u8"
+} | tee -a "${evidence}/dvr-c.txt"
+rm -f "${jar}" && test ! -e "${jar}" && echo removed
+```
+
+| 라벨 | 통과 |
+|---|---|
+| `closed-below` | `xcache` 가 함수 생성이 아님(키가 지워져 함수 통과). 조각이 없으면 버킷 `403` |
+| `closed-eq` | `200` · `acao` · `acac` 한 벌 |
+| `vod` | `200` · `acao` · `acac` 한 벌(`/vod` 무변) |
+
+`closed-below` 가 아직 함수 404 면 KVS 삭제가 엣지에 덜 퍼진 것일 수
+있습니다(결정 8 — 그동안의 VOD 조각 404 는 웹의 기존 재시도가 약 60초
+가립니다). 2분 뒤 다시 보고, 그래도 함수 404 면 끄고 kty 에게 보고합니다.
+
+### /dvr 하한 끄기
+
+1순위 롤백입니다. `dvr_floor_enabled = false` 로 edge apply 해 `/dvr/*` 에서
+함수를 뗍니다. 함수 · 로그 그룹 · 경보 · KVS 키는 그대로 둡니다(Writer 는
+계속 하한을 쓰지만 읽는 쪽이 없습니다). 실행 직전에 승인받습니다.
+
+```shell
+# 기대: update module.media.aws_cloudfront_distribution.this 한 줄
+edge_plan false dvr-off
+terraform -chdir=infra/terraform/prod/edge apply "${evidence}/dvr-off.plan"
+```
+
+apply 가 끝나면(Deployed) `c_get below1 "${below}"` 의 `xcache` 가 함수 생성이
+아닌지 봅니다. 다시 켜는 것은 원인을 고친 뒤 6.5(2단) · 6.6(C′)입니다.
+
+### /dvr 하한 롤백
+
+| 상황 | 할 일 |
+|---|---|
+| C′ 실패 · 엣지 거절 이상(시청자 404 · `dvr_floor_blocks_list`) · CORS 실패 | 「/dvr 하한 끄기」(1순위) |
+| 함수 코드 결함 | 고친 PR → 「붙은 채 함수 코드 고치기」 |
+| 경보 오탐 · 무음 | 문턱 · 패턴을 고치는 PR(스위치는 그대로) |
+| Writer 문제(`edge_bounds_write_failing` 이 풀리지 않음 등) | [Media 교체 런북](media-swap.md) 「POK-525 롤백」 의 /dvr 하한 갈래 |
+
+어느 갈래에서도 함수 · KVS 그릇 · 로그 그룹은 지우지 않습니다(`O7f` 묶음에
+`cloudfront:DeleteFunction` 이 없습니다).
+
+### 붙은 채 함수 코드 고치기
+
+함수는 `publish = true` 입니다. 코드가 바뀐 apply 는 UpdateFunction 뒤 곧바로
+PublishFunction 을 부르고, 게시는 그 함수를 쓰는 비헤이비어에 곧바로
+실립니다(provider 6.68.0 `function.go` · API PublishFunction — 계획 Ⓓ 리서치
+R8, 2026-11-11 확인). 붙은 채 고친 코드를 apply 하면 시험 전 코드가 바로
+시청자 요청을 받습니다. 그래서 차례가 이렇습니다.
+
+1.  **고친 PR 을 머지하기 전에** 지금 코드로 「/dvr 하한 끄기」 를 합니다.
+    기대 목록은 배포 한 줄입니다. 머지 뒤에 끄면 같은 apply 에서 함수 갱신
+    (곧바로 게시)이 배포 변경보다 먼저 돌 수 있습니다 — 배포가 함수 ARN 을
+    참조해 함수를 먼저 고칩니다.
+1.  고친 PR 을 머지합니다.
+1.  1단 apply(`false`) — 기대 목록은
+    `update module.media.aws_cloudfront_function.dvr_floor` 한 줄입니다.
+1.  판정 B′(새 시험 방송 — 승인 따로).
+1.  2단 apply(`true`) → 판정 C′.
+
+### /dvr 하한 실험대 결과
+
+ISB 리스 계정(= prod 계정)의 실험 자원(접두 `pcbench-pok525-isb34`)으로
+2026-11-11 에 잰 것입니다. prod CloudFront 는 바뀌지 않았고 잔여는 0
+입니다. 원문은 `$HOME/Documents/pokeclip-empirical/runs/` 아래에 있습니다.
+
+*   **(3) 함수 단독**(`test-function`): 갈래 53 개가 모두 node 판정과 같음
+    (각 3/3 — 값 골든 25행 · `VALUE INVALID` 포함). 계산 사용률 최대 9
+    (exists+get 9 · exists 7 · KVS 안 읽음 7) → 합격.
+*   **R6**: 함수 권한만 준 제한 역할로 KVS 연결 함수를 만들고 고칠 수
+    있었습니다 — KVS 쪽 권한이 따로 들지 않습니다.
+*   **(4) 실제 엣지**: 합격 항목 11/11 — 하한 아래 404 · 머리 한 벌 ·
+    `no-store`, 하한 이상 · 옛 꼴 · `/vod` 200 · 머리 한 벌, 다른 출처
+    credentials fetch 404 · 200.
+*   **R2 — 응답 헤더 정책은 함수가 만든 응답에도 붙습니다.** CORS 머리를
+    싣지 않는 함수의 404 에도 정책(`media_cors` 꼴 · `origin_override` 켬)의
+    머리가 붙었습니다. dvr-floor 404 의 머리가 한 벌인 것은 정책이 함수
+    머리를 덮은 결과입니다(E48 두 벌 없음). 함수 쪽 머리는 정책이 없을 때를
+    위한 겹친 방어입니다. 그래서 C′ 는 `/live` 403 의 머리를 보지 않습니다.
+*   **R5**: 함수 404 는 캐시되지 않아 재요청 10/10 이 함수를 탔습니다.
+*   **R9 — 함수는 원문 경로를 받습니다.** `/dvr/s/x/../r/seg/…` ·
+    `/dvr/s/r/seg/./…` · `%2e%2e` 가 정규화본이었다면 통과였을 자리에서 함수
+    MALFORMED 404 + 로그가 나왔습니다. `%2F` · `%5C` · `//` · 역슬래시는 두
+    경우 모두 404 라 가르지 못했습니다. E14(경로 조작으로 원본 200)는 없었습니다.
+*   **DENY 로그**: 요청 19 개가 모두 요청 ID 로 대응했습니다(첫 관측 1분).
+*   **못 잰 것**: `KVS ERROR` 갈래(장애를 일으킬 수단 없음 — node 시험의
+    가짜 KVS 로만 고정).
+
 ## 1차 대응 — 표준 로그 끄기
 
 Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이면
@@ -890,6 +1497,10 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 승인하고, 운영 plan 이 「전달 자원 삭제만 · 그 밖 0」 인지 봅니다. 로그
 그룹은 남습니다. 끈 동안은 설계 7절의 `/live` 302 · 401 신호를 쓸 수
 없습니다([prod/edge](../prod/edge/README.md) 「표준 로그 끄기」).
+
+/dvr 하한을 켠 뒤면 `-var dvr_floor_enabled=true` 를 함께 넘깁니다. 하한
+1단이 도중에 실패한 채면 plan 에 남은 생성이 끼어듭니다 — 「/dvr 하한 1단
+도중 실패」 의 3 을 따릅니다.
 
 ## 결과 기록
 
@@ -920,6 +1531,9 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 | T12 ⓑ 200 JSON | | | | |
 | T11 202 | | | | |
 | T13 | | | | |
+| /dvr 하한 B′ | | | | |
+| /dvr 하한 K | | | | |
+| /dvr 하한 C′ | | | | |
 | T6a · T9b | — | 하지 않음(kty 20차) | 「O7f 순서」 끝 문단 | |
 
 ## See also
@@ -927,7 +1541,10 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 *   [prod/edge](../prod/edge/README.md) · [prod/records](../prod/records/README.md)
 *   [엣지 비밀 런북](edge-secrets.md) — 「O7f」 · 「T6b 대체 절차」
 *   [단계 직전 점검 런북](stage-precheck.md) — `O7f` · `O7f-stop2` · 증거
+*   [Media 교체 런북](media-swap.md) — 4.10 시험 방송 · 「POK-525 롤백」 의
+    /dvr 하한 갈래
+*   [런타임 1단-가 런북](runtime-1a.md) — 「POK-525 원장 질의」
 *   [prod 철거 런북](prod-teardown.md) — edge · records 를 내릴 때
 *   `scripts/kvs-put-cdn-secret.sh` · `scripts/test/kvs_put_test.sh`
 *   설계서 5-6 · 5-4 의 9 · 7절 · 8절, 계획 M10 c10 · O7f · 「O7f 실행표」 ·
-    3절(SCP 멈춤 규칙 · 부분 진행)
+    3절(SCP 멈춤 규칙 · 부분 진행), POK-525 계획 Ⓓ 3절(걸음 6.0–6.6)

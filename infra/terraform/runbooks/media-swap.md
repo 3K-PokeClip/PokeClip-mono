@@ -909,8 +909,8 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
     보고합니다. `EDGE edge_bounds_disabled` 면 tfvars 스위치를,
     `_config_invalid` 면 런타임 출력 ARN 을, `_degraded` 면 그 줄의 `err` 를
     봅니다. 끈 채인 동안은 옛 꼴만 써 Writer 가 하한을 올릴 회차가 없고(원장
-    행 0), 엣지 PR(Ⓓ) 전이라 KVS 를 읽는 엣지 함수도 없어 시청자 영향은
-    없습니다.
+    행 0) KVS 에 키도 없습니다. /dvr 하한 함수(`dvr_floor_enabled`)가 붙어
+    있어도 키가 없는 회차는 통과라 시청자 영향은 없습니다.
 *   **4.3 — A 는 아직 돕니다.** 전환 동안 A 가 살아 있어 제어면 502 창이
     없습니다. `<cut>` = `tg_health` 의 `ingest` 가 B 한 대 healthy 가 된
     시각 + 30초(등록 해제 지연)입니다.
@@ -1102,19 +1102,41 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
 판정은 media README 「/dvr 하한 신호」, 절차는 「/dvr 하한 사람 복구」
 입니다.
 
-*   **엣지 거절**(엣지 PR Ⓓ 뒤 — 시청자 404 · `dvr_floor_blocks_list`)
-    *   방법: 엣지의 `/dvr` 하한 함수 연결을 끕니다(1순위 · prod/edge
-        apply). 원인을 고친 뒤 다시 켭니다.
+*   **엣지 거절**(/dvr 하한 함수를 붙인 뒤 — 시청자 404 ·
+    `dvr_floor_blocks_list`)
+    *   방법: `dvr_floor_enabled = false` 로 prod/edge apply 해 `/dvr/*` 에서
+        함수를 뗍니다(1순위 · 실행 직전 승인). plan 범위는
+        `update module.media.aws_cloudfront_distribution.this` 한 줄이고,
+        함수 · 로그 그룹 · 경보는 남깁니다. 원인을 고친 뒤 다시 켭니다 —
+        [엣지 시험 런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의
+        2단 · 판정 C′ 입니다. 함수 코드가 원인이면 같은 런북의 「붙은 채
+        함수 코드 고치기」 차례(고친 PR 머지 전에 끔)를 따릅니다.
+
+        ```shell
+        terraform -chdir=infra/terraform/prod/edge plan -input=false \
+          -var dvr_floor_enabled=false -out="${work}/edge-dvr-off.plan"
+        terraform -chdir=infra/terraform/prod/edge show -json \
+          "${work}/edge-dvr-off.plan" \
+          | jq -r '.resource_changes[] | select(.mode == "managed")
+              | select(.change.actions != ["no-op"])
+              | "\(.change.actions | join(",")) \(.address)"'
+        terraform -chdir=infra/terraform/prod/edge apply \
+          "${work}/edge-dvr-off.plan"
+        ```
+
 *   **Writer 만 문제**(`edge_bounds_write_failing` 이 풀리지 않음 ·
     `dvr_floor_release_overdue` · `edge_bounds_degraded`)
     *   `edge_bounds_degraded` 는 먼저 그 줄의 `err` 를 고치고 사이드카를
         재기동합니다(media README 「/dvr 하한 사람 복구」). 못 고칠 때만
         아래 방법으로 갑니다.
-    *   방법: 엣지를 먼저 끔(엣지 PR 뒤) → `edge_bounds_writer_enabled =
+    *   방법: 엣지를 먼저 끔(함수가 붙어 있을 때만 — 위 「엣지 거절」 의
+        `dvr_floor_enabled = false` apply) → `edge_bounds_writer_enabled =
         false` 로 「설정 반영 교체」 → 고친 뒤 `true` 로 다시 교체. 꺼진
         동안 닫힌 미해제 회차는 `ending` 에 묶이고
         (`edge_bounds_unreleased_without_writer`) Writer 가 돌아오면
         풀립니다.
+    *   엣지는 Writer 를 되살린 교체 뒤 다시 켭니다 — [엣지 시험
+        런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의 2단 · 판정 C′.
     *   `dvr_floor_release_overdue` 만이면(`pass=release` 의
         `edge_bounds_write_failing` 이 함께 나와도) 엣지는 끄지 않습니다 —
         피해는 그 회차 VOD 가 열리지 않는 것뿐입니다.
