@@ -20,8 +20,10 @@ import (
 //	불변식 I1  표가 「안다」 고 답하는 값은 언제나 실시간 값이다(덩어리 쓰기 — TestRestoredChunksInterleavedWithSweeper)
 //	불변식 I2  치움이 낀 복원 뒤, 끼움 없는 다음 깨움이 모든 구멍 seq 에 보정값을 적고 다시 넣는다
 //	불변식 I3  치울 표가 없는 tick · 치움 없는 실시간 요청은 복원을 버리지 않는다 — 같은 차례에 끝난다
-//	신호      치움이 낀 복원은 INFO chain_restore_discarded 한 줄(단계 = reason)이고 chain_restored 는 없다. 게시 단계에서 버린
-//	          복원은 이미 다시 넣은 작업을 큐에 남긴다(requeued) — 그 작업은 자기 도장을 싣고 있다(README 「③ 사슬 복원」)
+//	신호 S1   복원 기준부터 끝 대조까지 세대가 바뀌었으면 INFO chain_restore_discarded 정확히 한 줄 · chain_restored 0, 아니면
+//	          discarded 0 · chain_restored 1(불일치 갈래는 0) — 모든 사례 · 자리 · 끼움에서(PR 종결 r6)
+//	신호 S2   reason 은 처음 거절된 대조의 단계다(expectedDiscardReason)
+//	신호 S3   requeued 는 큐에 남은 그 회차 구멍 작업 수다 — 그 작업은 자기 도장을 싣고 있다(README 「③ 사슬 복원」)
 //
 // 앞 회차 재현이 어느 하위인가:
 //
@@ -33,6 +35,9 @@ import (
 //	r1 cc H   TestRestoredChunksInterleavedWithSweeper / 관찰
 //	r5 cx H   큐 여유 / 5-written · 6-requeued / 치움 셋 — 게시 거절도 버림 신호 · 남은 재투입 작업
 //	r5 cc M   표 없음 · 모든 사례 / 실시간만 — 실시간 요청이 세대를 바꾸면(변이 V9) 방송 중 복원이 매번 버려진다
+//	r6 cx H   빈 링크 / 쓴 뒤 자리 · 게시 뒤 자리 / 치움 셋 — 게시할 링크가 없어도 버림 신호(끝 대조)
+//	          · 불일치 / 모든 자리 / 치움 셋 — 불일치 기억 거절도 버림 신호(r6 cc L2 같은 자리)
+//	          · 링크 있는 사례 / *-published / 치움 셋 — 게시 뒤 · 끝 전 만료도 버림
 
 // cutKind 는 복원 한 자리에 끼우는 일이다.
 type cutKind int
@@ -61,7 +66,10 @@ type interleaveCase struct {
 	name     string
 	setup    func(t *testing.T) (*restoreBench, []int64)
 	mismatch bool // 구멍 뒤 대조에 지는 사례 — I2 대신 불일치 기억을 본다
-	noTable  bool // 표 없는 회차(재기동 뒤) — tick 만 본다(I3)
+	noTable  bool // 표 없는 회차(재기동 뒤) — 어떤 끼움도 세대를 바꾸지 않는다(I3)
+	noLinks  bool // 꼬리에서 기다려 링크가 0 개인 사례
+	// grow 는 다음 깨움 전에 할 일이다(빈 링크 — 꼬리를 다 쓴 ② 로 키워 다음 깨움이 접게 한다). nil 이면 없다.
+	grow func(b *restoreBench)
 }
 
 // interleaveTableSeen 은 복원 동안은 살아 있고 끼움 시각(+2분)에는 수명이 지난 표의 기준 시각이다.
@@ -116,6 +124,19 @@ var interleaveCases = []interleaveCase{
 		b.uploadAt(b.liveChain(), 0)
 		b.liveTable()
 		return b, []int64{1, 2, 3}
+	}},
+	{name: "빈 링크", noLinks: true, setup: func(t *testing.T) (*restoreBench, []int64) {
+		// 0 up → 1 pending(꼬리 · ② 가 반만 써짐) — 복원이 꼬리에서 기다려 링크가 0 개다(r6 cx 재현 입력).
+		b := newRestoreBench(t)
+		b.contiguous(0, 1, 600*time.Second, up)
+		half := withMtxi(t, b.raw, recA, 2, 600*time.Second+b.step())
+		b.add(benchRow{seq: 1, session: benchSession, src: half[:len(half)/2], archive: pending})
+		b.uploadAt(b.liveChain(1), 0)
+		b.liveTable()
+		return b, []int64{1}
+	}, grow: func(b *restoreBench) {
+		b.add(benchRow{seq: 1, session: benchSession, src: withMtxi(b.t, b.raw, recA, 2, 600*time.Second+b.step()),
+			archive: pending})
 	}},
 	{name: "표 없음", noTable: true, setup: func(t *testing.T) (*restoreBench, []int64) {
 		// 재기동 뒤 — 회차 몫이 없다. 복원 동안 tick 이 빈 몫을 지우면 게시할 곳이 없어진다.
@@ -197,29 +218,32 @@ func checkInterleaved(t *testing.T, tc interleaveCase, k int, p restorePoint, c 
 	if n <= k {
 		t.Fatalf("자리 %d 에 닿지 못했다(지난 자리 %d개)", k, n)
 	}
+	// 표 없는 회차는 치울 표가 없어 어떤 끼움도 세대를 바꾸지 않는다.
+	changed := c.evicts() && !tc.noTable
+	checkDiscardSignal(t, b, tc, p, changed, holes)
 	switch {
-	case (tc.noTable || !c.evicts()) && tc.mismatch:
+	case !changed && tc.mismatch:
 		if !b.u.sessions.knownMismatch(benchSession, interleaveMismatchSpan, b.ledgerFingerprint()) {
 			t.Errorf("%v 이 낀 불일치 판정을 기억하지 않았다 — 치울 표가 없는데 버렸다 (%s)", c, b.cap.dump())
 		}
 		return
-	case tc.noTable || !c.evicts():
-		// 표 없는 회차는 치울 표가 없어 어떤 끼움도 세대를 바꾸지 않는다.
+	case !changed && tc.noLinks:
+		return // 꼬리에서 기다린 복원은 낼 링크 · 줄이 없다 — 신호(S1)만 본다
+	case !changed:
 		checkNotDiscarded(t, b, holes)
 		return
 	}
 	checkNothingOutlivesTable(t, b, holes, tc.mismatch)
-	if !tc.mismatch {
-		checkDiscardSignal(t, b, p, holes)
+	if tc.grow != nil {
+		tc.grow(b)
 	}
-	b.queued() // 큐를 비운다 — 다음 깨움의 재투입이 들어갈 자리
 	b.restore()
 	checkNextWakeRestores(t, b, holes, tc.mismatch)
 }
 
-// checkDiscardSignal 은 치움이 낀 복원의 신호와 큐다. 게시 뒤의 치움은 복원이 끝난 뒤의 평범한 만료라 버림이 아니다. 게시 단계
-// (표 줄을 다 쓴 뒤)에서 버린 복원만 다시 넣은 작업이 큐에 남고, 그 수가 신호의 requeued 다.
-func checkDiscardSignal(t *testing.T, b *restoreBench, p restorePoint, holes []int64) {
+// checkDiscardSignal 은 S1 · S2 · S3 이다 — 세대가 바뀌었는가(changed)만으로 기대 신호가 정해진다. 큐는 여기서 비운다(다음 깨움의
+// 재투입이 들어갈 자리).
+func checkDiscardSignal(t *testing.T, b *restoreBench, tc interleaveCase, p restorePoint, changed bool, holes []int64) {
 	t.Helper()
 	discarded, restored := b.cap.find("chain_restore_discarded"), b.cap.count("chain_restored")
 	full := b.saturated() // 큐를 비우기 전에 — 차 있었으면 재투입이 거부됐다
@@ -229,9 +253,14 @@ func checkDiscardSignal(t *testing.T, b *restoreBench, p restorePoint, holes []i
 			holeJobs++
 		}
 	}
-	if p == pointPublished {
-		if len(discarded) != 0 || restored != 1 {
-			t.Errorf("게시 뒤 치움: discarded %d줄 · chain_restored %d줄, want 0 · 1", len(discarded), restored)
+	if !changed {
+		wantRestored := 1
+		if tc.mismatch {
+			wantRestored = 0
+		}
+		if len(discarded) != 0 || restored != wantRestored {
+			t.Errorf("세대가 그대로인 복원: discarded %d줄 · chain_restored %d줄, want 0 · %d (%s)", len(discarded), restored,
+				wantRestored, b.cap.dump())
 		}
 		return
 	}
@@ -240,15 +269,12 @@ func checkDiscardSignal(t *testing.T, b *restoreBench, p restorePoint, holes []i
 		t.Errorf("치움이 낀 복원: discarded %d줄 · chain_restored %d줄, want 1 · 0 (%s)", len(discarded), restored, b.cap.dump())
 		return
 	}
-	want, wantJobs := "table_evicted_while_writing", 0
-	if p == pointWritten || p == pointRequeued {
-		want = "table_evicted_before_publish"
-		if !full {
-			wantJobs = len(holes)
-		}
-	}
-	if got := discarded[0].attrs["reason"]; got != want {
+	if got, want := discarded[0].attrs["reason"], expectedDiscardReason(tc, p); got != want {
 		t.Errorf("discarded reason = %v, want %s", got, want)
+	}
+	wantJobs := 0
+	if requeuedBy(tc, p) && !full {
+		wantJobs = len(holes)
 	}
 	if got := discarded[0].attrs["requeued"]; got != int64(wantJobs) {
 		t.Errorf("discarded requeued = %v, want %d", got, wantJobs)
@@ -256,6 +282,24 @@ func checkDiscardSignal(t *testing.T, b *restoreBench, p restorePoint, holes []i
 	if holeJobs != wantJobs {
 		t.Errorf("버린 복원이 큐에 남긴 구멍 작업 %d개, want %d", holeJobs, wantJobs)
 	}
+}
+
+// expectedDiscardReason 은 자리 p 의 치움을 처음 거절하는 대조의 단계다(S2).
+func expectedDiscardReason(tc interleaveCase, p restorePoint) string {
+	switch {
+	case tc.mismatch:
+		return "table_evicted_while_settling" // 불일치 기억 바로 앞이 settling 자리다 — 어느 자리든 그 대조가 처음 거절한다
+	case p == pointPublished, tc.noLinks && (p == pointWritten || p == pointRequeued):
+		return "table_evicted_before_end" // 게시할 링크가 없거나 게시를 마쳤다 — 끝 대조가 잡는다
+	case p == pointWritten || p == pointRequeued:
+		return "table_evicted_before_publish"
+	}
+	return "table_evicted_while_writing"
+}
+
+// requeuedBy 는 자리 p 에 오기 전에 구멍 행 작업을 다시 넣었는가다(표 줄을 다 쓴 뒤 자리 · 낼 링크가 있는 commit 갈래).
+func requeuedBy(tc interleaveCase, p restorePoint) bool {
+	return !tc.mismatch && !tc.noLinks && (p == pointWritten || p == pointRequeued || p == pointPublished)
 }
 
 // saturated 는 큐가 다른 회차 작업으로 차 있는가다(saturate 를 불렀다).

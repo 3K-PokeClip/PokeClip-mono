@@ -53,6 +53,12 @@ type groupRun struct {
 	waited  bool
 	// compared 는 구멍 뒤 uploaded 행의 객체와 도장을 실제로 견줬는가다(chain_restored 의 compared — c10b 보안 보충 M).
 	compared bool
+
+	// refused 는 처음 거절된 세대 대조의 단계다(빈 값이면 거절 없음 — finish 가 끝 대조로 한 번 더 본다). requeued 는 다시 넣은
+	// 구멍 행 작업 수, progressed 는 commit 이 새로 낸 것이 있는가다 — 셋 다 결과 신호의 재료다(finish).
+	refused    string
+	requeued   int
+	progressed bool
 }
 
 // mismatch 는 구멍 뒤 uploaded 행의 도장 대조 실패다.
@@ -96,13 +102,17 @@ func (u *Uploader) restoreGroup(w restoreWake, g holeGroup, limit int64, lg *slo
 	case err != nil:
 		return false, err
 	case mm != nil:
-		return false, run.settleMismatch(run.span(), run.fingerprint(), *mm)
+		if err := run.settleMismatch(run.span(), run.fingerprint(), *mm); err != nil {
+			return false, err
+		}
+		return run.finish(false), nil
 	}
 	if err := run.adoptVerified(); err != nil {
 		return false, err
 	}
 	u.sessions.reach(pointAdopted)
-	return run.commit(run.anchorLink), nil
+	run.commit()
+	return run.finish(true), nil
 }
 
 // newGroupRun 은 무리 하나의 장부 구간을 읽고 닻을 정한다. 같은 입력으로 이미 불일치 판정한 무리면 nil 이다. useMemory 면 복원

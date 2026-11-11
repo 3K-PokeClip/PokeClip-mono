@@ -3003,7 +3003,7 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 | `legacy_unattributed_sum` | 판 NULL 귀속 행 | INFO | `u_ms` — PDT 식이 더한 U(기저 행 뒤 · 이 행 앞 비귀속 행 길이 합). U 가 0 이면 내지 않는다 |
 | `unattributed_run` | 비귀속 행 묶음 뒤 첫 귀속 행 | INFO | 아래 「E28 묶음 신호」 |
 | `chain_*` · `chain_restored` · `chain_row_passed` · `chain_restore_failed` | ③ 사슬 · 업로더 | WARN · INFO | 아래 「③ 사슬 복원」 |
-| `chain_restore_discarded` | ③ 사슬 복원 | INFO | 복원 도중 그 회차의 보정값 표가 수명(24시간)으로 치워져 그 복원을 버림 — 이 줄이 나오면 그 무리의 `chain_restored` 는 없다. `reason` 이 단계다: `table_evicted_while_writing`(표 줄을 다 쓰기 전 — 재투입 · 게시 없음) · `table_evicted_before_publish`(표 줄을 쓴 뒤 — 링크는 게시하지 않지만 이미 다시 넣은 작업 `requeued` 개는 큐에 남는다). 그 밖 `hole_from` · `hole_to` · `adopted` · `requeued`. 다음 깨움이 지난 링크 없이 장부 닻부터 다시 접는다. 우리 송출에서 빈도는 사실상 0 이다(아래 「③ 사슬 복원」) |
+| `chain_restore_discarded` | ③ 사슬 복원 | INFO | 복원 도중(복원 기준을 잡은 때부터 복원 끝의 마지막 대조까지) 그 회차의 보정값 표가 수명(24시간)으로 치워져 그 복원을 버림 — 끝까지 간 복원 무리마다 결과 신호는 이 줄과 `chain_restored` 중 정확히 하나다(불일치 갈래는 이 줄이거나 결과 신호 없음 — `chain_mismatch` 는 판정 신호라 함께 날 수 있다). `reason` 은 처음 거절된 대조의 단계다: `table_evicted_while_writing`(표 줄 — 재투입 · 게시 없음) · `table_evicted_before_publish`(복원 링크 게시 — 이미 다시 넣은 작업 `requeued` 개는 큐에 남는다) · `table_evicted_while_settling`(불일치 기억 — 구멍 행의 `failed` · 키 백오프는 장부에 남는다) · `table_evicted_before_end`(끝 대조 — 게시할 링크가 없었거나 게시를 마친 뒤, 재투입 작업이 있었으면 큐에 남는다). 오류 · 정지로 끝난 복원은 `chain_restore_failed` · `chain_restore_stopped` 뿐이다. 그 밖 `hole_from` · `hole_to` · `adopted` · `requeued`. 다음 깨움이 지난 링크 없이 장부 닻부터 다시 접는다. 우리 송출에서 빈도는 사실상 0 이다(아래 「③ 사슬 복원」) |
 | `chain_restore_progress` · `chain_restore_stopped` | ③ 사슬 복원 | INFO · DEBUG | 긴 접기의 진행(1,000행마다 `seq` · `folded_rows` · `hole_to` — 정지와 구별) · 업로더 종료 중 복원을 멈춤(실패 아님 — 백오프 없이 다음 기동이 다시 한다) |
 | DB 오류 `legacy_writer_refused`(23514) | 쓰기자 거부 트리거 | — | 래치 2 장부에 원래 사실 칸 없는 INSERT(출시 이미지) — 출시 이미지는 이 이름을 몰라 INSERT 실패로만 보인다 |
 
@@ -3043,11 +3043,13 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
   남긴다. 업로더가 멈추는 중이면 접기를 그만두고 DEBUG `chain_restore_stopped` 다 — 실패가 아니라 백오프 없이 다음
   기동이 다시 한다.
 - 복원은 닻을 고르기 전에 그 회차 보정값 표의 세대(표가 치워질 때마다 바뀌는 번호)와 지난 복원 링크를 한 번에 잡고, 표 줄 ·
-  복원 링크 · 불일치 기억을 모두 그 세대일 때만 낸다. 복원 도중 표가 수명으로 치워지면 그 복원은 메모리(표 줄 · 복원 링크 · 불일치
-  기억)에 아무것도 남기지 않고 INFO `chain_restore_discarded` 로 끝난다 — `chain_restored` 는 내지 않는다. 장부 · 큐에는 남는 것이
-  있다: 채택한 ③ CAS(장부 사실), 그리고 표 줄을 다 쓴 뒤 치워졌으면(`reason=table_evicted_before_publish`) 그 전에 다시 넣은 구멍 행
-  작업(`requeued`). 그 작업은 안전하다 — 도장 위치를 싣고 있어 표 없이 그 위치로 올라가고(실시간 작업은 실린 위치를 그대로 쓴다 —
-  `axis_body.go` `playbackPos`), 같은 키는 PUT · CAS 가 끝날 때까지 다시 들지 않으며(`upload.go` `acquireInflight` · `worker.go`
+  복원 링크 · 불일치 기억을 모두 그 세대일 때만 낸다. 버림은 술어 하나로 정한다 — 그 세대가 복원 기준부터 복원 끝의 마지막 대조까지
+  그대로였는가. 바뀌었으면(표가 수명으로 치워졌으면) 그 복원은 메모리(표 줄 · 복원 링크 · 불일치 기억)에 아무것도 남기지 않고 INFO
+  `chain_restore_discarded` 로 끝난다 — 결과 신호는 복원 끝 한 자리에서만 내므로 `chain_restored` 는 없다. 장부 · 큐에는 남는 것이
+  있다: 채택한 ③ CAS(장부 사실), 불일치 갈래의 구멍 행 `failed` · 키 백오프(장부 판정), 그리고 표 줄을 다 쓴 뒤 치워졌으면 그 전에 다시
+  넣은 구멍 행 작업(`requeued`). 그 작업은 안전하다 — 도장 위치를 싣고 있어 표 없이 그 위치로 올라가고(실시간 작업은 실린 위치를 그대로
+  쓴다 — `axis_body.go` `playbackPos`. 회차 init 확정값도 수명이 치웠으면 보류 목록에서 init 확정을 기다리다 — `holdForInit` — 다시
+  넣어지고, 보류 목록이 차 들지 못하면 장부 `pending` 으로 남아 스위퍼 · 다음 복원 길로 올라간다), 같은 키는 PUT · CAS 가 끝날 때까지 다시 들지 않으며(`upload.go` `acquireInflight` · `worker.go`
   `runJob`), CAS 는 행이 `pending` · `failed` 일 때만 `uploaded` 로 굳는다(확정된 행을 덮지 않는다). 도장은 장부 · S3 로 접은 값이라 표가 치워져도 틀리지 않는다. 다음
   복원은 올라간 행을 구멍으로 보지 않고(닻이 된다), 아직 큐에 있으면 재투입이 중복으로 걸러지며, PUT 뒤 CAS 전에 멈춘 객체는 같은
   바이트면 채택한다. 다음 깨움(스위퍼의 표 없는 ③ 작업, 30초)이 장부 닻부터 다시 접는다. 표 수명의 기준은 그 회차의 마지막 실시간 ③ 요청이라 방송 중인 회차의 표는 치워지지 않는다. 그래서 이

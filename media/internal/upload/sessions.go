@@ -451,6 +451,14 @@ func (m *sessionMemory) endRestore(sessionID string) {
 	}
 }
 
+// current 는 그 회차 몫이 아직 세대 gen 인가다 — 복원 끝 대조(groupRun.finish)다.
+func (m *sessionMemory) current(sessionID string, gen uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.currentLocked(sessionID, gen)
+	return ok
+}
+
 // currentLocked 는 그 회차 몫이 아직 세대 gen 인가다. 락을 잡은 채로 부른다.
 func (m *sessionMemory) currentLocked(sessionID string, gen uint64) (*sessionEntry, bool) {
 	e, ok := m.byID[sessionID]
@@ -614,18 +622,20 @@ func (m *sessionMemory) restoredLink(sessionID string) (restoredLink, bool) {
 }
 
 // recordMismatch 는 불일치로 판정한 구멍을 그 입력 지문(판정에 쓴 행들의 장부 크기)과 함께 적는다. 표가 복원 기준의 세대(gen)가
-// 아니면(판정하는 사이 수명이 표를 치웠다) 적지 않는다 — 치운 표보다 오래 사는 기억이 다음 판정을 막지 않게(PR 종결 r4).
-func (m *sessionMemory) recordMismatch(sessionID string, gen uint64, span holeSpan, fingerprint string) {
+// 아니면(판정하는 사이 수명이 표를 치웠다) 적지 않고 거짓이다 — 치운 표보다 오래 사는 기억이 다음 판정을 막지 않게(PR 종결 r4).
+// 부르는 쪽은 거짓이면 그 복원을 버림으로 센다(groupRun.finish · PR 종결 r6).
+func (m *sessionMemory) recordMismatch(sessionID string, gen uint64, span holeSpan, fingerprint string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.currentLocked(sessionID, gen)
 	if !ok {
-		return
+		return false
 	}
 	if e.mismatches == nil {
 		e.mismatches = map[holeSpan]string{}
 	}
 	e.mismatches[span] = fingerprint
+	return true
 }
 
 // knownMismatch 는 같은 입력으로 이미 불일치 판정한 구멍인가다.
