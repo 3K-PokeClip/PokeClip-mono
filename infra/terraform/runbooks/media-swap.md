@@ -1147,6 +1147,16 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         멈추기 직전 runtime-1a 「POK-525 원장 질의」 에서
         `released_settling` 0 을 봅니다.
 *   원장 표 · KVS 그릇 · IAM 문은 어느 갈래에서도 지우지 않습니다.
+*   **해체 · KVS 그릇 교체는 지금 할 수단이 없습니다.** 스위치
+    (`dvr_floor_enabled = false`)는 `/dvr/*` 부착만 떼고, dvr-floor 함수의
+    KVS 연결은 남습니다.
+    연결이 남은 그릇의 교체 · 삭제는 DeleteKeyValueStore 가 쓰는 중인
+    그릇으로 거절합니다(409 — [prod/edge](../prod/edge/README.md)
+    「/dvr 하한(POK-525)」 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).
+    연결을 떼려면 함수를 지워야 하는데 `O7f` 묶음에
+    `cloudfront:DeleteFunction` 이 없습니다. 그래서 해체 · 그릇 교체 앞에
+    함수 삭제 승인 경로(`O7f` 에 DeleteFunction 행 추가 · 별도 승인)가 먼저
+    있어야 하고, 이것은 POK-525 PR 범위 밖입니다.
 
 **켜기 전 복귀**(A 로 돌아감 — 실행 직전마다 승인):
 

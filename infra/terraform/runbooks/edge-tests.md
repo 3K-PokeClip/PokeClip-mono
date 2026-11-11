@@ -925,6 +925,25 @@ C′). 걸음마다 실행 직전에 kty 가 승인합니다. 근거는 계획 �
     — 2026-11-11 원문 확인). 기한 안에 로그가 다 오지 않은 것은 실패가
     아니라 관측 불충분이고, 다시 잽니다.
 
+### /dvr 하한 셸 전제
+
+아래 블록은 한 셸에서 이어 갑니다. 앞 블록이 만든 변수 · 함수를 뒤 블록이
+씁니다. 새 셸이면 아래 표의 이름을 그 자리에서 다시 만듭니다. 함수는 그
+블록의 정의 부분만 붙여 넣습니다 — 같은 블록의 `apply` · 시험 줄은 다시
+돌리지 않습니다.
+
+| 이름 | 만드는 곳 |
+|---|---|
+| `evidence` | 「접속법」 1 — 새 셸이면 새로 만들지 않고 쓰던 증거 디렉터리 경로를 다시 넣습니다 |
+| `edge_ip` | 「접속법」 2 — C′ · 끄기 확인 직전에 다시 풉니다 |
+| `edge_plan` | 「/dvr 하한 apply」 |
+| `fn` · `stream` · `round` · `fn_etag` · `dvr_case` | 「판정 B′」 첫 블록 |
+| `floor` · `seg` | 「판정 B′」 둘째 블록(`floor` 는 `deny0` 의 `floor=` 값) |
+| `topic_arn` · `alarms` · `log_group` | 「판정 K」 |
+| `jar` | 「판정 C′」 머리 — T2 의 `jar_a` 와 같은 발급 |
+| `c_since_ms` · `c_since` · `c_get` · `c_val` · `c_line` · `below` | 「판정 C′」 첫 블록 |
+| `e14_seq` · `e14_pad` · `e14` | 「판정 C′」 의 「E14 경로 우회」 블록 |
+
 ### /dvr 하한 걸음
 
 | 걸음 | 무엇 | 선행 | 통과 |
@@ -933,10 +952,19 @@ C′). 걸음마다 실행 직전에 kty 가 승인합니다. 근거는 계획 �
 | 6.1 | 그 PR 머지 | 6.0 | 1단 apply 바로 앞에 머지합니다(kty K-D3 (가) — 머지 뒤 첫 edge apply 는 스위치가 꺼져 있어도 함수를 만듭니다). PR 종결 뒤 develop 이 움직였으면 머지 전에 다시 봅니다 — 충돌이 나거나 새 커밋이 `infra/terraform/prod/edge` · `modules/cdn_media` · 공유 골든을 건드렸으면 머지하지 않고 kty 에게 보고 |
 | 6.2 | 단계 직전 점검 | 6.1 | `scp-recheck.sh O7f` · `principal-check.sh O7f` 거부 0([단계 직전 점검 런북](stage-precheck.md)) |
 | 6.3 | 1단 apply(`false`) | 6.2 | plan 범위 = 아래 「1단 기대 목록」 · 배포 변경 0 |
-| 6.4 | 판정 B′ · 판정 K | 6.3 · 새 시험 방송 6분 넘김 | 아래 「판정 B′」 · 「판정 K」 |
+| 6.4 | 판정 B′ · 판정 K | 6.3 · 1단 뒤 주제 판정 · 새 시험 방송 6분 넘김 | 아래 「판정 B′」 · 「판정 K」 |
 | 6.5 | 2단 apply(`true`) | 6.4 | plan 범위 = media 배포 변경 한 줄 · apply 끝(배포 Deployed) |
 | 6.6 | 판정 C′ | 6.5 | 아래 「판정 C′」. 실패하면 곧바로 「/dvr 하한 끄기」 |
 
+*   **1단 뒤 주제 판정**(6.3 뒤 · 6.4 앞): `principal-check.sh O7f` 를 한 번
+    더 돌립니다. 6.2 때는 알림 주제가 없어 `edge-alarm-topic` 행을 정책
+    없이 「자원 없음」 으로 판정했습니다([단계 직전 점검
+    런북](stage-precheck.md) 한계 A13). 1단이 만든 주제 정책의 CloudWatch
+    문장에는 조건 키(`aws:SourceArn` · `aws:SourceAccount` —
+    `prod/edge/dvr_floor_alarms.tf`)가 있습니다. 시뮬레이터가 그 문맥 없이
+    `MISSING_CONTEXT` 로 답하면 첫 줄이 `PRINCIPAL CHECK UNDECIDED` 가 됩니다.
+    첫 줄이 `PASS` 가 아니면 6.4 로 가지 않고, 표준 출력의 표 행(자원 키 ·
+    사유)을 kty 에게 회부합니다. 판정을 손으로 통과시키지 않습니다.
 *   **6.4 의 시험 방송은 4.10 과 다른 새 방송입니다.** 송출 직전에 따로
     승인받습니다. 시험 키 스트림(`<test>` — 4.10 과 같은 시험 키의
     `ingestStreamId`)으로 6분 넘게 보낸 뒤 판정 B′ 를 합니다. Writer 는 첫
@@ -994,9 +1022,18 @@ apply 는 배포가 Deployed 가 될 때까지 기다립니다(provider 기본
     옮기지 않습니다.
 1.  갈래를 고릅니다.
     *   `AccessDenied` — 계획 3절 「SCP 멈춤 규칙」. 다시 시도하지 않습니다.
+        `PublishFunction` 이나 함수의 KVS 연결에서 난 `AccessDenied` 는
+        실험대 R6 이 재지 않은 갈래입니다(R6 은 Create · Update 만 실측 —
+        아래 「/dvr 하한 실험대 결과」). 멈추고 그 동작 이름과 함께 kty 에게
+        회부합니다.
     *   함수 로그 그룹의 `ResourceAlreadyExistsException` — 함수가 그룹보다
         먼저 로그를 낸 것입니다. [prod/edge](../prod/edge/README.md)
         「적용 순서(O7f)」 의 import(키 `dvr_floor`) 뒤 1단을 다시 plan 합니다.
+        이 갈래는 dvr-floor 에서 미실측입니다. 1단에서는 함수가 `/dvr/*` 에
+        붙지 않고 `test-function` 도 CloudWatch 로 로그를 보내지 않아(아래
+        「판정 K」), 그룹보다 먼저 로그가 날 길이 확인된 것은 없습니다.
+        README 의 기제(붙은 함수가 그룹보다 먼저 로그를 냄)를 따른
+        대비입니다.
     *   그 밖(코드 · 설정 결함) — **고친 PR**(1순위)을 머지한 뒤 1단을 다시
         plan 합니다. **되돌림 PR**(이 함수를 더한 PR 을 되돌림)은 kty 가
         고릅니다. 되돌림 PR 의 plan 에는 이미 생긴 함수의 삭제가 끼는데, `O7f`
@@ -1072,6 +1109,14 @@ dvr_case() {  # dvr_case <이름> <메서드> <경로>
 }
 ```
 
+B′ 줄이 안 나오고 jq 오류만 남으면 함수 오류로 `FunctionOutput` 이 빈
+문자열이라 `fromjson` 이 멈춘 것입니다. 그 회차 응답의
+`FunctionErrorMessage` 를 보고, B′ 실패로 적습니다.
+
+```shell
+jq -r .TestResult.FunctionErrorMessage "${evidence}/dvr-<이름>.r<k>.json"
+```
+
 첫 묶음은 하한 값 없이 갈래를 봅니다. `deny0`(seq 0)은 하한이 1 이상이라
 키가 있으면 늘 막히고, 그 로그의 `floor=` 가 지금 하한입니다.
 
@@ -1137,20 +1182,21 @@ CloudWatch 로그를 내지 않아(AWS 개발자 안내서 Edge function logs �
 2026-11-11 원문 확인) B′ 로는 지표 필터가 움직이지 않습니다. 그래서 필터는
 `aws logs test-metric-filter`(표본 줄에 패턴을 대 보는 API)로, 알림 경로는
 `aws cloudwatch set-alarm-state`(경보 상태를 손으로 바꾸는 API)로 봅니다.
-경보 이름 · 주제 출력 이름은 Ⓓ-3 의 것입니다(아래 값은 자리표시자 —
-가칭).
+경보 이름 · 주제 출력 이름은 `prod/edge/dvr_floor_alarms.tf` 의 것입니다.
 
 | 경보 | 무엇을 세나 |
 |---|---|
-| `VALUE INVALID` 경보(Ⓓ-3 의 이름 — 가칭) | 함수 로그 `DVR FLOOR VALUE INVALID` 줄 — 5분 합 1 이상(kty K-D4) |
-| `KVS ERROR` 경보(Ⓓ-3 의 이름 — 가칭) | 함수 로그 `DVR FLOOR KVS ERROR` 줄 — 5분 합 1 이상(K-D4) |
-| FunctionExecutionErrors 경보(Ⓓ-3 의 이름 — 가칭) | AWS/CloudFront 기본 지표 FunctionExecutionErrors(잡히지 않은 예외 — `/dvr` 503) · 차원 `FunctionName=pokeclip-prod-dvr-floor` · `Region=Global`(kty K-D5 (a)) |
+| `pokeclip-prod-dvr-floor-value-invalid` | 함수 로그 `DVR FLOOR VALUE INVALID` 줄 — 5분 합 1 이상(kty K-D4) |
+| `pokeclip-prod-dvr-floor-kvs-error` | 함수 로그 `DVR FLOOR KVS ERROR` 줄 — 5분 합 1 이상(K-D4) |
+| `pokeclip-prod-dvr-floor-execution-errors` | AWS/CloudFront 기본 지표 FunctionExecutionErrors(잡히지 않은 예외 — `/dvr` 503) · 차원 `FunctionName=pokeclip-prod-dvr-floor` · `Region=Global`(kty K-D5 (a)) |
 
 **1. 알림 구독**(kty K-D1 (가) — 처음 한 번 · 주제를 다시 만든 뒤에도).
 알림 주제는 Terraform 이 만들고, 이메일 구독은 저장소 밖에서 kty 가 CLI 로
 한 번 겁니다. 구독은 Terraform 상태 밖이라 주제가 교체되거나 계정이 지워진
 뒤 다시 만들면 다시 겁니다. 메일 주소는 명령에만 넣고 저장소 · 증거 · 채팅에
-옮기지 않습니다. 필요 권한은 kty IAM 사용자의 `sns:Subscribe` ·
+옮기지 않습니다. 이 걸음(구독 걸기 · 확인된 구독 세기)은 kty 가 저장소
+밖에서 하는 K-D1 단계이고, `O7f` 묶음이 아닌 kty 자격으로 합니다. 필요
+권한은 kty IAM 사용자의 `sns:Subscribe` ·
 `sns:ListSubscriptionsByTopic` 입니다.
 
 ```shell
@@ -1165,7 +1211,8 @@ aws sns subscribe --region us-east-1 --topic-arn "${topic_arn}" \
 받은 확인 메일의 링크를 누른 뒤 확인된 구독 수가 1 이상인지 봅니다.
 
 ```shell
-confirmed="length(Subscriptions[?Protocol=='email' && SubscriptionArn!='PendingConfirmation'])"
+confirmed="length(Subscriptions[?Protocol=='email'"
+confirmed+=" && SubscriptionArn!='PendingConfirmation'])"
 aws sns list-subscriptions-by-topic --region us-east-1 \
   --topic-arn "${topic_arn}" --query "${confirmed}"   # 1 이상
 ```
@@ -1261,7 +1308,8 @@ c_since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 c_get() {  # c_get <라벨> <경로>
   # 쿠키 파일이 없으면 curl 은 쿠키 없이 보내고, 서명 거절 403 이 「함수
   # 생성 아님」 판정을 거짓으로 통과시킨다 — 그래서 없으면 멈춘다.
-  test -s "${jar:-}" || { echo "$1 jar 없음 — T2 와 같은 발급으로 다시 만듦"; return 1; }
+  test -s "${jar:-}" ||
+    { echo "$1 jar 없음 — T2 와 같은 발급으로 다시 만드세요"; return 1; }
   curl --path-as-is -b "${jar}" -H 'Origin: https://app.pokeclip.com' \
     --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
     -D "${evidence}/dvr-c-$1.h" -w "$1 %{http_code}" \
@@ -1278,7 +1326,6 @@ c_line() {  # c_line <라벨>
     "$(c_val access-control-allow-credentials "$1")" \
     "$(c_val cache-control "$1")" "$(c_val x-cache "$1")"
 }
-below_seq="$(printf '%06d' "$((floor - 1))")"
 below="$(seg "$((floor - 1))")"
 {
   c_get below1 "${below}"
@@ -1287,13 +1334,7 @@ below="$(seg "$((floor - 1))")"
   c_get eq "$(seg "${floor}")"
   c_get old "/dvr/${stream}/seg/<옛 꼴 seq>.m4s"
   c_get live "/live/${stream}/index.m3u8"
-  c_get e14-vod "/vod/${stream}/../..${below}"
-  c_get e14-dotdot "/dvr/${stream}/x/../${round}/seg/${below_seq}.m4s"
-  c_get e14-dot "/dvr/${stream}/${round}/seg/./${below_seq}.m4s"
-  c_get e14-pct2e "/dvr/${stream}/x/%2e%2e/${round}/seg/${below_seq}.m4s"
-  c_get e14-dslash "/dvr/${stream}/${round}//seg/${below_seq}.m4s"
 } | tee "${evidence}/dvr-c.txt"
-grep '^e14-' "${evidence}/dvr-c.txt" | grep -c ' 200 '   # 0
 ```
 
 | 라벨 | 통과 |
@@ -1302,7 +1343,43 @@ grep '^e14-' "${evidence}/dvr-c.txt" | grep -c ' 200 '   # 0
 | `eq` | `200` · `acao` · `acac` 한 벌 · `xcache` 가 함수 생성이 아님 |
 | `old` | `xcache` 가 함수 생성이 아님(함수 통과). 4.2 루프백이 남긴 옛 꼴 키가 있으면 `200`, 없으면 버킷의 `403`(`s3:ListBucket` 이 없어 없는 키도 403) |
 | `live` | `200`(`/live` 무변 — 방송 중) |
-| `e14-*` | `200` 이 아님(경로 조작으로 하한을 비켜 가지 못함 — E14). 기대는 함수 MALFORMED 404 입니다(실험대 (4) 의 R9) |
+
+**E14 경로 우회**: 우회 경로가 가리키는 하한 아래 조각이 버킷에 있어야
+시험이 뜻을 가집니다. 조각이 없으면 우회가 원본까지 가도 버킷 `403`
+(`s3:ListBucket` 이 없어 없는 키도 403)이라 거짓 통과입니다. 그래서 조각이
+있다고 확인된 seq 를 하한이 넘어선 뒤 그 seq 로 시험합니다.
+
+1.  `e14_seq` 는 위 `eq` 의 seq(`floor`)입니다. `eq` 가 `200` 이 아니면
+    조각이 확인되지 않은 것이라 **E14 시험 무효**입니다(통과로 적지 않고
+    kty 에게 보고).
+1.  하한이 `e14_seq` 를 넘기를 기다립니다. Writer 는 올림 틱(5분 주기)에
+    하한을 올립니다. 1분마다 판정 B′ 의 `dvr_case` 로 `deny0c` 를 돌려
+    `floor=` 가 `e14_seq` 보다 커질 때까지 봅니다. 방송이 이어져야 하고,
+    10분 안에 커지지 않으면 E14 시험 무효로 kty 에게 보고합니다.
+1.  `e14-direct`(조작 없는 경로)가 함수 404 여야 그 seq 가 이제 하한
+    아래라는 양성 대조가 섭니다. 아니면 E14 시험 무효입니다.
+
+```shell
+e14_seq="${floor}"                     # eq 가 200 이었던 seq
+dvr_case deny0c GET "$(seg 0)" | tee -a "${evidence}/dvr-c-floor.txt"
+# 1분마다 위 줄 — floor= 가 e14_seq 보다 커지면 아래로.
+e14_pad="$(printf '%06d' "${e14_seq}")"
+e14="$(seg "${e14_seq}")"
+{
+  c_get e14-direct "${e14}"
+  c_get e14-vod "/vod/${stream}/../..${e14}"
+  c_get e14-dotdot "/dvr/${stream}/x/../${round}/seg/${e14_pad}.m4s"
+  c_get e14-dot "/dvr/${stream}/${round}/seg/./${e14_pad}.m4s"
+  c_get e14-pct2e "/dvr/${stream}/x/%2e%2e/${round}/seg/${e14_pad}.m4s"
+  c_get e14-dslash "/dvr/${stream}/${round}//seg/${e14_pad}.m4s"
+} | tee -a "${evidence}/dvr-c.txt"
+grep '^e14-' "${evidence}/dvr-c.txt" | grep -c ' 200 '   # 0
+```
+
+| 라벨 | 통과 |
+|---|---|
+| `e14-direct` | `404` · `xcache=FunctionGeneratedResponse from cloudfront`(양성 대조 — 아니면 E14 시험 무효) |
+| 그 밖 `e14-*` | `200` 이 아님(경로 조작으로 하한을 비켜 가지 못함 — E14). 기대는 함수 MALFORMED 404 입니다(실험대 (4) 의 R9) |
 
 `e14-*` 가운데 `200` 이 하나라도 있으면 실패로 끄고, 그 경로를 kty 에게
 보고합니다(D4 회부). 끈다고 그 우회가 막히지는 않습니다 — 하한이 통째로
@@ -1356,15 +1433,30 @@ grep -cFf "${evidence}/dvr-c-ids.txt" "${evidence}/dvr-c-deny.txt"   # 3
     값은 쓰지 않습니다 — 표본이 적은 1분 창의 Average 는 첫 호출 피크 하나로
     94 가 됩니다(live-auth 의 호출 1번뿐인 날 Average 94 · 실험대 (4) 1분 창
     표본 2개).
-*   **SampleCount 가 20 미만이면 관측 불충분**입니다(판정 아님). 요청을 더
-    보낸 뒤 다시 잽니다.
-*   **판정을 미루고 kty 에게 보고하는 때**: SampleCount 20 이상에서
-    Average 가 50 을 넘거나, FunctionThrottles 합이 0 보다 클 때입니다. 이
-    조건만으로는 끄지 않습니다.
+*   **창 값 합치기**: 창이 분 경계에 걸쳐 지표 점이 둘 이상 나오면 점마다
+    적고, 창 값은 이렇게 합칩니다. SampleCount 는 합, 창 평균은
+    Σ(Average × SampleCount) ÷ ΣSampleCount(점별 Average 의 단순 평균이
+    아님), Maximum 은 점 가운데 최대, FunctionThrottles ·
+    FunctionExecutionErrors 는 Sum 의 합입니다. 아래 블록 끝의 `jq` 가 이
+    규칙으로 한 줄을 냅니다.
+*   **보는 차례**(위부터 봅니다 · 어느 조건만으로도 끄지 않습니다):
+    1.  FunctionExecutionErrors 합이 0 보다 큼 — SampleCount 와 무관하게
+        판정 보류 · kty 회부.
+    1.  FunctionThrottles 합이 0 보다 큼 — SampleCount 와 무관하게 이것만으로
+        판정 보류 · kty 보고.
+    1.  SampleCount 합이 20 미만 — **관측 불충분**입니다(판정 아님). 요청을
+        더 보낸 뒤 같은 창 규칙으로 한 번 더 잽니다. 두 번째도 20 미만이면
+        더 재지 않고 kty 에게 회부합니다.
+    1.  SampleCount 합 20 이상에서 창 평균이 50 을 넘음 — 판정 보류 · kty
+        보고.
+*   **20 의 근거**: 한 점 평균이 한두 호출에 휘둘리지 않게 하려는
+    보수값입니다. 실측 근거는 없습니다.
 *   **Maximum 하나만으로는 보고 조건이 아닙니다.** KVS 를 읽는 다른 prod
     함수 live-auth 의 7일 지표(2026-11-04–11-11 · 일 단위 · 읽기 전용 조회)에서
-    Maximum 이 매일 94 였습니다(호출이 1번뿐인 날도 94). Average 는
-    16.4–18.8, FunctionThrottles · FunctionExecutionErrors 는 0 이었습니다.
+    Maximum 이 매일 94 였습니다(호출이 1번뿐인 날도 94). Average 는 표본이
+    많은 날 16.4–18.8 이었습니다 — 호출이 1번뿐인 11-08 은 Average 94 ·
+    SampleCount 1 이라 이 범위에서 뺐습니다. FunctionThrottles ·
+    FunctionExecutionErrors 는 0 이었습니다.
     94 는 이 계정 CloudFront 함수의 평상 최대(첫 호출 등)이고 스로틀로
     이어지지 않았습니다. 실험대 (4) 의 dvr-floor 1분 Maximum 94
     (`test-function` 최대는 9)도 계정 평상 피크(live-auth 대조)로 봅니다.
@@ -1372,9 +1464,8 @@ grep -cFf "${evidence}/dvr-c-ids.txt" "${evidence}/dvr-c-deny.txt"   # 3
     창에서는 표본 · 지연 때문에 맞지 않습니다 — 실험대 (4) 에서 요청 49 에
     합 2 였습니다. 요청 수 대조는 위 「DENY 로그」 처럼 요청 ID 로만 합니다.
 
-아래는 창 끝(지금 + 2분)과 한 period 를 정한 뒤 넷을 받습니다. 창이 분
-경계에 걸쳐 값이 두 개로 나오면 둘을 다 적고, SampleCount 는 합으로
-봅니다.
+아래는 창 끝(지금 + 2분)과 한 period 를 정한 뒤 넷을 받고, 위 「창 값
+합치기」 규칙으로 한 줄을 냅니다.
 
 ```shell
 c_end_s="$(($(date -u +%s) + 120))"
@@ -1394,6 +1485,16 @@ c_metric() {  # c_metric <지표> <통계>… — C′ 창 전체를 한 period 
   c_metric FunctionThrottles Sum
   c_metric FunctionExecutionErrors Sum
 } | tee "${evidence}/dvr-c-metrics.txt"
+jq -rs 'add | .FunctionComputeUtilization as $u
+  | ($u | map(.SampleCount) | add // 0) as $n
+  | [ "samples=\($n)",
+      "avg=\(if $n > 0 then ($u | map(.Average * .SampleCount) | add) / $n
+             else "-" end)",
+      "max=\($u | map(.Maximum) | max // "-")",
+      "throttles=\(.FunctionThrottles | map(.Sum) | add // 0)",
+      "errors=\(.FunctionExecutionErrors | map(.Sum) | add // 0)" ]
+  | join(" ")' "${evidence}/dvr-c-metrics.txt" |
+  tee "${evidence}/dvr-c-metrics-window.txt"
 ```
 
 **닫힌 회차**: 시험 방송을 끝내고 그 회차 국면이 `vod` 로 넘어간 뒤(Media
@@ -1443,22 +1544,46 @@ terraform -chdir=infra/terraform/prod/edge apply "${evidence}/dvr-off.plan"
 
 apply 가 끝나면(Deployed) 확인합니다. 확인에는 유효한 서명 쿠키가
 필요합니다 — 쿠키 없는 요청은 함수 전에 서명 거절 `403` 이 되어 「함수
-생성 아님」 을 늘 만족하기 때문입니다. 쿠키 파일이 없거나 새 셸이면
-「경로 우회 시험」 T2 와 같은 발급으로 `jar` 를 다시 만들고(`c_get` 은
-`jar` 가 없으면 멈춥니다), 같은 셸에 `c_get` · `c_line` · `c_val` 을 다시
-정의합니다.
+생성 아님」 을 늘 만족하기 때문입니다. 쿠키 파일이 없으면 「경로 우회
+시험」 T2 와 같은 발급으로 `jar` 를 다시 만듭니다(`c_get` 은 `jar` 가 없으면
+멈춥니다).
+
+새 셸이면 아래를 먼저 다시 만듭니다(「/dvr 하한 셸 전제」). `jar` 는 위와
+같고, `edge_ip` 는 「접속법」 2 로 다시 풀고, `c_get` · `c_val` · `c_line` 은
+「판정 C′」 첫 블록의 정의 부분만 붙여 넣습니다. `floor` 는 판정 B′ 의
+`deny0` 로 다시 받습니다(`fn` · `fn_etag` · `dvr_case` 도 B′ 첫 블록의
+정의로 다시 만듦 — 함수는 떼어도 남아 있어 `test-function` 이 됩니다).
+
+```shell
+evidence='<쓰던 증거 디렉터리>'           # 새로 만들지 않습니다
+stream='<test>'
+round='<회차>'
+floor='<F>'                                # deny0 의 floor= 값
+seg() { printf '/dvr/%s/%s/seg/%06d.m4s' "${stream}" "${round}" "$1"; }
+below="$(seg "$((floor - 1))")"
+```
 
 ```shell
 {
   c_get off-eq "$(seg "${floor}")"
   c_get off-below "${below}"
 } | tee -a "${evidence}/dvr-off.txt"
-rm -f "${jar}" && test ! -e "${jar}" && echo removed
 ```
 
 통과: `off-eq` 가 `200` · `acao` · `acac` 한 벌(쿠키가 유효함)이고,
 `off-below` 의 `xcache` 가 함수 생성이 아님(조각이 있으면 `200`, 없으면 버킷
 `403`). 다시 켜는 것은 원인을 고친 뒤 6.5(2단) · 6.6(C′)입니다.
+
+`off-eq` 가 `200` 이 아니면 쿠키 만료와 `floor` 조각 밀림(그 seq 조각을 더
+받을 수 없음)을 가를 수 없습니다. 판정 B′ 의 `deny0` 로 `floor` 를 다시
+받고 `below` 를 다시 만든 뒤 위 블록을 한 번 더 돌립니다. 그래도 `off-eq`
+가 `200` 이 아니면 멈추고 kty 에게 보고합니다.
+
+확인이 끝나면(통과든 멈춤이든) 쿠키 파일을 지웁니다.
+
+```shell
+rm -f "${jar}" && test ! -e "${jar}" && echo removed
+```
 
 ### /dvr 하한 롤백
 
@@ -1500,7 +1625,9 @@ ISB 리스 계정(= prod 계정)의 실험 자원(접두 `pcbench-pok525-isb34`)
     (각 3/3 — 값 골든 25행 · `VALUE INVALID` 포함). 계산 사용률 최대 9
     (exists+get 9 · exists 7 · KVS 안 읽음 7) → 합격.
 *   **R6**: 함수 권한만 준 제한 역할로 KVS 연결 함수를 만들고 고칠 수
-    있었습니다 — KVS 쪽 권한이 따로 들지 않습니다.
+    있었습니다 — KVS 쪽 권한이 따로 들지 않습니다. 잰 것은 Create ·
+    Update 뿐이고 PublishFunction 은 재지 않았습니다(「/dvr 하한 1단 도중
+    실패」 의 `AccessDenied` 갈래).
 *   **(4) 실제 엣지**: 합격 항목 11/11 — 하한 아래 404 · 머리 한 벌 ·
     `no-store`, 하한 이상 · 옛 꼴 · `/vod` 200 · 머리 한 벌, 다른 출처
     credentials fetch 404 · 200.
