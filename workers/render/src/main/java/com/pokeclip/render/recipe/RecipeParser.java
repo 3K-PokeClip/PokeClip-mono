@@ -32,7 +32,8 @@ import java.util.regex.Pattern;
  * <p>여기는 원본을 보지 않고 가를 수 있는 규칙만 본다(preflight: 계약1 4절, 무토큰). 원본 해상도가 있어야 하는
  * 픽셀 종횡비 검사는 원본을 내려받은 뒤 {@code media.CropGeometry}가 한다.
  *
- * <p>실패는 전부 {@link ErrorCode#VALIDATION}이다. 메시지는 사용자 화면까지 가므로 어느 칸이 왜인지만 적는다.
+ * <p>실패는 전부 {@link ErrorCode#VALIDATION}이다. 메시지는 사용자 화면까지 가므로 어느 칸이 왜인지만 적는다. 입력 값(모르는
+ * 칸 이름 포함)은 싣지 않는다 — 칸 이름은 코드 상수만 싣는다.
  *
  * <p><b>v1과 v2를 둘 다 받는다.</b> v1은 출력마다 {@code crop} 하나(세로·정사각을 꽉 채움)이고, v2는 출력을 층·바탕·구분선으로
  * 적는다(분할·중앙·작은 화면, 계약6 7절). 이미 저장된 v1 편집본도 영상을 만들 수 있어야 해서 v1을 거두지 않는다.
@@ -81,7 +82,7 @@ public final class RecipeParser {
         object(node, "recipe", ROOT);
         int version = integer(node.get("schemaVersion"), "recipe.schemaVersion");
         if (version != SCHEMA_V1 && version != SCHEMA_V2) {
-            throw invalid("recipe.schemaVersion=" + version + "은 지원하지 않는다");
+            throw invalid("recipe.schemaVersion은 지원하지 않는다");
         }
         boolean v2 = version == SCHEMA_V2;
         String streamId = text(node.get("streamId"), "recipe.streamId");
@@ -125,11 +126,11 @@ public final class RecipeParser {
                 throw invalid("recipe.outputs[].outputId 형식은 [a-z0-9-]{1,32}이다");
             }
             if (!ids.add(id)) {
-                throw invalid("recipe.outputs[].outputId가 겹친다: " + id);
+                throw invalid("recipe.outputs[].outputId가 겹친다");
             }
             Aspect aspect = aspect(text(item.get("aspect"), "recipe.outputs[].aspect"));
             if (!aspects.add(aspect)) {
-                throw invalid("recipe.outputs[].aspect가 겹친다: " + aspect);
+                throw invalid("recipe.outputs[].aspect가 겹친다");
             }
             outputs.add(v2
                     ? new Output(id, aspect, background(item.get("background")), layers(item.get("layers")),
@@ -211,7 +212,7 @@ public final class RecipeParser {
                 object(node, "recipe.outputs[].background", COLOR);
                 yield new Background.Color(color(node.get("color"), "background.color"));
             }
-            default -> throw invalid("background.kind=" + kind + "은 지원하지 않는다");
+            default -> throw invalid("background.kind은 지원하지 않는다");
         };
     }
 
@@ -250,7 +251,7 @@ public final class RecipeParser {
         try {
             return Aspect.valueOf(value);
         } catch (IllegalArgumentException e) {
-            throw invalid("recipe.outputs[].aspect=" + value + "은 지원하지 않는다");
+            throw invalid("recipe.outputs[].aspect은 지원하지 않는다");
         }
     }
 
@@ -287,7 +288,7 @@ public final class RecipeParser {
                 throw invalid("audio.tracks[].trackId는 0~5다");
             }
             if (!ids.add(id)) {
-                throw invalid("audio.tracks[].trackId가 겹친다: " + id);
+                throw invalid("audio.tracks[].trackId가 겹친다");
             }
             double gain = number(item.get("gain"), "audio.tracks[].gain");
             if (gain < 0 || gain > MAX_GAIN) {
@@ -309,7 +310,7 @@ public final class RecipeParser {
         try {
             mode = SubtitleMode.valueOf(modeText);
         } catch (IllegalArgumentException e) {
-            throw invalid("subtitles.mode=" + modeText + "은 지원하지 않는다");
+            throw invalid("subtitles.mode은 지원하지 않는다");
         }
         JsonNode segmentsNode = node.get("segments");
         if (segmentsNode == null || !segmentsNode.isArray()) {
@@ -349,7 +350,7 @@ public final class RecipeParser {
         try {
             anchor = Anchor.valueOf(anchorText);
         } catch (IllegalArgumentException e) {
-            throw invalid("subtitles.position.anchor=" + anchorText + "은 지원하지 않는다");
+            throw invalid("subtitles.position.anchor은 지원하지 않는다");
         }
         double y = number(node.get("y"), "subtitles.position.y");
         if (y < 0 || y > 1) {
@@ -364,7 +365,7 @@ public final class RecipeParser {
         }
         for (String name : node.propertyNames()) {
             if (!allowed.contains(name)) {
-                throw invalid(where + "에 모르는 칸이 있다: " + name);
+                throw invalid(where + "에 모르는 칸이 있다");
             }
         }
     }

@@ -40,6 +40,18 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+// SharedTimelineCases가 services의 공유 시험 표를 이 폴더 기준 상대 경로로 읽는다(PDT 설계 r7 3.5 · r6 3.4). 입력으로
+// 알리지 않으면 표만 고친 판에서 시험이 UP-TO-DATE로 건너뛰어져 낡은 표가 초록으로 남는다(services/clip의 README 입력과 같은 이유).
 tasks.named('test') {
     useJUnitPlatform()
+    inputs.file('../../services/ledger-timeline/src/test/resources/ledger-timeline-cases.json')
+            .withPropertyName('ledgerTimelineCases')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    // RenderImagePinTest가 이 둘을 글자로 읽는다(ffmpeg 판 고정). 같은 까닭으로 입력에 넣는다.
+    inputs.file('Dockerfile')
+            .withPropertyName('renderDockerfile')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file('../../.github/workflows/workers-ci.yml')
+            .withPropertyName('workersCi')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }

@@ -29,6 +29,8 @@ import tools.jackson.databind.node.ObjectNode;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -44,6 +46,8 @@ class QueueWorkerLocalStackTest {
 
     private static final LocalStackContainer LOCALSTACK =
             new LocalStackContainer("localstack/localstack:4.14.0").withServices("sqs", "s3");
+    /** 숨김 연장 시험의 줄 숨김 — 연장 상수(2분)보다 짧아 첫 연장이 받자마자 걸린다. */
+    private static final Duration SHORT_HIDE = Duration.ofSeconds(2);
 
     private static S3Client s3;
     private static SqsClient sqs;
@@ -118,6 +122,38 @@ class QueueWorkerLocalStackTest {
         assertThat(visibleAndHidden(queueUrl)).isZero();
     }
 
+    /**
+     * 숨김 시간보다 오래 걸리는 처리 동안 메시지가 다시 보이지 않는다(계약1 1절 · 계획 13절 R11). 줄 숨김을 2초로 줄이면 첫 연장이
+     * 받자마자 걸려(숨김 − 2분이 음수) 숨김이 2분이 된다. 처리를 숨김의 세 배 동안 끌며 다른 소비자로 계속 받아 봐도 0 통이어야
+     * 한다 — 연장이 없으면 2초 뒤 다른 소비자가 같은 주문을 받는다. 1분마다 다시 거는 연장은 주기가 상수(1분)라 이 시험이 덮지 않는다.
+     */
+    @Test
+    void 숨김보다_긴_처리_동안_메시지가_다시_보이지_않는다() {
+        String queueUrl = sqs.createQueue(b -> b.queueName("jobs-render-" + UUID.randomUUID())
+                .attributes(Map.of(QueueAttributeName.VISIBILITY_TIMEOUT, String.valueOf(SHORT_HIDE.toSeconds()))))
+                .queueUrl();
+        sqs.sendMessage(b -> b.queueUrl(queueUrl).messageBody("{}"));
+        List<Integer> seen = new ArrayList<>();
+        MessageHandler slow = body -> {
+            Instant until = Instant.now().plus(SHORT_HIDE.multipliedBy(3));
+            while (Instant.now().isBefore(until)) {
+                seen.add(sqs.receiveMessage(b -> b.queueUrl(queueUrl).maxNumberOfMessages(1).waitTimeSeconds(1))
+                        .messages().size());
+            }
+            return Disposition.DELETE;
+        };
+        QueueWorker worker = new QueueWorker(sqs, queueUrl, slow, SHORT_HIDE, Duration.ofSeconds(1), "test");
+
+        try {
+            assertThat(worker.pollOnce()).isTrue();
+        } finally {
+            worker.stop();
+        }
+
+        assertThat(seen).as("처리 중 다른 소비자가 받은 통 수").hasSizeGreaterThanOrEqualTo(3).containsOnly(0);
+        assertThat(visibleAndHidden(queueUrl)).as("끝나고 지워졌다").isZero();
+    }
+
     private QueueWorker worker(String queueUrl) {
         RenderProperties props = new RenderProperties(queueUrl, null, null, true, LOCALSTACK.getRegion(),
                 clip.baseUrl(), "t", work, "ffmpeg", "ffprobe", Duration.ofMinutes(2), Duration.ofSeconds(600),
@@ -129,7 +165,7 @@ class QueueWorkerLocalStackTest {
         JobProcessor processor = new JobProcessor(new EnvelopeParser(Fixtures.MAPPER),
                 new ClipReporter(props, Fixtures.MAPPER, d -> { }), renderer, store, work, props.jobTimeout(),
                 Clock.systemUTC());
-        return new QueueWorker(sqs, queueUrl, processor, props.visibilityTimeout(), props.pollWait());
+        return new QueueWorker(sqs, queueUrl, processor, props.visibilityTimeout(), props.pollWait(), "test");
     }
 
     private static int visibleAndHidden(String queueUrl) {

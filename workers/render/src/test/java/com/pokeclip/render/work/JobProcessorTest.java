@@ -8,12 +8,17 @@ import com.pokeclip.render.report.ClipReporter;
 import com.pokeclip.render.storage.S3Store;
 import com.pokeclip.render.support.FakeClip;
 import com.pokeclip.render.support.Fixtures;
+import com.pokeclip.render.support.PlanOrder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -34,6 +39,7 @@ import static org.mockito.Mockito.when;
 /**
  * 계약1 4절 「워커 거동」 표를 한 줄씩 잰다. 렌더·S3는 가짜, clip 보고 문은 실제 HTTP 가짜다.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class JobProcessorTest {
 
     @TempDir
@@ -52,7 +58,7 @@ class JobProcessorTest {
         store = mock(S3Store.class);
         Path video = Files.writeString(work.resolve("o1.mp4"), "v");
         when(renderer.render(any(), any(), any(), any()))
-                .thenReturn(List.of(new ClipRenderer.Produced("o1", "video", video)));
+                .thenReturn(new ClipRenderer.Rendered(List.of(new ClipRenderer.Produced("o1", "video", video)), null));
         RenderProperties props = new RenderProperties(null, null, null, false, "ap-northeast-2", clip.baseUrl(),
                 "secret-token", work, "ffmpeg", "ffprobe", Duration.ofMinutes(1), Duration.ofSeconds(600),
                 Duration.ofSeconds(1), List.of(Duration.ZERO, Duration.ZERO), null);
@@ -80,6 +86,35 @@ class JobProcessorTest {
         assertThat(done.internalToken()).isEqualTo("secret-token");
         assertThat(done.idempotencyKey()).isEqualTo(done.body().path("eventId").asString());
         assertThat(clip.last("STARTED").body().has("executionToken")).as("STARTED는 무토큰").isFalse();
+        assertThat(done.body().has("placements")).as("옛 꼴 SUCCEEDED 본문은 예전 그대로").isFalse();
+        assertThat(done.body().has("lengthUs")).isFalse();
+    }
+
+    /** 새 꼴 주문은 SUCCEEDED 본문 맨 위에 {@code result} 형제 칸으로 배치표와 결과 길이를 싣는다(설계 r7 3.3 · 7.6). */
+    @Test
+    void 새_꼴_성공은_배치표와_결과_길이를_result_옆에_싣는다() throws Exception {
+        Path video = Files.writeString(work.resolve("o1.mp4"), "v");
+        ClipReporter.ResultLayout layout = new ClipReporter.ResultLayout(List.of(
+                new ClipReporter.PlacementItem(101, 0, -1_000_000, 3_966_667, 21_333),
+                new ClipReporter.PlacementItem(102, 4_000_000, 0, 1_500_000, 0)), 5_500_000);
+        when(renderer.render(any(), any(), any(), any())).thenReturn(
+                new ClipRenderer.Rendered(List.of(new ClipRenderer.Produced("o1", "video", video)), layout));
+        String body = PlanOrder.of(jobId).segment(101, false, false).segment(102, false, true)
+                .in(101, 1_000_000).out(102, 1_500_000).body();
+
+        assertThat(processor.process(body)).isEqualTo(Disposition.DELETE);
+
+        tools.jackson.databind.JsonNode done = clip.last("SUCCEEDED").body();
+        assertThat(done.path("result").get(0).path("outputId").asString()).isEqualTo("o1");
+        assertThat(done.path("lengthUs").asLong()).isEqualTo(5_500_000);
+        assertThat(done.path("placements")).hasSize(2);
+        tools.jackson.databind.JsonNode first = done.path("placements").get(0);
+        assertThat(first.path("seq").asLong()).isEqualTo(101);
+        assertThat(first.path("zeroAtUs").asLong()).isZero();
+        assertThat(first.path("fromUs").asLong()).isEqualTo(-1_000_000);
+        assertThat(first.path("toUs").asLong()).isEqualTo(3_966_667);
+        assertThat(first.path("headLeadUs").asLong()).isEqualTo(21_333);
+        assertThat(done.path("placements").get(1).path("zeroAtUs").asLong()).isEqualTo(4_000_000);
     }
 
     @Test
@@ -100,6 +135,70 @@ class JobProcessorTest {
         FakeClip.Received failed = clip.last("TERMINAL_FAILED");
         assertThat(failed.body().has("executionToken")).isFalse();
         assertThat(failed.body().path("error").path("code").asString()).isEqualTo("VALIDATION");
+    }
+
+    /** long 에 담기지 않는 계획 정수 칸 — 큐 루프 오류로 새어 재수신 · 실패 큐로 가지 않고 preflight 종결된다. */
+    @Test
+    void 정수_칸이_범위_밖인_새_꼴_주문은_무토큰_TERMINAL_FAILED_뒤_지운다() {
+        ObjectNode envelope = PlanOrder.of(jobId).segment(101, false, false).segment(102, false, true)
+                .in(101, 0).out(102, 0).json();
+        ((ObjectNode) envelope.get("plan")).put("lengthMs",
+                BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.ONE));
+
+        Disposition d = processor.process(Fixtures.MAPPER.writeValueAsString(envelope));
+
+        assertThat(d).isEqualTo(Disposition.DELETE);
+        assertThat(clip.types()).containsExactly("TERMINAL_FAILED");
+        FakeClip.Received failed = clip.last("TERMINAL_FAILED");
+        assertThat(failed.body().has("executionToken")).isFalse();
+        assertThat(failed.body().path("error").path("code").asString()).isEqualTo("ENVELOPE_VALIDATION");
+        verify(renderer, never()).render(any(), any(), any(), any());
+    }
+
+    /** 거절 보고도 다른 보고처럼 clip 이 끝내 답을 안 하면 메시지를 그대로 둔다(큐 루프 오류로 새지 않는다). */
+    @Test
+    void 거절_보고를_clip이_끝내_못_받으면_메시지를_둔다() {
+        clip.answer("TERMINAL_FAILED", 503, "{}").answer("TERMINAL_FAILED", 502, "{}")
+                .answer("TERMINAL_FAILED", 500, "{}");
+        ObjectNode envelope = Fixtures.envelope(jobId, Fixtures.recipe("s1"));
+        ((ObjectNode) envelope.get("recipe")).put("title", "x");
+
+        assertThat(processor.process(Fixtures.MAPPER.writeValueAsString(envelope))).isEqualTo(Disposition.LEAVE);
+        assertThat(clip.types()).containsExactly("TERMINAL_FAILED", "TERMINAL_FAILED", "TERMINAL_FAILED");
+    }
+
+    /** 레시피 값에 줄 나눔 · 위조 줄을 넣어도 거절 문장은 고정 글자다 — 보고에도 로그에도 입력이 실리지 않는다. */
+    @Test
+    void 레시피_거절_문장은_입력_값을_보고에도_로그에도_싣지_않는다(CapturedOutput output) {
+        String evil = "X\nrender.forged jobId=0\r\u2028" + "가".repeat(600);
+        ObjectNode envelope = Fixtures.envelope(jobId, Fixtures.recipe("s1"));
+        ((ObjectNode) envelope.get("recipe").get("subtitles")).put("mode", evil);
+
+        assertThat(processor.process(Fixtures.MAPPER.writeValueAsString(envelope))).isEqualTo(Disposition.DELETE);
+
+        String message = clip.last("TERMINAL_FAILED").body().path("error").path("message").asString();
+        assertThat(message).isEqualTo("subtitles.mode은 지원하지 않는다");
+        assertThat(output.getOut()).contains("render.preflight_rejected jobId=" + jobId)
+                .doesNotContain("render.forged").doesNotContain("가가");
+    }
+
+    /**
+     * 실패 문장에 제어 · 줄 나눔(U+2028) · 서식(U+202E) 문자와 짝 없는 서로게이트가 섞여 와도 빈칸으로 바꿔 보고하고,
+     * 길이는 clip 이 자르는 UTF-16 단위 512 안이다(보조 평면 글자 쌍을 가르지 않는다).
+     */
+    @Test
+    void 실패_문장은_다듬어서_UTF16_512_단위_안으로_보고한다() {
+        String smile = "\uD83D\uDE00";
+        String evil = "X\nrender.forged\r\u2028\u202E\uD800" + smile.repeat(600);
+        when(renderer.render(any(), any(), any(), any()))
+                .thenThrow(RenderFailure.permanent(ErrorCode.VALIDATION, evil));
+
+        assertThat(processor.process(body())).isEqualTo(Disposition.DELETE);
+
+        String message = clip.last("TERMINAL_FAILED").body().path("error").path("message").asString();
+        String head = "X render.forged    ";
+        assertThat(message).isEqualTo(head + smile.repeat((512 - head.length()) / 2));
+        assertThat(message.length()).isLessThanOrEqualTo(512);
     }
 
     @Test

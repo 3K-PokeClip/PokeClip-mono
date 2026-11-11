@@ -33,6 +33,9 @@ public class ClipReporter {
 
     private static final Logger log = LoggerFactory.getLogger(ClipReporter.class);
 
+    /** clip {@code clips.error_message} 칸 폭(VARCHAR(512)). 보고 문장은 UTF-16 단위로 이 안에서 자른다. */
+    static final int MAX_ERROR_MESSAGE = 512;
+
     private final RestClient client;
     private final ObjectMapper mapper;
     private final List<Duration> retryDelays;
@@ -72,6 +75,14 @@ public class ClipReporter {
     }
 
     public Reply succeeded(UUID jobId, String token, List<ResultItem> result) {
+        return succeeded(jobId, token, result, null);
+    }
+
+    /**
+     * @param layout 새 꼴 주문의 결과 배치(PDT 설계 r7 3.3 · 7.6). {@code result} 형제 칸 {@code placements} · {@code lengthUs}
+     *               로 싣는다. 옛 꼴은 null — 본문이 예전과 같다
+     */
+    public Reply succeeded(UUID jobId, String token, List<ResultItem> result, ResultLayout layout) {
         return send(jobId, "SUCCEEDED", token, body -> {
             ArrayNode items = body.putArray("result");
             for (ResultItem item : result) {
@@ -80,7 +91,23 @@ public class ClipReporter {
                 node.put("kind", item.kind());
                 node.put("s3Key", item.s3Key());
             }
+            if (layout != null) {
+                placements(body, layout);
+            }
         });
+    }
+
+    private static void placements(ObjectNode body, ResultLayout layout) {
+        ArrayNode placements = body.putArray("placements");
+        for (PlacementItem p : layout.placements()) {
+            ObjectNode node = placements.addObject();
+            node.put("seq", p.seq());
+            node.put("zeroAtUs", p.zeroAtUs());
+            node.put("fromUs", p.fromUs());
+            node.put("toUs", p.toUs());
+            node.put("headLeadUs", p.headLeadUs());
+        }
+        body.put("lengthUs", layout.lengthUs());
     }
 
     /** @param token null이면 preflight 실패(무토큰)다 */
@@ -91,7 +118,7 @@ public class ClipReporter {
     private void error(ObjectNode body, ErrorCode code, String message, boolean retryable) {
         ObjectNode error = body.putObject("error");
         error.put("code", code.name());
-        error.put("message", message);
+        error.put("message", safeMessage(message));
         error.put("retryable", retryable);
     }
 
@@ -139,8 +166,57 @@ public class ClipReporter {
         throw new ReportUnavailable("clip 보고 실패 type=" + type, last);
     }
 
+    /**
+     * 보고 · 로그에 싣는 실패 문장. 거절 문장은 입력 값을 싣지 않지만, 여기서 한 번 더 다듬는다(앞으로 생길 문장 · 예외 문장).
+     * 제어 문자 · 줄 나눔 문자는 로그 한 줄 위조를, 서식 문자(Cf — 방향 덮어쓰기 · 폭 0 · BOM)는 화면 위장을 막으려고 빈칸으로
+     * 바꾼다. 짝 없는 서로게이트도 빈칸이다 — 그대로 두면 UTF-8 로 나가며 {@code ?} 로 조용히 바뀐다.
+     *
+     * <p>길이는 UTF-16 단위 {@value #MAX_ERROR_MESSAGE} 안이다. clip 은 이 단위로 자르고({@code Clip.failed}) DB 칸은
+     * 글자로 세므로(VARCHAR(512)) UTF-16 쪽이 더 엄하다. 보조 평면 글자(두 단위)가 경계에 걸리면 통째로 뺀다 — 쌍을 가르면
+     * clip 이 짝 없는 서로게이트를 받는다.
+     *
+     * @return null 이면 null
+     */
+    public static String safeMessage(String message) {
+        if (message == null) {
+            return null;
+        }
+        StringBuilder safe = new StringBuilder();
+        for (int i = 0; i < message.length(); ) {
+            int c = message.codePointAt(i);
+            i += Character.charCount(c);
+            int kept = lineSafe(c) ? c : ' ';
+            if (safe.length() + Character.charCount(kept) > MAX_ERROR_MESSAGE) {
+                break;
+            }
+            safe.appendCodePoint(kept);
+        }
+        return safe.toString();
+    }
+
+    private static boolean lineSafe(int codePoint) {
+        int type = Character.getType(codePoint);
+        return !Character.isISOControl(codePoint) && type != Character.LINE_SEPARATOR
+                && type != Character.PARAGRAPH_SEPARATOR && type != Character.FORMAT && type != Character.SURROGATE;
+    }
+
     /** SUCCEEDED의 산출물 한 줄(계약1 4절 result). */
     public record ResultItem(String outputId, String kind, String s3Key) {
+    }
+
+    /**
+     * 결과 배치표 한 줄(PDT 설계 r7 7.6). 조각 {@code seq} 의 x′ = 0 이 결과 {@code zeroAtUs} 에 놓이고, 결과에 든 그 조각 몫이
+     * x′ 로 {@code [fromUs, toUs]} 다. {@code headLeadUs} = 그 조각 m(파일 머리 → 영상 첫 DTS).
+     */
+    public record PlacementItem(long seq, long zeroAtUs, long fromUs, long toUs, long headLeadUs) {
+    }
+
+    /** SUCCEEDED 의 결과 배치 — 배치표와 결과 길이(µs). */
+    public record ResultLayout(List<PlacementItem> placements, long lengthUs) {
+
+        public ResultLayout {
+            placements = List.copyOf(placements);
+        }
     }
 
     /** 재전송 대기. 시험은 바로 넘긴다. */

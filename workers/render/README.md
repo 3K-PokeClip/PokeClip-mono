@@ -49,6 +49,22 @@ clip이 `isFinalAttempt:true`(세 번째)를 준 실행의 실패는 다시 하�
 
 **한 일꾼은 한 번에 한 주문만** 한다. 렌더는 CPU를 다 쓰는 일이라 겹치면 둘 다 느려진다. 늘리려면 일꾼 수를 늘린다.
 
+## 새 꼴 주문: 렌더 계획이 있는 주문 (PDT 개정, POK-196)
+
+주문서에 계획(`plan`)이 있으면 새 꼴이다. 위 표의 4 · 7단계(구간 덮음 확인 · 한 파일로 잇기)를 거치지 않는다. 계획이 없는 옛 꼴은 위 표 그대로 간다(판별은 `work/ClipRenderer`).
+
+- **계획 검사**: 결과에 드는 조각 열 · 시작 좌표 · 끝 경계 · 자막 끝점 · 예상 길이를 검사 규칙 1–6으로 본다. 어기면 `ENVELOPE_VALIDATION`(규칙 1은 읽으면서 `job/EnvelopeParser` · `job/PlanReader`, 2–6은 `job/PlanCheck`).
+- **두 단계 자르기(A′)**: 조각마다 ffmpeg를 한 번 돌려 고른 첫 프레임부터 남는 마지막 프레임까지 정수 틱으로 잘라 무손실 중간 파일(FFV1 · NUT)을 만든다. 마지막에 중간 파일과 소리 묶음을 입력으로 받아 한 번 인코딩한다(`work/JoinedRenderer` · `media/RenderCommands.cutPiece` · `renderJoined`).
+- **자리는 한 곳에서**: 영상 이동량 · 소리 자리 · 배치표 · 자막 자리는 모두 `work/RenderTimeline`이 같은 계획 시각에서 낸다.
+- **중간 파일 디스크**: 무손실이라 크다. 바쁜 1080p30 화면 180초 한 창에 약 10GB였다(실측 2026-11-04).
+    - 조각 크기 상한(`-fs`) = 그 조각 프레임 수 × 폭 × 높이 × 화소당 날 바이트 × 5/4 + 1MiB. 화소당 날 바이트는 원본 `pix_fmt`로 정한다(4:2:0 1.5 · 4:2:2 2 · 4:4:4(평면 `gbrp` 포함) 3 · 회색 1 · 8비트 넘으면 두 배 · 알파 · 묶음 RGB(`rgb24` 등) · 모르는 꼴은 6 — `media/PixelFormats`). 5/4는 잡음 화면에서 FFV1이 날 크기를 조금 넘는 몫, 1MiB는 용기 머리 몫이다. 1080p30 4초 yuv420p 조각이면 약 468MB다.
+    - 조각마다 쓰기 전에 남은 디스크가 상한 + 1GiB보다 적으면 `render.disk_short`(WARN)를 남기고 일시 실패로 다시 받는다(마지막 시도면 위 규칙대로 종결).
+    - 상한까지 찼으면 잘린 파일로 보고 `render.piece_capped`(WARN)를 남긴 뒤 `SOURCE_MISMATCH`로 끝낸다(ffmpeg는 `-fs`에 닿아도 정상 종료하므로 크기로 가른다).
+    - 가드는 조각 단계에만 있다. 최종 인코딩 출력과 사진 줄은 남겨 둔 1GiB 여유에 기댄다. 처음부터 디스크에 안 들어가는 주문은 뒤쪽 조각에서야 `disk_short`가 난다.
+    - 중간 파일은 성공 · 실패 · 재시도 모든 갈래에서 지운다.
+- **보고**: 성공 보고에 배치표 `placements`와 결과 길이 `lengthUs`를 싣는다.
+- **운영에서 먼저 볼 로그 줄(전체 목록 아님)**: `render.graph_size`(단계별 시간 · 중간 파일 바이트 `midBytes` · 최대 RSS — 모든 출력의 인코드를 마친 뒤 한 줄이다(`JoinedRenderer.render` 의 `render.graph_size` 줄) — 조각 단계 · 인코드에서 실패한 시도에는 없다. 이 줄로는 그 시도의 성패를 알 수 없다(그 뒤 올리기 · 보고 단계가 따로 있다). 실패한 작업의 소리 묶음 수는 `render.audio_run` 줄 수로 세어 `render.ffmpeg_failed` 와 맞댄다. 한 시도 안에서 센다 — 같은 일꾼 로그 흐름에서 그 작업의 `render.started`(`attempt` 칸) 줄부터 그 시도의 `render.failed` 줄까지. 재시도마다 같은 `jobId` 로 다시 찍히므로 `jobId` 전체를 세면 부풀려진다(`render.audio_run` · `render.ffmpeg_failed` 에는 시도 칸이 없다). `render.ffmpeg_failed` 의 `detail` 은 stderr 끝부분이라 메모리 초과를 혼자 확정하지 못한다) · `render.audio_run` · `render.end_owned` · `render.prime_skipped` · `render.signal_skipped` · `render.burn_rejected` · `render.color_mixed` · `render.disk_short` · `render.piece_capped`. 옛 꼴 주문은 `render.legacy_order` 한 줄을 남긴다.
+
 ## 잇기: 조각 경계에 빈틈이 생기지 않게 (실측 2026-09-24)
 
 MediaMTX 조각은 **조각마다 머리(`ftyp+moov`)가 있는 완전한 fMP4**라 ffmpeg concat demuxer로 재인코딩 없이 잇는다.
@@ -92,6 +108,7 @@ MediaMTX 조각은 **조각마다 머리(`ftyp+moov`)가 있는 완전한 fMP4**
 | 소리 | 고른 트랙만 섞음(나누지 않음) → 48kHz 스테레오 → **-14 LUFS 두 번 돌기**(재고 선형 보정) · AAC 160k | 계약6 0절. 한 번에 하면 동적 압축으로 소리가 출렁인다. 무음이면 평준화를 건너뛴다 |
 | crop | 표시 평면 픽셀로 옮겨 ±1% 안이면 **중심을 지키며 줄여** 흡수, 넘으면 `VALIDATION` · 짝수 픽셀 | 계약6 2절 |
 | 자막 | 컷 밖은 무시, 경계에 걸치면 자름 · srt는 컷 안 자막이 있을 때만 output마다 하나 · 번인: 자리 없음(v1) = SRT + `Noto Sans CJK KR` 13(기준 높이 288) 아래 여백 60 / 자리 있음(v2) = **출력마다 ASS를 써서 태운다**(`media/AssWriter`, 기준 좌표 = 출력 해상도). 글자는 편집기 글자(기준 폭 240px에서 11px·굵게, 좌우 8px)를 결과 폭 비로 옮긴 값, 가운데 붙임은 줄마다 `\an5\pos`로 덩어리 가운데를 `y`에. 🔴 **SRT로는 자리를 못 찍는다**: ffmpeg가 SRT를 384×288 좌표로 옮기고 `force_style` 정렬은 옛 SSA 번호(위 가운데 = 6)이며 줄 앞 위치 태그는 버린다(실측). 한 줄 높이로 어림하면 두 줄 자막이 반 줄 어긋났다. ASS 글꼴 크기는 줄 높이라 CSS em에 1.448(Noto CJK)을 곱한다 | 계약6 2·7절 · 계약1 3절(빈 파일 금지) |
+| 촘촘한 원본의 자리 있는 번인(렌더 계획이 있는 주문) | 조각 안 원본 프레임 간격이 11ms 보다 짧으면(약 90fps 초과) 자리 있는 번인이 붙은 주문은 `VALIDATION`(종결 · 신호 `render.burn_rejected`). 자막 없음 · CC 만 · 자리 없는 번인은 그대로 렌더한다. 조각 이음 자리 간격(재접속)은 보지 않는다 | ASS 시각은 10ms 격자라 그보다 촘촘한 프레임을 가를 수 없다(PDT 설계 r7 7.6 · kty 2026-11-04) · `work/JoinedRenderer.requireAssFrames` |
 | 트랙 번호 | 트랙 N = N번째 소리 스트림(0 = 최종 믹스) | 계약9 2026-09-03 트랙 고정 |
 
 ## 사진 주문 (POK-277)
@@ -105,9 +122,10 @@ MediaMTX 조각은 **조각마다 머리(`ftyp+moov`)가 있는 완전한 fMP4**
 |---|---|
 | 1 | 주문서를 읽는다. 모양이 틀리거나 올릴 키가 `thumbnails/…jpg`가 아니면 지운다(다시 해도 같다) |
 | 2 | `source`를 받는다. 창고에 없으면(지워진 조각) 지운다 |
-| 3 | `ffmpeg -ss {offsetMs} -i 원본 -frames:v 1 -vf scale='min(640,iw)':-2 -q:v 4`. 🔴 자리가 원본 끝을 넘으면 ffmpeg 9.0은 파일 없이 실패한다(실측) → 첫 장면으로 한 번 더 |
-| 4 | `output`에 `image/jpeg`로 올린다. 같은 대상은 늘 같은 키라 덮어쓴다 |
-| 5 | 상한(60초)까지 보고 시간(최대 13초)이 남았으면 clip에 `{kind, targetId, capturedAt}`를 알린다. 2xx·4xx면 지우고, 3xx·5xx·연결 오류면 둔다(리다이렉트를 꺼 두어 3xx는 받은 것이 아니다). 🔴 **404면 대상이 탈퇴로 지워진 것이라 4에서 올린 사진을 지운 뒤** 메시지를 지운다(POK-256) |
+| 3 | 원본을 판독하고(`media/MediaProbe.timing` — 판독 결과의 꼴 · 값이 어긋나면 `SOURCE_MISMATCH` 로 지운다. ffprobe 실행 실패 · 시간 초과는 라이브면 지우고 카드 · 완성 영상이면 둔다 — 아래 「라이브는 다시 하지 않는다」) `offsetMs` 를 원본 안 자리로 옮긴다: 카드 · 라이브는 원점 표지 `offsetOrigin`(영상 시작 · 파일 머리 — 없으면 파일 머리), clip 은 파일 시작 기준. 그 자리를 `[0, 마지막 표시 프레임]` 으로 자른다(끝을 넘는 주문은 마지막 장면 — `thumbnail/ThumbnailProcessor.Seek`) |
+| 4 | `ffmpeg -ss {자리} -i 원본 -frames:v 1 -vf scale='min(640,iw)':-2 -q:v 4`. 자른 자리에서도 장면을 못 뽑으면 첫 장면으로 한 번 더 하고, 그래도 없으면 `SOURCE_MISMATCH` 로 지운다 |
+| 5 | `output`에 `image/jpeg`로 올린다. 같은 대상은 늘 같은 키라 덮어쓴다 |
+| 6 | 상한(60초)까지 보고 시간(최대 13초)이 남았으면 clip에 `{kind, targetId, capturedAt}`를 알린다. 2xx·4xx면 지우고, 3xx·5xx·연결 오류면 둔다(리다이렉트를 꺼 두어 3xx는 받은 것이 아니다). 🔴 **404면 대상이 탈퇴로 지워진 것이라 5에서 올린 사진을 지운 뒤** 메시지를 지운다(POK-256) |
 
 렌더 주문과 달리 시작·진행 보고와 실행 토큰이 없다: 몇 초짜리 일이고 같은 키에 덮어써도 사진은 하나라 실행을 가를 필요가 없다.
 창고·ffmpeg·clip이 잠깐 안 되면 메시지를 두고 숨김 시간 뒤 다시 한다. 세 번이면 DLQ로 가고, clip은 DLQ를 안 읽는다(다음 순회가 다시 찍는다).
@@ -146,15 +164,33 @@ cd workers/render && ./gradlew test
 
 - `src/test/resources/segments/`는 **로컬 MediaMTX에 실제로 송출해 받은 녹화 조각 셋**이다(영상 640×360 30fps + 소리 6트랙).
 - 🔴 **홈브루 ffmpeg는 libass가 없어 자막 번인을 못 한다.** 그 기계에서는 번인 시험이 CC만 켜고 돈다.
-  번인까지 재려면 배포 이미지와 같은 ffmpeg로 돌린다:
+  번인까지 재려면 배포 이미지와 같은 ffmpeg로 돌린다. JDK 이미지는 배포 이미지 기반(21-jre)과 같은 Ubuntu
+  26.04 판을 다이제스트로 박고, `Dockerfile`의 `FFMPEG_PACKAGES`(ffmpeg와 같은 소스의 라이브러리 7개 포함)를
+  `FFMPEG_VERSION` 판으로 깐다. 시험 앞에 판 첫 줄과 꾸러미 판 8개를 찍는다:
 
 ```bash
-docker run --rm -v "$PWD":/src -w /src eclipse-temurin:21-jdk bash -c 'apt-get update -qq && apt-get install -y -qq ffmpeg fonts-noto-cjk >/dev/null && ./gradlew -q test --tests "*ClipRendererTest"'
+v=$(sed -n 's/^ARG FFMPEG_VERSION=//p' Dockerfile)
+pkgs=$(sed -n 's/^ARG FFMPEG_PACKAGES="\(.*\)"$/\1/p' Dockerfile)
+docker run --rm -e FFMPEG_VERSION="$v" -e FFMPEG_PACKAGES="$pkgs" -v "$PWD":/src -w /src \
+  eclipse-temurin:21-jdk@sha256:ebfbb18d11ff163ee83b21258acf12248af48d22a0fdfdc68fa1a1516c05976a bash -c '
+    set -e
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends \
+      $(for p in $FFMPEG_PACKAGES; do echo "$p=$FFMPEG_VERSION"; done) fonts-noto-cjk >/dev/null
+    ffmpeg -hide_banner -version | sed -n 1p
+    dpkg-query -W $FFMPEG_PACKAGES
+    ./gradlew -q test --tests "*ClipRendererTest"'
 ```
 
-**PR에서는 `workers-ci`가 돈다**(`.github/workflows/workers-ci.yml`). 배포 이미지와 같은 꾸러미(ffmpeg ·
-fonts-noto-cjk)를 깔고, 시험 전에 ffmpeg에 `subtitles` 필터(libass)가 없으면 실패한다(없으면 번인 시험이
-CC만 켜고 초록이 된다). 시험 뒤 건너뛴 시험이 하나라도 있으면 실패한다.
+- 판을 올릴 때 같이 고칠 곳: `Dockerfile`의 `ARG FFMPEG_VERSION`(workers-ci · 위 명령이 이 줄을 읽는다) ·
+  `RenderImagePinTest`의 판 글자. 라이브러리 이름(so 판)이 바뀌면 `Dockerfile`의 `ARG FFMPEG_PACKAGES`와
+  `RenderImagePinTest`의 꾸러미 목록. 기반 이미지 다이제스트를 옮기면 위 JDK 다이제스트도 같은 Ubuntu 판으로.
+
+**PR에서는 `workers-ci`가 돈다**(`.github/workflows/workers-ci.yml`). 렌더 잡은 `Dockerfile`의
+`FFMPEG_PACKAGES` 꾸러미 8개를 `FFMPEG_VERSION` 판으로, 한글 글꼴(fonts-noto-cjk)과 함께 깐다. 깐 뒤 이미지
+빌드와 같은 검사로 꾸러미 판을 대조하고, PATH의 ffmpeg가 찍는 판 첫 줄도 그 판인지 본다. 시험 전에 ffmpeg에
+`subtitles` 필터(libass)가 없으면 실패한다(없으면 번인 시험이 CC만 켜고 초록이 된다). 시험 뒤 건너뛴 시험이
+하나라도 있으면 실패한다.
 
 **이미지**: 빌드 컨텍스트는 이 폴더다. ffmpeg(libass·libx264)와 한글 글꼴이 들어간다.
 
