@@ -400,6 +400,11 @@ services:
       # 렌더할 때만 켠다. 빈 값 · 거짓이면 janitor 는 아무것도 건드리지 않고
       # 대기만 하므로 이 줄을 빼면 조용히 멈춘다.
       JANITOR_ENABLED: "true"
+      # 업로드 끝난 조각을 지우기까지의 유예(기본 8분). V1 편집기 영상은
+      # playback /get 으로 이 로컬 녹화를 읽어 보존 기한 바로 앞까지 둔다 —
+      # v2(POK-473) 배포 뒤 되돌린다. recordDeleteAfter(24h) − 1h 와 같아
+      # unexpected_gone 감지는 이 동안 꺼진다.
+      JANITOR_GRACE: "23h"
       POSTGRES_AUTH: iam
       POSTGRES_HOST: ${rds_endpoint}
       POSTGRES_PORT: "5432"

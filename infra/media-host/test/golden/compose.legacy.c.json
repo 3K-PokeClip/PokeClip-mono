@@ -20,6 +20,7 @@
         "AWS_EC2_METADATA_V1_DISABLED": "true",
         "AWS_REGION": "ap-northeast-2",
         "JANITOR_ENABLED": "true",
+        "JANITOR_GRACE": "23h",
         "POSTGRES_AUTH": "iam",
         "POSTGRES_DB": "pcbench_edge_proxy",
         "POSTGRES_HOST": "db.pcbench-edge-proxy.invalid",
