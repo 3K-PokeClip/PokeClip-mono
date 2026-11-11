@@ -1573,8 +1573,8 @@ kty 가 정하고, 정하면 「/dvr 하한 끄기」(실행 직전 승인 · pl
 맞을 때뿐입니다.
 
 보류가 나와도 C′ 의 나머지 블록은 보고 재료로 이어 갑니다(같은 6.6 승인
-범위). 방송을 끝내 닫힌 회차 확인으로 갈지, 새 시험 방송으로 다시 할지,
-끌지는 kty 가 정합니다.
+범위). 방송을 끝내야 도는 「닫힌 회차」 블록은 이 이어 감에서 빼고, 방송을
+끝내 그 확인으로 갈지, 새 시험 방송으로 다시 할지, 끌지는 kty 가 정합니다.
 
 `below1`–`below3` 는 하한이 올라도 여전히 하한 아래라 `floor_gate retry` 를
 거치지 않고, 대신 2분 재확인을 거칩니다(아래 첫 블록 표 뒤).
@@ -1692,21 +1692,24 @@ c_issue && {
 줄을 셉니다. 로그 그룹 `aws-waf-logs-pokeclip-prod-cloudfront` 에는 차단된
 요청만 남습니다(`modules/waf_acl/main.tf` 116 · 144–153 — `BLOCK` 만
 남기고 나머지는 버림). 조회 주체는 kty 자격입니다(위 「조회 권한」 — `O7f` 묶음 밖).
-`--query 'length(events)'` 로 건수만 내고, 원문 이벤트(요청 머리 · URI 가
-든 JSON)는 화면 · 증거에 남기지 않습니다. 조회 실패(`AccessDenied` 등)는 0
+이벤트 ID 만 받아 jq 로 건수만 내고, 원문 이벤트(요청 머리 · URI 가 든
+JSON)는 화면 · 증거에 남기지 않습니다. 조회 실패(`AccessDenied` 등)는 0
 건이 아니라 「조회 실패」 로 적습니다.
 
 `--output text` 로 `length(events)` 를 내면 CLI 가 페이지마다 따로 세어 숫자가
 여러 줄이 될 수 있습니다(AWS CLI 「Filtering output」 — 쿼리는 페이지마다
 적용). 그래서 이벤트 ID 만 JSON 으로 받아 jq 로 한 번에 셉니다. `test_ip` 는
 이 기계의 공인 IP 입니다(자리표시자 그대로면 어느 줄과도 맞지 않아 거짓 0 이
-나오므로, IP 꼴이 아니면 조회하지 않습니다).
+나오므로, IP 꼴이 아니면 조회하지 않습니다). 꼴 검사는 글자 종류와 점 셋 ·
+쌍점 하나 이상만 봅니다 — 넣은 값이 이 기계의 공인 IP 인지는 눈으로
+확인합니다.
 
 ```shell
 test_ip='<시험 IP>'
 case "${test_ip}" in
-  '' | *[!0-9a-fA-F:.]*) echo 'waf-blocks 시험 IP 꼴 다름 — 조회 안 함' ;;
-  *)
+  '' | *[!0-9a-fA-F:.]* | *[!0-9.]*.* | *.*[!0-9.]*)
+    echo 'waf-blocks 시험 IP 꼴 다름 — 조회 안 함' ;;
+  *.*.*.* | *:*:*)
     waf_filter="{ \$.httpRequest.clientIp = \"${test_ip}\" }"
     # aws 의 실패를 jq 가 가리지 않게 두 걸음으로 나눈다(파이프의 종료 값은
     # 끝 명령 것).
@@ -1719,6 +1722,7 @@ case "${test_ip}" in
     else
       echo 'waf-blocks 조회 실패'
     fi ;;
+  *) echo 'waf-blocks 시험 IP 꼴 다름 — 조회 안 함' ;;
 esac | tee -a "${evidence}/dvr-c.txt"
 ```
 
@@ -2069,7 +2073,7 @@ c_issue && {
 
 ```shell
 case "${run_dir:-}" in
-  */pokeclip-dvr.??????)
+  */pokeclip-dvr.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9])
     rm -r "${run_dir}" && test ! -e "${run_dir}" && echo removed &&
       unset run_dir ;;
   *) echo 'run_dir 없음 · 꼴 다름 — 지우지 않음'; false ;;
@@ -2170,7 +2174,7 @@ apply 를 다시 보고 kty 에게 보고합니다. 다시 켜는 것은 원인�
 
 ```shell
 case "${run_dir:-}" in
-  */pokeclip-dvr.??????)
+  */pokeclip-dvr.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9])
     rm -r "${run_dir}" && test ! -e "${run_dir}" && echo removed &&
       unset run_dir ;;
   *) echo 'run_dir 없음 · 꼴 다름 — 지우지 않음'; false ;;
@@ -2231,7 +2235,7 @@ ISB 리스 계정(= prod 계정)의 실험 자원(접두 `pcbench-pok525-isb34`)
     싣지 않는 함수의 404 에도 정책(`media_cors` 꼴 · `origin_override` 켬)의
     머리가 붙었습니다. dvr-floor 404 의 머리가 한 벌인 것은 정책이 함수
     머리를 덮은 결과입니다(E48 두 벌 없음). 함수 쪽 머리는 정책이 없을 때를
-    위한 겹친 방어입니다. 그래서 C′ 는 `/live` 403 의 머리를 보지 않습니다.
+    위한 겹친 방어입니다. 그래서 C′ 는 `/live` 403 의 머리로 판정하지 않습니다(`live` 비-200 은 그 자체로 보류).
 *   **R5**: 함수 404 는 캐시되지 않아 재요청 10/10 이 함수를 탔습니다.
 *   **R9 — 함수는 원문 경로를 받습니다.** `/dvr/s/x/../r/seg/…` ·
     `/dvr/s/r/seg/./…` · `%2e%2e` 가 정규화본이었다면 통과였을 자리에서 함수
