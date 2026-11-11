@@ -35,6 +35,10 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
     apex-request 는 `console.log` 가 없어 그룹이 비어 있습니다 — 나중에
     로그를 넣을 때 보존 없는 그룹이 생기지 않게 미리 만드는 그릇입니다. 보존은
     WAF 차단 로그와 같은 30일입니다(PR 387 보안 L2).
+*   **/dvr 하한 경보 셋 · 알림 주제**(us-east-1 · POK-525): dvr-floor 함수
+    로그를 세는 지표 필터 둘과 경보 셋, 알림 주제
+    `pokeclip-prod-edge-alarms` 입니다. 이메일 구독은 저장소 밖입니다(아래
+    「경보(POK-525)」).
 *   **내부 ALB 인그레스 ← VPC origin**(서울): VPC origin 이 생긴 뒤
     CloudFront 가 그 VPC 에 만드는 SG `CloudFront-VPCOrigins-Service-SG` 를
     이름과 network `vpc_id` 로 조회하고, platform 내부 ALB SG 에 그 SG 출처
@@ -90,6 +94,7 @@ ALB DNS · SG id · S3 리전 도메인 · CloudFront KVS ARN)을 봅니다. 출
 | `media_distribution_domain` · `media_distribution_zone_id` | records(media) |
 | `media_distribution_arn` | 런타임 트랙 2단 `prod/runtime-2`(rewind 버킷 OAC 허용문의 `AWS:SourceArn`) |
 | `cdn_kvs_arn` | `scripts/kvs-put-cdn-secret.sh --kvs-arn` |
+| `edge_alarm_topic_arn` | kty 의 이메일 구독(`aws sns subscribe` — 「경보(POK-525)」) |
 
 ## 적용 순서(O7f)
 
@@ -146,7 +151,8 @@ Writer 가 씁니다([media README](/media/README.md) 「/dvr 하한 Writer」).
     뒤입니다 — 머지 뒤 첫 edge apply 는 스위치가 꺼져 있어도 함수 · 로그
     그룹을 만듭니다.
 1.  1단 — 스위치 기본값(`false`) 그대로 apply 합니다. plan 은 함수 하나 ·
-    함수 로그 그룹 하나 생성이고 배포 변경은 0 입니다. 게시된 함수를
+    함수 로그 그룹 하나 · 경보 일곱 자원(「경보(POK-525)」) 생성이고 배포
+    변경은 0 입니다. 게시된 함수를
     test-function 으로 시험합니다([엣지 시험 런북](../../runbooks/edge-tests.md)).
 1.  2단 — `-var dvr_floor_enabled=true` 로 apply 합니다. plan 은 media 배포
     하나 변경입니다. 실제 엣지 요청으로 시험하고, 실패하면 곧바로 `false` 로
@@ -164,6 +170,64 @@ Writer 가 씁니다([media README](/media/README.md) 「/dvr 하한 Writer」).
 지우려면 dvr-floor 의 연결을 먼저 떼야 합니다 — DeleteKeyValueStore 는 쓰는
 중인 그릇을 `CannotDeleteEntityWhileInUse`(409)로 거절합니다(API 참조
 2026-11-11 확인 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).
+
+## 경보(POK-525)
+
+dvr-floor 는 KVS 읽기가 실패하거나 하한 값이 이상해도 막지 않고 넘깁니다
+(K5 — 1차 통제는 서명 쿠키). 그 대신 고정 로그 한 줄을 남기고, 이 루트가 그
+줄을 세어 경보를 울립니다. 함수가 끝나지 못한 요청(503)은 CloudFront 기본
+지표로 봅니다. 경보 셋과 알림 주제는 모두 us-east-1 입니다(함수 로그와
+CloudFront 지표가 us-east-1 이라).
+
+| 경보 | 지표 | 뜻 |
+|---|---|---|
+| `pokeclip-prod-dvr-floor-value-invalid` | `PokeClip/Edge` · `DvrFloorValueInvalid`(지표 필터 `"DVR FLOOR VALUE INVALID"`) | KVS 의 하한 값이 하한 문법 밖이라 넘김 |
+| `pokeclip-prod-dvr-floor-kvs-error` | `PokeClip/Edge` · `DvrFloorKvsError`(지표 필터 `"DVR FLOOR KVS ERROR"`) | KVS 읽기가 실패해 넘김 |
+| `pokeclip-prod-dvr-floor-execution-errors` | `AWS/CloudFront` · `FunctionExecutionErrors`(차원 `FunctionName` · `Region` = `Global`) | 함수가 끝나지 못함 — 그 요청은 503 |
+
+문턱은 셋 모두 같습니다(K-D4): 5분(300초) 합이 1 이상이면 한 번에 `ALARM`
+이고, 데이터가 없으면 정상으로 봅니다. 알림은 `ALARM` 으로 바뀔 때 한 번
+가고, `ALARM` 이 이어지는 동안이나 `OK` 로 돌아올 때는 가지 않습니다. 문턱은
+걸음 7 뒤에 다시 봅니다.
+
+지표 필터는 dvr-floor 함수 로그 그룹에 걸리고, 패턴 글자는 함수 원문 상수
+(`modules/cdn_media/functions/dvr-floor.js`)에서 모듈 출력
+`dvr_floor_log_markers` 로 받습니다 — 로그 글자를 바꾸면 필터가 따라가고,
+시험이 패턴 글자를 고정해 그 변경을 드러냅니다. 필터는 만든 뒤의 로그만
+셉니다. 함수 로그 전달은 best-effort 라(드물게 늦거나 빠짐) 경보 수는 완전한
+수가 아닙니다. test-function 은 CloudWatch 로 로그를 보내지 않아 경보를
+울리지 않습니다. 알림 경로 확인(판정 K)은
+[엣지 시험 런북](../../runbooks/edge-tests.md)을 따릅니다.
+
+경보 · 주제 · 지표 필터(일곱 자원)는 스위치 `dvr_floor_enabled` 와 무관하게
+생깁니다. 이 경보를 더한 커밋 뒤 첫 edge apply 의 plan 에는 이 일곱 생성도
+낍니다.
+
+주제 정책은 SNS 기본 정책(Principal `*` · `AWS:SourceOwner`) 대신 명시
+정책입니다. 계정 루트에는 읽기(`SNS:GetTopicAttributes`) 하나만 열고, 발행은
+이 루트의 경보 셋이 보내는 CloudWatch(`aws:SourceArn` · `aws:SourceAccount`)
+뿐입니다. 관리 · 구독은 신원 정책(kty IAM 사용자)이 정합니다.
+
+### 이메일 구독
+
+주제는 이 루트가 만들지만 이메일 구독은 저장소 밖에서 kty 가 한 번 답니다
+(K-D1) — 공개 저장소에 주소를 두지 않고, 확인 전 구독은 provider 가 지우지
+못하기 때문입니다.
+
+1.  edge apply 뒤 이 루트에서 주제 ARN 을 읽어 구독합니다.
+
+    ```shell
+    aws sns subscribe --region us-east-1 \
+      --topic-arn "$(terraform output -raw edge_alarm_topic_arn)" \
+      --protocol email --notification-endpoint '<받을 주소>'
+    ```
+
+1.  받은 확인 메일의 링크를 누릅니다. 누르기 전에는 알림이 가지 않습니다
+    (`aws sns list-subscriptions-by-topic` 의 `SubscriptionArn` 이
+    `PendingConfirmation`).
+1.  구독은 Terraform 상태 밖이라 주제가 다시 만들어지면 사라집니다. 리스
+    계정이 끝나 AWS Nuke 로 지워진 뒤 다시 만들었을 때나 주제를 교체했을 때는
+    1 부터 다시 합니다.
 
 ## VPC origin TLS 전제
 
@@ -187,8 +251,8 @@ Budgets 경보 때 1차 대응은 `enable_standard_logs = false` 로 edge apply 
 설계 7절의 `/live` 302 · 401 신호를 쓸 수 없습니다.
 
 /dvr 하한을 켠 뒤라면 `dvr_floor_enabled = true` 도 함께 넘깁니다. 이 함수를
-더한 PR 의 머지 뒤 1단 apply 전이면 plan 에 함수 · 로그 그룹 생성이 낍니다
-(「/dvr 하한(POK-525)」 의 선행).
+더한 PR 의 머지 뒤 1단 apply 전이면 plan 에 함수 · 로그 그룹 · 경보 생성이
+낍니다(「/dvr 하한(POK-525)」 의 선행).
 
 모듈에 넘기는 로그 그룹 ARN 은 자원의 `arn` 속성이 아니라 계정 · 리전 ·
 이름으로 짓습니다. 로그 그룹을 처음 만드는 plan 에서 `arn` 은 정해지지 않고,
