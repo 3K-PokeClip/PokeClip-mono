@@ -169,16 +169,16 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
-콘솔에서 만들어 두고 링크를 Jira POK-478(콘솔 화면 구성, 백로그)에 남깁니다. 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
+2026-11-11에 콘솔에 만들었고 링크는 Jira POK-478 댓글에 있습니다(대시보드 6개 · 인사이트 18개, 웹 분석은 기본 제공 화면 그대로). 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
 
 | 화면 | 정의 |
 |---|---|
 | 웹 분석(기본 제공) | 일별 방문자, 유입 경로(`utm_source`·`utm_medium`·`$referring_domain`), 기기(`$device_type`: Mobile·Desktop·Tablet), 국가. 랜딩과 대시보드는 `$host`로 나눠 본다 |
-| 가입 퍼널 | `$pageview`(`$host` = pokeclip.com) → `landing_cta_clicked` → `login_started` → `login_completed` → `platform_link_started` → `platform_linked` → `pairing_code_issued` → `video_render_requested`. 사람 기준·순서대로·전환 기간 14일. **처음 유입**(`$initial_utm_source`)과 기기로 나눠 본다. `_started` → 짝 이벤트 사이가 바깥 동의 화면의 이탈이다 |
+| 가입 퍼널 | `$pageview`(`$host` = pokeclip.com) → `landing_cta_clicked` → `login_started` → `login_completed` → `platform_link_started` → `platform_linked` → `pairing_code_issued` → `video_render_requested`. 사람 기준·순서대로·전환 기간 14일. **유입**(세션에 들어올 때의 `$session_entry_utm_source`, 첫 단계 기준)과 기기(`$device_type`)로 나눠 본다 — 사람 속성 `$initial_utm_source`는 로그인 전 방문자에게 없어서(익명 이벤트에는 사람 속성이 없다) 그것으로 나누면 로그인 전에 떠난 사람이 한 덩어리가 된다. `_started` → 짝 이벤트 사이가 바깥 동의 화면의 이탈이다 |
 | 편집자 퍼널 | `editor_invitation_responded`(`outcome` = accepted) → `channel_switched`(`to_role` = editor) → `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`. 사람 기준·전환 기간 14일. 3~5단계(`clip_editor_opened`부터)는 `active_role` = editor로도 거른다 — 1단계 초대 수락은 대개 자기 채널(`active_role` = owner)에서 일어나, 전 단계에 걸면 첫 단계가 0에 가깝게 나온다 |
 | 제작 | `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`·`video_upload_requested`, 재시도(`video_render_retried`·`video_upload_retried`)·수동 해결(`video_upload_resolved`) 추이. **영상 완성·업로드 완료는 PostHog에 없다**(서버를 붙이지 않음, 2026-10-24) — DB로 본다 |
 | 기능 이용 | `broadcast_playback_started`(`mode`), `highlight_marked`·`highlight_card_seeked`, `clip_download_requested`, `pending_feature_clicked`(`feature`별 — 준비 중 기능 수요), `setup_step_clicked`(`step`별) |
-| 주간 재방문 | 시작 `login_completed`, 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
+| 주간 재방문 | 시작 `login_completed`(사람별 첫 번째만 — first time), 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
 | 출시 대시보드 | 위 화면들 + `onboarding_tour_started`(`entry`) → `onboarding_tour_finished` 결과 분포 + `platform_unlinked`·`editor_invited`·`editor_delegation_ended`(`initiator`) 추이 |
 
 대시보드 설명에 그대로 적어 둡니다.
