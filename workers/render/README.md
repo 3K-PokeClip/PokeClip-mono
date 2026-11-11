@@ -63,7 +63,7 @@ clip이 `isFinalAttempt:true`(세 번째)를 준 실행의 실패는 다시 하�
     - 가드는 조각 단계에만 있다. 최종 인코딩 출력과 사진 줄은 남겨 둔 1GiB 여유에 기댄다. 처음부터 디스크에 안 들어가는 주문은 뒤쪽 조각에서야 `disk_short`가 난다.
     - 중간 파일은 성공 · 실패 · 재시도 모든 갈래에서 지운다.
 - **보고**: 성공 보고에 배치표 `placements`와 결과 길이 `lengthUs`를 싣는다.
-- **운영에서 먼저 볼 로그 줄(전체 목록 아님)**: `render.graph_size`(단계별 시간 · 중간 파일 바이트 `midBytes` · 최대 RSS — 모든 출력의 인코드를 마친 시도에만 남는다 — 조각 단계 · 인코드에서 실패한 시도에는 없고, 그 뒤 올리기 · 보고에서 실패한 시도에는 `render.failed` 와 함께 남는다(`JoinedRenderer.java:174` · `JobProcessor.java:131`). 실패한 작업의 소리 묶음 수는 `render.audio_run` 줄 수로 세어 `render.ffmpeg_failed` 와 맞댄다. 한 시도 안에서 센다 — 같은 일꾼 로그 흐름에서 그 작업의 `render.started`(`attempt` 칸) 줄부터 그 시도의 `render.failed` 줄까지. 재시도마다 같은 `jobId` 로 다시 찍히므로 `jobId` 전체를 세면 부풀려진다(`render.audio_run` · `render.ffmpeg_failed` 에는 시도 칸이 없다). `render.ffmpeg_failed` 의 `detail` 은 stderr 끝부분이라 메모리 초과를 혼자 확정하지 못한다) · `render.audio_run` · `render.end_owned` · `render.prime_skipped` · `render.signal_skipped` · `render.burn_rejected` · `render.color_mixed` · `render.disk_short` · `render.piece_capped`. 옛 꼴 주문은 `render.legacy_order` 한 줄을 남긴다.
+- **운영에서 먼저 볼 로그 줄(전체 목록 아님)**: `render.graph_size`(단계별 시간 · 중간 파일 바이트 `midBytes` · 최대 RSS — 모든 출력의 인코드를 마친 뒤 한 줄이다(`JoinedRenderer.java:174`) — 조각 단계 · 인코드에서 실패한 시도에는 없다. 이 줄로는 그 시도의 성패를 알 수 없다(그 뒤 올리기 · 보고 단계가 따로 있다). 실패한 작업의 소리 묶음 수는 `render.audio_run` 줄 수로 세어 `render.ffmpeg_failed` 와 맞댄다. 한 시도 안에서 센다 — 같은 일꾼 로그 흐름에서 그 작업의 `render.started`(`attempt` 칸) 줄부터 그 시도의 `render.failed` 줄까지. 재시도마다 같은 `jobId` 로 다시 찍히므로 `jobId` 전체를 세면 부풀려진다(`render.audio_run` · `render.ffmpeg_failed` 에는 시도 칸이 없다). `render.ffmpeg_failed` 의 `detail` 은 stderr 끝부분이라 메모리 초과를 혼자 확정하지 못한다) · `render.audio_run` · `render.end_owned` · `render.prime_skipped` · `render.signal_skipped` · `render.burn_rejected` · `render.color_mixed` · `render.disk_short` · `render.piece_capped`. 옛 꼴 주문은 `render.legacy_order` 한 줄을 남긴다.
 
 ## 잇기: 조각 경계에 빈틈이 생기지 않게 (실측 2026-09-24)
 
@@ -122,7 +122,7 @@ MediaMTX 조각은 **조각마다 머리(`ftyp+moov`)가 있는 완전한 fMP4**
 |---|---|
 | 1 | 주문서를 읽는다. 모양이 틀리거나 올릴 키가 `thumbnails/…jpg`가 아니면 지운다(다시 해도 같다) |
 | 2 | `source`를 받는다. 창고에 없으면(지워진 조각) 지운다 |
-| 3 | 원본을 판독하고(`media/MediaProbe.timing` — 실패하면 `SOURCE_MISMATCH` 로 지운다) `offsetMs` 를 원본 안 자리로 옮긴다: 카드 · 라이브는 원점 표지 `offsetOrigin`(영상 시작 · 파일 머리 — 없으면 파일 머리), clip 은 파일 시작 기준. 그 자리를 `[0, 마지막 표시 프레임]` 으로 자른다(끝을 넘는 주문은 마지막 장면 — `thumbnail/ThumbnailProcessor.Seek`) |
+| 3 | 원본을 판독하고(`media/MediaProbe.timing` — 판독 결과의 꼴 · 값이 어긋나면 `SOURCE_MISMATCH` 로 지운다. ffprobe 실행 실패 · 시간 초과는 라이브면 지우고 카드 · 완성 영상이면 둔다 — 아래 「라이브는 다시 하지 않는다」) `offsetMs` 를 원본 안 자리로 옮긴다: 카드 · 라이브는 원점 표지 `offsetOrigin`(영상 시작 · 파일 머리 — 없으면 파일 머리), clip 은 파일 시작 기준. 그 자리를 `[0, 마지막 표시 프레임]` 으로 자른다(끝을 넘는 주문은 마지막 장면 — `thumbnail/ThumbnailProcessor.Seek`) |
 | 4 | `ffmpeg -ss {자리} -i 원본 -frames:v 1 -vf scale='min(640,iw)':-2 -q:v 4`. 자른 자리에서도 장면을 못 뽑으면 첫 장면으로 한 번 더 하고, 그래도 없으면 `SOURCE_MISMATCH` 로 지운다 |
 | 5 | `output`에 `image/jpeg`로 올린다. 같은 대상은 늘 같은 키라 덮어쓴다 |
 | 6 | 상한(60초)까지 보고 시간(최대 13초)이 남았으면 clip에 `{kind, targetId, capturedAt}`를 알린다. 2xx·4xx면 지우고, 3xx·5xx·연결 오류면 둔다(리다이렉트를 꺼 두어 3xx는 받은 것이 아니다). 🔴 **404면 대상이 탈퇴로 지워진 것이라 5에서 올린 사진을 지운 뒤** 메시지를 지운다(POK-256) |
