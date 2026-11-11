@@ -2499,7 +2499,7 @@ git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커
 
 | 줄 | 어디 | 뜻 · 할 일 |
 |---|---|---|
-| `MEDIA START BLOCKED: sidecar cannot read ledger timing v2 label=<라벨> check=<코드>` | 유닛 저널(시작 스크립트) | 사이드카 라벨에 판 2 가 없고 검사가 0 이 아님. `check=3` 거부(게이트가 판 2 를 요구) · `4` 검사 못 함(DB 설정 · 연결 · 권한 · 판 목록 꼴) · 그 밖(`1` · `137` 등)은 검사 컨테이너가 판정까지 못 간 것 — 검사 핀이 c0 하한 아래(검사 명령 없음) · 검사 핀 이미지 받기 실패 · docker 오류 · 로그 드라이버를 못 띄움(journald 없는 엔진 — prod 상자는 journald 가 있어 생기지 않음) · OOM(137) · 시작 스크립트가 받은 TERM. 원인은 같은 저널에서 이 줄 바로 앞의 compose 출력으로 가린다. `label=none` 은 라벨 없는 출시 이미지 · `invalid` 는 꼴 밖. 사이드카 다이제스트를 c0 하한 이상으로 고쳐 설정 반영 교체 |
+| `MEDIA START BLOCKED: sidecar cannot read ledger timing v2 label=<라벨> check=<코드>` | 유닛 저널(시작 스크립트) | 사이드카 라벨에 판 2 가 없고 검사가 0 이 아님. `check=3` 거부(게이트가 판 2 를 요구) · `4` 검사 못 함(DB 설정 · 연결 · 권한 · 판 목록 꼴 · **게이트 표 없음** — PDT 운영 SQL 전에 c0 하한 이상 묶음으로 띄웠다. 같은 저널의 검사 서비스 JSON 줄이 `timing_gate_check_failed` `reason=read` · `relation "stream_timing_gate" does not exist`) · 그 밖(`1` · `137` 등)은 검사 컨테이너가 판정까지 못 간 것 — 검사 핀이 c0 하한 아래(검사 명령 없음) · 검사 핀 이미지 받기 실패 · docker 오류 · 로그 드라이버를 못 띄움(journald 없는 엔진 — prod 상자는 journald 가 있어 생기지 않음) · OOM(137) · 시작 스크립트가 받은 TERM. 원인은 같은 저널에서 이 줄 바로 앞의 compose 출력으로 가린다. `label=none` 은 라벨 없는 출시 이미지 · `invalid` 는 꼴 밖. 처치는 사이드카 다이제스트를 c0 하한 이상으로 고쳐 설정 반영 교체 — 단 게이트 표 없음(위)이면 사이드카를 바꾸지 않습니다(c0 하한 이상 사이드카는 운영 SQL 없는 DB 에서 기동 스키마 확인으로 멈춥니다). 배포 순서 1(운영 SQL)부터 합니다 |
 | `timing_downgrade_refused` · `timing_gate_check_failed` | 검사 서비스 JSON(같은 저널) · 사이드카 저널 | 게이트 값(`highest_version` · `new_round_version`)과 이미지 판 목록(`readable`). 사이드카가 이것으로 끝나면 판 2 읽기를 지운 앞날 이미지 — 하한 이상으로 되돌림 |
 | `legacy_writer_refused`(SQLSTATE 23514) | 사이드카 저널의 INSERT 실패 · PG 로그 | 래치 2 장부에 출시 이미지가 씀. 그 상자의 모든 스트림 색인이 서고 엔진이 거듭 다시 띄움 — 사이드카를 c0 하한 이상으로 |
 
@@ -2518,6 +2518,11 @@ git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커
 
 ### PDT 배포 순서
 
+PDT 머지 뒤 **첫 `prod/media` plan 전에** tfvars 의 `image_digests.timing_guard`
+(c0 하한 이상 검사 핀 — [prod 산출물 런북](prod-artifacts.md) 「검사 핀」)를
+채웁니다. 필수 키라 아래 3 보다 앞선 다른 작업의 plan 도 이 키 없이는 멈춥니다.
+떠 있는 상자는 `user_data` 가 `ignore_changes` 라 바뀌지 않습니다.
+
 | # | 하는 일 | 자리 · 판정 |
 |---|---|---|
 | 1 | 운영 SQL(PDT c1 정의) | 런타임 1단-가 런북 「PDT 재실행 조건」 · 방송 없는 시간대 |
@@ -2531,8 +2536,9 @@ git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커
 **판 2 를 읽는 판**으로 prod 에 올라 있는지, 서비스마다 prod 배포 기록의 빌드
 커밋이 그 서비스의 판 2 읽기 머지 커밋을 조상으로 두는지(`git merge-base
 --is-ancestor`)로 봅니다. 다섯 줄 모두 「예」 를 기록한 뒤에 3 으로 갑니다.
-PDT 머지 뒤의 모든 사이드카 이미지(다른 수정 · POK-525 뒤 PR 포함)도 같은
-선행 조건(1 · 2)을 가집니다.
+PDT 머지 뒤의 모든 사이드카 · 설치 묶음 이미지(다른 수정 · POK-525 뒤 PR
+포함)도 같은 선행 조건(1 · 2)을 가집니다 — 묶음의 기동 전 검사는 게이트 표를
+읽으므로 운영 SQL(1) 전에 띄우면 `check=4` 로 막힙니다.
 
 **길들이기(4).** c0 가 판 NULL 로 도는 동안 봅니다 — c0 결함 0 ·
 `timing_facts_partial` 비율 · 귀속 행 `timing_round_id` = 세션 `round_id`

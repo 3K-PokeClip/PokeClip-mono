@@ -19,8 +19,8 @@ root_volume_size = 150
 # O7c 에서 푸시한 이미지의 다이제스트(runbooks/prod-artifacts.md). 태그가 아니라
 # sha256:<64자리> 다. 응답기(ingest_auth)는 M15 · O8a 에서 채운다 — 비워 두면
 # compose 에 렌더하지 않는다. timing_guard 는 기동 전 검사 핀이다 — c0 하한 이상
-# 사이드카 이미지 다이제스트(runbooks/media-swap.md 「판 2 롤백 하한」)이고,
-# 사이드카를 내릴 때도 그대로 둔다. bundle 도 c11 하한 이상만 둔다.
+# 사이드카 이미지 다이제스트(runbooks/media-swap.md 「PDT 하한 판정」)이고,
+# 사이드카를 내릴 때도 그대로 둔다. bundle 도 c0 하한 이상만 둔다.
 image_digests = {
   bundle          = "sha256:<MEDIA_HOST_BUNDLE_DIGEST>"
   mediamtx        = "sha256:<MEDIA_MEDIAMTX_DIGEST>"
