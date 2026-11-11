@@ -175,7 +175,7 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 |---|---|
 | 웹 분석(기본 제공) | 일별 방문자, 유입 경로(`utm_source`·`utm_medium`·`$referring_domain`), 기기(`$device_type`: Mobile·Desktop·Tablet), 국가. 랜딩과 대시보드는 `$host`로 나눠 본다 |
 | 가입 퍼널 | `$pageview`(`$host` = pokeclip.com) → `landing_cta_clicked` → `login_started` → `login_completed` → `platform_link_started` → `platform_linked` → `pairing_code_issued` → `video_render_requested`. 사람 기준·순서대로·전환 기간 14일. **처음 유입**(`$initial_utm_source`)과 기기로 나눠 본다. `_started` → 짝 이벤트 사이가 바깥 동의 화면의 이탈이다 |
-| 편집자 퍼널 | `editor_invitation_responded`(`outcome` = accepted) → `channel_switched`(`to_role` = editor) → `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`. 사람 기준·전환 기간 14일. 이 퍼널의 이벤트는 `active_role` = editor로도 거른다 |
+| 편집자 퍼널 | `editor_invitation_responded`(`outcome` = accepted) → `channel_switched`(`to_role` = editor) → `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`. 사람 기준·전환 기간 14일. 3~5단계(`clip_editor_opened`부터)는 `active_role` = editor로도 거른다 — 1단계 초대 수락은 대개 자기 채널(`active_role` = owner)에서 일어나, 전 단계에 걸면 첫 단계가 0에 가깝게 나온다 |
 | 제작 | `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`·`video_upload_requested`, 재시도(`video_render_retried`·`video_upload_retried`)·수동 해결(`video_upload_resolved`) 추이. **영상 완성·업로드 완료는 PostHog에 없다**(서버를 붙이지 않음, 2026-10-24) — DB로 본다 |
 | 기능 이용 | `broadcast_playback_started`(`mode`), `highlight_marked`·`highlight_card_seeked`, `clip_download_requested`, `pending_feature_clicked`(`feature`별 — 준비 중 기능 수요), `setup_step_clicked`(`step`별) |
 | 주간 재방문 | 시작 `login_completed`, 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
