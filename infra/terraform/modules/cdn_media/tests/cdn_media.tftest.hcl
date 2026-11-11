@@ -690,7 +690,8 @@ run "caches_errors_for_one_second_without_custom_pages" {
   }
 }
 
-# 함수 둘 · KVS — 이름 접두 · 런타임 · 게시 · KVS 연결은 live-auth 에만.
+# 함수 셋(deny-default · live-auth · dvr-floor) · KVS — 이 run 은 앞 둘: 이름
+# 접두 · 런타임 · 게시 · KVS 연결은 live-auth 에만(dvr-floor 는 아래 run).
 run "publishes_functions_with_kvs_only_on_live_auth" {
   command = plan
 

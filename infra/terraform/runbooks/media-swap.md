@@ -951,7 +951,9 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         지나도 4.2 세션이 아직 `live` 로 남아 있으면 같은 세션으로 이어지는데,
         그때도 Q4 는 `f` 를 냅니다(`<on>` 뒤에 시작한 세션이 없으면 `round_id`
         가 비고, 있으면 그 회차에 4.2 의 옛 꼴이 섞여 `not_round_keys` 1 이상) —
-        4.11 로 가지 않고 kty 에게 보고합니다.
+        4.11 로 가지 않고 kty 에게 보고합니다. [엣지 시험 런북](edge-tests.md)
+        「/dvr 하한 걸음」 의 「새 시험 방송으로 재개」 도 같은 까닭으로 6분을
+        기다리고, 새 회차가 직전 회차와 다른지 봅니다.
 *   **4.9 — 운영 SQL 2.** 직전에 B `PATHS 0` 을 다시 봅니다(트리거를 만드는
     동안 세션 쓰기가 막힘). 보내는 법 · 실패 갈래는 런타임 1단-가 런북
     「POK-525 운영 SQL 2 적용」 입니다. B 는 다시 띄우지 않습니다 — 다음
@@ -1109,8 +1111,9 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         `update module.media.aws_cloudfront_distribution.this` 한 줄이고,
         함수 · 로그 그룹 · 경보는 남깁니다. 원인을 고친 뒤 다시 켭니다 —
         [엣지 시험 런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의
-        2단 · 판정 C′ 입니다. 함수 코드가 원인이면 같은 런북의 「붙은 채
-        함수 코드 고치기」 차례(고친 PR 머지 전에 끔)를 따릅니다.
+        2단 · 판정 C′ 입니다(C′ 결과 셋 — 「통과」 면 켠 채 두고, 「끄기」 면
+        다시 끄며, 「보류」 면 kty 회부). 함수 코드가 원인이면 같은 런북의
+        「붙은 채 함수 코드 고치기」 차례(고친 PR 머지 전에 끔)를 따릅니다.
 
         ```shell
         terraform -chdir=infra/terraform/prod/edge plan -input=false \
@@ -1120,6 +1123,11 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
           | jq -r '.resource_changes[] | select(.mode == "managed")
               | select(.change.actions != ["no-op"])
               | "\(.change.actions | join(",")) \(.address)"'
+        ```
+
+        목록이 위 한 줄과 같을 때만, kty 실행 직전 승인 뒤 apply 합니다.
+
+        ```shell
         terraform -chdir=infra/terraform/prod/edge apply \
           "${work}/edge-dvr-off.plan"
         ```
