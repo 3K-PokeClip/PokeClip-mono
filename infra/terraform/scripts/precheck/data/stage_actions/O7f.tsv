@@ -10,6 +10,8 @@
 # 로그 그룹 태그 읽기(결정 65 예외 · 리뷰가 찾은 누락 · kty 2026-10-25 넣고
 # PR). KVS 값 동작은 O7f-stop2 에만.
 # SG 규칙 재조회 읽기(POK-479 — 결정 65 예외 · 그 덩어리의 주석).
+# /dvr 하한 함수의 재조회 · 갱신 · 판정 B′(POK-525 계획 Ⓓ 8절 5 — 그
+# 덩어리의 주석).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # CloudFront 제어면(KVS 그릇 생성 · 재조회 포함 — 값 동작 아님)
@@ -29,6 +31,19 @@ cloudfront:CreateOriginRequestPolicy	us-east-1	*
 cloudfront:CreateResponseHeadersPolicy	us-east-1	*
 cloudfront:CreateOriginAccessControl	us-east-1	*
 cloudfront:CreateInvalidation	us-east-1	*
+
+# /dvr 하한 함수 dvr-floor(POK-525 — modules/cdn_media edge_auth.tf). 생성 ·
+# 게시 · 설명은 위 행이 덮는다. provider 6.68.0 은 함수를 Read 에서
+# GetFunction(코드) · DescribeFunction 으로 읽어 재apply 의 refresh 가
+# 부르고, 코드가 바뀌면 UpdateFunction 뒤 PublishFunction 을 부른다(계획 Ⓓ
+# 리서치 R6 · R8). TestFunction 은 1단 apply 뒤 판정 B′(prod 함수
+# test-function — runbooks/edge-tests.md)가 부른다. 함수는 롤백에서도
+# 지우지 않아 DeleteFunction 은 두지 않는다. KVS 연결 권한은 실험대 (3)
+# R6(2026-11-11): 함수 권한만으로 KVS 연결 Create · Update 성공 — KVS 쪽
+# 동작 불요.
+cloudfront:GetFunction	us-east-1	*
+cloudfront:UpdateFunction	us-east-1	*
+cloudfront:TestFunction	us-east-1	*
 
 # 표준 로그 v2 전달 · 대상 로그 그룹 · 보존 · 리소스 정책(us-east-1)
 logs:PutDeliverySource	us-east-1	*

@@ -206,7 +206,8 @@ readonly LATE_TARGETS
 # 의 ARN 끝(ID)은 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와 같은 방식 —
 # 근거는 prod_targets.tsv 의 platform 덩어리 주석). 끝 덩어리
 # (platform-listener-rule 부터)는 POK-479 가 더한 보안 리뷰 M 다섯과
-# CloudFront 함수 로그 그룹 셋이다. ECS 서비스 로그 그룹은 platform 다섯
+# CloudFront 함수 로그 그룹 셋이다. 맨 끝 둘은 /dvr 하한 함수(POK-525)의
+# 함수 행 · 로그 그룹 행이다. ECS 서비스 로그 그룹은 platform 다섯
 # (chat 둘은 POK-306)과 workers 둘(render · upload — 첫 단계 workers ·
 # POK-408)이다. 런타임 2단 상태 객체(prod/runtime-2 — 첫 단계 O7f)와 일꾼
 # 배치 상태 객체(prod/workers — 첫 단계 workers)도 여기서 본다.
@@ -288,6 +289,12 @@ FOLLOWUP_TARGETS=(
 'logs:DeleteLogGroup'
   'cf-function-log-group-apex-request O7f arn:arn:aws:logs:us-east-1:'\
 '${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-apex-request '\
+'logs:DeleteLogGroup'
+  'cf-function-dvr-floor O7f arn:arn:aws:cloudfront::${ACCOUNT}:'\
+'function/pokeclip-prod-dvr-floor '\
+'cloudfront:UpdateFunction,cloudfront:PublishFunction'
+  'cf-function-log-group-dvr-floor O7f arn:arn:aws:logs:us-east-1:'\
+'${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-dvr-floor '\
 'logs:DeleteLogGroup')
 readonly FOLLOWUP_TARGETS
 # prod ACM 검증 레코드(prod/certs 의 aws_route53_record.validation — POK-484)
@@ -328,8 +335,10 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 의 그 덩어리 주석). O7a 의 스물셋은
 # network 의 인터페이스 엔드포인트 · 엔드포인트 SG 를 만들고 되돌릴 때
 # provider 가 부르는 동작과, 확인 · 되돌리기 절차가 부르는 동작이다. 그 뒤의
-# 둘은 엔드포인트 생성의 Route 53 종속 동작(두 리전), 맨 끝 하나는 확인
-# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석).
+# 둘은 엔드포인트 생성의 Route 53 종속 동작(두 리전), 그 뒤 하나는 확인
+# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석). 맨 끝 O7f 의
+# 셋은 /dvr 하한 함수(POK-525)의 provider 재조회 · 코드 갱신과 판정 B′ 의
+# test-function 이다(근거는 O7f 묶음 파일의 그 덩어리 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -397,7 +406,10 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7a\tssm:GetCommandInvocation\tap-northeast-2\t*'
   $'O7a\troute53:AssociateVPCWithHostedZone\tus-east-1\t*'
   $'O7a\troute53:AssociateVPCWithHostedZone\tap-northeast-2\t*'
-  $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*')
+  $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*'
+  $'O7f\tcloudfront:GetFunction\tus-east-1\t*'
+  $'O7f\tcloudfront:UpdateFunction\tus-east-1\t*'
+  $'O7f\tcloudfront:TestFunction\tus-east-1\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################

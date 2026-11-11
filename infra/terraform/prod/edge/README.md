@@ -23,13 +23,15 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
 *   **apex 배포**(`modules/cdn_static_site`): `pokeclip.com` · `www.pokeclip.com`
     별칭, 서울 S3 버킷(접두 `pokeclip-prod-apex-`)을 OAC 로만 읽습니다.
 *   **media 배포**(`modules/cdn_media`): `media.pokeclip.com` 별칭, KVS 그릇 ·
-    함수 둘 · 키 그룹 · VPC origin(내부 ALB) · rewind 버킷 오리진(OAC)을
-    포함합니다.
+    함수 셋(live-auth · deny-default · /dvr 하한 dvr-floor) · 키 그룹 · VPC
+    origin(내부 ALB) · rewind 버킷 오리진(OAC)을 포함합니다. dvr-floor 는
+    스위치가 켜졌을 때만 `/dvr/*` 에 붙습니다(아래 「/dvr 하한(POK-525)」).
 *   **표준 로그 로그 그룹**(`pokeclip-prod-media-access` · us-east-1): media
     배포의 표준 로그(v2)를 JSON 으로 받습니다. 보존은 `log_retention_days`
     (기본 7)입니다.
-*   **함수 로그 그룹 셋**(`/aws/cloudfront/function/<함수 이름>` ·
-    us-east-1): live-auth · deny-default 의 `console.log` 를 받습니다.
+*   **함수 로그 그룹 넷**(`/aws/cloudfront/function/<함수 이름>` ·
+    us-east-1): live-auth · deny-default · dvr-floor 의 `console.log` 를
+    받습니다.
     apex-request 는 `console.log` 가 없어 그룹이 비어 있습니다 — 나중에
     로그를 넣을 때 보존 없는 그룹이 생기지 않게 미리 만드는 그릇입니다. 보존은
     WAF 차단 로그와 같은 30일입니다(PR 387 보안 L2).
@@ -68,11 +70,14 @@ G14 · T10 에서 OPTIONS 0건 확인), 버킷 자체의 규칙은 S3 직접 요
 | secrets | `public_key_id` | media 키 그룹 |
 | platform | `internal_alb_arn` · `internal_alb_dns_name` · `internal_alb_sg_id` | VPC origin · media-alb 원본 도메인 · 인그레스 규칙 |
 | runtime | `rewind_bucket_regional_domain_name` | rewind-s3 오리진 |
+| runtime | `edge_bounds_kvs_arn` | dvr-floor 함수의 KVS 연결(POK-525) |
 
 `terraform_data.remote_contract` 의 precondition 이 이 값들의 꼴(VPC id ·
 us-east-1 ACM ARN · 공개키 id `K…` · ALB ARN · `internal-` 로 시작하는 내부
-ALB DNS · SG id · S3 리전 도메인)을 봅니다. 출력이 빠졌거나 꼴이 다르면
-plan 이 멈춥니다.
+ALB DNS · SG id · S3 리전 도메인 · CloudFront KVS ARN)을 봅니다. 출력이
+빠졌거나 꼴이 다르면 plan 이 멈춥니다. `edge_bounds_kvs_arn` 은 prod/runtime
+을 POK-525 판으로 다시 apply 해야 생깁니다 — 그 전에는 이 검사의 문구로
+멈춥니다.
 
 ## 출력
 
@@ -109,7 +114,8 @@ edge apply 는 [엣지 비밀 런북](../../runbooks/edge-secrets.md) 「초기�
 함수가 이 루트의 함수 로그 그룹보다 먼저 로그를 내면(apply 가 그룹 전에
 멈춘 채 T6b 를 했을 때 등) AWS 가 그룹을 먼저 만들어 다음 apply 가 이미
 있음(`ResourceAlreadyExistsException`)으로 실패합니다. 그 그룹을 import 로
-받고 다시 apply 합니다(키는 `live_auth` · `deny_default` · `apex_request`).
+받고 다시 apply 합니다(키는 `live_auth` · `deny_default` · `apex_request` ·
+`dvr_floor`).
 
 ```shell
 terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
@@ -120,6 +126,44 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
 
 *   **hlsSegmentCount 900 → 7**(ADR-102): `/dvr` 비헤이비어 · 되감기 버킷
     오리진이 생기고, 2번 플레이어가 `/dvr` 로 진입한 뒤에 줄입니다.
+
+## /dvr 하한(POK-525)
+
+dvr-floor(`pokeclip-prod-dvr-floor`)는 `/dvr/*` viewer-request 함수입니다.
+회차 꼴 조각의 seq 가 그 회차 하한보다 작으면 본문 없는 404 로 막습니다.
+하한은 런타임 1단 KVS(`edge_bounds_kvs_arn`)에서 읽고, 값은 media 사이드카
+Writer 가 씁니다([media README](/media/README.md) 「/dvr 하한 Writer」).
+하한은 되감기 창 정책이고 1차 통제는 서명 쿠키라, 키가 없거나 KVS 읽기가
+실패하거나 값이 이상하면 막지 않고 넘깁니다.
+
+스위치는 `dvr_floor_enabled`(기본 `false`)입니다. 함수와 함수 로그 그룹은
+스위치와 무관하게 생기고, 스위치는 `/dvr/*` 에 붙일지만 정합니다. 켜는 것은
+두 단 apply 이고 걸음마다 kty 승인을 받습니다.
+
+1.  선행 — prod/runtime 을 POK-525 판으로 apply 해 출력
+    `edge_bounds_kvs_arn` 이 있고, POK-528(하한 404 를 받는 웹)이 prod 에
+    반영돼 있어야 합니다. 이 함수를 더한 PR 의 머지도 이 선행이 다 참이 된
+    뒤입니다 — 머지 뒤 첫 edge apply 는 스위치가 꺼져 있어도 함수 · 로그
+    그룹을 만듭니다.
+1.  1단 — 스위치 기본값(`false`) 그대로 apply 합니다. plan 은 함수 하나 ·
+    함수 로그 그룹 하나 생성이고 배포 변경은 0 입니다. 게시된 함수를
+    test-function 으로 시험합니다([엣지 시험 런북](../../runbooks/edge-tests.md)).
+1.  2단 — `-var dvr_floor_enabled=true` 로 apply 합니다. plan 은 media 배포
+    하나 변경입니다. 실제 엣지 요청으로 시험하고, 실패하면 곧바로 `false` 로
+    되돌립니다(함수 · 로그 그룹은 남김).
+
+켠 뒤의 edge apply(표준 로그 끄기 · WAF 속도 조정 포함)는 모두
+`-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에 `/dvr/*`
+연결 제거가 끼어듭니다.
+
+붙은 채로 함수 코드를 고칠 때는 먼저 `false` 로 떼고, 1단으로 새 코드를
+게시해 시험한 뒤 다시 켭니다. 게시(PublishFunction)는 그 함수를 쓰는
+비헤이비어에 곧바로 실립니다.
+
+해체 · 교체 순서는 edge 가 먼저입니다. 런타임 1단 KVS 그릇을 교체하거나
+지우려면 dvr-floor 의 연결을 먼저 떼야 합니다 — DeleteKeyValueStore 는 쓰는
+중인 그릇을 `CannotDeleteEntityWhileInUse`(409)로 거절합니다(API 참조
+2026-11-11 확인 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).
 
 ## VPC origin TLS 전제
 
@@ -141,6 +185,10 @@ Budgets 경보 때 1차 대응은 `enable_standard_logs = false` 로 edge apply 
 은 전달 자원 삭제만이고 그 밖 0 입니다(VPC origin 서비스 SG 조회가 VPC origin
 하나만 기다려, 내부 ALB 인그레스 규칙에 변경 예고가 끼지 않습니다). 끈 동안은
 설계 7절의 `/live` 302 · 401 신호를 쓸 수 없습니다.
+
+/dvr 하한을 켠 뒤라면 `dvr_floor_enabled = true` 도 함께 넘깁니다. 이 함수를
+더한 PR 의 머지 뒤 1단 apply 전이면 plan 에 함수 · 로그 그룹 생성이 낍니다
+(「/dvr 하한(POK-525)」 의 선행).
 
 모듈에 넘기는 로그 그룹 ARN 은 자원의 `arn` 속성이 아니라 계정 · 리전 ·
 이름으로 짓습니다. 로그 그룹을 처음 만드는 plan 에서 `arn` 은 정해지지 않고,

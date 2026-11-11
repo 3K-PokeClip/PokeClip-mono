@@ -10,8 +10,10 @@
 #   보호는 출력 protected_headers · protected_query_args 로 본다.
 # - 표준 로그 로그 그룹은 보존 = 변수이고, enable_standard_logs = false 면
 #   media 모듈에 null 을 넘기되 로그 그룹은 남는다.
-# - CloudFront Function 로그 그룹 셋은 /aws/cloudfront/function/<함수 이름>
+# - CloudFront Function 로그 그룹 넷은 /aws/cloudfront/function/<함수 이름>
 #   · us-east-1 · 보존 = WAF 차단 로그(30일)다.
+# - /dvr 하한 함수(POK-525)는 runtime 출력 edge_bounds_kvs_arn 을 연결하고,
+#   스위치 dvr_floor_enabled(기본 false)가 참일 때만 /dvr/* 에 붙는다.
 # - VPC origin 서비스 SG 는 서울 별칭으로 이름 · network vpc_id 로 조회하고,
 #   내부 ALB SG 에 그 SG 출처 443 인그레스 하나를 둔다. 조회는 VPC origin
 #   하나만 기다려, VPC origin 밖 media 변경 plan 에서도 출처 SG 가 정해져 있다.
@@ -137,6 +139,14 @@ override_resource {
   }
 }
 
+# 함수 ARN 을 따로 줘, 스위치가 다른 함수를 붙이면 실패하게 한다.
+override_resource {
+  target = module.media.aws_cloudfront_function.dvr_floor
+  values = {
+    arn = "arn:aws:cloudfront::111122223333:function/pokeclip-prod-dvr-floor"
+  }
+}
+
 override_data {
   target = data.terraform_remote_state.network
   values = {
@@ -181,6 +191,7 @@ override_data {
   values = {
     outputs = {
       rewind_bucket_regional_domain_name = "pokeclip-prod-rewind-example.s3.ap-northeast-2.amazonaws.com"
+      edge_bounds_kvs_arn                = "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1"
     }
   }
 }
@@ -376,8 +387,9 @@ run "cloudfront_function_log_groups_keep_waf_retention" {
       live_auth    = "/aws/cloudfront/function/pokeclip-prod-live-auth"
       deny_default = "/aws/cloudfront/function/pokeclip-prod-deny-default"
       apex_request = "/aws/cloudfront/function/pokeclip-prod-apex-request"
+      dvr_floor    = "/aws/cloudfront/function/pokeclip-prod-dvr-floor"
     }
-    error_message = "함수 로그 그룹이 /aws/cloudfront/function/ + 함수 셋(live-auth · deny-default · apex-request)의 이름이 아니다."
+    error_message = "함수 로그 그룹이 /aws/cloudfront/function/ + 함수 넷(live-auth · deny-default · apex-request · dvr-floor)의 이름이 아니다."
   }
 
   assert {
@@ -403,6 +415,31 @@ run "cloudfront_function_log_groups_keep_waf_retention" {
       group.region == "us-east-1"
     ])
     error_message = "함수 로그 그룹의 region 이 us-east-1 이 아니다(자원에 적지 않았거나 다른 리전)."
+  }
+}
+
+# --- /dvr 하한 함수(POK-525) ---
+
+# 기본은 끔 — 함수는 게시돼도 /dvr/* 에 붙지 않는다(두 단 apply 의 1단).
+run "dvr_floor_is_published_but_detached_by_default" {
+  assert {
+    condition = (
+      var.dvr_floor_enabled == false &&
+      module.media.dvr_floor_attached == false &&
+      module.media.function_names.dvr_floor == "pokeclip-prod-dvr-floor"
+    )
+    error_message = "dvr_floor_enabled 기본(false)에서 dvr-floor 가 /dvr/* 에 붙었거나 함수 이름이 pokeclip-prod-dvr-floor 가 아니다."
+  }
+}
+
+run "dvr_floor_switch_attaches_to_dvr" {
+  variables {
+    dvr_floor_enabled = true
+  }
+
+  assert {
+    condition     = module.media.dvr_floor_attached == true
+    error_message = "dvr_floor_enabled = true 인데 media 모듈이 dvr-floor 를 /dvr/* 에 붙이지 않는다(스위치가 전달되지 않음)."
   }
 }
 
@@ -530,6 +567,39 @@ run "rejects_platform_internal_alb_sg_id_not_sg" {
         internal_alb_arn      = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/pokeclip-prod-internal/0123456789abcdef"
         internal_alb_dns_name = "internal-pokeclip-prod-internal-1234567890.ap-northeast-2.elb.amazonaws.com"
         internal_alb_sg_id    = "pokeclip-prod-internal"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.remote_contract]
+}
+
+# runtime 출력 이름이 어긋나 빠지면 함수 KVS 연결을 짓기 전에 멈춘다.
+run "rejects_missing_runtime_edge_bounds_kvs_arn" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rewind_bucket_regional_domain_name = "pokeclip-prod-rewind-example.s3.ap-northeast-2.amazonaws.com"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.remote_contract]
+}
+
+# ARN 이 아니라 그릇 이름이 오면 멈춘다.
+run "rejects_runtime_edge_bounds_kvs_name_not_arn" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rewind_bucket_regional_domain_name = "pokeclip-prod-rewind-example.s3.ap-northeast-2.amazonaws.com"
+        edge_bounds_kvs_arn                = "pokeclip-prod-edge-bounds"
       }
     }
   }
