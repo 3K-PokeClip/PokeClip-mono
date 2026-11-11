@@ -47,15 +47,29 @@ func (e *Expirer) process(ctx context.Context, b Broadcast) {
 	if errors.Is(err, errCutoffInvalid) || errors.Is(err, index.ErrCutoffInvalid) {
 		return // 경보는 cutoff_invalid 게이지가 켜질 때 · 꺼질 때 한 줄씩 냈다 — 회차마다 되풀이하지 않는다
 	}
+	if errors.Is(err, errDeferred) {
+		return // 실패가 아니다 — expiry_deferred 게이지가 켜질 때 한 줄을 냈다
+	}
 	e.log.Error("expiry_delete_failed", "stage", stage, "stream_id", b.IngestStreamID, "broadcast", b.StreamID, "err", err)
 }
 
 // errCutoffInvalid 는 1단계에서 멈췄다는 표지다(경보는 이미 냈다).
 var errCutoffInvalid = errors.New("무효 컷오프 — 객체를 지우지 않는다")
 
-// deleteBroadcast 는 한 방송의 다섯 걸음이다. 실패한 걸음 이름과 오류를 돌려준다.
+// errDeferred 는 미룸 판정이 거짓이라 아무것도 쓰지 않았다는 표지다(전환 줄은 이미 냈다). 그 방송은 재시도 집합에 남는다.
+var errDeferred = errors.New("확정 전 회차 — 이번에는 표시도 삭제도 하지 않는다")
+
+// deleteBroadcast 는 한 방송의 걸음이다 — 미룸 판정 뒤 다섯 걸음. 실패한 걸음 이름과 오류를 돌려준다.
 func (e *Expirer) deleteBroadcast(ctx context.Context, b Broadcast) (string, error) {
 	q := index.ExpiryQuery{StreamID: b.IngestStreamID, From: b.SegmentsFrom, Until: *b.SegmentsUntil}
+	settled, err := e.ledger.RoundsSettled(ctx, q)
+	if err != nil {
+		return "settle", err
+	}
+	e.signalDeferred(q.StreamID, b.StreamID, !settled)
+	if !settled {
+		return "settle", errDeferred
+	}
 	if _, err := e.ledger.MarkExpired(ctx, q); err != nil {
 		return "mark", err
 	}
@@ -105,6 +119,20 @@ func (e *Expirer) signalCutoff(stream string, valid bool) {
 	case valid && e.invalid[stream]:
 		delete(e.invalid, stream)
 		e.log.Error("cutoff_invalid", "axis", "expiry", "stream_id", stream, "value", 0)
+	}
+}
+
+// signalDeferred 는 expiry_deferred 게이지를 방송별로 맞춘다 — 미뤄질 때 · 처리될 때 한 줄씩이고 회차마다 되풀이하지
+// 않는다(signalCutoff 꼴). 하루 넘게 value=1 이면 확정되지 못한 회차 · 사슬이 있다(README 「60일 만료」 영구 미룸).
+func (e *Expirer) signalDeferred(stream, broadcast string, deferred bool) {
+	switch {
+	case deferred && !e.deferred[broadcast]:
+		e.deferred[broadcast] = true
+		e.log.Warn("expiry_deferred", "value", 1, "broadcast", broadcast, "stream_id", stream, "reason", "unsettled",
+			"note", "구간을 품을 수 있는 회차 · 사슬이 아직 확정될 수 있다 — 닫힐 때까지 미룬다")
+	case !deferred && e.deferred[broadcast]:
+		delete(e.deferred, broadcast)
+		e.log.Warn("expiry_deferred", "value", 0, "broadcast", broadcast, "stream_id", stream)
 	}
 }
 

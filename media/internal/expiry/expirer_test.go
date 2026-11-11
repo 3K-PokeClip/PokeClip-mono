@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -15,7 +16,8 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
-// 한 방송의 걸음 순서 — 표시(0) → 상태 표지 → e1 검사 → 대상 행 → 문서 → 조각 객체 → 행. 문서가 조각보다 먼저다(D16).
+// 한 방송의 걸음 순서 — 미룸 판정 → 표시(0) → 상태 표지 → e1 검사 → 대상 행 → 문서 → 조각 객체 → 행. 문서가 조각보다
+// 먼저다(D16).
 func TestSweepDeletesBroadcastInOrder(t *testing.T) {
 	r := newRig(t, nil)
 	r.ledger.put("live1", 3)
@@ -23,7 +25,7 @@ func TestSweepDeletesBroadcastInOrder(t *testing.T) {
 	r.clip.pages[""] = clipPage{items: []clipItem{item("live1")}, next: ptr("c1")}
 	r.sweep(t)
 
-	if got := r.ledger.callLog(); !slices.Equal(got, []string{"live1:mark", "live1:cutoff", "live1:rows", "live1:docs", "live1:delete"}) {
+	if got := r.ledger.callLog(); !slices.Equal(got, []string{"live1:settle", "live1:mark", "live1:cutoff", "live1:rows", "live1:docs", "live1:delete"}) {
 		t.Fatalf("걸음 %v", got)
 	}
 	if !slices.Equal(r.changed, []string{"live1"}) {
@@ -568,5 +570,49 @@ func TestSweepDefaultLimitsRejectElevenSecondsAndTwoMiB(t *testing.T) {
 				t.Fatal("실패 회차에 표시가 생겼다")
 			}
 		})
+	}
+}
+
+// POK-551 T2b — 구간을 앞으로 품을 수 있는 회차가 아직 확정될 수 있으면 미룬다. 표시도 삭제도 하지 않고 재시도 집합에
+// 남긴다. 전환 줄(expiry_deferred)은 미뤄질 때 한 번 · 처리될 때 한 번이고 회차마다 되풀이하지 않는다.
+func TestSweepDefersUnsettledBroadcastUntilSettled(t *testing.T) {
+	r := newRig(t, nil)
+	r.ledger.put("wait", 2)
+	r.ledger.unsettled["wait"] = true
+	r.clip.pages[""] = clipPage{items: []clipItem{item("wait")}, next: ptr("c1")}
+	r.clip.pages["c1"] = clipPage{next: ptr("c1")}
+	for range 2 {
+		r.sweep(t)
+		r.now = r.now.Add(10 * time.Minute)
+	}
+
+	if got := r.ledger.callLog(); !slices.Equal(got, []string{"wait:settle", "wait:settle"}) {
+		t.Fatalf("걸음 %v (미룸 판정만 기대 — 표시 · 삭제 없음)", got)
+	}
+	if _, ok := r.e.retry["S-wait"]; !ok {
+		t.Fatal("미룬 방송이 재시도 집합에 없다")
+	}
+	if len(r.changed) != 0 || len(r.objects.deletedKeys()) != 0 {
+		t.Fatalf("미뤘는데 상태 표지 %v · 객체 삭제 %v", r.changed, r.objects.deletedKeys())
+	}
+	if fails := r.log.all("expiry_delete_failed"); len(fails) != 0 {
+		t.Fatalf("expiry_delete_failed %v (0 기대 — 미룸은 실패가 아니다)", fails)
+	}
+	lines := r.log.all("expiry_deferred")
+	if len(lines) != 1 || lines[0].level != slog.LevelWarn || lines[0].attrs["value"] != "1" ||
+		lines[0].attrs["broadcast"] != "S-wait" || lines[0].attrs["reason"] != "unsettled" {
+		t.Fatalf("expiry_deferred %v (WARN value=1 한 줄 기대)", lines)
+	}
+
+	delete(r.ledger.unsettled, "wait")
+	r.sweep(t)
+	if got := r.ledger.deletedSeqs("wait"); !slices.Equal(got, []int64{0, 1}) {
+		t.Fatalf("확정 뒤 행 삭제 %v", got)
+	}
+	if _, ok := r.e.retry["S-wait"]; ok {
+		t.Fatal("처리한 방송이 재시도 집합에 남았다")
+	}
+	if lines = r.log.all("expiry_deferred"); len(lines) != 2 || lines[1].attrs["value"] != "0" {
+		t.Fatalf("expiry_deferred %v (처리될 때 value=0 한 줄 기대)", lines)
 	}
 }

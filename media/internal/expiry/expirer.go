@@ -1,7 +1,7 @@
 // Package expiry 는 60일 만료(POK-196 M6-4)다 — clip 만료 창구를 폴링해 받은 방송의 구간을 S3 와 장부에서 지운다.
 //
 // 사이드카 안 고루틴 하나다(K7 — 장부 표 단일 쓰기자 · S3 · 풀이 이미 있다). 한 방송의 순서(설계 M6 7절)는
-// 0 조회 제외 영속 → 상태 표지 → 1 무효 컷오프 검사 → 2 대상 행 → 3 세션 단위 문서 → 4 조각 객체 → 5 행이다.
+// 미룸 판정 → 0 조회 제외 영속 → 상태 표지 → 1 무효 컷오프 검사 → 2 대상 행 → 3 세션 단위 문서 → 4 조각 객체 → 5 행이다.
 // 걸음이 실패하면 그 방송을 재시도 집합(메모리)에 넣고 다음 방송으로 간다 — 한 방송이 뒤 방송을 막지 않는다(D22).
 // 캐시는 만지지 않는다. 장부를 바꾼 뒤 상태 표지(index.PlaybackChanged)만 넣는다(보내는 길은 하나).
 package expiry
@@ -62,6 +62,7 @@ type Expirer struct {
 	fails    int                  // 연속 폴링 실패 수
 	stalled  bool                 // expiry_stalled 게이지
 	invalid  map[string]bool      // cutoff_invalid axis=expiry 게이지(켜진 스트림)
+	deferred map[string]bool      // expiry_deferred 게이지(미뤄진 방송 — 방송 식별자 streamId)
 }
 
 // stalledAfter 는 expiry_stalled 를 켜는 연속 폴링 실패 수다(설계 8절).
@@ -84,14 +85,15 @@ func New(ledger Ledger, objects Objects, o Options) (*Expirer, error) {
 		now = time.Now
 	}
 	return &Expirer{
-		ledger:  ledger,
-		objects: objects,
-		clip:    newClipClient(o.ClipURL, o.Token, o.RequestTimeout, o.BodyLimit),
-		opt:     o,
-		log:     o.Log,
-		now:     now,
-		retry:   map[string]Broadcast{},
-		invalid: map[string]bool{},
+		ledger:   ledger,
+		objects:  objects,
+		clip:     newClipClient(o.ClipURL, o.Token, o.RequestTimeout, o.BodyLimit),
+		opt:      o,
+		log:      o.Log,
+		now:      now,
+		retry:    map[string]Broadcast{},
+		invalid:  map[string]bool{},
+		deferred: map[string]bool{},
 	}, nil
 }
 

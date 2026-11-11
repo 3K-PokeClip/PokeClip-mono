@@ -18,12 +18,13 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
-// fakeLedger 는 Ledger 의 시험 구현이다. 스트림마다 행 · 문서를 들고, 실패 · 무효 컷오프를 주입한다.
+// fakeLedger 는 Ledger 의 시험 구현이다. 스트림마다 행 · 문서를 들고, 실패 · 무효 컷오프 · 미정 회차를 주입한다.
 type fakeLedger struct {
 	mu        sync.Mutex
 	rows      map[string][]index.ExpiryRow
 	docs      map[string][]index.ExpiryDocument
 	invalid   map[string]bool
+	unsettled map[string]bool // 미룸 판정이 거짓인 스트림
 	marked    []string
 	deleted   map[string][]int64
 	markErr   error
@@ -33,7 +34,7 @@ type fakeLedger struct {
 
 func newFakeLedger() *fakeLedger {
 	return &fakeLedger{rows: map[string][]index.ExpiryRow{}, docs: map[string][]index.ExpiryDocument{},
-		invalid: map[string]bool{}, deleted: map[string][]int64{}}
+		invalid: map[string]bool{}, unsettled: map[string]bool{}, deleted: map[string][]int64{}}
 }
 
 // put 은 스트림에 대상 행 n 개를 넣는다(seq 0..n-1 · 키 둘).
@@ -48,6 +49,13 @@ func (l *fakeLedger) put(stream string, n int) {
 
 func (l *fakeLedger) step(stream, name string) {
 	l.calls = append(l.calls, stream+":"+name)
+}
+
+func (l *fakeLedger) RoundsSettled(_ context.Context, q index.ExpiryQuery) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.step(q.StreamID, "settle")
+	return !l.unsettled[q.StreamID], nil
 }
 
 func (l *fakeLedger) MarkExpired(_ context.Context, q index.ExpiryQuery) (int64, error) {
