@@ -1124,6 +1124,10 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
           "${work}/edge-dvr-off.plan"
         ```
 
+    *   apply 뒤 떼어졌는지는 [엣지 시험 런북](edge-tests.md) 「/dvr 하한
+        끄기」 의 확인 둘(배포 설정의 `/dvr/*` 연결 · 표지 요청)로 봅니다.
+        하한 값 · 회차와 무관해 회차가 닫힌 뒤에도 성립합니다.
+
 *   **Writer 만 문제**(`edge_bounds_write_failing` 이 풀리지 않음 ·
     `dvr_floor_release_overdue` · `edge_bounds_degraded`)
     *   `edge_bounds_degraded` 는 먼저 그 줄의 `err` 를 고치고 사이드카를
