@@ -28,6 +28,7 @@ import {
   type UploadInfo,
   type UploadRequestSummary,
 } from '@/api/clipEditor';
+import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 import { EditorBackLink } from '../EditorBackLink';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
@@ -251,6 +252,27 @@ function formatClock(ms: number): string {
   const s = total % 60;
   const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
   return `${h > 0 ? `${h}:` : ''}${mm}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * 머리의 출처 줄 — 「10월 17일 방송 · 카드 1:05」(편집본이면 「구간 …」). 시각은 이번 방송 시작부터 잰다(POK-562): 카드 · 구간 ms는
+ * 서버 기준점 축이라 같은 송출 키로 한 앞 방송들의 길이만큼 앞설 수 있다. 기준점을 모르면 시각을 싣지 않는다 — 방송 시작으로 대신
+ * 재면 어긋난 값이 정확한 값처럼 보인다
+ */
+function sourceLabelOf(
+  startedAt: string,
+  timelineOriginAt: string | null | undefined,
+  card: JumpCard | null,
+  windowStartMs: number,
+): string {
+  const day = `${dateLabel(startedAt)} 방송`;
+  const elapsed = elapsedSinceStartMs(
+    card ? card.streamTimestampMs : windowStartMs,
+    timelineOriginAt ? Date.parse(timelineOriginAt) : null,
+    Date.parse(startedAt),
+  );
+  if (elapsed === null) return day;
+  return `${day} · ${card ? '카드' : '구간'} ${formatClock(elapsed)}`;
 }
 
 function dateLabel(iso: string): string {
@@ -716,12 +738,22 @@ function WiredStudio({
     const durationSeconds = Math.min(totalSeconds, window.endMs / 1000);
     return {
       clipTitle: card ? `점프카드 #${card.id}` : `편집본 #${saved?.id}`,
-      sourceLabel: `${dateLabel(startedAt)} 방송 · ${card ? `카드 ${formatClock(card.streamTimestampMs)}` : `구간 ${formatClock(window.startMs)}`}`,
+      sourceLabel: sourceLabelOf(startedAt, broadcast.timelineOriginAt, card, window.startMs),
       durationSeconds,
       minSeconds,
       range: { startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 },
     };
-  }, [broadcast.endedAt, base, window, card, saved, startedAt, recording, recordingEndSeconds]);
+  }, [
+    broadcast.endedAt,
+    broadcast.timelineOriginAt,
+    base,
+    window,
+    card,
+    saved,
+    startedAt,
+    recording,
+    recordingEndSeconds,
+  ]);
 
   /** 화면값 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가 한다 */
   const documentFor = useCallback(

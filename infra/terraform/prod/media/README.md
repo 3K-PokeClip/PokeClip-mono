@@ -42,12 +42,17 @@ prod Media 상자[^box]를 띄우는 루트입니다(설계 3-1 의 ⑨). 자원
 | platform | `target_group_arns` · `internal_alb_sg_id` · `nlb_sg_id` · `media_proxy_ports` · `media_health_path` · `service_sg_ids`(`auth`) · `service_ports`(`auth`) |
 | secrets | `cdn_secret_arn` · `test_stream_key_secret_arn` |
 | registry | `repo_urls`(아래 「이미지」) |
-| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn` · `broadcast_topic_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
+| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn` · `broadcast_topic_arn` · `edge_bounds_kvs_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
 
 출력 하나라도 없으면 plan 이 그 이름으로 실패합니다. 런타임 1단 출력은 O7e
 선행 확인 ② 입니다. platform 의 `service_ports` 는 Media ↔ auth 짝(kty 결정
 2026-10-25 (나))과 함께 더한 출력이라, 그 전에 apply 한 platform 상태면
-platform 을 다시 apply 한 뒤에 plan 이 통과합니다.
+platform 을 다시 apply 한 뒤에 plan 이 통과합니다. 런타임 1단의
+`edge_bounds_kvs_arn`(POK-525)도 같습니다 — prod/runtime 을 다시 apply 해 KVS
+그릇을 만든 뒤에 plan 이 통과합니다. PR Ⓒ 머지 뒤 그 apply 전에는 이 루트의
+어떤 plan 이든(긴급 apply 포함) 그 출력 이름으로 멈춥니다. 순서는
+[교체 런북](/infra/terraform/runbooks/media-swap.md) 「POK-525 교체 선행」
+입니다.
 
 ## 이미지
 
@@ -107,6 +112,14 @@ tfvars 에 둡니다.
     `false`). prod 값은 POK-525 교체 걸음 4.12(A 회수 4.11 뒤)부터 `true` 입니다(결정 9 (가)).
     첫 부팅에만 쓰이므로 바꿔도 plan 의 상자 변경은 0 이고, 다음 상자부터 그
     값으로 뜹니다. 떠 있는 상자의 값은 상자 안 파일이 정본입니다.
+*   `edge_bounds_writer_enabled`(/dvr 하한 Writer 스위치)는 기본 `false`
+    입니다. 켜면 사이드카 `REWIND_EDGE_BOUNDS_KVS_ARN` 에 런타임 1단 출력
+    `edge_bounds_kvs_arn` 을 채우고, 끄면 빈 값(Writer 꺼짐)입니다. KVS ARN 은
+    런타임 출력에서만 오고 tfvars 칸이 없습니다. 인스턴스 역할의
+    `EdgeBoundsKvs`(그 KVS 하나)는 스위치와 무관하게 늘 있습니다 — 처음 이
+    루트를 apply 할 때 공유 역할 정책에 문 하나가 더해집니다. user_data 로만
+    들어가 바꿔도 떠 있는 상자는 그대로이고, 켜기 · 끄기는 설정 반영 교체
+    입니다(POK-525 교체 걸음 4.1 에서 켬).
 
 적용은 O7e 의 1(kty 승인)입니다. 백엔드는 `backend.hcl.example` 을
 `backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를

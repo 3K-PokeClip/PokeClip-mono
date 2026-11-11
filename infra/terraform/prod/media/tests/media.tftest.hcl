@@ -141,6 +141,7 @@ override_data {
 
       ingest_auth_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-token-StUvWx"
       broadcast_topic_arn                  = "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo"
+      edge_bounds_kvs_arn                  = "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1"
     }
   }
 }
@@ -473,6 +474,48 @@ run "keeps_broadcast_topic_out_of_tfvars" {
       !strcontains(file("terraform.tfvars.example"), "broadcast_topic_arn")
     )
     error_message = "기본 입력에서 주제가 런타임 상태 출력이 아니거나, broadcast_topic_arn 이 이 루트의 변수 · tfvars 예시에 있다(정본은 런타임 1단 출력)."
+  }
+}
+
+# --- /dvr 하한 Writer(POK-525 — KVS ARN 은 런타임 1단 출력 · 스위치만 tfvars) ---
+
+# 기본 끔 — 모듈에는 런타임 KVS ARN 이 늘 가고(인스턴스 역할 Resource), 사이드카
+# env 는 빈 값이다.
+run "defaults_edge_bounds_writer_off" {
+  command = plan
+
+  assert {
+    condition = (
+      var.edge_bounds_writer_enabled == false &&
+      module.media_host.template_vars.edge_bounds_kvs_arn == "" &&
+      strcontains(one([
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), "REWIND_EDGE_BOUNDS_KVS_ARN: \"\"")
+    )
+    error_message = "기본값에서 Writer 가 꺼져 있지 않다(사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 이 빈 값이 아님)."
+  }
+}
+
+# 켬 — 사이드카 env 가 런타임 상태의 KVS ARN 이다(손으로 넣는 칸이 없다).
+run "passes_edge_bounds_kvs_arn_from_runtime_state" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = true
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.edge_bounds_kvs_arn == "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1" &&
+      strcontains(one([
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), "REWIND_EDGE_BOUNDS_KVS_ARN: \"arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1\"") &&
+      !strcontains(file("variables.tf"), "variable \"edge_bounds_kvs_arn\"") &&
+      !strcontains(file("terraform.tfvars.example"), "edge_bounds_kvs_arn")
+    )
+    error_message = "edge_bounds_writer_enabled = true 인데 사이드카 env 가 런타임 상태 출력 edge_bounds_kvs_arn 이 아니거나, edge_bounds_kvs_arn 이 이 루트의 변수 · tfvars 예시에 있다(정본은 런타임 1단 출력)."
   }
 }
 

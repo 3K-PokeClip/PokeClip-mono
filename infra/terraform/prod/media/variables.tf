@@ -125,6 +125,13 @@ variable "playback_round_keys" {
   nullable    = false
 }
 
+variable "edge_bounds_writer_enabled" {
+  description = "/dvr 하한 Writer 스위치 — 참이면 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 에 런타임 1단 출력 edge_bounds_kvs_arn 을 채운다(거짓이면 빈 값 = Writer 꺼짐). KVS ARN 은 런타임 출력에서만 오므로 칸이 없다. user_data 로만 들어가 바꾸는 것은 설정 반영 교체다(떠 있는 상자는 그대로). 인스턴스 역할의 EdgeBoundsKvs 문은 스위치와 무관하게 늘 있다."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "docker_version" {
   description = "AL2023 arm64 저장소의 docker 패키지 판."
   type        = string

@@ -247,7 +247,7 @@ run "aborts_incomplete_uploads_without_expiration" {
   }
 }
 
-# 출력은 edge(오리진) · media(업로드 정책) 가 읽는다(CONTRACT-runtime.md).
+# 출력은 edge(오리진) · media(사이드카 S3 정책) 가 읽는다(CONTRACT-runtime.md).
 run "outputs_match_bucket_attributes" {
   command = plan
 

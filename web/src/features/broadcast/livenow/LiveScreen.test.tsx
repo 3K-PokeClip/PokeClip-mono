@@ -117,6 +117,8 @@ const control = vi.hoisted(() => ({
 // 기준점 칸(timeBaseMs)을 낸 순서(POK-546 K11): 한 커밋 안의 두 발행(null → 새 값)은 그리기 하나로 합쳐져 화면으로는 못 가른다.
 // 발행 함수를 감싸 timeBaseMs 를 실은 발행만 차례로 적는다
 const timeBaseLog = vi.hoisted(() => [] as (number | null)[]);
+// 재생 위치(playheadMs)를 실은 발행도 차례로 적는다 — 카드 이동이 옮긴 초를 그대로 잰다(POK-562)
+const playheadLog = vi.hoisted(() => [] as (number | null)[]);
 vi.mock('@/features/broadcast/livenow/liveDataStore', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/features/broadcast/livenow/liveDataStore')>();
@@ -124,6 +126,7 @@ vi.mock('@/features/broadcast/livenow/liveDataStore', async (importOriginal) => 
     ...actual,
     publishLiveData: (patch: Parameters<typeof actual.publishLiveData>[0]) => {
       if ('timeBaseMs' in patch) timeBaseLog.push(patch.timeBaseMs ?? null);
+      if ('playheadMs' in patch) playheadLog.push(patch.playheadMs ?? null);
       actual.publishLiveData(patch);
     },
   };
@@ -1168,6 +1171,7 @@ beforeEach(() => {
   control.roundStatus = null;
   control.calls = [];
   timeBaseLog.length = 0;
+  playheadLog.length = 0;
   pastCardLog.length = 0;
   playerSources.length = 0;
   playerSuspend.promise = null;
@@ -1292,6 +1296,17 @@ function stubMediaElement() {
   // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+}
+
+/**
+ * 카드의 사진 단추(누르면 그 시점으로 간다)를 카드 제목으로 찾는다. 단추 이름은 카드 시각을 싣는다: 이동 시험이 이름으로
+ * 고르면 시각 표기를 고친 것만으로 이동 시험이 깨지거나 통과한다(POK-562)
+ */
+function cardThumb(id: number): HTMLElement {
+  const article = screen
+    .getByRole('heading', { name: `채팅이 튄 순간 #${id}` })
+    .closest('article')!;
+  return within(article).getAllByRole('button')[0]!;
 }
 
 /** 지난 방송 채팅을 물은 창의 시작(epoch ms)들 */
@@ -2534,6 +2549,8 @@ describe('LiveScreen — 하이라이트 카드', () => {
   });
 
   it('카드를 누르면 그 시점으로 옮긴다 — 영상이 없으면 그렇다고 말한다', async () => {
+    // 카드 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.liveOriginMs = STARTED_AT;
     await renderLive();
 
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
@@ -2548,6 +2565,8 @@ describe('LiveScreen — 하이라이트 카드', () => {
   });
 
   it('지난 방송에서는 영상이 없어도 채팅을 그 시점으로 옮기고 그렇다고 말한다', async () => {
+    // 카드 · 채팅 바닥 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.vodOrigin = VOD_STARTED;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
@@ -2895,6 +2914,21 @@ describe('LiveScreen: 지난 방송 이 시점 카드 추가(POK-392)', () => {
     expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('기준점이 방송 시작보다 181시간 앞서도 마킹 자리 표기는 방송 시작부터다(POK-562) — 보내는 위치는 기준점 축 그대로다', async () => {
+    const ahead = 181 * 3_600_000;
+    const { container } = await openPastVod({ origin: VOD_STARTED - ahead });
+    await playTo(container, 8.11);
+    server.markGate = new Promise<void>(() => undefined);
+    server.markReply = { status: 201, body: VOD_MARK_CARD };
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies[0]?.positionMs).toBe(ahead + 8_110);
+    // 고치기 전에는 기준점 축 그대로 「181:00:08 마킹됨」이었다
+    expect(screen.getByText('0:00:08 마킹됨 · 카드 생성 중')).toBeInTheDocument();
   });
 
   it('F8도 같은 위치 갈래다', async () => {
@@ -3267,6 +3301,8 @@ describe('LiveScreen — 실시간 통계', () => {
   });
 
   it('그래프의 하이라이트 핀을 누르면 카드를 누른 것과 같이 그 시점으로 간다', async () => {
+    // 카드 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.liveOriginMs = STARTED_AT;
     graphWidth();
     await renderLive();
 
@@ -3797,7 +3833,8 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     openFromHome(4);
     await renderLive();
 
-    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    // 기준점이 방송 시작보다 32초 늦다: 카드 2,842초는 방송 시작부터 2,874초다(POK-562 — 전에는 기준점 축 그대로 0:47:22). 읽는 자리는 그대로다
+    expect(screen.getByText(/^0:47:54 시점까지 보는 중/)).toBeInTheDocument();
   });
 
   it('녹화가 없으면 채팅이 그 카드 시점까지에서 멈춘다: 서버 기준점 축으로 그 둘레를 읽는다', async () => {
@@ -3807,7 +3844,8 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
 
     // 차트가 이 방송의 칸이 아니면(시험 서버의 CHART) 카드 시점 60초 앞부터 읽는다. 요청은 영상 축이다(보정은 수집기가 더한다)
     expect(chatFroms()).toContain(VOD_STARTED + 32_000 + 2_842_000 - 60_000);
-    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    // 기준점이 방송 시작보다 32초 늦다: 카드 2,842초는 방송 시작부터 2,874초다(POK-562 — 전에는 기준점 축 그대로 0:47:22). 읽는 자리는 그대로다
+    expect(screen.getByText(/^0:47:54 시점까지 보는 중/)).toBeInTheDocument();
     // 사람이 누른 것이 아니다. 「영상은 아직 없어요」를 먼저 띄우지 않는다
     expect(screen.queryByText(/영상은 아직 없어요/)).not.toBeInTheDocument();
   });
@@ -3928,6 +3966,8 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
   }
 
   it('라이브에서 영상 없이 누른 카드는 남지 않는다: 방송이 끝나 다시보기가 서도 다시보기도 채팅도 그 카드로 가지 않는다', async () => {
+    // 카드 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.liveOriginMs = STARTED_AT;
     // 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 누른 카드가 아니라 되감은 영상의 시각만 따른다(POK-326).
     // 남겨 두면 방송이 끝나 다시보기로 바뀔 때 오래전 카드로 튀거나(리뷰 2라운드), 다시보기는 처음부터인데 채팅만 그 카드에
     // 묶인다(리뷰 3라운드)
@@ -3956,7 +3996,8 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
     const { container } = await renderLiveStrict();
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 명부 답 전이라 방송 시작을 몰라 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await act(async () => {
       release();
     });
@@ -3967,6 +4008,8 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
   });
 
   it('명부 답 전에 누른 카드도 라이브로 밝혀지면 버린다: 방송이 끝난 뒤 녹화도 채팅도 그 카드로 가지 않는다', async () => {
+    // 카드 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.liveOriginMs = STARTED_AT;
     stubMediaElement();
     let release: () => void = () => undefined;
     server.listGate = new Promise((resolve) => {
@@ -3975,7 +4018,8 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     nav.search = `?stream=${STREAM_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
     const { container } = await renderLive();
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 명부 답 전이라 방송 시작을 몰라 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await act(async () => {
       release();
     });
@@ -3990,6 +4034,8 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
   });
 
   it('주소의 카드는 한 번만 옮긴다: 사람이 다른 카드를 고른 뒤 몇 초가 지나도 주소의 카드로 돌아가지 않는다', async () => {
+    // 카드 · 채팅 바닥 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.vodOrigin = VOD_STARTED;
     // 카드 목록은 매초 새로 만들어져 주소 카드 효과가 매초 다시 돈다. 이미 옮겼다는 표시가 없으면 사람이 고른 시점을
     // 매초 되돌린다(리뷰 4라운드)
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
@@ -4122,6 +4168,8 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
   });
 
   it('영상이 없으면 카드를 누르기 전에는 방송 끝까지의 최근 300줄이고, 누르면 그 시점까지에서 멈춘다', async () => {
+    // 카드 · 채팅 바닥 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.vodOrigin = VOD_STARTED;
     server.vodChat = true;
     server.vodChartPerBucket = 3;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
@@ -4152,6 +4200,8 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
   });
 
   it('영상이 없어도 카드를 누르면 채팅 창이 그 시점(맨 아래)을 따라간다: 위로 올려 읽던 자리에 남지 않는다', async () => {
+    // 카드 · 채팅 바닥 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.vodOrigin = VOD_STARTED;
     server.vodChat = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
@@ -4179,7 +4229,8 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     server.vodChartPerBucket = 3;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(8));
     await settle();
 
     // 30초 칸마다 3줄: 5,000초가 걸친 칸(4,980초) 앞 100칸의 시작이 1,980초다
@@ -4314,7 +4365,8 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(signal?.aborted).toBe(false);
     server.vodChatGate = null;
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     expect(signal?.aborted).toBe(true);
@@ -4430,7 +4482,8 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     server.vodChat = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
     expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
 
@@ -4446,7 +4499,8 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     server.vodChat = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     const asked = chatFroms().length;
@@ -4812,7 +4866,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     const base = VOD_STARTED + 30_000;
     act(() => publishLiveData({ timeBaseMs: base }));
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     // 방송 시작 기준 2,872초다: 방송 시작에 더했으면 2,845초 채팅이 보인다
@@ -4828,7 +4883,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 이동만 잰다: 시각이 아니라 제목으로 고른다(cardThumb — POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     expect(screen.getByText('2865초 채팅')).toBeInTheDocument();
@@ -4961,7 +5017,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     fireEvent.scroll(list);
     setScrollTop.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
     expect(screen.getByText('영상은 아직 없어요')).toBeInTheDocument();
     expect(screen.queryByText(/채팅을 그 시점으로 옮겼어요/)).toBeNull();
@@ -5249,7 +5306,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(froms().length).toBeGreaterThan(0);
     expect(Math.min(...froms())).toBeGreaterThanOrEqual(VOD_STARTED + 3 * 3_600_000);
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
     expect(froms()).toContain(VOD_STARTED + 2_842_000 - 60_000);
   });
@@ -5368,7 +5426,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
     act(() => publishLiveData({ timeBaseMs: VOD_STARTED + 30_000 }));
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 이동만 잰다: 시각이 아니라 제목으로 고른다(cardThumb — POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     expect(chatFroms()).toContain(VOD_STARTED + 30_000 + 2_842_000 - 60_000);
@@ -6028,6 +6087,8 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
   });
 
   it('라이브 중 카드를 누르면 영상과 채팅이 같이 그 시점으로 간다: 카드의 실제 시각으로 옮긴다', async () => {
+    // 카드 시각은 서버 기준점이 있어야 선다(POK-562 — 모르면 숨긴다). 방송 시작과 같은 기준점을 준다
+    server.liveOriginMs = STARTED_AT;
     // 재생기 경과 시계(방송 시작 기준, 숨은 탭에서 밀린다)가 아니라 카드의 실제 시각에 조각의 시각 표시로 선다
     const { container } = await openLive();
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
@@ -6076,7 +6137,8 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     const { container } = await openLive(false);
     const video = container.querySelector('video')!;
     const before = video.currentTime;
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await tick(container);
 
     expect(video.currentTime).toBeLessThan(before - 60);
@@ -6091,7 +6153,8 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     stubLiveVideo();
     const { container } = await renderLive();
     await playTo(container, 0);
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await tick(container);
 
     expect(screen.getByText(/영상은 아직 없어요/)).toBeInTheDocument();
@@ -6335,6 +6398,73 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
     expect(within(chatPanel()).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
   });
+
+  // POK-562: 서버 기준점이 같은 송출 키로 한 앞 방송들의 길이만큼 시작보다 앞선 방송(prod 181시간). 카드 ms는 그 축이다.
+  // 이동 시험은 카드 제목 · 핀 글자로 고른다: 시각 · 그 시각이 든 단추 이름에 기대면 표기만 고쳐도 이동 시험이 같이 흔들린다
+  describe('기준점이 방송 시작보다 한참 앞인 방송(POK-562)', () => {
+    const AHEAD_MS = 181 * 3_600_000;
+    /** 방송 시작 5,000.7초 자리의 카드(지금 43초 전 — 되감기 창 안). ms 자리가 있어 옮기는 자리의 초 내림을 잰다 */
+    const aheadCard = (ahead: number) =>
+      card(20, { streamTimestampMs: ahead + 5_000_700, eventSeq: 200 });
+    /** 그 카드로 옮긴 영상 초 — 기준점 + floor(카드 ms / 1000) × 1000 의 실제 시각을 영상 0초(MEDIA_ZERO)에서 잰 것 */
+    const MOVED_SECONDS = (STARTED_AT + 5_000_000 - MEDIA_ZERO) / 1000;
+
+    it('카드를 누르면 지금과 같은 절대 시각(기준점 + 카드 초)으로 옮긴다', async () => {
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [aheadCard(AHEAD_MS)];
+      const { container } = await openLive();
+      fireEvent.click(cardThumb(20));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(MOVED_SECONDS, 3);
+    });
+
+    it('통계 핀을 눌러도 같은 자리로 옮긴다', async () => {
+      graphWidth();
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [aheadCard(AHEAD_MS)];
+      const { container } = await openLive();
+      fireEvent.click(screen.getByText('#20', { selector: 'button' }));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(MOVED_SECONDS, 3);
+    });
+
+    it('기준점이 1000시간 넘게 앞서도 옮긴다 — 시계 글자를 되읽던 때는 「1001:…」을 못 읽어 옮기지 못했다', async () => {
+      const ahead = 1_000 * 3_600_000;
+      server.liveOriginMs = STARTED_AT - ahead;
+      server.extraCards = [aheadCard(ahead)];
+      const { container } = await openLive();
+      fireEvent.click(cardThumb(20));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(MOVED_SECONDS, 3);
+    });
+
+    it('카드 시각 · 단추 이름 · 핀 이름은 방송 시작부터 잰다', async () => {
+      graphWidth();
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [aheadCard(AHEAD_MS)];
+      await openLive();
+
+      // 고치기 전에는 기준점 축 그대로 「182:23:20」이었다
+      expect(screen.getByRole('button', { name: '1:23:20 시점으로 이동' })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /^하이라이트 #20 — .*1:23:20로 이동$/ }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/18[12]:\d\d:\d\d/)).toBeNull();
+    });
+
+    it('라이브를 되감은 채팅 바닥도 방송 시작부터 잰다', async () => {
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [card(20, { streamTimestampMs: AHEAD_MS + 2_842_000, eventSeq: 200 })];
+      const { container } = await openLive();
+      fireEvent.click(cardThumb(20));
+      await tick(container);
+
+      expect(within(chatPanel()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    });
+  });
 });
 
 describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
@@ -6490,7 +6620,8 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     await settle();
     const loadsBefore = hlsFake.loads;
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     expect(screen.queryByText(OUT_OF_RANGE)).toBeNull();
@@ -6502,7 +6633,8 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     const { container } = await closeToRecording([{ startMs: MEDIA_ZERO, durationSeconds: 3_600 }]);
     expect(container.querySelector('video')?.getAttribute('src') ?? '').toContain('/playback/');
 
-    fireEvent.click(screen.getByRole('button', { name: '0:01:00 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(1));
     await settle();
 
     expect(screen.queryByText(/영상은 아직 없어요|녹화 영상이 없어요|다시보기/)).toBeNull();
@@ -6511,7 +6643,8 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
   it('B — 세션이 녹화로 닫혔는데 녹화가 없으면 카드는 「녹화 영상이 없어요」다(지금 녹화 길의 알림)', async () => {
     await closeToRecording([]);
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     expect(screen.getByText('녹화 영상이 없어요')).toBeInTheDocument();
@@ -6614,7 +6747,8 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
       video.currentTime = liveEndSeconds() - 2;
       const loadsBefore = hlsFake.loads;
 
-      fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+      // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+      fireEvent.click(cardThumb(4));
       await settle();
 
       expect(screen.getByText(OUT_OF_RANGE)).toBeInTheDocument();
@@ -6631,7 +6765,8 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     await liveListLoaded();
     const loadsBefore = hlsFake.loads;
 
-    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
     await settle();
 
     expect(hlsFake.loads).toBeGreaterThan(loadsBefore);
@@ -7058,7 +7193,8 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
       expect(control.calls).toEqual([]);
       expect(mediaCalls.spans).toEqual([]);
-      fireEvent.click(screen.getByRole('button', { name: CARD4 }));
+      // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+      fireEvent.click(cardThumb(4));
       await settle();
       expect(screen.getByText(`영상은 아직 없어요${CHAT_MOVED}`)).toBeInTheDocument();
       expect(lastPastCard()).toEqual({ phase: null, kind: 'blocked', reason: 'unconfigured' });
@@ -7147,7 +7283,8 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
         await vi.advanceTimersByTimeAsync(65_000);
       });
       await settle();
-      fireEvent.click(screen.getByRole('button', { name: CARD4 }));
+      // 이동만 잰다: 기준점이 1초 바뀌어 카드 시각 글자가 바뀌므로 제목으로 고른다(POK-562)
+      fireEvent.click(cardThumb(4));
       await settle();
       expect(screen.queryByText(WAITING_NOTICE)).toBeNull();
       expect(screen.getByText(`영상은 아직 없어요${CHAT_MOVED}`)).toBeInTheDocument();
@@ -7408,4 +7545,125 @@ function formatCardLabel(seconds: number): string {
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+describe('LiveScreen: 지난 방송의 카드 시각은 이번 방송 시작부터(POK-562)', () => {
+  // 서버 기준점이 시작보다 181시간 앞인 지난 방송(같은 송출 키로 한 앞 방송들). 카드 ms는 그 축이다
+  const AHEAD_MS = 181 * 3_600_000;
+  const VOD_ORIGIN = VOD_STARTED - AHEAD_MS;
+  /** 방송 시작 2,842.7초 자리의 카드 */
+  const aheadCard = () =>
+    card(20, { streamId: VOD_ID, streamTimestampMs: AHEAD_MS + 2_842_700, eventSeq: 200 });
+  const pastChat = () => screen.getByRole('complementary', { name: '지난 채팅' });
+
+  it('카드를 누르면 채팅이 지금과 같은 절대 시각(기준점 + 카드 초)의 둘레를 읽는다', async () => {
+    server.vodOrigin = VOD_ORIGIN;
+    server.extraCards = [aheadCard()];
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    fireEvent.click(cardThumb(20));
+    await settle();
+
+    // 차트가 이 방송의 칸이 아니면 카드 시점 60초 앞부터 읽는다. 카드 시점은 초 내림이다(ms 자리 700은 버린다)
+    expect(chatFroms()).toContain(VOD_ORIGIN + (AHEAD_MS + 2_842_000) - 60_000);
+  });
+
+  it('주소의 카드(?card=)도 같은 자리로 옮긴다', async () => {
+    server.vodOrigin = VOD_ORIGIN;
+    server.extraCards = [aheadCard()];
+    openFromHomeVod(20);
+    await renderLive();
+
+    expect(chatFroms()).toContain(VOD_ORIGIN + (AHEAD_MS + 2_842_000) - 60_000);
+  });
+
+  it('카드 시각과 채팅 바닥은 방송 시작부터 잰다', async () => {
+    server.vodOrigin = VOD_ORIGIN;
+    server.extraCards = [aheadCard()];
+    openFromHomeVod(20);
+    await renderLive();
+
+    // 고치기 전에는 「181:47:22」였다
+    expect(screen.getByRole('button', { name: '0:47:22 시점으로 이동' })).toBeInTheDocument();
+    expect(within(pastChat()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  describe('기준점을 모르면 시각을 숨긴다 — 방송 시작으로 대신 재지 않는다(K1)', () => {
+    /** 기준점 없이 온 키 누적 카드(prod: 방송 시작 1분 뒤인데 기준점 축으로 181시간 1분) */
+    const KEY_MS = AHEAD_MS + 60_700;
+    const keyCard = () => card(20, { streamId: VOD_ID, streamTimestampMs: KEY_MS, eventSeq: 200 });
+    /** 카드 이동이 옮기는 초(seekSeconds — 카드 ms 초 내림). 고치기 전에 시계 글자를 되읽어 옮기던 값과 같다 */
+    const KEY_SECONDS = Math.floor(KEY_MS / 1000);
+    /**
+     * 그 카드로 옮긴 뒤 채팅을 읽는 창의 시작. 기준점이 없어 0초는 방송 시작이고, 그 자리(방송 시작 + 181시간)는 방송 끝보다 뒤라
+     * 채팅 시점이 방송 끝에 걸린다. 차트가 이 방송의 칸이 아니면 그 60초 앞부터 읽는다 — 고치기 전과 같은 창이다
+     */
+    const KEY_CHAT_FROM = VOD_ENDED - 60_000;
+
+    it('카드: 시계 대신 「--:--:--」이고 단추 이름은 제목이다. 눌러도 채팅 바닥에 키 누적 시각이 서지 않고, 옮기는 초 · 채팅 창은 그대로다', async () => {
+      server.extraCards = [keyCard()];
+      window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+      await renderLive();
+
+      const thumb = cardThumb(20);
+      expect(thumb).toHaveAccessibleName('채팅이 튄 순간 #20 시점으로 이동');
+      expect(within(thumb).getByText('--:--:--')).toBeInTheDocument();
+
+      fireEvent.click(thumb);
+      await settle();
+      // 옮겼다(영상이 없어 채팅만): 시계 글자를 되읽었다면 「--:--:--」를 못 읽어 아무 일도 없다
+      expect(
+        screen.getByText('영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요'),
+      ).toBeInTheDocument();
+      expect(playheadLog.at(-1)).toBe(KEY_SECONDS * 1000);
+      expect(chatFroms()).toContain(KEY_CHAT_FROM);
+      expect(within(pastChat()).queryByText(/181:/)).toBeNull();
+      expect(within(pastChat()).getByText(/^재생 위치까지 보는 중/)).toBeInTheDocument();
+    });
+
+    it('주소의 카드(?card=): 채팅 바닥에 키 누적 시각이 서지 않고, 옮기는 초 · 채팅 창은 그대로다', async () => {
+      server.extraCards = [keyCard()];
+      openFromHomeVod(20);
+      await renderLive();
+
+      expect(playheadLog.at(-1)).toBe(KEY_SECONDS * 1000);
+      expect(chatFroms()).toContain(KEY_CHAT_FROM);
+      expect(within(pastChat()).queryByText(/181:/)).toBeNull();
+      expect(within(pastChat()).getByText(/^재생 위치까지 보는 중/)).toBeInTheDocument();
+    });
+
+    it('통계 핀: 이름에 시각이 없고, 누르면 채팅 바닥은 숫자 없이 따라 보며 옮기는 초 · 채팅 창은 그대로다', async () => {
+      graphWidth();
+      // 그래프가 이 방송 전체를 그리게 차트를 방송 길이만큼 준다(시험 서버의 기본 차트는 지금 앞 10분이라 핀이 안 선다)
+      server.vodChartPerBucket = 3;
+      // 채팅 줄이 있어야 어느 시점까지의 줄이 보이는지 잰다
+      server.vodChat = true;
+      server.extraCards = [keyCard()];
+      window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+      await renderLive();
+
+      // 키 누적 카드의 핀은 서지 않는다: 핀 자리(cardAt)는 기준점이 없으면 방송 시작 + 카드 ms 라 방송 끝보다 181시간 뒤, 그래프
+      // 밖이다. 그래서 누를 수 없다. 대신 같은 규칙(기준점 없음 + 카드 이동으로 정한 자리면 숫자를 숨긴다)을 그래프 안의 #4 핀으로
+      // 잰다 — 숨김은 카드 ms 의 크기가 아니라 「기준점 없음 + 카드 이동」 으로만 정해지므로 같은 갈래를 지난다
+      expect(screen.queryByText('#20', { selector: 'button' })).toBeNull();
+      const pin = screen.getByText('#4', { selector: 'button' });
+      expect(pin).toHaveAccessibleName('하이라이트 #4 — 채팅 ×3.2 급증 (120건) 시점으로 이동');
+      const asked = chatFroms().length;
+      fireEvent.click(pin);
+      await settle();
+      // 4번 카드 ms 2,842초 그대로 옮기고, 채팅은 기준점 대신 쓰는 방송 시작에서 그만큼 뒤의 둘레를 새로 읽는다
+      expect(playheadLog.at(-1)).toBe(2_842_000);
+      expect(chatFroms().length).toBeGreaterThan(asked);
+      expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
+      expect(screen.queryByText('2845초 채팅')).toBeNull();
+      expect(within(pastChat()).queryByText(/0:47:22/)).toBeNull();
+      expect(within(pastChat()).getByText(/^재생 위치까지 보는 중/)).toBeInTheDocument();
+    });
+  });
+});
+
+/** 홈에서 지난 방송의 카드로 들어온다(주소창은 그 뒤에 바뀐다 — 「주소로 고른 카드로 들어오기」 참고) */
+function openFromHomeVod(cardId: number) {
+  window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+  nav.search = `?card=${cardId}`;
 }

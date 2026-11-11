@@ -36,7 +36,7 @@ func TestRunWiresExpiryToPlaybackInbox(t *testing.T) {
 		"defer pool.Close()",
 		"board := assembleStatus(",
 		"inbox := session.NewPlaybackInbox()",
-		"pubPool := assemblePublishing(",
+		"pubPool := assembleObservedPublishing(",
 		call,
 		"defer stopExpiry()",
 		"startControlWithEndSignal(",

@@ -132,6 +132,7 @@ export const ChatPanel = memo(function ChatPanel({
   ratePerMinute,
   mode,
   replayClock,
+  replayClockHidden = false,
   replayWaiting = false,
   statusNote,
   followJump,
@@ -151,6 +152,10 @@ export const ChatPanel = memo(function ChatPanel({
    * 중」이다. 없으면 끝난 방송은 기록 끝까지이거나 아직 어느 시점을 보일지 모르고(replayWaiting), 라이브는 최신 메시지다
    */
   replayClock?: string | null;
+  /**
+   * 그 시점까지 보는데 시각을 숨겼다(방송 시작부터 몇 초인지 모른다 — POK-562). 바닥이 숫자 없이 「재생 위치까지 보는 중」이다
+   */
+  replayClockHidden?: boolean;
   /** 끝난 방송인데 채팅을 보일 시점을 아직 모른다(명부 답 전, 녹화가 자리를 알리기 전). 바닥이 「시점을 확인하는 중」이다 */
   replayWaiting?: boolean;
   /**
@@ -272,11 +277,13 @@ export const ChatPanel = memo(function ChatPanel({
   // 하면 영상과 함께 과거를 보는데 지금 채팅을 보는 것처럼 읽힌다
   const followNote = replayClock
     ? `${replayClock} 시점까지 보는 중`
-    : mode === 'ended'
-      ? replayWaiting
-        ? '시점을 확인하는 중'
-        : '마지막 메시지까지 보는 중'
-      : '최신 메시지 따라가는 중';
+    : replayClockHidden
+      ? '재생 위치까지 보는 중'
+      : mode === 'ended'
+        ? replayWaiting
+          ? '시점을 확인하는 중'
+          : '마지막 메시지까지 보는 중'
+        : '최신 메시지 따라가는 중';
   // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11). 이름은 배지 자리에 있던 「지난 채팅」을 제목으로 올렸다
   const heading = mode === 'ended' ? '지난 채팅' : '실시간 채팅';
   // 모드를 안 주면 수집 중(라이브)이다

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
+
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
@@ -69,6 +71,13 @@ type Config struct {
 	// 기동 때만 읽는다 — 상자 파일 sidecar.env 가 값을 주며, 바꾸면 사이드카를 다시 만든다(교체 겹침 동안 옛 상자가 못
 	// 읽는 키를 쓰지 않기 위해서다).
 	PlaybackRoundKeys bool
+	// EdgeBoundsKVSARN 은 /dvr 하한 Writer 가 쓰는 CloudFront KVS 의 ARN 이다(REWIND_EDGE_BOUNDS_KVS_ARN — POK-525 계획
+	// Ⓒ-5). 빈 값이면 Writer 를 띄우지 않는다(끔 — withDefault 를 쓰지 않는다). 꼴 밖이어도 빈 값이다.
+	EdgeBoundsKVSARN string
+	// EdgeBoundsConfigInvalid 는 REWIND_EDGE_BOUNDS_KVS_ARN 이 꼴 밖일 때의 이유다(원문 없음). 기동은 거부하지 않는다 —
+	// 하한은 KVS 사본이라 오타 하나가 인덱싱 · 업로드까지 죽이면 안 된다. 조립이 ERROR edge_bounds_config_invalid 로
+	// 싣고 Writer 를 끈다(설계 8-1).
+	EdgeBoundsConfigInvalid string
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -311,6 +320,7 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	edgeBoundsARN, edgeBoundsInvalid := loadEdgeBoundsKVSARN(env)
 	playbackReadMax, err := positiveInt(env, "REWIND_PLAYBACK_READ_MAX", defaultRewindPlaybackReadMax)
 	if err != nil {
 		return Config{}, err
@@ -423,6 +433,9 @@ func Load(env func(string) string) (Config, error) {
 		RewindStallSeal:       stallSeal,
 		RewindPlaybackReadMax: playbackReadMax,
 		PlaybackRoundKeys:     playbackRoundKeys,
+		// 꼴 밖이면 ARN 은 비고 이유만 남는다 — 기동은 계속된다.
+		EdgeBoundsKVSARN:        edgeBoundsARN,
+		EdgeBoundsConfigInvalid: edgeBoundsInvalid,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
 		RewindPublicBaseURL:       rewindBaseURL,
 		RewindPublishPoolMaxConns: publishPoolMaxConns,
@@ -481,6 +494,27 @@ func validateRewindPublicBaseURL(raw string) (string, error) {
 		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 이 '/' 둘 이상으로 끝난다 — 끝 '/' 는 하나까지만 뗀다")
 	}
 	return strings.TrimSuffix(raw, "/"), nil
+}
+
+// kvsResourcePattern 은 CloudFront KVS ARN 의 자원 칸(key-value-store/<ID>)이다. ID 는 KVS 가 주는 꼴인 소문자
+// UUID 다 — 테라폼 모듈 media_host 의 edge_bounds_kvs_arn 검사와 같다.
+var kvsResourcePattern = regexp.MustCompile(`^key-value-store/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// loadEdgeBoundsKVSARN 은 REWIND_EDGE_BOUNDS_KVS_ARN 을 읽어 KVS ARN
+// 꼴(arn:aws:cloudfront::<12자리 계정>:key-value-store/<ID> — 지역 칸이 빈 전역 자원 · aws 파티션만 · SDK 끝점 규칙과
+// 같다)을 본다. 빈 값이면 끔이다. 꼴 밖이면 오류가 아니라 빈 ARN 과 거부 이유를
+// 돌려준다(Config.EdgeBoundsConfigInvalid). 이유에는 원문을 싣지 않는다.
+func loadEdgeBoundsKVSARN(env func(string) string) (kvsARN, invalid string) {
+	raw := strings.TrimSpace(env("REWIND_EDGE_BOUNDS_KVS_ARN"))
+	if raw == "" {
+		return "", ""
+	}
+	a, err := arn.Parse(raw)
+	if err != nil || a.Partition != "aws" || a.Service != "cloudfront" || a.Region != "" ||
+		!accountIDPattern.MatchString(a.AccountID) || !kvsResourcePattern.MatchString(a.Resource) {
+		return "", "REWIND_EDGE_BOUNDS_KVS_ARN 은 CloudFront KVS ARN(arn:aws:cloudfront::<12자리 계정>:key-value-store/<ID>)이어야 한다 — 하한 Writer 를 끈다"
+	}
+	return raw, ""
 }
 
 // validPort 는 URL 의 포트 칸이 비었거나(scheme 기본) 1–65535 인가다. url.Parse 는 숫자만 보고 범위는 보지 않는다.

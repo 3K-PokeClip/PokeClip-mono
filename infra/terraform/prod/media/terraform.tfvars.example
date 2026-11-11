@@ -63,3 +63,8 @@ compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad
 # 새 꼴 쓰기 스위치(상자의 sidecar.env). 첫 부팅에만 쓰여 떠 있는 상자는 바뀌지
 # 않는다(plan 의 상자 변경 0) — 다음 상자부터 이 값으로 뜬다.
 # playback_round_keys = true   # POK-525 교체 걸음 4.12(A 회수 4.11 뒤)부터 prod 값 — 결정 9 (가) · 모듈 기본 false
+
+# /dvr 하한 Writer 스위치(기본 끔). 켜면 사이드카가 런타임 1단 KVS 에 회차 하한을
+# 쓴다 — KVS ARN 은 런타임 출력에서 오므로 여기 칸이 없다. user_data 로만
+# 들어가 떠 있는 상자는 바뀌지 않는다(다음 상자부터). POK-525 교체 걸음 4.1 의 값.
+# edge_bounds_writer_enabled = true

@@ -160,6 +160,18 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     공통 — compose 사이드카의 required `env_file`). 그 뒤의 정본은 상자 안
     파일이라(user_data `ignore_changes`) 값을 바꿔도 떠 있는 상자는 그대로이고
     다음 상자부터 그 값으로 뜹니다. 켬은 prod tfvars 의 몫입니다(결정 9).
+*   `edge_bounds_kvs_arn`(필수 — 런타임 1단 출력)은 /dvr 하한 KVS 하나만
+    받습니다 — `arn:<파티션>:cloudfront::<12자리 계정>:key-value-store/<소문자
+    UUID>`(와일드카드 · 다른 자원 · 뒤 경로 거부). 인스턴스 역할
+    `EdgeBoundsKvs`(`cloudfront-keyvaluestore:` DescribeKeyValueStore ·
+    UpdateKeys · GetKey · 그 KVS 하나 — ListKeys · PutKey · DeleteKey 없음)는
+    Writer 스위치와 무관하게 늘 있습니다. 동작 이름은 서비스 승인 참조 대조
+    (2026-11-04)이고, 실제 허용 · 거부는 ISB 실측 몫입니다(POK-525 계획 12절
+    (2)).
+*   `edge_bounds_writer_enabled`(bool · 기본 `false` · null 은 기본값으로)는
+    /dvr 하한 Writer 스위치입니다. 켜면 사이드카 `REWIND_EDGE_BOUNDS_KVS_ARN`
+    에 위 ARN 을, 끄면 빈 값을 렌더합니다(빈 값 = Writer 꺼짐 · 두 모드
+    공통). compose 에 들어가 첫 부팅에만 쓰이므로 바꾸는 것은 상자 교체입니다.
 *   응답기 거부 목록 파라미터 이름은 `/pokeclip/prod/media/ingest-auth-deny-tokens`
     로 확정입니다(M15 계획 · ingest-auth `CONTRACT.md` K5 · `media.env` 의
     `INGEST_AUTH_DENYLIST_PARAM`). 값은 운영자가 고치고 Terraform 은 첫 줄만
@@ -179,10 +191,11 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 `terraform -chdir=infra/terraform/modules/media_host test`(mock provider).
 
 *   정책 문서의 `json` 은 mock 이 지어내므로 `statement` 입력을 직접 봅니다.
-    예외는 `tests/broadcast_publish_policy.tftest.hcl` 하나입니다 — 정책
-    문서만 진짜 provider 로 계산하고(가짜 자격 · AWS 호출 없음) 나머지 자원 ·
-    data 는 모두 override 해, 실제 정책 JSON 에서 `BroadcastPublish` 를
-    봅니다. 모듈에 자원을 더하면 그 파일에도 `override_resource` 를 더합니다.
+    예외는 `tests/broadcast_publish_policy.tftest.hcl` ·
+    `tests/edge_bounds_kvs_policy.tftest.hcl` 둘입니다 — 정책 문서만 진짜
+    provider 로 계산하고(가짜 자격 · AWS 호출 없음) 나머지 자원 · data 는 모두
+    override 해, 실제 정책 JSON 에서 `BroadcastPublish` · `EdgeBoundsKvs` 를
+    봅니다. 모듈에 자원을 더하면 두 파일에 `override_resource` 를 더합니다.
 *   compose · nginx 렌더본은 저장소 템플릿을 같은 변수로 다시 렌더한 값과
     같은지, 템플릿 변수 키 집합은 `infra/media-host/test/render_vars.json` 과
     같은지 봅니다.

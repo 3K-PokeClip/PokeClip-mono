@@ -526,3 +526,23 @@ variable "playback_round_keys" {
   default     = false
   nullable    = false
 }
+
+variable "edge_bounds_kvs_arn" {
+  description = "/dvr 하한 KVS ARN(런타임 1단 출력 edge_bounds_kvs_arn — 값 아님). 인스턴스 역할 EdgeBoundsKvs 의 Resource 다(Writer 스위치와 무관하게 늘). 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 에는 edge_bounds_writer_enabled 가 참일 때만 들어간다."
+  type        = string
+
+  # 전역 CloudFront KVS 하나 — 리전 빔 · 12자리 계정 · id 는 생성 때 정해지는
+  # 소문자 UUID 다. 와일드카드 · 다른 자원 · 뒤 경로를 막는다(Resource 가 넓어짐).
+  # 파티션은 aws 와 「-」 로 이은 소문자 조각(aws-us-gov · aws-cn)뿐이다.
+  validation {
+    condition     = can(regex("^arn:aws(-[a-z]+)*:cloudfront::[0-9]{12}:key-value-store/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.edge_bounds_kvs_arn))
+    error_message = "edge_bounds_kvs_arn 은 CloudFront KVS ARN(arn:<파티션>:cloudfront::<12자리 계정>:key-value-store/<소문자 UUID>)이어야 한다."
+  }
+}
+
+variable "edge_bounds_writer_enabled" {
+  description = "/dvr 하한 Writer 스위치 — 참이면 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 에 edge_bounds_kvs_arn 을, 거짓이면 빈 값을 렌더한다(빈 값 = Writer 꺼짐). 사이드카는 기동 때만 읽고 user_data 는 첫 부팅에만 쓰므로 바꾸는 것은 상자 교체다. IAM 은 바뀌지 않는다."
+  type        = bool
+  default     = false
+  nullable    = false
+}

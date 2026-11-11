@@ -193,6 +193,58 @@ describe('useLiveMockState: 카드 시각', () => {
   });
 });
 
+describe('useLiveMockState: 카드 시각 표기는 이번 방송 시작부터(POK-562)', () => {
+  // 서버 기준점은 같은 송출 키로 한 앞 방송들의 길이만큼 시작보다 앞설 수 있다(prod 181시간). 카드 ms는 그 축이다
+  const STARTED_AT = Date.parse('2026-11-10T12:00:00Z');
+  const AHEAD_MS = 181 * 3_600_000;
+  const card = (streamTimestampMs: number): LiveCardSnapshot => ({
+    id: 1,
+    streamId: 's1',
+    source: 'auto',
+    streamTimestampMs,
+    window: { startMs: streamTimestampMs - 5_000, endMs: streamTimestampMs + 5_000 },
+    score: 1,
+    evidence: null,
+    eventSeq: 1,
+    createdAt: '2026-11-10T12:01:00.000Z',
+  });
+
+  beforeEach(() => {
+    api.calls.length = 0;
+    resetLiveData();
+  });
+
+  async function highlightOf(snapshot: LiveCardSnapshot) {
+    const { result } = renderHook(() => useLiveMockState(false), {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+    await waitFor(() => expect(result.current.cardsStatus).toBe('loaded'));
+    act(() => result.current.mergeCard(snapshot));
+    await waitFor(() => expect(result.current.highlights).toHaveLength(1));
+    return result.current.highlights[0]!;
+  }
+
+  it('기준점이 시작보다 181시간 앞이면 그만큼 뺀 시계다 — 이동 값은 카드 축 그대로다', async () => {
+    publishLiveData({
+      streamId: 's1',
+      status: 'live',
+      startedAt: STARTED_AT,
+      originMs: STARTED_AT - AHEAD_MS,
+    });
+    const highlight = await highlightOf(card(AHEAD_MS + 42_500));
+    // 고치기 전에는 축 값을 그대로 써서 「181:00:42」였다
+    expect(highlight.timestamp).toBe('0:00:42');
+    expect(highlight.seekSeconds).toBe(Math.floor((AHEAD_MS + 42_500) / 1000));
+  });
+
+  it('서버 기준점을 모르면 시계를 숨긴다 — 방송 시작으로 대신 재지 않는다. 이동 값은 그대로다', async () => {
+    publishLiveData({ streamId: 's1', status: 'live', startedAt: STARTED_AT });
+    const highlight = await highlightOf(card(AHEAD_MS + 42_500));
+    expect(highlight.timestamp).toBe('--:--:--');
+    expect(highlight.seekSeconds).toBe(Math.floor((AHEAD_MS + 42_500) / 1000));
+  });
+});
+
 describe('useLiveMockState: 통로로 온 방송 정보', () => {
   beforeEach(() => {
     api.calls.length = 0;

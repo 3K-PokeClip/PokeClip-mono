@@ -24,6 +24,7 @@ function highlight(overrides: Partial<LiveHighlight> = {}): LiveHighlight {
   return {
     id: 'hl-1',
     timestamp: '1:07:50',
+    seekSeconds: 4070,
     title: '시청자 참여 미션 성공',
     status: 'scored',
     source: 'auto',

@@ -110,6 +110,7 @@ variables {
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
   broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  edge_bounds_kvs_arn           = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 override_resource {
@@ -195,10 +196,10 @@ run "publish_statement_in_policy_json_with_stream" {
     error_message = "BroadcastPublish 가 Allow · 동작 sns:Publish 하나 · Resource = 입력 주제 ARN 하나가 아니다."
   }
 
-  # 기존 문(RewindDelete 포함)은 그대로이고 새 문은 하나만 더해진다.
+  # 기존 문(RewindDelete · EdgeBoundsKvs 포함)은 그대로이고 새 문은 하나만 더해진다.
   assert {
-    condition     = sort([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement.Sid]) == tolist(["BroadcastPublish", "DbConnect", "DenylistRead", "EcrAuth", "EcrPull", "RewindBucket", "RewindDelete", "RewindObjects", "SecretsRead"])
-    error_message = "정책 JSON 의 Sid 목록이 기존 여덟 + BroadcastPublish 가 아니다."
+    condition     = sort([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement.Sid]) == tolist(["BroadcastPublish", "DbConnect", "DenylistRead", "EcrAuth", "EcrPull", "EdgeBoundsKvs", "RewindBucket", "RewindDelete", "RewindObjects", "SecretsRead"])
+    error_message = "정책 JSON 의 Sid 목록이 기존 아홉 + BroadcastPublish 가 아니다."
   }
 }
 
@@ -220,9 +221,9 @@ run "publish_statement_in_policy_json_without_stream" {
     error_message = "BroadcastPublish 가 Allow · 동작 sns:Publish 하나 · Resource = 입력 주제 ARN 하나가 아니다."
   }
 
-  # 기존 문(RewindDelete 포함)은 그대로이고 새 문은 하나만 더해진다.
+  # 기존 문(RewindDelete · EdgeBoundsKvs 포함)은 그대로이고 새 문은 하나만 더해진다.
   assert {
-    condition     = sort([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement.Sid]) == tolist(["BroadcastPublish", "DbConnect", "DenylistRead", "EcrAuth", "EcrPull", "RewindBucket", "RewindDelete", "RewindObjects", "SecretsRead"])
-    error_message = "정책 JSON 의 Sid 목록이 기존 여덟 + BroadcastPublish 가 아니다."
+    condition     = sort([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement.Sid]) == tolist(["BroadcastPublish", "DbConnect", "DenylistRead", "EcrAuth", "EcrPull", "EdgeBoundsKvs", "RewindBucket", "RewindDelete", "RewindObjects", "SecretsRead"])
+    error_message = "정책 JSON 의 Sid 목록이 기존 아홉 + BroadcastPublish 가 아니다."
   }
 }

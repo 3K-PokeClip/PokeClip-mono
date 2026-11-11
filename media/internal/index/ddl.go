@@ -499,6 +499,16 @@ BEGIN
     END IF;
 END $do$;
 
+-- /dvr 하한 원장(POK-525) — 열린 회차의 하한 정본. KVS 는 사본이다. 회차가 닫히면 해제 뒤 행을 지운다.
+CREATE TABLE IF NOT EXISTS stream_edge_bounds (
+    stream_id   text        NOT NULL,
+    round_id    text        NOT NULL,
+    dvr_floor   bigint      NOT NULL CHECK (dvr_floor >= 1),
+    released_at timestamptz,
+    updated_at  timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    PRIMARY KEY (stream_id, round_id)
+);
+
 -- ============================================================================
 -- PDT 판 게이트 · 되돌리기 거부(POK-196 · 설계 r7 9.3 · 9.4) — 1번 소유 표(승인 표면 아님 · 통지). 게이트 표가 쓰기자
 -- 거부 트리거보다 앞이다 — 그 트리거가 이 표를 읽는다. 위 칸 블록의 「prod 적용 뒤 같은 이름으로 정의를 고치지 않는다」 가

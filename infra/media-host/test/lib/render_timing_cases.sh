@@ -3,9 +3,9 @@
 # vars_file · compose_render · config_json 은 render_test.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
-# render_test 의 기동 전 검사 서비스 사례(56 — POK-196 PDT 설계 r7 9.4).
+# render_test 의 기동 전 검사 서비스 사례(57 — POK-196 PDT 설계 r7 9.4).
 # timing-preflight 는 compose profiles(preflight)로만 있다 — 기본 up · config 에는
-# 없고(그래서 사례 1 – 55 의 서비스 집합이 그대로다), 프로필을 켠 구성에서만 보인다.
+# 없고(그래서 사례 1 – 56 의 서비스 집합이 그대로다), 프로필을 켠 구성에서만 보인다.
 # 이미지는 검사 핀 timing_guard_image, entrypoint 는 검사 명령, 망은 compose 기본
 # 망(mediamtx 앞에서 돈다), 볼륨 · 의존 · 비밀 env 는 없고 DB env 는 사이드카와
 # 같다.
@@ -41,12 +41,12 @@ timing_cases::profile_config() {
 }
 
 #######################################
-# 사례 56 — 기동 전 검사 서비스는 프로필로만 있다. 모든 갈래에서 기본 구성에는
+# 사례 57 — 기동 전 검사 서비스는 프로필로만 있다. 모든 갈래에서 기본 구성에는
 # 없고, 프로필 구성에는 하나 있으며, 그 꼴이 위 머리 주석과 같다. 기본 구성의
 # 나머지 서비스는 프로필 구성에서도 그대로다(프로필이 다른 서비스를 바꾸지
 # 않는다).
 #######################################
-timing_cases::check_56() {
+timing_cases::check_57() {
   local ok=0 v want got base prof sidecar_env
   require_setup || return 1
   for v in ${COMPOSE_VARIANTS}; do

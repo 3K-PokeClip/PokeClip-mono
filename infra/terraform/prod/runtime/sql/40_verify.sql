@@ -36,6 +36,13 @@
 --                                   stop_marked_at)과 PDT 판 2 칸 일곱(stream_segments 의 timing_version ·
 --                                   timing_wall_guess · timing_recorder_id · timing_segment_number ·
 --                                   timing_video_first_ns · timing_video_end_ns · timing_round_id)이 있다
+--   primary_key:stream_edge_bounds  원장 표의 PK 가 (stream_id, round_id) 그 순서다 — 올림의 ON CONFLICT 가 이것을
+--                                   충돌 대상으로 쓴다(없으면 42P10 이 write_failing 으로만 드러난다)
+--   check:stream_edge_bounds.dvr_floor
+--                                   CHECK (dvr_floor >= 1) 이 검증된 채 있다
+--   not_null:stream_edge_bounds.<열>
+--                                   원장 열이 있고 NOT NULL 여부가 DDL 과 같다(released_at 만 NULL 을 받는다). 원장
+--                                   모양 셋은 표가 없으면 내지 않는다(owner:stream_edge_bounds 가 잡는다)
 --   index:<인덱스>                  stream_sessions_round_open_idx 가 stream_sessions 의 인덱스로 있고, 쓸 수 있으며
 --                                   (indisvalid · indisready) 정의(열 · 정렬 · 부분 인덱스 술어)가 ddl.go 와 같다
 --   index:<FK 인덱스>               M6-4 FK 인덱스 셋(stream_segments_session_id_idx · stream_published_gaps_session_idx ·
@@ -165,7 +172,8 @@ BEGIN
     ),
     tables(t) AS (
         VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps'),
-               ('stream_seq_floors'), ('broadcast_lifecycle_outbox'), ('stream_timing_gate')
+               ('stream_seq_floors'), ('broadcast_lifecycle_outbox'),
+               ('stream_edge_bounds'), ('stream_timing_gate')
     ),
     -- M6 장부 열(ledger_column:<표>.<열>).
     ledger_columns(t, c) AS (
@@ -175,6 +183,17 @@ BEGIN
                ('stream_segments', 'timing_recorder_id'), ('stream_segments', 'timing_segment_number'),
                ('stream_segments', 'timing_video_first_ns'), ('stream_segments', 'timing_video_end_ns'),
                ('stream_segments', 'timing_round_id')
+    ),
+    -- 원장 표(POK-525)의 oid 다. 표가 없으면 행이 없어 모양 단언(primary_key · check · not_null)을 펼치지 않는다 —
+    -- 없는 표는 owner:stream_edge_bounds 하나로 드러난다.
+    edge_bounds(rel) AS (
+        SELECT pg_catalog.to_regclass('public.stream_edge_bounds')::oid
+         WHERE pg_catalog.to_regclass('public.stream_edge_bounds') IS NOT NULL
+    ),
+    -- 원장 열과 DDL(media/internal/index/ddl.go)의 NOT NULL 여부다(not_null:stream_edge_bounds.<열>).
+    edge_bounds_columns(c, not_null) AS (
+        VALUES ('stream_id', true), ('round_id', true), ('dvr_floor', true), ('released_at', false),
+               ('updated_at', true)
     ),
     -- M6-4 FK 인덱스 · M6-3b 발행 흔적 인덱스(index:<인덱스> — 이름 존재만).
     fk_indexes(t, i) AS (
@@ -232,6 +251,10 @@ BEGIN
                ('media_indexer', 'broadcast_lifecycle_outbox', 'INSERT'),
                ('media_indexer', 'broadcast_lifecycle_outbox', 'UPDATE'),
                ('media_indexer', 'broadcast_lifecycle_outbox', 'DELETE'),
+               ('media_indexer', 'stream_edge_bounds', 'SELECT'),
+               ('media_indexer', 'stream_edge_bounds', 'INSERT'),
+               ('media_indexer', 'stream_edge_bounds', 'UPDATE'),
+               ('media_indexer', 'stream_edge_bounds', 'DELETE'),
                ('media_indexer', 'stream_timing_gate', 'SELECT'),
                ('media_janitor', 'stream_segments', 'SELECT'),
                ('media_janitor', 'stream_sessions', 'SELECT'),
@@ -340,6 +363,29 @@ BEGIN
                         WHERE attrelid = pg_catalog.to_regclass('public.' || t)::oid
                           AND attname = c::name AND attnum > 0 AND NOT attisdropped)
           FROM ledger_columns
+        UNION ALL
+        -- conkey 를 첨자 순서대로 열 이름으로 편다 — 순서까지 DDL 과 같아야 한다.
+        SELECT 'primary_key:stream_edge_bounds',
+               ARRAY(SELECT a.attname::text
+                       FROM pg_catalog.pg_constraint k
+                            CROSS JOIN LATERAL pg_catalog.unnest(k.conkey) WITH ORDINALITY AS u(n, i)
+                            JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.n
+                      WHERE k.conrelid = edge_bounds.rel AND k.contype = 'p'::"char"
+                      ORDER BY u.i) OPERATOR(pg_catalog.=) ARRAY['stream_id', 'round_id']
+          FROM edge_bounds
+        UNION ALL
+        SELECT 'check:stream_edge_bounds.dvr_floor',
+               EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k
+                        WHERE k.conrelid = edge_bounds.rel AND k.contype = 'c'::"char" AND k.convalidated
+                          AND pg_catalog.pg_get_constraintdef(k.oid) = 'CHECK ((dvr_floor >= 1))'::text)
+          FROM edge_bounds
+        UNION ALL
+        SELECT 'not_null:stream_edge_bounds.' || c,
+               EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                        WHERE a.attrelid = edge_bounds.rel
+                          AND a.attname = c::name AND a.attnum > 0 AND NOT a.attisdropped
+                          AND a.attnotnull = edge_bounds_columns.not_null)
+          FROM edge_bounds, edge_bounds_columns
         UNION ALL
         SELECT 'index:stream_sessions_round_open_idx',
                EXISTS (SELECT 1 FROM pg_index

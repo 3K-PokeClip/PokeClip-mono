@@ -1760,7 +1760,7 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
     expect(card.getByText('1:23:45 ~ 1:24:30')).toBeInTheDocument();
   });
 
-  it('구간은 절대 시각이다: 방송 앞쪽 장면은 그때의 제목 · 카테고리와 방송 기준점에서 잰 위치를 보인다(PR #462 5차 리뷰)', async () => {
+  it('구간은 절대 시각이다: 방송 앞쪽 장면은 그때의 제목 · 카테고리와 방송 시작부터 잰 위치를 보인다(PR #462 5차 리뷰 · POK-562)', async () => {
     const origin = '2026-10-17T19:52:30+09:00';
     stubFetch((url) => {
       if (url.startsWith('/api/clip/broadcasts?state=past'))
@@ -1785,7 +1785,8 @@ describe('LibraryScreen — 원본 방송 카드 (POK-511)', () => {
 
     expect(await card.findByText('인사 방송')).toBeInTheDocument();
     expect(card.getByText('저스트 채팅 · 치지직')).toBeInTheDocument();
-    expect(card.getByText('10:00 ~ 10:45')).toBeInTheDocument();
+    // 장면 위치는 이번 방송 시작(19:52:00)부터 잰다 — 기준점(19:52:30)이 30초 늦어 기준점에서 잰 10:00이 10:30이다(POK-562)
+    expect(card.getByText('10:30 ~ 11:15')).toBeInTheDocument();
   });
 
   it('방송 줄을 찾으면 목록을 더 넘기지 않는다 — 한 줄 때문에 목록 전부를 읽지 않는다(PR #462 1차 리뷰)', async () => {

@@ -8,9 +8,9 @@ import (
 )
 
 // missingLedgerSchemaSQL 은 장부 객체 가운데 없는 것의 이름을 고른다 — M6(stream_sessions 열 넷 · 표 둘 · stream_segments
-// 하한 트리거 둘)와 PDT 판 2(POK-196 c1 — stream_segments 칸 일곱 · 게이트 표 · 쓰기자 거부 · 게이트 트리거 · 회차 인덱스).
-// 이름 꼴은 열 = 표.열 · 표 = 표 이름 · 트리거 = 트리거 이름 · 인덱스 = 인덱스 이름이다. PDT floor 인덱스 둘은 사이드카가
-// 쓰지 않으므로(채팅 조회 몫) 기동 확인에 넣지 않는다 — 40_verify.sql 이 본다.
+// 하한 트리거 둘)와 /dvr 하한 원장 표(POK-525)와 PDT 판 2(POK-196 c1 — stream_segments 칸 일곱 · 게이트 표 · 쓰기자 거부 ·
+// 게이트 트리거 · 회차 인덱스). 이름 꼴은 열 = 표.열 · 표 = 표 이름 · 트리거 = 트리거 이름 · 인덱스 = 인덱스 이름이다.
+// PDT floor 인덱스 둘은 사이드카가 쓰지 않으므로(채팅 조회 몫) 기동 확인에 넣지 않는다 — 40_verify.sql 이 본다.
 //
 // 사이드카 계정(media_indexer)으로 돈다 — 카탈로그 표는 PUBLIC 이 읽는다. 비교는 pg_catalog 에 정확한 판이 있는
 // 형으로 맞춘다(oid = oid · name = name · text = text). 맞추지 않으면 앱 사용자가 public 에 심은 같은 형의 연산자가
@@ -23,6 +23,7 @@ SELECT o.name
                ('stream_sessions.stop_marked_at',    'column',  'stream_sessions', 'stop_marked_at'),
                ('stream_seq_floors',                 'table',   'stream_seq_floors', ''),
                ('broadcast_lifecycle_outbox',        'table',   'broadcast_lifecycle_outbox', ''),
+               ('stream_edge_bounds',                'table',   'stream_edge_bounds', ''),
                ('stream_segments_seq_floor_raise',   'trigger', 'stream_segments', 'stream_segments_seq_floor_raise'),
                ('stream_segments_seq_floor_guard',   'trigger', 'stream_segments', 'stream_segments_seq_floor_guard'),
                ('stream_segments.timing_version',        'column',  'stream_segments', 'timing_version'),

@@ -20,7 +20,12 @@ import { forgetLibraryList, setJumpCardHidden } from '@/api/clipEditor';
 import styles from './LiveScreen.module.css';
 import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
-import type { LiveCardSnapshot, LiveHighlight, LiveStream } from './useLiveMockState';
+import {
+  UNKNOWN_CLOCK,
+  type LiveCardSnapshot,
+  type LiveHighlight,
+  type LiveStream,
+} from './useLiveMockState';
 import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import { useLiveField } from './liveDataStore';
 import { useCardEditorReady } from './useCardEditorReady';
@@ -84,7 +89,8 @@ export const HighlightCard = memo(function HighlightCard({
   highlight: LiveHighlight;
   stream: LiveStream;
   visuals: Record<string, CardVisual>;
-  onSeek: (timestamp: string) => void;
+  /** 카드로 옮긴다(초, 서버 기준점 축 — LiveHighlight.seekSeconds) */
+  onSeek: (seconds: number) => void;
   /** 가리기·되살리기 답을 목록에 넣는다. 통로가 끊겼거나 끝난 방송이면 다음 목록 읽기(1분)까지 기다리지 않게 */
   onCardChange?: (card: LiveCardSnapshot) => void;
 }) {
@@ -94,6 +100,8 @@ export const HighlightCard = memo(function HighlightCard({
   const view = cardViewFor(highlight);
   const visual = cardVisualFor(highlight, stream, visuals);
   const processing = view.state === 'processing';
+  // 방송 시작부터 몇 초인지 모르면(UNKNOWN_CLOCK) 단추 이름 · 알림 글에 시각을 싣지 않는다: 「--:--:-- 시점으로 이동」은 읽히지 않는다
+  const clock = highlight.timestamp === UNKNOWN_CLOCK ? null : highlight.timestamp;
   // 편집기는 방송 번호와 카드 번호(`card-23` → 23)로 클립을 연다
   const streamId = useLiveField('streamId');
   const cardId = highlight.id.replace(/^card-/, '');
@@ -118,7 +126,7 @@ export const HighlightCard = memo(function HighlightCard({
         toast({
           tone: 'success',
           title: '보관함에 저장했어요',
-          description: `편집본 #${snap.id} · ${highlight.timestamp} 장면`,
+          description: clock === null ? `편집본 #${snap.id}` : `편집본 #${snap.id} · ${clock} 장면`,
           action: { label: '보관함 열기', onClick: () => router.push(LIBRARY_HREF) },
         });
       },
@@ -157,8 +165,8 @@ export const HighlightCard = memo(function HighlightCard({
         <button
           type="button"
           className={styles.cardThumb}
-          onClick={() => onSeek(highlight.timestamp)}
-          aria-label={`${highlight.timestamp} 시점으로 이동`}
+          onClick={() => onSeek(highlight.seekSeconds)}
+          aria-label={`${clock ?? highlight.title} 시점으로 이동`}
         >
           <ThumbnailImage
             src={highlight.thumbnailUrl}

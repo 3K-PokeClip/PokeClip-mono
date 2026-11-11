@@ -101,6 +101,7 @@ variables {
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
   broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  edge_bounds_kvs_arn           = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 run "places_instance_in_media_private_subnet_without_public_ip" {
@@ -413,8 +414,11 @@ run "instance_role_policy_statements" {
 
       # 계약9 발행(O8a 당김) — 런타임 1단 주제 하나.
       BroadcastPublish = toset([var.broadcast_topic_arn])
+
+      # /dvr 하한 Writer(POK-525) — 런타임 1단 KVS 하나.
+      EdgeBoundsKvs = toset([var.edge_bounds_kvs_arn])
     }
-    error_message = "인스턴스 역할 정책의 statement · Resource 가 계획 M9 c1 · O8a 당김과 다르다."
+    error_message = "인스턴스 역할 정책의 statement · Resource 가 계획 M9 c1 · O8a 당김 · POK-525 와 다르다."
   }
 
   assert {
@@ -432,6 +436,14 @@ run "instance_role_policy_statements" {
       DenylistRead  = toset(["ssm:GetParameter"])
 
       BroadcastPublish = toset(["sns:Publish"])
+
+      # 판 읽기 · If-Match 묶음 쓰기 · 키 하나 읽기. ListKeys · PutKey ·
+      # DeleteKey 는 Writer 가 쓰지 않아 주지 않는다.
+      EdgeBoundsKvs = toset([
+        "cloudfront-keyvaluestore:DescribeKeyValueStore",
+        "cloudfront-keyvaluestore:GetKey",
+        "cloudfront-keyvaluestore:UpdateKeys",
+      ])
     }
     error_message = "인스턴스 역할 정책의 동작이 다르다."
   }

@@ -647,16 +647,26 @@ runtime-1a 「POK-525 읽기 질의」 입니다. 「O8a 당김 교체」 절의
     `playback_key_layout`(`layout=legacy|round`)로 판정합니다.
 *   **교체 걸음 4.N**: 아래 「POK-525 교체 걸음」 의 4.1–4.12 입니다(설계 9-3
     의 번호와 같음).
-*   **POK-525 하한**: PR Ⓑ2(회차 키 · 스위치)의 머지 커밋을 조상으로 둔
-    커밋으로 빌드한 사이드카 이미지입니다. 그 앞 커밋의 이미지(A 의 이미지 ·
-    prod 선출시 판 d03980cc 포함)가 하한 아래입니다. 판정은 「M6 운영 SQL
-    경계 · 롤백 하한」 과 같은 꼴입니다.
+*   **POK-525 하한**: PR Ⓑ2(회차 키 · 스위치)의 머지 커밋 `fcb6e0dd` 를
+    조상으로 둔 커밋으로 빌드한 사이드카 이미지입니다. 그 앞 커밋의 이미지(A
+    의 이미지 · prod 선출시 판 d03980cc 포함)가 하한 아래입니다. 판정은 「M6
+    운영 SQL 경계 · 롤백 하한」 과 같은 꼴입니다.
 
     ```shell
     git fetch origin
-    git merge-base --is-ancestor <PR Ⓑ2 머지 커밋 SHA> <이미지의 빌드 커밋 SHA> \
+    git merge-base --is-ancestor fcb6e0dd <이미지의 빌드 커밋 SHA> \
       && echo 'POK-525 하한 이상' || echo 'POK-525 하한 아래'
     ```
+
+*   **/dvr 하한 Writer**: 사이드카 안에서 열린 회차마다 /dvr 하한(엣지가 그
+    아래 조각을 막는 seq)을 원장 표 `stream_edge_bounds` 에 올리고 CloudFront
+    KVS 에 사본을 쓰는 몫입니다(PR Ⓒ). 회차가 닫히면 KVS 키를 지우고(해제)
+    120초 유예 뒤 원장 행을 지웁니다 — 원장 행이 남은 회차는 국면이 `vod`
+    로 넘어가지 않습니다. 스위치는 prod/media tfvars
+    `edge_bounds_writer_enabled` 이고, 켜면 상자의 사이드카
+    `REWIND_EDGE_BOUNDS_KVS_ARN` 에 런타임 1단 출력 KVS ARN 이 들어갑니다.
+    user_data 로만 들어가 떠 있는 상자는 바뀌지 않습니다. 신호 · 사람 복구는
+    media README 「/dvr 하한 Writer」 입니다.
 
 *   **롤백 하한**: 어디까지 A 로 되돌릴 수 있는가입니다. 기준은 **첫 새 꼴
     행**(Q1 ≥ 1)입니다. 그 전(스위치 켜기 전 · 켰다 껐는데 새 꼴 행 0)이면 A
@@ -678,10 +688,22 @@ runtime-1a 「POK-525 읽기 질의」 입니다. 「O8a 당김 교체」 절의
 1.  운영 SQL 1 — 런타임 1단-가 런북 「M6 스키마 재실행」 을 그 빌드 커밋 이상의
     재실행 SHA 로 돌아 `VERIFY OK`. `60_round_frozen.sql`(운영 SQL 2)은 넣지
     않습니다(교체 걸음 4.9 몫).
-1.  `prod/runtime` 을 그 SHA 로 다시 apply 합니다(PR Ⓒ 가 더한 자원).
+1.  `prod/runtime` 을 그 SHA 로 다시 apply 합니다 — PR Ⓒ 가 더한 /dvr 하한
+    KVS 그릇과 출력 `edge_bounds_kvs_arn` 입니다. **Ⓒ 머지 뒤 이 apply 전에는
+    `prod/media` 가 어떤 plan 이든 그 출력 이름으로 멈춥니다(긴급 apply
+    포함)** — `prod/media` 가 그 출력을 필수로 읽기 때문입니다(prod/media
+    README 「앞 루트 출력」). 그래서 Ⓒ 머지와 이 apply 사이를 짧게 두고, 그
+    사이 `prod/media` 를 바꿔야 하면 이 apply 를 먼저 합니다.
 1.  B 의 tfvars — `instances` 에 `config_version` 을 올린 새 키 B, 이미지
     다이제스트는 위 빌드, `playback_round_keys` 는 적지 않거나 `false`
-    (B 는 **끈 채** 뜹니다).
+    (B 는 **끈 채** 뜹니다), `edge_bounds_writer_enabled = true`(B 의 /dvr
+    하한 Writer 켬 — KVS ARN 은 tfvars 칸이 없고 런타임 출력에서만
+    옵니다). 이 스위치는 user_data 로만 들어가 A 는 바뀌지 않습니다.
+1.  Ⓒ 머지 뒤 첫 `prod/media` apply(보통 4.1)의 plan 에는 공유 인스턴스
+    역할 정책의 문 하나(`EdgeBoundsKvs` — 그 KVS 하나의 Describe ·
+    UpdateKeys · GetKey)가 더해집니다. 스위치와 무관하게 늘 붙고, A 도 같은
+    역할이라 그 순간부터 A 에도 이 권한이 생깁니다(A 의 이미지는 Writer 가
+    없어 쓰지 않음). 승인 때 B 인스턴스와 함께 이 한 줄을 봅니다.
 1.  사이드카 `LOG_LEVEL` 을 `info` 보다 높게(`warn` · `error`) 두지 않습니다.
     `playback_key_layout` 줄은 끔이면 INFO, 켬이면 트리거가 없을 때(4.7) WARN
     · 있을 때(4.9 뒤) INFO 입니다. 등급을 높이면 그 아래 줄이 사라져, 그 줄을
@@ -799,11 +821,59 @@ SH
     sidecar_round_keys_ops_test.sh` 가 이 런북의 here-document 를 그대로
     뽑아 가짜 docker · journalctl · systemctl 로 돌립니다(사례 R16 · R17).
 
+**하한 Writer 판정**(`edge-check.sh` — 인자 없음). 실행 중 사이드카 하나의
+**지금 프로세스**가 낸 /dvr 하한 Writer 기동 줄을 읽습니다. 기동 줄은
+프로세스마다 넷 가운데 하나입니다 — `edge_bounds_started`(Writer 켜짐) ·
+`_disabled`(ARN 빔) · `_config_invalid`(ARN 꼴 밖 — 뒤이어 `_disabled`) ·
+`_degraded`(KVS 클라이언트를 못 엶).
+
+```shell
+cat > "${work}/edge-check.sh" <<'SH'
+fail() { echo "EDGE CHECK FAIL $1"; exit 2; }
+ids="$(docker ps -q --no-trunc --filter status=running \
+  --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+[ "${running}" = 1 ] || fail "running ${running}"
+# 같은 컨테이너가 다시 시작하면(on-failure) 앞 프로세스의 줄이 그 컨테이너
+# 저널에 남는다 — 지금 프로세스의 시작 시각(State.StartedAt) 뒤 줄만 본다.
+started_at="$(docker inspect --format '{{.State.StartedAt}}' "${ids}")" \
+  || fail inspect
+since="$(date -d "${started_at}" +%s)" || fail started-at
+log="$(journalctl -t pokeclip-media-sidecar "CONTAINER_ID_FULL=${ids}" \
+  --since "@${since}" -q --no-pager -o cat)" || fail journal
+# 마지막 줄이 아니라 있는 줄로 고른다 — 꼴 밖 ARN 은 config_invalid 뒤
+# disabled 를 낸다. 뒤에 오는 이름이 앞 이름을 덮는다.
+msg=none
+for m in disabled degraded config_invalid started; do
+  if printf '%s\n' "${log}" | grep -qF "\"msg\":\"edge_bounds_${m}\""; then
+    msg="edge_bounds_${m}"
+  fi
+done
+echo "SINCE ${since}"
+echo "EDGE ${msg}"
+if [ "${msg}" = edge_bounds_started ]; then echo "EDGE STARTED OK"; exit 0; fi
+echo "EDGE STARTED NOT OK"
+exit 1
+SH
+```
+
+*   통과 = `EDGE STARTED OK`(`EDGE edge_bounds_started`). 그 밖 낱말이면
+    NOT OK 이고, 뜻과 처리는 media README 「/dvr 하한 신호」 입니다.
+    `EDGE none` 은 지금 프로세스가 아직 그 줄까지 오지 못했거나(갓 뜸 ·
+    기동 단계에서 죽음) 줄을 내기 전에 다시 시작한 것입니다 — 잠시 뒤
+    다시 봅니다.
+*   시작 시각은 `lifecycle-check.sh`(「O8a 당김 — 운영 감시」)와 같은 꼴로
+    초 단위로 자릅니다. 앞 프로세스가 지금 프로세스와 같은 초에 기동 줄을
+    냈으면 그 줄도 들어옵니다.
+*   `EDGE CHECK FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
+*   이 스크립트는 아직 시험이 뽑아 돌리지 않습니다(위 둘과 다름).
+
 ### POK-525 교체 걸음
 
 | 걸음 | 동작 | 통과 |
 |---|---|---|
-| 4.1 | B 기동(**끈 채**) — 「정상 교체」 2. apply 를 시작한 시각을 `<since>` 로 적음 | 기동 판정 넷(`PREREQ_FAIL 0` · `START_BLOCKED 0` · `SIDECAR_DB` · `MEDIA WATCH OK`) · `SCHEMA_NOT_READY 0` · B `layout-check.sh`(인자 없음) `SIDECAR LEGACY OK` |
+| 4.1 | B 기동(**끈 채** · 하한 Writer 켬) — 「정상 교체」 2. apply 를 시작한 시각을 `<since>` 로 적음 | 기동 판정 넷(`PREREQ_FAIL 0` · `START_BLOCKED 0` · `SIDECAR_DB` · `MEDIA WATCH OK`) · `SCHEMA_NOT_READY 0` · B `layout-check.sh`(인자 없음) `SIDECAR LEGACY OK` · B `edge-check.sh` `EDGE STARTED OK` |
 | 4.2 | B 루프백(옛 꼴) — 「정상 교체」 3 | `LOOPBACK OK` · Q1 = 0 |
 | 4.3 | 경로 수 → ingest 전환 → http 전환 → 일관성 — 「정상 교체」 4–7. ingest 전환 뒤 `<cut>` 을 적음 | 각 걸음의 통과 |
 | 4.4 | A 배출 — A `paths.sh` → Q2 | A `PATHS 0` · Q2 세 행 `waiting` 0 |
@@ -818,6 +888,7 @@ SH
 
 ```shell
 media_ssm b "${work}/layout-check.sh"                # 4.1
+media_ssm b "${work}/edge-check.sh"
 media_ssm a "${work}/paths.sh"                       # 4.4 · Q2 앞
 media_ssm a "${work}/stop.sh"                        # 4.5
 media_ssm a "${work}/disable.sh"
@@ -835,6 +906,12 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
     4.1 의 `SIDECAR LEGACY OK` 를 보기 전에는 루프백을 하지 않습니다 — 켜진
     B 의 루프백은 A 가 못 읽는 새 꼴 행을 만듭니다. 4.2 의 Q1 이 0 이
     아니면 멈추고 kty 에게 보고합니다.
+*   **4.1 — 하한 Writer.** `EDGE STARTED OK` 가 아니면 멈추고 kty 에게
+    보고합니다. `EDGE edge_bounds_disabled` 면 tfvars 스위치를,
+    `_config_invalid` 면 런타임 출력 ARN 을, `_degraded` 면 그 줄의 `err` 를
+    봅니다. 끈 채인 동안은 옛 꼴만 써 Writer 가 하한을 올릴 회차가 없고(원장
+    행 0), 엣지 PR(Ⓓ) 전이라 KVS 를 읽는 엣지 함수도 없어 시청자 영향은
+    없습니다.
 *   **4.3 — A 는 아직 돕니다.** 전환 동안 A 가 살아 있어 제어면 502 창이
     없습니다. `<cut>` = `tg_health` 의 `ingest` 가 B 한 대 healthy 가 된
     시각 + 30초(등록 해제 지연)입니다.
@@ -886,9 +963,26 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
     `<test>`(4.2 · 4.8 루프백과 같은 시험 스트림)여야 합니다 — 다른 스트림이면
     Q4 가 이 방송이 아니라 4.8 루프백의 회차를 판정합니다. 통과는 셋입니다.
     1.  키 새 꼴 — Q3(`<on>` 그대로)의 `matched` 가 늘고 `mismatched` 0.
-    1.  방송을 끝낸 뒤 그 회차의 국면이 `vod` 로 넘어감. 넘어가는 시각은
-        해제 · 재조회 주기의 합(약 2–3.5분) 뒤이고 상한이 아닙니다 — 읽기
-        상한에 걸리면 다음 주기로 밀립니다.
+    1.  방송을 끝낸 뒤 그 회차의 국면이 `vod` 로 넘어감. 하한 Writer 는
+        5분마다 원장에 올리므로, 시험 방송은 **10분 넘게** 보내 그 회차에
+        원장 행이 생기게 합니다. 원장 행은 첫 발행 뒤 Margin(60초)이 지난
+        다음 올림 틱(5분 주기)에 생겨 늦어도 약 6분이고, 10분은 여기에
+        여유를 둔 값입니다. 그러면 B 사이드카 저널에 그 회차의
+        `dvr_floor_released`(KVS 하한 키를 지움) 한 줄이 나오고, 120초 유예
+        뒤 원장 행이 지워져야 넘어갑니다. 넘어가는 시각은 해제 · 재조회
+        주기의 합(약 2–3.5분) 뒤이고 상한이 아닙니다. 해제도 30초는
+        주기일 뿐이라, Writer 의 올림 패스(5분마다 — 해제와 한 작업에서
+        차례로 돎)가 길면 그만큼 밀립니다. 재조회는 30초마다
+        `ending` 스트림을 이름순으로 한 묶음에 담고, 보류 틱마다 커밋 표지가
+        쓰고 남은 상태 읽기 칸(`REWIND_PLAYBACK_READ_MAX`)만큼 묶음 앞에서
+        읽습니다. 칸이 모자라면 남은 스트림은 다음 보류 틱에 이어 읽고, 묶음을
+        다 읽기 전에는 새 묶음을 담지 않습니다 — `ending` 스트림이 많으면 그만큼
+        늦어집니다. 10분이 넘도록 `ending` 이면
+        runtime-1a 「POK-525 원장 질의」 로 그 회차 행의 `state` 를 봅니다.
+        `sample` 은 상태마다 앞 10개뿐이라 그 회차가 빠질 수 있으므로, 그
+        절의 「한 스트림만 보기」 대로 `<test>` 로 좁혀 돌립니다.
+        `released_stuck` 이면 같은 절의 「`released_stuck` 판정」 대로 5분
+        뒤 다시 봅니다.
     1.  **업로드 · 발행 정상 · VOD 문서 URI 새 꼴** — 국면이 `vod` 가 된 뒤
         Q4(`<on>` · `<test>`)의 `pass` 가 `t`: 그 회차 조각(컷오프 이상)의
         ③(되감기 조각) 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0 · 최신 세션
@@ -1004,6 +1098,34 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         frozen`.
     *   방법: 런타임 1단-가 런북 「POK-525 트리거 롤백 짝」(손 SQL · 승인) →
         고친 60 파일 PR → 다시 4.9. A 복귀 수단이 아닙니다.
+
+/dvr 하한 갈래는 위 상태와 따로, 어느 걸음에서든 생길 수 있습니다. 상태
+판정은 media README 「/dvr 하한 신호」, 절차는 「/dvr 하한 사람 복구」
+입니다.
+
+*   **엣지 거절**(엣지 PR Ⓓ 뒤 — 시청자 404 · `dvr_floor_blocks_list`)
+    *   방법: 엣지의 `/dvr` 하한 함수 연결을 끕니다(1순위 · prod/edge
+        apply). 원인을 고친 뒤 다시 켭니다.
+*   **Writer 만 문제**(`edge_bounds_write_failing` 이 풀리지 않음 ·
+    `dvr_floor_release_overdue` · `edge_bounds_degraded`)
+    *   `edge_bounds_degraded` 는 먼저 그 줄의 `err` 를 고치고 사이드카를
+        재기동합니다(media README 「/dvr 하한 사람 복구」). 못 고칠 때만
+        아래 방법으로 갑니다.
+    *   방법: 엣지를 먼저 끔(엣지 PR 뒤) → `edge_bounds_writer_enabled =
+        false` 로 「설정 반영 교체」 → 고친 뒤 `true` 로 다시 교체. 꺼진
+        동안 닫힌 미해제 회차는 `ending` 에 묶이고
+        (`edge_bounds_unreleased_without_writer`) Writer 가 돌아오면
+        풀립니다.
+    *   `dvr_floor_release_overdue` 만이면(`pass=release` 의
+        `edge_bounds_write_failing` 이 함께 나와도) 엣지는 끄지 않습니다 —
+        피해는 그 회차 VOD 가 열리지 않는 것뿐입니다.
+    *   **Writer 없는 상자로 바꾸기 전에 해제 뒤 120초를 기다립니다.**
+        옛 상자의 Writer 가 KVS 키를 지우고 해제를 적은 행은 120초 유예 뒤에
+        지워집니다. 그 안에 옛 상자를 멈추면 지울 몫이 Writer 없는 상자의
+        감시만 남습니다(그 감시도 유예가 지난 해제 행은 지움). 옛 상자를
+        멈추기 직전 runtime-1a 「POK-525 원장 질의」 에서
+        `released_settling` 0 을 봅니다.
+*   원장 표 · KVS 그릇 · IAM 문은 어느 갈래에서도 지우지 않습니다.
 
 **켜기 전 복귀**(A 로 돌아감 — 실행 직전마다 승인):
 

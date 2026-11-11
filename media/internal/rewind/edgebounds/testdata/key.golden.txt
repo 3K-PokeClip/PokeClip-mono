@@ -1,0 +1,23 @@
+# /dvr 하한 KVS 키의 공유 골든이다(POK-525 설계 2-3 · 3-3 · 4-2).
+# Go 시험(media/internal/rewind/edgebounds 의 TestFloorKeyMatchesSharedGolden)과 엣지 함수 dvr-floor.js 의 node 시험이
+# 이 파일을 그대로 읽는다. 줄 규약(Go 시험의 parseGolden 이 어기면 실패로 막는다):
+#   - 파일은 UTF-8 · BOM 없음 · LF 전용(CR 없음)이고 NUL 이 없다.
+#   - `#` 로 시작하는 줄과 빈 줄은 건너뛴다. 그래서 스트림 열은 `#` 로 시작하지 않는다.
+#   - 나머지 줄은 탭 두 개로 나뉜 세 열이다 — 스트림 · 회차 · 키. 열은 비지 않고, 열 앞뒤에 공백을 두지 않는다.
+# 키는 Go FloorKey(스트림, 회차)의 값이고, 엣지 함수가 경로 /dvr/{스트림}/{회차}/seg/{seq}.m4s 에서 KVS 에 묻는 키와
+# 같아야 한다. 성분은 모두 ③ 조각 키 문법(media/internal/playback/testdata/seg_key.golden.txt 의 ok 행 —
+# [A-Za-z0-9._-] · 128자 이하 · `.` · `..` 아님)을 지키는 값이다 — FloorKey 는 성분을 다시 검사하지 않고, 원장의
+# 회차는 그 문법을 통과한 키에서 왔다. 키에는 `/` 가 꼭 하나라 해제 표지 키 `_release`(`/` 없음)와 겹치지 않는다.
+
+# 운영 꼴 — 회차 id 는 회차 머리 세션 id 다
+demo-stream	S-20261103-101530-demo-stream-42	demo-stream/S-20261103-101530-demo-stream-42
+# 한 글자 성분 · 대소문자 · 점 · 밑줄 · 붙임표
+s	r	s/r
+AbC	XyZ	AbC/XyZ
+a.b	c.d	a.b/c.d
+under_score	-dash-	under_score/-dash-
+# 회차 이름이 seg 여도 키는 그대로다
+s	seg	s/seg
+# 성분 길이 상한 128 — 회차 128자 · 스트림 128자
+s	0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef	s/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef	r	0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/r

@@ -9,7 +9,7 @@ package publish
 //	문장                메서드 · 갈래                                       표 · 동작
 //	fenceAcquireSQL     Tick 첫 걸음(fence 획득)                            sessions UPDATE
 //	fenceRenewSQL       RenewFence(lazy 갱신)                               sessions UPDATE
-//	fenceReleaseSQL     Release(shutdown 반납)                              sessions UPDATE
+//	fenceReleaseSQL     Release(shutdown 반납)                              sessions SELECT FOR NO KEY UPDATE · UPDATE
 //	p0ReserveSQL        Tick P0 · GAP 트랜잭션 첫 문장                      sessions UPDATE … RETURNING
 //	p2RevokeSQL         Tick P2′(계승 취소)                                 sessions UPDATE … RETURNING
 //	p4ConfirmSQL        Tick P4                                             sessions UPDATE · gaps UPDATE(recorded → put_confirmed)
