@@ -29,6 +29,9 @@
 #   - sidecar.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(모든 갈래 사이드카의
 #     required env_file). 스위치 파일 사례(54 · 55)는
 #     test/lib/render_sidecar_env_cases.sh 에 있다.
+#   - 사이드카 /dvr 하한 Writer env: 빈 값은 갈래 a – d(사례 10), ARN 을 채운
+#     갈래 k1 · k2(옛 · 응답기 모드 — 사례 56)는
+#     test/lib/render_edge_bounds_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -67,6 +70,8 @@ source "${TEST_DIR}/lib/render_auth_cases.sh"
 source "${TEST_DIR}/lib/render_publish_cases.sh"
 # shellcheck source=lib/render_sidecar_env_cases.sh
 source "${TEST_DIR}/lib/render_sidecar_env_cases.sh"
+# shellcheck source=lib/render_edge_bounds_cases.sh
+source "${TEST_DIR}/lib/render_edge_bounds_cases.sh"
 # shellcheck source=../bin/lib/render_files.sh
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
@@ -86,7 +91,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=55
+readonly CASE_COUNT=56
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -538,6 +543,7 @@ check_case_10() {
        MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
        S3_BUCKET: .rewind_bucket_name,
        REWIND_PUBLIC_BASE_URL: .rewind_public_base_url,
+       REWIND_EDGE_BOUNDS_KVS_ARN: .edge_bounds_kvs_arn,
        CONTROL_LISTEN: "127.0.0.1:8086",
        PLAYBACK_ROUND_KEYS: (.playback_round_keys | tostring)}
        + (if .ingest_auth_image != "" then sc_resolve_env else {} end))}
@@ -916,6 +922,7 @@ main() {
     auth_cases::prepare || true
     publish_cases::prepare || true
     sidecar_cases::prepare || true
+    edge_bounds_cases::prepare || true
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
@@ -1028,6 +1035,9 @@ main() {
   harness::run_case 55 \
     '사이드카 env_file — compose 파일 옆 · required · environment 에 같은 키 없음' \
     sidecar_cases::check_55
+  harness::run_case 56 \
+    '하한 Writer env — ARN 을 채우면 두 모드 모두 사이드카에만 따옴표 한 줄' \
+    edge_bounds_cases::check_56
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

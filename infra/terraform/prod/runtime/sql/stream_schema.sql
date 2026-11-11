@@ -402,4 +402,14 @@ BEGIN
             FOR EACH ROW EXECUTE FUNCTION stream_segments_check_seq_floor();
     END IF;
 END $do$;
+
+-- /dvr 하한 원장(POK-525) — 열린 회차의 하한 정본. KVS 는 사본이다. 회차가 닫히면 해제 뒤 행을 지운다.
+CREATE TABLE IF NOT EXISTS stream_edge_bounds (
+    stream_id   text        NOT NULL,
+    round_id    text        NOT NULL,
+    dvr_floor   bigint      NOT NULL CHECK (dvr_floor >= 1),
+    released_at timestamptz,
+    updated_at  timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    PRIMARY KEY (stream_id, round_id)
+);
 -- END schemaDDL

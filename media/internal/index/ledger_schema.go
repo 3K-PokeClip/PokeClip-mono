@@ -7,8 +7,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// missingLedgerSchemaSQL 은 M6 장부 객체(stream_sessions 열 넷 · 표 둘 · stream_segments 하한 트리거 둘) 가운데 없는
-// 것의 이름을 고른다. 이름 꼴은 열 = 표.열 · 표 = 표 이름 · 트리거 = 트리거 이름이다.
+// missingLedgerSchemaSQL 은 M6 장부 객체(stream_sessions 열 넷 · 표 둘 · stream_segments 하한 트리거 둘)와 /dvr 하한
+// 원장 표(POK-525) 가운데 없는 것의 이름을 고른다. 이름 꼴은 열 = 표.열 · 표 = 표 이름 · 트리거 = 트리거 이름이다.
 //
 // 사이드카 계정(media_indexer)으로 돈다 — 카탈로그 표는 PUBLIC 이 읽는다. 비교는 pg_catalog 에 정확한 판이 있는
 // 형으로 맞춘다(oid = oid · name = name · text = text). 맞추지 않으면 앱 사용자가 public 에 심은 같은 형의 연산자가
@@ -21,6 +21,7 @@ SELECT o.name
                ('stream_sessions.stop_marked_at',    'column',  'stream_sessions', 'stop_marked_at'),
                ('stream_seq_floors',                 'table',   'stream_seq_floors', ''),
                ('broadcast_lifecycle_outbox',        'table',   'broadcast_lifecycle_outbox', ''),
+               ('stream_edge_bounds',                'table',   'stream_edge_bounds', ''),
                ('stream_segments_seq_floor_raise',   'trigger', 'stream_segments', 'stream_segments_seq_floor_raise'),
                ('stream_segments_seq_floor_guard',   'trigger', 'stream_segments', 'stream_segments_seq_floor_guard')
        ) AS o(name, kind, rel, sub)
