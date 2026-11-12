@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RecipeSnapshot } from '@/api/clipEditor';
+import { CardNeedsEditorError } from '@/features/clips/editor/cardDraftErrors';
 import { saveCardDraft } from '@/features/clips/editor/saveCardDraft';
 import { captureSession } from '@/stores/auth';
 import { forgetCardSaves, useCardSave } from './cardSave';
@@ -80,6 +81,15 @@ describe('useCardSave', () => {
     const { result } = renderHook(() => useCardSave('S-1', '23'));
     await act(async () => {
       await expect(result.current.save()).rejects.toThrow('503');
+    });
+    expect(result.current.state).toBe('idle');
+  });
+
+  it('「편집기에서 열기」 오류도 저장 전으로 돌리고 종류 그대로 던진다 — 알림을 고르는 것은 부르는 쪽이다', async () => {
+    vi.mocked(saveCardDraft).mockRejectedValue(new CardNeedsEditorError());
+    const { result } = renderHook(() => useCardSave('S-1', '23'));
+    await act(async () => {
+      await expect(result.current.save()).rejects.toBeInstanceOf(CardNeedsEditorError);
     });
     expect(result.current.state).toBe('idle');
   });

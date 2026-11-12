@@ -210,6 +210,30 @@ describe('prefetchCardEditor', () => {
     expect(editor.kind === 'window' && windowBlobs.get(editor.target.key)).toBeTruthy();
   });
 
+  it('clip 이 창 두 끝(playerWindow)을 주면 미리 받기도 그 범위로 받아 편집기 열쇠와 같다(판 NULL · 카드 창과 수 초 다름)', async () => {
+    // 판 NULL 래칫으로 창 두 끝이 카드 창(50–80초)보다 7.3초 뒤다 → 여유 10초를 붙인 창 47.3–97.3초 = 조각 111–124
+    const card: JumpCard = {
+      ...CARD,
+      playerWindow: { startMs: STARTED + 57_300, endMs: STARTED + 87_300 },
+    };
+    const live = listOf(range(100, 160));
+    const rows = live.playlist.rows.map((row) => ({ ...row, timing: null }));
+    const list: SourceList = { ...live, playlist: { runs: [rows], rows } };
+    await prefetchCardEditor(
+      '7',
+      '23',
+      depsWith({ fetchJumpCard: async () => card, readSource: async () => snapshotOf(list) }),
+    );
+
+    const editorRange = displayRange(cardEndpoints(card, STARTED), headCacheFor('7'), STARTED);
+    const editor = decideWindow(editorRange, list, STARTED, '7', true);
+
+    expect(editor.kind === 'window' && editor.target.key).toBe(editorWindowKey('7', 111, 124));
+    expect(windowBlobs.get(editorWindowKey('7', 111, 124))).toBeDefined();
+    // 카드 창(estimate)으로 받은 창은 편집기가 꺼내 쓰지 않는다 — 받지 않는다
+    expect(windowBlobs.get(editorWindowKey('7', 110, 122))).toBeUndefined();
+  });
+
   it('방송 중인데 목록이 구간 끝 + 여유에 못 미치면 받지 않고 pending이다(방금 생긴 카드)', async () => {
     // 목록 끝 84초 < 구간 끝 80초 + 여유 10초
     const deps = depsWith({

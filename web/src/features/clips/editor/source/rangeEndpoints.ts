@@ -1,3 +1,4 @@
+import { readPlayerAtMs, readPlayerWindow } from '@/api/cardPositions';
 import { CUT_MAX_MS, CUT_MIN_MS } from '@/api/clipEditor';
 import {
   cutMsOf,
@@ -64,34 +65,67 @@ function endpointMs(
   }
 }
 
-/**
- * 저장 가능 판정과 저장 값. 끝점은 시작 · 끝 차례로 보고 처음 막힌 까닭을 낸다. 길이(5–180초)는 S 축 out − in(계약6 2절
- * 사용자 길이)으로 본다 — 몰래 자르지 않는다
- */
-export function savable(range: EndpointRange, ctx: CutContext): SaveVerdict {
-  const inMs = endpointMs(range.start, 'start', ctx);
-  if (typeof inMs === 'string') return { ok: false, reason: inMs };
-  const outMs = endpointMs(range.end, 'end', ctx);
-  if (typeof outMs === 'string') return { ok: false, reason: outMs };
+/** 길이(5–180초) 판정 — 길이는 S 축 out − in(계약6 2절 사용자 길이)이다. 몰래 늘리거나 자르지 않는다 */
+function lengthVerdict(inMs: number, outMs: number): SaveVerdict {
   const length = outMs - inMs;
   if (length < CUT_MIN_MS) return { ok: false, reason: 'tooShort' };
   if (length > CUT_MAX_MS) return { ok: false, reason: 'tooLong' };
   return { ok: true, inMs, outMs };
 }
 
+/** 저장 가능 판정과 저장 값. 끝점은 시작 · 끝 차례로 보고 처음 막힌 까닭을 낸다 */
+export function savable(range: EndpointRange, ctx: CutContext): SaveVerdict {
+  const inMs = endpointMs(range.start, 'start', ctx);
+  if (typeof inMs === 'string') return { ok: false, reason: inMs };
+  const outMs = endpointMs(range.end, 'end', ctx);
+  if (typeof outMs === 'string') return { ok: false, reason: outMs };
+  return lengthVerdict(inMs, outMs);
+}
+
 /**
  * 카드에서 연 범위(편집기와 미리 받기가 함께 쓴다 — 계획 4절 P-8). 둘이 같은 범위라야 미리 받은 창의 열쇠가 편집기 열쇠와 같다.
- * 지금은 칸 없는 카드의 지금 식(base + 카드 창) 하나라 estimate 다 — 사용자가 끝을 정해야 저장된다(설계 14.0 1번)
+ * clip 이 창 두 끝(playerWindow)을 주면 그 값 그대로 exact 다 — 판 NULL 에서는 카드 창과 래칫만큼 갈리지만 다시 셈하지 않는다.
+ * 칸이 없거나 null 이면 지금 식(base + 카드 창)이라 estimate 다 — 사용자가 끝을 정해야 저장된다(설계 14.0 1번)
  * @param base 편집기 0초의 절대 ms
  */
 export function cardEndpoints(
-  card: { window: { startMs: number; endMs: number } },
+  card: { window: { startMs: number; endMs: number }; playerWindow?: unknown },
   base: number,
 ): EndpointRange {
+  const player = readPlayerWindow(card);
+  if (player) {
+    return {
+      start: { kind: 'exact', ms: player.startMs },
+      end: { kind: 'exact', ms: player.endMs },
+    };
+  }
   return {
     start: { kind: 'estimate', ms: base + card.window.startMs },
     end: { kind: 'estimate', ms: base + card.window.endMs },
   };
+}
+
+/**
+ * 카드 바로 저장의 판정(편집기를 열지 않는다 — 고름 · 머리 · 목록이 없다). clip 이 준 창 두 끝(playerWindow)만 저장 값이고,
+ * 칸이 없거나 null 이면 estimate 로 막는다 — 카드 창(어림)으로 대신 저장하지 않는다. 길이는 편집기 저장과 같은 규칙이다
+ */
+export function cardDraftVerdict(card: { playerWindow?: unknown }): SaveVerdict {
+  const player = readPlayerWindow(card);
+  if (!player) return { ok: false, reason: 'estimate' };
+  return lengthVerdict(player.startMs, player.endMs);
+}
+
+/**
+ * 카드 하이라이트 자리(목록 PDT 축 epoch ms · 설계 prw2 3.3). clip 이 준 플레이어용 PDT(playerAtMs)가 값이면 그것, null(장면
+ * 없음)이면 하이라이트가 없다. 칸이 없으면(옛 clip) base + 카드 ms 다 — 끝난 방송이면 base 가 vod 첫 PDT 다
+ * @param base 편집기 0초의 절대 ms
+ */
+export function cardHighlightMs(
+  card: { streamTimestampMs: number; playerAtMs?: unknown },
+  base: number,
+): number | null {
+  const player = readPlayerAtMs(card);
+  return player === undefined ? base + card.streamTimestampMs : player;
 }
 
 /** 저장된 편집본의 컷 — 받은 값을 다시 셈하지 않는다(exact · 계획 4절 P-7). 손대지 않고 저장하면 같은 값이다 */

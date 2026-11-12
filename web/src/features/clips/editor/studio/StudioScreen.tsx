@@ -63,6 +63,7 @@ import { cardSceneLabelOf } from '../source/editorSourceState';
 import { headCacheFor } from '../source/fileHeadProbe';
 import {
   cardEndpoints,
+  cardHighlightMs,
   displayRange,
   recipeEndpoints,
   type EndpointRange,
@@ -681,16 +682,24 @@ function WiredStudio(props: WiredStudioProps) {
   return <WiredStudioBody key={source.base} {...props} source={source} base={source.base} />;
 }
 
-/** 저장된 컷(절대 ms)이면 편집기 0초 기준 창으로 옮긴다 — 저장할 때와 같은 base 라야 제자리로 온다(POK-255) */
-function windowOfSpan(span: Loaded['span'], base: number): { startMs: number; endMs: number } {
-  return span.kind === 'window'
-    ? { startMs: span.startMs, endMs: span.endMs }
-    : { startMs: span.inAtMs - base, endMs: span.outAtMs - base };
+/**
+ * 연 범위의 끝점 — 카드는 clip 이 준 창 두 끝(playerWindow · exact) 또는 칸 없는 카드의 지금 식(estimate), 저장된 컷은 받은
+ * 값 그대로(exact · 계획 4절 P-7). 카드 범위는 미리 받기와 같은 함수(cardEndpoints)라 미리 받은 창 열쇠가 같다
+ */
+function endpointsOfSpan(span: Loaded['span'], card: JumpCard | null, base: number): EndpointRange {
+  if (span.kind === 'cut') return recipeEndpoints(span);
+  return cardEndpoints({ window: span, playerWindow: card?.playerWindow }, base);
 }
 
-/** 연 범위의 끝점 — 카드는 칸 없는 카드의 지금 식(estimate), 저장된 컷은 받은 값 그대로(exact · 계획 4절 P-7) */
-function endpointsOfSpan(span: Loaded['span'], base: number): EndpointRange {
-  return span.kind === 'cut' ? recipeEndpoints(span) : cardEndpoints({ window: span }, base);
+/** 연 범위의 편집기 0초 기준 창(ms) — 끝점의 처음 표시 구간이다(손잡이 한계 · 출처 줄이 쓴다) */
+function windowOfRange(range: { startSeconds: number; endSeconds: number }): {
+  startMs: number;
+  endMs: number;
+} {
+  return {
+    startMs: Math.round(range.startSeconds * 1000),
+    endMs: Math.round(range.endSeconds * 1000),
+  };
 }
 
 function WiredStudioBody({
@@ -703,7 +712,6 @@ function WiredStudioBody({
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { streamId, card, broadcast, saved, latestClip, trackLabels } = data;
-  const window = useMemo(() => windowOfSpan(data.span, base), [data.span, base]);
   const startedAt = broadcast.startedAt!;
 
   // 사용 통계의 역할 속성(active_role) — 편집기는 독(ChannelScope) 밖이라, 링크로 바로 열면 등록이 없거나 그 브라우저의 옛
@@ -738,11 +746,12 @@ function WiredStudioBody({
   // 끝점(설계 prw2 3.5) — 저장 값은 이것이 정하고, 처음 구간은 그 표시 초다. ② 머리 캐시는 영상 키마다 하나다
   const mediaKey = mediaStreamId(broadcast);
   const heads = useMemo(() => headCacheFor(mediaKey), [mediaKey]);
-  const endpoints = useMemo(() => endpointsOfSpan(data.span, base), [data.span, base]);
+  const endpoints = useMemo(() => endpointsOfSpan(data.span, card, base), [data.span, card, base]);
   const initialRange = useMemo(
     () => displayRange(endpoints, heads, base),
     [endpoints, heads, base],
   );
+  const window = useMemo(() => windowOfRange(initialRange), [initialRange]);
   // 실재생 — 되감기 목록 창(POK-473). 훅은 늘 부르고, 원천 목록이 있을 때만 영상을 붙인다. 목록이 없어도 원천이 막힌 까닭
   //    (D3)이 있으면 어댑터를 넘겨 미리보기 아래에 알린다
   const video = useEditorVideoPlayback({
@@ -839,22 +848,12 @@ function WiredStudioBody({
 
   /**
    * 화면값 + 끝점으로 판정한 컷 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가
-   * 한다 — 컷을 편집기 초로 실어 넘기면 그대로 돌아온다(base + 정수 ms)
+   * 한다 — 판정한 컷 ms 를 그대로 싣는다(다시 셈하지 않음)
    */
   const documentFor = useCallback(
-    (recipe: EditorRecipe, cut: SaveCut): RecipeDocument => {
-      const range = {
-        startSeconds: (cut.inMs - base) / 1000,
-        endSeconds: (cut.outMs - base) / 1000,
-      };
-      return recipeDocumentOf({
-        streamId,
-        base,
-        recipe: { ...recipe, range },
-        saved: saved?.document ?? null,
-      });
-    },
-    [base, saved, streamId],
+    (recipe: EditorRecipe, cut: SaveCut): RecipeDocument =>
+      recipeDocumentOf({ streamId, cut, recipe, saved: saved?.document ?? null }),
+    [saved, streamId],
   );
 
   /** 새로 만들거나 고쳐 저장하고, 저장한 판을 상태에 적는다 */
@@ -979,8 +978,10 @@ function WiredStudioBody({
       const playheadSeconds = hasSource ? playbackClock.getSeconds() : null;
       const cutLengthMs = cut.outMs - cut.inMs;
       const rangeStart = recipe.range.startSeconds;
-      // 카드 시각은 기준점 축의 ms, 구간 시작은 같은 축의 초다(POK-255)
-      const highlightRaw = card ? Math.round(card.streamTimestampMs - rangeStart * 1000) : null;
+      // 하이라이트는 목록 PDT 축 ms(clip 의 playerAtMs · 칸 없으면 base + 카드 ms), 구간 시작은 편집기 초다
+      const highlightAt = card ? cardHighlightMs(card, base) : null;
+      const highlightRaw =
+        highlightAt === null ? null : Math.round(highlightAt - base - rangeStart * 1000);
       const highlightOffsetMs =
         highlightRaw !== null && highlightRaw >= 0 && highlightRaw < cutLengthMs
           ? highlightRaw

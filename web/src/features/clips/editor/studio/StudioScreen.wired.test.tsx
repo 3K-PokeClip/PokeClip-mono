@@ -152,6 +152,8 @@ const server = vi.hoisted(() => ({
   timing: null as 'v2' | null,
   /** 카드의 플레이어 장면 칸(playerAtMs). undefined 면 칸 없음 */
   playerAtMs: undefined as number | null | undefined,
+  /** 카드의 창 두 끝 칸(playerWindow · 목록 PDT 축 epoch ms). undefined 면 칸 없음 */
+  playerWindow: undefined as { startMs: number; endMs: number } | null | undefined,
   /** ③ 목록 PDT 간격(ms) — EXTINF 4초보다 길면 경계마다 죽은 자리(판 NULL 래칫)가 생긴다 */
   pdtStepMs: 4_000,
 }));
@@ -234,6 +236,7 @@ function handle(url: string, init?: RequestInit) {
           streamTimestampMs: server.cardWindow.startMs + 5_000,
           window: server.cardWindow,
           ...(server.playerAtMs === undefined ? {} : { playerAtMs: server.playerAtMs }),
+          ...(server.playerWindow === undefined ? {} : { playerWindow: server.playerWindow }),
           score: 80,
           evidence: null,
           eventSeq: 1,
@@ -354,6 +357,7 @@ beforeEach(() => {
   server.savedCut = { inMs: 120_000, outMs: 150_000 };
   server.timing = null;
   server.playerAtMs = undefined;
+  server.playerWindow = undefined;
   server.pdtStepMs = 4_000;
   server.savedTracks = [{ trackId: 0, gain: 1 }];
   server.savedSchema = 2;
@@ -1034,6 +1038,38 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     expect(await screen.findByText('이 카드는 범위 끝을 직접 정해 주세요')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '다시 시도' })).toBeNull();
     expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+  });
+
+  it('clip 이 창 두 끝(playerWindow)을 주면 끝을 정하지 않아도 그 값 그대로 저장한다(exact · 카드 창과 수 초 달라도)', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_234, endMs: STARTED_AT + 73_901 };
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 61_234,
+      outAtMs: STARTED_AT + 73_901,
+    });
+  });
+
+  it('하이라이트 장면은 clip 이 준 플레이어용 PDT(playerAtMs)다 — 카드 ms(기준점 축)로 대신 재지 않는다', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_000, endMs: STARTED_AT + 73_400 };
+    // 카드 ms 로 재면 65 − 61 = 4.0초 · 플레이어용 PDT 로 재면 67.5 − 61 = 6.5초
+    server.playerAtMs = STARTED_AT + 67_500;
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    const opened = await openUploadDialog(user);
+    await user.click(opened.getByRole('tab', { name: '썸네일' }));
+
+    expect(opened.getByRole('button', { name: '하이라이트 0:06.5' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('clip 이 카드 장면을 못 찾았으면(playerAtMs null) 열 때 한 번 알린다 — 편집기는 그대로 연다', async () => {

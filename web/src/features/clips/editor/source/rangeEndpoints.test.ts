@@ -4,7 +4,9 @@ import type { CutContext } from './cutPosition';
 import type { EditorPlaylist, PlaylistSegment } from './editorPlaylist';
 import type { HeadCache, HeadEntry } from './fileHeadProbe';
 import {
+  cardDraftVerdict,
   cardEndpoints,
+  cardHighlightMs,
   displayRange,
   displaySeconds,
   endpointOf,
@@ -15,7 +17,8 @@ import {
   type Endpoint,
   type EndpointRange,
 } from './rangeEndpoints';
-import type { EditorPick } from './windowPlacement';
+import type { RemuxedWindow } from './remuxWindow';
+import { placeWindow, type EditorPick } from './windowPlacement';
 
 // 끝점 모델(설계 prw2 3.5 · 계획 P-4′ · 처분 PK1). exact 는 다시 셈하지 않고(왕복 항등), estimate 는 저장 값이 아니며, pick 은
 // 저장할 때 그 seq 머리 · 이웃으로 셈한다. 저장 거절 사유는 일곱이다 — 계획의 여섯에 PK1 의 listUnavailable 을 더했다.
@@ -200,6 +203,35 @@ describe('cardEndpoints · recipeEndpoints', () => {
     });
   });
 
+  it('clip 이 창 두 끝(playerWindow)을 주면 그 값 그대로 exact 다 — 카드 창(base + window)과 수 초 달라도 다시 셈하지 않는다', () => {
+    const card = {
+      window: { startMs: 60_000, endMs: 72_400 },
+      playerWindow: { startMs: BASE + 63_217, endMs: BASE + 75_901 },
+    };
+
+    const range = cardEndpoints(card, BASE);
+
+    expect(range).toEqual({ start: exact(BASE + 63_217), end: exact(BASE + 75_901) });
+    expect(savable(range, { base: BASE, heads: headsOf(), list: null })).toEqual({
+      ok: true,
+      inMs: BASE + 63_217,
+      outMs: BASE + 75_901,
+    });
+  });
+
+  it.each([
+    ['null(장면 없음)', null],
+    ['칸 없음(옛 clip)', undefined],
+    ['끝 < 시작(믿을 수 없음)', { startMs: BASE + 9_000, endMs: BASE + 1_000 }],
+  ])('playerWindow %s — 카드 창의 지금 식(estimate)이다', (_label, playerWindow) => {
+    const card = { window: { startMs: 60_000, endMs: 72_400 }, playerWindow };
+
+    expect(cardEndpoints(card, BASE)).toEqual({
+      start: { kind: 'estimate', ms: BASE + 60_000 },
+      end: { kind: 'estimate', ms: BASE + 72_400 },
+    });
+  });
+
   it('레시피 컷은 받은 값 그대로 exact 라 손대지 않고 저장하면 같은 값이다(P-7)', () => {
     const range = recipeEndpoints({ inAtMs: BASE + 61_234, outAtMs: BASE + 71_999 });
 
@@ -207,6 +239,156 @@ describe('cardEndpoints · recipeEndpoints', () => {
       ok: true,
       inMs: BASE + 61_234,
       outMs: BASE + 71_999,
+    });
+  });
+});
+
+describe('cardDraftVerdict — 카드 바로 저장(편집기를 열지 않음)', () => {
+  const window = { startMs: 60_000, endMs: 72_400 };
+
+  it('playerWindow 두 끝 그대로가 저장 값이다', () => {
+    const card = { window, playerWindow: { startMs: BASE + 63_217, endMs: BASE + 75_901 } };
+
+    expect(cardDraftVerdict(card)).toEqual({ ok: true, inMs: BASE + 63_217, outMs: BASE + 75_901 });
+  });
+
+  it.each([
+    ['null', null],
+    ['칸 없음', undefined],
+  ])(
+    'playerWindow %s — estimate 로 막는다(카드 창으로 대신 저장하지 않는다)',
+    (_label, playerWindow) => {
+      const card = { window, playerWindow };
+
+      expect(cardDraftVerdict(card)).toEqual({ ok: false, reason: 'estimate' });
+    },
+  );
+
+  it('길이가 5–180초 밖이면 편집기 저장과 같은 사유로 막는다 — 몰래 늘리거나 자르지 않는다', () => {
+    const of = (length: number) => ({
+      window,
+      playerWindow: { startMs: BASE, endMs: BASE + length },
+    });
+
+    expect(cardDraftVerdict(of(CUT_MIN_MS - 1))).toEqual({ ok: false, reason: 'tooShort' });
+    expect(cardDraftVerdict(of(CUT_MAX_MS + 1))).toEqual({ ok: false, reason: 'tooLong' });
+    expect(cardDraftVerdict(of(CUT_MIN_MS)).ok).toBe(true);
+    expect(cardDraftVerdict(of(CUT_MAX_MS)).ok).toBe(true);
+  });
+});
+
+describe('cardHighlightMs — 카드 하이라이트 자리(목록 PDT 축 ms)', () => {
+  /** 끝난 방송의 base 는 vod 목록 첫 PDT 다(서버 기준점이 없을 때) — 칸 없는 카드는 그 base 에 카드 ms 를 더한다 */
+  const VOD_FIRST_PDT = 1_726_826_432_000;
+
+  it('playerAtMs 가 값이면 그 값이다', () => {
+    expect(cardHighlightMs({ streamTimestampMs: 65_000, playerAtMs: BASE + 67_250 }, BASE)).toBe(
+      BASE + 67_250,
+    );
+  });
+
+  it('playerAtMs 가 null(장면 없음)이면 하이라이트가 없다', () => {
+    expect(cardHighlightMs({ streamTimestampMs: 65_000, playerAtMs: null }, BASE)).toBeNull();
+  });
+
+  it('칸이 없으면(옛 clip) base + 카드 ms 다 — 끝난 방송이면 vod 첫 PDT 가 base 다', () => {
+    expect(cardHighlightMs({ streamTimestampMs: 65_000 }, VOD_FIRST_PDT)).toBe(
+      VOD_FIRST_PDT + 65_000,
+    );
+  });
+});
+
+describe('시험 묶음 D — 다시 열기 · 카드 범위 반례', () => {
+  it('R-a 없음 반례: 칸 없는 카드 창은 손대지 않으면 저장이 막히고, 끝점을 정하면 저장된다(r3 cx 1)', () => {
+    // start_pts = 0 · 4,000 · 8,000 · PDT = 100,000 · 110,000 · 114,000 — 카드 창 [1,000, 9,000] 의 지금 식 끝(109,000)은
+    // 조각 0 끝(104,000)과 조각 1 PDT(110,000) 사이 죽은 자리라 본 적 없는 장면이다
+    const base = 100_000;
+    const rows = [row(0, 100_000, null), row(1, 110_000, null), row(2, 114_000, null)];
+    const ctx = { base, heads: headsOf(), list: { runs: [rows], rows } };
+    const opened = cardEndpoints({ window: { startMs: 1_000, endMs: 9_000 } }, base);
+
+    const untouched = savable(opened, ctx);
+    const set: EndpointRange = {
+      start: endpointOf({ kind: 's', s: 1 }, base),
+      end: endpointOf({ kind: 's', s: 12 }, base),
+    };
+
+    expect(untouched).toEqual({ ok: false, reason: 'estimate' });
+    expect(savable(set, ctx)).toEqual({ ok: true, inMs: 101_000, outMs: 112_000 });
+  });
+
+  it('런을 건너는 컷(판 NULL seq 3 → 끊김 → seq 4)도 저장하고, 다시 열어 손대지 않고 저장하면 같은 값이다', () => {
+    const t0 = 1_726_826_400_000;
+    const seq3 = { ...row(3, t0 + 8_000, null), timing: 'v2' as const };
+    const seq4 = { ...row(4, t0 + 20_300, null), timing: 'v2' as const };
+    const list: EditorPlaylist = { runs: [[seq3], [seq4]], rows: [seq3, seq4] };
+    const pickIn: EditorPick = {
+      seq: 3,
+      pts: 32.0,
+      dur: 0.04,
+      videoDts: 30.0,
+      pdtMs: seq3.pdtMs,
+      durationMs: 4000,
+      timing: 'v2',
+    };
+    const pickOut: EditorPick = {
+      seq: 4,
+      pts: 42.96,
+      dur: 0.04,
+      videoDts: 40.0,
+      pdtMs: seq4.pdtMs,
+      durationMs: 4000,
+      timing: 'v2',
+    };
+    const ctx = { base: t0, heads: headsOf(), list };
+    const picked: EndpointRange = {
+      start: { kind: 'pick', pick: pickIn },
+      end: { kind: 'pick', pick: pickOut },
+    };
+
+    const saved = savable(picked, ctx);
+    if (!saved.ok) throw new Error(`저장이 막혔다: ${saved.reason}`);
+    const reopened = recipeEndpoints({ inAtMs: saved.inMs, outAtMs: saved.outMs });
+
+    expect(saved).toEqual({ ok: true, inMs: t0 + 10_000, outMs: t0 + 23_280 });
+    expect(savable(reopened, ctx)).toEqual(saved);
+    // 다시 연 화면은 저장 값의 표시 초다 — 고른 끝(프레임 시작 23.26초)이 아니라 그 프레임과 다음 프레임 사이 가운데
+    // (23.28초)다(kty 결정 (다) 2026-11-13 — 옛 결정 2 「그 프레임 끝」 을 대체)
+    expect(displayRange(reopened, ctx.heads, t0)).toEqual({ startSeconds: 10, endSeconds: 23.28 });
+  });
+
+  describe('레시피 다시 열기 — 판 NULL 머리 전후(설계 5절 8 · cx 1 반례)', () => {
+    // 조각 7: PDT 100,000 · ③ D3 10.3 · ② D2 0.3 · Hd 0 → o = 10.0 · 창 Δ 10.2(③ PTS 최솟값). 레시피 컷 101,000 은 Blob
+    // o + 1.0 − Δ = 0.8 이다 — 머리 전에는 o 를 D3 로 근사해 1.1 에 두고, 머리가 오면 같은 S 를 다시 배치해 0.8 로 간다
+    const base = 90_000;
+    const ticks = 90_000;
+    const seg7 = row(7, 100_000, null);
+    const frames = Array.from({ length: 120 }, (_, i) => ({
+      pts: (927_000 + 3000 * i) / ticks,
+      dur: 3000 / ticks,
+    }));
+    const remuxed: RemuxedWindow = {
+      blob: new Blob([]),
+      shiftSeconds: 10.2,
+      segments: [{ seq: 7, videoDts: 927_000 / ticks, frames, mediaStart: 10.3, mediaEnd: 14.3 }],
+    };
+    const cut = { inAtMs: 101_000, outAtMs: 106_000 };
+
+    it('저장 값은 머리 전후 같고(받은 값 · 다시 셈하지 않음) 시크는 머리가 오면 맞는 자리로 간다', () => {
+      const heads = headsOf({ 7: { state: 'missing' } });
+      const reopened = recipeEndpoints(cut);
+      const s = displayRange(reopened, heads, base).startSeconds;
+
+      const savedBefore = savable(reopened, { base, heads, list: LIST });
+      const seekBefore = placeWindow(remuxed, [seg7], base, heads).blobAtS(s);
+      heads.set(7, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } });
+      const seekAfter = placeWindow(remuxed, [seg7], base, heads).blobAtS(s);
+
+      expect(s).toBe(11);
+      expect(savedBefore).toEqual({ ok: true, inMs: 101_000, outMs: 106_000 });
+      expect(savable(reopened, { base, heads, list: LIST })).toEqual(savedBefore);
+      expect(seekBefore).toBeCloseTo(1.1, 9);
+      expect(seekAfter).toBeCloseTo(0.8, 9);
     });
   });
 });
