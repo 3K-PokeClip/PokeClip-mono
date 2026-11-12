@@ -372,10 +372,16 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
         문서가 회수된다. 그 행은 구간 규칙상 지워지므로 회수는 맞는
         처분이다. prod 9일 동안 하한 거부는 0건이다(2026-11-12 측정).
 
-    지금 prod 에는 `CLIP_INTERNAL_URL` 을 넣는 공급 경로가 없다
-    (`infra/media-host/bin/start-media.sh` 가 상자 스위치 파일
-    `sidecar.env` 에 `PLAYBACK_ROUND_KEYS` 한 줄만 받는다). prod 공급 경로는
-    POK-551 의 남은 몫이다.
+    prod 공급 경로(POK-551): 주소는 `prod/media` tfvars 의
+    `clip_internal_url`(기본 빈 값 = 끔)이고, 차면 compose 렌더본에
+    `CLIP_INTERNAL_URL` · `CLIP_EXPIRY_TOKEN_FILE` 이 들어간다. 토큰 그릇은
+    런타임 출력 `clip_expiry_token_secret_arn` → `media.env` 의
+    `CLIP_EXPIRY_TOKEN_SECRET_ARN` 으로 오고, 시작 스크립트가 받아 사이드카
+    파일로 둔다. user_data 로만 들어가 바꾸는 것은 상자 교체다. 절차는
+    [prod 런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md)
+    「1단-나 ③」 이다(코드: `infra/media-host/compose.yml.tmpl` 의 만료 블록 ·
+    `infra/media-host/bin/lib/clip_expiry.sh` ·
+    `infra/terraform/modules/media_host/user_data.tf`).
 *   **끄기 스위치 — DB 한 행(POK-551):** 위 조건으로 켜진 만료도 장부 표
     `stream_expiry_switch` 의 `enabled` 가 참일 때만 지운다. 씨앗 행은
     끔이라 배포만으로는 아무것도 지우지 않는다. 만료기는 회차 시작과
@@ -391,7 +397,8 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
         가 한 줄씩 나온다.
     *   **바꾸는 쪽:** 사이드카(`media_indexer`)는 SELECT 만 갖는다. 켜고
         끄는 것은 마스터가 `SET ROLE media_owner` 로 하는 손 SQL 이다.
-        절차는 런북 몫이다(POK-551 c5).
+        절차는 [prod 런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md)
+        「만료 스위치 손 SQL」 이다.
 *   **첫 적용 때 쓰기 정지:** M6 운영 SQL(`stream_schema.sql` ·
     `20_schema.sql`)의 인덱스는 `CREATE INDEX` 이고 `CONCURRENTLY` 가 아니다.
     처음 적용하거나 인덱스가 빠진 DB 에서는 인덱스를 만드는 동안 그 표의 쓰기가

@@ -46,6 +46,7 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
 | apply 가 중간에 실패함 | 「부분 실패 복구」 | — |
 | O7e 가 이미 끝나 하한 아래 사이드카가 도는 prod 에 M6 운영 SQL 을 적용함(대비 — 새 O7e 는 이 길로 가지 않음) | 「한 창 절차」 | 없는 시간대 |
 | PDT 판 2 생산자(c0 이미지)로 바꾸거나 · 사이드카를 되돌리거나 · 판 게이트 스위치를 바꿈(POK-196 PDT) | 「PDT 판 2 롤백 하한 · 판 게이트」 → 「설정 반영 교체」 | 운영 SQL · 교체는 없는 시간대 · 스위치는 방송 중 가능 |
+| 60일 만료의 사이드카 · 설치 묶음을 되돌리거나 · 만료 주소(`clip_internal_url`)나 만료 스위치를 바꿈(POK-551) | 「만료 롤백 하한 · 만료 스위치」 → 「설정 반영 교체」 | 교체는 없는 시간대 · 스위치는 방송 중 가능 |
 
 **옛 모드 단서(모든 갈래):** 옛 모드 상자(`ingest_auth_image` 빈 구성 · M15
 PR revert 판 포함)를 서비스에 넣는 모든 갈래(정상 · 설정 반영 · force · 부분
@@ -2630,6 +2631,176 @@ docker image inspect --format \
 아님).** PDT 운영 SQL · c0 교체는 POK-525 교체와 다른 창이고, 이 순서 그대로
 돕니다.
 
+## 만료 롤백 하한 · 만료 스위치
+
+POK-551(60일 만료 — 회차 문서 범위로 고르기 · 확정 전 회차 미룸 · DB 끄기
+스위치 · 전용 토큰 공급)의 배포 · 되돌리기 규칙입니다. 만료는 S3 문서 ·
+조각을 지우므로 되돌릴 수 없습니다. 그래서 만료를 켤 수 있는 구성은 스위치를
+아는 사이드카와 토큰을 두는 설치 묶음으로만 띄웁니다.
+
+용어:
+
+*   **만료 하한**: POK-551 머지 커밋을 조상으로 둔 커밋으로 빌드한
+    이미지입니다. 그 앞 커밋의 빌드가 하한 아래입니다.
+*   **만료 스위치**: 장부 표 `stream_expiry_switch` 한 행의 `enabled`
+    입니다(기본 끔 — 배포만으로는 아무것도 지우지 않음). 하한 이상
+    사이드카만 읽습니다. 바꾸는 법은 [런타임 1단-가 런북](runtime-1a.md)
+    「만료 스위치 손 SQL」 입니다.
+*   **만료 주소**: `prod/media` tfvars 의 `clip_internal_url` 입니다. 빈
+    값이면 사이드카에 만료 설정을 렌더하지 않고(`expiry_disabled
+    reason=no_url`) 상자가 토큰도 받지 않습니다. user_data 로만 들어가므로
+    바꾸는 것은 「설정 반영 교체」 · 「제자리 전환」 입니다.
+
+### 만료 하한 판정
+
+판정 명령은 「M6 운영 SQL 경계 · 롤백 하한」 과 같습니다.
+
+```shell
+git fetch origin
+git merge-base --is-ancestor <POK-551 머지 커밋 SHA> <이미지의 빌드 커밋 SHA> \
+  && echo '만료 하한 이상' || echo '만료 하한 아래'
+```
+
+POK-551 을 되돌린(revert) 커밋 뒤의 빌드도 머지 커밋을 조상으로 두어
+「하한 이상」 으로 나옵니다(「PDT 하한 판정」 과 같은 함정). 그래서 둘을 더
+봅니다. 사이드카 · 설치 묶음 모두 라벨이 없어 빌드 출처로 봅니다.
+
+```shell
+git log --oneline --grep='^Revert' <POK-551 머지 커밋 SHA>..<빌드 커밋 SHA>
+# 기대: POK-551 을 되돌린 줄 없음
+git cat-file -e <사이드카 빌드 커밋 SHA>:media/internal/index/expiry_switch.go \
+  && echo 'switch present'
+git cat-file -e <묶음 빌드 커밋 SHA>:infra/media-host/bin/lib/clip_expiry.sh \
+  && echo 'token installer present'
+# 기대: 각각 present
+```
+
+### 만료 하한 칸별 규칙
+
+| 칸 | 하한 아래이면 생기는 일 | 규칙 |
+|---|---|---|
+| `image_digests.sidecar` | 스위치를 모르는 옛 만료가 돕니다. 회차 문서 범위 처분 · 미룸 없이 지웁니다(방송 가운데만 지워 회차 문서가 지운 조각을 가리킴) | 하한 이상. 아래로 되돌리면 같은 교체에서 `clip_internal_url = ""` |
+| `image_digests.bundle`(설치 묶음) | **새 상자:** 이 판의 모듈(POK-551 이후 `prod/media`)로 띄우면 주소와 상관없이 부트스트랩이 필수 파일 `bin/lib/clip_expiry.sh` 가 없어 멈춥니다 — cloud-init 출력에 `MEDIA BOOTSTRAP missing bin/lib/clip_expiry.sh` · `MEDIA BOOTSTRAP FAIL bundle`. **제자리 전환:** 토큰 디렉터리 · 파일을 두지 않지만 그 bind 만 `create_host_path: true` 라 엔진이 빈 디렉터리를 만들어 상자는 뜨고 만료만 꺼집니다(`expiry_disabled reason=token_file`) | 하한 이상. 새 상자는 주소와 상관없이 하한 이상이어야 뜹니다. 제자리 전환으로 아래로 되돌리면 같은 전환에서 `clip_internal_url = ""`(규칙은 하나 — 사이드카 · 묶음 가운데 하나라도 아래면 주소를 비운다) |
+| user_data(모듈 — `prod/media` 를 apply 하는 커밋) | 하한 아래 모듈은 주소 · 토큰 env · bind 를 렌더하지 않습니다 — 사이드카가 `no_url` 로 만료를 꺼서 안전합니다. tfvars 의 `clip_internal_url` 는 선언 안 된 변수 경고로만 남습니다. 짝을 만든 뒤라면 그 판의 plan 에 Media ↔ clip SG 짝 둘의 삭제가 보입니다 | 제한 없음. 경고를 피하려면 그 판의 tfvars 에서 줄을 뺍니다 |
+
+*   `create_host_path: true` 받침은 **제자리 전환에서만** 효과가 있습니다.
+    새 상자는 부트스트랩의 필수 파일 확인이 먼저 막습니다(정본은
+    `modules/media_host/templates/bootstrap.sh.tftpl` 의 `REQUIRED_FILES`).
+*   **제자리 전환에도 같은 규칙입니다.** 떠 있는 상자의 묶음 · compose
+    렌더본을 바꿀 때, 사이드카나 묶음 가운데 하나라도 하한 아래면 주소 줄
+    없는 렌더본으로 바꿉니다 — 「제자리 전환 선행」 2 에서 tfvars 의
+    `clip_internal_url` 을 비운 뒤 렌더본을 뽑고, 3 의 diff 에
+    `CLIP_INTERNAL_URL` · `CLIP_EXPIRY_TOKEN_FILE` 줄이 없어야 합니다.
+*   하한 이상끼리의 되돌림은 주소를 그대로 둬도 됩니다. 만료를 멈추는 것은
+    스위치(끔)입니다.
+
+### 하한 아래로 되돌리기(K-g)
+
+하한 아래 사이드카는 스위치를 모릅니다. 그래서 그 사이드카의 만료를 끄는
+길은 주소를 비우는 것 하나입니다.
+
+1.  DB 스위치를 끕니다(런타임 1단-가 런북 「만료 스위치 손 SQL」 의 끔).
+    하한 이상 사이드카가 떠 있는 동안 지우기를 멈춥니다.
+1.  같은 「설정 반영 교체」(또는 「제자리 전환」)에서 tfvars 를
+    `clip_internal_url = ""` 로 두고 하한 아래 다이제스트를 넣습니다. 주소와
+    다이제스트를 다른 교체로 나누지 않습니다.
+1.  새 상자(또는 전환한 A)에서 아래 「만료 확인 스크립트」 를 `no_url` 로
+    돌려 `EXPIRY NO_URL OK` 를 봅니다. 아니면 그 상자를 서비스에 넣지
+    않고(제자리 전환이면 원복) kty 에게 보고합니다.
+
+다시 앞으로 갈 때는 하한 이상 다이제스트로 교체한 뒤 런타임 1단-가 런북
+「1단-나 ③」 5(주소 켜기)부터 다시 합니다.
+
+### 만료 확인 스크립트
+
+`expiry-check.sh <started|no_url>` 는 실행 중 사이드카 하나의 **지금
+프로세스**가 낸 만료 기동 줄과 스위치 값을 읽습니다. 기동 줄은 프로세스마다
+`expiry_started` 와 `expiry_disabled`(사유 하나) 가운데 하나입니다. 스위치는
+전환 때만 한 줄(WARN `expiry_switch value=0|1`)이라 마지막 줄의 값이 지금
+값입니다.
+
+```shell
+cat > "${work}/expiry-check.sh" <<'SH'
+fail() { echo "EXPIRY CHECK FAIL $1"; exit 2; }
+[ "$#" -eq 1 ] || fail usage
+case "$1" in
+  started) want=started; tag=STARTED ;;
+  no_url) want=disabled_no_url; tag=NO_URL ;;
+  *) fail usage ;;
+esac
+ids="$(docker ps -q --no-trunc --filter status=running \
+  --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+[ "${running}" = 1 ] || fail "running ${running}"
+# 같은 컨테이너가 다시 시작하면 앞 프로세스의 줄이 남는다 — 지금 프로세스의
+# 시작 시각(State.StartedAt) 뒤 줄만 본다(edge-check.sh 와 같은 꼴).
+started_at="$(docker inspect --format '{{.State.StartedAt}}' "${ids}")" \
+  || fail inspect
+since="$(date -d "${started_at}" +%s)" || fail started-at
+log="$(journalctl -t pokeclip-media-sidecar "CONTAINER_ID_FULL=${ids}" \
+  --since "@${since}" -q --no-pager -o cat)" || fail journal
+# 사유는 따옴표까지 대조한다 — privilege 가 privilege_check 에 걸리지 않는다.
+state=none
+if printf '%s\n' "${log}" | grep -qF '"msg":"expiry_started"'; then
+  state=started
+fi
+for r in no_url no_bucket publish_degraded privilege privilege_check \
+  token_file s3_client assembly; do
+  if printf '%s\n' "${log}" | grep -F '"msg":"expiry_disabled"' \
+    | grep -qF "\"reason\":\"${r}\""; then
+    state="disabled_${r}"
+  fi
+done
+switch="$(printf '%s\n' "${log}" | grep -F '"msg":"expiry_switch"' \
+  | sed -n 's/.*"value":\([01]\).*/\1/p' | tail -n 1)"
+if printf '%s\n' "${log}" | grep -F '"msg":"expiry_switch_read_failed"' \
+  | tail -n 1 | grep -qF '"value":1'; then
+  switch=read_failed
+fi
+echo "SINCE ${since}"
+echo "EXPIRY ${state}"
+echo "SWITCH ${switch:-none}"
+if [ "${state}" = "${want}" ]; then echo "EXPIRY ${tag} OK"; exit 0; fi
+echo "EXPIRY ${tag} NOT OK"
+exit 1
+SH
+media_ssm <상자 키> "${work}/expiry-check.sh" started
+```
+
+*   `started` 통과 = `EXPIRY STARTED OK`. 이어서 `SWITCH` 를 봅니다 — 켜기
+    전 `0`, 켠 뒤 10분 안에 `1` 입니다. `read_failed` 는 스위치 표를 읽지
+    못하는 것(운영 SQL 전 · 권한)이고 만료는 꺼진 채입니다. `none` 은
+    만료기가 아직 첫 회차를 돌지 않은 것입니다 — 잠시 뒤 다시 봅니다.
+*   `no_url` 통과 = `EXPIRY NO_URL OK`(K-g 3).
+*   `EXPIRY disabled_token_file` 은 토큰 파일을 읽지 못한 것입니다(받기
+    실패 · 하한 아래 묶음). 시작 스크립트는 이때 판정 줄을 내지 않으므로
+    이 줄이 유일한 신호입니다. 그 밖의 사유는 media README 「60일 만료」
+    입니다. `EXPIRY none` 은 그 줄까지 오지 못한 것이라 잠시 뒤 다시 봅니다.
+*   `EXPIRY CHECK FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
+*   이 스크립트는 아직 시험이 뽑아 돌리지 않습니다(`edge-check.sh` 와 같음).
+
+### 만료 영구 미룸
+
+만료는 구간을 앞으로 품을 수 있는 회차 · 사슬이 아직 VOD 를 확정할 수
+있으면 그 방송을 지우지 않고 다음 회차로 미룹니다(WARN `expiry_deferred
+value=1` — 방송마다 미뤄질 때 · 풀릴 때 한 줄씩). 그 단위가 끝내 확정되지
+않으면 미룸이 영구가 되고, 그 스트림의 옛 방송이 보존 기간을 넘겨 남습니다.
+지우는 쪽보다 안전해 받아들인 한계입니다(media README 「60일 만료」).
+
+*   **언제 봅니다:** 같은 방송의 `expiry_deferred value=1` 뒤 `value=0` 이
+    하루 넘게 나오지 않을 때입니다. 회차 고착은 WARN
+    `session_vod_round_wait_long`(`wait=round_open` · `front_pending`)과
+    짝입니다 — 그 줄이 같은 스트림에 있으면 회차가 닫히지 않은 것입니다.
+    짝이 없으면 사슬이 `ending` ∧ VOD `none` 에 머문 고착일 수 있습니다.
+*   **읽기:** 런타임 1단-가 런북 「만료 미룸 질의」 로 그 스트림의 미정
+    단위를 봅니다.
+*   **처분:** kty 회부(멈춤 자리)입니다. 고착을 푸는 손 SQL 은 두지
+    않습니다. 회차 VOD 대기의 뜻은 media README 「회차 VOD 동결 시점과
+    대기」 · 「회차 VOD 알려진 한계」 입니다.
+*   **스위치와 무관합니다.** 끄면 미룸 판정도 돌지 않을 뿐, 고착은 그대로
+    남습니다.
+
 ## 한 창 절차
 
 **O7e 가 이미 끝난 상태의 대비입니다.** 기본 절차는 O7e 전에 M6 운영 SQL
@@ -2821,7 +2992,7 @@ rm -r -- "${work}" && unset work
 *   [media-host README](/infra/media-host/README.md) — 판정 줄 · 운영 확인
     스크립트 · 운영 규칙
 *   [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md) 「M6 스키마
-    재실행」 · 「M6 읽기 질의」
+    재실행」 · 「M6 읽기 질의」 · 「만료 스위치 손 SQL」 · 「1단-나 ③」
 *   [엣지 비밀 런북](/infra/terraform/runbooks/edge-secrets.md) ·
     [단계 직전 점검 런북](/infra/terraform/runbooks/stage-precheck.md)
 
