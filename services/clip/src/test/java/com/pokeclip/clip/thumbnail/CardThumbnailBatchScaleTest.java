@@ -33,7 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 11시간)이면 한 번에 50만 행이다. 그 행 수와 경과를 1분 순회({@code cards}) · 2초 새 카드 순회({@code cardsIn}) 둘 다 잰다.
  *
  * <p>행 수는 정확히 단언한다(회차 길이 × 방송 수 — 줄이면 최적화가 들어온 것이다). 경과 상한은 판정 경계가 아니라 성긴 그물이다 —
- * 로컬 실측(보고 · README 썸네일 절)보다 넉넉히 둬 공유 러너 흔들림에 깨지지 않게 했다. 최적화는 이 PR 밖이다(넘치면 보고만).
+ * 로컬 실측보다 넉넉히 둬 공유 러너 흔들림에 깨지지 않게 했다 — 한가할 때 0.7–2.6초, 같은 기계에서 다른 부하 시험이 돌 때(부하
+ * 평균 100–190) 12–16.6초를 쟀다(2026-11-13). 상한 15초는 그 부하에서 깨져 60초로 올렸다. 최적화는 이 PR 밖이다(넘치면 보고만).
  */
 class CardThumbnailBatchScaleTest extends IntegrationTestSupport {
 
@@ -41,7 +42,7 @@ class CardThumbnailBatchScaleTest extends IntegrationTestSupport {
     private static final Instant START = Instant.parse("2026-09-01T00:00:00Z");
     private static final int BROADCASTS = ThumbnailSweeper.BATCH_LIMIT;
     private static final int ROUND_ROWS = 10_000;
-    private static final Duration BOUND = Duration.ofSeconds(15);
+    private static final Duration BOUND = Duration.ofSeconds(60);
 
     private final JdbcTemplate jdbc;
     private final BroadcastRepository broadcasts;
