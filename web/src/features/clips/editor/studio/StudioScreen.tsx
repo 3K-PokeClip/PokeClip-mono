@@ -67,6 +67,7 @@ import {
   recipeEndpoints,
   type EndpointRange,
 } from '../source/rangeEndpoints';
+import { uploadSceneOffsetMs, type UploadScene } from '../source/sceneOffset';
 import { useSaveCut, type SaveCut } from './useSaveCut';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { useTrackPreview } from '../trackAudio/useTrackPreview';
@@ -403,10 +404,11 @@ function uploadFieldErrorOf(e: unknown): UploadFieldErrors | null {
 }
 
 /**
- * 창의 값 → 렌더 주문의 업로드 정보. 장면 시각은 완성 영상 안으로 자른다. 예약이면 비공개 + 그 시각(유튜브는 비공개 영상에만
+ * 창의 값 → 렌더 주문의 업로드 정보. 장면 시각(sceneOffsetMs — 창의 편집기 초 차를 결과 영상 미디어 거리로 바꾼 값,
+ * sceneOffset.ts)은 완성 영상 안으로 자른다. 예약이면 비공개 + 그 시각(유튜브는 비공개 영상에만
  * 예약을 받는다, POK-381). 창이 보내기 전에 시각을 검사하므로 여기서 날짜가 틀릴 일은 없다
  */
-function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
+function uploadInfoOf(draft: UploadDraft, cutLengthMs: number, sceneOffsetMs: number): UploadInfo {
   const publishAt = draft.scheduled
     ? scheduleInstant(draft.scheduleDate, draft.scheduleTime)
     : null;
@@ -422,7 +424,7 @@ function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
       draft.thumbnailSource === 'scene'
         ? {
             source: 'scene',
-            offsetMs: Math.min(cutLengthMs - 1, Math.max(0, Math.round(draft.sceneOffsetMs))),
+            offsetMs: Math.min(cutLengthMs - 1, Math.max(0, Math.round(sceneOffsetMs))),
           }
         : { source: draft.thumbnailSource },
   };
@@ -638,6 +640,8 @@ interface PendingUpload {
   highlightOffsetMs: number | null;
   /** 장면 그림을 뽑을 재료(편집기가 받아 둔 녹화 조각). 녹화가 없거나 아직 못 받았으면 null */
   frameSource: SceneFrameSource | null;
+  /** 장면 offset 을 결과 영상 미디어 거리로 셀 재료(연 순간의 끝점 · 창 배치 · 목록) */
+  scene: UploadScene;
 }
 
 interface WiredStudioProps {
@@ -750,6 +754,7 @@ function WiredStudioBody({
   });
   const cutFor = useSaveCut({ base, heads, streamId, mediaKey, source: videoSource });
   const hasSource = videoSource.list !== null;
+  const sourceList = videoSource.list?.playlist ?? null;
   const showPlayback = hasSource || video.playback.error !== null;
   // 트랙별 미리 듣기(POK-389): 영상이 받으려는 창과 같은 창 조각의 소리(방송 소리 트랙 전부)를 영상과 함께 받기 시작해, 영상이
   // 그 창을 받으면 그 창 Blob 시각에 놓고 영상 노드를 따라 튼다. 창이 바뀌면 앞 재생기는 버린다(설계 prw2 3.3 · c9′)
@@ -928,6 +933,8 @@ function WiredStudioBody({
   }, [reloading, previewVideo]);
   // 이 화면에서 마지막으로 보낸 창의 값. 다시 열면 그대로 채운다(고른 이미지 파일까지)
   const lastDraft = useRef<UploadDraft | null>(null);
+  // 장면을 미디어 거리로 셀 수 없다는 알림은 편집기에서 한 번만 — 주문마다 끼면 같은 거절 알림이 합쳐지지 않고 쌓인다
+  const sceneApproxTold = useRef(false);
   // 창 코드는 첫 로드에서 뺐다: 화면이 선 뒤에 미리 받아 두어 처음 누를 때 기다리지 않게 한다. 못 받아도 누를 때 다시 묻는다
   useEffect(() => {
     loadUploadDialog().catch(() => undefined);
@@ -989,6 +996,14 @@ function WiredStudioBody({
               output: outputFromLook(recipe),
             }
           : null;
+      const sceneMedia: UploadScene = {
+        rangeStartSeconds: rangeStart,
+        start: recipe.endpoints?.start,
+        placement: hasSource ? shown : null,
+        list: sourceList,
+        base,
+        heads,
+      };
       const remembered = lastDraft.current;
       const stored =
         current.uploadRequest !== null && current.uploadRequest.version === current.version
@@ -1010,9 +1025,10 @@ function WiredStudioBody({
         playheadOffsetMs: sceneOffsetFromPlayhead(playheadSeconds, rangeStart, cutLengthMs),
         highlightOffsetMs,
         frameSource,
+        scene: sceneMedia,
       });
     },
-    [card, hasSource, playbackClock],
+    [card, hasSource, playbackClock, sourceList, base, heads],
   );
   /** 「영상 만들기」 = 끝점으로 컷을 판정하고(PK1) 서면 업로드 정보 창을 연다 */
   const openUploadDialog = useCallback(
@@ -1044,7 +1060,20 @@ function WiredStudioBody({
         current.recipeId === null ||
         current.savedDoc === null ||
         !sameRecipe(current.savedDoc, doc);
-      const upload = uploadInfoOf(draft, pending.cutLengthMs);
+      // 장면을 미디어 거리로 셀 수 없으면 창의 값을 싣되 업로드는 막지 않고 알린다(kty c12′ 결정 1 (가))
+      const scene =
+        draft.thumbnailSource === 'scene'
+          ? uploadSceneOffsetMs(draft.sceneOffsetMs, pending.scene)
+          : null;
+      if (scene?.approximate === true && !sceneApproxTold.current) {
+        sceneApproxTold.current = true;
+        toast({ tone: 'info', title: '썸네일 장면이 조금 다를 수 있어요' });
+      }
+      const upload = uploadInfoOf(
+        draft,
+        pending.cutLengthMs,
+        scene?.offsetMs ?? draft.sceneOffsetMs,
+      );
       setUploadErrors({});
       setSave((s) => ({
         ...s,

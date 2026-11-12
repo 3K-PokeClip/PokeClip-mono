@@ -152,6 +152,8 @@ const server = vi.hoisted(() => ({
   timing: null as 'v2' | null,
   /** 카드의 플레이어 장면 칸(playerAtMs). undefined 면 칸 없음 */
   playerAtMs: undefined as number | null | undefined,
+  /** ③ 목록 PDT 간격(ms) — EXTINF 4초보다 길면 경계마다 죽은 자리(판 NULL 래칫)가 생긴다 */
+  pdtStepMs: 4_000,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -188,7 +190,8 @@ function vodPlaylist(listUrl: string): string {
   const lines = ['#EXTM3U', '#EXT-X-VERSION:6', `#EXT-X-MAP:URI="${dir}/init/i.mp4"`];
   if (server.timing === 'v2') lines.push('#EXT-X-POKECLIP-TIMING:2');
   for (let seq = 0; seq < 100; seq += 1) {
-    lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(STARTED_AT + seq * 4_000).toISOString()}`);
+    const pdt = new Date(STARTED_AT + seq * server.pdtStepMs).toISOString();
+    lines.push(`#EXT-X-PROGRAM-DATE-TIME:${pdt}`);
     lines.push('#EXTINF:4.000,', `${dir}/seg/${String(seq).padStart(7, '0')}.m4s`);
   }
   return `${lines.join('\n')}\n#EXT-X-ENDLIST\n`;
@@ -351,6 +354,7 @@ beforeEach(() => {
   server.savedCut = { inMs: 120_000, outMs: 150_000 };
   server.timing = null;
   server.playerAtMs = undefined;
+  server.pdtStepMs = 4_000;
   server.savedTracks = [{ trackId: 0, gain: 1 }];
   server.savedSchema = 2;
   server.savedOutput = null;
@@ -709,6 +713,60 @@ describe('StudioScreen — 창 안 끝점 저장(K3)', () => {
       inAtMs: STARTED_AT + 60_000,
       outAtMs: STARTED_AT + 72_500,
     });
+  });
+});
+
+// 업로드 장면 offset 은 결과 영상 ms 다(설계 prw2 3.3 · c12′ · 경계 답 N9) — PDT 차가 아니라 in 부터 장면까지 미디어 거리
+describe('StudioScreen — 업로드 장면 offset 은 미디어 거리다(c12′)', () => {
+  it('경계마다 죽은 자리 0.2초인 창에서 하이라이트 장면은 PDT 차가 아니라 미디어 거리로 싣는다', async () => {
+    withMediaControl();
+    // 판 2 창이라 고른 끝점이 ② 머리 없이 저장된다. 조각 PDT 는 4.2초 간격 · 미디어(EXTINF)는 4초
+    server.timing = 'v2';
+    server.pdtStepMs = 4_200;
+    const user = userEvent.setup();
+    await openWithSource(`stream=${STREAM_ID}&card=5`);
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    await setCardEnds();
+
+    const opened = await openUploadDialog(user);
+    await user.click(opened.getByRole('tab', { name: '썸네일' }));
+    // 시작 60초 = 조각 14(PDT 58.8초) 안 1.2초 → 보이는 프레임 PTS 57.0(편집기 59.8초). 하이라이트 65초 = 조각 15(PDT
+    // 63.0초) 안 2.0초 → 프레임 PTS 62.0. 창의 값은 편집기 초 차 5.2초, 결과 영상 안 거리는 62.0 − 57.0 = 5.0초
+    expect(opened.getByRole('button', { name: '하이라이트 0:05.2' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(opened.getByRole('tab', { name: '정보' }));
+    await user.type(opened.getByRole('textbox', { name: /제목/ }), '보스 막타');
+    await uploadFromPublishTab(user);
+
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(1));
+    const { request } = await renderPartsOf();
+    expect(request.upload).toMatchObject({ thumbnail: { source: 'scene', offsetMs: 5_000 } });
+    expect(screen.queryByText('썸네일 장면이 조금 다를 수 있어요')).not.toBeInTheDocument();
+  });
+
+  it('미디어 거리로 셀 수 없으면(원천 목록 없음) 창의 값을 싣고 업로드는 막지 않되 한 번 알린다', async () => {
+    const user = userEvent.setup();
+    // 원천이 없어 두 끝은 창 밖 S 입력 그대로 받은 값(exact)이다 — 목록이 없어 조각 길이를 읽을 수 없다
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    const opened = await openUploadDialog(user);
+    await user.click(opened.getByRole('tab', { name: '썸네일' }));
+    expect(opened.getByRole('button', { name: '하이라이트 0:05.0' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(opened.getByRole('tab', { name: '정보' }));
+    await user.type(opened.getByRole('textbox', { name: /제목/ }), '보스 막타');
+    await uploadFromPublishTab(user);
+
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(1));
+    const { request } = await renderPartsOf();
+    expect(request.upload).toMatchObject({ thumbnail: { source: 'scene', offsetMs: 5_000 } });
+    expect(await screen.findAllByText('썸네일 장면이 조금 다를 수 있어요')).toHaveLength(1);
   });
 });
 
