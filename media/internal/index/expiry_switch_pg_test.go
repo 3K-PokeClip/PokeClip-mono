@@ -165,3 +165,40 @@ func TestReadExpirySwitchRunsUnderMediaIndexerRole(t *testing.T) {
 		t.Fatalf("역할 풀 UPDATE 오류 = %v, want 42501(사이드카는 스위치를 바꾸지 못한다)", err)
 	}
 }
+
+// 부른 쪽 ctx 에 시한이 없어도 읽기는 TxnDeadline 안에 돌아온다(c2 cx L) — 만료기의 ctx 는 루프 수명이라, 시한이 없으면
+// 잠긴 표 앞에서 만료 고루틴이 멎는다. 표를 잠근 채 시한 없는 ctx 로 부르면 TxnDeadline 근처에 끔과 시한 초과 오류로
+// 돌아와야 한다. 변이 = WithTimeout 제거 → 잠금이 풀릴 때까지 돌아오지 않아 FAIL. TxnDeadline 은 상수라 10초를 기다린다.
+func TestReadExpirySwitchBoundsItselfWithoutParentDeadline(t *testing.T) {
+	pool := newSwitchPool(t)
+	ctx := context.Background()
+	switchExec(t, pool, "UPDATE stream_expiry_switch SET enabled = true")
+	lock, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("잠금 트랜잭션: %v", err)
+	}
+	defer func() { _ = lock.Rollback(ctx) }()
+	if _, err := lock.Exec(ctx, "LOCK TABLE stream_expiry_switch IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatalf("LOCK: %v", err)
+	}
+
+	type read struct {
+		on  bool
+		err error
+	}
+	done := make(chan read, 1)
+	start := time.Now()
+	go func() {
+		on, err := ReadExpirySwitch(ctx, pool)
+		done <- read{on, err}
+	}()
+
+	select {
+	case got := <-done:
+		if took := time.Since(start); got.on || !errors.Is(got.err, context.DeadlineExceeded) || took < TxnDeadline-time.Second {
+			t.Fatalf("ReadExpirySwitch = (%t, %v) · %v, want (false, 시한 초과) · TxnDeadline(%v) 근처", got.on, got.err, took, TxnDeadline)
+		}
+	case <-time.After(TxnDeadline + 3*time.Second):
+		t.Fatalf("ReadExpirySwitch 가 %v 안에 돌아오지 않았다 — 읽기에 자체 시한이 없다", TxnDeadline+3*time.Second)
+	}
+}

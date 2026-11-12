@@ -335,7 +335,7 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
-| `CLIP_INTERNAL_URL` | (빈값 = 만료 끔) | clip 내부 주소 `http(s)://host[:port]`. 경로 · 끝 `/` · 질의 · 조각 · 자격증명이 있으면 기동 거부. **빈 값이 롤백 스위치다** — 비우고 사이드카만 재기동한다(`CONTROL_LISTEN` 과 같은 꼴). 주소가 비어도 아래 토큰 값의 규칙은 본다 |
+| `CLIP_INTERNAL_URL` | (빈값 = 만료 끔) | clip 내부 주소 `http(s)://host[:port]`. 경로 · 끝 `/` · 질의 · 조각 · 자격증명이 있으면 기동 거부. **빈 값이 롤백 스위치다** — compose 를 손으로 띄운 곳은 비우고 사이드카만 재기동한다(`CONTROL_LISTEN` 과 같은 꼴). prod 는 user_data 렌더라 tfvars `clip_internal_url` 을 비우고 상자를 교체한다(아래 「prod 공급 경로」). 재기동 없이 지우기만 멈추려면 아래 끄기 스위치를 끈다. 주소가 비어도 아래 토큰 값의 규칙은 본다 |
 | `CLIP_EXPIRY_TOKEN` | (빈값) | 만료 창구 토큰 값. 로그 · 오류 문구에 나오지 않는다. `CLIP_EXPIRY_TOKEN_FILE` 과 함께 넣으면 기동 거부. 둘 다 없이 켜면 clip 이 401 로 답하고, 연속 실패가 `expiry_stalled` 게이지(ERROR)로 드러난다 |
 | `CLIP_EXPIRY_TOKEN_FILE` | (빈값) | 토큰 한 줄이 든 파일의 **컨테이너 안 절대 경로**(prod 는 파일로만 공급한다). 상대 경로는 기동 거부. 파일 규칙은 `MTX_API_PASS_FILE` 과 같다(위 「관측 자격 파일 규칙」). 다만 읽기 실패는 기동 실패가 아니라 **만료만 끈다**(`expiry_disabled reason=token_file`). 기동 때 한 번 읽으므로 교체 = 재기동이다 |
 
@@ -353,24 +353,39 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
         같은 회차 안의 만료되지 않은 방송 VOD 도 함께 내려간다. 세션 NULL
         행만 만료돼도 그 행을 품은 문서를 회수한다 — 문서가 그 행을 GAP
         줄로 싣기 때문이다.
+    *   **한계 — 회차 길이 상한 없음:** 회차가 얼마나 길게 이어지는지에
+        상한이 없다. 회차가 보존 기간 가까이 이어지면 첫 방송이 만료될 때
+        방금 끝난 방송까지 담은 회차 VOD 문서가 통째로 내려간다.
     *   **미룸:** 구간을 앞으로 품을 수 있는 회차 · 사슬이 아직 확정될 수
         있으면 그 방송은 표시도 삭제도 하지 않고 다음 회차에 다시 본다.
         확정될 수 있다는 것은 회원이 `live` · `ending` 이면서 VOD 가
         `none` · `freezing` 이거나, 회차가 아직 안 닫힌 것이다. 미뤄질 때와
         처리될 때 WARN `expiry_deferred`(`value=1` · `value=0`) 가 방송마다
-        한 줄씩 나온다. 지금 방송 중인 회차는 조각이 구간보다 뒤라 걸리지
-        않는다.
+        한 줄씩 나온다. 미뤄 둔 방송을 clip 이 지우면(탈퇴 정리) 그 방송은
+        다시 오지 않는다. 그래서 처음부터 훑기를 끝까지 마쳤는데 받지 못한
+        미룸 방송은 `value=0 reason=gone` 으로 내린다. 지금 방송 중인 회차는
+        조각이 구간보다 뒤라 걸리지 않는다.
     *   **영구 미룸 두 경로:** ① 회차가 끝내 닫히지 않는다(`round_closed_at`
         NULL 고착 — `session_vod_round_wait_long wait=round_open` 과 짝).
         ② 사슬이 닫히지 않아 `ending` ∧ `vod_state='none'` 에 머문다. 대기
         사슬이면 `wait=front_pending` 과 짝이고, 그 밖의 고착은 그 경보가
-        잡지 못한다. `expiry_deferred value=1` 이 하루 넘게 남으면 그
-        스트림의 미정 회차 · 사슬을 찾아 손으로 처분한다.
+        잡지 못한다. 미룸 판정은 그 스트림(물리 키) 전체를 본다 — 미정
+        단위의 최소 seq 이상으로 꼭대기가 오는 구간은 모두 걸린다. 그래서
+        한 단위가 고착되면 그 스트림의 **이후 방송 만료가 전부** 멈춘다.
+        `expiry_deferred value=1` 이 하루 넘게 남으면 그 스트림의 미정
+        회차 · 사슬을 [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
+        「만료 미룸 질의」 로 읽는다. 처분은 kty 회부다 — 고착을 푸는 손
+        SQL 은 두지 않는다(회차 · 사슬 상태를 손으로 바꾸면 VOD 동결 ·
+        판정식과 어긋난다).
     *   **한계 — 오래된 벽시각 행:** seq 는 새로 받았는데 벽시각이 오래된
         행(귀속 하한 거부 행 · 시계 역행)이 구간에 들면 구간 꼭대기가
         올라간다. 그러면 지금 회차가 미뤄지거나, 그 행을 품은 최근 회차
         문서가 회수된다. 그 행은 구간 규칙상 지워지므로 회수는 맞는
         처분이다. prod 9일 동안 하한 거부는 0건이다(2026-11-12 측정).
+        이 한계는 판정 전에 이미 장부에 있는 행의 일이다. 판정 뒤에
+        들어오는 행은 구간에 들지 않는다 — 색인기는 꼬리보다 늦은
+        벽시각의 조각만 넣고(H3 · seq 순서 = 벽시각 순서 G8), 구간 상한은
+        같은 호스트 시계로 now − 59일 이하다.
 
     prod 공급 경로(POK-551): 주소는 `prod/media` tfvars 의
     `clip_internal_url`(기본 빈 값 = 끔)이고, 차면 compose 렌더본에
@@ -378,16 +393,17 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
     런타임 출력 `clip_expiry_token_secret_arn` → `media.env` 의
     `CLIP_EXPIRY_TOKEN_SECRET_ARN` 으로 오고, 시작 스크립트가 받아 사이드카
     파일로 둔다. user_data 로만 들어가 바꾸는 것은 상자 교체다. 절차는
-    [prod 런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md)
+    [prod 런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
     「1단-나 ③」 이다(코드: `infra/media-host/compose.yml.tmpl` 의 만료 블록 ·
     `infra/media-host/bin/lib/clip_expiry.sh` ·
     `infra/terraform/modules/media_host/user_data.tf`).
 *   **끄기 스위치 — DB 한 행(POK-551):** 위 조건으로 켜진 만료도 장부 표
     `stream_expiry_switch` 의 `enabled` 가 참일 때만 지운다. 씨앗 행은
-    끔이라 배포만으로는 아무것도 지우지 않는다. 만료기는 회차 시작과
-    방송마다 이 행을 다시 읽는다. 그래서 켜고 끄는 데 재기동이 필요 없고,
-    끄면 방송 하나 안에 멈춘다. 멈춘 회차는 표시를 넘기지 않고, 꺼낸
-    재시도 방송은 집합에 되돌린다. 끔인 동안은 clip 창구도 부르지 않는다.
+    끔이라 배포만으로는 아무것도 지우지 않는다. 만료기는 회차 시작 · 장을
+    받기 전 · 방송마다 이 행을 다시 읽는다. 그래서 켜고 끄는 데 재기동이
+    필요 없고, 끄면 방송 하나 안에 멈춘다. 방송 사이에서 멈춘 회차는 표시를
+    넘기지 않고, 꺼낸 재시도 방송은 집합에 되돌린다. 끔인 동안은 clip
+    창구도 부르지 않는다.
     *   **읽지 못하면 끔:** 행 없음 · 표 없음 · 권한 없음 · 시간 초과는
         모두 끔이다. 표가 없는 DB(이 표 전의 운영 SQL)에서도 사이드카는
         뜨고 만료만 꺼진다 — 기동 필수 목록에 넣지 않았다.
@@ -395,9 +411,13 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
         `expiry_switch value=0|1` 한 줄이 나온다. 읽기가 실패하기 시작할 때와
         다시 될 때 ERROR `expiry_switch_read_failed`(`value=1` · `value=0`)
         가 한 줄씩 나온다.
+    *   **한계 — 끈 동안 게이지가 멈춘다:** 끔인 동안은 창구도 장부도 보지
+        않으므로 `expiry_stalled` · `cutoff_invalid axis=expiry` ·
+        `expiry_deferred` 는 끄기 직전 값에 머문다. 끈 동안의 `value=1` 은
+        지금 상태가 아니다 — 다시 켠 뒤 첫 회차들이 맞춘다.
     *   **바꾸는 쪽:** 사이드카(`media_indexer`)는 SELECT 만 갖는다. 켜고
         끄는 것은 마스터가 `SET ROLE media_owner` 로 하는 손 SQL 이다.
-        절차는 [prod 런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md)
+        절차는 [prod 런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
         「만료 스위치 손 SQL」 이다.
 *   **첫 적용 때 쓰기 정지:** M6 운영 SQL(`stream_schema.sql` ·
     `20_schema.sql`)의 인덱스는 `CREATE INDEX` 이고 `CONCURRENTLY` 가 아니다.
@@ -1163,7 +1183,7 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 | 교체 겹침 고아 문서 | 이미지 교체가 겹칠 때 옛 writer 가 먼저 확정하면 지금 동작(마지막 사슬의 사슬 문서)이고, 새 writer 가 먼저면 회차 문서다. `vod_conflict` 는 없고, 확정되지 못한 쪽 문서 객체가 많아야 하나 남는다 | 없다 — 버킷 LIST 를 쓰지 않아 감사가 보지 않는다 |
 | 큰 회차의 장부 적재 시한 | 회차 장부 읽기(첫 적재 · 꼬리 잠금 아래 재독)는 10초(`index.TxnDeadline`) 안에 끝나야 한다. 넘으면 일시 오류라 물러서지 않고 재시도하고, 3회면 마지막 사슬 VOD 가 실패로 확정된다(회차 경로는 `ended` — 다시보기 없음). 실측은 1,730조각 동결 전체 48–107ms 뿐이고 적재 상한(약 6만 행) 근처는 재지 않았다 | `session_freeze_retry`(`reason=ledger_failed` 등) 세 줄 뒤 `session_freeze_failed` |
 | 회차 번호 없는 옛 세션이 머리인 마지막 사슬 | 회차 기능(M6) 전 세션(`round_id` 없음)이 마지막 사슬의 머리이고 그 회차에 앞 사슬이 있으면, 그 세션 조각은 회차 범위에 들지 않는데 그 세션 VOD 도 회차 문서를 가리킨다. 지금 개시 규칙(`session/round_rule.go` — 회차 없는 세션을 이으면 새 회차를 연다 · 계승은 직전 세션만)에서는 그런 사슬에 앞 사슬이 생기지 않아 도달하지 않는다 | 개시 규칙을 바꾸는 변경이 이 줄을 다시 본다 |
-| 방송 가운데만 만료 — 해소(POK-551) | 만료는 구간과 범위가 겹치는 확정 VOD 문서를 회수하고, 확정 전 회차 · 사슬이 구간을 품을 수 있으면 미룬다(위 「60일 만료」). 남은 한계는 영구 미룸 두 경로와 오래된 벽시각 행이다 | `expiry_deferred` · 아래 「회차 VOD 문서 구멍 진단」 |
+| 방송 가운데만 만료 — 해소(POK-551) | 만료는 구간과 범위가 겹치는 확정 VOD 문서를 회수하고, 확정 전 회차 · 사슬이 구간을 품을 수 있으면 미룬다(위 「60일 만료」). 남은 한계는 영구 미룸 두 경로 · 오래된 벽시각 행 · 회차 길이 상한 없음이다 | `expiry_deferred` · 아래 「회차 VOD 문서 구멍 진단」 |
 
 ### 회차 VOD 문서 구멍 진단
 

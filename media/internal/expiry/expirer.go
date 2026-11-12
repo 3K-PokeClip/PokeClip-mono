@@ -1,6 +1,6 @@
 // Package expiry 는 60일 만료(POK-196 M6-4)다 — clip 만료 창구를 폴링해 받은 방송의 구간을 S3 와 장부에서 지운다.
 //
-// DB 끄기 스위치(stream_expiry_switch 한 행 · 기본 끔 — POK-551)가 켜져 있을 때만 돈다. 회차 시작과 방송마다 다시 읽어,
+// DB 끄기 스위치(stream_expiry_switch 한 행 · 기본 끔 — POK-551)가 켜져 있을 때만 돈다. 회차 시작 · 장 · 방송마다 다시 읽어,
 // 끄면 재기동 없이 방송 하나 안에 멈춘다. 읽지 못하면 끔이다(fail-closed).
 //
 // 사이드카 안 고루틴 하나다(K7 — 장부 표 단일 쓰기자 · S3 · 풀이 이미 있다). 한 방송의 순서(설계 M6 7절)는
@@ -65,7 +65,8 @@ type Expirer struct {
 	fails    int                  // 연속 폴링 실패 수
 	stalled  bool                 // expiry_stalled 게이지
 	invalid  map[string]bool      // cutoff_invalid axis=expiry 게이지(켜진 스트림)
-	deferred map[string]bool      // expiry_deferred 게이지(미뤄진 방송 — 방송 식별자 streamId)
+	deferred map[string]string    // expiry_deferred 게이지(미뤄진 방송 streamId → 물리 키 ingestStreamId)
+	unseen   map[string]bool      // 처음부터 훑기를 시작할 때 미뤄져 있었고 그 훑기에서 아직 받지 못한 방송(dropUnseen)
 
 	switchKnown  bool // 스위치 값을 읽은 적이 있다(첫 읽기는 값 줄을 낸다)
 	switchOn     bool // 마지막으로 읽은 스위치 값(expiry_switch 게이지)
@@ -100,7 +101,7 @@ func New(ledger Ledger, objects Objects, o Options) (*Expirer, error) {
 		now:      now,
 		retry:    map[string]Broadcast{},
 		invalid:  map[string]bool{},
-		deferred: map[string]bool{},
+		deferred: map[string]string{},
 	}, nil
 }
 
@@ -121,8 +122,9 @@ func (e *Expirer) Run(ctx context.Context) error {
 }
 
 // sweep 은 한 회차다 — 재시도 집합을 먼저 다시 보고, 표시에서 이어(또는 처음부터) 장을 받아 처리한다. 처음부터
-// 훑는 회차는 재시도 집합을 비운다. 스위치가 꺼져 있으면 창구도 부르지 않는다. 방송마다 스위치를 다시 읽어, 꺼지면 그
-// 회차를 멈추고 표시를 넘기지 않는다 — 다음 회차가 그 장을 다시 받는다(처리한 방송은 멱등).
+// 훑는 회차는 재시도 집합을 비우고, 그 훑기를 끝까지 마친 회차는 받지 못한 미룸 방송을 내린다. 스위치가 꺼져 있으면
+// 창구도 부르지 않는다. 장을 받기 전과 방송마다 스위치를 다시 읽어, 꺼지면 그 회차를 멈춘다. 방송 사이에 멈추면 표시를
+// 넘기지 않는다 — 다음 회차가 그 장을 다시 받는다(처리한 방송은 멱등).
 func (e *Expirer) sweep(ctx context.Context) {
 	if !e.switchAllows(ctx) {
 		return // 표시 · 재시도 집합은 그대로 둔다 — 켜면 이어서 한다
@@ -131,6 +133,10 @@ func (e *Expirer) sweep(ctx context.Context) {
 	if e.lastFull.IsZero() || now.Sub(e.lastFull) >= e.opt.FullScanEvery {
 		e.cursor, e.lastFull = nil, now
 		clear(e.retry) // 처음부터 훑기가 그 방송을 다시 받는다 — 영구 실패가 하루를 넘겨 쌓이지 않는다
+		e.unseen = make(map[string]bool, len(e.deferred))
+		for broadcast := range e.deferred {
+			e.unseen[broadcast] = true
+		}
 		e.log.Info("expiry_full_scan", "note", "표시 없이 처음부터 훑는다(부팅 · 하루 한 번)")
 	}
 	if !e.retryFailed(ctx) {
@@ -139,6 +145,9 @@ func (e *Expirer) sweep(ctx context.Context) {
 	done := 0
 	cursor := e.cursor
 	for done < e.opt.RunCap && ctx.Err() == nil {
+		if !e.switchAllows(ctx) {
+			return // 장을 받기 전에도 읽는다 — 장 끝에서 꺼졌으면 다음 장을 부르지 않는다
+		}
 		page, err := e.clip.list(ctx, now, cursor)
 		if err != nil {
 			e.pollFailed(ctx, err)
@@ -158,6 +167,7 @@ func (e *Expirer) sweep(ctx context.Context) {
 		}
 		e.cursor = cursor
 		if !page.HasMore {
+			e.dropUnseen()
 			return
 		}
 	}

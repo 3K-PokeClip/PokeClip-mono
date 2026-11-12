@@ -3,7 +3,7 @@ package index
 // 만료 끄기 스위치(POK-551 ④) — stream_expiry_switch 한 행을 읽는다.
 //
 // 60일 만료(internal/expiry)는 스위치가 켜져 있을 때만 돈다. 기본은 끔이고, 켜고 끄는 것은 마스터의 손 SQL 이다(재기동
-// 없음 — 만료기가 회차 시작과 방송마다 다시 읽는다). 읽지 못하면 끔이다(fail-closed). 그래서 기동 필수 목록
+// 없음 — 만료기가 회차 시작 · 장 받기 전 · 방송마다 다시 읽는다). 읽지 못하면 끔이다(fail-closed). 그래서 기동 필수 목록
 // (MissingLedgerSchema)에는 넣지 않는다 — 표가 없는 DB(이 표 전의 운영 SQL)에서도 사이드카는 뜨고 만료만 꺼진다.
 
 import (

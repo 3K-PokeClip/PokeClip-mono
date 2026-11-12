@@ -1,7 +1,7 @@
 package index
 
-// 만료의 회차 문서 처분(POK-551 c1) PG 통합 시험 — 문서는 범위 겹침으로 고르고(T1 · T3 · T7), 주인은 VOD 확정 상태로
-// 고르며(T2 · T4), 확정될 수 있는 회차 · 사슬이 구간을 앞으로 품을 수 있으면 미룬다(T2b · T2c · T2d · T3b · T8).
+// 만료의 회차 문서 처분(POK-551 c1) PG 통합 시험 — 문서는 범위 겹침으로 고르고(T1 · T3 · T3c · T7), 주인은 VOD 확정 상태로
+// 고르며(T2 · T4), 확정될 수 있는 회차 · 사슬이 구간을 앞으로 품을 수 있으면 미룬다(T2b · T2c · T2d · T2e · T3b · T8).
 // 범위 칸이 NULL 인 문서는 지금처럼 사슬로 고른다(T6). 선택은 행 단계와 같은 행 집합을 본다(M14 시험).
 // PG_DSN 이 없으면 skip(REQUIRE_PG=1 이면 실패).
 //
@@ -588,5 +588,75 @@ func TestExpirySelectionIgnoresMarkAgeCeiling(t *testing.T) {
 	ovWantSeqs(t, pool, stream, 0, 2)
 	if n := ovHoleDocs(t, pool, stream); n != 0 {
 		t.Fatalf("결손 · 미표시 문서 %d행 (0 기대)", n)
+	}
+}
+
+// T3c — 구간이 문서 범위의 끝점 하나와만 겹친다(첫 seq 하나 · 마지막 seq 하나). BETWEEN 의 두 끝은 포함이라 그 문서를
+// 고르고 주인을 표시한다. 안쪽 행이 함께 만료되는 T3 은 끝점을 하나 빼는 변이(vod_first_seq + 1 · vod_last_seq − 1)를
+// 가르지 못한다.
+func TestExpiryDocumentSelectedOnSingleEndpointOverlap(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		seq  int64
+		left []int64
+	}{
+		{"first", 3, []int64{0, 1, 2, 4, 5, 6, 7, 8}},
+		{"last", 5, []int64{0, 1, 2, 3, 4, 6, 7, 8}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			stream := "ovtest-t3c"
+			key := docKey(stream, "D")
+			ovPut(t, pool, stream,
+				ovSession{id: "P", round: "P", vod: "frozen", key: docKey(stream, "P"), first: 0, last: 2},
+				ovSession{id: "D", round: "D", vod: "frozen", key: key, first: 3, last: 5, at: 1},
+				ovSession{id: "N", round: "N", vod: "frozen", key: docKey(stream, "N"), first: 6, last: 8, at: 2})
+			ovSeg(t, pool, stream, "P", 0, 1, 2)
+			ovSeg(t, pool, stream, "D", 3, 4, 5)
+			ovSeg(t, pool, stream, "N", 6, 7, 8)
+
+			out := ovSweep(t, pool, ovSpan(stream, c.seq, c.seq))
+
+			if out.deferred || !slices.Equal(out.vodDocs, []string{"D:" + key}) {
+				t.Fatalf("결과 %+v (D 문서만 기대 — 끝점 seq %d 가 범위 [3, 5] 안이다)", out, c.seq)
+			}
+			if got := ovMarked(t, pool, stream); !slices.Equal(got, []string{"D"}) {
+				t.Fatalf("표시 세션 %v (D 기대)", got)
+			}
+			ovWantSeqs(t, pool, stream, c.left...)
+			if n := ovHoleDocs(t, pool, stream); n != 0 {
+				t.Fatalf("결손 · 미표시 문서 %d행 (0 기대)", n)
+			}
+		})
+	}
+}
+
+// T2e — 확정될 수 있는 단위의 최소 seq 가 구간 꼭대기와 같다(꼭대기 행이 그 단위의 첫 조각이다). 판정은 seq ≤ 꼭대기라
+// 미룬다 — 그 단위가 확정할 문서는 꼭대기 행부터 시작할 수 있다. 세 갈래: 안 닫힌 회차의 ended 회원(미루지 않으면
+// 꼭대기 행을 지운다) · 닫힌 회차의 freezing 회원 · 회차 번호 없는 ending 옛 사슬.
+func TestExpiryDefersWhenUnsettledUnitStartsAtSpanTop(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		c    ovSession
+	}{
+		{"open-round", ovSession{id: "C", round: "C", vod: "frozen", key: "k", first: 2, last: 3, open: true, at: 1}},
+		{"freezing", ovSession{id: "C", round: "C", state: "ending", vod: "freezing", at: 1}},
+		{"legacy-ending", ovSession{id: "C", state: "ending", at: 1}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			stream := "ovtest-t2e"
+			ovPut(t, pool, stream, ovSession{id: "P", round: "P", vod: "frozen", key: docKey(stream, "P"), first: 0, last: 1}, c.c)
+			ovSeg(t, pool, stream, "P", 0, 1)
+			ovSeg(t, pool, stream, "C", 2, 3)
+
+			if out := ovSweep(t, pool, ovSpan(stream, 0, 2)); !out.deferred {
+				t.Fatalf("결과 %+v (미룸 기대 — C 의 최소 seq 2 = 구간 꼭대기)", out)
+			}
+			if got := ovMarked(t, pool, stream); len(got) != 0 {
+				t.Fatalf("미뤘는데 표시 %v", got)
+			}
+			ovWantSeqs(t, pool, stream, 0, 1, 2, 3)
+		})
 	}
 }

@@ -32,10 +32,11 @@ const (
 	ExpiryUntilSlack = 24 * time.Hour
 )
 
-// ExpiryCeiling 은 now 기준으로 지울 수 있는 가장 늦은 상한이다(now − 보존 기간 + 여유). 만료 루프는 이보다 늦은
-// segmentsUntil 을 받지 않는다(fail-closed · 보안 H1 — clip 응답 한 줄이 보존 기간 안 조각을 비가역으로 지우지
-// 않게). 0단계 문장이 DB 시계로 거는 같은 상한은 expired_at 표시만 막는다 — 뒤 단계(대상 · 문서 조회 · 객체 · 행
-// 삭제)는 expired_at 을 보지 않으므로, 비가역 삭제를 막는 것은 이 Go 쪽 응답 거부 하나다.
+// ExpiryCeiling 은 now 기준으로 지울 수 있는 가장 늦은 상한이다(now − 보존 기간 + 여유 = now − 59일). 만료 루프는
+// 이보다 늦은 segmentsUntil 을 받지 않는다(fail-closed · 보안 H1 — clip 응답 한 줄이 59일 안 조각을 비가역으로 지우지
+// 않게). 0단계 문장의 ended 갈래가 DB 시계로 거는 같은 상한은 그 갈래의 expired_at 표시만 막는다 — 문서 주인 갈래
+// (vod_owner)와 뒤 단계(대상 · 문서 조회 · 객체 · 행 삭제)는 나이를 보지 않으므로, 비가역 삭제를 막는 것은 이 Go 쪽
+// 응답 거부 하나다. now 는 사이드카 호스트 시계라 시계가 앞으로 뛴 만큼 일찍 지운다.
 func ExpiryCeiling(now time.Time) time.Time { return now.Add(-ExpiryRetention + ExpiryUntilSlack) }
 
 // ErrCutoffInvalid 는 그 스트림의 컷오프가 장부에 없는 행을 가리킨다는 뜻이다(e1 — fail-closed). 그 스트림은
@@ -174,8 +175,11 @@ SELECT span.top IS NULL
   FROM span`
 
 // ExpiryRoundsSettled 는 0단계보다 앞의 미룸 판정이다. 거짓이면 그 방송은 이번에 표시도 삭제도 하지 않는다 — 판정
-// 단위는 회차(round_id) 또는 사슬(round_id 없는 옛 세션)이다. 종국에서 freezing 으로 돌아가는 문장이 없고 닫힌 사슬은
-// 계승되지 않으므로 닫힘은 단조다 — 참이 된 뒤에는 표시 · 선택 · 삭제 사이에 잠금이 필요 없다.
+// 단위는 회차(round_id) 또는 사슬(round_id 없는 옛 세션)이다. 참이 된 뒤에는 표시 · 선택 · 삭제 사이에 잠금이 필요 없다.
+// 근거는 둘이다. ① 닫힘은 단조다 — 종국에서 freezing 으로 돌아가는 문장이 없고 닫힌 사슬은 계승되지 않는다. ② 구간
+// 행 집합이 판정 뒤 늘지 않는다 — 색인기는 꼬리보다 늦은 벽시각의 조각만 넣고(indexer H3 · seq 순서 = 벽시각 순서
+// G8) 구간 상한은 같은 호스트 시계로 now − 59일 이하라(ExpiryCeiling), 판정 뒤 녹화된 조각이 구간에 들려면 59일을
+// 넘는 시계 역행이 있어야 한다. ① 만으로는 행 집합이 고정되지 않는다(c1 cx 교차 검증).
 func ExpiryRoundsSettled(ctx context.Context, pool *pgxpool.Pool, q ExpiryQuery) (bool, error) {
 	if err := q.validate(); err != nil {
 		return false, err

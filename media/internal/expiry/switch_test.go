@@ -191,3 +191,29 @@ func TestSweepSwitchOffDuringRetryRequeuesBatch(t *testing.T) {
 		t.Fatalf("창구 요청 %d (첫 회차 하나 — 끈 회차는 부르지 않는다)", n)
 	}
 }
+
+// c2 cc L — 장의 마지막 방송 뒤에 끄면 다음 장을 받지 않는다(끔인 동안 창구를 부르지 않는다). 표시는 처리한 장까지
+// 넘긴다 — 그 장의 방송은 다 처리했다.
+func TestSweepSwitchOffAtPageEndSkipsNextPage(t *testing.T) {
+	r := newRig(t, nil)
+	r.ledger.put("a", 1)
+	r.ledger.put("b", 1)
+	r.ledger.onStep = func(l *fakeLedger, call string) {
+		if call == "a:delete" {
+			l.switchOff = true
+		}
+	}
+	r.clip.pages[""] = clipPage{items: []clipItem{item("a")}, next: ptr("c1"), more: true}
+	r.clip.pages["c1"] = clipPage{items: []clipItem{item("b")}, next: ptr("c2")}
+	r.sweep(t)
+
+	if n := len(r.clip.reqs()); n != 1 {
+		t.Fatalf("창구 요청 %d (1 기대 — 끈 뒤 다음 장을 받지 않는다)", n)
+	}
+	if r.e.cursor == nil || *r.e.cursor != "c1" {
+		t.Fatalf("표시 %v (c1 기대 — 첫 장은 다 처리했다)", r.e.cursor)
+	}
+	if got := r.ledger.deletedSeqs("b"); len(got) != 0 {
+		t.Fatalf("끈 뒤 둘째 장 방송 행 삭제 %v", got)
+	}
+}

@@ -25,6 +25,7 @@ func validIngestKey(s string) bool {
 // process 는 방송 하나를 지운다. 실패하면 재시도 집합에 넣는다. 키를 모르는 방송과 상한이 보존 기간 안인 방송은
 // 넣지 않는다 — 다시 해도 같은 판정이다.
 func (e *Expirer) process(ctx context.Context, b Broadcast) {
+	delete(e.unseen, b.StreamID)
 	if !validIngestKey(b.IngestStreamID) || b.SegmentsUntil == nil {
 		e.log.Warn("expiry_skipped", "reason", "no_ingest_key", "broadcast", b.StreamID,
 			"note", "물리 키나 구간 상한이 없다 — 장부에서 찾을 수 없는 방송이라 건너뛴다")
@@ -125,15 +126,27 @@ func (e *Expirer) signalCutoff(stream string, valid bool) {
 // signalDeferred 는 expiry_deferred 게이지를 방송별로 맞춘다 — 미뤄질 때 · 처리될 때 한 줄씩이고 회차마다 되풀이하지
 // 않는다(signalCutoff 꼴). 하루 넘게 value=1 이면 확정되지 못한 회차 · 사슬이 있다(README 「60일 만료」 영구 미룸).
 func (e *Expirer) signalDeferred(stream, broadcast string, deferred bool) {
+	_, on := e.deferred[broadcast]
 	switch {
-	case deferred && !e.deferred[broadcast]:
-		e.deferred[broadcast] = true
+	case deferred && !on:
+		e.deferred[broadcast] = stream
 		e.log.Warn("expiry_deferred", "value", 1, "broadcast", broadcast, "stream_id", stream, "reason", "unsettled",
 			"note", "구간을 품을 수 있는 회차 · 사슬이 아직 확정될 수 있다 — 닫힐 때까지 미룬다")
-	case !deferred && e.deferred[broadcast]:
+	case !deferred && on:
 		delete(e.deferred, broadcast)
 		e.log.Warn("expiry_deferred", "value", 0, "broadcast", broadcast, "stream_id", stream)
 	}
+}
+
+// dropUnseen 은 처음부터 훑기를 끝까지 마친 회차에서 부른다 — 그 훑기에서 받지 못한 미룸 방송은 clip 이 지운 것이다(탈퇴
+// 정리). 다시 오지 않으므로 여기서 게이지를 내리고 맵에서 뺀다 — 두면 value=1 이 재기동까지 남고 맵이 쌓인다.
+func (e *Expirer) dropUnseen() {
+	for broadcast := range e.unseen {
+		e.log.Warn("expiry_deferred", "value", 0, "broadcast", broadcast, "stream_id", e.deferred[broadcast],
+			"reason", "gone", "note", "clip 이 더는 주지 않는 방송이다 — 미룸 게이지를 내린다")
+		delete(e.deferred, broadcast)
+	}
+	e.unseen = nil
 }
 
 // targets 는 대상 행만 고르고, 건너뛴 행은 사유별로 WARN 한 줄씩 낸다.
