@@ -9,6 +9,7 @@
 import {
   boxes,
   child,
+  MAX_TRACK_SAMPLES,
   path,
   readFirstSampledTraf,
   readTrackHeaders,
@@ -87,10 +88,12 @@ function mp4aConfig(view: DataView, stsd: Box): AacConfig | null {
   return null;
 }
 
+/** 꺼내는 중인 소리 트랙 하나: 트랙 머리 · 설정 · trex 기본 표본 크기와 지금까지 모은 프레임 */
 interface TrackInfo {
-  id: number;
+  header: TrackHeader;
   config: AacConfig;
   defaultSize: number;
+  frames: Uint8Array[];
 }
 
 /** 조각 안 한 트랙의 시작 시각(초). 트랙마다 자기 timescale 로 먼저 초로 바꾼 파일 안 값이다 */
@@ -141,11 +144,10 @@ export function demuxSegmentAudio(data: ArrayBuffer | Uint8Array): SegmentTracks
 function segmentTracks(view: DataView, bytes: Uint8Array): SegmentTracks {
   const headers = readTrackHeaders(bytes);
   if (!headers) throw new RangeError('trak');
-  const audio = demux(view, bytes).map(({ id, audio: track }) => {
-    const header = headers.find((h) => h.trackId === id);
-    if (!header) throw new RangeError('trak'); // 소리 트랙인데 timescale 을 모른다
-    return { ...track, ...timedTrack(bytes, header) };
-  });
+  const audio = demux(view, bytes, headers).map(({ header, audio: track }) => ({
+    ...track,
+    ...timedTrack(bytes, header),
+  }));
   const video = headers.find((h) => h.handler === 'vide');
   return { audio, video: video ? timedTrack(bytes, video) : null };
 }
@@ -162,17 +164,59 @@ function timedTrack(bytes: Uint8Array, header: TrackHeader): SegmentTrack {
   return { timescale, timing: { firstDts: first.dts / timescale, firstPts: minPts / timescale } };
 }
 
-/** 소리 트랙(파일 순서)과 그 tkhd 트랙 번호 */
+/** 소리 트랙(파일 순서)과 그 트랙 머리 */
 interface DemuxedTrack {
-  id: number;
+  header: TrackHeader;
   audio: AudioTrackFrames;
 }
 
-function demux(view: DataView, bytes: Uint8Array): DemuxedTrack[] {
+/**
+ * 조각 하나에서 꺼내는 소리 프레임 수의 상한 — 트랙 합. 프레임마다 복사본을 하나씩 만들므로 1바이트 프레임 수백만 개면 1MB
+ * 조각이 224MiB 가 된다(보안 검수 prw2 c9′ M-1) — 복사 바이트 상한만으로는 못 막는다. 값은 판독 한 번의 표본 상한
+ * MAX_TRACK_SAMPLES(fmp4Boxes)를 그대로 쓴다: 정상 ② 조각(4초 · 소리 최대 6트랙)은 48kHz 면 트랙마다 4 × 48,000 / 1,024
+ * ≈ 188 프레임 · 합 약 1,130 이고, 96kHz 여도 합 약 2,250 이라 20배 넘게 남는다
+ */
+const MAX_SEGMENT_FRAMES = MAX_TRACK_SAMPLES;
+
+/** 판독 한 번에 남은 몫: 프레임 수(트랙 합)와 복사할 수 있는 바이트 */
+interface Room {
+  frames: number;
+  bytes: number;
+}
+
+function demux(view: DataView, bytes: Uint8Array, headers: readonly TrackHeader[]): DemuxedTrack[] {
   const top = [...boxes(view, 0, bytes.byteLength)];
   const moov = top.find((box) => box.type === 'moov');
   if (!moov) return [];
+  const tracks = audioTracks(view, bytes, moov, headers);
+  if (!tracks) return [];
 
+  // 정상 조각은 프레임마다 mdat 의 다른 바이트라 복사 합이 입력 크기를 넘지 않는다
+  let room: Room = { frames: MAX_SEGMENT_FRAMES, bytes: bytes.byteLength };
+  for (const moof of top) {
+    if (moof.type !== 'moof') continue;
+    for (const traf of boxes(view, moof.start, moof.end)) {
+      if (traf.type === 'traf') room = readTraf(view, bytes, moof, traf, tracks, room);
+    }
+  }
+  return [...tracks.values()].map(({ header, config, frames }) => ({
+    header,
+    audio: { config, frames },
+  }));
+}
+
+/**
+ * moov 의 소리 trak 을 파일 순서대로(Map 은 넣은 순서를 지킨다), track_ID 로 찾게. 못 읽는 소리 트랙이 있으면 null.
+ * 소리 trak 마다 트랙 머리(readTrackHeaders — 트랙 수 상한 · 번호 겹침을 거른 목록)의 짝을 traf 를 읽기 전에 확인한다:
+ * mdhd 가 빠진 trak 은 그 목록에 없어 상한에 세지 않으므로, 짝 없이 받으면 trak 수만큼 판독이 부푼다(보안 검수 prw2 c9′
+ * M-2). 짝이 없거나 번호가 겹치면 RangeError
+ */
+function audioTracks(
+  view: DataView,
+  bytes: Uint8Array,
+  moov: Box,
+  headers: readonly TrackHeader[],
+): Map<number, TrackInfo> | null {
   const defaults = new Map<number, number>();
   const mvex = child(view, moov, 'mvex');
   if (mvex) {
@@ -182,7 +226,8 @@ function demux(view: DataView, bytes: Uint8Array): DemuxedTrack[] {
     }
   }
 
-  const tracks: TrackInfo[] = [];
+  const headerOf = new Map(headers.map((header) => [header.trackId, header]));
+  const tracks = new Map<number, TrackInfo>();
   for (const trak of boxes(view, moov.start, moov.end)) {
     if (trak.type !== 'trak') continue;
     const tkhd = child(view, trak, 'tkhd');
@@ -193,54 +238,40 @@ function demux(view: DataView, bytes: Uint8Array): DemuxedTrack[] {
     if (handler !== 'soun') continue;
     const config = mp4aConfig(view, stsd);
     // 소리인데 못 읽는 트랙이 하나라도 있으면 번호가 밀린다: 트랙 번호가 렌더와 어긋나느니 통째로 포기한다.
-    if (!config) return [];
+    if (!config) return null;
     const id = view.getUint32(tkhd.start + (view.getUint8(tkhd.start) === 1 ? 20 : 12));
-    tracks.push({ id, config, defaultSize: defaults.get(id) ?? 0 });
+    const header = headerOf.get(id);
+    if (!header || tracks.has(id)) throw new RangeError('trak');
+    tracks.set(id, { header, config, defaultSize: defaults.get(id) ?? 0, frames: [] });
   }
-
-  const frames = new Map<number, Uint8Array[]>(tracks.map((track) => [track.id, []]));
-  for (const moof of top) {
-    if (moof.type !== 'moof') continue;
-    for (const traf of boxes(view, moof.start, moof.end)) {
-      if (traf.type === 'traf') readTraf(view, bytes, moof, traf, tracks, frames);
-    }
-  }
-  return tracks.map((track) => ({
-    id: track.id,
-    audio: { config: track.config, frames: frames.get(track.id)! },
-  }));
+  return tracks;
 }
 
+/**
+ * traf 하나의 프레임을 그 트랙에 덧붙이고 남은 몫을 준다(영상 트랙이면 그대로). 프레임 수가 몫을 넘으면 프레임을 만들기 전에,
+ * 복사 바이트가 몫을 넘으면(trun 이 data_offset 으로 같은 바이트를 거듭 가리킴 — codex prw2 후속 경화 M) RangeError
+ */
 function readTraf(
   view: DataView,
   bytes: Uint8Array,
   moof: Box,
   traf: Box,
-  tracks: TrackInfo[],
-  frames: Map<number, Uint8Array[]>,
-): void {
+  tracks: ReadonlyMap<number, TrackInfo>,
+  room: Room,
+): Room {
   const tfhd = child(view, traf, 'tfhd');
-  if (!tfhd) return;
-  const tfhdFlags = view.getUint32(tfhd.start) & 0xffffff;
-  const track = tracks.find((t) => t.id === view.getUint32(tfhd.start + 4));
-  if (!track) return; // 영상 트랙
-  let cursor = tfhd.start + 8;
-  // base-data-offset이 없으면 moof 머리가 기준이다(녹화 조각은 default-base-is-moof)
-  let base = moof.boxStart;
-  if (tfhdFlags & 0x01) {
-    base = Number(view.getBigUint64(cursor));
-    cursor += 8;
-  }
-  if (tfhdFlags & 0x02) cursor += 4;
-  if (tfhdFlags & 0x08) cursor += 4;
-  const defaultSize = tfhdFlags & 0x10 ? view.getUint32(cursor) : track.defaultSize;
+  const track = tfhd && tracks.get(view.getUint32(tfhd.start + 4));
+  if (!tfhd || !track) return room; // 영상 트랙
+  const { base, defaultSize } = trafDefaults(view, moof, tfhd, track.defaultSize);
 
-  const out = frames.get(track.id)!;
+  let { frames: framesLeft, bytes: bytesLeft } = room;
   let dataOffset = base;
   for (const trun of boxes(view, traf.start, traf.end)) {
     if (trun.type !== 'trun') continue;
     const flags = view.getUint32(trun.start) & 0xffffff;
     const count = view.getUint32(trun.start + 4);
+    if (count > framesLeft) throw new RangeError('trun frame count');
+    framesLeft -= count;
     let at = trun.start + 8;
     if (flags & 0x01) {
       dataOffset = base + view.getInt32(at);
@@ -257,11 +288,33 @@ function readTraf(
       if (flags & 0x400) at += 4;
       if (flags & 0x800) at += 4;
       if (size <= 0 || dataOffset + size > bytes.byteLength) throw new RangeError('trun');
+      if (size > bytesLeft) throw new RangeError('trun data_offset');
+      bytesLeft -= size;
       // 복사한다: 보기(subarray)면 영상까지 든 조각 버퍼 전체가 디코드가 끝날 때까지 남는다(3분 구간이면 약 170MB)
-      out.push(bytes.slice(dataOffset, dataOffset + size));
+      track.frames.push(bytes.slice(dataOffset, dataOffset + size));
       dataOffset += size;
     }
   }
+  return { frames: framesLeft, bytes: bytesLeft };
+}
+
+/** tfhd → 프레임 자리의 기준(base-data-offset, 없으면 moof 머리 — 녹화 조각은 default-base-is-moof)과 기본 표본 크기 */
+function trafDefaults(
+  view: DataView,
+  moof: Box,
+  tfhd: Box,
+  trexSize: number,
+): { base: number; defaultSize: number } {
+  const flags = view.getUint32(tfhd.start) & 0xffffff;
+  let cursor = tfhd.start + 8;
+  let base = moof.boxStart;
+  if (flags & 0x01) {
+    base = Number(view.getBigUint64(cursor));
+    cursor += 8;
+  }
+  if (flags & 0x02) cursor += 4;
+  if (flags & 0x08) cursor += 4;
+  return { base, defaultSize: flags & 0x10 ? view.getUint32(cursor) : trexSize };
 }
 
 /** 프레임마다 ADTS 머리(보호 없음, 7바이트)를 붙여 이은다: decodeAudioData가 그대로 받는다 */

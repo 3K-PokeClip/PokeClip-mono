@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { MAX_TRACK_SAMPLES } from '@/lib/fmp4Boxes';
 import { demuxSegmentAudio, toAdts } from './fmp4Audio';
 
 // 시험 조각은 ffmpeg로 만든 1초짜리 fMP4다(영상 1 + 소리 3, 상자 모양은 녹화 조각과 같다: ftyp·moov·moof/mdat 여러 쌍).
@@ -318,5 +319,174 @@ describe('demuxSegmentAudio: 녹화 조각의 트랙별 첫 DTS · PTS 와 times
   it('상자가 깨졌거나 비었으면 빈 결과를 준다(던지지 않는다)', () => {
     expect(demuxSegmentAudio(new Uint8Array(0))).toEqual(EMPTY);
     expect(demuxSegmentAudio(segment1v6a.subarray(0, 40))).toEqual(EMPTY);
+  });
+});
+
+// --- 꾸민 조각이 판독을 부풀리지 못한다(보안 검수 prw2 c9′ M-1 · M-2 · codex prw2 후속 경화 M) ---
+// 모두 S3 쓰기 권한이나 생산자 침해를 전제한 꾸민 ② 조각이다. 정상 녹화 조각에서는 생기지 않는 모양이라 판독 실패(빈 결과)로 접는다.
+
+/**
+ * 입력 바이트의 slice(프레임 복사) 횟수와 복사한 바이트를 센다. 판독이 실패해 빈 결과를 줘도 그 전에 한 일이 드러난다
+ * (앞 커밋 fileHeadProbe 의 할당 계수 시험과 같은 결)
+ */
+function countingCopies(bytes: Uint8Array) {
+  let copies = 0;
+  let copied = 0;
+  const proto: object = Object.create(Uint8Array.prototype, {
+    slice: {
+      value(this: Uint8Array, start?: number, end?: number) {
+        const out = Uint8Array.prototype.slice.call(this, start, end);
+        copies += 1;
+        copied += out.length;
+        return out;
+      },
+    },
+  });
+  Object.setPrototypeOf(bytes, proto);
+  return { bytes, copies: () => copies, copied: () => copied };
+}
+
+/** 표본별 칸 없는 trun(count 개 · 기본 크기는 tfhd) — 프레임 자리는 data_offset(moof 머리 기준) */
+function bareTrun(count: number, dataOffset: number): Uint8Array {
+  return fullBox('trun', 0, 0x01, u32(count), i32(dataOffset));
+}
+
+/** 소리 traf: tfhd 기본 표본 크기 size · tfdt 0 · 주어진 trun 들 */
+function sizedTraf(trackId: number, size: number, ...truns: Uint8Array[]): Uint8Array {
+  return box(
+    'traf',
+    fullBox('tfhd', 0, 0x020000 | 0x10, u32(trackId), u32(size)),
+    fullBox('tfdt', 0, 0, u32(0)),
+    ...truns,
+  );
+}
+
+/**
+ * moof + mdat(payload 바이트). trafsAt 은 mdat 본문 첫 바이트의 자리(moof 머리 기준 data_offset)를 받아 traf 들을 만든다 —
+ * 자리를 알려면 moof 크기가 있어야 하므로 한 번 재고 다시 만든다(크기는 자리 값과 무관하다)
+ */
+function fragmentWithData(
+  trafsAt: (dataOffset: number) => Uint8Array[],
+  payload: number,
+): Uint8Array {
+  const moofAt = (offset: number) => box('moof', fullBox('mfhd', 0, 0, u32(1)), ...trafsAt(offset));
+  return concat(moofAt(moofAt(0).length + 8), box('mdat', new Uint8Array(payload)));
+}
+
+/** mdhd 가 빠진 소리 trak(tkhd · hdlr · stsd 는 있다) — readTrackHeaders 는 세지 않고 건너뛰는 모양 */
+function trakWithoutMdhd(trackId: number): Uint8Array {
+  return box(
+    'trak',
+    fullBox('tkhd', 0, 3, u32(0), u32(0), u32(trackId), u32(0)),
+    box(
+      'mdia',
+      fullBox('hdlr', 0, 0, u32(0), ascii('soun'), u32(0), u32(0), u32(0)),
+      box('minf', box('stbl', fullBox('stsd', 0, 0, u32(1), mp4a(4)))),
+    ),
+  );
+}
+
+describe('demuxSegmentAudio: 같은 바이트를 거듭 가리키는 trun 으로 복사를 부풀리지 못한다(codex prw2 후속 경화 M)', () => {
+  const FRAME_BYTES = 4096;
+  const file = (truns: number) =>
+    concat(
+      init(trak(2, 'soun', 48000)),
+      fragmentWithData(
+        (at) => [
+          sizedTraf(2, FRAME_BYTES, ...Array.from({ length: truns }, () => bareTrun(1, at))),
+        ],
+        FRAME_BYTES,
+      ),
+    );
+
+  it('data_offset 을 한 번 가리킨 꼴은 그대로 푼다(아래 시험의 바탕이 정상 모양임을 보인다)', () => {
+    const seg = demuxSegmentAudio(file(1));
+
+    expect(seg.audio.map((t) => t.frames.map((f) => f.length))).toEqual([[FRAME_BYTES]]);
+  });
+
+  it('trun 64개가 같은 data_offset 을 다시 가리키면 입력보다 많이 복사하지 않고 빈 결과다', () => {
+    const counting = countingCopies(file(64));
+
+    const seg = demuxSegmentAudio(counting.bytes);
+
+    expect(seg).toEqual(EMPTY);
+    expect(counting.copied()).toBeLessThanOrEqual(counting.bytes.length);
+  });
+});
+
+describe('demuxSegmentAudio: 아주 작은 프레임으로 프레임 수를 부풀리지 못한다(보안 검수 prw2 c9′ M-1)', () => {
+  /** 트랙마다 counts[i] 개의 1바이트 프레임을 traf 하나씩으로. 첫 트랙 첫 traf 는 프레임 하나(timedTrack 이 보는 자리) */
+  const file = (...counts: number[]) => {
+    const ids = counts.map((_, i) => i + 2);
+    const total = counts.reduce((sum, n) => sum + n, 0);
+    return concat(
+      init(...ids.map((id) => trak(id, 'soun', 48000))),
+      fragmentWithData((at) => {
+        let offset = at;
+        return counts.map((count, i) => {
+          const traf = sizedTraf(ids[i]!, 1, bareTrun(count, offset));
+          offset += count;
+          return traf;
+        });
+      }, total),
+    );
+  };
+
+  it('첫 traf 는 프레임 하나 · 뒤 traf 는 1바이트 프레임 MAX_TRACK_SAMPLES 개면 뒤 프레임을 만들기 전에 빈 결과다', () => {
+    const bytes = concat(
+      init(trak(2, 'soun', 48000)),
+      fragmentWithData(
+        (at) => [
+          sizedTraf(2, 1, bareTrun(1, at)),
+          sizedTraf(2, 1, bareTrun(MAX_TRACK_SAMPLES, at + 1)),
+        ],
+        MAX_TRACK_SAMPLES + 1,
+      ),
+    );
+    const counting = countingCopies(bytes);
+
+    const seg = demuxSegmentAudio(counting.bytes);
+
+    expect(seg).toEqual(EMPTY);
+    expect(counting.copies()).toBe(1);
+  });
+
+  it('조각 하나의 소리 프레임이 트랙 합으로 꼭 MAX_TRACK_SAMPLES 면 그대로 푼다', () => {
+    const half = MAX_TRACK_SAMPLES / 2;
+
+    const seg = demuxSegmentAudio(file(half, half));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([half, half]);
+  });
+
+  it('트랙마다는 상한 아래여도 트랙 합이 MAX_TRACK_SAMPLES 를 넘으면 빈 결과다', () => {
+    const half = MAX_TRACK_SAMPLES / 2;
+
+    expect(demuxSegmentAudio(file(half, half + 1))).toEqual(EMPTY);
+  });
+});
+
+describe('demuxSegmentAudio: mdhd 없는 소리 trak 으로 트랙 수 상한을 비켜 가지 못한다(보안 검수 prw2 c9′ M-2)', () => {
+  it('트랙 머리(mdhd)가 없는 소리 trak 이 있으면 traf 를 읽기 전에 빈 결과다', () => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 48000), trakWithoutMdhd(3)),
+      fragmentWithData((at) => [sizedTraf(2, 1, bareTrun(1, at))], 1),
+    );
+    const counting = countingCopies(bytes);
+
+    const seg = demuxSegmentAudio(counting.bytes);
+
+    expect(seg).toEqual(EMPTY);
+    expect(counting.copies()).toBe(0);
+  });
+
+  it('mdhd 없는 trak 이 다른 소리 트랙의 번호를 겹쳐 써도 빈 결과다', () => {
+    const bytes = concat(
+      init(trak(2, 'soun', 48000), trakWithoutMdhd(2)),
+      fragmentWithData((at) => [sizedTraf(2, 1, bareTrun(1, at))], 1),
+    );
+
+    expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
   });
 });
