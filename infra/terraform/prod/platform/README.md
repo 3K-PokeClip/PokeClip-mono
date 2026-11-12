@@ -71,8 +71,8 @@ clip-sse 는 같은 clip 서비스입니다. 긴 SSE 연결이 clip 그룹의 �
 모두에서 `REDACTED` 로 바꿉니다(`load_balancers.tf` 의 `module "waf"`).
 
 *   **헤더**: `authorization` · `cookie` · `referer` · `x-internal-token` ·
-    `x-stream-key-resolve-token`. 앞의 둘은 로그 가림(`redacted_fields`)도
-    겹쳐 둡니다.
+    `x-stream-key-resolve-token` · `x-expired-broadcasts-token`. 앞의 둘은
+    로그 가림(`redacted_fields`)도 겹쳐 둡니다.
 *   **질의 인자**: `code`(OAuth 콜백) · `token`(프로필 사진 주소).
 
 이 설정에는 운영 대가가 둘 있습니다. 차단 동작은 바뀌지 않습니다 — 데이터
@@ -208,6 +208,7 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | auth | `STREAM_KEY_SECRET_STORE_TYPE` | `aws`(prod 는 처음부터 Secrets Manager — 앱 기본값 postgres) |
 | auth | `STREAM_KEY_SECRET_RETIRE_FROM` | `aws`(PG 이관이 없어 옛 암호도 Secrets Manager 에만 있다) |
 | auth | `STREAM_KEY_SECRET_REF_PREFIX` | `stream_key_secret_prefix`(작업 역할 정책과 같은 값) |
+| clip | `FORWARD_HEADERS_STRATEGY` | `native`(로드밸런서 뒤 — 비우면 ECS 감지로 같은 동작이지만, 만료 창구 전용 토큰이 있으면 명시해야 부팅한다 · POK-551). 신뢰 대역은 clip 기본값 그대로 |
 | clip | `CLOUDFRONT_KEY_PAIR_ID` | secrets `public_key_id` |
 | clip | `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` | `https://media.pokeclip.com` · `.pokeclip.com` |
 | auth | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | `http://clip.pokeclip.internal:8081` · `http://chat-collector.pokeclip.internal:8083`(탈퇴 정리 — 비면 부팅 거부) |

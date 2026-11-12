@@ -81,8 +81,9 @@ run "lists_env_names_per_service" {
       "UPLOAD_ENABLED", "UPLOAD_QUEUE_URL", "UPLOAD_DLQ_URL",
       "THUMBNAIL_ENABLED", "THUMBNAIL_QUEUE_URL",
       "CLIPS_BUCKET", "SEGMENT_BUCKET",
+      "EXPIRED_BROADCASTS_ALLOWED_CIDRS",
     ])
-    error_message = "clip 의 env 이름 집합이 DB 셋 · 계약9 둘 · 일 스위치 셋 · 일 큐 주소 다섯 · 창고 이름 둘과 다르다(BROADCAST_REAPER_ENABLED 없음 — K6)."
+    error_message = "clip 의 env 이름 집합이 DB 셋 · 계약9 둘 · 일 스위치 셋 · 일 큐 주소 다섯 · 창고 이름 둘 · EXPIRED_BROADCASTS_ALLOWED_CIDRS 와 다르다(BROADCAST_REAPER_ENABLED 없음 — K6)."
   }
 
   assert {
@@ -213,6 +214,25 @@ run "allows_resolve_from_media_private_subnet_only" {
   assert {
     condition     = can(cidrhost(output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"], 0)) && can(regex("^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/[0-9]+$", output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"]))
     error_message = "auth 의 STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 IPv4 CIDR 하나가 아니다."
+  }
+}
+
+# 만료 창구(GET /internal/broadcasts/expired)의 출발지도 Media 프라이빗 서브넷
+# 하나다(POK-551 — 사이드카의 만료 실행기). clip 은 전용 토큰
+# (app_secret_arns 의 EXPIRED_BROADCASTS_TOKEN)이 있는데 이 대역이 비면
+# 부팅을 거부한다(ExpiredBroadcastSecurityConfig). auth 의 resolve 대역과 같은
+# 원천이라 두 값이 갈라지지 않는지도 본다.
+run "allows_expired_broadcasts_from_media_private_subnet_only" {
+  command = apply
+
+  assert {
+    condition     = output.app_env["clip"]["EXPIRED_BROADCASTS_ALLOWED_CIDRS"] == "198.51.100.0/24"
+    error_message = "clip 의 EXPIRED_BROADCASTS_ALLOWED_CIDRS 가 Media 프라이빗 서브넷의 cidr_block 이 아니다."
+  }
+
+  assert {
+    condition     = output.app_env["clip"]["EXPIRED_BROADCASTS_ALLOWED_CIDRS"] == output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"]
+    error_message = "clip 의 EXPIRED_BROADCASTS_ALLOWED_CIDRS 와 auth 의 STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 다르다 — 둘 다 Media 프라이빗 서브넷이어야 한다."
   }
 }
 

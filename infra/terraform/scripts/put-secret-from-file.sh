@@ -30,6 +30,7 @@
 #   profile-photo-token-secret   한 줄 — 끝 줄바꿈 하나를 뗌
 #   soop-client-secret           한 줄 — 끝 줄바꿈 하나를 뗌
 #   stream-key-resolve-token     한 줄 — 끝 줄바꿈 하나를 뗌
+#   expired-broadcasts-token     한 줄 — 끝 줄바꿈 하나를 뗌
 #   비밀 이름으로 지정한다(ARN 은 계정 ID 를 품으므로 쓰지 않음). 리전은
 #   ap-northeast-2 고정이다. 이미 값이 있으면 새 버전이 되고 옛 값은
 #   AWSPREVIOUS 로 남는다.
@@ -122,6 +123,7 @@ readonly -a KINDS=(
   profile-photo-token-secret
   soop-client-secret
   stream-key-resolve-token
+  expired-broadcasts-token
 )
 
 # CLI 기록 판정(precheck::cli_history_state)은 단계 직전 점검 도구와 같은 공용
