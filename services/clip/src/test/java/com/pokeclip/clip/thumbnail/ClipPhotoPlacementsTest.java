@@ -95,6 +95,8 @@ class ClipPhotoPlacementsTest extends IntegrationTestSupport {
             assertThat(logs.messages()).contains("clip.thumbnail.clip_photo clipId=" + clip + " source=placements card=scene");
         }
         assertThat(장면들()).containsExactly(8_200L);
+        // 결과 파일 안 자리라 원점 표지가 없다 — 장면 행의 판(원점)은 배치표 계산에만 쓰고 주문서에 옮기지 않는다.
+        assertThat(sent.get(0).path("source").has("offsetOrigin")).isFalse();
     }
 
     /**
