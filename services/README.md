@@ -1677,7 +1677,7 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
 
 **카드 장면 두 칸(POK-196)** — 목록 · 통로 · 마크 응답(OBS · 웹) · 가리기 · 되살리기 응답이 모두 싣는다.
-🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 소리 주소 표지 갈래(`axis=fileHead`)도 500이다**(아래 소리 주소 절) — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
+🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 소리 주소(아래 소리 주소 절)와 렌더 주문(컷 판정이 회차 행의 판 칸을 읽는다)도 500이다** — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
 
 | 카드 칸 | |
 |---|---|
@@ -1689,7 +1689,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 - **`null`**: 카드 ms의 장면이 없으면(마지막 귀속 행 뒤 = 라이브 머리 · 회차 행 없음) 두 칸 모두. 창 끝 하나라도 장면이 없거나 두 끝 장면 행 가운데 하나라도 `playback_pdt`가 비면 `playerWindow`만(두 끝을 함께 내는 칸이라 반쪽을 안 싣는다). 카드 ms 장면 행의 `playback_pdt`가 비면 `playerAtMs`만. 웹은 `null`이면 지금 식(기준점 + 카드 ms)으로 떨어진다. 장부를 못 읽거나(판 칸이 아직 없는 DB 등) 장부 값이 장면 계산의 전제를 깨도 카드는 나가고 두 칸만 빈다(WARN `jumpcard.scene_unavailable streamId= reason=<예외 이름>` — 방송 목록 기준점의 `broadcast.timeline_origin_failed`처럼 요청마다 남는다)
 - 창 두 끝은 같은 사상이라 `startMs ≤ endMs`이고, 판 NULL 시각 역행으로 끝이 이르면 끝을 시작에 묶는다
 - **왕복**: 목록 한 장의 장면 = 방송 행 한 번 + 회차 고르기 한 번 + 회차 행 한 번이고 카드 수와 무관하다(`CardPositionRoundTripTest`가 목록 문 전체의 문장 수를 카드 한 장 · 다섯 장으로 맞댄다). 장부에 `start_pts_ms` 색인이 없어 값마다 floor를 질의하지 않고 회차 행을 한 번 읽어 메모리에서 푼다. 낱장(자동 카드 · 마크 · 가리기)은 카드 저장 트랜잭션 **밖**에서 읽는다 — 마크는 방송 행 잠금을 그 왕복만큼 더 쥐지 않고, 자동 카드는 장부 읽기가 실패해도 저장을 잃지 않는다. 마크 하나는 저장 위치 고르기와 카드 장면이 회차 행을 따로 읽어 회차 읽기가 두 번이다
-- **규모**: 회차 행 읽기는 키 이력이 아니라 **회차 길이**에 비례한다(호출마다 회차 전 행 — 4초 조각 12시간이면 약 1만 행). `RoundRowsScaleTest`가 2만 행 회차(키 이력 2만 행 위)에서 목록 한 장(값 150개)의 장면 · 마크 위치 하나 · 소리 주소 창 하나가 각각 5초 안인지 잰다(비례성은 행 수 · 실행 계획 단언이 잡고, 경과 상한은 공유 CI 러너에서 흔들리지 않게 넉넉히 둔 그물이다)(로컬 실측 2026-11-04: 장면 131ms · 마크 위치 58ms · 소리 창 35ms — 창 밖 회차 행 19,985개를 거르개로 버림)
+- **규모**: 회차 행 읽기는 키 이력이 아니라 **회차 길이**에 비례한다(호출마다 회차 전 행 — 4초 조각 12시간이면 약 1만 행). `RoundRowsScaleTest`가 2만 행 회차(키 이력 2만 행 위)에서 목록 한 장(값 150개)의 장면 · 마크 위치 하나가 각각 5초 안인지 잰다(비례성은 행 수 단언이 잡고, 경과 상한은 공유 CI 러너에서 흔들리지 않게 넉넉히 둔 그물이다)(로컬 실측 2026-11-04: 장면 131ms · 마크 위치 58ms)
 
 **방송 목록은 「그 방송을 처음 안 순서」의 역순이다 — 시작 시각 순이 아니다.** 시작·종료 시각은
 뒤늦게 도착한 알림이 갱신하므로 정렬·이어받기 기준으로 쓰면 중복·누락이 난다.
@@ -2656,39 +2656,37 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=[&axis=fileHead]` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url","startWallUtcMs"}]}`(표지 갈래는 아래 칸이 더 실린다) · **400** `{"field":"fromMs"\|"toMs"\|"axis"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
+| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url"}],"audioCapture","audioCaptureSegment":{"seq","startAtMs","durationMs","url"}}`(`audioCaptureSegment`는 `audioCapture`가 `attached`일 때만) · **400** `{"field":"fromMs"\|"toMs"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
 
 - **`fromMs`·`toMs`는 재생 축 UTC epoch ms**(편집본 `cut`과 같은 축)이고 반개 구간이다. `toMs`가 `fromMs` 이하이거나 6분을 넘으면 400이다.
-- **축 표지 `axis=fileHead`(POK-196).** 있으면 두 판 모두 **파일명 시각(`start_wall_utc`) 축**으로 고른다 — 그 방송 회차의 귀속 행
-  (`RoundRows` · 머리 세션 행이 없는 옛 방송은 방송 시간창 행) 가운데 `[fromMs, toMs)`와 겹치는 행이고, 범위 끝 · 조각 시작 · 확정 공백도
-  같은 축이다. 그 축으로 처리했을 때만 뿌리에 **메아리 `"axis":"fileHead"`** 를 싣는다(회차를 못 고르면 메아리 없이 아래 옛 갈래). 웹은
-  메아리가 있을 때만 새 칸을 쓴다(칸 유무가 신호가 아니다). **그 밖의 표지 값은 400(`field: axis`)** 이다 — 무시하고 옛 갈래로
-  물러서지 않는다. 그래서 새 축 값을 더할 때는 **clip 을 웹보다 먼저 배포**한다.
-    - 🔴 **판 칸(`timing_version`, 1번 생산자 c1 DDL)이 없는 DB에서는 표지 갈래가 500이다.** 회차(옛 방송은 시간창)를 고른 뒤 창
-      읽기가 그 칸을 읽고(`StreamSegmentReader`), 장부 실패를 옛 갈래로 물리는 처분이 없다. 표지 없는 옛 갈래는 그 칸을 안 읽어
-      그대로다. 웹 편집기가 표지를 보내기 시작하면 그 DB에서 편집기 소리가 깨진다 — 생산자 DDL 먼저(위 카드 장면 절 배포 순서 게이트).
-    - 조각 칸 더함: `startWallUtcMs`(파일명 시각 ms 내림) · `role`(`segment` · `audio_capture`) · `isDiscontinuity`(장부 칸) ·
-      `followsLedgerPrevious`(응답의 바로 앞 조각이 장부에서 이 조각의 바로 앞 행인가 — 첫 조각 · 아직 안 올라간 행이 빠진 자리 거짓).
-      `startAtMs`는 옛 값(재생 축) 그대로다.
-    - 뿌리 칸 더함: `audioCapture`(`attached` 확보 조각을 실음 · `not_ready` 아직 · `skipped` 없이 진행(창 안 회차 행이 없을 때 포함) — 렌더 주문과 같은
-      `AudioCaptureRule` · 컷 끝 = `toMs` · 「끝남」 = 방송 `ended` 이거나 회차 완결) · `gapEvidence`(`[{"beforeSeq","afterSeq"}]` —
-      창 안 회차 행 이웃 가운데 같은 녹화로 이어지지 않은 쌍. 쌍만 싣는다. 비귀속 행이 낀 자리가 여기 든다).
-    - 겹침은 응답 칸과 같은 **ms 내림 축**으로 본다(벽시각 µs 원값이 아니다 — 원값이면 내림 축에서 창 앞에 끝나는 행이 실린다).
-    - 확보 후보는 회차로 자르지 않는다(계약 6-6-5 「컷 끝 소리 확보는 별도 규칙」). 다음 회차 · 다음 방송으로 넘어가는 것을 막는 것은
-      후보의 `is_discontinuity`다(새 연결의 첫 조각은 참 — 같은 녹화기가 이어 쓴 파일이 아니다). 같은 녹화로 이어진 다음 행은 다른 회차
-      세션이어도 싣는다(`SegmentAudioAxisTest`가 두 경우를 잰다). 남는 위험: 그 불변식이 깨지면(훅 유실 + 1.5초 안 재접속) 같은 물리
-      키의 다음 조각 하나가 확보로 실린다.
-    - 장부 왕복: 회차 고르기 1 · 창 안 회차 행 1(행마다 장부 바로 앞 행은 PK 역순 한 행) · 확보 후보 0–1(거리 조건이 참일 때 · 판 NULL 은 늘) · 회차
-      완결 0–1(확보 후보가 장부에 없고 방송 중일 때만). 회차 행 읽기는 세션 색인(`stream_segments_session_idx`)을 타고 창 밖 회차 행을
-      거르개로 버린다 — 비용이 키 이력이 아니라 그 회차 길이에 비례한다(`WallAxisReadPlanTest` · `RoundRowsScaleTest`). 조각 길이 상한이
-      장부 계약에 없어 벽시계 하한으로 범위를 더 좁히지 않았다.
-- **표지가 없으면 develop 그대로다**(옛 웹 · 열린 옛 편집기 탭): 아래 재생 축 조회 · 응답에서 조각마다 `startWallUtcMs` 하나만 더한다.
-  그 칸을 빼면 develop 응답과 바이트가 같다(`SegmentAudioAxisTest` 기대값 파일). 🔴 표지와 무관하게 축을 바꾸는 판은 내지 않는다 —
-  옛 웹이 파일명 시각 축으로 고른 행을 재생 축에 놓아 덮음 판정이 갈린다.
+- **질의 칸 `axis`는 읽지 않는다**(POK-196 · kty 2026-11-12 K-1). 무엇이 와도 위 응답이고 400이 아니다. PR-B1 판이 받던 표지
+  `axis=fileHead`와 그 갈래 칸(뿌리 `axis` · `gapEvidence`, 조각 `startWallUtcMs` · `role` · `isDiscontinuity` ·
+  `followsLedgerPrevious`)은 거뒀다 — PR-B1 판은 prod 에 나간 적이 없다.
 - **순서: 구간 → 자격 → 만료 → 켜짐 → 조회.** 조각 조회 문과 같다: 410이 자격 앞이면 남남에게 「있었던 방송」이 샌다.
-- **올라간(`uploaded`) 조각만 싣는다.** 덜 올라온 조각은 주소를 줘도 창고에 없다. 빠진 자리는 화면이 소리 없이 둔다.
+- **`segments`는 올라간(`uploaded`) 조각만 싣는다.** 덜 올라온 조각은 주소를 줘도 창고에 없다. 빠진 자리는 화면이 소리 없이 둔다.
+  물리 키의 조각 가운데 창과 겹치는 것이고 회차로 거르지 않는다 — PR-B1 이전과 뜻 · 바이트가 같다(`SegmentAudioCaptureTest`
+  기대값 파일).
 - **`startAtMs`는 재생 축**(`playback_pdt`, 없으면 `start_wall_utc`). 조각 장부는 물리 키로 찾는다(POK-233).
-- **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt axis requested`(`axis` = 실제로 처리한 축 `fileHead` · `legacy`, `requested` = 요청 표지 `fileHead` · `none` — 표지를 보냈는데 옛 갈래로 간 것이 `axis=legacy requested=fileHead`).
+- **끝 소리 확보 `audioCapture`(POK-196 · 설계 r7 9.6).** 컷 끝 바로 뒤 조각의 머리 소리(판 2 에서 최대 약 1초)가 그 조각 파일
+  앞에 들어 있어 함께 받는 판정이다(계약 6-6-8). 값은 셋이다 — `attached`(확보 조각을 `audioCaptureSegment`에 실음) ·
+  `not_ready`(아직 준비 안 됨 — 다시 물으면 바뀔 수 있다) · `skipped`(확보 없이 진행). 확보 조각은 `segments`에 섞지 않는다(kty K-2).
+    - **판정은 같은 창을 렌더 주문 컷으로 받았을 때와 같다**(`CutPlanner.audioCaptureOf` — 렌더 주문과 같은 `AudioCaptureRule` ·
+      6-6-8 8항). 컷 끝 = `toMs`. k(영상 범위의 마지막 조각) · 컷 끝 좌표 · 원점은 **회차 귀속 행 위 F끝**(`locateEnd(toMs)` →
+      `endOf`)에서 얻는다 — `segments` 목록의 마지막이 아니다(목록 마지막은 비귀속 · 아직 안 올라간 행일 수 있다). 판 2 는 거리 조건
+      `x_out > dur(k) − 1초`를 영상 첫 표본 원점(PDT)에서 재고, 판 NULL 은 거리를 보지 않는다. 후보는 k 의 장부 다음 행이고
+      회차 · 방송으로 자르지 않는다 — 다른 회차 · 방송으로 넘어가는 것을 막는 것은 후보의 `is_discontinuity`다. 「끝남」 = 방송
+      `ended` 이거나 회차 완결. 후보가 15분 넘게 `failed`면 없이 진행한다.
+    - **렌더가 확보 판정 전에 멈추는 갈래는 렌더의 답을 옮긴다**: 회차 행 없음 · 끝이 마지막 행 뒤(라이브 머리) → 회차가 열렸으면
+      `not_ready`(렌더 409) · 닫혔으면 `skipped`(렌더 422). 시작이 첫 행 앞 · 창에 영상 조각이 없음 → `skipped`(렌더 422).
+      창 안 회차 행이 아직 → `not_ready`(렌더 409 `media_pending`). 디코더 준비 조각은 보지 않는다.
+    - `audioCaptureSegment.startAtMs`는 판정 축(목록 PDT 를 ms 로 내린 값)이다. `segments[].startAtMs`는 SQL 에서 ms 로 반올림한
+      값이라, 같은 조각이 두 곳에 실리면(겹침 · 비귀속 행 자리) 1ms 다를 수 있다.
+    - 🔴 **판 칸(`timing_version`, 1번 생산자 c1 DDL)이 없는 DB에서는 이 문이 500이다** — 확보 판정이 회차 행의 판 칸을 읽는다(위 카드
+      장면 절 배포 순서 게이트).
+    - 장부 왕복: 회차 고르기 1 · 회차 귀속 행 1(렌더 주문과 같은 읽기 — 규모는 `LedgerCutPlannerScaleTest`) · `segments` 목록 1 ·
+      확보 후보 0–1(판 2 는 거리 조건이 참일 때 · 판 NULL 은 늘) · 회차 완결 0–1(물을 때만 — 범위 갈래 · 확보 후보가 장부에 없고
+      방송 중). 방송 행 · 만료 판정은 JPA 질의다.
+- **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt audioCapture`.
 - 수명은 `pokeclip.render.segment-audio-url-ttl`(기본 `PT5M`, 0초 초과 7일 이하). 화면은 받자마자 내려받는다.
   조각 창고는 `SEGMENT_BUCKET`이고 주문줄(`RENDER_ENABLED`)과 같이 켜진다: 운영 역할에 조각 창고 `s3:GetObject`가 있어야 주소가 통한다.
 - 🔴 **배포 조건: 조각 창고에 웹 주소를 허락하는 CORS 규칙(GET·HEAD)이 있어야 한다.** 화면이 이 주소를 `fetch`로 받아 푼다.

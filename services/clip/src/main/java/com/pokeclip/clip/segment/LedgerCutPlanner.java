@@ -12,7 +12,7 @@ import java.util.Optional;
 /**
  * 렌더 주문의 컷 판정을 장부에서 읽어 돌린다(POK-196 · 설계 r7 9.1). 판정 자체는 {@link CutPlanner} 한 곳이고, 여기는 판정 입력을
  * 장부에서 모으는 일만 한다 — 회차 고르기 · 회차 행 전부(가장자리는 판정이 메모리 F 로 고른다) · 회차 완결 · 방송 상태, 그리고 판정
- * 중에 묻는 장부 이웃(확보 후보 · 준비 후보).
+ * 중에 묻는 장부 이웃(확보 후보 · 준비 후보). 편집기 소리 주소 API 의 끝 소리 확보도 같은 읽기로 돌린다({@link #audioCapture}).
  *
  * <p><b>왕복은 회차 길이와 무관하다</b>: 회차 고르기 1 · 회차 행 1 · 회차 완결 0–1(회차 세션이 있을 때만) · 확보 후보 0–1(판정이
  * 필요할 때만) · 준비 후보 0–1(구간 시작과 같은 왕복). 회차 행 읽기는 회차 길이에 비례하고 키 이력은 훑지 않는다.
@@ -23,7 +23,7 @@ public class LedgerCutPlanner {
     private final RoundRows rounds;
     private final StreamSegmentReader segments;
 
-    LedgerCutPlanner(RoundRows rounds, StreamSegmentReader segments) {
+    public LedgerCutPlanner(RoundRows rounds, StreamSegmentReader segments) {
         this.rounds = rounds;
         this.segments = segments;
     }
@@ -46,13 +46,32 @@ public class LedgerCutPlanner {
         return CutPlanner.plan(input, ledgerOf(broadcast));
     }
 
+    /**
+     * 편집기 소리 주소 API 의 끝 소리 확보(설계 r7 9.6) — {@link #plan} 과 같은 회차 고르기 · 회차 행 · 방송 상태 · 장부 이웃으로
+     * {@link CutPlanner#audioCaptureOf} 를 부른다. 같은 창을 컷으로 받은 렌더 주문과 같은 판정이다(계약 6-6-8 8항).
+     *
+     * <p>회차 완결은 판정이 물을 때만 읽는다(범위 갈래 · 확보 후보가 장부에 없고 방송 중일 때) — 왕복은 회차 고르기 1 · 회차 행 1 ·
+     * 확보 후보 0–1 · 회차 완결 0–1 이다.
+     *
+     * @param fromMs 창 시작(목록 PDT 축 epoch ms)
+     * @param toMs 창 끝(반개) — 컷 끝으로 본다
+     */
+    public CutPlanner.AudioCapture audioCapture(Broadcast broadcast, long fromMs, long toMs, Instant now) {
+        Optional<RoundRows.Round> round = rounds.roundOf(broadcast);
+        List<RoundRow> rows = round.map(segments::findRoundRows).orElse(List.of());
+        return CutPlanner.audioCaptureOf(rows, fromMs, toMs,
+                () -> round.orElse(null) instanceof RoundRows.Members
+                        && rounds.roundComplete(broadcast.getStreamId()),
+                broadcast.getStatus() != BroadcastStatus.LIVE, now, ledgerOf(broadcast));
+    }
+
     /** 판정이 정한 행에 대해서만 묻는 장부 이웃. 둘 다 회차로 자르지 않는다(계약 6-6-8 · 설계 r7 9.4). */
     private CutPlanner.Ledger ledgerOf(Broadcast broadcast) {
         String ingestKey = broadcast.ingestKey();
         return new CutPlanner.Ledger() {
             @Override
             public Optional<RoundRow> rowAfter(long seq) {
-                return segments.findRowAfter(ingestKey, seq).map(StreamSegmentReader.WallAxisRow::row);
+                return segments.findRowAfter(ingestKey, seq);
             }
 
             @Override

@@ -26,6 +26,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 /**
@@ -43,6 +44,10 @@ import java.util.stream.Collectors;
  *
  * <p>DB 를 읽지 않는다. 회차 행은 부르는 쪽이 주고, 장부 이웃(확보 후보 · 준비 후보)은 판정이 정한 행에 대해서만 {@link Ledger}
  * 로 묻는다 — 어느 행을 물을지가 판정 결과라서다.
+ *
+ * <p>편집기 소리 주소 API 의 끝 소리 확보({@link #audioCaptureOf})도 여기서 낸다 — 같은 창을 렌더 주문 컷으로 받았을 때와 같은
+ * ① · ③ · ④ · ⑥ 단계를 거쳐 같은 k · 같은 컷 끝 좌표 · 같은 원점으로 {@link AudioCaptureRule} 을 부른다(계약 6-6-8 8항 · 설계 r7
+ * 9.6).
  *
  * <p><b>이상 입력은 예외다</b>(장부 불변식 위반 — 부르는 쪽에서 500). 회차 행이 seq 오름차순이 아니거나 길이가 음수면 공통 모듈이
  * {@link IllegalArgumentException}, F 가 낸 seq 가 회차 행에 없거나 장부 바로 앞 행이 머리 뒤면 {@link IllegalStateException}
@@ -108,33 +113,128 @@ public final class CutPlanner {
 
     public static CutDecision plan(CutInput input, Ledger ledger) {
         List<RoundRow> rows = input.rows();
+        Span span = spanOf(rows, input.inMs(), input.outMs(), input::roundComplete);
+        if (span instanceof Span.Rejected rejected) {
+            return reject(input, rejected.reason());
+        }
+        if (span instanceof Span.Waiting waiting) {
+            return new NotReady(waiting.reason());
+        }
+        Span.Placed placed = (Span.Placed) span;
+        List<Gap> gaps = gapsOf(rows, placed.a(), placed.b(), input.inMs(), input.outMs());
+        List<SubtitleSpan> subtitles = subtitlesOf(placed.axis(), input, rows, placed.media());
+        if (!placed.media().stream().allMatch(RoundRow::uploaded)) {
+            return new NotReady("media_pending");
+        }
+        return finish(input, ledger, placed.origin(), placed.media(), placed.in(), placed.out(), subtitles, gaps);
+    }
+
+    /**
+     * 소리 주소 API 의 끝 소리 확보 상태(설계 r7 9.6 · 계약 6-6-8 8항). 창 {@code [fromMs, toMs)} 를 렌더 주문 컷으로 받았을 때와
+     * 같은 단계를 거친다 — 판정 입력(k · 컷 끝 좌표 · 원점)은 회차 귀속 행 위 F끝({@code locateEnd(toMs)} → {@code endOf})에서
+     * 얻고, 응답 조각 목록(물리 키 겹침)과는 따로다. 렌더가 확보 판정 전에 멈추는 갈래는 렌더의 답을 옮긴다(착수 체크리스트
+     * C-B2).
+     * <ul>
+     *   <li>회차 행 없음 · 끝이 마지막 행 뒤(라이브 머리) — 렌더는 회차가 열렸으면 409 · 닫혔으면 422 → {@code NOT_READY} ·
+     *       {@code SKIPPED}. 다시 물으면 바뀌는가가 렌더와 같다</li>
+     *   <li>시작이 첫 행 앞 — 렌더 422 {@code outside_recording} → {@code SKIPPED}. 렌더가 받지 않는 컷이라 확보할 것이 없다</li>
+     *   <li>영상 조각 없음(창이 끊긴 틈 안) — 렌더 422 {@code no_footage} → {@code SKIPPED}. k 가 없다</li>
+     *   <li>창 안 회차 행이 아직 — 렌더 409 {@code media_pending} → {@code NOT_READY}. 렌더가 확보 판정까지 가지 않는다(올라가면
+     *       다시 물어 정한다)</li>
+     * </ul>
+     * 그 뒤는 렌더와 같은 {@link AudioCaptureRule} 결과다 — {@code Attach} → {@code ATTACHED} · {@code Wait} →
+     * {@code NOT_READY} · {@code Proceed} · {@code FailedSkip} → {@code SKIPPED}. 디코더 준비 · 자막 · 길이는 보지 않는다(소리
+     * 응답에 싣는 것이 아니다 — 준비 조각이 아직이면 렌더는 409 지만 확보 상태는 이미 정해졌다).
+     *
+     * @param rows 그 방송 회차의 귀속 행, seq 오름차순({@link CutInput#rows()} 와 같은 읽기)
+     * @param roundComplete 회차 완결 술어 — 범위 갈래와 확보 「끝남」 에서 필요할 때만 묻는다(장부 왕복)
+     * @param broadcastEnded clip 방송이 {@code ended} 다({@link CutInput#broadcastEnded()} 와 같은 식)
+     * @param now 지금 — 확보 후보 {@code failed} 문턱을 잰다
+     */
+    public static AudioCapture audioCaptureOf(List<RoundRow> rows, long fromMs, long toMs,
+                                              BooleanSupplier roundComplete, boolean broadcastEnded, Instant now,
+                                              Ledger ledger) {
+        Span span = spanOf(rows, fromMs, toMs, roundComplete);
+        if (span instanceof Span.Rejected) {
+            return AudioCapture.SKIPPED_WITHOUT_ROW;
+        }
+        if (!(span instanceof Span.Placed placed) || !placed.media().stream().allMatch(RoundRow::uploaded)) {
+            return AudioCapture.NOT_READY_WITHOUT_ROW;
+        }
+        AudioCaptureRule.Outcome outcome = captureOf(placed.media(), placed.out(), ledger,
+                () -> broadcastEnded || roundComplete.getAsBoolean(), now);
+        return switch (outcome) {
+            case AudioCaptureRule.Outcome.Attach attach ->
+                    new AudioCapture(AudioCapture.State.ATTACHED, Optional.of(attach.row()));
+            case AudioCaptureRule.Outcome.Wait wait -> AudioCapture.NOT_READY_WITHOUT_ROW;
+            case AudioCaptureRule.Outcome.Proceed proceed -> AudioCapture.SKIPPED_WITHOUT_ROW;
+            case AudioCaptureRule.Outcome.FailedSkip skip -> AudioCapture.SKIPPED_WITHOUT_ROW;
+        };
+    }
+
+    /**
+     * 소리 주소 API 의 끝 소리 확보 상태와 확보 조각(k 의 장부 다음 행).
+     *
+     * @param row {@code ATTACHED} 일 때만 있다
+     */
+    public record AudioCapture(State state, Optional<RoundRow> row) {
+
+        static final AudioCapture NOT_READY_WITHOUT_ROW = new AudioCapture(State.NOT_READY, Optional.empty());
+        static final AudioCapture SKIPPED_WITHOUT_ROW = new AudioCapture(State.SKIPPED, Optional.empty());
+
+        /** 확보 조각을 싣는다 · 아직 준비 안 됨(다시 물으면 바뀔 수 있다) · 확보 없이 진행. */
+        public enum State {
+            ATTACHED,
+            NOT_READY,
+            SKIPPED
+        }
+    }
+
+    /** ① 범위 · ③ 좌표 · ④ 영상 조각 없음까지의 결과 — {@link #plan} 과 {@link #audioCaptureOf} 가 같이 쓴다. */
+    private sealed interface Span {
+
+        /** 종국 거절(422) — 다시 물어도 같다. */
+        record Rejected(Reason reason) implements Span {
+        }
+
+        /** 아직(409) — 회차 행이 더 쌓이면 바뀐다. */
+        record Waiting(String reason) implements Span {
+        }
+
+        /** 좌표까지 옮겼다. {@code a} · {@code b} 는 F · F끝 결과, {@code media} 는 결과에 드는 회차 행이다. */
+        record Placed(OffsetOrigin origin, List<LedgerRow> axis, Place a, Place b, MediaCoord in, End out,
+                      List<RoundRow> media) implements Span {
+        }
+    }
+
+    /**
+     * ① 범위(회차 행 없음 · 첫 행 앞 · 마지막 행 뒤) → ③ 좌표 → ④ 영상 조각 없음. 범위의 종국 거절은 회차 완결 술어만 보고(계약
+     * 6-6-6), 그 술어는 회차 행이 없거나 끝이 마지막 행 뒤일 때만 묻는다.
+     */
+    private static Span spanOf(List<RoundRow> rows, long inMs, long outMs, BooleanSupplier roundComplete) {
         if (rows.isEmpty()) {
-            return input.roundComplete() ? reject(input, Reason.OUTSIDE_RECORDING) : new NotReady("not_yet_recorded");
+            return roundComplete.getAsBoolean() ? new Span.Rejected(Reason.OUTSIDE_RECORDING)
+                    : new Span.Waiting("not_yet_recorded");
         }
         OffsetOrigin origin = originOf(rows);
         List<LedgerRow> axis = axisOf(rows);
-        Place a = LedgerTimeline.locate(axis, input.inMs());
-        Place b = LedgerTimeline.locateEnd(axis, input.outMs());
+        Place a = LedgerTimeline.locate(axis, inMs);
+        Place b = LedgerTimeline.locateEnd(axis, outMs);
         if (a instanceof Place.BeforeFirst) {
-            return reject(input, Reason.OUTSIDE_RECORDING);
+            return new Span.Rejected(Reason.OUTSIDE_RECORDING);
         }
         if (a instanceof Place.AfterLast || b instanceof Place.AfterLast) {
-            return input.roundComplete() ? reject(input, Reason.OUTSIDE_RECORDING) : new NotReady("not_yet_recorded");
+            return roundComplete.getAsBoolean() ? new Span.Rejected(Reason.OUTSIDE_RECORDING)
+                    : new Span.Waiting("not_yet_recorded");
         }
-        List<Gap> gaps = gapsOf(rows, a, b, input.inMs(), input.outMs());
         MediaCoord in = startOf(a);
         End out = endOf(b);
         int first = indexOf(rows, in.seq());
         int last = indexOf(rows, out.seq());
         if (first > last) {
-            return reject(input, Reason.NO_FOOTAGE);
+            return new Span.Rejected(Reason.NO_FOOTAGE);
         }
-        List<RoundRow> media = rows.subList(first, last + 1);
-        List<SubtitleSpan> subtitles = subtitlesOf(axis, input, rows, media);
-        if (!media.stream().allMatch(RoundRow::uploaded)) {
-            return new NotReady("media_pending");
-        }
-        return finish(input, ledger, origin, media, in, out, subtitles, gaps);
+        return new Span.Placed(origin, axis, a, b, in, out, rows.subList(first, last + 1));
     }
 
     /** 회차 판 하나로 원점을 고른다. 판이 섞이면 장부 불변식(한 회차 = 한 판 · 계약 6-6-4) 위반이다. */
@@ -152,8 +252,7 @@ public final class CutPlanner {
     /** ⑦ 끝 소리 확보 · 디코더 준비 → ⑧ 길이 → 계획. */
     private static CutDecision finish(CutInput input, Ledger ledger, OffsetOrigin origin, List<RoundRow> media,
                                       MediaCoord in, End out, List<SubtitleSpan> subtitles, List<Gap> gaps) {
-        RoundRow tail = media.get(media.size() - 1);
-        AudioCaptureRule.Outcome capture = AudioCaptureRule.decide(tail, out, () -> ledger.rowAfter(tail.seq()),
+        AudioCaptureRule.Outcome capture = captureOf(media, out, ledger,
                 () -> input.roundComplete() || input.broadcastEnded(), input.now());
         if (capture instanceof AudioCaptureRule.Outcome.Wait) {
             return new NotReady("capture_pending");
@@ -181,6 +280,17 @@ public final class CutPlanner {
                     skip.seq() == null ? "-" : skip.seq(), skip.ownerSeq(), skip.reason());
         }
         return ready;
+    }
+
+    /**
+     * ⑦ 끝 소리 확보 — 결과 마지막 회차 행 k 와 그 컷 끝 좌표로 판정한다. 렌더 주문과 소리 주소 API 가 이 한 곳을 지난다.
+     *
+     * @param endedOrComplete 「끝남」(방송 {@code ended} ∨ 회차 완결 — 6-6-8 5항). 다음 행이 장부에 없을 때만 묻는다
+     */
+    private static AudioCaptureRule.Outcome captureOf(List<RoundRow> media, End out, Ledger ledger,
+                                                      BooleanSupplier endedOrComplete, Instant now) {
+        RoundRow tail = media.get(media.size() - 1);
+        return AudioCaptureRule.decide(tail, out, () -> ledger.rowAfter(tail.seq()), endedOrComplete, now);
     }
 
     /** 편집기 출처 축(목록 PDT) — 이 판정이 시각을 읽는 단 한 자리. */

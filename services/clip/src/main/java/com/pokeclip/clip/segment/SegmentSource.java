@@ -6,12 +6,8 @@ package com.pokeclip.clip.segment;
  * {@code start_wall_utc}, UTC epoch ms)이다. 편집기가 보는 시각이 재생 축이라 레시피의 {@code cut}도 그 축이다(계약6 0절).
  *
  * <p>{@code s3Key}가 들어 있다 — 사람용 응답에 그대로 실으면 안 된다(주문서 전용).
- *
- * <p>{@code startWallUtcMs}는 {@code start_wall_utc}(파일명 시각)를 ms로 내린 값이다(POK-196) — 편집기 {@code /get} 축이라 소리
- * 주소 응답이 조각마다 싣는다. 고르는 축({@code startAtMs})은 바꾸지 않는다.
  */
-public record SegmentSource(long seq, long startAtMs, int durationMs, String s3Key, String uploadState,
-                            long startWallUtcMs) {
+public record SegmentSource(long seq, long startAtMs, int durationMs, String s3Key, String uploadState) {
 
     /** 조립기가 축을 안 가리므로 같은 판정을 그대로 태울 수 있다 — 값만 옮긴다. */
     public StreamSegmentRow asRow() {

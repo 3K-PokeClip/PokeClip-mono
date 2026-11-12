@@ -453,49 +453,29 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 표지 {@code axis=fileHead} 를 문으로 받아 메아리와 새 칸을 웹에 알린 이름 그대로 싣는다(POK-196 · 설계 r7 9.6). 이 픽스처는
-     * 파일명 시각이 재생 축보다 1시간 뒤라 창을 파일명 시각으로 옮겨 묻는다 — 옛 값({@code startAtMs})은 재생 축 그대로 나온다.
+     * 질의 칸 {@code axis} 는 읽지 않는다(kty K-1 (가) · 설계 r7 9.6) — 무엇이 와도(거둔 값 {@code fileHead} · 모르는 값) 표지 없는
+     * 요청과 같은 응답이고 400 이 아니다. 거둔 칸(메아리 · 공백 쌍 · 조각의 파일명 시각 · 역할 · 이웃 표시)은 응답에 없다.
      */
     @Test
-    void 원본_조각_주소는_표지가_있으면_파일명_시각_축으로_메아리를_싣는다() throws Exception {
+    void 원본_조각_주소는_axis_질의_칸을_읽지_않는다() throws Exception {
         볼_수_있다("OWNER");
         RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
-        long wallIn = RenderFixtures.CUT_IN + 3_600_000;
 
-        JsonNode 응답 = MAPPER.readTree(본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
-                        .param("fromMs", Long.toString(wallIn))
-                        .param("toMs", Long.toString(wallIn + 10_000))
-                        .param("axis", "fileHead")
-                        .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+        String 표지_없음 = 정규화(본문(조각_주소(내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000)
                 .andExpect(status().isOk())));
-
-        assertThat(응답.has("axis")).as("메아리 칸이 있다").isTrue();
-        assertThat(응답.get("axis").asString()).isEqualTo("fileHead");
-        JsonNode first = 응답.get("segments").get(0);
-        assertThat(first.get("seq").asLong()).isEqualTo(2);
-        assertThat(first.get("startWallUtcMs").asLong()).isEqualTo(wallIn);
-        assertThat(first.get("startAtMs").asLong()).as("옛 값 그대로").isEqualTo(RenderFixtures.CUT_IN);
-        assertThat(first.get("role").asString()).isEqualTo("segment");
-        assertThat(first.has("isDiscontinuity")).isTrue();
-        assertThat(first.has("followsLedgerPrevious")).isTrue();
+        for (String axis : new String[] {"fileHead", "pdt"}) {
+            String 표지_있음 = 정규화(본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
+                            .param("fromMs", Long.toString(RenderFixtures.CUT_IN))
+                            .param("toMs", Long.toString(RenderFixtures.CUT_IN + 10_000))
+                            .param("axis", axis)
+                            .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                    .andExpect(status().isOk())));
+            assertThat(표지_있음).as("axis=" + axis).isEqualTo(표지_없음);
+        }
+        JsonNode 응답 = MAPPER.readTree(표지_없음);
         assertThat(응답.has("audioCapture")).isTrue();
-        assertThat(응답.get("gapEvidence").isArray()).isTrue();
-    }
-
-    /** 모르는 표지는 400 {@code axis} 다 — 위 메아리 시험과 따로 두어 메아리가 깨져도 이 판정은 따로 돈다. */
-    @Test
-    void 원본_조각_주소는_모르는_표지면_400이다() throws Exception {
-        볼_수_있다("OWNER");
-        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
-        long wallIn = RenderFixtures.CUT_IN + 3_600_000;
-
-        mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
-                        .param("fromMs", Long.toString(wallIn))
-                        .param("toMs", Long.toString(wallIn + 10_000))
-                        .param("axis", "pdt")
-                        .header("Authorization", "Bearer " + TestTokens.access(요청자)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.field").value("axis"));
+        assertThat(표지_없음).doesNotContain("\"axis\"").doesNotContain("gapEvidence").doesNotContain("startWallUtcMs")
+                .doesNotContain("\"role\"").doesNotContain("isDiscontinuity").doesNotContain("followsLedgerPrevious");
     }
 
     /** 주소는 로그에 안 남는다: 한 줄 새면 그 조각이 수명 동안 열린다. 발급 줄 자체는 남는다(양성 대조). */
@@ -653,6 +633,12 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
 
     private static String 본문(ResultActions actions) throws Exception {
         return actions.andReturn().getResponse().getContentAsString();
+    }
+
+    /** 부를 때마다 바뀌는 두 값(만료 시각 · 서명 주소)만 자리표시로. */
+    private static String 정규화(String body) {
+        return body.replaceAll("\"expiresAt\":\"[^\"]*\"", "\"expiresAt\":\"<EXPIRES_AT>\"")
+                .replaceAll("\"url\":\"[^\"]*\"", "\"url\":\"<URL>\"");
     }
 
     /** 보관 기간(60일)이 지난 방송은 새로 렌더할 수 없다(POK-335): 410 vod_expired, 큐 · 표에 아무것도 안 남는다. 자격이 먼저다 */
