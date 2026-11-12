@@ -189,7 +189,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         }
     }
 
-    /** 단언 ⑥ — 채팅 위치(스트림 전체 floor 라 비귀속 u 안일 수 있다) 카드는 뒤 귀속 행 첫 화면으로 셋이 같다. */
+    /** 단언 ⑥ — 채팅 위치(스트림 전체 floor 라 비귀속 u 안일 수 있다) 카드는 뒤 귀속 행 첫 화면으로 둘이 같다. */
     @Test
     void d_비귀속_자리_채팅_카드는_뒤_귀속_행_첫_화면이다() {
         시드_d();
@@ -203,7 +203,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
 
     /** 단언 ⑦ — 옛 식(T − 기준점)으로 저장된 카드는 값을 안 고치고, 응답 · 썸네일이 그 값의 장면으로 같은 조각이다. */
     @Test
-    void d_옛_식으로_저장된_카드는_저장_값이_그대로이고_셋이_같은_조각이다() {
+    void d_옛_식으로_저장된_카드는_저장_값이_그대로이고_둘이_같은_조각이다() {
         시드_d();
 
         JumpCardSnapshot card = cards.recordHotkey("S-d", 주인, UUID.randomUUID().toString(), 25_000L).card();

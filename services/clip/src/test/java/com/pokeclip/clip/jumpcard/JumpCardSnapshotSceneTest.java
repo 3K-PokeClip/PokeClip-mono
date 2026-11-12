@@ -87,6 +87,21 @@ class JumpCardSnapshotSceneTest {
         assertThat(startEmpty.playerAtMs()).isEqualTo(106_000L);
     }
 
+    /**
+     * 카드 ms 장면은 있는데 그 행의 PDT 가 비면 {@code playerAtMs} 만 빈다 — 창 칸은 두 끝 장면에서 따로 서므로 그대로 선다(두 칸이
+     * 서로 다른 장면에서 나온다).
+     */
+    @Test
+    void 카드_ms_장면_행의_PDT가_비면_playerAtMs만_빈다() {
+        Row noPdt = new Row(2, 4_000, 4_000, 104_000, null, null, true, null);
+
+        JumpCardSnapshot snapshot = card(6_000, 1_000, 3_000).withScenes(Map.of(
+                6_000L, new Scene(noPdt, 2_000), 1_000L, new Scene(A, 1_000), 3_000L, new Scene(A, 3_000)));
+
+        assertThat(snapshot.playerAtMs()).isNull();
+        assertThat(snapshot.playerWindow()).isEqualTo(new PlayerWindow(101_000, 103_000));
+    }
+
     /** 끝이 시작보다 이른 PDT 로 풀리면(판 NULL 시각 역행 · 설계 r7 8.2) 끝을 시작에 묶는다. */
     @Test
     void 창_끝이_시작보다_이르면_시작에_묶는다() {
