@@ -1684,7 +1684,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `playerAtMs` | **목록 PDT 축** 절대 시각(epoch ms) — 플레이어 카드 클릭 이동(`seekToDate`)용. 판 2 · 판 NULL 모든 카드 |
 | `fileHead{atMs, startMs, endMs}` | **파일명 시각 축** 절대 시각(epoch ms) — 편집기 `/get` 축의 카드 자리와 기본 범위(`streamTimestampMs` · `window` 두 끝) |
 
-- 둘 다 **카드 장면 하나**에서 나온다(`CardPositionReader`): 카드 ms(`start_pts` 재생 위치 축)를 회차 귀속 행 위에서 F(`ledger-timeline` `locate` — 시작 ≤ 값인 행 가운데 seq 최대 · 겹침은 나중 조각)로 풀어 장면 `(조각 k, 거리 x)`를 고르고, `playerAtMs = playback_pdt(k) + x` · `fileHead.* = start_wall_utc(k) + x`(µs는 ms로 내림)다. 썸네일 주문 값(조각 · 거리 · 행 판 원점)도 이 장면에서 낸다 — 같은 조각이라는 것은 **계산된 주문 값**까지다. 🔴 실제 카드 사진 순회는 아직 지금 SQL(`ThumbnailTargets` — 시간창 안 덮는 행 · seq 최소)이고, 순회를 이 장면으로 옮기는 것은 PR-B2(S-c4)다. 그 전까지 틈 · 겹침 · 비귀속 자리 카드의 사진은 두 칸과 다른 조각이거나 아직 사진이 없을 수 있다(틈 · 비귀속 자리는 지금 SQL 에 덮는 행이 없어 사진 주문이 나가지 않을 수 있다. 겹침 예: 귀속 행 A `[0,4000)` · B `[3999,7999)` · 카드 3999 → 장면 B · 사진 A). 이미 찍힌 사진은 PR-B2 뒤 다시 찍지 않는다
+- 둘 다 **카드 장면 하나**에서 나온다(`CardPositionReader`): 카드 ms(`start_pts` 재생 위치 축)를 회차 귀속 행 위에서 F(`ledger-timeline` `locate` — 시작 ≤ 값인 행 가운데 seq 최대 · 겹침은 나중 조각)로 풀어 장면 `(조각 k, 거리 x)`를 고르고, `playerAtMs = playback_pdt(k) + x` · `fileHead.* = start_wall_utc(k) + x`(µs는 ms로 내림)다. 카드 사진 순회도 이 장면을 그대로 주문한다(조각 · 거리 · 행 판 원점 — 아래 「썸네일」 절). 🔴 순회가 이 장면으로 옮겨 오기 전(옛 SQL — 시간창 안 덮는 행 · seq 최소)에 이미 찍힌 사진은 다시 찍지 않아, 그 사진만 틈 · 겹침 · 비귀속 자리에서 두 칸과 다른 조각일 수 있다(겹침 예: 귀속 행 A `[0,4000)` · B `[3999,7999)` · 카드 3999 → 장면 B · 옛 사진 A)
 - **틈 안 카드는 뒤 귀속 행 첫 화면**(`(k′, 0)`) — 이어진 틈 · 재접속으로 끊긴 틈 · 비귀속 행 자리(채팅 카드 · 접힌 마크) 모두. 첫 귀속 행 앞은 첫 행 첫 화면
 - **`null`**: 카드 ms의 장면이 없으면(마지막 귀속 행 뒤 = 라이브 머리 · 회차 행 없음) 두 칸 모두. 창 끝 하나라도 장면이 없으면 `fileHead`만(셋을 함께 내는 칸이라 반쪽을 안 싣는다). 고른 행의 `playback_pdt`가 비면 `playerAtMs`만. 웹은 `null`이면 지금 식(기준점 + 카드 ms)으로 떨어진다. 장부를 못 읽거나(판 칸이 아직 없는 DB 등) 장부 값이 장면 계산의 전제를 깨도 카드는 나가고 두 칸만 빈다(WARN `jumpcard.scene_unavailable streamId= reason=<예외 이름>` — 방송 목록 기준점의 `broadcast.timeline_origin_failed`처럼 요청마다 남는다)
 - 창 두 끝은 같은 사상이라 `startMs ≤ endMs`이고, 판 NULL 벽시각 역행으로 끝이 이르면 끝을 시작에 묶는다
@@ -2824,9 +2824,9 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 
 | 자리 | 사진 | 어디서 찍나 |
 |---|---|---|
-| 라이브(`state=live` 목록 `thumbnailUrl`) | 가장 최근에 올라간 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
+| 라이브(`state=live` 목록 `thumbnailUrl`) | 회차 귀속 행 가운데 올라간 seq 최대 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
 | 지난 방송(`state=past` 목록 `thumbnailUrl`) | 가리지 않은 카드 중 **점수가 가장 높은** 카드의 사진(POK-463: 가린 카드는 대표가 아니다), 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
-| 카드(카드 목록 `thumbnailUrl`) | 카드 시각(`stream_timestamp_ms`, 조각 pts 축)이 든 조각의 그 자리 | 조각 창고. 조각이 올라온 뒤에 대상이 된다 |
+| 카드(카드 목록 `thumbnailUrl`) | 카드 장면(`CardPositionReader` — 위 「카드 장면 두 칸」): 카드 시각이 든 귀속 조각의 그 자리, 틈 · 비귀속 자리면 뒤 귀속 조각 첫 화면, 겹침이면 나중 조각 | 조각 창고. 장면 조각이 올라온 뒤에 주문이 나간다. 라이브 머리(마지막 귀속 행 뒤)는 장면이 없어 다음 행을 기다린다 |
 | 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드 시점(시각 기준점으로 재생 축에 맞춘다), 없으면 가운데 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
 
 - **순회**: `ThumbnailSweeper`가 `THUMBNAIL_INTERVAL`마다 라이브·카드·영상을 차례로 훑어 주문을 낸다. 카드·영상은 한 번에 50개, 사진이 안
@@ -2836,9 +2836,15 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
   2초마다 **명단의 카드만** 1분 순회와 같은 조건으로 본다. 조각이 아직 안 올라왔으면 명단에 남아 다음 2초에 다시 보고, 10분이 지나면 빠져 1분
   순회가 맡는다. 두 순회는 같은 「사진 없음 · 요청 5분 안 아님」 조건이라 같은 카드를 겹쳐 내지 않는다(같은 일정 스레드라 동시에도 안 돈다).
   표 전체를 2초마다 훑지 않는 이유: 카드 질의는 사진 없는 카드를 찾느라 표 끝까지 훑을 수 있다. 새 환경변수 없음.
-- **조각 찾기**: 물리 키(`COALESCE(ingest_stream_id, stream_id)`, POK-233) + 방송 시간(시작 2분 전 ~ 종료 10분 뒤)으로 자른다. 같은 키의 앞
-  방송 조각을 안 찍는다. `upload_state = 'uploaded'`만 쓴다.
-- **주문서**: `{"schemaVersion":1,"kind":"live|card|clip","targetId","capturedAt","source":{"bucket","s3Key","offsetMs"},"output":{"bucket","s3Key"}}`.
+- **조각 찾기**(POK-196): 방송의 **회차 귀속 행**(`RoundRows` — 위 「카드 장면 두 칸」)에서 고른다. 회차 머리 앞 · 회차 사이의 비귀속 행과 같은
+  물리 키의 앞 방송 조각은 안 찍는다. 머리 세션 행이 없는 옛 방송만 물리 키(`COALESCE(ingest_stream_id, stream_id)`, POK-233) + 방송 시간
+  (시작 2분 전부터 종료 10분 뒤까지)으로 자른다. `upload_state = 'uploaded'`만 쓴다. 카드 묶음(50장)이 여러 방송에 걸쳐도 장부 왕복은 회차 고르기
+  한 번 + 회차 행 한 번이다(방송마다 그 방송의 회차). 한 방송의 장부 값이 장면 계산의 전제를 깨면 그 방송 카드만 빠지고 WARN
+  `jumpcard.scene_unavailable`이 남는다.
+- **주문서**: `{"schemaVersion":1,"kind":"live|card|clip","targetId","capturedAt","source":{"bucket","s3Key","offsetMs","offsetOrigin"?},"output":{"bucket","s3Key"}}`.
+  `offsetMs`는 0 이상 정수(ms)다. `offsetOrigin`(카드 · 라이브만, POK-196)은 `offsetMs`를 조각 파일 안 어디서부터 재는가 — 고른 행의 판으로
+  정한다: 판 2 → `VIDEO_START`(영상 첫 표본) · 판 NULL → `FILE_HEAD`(파일 머리). 일꾼은 칸이 없으면 `FILE_HEAD`로 읽는다(`workers/render`
+  `ThumbnailJob`). 완성 영상(`clip`)은 결과 파일 안 자리라 칸을 싣지 않는다.
   사진 키는 clip이 정한다: `thumbnails/{kind}/{targetId}.jpg`(완성 영상 창고). 같은 대상은 늘 같은 키라 라이브 사진은 덮어써지고 쌓이지 않는다.
 - **보고 문**: `POST /internal/thumbnails` `{kind, targetId, capturedAt}`(`X-Internal-Token`). 200 `{"saved":true|false}`(false = 더 늦은
   장면이 이미 있어 안 덮음, 실패 아님) · 400 `invalid_thumbnail_report`(모양: 방송 번호는 `[A-Za-z0-9_-]`, 카드·영상 번호는 숫자). **키를 받지
@@ -2853,6 +2859,10 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 - **새 카드 명단은 메모리다**(POK-475). clip을 다시 띄우면 비고, 그 사이 생긴 카드는 1분 순회가 찍는다(그만큼 늦다). clip이 여러 대면
   각자 **자기가 만든 카드만** 빠르게 보고, 다른 clip이 만든 카드는 1분 순회 몫이다.
 - 라이브 카드는 그 시점 조각이 올라와야 찍는다. 로컬은 조각 올림 흉내가 30초 주기라 그만큼 늦고, 운영은 영상 서버가 조각이 닫히면 올린다.
+- **장면을 못 낸 카드도 후보 묶음(50장)에 든다**(POK-196). 장면은 질의가 아니라 카드 장면 함수가 고르므로, 장면이 없거나(끝난 방송의 마지막
+  귀속 행 뒤 · 회차 행 없음) 장면 조각이 끝내 안 올라간 카드는 주문 없이 사진 없음으로 남아 매 순회 묶음 자리를 차지한다(옛 질의는 덮는 조각이
+  올라간 카드만 골랐다). 새 카드는 번호가 커서 앞에 서므로 막히지 않고, 그런 카드가 50장 넘게 쌓이면 그보다 오래된 카드의 다시 찍기만 밀린다
+  (보관 기한이 지나면 후보에서 빠진다).
 - 카드 시각과 조각 pts는 방송 중 재접속·재시작으로 어긋날 수 있다(`timelineOriginAt`의 한계와 같은 뿌리).
 - 라이브 주문이 일꾼에서 늦게 처리되면 옛 장면이 같은 키를 잠깐 덮을 수 있다. 표의 시각은 되돌지 않고 다음 분에 다시 덮인다.
 

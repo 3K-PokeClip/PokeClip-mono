@@ -4,6 +4,8 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -18,7 +20,8 @@ import java.util.Optional;
 /**
  * 방송 회차의 <b>귀속 행</b>을 고르는 한 곳(POK-196 · 설계 r7 8.2 「회차 고르기」 · r6 S-c1). 기준점
  * ({@link TimelineOriginReader}) · 마크 저장 위치({@link ServerClockPosition}) · 카드 장면
- * ({@code CardPositionReader})이 모두 이 행 열 위에서 floor를 한다.
+ * ({@code CardPositionReader})이 모두 이 행 열 위에서 floor를 한다. 썸네일 순회(카드 사진 · 라이브 사진)도 이 행 열에서
+ * 조각을 고른다.
  *
  * <p><b>회차로 먼저 자른다</b>(계약-세그먼트인덱스 6-6-5). 방송 번호({@code broadcasts.stream_id})가 곧 회차 머리 세션의
  * {@code session_id}다(계약9). 머리 세션의 {@code round_id}가 있으면 같은 물리 키 · 같은 회차의 세션 전부, 비었으면(옛 회차)
@@ -59,10 +62,13 @@ public class RoundRows {
             UNION
             SELECT head_id, session_id FROM chain""";
 
+    private static final String ROW_FIELDS = """
+            s.seq, s.start_pts_ms, s.duration_ms, s.start_wall_utc, s.playback_pdt, s.timing_version,
+                   s.upload_state, s.s3_key""";
+
     private static final String ROW_COLUMNS = """
-            SELECT s.seq, s.start_pts_ms, s.duration_ms, s.start_wall_utc, s.playback_pdt, s.timing_version,
-                   s.upload_state
-              FROM public.stream_segments s""";
+            SELECT %s
+              FROM public.stream_segments s""".formatted(ROW_FIELDS);
 
     /** 회차 세션에 귀속된 행, seq 순. 색인 {@code stream_segments_session_idx (stream_id, session_id, seq)}. */
     static final String MEMBER_ROWS = ROW_COLUMNS + """
@@ -77,6 +83,62 @@ public class RoundRows {
                AND s.start_wall_utc >= ?
                AND s.start_wall_utc <= COALESCE(?::timestamptz, 'infinity'::timestamptz)
              ORDER BY s.seq""";
+
+    /**
+     * 회차 여럿의 행, 회차마다 seq 순(썸네일 순회 한 묶음 — 방송이 몇이든 왕복 한 번). 회차는 (열쇠, 물리 키, 세션) 쌍 배열로,
+     * 옛 방송 시간창은 (열쇠, 물리 키, 아래 끝, 위 끝) 배열로 받는다 — 방송마다 세션 수가 달라 2차원 배열로 못 싣는다
+     * ({@code TimelineOriginReader.ORIGINS_BY_ROUND}와 같은 꼴). 🔴 세션마다 {@code LATERAL} 로 읽는다 — 평범한 잇기면 계획기가
+     * 키 이력 전체를 훑어 해시 잇기를 고른다(2만 행 시드 실측 — {@code RoundRowsPlanTest}). 안쪽 {@code ORDER BY} 가 잇기로
+     * 펴지는 것을 막아 세션마다 {@code stream_segments_session_idx} 범위({@link #MEMBER_ROWS}와 같은 꼴)가 된다.
+     */
+    static final String BATCH_ROWS = """
+            SELECT m.round_key, r.*
+              FROM unnest(?::text[], ?::text[], ?::text[]) AS m(round_key, ingest_key, session_id)
+              CROSS JOIN LATERAL (
+                    SELECT %1$s
+                      FROM public.stream_segments s
+                     WHERE s.stream_id = m.ingest_key AND s.session_id = m.session_id
+                     ORDER BY s.seq) r
+            UNION ALL
+            SELECT w.round_key, r.*
+              FROM unnest(?::text[], ?::text[], ?::timestamptz[], ?::timestamptz[]) AS w(round_key, ingest_key, lo, hi)
+              CROSS JOIN LATERAL (
+                    SELECT %1$s
+                      FROM public.stream_segments s
+                     WHERE s.stream_id = w.ingest_key
+                       AND s.start_wall_utc >= w.lo
+                       AND s.start_wall_utc <= COALESCE(w.hi, 'infinity'::timestamptz)
+                     ORDER BY s.seq) r
+             ORDER BY round_key, seq""".formatted(ROW_FIELDS);
+
+    /**
+     * 회차 여럿의 올라간 최신 행 하나씩(라이브 사진 — r6 S-c4). 회차는 세션마다 올라간 seq 최대 행을 세션 색인 뒤쪽에서 하나
+     * 짚고 그 가운데 seq 최대를 쓴다. 옛 방송 시간창은 develop 라이브 조건 그대로(벽시각 최신 · 같으면 seq 최대). 매개변수
+     * 꼴은 {@link #BATCH_ROWS}와 같다.
+     */
+    static final String LATEST_UPLOADED = """
+            (SELECT DISTINCT ON (m.round_key) m.round_key, r.*
+               FROM unnest(?::text[], ?::text[], ?::text[]) AS m(round_key, ingest_key, session_id)
+               CROSS JOIN LATERAL (
+                     SELECT %1$s
+                       FROM public.stream_segments s
+                      WHERE s.stream_id = m.ingest_key AND s.session_id = m.session_id
+                        AND s.upload_state = 'uploaded'
+                      ORDER BY s.seq DESC
+                      LIMIT 1) r
+              ORDER BY m.round_key, r.seq DESC)
+            UNION ALL
+            (SELECT w.round_key, r.*
+               FROM unnest(?::text[], ?::text[], ?::timestamptz[], ?::timestamptz[]) AS w(round_key, ingest_key, lo, hi)
+               CROSS JOIN LATERAL (
+                     SELECT %1$s
+                       FROM public.stream_segments s
+                      WHERE s.stream_id = w.ingest_key
+                        AND s.upload_state = 'uploaded'
+                        AND s.start_wall_utc >= w.lo
+                        AND s.start_wall_utc <= COALESCE(w.hi, 'infinity'::timestamptz)
+                      ORDER BY s.start_wall_utc DESC, s.seq DESC
+                      LIMIT 1) r)""".formatted(ROW_FIELDS);
 
     /**
      * 회차 완결 술어(r6 S-c1 C6): 그 회차의 세션이 하나 이상이고 모두 끝났고 회차가 닫혔다. 생산자 종료 알림
@@ -114,10 +176,11 @@ public class RoundRows {
 
     /**
      * 회차 행 하나. 시각은 epoch ms다 — 벽시각({@code start_wall_utc})은 µs라 ms로 내린다. {@code pdtMs}는 빈 칸이면 null
-     * (귀속 행에는 늘 있으나 DB 제약은 아니다). {@code timingVersion}은 null(옛 식) 또는 2.
+     * (귀속 행에는 늘 있으나 DB 제약은 아니다). {@code timingVersion}은 null(옛 식) 또는 2. {@code s3Key}는 조각 창고 키다
+     * (썸네일 주문서가 싣는다).
      */
     public record Row(long seq, long startPtsMs, int durationMs, long wallMs, Long pdtMs, Integer timingVersion,
-                      boolean uploaded) {
+                      boolean uploaded, String s3Key) {
 
         /** 판 2 행인가. */
         public boolean v2() {
@@ -170,6 +233,74 @@ public class RoundRows {
         };
     }
 
+    /**
+     * 회차 여럿의 행(왕복 한 번 — 썸네일 순회 한 묶음이 여러 방송에 걸칠 때).
+     *
+     * @param rounds 열쇠(보통 방송 번호) → 회차
+     * @return 열쇠 → 행, seq 오름차순. 행이 없는 회차는 없다. 회차가 비면 DB 를 안 탄다
+     */
+    public Map<String, List<Row>> rowsOf(Map<String, Round> rounds) {
+        Map<String, List<Row>> rows = new HashMap<>();
+        if (rounds.isEmpty()) {
+            return rows;
+        }
+        jdbc.query(con -> bind(con, BATCH_ROWS, rounds), rs -> {
+            rows.computeIfAbsent(rs.getString("round_key"), k -> new ArrayList<>()).add(toRow(rs, 0));
+        });
+        return rows;
+    }
+
+    /**
+     * 회차 여럿의 올라간 최신 행(왕복 한 번 — 라이브 사진).
+     *
+     * @return 열쇠 → 행. 올라간 행이 없는 회차는 없다. 회차가 비면 DB 를 안 탄다
+     */
+    public Map<String, Row> latestUploadedOf(Map<String, Round> rounds) {
+        Map<String, Row> latest = new HashMap<>();
+        if (rounds.isEmpty()) {
+            return latest;
+        }
+        jdbc.query(con -> bind(con, LATEST_UPLOADED, rounds), rs -> {
+            latest.put(rs.getString("round_key"), toRow(rs, 0));
+        });
+        return latest;
+    }
+
+    /** {@link #BATCH_ROWS} · {@link #LATEST_UPLOADED} 의 매개변수 일곱 — 회차 몫 (열쇠, 키, 세션) · 시간창 몫 (열쇠, 키, 끝 둘). */
+    private static PreparedStatement bind(Connection con, String sql, Map<String, Round> rounds) throws SQLException {
+        List<String> memberOf = new ArrayList<>();
+        List<String> memberKey = new ArrayList<>();
+        List<String> memberSession = new ArrayList<>();
+        List<String> windowOf = new ArrayList<>();
+        List<String> windowKey = new ArrayList<>();
+        List<Timestamp> lows = new ArrayList<>();
+        List<Timestamp> highs = new ArrayList<>();
+        rounds.forEach((key, round) -> {
+            switch (round) {
+                case Members m -> m.sessionIds().forEach(session -> {
+                    memberOf.add(key);
+                    memberKey.add(m.ingestKey());
+                    memberSession.add(session);
+                });
+                case TimeWindow w -> {
+                    windowOf.add(key);
+                    windowKey.add(w.ingestKey());
+                    lows.add(Timestamp.from(w.lo()));
+                    highs.add(w.hi() == null ? null : Timestamp.from(w.hi()));
+                }
+            }
+        });
+        PreparedStatement ps = con.prepareStatement(sql);
+        ps.setArray(1, con.createArrayOf("text", memberOf.toArray()));
+        ps.setArray(2, con.createArrayOf("text", memberKey.toArray()));
+        ps.setArray(3, con.createArrayOf("text", memberSession.toArray()));
+        ps.setArray(4, con.createArrayOf("text", windowOf.toArray()));
+        ps.setArray(5, con.createArrayOf("text", windowKey.toArray()));
+        ps.setArray(6, con.createArrayOf("timestamptz", lows.toArray()));
+        ps.setArray(7, con.createArrayOf("timestamptz", highs.toArray()));
+        return ps;
+    }
+
     /** @param sessionId 회차의 아무 세션(보통 머리) */
     public boolean roundComplete(String sessionId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(ROUND_COMPLETE, Boolean.class, sessionId));
@@ -201,6 +332,7 @@ public class RoundRows {
                 rs.getTimestamp("start_wall_utc").toInstant().toEpochMilli(),
                 pdt == null ? null : pdt.toInstant().toEpochMilli(),
                 timingVersion,
-                "uploaded".equals(rs.getString("upload_state")));
+                "uploaded".equals(rs.getString("upload_state")),
+                rs.getString("s3_key"));
     }
 }

@@ -3,6 +3,7 @@ package com.pokeclip.clip.thumbnail;
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardCreated;
+import com.pokeclip.clip.segment.OffsetOrigin;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,8 +29,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * 1분마다 사진 주문을 낸다(POK-277). 세 갈래를 차례로 훑는다.
  *
  * <ul>
- *   <li><b>라이브</b>: 방송 중인 방송마다 가장 최근에 올라간 조각의 가운데 장면. 지난번 사진과 같은 조각이면 안 낸다.</li>
- *   <li><b>카드</b>: 사진이 없는 카드의 시점 장면. 조각이 올라온 뒤에야 대상이 된다.</li>
+ *   <li><b>라이브</b>: 방송 중인 방송마다 회차에서 가장 최근에 올라간 조각의 가운데 장면. 지난번 사진과 같은 조각이면 안
+ *       낸다.</li>
+ *   <li><b>카드</b>: 사진이 없는 카드의 장면(카드 장면 함수 — 틈 안이면 뒤 조각 첫 화면 · POK-196). 장면 조각이 올라온 뒤에야
+ *       주문이 나간다.</li>
  *   <li><b>완성 영상</b>: 영상 구간 안 최고 점수 카드 시점, 없으면 영상 가운데. 완성 영상 파일에서 뽑는다(보관함이 세로 영상이라
  *       원본 조각이 아니라 실제 결과물의 장면이어야 한다).</li>
  * </ul>
@@ -149,7 +152,7 @@ public class ThumbnailSweeper {
             if (previous != null && !shotAt.isAfter(previous)) {
                 continue; // 새 조각이 없다(송출이 멈췄다). 같은 장면을 다시 찍지 않는다
             }
-            send(ThumbnailKind.LIVE, row.streamId(), segmentBucket, row.s3Key(), offsetMs, shotAt);
+            send(ThumbnailKind.LIVE, row.streamId(), segmentBucket, row.s3Key(), offsetMs, row.offsetOrigin(), shotAt);
             sent++;
         }
         log.debug("thumbnail.sweep kind=live candidates={} sent={}", rows.size(), sent);
@@ -193,8 +196,7 @@ public class ThumbnailSweeper {
 
     private void orderCard(ThumbnailTargets.Card row, Instant now) {
         String target = String.valueOf(row.id());
-        send(ThumbnailKind.CARD, target, segmentBucket, row.s3Key(),
-                row.streamTimestampMs() - row.segmentStartPtsMs(), now);
+        send(ThumbnailKind.CARD, target, segmentBucket, row.s3Key(), row.offsetMs(), row.offsetOrigin(), now);
         thumbnails.markRequested(ThumbnailKind.CARD, target, now);
     }
 
@@ -209,7 +211,7 @@ public class ThumbnailSweeper {
                 thumbnails.markGivenUp(ThumbnailKind.CLIP, target, MAX_ATTEMPTS, now);
                 continue;
             }
-            send(ThumbnailKind.CLIP, target, outputBucket, video, clipOffsetMs(row), now);
+            send(ThumbnailKind.CLIP, target, outputBucket, video, clipOffsetMs(row), null, now);
             thumbnails.markRequested(ThumbnailKind.CLIP, target, now);
         }
         if (!rows.isEmpty()) {
@@ -259,8 +261,12 @@ public class ThumbnailSweeper {
     /**
      * 주문서. 일꾼은 {@code source}를 받아 {@code offsetMs} 자리의 한 장면을 jpg로 만들어 {@code output}에 올리고
      * {@code POST /internal/thumbnails}로 {@code kind}·{@code targetId}·{@code capturedAt}을 돌려준다.
+     *
+     * @param origin 조각 안 {@code offsetMs}를 어디서부터 재나(카드 · 라이브 — 고른 행의 판 · POK-196). 완성 영상은 결과 파일 안
+     *               자리라 칸을 싣지 않는다(null)
      */
-    private void send(ThumbnailKind kind, String targetId, String bucket, String key, long offsetMs, Instant capturedAt) {
+    private void send(ThumbnailKind kind, String targetId, String bucket, String key, long offsetMs,
+                      OffsetOrigin origin, Instant capturedAt) {
         ObjectNode root = mapper.createObjectNode();
         root.put("schemaVersion", 1);
         root.put("kind", kind.value());
@@ -270,6 +276,9 @@ public class ThumbnailSweeper {
         source.put("bucket", bucket);
         source.put("s3Key", key);
         source.put("offsetMs", Math.max(0, offsetMs));
+        if (origin != null) {
+            source.put("offsetOrigin", origin.name());
+        }
         ObjectNode output = root.putObject("output");
         output.put("bucket", outputBucket);
         output.put("s3Key", kind.keyOf(targetId));

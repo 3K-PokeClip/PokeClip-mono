@@ -8,6 +8,8 @@ import com.pokeclip.clip.segment.RoundRows.Row;
 import com.pokeclip.ledger.timeline.LedgerRow;
 import com.pokeclip.ledger.timeline.LedgerTimeline;
 import com.pokeclip.ledger.timeline.Place;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
@@ -31,12 +33,14 @@ import java.util.Optional;
  *   <li>마지막 귀속 행 뒤(라이브 머리 — 다음 행이 아직 없음) → 장면 없음. 셋 모두 없고 웹은 지금 식으로 떨어진다</li>
  * </ul>
  *
- * <p><b>왕복 두 번</b>: 회차 고르기 한 번 + 회차 행 한 번이고 값이 몇 개든 같다(목록 한 장 · 카드 한 장 모두). 회차 행을 한
- * 번에 읽어 값마다 메모리에서 F 를 돈다 — 장부에 {@code start_pts_ms} 색인이 없어 값마다 {@code LATERAL} 로 floor 를 찾으면
- * 값마다 회차 행을 훑는다.
+ * <p><b>왕복 두 번</b>: 회차 고르기 한 번 + 회차 행 한 번이고 값이 몇 개든 같다(목록 한 장 · 카드 한 장 · 여러 방송에 걸친
+ * 썸네일 순회 한 묶음 모두). 회차 행을 한 번에 읽어 값마다 메모리에서 F 를 돈다 — 장부에 {@code start_pts_ms} 색인이 없어
+ * 값마다 {@code LATERAL} 로 floor 를 찾으면 값마다 회차 행을 훑는다.
  */
 @Component
 public class CardPositionReader {
+
+    private static final Logger log = LoggerFactory.getLogger(CardPositionReader.class);
 
     /** 썸네일 일꾼에 낼 카드 장면 — 조각 {@code seq} 안 {@code offsetMs}, 원점은 행 판. */
     public record ThumbnailOrder(long seq, long offsetMs, OffsetOrigin offsetOrigin) {
@@ -71,7 +75,7 @@ public class CardPositionReader {
 
     private final RoundRows rounds;
 
-    CardPositionReader(RoundRows rounds) {
+    public CardPositionReader(RoundRows rounds) {
         this.rounds = rounds;
     }
 
@@ -89,6 +93,30 @@ public class CardPositionReader {
             return Map.of();
         }
         return scenesOf(rounds.rowsOf(round.get()), values);
+    }
+
+    /**
+     * 여러 방송 카드 값들의 장면(썸네일 순회 한 묶음). 방송마다 그 방송의 회차 행 위에서 풀고, 방송이 몇이든 왕복 두 번이다(회차
+     * 고르기 한 번 + 회차 행 한 번 · 계획 착수 체크리스트 C4). 한 방송의 장부 값이 장면 계산의 전제를 깨면(공통 모듈의 행 열
+     * 검사 등) 그 방송만 빼고 {@code jumpcard.scene_unavailable} 을 남긴다 — 묶음 전체가 실패하면 그 카드가 묶음에 남는 동안
+     * 다른 방송 카드 사진도 멈춘다. 장부 읽기 실패는 그대로 던진다.
+     *
+     * @param values 방송 번호 → 카드 값
+     * @return 방송 번호 → (값 → 장면). 장면이 없는 값 · 회차가 없는 방송은 없다. 방송이 비면 DB 를 안 탄다
+     */
+    public Map<String, Map<Long, Scene>> scenesOf(List<Broadcast> broadcasts,
+                                                  Map<String, ? extends Collection<Long>> values) {
+        Map<String, List<Row>> rows = rounds.rowsOf(rounds.roundsOf(broadcasts));
+        Map<String, Map<Long, Scene>> scenes = new HashMap<>();
+        rows.forEach((streamId, roundRows) -> {
+            Collection<Long> of = values.get(streamId);
+            try {
+                scenes.put(streamId, scenesOf(roundRows, of == null ? List.of() : of));
+            } catch (RuntimeException e) {
+                log.warn("jumpcard.scene_unavailable streamId={} reason={}", streamId, e.getClass().getSimpleName());
+            }
+        });
+        return scenes;
     }
 
     /** @param rows 회차 행, seq 오름차순 */

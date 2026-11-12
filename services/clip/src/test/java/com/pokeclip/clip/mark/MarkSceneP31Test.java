@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * P31(설계 r7 16.2 · 계획 8.2) — 카드 · 마크 ↔ 플레이어 · 편집기 · 썸네일. 한 카드의 썸네일 주문 값 · {@code fileHead} ·
  * {@code playerAtMs} 가 같은 장면에서 나오고, 마크는 회차 귀속 행에서 행별로 저장되는지 시드 (a)–(g) 와 999ms 겹침 사례로
- * 잰다. 썸네일은 이 커밋에서 주문 경로에 닿지 않아 {@link CardPositionReader}의 주문 값으로 단언한다(실제 주문은 S-c4).
+ * 잰다. 썸네일은 {@link CardPositionReader}의 주문 값으로 단언한다 — 실제 주문서는 {@code thumbnail.CardThumbnailSceneTest}.
  *
  * <p>시각은 {@link LedgerSeed#BASE}에서 잰 ms다. 응답의 두 칸은 절대 시각(epoch ms)이라 {@link #abs}로 맞댄다.
  */
