@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { demuxAudioTracks, demuxSegmentAudio, toAdts } from './fmp4Audio';
+import { demuxSegmentAudio, toAdts } from './fmp4Audio';
 
 // 시험 조각은 ffmpeg로 만든 1초짜리 fMP4다(영상 1 + 소리 3, 상자 모양은 녹화 조각과 같다: ftyp·moov·moof/mdat 여러 쌍).
 // 소리 트랙마다 표본 빈도·채널을 다르게 해 「파일 순서대로 꺼냈나」가 값으로 드러난다. 프레임 수는 ffprobe -count_packets 값.
@@ -14,8 +14,8 @@ const FREQUENCIES = [
   96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
 ];
 
-describe('demuxAudioTracks: 조각 하나에서 소리 트랙을 파일 순서대로 꺼낸다', () => {
-  const tracks = demuxAudioTracks(fixture);
+describe('demuxSegmentAudio: 조각 하나에서 소리 트랙을 파일 순서대로 꺼낸다', () => {
+  const tracks = demuxSegmentAudio(fixture).audio;
 
   it('영상 트랙은 빼고 소리 트랙 셋을 파일 순서대로 준다: 렌더의 [0:a:N]과 같은 번호다', () => {
     expect(tracks).toHaveLength(3);
@@ -36,14 +36,14 @@ describe('demuxAudioTracks: 조각 하나에서 소리 트랙을 파일 순서�
   });
 
   it('소리 트랙이 없거나 상자가 깨졌으면 빈 목록이다(던지지 않는다)', () => {
-    expect(demuxAudioTracks(new Uint8Array(0))).toEqual([]);
-    expect(demuxAudioTracks(fixture.subarray(0, 40))).toEqual([]);
+    expect(demuxSegmentAudio(new Uint8Array(0)).audio).toEqual([]);
+    expect(demuxSegmentAudio(fixture.subarray(0, 40)).audio).toEqual([]);
   });
 });
 
 describe('toAdts: 브라우저가 풀 수 있게 프레임마다 ADTS 머리(7바이트)를 붙인다', () => {
   it('머리의 동기 표시·길이·설정이 맞고 프레임이 이어 붙는다', () => {
-    const first = demuxAudioTracks(fixture)[0]!;
+    const first = demuxSegmentAudio(fixture).audio[0]!;
     const adts = toAdts(first);
     let offset = 0;
     let count = 0;
@@ -126,7 +126,7 @@ function fullBox(
   return box(type, u32(((version << 24) | flags) >>> 0), ...payload);
 }
 
-/** mp4a 표본 항목(AAC LC · 그 빈도 번호 · 1채널). demuxAudioTracks 가 읽는 esds 모양 그대로 */
+/** mp4a 표본 항목(AAC LC · 그 빈도 번호 · 1채널). demuxSegmentAudio 가 읽는 esds 모양 그대로 */
 function mp4a(frequencyIndex: number): Uint8Array {
   const asc = ((2 << 11) | (frequencyIndex << 7) | (1 << 3)) & 0xffff;
   const decoderConfig = concat(new Uint8Array(13), Uint8Array.of(0x05, 2, asc >> 8, asc & 0xff));
@@ -204,14 +204,6 @@ describe('demuxSegmentAudio: 녹화 조각의 트랙별 첫 DTS · PTS 와 times
       expect(track.timing).toEqual({ firstDts: 0, firstPts: 0 });
       expect(track.frames).toHaveLength(6);
     }
-  });
-
-  it('소리 트랙의 프레임 · 설정은 demuxAudioTracks 와 같다(파일 순서 · 렌더의 [0:a:N] 번호)', () => {
-    const seg = demuxSegmentAudio(fixture);
-
-    expect(seg.audio.map(({ config, frames }) => ({ config, frames }))).toEqual(
-      demuxAudioTracks(fixture),
-    );
   });
 
   it('timescale 이 다른 트랙은 각자 자기 timescale 로 초가 된다(영상 90,000 · 소리 44,100 · 48,000)', () => {

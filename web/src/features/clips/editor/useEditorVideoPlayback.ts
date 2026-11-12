@@ -73,6 +73,12 @@ export interface EditorVideoPlayback {
   targetWindow: { startSeconds: number; endSeconds: number } | null;
   /** 받은 창의 배치(Blob 시각 ↔ 편집기 초). 아직 못 받았으면 null */
   placement: WindowPlacement | null;
+  /** 지금 받으려는 창(열쇠 · 조각) — 트랙 미리 듣기가 같은 창 조각의 소리를 함께 받는다. 못 정했으면 null */
+  target: WindowTarget | null;
+  /** 받은 창(열쇠 · 다시 싼 결과 · 배치) — 트랙 미리 듣기가 소리를 이 창 Blob 시각에 놓는다. 아직 못 받았으면 null */
+  loaded: { key: string; remuxed: RemuxedWindow; placement: WindowPlacement | null } | null;
+  /** 받다 실패한 창의 열쇠(받기 · 다시 싸기) — 트랙 미리 듣기가 그 창 닻 기다림을 끝낸다. 실패가 없으면 null */
+  failedKey: string | null;
   /** 받은 창의 Blob 시크 한계(첫 영상 프레임 · 끝 반 프레임 — kty M1 처분). 아직 못 받았으면 null */
   seekLimits: SeekLimits | null;
   /** 영상이 끊겨 기다리는 중(POK-439). 첫 mp4를 받는 동안은 영상 노드에 소스가 없어 거짓이다 */
@@ -236,9 +242,10 @@ function useWindowMedia(options: {
   source: EditorWindowSource;
   setFailure: (failure: PlaybackError | null) => void;
   onReplaced: (placement: WindowPlacement | null) => void;
-}): Placed | null {
+}): { placed: Placed | null; failedKey: string | null } {
   const { target, streamId, mediaKey, base, setFailure } = options;
   const [placed, setPlaced] = useState<Placed | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
   const reportRef = useRef(options.source.reportSegmentFailure);
   reportRef.current = options.source.reportSegmentFailure;
   const onReplacedRef = useRef(options.onReplaced);
@@ -247,6 +254,7 @@ function useWindowMedia(options: {
 
   useEffect(() => {
     setFailure(null);
+    setFailedKey(null);
     if (target === null) {
       setPlaced(null);
       return undefined;
@@ -266,7 +274,9 @@ function useWindowMedia(options: {
         setPlaced({ target, remuxed, src: URL.createObjectURL(remuxed.blob), placement });
       })
       .catch((e: unknown) => {
-        if (!abort.signal.aborted) setFailure(windowFailureOf(e, target, reportRef.current));
+        if (abort.signal.aborted) return;
+        setFailure(windowFailureOf(e, target, reportRef.current));
+        setFailedKey(target.key);
       });
     return () => abort.abort();
   }, [target, streamId, mediaKey, base, heads, setFailure]);
@@ -296,7 +306,7 @@ function useWindowMedia(options: {
     return () => URL.revokeObjectURL(src);
   }, [src]);
 
-  return placed;
+  return { placed, failedKey };
 }
 
 /** 원천 상태(D3)와 받은 목록 — 보기 상태 · 목록 끝 · 개요 끝 */
@@ -382,7 +392,7 @@ export function useEditorVideoPlayback(options: {
     },
     [clock],
   );
-  const placed = useWindowMedia({
+  const { placed, failedKey } = useWindowMedia({
     target,
     streamId,
     mediaKey,
@@ -527,6 +537,13 @@ export function useEditorVideoPlayback(options: {
   );
   const placement = placed?.placement ?? null;
   const remuxedWindow = placed?.remuxed ?? null;
+  const loaded = useMemo(
+    () =>
+      loadedTarget === null || remuxedWindow === null
+        ? null
+        : { key: loadedTarget.key, remuxed: remuxedWindow, placement },
+    [loadedTarget, remuxedWindow, placement],
+  );
   const seekLimits = useMemo(
     () => (remuxedWindow === null ? null : seekLimitsOf(remuxedWindow)),
     [remuxedWindow],
@@ -540,6 +557,9 @@ export function useEditorVideoPlayback(options: {
     window: loadedWindow,
     targetWindow,
     placement,
+    target,
+    loaded,
+    failedKey,
     seekLimits,
     buffering,
   };

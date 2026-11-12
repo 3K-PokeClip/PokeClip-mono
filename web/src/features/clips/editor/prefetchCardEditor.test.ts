@@ -9,7 +9,13 @@ import {
 } from '@/api/clipEditor';
 import { jsonResponse } from '@/test/mockFetch';
 import { useAuthStore } from '@/stores/auth';
-import { clearEditorMedia, editorWindowKey, windowBlobs } from './editorMedia';
+import {
+  clearEditorMedia,
+  editorWindowKey,
+  segmentTrackKey,
+  segmentTracks,
+  windowBlobs,
+} from './editorMedia';
 import {
   forgetPrefetchLists,
   prefetchCardEditor,
@@ -20,8 +26,9 @@ import {
 import type { EditorSourceState } from './source/editorSourceState';
 import type { PlaylistSegment } from './source/editorPlaylist';
 import type { RemuxedWindow } from './source/remuxWindow';
+import type { WindowPlacement } from './source/windowPlacement';
 import type { EditorSourceSnapshot, SourceList } from './source/useEditorSource';
-import { SegmentsNotReadyError, type TrackPiece } from './trackAudio/loadTrackAudio';
+import { SegmentsNotReadyError, windowAnchors, type TrackPiece } from './trackAudio/loadTrackAudio';
 import { useTrackPreview } from './trackAudio/useTrackPreview';
 import { decideWindow, ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
 import { headCacheFor } from './source/fileHeadProbe';
@@ -129,7 +136,8 @@ const BUFFER = {
   numberOfChannels: 1,
   getChannelData: () => new Float32Array(100).fill(0.5),
 } as unknown as AudioBuffer;
-const TRACKS: TrackPiece[][] = [[{ startSeconds: 40, buffer: BUFFER }]];
+/** 창 Blob 시각 0–52초를 한 덩어리로 덮는 소리(창 40–92초 · Δ 40초) */
+const TRACKS: TrackPiece[][] = [[{ startSeconds: 0, buffer: BUFFER }]];
 
 function depsWith(overrides: Partial<PrefetchDeps> = {}): PrefetchDeps {
   return {
@@ -162,10 +170,13 @@ describe('prefetchCardEditor', () => {
     expect(seqsOf(segs)).toEqual(WINDOW_SEQS);
     expect(vi.mocked(deps.ensureWindowHeads).mock.calls[0]!.slice(0, 2)).toEqual(['7', '7']);
     expect(windowBlobs.get(editorWindowKey('7', 110, 122))).toBeDefined();
-    // 소리는 창 조각이 덮는 범위(40–92초)
-    expect(deps.loadSegmentTracks).toHaveBeenCalledWith(
-      expect.objectContaining({ streamId: '7', fromMs: STARTED + 40_000, toMs: STARTED + 92_000 }),
-    );
+    // 소리는 창 조각(110–122)을 받아 그 창을 다시 싼 결과의 Blob 닻에 놓는다
+    const [options] = vi.mocked(deps.loadSegmentTracks).mock.calls[0]!;
+    expect(options.streamId).toBe('7');
+    expect(seqsOf(options.segs as PlaylistSegment[])).toEqual(WINDOW_SEQS);
+    await expect(options.anchors()).resolves.toEqual(windowAnchors(remux.of(WINDOW_SEQS)));
+    // 맡긴 소리의 열쇠는 창 조각 seq 범위다(편집기의 미리 듣기가 같은 창에서 같은 열쇠를 낸다)
+    expect(segmentTracks.get(segmentTrackKey('7', 110, 122))).toBe(TRACKS);
   });
 
   it('편집기와 미리 받기는 같은 카드에서 같은 범위(cardEndpoints — estimate) · 같은 창 열쇠를 낸다', async () => {
@@ -299,8 +310,8 @@ describe('prefetchCardEditor', () => {
   });
 
   it('방송 중에 소리 조각이 덜 올라와 창을 다 못 덮으면 맡기지 않고 pending이다', async () => {
-    // 40–92초 창에서 40–60초만 왔다
-    const partial: TrackPiece[][] = [[{ startSeconds: 40, buffer: { ...BUFFER, duration: 20 } }]];
+    // 40–92초 창(Blob 0–52초)에서 앞 20초만 왔다
+    const partial: TrackPiece[][] = [[{ startSeconds: 0, buffer: { ...BUFFER, duration: 20 } }]];
     const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(partial)) });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
     // 맡기지 않았으니 다음 확인에서 다시 받는다
@@ -311,16 +322,31 @@ describe('prefetchCardEditor', () => {
   it('조각 사이가 비어 덩어리가 둘이어도 덜 덮은 것이다', async () => {
     const split: TrackPiece[][] = [
       [
-        { startSeconds: 40, buffer: { ...BUFFER, duration: 20 } },
-        { startSeconds: 64, buffer: { ...BUFFER, duration: 28 } },
+        { startSeconds: 0, buffer: { ...BUFFER, duration: 20 } },
+        { startSeconds: 24, buffer: { ...BUFFER, duration: 28 } },
       ],
     ];
     const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(split)) });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
   });
 
+  it('겹침을 잘라 덩어리가 둘이어도 빈틈없이 이어 창을 덮으면 다 덮은 것이다: 맡기고 다시 받지 않는다(E9)', async () => {
+    // 판 2 이음 겹침으로 앞 덩어리 꼬리를 프레임 경계에서 잘랐다 — 다음 덩어리는 앞 덩어리 끝(20초)에서 프레임 하나가 안 되는
+    // 20ms 뒤에 붙는다(32kHz 프레임 32ms)
+    const cut: TrackPiece[][] = [
+      [
+        { startSeconds: 0, buffer: { ...BUFFER, duration: 20 } },
+        { startSeconds: 20.02, buffer: { ...BUFFER, duration: 31.98 } },
+      ],
+    ];
+    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(cut)) });
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+    expect(deps.loadSegmentTracks).toHaveBeenCalledTimes(1);
+  });
+
   it('끝난 방송이면 덜 덮은 소리도 그대로 맡긴다: 더 올라올 조각이 없다', async () => {
-    const partial: TrackPiece[][] = [[{ startSeconds: 40, buffer: { ...BUFFER, duration: 20 } }]];
+    const partial: TrackPiece[][] = [[{ startSeconds: 0, buffer: { ...BUFFER, duration: 20 } }]];
     const deps = depsWith({
       fetchBroadcast: vi.fn(() => Promise.resolve(ENDED)),
       readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(100, 160), 'vod')))),
@@ -466,8 +492,18 @@ describe('미리 받은 카드를 편집기가 열면 다시 받지 않는다', 
     const { result } = renderHook(() =>
       useTrackPreview({
         streamId: '7',
-        baseMs: STARTED,
-        window: { startSeconds: 40, endSeconds: 92 },
+        window: {
+          key: editorWindowKey('7', 110, 122),
+          segs: listOf(WINDOW_SEQS).playlist.rows,
+          startSeconds: 40,
+          endSeconds: 92,
+        },
+        // 편집기 영상이 같은 창을 받았다(창 S 40초 = Blob 0초)
+        loaded: {
+          key: editorWindowKey('7', 110, 122),
+          remuxed: remux.of(WINDOW_SEQS),
+          placement: { blobAtS: (s: number) => s - 40 } as unknown as WindowPlacement,
+        },
         video: null,
         createContext: () =>
           ({

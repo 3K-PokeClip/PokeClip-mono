@@ -8,6 +8,8 @@ import { act, StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient, renderWithProviders } from '@/test/testProviders';
+import { clearEditorMedia, segmentTrackKey, segmentTracks } from '../editorMedia';
+import { remuxWindow } from '../source/remuxWindow';
 import { StudioScreen } from './StudioScreen';
 
 // 실제 모드 편집기(POK-251) — 주소(?stream=&card= · ?recipe=)로 열어 clip에 저장·주문하는 길을 잰다.
@@ -535,6 +537,57 @@ describe('StudioScreen — 편집기 영상 원천(POK-473 · POK-233)', () => {
     // 카드 창 60–72.4초 ± 10초 = 50–82.4초 → 조각 12(48–52초) … 20(80–84초)
     await waitFor(() => expect(requestsTo(/\.m4s$/)).toHaveLength(9));
     expect(requestsTo(/\/playback\//)).toEqual([]);
+  });
+
+  it('트랙 미리 듣기가 다시 켜진다: 영상 창 조각이 덮는 범위의 소리 주소를 표지 없이 한 번 묻는다(c9′)', async () => {
+    withMediaControl();
+    // 판 2 창이라 ② 머리는 읽지 않는다 — 소리 주소를 묻는 것은 미리 듣기 하나다
+    server.timing = 'v2';
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        state = 'running';
+        currentTime = 0;
+        destination = {};
+        close = () => Promise.resolve();
+      },
+    );
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    // 창 조각 12(48–52초) … 20(80–84초) → [48초, 84초)
+    await waitFor(() => expect(requestsTo(/\/segments\/audio-access/)).toHaveLength(1));
+    const [asked] = requestsTo(/\/segments\/audio-access/);
+    const query = new URL(asked!, 'http://localhost').searchParams;
+    expect(Object.fromEntries(query)).toEqual({
+      fromMs: String(STARTED_AT + 48_000),
+      toMs: String(STARTED_AT + 84_000),
+    });
+  });
+
+  it('영상 창을 다시 싸다 실패하면 미리 받아 둔 소리도 닻을 더 기다리지 않고 「못 불러옴」을 알린다(c9′)', async () => {
+    withMediaControl();
+    server.timing = 'v2';
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        state = 'running';
+        currentTime = 0;
+        destination = {};
+        close = () => Promise.resolve();
+      },
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // 카드가 미리 받아 둔 창 조각 12–20 의 소리 — 영상 창은 받다 실패해 그 창의 닻이 오지 않는다
+    const buffer = { duration: 1, length: 1, sampleRate: 1, numberOfChannels: 1 } as AudioBuffer;
+    segmentTracks.set(segmentTrackKey(STREAM_ID, 12, 20), [[{ startSeconds: 0, buffer }]]);
+    vi.mocked(remuxWindow).mockRejectedValueOnce(new Error('재다중화 패킷 수가 다르다'));
+    try {
+      await openWithSource(`?stream=${STREAM_ID}&card=5`);
+      expect(
+        await screen.findByText('트랙별 미리 듣기를 못 불러왔어요 · 영상 소리로 들려요'),
+      ).toBeInTheDocument();
+    } finally {
+      clearEditorMedia();
+    }
   });
 
   it('목록을 받기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 목록은 쿠키가 없으면 403)', async () => {

@@ -93,18 +93,6 @@ interface TrackInfo {
   defaultSize: number;
 }
 
-/** 녹화 조각 하나 → 소리 트랙들(파일 순서). 소리 트랙이 없거나 모양을 모르면 빈 목록이다 */
-export function demuxAudioTracks(data: ArrayBuffer | Uint8Array): AudioTrackFrames[] {
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  try {
-    return demux(view, bytes).map(({ audio }) => audio);
-  } catch {
-    // 잘린 파일 등에서 범위를 넘어 읽으면 RangeError다: 화면은 빈 목록을 「못 꺼냄」으로 다룬다.
-    return [];
-  }
-}
-
 /** 조각 안 한 트랙의 시작 시각(초). 트랙마다 자기 timescale 로 먼저 초로 바꾼 파일 안 값이다 */
 export interface TrackTiming {
   /**
@@ -129,13 +117,16 @@ export interface SegmentAudioTrack extends AudioTrackFrames, SegmentTrack {}
  * D2 = video.timing.firstDts · 「트랙 i 첫 PTS」 = audio[i].timing.firstPts
  */
 export interface SegmentTracks {
-  /** 소리 트랙(파일 순서 — demuxAudioTracks 와 같은 번호) */
+  /** 소리 트랙(파일 순서 — 렌더의 [0:a:N] 과 같은 번호) */
   audio: SegmentAudioTrack[];
   /** 파일 순서로 첫 영상 트랙. 영상 트랙이 없으면 null */
   video: SegmentTrack | null;
 }
 
-/** 녹화 조각 하나 → 소리 트랙들과 트랙별 시각. 모양을 모르면 빈 결과다(demuxAudioTracks 와 같은 관례) */
+/**
+ * 녹화 조각 하나 → 소리 트랙들과 트랙별 시각. 소리 트랙이 없거나 모양을 모르면 빈 결과다(던지지 않는다 — 잘린 파일 등에서 범위를
+ * 넘어 읽은 RangeError 도 빈 결과로 접는다). 화면은 빈 결과를 「못 꺼냄」으로 다룬다
+ */
 export function demuxSegmentAudio(data: ArrayBuffer | Uint8Array): SegmentTracks {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

@@ -18,8 +18,9 @@ import type { RemuxedWindow } from './source/remuxWindow';
 import { readEditorSourceOnce, type EditorSourceSnapshot } from './source/useEditorSource';
 import { decideWindow, ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
 import {
-  GAP_TOLERANCE_MS,
+  MAX_SEAM_SECONDS,
   SegmentsNotReadyError,
+  windowAnchors,
   type TrackPiece,
 } from './trackAudio/loadTrackAudio';
 import { loadSegmentTracks, PREVIEW_SAMPLE_RATE } from './trackAudio/useTrackPreview';
@@ -163,17 +164,30 @@ export const PREFETCH_VIDEO_TIMEOUT_MS = 120_000;
 
 /** 받은 소리가 창을 다 덮었다고 보는 여유(초). 조각은 4초 단위라 처음 · 끝 조각이 창보다 조금 넓다 */
 const COVER_TOLERANCE_SECONDS = 1;
+/**
+ * 소리 주소 목록에서 조각 사이(앞 조각 PDT 끝 → 다음 조각 PDT)가 이만큼 넘게 벌어지면 덜 올라온 조각이 빠진 자리로 본다(조각
+ * 길이는 ms 정수라 어긋남이 작다). 이 검사는 PDT 만 본다: 조각이 다 있어도 PDT 가 벌어지는 창(판 2 건너뜀 · 판 NULL 래칫)도
+ * 덜 올라온 것으로 접어 방송 중 미리 받기가 pending 이다(다시 묻기 1분 뒤 실패로 넘어가 편집기가 제 화면에서 직접 받는다).
+ * 바로잡기는 c10b′ 몫이다
+ */
+const GAP_TOLERANCE_MS = 50;
 
-/** 첫 트랙이 창을 한 덩어리로 빈틈없이 덮나. 덜 올라온 조각이 있으면 그 자리에서 덩어리가 끊긴다(loadTrackAudio) */
+/**
+ * 첫 트랙의 덩어리들이 창(Blob 시각)을 빈틈없이 덮나. 덜 올라온 조각이 있으면 그 자리에 틈이 난다(loadTrackAudio). 겹침을 잘라
+ * 나뉜 덩어리(E9)는 이음매 틈이 프레임 하나 미만이라 이어진 것으로 본다(MAX_SEAM_SECONDS)
+ */
 function coversWindow(tracks: TrackPiece[][], fromSeconds: number, toSeconds: number): boolean {
-  const pieces = tracks[0] ?? [];
-  const only = pieces[0];
-  return (
-    pieces.length === 1 &&
-    only !== undefined &&
-    only.startSeconds <= fromSeconds + COVER_TOLERANCE_SECONDS &&
-    only.startSeconds + only.buffer.duration >= toSeconds - COVER_TOLERANCE_SECONDS
-  );
+  const pieces = [...(tracks[0] ?? [])].sort((a, b) => a.startSeconds - b.startSeconds);
+  const first = pieces[0];
+  if (first === undefined || first.startSeconds > fromSeconds + COVER_TOLERANCE_SECONDS) {
+    return false;
+  }
+  let end = first.startSeconds;
+  for (const piece of pieces) {
+    if (piece.startSeconds > end + MAX_SEAM_SECONDS) return false;
+    end = Math.max(end, piece.startSeconds + piece.buffer.duration);
+  }
+  return end >= toSeconds - COVER_TOLERANCE_SECONDS;
 }
 
 /**
@@ -212,25 +226,41 @@ function verdictOfSource(view: EditorSourceState): CardEditorPrefetch {
   return 'pending';
 }
 
-/** 카드 창의 소리 조각을 받아 맡긴다. 다 덮은 소리를 받았나 — 방송 중에 조각이 덜 올라왔으면 맡기지 않고 false다 */
+/** 다시 싼 창이 덮는 Blob 시각 — 영상 프레임 PTS 처음부터 끝까지(Blob 시각 = ③ PTS − Δ) */
+function blobRangeOf(remuxed: RemuxedWindow): { fromSeconds: number; toSeconds: number } {
+  const starts = remuxed.segments.map((seg) => seg.mediaStart);
+  const ends = remuxed.segments.map((seg) => seg.mediaEnd);
+  return {
+    fromSeconds: Math.min(...starts) - remuxed.shiftSeconds,
+    toSeconds: Math.max(...ends) - remuxed.shiftSeconds,
+  };
+}
+
+/**
+ * 카드 창의 소리 조각을 받아 그 창 Blob 시각에 놓아 맡긴다. 다 덮은 소리를 받았나 — 방송 중에 조각이 덜 올라왔으면 맡기지 않고
+ * false다
+ * @param video 같은 창의 영상 받기(다시 싼 결과가 소리를 놓을 닻이다)
+ */
 async function prefetchAudio(
   streamId: string,
-  base: number,
-  range: { fromMs: number; toMs: number; startSeconds: number; endSeconds: number },
+  target: { segs: readonly PlaylistSegment[] },
+  video: () => Promise<RemuxedWindow>,
   live: boolean,
   deps: PrefetchDeps,
 ): Promise<boolean> {
-  const { fromMs, toMs } = range;
-  const trackKey = segmentTrackKey(streamId, fromMs, toMs);
+  const first = target.segs[0]!;
+  const last = target.segs.at(-1)!;
+  const trackKey = segmentTrackKey(streamId, first.seq, last.seq);
   if (segmentTracks.get(trackKey) !== undefined) return true;
+  const fromMs = first.pdtMs;
+  const toMs = last.pdtMs + last.durationMs;
   const decoder = deps.createDecoder();
   let tracks: TrackPiece[][];
   try {
     tracks = await deps.loadSegmentTracks({
       streamId,
-      baseMs: base,
-      fromMs,
-      toMs,
+      segs: target.segs,
+      anchors: async () => windowAnchors(await video()),
       decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
       // 방송 중에 조각 목록이 구간을 덮지 못하면 본문을 받지 않는다: 어차피 덜 덮은 소리는 맡기지 않고, 다시 확인할 때마다
       // 같은 구간을 통째로 받아 풀었다(10초마다 최대 6번)
@@ -244,22 +274,26 @@ async function prefetchAudio(
   if (tracks.length === 0) throw new Error('no audio tracks');
   // 영상 조각은 올라왔어도 소리 조각은 아직 올라가는 중일 수 있다(서버는 다 올라간 조각만 준다). 덜 덮은 소리를 맡기면 편집기가
   // 그것을 그대로 꺼내 빈 자리를 무음으로 튼다(PR #458 codex). 끝난 방송이면 더 올라올 것이 없어 그대로 맡긴다
-  if (live && !coversWindow(tracks, range.startSeconds, range.endSeconds)) return false;
+  if (live) {
+    const { fromSeconds, toSeconds } = blobRangeOf(await video());
+    if (!coversWindow(tracks, fromSeconds, toSeconds)) return false;
+  }
   segmentTracks.set(trackKey, tracks);
   return true;
 }
 
 /**
  * 창 조각을 받아 다시 싸 맡기고, 판 NULL 이면 ② 머리를 함께 읽는다. 머리 판독은 실패해도 미리 받기를 막지 않는다(편집기가 다시
- * 읽는다). 둘 다 시한에 끊는다
+ * 읽는다). 둘 다 시한에 끊는다. 맡겨 둔 창이면 그것을 돌려준다
  */
 async function prefetchVideo(
   streamId: string,
   mediaKey: string,
   target: { key: string; segs: readonly PlaylistSegment[] },
   deps: PrefetchDeps,
-): Promise<void> {
-  if (windowBlobs.get(target.key) !== undefined) return;
+): Promise<RemuxedWindow> {
+  const cached = windowBlobs.get(target.key);
+  if (cached !== undefined) return cached;
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), PREFETCH_VIDEO_TIMEOUT_MS);
   const stopped = new Promise<void>((resolve) =>
@@ -274,6 +308,7 @@ async function prefetchVideo(
       ]),
     ]);
     windowBlobs.set(target.key, remuxed);
+    return remuxed;
   } finally {
     clearTimeout(timer);
   }
@@ -310,15 +345,11 @@ async function prefetchOnce(
   // 구간에 받을 조각이 없다(틈 안). 편집기도 받지 않고 「녹화 없음」으로 알린다
   if (decision.kind === 'empty') return 'ready';
   const { target } = decision;
-  const audioRange = {
-    fromMs: base + Math.round(target.startSeconds * 1000),
-    toMs: base + Math.round(target.endSeconds * 1000),
-    startSeconds: target.startSeconds,
-    endSeconds: target.endSeconds,
-  };
+  // 소리는 영상과 함께 받기 시작하고, 창을 다시 싼 결과(Blob 닻)가 오면 놓는다
+  const video = prefetchVideo(streamId, mediaKey, target, deps);
   const [, audioComplete] = await Promise.all([
-    prefetchVideo(streamId, mediaKey, target, deps),
-    prefetchAudio(streamId, base, audioRange, live, deps),
+    video,
+    prefetchAudio(streamId, target, () => video, live, deps),
   ]);
   return audioComplete ? 'ready' : 'pending';
 }

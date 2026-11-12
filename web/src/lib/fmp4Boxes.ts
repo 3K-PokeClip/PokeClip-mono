@@ -1,6 +1,6 @@
 // fMP4(조각 MP4) 상자를 바이트에서 바로 읽는다. 편집기 소리(trackAudio/fmp4Audio.ts)와 플레이어가 같은 상자 해석을 쓴다.
 //
-// 읽는 함수는 던지지 않는다: 잘린 바이트 · 모르는 모양이면 null 이나 빈 목록을 준다(fmp4Audio.ts 의 demuxAudioTracks 관례).
+// 읽는 함수는 던지지 않는다: 잘린 바이트 · 모르는 모양이면 null 이나 빈 목록을 준다(fmp4Audio.ts 의 demuxSegmentAudio 관례).
 // 시각 값은 트랙 timescale 의 눈금 그대로 준다. 초로 바꾸는 것은 쓰는 쪽 몫이다.
 
 export interface Box {

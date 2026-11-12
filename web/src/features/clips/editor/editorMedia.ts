@@ -166,12 +166,15 @@ export const windowBlobs = recentlyUsed<RemuxedWindow>((remuxed) => remuxed.blob
  */
 export const editorWindowKey = (mediaKey: string, firstSeq: number, lastSeq: number) =>
   `${mediaKey}:${firstSeq}-${lastSeq}`;
-/** 받아 풀어 둔 소리 조각(segmentTrackKey → 트랙별 덩어리) */
+/** 받아 풀어 둔 소리 조각(segmentTrackKey → 트랙별 덩어리 — 그 창 Blob 시각에 놓았다) */
 export const segmentTracks = recentlyUsed<TrackPiece[][]>(trackPiecesBytes);
 
-/** 소리 조각의 열쇠: 방송 번호와 받은 창의 절대 ms. 편집기의 트랙 미리 듣기가 묻는 값과 같다 */
-export const segmentTrackKey = (streamId: string, fromMs: number, toMs: number) =>
-  `${streamId}:${fromMs}:${toMs}`;
+/**
+ * 소리 조각의 열쇠: 방송 번호와 창 첫 · 끝 조각 seq(설계 prw2 5절 4). 소리는 그 창을 다시 싼 Blob 시각에 놓으므로 영상 창과
+ * 같은 범위로 가른다 — 같은 seq 범위면 같은 다시 싸기 · 같은 자리다. 편집기의 트랙 미리 듣기가 묻는 값과 같다
+ */
+export const segmentTrackKey = (streamId: string, firstSeq: number, lastSeq: number) =>
+  `${streamId}:${firstSeq}-${lastSeq}`;
 
 /** 맡긴 것을 다 비운다. 계정이 바뀌어도 비운다: 앞 계정의 녹화가 메모리에 남지 않게(시험 사이에도 부른다) */
 export function clearEditorMedia() {

@@ -503,6 +503,23 @@ describe('useEditorVideoPlayback — 조각 실패', () => {
     expect(result.current.playback.error).toBe('fatal');
     expect(source.reportSegmentFailure).not.toHaveBeenCalled();
   });
+
+  it('받다 실패한 창의 열쇠를 알린다: 트랙 미리 듣기가 그 창 닻 기다림을 실패로 끝낸다', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(remuxWindow).mockRejectedValueOnce(new Error('재다중화 패킷 수가 다르다'));
+    const { result } = mount();
+    await flush();
+    expect(result.current.target).not.toBeNull();
+    expect(result.current.loaded).toBeNull();
+    expect(result.current.failedKey).toBe(result.current.target!.key);
+  });
+
+  it('창을 받으면 실패한 창 열쇠가 없다', async () => {
+    const { result } = mount();
+    await flush();
+    expect(result.current.loaded).not.toBeNull();
+    expect(result.current.failedKey).toBeNull();
+  });
 });
 
 describe('useEditorVideoPlayback — ② 머리(판 NULL)', () => {

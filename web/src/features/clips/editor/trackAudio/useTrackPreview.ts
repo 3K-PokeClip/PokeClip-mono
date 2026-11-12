@@ -3,12 +3,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestSegmentAudioAccess, type SegmentAudioAccess } from '@/api/clipEditor';
 import { segmentTrackKey, segmentTracks } from '../editorMedia';
-import { loadTrackAudio, SegmentUrlExpiredError, type TrackPiece } from './loadTrackAudio';
-import { measureLevels, type TrackLevels } from './trackLevels';
+import type { PlaylistSegment } from '../source/editorPlaylist';
+import type { RemuxedWindow } from '../source/remuxWindow';
+import type { WindowPlacement } from '../source/windowPlacement';
+import {
+  loadTrackAudio,
+  SegmentUrlExpiredError,
+  windowAnchors,
+  type SegmentAnchors,
+  type TrackPiece,
+} from './loadTrackAudio';
+import { LEVEL_STEP_SECONDS, measureCells, type TrackLevels } from './trackLevels';
 import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAudioPlayer';
 
-// 트랙별 미리 듣기(POK-389): 영상이 받은 창(구간 ± 여유)의 녹화 조각을 받아 트랙마다 풀고, 영상 노드를 따라 튼다.
+// 트랙별 미리 듣기(POK-389): 영상 창(구간 ± 여유)의 녹화 조각을 받아 트랙마다 풀고, 영상 노드를 따라 튼다.
 // 트랙을 끄거나 음량을 바꾸면 미리보기 소리에도 바로 들린다(저장·렌더와 같은 트랙 번호).
+//
+// 소리는 창 Blob 시각(영상 노드의 currentTime)에 놓는다(설계 prw2 3.3절 — loadTrackAudio). 그래서 재생기는 창 하나에 묶이고,
+// 창이 바뀌면 바로 버린다: 앞 창 재생기가 새 창 Blob 시각을 따라가면 다른 자리 소리를 낸다. 새 창 소리가 오기까지는 음량을 안
+// 바꾼 편집본이면 영상 소리, 바꿔 둔 편집본이면 무음이다(뺀 트랙이 섞인 최종 믹스를 내지 않는다 — 아래 영상 소리를 끄는 때).
 //
 // 못 부르면(소리 문맥 없음·주소·받기·풀기 실패) 「unavailable」이고 영상 소리가 그대로 난다: 화면이 그 사실을 알린다.
 
@@ -50,23 +63,48 @@ export function sameAsVideo(gains: readonly number[]): boolean {
   return gains.every((gain, i) => gain === (i === 0 ? 1 : 0));
 }
 
+/** 트랙 소리를 받을 창 — 영상이 받으려는 창(useEditorVideoPlayback 의 target)의 열쇠 · 조각 · S 범위 */
+export interface TrackWindow {
+  /** 창 열쇠(editorWindowKey). 재생기는 이 창 하나에 묶인다 */
+  key: string;
+  segs: readonly PlaylistSegment[];
+  startSeconds: number;
+  endSeconds: number;
+}
+
+/** 영상이 받은 창 — 다시 싼 결과(소리를 놓을 Blob 닻)와 배치(파형을 잴 Blob 범위) */
+export interface LoadedTrackWindow {
+  key: string;
+  remuxed: RemuxedWindow;
+  placement: WindowPlacement | null;
+}
+
+/** 소리 주소를 물을 범위 — 창 조각이 덮는 [첫 PDT, 마지막 PDT + EXTINF)(절대 ms). 확보 후보만큼 넓히지 않는다 */
+function audioRangeOf(segs: readonly Pick<PlaylistSegment, 'pdtMs' | 'durationMs'>[]) {
+  const first = segs[0];
+  const last = segs.at(-1);
+  if (first === undefined || last === undefined) throw new Error('창 조각이 없다');
+  return { fromMs: first.pdtMs, toMs: last.pdtMs + last.durationMs };
+}
+
 /**
- * 받을 창(절대 ms)의 녹화 조각을 받아 소리 트랙마다 푼다. 편집기의 미리 듣기와 카드의 미리 받기(POK-499)가 함께 쓴다.
- * 받기가 TRACK_LOAD_TIMEOUT_MS 동안 아무 진척이 없거나 signal이 멈추면 던진다. 하나가 실패하면 받는 중인 나머지도 멈춘다
+ * 창 조각의 ② 녹화 소리를 받아 트랙마다 풀고 창 Blob 시각에 놓는다. 편집기의 미리 듣기와 카드의 미리 받기(POK-499)가 함께
+ * 쓴다. 받기가 TRACK_LOAD_TIMEOUT_MS 동안 아무 진척이 없거나 signal이 멈추면 던진다. 하나가 실패하면 받는 중인 나머지도 멈춘다
  */
 export function loadSegmentTracks(options: {
   /** clip 방송 번호(편집본과 같은 번호) */
   streamId: string;
-  /** 편집기 시간축 0초의 절대 ms */
-  baseMs: number;
-  fromMs: number;
-  toMs: number;
+  /** 창 조각(seq · PDT · EXTINF) */
+  segs: readonly Pick<PlaylistSegment, 'seq' | 'pdtMs' | 'durationMs'>[];
+  /** 그 창의 닻. 받기를 다 마친 뒤 부른다 — 기다리는 동안은 받기 멈춤으로 세지 않는다. 거부하면(영상이 그 창을 못 받음) 던진다 */
+  anchors: () => Promise<SegmentAnchors>;
   decode: (adts: Uint8Array) => Promise<AudioBuffer>;
   signal?: AbortSignal;
   /** 조각 목록만 보고 본문을 받을지 정한다. false면 하나도 받지 않고 SegmentsNotReadyError로 던진다(loadTrackAudio) */
   precheck?: (segments: SegmentAudioAccess['segments']) => boolean;
 }): Promise<TrackPiece[][]> {
-  const { streamId, baseMs, fromMs, toMs, decode, signal, precheck } = options;
+  const { streamId, segs, decode, signal, precheck } = options;
+  const { fromMs, toMs } = audioRangeOf(segs);
   const abort = new AbortController();
   const stopOuter = () => abort.abort();
   signal?.addEventListener('abort', stopOuter);
@@ -98,9 +136,16 @@ export function loadSegmentTracks(options: {
           progressed();
           return bytes;
         },
+        anchors: async () => {
+          // 영상 창(③ 받기 · 다시 싸기)을 기다리는 동안은 소리 받기가 멈춘 것이 아니다
+          clearTimeout(timer);
+          const anchors = await options.anchors();
+          progressed();
+          return anchors;
+        },
         decode,
       },
-      baseMs,
+      segs.map((seg) => seg.seq),
       precheck,
     ),
     stopped,
@@ -117,29 +162,47 @@ export function loadSegmentTracks(options: {
     });
 }
 
+/**
+ * 창의 파형. 그리기는 편집기 초 S 의 고른 칸(LEVEL_STEP_SECONDS)이고, 소리는 Blob 시각에 놓였으므로 S 칸 하나하나를 배치로
+ * Blob 구간 [blobAtS(s_i), blobAtS(s_i + 칸)]으로 바꿔 잰다. 창 전체를 한 번에 재 S 에 고르게 펴면 회차 안 순단(PDT 7초 ·
+ * Blob 4초)에서 봉우리가 1–3초 어긋난다. 죽은 자리(조각 사이 PDT 빈 곳)는 Blob 구간 길이가 0 이라 빈 칸이다
+ */
+export function windowLevels(
+  tracks: readonly (readonly TrackPiece[])[],
+  placement: Pick<WindowPlacement, 'blobAtS'>,
+  range: { startSeconds: number; endSeconds: number },
+): TrackLevels {
+  const { startSeconds, endSeconds } = range;
+  const count = Math.max(0, Math.ceil((endSeconds - startSeconds) / LEVEL_STEP_SECONDS - 1e-9));
+  const edges = Array.from({ length: count + 1 }, (_, i) =>
+    placement.blobAtS(Math.min(endSeconds, startSeconds + i * LEVEL_STEP_SECONDS)),
+  );
+  return { startSeconds, stepSeconds: LEVEL_STEP_SECONDS, tracks: measureCells(tracks, edges) };
+}
+
 export function useTrackPreview(options: {
   /** clip 방송 번호(편집본과 같은 번호) */
   streamId: string;
-  /** 편집기 시간축 0초의 절대 ms */
-  baseMs: number;
-  /** 조각을 받을 창(편집기 초): 영상이 받으려는 창이라 영상 받기와 함께 시작한다. 녹화가 없으면 null */
-  window: { startSeconds: number; endSeconds: number } | null;
+  /** 영상이 받으려는 창. 영상 받기와 함께 조각을 받기 시작한다. 받을 창이 없으면(녹화 없음 · 아직 못 정함) null */
+  window: TrackWindow | null;
+  /** 영상이 받은 창. 받은 조각은 열쇠가 같은 이 창의 닻으로 놓는다. 아직 못 받았으면 null */
+  loaded: LoadedTrackWindow | null;
+  /** 영상이 받다 실패한 창의 열쇠(③ 받기 · 다시 싸기). 그 창의 닻은 오지 않으므로 소리도 「못 부름」으로 끝낸다 */
+  failedKey?: string | null;
   video: HTMLVideoElement | null;
-  /**
-   * 영상 노드의 0초가 편집기 몇 초인가(영상이 실제로 받아 튼 창의 시작). 영상이 아직 없으면 null이고 따라 틀기를 기다린다.
-   * 생략하면 받을 창의 시작이다(영상과 소리가 늘 같은 창일 때)
-   */
-  playingFromSeconds?: number | null;
   createContext?: () => DecodingContext;
 }): TrackPreview {
-  const { streamId, baseMs, video, createContext = defaultContext } = options;
-  const startSeconds = options.window?.startSeconds ?? null;
-  const endSeconds = options.window?.endSeconds ?? null;
-  const playingFrom =
-    options.playingFromSeconds === undefined ? startSeconds : options.playingFromSeconds;
+  const { streamId, loaded, video, createContext = defaultContext } = options;
+  const failedKey = options.failedKey ?? null;
+  const windowKey = options.window?.key ?? null;
   const [status, setStatus] = useState<TrackPreviewStatus>('idle');
   const [player, setPlayer] = useState<TrackAudioPlayer | null>(null);
-  const [levels, setLevels] = useState<TrackLevels | null>(null);
+  /** 놓아 둔 소리와 그 창(열쇠 · S 범위) — 파형을 그 창 배치로 잰다 */
+  const [placed, setPlaced] = useState<{
+    key: string;
+    range: { startSeconds: number; endSeconds: number };
+    tracks: TrackPiece[][];
+  } | null>(null);
   // 트랙 번호 순 음량은 ref로 든다: 음량 숫자를 끄는 동안 값이 초당 수십 번 오는데, 상태로 들면 그때마다 이 훅을 쥔 화면
   // 전체가 한 번 더 그려졌다(PR #341 3차). 화면이 알아야 하는 「영상 소리와 같은가」만 상태다(값이 같으면 다시 안 그린다)
   const gainsRef = useRef<readonly number[]>([]);
@@ -151,13 +214,24 @@ export function useTrackPreview(options: {
   const createRef = useRef(createContext);
   const playerRef = useRef(player);
   playerRef.current = player;
+  const windowRef = useRef(options.window);
+  windowRef.current = options.window;
+  /** 받는 중인 창의 닻 기다림 — 영상이 같은 열쇠의 창을 받으면 풀고, 그 창을 받다 실패하면 실패로 끝낸다 */
+  const anchorsRef = useRef<{
+    key: string;
+    resolve: (anchors: SegmentAnchors) => void;
+    reject: (error: Error) => void;
+  } | null>(null);
 
   useEffect(() => {
+    const win = windowRef.current;
+    // 창이 바뀌었다: 앞 창 재생기는 그 창 Blob 시각에 묶여 있어 바로 버린다(새 창 소리가 오기까지는 불러오는 동안과 같다)
+    setPlayer(null);
+    anchorsRef.current = null;
     // 녹화가 없는 구간(받을 창 없음)이다: 실패가 아니라 들을 것이 없다(PR #341 claude)
-    if (startSeconds === null || endSeconds === null) {
+    if (win === null || win.key !== windowKey) {
       setStatus('idle');
-      setPlayer(null);
-      setLevels(null);
+      setPlaced(null);
       return undefined;
     }
     let ctx = contextRef.current;
@@ -173,20 +247,26 @@ export function useTrackPreview(options: {
     let cancelled = false;
     // 창이 바뀌거나 화면이 떠나면 앞 창의 받기를 멈춘다: 안 멈추면 버릴 조각 수십 개를 끝까지 받는다(로컬 리뷰 2라운드)
     const abort = new AbortController();
-    // 앞 창의 재생기·파형은 새 것이 준비될 때까지 둔다. 조각 받기는 영상까지 든 파일이라 수십 초가 걸리는데(3분 구간 ≈ 150MB),
-    // 그동안 앞 창과 겹치는 자리는 그대로 들린다. 재생기는 편집기 초로 소리를 들고 있어 새 창 영상을 따라가도 제자리다(PR #341 claude)
+    const anchors = new Promise<SegmentAnchors>((resolve, reject) => {
+      anchorsRef.current = { key: win.key, resolve, reject };
+    });
+    // 받기가 닻을 묻기 전에 실패로 끝나도(주소 · 받기 실패) 영상 실패가 처리되지 않은 거부로 남지 않게 한다
+    anchors.catch(() => undefined);
     setStatus('loading');
-    const fromMs = baseMs + Math.round(startSeconds * 1000);
-    const toMs = baseMs + Math.round(endSeconds * 1000);
-    // 카드가 미리 받아 풀어 둔 창이면 다시 받지 않는다(POK-499)
-    const prefetched = segmentTracks.get(segmentTrackKey(streamId, fromMs, toMs));
+    const first = win.segs[0];
+    const last = win.segs.at(-1);
+    // 카드가 미리 받아 풀어 둔 창이면 다시 받지 않는다(POK-499). 그래도 그 창을 받은 영상의 닻이 올 때까지 놓지 않는다:
+    // 영상 · 소리 캐시는 따로 버려져 영상이 아직 앞 창을 틀 수 있다(받는 갈래와 같은 묶음 — 닻이 와야 재생기를 만든다)
+    const prefetched =
+      first === undefined || last === undefined
+        ? undefined
+        : segmentTracks.get(segmentTrackKey(streamId, first.seq, last.seq));
     (prefetched !== undefined
-      ? Promise.resolve(prefetched)
+      ? anchors.then(() => prefetched)
       : loadSegmentTracks({
           streamId,
-          baseMs,
-          fromMs,
-          toMs,
+          segs: win.segs,
+          anchors: () => anchors,
           decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
           signal: abort.signal,
         })
@@ -194,10 +274,13 @@ export function useTrackPreview(options: {
       .then((tracks) => {
         if (cancelled) return;
         // 파형은 트랙이 하나뿐이어도 그린다(소리 크기는 보여 줄 수 있다)
-        setLevels(measureLevels(tracks, startSeconds, endSeconds));
+        setPlaced({
+          key: win.key,
+          range: { startSeconds: win.startSeconds, endSeconds: win.endSeconds },
+          tracks,
+        });
         // 소리 트랙을 하나도 못 꺼냈으면 못 부름이다
         if (tracks.length === 0) {
-          setPlayer(null);
           setStatus('unavailable');
           return;
         }
@@ -214,15 +297,39 @@ export function useTrackPreview(options: {
       })
       .catch(() => {
         if (cancelled) return;
-        setPlayer(null);
-        setLevels(null);
+        setPlaced(null);
         setStatus('unavailable');
       });
     return () => {
       cancelled = true;
       abort.abort();
     };
-  }, [streamId, baseMs, startSeconds, endSeconds]);
+  }, [streamId, windowKey]);
+
+  // 영상이 받는 창의 닻을 푼다: 받는 중인 창과 열쇠가 같을 때만(앞 창을 받은 영상의 닻으로 놓지 않는다). 영상이 그 창을 받다
+  // 실패하면 닻은 오지 않는다 — 실패로 끝내 「못 부름」으로 영상 소리를 되살리고 받아 둔 판독 결과를 놓는다. 닻을 기다리는
+  // 동안은 받기 멈춤 시한을 세지 않으므로(loadSegmentTracks) 이 길이 없으면 loading 에 머문다
+  useEffect(() => {
+    const pending = anchorsRef.current;
+    if (pending === null) return;
+    if (failedKey === pending.key) {
+      pending.reject(new Error('video window failed'));
+      return;
+    }
+    if (loaded === null || loaded.key !== pending.key) return;
+    pending.resolve(windowAnchors(loaded.remuxed));
+  }, [loaded, failedKey, windowKey]);
+
+  // 파형 — 놓아 둔 소리를 같은 창의 배치로 잰다(판 NULL 머리가 늦게 와 배치가 바뀌면 다시 잰다). 새 창을 받는 동안은 앞 창
+  // 소리 · 배치가 그대로라 앞 파형이 남는다(편집기 초로 그려 자리가 맞다)
+  const placement = loaded !== null && loaded.key === placed?.key ? loaded.placement : null;
+  const levels = useMemo(
+    () =>
+      placed === null || placement === null
+        ? null
+        : windowLevels(placed.tracks, placement, placed.range),
+    [placed, placement],
+  );
 
   // 재생기는 바뀔 때(새 창 · 못 부름) 앞 것을, 화면을 떠날 때 마지막 것을 버린다. 소리 문맥을 닫기 전에 버려야 해서 그 이펙트보다 앞에 둔다
   useEffect(() => {
@@ -265,9 +372,10 @@ export function useTrackPreview(options: {
     if (player !== null) applyGains(player, videoCarries);
   }, [player, videoCarries, videoRate, videoMixMatches, applyGains]);
 
-  // 영상 소리를 끄는 때: 재생기가 소리를 내면(트는 중 · 새 창을 받는 동안 앞 창 재생기가 이어 튼다) 끈다. 재생기 없이 불러오는
-  // 중이면 음량이 영상 소리와 다를 때만 끈다: 다르면 뺀 트랙까지 섞인 최종 믹스가 들려서다(로컬 리뷰 1라운드). 같으면(새로 연
-  // 편집본) 영상 소리가 곧 미리 듣기 소리라 조각을 다 받을 때까지 조용히 기다리지 않는다(PR #341 claude)
+  // 영상 소리를 끄는 때: 재생기가 소리를 내면 끈다. 재생기 없이 불러오는 중이면(새 창을 받는 동안도 — 앞 창 재생기는 이미
+  // 버렸다) 음량이 영상 소리와 다를 때만 끈다: 다르면 뺀 트랙까지 섞인 최종 믹스가 들려서다(로컬 리뷰 1라운드). 그래서 음량을
+  // 바꿔 둔 편집본은 새 창 소리가 올 때까지 무음이다. 같으면(새로 연 편집본) 영상 소리가 곧 미리 듣기 소리라 조각을 다 받을
+  // 때까지 조용히 기다리지 않는다(PR #341 claude)
   const muteVideo = player !== null ? !videoCarries : status === 'loading' && !videoMixMatches;
   useEffect(() => {
     if (video === null) return undefined;
@@ -278,11 +386,11 @@ export function useTrackPreview(options: {
     };
   }, [video, muteVideo]);
 
-  // 소리는 편집기 초로 들고 있어, 받을 창보다 영상이 늦게(또는 앞 창 그대로) 돌아도 영상의 창으로 옮기면 제자리다
+  // 소리는 창 Blob 시각에 놓였다 — 영상 노드의 시각을 그대로 따른다. 재생기는 그 창을 받은 영상에서만 산다(창이 바뀌면 버림)
   useEffect(() => {
-    if (player === null || video === null || playingFrom === null) return undefined;
-    return followVideo(player, video, () => playingFrom + video.currentTime);
-  }, [player, video, playingFrom]);
+    if (player === null || video === null) return undefined;
+    return followVideo(player, video, () => video.currentTime);
+  }, [player, video]);
 
   const setGains = useCallback(
     (next: readonly number[]) => {

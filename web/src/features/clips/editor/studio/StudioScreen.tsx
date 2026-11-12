@@ -69,6 +69,7 @@ import {
 } from '../source/rangeEndpoints';
 import { useSaveCut, type SaveCut } from './useSaveCut';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
+import { useTrackPreview } from '../trackAudio/useTrackPreview';
 import type { FilmstripSource } from './VideoFilmstrip';
 import { lookFromDocument, outputFromLook, sameRecipe } from '../recipeLook';
 import { editorTrackId as trackId, recipeDocumentOf } from '../recipeDocument';
@@ -739,8 +740,7 @@ function WiredStudioBody({
     [endpoints, heads, base],
   );
   // 실재생 — 되감기 목록 창(POK-473). 훅은 늘 부르고, 원천 목록이 있을 때만 영상을 붙인다. 목록이 없어도 원천이 막힌 까닭
-  //    (D3)이 있으면 어댑터를 넘겨 미리보기 아래에 알린다. 트랙별 미리 듣기는 창 Blob 시각 배치(c9′)까지 잠시 끈다 — 영상 소리로
-  //    들린다
+  //    (D3)이 있으면 어댑터를 넘겨 미리보기 아래에 알린다
   const video = useEditorVideoPlayback({
     streamId,
     mediaKey,
@@ -751,6 +751,15 @@ function WiredStudioBody({
   const cutFor = useSaveCut({ base, heads, streamId, mediaKey, source: videoSource });
   const hasSource = videoSource.list !== null;
   const showPlayback = hasSource || video.playback.error !== null;
+  // 트랙별 미리 듣기(POK-389): 영상이 받으려는 창과 같은 창 조각의 소리(방송 소리 트랙 전부)를 영상과 함께 받기 시작해, 영상이
+  // 그 창을 받으면 그 창 Blob 시각에 놓고 영상 노드를 따라 튼다. 창이 바뀌면 앞 재생기는 버린다(설계 prw2 3.3 · c9′)
+  const trackPreview = useTrackPreview({
+    streamId,
+    window: hasSource ? video.target : null,
+    loaded: hasSource ? video.loaded : null,
+    failedKey: hasSource ? video.failedKey : null,
+    video: hasSource ? video.video : null,
+  });
 
   // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
   // 편집기 초 → 그 창의 Blob 시각은 창 배치가 바꾼다(blobAtS — 판 NULL 머리 원점 · 조각 경계)
@@ -1242,6 +1251,7 @@ function WiredStudioBody({
         clipStatus={clipStatus}
         reloading={reloading}
         mixTrackId={trackId(0)}
+        trackPreview={hasSource ? trackPreview : undefined}
         filmstripSource={filmstripSource}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}
