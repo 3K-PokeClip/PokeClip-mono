@@ -1284,6 +1284,35 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     ).toBeInTheDocument();
   });
 
+  it('다시 물어도 같은 거절(422 source_unrenderable)은 사유 낱말 대신 범위를 다시 정하라고 알린다(POK-196)', async () => {
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+
+    // 닫힌 사유 목록 둘(clip CutDecision.Reason) 다 할 일이 범위 재지정 하나다. 알림은 같은 종류를 갱신해 둘째 회차의
+    // 글자가 첫 회차 것일 수 있어, 회차마다 주문이 실제로 나갔는지 센다
+    for (const [index, reason] of ['outside_recording', 'no_footage'].entries()) {
+      server.renderError = { status: 422, body: { error: 'source_unrenderable', reason } };
+      await orderVideo(user);
+      await waitFor(() => expect(renders()).toBe(index + 1));
+      expect(
+        await screen.findByText(
+          '고른 범위가 녹화된 구간을 벗어났거나 영상이 없는 곳이라 만들 수 없어요. 범위를 다시 정해 주세요',
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/source_unrenderable|outside_recording|no_footage/),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it('모르는 422 코드는 지금처럼 상태와 코드를 그대로 보인다', async () => {
+    server.renderError = { status: 422, body: { error: 'brand_new_code' } };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await orderVideo(user);
+    expect(await screen.findByText('422 brand_new_code')).toBeInTheDocument();
+  });
+
   it('칸을 짚은 거절(400 field · 413 · 415)은 창 안 그 칸에 보이고 창이 남는다', async () => {
     server.renderError = { status: 400, body: { error: 'invalid_request', field: 'tags' } };
     const user = userEvent.setup();

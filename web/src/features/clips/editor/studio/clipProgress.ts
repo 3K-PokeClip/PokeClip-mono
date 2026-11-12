@@ -96,6 +96,16 @@ function uploadedDetail(
 }
 
 /**
+ * 영상 만들기 실패의 안내. SOURCE_RANGE(렌더 일꾼: 조각이 자를 구간을 다 덮지 못하거나 조각 사이가 끊겼다)는 다시
+ * 만들어도 같은 실패라 범위를 다시 정하라고 말한다(POK-196). 다른 코드는 코드를 보이고 다시 만들라고 한다
+ */
+function failedDetail(code: string | undefined): string {
+  if (code === 'SOURCE_RANGE')
+    return '고른 범위에 녹화가 비거나 끊긴 곳이 있어 만들 수 없어요. 범위를 다시 정해 주세요.';
+  return `영상을 만들지 못했어요(${code ?? '?'}). 다시 만들어 주세요.`;
+}
+
+/**
  * 단계 옆 시각. 오늘이면 시:분, 아니면 월/일 시:분이다 — 편집기를 다음 날 다시 열면 어제의 시각이 보인다.
  * 서버 값이 없거나 못 읽으면 null(지어내지 않는다).
  */
@@ -171,7 +181,7 @@ export function clipStatusView(
         ...base,
         tone: 'danger',
         title: '영상 만들기 실패',
-        detail: `영상을 만들지 못했어요(${clip.error?.code ?? '?'}). 다시 만들어 주세요.`,
+        detail: failedDetail(clip.error?.code),
         steps: steps(
           ['done', requested],
           ['danger', failedAt(stepClock(clip.updatedAt, now))],

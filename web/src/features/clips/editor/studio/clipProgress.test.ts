@@ -180,6 +180,21 @@ describe('clipStatusView: 영상 상태 알약과 작은 창(POK-492)', () => {
     expect(view(clip({ status: 'failed' })).actions).toEqual(['remake', 'library']);
   });
 
+  it('조각이 범위를 못 덮어 난 실패(SOURCE_RANGE)는 코드 대신 범위를 다시 정하라고 말한다(POK-196)', () => {
+    const failed = clip({ status: 'failed', error: { code: 'SOURCE_RANGE', message: null } });
+    expect(view(failed).detail).toBe(
+      '고른 범위에 녹화가 비거나 끊긴 곳이 있어 만들 수 없어요. 범위를 다시 정해 주세요.',
+    );
+  });
+
+  it('다른 실패 코드와 코드 없는 실패는 지금처럼 코드를 보이고 다시 만들라고 말한다', () => {
+    const failed = (error: ClipSnapshot['error']) => view(clip({ status: 'failed', error }));
+    expect(failed({ code: 'SOURCE_MISSING', message: null }).detail).toBe(
+      '영상을 만들지 못했어요(SOURCE_MISSING). 다시 만들어 주세요.',
+    );
+    expect(failed(null).detail).toBe('영상을 만들지 못했어요(?). 다시 만들어 주세요.');
+  });
+
   it('만드는 중인데 서버가 퍼센트를 안 줬으면 0%라 하지 않고 %를 뺀다(POK-444)', () => {
     expect(clipStatusView(rendering(null)).title).toBe('영상 만드는 중');
     expect(clipStatusView(rendering(null)).progress).toEqual({ value: null });

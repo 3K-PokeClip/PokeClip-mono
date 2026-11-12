@@ -340,6 +340,10 @@ function messageOf(e: unknown): string {
       return '보관 기간(60일)이 지나 이 방송으로는 새 영상을 만들 수 없어요';
     if (e.status === 409 && e.code === 'source_not_ready')
       return '영상 조각이 아직 다 안 올라왔어요 — 잠시 뒤 다시';
+    // 다시 눌러도 같은 거절(POK-196). 사유(reason) 둘(outside_recording · no_footage) 다 다시 물어도 같고 할 일이 범위
+    // 재지정 하나라 문구가 하나다. outside_recording 은 범위 일부만 녹화 밖이어도 난다. 사유 칸은 clipFetch가 싣지 않는다
+    if (e.status === 422 && e.code === 'source_unrenderable')
+      return '고른 범위가 녹화된 구간을 벗어났거나 영상이 없는 곳이라 만들 수 없어요. 범위를 다시 정해 주세요';
     if (e.status === 503 && e.code === 'render_unavailable')
       return '영상 만들기가 잠시 멈춰 있어요 — 잠시 뒤 다시 해 주세요';
     // 유튜브 업로드 정보를 실은 주문의 거절(POK-291)
