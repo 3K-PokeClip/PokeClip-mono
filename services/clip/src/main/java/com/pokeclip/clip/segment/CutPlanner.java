@@ -30,7 +30,7 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 /**
- * 렌더 주문의 컷 판정 한 곳(POK-196 · 설계 r7 9.2 · 9.4) — 레시피 컷 {@code [in, out)}(편집기 출처 벽시각)을 회차 귀속 행 위
+ * 렌더 주문의 컷 판정 한 곳(POK-196 · 설계 r7 9.2 · 9.4) — 레시피 컷 {@code [in, out)}(목록 PDT 축 epoch ms)을 회차 귀속 행 위
  * 좌표 · 자막 끝점 · 끝 소리 확보 · 디코더 준비 · 예상 길이로 옮기거나, 아직(409) · 종국 거절(422)로 가른다.
  *
  * <p><b>축은 목록 PDT({@code COALESCE(playback_pdt, start_wall_utc)})이고 원점은 회차 판이다</b>(kty 2026-11-12 D1). 편집기

@@ -1677,7 +1677,17 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
 
 **카드 장면 두 칸(POK-196)** — 목록 · 통로 · 마크 응답(OBS · 웹) · 가리기 · 되살리기 응답이 모두 싣는다.
-🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 렌더 주문(컷 판정이 회차 행의 판 칸을 읽는다)도 500이며, 소리 주소(아래 소리 주소 절)는 목록만 나가고 끝 소리 확보 칸이 빠진다** — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
+🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 렌더 주문(컷 판정이 회차 행의 판 칸을 읽는다)도 500이며, 소리 주소(아래 소리 주소 절)는 목록만 나가고 끝 소리 확보 칸이 빠지고, 라이브 · 카드 사진 순회도 멈춘다**(두 순회가 회차 행을 판 칸과 함께 읽는다 — 매 순회 예외) — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
+
+🔴 **PR-B2 배포 순서(POK-196 · PDT 설계 r7 13.1 · 13.4 · 계획 델타 R26): 생산자 DDL → 렌더 · 업로드 일꾼 새 판 → 웹 PR-W2 → clip.** 어기면 이렇다.
+
+| 먼저 나가야 하는 것 | clip 이 먼저 나가면 |
+|---|---|
+| 렌더(썸네일 포함) 새 판 | 옛 렌더가 새 꼴 주문을 `ENVELOPE_VALIDATION` 으로 거절해 모든 렌더가 실패로 끝난다(옛 파서는 `role=segment` · `sourceStartAtMs` 를 필수로 본다). 옛 썸네일 일꾼은 `offsetOrigin` 을 무시한다 |
+| 업로드 일꾼 U-c1 판 | 옛 일꾼이 clip 이 보내는 결과 끝 장면 값에서 100ms 를 또 당겨 결과 끝 장면이 앞당겨진다 |
+| 웹 PR-W2 | 옛 웹의 `/get` 축 컷을 clip 이 PDT 축으로 풀어 장 잔차 · 래칫만큼 어긋난다(추론). PR-W2 는 새 칸이 없으면 지금 식으로 떨어져 clip 보다 먼저 나가도 갈림이 없다 |
+
+**롤백 하한**: clip PR-B2 가 prod 에 닿은 순간부터 렌더 · 썸네일은 그 새 판, 업로드 일꾼은 U-c1 판, 웹은 PR-W2 판 아래로 내리지 않는다(내리면 위 표의 일이 그대로 생긴다). clip 은 생산자 쓰기 스위치(판 2 행이 처음 생김) 뒤 PR-B2 판 아래로 내리지 않는다 — 옛 clip 이 판 2 소재에 옛 꼴 주문을 내 영상 첫 표본만큼 이른 장면이 나간다.
 
 | 카드 칸 | |
 |---|---|
@@ -2520,7 +2530,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **🔴 주문서의 `sourceKeys`는 계약1 3절 초안과 다르다 — 조각 파일 목록을 그대로 싣는다.** 초안은 1번이 만들 「중간본 파일」
 (video 1 + audio N)을 전제했는데 그 파일은 아직 없고 렌더 일꾼도 우리 것이 됐다(2026-09-14). 조각 하나가 영상+소리 트랙
 전부를 담은 **완전한 fMP4**라(실측 2026-09-15: 실물 조각 둘 다 `ftyp+moov+moof…`, h264 720p + aac) 일꾼이 이어붙이면 된다.
-트랙 번호 ↔ 소리 스트림 대응은 고정이다(계약9 2026-09-03: 트랙 N = N번째 소리 스트림). `trackManifest` 칸은 실리지만 null로 온다. 주문서 모양
+트랙 번호 ↔ 소리 스트림 대응은 고정이다(계약9 2026-09-03: 트랙 N = N번째 소리 스트림). `trackManifest` 칸은 실리지만 늘 null 이고(방송 값을 그대로 싣는데 계약9 가 그 값을 폐기했다) 렌더는 읽지 않는다. 주문서 모양
 (새 꼴 — POK-196 · PDT 설계 r7 5.1 · 5.2. 조각은 역할 셋, 좌표는 `plan`, `sourceStartAtMs` 없음. 준비 조각 `audio_prime`에는 두 표지 대신
 `ownerSeq`를 싣고 그 머리 항목 바로 앞에 둔다. 확보 조각 `audio_capture`는 맨 끝. 첫 매체의 `followsLedgerPrevious`는 늘 거짓.
 `out`은 `offsetUs`와 `toSegmentEnd` 가운데 하나만 · 자막이 없어도 `subtitles`는 `[]` — 렌더 계획 검사가 fail-closed다):
@@ -2533,7 +2543,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
                 "isDiscontinuity":false,"followsLedgerPrevious":false},…,
                {"role":"audio_capture","bucket":"{SEGMENT_BUCKET}","s3Key":"…/seg_000043.m4s","seq":43,"durationMs":4000,
                 "isDiscontinuity":false,"followsLedgerPrevious":true}],
- "trackManifest":{…},
+ "trackManifest":null,
  "plan":{"planVersion":1,"offsetOrigin":"VIDEO_START","in":{"seq":31,"offsetUs":1000000},"out":{"seq":42,"toSegmentEnd":true},
          "mediaSeqs":[31,…,42],"subtitles":[],"lengthMs":45000},
  "recipe":{계약6 JSON}}
@@ -2859,7 +2869,9 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 - **조각 찾기**(POK-196): 방송의 **회차 귀속 행**(`RoundRows` — 위 「카드 장면 두 칸」)에서 고른다. 회차 머리 앞 · 회차 사이의 비귀속 행과 같은
   물리 키의 앞 방송 조각은 안 찍는다. 머리 세션 행이 없는 옛 방송만 물리 키(`COALESCE(ingest_stream_id, stream_id)`, POK-233) + 방송 시간
   (시작 2분 전부터 종료 10분 뒤까지)으로 자른다. `upload_state = 'uploaded'`만 쓴다. 카드 묶음(50장)이 여러 방송에 걸쳐도 장부 왕복은 회차 고르기
-  한 번 + 회차 행 한 번이다(방송마다 그 방송의 회차). 한 방송의 장부 값이 장면 계산의 전제를 깨면 그 방송 카드만 빠지고 WARN
+  한 번 + 회차 행 한 번이다(방송마다 그 방송의 회차). 장면이 없는 카드가 방송 중인 방송에 있으면 회차 완결을 묶음 한 번에 묻고,
+  완결인 방송은 회차를 다시 읽어 판정한 뒤에만 내려놓는다(완결을 회차 행 뒤에 읽어, 그 사이 마지막 행이 들어왔을 수 있다 — 그때만
+  두 번 더). 한 방송의 장부 값이 장면 계산의 전제를 깨면 그 방송 카드만 빠지고 WARN
   `jumpcard.scene_unavailable`이 남는다.
 - **주문서**: `{"schemaVersion":1,"kind":"live|card|clip","targetId","capturedAt","source":{"bucket","s3Key","offsetMs","offsetOrigin"?},"output":{"bucket","s3Key"}}`.
   `offsetMs`는 0 이상 정수(ms)다. `offsetOrigin`(카드 · 라이브만, POK-196)은 `offsetMs`를 조각 파일 안 어디서부터 재는가 — 고른 행의 판으로
@@ -2898,6 +2910,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
   (`FILE_HEAD`)이면 결과 자리로 옮길 때 m(파일 머리 → 영상 첫 표본)을 뺀다. 그 조각이 앞 조각과 이어져 렌더 배치의 몫 시작(`fromUs`)이
   음수면 그 자리는 뒤 조각 첫 표시 프레임보다 많아야 한 프레임 앞이다(앞 조각 마지막 화면이 찍힐 수 있다). 사진 고르기에만 걸리는 한계라
   계산은 바꾸지 않았다.
+- **카드 순회 한 묶음은 후보 방송마다 회차 행 전부를 읽는다**(POK-196 — 카드 장면이 메모리 F 라서다). 로컬 실측(방송 50 × 회차 1만 행 · `CardThumbnailBatchScaleTest`)은 한 번에 50만 행 · 0.8–2.6초다. 2초 새 카드 순회도 같은 읽기라, 긴 회차 방송이 여럿이면 한 번이 순회 주기의 절반 안팎을 쓴다. 줄이는 일은 이 판 밖이다.
 - 라이브 주문이 일꾼에서 늦게 처리되면 옛 장면이 같은 키를 잠깐 덮을 수 있다. 표의 시각은 되돌지 않고 다음 분에 다시 덮인다.
 
 ### clip — 보관함 목록·상세 (POK-243)
