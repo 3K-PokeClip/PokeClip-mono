@@ -147,24 +147,29 @@ export function readTrackSamples(
   trackId: number,
 ): SampleTiming[] | null {
   try {
-    return trafSampleLists(viewOf(init), viewOf(fragment), trackId).flat();
+    return [...trafSampleLists(viewOf(init), viewOf(fragment), trackId, MAX_TRACK_SAMPLES)].flat();
   } catch {
     return null;
   }
 }
 
 /**
- * 그 트랙의 **표본 있는** 첫 traf 의 표본(빈 traf 는 건너뜀 — 렌더 readTiming 과 같은 규칙). 표본 있는 traf 가
- * 없으면 빈 목록, 모양을 모르거나 그 트랙 traf 전부의 표본이 MAX_TRACK_SAMPLES 를 넘으면 null
+ * 그 트랙의 **표본 있는** 첫 traf 의 표본(빈 traf 는 건너뜀 — 렌더 readTiming 과 같은 규칙). 그 traf 에서 멈춰 뒤
+ * traf 는 만들지도 보지도 않는다. 표본 있는 traf 가 없으면 빈 목록, 그때까지 모양을 모르거나 표본이 maxSamples 를
+ * 넘으면 null
+ * @param maxSamples 표본 수 상한 — 트랙 여럿을 읽는 쪽이 판독 한 번의 남은 몫을 넘긴다(fileHeadProbe)
  */
 export function readFirstSampledTraf(
   init: Uint8Array,
   fragment: Uint8Array,
   trackId: number,
+  maxSamples: number = MAX_TRACK_SAMPLES,
 ): SampleTiming[] | null {
   try {
-    const lists = trafSampleLists(viewOf(init), viewOf(fragment), trackId);
-    return lists.find((samples) => samples.length > 0) ?? [];
+    for (const samples of trafSampleLists(viewOf(init), viewOf(fragment), trackId, maxSamples)) {
+      if (samples.length > 0) return samples;
+    }
+    return [];
   } catch {
     return null;
   }
@@ -178,12 +183,19 @@ export function readFirstSampledTraf(
  */
 export const MAX_TRACK_SAMPLES = 48_000;
 
-/** 그 트랙 traf 마다의 표본 목록(moof · traf 순서). 표본이 모두 합쳐 MAX_TRACK_SAMPLES 를 넘으면 RangeError */
-function trafSampleLists(initView: DataView, view: DataView, trackId: number): SampleTiming[][] {
+/**
+ * 그 트랙 traf 마다의 표본 목록을 moof · traf 순서로 하나씩 내준다(받는 쪽이 멈추면 뒤 traf 는 읽지 않는다). 내준 표본이
+ * 모두 합쳐 maxSamples 를 넘으면 RangeError
+ */
+function* trafSampleLists(
+  initView: DataView,
+  view: DataView,
+  trackId: number,
+  maxSamples: number,
+): Generator<SampleTiming[]> {
   const moov = topBox(initView, 'moov');
   const trexDuration = (moov && defaultDurations(initView, moov).get(trackId)) ?? 0;
-  const lists: SampleTiming[][] = [];
-  let room = MAX_TRACK_SAMPLES;
+  let room = maxSamples;
   for (const moof of boxes(view, 0, view.byteLength)) {
     if (moof.type !== 'moof') continue;
     for (const traf of boxes(view, moof.start, moof.end)) {
@@ -194,10 +206,9 @@ function trafSampleLists(initView: DataView, view: DataView, trackId: number): S
       const base = tfdt ? decodeTime(view, tfdt) : null;
       const samples = trafSamples(view, traf, base, header.defaultDuration ?? trexDuration, room);
       room -= samples.length;
-      lists.push(samples);
+      yield samples;
     }
   }
-  return lists;
 }
 
 /**
@@ -283,9 +294,17 @@ export interface TrackHeader {
 }
 
 /**
+ * init 하나의 트랙 수 상한. 트랙 머리를 읽는 쪽(fileHeadProbe · fmp4Audio)은 트랙마다 표본 있는 첫 traf 를 찾아 훑으므로
+ * 트랙 수가 곧 판독 비용의 배수다 — 64KB 에 trak 수백 개면 판독 한 번이 초 단위로 멈춘다(보안 검수 prw2 경화 M-1).
+ * 값 = ② 녹화 조각의 트랙(영상 1 + 소리 최대 6 — OBS 녹화 소리 트랙 6 · 실물 segment_1v6a)의 두 배를 넘는 여유
+ */
+export const MAX_TRACKS = 16;
+
+/**
  * init(moov)의 트랙 머리를 moov 의 트랙 순서대로. ② 녹화 파일처럼 moof 가 같은 바이트에 있어도 moov 만 본다.
  * tkhd · mdhd · hdlr 가 빠진 trak 은 뺀다(readTrackSpans 와 같다). moov 가 없으면 빈 목록, 상자가 칸까지
- * 닿지 않거나 모르는 버전이면 null
+ * 닿지 않거나 모르는 버전이거나 · track_ID 가 겹치거나(ISO/IEC 14496-12 — 겹치지 않는다) · 트랙이 MAX_TRACKS 를
+ * 넘으면 null
  */
 export function readTrackHeaders(init: Uint8Array): TrackHeader[] | null {
   const view = viewOf(init);
@@ -293,9 +312,13 @@ export function readTrackHeaders(init: Uint8Array): TrackHeader[] | null {
     const moov = topBox(view, 'moov');
     if (!moov) return [];
     const headers: TrackHeader[] = [];
+    const ids = new Set<number>();
     for (const trak of boxes(view, moov.start, moov.end)) {
       const header = trak.type === 'trak' ? trackHeader(view, trak) : null;
-      if (header) headers.push(header);
+      if (!header) continue;
+      if (ids.has(header.trackId) || headers.length === MAX_TRACKS) return null;
+      ids.add(header.trackId);
+      headers.push(header);
     }
     return headers;
   } catch {

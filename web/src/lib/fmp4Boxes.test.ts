@@ -460,6 +460,16 @@ describe('readFirstSampledTraf: 그 트랙의 표본 있는 첫 traf 의 표본�
     expect(audio?.[0]).toEqual({ dts: 0, pts: 0, duration: 1024 });
   });
 
+  it('실물 ② 파일(영상 1 + 소리 6)의 일곱 트랙 모두: mp4dump 의 표본 수 · tfdt 그대로다', () => {
+    // mp4dump: moof 하나 — 트랙 2–7 은 tfdt 0 · 표본 6, 트랙 1 은 tfdt 8136 · 표본 5
+    const read = [1, 2, 3, 4, 5, 6, 7].map((trackId) => {
+      const samples = readFirstSampledTraf(segment1v6a, segment1v6a, trackId);
+      return [samples?.length, samples?.[0]?.dts];
+    });
+
+    expect(read).toEqual([[5, 8136], ...Array.from({ length: 6 }, () => [6, 0])]);
+  });
+
   it('표본 있는 traf 가 없으면 빈 목록 · 모양을 모르면 null 이다', () => {
     const empty = concat(moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0, []))));
     const noTfdt = concat(moof(traf(tfhd(1), trun(0, 0, [{}]))));
@@ -904,5 +914,49 @@ describe('표본 수 상한: 표본별 칸이 없는 trun 의 표본 수 폭주�
         durationTicks: SAMPLE_LIMIT + 1,
       },
     ]);
+  });
+});
+
+describe('표본 수 상한: 표본 있는 첫 traf 만 만든다(보안 검수 prw2 경화 M-1)', () => {
+  it('readFirstSampledTraf 는 표본 있는 첫 traf 에서 멈춘다: 뒤 traf 의 표본 수 폭주는 만들지도 보지도 않는다', () => {
+    const bytes = concat(
+      moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0x100, []))),
+      moof(traf(tfhd(1), tfdt(0, 70n), trun(0, 0x100, [{ duration: 4 }]))),
+      moof(bareRunTraf(90n, 0xffffffff)),
+    );
+
+    expect(readFirstSampledTraf(bytes, bytes, 1)).toEqual([{ dts: 70, pts: 70, duration: 4 }]);
+  });
+
+  it('readFirstSampledTraf 의 표본 상한을 부르는 쪽이 줄 수 있다: 첫 traf 표본이 그만큼이면 읽고 넘으면 null 이다', () => {
+    const bytes = moof(bareRunTraf(0n, 10));
+
+    expect(readFirstSampledTraf(bytes, bytes, 1, 10)).toHaveLength(10);
+    expect(readFirstSampledTraf(bytes, bytes, 1, 9)).toBeNull();
+  });
+});
+
+/** init 하나의 트랙 수 상한(fmp4Boxes MAX_TRACKS — ② 는 영상 1 + 소리 최대 6) */
+const TRACK_LIMIT = 16;
+
+describe('트랙 수 상한: trak 수 · track_ID 중복으로 판독이 부풀지 않는다(보안 검수 prw2 경화 M-1)', () => {
+  it('트랙이 상한까지면 읽고, 하나라도 넘으면 null 이다', () => {
+    const traks = (count: number) =>
+      Array.from({ length: count }, (_, i) => trak(i + 1, i === 0 ? 'vide' : 'soun', 48000));
+
+    expect(readTrackHeaders(init(...traks(TRACK_LIMIT)))).toHaveLength(TRACK_LIMIT);
+    expect(readTrackHeaders(init(...traks(TRACK_LIMIT + 1)))).toBeNull();
+  });
+
+  it('같은 track_ID 의 trak 이 둘이면 null 이다(ISO/IEC 14496-12 — track_ID 는 겹치지 않는다)', () => {
+    expect(readTrackHeaders(init(trak(1, 'vide', 90000), trak(1, 'soun', 48000)))).toBeNull();
+  });
+
+  it('같은 track_ID 의 trak 1만 개(약 1MB)도 곧바로 null 이다', () => {
+    const bytes = init(...Array.from({ length: 10_000 }, () => trak(1, 'vide', 90000)));
+    const started = performance.now();
+
+    expect(readTrackHeaders(bytes)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

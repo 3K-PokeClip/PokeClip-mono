@@ -157,7 +157,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('ensureHeads: ② 머리를 64KB 씩 읽어 seq 캐시에 채운다', () => {
+describe('ensureHeads: ② 머리를 64KB 부터 두 배씩 읽어 seq 캐시에 채운다', () => {
   it('실물 ② 파일은 첫 64KB 하나로 읽고, 샘플 있는 트랙의 첫 DTS 최솟값 · PTS 최솟값 · 영상 첫 DTS 를 초로 준다', async () => {
     const { ensureHeads, headCacheFor } = await load();
     const spy = serve(segment1v6a);
@@ -183,7 +183,7 @@ describe('ensureHeads: ② 머리를 64KB 씩 읽어 seq 캐시에 채운다', (
     expect([...new Headers(init?.headers).keys()]).toEqual(['range']);
   });
 
-  it('첫 64KB 에서 샘플 있는 traf 를 못 찾은 트랙이 남으면 다음 64KB 를 받아 그 트랙까지 넣는다', async () => {
+  it('첫 64KB 에서 샘플 있는 traf 를 못 찾은 트랙이 남으면 다음 128KB 를 받아 그 트랙까지 넣는다', async () => {
     const { ensureHeads, headCacheFor } = await load();
     const bytes = file(
       [VIDEO, AUDIO],
@@ -195,10 +195,23 @@ describe('ensureHeads: ② 머리를 64KB 씩 읽어 seq 캐시에 채운다', (
 
     await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
 
-    expect(rangesOf(spy)).toEqual(['bytes=0-65535', 'bytes=65536-131071']);
+    expect(rangesOf(spy)).toEqual(['bytes=0-65535', 'bytes=65536-196607']);
     expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({
       state: 'ready',
       head: { hd: 0.05, hp: 0.05, videoDts: 0.1 },
+    });
+  });
+
+  it('받은 본문이 이번에 요청한 크기보다 짧으면 파일 끝이라 더 받지 않는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const spy = serve(emptyTrackFile(65_536 + 100_000));
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
+
+    expect(rangesOf(spy)).toEqual(['bytes=0-65535', 'bytes=65536-196607']);
+    expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({
+      state: 'ready',
+      head: { hd: 0.1, hp: 0.1, videoDts: 0.1 },
     });
   });
 
@@ -407,15 +420,24 @@ describe('ensureHeads: ② 머리를 64KB 씩 읽어 seq 캐시에 채운다', (
 });
 
 describe('ensureHeads: ② 하나에서 받는 바이트에 상한을 둔다(보안 검수 prw2 E4b-1 M2)', () => {
-  it('빈 트랙이 끝까지 이어지는 큰 ② 는 상한까지만 64KB 씩 받고 failed 다', async () => {
+  it('빈 트랙이 끝까지 이어지는 큰 ② 는 64KB 부터 두 배씩, 마지막은 상한까지 남은 만큼 받고 failed 다', async () => {
     const { ensureHeads, headCacheFor } = await load();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const spy = serve(emptyTrackFile(BYTE_LIMIT + 1_000_000));
 
     await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
 
-    expect(spy).toHaveBeenCalledTimes(BYTE_LIMIT / 65_536);
-    expect(rangesOf(spy).at(-1)).toBe(`bytes=${BYTE_LIMIT - 65_536}-${BYTE_LIMIT - 1}`);
+    // 64 · 128 · 256 · 512 · 1024 · 2048 · 4096KB 를 받으면 8128KB — 마지막은 상한(8192KB)까지 남은 64KB
+    expect(rangesOf(spy)).toEqual([
+      'bytes=0-65535',
+      'bytes=65536-196607',
+      'bytes=196608-458751',
+      'bytes=458752-983039',
+      'bytes=983040-2031615',
+      'bytes=2031616-4128767',
+      'bytes=4128768-8323071',
+      'bytes=8323072-8388607',
+    ]);
     expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({ state: 'failed' });
   });
 
@@ -522,5 +544,266 @@ describe('ensureHeads: 전송 오류(codex prw2 E4b-1 r1 지적 6 · 7)', () => 
 
     expect(rangesOf(spy)).toEqual(['bytes=0-65535', null]);
     expect(headCacheFor(MEDIA_KEY).get(300)?.state).toBe('ready');
+  });
+});
+
+// --- 트랙 수 · 표본 수 증폭(보안 검수 prw2 경화 M-1 · cc M): 판독 한 번이 트랙마다 표본 상한을 새로 쓰면 CPU 가 멈춘다 ---
+
+/** 판독 한 번의 표본 상한(fmp4Boxes MAX_TRACK_SAMPLES — 창 상한 200초 × 최고 프레임률 240) */
+const SAMPLE_LIMIT = 48_000;
+
+/** 표본별 칸이 없는(stride 0) trun 하나의 traf — 수십 바이트로 표본 count 개 */
+function bareTraf(trackId: number, count: number): Uint8Array {
+  return box(
+    'traf',
+    fullBox('tfhd', 0, 0x020000, u32(trackId)),
+    fullBox('tfdt', 0, 0, u32(0)),
+    fullBox('trun', 0, 0, u32(count)),
+  );
+}
+
+/** 한 ② 판독이 끝날 때까지 걸린 밀리초와 그 seq 의 캐시 값 */
+async function timedProbe(bytes: Uint8Array) {
+  const { ensureHeads, headCacheFor } = await load();
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  serve(bytes);
+  const started = performance.now();
+  await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
+  return { ms: performance.now() - started, entry: headCacheFor(MEDIA_KEY).get(7) };
+}
+
+describe('ensureHeads: 트랙 수로 판독이 부풀지 않는다(보안 검수 prw2 경화 M-1)', () => {
+  it('표본 상한만큼 든 영상 트랙 455개는 곧바로 failed 다(트랙마다 상한을 새로 쓰지 않는다)', async () => {
+    const ids = Array.from({ length: 455 }, (_, i) => i + 1);
+    const bytes = file(
+      ids.map((id) => trak(id, 'vide', 90000)),
+      moof(...ids.map((id) => bareTraf(id, SAMPLE_LIMIT))),
+    );
+
+    const { ms, entry } = await timedProbe(bytes);
+
+    expect(entry).toEqual({ state: 'failed' });
+    expect(ms).toBeLessThan(200);
+  });
+
+  it('같은 track_ID 의 trak 1만 개는 곧바로 failed 다', async () => {
+    const bytes = file(
+      Array.from({ length: 10_000 }, () => trak(1, 'vide', 90000)),
+      moof(bareTraf(1, SAMPLE_LIMIT)),
+    );
+
+    const { ms, entry } = await timedProbe(bytes);
+
+    expect(entry).toEqual({ state: 'failed' });
+    expect(ms).toBeLessThan(200);
+  });
+
+  it('같은 track_ID 의 trak 이 둘이면 failed 다', async () => {
+    const bytes = file([VIDEO, trak(1, 'soun', 48000)], moof(traf(1, 9000, [{ duration: 3000 }])));
+
+    const { entry } = await timedProbe(bytes);
+
+    expect(entry).toEqual({ state: 'failed' });
+  });
+
+  it('판독 한 번의 표본은 트랙 합으로 상한까지다: 두 트랙이 합쳐 넘으면 failed 다', async () => {
+    const bytes = file(
+      [VIDEO, AUDIO],
+      moof(bareTraf(1, SAMPLE_LIMIT / 2), bareTraf(2, SAMPLE_LIMIT / 2 + 1)),
+    );
+
+    const { entry } = await timedProbe(bytes);
+
+    expect(entry).toEqual({ state: 'failed' });
+  });
+
+  it('두 트랙이 합쳐 상한까지면 읽는다', async () => {
+    const bytes = file(
+      [VIDEO, AUDIO],
+      moof(bareTraf(1, SAMPLE_LIMIT / 2), bareTraf(2, SAMPLE_LIMIT / 2)),
+    );
+
+    const { entry } = await timedProbe(bytes);
+
+    expect(entry).toEqual({ state: 'ready', head: { hd: 0, hp: 0, videoDts: 0 } });
+  });
+});
+
+// --- 재판독 비용(보안 검수 prw2 후속 경화 M-1 · kty 결정 (가)): 받을 때마다 받은 앞부분 전체를 다시 읽으므로 받는 횟수가 곧 비용이다 ---
+
+/** piece 를 이어 붙여 size 바이트 이상으로 만든 바이트 */
+function repeated(piece: Uint8Array, size: number): Uint8Array {
+  const count = Math.ceil(size / piece.length);
+  const out = new Uint8Array(count * piece.length);
+  for (let i = 0; i < count; i += 1) out.set(piece, i * piece.length);
+  return out;
+}
+
+/**
+ * 16 트랙 ② — 표본 있는 traf(15 트랙 합 47,985 표본)를 상한의 한가운데(4MiB)에 두고, 그 앞뒤를 16번 트랙의 빈 traf 로
+ * 채워 상한을 넘긴다. 4MiB 뒤로는 판독마다 표본을 모두 읽고도 16번 트랙 때문에 머리가 끝나지 않는다(보안 검수 P5 · P6 꼴)
+ */
+function sampledInMiddle(): Uint8Array {
+  const ids = Array.from({ length: 16 }, (_, i) => i + 1);
+  const head = file(ids.map((id) => trak(id, id === 1 ? 'vide' : 'soun', 48000)));
+  const empty = moof(bareTraf(16, 0));
+  const sampled = moof(...ids.slice(0, 15).map((id) => bareTraf(id, 3199)));
+  const before = repeated(empty, BYTE_LIMIT / 2 - head.length);
+  return concat(head, before, sampled, repeated(empty, BYTE_LIMIT / 2 + 100_000));
+}
+
+describe('ensureHeads: 재판독 횟수가 받는 크기를 두 배씩 키운 만큼으로 준다(보안 검수 prw2 후속 경화 M-1 · kty (가))', () => {
+  it('표본 traf 를 4MiB 에 두고 빈 traf 로 상한을 넘긴 16 트랙 ② 는 여덟 번 받고 3초 안에 failed 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spy = serve(sampledInMiddle());
+    const started = performance.now();
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
+
+    const ms = performance.now() - started;
+    expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({ state: 'failed' });
+    expect(spy).toHaveBeenCalledTimes(8);
+    expect(ms).toBeLessThan(3_000);
+  }, 120_000);
+});
+
+// --- 본문 받기(codex prw2 경화 r1 지적 1 · 2 · 3) ---
+
+/**
+ * bytes 를 size 바이트 쪼각으로 흘려 주는 200 응답. 다음 쪼각을 내기 전에 앞 쪼각의 바이트를 0 으로 지운다 — 미리 당기지
+ * 않으므로(highWaterMark 0) 다음 쪼각은 읽는 쪽이 앞 쪼각을 다 쓰고 다시 read 할 때 나간다
+ */
+function reusedChunks(bytes: Uint8Array, size: number): Response {
+  let sent = 0;
+  let previous: Uint8Array | null = null;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        previous?.fill(0);
+        if (sent >= bytes.length) {
+          controller.close();
+          return;
+        }
+        previous = bytes.slice(sent, sent + size);
+        sent += previous.length;
+        controller.enqueue(previous);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return new Response(body, { status: 200 });
+}
+
+/** 바꿔 끼우기 전의 Uint8Array — 대역을 전역에 끼운 동안에도 진짜 생성자를 쓰려고 둔다 */
+const NATIVE_BYTES = Uint8Array;
+
+/**
+ * 새 바이트 저장소를 잡는 횟수를 세는 Uint8Array 대역. 길이 · 배열에서 만들 때만 센다(ArrayBuffer 위의 보기 — subarray —
+ * 는 저장소를 잡지 않는다). chunkOf 로 만든 쪼각은 이 대역을 constructor 로 가져 그 slice 도 대역을 거친다(species)
+ */
+function countingBytes() {
+  let allocations = 0;
+  const type = new Proxy(NATIVE_BYTES, {
+    construct(target, args, newTarget) {
+      if (!(args[0] instanceof ArrayBuffer)) allocations += 1;
+      return Reflect.construct(target, args, newTarget);
+    },
+  });
+  const proto: object = Object.create(NATIVE_BYTES.prototype, { constructor: { value: type } });
+  return {
+    type,
+    chunkOf: (bytes: Uint8Array): Uint8Array => Object.setPrototypeOf(bytes, proto),
+    allocations: () => allocations,
+  };
+}
+
+describe('ensureHeads: 본문 쪼각을 들고 있지 않는다(codex prw2 경화 r1 지적 1)', () => {
+  it('1바이트 쪼각마다 복사본을 만들지 않는다: 바이트 저장소는 판독 버퍼를 두 배씩 늘린 횟수만큼만 새로 잡는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const counting = countingBytes();
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= segment1v6a.length) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(counting.chunkOf(segment1v6a.slice(sent, sent + 1)));
+        sent += 1;
+      },
+    });
+    stubFetch(() => new Response(body, { status: 200 }));
+    vi.stubGlobal('Uint8Array', counting.type);
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 300, url: SIGNED }], []);
+
+    vi.stubGlobal('Uint8Array', NATIVE_BYTES);
+    // 실물 366,425바이트 — 두 배씩 늘리면 log2 ≈ 19번이다. 쪼각마다 복사하면 36만 번을 넘는다
+    expect(counting.allocations()).toBeLessThan(40);
+    expect(headCacheFor(MEDIA_KEY).get(300)?.state).toBe('ready');
+  });
+
+  it('받은 쪼각은 곧바로 판독 버퍼로 옮긴다: 다음 쪼각 전에 앞 쪼각 바이트가 지워져도 실물 ② 를 그대로 읽는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    stubFetch(() => reusedChunks(segment1v6a, 1));
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 300, url: SIGNED }], []);
+
+    expect(headCacheFor(MEDIA_KEY).get(300)).toEqual({
+      state: 'ready',
+      head: { hd: 0, hp: 0, videoDts: 8136 / 90000 },
+    });
+  });
+});
+
+describe('ensureHeads: 상한에서 끊은 본문은 스트림을 닫는다(cc · codex prw2 경화 r1 L)', () => {
+  it('상한보다 큰 200 본문을 끊으면 스트림의 cancel 이 불린다', async () => {
+    const { ensureHeads } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bytes = emptyTrackFile(2 * BYTE_LIMIT);
+    const cancel = vi.fn();
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const piece = bytes.slice(sent, sent + 65_536);
+        sent += piece.length;
+        controller.enqueue(piece);
+      },
+      cancel,
+    });
+    stubFetch(() => new Response(body, { status: 200 }));
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ensureHeads: 정확히 상한인 ② 는 받는 길과 무관하게 같은 결과다(codex prw2 경화 r1 지적 2)', () => {
+  it('끝까지 빈 트랙이 있는 정확히 상한 크기 ② 는 Range 로 받든 200 으로 받든 failed 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bytes = emptyTrackFile(BYTE_LIMIT);
+    stubFetch((url, init) => {
+      const range = new Headers(init?.headers).get('Range');
+      if (url.endsWith('whole') || range === null)
+        return new Response(bytes.slice(), { status: 200 });
+      const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(range)!;
+      if (Number(from) >= bytes.length) return new Response(null, { status: 416 });
+      return new Response(bytes.slice(Number(from), Number(to) + 1), { status: 206 });
+    });
+
+    await ensureHeads(
+      MEDIA_KEY,
+      [
+        { seq: 1, url: `${SIGNED}&range` },
+        { seq: 2, url: `${SIGNED}&whole` },
+      ],
+      [],
+    );
+
+    expect(headCacheFor(MEDIA_KEY).get(1)).toEqual({ state: 'failed' });
+    expect(headCacheFor(MEDIA_KEY).get(2)).toEqual({ state: 'failed' });
   });
 });
