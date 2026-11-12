@@ -2,6 +2,7 @@ package com.pokeclip.clip.thumbnail;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.jumpcard.CardPositionReader.Scene;
 import com.pokeclip.clip.jumpcard.JumpCardCreated;
 import com.pokeclip.clip.segment.OffsetOrigin;
 import com.pokeclip.clip.segment.TimelineOriginReader;
@@ -22,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -235,10 +237,73 @@ public class ThumbnailSweeper {
     }
 
     /**
-     * 완성 영상 안에서 찍을 자리. 구간 안 최고 점수 카드가 있으면 그 시점, 없으면 가운데. 카드 시각은 카드 축이라 시각 기준점으로
-     * 재생 축(구간)과 맞춘다. 기준점을 못 재면 가운데로 간다.
+     * 완성 영상 안에서 찍을 자리(결과 영상 ms). 구간 안 최고 점수 카드가 있으면 그 장면, 없으면 가운데.
+     *
+     * <p><b>배치표가 있는 영상</b>(새 꼴 주문 · POK-196 S-c5 · 설계 r7 8.3): 계획 in · out 구간 안 최고 카드의 장면(카드 장면 함수)을
+     * 렌더 배치표로 결과에 놓는다({@link ResultPlacements#resultMsOf} — 원점은 장면 행의 판). 카드가 없으면 결과 가운데다. 배치표가
+     * 깨졌으면 옛 식으로 떨어지고 WARN 을 남긴다. 장면을 읽다 실패하면 결과 가운데로 찍고 WARN 을 남긴다 — 한 영상 때문에 순회 묶음
+     * 전체가 멈추지 않게 던지지 않는다. <b>배치표가 없는 영상</b>(옛 꼴)은 옛 식({@link #legacyOffsetMs}).
+     *
+     * <p>신호 {@code clip.thumbnail.clip_photo}(DEBUG — 깨짐 · 실패만 WARN): {@code source} = {@code placements} · {@code legacy} ·
+     * {@code invalid}, {@code card} = {@code scene}(카드 장면) · {@code none}(가운데) · {@code failed}(장면 읽기 실패 → 가운데).
      */
     long clipOffsetMs(ThumbnailTargets.ClipRow row) {
+        if (row.placementsJson() == null) {
+            log.debug("clip.thumbnail.clip_photo clipId={} source=legacy", row.id());
+            return legacyOffsetMs(row);
+        }
+        ResultPlacements layout;
+        try {
+            layout = ResultPlacements.parse(mapper.readTree(row.placementsJson()));
+        } catch (RuntimeException e) {
+            log.warn("clip.thumbnail.clip_photo clipId={} source=invalid reason={}", row.id(), e.getClass().getSimpleName());
+            return legacyOffsetMs(row);
+        }
+        Optional<Scene> scene;
+        try {
+            scene = planCutOf(row).flatMap(cut -> targets.topCardScene(row.streamId(), cut));
+        } catch (RuntimeException e) {
+            log.warn("clip.thumbnail.clip_photo clipId={} source=placements card=failed reason={}", row.id(),
+                    e.getClass().getSimpleName());
+            return layout.middleMs();
+        }
+        if (scene.isEmpty()) {
+            log.debug("clip.thumbnail.clip_photo clipId={} source=placements card=none", row.id());
+            return layout.middleMs();
+        }
+        log.debug("clip.thumbnail.clip_photo clipId={} source=placements card=scene", row.id());
+        OffsetOrigin origin = OffsetOrigin.ofTimingVersion(scene.get().row().timingVersion());
+        return layout.resultMsOf(scene.get().seq(), scene.get().offsetMs(), origin);
+    }
+
+    /** 주문서 계획의 in · out. 옛 꼴 주문이거나 칸이 틀리면 비어 있다(카드 없음 — 결과 가운데). */
+    private Optional<ThumbnailTargets.PlanCut> planCutOf(ThumbnailTargets.ClipRow row) {
+        if (row.planInJson() == null || row.planOutJson() == null) {
+            return Optional.empty();
+        }
+        JsonNode in = mapper.readTree(row.planInJson());
+        JsonNode out = mapper.readTree(row.planOutJson());
+        if (!integral(in, "seq") || !integral(in, "offsetUs") || !integral(out, "seq")) {
+            return Optional.empty();
+        }
+        boolean toSegmentEnd = out.path("toSegmentEnd").asBoolean(false);
+        if (!toSegmentEnd && !integral(out, "offsetUs")) {
+            return Optional.empty();
+        }
+        return Optional.of(new ThumbnailTargets.PlanCut(in.get("seq").asLong(), in.get("offsetUs").asLong(),
+                out.get("seq").asLong(), toSegmentEnd ? null : out.get("offsetUs").asLong()));
+    }
+
+    private static boolean integral(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value != null && value.isIntegralNumber() && value.canConvertToLong();
+    }
+
+    /**
+     * 옛 식(배치표가 없는 완성 영상). 구간 안 최고 점수 카드가 있으면 그 시점, 없으면 가운데. 카드 시각은 카드 축이라 시각 기준점으로
+     * 재생 축(구간)과 맞춘다. 기준점을 못 재면 가운데로 간다.
+     */
+    long legacyOffsetMs(ThumbnailTargets.ClipRow row) {
         if (row.inAtMs() == null || row.outAtMs() == null) {
             return 0;
         }

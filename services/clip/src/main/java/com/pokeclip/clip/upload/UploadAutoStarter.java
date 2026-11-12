@@ -5,6 +5,8 @@ import com.pokeclip.clip.render.Clip;
 import com.pokeclip.clip.render.RenderJob;
 import com.pokeclip.clip.render.RenderJobRepository;
 import com.pokeclip.clip.render.RenderProperties;
+import com.pokeclip.clip.thumbnail.ResultPlacements;
+import com.pokeclip.clip.upload.UploadInfo.Thumbnail;
 import com.pokeclip.clip.upload.UploadRequestService.Video;
 import com.pokeclip.clip.upload.UploadRequestStore.Stored;
 import org.slf4j.Logger;
@@ -134,13 +136,56 @@ public class UploadAutoStarter {
         }
         long uploadId = inserted.getAsLong();
         inserter.fillPayload(uploadId, UploadPayload.build(mapper, uploadId, clip.getId(), clip.getStreamId(), channelOwner,
-                new UploadPayload.Source(render.outputBucket(), video.s3Key(), video.outputId()), info,
-                render.outputBucket(), Instant.now()));
+                new UploadPayload.Source(render.outputBucket(), video.s3Key(), video.outputId()),
+                sceneInResult(clip, info, uploadId), render.outputBucket(), Instant.now()));
         // 커밋 뒤에 싣는다. 커밋 전에 실으면 일꾼이 아직 없는 줄을 보고 404를 받고, 롤백되면 유령 주문이 남는다. 훅 안에서는 전용
         // 스레드에 제출만 한다(훅은 커넥션을 돌려주기 전에 돌아, 거기서 발행 트랜잭션을 열면 요청 하나가 커넥션 둘을 쥔다).
         // 못 실으면 예외를 안 올린다: 줄은 있고 outbox가 다시 싣는다.
         publishes.publishAfterCommit(uploadId);
         return new Started(null, uploadId);
+    }
+
+    /**
+     * 주문서에 실을 업로드 장면 — 고른 {@code thumbnail.offsetMs} 를 결과 영상 안 {@code [0, 결과 끝)} 으로 자른다(POK-196 S-c5). 그
+     * 값은 이미 결과 영상 안 ms 다(편집기가 in 부터 그 장면까지 결과 영상 안 미디어 거리로 잰다 · 장부 틈은 0 — N9 웹 답 2026-11-12).
+     * 그래서 장부 축으로 풀지 않고 결과 길이로 자르기만 한다. 결과 길이는 렌더 배치표({@link ResultPlacements})에서 읽는다.
+     *
+     * <p>저장값(업로드 줄 · 의도)은 고른 값 그대로 두고 주문서 값만 바꾼다(다시 시도가 같은 값에서 다시 자른다). 결과 길이를 모르면
+     * (옛 꼴 주문 · 배치표가 깨짐) 고른 값 그대로 보내고 WARN 을 남긴다 — 렌더 성공 트랜잭션 안에서 부르므로 던지지 않는다(던지면
+     * 완성까지 되감긴다). 이음이 1초 미만으로 겹치는 조각(K1 · 렌더 표시 소유)에서는 웹이 센 조각 길이 합과 결과 시각이 그 겹침만큼
+     * 다를 수 있다 — 썸네일은 거친 좌표라 받아들인 한계다(설계 r7 8.1).
+     *
+     * <p>신호 {@code clip.upload.scene_mapped}: {@code source=layout}(INFO — {@code resultMs} 가 {@code offsetMs} 와 다르면 잘랐다) ·
+     * {@code source=fallback}(WARN — 결과 길이를 몰라 그대로 보냈다).
+     */
+    private UploadInfo sceneInResult(Clip clip, UploadInfo info, long uploadId) {
+        Thumbnail thumbnail = info.thumbnail();
+        if (!Thumbnail.SCENE.equals(thumbnail.source()) || thumbnail.offsetMs() == null) {
+            return info;
+        }
+        long offsetMs = thumbnail.offsetMs();
+        Optional<ResultPlacements> layout = resultLayoutOf(clip);
+        if (layout.isEmpty()) {
+            log.warn("clip.upload.scene_mapped uploadId={} offsetMs={} resultMs={} source=fallback", uploadId, offsetMs,
+                    offsetMs);
+            return info;
+        }
+        long resultMs = layout.get().clampToResult(offsetMs);
+        log.info("clip.upload.scene_mapped uploadId={} offsetMs={} resultMs={} source=layout", uploadId, offsetMs,
+                resultMs);
+        return info.withThumbnail(Thumbnail.scene(resultMs));
+    }
+
+    /** 완성 줄의 배치표. 없거나(옛 꼴) 모양이 틀리면 비어 있다 — 어떤 이유로도 던지지 않는다(부른 쪽이 성공 트랜잭션이다). */
+    private Optional<ResultPlacements> resultLayoutOf(Clip clip) {
+        if (clip.getPlacements() == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(ResultPlacements.parse(mapper.readTree(clip.getPlacements())));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
     }
 
     /**

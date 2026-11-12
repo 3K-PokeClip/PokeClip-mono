@@ -121,8 +121,12 @@ public class CardPositionReader {
         return scenes;
     }
 
-    /** @param rows 회차 행, seq 오름차순 */
-    static Map<Long, Scene> scenesOf(List<Row> rows, Collection<Long> values) {
+    /**
+     * 이미 읽은 회차 행 위의 장면(DB 를 안 탄다 — 완성 사진이 컷 구간을 정하려고 읽은 행을 그대로 쓴다 · POK-196 S-c5).
+     *
+     * @param rows 회차 행, seq 오름차순
+     */
+    public static Map<Long, Scene> scenesOf(List<Row> rows, Collection<Long> values) {
         Map<Long, Scene> scenes = new HashMap<>();
         if (rows.isEmpty()) {
             return scenes;

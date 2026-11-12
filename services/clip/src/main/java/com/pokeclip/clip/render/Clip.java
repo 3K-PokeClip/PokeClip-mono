@@ -42,6 +42,14 @@ public class Clip {
     @Column(name = "outputs", columnDefinition = "jsonb")
     private String outputs;
 
+    /**
+     * 렌더 결과 배치표 묶음 {@code {"placements": [...], "lengthUs": n}}(V224 · POK-196 S-c5). 새 꼴 주문의 성공 보고가 실은 그대로다.
+     * 옛 꼴 · V224 전 줄은 null. 읽기는 {@code ResultPlacements} 하나로 한다.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "placements", columnDefinition = "jsonb")
+    private String placements;
+
     @Column(name = "error_code", length = 32)
     private String errorCode;
 
@@ -62,9 +70,11 @@ public class Clip {
         this.updatedAt = Instant.now();
     }
 
-    void rendered(String outputsJson) {
+    /** @param placementsJson 결과 배치표 묶음. 옛 꼴 보고면 null */
+    void rendered(String outputsJson, String placementsJson) {
         this.status = ClipStatus.RENDERED;
         this.outputs = outputsJson;
+        this.placements = placementsJson;
         this.errorCode = null;
         this.errorMessage = null;
         this.updatedAt = Instant.now();
@@ -104,6 +114,10 @@ public class Clip {
 
     public String getOutputs() {
         return outputs;
+    }
+
+    public String getPlacements() {
+        return placements;
     }
 
     public String getErrorCode() {

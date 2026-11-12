@@ -2548,7 +2548,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `STARTED` | 주문됨·시작됨 | 200 `{proceed:true, executionToken(새 UUID), attemptOrdinal(+1), isFinalAttempt(≥3)}` — 옛 토큰은 이 순간부터 죽는다, 진행률 0, 영상 `rendering` |
 | `STARTED` | 끝남 | 200 `{proceed:false}` — 일꾼은 메시지를 지운다 |
 | `PROGRESS`·`RETRY_SCHEDULED` | 시작됨 + 토큰 일치 | 200 `{}` — 진행률은 같은 토큰 안에서 단조(뒤로 가는 값 무시) |
-| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 · **그 판의 업로드 의도가 있으면 같은 트랜잭션에서 업로드 줄**(POK-291, 아래 절) |
+| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 · 새 꼴 주문의 맨 위 `placements` · `lengthUs`(렌더 결과 배치표)는 받은 그대로 `clips.placements`(`V224`, POK-196)에 — 모양 검사는 읽는 쪽이 하고 틀려도 성공을 막지 않는다 · **그 판의 업로드 의도가 있으면 같은 트랜잭션에서 업로드 줄**(POK-291, 아래 절) |
 | `TERMINAL_FAILED` | 시작됨 + 토큰 일치 · **주문됨 + 무토큰**(preflight) | 200 — `failed`, `error.code`·`message` 저장 |
 | 토큰 불일치 | 시작됨 | **409 `SUPERSEDED`** — 일꾼은 중단만, 메시지는 안 건드린다 |
 | 아무 보고 | 끝남 | **409 `TERMINAL`** |
@@ -2751,6 +2751,11 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 - **벌 고르기**: 영상 파일이 하나면 그것, 여럿이면 `outputId` 필수(무엇을 올릴지 우리가 정하지 않는다). 지금 편집 화면은 편집본마다 한 벌만 만든다.
 - **주문서**: `{"schemaVersion":1,"jobType":"UPLOAD","uploadId","clipId","streamId","channelOwnerUserId","source":{"bucket","s3Key","outputId"},"video":{"title","description","categoryId","privacyStatus","publishAt"?,"tags":[…],"madeForKids"},"thumbnail":null|{"source":"scene","offsetMs"}|{"source":"file","bucket","s3Key","contentType"},"requestedAt"}`.
   `categoryId`·`publishAt`은 POK-381. `publishAt`(UTC ISO-8601)은 예약일 때만 싣고, 그때 `privacyStatus`는 `private`다.
+  `thumbnail.offsetMs`(장면)는 고른 값이 이미 완성 영상 안 ms 라(편집기가 in 부터 결과 영상 안 미디어 거리로 잰다 · 장부 틈은 0) 축을 바꾸지
+  않고, 렌더 배치표의 결과 길이로 `[0, 결과 끝)` 안에 자르기만 해서 싣는다(POK-196 · `UploadAutoStarter`). 저장값(업로드 줄 · 의도)은 고른 값
+  그대로다. 신호 `clip.upload.scene_mapped`(`source=layout` INFO · 결과 길이를 몰라 그대로 보내면 `source=fallback` WARN — 옛 꼴 영상 ·
+  배치표가 깨짐. 렌더 성공 트랜잭션 안이라 던지지 않는다). 🔴 한계: 조각이 1초 미만으로 겹친 이음(렌더 표시 소유)에서는 편집기가 센 조각 길이
+  합과 결과 시각이 겹침만큼 다를 수 있다 — 썸네일은 거친 좌표라 받아들인다.
   옛 문(보관함 「업로드」)은 분류 20·예약 없음으로 싣는다. 다시 시도는 실패한 줄의 분류·예약을 그대로 옮긴다: 예약 시각이 이미 지났으면 유튜브가 올리자마자 공개한다.
   `schemaVersion`은 1 그대로다(POK-291): 새 칸은 선택 칸이고, 판을 올리면 옛 일꾼이 못 읽는다며 지워 줄이 `queued`로 영원히 남는다. 쓰는 자리는 하나다(`UploadPayload`).
   선기록·후발행(outbox)은 렌더와 같다. 줄을 만든 트랜잭션의 **커밋 뒤 훅은 전용 스레드(`upload-publish-N`, 둘)에 발행을 제출만 한다**
@@ -2827,7 +2832,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 | 라이브(`state=live` 목록 `thumbnailUrl`) | 회차 귀속 행 가운데 올라간 seq 최대 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
 | 지난 방송(`state=past` 목록 `thumbnailUrl`) | 가리지 않은 카드 중 **점수가 가장 높은** 카드의 사진(POK-463: 가린 카드는 대표가 아니다), 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
 | 카드(카드 목록 `thumbnailUrl`) | 카드 장면(`CardPositionReader` — 위 「카드 장면 두 칸」): 카드 시각이 든 귀속 조각의 그 자리, 틈 · 비귀속 자리면 뒤 귀속 조각 첫 화면, 겹침이면 나중 조각 | 조각 창고. 장면 조각이 올라온 뒤에 주문이 나간다. 라이브 머리(마지막 귀속 행 뒤)는 장면이 없어 다음 행을 기다린다 |
-| 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드 시점(시각 기준점으로 재생 축에 맞춘다), 없으면 가운데 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
+| 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드의 장면, 없으면 가운데. 배치표가 있는 영상(새 꼴 · POK-196)은 주문서 계획 in · out 을 카드 축으로 옮긴 구간 안 카드의 카드 장면을 렌더 배치표로 결과 ms 에 놓는다(`ResultPlacements` — 틈 안 카드는 뒤 조각 첫 화면). 배치표가 없는 옛 영상은 레시피 컷 구간 · 시각 기준점으로 맞춘 카드 시점 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
 
 - **순회**: `ThumbnailSweeper`가 `THUMBNAIL_INTERVAL`마다 라이브·카드·영상을 차례로 훑어 주문을 낸다. 카드·영상은 한 번에 50개(사진 없는 것을
   번호 큰 순으로), 사진이 안 오면 5분 뒤 다시, **세 번까지만**(조각이 지워졌으면 영원히 실패한다). 보관 기한이 지난 방송의 카드는 안 본다.

@@ -135,6 +135,10 @@ public class JobEventService {
      * <p>완성과 <b>같은 트랜잭션</b>에서 그 판의 「렌더 뒤 업로드」 의도대로 업로드 줄을 만든다(POK-291, {@link UploadAutoStarter}).
      * 같은 성공 보고가 다시 오면 위 보고 장부가 먼저 막아 여기 다시 안 온다. 업로드 줄 쓰기가 실패하면 완성까지 되감기고 장부도 안 남아
      * 일꾼이 같은 보고를 다시 보내면 처음부터 다시 된다.
+     *
+     * <p>결과 배치표({@code placements} · {@code lengthUs} — 새 꼴 주문, POK-196 S-c5)는 받은 그대로 완성 줄에 적는다. 검사하지 않는다:
+     * 결과 자리를 쓰는 쪽(완성 사진 · 업로드 장면)이 {@code ResultPlacements} 로 읽다 모양이 틀리면 옛 식 · 받은 값으로 떨어지므로,
+     * 여기서 막으면 결과 영상이 멀쩡한데 성공을 잃는다.
      */
     private Reply succeeded(RenderJob job, JobEventRequest event, Instant at) {
         String problem = validateResult(job, event.result());
@@ -144,10 +148,25 @@ public class JobEventService {
         }
         job.succeeded(at);
         clips.findByIdForUpdate(job.getClipId()).ifPresent(c -> {
-            c.rendered(mapper.writeValueAsString(event.result()));
+            c.rendered(mapper.writeValueAsString(event.result()), layoutJson(event));
             uploads.startFromRequest(c);
         });
         return ok(Map.of());
+    }
+
+    /** 배치표 묶음 {@code {"placements": …, "lengthUs": …}}(받은 칸만). 둘 다 없으면(옛 꼴) null. */
+    private String layoutJson(JobEventRequest event) {
+        if (event.placements() == null && event.lengthUs() == null) {
+            return null;
+        }
+        ObjectNode layout = mapper.createObjectNode();
+        if (event.placements() != null) {
+            layout.set("placements", event.placements());
+        }
+        if (event.lengthUs() != null) {
+            layout.set("lengthUs", event.lengthUs());
+        }
+        return mapper.writeValueAsString(layout);
     }
 
     private Reply terminalFailed(RenderJob job, JobEventRequest event, Instant at) {

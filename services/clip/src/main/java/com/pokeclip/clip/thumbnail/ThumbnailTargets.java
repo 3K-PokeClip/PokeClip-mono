@@ -63,11 +63,17 @@ public class ThumbnailTargets {
                %s""".formatted(extra);
     }
 
-    /** 사진이 없는 완성 영상. 구간은 그 영상을 만든 주문서의 레시피에서 읽는다(편집본이 그 뒤에 바뀌었을 수 있다). */
+    /**
+     * 사진이 없는 완성 영상. 구간은 그 영상을 만든 주문서에서 읽는다(편집본이 그 뒤에 바뀌었을 수 있다) — 배치표가 있는 영상은 계획
+     * in · out({@code plan.in} · {@code plan.out} · 새 꼴), 없는 영상은 레시피 컷(옛 식).
+     */
     static final String CLIPS = """
             SELECT cl.id, cl.stream_id, cl.outputs::text AS outputs,
                    (j.payload -> 'recipe' -> 'cut' ->> 'inAtMs')::bigint AS in_at_ms,
-                   (j.payload -> 'recipe' -> 'cut' ->> 'outAtMs')::bigint AS out_at_ms
+                   (j.payload -> 'recipe' -> 'cut' ->> 'outAtMs')::bigint AS out_at_ms,
+                   cl.placements::text AS placements,
+                   (j.payload #> '{plan,in}')::text AS plan_in,
+                   (j.payload #> '{plan,out}')::text AS plan_out
               FROM clips cl
               JOIN render_jobs j ON j.clip_id = cl.id
               LEFT JOIN thumbnails t ON t.kind = 'clip' AND t.target_id = cl.id::text
@@ -100,12 +106,25 @@ public class ThumbnailTargets {
         }
     }
 
-    record ClipRow(long id, String streamId, String outputsJson, Long inAtMs, Long outAtMs) {
+    /**
+     * 사진이 없는 완성 영상 줄. {@code placementsJson} 은 렌더 결과 배치표 묶음(옛 꼴은 null), {@code planInJson} ·
+     * {@code planOutJson} 은 주문서 계획의 in · out(옛 꼴 주문은 null).
+     */
+    record ClipRow(long id, String streamId, String outputsJson, Long inAtMs, Long outAtMs, String placementsJson,
+                   String planInJson, String planOutJson) {
+    }
+
+    /**
+     * 주문서 계획의 컷 두 끝 — 조각 seq 와 그 안 µs. {@code outOffsetUs} 가 null 이면 끝 조각 끝까지({@code toSegmentEnd})다.
+     */
+    record PlanCut(long inSeq, long inOffsetUs, long outSeq, Long outOffsetUs) {
     }
 
     /** 사진이 없는 카드 줄(장면을 고르기 전). */
     private record Candidate(long id, String streamId, long streamTimestampMs) {
     }
+
+    private static final long MICROS_PER_MILLI = 1_000;
 
     private static final RowMapper<Candidate> CANDIDATE = (rs, i) -> new Candidate(rs.getLong("id"),
             rs.getString("stream_id"), rs.getLong("stream_timestamp_ms"));
@@ -211,8 +230,44 @@ public class ThumbnailTargets {
 
     List<ClipRow> clips(int maxAttempts, Instant retryBefore, int limit) {
         return jdbc.query(CLIPS, (rs, i) -> new ClipRow(rs.getLong("id"), rs.getString("stream_id"),
-                rs.getString("outputs"), (Long) rs.getObject("in_at_ms"), (Long) rs.getObject("out_at_ms")),
+                rs.getString("outputs"), (Long) rs.getObject("in_at_ms"), (Long) rs.getObject("out_at_ms"),
+                rs.getString("placements"), rs.getString("plan_in"), rs.getString("plan_out")),
                 maxAttempts, Timestamp.from(retryBefore), limit);
+    }
+
+    /**
+     * 완성 영상 컷 안 최고 점수 카드의 장면(PDT 설계 r7 8.3 · POK-196 S-c5). 컷 구간은 계획 in · out 을 카드 축({@code start_pts})으로
+     * 옮긴 {@code [start_pts(in) + in µs, 끝)} 이고, 끝은 {@code start_pts(out) + out µs}(끝까지 컷이면 {@code start_pts(out) +
+     * dur(out)})다. 장면은 카드 장면 함수의 규칙 그대로다 — 카드 썸네일과 같은 장면(틈 안 카드는 뒤 조각 첫 화면 · kty 11:27).
+     * 회차 행 한 번을 읽어 구간과 장면이 같이 쓴다.
+     *
+     * <p>카드 구간은 편집기 축(목록 PDT)과 카드 축의 차 m 만큼 넓거나 좁을 수 있다 — 사진 고르기에만 쓰는 한계다(설계 8.3).
+     *
+     * @return 방송 · 회차 · 두 끝 조각 · 구간 안 카드 · 장면 가운데 하나라도 없으면 비어 있다
+     */
+    Optional<Scene> topCardScene(String streamId, PlanCut cut) {
+        Optional<RoundRows.Round> round = broadcasts.findByStreamId(streamId).flatMap(rounds::roundOf);
+        if (round.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Row> rows = rounds.rowsOf(round.get());
+        Optional<Row> in = rowOf(rows, cut.inSeq());
+        Optional<Row> out = rowOf(rows, cut.outSeq());
+        if (in.isEmpty() || out.isEmpty()) {
+            return Optional.empty();
+        }
+        long fromMs = in.get().startPtsMs() + Math.floorDiv(cut.inOffsetUs(), MICROS_PER_MILLI);
+        long toMs = out.get().startPtsMs() + (cut.outOffsetUs() == null ? out.get().durationMs()
+                : Math.floorDiv(cut.outOffsetUs(), MICROS_PER_MILLI));
+        OptionalLong card = topCardIn(streamId, fromMs, toMs);
+        if (card.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(CardPositionReader.scenesOf(rows, List.of(card.getAsLong())).get(card.getAsLong()));
+    }
+
+    private static Optional<Row> rowOf(List<Row> rows, long seq) {
+        return rows.stream().filter(r -> r.seq() == seq).findFirst();
     }
 
     /** {@code [fromMs, toMs)}(카드 축) 안 최고 점수 카드의 시각. */
