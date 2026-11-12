@@ -2,8 +2,8 @@
 
 import { trackApiActivity } from './client';
 
-// 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 지난 방송 목록의 녹화 확인(useVodListMockState — POK-546 · POK-547 은
-// 목록을 바꾸지 않는다) · 편집기 미리보기가 쓴다. 라이브 화면은 부르지 않는다(POK-547).
+// 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 편집기 미리보기(라이브 화면 카드의 미리 받기 useCardEditorReady 포함)가
+// 쓴다. 라이브 화면의 재생 · 지난 방송 목록은 부르지 않는다(POK-547 · POK-568 — 회차 경로를 묻는다).
 //   GET {base}/playback/<키>/list?path=<키>                                       녹화된 구간들(시작 시각·길이)
 //   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4&path=<키>   그 구간의 영상 한 덩어리
 // 🔴 주소는 출입증 쿠키 경로(/playback/<키>) 아래다(POK-317). 재생 서버가 읽는 path 쿼리는 웹이 경로의 키와 같은 값으로 하나 싣는다
@@ -78,7 +78,8 @@ export function parseSpanStartMs(iso: string): number {
 export async function lookupRecordingSpans(streamId: string): Promise<RecordingSpan[] | null> {
   if (BASE === '') return null;
   if (!STREAM_ID_RE.test(streamId)) return [];
-  // apiFetch 밖 요청이라 직접 알린다(본문까지): 지난 방송 목록이 이것을 기다리니 채널 전환 화면도 기다린다(PR #342 2차 리뷰)
+  // apiFetch 밖 요청이라 직접 알린다(본문까지): 라이브 화면의 편집기 미리 받기가 이것을 부르니 채널 전환 화면도 그 답을 기다린다
+  // (PR #342 2차 리뷰)
   return trackApiActivity(async () => {
     try {
       const res = await fetch(playbackUrl(streamId, 'list'), {
@@ -98,7 +99,7 @@ export async function lookupRecordingSpans(streamId: string): Promise<RecordingS
   });
 }
 
-/** 녹화 구간. 재생 서버가 없거나 녹화가 없거나 묻지 못했으면 빈 배열이다(「있음」만 쓰는 목록·편집기) */
+/** 녹화 구간. 재생 서버가 없거나 녹화가 없거나 묻지 못했으면 빈 배열이다(「있음」만 쓰는 편집기) */
 export async function fetchRecordingSpans(streamId: string): Promise<RecordingSpan[]> {
   return (await lookupRecordingSpans(streamId)) ?? [];
 }

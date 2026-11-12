@@ -8,7 +8,7 @@ import { foldPastVodAnswer, type PastVodHold, type PastVodState } from '@/featur
 /** 목록 행 표지 — 「VOD 준비 중」 · 「다시 보기 가능」 · 「다시보기가 없어요」 */
 export type VodBadge = 'preparing' | 'ready' | 'none';
 
-/** 행마다 기억하는 판정(목록 쿼리 데이터의 memory 에 산다) */
+/** 행마다 기억하는 판정(지난 방송 목록 쿼리 데이터의 memory 에서 방송마다 vod 칸에 산다 — useVodListMockState) */
 export interface RowVodMemory extends PastVodHold {
   badge: VodBadge;
   /** 마지막으로 묻기를 시도한 시각(실패해도 넘긴다: 늘 실패하는 행이 처음 보는 행처럼 매 주기 상한 밖으로 묻지 않게) */

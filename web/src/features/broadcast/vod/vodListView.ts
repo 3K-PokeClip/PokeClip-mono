@@ -15,8 +15,8 @@ import type {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * 「방금 종료」의 한도(POK-254). 녹화는 방송 중에 쌓이므로 녹화가 있는 방송은 끝난 뒤 첫 확인(1분)에서 「다시 보기 가능」이
- * 된다. 한 시간이 지나도록 안 잡혔으면 기다려도 오지 않는다: 전에는 며칠 지난 방송도 「방금 종료」라고 했다.
+ * 「방금 종료」의 한도(POK-254). 끝난 지 이만큼 안이면 준비 중 줄이 「방금 종료 · VOD 준비 중」이고, 회차 경로도 주기마다
+ * 묻는다(POK-568 — 그 밖의 미결 줄은 한 주기 상한 안). 전에는 며칠 지난 방송도 「방금 종료」라고 했다.
  * 홈 「준비 중」 배지도 이 값을 쓴다.
  */
 export const JUST_ENDED_MS = 60 * 60 * 1000;
@@ -75,8 +75,11 @@ export function durationLabel(durationSec: number | null): string | null {
 export type VodRowView =
   /** VOD가 아직 없어 열 수 없다. 끝난 지 한 시간 안이면 「방금 종료」다 */
   | { kind: 'preparing'; justEnded: boolean }
-  /** 끝난 지 한 시간이 지났는데 녹화가 없다고 확인됐다. 영상은 없어도 카드·채팅은 지난 방송 화면에서 본다 */
-  | { kind: 'noRecording' }
+  /**
+   * 회차 경로가 다시보기가 없다고 답했다(POK-568 — 끝난 뒤 들어온 화면과 같은 판정). 영상은 없어도 카드·채팅은 지난 방송
+   * 화면에서 본다
+   */
+  | { kind: 'noVod' }
   /** 보관 기한이 지나 지워진 것 — 줄은 남지만 열 것이 없다 */
   | { kind: 'expired' }
   /** 풀 VOD 저장 중 — 썸네일이 진행률로 덮인다 (B5 미구현이라 목업 전용 상태다) */
@@ -102,17 +105,17 @@ export function rowViewFor(
   item: VodBroadcast,
   download: VodDownloadState,
   now: Date,
-  /** 녹화 재생 서버에 물어 이 방송의 녹화가 없다고 확인됐다(물을 수 없으면 false) */
-  recordingMissing = false,
+  /** 회차 경로가 이 방송의 다시보기가 없다고 답했다(물을 수 없거나 아직 모르면 false) */
+  vodMissing = false,
 ): VodRowView {
   // 만료를 상태보다 먼저 본다. 뒤집으면 기한이 지나도록 `ended`에 머문 방송이 「준비 중」으로
   // 접히는데, 화면은 만료 배지를 따로 계산하므로 한 줄이 「곧 준비돼요」와 「이미 지워졌어요」를
   // 동시에 말한다. 기한이 지났으면 무엇을 기다리든 오지 않는다.
   if (ddayFor(item.vodExpiresAt, now).kind === 'expired') return { kind: 'expired' };
   if (VIEW_BY_STATUS[item.status] === 'preparing') {
-    const justEnded = isJustEnded(item.endedAt, now);
-    if (recordingMissing && !justEnded && item.endedAt !== null) return { kind: 'noRecording' };
-    return { kind: 'preparing', justEnded };
+    // 없다는 답은 곧바로 말한다: 끝난 뒤 들어온 화면도 기다리지 않는다
+    if (vodMissing) return { kind: 'noVod' };
+    return { kind: 'preparing', justEnded: isJustEnded(item.endedAt, now) };
   }
   if (download.kind === 'downloading') return { kind: 'downloading', progress: download.progress };
   if (download.kind === 'done') return { kind: 'done' };
@@ -125,7 +128,7 @@ export function isOpenable(view: VodRowView): boolean {
     view.kind === 'ready' ||
     view.kind === 'downloading' ||
     view.kind === 'done' ||
-    view.kind === 'noRecording'
+    view.kind === 'noVod'
   );
 }
 
