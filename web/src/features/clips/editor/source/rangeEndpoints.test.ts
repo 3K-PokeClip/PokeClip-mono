@@ -120,7 +120,8 @@ describe('savable', () => {
     heads.set(2, READY);
 
     expect(before).toEqual({ ok: false, reason: 'headMissing' });
-    expect(savable(range, ctxOf(heads))).toEqual({ ok: true, inMs: BASE, outMs: 1_004_000 + 1040 });
+    // 끝 = 고른 프레임(머리 원점에서 1.0초)과 다음 프레임 사이 가운데 — 길이 0.04 의 반(kty 결정 (다) 2026-11-13)
+    expect(savable(range, ctxOf(heads))).toEqual({ ok: true, inMs: BASE, outMs: 1_004_000 + 1020 });
   });
 
   it('거절 사유는 estimate · headFailed · outsideList · listUnavailable 이 끝점에서 나온다', () => {

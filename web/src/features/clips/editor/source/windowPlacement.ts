@@ -12,7 +12,10 @@ import type { RemuxedSegment, RemuxedWindow } from './remuxWindow';
 // 바뀐다 — 저장 값은 savable 이 머리를 요구한다).
 // 🔴 Δ 는 출력 timescale 로 양자화돼 최대 약 3.5µs 어긋난다. 「PTS ≤ t」 비교에 반 눈금 넘는 여유를 둔다.
 // 🔴 실물 표본 길이는 일정하지 않고(2997 · 3015 · 2970 /90000) 조각 경계가 몇 십 틱 겹친다. 프레임 끝은 표본 길이로 짐작하지
-//    않고 같은 조각 표의 다음 PTS 로 잡는다.
+//    않고 다음 표시 프레임 PTS 로 잡는다 — 조각 마지막 프레임도 창 안 다음 조각의 표시 PTS 로 잡는다. B 프레임 원본은 표본
+//    길이(디코드 순)가 표시 간격보다 길어, 끝점 out 이 다음 프레임 PTS 를 넘으면 결과 끝에 한 프레임이 더 붙는다(렌더 리허설
+//    2026-11-13 · 표본 길이 3/5 G+1 · 표시 간격 3/3 G). 끝점 out 은 이 길이의 반 — G 와 다음 프레임 사이 가운데 — 에
+//    선다(cutPosition · kty 결정 (다)). 창 끝에서 짐작한 길이 · ms 내림 · ③ 와 PDT 의 반 ms 차를 그 여유가 덮는다.
 
 /** 조각 안 미디어 자리 — ③ 축 PTS(초) */
 export interface MediaPos {
@@ -22,10 +25,15 @@ export interface MediaPos {
 
 /**
  * 화면에서 고른 프레임. 그 seq 에서 바뀌지 않는 사실만 든다 — ③ 바이트의 PTS · 길이 · D3 와 목록의 PDT · EXTINF · 판. 머리 ·
- * 이웃은 들지 않고 저장할 때 읽는다(머리 = 캐시 · 이웃 = 다시 받은 목록). 그래서 목록이 미끄러지거나 머리가 늦게 와도 같다
+ * 이웃은 들지 않고 저장할 때 읽는다(머리 = 캐시 · 이웃 = 다시 받은 목록). 그래서 목록이 미끄러지거나 머리가 늦게 와도 같다.
+ * 길이만 예외다 — 조각 마지막 프레임은 고른 창에 다음 조각이 있었는지에 따라 다를 수 있다(dur)
  */
 export interface EditorPick extends MediaPos {
-  /** 그 프레임 길이(초) — 같은 조각 표의 다음 프레임 PTS 까지(조각 마지막 프레임이면 표본 길이) */
+  /**
+   * 그 프레임의 표시 간격(초) — 다음 표시 프레임 PTS 까지. 조각 마지막 프레임이면 창 안 다음 조각(이어진 seq)의 이 PTS 뒤
+   * 첫 프레임까지, 그런 조각이 없으면 조각 안 앞 프레임과의 간격(프레임이 하나뿐이면 표본 길이)으로 짐작한다. 끝점 out 은
+   * 프레임 끝(pts + dur)이 아니라 가운데(pts + dur/2)에 선다 — cutPosition
+   */
   dur: number;
   /** D3_k — ③ 영상 첫 DTS(초) */
   videoDts: number;
@@ -78,14 +86,35 @@ function placedSegments(
   });
 }
 
-function pickOf(placed: PlacedSegment, index: number): EditorPick {
+/**
+ * 그 프레임이 화면에 머무는 길이(초) — 다음 표시 프레임 PTS 까지. 조각 마지막 프레임이면 창 안 다음 조각(이어진 seq)에서 이
+ * PTS 뒤 첫 프레임까지다 — 겹친 이음에서는 뒤 조각이 이기므로 이 PTS 이하인 뒤 조각 프레임은 이 프레임을 덮지 않아 건너뛴다.
+ * 그런 프레임이 없으면(창 끝 · 끊긴 seq) 조각 안 앞 프레임과의 간격, 프레임이 하나뿐이면 표본 길이로 물러난다
+ */
+function displayDur(
+  placed: PlacedSegment,
+  index: number,
+  after: PlacedSegment | undefined,
+): number {
+  const { frames } = placed.table;
+  const frame = frames[index]!;
+  const inner = frames[index + 1];
+  if (inner !== undefined) return inner.pts - frame.pts;
+  const joined = after !== undefined && after.row.seq === placed.row.seq + 1;
+  const following = joined ? after.table.frames.find((f) => f.pts > frame.pts) : undefined;
+  if (following !== undefined) return following.pts - frame.pts;
+  const previous = frames[index - 1];
+  return previous === undefined ? frame.dur : frame.pts - previous.pts;
+}
+
+function pickOf(segments: readonly PlacedSegment[], at: number, index: number): EditorPick {
+  const placed = segments[at]!;
   const { row, table } = placed;
   const frame = table.frames[index]!;
-  const next = table.frames[index + 1];
   return {
     seq: row.seq,
     pts: frame.pts,
-    dur: next === undefined ? frame.dur : next.pts - frame.pts,
+    dur: displayDur(placed, index, segments[at + 1]),
     videoDts: table.videoDts,
     pdtMs: row.pdtMs,
     durationMs: row.durationMs,
@@ -95,16 +124,16 @@ function pickOf(placed: PlacedSegment, index: number): EditorPick {
 
 /** ③ PTS p 에 보이는 프레임 — 겹친 경계에서는 PTS 가 같거나 큰 뒤 조각 프레임이 이긴다 */
 function visibleAt(segments: readonly PlacedSegment[], p: number): EditorPick {
-  let best = { placed: segments[0]!, index: 0 };
+  let best = { at: 0, index: 0 };
   let bestPts = Number.NEGATIVE_INFINITY;
-  for (const placed of segments) {
+  for (const [at, placed] of segments.entries()) {
     for (const [index, frame] of placed.table.frames.entries()) {
       if (frame.pts > p + BLOB_TOLERANCE_SECONDS || frame.pts < bestPts) continue;
-      best = { placed, index };
+      best = { at, index };
       bestPts = frame.pts;
     }
   }
-  return pickOf(best.placed, best.index);
+  return pickOf(segments, best.at, best.index);
 }
 
 /**

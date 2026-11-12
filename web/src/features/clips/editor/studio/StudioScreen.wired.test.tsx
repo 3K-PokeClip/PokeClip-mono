@@ -703,7 +703,7 @@ describe('StudioScreen — 창 안 끝점 저장(K3)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled());
   });
 
-  it('판 2 창이면 고른 프레임으로 컷을 짓는다: 시작은 그 프레임 PTS · 끝은 그 프레임 끝(내림)', async () => {
+  it('판 2 창이면 고른 프레임으로 컷을 짓는다: 시작은 그 프레임 PTS · 끝은 그 프레임과 다음 프레임 사이 가운데(내림)', async () => {
     server.timing = 'v2';
     const user = userEvent.setup();
     await openWithPickedEnds();
@@ -713,10 +713,10 @@ describe('StudioScreen — 창 안 끝점 저장(K3)', () => {
     await waitFor(() =>
       expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
     );
-    // 시작 60초 = 조각 15 첫 프레임(PTS 60) · 끝 72.4초 = 조각 18 의 72.0초 프레임(0.5초) → 끝 72.5초
+    // 시작 60초 = 조각 15 첫 프레임(PTS 60) · 끝 72.4초 = 조각 18 의 72.0초 프레임(0.5초) → 끝 72.25초(그 프레임과 다음 프레임 사이 가운데)
     expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
       inAtMs: STARTED_AT + 60_000,
-      outAtMs: STARTED_AT + 72_500,
+      outAtMs: STARTED_AT + 72_250,
     });
   });
 });

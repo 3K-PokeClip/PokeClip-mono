@@ -5,12 +5,17 @@ import type { EditorPick } from './windowPlacement';
 // 고른 프레임 · 표시 초 → 저장할 컷 값 T(③ 목록 PDT 축 ms)(POK-473 설계 prw2 3.2 결정 2 · 계획 4절 P-4′ · 처분 K1′ · K2 ·
 // PK1). 원점은 렌더와 같다 — 판 2 는 ③ 영상 첫 DTS(VIDEO_START), 판 NULL 은 ③ 축으로 옮긴 ② 머리 Hd(FILE_HEAD).
 //   in  T = PDT_k + floor(1000·(p_F − o_k − e_k))  → K2: min(T, min(PDT_k + EXTINF_k, PDT_{k+1}) − 1)
-//   out T = PDT_k + floor(1000·(p_F + dur_F − o_k)) → K1′: k 가 목록 마지막 행이고 T > PDT_k + EXTINF_k 일 때만 그 끝으로
+//   out T = PDT_k + floor(1000·(p_F + dur_F/2 − o_k)) → K1′: k 가 목록 마지막 행이고 T > PDT_k + EXTINF_k 일 때만 그 끝으로
+//   (dur_F = 다음 표시 프레임까지의 표시 간격 — windowPlacement)
+// 🔴 out 은 F 의 끝이 아니라 F 와 다음 표시 프레임 사이 가운데다(kty 결정 (다) 2026-11-13 · E4b-3 결정 ② 「저장 out = 그
+//    프레임 끝」 을 대체). F 의 끝에 두면 ms 내림 · ③ D3 간격과 PDT 간격의 반 ms 차 · 창 끝에서 앞 간격으로 짐작한 길이가
+//    다음 프레임 경계를 넘겨 렌더 끝 비교(PTS − D0 < x_out)가 다음 프레임을 담는다(렌더 리허설 2026-11-13 · r1 반례). 반
+//    프레임(약 16ms) 여유는 그 차들을 모두 덮고, 렌더는 F 를 그대로 담는다.
 // 🔴 out 은 장부 틈 안에서 맞추지 않는다. 이어진 틈이면 clip locateEnd 가 (k, EXTINF) 로 접어 맞춘 것과 같고, 끊긴 틈이면
 //    toSegmentEnd 로 k 를 끝까지 담는다 — 맞추면 오히려 끝 프레임을 잃는다. 웹은 목록에서 장부 이어짐을 모른다(렌더 답 3).
 //    맞춤은 다음 행이 없어 clip 이 AfterLast 로 거절할 자리에만 둔다. 이웃 · k 의 존재는 저장할 때 다시 받은 목록으로 본다.
 // 🔴 in 의 − e_k 는 옛 조립(-ss · 0점 Hp)과 새 경로(0점 Hd)의 차를 메운다. 반올림은 in · out 모두 내림이다 — in 을 올리면
-//    옛 경로가 고른 프레임을 빠뜨리고, out 을 올리면 두 경로 모두 다음 프레임을 더 담는다.
+//    옛 경로가 고른 프레임을 빠뜨리고, out 을 올리면 다음 프레임 쪽으로 다가간다.
 
 export type EdgeInput = { kind: 's'; s: number } | { kind: 'pick'; pick: EditorPick };
 
@@ -87,7 +92,7 @@ function startMsOf(pick: EditorPick, origin: SegmentOrigin, next: PlaylistSegmen
 }
 
 function endMsOf(pick: EditorPick, origin: SegmentOrigin, next: PlaylistSegment | null): number {
-  const t = pick.pdtMs + floorMs(pick.pts + pick.dur - origin.o);
+  const t = pick.pdtMs + floorMs(pick.pts + pick.dur / 2 - origin.o);
   const segmentEnd = pick.pdtMs + pick.durationMs;
   if (next !== null || t <= segmentEnd) return t;
   console.info('[editor] 끝점이 목록 마지막 조각 끝을 넘어 그 끝으로 맞췄어요', {

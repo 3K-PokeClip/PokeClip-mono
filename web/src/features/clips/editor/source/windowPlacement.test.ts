@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { boundaryAction } from '../editorPlayback';
 import { zoomedView } from '../timelineMath';
+import {
+  clipLocateEnd,
+  newPathLastFrame,
+  type JudgedFrame,
+  type JudgeMedia,
+  type JudgeRow,
+} from '@/test/renderJudge';
+import { cutMsOf } from './cutPosition';
 import type { PlaylistSegment } from './editorPlaylist';
 import type { HeadCache, HeadEntry } from './fileHeadProbe';
 import type { RemuxedSegment, RemuxedWindow } from './remuxWindow';
@@ -124,7 +132,121 @@ describe('placeWindow — 보이는 프레임 고르기(커밋별 검수 입력)
 
     expect(placement.pickAtBlob(0).dur).toBeCloseTo(2997 / TICKS, 12);
     expect(placement.pickAtBlob(2997 / TICKS).dur).toBeCloseTo(3015 / TICKS, 12);
-    expect(placement.pickAtBlob(8982 / TICKS).dur).toBeCloseTo(3000 / TICKS, 12);
+  });
+});
+
+describe('placeWindow — 조각 마지막 표시 프레임의 길이(렌더 리허설 2026-11-13 · 끝 G+1)', () => {
+  // B 프레임 원본은 표본 길이(디코드 순 · 3000 틱)와 표시 간격(다음 PTS − PTS · 2970 틱)이 다르다. 끝 프레임 길이를 표본
+  // 길이로 재면 out 이 다음 프레임 PTS 를 넘어 결과 끝에 한 프레임이 더 붙는다(pokeclip-empirical
+  // runs/2026-11-13-pdt-r7-prb2-rehearsal). 조각 마지막 프레임도 다음 표시 프레임 PTS 까지로 잰다.
+
+  it('다음 조각이 창에 있으면 앞 조각 마지막 프레임 길이는 다음 조각 첫 표시 PTS 까지다', () => {
+    const remuxed = windowOf(
+      0,
+      segment(1, 0, [0, 2997, 6012, 8982], 3000),
+      segment(2, 12_000, [11_997, 15_000], 3000),
+    );
+
+    const pick = placeWindow(
+      remuxed,
+      [row(1, 0, 133, 'v2'), row(2, 133, 4000, 'v2')],
+      BASE,
+      headsOf(),
+    ).pickAtBlob(8982 / TICKS);
+
+    expect(pick.seq).toBe(1);
+    expect(pick.dur).toBeCloseTo(3015 / TICKS, 12);
+  });
+
+  it('앞 조각 마지막 표시 프레임을 끝으로 고르면 out 은 그 프레임과 다음 조각 첫 프레임 사이 가운데다', () => {
+    // 표본 길이 3000 이면 끝 = 14,910 + 3000 = 17,910 틱 = 199.0ms > 다음 PTS 17,880 틱 = 198.67ms. 가운데는
+    // 14,910 + 2970/2 = 16,395 틱 = 182.17ms → 182
+    const a = row(1, 100_000, 133, 'v2');
+    const b = row(2, 100_133, 4000, 'v2');
+    const remuxed = windowOf(
+      0,
+      segment(1, 0, [6000, 8970, 11_940, 14_910], 3000),
+      segment(2, 12_000, [17_880, 20_850, 23_820], 3000),
+    );
+    const placement = placeWindow(remuxed, [a, b], BASE, headsOf());
+    const ctx = { base: BASE, heads: headsOf(), list: { runs: [[a, b]], rows: [a, b] } };
+
+    const out = cutMsOf({ kind: 'pick', pick: placement.pickAtBlob(14_910 / TICKS) }, 'end', ctx);
+
+    expect(out).toBe(100_182);
+    expect(out).toBeLessThanOrEqual(a.pdtMs + (1000 * 17_880) / TICKS);
+  });
+
+  it('창 끝 조각 마지막 프레임은 조각 안 앞 프레임과의 표시 간격이다(표본 길이 아님)', () => {
+    const remuxed = windowOf(0, segment(1, 0, [0, 2997, 6012, 8982], 3000));
+
+    const pick = placeWindow(remuxed, [row(1, 0, 4000, 'v2')], BASE, headsOf()).pickAtBlob(
+      8982 / TICKS,
+    );
+
+    expect(pick.dur).toBeCloseTo(2970 / TICKS, 12);
+  });
+
+  it('다음 조각이 이어진 seq 가 아니면 조각 안 표시 간격으로 물러난다', () => {
+    const remuxed = windowOf(
+      0,
+      segment(1, 0, [0, 2997, 6012, 8982], 3000),
+      segment(3, 12_000, [11_997, 15_000], 3000),
+    );
+
+    const pick = placeWindow(
+      remuxed,
+      [row(1, 0, 133, 'v2'), row(3, 133, 4000, 'v2')],
+      BASE,
+      headsOf(),
+    ).pickAtBlob(8982 / TICKS);
+
+    expect(pick.dur).toBeCloseTo(2970 / TICKS, 12);
+  });
+
+  it('프레임이 하나뿐인 창 끝 조각은 표본 길이다', () => {
+    const remuxed = windowOf(0, segment(1, 0, [0], 3000));
+
+    const pick = placeWindow(remuxed, [row(1, 0, 33, 'v2')], BASE, headsOf()).pickAtBlob(0);
+
+    expect(pick.dur).toBeCloseTo(3000 / TICKS, 12);
+  });
+
+  it('겹친 이음이면 뒤 조각이 이기므로 이 PTS 뒤 첫 뒤 조각 프레임까지다', () => {
+    // 뒤 조각 첫 PTS 8000 ≤ 앞 조각 끝 프레임 9000 — 9000 에는 앞 조각 프레임이 보이고 11,000 에서 뒤 조각이 덮는다
+    const remuxed = windowOf(
+      0,
+      segment(1, 0, [0, 3000, 6000, 9000], 3000),
+      segment(2, 8000, [8000, 11_000, 14_000], 3000),
+    );
+
+    const pick = placeWindow(
+      remuxed,
+      [row(1, 0, 100, 'v2'), row(2, 89, 4000, 'v2')],
+      BASE,
+      headsOf(),
+    ).pickAtBlob(9000 / TICKS);
+
+    expect(pick.seq).toBe(1);
+    expect(pick.dur).toBeCloseTo(2000 / TICKS, 12);
+  });
+
+  it('뒤 조각 프레임이 모두 이 PTS 이하이면 조각 안 표시 간격으로 물러난다', () => {
+    const remuxed = windowOf(
+      0,
+      segment(1, 0, [0, 3000, 6000, 8970], 3000),
+      segment(2, 5000, [5000, 8000], 3000),
+    );
+
+    const pick = placeWindow(
+      remuxed,
+      [row(1, 0, 100, 'v2'), row(2, 56, 4000, 'v2')],
+      BASE,
+      headsOf(),
+    ).pickAtBlob(8970 / TICKS);
+
+    expect(pick.seq).toBe(1);
+    expect(pick.dur).toBeCloseTo(2970 / TICKS, 12);
   });
 
   it('앞 조각 끝과 26 틱 겹친 뒤 조각의 첫 프레임 시각에는 뒤 조각 프레임이 보인다', () => {
@@ -157,6 +279,91 @@ describe('placeWindow — 보이는 프레임 고르기(커밋별 검수 입력)
 
     expect(placement.pickAtBlob(3000 / TICKS).pts).toBe(3000 / TICKS);
     expect(placement.blobAtS((0 - BASE) / 1000)).toBe(3000 / TICKS);
+  });
+});
+
+describe('placeWindow → cutMsOf — 끝은 G 와 다음 프레임 사이 가운데(리허설 실표본 · r1 반례 둘)', () => {
+  // 리허설 판 2 녹화 pcbv2 seq 1–3 의 ffprobe 표본(pokeclip-empirical runs/2026-11-13-pdt-r7-prb2-rehearsal
+  // work/ffprobe-src). 조각마다 제 파일 축의 틱을 ③ 축(앞 조각 DTS 끝에 이어 붙인 축)으로 옮겼다 — seq 2 는 +533,790 ·
+  // seq 3 은 +892,800. PDT 간격은 5966 · 4000ms 인데 ③ D3 간격은 5966.5 · 4000ms 이고, 조각 첫 프레임은 D3 뒤 33.5ms 다.
+  // 끝을 G 의 끝(다음 프레임 PTS)에 두면 ms 내림 · 반 ms 차로 다음 조각 첫 프레임(PTS − D0 = 33.5ms)을 넘는다.
+  const rows = [
+    row(1, 100_000, 5966, 'v2'),
+    row(2, 105_966, 4000, 'v2'),
+    row(3, 109_966, 4000, 'v2'),
+  ];
+  const seconds = (ticks: readonly number[]) => ticks.map((t) => t / TICKS);
+  const media = new Map<number, JudgeMedia>([
+    [1, { videoDts: 0, m: 0, e: 0, frames: seconds([531_044, 534_015, 537_075]) }],
+    [
+      2,
+      {
+        videoDts: 536_985 / TICKS,
+        m: 0,
+        e: 0,
+        frames: seconds([540_000, 542_970, 891_000, 893_970, 897_030]),
+      },
+    ],
+    [3, { videoDts: 896_985 / TICKS, m: 0, e: 0, frames: seconds([900_000, 902_970]) }],
+  ]);
+  const judgeRows: JudgeRow[] = rows.map((r) => ({ ...r, continuesPrevious: r.seq !== 1 }));
+  const list = { runs: [rows], rows };
+
+  function tableOf(seq: number): RemuxedSegment {
+    const seg = media.get(seq)!;
+    const ticks = seg.frames.map((pts) => Math.round(pts * TICKS));
+    return segment(seq, Math.round(seg.videoDts * TICKS), ticks, FRAME_TICKS);
+  }
+
+  /**
+   * 렌더 끝 프레임 — 새 경로 「PTS − D0 < x_out」(renderJudge). 끝 조각에 남는 프레임이 없으면 렌더는 앞 조각으로 물러나
+   * 그 끝 프레임까지 담는다(RenderTimeline 끝 조각 후퇴 — renderJudge 는 옮기지 않아 여기서 잇는다)
+   */
+  function renderEnd(outMs: number): JudgedFrame | null {
+    const last = newPathLastFrame(judgeRows, media, outMs, 'VIDEO_START');
+    if (last !== null) return last;
+    const place = clipLocateEnd(judgeRows, outMs);
+    if (place.kind !== 'media') return null;
+    const before = judgeRows[judgeRows.findIndex((r) => r.seq === place.seq) - 1];
+    return before === undefined
+      ? null
+      : { seq: before.seq, pts: media.get(before.seq)!.frames.at(-1)! };
+  }
+
+  function outOf(windowSeqs: readonly number[], gTicks: number): number {
+    const placement = placeWindow(
+      windowOf(0, ...windowSeqs.map(tableOf)),
+      rows.filter((r) => windowSeqs.includes(r.seq)),
+      BASE,
+      headsOf(),
+    );
+    const out = cutMsOf({ kind: 'pick', pick: placement.pickAtBlob(gTicks / TICKS) }, 'end', {
+      base: BASE,
+      heads: headsOf(),
+      list,
+    });
+    if (typeof out !== 'number') throw new Error(`컷 값을 짓지 못했다: ${out}`);
+    return out;
+  }
+
+  it('창 끝 seq 2 의 마지막 프레임(원본 299)을 끝으로 고르면 결과 끝은 그 프레임이고 300 은 빠진다', () => {
+    // 앞 간격 3060 틱의 반 → 360,045 + 1530 = 361,575 틱 = 4017.5ms → 4017 · seq 3 의 17ms 로 풀려 첫 프레임 33.5ms 는 빠진다
+    const out = outOf([2], 897_030);
+
+    expect(out).toBe(105_966 + 4017);
+    expect(renderEnd(out)).toEqual({ seq: 2, pts: 897_030 / TICKS });
+    // 앞 간격 전체(옛 r1 · 4034)면 seq 3 의 34ms 라 원본 300 이 든다
+    expect(renderEnd(105_966 + 4034)).toEqual({ seq: 3, pts: 900_000 / TICKS });
+  });
+
+  it('seq 1 마지막 프레임(원본 179)을 끝으로 고르면 ③ · PDT 반 ms 차가 있어도 결과 끝은 그 프레임이다', () => {
+    // 다음 PTS 540,000 까지 2925 틱의 반 → 537,075 + 1462.5 = 538,537.5 틱 = 5983.75ms → 5983 · seq 2 의 17ms
+    const out = outOf([1, 2], 537_075);
+
+    expect(out).toBe(100_000 + 5983);
+    expect(renderEnd(out)).toEqual({ seq: 1, pts: 537_075 / TICKS });
+    // 다음 PTS 까지 전체(6000)면 seq 2 의 34ms 라 원본 180 이 든다
+    expect(renderEnd(100_000 + 6000)).toEqual({ seq: 2, pts: 540_000 / TICKS });
   });
 });
 
