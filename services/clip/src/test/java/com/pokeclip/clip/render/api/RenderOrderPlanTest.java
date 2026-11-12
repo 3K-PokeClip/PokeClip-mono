@@ -205,6 +205,27 @@ class RenderOrderPlanTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * ⑥ 옆 — 같은 물리 키에 앞 방송이 있어도 앞 행 650 이 이 방송 장부 구간 안(구간 시작 = max(앞 방송 끝 60초, 시작 − 2분 =
+     * 530초))이면 준비 조각이다 → {650, owner 651}. 첫 방송을 뺀 모든 방송의 묶음 머리가 이 꼴이다.
+     */
+    @Test
+    void P30_6_옆_앞_방송이_있어도_구간_안_앞_행은_준비로_싣는다() throws Exception {
+        String key = 키("p30-6b");
+        Broadcast previous = broadcasts.save(Broadcast.startedNow("S-p30-6b-prev", TestIds.STREAMER, key, 1L, at(0),
+                null));
+        jdbc.update("UPDATE broadcasts SET status = 'ended', ended_at = ? WHERE id = ?", Timestamp.from(at(60_000)),
+                previous.getId());
+        String streamId = 회차("p30-6b", at(650_000));
+        seed.row(key, 650).wallAndPdt(646_000).insert();
+        귀속(streamId, 651, 650_000);
+        귀속(streamId, 652, 654_000);
+
+        JsonNode envelope = 주문서(streamId, 651_000, 656_000);
+
+        assertThat(sources(envelope)).containsExactly("audio_prime:650:owner=651", "segment:651:f:f", "segment:652:f:t");
+    }
+
     /** ⑦ seq 비조밀 — 머리 705 의 장부 바로 앞 행은 702(703 · 704 없음). */
     @Test
     void P30_7_seq_가_비조밀해도_장부_바로_앞_행을_준비로_싣는다() throws Exception {

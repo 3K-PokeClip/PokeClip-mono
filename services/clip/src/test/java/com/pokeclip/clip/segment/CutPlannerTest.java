@@ -425,6 +425,10 @@ class CutPlannerTest {
             Ready skipped = (Ready) CutPlanner.plan(input(unattributed, 1_000, 4_050, true), new FakeLedger());
 
             assertThat(joined.out()).as("판 2=%s 이어진 틈", v2).isEqualTo(new End(1, 4_000_000L));
+            if (v2) {
+                assertThat(lastFrameBefore(joined.out().offsetUs())).as("판 2 이어진 틈 — k 의 마지막 프레임까지")
+                        .isEqualTo(119);
+            }
             assertThat(joined.gaps()).isEmpty();
             assertThat(cut.out()).as("판 2=%s 끊긴 틈", v2).isEqualTo(new End(1, null));
             assertThat(cut.gaps()).containsExactly(new Gap(1, 2, Gap.Location.TAIL, 100, 50));
@@ -434,7 +438,6 @@ class CutPlannerTest {
                 assertThat(ready.media()).extracting(RoundRow::seq).containsExactly(1L);
             }
         }
-        assertThat(lastFrameBefore(4_000_000)).as("판 2 이어진 틈 — k 의 마지막 프레임까지").isEqualTo(119);
     }
 
     /**
@@ -586,6 +589,20 @@ class CutPlannerTest {
             assertThat(ready.primeSkips()).containsExactly(new PrimeSkip(10, null, "other_broadcast"));
             assertThat(ready.runHeads()).containsExactly(new RunHead(10, RunHead.Kind.CONTINUED));
         });
+    }
+
+    /**
+     * P30 ⑥ 옆 — 앞 방송이 있어도 구간 안 앞 행이 있으면 그 행이 준비 조각이다. 「앞 방송 있음」 은 구간 안 앞 행이 <b>없을 때만</b>
+     * 앞 이력을 앞 방송 몫으로 돌린다 — 첫 방송을 뺀 모든 방송이 이 꼴이다.
+     */
+    @Test
+    void P30_6_옆_앞_방송이_있어도_구간_안_앞_행은_준비로_싣는다() {
+        Ready ready = (Ready) CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
+                new FakeLedger().previousBroadcast().before(10, neighbor(7, RoundRow.UPLOADED)));
+
+        assertThat(ready.primes()).containsExactly(new Prime(10, neighbor(7, RoundRow.UPLOADED)));
+        assertThat(ready.primeSkips()).isEmpty();
+        assertThat(ready.runHeads()).containsExactly(new RunHead(10, RunHead.Kind.CONTINUED));
     }
 
     /**
