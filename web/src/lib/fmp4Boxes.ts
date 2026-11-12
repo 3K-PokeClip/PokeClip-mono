@@ -255,10 +255,35 @@ function trackDuration(view: DataView, trackId: number, trexDuration: number): n
   return total;
 }
 
-interface TrackHeader {
+/** trak 의 머리 칸 셋 */
+export interface TrackHeader {
+  /** tkhd 의 track_ID */
   trackId: number;
+  /** hdlr 의 handler_type('vide' · 'soun' 등) */
   handler: string;
+  /** mdhd 의 timescale. 0 이어도 그대로 준다 — 나누는 쪽이 거른다 */
   timescale: number;
+}
+
+/**
+ * init(moov)의 트랙 머리를 moov 의 트랙 순서대로. ② 녹화 파일처럼 moof 가 같은 바이트에 있어도 moov 만 본다.
+ * tkhd · mdhd · hdlr 가 빠진 trak 은 뺀다(readTrackSpans 와 같다). moov 가 없으면 빈 목록, 상자가 칸까지
+ * 닿지 않거나 모르는 버전이면 null
+ */
+export function readTrackHeaders(init: Uint8Array): TrackHeader[] | null {
+  const view = viewOf(init);
+  try {
+    const moov = topBox(view, 'moov');
+    if (!moov) return [];
+    const headers: TrackHeader[] = [];
+    for (const trak of boxes(view, moov.start, moov.end)) {
+      const header = trak.type === 'trak' ? trackHeader(view, trak) : null;
+      if (header) headers.push(header);
+    }
+    return headers;
+  } catch {
+    return null;
+  }
 }
 
 /**

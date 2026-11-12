@@ -6,7 +6,15 @@
 // 라이브러리(mp4box 등)를 안 쓴 이유: 읽을 상자가 몇 개뿐이고(moov·trak·stsd·esds·trex·moof·traf·tfhd·trun), 녹화 조각의
 // 모양이 정해져 있다(ftyp → 표본 없는 moov → moof/mdat 여러 쌍). 모르는 모양이면 빈 목록을 주고 화면은 영상 소리로 돌아간다.
 
-import { boxes, child, path, type Box } from '@/lib/fmp4Boxes';
+import {
+  boxes,
+  child,
+  path,
+  readFirstSampledTraf,
+  readTrackHeaders,
+  type Box,
+  type TrackHeader,
+} from '@/lib/fmp4Boxes';
 
 /** AudioSpecificConfig에서 ADTS 머리에 필요한 셋 */
 export interface AacConfig {
@@ -90,14 +98,86 @@ export function demuxAudioTracks(data: ArrayBuffer | Uint8Array): AudioTrackFram
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   try {
-    return demux(view, bytes);
+    return demux(view, bytes).map(({ audio }) => audio);
   } catch {
     // 잘린 파일 등에서 범위를 넘어 읽으면 RangeError다: 화면은 빈 목록을 「못 꺼냄」으로 다룬다.
     return [];
   }
 }
 
-function demux(view: DataView, bytes: Uint8Array): AudioTrackFrames[] {
+/** 조각 안 한 트랙의 시작 시각(초). 트랙마다 자기 timescale 로 먼저 초로 바꾼 파일 안 값이다 */
+export interface TrackTiming {
+  /**
+   * 표본 있는 첫 traf 의 tfdt = 트랙 첫 DTS. 표본 없는 traf 는 건너뛴다
+   * (media `internal/playback/timing.go` 의 readTiming 과 같은 규칙)
+   */
+  firstDts: number;
+  /** 표본 있는 첫 traf 표본들의 PTS 최솟값(open GOP 면 첫 표본의 PTS 보다 이르다) */
+  firstPts: number;
+}
+
+/** 조각 안 한 트랙의 timescale 과 시각. 표본이 하나도 없으면 timing 이 null 이다 */
+export interface SegmentTrack {
+  timescale: number;
+  timing: TrackTiming | null;
+}
+
+export interface SegmentAudioTrack extends AudioTrackFrames, SegmentTrack {}
+
+/**
+ * ② 녹화 조각 하나의 소리 트랙(프레임 · 시각)과 영상 트랙 시각. 설계 prw2 3.3절 소리 배치의 입력이다:
+ * D2 = video.timing.firstDts · 「트랙 i 첫 PTS」 = audio[i].timing.firstPts
+ */
+export interface SegmentTracks {
+  /** 소리 트랙(파일 순서 — demuxAudioTracks 와 같은 번호) */
+  audio: SegmentAudioTrack[];
+  /** 파일 순서로 첫 영상 트랙. 영상 트랙이 없으면 null */
+  video: SegmentTrack | null;
+}
+
+/** 녹화 조각 하나 → 소리 트랙들과 트랙별 시각. 모양을 모르면 빈 결과다(demuxAudioTracks 와 같은 관례) */
+export function demuxSegmentAudio(data: ArrayBuffer | Uint8Array): SegmentTracks {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  try {
+    return segmentTracks(view, bytes);
+  } catch {
+    return { audio: [], video: null };
+  }
+}
+
+/** 상자 판독은 fmp4Boxes 가 한다(상자 끝 · 버전 검사). 판독이 실패하면 RangeError 로 빈 결과가 된다 */
+function segmentTracks(view: DataView, bytes: Uint8Array): SegmentTracks {
+  const headers = readTrackHeaders(bytes);
+  if (!headers) throw new RangeError('trak');
+  const audio = demux(view, bytes).map(({ id, audio: track }) => {
+    const header = headers.find((h) => h.trackId === id);
+    if (!header) throw new RangeError('trak'); // 소리 트랙인데 timescale 을 모른다
+    return { ...track, ...timedTrack(bytes, header) };
+  });
+  const video = headers.find((h) => h.handler === 'vide');
+  return { audio, video: video ? timedTrack(bytes, video) : null };
+}
+
+/** 트랙 하나의 timescale 과 초 시각. ② 파일은 moov 와 moof 가 한 바이트라 init 과 조각으로 같은 것을 넘긴다 */
+function timedTrack(bytes: Uint8Array, header: TrackHeader): SegmentTrack {
+  const { trackId, timescale } = header;
+  const samples = readFirstSampledTraf(bytes, bytes, trackId);
+  if (!samples || timescale === 0) throw new RangeError('traf');
+  const first = samples[0];
+  if (!first) return { timescale, timing: null };
+  // 트랙마다 자기 timescale 로 먼저 초로 바꾼다: 트랙끼리 비교는 초에서만 한다
+  const minPts = samples.reduce((min, sample) => Math.min(min, sample.pts), first.pts);
+  return { timescale, timing: { firstDts: first.dts / timescale, firstPts: minPts / timescale } };
+}
+
+/** 소리 트랙(파일 순서)과 그 tkhd 트랙 번호 */
+interface DemuxedTrack {
+  id: number;
+  audio: AudioTrackFrames;
+}
+
+function demux(view: DataView, bytes: Uint8Array): DemuxedTrack[] {
   const top = [...boxes(view, 0, bytes.byteLength)];
   const moov = top.find((box) => box.type === 'moov');
   if (!moov) return [];
@@ -134,7 +214,10 @@ function demux(view: DataView, bytes: Uint8Array): AudioTrackFrames[] {
       if (traf.type === 'traf') readTraf(view, bytes, moof, traf, tracks, frames);
     }
   }
-  return tracks.map((track) => ({ config: track.config, frames: frames.get(track.id)! }));
+  return tracks.map((track) => ({
+    id: track.id,
+    audio: { config: track.config, frames: frames.get(track.id)! },
+  }));
 }
 
 function readTraf(

@@ -6,6 +6,7 @@ import {
   child,
   path,
   readFirstSampledTraf,
+  readTrackHeaders,
   readTrackSamples,
   readTrackSpans,
   readTrackStart,
@@ -796,4 +797,51 @@ describe('모르는 버전: trun 버전 2 · tfhd · trex · hdlr 버전 1 은 �
     expect(readVideoTrack(init(UNKNOWN_VERSION_TRAK))).toBeNull();
     expect(readTrackSpans(concat(init(UNKNOWN_VERSION_TRAK), fragment))).toEqual([]);
   });
+});
+
+// --- readTrackHeaders: 위 상자 끝 · 모르는 버전 표본을 같이 쓴다 ---
+
+describe('readTrackHeaders: init 에서 트랙마다 번호 · handler · timescale 을 moov 순서대로 읽는다', () => {
+  it('실물 ② 파일(영상 1 + 소리 6): moof 가 같은 바이트에 있어도 moov 만 본다', () => {
+    const audio = [2, 3, 4, 5, 6, 7].map((trackId) => ({
+      trackId,
+      handler: 'soun',
+      timescale: 44100,
+    }));
+
+    expect(readTrackHeaders(segment1v6a)).toEqual([
+      { trackId: 1, handler: 'vide', timescale: 90000 },
+      ...audio,
+    ]);
+  });
+
+  it('tkhd · mdhd 버전 1(64비트 시각)이면 밀린 자리에서 읽는다', () => {
+    expect(readTrackHeaders(init(trak(1, 'soun', 48000), trak(3, 'vide', 30000, 1)))).toEqual([
+      { trackId: 1, handler: 'soun', timescale: 48000 },
+      { trackId: 3, handler: 'vide', timescale: 30000 },
+    ]);
+  });
+
+  it('머리 상자가 빠진 trak 은 빼고 · moov 가 없으면 빈 목록이다', () => {
+    const noHdlr = box('trak', TKHD, box('mdia', MDHD));
+
+    expect(readTrackHeaders(init(noHdlr, trak(2, 'soun', 44100)))).toEqual([
+      { trackId: 2, handler: 'soun', timescale: 44100 },
+    ]);
+    expect(readTrackHeaders(new Uint8Array(0))).toEqual([]);
+  });
+
+  it.each(SHORT_TRAKS)(
+    '$name 이면 null 이다(다음 상자의 바이트를 제 칸으로 읽지 않는다)',
+    ({ trak }) => {
+      expect(readTrackHeaders(init(trak))).toBeNull();
+    },
+  );
+
+  it.each([...VERSION_2_TRAKS, { name: 'hdlr 1', trak: UNKNOWN_VERSION_TRAK }])(
+    '$name 버전이면 null 이다(v0 배치로 읽지 않는다)',
+    ({ trak }) => {
+      expect(readTrackHeaders(init(trak))).toBeNull();
+    },
+  );
 });

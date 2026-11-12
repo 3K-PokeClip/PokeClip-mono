@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { demuxAudioTracks, toAdts } from './fmp4Audio';
+import { demuxAudioTracks, demuxSegmentAudio, toAdts } from './fmp4Audio';
 
 // 시험 조각은 ffmpeg로 만든 1초짜리 fMP4다(영상 1 + 소리 3, 상자 모양은 녹화 조각과 같다: ftyp·moov·moof/mdat 여러 쌍).
 // 소리 트랙마다 표본 빈도·채널을 다르게 해 「파일 순서대로 꺼냈나」가 값으로 드러난다. 프레임 수는 ffprobe -count_packets 값.
@@ -62,5 +62,269 @@ describe('toAdts: 브라우저가 풀 수 있게 프레임마다 ADTS 머리(7�
     }
     expect(count).toBe(first.frames.length);
     expect(offset).toBe(adts.length);
+  });
+});
+
+// --- demuxSegmentAudio: ② 녹화 조각의 트랙별 시각(PR-W2 c8 · 설계 prw2 3.2 · 3.3절) ---
+
+// 실물은 운영 형상(영상 1 + 소리 6) 녹화 조각이다. 기대값은 ffprobe -show_packets 에서 옮겼다
+// (영상 첫 표본 dts 8136 · pts 11136 · 표본 길이 합 15000 / 소리마다 dts 0 · 길이 합 6144).
+const TESTDATA = join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  '..',
+  '..',
+  '..',
+  'media',
+  'internal',
+  'playback',
+  'testdata',
+);
+const segment1v6a = new Uint8Array(readFileSync(join(TESTDATA, 'segment_1v6a.mp4')));
+
+// 합성 바이트: 실물에 없는 모양(트랙마다 다른 timescale · 영상 없음 · 빈 traf · open GOP cto)을 만든다.
+
+function concat(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function u32(value: number): Uint8Array {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, value);
+  return out;
+}
+
+function i32(value: number): Uint8Array {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setInt32(0, value);
+  return out;
+}
+
+function ascii(text: string): Uint8Array {
+  return Uint8Array.from(text, (ch) => ch.charCodeAt(0));
+}
+
+function box(type: string, ...payload: Uint8Array[]): Uint8Array {
+  const body = concat(...payload);
+  return concat(u32(body.length + 8), ascii(type), body);
+}
+
+function fullBox(
+  type: string,
+  version: number,
+  flags: number,
+  ...payload: Uint8Array[]
+): Uint8Array {
+  return box(type, u32(((version << 24) | flags) >>> 0), ...payload);
+}
+
+/** mp4a 표본 항목(AAC LC · 그 빈도 번호 · 1채널). demuxAudioTracks 가 읽는 esds 모양 그대로 */
+function mp4a(frequencyIndex: number): Uint8Array {
+  const asc = ((2 << 11) | (frequencyIndex << 7) | (1 << 3)) & 0xffff;
+  const decoderConfig = concat(new Uint8Array(13), Uint8Array.of(0x05, 2, asc >> 8, asc & 0xff));
+  const es = concat(
+    Uint8Array.of(0, 1, 0),
+    Uint8Array.of(0x04, decoderConfig.length),
+    decoderConfig,
+  );
+  const esds = fullBox('esds', 0, 0, Uint8Array.of(0x03, es.length), es);
+  return box('mp4a', new Uint8Array(28), esds);
+}
+
+/** versions 는 tkhd · mdhd 버전(칸 배치는 언제나 v0 — 버전 2 는 규격에 없어 판독이 거부해야 한다) */
+function trak(
+  trackId: number,
+  handler: 'vide' | 'soun',
+  timescale: number,
+  versions = { tkhd: 0, mdhd: 0 },
+): Uint8Array {
+  const entries = handler === 'soun' ? [mp4a(4)] : [];
+  return box(
+    'trak',
+    fullBox('tkhd', versions.tkhd, 3, u32(0), u32(0), u32(trackId), u32(0)),
+    box(
+      'mdia',
+      fullBox('mdhd', versions.mdhd, 0, u32(0), u32(0), u32(timescale), u32(0)),
+      fullBox('hdlr', 0, 0, u32(0), ascii(handler), u32(0), u32(0), u32(0)),
+      box('minf', box('stbl', fullBox('stsd', 0, 0, u32(entries.length), ...entries))),
+    ),
+  );
+}
+
+function init(...traks: Uint8Array[]): Uint8Array {
+  return concat(box('ftyp', ascii('isom'), u32(0)), box('moov', ...traks));
+}
+
+interface Sample {
+  duration: number;
+  cto?: number;
+}
+
+/** traf 하나: tfdt v0 · trun(기본 v1 — 표본마다 길이 · 크기 1 · cto). 표본이 없으면 빈 trun */
+function traf(trackId: number, decodeTime: number, samples: Sample[], trunVersion = 1): Uint8Array {
+  const fields = samples.flatMap((s) => [u32(s.duration), u32(1), i32(s.cto ?? 0)]);
+  return box(
+    'traf',
+    fullBox('tfhd', 0, 0x020000, u32(trackId)),
+    fullBox('tfdt', 0, 0, u32(decodeTime)),
+    fullBox('trun', trunVersion, 0x100 | 0x200 | 0x800, u32(samples.length), ...fields),
+  );
+}
+
+function fragment(...trafs: Uint8Array[]): Uint8Array {
+  return concat(
+    box('moof', fullBox('mfhd', 0, 0, u32(1)), ...trafs),
+    box('mdat', new Uint8Array(16)),
+  );
+}
+
+const frame = (duration: number, cto = 0): Sample => ({ duration, cto });
+
+const EMPTY = { audio: [], video: null };
+
+describe('demuxSegmentAudio: 녹화 조각의 트랙별 첫 DTS · PTS 와 timescale 을 읽는다', () => {
+  it('실물 영상 1 + 소리 6 조각에서 트랙마다 자기 timescale 로 바꾼 초를 준다', () => {
+    const seg = demuxSegmentAudio(segment1v6a);
+
+    expect(seg.video).toEqual({
+      timescale: 90000,
+      timing: { firstDts: 8136 / 90000, firstPts: 11136 / 90000 },
+    });
+    expect(seg.audio).toHaveLength(6);
+    for (const track of seg.audio) {
+      expect(track.timescale).toBe(44100);
+      expect(track.timing).toEqual({ firstDts: 0, firstPts: 0 });
+      expect(track.frames).toHaveLength(6);
+    }
+  });
+
+  it('소리 트랙의 프레임 · 설정은 demuxAudioTracks 와 같다(파일 순서 · 렌더의 [0:a:N] 번호)', () => {
+    const seg = demuxSegmentAudio(fixture);
+
+    expect(seg.audio.map(({ config, frames }) => ({ config, frames }))).toEqual(
+      demuxAudioTracks(fixture),
+    );
+  });
+
+  it('timescale 이 다른 트랙은 각자 자기 timescale 로 초가 된다(영상 90,000 · 소리 44,100 · 48,000)', () => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 44100), trak(3, 'soun', 48000)),
+      fragment(
+        traf(1, 9000, [frame(3000, 3000)]),
+        traf(2, 2205, [frame(1024)]),
+        traf(3, 4800, [frame(1024, 480)]),
+      ),
+    );
+
+    const seg = demuxSegmentAudio(bytes);
+
+    expect(seg.video).toEqual({
+      timescale: 90000,
+      timing: { firstDts: 0.1, firstPts: 12000 / 90000 },
+    });
+    expect(seg.audio.map((t) => [t.timescale, t.timing?.firstDts, t.timing?.firstPts])).toEqual([
+      [44100, 0.05, 0.05],
+      [48000, 0.1, 0.11],
+    ]);
+  });
+
+  it('첫 PTS 는 첫 표본 PTS 가 아니라 첫 traf 표본들의 PTS 최솟값이다(open GOP)', () => {
+    // 영상 표본 둘: dts 9000 · cto 6000 → pts 15000 / dts 12000 · cto 0 → pts 12000(첫 표본보다 이르다)
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 44100)),
+      fragment(traf(1, 9000, [frame(3000, 6000), frame(3000, 0)]), traf(2, 5292, [frame(1024)])),
+    );
+
+    const seg = demuxSegmentAudio(bytes);
+
+    expect(seg.video?.timing).toEqual({ firstDts: 0.1, firstPts: 12000 / 90000 });
+  });
+
+  it('영상 트랙이 없는 파일은 video 가 null 이고 소리 트랙만 준다', () => {
+    const bytes = concat(
+      init(trak(2, 'soun', 44100), trak(3, 'soun', 48000)),
+      fragment(traf(2, 4410, [frame(1024)]), traf(3, 2400, [frame(1024)])),
+    );
+
+    const seg = demuxSegmentAudio(bytes);
+
+    expect(seg.video).toBeNull();
+    expect(seg.audio.map((t) => t.timing?.firstDts)).toEqual([0.1, 0.05]);
+  });
+
+  it('표본 없는 traf 는 건너뛰고 표본 있는 첫 traf 의 tfdt 를 첫 DTS 로 쓴다', () => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 44100)),
+      fragment(traf(1, 9000, [frame(3000)]), traf(2, 0, [])),
+      fragment(traf(1, 12000, [frame(3000)]), traf(2, 8820, [frame(1024)])),
+    );
+
+    const seg = demuxSegmentAudio(bytes);
+
+    expect(seg.audio[0]?.timing).toEqual({ firstDts: 0.2, firstPts: 0.2 });
+    expect(seg.video?.timing).toEqual({ firstDts: 0.1, firstPts: 0.1 });
+  });
+
+  it('표본이 하나도 없는 트랙은 timescale 만 있고 timing 이 null 이다', () => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 44100), trak(3, 'soun', 48000)),
+      fragment(traf(1, 9000, [frame(3000)]), traf(2, 8820, [frame(1024)]), traf(3, 0, [])),
+    );
+
+    const seg = demuxSegmentAudio(bytes);
+
+    expect(seg.audio.map((t) => [t.timescale, t.timing === null])).toEqual([
+      [44100, false],
+      [48000, true],
+    ]);
+  });
+
+  it('시각 값이 빠진 12바이트 tfdt 뒤에 정상 trun 이 오면 빈 결과다(다음 상자 크기를 DTS 로 읽지 않는다)', () => {
+    const shortTfdt = box(
+      'traf',
+      fullBox('tfhd', 0, 0x020000, u32(1)),
+      fullBox('tfdt', 0, 0),
+      fullBox('trun', 1, 0x100 | 0x200 | 0x800, u32(1), u32(3000), u32(1), i32(0)),
+    );
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 44100)),
+      fragment(shortTfdt, traf(2, 0, [frame(1024)])),
+    );
+
+    expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
+  });
+
+  it.each([
+    { name: 'tkhd', versions: { tkhd: 2, mdhd: 0 } },
+    { name: 'mdhd', versions: { tkhd: 0, mdhd: 2 } },
+  ])('$name 버전 2 는 v0 배치로 읽지 않고 빈 결과다', ({ versions }) => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 44100, versions)),
+      fragment(traf(1, 9000, [frame(3000)]), traf(2, 0, [frame(1024)])),
+    );
+
+    expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
+  });
+
+  it('trun 버전이 0 · 1 이 아니면 cto 부호를 몰라 빈 결과를 준다', () => {
+    const bytes = concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 44100)),
+      fragment(traf(1, 9000, [frame(3000, 3000)], 2), traf(2, 0, [frame(1024)])),
+    );
+
+    expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
+  });
+
+  it('상자가 깨졌거나 비었으면 빈 결과를 준다(던지지 않는다)', () => {
+    expect(demuxSegmentAudio(new Uint8Array(0))).toEqual(EMPTY);
+    expect(demuxSegmentAudio(segment1v6a.subarray(0, 40))).toEqual(EMPTY);
   });
 });
