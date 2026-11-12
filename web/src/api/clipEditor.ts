@@ -50,6 +50,8 @@ export interface JumpCard {
   hidden?: boolean;
   /** 카드 시점 장면 사진(POK-277). 목록 문만 싣는다. 통로(SSE)로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
+  /** 카드 시점의 플레이어용 PDT(POK-196). 장면이 없으면 null, 옛 서버면 빠져 온다. 읽기는 readPlayerAtMs(cardPositions.ts) */
+  playerAtMs?: number | null;
   createdAt: string;
 }
 
