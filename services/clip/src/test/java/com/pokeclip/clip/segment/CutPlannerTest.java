@@ -26,12 +26,14 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 렌더 주문의 컷 판정(POK-196 · 설계 r7 9.2 · 9.4 · 16.2 P11 · P19 · P30). 순수 판정이라 DB 없이 잰다 — 장부 이웃(끝 소리 확보
  * 후보 · 디코더 준비 후보)은 {@link FakeLedger}가 준다.
  *
- * <p>시각은 epoch ms 대신 작은 값을 쓴다. 축은 늘 파일명 시각({@code start_wall_utc})이다.
+ * <p>시각은 epoch ms 대신 작은 값을 쓴다. 축은 목록 PDT({@code COALESCE(playback_pdt, start_wall_utc)})이다 — 행 짓개의 기본은
+ * PDT = 파일명 시각이라, 두 축을 갈라야 하는 시험만 PDT 를 따로 준다.
  */
 class CutPlannerTest {
 
@@ -110,7 +112,7 @@ class CutPlannerTest {
                 row(101, 100_000, 4_000).first().build(),
                 row(102, 106_000, 4_000).discontinuity().build(),
                 row(103, 110_000, 4_000).build());
-        FakeLedger ledger = new FakeLedger().before(101, neighbor(100, 96_000, RoundRow.UPLOADED));
+        FakeLedger ledger = new FakeLedger().before(101, neighbor(100, RoundRow.UPLOADED));
         List<RecipeDocument.Segment> subtitles = List.of(
                 new RecipeDocument.Segment(101_500L, 106_500L, "걸침"),
                 new RecipeDocument.Segment(104_500L, 105_500L, "틈 안"));
@@ -125,7 +127,7 @@ class CutPlannerTest {
                 new SubtitleSpan(1, new InGap(101, 500), new InGap(101, 1_500)));
         assertThat(ready.lengthMs()).isEqualTo(9_000);
         assertThat(ready.gaps()).containsExactly(new Gap(101, 102, Gap.Location.MIDDLE, 2_000, 2_000));
-        assertThat(ready.primes()).containsExactly(new Prime(101, neighbor(100, 96_000, RoundRow.UPLOADED)));
+        assertThat(ready.primes()).containsExactly(new Prime(101, neighbor(100, RoundRow.UPLOADED)));
         assertThat(ready.runHeads()).containsExactly(
                 new RunHead(101, RunHead.Kind.CONTINUED), new RunHead(102, RunHead.Kind.NEW_RECORDING));
         assertThat(ready.capture()).as("판 NULL · 다음 행 없음 · 끝난 회차 → 확보 없이 진행").isEmpty();
@@ -284,24 +286,27 @@ class CutPlannerTest {
                 row(1, 0, 4_000).first().build(),
                 row(3, 4_300, 4_000).notLedgerNeighbor().build());
         FakeLedger ledger = new FakeLedger()
-                .before(1, neighbor(0, -4_000, RoundRow.UPLOADED))
-                .before(3, neighbor(2, 4_000, RoundRow.UPLOADED));
+                .before(1, neighbor(0, RoundRow.UPLOADED))
+                .before(3, neighbor(2, RoundRow.UPLOADED));
 
         Ready ready = (Ready) CutPlanner.plan(input(rows, 1_000, 7_000, true), ledger);
 
         assertThat(ready.gaps()).containsExactly(new Gap(1, 3, Gap.Location.MIDDLE, 300, 300));
         assertThat(ready.primes()).containsExactly(
-                new Prime(1, neighbor(0, -4_000, RoundRow.UPLOADED)),
-                new Prime(3, neighbor(2, 4_000, RoundRow.UPLOADED)));
+                new Prime(1, neighbor(0, RoundRow.UPLOADED)),
+                new Prime(3, neighbor(2, RoundRow.UPLOADED)));
         assertThat(ready.lengthMs()).isEqualTo(6_000 - 300);
         assertThat(ledger.askedBefore).as("머리 둘의 앞 행을 한 번에 묻는다").containsExactly(List.of(1L, 3L));
     }
 
-    // ── 축(P19) ──────────────────────────────────────────────────
+    // ── 축 · 원점(P19 · P5 — kty 2026-11-12 D1) ──────────────────
 
-    /** P19 — 판 2 회차에서도 축은 파일명 시각이다. PDT 를 120초 어긋낸 시드에서 PDT 로 고르면 다른 조각이다. */
+    /**
+     * P19 · P5 — 판 2 회차는 PDT 축이고 원점은 영상 첫 표본({@code VIDEO_START})이다. PDT 를 파일명 시각보다 120초 어긋낸 시드라
+     * 파일명 시각으로 고르면 행 33 · 35 가 된다(PR-B1 꼴 복귀 변이가 여기서 FAIL).
+     */
     @Test
-    void 판_2_회차도_파일명_시각으로_고른다() {
+    void 판_2_회차는_PDT_축으로_고르고_원점은_영상_첫_표본이다() {
         List<RoundRow> rows = new ArrayList<>();
         for (int i = 0; i < 40; i++) {
             RowBuilder b = row(i + 1, 4_000L * i, 4_000).pdt(4_000L * i + 120_000).v2();
@@ -310,22 +315,150 @@ class CutPlannerTest {
 
         Ready ready = (Ready) CutPlanner.plan(input(rows, 130_500, 138_000, true), new FakeLedger());
 
-        assertThat(ready.in()).isEqualTo(new MediaCoord(33, 2_500_000));
-        assertThat(ready.out()).isEqualTo(new End(35, 2_000_000L));
+        assertThat(ready.in()).isEqualTo(new MediaCoord(3, 2_500_000));
+        assertThat(ready.out()).isEqualTo(new End(5, 2_000_000L));
+        assertThat(ready.offsetOrigin()).isEqualTo(OffsetOrigin.VIDEO_START);
     }
 
-    /** P19 — 판 NULL 래칫(PDT 가 파일명 시각보다 앞섬)도 들어오지 않는다. */
+    /**
+     * P19 · P5 — 판 NULL 래칫 회차(PDT 가 파일명 시각보다 앞섬)도 화면과 같은 PDT 축이고 원점은 파일 머리({@code FILE_HEAD})다.
+     * 좌표 · 자막 끝점 · 끊긴 틈 · 범위가 모두 같은 래칫 축이어야 한다 — 「자막만 파일명 시각」 · 「틈만 파일명 시각」 변이가 자막 ·
+     * 틈 단언에서 FAIL 한다.
+     *
+     * <p>시드: 행 1–10 · 파일명 시각 3800i · PDT 4000i(행 6 부터 끊긴 새 녹화라 PDT +1500). PDT 축에서 행 5 끝 20000 과 행 6
+     * 시작 21500 사이가 1500ms 틈이고, 파일명 시각 축에서는 두 행이 200ms 겹쳐 틈이 없다.
+     */
     @Test
-    void 판_NULL_래칫_회차도_파일명_시각으로_고른다() {
-        List<RoundRow> rows = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
-            RowBuilder b = row(i + 1, 3_800L * i, 4_000).pdt(4_000L * i);
-            rows.add((i == 0 ? b.first() : b).build());
+    void 판_NULL_래칫_회차는_좌표_자막_틈이_같은_PDT_축이고_원점은_파일_머리다() {
+        List<RecipeDocument.Segment> subtitles = List.of(new RecipeDocument.Segment(21_000L, 22_000L, "틈에서 시작"));
+
+        Ready ready = (Ready) CutPlanner.plan(input(ratchetRows(), 17_000, 27_000, true, subtitles), new FakeLedger());
+
+        assertThat(ready.in()).as("PDT 16000 행(5) — 파일명 시각으로 고르면 행 5 의 1800").isEqualTo(new MediaCoord(5, 1_000_000));
+        assertThat(ready.out()).isEqualTo(new End(7, 1_500_000L));
+        assertThat(ready.gaps()).containsExactly(new Gap(5, 6, Gap.Location.MIDDLE, 1_500, 1_500));
+        assertThat(ready.subtitles()).containsExactly(
+                new SubtitleSpan(0, new InGap(5, 1_000), new AtMedia(new MediaCoord(6, 500_000))));
+        assertThat(ready.lengthMs()).isEqualTo(10_000 - 1_500);
+        assertThat(ready.offsetOrigin()).isEqualTo(OffsetOrigin.FILE_HEAD);
+    }
+
+    /**
+     * P19 — 범위(마지막 행 뒤)도 같은 래칫 축이다. 마지막 행 10 은 PDT [37500, 41500) · 파일명 시각 [34200, 38200) 이라, 끝
+     * 40000 은 PDT 축에서는 행 10 안이고 파일명 시각 축에서는 마지막 행 뒤(닫힌 회차 → 녹화 밖)다.
+     */
+    @Test
+    void 판_NULL_래칫_회차의_범위도_PDT_축이다() {
+        Ready ready = (Ready) CutPlanner.plan(input(ratchetRows(), 36_000, 40_000, true), new FakeLedger());
+
+        assertThat(ready.out()).isEqualTo(new End(10, 2_500_000L));
+    }
+
+    /** P5 — 한 회차는 한 판이다(계약 6-6-4). 판이 섞이면 장부 불변식 위반이라 원점을 고를 수 없다 — 조용히 한쪽으로 접지 않는다. */
+    @Test
+    void 회차_안에_판이_섞이면_예외다() {
+        List<RoundRow> rows = List.of(
+                row(1, 0, 4_000).first().v2().build(),
+                row(2, 4_000, 4_000).build());
+
+        assertThatThrownBy(() -> plan(rows, 1_000, 6_000, true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("판");
+    }
+
+    @Test
+    void 계획_신호에_축과_원점을_남긴다() {
+        List<RoundRow> rows = List.of(row(1, 0, 4_000).first().v2().build(), row(2, 4_000, 4_000).v2().build());
+
+        try (LogCaptor logs = new LogCaptor()) {
+            CutPlanner.plan(input(rows, 1_000, 6_000, true), new FakeLedger());
+
+            assertThat(logs.messages()).anyMatch(m -> m.startsWith(
+                    "clip.render.cut_planned streamId=s-1 recipeId=7 axis=pdt origin=VIDEO_START "));
         }
+    }
 
-        Ready ready = (Ready) CutPlanner.plan(input(rows, 30_500, 33_000, true), new FakeLedger());
+    // ── 웹 컷 식과의 경계(C-B1 · C-B3 · C-B5) ───────────────────────
 
-        assertThat(ready.in()).as("파일명 시각 30400 행(9) — PDT 로 고르면 행 8").isEqualTo(new MediaCoord(9, 100_000));
+    /**
+     * C-B1 — 웹 r5 컷 식은 in · out 을 ms 로 내린다(30fps 프레임 F = 7 · {@code p_F − D0} = 233.33…ms → in 233 · F 끝 266.66…ms →
+     * out 266). clip 은 그 ms 를 더하거나 빼지 않고 µs 로만 옮긴다. 렌더(판 2 · {@code VIDEO_START})의 시작 「PTS − D0 ≤ x 인
+     * 마지막」 은 F 바로 앞(6)이고 끝 「PTS − D0 < x_out」 은 F 까지다 — 「= F」 로 단정하지 않는다(머리에 앞 프레임 하나가 더
+     * 들어갈 수 있다 · kty A2).
+     */
+    @Test
+    void 웹이_내린_ms_컷은_그대로_옮겨_렌더가_F_또는_F_앞에서_시작해_F_에서_끝난다() {
+        List<RoundRow> rows = List.of(row(1, 100_000, 4_000).first().v2().build());
+        long frame = 7;
+
+        Ready ready = (Ready) CutPlanner.plan(input(rows, 100_000 + floorMs(frame), 100_000 + floorMs(frame + 1), true),
+                new FakeLedger());
+
+        assertThat(ready.in()).isEqualTo(new MediaCoord(1, 233_000));
+        assertThat(ready.out()).isEqualTo(new End(1, 266_000L));
+        assertThat(lastFrameAtOrBefore(ready.in().offsetUs())).isBetween(frame - 1, frame);
+        assertThat(lastFrameBefore(ready.out().offsetUs())).isEqualTo(frame);
+    }
+
+    /**
+     * C-B3 · 웹 경계 시드(오케스트레이터 2026-11-12 정정 — 웹 K1) — 웹은 out 이 장부 틈 안에 떨어져도 맞추지 않고 그 T 를 그대로
+     * 보낸다(여기 T = 4050 · k 끝 4000 · 뒤 행 시작 4100). 세 갈래 모두 k 를 끝까지 담는다.
+     * <ol>
+     *   <li>이어진 틈(같은 녹화 · 장부 시각만 벌어짐): F끝 이 k 끝 {@code (k, 4000ms)} 로 접는다 — 렌더 끝 배타
+     *       {@code PTS − D0 < x_out} 가 판 2({@code VIDEO_START})에서 k 의 마지막 30fps 프레임(119)까지 담는다. 판 NULL
+     *       ({@code FILE_HEAD})은 렌더가 m 을 빼 끝이 당겨지므로 꼬리 프레임 하나가 빠질 수 있다(이 시험 밖 · 렌더 몫)</li>
+     *   <li>회차 안 끊긴 틈(k+1 {@code is_discontinuity} 참 · 장부 이웃): 틈 → {@code toSegmentEnd} — 렌더가 마지막 프레임 끝까지
+     *       보존한다</li>
+     *   <li>비귀속 행이 낀 자리(k+2 의 이웃 표시 거짓): 2 와 같다</li>
+     * </ol>
+     */
+    @Test
+    void 웹_out_이_틈_안_그대로면_갈래마다_k_를_끝까지_담는다() {
+        for (boolean v2 : List.of(true, false)) {
+            List<RoundRow> continued = versioned(v2, row(1, 0, 4_000).first(), row(2, 4_100, 4_000));
+            List<RoundRow> broken = versioned(v2, row(1, 0, 4_000).first(), row(2, 4_100, 4_000).discontinuity());
+            List<RoundRow> unattributed = versioned(v2, row(1, 0, 4_000).first(),
+                    row(3, 4_100, 4_000).notLedgerNeighbor());
+
+            Ready joined = (Ready) CutPlanner.plan(input(continued, 1_000, 4_050, true), new FakeLedger());
+            Ready cut = (Ready) CutPlanner.plan(input(broken, 1_000, 4_050, true), new FakeLedger());
+            Ready skipped = (Ready) CutPlanner.plan(input(unattributed, 1_000, 4_050, true), new FakeLedger());
+
+            assertThat(joined.out()).as("판 2=%s 이어진 틈", v2).isEqualTo(new End(1, 4_000_000L));
+            assertThat(joined.gaps()).isEmpty();
+            assertThat(cut.out()).as("판 2=%s 끊긴 틈", v2).isEqualTo(new End(1, null));
+            assertThat(cut.gaps()).containsExactly(new Gap(1, 2, Gap.Location.TAIL, 100, 50));
+            assertThat(skipped.out()).as("판 2=%s 비귀속 낀 자리", v2).isEqualTo(new End(1, null));
+            assertThat(skipped.gaps()).containsExactly(new Gap(1, 3, Gap.Location.TAIL, 100, 50));
+            for (Ready ready : List.of(joined, cut, skipped)) {
+                assertThat(ready.media()).extracting(RoundRow::seq).containsExactly(1L);
+            }
+        }
+        assertThat(lastFrameBefore(4_000_000)).as("판 2 이어진 틈 — k 의 마지막 프레임까지").isEqualTo(119);
+    }
+
+    /**
+     * 웹 경계 시드(같은 정정) — 회차 마지막 행 뒤로 나간 out 은 범위 밖(F끝 AfterLast)이다: 닫힌 회차는 녹화 밖 422 · 안 닫힌 회차는
+     * 「아직 녹화 안 됨」 409. 그 조각 끝 값({@code PDT_k + duration_ms(k)})으로 맞춘 out 은 통과하고 k 를 끝까지 담는다.
+     */
+    @Test
+    void 웹_out_이_마지막_행_뒤면_범위_밖이고_조각_끝이면_통과한다() {
+        List<RoundRow> rows = List.of(row(1, 0, 4_000).first().build());
+
+        assertThat(plan(rows, 1_000, 4_050, true)).isEqualTo(new Unrenderable(Reason.OUTSIDE_RECORDING));
+        assertThat(plan(rows, 1_000, 4_050, false)).isEqualTo(new NotReady("not_yet_recorded"));
+        assertThat(plan(rows, 1_000, 4_000, true)).isInstanceOfSatisfying(Ready.class,
+                ready -> assertThat(ready.out()).isEqualTo(new End(1, 4_000_000L)));
+    }
+
+    /** C-B5 — 웹은 in 이 뒤 행 PDT 이상이면 {@code PDT_{k+1} − 1} 로 접어 보낸다. 그 값은 앞 조각 안 마지막 ms 다. */
+    @Test
+    void 웹이_접은_in_은_앞_조각_안_마지막_ms_다() {
+        List<RoundRow> rows = List.of(row(1, 0, 4_000).first().build(), row(2, 4_000, 4_000).build());
+
+        Ready ready = (Ready) CutPlanner.plan(input(rows, 3_999, 6_000, true), new FakeLedger());
+
+        assertThat(ready.in()).isEqualTo(new MediaCoord(1, 3_999_000));
     }
 
     // ── 준비 ─────────────────────────────────────────────────────
@@ -357,7 +490,7 @@ class CutPlannerTest {
         List<RoundRow> rows = List.of(row(1, 0, 4_000).first().build());
         RoundRow failed = row(2, 4_000, 4_000).failed().build();
         CutPlanner.CutInput late = new CutPlanner.CutInput("s-1", 7L, rows, 1_000, 3_500, List.of(), false, false,
-                null, Instant.ofEpochMilli(4_000).plus(Duration.ofMinutes(16)));
+                Instant.ofEpochMilli(4_000).plus(Duration.ofMinutes(16)));
 
         try (LogCaptor logs = new LogCaptor()) {
             Ready ready = (Ready) CutPlanner.plan(late, new FakeLedger().after(1, failed));
@@ -373,11 +506,11 @@ class CutPlannerTest {
         List<RoundRow> rows = List.of(row(1, 0, 4_000).first().build());
         RoundRow failed = row(2, 4_000, 4_000).failed().build();
         CutPlanner.CutInput late = new CutPlanner.CutInput("s-1", 7L, rows, 1_000, 3_500, List.of(), false, false,
-                null, Instant.ofEpochMilli(4_000).plus(Duration.ofMinutes(16)));
+                Instant.ofEpochMilli(4_000).plus(Duration.ofMinutes(16)));
 
         try (LogCaptor logs = new LogCaptor()) {
             CutDecision decision = CutPlanner.plan(late, new FakeLedger().after(1, failed)
-                    .before(1, neighbor(0, -4_000, RoundRow.PENDING)));
+                    .before(1, neighbor(0, RoundRow.PENDING)));
 
             assertThat(decision).isEqualTo(new NotReady("prime_pending"));
             assertThat(logs.messages()).noneMatch(m -> m.startsWith("clip.render.capture_skipped"));
@@ -390,32 +523,32 @@ class CutPlannerTest {
     @Test
     void P30_1_회차_첫_행의_앞_비귀속_행을_준비로_싣는다() {
         Ready ready = (Ready) CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
-                new FakeLedger().before(10, neighbor(9, 6_000, RoundRow.UPLOADED)));
+                new FakeLedger().before(10, neighbor(9, RoundRow.UPLOADED)));
 
-        assertThat(ready.primes()).containsExactly(new Prime(10, neighbor(9, 6_000, RoundRow.UPLOADED)));
+        assertThat(ready.primes()).containsExactly(new Prime(10, neighbor(9, RoundRow.UPLOADED)));
         assertThat(ready.runHeads()).containsExactly(new RunHead(10, RunHead.Kind.CONTINUED));
     }
 
     @Test
     void P30_2_준비_조각이_아직이면_기다린다() {
         assertThat(CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
-                new FakeLedger().before(10, neighbor(9, 6_000, RoundRow.PENDING))))
+                new FakeLedger().before(10, neighbor(9, RoundRow.PENDING))))
                 .isEqualTo(new NotReady("prime_pending"));
     }
 
     @Test
     void P30_3_준비_조각이_failed_면_기다리지_않고_없이_진행한다() {
         Ready ready = (Ready) CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
-                new FakeLedger().before(10, neighbor(9, 6_000, RoundRow.FAILED)));
+                new FakeLedger().before(10, neighbor(9, RoundRow.FAILED)));
 
         assertThat(ready.primes()).isEmpty();
-        assertThat(ready.primeSkips()).containsExactly(new PrimeSkip(10, 9, "failed"));
+        assertThat(ready.primeSkips()).containsExactly(new PrimeSkip(10, 9L, "failed"));
     }
 
     @Test
     void P30_4_머리가_새_녹화면_앞_행을_묻지_않고_준비가_없다() {
         List<RoundRow> rows = List.of(row(10, 10_000, 4_000).first().discontinuity().build());
-        FakeLedger ledger = new FakeLedger().before(10, neighbor(9, 6_000, RoundRow.UPLOADED));
+        FakeLedger ledger = new FakeLedger().before(10, neighbor(9, RoundRow.UPLOADED));
 
         Ready ready = (Ready) CutPlanner.plan(input(rows, 11_000, 13_000, true), ledger);
 
@@ -430,36 +563,54 @@ class CutPlannerTest {
         List<RoundRow> rows = List.of(
                 row(5, 0, 4_000).first().discontinuity().build(),
                 row(7, 8_000, 4_000).notLedgerNeighbor().build());
-        FakeLedger ledger = new FakeLedger().before(7, neighbor(6, 4_000, RoundRow.UPLOADED));
+        FakeLedger ledger = new FakeLedger().before(7, neighbor(6, RoundRow.UPLOADED));
 
         Ready ready = (Ready) CutPlanner.plan(input(rows, 1_000, 10_000, true), ledger);
 
-        assertThat(ready.primes()).containsExactly(new Prime(7, neighbor(6, 4_000, RoundRow.UPLOADED)));
+        assertThat(ready.primes()).containsExactly(new Prime(7, neighbor(6, RoundRow.UPLOADED)));
         assertThat(ready.runHeads()).containsExactly(
                 new RunHead(5, RunHead.Kind.NEW_RECORDING), new RunHead(7, RunHead.Kind.CONTINUED));
     }
 
-    /** P30 ⑥ — 앞 행이 이 방송의 장부 구간 시작 앞이면 앞 방송 몫이라 쓰지 않는다(5-2 소비자 규약). */
+    /**
+     * P30 ⑥ — 앞 행이 이 방송의 장부 구간 시작 앞이면 앞 방송 몫이라 쓰지 않는다(5-2 소비자 규약). 장부 읽기가 구간 경계를 조회
+     * 단계에서 걸어 그 행을 아예 주지 않으므로(K4), 판정은 「앞 방송이 있는데 구간 안 앞 행이 없다」 로 안다 — 그 행의 seq 도 모른다.
+     */
     @Test
     void P30_6_앞_행이_방송_장부_구간_시작_앞이면_다른_방송_몫이라_안_싣는다() {
-        CutPlanner.CutInput in = new CutPlanner.CutInput("s-1", 7L, oneRow(), 11_000, 13_000, List.of(), true, true,
-                Instant.ofEpochMilli(8_000), NOW);
-
-        CutDecision result = CutPlanner.plan(in, new FakeLedger().before(10, neighbor(9, 6_000, RoundRow.PENDING)));
+        CutDecision result = CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
+                new FakeLedger().previousBroadcast());
 
         assertThat(result).isInstanceOfSatisfying(Ready.class, ready -> {
             assertThat(ready.primes()).isEmpty();
-            assertThat(ready.primeSkips()).containsExactly(new PrimeSkip(10, 9, "other_broadcast"));
+            assertThat(ready.primeSkips()).containsExactly(new PrimeSkip(10, null, "other_broadcast"));
+            assertThat(ready.runHeads()).containsExactly(new RunHead(10, RunHead.Kind.CONTINUED));
         });
+    }
+
+    /**
+     * K2 — 앞 방송이 없을 때만 「앞 행 없음」 이 진짜 시작이다. 앞 방송이 있으면 구간 안 앞 행이 없는 머리는 앞 방송이 만료돼 그 행이
+     * 지워졌든 남았든 같은 열화({@code other_broadcast})로 센다 — 만료 전후로 집계 칸이 바뀌지 않는다.
+     */
+    @Test
+    void 앞_방송이_있으면_구간_안_앞_행이_없어도_진짜_시작으로_세지_않는다() {
+        Ready none = (Ready) CutPlanner.plan(input(oneRow(), 11_000, 13_000, true), new FakeLedger());
+        Ready afterBroadcast = (Ready) CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
+                new FakeLedger().previousBroadcast());
+
+        assertThat(none.runHeads()).containsExactly(new RunHead(10, RunHead.Kind.NO_PREV_ROW));
+        assertThat(none.primeSkips()).isEmpty();
+        assertThat(afterBroadcast.runHeads()).containsExactly(new RunHead(10, RunHead.Kind.CONTINUED));
+        assertThat(afterBroadcast.primeSkips()).containsExactly(new PrimeSkip(10, null, "other_broadcast"));
     }
 
     /** P30 ⑦ — seq 는 조밀하다고 보장되지 않는다. 장부 바로 앞 행이 h − 3 이어도 그 행이다. */
     @Test
     void P30_7_seq_가_조밀하지_않아도_장부_바로_앞_행을_쓴다() {
         Ready ready = (Ready) CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
-                new FakeLedger().before(10, neighbor(7, 6_000, RoundRow.UPLOADED)));
+                new FakeLedger().before(10, neighbor(7, RoundRow.UPLOADED)));
 
-        assertThat(ready.primes()).containsExactly(new Prime(10, neighbor(7, 6_000, RoundRow.UPLOADED)));
+        assertThat(ready.primes()).containsExactly(new Prime(10, neighbor(7, RoundRow.UPLOADED)));
     }
 
     @Test
@@ -480,14 +631,30 @@ class CutPlannerTest {
                 row(2, 5_000, 4_000).discontinuity().build());
 
         try (LogCaptor logs = new LogCaptor()) {
-            CutPlanner.plan(input(rows, 1_000, 6_000, true), new FakeLedger().before(1, neighbor(0, -4_000,
-                    RoundRow.UPLOADED)));
+            CutPlanner.plan(input(rows, 1_000, 6_000, true), new FakeLedger().before(1, neighbor(0, RoundRow.UPLOADED)));
             CutPlanner.plan(input(rows, 4_200, 4_800, true), new FakeLedger());
 
             assertThat(logs.messages()).contains(
-                    "clip.render.cut_planned streamId=s-1 recipeId=7 axis=wall gaps=middle:1-2:1000:1000 joinedMs=1000"
-                            + " lengthMs=4000 runHeads=1:continued,2:new_recording",
+                    "clip.render.cut_planned streamId=s-1 recipeId=7 axis=pdt origin=FILE_HEAD gaps=middle:1-2:1000:1000"
+                            + " joinedMs=1000 lengthMs=4000 runHeads=1:continued,2:new_recording",
                     "clip.render.cut_rejected streamId=s-1 recipeId=7 reason=no_footage");
+        }
+    }
+
+    /**
+     * 준비 조각을 쓰지 못한 머리(열화)는 계획이 나올 때 {@code clip.render.prime_skipped} 로 센다. 앞 방송 몫은 그 행을 읽지 않아
+     * seq 를 모른다({@code seq=-}).
+     */
+    @Test
+    void 준비_생략을_신호로_남긴다() {
+        try (LogCaptor logs = new LogCaptor()) {
+            CutPlanner.plan(input(oneRow(), 11_000, 13_000, true),
+                    new FakeLedger().before(10, neighbor(9, RoundRow.FAILED)));
+            CutPlanner.plan(input(oneRow(), 11_000, 13_000, true), new FakeLedger().previousBroadcast());
+
+            assertThat(logs.messages()).contains(
+                    "clip.render.prime_skipped streamId=s-1 seq=9 ownerSeq=10 reason=failed",
+                    "clip.render.prime_skipped streamId=s-1 seq=- ownerSeq=10 reason=other_broadcast");
         }
     }
 
@@ -503,6 +670,43 @@ class CutPlannerTest {
                 }
             }
         }
+    }
+
+    /** 판 NULL 래칫 시드(위 래칫 시험 셋) — 파일명 시각 3800i · PDT 4000i · 행 6 부터 끊긴 새 녹화(PDT +1500). */
+    private static List<RoundRow> ratchetRows() {
+        List<RoundRow> rows = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            RowBuilder b = row(i + 1, 3_800L * i, 4_000).pdt(4_000L * i + (i >= 5 ? 1_500 : 0));
+            if (i == 5) {
+                b.discontinuity();
+            }
+            rows.add((i == 0 ? b.first() : b).build());
+        }
+        return rows;
+    }
+
+    /** 행 짓개들을 판 2(참) 또는 판 NULL 로 짓는다. */
+    private static List<RoundRow> versioned(boolean v2, RowBuilder... builders) {
+        List<RoundRow> rows = new ArrayList<>();
+        for (RowBuilder b : builders) {
+            rows.add((v2 ? b.v2() : b).build());
+        }
+        return rows;
+    }
+
+    /** 30fps 프레임 n 의 표시 시각(D0 기준)을 ms 로 내린 값 — 웹 r5 컷 식의 {@code floor(1000·(p_F − D0))}. */
+    private static long floorMs(long frame) {
+        return frame * 1000 / 30;
+    }
+
+    /** 렌더 시작 규칙(설계 7.3) — {@code PTS − D0 ≤ x} 인 마지막 30fps 프레임. 정수식: {@code n/30 s ≤ x µs ⇔ n·10⁶ ≤ 30·x}. */
+    private static long lastFrameAtOrBefore(long offsetUs) {
+        return Math.floorDiv(30 * offsetUs, 1_000_000);
+    }
+
+    /** 렌더 끝 규칙 — {@code PTS − D0 < x_out} 인 마지막 30fps 프레임. */
+    private static long lastFrameBefore(long offsetUs) {
+        return Math.floorDiv(30 * offsetUs - 1, 1_000_000);
     }
 
     private static List<RoundRow> oneRow() {
@@ -523,17 +727,17 @@ class CutPlannerTest {
      */
     private static CutPlanner.CutInput input(List<RoundRow> rows, long in, long out, boolean ended,
                                             List<RecipeDocument.Segment> subtitles) {
-        return new CutPlanner.CutInput("s-1", 7L, rows, in, out, subtitles, ended, ended, null, NOW);
+        return new CutPlanner.CutInput("s-1", 7L, rows, in, out, subtitles, ended, ended, NOW);
     }
 
     /** 회차 완결 술어와 clip 방송 {@code ended} 를 따로 준다. */
     private static CutPlanner.CutInput input(List<RoundRow> rows, long in, long out, boolean roundComplete,
                                             boolean broadcastEnded) {
-        return new CutPlanner.CutInput("s-1", 7L, rows, in, out, List.of(), roundComplete, broadcastEnded, null, NOW);
+        return new CutPlanner.CutInput("s-1", 7L, rows, in, out, List.of(), roundComplete, broadcastEnded, NOW);
     }
 
-    private static LedgerNeighbor neighbor(long seq, long wall, String state) {
-        return new LedgerNeighbor(seq, wall, 4_000, state, "k" + seq);
+    private static LedgerNeighbor neighbor(long seq, String state) {
+        return new LedgerNeighbor(seq, 4_000, state, "k" + seq);
     }
 
     private static RowBuilder row(long seq, long wall, int duration) {
@@ -605,6 +809,7 @@ class CutPlannerTest {
     private static final class FakeLedger implements CutPlanner.Ledger {
         private final Map<Long, RoundRow> after = new HashMap<>();
         private final Map<Long, LedgerNeighbor> before = new HashMap<>();
+        private boolean previousBroadcast;
         final List<List<Long>> askedBefore = new ArrayList<>();
 
         FakeLedger after(long seq, RoundRow next) {
@@ -617,13 +822,19 @@ class CutPlannerTest {
             return this;
         }
 
+        /** 같은 물리 키에 앞 방송이 있다(이 방송 장부 구간에 시작이 있다). */
+        FakeLedger previousBroadcast() {
+            previousBroadcast = true;
+            return this;
+        }
+
         @Override
         public Optional<RoundRow> rowAfter(long seq) {
             return Optional.ofNullable(after.get(seq));
         }
 
         @Override
-        public Map<Long, LedgerNeighbor> rowsBefore(List<Long> heads) {
+        public CutPlanner.Preceding rowsBefore(List<Long> heads) {
             askedBefore.add(List.copyOf(heads));
             Map<Long, LedgerNeighbor> found = new HashMap<>();
             for (long h : heads) {
@@ -631,7 +842,7 @@ class CutPlannerTest {
                     found.put(h, before.get(h));
                 }
             }
-            return found;
+            return new CutPlanner.Preceding(found, previousBroadcast);
         }
     }
 }

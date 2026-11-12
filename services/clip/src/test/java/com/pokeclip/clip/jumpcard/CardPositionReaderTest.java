@@ -1,8 +1,8 @@
 package com.pokeclip.clip.jumpcard;
 
-import com.pokeclip.clip.jumpcard.CardPositionReader.OffsetOrigin;
 import com.pokeclip.clip.jumpcard.CardPositionReader.Scene;
 import com.pokeclip.clip.jumpcard.CardPositionReader.ThumbnailOrder;
+import com.pokeclip.clip.segment.OffsetOrigin;
 import com.pokeclip.clip.segment.RoundRows.Row;
 import org.junit.jupiter.api.Test;
 

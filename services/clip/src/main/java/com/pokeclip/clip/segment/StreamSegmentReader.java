@@ -1,5 +1,6 @@
 package com.pokeclip.clip.segment;
 
+import com.pokeclip.clip.broadcast.ExpiredBroadcastReader;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -8,8 +9,11 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * {@code stream_segments}를 <b>읽기만</b> 한다. 이 표의 소유는 1번(Media)이고 clip은
@@ -194,6 +198,126 @@ public class StreamSegmentReader {
         return jdbc.query(ROW_AFTER, StreamSegmentReader::readRow, ingestKey, seq).stream()
                 .findFirst()
                 .map(r -> r.withFollows(true));
+    }
+
+    /**
+     * 컷 판정 회차 행 읽기의 칸(POK-196 · kty 2026-11-12 D1). 시각은 두 칸 다 싣고 축(목록 PDT)은 {@link CutPlanner} 가 고른다.
+     * {@code ledger_previous_seq} 는 위 {@link #WALL_COLUMNS} 와 같이 장부 바로 앞 행 seq(행마다 PK 역순 한 행)다.
+     */
+    private static final String ROUND_COLUMNS = """
+            SELECT s.seq, s.start_wall_utc, s.playback_pdt, s.duration_ms, s.is_discontinuity, s.upload_state,
+                   s.timing_version, s.s3_key,
+                   (SELECT max(p.seq) FROM public.stream_segments p
+                     WHERE p.stream_id = s.stream_id AND p.seq < s.seq) AS ledger_previous_seq
+              FROM public.stream_segments s""";
+
+    /** 회차 세션에 귀속된 행 전부, seq 순. 색인 {@code stream_segments_session_idx (stream_id, session_id, seq)}. */
+    static final String ROUND_MEMBER_ROWS = ROUND_COLUMNS + """
+
+             WHERE s.stream_id = ? AND s.session_id = ANY(?::text[])
+             ORDER BY s.seq""";
+
+    /** 머리 세션 행이 없는 옛 방송 — 방송 시간창 안 행 전부. 색인 {@code stream_segments_wall_idx}. */
+    static final String ROUND_WINDOW_ROWS = ROUND_COLUMNS + """
+
+             WHERE s.stream_id = ?
+               AND s.start_wall_utc >= ?
+               AND s.start_wall_utc <= COALESCE(?::timestamptz, 'infinity'::timestamptz)
+             ORDER BY s.seq""";
+
+    /**
+     * 준비 후보(설계 r7 9.1 읽기 5) — 머리마다 장부 바로 앞 행 하나(PK 역순 · 회차 · 세션 · 판으로 거르지 않음)와 이 방송 장부 구간
+     * 시작을 한 왕복에. 바로 앞 행은 seq 만 먼저 고르고(PK 색인), 구간 시작 앞(앞 방송 몫)이면 칸을 읽지 않는다 — 경계를 조회
+     * 단계에 건다(계약 5-2 · K4). 머리가 그 방송에 없으면 줄이 없다.
+     */
+    static final String ROWS_BEFORE = """
+            WITH section AS (
+            """ + ExpiredBroadcastReader.SECTION_START + """
+            )
+            SELECT h.head, c.seq, c.duration_ms, c.upload_state, c.s3_key,
+                   section.segments_from IS NOT NULL AS previous_broadcast
+              FROM unnest(?::bigint[]) AS h(head)
+              JOIN section ON true
+              LEFT JOIN LATERAL (
+                    SELECT max(p.seq) AS seq FROM public.stream_segments p
+                     WHERE p.stream_id = ? AND p.seq < h.head) prev ON true
+              LEFT JOIN public.stream_segments c
+                     ON c.stream_id = ? AND c.seq = prev.seq
+                    AND (section.segments_from IS NULL OR c.start_wall_utc >= section.segments_from)""";
+
+    /**
+     * 회차 행 전부, seq 순(컷 판정 입력 — 가장자리는 판정이 메모리에서 F 로 고른다 · POK-196 · 설계 r7 9.1). 상태로 거르지 않는다.
+     * 각 행의 {@code followsLedgerPrevious} 는 「목록 바로 앞 행이 장부 바로 앞 행인가」(사이에 비귀속 행이 끼면 거짓 · 첫 행 거짓)다.
+     * 왕복 한 번 — 회차 길이에 비례해 읽고 키 이력은 훑지 않는다.
+     */
+    public List<RoundRow> findRoundRows(RoundRows.Round round) {
+        List<RoundRead> rows = switch (round) {
+            case RoundRows.Members m -> jdbc.query(con -> {
+                var ps = con.prepareStatement(ROUND_MEMBER_ROWS);
+                ps.setString(1, m.ingestKey());
+                ps.setArray(2, con.createArrayOf("text", m.sessionIds().toArray()));
+                return ps;
+            }, StreamSegmentReader::readRoundRow);
+            case RoundRows.TimeWindow w -> jdbc.query(ROUND_WINDOW_ROWS, StreamSegmentReader::readRoundRow,
+                    w.ingestKey(), Timestamp.from(w.lo()), w.hi() == null ? null : Timestamp.from(w.hi()));
+        };
+        List<RoundRow> linked = new ArrayList<>(rows.size());
+        for (int i = 0; i < rows.size(); i++) {
+            Long previous = rows.get(i).ledgerPreviousSeq();
+            boolean follows = i > 0 && previous != null && previous == rows.get(i - 1).seq();
+            linked.add(rows.get(i).withFollows(follows));
+        }
+        return linked;
+    }
+
+    /**
+     * 머리마다 이 방송 장부 구간 안의 장부 바로 앞 행(디코더 준비 후보 · 설계 r7 9.1 읽기 5 · 9.4). 왕복 한 번.
+     *
+     * @param ingestKey 물리 키(장부 {@code stream_id})
+     * @param streamId 방송 번호 — 장부 구간 시작을 이 방송으로 잰다
+     * @param heads 묻는 머리 seq. 비어 있으면 안 된다(부르는 쪽이 거른다)
+     */
+    public CutPlanner.Preceding findRowsBefore(String ingestKey, String streamId, List<Long> heads) {
+        Map<Long, CutDecision.LedgerNeighbor> found = new HashMap<>();
+        AtomicBoolean previousBroadcast = new AtomicBoolean();
+        jdbc.query(con -> {
+            var ps = con.prepareStatement(ROWS_BEFORE);
+            ps.setString(1, streamId);
+            ps.setArray(2, con.createArrayOf("bigint", heads.toArray()));
+            ps.setString(3, ingestKey);
+            ps.setString(4, ingestKey);
+            return ps;
+        }, rs -> {
+            previousBroadcast.set(rs.getBoolean("previous_broadcast"));
+            long seq = rs.getLong("seq");
+            if (!rs.wasNull()) {
+                found.put(rs.getLong("head"), new CutDecision.LedgerNeighbor(seq, rs.getInt("duration_ms"),
+                        rs.getString("upload_state"), rs.getString("s3_key")));
+            }
+        });
+        return new CutPlanner.Preceding(found, previousBroadcast.get());
+    }
+
+    /** 회차 행 읽기 한 줄 — 이웃 표시는 목록이 다 모인 뒤 장부 바로 앞 행 seq 로 정한다. */
+    private record RoundRead(long seq, long wallMs, Long pdtMs, int durationMs, boolean isDiscontinuity,
+                             String uploadState, Integer timingVersion, String s3Key, Long ledgerPreviousSeq) {
+
+        RoundRow withFollows(boolean follows) {
+            return new RoundRow(seq, wallMs, pdtMs, durationMs, isDiscontinuity, follows, uploadState, timingVersion,
+                    s3Key);
+        }
+    }
+
+    private static RoundRead readRoundRow(ResultSet rs, int rowNum) throws SQLException {
+        long previous = rs.getLong("ledger_previous_seq");
+        Long ledgerPrevious = rs.wasNull() ? null : previous;
+        short version = rs.getShort("timing_version");
+        Integer timingVersion = rs.wasNull() ? null : (int) version;
+        Timestamp pdt = rs.getTimestamp("playback_pdt");
+        return new RoundRead(rs.getLong("seq"), rs.getTimestamp("start_wall_utc").toInstant().toEpochMilli(),
+                pdt == null ? null : pdt.toInstant().toEpochMilli(), rs.getInt("duration_ms"),
+                rs.getBoolean("is_discontinuity"), rs.getString("upload_state"), timingVersion, rs.getString("s3_key"),
+                ledgerPrevious);
     }
 
     /** 읽은 그대로의 한 줄 — 이웃 표시는 목록이 다 모인 뒤 장부 바로 앞 행 seq 로 정한다. */

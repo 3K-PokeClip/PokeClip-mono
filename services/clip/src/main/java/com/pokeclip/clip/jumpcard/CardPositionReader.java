@@ -1,6 +1,7 @@
 package com.pokeclip.clip.jumpcard;
 
 import com.pokeclip.clip.broadcast.Broadcast;
+import com.pokeclip.clip.segment.OffsetOrigin;
 import com.pokeclip.clip.segment.RoundRows;
 import com.pokeclip.clip.segment.RoundRows.Round;
 import com.pokeclip.clip.segment.RoundRows.Row;
@@ -37,9 +38,6 @@ import java.util.Optional;
 @Component
 public class CardPositionReader {
 
-    /** 썸네일 주문의 원점 표지(주문서와 같은 이름 · 같은 값 — 설계 r7 3.1). */
-    public enum OffsetOrigin { VIDEO_START, FILE_HEAD }
-
     /** 썸네일 일꾼에 낼 카드 장면 — 조각 {@code seq} 안 {@code offsetMs}, 원점은 행 판. */
     public record ThumbnailOrder(long seq, long offsetMs, OffsetOrigin offsetOrigin) {
     }
@@ -66,7 +64,7 @@ public class CardPositionReader {
             if (!row.uploaded()) {
                 return Optional.empty();
             }
-            OffsetOrigin origin = row.v2() ? OffsetOrigin.VIDEO_START : OffsetOrigin.FILE_HEAD;
+            OffsetOrigin origin = OffsetOrigin.ofTimingVersion(row.timingVersion());
             return Optional.of(new ThumbnailOrder(row.seq(), offsetMs, origin));
         }
     }

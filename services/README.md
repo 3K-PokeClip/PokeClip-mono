@@ -2484,7 +2484,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/recipes/{id}/renders` (본문 없음 · JSON `{"upload":…}` · multipart, POK-291) | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 편집본 같은 판이 이미 진행 중이거나, 업로드 정보를 실었는데 이미 완성: 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"cut"\|업로드 칸}` · 404 `broadcast_not_found`/`recipe_not_found` · **409** `{"error":"source_not_ready"}`·`already_uploaded`·`youtube_not_linked` · **413** `payload_too_large` · **415** `unsupported_image` · **422** `{"error":"message_too_large"}` · 401 · 503 `authorization_unavailable`/**`render_unavailable`**/`upload_unavailable`/`thumbnail_store_unavailable` |
+| `POST /api/clip/broadcasts/{streamId}/recipes/{id}/renders` (본문 없음 · JSON `{"upload":…}` · multipart, POK-291) | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 편집본 같은 판이 이미 진행 중이거나, 업로드 정보를 실었는데 이미 완성: 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"cut"\|업로드 칸}` · 404 `broadcast_not_found`/`recipe_not_found` · **409** `{"error":"source_not_ready"}`·`already_uploaded`·`youtube_not_linked` · **413** `payload_too_large` · **415** `unsupported_image` · **422** `{"error":"message_too_large"}` · **422** `{"error":"source_unrenderable","reason":"outside_recording"\|"no_footage"}`(닫힌 목록 — 늘리면 웹 선배포가 먼저) · 401 · 503 `authorization_unavailable`/**`render_unavailable`**/`upload_unavailable`/`thumbnail_store_unavailable` |
 | `GET /api/clip/broadcasts/{streamId}/clips/{clipId}` | Bearer JWT | **200** 봉투 · 404 `broadcast_not_found`/`clip_not_found` · 401 · 503 |
 | `POST /internal/jobs/{jobId}/events` (계약1 4절) | `X-Internal-Token` | **200** 전이 응답 · **400** `{"reason":"INVALID_EVENT"\|"INVALID_RESULT"}` 또는 `{"error":"invalid_request","field":…}` · **404** `{"error":"job_not_found"}` · **409** `{"reason":"SUPERSEDED"\|"TERMINAL"}` · 401 |
 
@@ -2499,9 +2499,11 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개): 보고 받을 주소는 아래 「완성 영상 주소」 문(POK-247)이 준다.
 
 **주문의 순서가 계약이다 — 자격 → 편집본 → 조각 준비 → 선점(표) → 발행(큐).**
-- **조각이 컷을 「연속 uploaded」로 다 덮어야 주문한다.** 하나라도 빠지면 409 `source_not_ready`이고 표에도 큐에도 아무것도
-  안 남는다. 잘라서 주문하지 않는다 — 짧아진 영상이 조용히 나가는 것이 안 나가는 것보다 나쁘다(계약1 `SOURCE_RANGE`의 「클램프 금지」).
-  판정은 POK-117의 조립기 그대로이고 **축만 재생 축**이다(아래).
+- **컷은 회차 귀속 행 위 계획으로 옮겨야 주문한다(POK-196 · `CutPlanner`).** 결과에 드는 조각 · 끝 소리 확보 조각 · 디코더 준비
+  조각이 아직 안 올라왔으면(또는 회차가 아직 그 자리까지 녹화 안 됐으면) 409 `source_not_ready`이고 표에도 큐에도 아무것도 안 남는다.
+  잘라서 주문하지 않는다 — 짧아진 영상이 조용히 나가는 것이 안 나가는 것보다 나쁘다(계약1 `SOURCE_RANGE`의 「클램프 금지」). 다시
+  물어도 같은 거절(회차 첫 행 앞 · 닫힌 회차 끝 뒤 · 컷 안 영상 없음)은 422 `source_unrenderable`이다. 끊긴 이웃 사이 틈은 이어
+  붙인다(틈 초과 거절 없음).
 - **선점은 표가 한다** — `clips`의 부분 UNIQUE(`recipe_id, recipe_version` where 진행 중) + `ON CONFLICT DO NOTHING`.
   더블클릭의 두 번째는 200으로 첫 번째 영상을 돌려주고 큐에는 한 통뿐이다. 끝난(완성·실패) 영상은 자리를 비워 다시 주문할 수
   있다(재요청 = 새 영상 줄, 계약1 「종결 시 선점 해제」).
@@ -2509,21 +2511,32 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
   30초마다 도는 회차가 `published_at`이 빈 줄을 다시 보낸다 — 같은 jobId·같은 본문으로. 큐가 받고 응답만 못 받은 경우 같은
   주문서가 두 통 실릴 수 있는데, 그것은 SQS의 at-least-once와 같은 모양이라 일꾼의 STARTED 판정(아래 토큰)이 거른다.
 
-**🔴 조각은 재생 축(`playback_pdt`, 없으면 `start_wall_utc`)으로 찾는다.** 편집기가 보는 시각이 재생 축이고 레시피의 `cut`도
-그 축이다(계약6 0절). 미리보기 문(POK-117)은 파일 안 위치(`start_pts_ms`)로 찾는다 — **같은 조각 표에 시각 축이 둘**이고
-소비자마다 다른 축을 본다. `playback_pdt`·`session_id`는 계약-세그먼트인덱스 6-1(2026-09-01 승인)의 칸이라 **그 전 DDL로
-만든 표에서는 이 조회가 죽는다**(로컬 DB에는 손으로 더했다).
+**🔴 컷은 목록 PDT 축(`COALESCE(playback_pdt, start_wall_utc)`)으로 풀고 원점은 회차 판이다(kty 2026-11-12).** 편집기가 보는
+시각이 그 축이고 레시피의 `cut`도 그 축이다(계약6 0절). 회차 귀속 행(세션 색인)을 회차 전부 한 번에 읽어 가장자리를 메모리에서
+고르고, 원점은 판 2 → `VIDEO_START` · 판 NULL → `FILE_HEAD`(카드 썸네일과 같은 규칙 `OffsetOrigin.ofTimingVersion`)다 — 한 회차
+안에 판이 섞이면 장부 불변식 위반이라 500이다. 신호 `clip.render.cut_planned axis=pdt origin=…`. 미리보기 문(POK-117)은 파일 안
+위치(`start_pts_ms`)로 찾는다 — **같은 조각 표에 시각 축이 둘**이고 소비자마다 다른 축을 본다.
 
 **🔴 주문서의 `sourceKeys`는 계약1 3절 초안과 다르다 — 조각 파일 목록을 그대로 싣는다.** 초안은 1번이 만들 「중간본 파일」
 (video 1 + audio N)을 전제했는데 그 파일은 아직 없고 렌더 일꾼도 우리 것이 됐다(2026-09-14). 조각 하나가 영상+소리 트랙
 전부를 담은 **완전한 fMP4**라(실측 2026-09-15: 실물 조각 둘 다 `ftyp+moov+moof…`, h264 720p + aac) 일꾼이 이어붙이면 된다.
-트랙 번호 ↔ 소리 스트림 대응은 고정이다(계약9 2026-09-03: 트랙 N = N번째 소리 스트림). `trackManifest` 칸은 실리지만 null로 온다. 주문서 모양:
+트랙 번호 ↔ 소리 스트림 대응은 고정이다(계약9 2026-09-03: 트랙 N = N번째 소리 스트림). `trackManifest` 칸은 실리지만 null로 온다. 주문서 모양
+(새 꼴 — POK-196 · PDT 설계 r7 5.1 · 5.2. 조각은 역할 셋, 좌표는 `plan`, `sourceStartAtMs` 없음. 준비 조각 `audio_prime`에는 두 표지 대신
+`ownerSeq`를 싣고 그 머리 항목 바로 앞에 둔다. 확보 조각 `audio_capture`는 맨 끝. 첫 매체의 `followsLedgerPrevious`는 늘 거짓.
+`out`은 `offsetUs`와 `toSegmentEnd` 가운데 하나만 · 자막이 없어도 `subtitles`는 `[]` — 렌더 계획 검사가 fail-closed다):
 
 ```json
 {"schemaVersion":1,"jobId":"<uuid>","jobType":"RENDER","clipId":"12","correlationId":"12","idempotencyKey":"12:RENDER:1",
  "requestedAt":"…","streamId":"…","recipeVersion":1,"outputPrefix":"s3://{CLIPS_BUCKET}/clips/12",
- "sourceKeys":[{"role":"segment","bucket":"{SEGMENT_BUCKET}","s3Key":"streams/…/seg_000031.m4s","seq":31,"sourceStartAtMs":…,"durationMs":4000},…],
- "trackManifest":{…},"recipe":{계약6 JSON}}
+ "sourceKeys":[{"role":"audio_prime","bucket":"{SEGMENT_BUCKET}","s3Key":"…/seg_000030.m4s","seq":30,"ownerSeq":31,"durationMs":4000},
+               {"role":"segment","bucket":"{SEGMENT_BUCKET}","s3Key":"…/seg_000031.m4s","seq":31,"durationMs":4000,
+                "isDiscontinuity":false,"followsLedgerPrevious":false},…,
+               {"role":"audio_capture","bucket":"{SEGMENT_BUCKET}","s3Key":"…/seg_000043.m4s","seq":43,"durationMs":4000,
+                "isDiscontinuity":false,"followsLedgerPrevious":true}],
+ "trackManifest":{…},
+ "plan":{"planVersion":1,"offsetOrigin":"VIDEO_START","in":{"seq":31,"offsetUs":1000000},"out":{"seq":42,"toSegmentEnd":true},
+         "mediaSeqs":[31,…,42],"subtitles":[],"lengthMs":45000},
+ "recipe":{계약6 JSON}}
 ```
 
 **보고(계약1 4절 상태머신)는 `JobEventService` 한 곳에 표로 있다.** 처리 우선순위 — ① 모르는 잡 404 ② 같은 `(jobId,eventId)`는
