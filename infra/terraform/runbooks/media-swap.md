@@ -2626,6 +2626,19 @@ docker image inspect --format \
 # 기대: null,2
 ```
 
+**왜 꼭 지켜야 하나(라벨 2).** 쓰기자 거부(`legacy_writer_refused`)는 INSERT
+에서만 걸립니다. 스위치 순간 송출이 없던 상자의 출시 컨테이너는 INSERT 를 하지
+않아 거부되지 않고 살아남습니다. 그동안 다른 상자(c0)가 연 판 2 회차의 사슬은
+먼저 닿은 프로세스가 닫으므로, 그 출시 컨테이너가 닫으면 VOD 를 판
+태그(`#EXT-X-POKECLIP-TIMING:2`) 없이 동결할 수 있습니다(P13 연습 6 · 로컬
+실험대 2026-11-12 — 같은 회차 DVR 은 태그 1 · VOD 는 0). 장부 `vod_sha256` 이 그
+출시판 렌더와 같아 동결 감사도 통과시키고(VOD 는 sha · ETag 대조뿐 — 다시 쓰는
+갈래는 DVR 만, `media/internal/rewind/publish/audit.go`), VOD 확정은
+`freezing` 행에만 한 번 씁니다(`publish/vod.go` `vodConfirmSQL`). **복구 길
+없음 — 막는 것뿐입니다.** 막는 것은 이 선행 조건 하나라, 확인 결과에 라벨 2 가
+없는 상자가 하나라도 있으면 스위치 2 를 올리지 않습니다. 정본은 media README
+「PDT 알려진 한계」 입니다.
+
 **POK-525 와의 교체 · 적용 창(K5).** **따로 합니다(kty 2026-11-11 — 합동
 아님).** PDT 운영 SQL · c0 교체는 POK-525 교체와 다른 창이고, 이 순서 그대로
 돕니다.
