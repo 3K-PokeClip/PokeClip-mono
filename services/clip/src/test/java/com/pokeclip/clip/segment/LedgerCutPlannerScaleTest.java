@@ -69,6 +69,8 @@ class LedgerCutPlannerScaleTest extends IntegrationTestSupport {
     void 치운다() {
         jdbc.update("DELETE FROM public.stream_segments WHERE stream_id = ?", KEY);
         jdbc.execute("DROP INDEX IF EXISTS public.stream_segments_session_idx");
+        // 시험 시드 표에는 PK 뿐이다 — 여기서 만든 색인이 남으면 뒤 시험의 실행 계획이 달라진다.
+        jdbc.execute("DROP INDEX IF EXISTS public.stream_segments_wall_idx");
     }
 
     /**
@@ -116,6 +118,30 @@ class LedgerCutPlannerScaleTest extends IntegrationTestSupport {
 
         assertThat(text).as(text).contains("stream_segments_session_idx").contains("stream_segments_pkey");
         assertThat(text).as(text).doesNotContain("Seq Scan on stream_segments");
+    }
+
+    /**
+     * 머리 세션 행이 없는 옛 방송의 회차 행(방송 시간창)은 벽시각 색인 범위로 자르고, 장부 바로 앞 행 찾기는 행마다 PK 역순 한
+     * 행이다 — 키 이력을 훑지 않는다(c5 지적 3 · 지운 {@code WallAxisReadPlanTest} 의 시간창 몫을 잇는다). 색인은 운영 장부와 같은
+     * 모양(media {@code ddl.go} {@code stream_segments_wall_idx})이다.
+     */
+    @Test
+    void 옛_방송_시간창_행_읽기는_벽시각_색인_범위와_PK_로_읽는다() {
+        심는다(HISTORY_ROWS, SHORT_ROUND_ROWS);
+        jdbc.execute("CREATE INDEX IF NOT EXISTS stream_segments_wall_idx "
+                + "ON public.stream_segments (stream_id, start_wall_utc DESC)");
+        jdbc.execute("ANALYZE public.stream_segments");
+
+        String text = plan(StreamSegmentReader.ROUND_WINDOW_ROWS, ps -> {
+            ps.setString(1, KEY);
+            ps.setTimestamp(2, Timestamp.from(at(HISTORY_ROWS).minus(Duration.ofMinutes(2))));
+            ps.setTimestamp(3, null);
+        });
+
+        assertThat(text).as(text).contains("stream_segments_wall_idx").contains("Index Cond")
+                .contains("stream_segments_pkey");
+        assertThat(text).as(text).doesNotContain("Seq Scan on stream_segments");
+        assertThat(text).as(text).doesNotContain("Rows Removed by Filter: 2");
     }
 
     /** 준비 후보 읽기는 머리마다 PK 로 한 행을 고른다 — 키 이력을 훑지 않는다. */
