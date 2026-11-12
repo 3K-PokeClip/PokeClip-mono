@@ -291,7 +291,27 @@ describe('HighlightCard: 카드 시각과 옮길 자리(POK-562)', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: '1:07:50 시점으로 이동' }));
-    expect(onSeek).toHaveBeenCalledWith(seekSeconds);
+    expect(onSeek).toHaveBeenCalledWith(seekSeconds, undefined);
+  });
+
+  it.each([
+    ['clip 이 실어 준 플레이어용 PDT', 1_794_426_524_000],
+    ['장면이 없다는 null', null],
+  ])('사진을 누르면 카드의 %s 도 옮길 자리와 함께 넘긴다(POK-196)', (_label, playerAtMs) => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    const onSeek = vi.fn();
+    renderWithProviders(
+      <HighlightCard
+        highlight={{ ...HIGHLIGHT, playerAtMs }}
+        stream={STREAM}
+        visuals={{}}
+        onSeek={onSeek}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '1:07:50 시점으로 이동' }));
+
+    expect(onSeek).toHaveBeenCalledWith(HIGHLIGHT.seekSeconds, playerAtMs);
   });
 
   it('시각을 모르면(「--:--:--」) 단추 이름은 제목이고 저장 알림에도 시각을 싣지 않는다', async () => {

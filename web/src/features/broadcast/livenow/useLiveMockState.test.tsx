@@ -11,6 +11,10 @@ const api = vi.hoisted(() => ({
   sse: null as string | null,
   /** 시점별 기록 창구의 답(POK-462) */
   timeline: { segments: [] as unknown[], truncated: false },
+  /** 카드 목록 문의 답 */
+  cards: [] as unknown[],
+  /** 이것이 풀릴 때까지 이벤트 통로 답을 붙든다 — 목록이 먼저 선 뒤에 통로 카드가 오는 차례를 잰다 */
+  sseGate: null as Promise<void> | null,
 }));
 vi.mock('@/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/client')>();
@@ -21,7 +25,7 @@ vi.mock('@/api/client', async (importOriginal) => {
     apiFetch: async (path: string, init?: RequestInit) => {
       api.calls.push(path);
       const { pathname } = new URL(path, 'http://localhost');
-      if (pathname.endsWith('/jump-cards')) return json({ cards: [] });
+      if (pathname.endsWith('/jump-cards')) return json({ cards: api.cards });
       if (pathname.endsWith('/chat-chart'))
         return json({
           bucketSeconds: 30,
@@ -36,6 +40,7 @@ vi.mock('@/api/client', async (importOriginal) => {
           : json({ latest: null, series: [] });
       if (pathname.endsWith('/events') && api.sse !== null) {
         const text = api.sse;
+        if (api.sseGate !== null) await api.sseGate;
         // 보낸 뒤 끊지 않는다(끊으면 5초 뒤 다시 붙는다). 화면이 내려가면 닫는다
         return new Response(
           new ReadableStream<Uint8Array>({
@@ -312,5 +317,98 @@ describe('useLiveMockState: 통로로 온 방송 정보', () => {
     // 화면을 열 때 한 번 + 통로가 사진을 알려 한 번. 짧은 주기(5초)는 waitFor 시간(1초) 안에 오지 않는다
     await waitFor(() => expect(count('/broadcast-info/timeline')).toBe(2));
     unmount();
+  });
+});
+
+describe('useLiveMockState: 카드의 플레이어용 PDT(POK-196)', () => {
+  /** 카드 시점의 플레이어용 PDT — clip 이 장면 함수로 정해 실어 준 값 */
+  const PLAYER_AT_MS = 1_794_426_524_000;
+  const card = (over: Partial<LiveCardSnapshot> = {}): LiveCardSnapshot => ({
+    id: 2,
+    streamId: 's1',
+    source: 'auto',
+    streamTimestampMs: 5_000,
+    window: { startMs: 4_500, endMs: 9_000 },
+    score: 1,
+    evidence: null,
+    eventSeq: 1,
+    createdAt: '2026-11-11T19:58:53.221Z',
+    ...over,
+  });
+
+  beforeEach(() => {
+    api.calls.length = 0;
+    resetLiveData();
+    publishLiveData({ streamId: 's1', status: 'live', startedAt: Date.now() - 600_000 });
+  });
+  afterEach(() => {
+    api.cards = [];
+    api.sse = null;
+    api.sseGate = null;
+  });
+
+  function mount() {
+    return renderHook(() => useLiveMockState(false), {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+  }
+
+  it('목록 카드의 플레이어용 PDT 가 화면 카드까지 온다 · null 은 null 로, 칸이 없으면 비어 온다', async () => {
+    api.cards = [
+      card({ playerAtMs: PLAYER_AT_MS }),
+      card({ id: 3, playerAtMs: null }),
+      card({ id: 4 }),
+    ];
+    const { result } = mount();
+    await waitFor(() => expect(result.current.highlights).toHaveLength(3));
+
+    const byId = (id: string) => result.current.highlights.find((h) => h.id === id);
+    expect(byId('card-2')?.playerAtMs).toBe(PLAYER_AT_MS);
+    expect(byId('card-3')?.playerAtMs).toBeNull();
+    expect(byId('card-4')?.playerAtMs).toBeUndefined();
+  });
+
+  it('플레이어용 PDT 만 바뀐 카드는 다른 카드다', () => {
+    const now = Date.parse('2026-11-11T20:00:00Z');
+
+    expect(sameSnapshot(card({ playerAtMs: PLAYER_AT_MS }), card({ playerAtMs: null }), now)).toBe(
+      false,
+    );
+    expect(sameSnapshot(card({ playerAtMs: PLAYER_AT_MS }), card(), now)).toBe(false);
+    expect(
+      sameSnapshot(card({ playerAtMs: PLAYER_AT_MS }), card({ playerAtMs: PLAYER_AT_MS }), now),
+    ).toBe(true);
+  });
+
+  it('마크 · 가리기 답이 칸 없이 와도 받아 둔 플레이어용 PDT 를 지킨다', async () => {
+    const { result } = mount();
+    await waitFor(() => expect(result.current.cardsStatus).toBe('loaded'));
+    act(() => result.current.mergeCard(card({ playerAtMs: PLAYER_AT_MS })));
+    await waitFor(() => expect(result.current.highlights[0]?.playerAtMs).toBe(PLAYER_AT_MS));
+
+    act(() => result.current.mergeCard(card({ eventSeq: 2, hidden: true })));
+
+    await waitFor(() => expect(result.current.hiddenHighlights).toHaveLength(1));
+    expect(result.current.hiddenHighlights[0]?.playerAtMs).toBe(PLAYER_AT_MS);
+  });
+
+  it('통로(SSE)로 온 카드가 칸 없이 와도 목록이 준 플레이어용 PDT 를 지킨다', async () => {
+    let releaseSse: () => void = () => undefined;
+    api.sseGate = new Promise((resolve) => {
+      releaseSse = resolve;
+    });
+    api.cards = [card({ playerAtMs: PLAYER_AT_MS })];
+    // 같은 카드의 다음 판 — 점수가 바뀌었고 플레이어용 PDT 칸은 싣지 않았다
+    api.sse = `event: card\ndata: ${JSON.stringify(card({ score: 9, eventSeq: 2 }))}\n\n`;
+    const { result } = mount();
+    await waitFor(() => expect(result.current.highlights[0]?.playerAtMs).toBe(PLAYER_AT_MS));
+
+    await act(async () => {
+      releaseSse();
+    });
+
+    // 통로 카드가 실제로 들어왔다(양성 대조)
+    await waitFor(() => expect(result.current.highlights[0]?.score).toBe(9));
+    expect(result.current.highlights[0]?.playerAtMs).toBe(PLAYER_AT_MS);
   });
 });

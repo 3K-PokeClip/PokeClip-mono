@@ -89,8 +89,8 @@ export const HighlightCard = memo(function HighlightCard({
   highlight: LiveHighlight;
   stream: LiveStream;
   visuals: Record<string, CardVisual>;
-  /** 카드로 옮긴다(초, 서버 기준점 축 — LiveHighlight.seekSeconds) */
-  onSeek: (seconds: number) => void;
+  /** 카드로 옮긴다(초, 서버 기준점 축 — LiveHighlight.seekSeconds · 플레이어용 PDT — LiveHighlight.playerAtMs) */
+  onSeek: (seconds: number, atMs: number | null | undefined) => void;
   /** 가리기·되살리기 답을 목록에 넣는다. 통로가 끊겼거나 끝난 방송이면 다음 목록 읽기(1분)까지 기다리지 않게 */
   onCardChange?: (card: LiveCardSnapshot) => void;
 }) {
@@ -165,7 +165,7 @@ export const HighlightCard = memo(function HighlightCard({
         <button
           type="button"
           className={styles.cardThumb}
-          onClick={() => onSeek(highlight.seekSeconds)}
+          onClick={() => onSeek(highlight.seekSeconds, highlight.playerAtMs)}
           aria-label={`${clock ?? highlight.title} 시점으로 이동`}
         >
           <ThumbnailImage

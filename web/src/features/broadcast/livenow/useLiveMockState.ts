@@ -16,6 +16,8 @@ import {
 import { timeAgo } from '@/lib/timeAgo';
 import { setVisibleInterval } from '@/lib/visibleInterval';
 import { reuseHighlights } from './highlightCardView';
+import { readPlayerAtMs } from '@/api/cardPositions';
+import { keepKnownPlayerAtMs } from './cardSeek';
 import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
@@ -84,6 +86,11 @@ export interface LiveHighlight {
   thumbnailUrl?: string | null;
   /** 카드가 가리키는 절대 시각(epoch ms, cardAt) — 통계 그래프의 핀 자리 */
   atMs?: number;
+  /**
+   * 카드 시점의 플레이어용 PDT(epoch ms, POK-196) — 카드 · 핀 · 주소의 카드가 이 시각으로 옮긴다. 장면이 없으면 null, 칸을 모르는
+   * 옛 clip 이면 없다(둘 다 지금 식). 핀 자리(atMs)와 다른 칸이다
+   */
+  playerAtMs?: number | null;
   /** 감지 사유 한 줄(채팅 ×3.2 급증 (120건) · 수동 마킹) — 통계 그래프 툴팁 */
   reason?: string;
   /** 카드 창 길이(초) — 카드 사진 위 길이 표기 */
@@ -137,6 +144,8 @@ interface Snapshot {
   createdAt: string;
   /** 목록 문만 싣는다(POK-277). 통로로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
+  /** 카드 시점의 플레이어용 PDT(POK-196). 장면이 없으면 null, 옛 clip 이면 빠져 온다 */
+  playerAtMs?: number | null;
 }
 interface BroadcastInfoResponse {
   /** 모든 플랫폼 중 가장 새 관측 하나. 화면은 이것 대신 대표 플랫폼의 값을 쓴다(toLiveInfo) */
@@ -293,6 +302,7 @@ function toHighlight(
     score: c.score ?? undefined,
     thumbnailUrl: c.thumbnailUrl ?? null,
     atMs: cardAt(c, base),
+    playerAtMs: readPlayerAtMs(c),
     reason,
     lengthSec: winSec,
     ago,
@@ -334,6 +344,7 @@ export function sameSnapshot(prev: Snapshot | undefined, next: Snapshot, now: nu
     (prev.hidden ?? false) === (next.hidden ?? false) &&
     prev.eventSeq === next.eventSeq &&
     prev.createdAt === next.createdAt &&
+    readPlayerAtMs(prev) === readPlayerAtMs(next) &&
     pickThumbnailUrl(shownThumbnail, next.thumbnailUrl ?? null, now, CARD_THUMBNAIL_PASS_MS) ===
       shownThumbnail &&
     JSON.stringify(prev.evidence) === JSON.stringify(next.evidence)
@@ -438,10 +449,13 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       if (stopped) return;
       setCards((prev) => {
         let next: Record<number, Snapshot> | null = null;
-        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
+        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277). 플레이어용 PDT 도 통로에
+        // 실리는지 모른다(POK-196): 칸 없이 오면 목록이 준 값을 지킨다
         for (const c of list) {
           if (isStale(prev[c.id], c)) continue;
-          const value = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+          const value = fromStream
+            ? keepKnownPlayerAtMs(prev[c.id], keepKnownThumbnail(prev[c.id], c))
+            : c;
           // 내용이 같으면 앞 객체를 그대로 둔다: 3초마다 오는 목록 답은 늘 새 객체라, 그대로 덮으면 바뀐 카드가 없어도 화면 전체가
           // 다시 계산됐다. 바뀐 카드가 하나도 없으면 상태 자체를 그대로 돌려줘 다시 그리지 않는다
           if (sameSnapshot(prev[c.id], value, Date.now())) continue;
@@ -922,7 +936,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       if (card.streamId !== streamIdRef.current) return;
       setCards((prev) => {
         if (isStale(prev[card.id], card)) return prev;
-        const known = keepKnownThumbnail(prev[card.id], card);
+        const known = keepKnownPlayerAtMs(prev[card.id], keepKnownThumbnail(prev[card.id], card));
         // 내용이 같으면 앞 객체를 그대로 둔다(merge와 같은 이유)
         return sameSnapshot(prev[card.id], known, Date.now())
           ? prev
