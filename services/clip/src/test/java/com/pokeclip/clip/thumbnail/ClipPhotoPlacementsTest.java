@@ -4,7 +4,10 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.jumpcard.CardPositionReader;
 import com.pokeclip.clip.jumpcard.CardPositionReader.Scene;
+import com.pokeclip.clip.segment.RoundRows;
+import com.pokeclip.clip.segment.RoundRows.Row;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LedgerSeed;
@@ -24,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static com.pokeclip.clip.support.LedgerSeed.at;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,18 +50,23 @@ class ClipPhotoPlacementsTest extends IntegrationTestSupport {
     private final BroadcastRepository broadcasts;
     private final TimelineOriginReader origins;
     private final ObjectMapper mapper;
+    private final RoundRows rounds;
+    private final CardPositionReader scenes;
     private final LedgerSeed seed;
 
     private final List<JsonNode> sent = new ArrayList<>();
 
     ClipPhotoPlacementsTest(JdbcTemplate jdbc, ThumbnailTargets targets, ThumbnailRepository thumbnails,
-                            BroadcastRepository broadcasts, TimelineOriginReader origins, ObjectMapper mapper) {
+                            BroadcastRepository broadcasts, TimelineOriginReader origins, ObjectMapper mapper,
+                            RoundRows rounds, CardPositionReader scenes) {
         this.jdbc = jdbc;
         this.targets = targets;
         this.thumbnails = thumbnails;
         this.broadcasts = broadcasts;
         this.origins = origins;
         this.mapper = mapper;
+        this.rounds = rounds;
+        this.scenes = scenes;
         this.seed = new LedgerSeed(jdbc);
     }
 
@@ -204,7 +213,105 @@ class ClipPhotoPlacementsTest extends IntegrationTestSupport {
         assertThat(장면들()).containsExactly(6_350L);
     }
 
+    // ── 영상별 격리(커밋 리뷰 r1 — 보안 HIGH-1 · cx M3 · cc L) ─────────────────────────────
+
+    /**
+     * 받는 자리 검사 전에 저장된(또는 손으로 고친) 넘치는 배치표 영상은 읽기에서 거절돼 옛 식으로 찍고, 묶음의 다음 영상까지 간다.
+     * 그대로 계산하면 exact 연산이 던져 그 줄에서 순회가 멈추고, 그 줄은 횟수도 안 올라 매 순회 같은 자리에서 다시 멈춘다.
+     */
+    @Test
+    void 저장된_넘치는_배치표_영상이_있어도_다음_영상까지_찍는다() {
+        시드_판2("S-po", "PO");
+        카드("S-po", 9_500, 90);
+        long good = 완성_영상("S-po", 배치표_판2(), "{\"seq\":10,\"offsetUs\":1000000}", "{\"seq\":13,\"offsetUs\":2000000}");
+        long overflow = 완성_영상("S-po", 배치표_판2().replace("\"zeroAtUs\":6700000", "\"zeroAtUs\":9223372036854775807"),
+                "{\"seq\":10,\"offsetUs\":1000000}", "{\"seq\":13,\"offsetUs\":2000000}");
+
+        try (LogCaptor logs = new LogCaptor()) {
+            sweeper().sweepClips();
+
+            assertThat(logs.levelOf("clip.thumbnail.clip_photo clipId=" + overflow + " source=invalid"))
+                    .isEqualTo(Level.WARN);
+        }
+        assertThat(sent).extracting(job -> job.path("targetId").asString())
+                .containsExactly(String.valueOf(overflow), String.valueOf(good));
+        assertThat(sent.get(1).path("source").path("offsetMs").asLong()).isEqualTo(8_200L);
+    }
+
+    /** 자리 계산(resultMsOf)이 던져도 그 영상은 결과 가운데로 찍고 WARN 을 남긴다(장면 읽기 실패와 같은 갈래). */
+    @Test
+    void 자리_계산이_던지면_결과_가운데로_찍는다() {
+        시드_판2("S-pr", "PR");
+        long clip = 완성_영상("S-pr", 배치표_판2(), "{\"seq\":10,\"offsetUs\":1000000}", "{\"seq\":13,\"offsetUs\":2000000}");
+        Row row = new Row(12, 8_000, 4_000, 0, null, 2, true, "seg/PR/12");
+        ThumbnailTargets huge = new ThumbnailTargets(jdbc, broadcasts, null, null) {
+            @Override
+            Optional<Scene> topCardScene(String streamId, PlanCut cut) {
+                return Optional.of(new Scene(row, Long.MAX_VALUE / 1_000 + 1));
+            }
+        };
+
+        try (LogCaptor logs = new LogCaptor()) {
+            sweeper(huge).sweepClips();
+
+            assertThat(logs.levelOf("clip.thumbnail.clip_photo clipId=" + clip + " source=placements card=failed"))
+                    .isEqualTo(Level.WARN);
+        }
+        assertThat(장면들()).containsExactly(6_350L);
+    }
+
+    /**
+     * 영상 하나의 자리 계산이 어디서 던지든(여기서는 옛 식의 카드 질의) 그 영상만 횟수를 올리고 넘어가 묶음의 다음 영상을 찍는다 —
+     * 같은 결함이 다시 와도 세 번 뒤 후보에서 빠진다.
+     */
+    @Test
+    void 영상_하나의_계산이_던져도_횟수만_올리고_다음_영상을_찍는다() {
+        시드_판2("S-pk", "PK");
+        카드("S-pk", 9_500, 90);
+        시드_판2("S-px", "PX");
+        long good = 완성_영상("S-pk", 배치표_판2(), "{\"seq\":10,\"offsetUs\":1000000}", "{\"seq\":13,\"offsetUs\":2000000}");
+        long broken = 옛_완성_영상("S-px");
+        ThumbnailTargets failing = new ThumbnailTargets(jdbc, broadcasts, rounds, scenes) {
+            @Override
+            OptionalLong topCardIn(String streamId, long fromMs, long toMs) {
+                if (streamId.equals("S-px")) {
+                    throw new IllegalStateException("카드 질의 실패");
+                }
+                return super.topCardIn(streamId, fromMs, toMs);
+            }
+        };
+
+        try (LogCaptor logs = new LogCaptor()) {
+            sweeper(failing).sweepClips();
+
+            assertThat(logs.levelOf("clip.thumbnail.clip_photo clipId=" + broken + " source=failed"))
+                    .isEqualTo(Level.WARN);
+        }
+        assertThat(sent).extracting(job -> job.path("targetId").asString()).containsExactly(String.valueOf(good));
+        assertThat(jdbc.queryForObject("SELECT attempts FROM thumbnails WHERE kind = 'clip' AND target_id = ?",
+                Integer.class, String.valueOf(broken))).isOne();
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
+
+    /** 배치표 없는 옛 꼴 완성 영상(레시피 컷 · 기준점 식). @return 영상 번호 */
+    private long 옛_완성_영상(String streamId) {
+        long recipeId = jdbc.queryForObject("""
+                        INSERT INTO recipes (stream_id, creator_id, schema_version, recipe_version, cut_in_at_ms, cut_out_at_ms,
+                                             outputs, audio, updated_at)
+                        VALUES (?, '4180', 1, 1, ?, ?, '[]'::jsonb, '{}'::jsonb, now())
+                        RETURNING id""", Long.class, streamId, at(101_000).toEpochMilli(), at(114_000).toEpochMilli());
+        long clipId = jdbc.queryForObject("""
+                        INSERT INTO clips (stream_id, recipe_id, recipe_version, requested_by, status, outputs, updated_at)
+                        VALUES (?, ?, 1, '4180', 'rendered', CAST(? AS jsonb), now()) RETURNING id""",
+                Long.class, streamId, recipeId, "[{\"outputId\":\"o1\",\"kind\":\"video\",\"s3Key\":\"clips/y/t/o1.mp4\"}]");
+        String payload = "{\"recipe\":{\"cut\":{\"inAtMs\":" + at(101_000).toEpochMilli() + ",\"outAtMs\":"
+                + at(114_000).toEpochMilli() + "}}}";
+        jdbc.update("""
+                        INSERT INTO render_jobs (id, clip_id, status, payload, published_at, updated_at)
+                        VALUES (gen_random_uuid(), ?, 'succeeded', CAST(? AS jsonb), now(), now())""", clipId, payload);
+        return clipId;
+    }
 
     /** 판 2 회차 — 조각 10–13(위치 0 · 4,000 · 8,000 · 12,000). */
     private void 시드_판2(String streamId, String key) {

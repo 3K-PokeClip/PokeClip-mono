@@ -228,7 +228,19 @@ public class ThumbnailSweeper {
                 thumbnails.markGivenUp(ThumbnailKind.CLIP, target, MAX_ATTEMPTS, now);
                 continue;
             }
-            send(ThumbnailKind.CLIP, target, outputBucket, video, clipOffsetMs(row), null, now);
+            long offsetMs;
+            try {
+                offsetMs = clipOffsetMs(row);
+            } catch (RuntimeException e) {
+                // 이 영상만 건너뛴다 — 횟수를 올려 같은 결함이 다시 와도 세 번 뒤 후보에서 빠진다. 던지면 그 뒤 영상들까지 이번
+                // 순회를 잃고, 이 줄은 횟수가 안 올라 매 순회 같은 자리에서 다시 멈춘다(커밋 리뷰 r1). 줄에 싣기 실패는 여기 안
+                // 든다(아래 send — 줄 장애는 횟수를 안 쓴다).
+                log.warn("clip.thumbnail.clip_photo clipId={} source=failed reason={}", row.id(),
+                        e.getClass().getSimpleName());
+                thumbnails.markRequested(ThumbnailKind.CLIP, target, now);
+                continue;
+            }
+            send(ThumbnailKind.CLIP, target, outputBucket, video, offsetMs, null, now);
             thumbnails.markRequested(ThumbnailKind.CLIP, target, now);
         }
         if (!rows.isEmpty()) {
@@ -241,11 +253,13 @@ public class ThumbnailSweeper {
      *
      * <p><b>배치표가 있는 영상</b>(새 꼴 주문 · POK-196 S-c5 · 설계 r7 8.3): 계획 in · out 구간 안 최고 카드의 장면(카드 장면 함수)을
      * 렌더 배치표로 결과에 놓는다({@link ResultPlacements#resultMsOf} — 원점은 장면 행의 판). 카드가 없으면 결과 가운데다. 배치표가
-     * 깨졌으면 옛 식으로 떨어지고 WARN 을 남긴다. 장면을 읽다 실패하면 결과 가운데로 찍고 WARN 을 남긴다 — 한 영상 때문에 순회 묶음
-     * 전체가 멈추지 않게 던지지 않는다. <b>배치표가 없는 영상</b>(옛 꼴)은 옛 식({@link #legacyOffsetMs}).
+     * 깨졌으면(모양 · 범위) 옛 식으로 떨어지고 WARN 을 남긴다. 장면을 읽거나 자리를 계산하다 실패하면 결과 가운데로 찍고 WARN 을
+     * 남긴다. <b>배치표가 없는 영상</b>(옛 꼴)은 옛 식({@link #legacyOffsetMs}). 그 밖에서 던지면(옛 식의 질의 등) {@link #sweepClips}
+     * 가 그 영상만 횟수를 올리고 넘어간다 — 한 영상 때문에 순회 묶음 전체가 멈추지 않는다.
      *
      * <p>신호 {@code clip.thumbnail.clip_photo}(DEBUG — 깨짐 · 실패만 WARN): {@code source} = {@code placements} · {@code legacy} ·
-     * {@code invalid}, {@code card} = {@code scene}(카드 장면) · {@code none}(가운데) · {@code failed}(장면 읽기 실패 → 가운데).
+     * {@code invalid} · {@code failed}(순회가 건너뜀), {@code card} = {@code scene}(카드 장면) · {@code none}(가운데) ·
+     * {@code failed}(장면 읽기 · 자리 계산 실패 → 가운데).
      */
     long clipOffsetMs(ThumbnailTargets.ClipRow row) {
         if (row.placementsJson() == null) {
@@ -259,21 +273,26 @@ public class ThumbnailSweeper {
             log.warn("clip.thumbnail.clip_photo clipId={} source=invalid reason={}", row.id(), e.getClass().getSimpleName());
             return legacyOffsetMs(row);
         }
-        Optional<Scene> scene;
         try {
-            scene = planCutOf(row).flatMap(cut -> targets.topCardScene(row.streamId(), cut));
+            return placedOffsetMs(row, layout);
         } catch (RuntimeException e) {
             log.warn("clip.thumbnail.clip_photo clipId={} source=placements card=failed reason={}", row.id(),
                     e.getClass().getSimpleName());
             return layout.middleMs();
         }
+    }
+
+    /** 배치표가 있는 영상의 자리 — 장면 읽기 · 자리 계산이 던질 수 있다(부르는 쪽이 결과 가운데로 떨어뜨린다). */
+    private long placedOffsetMs(ThumbnailTargets.ClipRow row, ResultPlacements layout) {
+        Optional<Scene> scene = planCutOf(row).flatMap(cut -> targets.topCardScene(row.streamId(), cut));
         if (scene.isEmpty()) {
             log.debug("clip.thumbnail.clip_photo clipId={} source=placements card=none", row.id());
             return layout.middleMs();
         }
-        log.debug("clip.thumbnail.clip_photo clipId={} source=placements card=scene", row.id());
         OffsetOrigin origin = OffsetOrigin.ofTimingVersion(scene.get().row().timingVersion());
-        return layout.resultMsOf(scene.get().seq(), scene.get().offsetMs(), origin);
+        long offsetMs = layout.resultMsOf(scene.get().seq(), scene.get().offsetMs(), origin);
+        log.debug("clip.thumbnail.clip_photo clipId={} source=placements card=scene", row.id());
+        return offsetMs;
     }
 
     /** 주문서 계획의 in · out. 옛 꼴 주문이거나 칸이 틀리면 비어 있다(카드 없음 — 결과 가운데). */

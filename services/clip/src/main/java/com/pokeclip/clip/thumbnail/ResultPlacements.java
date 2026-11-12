@@ -5,6 +5,7 @@ import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 결과 영상 안 자리를 내는 한 곳(POK-196 S-c5 · PDT 설계 r7 3.4 · 8.3). <b>렌더 배치표만 읽는다</b> — 렌더가 그래프에 넣은 값에서 바로
@@ -22,6 +23,31 @@ public final class ResultPlacements {
 
     private static final long MICROS_PER_MILLI = 1_000;
 
+    /**
+     * 결과 길이 상한(µs) — 렌더 결과 끝 상한 180초({@code workers/render} {@code RenderTimeline.CAP_US} · 계약6 컷 5–180초 ·
+     * {@code RecipeValidator.MAX_CUT_MS}). 렌더가 이보다 긴 결과를 낼 길이 없다.
+     */
+    public static final long MAX_LENGTH_US = 180_000_000;
+
+    /**
+     * 배치 칸({@code zeroAtUs} · {@code fromUs} · {@code toUs} · {@code headLeadUs}) 절댓값 상한(µs) — 결과 길이 상한 위 60초 여유.
+     * 첫 조각 x′ 0 자리는 결과 앞(음수 {@code zeroAtUs})에, 몫 끝은 조각 길이(4초 조각 · 길어야 수 초)만큼 결과 밖에 놓일 수 있어
+     * 결과 길이만으로는 좁고, 60초면 어느 조각 하나의 길이보다 넉넉하다. 이 안의 값끼리는 자리 계산의 exact 연산이 넘치지 않는다.
+     */
+    public static final long MAX_ABS_US = MAX_LENGTH_US + 60_000_000;
+
+    /**
+     * 배치 줄 수 상한 — 결과 180초를 줄 하나가 360ms 꼴로 나눈 수. 실제는 4초 조각 46줄 안팎(재접속으로 짧은 조각이 섞여도 수십
+     * 줄)이라 정상 표는 닿지 않고, 넘는 표는 고장 난 보고로 본다.
+     */
+    public static final int MAX_ROWS = 500;
+
+    /** 받는 자리에서 글로 쓴 배치표 묶음의 길이 상한(글자) — 정상 표 최대(500줄 × 90자 안팎 ≈ 45KB) 위. */
+    public static final int MAX_STORED_CHARS = 64 * 1024;
+
+    private static final Set<String> LAYOUT_FIELDS = Set.of("placements", "lengthUs");
+    private static final Set<String> ROW_FIELDS = Set.of("seq", "zeroAtUs", "fromUs", "toUs", "headLeadUs");
+
     /** 배치 한 줄(렌더 {@code ClipReporter.PlacementItem} 과 같은 칸). */
     record Placement(long seq, long zeroAtUs, long fromUs, long toUs, long headLeadUs) {
     }
@@ -35,18 +61,29 @@ public final class ResultPlacements {
     }
 
     /**
-     * 완성 영상 줄에 적힌 묶음({@code {"placements": [...], "lengthUs": n}})을 읽는다. 배치는 하나 이상 · seq 가 늘어나는 순서 ·
-     * 칸 다섯이 모두 정수 · {@code fromUs ≤ toUs} 여야 하고, {@code lengthUs} 는 0 이상 정수다.
+     * 완성 영상 줄에 적힌 묶음({@code {"placements": [...], "lengthUs": n}})을 읽는다. 받는 자리(렌더 성공 보고 저장)와 읽는 자리가
+     * 같은 검사를 쓴다 — 저장 전에 걸러 JSONB 가 받지 못할 값이 DB 에 닿지 않게 하고, 이미 저장된 옛 값도 읽을 때 거른다.
      *
-     * @throws IllegalArgumentException 모양이 틀렸다(칸 경로를 싣는다)
+     * <ul>
+     *   <li>묶음 칸은 {@code placements} · {@code lengthUs} 뿐이고, 줄마다 칸은 {@code seq} · {@code zeroAtUs} · {@code fromUs}
+     *       · {@code toUs} · {@code headLeadUs} 다섯뿐이며 모두 정수다 — 글자 칸이 없으므로 NUL 같은 글자도 없다.</li>
+     *   <li>배치는 1–{@link #MAX_ROWS} 줄 · seq 는 0 이상이고 늘어나는 순서 · {@code fromUs ≤ toUs}.</li>
+     *   <li>{@code 0 ≤ lengthUs ≤ }{@link #MAX_LENGTH_US} · 배치 칸 절댓값 ≤ {@link #MAX_ABS_US} · {@code headLeadUs ≥ 0}.</li>
+     * </ul>
+     *
+     * @throws IllegalArgumentException 모양 · 범위가 틀렸다(칸 경로를 싣는다 — 입력 값은 싣지 않는다)
      */
     public static ResultPlacements parse(JsonNode stored) {
         if (stored == null || !stored.isObject()) {
             throw new IllegalArgumentException("placements: 묶음이 아니다");
         }
+        onlyFields(stored, LAYOUT_FIELDS, "layout");
         JsonNode rows = stored.get("placements");
         if (rows == null || !rows.isArray() || rows.isEmpty()) {
             throw new IllegalArgumentException("placements: 배치가 없다");
+        }
+        if (rows.size() > MAX_ROWS) {
+            throw new IllegalArgumentException("placements: 줄 수 상한을 넘었다");
         }
         List<Placement> placements = new ArrayList<>();
         for (int i = 0; i < rows.size(); i++) {
@@ -57,8 +94,8 @@ public final class ResultPlacements {
             placements.add(p);
         }
         long lengthUs = integer(stored, "lengthUs", "lengthUs");
-        if (lengthUs < 0) {
-            throw new IllegalArgumentException("lengthUs: 음수");
+        if (lengthUs < 0 || lengthUs > MAX_LENGTH_US) {
+            throw new IllegalArgumentException("lengthUs: 범위 밖");
         }
         return new ResultPlacements(placements, lengthUs);
     }
@@ -67,12 +104,36 @@ public final class ResultPlacements {
         if (row == null || !row.isObject()) {
             throw new IllegalArgumentException(path + ": 줄이 아니다");
         }
-        Placement p = new Placement(integer(row, "seq", path), integer(row, "zeroAtUs", path),
-                integer(row, "fromUs", path), integer(row, "toUs", path), integer(row, "headLeadUs", path));
+        onlyFields(row, ROW_FIELDS, path);
+        Placement p = new Placement(integer(row, "seq", path), bounded(row, "zeroAtUs", path),
+                bounded(row, "fromUs", path), bounded(row, "toUs", path), bounded(row, "headLeadUs", path));
+        if (p.seq() < 0) {
+            throw new IllegalArgumentException(path + ".seq: 음수");
+        }
+        if (p.headLeadUs() < 0) {
+            throw new IllegalArgumentException(path + ".headLeadUs: 음수");
+        }
         if (p.fromUs() > p.toUs()) {
             throw new IllegalArgumentException(path + ": fromUs > toUs");
         }
         return p;
+    }
+
+    private static void onlyFields(JsonNode node, Set<String> allowed, String path) {
+        for (String name : node.propertyNames()) {
+            if (!allowed.contains(name)) {
+                throw new IllegalArgumentException(path + ": 모르는 칸");
+            }
+        }
+    }
+
+    /** 배치 칸 — 정수이고 절댓값이 {@link #MAX_ABS_US} 이하. */
+    private static long bounded(JsonNode node, String field, String path) {
+        long value = integer(node, field, path);
+        if (value < -MAX_ABS_US || value > MAX_ABS_US) {
+            throw new IllegalArgumentException(path + "." + field + ": 범위 밖");
+        }
+        return value;
     }
 
     private static long integer(JsonNode node, String field, String path) {

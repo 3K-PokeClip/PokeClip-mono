@@ -43,8 +43,8 @@ public class Clip {
     private String outputs;
 
     /**
-     * 렌더 결과 배치표 묶음 {@code {"placements": [...], "lengthUs": n}}(V224 · POK-196 S-c5). 새 꼴 주문의 성공 보고가 실은 그대로다.
-     * 옛 꼴 · V224 전 줄은 null. 읽기는 {@code ResultPlacements} 하나로 한다.
+     * 렌더 결과 배치표 묶음 {@code {"placements": [...], "lengthUs": n}}(V224 · POK-196 S-c5). 새 꼴 주문의 성공 보고가 실은 그대로다
+     * (받는 자리 검사를 지난 것만 — 못 지나면 null). 옛 꼴 · V224 전 줄은 null. 읽기는 {@code ResultPlacements} 하나로 한다.
      */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "placements", columnDefinition = "jsonb")

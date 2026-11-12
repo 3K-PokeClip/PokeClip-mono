@@ -156,7 +156,7 @@ public class UploadAutoStarter {
      * 다를 수 있다 — 썸네일은 거친 좌표라 받아들인 한계다(설계 r7 8.1).
      *
      * <p>신호 {@code clip.upload.scene_mapped}: {@code source=layout}(INFO — {@code resultMs} 가 {@code offsetMs} 와 다르면 잘랐다) ·
-     * {@code source=fallback}(WARN — 결과 길이를 몰라 그대로 보냈다).
+     * {@code source=fallback}(WARN — 결과 길이를 몰라 그대로 보냈다 · {@code reason} 칸).
      */
     private UploadInfo sceneInResult(Clip clip, UploadInfo info, long uploadId) {
         Thumbnail thumbnail = info.thumbnail();
@@ -164,28 +164,30 @@ public class UploadAutoStarter {
             return info;
         }
         long offsetMs = thumbnail.offsetMs();
-        Optional<ResultPlacements> layout = resultLayoutOf(clip);
-        if (layout.isEmpty()) {
-            log.warn("clip.upload.scene_mapped uploadId={} offsetMs={} resultMs={} source=fallback", uploadId, offsetMs,
-                    offsetMs);
-            return info;
+        if (clip.getPlacements() == null) {
+            return fallback(info, uploadId, offsetMs, "no_layout");
         }
-        long resultMs = layout.get().clampToResult(offsetMs);
+        ResultPlacements layout;
+        try {
+            layout = ResultPlacements.parse(mapper.readTree(clip.getPlacements()));
+        } catch (RuntimeException e) {
+            // 어떤 이유로도 던지지 않는다 — 부른 쪽이 렌더 성공 트랜잭션이다.
+            return fallback(info, uploadId, offsetMs, e.getClass().getSimpleName());
+        }
+        long resultMs = layout.clampToResult(offsetMs);
         log.info("clip.upload.scene_mapped uploadId={} offsetMs={} resultMs={} source=layout", uploadId, offsetMs,
                 resultMs);
         return info.withThumbnail(Thumbnail.scene(resultMs));
     }
 
-    /** 완성 줄의 배치표. 없거나(옛 꼴) 모양이 틀리면 비어 있다 — 어떤 이유로도 던지지 않는다(부른 쪽이 성공 트랜잭션이다). */
-    private Optional<ResultPlacements> resultLayoutOf(Clip clip) {
-        if (clip.getPlacements() == null) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(ResultPlacements.parse(mapper.readTree(clip.getPlacements())));
-        } catch (RuntimeException e) {
-            return Optional.empty();
-        }
+    /**
+     * 결과 길이를 몰라 고른 값 그대로 보낸다. {@code reason} 은 {@code no_layout}(옛 꼴 · 받는 자리에서 버린 배치표) 또는 저장된
+     * 배치표를 읽다 난 예외 이름(깨짐 — 보안 리뷰 L1).
+     */
+    private static UploadInfo fallback(UploadInfo info, long uploadId, long offsetMs, String reason) {
+        log.warn("clip.upload.scene_mapped uploadId={} offsetMs={} resultMs={} source=fallback reason={}", uploadId,
+                offsetMs, offsetMs, reason);
+        return info;
     }
 
     /**

@@ -2,6 +2,7 @@ package com.pokeclip.clip.render.api;
 
 import ch.qos.logback.classic.Level;
 import com.pokeclip.clip.support.LocalStackFixture;
+import com.pokeclip.clip.thumbnail.ResultPlacements;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -100,7 +101,7 @@ class RenderResultLayoutTest extends RenderUploadTestSupport {
             배치표와_완성시킨다(clipId, null);
 
             assertThat(logs.messages()).contains("clip.upload.scene_mapped uploadId=" + 업로드_번호()
-                    + " offsetMs=12000 resultMs=12000 source=fallback");
+                    + " offsetMs=12000 resultMs=12000 source=fallback reason=no_layout");
             assertThat(logs.levelOf("clip.upload.scene_mapped")).isEqualTo(Level.WARN);
         }
         assertThat(주문서_장면()).isEqualTo(12_000L);
@@ -127,7 +128,98 @@ class RenderResultLayoutTest extends RenderUploadTestSupport {
         assertThat(주문서_장면()).isEqualTo(12_000L);
     }
 
+    // ── 받는 자리 검사(커밋 리뷰 r1 — 보안 HIGH-1 · MEDIUM-1 · MEDIUM-2 · cx HIGH 1) ─────────────────
+
+    /**
+     * 🔴 JSONB 가 받지 못하는 글자(NUL · U+0000)가 든 배치표가 와도 성공은 커밋된다 — 배치표만 버리고(NULL) WARN 을 남긴다. 그대로
+     * 적으면 PostgreSQL 이 커밋 때 거절해 완성 · 보고 장부까지 되감기고, 일꾼이 다시 보내도 같은 실패가 난다.
+     */
+    @Test
+    void JSONB_가_못_받는_글자가_든_배치표는_버리고_성공은_커밋된다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+
+        try (LogCaptor logs = new LogCaptor()) {
+            배치표와_완성시킨다(clipId, "\"placements\":[{\"seq\":2,\"zeroAtUs\":0,\"fromUs\":0,\"toUs\":1000,"
+                    + "\"headLeadUs\":0,\"note\":\"\\u0000\"}],\"lengthUs\":1000");
+
+            assertThat(logs.levelOf("clip.render.placements_dropped jobId=")).isEqualTo(Level.WARN);
+        }
+        assertThat(jdbc.queryForObject("SELECT status FROM clips WHERE id = ?", String.class, clipId))
+                .isEqualTo("rendered");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM render_job_events WHERE event_type = 'SUCCEEDED'",
+                Integer.class)).isOne();
+        assertThat(배치표_칸(clipId)).isNull();
+    }
+
+    /** 모양은 맞고 값이 넘치는 배치표(zeroAtUs = Long.MAX_VALUE)는 저장 단계에서 버린다 — 읽는 쪽 계산이 넘치지 않게. */
+    @Test
+    void 값이_넘치는_배치표는_버린다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+
+        배치표와_완성시킨다(clipId, "\"placements\":[{\"seq\":2,\"zeroAtUs\":9223372036854775807,\"fromUs\":0,"
+                + "\"toUs\":1,\"headLeadUs\":0}],\"lengthUs\":1");
+
+        assertThat(배치표_칸(clipId)).isNull();
+        assertThat(jdbc.queryForObject("SELECT status FROM clips WHERE id = ?", String.class, clipId))
+                .isEqualTo("rendered");
+    }
+
+    /** 줄 수 상한을 넘는 배치표는 버린다. */
+    @Test
+    void 줄이_너무_많은_배치표는_버린다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+        StringBuilder rows = new StringBuilder();
+        for (int i = 0; i <= ResultPlacements.MAX_ROWS; i++) {
+            rows.append(i == 0 ? "" : ",").append("{\"seq\":").append(i + 1)
+                    .append(",\"zeroAtUs\":0,\"fromUs\":0,\"toUs\":1,\"headLeadUs\":0}");
+        }
+
+        배치표와_완성시킨다(clipId, "\"placements\":[" + rows + "],\"lengthUs\":10");
+
+        assertThat(배치표_칸(clipId)).isNull();
+    }
+
+    /** 글로 쓴 길이가 상한(64KB)을 넘는 배치표는 칸을 읽기 전에 버린다(사유 too_long). */
+    @Test
+    void 글이_너무_긴_배치표는_버린다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+
+        try (LogCaptor logs = new LogCaptor()) {
+            배치표와_완성시킨다(clipId, "\"placements\":[{\"seq\":2,\"zeroAtUs\":0,\"fromUs\":0,\"toUs\":1000,"
+                    + "\"headLeadUs\":0,\"pad\":\"" + "a".repeat(70_000) + "\"}],\"lengthUs\":1000");
+
+            assertThat(logs.messages()).anySatisfy(m -> assertThat(m)
+                    .startsWith("clip.render.placements_dropped jobId=").endsWith("reason=too_long"));
+        }
+        assertThat(배치표_칸(clipId)).isNull();
+    }
+
+    /**
+     * 이미 저장된 옛 값이 범위를 넘으면(받는 자리 검사 전 · 손으로 고친 줄) 업로드 장면은 받은 값 그대로 보내고, WARN 에 파싱
+     * 실패의 이유(예외 이름)를 싣는다 — 「옛 꼴(없음)」 과 「깨짐」 을 가른다(보안 L1).
+     */
+    @Test
+    void 저장된_배치표가_깨졌으면_업로드_경고에_이유를_싣는다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+        완성시킨다(clipId, 영상_하나());
+        비운다(렌더줄);
+        jdbc.update("UPDATE clips SET placements = CAST(? AS jsonb) WHERE id = ?", "{\"placements\":[{\"seq\":2,"
+                + "\"zeroAtUs\":9223372036854775807,\"fromUs\":0,\"toUs\":1,\"headLeadUs\":0}],\"lengthUs\":1}", clipId);
+
+        try (LogCaptor logs = new LogCaptor()) {
+            만들기(편집본, 기본_업로드()).andExpect(status().isOk());
+
+            assertThat(logs.messages()).contains("clip.upload.scene_mapped uploadId=" + 업로드_번호()
+                    + " offsetMs=12000 resultMs=12000 source=fallback reason=IllegalArgumentException");
+        }
+        assertThat(주문서_장면()).isEqualTo(12_000L);
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
+
+    private String 배치표_칸(long clipId) {
+        return jdbc.queryForObject("SELECT placements::text FROM clips WHERE id = ?", String.class, clipId);
+    }
 
     /** 일꾼이 잡고 성공을 보고한다. {@code layout} 은 본문 맨 위 칸 조각(없으면 옛 꼴). */
     private void 배치표와_완성시킨다(long clipId, String layout) throws Exception {

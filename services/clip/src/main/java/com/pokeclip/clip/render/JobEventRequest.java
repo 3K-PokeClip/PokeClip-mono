@@ -13,7 +13,7 @@ import java.util.UUID;
  * @param executionToken STARTED와 preflight 실패에는 없다. 나머지는 필수(계약1)
  * @param result SUCCEEDED의 산출물 목록. 검증은 {@link JobEventService}
  * @param placements SUCCEEDED 맨 위 {@code placements}(새 꼴 주문의 결과 배치표 · POK-196 S-c5). 없으면 null(옛 꼴). 받은 그대로다 —
- *                   모양 검사는 읽는 쪽({@code ResultPlacements})이 하고 틀려도 성공을 막지 않는다
+ *                   검사는 {@link JobEventService} 가 저장 앞에서 하고(못 지나면 배치표만 버린다) 성공을 막지 않는다
  * @param lengthUs SUCCEEDED 맨 위 {@code lengthUs}(결과 길이 µs). {@code placements} 와 같다
  */
 public record JobEventRequest(UUID eventId, String eventType, String occurredAt, UUID executionToken,

@@ -2548,7 +2548,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `STARTED` | 주문됨·시작됨 | 200 `{proceed:true, executionToken(새 UUID), attemptOrdinal(+1), isFinalAttempt(≥3)}` — 옛 토큰은 이 순간부터 죽는다, 진행률 0, 영상 `rendering` |
 | `STARTED` | 끝남 | 200 `{proceed:false}` — 일꾼은 메시지를 지운다 |
 | `PROGRESS`·`RETRY_SCHEDULED` | 시작됨 + 토큰 일치 | 200 `{}` — 진행률은 같은 토큰 안에서 단조(뒤로 가는 값 무시) |
-| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 · 새 꼴 주문의 맨 위 `placements` · `lengthUs`(렌더 결과 배치표)는 받은 그대로 `clips.placements`(`V224`, POK-196)에 — 모양 검사는 읽는 쪽이 하고 틀려도 성공을 막지 않는다 · **그 판의 업로드 의도가 있으면 같은 트랜잭션에서 업로드 줄**(POK-291, 아래 절) |
+| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 · 새 꼴 주문의 맨 위 `placements` · `lengthUs`(렌더 결과 배치표)는 검사(줄마다 정수 칸 다섯 · 결과 길이 180초 · 칸 절댓값 240초 · 500줄 · 글 64KB 상한 — `ResultPlacements`)를 지나면 받은 그대로 `clips.placements`(`V224`, POK-196)에 — 못 지나면 배치표만 NULL 로 두고 WARN `clip.render.placements_dropped`(성공은 막지 않는다 · JSONB 가 못 받는 값이 DB 에 닿지 않게 저장 앞에서 거른다) · **그 판의 업로드 의도가 있으면 같은 트랜잭션에서 업로드 줄**(POK-291, 아래 절) |
 | `TERMINAL_FAILED` | 시작됨 + 토큰 일치 · **주문됨 + 무토큰**(preflight) | 200 — `failed`, `error.code`·`message` 저장 |
 | 토큰 불일치 | 시작됨 | **409 `SUPERSEDED`** — 일꾼은 중단만, 메시지는 안 건드린다 |
 | 아무 보고 | 끝남 | **409 `TERMINAL`** |

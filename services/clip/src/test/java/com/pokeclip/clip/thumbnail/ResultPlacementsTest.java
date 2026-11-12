@@ -122,6 +122,58 @@ class ResultPlacementsTest {
         assertThatThrownBy(() -> ResultPlacements.parse(null)).isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * 값 범위 · 줄 수 · 칸 묶음도 거절한다(커밋 리뷰 r1 보안 HIGH-1 · MEDIUM-1). 모양만 맞고 값이 넘치는 표가 지나가면 자리 계산의
+     * exact 연산이 던져 완성 사진 순회가 그 줄에서 멈춘다. 결과 길이 상한은 렌더 결과 상한 180초, 칸 절댓값 상한은 그 위 60초 여유다.
+     */
+    @Test
+    void 값이_범위를_넘거나_줄이_너무_많거나_모르는_칸이_있으면_던진다() {
+        long cap = ResultPlacements.MAX_LENGTH_US;
+        long abs = ResultPlacements.MAX_ABS_US;
+        for (String bad : new String[] {
+                row("9223372036854775807", "0", "1", "0") + ",\"lengthUs\":1000",
+                row("0", "0", "1", "-1") + ",\"lengthUs\":1000",
+                row("0", "0", "1", String.valueOf(abs + 1)) + ",\"lengthUs\":1000",
+                row(String.valueOf(-abs - 1), "0", "1", "0") + ",\"lengthUs\":1000",
+                row("0", String.valueOf(-abs - 1), "1", "0") + ",\"lengthUs\":1000",
+                row("0", "0", String.valueOf(abs + 1), "0") + ",\"lengthUs\":1000",
+                row("0", "0", "1", "0") + ",\"lengthUs\":" + (cap + 1),
+                "\"placements\":[{\"seq\":-1,\"zeroAtUs\":0,\"fromUs\":0,\"toUs\":1,\"headLeadUs\":0}],\"lengthUs\":10",
+                "\"placements\":[{\"seq\":1,\"zeroAtUs\":0,\"fromUs\":0,\"toUs\":1,\"headLeadUs\":0,\"x\":\"\\u0000\"}],"
+                        + "\"lengthUs\":10",
+                row("0", "0", "1", "0") + ",\"lengthUs\":10,\"extra\":1",
+                rows(ResultPlacements.MAX_ROWS + 1) + ",\"lengthUs\":10",
+        }) {
+            JsonNode node = MAPPER.readTree("{" + bad + "}");
+            assertThatThrownBy(() -> ResultPlacements.parse(node)).as(bad.substring(0, Math.min(bad.length(), 120)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    /** 경계 값 그대로는 받는다 — 결과 길이 180초 · 칸 절댓값 상한 · 줄 수 상한. */
+    @Test
+    void 상한_경계_값은_받는다() {
+        long abs = ResultPlacements.MAX_ABS_US;
+        ResultPlacements r = of("{" + row(String.valueOf(-abs), String.valueOf(-abs), String.valueOf(abs),
+                String.valueOf(abs)) + ",\"lengthUs\":" + ResultPlacements.MAX_LENGTH_US + "}");
+        assertThat(r.lengthMs()).isEqualTo(180_000);
+        assertThat(of("{" + rows(ResultPlacements.MAX_ROWS) + ",\"lengthUs\":10}").lengthMs()).isZero();
+    }
+
+    private static String row(String zeroAtUs, String fromUs, String toUs, String headLeadUs) {
+        return "\"placements\":[{\"seq\":1,\"zeroAtUs\":" + zeroAtUs + ",\"fromUs\":" + fromUs + ",\"toUs\":" + toUs
+                + ",\"headLeadUs\":" + headLeadUs + "}]";
+    }
+
+    private static String rows(int count) {
+        StringBuilder s = new StringBuilder("\"placements\":[");
+        for (int i = 0; i < count; i++) {
+            s.append(i == 0 ? "" : ",").append("{\"seq\":").append(i)
+                    .append(",\"zeroAtUs\":0,\"fromUs\":0,\"toUs\":1,\"headLeadUs\":0}");
+        }
+        return s.append("]").toString();
+    }
+
     private static ResultPlacements of(String json) {
         return ResultPlacements.parse(MAPPER.readTree(json));
     }
