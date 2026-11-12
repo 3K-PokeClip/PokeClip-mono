@@ -668,9 +668,10 @@ run "rejects_edge_bounds_kvs_arn_with_trailing_path" {
   expect_failures = [var.edge_bounds_kvs_arn]
 }
 
-# 60일 만료 창구 clip 주소(POK-551 c4). 꼴은 사이드카
-# media/internal/config/expiry.go 의 validateClipURL 과 같다 — http · https 의
-# scheme://host[:port] 하나(경로 · 끝 / · 질의 · 조각 · 자격증명 없음). 포트(없으면
+# 60일 만료 창구 clip 주소(POK-551 c4). 꼴은 http · https 의 scheme://host[:port]
+# 하나(경로 · 끝 / · 질의 · 조각 · 자격증명 없음)로, 사이드카
+# media/internal/config/expiry.go 의 validateClipURL 이 받는 꼴의 부분 집합이다
+# (IPv6 · 대문자 scheme · 밑줄 든 호스트는 여기서만 거부). 포트(없으면
 # scheme 기본 포트)는 clip_port 와 같아야 한다 — Media → clip SG 짝이 그 포트만
 # 연다. 시험 clip_port 는 18087.
 run "accepts_clip_internal_url_on_clip_port" {

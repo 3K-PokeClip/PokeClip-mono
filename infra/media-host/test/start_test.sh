@@ -11,7 +11,8 @@
 # lib/start_mode_cases.sh)과 상자 스위치 파일(sidecar.env — 사례 64 는
 # lib/start_sidecar_env_cases.sh)과 기동 전 검사(사이드카 라벨 · timing-preflight
 # — 사례 65 – 69 는 lib/start_timing_cases.sh)와 60일 만료 창구 토큰(받기 성공 ·
-# 실패 · 링크 · 정지 — 사례 70 – 74 는 lib/start_clip_expiry_cases.sh).
+# 실패 · 링크 · 정지 · 상속 export · 응답기 모드 — 사례 70 – 76 은
+# lib/start_clip_expiry_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -73,7 +74,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=74
+readonly CASE_COUNT=76
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -922,6 +923,10 @@ main() {
     clip_expiry::case_dir_link
   harness::run_case 74 'stop — 만료 토큰 삭제 · 링크면 CLEANUP FAIL · 대상 보존' \
     clip_expiry::case_stop
+  harness::run_case 75 '만료 토큰 — 상속 export 에도 토큰 노출 0' \
+    clip_expiry::case_inherited_export
+  harness::run_case 76 '만료 토큰 — 응답기 모드에서도 사이드카 0400' \
+    clip_expiry::case_responder_mode
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

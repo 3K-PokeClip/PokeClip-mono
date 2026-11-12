@@ -55,10 +55,11 @@ module "waf" {
   managed_rule_groups = local.cloudfront_waf.managed_rule_groups
   rate_limit          = local.cloudfront_waf.rate_limit
 
-  # Authorization · media 시청자의 서명 쿠키 · 내부 토큰 헤더 둘(auth
+  # Authorization · media 시청자의 서명 쿠키 · 내부 토큰 헤더 셋(auth
   # /internal/** 공용 X-Internal-Token · 계약4 resolve 전용
-  # X-Stream-Key-Resolve-Token — 정상 경로로는 엣지에 오지 않지만 잘못 실려 와도
-  # 남지 않게 미리 둔다)은 웹 ACL 데이터 보호로 요청 샘플 · 로그 모두에서
+  # X-Stream-Key-Resolve-Token · clip 만료 창구 전용 X-Expired-Broadcasts-Token
+  # — POK-551. 정상 경로로는 엣지에 오지 않지만 잘못 실려 와도 남지 않게 미리
+  # 둔다)은 웹 ACL 데이터 보호로 요청 샘플 · 로그 모두에서
   # 가린다(POK-459 · POK-479). 질의 인자는 가리지 않는다 — 자격 증명이 실리는
   # ?code=(OAuth 콜백) · ?token=(프로필 사진)은 app 호스트라 엣지가 아니라 공개
   # ALB 로 간다(prod/records · platform 의 protected_query_args).
@@ -75,6 +76,7 @@ module "waf" {
     "cookie",
     "x-internal-token",
     "x-stream-key-resolve-token",
+    "x-expired-broadcasts-token",
   ]
 
   # 차단된 요청만 남긴다(결정 161). redacted_headers 는 데이터 보호와 겹쳐 두는

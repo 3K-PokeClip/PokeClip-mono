@@ -563,10 +563,11 @@ variable "clip_internal_url" {
   default     = ""
   nullable    = false
 
-  # 사이드카 media/internal/config/expiry.go 의 validateClipURL 과 같은 꼴 —
   # http · https 의 scheme://host[:port] 하나. 문자 집합으로 사용자 정보 · 경로 ·
   # 끝 / · 질의 · 조각 · 공백이 모두 막힌다. 여기서 통과한 값을 사이드카가 기동
-  # 거부하지 않게 하는 것이 목적이다(사이드카가 받는 꼴의 부분 집합).
+  # 거부하지 않게 하는 것이 목적이라, 사이드카 media/internal/config/expiry.go 의
+  # validateClipURL 이 받는 꼴의 부분 집합이다(IPv6 · 대문자 scheme · 밑줄 든
+  # 호스트는 여기서만 거부).
   validation {
     condition     = var.clip_internal_url == "" || can(regex("^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$", var.clip_internal_url))
     error_message = "clip_internal_url 은 빈 값이거나 http(s)://<호스트>[:<포트>] 여야 한다(사용자 정보 · 경로 · 끝 / · 질의 · 조각 금지)."

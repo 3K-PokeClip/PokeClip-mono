@@ -2703,7 +2703,12 @@ git cat-file -e <묶음 빌드 커밋 SHA>:infra/media-host/bin/lib/clip_expiry.
     하한 이상 사이드카가 떠 있는 동안 지우기를 멈춥니다.
 1.  같은 「설정 반영 교체」(또는 「제자리 전환」)에서 tfvars 를
     `clip_internal_url = ""` 로 두고 하한 아래 다이제스트를 넣습니다. 주소와
-    다이제스트를 다른 교체로 나누지 않습니다.
+    다이제스트를 다른 교체로 나누지 않습니다. **묶음(`image_digests.bundle`)을
+    하한 아래로 내리는 새 상자 교체는 `prod/media` 를 apply 하는 커밋(모듈)도
+    POK-551 전 판일 때만 됩니다** — 그 뒤 판의 모듈로 띄우면 부트스트랩이
+    `bin/lib/clip_expiry.sh` 가 없어 멈춥니다(위 「만료 하한 칸별 규칙」 의
+    설치 묶음 행). 모듈을 그대로 둘 때는 「제자리 전환」 으로 내립니다.
+    사이드카만 내릴 때는 두 길 모두 됩니다.
 1.  새 상자(또는 전환한 A)에서 아래 「만료 확인 스크립트」 를 `no_url` 로
     돌려 `EXPIRY NO_URL OK` 를 봅니다. 아니면 그 상자를 서비스에 넣지
     않고(제자리 전환이면 원복) kty 에게 보고합니다.
@@ -2758,9 +2763,15 @@ if printf '%s\n' "${log}" | grep -F '"msg":"expiry_switch_read_failed"' \
   | tail -n 1 | grep -qF '"value":1'; then
   switch=read_failed
 fi
+# 폴링은 실패할 때만 줄을 낸다 — 마지막 실패의 status 와 고착 게이지의 마지막 값.
+poll="$(printf '%s\n' "${log}" | grep -F '"msg":"expiry_poll"' \
+  | sed -n 's/.*"status":"\([^"]*\)".*/\1/p' | tail -n 1)"
+stalled="$(printf '%s\n' "${log}" | grep -F '"msg":"expiry_stalled"' \
+  | sed -n 's/.*"value":\([01]\).*/\1/p' | tail -n 1)"
 echo "SINCE ${since}"
 echo "EXPIRY ${state}"
 echo "SWITCH ${switch:-none}"
+echo "POLL fail=${poll:-none} stalled=${stalled:-none}"
 if [ "${state}" = "${want}" ]; then echo "EXPIRY ${tag} OK"; exit 0; fi
 echo "EXPIRY ${tag} NOT OK"
 exit 1
@@ -2772,6 +2783,13 @@ media_ssm <상자 키> "${work}/expiry-check.sh" started
     전 `0`, 켠 뒤 10분 안에 `1` 입니다. `read_failed` 는 스위치 표를 읽지
     못하는 것(운영 SQL 전 · 권한)이고 만료는 꺼진 채입니다. `none` 은
     만료기가 아직 첫 회차를 돌지 않은 것입니다 — 잠시 뒤 다시 봅니다.
+*   `POLL` 은 폴링 실패의 흔적입니다 — 성공한 폴링은 줄이 없어서, `fail` 은
+    지금 프로세스의 **마지막 실패** status(`401` · `403` · `transport` ·
+    `timeout` 등)이고 그 뒤에 성공했을 수 있습니다. 지금도 막혔는지는
+    `stalled` 로 봅니다(`1` 이면 세 번 이어 실패한 채, `0` 이면 그 뒤 회복).
+    켠 뒤 첫 회차가 지나 `fail=none` · `stalled=none` 이 기대이고, 스위치가
+    꺼진 동안은 폴링이 없어 새 값이 생기지 않습니다. 판정(종료 코드)에는
+    넣지 않습니다.
 *   `no_url` 통과 = `EXPIRY NO_URL OK`(K-g 3).
 *   `EXPIRY disabled_token_file` 은 토큰 파일을 읽지 못한 것입니다(받기
     실패 · 하한 아래 묶음). 시작 스크립트는 이때 판정 줄을 내지 않으므로
@@ -2779,6 +2797,58 @@ media_ssm <상자 키> "${work}/expiry-check.sh" started
     입니다. `EXPIRY none` 은 그 줄까지 오지 못한 것이라 잠시 뒤 다시 봅니다.
 *   `EXPIRY CHECK FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
 *   이 스크립트는 아직 시험이 뽑아 돌리지 않습니다(`edge-check.sh` 와 같음).
+
+### 만료 창구 탐침
+
+스위치가 꺼진 동안 만료기는 clip 을 부르지 않습니다. 그래서 켜기 전에
+`expiry-probe.sh` 로 그 길을 한 번 봅니다 — 실행 중 사이드카 컨테이너 안에서
+(곧 같은 망 칸 · 같은 이름 풀이로) 만료 창구에 **진짜 토큰 없이** GET 을
+보냅니다. 전용 머리글 `X-Expired-Broadcasts-Token` 에는 토큰이 아닌 고정
+글자를 싣습니다. 머리글이 없으면 clip 의 공용 내부 체인이 받아 출발지를 보지 않고
+401 을 내기 때문입니다. 전용 체인은 출발지(403)를 먼저, 토큰(401)을 다음에
+보므로 401 이 이름 풀이 · SG · 출발지 대역이 모두 맞다는 뜻입니다. 비밀이
+지나가지 않고, clip 은 그 요청을 필터에서 돌려보내 아무것도 읽지 않습니다.
+
+```shell
+cat > "${work}/expiry-probe.sh" <<'SH'
+fail() { echo "EXPIRY PROBE FAIL $1"; exit 2; }
+[ "$#" -eq 1 ] || fail usage
+case "$1" in
+  http://*|https://*) ;;
+  *) fail usage ;;
+esac
+ids="$(docker ps -q --no-trunc --filter status=running \
+  --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+[ "${running}" = 1 ] || fail "running ${running}"
+# BusyBox wget — -S 가 응답 머리를 표준 오류로 내고, 2xx 밖이면 종료가 0 이
+# 아니다. 상태 코드는 머리의 HTTP 줄에서 읽는다.
+out="$(docker exec "${ids}" wget -q -S -T 5 -O /dev/null \
+  --header 'X-Expired-Broadcasts-Token: probe-not-a-token' \
+  "$1/internal/broadcasts/expired" 2>&1)"
+code="$(printf '%s\n' "${out}" \
+  | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | tail -n 1)"
+echo "PROBE ${code:-none}"
+if [ -z "${code}" ]; then
+  printf '%s\n' "${out}" | tail -n 1 | sed 's/^/PROBE ERR /'
+fi
+if [ "${code}" = 401 ]; then echo "EXPIRY PROBE OK"; exit 0; fi
+echo "EXPIRY PROBE NOT OK"
+exit 1
+SH
+media_ssm <상자 키> "${work}/expiry-probe.sh" http://clip.pokeclip.internal:8081
+```
+
+*   인자는 그 상자 tfvars 의 `clip_internal_url` 값 그대로입니다.
+*   통과 = `PROBE 401` · `EXPIRY PROBE OK`.
+*   `PROBE 403` 은 출발지 대역(`EXPIRED_BROADCASTS_ALLOWED_CIDRS`)이 이 상자
+    서브넷과 다른 것입니다. `PROBE none` 이면 `PROBE ERR` 줄이 까닭입니다 —
+    `bad address` 는 이름 풀이, 연결 실패 · 시간 초과는 SG 짝(런타임
+    1단-가 런북 「1단-나 ③ 4」)입니다. 그 밖의 코드는 clip 창구 · 판을
+    봅니다. 어느 쪽이든 스위치를 켜지 않고 kty 에게 보고합니다.
+*   `EXPIRY PROBE FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
+*   이 스크립트도 시험이 뽑아 돌리지 않습니다.
 
 ### 만료 영구 미룸
 
@@ -2790,9 +2860,15 @@ value=1` — 방송마다 미뤄질 때 · 풀릴 때 한 줄씩). 그 단위가
 
 *   **언제 봅니다:** 같은 방송의 `expiry_deferred value=1` 뒤 `value=0` 이
     하루 넘게 나오지 않을 때입니다. 회차 고착은 WARN
-    `session_vod_round_wait_long`(`wait=round_open` · `front_pending`)과
-    짝입니다 — 그 줄이 같은 스트림에 있으면 회차가 닫히지 않은 것입니다.
-    짝이 없으면 사슬이 `ending` ∧ VOD `none` 에 머문 고착일 수 있습니다.
+    `session_vod_round_wait_long` 과 짝이고, `wait` 값이 까닭을 가릅니다.
+    *   `wait=round_open`: 회차가 아직 닫히지 않았습니다.
+    *   `wait=front_pending`: 회차는 닫혔지만 앞 사슬의 VOD 가 아직 종국이
+        아닙니다.
+
+    그 줄에는 `stream_id` 가 없습니다(`session_id` · `round` · `wait` 뿐).
+    같은 스트림의 줄인지는 아래 미룸 질의가 내는 `session_id` · `round_id`
+    와 대조합니다. 짝이 없으면 사슬이 `ending` ∧ VOD `none` 에 머문 고착일
+    수 있습니다.
 *   **읽기:** 런타임 1단-가 런북 「만료 미룸 질의」 로 그 스트림의 미정
     단위를 봅니다.
 *   **처분:** kty 회부(멈춤 자리)입니다. 고착을 푸는 손 SQL 은 두지

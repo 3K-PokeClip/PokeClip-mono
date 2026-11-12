@@ -177,9 +177,11 @@ Jira POK-304 코멘트와 같은 목록). 1 · 2 · 7 은 1단-나 ①(POK-428)�
 1.  `scripts/put-secret-from-file.sh` 의 비밀 종류 확장(O7d 앞). 닫힘 —
     1단-다(POK-427): 그릇 이름 허용 목록 · SOOP 포함.
 1.  응답기 비밀 최소 권한(K1) — **닫힘 — 1단-나 ②(POK-429)**: Media 가 읽는
-    그릇은 resolve 전용 토큰 하나이고(공용 `INTERNAL_API_TOKEN` 없음), auth
-    의 전용 창구 출발지는 Media 프라이빗 서브넷입니다. auth 는 POK-316 으로
-    `native` 위에서도 그 창구를 엽니다.
+    전용 토큰 그릇은 POK-429 당시 resolve 전용 하나였고, 지금은 POK-551 의
+    만료 창구 전용(`expired-broadcasts-token` — 「1단-나 ③」)까지 둘입니다
+    (공용 `INTERNAL_API_TOKEN` 없음). 두 창구(auth resolve · clip 만료)의
+    출발지는 모두 Media 프라이빗 서브넷입니다. auth 는 POK-316 으로 `native`
+    위에서도 resolve 창구를 엽니다.
 1.  앱별 스키마 — **닫힘 — 1단-나 ①(POK-428)**: 앱 사용자 넷의 `public`
     CREATE 를 거두고, 계정과 이름이 같은 자기 스키마(`app_auth` ·
     `app_clip` · `app_chat_collector` · `app_chat_detector`)를 줍니다.
@@ -253,7 +255,10 @@ Jira POK-304 코멘트와 같은 목록). 1 · 2 · 7 은 1단-나 ①(POK-428)�
 *   auth 의 resolve 전용 창구 출발지는 Media 프라이빗 서브넷 대역 하나라,
     같은 AZ 에 뜨는 ECS 태스크(next · auth · clip · chat · 일꾼)도 출발지
     조건은 통과합니다. 그 서브넷이 `private_subnet_ids` 의 한 칸이기
-    때문입니다. 1차 방어는 토큰입니다(POK-429 K3).
+    때문입니다. 1차 방어는 토큰입니다(POK-429 K3). clip 의 만료 창구
+    (`EXPIRED_BROADCASTS_ALLOWED_CIDRS`)도 같은 대역이라 같은 한계이고, 실제
+    방어는 전용 토큰입니다(POK-551 — 대역을 상자 /32 로 좁히지 않음, kty
+    2026-11-13).
 *   전용 토큰 · 공용 토큰을 바꾸거나 긴급 차단할 때 auth 롤링 배포 동안 옛
     태스크 · 새 태스크가 섞여 어느 토큰이든 일부 요청이 401 입니다(거부 창 —
     진행 중인 송출은 무사). 순서와 완료 조건은

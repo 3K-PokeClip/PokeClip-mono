@@ -3,7 +3,7 @@
 # 도우미 auth_mode::chown_is 는 start_ingest_auth_cases.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
-# start_test 의 60일 만료 창구 토큰 사례(70 – 74). 시작 스크립트는
+# start_test 의 60일 만료 창구 토큰 사례(70 – 76). 시작 스크립트는
 # CLIP_EXPIRY_TOKEN_SECRET_ARN 이 찰 때만(두 모드 공통) RUNTIME_DIR/clip-expiry
 # (root 0711)를 맞추고, 앞 기동이 남긴 토큰 파일을 먼저 지운 뒤 토큰을 받아
 # 사이드카 실행 계정 소유 0400 파일(token)로 둔다. 받기가 실패하면 파일 없이
@@ -259,6 +259,73 @@ ${fixture_status}): $(harness::log_tail "${fixture_dir}/out")"
   fi
   if [[ "$(cat -- "${elsewhere}/${CLIP_EXPIRY_TOKEN_NAME}")" != keep ]]; then
     harness::add_reason '링크 대상의 토큰이 지워짐'
+    ok=1
+  fi
+  return "${ok}"
+}
+
+#######################################
+# 토큰 파일이 「값 한 줄」 · 0400 이고, 그 임시 파일이 사이드카 실행 계정으로
+# chown 됐는지 본다(chown 기록 번호는 모드마다 달라 전부 훑는다).
+# Globals:
+#   fixture_dir
+# Arguments:
+#   행 이름.
+#######################################
+clip_expiry::check_token_file() {
+  local ok=0 dir f owned=0
+  dir="$(clip_expiry::dir)"
+  if [[ "$(cat -- "${dir}/${CLIP_EXPIRY_TOKEN_NAME}" 2>/dev/null \
+    && printf x)" != "${CLIP_EXPIRY_TOKEN}"$'\n'x \
+    || "$(fixture::perm "${dir}/${CLIP_EXPIRY_TOKEN_NAME}" 2>/dev/null)" \
+      != -r-------- ]]; then
+    harness::add_reason "$1: 토큰 파일이 「값 한 줄」 · 0400 이 아님"
+    ok=1
+  fi
+  for f in "${fixture_dir}"/log/chown.*.argv; do
+    [[ -f "${f}" ]] || continue
+    if [[ "$(paste -s -d ' ' - <"${f}")" \
+      == "10001:10001 ${dir}/.${CLIP_EXPIRY_TOKEN_NAME}."* ]]; then
+      owned=$((owned + 1))
+    fi
+  done
+  if (( owned != 1 )); then
+    harness::add_reason "$1: 토큰 임시 파일 사이드카 chown ${owned}회(기대 1)"
+    ok=1
+  fi
+  return "${ok}"
+}
+
+#######################################
+# 사례 75 — 토큰을 담는 변수 이름(expiry_token)이 부모 환경에서 export 된 채
+# 들어와도 토큰 값이 가짜 명령(chown · docker)의 환경 · 출력에 나오지
+# 않는다. 시작 스크립트 머리의 unset -v 가 지키는 자리다(사례 26 과 같은 꼴).
+#######################################
+clip_expiry::case_inherited_export() {
+  local ok=0
+  fixture::new_case
+  clip_expiry::run expiry_token=inherited || return 1
+  clip_expiry::expect_started '상속 export' || ok=1
+  clip_expiry::check_token_file '상속 export' || ok=1
+  return "${ok}"
+}
+
+#######################################
+# 사례 76 — 응답기 모드에서도 ARN 이 차면 같은 자리에 토큰을 둔다. 응답기
+# 파일도 함께 생겨 모드가 응답기였음을 확인한다.
+#######################################
+clip_expiry::case_responder_mode() {
+  local ok=0
+  auth_mode::prod_template || return 1
+  fixture::new_case
+  auth_mode::run "${auth_mode_tmpl}" \
+    "CLIP_EXPIRY_TOKEN_SECRET_ARN=${CLIP_EXPIRY_ARN}" || return 1
+  clip_expiry::expect_started '응답기 모드' || ok=1
+  auth_mode::read_values || ok=1
+  clip_expiry::check_token_file '응답기 모드' || ok=1
+  if [[ "$(clip_expiry::aws_queries)" != 1 ]]; then
+    harness::add_reason "응답기 모드: 만료 토큰 조회 \
+$(clip_expiry::aws_queries)회(기대 1)"
     ok=1
   fi
   return "${ok}"

@@ -1255,14 +1255,19 @@ make_sql_step expiry_switch "${payload}/expiry_switch.sql" &&
     교체 런북 「만료 하한 판정」).
 1.  만료 주소를 채운 상자에서 Media 교체 런북 「만료 확인 스크립트」 가
     `EXPIRY STARTED OK` · `SWITCH 0` 입니다(아래 「1단-나 ③」 5).
-1.  회차 VOD 문서 구멍 진단을 한 번 돌려 0행입니다 — 켜기 전에 다른
-    경로로 지워진 조각을 가리키는 문서를 찾습니다([media README](../../../media/README.md)
-    「회차 VOD 문서 구멍 진단」).
+1.  만료 주소를 채운 상자마다 Media 교체 런북 「만료 창구 탐침」 이
+    `EXPIRY PROBE OK` 입니다 — 사이드카 망 칸에서 clip 이름이 풀리고, 진짜
+    토큰 없이 보낸 GET 이 401 로 돌아옵니다. 스위치가 꺼진 동안 만료기는 clip 을 부르지
+    않아, 이름 풀이 · SG · 출발지 대역은 켜기 전에는 이 탐침으로만 봅니다.
+1.  회차 VOD 문서 구멍 진단을 한 번 돌려 0행이거나, 나온 행을 kty 가
+    판정했습니다 — 켜기 전에 다른 경로로 지워진 조각을 가리키는 문서를
+    찾습니다([media README](/media/README.md) 「회차 VOD 문서 구멍 진단」).
 
-켠 뒤 10분 안에 `SWITCH 1` 을 확인하고, 그 뒤 첫 회차에 ERROR
-`expiry_poll`(`status=401` 은 토큰 · clip 창구, `403` 은 출발지 대역,
-`transport` · `timeout` 은 SG · 이름 풀이)이 없어야 합니다. 세 번 이어
-실패하면 ERROR `expiry_stalled value=1` 이 나옵니다 — 끄고 원인을 봅니다.
+켠 뒤 10분 안에 `SWITCH 1` 을 확인하고, 그 뒤 첫 회차가 지나 「만료 확인
+스크립트」 의 `POLL` 줄이 `fail=none` · `stalled=none` 이어야 합니다. 실패
+`status` 가 보이면 `401` 은 토큰 · clip 창구, `403` 은 출발지 대역,
+`transport` · `timeout` 은 SG · 이름 풀이입니다. 세 번 이어 실패하면 ERROR
+`expiry_stalled value=1`(`stalled=1`)이 나옵니다 — 끄고 원인을 봅니다.
 
 ### 만료 미룸 질의
 
@@ -1272,9 +1277,11 @@ WARN `expiry_deferred value=1` 이 같은 방송에 하루 넘게 남을 때 그
 `round_id` 없는 옛 사슬의 같은 상태 세션입니다. 만료 판정
 (`media/internal/index/expiry_store.go` 의 `expiryRoundsSettledSQL`)과 같은
 조건이고, 구간 꼭대기(만료 구간의 최대 seq)는 보지 않아 판정보다 넓게
-나옵니다 — `min_seq` 가 구간보다 큰 단위는 그 방송을 막지 않습니다. 흐름 ·
-승인 · 가림은 「M6 읽기 질의」 그대로이고, `<stream_id>` 는 그 줄의
-`stream_id` 입니다.
+나옵니다. `min_seq` 는 세션마다 그 세션 조각의 최소 seq 입니다. 회차는 그
+회차 행들의 `min_seq` 가운데 가장 작은 값이, `round_id` 없는 세션은 자기
+`min_seq` 가 구간 꼭대기보다 크면 그 방송을 막지 않습니다. `min_seq` 가 빈
+세션(조각 없음)은 막지 않습니다. 흐름 · 승인 · 가림은 「M6 읽기 질의」
+그대로이고, `<stream_id>` 는 그 줄의 `stream_id` 입니다.
 
 ```shell
 cat >"${payload}/expiry_deferred.sql" <<'SQL'
@@ -3248,6 +3255,8 @@ Media 사이드카의 60일 만료 실행기가 clip 을 부를 때 쓰는 전�
     프라이빗 서브넷 대역(`EXPIRED_BROADCASTS_ALLOWED_CIDRS`)이어야 합니다.
     clip 은 `EXPIRED_BROADCASTS_TOKEN` 으로, Media 는 시작 스크립트가 런타임
     출력 `clip_expiry_token_secret_arn` 의 그릇을 읽어 사이드카 파일로 받습니다.
+    한계: 그 대역은 `media_az` 의 프라이빗 서브넷 전체라 같은 AZ 의 ECS
+    태스크도 출발지 검사를 지납니다 — 그 자리는 토큰 하나가 막습니다.
 *   **그릇마다 값을 따로 만듭니다.** resolve 전용 토큰(「1단-나 ②」)의 값을
     다시 쓰지 않고, `INTERNAL_API_TOKEN` 과도 달라야 합니다 — 같으면 clip 이
     부팅을 거부합니다. 한 값이 새면 그 창구 하나만 열리게 하려는 분리입니다.
@@ -3268,7 +3277,7 @@ Media 사이드카의 60일 만료 실행기가 clip 을 부를 때 쓰는 전�
 *   **runtime apply(1) 전에는 prod/media plan 이 새 출력
     `clip_expiry_token_secret_arn` 이 없어 실패합니다.** `clip_internal_url`
     이 빈 값이어도, 긴급 apply 여도 같습니다. POK-551 머지 뒤의 prod/media
-    plan 은 1 뒤에만 돕니다([prod/media](../prod/media/README.md)).
+    plan 은 1 뒤에만 돕니다([prod/media](/infra/terraform/prod/media/README.md)).
 *   **runtime apply(1) 뒤 값 넣기(2) 전에는 platform apply 를 하지
     않습니다.** 어느 PR 의 platform apply 든 같습니다 — platform 은 런타임
     출력을 읽으므로 1 뒤의 plan 은 clip 태스크 정의에 값 없는 그릇을
@@ -3364,7 +3373,9 @@ platform 출력 `service_ports.clip` 과 같아야 plan 이 통과)을 넣고
 
 기동 판정 뒤 같은 런북 「만료 확인 스크립트」 를 `started` 로 돌립니다.
 
-*   통과 = `EXPIRY STARTED OK` · `SWITCH 0`(스위치는 아직 끔).
+*   통과 = `EXPIRY STARTED OK` · `SWITCH 0`(스위치는 아직 끔). 이어서 같은
+    런북 「만료 창구 탐침」 을 돌려 `EXPIRY PROBE OK` 를 봅니다(「켜기 전
+    조건」 3).
 *   **토큰을 받지 못하면 시작 판정 줄에는 아무것도 나오지 않습니다.**
     시작 스크립트는 받기 실패를 줄 없이 넘기고 상자는 정상으로 뜹니다.
     판별 신호는 사이드카 저널의 ERROR `expiry_disabled reason=token_file`
@@ -3376,7 +3387,7 @@ platform 출력 `service_ports.clip` 과 같아야 plan 이 통과)을 넣고
     렌더되지 않은 판).
 *   `SECRET COUNT box` 대조도 이 토큰을 셉니다 — 0 이 아니거나
     `SECRET COUNT FAIL clip-expiry` 면 멈춥니다([media-host
-    README](../../media-host/README.md) 「운영 확인 스크립트」).
+    README](/infra/media-host/README.md) 「운영 확인 스크립트」).
 
 스위치를 켜는 것(6)은 「만료 스위치 손 SQL」 의 「켜기 전 조건」 이 선 뒤
 kty 가 정합니다.
@@ -3397,9 +3408,23 @@ kty 가 정합니다.
     **kty 승인**). ECS 는 새 배포 · 새 태스크라야 새 값을 받습니다. 옛
     태스크가 모두 바뀔 때까지가 걸음입니다.
 1.  Media 는 사이드카 기동 때 한 번 읽으므로, 상자를 다시 기동하기 전까지
-    옛 값을 씁니다. 그동안 만료 폴링은 `expiry_poll status=401` 로 실패하고
-    아무것도 지우지 않습니다. 스위치를 먼저 끄면 그 줄도 나지 않습니다.
-    다시 기동은 방송 없는 시간대에 「설정 반영 교체」 로 합니다.
+    옛 값을 씁니다. 스위치가 켜져 있으면 그동안 만료 폴링은
+    `expiry_poll status=401` 로 실패합니다. 다만 401 이어도 재시도 집합에
+    남은 방송은 회차마다 폴링보다 먼저 처리되어 지워질 수 있습니다(다음
+    처음부터 훑기 — 최대 하루 — 까지). 그 방송도 보존 기간이 지난 정상 판정
+    대상입니다. 삭제를 바로 멈추려면 1 전에 스위치를 끕니다(「만료 스위치
+    손 SQL」 의 끔) — 끈 동안은 폴링도 하지 않아 그 줄도 나지 않습니다.
+    다시 기동은 방송 없는 시간대에 「설정 반영 교체」 로 하고, 그 뒤 다시
+    켜는 것은 「켜기 전 조건」 그대로 kty 가 정합니다.
+
+**값 넣기 전에 멈출 때(runtime apply(1) 뒤 · 2 전).** 그대로 두면 위
+「1단-나 ③ 순서 한눈에」 의 두 번째 경고가 풀리지 않습니다 — 어느 PR 의
+platform apply 든 값 없는 그릇을 clip 태스크 정의에 넣습니다. 이어 가지
+않으면 아래 「창구 닫기」 1 의 커밋으로 runtime plan · apply 까지만 합니다.
+platform 은 그 이름을 아직 받은 적이 없어 platform apply 가 따로 필요 없고,
+Media 는 주소가 비어 있어 스위치를 끌 것도 없습니다. 그릇은 남겨 둬도 되고,
+지우려면 「창구 닫기」 2 의 순서입니다(prod/media 를 아직 apply 하지 않았으면
+Media 쪽 걸음은 없습니다).
 
 **창구 닫기(코드 되돌림).** platform 에는 창구를 따로 끄는 손잡이가
 없습니다 — clip 창구는 런타임이 `EXPIRED_BROADCASTS_TOKEN` 을 주지 않을 때만
@@ -3411,8 +3436,9 @@ clip 태스크 정의가 지워질 그릇을 가리킨 채 남습니다).
 1.  `app_secret_arns.clip` 의 `EXPIRED_BROADCASTS_TOKEN` 과 `app_env.clip` 의
     `EXPIRED_BROADCASTS_ALLOWED_CIDRS` 를 빼는 커밋(그릇 · `media_secret_arns`
     · `clip_expiry_token_secret_arn` 은 그대로) → runtime plan · apply →
-    platform plan · apply → clip 옛 태스크 교체 완료. Media 의 만료 폴링은
-    401 이 됩니다(스위치를 켜 두면 `expiry_stalled`).
+    platform plan · apply → clip 옛 태스크 교체 완료. 스위치를 끈 동안은
+    Media 의 만료 폴링 줄이 없고, 다시 켜면 `expiry_poll status=401` 이
+    됩니다(세 번 이어지면 `expiry_stalled value=1`).
 1.  그릇까지 지우려면 Media 쪽을 먼저 걷습니다 — 만료 주소를 비운 상자로
     바꾸고(Media 교체 런북 「만료 롤백 하한 · 만료 스위치」), prod/media 가
     `clip_expiry_token_secret_arn` 을 읽지 않는 판이 된 뒤에 그릇을 지우는

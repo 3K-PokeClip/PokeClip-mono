@@ -269,7 +269,10 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 *   같은 자원이 앱의 부팅 거부 조건도 미리 봅니다 — `app_db_auth = "iam"` 인데
     DB 를 쓰는 서버 넷(auth · clip · chat 둘)에 `POSTGRES_PASSWORD` 가 오거나, auth 에
     `STREAM_KEY_RESOLVE_TOKEN` 이 오는데 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 가
-    비면 plan 이 멈춥니다.
+    비면 plan 이 멈춥니다. clip 도 같은 꼴로 둘을 봅니다 —
+    `EXPIRED_BROADCASTS_TOKEN` 이 오는데 `EXPIRED_BROADCASTS_ALLOWED_CIDRS` 가
+    비거나, clip 의 `FORWARD_HEADERS_STRATEGY` 가 `none` · `native` 가 아니면
+    plan 이 멈춥니다(POK-551 — 값은 `services.tf` 가 `native` 로 넣습니다).
 *   런타임 `app_env` 는 평문 env 라 비밀은 `app_secret_arns` 로 와야 합니다.
     이름 어디에든 `PASSWORD` · `SECRET` · `TOKEN` · `KEY` 등이 들면 plan 이
     멈춥니다 — 비밀이 아닌 그런 이름은 `app_env_non_secret_names` 에 적습니다.

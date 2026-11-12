@@ -152,16 +152,22 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 *   `stream_key_resolve_url` 의 포트는 `auth_port`(platform 출력
     `service_ports.auth`)와 같아야 합니다 — 다르면 plan 이 멈춥니다(POK-477).
 *   `clip_internal_url`(기본 빈 값 · null 은 기본값으로)은 60일 만료 창구
-    clip 주소입니다. 꼴은 사이드카 `validateClipURL`
-    (`media/internal/config/expiry.go`)과 같은 `http(s)://<호스트>[:<포트>]`
-    이고, 포트(없으면 scheme 기본 포트)는 `clip_port`(platform 출력
-    `service_ports.clip`)와 같아야 합니다 — 다르면 plan 이 멈춥니다. 차면
+    clip 주소입니다. 꼴은 `http(s)://<호스트>[:<포트>]` 이고, 사이드카
+    `validateClipURL`(`media/internal/config/expiry.go`)이 받는 꼴의 부분
+    집합입니다 — IPv6 · 대문자 scheme · 밑줄 든 호스트는 사이드카는 받지만
+    여기서는 plan 이 멈춥니다. 포트(없으면 scheme 기본 포트)는
+    `clip_port`(platform 출력 `service_ports.clip`)와 같아야 합니다 — 다르면
+    plan 이 멈춥니다. 차면
     사이드카 env 둘(`CLIP_INTERNAL_URL` · `CLIP_EXPIRY_TOKEN_FILE`)과 토큰
     디렉터리 bind 를 렌더하고(두 모드 공통), 비면(끔) 셋 다 렌더하지 않으며
     `media.env` 의 `CLIP_EXPIRY_TOKEN_SECRET_ARN` 도 비웁니다.
     `clip_expiry_token_secret_arn`(런타임 1단 출력 — 값 아님)의 읽기 권한은
     `media_secret_arns` 가 줍니다. compose 에 들어가 첫 부팅에만 쓰이므로
     바꾸는 것은 상자 교체입니다.
+*   **한계 — URL 이 빈 상자도 만료 토큰을 읽을 수 있습니다.** 읽기 권한은
+    `media_secret_arns` 를 따르고 `clip_internal_url` 을 보지 않으므로, 주소가
+    빈 상자의 인스턴스 역할도 그 그릇을 읽습니다. 만료를 켜고 끌 때 IAM
+    차분이 생기지 않게 하려는 선택입니다(kty 2026-11-13).
 *   `rewind_bucket_arn` 에서 버킷 이름을 꺼내 사이드카 `S3_BUCKET` 으로
     넘깁니다.
 *   `broadcast_topic_arn`(필수)은 사이드카 `loadLifecycle` 과 같은 판정으로

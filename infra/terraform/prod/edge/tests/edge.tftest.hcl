@@ -281,8 +281,9 @@ run "waf_protects_credentials_in_samples" {
       "cookie",
       "x-internal-token",
       "x-stream-key-resolve-token",
+      "x-expired-broadcasts-token",
     ])
-    error_message = "CLOUDFRONT WAF 데이터 보호가 authorization · cookie · x-internal-token · x-stream-key-resolve-token 헤더만 가리지 않는다."
+    error_message = "CLOUDFRONT WAF 데이터 보호가 authorization · cookie · x-internal-token · x-stream-key-resolve-token · x-expired-broadcasts-token 헤더만 가리지 않는다."
   }
 
   assert {
