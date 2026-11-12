@@ -5,6 +5,8 @@ import {
   boxes,
   child,
   path,
+  readFirstSampledTraf,
+  readTrackSamples,
   readTrackSpans,
   readTrackStart,
   readVideoTrack,
@@ -16,6 +18,10 @@ import {
 const TESTDATA = join(__dirname, '..', '..', '..', 'media', 'internal', 'playback', 'testdata');
 const segment4s = new Uint8Array(readFileSync(join(TESTDATA, 'segment_4s.mp4')));
 const segment1v6a = new Uint8Array(readFileSync(join(TESTDATA, 'segment_1v6a.mp4')));
+// ③ 재포장본(M0 — 저장소 생산자가 segment_4s 를 pos 1234.5초에 도장한 것 · 만든 법은 그 폴더 README)
+const REMUXED = join(__dirname, '..', 'features', 'clips', 'editor', 'source', 'testdata');
+const remuxedInit = new Uint8Array(readFileSync(join(REMUXED, 'init.mp4')));
+const remuxedSegment = new Uint8Array(readFileSync(join(REMUXED, 'seg_0000300.m4s')));
 
 // --- 합성 바이트: 실물에 없는 모양(음수 cto · 64비트 tfdt · 기본값 칸)을 만든다 ---
 
@@ -341,6 +347,124 @@ describe('readTrackStart: 조각에서 그 트랙 첫 traf 의 tfdt 와 첫 표�
     expect(readTrackStart(segment4s.subarray(0, 1300), 1)).toBeNull();
     expect(readTrackStart(shortRun, 1)).toBeNull();
     expect(readTrackStart(new Uint8Array(0), 1)).toBeNull();
+  });
+});
+
+describe('readTrackSamples: 조각 안 그 트랙의 표본마다 DTS · PTS · 길이를 디코드 순서로 읽는다', () => {
+  it('실물 ③ 조각: 영상 120 표본 · 첫 셋은 mp4dump 값(B 프레임이라 PTS 가 DTS 순서와 다르다)', () => {
+    const video = readTrackSamples(remuxedInit, remuxedSegment, 1);
+
+    expect(video).toHaveLength(120);
+    expect(video?.slice(0, 3)).toEqual([
+      { dts: 111106099, pts: 111112111, duration: 2997 },
+      { dts: 111109096, pts: 111124081, duration: 3015 },
+      { dts: 111112111, pts: 111118141, duration: 2970 },
+    ]);
+  });
+
+  it('실물 ③ 조각: 소리 172 표본은 PTS = DTS 이고 첫 표본이 tfdt 54441450 이다', () => {
+    const audio = readTrackSamples(remuxedInit, remuxedSegment, 2);
+
+    expect(audio).toHaveLength(172);
+    expect(audio?.[0]).toEqual({ dts: 54441450, pts: 54441450, duration: 1015 });
+  });
+
+  it('traf 마다 그 tfdt 에서 다시 센다(moof 둘)', () => {
+    const bytes = concat(
+      moof(traf(tfhd(1), tfdt(0, 100n), trun(0, 0x100, [{ duration: 10 }, { duration: 20 }]))),
+      moof(traf(tfhd(1), tfdt(0, 500n), trun(0, 0x100, [{ duration: 30 }]))),
+    );
+
+    expect(readTrackSamples(bytes, bytes, 1)).toEqual([
+      { dts: 100, pts: 100, duration: 10 },
+      { dts: 110, pts: 110, duration: 20 },
+      { dts: 500, pts: 500, duration: 30 },
+    ]);
+  });
+
+  it('trun v1 의 cto 는 부호 있다: 음수 cto 면 PTS 가 DTS 보다 앞이다', () => {
+    const run = trun(1, 0x900, [
+      { duration: 3000, cto: 3000 },
+      { duration: 3000, cto: -1500 },
+    ]);
+
+    expect(readTrackSamples(new Uint8Array(0), videoFragment(1, tfdt(0, 9000n), run), 1)).toEqual([
+      { dts: 9000, pts: 12000, duration: 3000 },
+      { dts: 12000, pts: 10500, duration: 3000 },
+    ]);
+  });
+
+  it('trun v0 의 cto 는 무부호다', () => {
+    const run = trun(0, 0x900, [{ duration: 1, cto: 0xfffffa24 }]);
+
+    expect(readTrackSamples(new Uint8Array(0), videoFragment(1, tfdt(0, 0n), run), 1)).toEqual([
+      { dts: 0, pts: 0xfffffa24, duration: 1 },
+    ]);
+  });
+
+  it('길이 칸이 없으면 tfhd 기본값, 그것도 없으면 init 의 trex 기본값이다', () => {
+    const header = init(trak(1, 'vide', 90000), box('mvex', trex(1, 3000)));
+    const byTfhd = concat(moof(traf(tfhd(1, 1500), tfdt(0, 0n), trun(0, 0, [{}, {}]))));
+    const byTrex = concat(moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0, [{}, {}]))));
+
+    expect(readTrackSamples(header, byTfhd, 1)?.map((s) => s.dts)).toEqual([0, 1500]);
+    expect(readTrackSamples(header, byTrex, 1)?.map((s) => s.dts)).toEqual([0, 3000]);
+  });
+
+  it('표본 없는 traf 는 tfdt 가 없어도 지나간다 · 다른 트랙 traf 는 세지 않는다', () => {
+    const bytes = concat(
+      moof(traf(tfhd(1), trun(0, 0, [])), traf(tfhd(2), tfdt(0, 7n), trun(0, 0, [{}]))),
+      moof(traf(tfhd(1), tfdt(0, 40n), trun(0, 0x100, [{ duration: 5 }]))),
+    );
+
+    expect(readTrackSamples(bytes, bytes, 1)).toEqual([{ dts: 40, pts: 40, duration: 5 }]);
+    expect(readTrackSamples(bytes, bytes, 9)).toEqual([]);
+  });
+
+  it('표본 있는 traf 에 tfdt 가 없거나 · trun 이 잘렸으면 null 이다(던지지 않는다)', () => {
+    const noTfdt = concat(moof(traf(tfhd(1), trun(0, 0, [{}]))), box('mdat'));
+    const full = videoFragment(1, tfdt(0, 0n), trun(1, 0x900, [{ duration: 1, cto: 9 }]));
+    // trun 상자 크기를 4 줄여 cto 칸이 상자 밖에 놓이게 한다
+    const shortRun = full.slice();
+    new DataView(shortRun.buffer).setUint32(topLevel(full)[0]!.end - 24, 20);
+
+    expect(readTrackSamples(noTfdt, noTfdt, 1)).toBeNull();
+    expect(readTrackSamples(shortRun, shortRun, 1)).toBeNull();
+  });
+});
+
+describe('readFirstSampledTraf: 그 트랙의 표본 있는 첫 traf 의 표본을 읽는다', () => {
+  it('표본 없는 traf 가 먼저 와도 건너뛰고 표본 있는 traf 를 고른다', () => {
+    const bytes = concat(
+      moof(traf(tfhd(1), tfdt(0, 10n), trun(0, 0x100, []))),
+      moof(
+        traf(tfhd(1), tfdt(0, 70n), trun(1, 0x900, [{ duration: 4, cto: -2 }, { duration: 4 }])),
+      ),
+      moof(traf(tfhd(1), tfdt(0, 90n), trun(0, 0x100, [{ duration: 4 }]))),
+    );
+
+    expect(readFirstSampledTraf(bytes, bytes, 1)).toEqual([
+      { dts: 70, pts: 68, duration: 4 },
+      { dts: 74, pts: 74, duration: 4 },
+    ]);
+  });
+
+  it('실물 ② 파일(영상 1 + 소리 6): 영상 첫 traf 는 tfdt 8136 · 소리는 0 에서 시작한다', () => {
+    const video = readFirstSampledTraf(segment1v6a, segment1v6a, 1);
+    const audio = readFirstSampledTraf(segment1v6a, segment1v6a, 2);
+
+    expect(video?.[0]?.dts).toBe(8136);
+    expect(video?.[0]?.pts).toBe(8136 + 3000);
+    expect(video).toHaveLength(5);
+    expect(audio?.[0]).toEqual({ dts: 0, pts: 0, duration: 1024 });
+  });
+
+  it('표본 있는 traf 가 없으면 빈 목록 · 모양을 모르면 null 이다', () => {
+    const empty = concat(moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0, []))));
+    const noTfdt = concat(moof(traf(tfhd(1), trun(0, 0, [{}]))));
+
+    expect(readFirstSampledTraf(empty, empty, 1)).toEqual([]);
+    expect(readFirstSampledTraf(noTfdt, noTfdt, 1)).toBeNull();
   });
 });
 

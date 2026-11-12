@@ -127,6 +127,97 @@ export function readTrackSpans(file: Uint8Array): TrackSpan[] {
   }
 }
 
+/** 표본 하나의 시각(트랙 timescale 눈금) */
+export interface SampleTiming {
+  /** 그 traf 의 tfdt + 앞 표본 길이 합 */
+  dts: number;
+  /** dts + cto(trun v1 은 부호 있음) */
+  pts: number;
+  duration: number;
+}
+
+/**
+ * 조각 바이트 안 그 트랙의 표본 전부를 디코드 순서로(편집기 창의 프레임 표). init 은 trex 기본 길이만 읽는다 —
+ * ② 녹화 파일처럼 moov 와 moof 가 한 바이트면 같은 것을 두 번 넘긴다. 그 트랙이 없으면 빈 목록, 모양을 모르면 null
+ */
+export function readTrackSamples(
+  init: Uint8Array,
+  fragment: Uint8Array,
+  trackId: number,
+): SampleTiming[] | null {
+  try {
+    return trafSampleLists(viewOf(init), viewOf(fragment), trackId).flat();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 그 트랙의 **표본 있는** 첫 traf 의 표본(빈 traf 는 건너뜀 — 렌더 readTiming 과 같은 규칙). 표본 있는 traf 가
+ * 없으면 빈 목록, 모양을 모르면 null
+ */
+export function readFirstSampledTraf(
+  init: Uint8Array,
+  fragment: Uint8Array,
+  trackId: number,
+): SampleTiming[] | null {
+  try {
+    const lists = trafSampleLists(viewOf(init), viewOf(fragment), trackId);
+    return lists.find((samples) => samples.length > 0) ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/** 그 트랙 traf 마다의 표본 목록(moof · traf 순서) */
+function trafSampleLists(initView: DataView, view: DataView, trackId: number): SampleTiming[][] {
+  const moov = topBox(initView, 'moov');
+  const trexDuration = (moov && defaultDurations(initView, moov).get(trackId)) ?? 0;
+  const lists: SampleTiming[][] = [];
+  for (const moof of boxes(view, 0, view.byteLength)) {
+    if (moof.type !== 'moof') continue;
+    for (const traf of boxes(view, moof.start, moof.end)) {
+      if (traf.type !== 'traf') continue;
+      const header = fragmentHeader(view, traf);
+      if (header.trackId !== trackId) continue;
+      const tfdt = child(view, traf, 'tfdt');
+      const base = tfdt ? decodeTime(view, tfdt) : null;
+      lists.push(trafSamples(view, traf, base, header.defaultDuration ?? trexDuration));
+    }
+  }
+  return lists;
+}
+
+/** traf 안 trun 전부의 표본. 표본이 있는데 tfdt 를 못 읽었으면(base null) 자리를 모르므로 RangeError */
+function trafSamples(
+  view: DataView,
+  traf: Box,
+  base: number | null,
+  fallback: number,
+): SampleTiming[] {
+  const samples: SampleTiming[] = [];
+  let dts = base ?? 0;
+  for (const trun of boxes(view, traf.start, traf.end)) {
+    if (trun.type !== 'trun') continue;
+    const { version, flags, count, samplesAt } = trunLayout(view, trun);
+    const stride = [0x100, 0x200, 0x400, 0x800].filter((bit) => flags & bit).length * 4;
+    if (!within(trun, samplesAt + count * stride)) throw new RangeError('trun');
+    if (count > 0 && base === null) throw new RangeError('tfdt');
+    // cto 는 표본 칸의 마지막(0x100 길이 · 0x200 크기 · 0x400 표지 뒤)
+    const ctoAt = stride - 4;
+    for (let i = 0; i < count; i++) {
+      const at = samplesAt + i * stride;
+      const duration = flags & 0x100 ? view.getUint32(at) : fallback;
+      let cto = 0;
+      if (flags & 0x800)
+        cto = version === 1 ? view.getInt32(at + ctoAt) : view.getUint32(at + ctoAt);
+      samples.push({ dts, pts: dts + cto, duration });
+      dts += duration;
+    }
+  }
+  return samples;
+}
+
 function trackSpans(view: DataView): TrackSpan[] {
   const moov = topBox(view, 'moov');
   if (!moov) return [];
