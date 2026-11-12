@@ -318,7 +318,7 @@ function canHandOffFromRewind(session: PlaybackSessionState, now: number): boole
 }
 
 /**
- * E1 의 넘김 조건 — 되감기로 끝에 닿은 끝남 대기(녹화로 가기로 정하기 전 · 막히기
+ * E1 의 넘김 조건 — 되감기로 끝에 닿은 끝남 대기(닫기로 정하기 전 · 막히기
  * 전 — POK-528 U1) ∧ 공통 몫. 이번 응답 대신 문을 본다
  */
 function canHandOffFromEnding(session: PlaybackSessionState, now: number): boolean {

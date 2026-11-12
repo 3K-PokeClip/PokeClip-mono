@@ -557,14 +557,14 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
       expect(done.effects).toEqual([REFRESH_A1, HOLD]);
     });
 
-    it('끝남 대기(녹화로 정하기 전) → 막힘', () => {
+    it('끝남 대기(닫기로 정하기 전) → 막힘', () => {
       const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
       const done = feed(ending, [gone(ending, undefined, S)]);
       expect(done.state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
       expect(done.effects).toEqual([HOLD]);
     });
 
-    it('끝남 대기(녹화로 정한 뒤) → 마지막 확인', () => {
+    it('끝남 대기(닫기로 정한 뒤) → 마지막 확인', () => {
       const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
       const decided = feed(ending, [
         { type: 'round-poll', result: status({ mode: 'ended' }) },

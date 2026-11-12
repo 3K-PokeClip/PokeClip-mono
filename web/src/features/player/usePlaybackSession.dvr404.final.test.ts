@@ -21,11 +21,11 @@ vi.mock('./rewindSwitch', async (importOriginal) => {
 // ① 마지막 확인(finalCheck)은 회차별 경로만 켜고, 켜짐이 렌더에 드러나면 그 렌더에서
 //    곧바로 묻는다(useRewindStatus 기동의 첫 물음 — 꺼짐 · 켜짐이 한 렌더 묶음에 겹치면
 //    걸려 있던 정기 물음이 그 물음이다 · endingWait.ts onEndingSegmentGone). 옛 표는
-//    녹화로 정한 끝남 대기의 404 를 무시해 회차별 물음이 나가지 않으므로 음성 대조
+//    닫기로 정한 끝남 대기의 404 를 무시해 회차별 물음이 나가지 않으므로 음성 대조
 //    트리에서는 단언으로 FAIL 한다.
 // ② 마지막 확인의 회차별 물음은 한 번이다(정본 r7 1151 「두 번째 확인은 없다」). 답을
 //    기다리는 동안 숨김 복귀가 되풀이돼도 요청을 끊고 다시 묻지 않고, 답이 없으면 처음
-//    물음의 시한(8초)에 녹화로 닫는다.
+//    물음의 시한(8초)에 닫는다(past — POK-547).
 // ③ 백그라운드 탭 10분(W13 증거 · c7 몫): 숨은 탭은 브라우저가 타이머를 묶어 정기
 //    물음이 나가지 않는다. 목록 다시 받기는 제어면 답을 기다리지 않으므로, 숨은
 //    동안이든 보이게 된 뒤든 다시 받는 중이 아닌 되감기의 404 는 곧바로 같은 목록을 다시
@@ -157,10 +157,10 @@ function assertAllTransitions(): void {
 /** 세션을 열어 라이브 답을 받고 되감은 세션 */
 async function openRewind(answers: Answers) {
   serve(answers);
-  // 녹화로 닫힌 방송은 다시 열지 않는다 — 화면(LiveScreen)의 여는 조건 꼴
+  // past 로 닫힌 방송은 다시 열지 않는다 — 화면(LiveScreen)의 여는 조건 꼴
   let canOpen = true;
   const onClose = vi.fn((closed: SessionClosed) => {
-    if (closed.reason === 'recorded') canOpen = false;
+    if (closed.reason === 'past') canOpen = false;
   });
   const { result } = renderHook(() => usePlaybackSession(options(canOpen, onClose)));
   await flush();
@@ -192,7 +192,7 @@ async function openRewind(answers: Answers) {
 }
 
 describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
-  it('녹화로 정한 끝남 대기의 404 → 회차별만 곧바로 한 번 묻고 · ended 면 녹화로 닫는다', async () => {
+  it('닫기로 정한 끝남 대기의 404 → 회차별만 곧바로 한 번 묻고 · ended 면 past 로 닫는다', async () => {
     const { session, gone, onClose } = await openRewind({
       stream: () => liveBody(FIRST_F),
       round: () => ENDED_BODY,
@@ -208,11 +208,11 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
     expect(roundStarts[1]).toBe(Date.now());
     expect(streamStarts).toHaveLength(streamBefore);
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onClose.mock.calls[0]?.[0]).toMatchObject({ reason: 'recorded' });
+    expect(onClose.mock.calls[0]?.[0]).toMatchObject({ reason: 'past' });
     assertAllTransitions();
   });
 
-  it('답을 기다리는 동안 숨김 복귀가 되풀이돼도 다시 묻지 않고 · 처음 시한에 녹화로 닫는다', async () => {
+  it('답을 기다리는 동안 숨김 복귀가 되풀이돼도 다시 묻지 않고 · 처음 시한에 past 로 닫는다', async () => {
     const { session, gone, onClose } = await openRewind({
       stream: () => liveBody(FIRST_F),
       round: (n) => (n === 0 ? ENDED_BODY : NO_ANSWER),
@@ -240,7 +240,7 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
     expect(roundStarts).toHaveLength(2);
     expect(roundSignals[1]?.aborted).toBe(false);
     expect(onClose).not.toHaveBeenCalled();
-    // 처음 물음의 시한 직전까지는 기다리고, 시한에 끊어 녹화로 닫는다
+    // 처음 물음의 시한 직전까지는 기다리고, 시한에 끊어 닫는다
     await act(async () =>
       vi.advanceTimersByTimeAsync(askedAt + REQUEST_TIMEOUT_MS - 1 - Date.now()),
     );
@@ -250,7 +250,7 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
     expect(roundSignals[1]?.aborted).toBe(true);
     expect(roundStarts).toHaveLength(2);
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onClose.mock.calls[0]?.[0]).toMatchObject({ reason: 'recorded' });
+    expect(onClose.mock.calls[0]?.[0]).toMatchObject({ reason: 'past' });
     assertAllTransitions();
   });
 });

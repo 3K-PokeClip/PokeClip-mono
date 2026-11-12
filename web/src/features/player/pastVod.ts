@@ -67,10 +67,10 @@ export type PastCardMode =
 /** 카드 갈래를 가르는 입력(pastCardMode) — 화면 · 다시보기 상태 · 출입증 · 재생기 국면을 한데 모은다 */
 export interface PastCardInput {
   /**
-   * 끝난 뒤 들어온 화면(A)인가 — 세션을 연 적 없이 명부가 ended 다(useLiveSession 이 정한다). 라이브 · B(세션을 연 화면) ·
-   * 명부 상태 모름은 거짓이다
+   * 지난 방송 판정으로 그리는 화면인가 — 끝난 뒤 들어온 화면(A) 또는 세션이 past 로 닫힌 화면(B · POK-547 — useLiveSession 이
+   * 정한다). 라이브 · 열린 세션 · go-live · left 로 닫힌 화면 · 명부 상태 모름은 거짓이다
    */
-  enteredAfterEnd: boolean;
+  showsPast: boolean;
   /** 410 보관 만료(accessExpiredFor === accessKey) */
   expired: boolean;
   vod: PastVodState;
@@ -156,13 +156,13 @@ export function foldPastVodAnswer(
 
 /**
  * 카드 갈래(설계 2-1 판정표 10줄 — 위에서부터 처음 맞는 줄).
- * 끝나기 전에 들어온 화면은 notPast, 보관 만료는 blocked(expired)다. 그 밖은 다시보기 상태가
+ * 지난 방송 판정으로 그리지 않는 화면은 notPast, 보관 만료는 blocked(expired)다. 그 밖은 다시보기 상태가
  * 먼저 가르고(ready 가 아니면 checking 만 waiting · 나머지는 같은 이름의 blocked), ready 면
  * 출입증 → 재생기 국면 순으로 가른다
  */
 export function pastCardMode(input: PastCardInput): PastCardMode {
-  const { enteredAfterEnd, expired, vod, access, phase } = input;
-  if (!enteredAfterEnd) return { kind: 'notPast' };
+  const { showsPast, expired, vod, access, phase } = input;
+  if (!showsPast) return { kind: 'notPast' };
   if (expired) return { kind: 'blocked', reason: 'expired' };
   if (vod.kind === 'checking') return { kind: 'waiting' };
   if (vod.kind !== 'ready') return { kind: 'blocked', reason: vod.kind };

@@ -117,8 +117,8 @@ function clampToView(targetMs: number, view: SeekView): number {
 }
 
 /**
- * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. 멈춤 회피가
- * 아니다: 받지 않은 마지막 조각 안으로 옮기면 앞 버퍼 끝에 멎는 일은 Playwright WebKit 26.4 에서 재현됐고 1초를 물러서도
+ * 끝으로 갈 때 목록 끝에서 물러설 거리 1초 — 결정-POK546 결정 5(kty (가) · 11-07) 그대로다. 멈춤 회피가 아니며 근거는
+ * 실측 범위다: 받지 않은 마지막 조각 안으로 옮기면 앞 버퍼 끝에 멎는 일은 Playwright WebKit 26.4 에서 재현됐고 1초를 물러서도
  * 남았으며, macOS Safari 27.0.1 의 앱 밖 최소 재현(hls.js 네 판과 기본 HLS 0/42 · 앱 판 1.7.3 은 0/6)과 Playwright
  * 1.65.0 의 WebKit 27.2 의 같은 재현(hls.js 네 판 · 조건 a 0/42)에서는 재현되지 않았다(iOS 는 재지 않았다). 마지막 1초를
  * 틀어 끝에 닿는다
@@ -126,16 +126,16 @@ function clampToView(targetMs: number, view: SeekView): number {
 const END_TAIL_MS = 1_000;
 
 /**
- * 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 마지막 조각이 1초보다 짧으면 그 조각의 시작이다(앞 조각으로 물러서지 않는다 —
- * 녹화 다시보기 tailStart 의 하한과 같다). 마지막 조각 시작을 모르면 첫 조각을 하한으로 둔다
+ * 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 마지막 조각이 1초보다 짧으면 그 조각의 시작이다(앞 조각으로 물러서지 않는다).
+ * 마지막 조각 시작을 모르면 첫 조각을 하한으로 둔다
  */
 function tailMs(list: VodList): number {
   return Math.max(list.lastStartMs ?? list.firstMs, list.lastEndMs - END_TAIL_MS);
 }
 
 /**
- * 카드 · 받아 둔 자리가 옮길 자리 — 첫 조각부터 꼬리까지로 가둔다(녹화 다시보기 forwardTarget 처럼 끝은 꼬리로 모은다). 끝
- * 이동과 달리 다 본 뒤에도 옮긴다(녹화 다시보기의 카드와 같다). 이 주소의 목록을 아직 모르면 재생기 목록 끝까지다
+ * 카드 · 받아 둔 자리가 옮길 자리 — 첫 조각부터 꼬리까지로 가둔다(끝은 꼬리로 모은다). 끝 이동과 달리 다 본 뒤에도
+ * 옮긴다. 이 주소의 목록을 아직 모르면 재생기 목록 끝까지다
  */
 function cardTargetMs(targetMs: number, view: SeekView, list: VodList | null): number {
   const endMs = list === null ? view.endMs : tailMs(list);
@@ -267,7 +267,7 @@ export function useVodPlayback(
     };
   }, [videoRef, url, currentProgramDateMs, readShownPdtMs]);
 
-  // 다 봤나 — 재생 단추가 「처음부터」가 된다(녹화 다시보기와 같은 뜻, POK-518). useHlsPlayback 의 끝 도달(onEndReached)은
+  // 다 봤나 — 재생 단추가 「처음부터」가 된다(POK-518). useHlsPlayback 의 끝 도달(onEndReached)은
   // 목록 끝 정체까지 세는 세션 알림이라 쓰지 않고, 브라우저의 ended 만 따른다
   useEffect(() => {
     const video = videoRef.current;
@@ -317,7 +317,7 @@ export function useVodPlayback(
       : Math.min(windowSeconds, Math.max(0, Math.round((list.lastEndMs - axisPdtMs) / 1000)));
 
   // 시크바 · 키가 옮길 자리 — 첫 조각부터 꼬리(끝 1초 앞)까지로 가둔다. 다 본 뒤 꼬리로 가면 옮기지 않는다: 옮기면 seeking 이
-  // 다 봤나를 풀어 「처음부터」 단추가 깜빡이거나 끝 1초를 또 돈다(녹화 다시보기 jumpTo 와 같은 뜻 — POK-518)
+  // 다 봤나를 풀어 「처음부터」 단추가 깜빡이거나 끝 1초를 또 돈다(POK-518)
   const moveWithinList = useCallback(
     (targetMs: number) => {
       if (list === null) {
@@ -378,7 +378,7 @@ export function useVodPlayback(
     return shownNow === null ? null : (shownNow - vod.axisZeroMs) / 1000;
   }, [list, readShownPdtMs, vod.axisZeroMs]);
 
-  // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(녹화 다시보기와 같은 뜻)
+  // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(POK-518)
   const togglePlay = useCallback(() => {
     const restarts = videoRef.current?.ended === true;
     toggleHlsPlay();

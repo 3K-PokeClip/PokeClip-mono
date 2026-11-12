@@ -2,10 +2,11 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
-import type { SessionView } from './sessionView';
+import { openSession, transition } from './rewindSwitch';
+import { sessionView, type SessionView } from './sessionView';
 import { PlayerSessionOverlay } from './PlayerSessionOverlay';
 
-// 끝남 대기 덮개 · 띠(설계 5.3 · 5.5절 — 버튼 넷의 문구는 2번 통지 범위다)
+// 끝남 대기 덮개 · 띠(설계 5.3 · 5.5절 — 버튼 셋의 문구는 2번 통지 범위다)
 
 const QUIET: SessionView = {
   cover: null,
@@ -14,7 +15,6 @@ const QUIET: SessionView = {
   seekHidden: false,
   liveHidden: false,
   liveChecking: false,
-  recordEmphasis: false,
   vodReady: false,
   startHeld: false,
 };
@@ -25,26 +25,30 @@ describe('PlayerSessionOverlay', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('재접속 대기 덮개는 「이어지는지 확인」 문구와 「녹화 보기」를 늘 둔다', async () => {
-    const onAction = vi.fn();
-    render(
-      <PlayerSessionOverlay
-        view={{ ...QUIET, cover: 'checking', actions: ['record'] }}
-        onAction={onAction}
-      />,
-    );
+  it('재접속 대기 덮개는 「이어지는지 확인」 문구다 · 제안이 없으면 단추가 없다', () => {
+    render(<PlayerSessionOverlay view={{ ...QUIET, cover: 'checking' }} onAction={vi.fn()} />);
     expect(screen.getByRole('status')).toHaveTextContent('방송이 이어지는지 확인하고 있어요');
-    await userEvent.click(screen.getByRole('button', { name: '녹화 보기' }));
-    expect(onAction).toHaveBeenCalledWith('record');
+    expect(screen.queryAllByRole('button')).toEqual([]);
+  });
+
+  it('T2-1 끝남 대기 덮개(명부 ended 뒤 포함)에 「녹화 보기」 가 없다 · T2-2 단추에 강조 속성이 없다(POK-547)', () => {
+    const NOW = Date.parse('2026-10-25T06:00:00.000Z');
+    const opened = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: 'live.m3u8' });
+    const ending = transition(opened, { type: 'live-closed' }, NOW).state;
+    const rostered = transition(ending, { type: 'roster-ended' }, NOW).state;
+    for (const state of [ending, rostered]) {
+      const { container, unmount } = render(
+        <PlayerSessionOverlay view={sessionView(state, NOW)} onAction={vi.fn()} />,
+      );
+      expect(screen.getByRole('status')).toHaveTextContent('방송이 이어지는지 확인하고 있어요');
+      expect(screen.queryByRole('button', { name: '녹화 보기' })).toBeNull();
+      expect(container.querySelectorAll('[data-emphasis]')).toHaveLength(0);
+      unmount();
+    }
   });
 
   it('재접속 대기 뒤에는 「다시보기 준비 중」이다', () => {
-    render(
-      <PlayerSessionOverlay
-        view={{ ...QUIET, cover: 'preparing', actions: ['record'] }}
-        onAction={vi.fn()}
-      />,
-    );
+    render(<PlayerSessionOverlay view={{ ...QUIET, cover: 'preparing' }} onAction={vi.fn()} />);
     expect(screen.getByRole('status')).toHaveTextContent('다시보기 준비 중');
   });
 
@@ -52,7 +56,7 @@ describe('PlayerSessionOverlay', () => {
     const onAction = vi.fn();
     const { rerender } = render(
       <PlayerSessionOverlay
-        view={{ ...QUIET, cover: 'checking', actions: ['record', 'go-live'] }}
+        view={{ ...QUIET, cover: 'checking', actions: ['go-live'] }}
         onAction={onAction}
       />,
     );
@@ -60,7 +64,7 @@ describe('PlayerSessionOverlay', () => {
     expect(onAction).toHaveBeenLastCalledWith('go-live');
     rerender(
       <PlayerSessionOverlay
-        view={{ ...QUIET, cover: 'checking', actions: ['record', 'new-broadcast'] }}
+        view={{ ...QUIET, cover: 'checking', actions: ['new-broadcast'] }}
         onAction={onAction}
       />,
     );
@@ -72,7 +76,7 @@ describe('PlayerSessionOverlay', () => {
     const onAction = vi.fn();
     render(
       <PlayerSessionOverlay
-        view={{ ...QUIET, actions: ['record', 'vod'], vodReady: true }}
+        view={{ ...QUIET, actions: ['vod'], vodReady: true }}
         onAction={onAction}
       />,
     );
@@ -91,19 +95,6 @@ describe('PlayerSessionOverlay', () => {
     expect(onAction).toHaveBeenCalledWith('new-broadcast');
   });
 
-  it('명부 ended 면 「녹화 보기」를 기본 강조로 둔다', () => {
-    render(
-      <PlayerSessionOverlay
-        view={{ ...QUIET, cover: 'preparing', actions: ['record'], recordEmphasis: true }}
-        onAction={vi.fn()}
-      />,
-    );
-    expect(screen.getByRole('button', { name: '녹화 보기' })).toHaveAttribute(
-      'data-emphasis',
-      'true',
-    );
-  });
-
   it('LIVE 를 눌러 지금 방송을 확인하는 동안 알린다', () => {
     render(<PlayerSessionOverlay view={{ ...QUIET, liveChecking: true }} onAction={vi.fn()} />);
     expect(screen.getByRole('status')).toHaveTextContent('지금 방송을 확인하고 있어요');
@@ -112,7 +103,7 @@ describe('PlayerSessionOverlay', () => {
   it('접근성 위반이 없다', async () => {
     const { container } = render(
       <PlayerSessionOverlay
-        view={{ ...QUIET, cover: 'checking', actions: ['record', 'go-live'] }}
+        view={{ ...QUIET, cover: 'checking', actions: ['go-live'] }}
         onAction={vi.fn()}
       />,
     );

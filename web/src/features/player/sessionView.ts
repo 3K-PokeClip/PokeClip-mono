@@ -24,8 +24,6 @@ export interface SessionView {
   liveHidden: boolean;
   /** LIVE 를 눌러 지금 방송을 확인하는 중 */
   liveChecking: boolean;
-  /** 「녹화 보기」를 기본 강조로 둔다(명부 ended) */
-  recordEmphasis: boolean;
   /** 「다시보기 준비됨」 — 아직 보는 시청자에게 띠로 */
   vodReady: boolean;
   /**
@@ -59,10 +57,11 @@ function endingCover(phase: EndingPhase, waiting: boolean): SessionView['cover']
   return waiting ? 'checking' : 'preparing';
 }
 
+/** 끝남 대기의 단추 — 버튼 규칙이 제안한 것뿐이다. 제안이 없으면 없다(녹화 출구 없음 · POK-547) */
 function offerActions(session: PlaybackSessionState): SessionButton[] {
-  if (session.offer?.kind === 'go-live') return ['record', 'go-live'];
-  if (session.offer?.kind === 'new-broadcast') return ['record', 'new-broadcast'];
-  return ['record'];
+  if (session.offer?.kind === 'go-live') return ['go-live'];
+  if (session.offer?.kind === 'new-broadcast') return ['new-broadcast'];
+  return [];
 }
 
 export function sessionView(session: PlaybackSessionState, now: number): SessionView {
@@ -73,7 +72,6 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
     seekHidden: false,
     liveHidden: false,
     liveChecking: session.liveChecking,
-    recordEmphasis: false,
     vodReady: false,
     startHeld: isPlayerStartHeld(session),
   };
@@ -85,14 +83,13 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
       cover: endingCover(phase, waiting),
       actions: offerActions(session),
       seekHidden: phase.atEnd && phase.origin === 'live',
-      recordEmphasis: session.rosterEnded,
     };
   }
   if (phase.kind === 'vod-offered') {
     return {
       ...base,
       cover: phase.atEnd ? 'vod-ready' : null,
-      actions: ['record', 'vod'],
+      actions: ['vod'],
       seekHidden: phase.atEnd && session.source.kind === 'live',
       vodReady: !phase.atEnd,
     };

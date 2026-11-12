@@ -138,7 +138,7 @@ describe('ending-wait 국면', () => {
     expect(sessionView(ended, NOW).cover).toBe('checking');
   });
 
-  it('회차별 404 + 13초 · 60초 · 290초 뒤 이어짐 증거 → 라이브 재세움 1회 · recorded 0(R21 · R53)', () => {
+  it('회차별 404 + 13초 · 60초 · 290초 뒤 이어짐 증거 → 라이브 재세움 1회 · 닫힘 0(R21 · R53)', () => {
     for (const gapMs of [13_000, 60_000, 290_000]) {
       const start = endingFromLiveClosed();
       const steps: Array<[SessionEvent, number]> = [];
@@ -190,10 +190,10 @@ describe('ending-wait 국면', () => {
       const watching = run(rewindAt(T0 + 20 * MIN), order()).state;
       expect(watching.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: false });
       expect(watching.offer).toBeNull();
-      expect(sessionView(watching, NOW).actions).toEqual(['record']);
+      expect(sessionView(watching, NOW).actions).toEqual([]);
       const ended = run(watching, [[{ type: 'end-reached' }], [other()]]).state;
       expect(ended.offer).toEqual({ kind: 'new-broadcast', goTo: 'r-B' });
-      expect(sessionView(ended, NOW).actions).toEqual(['record', 'new-broadcast']);
+      expect(sessionView(ended, NOW).actions).toEqual(['new-broadcast']);
     }
     // live 기원은 develop 그대로 — 끝에 닿기 전(ENDLIST)에도 띠에 낸다
     const live = run(liveWithEntry(), [[{ type: 'endlist' }], [other()]]).state;
@@ -245,29 +245,29 @@ describe('ending-wait 국면', () => {
     expect(effects).toEqual([]);
   });
 
-  it('회차별 404 · 이어짐 없음: 360초 직전까지 recorded 0 · 뒤 첫 404 에 atEnd:true 는 recorded(R53 · R32)', () => {
+  it('회차별 404 · 이어짐 없음: 360초 직전까지 닫힘 0 · 뒤 첫 404 에 atEnd:true 는 past 로 닫는다(R53 · R32 · POK-547)', () => {
     const start = endingFromLiveClosed();
     const before = run(start, [[{ type: 'round-poll', result: NONE }, NOW + RESUME_WAIT_MS - 1]]);
     expect(before.state.closed).toBeNull();
     const after = run(start, [[{ type: 'round-poll', result: NONE }, NOW + RESUME_WAIT_MS]]);
-    expect(after.effects).toEqual([{ kind: 'close', reason: 'recorded' }]);
+    expect(after.effects).toEqual([{ kind: 'close', reason: 'past' }]);
   });
 
-  it('회차별 404 · 360초 뒤 · atEnd:false 는 closeOnEnd · 폴링 0 · 끝 도달에 덮개 없이 recorded', () => {
+  it('회차별 404 · 360초 뒤 · atEnd:false 는 closeOnEnd · 폴링 0 · 끝 도달에 덮개 없이 past', () => {
     const start = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
     const after = run(start, [[{ type: 'round-poll', result: NONE }, NOW + RESUME_WAIT_MS]]).state;
     expect(after.phase).toMatchObject({ kind: 'ending-wait', atEnd: false, closeOnEnd: true });
     expect(pollTargets(after)).toEqual({ stream: false, round: false });
     expect(after.source.url).toBe(A1);
     const done = run(after, [[{ type: 'end-reached' }]]);
-    expect(done.effects).toEqual([{ kind: 'close', reason: 'recorded' }]);
+    expect(done.effects).toEqual([{ kind: 'close', reason: 'past' }]);
   });
 
   it('회차별 mode:ended 는 대기 안이어도 곧바로 종국이다', () => {
     const { effects } = run(endingFromLiveClosed(), [
       [{ type: 'round-poll', result: status({ mode: 'ended' }) }, NOW + 10_000],
     ]);
-    expect(effects).toEqual([{ kind: 'close', reason: 'recorded' }]);
+    expect(effects).toEqual([{ kind: 'close', reason: 'past' }]);
   });
 
   it('회차별 ending · live · null · 503 은 기다린다', () => {
@@ -329,7 +329,7 @@ describe('ending-wait 국면', () => {
     expect(sessionView(state, NOW).actions).toContain('vod');
   });
 
-  it('20분: atEnd:false 는 소스 교체 0 · 세션 유지 · 폴링 0 / atEnd:true 는 recorded', () => {
+  it('20분: atEnd:false 는 소스 교체 0 · 세션 유지 · 폴링 0 / atEnd:true 는 past', () => {
     const playing = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
     const late = run(playing, [[{ type: 'tick' }, NOW + ENDING_WAIT_MS]]);
     expect(late.state.source).toEqual(playing.source);
@@ -339,7 +339,7 @@ describe('ending-wait 국면', () => {
     // 20분 직전에는 닫지 않는다
     expect(run(atEnd, [[{ type: 'tick' }, NOW + ENDING_WAIT_MS - 1]]).effects).toEqual([]);
     expect(run(atEnd, [[{ type: 'tick' }, NOW + ENDING_WAIT_MS]]).effects).toEqual([
-      { kind: 'close', reason: 'recorded' },
+      { kind: 'close', reason: 'past' },
     ]);
   });
 
@@ -364,22 +364,19 @@ describe('ending-wait 국면', () => {
     const start = endingFromLiveClosed();
     const other = liveReady(B1, NOW + MIN, NOW + 2 * MIN);
     const goLive = run(start, [[streamPoll(other, X_A)]]).state;
-    expect(sessionView(goLive, NOW).actions).toEqual(['record', 'go-live']);
+    expect(sessionView(goLive, NOW).actions).toEqual(['go-live']);
     expect(goLive.phase.kind).toBe('ending-wait');
     const newOne = run(start, [[streamPoll(other, X_B)]]).state;
-    expect(sessionView(newOne, NOW).actions).toEqual(['record', 'new-broadcast']);
+    expect(sessionView(newOne, NOW).actions).toEqual(['new-broadcast']);
     for (const x of [X_EMPTY, X_UNKNOWN]) {
       const none = run(start, [[streamPoll(other, x)]]).state;
-      expect(sessionView(none, NOW).actions).toEqual(['record']);
+      expect(sessionView(none, NOW).actions).toEqual([]);
     }
   });
 
-  it('버튼 — 녹화 보기 · 라이브 보기 · 새 방송 보기가 세션을 닫는 사유', () => {
+  it('버튼 — 라이브 보기 · 새 방송 보기가 세션을 닫는 사유', () => {
     const start = endingFromLiveClosed();
     const other = liveReady(B1, NOW + MIN, NOW + 2 * MIN);
-    expect(run(start, [[{ type: 'button', which: 'record' }]]).effects).toEqual([
-      { kind: 'close', reason: 'recorded' },
-    ]);
     const a = run(start, [[streamPoll(other, X_A)]]).state;
     expect(run(a, [[{ type: 'button', which: 'go-live' }]]).effects).toEqual([
       { kind: 'close', reason: 'go-live' },
@@ -405,24 +402,25 @@ describe('ending-wait 국면', () => {
 
   it('회차 종국이 이미 선 뒤의 시한 검사는 상태를 새로 만들지 않는다(같은 객체 — cc L)', () => {
     const waiting = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
-    const record = run(waiting, [
+    const decided = run(waiting, [
       [{ type: 'round-poll', result: status({ mode: 'ended' }) }],
     ]).state;
-    expect(record.phase).toMatchObject({ closeOnEnd: true, atEnd: false });
-    expect(transition(record, { type: 'tick' }, NOW + ENDING_WAIT_MS).state).toBe(record);
+    expect(decided.phase).toMatchObject({ closeOnEnd: true, atEnd: false });
+    expect(transition(decided, { type: 'tick' }, NOW + ENDING_WAIT_MS).state).toBe(decided);
   });
 
-  it('덮개 문구: 재접속 대기 동안 「이어지는지 확인」, 뒤에는 「준비 중」 · 녹화 보기는 늘 있다', () => {
+  it('덮개 문구: 재접속 대기 동안 「이어지는지 확인」, 뒤에는 「준비 중」 · 제안이 없으면 단추가 없다', () => {
     const atEnd = endingFromLiveClosed();
     expect(sessionView(atEnd, NOW + RESUME_WAIT_MS - 1).cover).toBe('checking');
     expect(sessionView(atEnd, NOW + RESUME_WAIT_MS).cover).toBe('preparing');
-    expect(sessionView(atEnd, NOW).actions).toContain('record');
+    expect(sessionView(atEnd, NOW).actions).toEqual([]);
   });
 
-  it('명부 ended 는 「녹화 보기」를 강조할 뿐 자동 전환하지 않는다', () => {
-    const { state, effects } = run(endingFromLiveClosed(), [[{ type: 'roster-ended' }]]);
+  it('T1-4 명부 ended 는 끝남 대기의 상태를 바꾸지 않는다 — 효과 0 · 자동 전환 0(POK-547)', () => {
+    const start = endingFromLiveClosed();
+    const { state, effects } = run(start, [[{ type: 'roster-ended' }]]);
     expect(effects).toEqual([]);
-    expect(sessionView(state, NOW).recordEmphasis).toBe(true);
+    expect(state).toEqual(start);
     expect(state.closed).toBeNull();
   });
 
@@ -440,7 +438,7 @@ describe('ending-wait 국면', () => {
     const early = run(again, [[{ type: 'round-poll', result: NONE }, second + RESUME_WAIT_MS - 1]]);
     expect(early.state.closed).toBeNull();
     const late = run(again, [[{ type: 'round-poll', result: NONE }, second + RESUME_WAIT_MS]]);
-    expect(late.effects).toEqual([{ kind: 'close', reason: 'recorded' }]);
+    expect(late.effects).toEqual([{ kind: 'close', reason: 'past' }]);
   });
 
   it('LIVE 직후 라이브가 닫히면(재생 실패) endingSince 는 그대로다', () => {
@@ -451,5 +449,79 @@ describe('ending-wait 국면', () => {
     ]).state;
     expect(failed.phase.kind).toBe('ending-wait');
     expect(failed.endingSince).toBe(NOW);
+  });
+});
+
+describe('끝남 대기 종국 → 세션을 닫고 지난 방송 판정으로(POK-547 T1 · T2)', () => {
+  /** 종국 셋 — 회차별 ended · 재접속 대기 뒤 회차별 404 · 20분 시한. 끝남 대기는 NOW 에 들었다 */
+  const finals: Array<[string, SessionEvent, number]> = [
+    ['회차별 ended', { type: 'round-poll', result: status({ mode: 'ended' }) }, NOW + 10_000],
+    ['재접속 대기 뒤 회차별 404', { type: 'round-poll', result: NONE }, NOW + RESUME_WAIT_MS],
+    ['20분 시한', { type: 'tick' }, NOW + ENDING_WAIT_MS],
+  ];
+
+  for (const [name, event, at] of finals) {
+    it(`T1-1 ${name} · 끝에 닿은 시청자 → past 로 닫는다`, () => {
+      const { state, effects } = run(endingFromLiveClosed(), [[event, at]]);
+      expect(effects).toEqual([{ kind: 'close', reason: 'past' }]);
+      expect(state.closed).toBe('past');
+    });
+
+    it(`T1-2 ${name} · 아직 보는 시청자 → 끝에서 닫기로 정하고 폴링을 끈 뒤 끝 도달에 past`, () => {
+      const playing = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
+      const decided = run(playing, [[event, at]]);
+      expect(decided.effects).toEqual([]);
+      expect(decided.state.phase).toMatchObject({
+        kind: 'ending-wait',
+        atEnd: false,
+        closeOnEnd: true,
+      });
+      expect(pollTargets(decided.state)).toEqual({ stream: false, round: false });
+      const done = run(decided.state, [[{ type: 'end-reached' }, at]]);
+      expect(done.effects).toEqual([{ kind: 'close', reason: 'past' }]);
+    });
+  }
+
+  it('T1-5 본 구간과 안 겹치는 vod 답은 끝남 대기를 풀지 않고(R46) 20분 시한에 past 로 닫는다(cc 1)', () => {
+    const start = endingFromLiveClosed();
+    const otherRound = status({
+      ready: true,
+      mode: 'vod',
+      url: VOD,
+      firstPdtMs: NOW + 10 * MIN,
+      headPdtMs: NOW + 20 * MIN,
+    });
+    const kept = run(start, [[{ type: 'round-poll', result: otherRound }, NOW + MIN]]);
+    expect(kept.state.phase.kind).toBe('ending-wait');
+    expect(kept.effects).toEqual([]);
+    const late = run(kept.state, [[{ type: 'tick' }, NOW + ENDING_WAIT_MS]]);
+    expect(late.effects).toEqual([{ kind: 'close', reason: 'past' }]);
+  });
+
+  it('T2-1 국면 × 제안 표 — 덮개 · 띠의 단추에 녹화 길이 없다', () => {
+    const atEnd = endingFromLiveClosed();
+    const offers: Array<[PlaybackSessionState['offer'], string[]]> = [
+      [null, []],
+      [{ kind: 'go-live' }, ['go-live']],
+      [{ kind: 'new-broadcast', goTo: 'r-B' }, ['new-broadcast']],
+    ];
+    for (const [offer, actions] of offers) {
+      expect(sessionView({ ...atEnd, offer }, NOW).actions).toEqual(actions);
+      const watching = { ...atEnd, offer, phase: { ...atEnd.phase, atEnd: false } };
+      expect(sessionView(watching as PlaybackSessionState, NOW).actions).toEqual(actions);
+    }
+    const offered = run(rewindAt(T0 + 20 * MIN), [
+      [{ type: 'end-reached' }],
+      [
+        {
+          type: 'round-poll',
+          result: status({ ready: true, mode: 'vod', url: VOD, firstPdtMs: T0, headPdtMs: NOW }),
+        },
+      ],
+    ]).state;
+    expect(offered.phase.kind).toBe('vod-offered');
+    expect(sessionView(offered, NOW).actions).toEqual(['vod']);
+    expect(sessionView(fresh(), NOW).actions).toEqual([]);
+    expect(sessionView(rewindAt(T0 + 20 * MIN), NOW).actions).toEqual([]);
   });
 });

@@ -54,15 +54,13 @@ export function onEnding(
     case 'end-reached':
     case 'live-closed':
       if (phase.atEnd) return stateOnly(session);
-      if (phase.closeOnEnd) return close(session, 'recorded');
+      if (phase.closeOnEnd) return close(session, 'past');
       return stateOnly({ ...session, phase: { ...phase, atEnd: true } });
     case 'tick':
       if (session.endingSince === null || now - session.endingSince < ENDING_WAIT_MS) {
         return stateOnly(session);
       }
       return roundFinal(session, phase);
-    case 'roster-ended':
-      return stateOnly({ ...session, rosterEnded: true });
     case 'button':
       return onEndingButton(session, event.which);
     case 'seek':
@@ -102,7 +100,8 @@ function onEndingStreamPoll(
   if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
   const sameRound = isThisRound(session, currentX);
   // 되감기의 자동 이음은 같은 방송(X = 이 회차)이 끊겼다 돌아온 경우뿐이다 — 다른 방송 · 모름은 버튼 규칙으로.
-  // 막힌 세션은 잇지 않는다 — 회차별 조회의 겹치는 vod · 종국 · 20분과 사람 단추로만 풀린다(POK-528 U1)
+  // 막힌 세션은 잇지 않는다 — 회차별 조회의 겹치는 vod · 종국 · 20분과 사람 단추(라이브 보기 · 새 방송 보기 — 제안됐을
+  // 때)로만 풀린다(POK-528 U1)
   const joinable = !phase.blocked && (phase.origin === 'live' || sameRound);
   const join = joinPoint(session, phase);
   if (joinable && within(join, live.firstPdtMs, live.headPdtMs)) {
@@ -111,7 +110,6 @@ function onEndingStreamPoll(
       roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
       endingSince: null,
       offer: null,
-      rosterEnded: false,
       entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
     };
     if (phase.origin === 'rewind') {
@@ -162,16 +160,16 @@ function onEndingRoundPoll(
 }
 
 /**
- * 마지막 확인(POK-528 W6 · E76) — 녹화로 정한 뒤 404 로 끝에 닿을 수 없게 된 세션의 회차별
+ * 마지막 확인(POK-528 W6 · E76) — 닫기로 정한 뒤 404 로 끝에 닿을 수 없게 된 세션의 회차별
  * 답 하나로 끝낸다. 본 구간과 겹치는 vod 면 같은 자리 다시보기, 그 밖(ending · ended · 404 ·
- * 잠시 불가 · 요청 시한 · 겹침 불통과)이면 곧바로 녹화다 — 두 번째 확인은 없다
+ * 잠시 불가 · 요청 시한 · 겹침 불통과)이면 곧바로 닫는다(past) — 두 번째 확인은 없다
  */
 function onFinalCheckRoundPoll(
   session: PlaybackSessionState,
   result: RewindStatusResult,
 ): Transition {
   const vod = seenRoundVod(session, result);
-  return vod === null ? close(session, 'recorded') : openVodHere(session, vod);
+  return vod === null ? close(session, 'past') : openVodHere(session, vod);
 }
 
 /**
@@ -194,17 +192,17 @@ function seenRoundVod(
 
 /**
  * 회차 종국(회차별 ended · 재접속 대기 뒤 404 · 20분 시한) — 끝에 닿았거나 막혔으면(끝까지 볼 수 없다 · POK-528 W5)
- * 녹화로, 아니면 끝까지 본 뒤 녹화로
+ * 곧바로, 아니면 끝까지 본 뒤 세션을 닫는다(past — 지난 방송 판정으로 넘김 · POK-547)
  */
 function roundFinal(session: PlaybackSessionState, phase: EndingPhase): Transition {
-  if (phase.atEnd || phase.blocked) return close(session, 'recorded');
+  if (phase.atEnd || phase.blocked) return close(session, 'past');
   if (phase.closeOnEnd) return stateOnly(session);
   return stateOnly({ ...session, phase: { ...phase, closeOnEnd: true } });
 }
 
 /**
  * 되감기 조각 404(POK-528 계획 3-2) — 이 목록을 끝까지 재생할 수 없으니 지금 프레임에서 멈춘다.
- * 녹화로 정하기 전이면 막고, 녹화로 정한 뒤면 끝 도달을 기다릴 수 없으니 회차별 조회를 마지막으로
+ * 닫기로 정하기 전이면 막고, 닫기로 정한 뒤면 끝 도달을 기다릴 수 없으니 회차별 조회를 마지막으로
  * 한 번 한다(W6). 그 물음은 보통 pollTargets 가 회차별 경로를 켜는 렌더에서 곧바로 나간다. 다만
  * 경로가 꺼졌다 켜지는 일이 한 렌더 묶음에 겹쳐 켜짐이 렌더에 드러나지 않으면, 이미 걸려 있던
  * 다음 정기 물음(REWIND_POLL_MS 주기)이 그 물음이 된다. 이미 막혔거나 마지막 확인 중이면 그대로다
@@ -218,7 +216,6 @@ function onEndingSegmentGone(session: PlaybackSessionState, phase: EndingPhase):
 }
 
 function onEndingButton(session: PlaybackSessionState, which: SessionButton): Transition {
-  if (which === 'record') return close(session, 'recorded');
   if (which === 'go-live' && session.offer?.kind === 'go-live') return close(session, 'go-live');
   if (which === 'new-broadcast' && session.offer?.kind === 'new-broadcast') {
     return close(session, 'left', session.offer.goTo);

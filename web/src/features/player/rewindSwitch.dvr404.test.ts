@@ -182,7 +182,7 @@ function expectStillBlocked(
   expect(kinds(result.effects)).not.toContain('probe-live');
 }
 
-describe('끝남 대기의 되감기 조각 404 → 녹화로 정하기 전이면 blocked(계획 3-2)', () => {
+describe('끝남 대기의 되감기 조각 404 → 닫기로 정하기 전이면 blocked(계획 3-2)', () => {
   it('ENDLIST 뒤 404 는 막힘을 세우고 지금 프레임에서 멈춘다(cc 시나리오 A 셋째)', () => {
     const s = endedByEndlist();
     const done = feed(s, [gone(s)]);
@@ -202,7 +202,7 @@ describe('끝남 대기의 되감기 조각 404 → 녹화로 정하기 전이�
     const s = blockedOf(endedByEndlist());
     const view = sessionView(s, R);
     expect(view.cover).toBe('preparing');
-    expect(view.actions).toEqual(['record']);
+    expect(view.actions).toEqual([]);
     expect(pollTargets(s)).toEqual({ stream: true, round: true });
   });
 
@@ -232,7 +232,7 @@ describe('끝남 대기의 되감기 조각 404 → 녹화로 정하기 전이�
     expect(late.state.phase).toEqual(s.phase);
   });
 
-  it('녹화로 정한 끝남 대기(20분 시한)의 404 는 막힘이 아니라 마지막 확인이다(blocked ⇒ ¬closeOnEnd · c4)', () => {
+  it('닫기로 정한 끝남 대기(20분 시한)의 404 는 막힘이 아니라 마지막 확인이다(blocked ⇒ ¬closeOnEnd · c4)', () => {
     const s = feed(endedByEndlist(), [TICK], R + ENDING_WAIT_MS).state;
     expect(s.phase).toMatchObject({ closeOnEnd: true });
     const late = feed(s, [gone(s)], R + ENDING_WAIT_MS);
@@ -365,16 +365,16 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
       expect(moved.effects).toEqual([]);
     });
 
-    it(`W5 · ${name}: 겹침 불통과 · 재접속 대기 안 404 는 그대로 · ended · 대기 뒤 404 · 20분은 녹화`, () => {
+    it(`W5 · ${name}: 겹침 불통과 · 재접속 대기 안 404 는 그대로 · ended · 대기 뒤 404 · 20분은 past 로 닫는다`, () => {
       const s = make();
       const far = vodReady(NOW + 10 * MIN, NOW + 20 * MIN);
       expectStillBlocked(feed(s, [{ type: 'round-poll', result: far }]), s);
       expectStillBlocked(feed(s, [{ type: 'round-poll', result: NONE }], R + MIN), s);
       const ended = feed(s, [{ type: 'round-poll', result: status({ mode: 'ended' }) }]);
-      expect(ended.state.closed).toBe('recorded');
+      expect(ended.state.closed).toBe('past');
       const none = feed(s, [{ type: 'round-poll', result: NONE }], R + RESUME_WAIT_MS);
-      expect(none.state.closed).toBe('recorded');
-      expect(feed(s, [TICK], R + ENDING_WAIT_MS).state.closed).toBe('recorded');
+      expect(none.state.closed).toBe('past');
+      expect(feed(s, [TICK], R + ENDING_WAIT_MS).state.closed).toBe('past');
     });
   }
 });
@@ -396,28 +396,28 @@ describe('막힌 세션의 출구 — W5 셋(계획 3-4)', () => {
     expectStillBlocked(kept, s);
   });
 
-  it('회차별 ended → 곧바로 녹화', () => {
+  it('회차별 ended → 곧바로 past 로 닫는다', () => {
     const s = blockedOf(endedByEndlist());
     const done = feed(s, [{ type: 'round-poll', result: status({ mode: 'ended' }) }]);
-    expect(done.state.closed).toBe('recorded');
+    expect(done.state.closed).toBe('past');
     expect(kinds(done.effects)).toEqual(['close']);
   });
 
-  it('회차별 404 는 재접속 대기(360초) 안이면 그대로 · 뒤면 녹화', () => {
+  it('회차별 404 는 재접속 대기(360초) 안이면 그대로 · 뒤면 past 로 닫는다', () => {
     const s = blockedOf(endedByEndlist());
     const early = feed(s, [{ type: 'round-poll', result: NONE }], R + MIN);
     expectStillBlocked(early, s);
     const late = feed(s, [{ type: 'round-poll', result: NONE }], R + RESUME_WAIT_MS);
-    expect(late.state.closed).toBe('recorded');
+    expect(late.state.closed).toBe('past');
   });
 
-  it('20분 시한 → 끝에 닿지 않았어도 곧바로 녹화(roundFinal 의 막힘)', () => {
+  it('20분 시한 → 끝에 닿지 않았어도 곧바로 past 로 닫는다(roundFinal 의 막힘)', () => {
     const s = blockedOf(endedByEndlist());
     const done = feed(s, [TICK], R + ENDING_WAIT_MS);
-    expect(done.state.closed).toBe('recorded');
+    expect(done.state.closed).toBe('past');
   });
 
-  it('W9 한계 고정: vod 불통과 · 잠시 불가가 이어지면 20분까지 덮개 · 녹화 단추, 그 뒤 녹화', () => {
+  it('W9 한계 고정: vod 불통과 · 잠시 불가가 이어지면 20분까지 덮개(제안이 없으면 단추 없음), 그 뒤 past', () => {
     let s = blockedOf(endedByEndlist());
     const base = s;
     const far = vodReady(NOW + 10 * MIN, NOW + 20 * MIN);
@@ -426,16 +426,10 @@ describe('막힌 세션의 출구 — W5 셋(계획 3-4)', () => {
       const result = i % 2 === 0 ? UNAVAILABLE : far;
       const kept = feed(s, [{ type: 'round-poll', result }], at);
       expectStillBlocked(kept, base);
-      expect(sessionView(kept.state, at).actions).toContain('record');
+      expect(sessionView(kept.state, at).actions).toEqual([]);
       s = kept.state;
     }
-    expect(feed(s, [TICK], R + ENDING_WAIT_MS).state.closed).toBe('recorded');
-  });
-
-  it('녹화 단추는 늘 출구다', () => {
-    const s = blockedOf(endedByEndlist());
-    const done = feed(s, [{ type: 'button', which: 'record' }]);
-    expect(done.state.closed).toBe('recorded');
+    expect(feed(s, [TICK], R + ENDING_WAIT_MS).state.closed).toBe('past');
   });
 });
 
@@ -471,7 +465,7 @@ describe('막힌 세션의 사람 단추(P22 · U3)', () => {
     const offered = feed(s, [streamPoll(liveReady(A2, join - MIN, join + MIN), X_A)]);
     expectStillBlocked(offered, s);
     expect(offered.state.offer).toEqual({ kind: 'go-live' });
-    expect(sessionView(offered.state, R).actions).toEqual(['record', 'go-live']);
+    expect(sessionView(offered.state, R).actions).toEqual(['go-live']);
     const done = feed(offered.state, [{ type: 'button', which: 'go-live' }]);
     expect(done.state.closed).toBe('go-live');
   });
@@ -482,7 +476,7 @@ describe('막힌 세션의 사람 단추(P22 · U3)', () => {
     expect(other.state.offer).toEqual({ kind: 'new-broadcast', goTo: 'r-B' });
     const view = sessionView(other.state, R);
     expect(view.cover).toBe('preparing');
-    expect(view.actions).toEqual(['record', 'new-broadcast']);
+    expect(view.actions).toEqual(['new-broadcast']);
   });
 });
 
@@ -575,7 +569,7 @@ describe('T1 · U1 회귀 — 막힘은 W5 밖에서 풀리지 않는다(cx H1)'
     expectStillBlocked(kept, s);
   });
 
-  it('섞인 입력(늦은 P1 · X 모름 · 404 재발 · 새 url · 이미 본 url)을 지나 20분에 녹화', () => {
+  it('섞인 입력(늦은 P1 · X 모름 · 404 재발 · 새 url · 이미 본 url)을 지나 20분에 past 로 닫는다', () => {
     const s = blockedOf(endedAtTail(true));
     const events: Array<[SessionEvent, number]> = [
       [pos(E, { playing: true }), R + 200],
@@ -594,7 +588,7 @@ describe('T1 · U1 회귀 — 막힘은 W5 밖에서 풀리지 않는다(cx H1)'
     }
     const since = s.endingSince;
     if (since === null) throw new Error('끝남 대기의 20분 기준 시각이 없다');
-    expect(feed(state, [TICK], since + ENDING_WAIT_MS).state.closed).toBe('recorded');
+    expect(feed(state, [TICK], since + ENDING_WAIT_MS).state.closed).toBe('past');
   });
 });
 

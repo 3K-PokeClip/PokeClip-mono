@@ -81,13 +81,6 @@
   outline-offset: 2px;
 }
 
-/* 명부 ended — 「녹화 보기」가 기본 선택이다 */
-.action[data-emphasis='true'] {
-  border-color: transparent;
-  background: rgb(240 249 255); /* 테마 고정 */
-  color: rgb(3 10 24); /* 테마 고정 */
-}
-
 @keyframes session-fade-in {
   from {
     opacity: 0;

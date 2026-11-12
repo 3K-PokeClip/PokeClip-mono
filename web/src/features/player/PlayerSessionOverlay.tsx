@@ -15,7 +15,6 @@ const COVER_TEXT = {
 } as const;
 
 const BUTTON_TEXT: Record<SessionButton, string> = {
-  record: '녹화 보기',
   vod: '다시보기 보기',
   'go-live': '라이브 보기',
   'new-broadcast': '새 방송 보기',
@@ -30,13 +29,7 @@ function Actions({ view, onAction }: PlayerSessionOverlayProps) {
   return (
     <div className={styles.actions}>
       {view.actions.map((which) => (
-        <button
-          key={which}
-          type="button"
-          className={styles.action}
-          data-emphasis={which === 'record' && view.recordEmphasis ? 'true' : undefined}
-          onClick={() => onAction(which)}
-        >
+        <button key={which} type="button" className={styles.action} onClick={() => onAction(which)}>
           {BUTTON_TEXT[which]}
         </button>
       ))}

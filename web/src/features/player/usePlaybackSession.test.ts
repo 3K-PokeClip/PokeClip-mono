@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RewindStatusResult } from '@/api/rewindStatus';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { handedOff } from './handoffTestKit';
 import { HANDOFF_NOTICE } from './liveHandoff';
@@ -20,6 +21,11 @@ const A1 = `${BASE}/dvr/key-1/a1/index.m3u8`;
 const B1 = `${BASE}/dvr/key-1/b1/index.m3u8`;
 const STREAM = `${BASE}/api/streams/key-1/rewind`;
 const ROUND = `${BASE}/api/streams/key-1/rounds/r-A/rewind`;
+/** 회차별 경로의 ended 답 — 끝남 대기의 종국 */
+const ROUND_ENDED: RewindStatusResult = {
+  kind: 'ok',
+  status: { ready: false, mode: 'ended', url: null, firstPdtMs: null, headPdtMs: null },
+};
 
 function readyBody(url: string, first: number, head: number) {
   return {
@@ -112,6 +118,7 @@ describe('여는 조건 · 폴링', () => {
     const onClose = vi.fn();
     const { result } = renderHook(() => usePlaybackSession(options({ onClose })));
     await flush();
+    const endingSince = Date.now();
     act(() => result.current?.dispatch({ type: 'live-closed' }));
     await flush();
     expect(calls).toContain(ROUND);
@@ -120,7 +127,10 @@ describe('여는 조건 · 폴링', () => {
     expect(onClose).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTime(20_000));
     await flush();
-    expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ reason: 'recorded' }));
+    // 닫는 사유는 past 이고, 끝남 대기를 연 시각(지난 방송 판정의 404 유예 원점 폴백)을 함께 넘긴다(POK-547 T3-1)
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'past', endingSinceMs: endingSince }),
+    );
   });
 });
 
@@ -364,9 +374,9 @@ describe('세션 수명 — 앞 세션의 늦은 답(cx H3)', () => {
     act(() => result.current?.liveButton());
     await flush();
     expect(result.current?.state.liveChecking).toBe(true);
-    // 재조회 전에 세션이 녹화 보기로 닫히고 같은 방송|영상 키로 새로 열린다
+    // 재조회 전에 세션이 끝남 대기의 종국(회차별 ended)으로 닫히고 같은 방송|영상 키로 새로 열린다
     act(() => result.current?.dispatch({ type: 'end-reached' }));
-    act(() => result.current?.dispatch({ type: 'button', which: 'record' }));
+    act(() => result.current?.dispatch({ type: 'round-poll', result: ROUND_ENDED }));
     await flush();
     expect(result.current?.state.phase).toEqual({ kind: 'live' });
     rewindTo();

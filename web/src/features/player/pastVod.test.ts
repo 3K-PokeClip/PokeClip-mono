@@ -332,7 +332,7 @@ describe('pastCardMode — T1-4 판정표 10줄(위에서부터 처음 맞는 �
   type Input = Parameters<typeof pastCardMode>[0];
   /** 8줄(playable)에 닿는 입력 — 사례마다 한두 칸만 바꾼다 */
   const PLAYABLE_INPUT: Input = {
-    enteredAfterEnd: true,
+    showsPast: true,
     expired: false,
     vod: READY,
     access: 'ready',
@@ -343,8 +343,8 @@ describe('pastCardMode — T1-4 판정표 10줄(위에서부터 처음 맞는 �
 
   it.each<[string, Input, PastCardMode]>([
     [
-      '1 끝나기 전에 들어온 화면(라이브 · B)',
-      inputWith({ enteredAfterEnd: false }),
+      '1 지난 방송 판정으로 그리지 않는 화면(라이브 · 열린 세션 · go-live · left 로 닫힘)',
+      inputWith({ showsPast: false }),
       { kind: 'notPast' },
     ],
     ['2 보관 만료', inputWith({ expired: true }), blocked('expired')],
@@ -367,9 +367,9 @@ describe('pastCardMode — T1-4 판정표 10줄(위에서부터 처음 맞는 �
   });
 
   describe('경계 — 위 줄이 아래 줄을 이긴다', () => {
-    it('끝나기 전에 들어온 화면이면 만료 · 상태 · 국면과 무관하게 notPast', () => {
+    it('지난 방송 판정으로 그리지 않는 화면이면 만료 · 상태 · 국면과 무관하게 notPast', () => {
       const input = inputWith({
-        enteredAfterEnd: false,
+        showsPast: false,
         expired: true,
         vod: NONE,
         phase: 'failed',

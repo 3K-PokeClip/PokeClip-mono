@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 import { mediaControlBaseUrl } from '@/features/player/mediaSource';
@@ -17,7 +16,7 @@ import { publishLiveData } from './liveDataStore';
 import type { BroadcastStatus } from './useBroadcastClock';
 import type { Reselect } from './useLiveStreamSelection';
 
-// 라이브 화면의 재생 세션 배선(설계 5.5절, POK-200 M5) — 세션을 여는 조건 · 녹화 조회 요청 · 재생 보유 · 「새 방송」 띠를 정한다.
+// 라이브 화면의 재생 세션 배선(설계 5.5절, POK-200 M5) — 세션을 여는 조건 · 지난 방송 판정 화면 · 재생 보유 · 「새 방송」 띠를 정한다.
 // 세션은 이 층(GlassPlayer key 바깥)에 살아 재생기가 다시 마운트돼도 남는다. 명부 ended 는 세션을 닫지 않는다(재조회 신호다).
 
 /** 지금 방송 번호를 묻는 한도 — 넘으면 「모름」이다(설계 5.3절) */
@@ -26,13 +25,6 @@ const X_TIMEOUT_MS = 2_000;
 const PINNED_X_REUSE_MS = 10_000;
 /** 라이브 대시보드 경로 — 고정 화면의 「새 방송 보기」가 이 경로의 ?stream= 으로 간다 */
 const LIVE_DASHBOARD_PATH = '/broadcast/livenow';
-
-/** 녹화 조회 요청 — 그 자리에서 고정한다. 끝 시각이 있어야 같은 키의 다음 방송 녹화가 섞이지 않는다(cc H1) */
-export interface RecordedRequest {
-  /** 찾는 하한(recordingSearchFrom). 시작을 모르는 방송은 끝 12시간 안이고, 그것도 모르면 null */
-  fromMs: number | null;
-  untilMs: number | null;
-}
 
 export interface LiveSessionInput {
   /** 방송 번호(= 회차 ID) */
@@ -44,8 +36,6 @@ export interface LiveSessionInput {
   /** 출입증을 받았거나 필요 없다는 답이 왔다 */
   accessReady: boolean;
   broadcastStatus: BroadcastStatus;
-  startedAt: number | null;
-  endedAt: number | null;
   /** 라이브 목록 주소 */
   liveUrl: string | null;
   /** 보유 중의 다시 고르기(useLiveStreamSelection) — deferred 는 띠, latest(실패면 null)는 지금 방송 번호 X 의 재료 */
@@ -55,17 +45,15 @@ export interface LiveSessionInput {
 export interface LiveSession {
   session: PlaybackSession | null;
   /**
-   * 녹화 조회 요청 — 세션이 녹화로 닫힌 화면(시청자 B)만이다(POK-547 전까지 /playback). null 이면 묻지 않는다. 끝난 뒤 들어온
-   * 화면(A)은 녹화를 묻지 않고 회차 다시보기를 튼다(POK-546)
+   * 지난 방송 판정으로 그리는 화면인가 — 끝난 뒤 들어온 화면(시청자 A: 이 방송|영상 키로 세션을 연 적 없이 명부 ended ·
+   * POK-546 설계 2-4) 또는 세션이 past 로 닫힌 화면(시청자 B · POK-547). 라이브 · 열린 세션(명부 ended 포함) · go-live ·
+   * left 로 닫힌 화면 · 명부 상태 모름은 거짓이다
    */
-  recordedRequest: RecordedRequest | null;
-  /**
-   * 끝난 뒤 들어온 화면(시청자 A) — 이 방송|영상 키로 세션을 연 적 없이 명부가 ended 다(POK-546 설계 2-4). 라이브 · 세션을
-   * 연 화면(열린 채 ended · 녹화로 닫힘) · 명부 상태 모름은 거짓이다
-   */
-  enteredAfterEnd: boolean;
-  /** 세션이 녹화로 닫혔다 — 라이브 주소를 다시 붙이지 않고, 재생기 표시는 끝난 방송이다 */
-  closedRecorded: boolean;
+  showsPast: boolean;
+  /** 세션이 past 로 닫혔다 — 라이브 주소를 다시 붙이지 않고, 재생기 표시는 끝난 방송이다 */
+  closedToPast: boolean;
+  /** past 로 닫힌 화면의 404 유예 원점 폴백(끝남 대기를 연 시각 — SessionClosed.endingSinceMs). 그 밖은 null */
+  pastSinceMs: number | null;
   /** 「새 방송이 시작됐어요」 띠의 방송 번호 */
   band: string | null;
   onBand: () => void;
@@ -118,7 +106,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 }
 
 export function useLiveSession(input: LiveSessionInput): LiveSession {
-  const { liveStreamId, mediaKey, accessKey, broadcastStatus, startedAt, endedAt } = input;
+  const { liveStreamId, mediaKey, accessKey, broadcastStatus } = input;
   const { deferred } = input.reselect;
   const router = useRouter();
   const pathname = usePathname();
@@ -126,11 +114,12 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const pinned = vodStreamIdFromPathname(pathname ?? '') !== null || Boolean(streamParam);
   const streamerId = useChannelStreamerId();
   const { toast, dismiss } = useToast();
-  // recorded 로 닫힌 방송|영상 키 — 같은 키로는 세션을 다시 열지 않는다(cc H1 ②). 키 비교라 지울 필요가 없다
-  const [closedRecordedFor, setClosedRecordedFor] = useState<string | null>(null);
-  const [recordedReq, setRecordedReq] = useState<(RecordedRequest & { key: string }) | null>(null);
-  // 세션을 연 적 있는 키 — 이 키로 연 적 없이 명부가 ended 면 끝난 뒤 들어온 화면(A)이다(지난 방송 화면 포함). A 는 녹화를 묻지
-  // 않고 회차 다시보기를 튼다(POK-546)
+  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 — 같은 키로는 세션을 다시 열지 않는다(cc H1 ②). 키 비교라 지울 필요가
+  // 없다
+  const [closedPast, setClosedPast] = useState<{ key: string; sinceMs: number | null } | null>(
+    null,
+  );
+  // 세션을 연 적 있는 키 — 이 키로 연 적 없이 명부가 ended 면 끝난 뒤 들어온 화면(A)이다(지난 방송 화면 포함 · POK-546)
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   // 띠를 눌러 보유를 푼 키
   const [releasedFor, setReleasedFor] = useState<string | null>(null);
@@ -154,13 +143,8 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
 
   const onClose = useCallback(
     (closed: SessionClosed) => {
-      if (closed.reason === 'recorded') {
-        setClosedRecordedFor(closed.accessKey);
-        setRecordedReq({
-          key: closed.accessKey,
-          fromMs: recordingSearchFrom(startedAt, endedAt),
-          untilMs: endedAt ?? closed.observedEndMs ?? Date.now(),
-        });
+      if (closed.reason === 'past') {
+        setClosedPast({ key: closed.accessKey, sinceMs: closed.endingSinceMs });
         return;
       }
       // 고정 화면의 「새 방송 보기」는 라이브 대시보드의 그 방송으로 간다. 고정 안 한 화면은 보유가 풀려 다시 고르기가 X 를 넣는다
@@ -168,7 +152,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
         router.push(`${LIVE_DASHBOARD_PATH}?stream=${encodeURIComponent(closed.goTo)}`);
       }
     },
-    [startedAt, endedAt, pinned, router],
+    [pinned, router],
   );
   // 안내 문구마다 마지막으로 띄운 토스트 — 거두기(넘김 되돌림)가 그 토스트를 닫는다
   const noticeToasts = useRef(new Map<string, string>());
@@ -193,7 +177,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
       broadcastStatus === 'live' &&
       input.accessReady &&
       accessKey !== null &&
-      closedRecordedFor !== accessKey,
+      closedPast?.key !== accessKey,
     roundId: liveStreamId || null,
     accessKey,
     liveUrl: input.liveUrl,
@@ -217,21 +201,15 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     if (broadcastStatus === 'ended') dispatch?.({ type: 'roster-ended' });
   }, [broadcastStatus, dispatch]);
 
-  const closedRecorded = accessKey !== null && closedRecordedFor === accessKey;
-  // 보유 — 세션이 열려 있거나 녹화로 닫혀 그 녹화를 보이는 동안. 띠를 누르면 푼다(5.5절)
-  const holding = (opened || closedRecorded) && accessKey !== releasedFor && liveStreamId !== '';
+  const pastClose = closedPast !== null && closedPast.key === accessKey ? closedPast : null;
+  const closedToPast = pastClose !== null;
+  // 보유 — 세션이 열려 있거나 past 로 닫혀 그 자리에서 지난 방송 판정을 보이는 동안. 띠를 누르면 푼다(5.5절)
+  const holding = (opened || closedToPast) && accessKey !== releasedFor && liveStreamId !== '';
   useEffect(() => {
     publishLiveData({ playbackHold: holding ? liveStreamId : null });
   }, [holding, liveStreamId]);
 
   const pastOnly = openedFor !== accessKey && broadcastStatus === 'ended';
-  const recordedRequest = useMemo<RecordedRequest | null>(
-    () =>
-      recordedReq !== null && recordedReq.key === accessKey
-        ? { fromMs: recordedReq.fromMs, untilMs: recordedReq.untilMs }
-        : null,
-    [recordedReq, accessKey],
-  );
 
   // 세션 덮개가 다른 방송 띠를 세웠으면 화면 띠는 세우지 않는다 — 같은 뜻의 띠가 둘 서지 않게(cc L)
   const coverBanner = session?.view.banner ?? null;
@@ -248,5 +226,12 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     dispatch?.({ type: 'leave' });
   }, [accessKey, dispatch]);
 
-  return { session, recordedRequest, enteredAfterEnd: pastOnly, closedRecorded, band, onBand };
+  return {
+    session,
+    showsPast: pastOnly || closedToPast,
+    closedToPast,
+    pastSinceMs: pastClose?.sinceMs ?? null,
+    band,
+    onBand,
+  };
 }

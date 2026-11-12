@@ -16,7 +16,7 @@ import { useRewindStatus } from '@/features/player/useRewindStatus';
 
 /** usePastVod 가 회차 경로를 묻는 데 쓰는 입력 — 물을지 여부 · 경로를 만들 주소와 키 · 404 유예의 원점 */
 export interface PastVodInput {
-  /** 물을 화면인가 — 끝난 뒤 들어온 화면이고 보관 기간이 지나지 않음 */
+  /** 물을 화면인가 — 지난 방송 판정 화면(끝난 뒤 들어온 화면 · past 로 닫힌 화면)이고 보관 기간이 지나지 않음 */
   enabled: boolean;
   /** 제어면 주소(mediaControlBaseUrl). 없으면 물을 수 없다 */
   controlBase: string | null;
@@ -24,7 +24,10 @@ export interface PastVodInput {
   controlKey: string | null;
   /** 방송 번호(= 회차 ID) */
   roundId: string | null;
-  /** 명부 endedAt — 404 유예의 원점. 없으면 이 화면이 처음 404 를 받은 시각이 원점이다 */
+  /**
+   * 404 유예의 원점 — 명부 endedAt, 없으면 부른 쪽이 준 다른 원점(past 로 닫힌 화면의 끝남 대기 시작 — POK-547). 그것도 없으면
+   * 이 화면이 처음 404 를 받은 시각이 원점이다
+   */
   endedAtMs: number | null;
 }
 

@@ -9,12 +9,11 @@ import type { SessionView } from './sessionView';
 
 const VIEW: SessionView = {
   cover: 'checking',
-  actions: ['record'],
+  actions: ['go-live'],
   banner: null,
   seekHidden: false,
   liveHidden: false,
   liveChecking: false,
-  recordEmphasis: false,
   vodReady: false,
   startHeld: false,
 };
@@ -22,7 +21,7 @@ const VIEW: SessionView = {
 describe('PlayerSessionOverlay 층', () => {
   it('덮개 판은 pointer-events:none · 버튼 묶음은 auto 다', () => {
     render(<PlayerSessionOverlay view={VIEW} onAction={vi.fn()} />);
-    const button = screen.getByRole('button', { name: '녹화 보기' });
+    const button = screen.getByRole('button', { name: '라이브 보기' });
     const actions = button.parentElement!;
     const cover = actions.parentElement!;
     expect(getComputedStyle(cover).pointerEvents).toBe('none');

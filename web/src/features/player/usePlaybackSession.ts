@@ -44,14 +44,14 @@ export interface SessionClosed {
   reason: SessionClose;
   /** 「새 방송 보기」의 방송 번호 */
   goTo?: string;
-  /** 녹화 조회의 끝 시각 대체 — 이 세션 재생기가 로드한 목록의 조각 끝 최대(R42) */
-  observedEndMs: number | null;
+  /** 끝남 대기를 연 시각(세션 endingSince) — past 로 닫힌 화면의 404 유예 원점 폴백. 모르면 null */
+  endingSinceMs: number | null;
   accessKey: string;
 }
 
 export interface SessionOptions {
   /**
-   * 여는 조건(명부 live ∧ 출입증 준비 ∧ recorded 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는
+   * 여는 조건(명부 live ∧ 출입증 준비 ∧ past 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는
    * 조건이 아니다
    */
   canOpen: boolean;
@@ -99,7 +99,7 @@ function needsX(s: PlaybackSessionState): boolean {
 
 /**
  * 마지막 확인 중인가 — 회차별 조회는 처음 물음의 답 또는 시한(8초)이 끝낸다: 본 구간과 겹치는 다시보기 답이면 같은 자리
- * 다시보기, 그 밖 답이면 곧바로 녹화, 시한까지 답이 없으면 녹화다(POK-528 W6 · 정본 r7 1151)
+ * 다시보기, 그 밖 답이면 곧바로 닫고(past), 시한까지 답이 없어도 닫는다(POK-528 W6 · 정본 r7 1151 · POK-547)
  */
 function inFinalCheck(s: PlaybackSessionState | null): boolean {
   return s !== null && s.phase.kind === 'ending-wait' && s.phase.finalCheck === true;
@@ -225,7 +225,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
           optionsRef.current.onClose({
             reason: effect.reason,
             goTo: effect.goTo,
-            observedEndMs: session.observedEndMs,
+            endingSinceMs: session.endingSince,
             accessKey: session.accessKey,
           });
           break;

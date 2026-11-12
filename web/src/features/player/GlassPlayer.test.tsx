@@ -6,7 +6,6 @@ import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerMark } from '@/features/player/PlayerControls';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
-import { recordingTimeline } from '@/features/player/recordingTimeline';
 import { openSession } from '@/features/player/rewindSwitch';
 import { sessionView, type SessionView } from '@/features/player/sessionView';
 import type { PlaybackSession } from '@/features/player/usePlaybackSession';
@@ -962,288 +961,8 @@ describe('GlassPlayer', () => {
   });
 });
 
-describe('GlassPlayer: 녹화 다시보기', () => {
-  // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
-  beforeEach(() => {
-    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  function renderRecorded(
-    props: Partial<ComponentProps<typeof GlassPlayer>> = {},
-    durationSeconds = 444,
-  ) {
-    const T0 = Date.parse('2026-10-08T02:43:39Z');
-    const timeline = recordingTimeline([{ startMs: T0, durationSeconds }], null, null)!;
-    return render(
-      <ToastProvider>
-        <GlassPlayer
-          channelName="게임하는너구리"
-          viewersNote="시청자 수 수집 전"
-          broadcastStatus="ended"
-          embed
-          recorded={{ streamId: 'test1008a', ...timeline }}
-          {...props}
-        />
-      </ToastProvider>,
-    );
-  }
-
-  /** 영상 노드가 그 시각까지 흘렀다 */
-  function playTo(container: HTMLElement, seconds: number) {
-    const video = container.querySelector('video')!;
-    act(() => {
-      video.currentTime = seconds;
-      video.dispatchEvent(new Event('timeupdate'));
-    });
-  }
-
-  it('녹화를 다시 붙일 수 없으면 영상 위에 한 줄로 알린다: 전에는 마지막 장면에서 조용히 멎었다(POK-337)', async () => {
-    // 재생 서버가 답하지 않는다: 403인지 확인하지 못했으니 다시 붙일 수 없다
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('network'));
-    const { container } = renderRecorded();
-    expect(screen.queryByText('녹화 영상을 불러오지 못했어요')).toBeNull();
-
-    await act(async () => {
-      container.querySelector('video')!.dispatchEvent(new Event('error'));
-    });
-    expect(screen.getByRole('status')).toHaveTextContent('녹화 영상을 불러오지 못했어요');
-  });
-
-  it('재생 위치가 초 단위로 바뀔 때마다 알린다: 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324)', () => {
-    const heard = vi.fn();
-    const { container } = renderRecorded({ onPlaybackPosition: heard });
-
-    playTo(container, 12.2);
-    expect(heard).toHaveBeenLastCalledWith(12);
-    // 내린다: 영상 시각을 넘는 줄은 보이지 않는다(반올림하면 0.5초 앞 줄까지 보였다)
-    playTo(container, 12.9);
-    expect(heard).toHaveBeenLastCalledWith(12);
-    playTo(container, 13.1);
-
-    // timeupdate는 1초에 네 번쯤 온다. 같은 초면 다시 알리지 않는다
-    expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([0, 12, 13]);
-  });
-
-  it('카드처럼 정확한 시각으로 옮기면 그 초에 선다: 녹화 길이에 소수가 있어도 1초 앞에 서지 않는다', () => {
-    // 시크바 비율을 거치면 시차를 초 단위로 반올림해 600.7초 녹화에서 149초 카드가 148.7초에 섰다(리뷰 1라운드)
-    const heard = vi.fn();
-    const controllerRef = createRef<GlassPlayerController>();
-    renderRecorded({ onPlaybackPosition: heard, controllerRef }, 600.7);
-
-    act(() => {
-      controllerRef.current?.seekToUptime(149);
-    });
-    expect(heard).toHaveBeenLastCalledWith(149);
-  });
-
-  it('옮기면 옮긴 자리를 바로 알리고, 새 줄기가 붙기 전 옛 줄기의 시각으로 되돌아가지 않는다', () => {
-    vi.useFakeTimers();
-    try {
-      const heard = vi.fn();
-      const { container } = renderRecorded({ onPlaybackPosition: heard });
-      playTo(container, 30);
-      heard.mockClear();
-
-      fireEvent.keyDown(screen.getByRole('button', { name: '재생' }), { key: 'End' });
-      // 끝은 마지막 1초 앞이다
-      expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([443]);
-      playTo(container, 30.3);
-      act(() => {
-        vi.advanceTimersByTime(300);
-      });
-      // 새 줄기의 0초가 443초다(반올림해도 443): 옛 줄기의 기준이면 0초로 알렸다
-      playTo(container, 0.4);
-
-      expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([443]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('왼쪽 아래는 「지금 / 전체」 시간이다: 누르면 남은 시간, 다시 누르면 원래대로다(POK-518)', () => {
-    const { container } = renderRecorded();
-    playTo(container, 30);
-
-    expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
-    const button = screen.getByRole('button', { name: '남은 시간 보기' });
-    expect(button).toHaveTextContent('0:30 / 7:24');
-    expect(button).toHaveAccessibleDescription('0:30 / 7:24');
-
-    fireEvent.click(button);
-    const remaining = screen.getByRole('button', { name: '재생 시간 보기' });
-    expect(remaining).toHaveTextContent('-6:54 / 7:24');
-    expect(remaining).toHaveAccessibleDescription('-6:54 / 7:24');
-
-    fireEvent.click(remaining);
-    expect(screen.getByRole('button', { name: '남은 시간 보기' })).toHaveTextContent('0:30 / 7:24');
-  });
-
-  it('시간 버튼 말풍선은 버튼 이름이다 — 단축키가 없어 이름만 뜬다(POK-518)', () => {
-    renderRecorded();
-
-    expect(screen.getByText('남은 시간 보기')).toHaveAttribute('aria-hidden', 'true');
-
-    fireEvent.click(screen.getByRole('button', { name: '남은 시간 보기' }));
-
-    expect(screen.getByText('재생 시간 보기')).toBeInTheDocument();
-  });
-
-  it('녹화 끝에 닿으면 지금과 전체가 같고 남은 시간은 0이다(POK-518)', () => {
-    const { container } = renderRecorded();
-    const video = container.querySelector('video')!;
-    Object.defineProperty(video, 'ended', { value: true, configurable: true });
-    act(() => {
-      video.dispatchEvent(new Event('pause'));
-      video.dispatchEvent(new Event('ended'));
-    });
-
-    const button = screen.getByRole('button', { name: '남은 시간 보기' });
-    expect(button).toHaveTextContent('7:24 / 7:24');
-
-    fireEvent.click(button);
-    expect(screen.getByRole('button', { name: '재생 시간 보기' })).toHaveTextContent(
-      '-0:00 / 7:24',
-    );
-  });
-
-  it('멈춘 채로 뜬 화면도 호버하지 않으면 컨트롤이 숨는다 — 자동재생이 막혀도 영상을 가리지 않는다(POK-518)', () => {
-    vi.useFakeTimers();
-    try {
-      const { container } = renderRecorded();
-      const player = container.querySelector('[data-controls]')!;
-      expect(player).toHaveAttribute('data-controls', 'visible');
-
-      act(() => {
-        vi.advanceTimersByTime(3000);
-      });
-
-      expect(player).toHaveAttribute('data-controls', 'hidden');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('End 키는 플레이어 어디서든 녹화 끝으로 간다(POK-518)', () => {
-    const heard = vi.fn();
-    renderRecorded({ onPlaybackPosition: heard });
-
-    fireEvent.keyDown(screen.getByRole('button', { name: '재생' }), { key: 'End' });
-
-    // 끝은 마지막 1초 앞이다
-    expect(heard).toHaveBeenLastCalledWith(443);
-  });
-
-  it('End는 포커스가 플레이어 밖에 있어도 녹화 끝으로 간다 — 라이브와 같은 키다', () => {
-    const heard = vi.fn();
-    renderRecorded({ onPlaybackPosition: heard });
-
-    const notPrevented = fireEvent.keyDown(document.body, { key: 'End' });
-
-    expect(notPrevented).toBe(false);
-    expect(heard).toHaveBeenLastCalledWith(443);
-  });
-
-  it('끝까지 보면 재생 단추가 「처음부터」다: 눌렀을 때 일을 미리 말한다(POK-518)', () => {
-    const { container } = renderRecorded();
-    const video = container.querySelector('video')!;
-    expect(screen.queryByRole('button', { name: '처음부터' })).toBeNull();
-
-    Object.defineProperty(video, 'ended', { value: true, configurable: true });
-    act(() => {
-      video.dispatchEvent(new Event('pause'));
-      video.dispatchEvent(new Event('ended'));
-    });
-
-    expect(screen.getByRole('button', { name: '처음부터' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '재생' })).toBeNull();
-  });
-
-  it('시크바도 다시보기라고 읽는다: 화면 낭독기가 「실시간에서」라고 하지 않는다', () => {
-    renderRecorded();
-
-    expect(screen.queryByRole('slider', { name: '라이브 탐색' })).toBeNull();
-    expect(screen.getByRole('slider', { name: '다시보기 탐색' })).toHaveAttribute(
-      'aria-valuetext',
-      '녹화 끝에서 -07:24',
-    );
-  });
-
-  describe('끊겨 기다릴 때(POK-439)', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    const spinner = (container: HTMLElement) => container.querySelector('[data-buffering]');
-
-    /** 재생 중인 영상 노드 — jsdom의 영상은 늘 멈춰 있다 */
-    function playingVideo(container: HTMLElement) {
-      const video = container.querySelector('video')!;
-      Object.defineProperty(video, 'paused', { value: false, configurable: true });
-      return video;
-    }
-
-    function wait(video: HTMLVideoElement, ms: number) {
-      act(() => {
-        video.dispatchEvent(new Event('waiting'));
-        vi.advanceTimersByTime(ms);
-      });
-    }
-
-    it('waiting 뒤 400ms 전엔 없고, 그 뒤 생기고, playing에 사라진다', () => {
-      const { container } = renderRecorded();
-      const video = playingVideo(container);
-
-      wait(video, 399);
-      expect(spinner(container)).toBeNull();
-
-      act(() => {
-        vi.advanceTimersByTime(1);
-      });
-      // 채팅 창 불러오기와 같은 로고 그리기다
-      expect(spinner(container)?.querySelector('svg mask')).not.toBeNull();
-      // 버퍼링은 낭독하지 않는다(소음)
-      expect(screen.queryByRole('status')).toBeNull();
-
-      act(() => {
-        video.dispatchEvent(new Event('playing'));
-      });
-      expect(spinner(container)).toBeNull();
-    });
-
-    it('일시정지 중엔 안 뜬다', () => {
-      const { container } = renderRecorded();
-      const video = container.querySelector('video')!;
-
-      wait(video, 400);
-
-      expect(spinner(container)).toBeNull();
-    });
-
-    it('재생이 멎어 안내가 서면 안 뜬다', async () => {
-      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('network'));
-      const { container } = renderRecorded();
-      const video = playingVideo(container);
-      await act(async () => {
-        video.dispatchEvent(new Event('error'));
-      });
-      expect(screen.getByRole('status')).toHaveTextContent('녹화 영상을 불러오지 못했어요');
-
-      wait(video, 400);
-
-      expect(spinner(container)).toBeNull();
-    });
-  });
-});
-
 describe('GlassPlayer: 바깥 이동 명령의 결과', () => {
-  it('영상이 없는 자리 플레이어는 옮기지 못했다고 돌려주고 스스로 알리지 않는다: 녹화를 찾는 중일 수 있다', () => {
+  it('영상이 없는 자리 플레이어는 옮기지 못했다고 돌려주고 스스로 알리지 않는다: 다시보기를 확인하는 중일 수 있다', () => {
     const controllerRef = createRef<GlassPlayerController>();
     render(
       <ToastProvider>
@@ -1316,16 +1035,11 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     );
   }
 
-  it('고르는 순서는 세션이 먼저다 — 녹화 · src 가 있어도 세션 재생기가 서고 재생기를 세션에 묶는다', () => {
-    const session = fakeSession({ cover: 'checking', actions: ['record'] });
+  it('고르는 순서는 세션이 먼저다 — src 가 있어도 세션 재생기가 서고 재생기를 세션에 묶는다', () => {
+    const session = fakeSession({ cover: 'checking' });
     renderWith({
       session,
       src: 'https://m/live/other/index.m3u8',
-      recorded: {
-        streamId: 'x',
-        ...recordingTimeline([{ startMs: 0, durationSeconds: 60 }], 0, null)!,
-        originAxis: true,
-      },
     });
     expect(screen.getByRole('status')).toHaveTextContent('방송이 이어지는지 확인하고 있어요');
     expect(session.bindPlayer).toHaveBeenCalledWith(
@@ -1333,16 +1047,16 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     );
   });
 
-  it('덮개의 「녹화 보기」는 세션에 버튼 사건으로 올린다', async () => {
-    const session = fakeSession({ cover: 'checking', actions: ['record'] });
+  it('덮개의 「라이브 보기」는 세션에 버튼 사건으로 올린다', async () => {
+    const session = fakeSession({ cover: 'checking', actions: ['go-live'] });
     renderWith({ session });
-    await userEvent.click(screen.getByRole('button', { name: '녹화 보기' }));
-    expect(session.dispatch).toHaveBeenCalledWith({ type: 'button', which: 'record' });
+    await userEvent.click(screen.getByRole('button', { name: '라이브 보기' }));
+    expect(session.dispatch).toHaveBeenCalledWith({ type: 'button', which: 'go-live' });
   });
 
   it('live 기원 덮개에서는 시크바를 숨긴다 — 받을 목록이 없다', () => {
     renderWith({
-      session: fakeSession({ cover: 'checking', actions: ['record'], seekHidden: true }),
+      session: fakeSession({ cover: 'checking', seekHidden: true }),
     });
     expect(screen.queryByRole('slider', { name: '라이브 탐색' })).toBeNull();
   });
@@ -1352,7 +1066,7 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
     try {
       const covered = renderWith({
-        session: fakeSession({ cover: 'checking', actions: ['record'] }),
+        session: fakeSession({ cover: 'checking' }),
       });
       play.mockClear();
       await userEvent.click(screen.getByRole('button', { name: '재생' }));
@@ -1397,7 +1111,7 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
       };
 
       const covered = renderWith({
-        session: fakeSession({ cover: 'checking', actions: ['record'] }),
+        session: fakeSession({ cover: 'checking' }),
       });
       waitOn(covered.container);
       expect(covered.container.querySelector('[data-buffering]')).toBeNull();
@@ -1497,14 +1211,9 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     return video;
   }
 
-  it('고르는 순서는 세션 → 다시보기 → 녹화 → src 다 — 다시보기가 녹화 · src 보다 먼저 선다', async () => {
+  it('고르는 순서는 세션 → 다시보기 → src 다 — 다시보기가 src 보다 먼저 선다', async () => {
     await renderVod({
       src: 'https://m/live/key-1/index.m3u8',
-      recorded: {
-        streamId: 'x',
-        ...recordingTimeline([{ startMs: 0, durationSeconds: 60 }], 0, null)!,
-        originAxis: true,
-      },
     });
     expect(hlsFake.instances.map((h) => h.url)).toEqual([VOD_URL]);
     expect(screen.getByRole('slider', { name: '다시보기 탐색' })).toBeInTheDocument();
@@ -1543,7 +1252,7 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     fireEvent.keyDown(play, { key: 'ArrowLeft' });
     expect(video.currentTime).toBe(590);
     sit(container, 600);
-    // End 는 목록 끝이 아니라 끝 1초 앞(마지막 조각 안쪽)이다 — 녹화 다시보기의 꼬리와 같다
+    // End 는 목록 끝이 아니라 끝 1초 앞(마지막 조각 안쪽)이다 — 결정-POK546 결정 5 의 끝 1초 꼬리
     fireEvent.keyDown(play, { key: 'End' });
     expect(video.currentTime).toBe(7_199);
   });
@@ -1589,22 +1298,6 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     expect(controllerRef.current?.currentPositionMs?.()).toBeNull();
   });
 
-  it('지금 자리는 다시보기의 축만 본다 — 녹화가 기준점 축이어도 다시보기가 아니면 null 이다', async () => {
-    const controllerRef = createRef<GlassPlayerController>();
-    const { container } = await renderVod({
-      controllerRef,
-      vod: { ...VOD, originAxis: false },
-      recorded: {
-        streamId: 'x',
-        ...recordingTimeline([{ startMs: 0, durationSeconds: 60 }], 0, null)!,
-        originAxis: true,
-      },
-    });
-    listTwoHours();
-    sit(container, 600.25);
-    expect(controllerRef.current?.currentPositionMs?.()).toBeNull();
-  });
-
   it('화면에 붙은 자리를 모르면(readyState 1) 지금 자리는 null 이다 — 지어내지 않는다', async () => {
     const controllerRef = createRef<GlassPlayerController>();
     const { container } = await renderVod({ controllerRef });
@@ -1634,7 +1327,7 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     expect(onStartApplied).toHaveBeenCalledOnce();
   });
 
-  it('끝까지 보면 재생 단추가 「처음부터」다 — 녹화 다시보기와 같다(POK-518)', async () => {
+  it('끝까지 보면 재생 단추가 「처음부터」다(POK-518)', async () => {
     const { container } = await renderVod();
     listTwoHours();
     const video = sit(container, 7_199);

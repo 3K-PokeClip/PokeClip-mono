@@ -110,11 +110,11 @@ describe('세션 열기와 폴링 켜기(설계 5.1절 표)', () => {
   it('끝남 대기는 두 경로를 켜고, closeOnEnd · vod-offered · 닫힘은 둘 다 끈다', () => {
     const waiting = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
     expect(pollTargets(waiting)).toEqual({ stream: true, round: true });
-    const record = run(waiting, [
+    const decided = run(waiting, [
       [{ type: 'round-poll', result: status({ mode: 'ended' }) }],
     ]).state;
-    expect(record.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
-    expect(pollTargets(record)).toEqual({ stream: false, round: false });
+    expect(decided.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
+    expect(pollTargets(decided)).toEqual({ stream: false, round: false });
     const closed = run(fresh(), [[{ type: 'leave' }]]).state;
     expect(pollTargets(closed)).toEqual({ stream: false, round: false });
   });
@@ -401,7 +401,7 @@ describe('rewind 국면', () => {
     ]);
     expect(state.source.url).toBe(A1);
     expect(state.offer).toEqual({ kind: 'new-broadcast', goTo: 'r-B' });
-    expect(sessionView(state, NOW).actions).toEqual(['record', 'new-broadcast']);
+    expect(sessionView(state, NOW).actions).toEqual(['new-broadcast']);
   });
 
   it('LIVE 버튼 — X 가 보던 방송이면 라이브로, 다른 방송이면 세션을 닫고 그 방송으로(R58)', () => {

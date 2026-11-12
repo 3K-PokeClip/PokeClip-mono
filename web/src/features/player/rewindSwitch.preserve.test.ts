@@ -137,7 +137,7 @@ describe('봉인된 끝 — 넘김 0 · 현행 제안 경로(T27)', () => {
     expect(goLive.kinds).toEqual([]);
     expect(goLive.state.source.url).toBe(A1);
     expect(goLive.state.offer).toEqual({ kind: 'go-live' });
-    expect(sessionView(goLive.state, NOW).actions).toEqual(['record', 'go-live']);
+    expect(sessionView(goLive.state, NOW).actions).toEqual(['go-live']);
     expect(step(sealedEnd(), later(X_B)).state.offer).toMatchObject({ goTo: 'r-B' });
     expect(step(sealedEnd(), later(X_UNKNOWN)).state.offer).toBeNull();
   });
