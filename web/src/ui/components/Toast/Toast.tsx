@@ -11,7 +11,9 @@ import {
   type PointerEvent,
   type ReactNode,
 } from 'react';
+import clsx from 'clsx';
 import { OUTSIDE_POINTER_EXEMPT_ATTR } from '../../primitives/DismissableLayer';
+import { PRIVATE_TEXT_CLASS } from '../../privateText';
 import { Portal } from '../../primitives/Portal';
 import { Button } from '../Button';
 import { Progress } from '../Progress';
@@ -35,6 +37,13 @@ interface ToastBase {
   dedupeKey?: string;
   /** `progress` 톤 전용 0~100. 주면 본문 아래에 진행 바를 함께 그린다. */
   progress?: number;
+  /**
+   * 제목에 사람 이름·채널 이름·방송 제목이 들어가면 켠다 — 세션 녹화에서 그 줄을 가린다(POK-572, PRIVATE_TEXT_CLASS).
+   * 안내만 하는 줄은 끄고 둔다(녹화에서 무슨 일이 있었는지 보여야 한다)
+   */
+  maskTitle?: boolean;
+  /** 보조설명에 이름·제목이 들어가면 켠다 — `maskTitle`과 같다 */
+  maskDescription?: boolean;
 }
 
 /**
@@ -241,10 +250,12 @@ function ToastCard({
           <ToneIcon tone={item.tone} />
         )}
         <div className={styles.body}>
-          <div className={styles.title}>{item.title}</div>
+          <div className={clsx(styles.title, item.maskTitle && PRIVATE_TEXT_CLASS)}>
+            {item.title}
+          </div>
           {item.description != null ? (
             <div
-              className={styles.description}
+              className={clsx(styles.description, item.maskDescription && PRIVATE_TEXT_CLASS)}
               // 한 줄로 자르는 대신 전문을 볼 수단은 남긴다.
               title={typeof item.description === 'string' ? item.description : undefined}
             >
