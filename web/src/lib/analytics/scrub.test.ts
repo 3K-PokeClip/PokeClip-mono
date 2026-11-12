@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CaptureResult } from 'posthog-js';
-import { scrubAttribute, scrubEvent, scrubUrl } from './scrub';
+import { PRIVATE_TEXT_CLASS } from '@/ui/privateText';
+import {
+  maskReplayText,
+  REPLAY_BLOCK_SELECTOR,
+  scrubAttribute,
+  scrubEvent,
+  scrubUrl,
+} from './scrub';
 
 function event(
   name: string,
@@ -263,19 +270,136 @@ describe('세션 녹화 정제(POK-358)', () => {
     expect(scrubAttribute('href', '/broadcast/vod/S-1')).toBe('/broadcast/vod/_');
   });
 
+  it('우리 그림(public/brand/)의 src·srcset은 쿼리째 둔다 — 떼면 next/image 주소가 깨진다 (POK-572)', () => {
+    const next = '/_next/image?url=%2Fbrand%2Fpoki-wave.webp&w=1080&q=75';
+    expect(scrubAttribute('src', next)).toBe(next);
+    expect(scrubAttribute('src', `http://localhost:3000${next}`)).toBe(
+      `http://localhost:3000${next}`,
+    );
+    const srcset = `${next} 1x, /_next/image?url=%2Fbrand%2Fpoki-wave.webp&w=3840&q=75 2x`;
+    expect(scrubAttribute('srcset', srcset)).toBe(srcset);
+    expect(scrubAttribute('src', '/brand/poki-run.webp')).toBe('/brand/poki-run.webp');
+  });
+
+  it('우리 그림이 아니면 src·srcset 쿼리를 뗀다 — 하나라도 섞이면, 바깥 호스트의 같은 경로도', () => {
+    expect(
+      scrubAttribute('src', '/_next/image?url=https%3A%2F%2Fcdn.example.com%2Fa.jpg&w=640'),
+    ).toBe('/_next/image');
+    expect(
+      scrubAttribute(
+        'srcset',
+        '/_next/image?url=%2Fbrand%2Fa.webp&w=1 1x, /api/profile-photos/7?token=t 2x',
+      ),
+    ).not.toContain('token');
+    expect(
+      scrubAttribute('src', 'https://evil.example.com/_next/image?url=%2Fbrand%2Fa.webp&sig=s'),
+    ).toBe('https://evil.example.com');
+  });
+
   it('보관함의 YouTube 링크는 영상 ID 없이 origin만 남긴다 — 처리방침 13절', () => {
     expect(scrubAttribute('href', 'https://youtu.be/dQw4w9WgXcQ')).toBe('https://youtu.be');
   });
 
-  it('글 속성(aria-label·title·alt·placeholder 등)은 글자 수만 남긴다 — 채널·회원 이름이 실린다', () => {
+  it('글 속성(aria-label·title·alt 등)은 글자 수만 남긴다 — 화면에 안 보이고 채널·회원 이름이 실린다', () => {
     expect(scrubAttribute('aria-label', '게임하는너구리 연동 해제')).toBe('*'.repeat(13));
     expect(scrubAttribute('title', 'a@b.c')).toBe('*****');
     expect(scrubAttribute('alt', '프로필')).toBe('***');
+  });
+
+  it('placeholder는 글자와 같은 규칙 — 가림 칸 밖이면 보이고, 안이거나 요소를 모르면 가린다 (POK-572)', () => {
+    const plain = document.createElement('input');
+    expect(scrubAttribute('placeholder', '검색어 입력', plain)).toBe('검색어 입력');
+    const masked = document.createElement('div');
+    masked.className = PRIVATE_TEXT_CLASS;
+    const inner = document.createElement('input');
+    masked.append(inner);
+    expect(scrubAttribute('placeholder', '게임하는너구리', inner)).toBe('*******');
     expect(scrubAttribute('placeholder', '이메일')).toBe('***');
   });
 
   it('그 밖의 속성(class·role·data-*)은 그대로 둔다 — 화면을 다시 그리는 데 필요하다', () => {
     expect(scrubAttribute('class', 'chip ?x')).toBe('chip ?x');
     expect(scrubAttribute('role', 'dialog')).toBe('dialog');
+  });
+});
+
+describe('maskReplayText — 녹화 글자 가림 (POK-572)', () => {
+  function el(html: string, selector: string): Element {
+    const root = document.createElement('div');
+    root.innerHTML = html;
+    const found = root.querySelector(selector);
+    if (found === null) throw new Error(selector);
+    return found;
+  }
+
+  it('가림 칸 밖의 글자(단추·메뉴·안내문)는 그대로 둔다', () => {
+    expect(maskReplayText('클립 만들기', el('<button>클립 만들기</button>', 'button'))).toBe(
+      '클립 만들기',
+    );
+  });
+
+  it('가림 칸 안의 글자는 공백만 남기고 가린다 — 조상에 달아도 된다', () => {
+    const name = el(`<div class="${PRIVATE_TEXT_CLASS}"><p><b>게임 하는 너구리</b></p></div>`, 'b');
+    expect(maskReplayText('게임 하는 너구리', name)).toBe('** ** ***');
+  });
+
+  it('가림 칸 밖이라도 이메일 꼴은 가린다 — 표시를 빠뜨린 칸의 그물', () => {
+    const p = el('<p>초대 메일을 보냈어요</p>', 'p');
+    expect(maskReplayText('raccoon.gamer@example.com 님께 보냈어요', p)).toBe(
+      '************************* 님께 보냈어요',
+    );
+  });
+
+  it('<title>은 늘 가린다 — 문서 제목·SVG 툴팁에 방송·채널 이름이 실린다', () => {
+    const svgTitle = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    expect(maskReplayText('너구리 방송', svgTitle)).toBe('*** **');
+    expect(maskReplayText('PokeClip', document.createElement('title'))).toBe('********');
+  });
+
+  it('어느 요소의 글자인지 모르거나 판단이 실패하면 가린다', () => {
+    expect(maskReplayText('너구리', null)).toBe('***');
+    expect(maskReplayText('너구리', undefined)).toBe('***');
+    const broken = {
+      tagName: 'P',
+      closest: () => {
+        throw new Error('detached');
+      },
+    } as unknown as Element;
+    expect(maskReplayText('너구리', broken)).toBe('***');
+  });
+});
+
+describe('REPLAY_BLOCK_SELECTOR — 녹화에서 빼는 요소 (POK-572)', () => {
+  function img(src: string | null): HTMLImageElement {
+    const image = document.createElement('img');
+    if (src !== null) image.setAttribute('src', src);
+    return image;
+  }
+
+  it('우리 그림(public/brand/)만 남긴다 — next/image 주소 꼴도', () => {
+    expect(img('/brand/poki-wave.webp').matches(REPLAY_BLOCK_SELECTOR)).toBe(false);
+    expect(
+      img('/_next/image?url=%2Fbrand%2Fpoki-wave.webp&w=1080&q=75').matches(REPLAY_BLOCK_SELECTOR),
+    ).toBe(false);
+  });
+
+  it('썸네일·프로필 사진·src 없는 이미지는 뺀다', () => {
+    expect(img('https://cdn.example.com/thumb.jpg?sig=x').matches(REPLAY_BLOCK_SELECTOR)).toBe(
+      true,
+    );
+    expect(
+      img('/_next/image?url=https%3A%2F%2Fcdn.example.com%2Fbrand%2Fa.jpg').matches(
+        REPLAY_BLOCK_SELECTOR,
+      ),
+    ).toBe(true);
+    expect(img('/api/profile-photos/7?token=t').matches(REPLAY_BLOCK_SELECTOR)).toBe(true);
+    expect(img('data:image/png;base64,AAAA').matches(REPLAY_BLOCK_SELECTOR)).toBe(true);
+    expect(img(null).matches(REPLAY_BLOCK_SELECTOR)).toBe(true);
+  });
+
+  it('영상·캔버스·iframe·picture는 늘 뺀다', () => {
+    for (const tag of ['video', 'canvas', 'iframe', 'picture']) {
+      expect(document.createElement(tag).matches(REPLAY_BLOCK_SELECTOR)).toBe(true);
+    }
   });
 });
