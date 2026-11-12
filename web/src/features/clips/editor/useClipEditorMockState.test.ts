@@ -388,6 +388,8 @@ function fakePlayback(overrides: Partial<ClockedPlayback> = {}) {
     endScrub: vi.fn(),
     setRate: (rate: number) => calls.rates.push(rate),
     setBounds: (bounds: PlaybackBounds) => calls.bounds.push(bounds),
+    pickAtPlayhead: () => null,
+    pickAtS: () => null,
     ...overrides,
   };
   return { playback, calls };

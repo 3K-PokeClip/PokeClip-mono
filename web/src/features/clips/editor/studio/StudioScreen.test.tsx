@@ -16,12 +16,14 @@ function renderStudio(options?: ClipEditorOptions) {
 
 /** 재생 어댑터에 위치 저장소를 붙인다. 위치를 옮기지 않는 가짜라 끌기도 시크와 같다 */
 function clocked(
-  playback: Omit<ClockedPlayback, 'clock' | 'scrubTo' | 'endScrub'>,
+  playback: Omit<ClockedPlayback, 'clock' | 'scrubTo' | 'endScrub' | 'pickAtPlayhead' | 'pickAtS'>,
 ): ClockedPlayback {
   return {
     clock: createPlaybackClock(playback.currentSeconds),
     scrubTo: playback.seekTo,
     endScrub: () => {},
+    pickAtPlayhead: () => null,
+    pickAtS: () => null,
     ...playback,
   };
 }
@@ -42,6 +44,8 @@ function movingPlayback(seconds: number, durationSeconds: number) {
     endScrub: vi.fn(),
     setRate: vi.fn(),
     setBounds: vi.fn(),
+    pickAtPlayhead: () => null,
+    pickAtS: () => null,
   };
   return { clock, playback };
 }

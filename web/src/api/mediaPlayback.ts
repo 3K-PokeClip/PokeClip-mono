@@ -3,7 +3,8 @@
 import { trackApiActivity } from './client';
 
 // 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 라이브를 끝까지 본 시청자의 녹화 보기(POK-547 전까지) · 지난 방송 목록의
-// 녹화 확인(useVodListMockState — POK-546 은 목록을 바꾸지 않는다) · 편집기 미리보기가 쓴다.
+// 녹화 확인(useVodListMockState — POK-546 은 목록을 바꾸지 않는다)이 쓴다. 편집기 미리보기 · 카드 미리 받기는 POK-473 부터 ③ 되감기
+// 목록 창을 받아 여기를 부르지 않는다(카드 바로 저장의 녹화 기준점 조회는 E7 까지 남는다).
 //   GET {base}/playback/<키>/list?path=<키>                                       녹화된 구간들(시작 시각·길이)
 //   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4&path=<키>   그 구간의 영상 한 덩어리
 // 🔴 주소는 출입증 쿠키 경로(/playback/<키>) 아래다(POK-317). 재생 서버가 읽는 path 쿼리는 웹이 경로의 키와 같은 값으로 하나 싣는다

@@ -111,6 +111,8 @@ const NO_PLAYBACK: ClockedPlayback = {
   endScrub: noop,
   setRate: noop,
   setBounds: noop,
+  pickAtPlayhead: () => null,
+  pickAtS: () => null,
 };
 
 /**

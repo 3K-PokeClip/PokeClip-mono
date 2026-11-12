@@ -7,9 +7,9 @@ import {
   type BroadcastRow,
   type JumpCard,
 } from '@/api/clipEditor';
+import { jsonResponse } from '@/test/mockFetch';
 import { useAuthStore } from '@/stores/auth';
-import type { RecordingTimeline } from '@/features/player/recordingTimeline';
-import { clearEditorMedia, editorTimelineOf, loadRecording } from './editorMedia';
+import { clearEditorMedia, editorWindowKey, windowBlobs } from './editorMedia';
 import {
   forgetPrefetchLists,
   prefetchCardEditor,
@@ -17,8 +17,13 @@ import {
   PREFETCH_VIDEO_TIMEOUT_MS,
   type PrefetchDeps,
 } from './prefetchCardEditor';
+import type { EditorSourceState } from './source/editorSourceState';
+import type { PlaylistSegment } from './source/editorPlaylist';
+import type { RemuxedWindow } from './source/remuxWindow';
+import type { EditorSourceSnapshot, SourceList } from './source/useEditorSource';
 import { SegmentsNotReadyError, type TrackPiece } from './trackAudio/loadTrackAudio';
 import { useTrackPreview } from './trackAudio/useTrackPreview';
+import { ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
 import { useEditorVideoPlayback } from './useEditorVideoPlayback';
 
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
@@ -27,12 +32,41 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
   fetchAllJumpCards: vi.fn(),
   fetchBroadcast: vi.fn(),
 }));
-vi.mock('./editorMedia', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./editorMedia')>()),
-  loadRecording: vi.fn(),
+// 원천 한 번 읽기 — 기본은 실물, 「나눠 쓰기」 시험이 답을 정한다
+const actualSource = vi.hoisted(() => ({
+  read: null as null | typeof import('./source/useEditorSource').readEditorSourceOnce,
+}));
+vi.mock('./source/useEditorSource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./source/useEditorSource')>();
+  actualSource.read = actual.readEditorSourceOnce;
+  return { ...actual, readEditorSourceOnce: vi.fn(actual.readEditorSourceOnce) };
+});
+vi.mock('./source/broadcastStreamer', () => ({
+  streamerIdOf: vi.fn(async () => 7),
+  editorXResolver: vi.fn(() => async () => ({ kind: 'known', id: '7' })),
+}));
+/** 다시 싸기 가짜 — 조각 seq 로 표를 짓는다(조각마다 4초 · 첫 DTS = (seq − 100)·4초) */
+const remux = vi.hoisted(() => ({
+  of: (seqs: readonly number[]): RemuxedWindow => {
+    const segments = seqs.map((seq) => {
+      const dts = (seq - 100) * 4;
+      const frames = Array.from({ length: 8 }, (_, i) => ({ pts: dts + i * 0.5, dur: 0.5 }));
+      return { seq, videoDts: dts, frames, mediaStart: dts, mediaEnd: dts + 4 };
+    });
+    return { blob: new Blob(['mp4']), shiftSeconds: segments[0]!.videoDts, segments };
+  },
+}));
+vi.mock('./source/remuxWindow', () => ({
+  remuxWindow: vi.fn(async (bytes: { segments: { seq: number }[] }) =>
+    remux.of(bytes.segments.map((seg) => seg.seq)),
+  ),
 }));
 
-// 카드의 미리 받기(POK-499): 편집기가 처음 받는 영상 창 · 소리 조각을 같은 주소로 받아 두고, 편집기는 그것을 다시 받지 않는다
+const { readEditorSourceOnce } = await import('./source/useEditorSource');
+const { streamerIdOf } = await import('./source/broadcastStreamer');
+
+// 카드의 미리 받기(POK-499): 편집기가 처음 받는 영상 창 · 소리 조각을 같은 열쇠로 받아 두고, 편집기는 그것을 다시 받지 않는다.
+// 영상 창은 ③ 되감기 목록에서 정한다(POK-473) — 녹화 재생 서버(/playback)는 부르지 않는다.
 
 const STARTED = Date.parse('2026-10-29T01:00:00Z');
 const BROADCAST: BroadcastRow = {
@@ -44,6 +78,7 @@ const BROADCAST: BroadcastRow = {
   vodExpiresAt: null,
   timelineOriginAt: new Date(STARTED).toISOString(),
 };
+const ENDED: BroadcastRow = { ...BROADCAST, endedAt: new Date(STARTED + 600_000).toISOString() };
 const CARD: JumpCard = {
   id: '23',
   streamId: '7',
@@ -55,13 +90,38 @@ const CARD: JumpCard = {
   eventSeq: null,
   createdAt: new Date(STARTED + 80_000).toISOString(),
 };
-const recordingOf = (seconds: number): RecordingTimeline => ({
-  startMs: STARTED,
-  durationSeconds: seconds,
-  pieces: [{ fromSeconds: 0, toSeconds: seconds }],
-});
+const DIR = 'https://media.example/dvr/7';
+const LIST_URL = `${DIR}/index.m3u8`;
+
+const range = (from: number, to: number) =>
+  Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+/** seq 100 부터 4초 조각 — PDT = STARTED + (seq − 100)·4초 */
+function listOf(seqs: number[], mode: 'live' | 'vod' = 'live'): SourceList {
+  const rows: PlaylistSegment[] = seqs.map((seq) => ({
+    seq,
+    uri: `${DIR}/seg/${String(seq).padStart(7, '0')}.m4s`,
+    mapUri: `${DIR}/init/i.mp4`,
+    pdtMs: STARTED + (seq - 100) * 4_000,
+    durationMs: 4_000,
+    timing: 'v2',
+    gap: false,
+  }));
+  return { mode, url: LIST_URL, playlist: { runs: [rows], rows } };
+}
+
+function snapshotOf(
+  list: SourceList | null,
+  state: EditorSourceState = { kind: 'ready', mode: list?.mode ?? 'live', url: LIST_URL },
+  base: number | null = STARTED,
+): EditorSourceSnapshot {
+  return { state, list, base };
+}
+
+/** 카드 창 50–80초 ± 여유 10초 = 40–90초 → 조각 110(40–44초) … 122(88–92초) */
+const WINDOW_SEQS = range(110, 122);
 const BUFFER = {
-  duration: 50,
+  duration: 52,
   length: 100,
   sampleRate: 100,
   numberOfChannels: 1,
@@ -73,13 +133,18 @@ function depsWith(overrides: Partial<PrefetchDeps> = {}): PrefetchDeps {
   return {
     fetchJumpCard: vi.fn(() => Promise.resolve(CARD)),
     fetchBroadcast: vi.fn(() => Promise.resolve(BROADCAST)),
-    loadRecording: vi.fn(() => Promise.resolve(recordingOf(600))),
-    fetchRecordingWindow: vi.fn(() => Promise.resolve(new Blob(['mp4'], { type: 'video/mp4' }))),
+    readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(100, 160))))),
+    fetchEditorWindow: vi.fn((_key: string, segs: readonly PlaylistSegment[]) =>
+      Promise.resolve(remux.of(segs.map((seg) => seg.seq))),
+    ),
+    ensureWindowHeads: vi.fn(() => Promise.resolve()),
     loadSegmentTracks: vi.fn(() => Promise.resolve(TRACKS)),
     createDecoder: () => ({ decodeAudioData: vi.fn() }),
     ...overrides,
   };
 }
+
+const seqsOf = (segs: readonly PlaylistSegment[]) => segs.map((seg) => seg.seq);
 
 describe('prefetchCardEditor', () => {
   beforeEach(() => {
@@ -87,51 +152,111 @@ describe('prefetchCardEditor', () => {
     forgetPrefetchLists();
   });
 
-  it('녹화가 구간 끝 + 여유까지 올라왔으면 영상 창과 소리 조각을 받아 ready다', async () => {
+  it('목록이 구간 끝 + 여유까지 올라왔으면 영상 창 조각 · ② 머리 · 소리 조각을 받아 ready다', async () => {
     const deps = depsWith();
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
-    // 구간 50~80초 ± 여유 10초
-    const [, url] = vi.mocked(deps.fetchRecordingWindow).mock.calls[0]!;
-    const asked = new URL(url, 'http://localhost');
-    expect(Date.parse(asked.searchParams.get('start')!)).toBe(STARTED + 40_000);
-    expect(Number(asked.searchParams.get('duration'))).toBe(50);
+    const [key, segs] = vi.mocked(deps.fetchEditorWindow).mock.calls[0]!;
+    expect(key).toBe('7');
+    expect(seqsOf(segs)).toEqual(WINDOW_SEQS);
+    expect(vi.mocked(deps.ensureWindowHeads).mock.calls[0]!.slice(0, 2)).toEqual(['7', '7']);
+    expect(windowBlobs.get(editorWindowKey('7', 110, 122))).toBeDefined();
+    // 소리는 창 조각이 덮는 범위(40–92초)
     expect(deps.loadSegmentTracks).toHaveBeenCalledWith(
-      expect.objectContaining({ streamId: '7', fromMs: STARTED + 40_000, toMs: STARTED + 90_000 }),
+      expect.objectContaining({ streamId: '7', fromMs: STARTED + 40_000, toMs: STARTED + 92_000 }),
     );
   });
 
-  it('방송 중인데 녹화가 구간 끝 + 여유에 못 미치면 받지 않고 pending이다(방금 생긴 카드)', async () => {
-    const deps = depsWith({ loadRecording: vi.fn(() => Promise.resolve(recordingOf(85))) });
+  it('방송 중인데 목록이 구간 끝 + 여유에 못 미치면 받지 않고 pending이다(방금 생긴 카드)', async () => {
+    // 목록 끝 84초 < 구간 끝 80초 + 여유 10초
+    const deps = depsWith({
+      readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(100, 120))))),
+    });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
-    expect(deps.fetchRecordingWindow).not.toHaveBeenCalled();
+    expect(deps.fetchEditorWindow).not.toHaveBeenCalled();
     expect(deps.loadSegmentTracks).not.toHaveBeenCalled();
   });
 
-  it('방송 중에 녹화가 아직 없으면 pending이다', async () => {
-    const deps = depsWith({ loadRecording: vi.fn(() => Promise.resolve(null)) });
+  it('방송 중에 목록을 아직 못 받았거나 원천이 서지 않았으면 pending이다', async () => {
+    const noList = depsWith({ readSource: vi.fn(() => Promise.resolve(snapshotOf(null))) });
+    await expect(prefetchCardEditor('7', '23', noList)).resolves.toBe('pending');
+    forgetPrefetchLists();
+    const checking = depsWith({
+      readSource: vi.fn(() => Promise.resolve(snapshotOf(null, { kind: 'checking' }))),
+    });
+    await expect(prefetchCardEditor('7', '23', checking)).resolves.toBe('pending');
+  });
+
+  it('끝난 방송이 회차 정리 중이면(base 를 아직 못 정함) pending이다', async () => {
+    const deps = depsWith({
+      fetchBroadcast: vi.fn(() => Promise.resolve(ENDED)),
+      readSource: vi.fn(() =>
+        Promise.resolve(
+          snapshotOf(
+            null,
+            { kind: 'finalizing', cause: 'round', under: { kind: 'checking' } },
+            null,
+          ),
+        ),
+      ),
+    });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
   });
 
-  it('끝난 방송이면 녹화 끝에서 잘린 창도 그대로 받는다: 더 올라올 녹화가 없다', async () => {
+  it('원천이 끝내 막혔으면(없음 · 만료 · 1시간 밖) 받지 않고 ready다: 기다려도 오지 않고 편집기가 알린다', async () => {
+    for (const state of [{ kind: 'goneOrNone' }, { kind: 'expired' }] as EditorSourceState[]) {
+      forgetPrefetchLists();
+      const deps = depsWith({ readSource: vi.fn(() => Promise.resolve(snapshotOf(null, state))) });
+      await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+      expect(deps.fetchEditorWindow).not.toHaveBeenCalled();
+    }
+    // 방송 중 카드 자리가 목록 첫 PDT 앞(최근 1시간 밖) — 편집기도 창을 받지 않는다
+    const outside = depsWith({
+      readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(130, 200))))),
+    });
+    await expect(prefetchCardEditor('7', '23', outside)).resolves.toBe('ready');
+    expect(outside.fetchEditorWindow).not.toHaveBeenCalled();
+  });
+
+  it('되감기 제어면이 없는 환경이면 받을 것이 없어 ready다', async () => {
     const deps = depsWith({
-      fetchBroadcast: vi.fn(() =>
-        Promise.resolve({ ...BROADCAST, endedAt: new Date(STARTED + 85_000).toISOString() }),
-      ),
-      loadRecording: vi.fn(() => Promise.resolve(recordingOf(85))),
+      readSource: vi.fn(() => Promise.resolve(snapshotOf(null, { kind: 'unavailable' }))),
     });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
-    expect(deps.fetchRecordingWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('끝난 방송이면 목록 끝에서 잘린 창도 그대로 받는다: 더 올라올 조각이 없다', async () => {
+    const deps = depsWith({
+      fetchBroadcast: vi.fn(() => Promise.resolve(ENDED)),
+      readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(100, 120), 'vod')))),
+    });
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+    expect(seqsOf(vi.mocked(deps.fetchEditorWindow).mock.calls[0]![1])).toEqual(range(110, 120));
   });
 
   it('영상이나 소리 하나라도 실패하면 던지고, 다시 부르면 처음부터 다시 받는다', async () => {
-    const fetchRecordingWindow = vi
-      .fn<PrefetchDeps['fetchRecordingWindow']>()
+    const fetchWindow = vi
+      .fn<PrefetchDeps['fetchEditorWindow']>()
       .mockRejectedValueOnce(new Error('500'))
-      .mockResolvedValue(new Blob(['mp4']));
-    const deps = depsWith({ fetchRecordingWindow });
+      .mockResolvedValue(remux.of(WINDOW_SEQS));
+    const deps = depsWith({ fetchEditorWindow: fetchWindow });
     await expect(prefetchCardEditor('7', '23', deps)).rejects.toThrow('500');
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
-    expect(fetchRecordingWindow).toHaveBeenCalledTimes(2);
+    expect(fetchWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it('② 머리 판독이 끝나지 않아도 영상 시한에 끊고 나아간다: 머리는 편집기가 다시 읽는다', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = depsWith({
+        ensureWindowHeads: vi.fn(() => new Promise<void>(() => undefined)),
+      });
+      const result = prefetchCardEditor('7', '23', deps);
+      const settled = expect(result).resolves.toBe('ready');
+      await vi.advanceTimersByTimeAsync(PREFETCH_VIDEO_TIMEOUT_MS);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('소리 트랙을 하나도 못 꺼내면 실패다: 편집기도 소리를 못 부른다', async () => {
@@ -143,9 +268,9 @@ describe('prefetchCardEditor', () => {
     vi.useFakeTimers();
     try {
       const deps = depsWith({
-        fetchRecordingWindow: vi.fn(
-          (_stream: string, _url: string, signal?: AbortSignal) =>
-            new Promise<Blob>((_, reject) =>
+        fetchEditorWindow: vi.fn(
+          (_key: string, _segs: readonly PlaylistSegment[], signal?: AbortSignal) =>
+            new Promise<RemuxedWindow>((_, reject) =>
               signal?.addEventListener('abort', () => reject(new Error('stopped'))),
             ),
         ),
@@ -160,7 +285,7 @@ describe('prefetchCardEditor', () => {
   });
 
   it('방송 중에 소리 조각이 덜 올라와 창을 다 못 덮으면 맡기지 않고 pending이다', async () => {
-    // 40~90초 창에서 40~60초만 왔다
+    // 40–92초 창에서 40–60초만 왔다
     const partial: TrackPiece[][] = [[{ startSeconds: 40, buffer: { ...BUFFER, duration: 20 } }]];
     const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(partial)) });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
@@ -173,7 +298,7 @@ describe('prefetchCardEditor', () => {
     const split: TrackPiece[][] = [
       [
         { startSeconds: 40, buffer: { ...BUFFER, duration: 20 } },
-        { startSeconds: 64, buffer: { ...BUFFER, duration: 26 } },
+        { startSeconds: 64, buffer: { ...BUFFER, duration: 28 } },
       ],
     ];
     const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(split)) });
@@ -183,9 +308,8 @@ describe('prefetchCardEditor', () => {
   it('끝난 방송이면 덜 덮은 소리도 그대로 맡긴다: 더 올라올 조각이 없다', async () => {
     const partial: TrackPiece[][] = [[{ startSeconds: 40, buffer: { ...BUFFER, duration: 20 } }]];
     const deps = depsWith({
-      fetchBroadcast: vi.fn(() =>
-        Promise.resolve({ ...BROADCAST, endedAt: new Date(STARTED + 600_000).toISOString() }),
-      ),
+      fetchBroadcast: vi.fn(() => Promise.resolve(ENDED)),
+      readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(100, 160), 'vod')))),
       loadSegmentTracks: vi.fn(() => Promise.resolve(partial)),
     });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
@@ -283,13 +407,12 @@ describe('prefetchCardEditor', () => {
 });
 
 describe('미리 받은 카드를 편집기가 열면 다시 받지 않는다', () => {
-  const recording = recordingOf(600);
-  const timeline = editorTimelineOf(BROADCAST, recording);
   const initialRange = { startSeconds: 50, endSeconds: 80 };
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     clearEditorMedia();
+    forgetPrefetchLists();
     await prefetchCardEditor('7', '23', depsWith());
     fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
     vi.stubGlobal('fetch', fetchSpy);
@@ -303,27 +426,34 @@ describe('미리 받은 카드를 편집기가 열면 다시 받지 않는다', 
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it('영상 창', () => {
+  it('영상 창', async () => {
+    const list = listOf(range(100, 160));
     const { result } = renderHook(() =>
       useEditorVideoPlayback({
         streamId: '7',
-        recordingStartMs: timeline.base,
-        recordingSeconds: timeline.recordingEndSeconds,
-        pieces: timeline.pieces,
+        mediaKey: '7',
+        base: STARTED,
+        source: {
+          state: { kind: 'ready', mode: 'live', url: LIST_URL },
+          list,
+          listFailed: false,
+          reloadList: vi.fn(async () => list.playlist),
+          reportSegmentFailure: vi.fn(async () => undefined),
+        },
         initialRange,
       }),
     );
+    await waitFor(() => expect(result.current.src).toBe('blob:prefetched'));
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.current.src).toBe('blob:prefetched');
-    expect(result.current.window).toEqual({ startSeconds: 40, endSeconds: 90 });
+    expect(result.current.window).toEqual({ startSeconds: 40, endSeconds: 92 });
   });
 
   it('소리 조각 · 파형', async () => {
     const { result } = renderHook(() =>
       useTrackPreview({
         streamId: '7',
-        baseMs: timeline.base,
-        window: { startSeconds: 40, endSeconds: 90 },
+        baseMs: STARTED,
+        window: { startSeconds: 40, endSeconds: 92 },
         video: null,
         createContext: () =>
           ({
@@ -345,13 +475,72 @@ describe('미리 받은 카드를 편집기가 열면 다시 받지 않는다', 
   });
 });
 
+describe('미리 받기는 녹화 재생 서버(/playback)를 부르지 않는다', () => {
+  const CONTROL = 'https://media.example';
+  const VOD_LIST = `${CONTROL}/vod/7/7/index.m3u8`;
+
+  beforeEach(() => {
+    clearEditorMedia();
+    forgetPrefetchLists();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', CONTROL);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('fetch 가짜로 원천 · 목록 · 조각을 실제로 받아도 /playback/ 요청은 0이다', async () => {
+    const rows = range(100, 160).map(
+      (seq, i) =>
+        `#EXT-X-PROGRAM-DATE-TIME:${new Date(STARTED + i * 4_000).toISOString()}\n#EXTINF:4.000,\n` +
+        `${CONTROL}/vod/7/7/seg/${String(seq).padStart(7, '0')}.m4s`,
+    );
+    const playlist = [
+      '#EXTM3U',
+      '#EXT-X-VERSION:6',
+      `#EXT-X-MAP:URI="${CONTROL}/vod/7/7/init/i.mp4"`,
+      ...rows,
+      '#EXT-X-ENDLIST',
+      '',
+    ].join('\n');
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/rounds/7/rewind')) {
+        return jsonResponse(200, {
+          ready: true,
+          mode: 'vod',
+          url: VOD_LIST,
+          firstPdt: new Date(STARTED).toISOString(),
+          headPdt: new Date(STARTED + 244_000).toISOString(),
+        });
+      }
+      if (url === VOD_LIST) return new Response(playlist, { status: 200 });
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const deps = depsWith({
+      fetchBroadcast: vi.fn(() => Promise.resolve(ENDED)),
+      readSource: (broadcast) =>
+        actualSource.read!(broadcast, async () => ({ kind: 'known', id: '7' })),
+      fetchEditorWindow,
+      ensureWindowHeads,
+    });
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.endsWith('.m4s'))).toHaveLength(WINDOW_SEQS.length);
+    expect(urls.filter((url) => url.includes('/playback/'))).toEqual([]);
+  });
+});
+
 describe('조각 목록만 보고 판정하기', () => {
   beforeEach(() => {
     clearEditorMedia();
     forgetPrefetchLists();
   });
 
-  /** 40~90초 창을 4초 조각으로: 앞의 count개만 올라왔다 */
+  /** 40–92초 창을 4초 조각으로: 앞의 count개만 올라왔다 */
   const segmentsUpTo = (count: number) =>
     Array.from({ length: count }, (_, i) => ({
       seq: i + 1,
@@ -398,10 +587,8 @@ describe('조각 목록만 보고 판정하기', () => {
 
   it('끝난 방송은 미리 판정하지 않는다: 덜 덮어도 예전처럼 받는다', async () => {
     const { body, deps } = depsAskingList(segmentsUpTo(5));
-    vi.mocked(deps.fetchBroadcast).mockResolvedValue({
-      ...BROADCAST,
-      endedAt: new Date(STARTED + 600_000).toISOString(),
-    });
+    vi.mocked(deps.fetchBroadcast).mockResolvedValue(ENDED);
+    vi.mocked(deps.readSource).mockResolvedValue(snapshotOf(listOf(range(100, 160), 'vod')));
 
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
     expect(body).toHaveBeenCalledTimes(1);
@@ -409,7 +596,7 @@ describe('조각 목록만 보고 판정하기', () => {
   });
 });
 
-describe('카드 목록 · 녹화 목록 나눠 쓰기', () => {
+describe('카드 목록 · 원천 나눠 쓰기', () => {
   const CARD_B: JumpCard = { ...CARD, id: '24' };
   const CARD_NEW: JumpCard = { ...CARD, id: '99' };
 
@@ -418,17 +605,21 @@ describe('카드 목록 · 녹화 목록 나눠 쓰기', () => {
     forgetPrefetchLists();
     vi.mocked(fetchAllJumpCards).mockReset().mockResolvedValue([CARD, CARD_B]);
     vi.mocked(fetchBroadcast).mockReset().mockResolvedValue(BROADCAST);
-    // 녹화가 구간 끝에 못 미쳐 pending에서 멈춘다: 영상 · 소리는 받지 않고 목록 읽기만 본다
-    vi.mocked(loadRecording).mockReset().mockResolvedValue(recordingOf(85));
+    vi.mocked(streamerIdOf).mockClear();
+    // 목록이 구간 끝에 못 미쳐 pending에서 멈춘다: 영상 · 소리는 받지 않고 목록 읽기만 본다
+    vi.mocked(readEditorSourceOnce)
+      .mockReset()
+      .mockResolvedValue(snapshotOf(listOf(range(100, 120))));
   });
 
   afterEach(() => vi.useRealTimers());
 
-  it('같은 방송의 카드 여럿이 카드 목록과 녹화 목록을 한 번씩만 읽는다', async () => {
+  it('같은 방송의 카드 여럿이 카드 목록과 원천을 한 번씩만 읽고, 채널 번호도 한 번만 정한다', async () => {
     await Promise.all([prefetchCardEditor('7', '23'), prefetchCardEditor('7', '24')]);
 
     expect(fetchAllJumpCards).toHaveBeenCalledTimes(1);
-    expect(loadRecording).toHaveBeenCalledTimes(1);
+    expect(readEditorSourceOnce).toHaveBeenCalledTimes(1);
+    expect(streamerIdOf).toHaveBeenCalledTimes(1);
   });
 
   it('목록에 없는 카드는 낡은 목록일 수 있어 한 번 다시 읽고 찾는다: 방송 중 새로 생긴 카드', async () => {
@@ -463,16 +654,26 @@ describe('카드 목록 · 녹화 목록 나눠 쓰기', () => {
     expect(fetchAllJumpCards).toHaveBeenCalledTimes(2);
   });
 
-  it('방송 중 녹화 목록은 8초만 쓴다: 녹화 기다림의 다시 확인(10초)이 새 녹화 끝을 본다', async () => {
+  it('방송 중 원천(③ 목록)은 4초만 쓴다: 편집기가 목록을 다시 받는 간격과 같다', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     await prefetchCardEditor('7', '23');
-    vi.advanceTimersByTime(7_000);
+    vi.advanceTimersByTime(3_000);
     await prefetchCardEditor('7', '24');
-    expect(loadRecording).toHaveBeenCalledTimes(1);
+    expect(readEditorSourceOnce).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(2_000);
     await prefetchCardEditor('7', '23');
-    expect(loadRecording).toHaveBeenCalledTimes(2);
+    expect(readEditorSourceOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it('끝난 방송의 원천은 30초 쓴다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.mocked(fetchBroadcast).mockResolvedValue(ENDED);
+    vi.mocked(readEditorSourceOnce).mockResolvedValue(snapshotOf(null, { kind: 'checking' }));
+    await prefetchCardEditor('7', '23');
+    vi.advanceTimersByTime(29_000);
+    await prefetchCardEditor('7', '24');
+    expect(readEditorSourceOnce).toHaveBeenCalledTimes(1);
   });
 
   it('읽기가 실패하면 기억하지 않는다: 다음 부름이 다시 읽는다', async () => {
@@ -490,6 +691,7 @@ describe('카드 목록 · 녹화 목록 나눠 쓰기', () => {
     await prefetchCardEditor('7', '24');
 
     expect(fetchAllJumpCards).toHaveBeenCalledTimes(2);
-    expect(loadRecording).toHaveBeenCalledTimes(2);
+    expect(readEditorSourceOnce).toHaveBeenCalledTimes(2);
+    expect(streamerIdOf).toHaveBeenCalledTimes(2);
   });
 });

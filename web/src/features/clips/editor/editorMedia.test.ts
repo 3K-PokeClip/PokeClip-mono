@@ -4,6 +4,7 @@ import {
   EDITOR_MEDIA_BYTES_LIMIT,
   EDITOR_MEDIA_LINGER_MS,
   clearEditorMedia,
+  editorWindowKey,
   holdEditorMedia,
   segmentTracks,
   trackPiecesBytes,
@@ -12,7 +13,9 @@ import {
 
 // 맡긴 미디어는 창 하나가 수십 MB다: 쓰는 화면이 모두 내려가면 비워야 탭을 닫을 때까지 남지 않는다
 
-const BLOB = new Blob(['mp4']);
+/** 다시 싼 창 — 크기는 mp4 Blob 으로 잰다 */
+const windowOf = (blob: Blob) => ({ blob, shiftSeconds: 0, segments: [] });
+const BLOB = windowOf(new Blob(['mp4']));
 
 describe('holdEditorMedia', () => {
   beforeEach(() => {
@@ -78,7 +81,7 @@ describe('holdEditorMedia', () => {
 });
 
 describe('바이트 예산', () => {
-  const blobOf = (bytes: number) => new Blob([new Uint8Array(bytes)]);
+  const blobOf = (bytes: number) => windowOf(new Blob([new Uint8Array(bytes)]));
   const MB = 1024 * 1024;
 
   beforeEach(() => {
@@ -151,5 +154,14 @@ describe('바이트 예산', () => {
     expect(segmentTracks.get('a')).toBeUndefined();
     expect(segmentTracks.get('b')).toBeDefined();
     release();
+  });
+});
+
+describe('editorWindowKey', () => {
+  it('영상 키와 창 첫 · 끝 조각 seq 가 모두 같아야 같은 창이다', () => {
+    expect(editorWindowKey('key-1', 102, 109)).toBe(editorWindowKey('key-1', 102, 109));
+    expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-1', 102, 110));
+    expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-1', 101, 109));
+    expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-2', 102, 109));
   });
 });

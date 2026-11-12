@@ -8,6 +8,7 @@ import {
   type RecordingPiece,
   type RecordingTimeline,
 } from '@/features/player/recordingTimeline';
+import type { RemuxedWindow } from './source/remuxWindow';
 import type { TrackPiece } from './trackAudio/loadTrackAudio';
 
 // 편집기가 여는 방송의 녹화와 미리 받아 둔 미디어(POK-499). 하이라이트 카드가 편집기에 들어가기 전에 영상 창 · 소리 조각을
@@ -156,8 +157,15 @@ function recentlyUsed<T>(sizeOf: (value: T) => number) {
   };
 }
 
-/** 받아 둔 영상 창(녹화 재생 서버 주소 → mp4) */
-export const windowBlobs = recentlyUsed<Blob>((blob) => blob.size);
+/** 받아 둔 영상 창(editorWindowKey → 다시 싼 창 — mp4 와 조각 표) */
+export const windowBlobs = recentlyUsed<RemuxedWindow>((remuxed) => remuxed.blob.size);
+
+/**
+ * 영상 창의 열쇠: 영상 키와 창 첫 · 끝 조각 seq(설계 prw2 5절 4). 같은 seq 의 조각 바이트는 바뀌지 않으므로 같은 범위면 같은
+ * 창이다. 편집기와 카드의 미리 받기가 같은 셈으로 낸다
+ */
+export const editorWindowKey = (mediaKey: string, firstSeq: number, lastSeq: number) =>
+  `${mediaKey}:${firstSeq}-${lastSeq}`;
 /** 받아 풀어 둔 소리 조각(segmentTrackKey → 트랙별 덩어리) */
 export const segmentTracks = recentlyUsed<TrackPiece[][]>(trackPiecesBytes);
 

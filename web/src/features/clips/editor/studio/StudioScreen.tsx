@@ -19,7 +19,6 @@ import {
   requestRender,
   retryUpload,
   mediaStreamId,
-  timelineBaseMs,
   updateRecipe,
   type BroadcastRow,
   type ClipSnapshot,
@@ -54,10 +53,11 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { setActiveRole, toYoutubeCategoryId, track } from '@/lib/analytics';
-import type { RecordingTimeline } from '@/features/player/recordingTimeline';
-import { editorTimelineOf, holdEditorMedia, loadRecording } from '../editorMedia';
+import { holdEditorMedia } from '../editorMedia';
+import { editorSourceError, playbackErrorMessage } from '../editorPlayback';
+import { editorXResolver, streamerIdOf } from '../source/broadcastStreamer';
+import { useEditorSource, type EditorSource as EditorVideoSource } from '../source/useEditorSource';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
-import { useTrackPreview } from '../trackAudio/useTrackPreview';
 import type { FilmstripSource } from './VideoFilmstrip';
 import { lookFromDocument, outputFromLook, sameRecipe } from '../recipeLook';
 import { editorTrackId as trackId, recipeDocumentOf } from '../recipeDocument';
@@ -284,14 +284,17 @@ interface Loaded {
   streamId: string;
   card: JumpCard | null;
   broadcast: BroadcastRow;
-  /** 방송 시작 기준 창(ms) */
-  window: { startMs: number; endMs: number };
+  /**
+   * 연 구간 — 카드 창(편집기 0초 기준 ms) 또는 저장된 컷(절대 ms). 컷을 편집기 초로 옮기는 base 는 원천이 정한 뒤에야 알아
+   * 마운트 쪽(WiredStudioBody)이 바꾼다
+   */
+  span:
+    | { kind: 'window'; startMs: number; endMs: number }
+    | { kind: 'cut'; inAtMs: number; outAtMs: number };
   saved: { id: number; version: number; document: RecipeDocument } | null;
   latestClip: ClipSnapshot | null;
   /** 스트리머가 적어 둔 트랙 이름(POK-240). 못 읽으면 null — 그때는 「트랙 n」으로 보인다 */
   trackLabels: TrackLabels | null;
-  /** 녹화(재생 서버). 있으면 미리보기에 실제 영상이 나오고, 시각의 기준점도 여기다 */
-  recording: RecordingTimeline | null;
   /** 저장된 편집본 지금 판에 남겨 둔 업로드 정보(POK-291). 창을 다시 열 때 채운다 */
   uploadRequest: UploadRequestSummary | null;
 }
@@ -442,21 +445,17 @@ async function loadFromCard(streamId: string, cardId: string): Promise<LoadResul
   if (broadcast === null || broadcast.startedAt === null) {
     return { kind: 'error', message: '방송 시작 시각이 없어 구간을 절대 시각으로 못 옮겨요' };
   }
-  const [trackLabels, recording] = await Promise.all([
-    loadTrackLabels(broadcast),
-    loadRecording(broadcast),
-  ]);
+  const trackLabels = await loadTrackLabels(broadcast);
   return {
     kind: 'loaded',
     data: {
       streamId,
       card,
       broadcast,
-      window: card.window,
+      span: { kind: 'window', ...card.window },
       saved: null,
       latestClip: null,
       trackLabels,
-      recording,
       uploadRequest: null,
     },
   };
@@ -477,25 +476,17 @@ async function loadFromRecipe(recipeId: number): Promise<LoadResult> {
       message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
     };
   }
-  // 트랙 이름 읽기는 녹화와 서로 기다릴 이유가 없다: 편집본을 열 때만 둘이 줄을 섰다(카드로 열 때는 이미 함께 간다)
-  const [trackLabels, recording] = await Promise.all([
-    loadTrackLabels(broadcast),
-    loadRecording(broadcast),
-  ]);
-  // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
-  //    저장할 때와 같은 기준이어야 제자리로 온다.
-  const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
+  const trackLabels = await loadTrackLabels(broadcast);
   return {
     kind: 'loaded',
     data: {
       streamId: detail.streamId,
       card: null,
       broadcast,
-      window: { startMs: cut.inAtMs - base, endMs: cut.outAtMs - base },
+      span: { kind: 'cut', inAtMs: cut.inAtMs, outAtMs: cut.outAtMs },
       saved: { id: detail.recipeId, version: detail.recipeVersion, document: detail.recipe },
       latestClip: detail.latestClip,
       trackLabels,
-      recording,
       uploadRequest: detail.uploadRequest ?? null,
     },
   };
@@ -635,20 +626,61 @@ interface PendingUpload {
   frameSource: SceneFrameSource | null;
 }
 
-function WiredStudio({
-  data,
-  reloading,
-  onRecipeCreated,
-}: {
+interface WiredStudioProps {
   data: Loaded;
   /** 주소가 바뀌어 다른 편집 대상을 읽는 중이다 — 다 읽으면 이 화면은 갈아 끼워진다(POK-444) */
   reloading: boolean;
   /** 첫 저장(POST)으로 편집본이 생겼다. 주소를 ?recipe= 로 바꾼다 */
   onRecipeCreated: (recipeId: number) => void;
-}) {
+}
+
+/**
+ * 편집기 영상 원천(③ 되감기 목록 · POK-473)을 폴링하는 얇은 문(계획 prw2 4절 P-3). 편집기 0초(base)가 정해지기 전에는 원천
+ * 확인 표시만 두고, 정해지면 편집기 본문을 그 base 로 마운트한다 — 본문의 훅(영상 · 상태)은 마운트 때 한 번 base 를 받는다.
+ * base 는 세션 동안 바뀌지 않는다(timelineOriginAt → 끝난 방송이면 vod 첫 PDT → startedAt)
+ */
+function WiredStudio(props: WiredStudioProps) {
+  const { broadcast } = props.data;
+  // 채널 번호를 정하는 묻기(관계 · 위임)는 마운트마다 한 번이다
+  const [resolveX] = useState(() =>
+    editorXResolver(streamerIdOf(broadcast), mediaStreamId(broadcast)),
+  );
+  const source = useEditorSource(broadcast, resolveX);
+  if (source.base === null) {
+    const waiting = editorSourceError(source.state, false, source.listFailed) ?? 'checking';
+    return (
+      <>
+        <StudioSkeleton />
+        <p
+          role="status"
+          style={{ position: 'fixed', insetInline: 0, bottom: '1rem', textAlign: 'center' }}
+        >
+          {playbackErrorMessage(waiting)}
+        </p>
+      </>
+    );
+  }
+  return <WiredStudioBody key={source.base} {...props} source={source} base={source.base} />;
+}
+
+/** 저장된 컷(절대 ms)이면 편집기 0초 기준 창으로 옮긴다 — 저장할 때와 같은 base 라야 제자리로 온다(POK-255) */
+function windowOfSpan(span: Loaded['span'], base: number): { startMs: number; endMs: number } {
+  return span.kind === 'window'
+    ? { startMs: span.startMs, endMs: span.endMs }
+    : { startMs: span.inAtMs - base, endMs: span.outAtMs - base };
+}
+
+function WiredStudioBody({
+  data,
+  reloading,
+  onRecipeCreated,
+  source: videoSource,
+  base,
+}: WiredStudioProps & { source: EditorVideoSource; base: number }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
+  const { streamId, card, broadcast, saved, latestClip, trackLabels } = data;
+  const window = useMemo(() => windowOfSpan(data.span, base), [data.span, base]);
   const startedAt = broadcast.startedAt!;
 
   // 사용 통계의 역할 속성(active_role) — 편집기는 독(ChannelScope) 밖이라, 링크로 바로 열면 등록이 없거나 그 브라우저의 옛
@@ -672,38 +704,28 @@ function WiredStudio({
     track('clip_editor_opened', { source: openedFrom });
     if (openedCardId !== null) void openJumpCard(openedCardId);
   }, [openedFrom, openedCardId]);
-  // 시각 기준점 · 녹화 끝 · 녹화 구간(기준점 축). 카드의 미리 받기(POK-499)도 같은 셈으로 같은 주소를 만든다
-  const timeline = useMemo(() => editorTimelineOf(broadcast, recording), [broadcast, recording]);
-  const { base, recordingEndSeconds, pieces: recordingPieces } = timeline;
-
   const initialRange = useMemo(
     () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
     [window],
   );
-  // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
+  // 실재생 — 되감기 목록 창(POK-473). 훅은 늘 부르고, 원천 목록이 있을 때만 영상을 붙인다. 목록이 없어도 원천이 막힌 까닭
+  //    (D3)이 있으면 어댑터를 넘겨 미리보기 아래에 알린다. 트랙별 미리 듣기는 창 Blob 시각 배치(c9′)까지 잠시 끈다 — 영상 소리로
+  //    들린다
   const video = useEditorVideoPlayback({
-    streamId: mediaStreamId(broadcast),
-    // 재생 서버에는 「기준점 + 초」로 절대 시각을 묻는다 — 구간 초가 기준점 축이다
-    recordingStartMs: base,
-    recordingSeconds: recordingEndSeconds,
-    pieces: recordingPieces,
+    streamId,
+    mediaKey: mediaStreamId(broadcast),
+    base,
+    source: videoSource,
     initialRange,
   });
-  // 트랙별 미리 듣기: 영상이 받으려는 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 영상과 함께 받기 시작해, 영상 노드를
-  // 따라 튼다(POK-389). 따라 틀기는 영상이 실제로 받아 튼 창으로 옮긴다
-  const trackPreview = useTrackPreview({
-    streamId,
-    baseMs: base,
-    window: recording ? video.targetWindow : null,
-    video: recording ? video.video : null,
-    playingFromSeconds: recording ? (video.window?.startSeconds ?? null) : null,
-  });
+  const hasSource = videoSource.list !== null;
+  const showPlayback = hasSource || video.playback.error !== null;
 
   // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
   const loadedWindow = video.window;
   const filmstripSource = useMemo<FilmstripSource | null>(
     () =>
-      recording && video.src !== '' && loadedWindow !== null
+      hasSource && video.src !== '' && loadedWindow !== null
         ? {
             src: video.src,
             videoSecondsAt: (ms) => ms / 1000 - loadedWindow.startSeconds,
@@ -712,7 +734,7 @@ function WiredStudio({
             toSeconds: loadedWindow.endSeconds,
           }
         : null,
-    [recording, video.src, loadedWindow],
+    [hasSource, video.src, loadedWindow],
   );
 
   const [save, setSave] = useState<SaveState>(() => ({
@@ -730,11 +752,8 @@ function WiredStudio({
 
   const source = useMemo<EditorSource>(() => {
     const endedMs = broadcast.endedAt ? Date.parse(broadcast.endedAt) - base : null;
-    // 방송 길이 — 녹화가 있으면 녹화 길이, 끝났으면 실제 길이, 아니면 창 끝에 1분 여유
-    const totalSeconds = Math.max(
-      recording ? recordingEndSeconds : (endedMs ?? window.endMs + 60_000) / 1000,
-      window.endMs / 1000,
-    );
+    // 방송 길이 — 끝났으면 실제 길이, 아니면 창 끝에 1분 여유(구간 한계는 아래에서 창 끝으로 묶는다)
+    const totalSeconds = Math.max((endedMs ?? window.endMs + 60_000) / 1000, window.endMs / 1000);
     // 🔴 구간은 **그 하이라이트 안에서만** 잡는다(사용자 확정 2026-09-17) — 카드가 잡아 준 시작~끝이 곧 양쪽 한계이고,
     //    편집자는 그 안에서 줄이기만 한다. 방송의 다른 장면으로는 핸들이 나가지 않는다.
     //    저장된 편집본을 다시 열 때는 카드가 없어 저장된 구간이 한계가 된다(다시 넓히려면 카드에서 새로 연다).
@@ -747,17 +766,7 @@ function WiredStudio({
       minSeconds,
       range: { startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 },
     };
-  }, [
-    broadcast.endedAt,
-    broadcast.timelineOriginAt,
-    base,
-    window,
-    card,
-    saved,
-    startedAt,
-    recording,
-    recordingEndSeconds,
-  ]);
+  }, [broadcast.endedAt, broadcast.timelineOriginAt, base, window, card, saved, startedAt]);
 
   /** 화면값 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가 한다 */
   const documentFor = useCallback(
@@ -866,8 +875,8 @@ function WiredStudio({
     (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
-      // 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
-      const playheadSeconds = recording ? playbackClock.getSeconds() : null;
+      // 원천 목록이 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
+      const playheadSeconds = hasSource ? playbackClock.getSeconds() : null;
       const cut = documentFor(recipe).cut!;
       const cutLengthMs = cut.outAtMs - cut.inAtMs;
       const rangeStart = recipe.range.startSeconds;
@@ -883,7 +892,7 @@ function WiredStudio({
       // 창이 떠 있는 동안 편집기는 안 바뀌므로 조각·모양을 연 순간 값으로 쥔다
       const loaded = videoRef.current;
       const frameSource: SceneFrameSource | null =
-        recording && loaded.src !== ''
+        hasSource && loaded.src !== ''
           ? {
               src: loaded.src,
               videoSecondsAt: (offsetMs) =>
@@ -913,7 +922,7 @@ function WiredStudio({
         frameSource,
       });
     },
-    [documentFor, card, recording, playbackClock],
+    [documentFor, card, hasSource, playbackClock],
   );
 
   /**
@@ -1117,7 +1126,7 @@ function WiredStudio({
 
   return (
     <>
-      {recording ? (
+      {hasSource ? (
         // 보이지 않는 영상 노드 하나 — 프레임은 미리보기 칸의 캔버스들이 옮겨 그린다(VideoSurface).
         <video
           ref={video.videoRef}
@@ -1128,9 +1137,9 @@ function WiredStudio({
         />
       ) : null}
       <StudioEditor
-        playback={recording ? video.playback : undefined}
-        previewVideo={recording ? video.video : null}
-        previewBuffering={recording ? video.buffering : false}
+        playback={showPlayback ? video.playback : undefined}
+        previewVideo={hasSource ? video.video : null}
+        previewBuffering={hasSource ? video.buffering : false}
         source={source}
         actions={actions}
         autosaveLabel={save.label}
@@ -1139,7 +1148,6 @@ function WiredStudio({
         clipStatus={clipStatus}
         reloading={reloading}
         mixTrackId={trackId(0)}
-        trackPreview={recording ? trackPreview : undefined}
         filmstripSource={filmstripSource}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}

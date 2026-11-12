@@ -67,6 +67,25 @@ vi.mock('@/api/mediaPlayback', async (importOriginal) => {
   };
 });
 
+// 편집기 영상 원천(POK-473) — ③ 되감기 목록 창. 다시 싸기는 조각 seq 로 표를 짓는 가짜다(조각마다 4초 · 첫 DTS = seq·4초).
+// 제어면 주소(NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL)가 없는 시험에서는 원천이 없어 미리보기 없이 연다(지금까지와 같다)
+const remux = vi.hoisted(() => ({
+  of: (seqs: readonly number[]) => {
+    const segments = seqs.map((seq) => {
+      const dts = seq * 4;
+      const frames = Array.from({ length: 8 }, (_, i) => ({ pts: dts + i * 0.5, dur: 0.5 }));
+      return { seq, videoDts: dts, frames, mediaStart: dts, mediaEnd: dts + 4 };
+    });
+    return { blob: new Blob(['mp4']), shiftSeconds: segments[0]!.videoDts, segments };
+  },
+}));
+vi.mock('../source/remuxWindow', () => ({
+  remuxWindow: vi.fn(async (bytes: { segments: { seq: number }[] }) =>
+    remux.of(bytes.segments.map((seg) => seg.seq)),
+  ),
+}));
+const CONTROL = 'https://media.example';
+
 // 업로드 창 코드 조각의 받기. 못 받는 때와 늦게 오는 때를 시험이 정한다
 const dialogChunk = vi.hoisted(() => ({
   broken: false,
@@ -123,6 +142,8 @@ const server = vi.hoisted(() => ({
   clipPoll: null as null | ((clipId: number) => Promise<Response>),
   /** 카드 열기 기록(POK-393)의 답 */
   openStatus: 204,
+  /** 회차 경로 답(제어면이 있을 때) — vod 면 목록이 서고, finalizing 이면 회차 정리 중 */
+  round: 'vod' as 'vod' | 'finalizing',
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -153,7 +174,37 @@ function recipeSnapshot(id: number, version: number, recipe: unknown) {
   };
 }
 
+/** 영상 목록 — 방송 시작부터 4초 조각 100개(seq 0–99 · 400초). 카드 창(60–72.4초)과 여유를 넉넉히 덮는다 */
+function vodPlaylist(listUrl: string): string {
+  const dir = listUrl.replace(/\/index\.m3u8$/, '');
+  const lines = ['#EXTM3U', '#EXT-X-VERSION:6', `#EXT-X-MAP:URI="${dir}/init/i.mp4"`];
+  for (let seq = 0; seq < 100; seq += 1) {
+    lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(STARTED_AT + seq * 4_000).toISOString()}`);
+    lines.push('#EXTINF:4.000,', `${dir}/seg/${String(seq).padStart(7, '0')}.m4s`);
+  }
+  return `${lines.join('\n')}\n#EXT-X-ENDLIST\n`;
+}
+
+/** 되감기 제어면 · ③ 목록 · 조각 */
+function mediaAnswer(url: string): Response {
+  const round = /\/api\/streams\/([^/]+)\/rounds\/([^/]+)\/rewind$/.exec(url);
+  if (round) {
+    const listUrl = `${CONTROL}/vod/${round[1]}/${round[2]}/index.m3u8`;
+    const ready = server.round === 'vod';
+    return jsonResponse(200, {
+      ready,
+      mode: 'vod',
+      url: ready ? listUrl : null,
+      firstPdt: ready ? new Date(STARTED_AT).toISOString() : null,
+      headPdt: ready ? new Date(STARTED_AT + 400_000).toISOString() : null,
+    });
+  }
+  if (url.endsWith('/index.m3u8')) return new Response(vodPlaylist(url), { status: 200 });
+  return new Response(new Uint8Array([1]), { status: 200 });
+}
+
 function handle(url: string, init?: RequestInit) {
+  if (url.startsWith(CONTROL)) return mediaAnswer(url);
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   const method = init?.method ?? 'GET';
@@ -259,6 +310,9 @@ function handle(url: string, init?: RequestInit) {
       : server.playbackAccess === 'expired'
         ? jsonResponse(410, { error: 'vod_expired' })
         : jsonResponse(500, { error: 'boom' });
+  // 창 소리 주소(② 머리 판독 행) — 이 시험의 ② 는 아직 없다(머리 missing · 배치는 근사)
+  if (path === `/api/clip/broadcasts/${STREAM_ID}/segments/audio-access` && method === 'POST')
+    return jsonResponse(200, { expiresAt: '2999-01-01T00:00:00Z', segments: [] });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks')
@@ -295,6 +349,7 @@ beforeEach(() => {
   server.savedLatestClip = null;
   server.clipPoll = null;
   server.openStatus = 204;
+  server.round = 'vod';
   spansAsked.length = 0;
   nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
@@ -310,6 +365,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   playbackOn.value = false;
   recordedSpans.value = null;
@@ -386,64 +442,139 @@ async function renderPartsOf(index = 0) {
   };
 }
 
-describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
-  it('녹화는 방송 번호가 아니라 영상 경로의 키로 찾는다 — 방송 번호가 회차 번호면 그 이름의 녹화가 없다', async () => {
+/** 그 꼴의 주소로 간 요청들 */
+function requestsTo(pattern: RegExp): string[] {
+  return fetchSpy.mock.calls.map(([url]) => String(url)).filter((url) => pattern.test(url));
+}
+
+/** 제어면이 있는 환경 — 원천이 서면 ③ 목록 창을 받는다. 영상 주소(createObjectURL)는 jsdom 에 없어 흉내 낸다 */
+/**
+ * 원천이 있는 편집기를 연다. 끝난 방송은 회차 답 · vod 목록까지 받아야 편집기 0초가 서서 본문이 마운트되므로 기본 기다림(1초)보다
+ * 길게 기다린다(시험 전체를 돌릴 때 기계가 바쁘면 넘었다)
+ */
+async function openWithSource(search: string) {
+  nav.search = search;
+  renderWithProviders(<StudioScreen />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled(), {
+    timeout: 10_000,
+  });
+}
+
+function withMediaControl() {
+  vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', CONTROL);
+  vi.stubGlobal(
+    'URL',
+    Object.assign(URL, { createObjectURL: () => 'blob:window', revokeObjectURL: () => undefined }),
+  );
+}
+
+describe('StudioScreen — 편집기 영상 원천(POK-473 · POK-233)', () => {
+  it('영상 목록은 방송 번호가 아니라 영상 경로의 키로 묻는다 — 방송 번호가 회차 번호면 그 이름의 목록이 없다', async () => {
+    withMediaControl();
     server.ingest = 'key-studio';
-    await openFrom(`?stream=${STREAM_ID}&card=5`);
-    expect(spansAsked).toEqual(['key-studio']);
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    await waitFor(() => expect(requestsTo(/\/index\.m3u8$/)).toHaveLength(1));
+    expect(requestsTo(/\/rewind$/)[0]).toBe(
+      `${CONTROL}/api/streams/key-studio/rounds/${STREAM_ID}/rewind`,
+    );
   });
 
-  it('칸을 모르는 옛 서버면 방송 번호로 찾는다', async () => {
-    await openFrom(`?stream=${STREAM_ID}&card=5`);
-    expect(spansAsked).toEqual([STREAM_ID]);
+  it('칸을 모르는 옛 서버면 방송 번호로 묻는다', async () => {
+    withMediaControl();
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    await waitFor(() => expect(requestsTo(/\/rewind$/)).not.toHaveLength(0));
+    expect(requestsTo(/\/rewind$/)[0]).toBe(
+      `${CONTROL}/api/streams/${STREAM_ID}/rounds/${STREAM_ID}/rewind`,
+    );
   });
 
-  it('녹화를 찾기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 녹화는 쿠키가 없으면 403)', async () => {
-    // 녹화 재생 서버가 있는 곳에서만 받는다. 모듈이 주소를 읽어 두므로 흉내 낸 함수만 주소가 있다고 답하게 한다
+  it('카드로 열면 그 창의 ③ 조각을 받고 녹화 재생 서버(/playback)는 부르지 않는다', async () => {
+    withMediaControl();
+    // 녹화 재생 서버가 있고 녹화도 있는 곳이다 — 옛 편집기는 여기서 /playback/ 으로 창을 받았다
+    playbackOn.value = true;
+    recordedSpans.value = [{ startMs: STARTED_AT, durationSeconds: 3_600 }];
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    // 카드 창 60–72.4초 ± 10초 = 50–82.4초 → 조각 12(48–52초) … 20(80–84초)
+    await waitFor(() => expect(requestsTo(/\.m4s$/)).toHaveLength(9));
+    expect(requestsTo(/\/playback\//)).toEqual([]);
+  });
+
+  it('목록을 받기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 목록은 쿠키가 없으면 403)', async () => {
+    withMediaControl();
     playbackOn.value = true;
     server.ingest = 'key-studio';
-    await openFrom(`?stream=${STREAM_ID}&card=5`);
-    expect(
-      fetchSpy.mock.calls.filter(
-        ([url, init]) =>
-          url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
-      ),
-    ).toHaveLength(1);
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    await waitFor(() => expect(requestsTo(/\/index\.m3u8$/)).toHaveLength(1));
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url));
+    const access = urls.indexOf(`/api/clip/broadcasts/${STREAM_ID}/playback-access`);
+    expect(access).toBeGreaterThanOrEqual(0);
+    expect(access).toBeLessThan(urls.findIndex((url) => url.endsWith('/index.m3u8')));
   });
 
-  it('보관 기간이 지난 방송이면 그렇다고 알린다: 녹화를 찾지 않는다(POK-335)', async () => {
+  it('보관 기간이 지난 방송이면 미리보기 아래에 그렇다고 알린다: 목록을 받지 않는다(POK-335)', async () => {
+    withMediaControl();
     playbackOn.value = true;
     server.playbackAccess = 'expired';
-    nav.search = `?stream=${STREAM_ID}&card=5`;
-    renderWithProviders(<StudioScreen />);
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
     expect(
-      await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/),
+      await screen.findByText('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요', undefined, {
+        timeout: 10_000,
+      }),
     ).toBeInTheDocument();
-    expect(spansAsked).toEqual([]);
+    expect(requestsTo(/\/index\.m3u8$/)).toEqual([]);
   });
 
-  it('같은 탭에서 다시 열어도 받아 둔 만료로 알리고 녹화를 찾지 않는다(PR #348 codex)', async () => {
+  it('같은 탭에서 다시 열어도 받아 둔 만료로 알리고 목록을 받지 않는다(PR #348 codex)', async () => {
+    withMediaControl();
     playbackOn.value = true;
     server.playbackAccess = 'expired';
     nav.search = `?stream=${STREAM_ID}&card=5`;
     const first = renderWithProviders(<StudioScreen />);
-    await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/);
+    await screen.findByText('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요', undefined, {
+      timeout: 10_000,
+    });
     first.unmount();
 
     renderWithProviders(<StudioScreen />);
     expect(
-      await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/),
+      await screen.findByText('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요', undefined, {
+        timeout: 10_000,
+      }),
     ).toBeInTheDocument();
-    expect(spansAsked).toEqual([]);
+    expect(requestsTo(/\/index\.m3u8$/)).toEqual([]);
   });
 
-  it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
+  it('출입증을 못 받으면 「녹화 없음」으로 접지 않고 목록을 받지 못했다고 알린다(PR #320 codex)', async () => {
+    withMediaControl();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     playbackOn.value = true;
     server.playbackAccess = 'fail';
     nav.search = `?stream=${STREAM_ID}&card=5`;
     renderWithProviders(<StudioScreen />);
-    expect(await screen.findByText(/영상 출입증을 받지 못했어요/)).toBeInTheDocument();
-    expect(spansAsked).toEqual([]);
+    // 끝난 방송은 vod 목록 첫 PDT 가 편집기 0초라, 목록을 받을 때까지 본문 대신 그 까닭이 선다
+    expect(
+      await screen.findByText('영상 목록을 받지 못했어요. 다시 받는 중이에요', undefined, {
+        timeout: 10_000,
+      }),
+    ).toBeInTheDocument();
+    expect(requestsTo(/\/index\.m3u8$/)).toEqual([]);
+  });
+
+  it('편집기 0초(base)가 정해지기 전에는 편집기 본문을 마운트하지 않고 원천 상태만 알린다', async () => {
+    withMediaControl();
+    // 끝난 방송의 vod 가 아직 준비되지 않았다 — base 둘째 원천(vod 첫 PDT)을 기다린다
+    server.round = 'finalizing';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    renderWithProviders(<StudioScreen />);
+
+    expect(
+      await screen.findByText('방송 녹화를 정리하는 중이에요(보통 몇 분)', undefined, {
+        timeout: 10_000,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeDisabled();
+    // 본문이 서지 않았으니 카드 열기 기록도 아직이다
+    expect(openCalls()).toHaveLength(0);
   });
 });
 
@@ -1578,15 +1709,18 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
   });
 
   it('재생 중에 창을 열면 그 순간의 재생 위치를 추천에 싣는다: 허브의 값은 재생 중에 낡았다', async () => {
-    recordedSpans.value = [{ startMs: STARTED_AT, durationSeconds: 3_600 }];
+    withMediaControl();
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openWithSource(`stream=${STREAM_ID}&card=5`);
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
     const video = document.querySelector('video')!;
     Object.defineProperty(video, 'paused', { configurable: true, value: false });
     act(() => {
       video.dispatchEvent(new Event('play'));
-      // 카드 창은 60초부터고 앞 여유 10초를 받는다: 영상 안 13초 = 편집기 63초 = 쇼츠 안 3초
-      video.currentTime = 13;
+      // 카드 창은 60초부터고 앞 여유 10초를 조각 경계(48초)부터 받는다: 영상 안 15초 = 편집기 63초 = 쇼츠 안 3초
+      video.currentTime = 15;
       video.dispatchEvent(new Event('timeupdate'));
     });
 

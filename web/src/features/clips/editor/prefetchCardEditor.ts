@@ -5,17 +5,16 @@ import {
   type BroadcastRow,
   type JumpCard,
 } from '@/api/clipEditor';
-import { recordingClipUrl } from '@/api/mediaPlayback';
+import { mediaControlBaseUrl } from '@/features/player/mediaSource';
+import type { XAnswer } from '@/features/player/rewindSwitch';
 import { onSessionAdvance } from '@/stores/auth';
-import type { RecordingTimeline } from '@/features/player/recordingTimeline';
-import {
-  editorTimelineOf,
-  loadRecording,
-  segmentTrackKey,
-  segmentTracks,
-  windowBlobs,
-} from './editorMedia';
-import { fetchRecordingWindow, PAD_SECONDS, windowFor } from './useEditorVideoPlayback';
+import { segmentTrackKey, segmentTracks, windowBlobs } from './editorMedia';
+import { editorXResolver, streamerIdOf } from './source/broadcastStreamer';
+import { editorSourceView, type EditorSourceState } from './source/editorSourceState';
+import type { PlaylistSegment } from './source/editorPlaylist';
+import type { RemuxedWindow } from './source/remuxWindow';
+import { readEditorSourceOnce, type EditorSourceSnapshot } from './source/useEditorSource';
+import { decideWindow, ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
 import {
   GAP_TOLERANCE_MS,
   SegmentsNotReadyError,
@@ -24,31 +23,44 @@ import {
 import { loadSegmentTracks, PREVIEW_SAMPLE_RATE } from './trackAudio/useTrackPreview';
 
 // 카드에서 편집기를 미리 받아 둔다(POK-499). 편집기가 처음 받는 영상 창과 소리 조각(파형도 여기서 나온다)을 같은 셈 · 같은
-// 주소로 받아 editorMedia에 맡긴다. 셋이 다 오면 카드의 「편집」이 열리고, 편집기는 맡긴 것을 그대로 꺼내 쓴다.
+// 열쇠로 받아 editorMedia에 맡긴다. 셋이 다 오면 카드의 「편집」이 열리고, 편집기는 맡긴 것을 그대로 꺼내 쓴다.
+// 영상 창은 편집기처럼 ③ 되감기 목록에서 정하고(decideWindow) 조각을 받아 다시 싼다(POK-473). 녹화 재생 서버(/playback)는
+// 부르지 않는다. 판 NULL 창이면 ② 머리도 함께 읽어 둔다(편집기가 다시 읽지 않는다).
 
 /**
- * - ready: 다 받았다(받을 녹화가 없는 끝난 방송도 기다릴 것이 없어 ready다. 그 사정은 편집기가 알린다)
- * - pending: 녹화가 아직 덜 올라왔다(방금 생긴 카드). 조금 뒤 다시 묻는다
+ * - ready: 다 받았다(받을 조각이 없거나 원천이 끝내 막힌 방송도 기다릴 것이 없어 ready다. 그 사정은 편집기가 알린다)
+ * - pending: 목록이 아직 덜 올라왔거나 원천이 아직 서지 않았다(방금 생긴 카드 · 회차 정리 중). 조금 뒤 다시 묻는다
  */
 export type CardEditorPrefetch = 'ready' | 'pending';
 
 export interface PrefetchDeps {
   fetchJumpCard: (streamId: string, cardId: string) => Promise<JumpCard | null>;
   fetchBroadcast: (streamId: string) => Promise<BroadcastRow | null>;
-  loadRecording: (broadcast: BroadcastRow) => Promise<RecordingTimeline | null>;
-  fetchRecordingWindow: (streamId: string, url: string, signal?: AbortSignal) => Promise<Blob>;
+  /** 편집기 원천 한 번 읽기 — 상태 · ③ 목록 · base(편집기와 같은 판정) */
+  readSource: (broadcast: BroadcastRow) => Promise<EditorSourceSnapshot>;
+  fetchEditorWindow: (
+    mediaKey: string,
+    segs: readonly PlaylistSegment[],
+    signal?: AbortSignal,
+  ) => Promise<RemuxedWindow>;
+  ensureWindowHeads: (
+    streamId: string,
+    mediaKey: string,
+    segs: readonly PlaylistSegment[],
+    signal?: AbortSignal,
+  ) => Promise<void>;
   loadSegmentTracks: typeof loadSegmentTracks;
   /** 소리를 풀 문맥. 편집기의 미리 듣기와 같은 표본율이라야 같은 소리다 */
   createDecoder: () => Pick<BaseAudioContext, 'decodeAudioData'>;
 }
 
-/** 카드 목록 · 끝난 방송의 녹화 목록을 다시 쓰는 시간 */
+/** 카드 목록 · 끝난 방송의 원천을 다시 쓰는 시간 */
 const LIST_REUSE_MS = 30_000;
 /**
- * 방송 중 녹화 목록을 다시 쓰는 시간. 녹화 기다림의 재확인(useCardEditorReady, 10초)이 새 녹화 끝을 봐야 하므로 그보다 짧게 둔다.
- * 같은 방송의 카드 여럿이 한꺼번에 묻는 것만 나눈다
+ * 방송 중 원천(③ 목록)을 다시 쓰는 시간 — 편집기가 창 끝을 기다리며 목록을 다시 받는 간격과 같다(설계 prw2 5절 2). 녹화 기다림의
+ * 재확인(useCardEditorReady, 10초)이 새 목록 끝을 본다. 같은 방송의 카드 여럿이 한꺼번에 묻는 것만 나눈다
  */
-const LIVE_RECORDING_REUSE_MS = 8_000;
+const LIVE_SOURCE_REUSE_MS = 4_000;
 
 /**
  * 키마다 읽기 하나를 잠깐 기억한다. 읽는 중이면 그 읽기를 같이 기다리고(동시 요청 합침), 실패는 기억하지 않는다.
@@ -87,13 +99,16 @@ function shortLived<T>() {
 
 /** 방송 → 가린 카드까지 전체 카드 목록. 카드 하나를 찾으려고 목록 전체를 읽으므로(fetchJumpCard) 카드마다 읽지 않게 나눈다 */
 const cardLists = shortLived<JumpCard[]>();
-/** 방송(과 끝남 여부) → 녹화 */
-const recordings = shortLived<RecordingTimeline | null>();
+/** 방송(과 끝남 여부) → 편집기 원천(③ 목록 · base) */
+const sources = shortLived<EditorSourceSnapshot>();
+/** 방송 → 지금 방송 번호 묻기(R58). 채널 번호 판정(관계 · 위임 조회)을 카드마다 하지 않게 나눈다 */
+const resolvers = new Map<string, (fresh: boolean) => Promise<XAnswer>>();
 
-/** 기억해 둔 카드 목록 · 녹화를 비운다. 계정이 바뀔 때 · 화면 시험 사이에 부른다 */
+/** 기억해 둔 카드 목록 · 원천을 비운다. 계정이 바뀔 때 · 화면 시험 사이에 부른다 */
 export function forgetPrefetchLists(): void {
   cardLists.clear();
-  recordings.clear();
+  sources.clear();
+  resolvers.clear();
 }
 onSessionAdvance(forgetPrefetchLists);
 
@@ -111,27 +126,36 @@ export async function cardFromList(streamId: string, cardId: string): Promise<Ju
   return find(await cardLists.read(streamId, LIST_REUSE_MS, load).value);
 }
 
-function recordingOf(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
+function resolverOf(broadcast: BroadcastRow): (fresh: boolean) => Promise<XAnswer> {
+  const known = resolvers.get(broadcast.streamId);
+  if (known !== undefined) return known;
+  const resolver = editorXResolver(streamerIdOf(broadcast), mediaStreamId(broadcast));
+  resolvers.set(broadcast.streamId, resolver);
+  return resolver;
+}
+
+function sourceOf(broadcast: BroadcastRow): Promise<EditorSourceSnapshot> {
   const live = broadcast.endedAt === null;
-  return recordings.read(
+  return sources.read(
     `${broadcast.streamId}:${broadcast.endedAt ?? 'live'}`,
-    live ? LIVE_RECORDING_REUSE_MS : LIST_REUSE_MS,
-    () => loadRecording(broadcast),
+    live ? LIVE_SOURCE_REUSE_MS : LIST_REUSE_MS,
+    () => readEditorSourceOnce(broadcast, resolverOf(broadcast)),
   ).value;
 }
 
 const defaultDeps: PrefetchDeps = {
   fetchJumpCard: cardFromList,
   fetchBroadcast,
-  loadRecording: recordingOf,
-  fetchRecordingWindow,
+  readSource: sourceOf,
+  fetchEditorWindow,
+  ensureWindowHeads,
   loadSegmentTracks,
   createDecoder: () => new OfflineAudioContext(1, 1, PREVIEW_SAMPLE_RATE),
 };
 
 /**
- * 영상 창 받기의 시한. 재생 서버가 요청을 받고 본문을 보내다 멈추면 미리 받기가 끝나지 않아 「편집」이 실패로도 못 넘어가고,
- * 받기 자리(PREFETCH_PARALLEL)도 계속 쥐고 있었다(PR #458 codex). 창 하나가 수십 MB라 느린 망도 넉넉히 기다린다
+ * 영상 창 받기의 시한. 조각 받기가 본문을 보내다 멈추면 미리 받기가 끝나지 않아 「편집」이 실패로도 못 넘어가고, 받기
+ * 자리(PREFETCH_PARALLEL)도 계속 쥐고 있었다(PR #458 codex). 창 하나가 수십 MB라 느린 망도 넉넉히 기다린다
  */
 export const PREFETCH_VIDEO_TIMEOUT_MS = 120_000;
 
@@ -171,6 +195,88 @@ function segmentsCover(
   return end >= toMs - COVER_TOLERANCE_SECONDS * 1000;
 }
 
+/** 원천이 끝내 막힌 상태 — 기다려도 창이 서지 않는다(편집기가 그 까닭을 알린다) */
+const SETTLED_SOURCE: ReadonlySet<EditorSourceState['kind']> = new Set([
+  'expired',
+  'goneOrNone',
+  'access',
+  'outsideDvr',
+]);
+
+/** 창을 정할 수 없는 원천 상태의 미리 받기 판정. 제어면이 없는 환경은 받을 것이 없어 ready 다 */
+function verdictOfSource(view: EditorSourceState): CardEditorPrefetch {
+  if (SETTLED_SOURCE.has(view.kind)) return 'ready';
+  if (view.kind === 'unavailable' && mediaControlBaseUrl() === null) return 'ready';
+  return 'pending';
+}
+
+/** 카드 창의 소리 조각을 받아 맡긴다. 다 덮은 소리를 받았나 — 방송 중에 조각이 덜 올라왔으면 맡기지 않고 false다 */
+async function prefetchAudio(
+  streamId: string,
+  base: number,
+  range: { fromMs: number; toMs: number; startSeconds: number; endSeconds: number },
+  live: boolean,
+  deps: PrefetchDeps,
+): Promise<boolean> {
+  const { fromMs, toMs } = range;
+  const trackKey = segmentTrackKey(streamId, fromMs, toMs);
+  if (segmentTracks.get(trackKey) !== undefined) return true;
+  const decoder = deps.createDecoder();
+  let tracks: TrackPiece[][];
+  try {
+    tracks = await deps.loadSegmentTracks({
+      streamId,
+      baseMs: base,
+      fromMs,
+      toMs,
+      decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
+      // 방송 중에 조각 목록이 구간을 덮지 못하면 본문을 받지 않는다: 어차피 덜 덮은 소리는 맡기지 않고, 다시 확인할 때마다
+      // 같은 구간을 통째로 받아 풀었다(10초마다 최대 6번)
+      precheck: live ? (segments) => segmentsCover(segments, fromMs, toMs) : undefined,
+    });
+  } catch (error) {
+    if (error instanceof SegmentsNotReadyError) return false;
+    throw error;
+  }
+  // 소리 트랙을 하나도 못 꺼냈으면 편집기도 「소리 못 부름」이다: 준비됐다고 하지 않는다
+  if (tracks.length === 0) throw new Error('no audio tracks');
+  // 영상 조각은 올라왔어도 소리 조각은 아직 올라가는 중일 수 있다(서버는 다 올라간 조각만 준다). 덜 덮은 소리를 맡기면 편집기가
+  // 그것을 그대로 꺼내 빈 자리를 무음으로 튼다(PR #458 codex). 끝난 방송이면 더 올라올 것이 없어 그대로 맡긴다
+  if (live && !coversWindow(tracks, range.startSeconds, range.endSeconds)) return false;
+  segmentTracks.set(trackKey, tracks);
+  return true;
+}
+
+/**
+ * 창 조각을 받아 다시 싸 맡기고, 판 NULL 이면 ② 머리를 함께 읽는다. 머리 판독은 실패해도 미리 받기를 막지 않는다(편집기가 다시
+ * 읽는다). 둘 다 시한에 끊는다
+ */
+async function prefetchVideo(
+  streamId: string,
+  mediaKey: string,
+  target: { key: string; segs: readonly PlaylistSegment[] },
+  deps: PrefetchDeps,
+): Promise<void> {
+  if (windowBlobs.get(target.key) !== undefined) return;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), PREFETCH_VIDEO_TIMEOUT_MS);
+  const stopped = new Promise<void>((resolve) =>
+    abort.signal.addEventListener('abort', () => resolve(), { once: true }),
+  );
+  try {
+    const [remuxed] = await Promise.all([
+      deps.fetchEditorWindow(mediaKey, target.segs, abort.signal),
+      Promise.race([
+        deps.ensureWindowHeads(streamId, mediaKey, target.segs, abort.signal),
+        stopped,
+      ]),
+    ]);
+    windowBlobs.set(target.key, remuxed);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function prefetchOnce(
   streamId: string,
   cardId: string,
@@ -182,71 +288,35 @@ async function prefetchOnce(
   ]);
   if (card === null) throw new Error(`card ${cardId} not found`);
   if (broadcast === null || broadcast.startedAt === null) throw new Error('broadcast not started');
-  const live = broadcast.endedAt === null;
-  const recording = await deps.loadRecording(broadcast);
-  const { base, recordingEndSeconds, pieces } = editorTimelineOf(broadcast, recording);
+  const { state, list, base } = await deps.readSource(broadcast);
   const range = { startSeconds: card.window.startMs / 1000, endSeconds: card.window.endMs / 1000 };
-  // 방송 중에는 녹화가 구간 끝 + 여유까지 올라와야 창이 굳는다. 그 전에 받으면 편집기가 들어갈 때 창이 더 길어져 주소가
-  // 달라지고(다시 받는다), 받은 영상도 구간 끝에서 잘린다
-  if (live && range.endSeconds + PAD_SECONDS > recordingEndSeconds) return 'pending';
-  // 끝난 방송인데 녹화가 없으면 편집기도 미리보기 없이 연다: 기다려도 오지 않는다
-  if (recording === null || recordingEndSeconds <= 0) return 'ready';
-  const win = windowFor(range, recordingEndSeconds, pieces);
-  // 구간에 녹화가 없다(틈 안). 편집기도 받지 않고 「녹화 없음」으로 알린다
-  if (win.empty) return 'ready';
-
-  // 편집기(useEditorVideoPlayback · useTrackPreview)가 묻는 주소 · 열쇠와 같아야 꺼내 쓴다
-  const videoUrl = recordingClipUrl(
-    mediaStreamId(broadcast),
-    base + Math.round(win.startSeconds * 1000),
-    Math.max(1, win.endSeconds - win.startSeconds),
-  );
-  const fromMs = base + Math.round(win.startSeconds * 1000);
-  const toMs = base + Math.round(win.endSeconds * 1000);
-  const trackKey = segmentTrackKey(streamId, fromMs, toMs);
-
-  const loadVideo = async () => {
-    if (windowBlobs.get(videoUrl) !== undefined) return;
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), PREFETCH_VIDEO_TIMEOUT_MS);
-    try {
-      windowBlobs.set(
-        videoUrl,
-        await deps.fetchRecordingWindow(mediaStreamId(broadcast), videoUrl, abort.signal),
-      );
-    } finally {
-      clearTimeout(timer);
-    }
+  if (list === null || base === null) return verdictOfSource(state);
+  const rows = list.playlist.rows;
+  const bounds =
+    rows.length === 0
+      ? null
+      : { firstPdtMs: rows[0]!.pdtMs, endMs: rows.at(-1)!.pdtMs + rows.at(-1)!.durationMs };
+  const view = editorSourceView(state, bounds, base + range.startSeconds * 1000);
+  if (view.kind !== 'ready') return verdictOfSource(view);
+  const live = list.mode === 'live';
+  const mediaKey = mediaStreamId(broadcast);
+  // 편집기(useEditorVideoPlayback)와 같은 셈이라야 같은 열쇠다. 방송 중에는 목록이 구간 끝 + 여유까지 올라와야 창이 굳는다 —
+  // 그 전에 받으면 편집기가 들어갈 때 창이 더 길어져 열쇠가 달라지고(다시 받는다), 받은 영상도 구간 끝에서 잘린다
+  const decision = decideWindow(range, list, base, mediaKey, live);
+  if (decision.kind === 'wait') return 'pending';
+  // 구간에 받을 조각이 없다(틈 안). 편집기도 받지 않고 「녹화 없음」으로 알린다
+  if (decision.kind === 'empty') return 'ready';
+  const { target } = decision;
+  const audioRange = {
+    fromMs: base + Math.round(target.startSeconds * 1000),
+    toMs: base + Math.round(target.endSeconds * 1000),
+    startSeconds: target.startSeconds,
+    endSeconds: target.endSeconds,
   };
-  /** 다 덮은 소리를 받았나. 방송 중에 조각이 덜 올라왔으면 맡기지 않고 false다 */
-  const loadAudio = async (): Promise<boolean> => {
-    if (segmentTracks.get(trackKey) !== undefined) return true;
-    const decoder = deps.createDecoder();
-    let tracks: TrackPiece[][];
-    try {
-      tracks = await deps.loadSegmentTracks({
-        streamId,
-        baseMs: base,
-        fromMs,
-        toMs,
-        decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
-        // 방송 중에 조각 목록이 구간을 덮지 못하면 본문을 받지 않는다: 어차피 덜 덮은 소리는 맡기지 않고, 다시 확인할 때마다
-        // 같은 구간을 통째로 받아 풀었다(10초마다 최대 6번)
-        precheck: live ? (segments) => segmentsCover(segments, fromMs, toMs) : undefined,
-      });
-    } catch (error) {
-      if (error instanceof SegmentsNotReadyError) return false;
-      throw error;
-    }
-    // 소리 트랙을 하나도 못 꺼냈으면 편집기도 「소리 못 부름」이다: 준비됐다고 하지 않는다
-    if (tracks.length === 0) throw new Error('no audio tracks');
-    // 녹화는 올라왔어도 소리 조각은 아직 올라가는 중일 수 있다(서버는 다 올라간 조각만 준다). 덜 덮은 소리를 맡기면 편집기가
-    // 그것을 그대로 꺼내 빈 자리를 무음으로 튼다(PR #458 codex). 끝난 방송이면 더 올라올 것이 없어 그대로 맡긴다
-    if (live && !coversWindow(tracks, win.startSeconds, win.endSeconds)) return false;
-    segmentTracks.set(trackKey, tracks);
-    return true;
-  };
-  const [, audioComplete] = await Promise.all([loadVideo(), loadAudio()]);
+  const [, audioComplete] = await Promise.all([
+    prefetchVideo(streamId, mediaKey, target, deps),
+    prefetchAudio(streamId, base, audioRange, live, deps),
+  ]);
   return audioComplete ? 'ready' : 'pending';
 }
 
