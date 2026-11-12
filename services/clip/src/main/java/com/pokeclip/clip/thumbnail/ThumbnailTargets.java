@@ -160,11 +160,12 @@ public class ThumbnailTargets {
      * 번 · 계획 착수 체크리스트 C4). 순서는 후보 순서 그대로다. 주문을 못 내는 카드는 둘로 가른다.
      *
      * <ul>
-     *   <li><b>내려놓음</b>(kty 2026-11-12 (가)) — 방송이 끝났거나 회차가 완결이고 장면이 영구히 안 나온다: 장면 없음(마지막
-     *       귀속 행 뒤 · 회차 행 없음) 또는 장면 조각 올리기 실패. 내려놓지 않으면 그 카드가 사진 없음으로 남아 후보 묶음 자리를
-     *       계속 차지하고, 그보다 오래된 카드는 영영 후보에 못 든다(커밋 리뷰 r1 HIGH).</li>
-     *   <li><b>기다림</b> — 그 밖 전부: 방송 중(라이브 머리 · 다음 행 대기), 장면 조각이 아직, 장면 계산이 깨져 격리된 방송
-     *       ({@code jumpcard.scene_unavailable} — 장부 불변식 위반을 포기로 덮지 않는다).</li>
+     *   <li><b>내려놓음</b>(kty 2026-11-12 (가) 「영구 불가만」) — 방송이 끝났거나 회차가 완결이고 장면이 없다(마지막 귀속 행
+     *       뒤 · 회차 행 없음). 내려놓지 않으면 그 카드가 사진 없음으로 남아 후보 묶음 자리를 계속 차지하고, 그보다 오래된 카드는
+     *       영영 후보에 못 든다(커밋 리뷰 r1 HIGH).</li>
+     *   <li><b>기다림</b> — 그 밖 전부: 방송 중(라이브 머리 · 다음 행 대기), 장면 조각이 아직 안 올라감({@code pending}이든
+     *       {@code failed}든 — {@code failed}는 종국이 아니다: 생산자 스위퍼가 다시 집어 올리고 올라가기 전엔 로컬 원본을 안
+     *       지운다), 장면 계산이 깨져 격리된 방송({@code jumpcard.scene_unavailable} — 장부 불변식 위반을 포기로 덮지 않는다).</li>
      * </ul>
      *
      * <p>회차 완결은 방송이 아직 {@code live}이고 내려놓을지 따질 카드가 있을 때만 그 방송마다 한 번 묻는다(장면 몫 장부 왕복
@@ -193,16 +194,11 @@ public class ThumbnailTargets {
             Optional<ThumbnailOrder> order = scene == null ? Optional.empty() : scene.thumbnailOrder();
             if (order.isPresent()) {
                 orders.add(new Card(c.id(), scene.row().s3Key(), order.get().offsetMs(), order.get().offsetOrigin()));
-            } else if (neverResolves(scene) && finished.computeIfAbsent(c.streamId(), id -> finished(byId.get(id)))) {
-                givenUp.add(c.id());
+            } else if (scene == null && finished.computeIfAbsent(c.streamId(), id -> finished(byId.get(id)))) {
+                givenUp.add(c.id()); // 장면 없음(마지막 귀속 행 뒤 · 회차 행 없음) — 끝났으니 다시 봐도 같다
             }
         }
         return new CardBatch(orders, givenUp);
-    }
-
-    /** 장면이 없거나(마지막 귀속 행 뒤 · 회차 행 없음) 장면 조각 올리기가 실패로 끝났다 — 방송이 끝났으면 다시 봐도 같다. */
-    private static boolean neverResolves(Scene scene) {
-        return scene == null || scene.row().uploadFailed();
     }
 
     /**

@@ -28,8 +28,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 후보 50장을 뽑은 뒤에야 장면이 없음을 안다 — 내려놓지 않으면 그런 카드가 묶음 자리를 계속 차지해 그보다 오래된 카드의 사진이
  * 영영 안 나간다(커밋 리뷰 r1 HIGH — 정확히 50장이면 후보가 고정된다).
  *
- * <p>영구 불가 = 방송이 끝났거나 회차가 완결됐고, ① 장면이 없음(마지막 귀속 행 뒤) ② 장면 조각 {@code upload_state = failed}
- * ③ 회차 행이 없음. 방송 중이면 · 장면 조각이 아직이면 · 방송 장면이 계산 전제를 깨 격리됐으면 내려놓지 않는다.
+ * <p>영구 불가 = 방송이 끝났거나 회차가 완결됐고, ① 장면이 없음(마지막 귀속 행 뒤) ③ 회차 행이 없음(② 「장면 조각 failed」 는
+ * 확인 패스 1 에서 거뒀다 — failed 는 종국이 아니다). 방송 중이면 · 장면 조각이 아직이면(pending · failed) · 방송 장면이 계산
+ * 전제를 깨 격리됐으면 내려놓지 않는다.
  *
  * <p>시각은 {@link LedgerSeed#BASE}에서 잰 ms다.
  */
@@ -101,18 +102,38 @@ class CardThumbnailGiveUpTest extends IntegrationTestSupport {
         assertThat(내려놓음(card)).isTrue();
     }
 
-    /** ② 끝난 방송에서 장면 조각이 {@code failed}면 그 조각은 안 올라온다 — 내려놓는다. */
+    /**
+     * 끝난 방송이어도 장면 조각 {@code failed}는 종국이 아니다 — 생산자 스위퍼가 {@code pending} · {@code failed}를 다시 집어
+     * 올리고({@code failed → uploaded} 허용) 로컬 원본도 올라가기 전엔 안 지운다. 내려놓지 않고 기다린다(커밋 리뷰 확인 패스 1).
+     */
     @Test
-    void 끝난_방송에서_장면_조각이_실패면_내려놓는다() {
+    void 끝난_방송에서_장면_조각이_실패여도_기다린다() {
         회차_방송("S-failed", "FAILKEY", true);
         jdbc.update("UPDATE public.stream_segments SET upload_state = 'failed' WHERE stream_id = ? AND seq = 1",
                 "FAILKEY");
-        long card = 카드("S-failed", 1_000);
+        카드("S-failed", 1_000);
 
         sweeper().sweepCards();
 
         assertThat(sent).isEmpty();
-        assertThat(내려놓음(card)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
+    }
+
+    /** 회귀: {@code failed} 였던 장면 조각이 다시 올라가면(스위퍼 재시도) 다음 순회가 그 카드를 정상 주문한다. */
+    @Test
+    void 실패했던_장면_조각이_올라가면_다음_순회에_주문한다() {
+        회차_방송("S-retry", "RETRYKEY", true);
+        jdbc.update("UPDATE public.stream_segments SET upload_state = 'failed' WHERE stream_id = ? AND seq = 1",
+                "RETRYKEY");
+        long card = 카드("S-retry", 1_000);
+        sweeper().sweepCards();
+
+        jdbc.update("UPDATE public.stream_segments SET upload_state = 'uploaded' WHERE stream_id = ? AND seq = 1",
+                "RETRYKEY");
+        sweeper().sweepCards();
+
+        assertThat(sent).extracting(job -> job.path("targetId").asString()).containsExactly(String.valueOf(card));
+        assertThat(sent.get(0).path("source").path("s3Key").asString()).isEqualTo("seg/RETRYKEY/1");
     }
 
     /** ③ 끝난 방송의 회차에 행이 하나도 없으면 장면이 영구히 없다 — 내려놓는다. */

@@ -18,7 +18,7 @@ class ServerClockPositionTest {
 
     /** 판 NULL 행: 축 = 벽시각. PDT 는 래칫으로 앞설 수 있다. */
     private static Row legacy(long seq, long pts, long wall, Long pdt, int duration) {
-        return new Row(seq, pts, duration, wall, pdt, null, "uploaded", null);
+        return new Row(seq, pts, duration, wall, pdt, null, true, null);
     }
 
     /** 회차 귀속 행 열(지난 방송 floor 의 목록 시각 = PDT). */
@@ -29,7 +29,7 @@ class ServerClockPositionTest {
 
     /** 판 2 행: 축 = PDT. */
     private static Row v2(long seq, long pts, long wall, long pdt, int duration) {
-        return new Row(seq, pts, duration, wall, pdt, 2, "uploaded", null);
+        return new Row(seq, pts, duration, wall, pdt, 2, true, null);
     }
 
     // ── 서버 시계 → 위치(섞인 floor · 계약 6-6-9) ─────────────────
@@ -83,7 +83,7 @@ class ServerClockPositionTest {
     @Test
     void 다음_귀속_행이_있으면_조각_끝으로_접는다() {
         List<Row> rows = List.of(legacy(10, 200_000, 100_000, 100_000L, 4_000),
-                new Row(11, 210_000, 4_000, 110_000, 110_000L, null, "uploaded", null));
+                new Row(11, 210_000, 4_000, 110_000, 110_000L, null, true, null));
 
         assertThat(ServerClockPosition.fromServerClock(rows, 106_000))
                 .contains(new Position(204_000, 10, "wall", false, true));
