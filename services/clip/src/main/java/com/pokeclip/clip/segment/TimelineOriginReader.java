@@ -46,7 +46,7 @@ import java.util.Map;
  * 바꿨고 값의 식은 그대로다 — 회차 머리 앞 비귀속 행과 앞 방송 꼬리가 첫 조각으로 뽑히지 않는다. 위 시간창은 머리 세션 행이 없는
  * 옛 방송의 대체 경로로만 남는다. 🔴 「기준점 + 카드 ms = 목록 PDT」 는 회차 안 {@code PDT − start_pts} 가 상수인 행(판 2 ·
  * c0 이후 판 NULL)에서만 선다 — 출시 이미지가 쓴 판 NULL 행은 아니다(설계 r7 8.2). 그래서 카드 → 플레이어 · 편집기 자리는 이
- * 값이 아니라 카드 응답의 {@code playerAtMs} · {@code fileHead}(행별 변환)로 가고, 이 값은 지난 방송 마크의 왕복과 채팅 ·
+ * 값이 아니라 카드 응답의 {@code playerAtMs} · {@code playerWindow}(행별 변환)로 가고, 이 값은 지난 방송 마크의 왕복과 채팅 ·
  * 카테고리 커서에 남는다.
  *
  * <p>이 표의 소유는 1번(Media)이고 clip은 <b>읽기만</b> 한다({@link StreamSegmentReader}와 같다).

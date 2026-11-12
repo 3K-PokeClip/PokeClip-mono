@@ -75,7 +75,7 @@ class JumpCardSceneFailureTest extends IntegrationTestSupport {
             RecordResult result = service.record(방송, 자동_카드(30_000));
 
             assertThat(result.created()).isTrue();
-            assertThat(result.card().fileHead()).isNull();
+            assertThat(result.card().playerWindow()).isNull();
             assertThat(result.card().playerAtMs()).isNull();
             assertThat(카드_수()).isEqualTo(1);
             assertThat(logs.messages())
@@ -96,7 +96,7 @@ class JumpCardSceneFailureTest extends IntegrationTestSupport {
 
             assertThat(result.created()).isTrue();
             assertThat(result.card().playerAtMs()).isNull();
-            assertThat(page).singleElement().satisfies(card -> assertThat(card.fileHead()).isNull());
+            assertThat(page).singleElement().satisfies(card -> assertThat(card.playerWindow()).isNull());
             assertThat(hidden.hidden()).isTrue();
             assertThat(hidden.playerAtMs()).isNull();
             assertThat(logs.messages())
@@ -116,10 +116,10 @@ class JumpCardSceneFailureTest extends IntegrationTestSupport {
                 request.streamTimestampMs(), request.window(), 90, null));
 
         assertThat(made.playerAtMs()).isEqualTo(at(30_000).toEpochMilli());
-        assertThat(made.fileHead()).isNotNull();
+        assertThat(made.playerWindow()).isNotNull();
         assertThat(again.created()).isFalse();
         for (JumpCardSnapshot card : List.of(hidden, shown, again.card())) {
-            assertThat(card.fileHead()).isEqualTo(made.fileHead());
+            assertThat(card.playerWindow()).isEqualTo(made.playerWindow());
             assertThat(card.playerAtMs()).isEqualTo(made.playerAtMs());
         }
     }

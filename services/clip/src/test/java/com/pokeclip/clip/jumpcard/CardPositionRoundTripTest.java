@@ -21,15 +21,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 import javax.sql.DataSource;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
-import java.sql.Connection;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.pokeclip.clip.support.LedgerSeed.at;
+import static com.pokeclip.clip.support.StatementCounting.counting;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -43,7 +40,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CardPositionRoundTripTest extends IntegrationTestSupport {
 
     private static final String KEY = "TRIPKEY";
-    private static final Set<String> STATEMENT_MAKERS = Set.of("prepareStatement", "createStatement", "prepareCall");
 
     private final BroadcastRepository broadcasts;
     private final JdbcTemplate jdbc;
@@ -151,36 +147,6 @@ class CardPositionRoundTripTest extends IntegrationTestSupport {
             return new long[] {statements.get(), stats.getPrepareStatementCount()};
         } finally {
             stats.setStatisticsEnabled(false);
-        }
-    }
-
-    /** 연결이 문장을 만들 때마다 센다. */
-    private static DataSource counting(DataSource real, AtomicInteger counter) {
-        return (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[] {DataSource.class},
-                (proxy, method, args) -> {
-                    Object result = invoke(real, method, args);
-                    if (result instanceof Connection connection) {
-                        return countingConnection(connection, counter);
-                    }
-                    return result;
-                });
-    }
-
-    private static Connection countingConnection(Connection real, AtomicInteger counter) {
-        return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
-                (proxy, method, args) -> {
-                    if (STATEMENT_MAKERS.contains(method.getName())) {
-                        counter.incrementAndGet();
-                    }
-                    return invoke(real, method, args);
-                });
-    }
-
-    private static Object invoke(Object target, java.lang.reflect.Method method, Object[] args) throws Throwable {
-        try {
-            return method.invoke(target, args);
-        } catch (InvocationTargetException e) {
-            throw e.getCause();
         }
     }
 }

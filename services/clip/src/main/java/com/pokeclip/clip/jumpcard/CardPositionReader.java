@@ -1,12 +1,15 @@
 package com.pokeclip.clip.jumpcard;
 
 import com.pokeclip.clip.broadcast.Broadcast;
+import com.pokeclip.clip.segment.OffsetOrigin;
 import com.pokeclip.clip.segment.RoundRows;
 import com.pokeclip.clip.segment.RoundRows.Round;
 import com.pokeclip.clip.segment.RoundRows.Row;
 import com.pokeclip.ledger.timeline.LedgerRow;
 import com.pokeclip.ledger.timeline.LedgerTimeline;
 import com.pokeclip.ledger.timeline.Place;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
@@ -17,9 +20,8 @@ import java.util.Optional;
 
 /**
  * 카드 위치(카드 ms — {@code start_pts} 재생 위치 축)를 회차 귀속 행 위 <b>장면 하나</b>로 바꾸는 한 곳(POK-196 · 설계 r7
- * 8.2 「카드 장면 함수」 · kty 2026-11-03 11:27). 카드 썸네일 주문 값 · 편집기용 {@code fileHead}(파일명 시각 축) · 플레이어용
- * {@code playerAtMs}(목록 PDT 축)가 모두 이 장면에서 나온다 — 따로 SQL · 따로 판정을 두면 같은 카드의 썸네일과 이동 장면이
- * 갈린다.
+ * 8.2 「카드 장면 함수」 · kty 2026-11-03 11:27). 카드 썸네일 주문 값 · 카드 응답의 {@code playerAtMs} · {@code playerWindow}
+ * (목록 PDT 축)가 모두 이 장면에서 나온다 — 따로 SQL · 따로 판정을 두면 같은 카드의 썸네일과 이동 장면이 갈린다.
  *
  * <p><b>장면 규칙</b>(공통 모듈 F {@link LedgerTimeline#locate} 한 번 — 시작 ≤ v 인 행 가운데 seq 최대 · 겹침은 나중 조각):
  * <ul>
@@ -30,15 +32,14 @@ import java.util.Optional;
  *   <li>마지막 귀속 행 뒤(라이브 머리 — 다음 행이 아직 없음) → 장면 없음. 셋 모두 없고 웹은 지금 식으로 떨어진다</li>
  * </ul>
  *
- * <p><b>왕복 두 번</b>: 회차 고르기 한 번 + 회차 행 한 번이고 값이 몇 개든 같다(목록 한 장 · 카드 한 장 모두). 회차 행을 한
- * 번에 읽어 값마다 메모리에서 F 를 돈다 — 장부에 {@code start_pts_ms} 색인이 없어 값마다 {@code LATERAL} 로 floor 를 찾으면
- * 값마다 회차 행을 훑는다.
+ * <p><b>왕복 두 번</b>: 회차 고르기 한 번 + 회차 행 한 번이고 값이 몇 개든 같다(목록 한 장 · 카드 한 장 · 여러 방송에 걸친
+ * 썸네일 순회 한 묶음 모두). 회차 행을 한 번에 읽어 값마다 메모리에서 F 를 돈다 — 장부에 {@code start_pts_ms} 색인이 없어
+ * 값마다 {@code LATERAL} 로 floor 를 찾으면 값마다 회차 행을 훑는다.
  */
 @Component
 public class CardPositionReader {
 
-    /** 썸네일 주문의 원점 표지(주문서와 같은 이름 · 같은 값 — 설계 r7 3.1). */
-    public enum OffsetOrigin { VIDEO_START, FILE_HEAD }
+    private static final Logger log = LoggerFactory.getLogger(CardPositionReader.class);
 
     /** 썸네일 일꾼에 낼 카드 장면 — 조각 {@code seq} 안 {@code offsetMs}, 원점은 행 판. */
     public record ThumbnailOrder(long seq, long offsetMs, OffsetOrigin offsetOrigin) {
@@ -51,12 +52,7 @@ public class CardPositionReader {
             return row.seq();
         }
 
-        /** 편집기 {@code /get} 축(파일명 시각) 절대 시각. 판 2 행은 머리 앞섬 m 만큼 이르다(경계 표 B6 한계). */
-        public long fileHeadMs() {
-            return row.wallMs() + offsetMs;
-        }
-
-        /** 목록 PDT 축 절대 시각(플레이어 카드 클릭 이동). 고른 행의 PDT 가 비면 없다. */
+        /** 목록 PDT 축 절대 시각(플레이어 카드 클릭 이동 · 편집기 카드 자리 · 창 두 끝). 고른 행의 PDT 가 비면 없다. */
         public Long playerAtMs() {
             return row.pdtMs() == null ? null : row.pdtMs() + offsetMs;
         }
@@ -66,14 +62,14 @@ public class CardPositionReader {
             if (!row.uploaded()) {
                 return Optional.empty();
             }
-            OffsetOrigin origin = row.v2() ? OffsetOrigin.VIDEO_START : OffsetOrigin.FILE_HEAD;
+            OffsetOrigin origin = OffsetOrigin.ofTimingVersion(row.timingVersion());
             return Optional.of(new ThumbnailOrder(row.seq(), offsetMs, origin));
         }
     }
 
     private final RoundRows rounds;
 
-    CardPositionReader(RoundRows rounds) {
+    public CardPositionReader(RoundRows rounds) {
         this.rounds = rounds;
     }
 
@@ -93,8 +89,38 @@ public class CardPositionReader {
         return scenesOf(rounds.rowsOf(round.get()), values);
     }
 
-    /** @param rows 회차 행, seq 오름차순 */
-    static Map<Long, Scene> scenesOf(List<Row> rows, Collection<Long> values) {
+    /**
+     * 여러 방송 카드 값들의 장면(썸네일 순회 한 묶음). 방송마다 그 방송의 회차 행 위에서 풀고, 방송이 몇이든 왕복 두 번이다(회차
+     * 고르기 한 번 + 회차 행 한 번 · 계획 착수 체크리스트 C4). 한 방송의 장부 값이 장면 계산의 전제를 깨면(공통 모듈의 행 열
+     * 검사 등) 그 방송만 빼고 {@code jumpcard.scene_unavailable} 을 남긴다 — 묶음 전체가 실패하면 그 카드가 묶음에 남는 동안
+     * 다른 방송 카드 사진도 멈춘다. 장부 읽기 실패는 그대로 던진다.
+     *
+     * @param values 방송 번호 → 카드 값
+     * @return 방송 번호 → (값 → 장면). 받은 방송은 모두 든다 — 회차나 회차 행이 없으면 빈 맵이고, 장면이 없는 값은 안쪽 맵에
+     *         없다. <b>장면 계산이 깨져 뺀 방송만 없다</b>(부르는 쪽이 「장면 없음」과 「격리」를 가른다). 방송이 비면 DB 를 안 탄다
+     */
+    public Map<String, Map<Long, Scene>> scenesOf(List<Broadcast> broadcasts,
+                                                  Map<String, ? extends Collection<Long>> values) {
+        Map<String, List<Row>> rows = rounds.rowsOf(rounds.roundsOf(broadcasts));
+        Map<String, Map<Long, Scene>> scenes = new HashMap<>();
+        for (Broadcast broadcast : broadcasts) {
+            String streamId = broadcast.getStreamId();
+            Collection<Long> of = values.get(streamId);
+            try {
+                scenes.put(streamId, scenesOf(rows.getOrDefault(streamId, List.of()), of == null ? List.of() : of));
+            } catch (RuntimeException e) {
+                log.warn("jumpcard.scene_unavailable streamId={} reason={}", streamId, e.getClass().getSimpleName());
+            }
+        }
+        return scenes;
+    }
+
+    /**
+     * 이미 읽은 회차 행 위의 장면(DB 를 안 탄다 — 완성 사진이 컷 구간을 정하려고 읽은 행을 그대로 쓴다 · POK-196 S-c5).
+     *
+     * @param rows 회차 행, seq 오름차순
+     */
+    public static Map<Long, Scene> scenesOf(List<Row> rows, Collection<Long> values) {
         Map<Long, Scene> scenes = new HashMap<>();
         if (rows.isEmpty()) {
             return scenes;
