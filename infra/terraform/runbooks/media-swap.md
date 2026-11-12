@@ -2809,6 +2809,12 @@ media_ssm <상자 키> "${work}/expiry-check.sh" started
 보므로 401 이 이름 풀이 · SG · 출발지 대역이 모두 맞다는 뜻입니다. 비밀이
 지나가지 않고, clip 은 그 요청을 필터에서 돌려보내 아무것도 읽지 않습니다.
 
+**전제 — clip 창구가 열린 뒤에 돌립니다.** 런타임 1단-가 런북 「1단-나 ③」
+2(전용 토큰 값 넣기)와 3(platform apply 뒤 clip 옛 태스크 교체 완료)이 끝난
+다음입니다. 창구가 닫혀 있으면(clip 의 토큰이 빔) clip 은 출발지를 보지 않고
+늘 401 을 내므로(`ExpiredBroadcastSecurityConfig` 의 닫힘 갈래), 배선이
+틀려도 정상과 구별되지 않습니다.
+
 ```shell
 cat > "${work}/expiry-probe.sh" <<'SH'
 fail() { echo "EXPIRY PROBE FAIL $1"; exit 2; }

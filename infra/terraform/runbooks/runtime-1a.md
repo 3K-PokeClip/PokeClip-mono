@@ -1262,12 +1262,85 @@ make_sql_step expiry_switch "${payload}/expiry_switch.sql" &&
 1.  회차 VOD 문서 구멍 진단을 한 번 돌려 0행이거나, 나온 행을 kty 가
     판정했습니다 — 켜기 전에 다른 경로로 지워진 조각을 가리키는 문서를
     찾습니다([media README](/media/README.md) 「회차 VOD 문서 구멍 진단」).
+1.  아래 「만료 켜기 전 진단」 을 한 번 돌려 두 결과를 kty 가 판정했습니다.
 
 켠 뒤 10분 안에 `SWITCH 1` 을 확인하고, 그 뒤 첫 회차가 지나 「만료 확인
 스크립트」 의 `POLL` 줄이 `fail=none` · `stalled=none` 이어야 합니다. 실패
 `status` 가 보이면 `401` 은 토큰 · clip 창구, `403` 은 출발지 대역,
 `transport` · `timeout` 은 SG · 이름 풀이입니다. 세 번 이어 실패하면 ERROR
 `expiry_stalled value=1`(`stalled=1`)이 나옵니다 — 끄고 원인을 봅니다.
+
+### 만료 켜기 전 진단
+
+켜기 전에 장부 전체의 모양을 한 번 읽어, 만료가 기대는 전제를 숫자로
+봅니다. 흐름 · 승인은 「M6 읽기 질의」 그대로입니다. 두 SELECT 모두 집계만
+내고 스트림 · 세션 · 회차 식별자를 내지 않아, 출력을 그대로 기록에 옮깁니다.
+판정 기준값은 두지 않습니다 — 마지막 칸 하나(0 기대)를 빼면 kty 가
+판정합니다.
+
+```shell
+cat >"${payload}/expiry_preflight.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '30s';
+SET LOCAL lock_timeout = '3s';
+SET LOCAL search_path = pg_catalog, public;
+SET ROLE media_owner;
+WITH r AS (
+    SELECT s.round_id,
+           pg_catalog.max(s.round_closed_at) IS NOT NULL AS closed,
+           COALESCE(pg_catalog.max(s.ending_at), pg_catalog.max(s.round_closed_at),
+                    pg_catalog.now()) - pg_catalog.min(s.started_at) AS len
+      FROM stream_sessions s
+     WHERE s.round_id IS NOT NULL
+     GROUP BY s.round_id
+)
+SELECT CASE WHEN r.closed THEN 'closed' ELSE 'open' END AS rounds,
+       pg_catalog.count(*) AS n,
+       pg_catalog.round((pg_catalog.max(pg_catalog.date_part('epoch', r.len)) / 86400)::numeric, 2) AS max_days,
+       pg_catalog.round((pg_catalog.percentile_cont(0.99) WITHIN GROUP
+           (ORDER BY pg_catalog.date_part('epoch', r.len)) / 86400)::numeric, 2) AS p99_days,
+       pg_catalog.count(*) FILTER (WHERE r.len >= interval '30 days') AS ge_30d,
+       pg_catalog.count(*) FILTER (WHERE r.len >= interval '59 days') AS ge_59d
+  FROM r
+ GROUP BY r.closed
+ ORDER BY 1;
+SELECT pg_catalog.count(*) FILTER (WHERE s.vod_state IN ('frozen', 'frozen_with_gaps', 'freeze_failed')
+                                     AND s.vod_s3_key IS NOT NULL
+                                     AND (s.vod_first_seq IS NULL OR s.vod_last_seq IS NULL)) AS settled_range_null,
+       (SELECT pg_catalog.count(*) FROM (
+            SELECT 1 FROM stream_sessions o
+             WHERE o.round_id IS NOT NULL
+             GROUP BY o.stream_id, o.round_id
+            HAVING pg_catalog.bool_or(o.state IN ('live', 'ending') AND o.vod_state IN ('none', 'freezing'))
+                OR pg_catalog.max(o.round_closed_at) IS NULL) u) AS undecided_rounds,
+       pg_catalog.count(*) FILTER (WHERE s.round_id IS NULL AND s.state IN ('live', 'ending')
+                                     AND s.vod_state IN ('none', 'freezing')) AS undecided_chains,
+       pg_catalog.count(*) FILTER (WHERE s.round_id IS NULL AND s.state = 'ended'
+                                     AND s.vod_state = 'none') AS legacy_ended_none,
+       pg_catalog.count(*) FILTER (WHERE s.state = 'ended' AND s.vod_state = 'freezing') AS ended_freezing
+  FROM stream_sessions s;
+RESET ROLE;
+SQL
+make_read expiry_preflight "${payload}/expiry_preflight.sql" &&
+  send_step expiry_preflight
+```
+
+*   **첫 SELECT — 회차 길이.** 회차마다 첫 `started_at` 부터 마지막
+    `ending_at`(없으면 닫힌 시각, 열린 회차는 지금)까지입니다. `closed` ·
+    `open` 두 행에 수 · 최대 · p99(일)과 30일 · 59일 이상 회차 수를 냅니다.
+    회차 길이에는 상한이 없어, 보존 기간 가까이 이어진 회차는 첫 방송이
+    만료될 때 방금 끝난 방송까지 담은 회차 VOD 문서가 통째로 내려갑니다
+    (media README 「60일 만료」 의 한계). `ge_59d` 가 0 이 아니면 그 회차가
+    켠 뒤 처음 지우는 대상일 수 있습니다.
+*   **둘째 SELECT — 만료 판정의 입력.** `settled_range_null` 은 범위 칸이 빈
+    확정 문서(M6 전 확정 — 계승 사슬 규칙으로 고름)입니다.
+    `undecided_rounds` · `undecided_chains` 는 지금 미룸을 낳을 수 있는 단위
+    (「만료 미룸 질의」 의 미정 단위)이고, 진행 중 방송 수 근처가 보통입니다.
+    `legacy_ended_none` 은 VOD 없이 끝난 옛 세션이라, 만료가 문서 없이 조각만
+    지웁니다.
+*   **`ended_freezing` 은 0 이 기대입니다.** 만료는 `ended` 세션을 확정
+    가능으로 보지 않습니다(`expiry_store.go` 의 `expirySettleableMember`). 0 이
+    아니면 켜지 않고 kty 에게 보고합니다.
 
 ### 만료 미룸 질의
 
