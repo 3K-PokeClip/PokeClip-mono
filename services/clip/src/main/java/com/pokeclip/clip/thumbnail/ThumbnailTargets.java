@@ -18,13 +18,14 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 사진을 찍을 대상과 그 장면이 든 영상 조각을 찾는다(읽기 전용). 조각 장부({@code stream_segments})는 1번 표라 SELECT만 한다
@@ -190,25 +191,50 @@ public class ThumbnailTargets {
      * </ul>
      *
      * <p>회차 완결은 방송이 아직 {@code live}이고 내려놓을지 따질 카드가 있을 때만, 그런 방송 전부를 묶음 한 번에 묻는다(장면 몫
-     * 장부 왕복 두 번 밖의 판정 왕복 0–1).
+     * 장부 왕복 두 번 밖의 판정 왕복 0–1). <b>완결로 끝난 방송은 회차를 다시 읽어 판정한 뒤에만 내려놓는다</b>(장면 다시 읽기
+     * 0–2 · 종결 r1) — 완결은 회차 행보다 뒤에 읽으므로, 그 사이 생산자가 마지막 행을 넣고 회차를 닫으면 옛 행으로는 장면이 없어도
+     * 이제는 있다. 닫힌 회차는 더 바뀌지 않아 다시 읽은 판정이 마지막이다. 편지 {@code ended} 는 방송 줄을 행보다 먼저 읽어 이 창이
+     * 없다.
      */
     private CardBatch resolve(List<Candidate> candidates) {
         if (candidates.isEmpty()) {
             return new CardBatch(List.of(), List.of());
         }
-        Map<String, List<Long>> values = new LinkedHashMap<>();
-        for (Candidate c : candidates) {
-            values.computeIfAbsent(c.streamId(), k -> new ArrayList<>()).add(c.streamTimestampMs());
-        }
+        Map<String, List<Long>> values = valuesOf(candidates);
         Map<String, Broadcast> byId = new HashMap<>();
         broadcasts.findByStreamIdIn(values.keySet()).forEach(b -> byId.put(b.getStreamId(), b));
-        Map<String, Map<Long, Scene>> found = scenes.scenesOf(List.copyOf(byId.values()), values);
-        List<Card> orders = new ArrayList<>();
+        Map<Long, Card> orders = new HashMap<>();
+        List<Candidate> sceneless = judge(candidates, scenes.scenesOf(List.copyOf(byId.values()), values), orders);
+        List<Broadcast> waiting = sceneless.stream().map(c -> byId.get(c.streamId())).distinct().toList();
+        Set<String> completed = rounds.completedOf(waiting.stream().filter(b -> b.getStatus() == BroadcastStatus.LIVE)
+                .map(Broadcast::getStreamId).toList());
+        List<Candidate> rejudge = sceneless.stream().filter(c -> completed.contains(c.streamId())).toList();
+        List<Candidate> stillSceneless = new ArrayList<>(sceneless);
+        if (!rejudge.isEmpty()) {
+            stillSceneless.removeAll(rejudge);
+            List<Broadcast> closed = waiting.stream().filter(b -> completed.contains(b.getStreamId())).toList();
+            stillSceneless.addAll(judge(rejudge, scenes.scenesOf(closed, valuesOf(rejudge)), orders));
+        }
+        // 장면 없음(마지막 귀속 행 뒤 · 회차 행 없음) — 끝났으니 다시 봐도 같다
+        Set<Long> givenUp = stillSceneless.stream()
+                .filter(c -> completed.contains(c.streamId()) || byId.get(c.streamId()).getStatus() != BroadcastStatus.LIVE)
+                .map(Candidate::id).collect(Collectors.toSet());
+        return new CardBatch(
+                candidates.stream().map(c -> orders.get(c.id())).filter(Objects::nonNull).toList(),
+                candidates.stream().map(Candidate::id).filter(givenUp::contains).toList());
+    }
+
+    /**
+     * 장면이 있는 후보는 주문(올라간 조각만 — 아니면 기다림)을 {@code orders} 에 담고, 장면이 없는 후보를 돌려준다. 격리된 방송
+     * (또는 그 사이 지워진 방송)의 후보는 어디에도 안 든다 — 기다린다.
+     */
+    private static List<Candidate> judge(List<Candidate> candidates, Map<String, Map<Long, Scene>> found,
+                                         Map<Long, Card> orders) {
         List<Candidate> sceneless = new ArrayList<>();
         for (Candidate c : candidates) {
             Map<Long, Scene> ofBroadcast = found.get(c.streamId());
             if (ofBroadcast == null) {
-                continue; // 격리된 방송(또는 그 사이 지워진 방송) — 기다린다
+                continue;
             }
             Scene scene = ofBroadcast.get(c.streamTimestampMs());
             if (scene == null) {
@@ -216,31 +242,19 @@ public class ThumbnailTargets {
                 continue;
             }
             Optional<ThumbnailOrder> order = scene.thumbnailOrder();
-            order.ifPresent(o -> orders.add(new Card(c.id(), scene.row().s3Key(), o.offsetMs(), o.offsetOrigin())));
+            order.ifPresent(o -> orders.put(c.id(), new Card(c.id(), scene.row().s3Key(), o.offsetMs(),
+                    o.offsetOrigin())));
         }
-        Set<String> finished = finishedOf(sceneless.stream().map(c -> byId.get(c.streamId())).distinct().toList());
-        // 장면 없음(마지막 귀속 행 뒤 · 회차 행 없음) — 끝났으니 다시 봐도 같다
-        List<Long> givenUp = sceneless.stream().filter(c -> finished.contains(c.streamId())).map(Candidate::id)
-                .toList();
-        return new CardBatch(orders, givenUp);
+        return sceneless;
     }
 
-    /**
-     * 방송이 끝났거나(편지 {@code ended}) 회차가 완결인(세션 모두 끝 · 회차 닫힘 — {@link RoundRows#completedOf}) 방송 번호. 회차
-     * 칸이 없는 옛 방송은 완결 술어가 없어(거짓) 방송 상태로만 정한다. 완결은 {@code live} 방송만 한 왕복에 묻는다.
-     */
-    private Set<String> finishedOf(List<Broadcast> broadcasts) {
-        Set<String> finished = new HashSet<>();
-        List<String> live = new ArrayList<>();
-        for (Broadcast b : broadcasts) {
-            if (b.getStatus() != BroadcastStatus.LIVE) {
-                finished.add(b.getStreamId());
-            } else {
-                live.add(b.getStreamId());
-            }
+    /** 방송 번호 → 장면을 찾을 카드 값(후보 순서). */
+    private static Map<String, List<Long>> valuesOf(List<Candidate> candidates) {
+        Map<String, List<Long>> values = new LinkedHashMap<>();
+        for (Candidate c : candidates) {
+            values.computeIfAbsent(c.streamId(), k -> new ArrayList<>()).add(c.streamTimestampMs());
         }
-        finished.addAll(rounds.completedOf(live));
-        return finished;
+        return values;
     }
 
     List<ClipRow> clips(int maxAttempts, Instant retryBefore, int limit) {

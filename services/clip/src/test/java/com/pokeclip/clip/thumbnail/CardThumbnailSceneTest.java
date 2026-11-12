@@ -4,6 +4,8 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.CardPositionReader;
 import com.pokeclip.clip.segment.RoundRows;
+import com.pokeclip.clip.segment.RoundRows.Round;
+import com.pokeclip.clip.segment.RoundRows.Row;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LedgerSeed;
@@ -21,6 +23,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.pokeclip.clip.support.LedgerSeed.at;
@@ -204,7 +207,8 @@ class CardThumbnailSceneTest extends IntegrationTestSupport {
 
     /**
      * 내려놓을지 따질 카드(장면 없음)가 방송 중인 방송 여럿에 걸쳐도 회차 완결은 묶음 한 번에 묻는다(c2 확인 패스 #9 — 2초 빠른
-     * 순회 경로라 방송마다 물으면 묶음당 최대 50 문장). 장면 몫 둘 + 완결 하나 = 셋. 완결인 방송 카드만 내려놓는다.
+     * 순회 경로라 방송마다 물으면 묶음당 최대 50 문장). 완결인 방송이 없으면 장면 몫 둘 + 완결 하나 = 셋이고, 완결인 방송이 있으면
+     * 그 방송들만 장면을 한 번 더 읽어(회차 고르기 + 회차 행 = 둘 · 종결 r1) 다섯이다. 완결인 방송 카드만 내려놓는다.
      */
     @Test
     void 방송_중_장면_없는_카드의_회차_완결은_묶음당_한_번_묻는다() {
@@ -213,14 +217,53 @@ class CardThumbnailSceneTest extends IntegrationTestSupport {
         ThumbnailTargets measured = new ThumbnailTargets(jdbc, broadcasts, counted, new CardPositionReader(counted));
         라이브_머리_카드("S-la", "LA", false);
         라이브_머리_카드("S-lb", "LB", false);
-        long closed = 라이브_머리_카드("S-lc", "LC", true);
 
+        sweeper(measured).sweepCards();
+        assertThat(ledger.get()).as("완결 없음").isEqualTo(3);
+
+        long closed = 라이브_머리_카드("S-lc", "LC", true);
+        ledger.set(0);
         sweeper(measured).sweepCards();
 
         assertThat(sent).isEmpty();
         assertThat(jdbc.queryForList("SELECT target_id FROM thumbnails WHERE kind = 'card'", String.class))
                 .as("완결 회차 카드만 내려놓는다").containsExactly(String.valueOf(closed));
-        assertThat(ledger.get()).isEqualTo(3);
+        assertThat(ledger.get()).as("완결 하나 — 그 방송만 다시 읽는다").isEqualTo(5);
+    }
+
+    /**
+     * 종결 r1 cc 2 · cx 1 — 회차 행을 읽은 뒤 생산자가 마지막 행을 넣고 회차를 닫으면, 완결은 참인데 읽은 행에는 그 행이 없다.
+     * 옛 행만 보고 내려놓으면 이제 장면이 있는 카드를 영구히 포기한다(시도 3 으로 적혀 다시 안 찍는다). 완결이 참이면 그 방송의
+     * 회차를 다시 읽어 판정한 뒤에만 내려놓는다 — 닫힌 회차는 더 바뀌지 않는다.
+     */
+    @Test
+    void 행을_읽은_뒤_마지막_행과_완결이_들어오면_다시_읽어_장면을_주문한다() {
+        broadcasts.save(Broadcast.startedNow("S-race", TestIds.STREAMER, "RACE", 1L, at(0), null));
+        seed.session("S-race", "RACE", "S-race", null);
+        seed.row("RACE", 1).pts(0).wallAndPdt(0).session("S-race").insert();
+        long card = 카드("S-race", 5_000);
+        RoundRows racing = new RoundRows(jdbc) {
+            private boolean raced;
+
+            @Override
+            public Map<String, List<Row>> rowsOf(Map<String, Round> rounds) {
+                Map<String, List<Row>> read = super.rowsOf(rounds);
+                if (!raced) {
+                    raced = true;
+                    seed.row("RACE", 2).pts(4_000).wallAndPdt(4_000).session("S-race").insert();
+                    seed.endSession("S-race", true);
+                }
+                return read;
+            }
+        };
+
+        sweeper(new ThumbnailTargets(jdbc, broadcasts, racing, new CardPositionReader(racing))).sweepCards();
+
+        assertThat(sent).hasSize(1);
+        assertThat(sent.get(0).path("targetId").asString()).isEqualTo(String.valueOf(card));
+        assertOrder(sent.get(0), "seg/RACE/2", 1_000, "FILE_HEAD");
+        assertThat(jdbc.queryForObject("SELECT attempts FROM thumbnails WHERE kind = 'card' AND target_id = ?",
+                Integer.class, String.valueOf(card))).as("주문 한 번 — 내려놓지 않았다").isEqualTo(1);
     }
 
     // ── 실패 격리 ─────────────────────────────────────────────────────────────
