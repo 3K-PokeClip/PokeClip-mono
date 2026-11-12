@@ -7,6 +7,7 @@ import {
   type CutRefusal,
   type EdgeInput,
 } from './cutPosition';
+import type { EditorPlaylist } from './editorPlaylist';
 import type { HeadCache } from './fileHeadProbe';
 import type { EditorPick } from './windowPlacement';
 
@@ -76,4 +77,70 @@ export function savable(range: EndpointRange, ctx: CutContext): SaveVerdict {
   if (length < CUT_MIN_MS) return { ok: false, reason: 'tooShort' };
   if (length > CUT_MAX_MS) return { ok: false, reason: 'tooLong' };
   return { ok: true, inMs, outMs };
+}
+
+/**
+ * 카드에서 연 범위(편집기와 미리 받기가 함께 쓴다 — 계획 4절 P-8). 둘이 같은 범위라야 미리 받은 창의 열쇠가 편집기 열쇠와 같다.
+ * 지금은 칸 없는 카드의 지금 식(base + 카드 창) 하나라 estimate 다 — 사용자가 끝을 정해야 저장된다(설계 14.0 1번)
+ * @param base 편집기 0초의 절대 ms
+ */
+export function cardEndpoints(
+  card: { window: { startMs: number; endMs: number } },
+  base: number,
+): EndpointRange {
+  return {
+    start: { kind: 'estimate', ms: base + card.window.startMs },
+    end: { kind: 'estimate', ms: base + card.window.endMs },
+  };
+}
+
+/** 저장된 편집본의 컷 — 받은 값을 다시 셈하지 않는다(exact · 계획 4절 P-7). 손대지 않고 저장하면 같은 값이다 */
+export function recipeEndpoints(cut: { inAtMs: number; outAtMs: number }): EndpointRange {
+  return { start: { kind: 'exact', ms: cut.inAtMs }, end: { kind: 'exact', ms: cut.outAtMs } };
+}
+
+/** 범위의 표시 구간(편집기 초). 고름은 머리가 오면 머리 원점으로 다시 그려진다(값은 그대로) */
+export function displayRange(
+  range: EndpointRange,
+  heads: HeadCache,
+  base: number,
+): { startSeconds: number; endSeconds: number } {
+  return {
+    startSeconds: displaySeconds(range.start, heads, base),
+    endSeconds: displaySeconds(range.end, heads, base),
+  };
+}
+
+/**
+ * 저장 판정 — 저장을 누를 때 목록을 한 번 다시 받아(끝난 방송이면 들고 있는 목록) 그 목록으로 이웃 · k 의 존재를 본다. 다시
+ * 받기에 실패하면 들고 있는 목록으로 맞추지 않는다 — 낡은 「목록 마지막」 으로 맞추면 끝 프레임을 잃을 수 있다(처분 PK1)
+ * @param reloadList 원천의 다시 받기(useEditorSource.reloadList). 실패면 null
+ */
+export async function saveAfterReload(
+  range: EndpointRange,
+  base: number,
+  heads: HeadCache,
+  reloadList: () => Promise<EditorPlaylist | null>,
+): Promise<SaveVerdict> {
+  return savable(range, { base, heads, list: await reloadList() });
+}
+
+const HEAD_UNREAD = '저장에 필요한 녹화 정보를 받지 못했어요';
+
+/** 저장 거절 문구. retry 는 다시 받으면 풀릴 수 있는 사유(② 머리 · 목록)라 「다시 시도」 단추를 단다 */
+const SAVE_REFUSAL: Record<SaveRefusal, { title: string; retry: boolean }> = {
+  estimate: { title: '이 카드는 범위 끝을 직접 정해 주세요', retry: false },
+  headMissing: { title: HEAD_UNREAD, retry: true },
+  headFailed: { title: HEAD_UNREAD, retry: true },
+  outsideList: {
+    title: '이 끝점은 방송 중 편집 범위(최근 1시간) 밖이 됐어요 · 다시 정해 주세요',
+    retry: false,
+  },
+  listUnavailable: { title: '목록을 다시 받지 못했어요', retry: true },
+  tooShort: { title: '범위가 5초보다 짧아요', retry: false },
+  tooLong: { title: '범위가 180초를 넘어요', retry: false },
+};
+
+export function saveRefusalMessage(reason: SaveRefusal): { title: string; retry: boolean } {
+  return SAVE_REFUSAL[reason];
 }

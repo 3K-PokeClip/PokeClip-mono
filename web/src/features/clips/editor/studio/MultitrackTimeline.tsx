@@ -38,6 +38,8 @@ import type { ClipEditorMockState } from '../useClipEditorMockState';
 // 구간 핸들은 마우스와 키보드가 같은 문을 쓴다(PlayerSeekBar와 같은 규약) —
 // jsdom엔 레이아웃이 없어 포인터 경로를 렌더 테스트로 못 재는데,
 // 키보드 경로가 같은 setRangeEdge로 들어가므로 경계 동작을 화면에서도 확인할 수 있다.
+// 끌기 · 화살표는 편집기 표시 초 S 를 넘긴다({ kind: 's' }). 창 안 자리면 상태 훅이 그 자리에 보이는 프레임의 고름으로 바꾼다 —
+// 화면이 고름을 따로 셈하지 않는다(editorEndpoints · 설계 prw2 3.3).
 
 /** 높이 조절 키보드 한 걸음 */
 const HEIGHT_STEP_PX = 24;
@@ -132,7 +134,7 @@ export function MultitrackTimeline({
     if (overlay === null) return;
     const seconds = secondsFromPointer(overlay.getBoundingClientRect(), clientX, state.view);
     if (seconds === null) return;
-    state.setRangeEdge(edge, seconds);
+    state.setRangeEdge(edge, { kind: 's', s: seconds });
   };
 
   // 재생 위치 옮기기(POK-389): 타임라인·윗줄 눈금을 누르면 그 시점으로, 누른 채 끌면 따라간다. 눈금과 덮개는 가로 범위가
@@ -218,10 +220,10 @@ export function MultitrackTimeline({
     const current = edge === 'start' ? state.range.startSeconds : state.range.endSeconds;
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      state.setRangeEdge(edge, current - step);
+      state.setRangeEdge(edge, { kind: 's', s: current - step });
     } else if (event.key === 'ArrowRight') {
       event.preventDefault();
-      state.setRangeEdge(edge, current + step);
+      state.setRangeEdge(edge, { kind: 's', s: current + step });
     }
   };
 

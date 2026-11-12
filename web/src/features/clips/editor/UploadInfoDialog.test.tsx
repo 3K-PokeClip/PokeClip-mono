@@ -66,7 +66,8 @@ describe('UploadInfoDialog', () => {
       .spyOn(document, 'createElement')
       .mockImplementation(((tag: string) =>
         tag === 'video'
-          ? Object.assign(new EventTarget(), { removeAttribute() {}, load() {} })
+          ? // 문서에 붙는 노드라(프레임 콜백) 요소 하나로 흉내 낸다
+            Object.assign(create('div'), { removeAttribute() {}, load() {} })
           : create(tag)) as typeof document.createElement);
     try {
       const user = userEvent.setup();

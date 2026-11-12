@@ -37,6 +37,7 @@ import { ToolPanel } from './ToolPanel';
 import { ToolRail } from './ToolRail';
 import styles from './StudioScreen.module.css';
 import shared from '../editorShared.module.css';
+import { rangeEdgeLimits } from '../editorEndpoints';
 import { editorIntentForKey, type EditorIntent } from '../editorKeys';
 import {
   useClipEditorMockState,
@@ -57,6 +58,16 @@ import { holdEditorMedia } from '../editorMedia';
 import { editorSourceError, playbackErrorMessage } from '../editorPlayback';
 import { editorXResolver, streamerIdOf } from '../source/broadcastStreamer';
 import { useEditorSource, type EditorSource as EditorVideoSource } from '../source/useEditorSource';
+import { readPlayerAtMs } from '@/api/cardPositions';
+import { cardSceneLabelOf } from '../source/editorSourceState';
+import { headCacheFor } from '../source/fileHeadProbe';
+import {
+  cardEndpoints,
+  displayRange,
+  recipeEndpoints,
+  type EndpointRange,
+} from '../source/rangeEndpoints';
+import { useSaveCut, type SaveCut } from './useSaveCut';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import type { FilmstripSource } from './VideoFilmstrip';
 import { lookFromDocument, outputFromLook, sameRecipe } from '../recipeLook';
@@ -615,6 +626,8 @@ interface SaveState {
 /** 창이 열려 있는 동안 쥐고 있는 것: 연 순간의 화면(레시피)·완성 영상 길이·처음 값 */
 interface PendingUpload {
   recipe: EditorRecipe;
+  /** 연 순간 끝점으로 판정한 컷(절대 ms) — 주문은 이 컷으로 저장한다 */
+  cut: SaveCut;
   cutLengthMs: number;
   initial: UploadDraft;
   /** 썸네일 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
@@ -670,6 +683,11 @@ function windowOfSpan(span: Loaded['span'], base: number): { startMs: number; en
     : { startMs: span.inAtMs - base, endMs: span.outAtMs - base };
 }
 
+/** 연 범위의 끝점 — 카드는 칸 없는 카드의 지금 식(estimate), 저장된 컷은 받은 값 그대로(exact · 계획 4절 P-7) */
+function endpointsOfSpan(span: Loaded['span'], base: number): EndpointRange {
+  return span.kind === 'cut' ? recipeEndpoints(span) : cardEndpoints({ window: span }, base);
+}
+
 function WiredStudioBody({
   data,
   reloading,
@@ -704,37 +722,53 @@ function WiredStudioBody({
     track('clip_editor_opened', { source: openedFrom });
     if (openedCardId !== null) void openJumpCard(openedCardId);
   }, [openedFrom, openedCardId]);
+  // 카드에서 열었는데 clip 이 장면을 못 찾았으면(playerAtMs null) 한 번 알린다 — 영상 창은 막지 않는다(설계 14.2 카드 표지)
+  const sceneLabel = card === null ? null : cardSceneLabelOf(readPlayerAtMs(card));
+  const sceneTold = useRef(false);
+  useEffect(() => {
+    if (sceneLabel !== 'sceneMissing' || sceneTold.current) return;
+    sceneTold.current = true;
+    toast({ tone: 'info', title: '이 카드의 장면을 아직 찾지 못했어요' });
+  }, [sceneLabel, toast]);
+  // 끝점(설계 prw2 3.5) — 저장 값은 이것이 정하고, 처음 구간은 그 표시 초다. ② 머리 캐시는 영상 키마다 하나다
+  const mediaKey = mediaStreamId(broadcast);
+  const heads = useMemo(() => headCacheFor(mediaKey), [mediaKey]);
+  const endpoints = useMemo(() => endpointsOfSpan(data.span, base), [data.span, base]);
   const initialRange = useMemo(
-    () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
-    [window],
+    () => displayRange(endpoints, heads, base),
+    [endpoints, heads, base],
   );
   // 실재생 — 되감기 목록 창(POK-473). 훅은 늘 부르고, 원천 목록이 있을 때만 영상을 붙인다. 목록이 없어도 원천이 막힌 까닭
   //    (D3)이 있으면 어댑터를 넘겨 미리보기 아래에 알린다. 트랙별 미리 듣기는 창 Blob 시각 배치(c9′)까지 잠시 끈다 — 영상 소리로
   //    들린다
   const video = useEditorVideoPlayback({
     streamId,
-    mediaKey: mediaStreamId(broadcast),
+    mediaKey,
     base,
     source: videoSource,
     initialRange,
   });
+  const cutFor = useSaveCut({ base, heads, streamId, mediaKey, source: videoSource });
   const hasSource = videoSource.list !== null;
   const showPlayback = hasSource || video.playback.error !== null;
 
   // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
+  // 편집기 초 → 그 창의 Blob 시각은 창 배치가 바꾼다(blobAtS — 판 NULL 머리 원점 · 조각 경계)
   const loadedWindow = video.window;
+  const { placement, seekLimits } = video;
   const filmstripSource = useMemo<FilmstripSource | null>(
     () =>
-      hasSource && video.src !== '' && loadedWindow !== null
+      hasSource && video.src !== '' && loadedWindow !== null && placement !== null
         ? {
             src: video.src,
-            videoSecondsAt: (ms) => ms / 1000 - loadedWindow.startSeconds,
+            videoSecondsAt: (ms) => placement.blobAtS(ms / 1000),
+            seekLimits: seekLimits ?? undefined,
             output: FULL_FRAME_OUTPUT,
             fromSeconds: loadedWindow.startSeconds,
             toSeconds: loadedWindow.endSeconds,
           }
         : null,
-    [hasSource, video.src, loadedWindow],
+    [hasSource, video.src, loadedWindow, placement, seekLimits],
   );
 
   const [save, setSave] = useState<SaveState>(() => ({
@@ -757,21 +791,51 @@ function WiredStudioBody({
     // 🔴 구간은 **그 하이라이트 안에서만** 잡는다(사용자 확정 2026-09-17) — 카드가 잡아 준 시작~끝이 곧 양쪽 한계이고,
     //    편집자는 그 안에서 줄이기만 한다. 방송의 다른 장면으로는 핸들이 나가지 않는다.
     //    저장된 편집본을 다시 열 때는 카드가 없어 저장된 구간이 한계가 된다(다시 넓히려면 카드에서 새로 연다).
-    const minSeconds = window.startMs / 1000;
-    const durationSeconds = Math.min(totalSeconds, window.endMs / 1000);
+    //    5초 언저리로 짧은 범위는 카드로 열었을 때만 끝 한계를 넓힌다(rangeEdgeLimits — kty 2026-11-12 (나) 「카드만」)
+    const { minSeconds, durationSeconds } = rangeEdgeLimits(
+      window,
+      totalSeconds,
+      data.span.kind === 'window',
+    );
     return {
       clipTitle: card ? `점프카드 #${card.id}` : `편집본 #${saved?.id}`,
       sourceLabel: sourceLabelOf(startedAt, broadcast.timelineOriginAt, card, window.startMs),
       durationSeconds,
       minSeconds,
-      range: { startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 },
+      range: initialRange,
+      endpoints: { initial: endpoints, base, heads },
     };
-  }, [broadcast.endedAt, broadcast.timelineOriginAt, base, window, card, saved, startedAt]);
+  }, [
+    broadcast.endedAt,
+    broadcast.timelineOriginAt,
+    base,
+    window,
+    data.span.kind,
+    card,
+    saved,
+    startedAt,
+    initialRange,
+    endpoints,
+    heads,
+  ]);
 
-  /** 화면값 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가 한다 */
+  /**
+   * 화면값 + 끝점으로 판정한 컷 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가
+   * 한다 — 컷을 편집기 초로 실어 넘기면 그대로 돌아온다(base + 정수 ms)
+   */
   const documentFor = useCallback(
-    (recipe: EditorRecipe): RecipeDocument =>
-      recipeDocumentOf({ streamId, base, recipe, saved: saved?.document ?? null }),
+    (recipe: EditorRecipe, cut: SaveCut): RecipeDocument => {
+      const range = {
+        startSeconds: (cut.inMs - base) / 1000,
+        endSeconds: (cut.outMs - base) / 1000,
+      };
+      return recipeDocumentOf({
+        streamId,
+        base,
+        recipe: { ...recipe, range },
+        saved: saved?.document ?? null,
+      });
+    },
     [base, saved, streamId],
   );
 
@@ -795,13 +859,10 @@ function WiredStudioBody({
     [streamId, card, onRecipeCreated, queryClient],
   );
 
-  const saveDraft = useCallback(
-    (recipe: EditorRecipe) => {
-      const current = saveRef.current;
-      if (current.busy !== null) return;
-      const doc = documentFor(recipe);
-      setSave((s) => ({ ...s, busy: 'save', label: '저장하는 중…' }));
-      persist(current.recipeId, doc)
+  /** 판정한 컷으로 저장하고 결과를 알린다 */
+  const persistDraft = useCallback(
+    (recipe: EditorRecipe, cut: SaveCut, recipeId: number | null) => {
+      persist(recipeId, documentFor(recipe, cut))
         .then((snap) => {
           setSave((s) => ({
             ...s,
@@ -811,7 +872,7 @@ function WiredStudioBody({
           toast({ tone: 'success', title: `편집본 #${snap.id} 저장됨 (v${snap.recipeVersion})` });
           // 사람이 누른 저장만 센다 — 영상 주문(submitUpload)도 persist를 거치지만 여기로 오지 않는다 (POK-357)
           track('clip_recipe_saved', {
-            first_save: current.recipeId === null,
+            first_save: recipeId === null,
             source: openedFrom,
             layout: recipe.layout,
             caption_position: recipe.captionPosition,
@@ -826,6 +887,24 @@ function WiredStudioBody({
         });
     },
     [documentFor, persist, toast, openedFrom],
+  );
+
+  const saveDraft = useCallback(
+    (recipe: EditorRecipe, again: () => void) => {
+      const current = saveRef.current;
+      if (current.busy !== null) return;
+      setSave((s) => ({ ...s, busy: 'save', label: '저장하는 중…' }));
+      // 끝점 판정(누를 때 목록을 다시 받는다 — PK1)이 막으면 저장 전으로 돌린다. 까닭은 useSaveCut 이 알리고, 「다시 시도」 는
+      // again(그 순간의 레시피로 이 저장을 처음부터)이다
+      const refused = () => setSave((s) => ({ ...s, busy: null, label: current.label }));
+      cutFor(
+        recipe.endpoints,
+        (cut) => persistDraft(recipe, cut, current.recipeId),
+        refused,
+        again,
+      );
+    },
+    [cutFor, persistDraft],
   );
 
   const [pending, setPending] = useState<PendingUpload | null>(null);
@@ -866,19 +945,19 @@ function WiredStudioBody({
   );
   // 재생 위치 저장소. 업로드 창은 재생 중에도 열리므로 허브의 값(멈춤 · 시크 때만 바뀐다)이 아니라 여는 순간의 위치를 읽는다
   const playbackClock = video.playback.clock;
-  // 받아 둔 녹화 조각과 그 시작 초. 창을 여는 순간에 읽는다(장면 그림 재료)
-  const videoRef = useRef({ src: video.src, windowStartSeconds: video.windowStartSeconds });
-  videoRef.current = { src: video.src, windowStartSeconds: video.windowStartSeconds };
+  // 받아 둔 녹화 조각과 그 배치. 창을 여는 순간에 읽는다(장면 그림 재료)
+  const videoRef = useRef({ src: video.src, placement, seekLimits });
+  videoRef.current = { src: video.src, placement, seekLimits };
 
-  /** 「영상 만들기」 = 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
-  const openUploadDialog = useCallback(
-    (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
+  /** 판정한 컷으로 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
+  const openWithCut = useCallback(
+    (recipe: EditorRecipe, thumbnailSeconds: number | null, cut: SaveCut) => {
       const current = saveRef.current;
-      if (current.busy !== null) return;
+      // 판정하는 사이 다른 동작이 시작됐거나 다른 편집 대상으로 넘어갔으면 열지 않는다
+      if (current.busy !== null || reloadingRef.current) return;
       // 원천 목록이 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
       const playheadSeconds = hasSource ? playbackClock.getSeconds() : null;
-      const cut = documentFor(recipe).cut!;
-      const cutLengthMs = cut.outAtMs - cut.inAtMs;
+      const cutLengthMs = cut.outMs - cut.inMs;
       const rangeStart = recipe.range.startSeconds;
       // 카드 시각은 기준점 축의 ms, 구간 시작은 같은 축의 초다(POK-255)
       const highlightRaw = card ? Math.round(card.streamTimestampMs - rangeStart * 1000) : null;
@@ -891,12 +970,13 @@ function WiredStudioBody({
         highlightOffsetMs ?? defaultSceneOffsetMs(playheadSeconds, rangeStart, cutLengthMs);
       // 창이 떠 있는 동안 편집기는 안 바뀌므로 조각·모양을 연 순간 값으로 쥔다
       const loaded = videoRef.current;
+      const shown = loaded.placement;
       const frameSource: SceneFrameSource | null =
-        hasSource && loaded.src !== ''
+        hasSource && loaded.src !== '' && shown !== null
           ? {
               src: loaded.src,
-              videoSecondsAt: (offsetMs) =>
-                rangeStart + offsetMs / 1000 - loaded.windowStartSeconds,
+              videoSecondsAt: (offsetMs) => shown.blobAtS(rangeStart + offsetMs / 1000),
+              seekLimits: loaded.seekLimits ?? undefined,
               output: outputFromLook(recipe),
             }
           : null;
@@ -914,6 +994,7 @@ function WiredStudioBody({
       setUploadErrors({});
       setPending({
         recipe,
+        cut,
         cutLengthMs,
         initial: prefilled.draft,
         pickedInEditor: prefilled.picked,
@@ -922,7 +1003,20 @@ function WiredStudioBody({
         frameSource,
       });
     },
-    [documentFor, card, hasSource, playbackClock],
+    [card, hasSource, playbackClock],
+  );
+  /** 「영상 만들기」 = 끝점으로 컷을 판정하고(PK1) 서면 업로드 정보 창을 연다 */
+  const openUploadDialog = useCallback(
+    (recipe: EditorRecipe, thumbnailSeconds: number | null, again: () => void) => {
+      if (saveRef.current.busy !== null) return;
+      cutFor(
+        recipe.endpoints,
+        (cut) => openWithCut(recipe, thumbnailSeconds, cut),
+        () => undefined,
+        again,
+      );
+    },
+    [cutFor, openWithCut],
   );
 
   /**
@@ -936,7 +1030,7 @@ function WiredStudioBody({
       const current = saveRef.current;
       if (pending === null || current.busy !== null) return;
       lastDraft.current = draft;
-      const doc = documentFor(pending.recipe);
+      const doc = documentFor(pending.recipe, pending.cut);
       const dirty =
         current.recipeId === null ||
         current.savedDoc === null ||

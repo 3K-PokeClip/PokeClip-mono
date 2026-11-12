@@ -12,6 +12,8 @@ import { segmentTrackKey, segmentTracks, windowBlobs } from './editorMedia';
 import { editorXResolver, streamerIdOf } from './source/broadcastStreamer';
 import { editorSourceView, type EditorSourceState } from './source/editorSourceState';
 import type { PlaylistSegment } from './source/editorPlaylist';
+import { headCacheFor } from './source/fileHeadProbe';
+import { cardEndpoints, displayRange } from './source/rangeEndpoints';
 import type { RemuxedWindow } from './source/remuxWindow';
 import { readEditorSourceOnce, type EditorSourceSnapshot } from './source/useEditorSource';
 import { decideWindow, ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
@@ -289,8 +291,10 @@ async function prefetchOnce(
   if (card === null) throw new Error(`card ${cardId} not found`);
   if (broadcast === null || broadcast.startedAt === null) throw new Error('broadcast not started');
   const { state, list, base } = await deps.readSource(broadcast);
-  const range = { startSeconds: card.window.startMs / 1000, endSeconds: card.window.endMs / 1000 };
   if (list === null || base === null) return verdictOfSource(state);
+  const mediaKey = mediaStreamId(broadcast);
+  // 카드 범위는 편집기와 같은 함수로 정한다(계획 4절 P-8) — 같은 범위라야 같은 창 열쇠다
+  const range = displayRange(cardEndpoints(card, base), headCacheFor(mediaKey), base);
   const rows = list.playlist.rows;
   const bounds =
     rows.length === 0
@@ -299,7 +303,6 @@ async function prefetchOnce(
   const view = editorSourceView(state, bounds, base + range.startSeconds * 1000);
   if (view.kind !== 'ready') return verdictOfSource(view);
   const live = list.mode === 'live';
-  const mediaKey = mediaStreamId(broadcast);
   // 편집기(useEditorVideoPlayback)와 같은 셈이라야 같은 열쇠다. 방송 중에는 목록이 구간 끝 + 여유까지 올라와야 창이 굳는다 —
   // 그 전에 받으면 편집기가 들어갈 때 창이 더 길어져 열쇠가 달라지고(다시 받는다), 받은 영상도 구간 끝에서 잘린다
   const decision = decideWindow(range, list, base, mediaKey, live);

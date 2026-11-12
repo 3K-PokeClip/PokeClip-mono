@@ -23,7 +23,9 @@ import type { RemuxedWindow } from './source/remuxWindow';
 import type { EditorSourceSnapshot, SourceList } from './source/useEditorSource';
 import { SegmentsNotReadyError, type TrackPiece } from './trackAudio/loadTrackAudio';
 import { useTrackPreview } from './trackAudio/useTrackPreview';
-import { ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
+import { decideWindow, ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
+import { headCacheFor } from './source/fileHeadProbe';
+import { cardEndpoints, displayRange } from './source/rangeEndpoints';
 import { useEditorVideoPlayback } from './useEditorVideoPlayback';
 
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
@@ -164,6 +166,18 @@ describe('prefetchCardEditor', () => {
     expect(deps.loadSegmentTracks).toHaveBeenCalledWith(
       expect.objectContaining({ streamId: '7', fromMs: STARTED + 40_000, toMs: STARTED + 92_000 }),
     );
+  });
+
+  it('편집기와 미리 받기는 같은 카드에서 같은 범위(cardEndpoints — estimate) · 같은 창 열쇠를 낸다', async () => {
+    const list = listOf(range(100, 160));
+    await prefetchCardEditor('7', '23', depsWith({ readSource: async () => snapshotOf(list) }));
+
+    // 편집기 쪽(StudioScreen → useEditorVideoPlayback)과 같은 셈
+    const editorRange = displayRange(cardEndpoints(CARD, STARTED), headCacheFor('7'), STARTED);
+    const editor = decideWindow(editorRange, list, STARTED, '7', true);
+
+    expect(editor.kind).toBe('window');
+    expect(editor.kind === 'window' && windowBlobs.get(editor.target.key)).toBeTruthy();
   });
 
   it('방송 중인데 목록이 구간 끝 + 여유에 못 미치면 받지 않고 pending이다(방금 생긴 카드)', async () => {

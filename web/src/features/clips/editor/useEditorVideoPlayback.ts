@@ -23,6 +23,7 @@ import {
 import { SegmentForbiddenError, SegmentGoneError } from './source/fetchWindowBytes';
 import { headCacheFor, type HeadCache } from './source/fileHeadProbe';
 import type { RemuxedWindow } from './source/remuxWindow';
+import { clampSeekBlob, seekLimitsOf, type SeekLimits } from './source/seekGuard';
 import type { EditorSource } from './source/useEditorSource';
 import { placeWindow, type WindowPlacement } from './source/windowPlacement';
 
@@ -70,10 +71,10 @@ export interface EditorVideoPlayback {
   window: { startSeconds: number; endSeconds: number } | null;
   /** 지금 받으려는 창(편집기 초). 영상을 다 받기 전에도 있다. 창을 아직 못 정했거나 받을 조각이 없으면 null */
   targetWindow: { startSeconds: number; endSeconds: number } | null;
-  /** 받아 둔 영상의 0초가 편집기 몇 초인가(창 배치로 셈한 값). 아직 못 받았으면 받으려는 창의 시작 */
-  windowStartSeconds: number;
   /** 받은 창의 배치(Blob 시각 ↔ 편집기 초). 아직 못 받았으면 null */
   placement: WindowPlacement | null;
+  /** 받은 창의 Blob 시크 한계(첫 영상 프레임 · 끝 반 프레임 — kty M1 처분). 아직 못 받았으면 null */
+  seekLimits: SeekLimits | null;
   /** 영상이 끊겨 기다리는 중(POK-439). 첫 mp4를 받는 동안은 영상 노드에 소스가 없어 거짓이다 */
   buffering: boolean;
 }
@@ -89,6 +90,19 @@ interface Placed {
   remuxed: RemuxedWindow;
   src: string;
   placement: WindowPlacement | null;
+}
+
+/**
+ * 편집기 초 → 받은 창의 Blob 시각. 창 첫 영상 프레임 앞(빈 편집 구간)과 영상 노드가 알리는 길이 − 반 프레임 너머로는 가지
+ * 않는다(source/seekGuard ① · ②). 배치가 없으면 null
+ */
+function blobTargetOf(placed: Placed | null, seconds: number, duration: number): number | null {
+  if (placed?.placement == null) return null;
+  return clampSeekBlob(
+    placed.placement.blobAtS(seconds),
+    seekLimitsOf(placed.remuxed),
+    duration,
+  );
 }
 
 /** 구간 끝이 창 끝(반 초 안쪽)에 닿았다 — 창을 뒤로 늘려야 한다 */
@@ -356,12 +370,15 @@ export function useEditorVideoPlayback(options: {
 
   const videoNodeRef = useRef(video);
   videoNodeRef.current = video;
+  const placedRef = useRef<Placed | null>(null);
   /** 머리가 와 배치를 다시 셈했다: 멈춘 영상은 같은 편집기 초의 자리로 옮긴다(재생 중이면 위치 표시만 바뀐다) */
   const onReplaced = useCallback(
     (placement: WindowPlacement | null) => {
       const node = videoNodeRef.current;
-      if (placement === null || node === null || !node.paused) return;
-      node.currentTime = Math.max(0, placement.blobAtS(clock.getSeconds()));
+      const placed = placedRef.current;
+      if (placement === null || placed === null || node === null || !node.paused) return;
+      const target = blobTargetOf({ ...placed, placement }, clock.getSeconds(), node.duration);
+      if (target !== null) node.currentTime = target;
     },
     [clock],
   );
@@ -374,7 +391,6 @@ export function useEditorVideoPlayback(options: {
     setFailure,
     onReplaced,
   });
-  const placedRef = useRef(placed);
   placedRef.current = placed;
 
   const boundsRef = useRef<PlaybackBounds>({ ...initialRange, loop: true });
@@ -510,6 +526,11 @@ export function useEditorVideoPlayback(options: {
     [target],
   );
   const placement = placed?.placement ?? null;
+  const remuxedWindow = placed?.remuxed ?? null;
+  const seekLimits = useMemo(
+    () => (remuxedWindow === null ? null : seekLimitsOf(remuxedWindow)),
+    [remuxedWindow],
+  );
 
   return {
     playback,
@@ -518,8 +539,8 @@ export function useEditorVideoPlayback(options: {
     src: placed?.src ?? '',
     window: loadedWindow,
     targetWindow,
-    windowStartSeconds: placement?.sAtBlob(0) ?? target?.startSeconds ?? want.startSeconds,
     placement,
+    seekLimits,
     buffering,
   };
 }
@@ -571,10 +592,12 @@ function useConversions(w: VideoWiring): Conversions {
   const seekNode = useCallback(
     (node: HTMLVideoElement, seconds: number) => {
       const placed = placedRef.current;
-      if (placed?.placement == null) return null;
+      if (placed === null) return null;
       const { startSeconds, endSeconds } = placed.target;
       const s = Math.min(endSeconds - 0.05, Math.max(startSeconds, seconds));
-      node.currentTime = Math.max(0, placed.placement.blobAtS(s));
+      const target = blobTargetOf(placed, s, node.duration);
+      if (target === null) return null;
+      node.currentTime = target;
       return { s };
     },
     [placedRef],

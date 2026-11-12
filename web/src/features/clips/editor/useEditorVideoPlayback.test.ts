@@ -740,6 +740,45 @@ describe('useEditorVideoPlayback: 새 창을 받는 동안의 시각 (POK-389)',
   });
 });
 
+describe('useEditorVideoPlayback — 창 Blob 시크 규칙(kty M1 처분 (가))', () => {
+  it('② 창 첫 영상 프레임 앞으로는 옮기지 않는다: 빈 편집 구간이면 Safari 가 앞 그림을 남긴다', async () => {
+    const { result } = mount();
+    const node = videoNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+
+    act(() => result.current.playback.seekTo(8)); // 창 첫 조각 시작 = Blob 0초 = 첫 영상 프레임
+
+    expect(node.currentTime).toBeCloseTo(0.001, 9);
+    expect(result.current.seekLimits).toEqual({ firstFrame: 0, halfFrame: 0.25 });
+  });
+
+  it('① 시크 목표는 video.duration − 반 프레임 안이다: Firefox 가 짧게 알린 끝 너머로 가지 않는다', async () => {
+    const { result } = mount();
+    const node = videoNode({ duration: 31.9 });
+    act(() => result.current.videoRef(node));
+    await flush();
+
+    act(() => result.current.playback.seekTo(39.99));
+
+    expect(node.currentTime).toBeCloseTo(31.9 - 0.25, 9);
+  });
+
+  it('머리가 와 다시 배치해 멈춘 영상을 옮길 때도 같은 규칙으로 묶는다', async () => {
+    const key = 'key-m1';
+    const { result } = mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    const node = videoNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+    act(() => result.current.playback.seekTo(8));
+
+    // 조각 102 머리: m = 0.3 → 편집기 8초는 원점 앞 0.3초 자리지만 창 첫 프레임 앞으로는 가지 않는다
+    act(() => heads.set(key, 102, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } }));
+
+    expect(node.currentTime).toBeCloseTo(0.001, 9);
+  });
+});
+
 describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
   /** 구간 20–30초, 창 8–40초를 받아 둔 영상 노드. duration 은 받은 영상의 실제 길이(초) */
   async function loaded(duration: number) {

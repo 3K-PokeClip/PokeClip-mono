@@ -1,12 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CUT_MAX_MS, CUT_MIN_MS } from '@/api/clipEditor';
 import type { CutContext } from './cutPosition';
 import type { EditorPlaylist, PlaylistSegment } from './editorPlaylist';
 import type { HeadCache, HeadEntry } from './fileHeadProbe';
 import {
+  cardEndpoints,
+  displayRange,
   displaySeconds,
   endpointOf,
+  recipeEndpoints,
   savable,
+  saveAfterReload,
+  saveRefusalMessage,
   type Endpoint,
   type EndpointRange,
 } from './rangeEndpoints';
@@ -176,6 +181,108 @@ describe('savable', () => {
       ok: true,
       inMs: 1_004_000 + 500,
       outMs: BASE + 20_000,
+    });
+  });
+});
+
+describe('cardEndpoints · recipeEndpoints', () => {
+  it('카드 범위는 칸 없는 카드의 지금 식(base + 카드 창)이라 estimate 다 — 저장 값이 아니다', () => {
+    const range = cardEndpoints({ window: { startMs: 60_000, endMs: 72_400 } }, BASE);
+
+    expect(range).toEqual({
+      start: { kind: 'estimate', ms: BASE + 60_000 },
+      end: { kind: 'estimate', ms: BASE + 72_400 },
+    });
+    expect(savable(range, { base: BASE, heads: headsOf(), list: LIST })).toEqual({
+      ok: false,
+      reason: 'estimate',
+    });
+  });
+
+  it('레시피 컷은 받은 값 그대로 exact 라 손대지 않고 저장하면 같은 값이다(P-7)', () => {
+    const range = recipeEndpoints({ inAtMs: BASE + 61_234, outAtMs: BASE + 71_999 });
+
+    expect(savable(range, { base: BASE, heads: headsOf(), list: null })).toEqual({
+      ok: true,
+      inMs: BASE + 61_234,
+      outMs: BASE + 71_999,
+    });
+  });
+});
+
+describe('displayRange', () => {
+  it('끝점 둘의 표시 초를 편집기 구간으로 낸다 — 카드 창이면 지금 식과 같은 초다', () => {
+    const range = cardEndpoints({ window: { startMs: 60_000, endMs: 72_400 } }, 1_726_826_400_000);
+
+    expect(displayRange(range, headsOf(), 1_726_826_400_000)).toEqual({
+      startSeconds: 60,
+      endSeconds: 72.4,
+    });
+  });
+
+  it('고름은 머리가 오면 표시 초가 머리 원점으로 바뀐다(값은 그대로)', () => {
+    const heads = headsOf();
+    const range: EndpointRange = {
+      start: { kind: 'pick', pick: pickAt(0.5) },
+      end: { kind: 'exact', ms: BASE + 12_000 },
+    };
+    const before = displayRange(range, heads, BASE).startSeconds;
+
+    heads.set(2, READY);
+
+    expect(before).toBeCloseTo(4.3, 9);
+    expect(displayRange(range, heads, BASE).startSeconds).toBeCloseTo(4.5, 9);
+  });
+});
+
+describe('saveAfterReload — 저장 때 목록 다시 받기(PK1)', () => {
+  const picked: EndpointRange = {
+    start: { kind: 'pick', pick: pickAt(0.5) },
+    end: { kind: 'exact', ms: BASE + 12_000 },
+  };
+
+  it('저장을 누르면 목록을 한 번 다시 받고 그 목록으로 판정한다', async () => {
+    const reloadList = vi.fn(async () => LIST);
+
+    const verdict = await saveAfterReload(picked, BASE, headsOf({ 2: READY }), reloadList);
+
+    expect(reloadList).toHaveBeenCalledOnce();
+    expect(verdict).toEqual({ ok: true, inMs: 1_004_500, outMs: BASE + 12_000 });
+  });
+
+  it('다시 받기에 실패하면 들고 있는 목록으로 맞추지 않고 listUnavailable 로 막는다', async () => {
+    const verdict = await saveAfterReload(picked, BASE, headsOf({ 2: READY }), async () => null);
+
+    expect(verdict).toEqual({ ok: false, reason: 'listUnavailable' });
+  });
+});
+
+describe('saveRefusalMessage', () => {
+  it('사유마다 문구가 있고, 다시 받으면 풀릴 수 있는 사유(머리 · 목록)만 다시 시도 단추를 단다', () => {
+    expect(saveRefusalMessage('estimate')).toEqual({
+      title: '이 카드는 범위 끝을 직접 정해 주세요',
+      retry: false,
+    });
+    expect(saveRefusalMessage('headMissing')).toEqual({
+      title: '저장에 필요한 녹화 정보를 받지 못했어요',
+      retry: true,
+    });
+    expect(saveRefusalMessage('headFailed')).toEqual({
+      title: '저장에 필요한 녹화 정보를 받지 못했어요',
+      retry: true,
+    });
+    expect(saveRefusalMessage('outsideList')).toEqual({
+      title: '이 끝점은 방송 중 편집 범위(최근 1시간) 밖이 됐어요 · 다시 정해 주세요',
+      retry: false,
+    });
+    expect(saveRefusalMessage('listUnavailable')).toEqual({
+      title: '목록을 다시 받지 못했어요',
+      retry: true,
+    });
+    expect(saveRefusalMessage('tooLong')).toEqual({ title: '범위가 180초를 넘어요', retry: false });
+    expect(saveRefusalMessage('tooShort')).toEqual({
+      title: '범위가 5초보다 짧아요',
+      retry: false,
     });
   });
 });

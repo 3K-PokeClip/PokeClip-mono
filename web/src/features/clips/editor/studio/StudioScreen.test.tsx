@@ -419,11 +419,11 @@ describe('StudioScreen', () => {
     renderStudio({ actions: { requestUpload } });
 
     await user.click(screen.getByRole('button', { name: '업로드' }));
-    expect(requestUpload).toHaveBeenLastCalledWith(expect.anything(), null);
+    expect(requestUpload).toHaveBeenLastCalledWith(expect.anything(), null, expect.any(Function));
 
     await user.click(screen.getByRole('button', { name: '이 장면을 썸네일로' }));
     await user.click(screen.getByRole('button', { name: '업로드' }));
-    expect(requestUpload).toHaveBeenLastCalledWith(expect.anything(), 4934);
+    expect(requestUpload).toHaveBeenLastCalledWith(expect.anything(), 4934, expect.any(Function));
   });
 
   it('확대 단추가 타임라인 배율을 바꾼다', async () => {

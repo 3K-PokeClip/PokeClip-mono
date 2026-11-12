@@ -11,8 +11,17 @@ const FAIL_SECONDS = new Set<number>();
 let loadFails = false;
 let drawn = 0;
 
+/** 만든 영상 노드 — 시험이 옮긴 시각 · 붙은 자리를 본다 */
+const made: FakeVideo[] = [];
+/** 프레임 콜백(requestVideoFrameCallback)을 흉내 낼 때 시험이 부를 콜백들 */
+let frameCallbacks: (() => void)[] | null = null;
+
 class FakeVideo extends EventTarget {
   muted = false;
+  style: Record<string, string> = {};
+  seeks: number[] = [];
+  requestVideoFrameCallback = frameCallbacks === null ? undefined : this.onFrame.bind(this);
+  cancelVideoFrameCallback = () => undefined;
   playsInline = false;
   preload = '';
   duration = 600;
@@ -24,6 +33,7 @@ class FakeVideo extends EventTarget {
   }
   set currentTime(value: number) {
     this.seconds = value;
+    this.seeks.push(value);
     queueMicrotask(() =>
       this.dispatchEvent(new Event(FAIL_SECONDS.has(value) ? 'error' : 'seeked')),
     );
@@ -33,6 +43,11 @@ class FakeVideo extends EventTarget {
   }
   removeAttribute() {}
   load() {}
+  remove() {}
+  private onFrame(cb: () => void) {
+    frameCallbacks?.push(cb);
+    return frameCallbacks?.length ?? 0;
+  }
 }
 
 const context = new Proxy({}, { get: () => () => undefined, set: () => true });
@@ -48,9 +63,16 @@ describe('useSceneFrames', () => {
     FAIL_SECONDS.clear();
     loadFails = false;
     drawn = 0;
+    made.length = 0;
+    frameCallbacks = null;
+    vi.spyOn(document.body, 'append').mockImplementation(() => undefined);
     const create = document.createElement.bind(document);
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
-      if (tag === 'video') return new FakeVideo() as unknown as HTMLVideoElement;
+      if (tag === 'video') {
+        const video = new FakeVideo();
+        made.push(video);
+        return video as unknown as HTMLVideoElement;
+      }
       if (tag === 'canvas') {
         return {
           width: 0,
@@ -125,5 +147,54 @@ describe('useSceneFrames', () => {
     expect(result.current.failed(7_000)).toBe(false);
     expect(result.current.frameOf(8_000)).not.toBeNull();
     expect(result.current.frameOf(31_000)).not.toBeNull();
+  });
+
+  it('뽑는 영상 노드는 문서에 보이지 않게 붙인다: 프레임 콜백은 그려지는(문서에 붙은) 영상에만 온다', async () => {
+    const { result } = renderHook(() => useSceneFrames(SOURCE, [], 2_000));
+    await waitFor(() => expect(result.current.frameOf(2_000)).not.toBeNull());
+
+    expect(document.body.append).toHaveBeenCalledWith(made[0]);
+    expect(made[0]!.style).toMatchObject({ position: 'fixed', opacity: '0' });
+  });
+
+  it('③ 프레임 콜백이 있는 브라우저는 seeked 만으로 그리지 않고 프레임 콜백까지 와야 그린다(WebKit 묵은 그림)', async () => {
+    frameCallbacks = [];
+    const { result } = renderHook(() => useSceneFrames(SOURCE, [], 2_000));
+    await waitFor(() => expect(made[0]?.seeks).toEqual([2]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const beforeFrame = result.current.frameOf(2_000);
+
+    for (const cb of frameCallbacks.splice(0)) cb();
+
+    expect(beforeFrame).toBeNull();
+    await waitFor(() => expect(result.current.frameOf(2_000)).not.toBeNull());
+  });
+
+  it('① ② 시크 목표를 창 첫 영상 프레임 뒤 · 길이 − 반 프레임 안으로 묶는다', async () => {
+    const limited: SceneFrameSource = {
+      ...SOURCE,
+      seekLimits: { firstFrame: 0.079, halfFrame: 1 / 60 },
+    };
+    const { result } = renderHook(() => useSceneFrames(limited, [0, 700_000], null));
+    await waitFor(() => expect(result.current.frameOf(700_000)).not.toBeNull());
+
+    expect(made[0]!.seeks[0]).toBeCloseTo(0.08, 9);
+    expect(made[0]!.seeks[1]).toBeCloseTo(600 - 1 / 60, 9);
+  });
+
+  it('E4b-3 r1 — 같은 조각이어도 배치(시각 변환)가 바뀌면 뽑아 둔 그림을 버리고 새 배치로 다시 뽑는다(머리 도착)', async () => {
+    const { result, rerender } = renderHook(
+      ({ source }: { source: SceneFrameSource }) => useSceneFrames(source, [2_000], null),
+      { initialProps: { source: SOURCE } },
+    );
+    await waitFor(() => expect(result.current.frameOf(2_000)).not.toBeNull());
+    const before = result.current.frameOf(2_000);
+
+    rerender({ source: { ...SOURCE, videoSecondsAt: (offsetMs) => offsetMs / 1000 + 0.3 } });
+
+    await waitFor(() => expect(made[0]!.seeks).toEqual([2, 2.3]));
+    await waitFor(() => expect(result.current.frameOf(2_000)).not.toBe(before));
+    expect(result.current.frameOf(2_000)).not.toBeNull();
+    expect(made).toHaveLength(1);
   });
 });
