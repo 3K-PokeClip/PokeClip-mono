@@ -202,6 +202,27 @@ class CardThumbnailSceneTest extends IntegrationTestSupport {
         assertThat(ledger.get()).isEqualTo(2);
     }
 
+    /**
+     * 내려놓을지 따질 카드(장면 없음)가 방송 중인 방송 여럿에 걸쳐도 회차 완결은 묶음 한 번에 묻는다(c2 확인 패스 #9 — 2초 빠른
+     * 순회 경로라 방송마다 물으면 묶음당 최대 50 문장). 장면 몫 둘 + 완결 하나 = 셋. 완결인 방송 카드만 내려놓는다.
+     */
+    @Test
+    void 방송_중_장면_없는_카드의_회차_완결은_묶음당_한_번_묻는다() {
+        AtomicInteger ledger = new AtomicInteger();
+        RoundRows counted = new RoundRows(new JdbcTemplate(counting(dataSource, ledger)));
+        ThumbnailTargets measured = new ThumbnailTargets(jdbc, broadcasts, counted, new CardPositionReader(counted));
+        라이브_머리_카드("S-la", "LA", false);
+        라이브_머리_카드("S-lb", "LB", false);
+        long closed = 라이브_머리_카드("S-lc", "LC", true);
+
+        sweeper(measured).sweepCards();
+
+        assertThat(sent).isEmpty();
+        assertThat(jdbc.queryForList("SELECT target_id FROM thumbnails WHERE kind = 'card'", String.class))
+                .as("완결 회차 카드만 내려놓는다").containsExactly(String.valueOf(closed));
+        assertThat(ledger.get()).isEqualTo(3);
+    }
+
     // ── 실패 격리 ─────────────────────────────────────────────────────────────
 
     /**
@@ -301,6 +322,22 @@ class CardThumbnailSceneTest extends IntegrationTestSupport {
         seed.row("MC", 1).pts(4_500).wall(4_500).insert();
         seed.row("MC", 2).pts(8_500).wall(8_500).insert();
         카드("S-mc", 5_000);
+    }
+
+    /**
+     * 방송 중(편지 {@code live})인 회차 방송 하나와 그 마지막 귀속 행 뒤(라이브 머리) 카드. {@code roundClosed}면 회차 세션을
+     * 끝내고 닫는다(완결 · 방송 편지 전).
+     *
+     * @return 카드 번호
+     */
+    private long 라이브_머리_카드(String streamId, String key, boolean roundClosed) {
+        broadcasts.save(Broadcast.startedNow(streamId, TestIds.STREAMER, key, 1L, at(0), null));
+        seed.session(streamId, key, streamId, null);
+        seed.row(key, 1).pts(0).wallAndPdt(0).session(streamId).insert();
+        if (roundClosed) {
+            seed.endSession(streamId, true);
+        }
+        return 카드(streamId, 9_000);
     }
 
     private Broadcast 방송_찾기(String streamId) {

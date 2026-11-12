@@ -11,11 +11,13 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 방송 회차의 <b>귀속 행</b>을 고르는 한 곳(POK-196 · 설계 r7 8.2 「회차 고르기」 · r6 S-c1). 기준점
@@ -144,13 +146,17 @@ public class RoundRows {
      * 회차 완결 술어(r6 S-c1 C6): 그 회차의 세션이 하나 이상이고 모두 끝났고 회차가 닫혔다. 생산자 종료 알림
      * ({@code media/internal/broadcast/outbox.go} 의 members · done)과 같은 열쇠 · 같은 술어다. 회차 칸이 빈 세션 · 없는
      * 세션은 술어가 없다(거짓) — 부르는 쪽이 방송 {@code ended}로만 정한다.
+     *
+     * <p>세션 여럿을 한 왕복에 묻고 완결인 세션만 낸다(줄이 없으면 거짓). 묶음으로 묻는 쪽(썸네일 카드 순회)과 하나만 묻는 쪽이
+     * 같은 문장을 쓴다 — 술어가 두 벌로 갈리지 않게.
      */
     static final String ROUND_COMPLETE = """
-            SELECT pg_catalog.count(*) > 0
-                   AND pg_catalog.bool_and(m.state = 'ended' AND m.round_closed_at IS NOT NULL)
+            SELECT k.session_id
               FROM public.stream_sessions k
               JOIN public.stream_sessions m ON m.stream_id = k.stream_id AND m.round_id = k.round_id
-             WHERE k.session_id = ? AND k.round_id IS NOT NULL""";
+             WHERE k.session_id = ANY(?::text[]) AND k.round_id IS NOT NULL
+             GROUP BY k.session_id
+            HAVING pg_catalog.bool_and(m.state = 'ended' AND m.round_closed_at IS NOT NULL)""";
 
     /** 이 방송의 장부 행을 무엇으로 자르나. */
     public sealed interface Round permits Members, TimeWindow {
@@ -303,7 +309,25 @@ public class RoundRows {
 
     /** @param sessionId 회차의 아무 세션(보통 머리) */
     public boolean roundComplete(String sessionId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject(ROUND_COMPLETE, Boolean.class, sessionId));
+        return completedOf(List.of(sessionId)).contains(sessionId);
+    }
+
+    /**
+     * 회차가 완결인 세션들(왕복 한 번 · 술어는 {@link #roundComplete} 와 같은 문장).
+     *
+     * @param sessionIds 물을 세션(각각 회차의 아무 세션). 비면 묻지 않는다
+     * @return {@code sessionIds} 가운데 회차가 완결인 것
+     */
+    public Set<String> completedOf(Collection<String> sessionIds) {
+        if (sessionIds.isEmpty()) {
+            return Set.of();
+        }
+        List<String> complete = jdbc.query(con -> {
+            var ps = con.prepareStatement(ROUND_COMPLETE);
+            ps.setArray(1, con.createArrayOf("text", sessionIds.toArray()));
+            return ps;
+        }, (rs, rowNum) -> rs.getString("session_id"));
+        return Set.copyOf(complete);
     }
 
     private Map<String, List<String>> membersOf(List<String> heads) {

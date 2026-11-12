@@ -18,11 +18,13 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 
 /**
  * 사진을 찍을 대상과 그 장면이 든 영상 조각을 찾는다(읽기 전용). 조각 장부({@code stream_segments})는 1번 표라 SELECT만 한다
@@ -187,8 +189,8 @@ public class ThumbnailTargets {
      *       지운다), 장면 계산이 깨져 격리된 방송({@code jumpcard.scene_unavailable} — 장부 불변식 위반을 포기로 덮지 않는다).</li>
      * </ul>
      *
-     * <p>회차 완결은 방송이 아직 {@code live}이고 내려놓을지 따질 카드가 있을 때만 그 방송마다 한 번 묻는다(장면 몫 장부 왕복
-     * 두 번 밖의 판정 왕복).
+     * <p>회차 완결은 방송이 아직 {@code live}이고 내려놓을지 따질 카드가 있을 때만, 그런 방송 전부를 묶음 한 번에 묻는다(장면 몫
+     * 장부 왕복 두 번 밖의 판정 왕복 0–1).
      */
     private CardBatch resolve(List<Candidate> candidates) {
         if (candidates.isEmpty()) {
@@ -201,31 +203,44 @@ public class ThumbnailTargets {
         Map<String, Broadcast> byId = new HashMap<>();
         broadcasts.findByStreamIdIn(values.keySet()).forEach(b -> byId.put(b.getStreamId(), b));
         Map<String, Map<Long, Scene>> found = scenes.scenesOf(List.copyOf(byId.values()), values);
-        Map<String, Boolean> finished = new HashMap<>();
         List<Card> orders = new ArrayList<>();
-        List<Long> givenUp = new ArrayList<>();
+        List<Candidate> sceneless = new ArrayList<>();
         for (Candidate c : candidates) {
             Map<Long, Scene> ofBroadcast = found.get(c.streamId());
             if (ofBroadcast == null) {
                 continue; // 격리된 방송(또는 그 사이 지워진 방송) — 기다린다
             }
             Scene scene = ofBroadcast.get(c.streamTimestampMs());
-            Optional<ThumbnailOrder> order = scene == null ? Optional.empty() : scene.thumbnailOrder();
-            if (order.isPresent()) {
-                orders.add(new Card(c.id(), scene.row().s3Key(), order.get().offsetMs(), order.get().offsetOrigin()));
-            } else if (scene == null && finished.computeIfAbsent(c.streamId(), id -> finished(byId.get(id)))) {
-                givenUp.add(c.id()); // 장면 없음(마지막 귀속 행 뒤 · 회차 행 없음) — 끝났으니 다시 봐도 같다
+            if (scene == null) {
+                sceneless.add(c);
+                continue;
             }
+            Optional<ThumbnailOrder> order = scene.thumbnailOrder();
+            order.ifPresent(o -> orders.add(new Card(c.id(), scene.row().s3Key(), o.offsetMs(), o.offsetOrigin())));
         }
+        Set<String> finished = finishedOf(sceneless.stream().map(c -> byId.get(c.streamId())).distinct().toList());
+        // 장면 없음(마지막 귀속 행 뒤 · 회차 행 없음) — 끝났으니 다시 봐도 같다
+        List<Long> givenUp = sceneless.stream().filter(c -> finished.contains(c.streamId())).map(Candidate::id)
+                .toList();
         return new CardBatch(orders, givenUp);
     }
 
     /**
-     * 방송이 끝났거나(편지 {@code ended}) 회차가 완결이다(세션 모두 끝 · 회차 닫힘 — {@link RoundRows#roundComplete}). 회차 칸이
-     * 없는 옛 방송은 완결 술어가 없어(거짓) 방송 상태로만 정한다.
+     * 방송이 끝났거나(편지 {@code ended}) 회차가 완결인(세션 모두 끝 · 회차 닫힘 — {@link RoundRows#completedOf}) 방송 번호. 회차
+     * 칸이 없는 옛 방송은 완결 술어가 없어(거짓) 방송 상태로만 정한다. 완결은 {@code live} 방송만 한 왕복에 묻는다.
      */
-    private boolean finished(Broadcast broadcast) {
-        return broadcast.getStatus() != BroadcastStatus.LIVE || rounds.roundComplete(broadcast.getStreamId());
+    private Set<String> finishedOf(List<Broadcast> broadcasts) {
+        Set<String> finished = new HashSet<>();
+        List<String> live = new ArrayList<>();
+        for (Broadcast b : broadcasts) {
+            if (b.getStatus() != BroadcastStatus.LIVE) {
+                finished.add(b.getStreamId());
+            } else {
+                live.add(b.getStreamId());
+            }
+        }
+        finished.addAll(rounds.completedOf(live));
+        return finished;
     }
 
     List<ClipRow> clips(int maxAttempts, Instant retryBefore, int limit) {
