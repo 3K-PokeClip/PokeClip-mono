@@ -29,7 +29,7 @@ import java.util.OptionalLong;
  * ({@code StreamSegmentReader}와 같은 규칙). 올라간 조각({@code upload_state = 'uploaded'})만 쓴다: 일꾼은 창고에서 받는다.
  *
  * <p><b>조각은 방송의 회차로 고른다</b>(POK-196 · {@link RoundRows}). 카드는 장면을 따로 판정하지 않고 카드 장면 함수
- * ({@link CardPositionReader})의 장면을 그대로 쓴다 — 카드 응답의 {@code playerAtMs} · {@code fileHead}와 사진이 같은 조각이다
+ * ({@link CardPositionReader})의 장면을 그대로 쓴다 — 카드 응답의 {@code playerAtMs}와 사진이 같은 조각이다
  * (틈 · 비귀속 자리는 뒤 귀속 행 첫 화면 · 겹침은 나중 조각 · 설계 r7 8.2). 라이브는 회차 귀속 행 가운데 올라간 seq 최대 행이다.
  * 머리 세션 행이 없는 옛 방송만 방송 시간(시작 2분 전부터 종료 10분 뒤까지)으로 자른다. 원점 표지({@code offsetOrigin})는 고른 행의
  * 판이다({@link OffsetOrigin#ofTimingVersion}).

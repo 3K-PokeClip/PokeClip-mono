@@ -12,8 +12,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 카드 위치 → 장면 하나(POK-196 · 설계 r7 8.2 「카드 장면 함수」 · kty 11:27). 썸네일 주문 값 · 편집기 {@code fileHead} ·
- * 플레이어 {@code playerAtMs} 가 같은 장면에서 나오는지, 틈 안(이어진 · 끊긴 · 비귀속 자리)이 모두 뒤 귀속 행 첫 화면인지
+ * 카드 위치 → 장면 하나(POK-196 · 설계 r7 8.2 「카드 장면 함수」 · kty 11:27). 썸네일 주문 값 · 플레이어
+ * {@code playerAtMs} 가 같은 장면에서 나오는지, 틈 안(이어진 · 끊긴 · 비귀속 자리)이 모두 뒤 귀속 행 첫 화면인지
  * 잰다. 회차 행 열만 받는 순수 함수라 DB 없이 잰다 — 왕복 수는 {@code CardPositionRoundTripTest}, 실행 계획은
  * {@code segment.RoundRowsPlanTest}.
  */
@@ -28,14 +28,13 @@ class CardPositionReaderTest {
     }
 
     @Test
-    void 조각_안이면_그_자리이고_셋이_같은_조각에서_나온다() {
+    void 조각_안이면_그_자리이고_둘이_같은_조각에서_나온다() {
         List<Row> rows = List.of(legacy(1, 0, 4_000, 100_000, 100_000L), legacy(2, 4_000, 4_000, 104_900, 104_900L));
 
         Scene scene = CardPositionReader.scenesOf(rows, List.of(4_500L)).get(4_500L);
 
         assertThat(scene.seq()).isEqualTo(2);
         assertThat(scene.offsetMs()).isEqualTo(500);
-        assertThat(scene.fileHeadMs()).isEqualTo(105_400);
         assertThat(scene.playerAtMs()).isEqualTo(105_400L);
         assertThat(scene.thumbnailOrder()).contains(new ThumbnailOrder(2, 500, OffsetOrigin.FILE_HEAD));
     }
@@ -61,7 +60,6 @@ class CardPositionReaderTest {
         assertThat(scene.offsetMs()).isZero();
         assertThat(scene.thumbnailOrder()).contains(new ThumbnailOrder(11, 0, OffsetOrigin.FILE_HEAD));
         assertThat(scene.playerAtMs()).isEqualTo(110_000L);
-        assertThat(scene.fileHeadMs()).isEqualTo(110_000);
     }
 
     /** 비귀속 행은 회차 행 열에 없다 — 그 자리 위치(채팅 카드)는 두 귀속 행 사이 틈이라 뒤 귀속 행 첫 화면이다. */
@@ -106,7 +104,6 @@ class CardPositionReaderTest {
         Scene scene = CardPositionReader.scenesOf(rows, List.of(1_000L)).get(1_000L);
 
         assertThat(scene.playerAtMs()).isNull();
-        assertThat(scene.fileHeadMs()).isEqualTo(101_000);
         assertThat(scene.thumbnailOrder()).isPresent();
     }
 

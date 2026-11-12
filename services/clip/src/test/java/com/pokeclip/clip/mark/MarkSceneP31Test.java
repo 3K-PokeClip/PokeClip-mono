@@ -9,7 +9,7 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.TimelineNotReadyException;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
-import com.pokeclip.clip.jumpcard.JumpCardSnapshot.FileHead;
+import com.pokeclip.clip.jumpcard.JumpCardSnapshot.PlayerWindow;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.segment.OffsetOrigin;
 import com.pokeclip.clip.segment.ServerClockPosition;
@@ -36,8 +36,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * P31(설계 r7 16.2 · 계획 8.2) — 카드 · 마크 ↔ 플레이어 · 편집기 · 썸네일. 한 카드의 썸네일 주문 값 · {@code fileHead} ·
- * {@code playerAtMs} 가 같은 장면에서 나오고, 마크는 회차 귀속 행에서 행별로 저장되는지 시드 (a)–(g) 와 999ms 겹침 사례로
+ * P31(설계 r7 16.2 · 계획 8.2) — 카드 · 마크 ↔ 플레이어 · 편집기 · 썸네일. 한 카드의 썸네일 주문 값 · {@code playerAtMs} ·
+ * {@code playerWindow} 가 같은 장면에서 나오고, 마크는 회차 귀속 행에서 행별로 저장되는지 시드 (a)–(g) 와 999ms 겹침 사례로
  * 잰다. 썸네일은 {@link CardPositionReader}의 주문 값으로 단언한다 — 실제 주문서는 {@code thumbnail.CardThumbnailSceneTest}.
  *
  * <p>시각은 {@link LedgerSeed#BASE}에서 잰 ms다. 응답의 두 칸은 절대 시각(epoch ms)이라 {@link #abs}로 맞댄다.
@@ -104,8 +104,8 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(thumbnailOf("S-a", card)).as("② 썸네일 주문 값")
                 .contains(new ThumbnailOrder(881, 1_000, OffsetOrigin.FILE_HEAD));
         assertThat(card.playerAtMs()).as("③ 플레이어 = PDT(881) + 1000").isEqualTo(abs(3_521_000));
-        assertThat(card.fileHead().atMs()).as("④ 편집기 = 파일명 시각(881) + 1000 = 누른 시각").isEqualTo(abs(3_345_000));
-        assertThat(card.fileHead().startMs()).isLessThanOrEqualTo(card.fileHead().endMs());
+        assertThat(card.playerWindow()).as("④ 창 두 끝 = 끝마다 장면 행 PDT + 거리(871 · 886)")
+                .isEqualTo(new PlayerWindow(abs(3_481_000), abs(3_541_000)));
         assertThat(목록_카드("S-a")).as("목록 응답도 같은 두 칸").isEqualTo(card);
     }
 
@@ -120,7 +120,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(card.streamTimestampMs()).as("① R2 j=50 행 + 1000(옛 식이면 120초 이른 2,481,000)")
                 .isEqualTo(2_601_000);
         assertThat(card.playerAtMs()).isEqualTo(abs(2_601_000));
-        assertThat(card.fileHead().atMs()).isEqualTo(abs(2_481_000));
+        assertThat(card.playerWindow()).isEqualTo(new PlayerWindow(abs(2_561_000), abs(2_621_000)));
     }
 
     // ── (c) 판 2 회차(장 잔차 700ms) ────────────────────────────────────────────
@@ -141,7 +141,10 @@ class MarkSceneP31Test extends IntegrationTestSupport {
 
     // ── (d) 출시 이미지 식 판 NULL 회차 ─────────────────────────────────────────
 
-    /** 단언 ① ② ③. 기준점 + 카드 ms = 120,500 은 조각 5(설계 예의 조각 4)다. */
+    /**
+     * 단언 ① ② ③ ④. 기준점 + 카드 ms = 120,500 은 조각 5(설계 예의 조각 4)다. 창 끝도 같다 — 기준점 + 창 ms 면 140,500,
+     * 카드 값에 창 ms 차를 더해 늘리면 145,000 이고, 끝 장면 행(조각 9 첫 화면)에서 풀어야 146,500 이다.
+     */
     @Test
     void d_출시_이미지_식_회차의_마크는_행별로_서고_플레이어가_같은_조각을_가리킨다() {
         시드_d();
@@ -151,7 +154,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(card.streamTimestampMs()).as("① 조각 6 + 500").isEqualTo(20_500);
         assertThat(card.playerAtMs()).as("③ PDT(6) + 500").isEqualTo(abs(125_000));
         assertThat(thumbnailOf("S-d", card)).as("②").contains(new ThumbnailOrder(6, 500, OffsetOrigin.FILE_HEAD));
-        assertThat(card.fileHead()).isEqualTo(new FileHead(abs(125_000), abs(100_000), abs(146_500)));
+        assertThat(card.playerWindow()).as("④").isEqualTo(new PlayerWindow(abs(100_000), abs(146_500)));
     }
 
     /** 단언 ⑤(조각 안) — 웹이 「playerAtMs − 기준점」 을 보내면 같은 숫자로 저장된다. 그대로 저장하면 25,000 = 틈 → 조각 7. */
@@ -177,7 +180,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
             JumpCardSnapshot card = webLive("S-d", at(204_500)).card();
 
             assertThat(card.streamTimestampMs()).as("조각 20 시작 86,000 + 14,000 — 접으면 90,000").isEqualTo(100_000);
-            assertThat(card.fileHead()).isNull();
+            assertThat(card.playerWindow()).isNull();
             assertThat(card.playerAtMs()).isNull();
             assertThat(thumbnailOf("S-d", card)).isEmpty();
             assertThat(logs.messages()).anyMatch(m -> m.startsWith("clip.mark.positioned streamId=S-d source=web_live")
@@ -195,7 +198,6 @@ class MarkSceneP31Test extends IntegrationTestSupport {
 
         assertThat(thumbnailOf("S-d", card)).contains(new ThumbnailOrder(9, 0, OffsetOrigin.FILE_HEAD));
         assertThat(card.playerAtMs()).isEqualTo(abs(146_500));
-        assertThat(card.fileHead().atMs()).isEqualTo(abs(146_500));
         assertThat(목록_카드("S-d")).isEqualTo(card);
     }
 
@@ -209,27 +211,29 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(card.streamTimestampMs()).isEqualTo(25_000);
         assertThat(thumbnailOf("S-d", card)).contains(new ThumbnailOrder(7, 0, OffsetOrigin.FILE_HEAD));
         assertThat(card.playerAtMs()).isEqualTo(abs(138_500));
-        assertThat(card.fileHead().atMs()).isEqualTo(abs(138_500));
     }
 
     // ── (e) 하한 거부 꼴 비귀속 u ─────────────────────────────────────────────
 
-    /** 단언 ⑩ — 회차로 자르면 u(벽시각 3초 이름)를 안 고른다. 시간창이면 98,000. */
+    /**
+     * 단언 ⑩ — 회차로 자르면 u 를 안 고른다. q · u 는 위치 · PDT 가 같아 플레이어 값으로는 못 가르고, 장면 조각 seq 로 가른다(시간창이면
+     * u = seq 11).
+     */
     @Test
     void e_하한_거부_꼴_비귀속_행은_장면에_안_고른다() {
         시드_e();
 
         JumpCardSnapshot card = cards.recordHotkey("S-e", 주인, UUID.randomUUID().toString(), 201_000L).card();
 
-        assertThat(card.fileHead().atMs()).isEqualTo(abs(101_000));
-        assertThat(thumbnailOf("S-e", card)).contains(new ThumbnailOrder(10, 1_000, OffsetOrigin.FILE_HEAD));
+        assertThat(thumbnailOf("S-e", card)).as("⑩ 장면 조각 = q").contains(new ThumbnailOrder(10, 1_000, OffsetOrigin.FILE_HEAD));
+        assertThat(card.playerAtMs()).isEqualTo(abs(101_000));
     }
 
     // ── (f) 재접속 틈 안 라이브 마크 ───────────────────────────────────────────
 
-    /** 단언 ⑪ — A 끝으로 접힌 위치 204,000 은 셋 모두 재접속 뒤 첫 화면(B 시작)이다(kty 11:27). */
+    /** 단언 ⑪ — A 끝으로 접힌 위치 204,000 은 썸네일 · 플레이어 둘 모두 재접속 뒤 첫 화면(B 시작)이다(kty 11:27). */
     @Test
-    void f_재접속_틈_안_마크는_A_끝으로_접히고_셋_모두_B_첫_화면이다() {
+    void f_재접속_틈_안_마크는_A_끝으로_접히고_둘_모두_B_첫_화면이다() {
         시드_f();
 
         JumpCardSnapshot card = webLive("S-f", at(106_000)).card();
@@ -237,7 +241,6 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         assertThat(card.streamTimestampMs()).isEqualTo(204_000);
         assertThat(thumbnailOf("S-f", card)).contains(new ThumbnailOrder(11, 0, OffsetOrigin.FILE_HEAD));
         assertThat(card.playerAtMs()).isEqualTo(abs(110_000));
-        assertThat(card.fileHead().atMs()).isEqualTo(abs(110_000));
     }
 
     /** 단언 ⑤(틈) — 틈에서는 숫자가 아니라 장면이 보존된다: 204,000 → PDT 110,000 → 새 마크 210,000. */
@@ -262,7 +265,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
 
         assertThat(card.streamTimestampMs()).isEqualTo(200_000);
         assertThat(card.playerAtMs()).isEqualTo(abs(100_000));
-        assertThat(card.fileHead()).isNotNull();
+        assertThat(card.playerWindow()).isEqualTo(new PlayerWindow(abs(100_000), abs(120_000)));
         assertThat(thumbnailOf("S-f", card)).contains(new ThumbnailOrder(10, 0, OffsetOrigin.FILE_HEAD));
     }
 
@@ -274,21 +277,21 @@ class MarkSceneP31Test extends IntegrationTestSupport {
         JumpCardSnapshot card = cards.record("S-f", new HighlightRequest(UUID.randomUUID().toString(), "auto",
                 205_000L, new HighlightRequest.Window(204_500L, 209_000L), 90, null)).card();
 
-        assertThat(card.fileHead()).isEqualTo(new FileHead(abs(110_000), abs(110_000), abs(110_000)));
+        assertThat(card.playerAtMs()).isEqualTo(abs(110_000));
+        assertThat(card.playerWindow()).isEqualTo(new PlayerWindow(abs(110_000), abs(110_000)));
     }
 
     // ── (g) 비귀속 옆 채팅 카드 ─────────────────────────────────────────────
 
     /** 단언 ⑫. 「Gap = (j, dur(j))」(r6 S-c4) 면 썸네일이 j 끝이 된다. */
     @Test
-    void g_비귀속_옆_채팅_카드는_셋_모두_k_프라임_시작이다() {
+    void g_비귀속_옆_채팅_카드는_둘_모두_k_프라임_시작이다() {
         시드_g();
 
         JumpCardSnapshot card = 채팅_카드("S-g", 305_500);
 
         assertThat(thumbnailOf("S-g", card)).contains(new ThumbnailOrder(22, 0, OffsetOrigin.FILE_HEAD));
         assertThat(card.playerAtMs()).isEqualTo(abs(308_000));
-        assertThat(card.fileHead().atMs()).isEqualTo(abs(308_000));
     }
 
     // ── K1-c 999ms PDT 부분 겹침 ───────────────────────────────────────────
@@ -320,7 +323,7 @@ class MarkSceneP31Test extends IntegrationTestSupport {
 
         assertThat(again.streamId()).isEqualTo("S-d");
         assertThat(again.playerAtMs()).isEqualTo(abs(125_000)).isEqualTo(made.playerAtMs());
-        assertThat(again.fileHead()).isEqualTo(made.fileHead());
+        assertThat(again.playerWindow()).isEqualTo(made.playerWindow());
     }
 
     /**

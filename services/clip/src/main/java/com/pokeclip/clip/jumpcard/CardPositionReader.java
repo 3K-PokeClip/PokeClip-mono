@@ -20,9 +20,8 @@ import java.util.Optional;
 
 /**
  * 카드 위치(카드 ms — {@code start_pts} 재생 위치 축)를 회차 귀속 행 위 <b>장면 하나</b>로 바꾸는 한 곳(POK-196 · 설계 r7
- * 8.2 「카드 장면 함수」 · kty 2026-11-03 11:27). 카드 썸네일 주문 값 · 편집기용 {@code fileHead}(파일명 시각 축) · 플레이어용
- * {@code playerAtMs}(목록 PDT 축)가 모두 이 장면에서 나온다 — 따로 SQL · 따로 판정을 두면 같은 카드의 썸네일과 이동 장면이
- * 갈린다.
+ * 8.2 「카드 장면 함수」 · kty 2026-11-03 11:27). 카드 썸네일 주문 값 · 카드 응답의 {@code playerAtMs} · {@code playerWindow}
+ * (목록 PDT 축)가 모두 이 장면에서 나온다 — 따로 SQL · 따로 판정을 두면 같은 카드의 썸네일과 이동 장면이 갈린다.
  *
  * <p><b>장면 규칙</b>(공통 모듈 F {@link LedgerTimeline#locate} 한 번 — 시작 ≤ v 인 행 가운데 seq 최대 · 겹침은 나중 조각):
  * <ul>
@@ -53,12 +52,7 @@ public class CardPositionReader {
             return row.seq();
         }
 
-        /** 편집기 {@code /get} 축(파일명 시각) 절대 시각. 판 2 행은 머리 앞섬 m 만큼 이르다(경계 표 B6 한계). */
-        public long fileHeadMs() {
-            return row.wallMs() + offsetMs;
-        }
-
-        /** 목록 PDT 축 절대 시각(플레이어 카드 클릭 이동). 고른 행의 PDT 가 비면 없다. */
+        /** 목록 PDT 축 절대 시각(플레이어 카드 클릭 이동 · 편집기 카드 자리 · 창 두 끝). 고른 행의 PDT 가 비면 없다. */
         public Long playerAtMs() {
             return row.pdtMs() == null ? null : row.pdtMs() + offsetMs;
         }

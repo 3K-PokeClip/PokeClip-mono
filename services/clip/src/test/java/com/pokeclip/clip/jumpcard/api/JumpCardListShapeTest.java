@@ -71,7 +71,7 @@ class JumpCardListShapeTest extends IntegrationTestSupport {
                         VALUES (?, ?, 'live', ?, 1)""",
                 방송, TestIds.STREAMER,
                 OffsetDateTime.ofInstant(Instant.parse("2026-08-25T00:00:00Z"), ZoneOffset.UTC));
-        // 카드 장면 두 칸(fileHead · playerAtMs)이 null 이 아닌 상태에서 맞대려고 카드 구간을 덮는 회차 행을 심는다(POK-196).
+        // 카드 장면 두 칸(playerAtMs · playerWindow)이 null 이 아닌 상태에서 맞대려고 카드 구간을 덮는 회차 행을 심는다(POK-196).
         LedgerSeed seed = new LedgerSeed(jdbc);
         seed.session(방송, 방송, 방송, null);
         seed.row(방송, 1).pts(5_000_000).wallAndPdt(5_000_000).duration(100_000).session(방송).insert();
@@ -106,7 +106,10 @@ class JumpCardListShapeTest extends IntegrationTestSupport {
                     .as("두 쪽 다 근거를 통째로 빠뜨렸다면 위 동등은 참이면서 아무 뜻이 없다").isEqualTo(4.2);
             assertThat(목록_카드.path("playerAtMs").isNumber())
                     .as("두 쪽 다 장면을 빠뜨렸다면(null) 위 동등은 참이면서 아무 뜻이 없다").isTrue();
-            assertThat(목록_카드.path("fileHead").path("atMs").isNumber()).isTrue();
+            JsonNode 창 = 목록_카드.path("playerWindow");
+            assertThat(창.path("startMs").asLong()).isEqualTo(LedgerSeed.at(5_020_000).toEpochMilli());
+            assertThat(창.path("endMs").asLong()).isEqualTo(LedgerSeed.at(5_062_000).toEpochMilli());
+            assertThat(목록_카드.has("fileHead")).as("PR-B1 편집기 칸은 거뒀다(PR-B2 D3)").isFalse();
         }
     }
 
