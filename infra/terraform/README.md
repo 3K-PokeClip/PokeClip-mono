@@ -231,7 +231,7 @@ terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` �
 닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
 에 닿지 않음), 없으면 skip 으로 셉니다.
 
-`node --test` 는 CloudFront Function 셋의 단위 시험입니다(node 26 · 표준
+`node --test` 는 CloudFront Function 넷의 단위 시험입니다(node 26 · 표준
 라이브러리만 — 패키지 설치 없음). 글롭은 따옴표 없이 두어 셸이 풀고, 파일
 목록을 node 에 넘깁니다(CI 의 cf-functions 잡과 같음). 디렉터리를 인자로 주면
 node 26 은 실패합니다. 맞는 파일이 없을 때 CI 는 빈 목록을 보고 실패하고,

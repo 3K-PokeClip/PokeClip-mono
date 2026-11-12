@@ -133,12 +133,20 @@ apply 마다 plan 파일을 만들고, 바뀌는 관리 자원 목록이 그 걸
 목록과 같을 때만 apply 합니다. 하나라도 다르면 apply 하지 않고 kty 에게
 보고합니다.
 
+plan 과 apply 는 다른 블록입니다. 먼저 plan 블록으로 목록을 냅니다.
+
 ```shell
 terraform -chdir=infra/terraform/prod/media plan -out="${work}/media.plan"
 terraform -chdir=infra/terraform/prod/media show -json "${work}/media.plan" \
   | jq -r '.resource_changes[] | select(.mode == "managed")
       | select(.change.actions != ["no-op"])
       | "\(.change.actions | join(",")) \(.address)"'
+```
+
+목록이 아래 표의 그 걸음 기대 목록과 같은지 대조하고, kty 의 실행 직전
+승인을 받은 뒤에 apply 블록을 돌립니다.
+
+```shell
 terraform -chdir=infra/terraform/prod/media apply "${work}/media.plan"
 ```
 
@@ -910,8 +918,8 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
     보고합니다. `EDGE edge_bounds_disabled` 면 tfvars 스위치를,
     `_config_invalid` 면 런타임 출력 ARN 을, `_degraded` 면 그 줄의 `err` 를
     봅니다. 끈 채인 동안은 옛 꼴만 써 Writer 가 하한을 올릴 회차가 없고(원장
-    행 0), 엣지 PR(Ⓓ) 전이라 KVS 를 읽는 엣지 함수도 없어 시청자 영향은
-    없습니다.
+    행 0) KVS 에 키도 없습니다. /dvr 하한 함수(`dvr_floor_enabled`)가 붙어
+    있어도 키가 없는 회차는 통과라 시청자 영향은 없습니다.
 *   **4.3 — A 는 아직 돕니다.** 전환 동안 A 가 살아 있어 제어면 502 창이
     없습니다. `<cut>` = `tg_health` 의 `ingest` 가 B 한 대 healthy 가 된
     시각 + 30초(등록 해제 지연)입니다.
@@ -952,7 +960,9 @@ media_ssm b "${work}/round-keys.sh" on               # 4.7
         지나도 4.2 세션이 아직 `live` 로 남아 있으면 같은 세션으로 이어지는데,
         그때도 Q4 는 `f` 를 냅니다(`<on>` 뒤에 시작한 세션이 없으면 `round_id`
         가 비고, 있으면 그 회차에 4.2 의 옛 꼴이 섞여 `not_round_keys` 1 이상) —
-        4.11 로 가지 않고 kty 에게 보고합니다.
+        4.11 로 가지 않고 kty 에게 보고합니다. [엣지 시험 런북](edge-tests.md)
+        「/dvr 하한 걸음」 의 「새 시험 방송으로 재개」 도 같은 까닭으로 6분을
+        기다리고, 새 회차가 직전 회차와 다른지 봅니다.
 *   **4.9 — 운영 SQL 2.** 직전에 B `PATHS 0` 을 다시 봅니다(트리거를 만드는
     동안 세션 쓰기가 막힘). 보내는 법 · 실패 갈래는 런타임 1단-가 런북
     「POK-525 운영 SQL 2 적용」 입니다. B 는 다시 띄우지 않습니다 — 다음
@@ -1103,19 +1113,53 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
 판정은 media README 「/dvr 하한 신호」, 절차는 「/dvr 하한 사람 복구」
 입니다.
 
-*   **엣지 거절**(엣지 PR Ⓓ 뒤 — 시청자 404 · `dvr_floor_blocks_list`)
-    *   방법: 엣지의 `/dvr` 하한 함수 연결을 끕니다(1순위 · prod/edge
-        apply). 원인을 고친 뒤 다시 켭니다.
+*   **엣지 거절**(/dvr 하한 함수를 붙인 뒤 운영 중 — 시청자 404 ·
+    `dvr_floor_blocks_list`. 판정 C′ 도중의 같은 관찰은 엣지 시험 런북의
+    「보류 · 즉시 kty 보고」 이고 끌지는 kty 가 정함)
+    *   방법: `dvr_floor_enabled = false` 로 prod/edge apply 해 `/dvr/*` 에서
+        함수를 뗍니다(1순위 · 실행 직전 승인). plan 범위는
+        `update module.media.aws_cloudfront_distribution.this` 한 줄이고,
+        함수 · 로그 그룹 · 경보는 남깁니다. 원인을 고친 뒤 다시 켭니다 —
+        [엣지 시험 런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의
+        2단 · 판정 C′ 입니다(C′ 결과 둘 — 「통과」 면 켠 채 두고, 「보류 ·
+        즉시 kty 보고」 면 켠 채 6.6 을 열어 둠 · 다시 끌지는 kty 판단).
+        함수 코드가 원인이면 같은 런북의
+        「붙은 채 함수 코드 고치기」 차례(고친 PR 머지 전에 끔)를 따릅니다.
+
+        ```shell
+        terraform -chdir=infra/terraform/prod/edge plan -input=false \
+          -var dvr_floor_enabled=false -out="${work}/edge-dvr-off.plan"
+        terraform -chdir=infra/terraform/prod/edge show -json \
+          "${work}/edge-dvr-off.plan" \
+          | jq -r '.resource_changes[] | select(.mode == "managed")
+              | select(.change.actions != ["no-op"])
+              | "\(.change.actions | join(",")) \(.address)"'
+        ```
+
+        목록이 위 한 줄과 같을 때만, kty 실행 직전 승인 뒤 apply 합니다.
+
+        ```shell
+        terraform -chdir=infra/terraform/prod/edge apply \
+          "${work}/edge-dvr-off.plan"
+        ```
+
+    *   apply 뒤 떼어졌는지는 [엣지 시험 런북](edge-tests.md) 「/dvr 하한
+        끄기」 의 확인 둘(배포 설정의 `/dvr/*` 연결 · 표지 요청)로 봅니다.
+        하한 값 · 회차와 무관해 회차가 닫힌 뒤에도 성립합니다.
+
 *   **Writer 만 문제**(`edge_bounds_write_failing` 이 풀리지 않음 ·
     `dvr_floor_release_overdue` · `edge_bounds_degraded`)
     *   `edge_bounds_degraded` 는 먼저 그 줄의 `err` 를 고치고 사이드카를
         재기동합니다(media README 「/dvr 하한 사람 복구」). 못 고칠 때만
         아래 방법으로 갑니다.
-    *   방법: 엣지를 먼저 끔(엣지 PR 뒤) → `edge_bounds_writer_enabled =
+    *   방법: 엣지를 먼저 끔(함수가 붙어 있을 때만 — 위 「엣지 거절」 의
+        `dvr_floor_enabled = false` apply) → `edge_bounds_writer_enabled =
         false` 로 「설정 반영 교체」 → 고친 뒤 `true` 로 다시 교체. 꺼진
         동안 닫힌 미해제 회차는 `ending` 에 묶이고
         (`edge_bounds_unreleased_without_writer`) Writer 가 돌아오면
         풀립니다.
+    *   엣지는 Writer 를 되살린 교체 뒤 다시 켭니다 — [엣지 시험
+        런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의 2단 · 판정 C′.
     *   `dvr_floor_release_overdue` 만이면(`pass=release` 의
         `edge_bounds_write_failing` 이 함께 나와도) 엣지는 끄지 않습니다 —
         피해는 그 회차 VOD 가 열리지 않는 것뿐입니다.
@@ -1126,6 +1170,16 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         멈추기 직전 runtime-1a 「POK-525 원장 질의」 에서
         `released_settling` 0 을 봅니다.
 *   원장 표 · KVS 그릇 · IAM 문은 어느 갈래에서도 지우지 않습니다.
+*   **해체 · KVS 그릇 교체는 지금 할 수단이 없습니다.** 스위치
+    (`dvr_floor_enabled = false`)는 `/dvr/*` 부착만 떼고, dvr-floor 함수의
+    KVS 연결은 남습니다.
+    연결이 남은 그릇의 교체 · 삭제는 DeleteKeyValueStore 가 쓰는 중인
+    그릇으로 거절합니다(409 — [prod/edge](../prod/edge/README.md)
+    「/dvr 하한(POK-525)」 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).
+    연결을 떼려면 함수를 지워야 하는데 `O7f` 묶음에
+    `cloudfront:DeleteFunction` 이 없습니다. 그래서 해체 · 그릇 교체 앞에
+    함수 삭제 승인 경로(`O7f` 에 DeleteFunction 행 추가 · 별도 승인)가 먼저
+    있어야 하고, 이것은 POK-525 PR 범위 밖입니다.
 
 **켜기 전 복귀**(A 로 돌아감 — 실행 직전마다 승인):
 

@@ -110,6 +110,16 @@ module "media" {
   internal_alb_dns_name              = local.platform.internal_alb_dns_name
   rewind_bucket_regional_domain_name = local.runtime.rewind_bucket_regional_domain_name
   log_destination                    = local.media_log_destination
+  dvr_floor_enabled                  = var.dvr_floor_enabled
+
+  # /dvr 하한 KVS(POK-525)는 prod/runtime 을 POK-525 판으로 apply 해야 출력에
+  # 생긴다. 출력이 없으면 속성 오류가 아니라 remote_contract 의 계약 문구로
+  # 멈추게 null 로 두고, 모듈은 그 검사를 기다린다 — 기다리지 않으면 모듈
+  # 변수 검증이 null 로 먼저 멈춘다(terraform 1.16.4 실측). 모듈에 data 가
+  # 없어 기다림이 plan 의 읽기를 apply 로 미루지 않는다.
+  edge_bounds_kvs_arn = try(local.runtime.edge_bounds_kvs_arn, null)
+
+  depends_on = [terraform_data.remote_contract]
 }
 
 # 표준 로그 v2 대상(us-east-1). 이름은 cdn_media 의 log_destination 검증에
