@@ -8,7 +8,7 @@ import {
   ChevronUp,
   Film,
 } from 'lucide-react';
-import { IconButton } from '@/ui';
+import { IconButton, PRIVATE_TEXT_CLASS } from '@/ui';
 import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { ThumbnailTile } from './ThumbnailTile';
@@ -373,7 +373,7 @@ export function MultitrackTimeline({
                       {subtitleBlocks.map((block) => (
                         <span
                           key={block.id}
-                          className={styles.subtitleBlock}
+                          className={`${styles.subtitleBlock} ${PRIVATE_TEXT_CLASS}`}
                           data-subtitle-block
                           style={{ left: `${block.left * 100}%`, width: `${block.width * 100}%` }}
                         >

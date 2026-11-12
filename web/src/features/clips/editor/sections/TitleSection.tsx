@@ -1,5 +1,5 @@
 import { Lock, Sparkles } from 'lucide-react';
-import { Badge } from '@/ui';
+import { Badge, PRIVATE_TEXT_CLASS } from '@/ui';
 import styles from './sections.module.css';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
 
@@ -36,7 +36,8 @@ export function TitleSection({ state }: { state: ClipEditorMockState }) {
           <button
             key={suggestion.id}
             type="button"
-            className={styles.titleOption}
+            // 추천 제목은 방송 자막(말한 내용)에서 나온다
+            className={`${styles.titleOption} ${PRIVATE_TEXT_CLASS}`}
             aria-pressed={state.selectedTitleId === suggestion.id}
             onClick={() => state.selectTitle(suggestion.id)}
           >

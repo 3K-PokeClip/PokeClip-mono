@@ -27,7 +27,8 @@ import {
   type AppNotification,
   type NotificationKind,
 } from '@/api/notifications';
-import { Button, IconButton, Popover, Skeleton } from '@/ui';
+import clsx from 'clsx';
+import { Button, IconButton, PRIVATE_TEXT_CLASS, Popover, Skeleton } from '@/ui';
 import { isInvitationFinished } from '@/features/channel/useInvitationResponse';
 import {
   buildPanelView,
@@ -430,8 +431,9 @@ function NotificationRow({
       >
         <KindIcon kind={n.payload.kind} tone={view.tone} />
         <span className={styles.text}>
-          <span className={styles.rowTitle}>{view.title}</span>
-          <span className={styles.rowDetail}>{view.detail}</span>
+          {/* 알림 제목·내용에는 채널·편집자 이름과 방송·클립 제목이 들어간다(describeNotification) */}
+          <span className={clsx(styles.rowTitle, PRIVATE_TEXT_CLASS)}>{view.title}</span>
+          <span className={clsx(styles.rowDetail, PRIVATE_TEXT_CLASS)}>{view.detail}</span>
           <span className={styles.meta}>
             {notificationTime(n.createdAt, now)}
             {n.resolvedAt !== null ? (
@@ -498,8 +500,8 @@ function TodoCard({
       >
         <KindIcon kind={n.payload.kind} tone={view.tone} />
         <span className={styles.text}>
-          <span className={styles.rowTitle}>{view.title}</span>
-          <span className={styles.rowDetail} data-wrap>
+          <span className={clsx(styles.rowTitle, PRIVATE_TEXT_CLASS)}>{view.title}</span>
+          <span className={clsx(styles.rowDetail, PRIVATE_TEXT_CLASS)} data-wrap>
             {view.detail}
           </span>
           <span className={styles.meta}>
@@ -559,7 +561,10 @@ function InviteActions({ n, state }: { n: AppNotification; state: NotificationsS
   if (asking) {
     return (
       <div className={styles.confirm}>
-        <span>거절하면 {n.channel.name} 채널이 다시 초대해야 참여할 수 있어요</span>
+        <span>
+          거절하면 <span className={PRIVATE_TEXT_CLASS}>{n.channel.name}</span> 채널이 다시 초대해야
+          참여할 수 있어요
+        </span>
         <div className={styles.actions} data-count="2">
           <Button
             ref={cancelRef}

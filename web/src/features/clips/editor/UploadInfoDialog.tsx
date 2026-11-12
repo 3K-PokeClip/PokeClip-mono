@@ -16,6 +16,7 @@ import {
   Field,
   HStack,
   Input,
+  PRIVATE_TEXT_CLASS,
   RadioGroup,
   Select,
   Skeleton,
@@ -385,7 +386,8 @@ function UploadInfoForm({
               <span className={styles.shortsBadge}>{schedule} 공개</span>
             ) : null}
             <div className={styles.shortsShade}>
-              <p className={styles.shortsTitle}>
+              {/* 입력 칸은 녹화가 가려도 여기서 같은 제목을 글자로 다시 그린다 */}
+              <p className={`${styles.shortsTitle} ${PRIVATE_TEXT_CLASS}`}>
                 {draft.title.trim() === '' ? '제목' : draft.title}
               </p>
             </div>
@@ -687,7 +689,7 @@ function TagBox({
         <Tag
           key={tag}
           size="sm"
-          className={styles.tagChip}
+          className={`${styles.tagChip} ${PRIVATE_TEXT_CLASS}`}
           // 칸보다 길어 말줄임된 태그도 올리면 다 보인다
           title={tag}
           onKeyDown={(event) => onChipKeyDown(event, index)}
@@ -707,7 +709,10 @@ function TagBox({
         onChange={(e) => onText(e.target.value)}
         onKeyDown={onInputKeyDown}
       />
-      <VisuallyHidden role="status">{notice}</VisuallyHidden>
+      <VisuallyHidden role="status">
+        {/* 「{태그} 태그를 뺐어요」 */}
+        <span className={PRIVATE_TEXT_CLASS}>{notice}</span>
+      </VisuallyHidden>
     </div>
   );
 }

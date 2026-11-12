@@ -91,6 +91,7 @@ export function ChzzkCallbackScreen() {
           tone: 'success',
           title: '치지직 채널을 연동했어요',
           description: `${linked.channelName} 채널에서 하이라이트를 감지해요`,
+          maskDescription: true,
         });
         back();
       })

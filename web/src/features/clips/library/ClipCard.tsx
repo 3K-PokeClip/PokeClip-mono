@@ -2,7 +2,7 @@
 
 import { memo } from 'react';
 import clsx from 'clsx';
-import { Badge } from '@/ui';
+import { Badge, PRIVATE_TEXT_CLASS } from '@/ui';
 import {
   STATUS_BADGE,
   cardName,
@@ -60,11 +60,12 @@ export const ClipCard = memo(function ClipCard({
             {badge.label}
           </Badge>
         </span>
-        <span className={styles.cardOwner} aria-hidden="true">
+        {/* 남의 편집본이면 편집자 이름의 첫 글자다 */}
+        <span className={clsx(styles.cardOwner, PRIVATE_TEXT_CLASS)} aria-hidden="true">
           {ownerInitial(clip.owner)}
         </span>
         <span className={styles.cardFoot} aria-hidden="true">
-          <span className={styles.cardTitle}>{displayTitle(clip)}</span>
+          <span className={clsx(styles.cardTitle, PRIVATE_TEXT_CLASS)}>{displayTitle(clip)}</span>
           {duration ? <span className={styles.cardDuration}>{duration}</span> : null}
         </span>
       </button>

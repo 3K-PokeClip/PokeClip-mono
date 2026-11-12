@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { Lock } from 'lucide-react';
-import { Button } from '@/ui';
+import { Button, PRIVATE_TEXT_CLASS } from '@/ui';
 import { useMe } from '@/features/auth/useSession';
 import { SettingsPageHeader } from '@/features/settings/SettingsPageHeader';
 import { useChannelRelation } from './ChannelScope';
@@ -36,7 +36,9 @@ function Blocked({ title }: { title: string }) {
           <Lock />
         </span>
         <p className={styles.title}>채널 주인만 볼 수 있는 화면이에요</p>
-        <p className={styles.text}>지금은 {where}에서 편집자로 일하는 중이에요</p>
+        <p className={styles.text}>
+          지금은 <span className={PRIVATE_TEXT_CLASS}>{where}</span>에서 편집자로 일하는 중이에요
+        </p>
         <Button
           variant="solid"
           size="sm"

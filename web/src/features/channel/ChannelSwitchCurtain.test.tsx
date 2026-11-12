@@ -1,4 +1,5 @@
 import { StrictMode } from 'react';
+import { byTextContent } from '@/test/byTextContent';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from '@/api/client';
@@ -79,14 +80,15 @@ function pendingRequest(): () => Promise<void> {
 }
 
 const progress = () => Number(screen.getByRole('progressbar').getAttribute('aria-valuenow'));
-const shown = () => screen.queryByText('별하 채널로 전환 중') !== null;
+// 채널 이름만 녹화 가림 칸으로 감싸 문장이 나뉜다(POK-572)
+const shown = () => screen.queryByText(byTextContent('별하 채널로 전환 중')) !== null;
 
 describe('ChannelSwitchCurtain', () => {
   it('덮개를 세우면 새 채널과 역할을 보이고, 다 덮은 뒤에야 채널을 바꾼다', () => {
     setup();
     const commit = cover();
 
-    expect(screen.getByText('별하 채널로 전환 중')).toBeInTheDocument();
+    expect(screen.getByText(byTextContent('별하 채널로 전환 중'))).toBeInTheDocument();
     expect(screen.getByText('편집자로 들어가요')).toBeInTheDocument();
     run(COVER_IN_MS - 50);
     expect(commit).not.toHaveBeenCalled();

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { READ_TIMEOUT_MS } from '@/api/client';
+import { byTextContent } from '@/test/byTextContent';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders, withToastProvider } from '@/test/testProviders';
 import { VodListScreen } from './VodListScreen';
@@ -163,7 +164,10 @@ describe('VodListScreen — 풀 VOD 내려받기', () => {
     await user.click(within(rowAt(2)).getByRole('button', { name: /^풀 버전 다운로드/ }));
 
     const panel = screen.getByRole('dialog', { name: /^풀 버전 다운로드/ });
-    expect(within(panel).getByText('합방 특집 — 4인 내전 · 4:12:08')).toBeInTheDocument();
+    // 제목만 녹화 가림 칸으로 감싸 문장이 나뉜다(POK-572)
+    expect(
+      within(panel).getByText(byTextContent('합방 특집 — 4인 내전 · 4:12:08')),
+    ).toBeInTheDocument();
     // 크기는 길이에서 계산한다 — 행마다 같은 값이 아니다
     expect(within(panel).getByText('6.2GB')).toBeInTheDocument();
     expect(within(panel).getByRole('radio', { name: /원본 화질/ })).toBeChecked();

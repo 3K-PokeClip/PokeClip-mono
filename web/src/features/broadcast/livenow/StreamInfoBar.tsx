@@ -2,7 +2,7 @@
 
 import { memo, useState } from 'react';
 import { CirclePlus, Pencil, Zap } from 'lucide-react';
-import { Avatar, Button, IconButton, Skeleton, Tag } from '@/ui';
+import { Avatar, Button, IconButton, PRIVATE_TEXT_CLASS, Skeleton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { MARK_HOTKEY } from './markKey';
 import { withMarkLabel } from './useManualMarking';
@@ -93,7 +93,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
       <div className={styles.infoBody}>
         <div className={styles.infoTitleRow}>
           {stream.title ? (
-            <h1 className={styles.infoTitle}>{stream.title}</h1>
+            <h1 className={`${styles.infoTitle} ${PRIVATE_TEXT_CLASS}`}>{stream.title}</h1>
           ) : infoPending ? (
             <h1 className={styles.infoTitle} aria-label="방송 정보를 받아 오고 있어요">
               <Skeleton width={260} height={18} data-testid="info-title-pending" />
@@ -113,7 +113,8 @@ export const StreamInfoBar = memo(function StreamInfoBar({
             <>
               {meta.category ? <span className={styles.infoCategory}>{meta.category}</span> : null}
               {meta.tags.map((tag) => (
-                <Tag key={tag} variant="soft" size="sm">
+                // 방송 태그는 스트리머가 쓴 글이다
+                <Tag key={tag} variant="soft" size="sm" className={PRIVATE_TEXT_CLASS}>
                   {tag}
                 </Tag>
               ))}
