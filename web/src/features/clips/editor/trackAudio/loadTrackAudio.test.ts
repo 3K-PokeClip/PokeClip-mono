@@ -459,6 +459,75 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
   });
 });
 
+// --- 브라우저 풀기가 버린 머리(실측 M6 · 2026-11-13) ---
+
+/**
+ * 풀린 소리를 seconds 만큼 줄여 돌려주는 풀기 — 브라우저 decodeAudioData(ADTS)가 머리 표본을 버리는 것을 흉내 낸다. 음수면
+ * 기대보다 길다(꼬리 · SBR 두 배 빈도 등)
+ */
+function trimmingDecode(seconds: number) {
+  return vi.fn(async (adts: Uint8Array) => {
+    const buffer = fake(await fakeDecode(adts));
+    return { ...buffer, duration: buffer.duration - seconds } as unknown as AudioBuffer;
+  });
+}
+
+/** 8초짜리 48kHz 소리(1024표본 프레임 375개) */
+const EIGHT_SECONDS_48K = { frequencyIndex: 3, frames: 375 };
+
+describe('loadTrackAudio — 풀기가 버린 머리만큼 시작을 뒤로 민다', () => {
+  beforeEach(() => {
+    demux.synthetic = null;
+  });
+
+  it('WebKit · Safari 꼴(48kHz 2112표본 = 44ms 버림): 덩어리 시작이 44ms 뒤로 간다 — 남은 소리가 제 시각에 난다', async () => {
+    useSynthetic({ 1: { videoDts: 0, tracks: [{ ...EIGHT_SECONDS_48K, firstPts: 0 }] } });
+    const src = { ...source(access(BASE), anchorsOf(2)), decode: trimmingDecode(2112 / 48000) };
+
+    const { tracks } = await loadTrackAudio(src, [1]);
+
+    expect(tracks[0]![0]!.startSeconds).toBeCloseTo(2 + 0.044, 9);
+  });
+
+  it('Firefox 꼴(프레임 하나 버림): 그 트랙 프레임 길이만큼 뒤로 간다', async () => {
+    useSynthetic({ 1: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] } });
+    const src = { ...source(access(BASE), anchorsOf(2)), decode: trimmingDecode(FRAME_32K) };
+
+    const { tracks } = await loadTrackAudio(src, [1]);
+
+    expect(tracks[0]![0]!.startSeconds).toBeCloseTo(2 + FRAME_32K, 9);
+  });
+
+  it('기대보다 길게 풀리면 시작을 그대로 둔다: 머리를 버린 근거가 없다(꼬리 · SBR)', async () => {
+    useSynthetic({ 1: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] } });
+    const src = { ...source(access(BASE), anchorsOf(2)), decode: trimmingDecode(-4) };
+
+    const { tracks } = await loadTrackAudio(src, [1]);
+
+    expect(tracks[0]![0]!.startSeconds).toBe(2);
+  });
+
+  it('앞서 푼 덩어리를 다시 써도(previous) 같은 만큼 민다', async () => {
+    useSynthetic({
+      1: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
+      // 1초 떨어진 둘째 조각 — 새 덩어리라 첫 덩어리는 앞서 푼 것을 쓴다
+      2: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
+    });
+    const decode = trimmingDecode(FRAME_32K);
+    const first = await loadTrackAudio({ ...source(access(BASE), anchorsOf(0, 5)), decode }, [1]);
+    const second = await loadTrackAudio(
+      { ...source(access(BASE, BASE + 5000), anchorsOf(0, 5)), decode },
+      [1, 2],
+      { previous: first },
+    );
+
+    expect(decode).toHaveBeenCalledTimes(2);
+    const [head, tail] = second.tracks[0]!;
+    expect(head!.startSeconds).toBeCloseTo(FRAME_32K, 9);
+    expect(tail!.startSeconds).toBeCloseTo(5 + FRAME_32K, 9);
+  });
+});
+
 describe('windowAnchors', () => {
   it('seq → ③ 영상 첫 DTS − Δ(창 Blob 시각)', () => {
     const segment = (seq: number, videoDts: number) => ({

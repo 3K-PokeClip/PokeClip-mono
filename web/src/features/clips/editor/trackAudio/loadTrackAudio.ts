@@ -343,6 +343,16 @@ async function resolveCapture(
   }
 }
 
+/**
+ * 풀린 소리의 첫 표본이 놓일 Blob 시각. 브라우저 decodeAudioData(ADTS)는 앞 표본을 엔진마다 다르게 버린다(실측 M6 · 2026-11-13
+ * — 48kHz 기준 Chrome 0 · Firefox 1024 · WebKit · Safari 2112표본). 머리에서 버려 남은 소리가 모두 그만큼 이르다 — 버린 몫(기대
+ * 길이 − 풀린 길이)만큼 뒤로 민다. 기대보다 길게 풀리면(꼬리 · SBR 두 배 빈도) 머리를 버린 근거가 없어 그대로 둔다
+ */
+function decodedStart(run: Run, buffer: AudioBuffer): number {
+  const dropped = run.frames.length * frameSeconds(run.config) - buffer.duration;
+  return run.startSeconds + Math.max(0, dropped);
+}
+
 /** 덩어리를 푼다. 앞서 푼 같은 덩어리(runKey)는 다시 풀지 않는다. 결과 순서는 트랙 · 덩어리 순서다 */
 async function decodeRuns(
   runs: Run[][],
@@ -358,7 +368,7 @@ async function decodeRuns(
   await runLimited(jobs, DECODE_PARALLEL, async ({ run, k, j, key }) => {
     const buffer = known.get(key) ?? (await decode(toAdts(run)));
     decoded.set(key, buffer);
-    tracks[k]![j] = { startSeconds: run.startSeconds, buffer };
+    tracks[k]![j] = { startSeconds: decodedStart(run, buffer), buffer };
   });
   return { tracks, decoded };
 }

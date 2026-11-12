@@ -108,10 +108,27 @@ export function followVideo(
     if (flowing()) player.play(sourceSeconds(), video.playbackRate);
     else player.stop();
   };
+  // 재생 시작 · 옮긴 뒤(playing · seeked)에는 영상 시계가 아직 출발 전이라 그 자리에 건 소리가 앞선다(실측 M6 — Chrome 약
+  // 40ms · WebKit · Safari 10–61ms). 문턱(DRIFT_SECONDS) 안이라 어긋남 검사로는 다시 맞추지 않는다: 영상 자리가 그 자리를
+  // 떠난 첫 timeupdate 에서 한 번만 더 건다(흐르지 않으면 sync 가 세우기만 한다). 문턱을 낮추면 시계 잡음(Firefox currentTime
+  // 약 10ms)에 자꾸 다시 걸어 소리가 끊긴다
+  let startedAt: number | null = null;
+  const start = () => {
+    sync();
+    startedAt = flowing() ? sourceSeconds() : null;
+  };
+  const settle = () => {
+    if (startedAt === null || sourceSeconds() === startedAt) return;
+    startedAt = null;
+    sync();
+  };
   const halt = () => player.stop();
-  const resyncEvents = ['playing', 'seeked', 'ratechange'] as const;
+  const startEvents = ['playing', 'seeked'] as const;
   const haltEvents = ['pause', 'ended', 'waiting', 'seeking'] as const;
-  for (const name of resyncEvents) video.addEventListener(name, sync);
+  for (const name of startEvents) video.addEventListener(name, start);
+  // 배속 바꿈은 흐르는 시계 위라 다시 걸기만 한다
+  video.addEventListener('ratechange', sync);
+  video.addEventListener('timeupdate', settle);
   for (const name of haltEvents) video.addEventListener(name, halt);
 
   // 영상이 버벅이거나(버퍼링) 시계가 서로 조금씩 밀리면 소리가 앞서 간다: 주기적으로 재서 맞춘다
@@ -122,10 +139,12 @@ export function followVideo(
     if (heard === null || Math.abs(heard - sourceSeconds()) > DRIFT_SECONDS) sync();
   }, DRIFT_CHECK_MS);
 
-  if (!video.paused) sync();
+  if (!video.paused) start();
 
   return () => {
-    for (const name of resyncEvents) video.removeEventListener(name, sync);
+    for (const name of startEvents) video.removeEventListener(name, start);
+    video.removeEventListener('ratechange', sync);
+    video.removeEventListener('timeupdate', settle);
     for (const name of haltEvents) video.removeEventListener(name, halt);
     clearInterval(timer);
     player.stop();

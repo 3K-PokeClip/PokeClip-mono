@@ -101,6 +101,33 @@ const LOADED = loadedOf(WINDOW);
 /** 1초 조각 셋(seq 1–3 · S 10–13초) */
 const THREE = windowOf(10, [1, 2, 3]);
 
+/** ADTS 빈도 번호 → 표본 빈도(Hz) */
+const FREQUENCIES = [
+  96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+];
+
+/**
+ * 가짜 풀기 — 실물처럼 프레임 수 × 1024 / 설정 빈도 길이의 소리(100Hz 표본 · 0.5)를 돌려준다. 머리를 버리지 않는다(Chrome 꼴):
+ * 길이가 프레임과 어긋나면 loadTrackAudio 가 그만큼 버린 것으로 보고 시작을 민다
+ */
+function fakeDecoded(adts: ArrayBuffer): AudioBuffer {
+  const bytes = new Uint8Array(adts);
+  let frames = 0;
+  for (let offset = 0; offset < bytes.length; frames++) {
+    offset +=
+      ((bytes[offset + 3]! & 0x03) << 11) | (bytes[offset + 4]! << 3) | (bytes[offset + 5]! >> 5);
+  }
+  const duration = (frames * 1024) / FREQUENCIES[(bytes[2]! >> 2) & 0x0f]!;
+  const length = Math.round(duration * 100);
+  return {
+    duration,
+    length,
+    sampleRate: 100,
+    numberOfChannels: 1,
+    getChannelData: () => new Float32Array(length).fill(0.5),
+  } as unknown as AudioBuffer;
+}
+
 function fakeContext() {
   const gains: { gain: { value: number }; disconnect: ReturnType<typeof vi.fn> }[] = [];
   return {
@@ -114,15 +141,7 @@ function fakeContext() {
         this.state = 'closed';
         return Promise.resolve();
       }),
-      decodeAudioData: vi.fn(() =>
-        Promise.resolve({
-          duration: 1,
-          length: 100,
-          sampleRate: 100,
-          numberOfChannels: 1,
-          getChannelData: () => new Float32Array(100).fill(0.5),
-        } as unknown as AudioBuffer),
-      ),
+      decodeAudioData: vi.fn((adts: ArrayBuffer) => Promise.resolve(fakeDecoded(adts))),
       createGain() {
         const node = { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() };
         gains.push(node);

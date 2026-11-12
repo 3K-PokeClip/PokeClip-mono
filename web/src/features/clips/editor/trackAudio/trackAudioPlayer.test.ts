@@ -217,6 +217,74 @@ describe('followVideo: 소리를 영상 노드에 맞춰 튼다', () => {
     expect(play).toHaveBeenLastCalledWith(10.9, 1);
   });
 
+  // 실측 M6(2026-11-13): playing · seeked 때 영상 시계는 아직 출발 전이라(Chrome 약 40ms · WebKit · Safari 10–61ms) 그 자리에 건
+  // 소리가 앞섰고, 문턱(80ms) 안이라 재생 내내 굳었다
+  it('재생을 시작하면 영상 시계가 실제로 움직인 첫 timeupdate 에서 한 번 더 건다: 그 뒤로는 문턱만 본다', () => {
+    const { play, video } = setup();
+    Object.assign(video, { paused: false, currentTime: 3 });
+    video.dispatchEvent(new Event('playing'));
+    expect(play).toHaveBeenCalledTimes(1);
+
+    // 시작 직후 timeupdate — 영상 시계가 아직 서 있다
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(play).toHaveBeenCalledTimes(1);
+
+    video.currentTime = 3.04;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(play).toHaveBeenLastCalledWith(13.04, 1);
+
+    // 한 번뿐이다: 재조정마다 소리가 끊긴다
+    video.currentTime = 3.3;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it('옮긴 뒤(seeked)에도 영상 시계가 움직이면 한 번 더 건다', () => {
+    const { play, video } = setup();
+    Object.assign(video, { paused: false, currentTime: 3 });
+    video.dispatchEvent(new Event('playing'));
+    video.currentTime = 3.04;
+    video.dispatchEvent(new Event('timeupdate'));
+
+    Object.assign(video, { seeking: true });
+    video.dispatchEvent(new Event('seeking'));
+    Object.assign(video, { seeking: false, currentTime: 1 });
+    video.dispatchEvent(new Event('seeked'));
+    expect(play).toHaveBeenLastCalledWith(11, 1);
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(play).toHaveBeenCalledTimes(3);
+
+    video.currentTime = 1.05;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(play).toHaveBeenCalledTimes(4);
+    expect(play).toHaveBeenLastCalledWith(11.05, 1);
+  });
+
+  it('배속만 바꾸면(ratechange) 시계가 이미 흐르니 한 번 더 걸지 않는다 · 멈춘 영상의 timeupdate 로 틀지 않는다', () => {
+    const { player, play, video } = setup();
+    Object.assign(video, { paused: false, currentTime: 3 });
+    video.dispatchEvent(new Event('playing'));
+    video.currentTime = 3.04;
+    video.dispatchEvent(new Event('timeupdate'));
+
+    Object.assign(video, { playbackRate: 2 });
+    video.dispatchEvent(new Event('ratechange'));
+    expect(play).toHaveBeenCalledTimes(3);
+    video.currentTime = 3.5;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(play).toHaveBeenCalledTimes(3);
+
+    // 재생을 다시 걸어 둔 채 멈춘다: 멈춘 뒤 옮긴 자리의 timeupdate 는 소리를 틀지 않는다
+    video.dispatchEvent(new Event('playing'));
+    Object.assign(video, { paused: true });
+    video.dispatchEvent(new Event('pause'));
+    video.currentTime = 7;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(play).toHaveBeenCalledTimes(4);
+    expect(player.position()).toBeNull();
+  });
+
   it('그만두면 사건을 더 안 듣고 소리를 세운다', () => {
     const { player, play, video, stopFollowing } = setup();
     Object.assign(video, { paused: false });
