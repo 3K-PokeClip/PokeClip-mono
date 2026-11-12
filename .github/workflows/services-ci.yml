@@ -24,7 +24,8 @@ concurrency:
 jobs:
   test:
     name: test (${{ matrix.module }})
-    runs-on: ubuntu-latest
+    # ubuntu-latest가 26.04로 넘어가자 Playwright 1.52가 그 판을 몰라 깨져 24.04로 고정한다 — Playwright를 1.61 이상으로 올리면 되돌린다.
+    runs-on: ubuntu-24.04
     # 실측(2026-10-16, 두 번): clip 12분 34초~12분 56초 · chat-collector 6분 · auth 4분 30초 · chat-detector 1분 30초.
     # 가장 긴 clip의 두 배쯤으로 둔다. clip 시험이 늘어 15분을 넘기 시작하면 같이 올린다.
     timeout-minutes: 25
