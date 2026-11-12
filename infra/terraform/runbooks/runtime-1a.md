@@ -365,6 +365,8 @@ conn = [
     " PGUSER=pokeclip_admin PGSSLMODE=verify-full"
     f" PGSSLROOTCERT={box}/rds-ca.pem PGCONNECT_TIMEOUT=10",
 ]
+# 파일마다 따로 커밋한다(psql -1). 8 의 직전 적용 SHA 가 PDT 머지 c81d04cd
+# 앞이면 어느 흐름이든 20 · 30 을 이은 한 파일로 돈다 — 아래 「PDT 재실행 조건」.
 apply = conn + [
     "for f in 00_preflight.sql 10_roles.sql 20_schema.sql 30_grants.sql"
     " 40_verify.sql; do echo \"== ${f}\";"
@@ -874,6 +876,9 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     더하지 않으므로 `names` 는 그대로입니다(전진 SQL PR 이 파일을 더했으면
     그 PR 이 `names` 도 고칩니다) — 이름이 다르면 `git show` 가 실패해
     「멈춤」 이 납니다.
+1.  **PDT 이은 파일(해당할 때)**: 8 의 직전 적용 SHA 가 PDT 머지
+    `c81d04cd` 앞이고 재실행 SHA 가 그것을 품으면, 아래 「PDT 재실행 조건」 의
+    이은 파일 고침을 지금 합니다 — 다음 걸음(잠금 대기 상한) 앞입니다.
 1.  **잠금 대기 상한 넣기**: 적용 페이로드에 `lock_timeout` 을 겁니다.
     아래는 `apply.json` 의 마지막 명령(00 → 40 반복) 바로 앞에 한 줄을
     끼웁니다.
@@ -908,7 +913,8 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     인지가 무변경 확인입니다.
 1.  **7(끔)**: 그대로 합니다 — 잔여 0 까지.
 1.  **기록**: 8 의 항목에 재실행 SHA · `lock_timeout` 값 · sha256 일곱
-    줄 · `apply` 결과를 더합니다. Jira POK-196 코멘트에 통과 시각과 SHA 를
+    줄 · `apply` 결과를 더합니다. 이은 파일을 썼으면 `2030.sql` 의 sha 두
+    값(상자 출력 · 로컬 계산)도 더합니다. Jira POK-196 코멘트에 통과 시각과 SHA 를
     남깁니다. 이 기록이 사이드카 재푸시(위 순서 3)의 선행 조건입니다.
 
 ### M6 읽기 질의
@@ -1135,11 +1141,91 @@ PDT 판 2 생산자(POK-196 PDT PR)의 DB 몫입니다. 그 PR 의 c1 이 운영
     돕니다 — 칸 추가는 표를 다시 쓰지 않지만 ACCESS EXCLUSIVE 를 잡고
     `psql -1` 이라 파일 끝 커밋까지 남아, 그동안 장부 표의 읽기 질의도
     기다립니다(사이드카 INSERT 는 5초 잠금 대기 뒤 백오프로 유실 없음).
+*   **20 · 30 을 한 트랜잭션으로 돕니다.** 조건은 흐름 이름이 아니라 DB
+    상태입니다 — 8 의 직전 적용 SHA 가 PDT 머지 `c81d04cd` 앞이면, 이 절이든
+    「M6 스키마 재실행」 의 다른 흐름(POK-525 운영 SQL 등)이든 재실행 SHA 가
+    `c81d04cd` 를 품는 첫 적용은 이 꼴로 돕니다. POK-525 운영 SQL 1 의 SHA
+    `e2d258ec` · `2fc2323c` 는 `c81d04cd` 를 품지 않아 `stream_schema.sql` 에
+    `legacy_writer` · `stream_timing_gate` 가 0 건이므로, 지금 순서(Media 교체
+    런북 「POK-525 와의 교체 · 적용 창(K5)」)에서는 이 틈이 생기지 않습니다.
+    PDT 판 `20_schema.sql` 이 처음
+    만드는 쓰기자 거부 트리거(`stream_segments_legacy_writer_guard`)는 정의자
+    함수가 아니라, 넣는 계정 `media_indexer` 의 권한으로 게이트 표
+    `stream_timing_gate` 를 읽습니다. 그 SELECT 권한은 `30_grants.sql` 이
+    줍니다. 5-1 의 반복(파일마다 `psql -X -1`)은 20 을 커밋한 뒤 30 을 따로
+    돌리므로, 그 사이 송출 중인 사이드카의 INSERT 는 42501(권한 없음)로
+    거부됩니다. 42 클래스는 복구 불가 오류라 사이드카가 종료 코드 1 로 끝나고
+    엔진이 거듭 다시 띄웁니다(`media/internal/indexer/insert.go`
+    `classifyInsertError`). 30 이 실패하면 이 틈이 다음 흐름까지 남습니다(소스
+    판독 · 돌려 보지는 않음). 그래서 두 파일을 이은 **한 파일**을 `psql -X -1
+    -v ON_ERROR_STOP=1 -f` 로 돌립니다. 여러 `-f` 대신 한 파일로 잇는 까닭은
+    5-1 의 반복이 파일 하나씩 psql 을 부르는 꼴을 바꾸지 않으려는 것입니다.
+    5-1 의 꼴은 그대로입니다 — 준비(`prepare`)가 원본 파일을 상자에 풀고,
+    적용(`apply`)의 명령 목록이 `conn`(`cd` 뒤 `sha256sum -c` 로 원본 대조)
+    다음 반복에서 psql 을 부릅니다. `make_payload` 뒤, 아래 「재실행 걸음」 의
+    잠금 대기 상한 넣기 **앞에** 적용 페이로드만 고칩니다 — 반복 바로 앞에 두
+    명령(`cat 20_schema.sql 30_grants.sql > 2030.sql` · `sha256sum 2030.sql`)을
+    끼우고, 반복이 20 · 30 대신 `2030.sql` 을 같은 `psql -X -1 -v
+    ON_ERROR_STOP=1 -f` 로 돕니다.
+
+    ```shell
+    jq '.commands |= (.[:-1]
+          + ["cat 20_schema.sql 30_grants.sql > 2030.sql", "sha256sum 2030.sql"]
+          + (.[-1:] | map(sub("20_schema.sql 30_grants.sql"; "2030.sql"))))' \
+      "${payload}/apply.json" >"${payload}/apply.json.new" &&
+      mv "${payload}/apply.json.new" "${payload}/apply.json"
+    jq -r '.commands[-3:][]' "${payload}/apply.json"
+    # cat 20_schema.sql 30_grants.sql > 2030.sql
+    # sha256sum 2030.sql
+    # for f in 00_preflight.sql 10_roles.sql 2030.sql 40_verify.sql; do …
+    ```
+
+    마지막 세 줄이 주석과 다르면 보내지 않고 7 로 갑니다. **sha 대조는 붙이기
+    전 원본 두 파일 기준입니다** — 5-3 의 sha256 일곱 줄 대조와 적용의 `sha256sum
+    -c` 가 그대로 그 일을 하고(이것이 관문), 잇기는 그 대조 뒤에 돕니다. 붙인
+    파일 `2030.sql` 의 sha 는 관문이 아니라 사후 기록입니다 — 상자의 sha 줄은
+    같은 적용 명령 안에서 psql 바로 앞에 나와, 견줄 때는 SQL 이 이미 돈
+    뒤입니다. 적용 출력의 `<sha>  2030.sql` 줄과, 로컬에서 같은 SHA 의 두
+    원본을 이어 계산한 값을 함께 8 의 기록에 남깁니다.
+
+    ```shell
+    # 블롭 둘을 이어서 냅니다 — 상자의 cat 과 같은 바이트입니다.
+    git show "<재실행 SHA>:infra/terraform/prod/runtime/sql/20_schema.sql" \
+      "<재실행 SHA>:infra/terraform/prod/runtime/sql/30_grants.sql" | sha256sum
+    ```
+
+    둘이 다르면 대조를 통과한 두 원본의 잇기가 깨진 것이라 kty 에게
+    알립니다. 이은 파일은 상자의 `sql` 디렉터리에 있어
+    20 의 `\ir stream_schema.sql` 이 그대로 풀립니다. 20 · 30 · `stream_schema.sql` 에는
+    트랜잭션 블록 안에서 못 도는 문장(`CREATE INDEX CONCURRENTLY` · `VACUUM` 등)이
+    없습니다 — 인덱스는 비동시 `CREATE INDEX` 이고, 20 · 30 은 머리 주석대로
+    트랜잭션 문을 쓰지 않습니다(파일 판독). 대가로 20 이 잡은 ACCESS
+    EXCLUSIVE 가 30 의 커밋까지 이어집니다. 30 은 GRANT 열네 문장이라 몇 초
+    안쪽으로 보지만 prod 에서 잰 값은 없습니다 — 그만큼 장부 표 질의가 더
+    기다립니다(위 「언제」 의 방송 없는 시간대 그대로).
+*   **`VERIFY OK` 전에는 송출을 열지 않습니다.** 판정은 이은 파일 뒤
+    `40_verify.sql` 의 `VERIFY OK` 입니다(40 은 `media_indexer` 의 게이트
+    SELECT 와 트리거를 봅니다). 이은 파일이 실패하면 20 도 함께 롤백되어 틈이
+    생기지 않습니다 — 「실패 · 시간 초과」 대로 끄고 다음 흐름에서 같은 꼴로
+    다시 돕니다. 20 은 커밋됐는데 `VERIFY OK` 가 없는 DB(이은 파일 없이 돌려
+    30 이 실패했거나, 40 이 실패한 흐름)면 다음 흐름에서 이 절차로 30 까지
+    다시 돌리고, `VERIFY OK` 를 받을 때까지 송출을 열지 않습니다. 20 은 다시
+    돌려도 수렴하므로(위 「M6 스키마 재실행 순서」 의 「다시 돌려도
+    안전합니다」) 함께 돌아도 됩니다.
+    *   수단: 따로 여닫는 조작은 없습니다. 이 흐름은 위 「언제」 의 방송 없는
+        시간대에 돌므로, `VERIFY OK` 를 받기 전에는 그 시간대를 끝난 것으로
+        보지 않습니다.
+    *   어겼을 때: 그 사이 들어온 송출의 출시 사이드카는 INSERT 가 42501 로
+        거부돼 종료 코드 1 로 끝나고 엔진이 거듭 다시 띄웁니다(일회용 PG17 에서
+        20 커밋 · 30 전 상태로 재현 — c0 꼴 INSERT 는 통과). 30 이 커밋되면
+        멈춥니다. 녹화 파일은 상자에 남고, 다시 뜬 사이드카가 기동 스캔에서
+        장부에 없는 파일을 시각 순으로 다시 처리합니다
+        (`media/internal/indexer/scan.go` `scanStream` — 소스 판독).
 *   **기록**: 적용 직전 `stream_segments` 행 수를 기록에 한 줄 남깁니다(위
     「M6 스키마 재실행 순서」 의 새 인덱스 재실행과 같은 규칙).
-*   **출시 이미지는 그대로 돕니다.** 새 칸에 쓰지 않아 NULL 이고, CHECK 는 모두
-    NULL 이라 만족하며, 래치가 NULL 이라 쓰기자 거부(`legacy_writer_refused`)가
-    걸리지 않습니다.
+*   **출시 이미지는 그대로 돕니다(30 이 커밋된 DB 에서).** 새 칸에 쓰지
+    않아 NULL 이고, CHECK 는 모두 NULL 이라 만족하며, 래치가 NULL 이라
+    쓰기자 거부(`legacy_writer_refused`)가 걸리지 않습니다.
 *   **적용 뒤 정의를 고치지 않습니다.** 칸 · CHECK · 색인 DO 블록은 「이름이
     있으면 건너뜀」 이라, 같은 이름으로 정의를 고친 SHA 로 다시 돌려도 옛
     정의가 조용히 남고 `MissingLedgerSchema` 도 통과합니다. 적용 뒤의 정의
