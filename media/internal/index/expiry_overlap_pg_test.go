@@ -536,8 +536,9 @@ func TestExpiryUnconfirmableLegacySessionDoesNotDefer(t *testing.T) {
 	ovWantSeqs(t, pool, stream)
 }
 
-// T8 K5 — (a) 닫힌 회차의 ended ∧ none 회원 · (b) 머리만 구간 꼭대기 이하인 다중 회원 옛 사슬. 확정될 길이 없으면
-// 미루지 않고, 같은 옛 사슬이 아직 확정될 수 있으면(ending ∧ none) 머리의 최소 seq 로 미룬다.
+// T8 K5 — (a) 닫힌 회차의 ended ∧ none 회원 · (b) 머리만 구간 꼭대기 이하인 다중 회원 옛 사슬 · (c) 닫힌 회차의
+// ended ∧ freezing 회원(정상 경로에서 생기지 않는 행 — 확정될 길이 없다). 확정될 길이 없으면 미루지 않고, 같은 옛
+// 사슬이 아직 확정될 수 있으면(ending ∧ none) 머리의 최소 seq 로 미룬다.
 func TestExpiryLegacyMembersDeferOnlyWhenConfirmable(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -547,6 +548,7 @@ func TestExpiryLegacyMembersDeferOnlyWhenConfirmable(t *testing.T) {
 		{"closed-round-ended-none", []ovSession{{id: "M1", round: "M"}, {id: "M2", round: "M", inherits: "M1", at: 1}}, false},
 		{"legacy-chain-ended-none", []ovSession{{id: "M1"}, {id: "M2", inherits: "M1", at: 1}}, false},
 		{"legacy-chain-ending-none", []ovSession{{id: "M1", state: "ending"}, {id: "M2", inherits: "M1", state: "ending", at: 1}}, true},
+		{"closed-round-ended-freezing", []ovSession{{id: "M1", round: "M", vod: "freezing"}, {id: "M2", round: "M", inherits: "M1", vod: "freezing", at: 1}}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pool := newTestPool(t)

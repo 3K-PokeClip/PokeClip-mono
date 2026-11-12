@@ -85,7 +85,9 @@ const expiryVODSettled = `s.vod_state IN ('frozen', 'frozen_with_gaps', 'freeze_
 // expirySettleableMember 는 세션 s 가 앞으로 VOD 를 확정할 수 있는가다. 정산 스캔 · 빠른 길은 ending 만 받고
 // (ending.go listEndingSessionsSQL · loadEndingSessionSQL), ended 로 바꾸는 문장은 사슬 전원이 VOD 종국일 때의 phase 4
 // 하나다(chain_close.go markEndedSQL). 그래서 ended ∧ none(옛 판이 쓴 행)은 확정될 길이 없어 넣지 않는다 — 넣으면 그
-// 스트림의 만료가 영구히 미뤄진다. 미룸 판정(expiryRoundsSettledSQL)만 쓴다.
+// 스트림의 만료가 영구히 미뤄진다. ended ∧ freezing 도 같은 까닭으로 뺀다(chain_close.go:161-163 · ending.go) — ended 는
+// VOD 종국 뒤에만 되므로 그 행은 정상 경로에서 생기지 않고, 생겨도 확정될 길이 없다. 미룸 판정(expiryRoundsSettledSQL)만
+// 쓴다.
 const expirySettleableMember = `s.state IN ('live', 'ending') AND s.vod_state IN ('none', 'freezing')`
 
 // expiryChainCTE 는 WITH RECURSIVE 의 사슬 세 표다 — touched(범위에 닿은 세션) · edge(계승 간선) · chain(touched 에서

@@ -365,6 +365,11 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
         다시 오지 않는다. 그래서 처음부터 훑기를 끝까지 마쳤는데 받지 못한
         미룸 방송은 `value=0 reason=gone` 으로 내린다. 지금 방송 중인 회차는
         조각이 구간보다 뒤라 걸리지 않는다.
+    *   **한계 — `reason=gone` 은 마지막 장을 믿는다:** 내림은 처음부터
+        훑기의 마지막 장(`hasMore=false`)을 믿는다. clip 이 잘린 장을 주면
+        아직 미뤄진 방송의 경보가 다음 처음부터 훑기까지 최대 하루 가려진다.
+        삭제에는 영향이 없다 — 내림은 게이지만 바꾸고, 그 방송이 다시 오면
+        미룸 판정을 처음부터 다시 한다.
     *   **영구 미룸 두 경로:** ① 회차가 끝내 닫히지 않는다(`round_closed_at`
         NULL 고착 — `session_vod_round_wait_long wait=round_open` 과 짝).
         ② 사슬이 닫히지 않아 `ending` ∧ `vod_state='none'` 에 머문다. 대기
