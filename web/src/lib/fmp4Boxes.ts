@@ -138,7 +138,8 @@ export interface SampleTiming {
 
 /**
  * 조각 바이트 안 그 트랙의 표본 전부를 디코드 순서로(편집기 창의 프레임 표). init 은 trex 기본 길이만 읽는다 —
- * ② 녹화 파일처럼 moov 와 moof 가 한 바이트면 같은 것을 두 번 넘긴다. 그 트랙이 없으면 빈 목록, 모양을 모르면 null
+ * ② 녹화 파일처럼 moov 와 moof 가 한 바이트면 같은 것을 두 번 넘긴다. 그 트랙이 없으면 빈 목록, 모양을 모르거나 표본이
+ * MAX_TRACK_SAMPLES 를 넘으면 null
  */
 export function readTrackSamples(
   init: Uint8Array,
@@ -154,7 +155,7 @@ export function readTrackSamples(
 
 /**
  * 그 트랙의 **표본 있는** 첫 traf 의 표본(빈 traf 는 건너뜀 — 렌더 readTiming 과 같은 규칙). 표본 있는 traf 가
- * 없으면 빈 목록, 모양을 모르면 null
+ * 없으면 빈 목록, 모양을 모르거나 그 트랙 traf 전부의 표본이 MAX_TRACK_SAMPLES 를 넘으면 null
  */
 export function readFirstSampledTraf(
   init: Uint8Array,
@@ -169,11 +170,20 @@ export function readFirstSampledTraf(
   }
 }
 
-/** 그 트랙 traf 마다의 표본 목록(moof · traf 순서) */
+/**
+ * 한 판독에서 한 트랙의 표본 수 상한. 표본별 칸이 없는 trun(flags 0x100 · 0x200 · 0x400 · 0x800 모두 꺼짐)은 표본
+ * 수 칸만으로 바이트 검사를 통과하므로(stride 0), 이 상한이 없으면 수십 바이트 조각 하나가 표본 객체 40억 개를 만든다
+ * (보안 검수 prw2 E3 M1). 값 = 편집기 창 상한 200초(editorSourceTimeline MAX_WINDOW_SECONDS) × 최고 프레임률 240.
+ * 판독은 조각 하나(약 4초)씩이라 정상 조각은 이 값에 한참 못 미친다(영상 60fps 4초 = 240 · 소리 AAC 48kHz 4초 ≈ 188)
+ */
+export const MAX_TRACK_SAMPLES = 48_000;
+
+/** 그 트랙 traf 마다의 표본 목록(moof · traf 순서). 표본이 모두 합쳐 MAX_TRACK_SAMPLES 를 넘으면 RangeError */
 function trafSampleLists(initView: DataView, view: DataView, trackId: number): SampleTiming[][] {
   const moov = topBox(initView, 'moov');
   const trexDuration = (moov && defaultDurations(initView, moov).get(trackId)) ?? 0;
   const lists: SampleTiming[][] = [];
+  let room = MAX_TRACK_SAMPLES;
   for (const moof of boxes(view, 0, view.byteLength)) {
     if (moof.type !== 'moof') continue;
     for (const traf of boxes(view, moof.start, moof.end)) {
@@ -182,18 +192,24 @@ function trafSampleLists(initView: DataView, view: DataView, trackId: number): S
       if (header.trackId !== trackId) continue;
       const tfdt = child(view, traf, 'tfdt');
       const base = tfdt ? decodeTime(view, tfdt) : null;
-      lists.push(trafSamples(view, traf, base, header.defaultDuration ?? trexDuration));
+      const samples = trafSamples(view, traf, base, header.defaultDuration ?? trexDuration, room);
+      room -= samples.length;
+      lists.push(samples);
     }
   }
   return lists;
 }
 
-/** traf 안 trun 전부의 표본. 표본이 있는데 tfdt 를 못 읽었으면(base null) 자리를 모르므로 RangeError */
+/**
+ * traf 안 trun 전부의 표본. 표본이 있는데 tfdt 를 못 읽었으면(base null) 자리를 모르므로 RangeError, 표본이 room 개를
+ * 넘으면 객체를 만들기 전에 RangeError
+ */
 function trafSamples(
   view: DataView,
   traf: Box,
   base: number | null,
   fallback: number,
+  room: number,
 ): SampleTiming[] {
   const samples: SampleTiming[] = [];
   let dts = base ?? 0;
@@ -203,6 +219,7 @@ function trafSamples(
     const stride = [0x100, 0x200, 0x400, 0x800].filter((bit) => flags & bit).length * 4;
     if (!within(trun, samplesAt + count * stride)) throw new RangeError('trun');
     if (count > 0 && base === null) throw new RangeError('tfdt');
+    if (samples.length + count > room) throw new RangeError('trun sample count');
     // cto 는 표본 칸의 마지막(0x100 길이 · 0x200 크기 · 0x400 표지 뒤)
     const ctoAt = stride - 4;
     for (let i = 0; i < count; i++) {

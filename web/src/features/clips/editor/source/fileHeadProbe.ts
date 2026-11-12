@@ -7,7 +7,11 @@ import { readFirstSampledTraf, readTrackHeaders } from '@/lib/fmp4Boxes';
 // 🔴 자격: ② 는 S3 서명 URL 이다. 버킷 CORS 에 Allow-Credentials 가 없어 쿠키를 실으면(include) 막힌다 — 늘 omit 이다. 단일
 //    Range 는 CORS 안전 목록이라 프리플라이트가 없고(버킷 AllowedHeaders 없음), 그 밖의 머리는 싣지 않는다. 버킷 ExposeHeaders
 //    가 비어 응답 머리(Content-Range)를 읽을 수 없으므로 상태 코드와 본문 길이로만 파일 끝을 안다 — 받은 본문이 64KB 보다
-//    짧거나 416 이면 끝이다. Range 가 망 · CORS 오류면 Range 없이 한 번 전체를 받는다. 서명 URL 은 경고 · 오류에 싣지 않는다.
+//    짧거나 416 이면 끝이다. Range 가 망 · CORS 오류거나 206 본문이 도중에 끊기면 Range 없이 한 번 전체를 받는다. 서명 URL 은
+//    경고 · 오류에 싣지 않는다(전송 오류 원문에도 URL 이 들 수 있어 사유만 싣는다).
+//
+// 🔴 상한: ② 하나에서 HEAD_PROBE_MAX_BYTES 까지만 받는다. 전체 받기 · Range 를 무시한 200 도 본문 스트림을 세다가 상한에서
+//    끊는다. 상한까지 받고도 머리가 끝나지 않으면(빈 트랙이 그 뒤까지 이어짐) 그 seq 는 failed 다(보안 검수 prw2 E4b-1 M2).
 //
 // 값은 영상 키 · seq 별로 세션 캐시에 둔다(조각 머리는 바뀌지 않는다 — 장부 키 seq 고정 · pdt-main M-1). seq 는 그 키의 장부
 // 번호라 키가 다르면 캐시도 따로다.
@@ -41,6 +45,13 @@ export interface HeadRow {
 
 /** 한 번에 받는 바이트(Range bytes=0-65535). 대개 moov 와 첫 moof 가 이 안에 든다 */
 export const HEAD_CHUNK_BYTES = 65_536;
+/**
+ * ② 하나에서 받는 바이트 상한(64KB 128번 — HEAD_CHUNK_BYTES 의 배수라 Range 가 상한을 넘지 않는다). 정상 ② 는
+ * 첫 64KB 하나로 끝나고(설계 3.2 비용 — 창 50 조각 ≈ 3.2MB), 이 상한은 빈 트랙이라 파일 끝까지 읽어야 하는 ② 를 위한
+ * 것이다. 값 = ② 조각 하나 크기(계약-세그먼트인덱스 「개당 ~4MB」 · ③ 창 200초 ≈ 150MB ÷ 50 조각 ≈ 3MB)의 두 배 —
+ * 정상 ② 는 끝까지 읽고, 그보다 큰 파일은 머리를 끝내지 못하면 판독 실패로 둔다
+ */
+export const HEAD_PROBE_MAX_BYTES = 8 * 1024 * 1024;
 /** 동시에 읽는 seq 수(설계 3.2 비용 — 창 조각 약 50 · 동시 6) */
 const PROBE_CONCURRENCY = 6;
 
@@ -118,19 +129,63 @@ function readHead(bytes: Uint8Array, atEnd: boolean): HeadRead {
   return videoDts === null ? 'bad' : { hd, hp, videoDts };
 }
 
-/** 받은 조각 하나 — whole 은 Range 없이(또는 서버가 Range 를 무시해) 받은 파일 전체다 */
+/**
+ * 받은 조각 하나 — whole 은 Range 없이(또는 서버가 Range 를 무시해) 받은 파일 앞부분이라 앞서 받은 바이트를 갈음한다.
+ * atEnd 는 파일 끝까지 받았는가(상한에서 끊은 전체 받기는 끝이 아니다)
+ */
 interface Chunk {
   bytes: Uint8Array;
   whole: boolean;
+  atEnd: boolean;
+}
+
+/** 본문 스트림을 limit 바이트까지 읽는다. 더 오면 거기서 끊고 cut 이다(응답 머리의 길이는 읽을 수 없다 — 위 자격 절) */
+async function readBody(
+  res: Response,
+  limit: number,
+): Promise<{ bytes: Uint8Array; cut: boolean }> {
+  const reader = res.body?.getReader();
+  if (reader === undefined) return { bytes: new Uint8Array(0), cut: false };
+  const parts: Uint8Array[] = [];
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { bytes: joined(parts, length), cut: false };
+    if (length + value.length > limit) {
+      parts.push(value.subarray(0, limit - length));
+      await reader.cancel();
+      return { bytes: joined(parts, limit), cut: true };
+    }
+    parts.push(value);
+    length += value.length;
+  }
+}
+
+function joined(parts: readonly Uint8Array[], length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+/** 200 본문 — 상한까지만 읽는다 */
+async function wholeChunk(res: Response): Promise<Chunk> {
+  const { bytes, cut } = await readBody(res, HEAD_PROBE_MAX_BYTES);
+  return { bytes, whole: true, atEnd: !cut };
 }
 
 async function fetchWhole(url: string, signal: AbortSignal | undefined): Promise<Chunk> {
   const res = await fetch(url, { credentials: 'omit', signal });
   if (!res.ok) throw new HeadProbeError(`전체 ${res.status}`);
-  return { bytes: new Uint8Array(await res.arrayBuffer()), whole: true };
+  return wholeChunk(res);
 }
 
-/** offset 부터 64KB. Range 가 망 · CORS 오류면 전체로, 416(파일 밖 시작)이면 빈 조각으로 */
+/**
+ * offset 부터 64KB. Range 요청이 망 · CORS 오류거나 206 본문이 도중에 끊기면 전체로, 416(파일 밖 시작)이면 빈 조각으로
+ */
 async function fetchChunk(
   url: string,
   offset: number,
@@ -147,28 +202,48 @@ async function fetchChunk(
     if (signal?.aborted) throw e;
     return fetchWhole(url, signal);
   }
-  if (res.status === 416) return { bytes: new Uint8Array(0), whole: false };
-  if (res.status !== 200 && res.status !== 206) throw new HeadProbeError(String(res.status));
-  return { bytes: new Uint8Array(await res.arrayBuffer()), whole: res.status === 200 };
+  if (res.status === 416) return { bytes: new Uint8Array(0), whole: false, atEnd: true };
+  if (res.status === 200) return wholeChunk(res);
+  if (res.status !== 206) throw new HeadProbeError(String(res.status));
+  let body: { bytes: Uint8Array; cut: boolean };
+  try {
+    body = await readBody(res, HEAD_CHUNK_BYTES);
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    return fetchWhole(url, signal);
+  }
+  return { bytes: body.bytes, whole: false, atEnd: body.bytes.length < HEAD_CHUNK_BYTES };
 }
 
-function append(head: Uint8Array, tail: Uint8Array): Uint8Array {
-  const out = new Uint8Array(head.length + tail.length);
-  out.set(head);
-  out.set(tail, head.length);
-  return out;
+/**
+ * buffer 의 앞 length 바이트 뒤에 tail 을 잇는다. 자리가 모자라면 두 배(상한까지)로 늘린 새 버퍼로 옮긴다 — 64KB 마다 전체를
+ * 새로 복사하면 복사량이 받은 바이트의 제곱으로 늘어난다(상한 8MB 면 약 512MB → 두 배씩이면 약 16MB)
+ */
+function appended(buffer: Uint8Array, length: number, tail: Uint8Array): Uint8Array {
+  const needed = length + tail.length;
+  if (needed > buffer.length) {
+    const grown = new Uint8Array(
+      Math.max(needed, Math.min(2 * buffer.length, HEAD_PROBE_MAX_BYTES)),
+    );
+    grown.set(buffer.subarray(0, length));
+    buffer = grown;
+  }
+  buffer.set(tail, length);
+  return buffer;
 }
 
-/** ② 파일 하나의 머리. 읽을 수 없으면 HeadProbeError, 끊으면 AbortError 를 던진다 */
+/** ② 파일 하나의 머리. 읽을 수 없거나 상한까지 받고도 끝나지 않으면 HeadProbeError, 끊으면 AbortError 를 던진다 */
 async function probeHead(url: string, signal: AbortSignal | undefined): Promise<FileHead> {
-  let bytes: Uint8Array = new Uint8Array(0);
+  let buffer: Uint8Array = new Uint8Array(0);
+  let length = 0;
   for (;;) {
-    const chunk = await fetchChunk(url, bytes.length, signal);
-    bytes = chunk.whole ? chunk.bytes : append(bytes, chunk.bytes);
-    const atEnd = chunk.whole || chunk.bytes.length < HEAD_CHUNK_BYTES;
-    const read = readHead(bytes, atEnd);
+    const chunk = await fetchChunk(url, length, signal);
+    buffer = chunk.whole ? chunk.bytes : appended(buffer, length, chunk.bytes);
+    length = chunk.whole ? chunk.bytes.length : length + chunk.bytes.length;
+    const read = readHead(buffer.subarray(0, length), chunk.atEnd);
     if (read === 'bad') throw new HeadProbeError('상자');
     if (read !== 'more') return read;
+    if (length >= HEAD_PROBE_MAX_BYTES) throw new HeadProbeError('상한');
   }
 }
 
@@ -182,7 +257,9 @@ async function probeInto(
     scope.set(row.seq, { state: 'ready', head: await probeHead(row.url, signal) });
   } catch (e) {
     if (signal?.aborted) return;
-    console.warn(`[editor] ② 머리를 읽지 못했어요(seq ${row.seq}):`, (e as Error).message);
+    // 전송 오류 원문(예: Failed to parse URL from …?X-Amz-Signature=…)에는 서명 URL 이 들 수 있어 사유만 싣는다
+    const reason = e instanceof HeadProbeError ? e.message : '② 머리 판독 실패(전송)';
+    console.warn(`[editor] ② 머리를 읽지 못했어요(seq ${row.seq}):`, reason);
     scope.set(row.seq, { state: 'failed' });
   }
 }

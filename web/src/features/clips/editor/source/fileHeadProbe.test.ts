@@ -114,6 +114,35 @@ function serve(bytes: Uint8Array, options: { rangeFails?: boolean } = {}) {
   });
 }
 
+/** 한 ② 에서 받는 바이트 상한(fileHeadProbe HEAD_PROBE_MAX_BYTES — 계약 ② 개당 약 4MB 의 두 배) */
+const BYTE_LIMIT = 8 * 1024 * 1024;
+
+/** 영상 표본은 첫 moof 에 있고 소리 트랙은 끝까지 비어, 파일 끝을 봐야 머리가 끝나는 size 바이트 ② */
+function emptyTrackFile(size: number): Uint8Array {
+  const head = file([VIDEO, AUDIO], moof(traf(1, 9000, [{ duration: 3000 }])));
+  return concat(head, box('mdat', new Uint8Array(size - head.length - 8)));
+}
+
+/** 끊은 뒤에도 스트림이 큐를 채우려 미리 당기는 몫(한 조각)까지 — 그 이상이면 상한에서 끊지 않은 것이다 */
+const PULL_LIMIT = BYTE_LIMIT + 2 * 65_536;
+
+/** bytes 를 64KB 씩 흘려 주는 200 응답 — pulled() 는 지금까지 꺼내 간 바이트 */
+function streamed(bytes: Uint8Array) {
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= bytes.length) {
+        controller.close();
+        return;
+      }
+      const piece = bytes.slice(sent, sent + 65_536);
+      sent += piece.length;
+      controller.enqueue(piece);
+    },
+  });
+  return { response: new Response(body, { status: 200 }), pulled: () => sent };
+}
+
 function rangesOf(spy: ReturnType<typeof stubFetch>): (string | null)[] {
   return spy.mock.calls.map(([, init]) => new Headers(init?.headers).get('Range'));
 }
@@ -374,5 +403,124 @@ describe('ensureHeads: ② 머리를 64KB 씩 읽어 seq 캐시에 채운다', (
     await ensureHeads(MEDIA_KEY, rows, []);
 
     expect(peak).toBe(6);
+  });
+});
+
+describe('ensureHeads: ② 하나에서 받는 바이트에 상한을 둔다(보안 검수 prw2 E4b-1 M2)', () => {
+  it('빈 트랙이 끝까지 이어지는 큰 ② 는 상한까지만 64KB 씩 받고 failed 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spy = serve(emptyTrackFile(BYTE_LIMIT + 1_000_000));
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
+
+    expect(spy).toHaveBeenCalledTimes(BYTE_LIMIT / 65_536);
+    expect(rangesOf(spy).at(-1)).toBe(`bytes=${BYTE_LIMIT - 65_536}-${BYTE_LIMIT - 1}`);
+    expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({ state: 'failed' });
+  });
+
+  it('빈 트랙 ② 가 상한보다 1바이트 작으면 끝까지 읽어 ready, 1바이트 크면 failed 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const under = emptyTrackFile(BYTE_LIMIT - 1);
+    const over = emptyTrackFile(BYTE_LIMIT + 1);
+    stubFetch((url, init) => {
+      const bytes = url.endsWith('under') ? under : over;
+      const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(new Headers(init?.headers).get('Range')!)!;
+      if (Number(from) >= bytes.length) return new Response(null, { status: 416 });
+      return new Response(bytes.slice(Number(from), Number(to) + 1), { status: 206 });
+    });
+
+    await ensureHeads(
+      MEDIA_KEY,
+      [
+        { seq: 1, url: `${SIGNED}&under` },
+        { seq: 2, url: `${SIGNED}&over` },
+      ],
+      [],
+    );
+
+    expect(headCacheFor(MEDIA_KEY).get(1)).toEqual({
+      state: 'ready',
+      head: { hd: 0.1, hp: 0.1, videoDts: 0.1 },
+    });
+    expect(headCacheFor(MEDIA_KEY).get(2)).toEqual({ state: 'failed' });
+  });
+
+  it('서버가 Range 를 무시하고 상한보다 큰 200 본문을 주면 상한에서 끊고, 그 안에서 머리를 못 끝내면 failed 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const body = streamed(emptyTrackFile(2 * BYTE_LIMIT));
+    stubFetch(() => body.response);
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
+
+    expect(body.pulled()).toBeLessThanOrEqual(PULL_LIMIT);
+    expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({ state: 'failed' });
+  });
+
+  it('Range 가 망 오류라 전체를 받을 때도 상한에서 끊고 failed 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const body = streamed(emptyTrackFile(2 * BYTE_LIMIT));
+    const spy = stubFetch((_url, init) => {
+      if (new Headers(init?.headers).has('Range')) throw new TypeError('Failed to fetch');
+      return body.response;
+    });
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
+
+    expect(rangesOf(spy)).toEqual(['bytes=0-65535', null]);
+    expect(body.pulled()).toBeLessThanOrEqual(PULL_LIMIT);
+    expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({ state: 'failed' });
+  });
+
+  it('상한보다 큰 200 본문이라도 상한 안 앞부분에서 머리가 끝나면 ready 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const bytes = concat(segment1v6a, box('mdat', new Uint8Array(BYTE_LIMIT)));
+    stubFetch(() => new Response(bytes.slice(), { status: 200 }));
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 300, url: SIGNED }], []);
+
+    expect(headCacheFor(MEDIA_KEY).get(300)).toEqual({
+      state: 'ready',
+      head: { hd: 0, hp: 0, videoDts: 8136 / 90000 },
+    });
+  });
+});
+
+describe('ensureHeads: 전송 오류(codex prw2 E4b-1 r1 지적 6 · 7)', () => {
+  it('전송 오류 원문에 서명 URL 이 있어도 경고에는 사유만 싣는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubFetch(() => {
+      throw new TypeError(`Failed to parse URL from ${SIGNED}`);
+    });
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 300, url: SIGNED }], []);
+
+    expect(headCacheFor(MEDIA_KEY).get(300)).toEqual({ state: 'failed' });
+    expect(warn).toHaveBeenCalled();
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/seg\.example|Signature|secret-sig/);
+  });
+
+  it('206 머리를 받은 뒤 본문 전송이 끊기면 Range 없이 한 번 전체를 받아 읽는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const spy = stubFetch((_url, init) => {
+      if (!new Headers(init?.headers).has('Range')) {
+        return new Response(segment1v6a.slice(), { status: 200 });
+      }
+      const broken = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.error(new TypeError('network error'));
+        },
+      });
+      return new Response(broken, { status: 206 });
+    });
+
+    await ensureHeads(MEDIA_KEY, [{ seq: 300, url: SIGNED }], []);
+
+    expect(rangesOf(spy)).toEqual(['bytes=0-65535', null]);
+    expect(headCacheFor(MEDIA_KEY).get(300)?.state).toBe('ready');
   });
 });

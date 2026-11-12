@@ -845,3 +845,64 @@ describe('readTrackHeaders: init 에서 트랙마다 번호 · handler · timesc
     },
   );
 });
+
+/** 한 판독의 트랙 표본 상한(fmp4Boxes MAX_TRACK_SAMPLES — 창 상한 200초 × 최고 프레임률 240) */
+const SAMPLE_LIMIT = 48_000;
+
+/** 표본별 칸이 없는(stride 0) trun 하나의 traf — 표본 수 칸만 count 로 둔다 */
+function bareRunTraf(decodeTime: bigint, count: number): Uint8Array {
+  return traf(tfhd(1, 1), tfdt(0, decodeTime), fullBox('trun', 0, 0, u32(count)));
+}
+
+describe('표본 수 상한: 표본별 칸이 없는 trun 의 표본 수 폭주는 판독 실패다', () => {
+  it('stride 0 · 표본 수 0xFFFFFFFF 인 작은 조각은 표본을 만들지 않고 곧바로 null 이다(던지지 않는다)', () => {
+    const bytes = moof(bareRunTraf(0n, 0xffffffff));
+    const started = performance.now();
+
+    expect(bytes.length).toBeLessThan(100);
+    expect(readTrackSamples(bytes, bytes, 1)).toBeNull();
+    expect(readFirstSampledTraf(bytes, bytes, 1)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it('한 트랙 표본이 상한까지면 읽고, 하나라도 넘으면 null 이다', () => {
+    const atLimit = moof(bareRunTraf(0n, SAMPLE_LIMIT));
+    const overLimit = moof(bareRunTraf(0n, SAMPLE_LIMIT + 1));
+
+    expect(readTrackSamples(atLimit, atLimit, 1)).toHaveLength(SAMPLE_LIMIT);
+    expect(readTrackSamples(overLimit, overLimit, 1)).toBeNull();
+    expect(readFirstSampledTraf(overLimit, overLimit, 1)).toBeNull();
+  });
+
+  it('상한은 trun 하나가 아니라 그 판독에서 그 트랙 trun · traf 전부의 표본 합이다', () => {
+    const half = SAMPLE_LIMIT / 2;
+    const atLimit = concat(moof(bareRunTraf(0n, half)), moof(bareRunTraf(9n, half)));
+    const overLimit = concat(moof(bareRunTraf(0n, half)), moof(bareRunTraf(9n, half + 1)));
+    const twoRuns = moof(
+      traf(
+        tfhd(1, 1),
+        tfdt(0, 0n),
+        fullBox('trun', 0, 0, u32(half)),
+        fullBox('trun', 0, 0, u32(half + 1)),
+      ),
+    );
+
+    expect(readTrackSamples(atLimit, atLimit, 1)).toHaveLength(SAMPLE_LIMIT);
+    expect(readTrackSamples(overLimit, overLimit, 1)).toBeNull();
+    expect(readTrackSamples(twoRuns, twoRuns, 1)).toBeNull();
+  });
+
+  it('표본 길이 합(readTrackSpans)은 곱셈으로 세므로 상한과 무관하게 그대로다', () => {
+    const bytes = concat(init(trak(1, 'vide', 90000)), moof(bareRunTraf(0n, SAMPLE_LIMIT + 1)));
+
+    expect(readTrackSpans(bytes)).toEqual([
+      {
+        trackId: 1,
+        handler: 'vide',
+        timescale: 90000,
+        startTicks: 0,
+        durationTicks: SAMPLE_LIMIT + 1,
+      },
+    ]);
+  });
+});
