@@ -13,6 +13,7 @@ import {
   path,
   readFirstSampledTraf,
   readTrackHeaders,
+  readTrackSamples,
   type Box,
   type TrackHeader,
 } from '@/lib/fmp4Boxes';
@@ -88,11 +89,12 @@ function mp4aConfig(view: DataView, stsd: Box): AacConfig | null {
   return null;
 }
 
-/** 꺼내는 중인 소리 트랙 하나: 트랙 머리 · 설정 · trex 기본 표본 크기와 지금까지 모은 프레임 */
+/** 꺼내는 중인 소리 트랙 하나: 트랙 머리 · 설정 · trex 기본 표본 크기 · 프레임 수 시간 상한과 지금까지 모은 프레임 */
 interface TrackInfo {
   header: TrackHeader;
   config: AacConfig;
   defaultSize: number;
+  maxFrames: number;
   frames: Uint8Array[];
 }
 
@@ -178,6 +180,56 @@ interface DemuxedTrack {
  */
 const MAX_SEGMENT_FRAMES = MAX_TRACK_SAMPLES;
 
+/** AAC 빈도 번호(samplingFrequencyIndex 0~12, ISO/IEC 14496-3) → Hz */
+const SAMPLE_RATES = [
+  96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+];
+
+/**
+ * AAC 프레임 하나의 표본 수. HE-AAC(SBR)도 esds 의 AudioSpecificConfig 가 적은 빈도는 핵심 부호기 빈도이고 프레임 하나는 그
+ * 빈도로 1,024 표본이라(출력은 두 배 빈도 · 2,048 표본), 「설정 빈도 / 1,024」 가 초당 프레임 수로 그대로 맞는다
+ */
+const SAMPLES_PER_FRAME = 1024;
+
+/**
+ * 프레임 수 시간 상한의 배율. 정상 조각은 프레임 수가 「시간 × 빈도 / 1,024」 와 같다(4초 · 48kHz = 187.5 — 실측 187~189).
+ * 1.5 배면 약 281 이라 정상보다 반을 더 남기고, 범람(4초 조각에 1ms 간격 약 4,200 · 같은 시각 약 1.9만 — 실측
+ * runs/2026-11-13-prw2-aac-flood)은 상수 여유를 더한 상한 328 의 12배를 넘어 걸린다
+ */
+const FRAME_MARGIN = 1.5;
+
+/**
+ * 짧은 조각용 상수 여유(초 — 트랙마다 ceil(이 초 × 설정 빈도 / 1,024) 프레임을 더한다). 녹화가 끝나는 마지막 조각처럼 영상
+ * 시간이 아주 짧으면 소리 · 영상 조각 경계의 어긋남이 배율로 덮이지 않는다. 프레임 수가 아니라 초로 두는 까닭: 고정 48
+ * 프레임은 48kHz 로 1초지만 7,350Hz 로는 6.7초라 4초 조각 상한이 12.7초 분량까지 벌어진다(보안 검수 prw2 hard4 M-2).
+ * 4초 조각이면 48kHz 는 281 + 47 = 328 · 7,350Hz 는 43 + 8 = 51 이다
+ */
+const SHORT_SEGMENT_SECONDS = 1;
+
+/**
+ * 기준 초를 낼 때 소리 표본 하나가 셀 수 있는 길이(그 트랙 설정 빈도로 AAC 프레임 몇 개 몫인가). 정상 소리 표본은 프레임
+ * 하나 = 1,024 표본 길이다(MediaMTX 녹화 format_fmp4.go 가 PES 안 프레임마다 SamplesPerAccessUnit 1,024 씩 더해 DTS 를
+ * 매긴다). PES 경계의 시각 흔들림을 덮도록 두 배까지 센다. 소리가 끊긴 틈은 두 프레임 몫만 세지만 그 틈에는 프레임도 없어 프레임 수와 시간의 비가 그대로다
+ */
+const MAX_AUDIO_SAMPLE_FRAMES = 2;
+
+/**
+ * 기준 초를 낼 때 영상 표본 하나가 셀 수 있는 길이(초). 정상 영상 프레임 간격은 1/120–1/10초이고, 가변 프레임률(장면이
+ * 멈추면 프레임을 드물게 보냄)도 1초 안이면 그대로 센다. 그보다 긴 멈춤은 1초로 깎이지만 늦은 시작 여유가 덮는다
+ * (4초 조각에 3초 멈춤이면 영상 2초 + 여유 3초 ≥ 소리 4초)
+ */
+const MAX_VIDEO_SAMPLE_SECONDS = 1;
+
+/**
+ * 영상이 소리보다 늦게 시작하는 몫(초) — 기준 초의 영상 쪽 합에 더한다. 녹화기(포크 format_fmp4.go)는 영상 트랙의 첫
+ * 키프레임이 오기 전 영상 표본을 버리지만(`if !randomAccess { return nil }`) 소리는 처음부터 적는다. 그래서 녹화가
+ * (다시) 시작된 첫 조각은 영상이 키프레임 간격만큼 짧다 — 플러그인은 그 간격을 2초로 강제한다(obs-plugin constants.hpp
+ * kForcedKeyintSec · ADR-020). 여유가 없으면 영상 2초 · 소리 4.05초 · 188 프레임인 재시작 첫 조각이 상한 187 에 걸린다.
+ * 값 = 키프레임 간격 2초 + 짧은 조각 여유와 같은 1초. 범람 쪽 몫: 소리 자신의 합이 실제 시간이라 범람(길이 0 · 1ms)에는
+ * 보탬이 없고, 1,024 간격으로 소리 시각만 넓힌 꼴에는 4초 조각 상한이 328 에서 539(48kHz)로 오른다
+ */
+const VIDEO_LATE_START_SECONDS = 3;
+
 /** 판독 한 번에 남은 몫: 프레임 수(트랙 합)와 복사할 수 있는 바이트 */
 interface Room {
   frames: number;
@@ -188,7 +240,7 @@ function demux(view: DataView, bytes: Uint8Array, headers: readonly TrackHeader[
   const top = [...boxes(view, 0, bytes.byteLength)];
   const moov = top.find((box) => box.type === 'moov');
   if (!moov) return [];
-  const tracks = audioTracks(view, bytes, moov, headers);
+  const tracks = audioTracks(view, bytes, moov, headers, frameLimit(bytes, headers));
   if (!tracks) return [];
 
   // 정상 조각은 프레임마다 mdat 의 다른 바이트라 복사 합이 입력 크기를 넘지 않는다
@@ -206,16 +258,72 @@ function demux(view: DataView, bytes: Uint8Array, headers: readonly TrackHeader[
 }
 
 /**
+ * 소리 트랙 하나가 이 조각에서 낼 수 있는 프레임 수(시간 상한 — 보안 검수 prw2 hard3 M-1 추기). 방송자는 송출만으로 4초 조각
+ * 소리 trun 을 16만 표본 넘게 부풀리고, 그 프레임을 decodeAudioData 로 풀면 탭 메모리가 다 찬다. 그래서 트랙마다
+ * floor(기준 초 × 설정 빈도 / 1,024 × FRAME_MARGIN) + ceil(SHORT_SEGMENT_SECONDS × 설정 빈도 / 1,024) 를 넘으면 그 조각
+ * 소리 전체를 판독 실패로 접는다.
+ *
+ * 기준 초 = min(영상 트랙 표본 길이 합 + VIDEO_LATE_START_SECONDS, 그 소리 트랙 표본 길이 합) — 표본 길이는 하나씩
+ * 잘라(소리 MAX_AUDIO_SAMPLE_FRAMES 프레임 몫 · 영상 MAX_VIDEO_SAMPLE_SECONDS) 더한다. 작은 쪽을 쓰는 까닭: 둘 다 송출 시각 도장에서 오므로, 범람을
+ * 통과시키려면 두 트랙을 함께 벌려야 하게 만든다. 큰 쪽이면 한 트랙만 벌려도 되고, 소리 자신만 쓰면 소리 시각을 넓힌 꼴이,
+ * 영상만 쓰면 영상 시각을 넓힌 꼴이 그대로 통과한다. 범람 표본은 길이가 0(같은 시각) · 1ms 라 소리 자신의 합도 실제
+ * 시간만큼만 잡힌다.
+ *
+ * 표본마다 자르는 까닭(보안 검수 prw2 hard4 H-1 · cc · codex 재현): 녹화 서버 포크(v1.21.1-pokeclip.2
+ * format_fmp4_track.go)는 DTS 뜀을 tfdt 가 아니라 앞 표본 길이(uint32(다음 DTS − 이 DTS) · 상한 없음)로 적고, DTS 와
+ * NTP 가 5초 넘게 벌어졌는지(recorder.go ntpDriftTolerance)는 다음 차례 표본에서야 본다. 그래서 방송자가 송출만으로 두
+ * 트랙 DTS 를 함께 크게 뛰우면 녹화가 다시 시작되기 직전 조각의 마지막 표본 길이가 수백 초가 되고, 드리프트 검사는 이를
+ * 막지 못한다(묶음 AU 는 format_fmp4.go 가 NTP 도 같은 몫만큼 늘려 드리프트에도 걸리지 않는다). 상류 main 은 이 길이를
+ * 0 으로 바꿨으나 포크에는 없다. 표본 하나가 셀 수 있는 길이를 묶으면 뜀 하나가 보탤 수 있는 시간은 소리 프레임 두 개
+ * 몫 · 영상 1초뿐이다.
+ *
+ * 영상 트랙이 없거나 그 시간이 0 이면 기준이 없어 RangeError. 포크는 영상이 늦으면 소리만으로 조각을 열기도 하지만, 영상
+ * 시각이 없는 조각은 배치(loadTrackAudio placeRuns)도 못 하므로 여기서 실패로 접어도 결과가 같다
+ */
+function frameLimit(
+  bytes: Uint8Array,
+  headers: readonly TrackHeader[],
+): (header: TrackHeader, config: AacConfig) => number {
+  const video = headers.find((h) => h.handler === 'vide');
+  const videoSeconds = video
+    ? cappedSeconds(bytes, video, video.timescale * MAX_VIDEO_SAMPLE_SECONDS)
+    : 0;
+  if (videoSeconds <= 0) throw new RangeError('video span');
+  const videoBase = videoSeconds + VIDEO_LATE_START_SECONDS;
+  return (header, config) => {
+    const rate = SAMPLE_RATES[config.frequencyIndex]!;
+    // 프레임 몫을 그 트랙 timescale 눈금으로: 2 × 1,024 × timescale / 설정 빈도(timescale 이 빈도와 같으면 2,048)
+    const maxTicks = (MAX_AUDIO_SAMPLE_FRAMES * SAMPLES_PER_FRAME * header.timescale) / rate;
+    const base = Math.min(videoBase, cappedSeconds(bytes, header, maxTicks));
+    const slack = Math.ceil((SHORT_SEGMENT_SECONDS * rate) / SAMPLES_PER_FRAME);
+    return Math.floor(((base * rate) / SAMPLES_PER_FRAME) * FRAME_MARGIN) + slack;
+  };
+}
+
+/**
+ * 트랙 표본 길이 합(초) — 표본마다 maxTicks 눈금까지만 센다. 조각에 나오지 않은 트랙은 0. timescale 이 0 이면 초를 몰라,
+ * 표본이 판독 한 번의 상한 MAX_TRACK_SAMPLES 를 넘거나 모양을 모르면(readTrackSamples 가 null) RangeError
+ */
+function cappedSeconds(bytes: Uint8Array, header: TrackHeader, maxTicks: number): number {
+  if (header.timescale === 0) throw new RangeError('timescale');
+  const samples = readTrackSamples(bytes, bytes, header.trackId);
+  if (!samples) throw new RangeError('samples');
+  const ticks = samples.reduce((sum, sample) => sum + Math.min(sample.duration, maxTicks), 0);
+  return ticks / header.timescale;
+}
+
+/**
  * moov 의 소리 trak 을 파일 순서대로(Map 은 넣은 순서를 지킨다), track_ID 로 찾게. 못 읽는 소리 트랙이 있으면 null.
  * 소리 trak 마다 트랙 머리(readTrackHeaders — 트랙 수 상한 · 번호 겹침을 거른 목록)의 짝을 traf 를 읽기 전에 확인한다:
  * mdhd 가 빠진 trak 은 그 목록에 없어 상한에 세지 않으므로, 짝 없이 받으면 trak 수만큼 판독이 부푼다(보안 검수 prw2 c9′
- * M-2). 짝이 없거나 번호가 겹치면 RangeError
+ * M-2). 짝이 없거나 번호가 겹치면 RangeError. 트랙마다 프레임 수 시간 상한은 maxFramesOf(frameLimit)가 준다
  */
 function audioTracks(
   view: DataView,
   bytes: Uint8Array,
   moov: Box,
   headers: readonly TrackHeader[],
+  maxFramesOf: (header: TrackHeader, config: AacConfig) => number,
 ): Map<number, TrackInfo> | null {
   const defaults = new Map<number, number>();
   const mvex = child(view, moov, 'mvex');
@@ -242,14 +350,17 @@ function audioTracks(
     const id = view.getUint32(tkhd.start + (view.getUint8(tkhd.start) === 1 ? 20 : 12));
     const header = headerOf.get(id);
     if (!header || tracks.has(id)) throw new RangeError('trak');
-    tracks.set(id, { header, config, defaultSize: defaults.get(id) ?? 0, frames: [] });
+    const defaultSize = defaults.get(id) ?? 0;
+    const maxFrames = maxFramesOf(header, config);
+    tracks.set(id, { header, config, defaultSize, maxFrames, frames: [] });
   }
   return tracks;
 }
 
 /**
- * traf 하나의 프레임을 그 트랙에 덧붙이고 남은 몫을 준다(영상 트랙이면 그대로). 프레임 수가 몫을 넘으면 프레임을 만들기 전에,
- * 복사 바이트가 몫을 넘으면(trun 이 data_offset 으로 같은 바이트를 거듭 가리킴 — codex prw2 후속 경화 M) RangeError
+ * traf 하나의 프레임을 그 트랙에 덧붙이고 남은 몫을 준다(영상 트랙이면 그대로). 프레임 수가 몫(트랙 합)이나 그 트랙의 시간
+ * 상한(maxFrames)을 넘으면 프레임을 만들기 전에, 복사 바이트가 몫을 넘으면(trun 이 data_offset 으로 같은 바이트를 거듭
+ * 가리킴 — codex prw2 후속 경화 M) RangeError
  */
 function readTraf(
   view: DataView,
@@ -271,6 +382,7 @@ function readTraf(
     const flags = view.getUint32(trun.start) & 0xffffff;
     const count = view.getUint32(trun.start + 4);
     if (count > framesLeft) throw new RangeError('trun frame count');
+    if (track.frames.length + count > track.maxFrames) throw new RangeError('trun frame time');
     framesLeft -= count;
     let at = trun.start + 8;
     if (flags & 0x01) {

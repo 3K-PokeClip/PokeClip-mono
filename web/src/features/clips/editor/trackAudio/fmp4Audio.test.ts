@@ -12,7 +12,7 @@ import { demuxSegmentAudio, toAdts } from './fmp4Audio';
 const fixture = readFileSync(join(__dirname, '__fixtures__', 'three-tracks.m4s'));
 
 const FREQUENCIES = [
-  96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
+  96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
 ];
 
 describe('demuxSegmentAudio: 조각 하나에서 소리 트랙을 파일 순서대로 꺼낸다', () => {
@@ -140,20 +140,23 @@ function mp4a(frequencyIndex: number): Uint8Array {
   return box('mp4a', new Uint8Array(28), esds);
 }
 
-/** versions 는 tkhd · mdhd 버전(칸 배치는 언제나 v0 — 버전 2 는 규격에 없어 판독이 거부해야 한다) */
+/**
+ * tkhd · mdhd 는 그 버전(칸 배치는 언제나 v0 — 버전 2 는 규격에 없어 판독이 거부해야 한다), frequencyIndex 는 소리 트랙
+ * AAC 설정의 빈도 번호(기본 4 = 44,100Hz)
+ */
 function trak(
   trackId: number,
   handler: 'vide' | 'soun',
   timescale: number,
-  versions = { tkhd: 0, mdhd: 0 },
+  { tkhd = 0, mdhd = 0, frequencyIndex = 4 } = {},
 ): Uint8Array {
-  const entries = handler === 'soun' ? [mp4a(4)] : [];
+  const entries = handler === 'soun' ? [mp4a(frequencyIndex)] : [];
   return box(
     'trak',
-    fullBox('tkhd', versions.tkhd, 3, u32(0), u32(0), u32(trackId), u32(0)),
+    fullBox('tkhd', tkhd, 3, u32(0), u32(0), u32(trackId), u32(0)),
     box(
       'mdia',
-      fullBox('mdhd', versions.mdhd, 0, u32(0), u32(0), u32(timescale), u32(0)),
+      fullBox('mdhd', mdhd, 0, u32(0), u32(0), u32(timescale), u32(0)),
       fullBox('hdlr', 0, 0, u32(0), ascii(handler), u32(0), u32(0), u32(0)),
       box('minf', box('stbl', fullBox('stsd', 0, 0, u32(entries.length), ...entries))),
     ),
@@ -169,14 +172,23 @@ interface Sample {
   cto?: number;
 }
 
-/** traf 하나: tfdt v0 · trun(기본 v1 — 표본마다 길이 · 크기 1 · cto). 표본이 없으면 빈 trun */
+/**
+ * traf 하나: tfdt v0 · trun(기본 v1 — 표본마다 길이 · 크기 1 · cto). 표본이 없으면 빈 trun. 표본 칸은 한 버퍼에 바로 쓴다 —
+ * 범람 꼴(표본 2만 개 가까이)을 인자 펼치기로 이으면 호출 스택이 넘친다
+ */
 function traf(trackId: number, decodeTime: number, samples: Sample[], trunVersion = 1): Uint8Array {
-  const fields = samples.flatMap((s) => [u32(s.duration), u32(1), i32(s.cto ?? 0)]);
+  const fields = new Uint8Array(samples.length * 12);
+  const view = new DataView(fields.buffer);
+  samples.forEach((s, i) => {
+    view.setUint32(i * 12, s.duration);
+    view.setUint32(i * 12 + 4, 1);
+    view.setInt32(i * 12 + 8, s.cto ?? 0);
+  });
   return box(
     'traf',
     fullBox('tfhd', 0, 0x020000, u32(trackId)),
     fullBox('tfdt', 0, 0, u32(decodeTime)),
-    fullBox('trun', trunVersion, 0x100 | 0x200 | 0x800, u32(samples.length), ...fields),
+    fullBox('trun', trunVersion, 0x100 | 0x200 | 0x800, u32(samples.length), fields),
   );
 }
 
@@ -241,16 +253,13 @@ describe('demuxSegmentAudio: 녹화 조각의 트랙별 첫 DTS · PTS 와 times
     expect(seg.video?.timing).toEqual({ firstDts: 0.1, firstPts: 12000 / 90000 });
   });
 
-  it('영상 트랙이 없는 파일은 video 가 null 이고 소리 트랙만 준다', () => {
+  it('영상 트랙이 없는 파일은 소리 프레임 수를 잴 시간 기준이 없어 빈 결과다', () => {
     const bytes = concat(
       init(trak(2, 'soun', 44100), trak(3, 'soun', 48000)),
       fragment(traf(2, 4410, [frame(1024)]), traf(3, 2400, [frame(1024)])),
     );
 
-    const seg = demuxSegmentAudio(bytes);
-
-    expect(seg.video).toBeNull();
-    expect(seg.audio.map((t) => t.timing?.firstDts)).toEqual([0.1, 0.05]);
+    expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
   });
 
   it('표본 없는 traf 는 건너뛰고 표본 있는 첫 traf 의 tfdt 를 첫 DTS 로 쓴다', () => {
@@ -351,15 +360,26 @@ function bareTrun(count: number, dataOffset: number): Uint8Array {
   return fullBox('trun', 0, 0x01, u32(count), i32(dataOffset));
 }
 
-/** 소리 traf: tfhd 기본 표본 크기 size · tfdt 0 · 주어진 trun 들 */
+/** 소리 traf: tfhd 기본 표본 길이 1,024 · 기본 표본 크기 size · tfdt 0 · 주어진 trun 들 */
 function sizedTraf(trackId: number, size: number, ...truns: Uint8Array[]): Uint8Array {
   return box(
     'traf',
-    fullBox('tfhd', 0, 0x020000 | 0x10, u32(trackId), u32(size)),
+    fullBox('tfhd', 0, 0x020000 | 0x08 | 0x10, u32(trackId), u32(1024), u32(size)),
     fullBox('tfdt', 0, 0, u32(0)),
     ...truns,
   );
 }
+
+/**
+ * 아래 꾸민 조각들의 영상 트랙(1번 · 1초 표본 2,000개 — 표본 하나는 1초까지만 센다). 소리 프레임 수의 시간 상한이 먼저 걸리지
+ * 않게 길게 둬서, 각 시험이 겨누는 다른 상한(복사 바이트 · 프레임 합 · 트랙 머리 짝)이 거르는지를 본다
+ */
+const LONG_VIDEO_TRAK = trak(1, 'vide', 90000);
+const LONG_VIDEO_TRAF = traf(
+  1,
+  0,
+  Array.from({ length: 2000 }, () => frame(90000)),
+);
 
 /**
  * moof + mdat(payload 바이트). trafsAt 은 mdat 본문 첫 바이트의 자리(moof 머리 기준 data_offset)를 받아 traf 들을 만든다 —
@@ -390,9 +410,10 @@ describe('demuxSegmentAudio: 같은 바이트를 거듭 가리키는 trun 으로
   const FRAME_BYTES = 4096;
   const file = (truns: number) =>
     concat(
-      init(trak(2, 'soun', 48000)),
+      init(LONG_VIDEO_TRAK, trak(2, 'soun', 48000)),
       fragmentWithData(
         (at) => [
+          LONG_VIDEO_TRAF,
           sizedTraf(2, FRAME_BYTES, ...Array.from({ length: truns }, () => bareTrun(1, at))),
         ],
         FRAME_BYTES,
@@ -421,23 +442,34 @@ describe('demuxSegmentAudio: 아주 작은 프레임으로 프레임 수를 부�
     const ids = counts.map((_, i) => i + 2);
     const total = counts.reduce((sum, n) => sum + n, 0);
     return concat(
-      init(...ids.map((id) => trak(id, 'soun', 48000))),
+      init(LONG_VIDEO_TRAK, ...ids.map((id) => trak(id, 'soun', 48000))),
       fragmentWithData((at) => {
         let offset = at;
-        return counts.map((count, i) => {
+        const audio = counts.map((count, i) => {
           const traf = sizedTraf(ids[i]!, 1, bareTrun(count, offset));
           offset += count;
           return traf;
         });
+        return [LONG_VIDEO_TRAF, ...audio];
       }, total),
     );
   };
 
-  it('첫 traf 는 프레임 하나 · 뒤 traf 는 1바이트 프레임 MAX_TRACK_SAMPLES 개면 뒤 프레임을 만들기 전에 빈 결과다', () => {
+  it('첫 트랙은 프레임 하나 · 뒤 트랙은 1바이트 프레임 MAX_TRACK_SAMPLES 개면 뒤 프레임을 만들기 전에 빈 결과다', () => {
+    const counting = countingCopies(file(1, MAX_TRACK_SAMPLES));
+
+    const seg = demuxSegmentAudio(counting.bytes);
+
+    expect(seg).toEqual(EMPTY);
+    expect(counting.copies()).toBe(1);
+  });
+
+  it('한 트랙 표본이 traf 여럿에 걸쳐 MAX_TRACK_SAMPLES 를 넘으면 기준 초를 읽을 때 프레임 하나 없이 빈 결과다', () => {
     const bytes = concat(
-      init(trak(2, 'soun', 48000)),
+      init(LONG_VIDEO_TRAK, trak(2, 'soun', 48000)),
       fragmentWithData(
         (at) => [
+          LONG_VIDEO_TRAF,
           sizedTraf(2, 1, bareTrun(1, at)),
           sizedTraf(2, 1, bareTrun(MAX_TRACK_SAMPLES, at + 1)),
         ],
@@ -446,10 +478,8 @@ describe('demuxSegmentAudio: 아주 작은 프레임으로 프레임 수를 부�
     );
     const counting = countingCopies(bytes);
 
-    const seg = demuxSegmentAudio(counting.bytes);
-
-    expect(seg).toEqual(EMPTY);
-    expect(counting.copies()).toBe(1);
+    expect(demuxSegmentAudio(counting.bytes)).toEqual(EMPTY);
+    expect(counting.copies()).toBe(0);
   });
 
   it('조각 하나의 소리 프레임이 트랙 합으로 꼭 MAX_TRACK_SAMPLES 면 그대로 푼다', () => {
@@ -470,8 +500,8 @@ describe('demuxSegmentAudio: 아주 작은 프레임으로 프레임 수를 부�
 describe('demuxSegmentAudio: mdhd 없는 소리 trak 으로 트랙 수 상한을 비켜 가지 못한다(보안 검수 prw2 c9′ M-2)', () => {
   it('트랙 머리(mdhd)가 없는 소리 trak 이 있으면 traf 를 읽기 전에 빈 결과다', () => {
     const bytes = concat(
-      init(trak(1, 'vide', 90000), trak(2, 'soun', 48000), trakWithoutMdhd(3)),
-      fragmentWithData((at) => [sizedTraf(2, 1, bareTrun(1, at))], 1),
+      init(LONG_VIDEO_TRAK, trak(2, 'soun', 48000), trakWithoutMdhd(3)),
+      fragmentWithData((at) => [LONG_VIDEO_TRAF, sizedTraf(2, 1, bareTrun(1, at))], 1),
     );
     const counting = countingCopies(bytes);
 
@@ -483,10 +513,248 @@ describe('demuxSegmentAudio: mdhd 없는 소리 trak 으로 트랙 수 상한을
 
   it('mdhd 없는 trak 이 다른 소리 트랙의 번호를 겹쳐 써도 빈 결과다', () => {
     const bytes = concat(
-      init(trak(2, 'soun', 48000), trakWithoutMdhd(2)),
-      fragmentWithData((at) => [sizedTraf(2, 1, bareTrun(1, at))], 1),
+      init(LONG_VIDEO_TRAK, trak(2, 'soun', 48000), trakWithoutMdhd(2)),
+      fragmentWithData((at) => [LONG_VIDEO_TRAF, sizedTraf(2, 1, bareTrun(1, at))], 1),
     );
 
     expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
+  });
+});
+
+// --- 소리 프레임 수를 조각 시간에 묶는다(보안 검수 prw2 hard3 M-1 추기 · kty 결정 (가) 2026-11-13) ---
+// 방송자는 송출만으로(SRT) 4초 ② 조각 소리 trun 을 16만 표본 넘게 부풀린다 — 대부분 길이 0(MediaMTX 가 같거나 작은 DTS 를 길이
+// 0 으로 기록) · 1ms 간격이면 약 4,200개(실측 runs/2026-11-13-prw2-aac-flood). 그 조각은 영상이 정상이라 재생 경로를 지난다.
+
+/** 48kHz · 기준 4초 한 트랙의 상한: floor(4 × 48,000 / 1,024 × 1.5) + ceil(48,000 / 1,024) = 281 + 47 */
+const CAP_4S_48K = 328;
+
+/** 길이 duration 표본 count 개 */
+const samples = (count: number, duration: number): Sample[] =>
+  Array.from({ length: count }, () => frame(duration));
+
+/** 30fps 영상(90kHz · 표본마다 3,000 눈금) seconds 초어치 */
+const fps30 = (seconds: number): Sample[] => samples(seconds * 30, 3000);
+
+/**
+ * 영상 1(90kHz · 주어진 표본) + 소리 트랙들(트랙마다 주어진 표본 · 빈도 번호 frequencyIndex · timescale 은 그 빈도).
+ * 소리 표본은 크기 1 이고 moof 머리부터 읽는다
+ */
+function timedSegment(video: Sample[], frequencyIndex: number, ...audio: Sample[][]): Uint8Array {
+  const rate = FREQUENCIES[frequencyIndex]!;
+  const ids = audio.map((_, i) => i + 2);
+  return concat(
+    init(trak(1, 'vide', 90000), ...ids.map((id) => trak(id, 'soun', rate, { frequencyIndex }))),
+    fragment(traf(1, 0, video), ...audio.map((list, i) => traf(ids[i]!, 0, list))),
+  );
+}
+
+const HZ_48K = 3;
+const HZ_96K = 0;
+const HZ_7350 = 12;
+/** 48kHz 4초 정상 소리(1,024 눈금 프레임 188개) */
+const NORMAL_4S = samples(188, 1024);
+/**
+ * 영상 표본 하나 1초 — 늦은 시작 여유 3초를 더하면 영상 쪽 기준이 꼭 4초다. 상한 경계 시험은 소리를 그보다 길게 둬 영상
+ * 쪽이 기준이 되게 한다(1초 표본을 그대로 다 세는지도 함께 본다)
+ */
+const VIDEO_1S = [frame(90000)];
+
+describe('demuxSegmentAudio: 소리 프레임 수를 그 조각의 시간에 비례해 묶는다(보안 검수 prw2 hard3 M-1)', () => {
+  it('정상 4초 조각(48kHz 188 프레임)은 그대로 푼다', () => {
+    const seg = demuxSegmentAudio(timedSegment(fps30(4), HZ_48K, NORMAL_4S));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([188]);
+  });
+
+  it('정상 4초 조각(96kHz 375 프레임)은 그대로 푼다', () => {
+    const seg = demuxSegmentAudio(timedSegment(fps30(4), HZ_96K, samples(375, 1024)));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([375]);
+  });
+
+  it('같은 시각 범람(길이 0 표본 4,000 덧붙임)은 프레임을 만들기 전에 빈 결과다', () => {
+    const flood = [...NORMAL_4S, ...samples(4000, 0)];
+    const counting = countingCopies(timedSegment(fps30(4), HZ_48K, flood));
+
+    expect(demuxSegmentAudio(counting.bytes)).toEqual(EMPTY);
+    expect(counting.copies()).toBe(0);
+  });
+
+  it('1ms 간격 범람(4,200 표본 · 길이 48)은 빈 결과다', () => {
+    expect(demuxSegmentAudio(timedSegment(fps30(4), HZ_48K, samples(4200, 48)))).toEqual(EMPTY);
+  });
+
+  it('소리 시각을 넓게 벌려도(4,200 표본 × 1,024 = 89.6초) 영상이 4초면 빈 결과다', () => {
+    expect(demuxSegmentAudio(timedSegment(fps30(4), HZ_48K, samples(4200, 1024)))).toEqual(EMPTY);
+  });
+
+  it('영상 시각을 넓게 벌려도(90초) 소리 자신의 시간이 4초면 범람은 빈 결과다', () => {
+    const flood = [...NORMAL_4S, ...samples(4000, 0)];
+
+    expect(demuxSegmentAudio(timedSegment(fps30(90), HZ_48K, flood))).toEqual(EMPTY);
+  });
+
+  it('상한에 꼭 맞으면 푼다 · 하나 넘으면 빈 결과다', () => {
+    const atCap = demuxSegmentAudio(timedSegment(VIDEO_1S, HZ_48K, samples(CAP_4S_48K, 1024)));
+
+    expect(atCap.audio.map((t) => t.frames.length)).toEqual([CAP_4S_48K]);
+    const over = timedSegment(VIDEO_1S, HZ_48K, samples(CAP_4S_48K + 1, 1024));
+    expect(demuxSegmentAudio(over)).toEqual(EMPTY);
+  });
+
+  it('상한은 트랙마다다: 다른 트랙이 정상이어도 한 트랙이 넘으면 빈 결과다', () => {
+    const over = samples(CAP_4S_48K + 71, 1024);
+
+    expect(demuxSegmentAudio(timedSegment(VIDEO_1S, HZ_48K, NORMAL_4S, over))).toEqual(EMPTY);
+  });
+
+  it('영상 시간이 0 이면 기준이 없어 빈 결과다', () => {
+    expect(demuxSegmentAudio(timedSegment([frame(0)], HZ_48K, samples(1, 1024)))).toEqual(EMPTY);
+  });
+
+  it('긴 정상 조각(6트랙 · 96kHz · 84초)도 그대로 푼다 — 시간 상한은 조각 길이를 따라 커진다', () => {
+    const perTrack = (84 * 96000) / 1024;
+    const tracks = Array.from({ length: 6 }, () => samples(perTrack, 1024));
+
+    const seg = demuxSegmentAudio(timedSegment(fps30(84), HZ_96K, ...tracks));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual(Array(6).fill(perTrack));
+  });
+
+  it('영상 표본이 하나에 1초(가변 프레임률이 가장 성긴 꼴)여도 1초씩 다 세어 정상 4초 소리를 푼다', () => {
+    const seg = demuxSegmentAudio(timedSegment(samples(4, 90000), HZ_48K, NORMAL_4S));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([188]);
+  });
+
+  it('가변 프레임률 영상(0.1초 간격 · 중간 0.9초 멈춤)도 정상 4초 소리를 그대로 푼다', () => {
+    const video = [...samples(31, 9000), frame(81000)];
+
+    const seg = demuxSegmentAudio(timedSegment(video, HZ_48K, NORMAL_4S));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([188]);
+  });
+});
+
+// --- 표본 하나의 길이를 잘라 기준 초를 낸다(보안 검수 prw2 hard4 H-1 · codex 재현) ---
+// 녹화 서버 포크(v1.21.1-pokeclip.2)는 앞 표본 길이를 「다음 DTS − 이 DTS」 로 상한 없이 적는다. 리셋 직전에 영상 · 소리 DTS 를
+// 함께 크게 뛰우면 그 조각의 마지막 표본 길이가 수백 초가 된다(codex: 같은 PTS 실물 범람의 두 마지막 표본을 600초로 바꾸면
+// 18,887 프레임이 통과). 상류 main 은 이 길이를 0 으로 바꿨지만 포크에는 없다.
+
+/** 600초(리셋 직전 DTS 점프로 부풀린 마지막 표본) */
+const JUMP_SECONDS = 600;
+
+describe('demuxSegmentAudio: 마지막 표본 길이를 부풀려 시간 상한을 끄지 못한다(보안 검수 prw2 hard4 H-1)', () => {
+  /**
+   * 정상 188 + 길이 0 표본 + 마지막 표본(lastTicks). 기본 프레임 수는 같은 PTS 실물 범람(same100r1)의 18,887 이고, 영상이
+   * 90초면 그 시간 상한(약 6,376)이 18,887 을 막아 버리므로 그 시험은 1ms 간격 실물(ms1r1)의 4,187 로 줄인다
+   */
+  const sameTimeFlood = (lastTicks: number, total = 18887) => [
+    ...NORMAL_4S,
+    ...samples(total - NORMAL_4S.length - 1, 0),
+    frame(lastTicks),
+  ];
+
+  it('영상 · 소리 마지막 표본을 함께 600초로 벌린 범람은 프레임을 만들기 전에 빈 결과다', () => {
+    const video = [...fps30(4), frame(JUMP_SECONDS * 90000)];
+    const counting = countingCopies(
+      timedSegment(video, HZ_48K, sameTimeFlood(JUMP_SECONDS * 48000)),
+    );
+
+    expect(demuxSegmentAudio(counting.bytes)).toEqual(EMPTY);
+    expect(counting.copies()).toBe(0);
+  });
+
+  it('소리 마지막 표본만 600초로 벌리면 영상 4초가 기준이라 빈 결과다', () => {
+    const bytes = timedSegment(fps30(4), HZ_48K, sameTimeFlood(JUMP_SECONDS * 48000));
+
+    expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
+  });
+
+  it('영상 마지막 표본만 600초로 벌리면 소리 4초가 기준이라 빈 결과다', () => {
+    const video = [...fps30(4), frame(JUMP_SECONDS * 90000)];
+
+    expect(demuxSegmentAudio(timedSegment(video, HZ_48K, sameTimeFlood(1024)))).toEqual(EMPTY);
+  });
+
+  it('영상이 길어도(90초) 소리 마지막 표본 600초로 소리 시간을 부풀리지 못한다(표본마다 2 × 1,024 눈금까지)', () => {
+    const bytes = timedSegment(fps30(90), HZ_48K, sameTimeFlood(JUMP_SECONDS * 48000, 4187));
+
+    expect(demuxSegmentAudio(bytes)).toEqual(EMPTY);
+  });
+
+  it('소리가 길어도(90초 분량) 영상 마지막 표본 600초로 영상 시간을 부풀리지 못한다(표본마다 1초까지)', () => {
+    const video = [...fps30(4), frame(JUMP_SECONDS * 90000)];
+
+    expect(demuxSegmentAudio(timedSegment(video, HZ_48K, samples(4219, 1024)))).toEqual(EMPTY);
+  });
+
+  it('같은 시각 범람(4만) + 영상 · 소리 마지막 표본 700초는 빈 결과다(cc 재현 — 1차 상한은 40,189 프레임을 통과시켰다)', () => {
+    const video = [...fps30(4), frame(700 * 90000)];
+    const flood = sameTimeFlood(700 * 48000, NORMAL_4S.length + 40000 + 1);
+
+    expect(demuxSegmentAudio(timedSegment(video, HZ_48K, flood))).toEqual(EMPTY);
+  });
+
+  it('1,024 간격 AU 4만 개(소리 약 853초 — 묶음 AU 는 NTP 도 같이 늘어 드리프트에 안 걸림) + 영상 마지막 표본 700초는 빈 결과다', () => {
+    const video = [...fps30(4), frame(700 * 90000)];
+
+    expect(demuxSegmentAudio(timedSegment(video, HZ_48K, samples(40000, 1024)))).toEqual(EMPTY);
+  });
+
+  /** 48kHz 설정 소리 트랙을 timescale 192,000(빈도의 4배 — 프레임 하나 4,096 눈금)으로 적은 조각 */
+  const scaledSegment = (video: Sample[], audio: Sample[]) =>
+    concat(
+      init(trak(1, 'vide', 90000), trak(2, 'soun', 192000, { frequencyIndex: HZ_48K })),
+      fragment(traf(1, 0, video), traf(2, 0, audio)),
+    );
+
+  // 8초를 쓰는 까닭: 표본 상한을 timescale 없이 2,048 눈금으로 잡으면 소리가 절반(4초)으로 세여 상한 328 < 375 로 걸린다.
+  // 4초면 그 절반(2초)으로도 상한이 꼭 188 이라 구별되지 않는다
+  it('소리 timescale 이 빈도와 달라도(192,000) 정상 8초는 그대로 푼다 — 표본 상한은 그 timescale 의 2 × 1,024 표본 몫이다', () => {
+    const seg = demuxSegmentAudio(scaledSegment(fps30(8), samples(375, 4096)));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([375]);
+  });
+
+  it('소리 timescale 이 빈도와 달라도(192,000) 마지막 표본 600초 범람은 빈 결과다', () => {
+    const video = [...fps30(4), frame(JUMP_SECONDS * 90000)];
+    const flood = [...samples(188, 4096), ...samples(18698, 0), frame(JUMP_SECONDS * 192000)];
+
+    expect(demuxSegmentAudio(scaledSegment(video, flood))).toEqual(EMPTY);
+  });
+});
+
+describe('demuxSegmentAudio: 짧은 조각 여유는 프레임 수가 아니라 1초 분량이다(보안 검수 prw2 hard4 M-2)', () => {
+  /** 7,350Hz · 기준 4초 한 트랙의 상한: floor(4 × 7,350 / 1,024 × 1.5) + ceil(7,350 / 1,024) = 43 + 8 */
+  const CAP_4S_7350 = 51;
+
+  it('7,350Hz 4초 조각은 상한 51 에 꼭 맞으면 푼다 · 하나 넘으면 빈 결과다', () => {
+    const atCap = demuxSegmentAudio(timedSegment(VIDEO_1S, HZ_7350, samples(CAP_4S_7350, 1024)));
+
+    expect(atCap.audio.map((t) => t.frames.length)).toEqual([CAP_4S_7350]);
+    const over = timedSegment(VIDEO_1S, HZ_7350, samples(CAP_4S_7350 + 1, 1024));
+    expect(demuxSegmentAudio(over)).toEqual(EMPTY);
+  });
+});
+
+// --- 녹화가 (다시) 시작된 첫 조각은 영상이 늦게 시작한다(오케스트레이터 3차 · kty 결정 (가) 「정상 조각은 통과」) ---
+// 녹화기는 첫 키프레임 전 영상 표본을 버리고 소리는 처음부터 적는다 — 그 조각은 영상이 키프레임 간격(플러그인 2초)만큼 짧다.
+
+describe('demuxSegmentAudio: 영상이 늦게 시작하거나 멈춘 정상 조각도 소리를 푼다(늦은 시작 여유)', () => {
+  it('녹화 재시작 첫 조각(영상 2초 · 소리 약 4.05초 · 188 프레임)은 그대로 푼다', () => {
+    const audio = [...samples(187, 1024), frame(2920)];
+
+    const seg = demuxSegmentAudio(timedSegment(fps30(2), HZ_48K, audio));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([188]);
+  });
+
+  it('영상이 3초 멈춘 4초 조각(영상 1초 + 멈춤 표본 하나 — 1초로 깎임)도 정상 소리를 푼다', () => {
+    const video = [...fps30(1), frame(3 * 90000)];
+
+    const seg = demuxSegmentAudio(timedSegment(video, HZ_48K, NORMAL_4S));
+
+    expect(seg.audio.map((t) => t.frames.length)).toEqual([188]);
   });
 });
