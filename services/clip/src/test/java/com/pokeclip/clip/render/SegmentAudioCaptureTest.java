@@ -459,17 +459,13 @@ class SegmentAudioCaptureTest extends IntegrationTestSupport {
 
     /**
      * 장부 왕복(C-B5 · R24) — 회차 고르기 1 · 회차 귀속 행 1 · 응답 목록 1 · 확보 후보 0–1(판 2 는 거리 조건이 참일 때 · 판 NULL 은
-     * 늘) · 회차 완결 0–1(확보 후보가 장부에 없고 방송 중일 때만 — 지연 평가). 완결이 참이면 회차 고르기 · 회차 행 · 확보 후보를
-     * 한 번씩 더 읽는다(R28 다시 판정 · 거짓이면 그대로). 방송 행은 JPA 라 이 측정기에 안 잡힌다.
+     * 늘) · 회차 완결 0–1(확보 후보가 장부에 없고 방송 중일 때만 — 지연 평가). 방송 행은 JPA 라 이 측정기에 안 잡힌다.
      */
     @Test
     void 장부_왕복은_후보가_있으면_넷이고_방송_중_후보가_없을_때만_다섯이다() {
         래칫_시드();
         AtomicInteger statements = new AtomicInteger();
-        JdbcTemplate counted = new JdbcTemplate(counting(dataSource, statements));
-        StreamSegmentReader reader = new StreamSegmentReader(counted);
-        SegmentAudioAccessService service = service(reader, new LedgerCutPlanner(new RoundRows(counted), reader),
-                at(100_000));
+        SegmentAudioAccessService service = countedService(statements);
 
         service.issue(요청자, 방송, at(10_000).toEpochMilli(), at(11_000).toEpochMilli());
         assertThat(statements).as("방송 중 · 확보 후보 있음").hasValue(4);
@@ -478,15 +474,32 @@ class SegmentAudioCaptureTest extends IntegrationTestSupport {
         service.issue(요청자, 방송, at(42_000).toEpochMilli(), at(45_000).toEpochMilli());
         assertThat(statements).as("방송 중 · 마지막 행이라 후보 없음 → 회차 완결을 묻는다").hasValue(5);
 
-        seed.endSession(방송, true);
-        statements.set(0);
-        service.issue(요청자, 방송, at(42_000).toEpochMilli(), at(45_000).toEpochMilli());
-        assertThat(statements).as("방송 중 · 회차 완결 참 → 회차 고르기 · 회차 행 · 확보 후보를 다시 읽는다").hasValue(8);
-
         끝낸다();
         statements.set(0);
         service.issue(요청자, 방송, at(42_000).toEpochMilli(), at(45_000).toEpochMilli());
         assertThat(statements).as("끝난 방송 — 회차 완결을 안 묻는다").hasValue(4);
+    }
+
+    /**
+     * R28 다시 판정의 왕복 — 방송 중 · 후보 없음(다섯) 갈래에서 회차 완결이 참이면 회차 고르기 · 회차 행을 한 번씩 더 읽고, 다시
+     * 읽은 행으로도 컷 끝이 같은 조각이라 확보 후보도 한 번 더 묻는다 — 여덟. 완결이 거짓이면 그대로 다섯이다(위 시험).
+     */
+    @Test
+    void 장부_왕복은_방송_중_회차_완결이_참이면_다시_읽어_여덟이다() {
+        래칫_시드();
+        seed.endSession(방송, true);
+        AtomicInteger statements = new AtomicInteger();
+
+        countedService(statements).issue(요청자, 방송, at(42_000).toEpochMilli(), at(45_000).toEpochMilli());
+
+        assertThat(statements).as("방송 중 · 회차 완결 참 → 회차 고르기 · 회차 행 · 확보 후보를 다시 읽는다").hasValue(8);
+    }
+
+    /** 장부 문장을 세는 소리 주소 서비스. */
+    private SegmentAudioAccessService countedService(AtomicInteger statements) {
+        JdbcTemplate counted = new JdbcTemplate(counting(dataSource, statements));
+        StreamSegmentReader reader = new StreamSegmentReader(counted);
+        return service(reader, new LedgerCutPlanner(new RoundRows(counted), reader), at(100_000));
     }
 
     // ── 시드 · 도우미 ──────────────────────────────────────────────
