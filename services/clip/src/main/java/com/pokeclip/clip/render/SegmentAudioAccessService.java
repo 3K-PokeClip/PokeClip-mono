@@ -2,6 +2,7 @@ package com.pokeclip.clip.render;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.recipe.RecipeValidator;
 import com.pokeclip.clip.render.RenderErrors.InvalidSegmentRangeException;
@@ -21,6 +22,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 원본 조각 주소(POK-389). 편집기가 구간의 조각을 받아 소리 트랙별로 미리 듣는다(저장·렌더와 같은 트랙 번호).
@@ -90,7 +92,9 @@ public class SegmentAudioAccessService {
         if (available == null) {
             throw new RenderUnavailableException();
         }
-        Broadcast broadcast = broadcasts.findByStreamId(streamId).orElseThrow();
+        // 자격 검사 뒤 방송 줄이 지워지는 경합도 자격 검사와 같은 404 다(500 으로 새지 않게).
+        Broadcast broadcast = broadcasts.findByStreamId(streamId)
+                .orElseThrow(() -> new AccessErrors.NotViewableException("broadcast_not_found"));
         Instant now = clock.instant();
         // 조각 장부는 물리 키로 찾는다(POK-233). 아직 안 올라간 조각은 주소를 줘도 창고에 없다.
         List<SegmentAudioSigner.Unsigned> uploaded = segments
@@ -98,16 +102,31 @@ public class SegmentAudioAccessService {
                 .filter(segment -> "uploaded".equals(segment.uploadState()))
                 .map(SegmentAudioAccessService::unsigned)
                 .toList();
-        CutPlanner.AudioCapture capture = cuts.audioCapture(broadcast, fromMs, toMs, now);
-        SegmentAudioAccess.Segment captureSegment = capture.row()
+        Optional<CutPlanner.AudioCapture> capture = captureOrEmpty(broadcast, fromMs, toMs, now);
+        SegmentAudioAccess.Segment captureSegment = capture.flatMap(CutPlanner.AudioCapture::row)
                 .map(row -> available.sign(List.of(unsigned(row))).get(0))
                 .orElse(null);
         SegmentAudioAccess access = new SegmentAudioAccess(available.expiresAt(now), available.sign(uploaded),
-                wire(capture.state()), captureSegment);
+                capture.map(c -> wire(c.state())).orElse(null), captureSegment);
         // 주소·창고 좌표는 안 찍는다: 주소가 곧 출입증이다.
         log.info("clip.segment_audio_access.issued streamId={} userId={} segments={} expiresAt={} audioCapture={}",
                 streamId, requesterSubject, access.segments().size(), access.expiresAt(), access.audioCapture());
         return access;
+    }
+
+    /**
+     * 끝 소리 확보는 부가 칸이다(kty 2026-11-12). 판정이 실패하면 — 장부를 못 읽거나(생산자 c1 DDL 이 아직 없는 DB) 장부 값이 판정
+     * 전제를 깨면(회차 안 판 섞임 등) — 칸만 비우고 조각 목록은 낸다. 비면 웹은 확보 없이 목록으로 미리 듣는다. 카드 장면 실패
+     * ({@code jumpcard.scene_unavailable})와 같은 처분이다. 입력 값 · 메시지는 싣지 않는다.
+     */
+    private Optional<CutPlanner.AudioCapture> captureOrEmpty(Broadcast broadcast, long fromMs, long toMs, Instant now) {
+        try {
+            return Optional.of(cuts.audioCapture(broadcast, fromMs, toMs, now));
+        } catch (RuntimeException e) {
+            log.warn("clip.segment_audio_access.capture_unavailable streamId={} reason={}", broadcast.getStreamId(),
+                    e.getClass().getSimpleName());
+            return Optional.empty();
+        }
     }
 
     private static SegmentAudioSigner.Unsigned unsigned(SegmentSource s) {

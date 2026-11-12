@@ -2,6 +2,7 @@ package com.pokeclip.clip.render;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.segment.CutDecision;
 import com.pokeclip.clip.segment.LedgerCutPlanner;
@@ -35,11 +36,15 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.pokeclip.clip.support.LedgerSeed.at;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 /**
  * 소리 주소 API 의 끝 소리 확보 판정(POK-196 · 설계 r7 9.6 · 계획 델타 7절 P38 · 착수 체크리스트 C-B2 · C-B5). 표지 갈래를 거둔
@@ -201,6 +206,85 @@ class SegmentAudioCaptureTest extends IntegrationTestSupport {
         seed.row(키, 2).wallAndPdt(4_000).discontinuity().insert();
 
         assertThat(capture(issue(1_000, 3_500))).isEqualTo("skipped");
+    }
+
+    /**
+     * 다음 방송의 머리 세션에 귀속된 다음 행도 새 녹화({@code is_discontinuity} 참)면 확보로 싣지 않는다(c5 보안 L2 — 지운
+     * {@code 다음_회차_첫_행이_새_녹화면_확보로_싣지_않는다} 를 잇는다). 확보 후보는 회차로 자르지 않으므로(계약 6-6-5) 다른 방송으로
+     * 넘어가는 것을 막는 것은 이 표시뿐이다. 렌더 주문과 같은 판정이라 회귀가 나면 양쪽이 같이 깨진다.
+     */
+    @Test
+    void 다음_방송_머리_세션의_새_녹화_행은_확보로_싣지_않는다() throws Exception {
+        방송(true);
+        broadcasts.save(Broadcast.startedNow("S-aud-next", TestIds.STREAMER, 키, 2L, at(30_000), null));
+        seed.session("S-aud-next", 키, "S-aud-next", null);
+        seed.row(키, 1).wallAndPdt(0).session(방송).insert();
+        seed.row(키, 2).wallAndPdt(4_000).session("S-aud-next").discontinuity().insert();
+
+        JsonNode root = mapper.readTree(json(issue(1_000, 4_000)));
+
+        assertThat(root.get("audioCapture").asString()).isEqualTo("skipped");
+        assertThat(root.has("audioCaptureSegment")).isFalse();
+        assertThat(seqs(root)).containsExactly(1L);
+    }
+
+    // ── 세션 없는 옛 방송 · 판정 실패 · 방송 삭제 경합(c5 지적 4 · 5 · kty 2026-11-12 A17) ──────
+
+    /**
+     * 머리 세션 행이 없는 옛 방송(시간창 회차 — 회차 완결 술어가 늘 거짓)은 끝난 방송이어도 창 끝이 마지막 행 뒤면 {@code not_ready}
+     * 다(렌더도 409 로 기다린다). 목록은 develop 뜻 그대로 — 물리 키 조각 가운데 창과 목록 PDT 축으로 겹치는 올라간 조각이다.
+     */
+    @Test
+    void 세션_없는_옛_방송은_라이브_머리_창이면_끝났어도_not_ready_이고_목록은_그대로다() throws Exception {
+        방송(false);
+        seed.row(키, 1).wallAndPdt(0).insert();
+        seed.row(키, 2).wallAndPdt(4_000).insert();
+        seed.row(키, 3).wallAndPdt(8_000).insert();
+        끝낸다();
+
+        JsonNode root = mapper.readTree(json(issue(6_000, 14_000)));
+
+        assertThat(root.get("audioCapture").asString()).isEqualTo("not_ready");
+        assertThat(root.has("audioCaptureSegment")).isFalse();
+        assertThat(seqs(root)).as("창 [6000, 14000) 과 겹치는 올라간 조각").containsExactly(2L, 3L);
+        for (JsonNode s : root.get("segments")) {
+            assertThat(fieldNames(s)).containsExactly("seq", "startAtMs", "durationMs", "url");
+        }
+    }
+
+    /**
+     * 끝 소리 확보 판정이 실패하면(여기선 회차 안 판 섞임 — 장부 불변식 위반 · 생산자 DDL 없음도 같은 길) 확보 칸만 빼고 목록은
+     * develop 뜻 그대로 낸다 — 카드 장면 실패({@code jumpcard.scene_unavailable})와 같은 처분이다(kty 2026-11-12 A17). WARN 에는
+     * 예외 클래스 이름만 싣는다.
+     */
+    @Test
+    void 확보_판정이_실패하면_확보_칸만_빼고_목록은_그대로_낸다() throws Exception {
+        방송(true);
+        seed.row(키, 1).wallAndPdt(0).session(방송).v2().insert();
+        seed.row(키, 2).wallAndPdt(4_000).session(방송).insert();
+
+        try (LogCaptor logs = new LogCaptor()) {
+            JsonNode root = mapper.readTree(json(issue(1_000, 6_000)));
+
+            assertThat(fieldNames(root)).containsExactly("expiresAt", "segments");
+            assertThat(seqs(root)).containsExactly(1L, 2L);
+            assertThat(logs.messages()).contains(
+                    "clip.segment_audio_access.capture_unavailable streamId=" + 방송 + " reason=IllegalStateException");
+        }
+    }
+
+    /** 자격 검사 뒤 방송 줄이 지워지면(삭제 경합) 500 이 아니라 404 {@code broadcast_not_found} 다 — 자격 검사와 같은 답. */
+    @Test
+    void 자격_검사_뒤_방송이_지워지면_404_다() {
+        방송(true);
+        BroadcastRepository vanished = mock(BroadcastRepository.class);
+        given(vanished.isVodExpired(방송)).willReturn(false);
+        given(vanished.findByStreamId(방송)).willReturn(Optional.empty());
+        SegmentAudioAccessService service = service(segments, cuts, at(100_000), vanished);
+
+        assertThatThrownBy(() -> service.issue(요청자, 방송, at(1_000).toEpochMilli(), at(2_000).toEpochMilli()))
+                .isInstanceOfSatisfying(AccessErrors.NotViewableException.class,
+                        e -> assertThat(e.reason()).isEqualTo("broadcast_not_found"));
     }
 
     // ── 판정 전에 끝나는 갈래(C-B2 대응표) ─────────────────────────
@@ -421,11 +505,16 @@ class SegmentAudioCaptureTest extends IntegrationTestSupport {
     }
 
     private SegmentAudioAccessService service(StreamSegmentReader reader, LedgerCutPlanner planner, Instant now) {
+        return service(reader, planner, now, broadcasts);
+    }
+
+    private SegmentAudioAccessService service(StreamSegmentReader reader, LedgerCutPlanner planner, Instant now,
+                                              BroadcastRepository broadcastRows) {
         DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
         factory.registerSingleton("signer", new SegmentAudioSigner(S3Presigner.builder().region(Region.AP_NORTHEAST_2)
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
                 .build(), "segments-test", Duration.ofMinutes(5)));
-        return new SegmentAudioAccessService(guard, broadcasts, reader, planner,
+        return new SegmentAudioAccessService(guard, broadcastRows, reader, planner,
                 factory.getBeanProvider(SegmentAudioSigner.class), Clock.fixed(now, ZoneOffset.UTC));
     }
 

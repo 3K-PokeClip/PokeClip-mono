@@ -1677,7 +1677,7 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
 
 **카드 장면 두 칸(POK-196)** — 목록 · 통로 · 마크 응답(OBS · 웹) · 가리기 · 되살리기 응답이 모두 싣는다.
-🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 소리 주소(아래 소리 주소 절)와 렌더 주문(컷 판정이 회차 행의 판 칸을 읽는다)도 500이다** — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
+🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 렌더 주문(컷 판정이 회차 행의 판 칸을 읽는다)도 500이며, 소리 주소(아래 소리 주소 절)는 목록만 나가고 끝 소리 확보 칸이 빠진다** — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
 
 | 카드 칸 | |
 |---|---|
@@ -2656,7 +2656,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url"}],"audioCapture","audioCaptureSegment":{"seq","startAtMs","durationMs","url"}}`(`audioCaptureSegment`는 `audioCapture`가 `attached`일 때만) · **400** `{"field":"fromMs"\|"toMs"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
+| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url"}],"audioCapture","audioCaptureSegment":{"seq","startAtMs","durationMs","url"}}`(`audioCaptureSegment`는 `audioCapture`가 `attached`일 때만 · 확보 판정이 실패하면 두 칸 모두 없음) · **400** `{"field":"fromMs"\|"toMs"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
 
 - **`fromMs`·`toMs`는 재생 축 UTC epoch ms**(편집본 `cut`과 같은 축)이고 반개 구간이다. `toMs`가 `fromMs` 이하이거나 6분을 넘으면 400이다.
 - **질의 칸 `axis`는 읽지 않는다**(POK-196 · kty 2026-11-12 K-1). 무엇이 와도 위 응답이고 400이 아니다. PR-B1 판이 받던 표지
@@ -2681,8 +2681,11 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
       창 안 회차 행이 아직 → `not_ready`(렌더 409 `media_pending`). 디코더 준비 조각은 보지 않는다.
     - `audioCaptureSegment.startAtMs`는 판정 축(목록 PDT 를 ms 로 내린 값)이다. `segments[].startAtMs`는 SQL 에서 ms 로 반올림한
       값이라, 같은 조각이 두 곳에 실리면(겹침 · 비귀속 행 자리) 1ms 다를 수 있다.
-    - 🔴 **판 칸(`timing_version`, 1번 생산자 c1 DDL)이 없는 DB에서는 이 문이 500이다** — 확보 판정이 회차 행의 판 칸을 읽는다(위 카드
-      장면 절 배포 순서 게이트).
+    - **확보 판정이 실패하면 확보 칸만 빠지고 `segments`는 200 으로 나간다**(kty 2026-11-12). 판 칸(`timing_version`, 1번 생산자 c1
+      DDL)이 없는 DB(확보 판정이 회차 행의 판 칸을 읽는다 — 위 카드 장면 절 배포 순서 게이트)나 장부 불변식 위반(회차 안 판 섞임
+      등)이면 `audioCapture` · `audioCaptureSegment`가 없고 WARN `clip.segment_audio_access.capture_unavailable streamId reason`
+      (`reason` = 예외 클래스 이름 · 입력 값은 싣지 않는다)이 남는다. 카드 장면 실패(`jumpcard.scene_unavailable`)와 같은 처분이다 —
+      웹은 확보 없이 목록으로 미리 듣는다.
     - 장부 왕복: 회차 고르기 1 · 회차 귀속 행 1(렌더 주문과 같은 읽기 — 규모는 `LedgerCutPlannerScaleTest`) · `segments` 목록 1 ·
       확보 후보 0–1(판 2 는 거리 조건이 참일 때 · 판 NULL 은 늘) · 회차 완결 0–1(물을 때만 — 범위 갈래 · 확보 후보가 장부에 없고
       방송 중). 방송 행 · 만료 판정은 JPA 질의다.

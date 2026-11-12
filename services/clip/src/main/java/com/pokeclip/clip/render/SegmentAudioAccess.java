@@ -10,8 +10,9 @@ import java.util.List;
  *
  * <p>창고 좌표({@code s3Key})는 싣지 않는다: 화면은 주소만 있으면 받는다.
  *
- * <p><b>끝 소리 확보(POK-196 · 설계 r7 9.6).</b> 뿌리 {@code audioCapture} 는 늘 싣고, {@code attached} 일 때만 확보 조각을
- * {@code audioCaptureSegment} 에 따로 싣는다(kty 2026-11-12 K-2). {@code segments} 는 그대로 창과 겹치는 올라간 조각이다 — 확보
+ * <p><b>끝 소리 확보(POK-196 · 설계 r7 9.6).</b> 뿌리 {@code audioCapture} 는 판정이 나면 늘 싣고, {@code attached} 일 때만 확보
+ * 조각을 {@code audioCaptureSegment} 에 따로 싣는다(kty 2026-11-12 K-2). 판정이 실패하면 두 칸 모두 없다(목록은 그대로 나간다 ·
+ * WARN {@code clip.segment_audio_access.capture_unavailable}). {@code segments} 는 그대로 창과 겹치는 올라간 조각이다 — 확보
  * 조각을 거기 섞지 않아 목록 뜻 · 바이트가 PR-B1 이전과 같다. 빈 칸은 싣지 않는다.
  *
  * @param audioCapture 끝 소리 확보 상태 — {@code attached}(확보 조각을 실음) · {@code not_ready}(아직 준비 안 됨 — 다시 물으면
