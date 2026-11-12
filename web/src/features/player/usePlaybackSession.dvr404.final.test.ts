@@ -199,7 +199,7 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
     });
     act(() => session().dispatch({ type: 'endlist' }));
     await flush();
-    expect(session().state.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+    expect(session().state.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
     const streamBefore = streamStarts.length;
     expect(roundStarts).toHaveLength(1);
     gone();
@@ -219,7 +219,7 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
     });
     act(() => session().dispatch({ type: 'endlist' }));
     await flush();
-    expect(session().state.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+    expect(session().state.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
     gone();
     await flush();
     expect(session().state.phase).toMatchObject({ kind: 'ending-wait', finalCheck: true });

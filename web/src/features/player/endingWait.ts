@@ -43,18 +43,18 @@ export function onEnding(
     case 'stream-poll': {
       const fromRewind = phase.origin === 'rewind';
       const doored = fromRewind ? withNextDoor(session, event) : session;
-      if (phase.recordOnEnd) return stateOnly(doored);
+      if (phase.closeOnEnd) return stateOnly(doored);
       return onEndingStreamPoll(doored, phase, event, now);
     }
     case 'round-poll':
       if (phase.finalCheck) return onFinalCheckRoundPoll(session, event.result);
-      return phase.recordOnEnd
+      return phase.closeOnEnd
         ? stateOnly(session)
         : onEndingRoundPoll(session, phase, event.result, now);
     case 'end-reached':
     case 'live-closed':
       if (phase.atEnd) return stateOnly(session);
-      if (phase.recordOnEnd) return close(session, 'recorded');
+      if (phase.closeOnEnd) return close(session, 'recorded');
       return stateOnly({ ...session, phase: { ...phase, atEnd: true } });
     case 'tick':
       if (session.endingSince === null || now - session.endingSince < ENDING_WAIT_MS) {
@@ -198,8 +198,8 @@ function seenRoundVod(
  */
 function roundFinal(session: PlaybackSessionState, phase: EndingPhase): Transition {
   if (phase.atEnd || phase.blocked) return close(session, 'recorded');
-  if (phase.recordOnEnd) return stateOnly(session);
-  return stateOnly({ ...session, phase: { ...phase, recordOnEnd: true } });
+  if (phase.closeOnEnd) return stateOnly(session);
+  return stateOnly({ ...session, phase: { ...phase, closeOnEnd: true } });
 }
 
 /**
@@ -211,7 +211,7 @@ function roundFinal(session: PlaybackSessionState, phase: EndingPhase): Transiti
  */
 function onEndingSegmentGone(session: PlaybackSessionState, phase: EndingPhase): Transition {
   if (phase.blocked || phase.finalCheck) return stateOnly(session);
-  const next: EndingPhase = phase.recordOnEnd
+  const next: EndingPhase = phase.closeOnEnd
     ? { ...phase, finalCheck: true }
     : { ...phase, blocked: true };
   return { state: { ...session, phase: next }, effects: [{ kind: 'hold-frame' }] };

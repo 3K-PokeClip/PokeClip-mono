@@ -253,10 +253,10 @@ describe('ending-wait 국면', () => {
     expect(after.effects).toEqual([{ kind: 'close', reason: 'recorded' }]);
   });
 
-  it('회차별 404 · 360초 뒤 · atEnd:false 는 recordOnEnd · 폴링 0 · 끝 도달에 덮개 없이 recorded', () => {
+  it('회차별 404 · 360초 뒤 · atEnd:false 는 closeOnEnd · 폴링 0 · 끝 도달에 덮개 없이 recorded', () => {
     const start = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
     const after = run(start, [[{ type: 'round-poll', result: NONE }, NOW + RESUME_WAIT_MS]]).state;
-    expect(after.phase).toMatchObject({ kind: 'ending-wait', atEnd: false, recordOnEnd: true });
+    expect(after.phase).toMatchObject({ kind: 'ending-wait', atEnd: false, closeOnEnd: true });
     expect(pollTargets(after)).toEqual({ stream: false, round: false });
     expect(after.source.url).toBe(A1);
     const done = run(after, [[{ type: 'end-reached' }]]);
@@ -408,7 +408,7 @@ describe('ending-wait 국면', () => {
     const record = run(waiting, [
       [{ type: 'round-poll', result: status({ mode: 'ended' }) }],
     ]).state;
-    expect(record.phase).toMatchObject({ recordOnEnd: true, atEnd: false });
+    expect(record.phase).toMatchObject({ closeOnEnd: true, atEnd: false });
     expect(transition(record, { type: 'tick' }, NOW + ENDING_WAIT_MS).state).toBe(record);
   });
 

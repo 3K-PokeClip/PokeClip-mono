@@ -239,9 +239,9 @@ describe('넘김 0 끝단 — 탐침을 청하지 않는 자리(T4 b–e · T6 �
 
   it('T6 음성: 끝남 대기의 문이 열려도 E1 의 조건 하나가 거짓이면 탐침 0', () => {
     const ending = endingAtEnd();
-    const waitWith = (origin: 'live' | 'rewind', atEnd: boolean, recordOnEnd: boolean) => ({
+    const waitWith = (origin: 'live' | 'rewind', atEnd: boolean, closeOnEnd: boolean) => ({
       ...ending,
-      phase: { kind: 'ending-wait' as const, origin, atEnd, recordOnEnd },
+      phase: { kind: 'ending-wait' as const, origin, atEnd, closeOnEnd },
     });
     const waits: PlaybackSessionState[] = [
       waitWith('rewind', false, false),

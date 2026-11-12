@@ -16,7 +16,7 @@ import {
 import { isPlayerStartHeld, sessionView } from './sessionView';
 
 // 종국 뒤 되감기 조각 404 시험(POK-528 c4 — 계획 3-2 · 3-4 · 3-6 · 8-1 W6 · E76 ·
-// 「종국 → 404」 순서 넷 · U2 의 finalCheck 몫). 녹화로 정한 끝남 대기(recordOnEnd)는
+// 「종국 → 404」 순서 넷 · U2 의 finalCheck 몫). 녹화로 정한 끝남 대기(closeOnEnd)는
 // 끝까지 본 뒤 녹화로 가려고 두 폴링을 끈다. 그 자리에서 404 가 오면 끝에 영영 닿지
 // 못하므로(E76) 회차별 조회를 한 번 더 해 다시보기 또는 녹화로 넘긴다. 사건은 모두
 // 감싸개 step 을 거친다(전이마다 불변식 단언 — 계획 8-0). 옛 판 표는 이 404 를 무시하므로
@@ -146,7 +146,7 @@ function finalOf(recorded: PlaybackSessionState, now = AFTER_DEADLINE): Playback
 describe('녹화로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 · E76)', () => {
   it('녹화로 정한 끝남 대기는 두 폴링을 끈다 — 404 가 없으면 끝 도달을 기다린다(지금 동작)', () => {
     const s = byDeadline();
-    expect(s.phase).toMatchObject({ recordOnEnd: true, atEnd: false });
+    expect(s.phase).toMatchObject({ closeOnEnd: true, atEnd: false });
     expect(pollTargets(s)).toEqual({ stream: false, round: false });
     expect(sessionView(s, AFTER_DEADLINE).cover).toBeNull();
   });
@@ -158,7 +158,7 @@ describe('녹화로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 
       kind: 'ending-wait',
       origin: 'rewind',
       atEnd: false,
-      recordOnEnd: true,
+      closeOnEnd: true,
       finalCheck: true,
     });
     expect(checked.effects).toEqual([HOLD]);

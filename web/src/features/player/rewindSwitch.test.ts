@@ -107,13 +107,13 @@ describe('세션 열기와 폴링 켜기(설계 5.1절 표)', () => {
     expect(pollTargets(s)).toEqual({ stream: true, round: false });
   });
 
-  it('끝남 대기는 두 경로를 켜고, recordOnEnd · vod-offered · 닫힘은 둘 다 끈다', () => {
+  it('끝남 대기는 두 경로를 켜고, closeOnEnd · vod-offered · 닫힘은 둘 다 끈다', () => {
     const waiting = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
     expect(pollTargets(waiting)).toEqual({ stream: true, round: true });
     const record = run(waiting, [
       [{ type: 'round-poll', result: status({ mode: 'ended' }) }],
     ]).state;
-    expect(record.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+    expect(record.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
     expect(pollTargets(record)).toEqual({ stream: false, round: false });
     const closed = run(fresh(), [[{ type: 'leave' }]]).state;
     expect(pollTargets(closed)).toEqual({ stream: false, round: false });
@@ -224,7 +224,7 @@ describe('live 국면', () => {
       kind: 'ending-wait',
       origin: 'live',
       atEnd: false,
-      recordOnEnd: false,
+      closeOnEnd: false,
     });
     expect(state.source.kind).toBe('live');
     expect(state.endingSince).toBe(NOW);

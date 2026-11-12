@@ -176,7 +176,7 @@ describe('되풀이 상한 — 화면 전 404 는 막힘(계획 3-2 셋째 행)'
         kind: 'ending-wait',
         origin: 'rewind',
         atEnd: false,
-        recordOnEnd: false,
+        closeOnEnd: false,
         blocked: true,
       });
       expect(done.effects).toEqual([REFRESH_A1, HOLD]);
@@ -296,7 +296,7 @@ describe('다시 받은 목록의 ENDLIST(계획 3-3 (3))', () => {
       kind: 'ending-wait',
       origin: 'rewind',
       atEnd: false,
-      recordOnEnd: false,
+      closeOnEnd: false,
     });
     const done = feed(ended, [gone(ended)]);
     expect(done.state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
@@ -399,7 +399,7 @@ describe('「세우지 않음」 — 다시 받는 되감기는 세운다(계획
     const rewind = rewindAt(P20);
     const ended = feed(rewind, [ENDLIST]).state;
     const decided = feed(ended, [{ type: 'round-poll', result: status({ mode: 'ended' }) }]).state;
-    expect(decided.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+    expect(decided.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
     expect(isPlayerStartHeld(fresh())).toBe(false);
     expect(isPlayerStartHeld(rewind)).toBe(false);
     expect(isPlayerStartHeld(relisted(rewind))).toBe(false);
@@ -420,7 +420,7 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
     kind: 'ending-wait',
     origin: 'rewind',
     atEnd: false,
-    recordOnEnd: false,
+    closeOnEnd: false,
     blocked: true,
   } as const;
 
@@ -569,9 +569,9 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
       const decided = feed(ending, [
         { type: 'round-poll', result: status({ mode: 'ended' }) },
       ]).state;
-      expect(decided.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+      expect(decided.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
       const done = feed(decided, [gone(decided, undefined, S)]).state;
-      expect(done.phase).toMatchObject({ recordOnEnd: true, finalCheck: true });
+      expect(done.phase).toMatchObject({ closeOnEnd: true, finalCheck: true });
     });
 
     it('다시보기 제안 → 같은 자리 다시보기', () => {

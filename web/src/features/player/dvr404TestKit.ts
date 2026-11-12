@@ -100,10 +100,10 @@ export function assertPhaseInvariants(state: PlaybackSessionState): void {
   const blocked = phase.blocked === true;
   const finalCheck = phase.finalCheck === true;
   if (finalCheck) {
-    expect(phase.recordOnEnd, 'finalCheck ⇒ recordOnEnd').toBe(true);
+    expect(phase.closeOnEnd, 'finalCheck ⇒ closeOnEnd').toBe(true);
     expect(blocked, 'finalCheck ⇒ ¬blocked').toBe(false);
   }
-  if (blocked) expect(phase.recordOnEnd, 'blocked ⇒ ¬recordOnEnd').toBe(false);
+  if (blocked) expect(phase.closeOnEnd, 'blocked ⇒ ¬closeOnEnd').toBe(false);
   if (blocked || finalCheck) {
     expect(state.source.kind, 'blocked ∨ finalCheck ⇒ source.kind rewind').toBe('rewind');
   }

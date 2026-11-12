@@ -190,7 +190,7 @@ describe('끝남 대기의 되감기 조각 404 → 녹화로 정하기 전이�
       kind: 'ending-wait',
       origin: 'rewind',
       atEnd: false,
-      recordOnEnd: false,
+      closeOnEnd: false,
       blocked: true,
     });
     expect(done.effects).toEqual([{ kind: 'hold-frame' }]);
@@ -232,12 +232,12 @@ describe('끝남 대기의 되감기 조각 404 → 녹화로 정하기 전이�
     expect(late.state.phase).toEqual(s.phase);
   });
 
-  it('녹화로 정한 끝남 대기(20분 시한)의 404 는 막힘이 아니라 마지막 확인이다(blocked ⇒ ¬recordOnEnd · c4)', () => {
+  it('녹화로 정한 끝남 대기(20분 시한)의 404 는 막힘이 아니라 마지막 확인이다(blocked ⇒ ¬closeOnEnd · c4)', () => {
     const s = feed(endedByEndlist(), [TICK], R + ENDING_WAIT_MS).state;
-    expect(s.phase).toMatchObject({ recordOnEnd: true });
+    expect(s.phase).toMatchObject({ closeOnEnd: true });
     const late = feed(s, [gone(s)], R + ENDING_WAIT_MS);
     expect(late.state.phase).not.toMatchObject({ blocked: true });
-    expect(late.state.phase).toMatchObject({ recordOnEnd: true, finalCheck: true });
+    expect(late.state.phase).toMatchObject({ closeOnEnd: true, finalCheck: true });
   });
 
   it('막힌 동안 시크는 무시한다 — 복구는 세션 효과만(P15)', () => {
@@ -354,7 +354,7 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
         kind: 'ending-wait',
         origin: 'rewind',
         atEnd: true,
-        recordOnEnd: false,
+        closeOnEnd: false,
         blocked: true,
       });
       expect(s.closed).toBeNull();
@@ -541,7 +541,7 @@ describe('T1 · U1 회귀 — 막힘은 W5 밖에서 풀리지 않는다(cx H1)'
       kind: 'ending-wait',
       origin: 'rewind',
       atEnd: true,
-      recordOnEnd: false,
+      closeOnEnd: false,
       blocked: true,
     });
     expect(s.list?.sealed).toBe(false);

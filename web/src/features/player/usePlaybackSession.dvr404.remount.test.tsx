@@ -416,7 +416,7 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     control.round = () => jsonResponse(200, statusBody({ mode: 'ended' }));
     act(() => current().dispatch({ type: 'endlist' }));
     await settle();
-    expect(current().state.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+    expect(current().state.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
     const finalAnswer = heldReply();
     control.round = finalAnswer.reply;
     segmentGone(rewindHls);

@@ -99,7 +99,8 @@ export type SessionPhase =
    */
   | { kind: 'rewind'; pendingNext: RewindRange | null; relist?: RelistState }
   /**
-   * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 · recordOnEnd = 회차 종국 또는 20분 시한이 섰다 ·
+   * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 ·
+   * closeOnEnd = 회차 종국 또는 20분 시한이 섰다 — 끝에 닿으면 세션을 닫는다 ·
    * blocked = 되감기 조각 404 로 이 목록을 끝까지 재생할 수 없다(POK-528 — 회차별 조회의 겹치는 vod · 종국 · 20분과 사람
    * 단추로만 풀린다) · finalCheck = 녹화로 정한 뒤 404 를 받아 회차별 조회를 마지막으로 한 번 하는 중(POK-528 W6 — 답이 본
    * 구간과 겹치는 유효한 vod 면 같은 자리 다시보기, 그 밖이면 녹화). 둘 다 없으면 거짓이다
@@ -108,7 +109,7 @@ export type SessionPhase =
       kind: 'ending-wait';
       origin: 'live' | 'rewind';
       atEnd: boolean;
-      recordOnEnd: boolean;
+      closeOnEnd: boolean;
       blocked?: boolean;
       finalCheck?: boolean;
     }
@@ -310,7 +311,7 @@ export function pollTargets(session: PlaybackSessionState): { stream: boolean; r
       return { stream: true, round: false };
     case 'ending-wait':
       // 녹화로 정했으면 끝 도달만 기다린다 — 마지막 확인 중이면 회차별 조회 하나만 켠다(POK-528 W6)
-      if (!session.phase.recordOnEnd) return { stream: true, round: true };
+      if (!session.phase.closeOnEnd) return { stream: true, round: true };
       return { stream: false, round: session.phase.finalCheck === true };
     default:
       return { stream: false, round: false };
@@ -329,7 +330,7 @@ function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number)
   return {
     state: {
       ...session,
-      phase: { kind: 'ending-wait', origin, atEnd, recordOnEnd: false },
+      phase: { kind: 'ending-wait', origin, atEnd, closeOnEnd: false },
       endingSince: session.endingSince ?? now,
       offer: null,
     },
@@ -347,7 +348,7 @@ function enterBlocked(session: PlaybackSessionState, atEnd: boolean, now: number
     kind: 'ending-wait',
     origin: 'rewind',
     atEnd,
-    recordOnEnd: false,
+    closeOnEnd: false,
     blocked: true,
   };
   return {

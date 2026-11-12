@@ -326,7 +326,7 @@ function canHandOffFromEnding(session: PlaybackSessionState, now: number): boole
   if (phase.kind !== 'ending-wait' || session.source.kind !== 'rewind') {
     return false;
   }
-  if (phase.origin !== 'rewind' || !phase.atEnd || phase.recordOnEnd || phase.blocked) {
+  if (phase.origin !== 'rewind' || !phase.atEnd || phase.closeOnEnd || phase.blocked) {
     return false;
   }
   return tailOpen(session, now);
@@ -487,7 +487,7 @@ function revertEndedHandoff(
   return {
     state: {
       ...state,
-      phase: { kind: 'ending-wait', origin, atEnd: false, recordOnEnd: false },
+      phase: { kind: 'ending-wait', origin, atEnd: false, closeOnEnd: false },
       endingSince: session.endingSince ?? now,
       offer: null,
     },
