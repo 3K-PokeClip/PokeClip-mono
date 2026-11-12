@@ -354,6 +354,6 @@ plan 요지를 kty 가 보고 승인합니다.
 | `nlb_{dns_name,zone_id,sg_id}` | records(ingest 별칭) · media(이그레스 → Media) |
 | `target_group_arns`(ingest · live · control · playback) | media — Media 상자 등록 |
 | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | media — 상자 nginx 포트 · 헬스 경로(대상 그룹과 같은 값) |
-| `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-408) · media(`service_sg_ids.auth` — Media ↔ auth). chat 두 서비스의 SG 는 이 루트 안에서만 써서 내보내지 않음 |
-| `service_ports`(auth · clip · next — `services` 의 포트) | media — Media ↔ auth 규칙의 포트(kty 결정 2026-10-25 (나)) |
+| `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-408) · media(`service_sg_ids.auth` · `.clip` — Media ↔ auth · Media ↔ clip 만료 창구, POK-551). chat 두 서비스의 SG 는 이 루트 안에서만 써서 내보내지 않음 |
+| `service_ports`(auth · clip · next — `services` 의 포트) | media — Media ↔ auth 규칙의 포트(kty 결정 2026-10-25 (나)) · Media ↔ clip 규칙의 포트와 `clip_internal_url` 포트 교차 검증(POK-551) |
 | `clip_execution_role_arn` | 런타임 2단 |
