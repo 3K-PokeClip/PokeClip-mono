@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 렌더 주문의 컷 판정을 장부에서 읽어 돌린다(POK-196 · 설계 r7 9.1). 판정 자체는 {@link CutPlanner} 한 곳이고, 여기는 판정 입력을
@@ -56,8 +57,11 @@ public class LedgerCutPlanner {
      * 편집기 소리 주소 API 의 끝 소리 확보(설계 r7 9.6) — {@link #plan} 과 같은 회차 고르기 · 회차 행 · 방송 상태 · 장부 이웃으로
      * {@link CutPlanner#audioCaptureOf} 를 부른다. 같은 창을 컷으로 받은 렌더 주문과 같은 판정이다(계약 6-6-8 8항).
      *
-     * <p>회차 완결은 판정이 물을 때만 읽는다(범위 갈래 · 확보 후보가 장부에 없고 방송 중일 때) — 왕복은 회차 고르기 1 · 회차 행 1 ·
-     * 확보 후보 0–1 · 회차 완결 0–1 이다.
+     * <p>회차 완결은 판정이 물을 때만 읽는다(범위 갈래 · 확보 후보가 장부에 없고 방송 중일 때) — 그래서 회차 행 <b>뒤</b>에 읽힌다.
+     * 완결이 참으로 나오면 세션 목록 · 회차 행을 다시 읽어 다시 판정한다(R28 · kty 결정 (나)) — 두 읽기 사이에 생산자가 마지막 행을
+     * 넣고 회차를 닫았으면 옛 행 목록 + 완결 참이 확보할 수 있는 창을 {@code SKIPPED} 로 접기 때문이다. 닫힌 회차는 더 바뀌지
+     * 않아 다시 읽은 판정이 마지막이다. 왕복은 회차 고르기 1 · 회차 행 1 · 확보 후보 0–1 · 회차 완결 0–1 · (완결 참이면) 회차
+     * 고르기 · 회차 행 하나씩 더 · 확보 후보 0–1 이다.
      *
      * @param fromMs 창 시작(목록 PDT 축 epoch ms)
      * @param toMs 창 끝(반개) — 컷 끝으로 본다
@@ -65,10 +69,19 @@ public class LedgerCutPlanner {
     public CutPlanner.AudioCapture audioCapture(Broadcast broadcast, long fromMs, long toMs, Instant now) {
         Optional<RoundRows.Round> round = rounds.roundOf(broadcast);
         List<RoundRow> rows = round.map(segments::findRoundRows).orElse(List.of());
-        return CutPlanner.audioCaptureOf(rows, fromMs, toMs,
-                () -> round.orElse(null) instanceof RoundRows.Members
-                        && rounds.roundComplete(broadcast.getStreamId()),
-                broadcast.getStatus() != BroadcastStatus.LIVE, now, ledgerOf(broadcast));
+        boolean ended = broadcast.getStatus() != BroadcastStatus.LIVE;
+        AtomicBoolean completeSeen = new AtomicBoolean();
+        CutPlanner.AudioCapture first = CutPlanner.audioCaptureOf(rows, fromMs, toMs, () -> {
+            boolean complete = round.orElse(null) instanceof RoundRows.Members
+                    && rounds.roundComplete(broadcast.getStreamId());
+            completeSeen.set(complete);
+            return complete;
+        }, ended, now, ledgerOf(broadcast));
+        if (!completeSeen.get()) {
+            return first;
+        }
+        List<RoundRow> settled = rounds.roundOf(broadcast).map(segments::findRoundRows).orElse(List.of());
+        return CutPlanner.audioCaptureOf(settled, fromMs, toMs, () -> true, ended, now, ledgerOf(broadcast));
     }
 
     /** 판정이 정한 행에 대해서만 묻는 장부 이웃. 둘 다 회차로 자르지 않는다(계약 6-6-8 · 설계 r7 9.4). */

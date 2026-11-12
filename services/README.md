@@ -2699,6 +2699,10 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
     - 장부 왕복: 회차 고르기 1 · 회차 귀속 행 1(렌더 주문과 같은 읽기 — 규모는 `LedgerCutPlannerScaleTest`) · `segments` 목록 1 ·
       확보 후보 0–1(판 2 는 거리 조건이 참일 때 · 판 NULL 은 늘) · 회차 완결 0–1(물을 때만 — 범위 갈래 · 확보 후보가 장부에 없고
       방송 중). 방송 행 · 만료 판정은 JPA 질의다.
+    - **회차 완결이 참으로 나오면 다시 판정한다**(POK-196 · kty 결정 R28 (나)). 완결은 회차 행 뒤에 묻기 때문에, 그 사이 생산자가 마지막
+      행을 넣고 회차를 닫았으면 옛 행 목록 + 완결 참이 확보할 수 있는 창을 `skipped`로 접는다. 그래서 완결이 참이면 세션 목록 · 회차 행을
+      다시 읽어 판정한다(그때만 회차 고르기 · 회차 행 · 확보 후보 왕복이 하나씩 더). 닫힌 회차는 더 바뀌지 않는다. 렌더 주문도 같은 까닭으로
+      완결이 참이면 세션 목록을 다시 고른다.
 - **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt audioCapture`.
 - 수명은 `pokeclip.render.segment-audio-url-ttl`(기본 `PT5M`, 0초 초과 7일 이하). 화면은 받자마자 내려받는다.
   조각 창고는 `SEGMENT_BUCKET`이고 주문줄(`RENDER_ENABLED`)과 같이 켜진다: 운영 역할에 조각 창고 `s3:GetObject`가 있어야 주소가 통한다.

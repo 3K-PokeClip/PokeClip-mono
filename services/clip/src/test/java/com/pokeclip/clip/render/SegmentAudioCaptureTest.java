@@ -6,6 +6,7 @@ import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.segment.CutDecision;
 import com.pokeclip.clip.segment.LedgerCutPlanner;
+import com.pokeclip.clip.segment.RoundRow;
 import com.pokeclip.clip.segment.RoundRows;
 import com.pokeclip.clip.segment.StreamSegmentReader;
 import com.pokeclip.clip.support.IntegrationTestSupport;
@@ -287,6 +288,38 @@ class SegmentAudioCaptureTest extends IntegrationTestSupport {
                         e -> assertThat(e.reason()).isEqualTo("broadcast_not_found"));
     }
 
+    /**
+     * R28(kty 결정 (나)) — 회차 행을 읽은 직후 생산자가 마지막 행과 다음 행을 넣고 회차를 닫으면, 옛 행 목록으로는 창 끝이 마지막
+     * 행 뒤(AfterLast)인데 완결이 참이라 {@code skipped} 가 나왔다(맞는 답은 새 행 위 {@code attached}). 완결이 참이면 세션 목록 ·
+     * 회차 행을 다시 읽어 판정한다 — 닫힌 회차는 더 바뀌지 않는다. 렌더 주문의 같은 처분(B2)과 짝이다.
+     */
+    @Test
+    void 행을_읽은_뒤_마지막_행과_완결이_들어오면_다시_읽어_확보한다() throws Exception {
+        방송(true);
+        seed.row(키, 1).wallAndPdt(0).session(방송).insert();
+        StreamSegmentReader racing = new StreamSegmentReader(jdbc) {
+            private boolean raced;
+
+            @Override
+            public List<RoundRow> findRoundRows(RoundRows.Round round) {
+                List<RoundRow> read = super.findRoundRows(round);
+                if (!raced) {
+                    raced = true;
+                    seed.row(키, 2).wallAndPdt(4_000).session(방송).insert();
+                    seed.row(키, 3).wallAndPdt(8_000).insert();
+                    seed.endSession(방송, true);
+                }
+                return read;
+            }
+        };
+
+        JsonNode root = mapper.readTree(json(service(racing, new LedgerCutPlanner(rounds, racing), at(100_000))
+                .issue(요청자, 방송, at(1_000).toEpochMilli(), at(6_000).toEpochMilli())));
+
+        assertThat(root.get("audioCapture").asString()).isEqualTo("attached");
+        assertThat(root.get("audioCaptureSegment").get("seq").asLong()).isEqualTo(3L);
+    }
+
     // ── 판정 전에 끝나는 갈래(C-B2 대응표) ─────────────────────────
 
     /**
@@ -426,7 +459,8 @@ class SegmentAudioCaptureTest extends IntegrationTestSupport {
 
     /**
      * 장부 왕복(C-B5 · R24) — 회차 고르기 1 · 회차 귀속 행 1 · 응답 목록 1 · 확보 후보 0–1(판 2 는 거리 조건이 참일 때 · 판 NULL 은
-     * 늘) · 회차 완결 0–1(확보 후보가 장부에 없고 방송 중일 때만 — 지연 평가). 방송 행은 JPA 라 이 측정기에 안 잡힌다.
+     * 늘) · 회차 완결 0–1(확보 후보가 장부에 없고 방송 중일 때만 — 지연 평가). 완결이 참이면 회차 고르기 · 회차 행 · 확보 후보를
+     * 한 번씩 더 읽는다(R28 다시 판정 · 거짓이면 그대로). 방송 행은 JPA 라 이 측정기에 안 잡힌다.
      */
     @Test
     void 장부_왕복은_후보가_있으면_넷이고_방송_중_후보가_없을_때만_다섯이다() {
@@ -443,6 +477,11 @@ class SegmentAudioCaptureTest extends IntegrationTestSupport {
         statements.set(0);
         service.issue(요청자, 방송, at(42_000).toEpochMilli(), at(45_000).toEpochMilli());
         assertThat(statements).as("방송 중 · 마지막 행이라 후보 없음 → 회차 완결을 묻는다").hasValue(5);
+
+        seed.endSession(방송, true);
+        statements.set(0);
+        service.issue(요청자, 방송, at(42_000).toEpochMilli(), at(45_000).toEpochMilli());
+        assertThat(statements).as("방송 중 · 회차 완결 참 → 회차 고르기 · 회차 행 · 확보 후보를 다시 읽는다").hasValue(8);
 
         끝낸다();
         statements.set(0);
