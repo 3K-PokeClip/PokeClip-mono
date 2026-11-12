@@ -1342,4 +1342,55 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
     expect(screen.getByRole('button', { name: '처음부터' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '재생' })).toBeNull();
   });
+
+  it('왼쪽 아래는 「지금 / 전체」 시간이다: 누르면 남은 시간, 다시 누르면 원래대로다(POK-518)', async () => {
+    const { container } = await renderVod();
+    listTwoHours();
+    sit(container, 600);
+
+    expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
+    const button = screen.getByRole('button', { name: '남은 시간 보기' });
+    expect(button).toHaveTextContent('10:00 / 2:00:00');
+    expect(button).toHaveAccessibleDescription('10:00 / 2:00:00');
+
+    fireEvent.click(button);
+    const remaining = screen.getByRole('button', { name: '재생 시간 보기' });
+    expect(remaining).toHaveTextContent('-1:50:00 / 2:00:00');
+    expect(remaining).toHaveAccessibleDescription('-1:50:00 / 2:00:00');
+
+    fireEvent.click(remaining);
+    expect(screen.getByRole('button', { name: '남은 시간 보기' })).toHaveTextContent(
+      '10:00 / 2:00:00',
+    );
+  });
+
+  it('시간 버튼 말풍선은 버튼 이름이다 — 단축키가 없어 이름만 뜬다(POK-518)', async () => {
+    await renderVod();
+    listTwoHours();
+
+    expect(screen.getByText('남은 시간 보기')).toHaveAttribute('aria-hidden', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: '남은 시간 보기' }));
+
+    expect(screen.getByText('재생 시간 보기')).toBeInTheDocument();
+  });
+
+  it('다시보기 끝에 닿으면 지금과 전체가 같고 남은 시간은 0이다(POK-518)', async () => {
+    const { container } = await renderVod();
+    listTwoHours();
+    const video = sit(container, 7_200);
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+
+    const button = screen.getByRole('button', { name: '남은 시간 보기' });
+    expect(button).toHaveTextContent('2:00:00 / 2:00:00');
+
+    fireEvent.click(button);
+    expect(screen.getByRole('button', { name: '재생 시간 보기' })).toHaveTextContent(
+      '-0:00 / 2:00:00',
+    );
+  });
 });

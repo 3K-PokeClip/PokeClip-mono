@@ -55,7 +55,7 @@ export type PastBlockReason =
 
 /** 부모(LiveDashboard)가 카드 누름을 어느 길로 보낼지 — 갈래 넷 */
 export type PastCardMode =
-  /** 라이브 · B(세션을 연 화면) · 명부 상태 모름 — 지금 길 그대로 */
+  /** 라이브 · 열린 세션(B) · 명부 상태 모름 — 지금 길 그대로. past 로 닫힌 B 는 아래 갈래를 A 와 같이 탄다(POK-547) */
   | { kind: 'notPast' }
   /** A · 다시보기가 곧 선다 — 누른 자리를 받아 둔다 */
   | { kind: 'waiting' }

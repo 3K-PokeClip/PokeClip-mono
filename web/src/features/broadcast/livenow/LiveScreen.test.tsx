@@ -6562,12 +6562,12 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
   });
 
   /** 회차별 경로의 다시보기 답(B — 이 회차의 /vod 목록 · 라이브 영상 0초부터 지금까지) */
-  const B_VOD_URL = `http://control.test/vod/${STREAM_ID}/${STREAM_ID}/index.m3u8`;
+  const bVodUrl = `http://control.test/vod/${STREAM_ID}/${STREAM_ID}/index.m3u8`;
   function bRoundVod() {
     return {
       ready: true,
       mode: 'vod',
-      url: B_VOD_URL,
+      url: bVodUrl,
       firstPdt: new Date(MEDIA_ZERO).toISOString(),
       headPdt: new Date(NOW).toISOString(),
     };
@@ -6611,6 +6611,30 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     return view;
   }
 
+  // 라이브 · B(세션을 연 화면)의 카드는 지금 길이다(POK-546 T4-11 · 설계 3절 「라이브 · B 가 모두 notPast 인 근거」). 무변경 대조
+  // it 는 기준 브랜치에도 있는 관측(알림 · 재생기 호출)만 보고, 재생기 층이 정한 갈래는 아래 새 동작 it 가 본다
+  it('B — 세션이 열린 채 명부가 ended 로 바뀐 화면에서 카드를 누르면 지금 길이다(받아 두지 않고 다시보기 알림도 없다)', async () => {
+    // 재생기가 읽는 목록은 운영처럼 마지막 28초다: 실제 시각으로 옮기면 범위 밖이다. 끝난 방송의 지금 길은 실제 시각으로 옮기지
+    // 않고 경과 시계로 옮긴다(범위 밖 알림 없음)
+    hlsFake.sliding = true;
+    await renderLive();
+    await liveListLoaded();
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+    const loadsBefore = hlsFake.loads;
+
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
+    fireEvent.click(cardThumb(4));
+    await settle();
+
+    expect(screen.queryByText(OUT_OF_RANGE)).toBeNull();
+    expect(screen.queryByText(/다시보기/)).toBeNull();
+    expect(hlsFake.loads).toBe(loadsBefore);
+  });
+
   /** 끝남 대기가 회차별 답(round)으로 닫힌다 — 끝에 닿은 시청자의 종국(POK-547). 명부는 아직 live 다 */
   async function closeToPast(round: Record<string, unknown> | null = roundNotReady('ended')) {
     const view = await endingAtEnd();
@@ -6650,7 +6674,7 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
   }
 
   describe('T4-1 끝남 대기 종국 → 세션을 닫고 지난 방송 판정으로 — /playback 0 · 라이브 재부착 0(POK-547)', () => {
-    const FINALS: Array<[string, Record<string, unknown> | null, number, string]> = [
+    const finals: Array<[string, Record<string, unknown> | null, number, string]> = [
       ['회차별 ended', roundNotReady('ended'), 10_000, '다시보기가 없어요'],
       ['재접속 대기(360초) 뒤 회차별 404', null, 370_000, '다시보기가 없어요'],
       [
@@ -6661,7 +6685,7 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
       ],
     ];
 
-    it.each(FINALS)('%s → 닫고 지난 방송 판정의 안내를 띄운다', async (_, round, waitMs, note) => {
+    it.each(finals)('%s → 닫고 지난 방송 판정의 안내를 띄운다', async (_, round, waitMs, note) => {
       await endingAtEnd();
       control.round = round;
       const loadsBefore = hlsFake.loads;
@@ -6723,7 +6747,7 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     await nextRoundPoll();
     await vodListed(vodList(MEDIA_ZERO, NOW));
     expect(playerSources.at(-1)?.vod).toBe(true);
-    expect(hlsFake.sources.at(-1)).toBe(B_VOD_URL);
+    expect(hlsFake.sources.at(-1)).toBe(bVodUrl);
     expect(screen.queryByText(/다시보기를 준비하고 있어요/)).toBeNull();
     expect(lastPastCard()?.kind).toBe('playable');
 
@@ -6781,7 +6805,30 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     expect(timeBaseLog.at(-1)).toBeNull();
   });
 
-  it('T4-5 · T4-7 닫힌 뒤 명부가 live → ended 로 바뀌어도 판정을 처음부터 다시 하지 않고 재생기를 다시 붙이지 않는다 · 채팅은 지난 방송이다', async () => {
+  it('T4-5 명부 ended 인 B 가 끝에 닿아 past 로 닫혀 다시보기를 확인하는 동안 채팅 기다림을 닫힌 때부터 다시 센다 — 마지막 메시지를 먼저 보이지 않는다', async () => {
+    mediaCalls.configured = true;
+    await renderLive();
+    await liveListLoaded();
+    await liveEndlisted();
+    control.round = roundNotReady('ended');
+    await advance(10_000);
+    server.liveEnded = true;
+    await advance(61_000);
+    expect(chatModes.at(-1)).toBe('ended');
+    // 회차 답이 아직 없다(mode null) — 닫힌 뒤 지난 방송 판정은 확인 중이다
+    control.round = roundNotReady(null);
+
+    await liveClosed();
+
+    expect(screen.getByText('다시보기를 확인하고 있어요')).toBeInTheDocument();
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+    await advance(9_999);
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+    await advance(1);
+    expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
+  });
+
+  it('T4-7 닫힌 뒤 명부가 live → ended 로 바뀌어도 판정을 처음부터 다시 하지 않고 재생기를 다시 붙이지 않는다 · 채팅은 지난 방송이다', async () => {
     await closeToPast();
     expect(chatModes.at(-1)).toBe('live');
     const roundAsks = () => control.calls.filter((p) => p.includes('/rounds/')).length;
@@ -6828,30 +6875,6 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
     expect(screen.queryByText(/확인하고 있어요/)).toBeNull();
     expect(mediaCalls.spans).toEqual([]);
-  });
-
-  // 라이브 · B(세션을 연 화면)의 카드는 지금 길이다(POK-546 T4-11 · 설계 3절 「라이브 · B 가 모두 notPast 인 근거」). 무변경 대조
-  // it 는 기준 브랜치에도 있는 관측(알림 · 재생기 호출)만 보고, 재생기 층이 정한 갈래는 아래 새 동작 it 가 본다
-  it('B — 세션이 열린 채 명부가 ended 로 바뀐 화면에서 카드를 누르면 지금 길이다(받아 두지 않고 다시보기 알림도 없다)', async () => {
-    // 재생기가 읽는 목록은 운영처럼 마지막 28초다: 실제 시각으로 옮기면 범위 밖이다. 끝난 방송의 지금 길은 실제 시각으로 옮기지
-    // 않고 경과 시계로 옮긴다(범위 밖 알림 없음)
-    hlsFake.sliding = true;
-    await renderLive();
-    await liveListLoaded();
-    server.liveEnded = true;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(61_000);
-    });
-    await settle();
-    const loadsBefore = hlsFake.loads;
-
-    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
-    fireEvent.click(cardThumb(4));
-    await settle();
-
-    expect(screen.queryByText(OUT_OF_RANGE)).toBeNull();
-    expect(screen.queryByText(/다시보기/)).toBeNull();
-    expect(hlsFake.loads).toBe(loadsBefore);
   });
 
   it('끝남 대기 중 같은 방송이 이어지면(이어짐 증거) 사람 조작 없이 라이브를 다시 세운다(R21 · R53)', async () => {

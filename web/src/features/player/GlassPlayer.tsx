@@ -41,9 +41,9 @@ import {
 import { useSimulatedChat } from './useSimulatedChat';
 
 // 리퀴드 글래스 라이브 플레이어 (시안 "영상 플레이어 글래스").
-// 고르는 순서: session(라이브 · 되감기 · 끝남 대기 재생 세션, useLiveRewindPlayback — POK-200 M5) → vod(끝난 뒤 들어온 화면의
-// 회차 다시보기, useVodPlayback — POK-546 · POK-547) → src(hls.js 실재생, useHlsPlayback) → simulate(목업,
-// usePlayerSimulation — 스토리북·시험용) → 그 밖엔 「영상 신호 없음」 자리 표시(NoSignalGlassPlayer).
+// 고르는 순서: session(라이브 · 되감기 · 끝남 대기 재생 세션, useLiveRewindPlayback — POK-200 M5) → vod(끝난 뒤 들어온
+// 화면 · past 로 닫힌 화면의 회차 다시보기, useVodPlayback — POK-546 · POK-547) → src(hls.js 실재생, useHlsPlayback) →
+// simulate(목업, usePlayerSimulation — 스토리북·시험용) → 그 밖엔 「영상 신호 없음」 자리 표시(NoSignalGlassPlayer).
 // 실제 화면에서 영상이 없을 때 흐르는 진행바·시간·채팅을 지어내지 않는다(POK-251).
 // 훅 규칙상 조건부 호출이 안 되므로 컴포넌트 단위로 갈라 태운다. Body는 어느 쪽인지 모른다.
 //

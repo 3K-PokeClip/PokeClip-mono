@@ -118,8 +118,8 @@ export type SessionPhase =
   | { kind: 'vod' };
 
 /**
- * 세션을 닫는 사유. past = 다시보기가 끝내 없다고 정해져 지난 방송 판정으로 넘김(POK-547) · go-live = 「라이브 보기」 ·
- * left = 화면 이탈 · 다른 방송 선택
+ * 세션을 닫는 사유. past = 끝남 대기가 종국(회차 ended · 재접속 대기 뒤 404 · 20분 시한 · 마지막 확인 비 vod)에 닿아
+ * 지난 방송 판정으로 넘김(POK-547) · go-live = 「라이브 보기」 · left = 화면 이탈 · 다른 방송 선택
  */
 export type SessionClose = 'past' | 'go-live' | 'left';
 

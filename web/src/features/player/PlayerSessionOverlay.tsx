@@ -26,6 +26,8 @@ interface PlayerSessionOverlayProps {
 }
 
 function Actions({ view, onAction }: PlayerSessionOverlayProps) {
+  // 제안이 없으면 묶음째 뺀다 — 빈 묶음도 덮개의 간격을 받아 문구를 위로 민다
+  if (view.actions.length === 0) return null;
   return (
     <div className={styles.actions}>
       {view.actions.map((which) => (

@@ -153,8 +153,8 @@ function samePastCardMode(a: PastCardMode, b: PastCardMode): boolean {
 }
 
 /**
- * 끝난 뒤 들어온 화면(A)의 다시보기 상태 → 녹화 조회 결과 꼴(설계 3절 대응표). 채팅은 확인 중(pending)만 CHAT_WAIT_MS 까지 기다리고,
- * 찾음(found)은 화면에 붙은 위치를 한 번 받은 때(showing)다
+ * 지난 방송 판정 화면(끝난 뒤 들어온 화면 A · past 로 닫힌 화면 B)의 다시보기 상태 → 녹화 조회 결과 꼴(설계 3절 대응표).
+ * 채팅은 확인 중(pending)만 CHAT_WAIT_MS 까지 기다리고, 찾음(found)은 화면에 붙은 위치를 한 번 받은 때(showing)다
  */
 function pastLookupKind(
   vod: PastVodState,
@@ -302,30 +302,30 @@ const LivePlayer = memo(function LivePlayer({
   onToggleChatPanel: () => void;
   /** 전체 화면의 수동 마킹. 영상 아래 줄이 안 보이는 자리라 재생 막대가 받는다 */
   mark: PlayerMark;
-  /** 다시보기(녹화 · 회차 다시보기)가 서면 이 자리(방송 기준 초)부터 튼다. 다시보기가 서기 전에 고른 시점이다 */
+  /** 회차 다시보기가 서면 이 자리(방송 기준 초)부터 튼다. 다시보기가 서기 전에 고른 시점이다 */
   startAtSeconds: number | null;
   /**
-   * 다시보기가 시작 자리를 가져갔다 — 녹화는 플레이어가 서며 읽었고, 회차 다시보기는 첫 목록 뒤 그 자리로 옮겼다(POK-546). 부른 쪽이
+   * 다시보기가 시작 자리를 가져갔다 — 회차 다시보기가 첫 목록 뒤 그 자리로 옮겼다(POK-546). 부른 쪽이
    * 비운다
    */
   onStartApplied: () => void;
   /**
-   * 카드 누름을 보낼 갈래(POK-546 — 설계 3절 카드 표). 끝난 뒤 들어온 화면인지 · 다시보기 상태 · 출입증 · 재생기 국면은 모두 이
-   * 층에 있어 하나로 합쳐 올린다. 이 층이 내려가면 지금 길(notPast)을 올린다
+   * 카드 누름을 보낼 갈래(POK-546 — 설계 3절 카드 표). 지난 방송 판정 화면(A · past 로 닫힌 B)인지 · 다시보기 상태 · 출입증 ·
+   * 재생기 국면은 모두 이 층에 있어 하나로 합쳐 올린다. 이 층이 내려가면 지금 길(notPast)을 올린다
    */
   onPastCardMode: (mode: PastCardMode) => void;
   /**
-   * 녹화 조회 결과가 바뀌었다. 카드를 누를 때의 알림이 플레이어와 같은 말을 하고(없음), 지난 방송 채팅이 녹화가 자리를 알려 올
-   * 때까지 기다리게(확인 중·찾음) 부른 쪽에 알린다
+   * 다시보기 상태(녹화 조회 결과 꼴로 접은 값 — pastLookupKind)가 바뀌었다. 카드를 누를 때의 알림이 플레이어와 같은 말을 하고(없음),
+   * 지난 방송 채팅이 다시보기가 자리를 알려 올 때까지 기다리게(확인 중·찾음) 부른 쪽에 알린다
    */
   onRecordingLookup: (kind: RecordingLookup['kind']) => void;
   /**
-   * 녹화 조회를 새로 시작했다(끝난 방송으로 밝혀졌거나 끝 시각·기준점·영상 키가 바뀜). 끝난 뒤 들어온 화면(A)은 회차 경로를 묻기
-   * 시작할 때와 회차 다시보기 소스가 설 때 부른다(POK-546). 조회 결과는 확인 중 그대로라 onRecordingLookup이 다시 불리지 않는다:
-   * 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 이 조회부터 다시 센다
+   * 다시보기 확인을 새로 시작했다. 지난 방송 판정 화면(A · past 로 닫힌 B)이 회차 경로를 묻기 시작할 때(방송|영상 키가 바뀌어
+   * 다시 물을 때 포함)와 회차 다시보기 소스가 설 때 부른다(POK-546 · POK-547). 결과는 확인 중 그대로라 onRecordingLookup이 다시
+   * 불리지 않는다: 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 이 확인부터 다시 센다
    */
   onRecordingLookupStart: () => void;
-  /** 녹화의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
+  /** 회차 다시보기의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
   onPlaybackPosition: (seconds: number) => void;
   /** 라이브 재생기의 자리(실제 시각·실시간에서 몇 초 뒤)가 바뀌었다. 되감으면 라이브 채팅이 그 시각까지의 줄만 보인다(POK-326) */
   onLivePosition: (position: LivePosition | null) => void;
@@ -335,8 +335,8 @@ const LivePlayer = memo(function LivePlayer({
    */
   onSeek: () => void;
   /**
-   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 녹화(끝난 뒤 들어온 화면은 회차 다시보기 — POK-546)가 서 있고 그
-   * 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는 소스(녹화 · 회차 다시보기)에서 읽는다(계획 검증 m11): 녹화 조회 결과와
+   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 회차 다시보기(POK-546 · POK-547)가 서 있고 그
+   * 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는 소스(회차 다시보기)에서 읽는다(계획 검증 m11): 다시보기 상태와
    * 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
    */
   onMarkableChange: (markable: boolean) => void;
@@ -445,8 +445,8 @@ const LivePlayer = memo(function LivePlayer({
       void ensureLiveAccess(liveStreamId, mediaKey ?? liveStreamId).then((result) => {
         if (!alive) return;
         if (result.kind === 'expired') {
-          // 다시 받아도 같다: 더 묻지 않는다. 보던 녹화가 있으면 내린다: 준비 표시를 비우면 녹화 효과가 찾은 녹화를 치운다
-          // (남기면 녹화가 안내보다 앞서 쿠키가 끝날 때까지 계속 돈다, PR #348 codex)
+          // 다시 받아도 같다: 더 묻지 않는다. 보던 다시보기가 있으면 내린다: 준비 표시를 비우면 다시보기 소스가 빠진다
+          // (남기면 영상이 안내보다 앞서 쿠키가 끝날 때까지 계속 돈다, PR #348 codex)
           setAccessExpiredFor(key);
           setAccessReadyFor(null);
           setCookieFor(null);
@@ -757,29 +757,29 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     const timer = window.setTimeout(() => setChatWaitOver(true), CHAT_WAIT_MS);
     return () => window.clearTimeout(timer);
   }, [recordingLookup, lookupStarts]);
-  // 끝난 뒤 들어온 화면(A — 갈래가 notPast 아님)은 재생 서버 주소와 무관하게 다시보기가 곧 설 수 있는 동안 기다린다: 다시보기는
-  // 녹화 재생 서버를 쓰지 않는다(계획 4절 D). 이 갈래가 결과를 바꾸는 것은 재생 서버 주소가 없는 구성(로컬 등)뿐이다. 주소가 있는
-  // 구성(prod)은 갈래 없이도 지금처럼 녹화 확인 한도까지 기다린다. 제어면 주소가 없으면 그 상태가 「물을 수 없음」으로 와 기다리지
-  // 않는다. 보관 기간이 지난 방송(410)은 다시보기를 묻지 않아 지금 그대로 재생 서버 주소로 가른다(설계 3절 표): 갈래만 보면 재생
-  // 서버 주소가 없는 구성에서 채팅이 10초 「확인 중」이었다(c4 리뷰 F1)
+  // 지난 방송 판정 화면(A · past 로 닫힌 B — 갈래가 notPast 아님)은 재생 서버 주소와 무관하게 다시보기가 곧 설 수 있는 동안
+  // 기다린다: 다시보기는 녹화 재생 서버를 쓰지 않는다(계획 4절 D). 이 갈래가 결과를 바꾸는 것은 재생 서버 주소가 없는 구성(로컬
+  // 등)뿐이다. 주소가 있는 구성(prod)은 갈래 없이도 확인 중 기다림(CHAT_WAIT_MS)까지 기다린다. 제어면 주소가 없으면 그 상태가
+  // 「물을 수 없음」으로 와 기다리지 않는다. 보관 기간이 지난 방송(410)은 다시보기를 묻지 않아 지금 그대로 재생 서버 주소로
+  // 가른다(설계 3절 표): 갈래만 보면 재생 서버 주소가 없는 구성에서 채팅이 10초 「확인 중」이었다(c4 리뷰 F1)
   const pastAwaits =
     pastCard.kind !== 'notPast' && !(pastCard.kind === 'blocked' && pastCard.reason === 'expired');
   const awaitPlayhead =
     (pastAwaits || playbackConfigured()) &&
     recordingMayPlay(recordingLookup) &&
     !(recordingLookup === 'pending' && chatWaitOver);
-  // 채팅 창이 그 시점(맨 아래)을 따라가는 횟수. 사람이 옮긴 것(영상 없이 누른 카드, 녹화의 시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤
-  // 처음부터, 채팅이 따르는 동안의 라이브 시크)과 라이브 채팅이 영상을 따르기 시작하거나 멈춘 것이다(POK-326): 재생으로 흐르거나
-  // 녹화 틈을 넘는 것은 옮긴 것이 아니다(커서가 튀었는지로 짐작해 틈을 넘을 때도 읽던 자리를 잃었다, 리뷰 1라운드)
+  // 채팅 창이 그 시점(맨 아래)을 따라가는 횟수. 사람이 옮긴 것(영상 없이 누른 카드, 다시보기의 시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤
+  // 처음부터, 채팅이 따르는 동안의 라이브 시크)과 라이브 채팅이 영상을 따르기 시작하거나 멈춘 것이다(POK-326): 재생으로 흐르는
+  // 것은 옮긴 것이 아니다(커서가 튀었는지로 짐작하면 녹화 틈을 넘을 때도 읽던 자리를 잃었다, 리뷰 1라운드)
   const [chatJump, setChatJump] = useState(0);
   const bumpChatJump = useCallback(() => setChatJump((n) => n + 1), []);
-  // 녹화를 찾으면 채팅이 그 녹화의 재생 위치로 통째로 바뀐다(방송 끝 줄 → 0초 줄). 위로 올려 읽던 자리가 남으면 엉뚱한 줄이
-  // 보이므로 그 시점(맨 아래)을 따라간다: 「묻지 못함」·「없음」 뒤 1분 재조회로 찾을 때 그랬다(리뷰 3라운드)
+  // 다시보기가 화면에 붙으면(찾음) 채팅이 그 재생 위치로 통째로 바뀐다(방송 끝 줄 → 0초 줄). 위로 올려 읽던 자리가 남으면
+  // 엉뚱한 줄이 보이므로 그 시점(맨 아래)을 따라간다: 확인 · 준비 중 뒤 회차 경로 폴링으로 늦게 설 때 그렇다(리뷰 3라운드)
   useEffect(() => {
     if (recordingLookup === 'found') bumpChatJump();
   }, [recordingLookup, bumpChatJump]);
-  // 재생 위치가 녹화가 알린 자리인가(영상 없이 누른 카드 시각이 아니라). 끝 시각·기준점이 고쳐져 녹화를 다시 찾으면 그 녹화가
-  // 알린 자리는 버린다: 남기면 찾는 동안 옛 녹화의 자리를 보이고, 끝내 못 찾으면 방송 끝으로 돌아가지 않고 거기에 멈췄다
+  // 재생 위치가 다시보기가 알린 자리인가(영상 없이 누른 카드 시각이 아니라). 다시보기가 내려 확인 중 · 없음으로 돌아가면 그
+  // 다시보기가 알린 자리는 버린다: 남기면 확인하는 동안 옛 자리를 보이고, 끝내 서지 않으면 방송 끝으로 돌아가지 않고 멈췄다
   // (PR #230 codex). 카드 시각은 남긴다: 영상이 없으면 채팅은 누른 카드 시각까지에서 멈춘다
   const playheadFromRecording = useRef(false);
   useEffect(() => {
@@ -872,9 +872,9 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     return pinCache.current.cards;
   }, [highlights]);
 
-  // 녹화는 방송을 연 뒤에 찾는다. 그 전에 고른 시점은 옮길 플레이어가 없어(자리 표시) 그냥 사라지고, 뒤늦게 선 녹화는
-  // 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 녹화의 시작 위치로 넘긴다(QA 2026-10-11 실기동).
-  // 녹화가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 녹화가 다시 설 때 오래전 카드로 튄다
+  // 회차 다시보기는 방송을 연 뒤 회차 경로 답으로 선다. 그 전에 고른 시점은 옮길 플레이어가 없어(자리 표시) 그냥 사라지고,
+  // 뒤늦게 선 다시보기는 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 다시보기의 시작 위치(startAtSeconds)로
+  // 넘긴다(QA 2026-10-11 실기동). 다시보기가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 다시보기가 다시 설 때 오래전 카드로 튄다
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   // 라이브에서 고른 시점은 남기지 않는다. 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 고른 시점이 아니라 재생기가
   // 알린 자리(되감은 영상의 시각, POK-326)를 따라, 남겨 두면 방송이 끝난 뒤 녹화는 처음부터인데 채팅만 그 카드에 묶이거나
@@ -958,8 +958,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     },
     [pastCard, seekPast, live, cardBase, followsPlayhead, bumpChatJump],
   );
-  // 녹화가 흐르는 대로 채팅에 알린다: 지난 방송 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다(POK-324).
-  // 녹화는 끝난 방송에만 서므로 라이브 채팅은 영향이 없다
+  // 다시보기가 흐르는 대로 채팅에 알린다: 지난 방송 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다(POK-324).
+  // 회차 다시보기 재생기만 부른다 — 라이브 재생기의 자리는 handleLivePosition 이 받는다
   const handlePlaybackPosition = useCallback((seconds: number) => {
     playheadFromRecording.current = true;
     publishLiveData({ playheadMs: seconds * 1000, playheadFromCard: false });
@@ -994,7 +994,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     },
     [bumpChatJump],
   );
-  // 사람이 옮겼다. 녹화는 늘 채팅 창이 그 시점을 따라간다(POK-324). 라이브는 채팅이 영상을 따르는 동안만이다: 따르지
+  // 사람이 옮겼다. 다시보기는 늘 채팅 창이 그 시점을 따라간다(POK-324). 라이브는 채팅이 영상을 따르는 동안만이다: 따르지
   // 않으면(실시간 근처, 시작 시각을 모름, 목록에 시각 표시가 없음) 채팅은 그대로라 위로 올려 읽던 자리를 지킨다(리뷰 2라운드).
   // 따르기가 켜지거나 꺼지는 시크는 handleLivePosition이 끈다
   const handlePlayerSeek = useCallback(() => {
