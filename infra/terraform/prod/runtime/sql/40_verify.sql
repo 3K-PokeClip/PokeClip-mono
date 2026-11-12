@@ -85,6 +85,9 @@
 --                                   있다
 --   check:<PDT CHECK>               PDT CHECK 넷(stream_segments)과 게이트 CHECK 셋(stream_timing_gate)이 제 표에 그
 --                                   이름의 CHECK 로 있다 — 정의 본문은 위 인덱스와 같은 까닭으로 보지 않는다
+--   seed_row:stream_expiry_switch   만료 끄기 스위치 표(POK-551)에 씨앗 행이 있다. 마스터는 행을 읽지 못하므로 이
+--                                   단언만 끝에서 SET ROLE media_owner 로 읽는다. 값(enabled)은 보지 않는다 — 켜고
+--                                   끄는 것은 운영 몫이다. 표 · 소유자 · 권한은 owner:<표> · privilege:<…> 가 본다
 --
 -- advisory 단언 둘은 사이드카 컷오프 잠금(media/internal/index/store.go 의 lockCutoffStreamSQL)과 PDT 회차 개시의 게이트
 -- 공유 잠금(열쇠 pc_timing_gate — 설계 r7 9.3)의 전제다.
@@ -173,7 +176,7 @@ BEGIN
     tables(t) AS (
         VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps'),
                ('stream_seq_floors'), ('broadcast_lifecycle_outbox'),
-               ('stream_edge_bounds'), ('stream_timing_gate')
+               ('stream_edge_bounds'), ('stream_timing_gate'), ('stream_expiry_switch')
     ),
     -- M6 장부 열(ledger_column:<표>.<열>).
     ledger_columns(t, c) AS (
@@ -256,6 +259,7 @@ BEGIN
                ('media_indexer', 'stream_edge_bounds', 'UPDATE'),
                ('media_indexer', 'stream_edge_bounds', 'DELETE'),
                ('media_indexer', 'stream_timing_gate', 'SELECT'),
+               ('media_indexer', 'stream_expiry_switch', 'SELECT'),
                ('media_janitor', 'stream_segments', 'SELECT'),
                ('media_janitor', 'stream_sessions', 'SELECT'),
                ('media_janitor', 'stream_cutoffs', 'SELECT'),
@@ -538,5 +542,18 @@ BEGIN
         RAISE EXCEPTION 'verify failed: %', pg_catalog.array_to_string(failed, ', ');
     END IF;
 END $do$;
+
+-- 만료 끄기 스위치의 씨앗 행(seed_row:stream_expiry_switch). 위 블록이 표의 존재 · 소유자를 이미 단언했다. 행이 없으면
+-- 사이드카는 끔으로 읽어 지우지 않지만, 손 SQL 의 UPDATE 로 켤 수 없다. 읽기만 하고 RESET ROLE 로 돌아온다.
+SET ROLE media_owner;
+
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.stream_expiry_switch) THEN
+        RAISE EXCEPTION 'verify failed: seed_row:stream_expiry_switch';
+    END IF;
+END $do$;
+
+RESET ROLE;
 
 SELECT 'VERIFY OK' AS verify;

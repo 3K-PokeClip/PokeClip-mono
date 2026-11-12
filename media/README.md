@@ -374,8 +374,24 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
 
     지금 prod 에는 `CLIP_INTERNAL_URL` 을 넣는 공급 경로가 없다
     (`infra/media-host/bin/start-media.sh` 가 상자 스위치 파일
-    `sidecar.env` 에 `PLAYBACK_ROUND_KEYS` 한 줄만 받는다). prod 공급 경로와
-    끄기 스위치는 POK-551 의 남은 몫이다.
+    `sidecar.env` 에 `PLAYBACK_ROUND_KEYS` 한 줄만 받는다). prod 공급 경로는
+    POK-551 의 남은 몫이다.
+*   **끄기 스위치 — DB 한 행(POK-551):** 위 조건으로 켜진 만료도 장부 표
+    `stream_expiry_switch` 의 `enabled` 가 참일 때만 지운다. 씨앗 행은
+    끔이라 배포만으로는 아무것도 지우지 않는다. 만료기는 회차 시작과
+    방송마다 이 행을 다시 읽는다. 그래서 켜고 끄는 데 재기동이 필요 없고,
+    끄면 방송 하나 안에 멈춘다. 멈춘 회차는 표시를 넘기지 않고, 꺼낸
+    재시도 방송은 집합에 되돌린다. 끔인 동안은 clip 창구도 부르지 않는다.
+    *   **읽지 못하면 끔:** 행 없음 · 표 없음 · 권한 없음 · 시간 초과는
+        모두 끔이다. 표가 없는 DB(이 표 전의 운영 SQL)에서도 사이드카는
+        뜨고 만료만 꺼진다 — 기동 필수 목록에 넣지 않았다.
+    *   **신호:** 값이 바뀔 때(기동 뒤 첫 읽기 포함) WARN
+        `expiry_switch value=0|1` 한 줄이 나온다. 읽기가 실패하기 시작할 때와
+        다시 될 때 ERROR `expiry_switch_read_failed`(`value=1` · `value=0`)
+        가 한 줄씩 나온다.
+    *   **바꾸는 쪽:** 사이드카(`media_indexer`)는 SELECT 만 갖는다. 켜고
+        끄는 것은 마스터가 `SET ROLE media_owner` 로 하는 손 SQL 이다.
+        절차는 런북 몫이다(POK-551 c5).
 *   **첫 적용 때 쓰기 정지:** M6 운영 SQL(`stream_schema.sql` ·
     `20_schema.sql`)의 인덱스는 `CREATE INDEX` 이고 `CONCURRENTLY` 가 아니다.
     처음 적용하거나 인덱스가 빠진 DB 에서는 인덱스를 만드는 동안 그 표의 쓰기가
@@ -1264,6 +1280,7 @@ GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer;
 GRANT SELECT ON stream_timing_gate TO media_indexer;
+GRANT SELECT ON stream_expiry_switch TO media_indexer;
 ```
 
 - **DELETE 는 M6 만료 · outbox 몫과 하한 원장(`stream_edge_bounds`) 몫

@@ -18,18 +18,24 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
-// fakeLedger 는 Ledger 의 시험 구현이다. 스트림마다 행 · 문서를 들고, 실패 · 무효 컷오프 · 미정 회차를 주입한다.
+// fakeLedger 는 Ledger 의 시험 구현이다. 스트림마다 행 · 문서를 들고, 실패 · 무효 컷오프 · 미정 회차 · 만료 스위치를
+// 주입한다.
 type fakeLedger struct {
-	mu        sync.Mutex
-	rows      map[string][]index.ExpiryRow
-	docs      map[string][]index.ExpiryDocument
-	invalid   map[string]bool
-	unsettled map[string]bool // 미룸 판정이 거짓인 스트림
-	marked    []string
-	deleted   map[string][]int64
-	markErr   error
-	deleteErr error
-	calls     []string // 걸음 순서(스트림:걸음)
+	mu          sync.Mutex
+	rows        map[string][]index.ExpiryRow
+	docs        map[string][]index.ExpiryDocument
+	invalid     map[string]bool
+	unsettled   map[string]bool // 미룸 판정이 거짓인 스트림
+	marked      []string
+	deleted     map[string][]int64
+	markErr     error
+	deleteErr   error
+	calls       []string // 걸음 순서(스트림:걸음) — 스위치 읽기는 걸음이 아니라 switchReads 가 센다
+	switchOff   bool     // 만료 스위치 끔(영값 = 켬 — 스위치를 보지 않는 시험은 그대로 돈다)
+	switchErr   error    // 스위치 읽기 실패(index.ReadExpirySwitch 처럼 끔과 함께 돌려준다)
+	switchReads int
+	// onStep 은 걸음을 적은 뒤 잠금을 쥔 채 부른다 — 시험이 걸음 사이에 스위치를 바꾼다. 잠금을 다시 잡지 않는다.
+	onStep func(l *fakeLedger, call string)
 }
 
 func newFakeLedger() *fakeLedger {
@@ -48,7 +54,27 @@ func (l *fakeLedger) put(stream string, n int) {
 }
 
 func (l *fakeLedger) step(stream, name string) {
-	l.calls = append(l.calls, stream+":"+name)
+	call := stream + ":" + name
+	l.calls = append(l.calls, call)
+	if l.onStep != nil {
+		l.onStep(l, call)
+	}
+}
+
+func (l *fakeLedger) SwitchOn(context.Context) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.switchReads++
+	if l.switchErr != nil {
+		return false, l.switchErr
+	}
+	return !l.switchOff, nil
+}
+
+func (l *fakeLedger) setSwitch(off bool, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.switchOff, l.switchErr = off, err
 }
 
 func (l *fakeLedger) RoundsSettled(_ context.Context, q index.ExpiryQuery) (bool, error) {
