@@ -2,6 +2,7 @@ package com.pokeclip.clip.render;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.recipe.Recipe;
 import com.pokeclip.clip.recipe.RecipeDocument;
@@ -267,8 +268,9 @@ public class RenderRequestService {
             throw new VodExpiredException();
         }
         // 컷을 회차 귀속 행 위 계획으로 옮긴다(POK-196 · 설계 r7 9.2). 조각 장부는 방송의 물리 키로 읽는다(POK-233).
-        // 자격 판정을 지났으니 줄은 있다
-        Broadcast broadcast = broadcasts.findByStreamId(streamId).orElseThrow();
+        // 자격 판정을 지났으니 줄은 있다 — 그 사이 지워지는 경합(스트리머 정리)도 자격 판정과 같은 404 다(500 으로 새지 않게)
+        Broadcast broadcast = broadcasts.findByStreamId(streamId)
+                .orElseThrow(() -> new AccessErrors.NotViewableException("broadcast_not_found"));
         RecipeDocument document = RecipeDocument.fromStored(mapper, recipe);
         CutDecision.Ready plan = readyOrThrow(cuts.plan(broadcast, recipe.getId(), recipe.getCutInAtMs(),
                 recipe.getCutOutAtMs(), document.subtitles() == null ? List.of() : document.subtitles().segments(),

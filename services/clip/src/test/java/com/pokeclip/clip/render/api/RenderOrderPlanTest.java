@@ -16,6 +16,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
@@ -25,9 +26,11 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static com.pokeclip.clip.support.LedgerSeed.at;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doReturn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -66,6 +69,10 @@ class RenderOrderPlanTest extends IntegrationTestSupport {
     private final MockMvc mvc;
     private final JdbcTemplate jdbc;
     private final BroadcastRepository broadcasts;
+
+    /** 방송 줄 삭제 경합을 흉내 낸다(한 시험만 답을 단다 — 나머지는 실물 그대로). */
+    @MockitoSpyBean
+    private BroadcastRepository broadcastRows;
     private final LedgerSeed seed;
 
     RenderOrderPlanTest(MockMvc mvc, JdbcTemplate jdbc, BroadcastRepository broadcasts) {
@@ -267,6 +274,22 @@ class RenderOrderPlanTest extends IntegrationTestSupport {
         주문(streamId, 5_000, 12_000).andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.error").value("source_unrenderable"))
                 .andExpect(jsonPath("$.reason").value("outside_recording"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM clips", Integer.class)).isZero();
+        assertThat(LocalStackFixture.receiveAndDelete(큐.queueUrl())).isNull();
+    }
+
+    /**
+     * 자격 검사 뒤 방송 줄이 지워지면(스트리머 정리 경합) 500 이 아니라 자격 검사와 같은 404 {@code broadcast_not_found} 다(종결 r1
+     * cc 3 · 소리 주소 A13 과 같은 처분). 표 · 큐에 아무것도 없다.
+     */
+    @Test
+    void 자격_검사_뒤_방송이_지워지면_404_다() throws Exception {
+        String streamId = 회차("gone");
+        귀속(streamId, 1, 0);
+        doReturn(Optional.empty()).when(broadcastRows).findByStreamId(streamId);
+
+        주문(streamId, 1_000, 3_000).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("broadcast_not_found"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM clips", Integer.class)).isZero();
         assertThat(LocalStackFixture.receiveAndDelete(큐.queueUrl())).isNull();
     }
