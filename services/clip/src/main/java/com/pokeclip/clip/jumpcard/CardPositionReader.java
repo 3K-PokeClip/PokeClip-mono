@@ -102,20 +102,22 @@ public class CardPositionReader {
      * 다른 방송 카드 사진도 멈춘다. 장부 읽기 실패는 그대로 던진다.
      *
      * @param values 방송 번호 → 카드 값
-     * @return 방송 번호 → (값 → 장면). 장면이 없는 값 · 회차가 없는 방송은 없다. 방송이 비면 DB 를 안 탄다
+     * @return 방송 번호 → (값 → 장면). 받은 방송은 모두 든다 — 회차나 회차 행이 없으면 빈 맵이고, 장면이 없는 값은 안쪽 맵에
+     *         없다. <b>장면 계산이 깨져 뺀 방송만 없다</b>(부르는 쪽이 「장면 없음」과 「격리」를 가른다). 방송이 비면 DB 를 안 탄다
      */
     public Map<String, Map<Long, Scene>> scenesOf(List<Broadcast> broadcasts,
                                                   Map<String, ? extends Collection<Long>> values) {
         Map<String, List<Row>> rows = rounds.rowsOf(rounds.roundsOf(broadcasts));
         Map<String, Map<Long, Scene>> scenes = new HashMap<>();
-        rows.forEach((streamId, roundRows) -> {
+        for (Broadcast broadcast : broadcasts) {
+            String streamId = broadcast.getStreamId();
             Collection<Long> of = values.get(streamId);
             try {
-                scenes.put(streamId, scenesOf(roundRows, of == null ? List.of() : of));
+                scenes.put(streamId, scenesOf(rows.getOrDefault(streamId, List.of()), of == null ? List.of() : of));
             } catch (RuntimeException e) {
                 log.warn("jumpcard.scene_unavailable streamId={} reason={}", streamId, e.getClass().getSimpleName());
             }
-        });
+        }
         return scenes;
     }
 

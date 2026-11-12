@@ -20,11 +20,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CardPositionReaderTest {
 
     private static Row legacy(long seq, long pts, int duration, long wall, Long pdt) {
-        return new Row(seq, pts, duration, wall, pdt, null, true, null);
+        return new Row(seq, pts, duration, wall, pdt, null, "uploaded", null);
     }
 
     private static Row v2(long seq, long pts, int duration, long wall, long pdt) {
-        return new Row(seq, pts, duration, wall, pdt, 2, true, null);
+        return new Row(seq, pts, duration, wall, pdt, 2, "uploaded", null);
     }
 
     @Test
@@ -112,7 +112,7 @@ class CardPositionReaderTest {
 
     @Test
     void 아직_안_올라간_조각이면_썸네일_주문만_없다() {
-        List<Row> rows = List.of(new Row(1, 0, 4_000, 100_000, 100_000L, null, false, null));
+        List<Row> rows = List.of(new Row(1, 0, 4_000, 100_000, 100_000L, null, "pending", null));
 
         Scene scene = CardPositionReader.scenesOf(rows, List.of(1_000L)).get(1_000L);
 

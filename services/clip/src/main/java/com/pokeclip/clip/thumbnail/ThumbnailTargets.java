@@ -2,8 +2,10 @@ package com.pokeclip.clip.thumbnail;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.broadcast.BroadcastStatus;
 import com.pokeclip.clip.jumpcard.CardPositionReader;
 import com.pokeclip.clip.jumpcard.CardPositionReader.Scene;
+import com.pokeclip.clip.jumpcard.CardPositionReader.ThumbnailOrder;
 import com.pokeclip.clip.segment.OffsetOrigin;
 import com.pokeclip.clip.segment.RoundRows;
 import com.pokeclip.clip.segment.RoundRows.Row;
@@ -15,9 +17,11 @@ import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 /**
@@ -35,7 +39,7 @@ public class ThumbnailTargets {
 
     /**
      * 사진이 없는 카드(보관 기한이 지난 방송은 조각이 지워졌으니 안 본다). 장면은 여기서 고르지 않는다 — 카드 장면 함수가 고르고,
-     * 장면이 없거나(라이브 머리) 장면 조각이 아직 안 올라왔으면 그 카드는 이번 순회에 주문이 안 나간다(다음 순회에 다시 본다).
+     * 주문 · 내려놓음 · 기다림 처분은 {@link #resolve}가 한다.
      */
     static final String CARDS = """
             %s
@@ -88,6 +92,14 @@ public class ThumbnailTargets {
     record Card(long id, String s3Key, long offsetMs, OffsetOrigin offsetOrigin) {
     }
 
+    /** 카드 묶음 한 번의 처분 — 주문할 카드와, 장면이 영구히 안 나와 내려놓을 카드 번호. 둘 다 아닌 카드는 다음 순회를 기다린다. */
+    record CardBatch(List<Card> orders, List<Long> givenUp) {
+        CardBatch {
+            orders = List.copyOf(orders);
+            givenUp = List.copyOf(givenUp);
+        }
+    }
+
     record ClipRow(long id, String streamId, String outputsJson, Long inAtMs, Long outAtMs) {
     }
 
@@ -127,13 +139,13 @@ public class ThumbnailTargets {
         return rows;
     }
 
-    List<Card> cards(int maxAttempts, Instant retryBefore, int limit) {
-        return ordered(jdbc.query(CARDS, CANDIDATE, maxAttempts, Timestamp.from(retryBefore), limit));
+    CardBatch cards(int maxAttempts, Instant retryBefore, int limit) {
+        return resolve(jdbc.query(CARDS, CANDIDATE, maxAttempts, Timestamp.from(retryBefore), limit));
     }
 
     /** {@link #cards}와 같되 번호가 {@code ids} 안인 카드만. */
-    List<Card> cardsIn(List<Long> ids, int maxAttempts, Instant retryBefore, int limit) {
-        return ordered(jdbc.query(con -> {
+    CardBatch cardsIn(List<Long> ids, int maxAttempts, Instant retryBefore, int limit) {
+        return resolve(jdbc.query(con -> {
             PreparedStatement ps = con.prepareStatement(CARDS_IN);
             ps.setInt(1, maxAttempts);
             ps.setTimestamp(2, Timestamp.from(retryBefore));
@@ -145,27 +157,60 @@ public class ThumbnailTargets {
 
     /**
      * 후보 카드를 장면 주문으로 바꾼다 — 묶음이 여러 방송에 걸쳐도 방송마다 그 회차로 푼다(카드 장면 함수 한 번 · 장부 왕복 두
-     * 번 · 계획 착수 체크리스트 C4). 장면이 없거나 장면 조각이 아직 안 올라간 카드는 빠진다. 순서는 후보 순서 그대로다.
+     * 번 · 계획 착수 체크리스트 C4). 순서는 후보 순서 그대로다. 주문을 못 내는 카드는 둘로 가른다.
+     *
+     * <ul>
+     *   <li><b>내려놓음</b>(kty 2026-11-12 (가)) — 방송이 끝났거나 회차가 완결이고 장면이 영구히 안 나온다: 장면 없음(마지막
+     *       귀속 행 뒤 · 회차 행 없음) 또는 장면 조각 올리기 실패. 내려놓지 않으면 그 카드가 사진 없음으로 남아 후보 묶음 자리를
+     *       계속 차지하고, 그보다 오래된 카드는 영영 후보에 못 든다(커밋 리뷰 r1 HIGH).</li>
+     *   <li><b>기다림</b> — 그 밖 전부: 방송 중(라이브 머리 · 다음 행 대기), 장면 조각이 아직, 장면 계산이 깨져 격리된 방송
+     *       ({@code jumpcard.scene_unavailable} — 장부 불변식 위반을 포기로 덮지 않는다).</li>
+     * </ul>
+     *
+     * <p>회차 완결은 방송이 아직 {@code live}이고 내려놓을지 따질 카드가 있을 때만 그 방송마다 한 번 묻는다(장면 몫 장부 왕복
+     * 두 번 밖의 판정 왕복).
      */
-    private List<Card> ordered(List<Candidate> candidates) {
+    private CardBatch resolve(List<Candidate> candidates) {
         if (candidates.isEmpty()) {
-            return List.of();
+            return new CardBatch(List.of(), List.of());
         }
         Map<String, List<Long>> values = new LinkedHashMap<>();
         for (Candidate c : candidates) {
             values.computeIfAbsent(c.streamId(), k -> new ArrayList<>()).add(c.streamTimestampMs());
         }
-        Map<String, Map<Long, Scene>> found = scenes.scenesOf(broadcasts.findByStreamIdIn(values.keySet()), values);
-        List<Card> cards = new ArrayList<>();
+        Map<String, Broadcast> byId = new HashMap<>();
+        broadcasts.findByStreamIdIn(values.keySet()).forEach(b -> byId.put(b.getStreamId(), b));
+        Map<String, Map<Long, Scene>> found = scenes.scenesOf(List.copyOf(byId.values()), values);
+        Map<String, Boolean> finished = new HashMap<>();
+        List<Card> orders = new ArrayList<>();
+        List<Long> givenUp = new ArrayList<>();
         for (Candidate c : candidates) {
-            Scene scene = found.getOrDefault(c.streamId(), Map.of()).get(c.streamTimestampMs());
-            if (scene == null) {
-                continue;
+            Map<Long, Scene> ofBroadcast = found.get(c.streamId());
+            if (ofBroadcast == null) {
+                continue; // 격리된 방송(또는 그 사이 지워진 방송) — 기다린다
             }
-            scene.thumbnailOrder().ifPresent(order -> cards.add(
-                    new Card(c.id(), scene.row().s3Key(), order.offsetMs(), order.offsetOrigin())));
+            Scene scene = ofBroadcast.get(c.streamTimestampMs());
+            Optional<ThumbnailOrder> order = scene == null ? Optional.empty() : scene.thumbnailOrder();
+            if (order.isPresent()) {
+                orders.add(new Card(c.id(), scene.row().s3Key(), order.get().offsetMs(), order.get().offsetOrigin()));
+            } else if (neverResolves(scene) && finished.computeIfAbsent(c.streamId(), id -> finished(byId.get(id)))) {
+                givenUp.add(c.id());
+            }
         }
-        return cards;
+        return new CardBatch(orders, givenUp);
+    }
+
+    /** 장면이 없거나(마지막 귀속 행 뒤 · 회차 행 없음) 장면 조각 올리기가 실패로 끝났다 — 방송이 끝났으면 다시 봐도 같다. */
+    private static boolean neverResolves(Scene scene) {
+        return scene == null || scene.row().uploadFailed();
+    }
+
+    /**
+     * 방송이 끝났거나(편지 {@code ended}) 회차가 완결이다(세션 모두 끝 · 회차 닫힘 — {@link RoundRows#roundComplete}). 회차 칸이
+     * 없는 옛 방송은 완결 술어가 없어(거짓) 방송 상태로만 정한다.
+     */
+    private boolean finished(Broadcast broadcast) {
+        return broadcast.getStatus() != BroadcastStatus.LIVE || rounds.roundComplete(broadcast.getStreamId());
     }
 
     List<ClipRow> clips(int maxAttempts, Instant retryBefore, int limit) {

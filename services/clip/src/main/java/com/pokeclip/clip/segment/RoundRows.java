@@ -176,15 +176,25 @@ public class RoundRows {
 
     /**
      * 회차 행 하나. 시각은 epoch ms다 — 벽시각({@code start_wall_utc})은 µs라 ms로 내린다. {@code pdtMs}는 빈 칸이면 null
-     * (귀속 행에는 늘 있으나 DB 제약은 아니다). {@code timingVersion}은 null(옛 식) 또는 2. {@code s3Key}는 조각 창고 키다
-     * (썸네일 주문서가 싣는다).
+     * (귀속 행에는 늘 있으나 DB 제약은 아니다). {@code timingVersion}은 null(옛 식) 또는 2. {@code uploadState}는 장부
+     * {@code upload_state} 그대로다. {@code s3Key}는 조각 창고 키다(썸네일 주문서가 싣는다).
      */
     public record Row(long seq, long startPtsMs, int durationMs, long wallMs, Long pdtMs, Integer timingVersion,
-                      boolean uploaded, String s3Key) {
+                      String uploadState, String s3Key) {
 
         /** 판 2 행인가. */
         public boolean v2() {
             return timingVersion != null && timingVersion == 2;
+        }
+
+        /** 조각이 창고에 올라갔나. */
+        public boolean uploaded() {
+            return RoundRow.UPLOADED.equals(uploadState);
+        }
+
+        /** 올리기가 실패로 끝났나(업로더가 다시 올리지 않는다 — 썸네일이 그 카드를 내려놓는 조건). */
+        public boolean uploadFailed() {
+            return RoundRow.FAILED.equals(uploadState);
         }
     }
 
@@ -332,7 +342,7 @@ public class RoundRows {
                 rs.getTimestamp("start_wall_utc").toInstant().toEpochMilli(),
                 pdt == null ? null : pdt.toInstant().toEpochMilli(),
                 timingVersion,
-                "uploaded".equals(rs.getString("upload_state")),
+                rs.getString("upload_state"),
                 rs.getString("s3_key"));
     }
 }

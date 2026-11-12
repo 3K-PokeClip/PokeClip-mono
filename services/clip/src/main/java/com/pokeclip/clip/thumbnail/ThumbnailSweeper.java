@@ -160,18 +160,19 @@ public class ThumbnailSweeper {
 
     void sweepCards() {
         Instant now = clock.instant();
-        List<ThumbnailTargets.Card> rows = targets.cards(MAX_ATTEMPTS, now.minus(RETRY_AFTER), BATCH_LIMIT);
-        for (ThumbnailTargets.Card row : rows) {
+        ThumbnailTargets.CardBatch batch = targets.cards(MAX_ATTEMPTS, now.minus(RETRY_AFTER), BATCH_LIMIT);
+        for (ThumbnailTargets.Card row : batch.orders()) {
             orderCard(row, now);
         }
-        if (!rows.isEmpty()) {
-            log.info("thumbnail.sweep kind=card sent={}", rows.size());
+        batch.givenUp().forEach(id -> giveUpCard(id, now));
+        if (!batch.orders().isEmpty() || !batch.givenUp().isEmpty()) {
+            log.info("thumbnail.sweep kind=card sent={} givenUp={}", batch.orders().size(), batch.givenUp().size());
         }
     }
 
     /**
      * 명단의 카드 중 조각이 올라온 것을 주문하고 명단에서 뺀다. 주문 조건(사진 없음 · 재시도 간격 · 횟수)은 1분 순회와 같아서 둘이
-     * 같은 카드를 겹쳐 내지 않는다(같은 일정 스레드라 동시에 돌지도 않는다). 줄에 못 실으면 명단에 남는다.
+     * 같은 카드를 겹쳐 내지 않는다(같은 일정 스레드라 동시에 돌지도 않는다). 줄에 못 실으면 명단에 남는다. 내려놓은 카드도 빠진다.
      */
     void sweepNewCards() {
         if (newCards.isEmpty()) {
@@ -183,14 +184,19 @@ public class ThumbnailSweeper {
         if (newCards.isEmpty()) {
             return;
         }
-        List<ThumbnailTargets.Card> rows = targets.cardsIn(List.copyOf(newCards.keySet()), MAX_ATTEMPTS,
+        ThumbnailTargets.CardBatch batch = targets.cardsIn(List.copyOf(newCards.keySet()), MAX_ATTEMPTS,
                 now.minus(RETRY_AFTER), BATCH_LIMIT);
-        for (ThumbnailTargets.Card row : rows) {
+        for (ThumbnailTargets.Card row : batch.orders()) {
             orderCard(row, now);
             newCards.remove(row.id());
         }
-        if (!rows.isEmpty()) {
-            log.info("thumbnail.sweep kind=new_card sent={} waiting={}", rows.size(), newCards.size());
+        for (long id : batch.givenUp()) {
+            giveUpCard(id, now);
+            newCards.remove(id);
+        }
+        if (!batch.orders().isEmpty() || !batch.givenUp().isEmpty()) {
+            log.info("thumbnail.sweep kind=new_card sent={} givenUp={} waiting={}", batch.orders().size(),
+                    batch.givenUp().size(), newCards.size());
         }
     }
 
@@ -198,6 +204,15 @@ public class ThumbnailSweeper {
         String target = String.valueOf(row.id());
         send(ThumbnailKind.CARD, target, segmentBucket, row.s3Key(), row.offsetMs(), row.offsetOrigin(), now);
         thumbnails.markRequested(ThumbnailKind.CARD, target, now);
+    }
+
+    /**
+     * 장면이 영구히 안 나오는 카드(끝난 방송 · 완결 회차에서 장면 없음 · 장면 조각 올리기 실패 — {@code ThumbnailTargets})를
+     * 내려놓는다. 영상 산출물이 없는 완성 영상과 같은 길이다: 횟수를 다 쓴 것으로 적어 다시 후보에 안 든다(POK-196 · kty
+     * 2026-11-12 (가)).
+     */
+    private void giveUpCard(long id, Instant now) {
+        thumbnails.markGivenUp(ThumbnailKind.CARD, String.valueOf(id), MAX_ATTEMPTS, now);
     }
 
     void sweepClips() {

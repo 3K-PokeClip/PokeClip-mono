@@ -16,8 +16,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class JumpCardSnapshotSceneTest {
 
-    private static final Row A = new Row(1, 0, 4_000, 100_000, 100_000L, null, true, null);
-    private static final Row B = new Row(2, 4_000, 4_000, 99_000, 104_000L, null, true, null);
+    private static final Row A = new Row(1, 0, 4_000, 100_000, 100_000L, null, "uploaded", null);
+    private static final Row B = new Row(2, 4_000, 4_000, 99_000, 104_000L, null, "uploaded", null);
 
     private static JumpCardSnapshot card(long ts, long start, long end) {
         return new JumpCardSnapshot(1L, "s-1", JumpCardSource.HOTKEY, ts, new JumpCardSnapshot.Window(start, end), null,
