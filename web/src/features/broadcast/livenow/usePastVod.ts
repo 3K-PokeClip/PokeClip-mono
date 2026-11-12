@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { roundRewindUrl, type RewindStatusResult } from '@/api/rewindStatus';
-import { nextPastVodState, pastVodNeedsPoll, type PastVodState } from '@/features/player/pastVod';
+import {
+  foldPastVodAnswer,
+  pastVodNeedsPoll,
+  type PastVodHold,
+  type PastVodState,
+} from '@/features/player/pastVod';
 import { useRewindStatus } from '@/features/player/useRewindStatus';
 
 // 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부가 ended 인 화면)의 회차 경로 폴링(POK-546 설계 2-2). 폴링은
@@ -32,12 +37,7 @@ const UNANSWERED: PastVodState = { kind: 'checking', answered: false };
  * 한 회차 경로로 쌓은 것 — 상태와 첫 404 시각을 한 묶음으로 둔다. 경로(방송 · 키)가 바뀌면 묶음째 새로 세워, 다른 경로로 갔다
  * 돌아와도 옛 상태 · 옛 원점이 되살아나지 않는다
  */
-interface HeldState {
-  forUrl: string | null;
-  state: PastVodState;
-  /** 이 경로로 처음 404 를 받은 시각. 명부 endedAt 이 없을 때의 404 유예 원점이다 */
-  firstUnknownMs: number | null;
-}
+type HeldState = PastVodHold & { forUrl: string | null };
 
 /** 경로 하나의 새 묶음 — 아직 아무 답도 받지 않았다 */
 function freshHold(url: string | null): HeldState {
@@ -61,7 +61,10 @@ type HoldAction =
 function holdReducer(held: HeldState, action: HoldAction): HeldState {
   if (action.type === 'route') return held.forUrl === action.url ? held : freshHold(action.url);
   if (held.forUrl !== action.askingUrl) return held;
-  return foldAnswer(held, action.result, action.nowMs, action.endedAtMs);
+  return {
+    ...held,
+    ...foldPastVodAnswer(held, action.result, action.nowMs, action.endedAtMs),
+  };
 }
 
 /**
@@ -121,20 +124,4 @@ export function usePastVod(input: PastVodInput): PastVodState {
   }, []);
   useRewindStatus(pollUrl, controlBase, onResult);
   return state;
-}
-
-/**
- * 답 하나를 묶음에 접는다. 404 유예의 원점은 명부 endedAt, 없으면 이 경로의 첫 404 시각이다
- * @param endedAtMs 명부 endedAt
- */
-function foldAnswer(
-  prev: HeldState,
-  result: RewindStatusResult,
-  nowMs: number,
-  endedAtMs: number | null,
-): HeldState {
-  const firstUnknownMs =
-    result.kind === 'none' ? (prev.firstUnknownMs ?? nowMs) : prev.firstUnknownMs;
-  const clock = { nowMs, unknownSinceMs: endedAtMs ?? firstUnknownMs ?? nowMs };
-  return { ...prev, state: nextPastVodState(prev.state, result, clock), firstUnknownMs };
 }

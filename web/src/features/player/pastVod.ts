@@ -130,6 +130,30 @@ export function pastVodNeedsPoll(state: PastVodState): boolean {
   return state.kind === 'checking' || state.kind === 'preparing' || state.kind === 'unavailable';
 }
 
+/** 한 회차 경로로 쌓은 판정 — 상태와 첫 404 시각(유예 원점이 따로 없을 때의 404 유예 원점) */
+export interface PastVodHold {
+  state: PastVodState;
+  /** 이 경로로 처음 404 를 받은 시각. 처음 받은 그대로 두고 덮지 않는다 */
+  firstUnknownMs: number | null;
+}
+
+/**
+ * 답 하나를 묶음에 접는다(A 화면 usePastVod · 지난 방송 목록이 같은 규칙을 쓴다). 404 유예의 원점은 originMs(명부
+ * endedAt 등), 없으면 이 경로의 첫 404 시각, 그것도 없으면 지금이다. 404 를 받으면 첫 404 시각을 적는다
+ * @param originMs 404 유예의 원점. 없으면 null
+ */
+export function foldPastVodAnswer(
+  prev: PastVodHold,
+  result: RewindStatusResult,
+  nowMs: number,
+  originMs: number | null,
+): PastVodHold {
+  const firstUnknownMs =
+    result.kind === 'none' ? (prev.firstUnknownMs ?? nowMs) : prev.firstUnknownMs;
+  const clock = { nowMs, unknownSinceMs: originMs ?? firstUnknownMs ?? nowMs };
+  return { state: nextPastVodState(prev.state, result, clock), firstUnknownMs };
+}
+
 /**
  * 카드 갈래(설계 2-1 판정표 10줄 — 위에서부터 처음 맞는 줄).
  * 끝나기 전에 들어온 화면은 notPast, 보관 만료는 blocked(expired)다. 그 밖은 다시보기 상태가
