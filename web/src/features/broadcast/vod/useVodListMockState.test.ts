@@ -17,7 +17,7 @@ const api = vi.hoisted(() => ({
   /** 목록 끝에 더할 방송 줄 */
   extra: [] as Record<string, unknown>[],
   /** 있으면 기본 두 줄 대신 이 줄들만 목록으로 준다 */
-  only: null as Record<string, unknown>[] | null,
+  only: null as Array<Record<string, unknown>> | null,
   /** 목록·카드 읽기에 넘긴 끊기 신호 */
   signals: [] as (AbortSignal | undefined)[],
   /** 카드 읽기 횟수 · 동시에 도는 수 · 그 최댓값 */
@@ -177,7 +177,7 @@ function stubControl(
 ) {
   const seen = {
     asked: [] as string[],
-    signals: [] as (AbortSignal | undefined)[],
+    signals: [] as Array<AbortSignal | undefined>,
     running: 0,
     peak: 0,
   };
@@ -192,9 +192,9 @@ function stubControl(
     try {
       if (hold(roundId)) {
         return await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () =>
-            reject(new DOMException('aborted', 'AbortError')),
-          );
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          });
         });
       }
       await Promise.resolve();
@@ -313,6 +313,10 @@ describe('useVodListMockState — 회차 경로 표지(POK-568)', () => {
   });
 
   it('8초 안에 답이 없으면 끊고 「잠시 불가」 로 접는다: 표지는 그대로이고 목록은 다른 줄의 답과 함께 선다', async () => {
+    // 이 사례만 가짜 시계가 실제 시간으로 흐르지 않게 한다: 시한 경계(7 999 · 8 000ms)를 정확히 잰다.
+    // 이미 깔린 가짜 시계에는 useFakeTimers 설정이 먹지 않아 한 번 걷고 다시 깐다
+    vi.useRealTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: false });
     const old = 3 * 24 * HOUR;
     api.only = [endedRow('slow', old), endedRow('done', old)];
     const { seen } = stubControl(
@@ -320,14 +324,21 @@ describe('useVodListMockState — 회차 경로 표지(POK-568)', () => {
       (id) => id === 'slow',
     );
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
-    await advance(7_900);
+    await advance(0);
+    const slowSignal = () => seen.signals[seen.asked.indexOf('slow')];
+    expect(seen.asked).toContain('slow');
+
+    await advance(7_999);
+    expect(slowSignal()?.aborted).toBe(false);
     expect(result.current.loading).toBe(true);
 
-    await advance(200);
+    await advance(1);
+    expect(slowSignal()?.aborted).toBe(true);
 
+    // 끊긴 뒤 목록이 서기까지(화면 갱신)는 따로 기다린다
+    await advance(50);
     expect(result.current.loading).toBe(false);
     expect(result.current.failed).toBe(false);
-    expect(seen.signals[seen.asked.indexOf('slow')]?.aborted).toBe(true);
     expect(rowOf(result, 'slow')).toEqual({ status: 'ended', vodMissing: false });
     expect(rowOf(result, 'done')).toEqual({ status: 'ended', vodMissing: true });
   });
@@ -371,7 +382,9 @@ describe('useVodListMockState — 회차 경로 표지(POK-568)', () => {
 
   it('회차 물음은 요청 활동으로 알린다: 채널 전환 화면이 그 답(시한으로 끝난 것까지)을 기다린다', async () => {
     const events: string[] = [];
-    const stop = subscribeApiActivity(({ type }) => events.push(type));
+    const stop = subscribeApiActivity(({ type }) => {
+      events.push(type);
+    });
     api.only = [endedRow('A', 3 * 24 * HOUR), endedRow('B', 3 * 24 * HOUR)];
     stubControl(
       () => 'ending',

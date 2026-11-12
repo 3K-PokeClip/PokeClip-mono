@@ -61,11 +61,11 @@ export function isRowVodSettled(memory: RowVodMemory): boolean {
  * askedAt 이 오래된 것부터 limit 개까지. 같은 askedAt 은 목록 순(안정 정렬)
  */
 export function pickRoundAsks(
-  candidates: readonly { streamId: string; justEnded: boolean; askedAt: number | null }[],
+  candidates: ReadonlyArray<{ streamId: string; justEnded: boolean; askedAt: number | null }>,
   limit: number,
 ): ReadonlySet<string> {
   const asks = new Set<string>();
-  const oldPending: { streamId: string; askedAt: number }[] = [];
+  const oldPending: Array<{ streamId: string; askedAt: number }> = [];
   for (const { streamId, justEnded, askedAt } of candidates) {
     if (askedAt === null || justEnded) asks.add(streamId);
     else oldPending.push({ streamId, askedAt });
@@ -73,6 +73,8 @@ export function pickRoundAsks(
   oldPending
     .sort((x, y) => x.askedAt - y.askedAt)
     .slice(0, limit)
-    .forEach(({ streamId }) => asks.add(streamId));
+    .forEach(({ streamId }) => {
+      asks.add(streamId);
+    });
   return asks;
 }

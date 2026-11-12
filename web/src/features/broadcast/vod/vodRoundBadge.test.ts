@@ -82,10 +82,11 @@ describe('foldRowVod · isRowVodSettled — T6-1 답 × 직전 표지', () => {
   });
 
   /** 답 · 직전 · 기대 표지. ready · none 은 다시 묻지 않는 행(settled)이다 */
-  const TABLE: ReadonlyArray<[AnswerName, PrevName, VodBadge]> = [
+  const table: ReadonlyArray<[AnswerName, PrevName, VodBadge]> = [
     ['vod · ready', '처음(답 없음)', 'ready'],
     ['vod · ready', 'preparing 기억', 'ready'],
     ['vod · ready', 'ready 기억', 'ready'],
+    ['vod · ready', 'none 기억', 'ready'],
     ['ended', '처음(답 없음)', 'none'],
     ['ended', 'preparing 기억', 'none'],
     ['ended', 'ready 기억', 'ready'],
@@ -93,6 +94,7 @@ describe('foldRowVod · isRowVodSettled — T6-1 답 × 직전 표지', () => {
     ['ending · 미준비 vod · live', '처음(답 없음)', 'preparing'],
     ['ending · 미준비 vod · live', 'preparing 기억', 'preparing'],
     ['ending · 미준비 vod · live', 'ready 기억', 'ready'],
+    ['ending · 미준비 vod · live', 'none 기억', 'preparing'],
     ['유예 밖 404', '처음(답 없음)', 'none'],
     ['유예 밖 404', 'preparing 기억', 'none'],
     ['유예 밖 404', 'ready 기억', 'ready'],
@@ -111,7 +113,7 @@ describe('foldRowVod · isRowVodSettled — T6-1 답 × 직전 표지', () => {
     ['mode null', 'none 기억', 'none'],
   ];
 
-  it.each(TABLE)('%s · 직전 %s → 표지 %s', (answer, prevName, expected) => {
+  it.each(table)('%s · 직전 %s → 표지 %s', (answer, prevName, expected) => {
     const [result, endedAtMs] = ANSWERS[answer];
     const next = foldRowVod(PREVS[prevName], result, NOW, endedAtMs);
     expect(next.badge).toBe(expected);
@@ -156,21 +158,20 @@ interface Candidate {
   askedAt: number | null;
 }
 /** 처음 보는 행(물은 적 없음) */
-const firstSeen = (streamId: string): Candidate => ({ streamId, justEnded: false, askedAt: null });
+function firstSeen(streamId: string): Candidate {
+  return { streamId, justEnded: false, askedAt: null };
+}
 /** 방금 끝난 행 — 물은 적이 있어도 매 주기 묻는다 */
-const justEnded = (streamId: string, askedAt: number): Candidate => ({
-  streamId,
-  justEnded: true,
-  askedAt,
-});
+function justEnded(streamId: string, askedAt: number): Candidate {
+  return { streamId, justEnded: true, askedAt };
+}
 /** 오래된 미결 행 — 물었는데 아직 ready · none 이 아니다 */
-const oldPending = (streamId: string, askedAt: number): Candidate => ({
-  streamId,
-  justEnded: false,
-  askedAt,
-});
-const ids = (prefix: string, count: number) =>
-  Array.from({ length: count }, (_, i) => `${prefix}${i}`);
+function oldPending(streamId: string, askedAt: number): Candidate {
+  return { streamId, justEnded: false, askedAt };
+}
+function ids(prefix: string, count: number) {
+  return Array.from({ length: count }, (_, i) => `${prefix}${i}`);
+}
 const LIMIT = 20;
 
 describe('pickRoundAsks — T6-2 처음 보는 행 · 방금 끝난 행은 모두, 오래된 미결 행만 상한까지', () => {
