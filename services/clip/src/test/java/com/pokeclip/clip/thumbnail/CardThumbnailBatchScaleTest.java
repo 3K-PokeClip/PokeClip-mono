@@ -72,15 +72,15 @@ class CardThumbnailBatchScaleTest extends IntegrationTestSupport {
         for (int b = 0; b < BROADCASTS; b++) {
             seed.session(head(b), key(b), head(b), null);
             broadcasts.save(Broadcast.startedNow(head(b), TestIds.STREAMER, key(b), 1L, START, null));
+            // 방송마다 한 문장 — 50만 행을 한 문장에 넣으면 공유 러너에서 연결 읽기 시한(socketTimeout 10초)을 넘었다
+            jdbc.update("""
+                    INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt,
+                                                        duration_ms, s3_key, upload_state, session_id)
+                    SELECT ?, g, g * 4000, ?::timestamptz + g * 4000 * interval '1 millisecond',
+                           ?::timestamptz + g * 4000 * interval '1 millisecond', 4000, ? || '-' || g, 'uploaded', ?
+                      FROM generate_series(0, ? - 1) g""",
+                    key(b), Timestamp.from(START), Timestamp.from(START), "k" + b, head(b), ROUND_ROWS);
         }
-        jdbc.update("""
-                INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms,
-                                                    s3_key, upload_state, session_id)
-                SELECT 'SC-' || b, g, g * 4000, ?::timestamptz + g * 4000 * interval '1 millisecond',
-                       ?::timestamptz + g * 4000 * interval '1 millisecond', 4000, 'k' || b || '-' || g, 'uploaded',
-                       'S-sc-' || b
-                  FROM generate_series(0, ? - 1) b, generate_series(0, ? - 1) g""",
-                Timestamp.from(START), Timestamp.from(START), BROADCASTS, ROUND_ROWS);
         jdbc.execute("ANALYZE public.stream_segments");
         for (int b = 0; b < BROADCASTS; b++) {
             cardIds.add(카드(head(b), (ROUND_ROWS / 2) * 4_000L + 1_000));
