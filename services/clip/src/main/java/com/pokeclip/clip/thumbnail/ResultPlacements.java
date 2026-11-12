@@ -13,8 +13,8 @@ import java.util.Set;
  * (설계 8.3 대안 (라) 기각 · 예측 P14). 완성 사진 자리와 업로드 장면의 결과 끝이 이 값 하나를 쓴다.
  *
  * <p>배치 한 줄: 조각 {@code seq} 의 x′ = 0 이 결과 {@code zeroAtUs} 에 놓였고, 결과에 든 그 조각 몫이 x′ 로 {@code [fromUs, toUs]}
- * 다. {@code headLeadUs} = 그 조각 m(파일 머리 → 영상 첫 DTS). 이웃 조각 몫은 겹칠 수 있다 — 자리를 옮길 때 가리킨 조각 줄 하나만
- * 읽으므로 겹침이 옮긴 값을 바꾸지 않는다(설계 7.6).
+ * 다. {@code headLeadUs} = 그 조각 m(파일 머리 → 영상 첫 DTS). 이웃 조각 몫은 겹칠 수 있다 — 자리를 옮길 때 가리킨 조각 줄로
+ * 놓고(설계 7.6), 바로 앞 줄은 그 조각 첫 표시 프레임 하한으로만 읽는다(A18 · {@link #resultMsOf}).
  *
  * <p>모양이 틀린 표는 {@link #parse} 가 {@link IllegalArgumentException} 으로 거절한다 — 부르는 쪽은 옛 식 · 받은 값으로 떨어지고
  * 성공 처리를 되감지 않는다.
@@ -184,7 +184,9 @@ public final class ResultPlacements {
     /**
      * 조각 {@code seq} 안 {@code offsetMs}(원점 {@code origin} 에서 잰 ms) 자리가 결과 몇 ms 인가. 단위를 µs 로 맞춘 뒤({@code x′ =
      * offsetMs × 1000 − (FILE_HEAD ? headLeadUs : 0)}) 그 조각 몫으로 자르고 놓는다 — 놓은 뒤에 자르면 x′ 축과 결과 축이 섞인다
-     * (cx2-2). 그 조각이 결과에 없으면 바로 앞 배치의 몫 끝(틈 뒤 · 계획 밖 뒤쪽), 앞 배치가 없으면 첫 배치의 몫 시작(계획 앞쪽)이다.
+     * (cx2-2). 놓은 자리는 그 조각 첫 표시 프레임(바로 앞 배치 몫의 끝) 아래로 내려가지 않는다 — 첫 DTS 와 첫 화면 사이 자리가 앞
+     * 조각 화면을 찍지 않게(A18). 그 조각이 결과에 없으면 바로 앞 배치의 몫 끝(틈 뒤 · 계획 밖 뒤쪽), 앞 배치가 없으면 첫 배치의 몫
+     * 시작(계획 앞쪽)이다.
      * 마지막에 결과 {@code [0, lengthUs]} 로 자르고 ms 로 내린다.
      */
     public long resultMsOf(long seq, long offsetMs, OffsetOrigin origin) {
@@ -198,7 +200,8 @@ public final class ResultPlacements {
             if (p.seq() == seq) {
                 long lead = origin == OffsetOrigin.FILE_HEAD ? p.headLeadUs() : 0;
                 long x = Math.subtractExact(Math.multiplyExact(offsetMs, MICROS_PER_MILLI), lead);
-                return Math.addExact(p.zeroAtUs(), Math.clamp(x, p.fromUs(), p.toUs()));
+                long placed = Math.addExact(p.zeroAtUs(), Math.clamp(x, p.fromUs(), p.toUs()));
+                return before == null ? placed : Math.max(placed, firstShownUs(before, p));
             }
             if (p.seq() < seq) {
                 before = p;
@@ -209,6 +212,16 @@ public final class ResultPlacements {
         }
         Placement first = placements.getFirst();
         return Math.addExact(first.zeroAtUs(), first.fromUs());
+    }
+
+    /**
+     * 조각 {@code p} 의 첫 표시 프레임 결과 자리 — 바로 앞 배치 몫의 끝이다. 렌더가 앞 조각 몫의 끝을 「뒤 조각 첫 프레임 자리」
+     * (첫 표시 PTS · 이음 종류와 무관 — {@code RenderTimeline.endOfShare})로 내기 때문이다. {@code zeroAtUs} 는 첫 DTS 자리라
+     * 첫 화면보다 구성 시차 c 만큼 앞이고, 그 사이 x′(판 NULL 머리 {@code (k′, 0)} = −m 등)는 앞 조각 마지막 화면을 찍는다 —
+     * 그 조각의 장면이면 그 조각 화면을 찍도록 이것을 하한으로 쓴다(A18 · kty 결정 (가)). 그 조각 몫 끝을 넘지는 않는다.
+     */
+    private static long firstShownUs(Placement before, Placement p) {
+        return Math.min(Math.addExact(before.zeroAtUs(), before.toUs()), Math.addExact(p.zeroAtUs(), p.toUs()));
     }
 
     /** 결과 길이(ms 내림). */

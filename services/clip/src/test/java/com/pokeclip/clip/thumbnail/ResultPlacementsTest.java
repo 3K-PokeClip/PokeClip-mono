@@ -40,6 +40,24 @@ class ResultPlacementsTest {
         assertThat(of(셋).resultMsOf(9, 1_000, OffsetOrigin.FILE_HEAD)).isEqualTo(31_978);
     }
 
+    /**
+     * A18 kty (가) — 배치표 {@code zeroAtUs} 는 첫 DTS 자리라 첫 화면(PTS)보다 구성 시차 c 만큼 앞이다. 판 NULL J 이음 뒤 조각
+     * (30fps · c = 66,667µs · m = 21,333µs · {@code zeroAtUs} 3,933,333 · {@code fromUs} −21,333)의 머리 {@code (2, 0)} 은
+     * x′ = −m 이라 3,912ms 에 놓여 앞 조각 마지막 화면을 찍는다. 앞 배치 몫의 끝(4,000,000 — 렌더가 뒤 조각 첫 표시 프레임
+     * 자리로 낸 값)을 하한으로 둬 뒤 조각 첫 화면 4,000ms 를 찍는다 — 틈 카드 = 재접속 뒤 첫 화면(kty 11-03).
+     */
+    @Test
+    void 뒤_조각_머리는_앞_배치_몫_끝_아래로_내려가지_않는다() {
+        ResultPlacements joined = of("""
+                {"placements":[
+                  {"seq":1,"zeroAtUs":0,"fromUs":0,"toUs":4000000,"headLeadUs":21333},
+                  {"seq":2,"zeroAtUs":3933333,"fromUs":-21333,"toUs":4000000,"headLeadUs":21333}],
+                 "lengthUs":8000000}""");
+
+        assertThat(joined.resultMsOf(2, 0, OffsetOrigin.FILE_HEAD)).isEqualTo(4_000);
+        assertThat(joined.resultMsOf(2, 1_000, OffsetOrigin.FILE_HEAD)).as("하한 위 자리는 그대로").isEqualTo(4_912);
+    }
+
     /** 조각 몫 밖 자리(조각 끝 넘어)는 그 조각 몫 끝에 붙는다. */
     @Test
     void 조각_몫_밖_자리는_몫_끝에_붙는다() {
