@@ -18,6 +18,10 @@ import java.util.Set;
  *
  * <p>모양이 틀린 표는 {@link #parse} 가 {@link IllegalArgumentException} 으로 거절한다 — 부르는 쪽은 옛 식 · 받은 값으로 떨어지고
  * 성공 처리를 되감지 않는다.
+ *
+ * <p><b>칸을 엄격히 거른다</b>(모르는 칸 · 정수 아닌 칸은 거절) — 받는 자리가 렌더 보고를 그대로 JSONB 에 쓰므로, 아는 정수 칸만
+ * 있어야 NUL 같은 JSONB 가 못 받는 글자가 DB 에 닿지 않는다(커밋 리뷰 r1). 그래서 렌더가 줄이나 묶음에 칸을 더하면 <b>clip 을
+ * 먼저 배포</b>한다 — 렌더가 먼저 나가면 모든 배치표가 WARN 하나만 남기고 버려져 옛 식으로 떨어진다(성공은 남는다).
  */
 public final class ResultPlacements {
 
@@ -36,14 +40,31 @@ public final class ResultPlacements {
      */
     public static final long MAX_ABS_US = MAX_LENGTH_US + 60_000_000;
 
-    /**
-     * 배치 줄 수 상한 — 결과 180초를 줄 하나가 360ms 꼴로 나눈 수. 실제는 4초 조각 46줄 안팎(재접속으로 짧은 조각이 섞여도 수십
-     * 줄)이라 정상 표는 닿지 않고, 넘는 표는 고장 난 보고로 본다.
-     */
-    public static final int MAX_ROWS = 500;
+    /** 주문서 크기 상한(UTF-8 바이트) — 계약1 2절 200KB · {@code pokeclip.render.max-message-bytes}(204800). */
+    static final int MAX_ORDER_BYTES = 204_800;
 
-    /** 받는 자리에서 글로 쓴 배치표 묶음의 길이 상한(글자) — 정상 표 최대(500줄 × 90자 안팎 ≈ 45KB) 위. */
-    public static final int MAX_STORED_CHARS = 64 * 1024;
+    /**
+     * 매체 조각 하나가 주문서에서 차지하는 최소 바이트 — 창고 · 키가 빈 {@code sourceKeys} {@code segment} 항목(쉼표 포함 119)과
+     * {@code plan.mediaSeqs} 한 자리(쉼표 포함 2). 실제 항목은 창고 이름 · 키만큼 더 길다.
+     */
+    static final int MIN_ORDER_BYTES_PER_MEDIA = 119 + 2;
+
+    /**
+     * 읽는 쪽 배치 줄 수 상한 — 주문서 크기 상한에 들어갈 수 있는 매체 조각 수의 최댓값(204,800 ÷ 121 = 1,692). 렌더는 매체 조각마다
+     * 배치 한 줄을 내고(결과 끝 소유로 빠진 조각은 줄이 없다) 렌더 · 계획에 조각 수 상한이 따로 없으므로, 정상 표는 이 수를 넘을 수
+     * 없다. 받는 자리는 그 잡 주문의 실제 매체 조각 수로 더 좁힌다({@link #parse(JsonNode, int)}). 운영 설정의 주문서 상한을 올리면
+     * 이 값도 함께 올린다.
+     */
+    public static final int MAX_ROWS = MAX_ORDER_BYTES / MIN_ORDER_BYTES_PER_MEDIA;
+
+    /**
+     * 가장 긴 배치 한 줄의 글자 수(쉼표 포함) — seq 19자리(long 최대) · {@code zeroAtUs} · {@code fromUs} · {@code toUs} 가
+     * −{@link #MAX_ABS_US}(10자) · {@code headLeadUs} 가 {@link #MAX_ABS_US}(9자).
+     */
+    static final int MAX_ROW_CHARS = 111;
+
+    /** 묶음 껍데기 {@code {"placements":[],"lengthUs":180000000}} 의 글자 수. */
+    static final int LAYOUT_SHELL_CHARS = 38;
 
     private static final Set<String> LAYOUT_FIELDS = Set.of("placements", "lengthUs");
     private static final Set<String> ROW_FIELDS = Set.of("seq", "zeroAtUs", "fromUs", "toUs", "headLeadUs");
@@ -67,13 +88,21 @@ public final class ResultPlacements {
      * <ul>
      *   <li>묶음 칸은 {@code placements} · {@code lengthUs} 뿐이고, 줄마다 칸은 {@code seq} · {@code zeroAtUs} · {@code fromUs}
      *       · {@code toUs} · {@code headLeadUs} 다섯뿐이며 모두 정수다 — 글자 칸이 없으므로 NUL 같은 글자도 없다.</li>
-     *   <li>배치는 1–{@link #MAX_ROWS} 줄 · seq 는 0 이상이고 늘어나는 순서 · {@code fromUs ≤ toUs}.</li>
+     *   <li>배치는 1–{@link #MAX_ROWS} 줄(받는 자리는 그 잡 주문의 매체 조각 수까지) · seq 는 0 이상이고 늘어나는 순서 · {@code fromUs ≤ toUs}.</li>
      *   <li>{@code 0 ≤ lengthUs ≤ }{@link #MAX_LENGTH_US} · 배치 칸 절댓값 ≤ {@link #MAX_ABS_US} · {@code headLeadUs ≥ 0}.</li>
      * </ul>
      *
      * @throws IllegalArgumentException 모양 · 범위가 틀렸다(칸 경로를 싣는다 — 입력 값은 싣지 않는다)
      */
     public static ResultPlacements parse(JsonNode stored) {
+        return parse(stored, MAX_ROWS);
+    }
+
+    /**
+     * {@link #parse(JsonNode)} 와 같되 줄 수 상한을 {@code maxRows}(그 잡 주문의 매체 조각 수 — 받는 자리)로 좁힌다. 렌더는 매체
+     * 조각마다 한 줄을 내므로 정상 표는 이 수를 넘지 않는다. {@link #MAX_ROWS} 보다 크게 주어도 {@link #MAX_ROWS} 다.
+     */
+    public static ResultPlacements parse(JsonNode stored, int maxRows) {
         if (stored == null || !stored.isObject()) {
             throw new IllegalArgumentException("placements: 묶음이 아니다");
         }
@@ -82,7 +111,7 @@ public final class ResultPlacements {
         if (rows == null || !rows.isArray() || rows.isEmpty()) {
             throw new IllegalArgumentException("placements: 배치가 없다");
         }
-        if (rows.size() > MAX_ROWS) {
+        if (rows.size() > Math.min(maxRows, MAX_ROWS)) {
             throw new IllegalArgumentException("placements: 줄 수 상한을 넘었다");
         }
         List<Placement> placements = new ArrayList<>();
@@ -98,6 +127,14 @@ public final class ResultPlacements {
             throw new IllegalArgumentException("lengthUs: 범위 밖");
         }
         return new ResultPlacements(placements, lengthUs);
+    }
+
+    /**
+     * 줄 {@code rows} 개짜리 정상 배치표 묶음이 글로 가질 수 있는 최대 글자 수 — 받는 자리의 글 길이 상한이다. 정상 표는 이 길이를
+     * 넘을 수 없고, 넘으면 모르는 칸 · 공백 같은 덧붙임이 든 것이라 칸을 읽기 전에 버린다.
+     */
+    public static int maxStoredChars(int rows) {
+        return Math.multiplyExact(Math.min(rows, MAX_ROWS), MAX_ROW_CHARS) + LAYOUT_SHELL_CHARS;
     }
 
     private static Placement placement(JsonNode row, String path) {

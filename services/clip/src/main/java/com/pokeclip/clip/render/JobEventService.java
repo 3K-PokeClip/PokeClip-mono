@@ -160,8 +160,12 @@ public class JobEventService {
 
     /**
      * 저장할 배치표 묶음 {@code {"placements": …, "lengthUs": …}}(받은 칸만). 둘 다 없으면(옛 꼴) null, 검사를 못 지나면 null +
-     * WARN {@code clip.render.placements_dropped}({@code reason} = {@code too_long} · {@code invalid}, {@code invalid} 면
-     * {@code detail} 에 칸 경로 — 입력 값은 싣지 않는다).
+     * WARN {@code clip.render.placements_dropped}({@code reason} = {@code no_plan} · {@code too_long} · {@code invalid},
+     * {@code invalid} 면 {@code detail} 에 칸 경로 — 입력 값은 싣지 않는다).
+     *
+     * <p>줄 수 · 글 길이 상한은 <b>그 잡 주문의 매체 조각 수</b>({@code plan.mediaSeqs})에 묶는다 — 렌더는 매체 조각마다 한 줄을
+     * 내므로 정상 표는 그 수를 넘지 않는다. 고정 줄 수 상한은 짧은 재접속 조각이 많은 정상 컷을 버렸다(확인 패스 1 #8). 계획이
+     * 없는 주문(옛 꼴)에는 배치표가 올 까닭이 없어 버린다.
      */
     private String layoutJson(RenderJob job, JobEventRequest event) {
         if (event.placements() == null && event.lengthUs() == null) {
@@ -174,19 +178,30 @@ public class JobEventService {
         if (event.lengthUs() != null) {
             layout.set("lengthUs", event.lengthUs());
         }
+        int media = mediaCountOf(job);
+        if (media == 0) {
+            log.warn("clip.render.placements_dropped jobId={} clipId={} reason=no_plan", job.getId(), job.getClipId());
+            return null;
+        }
         String text = mapper.writeValueAsString(layout);
-        if (text.length() > ResultPlacements.MAX_STORED_CHARS) {
+        if (text.length() > ResultPlacements.maxStoredChars(media)) {
             log.warn("clip.render.placements_dropped jobId={} clipId={} reason=too_long", job.getId(), job.getClipId());
             return null;
         }
         try {
-            ResultPlacements.parse(layout);
+            ResultPlacements.parse(layout, media);
         } catch (IllegalArgumentException e) {
             log.warn("clip.render.placements_dropped jobId={} clipId={} reason=invalid detail={}", job.getId(),
                     job.getClipId(), e.getMessage());
             return null;
         }
         return text;
+    }
+
+    /** 그 잡 주문서의 매체 조각 수({@code plan.mediaSeqs} 길이). 계획이 없으면(옛 꼴) 0. */
+    private int mediaCountOf(RenderJob job) {
+        JsonNode seqs = mapper.readTree(job.getPayload()).path("plan").path("mediaSeqs");
+        return seqs.isArray() ? seqs.size() : 0;
     }
 
     private Reply terminalFailed(RenderJob job, JobEventRequest event, Instant at) {

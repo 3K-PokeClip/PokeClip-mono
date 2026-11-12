@@ -160,6 +160,53 @@ class ResultPlacementsTest {
         assertThat(of("{" + rows(ResultPlacements.MAX_ROWS) + ",\"lengthUs\":10}").lengthMs()).isZero();
     }
 
+    /**
+     * cx 반례(커밋 리뷰 확인 패스 1 #8) — 재접속으로 생긴 300ms 조각 501개(사이 50ms 공백 500개 · 컷 175.3초 · 결과 150.3초)는
+     * 정상 렌더 배치표다. 렌더 · 계획에 조각 수 상한이 없으니 읽는 쪽 줄 수 상한은 주문서 크기에서 나올 수 있는 최대 매체 조각 수
+     * 위여야 한다. 조각 250 의 100ms 는 결과 75,100 이다.
+     */
+    @Test
+    void 짧은_재접속_조각_501개_배치표를_받는다() {
+        ResultPlacements r = of(짧은_조각_501());
+        assertThat(r.lengthMs()).isEqualTo(150_300);
+        assertThat(r.resultMsOf(250, 100, OffsetOrigin.VIDEO_START)).isEqualTo(75_100);
+    }
+
+    /** 받는 자리는 그 잡 주문의 매체 조각 수를 줄 수 상한으로 준다 — 그보다 많으면 던진다. 같으면 받는다. */
+    @Test
+    void 주는_줄_수_상한보다_많으면_던진다() {
+        JsonNode node = MAPPER.readTree(짧은_조각_501());
+        assertThat(ResultPlacements.parse(node, 501).lengthMs()).isEqualTo(150_300);
+        assertThatThrownBy(() -> ResultPlacements.parse(node, 500)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * 읽는 쪽 줄 수 상한은 주문서 크기 상한(계약1 2절 204,800바이트)을 매체 조각 하나가 주문서에서 차지하는 최소 바이트(빈
+     * 창고 · 빈 키 {@code segment} 항목 119 + {@code mediaSeqs} 한 자리 2)로 나눈 수다. 글 길이 상한은 그 줄 수 × 가장 긴 줄(seq
+     * 19자리 · 칸 셋 ±240,000,000 · m 240,000,000)이다 — 정상 표가 글 길이로 걸리지 않는다.
+     */
+    @Test
+    void 줄_수_상한과_글_길이_상한은_주문서_크기에서_나온다() {
+        String widest = "{\"seq\":9999999999999999999,\"zeroAtUs\":-240000000,\"fromUs\":-240000000,\"toUs\":-240000000,"
+                + "\"headLeadUs\":240000000},";
+        String emptySegment = "{\"role\":\"segment\",\"bucket\":\"\",\"s3Key\":\"\",\"seq\":0,\"durationMs\":0,"
+                + "\"isDiscontinuity\":false,\"followsLedgerPrevious\":false},";
+        assertThat(ResultPlacements.MAX_ROWS).isEqualTo(204_800 / (emptySegment.length() + "0,".length()));
+        assertThat(ResultPlacements.maxStoredChars(501))
+                .isGreaterThanOrEqualTo(501 * widest.length() + "{\"placements\":[],\"lengthUs\":180000000}".length());
+        assertThat(짧은_조각_501().length()).isLessThan(ResultPlacements.maxStoredChars(501));
+    }
+
+    /** 300ms 조각 501개 · 결과 150.3초(공백 접힘) — cx 반례 배치표. */
+    private static String 짧은_조각_501() {
+        StringBuilder s = new StringBuilder("{\"placements\":[");
+        for (int i = 0; i <= 500; i++) {
+            s.append(i == 0 ? "" : ",").append("{\"seq\":").append(i).append(",\"zeroAtUs\":").append(300_000L * i)
+                    .append(",\"fromUs\":0,\"toUs\":300000,\"headLeadUs\":0}");
+        }
+        return s.append("],\"lengthUs\":150300000}").toString();
+    }
+
     private static String row(String zeroAtUs, String fromUs, String toUs, String headLeadUs) {
         return "\"placements\":[{\"seq\":1,\"zeroAtUs\":" + zeroAtUs + ",\"fromUs\":" + fromUs + ",\"toUs\":" + toUs
                 + ",\"headLeadUs\":" + headLeadUs + "}]";

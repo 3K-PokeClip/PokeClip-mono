@@ -215,6 +215,29 @@ class ClipPhotoPlacementsTest extends IntegrationTestSupport {
         assertThat(장면들()).containsExactly(6_350L);
     }
 
+    /**
+     * cx 반례(확인 패스 1 #8) — 재접속 300ms 조각 501개(사이 50ms 공백)의 저장된 501줄 배치표를 다시 읽어 사진을 놓는다. 카드
+     * 87,600(조각 250 의 100ms)은 결과 75,100 이다. 고정 500줄 상한이면 읽기에서 거절돼 옛 식으로 떨어진다.
+     */
+    @Test
+    void 짧은_재접속_조각_501개_영상도_배치표로_찍는다() {
+        broadcasts.save(Broadcast.startedNow("S-p5", TestIds.STREAMER, "P5", 1L, at(0), null));
+        seed.session("S-p5", "P5", "S-p5", null);
+        StringBuilder rows = new StringBuilder();
+        for (int i = 0; i <= 500; i++) {
+            seed.row("P5", i).pts(350L * i).wallAndPdt(100_000 + 350L * i).duration(300).session("S-p5").v2().insert();
+            rows.append(i == 0 ? "" : ",").append("{\"seq\":").append(i).append(",\"zeroAtUs\":").append(300_000L * i)
+                    .append(",\"fromUs\":0,\"toUs\":300000,\"headLeadUs\":0}");
+        }
+        카드("S-p5", 250 * 350 + 100, 90);
+        완성_영상("S-p5", "{\"placements\":[" + rows + "],\"lengthUs\":150300000}", "{\"seq\":0,\"offsetUs\":0}",
+                "{\"seq\":500,\"toSegmentEnd\":true}");
+
+        sweeper().sweepClips();
+
+        assertThat(장면들()).containsExactly(75_100L);
+    }
+
     // ── 영상별 격리(커밋 리뷰 r1 — 보안 HIGH-1 · cx M3 · cc L) ─────────────────────────────
 
     /**

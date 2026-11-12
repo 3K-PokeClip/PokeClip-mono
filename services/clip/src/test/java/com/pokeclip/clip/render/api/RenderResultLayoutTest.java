@@ -179,7 +179,50 @@ class RenderResultLayoutTest extends RenderUploadTestSupport {
         assertThat(배치표_칸(clipId)).isNull();
     }
 
-    /** 글로 쓴 길이가 상한(64KB)을 넘는 배치표는 칸을 읽기 전에 버린다(사유 too_long). */
+    /**
+     * cx 반례(확인 패스 1 #8) — 그 잡 주문의 매체 조각이 501개(재접속 300ms 조각 · 사이 50ms 공백)면 배치표 501줄이 정상이다. 저장하고
+     * 업로드 장면도 그 결과 길이(150.3초)로 자른다(고정 500줄 상한이면 NULL 로 버려 업로드가 받은 값 그대로 · fallback 이 됐다).
+     */
+    @Test
+    void 주문_매체_조각이_501개면_501줄_배치표를_저장하고_업로드_장면에_쓴다() throws Exception {
+        long clipId = json(만들기(편집본, 기본_업로드()).andExpect(status().isCreated())).get("id").asLong();
+        jdbc.update("""
+                UPDATE render_jobs SET payload = jsonb_set(payload, '{plan,mediaSeqs}',
+                       (SELECT jsonb_agg(g) FROM generate_series(0, 500) g)) WHERE clip_id = ?""", clipId);
+        StringBuilder rows = new StringBuilder();
+        for (int i = 0; i <= 500; i++) {
+            rows.append(i == 0 ? "" : ",").append("{\"seq\":").append(i).append(",\"zeroAtUs\":").append(300_000L * i)
+                    .append(",\"fromUs\":0,\"toUs\":300000,\"headLeadUs\":0}");
+        }
+
+        try (LogCaptor logs = new LogCaptor()) {
+            배치표와_완성시킨다(clipId, "\"placements\":[" + rows + "],\"lengthUs\":150300000");
+
+            assertThat(logs.messages()).contains("clip.upload.scene_mapped uploadId=" + 업로드_번호()
+                    + " offsetMs=12000 resultMs=12000 source=layout");
+        }
+        JsonNode stored = MAPPER.readTree(배치표_칸(clipId));
+        assertThat(stored.get("placements")).hasSize(501);
+        assertThat(stored.get("lengthUs").asLong()).isEqualTo(150_300_000L);
+        assertThat(주문서_장면()).isEqualTo(12_000L);
+    }
+
+    /** 배치표 줄이 그 잡 주문의 매체 조각 수(이 컷은 12)보다 많으면 버린다 — 렌더는 매체 조각마다 한 줄을 낸다. */
+    @Test
+    void 줄이_주문_매체_조각_수보다_많으면_버린다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+        assertThat(jdbc.queryForObject("SELECT jsonb_array_length(payload -> 'plan' -> 'mediaSeqs') FROM render_jobs"
+                + " WHERE clip_id = ?", Integer.class, clipId)).as("이 컷의 주문 매체 조각 수").isEqualTo(12);
+
+        try (LogCaptor logs = new LogCaptor()) {
+            배치표와_완성시킨다(clipId, 배치표(new long[] {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, 52_000_000));
+
+            assertThat(logs.levelOf("clip.render.placements_dropped jobId=")).isEqualTo(Level.WARN);
+        }
+        assertThat(배치표_칸(clipId)).isNull();
+    }
+
+    /** 글로 쓴 길이가 상한(그 잡 매체 조각 수 × 가장 긴 줄)을 넘는 배치표는 칸을 읽기 전에 버린다(사유 too_long). */
     @Test
     void 글이_너무_긴_배치표는_버린다() throws Exception {
         long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
