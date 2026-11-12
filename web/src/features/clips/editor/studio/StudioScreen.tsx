@@ -757,9 +757,13 @@ function WiredStudioBody({
   const sourceList = videoSource.list?.playlist ?? null;
   const showPlayback = hasSource || video.playback.error !== null;
   // 트랙별 미리 듣기(POK-389): 영상이 받으려는 창과 같은 창 조각의 소리(방송 소리 트랙 전부)를 영상과 함께 받기 시작해, 영상이
-  // 그 창을 받으면 그 창 Blob 시각에 놓고 영상 노드를 따라 튼다. 창이 바뀌면 앞 재생기는 버린다(설계 prw2 3.3 · c9′)
+  // 그 창을 받으면 그 창 Blob 시각에 놓고 영상 노드를 따라 튼다. 창이 바뀌면 앞 재생기는 버린다(설계 prw2 3.3 · c9′). ② 가 아직
+  // 없으면(행 · 판 NULL 머리 · 끝 소리 확보) 기다림 고리가 다시 묻는다 — 확보 seq 의 ③ 은 원천 목록에서 찾는다(c10b′)
   const trackPreview = useTrackPreview({
     streamId,
+    mediaKey,
+    list: sourceList,
+    reloadList: videoSource.reloadList,
     window: hasSource ? video.target : null,
     loaded: hasSource ? video.loaded : null,
     failedKey: hasSource ? video.failedKey : null,

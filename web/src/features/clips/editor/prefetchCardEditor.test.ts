@@ -28,7 +28,12 @@ import type { PlaylistSegment } from './source/editorPlaylist';
 import type { RemuxedWindow } from './source/remuxWindow';
 import type { WindowPlacement } from './source/windowPlacement';
 import type { EditorSourceSnapshot, SourceList } from './source/useEditorSource';
-import { SegmentsNotReadyError, windowAnchors, type TrackPiece } from './trackAudio/loadTrackAudio';
+import {
+  SegmentsNotReadyError,
+  windowAnchors,
+  type TrackAudioLoad,
+  type TrackPiece,
+} from './trackAudio/loadTrackAudio';
 import { useTrackPreview } from './trackAudio/useTrackPreview';
 import { decideWindow, ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
 import { headCacheFor } from './source/fileHeadProbe';
@@ -139,6 +144,19 @@ const BUFFER = {
 /** 창 Blob 시각 0–52초를 한 덩어리로 덮는 소리(창 40–92초 · Δ 40초) */
 const TRACKS: TrackPiece[][] = [[{ startSeconds: 0, buffer: BUFFER }]];
 
+/** 소리 받기 결과(TrackAudioLoad) — 빠진 행 · 확보 기다림 없이 */
+const loadOf = (
+  tracks: TrackPiece[][],
+  extra: Partial<Pick<TrackAudioLoad, 'missingSeqs' | 'capture'>> = {},
+): TrackAudioLoad => ({
+  tracks,
+  missingSeqs: [],
+  capture: 'none',
+  reuse: { segments: new Map(), capture: null, decoded: new Map() },
+  ...extra,
+});
+const LOAD = loadOf(TRACKS);
+
 function depsWith(overrides: Partial<PrefetchDeps> = {}): PrefetchDeps {
   return {
     fetchJumpCard: vi.fn(() => Promise.resolve(CARD)),
@@ -148,7 +166,8 @@ function depsWith(overrides: Partial<PrefetchDeps> = {}): PrefetchDeps {
       Promise.resolve(remux.of(segs.map((seg) => seg.seq))),
     ),
     ensureWindowHeads: vi.fn(() => Promise.resolve()),
-    loadSegmentTracks: vi.fn(() => Promise.resolve(TRACKS)),
+    loadSegmentTracks: vi.fn(() => Promise.resolve(LOAD)),
+    readFragmentVideoDts: vi.fn(() => Promise.resolve(0)),
     createDecoder: () => ({ decodeAudioData: vi.fn() }),
     ...overrides,
   };
@@ -176,7 +195,7 @@ describe('prefetchCardEditor', () => {
     expect(seqsOf(options.segs as PlaylistSegment[])).toEqual(WINDOW_SEQS);
     await expect(options.anchors()).resolves.toEqual(windowAnchors(remux.of(WINDOW_SEQS)));
     // 맡긴 소리의 열쇠는 창 조각 seq 범위다(편집기의 미리 듣기가 같은 창에서 같은 열쇠를 낸다)
-    expect(segmentTracks.get(segmentTrackKey('7', 110, 122))).toBe(TRACKS);
+    expect(segmentTracks.get(segmentTrackKey('7', 110, 122))).toBe(LOAD);
   });
 
   it('편집기와 미리 받기는 같은 카드에서 같은 범위(cardEndpoints — estimate) · 같은 창 열쇠를 낸다', async () => {
@@ -285,7 +304,7 @@ describe('prefetchCardEditor', () => {
   });
 
   it('소리 트랙을 하나도 못 꺼내면 실패다: 편집기도 소리를 못 부른다', async () => {
-    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve([])) });
+    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(loadOf([]))) });
     await expect(prefetchCardEditor('7', '23', deps)).rejects.toThrow();
   });
 
@@ -312,7 +331,7 @@ describe('prefetchCardEditor', () => {
   it('방송 중에 소리 조각이 덜 올라와 창을 다 못 덮으면 맡기지 않고 pending이다', async () => {
     // 40–92초 창(Blob 0–52초)에서 앞 20초만 왔다
     const partial: TrackPiece[][] = [[{ startSeconds: 0, buffer: { ...BUFFER, duration: 20 } }]];
-    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(partial)) });
+    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(loadOf(partial))) });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
     // 맡기지 않았으니 다음 확인에서 다시 받는다
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
@@ -326,7 +345,7 @@ describe('prefetchCardEditor', () => {
         { startSeconds: 24, buffer: { ...BUFFER, duration: 28 } },
       ],
     ];
-    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(split)) });
+    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(loadOf(split))) });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
   });
 
@@ -339,7 +358,7 @@ describe('prefetchCardEditor', () => {
         { startSeconds: 20.02, buffer: { ...BUFFER, duration: 31.98 } },
       ],
     ];
-    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(cut)) });
+    const deps = depsWith({ loadSegmentTracks: vi.fn(() => Promise.resolve(loadOf(cut))) });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
     expect(deps.loadSegmentTracks).toHaveBeenCalledTimes(1);
@@ -350,7 +369,7 @@ describe('prefetchCardEditor', () => {
     const deps = depsWith({
       fetchBroadcast: vi.fn(() => Promise.resolve(ENDED)),
       readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(100, 160), 'vod')))),
-      loadSegmentTracks: vi.fn(() => Promise.resolve(partial)),
+      loadSegmentTracks: vi.fn(() => Promise.resolve(loadOf(partial))),
     });
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
   });
@@ -590,13 +609,13 @@ describe('조각 목록만 보고 판정하기', () => {
     forgetPrefetchLists();
   });
 
-  /** 40–92초 창을 4초 조각으로: 앞의 count개만 올라왔다 */
-  const segmentsUpTo = (count: number) =>
-    Array.from({ length: count }, (_, i) => ({
-      seq: i + 1,
-      startAtMs: STARTED + 40_000 + i * 4_000,
+  /** 40–92초 창(조각 110–122)을 4초 조각으로: 앞의 count개만 올라왔다. pdtStepMs 로 조각 사이 PDT 간격을 바꾼다 */
+  const segmentsUpTo = (count: number, pdtStepMs = 4_000) =>
+    WINDOW_SEQS.slice(0, count).map((seq, i) => ({
+      seq,
+      startAtMs: STARTED + 40_000 + i * pdtStepMs,
       durationMs: 4_000,
-      url: `https://s3/${i + 1}`,
+      url: `https://s3/${seq}`,
     }));
 
   function depsAskingList(segments: ReturnType<typeof segmentsUpTo>) {
@@ -605,7 +624,7 @@ describe('조각 목록만 보고 판정하기', () => {
       async (options: Parameters<PrefetchDeps['loadSegmentTracks']>[0]) => {
         if (options.precheck && !options.precheck(segments)) throw new SegmentsNotReadyError();
         body();
-        return TRACKS;
+        return LOAD;
       },
     );
     return { body, deps: depsWith({ loadSegmentTracks }) };
@@ -620,9 +639,25 @@ describe('조각 목록만 보고 판정하기', () => {
     expect(body).not.toHaveBeenCalled();
   });
 
-  it('조각 사이가 비면 덜 덮은 것이다', async () => {
-    const gappy = segmentsUpTo(13).filter((segment) => segment.seq !== 6);
+  it('창 조각 하나라도 응답에 없으면(② 미업로드) 덜 덮은 것이다', async () => {
+    const gappy = segmentsUpTo(13).filter((segment) => segment.seq !== 115);
     const { body, deps } = depsAskingList(gappy);
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it('창 밖 이웃 조각이 같이 와도 창 조각이 빠졌으면 덜 덮은 것이다', async () => {
+    const neighbor = {
+      seq: 123,
+      startAtMs: STARTED + 92_000,
+      durationMs: 4_000,
+      url: 'https://s3/123',
+    };
+    const { body, deps } = depsAskingList([
+      ...segmentsUpTo(13).filter((segment) => segment.seq !== 122),
+      neighbor,
+    ]);
 
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('pending');
     expect(body).not.toHaveBeenCalled();
@@ -630,6 +665,23 @@ describe('조각 목록만 보고 판정하기', () => {
 
   it('목록이 구간을 다 덮으면 본문을 받아 ready다', async () => {
     const { body, deps } = depsAskingList(segmentsUpTo(13));
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
+  it('판 NULL 래칫으로 조각 사이 PDT 가 벌어져도(조각마다 +200ms) 창 조각이 다 올라왔으면 다 덮은 것이다', async () => {
+    const { body, deps } = depsAskingList(segmentsUpTo(13, 4_200));
+
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
+  it('판 2 건너뜀으로 PDT 가 한 번 3초 뛰어도 창 조각이 다 올라왔으면 다 덮은 것이다', async () => {
+    const jumped = segmentsUpTo(13).map((segment) =>
+      segment.seq >= 116 ? { ...segment, startAtMs: segment.startAtMs + 3_000 } : segment,
+    );
+    const { body, deps } = depsAskingList(jumped);
 
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
     expect(body).toHaveBeenCalledTimes(1);
@@ -643,6 +695,42 @@ describe('조각 목록만 보고 판정하기', () => {
     await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
     expect(body).toHaveBeenCalledTimes(1);
     expect(vi.mocked(deps.loadSegmentTracks).mock.calls[0]![0].precheck).toBeUndefined();
+  });
+});
+
+describe('미리 받기의 끝 소리 확보(설계 prw2 7절 c10b′)', () => {
+  beforeEach(() => {
+    clearEditorMedia();
+    forgetPrefetchLists();
+  });
+
+  it('확보 닻은 원천 목록에서 확보 seq 의 ③ 을 찾아 그 머리 tfdt − Δ 다(창은 다시 싸지 않는다)', async () => {
+    const readFragmentVideoDts = vi.fn(() => Promise.resolve(52.5));
+    const deps = depsWith({ readFragmentVideoDts });
+    await prefetchCardEditor('7', '23', deps);
+
+    const [options] = vi.mocked(deps.loadSegmentTracks).mock.calls[0]!;
+    // 창 110–122 · Δ = 조각 110 의 DTS 40초 — 123 의 ③ 머리 52.5초는 Blob 12.5초다
+    await expect(options.captureAnchor!(123)).resolves.toBe(12.5);
+    expect(readFragmentVideoDts).toHaveBeenCalledWith(
+      expect.objectContaining({ seq: 123, uri: `${DIR}/seg/0000123.m4s` }),
+    );
+    expect(deps.fetchEditorWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('확보 seq 의 ③ 이 목록에 아직 없으면 기다림이다: 맡긴 소리가 기다림을 들고 가 편집기가 이어 묻는다', async () => {
+    const waiting = loadOf(TRACKS, { capture: 'waiting' });
+    const deps = depsWith({
+      readSource: vi.fn(() => Promise.resolve(snapshotOf(listOf(range(100, 122))))),
+      loadSegmentTracks: vi.fn(() => Promise.resolve(waiting)),
+    });
+    // 목록 끝 92초 = 구간 끝 + 여유 90초를 넘는다(창이 굳는다)
+    await expect(prefetchCardEditor('7', '23', deps)).resolves.toBe('ready');
+
+    const [options] = vi.mocked(deps.loadSegmentTracks).mock.calls[0]!;
+    await expect(options.captureAnchor!(123)).resolves.toBe('wait');
+    expect(deps.readFragmentVideoDts).not.toHaveBeenCalled();
+    expect(segmentTracks.get(segmentTrackKey('7', 110, 122))).toBe(waiting);
   });
 });
 

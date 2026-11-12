@@ -3,13 +3,16 @@ import { join } from 'node:path';
 import { StrictMode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { requestSegmentAudioAccess } from '@/api/clipEditor';
+import { requestSegmentAudioAccess, type SegmentAudioAccess } from '@/api/clipEditor';
 import { clearEditorMedia, segmentTrackKey, segmentTracks } from '../editorMedia';
-import type { PlaylistSegment } from '../source/editorPlaylist';
+import type { EditorPlaylist, PlaylistSegment } from '../source/editorPlaylist';
+import { ensureHeads, failMissingHeads, headCacheFor } from '../source/fileHeadProbe';
 import type { RemuxedWindow } from '../source/remuxWindow';
 import type { WindowPlacement } from '../source/windowPlacement';
-import type { TrackPiece } from './loadTrackAudio';
+import type { TrackAudioLoad, TrackPiece } from './loadTrackAudio';
 import {
+  AUDIO_WAIT_LIMIT,
+  AUDIO_WAIT_MS,
   TRACK_LOAD_TIMEOUT_MS,
   useTrackPreview,
   windowLevels,
@@ -17,7 +20,10 @@ import {
   type TrackWindow,
 } from './useTrackPreview';
 
-vi.mock('@/api/clipEditor', () => ({ requestSegmentAudioAccess: vi.fn() }));
+vi.mock('@/api/clipEditor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/clipEditor')>()),
+  requestSegmentAudioAccess: vi.fn(),
+}));
 
 const fixture = readFileSync(join(__dirname, '__fixtures__', 'three-tracks.m4s'));
 // 소리 트랙 하나짜리(최종 믹스만 녹화한 방송). three-tracks.m4s와 같은 ffmpeg 명령에서 소리를 하나만 넣었다:
@@ -77,6 +83,18 @@ const CACHED_BUFFER = {
   numberOfChannels: 1,
   getChannelData: () => new Float32Array(100).fill(0.5),
 } as unknown as AudioBuffer;
+
+/** 카드가 미리 받아 맡긴 소리(TrackAudioLoad) — 빠진 행 · 확보 기다림 없이 다 받은 것 */
+const cachedLoad = (
+  tracks: TrackPiece[][],
+  extra: Partial<Pick<TrackAudioLoad, 'missingSeqs' | 'capture'>> = {},
+): TrackAudioLoad => ({
+  tracks,
+  missingSeqs: [],
+  capture: 'none',
+  reuse: { segments: new Map(), capture: null, decoded: new Map() },
+  ...extra,
+});
 
 const WINDOW = windowOf(10, [1]);
 const LOADED = loadedOf(WINDOW);
@@ -309,7 +327,10 @@ describe('useTrackPreview', () => {
     const node = video();
     // 카드가 미리 받아 둔 창(seq 7–8)의 소리 — 영상 창 캐시는 따로 버려져(예산이 다르다) 영상은 아직 앞 창을 튼다
     const next = windowOf(20, [7, 8]);
-    segmentTracks.set(segmentTrackKey('s-1', 7, 8), [[{ startSeconds: 0, buffer: CACHED_BUFFER }]]);
+    segmentTracks.set(
+      segmentTrackKey('s-1', 7, 8),
+      cachedLoad([[{ startSeconds: 0, buffer: CACHED_BUFFER }]]),
+    );
     const { result, rerender } = renderHook(
       ({ loaded }: { loaded: LoadedTrackWindow | null }) =>
         useTrackPreview({
@@ -369,7 +390,10 @@ describe('useTrackPreview', () => {
 
   it('미리 받아 둔 소리로 닻을 기다리다 그 창 영상이 실패해도 「못 부름」이다', async () => {
     const node = video();
-    segmentTracks.set(segmentTrackKey('s-1', 1, 1), [[{ startSeconds: 0, buffer: CACHED_BUFFER }]]);
+    segmentTracks.set(
+      segmentTrackKey('s-1', 1, 1),
+      cachedLoad([[{ startSeconds: 0, buffer: CACHED_BUFFER }]]),
+    );
     const { result, rerender } = renderHook(
       ({ failedKey }: { failedKey: string | null }) =>
         useTrackPreview({
@@ -486,9 +510,9 @@ describe('useTrackPreview', () => {
     expect(result.current.status).toBe('loading');
     expect(node.muted).toBe(true);
     finish({ expiresAt: '', segments: [] });
-    // 소리 트랙을 못 꺼냈다(빈 조각) → 못 부름 → 영상 소리로 돌아간다
-    await waitFor(() => expect(result.current.status).toBe('unavailable'));
-    expect(node.muted).toBe(false);
+    // 창 조각의 ② 가 아직 하나도 없다 → 기다림(무음 그대로 · 못 부름 알림 없음 — kty 결정 (나) c10b′ r1 5번)
+    await waitFor(() => expect(result.current.status).toBe('waiting'));
+    expect(node.muted).toBe(true);
   });
 
   it('음량이 영상 소리와 같으면(첫 트랙만 100%) 불러오는 동안 영상 소리를 그대로 둔다: 조각을 다 받는 수십 초 동안 조용하지 않게(PR #341 claude)', async () => {
@@ -825,6 +849,446 @@ describe('useTrackPreview', () => {
     expect(result.current.status).toBe('idle');
     expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
     expect(node.muted).toBe(false);
+  });
+});
+
+// --- ② 기다림 고리 · 끝 소리 확보(설계 prw2 7절 c10b′ · 계획 검증 묶음 C 뒤) ---
+
+/** 창 조각 seq 들의 소리 주소 응답 — 창 조각과 같은 PDT 자리(1초씩) · 확보 칸은 덧붙인다 */
+function accessFor(
+  seqs: readonly number[],
+  extra: {
+    audioCapture?: string;
+    audioCaptureSegment?: SegmentAudioAccess['segments'][number];
+  } = {},
+): SegmentAudioAccess {
+  return {
+    expiresAt: '2026-10-23T00:05:00Z',
+    segments: seqs.map((seq) => ({
+      seq,
+      startAtMs: BASE + (9 + seq) * 1000,
+      durationMs: 1000,
+      url: `https://s3/seg_${seq}.m4s`,
+    })),
+    ...extra,
+  } as SegmentAudioAccess;
+}
+
+/** 확보 조각 seq 4 의 ② 행 */
+const CAPTURE_4 = {
+  seq: 4,
+  startAtMs: BASE + 13_000,
+  durationMs: 1000,
+  url: 'https://s3/seg_4.m4s',
+};
+
+/** 판 NULL 창(② 머리를 읽는 창) — seq 1–2 · S 10–12초 */
+function unversionedWindow(): TrackWindow {
+  const win = windowOf(10, [1, 2]);
+  return { ...win, segs: win.segs.map((seg) => ({ ...seg, timing: null })) };
+}
+
+/** 목록 — 한 런(seq 1…) · gap 이면 그 seq 를 GAP 줄로 */
+function playlistOf(seqs: readonly number[], gapSeq?: number): EditorPlaylist {
+  const rows = seqs.map((seq) => ({
+    ...segment(seq, BASE + (9 + seq) * 1000),
+    gap: seq === gapSeq,
+  }));
+  return { runs: [rows.filter((row) => !row.gap)], rows };
+}
+
+const fetchedUrls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+
+/** 가짜 시계를 흘려 받기 · 고리를 진행시킨다 */
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2, 3]));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(new Uint8Array(fixture)))),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.mocked(requestSegmentAudioAccess).mockReset();
+    vi.restoreAllMocks();
+    clearEditorMedia();
+  });
+
+  it('고리는 10초마다 · 30회(약 5분)까지 다시 묻는다', () => {
+    expect(AUDIO_WAIT_MS).toBe(10_000);
+    expect(AUDIO_WAIT_LIMIT).toBe(30);
+  });
+
+  it('창 seq 의 ② 행이 빠지면 10초 뒤 다시 묻고, 오면 그 조각만 받아 재생기를 새로 짓는다', async () => {
+    vi.mocked(requestSegmentAudioAccess)
+      .mockResolvedValueOnce(accessFor([1, 3]))
+      .mockResolvedValue(accessFor([1, 2, 3]));
+    const { ctx, gains } = fakeContext();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        video: video(),
+        createContext: () => ctx as never,
+      }),
+    );
+    await advance(50);
+    expect(result.current.status).toBe('ready');
+    expect(gains).toHaveLength(3);
+
+    await advance(AUDIO_WAIT_MS - 100);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+    await advance(150);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+    // 받아 둔 조각(1 · 3)은 다시 받지 않는다
+    expect(fetchedUrls().sort()).toEqual(
+      ['https://s3/seg_1.m4s', 'https://s3/seg_2.m4s', 'https://s3/seg_3.m4s'].sort(),
+    );
+    expect(gains).toHaveLength(6);
+    expect(result.current.status).toBe('ready');
+
+    // 사유가 없으면 고리가 멈춘다
+    await advance(AUDIO_WAIT_MS * 3);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it(`상한 ${AUDIO_WAIT_LIMIT}회에 멈추고 경고는 한 번 · 끝내 빠진 행이면 영상 소리로 물러나고 끝내 없는 머리는 failed 다`, async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const win = unversionedWindow();
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1]));
+    const node = video();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-cap',
+        window: win,
+        loaded: loadedOf(win),
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+    await advance(50);
+    expect(result.current.status).toBe('ready');
+    expect(node.muted).toBe(true);
+
+    await advance(AUDIO_WAIT_MS * AUDIO_WAIT_LIMIT + 1000);
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1 + AUDIO_WAIT_LIMIT);
+    const gaveUp = warn.mock.calls.filter(([message]) => String(message).includes('그만'));
+    expect(gaveUp).toHaveLength(1);
+    expect(result.current.status).toBe('unavailable');
+    expect(node.muted).toBe(false);
+    expect(headCacheFor('mk-cap').get(2)).toEqual({ state: 'failed' });
+
+    await advance(AUDIO_WAIT_MS * 5);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1 + AUDIO_WAIT_LIMIT);
+  });
+
+  it('판 NULL 창 seq 의 머리가 missing 이면 다시 판독한다 — 그 소리 주소는 트랙 다시 받기와 한 번만 묻는다', async () => {
+    const win = unversionedWindow();
+    await ensureHeads('mk-head', [], [2]);
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2]));
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-head',
+        window: win,
+        loaded: loadedOf(win),
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await advance(50);
+    expect(result.current.status).toBe('ready');
+    expect(headCacheFor('mk-head').get(2)).toEqual({ state: 'missing' });
+
+    await advance(AUDIO_WAIT_MS + 50);
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+    expect(headCacheFor('mk-head').get(2)?.state).toBe('ready');
+    await advance(AUDIO_WAIT_MS * 3);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it('응답에 창 조각 행이 하나도 없으면 기다림이다: 음량을 바꿔 둔 편집본은 무음 · 못 부름으로 알리지 않는다(kty 결정 (나) c10b′ r1 5번)', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([]));
+    const node = video();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+
+    await advance(50);
+    expect(result.current.status).toBe('waiting');
+    expect(node.muted).toBe(true);
+    await advance(AUDIO_WAIT_MS * 3);
+    expect(result.current.status).toBe('waiting');
+    expect(node.muted).toBe(true);
+
+    // 행이 오면 그 소리로 튼다
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2, 3]));
+    await advance(AUDIO_WAIT_MS + 50);
+    expect(result.current.status).toBe('ready');
+  });
+
+  it('응답에 창 조각 행이 하나도 없어도 음량이 영상 소리와 같으면 기다리는 동안 영상 소리를 그대로 둔다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([]));
+    const node = video();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    act(() => result.current.setGains([1, 0, 0]));
+
+    await advance(50);
+
+    expect(result.current.status).toBe('waiting');
+    expect(node.muted).toBe(false);
+  });
+
+  it(`응답에 행이 끝내 하나도 없으면 상한 ${AUDIO_WAIT_LIMIT}회에 영상 소리로 물러나 못 부름으로 알린다(경고 한 번)`, async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([]));
+    const node = video();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+
+    await advance(AUDIO_WAIT_MS * AUDIO_WAIT_LIMIT - 1000);
+    expect(result.current.status).toBe('waiting');
+    await advance(2000);
+
+    expect(result.current.status).toBe('unavailable');
+    expect(node.muted).toBe(false);
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toHaveLength(1);
+  });
+
+  it('고리는 failed 머리를 다시 읽지 않는다: 다시 판독은 missing · 아직 안 읽은 seq 만이다(c10b′ r1 3번 · 보안 M-1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const win = { ...THREE, segs: THREE.segs.map((seg) => ({ ...seg, timing: null })) };
+    await ensureHeads('mk-failed', [], [2]);
+    failMissingHeads('mk-failed', [2]);
+    // seq 3 의 ② 행이 끝내 안 와 고리가 상한까지 돈다. seq 2 의 ② 머리는 읽으면 늘 실패한다(Range 404)
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2]));
+    vi.mocked(fetch).mockImplementation((url, init) =>
+      Promise.resolve(
+        String(url).endsWith('seg_2.m4s') && new Headers(init?.headers).has('Range')
+          ? new Response(null, { status: 404 })
+          : new Response(new Uint8Array(fixture)),
+      ),
+    );
+    const headReads = () =>
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(
+          ([url, init]) =>
+            String(url).endsWith('seg_2.m4s') && new Headers(init?.headers).has('Range'),
+        ).length;
+    renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-failed',
+        window: win,
+        loaded: loadedOf(win),
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+
+    await advance(AUDIO_WAIT_MS * AUDIO_WAIT_LIMIT + 1000);
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1 + AUDIO_WAIT_LIMIT);
+    expect(headReads()).toBe(0);
+    expect(headCacheFor('mk-failed').get(2)).toEqual({ state: 'failed' });
+    // 아직 안 읽은 seq 1 은 고리가 읽는다
+    expect(headCacheFor('mk-failed').get(1)?.state).toBe('ready');
+  });
+
+  it('확보가 not_ready 면 다시 묻고, attached 가 되면 ③ 머리 tfdt 만 읽어(창은 다시 싸지 않음) 확보 소리를 붙인다', async () => {
+    vi.mocked(requestSegmentAudioAccess)
+      .mockResolvedValueOnce(accessFor([1, 2, 3], { audioCapture: 'not_ready' }))
+      .mockResolvedValue(
+        accessFor([1, 2, 3], { audioCapture: 'attached', audioCaptureSegment: CAPTURE_4 }),
+      );
+    const { ctx, gains } = fakeContext();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        list: playlistOf([1, 2, 3, 4]),
+        reloadList: vi.fn(async () => null),
+        video: video(),
+        createContext: () => ctx as never,
+      }),
+    );
+    await advance(50);
+    expect(result.current.status).toBe('ready');
+    expect(fetchedUrls()).not.toContain('https://s3/seg_4.m4s');
+
+    await advance(AUDIO_WAIT_MS + 50);
+
+    // ③ 은 init(MAP) · 조각 앞부분만 Range 로 · 쿠키 자격(mediaCredentials)으로 읽는다
+    const third = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).startsWith('https://cdn/'));
+    expect(third.map(([url]) => String(url)).sort()).toEqual(
+      ['https://cdn/init.mp4', 'https://cdn/seg/4.m4s'].sort(),
+    );
+    expect(third.map(([, init]) => init?.credentials)).toEqual(['same-origin', 'same-origin']);
+    expect(third.map(([, init]) => new Headers(init?.headers).get('Range'))).toEqual([
+      'bytes=0-65535',
+      'bytes=0-65535',
+    ]);
+    expect(fetchedUrls()).toContain('https://s3/seg_4.m4s');
+    expect(gains).toHaveLength(6);
+    await advance(AUDIO_WAIT_MS * 3);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it('확보 seq 의 ③ 이 들고 있는 목록에 없으면 목록을 다시 받아 찾고, 그래도 없으면 기다린다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(
+      accessFor([1, 2, 3], { audioCapture: 'attached', audioCaptureSegment: CAPTURE_4 }),
+    );
+    const reloadList = vi.fn(async () => playlistOf([1, 2, 3]));
+    renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        list: playlistOf([1, 2, 3]),
+        reloadList,
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await advance(50);
+    expect(reloadList).toHaveBeenCalledTimes(1);
+    expect(fetchedUrls()).not.toContain('https://s3/seg_4.m4s');
+
+    // 다시 받은 목록에 나타나면 그 차례에 붙는다
+    reloadList.mockResolvedValue(playlistOf([1, 2, 3, 4]));
+    await advance(AUDIO_WAIT_MS + 50);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+    expect(fetchedUrls()).toContain('https://s3/seg_4.m4s');
+  });
+
+  it('확보 seq 의 ③ 이 GAP 줄이면 확보를 포기하고 다시 묻지 않는다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(
+      accessFor([1, 2, 3], { audioCapture: 'attached', audioCaptureSegment: CAPTURE_4 }),
+    );
+    renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        list: playlistOf([1, 2, 3, 4], 4),
+        reloadList: vi.fn(async () => null),
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await advance(AUDIO_WAIT_MS * 3);
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+    expect(fetchedUrls().filter((url) => /seg[_/]4\./.test(url))).toEqual([]);
+  });
+
+  it.each([
+    ['skipped(R28 — 확보 안 함 · 재조회 멈춤)', { audioCapture: 'skipped' }],
+    ['칸 없음(PR-B2 전 clip)', {}],
+  ])('확보가 %s 이고 빠진 것이 없으면 다시 묻지 않는다', async (_name, extra) => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2, 3], extra));
+    renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        list: playlistOf([1, 2, 3, 4]),
+        reloadList: vi.fn(async () => null),
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await advance(AUDIO_WAIT_MS * 3);
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('창이 바뀌면 앞 창의 고리를 멈춘다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockImplementation(async (_id, fromMs) =>
+      fromMs === BASE + 10_000 ? accessFor([1]) : accessFor([7]),
+    );
+    const other = windowOf(16, [7]);
+    const { rerender } = renderHook(
+      ({ window }: { window: TrackWindow }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window,
+          loaded: loadedOf(window),
+          video: video(),
+          createContext: () => fakeContext().ctx as never,
+        }),
+      { initialProps: { window: THREE } },
+    );
+    await advance(50);
+    rerender({ window: other });
+    await advance(AUDIO_WAIT_MS * 3);
+
+    const asked = vi.mocked(requestSegmentAudioAccess).mock.calls.map(([, fromMs]) => fromMs);
+    expect(asked).toEqual([BASE + 10_000, BASE + 16_000]);
+  });
+
+  it('미리 받아 맡긴 소리가 확보를 기다리던 것이면 편집기가 이어서 다시 묻는다', async () => {
+    segmentTracks.set(
+      segmentTrackKey('s-1', 1, 3),
+      cachedLoad([[{ startSeconds: 0, buffer: CACHED_BUFFER }]], { capture: 'waiting' }),
+    );
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2, 3]));
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await advance(50);
+    expect(result.current.status).toBe('ready');
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+
+    await advance(AUDIO_WAIT_MS + 50);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
   });
 });
 

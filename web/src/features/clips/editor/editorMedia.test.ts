@@ -7,15 +7,26 @@ import {
   editorWindowKey,
   holdEditorMedia,
   segmentTracks,
+  trackAudioLoadBytes,
   trackPiecesBytes,
   windowBlobs,
 } from './editorMedia';
+import type { SegmentTracks } from './trackAudio/fmp4Audio';
+import type { TrackAudioLoad, TrackPiece } from './trackAudio/loadTrackAudio';
 
 // 맡긴 미디어는 창 하나가 수십 MB다: 쓰는 화면이 모두 내려가면 비워야 탭을 닫을 때까지 남지 않는다
 
 /** 다시 싼 창 — 크기는 mp4 Blob 으로 잰다 */
 const windowOf = (blob: Blob) => ({ blob, shiftSeconds: 0, segments: [] });
 const BLOB = windowOf(new Blob(['mp4']));
+
+/** 맡기는 소리(TrackAudioLoad) — 다시 받기 재료 없이 */
+const loadOf = (tracks: TrackPiece[][]): TrackAudioLoad => ({
+  tracks,
+  missingSeqs: [],
+  capture: 'none',
+  reuse: { segments: new Map(), capture: null, decoded: new Map() },
+});
 
 describe('holdEditorMedia', () => {
   beforeEach(() => {
@@ -147,13 +158,43 @@ describe('바이트 예산', () => {
 
     const release = holdEditorMedia();
     const big = { length: 20 * MB, numberOfChannels: 1 } as unknown as AudioBuffer; // 80MB
-    segmentTracks.set('a', [[{ startSeconds: 0, buffer: big }]]);
-    segmentTracks.set('b', [[{ startSeconds: 0, buffer: big }]]);
-    segmentTracks.set('c', [[{ startSeconds: 0, buffer: big }]]);
+    segmentTracks.set('a', loadOf([[{ startSeconds: 0, buffer: big }]]));
+    segmentTracks.set('b', loadOf([[{ startSeconds: 0, buffer: big }]]));
+    segmentTracks.set('c', loadOf([[{ startSeconds: 0, buffer: big }]]));
 
     expect(segmentTracks.get('a')).toBeUndefined();
     expect(segmentTracks.get('b')).toBeDefined();
     release();
+  });
+});
+
+describe('trackAudioLoadBytes', () => {
+  it('맡긴 소리는 푼 소리에 다시 받기 재료(판독한 조각의 프레임 바이트)까지 잰다: 기다림 고리가 다시 쓰려고 든다', () => {
+    const buffer = { length: 1_000, numberOfChannels: 2 } as unknown as AudioBuffer; // 8,000
+    const frames = (count: number, size: number) =>
+      Array.from({ length: count }, () => new Uint8Array(size));
+    const segment = (size: number) =>
+      ({
+        video: null,
+        audio: [
+          { frames: frames(3, size), config: {}, timescale: 48000, timing: null },
+          { frames: frames(2, size), config: {}, timescale: 48000, timing: null },
+        ],
+      }) as unknown as SegmentTracks;
+    const load: TrackAudioLoad = {
+      ...loadOf([[{ startSeconds: 0, buffer }]]),
+      reuse: {
+        segments: new Map([
+          [1, segment(100)],
+          [2, segment(10)],
+        ]),
+        capture: null,
+        decoded: new Map([['0:1:0:5', buffer]]),
+      },
+    };
+
+    // 푼 소리 8,000 + 프레임 (3 + 2)·100 + (3 + 2)·10 — 푼 덩어리 표(decoded)는 tracks 와 같은 소리라 두 번 세지 않는다
+    expect(trackAudioLoadBytes(load)).toBe(8_000 + 500 + 50);
   });
 });
 

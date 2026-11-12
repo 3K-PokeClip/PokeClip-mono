@@ -112,6 +112,11 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
               {state.previewError}
             </span>
           ) : null}
+          {state.trackPreviewStatus === 'waiting' ? (
+            <span className={styles.stageNote} role="status">
+              트랙 소리를 기다리는 중이에요
+            </span>
+          ) : null}
           {state.trackPreviewStatus === 'unavailable' ? (
             <span className={styles.stageNote} role="status">
               트랙별 미리 듣기를 못 불러왔어요 · 영상 소리로 들려요

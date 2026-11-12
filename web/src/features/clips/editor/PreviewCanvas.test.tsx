@@ -40,3 +40,23 @@ describe('PreviewCanvas 버퍼링', () => {
     expect(spinners({ previewBuffering: true, previewError: '미리보기를 틀 수 없어요' })).toBe(0);
   });
 });
+
+describe('PreviewCanvas 트랙별 미리 듣기 안내', () => {
+  it('트랙 소리를 기다리는 중이면 그렇게 알리고 못 부름으로 알리지 않는다(kty 결정 (나) c10b′ r1 5번)', () => {
+    const { getByText, queryByText } = render(
+      <PreviewCanvas state={state({ trackPreviewStatus: 'waiting' })} />,
+    );
+    expect(getByText('트랙 소리를 기다리는 중이에요')).toHaveAttribute('role', 'status');
+    expect(queryByText(/트랙별 미리 듣기를 못 불러왔어요/)).toBeNull();
+  });
+
+  it('불러오는 중 · 다 불렀으면 기다림으로 알리지 않는다', () => {
+    for (const status of ['loading', 'ready'] as const) {
+      const { queryByText, unmount } = render(
+        <PreviewCanvas state={state({ trackPreviewStatus: status })} />,
+      );
+      expect(queryByText('트랙 소리를 기다리는 중이에요')).toBeNull();
+      unmount();
+    }
+  });
+});

@@ -11,13 +11,15 @@ import { onSessionAdvance } from '@/stores/auth';
 import { segmentTrackKey, segmentTracks, windowBlobs } from './editorMedia';
 import { editorXResolver, streamerIdOf } from './source/broadcastStreamer';
 import { editorSourceView, type EditorSourceState } from './source/editorSourceState';
-import type { PlaylistSegment } from './source/editorPlaylist';
-import { headCacheFor } from './source/fileHeadProbe';
+import type { EditorPlaylist, PlaylistSegment } from './source/editorPlaylist';
+import { headCacheFor, readFragmentVideoDts } from './source/fileHeadProbe';
 import { cardEndpoints, displayRange } from './source/rangeEndpoints';
 import type { RemuxedWindow } from './source/remuxWindow';
 import { readEditorSourceOnce, type EditorSourceSnapshot } from './source/useEditorSource';
 import { decideWindow, ensureWindowHeads, fetchEditorWindow } from './source/editorWindow';
 import {
+  captureAnchorOf,
+  captureRowOf,
   MAX_SEAM_SECONDS,
   SegmentsNotReadyError,
   windowAnchors,
@@ -28,7 +30,9 @@ import { loadSegmentTracks, PREVIEW_SAMPLE_RATE } from './trackAudio/useTrackPre
 // 카드에서 편집기를 미리 받아 둔다(POK-499). 편집기가 처음 받는 영상 창과 소리 조각(파형도 여기서 나온다)을 같은 셈 · 같은
 // 열쇠로 받아 editorMedia에 맡긴다. 셋이 다 오면 카드의 「편집」이 열리고, 편집기는 맡긴 것을 그대로 꺼내 쓴다.
 // 영상 창은 편집기처럼 ③ 되감기 목록에서 정하고(decideWindow) 조각을 받아 다시 싼다(POK-473). 녹화 재생 서버(/playback)는
-// 부르지 않는다. 판 NULL 창이면 ② 머리도 함께 읽어 둔다(편집기가 다시 읽지 않는다).
+// 부르지 않는다. 판 NULL 창이면 ② 머리도 함께 읽어 둔다(편집기가 다시 읽지 않는다). 소리 주소 응답의 끝 소리 확보가
+// attached 면 확보 소리도 놓아 맡기고, 기다림(not_ready · ③ 이 목록에 아직 없음)이나 빠진 행은 맡긴 결과에 실려 편집기의 ② 기다림
+// 고리가 이어 묻는다(설계 prw2 7절 c10b′).
 
 /**
  * - ready: 다 받았다(받을 조각이 없거나 원천이 끝내 막힌 방송도 기다릴 것이 없어 ready다. 그 사정은 편집기가 알린다)
@@ -53,6 +57,8 @@ export interface PrefetchDeps {
     signal?: AbortSignal,
   ) => Promise<void>;
   loadSegmentTracks: typeof loadSegmentTracks;
+  /** 확보 조각 ③ 의 영상 첫 DTS(초) — 쿠키 자격 Range 판독 */
+  readFragmentVideoDts: (seg: PlaylistSegment) => Promise<number>;
   /** 소리를 풀 문맥. 편집기의 미리 듣기와 같은 표본율이라야 같은 소리다 */
   createDecoder: () => Pick<BaseAudioContext, 'decodeAudioData'>;
 }
@@ -153,6 +159,7 @@ const defaultDeps: PrefetchDeps = {
   fetchEditorWindow,
   ensureWindowHeads,
   loadSegmentTracks,
+  readFragmentVideoDts: (seg) => readFragmentVideoDts(seg),
   createDecoder: () => new OfflineAudioContext(1, 1, PREVIEW_SAMPLE_RATE),
 };
 
@@ -164,14 +171,6 @@ export const PREFETCH_VIDEO_TIMEOUT_MS = 120_000;
 
 /** 받은 소리가 창을 다 덮었다고 보는 여유(초). 조각은 4초 단위라 처음 · 끝 조각이 창보다 조금 넓다 */
 const COVER_TOLERANCE_SECONDS = 1;
-/**
- * 소리 주소 목록에서 조각 사이(앞 조각 PDT 끝 → 다음 조각 PDT)가 이만큼 넘게 벌어지면 덜 올라온 조각이 빠진 자리로 본다(조각
- * 길이는 ms 정수라 어긋남이 작다). 이 검사는 PDT 만 본다: 조각이 다 있어도 PDT 가 벌어지는 창(판 2 건너뜀 · 판 NULL 래칫)도
- * 덜 올라온 것으로 접어 방송 중 미리 받기가 pending 이다(다시 묻기 1분 뒤 실패로 넘어가 편집기가 제 화면에서 직접 받는다).
- * 바로잡기는 c10b′ 몫이다
- */
-const GAP_TOLERANCE_MS = 50;
-
 /**
  * 첫 트랙의 덩어리들이 창(Blob 시각)을 빈틈없이 덮나. 덜 올라온 조각이 있으면 그 자리에 틈이 난다(loadTrackAudio). 겹침을 잘라
  * 나뉜 덩어리(E9)는 이음매 틈이 프레임 하나 미만이라 이어진 것으로 본다(MAX_SEAM_SECONDS)
@@ -191,24 +190,15 @@ function coversWindow(tracks: TrackPiece[][], fromSeconds: number, toSeconds: nu
 }
 
 /**
- * 조각 목록만 보고 구간을 한 덩어리로 빈틈없이 덮나(coversWindow의 목록판). 덜 올라온 조각이 있으면 거기서 틈이 난다.
- * 목록이 비었으면 true다: 그때는 받을 것이 없어 아래의 「소리 트랙 없음」 판정이 맡는다
+ * 창 조각이 모두 올라왔나 — 소리 주소 응답에는 올라간 ② 만 온다(clip). 덜 올라온 조각은 창 조각(③ 목록의 한 런)의 seq 로
+ * 가른다: 응답의 PDT 차로 보면 조각이 다 있어도 판 NULL 래칫 · 판 2 건너뜀에서 벌어져 덜 올라온 것으로 접혔다(c9′ r1)
  */
-function segmentsCover(
-  segments: { seq: number; startAtMs: number; durationMs: number }[],
-  fromMs: number,
-  toMs: number,
+function windowUploaded(
+  segments: readonly { seq: number }[],
+  segs: readonly Pick<PlaylistSegment, 'seq'>[],
 ): boolean {
-  const ordered = [...segments].sort((a, b) => a.seq - b.seq);
-  const first = ordered[0];
-  if (first === undefined) return true;
-  if (first.startAtMs > fromMs + COVER_TOLERANCE_SECONDS * 1000) return false;
-  let end = first.startAtMs + first.durationMs;
-  for (const segment of ordered.slice(1)) {
-    if (Math.abs(segment.startAtMs - end) > GAP_TOLERANCE_MS) return false;
-    end = segment.startAtMs + segment.durationMs;
-  }
-  return end >= toMs - COVER_TOLERANCE_SECONDS * 1000;
+  const uploaded = new Set(segments.map((segment) => segment.seq));
+  return segs.every((seg) => uploaded.has(seg.seq));
 }
 
 /** 원천이 끝내 막힌 상태 — 기다려도 창이 서지 않는다(편집기가 그 까닭을 알린다) */
@@ -238,47 +228,53 @@ function blobRangeOf(remuxed: RemuxedWindow): { fromSeconds: number; toSeconds: 
 
 /**
  * 카드 창의 소리 조각을 받아 그 창 Blob 시각에 놓아 맡긴다. 다 덮은 소리를 받았나 — 방송 중에 조각이 덜 올라왔으면 맡기지 않고
- * false다
+ * false다. 끝 소리 확보 기다림은 막지 않는다: 맡긴 결과에 실려 편집기의 ② 기다림 고리가 이어 묻는다
  * @param video 같은 창의 영상 받기(다시 싼 결과가 소리를 놓을 닻이다)
+ * @param source 방송 중인가 · 원천 ③ 목록(확보 seq 의 ③ 을 찾는다)
  */
 async function prefetchAudio(
   streamId: string,
   target: { segs: readonly PlaylistSegment[] },
   video: () => Promise<RemuxedWindow>,
-  live: boolean,
+  source: { live: boolean; playlist: EditorPlaylist },
   deps: PrefetchDeps,
 ): Promise<boolean> {
+  const { live, playlist } = source;
   const first = target.segs[0]!;
   const last = target.segs.at(-1)!;
   const trackKey = segmentTrackKey(streamId, first.seq, last.seq);
   if (segmentTracks.get(trackKey) !== undefined) return true;
-  const fromMs = first.pdtMs;
-  const toMs = last.pdtMs + last.durationMs;
   const decoder = deps.createDecoder();
-  let tracks: TrackPiece[][];
+  let load: Awaited<ReturnType<PrefetchDeps['loadSegmentTracks']>>;
   try {
-    tracks = await deps.loadSegmentTracks({
+    load = await deps.loadSegmentTracks({
       streamId,
       segs: target.segs,
       anchors: async () => windowAnchors(await video()),
       decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
-      // 방송 중에 조각 목록이 구간을 덮지 못하면 본문을 받지 않는다: 어차피 덜 덮은 소리는 맡기지 않고, 다시 확인할 때마다
+      // 방송 중에 창 조각이 다 올라오지 않았으면 본문을 받지 않는다: 어차피 덜 덮은 소리는 맡기지 않고, 다시 확인할 때마다
       // 같은 구간을 통째로 받아 풀었다(10초마다 최대 6번)
-      precheck: live ? (segments) => segmentsCover(segments, fromMs, toMs) : undefined,
+      precheck: live ? (segments) => windowUploaded(segments, target.segs) : undefined,
+      captureAnchor: async (seq) =>
+        captureAnchorOf(
+          captureRowOf(playlist, target.segs, seq),
+          (await video()).shiftSeconds,
+          deps.readFragmentVideoDts,
+        ),
     });
   } catch (error) {
     if (error instanceof SegmentsNotReadyError) return false;
     throw error;
   }
   // 소리 트랙을 하나도 못 꺼냈으면 편집기도 「소리 못 부름」이다: 준비됐다고 하지 않는다
-  if (tracks.length === 0) throw new Error('no audio tracks');
+  if (load.tracks.length === 0) throw new Error('no audio tracks');
   // 영상 조각은 올라왔어도 소리 조각은 아직 올라가는 중일 수 있다(서버는 다 올라간 조각만 준다). 덜 덮은 소리를 맡기면 편집기가
   // 그것을 그대로 꺼내 빈 자리를 무음으로 튼다(PR #458 codex). 끝난 방송이면 더 올라올 것이 없어 그대로 맡긴다
   if (live) {
     const { fromSeconds, toSeconds } = blobRangeOf(await video());
-    if (!coversWindow(tracks, fromSeconds, toSeconds)) return false;
+    if (!coversWindow(load.tracks, fromSeconds, toSeconds)) return false;
   }
-  segmentTracks.set(trackKey, tracks);
+  segmentTracks.set(trackKey, load);
   return true;
 }
 
@@ -349,7 +345,7 @@ async function prefetchOnce(
   const video = prefetchVideo(streamId, mediaKey, target, deps);
   const [, audioComplete] = await Promise.all([
     video,
-    prefetchAudio(streamId, target, () => video, live, deps),
+    prefetchAudio(streamId, target, () => video, { live, playlist: list.playlist }, deps),
   ]);
   return audioComplete ? 'ready' : 'pending';
 }

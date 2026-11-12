@@ -582,7 +582,12 @@ describe('StudioScreen — 편집기 영상 원천(POK-473 · POK-233)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     // 카드가 미리 받아 둔 창 조각 12–20 의 소리 — 영상 창은 받다 실패해 그 창의 닻이 오지 않는다
     const buffer = { duration: 1, length: 1, sampleRate: 1, numberOfChannels: 1 } as AudioBuffer;
-    segmentTracks.set(segmentTrackKey(STREAM_ID, 12, 20), [[{ startSeconds: 0, buffer }]]);
+    segmentTracks.set(segmentTrackKey(STREAM_ID, 12, 20), {
+      tracks: [[{ startSeconds: 0, buffer }]],
+      missingSeqs: [],
+      capture: 'none',
+      reuse: { segments: new Map(), capture: null, decoded: new Map() },
+    });
     vi.mocked(remuxWindow).mockRejectedValueOnce(new Error('재다중화 패킷 수가 다르다'));
     try {
       await openWithSource(`?stream=${STREAM_ID}&card=5`);

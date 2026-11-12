@@ -1,4 +1,12 @@
-import { MAX_TRACK_SAMPLES, readFirstSampledTraf, readTrackHeaders } from '@/lib/fmp4Boxes';
+import { mediaCredentials } from '@/api/mediaPlayback';
+import {
+  MAX_TRACK_SAMPLES,
+  readFirstSampledTraf,
+  readTrackHeaders,
+  readTrackStart,
+  readVideoTrack,
+} from '@/lib/fmp4Boxes';
+import type { PlaylistSegment } from './editorPlaylist';
 
 // 판 NULL 조각의 ② 머리 — 창 배치 · 컷 원점이 기대는 값(POK-473 설계 prw2 3.2 결정 3 · 4절). seq 의 ② 서명 주소(창 소리 주소
 // 응답의 행 url)를 Range 로 받아 moov 와 moof 들에서 트랙마다 「표본 있는 첫 traf」 를 찾는다. 첫 Range 는 64KB 이고, 못 찾은
@@ -20,6 +28,9 @@ import { MAX_TRACK_SAMPLES, readFirstSampledTraf, readTrackHeaders } from '@/lib
 //    받는 바이트의 합은 상한의 약 두 배까지다 — Range 로 상한 가까이 받은 뒤 206 본문이 끊기면 전체 받기로 처음부터 다시
 //    받는다. 판독 한 번의 비용도 묶는다: 트랙 수는 MAX_TRACKS 까지(fmp4Boxes), 표본은 트랙 합으로 MAX_TRACK_SAMPLES 까지다
 //    (보안 검수 prw2 경화 M-1).
+//
+// 확보 조각(설계 prw2 7절 c10b′)은 ③ 조각 머리 tfdt 만 같은 Range 판독으로 읽는다(readFragmentVideoDts). ③ 은 CloudFront
+// 서명 쿠키라 자격이 mediaCredentials() 다 — 판독 함수는 자격을 인자로만 받고, 고르는 것은 부르는 쪽이다.
 //
 // 값은 영상 키 · seq 별로 세션 캐시에 둔다(조각 머리는 바뀌지 않는다 — 장부 키 seq 고정 · pdt-main M-1). seq 는 그 키의 장부
 // 번호라 키가 다르면 캐시도 따로다.
@@ -184,8 +195,12 @@ async function wholeChunk(res: Response): Promise<Chunk> {
   return { bytes, whole: true, atEnd: bytes.length < HEAD_PROBE_MAX_BYTES };
 }
 
-async function fetchWhole(url: string, signal: AbortSignal | undefined): Promise<Chunk> {
-  const res = await fetch(url, { credentials: 'omit', signal });
+async function fetchWhole(
+  url: string,
+  credentials: RequestCredentials,
+  signal: AbortSignal | undefined,
+): Promise<Chunk> {
+  const res = await fetch(url, { credentials, signal });
   if (!res.ok) throw new HeadProbeError(`전체 ${res.status}`);
   return wholeChunk(res);
 }
@@ -193,23 +208,25 @@ async function fetchWhole(url: string, signal: AbortSignal | undefined): Promise
 /**
  * offset 부터 size 바이트. 받은 본문이 size 보다 짧으면 파일 끝이다. Range 요청이 망 · CORS 오류거나 206 본문이 도중에
  * 끊기면 전체로, 416(파일 밖 시작)이면 빈 조각으로
+ * @param credentials ② 서명 URL 은 omit, ③ CloudFront 는 mediaCredentials() — 부르는 쪽이 고른다
  */
 async function fetchChunk(
   url: string,
   offset: number,
   size: number,
+  credentials: RequestCredentials,
   signal: AbortSignal | undefined,
 ): Promise<Chunk> {
   let res: Response;
   try {
     res = await fetch(url, {
-      credentials: 'omit',
+      credentials,
       headers: { Range: `bytes=${offset}-${offset + size - 1}` },
       signal,
     });
   } catch (e) {
     if (signal?.aborted) throw e;
-    return fetchWhole(url, signal);
+    return fetchWhole(url, credentials, signal);
   }
   if (res.status === 416) return { bytes: new Uint8Array(0), whole: false, atEnd: true };
   if (res.status === 200) return wholeChunk(res);
@@ -219,7 +236,7 @@ async function fetchChunk(
     bytes = await readBody(res, size);
   } catch (e) {
     if (signal?.aborted) throw e;
-    return fetchWhole(url, signal);
+    return fetchWhole(url, credentials, signal);
   }
   return { bytes, whole: false, atEnd: bytes.length < size };
 }
@@ -254,7 +271,7 @@ async function probeHead(url: string, signal: AbortSignal | undefined): Promise<
   let length = 0;
   let size = HEAD_CHUNK_BYTES;
   for (;;) {
-    const chunk = await fetchChunk(url, length, size, signal);
+    const chunk = await fetchChunk(url, length, size, 'omit', signal);
     buffer = chunk.whole ? chunk.bytes : appended(buffer, length, chunk.bytes);
     length = chunk.whole ? chunk.bytes.length : length + chunk.bytes.length;
     const read = readHead(buffer.subarray(0, length), chunk.atEnd);
@@ -323,4 +340,36 @@ export async function ensureHeads(
   };
   const workers = Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, worker);
   await Promise.all([...waiting, ...workers]);
+}
+
+/**
+ * 기다림 고리 상한(설계 prw2 7절 c10b′)에서 끝내 missing 인 머리를 failed 로 바꾼다 — 그 조각 고름은 저장할 수 없고 「다시
+ * 시도」 를 띄운다. ready · 아직 묻지 않은 seq 는 그대로 둔다
+ */
+export function failMissingHeads(mediaKey: string, seqs: readonly number[]): void {
+  const scope = scopeOf(mediaKey);
+  for (const seq of seqs) {
+    if (scope.entries.get(seq)?.state === 'missing') scope.set(seq, { state: 'failed' });
+  }
+}
+
+/**
+ * ③ 조각의 영상 첫 DTS(D3 — ③ 축 초). 끝 소리 확보 조각을 창 Blob 시각에 놓는 데 쓴다(설계 prw2 7절 c10b′ — 창은 다시 싸지
+ * 않는다). init(MAP)의 영상 트랙 · timescale 과 조각 앞부분 moof 의 tfdt 를 각각 Range 64KB 로 읽는다. 자격은
+ * mediaCredentials() 다(③ CloudFront 서명 쿠키). 읽을 수 없으면 HeadProbeError(사유만 — 주소는 싣지 않는다)
+ */
+export async function readFragmentVideoDts(
+  seg: Pick<PlaylistSegment, 'uri' | 'mapUri'>,
+  signal?: AbortSignal,
+): Promise<number> {
+  const credentials = mediaCredentials();
+  const [init, head] = await Promise.all([
+    fetchChunk(seg.mapUri, 0, HEAD_CHUNK_BYTES, credentials, signal),
+    fetchChunk(seg.uri, 0, HEAD_CHUNK_BYTES, credentials, signal),
+  ]);
+  const video = readVideoTrack(init.bytes);
+  if (video === null) throw new HeadProbeError('③ init');
+  const start = readTrackStart(head.bytes, video.trackId);
+  if (start === null) throw new HeadProbeError('③ tfdt');
+  return start.baseDecodeTime / video.timescale;
 }

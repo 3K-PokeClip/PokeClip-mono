@@ -2,8 +2,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SegmentAudioAccess } from '@/api/clipEditor';
+import type { EditorPlaylist, PlaylistSegment } from '../source/editorPlaylist';
 import type { SegmentTracks } from './fmp4Audio';
 import {
+  captureAnchorOf,
+  captureRowOf,
   loadTrackAudio,
   SegmentsNotReadyError,
   SegmentUrlExpiredError,
@@ -102,7 +105,7 @@ describe('loadTrackAudio — 실물 조각', () => {
   });
 
   it('트랙 번호는 조각 안 소리 트랙의 파일 순서다: 렌더의 [0:a:N]과 같다', async () => {
-    const tracks = await loadTrackAudio(source(access(BASE + 2000), anchorsOf(0)), [1]);
+    const { tracks } = await loadTrackAudio(source(access(BASE + 2000), anchorsOf(0)), [1]);
     expect(tracks).toHaveLength(3);
     expect(tracks.map((pieces) => fake(pieces[0]!.buffer).frequencyIndex)).toEqual([3, 4, 6]); // 48000 · 44100 · 24000
   });
@@ -145,7 +148,7 @@ describe('loadTrackAudio — 실물 조각', () => {
         ? Promise.reject(new SegmentUrlExpiredError())
         : Promise.resolve(new Uint8Array(fixture).buffer),
     );
-    const tracks = await loadTrackAudio(src, [1, 2, 3]);
+    const { tracks } = await loadTrackAudio(src, [1, 2, 3]);
     expect(tracks).toHaveLength(3);
     expect(tracks[0]![0]!.startSeconds).toBe(2);
     expect(src.fetchAccess).toHaveBeenCalledTimes(2);
@@ -174,7 +177,7 @@ describe('loadTrackAudio — 실물 조각', () => {
 
   it('받을 조각이 없으면 빈 목록이다', async () => {
     const src = source(access(), new Map());
-    expect(await loadTrackAudio(src, [])).toEqual([]);
+    expect((await loadTrackAudio(src, [])).tracks).toEqual([]);
   });
 });
 
@@ -186,7 +189,7 @@ describe('loadTrackAudio — 미리 판정과 풀기 동시 수', () => {
   it('precheck가 false면 본문을 하나도 받지 않고 SegmentsNotReadyError로 던진다', async () => {
     const src = source(access(BASE + 2000), anchorsOf(0));
 
-    await expect(loadTrackAudio(src, [1], () => false)).rejects.toBeInstanceOf(
+    await expect(loadTrackAudio(src, [1], { precheck: () => false })).rejects.toBeInstanceOf(
       SegmentsNotReadyError,
     );
     expect(src.fetchBytes).not.toHaveBeenCalled();
@@ -197,7 +200,7 @@ describe('loadTrackAudio — 미리 판정과 풀기 동시 수', () => {
     const src = source(access(BASE + 2000), anchorsOf(0));
     const seen = vi.fn((segments: SegmentAudioAccess['segments']) => segments.length === 1);
 
-    await expect(loadTrackAudio(src, [1], seen)).resolves.toHaveLength(3);
+    expect((await loadTrackAudio(src, [1], { precheck: seen })).tracks).toHaveLength(3);
     expect(seen).toHaveBeenCalledTimes(1);
     expect(src.fetchBytes).toHaveBeenCalledTimes(1);
   });
@@ -220,7 +223,7 @@ describe('loadTrackAudio — 미리 판정과 풀기 동시 수', () => {
       }),
     };
 
-    const tracks = await loadTrackAudio(src, [1]);
+    const { tracks } = await loadTrackAudio(src, [1]);
 
     expect(peak).toBe(2);
     expect(tracks.map((track) => (track[0]!.buffer as unknown as { id: number }).id)).toEqual([
@@ -287,7 +290,7 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
 
   it('트랙 시작 = 그 조각 ③ 영상 첫 DTS 의 Blob 시각 + (② 트랙 첫 PTS − ② 영상 첫 DTS)', async () => {
     useSynthetic({ 1: { videoDts: 0.1, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0.04 }] } });
-    const tracks = await loadTrackAudio(source(access(BASE + 30_000), anchorsOf(2.0)), [1]);
+    const { tracks } = await loadTrackAudio(source(access(BASE + 30_000), anchorsOf(2.0)), [1]);
 
     // 장부 시각(startAtMs)이 아니라 닻 2.0 − 0.06 이다
     expect(tracks[0]![0]!.startSeconds).toBeCloseTo(1.94, 9);
@@ -300,7 +303,7 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
     });
     const src = source(access(BASE, BASE + 7000), anchorsOf(0, 4));
 
-    const tracks = await loadTrackAudio(src, [1, 2]);
+    const { tracks } = await loadTrackAudio(src, [1, 2]);
 
     expect(Math.abs(firstHeard(tracks[0]!, 2)! - 4)).toBeLessThan(0.08);
     // 이어진 소리라 한 덩어리로 푼다(이음매 소리 없음)
@@ -325,7 +328,10 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
         ],
       },
     });
-    const tracks = await loadTrackAudio(source(access(BASE, BASE + 4000), anchorsOf(0, 4)), [1, 2]);
+    const { tracks } = await loadTrackAudio(
+      source(access(BASE, BASE + 4000), anchorsOf(0, 4)),
+      [1, 2],
+    );
 
     expect(tracks[0]!.map((piece) => piece.startSeconds)).toEqual([0]);
     expect(tracks[1]!.map((piece) => piece.startSeconds)).toEqual([0, 4.1]);
@@ -337,7 +343,10 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
       // 반 프레임(16ms)보다 작게 8ms 늦다
       2: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0.008 }] },
     });
-    const tracks = await loadTrackAudio(source(access(BASE, BASE + 4000), anchorsOf(0, 4)), [1, 2]);
+    const { tracks } = await loadTrackAudio(
+      source(access(BASE, BASE + 4000), anchorsOf(0, 4)),
+      [1, 2],
+    );
 
     expect(tracks[0]).toHaveLength(1);
   });
@@ -348,7 +357,7 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
       2: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
     });
     // 판 2 이음 겹침: 둘째 조각이 0.32초(프레임 열 개) 일찍 시작한다
-    const tracks = await loadTrackAudio(
+    const { tracks } = await loadTrackAudio(
       source(access(BASE, BASE + 3680), anchorsOf(0, 3.68)),
       [1, 2],
     );
@@ -365,7 +374,7 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
       2: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
     });
     // 둘째 조각이 3.7초에 시작한다 — 앞 덩어리 115.625 프레임 자리. 반올림하면 116 프레임(3.712초)까지 남아 12ms 겹친다
-    const tracks = await loadTrackAudio(
+    const { tracks } = await loadTrackAudio(
       source(access(BASE, BASE + 3700), anchorsOf(0, 3.7)),
       [1, 2],
     );
@@ -383,7 +392,7 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
       2: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
     });
     // 앞 끝 4초 · 다음 시작 4.016초 = 32kHz 반 프레임(512표본)
-    const tracks = await loadTrackAudio(
+    const { tracks } = await loadTrackAudio(
       source(access(BASE, BASE + 4016), anchorsOf(0, 4.016)),
       [1, 2],
     );
@@ -397,7 +406,7 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
       2: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
     });
     const next = 4 + 513 / 32000;
-    const tracks = await loadTrackAudio(
+    const { tracks } = await loadTrackAudio(
       source(access(BASE, BASE + 4016), anchorsOf(0, next)),
       [1, 2],
     );
@@ -411,7 +420,10 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
       1: { videoDts: 0, tracks: [track] },
       2: { videoDts: 0, tracks: [track] },
     });
-    const tracks = await loadTrackAudio(source(access(BASE, BASE + 8000), anchorsOf(0, 8)), [1, 2]);
+    const { tracks } = await loadTrackAudio(
+      source(access(BASE, BASE + 8000), anchorsOf(0, 8)),
+      [1, 2],
+    );
 
     expect(tracks[0]).toHaveLength(1);
     expect(fake(tracks[0]![0]!.buffer).frames).toBe(750);
@@ -464,5 +476,388 @@ describe('windowAnchors', () => {
         [8, 14.3 - 10.2],
       ]),
     );
+  });
+});
+
+// --- ② 기다림 고리 재료 · 끝 소리 확보(설계 prw2 7절 c10b′) ---
+
+/** 확보 칸을 더한 응답 — 확보 조각은 segments 에 섞지 않는다 */
+function withCapture(
+  base: SegmentAudioAccess,
+  audioCapture: string | undefined,
+  captureSeq?: number,
+): SegmentAudioAccess {
+  return {
+    ...base,
+    ...(audioCapture === undefined ? {} : { audioCapture }),
+    ...(captureSeq === undefined
+      ? {}
+      : {
+          audioCaptureSegment: {
+            seq: captureSeq,
+            startAtMs: BASE + captureSeq * 4000,
+            durationMs: 4000,
+            url: `https://s3/seg_${captureSeq}.m4s`,
+          },
+        }),
+  } as SegmentAudioAccess;
+}
+
+/** 4초 조각 seq 1… 를 Blob 0, 4, 8 … 에 둔 응답(seq 를 골라 뺄 수 있다) */
+function accessOf(seqs: readonly number[]): SegmentAudioAccess {
+  return {
+    expiresAt: '2026-10-23T00:05:00Z',
+    segments: seqs.map((seq) => ({
+      seq,
+      startAtMs: BASE + seq * 4000,
+      durationMs: 4000,
+      url: `https://s3/seg_${seq}.m4s`,
+    })),
+  };
+}
+
+const FOUR = (): SyntheticSegment => ({
+  videoDts: 0,
+  tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }],
+});
+const BLOB_ANCHORS = new Map([1, 2, 3, 4].map((seq) => [seq, (seq - 1) * 4]));
+
+/** 확보 조각(seq 9) 프레임이 든 덩어리만 못 푸는 풀기 — decodeAudioData 거절을 흉내 낸다 */
+function rejectCaptureFrames(adts: Uint8Array) {
+  for (let offset = 0; offset < adts.length;) {
+    if (adts[offset + 7] === 9) {
+      return Promise.reject(new DOMException('Unable to decode audio data', 'EncodingError'));
+    }
+    offset +=
+      ((adts[offset + 3]! & 0x03) << 11) | (adts[offset + 4]! << 3) | (adts[offset + 5]! >> 5);
+  }
+  return fakeDecode(adts);
+}
+
+describe('loadTrackAudio — 빠진 행 · 확보 상태', () => {
+  beforeEach(() => {
+    useSynthetic({ 1: FOUR(), 2: FOUR(), 3: FOUR(), 4: FOUR(), 9: FOUR() });
+  });
+
+  it('창 조각 가운데 응답에 행이 없는 seq 를 missingSeqs 로 알리고, 있는 조각만 놓는다', async () => {
+    const src = source(accessOf([1, 3]), BLOB_ANCHORS);
+
+    const load = await loadTrackAudio(src, [1, 2, 3]);
+
+    expect(load.missingSeqs).toEqual([2]);
+    expect(firstHeard(load.tracks[0]!, 1)).toBeCloseTo(0, 9);
+    expect(firstHeard(load.tracks[0]!, 3)).toBeCloseTo(8, 9);
+    expect(firstHeard(load.tracks[0]!, 2)).toBeNull();
+  });
+
+  it('응답에 행이 하나도 없으면 빈 트랙에 모든 seq 가 빠졌다고 알린다(닻을 기다리지 않는다)', async () => {
+    const src = source(accessOf([]), BLOB_ANCHORS);
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.tracks).toEqual([]);
+    expect(load.missingSeqs).toEqual([1, 2]);
+    expect(src.anchors).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['칸 없음(옛 clip) → none', undefined, 'none'],
+    ['skipped → none(확보 안 함 · 다시 묻지 않음 — R28)', 'skipped', 'none'],
+    ['모르는 값 → none', 'later', 'none'],
+    ['not_ready → waiting', 'not_ready', 'waiting'],
+  ] as const)('%s · 확보 닻을 묻지 않는다', async (_name, value, expected) => {
+    const captureAnchor = vi.fn(() => Promise.resolve(8));
+    const src = { ...source(withCapture(accessOf([1, 2]), value), BLOB_ANCHORS), captureAnchor };
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe(expected);
+    expect(captureAnchor).not.toHaveBeenCalled();
+    expect(src.fetchBytes).toHaveBeenCalledTimes(2);
+  });
+
+  it('attached 면 확보 조각(응답 audioCaptureSegment 주소)을 받아 확보 닻(D3 − Δ)에 놓는다: 창 끝 소리가 이어진다', async () => {
+    const captureAnchor = vi.fn(() => Promise.resolve(8));
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor,
+    };
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe('placed');
+    expect(captureAnchor).toHaveBeenCalledWith(9);
+    expect(src.fetchBytes).toHaveBeenCalledWith('https://s3/seg_9.m4s');
+    expect(firstHeard(load.tracks[0]!, 9)).toBeCloseTo(8, 9);
+    // 창 끝(Blob 8초)에 바로 이어 한 덩어리다
+    expect(load.tracks[0]).toHaveLength(1);
+  });
+
+  it('확보 닻이 아직이면(③ 이 목록에 아직 없음) 확보 조각을 받지 않고 waiting 이다', async () => {
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve('wait' as const)),
+    };
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe('waiting');
+    expect(src.fetchBytes).not.toHaveBeenCalledWith('https://s3/seg_9.m4s');
+  });
+
+  it('확보를 포기하면(GAP · 다른 런 · 판독 실패) 받지 않고 none 이다', async () => {
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(null)),
+    };
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe('none');
+    expect(src.fetchBytes).toHaveBeenCalledTimes(2);
+  });
+
+  it('확보 닻을 물을 길이 없으면(부르는 쪽이 목록을 모름) 확보하지 않는다', async () => {
+    const src = source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS);
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe('none');
+    expect(src.fetchBytes).toHaveBeenCalledTimes(2);
+  });
+
+  it('확보 조각 받기가 실패해도 창 소리는 그대로 놓고 확보만 포기한다', async () => {
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchBytes = src.fetchBytes.getMockImplementation()!;
+    src.fetchBytes.mockImplementation((url: string) =>
+      url.endsWith('seg_9.m4s') ? Promise.reject(new Error('503')) : fetchBytes(url),
+    );
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe('none');
+    expect(firstHeard(load.tracks[0]!, 2)).toBeCloseTo(4, 9);
+  });
+
+  it('창 끝에 이어 붙은 확보 소리를 못 풀면 확보를 빼고 창 소리만 다시 놓아 푼다: 창 소리는 그대로 · 확보 none(c10b′ r1 2번)', async () => {
+    useSynthetic({ 1: FOUR(), 2: FOUR(), 9: FOUR() });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+    src.decode.mockImplementation(rejectCaptureFrames);
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe('none');
+    expect(load.tracks[0]).toHaveLength(1);
+    expect(firstHeard(load.tracks[0]!, 1)).toBeCloseTo(0, 9);
+    expect(firstHeard(load.tracks[0]!, 2)).toBeCloseTo(4, 9);
+    expect(firstHeard(load.tracks[0]!, 9)).toBeNull();
+    expect(load.reuse.capture).toBeNull();
+    expect([...load.reuse.segments.keys()]).toEqual([1, 2]);
+  });
+
+  it('확보 조각에 ② 영상 시각이 없어 놓을 수 없으면 확보를 빼고 창 소리만 놓는다: 확보 none', async () => {
+    useSynthetic({
+      1: FOUR(),
+      2: FOUR(),
+      9: { videoDts: null, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+
+    const load = await loadTrackAudio(src, [1, 2]);
+
+    expect(load.capture).toBe('none');
+    expect(firstHeard(load.tracks[0]!, 2)).toBeCloseTo(4, 9);
+    expect(firstHeard(load.tracks[0]!, 9)).toBeNull();
+  });
+
+  it('창 조각 소리를 못 풀면 확보와 무관하게 실패다: 확보를 빼고 다시 해도 못 풀면 던진다', async () => {
+    useSynthetic({ 1: FOUR(), 2: FOUR(), 9: FOUR() });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+    src.decode.mockRejectedValue(new DOMException('Unable to decode audio data', 'EncodingError'));
+
+    await expect(loadTrackAudio(src, [1, 2])).rejects.toThrow('Unable to decode audio data');
+  });
+});
+
+describe('loadTrackAudio — 다시 받기(previous): 행이 같으면 내려받기 0 · 바뀐 덩어리만 다시 푼다', () => {
+  beforeEach(() => {
+    useSynthetic({ 1: FOUR(), 2: FOUR(), 3: FOUR(), 4: FOUR(), 9: FOUR() });
+  });
+
+  it('행이 같으면 하나도 받거나 풀지 않고 같은 트랙을 돌려준다', async () => {
+    const first = await loadTrackAudio(source(accessOf([1, 2]), BLOB_ANCHORS), [1, 2, 3]);
+    const src = source(accessOf([1, 2]), BLOB_ANCHORS);
+
+    const again = await loadTrackAudio(src, [1, 2, 3], { previous: first });
+
+    expect(src.fetchBytes).not.toHaveBeenCalled();
+    expect(src.decode).not.toHaveBeenCalled();
+    expect(again.tracks).toBe(first.tracks);
+    expect(again.missingSeqs).toEqual([3]);
+  });
+
+  it('빠졌던 행이 오면 그 조각만 받고, 그 조각이 든 덩어리를 다시 푼다', async () => {
+    const first = await loadTrackAudio(source(accessOf([1, 2]), BLOB_ANCHORS), [1, 2, 3]);
+    const src = source(accessOf([1, 2, 3]), BLOB_ANCHORS);
+
+    const again = await loadTrackAudio(src, [1, 2, 3], { previous: first });
+
+    expect(src.fetchBytes.mock.calls.map(([url]) => url)).toEqual(['https://s3/seg_3.m4s']);
+    expect(again.missingSeqs).toEqual([]);
+    expect(again.tracks[0]).toHaveLength(1);
+    expect(firstHeard(again.tracks[0]!, 3)).toBeCloseTo(8, 9);
+    expect(src.decode).toHaveBeenCalledTimes(1);
+  });
+
+  it('바뀌지 않은 덩어리는 다시 풀지 않는다: 창 뒤 떨어진 자리에 확보 소리가 붙으면 그 덩어리만 푼다', async () => {
+    const first = await loadTrackAudio(
+      source(withCapture(accessOf([1, 2]), 'not_ready'), BLOB_ANCHORS),
+      [1, 2],
+    );
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(20)),
+    };
+
+    const again = await loadTrackAudio(src, [1, 2], { previous: first });
+
+    expect(again.capture).toBe('placed');
+    expect(src.fetchBytes.mock.calls.map(([url]) => url)).toEqual(['https://s3/seg_9.m4s']);
+    expect(src.decode).toHaveBeenCalledTimes(1);
+    expect(again.tracks[0]![0]!.buffer).toBe(first.tracks[0]![0]!.buffer);
+    expect(firstHeard(again.tracks[0]!, 9)).toBeCloseTo(20, 9);
+  });
+
+  it('놓아 둔 확보 조각이 같으면 확보 닻을 다시 묻지도 받지도 않는다', async () => {
+    const captured = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+    const first = await loadTrackAudio(captured, [1, 2, 3]);
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+
+    const again = await loadTrackAudio(src, [1, 2, 3], { previous: first });
+
+    expect(src.captureAnchor).not.toHaveBeenCalled();
+    expect(src.fetchBytes).not.toHaveBeenCalled();
+    expect(again.tracks).toBe(first.tracks);
+    expect(again.capture).toBe('placed');
+  });
+
+  it('다시 받기에서 새로 붙인 확보 소리를 못 풀어도 앞 창 소리를 그대로 돌려주고 확보는 none 이다', async () => {
+    useSynthetic({ 1: FOUR(), 2: FOUR(), 9: FOUR() });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const first = await loadTrackAudio(
+      source(withCapture(accessOf([1, 2]), 'not_ready'), BLOB_ANCHORS),
+      [1, 2],
+    );
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+    src.decode.mockImplementation(rejectCaptureFrames);
+
+    const again = await loadTrackAudio(src, [1, 2], { previous: first });
+
+    expect(first.capture).toBe('waiting');
+    expect(again.capture).toBe('none');
+    expect(again.tracks).toBe(first.tracks);
+    expect(again.reuse.capture).toBeNull();
+  });
+});
+
+// --- 확보 조각 자리 판정(설계 prw2 7절 c10b′ 확보 배치) ---
+
+const DIR = 'https://cdn/r-1';
+function row(seq: number, extra: Partial<PlaylistSegment> = {}): PlaylistSegment {
+  return {
+    seq,
+    uri: `${DIR}/seg/${seq}.m4s`,
+    mapUri: `${DIR}/init/i-1.mp4`,
+    pdtMs: BASE + seq * 4000,
+    durationMs: 4000,
+    timing: 'v2',
+    gap: false,
+    ...extra,
+  };
+}
+
+/** 목록 — runs 는 나눈 그대로, rows 는 GAP 줄까지 차례로 */
+function playlistOf(runs: PlaylistSegment[][], gaps: PlaylistSegment[] = []): EditorPlaylist {
+  return { runs, rows: [...runs.flat(), ...gaps].sort((a, b) => a.seq - b.seq) };
+}
+
+describe('captureRowOf: 확보 seq 의 ③ 을 목록에서 찾는다', () => {
+  const window = [row(10), row(11)];
+
+  it('창과 같은 런의 조각이면 그 줄이다', () => {
+    const list = playlistOf([[row(10), row(11), row(12)]]);
+    expect(captureRowOf(list, window, 12)).toEqual(row(12));
+  });
+
+  it('목록에 아직 없으면(GAP 줄도 없음) 기다린다 — 목록이 없을 때도', () => {
+    expect(captureRowOf(playlistOf([[row(10), row(11)]]), window, 12)).toBe('wait');
+    expect(captureRowOf(null, window, 12)).toBe('wait');
+  });
+
+  it('GAP 줄이면 포기한다', () => {
+    const list = playlistOf([[row(10), row(11)]], [row(12, { gap: true })]);
+    expect(captureRowOf(list, window, 12)).toBeNull();
+  });
+
+  it('다른 런이면(DISCONTINUITY · MAP 바뀜) 포기한다', () => {
+    const list = playlistOf([[row(10), row(11)], [row(12, { mapUri: `${DIR}/init/i-2.mp4` })]]);
+    expect(captureRowOf(list, window, 12)).toBeNull();
+  });
+
+  it('창 안이나 창 앞 seq 는 확보 조각이 아니다: 포기한다', () => {
+    const list = playlistOf([[row(9), row(10), row(11), row(12)]]);
+    expect(captureRowOf(list, window, 11)).toBeNull();
+    expect(captureRowOf(list, window, 9)).toBeNull();
+  });
+});
+
+describe('captureAnchorOf: 확보 조각의 Blob 닻 = ③ 영상 첫 DTS − Δ', () => {
+  it('찾은 줄의 ③ 머리 tfdt 를 읽어 Δ 를 뺀다', async () => {
+    const readDts = vi.fn(() => Promise.resolve(512.5));
+    await expect(captureAnchorOf(row(12), 500, readDts)).resolves.toBe(12.5);
+    expect(readDts).toHaveBeenCalledWith(row(12));
+  });
+
+  it('기다림 · 포기는 읽지 않고 그대로다', async () => {
+    const readDts = vi.fn(() => Promise.resolve(0));
+    await expect(captureAnchorOf('wait', 500, readDts)).resolves.toBe('wait');
+    await expect(captureAnchorOf(null, 500, readDts)).resolves.toBeNull();
+    expect(readDts).not.toHaveBeenCalled();
+  });
+
+  it('읽지 못하면 포기하고 경고에는 주소를 싣지 않는다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const readDts = vi.fn(() =>
+      Promise.reject(new Error(`fetch failed ${DIR}/seg/12.m4s?Signature=secret`)),
+    );
+
+    await expect(captureAnchorOf(row(12), 500, readDts)).resolves.toBeNull();
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('secret');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(DIR);
   });
 });

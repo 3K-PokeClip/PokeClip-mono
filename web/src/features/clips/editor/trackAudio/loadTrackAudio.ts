@@ -1,5 +1,7 @@
+import { readAudioCapture, type AudioCaptureState } from '@/api/cardPositions';
 import type { SegmentAudioAccess } from '@/api/clipEditor';
 import { runLimited } from '@/lib/runLimited';
+import type { EditorPlaylist, PlaylistSegment } from '../source/editorPlaylist';
 import type { RemuxedWindow } from '../source/remuxWindow';
 import {
   demuxSegmentAudio,
@@ -15,6 +17,11 @@ import {
 //   D3_k − Δ = 그 조각 ③ 영상 첫 DTS 의 Blob 시각(windowAnchors) · D2_k = ② 영상 첫 DTS
 // AAC는 앞 프레임에 기대 풀리므로 조각마다 끊어 풀지 않고 이어진 조각끼리 프레임을 이어 한 번에 푼다. 트랙마다 따로 본다: 반
 // AAC 프레임 넘게 벌어지면 그 트랙만 새 덩어리이고, 겹치면 나중 조각 소리가 이긴다(앞 덩어리 꼬리를 자른다).
+//
+// 끝 소리 확보(설계 prw2 7절 c10b′): 소리 주소 응답의 audioCapture 가 attached 면 확보 조각(창 바로 뒤 ②)을 받아 그 ③ 조각의
+// Blob 닻(D3 − Δ — 창은 다시 싸지 않고 ③ 머리 tfdt 만 읽음)에 놓는다. 판정은 clip 몫이고(웹은 칸을 따른다), ③ 이 GAP 이거나
+// 다른 런이면 포기한다(captureRowOf). 결과(TrackAudioLoad)는 ② 기다림 고리가 다시 받을 때 previous 로 넘긴다 — 행이 같으면
+// 내려받기 0, 바뀐 덩어리만 다시 푼다.
 
 /** 트랙 하나의 한 덩어리. startSeconds는 창 Blob 시각(영상 노드의 currentTime 과 같은 시계)이다 */
 export interface TrackPiece {
@@ -32,11 +39,77 @@ export function windowAnchors(
   return new Map(remuxed.segments.map((seg) => [seg.seq, seg.videoDts - remuxed.shiftSeconds]));
 }
 
+/** 끝 소리 확보 — placed 놓음 · waiting 다시 물으면 바뀔 수 있음(not_ready · ③ 이 목록에 아직 없음) · none 확보 없음 */
+export type CaptureOutcome = 'placed' | 'waiting' | 'none';
+
+/** 다시 받기 재료 — 바깥은 읽지 않는다(맡겨 두는 크기 셈만) */
+export interface LoadReuse {
+  /** 받아 판독한 조각(seq →) — 확보 조각도 든다. 프레임은 조각 버퍼에서 복사한 것이다(fmp4Audio) */
+  segments: ReadonlyMap<number, SegmentTracks>;
+  /** 놓은 확보 조각과 그 Blob 닻. 없으면 null */
+  capture: { seq: number; anchor: number } | null;
+  /** 푼 덩어리(트랙 · 첫 seq · 자리 · 프레임 수 →) */
+  decoded: ReadonlyMap<string, AudioBuffer>;
+}
+
+/** 창 소리 받기의 결과(설계 prw2 7절 c10b′) */
+export interface TrackAudioLoad {
+  /** 트랙 번호(파일 순서) → 덩어리들(Blob 시각 순) */
+  tracks: TrackPiece[][];
+  /** 창 조각 가운데 소리 주소 응답에 행이 없던 seq(② 미업로드 — 기다림 고리 사유) */
+  missingSeqs: readonly number[];
+  capture: CaptureOutcome;
+  reuse: LoadReuse;
+}
+
+/**
+ * 확보 seq 의 ③ 을 목록에서 찾는다(설계 prw2 7절 c10b′ 확보 배치). 창 뒤 조각이고 창과 같은 런(DISCONTINUITY · MAP 바뀜
+ * 없음)이면 그 줄이다. 목록에 아직 없으면(GAP 줄도 없음 · 목록을 모름) 'wait', GAP 줄 · 다른 런 · 창 안이나 앞 seq 면 null(포기)
+ */
+export function captureRowOf(
+  playlist: EditorPlaylist | null,
+  segs: readonly Pick<PlaylistSegment, 'seq'>[],
+  seq: number,
+): PlaylistSegment | 'wait' | null {
+  const last = segs.at(-1);
+  if (last === undefined || seq <= last.seq) return null;
+  const row = playlist?.rows.find((r) => r.seq === seq);
+  if (playlist === null || row === undefined) return 'wait';
+  if (row.gap) return null;
+  const run = playlist.runs.find((r) => r.some((s) => s.seq === last.seq));
+  return run?.some((s) => s.seq === seq) ? row : null;
+}
+
+/**
+ * 확보 조각의 Blob 닻 — 찾은 줄(captureRowOf)의 ③ 영상 첫 DTS(readDts) − Δ. 기다림 · 포기는 그대로 돌려주고, 읽지 못하면
+ * 포기한다(경고에는 주소를 싣지 않는다 — 서명 · 쿠키 주소)
+ */
+export async function captureAnchorOf(
+  row: PlaylistSegment | 'wait' | null,
+  shiftSeconds: number,
+  readDts: (row: PlaylistSegment) => Promise<number>,
+): Promise<number | 'wait' | null> {
+  if (row === 'wait' || row === null) return row;
+  try {
+    return (await readDts(row)) - shiftSeconds;
+  } catch (e) {
+    console.warn(
+      `[editor] 확보 조각 머리를 읽지 못해 끝 소리를 비워 둬요(seq ${row.seq} · ${(e as Error).name})`,
+    );
+    return null;
+  }
+}
+
 export interface SegmentAudioSource {
   fetchAccess(): Promise<SegmentAudioAccess>;
   fetchBytes(url: string): Promise<ArrayBuffer>;
   /** 창 닻. 받기를 다 마친 뒤에 묻는다 — 영상 창(③ 다시 싸기)이 늦게 와도 소리 받기는 먼저 간다 */
   anchors(): Promise<SegmentAnchors>;
+  /**
+   * 확보 조각 seq 의 Blob 닻(D3 − Δ). 'wait' 는 아직 놓을 수 없음, null 은 포기다. 닻(anchors) 뒤에 묻는다. 없으면 확보하지
+   * 않는다
+   */
+  captureAnchor?(seq: number): Promise<number | 'wait' | null>;
   decode(adts: Uint8Array): Promise<AudioBuffer>;
 }
 
@@ -55,6 +128,8 @@ const SAMPLE_RATES = [
 
 /** 한 트랙의 한 덩어리 — 풀기 전 프레임 */
 interface Run {
+  /** 덩어리를 연 조각 — 다시 받기가 같은 덩어리를 알아보는 열쇠의 한 몫 */
+  firstSeq: number;
   config: AacConfig;
   startSeconds: number;
   frames: Uint8Array[];
@@ -122,7 +197,12 @@ export class SegmentsNotReadyError extends Error {
  * 내림이다: 반올림하면 반 프레임까지 남아 두 소리가 함께 난다(32kHz 앞 4초 · 다음 3.7초 → 3.712초까지). 대신 프레임 하나가
  * 안 되는 틈(32kHz 32ms 미만)이 남는다
  */
-function appendTrack(runs: Run[], track: SegmentAudioTrack, startSeconds: number): void {
+function appendTrack(
+  runs: Run[],
+  track: SegmentAudioTrack,
+  startSeconds: number,
+  seq: number,
+): void {
   const last = runs.at(-1);
   if (last !== undefined) {
     const lastFrame = frameSeconds(last.config);
@@ -139,7 +219,7 @@ function appendTrack(runs: Run[], track: SegmentAudioTrack, startSeconds: number
       else last.frames = last.frames.slice(0, keep);
     }
   }
-  runs.push({ config: track.config, startSeconds, frames: [...track.frames] });
+  runs.push({ firstSeq: seq, config: track.config, startSeconds, frames: [...track.frames] });
 }
 
 /**
@@ -160,35 +240,27 @@ function placeRuns(
       // 표본이 없는 트랙은 그 조각에서 낼 소리가 없다
       if (track.timing === null || track.frames.length === 0) return;
       runs[k] ??= [];
-      appendTrack(runs[k], track, anchor + track.timing.firstPts - videoDts);
+      appendTrack(runs[k], track, anchor + track.timing.firstPts - videoDts, seq);
     });
   }
   // 앞 조각에 없던 트랙 번호(가운데가 빈 자리)도 빈 목록으로 둔다
   return Array.from(runs, (trackRuns) => trackRuns ?? []);
 }
 
-/**
- * @param seqs 창 조각 seq. 주소 응답에 같이 온 그 밖의 조각(창과 겹치는 이웃)은 놓을 Blob 자리가 없어 받지 않는다
- * @param precheck 조각 목록(주소 응답)만 보고 본문을 받을지 정한다. false면 하나도 받지 않고 SegmentsNotReadyError로 던진다
- * @returns 트랙 번호(파일 순서) → 덩어리들(Blob 시각 순). 받을 조각이 없으면 빈 목록. 주소·내려받기가 실패하거나 받은 조각
- *   하나라도 못 풀거나 놓을 자리(② 영상 시각 · 닻)를 모르면 던진다
- */
-export async function loadTrackAudio(
-  source: SegmentAudioSource,
-  seqs: readonly number[],
-  precheck?: (segments: SegmentAudioAccess['segments']) => boolean,
-): Promise<TrackPiece[][]> {
-  let current = await source.fetchAccess();
-  if (precheck !== undefined && !precheck(current.segments)) throw new SegmentsNotReadyError();
-  const inWindow = new Set(seqs);
-  const ordered = current.segments
-    .filter((segment) => inWindow.has(segment.seq))
-    .sort((a, b) => a.seq - b.seq);
-  // 놓을 것이 없으면 닻(영상 창)을 기다리지 않는다
-  if (ordered.length === 0) return [];
+/** 덩어리의 열쇠 — 같은 조각에서 같은 자리에 같은 프레임 수로 열린 덩어리는 같은 소리다 */
+const runKey = (k: number, run: Run) =>
+  `${k}:${run.firstSeq}:${run.startSeconds}:${run.frames.length}`;
 
-  // 받기가 서명 주소 수명(기본 5분)보다 길어지면 뒤에 받는 조각의 주소가 만료된다(느린 망의 3분 구간 ≈ 150MB):
-  // 그 조각에서 주소를 새로 받아 이어 받는다. 동시에 여럿이 만료돼도 새로 받기는 한 번이다(PR #341 3차)
+/**
+ * 창 조각을 받아 판독한다. 받기가 서명 주소 수명(기본 5분)보다 길어지면 뒤에 받는 조각의 주소가 만료된다(느린 망의 3분 구간
+ * ≈ 150MB): 그 조각에서 주소를 새로 받아 이어 받는다. 동시에 여럿이 만료돼도 새로 받기는 한 번이다(PR #341 3차)
+ */
+async function downloadSegments(
+  source: SegmentAudioSource,
+  first: SegmentAudioAccess,
+  seqs: readonly number[],
+): Promise<Map<number, SegmentTracks>> {
+  let current = first;
   let refreshing: Promise<SegmentAudioAccess> | null = null;
   const refresh = (stale: SegmentAudioAccess): Promise<SegmentAudioAccess> => {
     if (current !== stale) return Promise.resolve(current);
@@ -222,22 +294,191 @@ export async function loadTrackAudio(
   };
   // 받은 조각을 못 풀면(깨짐 · 모르는 AAC 모양) 실패다: 덜 올라온 조각(목록에 없음)처럼 건너뛰면 그 자리가 영상 소리를 끈 채
   // 무음이고 안내도 없다(PR #341 3차). 던지면 받던 나머지도 멈추고 화면은 영상 소리로 물러나 알린다
-  const demuxed = await inParallel(ordered, async (segment) => {
-    const tracks = demuxSegmentAudio(await download(segment.seq));
-    if (tracks.audio.length === 0) throw new Error(`segment ${segment.seq} has no readable audio`);
+  const demuxed = await inParallel(seqs, async (seq) => {
+    const tracks = demuxSegmentAudio(await download(seq));
+    if (tracks.audio.length === 0) throw new Error(`segment ${seq} has no readable audio`);
     return tracks;
   });
-  const anchors = await source.anchors();
-  const runs = placeRuns(
-    ordered.map((segment, i) => ({ seq: segment.seq, tracks: demuxed[i]! })),
-    anchors,
-  );
+  return new Map(seqs.map((seq, i) => [seq, demuxed[i]!]));
+}
 
-  const pieces: TrackPiece[][] = runs.map(() => []);
-  const jobs = runs.flatMap((trackRuns, k) => trackRuns.map((run, j) => ({ run, k, j })));
-  // 결과 순서는 트랙 · 덩어리 순서다: 끝나는 순서가 아니라 자리(k · j)에 넣는다
-  await runLimited(jobs, DECODE_PARALLEL, async ({ run, k, j }) => {
-    pieces[k]![j] = { startSeconds: run.startSeconds, buffer: await source.decode(toAdts(run)) };
+/** 확보를 정한 결과 — 놓을 확보 조각(seq · Blob 닻 · 판독)이 있으면 placed */
+interface CaptureResolution {
+  outcome: CaptureOutcome;
+  placed: { seq: number; anchor: number; tracks: SegmentTracks } | null;
+}
+
+const NO_CAPTURE: CaptureResolution = { outcome: 'none', placed: null };
+
+/**
+ * 끝 소리 확보를 정한다. attached 면 확보 닻을 묻고(앞서 놓은 같은 seq 면 그것을 쓴다) 확보 조각을 받아 판독한다. 확보 조각을
+ * 못 받거나 못 풀어도 창 소리는 그대로 두고 확보만 포기한다(경고에는 주소를 싣지 않는다)
+ */
+async function resolveCapture(
+  source: SegmentAudioSource,
+  state: AudioCaptureState,
+  previous: TrackAudioLoad | undefined,
+): Promise<CaptureResolution> {
+  if (state.kind === 'notReady') return { outcome: 'waiting', placed: null };
+  if (state.kind === 'none') return NO_CAPTURE;
+  const { seq, url } = state.segment;
+  const known = previous?.reuse.capture;
+  const knownTracks = previous?.reuse.segments.get(seq);
+  if (known?.seq === seq && knownTracks !== undefined) {
+    return { outcome: 'placed', placed: { seq, anchor: known.anchor, tracks: knownTracks } };
+  }
+  if (source.captureAnchor === undefined) return NO_CAPTURE;
+  try {
+    const anchor = await source.captureAnchor(seq);
+    if (anchor === 'wait') return { outcome: 'waiting', placed: null };
+    if (anchor === null) return NO_CAPTURE;
+    const tracks = demuxSegmentAudio(await source.fetchBytes(url));
+    if (tracks.audio.length === 0) throw new Error('no readable audio');
+    return { outcome: 'placed', placed: { seq, anchor, tracks } };
+  } catch (e) {
+    console.warn(
+      `[editor] 끝 소리 확보 조각을 받지 못해 비워 둬요(seq ${seq} · ${(e as Error).name})`,
+    );
+    return NO_CAPTURE;
+  }
+}
+
+/** 덩어리를 푼다. 앞서 푼 같은 덩어리(runKey)는 다시 풀지 않는다. 결과 순서는 트랙 · 덩어리 순서다 */
+async function decodeRuns(
+  runs: Run[][],
+  decode: SegmentAudioSource['decode'],
+  known: ReadonlyMap<string, AudioBuffer>,
+): Promise<{ tracks: TrackPiece[][]; decoded: Map<string, AudioBuffer> }> {
+  const tracks: TrackPiece[][] = runs.map(() => []);
+  const decoded = new Map<string, AudioBuffer>();
+  const jobs = runs.flatMap((trackRuns, k) =>
+    trackRuns.map((run, j) => ({ run, k, j, key: runKey(k, run) })),
+  );
+  // 끝나는 순서가 아니라 자리(k · j)에 넣는다
+  await runLimited(jobs, DECODE_PARALLEL, async ({ run, k, j, key }) => {
+    const buffer = known.get(key) ?? (await decode(toAdts(run)));
+    decoded.set(key, buffer);
+    tracks[k]![j] = { startSeconds: run.startSeconds, buffer };
   });
-  return pieces;
+  return { tracks, decoded };
+}
+
+/** 앞 결과와 놓을 것(조각 seq · 확보 닻)이 같은가 — 같으면 덩어리도 같다 */
+function samePlacement(
+  previous: TrackAudioLoad,
+  segments: ReadonlyMap<number, SegmentTracks>,
+  capture: LoadReuse['capture'],
+): boolean {
+  const before = [...previous.reuse.segments.keys()];
+  const now = [...segments.keys()];
+  const known = previous.reuse.capture;
+  return (
+    before.length === now.length &&
+    before.every((seq, i) => seq === now[i]) &&
+    known?.seq === capture?.seq &&
+    known?.anchor === capture?.anchor
+  );
+}
+
+export interface LoadTrackAudioOptions {
+  /** 조각 목록(주소 응답)만 보고 본문을 받을지 정한다. false면 하나도 받지 않고 SegmentsNotReadyError로 던진다 */
+  precheck?: (segments: SegmentAudioAccess['segments']) => boolean;
+  /** 앞서 받은 결과(기다림 고리) — 판독한 조각 · 확보 닻 · 푼 덩어리를 다시 쓴다 */
+  previous?: TrackAudioLoad;
+}
+
+/**
+ * @param seqs 창 조각 seq. 주소 응답에 같이 온 그 밖의 조각(창과 겹치는 이웃)은 놓을 Blob 자리가 없어 받지 않는다
+ * @returns 트랙 번호(파일 순서) → 덩어리들(Blob 시각 순)과 빠진 seq · 확보 상태. 받을 조각이 없으면 빈 트랙. 주소 · 내려받기가
+ *   실패하거나 받은 조각 하나라도 못 풀거나 놓을 자리(② 영상 시각 · 닻)를 모르면 던진다(확보 조각만의 실패는 확보 포기)
+ */
+export async function loadTrackAudio(
+  source: SegmentAudioSource,
+  seqs: readonly number[],
+  options: LoadTrackAudioOptions = {},
+): Promise<TrackAudioLoad> {
+  const { precheck, previous } = options;
+  const access = await source.fetchAccess();
+  if (precheck !== undefined && !precheck(access.segments)) throw new SegmentsNotReadyError();
+  const inWindow = new Set(seqs);
+  const rows = access.segments
+    .filter((segment) => inWindow.has(segment.seq))
+    .map((segment) => segment.seq)
+    .sort((a, b) => a - b);
+  const found = new Set(rows);
+  const missingSeqs = seqs.filter((seq) => !found.has(seq));
+  const state = readAudioCapture(access);
+  // 놓을 것이 없으면 닻(영상 창)을 기다리지 않는다
+  if (rows.length === 0) return emptyLoad(missingSeqs, state);
+
+  const known = previous?.reuse.segments ?? new Map<number, SegmentTracks>();
+  const fresh = await downloadSegments(
+    source,
+    access,
+    rows.filter((seq) => !known.has(seq)),
+  );
+  const windowLoad: WindowLoad = {
+    segments: new Map(rows.map((seq) => [seq, known.get(seq) ?? fresh.get(seq)!])),
+    anchors: await source.anchors(),
+    missingSeqs,
+    previous,
+  };
+  const { outcome, placed } = await resolveCapture(source, state, previous);
+  if (placed === null) return arrange(source, windowLoad, null, outcome);
+  // 확보 소리는 창 끝 덩어리에 이어 붙어 같이 풀리므로 덩어리 하나만 감싸서는 창 소리를 건지지 못한다: 확보를 넣어 놓기 ·
+  // 풀기가 실패하면 확보를 빼고 창 조각만으로 다시 놓아 푼다(창 조각 자체가 못 풀리면 그때 던진다 — c10b′ r1 2번)
+  try {
+    return await arrange(source, windowLoad, placed, outcome);
+  } catch (e) {
+    console.warn(
+      `[editor] 끝 소리 확보 조각을 놓거나 풀지 못해 비워 둬요(seq ${placed.seq} · ${(e as Error).name})`,
+    );
+    return arrange(source, windowLoad, null, 'none');
+  }
+}
+
+/** 놓을 창 조각 — 확보 조각은 섞지 않는다 */
+interface WindowLoad {
+  segments: ReadonlyMap<number, SegmentTracks>;
+  anchors: SegmentAnchors;
+  missingSeqs: readonly number[];
+  previous: TrackAudioLoad | undefined;
+}
+
+/**
+ * 창 조각(과 확보 조각)을 Blob 시각에 놓아 푼다. 앞 결과와 놓을 것이 같으면 앞 결과를 그대로 쓴다
+ * @throws 놓을 자리(② 영상 시각 · 닻)를 모르거나 덩어리를 못 풀면
+ */
+async function arrange(
+  source: SegmentAudioSource,
+  { segments: windowSegments, anchors, missingSeqs, previous }: WindowLoad,
+  placed: CaptureResolution['placed'],
+  outcome: CaptureOutcome,
+): Promise<TrackAudioLoad> {
+  const segments = new Map(windowSegments);
+  if (placed !== null) segments.set(placed.seq, placed.tracks);
+  const capture = placed === null ? null : { seq: placed.seq, anchor: placed.anchor };
+  if (previous !== undefined && samePlacement(previous, segments, capture)) {
+    return { ...previous, missingSeqs, capture: outcome };
+  }
+  const runs = placeRuns(
+    [...segments].map(([seq, tracks]) => ({ seq, tracks })),
+    placed === null ? anchors : new Map([...anchors, [placed.seq, placed.anchor]]),
+  );
+  const { tracks, decoded } = await decodeRuns(
+    runs,
+    (adts) => source.decode(adts),
+    previous?.reuse.decoded ?? new Map(),
+  );
+  return { tracks, missingSeqs, capture: outcome, reuse: { segments, capture, decoded } };
+}
+
+/** 응답에 창 조각 행이 하나도 없다 — 놓을 소리가 없다. 확보는 행이 오면 다시 정한다 */
+function emptyLoad(missingSeqs: readonly number[], state: AudioCaptureState): TrackAudioLoad {
+  return {
+    tracks: [],
+    missingSeqs,
+    capture: state.kind === 'none' ? 'none' : 'waiting',
+    reuse: { segments: new Map(), capture: null, decoded: new Map() },
+  };
 }

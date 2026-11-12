@@ -9,7 +9,7 @@ import {
   type RecordingTimeline,
 } from '@/features/player/recordingTimeline';
 import type { RemuxedWindow } from './source/remuxWindow';
-import type { TrackPiece } from './trackAudio/loadTrackAudio';
+import type { TrackAudioLoad, TrackPiece } from './trackAudio/loadTrackAudio';
 
 // 편집기가 여는 방송의 녹화와 미리 받아 둔 미디어(POK-499). 하이라이트 카드가 편집기에 들어가기 전에 영상 창 · 소리 조각을
 // 받아 여기 맡기고, 편집기는 같은 주소면 다시 받지 않고 꺼내 쓴다. 두 쪽이 같은 주소를 만들어야 해서 녹화 읽기와 시간축
@@ -119,6 +119,17 @@ export function trackPiecesBytes(tracks: TrackPiece[][]): number {
   return total;
 }
 
+/**
+ * 맡긴 소리(TrackAudioLoad)의 크기: 푼 소리에 다시 받기 재료 — 판독한 조각의 프레임 바이트 — 를 더한다(② 기다림 고리가
+ * 빠진 조각만 받아 다시 묶으려고 든다 · 설계 prw2 7절 c10b′). 푼 덩어리 표(reuse.decoded)는 tracks 와 같은 소리라 더하지 않는다
+ */
+export function trackAudioLoadBytes(load: TrackAudioLoad): number {
+  let frames = 0;
+  for (const segment of load.reuse.segments.values())
+    for (const track of segment.audio) for (const frame of track.frames) frames += frame.byteLength;
+  return trackPiecesBytes(load.tracks) + frames;
+}
+
 function recentlyUsed<T>(sizeOf: (value: T) => number) {
   const entries = new Map<string, { value: T; bytes: number }>();
   let totalBytes = 0;
@@ -166,8 +177,11 @@ export const windowBlobs = recentlyUsed<RemuxedWindow>((remuxed) => remuxed.blob
  */
 export const editorWindowKey = (mediaKey: string, firstSeq: number, lastSeq: number) =>
   `${mediaKey}:${firstSeq}-${lastSeq}`;
-/** 받아 풀어 둔 소리 조각(segmentTrackKey → 트랙별 덩어리 — 그 창 Blob 시각에 놓았다) */
-export const segmentTracks = recentlyUsed<TrackPiece[][]>(trackPiecesBytes);
+/**
+ * 받아 풀어 둔 소리 조각(segmentTrackKey → 받기 결과 — 트랙별 덩어리는 그 창 Blob 시각에 놓았다). 빠진 행 · 확보 기다림도 함께
+ * 들어 편집기가 꺼내 쓰면 ② 기다림 고리를 이어 돈다
+ */
+export const segmentTracks = recentlyUsed<TrackAudioLoad>(trackAudioLoadBytes);
 
 /**
  * 소리 조각의 열쇠: 방송 번호와 창 첫 · 끝 조각 seq(설계 prw2 5절 4). 소리는 그 창을 다시 싼 Blob 시각에 놓으므로 영상 창과
