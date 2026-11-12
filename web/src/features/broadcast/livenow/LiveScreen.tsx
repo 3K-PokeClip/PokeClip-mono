@@ -180,8 +180,8 @@ function pastLookupKind(
 }
 
 /**
- * 끝난 뒤 들어온 화면(A)의 영상 자리 아랫줄(계획 9절). 제어면 주소가 없으면 플레이어 기본 말이고, 재생기가 설 수 있으면(vod ∧ ready ∧
- * 출입증 받음) 아랫줄이 없다
+ * 지난 방송 판정 화면(끝난 뒤 들어온 화면 A · past 로 닫힌 화면 B)의 영상 자리 아랫줄(계획 9절). 제어면 주소가 없으면 플레이어
+ * 기본 말이고, 재생기가 설 수 있으면(vod ∧ ready ∧ 출입증 받음) 아랫줄이 없다
  */
 function pastVodNote(vod: PastVodState, access: PastCardInput['access']): string | undefined {
   switch (vod.kind) {
@@ -215,13 +215,13 @@ const BLOCKED_NOTICE: Record<PastBlockReason, string> = {
   failed: '그 시점으로 옮기지 못했어요',
 };
 
-/** 카드를 옮긴 결과 — 'queued' 는 끝난 뒤 들어온 화면이 곧 설 다시보기에 받아 두었다(POK-546) */
+/** 카드를 옮긴 결과 — 'queued' 는 지난 방송 판정 화면(A · past 로 닫힌 B)이 곧 설 다시보기에 받아 두었다(POK-546) */
 type CardSeekResult = 'moved' | 'outside' | 'none' | 'queued';
 
 /**
- * 끝난 뒤 들어온 화면(A)에서 사람이 누른 카드의 알림(계획 9절 · 설계 3절 카드 표). 받아 두었거나(waiting) 서지 않거나(blocked) 선
- * 재생기가 옮기지 못하면(playable 의 none) 채팅이 카드 시각으로 갔다고 덧붙인다(채팅이 그 시점을 따를 때만). 목록 밖(outside)은
- * 채팅도 옮기지 않아 덧붙이지 않고, 옮겼으면 알리지 않는다
+ * 지난 방송 판정 화면(끝난 뒤 들어온 화면 A · past 로 닫힌 화면 B)에서 사람이 누른 카드의 알림(계획 9절 · 설계 3절 카드 표). 받아
+ * 두었거나(waiting) 서지 않거나(blocked) 선 재생기가 옮기지 못하면(playable 의 none) 채팅이 카드 시각으로 갔다고 덧붙인다(채팅이
+ * 그 시점을 따를 때만). 목록 밖(outside)은 채팅도 옮기지 않아 덧붙이지 않고, 옮겼으면 알리지 않는다
  * @returns 알림 제목. 알릴 것이 없으면 null
  */
 function pastCardNotice(
@@ -896,7 +896,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     [followsPlayhead, bumpChatJump],
   );
   /**
-   * 끝난 뒤 들어온 화면(A)의 카드 이동(설계 3절 카드 표 — POK-546). 곧 설 다시보기(waiting)는 받아 두고, 서지 않으면(blocked) 받아
+   * 지난 방송 판정 화면(A · past 로 닫힌 B)의 카드 이동(설계 3절 카드 표 — POK-546). 곧 설 다시보기(waiting)는 받아 두고, 서지 않으면(blocked) 받아
    * 둔 자리를 건드리지 않는다(앞서 받아 둔 자리가 있으면 다시보기가 설 때 그 자리부터다 — 계획 4절 F). 목록을 받은 재생기(playable)는
    * 카드의 실제 시각으로 옮기고, 받아 두지 않는다(다시 선 재생기가 옛 카드로 가지 않게)
    */
