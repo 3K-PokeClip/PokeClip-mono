@@ -7,13 +7,18 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * 렌더 주문 컷 판정의 장부 읽기 순서(POK-196 · PR-B2 c1 지적 1). 회차 완결을 회차 행보다 <b>먼저</b> 읽는다 — 완결이 참이면 회차
@@ -47,6 +52,33 @@ class LedgerCutPlannerReadOrderTest {
 
         assertThat(decision).isEqualTo(new NotReady("not_yet_recorded"));
         assertThat(ledger.reads).containsExactly("complete", "rows");
+        verify(rounds, times(1)).roundOf(broadcast); // 완결이 거짓이면 세션 목록을 다시 읽지 않는다
+    }
+
+    /**
+     * 종결 r1 cx 2 — 회차 세션 목록도 완결보다 먼저 고정하면 같은 꼴이 생긴다: 목록 {A} 를 읽은 뒤 재접속 세션 B 와 그 귀속 행이
+     * 들어오고 회차가 닫히면 「완결 참 + B 빠진 행」 이 되어 B 에 걸린 컷을 녹화 밖 422 로 거절한다. 완결이 참이면 세션 목록을 다시
+     * 읽는다(닫힌 회차에는 새 세션이 합류하지 않는다).
+     */
+    @Test
+    void 세션_목록을_읽은_뒤_새_세션과_완결이_들어와도_그_세션_컷을_녹화_밖으로_내지_않는다() {
+        Broadcast broadcast = Broadcast.startedNow(STREAM, "1", "K-order", 1L, NOW, null);
+        RoundRows.Members before = new RoundRows.Members("K-order", List.of(STREAM));
+        RoundRows.Members after = new RoundRows.Members("K-order", List.of(STREAM, "S-order-b"));
+        RoundRows rounds = mock(RoundRows.class);
+        StreamSegmentReader segments = mock(StreamSegmentReader.class);
+        given(rounds.roundOf(broadcast)).willReturn(Optional.of(before), Optional.of(after));
+        given(rounds.roundComplete(anyString())).willReturn(true);
+        given(segments.findRoundRows(before)).willReturn(List.of(row(1, 0)));
+        given(segments.findRoundRows(after)).willReturn(List.of(row(1, 0), row(2, 4_000)));
+        given(segments.findRowAfter(anyString(), anyLong())).willReturn(Optional.empty());
+        given(segments.findRowsBefore(anyString(), anyString(), anyList()))
+                .willReturn(new CutPlanner.Preceding(Map.of(), false));
+
+        CutDecision decision = new LedgerCutPlanner(rounds, segments).plan(broadcast, 7L, 5_000, 7_000, List.of(), NOW);
+
+        assertThat(decision).isInstanceOf(CutDecision.Ready.class);
+        verify(rounds, times(2)).roundOf(broadcast);
     }
 
     private static RoundRow row(long seq, long ms) {
