@@ -68,3 +68,9 @@ compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad
 # 쓴다 — KVS ARN 은 런타임 출력에서 오므로 여기 칸이 없다. user_data 로만
 # 들어가 떠 있는 상자는 바뀌지 않는다(다음 상자부터). POK-525 교체 걸음 4.1 의 값.
 # edge_bounds_writer_enabled = true
+
+# 60일 만료 창구 clip 주소(기본 빈 값 = 만료 끔). 포트는 platform 의 clip 포트와
+# 같아야 한다. 토큰 그릇은 런타임 1단 출력에서 오므로 여기 칸이 없다 — 값을
+# 넣기 전에 채우지 않는다(runbooks/runtime-1a.md 「1단-나 ③」). user_data 로만
+# 들어가 떠 있는 상자는 바뀌지 않는다(다음 상자부터).
+# clip_internal_url = "http://clip.pokeclip.internal:8081"

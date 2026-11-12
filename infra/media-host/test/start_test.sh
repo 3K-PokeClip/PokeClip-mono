@@ -10,7 +10,8 @@
 # 과 모드 블록(운영 템플릿 원본 그대로 두 모드 기동 · 표지 꼴 — 사례 62 · 63 은
 # lib/start_mode_cases.sh)과 상자 스위치 파일(sidecar.env — 사례 64 는
 # lib/start_sidecar_env_cases.sh)과 기동 전 검사(사이드카 라벨 · timing-preflight
-# — 사례 65 – 69 는 lib/start_timing_cases.sh).
+# — 사례 65 – 69 는 lib/start_timing_cases.sh)와 60일 만료 창구 토큰(받기 성공 ·
+# 실패 · 링크 · 정지 — 사례 70 – 74 는 lib/start_clip_expiry_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -54,6 +55,8 @@ source "${TEST_DIR}/lib/start_mode_cases.sh"
 source "${TEST_DIR}/lib/start_sidecar_env_cases.sh"
 # shellcheck source=lib/start_timing_cases.sh
 source "${TEST_DIR}/lib/start_timing_cases.sh"
+# shellcheck source=lib/start_clip_expiry_cases.sh
+source "${TEST_DIR}/lib/start_clip_expiry_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -70,7 +73,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=69
+readonly CASE_COUNT=74
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -908,6 +911,17 @@ main() {
     timing::case_order_static
   harness::run_case 69 '기동 전 검사 — 받기 실패면 고정 다이제스트 로컬 라벨' \
     timing::case_pull_fallback
+  harness::run_case 70 '만료 토큰 — ARN 빔 → 받지 않음 · 디렉터리 없음' \
+    clip_expiry::case_arn_empty
+  harness::run_case 71 \
+    '만료 토큰 — 낡은 파일 지우고 사이드카 0400 · rename · argv 에 ARN 만' \
+    clip_expiry::case_installed
+  harness::run_case 72 '만료 토큰 받기 실패 → 앞 토큰 없음 · 기동 계속' \
+    clip_expiry::case_fetch_failed
+  harness::run_case 73 '만료 토큰 디렉터리 링크 → 손대지 않고 막음' \
+    clip_expiry::case_dir_link
+  harness::run_case 74 'stop — 만료 토큰 삭제 · 링크면 CLEANUP FAIL · 대상 보존' \
+    clip_expiry::case_stop
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

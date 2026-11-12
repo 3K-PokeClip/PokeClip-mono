@@ -31,18 +31,19 @@ compose 로 한 묶음으로 돌리고, systemd 유닛 하나가 그 묶음 전�
 | `bin/loopback-health.sh` · `paths-count.sh` · `paths-list.sh` · `secret-count.sh` | `/opt/pokeclip-media/bin/` | 운영자(SSM) — secret-count 의 `ssm` 모드만 kty 로컬 |
 | `bin/ingest-auth-deny-sync.sh` · `bin/ingest-auth-ip-limit.sh` | `/opt/pokeclip-media/bin/` | 운영자(SSM · 응답기 모드만 — 아래 「응답기 런북」) |
 | `bin/sidecar-round-keys.sh` | `/opt/pokeclip-media/bin/` | 운영자(SSM · 두 모드 — 새 꼴 쓰기 스위치 켜기 · 끄기, 런북 `runbooks/media-swap.md` 「POK-525 교체」) |
-| `bin/lib/` 다섯 — `ops.sh` · `mtx_paths.sh` · `deny_tokens.sh` · `docker_config.sh` · `render_files.sh` | `/opt/pokeclip-media/bin/lib/` | 위 스크립트가 source — 시작 스크립트는 뒤 셋, 운영 스크립트는 `ops.sh`(paths 둘은 `mtx_paths.sh` 도, 거부 목록 동기화는 `deny_tokens.sh` 도) |
+| `bin/lib/` 여섯 — `ops.sh` · `mtx_paths.sh` · `deny_tokens.sh` · `docker_config.sh` · `render_files.sh` · `clip_expiry.sh` | `/opt/pokeclip-media/bin/lib/` | 위 스크립트가 source — 시작 스크립트는 뒤 넷, 운영 스크립트는 `ops.sh`(paths 둘은 `mtx_paths.sh` 도, 거부 목록 동기화는 `deny_tokens.sh` 도) |
 | `compose.yml.tmpl` | `/etc/pokeclip-media/compose.yml`(렌더본) | `start-media.sh` · `stop-media.sh` |
 | `ingest-auth.env.tmpl` | `/etc/pokeclip-media/ingest-auth.env`(렌더본 · `root:root 0644` · 두 모드 공통) | 응답기 서비스 `env_file` · `ingest-auth-ip-limit.sh`(바꿔 씀) · 시작 스크립트(응답기 모드에서 꼴 점검) |
 | `sidecar.env.tmpl` | `/etc/pokeclip-media/sidecar.env`(렌더본 · `root:root 0644` · 두 모드 공통 · 첫 부팅에만 씀 — 그 뒤의 정본은 이 파일) | 사이드카 서비스 `env_file`(새 꼴 쓰기 스위치 `PLAYBACK_ROUND_KEYS`) · `sidecar-round-keys.sh`(바꿔 씀) · 시작 스크립트(두 모드 모두 꼴 점검) |
 | `nginx/nginx.conf.tmpl` | `/etc/pokeclip-media/nginx.conf`(렌더본) | compose 가 nginx 에 읽기 전용 마운트(원본이 없으면 만들지 않음: `create_host_path: false`, nginx 기동만 실패) |
 | `mediamtx.yml.tmpl` | `/etc/pokeclip-media/mediamtx.yml.tmpl`(저장소 파일 그대로 — 두 모드 블록 · 토큰이 든 원본, 렌더하지 않는다) | `start-media.sh` 가 기동마다 모드 블록을 고르고 비밀을 채움 |
 | (`sidecar-round-keys.sh` 가 씀) | `/etc/pokeclip-media/sidecar-round-keys.lock`(빈 파일 · `root:root 0600` · 지우지 않음) | 스위치 스크립트의 동시 실행 잠금(`flock -n` — 프로세스가 끝나면 커널이 푼다. `flock` 은 AL2023 `util-linux-core` — systemd 가 요구해 상자에 늘 있다) |
-| (M9 이 씀) | `/etc/pokeclip-media/media.env` | 유닛 `EnvironmentFile` · 운영 확인 스크립트. 응답기 모드 키 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM` 은 응답기 모드에서만 읽는다 |
+| (M9 이 씀) | `/etc/pokeclip-media/media.env` | 유닛 `EnvironmentFile` · 운영 확인 스크립트. 응답기 모드 키 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM` 은 응답기 모드에서만 읽는다. `CLIP_EXPIRY_TOKEN_SECRET_ARN`(60일 만료 창구 토큰 — clip 주소가 빈 상자는 빈 값)은 두 모드 모두 차 있을 때만 읽는다 |
 | (M9 이 씀) | `/root/.docker/config.json`(ECR 자격 도우미 설정) | docker · 시작 스크립트 선행 점검 |
 | (시작 스크립트가 씀) | `/run/pokeclip-media/mediamtx.yml` · `mtx_api_pass` | MediaMTX · 사이드카(읽기 전용 bind — 원본이 없으면 만들지 않음: `create_host_path: false`, 그 컨테이너 기동만 실패) |
 | (시작 스크립트가 씀 · 응답기 모드) | `/run/pokeclip-media/stream_key_resolve_token`(응답기 4C 토큰과 같은 값 · `10001:10001 0400`) | 사이드카(읽기 전용 bind · `STREAM_KEY_RESOLVE_TOKEN_FILE` — 4D 종료 신호 인증 · 계약9 streamerId 에 4C 를 부른다. 옛 모드는 파일도 env 도 없어 4D 수신부가 등록되지 않는다) |
 | (시작 스크립트가 씀 · 응답기 모드) | `/run/pokeclip-media/ingest-auth/`(`root:root 0711`) 아래 `ingest_basic_pass` · `mtx_api_pass` · `stream_key_resolve_token`(`10003:10003 0400`) · `state/`(`10003:10003 0700`) | 응답기(비밀 셋은 읽기 전용 bind · `state/` 는 쓰기 bind) |
+| (시작 스크립트가 씀 · `CLIP_EXPIRY_TOKEN_SECRET_ARN` 이 찰 때 · 두 모드) | `/run/pokeclip-media/clip-expiry/`(`root:root 0711`) 아래 `token`(`10001:10001 0400`) | 사이드카(**디렉터리**를 읽기 전용 bind · `CLIP_EXPIRY_TOKEN_FILE` — clip 주소가 찬 렌더본만. 이 bind 만 원본이 없으면 엔진이 만든다: `create_host_path: true` — 디렉터리를 만들지 않는 옛 설치 묶음과 만나도 사이드카가 뜨고 만료만 꺼진다). 받기에 실패하면 앞 기동의 토큰을 지운 채 파일 없이 기동한다 — 판별 신호는 사이드카 ERROR `expiry_disabled reason=token_file` |
 | (시작 스크립트 · 거부 목록 동기화가 씀 · 응답기 모드) | `/var/lib/pokeclip-media/ingest-auth/deny/deny-tokens`(디렉터리 `root:10003 0750` · 파일 `root:10003 0640`) | 응답기(**디렉터리**를 읽기 전용 bind — rename 한 새 파일이 보이게) |
 | `bundle/Dockerfile` | 설치하지 않음 — 설치 묶음 이미지(`pokeclip-prod/media-host-bundle`)를 만든다. 위 `bin/` · `bin/lib/` · `mediamtx.yml.tmpl` 은 이 이미지에 담겨 상자에 온다 | O7c 빌드 · M9 부트스트랩(`docker create` · `docker cp` 로 꺼내 설치) |
 | `ops/force-diff.sh` | 설치하지 않음 | kty 로컬(force 복구 대조) |
@@ -606,13 +607,13 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `MEDIA START BLOCKED: ingest-auth denylist unavailable` | 응답기 모드 — 거부 목록 파라미터 이름 빔 · 받기 실패 |
 | | `MEDIA START BLOCKED: ingest-auth denylist invalid` | 응답기 모드 — 받은 거부 목록이 꼴 밖(공백뿐 · 머리 줄 없음 · NUL · 64 KiB 초과) |
 | | `MEDIA START BLOCKED: generated credential unavailable` | 응답기 모드 — Basic 비밀번호 · 잠금 둘 생성 실패 |
-| | `MEDIA START FAIL render <단계>` | 렌더 실패 — `runtime-dir` · `template` · `template-mode`(MediaMTX 템플릿의 모드 블록 표지 꼴이 깨짐 · 한 모드 블록 없음) · `template-token`(고른 모드 블록의 토큰 집합이 그 모드 꼴이 아님) · `owner` · 파일마다 `<앞머리>tmpfile` · `write` · `chown` · `target` · `rename`. 앞머리는 `mediamtx.yml` 이 없음, 사이드카 비밀번호가 `api-pass-`, 응답기 모드 파일이 `ingest-auth-basic-pass-` · `ingest-auth-api-pass-` · `ingest-auth-resolve-token-` · 사이드카 4C 토큰 사본 `resolve-token-` 다. 응답기 모드 디렉터리 단계는 `ingest-auth-dir` · `ingest-auth-state-dir` · `deny-dir`(거부 목록 디렉터리 · 남은 임시 파일 정리 · 임시 파일), 거부 목록 파일 설치 단계는 `deny-install` |
+| | `MEDIA START FAIL render <단계>` | 렌더 실패 — `runtime-dir` · `template` · `template-mode`(MediaMTX 템플릿의 모드 블록 표지 꼴이 깨짐 · 한 모드 블록 없음) · `template-token`(고른 모드 블록의 토큰 집합이 그 모드 꼴이 아님) · `owner` · 파일마다 `<앞머리>tmpfile` · `write` · `chown` · `target` · `rename`. 앞머리는 `mediamtx.yml` 이 없음, 사이드카 비밀번호가 `api-pass-`, 응답기 모드 파일이 `ingest-auth-basic-pass-` · `ingest-auth-api-pass-` · `ingest-auth-resolve-token-` · 사이드카 4C 토큰 사본 `resolve-token-` 다. 응답기 모드 디렉터리 단계는 `ingest-auth-dir` · `ingest-auth-state-dir` · `deny-dir`(거부 목록 디렉터리 · 남은 임시 파일 정리 · 임시 파일), 거부 목록 파일 설치 단계는 `deny-install` 이다. 만료 창구 토큰(두 모드 · ARN 이 찰 때)은 `clip-expiry-dir`(디렉터리 링크 · 맞추기 · 앞 토큰 지우기 실패)과 `clip-expiry-tmpfile` · `write` · `chown` · `target` · `rename` 이다 — 토큰 받기 실패는 줄 없이 기동을 계속한다 |
 | | `MEDIA START FAIL usage` | 인자를 줬음 |
 | `stop-media.sh` | `MEDIA STOP FAIL usage\|runtime-dir` | 인자 오류 · `RUNTIME_DIR` 이 절대 경로가 아님 |
 | | `MEDIA STOP down exit <n>` | `compose down` 이 0 아닌 코드 |
 | | `MEDIA STOP fallback removed <n>` · `MEDIA STOP fallback FAIL` | down 실패 뒤 프로젝트 라벨로 지운 컨테이너 수 · 그 조회 · 삭제 실패 |
 | | `MEDIA STOP interrupted` | down 중 TERM · INT — down 을 멈추고 렌더를 지운 뒤 143 · 130 |
-| | `MEDIA STOP CLEANUP FAIL <디렉터리>` | 렌더 파일이 지운 뒤에도 남음(`RUNTIME_DIR` 과 응답기 모드의 `RUNTIME_DIR/ingest-auth` — 비밀 셋 · 임시 파일. `state/` 는 남긴다) |
+| | `MEDIA STOP CLEANUP FAIL <디렉터리>` | 렌더 파일이 지운 뒤에도 남음(`RUNTIME_DIR` 과 응답기 모드의 `RUNTIME_DIR/ingest-auth` — 비밀 셋 · 임시 파일. `state/` 는 남긴다. `RUNTIME_DIR/clip-expiry` — 만료 토큰 · 임시 파일. 디렉터리는 남긴다). 응답기 · 만료 토큰 디렉터리가 링크여도 이 줄이다(따라가 지우지 않는다) |
 | `paths-count.sh` | `PATHS <n>` | 경로 항목 수(송출 중 아닌 것 포함) |
 | | `PATHS FAIL incomplete` | 응답이 여러 페이지 — 원자 스냅샷 아님 |
 | | `PATHS FAIL <단계>` | `usage` · `scratch`(스크래치 디렉터리를 못 만듦) · `config` · `sidecar` · `credentials` · `request` · `timeout` · `auth`(401) · `http` · `response` |
@@ -623,7 +624,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | `loopback-health.sh` | `LOOPBACK OK` | 송출 → 프록시 경유 재생목록 200 |
 | | `LOOPBACK FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `mediamtx` · `scratch` · `pull` · `sender` · `playlist` · `sender-cleanup` |
 | `secret-count.sh` | `SECRET COUNT box\|ssm <n>` | 비밀 값이 든 줄 수 |
-| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass`(관리 API 비밀번호 파일 없음 · 못 읽음 · 꼴 밖 — 정지 뒤에는 정상) · `ingest-auth`(box — 응답기 모드 표지 넷 가운데 일부만 있음 · 꼴 밖 · 못 읽음) · `scratch` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
+| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass`(관리 API 비밀번호 파일 없음 · 못 읽음 · 꼴 밖 — 정지 뒤에는 정상) · `ingest-auth`(box — 응답기 모드 표지 넷 가운데 일부만 있음 · 꼴 밖 · 못 읽음) · `clip-expiry`(box — 만료 토큰 파일 · 디렉터리가 링크 · 꼴 밖 · 못 읽음) · `scratch` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
 | `ingest-auth-deny-sync.sh` | `INGEST AUTH DENY SYNC OK [release] tokens=<N>` | 거부 목록을 받아 두고 응답기 healthcheck 통과(`release` 면 응답기 재생성 · healthy 까지). N 은 설치한 목록의 유효 토큰 수(주석 · 빈 줄 · 중복 제외) — 기대한 수와 대조한다 |
 | | `INGEST AUTH DENY SYNC FAIL <단계>` | `usage`(종료 2) · `config`(옛 모드에서 파라미터 이름이 비면 여기 — 이름을 먼저 본다) · `not-running`(옛 모드 · 정지 — 아무것도 하지 않음) · `ssm` · `invalid` · `install` · `health` · `recreate` · `unhealthy` |
 | `ingest-auth-ip-limit.sh` | `INGEST AUTH IP LIMIT OK on\|off` | env 파일을 바꾸고 응답기를 재생성해, 새 컨테이너의 `ingestauth_started` 줄 `ip_limit` 가 요청한 값과 같음 |
@@ -749,6 +750,11 @@ root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)�
     (응답기 파일 둘 · `mediamtx.yml` 의 잠금 두 줄)가 모두 있으면 응답기 모드,
     하나도 없으면 옛 모드다. 일부만 있거나 꼴 밖이면 `SECRET COUNT FAIL
     ingest-auth` 다.
+*   **만료 토큰 파일이 있으면 그것도 센다(두 모드)** — 시작 스크립트가 둔
+    `/run/pokeclip-media/clip-expiry/token`(사이드카가 clip 에 싣는 토큰)의
+    원문과 slog JSON 꼴이다. 파일이 없으면(만료 끔 · 받기 실패) 더하지 않는다.
+    꼴 밖이거나 링크면 `SECRET COUNT FAIL clip-expiry` 다. `ssm` 모드는 이
+    파일도 읽지 않는다(응답기 파일과 같은 한계).
 
 ## 운영 규칙
 

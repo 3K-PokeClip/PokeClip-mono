@@ -75,6 +75,8 @@ variables {
   rds_sg_id          = "sg-0rds0000000000000"
   auth_sg_id         = "sg-0auth000000000000"
   auth_port          = 18086
+  clip_sg_id         = "sg-0clip000000000000"
+  clip_port          = 18087
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -248,8 +250,9 @@ run "media_sg_egress_and_rds_pair" {
       https_any    = "tcp 443 443 - 0.0.0.0/0 -"
       postgres     = "tcp 5432 5432 - - sg-0rds0000000000000"
       auth_resolve = "tcp 18086 18086 - - sg-0auth000000000000"
+      clip_expiry  = "tcp 18087 18087 - - sg-0clip000000000000"
     }
-    error_message = "Media SG 이그레스가 443 → S3 prefix list · 443 → 0.0.0.0/0 · 5432 → rds_sg_id · auth_port → auth_sg_id 가 아니다."
+    error_message = "Media SG 이그레스가 443 → S3 prefix list · 443 → 0.0.0.0/0 · 5432 → rds_sg_id · auth_port → auth_sg_id · clip_port → clip_sg_id 가 아니다."
   }
 
   # kty 21차: RDS 인그레스 ← Media 5432 는 이그레스와 같은 루트의 한 쌍.
@@ -287,6 +290,34 @@ run "media_to_auth_resolve_pair" {
       ingress = { auth_sg_id = "sg-0auth000000000000", port = 18086 }
     }
     error_message = "출력 auth_resolve_rules 가 Media → auth 이그레스 · auth 인그레스 ← Media 의 SG · 포트와 다르다."
+  }
+}
+
+# POK-551 c4: Media → clip(60일 만료 창구) 이그레스와 clip 인그레스 ← Media 는
+# auth 짝과 같은 꼴이다. clip 주소와 상관없이 늘 만든다 — 만료를 켜고 끌 때 SG
+# 차분이 없게 한다(시험 기본값은 주소 빔).
+run "media_to_clip_expiry_pair" {
+  command = plan
+
+  assert {
+    condition = (
+      var.clip_internal_url == "" &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.security_group_id == "sg-0clip000000000000" &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.ip_protocol == "tcp" &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.from_port == 18087 &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.to_port == 18087 &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.cidr_ipv4 == null
+    )
+    error_message = "clip SG 인그레스 ← Media 가 주소 빔에서도 clip_sg_id 의 TCP clip_port 로 있지 않다."
+  }
+
+  # 루트 시험이 platform 출력에서 넘긴 값을 보는 창 — 규칙 자원의 값이어야 한다.
+  assert {
+    condition = output.clip_expiry_rules == {
+      egress  = { clip_sg_id = "sg-0clip000000000000", port = 18087 }
+      ingress = { clip_sg_id = "sg-0clip000000000000", port = 18087 }
+    }
+    error_message = "출력 clip_expiry_rules 가 Media → clip 이그레스 · clip 인그레스 ← Media 의 SG · 포트와 다르다."
   }
 }
 
@@ -329,6 +360,11 @@ run "wires_sg_references_to_media_sg" {
   assert {
     condition     = aws_vpc_security_group_ingress_rule.auth_from_media.referenced_security_group_id == aws_security_group.media.id
     error_message = "auth 인그레스의 출처가 Media SG 가 아니다."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.clip_from_media.referenced_security_group_id == aws_security_group.media.id
+    error_message = "clip 인그레스의 출처가 Media SG 가 아니다."
   }
 
   assert {

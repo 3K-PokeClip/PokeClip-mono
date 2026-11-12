@@ -137,9 +137,13 @@ override_data {
       rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
       rds_sg_id         = "sg-0rds"
       rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
-      media_secret_arns = ["arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"]
+      media_secret_arns = [
+        "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj",
+        "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-YzAbCd",
+      ]
 
       ingest_auth_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-token-StUvWx"
+      clip_expiry_token_secret_arn         = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-YzAbCd"
       broadcast_topic_arn                  = "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo"
       edge_bounds_kvs_arn                  = "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1"
     }
@@ -368,6 +372,53 @@ run "reads_auth_sg_and_port_from_platform" {
       ingress = { auth_sg_id = "sg-0auth", port = 28082 }
     }
     error_message = "Media → auth 이그레스 · auth 인그레스 ← Media 의 SG · 포트가 platform 출력 service_sg_ids.auth · service_ports.auth 와 다르다."
+  }
+}
+
+# Media → clip(60일 만료 창구) SG 짝도 media 가 만든다 — auth 짝과 같은 꼴이고
+# 주소와 상관없이 늘 있다. clip SG · 포트의 정본은 platform 이다(services.clip).
+run "reads_clip_sg_and_port_from_platform" {
+  command = plan
+
+  assert {
+    condition = module.media_host.clip_expiry_rules == {
+      egress  = { clip_sg_id = "sg-0clip", port = 28081 }
+      ingress = { clip_sg_id = "sg-0clip", port = 28081 }
+    }
+    error_message = "Media → clip 이그레스 · clip 인그레스 ← Media 의 SG · 포트가 platform 출력 service_sg_ids.clip · service_ports.clip 과 다르다."
+  }
+}
+
+# 만료 주소 기본값은 빈 값(끔)이다 — 사이드카 env · 토큰 bind 가 렌더되지 않고
+# media.env 의 토큰 비밀 ARN 도 비어 상자가 토큰을 받지 않는다.
+run "defaults_clip_internal_url_empty" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.clip_internal_url == "" &&
+      strcontains(module.media_host.rendered_user_data["a"], "CLIP_EXPIRY_TOKEN_SECRET_ARN=\n") &&
+      !strcontains(module.media_host.rendered_user_data["a"], "CLIP_INTERNAL_URL")
+    )
+    error_message = "clip_internal_url 기본값이 빈 값이 아니거나, 끔인데 만료 env · 토큰 비밀 ARN 이 user_data 에 있다."
+  }
+}
+
+# 주소를 채우면 그 값이 사이드카로, 토큰 비밀 ARN 은 런타임 1단 출력
+# clip_expiry_token_secret_arn 그대로 media.env 로 간다(tfvars 칸 없음).
+run "passes_clip_internal_url_and_token_arn_from_runtime_state" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:28081"
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.clip_internal_url == "http://clip.pokeclip.internal:28081" &&
+      strcontains(module.media_host.rendered_user_data["a"], "CLIP_EXPIRY_TOKEN_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-YzAbCd\n")
+    )
+    error_message = "clip_internal_url 이 모듈로, 런타임 1단 clip_expiry_token_secret_arn 이 media.env 로 그대로 가지 않는다."
   }
 }
 
