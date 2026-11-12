@@ -52,6 +52,11 @@ export interface JumpCard {
   thumbnailUrl?: string | null;
   /** 카드 시점의 플레이어용 PDT(POK-196). 장면이 없으면 null, 옛 서버면 빠져 온다. 읽기는 readPlayerAtMs(cardPositions.ts) */
   playerAtMs?: number | null;
+  /**
+   * 창 두 끝의 플레이어용 PDT(POK-196). 카드 장면이 없거나 창 끝 장면 · PDT 가 없으면 null, 옛 서버면 빠져 온다.
+   * 읽기는 readPlayerWindow(cardPositions.ts)
+   */
+  playerWindow?: { startMs: number; endMs: number } | null;
   createdAt: string;
 }
 
@@ -859,6 +864,10 @@ export function requestFileAccess(streamId: string, clipId: number): Promise<Cli
 export interface SegmentAudioAccess {
   expiresAt: string;
   segments: { seq: number; startAtMs: number; durationMs: number; url: string }[];
+  /** 끝 소리 확보 상태(POK-196). 옛 서버면 빠져 온다. 읽기는 readAudioCapture(cardPositions.ts) */
+  audioCapture?: 'attached' | 'not_ready' | 'skipped';
+  /** 확보 조각(컷 끝 바로 뒤 조각 · segments 에 섞지 않는다). audioCapture 가 attached 일 때만 실린다 */
+  audioCaptureSegment?: SegmentAudioAccess['segments'][number];
 }
 
 export function requestSegmentAudioAccess(
