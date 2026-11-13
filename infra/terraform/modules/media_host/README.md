@@ -122,7 +122,14 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     `c8gn.large`). 2026-10-23 `describe-instance-types` 읽기에서 상시 네트워크
     대역폭 6.25 Gbps · EBS 상시 처리량 156 MB/s 였습니다(같은 크기의
     `c7g.large` 는 상시 0.937 Gbps).
-*   디스크: DVR 1시간 × 30방송 ≈ 125 GB 에 OS 몫을 더한 150 GiB 입니다.
+*   디스크: 150 GiB 는 처음에 라이브 DVR 1시간 × 30방송 ≈ 125 GB 에 OS 몫을
+    더해 정했습니다. 라이브 창이 28초(조각 7개 · ADR-102)가 된 뒤로는 라이브
+    목록 몫이 무시할 만합니다 — MediaMTX 는 목록에서 빠진 조각을 디스크에서도
+    지웁니다(상류 v1.21.1 이 쓰는 gohlslib v2.4.5 `muxer_stream.go`). 디스크를
+    채우는 것은 녹화 보존입니다: 녹화는 방송 하나에 시간당 약 4.2 GB 이고
+    보관 유예 23시간 · 보존 기한 24시간 동안 남습니다(`infra/media-host`
+    README 「janitor_enabled」). 값은 그대로 두고, 판정은 녹화 증가율로 합니다
+    ([media-swap](../../runbooks/media-swap.md) 「동시 방송 부하」 행).
     처리량 변수는 125 부터 750 MiB/s 까지 받습니다 — gp3 는 IOPS 당
     0.25 MiB/s 까지이고 이 모듈은 IOPS 를 기본 3,000 으로 둡니다.
 *   유형은 입력 단계에서 계열 이름(세대 숫자 뒤 `g`)으로 한 번 거르고, plan

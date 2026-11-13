@@ -2869,7 +2869,7 @@ mkdir -p "${measure_dir}" && chmod 700 "${measure_dir}"
 | AL2023 arm64 판 docker 25.0.16 | `rpm -q docker amazon-ecr-credential-helper` · `dnf list --showduplicates docker` | 고정 판이 arm64 저장소에 있는지 — 없으면 `BOOTSTRAP_FAIL`(`FAIL packages`)로 드러남, 있는 판으로 tfvars 를 바꿔 설정 반영 교체 |
 | 자격 도우미 존재 | `command -v docker-credential-ecr-login` · 유닛 저널의 `MEDIA PREREQ OK ecr-credential-helper` 건수 | — |
 | drop-in 재시도 | 등록하지 않은 상자에서 설치 표지를 잠시 옮기고(`mv` → `systemctl restart`) 1분 뒤 `MEDIA PREREQ FAIL bundle` 건수가 2 이상인지 → 표지를 되돌리고 재시작 → 기동 판정 | 묶음 표지 확인이 유닛 기동마다 20초 간격으로 다시 도는지(`failed` 로 굳지 않음 · 설치는 다시 하지 않음 — 표지를 되돌리기 전까지 매 시도가 같은 줄로 실패) |
-| 동시 방송 부하(c8gn.large 30방송 가정) | 공개 전(NLB 가 팀 IP 만 받을 때) 팀 IP 에서 목표 비트레이트의 시험 송출 30개를 10분 · CloudWatch `CPUUtilization` · `NetworkIn` · `NetworkPacketsIn` · EBS 쓰기 바이트 · 상자의 `ethtool -S <ENA 장치>` 의 `bw_in_allowance_exceeded` · `pps_allowance_exceeded` 증가분 · `df -h /var/lib/docker` 증가율 | CPU 여유 · 대역폭 허용치 초과 0 · 1시간 DVR × 30 이 150 GiB 안인지 — 아니면 유형 · 디스크 재결정(kty) |
+| 동시 방송 부하(c8gn.large 30방송 가정) | 공개 전(NLB 가 팀 IP 만 받을 때) 팀 IP 에서 목표 비트레이트의 시험 송출 30개를 10분 · CloudWatch `CPUUtilization` · `NetworkIn` · `NetworkPacketsIn` · EBS 쓰기 바이트 · 상자의 `ethtool -S <ENA 장치>` 의 `bw_in_allowance_exceeded` · `pps_allowance_exceeded` 증가분 · `df -h /var/lib/docker` 증가율 | CPU 여유 · 대역폭 허용치 초과 0 · 디스크는 녹화 증가율로 본다 — 라이브 목록은 창 28초(조각 7개 · ADR-102)라 몫이 무시할 만하고, 녹화는 보관 유예 23시간 동안 남는다(media-host README 「janitor_enabled」). 그 증가율로 어림해 23시간 안에 루트가 150 GiB 의 70% 에 닿으면 유형 · 디스크 · 보존 재결정(kty) |
 
 ## 정리
 

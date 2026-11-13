@@ -8,8 +8,9 @@ instances = {
 ingest_active_key = "a"
 http_active_key   = "a"
 
-# kty 확정(2026-10-23) — 네트워크 최적화 Graviton · DVR 1시간 × 30방송 몫
-# (modules/media_host README 「상자 크기」).
+# kty 확정(2026-10-23) — 네트워크 최적화 Graviton · 디스크는 처음에 DVR
+# 1시간 × 30방송 몫으로 정했고, 라이브 창 28초(ADR-102) 뒤로는 녹화 보존이
+# 채운다(modules/media_host README 「상자 크기」).
 instance_type    = "c8gn.large"
 root_volume_size = 150
 
