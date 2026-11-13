@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient, renderWithProviders } from '@/test/testProviders';
 import { clearEditorMedia, segmentTrackKey, segmentTracks } from '../editorMedia';
+import * as rangeEndpoints from '../source/rangeEndpoints';
 import { remuxWindow } from '../source/remuxWindow';
 import { StudioScreen } from './StudioScreen';
 
@@ -156,6 +157,8 @@ const server = vi.hoisted(() => ({
   playerWindow: undefined as { startMs: number; endMs: number } | null | undefined,
   /** ③ 목록 PDT 간격(ms) — EXTINF 4초보다 길면 경계마다 죽은 자리(판 NULL 래칫)가 생긴다 */
   pdtStepMs: 4_000,
+  /** 이 seq 앞에 DISCONTINUITY 를 넣어 런을 끊는다. null 이면 런 하나 */
+  breakBeforeSeq: null as number | null,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -192,6 +195,7 @@ function vodPlaylist(listUrl: string): string {
   const lines = ['#EXTM3U', '#EXT-X-VERSION:6', `#EXT-X-MAP:URI="${dir}/init/i.mp4"`];
   if (server.timing === 'v2') lines.push('#EXT-X-POKECLIP-TIMING:2');
   for (let seq = 0; seq < 100; seq += 1) {
+    if (seq === server.breakBeforeSeq) lines.push('#EXT-X-DISCONTINUITY');
     const pdt = new Date(STARTED_AT + seq * server.pdtStepMs).toISOString();
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${pdt}`);
     lines.push('#EXTINF:4.000,', `${dir}/seg/${String(seq).padStart(7, '0')}.m4s`);
@@ -359,6 +363,7 @@ beforeEach(() => {
   server.playerAtMs = undefined;
   server.playerWindow = undefined;
   server.pdtStepMs = 4_000;
+  server.breakBeforeSeq = null;
   server.savedTracks = [{ trackId: 0, gain: 1 }];
   server.savedSchema = 2;
   server.savedOutput = null;
@@ -488,6 +493,13 @@ async function renderPartsOf(index = 0) {
     request: JSON.parse(await (form.get('request') as Blob).text()) as { upload: unknown },
     thumbnail: form.get('thumbnail'),
   };
+}
+
+/** 그 제목의 알림을 닫기 단추로 닫고 사라질 때까지 기다린다 */
+async function closeToastOf(title: string) {
+  const card = screen.getByText(title).closest('[data-toast-id]') as HTMLElement;
+  await userEvent.setup().click(within(card).getByRole('button', { name: '닫기' }));
+  await waitFor(() => expect(screen.queryByText(title)).not.toBeInTheDocument());
 }
 
 /** 그 꼴의 주소로 간 요청들 */
@@ -777,6 +789,43 @@ describe('StudioScreen — 업로드 장면 offset 은 미디어 거리다(c12�
     expect(request.upload).toMatchObject({ thumbnail: { source: 'scene', offsetMs: 5_000 } });
     expect(await screen.findAllByText('썸네일 장면이 조금 다를 수 있어요')).toHaveLength(1);
   });
+
+  it('그 알림은 요청이 받아들여진 뒤에 뜬다 — 요청이 실패하면 알리지 않고, 다음에 받아들여질 때 한 번 알린다', async () => {
+    server.renderError = { status: 500, body: { error: 'boom' } };
+    const user = userEvent.setup();
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    await orderVideo(user);
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(1));
+    expect(await screen.findByText('영상 만들기 실패')).toBeInTheDocument();
+    expect(screen.queryByText('썸네일 장면이 조금 다를 수 있어요')).not.toBeInTheDocument();
+
+    server.renderError = null;
+    await orderVideo(user);
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(2));
+    const { request } = await renderPartsOf(1);
+    expect(request.upload).toMatchObject({ thumbnail: { source: 'scene' } });
+    expect(await screen.findAllByText('썸네일 장면이 조금 다를 수 있어요')).toHaveLength(1);
+  });
+
+  it('받은 창 밖의 장면은 미리보기에 창 끝 그림을 대신 보이지 않는다 — 그림 없음으로 둔다(c12′ r1 [cx] 강등 M)', async () => {
+    withMediaControl();
+    // 판 2 · 68초(seq 17) 앞에서 런이 끊긴다. 창은 시작이 든 런 하나라 68초까지다. 하이라이트 70초 = 창 밖
+    server.timing = 'v2';
+    server.breakBeforeSeq = 17;
+    server.playerAtMs = STARTED_AT + 70_000;
+    const user = userEvent.setup();
+    await openWithSource(`stream=${STREAM_ID}&card=5`);
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    await setCardEnds();
+
+    const opened = await openUploadDialog(user);
+
+    expect(opened.getByText('장면 그림을 못 불러와요 · 0:10.0')).toBeInTheDocument();
+    expect(opened.queryByText('장면을 불러오는 중이에요')).not.toBeInTheDocument();
+  });
 });
 
 // 「다시 시도」 는 처음 캡처한 레시피 · 편집본 번호로 저장하지 않는다 — 그 순간의 화면으로 저장을 처음부터 다시 부른다(E4b-3 r1
@@ -831,6 +880,57 @@ describe('StudioScreen — 저장 「다시 시도」 는 그 순간의 화면�
     expect(screen.queryByText('저장에 필요한 녹화 정보를 받지 못했어요')).toBeNull();
     expect(screen.queryByRole('button', { name: '다시 시도' })).toBeNull();
     expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+  });
+
+  it('「영상 만들기」 판정(목록 다시 받기) 중에는 헤더가 잠겨 저장이 겹치지 않는다 — 판정이 끝나면 창이 뜬다', async () => {
+    const user = userEvent.setup();
+    await openCard(`stream=${STREAM_ID}&card=5`);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = rangeEndpoints.saveAfterReload;
+    const judged = vi
+      .spyOn(rangeEndpoints, 'saveAfterReload')
+      .mockImplementation(async (...args) => {
+        await gate;
+        return original(...args);
+      });
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await waitFor(() => expect(judged).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    expect(judged).toHaveBeenCalledTimes(1);
+
+    act(() => release());
+    expect(await screen.findByRole('dialog', { name: '유튜브에 올리기' })).toBeInTheDocument();
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+  });
+
+  it('「영상 만들기」 판정이 거절되면 헤더 잠금이 풀린다 — 저장 · 영상 만들기를 다시 누를 수 있고 「다시 시도」 도 다시 판정한다', async () => {
+    const user = userEvent.setup();
+    withMediaControl();
+    await openWithSource('?recipe=31');
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    // 창 안 두 끝을 고른다(판 NULL · ② 머리 없음) — 판정이 머리 missing 으로 거절된다
+    await setCardEnds();
+    const judged = vi.spyOn(rangeEndpoints, 'saveAfterReload');
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await screen.findByText('저장에 필요한 녹화 정보를 받지 못했어요');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: '영상 만들기' })).toBeEnabled();
+    expect(screen.queryByRole('dialog', { name: '유튜브에 올리기' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '다시 시도' }));
+    await waitFor(() => expect(judged).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: '영상 만들기' })).toBeEnabled());
+    expect(screen.queryByRole('dialog', { name: '유튜브에 올리기' })).not.toBeInTheDocument();
   });
 });
 
@@ -1054,6 +1154,28 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
       inAtMs: STARTED_AT + 61_234,
       outAtMs: STARTED_AT + 73_901,
     });
+  });
+
+  it('손잡이 한계는 clip 이 준 창 두 끝(playerWindow)이다 — 카드 창(60–72.4초)이 아니다', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_234, endMs: STARTED_AT + 73_901 };
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    const start = screen.getByRole('slider', { name: '구간 시작점' });
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+
+    expect(Number(end.getAttribute('aria-valuemax'))).toBeCloseTo(73.901, 6);
+    act(() => start.focus());
+    await user.keyboard('{ArrowLeft}');
+    expect(Number(start.getAttribute('aria-valuenow'))).toBeCloseTo(61.234, 6);
+  });
+
+  it('짧은 창(5초 + 한 프레임 미만)이면 끝 손잡이 한계를 창 끝 뒤 5초까지 넓힌다 — playerWindow 기준', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_000, endMs: STARTED_AT + 64_000 };
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    expect(
+      Number(screen.getByRole('slider', { name: '구간 끝점' }).getAttribute('aria-valuemax')),
+    ).toBeCloseTo(69, 6);
   });
 
   it('하이라이트 장면은 clip 이 준 플레이어용 PDT(playerAtMs)다 — 카드 ms(기준점 축)로 대신 재지 않는다', async () => {
@@ -1784,6 +1906,8 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
       expect(
         screen.queryByText(/source_unrenderable|outside_recording|no_footage/),
       ).not.toBeInTheDocument();
+      // 알림을 닫아 다음 회차의 글자가 그 회차 응답에서만 오게 한다(c11 r1 [cc] · cp1 [cx] L 판별력)
+      await closeToastOf('영상 만들기 실패');
     }
   });
 

@@ -197,4 +197,54 @@ describe('useSceneFrames', () => {
     expect(result.current.frameOf(2_000)).not.toBeNull();
     expect(made).toHaveLength(1);
   });
+
+  it('배치가 바뀌어도 그 시각의 조각 안 자리가 그대로인 그림은 두고, 자리가 바뀐 그림만 다시 뽑는다(머리 서명마다 깜빡이지 않게)', async () => {
+    const { result, rerender } = renderHook(
+      ({ source }: { source: SceneFrameSource }) => useSceneFrames(source, [2_000, 5_000], null),
+      { initialProps: { source: SOURCE } },
+    );
+    await waitFor(() => expect(result.current.frameOf(5_000)).not.toBeNull());
+    const kept = result.current.frameOf(2_000);
+    const moved = result.current.frameOf(5_000);
+
+    // 머리가 와서 4초 뒤 조각만 원점이 0.3초 옮겨졌다 — 앞 조각의 자리는 같다
+    const shifted = (offsetMs: number) => offsetMs / 1000 + (offsetMs >= 4_000 ? 0.3 : 0);
+    rerender({ source: { ...SOURCE, videoSecondsAt: shifted } });
+
+    await waitFor(() => expect(made[0]!.seeks).toEqual([2, 5, 5.3]));
+    await waitFor(() => expect(result.current.frameOf(5_000)).not.toBe(moved));
+    expect(result.current.frameOf(5_000)).not.toBeNull();
+    expect(result.current.frameOf(2_000)).toBe(kept);
+  });
+
+  it('받아 둔 조각 밖 시각(covers 거짓)은 옮기지 않고 바로 「못 얻음」이다 — 조각 끝으로 묶은 그림을 대신 보이지 않는다', async () => {
+    const covered: SceneFrameSource = { ...SOURCE, covers: (offsetMs) => offsetMs < 4_000 };
+    const { result } = renderHook(() => useSceneFrames(covered, [2_000, 5_000], null));
+
+    expect(result.current.failed(5_000)).toBe(true);
+    await waitFor(() => expect(result.current.frameOf(2_000)).not.toBeNull());
+    expect(made[0]!.seeks).toEqual([2]);
+    expect(result.current.frameOf(5_000)).toBeNull();
+  });
+
+  it('시크 한계가 바뀌어 묶인 자리가 달라진 그림도 다시 뽑는다', async () => {
+    const { result, rerender } = renderHook(
+      ({ source }: { source: SceneFrameSource }) => useSceneFrames(source, [0, 2_000], null),
+      { initialProps: { source: SOURCE } },
+    );
+    await waitFor(() => expect(result.current.frameOf(2_000)).not.toBeNull());
+    const kept = result.current.frameOf(2_000);
+
+    rerender({
+      source: {
+        ...SOURCE,
+        videoSecondsAt: (offsetMs) => offsetMs / 1000,
+        seekLimits: { firstFrame: 0.079, halfFrame: 1 / 60 },
+      },
+    });
+
+    await waitFor(() => expect(made[0]!.seeks).toHaveLength(3));
+    expect(made[0]!.seeks[2]).toBeCloseTo(0.08, 9);
+    expect(result.current.frameOf(2_000)).toBe(kept);
+  });
 });

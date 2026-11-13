@@ -187,6 +187,14 @@ describe('clipStatusView: 영상 상태 알약과 작은 창(POK-492)', () => {
     );
   });
 
+  it('SOURCE_RANGE 실패에는 「다시 만들기」 를 주지 않는다 — 같은 범위로 다시 만들면 같은 실패다', () => {
+    const failed = clip({ status: 'failed', error: { code: 'SOURCE_RANGE', message: null } });
+    expect(view(failed).actions).toEqual(['library']);
+    expect(
+      view(clip({ status: 'failed', error: { code: 'SOURCE_MISSING', message: null } })).actions,
+    ).toEqual(['remake', 'library']);
+  });
+
   it('다른 실패 코드와 코드 없는 실패는 지금처럼 코드를 보이고 다시 만들라고 말한다', () => {
     const failed = (error: ClipSnapshot['error']) => view(clip({ status: 'failed', error }));
     expect(failed({ code: 'SOURCE_MISSING', message: null }).detail).toBe(

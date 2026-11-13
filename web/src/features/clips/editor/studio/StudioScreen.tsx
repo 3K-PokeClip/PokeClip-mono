@@ -618,7 +618,8 @@ export function StudioScreen() {
 interface SaveState {
   recipeId: number | null;
   version: number | null;
-  busy: 'save' | 'render' | null;
+  /** 보내는 중인 동작. judge 는 「영상 만들기」 앞 컷 판정(목록 다시 받기) — 헤더를 잠그되 영상 상태 알약은 그대로 둔다 */
+  busy: 'save' | 'judge' | 'render' | null;
   clip: ClipSnapshot | null;
   label: string;
   /** 마지막으로 서버에 저장한 본문 — 지금 화면과 다르면 영상 만들기 전에 먼저 저장한다 */
@@ -972,8 +973,8 @@ function WiredStudioBody({
   const openWithCut = useCallback(
     (recipe: EditorRecipe, thumbnailSeconds: number | null, cut: SaveCut) => {
       const current = saveRef.current;
-      // 판정하는 사이 다른 동작이 시작됐거나 다른 편집 대상으로 넘어갔으면 열지 않는다
-      if (current.busy !== null || reloadingRef.current) return;
+      // 판정하는 동안은 헤더가 잠겨(judge) 다른 동작이 시작되지 않는다. 그 사이 다른 편집 대상으로 넘어갔으면 열지 않는다
+      if ((current.busy !== null && current.busy !== 'judge') || reloadingRef.current) return;
       // 원천 목록이 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
       const playheadSeconds = hasSource ? playbackClock.getSeconds() : null;
       const cutLengthMs = cut.outMs - cut.inMs;
@@ -997,6 +998,8 @@ function WiredStudioBody({
           ? {
               src: loaded.src,
               videoSecondsAt: (offsetMs) => shown.blobAtS(rangeStart + offsetMs / 1000),
+              // 받은 창 밖 장면은 그림이 없다 — blobAtS 가 창 끝으로 묶은 그림은 제출되는 장면과 다르다(c12′ r1 [cx] 강등 M)
+              covers: (offsetMs) => shown.pickAtS(rangeStart + offsetMs / 1000) !== null,
               seekLimits: loaded.seekLimits ?? undefined,
               output: outputFromLook(recipe),
             }
@@ -1039,10 +1042,17 @@ function WiredStudioBody({
   const openUploadDialog = useCallback(
     (recipe: EditorRecipe, thumbnailSeconds: number | null, again: () => void) => {
       if (saveRef.current.busy !== null) return;
+      // 판정(누를 때 목록을 다시 받는다)이 끝날 때까지 헤더를 잠근다 — 그 사이 누른 저장이 판정 겹침으로 말없이 무시되지
+      // 않게(E4b-3 r1 [cc] L1 · cp1 L)
+      setSave((s) => ({ ...s, busy: 'judge' }));
+      const release = () => setSave((s) => (s.busy === 'judge' ? { ...s, busy: null } : s));
       cutFor(
         recipe.endpoints,
-        (cut) => openWithCut(recipe, thumbnailSeconds, cut),
-        () => undefined,
+        (cut) => {
+          release();
+          openWithCut(recipe, thumbnailSeconds, cut);
+        },
+        release,
         again,
       );
     },
@@ -1070,10 +1080,6 @@ function WiredStudioBody({
         draft.thumbnailSource === 'scene'
           ? uploadSceneOffsetMs(draft.sceneOffsetMs, pending.scene)
           : null;
-      if (scene?.approximate === true && !sceneApproxTold.current) {
-        sceneApproxTold.current = true;
-        toast({ tone: 'info', title: '썸네일 장면이 조금 다를 수 있어요' });
-      }
       const upload = uploadInfoOf(
         draft,
         pending.cutLengthMs,
@@ -1113,6 +1119,11 @@ function WiredStudioBody({
             label: `편집본 #${s.recipeId} v${s.version} 저장됨`,
           }));
           setPending(null);
+          // 장면을 미디어 거리로 못 셌다는 알림은 요청이 받아들여진 뒤에 — 저장 · 요청이 실패하면 그 실패 알림만 뜬다(c12 cp1 [cc] L)
+          if (scene?.approximate === true && !sceneApproxTold.current) {
+            sceneApproxTold.current = true;
+            toast({ tone: 'info', title: '썸네일 장면이 조금 다를 수 있어요' });
+          }
           // 서버가 주문을 받은 뒤에 센다 — 거절된 제출은 세지 않아 DB 숫자와 맞는다. 제목·설명·태그는 싣지 않는다 (POK-357)
           track('video_render_requested', {
             privacy_status: upload.privacyStatus,
@@ -1281,7 +1292,8 @@ function WiredStudioBody({
         actions={actions}
         autosaveLabel={save.label}
         uploadLabel="영상 만들기"
-        busyAction={save.busy}
+        // 판정 중에도 「영상 만들기」 가 도는 중으로 보인다(누른 동작이 진행 중이다)
+        busyAction={save.busy === 'judge' ? 'render' : save.busy}
         clipStatus={clipStatus}
         reloading={reloading}
         mixTrackId={trackId(0)}
