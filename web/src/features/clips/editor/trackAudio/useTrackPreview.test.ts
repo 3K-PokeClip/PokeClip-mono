@@ -1590,6 +1590,48 @@ describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => 
       expect(result.current.status).toBe('waiting');
       expect(node.muted).toBe(true);
     });
+
+    // 영상 실패가 ② 응답보다 먼저 오면 받기가 끊겨 첫 받기 거부(fail)로 간다. 빈 응답이 받기를 끝낸 뒤 · 처음 받은 소리를 놓기
+    // 전 몇 작업 사이에 오면 놓기 전이라 영상 실패 쪽은 할 일이 없다 — 놓은 직후 그 실패를 봐야 한다. 그 틈이 어디든 걸리게
+    // 빈 응답 뒤 미룬 작업(마이크로태스크) 수를 0 부터 넓게 훑는다
+    it.each(Array.from({ length: 25 }, (_, ticks) => ticks))(
+      '빈 응답 뒤 작업 %i 개 만에 영상이 실패해도 바로 못 부름이다: 처음 받은 소리를 놓은 직후 그 실패를 본다',
+      async (ticks) => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        let answer!: (access: SegmentAudioAccess) => void;
+        const answered = new Promise<SegmentAudioAccess>((resolve) => {
+          answer = resolve;
+        });
+        vi.mocked(requestSegmentAudioAccess).mockReturnValue(answered);
+        const node = video();
+        const { result, rerender } = renderHook(
+          (props: Props) =>
+            useTrackPreview({
+              streamId: 's-1',
+              window: THREE,
+              ...props,
+              video: node,
+              createContext: () => fakeContext().ctx as never,
+            }),
+          { initialProps: { loaded: null, failedKey: null } as Props },
+        );
+        act(() => result.current.setGains([0, 1, 0]));
+        await advance(50);
+        expect(result.current.status).toBe('loading');
+
+        answer(accessFor([]));
+        for (let i = 0; i < ticks; i++) await Promise.resolve();
+        rerender({ loaded: null, failedKey: THREE.key });
+        await advance(50);
+
+        expect(result.current.status).toBe('unavailable');
+        expect(node.muted).toBe(false);
+        const asked = accessCalls();
+        await advance(AUDIO_WAIT_MS * AUDIO_WAIT_LIMIT + 1000);
+        expect(accessCalls()).toBe(asked);
+        expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toEqual([]);
+      },
+    );
   });
 
   it('고리는 failed 머리를 다시 읽지 않는다: 다시 판독은 missing · 아직 안 읽은 seq 만이다(c10b′ r1 3번 · 보안 M-1)', async () => {
