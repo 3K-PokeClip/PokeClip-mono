@@ -155,6 +155,9 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
         // 한다. 일반 계획에서는 플래너가 이른 시각인지 모르므로, 앞세운 존재 확인이 없으면 seq 역순으로 끝까지 훑을 수 있다.
         long v2EarlyGeneric = v2FloorGeneric(V2_ONLY, T0.minusSeconds(1), "있음 · 일반 계획 · 첫 PDT − 1초");
         long v2TailGeneric = v2FloorGeneric(V2_ONLY, tail, "있음 · 일반 계획");
+        // 기록만 — 중간 시각(답이 있고 그 뒤 판 2 행이 15만). 본 조회가 seq 역순으로 그 행들을 지난다 — kty 2026-11-13 수용
+        // (호출자는 카드당 1회 · 시각은 보통 라이브 머리). 생산자 리뷰 실측 30만 행 5,923 버퍼 · 약 32ms 와 견준다.
+        v2Floor(V2_ONLY, T0.plusMillis((long) (ROWS / 2) * SEGMENT_MS), "있음 · 중간 시각");
         // 기록만 — 꼬리에서 먼 시각(첫 행 + 1초)의 옛 후보 조회는 그 시각 뒤 판 NULL 행 수만큼 읽는다.
         legacyFloor(LEGACY_ONLY, T0.plusSeconds(1), "있음 · 첫 행 + 1초");
 
