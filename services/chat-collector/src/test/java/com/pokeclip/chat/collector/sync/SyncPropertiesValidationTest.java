@@ -122,13 +122,38 @@ class SyncPropertiesValidationTest {
                 .hasMessageContaining("pokeclip.sync.channel-offset-ms.streamer-a");
     }
 
-    /** 판 2 차감도 같은 그물이다(설계 r6 7.1 — 상한 검사는 {@code requireInRange} 그대로). 메시지가 어느 속성인지 가리킨다. */
+    /**
+     * 판 2 차감은 {@code 0 ≤ 값 ≤ 상한}이다 — m(파일 머리 → 영상 첫 표본)은 음수가 아니다(계약 6-6-10 I11). 실제로 쓰이는 판 2
+     * 보정값(기본 · 채널별 모두)도 같은 상한 안이어야 한다 — 두 값을 빼면 크기가 상한의 두 배까지 갈 수 있다(보안 L1).
+     * 메시지가 어느 속성인지 가리킨다.
+     */
     @Test
     void 판_2_차감도_같은_그물에_걸린다() {
-        assertThatThrownBy(() -> new SyncProperties(0, Map.of(), 1_500_000_000L))
+        long limit = SyncProperties.MAX_ABS_OFFSET_MS;
+
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of(), -1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms");
-        assertThatCode(() -> new SyncProperties(0, Map.of(), -SyncProperties.MAX_ABS_OFFSET_MS))
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of(), limit + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms");
+        assertThatCode(() -> new SyncProperties(0, Map.of(), limit)).doesNotThrowAnyException();
+        assertThatCode(() -> new SyncProperties(0, Map.of(), 0)).doesNotThrowAnyException();
+    }
+
+    /** 각 값은 상한 안인데 빼고 나면 넘는 갈래 — 기본값 쪽과 채널 쪽을 따로 본다. */
+    @Test
+    void 판_2_보정값이_상한을_넘으면_거부한다() {
+        long limit = SyncProperties.MAX_ABS_OFFSET_MS;
+
+        assertThatThrownBy(() -> new SyncProperties(-limit, Map.of(), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.default-offset-ms")
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms");
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of("streamer-a", -limit), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.channel-offset-ms.streamer-a");
+        assertThatCode(() -> new SyncProperties(-limit + 1, Map.of("streamer-a", -limit + 1), 1))
                 .doesNotThrowAnyException();
     }
 

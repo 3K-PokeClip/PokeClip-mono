@@ -77,7 +77,7 @@ public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffs
 
     public SyncProperties {
         requireInRange(defaultOffsetMs, "pokeclip.sync.default-offset-ms");
-        requireInRange(v2LeadCorrectionMs, "pokeclip.sync.v2-lead-correction-ms");
+        requireV2Correction(v2LeadCorrectionMs);
         if (channelOffsetMs == null) {
             channelOffsetMs = Map.of();
         } else {
@@ -85,6 +85,23 @@ public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffs
             // 던져 원인이 설정의 어느 줄인지가 안 드러난다.
             channelOffsetMs.forEach(SyncProperties::requireChannelOffset);
             channelOffsetMs = Map.copyOf(channelOffsetMs);
+        }
+        // 실제로 쓰이는 판 2 보정값도 같은 상한 안이어야 한다 — 각 값이 상한 안이어도 빼면 상한의 두 배까지 간다.
+        requireInRange(defaultOffsetMs - v2LeadCorrectionMs,
+                "pokeclip.sync.default-offset-ms − pokeclip.sync.v2-lead-correction-ms");
+        channelOffsetMs.forEach((channelId, offsetMs) -> requireInRange(offsetMs - v2LeadCorrectionMs,
+                "pokeclip.sync.channel-offset-ms." + channelId + " − pokeclip.sync.v2-lead-correction-ms"));
+    }
+
+    /**
+     * 판 2 차감은 {@code 0 ≤ 값 ≤ MAX_ABS_OFFSET_MS}다. 차감은 파일 머리에서 영상 첫 표본까지(m)의 평균이라 음수가 아니다
+     * (계약 세그먼트인덱스 6-6-10 I11 {@code m_f ≥ 0}).
+     */
+    private static void requireV2Correction(long correctionMs) {
+        if (correctionMs < 0 || correctionMs > MAX_ABS_OFFSET_MS) {
+            throw new IllegalArgumentException("pokeclip.sync.v2-lead-correction-ms=" + correctionMs
+                    + "이(가) 범위 0–" + MAX_ABS_OFFSET_MS + "ms 밖이다. 파일 머리에서 영상 첫 표본까지의 평균이라"
+                    + " 음수가 아니다. 단위는 밀리초다.");
         }
     }
 

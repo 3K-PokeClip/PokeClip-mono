@@ -30,9 +30,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>판정: 색인 있음에서 판 2 후보 조회는 세 장부 모두, 옛 후보 조회는 판 2 만 있는 장부에서 꼬리 몇 행 수준이다. 대조로 색인
  * 없음에서는 같은 두 자리가 그 판이 아닌 행을 훑어 버퍼가 크다(색인이 실제로 일을 하는지).
  *
- * <p>옛 행이 많은 두 장부(판 NULL 만 · 롤백)의 옛 후보 조회는 꼬리 몇 행이 아니다 — 역행 신호 {@code earlier_is_future}의
- * {@code EXISTS}를 플래너가 표 전체 Seq Scan으로 푼다(2026-11-13 실측 12,676 버퍼 · 색인 있음 · 없음 같음). 판 조건을 더하기 전
- * develop 조회도 같은 데이터에서 같은 12,676 버퍼였다 — 이 커밋이 만든 비용이 아니라 기록만 한다.
+ * <p>옛 floor가 잡히는 두 장부(판 NULL 만 · 롤백)의 옛 후보 조회는 꼬리 몇 행이 아니다 — 역행 신호
+ * {@code earlier_is_future}의 {@code EXISTS}를 플래너가 표 전체 Seq Scan으로 푼다. 비용은 그 스트림이 아니라 표 전체 행
+ * 수에 비례한다(2026-11-13 실측 · 표 907,200행 · {@code Rows Removed by Filter} 907,200 · 12,676 버퍼 · 약 35ms · 색인 있음 ·
+ * 없음 같음). 옛 floor가 잡히는 모든 호출이 치르고 P2 쓰기 스위치 전 prod 기간 내내 그렇다. 판 조건을 더하기 전 develop
+ * 조회도 같은 데이터에서 같은 12,676 버퍼였다 — 이 커밋이 만든 비용이 아니라 기록만 한다. 재검토 조건과 EXISTS 처분은
+ * {@link SegmentLedger#FLOOR_BY_WALL_CLOCK} 주석과 kty 회부를 따른다.
+ *
+ * <p>판 2 후보 조회를 첫 판 2 PDT보다 이른 시각으로 부르는 경우(보안 L2)도 기록만 한다 — 판 2 후보가 없어 그 스트림의 판 2
+ * 행을 끝까지 훑는다(2026-11-13 실측 · 판 2 30만 행에서 7,246 버퍼 · 약 37ms).
  *
  * <p><b>방송 번호 접두는 {@code idx-}다.</b> 행 수가 커서 끝나면 지운다.
  */
@@ -122,6 +128,8 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
         long legacyOnV2 = legacyFloor(V2_ONLY, tail, "있음");
         legacyFloor(LEGACY_ONLY, tail, "있음");
         legacyFloor(ROLLBACK, tail, "있음");
+        // 기록만(보안 L2) — 첫 판 2 PDT 보다 이른 시각이면 판 2 후보가 없어 그 스트림의 판 2 행을 어디까지 훑는지 본다.
+        v2Floor(V2_ONLY, T0.minusSeconds(1), "있음 · 첫 PDT − 1초");
 
         jdbc.execute("DROP INDEX public.stream_segments_v2_seq_idx");
         jdbc.execute("DROP INDEX public.stream_segments_legacy_wall_idx");
@@ -152,10 +160,11 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
     /** 운영 SQL 글자 그대로를 {@code EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)}으로 돌려 맨 위 마디의 공유 버퍼 수를 낸다. */
     private long explain(String query, String streamId, String index, String sql, Object... args) {
         String plan = jdbc.queryForObject("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql, String.class, args);
-        JsonNode root = json.readTree(plan).get(0).get("Plan");
+        JsonNode top = json.readTree(plan).get(0);
+        JsonNode root = top.get("Plan");
         long buffers = root.get("Shared Hit Blocks").asLong() + root.get("Shared Read Blocks").asLong();
-        log.info("chat.sync.index_record query={} stream={} partialIndex={} buffers={} plan={}",
-                query, streamId, index, buffers, plan.replaceAll("\\s+", " "));
+        log.info("chat.sync.index_record query={} stream={} partialIndex={} buffers={} executionMs={} plan={}",
+                query, streamId, index, buffers, top.get("Execution Time").asDouble(), plan.replaceAll("\\s+", " "));
         return buffers;
     }
 }

@@ -44,8 +44,9 @@ import java.util.Optional;
  * <h2>옛 행의 {@code min(delta, duration)} 클램프 — 실효 상한이 1500ms다</h2>
  * 등식 {@code next.start_pts == floor.start_pts + floor.duration}은 같은 장 안 맞닿은 이웃에서 선다
  * ({@code media/internal/indexer/indexer.go:528}). 장 경계에서는 PDT가 뛴 만큼(겹치면 그만큼 작게) 다르다(계약 6-6-9).
- * 그래서 옛 행에서는 드리프트로 {@code delta}가 길이를 넘는 구간에서도 위치가 조각 끝에 머물다가 경계에서 다음 조각의
- * 시작으로 이어진다 — <b>뒤로 튀지 않는다.</b>
+ * 출시 이미지가 쓴 옛 행은 등식이 늘 서므로(이어진 이웃의 {@code start_pts}는 앞 위치 + 앞 길이로 쌓인다) 옛 행에서는
+ * 드리프트로 {@code delta}가 길이를 넘는 구간에서도 위치가 조각 끝에 머물다가 경계에서 다음 조각의 시작으로 이어진다 —
+ * <b>뒤로 튀지 않는다.</b>
  *
  * <p>대신 <b>그 구간의 채팅이 조각 끝 한 점에 접힌다.</b> 얼마나 접히나 = 갭이 불연속으로
  * 안 서는 한계, 즉 {@code SEGMENT_DRIFT_TOLERANCE_MS = 1500}이다
