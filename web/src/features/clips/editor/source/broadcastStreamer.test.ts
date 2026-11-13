@@ -94,6 +94,14 @@ describe('streamerIdOf: 이 방송의 채널(스트리머) 번호', () => {
     // 조회 실패는 오류 이름만 적는다 — 오류 객체를 통째로 싣지 않는다
     expect(warn).toHaveBeenLastCalledWith('[editor] 방송의 채널 번호를 정하지 못했어요(Error)');
   });
+
+  it('오류가 아닌 값(null)이 던져져도 모름(null)이고 경고에는 그 값의 종류만 적는다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(fetchDelegationsAsEditor).mockRejectedValueOnce(null);
+
+    expect(await streamerIdOf(broadcast('EDITOR'))).toBeNull();
+    expect(warn).toHaveBeenLastCalledWith('[editor] 방송의 채널 번호를 정하지 못했어요(object)');
+  });
 });
 
 describe('editorXResolver: 그 채널 번호로만 지금 방송 번호를 묻는다', () => {

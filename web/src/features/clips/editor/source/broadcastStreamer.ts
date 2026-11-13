@@ -45,7 +45,8 @@ export async function streamerIdOf(
     }
     return await delegatedStreamerOf(broadcast.streamId);
   } catch (e) {
-    console.warn(`[editor] 방송의 채널 번호를 정하지 못했어요(${(e as Error).name})`);
+    const reason = e instanceof Error ? e.name : typeof e;
+    console.warn(`[editor] 방송의 채널 번호를 정하지 못했어요(${reason})`);
     return null;
   }
 }
