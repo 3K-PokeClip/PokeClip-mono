@@ -10,8 +10,10 @@
 #   보호는 출력 protected_headers · protected_query_args 로 본다.
 # - 표준 로그 로그 그룹은 보존 = 변수이고, enable_standard_logs = false 면
 #   media 모듈에 null 을 넘기되 로그 그룹은 남는다.
-# - CloudFront Function 로그 그룹 셋은 /aws/cloudfront/function/<함수 이름>
+# - CloudFront Function 로그 그룹 넷은 /aws/cloudfront/function/<함수 이름>
 #   · us-east-1 · 보존 = WAF 차단 로그(30일)다.
+# - /dvr 하한 함수(POK-525)는 runtime 출력 edge_bounds_kvs_arn 을 연결하고,
+#   스위치 dvr_floor_enabled(기본 false)가 참일 때만 /dvr/* 에 붙는다.
 # - VPC origin 서비스 SG 는 서울 별칭으로 이름 · network vpc_id 로 조회하고,
 #   내부 ALB SG 에 그 SG 출처 443 인그레스 하나를 둔다. 조회는 VPC origin
 #   하나만 기다려, VPC origin 밖 media 변경 plan 에서도 출처 SG 가 정해져 있다.
@@ -137,6 +139,14 @@ override_resource {
   }
 }
 
+# 함수 ARN 을 따로 줘, 스위치가 다른 함수를 붙이면 실패하게 한다.
+override_resource {
+  target = module.media.aws_cloudfront_function.dvr_floor
+  values = {
+    arn = "arn:aws:cloudfront::111122223333:function/pokeclip-prod-dvr-floor"
+  }
+}
+
 override_data {
   target = data.terraform_remote_state.network
   values = {
@@ -181,6 +191,7 @@ override_data {
   values = {
     outputs = {
       rewind_bucket_regional_domain_name = "pokeclip-prod-rewind-example.s3.ap-northeast-2.amazonaws.com"
+      edge_bounds_kvs_arn                = "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1"
     }
   }
 }
@@ -362,7 +373,7 @@ run "standard_log_retention_rejects_non_cloudwatch_value" {
 
 # --- CloudFront Function 로그 그룹(POK-469 · PR 387 보안 L2) ---
 
-# 함수 셋의 console.log 가 가는 us-east-1 로그 그룹을 이 루트가 미리 만들어
+# 함수 넷의 console.log 가 가는 us-east-1 로그 그룹을 이 루트가 미리 만들어
 # 보존을 건다. 이름은 /aws/cloudfront/function/<함수 이름>, 보존은 WAF 차단
 # 로그와 같다. 리전은 자원의 region 값으로 본다 — mock 은 provider 리전을
 # 모르므로, 자원이 region 을 적지 않으면 mock 이 지은 값이 나와 실패하고 다른
@@ -377,8 +388,9 @@ run "cloudfront_function_log_groups_keep_waf_retention" {
       live_auth    = "/aws/cloudfront/function/pokeclip-prod-live-auth"
       deny_default = "/aws/cloudfront/function/pokeclip-prod-deny-default"
       apex_request = "/aws/cloudfront/function/pokeclip-prod-apex-request"
+      dvr_floor    = "/aws/cloudfront/function/pokeclip-prod-dvr-floor"
     }
-    error_message = "함수 로그 그룹이 /aws/cloudfront/function/ + 함수 셋(live-auth · deny-default · apex-request)의 이름이 아니다."
+    error_message = "함수 로그 그룹이 /aws/cloudfront/function/ + 함수 넷(live-auth · deny-default · apex-request · dvr-floor)의 이름이 아니다."
   }
 
   assert {
@@ -404,6 +416,31 @@ run "cloudfront_function_log_groups_keep_waf_retention" {
       group.region == "us-east-1"
     ])
     error_message = "함수 로그 그룹의 region 이 us-east-1 이 아니다(자원에 적지 않았거나 다른 리전)."
+  }
+}
+
+# --- /dvr 하한 함수(POK-525) ---
+
+# 기본은 끔 — 함수는 게시돼도 /dvr/* 에 붙지 않는다(두 단 apply 의 1단).
+run "dvr_floor_is_published_but_detached_by_default" {
+  assert {
+    condition = (
+      var.dvr_floor_enabled == false &&
+      module.media.dvr_floor_attached == false &&
+      module.media.function_names.dvr_floor == "pokeclip-prod-dvr-floor"
+    )
+    error_message = "dvr_floor_enabled 기본(false)에서 dvr-floor 가 /dvr/* 에 붙었거나 함수 이름이 pokeclip-prod-dvr-floor 가 아니다."
+  }
+}
+
+run "dvr_floor_switch_attaches_to_dvr" {
+  variables {
+    dvr_floor_enabled = true
+  }
+
+  assert {
+    condition     = module.media.dvr_floor_attached == true
+    error_message = "dvr_floor_enabled = true 인데 media 모듈이 dvr-floor 를 /dvr/* 에 붙이지 않는다(스위치가 전달되지 않음)."
   }
 }
 
@@ -536,4 +573,250 @@ run "rejects_platform_internal_alb_sg_id_not_sg" {
   }
 
   expect_failures = [terraform_data.remote_contract]
+}
+
+# runtime 출력 이름이 어긋나 빠지면 함수 KVS 연결을 짓기 전에 멈춘다.
+run "rejects_missing_runtime_edge_bounds_kvs_arn" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rewind_bucket_regional_domain_name = "pokeclip-prod-rewind-example.s3.ap-northeast-2.amazonaws.com"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.remote_contract]
+}
+
+# ARN 이 아니라 그릇 이름이 오면 멈춘다.
+run "rejects_runtime_edge_bounds_kvs_name_not_arn" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rewind_bucket_regional_domain_name = "pokeclip-prod-rewind-example.s3.ap-northeast-2.amazonaws.com"
+        edge_bounds_kvs_arn                = "pokeclip-prod-edge-bounds"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.remote_contract]
+}
+
+# --- /dvr 하한 경보(POK-525 K5 · K-D1 · K-D4 · K-D5) ---
+
+# 경보 알림 주제의 ARN 을 고정해, 경보가 다른 주제로 보내거나 주제 정책이
+# 다른 주제를 가리키면 실패하게 한다.
+override_resource {
+  target = aws_sns_topic.edge_alarms
+  values = {
+    arn = "arn:aws:sns:us-east-1:111122223333:pokeclip-prod-edge-alarms"
+  }
+}
+
+# 지표 필터 둘의 패턴은 함수 로그 표지(module.media 출력 — dvr-floor.js 상수)를
+# 따옴표로 감싼 구절이다(E43). 패턴 글자는 계약이라 고정하고(런북 판정 K 가
+# 이 글자로 test-metric-filter 를 돌린다), 같은 글자가 함수 렌더본의 문자열
+# 상수로 있는지도 본다 — 모듈 출력을 거치지 않는 교차 검사다. 루트 시험은 모듈
+# 안 함수 자원을 주소로 볼 수 없어 렌더본은 모듈과 같은 templatefile 로 짓는다.
+run "dvr_floor_metric_filters_match_function_log_markers" {
+  command = plan
+
+  assert {
+    condition = {
+      for key, filter in aws_cloudwatch_log_metric_filter.dvr_floor :
+      key => filter.pattern
+      } == {
+      value_invalid = "\"DVR FLOOR VALUE INVALID\""
+      kvs_error     = "\"DVR FLOOR KVS ERROR\""
+    }
+    error_message = "지표 필터 패턴이 \"DVR FLOOR VALUE INVALID\" · \"DVR FLOOR KVS ERROR\" 둘(따옴표 구절)이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, filter in aws_cloudwatch_log_metric_filter.dvr_floor :
+      filter.pattern == "\"${module.media.dvr_floor_log_markers[key]}\"" &&
+      strcontains(
+        templatefile(
+          "../../modules/cdn_media/functions/dvr-floor.js",
+          { app_origin = "https://app.example.com" },
+        ),
+        "'${trim(filter.pattern, "\"")}'",
+      )
+    ])
+    error_message = "지표 필터 패턴이 module.media 의 dvr_floor_log_markers 와 다르거나 dvr-floor 렌더본에 그 문자열 상수가 없다(E43)."
+  }
+
+  assert {
+    condition = alltrue([
+      for filter in aws_cloudwatch_log_metric_filter.dvr_floor :
+      filter.log_group_name == aws_cloudwatch_log_group.cloudfront_function["dvr_floor"].name &&
+      filter.log_group_name == "/aws/cloudfront/function/pokeclip-prod-dvr-floor" &&
+      filter.region == "us-east-1"
+    ])
+    error_message = "지표 필터가 dvr-floor 함수 로그 그룹(us-east-1)에 걸려 있지 않다."
+  }
+
+  assert {
+    condition = {
+      for key, filter in aws_cloudwatch_log_metric_filter.dvr_floor :
+      key => [
+        filter.metric_transformation[0].namespace,
+        filter.metric_transformation[0].name,
+        filter.metric_transformation[0].value,
+      ]
+      } == {
+      value_invalid = ["PokeClip/Edge", "DvrFloorValueInvalid", "1"]
+      kvs_error     = ["PokeClip/Edge", "DvrFloorKvsError", "1"]
+    }
+    error_message = "지표 필터의 지표가 PokeClip/Edge · DvrFloorValueInvalid · DvrFloorKvsError · 값 1 이 아니다."
+  }
+}
+
+# 로그 지표 경보 둘(K-D4) — 지표 · 네임스페이스는 필터의 것, 5분 합 1 이상 ·
+# 1/1 · 데이터 없음 = 정상, 알림은 경보 주제 하나.
+run "dvr_floor_log_alarms_notify_topic_on_first_count" {
+  assert {
+    condition = length(aws_cloudwatch_metric_alarm.dvr_floor_log) == 2 && alltrue([
+      for key, alarm in aws_cloudwatch_metric_alarm.dvr_floor_log :
+      alarm.namespace == aws_cloudwatch_log_metric_filter.dvr_floor[key].metric_transformation[0].namespace &&
+      alarm.metric_name == aws_cloudwatch_log_metric_filter.dvr_floor[key].metric_transformation[0].name &&
+      length(coalesce(alarm.dimensions, {})) == 0
+    ])
+    error_message = "로그 지표 경보 둘의 지표 · 네임스페이스가 지표 필터의 것이 아니거나 차원이 붙었다."
+  }
+
+  assert {
+    condition = alltrue([
+      for alarm in aws_cloudwatch_metric_alarm.dvr_floor_log :
+      alarm.statistic == "Sum" &&
+      alarm.period == 300 &&
+      alarm.evaluation_periods == 1 &&
+      alarm.datapoints_to_alarm == 1 &&
+      alarm.threshold == 1 &&
+      alarm.comparison_operator == "GreaterThanOrEqualToThreshold" &&
+      alarm.treat_missing_data == "notBreaching"
+    ])
+    error_message = "로그 지표 경보가 5분(300초) 합(Sum) 1 이상 · 1/1 · treat_missing_data = notBreaching(K-D4)이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for alarm in aws_cloudwatch_metric_alarm.dvr_floor_log :
+      alarm.alarm_actions == toset([
+        "arn:aws:sns:us-east-1:111122223333:pokeclip-prod-edge-alarms",
+      ]) &&
+      alarm.region == "us-east-1" &&
+      strcontains(alarm.alarm_description, "best-effort")
+    ])
+    error_message = "로그 지표 경보의 알림이 경보 주제 하나가 아니거나 리전이 us-east-1 이 아니거나 설명에 best-effort 한계가 없다."
+  }
+
+  assert {
+    condition = {
+      for key, alarm in aws_cloudwatch_metric_alarm.dvr_floor_log :
+      key => alarm.alarm_name
+      } == {
+      value_invalid = "pokeclip-prod-dvr-floor-value-invalid"
+      kvs_error     = "pokeclip-prod-dvr-floor-kvs-error"
+    }
+    error_message = "로그 지표 경보 이름이 pokeclip-prod-dvr-floor-value-invalid · -kvs-error 가 아니다."
+  }
+}
+
+# 실행 오류 경보(K-D5 (a)) — CloudFront 기본 지표 FunctionExecutionErrors
+# (AWS/CloudFront · us-east-1 · 차원 FunctionName · Region = Global). 잡지 못한
+# 예외는 /dvr 503 이라 로그 지표 경보와 같은 문턱 · 주제로 둔다.
+run "dvr_floor_execution_errors_alarm_watches_cloudfront_metric" {
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.alarm_name == "pokeclip-prod-dvr-floor-execution-errors" &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.namespace == "AWS/CloudFront" &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.metric_name == "FunctionExecutionErrors" &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.region == "us-east-1"
+    )
+    error_message = "실행 오류 경보가 us-east-1 의 AWS/CloudFront FunctionExecutionErrors 가 아니다."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.dimensions == tomap({
+        FunctionName = module.media.function_names.dvr_floor
+        Region       = "Global"
+      }) &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.dimensions.FunctionName == "pokeclip-prod-dvr-floor"
+    )
+    error_message = "실행 오류 경보의 차원이 FunctionName = dvr-floor 함수 이름 · Region = Global 둘이 아니다."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.statistic == "Sum" &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.period == 300 &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.evaluation_periods == 1 &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.datapoints_to_alarm == 1 &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.threshold == 1 &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.comparison_operator == "GreaterThanOrEqualToThreshold" &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.treat_missing_data == "notBreaching" &&
+      aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.alarm_actions == toset(["arn:aws:sns:us-east-1:111122223333:pokeclip-prod-edge-alarms"])
+    )
+    error_message = "실행 오류 경보가 5분 합 1 이상 · 1/1 · notBreaching · 경보 주제 알림이 아니다."
+  }
+}
+
+# 경보 주제(K-D1 (가)) — 이메일 구독은 저장소 밖이라 구독 자원이 없다. 주제
+# 정책은 기본 정책(Principal * · SourceOwner) 대신 명시 정책이다 — 계정 루트는
+# 읽기 하나, 발행은 이 루트의 경보 셋이 보내는 CloudWatch 뿐이다.
+run "edge_alarm_topic_is_private_and_cloudwatch_only_publishes" {
+  assert {
+    condition = (
+      aws_sns_topic.edge_alarms.name == "pokeclip-prod-edge-alarms" &&
+      aws_sns_topic.edge_alarms.region == "us-east-1" &&
+      aws_sns_topic_policy.edge_alarms.arn == aws_sns_topic.edge_alarms.arn &&
+      aws_sns_topic_policy.edge_alarms.region == "us-east-1" &&
+      output.edge_alarm_topic_arn == "arn:aws:sns:us-east-1:111122223333:pokeclip-prod-edge-alarms"
+    )
+    error_message = "경보 주제가 us-east-1 의 pokeclip-prod-edge-alarms 가 아니거나 정책 · 출력 edge_alarm_topic_arn 이 그 주제를 가리키지 않는다."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_sns_topic_policy.edge_alarms.policy).Statement :
+      statement.Effect == "Allow" &&
+      try(statement.Principal.AWS, "") != "*" &&
+      try(statement.Principal, "") != "*" &&
+      statement.Resource == aws_sns_topic.edge_alarms.arn
+    ])
+    error_message = "경보 주제 정책에 Principal * 가 있거나 Allow 밖 문장 · 다른 자원이 있다."
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_sns_topic_policy.edge_alarms.policy).Statement :
+      [statement.Principal, statement.Action]
+      ] == [
+      [{ AWS = "arn:aws:iam::111122223333:root" }, ["SNS:GetTopicAttributes"]],
+      [{ Service = "cloudwatch.amazonaws.com" }, "SNS:Publish"],
+    ]
+    error_message = "경보 주제 정책이 계정 루트 읽기(GetTopicAttributes) · CloudWatch 발행(Publish) 두 문장이 아니다."
+  }
+
+  assert {
+    condition = (
+      keys(jsondecode(aws_sns_topic_policy.edge_alarms.policy).Statement[1].Condition) == ["ArnEquals", "StringEquals"] &&
+      tolist(jsondecode(aws_sns_topic_policy.edge_alarms.policy).Statement[1].Condition.ArnEquals["aws:SourceArn"]) == sort(concat(
+        [for alarm in aws_cloudwatch_metric_alarm.dvr_floor_log : alarm.arn],
+        [aws_cloudwatch_metric_alarm.dvr_floor_execution_errors.arn],
+      )) &&
+      length(aws_cloudwatch_metric_alarm.dvr_floor_log) == 2 &&
+      jsondecode(aws_sns_topic_policy.edge_alarms.policy).Statement[1].Condition.StringEquals == { "aws:SourceAccount" = "111122223333" }
+    )
+    error_message = "CloudWatch 발행 문장이 이 루트의 경보 셋(aws:SourceArn) · 이 계정(aws:SourceAccount)으로 좁혀져 있지 않다."
+  }
 }

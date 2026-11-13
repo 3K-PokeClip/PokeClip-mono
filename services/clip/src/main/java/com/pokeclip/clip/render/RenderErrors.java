@@ -34,6 +34,23 @@ public final class RenderErrors {
         }
     }
 
+    /**
+     * 422. 그 구간은 다시 물어도 렌더할 수 없다 — 회차 밖 · 녹화 밖({@code outside_recording}) 또는 컷 안에 영상 조각이 없음
+     * ({@code no_footage}). {@code reason} 은 닫힌 목록이고, 늘리면 웹 선배포가 먼저다(POK-196 · 설계 r7 9.5).
+     */
+    public static class SourceUnrenderableException extends RuntimeException {
+        private final String reason;
+
+        public SourceUnrenderableException(String reason) {
+            super("렌더할 수 없는 구간: " + reason);
+            this.reason = reason;
+        }
+
+        public String reason() {
+            return reason;
+        }
+    }
+
     /** 422. 주문서가 큐 상한(200KB)을 넘는다 — 자막이 비정상적으로 많은 편집본이다. */
     public static class MessageTooLargeException extends RuntimeException {
         public MessageTooLargeException() {

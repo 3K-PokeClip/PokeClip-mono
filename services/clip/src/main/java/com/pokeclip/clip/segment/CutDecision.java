@@ -10,8 +10,10 @@ import java.util.Optional;
 public sealed interface CutDecision {
 
     /**
-     * 주문을 낼 계획. 좌표 원점은 늘 {@code FILE_HEAD}(편집기 출처 — 경계 표 5판 B6).
+     * 주문을 낼 계획.
      *
+     * @param offsetOrigin 좌표({@code in} · {@code out} · 자막 매체 끝점) 오프셋의 원점 — 회차 판으로 고른다(판 2
+     *        {@code VIDEO_START} · 판 NULL {@code FILE_HEAD} — kty 2026-11-12 D1). 주문서 {@code plan.offsetOrigin}
      * @param in 시작 프레임 지시
      * @param out 끝 경계
      * @param media 결과에 드는 회차 행, seq 순(주문서 {@code mediaSeqs} · {@code segment} 항목)
@@ -23,8 +25,8 @@ public sealed interface CutDecision {
      * @param gaps 원래 범위가 걸친 끊긴 이웃(로그 · 이음 방식이 하나라 주문서에 싣지 않는다)
      * @param runHeads 소리 묶음 머리와 그 종류(로그 · 집계 분모)
      */
-    record Ready(MediaCoord in, End out, List<RoundRow> media, List<SubtitleSpan> subtitles, long lengthMs,
-                 Optional<RoundRow> capture, List<Prime> primes, List<PrimeSkip> primeSkips, List<Gap> gaps,
+    record Ready(OffsetOrigin offsetOrigin, MediaCoord in, End out, List<RoundRow> media, List<SubtitleSpan> subtitles,
+                 long lengthMs, Optional<RoundRow> capture, List<Prime> primes, List<PrimeSkip> primeSkips, List<Gap> gaps,
                  List<RunHead> runHeads) implements CutDecision {
         public Ready {
             media = List.copyOf(media);
@@ -93,11 +95,14 @@ public sealed interface CutDecision {
     /** 소리 묶음 머리. */
     record RunHead(long seq, Kind kind) {
         public enum Kind {
-            /** 같은 녹화 흐름 — 장부 바로 앞 행이 있고 머리 {@code is_discontinuity} 가 거짓. */
+            /**
+             * 같은 녹화 흐름 — 머리 {@code is_discontinuity} 가 거짓이고 장부 바로 앞 행이 있거나 그 앞 이력이 앞 방송 몫이다(그 행이
+             * 지워졌어도 같다 — K2).
+             */
             CONTINUED("continued"),
             /** 진짜 새 녹화 — 머리 {@code is_discontinuity} 가 참. */
             NEW_RECORDING("new_recording"),
-            /** 장부에 앞 행이 없다 — 이 방송 안에서 진짜 시작. */
+            /** 장부에 앞 행이 없고 같은 물리 키에 앞 방송도 없다 — 진짜 시작. */
             NO_PREV_ROW("no_prev_row");
 
             private final String wire;
@@ -113,14 +118,18 @@ public sealed interface CutDecision {
     }
 
     /** 장부 바로 앞 행(디코더 준비 후보). 읽는 칸은 이것뿐이다(설계 r7 9.1 읽기 5). */
-    record LedgerNeighbor(long seq, long wallMs, int durationMs, String uploadState, String s3Key) {
+    record LedgerNeighbor(long seq, int durationMs, String uploadState, String s3Key) {
     }
 
     /** 머리 {@code ownerSeq} 묶음의 디코더 준비 조각. */
     record Prime(long ownerSeq, LedgerNeighbor row) {
     }
 
-    /** 쓰지 못한 준비 조각. {@code reason}: {@code failed} · {@code other_broadcast}. */
-    record PrimeSkip(long ownerSeq, long seq, String reason) {
+    /**
+     * 쓰지 못한 준비 조각. {@code reason}: {@code failed} · {@code other_broadcast}.
+     *
+     * @param seq 준비 조각 seq. {@code other_broadcast} 면 null — 앞 방송 몫 행은 읽지 않는다(K4)
+     */
+    record PrimeSkip(long ownerSeq, Long seq, String reason) {
     }
 }

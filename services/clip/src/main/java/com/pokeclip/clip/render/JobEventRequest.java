@@ -12,10 +12,13 @@ import java.util.UUID;
  *
  * @param executionToken STARTED와 preflight 실패에는 없다. 나머지는 필수(계약1)
  * @param result SUCCEEDED의 산출물 목록. 검증은 {@link JobEventService}
+ * @param placements SUCCEEDED 맨 위 {@code placements}(새 꼴 주문의 결과 배치표 · POK-196 S-c5). 없으면 null(옛 꼴). 받은 그대로다 —
+ *                   검사는 {@link JobEventService} 가 저장 앞에서 하고(못 지나면 배치표만 버린다) 성공을 막지 않는다
+ * @param lengthUs SUCCEEDED 맨 위 {@code lengthUs}(결과 길이 µs). {@code placements} 와 같다
  */
 public record JobEventRequest(UUID eventId, String eventType, String occurredAt, UUID executionToken,
                               Integer progressPercent, String progressStage, JsonNode result,
-                              String errorCode, String errorMessage) {
+                              JsonNode placements, JsonNode lengthUs, String errorCode, String errorMessage) {
 
     static final Set<String> EVENT_TYPES = Set.of("STARTED", "PROGRESS", "RETRY_SCHEDULED", "SUCCEEDED", "TERMINAL_FAILED");
 
@@ -50,6 +53,8 @@ public record JobEventRequest(UUID eventId, String eventType, String occurredAt,
         }
 
         JsonNode result = body.hasNonNull("result") ? body.get("result") : null;
+        JsonNode placements = body.hasNonNull("placements") ? body.get("placements") : null;
+        JsonNode lengthUs = body.hasNonNull("lengthUs") ? body.get("lengthUs") : null;
 
         String errorCode = null;
         String errorMessage = null;
@@ -64,7 +69,7 @@ public record JobEventRequest(UUID eventId, String eventType, String occurredAt,
             errorMessage = message != null && message.isString() ? message.asString() : null;
         }
         return new JobEventRequest(eventId, type.asString(), occurredAt.asString(), token, percent, stage, result,
-                errorCode, errorMessage);
+                placements, lengthUs, errorCode, errorMessage);
     }
 
     private static UUID uuid(JsonNode node, String field) {

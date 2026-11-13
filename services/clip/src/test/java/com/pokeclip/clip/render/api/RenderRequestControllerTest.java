@@ -110,6 +110,9 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     /**
      * 주문서가 <b>큐에 실제로</b> 실리고, 그 안에 컷을 덮는 조각 목록(재생 축)·편집본·좌표가 있다. 조각은 재생 축과 녹화 축을
      * 일부러 1시간 어긋나게 심었다 — 조회가 녹화 축을 보면 조각을 못 찾아 409가 나고, 이 시험은 그 자리에서 빨간불이다.
+     *
+     * <p>새 꼴(POK-196 · 설계 r7 5.1): 조각은 역할 셋으로 싣고 좌표는 {@code plan} 이다. 이 픽스처는 머리 세션 행이 없는 옛 방송이라
+     * 시간창 행이 회차다 — 컷 앞 조각 1 이 첫 매체 2 의 준비 조각, 컷 뒤 조각 14 가 끝 소리 확보 조각이다(판 NULL).
      */
     @Test
     void 주문하면_201이고_주문서가_큐에_실린다() throws Exception {
@@ -139,13 +142,21 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         assertThat(봉투.get("recipe").get("cut").get("inAtMs").asLong()).isEqualTo(RenderFixtures.CUT_IN);
         assertThat(봉투.get("recipe").get("outputs").get(0).get("outputId").asString()).isEqualTo("o1");
         assertThat(봉투.get("trackManifest").get("manifestVersion").asInt()).isEqualTo(3);
-        // 45초 컷을 4초 조각으로 덮으면 앞뒤 경계 포함 열둘 — 컷과 안 겹치는 앞뒤 여유 조각은 빠진다.
+        // 45초 컷을 4초 조각으로 덮으면 경계 포함 매체 열둘(2–13) — 그 앞뒤에 준비 조각 1 · 확보 조각 14.
         JsonNode sources = 봉투.get("sourceKeys");
-        assertThat(sources.size()).isEqualTo(12);
-        assertThat(sources.get(0).get("bucket").asString()).isEqualTo("segments-test");
-        assertThat(sources.get(0).get("s3Key").asString()).isEqualTo("streams/" + 내_방송 + "/seg_2.m4s");
-        assertThat(sources.get(0).get("sourceStartAtMs").asLong()).isEqualTo(RenderFixtures.CUT_IN);
-        assertThat(sources.get(11).get("sourceStartAtMs").asLong()).isLessThan(RenderFixtures.CUT_OUT);
+        assertThat(sources.size()).isEqualTo(14);
+        assertThat(sources.get(0).get("role").asString()).isEqualTo("audio_prime");
+        assertThat(sources.get(0).get("seq").asLong()).isEqualTo(1);
+        assertThat(sources.get(1).get("bucket").asString()).isEqualTo("segments-test");
+        assertThat(sources.get(1).get("s3Key").asString()).isEqualTo("streams/" + 내_방송 + "/seg_2.m4s");
+        assertThat(sources.get(1).has("sourceStartAtMs")).isFalse();
+        assertThat(sources.get(13).get("role").asString()).isEqualTo("audio_capture");
+        assertThat(sources.get(13).get("seq").asLong()).isEqualTo(14);
+        JsonNode plan = 봉투.get("plan");
+        assertThat(plan.get("in").toString()).isEqualTo("{\"seq\":2,\"offsetUs\":0}");
+        assertThat(plan.get("out").toString()).isEqualTo("{\"seq\":13,\"offsetUs\":1000000}");
+        assertThat(plan.get("offsetOrigin").asString()).isEqualTo("FILE_HEAD");
+        assertThat(plan.get("mediaSeqs").size()).isEqualTo(12);
 
         assertThat(jdbc.queryForObject("SELECT published_at IS NOT NULL FROM render_jobs WHERE id = ?::uuid",
                 Boolean.class, jobId)).as("발행 시각이 안 적혔다 — outbox가 같은 주문을 또 보낸다").isTrue();
@@ -165,7 +176,8 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         주문(내_방송, 편집본).andExpect(status().isCreated());
 
         JsonNode 봉투 = MAPPER.readTree(LocalStackFixture.receiveAndDelete(큐.queueUrl()));
-        assertThat(봉투.get("sourceKeys").get(0).get("s3Key").asString()).isEqualTo("streams/key-render/seg_2.m4s");
+        // 0 번은 컷 앞 조각 1(준비 조각)이고 첫 매체는 1 번이다.
+        assertThat(봉투.get("sourceKeys").get(1).get("s3Key").asString()).isEqualTo("streams/key-render/seg_2.m4s");
     }
 
     /** 더블클릭 — 같은 편집본 같은 판이 진행 중이면 새 주문 없이 그것을 돌려준다(200). 큐에도 한 통뿐이다. */
@@ -210,18 +222,21 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 송출이 끊겼다 이어지면 번호는 이어지는데 재생 시각이 건너뛴다. 조립기(번호 연속)만 믿으면 201이 나가고 일꾼이 가운데가
-     * 빈 영상을 만든다 — 1판 codex P1. 조각 6과 7 사이를 10초 벌린다(번호는 그대로).
+     * 같은 녹화로 이어진 조각 사이 재생 시각이 건너뛴 장부 틈(경계 표 B7)은 거절하지 않는다 — 그 틈 안 시각은 뒤 조각 머리라 매체가
+     * 이어지고, 렌더가 실제 배치로 결과 시각을 낸다(POK-196 · 설계 r7 9.2 · 옛 「1초 넘는 구멍 409」 는 거뒀다). 조각 6과 7 사이를
+     * 10초 벌린다(번호는 그대로) — 컷 끝 45초는 벌린 만큼 앞 조각(10)에 닿는다.
      */
     @Test
-    void 번호는_이어져도_재생_시각에_구멍이_있으면_409다() throws Exception {
+    void 이어진_조각_사이_재생_시각이_건너뛰어도_이어_붙여_주문한다() throws Exception {
         볼_수_있다("OWNER");
         RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
         jdbc.update("UPDATE public.stream_segments SET playback_pdt = playback_pdt + interval '10 seconds' WHERE stream_id = ? AND seq >= 7", 내_방송);
 
-        주문(내_방송, 편집본).andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error").value("source_not_ready"));
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM clips", Integer.class)).isZero();
+        주문(내_방송, 편집본).andExpect(status().isCreated());
+
+        JsonNode plan = MAPPER.readTree(LocalStackFixture.receiveAndDelete(큐.queueUrl())).get("plan");
+        assertThat(plan.get("mediaSeqs").toString()).isEqualTo("[2,3,4,5,6,7,8,9,10]");
+        assertThat(plan.get("out").toString()).isEqualTo("{\"seq\":10,\"offsetUs\":3000000}");
     }
 
     /**
@@ -438,49 +453,29 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 표지 {@code axis=fileHead} 를 문으로 받아 메아리와 새 칸을 웹에 알린 이름 그대로 싣는다(POK-196 · 설계 r7 9.6). 이 픽스처는
-     * 파일명 시각이 재생 축보다 1시간 뒤라 창을 파일명 시각으로 옮겨 묻는다 — 옛 값({@code startAtMs})은 재생 축 그대로 나온다.
+     * 질의 칸 {@code axis} 는 읽지 않는다(kty K-1 (가) · 설계 r7 9.6) — 무엇이 와도(거둔 값 {@code fileHead} · 모르는 값) 표지 없는
+     * 요청과 같은 응답이고 400 이 아니다. 거둔 칸(메아리 · 공백 쌍 · 조각의 파일명 시각 · 역할 · 이웃 표시)은 응답에 없다.
      */
     @Test
-    void 원본_조각_주소는_표지가_있으면_파일명_시각_축으로_메아리를_싣는다() throws Exception {
+    void 원본_조각_주소는_axis_질의_칸을_읽지_않는다() throws Exception {
         볼_수_있다("OWNER");
         RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
-        long wallIn = RenderFixtures.CUT_IN + 3_600_000;
 
-        JsonNode 응답 = MAPPER.readTree(본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
-                        .param("fromMs", Long.toString(wallIn))
-                        .param("toMs", Long.toString(wallIn + 10_000))
-                        .param("axis", "fileHead")
-                        .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+        String 표지_없음 = 정규화(본문(조각_주소(내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000)
                 .andExpect(status().isOk())));
-
-        assertThat(응답.has("axis")).as("메아리 칸이 있다").isTrue();
-        assertThat(응답.get("axis").asString()).isEqualTo("fileHead");
-        JsonNode first = 응답.get("segments").get(0);
-        assertThat(first.get("seq").asLong()).isEqualTo(2);
-        assertThat(first.get("startWallUtcMs").asLong()).isEqualTo(wallIn);
-        assertThat(first.get("startAtMs").asLong()).as("옛 값 그대로").isEqualTo(RenderFixtures.CUT_IN);
-        assertThat(first.get("role").asString()).isEqualTo("segment");
-        assertThat(first.has("isDiscontinuity")).isTrue();
-        assertThat(first.has("followsLedgerPrevious")).isTrue();
+        for (String axis : new String[] {"fileHead", "pdt"}) {
+            String 표지_있음 = 정규화(본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
+                            .param("fromMs", Long.toString(RenderFixtures.CUT_IN))
+                            .param("toMs", Long.toString(RenderFixtures.CUT_IN + 10_000))
+                            .param("axis", axis)
+                            .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                    .andExpect(status().isOk())));
+            assertThat(표지_있음).as("axis=" + axis).isEqualTo(표지_없음);
+        }
+        JsonNode 응답 = MAPPER.readTree(표지_없음);
         assertThat(응답.has("audioCapture")).isTrue();
-        assertThat(응답.get("gapEvidence").isArray()).isTrue();
-    }
-
-    /** 모르는 표지는 400 {@code axis} 다 — 위 메아리 시험과 따로 두어 메아리가 깨져도 이 판정은 따로 돈다. */
-    @Test
-    void 원본_조각_주소는_모르는_표지면_400이다() throws Exception {
-        볼_수_있다("OWNER");
-        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
-        long wallIn = RenderFixtures.CUT_IN + 3_600_000;
-
-        mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/segments/audio-access")
-                        .param("fromMs", Long.toString(wallIn))
-                        .param("toMs", Long.toString(wallIn + 10_000))
-                        .param("axis", "pdt")
-                        .header("Authorization", "Bearer " + TestTokens.access(요청자)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.field").value("axis"));
+        assertThat(표지_없음).doesNotContain("\"axis\"").doesNotContain("gapEvidence").doesNotContain("startWallUtcMs")
+                .doesNotContain("\"role\"").doesNotContain("isDiscontinuity").doesNotContain("followsLedgerPrevious");
     }
 
     /** 주소는 로그에 안 남는다: 한 줄 새면 그 조각이 수명 동안 열린다. 발급 줄 자체는 남는다(양성 대조). */
@@ -638,6 +633,12 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
 
     private static String 본문(ResultActions actions) throws Exception {
         return actions.andReturn().getResponse().getContentAsString();
+    }
+
+    /** 부를 때마다 바뀌는 두 값(만료 시각 · 서명 주소)만 자리표시로. */
+    private static String 정규화(String body) {
+        return body.replaceAll("\"expiresAt\":\"[^\"]*\"", "\"expiresAt\":\"<EXPIRES_AT>\"")
+                .replaceAll("\"url\":\"[^\"]*\"", "\"url\":\"<URL>\"");
     }
 
     /** 보관 기간(60일)이 지난 방송은 새로 렌더할 수 없다(POK-335): 410 vod_expired, 큐 · 표에 아무것도 안 남는다. 자격이 먼저다 */

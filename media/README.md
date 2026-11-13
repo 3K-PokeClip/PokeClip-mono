@@ -890,8 +890,11 @@ IP 속도 제한(WAF 후속)이다.
 /dvr 하한은 회차마다 엣지가 그 아래 seq 의 되감기 조각을 막는 값이다 — 방송
 중 시청자가 1시간 DVR 창 밖 조각을 받지 못하게 한다. 사이드카의 **Writer** 가
 그 값을 원장 표 `stream_edge_bounds`(정본)에 올리고 CloudFront KVS 에 사본을
-쓴다. 엣지 함수가 KVS 를 읽어 막는 몫은 엣지 PR(Ⓓ)이 넣는다 — 그 전에는
-KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` 이다.
+쓴다. KVS 를 읽어 막는 몫은 media 배포 `/dvr/*` 의 엣지 함수
+`pokeclip-prod-dvr-floor` 다 — prod/edge 스위치 `dvr_floor_enabled` 가 참일
+때만 붙고, 끔이면 KVS 를 읽는 쪽이 없다
+([prod/edge README](../infra/terraform/prod/edge/README.md) 「/dvr
+하한(POK-525)」). 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` 이다.
 
 *   **올림(5분마다):** 되감기 발행이 성공할 때마다 그 목록 마지막 행이 새
     꼴(회차 경로) 키면 그 회차의 하한 후보(목록 첫 조각 seq)를 Writer 에
@@ -1021,8 +1024,8 @@ KVS 를 읽는 쪽이 없다. 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` �
 
 | 증상 | 먼저 | 원인 수정 | 다시 켬 |
 |---|---|---|---|
-| 시청자 404 · `dvr_floor_blocks_list` set(엣지 PR 뒤) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
-| `edge_bounds_write_failing` 이 위 신호 절의 문턱(올림 15분 · 해제 5분) 안에 풀리지 않음 | 엣지를 끈다(엣지 PR 뒤) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
+| 시청자 404 · `dvr_floor_blocks_list` set(엣지 하한을 켠 뒤 운영 중 — 판정 C′ 도중이면 엣지 시험 런북의 보류 · 즉시 보고) | 엣지의 `/dvr` 하한 함수 연결을 끈다(prod/edge 스위치 `dvr_floor_enabled = false` 로 apply) | 원장 값 · Writer 판정을 본다 — 그 회차가 닫히면 행이 풀린다 | 연결을 다시 켠다 |
+| `edge_bounds_write_failing` 이 위 신호 절의 문턱(올림 15분 · 해제 5분) 안에 풀리지 않음 | 엣지를 끈다(켠 뒤라면 — 위 행과 같은 스위치) | KVS · IAM · 네트워크를 고친다. Writer 만 고칠 수 없으면 `edge_bounds_writer_enabled = false` 로 설정 반영 교체 | 고친 뒤 스위치를 켜 교체 — 닫힌 미해제 행을 Writer 가 푼다 |
 | `dvr_floor_release_overdue` | — 엣지는 끄지 않는다. 피해는 그 회차 VOD 가 열리지 않는 것뿐이다(`pass=release` 의 `_write_failing` 이 함께 나와도 같다) | 위 행과 같다 | 위 행과 같다 |
 | `edge_bounds_degraded` | — | 그 줄의 `err` 를 고친다. 못 고치면 위 행처럼 스위치를 끄고 교체한다(Media 교체 런북 「POK-525 롤백」 의 「Writer 만 문제」) | 고쳤으면 사이드카 재기동 — 기동 줄이 `edge_bounds_started` 면 된다. 스위치를 껐으면 위 행처럼 켜 교체 |
 | `edge_bounds_unreleased_without_writer` set(E10 — ARN 없이 뜬 상자) | — | 스위치 · 런타임 출력 ARN 을 고친다(`_config_invalid` 면 꼴) | 켠 설정으로 교체 → Writer 가 풀면 clear |
@@ -1444,8 +1447,9 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
     *   **결과.** 하한이 내려가거나 키가 지워지면 그 회차의 /dvr 창 밖
         조각이 엣지를 지나고, 높아지면 시청자가 404 를 받는다. 닫힌 회차의
         행이 해제 전에 지워지면 KVS 키를 Writer 가 찾지 못해 키가 남는다(위
-        「/dvr 하한 사람 복구」). 엣지 함수가 키 없음 · 값 이상을 어떻게
-        다룰지는 엣지 PR(Ⓓ) 몫이다.
+        「/dvr 하한 사람 복구」). 엣지 함수 dvr-floor 는 키 없음 · KVS
+        읽기 실패 · 값 이상을 막지 않고 넘긴다(값 이상 · 읽기 실패는 고정
+        로그와 경보 — prod/edge README 「경보(POK-525)」).
     *   **받아들인 이유(kty 2026-11-04).** 하한은 창 정책이지 접근 통제가
         아니다. 1차 통제는 서명 쿠키(시청 권한을 엣지가 확인하는 값)이고,
         상자 · 자격이 침해되면 하한을 우회할 수 있다는 것을 받아들였다. DB
@@ -3146,6 +3150,7 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
 | **꼬리 교정의 판독 실패.** 꼬리 조각이 자라 길이를 고칠 때 시각 판독이 실패하면(WARN `tail_timing_read_failed`) 길이 · 크기만 고치고 영상 끝 칸은 옛 값이다 | 우리 송출에서도 생긴다: 송출이 10초(`SEGMENT_IDLE_TIMEOUT`) 넘게 멈추면 워처가 아직 쓰는 중인 파일을 유휴 확정해 커밋하고(덜 써진 조각 — 영상 끝이 그때 값), 송출이 돌아와 같은 파일이 자라면 꼬리 교정(`tail_corrected`)이 그 파일을 다시 읽는다(`recording/watcher.go` `onIdleTick` · 인덱서 `correctTail`). 이 다시 읽기가 실패하면 장부에는 새 길이 · 크기와 유휴 확정 때의 짧은 영상 끝이 남는다. 다음 행의 맞닿음(영상 축 d = 다음 영상 첫 − 옛 영상 끝)이 자란 만큼 거짓 구멍으로 보여, 그 행의 보정값이 구멍 갈래(앞 도장 + 장부 길이)로 정해진다 — 앞 조각이 소리 머리면 머리 앞섬만큼(실측 최대 226ms) 도장이 앞당겨진다. 판 2 섞기의 길이 판단도 옛 영상 끝을 본다. 실시간과 복원은 같은 장부 값을 보므로 둘이 갈리지는 않는다. 볼 것: 같은 `path` 에 `tail_corrected` 와 `tail_timing_read_failed` 가 함께 남은 조각 — 그 다음 조각의 `segment_indexed`(`timing_branch` · `delta_ms`)와 ③ 도장 | 한계(기록) — 방어안(`UpdateTail` 판 2 길이 재계산)은 두지 않았다 |
 | **판독 일시 실패 동안 그 스트림이 멈춘다.** 실패한 조각과 그 뒤 조각을 커밋하지 않고 다음 재스캔을 기다린다 | 한 번에 최대 약 5분 45초(재스캔 5분 + 수집 예산 45초) 그 스트림의 되감기 목록 · ③ 업로드가 늘지 않는다. 다른 스트림은 무관하다 | 순서 보존의 대가 — 다음 재스캔에서도 실패하면 칸 NULL 로 커밋한다 |
 | **기동 전 검사는 시작 스크립트를 지나는 기동만 본다.** 엔진 재기동(`restart: on-failure`) · 스위치를 올리는 순간 이미 돌던 출시 컨테이너는 보지 않는다 | 이미 돌던 출시 컨테이너는 스위치 2 선행 조건(모든 상자 라벨 2)이 막고, 어겨도 쓰기자 거부가 첫 INSERT 에서 끝낸다 — 그 사이 감사 · 정산이 판 2 행을 옛 식으로 읽을 수 있다 | 런북 「PDT 판 2 롤백 하한 · 판 게이트」 남는 한계 |
+| **스위치 2 때 살아남은 출시 컨테이너가 판 2 회차 VOD 를 판 태그 없이 동결할 수 있다(위 행의 「감사 · 정산이 판 2 행을 옛 식으로」 의 실물).** 쓰기자 거부는 INSERT 에서만 걸린다 — 스위치 순간 송출이 없던 상자의 출시 컨테이너는 INSERT 를 하지 않아 23514 에 걸리지 않고 계속 돈다 | 다른 상자(c0)가 연 판 2 회차의 사슬은 먼저 닿은 프로세스가 닫는다 — 그 출시 프로세스가 닫으면 VOD 를 판 태그(`#EXT-X-POKECLIP-TIMING:2`) 없이 동결할 수 있다(P13 연습 6 · 로컬 실험대 2026-11-12 — 같은 회차 DVR 은 태그 1 · VOD 는 0). 장부 `vod_sha256` 이 출시판 렌더와 같아 동결 감사가 늘 통과시킨다 — VOD 감사는 sha · ETag 대조뿐이고 다시 쓰는 갈래는 DVR 만이다(`rewind/publish/audit.go`). VOD 확정은 `freezing` 행에만 한 번 쓴다(`rewind/publish/vod.go` `vodConfirmSQL`) | 한계(기록) — 복구 길 없음, 막는 것뿐이다. 막는 것은 스위치 2 선행 조건(모든 상자 사이드카 라벨 2 — media-swap 런북 「스위치 2 선행 조건(5)」)뿐이다 |
 | **판 NULL 귀속 PDT 가 귀속 하한 거부 행 길이만큼 앞선다(c0 — 판 NULL 회차).** 판 NULL 귀속 식은 `max(A + U, f)` 다 — A = 기저 세션의 마지막 귀속 행 PDT + 길이 · U = 그 행 뒤 이 행 앞 비귀속 행 길이 합 · f = 이 행의 파일 이름 벽시각(`index/placement.go` `legacyPDT` · `index/store.go` `basePDTSQL`). 방송 중 귀속 하한 거부 행(WARN `session_floor_rejected` — 세션 시작보다 `FloorSlack`(1초) 넘게 이른 벽시각의 조각, 비귀속으로 쓴다)도 U 에 든다 | 다음 귀속 행 PDT 가 그 행 길이만큼 벽시각보다 앞서고, 뒤 행이 누적항으로 이어 받아 방송 끝까지 남는다(f 가 U 보다 긴 틈으로 다시 앞설 때까지) — 장부 PDT 를 벽시각으로 읽는 클립 · 채팅 시각이 그만큼 어긋난다. 그 행이 계승 개시 행이면 새 세션의 `first_pdt` 에도 같은 차가 든다. 대신 그 사슬의 VOD 동결은 S7(GAP 행 PDT = 앞 행 PDT + 길이 뒤의 단조 검사)을 지난다 — U 를 빼면 하한 거부가 낀 사슬의 VOD 가 S7 로 실패해, 그 대가로 앞섬을 받아들였다(kty 2026-11-12 (나)). 관측: INFO `legacy_unattributed_sum`(`u_ms` — U 가 생긴 귀속 행에만) · WARN `session_floor_rejected`. prod 9일 · 색인 조각 4,616 에서 하한 거부 0 건(2026-11-12 측정) | 한계(기록) — 판 2 회차는 섞기가 PDT 를 정해 이 식을 쓰지 않는다(그 대신 아래 행) |
 | **판 2 회차에 귀속 하한 거부 행이 끼면 VOD 동결이 S7 로 실패한다(판 2 전용 — 스위치 2 전에는 생기지 않는다).** 판 2 의 하한 거부 행은 판 2 · 세션 NULL · PDT = 짐작 벽시각이라 앞 귀속 행보다 앞선다. 재현 경로(2026-11-12 시험): `index/finalize.go`(사슬 seq 범위의 세션 NULL 행도 읽음) → `rewind/publish/vod.go` `fillGap`(PDT 가 있으면 그대로 · 판 2 그대로) → `rewind/validate.go` `checkPDTV2` B8 조건 1(시작이 앞선다) 위반 — 다음 행이 이어 가는 갈래 · 영상 머리 겹침 갈래 둘 다. 판 NULL 은 같은 꼴에서 통과한다 | 그 사슬의 VOD 축이 `failed`(`validate`) — VOD 가 나오지 않는다. 라이브 목록 · 장부는 무관 | 결함 — 후속 PR 로 고친다(Jira POK-567). 고친 판이 prod 에 배포되기 전에는 스위치 2 를 올리지 않는다(media-swap 런북 「스위치 2 선행 조건(5)」) |
 

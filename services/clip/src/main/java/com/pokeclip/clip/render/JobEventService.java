@@ -1,6 +1,7 @@
 package com.pokeclip.clip.render;
 
 import com.pokeclip.clip.render.RenderErrors.JobNotFoundException;
+import com.pokeclip.clip.thumbnail.ResultPlacements;
 import com.pokeclip.clip.upload.UploadAutoStarter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -135,6 +136,13 @@ public class JobEventService {
      * <p>완성과 <b>같은 트랜잭션</b>에서 그 판의 「렌더 뒤 업로드」 의도대로 업로드 줄을 만든다(POK-291, {@link UploadAutoStarter}).
      * 같은 성공 보고가 다시 오면 위 보고 장부가 먼저 막아 여기 다시 안 온다. 업로드 줄 쓰기가 실패하면 완성까지 되감기고 장부도 안 남아
      * 일꾼이 같은 보고를 다시 보내면 처음부터 다시 된다.
+     *
+     * <p>결과 배치표({@code placements} · {@code lengthUs} — 새 꼴 주문, POK-196 S-c5)는 검사를 지나면 받은 그대로 완성 줄에 적는다.
+     * 검사({@link ResultPlacements#parse} · 글 길이 상한)를 못 지나면 <b>배치표만 버리고(NULL) WARN</b> 을 남긴다 — 성공은 그대로다.
+     * 결과 자리를 쓰는 쪽(완성 사진 · 업로드 장면)은 배치표가 없으면 옛 식 · 받은 값으로 떨어지므로, 여기서 성공을 막으면 결과 영상이
+     * 멀쩡한데 완성을 잃는다. 검사를 저장 <b>앞</b>에 두는 까닭: JSONB 가 받지 못하는 값(NUL 글자 등)을 그대로 적으면 PostgreSQL 이
+     * 커밋 때 거절해 완성 · 보고 장부까지 되감기고, 일꾼이 다시 보내도 같은 실패가 난다(커밋 리뷰 r1). 크기도 여기서 묶는다 — 완성
+     * 줄을 읽는 요청마다 이 칸을 같이 읽는다.
      */
     private Reply succeeded(RenderJob job, JobEventRequest event, Instant at) {
         String problem = validateResult(job, event.result());
@@ -144,10 +152,56 @@ public class JobEventService {
         }
         job.succeeded(at);
         clips.findByIdForUpdate(job.getClipId()).ifPresent(c -> {
-            c.rendered(mapper.writeValueAsString(event.result()));
+            c.rendered(mapper.writeValueAsString(event.result()), layoutJson(job, event));
             uploads.startFromRequest(c);
         });
         return ok(Map.of());
+    }
+
+    /**
+     * 저장할 배치표 묶음 {@code {"placements": …, "lengthUs": …}}(받은 칸만). 둘 다 없으면(옛 꼴) null, 검사를 못 지나면 null +
+     * WARN {@code clip.render.placements_dropped}({@code reason} = {@code no_plan} · {@code too_long} · {@code invalid},
+     * {@code invalid} 면 {@code detail} 에 칸 경로 — 입력 값은 싣지 않는다).
+     *
+     * <p>줄 수 · 글 길이 상한은 <b>그 잡 주문의 매체 조각 수</b>({@code plan.mediaSeqs})에 묶는다 — 렌더는 매체 조각마다 한 줄을
+     * 내므로 정상 표는 그 수를 넘지 않는다. 고정 줄 수 상한은 짧은 재접속 조각이 많은 정상 컷을 버렸다(확인 패스 1 #8). 계획이
+     * 없는 주문(옛 꼴)에는 배치표가 올 까닭이 없어 버린다.
+     */
+    private String layoutJson(RenderJob job, JobEventRequest event) {
+        if (event.placements() == null && event.lengthUs() == null) {
+            return null;
+        }
+        ObjectNode layout = mapper.createObjectNode();
+        if (event.placements() != null) {
+            layout.set("placements", event.placements());
+        }
+        if (event.lengthUs() != null) {
+            layout.set("lengthUs", event.lengthUs());
+        }
+        int media = mediaCountOf(job);
+        if (media == 0) {
+            log.warn("clip.render.placements_dropped jobId={} clipId={} reason=no_plan", job.getId(), job.getClipId());
+            return null;
+        }
+        String text = mapper.writeValueAsString(layout);
+        if (text.length() > ResultPlacements.maxStoredChars(media)) {
+            log.warn("clip.render.placements_dropped jobId={} clipId={} reason=too_long", job.getId(), job.getClipId());
+            return null;
+        }
+        try {
+            ResultPlacements.parse(layout, media);
+        } catch (IllegalArgumentException e) {
+            log.warn("clip.render.placements_dropped jobId={} clipId={} reason=invalid detail={}", job.getId(),
+                    job.getClipId(), e.getMessage());
+            return null;
+        }
+        return text;
+    }
+
+    /** 그 잡 주문서의 매체 조각 수({@code plan.mediaSeqs} 길이). 계획이 없으면(옛 꼴) 0. */
+    private int mediaCountOf(RenderJob job) {
+        JsonNode seqs = mapper.readTree(job.getPayload()).path("plan").path("mediaSeqs");
+        return seqs.isArray() ? seqs.size() : 0;
     }
 
     private Reply terminalFailed(RenderJob job, JobEventRequest event, Instant at) {

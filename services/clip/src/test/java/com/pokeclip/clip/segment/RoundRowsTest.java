@@ -166,8 +166,8 @@ class RoundRowsTest extends IntegrationTestSupport {
 
         long base = LedgerSeed.BASE.toEpochMilli();
         assertThat(rows).containsExactly(
-                new RoundRows.Row(1, 0, 3_000, base + 1_999, base + 5_000L, 2, true),
-                new RoundRows.Row(2, 3_000, 4_000, base + 4_000, null, null, false));
+                new RoundRows.Row(1, 0, 3_000, base + 1_999, base + 5_000L, 2, true, "seg/" + KEY + "/1"),
+                new RoundRows.Row(2, 3_000, 4_000, base + 4_000, null, null, false, "seg/" + KEY + "/2"));
     }
 
     @Test

@@ -633,10 +633,12 @@ BEGIN
     END IF;
 END $do$;
 
--- PDT 부분 인덱스 셋 — 비동시(CONCURRENTLY 아님 · 트랜잭션 · DO 블록 안에서 돈다)라 처음 만드는 동안 그 표 쓰기가 멈춘다
+-- PDT 부분 인덱스 넷 — 비동시(CONCURRENTLY 아님 · 트랜잭션 · DO 블록 안에서 돈다)라 처음 만드는 동안 그 표 쓰기가 멈춘다
 -- (설계 9.2 단계 2 (ㄱ) · 방송 없는 창). 회차 인덱스는 생산자가 p(같은 회차 최신 행)를 한 줄로 찾는다(설계 2.4). floor
 -- 인덱스 둘은 채팅 시각 → 영상 위치 조회가 한쪽 판만 있는 스트림에서 다른 판 행을 끝까지 훑지 않게 한다(r6 2.12) — 판 2
--- 인덱스는 게이트 트리거의 「판 2 행이 있나」 도 탄다.
+-- 인덱스는 게이트 트리거의 「판 2 행이 있나」 도 탄다. 판 2 PDT 인덱스는 채팅 수집기 판 2 바닥 조회 앞의 존재 확인
+-- (playback_pdt ≤ t 인 판 2 행이 있는가)이 이른 t 에서 판 2 행을 끝까지 훑지 않게 한다 — 답(seq 최대)은 v2_seq_idx 로
+-- 고른다(판 2 PDT 는 seq 순으로 단조가 아니라 pdt 순 조회는 답이 다르다).
 DO $do$
 BEGIN
     IF pg_catalog.to_regclass('stream_segments_timing_round_idx') IS NULL THEN
@@ -649,6 +651,10 @@ BEGIN
     IF pg_catalog.to_regclass('stream_segments_legacy_wall_idx') IS NULL THEN
         CREATE INDEX stream_segments_legacy_wall_idx ON stream_segments (stream_id, start_wall_utc DESC)
             WHERE timing_version IS NULL;
+    END IF;
+    IF pg_catalog.to_regclass('stream_segments_v2_pdt_idx') IS NULL THEN
+        CREATE INDEX stream_segments_v2_pdt_idx ON stream_segments (stream_id, playback_pdt DESC)
+            WHERE timing_version = 2;
     END IF;
 END $do$;
 `
