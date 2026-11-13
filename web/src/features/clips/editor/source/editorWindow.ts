@@ -1,6 +1,7 @@
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
+import { captureSession } from '@/stores/auth';
 import { editorWindowKey } from '../editorMedia';
-import type { PlaylistSegment } from './editorPlaylist';
+import type { EditorPlaylist, PlaylistSegment } from './editorPlaylist';
 import { segmentsForWindow, sourceTimelineOf } from './editorSourceTimeline';
 import { fetchWindowBytes } from './fetchWindowBytes';
 import { ensureHeads, headCacheFor } from './fileHeadProbe';
@@ -11,6 +12,7 @@ import { windowAudioAccess } from './windowAudioAccess';
 // 편집기 미리보기 창 정하기 · 받기(POK-473 설계 prw2 5절 4) — 편집기(useEditorVideoPlayback)와 카드의 미리 받기
 // (prefetchCardEditor)가 같은 셈으로 같은 창 · 같은 열쇠를 낸다.
 //   decideWindow       구간 ± 여유를 지금 ③ 목록의 개요 구간 안으로 자르고, 그 런 안 조각을 고른다(segmentsForWindow)
+//   listSpanOf         목록이 덮는 PDT 범위 — 원천 상태(editorSourceView)가 카드 자리를 대 본다
 //   fetchEditorWindow  조각을 받아(fetchWindowBytes) 일반 mp4 로 다시 싼다(remuxWindow). 하나라도 실패하면 나머지를 끊는다
 //   ensureWindowHeads  판 NULL 조각의 ② 머리를 캐시에 채운다 — 행 주소는 clip 창 소리 주소 응답(트랙 미리 듣기와 같은 범위를
 //                      함께 물으면 응답 하나를 나눠 쓴다 — windowAudioAccess)
@@ -102,6 +104,17 @@ export function decideWindow(
 }
 
 /**
+ * 목록이 덮는 PDT 범위(epoch ms) — 첫 조각 PDT · 마지막 조각 끝. 원천 상태(editorSourceView)가 카드 자리를 이 범위에 대 본다.
+ * 편집기와 카드의 미리 받기가 같은 셈으로 같은 상태를 낸다. 조각이 없으면 null
+ */
+export function listSpanOf(playlist: EditorPlaylist): { firstPdtMs: number; endMs: number } | null {
+  const first = playlist.rows[0];
+  const last = playlist.rows.at(-1);
+  if (first === undefined || last === undefined) return null;
+  return { firstPdtMs: first.pdtMs, endMs: last.pdtMs + last.durationMs };
+}
+
+/**
  * 창 조각을 받아 일반 mp4 하나로 다시 싼다. 편집기와 카드의 미리 받기(POK-499)가 함께 쓴다. 조각 하나라도 실패하면 아직 받는
  * 나머지 요청을 끊고 그 오류를 던진다(SegmentForbiddenError · SegmentGoneError · RemuxMismatchError 등)
  */
@@ -115,8 +128,9 @@ export async function fetchEditorWindow(
   if (signal?.aborted) own.abort();
   signal?.addEventListener('abort', stop, { once: true });
   try {
-    // 받은 창 바이트를 지역 변수에 두지 않는다 — 다시 싸는 동안 수백 MiB 를 쥔다(remuxWindow 는 변환 뒤 놓는다)
-    return await remuxWindow(await fetchWindowBytes(mediaKey, segs, own.signal));
+    // 받은 창 바이트를 지역 변수에 두지 않는다 — 다시 싸는 동안 수백 MiB 를 쥔다(remuxWindow 는 변환 뒤 놓는다). 끊기면
+    // 다시 싸기도 멈춘다: 끊긴 카드 미리 받기의 변환이 편집기 창 받기와 겹치지 않게
+    return await remuxWindow(await fetchWindowBytes(mediaKey, segs, own.signal), own.signal);
   } catch (e) {
     own.abort();
     throw e;
@@ -128,7 +142,8 @@ export async function fetchEditorWindow(
 /**
  * 판 NULL 창 조각의 ② 머리를 캐시에 채운다(설계 prw2 3.2 결정 3). 창 범위 [첫 PDT, 마지막 PDT + EXTINF) 의 소리 주소를 clip 에
  * 한 번 묻고(트랙 미리 듣기가 같은 범위를 묻는 중이면 그 응답을 같이 쓴다 — windowAudioAccess), 그 응답 행의 ② 서명 주소로
- * 읽는다. 응답에 행이 없는 seq 는 missing 이다. 판 2 조각은 읽지 않는다. 소리 주소를 못 물었으면 경고만 남긴다(머리는 아직
+ * 읽는다. 응답에 행이 없는 seq 는 missing 이다. 판 2 조각과 이미 읽은(ready) 머리는 읽지 않는다 — 읽을 것이 없으면 묻지도
+ * 않는다. 소리 주소를 못 물었으면 경고만 남긴다(머리는 아직
  * 모름 — 배치는 근사로 먼저 보인다). 던지지 않는다
  * @param streamId clip 방송 번호(소리 주소 요청)
  * @param mediaKey 영상 키(머리 캐시)
@@ -143,14 +158,18 @@ export async function ensureWindowHeads(
   { retryFailed = true }: { retryFailed?: boolean } = {},
 ): Promise<void> {
   const heads = headCacheFor(mediaKey);
-  // failed 를 다시 읽지 않으면 missing 으로도 되돌리지 않는다(그 seq 는 건드리지 않는다)
+  // 이미 읽은 머리는 다시 읽지 않는다 — 모두 읽혀 있으면 소리 주소(서명 주소 발급)도 묻지 않는다(보안 검수 E4b-2 L2). failed 를
+  // 다시 읽지 않으면 missing 으로도 되돌리지 않는다(그 seq 는 건드리지 않는다)
   const unversioned = new Set(
     segs
       .filter((seg) => seg.timing === null)
+      .filter((seg) => heads.get(seg.seq)?.state !== 'ready')
       .filter((seg) => retryFailed || heads.get(seg.seq)?.state !== 'failed')
       .map((seg) => seg.seq),
   );
   if (unversioned.size === 0) return;
+  // 묻기 전에 계정을 잡는다 — 묻는 사이 계정이 바뀌면 옛 응답으로 판독하지 않는다(ensureHeads sameSession)
+  const sameSession = captureSession();
   let rows: { seq: number; url: string }[];
   try {
     const access = await windowAudioAccess(streamId, segs, signal);
@@ -169,5 +188,6 @@ export async function ensureWindowHeads(
     rows.map(({ seq, url }) => ({ seq, url })),
     missing,
     signal,
+    sameSession,
   );
 }

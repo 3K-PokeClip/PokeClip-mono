@@ -353,6 +353,51 @@ describe('useEditorVideoPlayback — 방송 중 목록 기다리기', () => {
     expect(result.current.window).toEqual({ startSeconds: 8, endSeconds: 48 });
   });
 
+  it('기다리며 목록을 다시 받다 실패하면 경고를 남기고 계속 기다린다: 거절을 흘리지 않는다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { source } = mount({
+        state: LIVE_READY,
+        list: listOf([range(100, 106)], { mode: 'live' }),
+      });
+      source.reloadList.mockRejectedValue(new Error('503'));
+      for (let i = 0; i < 2; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4_000);
+        });
+      }
+
+      expect(source.reloadList).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith('[editor] 목록을 다시 받지 못했어요:', '503');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('30초를 기다리다 포기한 창은 같은 구간을 다시 줘도(반복 켜고 끄기) 목록 기다리기를 다시 돌리지 않는다', async () => {
+    const { result, source } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+    });
+    for (let i = 0; i < 7; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+    }
+    await flush();
+    expect(source.reloadList).toHaveBeenCalledTimes(7);
+
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: false });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(source.reloadList).toHaveBeenCalledTimes(7);
+  });
+
   it('끝난 방송(vod) 목록은 기다리지 않는다: 더 올라올 조각이 없다', async () => {
     const { source } = mount({ list: listOf([range(100, 106)]) });
     await flush();
@@ -379,6 +424,17 @@ describe('useEditorVideoPlayback — 원천 상태 문구(D3)', () => {
     });
     await flush();
     expect(result.current.playback.error).toBe('uploading');
+  });
+
+  it('목록 끝은 마지막 조각 PDT 가 아니라 그 조각의 끝이다: 마지막 조각 안의 카드 자리는 uploading 이 아니다', async () => {
+    // 목록 끝 28초(조각 106 = 24–28초) · 구간 시작 26초
+    const { result } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+      initialRange: { startSeconds: 26, endSeconds: 27 },
+    });
+    await flush();
+    expect(result.current.playback.error).toBeNull();
   });
 
   it('uploading 이면 4초마다 목록을 다시 받고, 목록이 구간을 덮도록 자라면 창을 받는다', async () => {
@@ -590,6 +646,58 @@ describe('useEditorVideoPlayback — ② 머리(판 NULL)', () => {
     act(() => heads.set(key, 105, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } }));
     expect(result.current.placement!.sAtBlob(13)).toBeCloseTo(21.3);
     expect(node.currentTime).toBeCloseTo(12.7);
+  });
+
+  it('머리 알림 둘이 같은 React 배치로 와도 나중 알림의 배치가 남는다', async () => {
+    const key = 'key-batched';
+    const { result } = mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    await flush();
+
+    act(() => {
+      heads.set(key, 105, { state: 'missing' });
+      heads.set(key, 105, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } });
+    });
+
+    expect(result.current.placement!.sAtBlob(13)).toBeCloseTo(21.3);
+  });
+
+  it('창 조각 머리가 모두 이미 읽혀 있으면(카드가 미리 읽음) 소리 주소를 다시 묻지 않는다', async () => {
+    const key = 'key-read';
+    for (const seq of range(102, 109)) {
+      heads.set(key, seq, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0 } });
+    }
+    mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    await flush();
+
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+    expect(heads.ensure).not.toHaveBeenCalled();
+  });
+
+  it('일부만 읽혀 있으면 소리 주소를 묻고 아직 안 읽은 seq 만 머리 판독에 넘긴다', async () => {
+    const key = 'key-partly';
+    for (const seq of range(102, 105)) {
+      heads.set(key, seq, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0 } });
+    }
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+      expiresAt: '',
+      segments: range(102, 109).map((seq) => ({
+        seq,
+        startAtMs: 0,
+        durationMs: 4_000,
+        url: `https://s3.example/${seq}`,
+      })),
+    });
+    mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    await flush();
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+    const [, rows, missing] = heads.ensure.mock.calls[0]! as unknown as [
+      string,
+      { seq: number }[],
+      number[],
+    ];
+    expect(rows.map((row) => row.seq)).toEqual(range(106, 109));
+    expect(missing).toEqual([]);
   });
 });
 

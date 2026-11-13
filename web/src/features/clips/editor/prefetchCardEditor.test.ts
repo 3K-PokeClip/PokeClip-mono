@@ -26,7 +26,7 @@ import {
 } from './prefetchCardEditor';
 import type { EditorSourceState } from './source/editorSourceState';
 import type { PlaylistSegment } from './source/editorPlaylist';
-import type { RemuxedWindow } from './source/remuxWindow';
+import { remuxWindow, type RemuxedWindow } from './source/remuxWindow';
 import type { WindowPlacement } from './source/windowPlacement';
 import type { EditorSourceSnapshot, SourceList } from './source/useEditorSource';
 import {
@@ -211,6 +211,33 @@ describe('prefetchCardEditor', () => {
     expect(editor.kind === 'window' && windowBlobs.get(editor.target.key)).toBeTruthy();
   });
 
+  it('영상 키(ingestStreamId)가 방송 번호와 다르면 창은 영상 키 열쇠로 맡기고, 소리는 방송 번호 열쇠로 맡긴다: 편집기가 꺼내는 열쇠다', async () => {
+    const broadcast: BroadcastRow = { ...BROADCAST, ingestStreamId: 'ingest-7' };
+    const list = listOf(range(100, 160));
+    const deps = depsWith({
+      fetchBroadcast: async () => broadcast,
+      readSource: async () => snapshotOf(list),
+    });
+    await prefetchCardEditor('7', '23', deps);
+
+    // 편집기 쪽: 영상 · ② 머리는 영상 키(StudioScreen mediaStreamId), 소리 주소 · 소리 열쇠는 방송 번호
+    const editorRange = displayRange(
+      cardEndpoints(CARD, STARTED),
+      headCacheFor('ingest-7'),
+      STARTED,
+    );
+    const editor = decideWindow(editorRange, list, STARTED, 'ingest-7', true);
+
+    expect(editor.kind === 'window' && editor.target.key).toBe(
+      editorWindowKey('ingest-7', 110, 122),
+    );
+    expect(windowBlobs.get(editorWindowKey('ingest-7', 110, 122))).toBeDefined();
+    expect(windowBlobs.get(editorWindowKey('7', 110, 122))).toBeUndefined();
+    expect(vi.mocked(deps.fetchEditorWindow).mock.calls[0]![0]).toBe('ingest-7');
+    expect(vi.mocked(deps.ensureWindowHeads).mock.calls[0]!.slice(0, 2)).toEqual(['7', 'ingest-7']);
+    expect(segmentTracks.get(segmentTrackKey('7', 110, 122))).toBe(LOAD);
+  });
+
   it('clip 이 창 두 끝(playerWindow)을 주면 미리 받기도 그 범위로 받아 편집기 열쇠와 같다(판 NULL · 카드 창과 수 초 다름)', async () => {
     // 판 NULL 래칫으로 창 두 끝이 카드 창(50–80초)보다 7.3초 뒤다 → 여유 10초를 붙인 창 47.3–97.3초 = 조각 111–124
     const card: JumpCard = {
@@ -351,6 +378,47 @@ describe('prefetchCardEditor', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('영상 창 받기가 실패하면 ② 머리 판독도 끊는다: 쓰지 않을 머리를 계속 읽지 않는다', async () => {
+    let headSignal: AbortSignal | undefined;
+    const deps = depsWith({
+      fetchEditorWindow: vi.fn(() => Promise.reject(new Error('500'))),
+      ensureWindowHeads: vi.fn(
+        (
+          _streamId: string,
+          _key: string,
+          _segs: readonly PlaylistSegment[],
+          signal?: AbortSignal,
+        ) => {
+          headSignal = signal;
+          return new Promise<void>(() => undefined);
+        },
+      ),
+    });
+    await expect(prefetchCardEditor('7', '23', deps)).rejects.toThrow('500');
+    expect(headSignal?.aborted).toBe(true);
+  });
+
+  it('받는 사이 계정이 바뀌면 받은 창 · 소리를 맡기지 않고 pending이다: 앞 계정 몫이 다음 사람 편집기에 남지 않는다', async () => {
+    let finish = () => {};
+    const deps = depsWith({
+      fetchEditorWindow: vi.fn(
+        (_key: string, segs: readonly PlaylistSegment[]) =>
+          new Promise<RemuxedWindow>((resolve) => {
+            finish = () => resolve(remux.of(seqsOf(segs)));
+          }),
+      ),
+    });
+    const result = prefetchCardEditor('7', '23', deps);
+    await waitFor(() => expect(deps.fetchEditorWindow).toHaveBeenCalled());
+
+    useAuthStore.getState().clearTokens();
+    finish();
+
+    await expect(result).resolves.toBe('pending');
+    expect(windowBlobs.get(editorWindowKey('7', 110, 122))).toBeUndefined();
+    expect(segmentTracks.get(segmentTrackKey('7', 110, 122))).toBeUndefined();
   });
 
   it('방송 중에 소리 조각이 덜 올라와 창을 다 못 덮으면 맡기지 않고 pending이다', async () => {
@@ -636,6 +704,119 @@ describe('편집기가 창을 받는 동안 카드 미리 받기는 쉰다', () 
     expect(video.fetchEditorWindow).toHaveBeenCalledTimes(1);
   });
 
+  it('기다리는 쪽이 모두 떠난 받기에 새로 붙은 쪽은 그 받기가 끊기면 처음부터 다시 받는다: 거짓 실패를 받지 않는다', async () => {
+    const video = heldVideo();
+    const deps = depsWith({ fetchEditorWindow: video.fetchEditorWindow });
+    const leaving = new AbortController();
+    const left = prefetchCardEditor('7', '23', deps, leaving.signal);
+    await waitFor(() => expect(video.pending).toHaveLength(1));
+    leaving.abort();
+    const joined = prefetchCardEditor('7', '23', deps);
+
+    const release = holdFetch();
+    await expect(left).rejects.toMatchObject({ name: 'AbortError' });
+    release();
+    await waitFor(() => expect(video.pending).toHaveLength(2));
+    video.finishAll();
+
+    await expect(joined).resolves.toBe('ready');
+  });
+
+  it('기다리는 쪽이 모두 떠난 받기가 끝까지 받으면 새로 붙은 쪽도 그 결과를 쓴다: 다시 받지 않는다', async () => {
+    const video = heldVideo();
+    const deps = depsWith({ fetchEditorWindow: video.fetchEditorWindow });
+    const leaving = new AbortController();
+    void prefetchCardEditor('7', '23', deps, leaving.signal);
+    await waitFor(() => expect(video.pending).toHaveLength(1));
+    leaving.abort();
+    const joined = prefetchCardEditor('7', '23', deps);
+
+    video.finishAll();
+
+    await expect(joined).resolves.toBe('ready');
+    expect(video.fetchEditorWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('기다리는 쪽이 모두 떠난 받기가 제 오류로 실패하면 새로 붙은 쪽도 그 오류를 받는다: 끊김이 아니면 다시 받지 않는다', async () => {
+    let fail = (_error: Error) => {};
+    const fetchEditorWindow = vi
+      .fn<PrefetchDeps['fetchEditorWindow']>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<RemuxedWindow>((_, reject) => {
+            fail = reject;
+          }),
+      )
+      .mockResolvedValue(remux.of(WINDOW_SEQS));
+    const deps = depsWith({ fetchEditorWindow });
+    const leaving = new AbortController();
+    const left = prefetchCardEditor('7', '23', deps, leaving.signal);
+    await waitFor(() => expect(fetchEditorWindow).toHaveBeenCalledTimes(1));
+    leaving.abort();
+    const joined = prefetchCardEditor('7', '23', deps);
+
+    fail(new Error('500'));
+
+    await expect(left).rejects.toThrow('500');
+    await expect(joined).rejects.toThrow('500');
+    expect(fetchEditorWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('목록을 읽는 사이에 편집기가 잡으면 영상 · 소리 받기를 시작하지 않는다: 받기는 이미 끊긴 신호를 다시 듣지 못한다', async () => {
+    let answer = () => {};
+    const readSource = vi
+      .fn<PrefetchDeps['readSource']>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<EditorSourceSnapshot>((resolve) => {
+            answer = () => resolve(snapshotOf(listOf(range(100, 160))));
+          }),
+      )
+      .mockResolvedValue(snapshotOf(listOf(range(100, 160))));
+    const deps = depsWith({ readSource });
+    const result = prefetchCardEditor('7', '23', deps);
+    await waitFor(() => expect(readSource).toHaveBeenCalledTimes(1));
+
+    const release = holdFetch();
+    answer();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(deps.fetchEditorWindow).not.toHaveBeenCalled();
+    expect(deps.loadSegmentTracks).not.toHaveBeenCalled();
+
+    release();
+    await expect(result).resolves.toBe('ready');
+  });
+
+  it('끊긴 받기는 줄 맨 앞에 다시 선다: 놓으면 뒤에 줄 선 카드보다 먼저 받는다', async () => {
+    const video = heldVideo();
+    const deps = depsWith({
+      fetchJumpCard: vi.fn(cardOf),
+      fetchEditorWindow: video.fetchEditorWindow,
+    });
+    // 카드 0 · 1 이 받는 중(창 첫 조각 110 · 115), 카드 2(120)는 줄에서 기다린다
+    const ids = Array.from({ length: PREFETCH_PARALLEL + 1 }, (_, i) => String(i));
+    const all = ids.map((id) => prefetchCardEditor('7', id, deps));
+    await waitFor(() => expect(video.running()).toBe(PREFETCH_PARALLEL));
+
+    const release = holdFetch();
+    await waitFor(() => expect(video.running()).toBe(0));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    await waitFor(() => expect(video.running()).toBe(PREFETCH_PARALLEL));
+
+    const restarted = video.fetchEditorWindow.mock.calls
+      .slice(PREFETCH_PARALLEL)
+      .map(([, segs]) => segs[0]!.seq);
+    // 단언 전에 줄을 다 비운다: 남은 받기가 자리를 쥐면 뒤 시험이 차례를 못 받는다
+    await waitFor(() => {
+      video.finishAll();
+      expect(video.fetchEditorWindow).toHaveBeenCalledTimes(PREFETCH_PARALLEL * 2 + 1);
+    });
+    video.finishAll();
+    await expect(Promise.all(all)).resolves.toEqual(ids.map(() => 'ready'));
+    expect(restarted.sort()).toEqual([110, 115]);
+  });
+
   it(`놓은 뒤에도 한 번에 ${PREFETCH_PARALLEL}장까지만 받는다`, async () => {
     const video = heldVideo();
     const deps = depsWith({
@@ -713,6 +894,86 @@ describe('편집기가 창을 받는 동안 카드 미리 받기는 쉰다', () 
     await waitFor(() => expect(video.fetchEditorWindow).toHaveBeenCalledTimes(2));
     video.finishAll();
     await expect(result).resolves.toBe('ready');
+  });
+
+  it('끊긴 카드의 다시 싸기도 멈춘다: 다시 싸기가 받기의 신호를 받고, 편집기가 잡으면 AbortError 로 끝난다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Uint8Array([1]), { status: 200 })),
+    );
+    let started = false;
+    let remuxSignal: AbortSignal | undefined;
+    let remuxError: unknown;
+    // 신호를 못 받았어도 시험 끝에 놓는다: 걸린 채 남으면 받기 자리를 쥐어 뒤 시험이 차례를 못 받는다
+    let unhold = (_error: unknown) => {};
+    vi.mocked(remuxWindow).mockImplementationOnce(
+      (_bytes, signal) =>
+        new Promise<RemuxedWindow>((_, reject) => {
+          started = true;
+          remuxSignal = signal;
+          unhold = reject;
+          signal?.addEventListener('abort', () => {
+            remuxError = signal.reason;
+            reject(signal.reason);
+          });
+        }),
+    );
+    const result = prefetchCardEditor('7', '23', depsWith({ fetchEditorWindow }));
+    try {
+      await waitFor(() => expect(started).toBe(true));
+      expect(remuxSignal?.aborted).toBe(false);
+
+      const release = holdFetch();
+      expect(remuxSignal?.aborted).toBe(true);
+      await waitFor(() => expect(remuxError).toMatchObject({ name: 'AbortError' }));
+
+      release();
+      await expect(result).resolves.toBe('ready');
+    } finally {
+      unhold(new Error('test cleanup'));
+      await result.catch(() => undefined);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('끝 소리 확보의 ③ 머리 판독도 받기의 신호로 묶인다: 편집기가 잡으면 판독 요청을 끊는다', async () => {
+    const dtsSignals: (AbortSignal | undefined)[] = [];
+    // 신호를 못 받았어도 시험 끝에 놓는다(위와 같은 까닭)
+    let unhold = (_error: unknown) => {};
+    const readFragmentVideoDts = vi
+      .fn<PrefetchDeps['readFragmentVideoDts']>()
+      .mockImplementationOnce(
+        (_seg, signal) =>
+          new Promise<number>((_, reject) => {
+            dtsSignals.push(signal);
+            unhold = reject;
+            signal?.addEventListener('abort', () => reject(signal.reason));
+          }),
+      )
+      .mockResolvedValue(52.5);
+    const deps = depsWith({
+      readFragmentVideoDts,
+      loadSegmentTracks: vi.fn(async (options) => {
+        await options.captureAnchor!(123);
+        return LOAD;
+      }),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const result = prefetchCardEditor('7', '23', deps);
+    try {
+      await waitFor(() => expect(dtsSignals).toHaveLength(1));
+      expect(dtsSignals[0]?.aborted).toBe(false);
+
+      const release = holdFetch();
+      expect(dtsSignals[0]?.aborted).toBe(true);
+
+      release();
+      await expect(result).resolves.toBe('ready');
+    } finally {
+      unhold(new Error('test cleanup'));
+      await result.catch(() => undefined);
+      warn.mockRestore();
+    }
   });
 
   it('편집기가 받다 실패하거나 화면을 떠나 놓아도 다시 흐른다: 잡은 쪽이 모두 놓을 때까지만 쉰다', async () => {
@@ -977,8 +1238,10 @@ describe('미리 받기의 끝 소리 확보(설계 prw2 7절 c10b′)', () => {
     const [options] = vi.mocked(deps.loadSegmentTracks).mock.calls[0]!;
     // 창 110–122 · Δ = 조각 110 의 DTS 40초 — 123 의 ③ 머리 52.5초는 Blob 12.5초다
     await expect(options.captureAnchor!(123)).resolves.toBe(12.5);
+    // 받기의 신호가 함께 간다: 받기가 끊기면 판독 요청도 끊긴다
     expect(readFragmentVideoDts).toHaveBeenCalledWith(
       expect.objectContaining({ seq: 123, uri: `${DIR}/seg/0000123.m4s` }),
+      options.signal,
     );
     expect(deps.fetchEditorWindow).toHaveBeenCalledTimes(1);
   });

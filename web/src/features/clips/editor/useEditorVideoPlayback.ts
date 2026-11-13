@@ -18,6 +18,7 @@ import {
   decideWindow,
   ensureWindowHeads,
   fetchEditorWindow,
+  listSpanOf,
   type WindowTarget,
 } from './source/editorWindow';
 import { SegmentForbiddenError, SegmentGoneError } from './source/fetchWindowBytes';
@@ -42,9 +43,6 @@ import { placeWindow, type WindowPlacement } from './source/windowPlacement';
 //
 // 원천이 서지 않았거나 막히면(D3 — 14.2) 그 까닭을 재생 오류로 알린다. 원천이 막혀도(ending 등) 받은 창은 그대로 틀고 새 창만
 // 받지 않는다. 조각이 403(갱신 뒤) · 404 면 그 조각과 창의 목록 주소를 원천에 싣는다(D3 6–9행).
-
-// 창 정하기 · 받기는 카드의 미리 받기와 함께 쓰는 source/editorWindow 에 있다. PAD_SECONDS 는 전부터 이 모듈의 이름이라 다시 내보낸다
-export { PAD_SECONDS } from './source/editorWindow';
 
 const REWINDOW_DELAY_MS = 500;
 /**
@@ -104,11 +102,11 @@ interface Placed {
  */
 function blobTargetOf(placed: Placed | null, seconds: number, duration: number): number | null {
   if (placed?.placement == null) return null;
-  return clampSeekBlob(
-    placed.placement.blobAtS(seconds),
-    seekLimitsOf(placed.remuxed),
-    duration,
-  );
+  return clampSeekBlob(placed.placement.blobAtS(seconds), seekLimitsOf(placed.remuxed), duration);
+}
+
+function sameRange(a: Range, b: Range): boolean {
+  return a.startSeconds === b.startSeconds && a.endSeconds === b.endSeconds;
 }
 
 /** 구간 끝이 창 끝(반 초 안쪽)에 닿았다 — 창을 뒤로 늘려야 한다 */
@@ -159,9 +157,14 @@ function useWindowTarget(
       let active = true;
       const timer = window.setTimeout(() => {
         wait.reloads += 1;
-        void reloadRef.current().finally(() => {
-          if (active) setTick((n) => n + 1);
-        });
+        void reloadRef
+          .current()
+          .catch((e: unknown) =>
+            console.warn('[editor] 목록을 다시 받지 못했어요:', (e as Error).message),
+          )
+          .finally(() => {
+            if (active) setTick((n) => n + 1);
+          });
       }, LIVE_LIST_RELOAD_MS);
       return () => {
         active = false;
@@ -288,7 +291,8 @@ function useWindowMedia(options: {
   }, [target, streamId, mediaKey, base, heads, setFailure]);
 
   // 머리가 늦게 오면 같은 창을 다시 배치한다(표시만 바뀐다). 캐시는 영상 키 하나에 하나라 다른 창(카드 미리 받기)의 머리에도
-  // 알림이 온다 — 이 창 조각의 머리가 바뀌었을 때만 다시 배치한다
+  // 알림이 온다 — 이 창 조각의 머리가 바뀌었을 때만 다시 배치한다. 같은 받은 창인지는 다시 싼 결과로 가린다: 알림 둘이 한
+  // React 배치에 모이면 앞 알림이 이미 바꾼 상태를 받으므로, 객체 동일성으로 보면 나중 알림의 배치를 버린다
   useEffect(() => {
     if (placed === null) return undefined;
     const signature = () =>
@@ -299,7 +303,9 @@ function useWindowMedia(options: {
       if (now === seen) return;
       seen = now;
       const placement = placementOf(placed.target, placed.remuxed, base, heads);
-      setPlaced((prev) => (prev === placed ? { ...prev, placement } : prev));
+      setPlaced((prev) =>
+        prev !== null && prev.remuxed === placed.remuxed ? { ...prev, placement } : prev,
+      );
       onReplacedRef.current(placement);
     });
   }, [placed, base, heads]);
@@ -319,15 +325,9 @@ function useWindowMedia(options: {
 function useSourceView(source: EditorWindowSource, base: number, want: Range) {
   const list = source.list;
   const bounds = useMemo(() => {
-    const rows = list?.playlist.rows ?? [];
-    const first = rows[0];
-    const last = rows.at(-1);
-    if (list === null || first === undefined || last === undefined) return null;
-    return {
-      firstPdtMs: first.pdtMs,
-      endMs: last.pdtMs + last.durationMs,
-      timeline: sourceTimelineOf(list.playlist, base),
-    };
+    const span = list === null ? null : listSpanOf(list.playlist);
+    if (list === null || span === null) return null;
+    return { ...span, timeline: sourceTimelineOf(list.playlist, base) };
   }, [list, base]);
   const view = editorSourceView(source.state, bounds, base + want.startSeconds * 1000);
   return {
@@ -452,7 +452,7 @@ export function useEditorVideoPlayback(options: {
       const t = targetRef.current;
       if (t === null) {
         setWant((prev) =>
-          prev.startSeconds === bounds.startSeconds && prev.endSeconds === bounds.endSeconds
+          sameRange(prev, bounds)
             ? prev
             : { startSeconds: bounds.startSeconds, endSeconds: bounds.endSeconds },
         );
@@ -473,11 +473,13 @@ export function useEditorVideoPlayback(options: {
         const list = listRef.current;
         // 기다리는 사이 구간을 안쪽으로 되돌렸으면 창이 그대로다: 같은 영상을 다시 받고 구간 시작으로 튀지 않게 둔다. 방송 중
         // 목록 끝에서 멈춘 창은 지금 목록으로는 열쇠가 같아도 구간을 넘긴다 — 구간을 새로 줘 목록 기다리기(4초 · 30초 한도)를
-        // 다시 돌린다. 다시 받기는 이렇게 구간을 바꿀 때만 일어나 한 번에 7회를 넘지 않는다
+        // 다시 돌린다. 같은 구간을 다시 주면(반복 켜고 끄기) 돌리지 않는다: 다시 받기는 구간을 바꿀 때만 일어나 한 번에 7회를
+        // 넘지 않는다
         const held = targetRef.current;
         const next = list === null ? null : decideWindow(current, list, base, mediaKey, false);
+        const sameWindow = next?.kind === 'window' && next.target.key === held?.key;
         const awaitsGrowth = list?.mode === 'live' && held !== null && reachesEnd(current, held);
-        if (next?.kind === 'window' && next.target.key === held?.key && !awaitsGrowth) return;
+        if (sameWindow && (!awaitsGrowth || sameRange(wantRef.current, current))) return;
         setWant({ startSeconds: current.startSeconds, endSeconds: current.endSeconds });
       }, REWINDOW_DELAY_MS);
     },
