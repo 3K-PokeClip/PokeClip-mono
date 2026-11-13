@@ -1247,7 +1247,8 @@ describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => 
 
   it(`상한 ${AUDIO_WAIT_LIMIT}회에 멈추고 경고는 한 번 · 끝내 빠진 행이면 영상 소리로 물러나고 끝내 없는 머리는 failed 다`, async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const win = unversionedWindow();
+    // 창 열쇠는 editorWindowKey — 영상 키(송출 키)가 든다
+    const win = { ...unversionedWindow(), key: 'mk-cap:1-2' };
     vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1]));
     const node = video();
     const { result } = renderHook(() =>
@@ -1270,6 +1271,9 @@ describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => 
     expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1 + AUDIO_WAIT_LIMIT);
     const gaveUp = warn.mock.calls.filter(([message]) => String(message).includes('그만'));
     expect(gaveUp).toHaveLength(1);
+    // 경고에는 seq 범위만 싣는다 — 송출 키를 콘솔에 남기지 않는다(보안 L-1)
+    expect(String(gaveUp[0]![0])).toContain('seq 1–2');
+    expect(String(gaveUp[0]![0])).not.toContain('mk-cap');
     expect(result.current.status).toBe('unavailable');
     expect(node.muted).toBe(false);
     expect(headCacheFor('mk-cap').get(2)).toEqual({ state: 'failed' });

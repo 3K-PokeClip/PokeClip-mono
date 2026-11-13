@@ -584,6 +584,115 @@ describe('useEditorVideoPlayback — 조각 실패', () => {
   });
 });
 
+// 방송이 끝나 /dvr 하한이 풀리면(POK-525 — vod 는 엣지 하한 키를 지운 뒤에야 열린다) 하한 아래라 404 였던 조각도 같은
+// 주소로 받힌다. 조각 주소는 live · vod 가 같다(장부 playback_s3_key 고정 — rewind/render.go).
+describe('useEditorVideoPlayback — 원천 전환(live → vod)', () => {
+  /** 하한이 서 있는 동안 seq 104 는 404 다 */
+  function floorAt104() {
+    const floor = { on: true };
+    fetchSpy.mockImplementation(async (url: string) =>
+      floor.on && url.endsWith('0000104.m4s')
+        ? new Response(null, { status: 404 })
+        : new Response(new Uint8Array([1]), { status: 200 }),
+    );
+    return floor;
+  }
+  const mountLive = () =>
+    mount({ state: LIVE_READY, list: listOf([range(100, 124)], { mode: 'live' }) });
+
+  it('live 창이 404 로 실패한 뒤 같은 구간에 vod 목록이 오면 창을 다시 정해 다시 받는다', async () => {
+    const floor = floorAt104();
+    const { result, source, update } = mountLive();
+    await flush();
+    expect(source.reportSegmentFailure).toHaveBeenCalledWith('gone', 104, LIST_URL);
+    expect(result.current.failedKey).not.toBeNull();
+
+    floor.on = false;
+    fetchSpy.mockClear();
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+    expect(result.current.loaded).not.toBeNull();
+    expect(result.current.failedKey).toBeNull();
+    expect(result.current.playback.error).toBeNull();
+  });
+
+  it('같은 원천(live)의 목록만 새로 와서는 실패한 창을 다시 받지 않는다', async () => {
+    floorAt104();
+    const { result, update } = mountLive();
+    await flush();
+    fetchSpy.mockClear();
+
+    update({ list: listOf([range(100, 124)], { mode: 'live' }) });
+    await flush();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.failedKey).not.toBeNull();
+  });
+
+  it('live 에서 받은 창은 vod 로 바뀌어도 열쇠가 같으면 다시 받지 않는다: 같은 seq 는 같은 바이트다', async () => {
+    const { result, update } = mountLive();
+    await flush();
+    const loaded = result.current.loaded;
+    expect(result.current.src).toBe('blob:1');
+    fetchSpy.mockClear();
+
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.src).toBe('blob:1');
+    expect(result.current.loaded).toBe(loaded);
+  });
+
+  it('live 에서 받는 중에 vod 로 바뀌고 그 뒤 404 로 실패하면, 지금 vod 목록으로 다시 받는다', async () => {
+    let fail: () => void = () => undefined;
+    let first = true;
+    fetchSpy.mockImplementation(async (url: string) => {
+      if (first && url.endsWith('0000104.m4s')) {
+        first = false;
+        return new Promise<Response>((resolve) => {
+          fail = () => resolve(new Response(null, { status: 404 }));
+        });
+      }
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    const { result, update } = mountLive();
+    await flush();
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+    fetchSpy.mockClear();
+
+    await act(async () => fail());
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+    expect(result.current.loaded).not.toBeNull();
+    expect(result.current.failedKey).toBeNull();
+  });
+
+  it('live 목록 끝에서 멈춘 창은 vod 목록이 오면 같은 구간이라도 그 목록으로 창을 다시 정한다', async () => {
+    const { update } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+    });
+    for (let i = 0; i < 7; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+    }
+    await flush();
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 106));
+    fetchSpy.mockClear();
+
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+  });
+});
+
 describe('useEditorVideoPlayback — ② 머리(판 NULL)', () => {
   it('판 NULL 창이면 창 범위의 소리 주소를 한 번 묻고, 창 seq 행만 머리 판독에 넘기고 없는 seq 는 missing 으로 넘긴다', async () => {
     vi.mocked(requestSegmentAudioAccess).mockResolvedValue({

@@ -131,14 +131,18 @@ function waitReasons(
   return reasons;
 }
 
-/** 고리가 상한에 닿아 그만둔다: 경고 한 번을 남기고 끝내 없는 머리는 failed 로 둔다(그 조각 고름은 저장 막음) */
+/**
+ * 고리가 상한에 닿아 그만둔다: 경고 한 번을 남기고 끝내 없는 머리는 failed 로 둔다(그 조각 고름은 저장 막음). 경고에는 창의
+ * seq 범위만 싣는다 — 창 열쇠(editorWindowKey)에는 영상 키(송출 키)가 든다
+ */
 function giveUpWaiting(
   win: TrackWindow,
   mediaKey: string | undefined,
   reasons: readonly WaitReason[],
 ): void {
   const labels = reasons.map((reason) => REASON_LABEL[reason]).join(' · ');
-  console.warn(`[editor] ② 를 기다리다 그만뒀어요(창 ${win.key} · ${labels})`);
+  const seqs = `seq ${win.segs[0]?.seq ?? '-'}–${win.segs.at(-1)?.seq ?? '-'}`;
+  console.warn(`[editor] ② 를 기다리다 그만뒀어요(창 ${seqs} · ${labels})`);
   if (mediaKey !== undefined)
     failMissingHeads(
       mediaKey,

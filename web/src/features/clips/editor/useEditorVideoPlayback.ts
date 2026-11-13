@@ -25,7 +25,7 @@ import { SegmentForbiddenError, SegmentGoneError } from './source/fetchWindowByt
 import { headCacheFor, type HeadCache } from './source/fileHeadProbe';
 import type { RemuxedWindow } from './source/remuxWindow';
 import { clampSeekBlob, seekLimitsOf, type SeekLimits } from './source/seekGuard';
-import type { EditorSource } from './source/useEditorSource';
+import type { EditorSource, SourceList } from './source/useEditorSource';
 import { placeWindow, type WindowPlacement } from './source/windowPlacement';
 
 // 편집기의 실재생 어댑터(POK-251 · POK-473 설계 prw2 5절 4) — ③ 되감기 목록에서 「구간 앞뒤로 조금 넉넉한 창」의 조각을 받아
@@ -128,10 +128,27 @@ function placementOf(
   }
 }
 
+/** 원천 정체성 — 국면과 목록 주소(useEditorSource 의 원천 대조와 같은 두 값) */
+const sourceIdOf = (list: SourceList) => `${list.mode} ${list.url}`;
+
+/** 정한 창 — 정한 구간 · 그때 원천 · 창과 그 창을 지은 원천(열쇠가 같아 앞 창을 두면 앞 원천이다) */
+interface Decided {
+  want: Range;
+  source: string;
+  target: WindowTarget | null;
+  builtFrom: string;
+}
+
+/** 앞 원천으로 지은 창이 실패했다 — 지금 원천으로 다시 지어 받는다(live 404 뒤 하한이 풀린 vod — POK-525) */
+const failedOnEarlierSource = (decided: Decided, failedKey: string | null, source: string) =>
+  decided.target !== null && decided.target.key === failedKey && decided.builtFrom !== source;
+
 /**
  * 구간(want)을 덮을 창을 정한다. 원천이 서 있고(view ready) 목록이 있을 때만 정한다 — 원천이 막히면 새 창을 정하지 않는다.
- * 같은 구간에는 한 번만 정하고, 정한 창의 열쇠가 같으면 앞 창을 그대로 둔다(다시 받지 않는다). 방송 중 목록이 창 끝에 못
- * 미치면 4초마다 목록을 다시 받으며 30초까지 기다린다 — 구간(want)이 새로 올 때마다 다시 센다
+ * 한 원천 안에서 같은 구간에는 한 번만 정하고, 정한 창의 열쇠가 같으면 앞 창을 그대로 둔다(다시 받지 않는다 — 같은 seq 는
+ * 같은 조각 주소 · 같은 바이트다). 원천이 바뀌면(live → vod) 같은 구간도 다시 정하고, 앞 원천으로 지은 창이 실패했으면 열쇠가
+ * 같아도 새로 지어 다시 받는다. 방송 중 목록이 창 끝에 못 미치면 4초마다 목록을 다시 받으며 30초까지 기다린다 — 구간(want)이
+ * 새로 올 때마다 다시 센다
  */
 function useWindowTarget(
   source: EditorWindowSource,
@@ -139,8 +156,9 @@ function useWindowTarget(
   mediaKey: string,
   want: Range,
   viewReady: boolean,
+  failedKey: string | null,
 ): { target: WindowTarget | null; empty: boolean } {
-  const [decided, setDecided] = useState<{ want: Range; target: WindowTarget | null } | null>(null);
+  const [decided, setDecided] = useState<Decided | null>(null);
   const [tick, setTick] = useState(0);
   const reloadRef = useRef(source.reloadList);
   reloadRef.current = source.reloadList;
@@ -148,7 +166,15 @@ function useWindowTarget(
   const list = source.list;
 
   useEffect(() => {
-    if (list === null || !viewReady || decided?.want === want) return undefined;
+    if (list === null || !viewReady) return undefined;
+    const sourceId = sourceIdOf(list);
+    if (
+      decided?.want === want &&
+      decided.source === sourceId &&
+      !failedOnEarlierSource(decided, failedKey, sourceId)
+    ) {
+      return undefined;
+    }
     if (waitRef.current.want !== want) waitRef.current = { want, reloads: 0 };
     const wait = waitRef.current;
     const growing = list.mode === 'live' && wait.reloads < LIVE_LIST_RELOADS;
@@ -172,12 +198,17 @@ function useWindowTarget(
       };
     }
     const next = decision.kind === 'window' ? decision.target : null;
-    setDecided((prev) => ({
-      want,
-      target: prev?.target != null && prev.target.key === next?.key ? prev.target : next,
-    }));
+    setDecided((prev) => {
+      const keep =
+        prev?.target != null &&
+        prev.target.key === next?.key &&
+        !failedOnEarlierSource(prev, failedKey, sourceId);
+      return keep
+        ? { ...prev, want, source: sourceId }
+        : { want, source: sourceId, target: next, builtFrom: sourceId };
+    });
     return undefined;
-  }, [list, viewReady, want, decided, base, mediaKey, tick]);
+  }, [list, viewReady, want, decided, base, mediaKey, tick, failedKey]);
 
   return { target: decided?.target ?? null, empty: decided !== null && decided.target === null };
 }
@@ -244,11 +275,12 @@ function useWindowMedia(options: {
   base: number;
   source: EditorWindowSource;
   setFailure: (failure: PlaybackError | null) => void;
+  /** 받다 실패한 창의 열쇠를 싣는다(창을 새로 받기 시작하면 null) */
+  setFailedKey: (key: string | null) => void;
   onReplaced: (placement: WindowPlacement | null) => void;
-}): { placed: Placed | null; failedKey: string | null } {
-  const { target, streamId, mediaKey, base, setFailure } = options;
+}): Placed | null {
+  const { target, streamId, mediaKey, base, setFailure, setFailedKey } = options;
   const [placed, setPlaced] = useState<Placed | null>(null);
-  const [failedKey, setFailedKey] = useState<string | null>(null);
   const reportRef = useRef(options.source.reportSegmentFailure);
   reportRef.current = options.source.reportSegmentFailure;
   const onReplacedRef = useRef(options.onReplaced);
@@ -288,7 +320,7 @@ function useWindowMedia(options: {
       abort.abort();
       release();
     };
-  }, [target, streamId, mediaKey, base, heads, setFailure]);
+  }, [target, streamId, mediaKey, base, heads, setFailure, setFailedKey]);
 
   // 머리가 늦게 오면 같은 창을 다시 배치한다(표시만 바뀐다). 캐시는 영상 키 하나에 하나라 다른 창(카드 미리 받기)의 머리에도
   // 알림이 온다 — 이 창 조각의 머리가 바뀌었을 때만 다시 배치한다. 같은 받은 창인지는 다시 싼 결과로 가린다: 알림 둘이 한
@@ -318,7 +350,7 @@ function useWindowMedia(options: {
     return () => URL.revokeObjectURL(src);
   }, [src]);
 
-  return { placed, failedKey };
+  return placed;
 }
 
 /** 원천 상태(D3)와 받은 목록 — 보기 상태 · 목록 끝 · 개요 끝 */
@@ -368,11 +400,19 @@ export function useEditorVideoPlayback(options: {
   // 재생 중 위치는 저장소에만 흐른다: 상태로 들면 이 훅을 부르는 화면부터 전부가 프레임마다 다시 돈다
   const [clock] = useState(() => createPlaybackClock(initialRange.startSeconds));
   const [failure, setFailure] = useState<PlaybackError | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
   /** 재생 위치를 끄는 중. 멈춘 영상도 seeked마다 허브를 깨우지 않게 끌기가 끝날 때 한 번만 올린다 */
   const scrubbingRef = useRef(false);
 
   const { view, sourceError, timeline } = useSourceView(source, base, want);
-  const { target, empty } = useWindowTarget(source, base, mediaKey, want, view.kind === 'ready');
+  const { target, empty } = useWindowTarget(
+    source,
+    base,
+    mediaKey,
+    want,
+    view.kind === 'ready',
+    failedKey,
+  );
   useUploadingReload(source, view.kind === 'uploading');
 
   /** 위치를 허브까지 올린다: 멈춤 · 시크 · 구간 경계에서만. 재생 틱은 clock.publish만 부른다 */
@@ -398,13 +438,14 @@ export function useEditorVideoPlayback(options: {
     },
     [clock],
   );
-  const { placed, failedKey } = useWindowMedia({
+  const placed = useWindowMedia({
     target,
     streamId,
     mediaKey,
     base,
     source,
     setFailure,
+    setFailedKey,
     onReplaced,
   });
   placedRef.current = placed;
