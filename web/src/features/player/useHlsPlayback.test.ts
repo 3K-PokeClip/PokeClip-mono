@@ -207,11 +207,11 @@ describe('재생기 소스와 세대(5.4절)', () => {
     expect(hls.startLoads).toEqual([20]);
   });
 
-  it('startAtMs 가 창 하한 앞이면 하한(첫 조각 + 맨 앞 조각 셋의 길이)으로 자른다 · vod 는 첫 조각 그대로(R47)', async () => {
+  it('startAtMs 가 창 하한 앞이면 하한(방송 중 되감기는 첫 조각 + 그 조각 하나의 길이)으로 자른다 · vod 는 첫 조각 그대로(R47)', async () => {
     mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8', startAtMs: PDT0 }));
     await settle();
     act(() => lastHls().trigger('hlsLevelLoaded', { details: details(frags(10)) }));
-    expect(lastHls().startLoads).toEqual([12]);
+    expect(lastHls().startLoads).toEqual([4]);
     mount(src({ kind: 'vod', url: 'https://m/vod/k/r/index.m3u8', startAtMs: PDT0 }));
     await settle();
     act(() => lastHls().trigger('hlsLevelLoaded', { details: details(frags(2), false) }));
@@ -254,6 +254,8 @@ describe('사건 올림 — ENDLIST 와 끝 도달을 따로(cx H1)', () => {
       lastStartMs: PDT0 + 36_000,
       targetDurationS: 4,
       headSpanMs: 12_000,
+      contentFirstMs: PDT0,
+      rewindHeadSpanMs: 4_000,
     });
   });
 
@@ -638,13 +640,13 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(13, n)) }));
 
   it.each([1, 2, 3])(
-    '재생점이 첫 조각 + 1 TD 앞이면(readyState %s) 처리기 안에서 바로 창 하한(첫 조각 + 맨 앞 조각 셋의 길이)으로 옮기고 한 번 알린다',
+    '재생점이 첫 조각 앞이면(readyState %s) 처리기 안에서 바로 창 하한(첫 조각 + 그 조각 하나의 길이)으로 옮기고 한 번 알린다',
     async (readyState) => {
       vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(readyState);
-      const { onNotice, onSeekRequest } = await rewindAt(15);
+      const { onNotice, onSeekRequest } = await rewindAt(11);
       video.paused = false;
       slide(3);
-      expect(video.el!.currentTime).toBe(24);
+      expect(video.el!.currentTime).toBe(16);
       expect(onNotice).toHaveBeenCalledTimes(1);
       expect(onNotice).toHaveBeenCalledWith('가장 오래된 지점으로 옮겼어요');
       expect(onSeekRequest).not.toHaveBeenCalled();
@@ -653,33 +655,33 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
 
   it('옮길 때마다 한 줄 남긴다 — 알림은 조용한 구간에 묶여도 기록은 빠지지 않는다(cc L5)', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    await rewindAt(15);
+    await rewindAt(11);
     slide(3);
-    video.el!.currentTime = 17;
+    video.el!.currentTime = 15;
     slide(4);
     expect(info).toHaveBeenCalledTimes(2);
     expect(info).toHaveBeenLastCalledWith(
       '[player] 되감기 재생점을 창 하한으로 옮겼어요:',
       'seek',
-      28,
+      20,
     );
   });
 
-  it('첫 조각 + 1 TD 이상이면 두고 알리지 않는다', async () => {
-    const { onNotice } = await rewindAt(16);
+  it('재생점이 첫 조각 이상이면 창 하한 앞이라도 두고 알리지 않는다', async () => {
+    const { onNotice } = await rewindAt(12);
     slide(3);
-    expect(video.el!.currentTime).toBe(16);
+    expect(video.el!.currentTime).toBe(12);
     expect(onNotice).not.toHaveBeenCalled();
   });
 
   it('멈춰 있어도 옮긴다 — hls.js 는 일시정지를 보지 않는다 · 재개는 옮긴 자리로 판정해 다시 넘기지 않는다', async () => {
-    const { onNotice, onSeekRequest } = await rewindAt(15);
+    const { onNotice, onSeekRequest } = await rewindAt(11);
     act(() => {
       video.paused = true;
       video.el!.dispatchEvent(new Event('pause'));
     });
     slide(3);
-    expect(video.el!.currentTime).toBe(24);
+    expect(video.el!.currentTime).toBe(16);
     expect(onNotice).toHaveBeenCalledTimes(1);
     act(() => {
       video.paused = false;
@@ -701,16 +703,16 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
   });
 
   it('2 TD 안에 또 옮기면 알림을 겹치지 않는다 · 그 뒤에 옮기면 다시 알린다', async () => {
-    const { onNotice } = await rewindAt(15);
+    const { onNotice } = await rewindAt(11);
     slide(3);
-    video.el!.currentTime = 27;
+    video.el!.currentTime = 23;
     slide(6);
-    expect(video.el!.currentTime).toBe(36);
+    expect(video.el!.currentTime).toBe(28);
     expect(onNotice).toHaveBeenCalledTimes(1);
     await act(async () => vi.advanceTimersByTime(9_000));
-    video.el!.currentTime = 39;
+    video.el!.currentTime = 35;
     slide(9);
-    expect(video.el!.currentTime).toBe(48);
+    expect(video.el!.currentTime).toBe(40);
     expect(onNotice).toHaveBeenCalledTimes(2);
   });
 
@@ -725,14 +727,14 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     hls.hasEnoughToStart = false;
     act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(13)) }));
     act(() => hls.trigger('hlsLevelUpdated', { details: details(frags(13)) }));
-    expect(hls.startLoads).toEqual([12]);
+    expect(hls.startLoads).toEqual([4]);
     video.el!.currentTime = 0;
     slide(3);
-    expect(hls.startLoads).toEqual([12, 24]);
+    expect(hls.startLoads).toEqual([4, 16]);
     expect(video.el!.currentTime).toBe(0);
     expect(onNotice).toHaveBeenCalledTimes(1);
     slide(4);
-    expect(hls.startLoads).toEqual([12, 24]);
+    expect(hls.startLoads).toEqual([4, 16]);
   });
 
   it('readyState 0 이면 기동 뒤라도 받기 위치로 다시 잡는다 — currentTime 쓰기가 먹지 않는다', async () => {
@@ -743,7 +745,7 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(13)) }));
     video.el!.currentTime = 30;
     slide(3);
-    expect(hls.startLoads).toEqual([12, 24]);
+    expect(hls.startLoads).toEqual([4, 16]);
     expect(video.el!.currentTime).toBe(30);
   });
 
@@ -756,10 +758,10 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     hls.hasEnoughToStart = false;
     act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(13)) }));
     expect(hls.startLoads).toEqual([40]);
-    video.el!.currentTime = 13;
+    video.el!.currentTime = 11;
     act(() => video.el!.dispatchEvent(new Event('seeking')));
     slide(3);
-    expect(hls.startLoads).toEqual([40, 24]);
+    expect(hls.startLoads).toEqual([40, 16]);
   });
 
   /**
@@ -819,10 +821,10 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
   ])(
     '%s 할 때 떼기 전 재생점이 창 하한 가까이고 첫 조각 전에 창이 지나가면 창 하한으로 다시 잡는다(cc M1)',
     async (_name, recover, playheadEvent) => {
-      const { hls, onNotice } = await rewindStarted(40, 13, playheadEvent);
+      const { hls, onNotice } = await rewindStarted(40, 11, playheadEvent);
       recover(hls);
       slide(3);
-      expect(hls.startLoads).toEqual([40, 13, 24]);
+      expect(hls.startLoads).toEqual([40, 11, 16]);
       expect(onNotice).toHaveBeenCalledTimes(1);
     },
   );
@@ -852,11 +854,11 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
   });
 
   it('치명 NETWORK_ERROR 를 다시 받을 때도 재생점을 받기 위치로 본다 — 기동 전으로 돌아가면 창 하한으로 다시 잡는다', async () => {
-    const { hls, onNotice } = await rewindStarted(40, 13);
+    const { hls, onNotice } = await rewindStarted(40, 11);
     act(() => hls.trigger('hlsError', { fatal: true, type: 'networkError', details: 'x' }));
     hls.hasEnoughToStart = false;
     slide(3);
-    expect(hls.startLoads).toEqual([40, undefined, 24]);
+    expect(hls.startLoads).toEqual([40, undefined, 16]);
     expect(onNotice).toHaveBeenCalledTimes(1);
   });
 

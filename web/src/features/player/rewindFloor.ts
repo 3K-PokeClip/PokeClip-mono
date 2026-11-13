@@ -1,6 +1,6 @@
 import type Hls from 'hls.js';
 import type { LevelDetails } from 'hls.js';
-import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
+import { REWIND_MARGIN_SEGMENTS } from './playbackEdge';
 
 // 되감기 재생기의 창 하한 지키기(설계 5.3.1절 · 진단 28_). 되감기 목록은 ENDLIST 없는 미닫이 live 목록이라, 목록이 갱신될 때
 // 재생점이 첫 조각 앞이면 hls.js 1.7.3 의 synchronizeToLiveEdge 가 재생점을 라이브 끝으로 옮긴다(stream-controller.ts
@@ -8,10 +8,11 @@ import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
 // (674행). 그 처리기에서 재생점을 창 하한으로 옮겨 두면 hls.js 가 옮길 까닭이 사라진다 — 튐을 되돌리지 않고 일어나지 않게 한다.
 
 /**
- * 재생점이 첫 조각에서 이 배수 × TD 안으로 들어오면 옮긴다. hls.js 는 첫 조각 앞(−0.25초)부터 옮긴다 — 한 조각 앞당겨 다음
- * 목록 갱신(≈ 1 TD 뒤)이 오기 전에 먼저 옮긴다
+ * 재생점이 첫 조각에서 이 배수 × TD 안으로 들어오면 옮긴다(0 이면 첫 조각 앞일 때만). hls.js 는 첫 조각 앞(−0.25초)부터
+ * 옮기지만 그 판정은 이 처리기 뒤에 돈다. 착지 여유 − 조각 하나 ≥ 문턱일 때 안정하다 — 여유가 조각 하나면 0, 여유가 맨 앞
+ * 조각 셋이면 1 TD 다. 문턱이 그보다 크면 하한에 착지하자마자 다음 갱신에서 다시 옮긴다
  */
-const FLOOR_TRIGGER_TD = 1;
+const FLOOR_TRIGGER_TD = 0;
 
 export interface RewindFloorInput {
   hls: Pick<Hls, 'hasEnoughToStart' | 'startLoad'>;
@@ -33,16 +34,16 @@ function isBeforeStart(
 }
 
 /**
- * 창 하한(영상 초) — 맨 앞 GAP 을 뺀 첫 내용 조각 + 그 조각부터 EDGE_MARGIN_SEGMENTS 개의 EXTINF 합이다
- * (liveStartFloorMs 와 같은 까닭 — 맨 앞 GAP 은 내용이 아니고, 가운데 GAP 은 창이 밀리는 조각이라 센다). 조각이
+ * 창 하한(영상 초) — 맨 앞 GAP 을 뺀 첫 내용 조각 + 그 조각부터 REWIND_MARGIN_SEGMENTS 개의 EXTINF 합이다
+ * (playbackEdge.windowLowerMs 와 같은 셈 — 맨 앞 GAP 은 내용이 아니고, 가운데 GAP 은 창이 밀리는 조각이라 센다). 조각이
  * 하나도 없거나 모두 GAP 이면 첫 조각 + 그 개수 × TD 로 둔다
  */
 function windowFloorS(
   details: Pick<LevelDetails, 'fragmentStart' | 'targetduration' | 'fragments'>,
 ): number {
   const first = details.fragments.findIndex((frag) => !frag.gap);
-  if (first < 0) return details.fragmentStart + EDGE_MARGIN_SEGMENTS * details.targetduration;
-  const head = details.fragments.slice(first, first + EDGE_MARGIN_SEGMENTS);
+  if (first < 0) return details.fragmentStart + REWIND_MARGIN_SEGMENTS * details.targetduration;
+  const head = details.fragments.slice(first, first + REWIND_MARGIN_SEGMENTS);
   return head[0]!.start + head.reduce((sum, frag) => sum + frag.duration, 0);
 }
 
@@ -68,7 +69,7 @@ function floorTarget(
 }
 
 /**
- * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 내용 조각 + 그 뒤 조각 셋 · 적어도
+ * LEVEL_UPDATED 처리기에서 부른다. 재생점이 창 밖으로 떨어지기 직전이면 창 하한(첫 내용 조각 + 그 조각 하나 · 적어도
  * 옮김 문턱 · 많아야 목록 끝)으로 옮기고 그 자리를, 아니면 null 을 낸다.
  * 이미 그 자리거나 뒤면 옮기지 않는다. ENDLIST 목록은 hls.js 가 옮기지
  * 않으므로(stream-controller.ts 688 `newDetails.live`) 그대로 둔다.

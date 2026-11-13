@@ -3,14 +3,17 @@ import { REWIND_UI_MAX_SECONDS } from './playerMath';
 import type { PlaybackSource, SeekView } from './rewindSwitch';
 
 // 재생기가 로드한 목록의 가장자리 판정(설계 5.3.1 · 5.4절, POK-200 M5). 순수 함수라 jsdom 없이 시험한다.
-// hls.js synchronizeToLiveEdge 는 ENDLIST 없는 목록이 갱신될 때마다 돌아, 재생점이 창 밖이면 목록 끝으로 옮긴다. 되감기 목록도
-// ENDLIST 없는 미닫이 목록이라 같은 일이 생긴다. 그래서 창 하한에 여유(맨 앞 조각 셋)를 둔다: 시동은 목록 받기 · 조각
-// 받기 · 디코더 시동이고 창은 조각 하나마다 밀리므로, 1 조각 여유로는 시동 한 번에 창 밖이 될 수 있다. 여유는 TD 가 아니라
-// 그 조각들의 실제 길이로 센다 — gohlslib 은 TD 를 지금까지 본 조각 최대값으로 올리기만 해(첫 조각 5.9초면 방송 끝까지 TD 6)
-// 실제 조각(4초)보다 클 수 있다.
+// hls.js synchronizeToLiveEdge 는 ENDLIST 없는 목록이 갱신될 때마다 돌아, 재생점이 창 밖이면 목록 끝으로 옮긴다. 그래서 창
+// 하한에 여유를 둔다. 라이브는 맨 앞 조각 셋이다: 시동은 목록 받기 · 조각 받기 · 디코더 시동이고 창은 조각 하나마다 밀리므로,
+// 1 조각 여유로는 시동 한 번에 창 밖이 될 수 있다(라이브 시작 하한 · POK-200 c13). 방송 중 되감기는 첫 내용 조각 하나다 —
+// 재생점이 첫 조각 앞이 되면 hls.js 보다 먼저 창 하한 지키기(rewindFloor)가 옮긴다(POK-573). 끝난 목록(ENDLIST) · 다시보기는
+// 창이 밀리지 않아 여유가 없다. 여유는 TD 가 아니라 그 조각들의 실제 길이로 센다 — gohlslib 은 TD 를 지금까지 본 조각 최대값으로 올리기만
+// 해(첫 조각 5.9초면 방송 끝까지 TD 6) 실제 조각(4초)보다 클 수 있다.
 
-/** 창 하한 여유 = 목록 맨 앞 조각 이 개수의 길이 합 */
+/** 라이브 창 하한 여유 = 목록 맨 앞 조각 이 개수의 길이 합(라이브 시작 하한 · headSpanMs) */
 export const EDGE_MARGIN_SEGMENTS = 3;
+/** 방송 중 되감기 창 하한 여유 = 첫 내용 조각부터 이 개수의 길이 합(rewindHeadSpanMs · 창 하한 지키기) */
+export const REWIND_MARGIN_SEGMENTS = 1;
 /** 끝 정체 판정의 「목록이 이 값 × TD 넘게 자라지 않음」 — 목록 갱신 주기라 TD 로 센다 */
 const END_STALL_TD = 3;
 /** 끝 정체 판정의 「끝 1초 안」 */
@@ -28,8 +31,23 @@ export interface LoadedList {
    */
   lastStartMs?: number;
   targetDurationS: number;
-  /** 맨 앞 조각 EDGE_MARGIN_SEGMENTS 개(모자라면 있는 만큼)의 EXTINF 합(ms) — 창 하한 여유 */
+  /** 맨 앞 조각 EDGE_MARGIN_SEGMENTS 개(모자라면 있는 만큼)의 EXTINF 합(ms) — 라이브 창 하한 여유 */
   headSpanMs: number;
+  /**
+   * 첫 내용 조각(맨 앞 EXT-X-GAP 을 뺀 첫 조각)의 시각(epoch ms) — 되감기 · 다시보기 하한의 기준. 모두 GAP 이면 firstMs.
+   * 만드는 쪽 loadedList 는 늘 채운다 — 선택인 까닭은 lastStartMs 와 같다. 없으면 firstMs 로 읽는다
+   */
+  contentFirstMs?: number;
+  /**
+   * 첫 내용 조각부터 REWIND_MARGIN_SEGMENTS 개(모자라면 있는 만큼)의 EXTINF 합(ms) — 방송 중 되감기 창 하한 여유. 모두 GAP
+   * 이면 그 개수 × TD(rewindFloor 와 같은 셈). 만드는 쪽 loadedList 는 늘 채운다 — 없으면 headSpanMs 로 읽는다
+   */
+  rewindHeadSpanMs?: number;
+}
+
+/** 조각 길이 합(ms) */
+function spanMs(fragments: readonly DatedFragment[]): number {
+  return fragments.reduce((sum, frag) => sum + frag.duration * 1000, 0);
 }
 
 export function loadedList(
@@ -40,25 +58,44 @@ export function loadedList(
   const last = fragments[fragments.length - 1];
   if (first === undefined || last === undefined) return null;
   if (first.programDateTime === null || last.programDateTime === null) return null;
+  const content = liveContent(fragments);
+  const contentFirst = content[0];
   return {
     firstMs: first.programDateTime,
     lastEndMs: last.programDateTime + last.duration * 1000,
     lastStartMs: last.programDateTime,
     targetDurationS,
-    headSpanMs: fragments
-      .slice(0, EDGE_MARGIN_SEGMENTS)
-      .reduce((sum, frag) => sum + frag.duration * 1000, 0),
+    headSpanMs: spanMs(fragments.slice(0, EDGE_MARGIN_SEGMENTS)),
+    contentFirstMs: contentFirst?.programDateTime ?? first.programDateTime,
+    rewindHeadSpanMs:
+      contentFirst === undefined
+        ? REWIND_MARGIN_SEGMENTS * targetDurationS * 1000
+        : spanMs(content.slice(0, REWIND_MARGIN_SEGMENTS)),
   };
 }
 
-/** 창 하한 여유(ms) — vod 는 ENDLIST 문서라 창이 밀리지 않아 0 이다 */
-export function edgeMarginMs(list: LoadedList, kind: PlaybackSource['kind']): number {
-  return kind === 'vod' ? 0 : list.headSpanMs;
+/**
+ * 창 하한 여유(ms). 라이브는 맨 앞 조각 셋 · 방송 중(live — hls.js details.live) 되감기는 첫 내용 조각 하나다. 끝난 되감기
+ * 목록(ENDLIST)과 vod 는 창이 밀리지 않아 0 이다
+ */
+export function edgeMarginMs(
+  list: LoadedList,
+  kind: PlaybackSource['kind'],
+  live: boolean,
+): number {
+  if (kind === 'live') return list.headSpanMs;
+  if (kind === 'vod' || !live) return 0;
+  return list.rewindHeadSpanMs ?? list.headSpanMs;
 }
 
-/** 창 하한(epoch ms) = 첫 조각 시작 + 여유 */
-export function windowLowerMs(list: LoadedList, kind: PlaybackSource['kind']): number {
-  return list.firstMs + edgeMarginMs(list, kind);
+/** 창 하한(epoch ms) = 기준 조각 시작 + 여유. 기준은 라이브가 첫 조각, 되감기 · 다시보기가 첫 내용 조각이다 */
+export function windowLowerMs(
+  list: LoadedList,
+  kind: PlaybackSource['kind'],
+  live: boolean,
+): number {
+  const baseMs = kind === 'live' ? list.firstMs : (list.contentFirstMs ?? list.firstMs);
+  return baseMs + edgeMarginMs(list, kind, live);
 }
 
 /** 첫 목록의 시작 — position = startLoad 할 영상 초 · floorCut = 창 하한으로 잘랐다 */
@@ -79,6 +116,7 @@ export function startCut(
   startAtMs: number,
   kind: PlaybackSource['kind'],
   targetDurationS: number,
+  live: boolean,
 ): StartCut | null {
   const list = loadedList(fragments, targetDurationS);
   const first = fragments[0];
@@ -86,7 +124,8 @@ export function startCut(
   if (list === null || first === undefined || last === undefined) return null;
   const target = mediaTimeAt(fragments, startAtMs);
   if (target === null) return null;
-  const lower = first.start + edgeMarginMs(list, kind) / 1000;
+  const base = kind === 'live' ? first : (liveContent(fragments)[0] ?? first);
+  const lower = base.start + edgeMarginMs(list, kind, live) / 1000;
   const end = last.start + last.duration;
   return { position: Math.min(end, Math.max(lower, target)), floorCut: target < lower };
 }
@@ -97,8 +136,9 @@ export function startLoadPosition(
   startAtMs: number,
   kind: PlaybackSource['kind'],
   targetDurationS: number,
+  live: boolean,
 ): number | null {
-  return startCut(fragments, startAtMs, kind, targetDurationS)?.position ?? null;
+  return startCut(fragments, startAtMs, kind, targetDurationS, live)?.position ?? null;
 }
 
 /**
@@ -111,7 +151,7 @@ export function liveStartFloorMs(
   targetDurationS: number,
 ): number | null {
   const list = loadedList(liveContent(fragments), targetDurationS);
-  return list === null ? null : windowLowerMs(list, 'live');
+  return list === null ? null : windowLowerMs(list, 'live', true);
 }
 
 /**
@@ -139,8 +179,9 @@ export function startIsTruncated(
     const floor = liveStartFloorMs(fragments, targetDurationS);
     return floor !== null && startAtMs < floor;
   }
+  // 비라이브 갈래는 호출자가 없다 — 방송 중 하한으로 잰다
   const list = loadedList(fragments, targetDurationS);
-  return list !== null && startAtMs < windowLowerMs(list, kind);
+  return list !== null && startAtMs < windowLowerMs(list, kind, true);
 }
 
 /**
@@ -216,7 +257,11 @@ export function sessionAxis(input: SessionAxisInput): SessionAxis | null {
     list,
     atMs,
     edgeMs,
-    view: { lowerMs: windowLowerMs(list, kind), endMs: kind === 'live' ? edgeMs : list.lastEndMs },
+    // 축 입력에 방송 중 여부가 아직 없어 방송 중 하한으로 둔다
+    view: {
+      lowerMs: windowLowerMs(list, kind, true),
+      endMs: kind === 'live' ? edgeMs : list.lastEndMs,
+    },
     windowSeconds: clampSeconds(edgeMs - lower),
     behindSeconds: atMs === null ? 0 : clampSeconds(edgeMs - atMs),
   };

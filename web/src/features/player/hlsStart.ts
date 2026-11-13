@@ -29,7 +29,7 @@ export function decideLiveStart(
   if (strictStart && startIsTruncated(fragments, startAtMs, 'live', targetduration)) {
     return { kind: 'truncated' };
   }
-  const position = startLoadPosition(fragments, startAtMs, 'live', targetduration);
+  const position = startLoadPosition(fragments, startAtMs, 'live', targetduration, true);
   return { kind: 'load', position: position ?? -1 };
 }
 
@@ -86,8 +86,8 @@ export function armStart(
   hls.on(events.LEVEL_LOADED, (...[, data]) => {
     if (placed) return;
     placed = true;
-    const { fragments, targetduration } = data.details;
-    const position = startLoadPosition(fragments, startAtMs, kind, targetduration);
+    const { fragments, targetduration, live } = data.details;
+    const position = startLoadPosition(fragments, startAtMs, kind, targetduration, live);
     load.set(position);
     hls.startLoad(position ?? -1);
   });

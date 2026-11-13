@@ -71,7 +71,7 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     const startAtMs = PDT0 + 10_000;
     const { hls, onLoadFrom } = arm({ kind: 'rewind', startAtMs, strictStart: false });
     const first = details(8);
-    const want = startLoadPosition(first.fragments, startAtMs, 'rewind', 4);
+    const want = startLoadPosition(first.fragments, startAtMs, 'rewind', 4, true);
 
     hls.trigger(EVENTS.LEVEL_LOADED, { details: first });
     hls.trigger(EVENTS.LEVEL_LOADED, { details: details(9) });
@@ -80,6 +80,27 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     expect(hls.startLoad.mock.calls).toEqual([[want]]);
     expect(onLoadFrom.mock.calls).toEqual([[want]]);
     expect(hls.count(EVENTS.LEVEL_UPDATED)).toBe(0);
+  });
+
+  it.each<[string, boolean, number]>([
+    ['끝난 목록(ENDLIST)이면 첫 내용 조각(영상 6초)', false, 6],
+    ['방송 중이면 첫 내용 조각 + 그 조각 하나(영상 10초)', true, 10],
+  ])('되감기 맨 왼쪽 시작은 그 목록이 방송 중인가로 정한다 — %s', (_name, live, want) => {
+    const { hls, onLoadFrom } = arm({ kind: 'rewind', startAtMs: PDT0, strictStart: false });
+    // 맨 앞 GAP 하나(6초) 뒤 4초 조각 900 개 — 합이 한 시간을 넘는다
+    const fragments = [
+      { start: 0, duration: 6, programDateTime: PDT0, gap: true },
+      ...[...Array(900).keys()].map((i) => ({
+        start: 6 + i * 4,
+        duration: 4,
+        programDateTime: PDT0 + 6_000 + i * 4_000,
+      })),
+    ];
+
+    hls.trigger(EVENTS.LEVEL_LOADED, { details: { fragments, targetduration: 6, live } });
+
+    expect(hls.startLoad.mock.calls).toEqual([[want]]);
+    expect(onLoadFrom.mock.calls).toEqual([[want]]);
   });
 
   it('되감기 목록에 시각 표시가 없으면 받기 위치는 null · hls.js 가 고르는 -1 로 받는다', () => {
@@ -100,7 +121,7 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     hls.trigger(EVENTS.MANIFEST_PARSED);
     hls.trigger(EVENTS.LEVEL_UPDATED, { details: details(8) });
 
-    const want = startLoadPosition(details(8).fragments, startAtMs, 'live', 4);
+    const want = startLoadPosition(details(8).fragments, startAtMs, 'live', 4, true);
     expect(hls.startLoad.mock.calls).toEqual([[-1], [want]]);
     expect(onLoadFrom).not.toHaveBeenCalled();
   });

@@ -180,12 +180,12 @@ describe('라이브 기동 — 첫 목록에서 시작 자리를 정한다(설�
   it('되감기는 현행대로 첫 목록 로드에서 하한으로 잘라 시작한다', async () => {
     const onStartTruncated = vi.fn();
     const rewind = source({ kind: 'rewind', url: 'https://m/dvr/k/a1/index.m3u8' });
-    await mount({ ...rewind, startAtMs: PDT0 + 5_000 }, { onStartTruncated });
+    await mount({ ...rewind, startAtMs: PDT0 + 2_000 }, { onStartTruncated });
     const hls = lastHls();
     expect(hls.config.autoStartLoad).toBe(false);
     boot(hls);
     await Promise.resolve();
-    expect(hls.startLoad.mock.calls).toEqual([[12]]);
+    expect(hls.startLoad.mock.calls).toEqual([[4]]);
     expect(hls.stopLoad).not.toHaveBeenCalled();
     expect(onStartTruncated).not.toHaveBeenCalled();
   });

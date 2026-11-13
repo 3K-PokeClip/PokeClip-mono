@@ -493,8 +493,8 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     const recovered = lastHls();
     expect(recovered).not.toBe(relistHls);
     expect(current().state.source).toMatchObject({ url: A1, startAtMs: TARGET });
-    // 새 목록 첫 조각 NEW_F 는 청한 자리 뒤 — 창 하한(영상 12초)에서 받는다
-    expect(recovered.startLoad.mock.calls).toEqual([[12]]);
+    // 새 목록 첫 조각 NEW_F 는 청한 자리 뒤 — 창 하한(영상 4초)에서 받는다
+    expect(recovered.startLoad.mock.calls).toEqual([[4]]);
     expect(oldestNotices(onNotice)).toBe(1);
     checkedEvents();
   });

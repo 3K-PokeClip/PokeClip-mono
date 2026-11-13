@@ -86,7 +86,7 @@ function firstStartCut(
   details: LevelDetails,
 ): { startFloorCut?: boolean } {
   if (kind !== 'rewind' || startAtMs === null) return {};
-  const cut = startCut(details.fragments, startAtMs, kind, details.targetduration);
+  const cut = startCut(details.fragments, startAtMs, kind, details.targetduration, details.live);
   return cut === null ? {} : { startFloorCut: cut.floorCut };
 }
 
