@@ -10,6 +10,13 @@ import type { WindowBytes } from './fetchWindowBytes';
 // 🔴 mediabunny 1.65.1 부터 Conversion 은 GOP 시각 규칙을 어기는 패킷을 조용히 버린다(Vanilagy/mediabunny#614). 입력 영상
 //    표본 수와 출력 영상 패킷 수가 다르면 RemuxMismatchError 로 끝낸다 — 프레임 표가 출력과 어긋난 창을 내보내지 않는다.
 // trim 은 쓰지 않는다(창 = 조각 경계). 시각은 모두 초이고, 조각 표는 ③ 축(그 조각 tfdt 기준) 값이다.
+//
+// 메모리(M3 실패 처분 (가) — 실측 2026-11-13-prw2-m3): 200초 창이면 ③ 입력만 약 190MiB 다. 그래서
+//   - 입력을 한 덩어리로 이어 붙이지 않는다. 조각 배열을 가로질러 읽는 원천(CustomSource)에 조각의 subarray 를 넘긴다.
+//     변환기는 패킷 바이트를 원천이 준 바이트의 subarray 로 쥐므로(isobmff-demuxer fetchPacketInFragment · reader
+//     readBytes), 넓게 미리 읽게 해(prefetch 'network') 패킷 대부분이 조각 바이트를 그대로 가리키게 한다.
+//   - 변환이 끝나면 입력 조각을 놓는다(WindowParts.release) — 출력을 확인하고 Blob 을 만드는 동안 입력 조각이 살지 않는다.
+// 다시 싼 바이트는 원천과 무관하게 같다(remuxWindow.bytes.test.ts 가 바꾸기 전 판의 sha 로 단언한다).
 
 export interface RemuxedSegment {
   seq: number;
@@ -41,23 +48,42 @@ export class RemuxMismatchError extends Error {
   }
 }
 
-/** 창 바이트를 일반 mp4 로 다시 싼다. init · 조각을 읽지 못하면 변환 전에 던진다 */
-export async function remuxWindow(bytes: WindowBytes): Promise<RemuxedWindow> {
-  const video = readVideoTrack(bytes.init);
-  if (video === null) throw new Error('init 에 영상 트랙이 없다');
-  if (bytes.segments.length === 0) throw new Error('창 조각이 없다');
-  const segments = bytes.segments.map((seg) => segmentTable(bytes.init, seg, video));
-  const inputFrames = segments.reduce((sum, seg) => sum + seg.frames.length, 0);
-  const inputFirstPts = Math.min(...segments.map((seg) => seg.mediaStart));
+/**
+ * 창 바이트를 일반 mp4 로 다시 싼다. init · 조각을 읽지 못하면 변환 전에 던진다. 변환이 끝나면 창 바이트를 더 쥐지
+ * 않는다 — 부른 쪽도 쥐고 있지 않으면 출력을 확인하는 동안 거둘 수 있다
+ */
+export function remuxWindow(bytes: WindowBytes): Promise<RemuxedWindow> {
+  // async 로 두지 않는다: async 함수는 기다리는 동안 인자를 끝까지 쥔다(V8). 창 바이트는 놓을 수 있는 그릇에만 둔다
+  return remuxParts(new WindowParts(bytes));
+}
 
+async function remuxParts(parts: WindowParts): Promise<RemuxedWindow> {
+  const { segments, inputFrames, inputFirstPts } = windowTable(parts.bytes);
   const mb = await import('mediabunny');
-  const output = await convert(mb, concat([bytes.init, ...bytes.segments.map((seg) => seg.bytes)]));
+  const output = await convert(mb, parts).finally(() => parts.release());
   const packets = await videoPackets(mb, output);
   if (packets.count !== inputFrames) throw new RemuxMismatchError(inputFrames, packets.count);
   return {
     blob: new Blob([output], { type: 'video/mp4' }),
     shiftSeconds: inputFirstPts - packets.firstPts,
     segments,
+  };
+}
+
+/** 조각 표 · 입력 영상 표본 수 · 입력 첫 영상 PTS. 창 바이트는 붙들지 않는다 */
+function windowTable(bytes: WindowBytes): {
+  segments: RemuxedSegment[];
+  inputFrames: number;
+  inputFirstPts: number;
+} {
+  const video = readVideoTrack(bytes.init);
+  if (video === null) throw new Error('init 에 영상 트랙이 없다');
+  if (bytes.segments.length === 0) throw new Error('창 조각이 없다');
+  const segments = bytes.segments.map((seg) => segmentTable(bytes.init, seg, video));
+  return {
+    segments,
+    inputFrames: segments.reduce((sum, seg) => sum + seg.frames.length, 0),
+    inputFirstPts: Math.min(...segments.map((seg) => seg.mediaStart)),
   };
 }
 
@@ -83,8 +109,13 @@ function segmentTable(
 }
 
 /** mediabunny 복사 변환(trim 없음) — moov 를 앞에 둔 일반 mp4 바이트 */
-async function convert(mb: typeof Mediabunny, file: Uint8Array): Promise<ArrayBuffer> {
-  const input = new mb.Input({ source: new mb.BufferSource(file), formats: mb.ALL_FORMATS });
+async function convert(mb: typeof Mediabunny, parts: WindowParts): Promise<ArrayBuffer> {
+  const source = new mb.CustomSource({
+    getSize: () => parts.size,
+    read: (start, end) => parts.read(start, end),
+    prefetchProfile: 'network',
+  });
+  const input = new mb.Input({ source, formats: mb.ALL_FORMATS });
   const target = new mb.BufferTarget();
   const output = new mb.Output({
     format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }),
@@ -118,12 +149,61 @@ async function videoPackets(
   return { count, firstPts };
 }
 
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.byteLength;
+/**
+ * 창 바이트(init + 조각)를 이어 붙이지 않고 한 파일처럼 읽게 쥔다. release 뒤에는 바이트를 쥐지 않고, 읽으면 던진다
+ */
+class WindowParts {
+  #window: WindowBytes | null;
+  #parts: readonly Uint8Array[] | null;
+  readonly size: number;
+
+  constructor(window: WindowBytes) {
+    this.#window = window;
+    this.#parts = [window.init, ...window.segments.map((seg) => seg.bytes)];
+    this.size = this.#parts.reduce((sum, part) => sum + part.byteLength, 0);
   }
-  return out;
+
+  get bytes(): WindowBytes {
+    if (this.#window === null) throw new Error('창 바이트를 이미 놓았다');
+    return this.#window;
+  }
+
+  /** [start, end) — 한 조각 안이면 그 subarray, 조각을 가로지르면 조각별 subarray 를 차례로 내는 스트림 */
+  read(start: number, end: number): Uint8Array | ReadableStream<Uint8Array> {
+    if (this.#parts === null) throw new Error('창 바이트를 이미 놓았다');
+    const chunks = sliceParts(this.#parts, start, end);
+    if (chunks.length === 1) return chunks[0]!;
+    return new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(chunk));
+        controller.close();
+      },
+    });
+  }
+
+  release(): void {
+    this.#window = null;
+    this.#parts = null;
+  }
+}
+
+/**
+ * parts 를 차례로 이은 파일의 [start, end) 를 조각마다 subarray 로 준다(복사하지 않는다). 빈 조각은 건너뛴다.
+ * 범위가 파일 밖이거나 뒤집혔으면 RangeError
+ */
+export function sliceParts(parts: readonly Uint8Array[], start: number, end: number): Uint8Array[] {
+  const size = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  if (start < 0 || end > size || start > end) {
+    throw new RangeError(`창 바이트 범위 밖 — [${start}, ${end}) · 크기 ${size}`);
+  }
+  const chunks: Uint8Array[] = [];
+  let partStart = 0;
+  for (const part of parts) {
+    const partEnd = partStart + part.byteLength;
+    const from = Math.max(start, partStart);
+    const to = Math.min(end, partEnd);
+    if (from < to) chunks.push(part.subarray(from - partStart, to - partStart));
+    partStart = partEnd;
+  }
+  return chunks;
 }

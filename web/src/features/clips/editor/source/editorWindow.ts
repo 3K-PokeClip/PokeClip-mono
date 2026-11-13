@@ -115,6 +115,7 @@ export async function fetchEditorWindow(
   if (signal?.aborted) own.abort();
   signal?.addEventListener('abort', stop, { once: true });
   try {
+    // 받은 창 바이트를 지역 변수에 두지 않는다 — 다시 싸는 동안 수백 MiB 를 쥔다(remuxWindow 는 변환 뒤 놓는다)
     return await remuxWindow(await fetchWindowBytes(mediaKey, segs, own.signal));
   } catch (e) {
     own.abort();
