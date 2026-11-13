@@ -81,7 +81,7 @@ describe('streamerIdOf: 이 방송의 채널(스트리머) 번호', () => {
   });
 
   it('위임이 없거나 · 어느 채널에도 없거나 · 조회가 실패하면 모름(null)이다', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.mocked(fetchDelegationsAsEditor)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([delegation(A), delegation(B)])
@@ -91,6 +91,8 @@ describe('streamerIdOf: 이 방송의 채널(스트리머) 번호', () => {
     expect(await streamerIdOf(broadcast('EDITOR'))).toBeNull();
     expect(await streamerIdOf(broadcast('EDITOR'))).toBeNull();
     expect(await streamerIdOf(broadcast('EDITOR'))).toBeNull();
+    // 조회 실패는 오류 이름만 적는다 — 오류 객체를 통째로 싣지 않는다
+    expect(warn).toHaveBeenLastCalledWith('[editor] 방송의 채널 번호를 정하지 못했어요(Error)');
   });
 });
 

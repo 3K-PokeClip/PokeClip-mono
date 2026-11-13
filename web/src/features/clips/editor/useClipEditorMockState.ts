@@ -1052,6 +1052,28 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     [recipe.layout, recipe.splitRatio],
   );
 
+  // 저장·주문은 컨테이너가 준 실제 동작으로 간다. 없으면 목업 안내다. 다시 시도 콜백으로 자기 자신을 넘긴다
+  const saveDraft = useCallback(() => {
+    const save = actionsRef.current?.saveDraft;
+    if (save) save(presentRef.current, saveDraft);
+    else toast({ tone: 'success', title: '편집본을 저장했어요' });
+  }, [toast]);
+  const requestUpload = useCallback(() => {
+    const current = actionsRef.current;
+    const request = current?.requestUpload;
+    if (request === undefined) {
+      toast({
+        tone: 'info',
+        title: '업로드는 아직 준비 중이에요',
+        description: '지금은 화면만 있는 목업이에요.',
+      });
+      return;
+    }
+    const open = () => request(presentRef.current, thumbnailRef.current, requestUpload);
+    if (current?.whenUploadReady) current.whenUploadReady(open);
+    else open();
+  }, [toast]);
+
   return {
     clipTitle: source.clipTitle,
     sourceLabel: source.sourceLabel,
@@ -1071,33 +1093,8 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
     undo: useCallback(() => setHistory(undoHistory), []),
     redo: useCallback(() => setHistory(redoHistory), []),
-    // 저장·주문은 컨테이너가 준 실제 동작으로 간다. 없으면 목업 안내다
-    saveDraft: useCallback(
-      function saveDraft() {
-        const save = actionsRef.current?.saveDraft;
-        if (save) save(presentRef.current, saveDraft);
-        else toast({ tone: 'success', title: '편집본을 저장했어요' });
-      },
-      [toast],
-    ),
-    requestUpload: useCallback(
-      function requestUpload() {
-        const current = actionsRef.current;
-        const request = current?.requestUpload;
-        if (request === undefined) {
-          toast({
-            tone: 'info',
-            title: '업로드는 아직 준비 중이에요',
-            description: '지금은 화면만 있는 목업이에요.',
-          });
-          return;
-        }
-        const open = () => request(presentRef.current, thumbnailRef.current, requestUpload);
-        if (current?.whenUploadReady) current.whenUploadReady(open);
-        else open();
-      },
-      [toast],
-    ),
+    saveDraft,
+    requestUpload,
 
     playing,
     togglePlay: playback.togglePlay,
