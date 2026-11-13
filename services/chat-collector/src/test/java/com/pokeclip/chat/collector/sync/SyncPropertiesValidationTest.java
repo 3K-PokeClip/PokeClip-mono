@@ -140,6 +140,25 @@ class SyncPropertiesValidationTest {
         assertThatCode(() -> new SyncProperties(0, Map.of(), -limit)).doesNotThrowAnyException();
     }
 
+    /**
+     * 차감 자체의 상한은 합친 값 검사와 따로다 — 기본 1 · 차감 상한+1 이면 판 2 보정값(−600000)은 상한 안이지만 차감이 상한
+     * 밖이라 거절한다(음수 쪽 대칭). 합친 값 검사가 대신 잡지 못하는 갈래라, 메시지가 차감 속성과 그 값을 가리키고 합친 값
+     * 꼴({@code default-offset-ms(…) − …})이 아님까지 본다(변이 교정 ⑩ — 2026-11-13).
+     */
+    @Test
+    void 차감_자체가_상한_밖이면_합친_값이_상한_안이어도_거절한다() {
+        long limit = SyncProperties.MAX_ABS_OFFSET_MS;
+
+        assertThatThrownBy(() -> new SyncProperties(1, Map.of(), limit + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms=" + (limit + 1))
+                .hasMessageNotContaining("default-offset-ms(");
+        assertThatThrownBy(() -> new SyncProperties(-1, Map.of(), -limit - 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms=" + (-limit - 1))
+                .hasMessageNotContaining("default-offset-ms(");
+    }
+
     /** P3 의 음수 차감 — 옛 3,900 · 차감 −300 이면 판 2 보정값은 4,200 이다. */
     @Test
     void 음수_차감은_판_2_보정값을_키운다() {
