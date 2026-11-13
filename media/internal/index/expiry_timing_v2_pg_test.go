@@ -6,7 +6,7 @@ package index
 // playback_pdt · 위치 · 길이만 섞기로 바꾼다(timing_v2_store.go settleV2). 그래서 판만 다른 두 장부가 같은 결과를 내야 한다.
 //
 // 판 2 행의 timing_wall_guess · playback_pdt 는 start_wall_utc 보다 v2Lag 만큼 이르게 심는다 — 만료가 범위를 그 칸으로
-// 재면 구간 첫 조각이 빠지고 뒤 방송 첫 조각이 들어 결과가 갈린다. 판 2 래치가 선 뒤에는 판 NULL 행을 넣을 수 없으므로(쓰기자
+// 재면 구간 첫 조각이 빠지고 뒤 방송 첫 조각이 들어 결과가 갈린다. 판 2 래치가 선 뒤에는 옛 쓰기자의 행(timing_wall_guess NULL)을 넣을 수 없으므로(쓰기자
 // 거부 트리거) 섞인 장부는 판 NULL 행 → 래치 → 판 2 행 순서로 심는다. PG_DSN 이 없으면 skip(REQUIRE_PG=1 이면 실패).
 
 import (
@@ -51,7 +51,8 @@ VALUES ($1, $2, $3, $4, 4000, $5, 'uploaded', $4, 1000, $6, $7, $8, 'uploaded', 
 	}
 }
 
-// v2Latch 는 새 회차 판 스위치를 2 로 올려 래치를 세운다 — 이 뒤로는 판 NULL 행이 23514 legacy_writer_refused 로 막힌다.
+// v2Latch 는 새 회차 판 스위치를 2 로 올려 래치를 세운다 — 이 뒤로는 timing_wall_guess 가 NULL 인 행(옛 쓰기자)이
+// 23514 legacy_writer_refused 로 막힌다.
 func v2Latch(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	mustTimingExec(t, pool, `UPDATE stream_timing_gate SET new_round_version = 2`)
@@ -192,7 +193,7 @@ func TestExpiryMixedVersionStreamLeavesOutOfRangeRoundsUntouched(t *testing.T) {
 
 // 구간 경계 — 판 2 행도 판 NULL 행처럼 start_wall_utc 로 [From, Until) 에 갈린다. 조각 여섯을 From · Until 의 1ms 앞 ·
 // 같음 · 1ms 뒤에 두면 판과 무관하게 From · From + 1ms · Until − 1ms 셋만 대상이고 그 셋만 지워진다. 판 2 행의 PDT 칸 둘은
-// v2Lag 만큼 이르므로, 범위를 그 칸으로 재면 From + 1ms 가 빠지고 Until · Until + 1ms 가 든다.
+// v2Lag 만큼 이르므로, 범위를 그 칸으로 재면 From · From + 1ms 가 빠지고 Until · Until + 1ms 가 든다.
 func TestExpiryV2RowsSplitAtRangeEdgesLikeV1(t *testing.T) {
 	from, until := expAt(10), expAt(20)
 	edges := []time.Time{
@@ -351,7 +352,7 @@ func TestExpiryPreflightDiagnosticsSameWithV2Rows(t *testing.T) {
 			if h := got[tc.name]["VODDocumentHolesSQL"]; h != wantHoles {
 				t.Errorf("문서 구멍 %s, want %s", h, wantHoles)
 			}
-			if d := got[tc.name]["expiry_deferred.sql"]; !strings.Contains(d, " U ") {
+			if d := got[tc.name]["expiry_deferred.sql"]; strings.Count(d, " U ") != 1 {
 				t.Errorf("미룸 질의 %s (미정 회차 U 한 행 기대)", d)
 			}
 		})
