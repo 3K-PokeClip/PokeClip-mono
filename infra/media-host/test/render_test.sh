@@ -602,7 +602,7 @@ check_case_10() {
          + (if .cred_relay then cred_env else {} end))}
       + (if .janitor_enabled
          then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
-           JANITOR_ENABLED: "true", JANITOR_GRACE: "23h",
+           JANITOR_ENABLED: "true",
            SEGMENT_ROOT: "/recordings"}
            + (if .cred_relay then cred_env else {} end))}
          else {} end)' '사이드카 · janitor env' || ok=1
