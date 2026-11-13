@@ -12,6 +12,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -39,13 +40,12 @@ class SegmentLedgerPrepareTest extends IntegrationTestSupport {
     private static final String CONTROL_TAG = "/* prepare-control */";
 
     /**
-     * 그 연결의 서버 준비 문장 가운데 판 2 후보 조회 꼴(확인 술어 조각)인 것을 센다. 드라이버는 {@code ?} 를 {@code $1 …} 로 바꾼
-     * 글자를 올리므로 글자 그대로 견주지 않고 조각으로 찾는다. 첫 자리 표시는 대조 꼬리표를 넣을지(참) 뺄지(거짓)다.
+     * 그 연결의 서버 준비 문장 가운데 판 2 후보 조회 꼴(확인 술어 조각)인 것. 같은 컨텍스트의 다른 시험이 같은 연결 풀에 비슷한
+     * 문장(예: 그 조회 앞에 {@code EXPLAIN} 을 붙인 기록 시험)을 올려 둘 수 있어, 셀 때는 드라이버가 올리는 글자 그대로({@code ?}
+     * 를 {@code $1 …} 로 바꾼 글자)와 견준다. 실패 메시지에 조각이 맞는 문장을 모두 싣는다.
      */
-    private static final String PREPARED_COUNT = """
-            SELECT count(*) FROM pg_prepared_statements
-             WHERE statement LIKE '%min(e.playback_pdt)%'
-               AND (statement LIKE '%prepare-control%') = ?
+    private static final String PREPARED_LIKE = """
+            SELECT statement FROM pg_prepared_statements WHERE statement LIKE '%min(e.playback_pdt)%'
             """;
 
     private final SegmentLedger ledger;
@@ -73,18 +73,27 @@ class SegmentLedgerPrepareTest extends IntegrationTestSupport {
         String control = SegmentLedger.FLOOR_BY_PLAYBACK_PDT + CONTROL_TAG;
         Timestamp at = Timestamp.from(T0.plusMillis(1));
 
-        long[] counts = transaction.execute(status -> {
+        List<String> prepared = transaction.execute(status -> {
             for (int i = 0; i < CALLS; i++) {
                 assertThat(ledger.floorByPlaybackPdt(STREAM, T0.plusMillis(1)))
                         .as("답은 그대로 — 첫 행").hasValueSatisfying(s -> assertThat(s.seq()).isEqualTo(1L));
                 jdbc.query(control, (row, n) -> row.getLong("seq"), STREAM, at, STREAM, at);
             }
-            return new long[]{
-                    jdbc.queryForObject(PREPARED_COUNT, Long.class, false),
-                    jdbc.queryForObject(PREPARED_COUNT, Long.class, true)};
+            return jdbc.queryForList(PREPARED_LIKE, String.class);
         });
 
-        assertThat(counts[1]).as("대조 — 기본 설정이면 %d번 부른 문장은 올라간다", CALLS).isEqualTo(1L);
-        assertThat(counts[0]).as("판 2 후보 조회는 이름 없는 문장으로만 돈다").isZero();
+        assertThat(prepared).as("대조 — 기본 설정이면 %d번 부른 문장은 올라간다", CALLS).contains(nativeSql(control));
+        assertThat(prepared).as("판 2 후보 조회는 이름 없는 문장으로만 돈다")
+                .doesNotContain(nativeSql(SegmentLedger.FLOOR_BY_PLAYBACK_PDT));
+    }
+
+    /** 드라이버가 서버에 올리는 글자 — 자리 표시 {@code ?} 를 차례로 {@code $1, $2, …} 로 바꾼다. */
+    private static String nativeSql(String sql) {
+        StringBuilder out = new StringBuilder();
+        int n = 0;
+        for (char c : sql.toCharArray()) {
+            out.append(c == '?' ? "$" + ++n : String.valueOf(c));
+        }
+        return out.toString();
     }
 }
