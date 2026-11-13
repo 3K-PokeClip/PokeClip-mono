@@ -121,6 +121,5 @@ export function useLiveRewindPlayback(
     }
   }, [atMs, playing, runMs, epoch, dispatch]);
 
-  // 다시보기(VOD)는 끝난 방송이라 오른쪽 끝이 「실시간」이 아니라 녹화 끝이다(시크바 문구 · LIVE 숨김)
-  return { ...sim, replay: state.source.kind === 'vod' };
+  return sim;
 }

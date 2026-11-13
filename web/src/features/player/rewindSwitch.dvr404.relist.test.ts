@@ -532,10 +532,9 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
     expect(known(list)).toBe(true);
     expect(known(paint)).toBe(true);
     expect(known(settled)).toBe(true);
-    // 거짓 — 세대 다름 · url 다름 · 소스 다시보기 · 라이브 · 기록 없음 · 끝남 대기 · 다시보기 제안
+    // 거짓 — 세대 다름 · url 다름 · 라이브 · 기록 없음 · 끝남 대기 · 다시보기 제안
     expect(known(settled, S, settled.source.generation - 1)).toBe(false);
     expect(known({ ...settled, source: { ...settled.source, url: A2 } })).toBe(false);
-    expect(known({ ...settled, source: { ...settled.source, kind: 'vod' } })).toBe(false);
     expect(known({ ...settled, source: { ...settled.source, kind: 'live' } })).toBe(false);
     expect(known(settled, { type: 'main', sn: 99 })).toBe(false);
     expect(known(settled, { type: 'audio', sn: 41 })).toBe(false);

@@ -13,7 +13,6 @@ const QUIET: SessionView = {
   actions: [],
   banner: null,
   seekHidden: false,
-  liveHidden: false,
   liveChecking: false,
   vodReady: false,
   startHeld: false,

@@ -62,7 +62,6 @@ function rewindAt(): PlaybackSessionState {
       firstMs: T0,
       lastEndMs: NOW,
       targetDurationS: 6,
-      headSpanMs: 18_000,
     },
     pos(P),
   ]);

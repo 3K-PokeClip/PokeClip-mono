@@ -46,7 +46,7 @@ function vodReady(): RewindStatusResult {
 }
 
 function loaded(url: string, firstMs: number, lastEndMs: number): SessionEvent {
-  return { type: 'list-loaded', url, firstMs, lastEndMs, targetDurationS: 4, headSpanMs: 12_000 };
+  return { type: 'list-loaded', url, firstMs, lastEndMs, targetDurationS: 4 };
 }
 
 function feed(

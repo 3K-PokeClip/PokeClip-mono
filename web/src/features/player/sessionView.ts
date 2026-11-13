@@ -21,8 +21,6 @@ export interface SessionView {
   banner: { goTo: string } | null;
   /** 받을 목록이 없어 시크바를 숨긴다(live 기원 덮개) */
   seekHidden: boolean;
-  /** LIVE 버튼을 숨긴다(끝난 방송의 VOD) */
-  liveHidden: boolean;
   /** LIVE 를 눌러 지금 방송을 확인하는 중 */
   liveChecking: boolean;
   /** 「다시보기 준비됨」 — 아직 보는 시청자에게 띠로 */
@@ -83,7 +81,6 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
     actions: [],
     banner: session.foreignLive === null ? null : { goTo: session.foreignLive },
     seekHidden: false,
-    liveHidden: false,
     liveChecking: session.liveChecking,
     vodReady: false,
     startHeld: isPlayerStartHeld(session),
@@ -109,6 +106,5 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
       vodReady: !covered,
     };
   }
-  if (phase.kind === 'vod') return { ...base, liveHidden: true };
   return base;
 }

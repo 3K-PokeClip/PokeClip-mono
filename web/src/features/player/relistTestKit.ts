@@ -76,7 +76,6 @@ export function loaded(url: string, cut?: boolean, firstMs = T0, lastEndMs = NOW
     firstMs,
     lastEndMs,
     targetDurationS: 4,
-    headSpanMs: MARGIN_MS,
   };
   return cut === undefined ? list : { ...list, startFloorCut: cut };
 }

@@ -12,7 +12,6 @@ const VIEW: SessionView = {
   actions: ['go-live'],
   banner: null,
   seekHidden: false,
-  liveHidden: false,
   liveChecking: false,
   vodReady: false,
   startHeld: false,

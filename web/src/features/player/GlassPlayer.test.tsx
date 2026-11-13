@@ -1083,23 +1083,6 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     }
   });
 
-  it('끝난 방송의 다시보기(liveHidden)는 LIVE 버튼을 숨긴다 — 눌러도 세션이 무시하는 죽은 버튼이 남지 않게(cx M)', () => {
-    const shown = renderWith({ session: fakeSession() });
-    expect(screen.getByRole('button', { name: '실시간으로 이동' })).toBeInTheDocument();
-    shown.unmount();
-    renderWith({ session: fakeSession({ liveHidden: true }) });
-    expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
-  });
-
-  it('세션 다시보기엔 시간 표기를 세우지 않는다 — 세션 축은 1시간에서 잘려 총 시간이 틀린다(POK-518)', () => {
-    const session = fakeSession({ liveHidden: true });
-    const source = { ...session.state.source, kind: 'vod' as const };
-    renderWith({ session: { ...session, state: { ...session.state, source } } });
-
-    expect(screen.getByRole('slider', { name: '다시보기 탐색' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '남은 시간 보기' })).toBeNull();
-  });
-
   it('덮개가 선 동안은 끊겨도 스피너를 겹치지 않는다 — 덮개가 없으면 띄운다(POK-439)', () => {
     vi.useFakeTimers();
     try {

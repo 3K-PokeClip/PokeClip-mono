@@ -293,7 +293,6 @@ async function rewindScreen(watched = true) {
       firstMs: OLD_F,
       lastEndMs: NOW - 2_000,
       targetDurationS: 4,
-      headSpanMs: 12_000,
     }),
   );
   if (watched) {

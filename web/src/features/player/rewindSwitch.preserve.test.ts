@@ -57,7 +57,6 @@ function sealedEnd(): PlaybackSessionState {
       firstMs: T0,
       lastEndMs: NOW,
       targetDurationS: 6,
-      headSpanMs: 18_000,
     },
     pos(p),
     { type: 'endlist' },
@@ -88,7 +87,6 @@ describe('끝남 대기의 이음 지점(현행 보존)', () => {
         firstMs: T0,
         lastEndMs: NOW,
         targetDurationS: 6,
-        headSpanMs: 18_000,
       },
       pos(p),
       streamPoll(liveReady(A2, NOW - 2_000, NOW + MIN), X_A),
@@ -121,7 +119,6 @@ describe('봉인된 끝 — 넘김 0 · 현행 제안 경로(T27)', () => {
         firstMs: T0,
         lastEndMs: NOW,
         targetDurationS: 6,
-        headSpanMs: 18_000,
       },
       streamPoll(liveReady(A2, NOW + MIN, NOW + 2 * MIN), X_A),
       { type: 'endlist' },
@@ -191,7 +188,6 @@ function rewindNear(): PlaybackSessionState {
       firstMs: T0,
       lastEndMs: NOW,
       targetDurationS: 6,
-      headSpanMs: 18_000,
     },
   ]);
 }

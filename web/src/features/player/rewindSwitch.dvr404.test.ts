@@ -27,7 +27,7 @@ import { isPlayerStartHeld, sessionView } from './sessionView';
 // 단언 — 계획 8-0). 사건 'dvr-segment-gone' · 효과 'hold-frame' 은 옛 판 타입에 없으므로
 // 음성 대조 트리에서는 옛 표의 default 가 받아 단언으로 FAIL 한다.
 //
-// 시각은 epoch ms 다. 되감기 목록 A1 의 끝 E = NOW · TD 4초 · 여유 12초 · 문은 R 에
+// 시각은 epoch ms 다. 되감기 목록 A1 의 끝 E = NOW · TD 4초 · 문은 R 에
 // 받은 응답이다. 방송 A(회차 r-A)를 보던 세션이 기준이다.
 
 const MIN = 60_000;
@@ -36,7 +36,6 @@ const NOW = T0 + 60 * MIN;
 const E = NOW;
 const P = E - 2_000;
 const R = NOW + 1_000;
-const MARGIN_MS = 12_000;
 const LIVE_URL = 'https://media.pokeclip.com/live/key-1/index.m3u8';
 const A1 = 'https://media.pokeclip.com/dvr/key-1/a1/index.m3u8';
 const A2 = 'https://media.pokeclip.com/dvr/key-1/a2/index.m3u8';
@@ -73,7 +72,6 @@ function loaded(url: string, firstMs: number, lastEndMs: number): SessionEvent {
     firstMs,
     lastEndMs,
     targetDurationS: 4,
-    headSpanMs: MARGIN_MS,
   };
 }
 

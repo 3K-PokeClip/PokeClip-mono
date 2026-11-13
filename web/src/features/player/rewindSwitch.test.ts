@@ -11,8 +11,6 @@ import {
   type XAnswer,
 } from './rewindSwitch';
 import { pos, resetEventKit, stamped, startRun, streamPoll } from './handoffTestKit';
-import { withPositionEpoch } from './liveHandoff';
-import { offeredRange, openVodHere } from './sessionShared';
 import { sessionView } from './sessionView';
 
 // 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 ·
@@ -88,7 +86,6 @@ function rewindAt(t: number): PlaybackSessionState {
         firstMs: T0,
         lastEndMs: NOW,
         targetDurationS: 4,
-        headSpanMs: 12_000,
       },
     ],
     [pos(t)],
@@ -440,7 +437,6 @@ describe('rewind 국면', () => {
           firstMs: NOW,
           lastEndMs: NOW + 2 * MIN,
           targetDurationS: 4,
-          headSpanMs: 12_000,
         },
       ],
     ]);
@@ -470,7 +466,7 @@ describe('rewind 국면', () => {
   });
 });
 
-describe('vod-offered · vod 국면', () => {
+describe('vod-offered 국면', () => {
   const VOD_RANGE = status({ ready: true, mode: 'vod', url: VOD, firstPdtMs: T0, headPdtMs: NOW });
 
   function offered(atEnd: boolean, p = T0 + 20 * MIN): PlaybackSessionState {
@@ -505,22 +501,6 @@ describe('vod-offered · vod 국면', () => {
     expect(effects).toEqual(pressed(p));
   });
 
-  it('창 하한 여유는 목록의 맨 앞 조각 셋 길이다 — TD 6 · 6초 + 4초 + 4초면 18초가 아니라 14초', () => {
-    const loaded = (headSpanMs: number) => ({
-      type: 'list-loaded' as const,
-      url: A1,
-      firstMs: T0,
-      lastEndMs: NOW,
-      targetDurationS: 6,
-      headSpanMs,
-    });
-    // 기본 여유(12초)와 다른 값이라야 받은 길이를 쓰는지 가른다
-    const state = run(liveWithEntry(), [[loaded(14_000)]]).state;
-    expect(state.edgeMarginMs).toBe(14_000);
-    // 길이를 모르면(0) 앞서 안 여유를 그대로 둔다
-    expect(run(state, [[loaded(0)]]).state.edgeMarginMs).toBe(14_000);
-  });
-
   it('「다시보기 보기」 — 짧은 VOD 의 단추도 보던 자리를 그대로 넘긴다(첫 조각으로 가두기는 다시보기 재생기가 한다)', () => {
     const short = status({
       ready: true,
@@ -551,7 +531,6 @@ describe('vod-offered · vod 국면', () => {
           firstMs: NOW - 28_000,
           lastEndMs: NOW,
           targetDurationS: 4,
-          headSpanMs: 12_000,
         },
       ],
       [pos(NOW - 5_000)],
@@ -577,37 +556,6 @@ describe('vod-offered · vod 국면', () => {
     ]);
     const out = run(start, [[{ type: 'seek', targetMs: T0 + MIN, view }]]).state;
     expect(out.source).toMatchObject({ kind: 'rewind', url: A1, startAtMs: T0 + MIN });
-  });
-
-  /**
-   * 같은 자리 다시보기(vod 국면) — 제안 중 404 는 이제 국면을 바꾸지 않아 사건으로는 닿지 않는다. 옛 404 행이 하던
-   * 전이(국면 · 소스 교체 · 위치 시대 올림)를 손으로 만든다
-   */
-  function vodByGone(): PlaybackSessionState {
-    const s = offered(true);
-    if (s.phase.kind !== 'vod-offered') throw new Error('다시보기 제안이 아니다');
-    return withPositionEpoch(s, openVodHere(s, offeredRange(s.phase))).state;
-  }
-
-  it('vod 국면의 시크는 문서 안 · 끝 도달은 국면 그대로다', () => {
-    const vod = vodByGone();
-    expect(vod.phase).toEqual({ kind: 'vod' });
-    const view = { lowerMs: T0, endMs: NOW };
-    expect(run(vod, [[{ type: 'seek', targetMs: T0 + MIN, view }]]).effects).toEqual([
-      { kind: 'seek-within', atMs: T0 + MIN },
-    ]);
-    expect(run(vod, [[{ type: 'seek', targetMs: NOW + MIN, view }]]).effects).toEqual([
-      { kind: 'seek-within', atMs: NOW },
-    ]);
-    const ended = run(vod, [[{ type: 'end-reached' }]]);
-    expect(ended.state).toEqual(vod);
-    expect(ended.effects).toEqual([]);
-  });
-
-  it('vod 의 LIVE 버튼은 숨긴다', () => {
-    const vod = vodByGone();
-    expect(sessionView(vod, NOW).liveHidden).toBe(true);
-    expect(run(vod, [[{ type: 'live-button', x: X_A, attempt: 0 }]]).effects).toEqual([]);
   });
 });
 

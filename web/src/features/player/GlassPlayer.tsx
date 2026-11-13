@@ -321,7 +321,6 @@ function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession
       // 덮개가 선 동안은 영상이 끝에서 멎은 것이다: 덮개가 까닭을 말하니 스피너를 겹치지 않는다
       buffering={buffering && view.cover === null}
       seekHidden={view.seekHidden}
-      liveHidden={view.liveHidden}
       overlay={
         <PlayerSessionOverlay
           view={view}
@@ -342,8 +341,6 @@ interface GlassPlayerBodyProps extends GlassPlayerProps {
   overlay?: ReactNode;
   /** 받을 목록이 없어 시크바를 숨긴다(재생 세션의 끝남 대기 덮개) */
   seekHidden?: boolean;
-  /** LIVE 버튼을 숨긴다(재생 세션의 끝난 방송 다시보기 — 설계 5.3절 vod 표) */
-  liveHidden?: boolean;
 }
 
 function GlassPlayerBody({
@@ -364,7 +361,6 @@ function GlassPlayerBody({
   buffering = false,
   overlay,
   seekHidden = false,
-  liveHidden = false,
 }: GlassPlayerBodyProps) {
   // 오버레이는 전체 화면에서만 선다(파일 머리 주석). 첫 진입은 켜진 채 시작하고, 사용자가 끄면
   // 그 선택이 다음 전체 화면까지 남는다 — 플레이어 토글의 통상 동작이다.
@@ -640,7 +636,6 @@ function GlassPlayerBody({
         )}
         <PlayerControls
           sim={sim}
-          liveHidden={liveHidden}
           chatToggle={
             overlayChat && fullscreen
               ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }

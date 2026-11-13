@@ -2,17 +2,17 @@ import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
 import type {
   DvrSegment,
   PlaybackSessionState,
-  PlaybackSource,
   SeekView,
   SessionEffect,
   SessionPhase,
+  SessionSource,
   Transition,
   XAnswer,
 } from './rewindSwitch';
 
-// 재생 세션 상태기계(rewindSwitch.ts)와 끝남 대기 표(endingWait.ts)가 나눠 쓰는 값과
-// 도구(POK-200 c13). 두 표가 서로의 값을 읽지 않도록 여기에 둔다 — 여기는
-// rewindSwitch 의 타입만 읽는다.
+// 재생 세션 상태기계(rewindSwitch.ts)와 끝남 대기 표(endingWait.ts) · 다시보기 제안 표
+// (vodOffered.ts)가 나눠 쓰는 값과 도구(POK-200 c13). 표들이 서로의 값을 읽지 않도록
+// 여기에 둔다 — 여기는 rewindSwitch 의 타입만 읽는다.
 
 /** 재접속 대기 = 재접속 창 300초 + 판정 여유 60초(M6 회차 닫힘 조건과 같다). 이 동안 회차별 404 는 「아직 모름」이다 */
 export const RESUME_WAIT_MS = 360_000;
@@ -31,7 +31,6 @@ export interface RewindRange {
 export const SESSION_NOTICES = {
   oldest: '가장 오래된 지점으로 옮겼어요',
   gap: '방송이 끊긴 구간이라 이어지는 자리로 옮겼어요',
-  vodStart: '다시보기는 이 시각부터 볼 수 있어요',
 } as const;
 
 /**
@@ -50,11 +49,9 @@ export function confirmedAtMs(session: PlaybackSessionState): number | null {
 }
 
 /**
- * 이어 볼 자리. 되감기 · 다시보기 소스는 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작
- * 요청(「목록 하한에서」 는 모름), 라이브 소스는 lastAtMs 다. 모르면 null. 첫 위치 전의
- * lastAtMs 는 앞 소스의 자리라 되감기 · 다시보기 소스에서는 읽지 않는다(다시보기 — c7 리뷰
- * V7-1: 다시보기로 옮긴 직후 리마운트가 앞 되감기 소스의 자리에서 서지 않게). 다시보기의
- * 시작 요청 null 은 「처음부터」 라 그대로 null 이다
+ * 이어 볼 자리. 되감기 소스는 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작 요청(「목록
+ * 하한에서」 는 모름), 라이브 소스는 lastAtMs 다. 모르면 null. 첫 위치 전의 lastAtMs 는 앞
+ * 소스의 자리라 되감기 소스에서는 읽지 않는다
  */
 export function resumeAtMs(session: PlaybackSessionState): number | null {
   if (session.source.kind === 'live') return session.lastAtMs;
@@ -109,10 +106,10 @@ export function deniesRound(session: PlaybackSessionState, x: XAnswer | undefine
 
 export function replace(
   session: PlaybackSessionState,
-  kind: PlaybackSource['kind'],
+  kind: SessionSource['kind'],
   url: string,
   startAtMs: number | null,
-): PlaybackSource {
+): SessionSource {
   return { kind, url, startAtMs, generation: session.source.generation + 1, strictStart: false };
 }
 
@@ -152,36 +149,6 @@ export function closePast(
 /** 다시보기 제안이 내민 회차 다시보기의 범위 */
 export function offeredRange(phase: Extract<SessionPhase, { kind: 'vod-offered' }>): RewindRange {
   return { url: phase.url, firstPdtMs: phase.firstPdtMs, headPdtMs: phase.headPdtMs };
-}
-
-// ── 다시보기 ──
-
-/**
- * 다시보기 범위(vod) 안에서 atMs 에 가장 가까운 시작 자리 — 첫 조각 앞이면 첫 조각,
- * 끝 여유(headPdtMs − 창 하한 여유) 뒤면 끝 여유. 하한이 이긴다(짧은 VOD 는 첫 조각 · R47)
- */
-export function vodStartAt(session: PlaybackSessionState, atMs: number, vod: RewindRange): number {
-  return Math.max(vod.firstPdtMs, Math.min(atMs, vod.headPdtMs - session.edgeMarginMs));
-}
-
-/**
- * 같은 자리 다시보기로 옮긴다 — 다시보기 제안 중 끝난 회차의 되감기 조각이 사라졌을 때(POK-528 W4).
- * 자리는 이어 볼 자리다 — 모르면 처음부터, 자리를 범위 안으로 가뒀으면 알린다. 제안 단추는 거둔다
- */
-export function openVodHere(session: PlaybackSessionState, vod: RewindRange): Transition {
-  const atMs = resumeAtMs(session);
-  const start = atMs === null ? null : vodStartAt(session, atMs, vod);
-  const effects: SessionEffect[] =
-    start === null || start === atMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
-  return {
-    state: {
-      ...session,
-      phase: { kind: 'vod' },
-      source: replace(session, 'vod', vod.url, start),
-      offer: null,
-    },
-    effects,
-  };
 }
 
 // ── 시크 ──
@@ -229,7 +196,7 @@ export function seekLive(
   };
 }
 
-/** 로드한 목록 안 시크(되감기 · vod) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로 */
+/** 로드한 목록 안 시크(되감기) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로 */
 export function seekInList(
   session: PlaybackSessionState,
   targetMs: number,
@@ -304,8 +271,8 @@ export function withDvrHole(
 /**
  * 그 세대 재생기의 조각이 아는 구멍인가 — 되감기 국면의 지금 세대 되감기 재생기이고, 지금 url 을 이미
  * 그 조각으로 다시 받았다. 다시 받는 중(relist)인지는 보지 않는다 — 화면을 붙이기 전이든 뒤든 같은
- * 답이다. 끝남 대기 · 다시보기 제안은 아니다 — 그 국면의 404 행(막힘 · 마지막 확인 · 같은 자리
- * 다시보기)이 출구다
+ * 답이다. 끝남 대기 · 다시보기 제안은 아니다 — 그 국면의 404 행(막힘 · 마지막 확인 · 받기만
+ * 멈추고 남은 버퍼를 틂)이 출구다
  */
 export function dvrHoleKnown(
   session: PlaybackSessionState,

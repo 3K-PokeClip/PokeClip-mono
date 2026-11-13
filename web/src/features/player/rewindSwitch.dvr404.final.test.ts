@@ -22,14 +22,13 @@ import { isPlayerStartHeld, sessionView } from './sessionView';
 // 감싸개 step 을 거친다(전이마다 불변식 단언 — 계획 8-0). 옛 판 표는 이 404 를 무시하므로
 // 음성 대조 트리에서는 단언으로 FAIL 한다.
 //
-// 시각은 epoch ms 다. 되감기 목록 A1 의 첫 조각 T0 · 끝 NOW · 여유 12초 · 끝남 대기는
+// 시각은 epoch ms 다. 되감기 목록 A1 의 첫 조각 T0 · 끝 NOW · 끝남 대기는
 // R 에 들었다(endingSince = R). 방송 A(회차 r-A)를 P20 에서 보던 세션이 기준이다.
 
 const MIN = 60_000;
 const T0 = Date.parse('2026-10-25T05:00:00.000Z');
 const NOW = T0 + 60 * MIN;
 const R = NOW + 1_000;
-const MARGIN_MS = 12_000;
 const P20 = T0 + 20 * MIN;
 const LIVE_URL = 'https://media.pokeclip.com/live/key-1/index.m3u8';
 const A1 = 'https://media.pokeclip.com/dvr/key-1/a1/index.m3u8';
@@ -66,7 +65,6 @@ function loaded(url: string, firstMs: number, lastEndMs: number): SessionEvent {
     firstMs,
     lastEndMs,
     targetDurationS: 4,
-    headSpanMs: MARGIN_MS,
   };
 }
 

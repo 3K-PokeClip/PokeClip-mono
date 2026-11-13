@@ -249,7 +249,6 @@ function playerSteps(
     firstMs: FIRST_F,
     lastEndMs: NOW,
     targetDurationS: 4,
-    headSpanMs: 12_000,
     startFloorCut: true,
   };
   const painted: SessionEvent = {

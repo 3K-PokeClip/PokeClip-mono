@@ -43,7 +43,6 @@ function listLoaded(url: string, lastEndMs: number): SessionEvent {
     firstMs: T0,
     lastEndMs,
     targetDurationS: 6,
-    headSpanMs: 18_000,
   };
 }
 
@@ -159,7 +158,15 @@ describe('재생 여부(A1)와 넘김 칸 후처리(A6)', () => {
     const handoff = { fromUrl: A1, endMs: NOW, atMs: NOW - 6_000, deadlineMs: NOW, seenAtMs: null };
     const handoffProbe = { seq: 1, fromUrl: A1, endMs: NOW };
     const prev = { ...live, handoff, handoffProbe };
-    const leftLive = settleHandoffFields(prev, { ...prev, phase: { kind: 'vod' } });
+    const offered = {
+      kind: 'vod-offered' as const,
+      url: A2,
+      firstPdtMs: T0,
+      headPdtMs: NOW,
+      atEnd: false,
+      stopped: null,
+    };
+    const leftLive = settleHandoffFields(prev, { ...prev, phase: offered });
     expect([leftLive.handoff, leftLive.handoffProbe]).toEqual([null, null]);
     const confirming = { ...prev, handoffProbe: null };
     expect(settleHandoffFields(confirming, confirming)).toBe(confirming);

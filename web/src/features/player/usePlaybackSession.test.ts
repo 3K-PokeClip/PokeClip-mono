@@ -179,7 +179,6 @@ describe('past 닫힘의 넘김(POK-547)', () => {
         firstMs: NOW - 28_000,
         lastEndMs: NOW,
         targetDurationS: 4,
-        headSpanMs: 12_000,
       },
       { type: 'position', atMs: at, playing: true, runMs: 0, epoch: 0 },
       { type: 'endlist' },

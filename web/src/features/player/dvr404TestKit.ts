@@ -158,7 +158,7 @@ function isCurrentPosition(before: PlaybackSessionState, event: SessionEvent): b
   return event.type === 'position' && event.epoch === before.positionEpoch;
 }
 
-/** T2 · T3 · T6 — 다시 받기 · 같은 url 다시 세우기 · 리마운트(되감기 · 다시보기)의 시작 */
+/** T2 · T3 · T6 — 다시 받기 · 같은 url 다시 세우기 · 리마운트(되감기)의 시작 */
 function assertRestart(
   before: PlaybackSessionState,
   event: SessionEvent,
@@ -178,9 +178,6 @@ function assertRestart(
   if (event.type !== 'remount' || source.kind !== before.source.kind) return;
   if (source.kind === 'rewind') {
     expect(source.startAtMs, 'T6 리마운트 ⇒ 시작 = restartAtMs(앞)').toBe(restartBySpec(before));
-  }
-  if (source.kind === 'vod') {
-    expect(source.startAtMs, 'T6 vod 리마운트 ⇒ 시작 = resumeAtMs(앞)').toBe(resumeBySpec(before));
   }
 }
 
