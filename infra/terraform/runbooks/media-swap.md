@@ -520,7 +520,7 @@ tg_health
 | 5 | ingest 전환 | NLB = B 1대 healthy |
 | 6 | http 전환 | ALB 셋 = B 1대 healthy |
 | 7 | 일관성 확인(읽기) | 네 그룹 모두 B 하나 · healthy |
-| 8 | A 회수 | 하루 관찰 뒤 |
+| 8 | A 회수 | 하루 관찰 뒤(PDT c0 교체는 앞당김 — 아래 8) |
 
 ### 정상 교체 2 — B 기동
 
@@ -2559,7 +2559,8 @@ git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커
 
 *   기존 상자의 user_data 는 갱신되지 않습니다(`ignore_changes`). 묶음 · 검사
     핀은 그 값으로 **새로 띄운 상자**에 들어갑니다 — c0 교체는 「설정 반영
-    교체」 로 합니다. 「제자리 전환」 으로 떠 있는 상자의 묶음 · compose
+    교체」 로 합니다(새 상자가 재고 부족으로 안 뜨면 「제자리 전환」 — kty
+    2026-11-13 K-1). 「제자리 전환」 으로 떠 있는 상자의 묶음 · compose
     렌더본을 바꿀 때도 같은 규칙입니다 — 새 묶음은 c0 하한 이상, 새
     렌더본에는 `timing-preflight` 서비스와 c0 하한 이상 검사 핀이 있어야
     합니다. 하한 아래 묶음 · 렌더본으로 제자리 전환하면 그 상자는 기동 전
@@ -2617,7 +2618,7 @@ PDT 머지 뒤 **첫 `prod/media` plan 전에** tfvars 의 `image_digests.timing
 |---|---|---|
 | 1 | 운영 SQL(PDT c1 정의) | 런타임 1단-가 런북 「PDT 재실행 조건」 · 방송 없는 시간대 |
 | 2 | **소비자 선배포 확인** | 아래 확인 줄 — 하나라도 「아니오」 면 3 으로 가지 않음 |
-| 3 | c0 교체 | 「설정 반영 교체」 — `image_digests.sidecar` · `timing_guard` · `bundle` 을 c0 하한 이상으로. 게이트는 NULL 그대로라 c0 는 새 회차도 판 NULL 로 엽니다 |
+| 3 | c0 교체 | 「설정 반영 교체」(새 상자가 안 뜨면 「제자리 전환」) — `image_digests.sidecar` · `timing_guard` · `bundle` 을 c0 하한 이상으로. 게이트는 NULL 그대로라 c0 는 새 회차도 판 NULL 로 엽니다 |
 | 4 | c0 기동 확인 | 아래 「c0 기동 확인」 — 관찰 기간 없이 서면 바로 5 |
 | 5 | 스위치 2 | 아래 선행 조건 → 런타임 1단-가 런북 「PDT 판 게이트 손 SQL」 — 방송 중이어도 됨(열린 회차는 판 고정) |
 | 6 | 재측정 | 넘김 ±250ms(갈래 넷 · 보정 ON/OFF) · M5a 이음 손실 0 — 판정 전에는 완료로 보고하지 않음 |
@@ -2705,7 +2706,9 @@ NULL 에도 같습니다. 정본은 media README 「PDT 알려진 한계」 입�
 것입니다. 스위치 2 뒤에는 이 신호에 따로 붙은 경보가 없습니다 — 판 2 회차
 VOD 가 `failed`(`validate`)로 나오면 운영자가 같은 스트림의
 `session_floor_rejected` 를 사이드카 저널에서 봅니다. 그리고 모든 Media 상자의 사이드카 라벨에 2 가 있습니다.
-상자마다 SSM 읽기 명령으로 확인하고 결과를 기록합니다.
+상자마다 SSM 읽기 명령으로 확인하고 결과를 기록합니다. c0 를 「제자리 전환」
+으로 넣은 상자는 c0 하한 아래 판 백업이 0 개인지도 같은 읽기로 확인합니다(위
+「c0 기동 확인(4)」 에서 지운 것 — 남아 있으면 스위치 2 를 올리지 않습니다).
 
 ```shell
 docker image inspect --format \
@@ -2713,6 +2716,8 @@ docker image inspect --format \
   "$(docker inspect --format '{{.Config.Image}}' \
     "$(docker ps -q --filter label=com.docker.compose.service=sidecar)")"
 # 기대: null,2
+ls -d /etc/pokeclip-media/rollback-v* 2>/dev/null || echo 'ROLLBACK NONE'
+# 기대(c0 를 제자리 전환으로 넣은 상자): ROLLBACK NONE, 또는 c0 판 번호 이상의 이름만
 ```
 
 **왜 꼭 지켜야 하나(라벨 2).** 쓰기자 거부(`legacy_writer_refused`)는 INSERT
