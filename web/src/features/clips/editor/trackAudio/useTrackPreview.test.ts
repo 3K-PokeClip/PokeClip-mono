@@ -1502,6 +1502,96 @@ describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => 
     expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toHaveLength(1);
   });
 
+  describe('응답에 행이 없어 기다리는 동안 그 창 영상이 실패하거나 성공한다', () => {
+    type Props = { loaded: LoadedTrackWindow | null; failedKey: string | null };
+    /** 행이 없는 응답으로 waiting 이 된 창 — 음량을 바꿔 둔 편집본이라 영상 소리는 꺼져 있다 */
+    const mountWaiting = async () => {
+      vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([]));
+      const node = video();
+      const hook = renderHook(
+        (props: Props) =>
+          useTrackPreview({
+            streamId: 's-1',
+            window: THREE,
+            ...props,
+            video: node,
+            createContext: () => fakeContext().ctx as never,
+          }),
+        { initialProps: { loaded: null, failedKey: null } as Props },
+      );
+      act(() => hook.result.current.setGains([0, 1, 0]));
+      await advance(50);
+      expect(hook.result.current.status).toBe('waiting');
+      expect(node.muted).toBe(true);
+      return { ...hook, node };
+    };
+    const accessCalls = () => vi.mocked(requestSegmentAudioAccess).mock.calls.length;
+
+    it(`영상이 실패하면 바로 못 부름으로 영상 소리를 되살린다: 상한 ${AUDIO_WAIT_LIMIT}회(약 5분)까지 무음 · waiting 에 남지 않는다`, async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { result, rerender, node } = await mountWaiting();
+
+      rerender({ loaded: null, failedKey: THREE.key });
+      await advance(50);
+
+      expect(result.current.status).toBe('unavailable');
+      expect(node.muted).toBe(false);
+      // 고리도 멈춘다 — 끊긴 받기로 상한까지 다시 묻다 그만뒀다고 경고하지 않는다
+      const asked = accessCalls();
+      await advance(AUDIO_WAIT_MS * AUDIO_WAIT_LIMIT + 1000);
+      expect(accessCalls()).toBe(asked);
+      expect(result.current.status).toBe('unavailable');
+      expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toEqual([]);
+    });
+
+    it('다시 묻는 중에 영상이 실패해도 고리가 멈춘다: 끊긴 다시 묻기가 기다림으로 돌아가지 않는다', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { result, rerender } = await mountWaiting();
+      vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(new Promise(() => {}) as never);
+      await advance(AUDIO_WAIT_MS);
+      const asked = accessCalls();
+
+      rerender({ loaded: null, failedKey: THREE.key });
+      await advance(AUDIO_WAIT_MS * AUDIO_WAIT_LIMIT + 1000);
+
+      expect(result.current.status).toBe('unavailable');
+      expect(accessCalls()).toBe(asked);
+      expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toEqual([]);
+    });
+
+    it('실패 뒤 영상이 그 창을 다시 받기 시작하면 소리도 다시 묻는다(6a15cd31)', async () => {
+      const { result, rerender } = await mountWaiting();
+      rerender({ loaded: null, failedKey: THREE.key });
+      await advance(50);
+      expect(result.current.status).toBe('unavailable');
+      const asked = accessCalls();
+
+      vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2, 3]));
+      rerender({ loaded: null, failedKey: null });
+      await advance(50);
+      expect(accessCalls()).toBe(asked + 1);
+      rerender({ loaded: loadedOf(THREE), failedKey: null });
+      await advance(50);
+
+      expect(result.current.status).toBe('ready');
+    });
+
+    it('영상이 그 창을 받아도 행이 오기 전까지는 그대로 기다린다(무음 · 고리는 계속 묻는다)', async () => {
+      const { result, rerender, node } = await mountWaiting();
+      const asked = accessCalls();
+
+      rerender({ loaded: loadedOf(THREE), failedKey: null });
+      await advance(50);
+      expect(result.current.status).toBe('waiting');
+      expect(node.muted).toBe(true);
+      await advance(AUDIO_WAIT_MS);
+
+      expect(accessCalls()).toBe(asked + 1);
+      expect(result.current.status).toBe('waiting');
+      expect(node.muted).toBe(true);
+    });
+  });
+
   it('고리는 failed 머리를 다시 읽지 않는다: 다시 판독은 missing · 아직 안 읽은 seq 만이다(c10b′ r1 3번 · 보안 M-1)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const win = { ...THREE, segs: THREE.segs.map((seg) => ({ ...seg, timing: null })) };

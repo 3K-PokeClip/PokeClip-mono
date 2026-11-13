@@ -204,10 +204,14 @@ function waitWindowHeads(
 /**
  * ② 기다림 고리 하나. 처음 받은 소리를 놓고, 사유가 남으면 AUDIO_WAIT_MS 마다 다시 받아 트랙이 바뀌면 다시 놓는다. 다시 받기가
  * 실패하면 들고 있는 소리로 다음 차례를 기다린다(차례는 센다). AUDIO_WAIT_LIMIT 번 다시 받고도 사유가 남으면 giveUp 이다.
+ * 처음 받은 소리를 놓은 뒤에 영상이 그 창을 못 받으면(videoWindow 거부) 고리를 멈추고 fail 이다: 행이 없는 응답은 닻을 묻지
+ * 않고 끝나 그 실패를 받지 못하고, 끊긴 다시 받기는 기다림으로 돌아가 상한(약 5분)까지 waiting · 무음이었다(close r2 cx M).
  * 돌려준 함수가 멈춘다
  */
 function runAudioWait(steps: {
   first: Promise<TrackAudioLoad>;
+  /** 영상이 그 창을 받는 기다림 — 거부되면 그 창의 닻은 오지 않는다 */
+  videoWindow: Promise<unknown>;
   refresh: (previous: TrackAudioLoad) => Promise<TrackAudioLoad>;
   reasons: (load: TrackAudioLoad) => WaitReason[];
   show: (load: TrackAudioLoad) => void;
@@ -217,6 +221,15 @@ function runAudioWait(steps: {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let rounds = 0;
+  let shown = false;
+  let videoFailed = false;
+  /** 놓은 소리가 있는데 영상이 그 창을 못 받았다. 놓기 전이면 first 가 거부돼 fail 로 간다 */
+  const failShown = () => {
+    if (stopped || !shown || !videoFailed) return;
+    stopped = true;
+    clearTimeout(timer);
+    steps.fail();
+  };
   const wait = (load: TrackAudioLoad) => {
     const reasons = steps.reasons(load);
     if (stopped || reasons.length === 0) return;
@@ -242,12 +255,18 @@ function runAudioWait(steps: {
     (load) => {
       if (stopped) return;
       steps.show(load);
+      shown = true;
+      failShown();
       wait(load);
     },
     () => {
       if (!stopped) steps.fail();
     },
   );
+  steps.videoWindow.catch(() => {
+    videoFailed = true;
+    failShown();
+  });
   return () => {
     stopped = true;
     clearTimeout(timer);
@@ -515,6 +534,7 @@ function startWindowAudio(run: WindowAudioRun): () => void {
   let stopHeads: () => void = () => undefined;
   const stop = runAudioWait({
     first,
+    videoWindow: remuxed,
     // 판 NULL 창의 빠진 머리도 같은 차례에 다시 읽는다 — 소리 주소 응답 하나를 나눠 쓴다(windowAudioAccess). 고리가
     // 기다리는 것은 missing 이라 failed 는 다시 읽지 않는다(보안 검수 c10b′ M-1 — 다시 시도는 저장 쪽 몫)
     refresh: (previous) => {
