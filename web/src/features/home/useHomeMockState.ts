@@ -12,6 +12,19 @@ import { infoWaitOver } from '@/features/broadcast/infoWait';
 import { onAirLabel, primaryInfo, type PlatformLatest } from '@/features/broadcast/platformView';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
+  askRound,
+  isoMs,
+  pickRoundUrls,
+  ROW_READ_PARALLEL,
+  type RoundAskRow,
+} from '@/features/broadcast/vod/vodRoundAsk';
+import {
+  FRESH_ROW_VOD,
+  foldRowVod,
+  type RowVodMemory,
+} from '@/features/broadcast/vod/vodRoundBadge';
+import { mediaControlBaseUrl } from '@/features/player/mediaSource';
+import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
   libraryQueryOptions,
@@ -257,6 +270,8 @@ interface HomeMemory {
   liveIds: string[];
   /** 방송별 카드 수와 잰 시각 */
   cardCounts: Record<string, { count: number; at: number }>;
+  /** 격자의 방금 끝난 방송마다 회차 경로로 정한 다시보기 판정(지난 방송 목록과 같은 꼴). 한 시간이 지나면 빠진다 */
+  roundVods: Record<string, RowVodMemory>;
 }
 
 type HomeData = Loaded & { memory: HomeMemory };
@@ -306,7 +321,7 @@ async function loadHome(
     ...pastAll.filter((b) => inRange(b.startedAt, lastWeekStart, Infinity)).map((b) => b.streamId),
   ]);
   const cardCounts: HomeMemory['cardCounts'] = {};
-  await runLimited([...counted], CARD_READ_PARALLEL, async (streamId) => {
+  const readCards = runLimited([...counted], CARD_READ_PARALLEL, async (streamId) => {
     if (signal.aborted) return;
     const known = previous?.cardCounts[streamId];
     if (known && !fresh.has(streamId) && now - known.at < CARD_CACHE_MS) {
@@ -322,6 +337,10 @@ async function loadHome(
     // 빈 값을 기억하면 5분 동안 카드 수가 실제보다 적게 보인다(리뷰 #299 2차)
     else if (known) cardCounts[streamId] = known;
   });
+  const [, roundVods] = await Promise.all([
+    readCards,
+    askJustEndedRounds(past, previous, now, signal),
+  ]);
   const cardCountOf = (streamId: string) => cardCounts[streamId]?.count ?? 0;
 
   // 주는 방송 시작 시각으로 가른다 — 일요일 밤에 켜 월요일까지 간 방송은 지난주 방송이다.
@@ -374,16 +393,21 @@ async function loadHome(
 
   const vods: HomeVod[] = past.map((b) => {
     let badge: VodBadge | undefined;
-    // 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안만이다(POK-254 — 지난 방송 목록의 「방금 종료」와 같은 한도). 홈은 회차를 묻지
-    // 않는다: 목록은 다시보기가 없으면 한 시간 안이어도 곧바로 「다시보기가 없어요」지만(POK-568), 홈은 그 한 시간을 「준비 중」으로
-    // 두고 그 뒤에는 다시보기가 없어도 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다.
+    // 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안(POK-254 — 지난 방송 목록의 「방금 종료」와 같은 한도)이면서 회차 경로가 아직
+    // 다시보기를 세우지 않았을 때만이다(POK-568 — 목록과 같은 판정). 준비 중 · 아직 답 없음 · 물을 수 없음(실패 · 제어면 없음)이면
+    // 단다. 다시보기가 없다는 답이면 달지 않는다: 홈은 다시보기가 없어도 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다.
+    // 한 시간이 지난 방송은 묻지 않고 달지 않는다.
     // D-n은 지난 방송 목록이 붉게 다는 경계(3일) 안에서만 단다 —
     // 그보다 먼 기한은 홈이 말하지 않고 「60일 보관」 한 줄과 지난 방송 목록이 맡는다. 녹화 없이 `ended`에 머문 방송도 단다 —
     // 기한이 지나면 카드·채팅이 함께 지워지고, 지난 방송 목록도 행 상태와 상관없이 D-day를 단다
     const dday = ddayFor(b.vodExpiresAt, new Date(now));
     const expired = dday.kind === 'expired';
     if (expired) badge = { kind: 'expired' };
-    else if (b.status === 'ended' && isJustEnded(b.endedAt, new Date(now)))
+    else if (
+      b.status === 'ended' &&
+      isJustEnded(b.endedAt, new Date(now)) &&
+      (roundVods[b.streamId]?.badge ?? 'preparing') === 'preparing'
+    )
       badge = { kind: 'preparing' };
     else if (dday.kind === 'active' && dday.urgent) badge = { kind: 'dday', label: dday.label };
     const duration =
@@ -420,8 +444,45 @@ async function loadHome(
     lastBroadcast: latestStart
       ? { date: dateLabel(latestStart), ago: daysAgoLabel(latestStart, new Date(now)) }
       : null,
-    memory: { pastAll, pastReadAt, liveIds: [...liveIds], cardCounts },
+    memory: { pastAll, pastReadAt, liveIds: [...liveIds], cardCounts, roundVods },
   };
+}
+
+/**
+ * 격자에 보이는 방송 중 끝난 지 한 시간 안인 것만 회차 경로를 묻고(POK-568) 판정을 접는다. 무엇을 · 몇 개를 동시에 묻는지와 답을
+ * 접는 규칙은 지난 방송 목록과 같다(vodRoundAsk · vodRoundBadge): 다시보기가 섰거나 없다고 굳은 방송은 다시 묻지 않고, 나머지는
+ * 홈 주기마다 다시 묻는다. 돌려주는 기억에는 그 방송들만 남는다 — 한 시간이 지난 방송의 판정은 쓰지 않는다
+ */
+async function askJustEndedRounds(
+  past: readonly RoundAskRow[],
+  previous: HomeMemory | undefined,
+  now: number,
+  signal: AbortSignal,
+): Promise<Record<string, RowVodMemory>> {
+  const justEnded = past.filter((b) => isJustEnded(b.endedAt, new Date(now)));
+  const vodOf = (streamId: string) => previous?.roundVods[streamId] ?? FRESH_ROW_VOD;
+  const roundVods: Record<string, RowVodMemory> = Object.fromEntries(
+    justEnded.map((b) => [b.streamId, vodOf(b.streamId)]),
+  );
+  const controlBase = mediaControlBaseUrl();
+  if (controlBase === null) return roundVods;
+  const urls = pickRoundUrls(justEnded, vodOf, controlBase, new Date(now));
+  const asks = justEnded.flatMap((row) => {
+    const url = urls.get(row.streamId);
+    return url === undefined ? [] : [{ row, url }];
+  });
+  await runLimited(asks, ROW_READ_PARALLEL, async ({ row, url }) => {
+    if (signal.aborted) return;
+    const answer = await askRound(url, controlBase, signal);
+    // 못 받은 답도 접는다(askedAt 을 세운다). 404 유예의 원점은 명부 endedAt 이다
+    roundVods[row.streamId] = foldRowVod(
+      vodOf(row.streamId),
+      answer,
+      Date.now(),
+      isoMs(row.endedAt),
+    );
+  });
+  return roundVods;
 }
 
 const EMPTY_WEEK: BroadcastWeek = { broadcasts: 0, cards: 0 };

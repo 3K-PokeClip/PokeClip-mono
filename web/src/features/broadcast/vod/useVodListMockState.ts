@@ -1,11 +1,6 @@
 'use client';
 
-import {
-  broadcastTitle,
-  fetchAllBroadcasts,
-  fetchAllJumpCards,
-  mediaStreamId,
-} from '@/api/clipEditor';
+import { broadcastTitle, fetchAllBroadcasts, fetchAllJumpCards } from '@/api/clipEditor';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
@@ -23,30 +18,15 @@ const CARD_COUNT_TTL_MS = 10 * 60_000;
  * 카드 목록을 한꺼번에 불렀다(리뷰 1라운드). 남은 것은 다음 주기로 넘어가 흩어진다
  */
 const CARD_RECOUNT_PER_POLL = 20;
-/**
- * 한 주기에 회차 경로를 묻는 오래된 미결 방송(끝난 지 한 시간이 지났고 표지가 아직 안 굳은 것) 수의 상한(POK-568 · kty X2).
- * 처음 보는 방송과 방금 끝난 방송은 이 상한 밖이라 다 묻는다 — 카드 수 다시 세기와 같은 꼴이다
- */
-const ROUND_ASKS_PER_POLL = 20;
-/** 방송마다 묻는 읽기의 동시 수. 방송이 많은 계정이 처음 들어올 때 전체 이력을 한꺼번에 묻지 않게 한다 */
-const ROW_READ_PARALLEL = 6;
 import { useCallback, useMemo, useState } from 'react';
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
 import { runLimited } from '@/lib/runLimited';
 import { useToast } from '@/ui';
-import { trackApiActivity } from '@/api/client';
-import { fetchRewindStatus, roundRewindUrl, type RewindStatusResult } from '@/api/rewindStatus';
 import { mediaControlBaseUrl } from '@/features/player/mediaSource';
-import { REWIND_REQUEST_TIMEOUT_MS } from '@/features/player/useRewindStatus';
-import { ddayFor, excludeLive, filterByPeriod, isJustEnded } from './vodListView';
-import {
-  FRESH_ROW_VOD,
-  foldRowVod,
-  isRowVodSettled,
-  pickRoundAsks,
-  type RowVodMemory,
-} from './vodRoundBadge';
+import { excludeLive, filterByPeriod, isJustEnded } from './vodListView';
+import { askRound, isoMs, pickRoundUrls, ROW_READ_PARALLEL } from './vodRoundAsk';
+import { FRESH_ROW_VOD, foldRowVod, type RowVodMemory } from './vodRoundBadge';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
@@ -196,12 +176,6 @@ interface WireBroadcast {
   title?: string | null;
 }
 
-function isoMs(iso: string | null): number | null {
-  if (!iso) return null;
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? null : t;
-}
-
 /** 방송마다 재 둔 값. 쿼리 데이터에 함께 두어 화면을 떠났다 돌아와도 남는다: 안 그러면 들어올 때마다 전체 이력의 카드를 다시 센다 */
 interface RowMemory {
   /** 아직 한 번도 못 셌으면 null */
@@ -216,68 +190,6 @@ interface VodListData {
   rows: VodBroadcast[];
   visuals: Record<string, VodRowVisual>;
   memory: Record<string, RowMemory>;
-}
-
-/**
- * 회차 경로를 한 번 묻는다(POK-568). REWIND_REQUEST_TIMEOUT_MS 안에 답이 없으면 끊고 「잠시 불가」다 — 화면 폴링
- * (useRewindStatus)과 같은 시한이다. 쿼리가 끊기면(내려감 · 채널 전환) 요청도 끊고 던진다: react-query 가 그 주기를 버린다.
- * apiFetch 밖 요청이라 직접 알린다: 목록이 이 답을 기다리니 채널 전환 화면도 기다린다
- */
-async function askRound(
-  url: string,
-  controlBase: string,
-  signal: AbortSignal,
-): Promise<RewindStatusResult> {
-  const request = new AbortController();
-  let timedOut = false;
-  const deadline = window.setTimeout(() => {
-    timedOut = true;
-    request.abort();
-  }, REWIND_REQUEST_TIMEOUT_MS);
-  const onAbort = () => request.abort();
-  signal.addEventListener('abort', onAbort);
-  if (signal.aborted) request.abort();
-  try {
-    return await trackApiActivity(() => fetchRewindStatus(url, controlBase, request.signal));
-  } catch (e) {
-    // fetchRewindStatus 는 끊긴 요청만 던진다. 시한이 끊었으면 「잠시 불가」, 쿼리가 끊었으면 그대로 던진다
-    if (timedOut && !signal.aborted) return { kind: 'unavailable' };
-    throw e;
-  } finally {
-    window.clearTimeout(deadline);
-    signal.removeEventListener('abort', onAbort);
-  }
-}
-
-/**
- * 이번 주기에 회차 경로를 물을 방송과 그 경로(POK-568). 물을 수 있는 방송은 ended · 보관 만료 아님 · 표지가 아직 안 굳음
- * (isRowVodSettled) · 경로를 만들 수 있음(제어면 주소 · 키 꼴)이고, 그중 pickRoundAsks 가 고른 것만 묻는다. 제어면 주소가
- * 없으면 비어 표지는 「VOD 준비 중」에 머문다
- */
-function pickRoundUrls(
-  all: readonly WireBroadcast[],
-  vodOf: (streamId: string) => RowVodMemory,
-  controlBase: string | null,
-  now: Date,
-): Map<string, string> {
-  const urls = new Map<string, string>();
-  for (const b of all) {
-    if (b.status !== 'ended' || isRowVodSettled(vodOf(b.streamId))) continue;
-    if (ddayFor(b.vodExpiresAt, now).kind === 'expired') continue;
-    const url = roundRewindUrl(controlBase, mediaStreamId(b), b.streamId);
-    if (url !== null) urls.set(b.streamId, url);
-  }
-  const asks = pickRoundAsks(
-    all
-      .filter((b) => urls.has(b.streamId))
-      .map((b) => ({
-        streamId: b.streamId,
-        justEnded: isJustEnded(b.endedAt, now),
-        askedAt: vodOf(b.streamId).askedAt,
-      })),
-    ROUND_ASKS_PER_POLL,
-  );
-  return new Map([...urls].filter(([streamId]) => asks.has(streamId)));
 }
 
 /** 목록 한 벌. 목록을 못 읽으면 던진다: react-query가 지난 목록을 그대로 두고 다음 주기에 다시 읽는다 */
