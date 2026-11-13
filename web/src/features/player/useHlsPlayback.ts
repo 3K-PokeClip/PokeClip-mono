@@ -168,6 +168,11 @@ export interface PlaybackHooks extends PositionHooks {
    * 기본(무음 · 70)이다
    */
   initialSound?: PlayerSound | null;
+  /**
+   * 영상 노드의 소리 상태가 바뀌었다(volumechange — 사람의 조작 · 무음 대체 모두 · POK-547). 다시보기 재생기가 다시 설 때 그
+   * 값으로 서게 부른 쪽이 기억한다
+   */
+  onSoundChange?: (sound: PlayerSound) => void;
 }
 
 export type { LivePosition } from './livePosition';
@@ -726,8 +731,10 @@ export function useHlsPlayback(
       hooksRef.current.onNotice?.(SESSION_NOTICES.oldest);
     };
     const onVolumeChange = () => {
-      setMuted(video.muted);
-      setVolumeState(Math.round(video.volume * 100));
+      const sound = { muted: video.muted, volume: Math.round(video.volume * 100) };
+      setMuted(sound.muted);
+      setVolumeState(sound.volume);
+      hooksRef.current.onSoundChange?.(sound);
     };
     // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 라이브의 멈춘 자리(5.3.1절)도 여기서
     // 본다

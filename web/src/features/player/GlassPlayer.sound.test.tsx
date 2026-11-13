@@ -1,5 +1,5 @@
 import { act, type ComponentProps } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { GlassPlayer } from '@/features/player/GlassPlayer';
@@ -234,6 +234,28 @@ describe('다시보기 재생기 — 넘겨받은 소리 상태를 첫 재생 �
   });
 });
 
+describe('다시보기 재생기 — 바뀐 소리를 부른 쪽에 알린다', () => {
+  it('사람이 음소거 · 음량을 바꾸면 영상 노드의 값을 그때마다 알린다', async () => {
+    const onVodSoundChange = vi.fn();
+    await renderPlayer({ vod: VOD, vodSound: LOUD_30, onVodSoundChange });
+    await manifestParsed();
+
+    fireEvent.click(screen.getByRole('button', { name: '음소거' }));
+    expect(onVodSoundChange).toHaveBeenLastCalledWith({ muted: true, volume: 30 });
+    fireEvent.change(volumeSlider(), { target: { value: '50' } });
+    expect(onVodSoundChange).toHaveBeenLastCalledWith({ muted: false, volume: 50 });
+  });
+
+  it('소리 켠 첫 재생이 막혀 무음으로 대체하면 그 무음도 알린다', async () => {
+    results = ['NotAllowedError'];
+    const onVodSoundChange = vi.fn();
+    await renderPlayer({ vod: VOD, vodSound: LOUD_30, onVodSoundChange });
+    await manifestParsed();
+
+    expect(onVodSoundChange).toHaveBeenLastCalledWith({ muted: true, volume: 30 });
+  });
+});
+
 describe('넘겨받은 소리가 없는 재생기 — 지금 그대로(무음 · 70 · 막히면 재생 단추)', () => {
   function fakeSession(): PlaybackSession {
     const state = openSession({
@@ -274,6 +296,19 @@ describe('넘겨받은 소리가 없는 재생기 — 지금 그대로(무음 ·
       expect(seen).toEqual([{ muted: true, volume: expect.closeTo(0.7) }]);
       expect(screen.getByRole('button', { name: '음소거 해제' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+    },
+  );
+
+  it.each(players.slice(1))(
+    '%s: 사람이 소리를 바꿔도 다시보기 소리로 알리지 않는다',
+    async (_name, props) => {
+      const onVodSoundChange = vi.fn();
+      await renderPlayer({ ...props, onVodSoundChange });
+      await manifestParsed();
+
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+      fireEvent.change(volumeSlider(), { target: { value: '50' } });
+      expect(onVodSoundChange).not.toHaveBeenCalled();
     },
   );
 });

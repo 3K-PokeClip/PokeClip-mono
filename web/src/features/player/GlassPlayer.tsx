@@ -111,6 +111,11 @@ export interface GlassPlayerProps {
    */
   vodSound?: PlayerSound | null;
   /**
+   * 회차 다시보기 재생기의 소리 상태가 바뀌었다(사람의 조작 · 무음 대체 — POK-547). 부른 쪽이 기억해 다시 서는 재생기의
+   * vodSound 로 넘긴다. 라이브 · 재생 세션 재생기는 부르지 않는다
+   */
+  onVodSoundChange?: (sound: PlayerSound) => void;
+  /**
    * 다시보기를 이 자리(방송 기준 초)부터 튼다. 회차 다시보기는 목록이 서 있을 때마다 읽어 그 자리로 옮기고 onStartApplied 로
    * 알린다(useVodPlayback)
    */
@@ -238,6 +243,7 @@ function VodGlassPlayer(props: GlassPlayerProps & { vod: VodSource }) {
     props.startAtSeconds ?? null,
     props.onStartApplied,
     props.vodSound ?? null,
+    props.onVodSoundChange,
   );
   const buffering = useMediaBuffering(videoRef);
   // 화면에 붙은 자리를 모르면 알리지 않는다: 채팅은 직전 자리를 둔다

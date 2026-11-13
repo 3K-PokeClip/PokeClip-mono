@@ -181,6 +181,8 @@ function vodPhase(input: {
  * @param onStartApplied 받아 둔 자리를 적용했다(옮김 · 범위 밖이라 첫 조각으로 자름) — 부른 쪽이 받아 둔 자리를 비운다. 그
  *   시각의 영상 자리를 모르면 부르지 않고 남겨 둔다(다음 목록에서 다시 해 본다)
  * @param initialSound 세션 재생기에서 넘겨받은 소리 상태(POK-547). 재생기가 설 때 첫 재생 전에 싣는다. 없으면 기본(무음 · 70)
+ * @param onSoundChange 영상 노드의 소리 상태가 바뀌었다(사람의 조작 · 무음 대체 — POK-547). 부른 쪽이 기억해 재생기를 다시
+ *   세울 때 initialSound 로 넘긴다
  */
 export function useVodPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
@@ -193,6 +195,7 @@ export function useVodPlayback(
   startAtSeconds: number | null = null,
   onStartApplied?: () => void,
   initialSound: PlayerSound | null = null,
+  onSoundChange?: (sound: PlayerSound) => void,
 ): PlayerSimulation & { positionSeconds: number | null; phase: VodPhase } {
   // useState 가 아니라 useReducer 다(usePastVod 와 같은 까닭). useState 의 갱신은 마지막으로 렌더한 상태로 결과를 미리 셈해
   // 같으면 렌더를 건너뛰는데, 그 상태가 버려진 렌더의 것이면 지금 주소의 목록 · 자리를 「다른 주소」로 셈해 버린다
@@ -223,8 +226,9 @@ export function useVodPlayback(
         }),
       // 재생기는 설 때 한 번만 읽는다 — 그 뒤 바뀐 값은 재생기를 다시 세울 때(다시 마운트) 쓰인다
       initialSound,
+      onSoundChange,
     }),
-    [initialSound],
+    [initialSound, onSoundChange],
   );
   const sim = useHlsPlayback(
     videoRef,

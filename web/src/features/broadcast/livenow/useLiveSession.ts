@@ -69,10 +69,13 @@ export interface LiveSession {
   /** past 로 닫힐 때 세션이 확인한 다시보기(ready:true). past 로 닫힌 그 방송|영상 키에서만 낸다 */
   pastSeenVod: RewindRange | null;
   /**
-   * past 로 닫힐 때 세션 재생기의 소리 상태 — 다시보기 재생기가 첫 재생 전에 싣는다. 시작을 적용하거나 옮겨도 남는다. past
-   * 로 닫힌 그 방송|영상 키에서만 낸다
+   * 다시보기 재생기가 설 때 첫 재생 전에 실을 소리 상태 — past 로 닫힐 때 세션 재생기의 값이고, 이 화면의 다시보기 재생기에서
+   * 바뀌면 그 값이다(끝난 뒤 들어온 화면 포함). 시작을 적용하거나 옮겨도 남는다. 그 값을 정한 방송|영상 키에서만 낸다. 없으면
+   * null 이고 재생기는 기본(무음 · 70)으로 선다
    */
-  pastSound: PlayerSound | null;
+  vodSound: PlayerSound | null;
+  /** 다시보기 재생기의 소리 상태가 바뀌었다 — 지금 방송|영상 키로 기억해, 재생기가 다시 설 때(출입증 403 등) 그 값으로 선다 */
+  rememberVodSound: (sound: PlayerSound) => void;
   /** 이어 틀 자리를 소모한다 — 닫힘 기록 · 확인한 다시보기 · 소리는 둔다. 다시보기가 시작을 적용하거나 옮길 때 부른다 */
   consumePastResume: () => void;
   /** 「새 방송이 시작됐어요」 띠의 방송 번호 */
@@ -80,13 +83,22 @@ export interface LiveSession {
   onBand: () => void;
 }
 
-/** past 로 닫힌 기록 — 키 · 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 · 소리 상태(POK-547) */
+/** past 로 닫힌 기록 — 키 · 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기(POK-547) */
 interface ClosedPast {
   key: string;
   sinceMs: number | null;
   resumeAtMs: number | null;
   seenVod: RewindRange | null;
-  sound: PlayerSound | null;
+}
+
+/** 다시보기 재생기가 설 때 실을 소리 상태와 그 값을 정한 방송|영상 키(POK-547) */
+interface VodSoundMemo {
+  key: string;
+  sound: PlayerSound;
+}
+
+function sameSound(a: PlayerSound, b: PlayerSound): boolean {
+  return a.muted === b.muted && a.volume === b.volume;
 }
 
 /**
@@ -144,9 +156,12 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const pinned = vodStreamIdFromPathname(pathname ?? '') !== null || Boolean(streamParam);
   const streamerId = useChannelStreamerId();
   const { toast, dismiss } = useToast();
-  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 · 소리 상태 — 같은 키로는 세션을 다시 열지 않는다
+  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 — 같은 키로는 세션을 다시 열지 않는다
   // (cc H1 ②). 키 비교라 지울 필요가 없다
   const [closedPast, setClosedPast] = useState<ClosedPast | null>(null);
+  // 다시보기 재생기가 설 때 실을 소리 — past 닫힘이 넘긴 값으로 놓고, 다시보기 재생기에서 바뀌면 덮는다. 이 화면(층)의 상태라
+  // 화면을 떠나면 사라진다. 키 비교라 지울 필요가 없다
+  const [vodSoundMemo, setVodSoundMemo] = useState<VodSoundMemo | null>(null);
   const onChosenRef = useRef(input.onChosenPastClose);
   onChosenRef.current = input.onChosenPastClose;
   // 세션을 연 적 있는 키 — 이 키로 연 적 없이 명부가 ended 면 끝난 뒤 들어온 화면(A)이다(지난 방송 화면 포함 · POK-546)
@@ -179,8 +194,9 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
           sinceMs: closed.endingSinceMs,
           resumeAtMs: closed.handoff?.resumeAtMs ?? null,
           seenVod: closed.handoff?.seenVod ?? null,
-          sound: closed.handoff?.sound ?? null,
         });
+        const sound = closed.handoff?.sound ?? null;
+        setVodSoundMemo(sound === null ? null : { key: closed.accessKey, sound });
         // 같은 동기 호출이라 닫힘 · 카드 비움이 한 그리기로 묶인다
         if (closed.handoff?.chosen === true) onChosenRef.current?.();
         return;
@@ -246,6 +262,14 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
       setClosedPast((p) => (p === null || p.resumeAtMs === null ? p : { ...p, resumeAtMs: null })),
     [],
   );
+  const rememberVodSound = useCallback((sound: PlayerSound) => {
+    const key = accessKeyRef.current;
+    if (key === null) return;
+    // 같은 값이면 상태를 바꾸지 않는다 — 소리를 실을 때마다 화면을 다시 그리지 않게
+    setVodSoundMemo((memo) =>
+      memo !== null && memo.key === key && sameSound(memo.sound, sound) ? memo : { key, sound },
+    );
+  }, []);
   // 보유 — 세션이 열려 있거나 past 로 닫혀 그 자리에서 지난 방송 판정을 보이는 동안. 띠를 누르면 푼다(5.5절)
   const holding = (opened || closedToPast) && accessKey !== releasedFor && liveStreamId !== '';
   useEffect(() => {
@@ -276,7 +300,8 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     pastSinceMs: pastClose?.sinceMs ?? null,
     pastResumeAtMs: pastClose?.resumeAtMs ?? null,
     pastSeenVod: pastClose?.seenVod ?? null,
-    pastSound: pastClose?.sound ?? null,
+    vodSound: vodSoundMemo !== null && vodSoundMemo.key === accessKey ? vodSoundMemo.sound : null,
+    rememberVodSound,
     consumePastResume,
     band,
     onBand,

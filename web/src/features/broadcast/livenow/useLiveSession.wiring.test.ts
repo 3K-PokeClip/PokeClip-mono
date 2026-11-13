@@ -321,7 +321,7 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
     expect(view.result.current.closedToPast).toBe(true);
     expect(view.result.current.pastResumeAtMs).toBe(SPOT_MS);
     expect(view.result.current.pastSeenVod).toEqual(VOD);
-    expect(view.result.current.pastSound).toEqual(SOUND);
+    expect(view.result.current.vodSound).toEqual(SOUND);
     expect(onChosenPastClose).toHaveBeenCalledTimes(1);
   });
 
@@ -339,7 +339,7 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
     act(() => view.result.current.consumePastResume());
     expect(view.result.current.pastResumeAtMs).toBeNull();
     expect(view.result.current.pastSeenVod).toEqual(VOD);
-    expect(view.result.current.pastSound).toEqual(SOUND);
+    expect(view.result.current.vodSound).toEqual(SOUND);
     expect(view.result.current.closedToPast).toBe(true);
     expect(hoisted.options!.canOpen).toBe(false);
   });
@@ -350,7 +350,7 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
     view.rerender(input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1' }));
     expect(view.result.current.pastResumeAtMs).toBeNull();
     expect(view.result.current.pastSeenVod).toBeNull();
-    expect(view.result.current.pastSound).toBeNull();
+    expect(view.result.current.vodSound).toBeNull();
   });
 
   it.each(['go-live', 'left'] as const)('%s 닫힘은 카드를 비우지 않고 넘길 것도 없다', (reason) => {
@@ -367,5 +367,61 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
     act(() => before.consumePastResume());
     expect(view.result.current.pastResumeAtMs).toBeNull();
     expect(view.result.current.closedToPast).toBe(false);
+  });
+});
+
+describe('useLiveSession: 다시보기 재생기에서 바꾼 소리(POK-547)', () => {
+  /** 세션 재생기에서 소리를 켜고 음량 30 으로 보다 닫혔다 */
+  const HANDED = { muted: false, volume: 30 };
+  /** 다시보기 재생기에서 음소거했다(음량은 그대로) */
+  const MUTED = { muted: true, volume: 30 };
+
+  function closedWith(sound: typeof HANDED) {
+    hoisted.session = { view: { banner: null }, dispatch: vi.fn() } as unknown as PlaybackSession;
+    const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
+      initialProps: input(),
+    });
+    act(() => {
+      hoisted.options!.onClose({
+        reason: 'past',
+        accessKey: 'r-A|key-1',
+        endingSinceMs: null,
+        handoff: { resumeAtMs: null, seenVod: null, chosen: true, sound },
+      });
+    });
+    hoisted.session = null;
+    view.rerender(input());
+    return view;
+  }
+
+  it('past 로 닫힌 뒤 다시보기 재생기에서 바꾼 소리가 넘긴 소리를 갈음한다', () => {
+    const view = closedWith(HANDED);
+    act(() => view.result.current.rememberVodSound(MUTED));
+    expect(view.result.current.vodSound).toEqual(MUTED);
+  });
+
+  it('끝난 뒤 들어온 화면은 처음에 소리가 없고(기본값), 다시보기 재생기에서 바꾸면 그 값이다', () => {
+    const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
+      initialProps: input({ broadcastStatus: 'ended' }),
+    });
+    expect(view.result.current.vodSound).toBeNull();
+    act(() => view.result.current.rememberVodSound(HANDED));
+    expect(view.result.current.vodSound).toEqual(HANDED);
+  });
+
+  it('바꾼 소리는 그 방송|영상 키에서만 낸다 — 다른 키의 첫 다시보기는 기본값이다', () => {
+    const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
+      initialProps: input({ broadcastStatus: 'ended' }),
+    });
+    act(() => view.result.current.rememberVodSound(HANDED));
+    view.rerender(input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1', broadcastStatus: 'ended' }));
+    expect(view.result.current.vodSound).toBeNull();
+  });
+
+  it('넘김 자리를 소모해도 바꾼 소리는 남는다', () => {
+    const view = closedWith(HANDED);
+    act(() => view.result.current.rememberVodSound(MUTED));
+    act(() => view.result.current.consumePastResume());
+    expect(view.result.current.vodSound).toEqual(MUTED);
   });
 });

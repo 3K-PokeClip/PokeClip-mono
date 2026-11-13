@@ -1746,6 +1746,29 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(hlsFake.loads).toBe(2);
   });
 
+  it('라이브 재생기에서 바꾼 소리는 출입증 403 으로 다시 서면 지금처럼 무음 · 70 으로 돌아간다', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    const { container } = await renderLive();
+    fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+    fireEvent.change(screen.getByRole('slider', { name: '볼륨' }), { target: { value: '30' } });
+    const before = container.querySelector('video')!;
+    expect(before.muted).toBe(false);
+
+    reportPlaybackForbidden(STREAM_ID);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+
+    expect(hlsFake.loads).toBe(2);
+    const remounted = container.querySelector('video')!;
+    expect(remounted).not.toBe(before);
+    expect(remounted.muted).toBe(true);
+    expect(remounted.volume).toBeCloseTo(0.7);
+  });
+
   it('열기 전 출입증을 못 받으면 영상 자리에 그렇게 알리고, 다시 받으면 연다: 「아직 연결되지 않았어요」는 틀린 말이었다(POK-337)', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
@@ -7323,6 +7346,54 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
       expect(remounted.volume).toBeCloseTo(0.3);
     });
 
+    /** 세션 재생기에서 소리를 켜고 음량 30 으로 보다가 띠 단추로 넘겼다 — VOD 재생기가 첫 목록까지 받는다 */
+    async function handedLoud30() {
+      server.playback = 'grant';
+      const view = await offered();
+      const sessionVideo = view.container.querySelector('video')!;
+      act(() => {
+        sessionVideo.muted = false;
+        sessionVideo.volume = 0.3;
+      });
+      await press();
+      await vodListed(fullVod());
+      return view;
+    }
+
+    /** 출입증 403 으로 VOD 재생기가 다시 선다(첫 목록까지) — 다시 선 영상 노드를 돌려준다 */
+    async function remountByForbidden(container: HTMLElement) {
+      const before = container.querySelector('video');
+      reportPlaybackForbidden(STREAM_ID);
+      await advance(60_000);
+      await vodListed(fullVod());
+      const remounted = container.querySelector('video')!;
+      expect(remounted).not.toBe(before);
+      return remounted;
+    }
+
+    it('넘긴 뒤 다시보기에서 음소거하면 출입증 403 으로 다시 서도 음소거다', async () => {
+      const { container } = await handedLoud30();
+      fireEvent.click(screen.getByRole('button', { name: '음소거' }));
+      expect(container.querySelector('video')!.muted).toBe(true);
+
+      const remounted = await remountByForbidden(container);
+
+      expect(remounted.muted).toBe(true);
+      expect(remounted.volume).toBeCloseTo(0.3);
+      expect(screen.getByRole('button', { name: '음소거 해제' })).toBeInTheDocument();
+    });
+
+    it('넘긴 뒤 다시보기에서 음량을 30 에서 50 으로 올리면 출입증 403 으로 다시 서도 50 이다', async () => {
+      const { container } = await handedLoud30();
+      fireEvent.change(screen.getByRole('slider', { name: '볼륨' }), { target: { value: '50' } });
+
+      const remounted = await remountByForbidden(container);
+
+      expect(remounted.muted).toBe(false);
+      expect(remounted.volume).toBeCloseTo(0.5);
+      expect(screen.getByRole('slider', { name: '볼륨' })).toHaveValue('50');
+    });
+
     it('명부 ended 인 채 멈춘 그대로 선 제안(held)에서 누른 카드 Y 는 단추가 이긴다 — 멈춘 자리에서 튼다', async () => {
       stopOffer('held');
       const view = await watching();
@@ -7886,6 +7957,73 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       await vodListed();
       expect(hlsFake.sources).toEqual([VOD_LIST_URL, VOD_LIST_URL]);
       expect(videoAt(container)).toBe(0);
+    });
+  });
+
+  describe('다시보기 재생기의 소리 — 처음엔 기본값 · 바꾼 뒤 다시 서면 그 값(POK-547)', () => {
+    /** 출입증 403 으로 다시보기 재생기가 다시 선다 — 다시 선 영상 노드를 돌려준다 */
+    async function remountByForbidden(container: HTMLElement) {
+      const before = videoOf(container);
+      reportPlaybackForbidden(VOD_ID);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await settle();
+      await vodListed();
+      const remounted = videoOf(container)!;
+      expect(remounted).not.toBe(before);
+      return remounted;
+    }
+
+    it('처음 선 다시보기는 무음 · 70 이고, 화면을 떠났다 다시 들어오면 바꾼 소리를 잊고 무음 · 70 이다', async () => {
+      const first = await openPastVod();
+      const video = videoOf(first.container)!;
+      expect(video.muted).toBe(true);
+      expect(video.volume).toBeCloseTo(0.7);
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+      expect(video.muted).toBe(false);
+
+      first.unmount();
+      const again = await renderLive();
+      await vodListed();
+
+      const fresh = videoOf(again.container)!;
+      expect(fresh.muted).toBe(true);
+      expect(fresh.volume).toBeCloseTo(0.7);
+    });
+
+    it('소리를 켠 뒤 출입증 403 으로 다시 서면 켠 그대로 선다', async () => {
+      server.playback = 'grant';
+      const { container } = await openPastVod();
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+
+      const remounted = await remountByForbidden(container);
+
+      expect(remounted.muted).toBe(false);
+      expect(remounted.volume).toBeCloseTo(0.7);
+      expect(screen.getByRole('button', { name: '음소거' })).toBeInTheDocument();
+    });
+
+    it('소리를 켠 뒤 다시 선 재생기의 첫 재생을 브라우저가 막으면 무음으로 한 번 더 튼다', async () => {
+      server.playback = 'grant';
+      const { container } = await openPastVod();
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+      vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const mutedAtPlay: boolean[] = [];
+      vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (
+        this: HTMLMediaElement,
+      ) {
+        mutedAtPlay.push(this.muted);
+        return mutedAtPlay.length === 1
+          ? Promise.reject(new DOMException('play() 거절', 'NotAllowedError'))
+          : Promise.resolve();
+      });
+
+      const remounted = await remountByForbidden(container);
+
+      expect(mutedAtPlay).toEqual([false, true]);
+      expect(remounted.muted).toBe(true);
+      expect(remounted.volume).toBeCloseTo(0.7);
     });
   });
 
