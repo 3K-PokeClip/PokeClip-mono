@@ -3355,7 +3355,7 @@ Media 사이드카의 60일 만료 실행기가 clip 을 부를 때 쓰는 전�
 | 5 | 만료 주소 켜기 · 확인(설정 반영 교체) | 교체 규칙 |
 | 6 | 만료 스위치 켬 — kty 결정, 이 순서 밖 | send-command |
 
-두 경고가 이 순서에 걸립니다.
+세 경고가 이 순서에 걸립니다.
 
 *   **runtime apply(1) 전에는 prod/media plan 이 새 출력
     `clip_expiry_token_secret_arn` 이 없어 실패합니다.** `clip_internal_url`
@@ -3365,6 +3365,11 @@ Media 사이드카의 60일 만료 실행기가 clip 을 부를 때 쓰는 전�
     않습니다.** 어느 PR 의 platform apply 든 같습니다 — platform 은 런타임
     출력을 읽으므로 1 뒤의 plan 은 clip 태스크 정의에 값 없는 그릇을
     넣습니다. 그 태스크가 뜨는지는 미확인입니다.
+*   **운영 SQL 재실행(「M6 스키마 재실행」 — 스위치 표)은 1 뒤, 5 의
+    `SWITCH 0` 판정 전에 합니다.** 재실행은 「재실행 걸음」 4 의 실행기 켬
+    plan 이 실행기 자원만이기를 단언하는데, 1 전에 돌면 새 그릇이 같은 plan
+    에 잡혀 거기서 멈춥니다. 5 전에 표가 없으면 `SWITCH read_failed` 가
+    나옵니다.
 
 ### 1단-나 ③ 1. runtime plan · apply
 
