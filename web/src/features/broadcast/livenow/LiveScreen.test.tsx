@@ -7150,6 +7150,25 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
       expect(roundAsks()).toBe(asksBefore);
     });
 
+    it('띠 단추 → 세션 재생기에서 바꾼 소리(켬 · 음량 30)를 새로 선 VOD 재생기가 이어받는다', async () => {
+      const { container } = await offered();
+      const sessionVideo = container.querySelector('video')!;
+      act(() => {
+        sessionVideo.muted = false;
+        sessionVideo.volume = 0.3;
+      });
+
+      await press();
+      await vodListed(fullVod());
+
+      const vodVideo = container.querySelector('video')!;
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(vodVideo).not.toBe(sessionVideo);
+      expect(vodVideo.muted).toBe(false);
+      expect(vodVideo.volume).toBeCloseTo(0.3);
+      expect(screen.getByRole('slider', { name: '볼륨' })).toHaveValue('30');
+    });
+
     it('끝 덮개 단추 → 보던 자리가 있어도 처음부터 튼다(시작 자리를 옮기지 않는다)', async () => {
       const { container } = await watching();
       control.round = bRoundVod();
@@ -7280,9 +7299,14 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
       },
     );
 
-    it('넘긴 자리를 적용한 뒤 출입증 403 으로 다시 서면 처음부터다 — 넘긴 자리를 다시 쓰지 않는다', async () => {
+    it('넘긴 자리를 적용한 뒤 출입증 403 으로 다시 서면 처음부터다 — 넘긴 자리를 다시 쓰지 않고 소리는 넘긴 값이다', async () => {
       server.playback = 'grant';
       const { container, watchS } = await offered();
+      const sessionVideo = container.querySelector('video')!;
+      act(() => {
+        sessionVideo.muted = false;
+        sessionVideo.volume = 0.3;
+      });
       await press();
       await vodListed(fullVod());
       expect(videoAt(container)).toBeCloseTo(watchS, 0);
@@ -7294,6 +7318,9 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
 
       expect(hlsFake.sources.length).toBeGreaterThan(sourcesBefore);
       expect(videoAt(container)).toBe(0);
+      const remounted = container.querySelector('video')!;
+      expect(remounted.muted).toBe(false);
+      expect(remounted.volume).toBeCloseTo(0.3);
     });
 
     it('명부 ended 인 채 멈춘 그대로 선 제안(held)에서 누른 카드 Y 는 단추가 이긴다 — 멈춘 자리에서 튼다', async () => {

@@ -429,6 +429,7 @@ describe('재생기 명령 배선 — hold-frame · drop-pause-mark(POK-528 c5 �
       keepPausedOnSwap: vi.fn(),
       holdFrame: vi.fn(),
       dropPauseMark: vi.fn(),
+      readSound: () => null,
     };
   }
 

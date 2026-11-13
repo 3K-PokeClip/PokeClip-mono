@@ -587,6 +587,7 @@ const LivePlayer = memo(function LivePlayer({
         onVodPhase={handleVodPhase}
         onStartApplied={onVodStartApplied}
         startAtSeconds={vodStartSeconds}
+        vodSound={live.pastSound}
         onPlaybackPosition={onPlaybackPosition}
         onLivePosition={onLivePosition}
         onSeek={onPlayerSeek}

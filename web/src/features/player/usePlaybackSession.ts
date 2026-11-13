@@ -17,6 +17,7 @@ import {
   type XAnswer,
 } from './rewindSwitch';
 import { probeLiveWindow } from './liveWindowProbe';
+import type { PlayerSound } from './playbackSound';
 import { dvrHoleKnown } from './sessionShared';
 import { isPlayerStartHeld, sessionView, watchesDrain, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
@@ -39,6 +40,8 @@ export interface SessionPlayer {
   holdFrame: () => void;
   /** 재생기가 들고 있는 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(POK-528 목록 다시 받기) */
   dropPauseMark: () => void;
+  /** 지금 영상 노드의 소리 상태 — past 로 닫을 때 읽어 다시보기 재생기에 넘긴다(POK-547). 노드가 없으면 null */
+  readSound: () => PlayerSound | null;
 }
 
 export interface SessionClosed {
@@ -48,8 +51,11 @@ export interface SessionClosed {
   /** 끝남 대기를 연 시각(세션 endingSince) — past 로 닫힌 화면의 404 유예 원점 폴백. 모르면 null */
   endingSinceMs: number | null;
   accessKey: string;
-  /** past 닫힘이 지난 방송 판정에 넘기는 것(POK-547). past 가 아니면 null */
-  handoff: PastHandoff | null;
+  /**
+   * past 닫힘이 지난 방송 판정에 넘기는 것(POK-547) — 상태기계가 정한 자리 · 다시보기에 닫는 순간 재생기의 소리 상태를
+   * 더한다(재생기가 묶이지 않았으면 null). past 가 아니면 null
+   */
+  handoff: (PastHandoff & { sound: PlayerSound | null }) | null;
 }
 
 export interface SessionOptions {
@@ -238,7 +244,9 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
             goTo: past ? undefined : effect.goTo,
             endingSinceMs: session.endingSince,
             accessKey: session.accessKey,
-            handoff: past ? effect.handoff : null,
+            handoff: past
+              ? { ...effect.handoff, sound: playerRef.current?.readSound() ?? null }
+              : null,
           });
           break;
         }

@@ -157,6 +157,22 @@ describe('되감기 조각 404 의 고리 · 명령 묶음(POK-528 c5 · 계획 
     expect(drop).toHaveBeenCalledTimes(1);
   });
 
+  it('세션에 묶는 재생기 명령의 readSound 는 부르는 순간의 영상 노드 소리 상태를 읽는다 — 노드가 없으면 null', () => {
+    const bindPlayer = vi.fn<(p: SessionPlayer | null) => void>();
+    const video = document.createElement('video');
+    const ref = { current: video as HTMLVideoElement | null };
+    renderHook(() => useLiveRewindPlayback(ref, fakeSession({ bindPlayer })));
+    const bound = bindPlayer.mock.calls[0]?.[0];
+
+    video.muted = false;
+    video.volume = 0.3;
+    expect(bound?.readSound()).toEqual({ muted: false, volume: 30 });
+    video.muted = true;
+    expect(bound?.readSound()).toEqual({ muted: true, volume: 30 });
+    ref.current = null;
+    expect(bound?.readSound()).toBeNull();
+  });
+
   // K3 — 덮개 · 주소가 그대로인데 「세우지 않음」 값만 바뀌어도(덮개가 이미 preparing 인 채 막힘이 서는 전이) 고리가 새 값을 싣는다
   it('세션의 「세우지 않음」(view.startHeld)을 고리 startHeld 로 넘기고, 그 값만 바뀌어도 새 값을 싣는다', () => {
     const dispatch = vi.fn<(event: SessionEvent) => void>();

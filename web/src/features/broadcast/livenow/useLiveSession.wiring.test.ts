@@ -1,7 +1,11 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PastHandoff, SessionClose } from '@/features/player/rewindSwitch';
-import type { PlaybackSession, SessionOptions } from '@/features/player/usePlaybackSession';
+import type { SessionClose } from '@/features/player/rewindSwitch';
+import type {
+  PlaybackSession,
+  SessionClosed,
+  SessionOptions,
+} from '@/features/player/usePlaybackSession';
 import { useLiveSession, type LiveSessionInput } from './useLiveSession';
 
 // useLiveSession 의 배선(cc c10 L2) — 세션에 넘기는 지금 방송 번호 묻기가 최신 방송|영상 키를 싣고, 그 기억이 렌더를 넘어 산다.
@@ -133,7 +137,12 @@ describe('useLiveSession: 지난 방송 판정으로 그리는 화면(POK-546 T3
   /** 끝남 대기를 연 시각(세션 endingSince) */
   const ENDING_SINCE = Date.parse('2026-11-04T01:59:30.000Z');
   /** 단추 없이 끝에 닿아 닫힌 past 의 넘김 — 넘길 자리 · 다시보기 없음 */
-  const NO_HANDOFF: PastHandoff = { resumeAtMs: null, seenVod: null, chosen: false };
+  const NO_HANDOFF: SessionClosed['handoff'] = {
+    resumeAtMs: null,
+    seenVod: null,
+    chosen: false,
+    sound: null,
+  };
 
   function openedSession(): PlaybackSession {
     return { view: { banner: null }, dispatch: vi.fn() } as unknown as PlaybackSession;
@@ -153,7 +162,7 @@ describe('useLiveSession: 지난 방송 판정으로 그리는 화면(POK-546 T3
     reason: SessionClose,
     roster: LiveSessionInput['broadcastStatus'],
     patch: Partial<LiveSessionInput> = {},
-    handoff: PastHandoff | null = reason === 'past' ? NO_HANDOFF : null,
+    handoff: SessionClosed['handoff'] = reason === 'past' ? NO_HANDOFF : null,
   ) {
     act(() => {
       hoisted.options!.onClose({
@@ -273,6 +282,8 @@ describe('useLiveSession: 지난 방송 판정으로 그리는 화면(POK-546 T3
 describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아 둔 카드(POK-547)', () => {
   const VOD = { url: 'https://m/vod/key-1/r-A/index.m3u8', firstPdtMs: 1_000, headPdtMs: 9_000 };
   const SPOT_MS = 5_000;
+  /** 세션 재생기에서 소리를 켜고 음량 30 으로 보다 닫혔다 */
+  const SOUND = { muted: false, volume: 30 };
 
   function mountWith(onChosenPastClose = vi.fn()) {
     hoisted.session = { view: { banner: null }, dispatch: vi.fn() } as unknown as PlaybackSession;
@@ -284,7 +295,7 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
 
   function close(
     view: ReturnType<typeof mountWith>['view'],
-    handoff: PastHandoff | null,
+    handoff: SessionClosed['handoff'],
     reason: SessionClose = 'past',
   ) {
     act(() => {
@@ -294,14 +305,14 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
     view.rerender(input());
   }
 
-  it('단추로 닫으면 넘긴 자리 · 다시보기를 내고 같은 닫힘 호출 안에서 받아 둔 카드를 비우게 한다', () => {
+  it('단추로 닫으면 넘긴 자리 · 다시보기 · 소리를 내고 같은 닫힘 호출 안에서 받아 둔 카드를 비우게 한다', () => {
     const { view, onChosenPastClose } = mountWith();
     act(() => {
       hoisted.options!.onClose({
         reason: 'past',
         accessKey: 'r-A|key-1',
         endingSinceMs: null,
-        handoff: { resumeAtMs: SPOT_MS, seenVod: VOD, chosen: true },
+        handoff: { resumeAtMs: SPOT_MS, seenVod: VOD, chosen: true, sound: SOUND },
       });
       expect(onChosenPastClose).toHaveBeenCalledTimes(1);
     });
@@ -310,33 +321,36 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
     expect(view.result.current.closedToPast).toBe(true);
     expect(view.result.current.pastResumeAtMs).toBe(SPOT_MS);
     expect(view.result.current.pastSeenVod).toEqual(VOD);
+    expect(view.result.current.pastSound).toEqual(SOUND);
     expect(onChosenPastClose).toHaveBeenCalledTimes(1);
   });
 
   it('단추 없는 past 닫힘은 받아 둔 카드를 두고 넘긴 자리만 낸다', () => {
     const { view, onChosenPastClose } = mountWith();
-    close(view, { resumeAtMs: SPOT_MS, seenVod: null, chosen: false });
+    close(view, { resumeAtMs: SPOT_MS, seenVod: null, chosen: false, sound: null });
     expect(onChosenPastClose).not.toHaveBeenCalled();
     expect(view.result.current.pastResumeAtMs).toBe(SPOT_MS);
     expect(view.result.current.pastSeenVod).toBeNull();
   });
 
-  it('넘김 자리를 소모하면 자리만 비우고 닫힘 기록 · 다시보기는 둔다', () => {
+  it('넘김 자리를 소모하면 자리만 비우고 닫힘 기록 · 다시보기 · 소리는 둔다', () => {
     const { view } = mountWith();
-    close(view, { resumeAtMs: SPOT_MS, seenVod: VOD, chosen: true });
+    close(view, { resumeAtMs: SPOT_MS, seenVod: VOD, chosen: true, sound: SOUND });
     act(() => view.result.current.consumePastResume());
     expect(view.result.current.pastResumeAtMs).toBeNull();
     expect(view.result.current.pastSeenVod).toEqual(VOD);
+    expect(view.result.current.pastSound).toEqual(SOUND);
     expect(view.result.current.closedToPast).toBe(true);
     expect(hoisted.options!.canOpen).toBe(false);
   });
 
-  it('다른 방송|영상 키는 넘긴 자리 · 다시보기를 이어받지 않는다', () => {
+  it('다른 방송|영상 키는 넘긴 자리 · 다시보기 · 소리를 이어받지 않는다', () => {
     const { view } = mountWith();
-    close(view, { resumeAtMs: SPOT_MS, seenVod: VOD, chosen: true });
+    close(view, { resumeAtMs: SPOT_MS, seenVod: VOD, chosen: true, sound: SOUND });
     view.rerender(input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1' }));
     expect(view.result.current.pastResumeAtMs).toBeNull();
     expect(view.result.current.pastSeenVod).toBeNull();
+    expect(view.result.current.pastSound).toBeNull();
   });
 
   it.each(['go-live', 'left'] as const)('%s 닫힘은 카드를 비우지 않고 넘길 것도 없다', (reason) => {

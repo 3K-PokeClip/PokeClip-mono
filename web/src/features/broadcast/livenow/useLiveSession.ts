@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 import { mediaControlBaseUrl } from '@/features/player/mediaSource';
+import type { PlayerSound } from '@/features/player/playbackSound';
 import type { XAnswer } from '@/features/player/rewindSwitch';
 import type { RewindRange } from '@/features/player/sessionShared';
 import {
@@ -67,19 +68,25 @@ export interface LiveSession {
   pastResumeAtMs: number | null;
   /** past 로 닫힐 때 세션이 확인한 다시보기(ready:true). past 로 닫힌 그 방송|영상 키에서만 낸다 */
   pastSeenVod: RewindRange | null;
-  /** 이어 틀 자리를 소모한다 — 닫힘 기록 · 확인한 다시보기는 둔다. 다시보기가 시작을 적용하거나 옮길 때 부른다 */
+  /**
+   * past 로 닫힐 때 세션 재생기의 소리 상태 — 다시보기 재생기가 첫 재생 전에 싣는다. 시작을 적용하거나 옮겨도 남는다. past
+   * 로 닫힌 그 방송|영상 키에서만 낸다
+   */
+  pastSound: PlayerSound | null;
+  /** 이어 틀 자리를 소모한다 — 닫힘 기록 · 확인한 다시보기 · 소리는 둔다. 다시보기가 시작을 적용하거나 옮길 때 부른다 */
   consumePastResume: () => void;
   /** 「새 방송이 시작됐어요」 띠의 방송 번호 */
   band: string | null;
   onBand: () => void;
 }
 
-/** past 로 닫힌 기록 — 키 · 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기(POK-547) */
+/** past 로 닫힌 기록 — 키 · 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 · 소리 상태(POK-547) */
 interface ClosedPast {
   key: string;
   sinceMs: number | null;
   resumeAtMs: number | null;
   seenVod: RewindRange | null;
+  sound: PlayerSound | null;
 }
 
 /**
@@ -137,7 +144,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const pinned = vodStreamIdFromPathname(pathname ?? '') !== null || Boolean(streamParam);
   const streamerId = useChannelStreamerId();
   const { toast, dismiss } = useToast();
-  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 — 같은 키로는 세션을 다시 열지 않는다
+  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 · 소리 상태 — 같은 키로는 세션을 다시 열지 않는다
   // (cc H1 ②). 키 비교라 지울 필요가 없다
   const [closedPast, setClosedPast] = useState<ClosedPast | null>(null);
   const onChosenRef = useRef(input.onChosenPastClose);
@@ -172,6 +179,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
           sinceMs: closed.endingSinceMs,
           resumeAtMs: closed.handoff?.resumeAtMs ?? null,
           seenVod: closed.handoff?.seenVod ?? null,
+          sound: closed.handoff?.sound ?? null,
         });
         // 같은 동기 호출이라 닫힘 · 카드 비움이 한 그리기로 묶인다
         if (closed.handoff?.chosen === true) onChosenRef.current?.();
@@ -268,6 +276,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     pastSinceMs: pastClose?.sinceMs ?? null,
     pastResumeAtMs: pastClose?.resumeAtMs ?? null,
     pastSeenVod: pastClose?.seenVod ?? null,
+    pastSound: pastClose?.sound ?? null,
     consumePastResume,
     band,
     onBand,

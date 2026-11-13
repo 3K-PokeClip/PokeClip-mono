@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import { readSound } from './playbackSound';
 import { rewindAxisLowerMs } from './rewindSwitch';
 import type { PlaybackSession } from './usePlaybackSession';
 import { useHlsPlayback, type LivePosition, type PlaybackHooks } from './useHlsPlayback';
@@ -100,9 +101,11 @@ export function useLiveRewindPlayback(
       keepPausedOnSwap: () => simRef.current.keepPausedOnSwap(),
       holdFrame: () => simRef.current.holdFrame(),
       dropPauseMark: () => simRef.current.dropPauseMark(),
+      // 부르는 순간의 영상 노드를 읽는다 — past 로 닫는 동기 경로라 아직 이 재생기의 노드다
+      readSound: () => readSound(videoRef.current),
     });
     return () => bindPlayer(null);
-  }, [bindPlayer]);
+  }, [bindPlayer, videoRef]);
 
   // 마지막으로 본 자리(P) — 리마운트 잇기 · 계승 판정 · 이음 지점의 재료
   // 재생 여부 · 연속 길이도 싣는다 — 같은 자리여도 일시정지만 하면 사건이 한 번 난다(POK-200 c13)

@@ -90,6 +90,7 @@ function fakePlayer(): SessionPlayer & { seeks: number[] } {
     keepPausedOnSwap: vi.fn(),
     holdFrame: vi.fn(),
     dropPauseMark: vi.fn(),
+    readSound: () => null,
   };
 }
 
@@ -139,7 +140,7 @@ describe('여는 조건 · 폴링', () => {
       expect.objectContaining({
         reason: 'past',
         endingSinceMs: endingSince,
-        handoff: { resumeAtMs: null, seenVod: null, chosen: false },
+        handoff: { resumeAtMs: null, seenVod: null, chosen: false, sound: null },
       }),
     );
   });
@@ -204,9 +205,23 @@ describe('past 닫힘의 넘김(POK-547)', () => {
         resumeAtMs: at,
         seenVod: { url: VOD, firstPdtMs: VOD_FIRST, headPdtMs: NOW },
         chosen: true,
+        sound: null,
       },
     });
     expect(result.current).toBeNull();
+  });
+
+  it('닫는 순간 묶인 재생기의 소리 상태를 넘긴다 — 닫힌 뒤 재생기가 바꾼 값은 싣지 않는다', async () => {
+    const { result, onClose } = await offeredScreen();
+    let sound = { muted: false, volume: 30 };
+    act(() => result.current?.bindPlayer({ ...fakePlayer(), readSound: () => sound }));
+
+    act(() => result.current?.dispatch({ type: 'button', which: 'vod' }));
+    sound = { muted: true, volume: 70 };
+    await flush();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.calls[0]?.[0].handoff.sound).toEqual({ muted: false, volume: 30 });
   });
 
   it('past 로 닫힌 뒤 재접속 대기 · 20분 시한이 지나도 효과 0 · onClose 1회 · 물음 0', async () => {

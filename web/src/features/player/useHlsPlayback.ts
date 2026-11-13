@@ -33,6 +33,7 @@ import {
   type SessionAxis,
 } from './playbackEdge';
 import { nextLivePosition, playedRunMs, type LivePosition } from './livePosition';
+import { applySound, playFirst, type PlayerSound } from './playbackSound';
 import { trackPlaybackStartOnce } from './playbackStarts';
 import { guardRewindFloor } from './rewindFloor';
 import { useSourcePosition, type PositionHooks } from './sourcePosition';
@@ -162,6 +163,11 @@ export interface PlaybackHooks extends PositionHooks {
   onDvrDrain?: (generation: number, drained: boolean, atPdtMs: number | null) => void;
   /** 지금 세션이 고갈을 보라고 하나 — 받기를 멈춘 순간 지금 세션 상태로 읽는다(POK-547) */
   watchesDrain?: () => boolean;
+  /**
+   * 새 영상 노드의 첫 소리 상태 — 다시보기로 넘길 때 옛 노드에서 읽은 값(POK-547). 재생기가 설 때 한 번 읽는다. 없으면 지금
+   * 기본(무음 · 70)이다
+   */
+  initialSound?: PlayerSound | null;
 }
 
 export type { LivePosition } from './livePosition';
@@ -215,9 +221,12 @@ export function useHlsPlayback(
 } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
-  // 자동재생 정책상 muted로 시작한다 (시뮬레이션의 muted=false와 다른 점)
-  const [muted, setMuted] = useState(true);
-  const [volume, setVolumeState] = useState(70);
+  // 넘겨받은 소리 상태(설 때 한 번 읽는다). 없으면 자동재생 정책상 muted로 시작한다 (시뮬레이션의 muted=false와 다른 점)
+  const [initialSound] = useState(() => hooks.initialSound ?? null);
+  const [muted, setMuted] = useState(initialSound?.muted ?? true);
+  const [volume, setVolumeState] = useState(initialSound?.volume ?? 70);
+  // 넘겨받은 소리가 켜짐이면 이 재생기의 첫 재생 하나만, 막힐 때 소리를 끄고 다시 튼다. 라이브 · 세션 재생기는 지금 그대로다
+  const soundFallbackRef = useRef(initialSound?.muted === false);
   const [behindSeconds, setBehind] = useState(0);
   // 매니페스트 로드 전엔 되감을 곳이 없다 — 0이면 시크바가 엣지에 붙는다 (POK-32)
   const [windowSeconds, setWindowSeconds] = useState(0);
@@ -287,11 +296,14 @@ export function useHlsPlayback(
   useEffect(() => () => window.clearTimeout(clipTimer.current), []);
 
   // 초기 볼륨은 마운트 1회만 — src 전환(?stream= 변경) 이펙트에 두면 사용자가 만진
-  // 볼륨이 스트림을 바꿀 때마다 70으로 되돌아간다.
+  // 볼륨이 스트림을 바꿀 때마다 70으로 되돌아간다. 넘겨받은 소리 상태는 무음까지 여기서 싣는다: <video muted> 정적 속성보다
+  // 뒤이고 첫 play()(아래 재생기 효과)보다 앞이다
   useEffect(() => {
     const video = videoRef.current;
-    if (video) video.volume = 0.7;
-  }, [videoRef]);
+    if (!video) return;
+    if (initialSound) applySound(video, initialSound);
+    else video.volume = 0.7;
+  }, [videoRef, initialSound]);
 
   /** 세션 모드의 시각 축(설계 5.2절). 목록 · 라이브 끝을 모르면 null */
   const readAxis = useCallback((): SessionAxis | null => {
@@ -557,6 +569,12 @@ export function useHlsPlayback(
     // 되감기 창 하한 지키기(5.3.1절)의 상태: 기동 전 받기 위치 장부(hlsStart) · 옮겨 알린 때
     const load = trackLoadFrom(video);
     let floorNoticeAt: number | null = null;
+    // 재생기가 스스로 거는 재생(목록 읽음 · 기본 HLS 소스 붙임). 소리 대체는 이 훅의 첫 재생 하나에만 건다
+    const autoplay = () => {
+      const soundFallback = soundFallbackRef.current;
+      soundFallbackRef.current = false;
+      playFirst(video, soundFallback);
+    };
     const reachEnd = () => {
       if (endSent) return;
       endSent = true;
@@ -951,7 +969,7 @@ export function useHlsPlayback(
           // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번)
           if (swap.holds(generation)) return;
           // 자동재생 거부는 reject로 온다 — playing=false로 남아 재생 버튼이 노출된다
-          video.play().catch(() => {});
+          autoplay();
         });
         hls.attachMedia(video);
         // index.m3u8의 302(세션 파라미터)는 기본 로더가 따라간다 — 커스텀 loader 금지 (.env.example 참조)
@@ -980,7 +998,7 @@ export function useHlsPlayback(
         video.addEventListener('error', onNativeError);
         video.addEventListener('loadeddata', onHealed);
         video.src = src;
-        video.play().catch(() => {});
+        autoplay();
       } else {
         setEngine('none');
         console.warn('[player] HLS 재생 불가 — hls.js 미지원 + 네이티브 HLS 없음 (Chrome 권장)');

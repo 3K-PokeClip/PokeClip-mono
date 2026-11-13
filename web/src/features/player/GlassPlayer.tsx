@@ -32,6 +32,7 @@ import { usePlayerShortcuts } from './usePlayerShortcuts';
 import { useSoundToggle } from './useSoundToggle';
 import { useVodPlayback, type VodSource } from './useVodPlayback';
 import type { VodPhase } from './pastVod';
+import type { PlayerSound } from './playbackSound';
 import {
   usePlayerSimulation,
   type DateSeekResult,
@@ -104,6 +105,11 @@ export interface GlassPlayerProps {
   onVodPhase?: (phase: VodPhase) => void;
   /** 다시보기가 받아 둔 자리(startAtSeconds)를 적용했다 — 부른 쪽이 받아 둔 자리를 비운다(POK-546) */
   onStartApplied?: () => void;
+  /**
+   * 회차 다시보기 재생기의 첫 소리 상태 — 세션이 past 로 닫힐 때 세션 재생기에서 넘겨받은 값(POK-547). 재생기가 설 때 첫 재생
+   * 전에 싣는다. 없으면 기본(무음 · 70)
+   */
+  vodSound?: PlayerSound | null;
   /**
    * 다시보기를 이 자리(방송 기준 초)부터 튼다. 회차 다시보기는 목록이 서 있을 때마다 읽어 그 자리로 옮기고 onStartApplied 로
    * 알린다(useVodPlayback)
@@ -231,6 +237,7 @@ function VodGlassPlayer(props: GlassPlayerProps & { vod: VodSource }) {
     props.broadcastId,
     props.startAtSeconds ?? null,
     props.onStartApplied,
+    props.vodSound ?? null,
   );
   const buffering = useMediaBuffering(videoRef);
   // 화면에 붙은 자리를 모르면 알리지 않는다: 채팅은 직전 자리를 둔다
