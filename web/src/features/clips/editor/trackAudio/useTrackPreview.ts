@@ -624,6 +624,10 @@ export function useTrackPreview(options: {
     mediaKey: options.mediaKey,
   };
   const anchorsRef = useRef<PendingAnchors | null>(null);
+  /** 영상이 받다 실패해 닻 기다림을 끝낸 창의 열쇠 — 영상이 그 창을 다시 받기 시작하면 소리도 다시 받는다 */
+  const failedRunRef = useRef<string | null>(null);
+  /** 같은 열쇠의 창을 다시 받은 차례 — 창 열쇠가 같아도 소리 받기를 다시 시작한다 */
+  const [retry, setRetry] = useState(0);
 
   /** 받은 소리를 놓는다 — 파형 자리 · 재생기 · 상태. 소리 트랙을 하나도 못 꺼냈으면 못 부름이다 */
   const showLoad = useCallback(
@@ -657,6 +661,7 @@ export function useTrackPreview(options: {
     // 창이 바뀌었다: 앞 창 재생기는 그 창 Blob 시각에 묶여 있어 바로 버린다(새 창 소리가 오기까지는 불러오는 동안과 같다)
     setPlayer(null);
     anchorsRef.current = null;
+    failedRunRef.current = null;
     // 녹화가 없는 구간(받을 창 없음)이다: 실패가 아니라 들을 것이 없다(PR #341 claude)
     if (win === null || win.key !== windowKey) {
       setStatus('idle');
@@ -692,22 +697,34 @@ export function useTrackPreview(options: {
       setPlaced,
       setPlayer,
     });
-  }, [streamId, windowKey, showLoad]);
+  }, [streamId, windowKey, showLoad, retry]);
 
   // 영상이 받는 창의 닻을 푼다: 받는 중인 창과 열쇠가 같을 때만(앞 창을 받은 영상의 닻으로 놓지 않는다). 영상이 그 창을 받다
   // 실패하면 닻은 오지 않는다 — 실패로 끝내 「못 부름」으로 영상 소리를 되살리고 받아 둔 판독 결과를 놓는다. ② 를 받는 중이면
   // 받기도 그 자리에서 끊는다(startWindowAudio). 닻을 기다리는 동안은 받기 멈춤 시한을 세지 않으므로(loadSegmentTracks) 이 길이
-  // 없으면 loading 에 머문다
+  // 없으면 loading 에 머문다.
+  // 실패한 창을 영상이 다시 받기 시작하면(failedKey 가 그 열쇠를 떠난다 — 원천이 live → vod 로 바뀌어 같은 열쇠로 다시 지은
+  // 창 · 233ab62a) 소리도 그 창을 다시 받는다: 창 열쇠만 보면 그 창에서 내내 못 부름이었다. 실패한 렌더에 남은 failedKey 가
+  // 다시 지은 창의 첫 렌더에도 남으므로 지워진 뒤에 다시 시작한다(그 전에 시작하면 새 닻 기다림이 그 자리에서 거부된다).
+  // 실패가 없던 창은 여기를 지나지 않는다(다시 받기 0)
   useEffect(() => {
+    if (failedRunRef.current !== null) {
+      if (failedRunRef.current === windowKey && failedKey !== windowKey) {
+        failedRunRef.current = null;
+        setRetry((n) => n + 1);
+      }
+      return;
+    }
     const pending = anchorsRef.current;
     if (pending === null) return;
     if (failedKey === pending.key) {
       pending.reject(VIDEO_WINDOW_FAILED);
+      failedRunRef.current = pending.key;
       return;
     }
     if (loaded === null || loaded.key !== pending.key) return;
     pending.resolve(loaded.remuxed);
-  }, [loaded, failedKey, windowKey]);
+  }, [loaded, failedKey, windowKey, retry]);
 
   // 파형 — 놓아 둔 소리를 같은 창의 배치로 잰다(판 NULL 머리가 늦게 와 배치가 바뀌면 다시 잰다). 새 창을 받는 동안은 영상이
   // 앞 창을 트는 동안 앞 창에서 잰 값이 남는다(편집기 초로 그려 자리가 맞다 — 소리는 이미 놓았다)

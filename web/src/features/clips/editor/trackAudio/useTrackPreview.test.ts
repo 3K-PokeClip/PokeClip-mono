@@ -508,6 +508,129 @@ describe('useTrackPreview', () => {
     expect(node.muted).toBe(false);
   });
 
+  describe('같은 열쇠의 창을 영상이 다시 받는다(live 404 → vod 로 다시 지은 창 — 233ab62a)', () => {
+    type Props = {
+      window: TrackWindow;
+      loaded: LoadedTrackWindow | null;
+      failedKey: string | null;
+    };
+    const accessCalls = () => vi.mocked(requestSegmentAudioAccess).mock.calls.length;
+    const fetchCalls = () => vi.mocked(fetch).mock.calls.length;
+
+    /** 창 하나를 받기 시작하고, 영상이 그 창을 받다 실패해 못 부름이 될 때까지 둔다 */
+    const mountFailed = async () => {
+      const node = video();
+      const hook = renderHook(
+        (props: Props) =>
+          useTrackPreview({
+            streamId: 's-1',
+            ...props,
+            video: node,
+            createContext: () => fakeContext().ctx as never,
+          }),
+        { initialProps: { window: WINDOW, loaded: null, failedKey: null } as Props },
+      );
+      act(() => hook.result.current.setGains([0, 1, 0]));
+      await waitFor(() => expect(fetch).toHaveBeenCalled());
+      hook.rerender({ window: WINDOW, loaded: null, failedKey: WINDOW.key });
+      await waitFor(() => expect(hook.result.current.status).toBe('unavailable'));
+      return { ...hook, node };
+    };
+
+    /**
+     * 실패 뒤 원천이 vod 로 바뀌어 같은 열쇠의 창을 새로 짓는다. 그 렌더에는 앞 실패(failedKey)가 아직 남아 있고, 영상이 다시
+     * 받기 시작하면서 지운다
+     */
+    const failThenRetry = async () => {
+      const hook = await mountFailed();
+      const accessBefore = accessCalls();
+      const fetchBefore = fetchCalls();
+      const rebuilt = windowOf(10, [1]);
+      hook.rerender({ window: rebuilt, loaded: null, failedKey: WINDOW.key });
+      // 실패가 남은 동안 앞 창(영상이 아직 트는 창)이 다시 배치돼 받은 창 객체가 바뀌어도 다시 시작하지 않는다: 시작하면 새 닻
+      // 기다림이 그 자리에서 거부돼 loading 으로 깜빡이고 한 번 더 받는다
+      hook.rerender({ window: rebuilt, loaded: loadedOf(windowOf(5, [3])), failedKey: WINDOW.key });
+      expect(hook.result.current.status).toBe('unavailable');
+      expect(accessCalls()).toBe(accessBefore);
+      hook.rerender({ window: rebuilt, loaded: null, failedKey: null });
+      await waitFor(() => expect(fetchCalls()).toBeGreaterThan(fetchBefore));
+      return { ...hook, rebuilt, accessBefore };
+    };
+
+    it('실패 뒤 영상이 그 창을 다시 받아 성공하면 미리 듣기도 그 창 소리를 다시 받아 ready 다', async () => {
+      const { result, rerender, node, rebuilt, accessBefore } = await failThenRetry();
+      expect(result.current.status).toBe('loading');
+
+      rerender({ window: rebuilt, loaded: loadedOf(rebuilt), failedKey: null });
+
+      await waitFor(() => expect(result.current.status).toBe('ready'));
+      expect(accessCalls()).toBe(accessBefore + 1);
+      expect(node.muted).toBe(true);
+      expect(result.current.levels?.startSeconds).toBe(10);
+    });
+
+    it('다시 받기도 실패하면 다시 「못 부름」이다', async () => {
+      const { result, rerender, node, rebuilt } = await failThenRetry();
+
+      rerender({ window: rebuilt, loaded: null, failedKey: rebuilt.key });
+
+      await waitFor(() => expect(result.current.status).toBe('unavailable'));
+      expect(node.muted).toBe(false);
+    });
+
+    it('실패가 지워진 렌더에 다시 받은 창이 함께 와도(미리 받아 둔 창) 그 닻으로 놓아 ready 다', async () => {
+      const { result, rerender } = await mountFailed();
+      const rebuilt = windowOf(10, [1]);
+      rerender({ window: rebuilt, loaded: null, failedKey: WINDOW.key });
+
+      rerender({ window: rebuilt, loaded: loadedOf(rebuilt), failedKey: null });
+
+      await waitFor(() => expect(result.current.status).toBe('ready'));
+    });
+
+    it('실패한 창에서 다른 창으로 옮기면 그 창 소리는 그대로 받아 놓는다', async () => {
+      const { result, rerender } = await mountFailed();
+      const other = windowOf(5, [3]);
+      vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+        expiresAt: '2026-10-23T00:05:00Z',
+        segments: [
+          { seq: 3, startAtMs: BASE + 5_000, durationMs: 1000, url: 'https://s3/seg_3.m4s' },
+        ],
+      });
+
+      // 앞 창의 실패(failedKey)가 남은 렌더에 다른 창이 온다
+      rerender({ window: other, loaded: loadedOf(other), failedKey: WINDOW.key });
+
+      await waitFor(() => expect(result.current.status).toBe('ready'));
+      expect(result.current.levels?.startSeconds).toBe(5);
+    });
+
+    it('실패가 없던 창은 같은 열쇠의 창 · 받은 창 객체가 새로 와도 소리를 다시 받지 않는다', async () => {
+      const { result, rerender } = renderHook(
+        (props: Props) =>
+          useTrackPreview({
+            streamId: 's-1',
+            ...props,
+            video: video(),
+            createContext: () => fakeContext().ctx as never,
+          }),
+        { initialProps: { window: WINDOW, loaded: LOADED, failedKey: null } as Props },
+      );
+      await waitFor(() => expect(result.current.status).toBe('ready'));
+      const accessBefore = accessCalls();
+      const fetchBefore = fetchCalls();
+
+      const same = windowOf(10, [1]);
+      rerender({ window: same, loaded: LOADED, failedKey: null });
+      rerender({ window: same, loaded: loadedOf(same), failedKey: null });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(result.current.status).toBe('ready');
+      expect(accessCalls()).toBe(accessBefore);
+      expect(fetchCalls()).toBe(fetchBefore);
+    });
+  });
+
   it('재생기는 영상 노드의 Blob 시각(currentTime)을 그대로 따라간다: 편집기 초로 옮기지 않는다', async () => {
     const { ctx } = fakeContext();
     const sources = vi.spyOn(ctx, 'createBufferSource');
