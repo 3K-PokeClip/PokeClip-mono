@@ -181,6 +181,11 @@ describe('창 환산', () => {
     expect(marks.map((mark) => mark.label)).toEqual(['', '0:00', '0:15', '0:30', '0:45', '1:00']);
   });
 
+  it('방송 시작과 1ms 안의 눈금은 앞선 눈금이 아니다 — 눈금 자리가 ms 로 반올림된 만큼 시작도 ms 로 맞춰 견준다', () => {
+    const marks = rulerMarks({ startSeconds: 100, endSeconds: 175 }, 115.0004);
+    expect(marks.slice(0, 2).map((mark) => mark.label)).toEqual(['', '0:00']);
+  });
+
   it('창이 통째로 방송 시작 앞이면 첫 눈금에만 0:00 을 적는다 — 눈금자가 비지 않는다', () => {
     const marks = rulerMarks({ startSeconds: 100, endSeconds: 175 }, 914_651.37);
     expect(marks.map((mark) => mark.label)).toEqual(['0:00', '', '', '', '', '']);

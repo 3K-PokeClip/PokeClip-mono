@@ -159,6 +159,8 @@ const server = vi.hoisted(() => ({
   pdtStepMs: 4_000,
   /** 이 seq 앞에 DISCONTINUITY 를 넣어 런을 끊는다. null 이면 런 하나 */
   breakBeforeSeq: null as number | null,
+  /** ③ 목록 첫 PDT 가 방송 시작보다 늦은 만큼(ms) */
+  listLeadMs: 0,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -196,7 +198,7 @@ function vodPlaylist(listUrl: string): string {
   if (server.timing === 'v2') lines.push('#EXT-X-POKECLIP-TIMING:2');
   for (let seq = 0; seq < 100; seq += 1) {
     if (seq === server.breakBeforeSeq) lines.push('#EXT-X-DISCONTINUITY');
-    const pdt = new Date(STARTED_AT + seq * server.pdtStepMs).toISOString();
+    const pdt = new Date(STARTED_AT + server.listLeadMs + seq * server.pdtStepMs).toISOString();
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${pdt}`);
     lines.push('#EXTINF:4.000,', `${dir}/seg/${String(seq).padStart(7, '0')}.m4s`);
   }
@@ -213,8 +215,8 @@ function mediaAnswer(url: string): Response {
       ready,
       mode: 'vod',
       url: ready ? listUrl : null,
-      firstPdt: ready ? new Date(STARTED_AT).toISOString() : null,
-      headPdt: ready ? new Date(STARTED_AT + 400_000).toISOString() : null,
+      firstPdt: ready ? new Date(STARTED_AT + server.listLeadMs).toISOString() : null,
+      headPdt: ready ? new Date(STARTED_AT + server.listLeadMs + 400_000).toISOString() : null,
     });
   }
   if (url.endsWith('/index.m3u8')) return new Response(vodPlaylist(url), { status: 200 });
@@ -364,6 +366,7 @@ beforeEach(() => {
   server.playerWindow = undefined;
   server.pdtStepMs = 4_000;
   server.breakBeforeSeq = null;
+  server.listLeadMs = 0;
   server.savedTracks = [{ trackId: 0, gain: 1 }];
   server.savedSchema = 2;
   server.savedOutput = null;
@@ -1114,6 +1117,18 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
     expect(ticks.length).toBeGreaterThan(0);
     expect(ticks.filter((tick) => !/^[01]:\d\d(\.\d)?$/.test(tick))).toEqual([]);
+  });
+
+  it('기준점이 없어 편집기 0초가 vod 첫 PDT 여도 표기는 옮기지 않는다 — 방송 시작과의 차를 빼지 않는다', async () => {
+    withMediaControl();
+    // 끝난 방송의 편집기 0초는 vod 목록 첫 PDT 다(방송 시작보다 32초 늦다). 기준점이 없으니 표기 오프셋은 0 이다
+    server.listLeadMs = 32_000;
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+
+    expect(screen.getByRole('slider', { name: '구간 시작점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:00.0 · 구간 12.4초',
+    );
   });
 
   it('기준점이 방송 시작보다 늦어도 눈금 · 접힌 요약 · 손잡이 표기는 출처 줄과 같은 경과다 — 32초 뒤로 옮긴다', async () => {

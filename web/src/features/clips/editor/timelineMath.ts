@@ -337,9 +337,11 @@ export interface RulerMark {
 export function rulerMarks(view: TimelineView, startOnAxisSeconds: number, count = 6): RulerMark[] {
   const span = view.endSeconds - view.startSeconds;
   const ticks = rulerTicks(view, count);
-  const allBeforeStart = ticks.every((tick) => tick < startOnAxisSeconds);
+  // 눈금 자리는 ms 로 반올림돼 있다 — 시작도 ms 로 맞춰야 시작과 1ms 안의 눈금이 앞선 눈금으로 비지 않는다
+  const start = roundMs(startOnAxisSeconds);
+  const allBeforeStart = ticks.every((tick) => tick < start);
   return ticks.map((tick, i) => {
-    const blank = tick < startOnAxisSeconds && !(allBeforeStart && i === 0);
+    const blank = tick < start && !(allBeforeStart && i === 0);
     return {
       seconds: tick,
       label: blank ? '' : rulerLabel(secondsSinceStart(tick, startOnAxisSeconds), span),
