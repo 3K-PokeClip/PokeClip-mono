@@ -87,8 +87,9 @@ public class SegmentLedger {
      * 버퍼 — 보안 L2). 그래서 「그 스트림 판 2 행의 최소 PDT ≤ t」 를 먼저 본다 — 「PDT ≤ t 인 판 2 행이 있다」 와 같은
      * 뜻이고(판 2 행이 없으면 최솟값이 NULL 이라 거짓), 거짓이면 본 조회를 건너뛴다. 최솟값은 생산자 판 2 PDT 색인
      * {@code stream_segments_v2_pdt_idx}({@code (stream_id, playback_pdt DESC) WHERE timing_version = 2} — 생산자 PR 510
-     * · develop 머지 커밋 fc7dd91c(2026-11-13))의 한쪽 끝 한 항목이라, 플래너가 t 를 모르는 일반 계획(같은 문장을 되풀이한 서버 준비 문장)에서도
-     * 꼬리 몇 행이다. {@code EXISTS(… playback_pdt <= ?)} 꼴은 플래너가 첫 행만 찾으면 된다고 보고 표 전체 Seq Scan 을
+     * · develop 머지 커밋 fc7dd91c(2026-11-13))의 한쪽 끝 한 항목이라 t 값과 무관하게 꼬리 몇 행이다 — 플래너가 t 를 모르는
+     * 일반 계획이어도 그렇다. 이 조회는 서버 준비 문장을 쓰지 않아({@link #floorByPlaybackPdt}) 실제로는 매번 바인딩 값으로 세운
+     * 계획이다. {@code EXISTS(… playback_pdt <= ?)} 꼴은 플래너가 첫 행만 찾으면 된다고 보고 표 전체 Seq Scan 을
      * 골랐다(2026-11-13 실측 12,668 버퍼). 확인은 본 조회와 같은 조건이라 답은 그대로다.
      *
      * <p>색인이 없는 DB(생산자 적용 전)에서도 답은 같다. 다만 판 2 행이 표에 생긴 뒤 이 색인이 없으면 조회마다 그 스트림 행을

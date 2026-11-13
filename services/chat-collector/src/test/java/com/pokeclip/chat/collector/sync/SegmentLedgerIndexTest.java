@@ -152,17 +152,18 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
         long legacyOnRollback = legacyFloor(ROLLBACK, tail, "있음");
         // 보안 L2 — 첫 판 2 PDT 보다 이른 시각이면 판 2 후보가 없다. 판 2 PDT 색인으로 「없음」 을 꼬리 몇 행에 안다.
         long v2Early = v2Floor(V2_ONLY, T0.minusSeconds(1), "있음 · 첫 PDT − 1초");
-        // 운영은 같은 문장을 되풀이하면 서버 준비 문장의 일반 계획(t 값을 모르는 계획)으로 돈다 — 그 계획에서도 꼬리 몇 행이어야
-        // 한다. 일반 계획에서는 플래너가 이른 시각인지 모르므로, 앞세운 존재 확인이 없으면 seq 역순으로 끝까지 훑을 수 있다.
+        // 앱의 이 조회는 서버 준비 문장을 쓰지 않는다(kty 2026-11-13 L3 (나) · SegmentLedgerPrepareTest). 아래 일반 계획(t 값을
+        // 모르는 계획) 측정은 그 문턱이 빠지거나 바뀔 때를 대비한 대조다 — 앞세운 존재 확인 덕에 일반 계획이어도 이른 시각 ·
+        // 꼬리는 꼬리 몇 행이어야 한다(확인이 없으면 이른 시각에 seq 역순으로 끝까지 훑는다).
         long v2EarlyGeneric = v2FloorGeneric(V2_ONLY, T0.minusSeconds(1), "있음 · 일반 계획 · 첫 PDT − 1초");
         long v2TailGeneric = v2FloorGeneric(V2_ONLY, tail, "있음 · 일반 계획");
         // 기록만 — 중간 시각(답이 있고 그 뒤 판 2 행이 15만). 본 조회가 seq 역순으로 그 행들을 지난다 — kty 2026-11-13 중간 t
         // 결정으로 수용(호출자는 카드당 1회 · 시각은 보통 라이브 머리). 생산자 리뷰 실측 30만 행 5,923 버퍼 · 약 32ms 와 견준다.
-        // 아래 첫 PDT + 1ms 는 일반 계획이면 그 스트림 판 2 행 거의 전부(7,249 버퍼 · 51–141ms(5회))다. 앱의 이 조회는 서버 준비
-        // 문장을 쓰지 않아(kty 2026-11-13 L3 (나) · SegmentLedgerPrepareTest) 매번 사용자 지정 계획(8 버퍼)이다.
         v2Floor(V2_ONLY, T0.plusMillis((long) (ROWS / 2) * SEGMENT_MS), "있음 · 중간 시각");
-        // 기록만(보안 L3) — 최악의 시각: 첫 판 2 PDT 바로 뒤. 답이 첫 행이라 본 조회가 그 스트림 판 2 행 거의 전부를 지난다.
+        // 기록만(보안 L3) — 첫 판 2 PDT 바로 뒤. 앱 경로는 서버 준비 문장을 쓰지 않아(kty 2026-11-13 L3 (나)) 이 사용자 지정
+        // 계획이다(8 버퍼).
         v2Floor(V2_ONLY, T0.plusMillis(1), "있음 · 첫 PDT + 1ms");
+        // 일반 계획 대조 — 답이 첫 행이라 seq 역순 본 조회가 그 스트림 판 2 행 거의 전부를 지난다(7,249 버퍼 · 51–141ms(5회)).
         v2FloorGeneric(V2_ONLY, T0.plusMillis(1), "있음 · 일반 계획 · 첫 PDT + 1ms");
         // 기록만 — 꼬리에서 먼 시각(첫 행 + 1초)의 옛 후보 조회는 그 시각 뒤 판 NULL 행 수만큼 읽는다.
         legacyFloor(LEGACY_ONLY, T0.plusSeconds(1), "있음 · 첫 행 + 1초");
@@ -234,7 +235,8 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
             values.append(i == 0 ? "" : ", ").append('\'').append(value).append('\'');
         }
         // 연결은 풀로 돌아간다 — 실패해도 일반 계획 강제 · 이 준비 문장이 남지 않게 finally 에서 늘 되돌린다. DEALLOCATE ALL 은
-        // 쓰지 않는다 — 드라이버가 그 연결에 둔 서버 준비 문장까지 지운다.
+        // 쓰지 않는다 — 드라이버가 그 연결에 둔 서버 준비 문장까지 지운다. DEALLOCATE 가 실패해도 RESET 은 따로 시도하고, RESET
+        // 까지 실패하면 예외를 그대로 던져 시험 실패로 드러낸다(시험 DB 안 일이라 연결 폐기 처리는 두지 않는다).
         String plan = jdbc.execute((ConnectionCallback<String>) con -> {
             try (Statement st = con.createStatement()) {
                 boolean prepared = false;
@@ -248,10 +250,13 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
                         return rs.getString(1);
                     }
                 } finally {
-                    if (prepared) {
-                        st.execute("DEALLOCATE v2_floor_generic");
+                    try {
+                        if (prepared) {
+                            st.execute("DEALLOCATE v2_floor_generic");
+                        }
+                    } finally {
+                        st.execute("RESET plan_cache_mode");
                     }
-                    st.execute("RESET plan_cache_mode");
                 }
             }
         });
