@@ -143,7 +143,7 @@ class VideoPositionV2Test extends IntegrationTestSupport {
     }
 
     /**
-     * 장 안 건너뜀(경계 표 B7 — 같은 녹화 · PDT 1,200ms 건너뜀)과 이어진 이웃 사이 틈은 뒤 조각 시작이다(F 3항). 공유 표
+     * 녹화가 이어진 새 장의 건너뜀(경계 표 B7 — 같은 녹화 · PDT 1,200ms 건너뜀)과 이어진 이웃 사이 틈은 뒤 조각 시작이다(F 3항). 공유 표
      * {@code F-pdt-chapter-skip-B7} 과 같은 숫자다. 옛 행 식(조각 끝으로 접음)이면 4,000 이다.
      */
     @Test

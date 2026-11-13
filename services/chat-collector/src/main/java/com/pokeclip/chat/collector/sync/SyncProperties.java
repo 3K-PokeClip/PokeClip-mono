@@ -77,7 +77,7 @@ public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffs
 
     public SyncProperties {
         requireInRange(defaultOffsetMs, "pokeclip.sync.default-offset-ms");
-        requireV2Correction(v2LeadCorrectionMs);
+        requireInRange(v2LeadCorrectionMs, "pokeclip.sync.v2-lead-correction-ms");
         if (channelOffsetMs == null) {
             channelOffsetMs = Map.of();
         } else {
@@ -86,22 +86,22 @@ public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffs
             channelOffsetMs.forEach(SyncProperties::requireChannelOffset);
             channelOffsetMs = Map.copyOf(channelOffsetMs);
         }
-        // 실제로 쓰이는 판 2 보정값도 같은 상한 안이어야 한다 — 각 값이 상한 안이어도 빼면 상한의 두 배까지 간다.
-        requireInRange(defaultOffsetMs - v2LeadCorrectionMs,
-                "pokeclip.sync.default-offset-ms − pokeclip.sync.v2-lead-correction-ms");
-        channelOffsetMs.forEach((channelId, offsetMs) -> requireInRange(offsetMs - v2LeadCorrectionMs,
-                "pokeclip.sync.channel-offset-ms." + channelId + " − pokeclip.sync.v2-lead-correction-ms"));
+        // 실제로 쓰이는 판 2 보정값도 같은 상한 안이어야 한다 — 각 값이 상한 안이어도 빼면 상한의 두 배까지 간다(보안 L1).
+        requireV2InRange("pokeclip.sync.default-offset-ms", defaultOffsetMs, v2LeadCorrectionMs);
+        channelOffsetMs.forEach((channelId, offsetMs) -> requireV2InRange(
+                "pokeclip.sync.channel-offset-ms." + channelId, offsetMs, v2LeadCorrectionMs));
     }
 
     /**
-     * 판 2 차감은 {@code 0 ≤ 값 ≤ MAX_ABS_OFFSET_MS}다. 차감은 파일 머리에서 영상 첫 표본까지(m)의 평균이라 음수가 아니다
-     * (계약 세그먼트인덱스 6-6-10 I11 {@code m_f ≥ 0}).
+     * 판 2 보정값(보정값 − 판 2 차감)의 상한. 각 값은 이미 상한 안이라 넘었다면 <b>두 값의 조합</b> 탓이다 — 한 값의 단위
+     * 착각 안내는 싣지 않고, 두 값과 결과를 함께 싣는다.
      */
-    private static void requireV2Correction(long correctionMs) {
-        if (correctionMs < 0 || correctionMs > MAX_ABS_OFFSET_MS) {
-            throw new IllegalArgumentException("pokeclip.sync.v2-lead-correction-ms=" + correctionMs
-                    + "이(가) 범위 0–" + MAX_ABS_OFFSET_MS + "ms 밖이다. 파일 머리에서 영상 첫 표본까지의 평균이라"
-                    + " 음수가 아니다. 단위는 밀리초다.");
+    private static void requireV2InRange(String property, long offsetMs, long correctionMs) {
+        long v2OffsetMs = offsetMs - correctionMs;
+        if (v2OffsetMs > MAX_ABS_OFFSET_MS || v2OffsetMs < -MAX_ABS_OFFSET_MS) {
+            throw new IllegalArgumentException(property + "(" + offsetMs + ") − pokeclip.sync.v2-lead-correction-ms("
+                    + correctionMs + ") = " + v2OffsetMs + "이(가) 판 2 보정값 크기 상한 " + MAX_ABS_OFFSET_MS
+                    + "ms를 넘는다. 두 값의 조합이 넘은 것이다 — 둘 가운데 하나를 고친다.");
         }
     }
 
