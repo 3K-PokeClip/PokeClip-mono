@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMediaBuffering } from '@/features/player/useMediaBuffering';
-import { windowBlobs } from './editorMedia';
+import { holdEditorWindowFetch, windowBlobs } from './editorMedia';
 import {
   boundaryAction,
   editorSourceError,
@@ -261,12 +261,15 @@ function useWindowMedia(options: {
     }
     const abort = new AbortController();
     void ensureWindowHeads(streamId, mediaKey, target.segs, abort.signal);
-    // 카드가 미리 받아 둔 창이면 다시 받지 않는다(POK-499)
+    // 카드가 미리 받아 둔 창이면 다시 받지 않는다(POK-499). 받는 동안은 카드 미리 받기를 쉬게 한다: 둘이 겹칠 때 메모리가 가장
+    // 높았다(M3). 받기가 끝나거나(성공 · 실패) 창이 바뀌거나 화면을 떠나면 놓는다
     const cached = windowBlobs.get(target.key);
+    const release = cached !== undefined ? () => undefined : holdEditorWindowFetch();
     (cached !== undefined
       ? Promise.resolve(cached)
       : fetchEditorWindow(mediaKey, target.segs, abort.signal)
     )
+      .finally(release)
       .then((remuxed) => {
         if (abort.signal.aborted) return;
         const placement = placementOf(target, remuxed, base, heads);
@@ -278,7 +281,10 @@ function useWindowMedia(options: {
         setFailure(windowFailureOf(e, target, reportRef.current));
         setFailedKey(target.key);
       });
-    return () => abort.abort();
+    return () => {
+      abort.abort();
+      release();
+    };
   }, [target, streamId, mediaKey, base, heads, setFailure]);
 
   // 머리가 늦게 오면 같은 창을 다시 배치한다(표시만 바뀐다). 캐시는 영상 키 하나에 하나라 다른 창(카드 미리 받기)의 머리에도

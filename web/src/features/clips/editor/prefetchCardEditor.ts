@@ -8,7 +8,13 @@ import {
 import { mediaControlBaseUrl } from '@/features/player/mediaSource';
 import type { XAnswer } from '@/features/player/rewindSwitch';
 import { onSessionAdvance } from '@/stores/auth';
-import { segmentTrackKey, segmentTracks, windowBlobs } from './editorMedia';
+import {
+  editorWindowFetching,
+  segmentTrackKey,
+  segmentTracks,
+  watchEditorWindowFetch,
+  windowBlobs,
+} from './editorMedia';
 import { editorXResolver, streamerIdOf } from './source/broadcastStreamer';
 import { editorSourceView, type EditorSourceState } from './source/editorSourceState';
 import type { EditorPlaylist, PlaylistSegment } from './source/editorPlaylist';
@@ -231,6 +237,7 @@ function blobRangeOf(remuxed: RemuxedWindow): { fromSeconds: number; toSeconds: 
  * false다. 끝 소리 확보 기다림은 막지 않는다: 맡긴 결과에 실려 편집기의 ② 기다림 고리가 이어 묻는다
  * @param video 같은 창의 영상 받기(다시 싼 결과가 소리를 놓을 닻이다)
  * @param source 방송 중인가 · 원천 ③ 목록(확보 seq 의 ③ 을 찾는다)
+ * @param signal 끊으면 받기를 멈추고 던진다(편집기에게 자리를 내줌)
  */
 async function prefetchAudio(
   streamId: string,
@@ -238,6 +245,7 @@ async function prefetchAudio(
   video: () => Promise<RemuxedWindow>,
   source: { live: boolean; playlist: EditorPlaylist },
   deps: PrefetchDeps,
+  signal: AbortSignal,
 ): Promise<boolean> {
   const { live, playlist } = source;
   const first = target.segs[0]!;
@@ -252,6 +260,7 @@ async function prefetchAudio(
       segs: target.segs,
       anchors: async () => windowAnchors(await video()),
       decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
+      signal,
       // 방송 중에 창 조각이 다 올라오지 않았으면 본문을 받지 않는다: 어차피 덜 덮은 소리는 맡기지 않고, 다시 확인할 때마다
       // 같은 구간을 통째로 받아 풀었다(10초마다 최대 6번)
       precheck: live ? (segments) => windowUploaded(segments, target.segs) : undefined,
@@ -280,18 +289,21 @@ async function prefetchAudio(
 
 /**
  * 창 조각을 받아 다시 싸 맡기고, 판 NULL 이면 ② 머리를 함께 읽는다. 머리 판독은 실패해도 미리 받기를 막지 않는다(편집기가 다시
- * 읽는다). 둘 다 시한에 끊는다. 맡겨 둔 창이면 그것을 돌려준다
+ * 읽는다). 둘 다 시한이나 signal 에 끊는다. 맡겨 둔 창이면 그것을 돌려준다
  */
 async function prefetchVideo(
   streamId: string,
   mediaKey: string,
   target: { key: string; segs: readonly PlaylistSegment[] },
   deps: PrefetchDeps,
+  signal: AbortSignal,
 ): Promise<RemuxedWindow> {
   const cached = windowBlobs.get(target.key);
   if (cached !== undefined) return cached;
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), PREFETCH_VIDEO_TIMEOUT_MS);
+  const stop = () => abort.abort();
+  const timer = setTimeout(stop, PREFETCH_VIDEO_TIMEOUT_MS);
+  signal.addEventListener('abort', stop, { once: true });
   const stopped = new Promise<void>((resolve) =>
     abort.signal.addEventListener('abort', () => resolve(), { once: true }),
   );
@@ -307,13 +319,16 @@ async function prefetchVideo(
     return remuxed;
   } finally {
     clearTimeout(timer);
+    signal.removeEventListener('abort', stop);
   }
 }
 
+/** @param signal 끊으면 받기를 멈추고 던진다(편집기에게 자리를 내줌) — 맡기는 것은 다 받은 것뿐이다 */
 async function prefetchOnce(
   streamId: string,
   cardId: string,
   deps: PrefetchDeps,
+  signal: AbortSignal,
 ): Promise<CardEditorPrefetch> {
   const [card, broadcast] = await Promise.all([
     deps.fetchJumpCard(streamId, cardId),
@@ -341,20 +356,29 @@ async function prefetchOnce(
   // 구간에 받을 조각이 없다(틈 안). 편집기도 받지 않고 「녹화 없음」으로 알린다
   if (decision.kind === 'empty') return 'ready';
   const { target } = decision;
+  // 목록을 읽는 사이에 끊겼으면 받기를 시작하지 않는다(받기 함수는 이미 끊긴 신호를 다시 듣지 못한다)
+  signal.throwIfAborted();
   // 소리는 영상과 함께 받기 시작하고, 창을 다시 싼 결과(Blob 닻)가 오면 놓는다
-  const video = prefetchVideo(streamId, mediaKey, target, deps);
-  const [, audioComplete] = await Promise.all([
+  const video = prefetchVideo(streamId, mediaKey, target, deps, signal);
+  // 하나가 실패해도 다른 쪽이 실제로 끝날 때까지 기다린다: 먼저 던지면 차례(자리)를 넘긴 뒤에도 남은 쪽이 받기 · 풀기를 이어
+  // 옛 · 새 작업이 겹친다(끊긴 소리는 풀던 덩어리를 마저 푼다 — loadSegmentTracks)
+  const [videoDone, audioDone] = await Promise.allSettled([
     video,
-    prefetchAudio(streamId, target, () => video, { live, playlist: list.playlist }, deps),
+    prefetchAudio(streamId, target, () => video, { live, playlist: list.playlist }, deps, signal),
   ]);
-  return audioComplete ? 'ready' : 'pending';
+  if (videoDone.status === 'rejected') throw videoDone.reason;
+  if (audioDone.status === 'rejected') throw audioDone.reason;
+  return audioDone.value ? 'ready' : 'pending';
 }
 
 /** 동시에 받는 카드 수. 한 화면에 카드가 많아도 받기가 한꺼번에 몰리지 않게 줄 세운다 */
 export const PREFETCH_PARALLEL = 2;
 
+/** 차례를 받아 도는 받기 수 */
 let running = 0;
 const waiting: (() => void)[] = [];
+/** 도는 받기마다 그 차례를 거둘 끊개 — 편집기가 창을 받기 시작하면 끊는다 */
+const turns = new Set<AbortController>();
 
 interface Prefetching {
   result: Promise<CardEditorPrefetch>;
@@ -364,39 +388,86 @@ interface Prefetching {
 }
 const inFlight = new Map<string, Prefetching>();
 
-/** 차례를 기다린다. 기다리는 동안 끊기면 줄에서 빠지고 던진다 */
-function awaitTurn(signal: AbortSignal): Promise<void> {
+const abandoned = () => new DOMException('prefetch abandoned', 'AbortError');
+
+/** 새 받기를 시작해도 되나: 자리가 남고 편집기가 창을 받는 중이 아니다(M3 — 둘이 겹칠 때 메모리가 가장 높았다) */
+const canStart = () => running < PREFETCH_PARALLEL && !editorWindowFetching();
+
+/** 자리가 나는 만큼 줄 앞부터 깨운다 */
+function wakeWaiting() {
+  while (canStart() && waiting.length > 0) waiting.shift()!();
+}
+
+// 편집기가 창을 받기 시작하면 도는 받기를 끊어 줄로 돌려보내고(안 끊으면 겹침이 그대로다), 다 받으면 줄을 다시 흘린다
+watchEditorWindowFetch((fetching) => {
+  if (fetching) for (const turn of turns) turn.abort();
+  else wakeWaiting();
+});
+
+/** 자리를 하나 쥐고 그 차례의 끊개를 바로 올린다: 받기가 깨어나기 전에 편집기가 다시 잡아도 끊긴다 */
+function grantTurn(): AbortController {
+  running += 1;
+  const turn = new AbortController();
+  turns.add(turn);
+  return turn;
+}
+
+/**
+ * 차례를 받는다(자리를 하나 쥔다). 받은 차례의 끊개를 돌려준다. 기다리는 동안 signal 이 끊기면 줄에서 빠지고 던진다
+ * @param first 줄 맨 앞에 선다 — 편집기에게 자리를 내줬던 받기다
+ */
+function takeTurn(signal: AbortSignal, first: boolean): Promise<AbortController> {
+  if (signal.aborted) return Promise.reject(abandoned());
+  if (canStart()) return Promise.resolve(grantTurn());
   return new Promise((resolve, reject) => {
     const turn = () => {
       signal.removeEventListener('abort', leave);
-      resolve();
+      resolve(grantTurn());
     };
     const leave = () => {
       waiting.splice(waiting.indexOf(turn), 1);
-      reject(new DOMException('prefetch abandoned', 'AbortError'));
+      reject(abandoned());
     };
-    waiting.push(turn);
+    if (first) waiting.unshift(turn);
+    else waiting.push(turn);
     signal.addEventListener('abort', leave, { once: true });
   });
 }
 
-async function inTurn<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
-  if (running >= PREFETCH_PARALLEL) await awaitTurn(signal);
-  running += 1;
-  try {
-    return await work();
-  } finally {
-    running -= 1;
-    waiting.shift()?.();
+/**
+ * 차례를 받아 work 를 돈다. 도는 중에 편집기가 창을 받기 시작하면 work 를 끊고 줄 맨 앞에 다시 서서 처음부터 돈다 — 맡기는 것은
+ * 다 받은 것뿐이라 반쯤 받은 것은 남지 않고, 다 받아 맡긴 영상 창은 다시 돌 때 꺼내 쓴다. 기다리는 쪽이 모두 떠났으면(abandon)
+ * 다시 돌지 않고 던진다. 끊으면 받던 바이트를 버리지만, 안 끊으면 편집기 창 받기와 겹쳐 메모리가 가장 높다(M3)
+ */
+async function inTurn<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  abandon: AbortSignal,
+): Promise<T> {
+  for (let first = false; ; first = true) {
+    const turn = await takeTurn(abandon, first);
+    try {
+      // 차례를 받은 뒤 깨어나기 전에 편집기가 다시 잡았으면(놓기 → 같은 틱 다시 잡기) 시작하지 않고 줄로 돌아간다
+      turn.signal.throwIfAborted();
+      return await work(turn.signal);
+    } catch (error) {
+      // 편집기에게 자리를 내줬다: 줄 맨 앞에 다시 선다(기다리는 쪽이 모두 떠났으면 takeTurn 이 던진다)
+      if (!turn.signal.aborted) throw error;
+    } finally {
+      turns.delete(turn);
+      running -= 1;
+      wakeWaiting();
+    }
   }
 }
 
 /**
  * 카드 하나의 편집기 미디어를 미리 받는다. 같은 카드를 받는 중이면 그 받기를 같이 기다린다(카드가 다시 그려져도 두 번 받지
- * 않는다). 실패하면 던지고, 다시 부르면 처음부터 다시 받는다.
+ * 않는다). 실패하면 던지고, 다시 부르면 처음부터 다시 받는다. 편집기가 창(영상 · 소리)을 받는 동안은 쉰다: 새 받기는 줄에서
+ * 기다리고, 도는 받기는 끊겨 줄 앞에 다시 선다(inTurn).
  *
  * @param signal 끊으면 이 카드를 더 기다리지 않는다는 뜻이다. 기다리는 쪽이 모두 끊었고 아직 줄에 있으면 받지 않는다(카드가 화면을
- *   벗어났거나 화면을 떠났다: 맡겨 둘 자리는 넷뿐이라 받아도 버린다). 이미 받기 시작했으면 끝까지 간다: 지금까지 받은 것을 버리지 않게
+ *   벗어났거나 화면을 떠났다: 맡겨 둘 자리는 넷뿐이라 받아도 버린다). 이미 받기 시작했으면 끝까지 간다: 지금까지 받은 것을 버리지 않게.
+ *   단 그 사이 편집기가 창을 받기 시작해 끊기면 다시 받지 않는다
  */
 export function prefetchCardEditor(
   streamId: string,
@@ -408,9 +479,10 @@ export function prefetchCardEditor(
   let job = inFlight.get(key);
   if (job === undefined) {
     const abandon = new AbortController();
-    const result = inTurn(() => prefetchOnce(streamId, cardId, deps), abandon.signal).finally(() =>
-      inFlight.delete(key),
-    );
+    const result = inTurn(
+      (signal) => prefetchOnce(streamId, cardId, deps, signal),
+      abandon.signal,
+    ).finally(() => inFlight.delete(key));
     job = { result, interest: 0, abandon };
     inFlight.set(key, job);
   }

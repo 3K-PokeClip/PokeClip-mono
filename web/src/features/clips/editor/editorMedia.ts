@@ -121,6 +121,40 @@ export const segmentTracks = recentlyUsed<TrackAudioLoad>(trackAudioLoadBytes);
 export const segmentTrackKey = (streamId: string, firstSeq: number, lastSeq: number) =>
   `${streamId}:${firstSeq}-${lastSeq}`;
 
+let windowFetches = 0;
+const windowFetchWatchers = new Set<(fetching: boolean) => void>();
+
+function announceWindowFetch() {
+  const fetching = windowFetches > 0;
+  for (const watcher of windowFetchWatchers) watcher(fetching);
+}
+
+/**
+ * 편집기가 창(영상 · 소리)을 받는 동안 잡는다. 그동안 카드 미리 받기는 쉰다(prefetchCardEditor): 편집기 창 받기와 카드 미리
+ * 받기가 겹칠 때 메모리가 가장 높았다(M3 · 2026-11-13). 돌려준 함수가 놓는다 — 두 번 불러도 한 번만 놓는다(받기 끝 · 효과 정리
+ * 양쪽에서 부른다)
+ */
+export function holdEditorWindowFetch(): () => void {
+  windowFetches += 1;
+  if (windowFetches === 1) announceWindowFetch();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    windowFetches -= 1;
+    if (windowFetches === 0) announceWindowFetch();
+  };
+}
+
+/** 편집기가 창을 받는 중인가 */
+export const editorWindowFetching = () => windowFetches > 0;
+
+/** 편집기가 창을 받는 중 ↔ 아님이 바뀔 때 부른다. 돌려준 함수가 그만 듣는다 */
+export function watchEditorWindowFetch(watcher: (fetching: boolean) => void): () => void {
+  windowFetchWatchers.add(watcher);
+  return () => windowFetchWatchers.delete(watcher);
+}
+
 /** 맡긴 것을 다 비운다. 계정이 바뀌어도 비운다: 앞 계정의 녹화가 메모리에 남지 않게(시험 사이에도 부른다) */
 export function clearEditorMedia() {
   clearTimeout(releaseTimer);

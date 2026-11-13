@@ -4,11 +4,14 @@ import {
   EDITOR_MEDIA_BYTES_LIMIT,
   EDITOR_MEDIA_LINGER_MS,
   clearEditorMedia,
+  editorWindowFetching,
   editorWindowKey,
   holdEditorMedia,
+  holdEditorWindowFetch,
   segmentTracks,
   trackAudioLoadBytes,
   trackPiecesBytes,
+  watchEditorWindowFetch,
   windowBlobs,
 } from './editorMedia';
 import type { SegmentTracks } from './trackAudio/fmp4Audio';
@@ -204,5 +207,44 @@ describe('editorWindowKey', () => {
     expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-1', 102, 110));
     expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-1', 101, 109));
     expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-2', 102, 109));
+  });
+});
+
+// 편집기가 창(영상 · 소리)을 받는 동안 카드 미리 받기를 쉬게 하는 표시(M3 — 둘이 겹칠 때 메모리가 가장 높았다)
+describe('holdEditorWindowFetch', () => {
+  it('잡은 쪽이 모두 놓을 때까지 받는 중이다', () => {
+    const first = holdEditorWindowFetch();
+    const second = holdEditorWindowFetch();
+    expect(editorWindowFetching()).toBe(true);
+
+    first();
+    expect(editorWindowFetching()).toBe(true);
+    second();
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('같은 놓기를 두 번 불러도 한 번만 놓는다: 남이 잡은 것까지 풀지 않는다', () => {
+    const mine = holdEditorWindowFetch();
+    const other = holdEditorWindowFetch();
+
+    mine();
+    mine();
+    expect(editorWindowFetching()).toBe(true);
+    other();
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받는 중 ↔ 아님이 바뀔 때만 알린다', () => {
+    const seen: boolean[] = [];
+    const stop = watchEditorWindowFetch((fetching) => seen.push(fetching));
+
+    const first = holdEditorWindowFetch();
+    const second = holdEditorWindowFetch();
+    first();
+    second();
+    stop();
+    holdEditorWindowFetch()();
+
+    expect(seen).toEqual([true, false]);
   });
 });

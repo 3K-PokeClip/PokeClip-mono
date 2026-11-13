@@ -528,6 +528,172 @@ describe('loadTrackAudio — 풀기가 버린 머리만큼 시작을 뒤로 민�
   });
 });
 
+// 받은 ② 조각(영상까지 든 4MB 남짓)과 풀기 입력(ADTS)은 다 쓰면 바로 놓는다(M3 — GC 를 기다리면 창 하나에 ② 약 210MiB 가
+// 쌓였다). 놓기 = ArrayBuffer 떼어 내기(detached)라 가짜 받기가 준 버퍼로 살아 있는 수를 센다
+describe('loadTrackAudio — 다 쓴 바이트를 바로 놓는다', () => {
+  beforeEach(() => {
+    demux.synthetic = null;
+  });
+
+  /** 4초 조각 seq 1…count(닻 4초 간격이라 이어진다) */
+  const fourSecondSegments = (count: number): Record<number, SyntheticSegment> =>
+    Object.fromEntries(
+      seqsOf(count).map((seq) => [
+        seq,
+        { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] },
+      ]),
+    );
+
+  /** 조각 열 개 받기 — 한 틱 늦게 오고, 줄 때마다 아직 안 놓인 버퍼 수를 잰다 */
+  function countingSource() {
+    const given: ArrayBuffer[] = [];
+    let peak = 0;
+    const src = source(
+      access(...seqsOf(10).map((seq) => BASE + seq * 4000)),
+      anchorsOf(...seqsOf(10).map((seq) => (seq - 1) * 4)),
+    );
+    src.fetchBytes.mockImplementation((url: string) => {
+      const seq = Number(/seg_(\d+)/.exec(url)?.[1]);
+      const bytes = Uint8Array.of(seq).buffer;
+      given.push(bytes);
+      peak = Math.max(peak, given.filter((buffer) => !buffer.detached).length);
+      return new Promise<ArrayBuffer>((resolve) => setTimeout(() => resolve(bytes), 0));
+    });
+    return { src, given, peak: () => peak };
+  }
+
+  it('받은 ② 조각은 판독하자마자 놓는다: 동시에 살아 있는 조각은 받는 수(4)를 넘지 않는다', async () => {
+    useSynthetic(fourSecondSegments(10));
+    const { src, given, peak } = countingSource();
+
+    const { tracks } = await loadTrackAudio(src, seqsOf(10));
+
+    expect(given).toHaveLength(10);
+    expect(given.every((buffer) => buffer.detached)).toBe(true);
+    expect(peak()).toBeLessThanOrEqual(4);
+    // 놓아도 소리는 같다(프레임은 판독이 복사해 둔다): 열 조각이 한 덩어리로 이어진다
+    expect(tracks[0]).toHaveLength(1);
+    expect(fake(tracks[0]![0]!.buffer).tags).toEqual(
+      seqsOf(10).flatMap((seq) => Array.from({ length: 125 }, () => seq)),
+    );
+  });
+
+  it('판독이 실패해도 받은 조각은 놓는다', async () => {
+    const { src, given } = countingSource();
+    demux.synthetic = () => ({ video: null, audio: [] });
+
+    await expect(loadTrackAudio(src, seqsOf(10))).rejects.toThrow('has no readable audio');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(given.length).toBeGreaterThan(0);
+    expect(given.every((buffer) => buffer.detached)).toBe(true);
+  });
+
+  it('풀기 입력(ADTS)은 풀고 나면 놓는다: 소리는 그대로다', async () => {
+    useSynthetic(fourSecondSegments(10));
+    const { src } = countingSource();
+    const inputs: Uint8Array[] = [];
+    src.decode.mockImplementation((adts: Uint8Array) => {
+      inputs.push(adts);
+      return fakeDecode(adts);
+    });
+
+    const { tracks } = await loadTrackAudio(src, seqsOf(10));
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs.every((adts) => (adts.buffer as ArrayBuffer).detached)).toBe(true);
+    expect(fake(tracks[0]![0]!.buffer).frames).toBe(1250);
+  });
+
+  it('끝 소리 확보 조각도 판독하자마자 놓는다', async () => {
+    useSynthetic(fourSecondSegments(11));
+    const { src, given } = countingSource();
+    src.fetchAccess.mockResolvedValue(
+      withCapture(access(...seqsOf(10).map((seq) => BASE + seq * 4000)), 'attached', 11),
+    );
+    const captureAnchor = () => Promise.resolve(40);
+
+    const load = await loadTrackAudio({ ...src, captureAnchor }, seqsOf(10));
+
+    expect(load.capture).toBe('placed');
+    expect(given).toHaveLength(11);
+    expect(given.every((buffer) => buffer.detached)).toBe(true);
+  });
+});
+
+// 끊으면(signal) 다음 조각 받기 · 다음 덩어리 풀기를 시작하지 않는다. 받던 · 풀던 것은 끝까지 가도 새 일은 없다 — 바깥이 끊긴
+// 줄 알고 자리를 넘긴 뒤에도 안에서 일이 이어지면 옛 · 새 작업이 겹친다(메모리 r1 H2)
+describe('loadTrackAudio — 끊으면 새 받기 · 풀기를 시작하지 않는다', () => {
+  beforeEach(() => {
+    demux.synthetic = null;
+  });
+
+  it('받는 중에 끊으면 다음 조각을 받지 않고 던진다', async () => {
+    const seqs = seqsOf(10);
+    const src = source(access(...seqs.map((i) => BASE + i * 1000)), anchorsOf(...seqs));
+    const stop = new AbortController();
+    src.fetchBytes.mockImplementation(() => {
+      stop.abort();
+      return new Promise<ArrayBuffer>((resolve) =>
+        setTimeout(() => resolve(new Uint8Array(fixture).buffer), 5),
+      );
+    });
+
+    await expect(loadTrackAudio(src, seqs, { signal: stop.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(src.fetchBytes.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it('푸는 중에 끊으면 남은 덩어리를 풀지 않고 던진다', async () => {
+    useSynthetic({
+      1: {
+        videoDts: 0,
+        tracks: Array.from({ length: 6 }, () => ({ ...FOUR_SECONDS_32K, firstPts: 0 })),
+      },
+    });
+    const src = source(access(BASE), anchorsOf(0));
+    const stop = new AbortController();
+    src.decode.mockImplementation(async (adts: Uint8Array) => {
+      stop.abort();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return fakeDecode(adts);
+    });
+
+    await expect(loadTrackAudio(src, [1], { signal: stop.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(src.decode.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it('끝 소리 확보를 놓다가 끊겨도 확보만 빼고 다시 풀지 않는다: 끊김은 확보 실패가 아니다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const twoTracks = Array.from({ length: 2 }, () => ({ ...FOUR_SECONDS_32K, firstPts: 0 }));
+    useSynthetic({ 1: { videoDts: 0, tracks: twoTracks }, 2: { videoDts: 0, tracks: twoTracks } });
+    const stop = new AbortController();
+    const src = {
+      ...source(withCapture(access(BASE), 'attached', 2), anchorsOf(0)),
+      captureAnchor: () => Promise.resolve(4),
+    };
+    src.decode.mockImplementation(async (adts: Uint8Array) => {
+      stop.abort();
+      return fakeDecode(adts);
+    });
+
+    await expect(loadTrackAudio(src, [1], { signal: stop.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+
+    expect(src.decode.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('끝 소리 확보');
+    warn.mockRestore();
+  });
+});
+
 describe('windowAnchors', () => {
   it('seq → ③ 영상 첫 DTS − Δ(창 Blob 시각)', () => {
     const segment = (seq: number, videoDts: number) => ({

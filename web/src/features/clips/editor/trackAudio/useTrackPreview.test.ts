@@ -4,7 +4,13 @@ import { StrictMode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestSegmentAudioAccess, type SegmentAudioAccess } from '@/api/clipEditor';
-import { clearEditorMedia, segmentTrackKey, segmentTracks } from '../editorMedia';
+import {
+  clearEditorMedia,
+  editorWindowFetching,
+  segmentTrackKey,
+  segmentTracks,
+  watchEditorWindowFetch,
+} from '../editorMedia';
 import type { EditorPlaylist, PlaylistSegment } from '../source/editorPlaylist';
 import { ensureHeads, failMissingHeads, headCacheFor } from '../source/fileHeadProbe';
 import type { RemuxedWindow } from '../source/remuxWindow';
@@ -13,6 +19,7 @@ import type { TrackAudioLoad, TrackPiece } from './loadTrackAudio';
 import {
   AUDIO_WAIT_LIMIT,
   AUDIO_WAIT_MS,
+  loadSegmentTracks,
   TRACK_LOAD_TIMEOUT_MS,
   useTrackPreview,
   windowLevels,
@@ -1308,6 +1315,168 @@ describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => 
 
     await advance(AUDIO_WAIT_MS + 50);
     expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 편집기가 창 소리를 처음 받는 동안은 카드 미리 받기가 쉰다(M3 — 둘이 겹칠 때 메모리가 가장 높았다). 받기 끝 · 실패 · 화면
+// 떠남에서 꼭 풀려야 카드 미리 받기가 영원히 멈추지 않는다. 고리의 다시 받기는 잡지 않는다(10초마다 카드 받기를 끊지 않게)
+describe('useTrackPreview — 창 소리를 받는 동안 카드 미리 받기 쉬게 하기', () => {
+  let seen: boolean[];
+  let stopWatching: () => void;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2, 3]));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(new Uint8Array(fixture)))),
+    );
+    seen = [];
+    stopWatching = watchEditorWindowFetch((fetching) => seen.push(fetching));
+  });
+  afterEach(() => {
+    stopWatching();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.mocked(requestSegmentAudioAccess).mockReset();
+    clearEditorMedia();
+  });
+
+  const mountPreview = (loaded: LoadedTrackWindow | null) =>
+    renderHook(
+      ({ loaded: current }: { loaded: LoadedTrackWindow | null }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window: THREE,
+          loaded: current,
+          video: video(),
+          createContext: () => fakeContext().ctx as never,
+        }),
+      { initialProps: { loaded } },
+    );
+
+  it('창 소리를 처음 받는 동안(닻 기다림 · 풀기 포함) 잡고, 놓아 ready 가 되면 놓는다', async () => {
+    const { result, rerender } = mountPreview(null);
+    await advance(50);
+    expect(editorWindowFetching()).toBe(true);
+
+    rerender({ loaded: loadedOf(THREE) });
+    await advance(50);
+
+    expect(result.current.status).toBe('ready');
+    expect(editorWindowFetching()).toBe(false);
+    expect(seen).toEqual([true, false]);
+  });
+
+  it('받다 실패해도 놓는다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockRejectedValueOnce(new Error('503'));
+    const { result } = mountPreview(loadedOf(THREE));
+    await advance(50);
+
+    expect(result.current.status).toBe('unavailable');
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받는 중에 화면을 떠나도 놓는다', async () => {
+    const { unmount } = mountPreview(null);
+    await advance(50);
+    expect(editorWindowFetching()).toBe(true);
+
+    unmount();
+
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('카드가 미리 받아 둔 소리면 받지 않으므로 잡지 않는다', async () => {
+    segmentTracks.set(
+      segmentTrackKey('s-1', 1, 3),
+      cachedLoad([[{ startSeconds: 0, buffer: CACHED_BUFFER }]]),
+    );
+    const { result } = mountPreview(loadedOf(THREE));
+    await advance(50);
+
+    expect(result.current.status).toBe('ready');
+    expect(seen).toEqual([]);
+  });
+
+  it('② 기다림 고리의 다시 받기는 잡지 않는다: 10초마다 카드 미리 받기를 끊지 않는다', async () => {
+    vi.mocked(requestSegmentAudioAccess)
+      .mockResolvedValueOnce(accessFor([1, 3]))
+      .mockResolvedValue(accessFor([1, 2, 3]));
+    const { result } = mountPreview(loadedOf(THREE));
+    await advance(50);
+    expect(seen).toEqual([true, false]);
+
+    await advance(AUDIO_WAIT_MS + 50);
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+    expect(result.current.status).toBe('ready');
+    expect(seen).toEqual([true, false]);
+  });
+});
+
+// 끊으면(바깥 신호 · 창 바뀜 · 시한) 안쪽 받기 · 풀기도 멈추고, 안쪽이 실제로 끝난 뒤에 거부한다 — 먼저 거부하면 쥔 쪽(카드
+// 미리 받기의 차례)이 자리를 넘긴 뒤에도 안에서 남은 덩어리를 계속 풀어 옛 · 새 작업이 겹친다(메모리 r1 H2)
+describe('loadSegmentTracks — 끊으면 안쪽이 멈춘 뒤에 끝난다', () => {
+  beforeEach(() => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1]));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(new Uint8Array(fixture)))),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.mocked(requestSegmentAudioAccess).mockReset();
+  });
+
+  it('풀던 덩어리가 끝날 때까지 거부하지 않고, 남은 덩어리는 풀지 않는다', async () => {
+    const stop = new AbortController();
+    const finishing: (() => void)[] = [];
+    const decode = vi.fn(
+      (adts: Uint8Array) =>
+        new Promise<AudioBuffer>((resolve) =>
+          finishing.push(() => resolve(fakeDecoded(adts.buffer as ArrayBuffer))),
+        ),
+    );
+    let settled = false;
+    const load = loadSegmentTracks({
+      streamId: 's-1',
+      segs: windowOf(10, [1]).segs,
+      anchors: () => Promise.resolve(new Map([[1, 0]])),
+      decode,
+      signal: stop.signal,
+    }).finally(() => {
+      settled = true;
+    });
+    load.catch(() => undefined);
+    await waitFor(() => expect(decode).toHaveBeenCalled());
+    const started = decode.mock.calls.length;
+
+    stop.abort();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    finishing.splice(0).forEach((finish) => finish());
+    await expect(load).rejects.toThrow('track audio load stopped');
+    expect(decode).toHaveBeenCalledTimes(started);
+  });
+
+  it('닻(영상 창)을 기다리는 중에 끊어도 끝난다: 안쪽이 닻에 묶여 남지 않는다', async () => {
+    const stop = new AbortController();
+    const load = loadSegmentTracks({
+      streamId: 's-1',
+      segs: windowOf(10, [1]).segs,
+      anchors: () => new Promise(() => undefined),
+      decode: (adts) => Promise.resolve(fakeDecoded(adts.buffer as ArrayBuffer)),
+      signal: stop.signal,
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    stop.abort();
+
+    await expect(load).rejects.toThrow('track audio load stopped');
   });
 });
 

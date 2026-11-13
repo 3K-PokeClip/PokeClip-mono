@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SegmentAudioAccess } from '@/api/clipEditor';
-import { segmentTrackKey, segmentTracks } from '../editorMedia';
+import { holdEditorWindowFetch, segmentTrackKey, segmentTracks } from '../editorMedia';
 import type { EditorPlaylist, PlaylistSegment } from '../source/editorPlaylist';
 import { ensureWindowHeads } from '../source/editorWindow';
 import {
@@ -217,50 +217,53 @@ export function loadSegmentTracks(options: {
   const stopped = new Promise<never>((_, reject) => {
     abort.signal.addEventListener('abort', () => reject(new Error('track audio load stopped')));
   });
-  return Promise.race([
-    loadTrackAudio(
-      {
-        // 창 조각이 덮는 [첫 PDT, 마지막 PDT + EXTINF) — 확보 후보만큼 넓히지 않는다. 판 NULL 창의 ② 머리 판독이 같은 범위를
-        // 묻는 중이면 그 응답을 같이 쓴다(windowAudioAccess). 멈춤 시한 · 바깥 멈춤이면 그 요청을 더는 같이 쓰지 않는다
-        fetchAccess: async () => {
-          const access = await windowAudioAccess(streamId, segs, abort.signal);
-          progressed();
-          return access;
-        },
-        fetchBytes: async (url) => {
-          const res = await fetch(url, { signal: abort.signal });
-          // 서명 주소 만료(S3는 403): 주소를 새로 받아 다시 받는다(loadTrackAudio)
-          if (res.status === 403) throw new SegmentUrlExpiredError();
-          if (!res.ok) throw new Error(`segment ${res.status}`);
-          const bytes = await res.arrayBuffer();
-          progressed();
-          return bytes;
-        },
-        anchors: async () => {
-          // 영상 창(③ 받기 · 다시 싸기)을 기다리는 동안은 소리 받기가 멈춘 것이 아니다
-          clearTimeout(timer);
-          const anchors = await options.anchors();
-          progressed();
-          return anchors;
-        },
-        captureAnchor:
-          captureAnchor === undefined
-            ? undefined
-            : async (seq) => {
-                const anchor = await captureAnchor(seq);
-                progressed();
-                return anchor;
-              },
-        decode,
+  /** 바깥(닻 · 확보 닻) 기다림도 멈춤에 끊는다: 안쪽이 그 기다림에 묶여 끝나지 않으면 아래에서 안쪽 끝을 기다리다 멈춘다 */
+  const untilStopped = <T>(waiting: Promise<T>) => Promise.race([waiting, stopped]);
+  const work = loadTrackAudio(
+    {
+      // 창 조각이 덮는 [첫 PDT, 마지막 PDT + EXTINF) — 확보 후보만큼 넓히지 않는다. 판 NULL 창의 ② 머리 판독이 같은 범위를
+      // 묻는 중이면 그 응답을 같이 쓴다(windowAudioAccess). 멈춤 시한 · 바깥 멈춤이면 그 요청을 더는 같이 쓰지 않는다
+      fetchAccess: async () => {
+        const access = await windowAudioAccess(streamId, segs, abort.signal);
+        progressed();
+        return access;
       },
-      segs.map((seg) => seg.seq),
-      { precheck, previous },
-    ),
-    stopped,
-  ])
-    .catch((error: unknown) => {
-      // 받는 중인 다른 조각도 멈춘다: 하나가 실패하면 결과를 버린다(PR #341 claude)
+      fetchBytes: async (url) => {
+        // 멈추면 fetch 도 끊기지만, 붙잡힌 연결이 거부를 늦게 알려도 안쪽이 바로 끝나게 멈춤에 묶는다
+        const res = await untilStopped(fetch(url, { signal: abort.signal }));
+        // 서명 주소 만료(S3는 403): 주소를 새로 받아 다시 받는다(loadTrackAudio)
+        if (res.status === 403) throw new SegmentUrlExpiredError();
+        if (!res.ok) throw new Error(`segment ${res.status}`);
+        const bytes = await untilStopped(res.arrayBuffer());
+        progressed();
+        return bytes;
+      },
+      anchors: async () => {
+        // 영상 창(③ 받기 · 다시 싸기)을 기다리는 동안은 소리 받기가 멈춘 것이 아니다
+        clearTimeout(timer);
+        const anchors = await untilStopped(options.anchors());
+        progressed();
+        return anchors;
+      },
+      captureAnchor:
+        captureAnchor === undefined
+          ? undefined
+          : async (seq) => {
+              const anchor = await untilStopped(captureAnchor(seq));
+              progressed();
+              return anchor;
+            },
+      decode,
+    },
+    segs.map((seg) => seg.seq),
+    { precheck, previous, signal: abort.signal },
+  );
+  return Promise.race([work, stopped])
+    .catch(async (error: unknown) => {
+      // 받는 중인 다른 조각도 멈춘다: 하나가 실패하면 결과를 버린다(PR #341 claude). 안쪽이 실제로 끝난 뒤에 던진다 — 먼저
+      // 던지면 쥔 쪽(카드 미리 받기의 차례)이 자리를 넘긴 뒤에도 안에서 풀던 덩어리가 이어져 옛 · 새 작업이 겹친다
       abort.abort();
+      await work.catch(() => undefined);
       throw error;
     })
     .finally(() => {
@@ -458,8 +461,13 @@ export function useTrackPreview(options: {
     // 카드가 미리 받아 풀어 둔 창이면 다시 받지 않는다(POK-499). 그래도 그 창을 받은 영상의 닻이 올 때까지 놓지 않는다:
     // 영상 · 소리 캐시는 따로 버려져 영상이 아직 앞 창을 틀 수 있다(받는 갈래와 같은 묶음 — 닻이 와야 재생기를 만든다)
     const prefetched = prefetchedLoad(streamId, win.segs);
+    // 처음 받는 동안(닻 기다림 · 풀기까지)은 카드 미리 받기를 쉬게 한다: 둘이 겹칠 때 메모리가 가장 높았다(M3). 고리의 다시
+    // 받기는 잡지 않는다 — 빠진 조각만 받는데, 10초마다 잡으면 카드 미리 받기가 그때마다 끊긴다
+    const release = prefetched !== undefined ? () => undefined : holdEditorWindowFetch();
+    const first = prefetched !== undefined ? remuxed.then(() => prefetched) : load();
+    first.then(release, release);
     const stop = runAudioWait({
-      first: prefetched !== undefined ? remuxed.then(() => prefetched) : load(),
+      first,
       // 판 NULL 창의 빠진 머리도 같은 차례에 다시 읽는다 — 소리 주소 응답 하나를 나눠 쓴다(windowAudioAccess). 고리가
       // 기다리는 것은 missing 이라 failed 는 다시 읽지 않는다(보안 검수 c10b′ M-1 — 다시 시도는 저장 쪽 몫)
       refresh: (previous) => {
@@ -494,6 +502,7 @@ export function useTrackPreview(options: {
     return () => {
       stop();
       abort.abort();
+      release();
     };
   }, [streamId, windowKey, showLoad]);
 

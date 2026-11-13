@@ -78,7 +78,13 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
 
 const { requestSegmentAudioAccess } = await import('@/api/clipEditor');
 const { remuxWindow } = await import('./source/remuxWindow');
-const { clearEditorMedia, editorWindowKey, windowBlobs } = await import('./editorMedia');
+const {
+  clearEditorMedia,
+  editorWindowFetching,
+  editorWindowKey,
+  watchEditorWindowFetch,
+  windowBlobs,
+} = await import('./editorMedia');
 const { decideWindow } = await import('./source/editorWindow');
 const { useEditorVideoPlayback } = await import('./useEditorVideoPlayback');
 
@@ -621,6 +627,87 @@ describe('useEditorVideoPlayback — 미리 받아 둔 창', () => {
     mount();
     await flush();
     expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+  });
+});
+
+// 편집기가 창을 받는 동안은 카드 미리 받기가 쉰다(M3 — 둘이 겹칠 때 메모리가 가장 높았다). 쉬게 하는 표시가 받기 끝 · 실패 ·
+// 화면 떠남에서 꼭 풀려야 카드 미리 받기가 영원히 멈추지 않는다
+describe('useEditorVideoPlayback — 창을 받는 동안 카드 미리 받기 쉬게 하기', () => {
+  it('창을 받는 동안 잡고, 받아 다시 싸면 놓는다', async () => {
+    const release: (() => void)[] = [];
+    fetchSpy.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          release.push(() => resolve(new Response(new Uint8Array([1]), { status: 200 }))),
+        ),
+    );
+    const { result } = mount();
+    await flush();
+    expect(editorWindowFetching()).toBe(true);
+
+    await act(async () => {
+      while (release.length > 0) release.shift()!();
+      for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(0);
+    });
+    await flush();
+
+    expect(result.current.src).toBe('blob:1');
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받다 실패해도 놓는다', async () => {
+    fetchSpy.mockImplementation(async (url: string) =>
+      url.endsWith('.m4s')
+        ? new Response(null, { status: 404 })
+        : new Response(new Uint8Array([1]), { status: 200 }),
+    );
+    const { result } = mount();
+    await flush();
+
+    expect(result.current.playback.error).not.toBeNull();
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받는 중에 화면을 떠나도 놓는다', async () => {
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const { unmount } = mount();
+    await flush();
+    expect(editorWindowFetching()).toBe(true);
+
+    unmount();
+
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받는 중에 창이 바뀌면 앞 창 몫은 놓고 새 창 몫으로 잡는다', async () => {
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const seen: boolean[] = [];
+    const stop = watchEditorWindowFetch((fetching) => seen.push(fetching));
+    const { result, unmount } = mount();
+    await flush();
+
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 60, endSeconds: 70, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flush();
+    expect(editorWindowFetching()).toBe(true);
+    unmount();
+    stop();
+
+    expect(editorWindowFetching()).toBe(false);
+    expect(seen.at(-1)).toBe(false);
+  });
+
+  it('카드가 미리 받아 둔 창이면 받지 않으므로 잡지 않는다', async () => {
+    windowBlobs.set(editorWindowKey(MEDIA_KEY, 102, 109), remux.of(range(102, 109)));
+    const seen: boolean[] = [];
+    const stop = watchEditorWindowFetch((fetching) => seen.push(fetching));
+    mount();
+    await flush();
+    stop();
+
+    expect(seen).toEqual([]);
   });
 });
 
