@@ -76,6 +76,8 @@ variables {
   rds_sg_id          = "sg-0rds0000000000000"
   auth_sg_id         = "sg-0auth000000000000"
   auth_port          = 18086
+  clip_sg_id         = "sg-0clip000000000000"
+  clip_port          = 18087
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -126,7 +128,7 @@ run "user_data_is_gzip_base64_under_16_kib" {
 }
 
 # 가장 큰 렌더(응답기 · janitor · 제어면 상류 · 발행 목록 둘 · 새 꼴 쓰기 ·
-# 하한 Writer 모두 켬)도 한도 안이다.
+# 하한 Writer · 만료 창구 모두 켬)도 한도 안이다.
 run "largest_user_data_under_16_kib" {
   command = plan
 
@@ -139,14 +141,19 @@ run "largest_user_data_under_16_kib" {
     lifecycle_publish_streams           = ["01ARZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ"]
     playback_round_keys                 = true
     edge_bounds_writer_enabled          = true
+    clip_internal_url                   = "http://clip.pokeclip.internal:18087"
+    clip_expiry_token_secret_arn        = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx"
   }
 
   assert {
-    condition = strcontains(one([
-      for file in yamldecode(output.rendered_user_data["a"]).write_files :
-      file.content if file.path == "/etc/pokeclip-media/compose.yml"
-    ]), "REWIND_EDGE_BOUNDS_KVS_ARN: \"${var.edge_bounds_kvs_arn}\"")
-    error_message = "가장 큰 렌더에 하한 Writer 의 KVS ARN 이 없다 — 크기 단언이 가장 큰 렌더를 재지 않는다."
+    condition = alltrue([
+      for text in ["REWIND_EDGE_BOUNDS_KVS_ARN: \"${var.edge_bounds_kvs_arn}\"", "CLIP_INTERNAL_URL: ${var.clip_internal_url}"] :
+      strcontains(one([
+        for file in yamldecode(output.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), text)
+    ])
+    error_message = "가장 큰 렌더에 하한 Writer 의 KVS ARN 이나 만료 창구 주소가 없다 — 크기 단언이 가장 큰 렌더를 재지 않는다."
   }
 
   assert {
@@ -512,10 +519,11 @@ run "writes_media_env_and_docker_config" {
       "MEDIA_LIVE_PORT=18081",
       "INGEST_AUTH_DENYLIST_PARAM=/pokeclip/prod/media/ingest-auth-deny-tokens",
       "STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=",
+      "CLIP_EXPIRY_TOKEN_SECRET_ARN=",
       "MEDIA_CONFIG_VERSION=7",
       "MEDIA_BUNDLE_IMAGE=123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-host-bundle@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     ])
-    error_message = "media.env 의 줄(기대 compose 판 · ECR 호스트 · 비밀 ARN · 송출기 · live 포트 · 거부 목록 · 4C 토큰 비밀 · 구성 판 · 묶음)이 다르다."
+    error_message = "media.env 의 줄(기대 compose 판 · ECR 호스트 · 비밀 ARN · 송출기 · live 포트 · 거부 목록 · 4C 토큰 비밀 · 만료 토큰 비밀 · 구성 판 · 묶음)이 다르다."
   }
 
   assert {
@@ -561,6 +569,68 @@ run "writes_resolve_token_secret_arn_to_media_env" {
       file.content if file.path == "/etc/pokeclip-media/media.env"
     ])), "STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr")
     error_message = "media.env 의 STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN 이 입력 ARN 이 아니다."
+  }
+}
+
+# 60일 만료 창구(POK-551 c4) — 주소가 차면 compose 사이드카에 env 둘 · 토큰
+# 디렉터리 bind 가 렌더되고, 토큰 비밀 ARN 이 media.env 로 간다(시작 스크립트가
+# 두 모드 모두 읽는다).
+run "writes_clip_expiry_when_url_set" {
+  command = plan
+
+  variables {
+    clip_internal_url            = "http://clip.pokeclip.internal:18087"
+    clip_expiry_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx"
+  }
+
+  assert {
+    condition = contains(split("\n", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/media.env"
+    ])), "CLIP_EXPIRY_TOKEN_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx")
+    error_message = "media.env 의 CLIP_EXPIRY_TOKEN_SECRET_ARN 이 입력 ARN 이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for line in [
+        "      CLIP_INTERNAL_URL: http://clip.pokeclip.internal:18087",
+        "      CLIP_EXPIRY_TOKEN_FILE: /run/secrets/clip-expiry/token",
+        "        source: /run/pokeclip-media/clip-expiry",
+      ] :
+      contains(split("\n", one([
+        for file in yamldecode(output.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ])), line)
+    ])
+    error_message = "compose.yml 에 만료 env 둘 · 토큰 디렉터리 bind 가 없다."
+  }
+}
+
+# 주소가 비면(끔 · 롤백) ARN 을 넘겨도 media.env 는 빈 값이고 compose 에 만료
+# 글자가 없다 — 시작 스크립트가 쓰지 않을 토큰을 받지 않는다.
+run "clears_clip_expiry_when_url_empty" {
+  command = plan
+
+  variables {
+    clip_internal_url            = ""
+    clip_expiry_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx"
+  }
+
+  assert {
+    condition = contains(split("\n", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/media.env"
+    ])), "CLIP_EXPIRY_TOKEN_SECRET_ARN=")
+    error_message = "주소가 빈데 media.env 의 CLIP_EXPIRY_TOKEN_SECRET_ARN 이 빈 값이 아니다."
+  }
+
+  assert {
+    condition = !strcontains(one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]), "clip-expiry")
+    error_message = "주소가 빈데 compose.yml 에 만료 토큰 디렉터리가 있다."
   }
 }
 
@@ -706,9 +776,10 @@ run "bootstrap_requires_every_bundle_file" {
       "bin/lib/deny_tokens.sh",
       "bin/lib/docker_config.sh",
       "bin/lib/render_files.sh",
+      "bin/lib/clip_expiry.sh",
       "mediamtx.yml.tmpl",
     ]
-    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 15개(bin/ 아홉 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
+    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 16개(bin/ 아홉 · bin/lib/ 여섯 · mediamtx.yml.tmpl)와 다르다."
   }
 }
 

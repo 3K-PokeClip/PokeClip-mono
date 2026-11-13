@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
 # 가짜 aws — 시작 스크립트의 비밀 조회(Secrets Manager get-secret-value — CDN
-# 비밀 · 응답기 모드의 4C 토큰)와 거부 목록 조회(SSM get-parameter)만 흉내 낸다.
-# 시험 전용이고, 돌려주는 값은 실제 비밀이 아닌 고정 시험 문자열이다. 비밀 조회는
-# --secret-id 로 값을 고른다 — 4C 토큰 ARN(FAKE_RESOLVE_ARN)이면 4C 토큰 갈래,
-# 그 밖은 CDN 비밀 갈래다.
+# 비밀 · 응답기 모드의 4C 토큰 · 만료 창구 토큰)와 거부 목록 조회(SSM
+# get-parameter)만 흉내 낸다. 시험 전용이고, 돌려주는 값은 실제 비밀이 아닌 고정
+# 시험 문자열이다. 비밀 조회는 --secret-id 로 값을 고른다 — 4C 토큰
+# ARN(FAKE_RESOLVE_ARN)이면 4C 토큰 갈래, 만료 토큰 ARN(FAKE_CLIP_EXPIRY_ARN)이면
+# 만료 토큰 갈래, 그 밖은 CDN 비밀 갈래다.
 # 계약 시험(실물 compose) · start_test · 유닛 재기동 시험이 PATH 앞에 이 디렉터리를
 # 둔다.
 #
@@ -28,6 +29,9 @@
 #                          4C 토큰 갈래의 모드 — ok(기본) · fail · empty · none ·
 #                          value(PCBENCH_FAKE_AWS_RESOLVE_VALUE_FILE 파일 내용을
 #                          바이트 그대로 낸 뒤 줄바꿈 하나).
+#   PCBENCH_FAKE_AWS_CLIP_EXPIRY_MODE
+#                          만료 토큰 갈래의 모드 — 4C 갈래와 같은 값(값 파일은
+#                          PCBENCH_FAKE_AWS_CLIP_EXPIRY_VALUE_FILE).
 #   PCBENCH_FAKE_AWS_SSM_MODE
 #                          거부 목록 조회의 모드 — ok(기본 · 머리 줄 + 토큰 한
 #                          줄) · headeronly(머리 줄만) · notfound(종료 254) ·
@@ -45,6 +49,9 @@ readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 # 4C 토큰 ARN(값이 아니다)과 그 갈래가 돌려주는 가짜 토큰.
 readonly FAKE_RESOLVE_ARN='pcbench-ingest-auth-fake-resolve-arn'
 readonly FAKE_RESOLVE_TOKEN='pcbench-ingest-auth-fake-resolve-token'
+# 만료 창구 토큰 ARN(값이 아니다)과 그 갈래가 돌려주는 가짜 토큰.
+readonly FAKE_CLIP_EXPIRY_ARN='pcbench-clip-expiry-fake-arn'
+readonly FAKE_CLIP_EXPIRY_TOKEN='pcbench-clip-expiry-fake-token'
 readonly DENY_HEADER='# pokeclip deny-tokens v1'
 readonly FAKE_DENY_TOKEN='pcbench-deny-token-1'
 # 거부 목록 크기 상한(바이트) — oversize 모드가 넘긴다.
@@ -125,15 +132,15 @@ cdn_secret() {
 }
 
 #######################################
-# 4C 토큰 갈래 — PCBENCH_FAKE_AWS_RESOLVE_MODE 대로 값을 낸다.
-# Globals:
-#   PCBENCH_FAKE_AWS_RESOLVE_MODE, PCBENCH_FAKE_AWS_RESOLVE_VALUE_FILE
+# 토큰 갈래(4C · 만료) — 모드대로 값을 낸다.
+# Arguments:
+#   모드, 가짜 토큰, 값 파일(value 모드만).
 #######################################
-resolve_token() {
-  case "${PCBENCH_FAKE_AWS_RESOLVE_MODE:-ok}" in
-    ok) printf '%s\n' "${FAKE_RESOLVE_TOKEN}" ;;
+token_secret() {
+  case "$1" in
+    ok) printf '%s\n' "$2" ;;
     value)
-      cat -- "${PCBENCH_FAKE_AWS_RESOLVE_VALUE_FILE:?가짜 aws: 값 파일 없음}"
+      cat -- "${3:?가짜 aws: 값 파일 없음}"
       printf '\n'
       ;;
     empty) printf '\n' ;;
@@ -143,7 +150,7 @@ resolve_token() {
       exit 254
       ;;
     *)
-      printf '가짜 aws: 모르는 4C 모드\n' >&2
+      printf '가짜 aws: 모르는 토큰 모드\n' >&2
       exit 2
       ;;
   esac
@@ -201,7 +208,14 @@ main() {
     exit 2
   fi
   if [[ "$4" == "${FAKE_RESOLVE_ARN}" ]]; then
-    resolve_token
+    token_secret "${PCBENCH_FAKE_AWS_RESOLVE_MODE:-ok}" \
+      "${FAKE_RESOLVE_TOKEN}" "${PCBENCH_FAKE_AWS_RESOLVE_VALUE_FILE:-}"
+    return
+  fi
+  if [[ "$4" == "${FAKE_CLIP_EXPIRY_ARN}" ]]; then
+    token_secret "${PCBENCH_FAKE_AWS_CLIP_EXPIRY_MODE:-ok}" \
+      "${FAKE_CLIP_EXPIRY_TOKEN}" \
+      "${PCBENCH_FAKE_AWS_CLIP_EXPIRY_VALUE_FILE:-}"
     return
   fi
   mode="$(current_mode)" || exit 2

@@ -608,6 +608,31 @@ BEGIN
     END IF;
 END $do$;
 
+-- ============================================================================
+-- 만료 끄기 스위치(POK-551 ④) — 1번 소유 표(승인 표면 아님 · 통지). 60일 만료(internal/expiry)가 회차 시작과 방송마다
+-- 읽는다(index.ReadExpirySwitch). 판 게이트와 같은 한 행 꼴이고, 「이름이 있으면 건너뜀」 이라 prod 에 적용한 뒤 같은
+-- 이름으로 정의를 고치지 않는다(PDT 칸 블록과 같은 규칙).
+-- ============================================================================
+
+-- 스위치 한 행 — enabled 가 참일 때만 만료가 돈다(기본 끔 — 배포만으로는 아무것도 지우지 않는다). 사이드카(media_indexer)는
+-- SELECT 만 갖는다. 켜고 끄는 것은 마스터가 SET ROLE media_owner 로 손 SQL 로만 하고, changed_at · changed_by 는 그 기록이다.
+-- 트리거는 두지 않는다 — 행이 없거나 읽지 못하면 끔으로 읽으므로, 지워져도 지우는 쪽으로 틀리지 않는다(판 게이트와 다른 점).
+CREATE TABLE IF NOT EXISTS stream_expiry_switch (
+    id         boolean     PRIMARY KEY DEFAULT true,
+    enabled    boolean     NOT NULL DEFAULT false,
+    changed_at timestamptz,
+    changed_by text,
+    CONSTRAINT stream_expiry_switch_one_row_chk CHECK (id)
+);
+
+-- 씨앗 행(끔). 행이 있으면 INSERT 문장을 돌리지 않는다 — 수렴한 재실행이 스위치 표를 잠그지 않고, 켜 둔 값도 되돌리지 않는다.
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM stream_expiry_switch) THEN
+        INSERT INTO stream_expiry_switch (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+    END IF;
+END $do$;
+
 -- PDT 부분 인덱스 넷 — 비동시(CONCURRENTLY 아님 · 트랜잭션 · DO 블록 안에서 돈다)라 처음 만드는 동안 그 표 쓰기가 멈춘다
 -- (설계 9.2 단계 2 (ㄱ) · 방송 없는 창). 회차 인덱스는 생산자가 p(같은 회차 최신 행)를 한 줄로 찾는다(설계 2.4). floor
 -- 인덱스 둘은 채팅 시각 → 영상 위치 조회가 한쪽 판만 있는 스트림에서 다른 판 행을 끝까지 훑지 않게 한다(r6 2.12) — 판 2

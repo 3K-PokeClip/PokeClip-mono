@@ -132,6 +132,13 @@ variable "edge_bounds_writer_enabled" {
   nullable    = false
 }
 
+variable "clip_internal_url" {
+  description = "60일 만료 창구 clip 주소 http(s)://<호스트>[:<포트>](예: http://clip.pokeclip.internal:8081 — 포트는 platform 의 clip 포트와 같아야 plan 이 통과한다). 기본 빈 값 = 만료 끔(롤백 스위치) — 사이드카에 만료 설정을 렌더하지 않고 상자가 토큰을 받지 않는다. 토큰 그릇은 런타임 1단 출력에서만 오므로 칸이 없다. user_data 로만 들어가 바꾸는 것은 설정 반영 교체다(떠 있는 상자는 그대로)."
+  type        = string
+  default     = ""
+  nullable    = false
+}
+
 variable "docker_version" {
   description = "AL2023 arm64 저장소의 docker 패키지 판."
   type        = string

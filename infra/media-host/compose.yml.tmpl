@@ -54,6 +54,13 @@
 #                        "journald" — 오타가 나도 prod 쪽으로 떨어진다).
 #                        json-file 은 journald 가 없는 로컬 엔진에서 띄울
 #                        때만 쓴다.
+${/*
+  clip_internal_url    60일 만료 창구 clip 주소(사이드카 CLIP_INTERNAL_URL —
+                       http(s)://host[:port]). 비면 끔이다 — 사이드카 env 둘과
+                       토큰 디렉터리 bind 를 렌더하지 않고, 렌더본의 구성은 이
+                       변수가 없던 때와 같다. 이 설명은 user_data 16 KiB 여유
+                       때문에 렌더에 남지 않는 템플릿 주석에 둔다.
+*/ ""~}
 #
 # 지키는 것:
 #   - 망 칸 하나. nginx · sidecar · 응답기 · janitor 는 MediaMTX 의 네트워크
@@ -84,22 +91,26 @@
 #     응답기도 같다 — 시작 스크립트가 tmpfs 에 둔 비밀 셋 · 상태 디렉터리와
 #     거부 목록 디렉터리를 bind 로 받고, env 에는 그 파일 경로(*_FILE)만
 #     적는다.
-#   - 계약9 발행 게이트. 사이드카는 발행 설정을 기동 때만 읽는다 — 바꾸려면
-#     상자를 교체한다(user_data 는 ignore_changes). 같은 DB 에 붙은 사이드카는
-#     모두 게이트가 켜져 있어야 한다 — 꺼진 사이드카는 started 를 내지 않고,
-#     닫은 회차의 ended 도 그 자리에서 넣지 않는다(보정 후보 — started 가
-#     살아 있고(abandoned 아님) · 회차가 닫혀 구성원 전원 ended · ended 없음 ·
-#     회차 시작 뒤 1392시간 안 — 인 회차는 같은 DB 의 발행 사이드카가 보정으로
-#     거둔다. 발행 사이드카는 기동 줄 lifecycle_degraded 를 내는 판이고
-#     마지막 lifecycle_degraded(회복 줄 reason=recovered 포함)가 value=0 인
-#     것이다. 그 줄이 없는 옛 판은 보정하지 않는다). 기동(재기동 포함) 때
-#     발행기 준비가 실패해도 게이트를 켠 채(기동 줄 lifecycle_degraded 를
-#     내는 판) 30초마다 다시 준비하고(ADR-063 결정 1), 적재 직전 권한 판정이
-#     참이면 적재를 계속한다 — 거짓이면 ERROR lifecycle_enqueue_skipped 로 건너뛰며 그
-#     started 는 되살릴 수 없고, 건너뛴 것이 ended 면, 그 회차가 위 보정
-#     후보일 때 같은 DB 의 발행 사이드카가 보정으로 거둔다. 판정은
-#     media/README 「계약9 운영 판정」, 감시 절차는 media-swap 런북 「O8a 당김
-#     — 운영 감시」 다.
+${/*
+   - 계약9 발행 게이트. 사이드카는 발행 설정을 기동 때만 읽는다 — 바꾸려면
+     상자를 교체한다(user_data 는 ignore_changes). 같은 DB 에 붙은 사이드카는
+     모두 게이트가 켜져 있어야 한다 — 꺼진 사이드카는 started 를 내지 않고,
+     닫은 회차의 ended 도 그 자리에서 넣지 않는다(보정 후보 — started 가
+     살아 있고(abandoned 아님) · 회차가 닫혀 구성원 전원 ended · ended 없음 ·
+     회차 시작 뒤 1392시간 안 — 인 회차는 같은 DB 의 발행 사이드카가 보정으로
+     거둔다. 발행 사이드카는 기동 줄 lifecycle_degraded 를 내는 판이고
+     마지막 lifecycle_degraded(회복 줄 reason=recovered 포함)가 value=0 인
+     것이다. 그 줄이 없는 옛 판은 보정하지 않는다). 기동(재기동 포함) 때
+     발행기 준비가 실패해도 게이트를 켠 채(기동 줄 lifecycle_degraded 를
+     내는 판) 30초마다 다시 준비하고(ADR-063 결정 1), 적재 직전 권한 판정이
+     참이면 적재를 계속한다 — 거짓이면 ERROR lifecycle_enqueue_skipped 로 건너뛰며 그
+     started 는 되살릴 수 없고, 건너뛴 것이 ended 면, 그 회차가 위 보정
+     후보일 때 같은 DB 의 발행 사이드카가 보정으로 거둔다. 판정은
+     media/README 「계약9 운영 판정」, 감시 절차는 media-swap 런북 「O8a 당김
+     — 운영 감시」 다.
+  (이 항목은 user_data 16 KiB 여유 때문에 렌더에 남지 않는 템플릿 주석에
+  둔다 — kty 결정 B.)
+*/ ""~}
 #   - 모든 서비스의 core 덤프 크기 0(ulimits core: 0 — 소프트 · 하드 둘 다).
 #     메모리의 CDN 비밀 · API 비밀번호가 덤프 파일로 남지 않게 한다.
 #   - 볼륨에 복사 금지 옵션을 붙이지 않는다 — 이미지에 심은 소유권 복사가
@@ -237,6 +248,16 @@ services:
       # 가 control_upstream(= 이 주소)으로 넘긴다. control_upstream 이 비면 nginx
       # 가 제어면 경로를 404 로 답해 이 서버에 닿는 길이 없다.
       CONTROL_LISTEN: 127.0.0.1:8086
+${/*
+  60일 만료 — 두 모드 공통이고 주소가 찰 때만 둔다. 토큰은 값이 아니라 파일
+  경로로 받는다. 시작 스크립트가 CLIP_EXPIRY_TOKEN_SECRET_ARN 이 찰 때 읽어
+  아래 디렉터리 bind 안에 사이드카 실행 계정 소유 0400 으로 둔다. 파일이
+  없으면(받기 실패 · 옛 설치 묶음) 사이드카는 뜨고 만료만 끈다
+  (expiry_disabled reason=token_file).
+*/ ""}%{ if clip_internal_url != "" ~}
+      CLIP_INTERNAL_URL: ${clip_internal_url}
+      CLIP_EXPIRY_TOKEN_FILE: /run/secrets/clip-expiry/token
+%{ endif ~}
 %{ if ingest_auth_image != "" ~}
       # 4C(스트림 키 판정) — 4D 종료 신호 인증과 계약9 streamerId 에 쓴다.
       # 응답기 모드에서만 둔다: 토큰 사본은 응답기 모드의 시작 스크립트만
@@ -276,6 +297,22 @@ services:
         read_only: true
         bind:
           create_host_path: false
+%{ endif ~}
+${/*
+  만료 토큰은 파일이 아니라 디렉터리로 받는다. 이 bind 만 원본이 없으면
+  엔진이 만든다(create_host_path: true — 머리 주석 「비밀은 환경변수로 넘기지
+  않는다」 의 예외). 그 규칙이 막는 것은 파일 bind 원본 자리에 엔진이
+  디렉터리를 만들어 다음 렌더를 막는 일이다. 디렉터리 bind 는 엔진이 만든
+  것도 같은 종류라 시작 스크립트가 그대로 고쳐 쓴다. 그래서 디렉터리를
+  만들지 않는 옛 설치 묶음이 이 렌더본과 만나도 상자는 내려가지 않고 만료만
+  꺼진다.
+*/ ""}%{ if clip_internal_url != "" ~}
+      - type: bind
+        source: /run/pokeclip-media/clip-expiry
+        target: /run/secrets/clip-expiry
+        read_only: true
+        bind:
+          create_host_path: true
 %{ endif ~}
 %{ if detached_log_driver == "json-file" ~}
     logging: *attached-logging

@@ -114,7 +114,7 @@ NOTE_SYMLINK='심볼릭 링크로 부름(공용 함수를 링크 자리에서 �
 NOTE_SYMLINK+=' 읽지 않음 · 실제 경로로 다시'
 readonly NOTE_SYMLINK
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=64
+readonly EXPECTED_CASES=65
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -810,6 +810,13 @@ test_one_line() {
   printf '%s' "${ONE_LINE_VALUE}" >"${expected}"
   write_input '%s\n' "${ONE_LINE_VALUE}"
   expect_put one-line-resolve-token stream-key-resolve-token "${expected}" \
+    "${ONE_LINE_MARKER}"
+  # 만료 창구 전용 토큰 그릇(1단-나 ③ — POK-551)도 같은 한 줄 갈래다.
+  new_case || return
+  expected="${case_dir}/expected"
+  printf '%s' "${ONE_LINE_VALUE}" >"${expected}"
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_put one-line-expiry-token expired-broadcasts-token "${expected}" \
     "${ONE_LINE_MARKER}"
   new_case || return
   write_input 'FakeFirst\nFakeSecond\n'

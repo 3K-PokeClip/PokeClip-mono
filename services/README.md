@@ -346,7 +346,7 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `PLAYBACK_REQUIRED` | `false` | 켜면 출입증 셋이 다 빈 「꺼짐」도, 켜졌는데 `PLAYBACK_COOKIE_DOMAIN`이 빈 것도 부팅 거부(POK-321 · POK-317, 엣지 T9b 대체). **prod만 `true`** |
 | `EXPIRED_BROADCASTS_TOKEN` | 빈 값 | 1번(Media) 만료 실행기의 전용 출입증(POK-196). **비면 그냥 뜨고 전용 창구만 닫힌다** — 전용 헤더(`X-Expired-Broadcasts-Token`) 만료 목록 요청은 늘 401이고, 공용 `X-Internal-Token` 요청은 그대로다. 🔴 **채우면 조건 넷이 붙는다** — 아래 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`·`native`가 아니거나(비어도 안 된다: 미설정은 플랫폼 감지다), 톰캣 remoteip 헤더 이름 속성(`remote-ip-header`·`protocol-header`)이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패**. 토큰은 `openssl rand -hex 32` |
 | `EXPIRED_BROADCASTS_ALLOWED_CIDRS` | 빈 값 | 전용 출입증을 받는 출발지 IPv4 CIDR 쉼표 목록(Media 프라이빗 서브넷). 토큰이 있을 때만 쓴다. 출발지는 소켓 주소만 보고, 전달 머리글을 단 전용 헤더 요청은 허용 대역 안이어도 403이다 |
-| `FORWARD_HEADERS_STRATEGY` | 빈 값(미설정) | 프록시의 `X-Forwarded-*`를 믿을지. **auth와 같은 이름**이다. 비면 Boot가 클라우드 플랫폼을 감지해 고른다(지금 운영 clip이 이 꼴이다). 만료 창구 토큰을 넣는 환경은 `none`이나 `native`를 같이 넣는다 |
+| `FORWARD_HEADERS_STRATEGY` | 빈 값(미설정) | 프록시의 `X-Forwarded-*`를 믿을지. **auth와 같은 이름**이다. 비면 Boot가 클라우드 플랫폼을 감지해 고른다. 운영 clip은 `prod/platform`이 `native`를 넣는다(POK-551). 만료 창구 토큰을 넣는 환경은 `none`이나 `native`를 같이 넣는다 |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
 부팅은 산다** — 로컬에는 CloudFront가 없다. 꺼진 채로 출입증 문을 부르면 `503 playback_signing_unavailable`이다.

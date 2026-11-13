@@ -76,6 +76,15 @@
 #      그대로 두고, rename 하나가 실패하면 이번에 옮긴 파일을 지워 짝이 어긋난
 #      설정을 남기지 않는다. 치환은 bash 내장 문자열 연산으로만 해서 값이 외부
 #      명령의 argv 에 오르지 않는다.
+#      그 뒤 60일 만료 창구 토큰을 따로 둔다(두 모드 공통 ·
+#      CLIP_EXPIRY_TOKEN_SECRET_ARN 이 찰 때만 — lib/clip_expiry.sh).
+#      RUNTIME_DIR/clip-expiry 를 root 0711 로 맞추고 앞 기동의 토큰과 그
+#      임시 파일을 먼저 지운 뒤, 토큰을 4C 토큰과 같은 꼴로 읽어 임시 파일 +
+#      rename 으로 token(사이드카 실행 계정 소유 0400)에 둔다. 받기 실패 · 쓸 수
+#      없는 값이면 판정 줄 없이 파일 없이 계속한다 — 사이드카가 만료만 끄고
+#      (expiry_disabled reason=token_file) 그 줄이 판별 신호다. 디렉터리가
+#      링크이거나 맞추지 · 지우지 못하면 「MEDIA START FAIL render
+#      clip-expiry-dir」, 파일을 두지 못하면 「… clip-expiry-<단계>」 다.
 #   9. 기동 전 검사(POK-196 PDT 설계 r7 9.4 — 판 2 를 못 읽는 사이드카로 내린
 #      상자를 막는다). compose 렌더본의 sidecar 서비스 image 를 받아(docker pull)
 #      라벨 com.pokeclip.timing.readable 을 읽는다. 받기가 실패하면 다이제스트로
@@ -128,6 +137,9 @@
 #                                   이름.
 #   INGEST_AUTH_DENY_DIR            기본 /var/lib/pokeclip-media/ingest-auth/deny
 #                                   (절대 경로 — 응답기 모드만).
+#   CLIP_EXPIRY_TOKEN_SECRET_ARN    비면 만료 토큰을 두지 않는다. 60일 만료
+#                                   창구 토큰 비밀 ARN(clip 주소가 찰 때만
+#                                   모듈이 채운다).
 #
 # 출력: 판정 줄(MEDIA PREREQ OK|FAIL · MEDIA START BLOCKED · MEDIA START FAIL)만
 # 낸다 — 예외는 순서 9 의 검사 서비스가 내는 판정 줄(JSON)이다. 비밀 값은
@@ -149,13 +161,15 @@ source "${BIN_DIR}/lib/docker_config.sh"
 source "${BIN_DIR}/lib/deny_tokens.sh"
 # shellcheck source=lib/render_files.sh
 source "${BIN_DIR}/lib/render_files.sh"
+# shellcheck source=lib/clip_expiry.sh
+source "${BIN_DIR}/lib/clip_expiry.sh"
 # 비밀이 든 메모리가 core 파일로 남지 않게 한다.
 ulimit -c 0
 # 비밀 · 렌더 내용을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면, bash
 # 의 local 이 그 export 속성을 이어받아 자식(chown 등) 환경에 값이 실린다. 쓰기
 # 전에 그 이름들을 환경에서 지운다.
 unset -v secret rendered value content head tail api_pass basic_pass \
-  publish_lock read_lock file_bodies template_body resolve_token
+  publish_lock read_lock file_bodies template_body resolve_token expiry_token
 
 readonly SECRET_TOKEN='@@HLS_CDN_SECRET@@'
 # CDN 비밀이 가질 수 있는 글자 — MediaMTX 평문 자격 글자(hlsCDNSecret 검사)와
@@ -585,19 +599,20 @@ check_env_line() {
 }
 
 #######################################
-# 4C 토큰을 읽는다(read_cdn_secret 과 같은 방식 — 끝 줄바꿈 하나만 떼고 NUL 은
-# 제어 문자로 바꾼다). 응답기가 값을 HTTP 머리글에 싣고(headerSafe) 파일을
-# 4096바이트까지 받으므로(secretfile) 빈 값 · None · 제어 문자(C1 포함) · 앞뒤
-# 공백 · 값 + 줄바꿈이 상한 초과면 실패다.
-# Globals:
-#   STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN
+# 머리글 토큰(4C 토큰 · 만료 창구 토큰)을 읽는다(read_cdn_secret 과 같은 방식
+# — 끝 줄바꿈 하나만 떼고 NUL 은 제어 문자로 바꾼다). 응답기 · 사이드카가 값을
+# HTTP 머리글에 싣고(headerSafe) 파일을 4096바이트까지 받으므로(secretfile) 빈
+# 값 · None · 제어 문자(C1 포함) · 앞뒤 공백 · 값 + 줄바꿈이 상한 초과면
+# 실패다.
+# Arguments:
+#   비밀 ARN(빈 값이면 실패).
 # Outputs:
 #   값(성공했을 때만).
 # Returns:
 #   0 / 1 조회 실패 · 쓸 수 없는 값.
 #######################################
-read_resolve_token() {
-  local arn="${STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN:-}" value LC_ALL=C
+read_token_secret() {
+  local arn="$1" value LC_ALL=C
   local c1=$'\xc2['$'\x80''-'$'\x9f'']'
   [[ -n "${arn}" ]] || return 1
   value="$({ aws secretsmanager get-secret-value --secret-id "${arn}" \
@@ -681,7 +696,8 @@ render_ingest_auth() {
     say 'MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable'
     return 1
   fi
-  if ! resolve_token="$(read_resolve_token)"; then
+  if ! resolve_token="$(read_token_secret \
+    "${STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN:-}")"; then
     say 'MEDIA START BLOCKED: ingest-auth resolve token unavailable'
     return 1
   fi
@@ -876,6 +892,9 @@ main() {
     exit 1
   fi
   if ! prepare_config "${compose_file}"; then
+    exit 1
+  fi
+  if ! install_clip_expiry_token "${RUNTIME_DIR:-/run/pokeclip-media}"; then
     exit 1
   fi
   if ! check_timing_preflight "${project}" "${compose_file}"; then

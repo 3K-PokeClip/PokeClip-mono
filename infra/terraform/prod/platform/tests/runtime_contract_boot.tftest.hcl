@@ -7,6 +7,11 @@
 # 2. auth 에 STREAM_KEY_RESOLVE_TOKEN 이 오면 STREAM_KEY_RESOLVE_ALLOWED_CIDRS
 #    가 비어 있을 때 부팅을 거부한다(auth StreamKeyResolveSecurityConfig
 #    .requireSafeToOpen).
+# 3. clip 에 EXPIRED_BROADCASTS_TOKEN 이 오면 EXPIRED_BROADCASTS_ALLOWED_CIDRS
+#    가 비어 있거나 FORWARD_HEADERS_STRATEGY 가 none · native 가 아닐 때
+#    부팅을 거부한다(clip ExpiredBroadcastSecurityConfig — POK-551). 전략은
+#    platform 이 넣으므로 런타임 값으로는 거부 갈래를 만들 수 없다 — 아래
+#    run 은 통과 갈래만 본다.
 #
 # 앞 루트 상태 흉내 · 가짜 값은 o7d_env.tftest.hcl 과 같다(시험 파일마다 따로
 # 둬야 한다).
@@ -521,5 +526,131 @@ run "allows_resolve_token_with_allowed_cidrs_secret" {
   assert {
     condition     = local.service_secrets.auth["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"] == "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-cidrs-WxYzAb"
     error_message = "비밀로 준 허용 대역이 auth secrets 로 넘어가지 않는다."
+  }
+}
+
+# --- 만료 창구 전용 토큰과 허용 대역(POK-551) ---
+
+run "rejects_expiry_token_without_allowed_cidrs" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env           = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns = {
+          auth = {}
+          clip = { EXPIRED_BROADCASTS_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-WxYzAb" }
+        }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+run "rejects_expiry_token_with_blank_allowed_cidrs" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env           = { auth = {}, clip = { EXPIRED_BROADCASTS_ALLOWED_CIDRS = " " }, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns = {
+          auth = {}
+          clip = { EXPIRED_BROADCASTS_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-WxYzAb" }
+        }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+run "allows_expiry_token_with_allowed_cidrs" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env           = { auth = {}, clip = { EXPIRED_BROADCASTS_ALLOWED_CIDRS = "192.0.2.0/24" }, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns = {
+          auth = {}
+          clip = { EXPIRED_BROADCASTS_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-WxYzAb" }
+        }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.clip["EXPIRED_BROADCASTS_ALLOWED_CIDRS"] == "192.0.2.0/24"
+    error_message = "허용 대역이 clip env 로 넘어가지 않는다."
+  }
+
+  assert {
+    condition     = contains(keys(local.service_secrets.clip), "EXPIRED_BROADCASTS_TOKEN")
+    error_message = "만료 창구 전용 토큰이 clip secrets 로 넘어가지 않는다."
+  }
+
+  # 토큰이 있으면 clip 은 전략이 none 또는 native 일 때만 뜬다
+  # (DedicatedWindow.requireSafeToOpen). platform 값이 런타임 app_env 를 이긴다.
+  assert {
+    condition     = contains(["none", "native"], lookup(local.service_env.clip, "FORWARD_HEADERS_STRATEGY", ""))
+    error_message = "만료 창구 전용 토큰을 받는 clip 의 FORWARD_HEADERS_STRATEGY 가 none · native 가 아니다 — clip 이 부팅을 거부한다."
+  }
+}
+
+# 전략은 platform 이 정한다. 런타임 app_env 가 clip 에 부팅이 거부되는 값
+# (framework)을 실어도 services.tf 의 native 가 이겨 전략 검사를 지난다.
+run "keeps_native_strategy_for_expiry_token_over_runtime_env" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env           = { auth = {}, clip = { EXPIRED_BROADCASTS_ALLOWED_CIDRS = "192.0.2.0/24", FORWARD_HEADERS_STRATEGY = "framework" }, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns = {
+          auth = {}
+          clip = { EXPIRED_BROADCASTS_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-WxYzAb" }
+        }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.clip["FORWARD_HEADERS_STRATEGY"] == "native"
+    error_message = "런타임 app_env 의 FORWARD_HEADERS_STRATEGY 가 platform 의 native 를 이겼다."
   }
 }

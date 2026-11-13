@@ -118,9 +118,10 @@ logging:
 server:
   port: 8081
   # 프록시가 붙여 주는 X-Forwarded-* 헤더를 믿을지. env 이름은 auth와 같다(FORWARD_HEADERS_STRATEGY).
-  # 🔴 빈 기본값은 none이 아니라 「미설정」이다(빈 값의 enum 변환이 null). env를 안 넣으면 지금처럼 Boot가
-  # 클라우드 플랫폼을 감지해 전략을 고른다 — 이 줄이 생겨도 운영 clip의 동작은 바뀌지 않는다.
-  # 만료 방송 전용 창구(아래 pokeclip.internal-api.expired-broadcasts)를 열 때만 none이나 native여야 부팅이 산다.
+  # 🔴 빈 기본값은 none이 아니라 「미설정」이다(빈 값의 enum 변환이 null). 미설정이면 Boot가 클라우드 플랫폼을
+  # 감지해 전략을 고른다 — 운영 ECS는 AWS_EXECUTION_ENV로 감지돼(CloudPlatform.AWS_ECS) env 없이도 native와 같게 돈다.
+  # 만료 방송 전용 창구(아래 pokeclip.internal-api.expired-broadcasts)를 열 때는 none이나 native를 명시해야 부팅이
+  # 산다. 운영은 platform이 native를 넣는다(infra/terraform/prod/platform/services.tf — POK-551).
   forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:}
 
 management:

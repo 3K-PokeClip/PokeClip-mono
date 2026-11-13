@@ -14,10 +14,13 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     넷에는 활성 키의 상자 하나만 등록합니다.
 *   **SG(5-5):** Media SG 인그레스는 SRT ← NLB · 프록시 셋 ← 내부 ALB ·
     헬스 ← 둘입니다. 이그레스는 443 → S3 prefix list · 443 → 0.0.0.0/0 ·
-    5432 → RDS SG · `auth_port` → auth SG(응답기의 4C resolve)입니다. RDS
-    인그레스 ← Media 5432 · auth 인그레스 ← Media `auth_port` 와 로드밸런서
-    SG 이그레스 → Media 도 이 모듈이 만듭니다(한 apply 에 짝이 생깁니다).
-    auth 짝은 kty 결정 2026-10-25 (나)로 런타임 2단에서 옮겼습니다.
+    5432 → RDS SG · `auth_port` → auth SG(응답기의 4C resolve) ·
+    `clip_port` → clip SG(사이드카의 60일 만료 창구)입니다. RDS 인그레스 ←
+    Media 5432 · auth 인그레스 ← Media `auth_port` · clip 인그레스 ← Media
+    `clip_port` 와 로드밸런서 SG 이그레스 → Media 도 이 모듈이 만듭니다(한
+    apply 에 짝이 생깁니다). auth 짝은 kty 결정 2026-10-25 (나)로 런타임
+    2단에서 옮겼고, clip 짝은 같은 꼴입니다. clip 짝은 만료 주소와 상관없이 늘
+    만듭니다 — 켜고 끌 때 SG 차분이 없습니다.
     MediaMTX 루프백 포트(8888 · 9996 · 9997)는 열지 않습니다.
 *   **인스턴스 역할:** 경로 `/pokeclip/prod/`. 관리형 정책은
     `AmazonSSMManagedInstanceCore` 하나이고, 권한 정책은 정책 문서
@@ -90,10 +93,15 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     합니다.
 *   부트스트랩의 판정 줄(`MEDIA BOOTSTRAP OK|FAIL <단계>`)은 cloud-init 출력
     (`/var/log/cloud-init-output.log`)에 남습니다.
-*   압축 user_data 크기(시험값 기준 · 2026-11-03 실측): 기본 13,293 바이트 ·
-    가장 큰 렌더(응답기 · janitor · 제어면 상류 모두 켬) 14,193 바이트 — 여유
-    약 2.1 KiB 입니다. 주석을 고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은
-    16 KiB 게이트 시험이 매번 다시 잽니다.
+*   압축 user_data 크기(시험값 기준 · 2026-11-12 실측): 기본 14,673 바이트 ·
+    가장 큰 렌더(응답기 · janitor · 제어면 상류 · 발행 목록 둘 · 새 꼴 쓰기 ·
+    하한 Writer · 만료 창구 모두 켬) 15,819 바이트입니다. 주석을 고칠 때마다
+    수십 바이트씩 바뀌므로 정확한 값은 16 KiB 게이트 시험이 매번 다시 잽니다.
+*   **한계 — 16 KiB 여유가 작습니다.** 가장 큰 렌더의 여유는 565 바이트입니다.
+    POK-551 전(acebb9a1)에 이미 16,302 바이트(여유 82)였고, 만료 창구를 더하려고
+    compose 템플릿 머리의 「계약9 발행 게이트」 설명을 렌더에 남지 않는 템플릿
+    주석으로 옮겼습니다(kty 결정 B). compose 템플릿에 줄을 더할 때는 새 설명을
+    템플릿 주석(`${/* … */ ""}`)으로 둡니다.
 
 묶음 내용이 저장소와 같은지는 묶음 Dockerfile 이 저장소 경로를 그대로 COPY
 하는 것으로 갈음합니다. 2026-10-23 로컬 빌드(arm64)에서 꺼낸 9개 파일의
@@ -143,6 +151,23 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     아키텍처(`aws_ec2_instance_type`)에 arm64 가 없으면 plan 이 멈춥니다.
 *   `stream_key_resolve_url` 의 포트는 `auth_port`(platform 출력
     `service_ports.auth`)와 같아야 합니다 — 다르면 plan 이 멈춥니다(POK-477).
+*   `clip_internal_url`(기본 빈 값 · null 은 기본값으로)은 60일 만료 창구
+    clip 주소입니다. 꼴은 `http(s)://<호스트>[:<포트>]` 이고, 사이드카
+    `validateClipURL`(`media/internal/config/expiry.go`)이 받는 꼴의 부분
+    집합입니다 — IPv6 · 대문자 scheme · 밑줄 든 호스트는 사이드카는 받지만
+    여기서는 plan 이 멈춥니다. 포트(없으면 scheme 기본 포트)는
+    `clip_port`(platform 출력 `service_ports.clip`)와 같아야 합니다 — 다르면
+    plan 이 멈춥니다. 차면
+    사이드카 env 둘(`CLIP_INTERNAL_URL` · `CLIP_EXPIRY_TOKEN_FILE`)과 토큰
+    디렉터리 bind 를 렌더하고(두 모드 공통), 비면(끔) 셋 다 렌더하지 않으며
+    `media.env` 의 `CLIP_EXPIRY_TOKEN_SECRET_ARN` 도 비웁니다.
+    `clip_expiry_token_secret_arn`(런타임 1단 출력 — 값 아님)의 읽기 권한은
+    `media_secret_arns` 가 줍니다. compose 에 들어가 첫 부팅에만 쓰이므로
+    바꾸는 것은 상자 교체입니다.
+*   **한계 — URL 이 빈 상자도 만료 토큰을 읽을 수 있습니다.** 읽기 권한은
+    `media_secret_arns` 를 따르고 `clip_internal_url` 을 보지 않으므로, 주소가
+    빈 상자의 인스턴스 역할도 그 그릇을 읽습니다. 만료를 켜고 끌 때 IAM
+    차분이 생기지 않게 하려는 선택입니다(kty 2026-11-13).
 *   `rewind_bucket_arn` 에서 버킷 이름을 꺼내 사이드카 `S3_BUCKET` 으로
     넘깁니다.
 *   `broadcast_topic_arn`(필수)은 사이드카 `loadLifecycle` 과 같은 판정으로
@@ -182,9 +207,9 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 | 출력 | 쓰는 곳 |
 |---|---|
 | `instance_ids` | 루트 · 운영 확인 |
-| `media_sg_id` | Media 를 상대로 규칙을 거는 다른 루트(Media ↔ auth 짝은 이 모듈이 만듭니다 — kty 결정 2026-10-25 (나)) |
+| `media_sg_id` | Media 를 상대로 규칙을 거는 다른 루트(Media ↔ auth · clip 짝은 이 모듈이 만듭니다 — kty 결정 2026-10-25 (나)) |
 | `instance_role_arn` | 참고용 |
-| `rendered_user_data` · `template_vars` · `auth_resolve_rules` | 시험용(비밀 없음) — 루트는 다시 내보내지 않습니다 |
+| `rendered_user_data` · `template_vars` · `auth_resolve_rules` · `clip_expiry_rules` | 시험용(비밀 없음) — 루트는 다시 내보내지 않습니다 |
 
 ## 시험
 

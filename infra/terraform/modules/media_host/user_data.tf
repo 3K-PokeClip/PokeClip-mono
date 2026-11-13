@@ -14,6 +14,7 @@ locals {
 
   # compose · nginx 템플릿 변수(키 집합 = infra/media-host/test/render_vars.json).
   template_vars = {
+    clip_internal_url      = var.clip_internal_url
     control_upstream       = var.control_upstream
     detached_log_driver    = "journald"
     ingest_auth_image      = var.ingest_auth_image
@@ -66,8 +67,10 @@ locals {
               path        = "/etc/pokeclip-media/media.env"
               permissions = "0644"
               content = templatefile("${path.module}/templates/media.env.tftpl", {
-                bundle_image                        = var.bundle_image
-                cdn_secret_arn                      = var.cdn_secret_arn
+                bundle_image   = var.bundle_image
+                cdn_secret_arn = var.cdn_secret_arn
+                # 만료를 끈(주소 빔) 상자는 토큰을 받지 않는다.
+                clip_expiry_token_secret_arn        = var.clip_internal_url == "" ? "" : var.clip_expiry_token_secret_arn
                 compose_version                     = var.compose_version
                 config_version                      = instance.config_version
                 denylist_parameter_name             = aws_ssm_parameter.denylist.name
