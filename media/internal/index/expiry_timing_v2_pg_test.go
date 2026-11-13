@@ -313,8 +313,8 @@ func v2Diagnostics(t *testing.T, pool *pgxpool.Pool, stream string) map[string]s
 	return out
 }
 
-// 켜기 전 진단은 판 2 행이 있어도 같은 판정을 낸다. 닫힌 회차 R(A · B — B 문서 범위의 seq 4 를 지운 구멍)과 확정 전 회차
-// U(ending · freezing — 미정 단위)를 판 NULL 로만 심은 장부와, A 만 판 NULL 로 심고 래치 뒤 B · U 를 판 2 로 심은 장부가
+// 켜기 전 진단은 판 2 행이 있어도 같은 판정을 낸다. 닫힌 회차 Q(A) · R(B — B 문서 범위의 seq 4 를 지운 구멍)과
+// 확정 전 회차 U(ending · freezing — 미정 단위)를 판 NULL 로만 심은 장부와, A 만 판 NULL 로 심고 래치 뒤 B · U 를 판 2 로 심은 장부가
 // 문서 구멍 · 런북 「만료 켜기 전 진단」 · 「만료 미룸 질의」 에서 같은 결과를 낸다.
 func TestExpiryPreflightDiagnosticsSameWithV2Rows(t *testing.T) {
 	const stream = "v2exp-diag"
@@ -353,7 +353,8 @@ func TestExpiryPreflightDiagnosticsSameWithV2Rows(t *testing.T) {
 			if h := got[tc.name]["VODDocumentHolesSQL"]; h != wantHoles {
 				t.Errorf("문서 구멍 %s, want %s", h, wantHoles)
 			}
-			if d := got[tc.name]["expiry_deferred.sql"]; strings.Count(d, " U ") != 1 {
+			// 결과는 [[행] [행] …] 꼴이다 — 행이 하나이고 그 첫 열이 U 여야 한다(닫힌 Q · R 이 끼면 실패).
+			if d := got[tc.name]["expiry_deferred.sql"]; !strings.HasPrefix(d, "[[U ") || strings.Count(d, "[") != 2 {
 				t.Errorf("미룸 질의 %s (미정 회차 U 한 행 기대)", d)
 			}
 		})
