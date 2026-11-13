@@ -568,7 +568,7 @@ check_case_10() {
          + (if .clip_internal_url != "" then sc_clip_env else {} end))}
       + (if .janitor_enabled
          then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
-           JANITOR_ENABLED: "true", JANITOR_GRACE: "23h",
+           JANITOR_ENABLED: "true",
            SEGMENT_ROOT: "/recordings"})}
          else {} end)' '사이드카 · janitor env' || ok=1
   done
