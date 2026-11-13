@@ -316,7 +316,7 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
     return feed(endedAtTail(false), [{ type: 'round-poll', result: vodPastTail }]).state;
   }
 
-  it('W4: 끝에 닿은 제안의 404 는 같은 자리(가둔 E)로 · 같은 상태의 「다시보기 보기」 는 처음부터', () => {
+  it('W4: 끝에 닿은 제안의 404 는 같은 자리(가둔 E)로 · 같은 상태의 「다시보기 보기」 는 처음부터 넘긴다', () => {
     const s = offeredAtTail();
     expect(s.phase).toMatchObject({ kind: 'vod-offered', atEnd: true });
     expect(s.lastAtMs).toBe(E);
@@ -325,7 +325,17 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
     expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: E });
     expect(moved.effects).toEqual([]);
     const pressed = feed(s, [{ type: 'button', which: 'vod' }]);
-    expect(pressed.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: null });
+    expect(pressed.effects).toEqual([
+      {
+        kind: 'close',
+        reason: 'past',
+        handoff: {
+          resumeAtMs: null,
+          seenVod: { url: VOD, firstPdtMs: T0, headPdtMs: NOW + MIN },
+          chosen: true,
+        },
+      },
+    ]);
   });
 
   it('W4: 끝에 닿은 제안의 404 도 끝 여유 뒤 자리는 끝 여유 앞으로 가두고 알린다', () => {
@@ -348,7 +358,7 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
   ];
 
   for (const [name, make] of blockedAtTail) {
-    it(`W5 · ${name}: 막힘은 남고 회차별 vod 는 처음부터가 아니라 같은 자리(E)로`, () => {
+    it(`W5 · ${name}: 막힌 채 끝에 닿았으면 회차별 vod 는 멈춘 그대로 끝에 닿은 제안이다 — 단추는 처음부터`, () => {
       const s = make();
       expect(s.phase).toEqual({
         kind: 'ending-wait',
@@ -360,9 +370,18 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
       expect(s.closed).toBeNull();
       expect(s.lastAtMs).toBe(E);
       const moved = feed(s, [{ type: 'round-poll', result: vodPastTail }]);
-      expect(moved.state.phase).toEqual({ kind: 'vod' });
-      expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: E });
+      expect(moved.state.phase).toEqual({
+        kind: 'vod-offered',
+        url: VOD,
+        firstPdtMs: T0,
+        headPdtMs: NOW + MIN,
+        atEnd: true,
+        stopped: 'held',
+      });
+      expect(moved.state.source).toBe(s.source);
       expect(moved.effects).toEqual([]);
+      const pressed = feed(moved.state, [{ type: 'button', which: 'vod' }]);
+      expect(pressed.effects).toMatchObject([{ kind: 'close', handoff: { resumeAtMs: null } }]);
     });
 
     it(`W5 · ${name}: 겹침 불통과 · 재접속 대기 안 404 는 그대로 · ended · 대기 뒤 404 · 20분은 past 로 닫는다`, () => {
@@ -380,13 +399,21 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
 });
 
 describe('막힌 세션의 출구 — W5 셋(계획 3-4)', () => {
-  it('회차별 vod · 겹침 통과 → vod-offered 를 거치지 않고 같은 자리 다시보기', () => {
+  it('회차별 vod · 겹침 통과 → 멈춘 그대로 다시보기 제안 · 덮개 단추(자동 교체 안 함)', () => {
     const s = blockedOf(endedByEndlist());
     const moved = feed(s, [{ type: 'round-poll', result: vodReady(T0, NOW) }]);
-    expect(moved.state.phase).toEqual({ kind: 'vod' });
-    expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: T0 + 20 * MIN });
+    expect(moved.state.phase).toEqual({
+      kind: 'vod-offered',
+      url: VOD,
+      firstPdtMs: T0,
+      headPdtMs: NOW,
+      atEnd: false,
+      stopped: 'held',
+    });
+    expect(moved.state.source).toBe(s.source);
     expect(moved.effects).toEqual([]);
-    expect(sessionView(moved.state, R).cover).toBeNull();
+    expect(sessionView(moved.state, R).cover).toBe('vod-ready');
+    expect(isPlayerStartHeld(moved.state)).toBe(true);
   });
 
   it('회차별 vod 가 본 구간과 겹치지 않으면 막힌 채 그대로', () => {

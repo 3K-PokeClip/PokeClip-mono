@@ -653,3 +653,48 @@ describe('usePastVod: 경로를 바꾼 커밋 직후 · passive 전에 온 옛 �
     }, 10_000);
   });
 });
+
+describe('usePastVod: 세션이 이미 확인한 다시보기(knownVod — POK-547)', () => {
+  const KNOWN = {
+    url: VOD_URL,
+    firstPdtMs: Date.parse(READY_BODY.firstPdt),
+    headPdtMs: Date.parse(READY_BODY.headPdt),
+  };
+
+  it('첫 그리기부터 ready 이고 회차 경로를 묻지 않는다', async () => {
+    const spy = stubControllableFetch();
+    const { result } = renderHook(() => usePastVod(input({ knownVod: KNOWN })));
+    expect(result.current).toEqual({ kind: 'ready', vod: KNOWN });
+    await flush();
+    await stepPoll();
+    expect(spy).not.toHaveBeenCalled();
+    expect(result.current).toEqual({ kind: 'ready', vod: KNOWN });
+  });
+
+  it('부른 쪽이 거두면(다른 방송|영상 키) 새 경로를 처음부터 묻는다', async () => {
+    const spy = stubControllableFetch();
+    const { result, rerender } = renderHook((props: PastVodInput) => usePastVod(props), {
+      initialProps: input({ knownVod: KNOWN }),
+    });
+    expect(result.current.kind).toBe('ready');
+    rerender(input({ roundId: 'r2', knownVod: null }));
+    expect(result.current).toEqual({ kind: 'checking', answered: false });
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(pending[0]?.url).toBe(ROUND_2);
+  });
+
+  it('없으면(null) 지금 동작 그대로 묻는다', async () => {
+    const spy = stubControllableFetch();
+    const { result } = renderHook(() => usePastVod(input({ knownVod: null })));
+    expect(result.current).toEqual({ kind: 'checking', answered: false });
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('경로를 만들 수 없으면 knownVod 가 있어도 unconfigured 다', () => {
+    stubControllableFetch();
+    const { result } = renderHook(() => usePastVod(input({ controlKey: null, knownVod: KNOWN })));
+    expect(result.current).toEqual({ kind: 'unconfigured' });
+  });
+});

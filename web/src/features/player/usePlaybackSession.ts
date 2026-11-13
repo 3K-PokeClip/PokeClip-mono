@@ -9,6 +9,7 @@ import {
   pollTargets,
   transition,
   type DvrSegment,
+  type PastHandoff,
   type PlaybackSessionState,
   type SessionClose,
   type SessionEffect,
@@ -47,6 +48,8 @@ export interface SessionClosed {
   /** 끝남 대기를 연 시각(세션 endingSince) — past 로 닫힌 화면의 404 유예 원점 폴백. 모르면 null */
   endingSinceMs: number | null;
   accessKey: string;
+  /** past 닫힘이 지난 방송 판정에 넘기는 것(POK-547). past 가 아니면 null */
+  handoff: PastHandoff | null;
 }
 
 export interface SessionOptions {
@@ -98,8 +101,8 @@ function needsX(s: PlaybackSessionState): boolean {
 }
 
 /**
- * 마지막 확인 중인가 — 회차별 조회는 처음 물음의 답 또는 시한(8초)이 끝낸다: 본 구간과 겹치는 다시보기 답이면 같은 자리
- * 다시보기, 그 밖 답이면 곧바로 닫고(past), 시한까지 답이 없어도 닫는다(POK-528 W6 · 정본 r7 1151 · POK-547)
+ * 마지막 확인 중인가 — 회차별 조회는 처음 물음의 답 또는 시한(8초)이 끝낸다: 본 구간과 겹치는 다시보기 답이면 멈춘 그대로
+ * 다시보기를 제안하고, 그 밖 답이면 곧바로 닫고(past), 시한까지 답이 없어도 닫는다(POK-528 W6 · 정본 r7 1151 · POK-547)
  */
 function inFinalCheck(s: PlaybackSessionState | null): boolean {
   return s !== null && s.phase.kind === 'ending-wait' && s.phase.finalCheck === true;
@@ -220,15 +223,18 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
           );
           break;
         }
-        case 'close':
+        case 'close': {
           if (effect.reason === 'left') leftForRef.current = session.accessKey;
+          const past = effect.reason === 'past';
           optionsRef.current.onClose({
             reason: effect.reason,
-            goTo: effect.goTo,
+            goTo: past ? undefined : effect.goTo,
             endingSinceMs: session.endingSince,
             accessKey: session.accessKey,
+            handoff: past ? effect.handoff : null,
           });
           break;
+        }
       }
     }
   }, []);

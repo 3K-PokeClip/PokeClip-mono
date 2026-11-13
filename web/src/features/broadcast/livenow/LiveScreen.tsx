@@ -369,6 +369,8 @@ const LivePlayer = memo(function LivePlayer({
     broadcastStatus,
     liveUrl: src,
     reselect,
+    // 「다시보기 보기」 로 닫으면 단추 전에 받아 둔 카드를 버린다 — 누른 것이 마지막 의도다(POK-547)
+    onChosenPastClose: onStartApplied,
   });
   const showsPast = live.showsPast;
   const playerStatus: BroadcastStatus = live.closedToPast ? 'ended' : displayStatus;
@@ -398,6 +400,8 @@ const LivePlayer = memo(function LivePlayer({
     controlKey: mediaKey || null,
     roundId: liveStreamId || null,
     endedAtMs: endedAt ?? live.pastSinceMs,
+    // past 로 닫힌 화면은 세션이 확인한 다시보기를 곧바로 튼다 — 다시 묻지 않는다(POK-547)
+    knownVod: live.pastSeenVod,
   });
   const access: PastCardInput['access'] = accessReady
     ? 'ready'
@@ -495,6 +499,24 @@ const LivePlayer = memo(function LivePlayer({
       originAxis: originMs !== null,
     };
   }, [showsPast, pastVod, accessReady, expired, originMs]);
+  // past 로 닫힌 화면의 시작 자리(POK-547) — 받아 둔 카드가 먼저고, 없으면 세션이 넘긴 자리(PDT)를 다시보기 축의 초로 바꾼다.
+  // 「다시보기 보기」 로 닫았으면 카드는 닫을 때 이미 비웠다. 축 0초가 늦게 와도 PDT 에서 매 그리기 다시 센다
+  const { pastResumeAtMs, consumePastResume } = live;
+  const handoffSeconds =
+    pastResumeAtMs === null || vodSource === null
+      ? null
+      : (pastResumeAtMs - vodSource.axisZeroMs) / 1000;
+  const vodStartSeconds = startAtSeconds ?? handoffSeconds;
+  // 시작을 적용하면 카드와 넘긴 자리를 함께 비운다. 다시보기를 옮기면(시작 적용 · 카드 · 시크바 · 키) 넘긴 자리를 비워, 다시 선
+  // 재생기가 옛 자리로 가지 않게 한다. 재생기 훅이 이 함수들의 정체성을 의존성으로 본다
+  const onVodStartApplied = useCallback(() => {
+    onStartApplied();
+    consumePastResume();
+  }, [onStartApplied, consumePastResume]);
+  const onPlayerSeek = useCallback(() => {
+    consumePastResume();
+    onSeek();
+  }, [consumePastResume, onSeek]);
   // 다시보기 재생기가 알린 국면. 그 재생기(소스 주소 · 재생기 열쇠)가 알린 것만 쓰고 소스가 내려가면 버린다: 다시 선 재생기의 첫
   // 그리기에 옛 국면(showing)을 쓰면 목록 없는 재생기로 카드를 옮기려 들었다(POK-546 K2 (i)). 새 재생기는 곧 loading 을 알린다
   const phaseKey = `${vodSource?.url ?? ''}|${playerKey}`;
@@ -563,11 +585,11 @@ const LivePlayer = memo(function LivePlayer({
         src={broadcastStatus === 'live' && accessReady && !live.closedToPast ? src : null}
         vod={vodSource}
         onVodPhase={handleVodPhase}
-        onStartApplied={onStartApplied}
-        startAtSeconds={startAtSeconds}
+        onStartApplied={onVodStartApplied}
+        startAtSeconds={vodStartSeconds}
         onPlaybackPosition={onPlaybackPosition}
         onLivePosition={onLivePosition}
-        onSeek={onSeek}
+        onSeek={onPlayerSeek}
         embed
         simulationOptions={simulationOptions}
         controllerRef={controllerRef}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { roundRewindUrl, type RewindStatusResult } from '@/api/rewindStatus';
 import {
   foldPastVodAnswer,
@@ -8,6 +8,7 @@ import {
   type PastVodHold,
   type PastVodState,
 } from '@/features/player/pastVod';
+import type { RewindRange } from '@/features/player/sessionShared';
 import { useRewindStatus } from '@/features/player/useRewindStatus';
 
 // 지난 방송 판정 화면(끝난 뒤 들어온 화면 A · 세션이 past 로 닫힌 화면 B — POK-547)의 회차 경로 폴링(POK-546 설계
@@ -29,6 +30,11 @@ export interface PastVodInput {
    * 이 화면이 처음 404 를 받은 시각이 원점이다
    */
   endedAtMs: number | null;
+  /**
+   * 세션이 past 로 닫히며 이미 확인한 이 회차의 다시보기(ready:true — POK-547). 이 경로로 받은 답이 아직 없으면 ready 로
+   * 보고 묻지 않는다. 부른 쪽이 그 방송|영상 키에 묶어 준다 — 다른 키면 null
+   */
+  knownVod?: RewindRange | null;
 }
 
 /** 경로를 만들 수 없을 때 — 묻지 않는다 */
@@ -60,6 +66,12 @@ type HoldAction =
       endedAtMs: number | null;
     };
 
+/** 아직 아무 답도 없는 경로는 세션이 확인한 다시보기를 그대로 쓴다 — 다시 묻지 않는다(POK-547) */
+function withKnownVod(state: PastVodState, knownVod: RewindRange | null): PastVodState {
+  const unanswered = state.kind === 'checking' && !state.answered;
+  return unanswered && knownVod !== null ? { kind: 'ready', vod: knownVod } : state;
+}
+
 /** 경로가 바뀌면 묶음째 새로 세우고, 답은 묶음의 경로와 묻던 경로가 같을 때만 접는다(앞 경로의 답은 버린다) */
 function holdReducer(held: HeldState, action: HoldAction): HeldState {
   if (action.type === 'route') return held.forUrl === action.url ? held : freshHold(action.url);
@@ -80,7 +92,7 @@ function holdReducer(held: HeldState, action: HoldAction): HeldState {
  *   답은 버리고, 버려진 전이 렌더 뒤에도 지금 경로의 답은 받는다.
  */
 export function usePastVod(input: PastVodInput): PastVodState {
-  const { enabled, controlBase, controlKey, roundId, endedAtMs } = input;
+  const { enabled, controlBase, controlKey, roundId, endedAtMs, knownVod = null } = input;
   const routeUrl =
     controlKey !== null && roundId !== null
       ? roundRewindUrl(controlBase, controlKey, roundId)
@@ -96,7 +108,12 @@ export function usePastVod(input: PastVodInput): PastVodState {
     dispatchHold({ type: 'route', url: routeUrl });
   }
 
-  const state = routeUrl === null ? UNCONFIGURED : current.state;
+  // 묶음 상태 · 확인한 다시보기가 그대로면 같은 값을 낸다 — 받는 쪽이 이 값의 정체성으로 다시보기 소스를 다시 세운다
+  const heldState = current.state;
+  const state = useMemo(
+    () => (routeUrl === null ? UNCONFIGURED : withKnownVod(heldState, knownVod)),
+    [routeUrl, heldState, knownVod],
+  );
   const pollUrl = enabled && pastVodNeedsPoll(state) ? routeUrl : null;
 
   // 답 처리는 커밋된 값만 읽는다. useRewindStatus 는 답 처리 함수를 렌더 중에 갈아 끼우므로, 렌더의 값(경로 · endedAt)을 닫아

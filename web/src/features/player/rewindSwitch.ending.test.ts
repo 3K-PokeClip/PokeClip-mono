@@ -44,6 +44,12 @@ const X_A: XAnswer = { kind: 'known', id: 'r-A' };
 const X_B: XAnswer = { kind: 'known', id: 'r-B' };
 const X_EMPTY: XAnswer = { kind: 'known', id: '' };
 const X_UNKNOWN: XAnswer = { kind: 'unknown' };
+/** 단추 없이 끝에 닿아 닫힌 past — 다시보기 없이 처음부터(POK-547) */
+const PAST_FROM_START: SessionEffect = {
+  kind: 'close',
+  reason: 'past',
+  handoff: { resumeAtMs: null, seenVod: null, chosen: false },
+};
 
 beforeEach(resetEventKit);
 
@@ -250,7 +256,7 @@ describe('ending-wait 국면', () => {
     const before = run(start, [[{ type: 'round-poll', result: NONE }, NOW + RESUME_WAIT_MS - 1]]);
     expect(before.state.closed).toBeNull();
     const after = run(start, [[{ type: 'round-poll', result: NONE }, NOW + RESUME_WAIT_MS]]);
-    expect(after.effects).toEqual([{ kind: 'close', reason: 'past' }]);
+    expect(after.effects).toEqual([PAST_FROM_START]);
   });
 
   it('회차별 404 · 360초 뒤 · atEnd:false 는 closeOnEnd · 폴링 0 · 끝 도달에 덮개 없이 past', () => {
@@ -260,14 +266,14 @@ describe('ending-wait 국면', () => {
     expect(pollTargets(after)).toEqual({ stream: false, round: false });
     expect(after.source.url).toBe(A1);
     const done = run(after, [[{ type: 'end-reached' }]]);
-    expect(done.effects).toEqual([{ kind: 'close', reason: 'past' }]);
+    expect(done.effects).toEqual([PAST_FROM_START]);
   });
 
   it('회차별 mode:ended 는 대기 안이어도 곧바로 종국이다', () => {
     const { effects } = run(endingFromLiveClosed(), [
       [{ type: 'round-poll', result: status({ mode: 'ended' }) }, NOW + 10_000],
     ]);
-    expect(effects).toEqual([{ kind: 'close', reason: 'past' }]);
+    expect(effects).toEqual([PAST_FROM_START]);
   });
 
   it('회차별 ending · live · null · 503 은 기다린다', () => {
@@ -324,6 +330,7 @@ describe('ending-wait 국면', () => {
       firstPdtMs: T0,
       headPdtMs: NOW,
       atEnd: true,
+      stopped: null,
     });
     expect(pollTargets(state)).toEqual({ stream: false, round: false });
     expect(sessionView(state, NOW).actions).toContain('vod');
@@ -339,7 +346,7 @@ describe('ending-wait 국면', () => {
     // 20분 직전에는 닫지 않는다
     expect(run(atEnd, [[{ type: 'tick' }, NOW + ENDING_WAIT_MS - 1]]).effects).toEqual([]);
     expect(run(atEnd, [[{ type: 'tick' }, NOW + ENDING_WAIT_MS]]).effects).toEqual([
-      { kind: 'close', reason: 'past' },
+      PAST_FROM_START,
     ]);
   });
 
@@ -438,7 +445,7 @@ describe('ending-wait 국면', () => {
     const early = run(again, [[{ type: 'round-poll', result: NONE }, second + RESUME_WAIT_MS - 1]]);
     expect(early.state.closed).toBeNull();
     const late = run(again, [[{ type: 'round-poll', result: NONE }, second + RESUME_WAIT_MS]]);
-    expect(late.effects).toEqual([{ kind: 'close', reason: 'past' }]);
+    expect(late.effects).toEqual([PAST_FROM_START]);
   });
 
   it('LIVE 직후 라이브가 닫히면(재생 실패) endingSince 는 그대로다', () => {
@@ -463,7 +470,7 @@ describe('끝남 대기 종국 → 세션을 닫고 지난 방송 판정으로(P
   for (const [name, event, at] of finals) {
     it(`T1-1 ${name} · 끝에 닿은 시청자 → past 로 닫는다`, () => {
       const { state, effects } = run(endingFromLiveClosed(), [[event, at]]);
-      expect(effects).toEqual([{ kind: 'close', reason: 'past' }]);
+      expect(effects).toEqual([PAST_FROM_START]);
       expect(state.closed).toBe('past');
     });
 
@@ -478,7 +485,7 @@ describe('끝남 대기 종국 → 세션을 닫고 지난 방송 판정으로(P
       });
       expect(pollTargets(decided.state)).toEqual({ stream: false, round: false });
       const done = run(decided.state, [[{ type: 'end-reached' }, at]]);
-      expect(done.effects).toEqual([{ kind: 'close', reason: 'past' }]);
+      expect(done.effects).toEqual([PAST_FROM_START]);
     });
   }
 
@@ -495,7 +502,7 @@ describe('끝남 대기 종국 → 세션을 닫고 지난 방송 판정으로(P
     expect(kept.state.phase.kind).toBe('ending-wait');
     expect(kept.effects).toEqual([]);
     const late = run(kept.state, [[{ type: 'tick' }, NOW + ENDING_WAIT_MS]]);
-    expect(late.effects).toEqual([{ kind: 'close', reason: 'past' }]);
+    expect(late.effects).toEqual([PAST_FROM_START]);
   });
 
   it('T2-1 국면 × 제안 표 — 덮개 · 띠의 단추에 녹화 길이 없다', () => {

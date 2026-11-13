@@ -6,6 +6,7 @@ import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadca
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 import { mediaControlBaseUrl } from '@/features/player/mediaSource';
 import type { XAnswer } from '@/features/player/rewindSwitch';
+import type { RewindRange } from '@/features/player/sessionShared';
 import {
   usePlaybackSession,
   type PlaybackSession,
@@ -40,6 +41,11 @@ export interface LiveSessionInput {
   liveUrl: string | null;
   /** 보유 중의 다시 고르기(useLiveStreamSelection) — deferred 는 띠, latest(실패면 null)는 지금 방송 번호 X 의 재료 */
   reselect: Reselect;
+  /**
+   * 「다시보기 보기」 로 past 닫힘 — 닫는 같은 동기 호출에서 불러, 단추 전에 받아 둔 카드를 버리게 한다(누른 것이 마지막
+   * 의도다 · POK-547)
+   */
+  onChosenPastClose?: () => void;
 }
 
 export interface LiveSession {
@@ -54,9 +60,26 @@ export interface LiveSession {
   closedToPast: boolean;
   /** past 로 닫힌 화면의 404 유예 원점 폴백(끝남 대기를 연 시각 — SessionClosed.endingSinceMs). 그 밖은 null */
   pastSinceMs: number | null;
+  /**
+   * past 로 닫힌 화면이 이어 틀 자리(PDT epoch ms — POK-547). 끝에 닿아 닫혔거나 소모했으면 null. past 로 닫힌 그
+   * 방송|영상 키에서만 낸다
+   */
+  pastResumeAtMs: number | null;
+  /** past 로 닫힐 때 세션이 확인한 다시보기(ready:true). past 로 닫힌 그 방송|영상 키에서만 낸다 */
+  pastSeenVod: RewindRange | null;
+  /** 이어 틀 자리를 소모한다 — 닫힘 기록 · 확인한 다시보기는 둔다. 다시보기가 시작을 적용하거나 옮길 때 부른다 */
+  consumePastResume: () => void;
   /** 「새 방송이 시작됐어요」 띠의 방송 번호 */
   band: string | null;
   onBand: () => void;
+}
+
+/** past 로 닫힌 기록 — 키 · 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기(POK-547) */
+interface ClosedPast {
+  key: string;
+  sinceMs: number | null;
+  resumeAtMs: number | null;
+  seenVod: RewindRange | null;
 }
 
 /**
@@ -114,11 +137,11 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const pinned = vodStreamIdFromPathname(pathname ?? '') !== null || Boolean(streamParam);
   const streamerId = useChannelStreamerId();
   const { toast, dismiss } = useToast();
-  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 — 같은 키로는 세션을 다시 열지 않는다(cc H1 ②). 키 비교라 지울 필요가
-  // 없다
-  const [closedPast, setClosedPast] = useState<{ key: string; sinceMs: number | null } | null>(
-    null,
-  );
+  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 — 같은 키로는 세션을 다시 열지 않는다
+  // (cc H1 ②). 키 비교라 지울 필요가 없다
+  const [closedPast, setClosedPast] = useState<ClosedPast | null>(null);
+  const onChosenRef = useRef(input.onChosenPastClose);
+  onChosenRef.current = input.onChosenPastClose;
   // 세션을 연 적 있는 키 — 이 키로 연 적 없이 명부가 ended 면 끝난 뒤 들어온 화면(A)이다(지난 방송 화면 포함 · POK-546)
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   // 띠를 눌러 보유를 푼 키
@@ -144,7 +167,14 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const onClose = useCallback(
     (closed: SessionClosed) => {
       if (closed.reason === 'past') {
-        setClosedPast({ key: closed.accessKey, sinceMs: closed.endingSinceMs });
+        setClosedPast({
+          key: closed.accessKey,
+          sinceMs: closed.endingSinceMs,
+          resumeAtMs: closed.handoff?.resumeAtMs ?? null,
+          seenVod: closed.handoff?.seenVod ?? null,
+        });
+        // 같은 동기 호출이라 닫힘 · 카드 비움이 한 그리기로 묶인다
+        if (closed.handoff?.chosen === true) onChosenRef.current?.();
         return;
       }
       // 고정 화면의 「새 방송 보기」는 라이브 대시보드의 그 방송으로 간다. 고정 안 한 화면은 보유가 풀려 다시 고르기가 X 를 넣는다
@@ -203,6 +233,11 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
 
   const pastClose = closedPast !== null && closedPast.key === accessKey ? closedPast : null;
   const closedToPast = pastClose !== null;
+  const consumePastResume = useCallback(
+    () =>
+      setClosedPast((p) => (p === null || p.resumeAtMs === null ? p : { ...p, resumeAtMs: null })),
+    [],
+  );
   // 보유 — 세션이 열려 있거나 past 로 닫혀 그 자리에서 지난 방송 판정을 보이는 동안. 띠를 누르면 푼다(5.5절)
   const holding = (opened || closedToPast) && accessKey !== releasedFor && liveStreamId !== '';
   useEffect(() => {
@@ -231,6 +266,9 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     showsPast: pastOnly || closedToPast,
     closedToPast,
     pastSinceMs: pastClose?.sinceMs ?? null,
+    pastResumeAtMs: pastClose?.resumeAtMs ?? null,
+    pastSeenVod: pastClose?.seenVod ?? null,
+    consumePastResume,
     band,
     onBand,
   };

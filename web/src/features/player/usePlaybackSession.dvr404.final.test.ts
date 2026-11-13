@@ -208,7 +208,11 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
     expect(roundStarts[1]).toBe(Date.now());
     expect(streamStarts).toHaveLength(streamBefore);
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onClose.mock.calls[0]?.[0]).toMatchObject({ reason: 'past' });
+    // 단추 없는 닫힘이라 다시보기 · 단추 표지는 없다(POK-547)
+    expect(onClose.mock.calls[0]?.[0]).toMatchObject({
+      reason: 'past',
+      handoff: { seenVod: null, chosen: false },
+    });
     assertAllTransitions();
   });
 
@@ -250,7 +254,11 @@ describe('마지막 확인의 폴링 배선(계획 3-6 · 8-3)', () => {
     expect(roundSignals[1]?.aborted).toBe(true);
     expect(roundStarts).toHaveLength(2);
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onClose.mock.calls[0]?.[0]).toMatchObject({ reason: 'past' });
+    // 단추 없는 닫힘이라 다시보기 · 단추 표지는 없다(POK-547)
+    expect(onClose.mock.calls[0]?.[0]).toMatchObject({
+      reason: 'past',
+      handoff: { seenVod: null, chosen: false },
+    });
     assertAllTransitions();
   });
 });

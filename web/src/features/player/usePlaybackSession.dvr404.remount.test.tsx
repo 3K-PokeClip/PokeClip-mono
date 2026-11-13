@@ -314,7 +314,30 @@ async function rewindScreen(watched = true) {
     view.rerender(<Screen options={opts} playerShown />);
     await settle();
   };
-  return { view, rewindHls, remount, onNotice };
+  return { view, rewindHls, remount, onNotice, onClose: vi.mocked(opts.onClose) };
+}
+
+/**
+ * 멈춘 그대로 선 다시보기 제안(POK-547) — 덮개 단추 · 새 재생기 보류 · hls.js 생성 · 재생 0. 단추를 누르면 past 로 닫아
+ * 넘긴다(넘김은 지난 방송 재생기가 한다 — 이 화면은 닫힌 뒤 세션을 다시 여는 것을 막지 않아 닫힌 뒤는 보지 않는다)
+ */
+async function expectHeldOfferThenPress(
+  created: number,
+  played: number,
+  onClose: ReturnType<typeof vi.fn>,
+) {
+  expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD, stopped: 'held' });
+  expect(current().view).toMatchObject({ cover: 'vod-ready', startHeld: true });
+  expect(fake.instances).toHaveLength(created);
+  expect(playCalls()).toBe(played);
+  checkedEvents();
+  act(() => current().dispatch({ type: 'button', which: 'vod' }));
+  await settle();
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onClose.mock.calls[0]?.[0]).toMatchObject({
+    reason: 'past',
+    handoff: { seenVod: { url: VOD }, chosen: true },
+  });
 }
 
 /** 감싼 transition 의 모든 호출에 감싸개 불변식을 단언하고 사건 꼴을 돌려준다(계획 8-0) */
@@ -377,8 +400,8 @@ afterEach(() => {
 });
 
 describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는 hls.js 를 만들지 않는다(U2 · 계획 8-3c)', () => {
-  it('막힘 기원: 404 → 다시 받기 → 화면 전 404 → 막힘 · 멈춤 → 리마운트 → 생성 0 · 재생 0 → 다시보기가 나오면 생성 1 · 재생 1', async () => {
-    const { rewindHls, remount } = await rewindScreen();
+  it('막힘 기원: 404 → 다시 받기 → 화면 전 404 → 막힘 · 멈춤 → 리마운트 → 생성 0 · 재생 0 → 다시보기가 나와도 멈춘 그대로 덮개 단추 · 누르면 past', async () => {
+    const { rewindHls, remount, onClose } = await rewindScreen();
     segmentGone(rewindHls);
     expect(rewindHls.stopLoad).toHaveBeenCalledTimes(1);
     await settle();
@@ -404,15 +427,11 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     control.round = () => jsonResponse(200, vodBody());
     await act(async () => vi.advanceTimersByTime(10_000));
     await settle();
-    expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD });
-    expect(fake.instances).toHaveLength(created + 1);
-    expect(lastHls().loadSource).toHaveBeenCalledTimes(1);
-    expect(playCalls()).toBe(played + 1);
-    checkedEvents();
+    await expectHeldOfferThenPress(created, played, onClose);
   });
 
-  it('마지막 확인 기원: 녹화로 정한 끝남 대기 → 404 → 리마운트 → 생성 0 → 회차별 답이 다시보기면 생성 1 · 재생 1', async () => {
-    const { rewindHls, remount } = await rewindScreen();
+  it('마지막 확인 기원: 녹화로 정한 끝남 대기 → 404 → 리마운트 → 생성 0 → 회차별 답이 다시보기면 멈춘 그대로 덮개 단추 · 누르면 past', async () => {
+    const { rewindHls, remount, onClose } = await rewindScreen();
     control.round = () => jsonResponse(200, statusBody({ mode: 'ended' }));
     act(() => current().dispatch({ type: 'endlist' }));
     await settle();
@@ -430,10 +449,7 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     expect(playCalls()).toBe(played);
     finalAnswer.release(vodBody());
     await settle();
-    expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD });
-    expect(fake.instances).toHaveLength(created + 1);
-    expect(playCalls()).toBe(played + 1);
-    checkedEvents();
+    await expectHeldOfferThenPress(created, played, onClose);
   });
 
   it('다시 받기 기원: 404 → 첫 목록 전 리마운트 → 세우지 않음 아님 · 새 재생기 생성 · 재생 1 · 새 목록 판정 알림 1', async () => {

@@ -15,7 +15,8 @@ import type { SeekView } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 import type { PlayerSimulation, PlayerSimulationOptions } from './usePlayerSimulation';
 
-// 끝난 뒤 들어온 화면(A)의 다시보기 재생기(POK-546 설계 2-3) — 회차 경로가 답한 VOD 목록 하나를 PDT 축으로 튼다.
+// 끝난 뒤 들어온 화면(A) · 세션이 past 로 닫힌 화면(B — POK-547)의 다시보기 재생기(POK-546 설계 2-3) — 회차 경로가 답한
+// VOD 목록 하나를 PDT 축으로 튼다.
 // useHlsPlayback 을 세션 모드(onSeekRequest)로 세워 카드의 실제 시각 옮기기가 PDT 와 범위 밖 판정을 쓰게 하고, 그 반환을
 // 펼쳐 세 가지를 덮는다: 시크바(목록 전체 길이 축 — 세션 축의 1시간 상한을 거치지 않는다) · 위치(화면에 붙은 자리를
 // 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른 카드). 다 봤나(ended)는 useHlsPlayback 에 없어 더한다.

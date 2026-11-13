@@ -191,15 +191,23 @@ describe('닫기로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 
 });
 
 describe('W6 「종국 → 404」 순서 넷(계획 8-1)', () => {
-  it('1. 20분 시한 → 404 → 회차별 vod · 겹침 통과 → 같은 자리 다시보기(시한 직후 VOD)', () => {
+  it('1. 20분 시한 → 404 → 회차별 vod · 겹침 통과 → 멈춘 그대로 다시보기 제안(덮개 단추 · 마지막 확인 끝)', () => {
     const s = finalOf(byDeadline());
     const moved = feed(s, [roundPoll(vodReady(T0, NOW))], AFTER_DEADLINE);
-    expect(moved.state.phase).toEqual({ kind: 'vod' });
-    expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: P20 });
-    expect(moved.state.source.generation).toBe(s.source.generation + 1);
+    expect(moved.state.phase).toEqual({
+      kind: 'vod-offered',
+      url: VOD,
+      firstPdtMs: T0,
+      headPdtMs: NOW,
+      atEnd: false,
+      stopped: 'held',
+    });
+    expect(moved.state.source).toBe(s.source);
     expect(moved.state.closed).toBeNull();
     expect(moved.effects).toEqual([]);
-    expect(sessionView(moved.state, AFTER_DEADLINE).cover).toBeNull();
+    expect(sessionView(moved.state, AFTER_DEADLINE).cover).toBe('vod-ready');
+    const pressed = feed(moved.state, [{ type: 'button', which: 'vod' }], AFTER_DEADLINE);
+    expect(pressed.effects).toMatchObject([{ kind: 'close', handoff: { resumeAtMs: P20 } }]);
   });
 
   it('2. 회차별 ended → 404 → 회차별 ended → past 로 닫는다', () => {

@@ -20,9 +20,11 @@ import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
 import {
   SESSION_NOTICES,
   close,
+  closePast,
   dvrHoleKnown,
   isThisRound,
   liveFromAway,
+  offeredRange,
   openVodHere,
   readyLive,
   replace,
@@ -31,7 +33,6 @@ import {
   seekInList,
   seekLive,
   stateOnly,
-  vodStartAt,
   within,
   withDvrHole,
   withUrl,
@@ -102,9 +103,9 @@ export type SessionPhase =
    * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 ·
    * closeOnEnd = 회차 종국 또는 20분 시한이 섰다 — 끝에 닿으면 세션을 닫는다 ·
    * blocked = 되감기 조각 404 로 이 목록을 끝까지 재생할 수 없다(POK-528 — 회차별 조회의 겹치는 vod · 종국 · 20분과 사람
-   * 단추(라이브 보기 · 새 방송 보기 — 제안됐을 때)로만 풀린다) · finalCheck = 닫기로 정한 뒤 404 를 받아 회차별 조회를
-   * 마지막으로 한 번 하는 중(POK-528 W6 — 답이 본 구간과 겹치는 유효한 vod 면 같은 자리 다시보기, 그 밖이면 닫는다). 둘 다
-   * 없으면 거짓이다
+   * 단추(라이브 보기 · 새 방송 보기 — 제안됐을 때)로만 풀린다. 겹치는 vod 는 멈춘 그대로 다시보기 제안으로 옮긴다) ·
+   * finalCheck = 닫기로 정한 뒤 404 를 받아 회차별 조회를 마지막으로 한 번 하는 중(POK-528 W6 — 답이 본 구간과 겹치는
+   * 유효한 vod 면 멈춘 그대로 다시보기 제안, 그 밖이면 닫는다). 둘 다 없으면 거짓이다
    */
   | {
       kind: 'ending-wait';
@@ -114,12 +115,36 @@ export type SessionPhase =
       blocked?: boolean;
       finalCheck?: boolean;
     }
-  | { kind: 'vod-offered'; url: string; firstPdtMs: number; headPdtMs: number; atEnd: boolean }
+  /** 다시보기 제안 — 「다시보기 보기」 단추로만 넘긴다(자동 교체 안 함 · POK-547). stopped = 재생이 멎은 까닭 */
+  | {
+      kind: 'vod-offered';
+      url: string;
+      firstPdtMs: number;
+      headPdtMs: number;
+      atEnd: boolean;
+      stopped: OfferStopped;
+    }
   | { kind: 'vod' };
 
 /**
- * 세션을 닫는 사유. past = 끝남 대기가 종국(회차 ended · 재접속 대기 뒤 404 · 20분 시한 · 마지막 확인 비 vod)에 닿아
- * 지난 방송 판정으로 넘김(POK-547) · go-live = 「라이브 보기」 · left = 화면 이탈 · 다른 방송 선택
+ * 다시보기 제안 중 재생이 멎은 까닭. drained = 받기를 멈춘 뒤 받은 버퍼를 다 틀었다 · held = 막힘 · 마지막
+ * 확인에서 넘어와 멈춘 그대로다(시크도 받지 않는다). null 이면 아직 튼다. 멎었으면 단추를 덮개에 둔다
+ */
+export type OfferStopped = null | 'drained' | 'held';
+
+/** past 닫힘이 지난 방송 판정에 넘기는 것(POK-547) */
+export interface PastHandoff {
+  /** 이어 볼 자리(PDT epoch ms). 끝에 닿았거나 모르면 null — 처음부터 */
+  resumeAtMs: number | null;
+  /** 본 구간과 겹친다고 확인한 회차 다시보기(ready:true). 확인하지 못했으면 null */
+  seenVod: RewindRange | null;
+  /** 사람이 「다시보기 보기」 를 눌러 닫았다 — 단추 전에 받아 둔 카드는 버린다 */
+  chosen: boolean;
+}
+
+/**
+ * 세션을 닫는 사유. past = 「다시보기 보기」 를 눌렀거나 끝남 대기가 종국(회차 ended · 재접속 대기 뒤 404 · 20분 시한 ·
+ * 마지막 확인 비 vod)에 닿아 지난 방송 판정으로 넘김(POK-547) · go-live = 「라이브 보기」 · left = 화면 이탈 · 다른 방송 선택
  */
 export type SessionClose = 'past' | 'go-live' | 'left';
 
@@ -246,8 +271,9 @@ export type SessionEffect =
   | { kind: 'withdraw-notice'; text: string }
   /** LIVE 의 X 를 2초 뒤 다시 묻는다 */
   | { kind: 'recheck-x'; attempt: number }
+  | { kind: 'close'; reason: 'past'; handoff: PastHandoff }
   /** goTo = 「새 방송 보기」의 방송 번호 */
-  | { kind: 'close'; reason: SessionClose; goTo?: string }
+  | { kind: 'close'; reason: 'go-live' | 'left'; goTo?: string }
   /**
    * 라이브 목록 url 의 창 하한을 잰다(liveWindowProbe) — 결과는 같은 seq 의
    * live-probe 사건으로 돌아온다
@@ -632,12 +658,16 @@ function onVodOffered(
 ): Transition {
   switch (event.type) {
     case 'button':
-      return event.which === 'vod' ? openVod(session, phase) : stateOnly(session);
+      return event.which === 'vod'
+        ? closePast(session, offeredRange(phase), { atEnd: phase.atEnd, chosen: true })
+        : stateOnly(session);
     case 'end-reached':
       return phase.atEnd
         ? stateOnly(session)
         : stateOnly({ ...session, phase: { ...phase, atEnd: true } });
     case 'seek':
+      // 막힘 · 마지막 확인에서 멈춘 그대로 온 제안은 시크를 받지 않는다 — 재생기가 받기를 멈췄다(POK-528)
+      if (phase.stopped === 'held') return stateOnly(session);
       if (phase.atEnd) {
         if (origin === 'live') return stateOnly(session);
         const moved = seekInList(session, event.targetMs, event.view);
@@ -660,32 +690,6 @@ function onVodOffered(
     default:
       return stateOnly(session);
   }
-}
-
-/**
- * 「다시보기 보기」 — 끝에 닿았거나 자리를 모르면 처음부터, 아니면 이어 볼 자리에서(하한이 이긴다 —
- * 짧은 VOD 는 첫 조각 · R47)
- */
-function openVod(session: PlaybackSessionState, phase: OfferedPhase): Transition {
-  const atMs = resumeAtMs(session);
-  if (phase.atEnd || atMs === null) {
-    return stateOnly({
-      ...session,
-      phase: { kind: 'vod' },
-      source: replace(session, 'vod', phase.url, null),
-    });
-  }
-  const start = vodStartAt(session, atMs, phase);
-  const effects: SessionEffect[] =
-    start === atMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
-  return {
-    state: {
-      ...session,
-      phase: { kind: 'vod' },
-      source: replace(session, 'vod', phase.url, start),
-    },
-    effects,
-  };
 }
 
 function onVod(session: PlaybackSessionState, event: SessionEvent): Transition {

@@ -1,10 +1,10 @@
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
 import { RESUME_WAIT_MS, type RewindRange } from './sessionShared';
 
-// 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부가 ended 인 화면)의 다시보기 판정(POK-546
-// 설계 2-1 · 4-5). 회차 경로 답 → 다시보기 상태, 그리고 카드 누름을 어느 길로 보낼지를 정하는
-// 순수 함수다. React 없이 단위 시험하려고 훅과 뗀다(endingWait.ts 와 같은 꼴). 웹은 회차
-// 경로 답만 믿는다 — 목록에 오르는지는 서버가 정한다.
+// 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부가 ended 인 화면) · 세션이 past 로 닫힌
+// 화면(B — POK-547)의 다시보기 판정(POK-546 설계 2-1 · 4-5). 회차 경로 답 → 다시보기 상태,
+// 그리고 카드 누름을 어느 길로 보낼지를 정하는 순수 함수다. React 없이 단위 시험하려고 훅과
+// 뗀다(endingWait.ts 와 같은 꼴). 웹은 회차 경로 답만 믿는다 — 목록에 오르는지는 서버가 정한다.
 
 /**
  * 다시보기 상태. 회차 경로 답이 쌓여 정한다 — 같은 답이라도 직전 상태에 따라 결과가 다르다
@@ -138,7 +138,7 @@ export interface PastVodHold {
 }
 
 /**
- * 답 하나를 묶음에 접는다(A 화면 usePastVod · 지난 방송 목록이 같은 규칙을 쓴다). 404 유예의 원점은 originMs(명부
+ * 답 하나를 묶음에 접는다(A · B 화면 usePastVod · 지난 방송 목록이 같은 규칙을 쓴다). 404 유예의 원점은 originMs(명부
  * endedAt 등), 없으면 이 경로의 첫 404 시각, 그것도 없으면 지금이다. 404 를 받으면 첫 404 시각을 적는다
  * @param originMs 404 유예의 원점. 없으면 null
  */

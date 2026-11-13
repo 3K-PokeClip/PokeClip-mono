@@ -4,7 +4,13 @@ import type { RewindStatusResult } from '@/api/rewindStatus';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { handedOff } from './handoffTestKit';
 import { HANDOFF_NOTICE } from './liveHandoff';
-import { transition, type SessionEvent, type XAnswer } from './rewindSwitch';
+import {
+  ENDING_WAIT_MS,
+  RESUME_WAIT_MS,
+  transition,
+  type SessionEvent,
+  type XAnswer,
+} from './rewindSwitch';
 import { usePlaybackSession, type SessionPlayer, type SessionOptions } from './usePlaybackSession';
 
 // 세션에 들어간 사건을 보려고 상태기계를 감싼다 — 동작은 원본 그대로다
@@ -127,9 +133,102 @@ describe('여는 조건 · 폴링', () => {
     expect(onClose).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTime(20_000));
     await flush();
-    // 닫는 사유는 past 이고, 끝남 대기를 연 시각(지난 방송 판정의 404 유예 원점 폴백)을 함께 넘긴다(POK-547 T3-1)
+    // 닫는 사유는 past 이고, 끝남 대기를 연 시각(지난 방송 판정의 404 유예 원점 폴백)을 함께 넘긴다(POK-547 T3-1).
+    // 끝에 닿아 닫혔으니 넘길 자리 · 다시보기는 없다(처음부터)
     expect(onClose).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'past', endingSinceMs: endingSince }),
+      expect.objectContaining({
+        reason: 'past',
+        endingSinceMs: endingSince,
+        handoff: { resumeAtMs: null, seenVod: null, chosen: false },
+      }),
+    );
+  });
+});
+
+describe('past 닫힘의 넘김(POK-547)', () => {
+  const VOD = `${BASE}/vod/key-1/r-A/index.m3u8`;
+  const VOD_FIRST = NOW - 3_600_000;
+  const ROUND_VOD: RewindStatusResult = {
+    kind: 'ok',
+    status: { ready: true, mode: 'vod', url: VOD, firstPdtMs: VOD_FIRST, headPdtMs: NOW },
+  };
+  const LIVE_URL = `${BASE}/live/key-1/index.m3u8`;
+
+  /** 라이브를 AT 에서 보다 ENDLIST 로 끝남 대기 → 회차별 vod 로 띠 제안까지 온 세션. 닫히면 다시 열지 않는다 */
+  async function offeredScreen() {
+    const onClose = vi.fn();
+    let closedPast = false;
+    const view = renderHook(() =>
+      usePlaybackSession(
+        options({
+          canOpen: !closedPast,
+          onClose: (closed) => {
+            if (closed.reason === 'past') closedPast = true;
+            onClose(closed);
+          },
+        }),
+      ),
+    );
+    await flush();
+    const at = NOW - 5_000;
+    const feed: SessionEvent[] = [
+      {
+        type: 'list-loaded',
+        url: LIVE_URL,
+        firstMs: NOW - 28_000,
+        lastEndMs: NOW,
+        targetDurationS: 4,
+        headSpanMs: 12_000,
+      },
+      { type: 'position', atMs: at, playing: true, runMs: 0, epoch: 0 },
+      { type: 'endlist' },
+      { type: 'round-poll', result: ROUND_VOD },
+    ];
+    for (const event of feed) act(() => view.result.current?.dispatch(event));
+    await flush();
+    expect(view.result.current?.state.phase).toMatchObject({ kind: 'vod-offered', stopped: null });
+    return { ...view, onClose, at };
+  }
+
+  it('「다시보기 보기」 — onClose 가 넘길 자리 · 확인한 다시보기 · 단추로 닫음을 받는다', async () => {
+    const { result, onClose, at } = await offeredScreen();
+    act(() => result.current?.dispatch({ type: 'button', which: 'vod' }));
+    await flush();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.calls[0]?.[0]).toEqual({
+      reason: 'past',
+      goTo: undefined,
+      endingSinceMs: expect.any(Number),
+      accessKey: 'r-A|key-1',
+      handoff: {
+        resumeAtMs: at,
+        seenVod: { url: VOD, firstPdtMs: VOD_FIRST, headPdtMs: NOW },
+        chosen: true,
+      },
+    });
+    expect(result.current).toBeNull();
+  });
+
+  it('past 로 닫힌 뒤 재접속 대기 · 20분 시한이 지나도 효과 0 · onClose 1회 · 물음 0', async () => {
+    const { result, onClose } = await offeredScreen();
+    act(() => result.current?.dispatch({ type: 'button', which: 'vod' }));
+    await flush();
+    const asked = calls.length;
+    await act(async () => vi.advanceTimersByTime(ENDING_WAIT_MS + RESUME_WAIT_MS));
+    await flush();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(asked);
+    expect(result.current).toBeNull();
+  });
+
+  it('past 가 아닌 닫힘(left)은 넘길 것이 없다', async () => {
+    const onClose = vi.fn();
+    const { result } = renderHook(() => usePlaybackSession(options({ onClose })));
+    await flush();
+    act(() => result.current?.dispatch({ type: 'leave' }));
+    await flush();
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'left', handoff: null }),
     );
   });
 });

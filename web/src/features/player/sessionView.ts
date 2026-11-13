@@ -37,12 +37,14 @@ type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 
 /**
  * 새로 서는 재생기(세대가 올라 다시 서는 것 · 리마운트 포함)를 세우지 않는가 — 막힌 끝남
- * 대기 · 마지막 확인 중인 끝남 대기(POK-528 U2). 되감기는 404 뒤 목록을 다시 받는 중에도
- * 세운다(다시 받기가 곧 새 재생기다 — 계획 3-6). 화면에 그릴 것이 아니라 재생기 수명
- * 지시다. 국면 데이터에서 뽑으므로 세대가 오를 때마다 같은 값을 다시 읽는다
+ * 대기 · 마지막 확인 중인 끝남 대기(POK-528 U2), 그리고 재생이 멎은 다시보기 제안(POK-547 —
+ * 멈춘 화면 위 덮개 단추가 출구다). 되감기는 404 뒤 목록을 다시 받는 중에도 세운다(다시 받기가
+ * 곧 새 재생기다 — 계획 3-6). 화면에 그릴 것이 아니라 재생기 수명 지시다. 국면 데이터에서
+ * 뽑으므로 세대가 오를 때마다 같은 값을 다시 읽는다
  */
 export function isPlayerStartHeld(session: PlaybackSessionState): boolean {
   const { phase } = session;
+  if (phase.kind === 'vod-offered') return phase.stopped !== null;
   return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
 }
 
@@ -86,12 +88,14 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
     };
   }
   if (phase.kind === 'vod-offered') {
+    // 끝에 닿았거나 재생이 멎었으면 덮개 단추, 아직 틀면 띠 단추다
+    const covered = phase.atEnd || phase.stopped !== null;
     return {
       ...base,
-      cover: phase.atEnd ? 'vod-ready' : null,
+      cover: covered ? 'vod-ready' : null,
       actions: ['vod'],
       seekHidden: phase.atEnd && session.source.kind === 'live',
-      vodReady: !phase.atEnd,
+      vodReady: !covered,
     };
   }
   if (phase.kind === 'vod') return { ...base, liveHidden: true };

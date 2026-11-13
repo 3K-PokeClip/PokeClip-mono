@@ -30,10 +30,12 @@ const HUMAN_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['seek', 'live-b
 
 /**
  * 계획 3-6 의 「새로 서는 재생기는 hls.js 를 만들지 않는다」 — 막힌 끝남 대기 ·
- * 마지막 확인 중인 끝남 대기(finalCheck). 목록을 다시 받는 되감기는 세운다
+ * 마지막 확인 중인 끝남 대기(finalCheck) · 재생이 멎은 다시보기 제안(POK-547). 목록을
+ * 다시 받는 되감기는 세운다. 옛 판 제안에는 stopped 칸이 없어 멎지 않은 것으로 읽는다
  */
 function startHeldBySpec(state: PlaybackSessionState): boolean {
   const { phase } = state;
+  if (phase.kind === 'vod-offered') return phase.stopped != null;
   return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
 }
 

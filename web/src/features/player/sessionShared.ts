@@ -4,8 +4,8 @@ import type {
   PlaybackSessionState,
   PlaybackSource,
   SeekView,
-  SessionClose,
   SessionEffect,
+  SessionPhase,
   Transition,
   XAnswer,
 } from './rewindSwitch';
@@ -116,14 +116,42 @@ export function replace(
   return { kind, url, startAtMs, generation: session.source.generation + 1, strictStart: false };
 }
 
+/** 「라이브 보기」 · 화면 이탈로 닫는다. past 닫힘은 closePast 다 */
 export function close(
   session: PlaybackSessionState,
-  reason: SessionClose,
+  reason: 'go-live' | 'left',
   goTo?: string,
 ): Transition {
   const effect: SessionEffect =
     goTo === undefined ? { kind: 'close', reason } : { kind: 'close', reason, goTo };
   return { state: { ...session, closed: reason }, effects: [effect] };
+}
+
+/**
+ * past 로 닫고 지난 방송 판정에 넘길 것을 싣는다(POK-547). 끝에 닿았으면 이어 볼 자리를 싣지 않는다(처음부터).
+ * chosen 은 「다시보기 보기」 를 눌러 닫았는가다 — 닫는 자리마다 빠뜨리지 않게 필수 칸으로 둔다
+ */
+export function closePast(
+  session: PlaybackSessionState,
+  seenVod: RewindRange | null,
+  opts: { atEnd: boolean; chosen: boolean },
+): Transition {
+  const resume = opts.atEnd ? null : resumeAtMs(session);
+  return {
+    state: { ...session, closed: 'past' },
+    effects: [
+      {
+        kind: 'close',
+        reason: 'past',
+        handoff: { resumeAtMs: resume, seenVod, chosen: opts.chosen },
+      },
+    ],
+  };
+}
+
+/** 다시보기 제안이 내민 회차 다시보기의 범위 */
+export function offeredRange(phase: Extract<SessionPhase, { kind: 'vod-offered' }>): RewindRange {
+  return { url: phase.url, firstPdtMs: phase.firstPdtMs, headPdtMs: phase.headPdtMs };
 }
 
 // ── 다시보기 ──
@@ -137,8 +165,7 @@ export function vodStartAt(session: PlaybackSessionState, atMs: number, vod: Rew
 }
 
 /**
- * 같은 자리 다시보기로 옮긴다 — 끝난 회차의 되감기 조각이 사라졌을 때(POK-528 W4 제안 중 404 ·
- * W5 막힌 뒤 · W6 마지막 확인에서 회차별 답이 본 구간과 겹치는 다시보기일 때).
+ * 같은 자리 다시보기로 옮긴다 — 다시보기 제안 중 끝난 회차의 되감기 조각이 사라졌을 때(POK-528 W4).
  * 자리는 이어 볼 자리다 — 모르면 처음부터, 자리를 범위 안으로 가뒀으면 알린다. 제안 단추는 거둔다
  */
 export function openVodHere(session: PlaybackSessionState, vod: RewindRange): Transition {
