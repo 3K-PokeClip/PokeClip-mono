@@ -387,13 +387,33 @@ function decodedStart(run: Run, buffer: AudioBuffer): number {
   return run.startSeconds + Math.max(0, dropped);
 }
 
-/** 풀기 입력(ADTS — 덩어리 프레임을 이은 사본)을 풀고 놓는다 */
+/**
+ * 미리 듣기 소리를 1채널(채널 평균)로 내린다(M3 두 번째 처분 ⑤ · 2026-11-13). decodeAudioData 는 문맥 채널 수와 무관하게 원본
+ * 채널 수로 풀어(녹화 ② 는 2채널) 창 하나의 소리가 두 벌 크기였다. 저장 · 렌더는 이 소리를 쓰지 않는다. 내리는 동안만 덩어리
+ * 하나의 1채널 몫이 더 서고, 원본은 돌려준 뒤 참조가 끊겨 거둔다. 1채널이거나 AudioBuffer 생성자가 없는 브라우저면 그대로 둔다
+ */
+function toMono(buffer: AudioBuffer): AudioBuffer {
+  const channels = buffer.numberOfChannels;
+  if (!(channels > 1) || typeof AudioBuffer !== 'function') return buffer;
+  const { length, sampleRate } = buffer;
+  const mono = new AudioBuffer({ length, sampleRate, numberOfChannels: 1 });
+  // getChannelData 는 소리 안쪽 배열 자체다 — 사본 없이 그 자리에 더한다
+  const out = mono.getChannelData(0);
+  for (let c = 0; c < channels; c++) {
+    const data = buffer.getChannelData(c);
+    for (let i = 0; i < length; i++) out[i]! += data[i]!;
+  }
+  for (let i = 0; i < length; i++) out[i]! /= channels;
+  return mono;
+}
+
+/** 풀기 입력(ADTS — 덩어리 프레임을 이은 사본)을 풀고 놓는다. 풀린 소리는 1채널로 내린다(toMono) */
 async function decodeAndRelease(
   decode: SegmentAudioSource['decode'],
   adts: Uint8Array,
 ): Promise<AudioBuffer> {
   try {
-    return await decode(adts);
+    return toMono(await decode(adts));
   } finally {
     releaseBytes(adts.buffer);
   }

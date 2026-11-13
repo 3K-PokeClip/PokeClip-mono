@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { StrictMode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestSegmentAudioAccess, type SegmentAudioAccess } from '@/api/clipEditor';
+import { filledAudioBuffer, installFakeAudioBuffer } from '@/test/fakeAudioBuffer';
 import {
   clearEditorMedia,
   editorWindowFetching,
@@ -163,6 +166,39 @@ function fakeContext() {
       }),
     },
   };
+}
+
+setFlagsFromString('--expose-gc');
+const gc = runInNewContext('gc') as () => void;
+const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** fakeDecoded 와 같은 길이로 채널마다 정한 값을 채운 소리 — 2채널 녹화를 흉내 낸다 */
+function channelsDecoded(adts: ArrayBuffer, values: readonly number[]): AudioBuffer {
+  const { length, sampleRate } = fakeDecoded(adts);
+  return filledAudioBuffer(values, length, sampleRate);
+}
+
+/**
+ * 풀린 소리를 약하게만 가리키는 소리 문맥. 가짜 함수(vi.fn)는 돌려준 값 · 받은 인자를 기록해 쥐므로 풀기 · 받기를 맨 함수로
+ * 둔다 — 받기 가짜가 기록한 멈춤 signal 은 그 signal 에 걸린 받기 결과까지 붙든다
+ */
+function watchDecoded() {
+  const { ctx, gains } = fakeContext();
+  const decodedRefs: WeakRef<AudioBuffer>[] = [];
+  const decodeAudioData = (adts: ArrayBuffer) => {
+    const buffer = fakeDecoded(adts);
+    decodedRefs.push(new WeakRef(buffer));
+    return Promise.resolve(buffer);
+  };
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response(new Uint8Array(fixture))));
+  return { context: { ...ctx, decodeAudioData }, gains, decodedRefs };
+}
+
+/** 거둔 뒤 살아 있는 풀린 소리 수 */
+async function aliveAfterGc(refs: readonly WeakRef<AudioBuffer>[]): Promise<number> {
+  await nextTask(); // WeakRef 를 만든 작업이 끝나야 대상을 거둘 수 있다
+  gc();
+  return refs.filter((ref) => ref.deref() !== undefined).length;
 }
 
 const video = () =>
@@ -618,6 +654,93 @@ describe('useTrackPreview', () => {
     expect(result.current.levels?.startSeconds).toBe(-10);
   });
 
+  it('창이 바뀌면 새 창 소리가 오기 전에 앞 창 소리(PCM)를 놓는다: 그동안 미리 듣기는 무음 · loading 이고 앞 파형 값만 남는다(M3 ④)', async () => {
+    const { context, gains, decodedRefs } = watchDecoded();
+    const node = video();
+    const { result, rerender } = renderHook(
+      ({ window }: { window: TrackWindow }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window,
+          loaded: LOADED,
+          video: node,
+          createContext: () => context as never,
+        }),
+      { initialProps: { window: WINDOW } },
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(decodedRefs.length).toBeGreaterThan(0);
+    const firstPlayerGains = [...gains];
+    const levelsBefore = result.current.levels;
+
+    // 새 창 소리 주소가 아직 안 온다 — 새 소리가 놓이기 전이다
+    vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(new Promise(() => undefined));
+    rerender({ window: windowOf(-10, [5]) });
+    // 한 번 더 그린다: React 는 앞 렌더의 상태를 다음 렌더까지 쥔다(이중 버퍼) — 화면은 늘 다시 그려진다
+    rerender({ window: windowOf(-10, [5]) });
+
+    expect(result.current.status).toBe('loading');
+    for (const gain of firstPlayerGains) expect(gain.disconnect).toHaveBeenCalled();
+    // 음량을 바꿔 둔 편집본: 재생기도 영상 소리도 내지 않는다(무음)
+    expect(node.muted).toBe(true);
+    expect(result.current.levels?.startSeconds).toBe(10);
+    expect(Array.from(result.current.levels!.tracks[0]!)).toEqual(
+      Array.from(levelsBefore!.tracks[0]!),
+    );
+    expect(await aliveAfterGc(decodedRefs)).toBe(0);
+  });
+
+  it('창을 바꿨다가 같은 창으로 돌아오면 그 창 소리를 다시 놓아 ready 다', async () => {
+    const { ctx, gains } = fakeContext();
+    const { result, rerender } = renderHook(
+      ({ window }: { window: TrackWindow }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window,
+          loaded: LOADED,
+          video: video(),
+          createContext: () => ctx as never,
+        }),
+      { initialProps: { window: WINDOW } },
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(new Promise(() => undefined));
+    rerender({ window: windowOf(-10, [5]) });
+    expect(result.current.status).toBe('loading');
+    rerender({ window: WINDOW });
+
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(gains).toHaveLength(6);
+    expect(gains.slice(3).map((g) => g.gain.value)).toEqual([0, 1, 0]);
+    expect(result.current.levels?.startSeconds).toBe(10);
+    expect(result.current.levels?.tracks[0]![0]).toBeCloseTo(0.5);
+  });
+
+  it('2채널로 풀린 녹화도 채널 평균 1채널로 틀고 파형도 그 평균으로 잰다(M3 ⑤)', async () => {
+    installFakeAudioBuffer();
+    const { ctx } = fakeContext();
+    ctx.decodeAudioData.mockImplementation((adts: ArrayBuffer) =>
+      Promise.resolve(channelsDecoded(adts, [0.2, 0.6])),
+    );
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        window: WINDOW,
+        loaded: LOADED,
+        video: video(),
+        createContext: () => ctx as never,
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    // 2채널 그대로면 칸의 가장 큰 표본은 0.6 이다
+    expect(result.current.levels?.tracks).toHaveLength(3);
+    for (const track of result.current.levels!.tracks) expect(track[0]).toBeCloseTo(0.4, 6);
+  });
+
   it('창을 다시 받다 실패하면 영상 소리로 돌아가고 파형도 비운다: 꺼진 채 무음으로 남지 않게(PR #341 2차)', async () => {
     const { ctx, gains } = fakeContext();
     const node = video();
@@ -931,6 +1054,83 @@ async function advance(ms: number) {
     await vi.advanceTimersByTimeAsync(ms);
   });
 }
+
+describe('useTrackPreview — 창이 바뀌면 효과 · 정리 함수도 앞 창 소리를 붙들지 않는다(M3 ④)', () => {
+  beforeEach(() => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1]));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.mocked(requestSegmentAudioAccess).mockReset();
+    clearEditorMedia();
+  });
+
+  /** WINDOW 를 ready 까지 받고, after 를 한 뒤 새 창으로 바꾼다(새 창 주소는 오지 않음 · 한 번 더 그림) */
+  async function switchAfter(
+    after: (hook: {
+      node: HTMLVideoElement;
+      setGains: (gains: readonly number[]) => void;
+      attach: () => void;
+    }) => void,
+    { attachLater = false } = {},
+  ) {
+    const { context, decodedRefs } = watchDecoded();
+    const node = video();
+    const { result, rerender } = renderHook(
+      ({ window, attached }: { window: TrackWindow; attached: boolean }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window,
+          loaded: LOADED,
+          video: attached ? node : null,
+          createContext: () => context as never,
+        }),
+      { initialProps: { window: WINDOW, attached: !attachLater } },
+    );
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    let attached = !attachLater;
+    act(() =>
+      after({
+        node,
+        setGains: (gains) => result.current.setGains(gains),
+        attach: () => {
+          attached = true;
+          rerender({ window: WINDOW, attached });
+        },
+      }),
+    );
+
+    vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(new Promise(() => undefined));
+    const next = windowOf(-10, [5]);
+    rerender({ window: next, attached });
+    rerender({ window: next, attached });
+    expect(result.current.status).toBe('loading');
+    return { node, alive: await aliveAfterGc(decodedRefs) };
+  }
+
+  it('ready 뒤 음량을 바꾸고 창을 바꾸면: 영상 음소거는 그대로(무음)이고 그 효과의 정리 함수가 앞 창 소리를 쥐지 않는다', async () => {
+    const { node, alive } = await switchAfter(({ setGains }) => setGains([0, 1, 0]));
+
+    expect(node.muted).toBe(true);
+    expect(alive).toBe(0);
+  });
+
+  it('ready 뒤 배속을 바꾸고 창을 바꾸면: 영상 소리가 맡은 채(음소거 풀림)이고 앞 창 소리를 쥐지 않는다', async () => {
+    const { node, alive } = await switchAfter(({ node: target }) => {
+      target.playbackRate = 2;
+      target.dispatchEvent(new Event('ratechange'));
+    });
+
+    expect(node.muted).toBe(false);
+    expect(alive).toBe(0);
+  });
+
+  it('ready 뒤에 영상 노드가 붙고 창을 바꾸면: 배속 듣기 · 음소거 효과가 앞 창 소리를 쥐지 않는다', async () => {
+    const { alive } = await switchAfter(({ attach }) => attach(), { attachLater: true });
+
+    expect(alive).toBe(0);
+  });
+});
 
 describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => {
   beforeEach(() => {
@@ -1460,6 +1660,21 @@ describe('loadSegmentTracks — 끊으면 안쪽이 멈춘 뒤에 끝난다', ()
     finishing.splice(0).forEach((finish) => finish());
     await expect(load).rejects.toThrow('track audio load stopped');
     expect(decode).toHaveBeenCalledTimes(started);
+  });
+
+  it('카드 미리 받기와 함께 쓰는 받기도 2채널을 채널 평균 1채널로 돌려준다(M3 ⑤ — prefetchCardEditor 기본 받기)', async () => {
+    installFakeAudioBuffer();
+    const load = await loadSegmentTracks({
+      streamId: 's-1',
+      segs: windowOf(10, [1]).segs,
+      anchors: () => Promise.resolve(new Map([[1, 0]])),
+      decode: (adts) => Promise.resolve(channelsDecoded(adts.buffer as ArrayBuffer, [0.2, 0.6])),
+    });
+
+    const buffers = load.tracks.flat().map((piece) => piece.buffer);
+    expect(buffers).toHaveLength(3);
+    expect(buffers.map((b) => b.numberOfChannels)).toEqual([1, 1, 1]);
+    for (const b of buffers) expect(b.getChannelData(0)[0]).toBeCloseTo(0.4, 6);
   });
 
   it('닻(영상 창)을 기다리는 중에 끊어도 끝난다: 안쪽이 닻에 묶여 남지 않는다', async () => {

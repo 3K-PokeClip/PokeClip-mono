@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SegmentAudioAccess } from '@/api/clipEditor';
+import { filledAudioBuffer, installFakeAudioBuffer } from '@/test/fakeAudioBuffer';
+import { trackPiecesBytes } from '../editorMedia';
 import type { EditorPlaylist, PlaylistSegment } from '../source/editorPlaylist';
 import type { SegmentTracks } from './fmp4Audio';
 import {
@@ -525,6 +527,95 @@ describe('loadTrackAudio — 풀기가 버린 머리만큼 시작을 뒤로 민�
     const [head, tail] = second.tracks[0]!;
     expect(head!.startSeconds).toBeCloseTo(FRAME_32K, 9);
     expect(tail!.startSeconds).toBeCloseTo(5 + FRAME_32K, 9);
+  });
+});
+
+// --- 미리 듣기 소리는 모노(M3 두 번째 처분 ⑤ · 2026-11-13) ---
+
+/**
+ * 채널마다 정한 값으로 채운 소리를 돌려주는 풀기. 길이는 프레임 수 × 1024 · 빈도는 그 트랙 표본 빈도라 머리를 버리지 않은
+ * 꼴이다(시작이 밀리지 않는다)
+ */
+function channelsDecode(values: readonly number[]) {
+  return vi.fn(async (adts: Uint8Array) => {
+    const { frames, frequencyIndex } = fake(await fakeDecode(adts));
+    return filledAudioBuffer(values, frames * 1024, FREQUENCIES[frequencyIndex]!);
+  });
+}
+
+const everySample = (buffer: AudioBuffer, expected: number) =>
+  buffer.getChannelData(0).every((v) => Math.abs(v - expected) < 1e-6);
+
+describe('loadTrackAudio — 미리 듣기 소리는 채널 평균 1채널로 둔다', () => {
+  beforeEach(() => {
+    demux.synthetic = null;
+    installFakeAudioBuffer();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('2채널로 풀린 소리는 채널 평균 1채널이다 — 길이 · 빈도 · 시작 시각은 1채널로 풀린 것과 같다', async () => {
+    const decode = channelsDecode([0.2, 0.6]);
+    const { tracks } = await loadTrackAudio(
+      { ...source(access(BASE + 2000), anchorsOf(0)), decode },
+      [1],
+    );
+    const mono = await loadTrackAudio(
+      { ...source(access(BASE + 2000), anchorsOf(0)), decode: channelsDecode([0.4]) },
+      [1],
+    );
+
+    const pieces = tracks.flat();
+    expect(pieces).toHaveLength(3);
+    for (const { buffer } of pieces) {
+      expect(buffer.numberOfChannels).toBe(1);
+      expect(everySample(buffer, 0.4)).toBe(true);
+    }
+    const decoded = await Promise.all(decode.mock.results.map((r) => r.value as AudioBuffer));
+    expect(pieces.map((p) => [p.buffer.length, p.buffer.sampleRate])).toEqual(
+      decoded.map((b) => [b.length, b.sampleRate]),
+    );
+    expect(pieces.map((p) => p.startSeconds)).toEqual(
+      mono.tracks.flat().map((p) => p.startSeconds),
+    );
+  });
+
+  it('셋 이상이어도 모든 채널의 평균이다', async () => {
+    const { tracks } = await loadTrackAudio(
+      { ...source(access(BASE + 2000), anchorsOf(0)), decode: channelsDecode([0.3, 0.6, 0.9]) },
+      [1],
+    );
+
+    for (const { buffer } of tracks.flat()) {
+      expect(buffer.numberOfChannels).toBe(1);
+      expect(everySample(buffer, 0.6)).toBe(true);
+    }
+  });
+
+  it('1채널로 풀린 소리는 그대로 쓴다(새로 짓지 않는다)', async () => {
+    const decode = channelsDecode([0.5]);
+    const { tracks } = await loadTrackAudio(
+      { ...source(access(BASE + 2000), anchorsOf(0)), decode },
+      [1],
+    );
+
+    const decoded = await Promise.all(decode.mock.results.map((r) => r.value as AudioBuffer));
+    expect(tracks.flat().map((p) => p.buffer)).toEqual(decoded);
+    tracks.flat().forEach((p, i) => expect(p.buffer).toBe(decoded[i]));
+  });
+
+  it('다시 쓰는 푼 덩어리(reuse.decoded)도 1채널이고, 맡기는 크기 셈은 2채널의 절반이다', async () => {
+    const decode = channelsDecode([0.2, 0.6]);
+    const load = await loadTrackAudio(
+      { ...source(access(BASE + 2000), anchorsOf(0)), decode },
+      [1],
+    );
+
+    expect([...load.reuse.decoded.values()].map((b) => b.numberOfChannels)).toEqual([1, 1, 1]);
+    const decoded = await Promise.all(decode.mock.results.map((r) => r.value as AudioBuffer));
+    const stereoBytes = decoded.reduce((sum, b) => sum + b.length * b.numberOfChannels * 4, 0);
+    expect(trackPiecesBytes(load.tracks)).toBe(stereoBytes / 2);
   });
 });
 
