@@ -104,6 +104,28 @@ describe('readFragmentVideoDts: 확보 조각 ③ 의 영상 첫 DTS(초)', () =
     await expect(readFragmentVideoDts(ROW)).rejects.toThrow();
   });
 
+  it('쿠키를 싣는 ③ 받기는 3xx 를 따라가지 않고(redirect error) 던진다', async () => {
+    const { readFragmentVideoDts } = await load();
+    // 브라우저 fetch 는 redirect 'error' 면 3xx 에서 TypeError 로 거절한다 — 아니면 따라가 넘어간 곳의 본문을 준다
+    const spy = stubFetch((_url, init) => {
+      if (init?.redirect === 'error') throw new TypeError('Failed to fetch');
+      return new Response(segment1v6a.slice(), { status: 200 });
+    });
+
+    await expect(readFragmentVideoDts(ROW)).rejects.toThrow();
+    expect(spy.mock.calls.every(([, init]) => init?.redirect === 'error')).toBe(true);
+  });
+
+  it('판독 실패 사유는 ③ 판독을 ② 머리 판독으로 적지 않는다', async () => {
+    const { readFragmentVideoDts } = await load();
+    stubFetch(() => new Response(null, { status: 403 }));
+
+    const error = await readFragmentVideoDts(ROW).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain('②');
+  });
+
   it('응답이 403 이면 던진다(그 확보는 포기 — 부르는 쪽이 정한다)', async () => {
     const { readFragmentVideoDts } = await load();
     stubFetch(() => new Response(null, { status: 403 }));

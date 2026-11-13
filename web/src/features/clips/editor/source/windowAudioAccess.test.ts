@@ -63,6 +63,7 @@ describe('windowAudioAccess', () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.mocked(requestSegmentAudioAccess).mockReset();
   });
 
@@ -158,6 +159,107 @@ describe('windowAudioAccess', () => {
     vi.mocked(requestSegmentAudioAccess).mockResolvedValue(ACCESS);
     await expect(windowAudioAccess('s-1', segs)).resolves.toBe(ACCESS);
     expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it('이미 멈춘 signal 로 부르면 묻지 않고 던진다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(ACCESS);
+    const stop = new AbortController();
+    stop.abort();
+
+    await expect(windowAudioAccess('s-1', [segment(1)], stop.signal)).rejects.toThrow();
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+  });
+
+  it('같은 응답을 기다리던 한쪽이 멈춰도 다른 쪽은 그 응답을 받는다', async () => {
+    const answer = pendingAccess();
+    const segs = [segment(1), segment(2)];
+    const stop = new AbortController();
+    const left = windowAudioAccess('s-1', segs, stop.signal);
+    const stayed = windowAudioAccess('s-1', segs);
+
+    stop.abort();
+    answer(ACCESS);
+
+    await expect(left).rejects.toThrow();
+    await expect(stayed).resolves.toBe(ACCESS);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('https 가 아닌 ② 주소의 행과 확보 칸은 응답에서 버린다(제어면이 루프백 http 면 루프백 http 는 둔다)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'http://localhost:8086');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const row = (seq: number, url: string) => ({ seq, startAtMs: BASE, durationMs: 1000, url });
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+      expiresAt: ACCESS.expiresAt,
+      segments: [
+        row(1, 'https://s3/seg_1.m4s'),
+        row(2, 'http://s3/seg_2.m4s?X-Amz-Signature=secret-sig'),
+        row(3, 'javascript:alert(1)'),
+        row(4, 'not a url'),
+        row(5, 'http://localhost:4566/seg_5.m4s'),
+      ],
+      audioCapture: 'attached',
+      audioCaptureSegment: row(6, 'http://s3/seg_6.m4s'),
+    });
+
+    const access = await windowAudioAccess('s-1', [segment(1)]);
+
+    expect(access.segments.map((r) => r.seq)).toEqual([1, 5]);
+    expect(access.audioCapture).toBe('attached');
+    expect(access.audioCaptureSegment).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/s3\/|secret-sig|localhost/);
+    warn.mockRestore();
+  });
+
+  it('제어면이 https(prod 꼴)면 루프백 http 행도 버린다', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'https://media.pokeclip.com');
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const row = (seq: number, url: string) => ({ seq, startAtMs: BASE, durationMs: 1000, url });
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+      expiresAt: ACCESS.expiresAt,
+      segments: [row(1, 'https://s3/seg_1.m4s'), row(5, 'http://localhost:4566/seg_5.m4s')],
+      audioCapture: 'attached',
+      audioCaptureSegment: row(6, 'http://127.0.0.1:4566/seg_6.m4s'),
+    });
+
+    const access = await windowAudioAccess('s-1', [segment(1)]);
+
+    expect(access.segments.map((r) => r.seq)).toEqual([1]);
+    expect(access.audioCaptureSegment).toBeUndefined();
+  });
+
+  it('소리 주소를 묻는 사이 계정이 바뀌면, 늦게 온 응답으로 ② 머리를 읽거나 캐시에 적지 않는다', async () => {
+    const answer = pendingAccess();
+    const segs = [segment(1), segment(2), segment(3)];
+    const read = ensureWindowHeads('s-1', 'session-key', segs);
+
+    useAuthStore.getState().clearTokens();
+    answer(ACCESS);
+    await read;
+
+    expect(fetch).not.toHaveBeenCalled();
+    const heads = headCacheFor('session-key');
+    expect([heads.get(1), heads.get(2), heads.get(3)]).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('https 인 확보 칸은 그대로 둔다', async () => {
+    const capture = {
+      seq: 3,
+      startAtMs: BASE + 3000,
+      durationMs: 1000,
+      url: 'https://s3/seg_3.m4s',
+    };
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+      ...ACCESS,
+      audioCapture: 'attached',
+      audioCaptureSegment: capture,
+    });
+
+    const access = await windowAudioAccess('s-1', [segment(1)]);
+
+    expect(access.audioCaptureSegment).toEqual(capture);
+    expect(access.segments).toEqual(ACCESS.segments);
   });
 
   it('소리 주소 요청이 끝나지 않아 트랙 받기가 시한에 멈추면, 그 창을 다시 받을 때 새로 묻는다', async () => {

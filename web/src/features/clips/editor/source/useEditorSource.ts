@@ -55,16 +55,21 @@ export interface EditorSourceSnapshot {
 export type SegmentFailureKind = 'forbiddenAfterRefresh' | 'gone';
 
 export interface EditorSource extends EditorSourceSnapshot {
-  /** 지금 원천의 목록을 마지막으로 받으려다 실패했고 아직 들고 있지 않다(다시 받기는 이어진다). 받는 중이면 거짓 */
+  /**
+   * 지금 원천의 목록을 자동 받기(원천이 서면 받고 실패하면 폴링 주기마다 다시)로 받으려다 실패했고 아직 들고 있지 않다. 첫
+   * 받기가 끝나기 전에는 거짓이고, 한 번 실패한 뒤에는 다시 받는 중에도 참이다 — 받아 들면 거짓이다
+   */
   listFailed: boolean;
   /**
    * 목록을 지금 원천에서 한 번 다시 받아 돌려준다(저장 때 이웃 판정 — 계획 4절 P-4′). 끝난 방송(vod)은 목록이 바뀌지 않아
    * 들고 있는 것을 준다. 실패하면 null 이고 들고 있는 목록은 그대로다
+   * @param signal 부른 쪽이 멈추면 걸린 요청을 끊고 null 이다(이미 멈췄으면 받지 않는다)
    */
-  reloadList(): Promise<EditorPlaylist | null>;
+  reloadList(signal?: AbortSignal): Promise<EditorPlaylist | null>;
   /**
-   * 조각 받기 실패를 원천 상태에 싣는다(D3 6–9행). 지금 원천 목록을 다시 받아 그 seq 가 남았는지 보고(실패하면 들고 있는 목록),
-   * 403 이면 회차 경로를 한 번 묻는다. listUrl 이 지금 원천 주소가 아니면 버린다
+   * 조각 받기 실패를 원천 상태에 싣는다(D3 6–9행). 지금 원천 목록을 다시 받아 그 seq 가 남았는지 보고, 403 이면 회차 경로를
+   * 한 번 묻는다. 방송 중이면 404 · 403 모두 다시 받기가 실패할 때 싣지 않는다(다음 보고에서 다시 받기가 될 때 판정한다 —
+   * vod 는 목록이 바뀌지 않아 들고 있는 목록으로 본다). listUrl 이 지금 원천 주소가 아니면 버린다
    * @param listUrl 그 조각을 받은 창의 목록 주소(SourceList.url)
    */
   reportSegmentFailure(failure: SegmentFailureKind, seq: number, listUrl: string): Promise<void>;
@@ -141,9 +146,12 @@ function roundEventOf(
   return { type: 'round', result, clock: { nowMs, unknownSinceMs } };
 }
 
-/** 목록 글 받기. 403 이면 쿠키가 지워진 것이라 출입증을 버리고 다시 받은 뒤 한 번 더 부른다(fetchWindowBytes 와 같은 관례) */
+/**
+ * 목록 글 받기. 403 이면 쿠키가 지워진 것이라 출입증을 버리고 다시 받은 뒤 한 번 더 부른다(fetchWindowBytes 와 같은 관례).
+ * 쿠키를 싣는 받기라 3xx 를 따라가지 않는다(redirect 'error' — PR 단계 r1 L-2)
+ */
 async function fetchListText(url: string, mediaKey: string, signal?: AbortSignal) {
-  const load = () => fetch(url, { signal, credentials: mediaCredentials() });
+  const load = () => fetch(url, { signal, credentials: mediaCredentials(), redirect: 'error' });
   let res = await load();
   if (res.status === 403) {
     reportPlaybackForbidden(mediaKey);
@@ -296,9 +304,9 @@ interface SourceListLoad {
   listFailed: boolean;
   /**
    * 원천 목록을 받아 들고 있는 목록으로 둔다. 만료면 expired 를 싣는다. 못 받았거나, 끊겼거나, 받는 사이 원천이 바뀌었으면
-   * null 이고 들고 있는 목록은 그대로다
+   * null 이고 들고 있는 목록은 그대로다. signal 이 멈춰도 끊긴 것이라 null 이다
    */
-  loadInto(source: SegmentFailure): Promise<EditorPlaylist | null>;
+  loadInto(source: SegmentFailure, signal?: AbortSignal): Promise<EditorPlaylist | null>;
 }
 
 /**
@@ -327,18 +335,24 @@ function useSourceList(
   }, []);
 
   const loadInto = useCallback(
-    async (source: SegmentFailure) => {
+    async (source: SegmentFailure, signal?: AbortSignal) => {
+      if (signal?.aborted) return null;
       const controller = new AbortController();
+      const stop = () => controller.abort();
+      signal?.addEventListener('abort', stop, { once: true });
       pendingRef.current.set(controller, source);
       let playlist: Awaited<ReturnType<typeof loadSourceList>>;
       try {
         playlist = await loadSourceList(broadcastRef.current, source.listUrl, controller.signal);
       } catch (e) {
-        if (controller.signal.aborted) return null; // 원천이 바뀌었거나 내려갔다
+        if (controller.signal.aborted) return null; // 원천이 바뀌었거나 내려갔거나 부른 쪽이 멈췄다
         throw e;
       } finally {
         pendingRef.current.delete(controller);
+        signal?.removeEventListener('abort', stop);
       }
+      // 끊긴 뒤에는 답이 왔어도 버린다(끊기와 답 도착이 엇갈릴 수 있다)
+      if (controller.signal.aborted) return null;
       if (!isSameSource(sourceOfState(stateRef.current), source)) return null;
       if (playlist === 'expired') dispatch({ type: 'accessExpired' });
       if (playlist === 'expired' || playlist === null) return null;
@@ -361,6 +375,8 @@ function useSourceList(
     let active = true;
     let timer: number | undefined;
     const attempt = () => {
+      // 그사이 다른 받기(reloadList · 조각 실패의 다시 받기)가 이 원천의 목록을 들었으면 더 받지 않는다
+      if (listRef.current?.url === current.listUrl) return;
       void loadInto(current).then((playlist) => {
         if (!active || playlist !== null) return;
         setFailedUrl(current.listUrl);
@@ -412,13 +428,16 @@ export function useEditorSource(
 
   useSourcePolls(broadcast, state, dispatch, resolveX);
 
-  const reloadList = useCallback(async () => {
-    const current = sourceOfState(stateRef.current);
-    if (current === null) return null;
-    const held = listRef.current;
-    if (current.mode === 'vod' && held?.url === current.listUrl) return held.playlist;
-    return loadInto(current);
-  }, [listRef, loadInto]);
+  const reloadList = useCallback(
+    async (signal?: AbortSignal) => {
+      const current = sourceOfState(stateRef.current);
+      if (current === null) return null;
+      const held = listRef.current;
+      if (current.mode === 'vod' && held?.url === current.listUrl) return held.playlist;
+      return loadInto(current, signal);
+    },
+    [listRef, loadInto],
+  );
 
   const reportSegmentFailure = useCallback(
     async (failure: SegmentFailureKind, seq: number, listUrl: string) => {
@@ -427,6 +446,9 @@ export function useEditorSource(
       const held = listRef.current?.url === listUrl ? listRef.current.playlist : null;
       // 받는 사이 원천이 바뀌면 아래 사건은 원천 상태가 버린다(listUrl 이 지금 원천이 아니다)
       const reloaded = current.mode === 'vod' ? null : await loadInto(current);
+      // 다시 받기가 실패하면 그 seq 가 목록에서 빠졌는지 알 근거가 없다 — 낡은 목록으로 보면 하한 아래로 빠진 조각이
+      // goneOrNone · access 로 굳는다(맞는 판정은 outsideDvr · 없는 조각은 403 으로도 온다). 장부 85 kty 2026-11-14 (가) · 403 확장
+      if (current.mode === 'live' && reloaded === null) return;
       const playlist = reloaded ?? held;
       const roundGone =
         failure === 'forbiddenAfterRefresh' && (await isRoundGone(broadcastRef.current));

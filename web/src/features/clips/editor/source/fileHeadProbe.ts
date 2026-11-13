@@ -1,3 +1,4 @@
+import { READ_TIMEOUT_MS } from '@/api/client';
 import { mediaCredentials } from '@/api/mediaPlayback';
 import {
   MAX_TRACK_SAMPLES,
@@ -6,6 +7,7 @@ import {
   readTrackStart,
   readVideoTrack,
 } from '@/lib/fmp4Boxes';
+import { captureSession, onSessionAdvance } from '@/stores/auth';
 import type { PlaylistSegment } from './editorPlaylist';
 
 // 판 NULL 조각의 ② 머리 — 창 배치 · 컷 원점이 기대는 값(POK-473 설계 prw2 3.2 결정 3 · 4절). seq 의 ② 서명 주소(창 소리 주소
@@ -17,7 +19,10 @@ import type { PlaylistSegment } from './editorPlaylist';
 // 표본 traf 를 파일 중간에 두고 빈 traf 로 채운 ② 하나가 수십 초 걸렸다(보안 검수 prw2 후속 경화 M-1 실측 node 42–46초).
 // 두 배씩이면 상한까지 여덟 번이다 — 설계 3.2 의 계획 편차(kty 결정 (가) 2026-11-12). 정상 ② 는 그대로 첫 64KB 하나로 끝난다.
 //
-// 🔴 자격: ② 는 S3 서명 URL 이다. 버킷 CORS 에 Allow-Credentials 가 없어 쿠키를 실으면(include) 막힌다 — 늘 omit 이다. 단일
+// 🔴 자격: ② 는 S3 서명 URL 이다. 서명이 자격이라 실을 쿠키가 없어 늘 omit 이다 — CORS 가 막아서가 아니다(M4 실측
+//    2026-11-13: 버킷은 Origin 이 맞으면 Allow-Credentials true 를 붙이고(curl), include 도 세 브라우저에서 206 이었다 —
+//    Chrome · Safari 는 캐시였을 수 있어 확인은 Firefox 다). 받기는 모두 3xx 를 따라가지 않는다(redirect 'error' — ③ 은
+//    쿠키를 싣는다 · PR 단계 r1 L-2). 단일
 //    Range 는 CORS 안전 목록이라 프리플라이트가 없고(버킷 AllowedHeaders 없음), 그 밖의 머리는 싣지 않는다. 버킷 ExposeHeaders
 //    가 비어 응답 머리(Content-Range)를 읽을 수 없으므로 상태 코드와 본문 길이로만 파일 끝을 안다 — 받은 본문이 이번에
 //    요청한 크기보다 짧거나 416 이면 끝이다. Range 가 망 · CORS 오류거나 206 본문이 도중에 끊기면 Range 없이 한 번 전체를 받는다. 서명 URL 은
@@ -28,6 +33,17 @@ import type { PlaylistSegment } from './editorPlaylist';
 //    받는 바이트의 합은 상한의 약 두 배까지다 — Range 로 상한 가까이 받은 뒤 206 본문이 끊기면 전체 받기로 처음부터 다시
 //    받는다. 판독 한 번의 비용도 묶는다: 트랙 수는 MAX_TRACKS 까지(fmp4Boxes), 표본은 트랙 합으로 MAX_TRACK_SAMPLES 까지다
 //    (보안 검수 prw2 경화 M-1).
+//
+// 🔴 시한: 응답 머리와 본문 쪼각을 HEAD_FETCH_STALL_MS 씩 기다린다. 넘으면 멈춘 받기라 끊고 그 seq 는 failed 다 — 전체 받기로
+//    물러나지 않는다(멈춘 서버를 한 번 더 기다리게 될 뿐이다). 쪼각마다 시계를 새로 재므로 느리게라도 이어 오는 본문은 끊지
+//    않는다(보안 검수 prw2 경화 L-3).
+//
+// 🔴 동시성: 동시에 받는 seq 는 모듈 전체로 PROBE_CONCURRENCY 까지다 — 창 판독과 카드 미리 받기 · 영상 키가 달라도 합쳐 센다.
+//    줄에 세운 seq 는 받기 전부터 읽는 중으로 두어, 겹쳐 부른 쪽은 그 판독을 기다리고 두 번 받지 않는다. 기다리던 판독이 그
+//    판독을 세운 쪽의 멈춤으로 끝나면 자기 signal 로 다시 세운다(보안 검수 prw2 E4b-1 · E4b-2 L4).
+//
+// 🔴 계정 경계: 계정이 바뀌면(onSessionAdvance) 모든 영상 키의 캐시를 비우고, 바뀌기 전에 세운 판독은 결과를 넣지 않는다.
+//    캐시 객체는 그대로 둔다 — 화면이 들고 있는 캐시(headCacheFor)가 비움을 듣고 새 판독을 받는다(보안 검수 prw2 E4b-1 L2).
 //
 // 확보 조각(설계 prw2 7절 c10b′)은 ③ 조각 머리 tfdt 만 같은 Range 판독으로 읽는다(readFragmentVideoDts). ③ 은 CloudFront
 // 서명 쿠키라 자격이 mediaCredentials() 다 — 판독 함수는 자격을 인자로만 받고, 고르는 것은 부르는 쪽이다.
@@ -72,13 +88,15 @@ export const HEAD_CHUNK_BYTES = 65_536;
  * 정상 ② 는 끝까지 읽고, 그보다 큰 파일은 머리를 끝내지 못하면 판독 실패로 둔다
  */
 export const HEAD_PROBE_MAX_BYTES = 8 * 1024 * 1024;
-/** 동시에 읽는 seq 수(설계 3.2 비용 — 창 조각 약 50 · 동시 6) */
+/** 동시에 읽는 seq 수 — 모듈 전체(설계 3.2 비용 — 창 조각 약 50 · 동시 6) */
 const PROBE_CONCURRENCY = 6;
+/** 응답 머리 · 본문 쪼각 하나를 기다리는 한도(파일 머리의 시한 절 — api 읽기 한도 READ_TIMEOUT_MS 와 같은 규칙 · 값) */
+export const HEAD_FETCH_STALL_MS = READ_TIMEOUT_MS;
 
-/** 판독 실패 — 사유만 싣는다(서명 URL 은 싣지 않는다) */
+/** 판독 실패 — 사유만 싣는다(서명 URL 은 싣지 않는다). ② 머리 · ③ 조각 판독이 함께 쓴다 */
 class HeadProbeError extends Error {
   constructor(reason: string) {
-    super(`② 머리 판독 실패(${reason})`);
+    super(`조각 머리 판독 실패(${reason})`);
     this.name = 'HeadProbeError';
   }
 }
@@ -87,18 +105,26 @@ interface ScopeCache extends HeadCache {
   entries: Map<number, HeadEntry>;
   inFlight: Map<number, Promise<void>>;
   set(seq: number, entry: HeadEntry | undefined): void;
+  /** 머리 · 읽는 중 표를 비우고 구독자를 부른다(계정 바뀜) */
+  reset(): void;
 }
 
 const scopes = new Map<string, ScopeCache>();
+
+onSessionAdvance(() => scopes.forEach((scope) => scope.reset()));
 
 function scopeOf(mediaKey: string): ScopeCache {
   const known = scopes.get(mediaKey);
   if (known !== undefined) return known;
   const entries = new Map<number, HeadEntry>();
+  const inFlight = new Map<number, Promise<void>>();
   const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of [...listeners]) listener();
+  };
   const scope: ScopeCache = {
     entries,
-    inFlight: new Map(),
+    inFlight,
     get: (seq) => entries.get(seq),
     subscribe(listener) {
       listeners.add(listener);
@@ -107,7 +133,12 @@ function scopeOf(mediaKey: string): ScopeCache {
     set(seq, entry) {
       if (entry === undefined) entries.delete(seq);
       else entries.set(seq, entry);
-      for (const listener of [...listeners]) listener();
+      notify();
+    },
+    reset() {
+      entries.clear();
+      inFlight.clear();
+      notify();
     },
   };
   scopes.set(mediaKey, scope);
@@ -164,17 +195,102 @@ interface Chunk {
 }
 
 /**
+ * 받기 하나의 끊기 — 부른 쪽 signal 과 멈춤 시한(HEAD_FETCH_STALL_MS)을 함께 듣는 signal 을 준다. arm 은 시계를 새로 재고,
+ * release 는 시계와 듣기를 거둔다
+ */
+class StallGuard {
+  private readonly controller = new AbortController();
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timedOut = false;
+  private readonly onOuterAbort = () => this.controller.abort(this.outer?.reason);
+
+  constructor(private readonly outer: AbortSignal | undefined) {
+    if (outer?.aborted) this.controller.abort(outer.reason);
+    else outer?.addEventListener('abort', this.onOuterAbort, { once: true });
+    this.arm();
+  }
+
+  get signal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  /** 시한으로 끊었는가(부른 쪽이 멈춘 것은 아니다) */
+  get stalled(): boolean {
+    return this.timedOut;
+  }
+
+  arm(): void {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timedOut = true;
+      this.controller.abort(new HeadProbeError('시한'));
+    }, HEAD_FETCH_STALL_MS);
+  }
+
+  release(): void {
+    clearTimeout(this.timer);
+    this.outer?.removeEventListener('abort', this.onOuterAbort);
+  }
+}
+
+/**
+ * work 를 시한과 함께 돌린다. 시한으로 끊겼으면 HeadProbeError('시한')을 던진다 — 부른 쪽이 멈춘 것과 갈라 둔다(그쪽은
+ * 받은 오류를 그대로 던진다)
+ */
+async function withStallGuard<T>(
+  signal: AbortSignal | undefined,
+  work: (guard: StallGuard) => Promise<T>,
+): Promise<T> {
+  const guard = new StallGuard(signal);
+  try {
+    return await work(guard);
+  } catch (e) {
+    throw guard.stalled && !signal?.aborted ? new HeadProbeError('시한') : e;
+  } finally {
+    guard.release();
+  }
+}
+
+/**
+ * 본문 쪼각 하나를 읽는다. 시계를 새로 재고, guard 가 끊으면(시한 · 부른 쪽 멈춤) 본문을 닫고 그 사유로 던진다 — 끊어도
+ * 풀리지 않는 본문이 있어 read 만 기다리지 않는다
+ */
+function readWithin(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  guard: StallGuard,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  guard.arm();
+  const { signal } = guard;
+  return new Promise((resolve, reject) => {
+    const stop = () => {
+      // 닫기의 성패는 판독 결과와 무관하다 — 끊긴 사유로 이미 던진다
+      reader.cancel().catch(() => undefined);
+      reject(signal.reason);
+    };
+    if (signal.aborted) {
+      stop();
+      return;
+    }
+    signal.addEventListener('abort', stop, { once: true });
+    reader
+      .read()
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', stop));
+  });
+}
+
+/**
  * 본문 스트림을 limit 바이트까지 읽는다. 더 오면 거기서 끊는다(응답 머리의 길이는 읽을 수 없다 — 위 자격 절). 받은 쪼각은
  * 곧바로 버퍼로 옮기고 들고 있지 않는다 — 1바이트 쪼각도 쪼각마다 객체라, 모아 두면 256KB 에 힙 약 60MB 다(codex prw2 경화
- * r1 지적 1)
+ * r1 지적 1). 쪼각마다 guard 의 시계를 새로 잰다
  */
-async function readBody(res: Response, limit: number): Promise<Uint8Array> {
+async function readBody(res: Response, limit: number, guard: StallGuard): Promise<Uint8Array> {
   const reader = res.body?.getReader();
   if (reader === undefined) return new Uint8Array(0);
   let buffer: Uint8Array = new Uint8Array(0);
   let length = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readWithin(reader, guard);
     if (done) return buffer.subarray(0, length);
     if (length + value.length > limit) {
       buffer = appended(buffer, length, value.subarray(0, limit - length), limit);
@@ -190,24 +306,62 @@ async function readBody(res: Response, limit: number): Promise<Uint8Array> {
  * 200 본문 — 상한까지만 읽는다. 상한을 꽉 채운 본문은 파일 끝으로 치지 않는다: Range 길도 상한을 꽉 채우면 끝을 확인하지
  * 못해 failed 라, 정확히 상한 크기인 ② 가 받는 길에 따라 결과가 갈리지 않게 한다(codex prw2 경화 r1 지적 2)
  */
-async function wholeChunk(res: Response): Promise<Chunk> {
-  const bytes = await readBody(res, HEAD_PROBE_MAX_BYTES);
+async function wholeChunk(res: Response, guard: StallGuard): Promise<Chunk> {
+  const bytes = await readBody(res, HEAD_PROBE_MAX_BYTES, guard);
   return { bytes, whole: true, atEnd: bytes.length < HEAD_PROBE_MAX_BYTES };
 }
 
-async function fetchWhole(
+function fetchWhole(
   url: string,
   credentials: RequestCredentials,
   signal: AbortSignal | undefined,
 ): Promise<Chunk> {
-  const res = await fetch(url, { credentials, signal });
-  if (!res.ok) throw new HeadProbeError(`전체 ${res.status}`);
-  return wholeChunk(res);
+  return withStallGuard(signal, async (guard) => {
+    const res = await fetch(url, { credentials, redirect: 'error', signal: guard.signal });
+    if (!res.ok) throw new HeadProbeError(`전체 ${res.status}`);
+    return wholeChunk(res, guard);
+  });
+}
+
+/**
+ * Range 요청 하나. 망 · CORS 오류거나 206 본문이 도중에 끊기면 'whole'(전체로 물러남)이다 — guard 가 끊은 것(시한 · 부른
+ * 쪽 멈춤)은 물러나지 않고 던진다
+ */
+async function rangeChunk(
+  url: string,
+  offset: number,
+  size: number,
+  credentials: RequestCredentials,
+  guard: StallGuard,
+): Promise<Chunk | 'whole'> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      credentials,
+      headers: { Range: `bytes=${offset}-${offset + size - 1}` },
+      redirect: 'error',
+      signal: guard.signal,
+    });
+  } catch (e) {
+    if (guard.signal.aborted) throw e;
+    return 'whole';
+  }
+  if (res.status === 416) return { bytes: new Uint8Array(0), whole: false, atEnd: true };
+  if (res.status === 200) return wholeChunk(res, guard);
+  if (res.status !== 206) throw new HeadProbeError(String(res.status));
+  let bytes: Uint8Array;
+  try {
+    bytes = await readBody(res, size, guard);
+  } catch (e) {
+    if (guard.signal.aborted) throw e;
+    return 'whole';
+  }
+  return { bytes, whole: false, atEnd: bytes.length < size };
 }
 
 /**
  * offset 부터 size 바이트. 받은 본문이 size 보다 짧으면 파일 끝이다. Range 요청이 망 · CORS 오류거나 206 본문이 도중에
- * 끊기면 전체로, 416(파일 밖 시작)이면 빈 조각으로
+ * 끊기면 전체로, 416(파일 밖 시작)이면 빈 조각으로. 응답 · 쪼각이 시한까지 오지 않으면 HeadProbeError('시한')
  * @param credentials ② 서명 URL 은 omit, ③ CloudFront 는 mediaCredentials() — 부르는 쪽이 고른다
  */
 async function fetchChunk(
@@ -217,28 +371,10 @@ async function fetchChunk(
   credentials: RequestCredentials,
   signal: AbortSignal | undefined,
 ): Promise<Chunk> {
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      credentials,
-      headers: { Range: `bytes=${offset}-${offset + size - 1}` },
-      signal,
-    });
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    return fetchWhole(url, credentials, signal);
-  }
-  if (res.status === 416) return { bytes: new Uint8Array(0), whole: false, atEnd: true };
-  if (res.status === 200) return wholeChunk(res);
-  if (res.status !== 206) throw new HeadProbeError(String(res.status));
-  let bytes: Uint8Array;
-  try {
-    bytes = await readBody(res, size);
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    return fetchWhole(url, credentials, signal);
-  }
-  return { bytes, whole: false, atEnd: bytes.length < size };
+  const chunk = await withStallGuard(signal, (guard) =>
+    rangeChunk(url, offset, size, credentials, guard),
+  );
+  return chunk === 'whole' ? fetchWhole(url, credentials, signal) : chunk;
 }
 
 /**
@@ -282,64 +418,109 @@ async function probeHead(url: string, signal: AbortSignal | undefined): Promise<
   }
 }
 
-/** seq 하나를 읽어 캐시에 넣는다. 끊긴 판독은 남기지 않는다(다음에 다시 읽는다) */
+/**
+ * seq 하나를 읽어 캐시에 넣는다. 끊긴 판독은 남기지 않는다(다음에 다시 읽는다). 계정이 바뀐 뒤 끝난 판독도 넣지 않는다
+ * @param sameSession 판독을 세운 때와 같은 계정인가(captureSession)
+ */
 async function probeInto(
   scope: ScopeCache,
   row: HeadRow,
   signal: AbortSignal | undefined,
+  sameSession: () => boolean,
 ): Promise<void> {
   try {
-    scope.set(row.seq, { state: 'ready', head: await probeHead(row.url, signal) });
+    const head = await probeHead(row.url, signal);
+    if (sameSession()) scope.set(row.seq, { state: 'ready', head });
   } catch (e) {
-    if (signal?.aborted) return;
+    if (signal?.aborted || !sameSession()) return;
     // 전송 오류 원문(예: Failed to parse URL from …?X-Amz-Signature=…)에는 서명 URL 이 들 수 있어 사유만 싣는다
-    const reason = e instanceof HeadProbeError ? e.message : '② 머리 판독 실패(전송)';
+    const reason = e instanceof HeadProbeError ? e.message : '조각 머리 판독 실패(전송)';
     console.warn(`[editor] ② 머리를 읽지 못했어요(seq ${row.seq}):`, reason);
     scope.set(row.seq, { state: 'failed' });
   }
 }
 
-/** 읽어야 할 행 — ready 는 다시 읽지 않는다. failed 는 캐시를 지우고 한 번 더 읽는다 */
-function rowsToProbe(scope: ScopeCache, rows: readonly HeadRow[]): HeadRow[] {
-  const wanted: HeadRow[] = [];
-  for (const row of rows) {
-    const entry = scope.entries.get(row.seq);
-    if (entry?.state === 'ready' || scope.inFlight.has(row.seq)) continue;
-    if (entry !== undefined) scope.set(row.seq, undefined);
-    wanted.push(row);
+/** 지금 받는 판독 수(모듈 전체)와 자리를 기다리는 판독의 출발 신호 */
+let probing = 0;
+const turns: (() => void)[] = [];
+
+/** 자리가 나면 work 를 돌린다 — 동시에 PROBE_CONCURRENCY 까지. 끝난 자리는 줄의 맨 앞 판독에 바로 넘긴다 */
+async function inTurn(work: () => Promise<void>): Promise<void> {
+  if (probing < PROBE_CONCURRENCY) probing += 1;
+  else await new Promise<void>((resolve) => turns.push(resolve));
+  try {
+    await work();
+  } finally {
+    const next = turns.shift();
+    if (next === undefined) probing -= 1;
+    else next();
   }
-  return wanted;
+}
+
+/**
+ * 그 seq 의 판독 — ready 면 null, 읽는 중(줄에 선 것 포함)이면 그 판독, 아니면 새로 줄에 세워 읽는 중으로 둔다. failed 는
+ * 캐시를 지우고 한 번 더 읽는다. 차례가 왔을 때 세운 쪽이 멈췄거나 계정이 바뀌었으면 받지 않는다
+ */
+function probeOf(
+  scope: ScopeCache,
+  row: HeadRow,
+  signal: AbortSignal | undefined,
+  sameSession: () => boolean,
+): Promise<void> | null {
+  if (scope.entries.get(row.seq)?.state === 'ready') return null;
+  const reading = scope.inFlight.get(row.seq);
+  if (reading !== undefined) return reading;
+  if (scope.entries.has(row.seq)) scope.set(row.seq, undefined);
+  const job: Promise<void> = inTurn(async () => {
+    if (signal?.aborted || !sameSession()) return;
+    await probeInto(scope, row, signal, sameSession);
+  }).finally(() => {
+    if (scope.inFlight.get(row.seq) === job) scope.inFlight.delete(row.seq);
+  });
+  scope.inFlight.set(row.seq, job);
+  return job;
+}
+
+/**
+ * seq 하나가 캐시에 들 때까지 기다린다. 기다린 판독이 머리를 남기지 않고 끝났으면(그 판독을 세운 쪽이 멈춤) 자기 signal 로
+ * 다시 세운다 — 자기가 멈췄거나 계정이 바뀌었으면 그만둔다
+ */
+async function settleHead(
+  scope: ScopeCache,
+  row: HeadRow,
+  signal: AbortSignal | undefined,
+  sameSession: () => boolean,
+): Promise<void> {
+  let job = probeOf(scope, row, signal, sameSession);
+  while (job !== null) {
+    await job;
+    if (scope.entries.has(row.seq) || signal?.aborted || !sameSession()) return;
+    job = probeOf(scope, row, signal, sameSession);
+  }
 }
 
 /**
  * 창 조각들의 머리를 캐시에 채운다. rows 는 소리 주소 응답의 행(seq · ② 서명 주소), missingSeqs 는 창에 있는데 응답에 행이
  * 없는 seq(② 미업로드 — missing). 이미 읽은 seq 는 다시 받지 않고, 읽는 중인 seq 는 그 판독을 기다린다. 실패는 캐시의 failed
- * 로 남기고 던지지 않는다. 동시에 여섯까지 받는다
+ * 로 남기고 던지지 않는다. 동시에 받는 수는 모듈 전체로 여섯까지다(파일 머리의 동시성 절)
  * @param mediaKey 영상 키 — seq 는 그 키의 장부 번호다
+ * @param sameSession rows 를 받은 계정인가(captureSession). 소리 주소를 묻기 전에 잡아 넘긴다 — 묻는 사이 계정이 바뀌면 옛
+ *   계정 응답의 서명 주소로 받지도, 비운 캐시에 적지도 않는다(PR 단계 r1). 없으면 지금 계정이다
  */
 export async function ensureHeads(
   mediaKey: string,
   rows: readonly HeadRow[],
   missingSeqs: readonly number[],
   signal?: AbortSignal,
+  sameSession: () => boolean = captureSession(),
 ): Promise<void> {
+  if (!sameSession()) return;
   const scope = scopeOf(mediaKey);
   for (const seq of missingSeqs) {
     const entry = scope.entries.get(seq);
     if (entry?.state !== 'ready' && !scope.inFlight.has(seq)) scope.set(seq, { state: 'missing' });
   }
-  const waiting = rows.flatMap((row) => scope.inFlight.get(row.seq) ?? []);
-  const queue = rowsToProbe(scope, rows);
-  const worker = async () => {
-    for (let row = queue.shift(); row !== undefined; row = queue.shift()) {
-      const job = probeInto(scope, row, signal);
-      scope.inFlight.set(row.seq, job);
-      await job;
-      scope.inFlight.delete(row.seq);
-    }
-  };
-  const workers = Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, worker);
-  await Promise.all([...waiting, ...workers]);
+  await Promise.all(rows.map((row) => settleHead(scope, row, signal, sameSession)));
 }
 
 /**

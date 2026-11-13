@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stubFetch } from '@/test/mockFetch';
 
 // ② 머리 판독 · seq 별 캐시(설계 prw2 3.2 결정 3 · 4절 · 계획 E4b-1 검증 묶음 B-1). ② 는 S3 서명 URL 이라 쿠키를 싣지 않고
-// (credentials omit — 버킷 CORS 에 Allow-Credentials 가 없다) Range 하나만 싣는다. 캐시가 모듈 상태라 시험마다 모듈을 새로 읽는다.
+// (credentials omit — 서명이 자격이라 실을 쿠키가 없다 · M4 실측 2026-11-13) Range 하나만 싣는다. 캐시가 모듈 상태라 시험마다
+// 모듈을 새로 읽는다.
 
 const TESTDATA = join(
   __dirname,
@@ -653,18 +654,16 @@ function sampledInMiddle(): Uint8Array {
 }
 
 describe('ensureHeads: 재판독 횟수가 받는 크기를 두 배씩 키운 만큼으로 준다(보안 검수 prw2 후속 경화 M-1 · kty (가))', () => {
-  it('표본 traf 를 4MiB 에 두고 빈 traf 로 상한을 넘긴 16 트랙 ② 는 여덟 번 받고 3초 안에 failed 다', async () => {
+  // 판별은 받은 횟수가 한다 — 벽시계 단언은 부하 때 흔들려 두지 않는다
+  it('표본 traf 를 4MiB 에 두고 빈 traf 로 상한을 넘긴 16 트랙 ② 는 여덟 번 받고 failed 다', async () => {
     const { ensureHeads, headCacheFor } = await load();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const spy = serve(sampledInMiddle());
-    const started = performance.now();
 
     await ensureHeads(MEDIA_KEY, [{ seq: 7, url: SIGNED }], []);
 
-    const ms = performance.now() - started;
     expect(headCacheFor(MEDIA_KEY).get(7)).toEqual({ state: 'failed' });
     expect(spy).toHaveBeenCalledTimes(8);
-    expect(ms).toBeLessThan(3_000);
   }, 120_000);
 });
 
@@ -805,5 +804,279 @@ describe('ensureHeads: 정확히 상한인 ② 는 받는 길과 무관하게 �
 
     expect(headCacheFor(MEDIA_KEY).get(1)).toEqual({ state: 'failed' });
     expect(headCacheFor(MEDIA_KEY).get(2)).toEqual({ state: 'failed' });
+  });
+});
+
+// --- 겹친 판독 · 계정 경계 · 받기 시한(PR 단계 장부 78 · 79 · 86 · 94) ---
+
+/** 시험이 풀 때까지 걸려 있는 206 답 — release 하면 실물 ② 첫 64KB 를 준다 */
+function heldRange() {
+  const releases: (() => void)[] = [];
+  const spy = stubFetch(
+    () =>
+      new Promise<Response>((resolve) => {
+        releases.push(() => resolve(new Response(segment1v6a.slice(0, 65_536), { status: 206 })));
+      }),
+  );
+  return { spy, releaseAll: () => releases.splice(0).forEach((release) => release()) };
+}
+
+const rowsOf = (seqs: number[]) => seqs.map((seq) => ({ seq, url: `${SIGNED}&seq=${seq}` }));
+
+describe('ensureHeads: 겹쳐 부르면 같은 seq 를 두 번 받지 않고, 동시 받기는 모듈 전체로 여섯까지다', () => {
+  it('읽는 중인 seq 는 그 판독을 기다리고, 다 읽힌 뒤에 끝난다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const { spy, releaseAll } = heldRange();
+    const first = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+    let secondDone = false;
+    const second = ensureHeads(MEDIA_KEY, rowsOf([300]), []).then(() => {
+      secondDone = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(secondDone).toBe(false);
+    releaseAll();
+    await second;
+
+    expect(headCacheFor(MEDIA_KEY).get(300)?.state).toBe('ready');
+    expect(spy).toHaveBeenCalledTimes(1);
+    await first;
+  });
+
+  it('앞 호출의 줄에 든(아직 받기 전인) seq 도 다시 받지 않는다', async () => {
+    const { ensureHeads } = await load();
+    const spy = stubFetch(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return new Response(segment1v6a.slice(0, 65_536), { status: 206 });
+    });
+    const seqs = Array.from({ length: 10 }, (_, i) => 300 + i);
+
+    await Promise.all([
+      ensureHeads(MEDIA_KEY, rowsOf(seqs), []),
+      ensureHeads(MEDIA_KEY, rowsOf(seqs), []),
+    ]);
+
+    expect(spy).toHaveBeenCalledTimes(10);
+  });
+
+  it('기다리던 판독이 그 판독을 세운 쪽의 멈춤으로 끝나면, 기다리던 쪽이 다시 받아 채운다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    let calls = 0;
+    const spy = stubFetch((_url, init) => {
+      calls += 1;
+      if (calls === 1) return neverAnswers(init);
+      return new Response(segment1v6a.slice(0, 65_536), { status: 206 });
+    });
+    const owner = new AbortController();
+    const first = ensureHeads(MEDIA_KEY, rowsOf([300]), [], owner.signal);
+    const waiter = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+
+    owner.abort();
+    await Promise.all([first, waiter]);
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(headCacheFor(MEDIA_KEY).get(300)?.state).toBe('ready');
+  });
+
+  it('호출 · 영상 키가 달라도 동시에 받는 수는 모두 합쳐 여섯까지다', async () => {
+    const { ensureHeads } = await load();
+    let open = 0;
+    let peak = 0;
+    stubFetch(async () => {
+      open += 1;
+      peak = Math.max(peak, open);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      open -= 1;
+      return new Response(segment1v6a.slice(0, 65_536), { status: 206 });
+    });
+    const seqs = Array.from({ length: 10 }, (_, i) => 300 + i);
+
+    await Promise.all([
+      ensureHeads(MEDIA_KEY, rowsOf(seqs), []),
+      ensureHeads('key-2', rowsOf(seqs), []),
+    ]);
+
+    expect(peak).toBe(6);
+  });
+});
+
+describe('ensureHeads: 계정이 바뀌면 머리 캐시를 비운다(보안 검수 prw2 E4b-1 L2)', () => {
+  it('부른 쪽이 넘긴 세션이 이미 지났으면(주소를 묻는 사이 계정 바뀜) 받지도 적지도 않는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const spy = serve(segment1v6a);
+
+    await ensureHeads(MEDIA_KEY, rowsOf([300]), [301], undefined, () => false);
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(headCacheFor(MEDIA_KEY).get(300)).toBeUndefined();
+    expect(headCacheFor(MEDIA_KEY).get(301)).toBeUndefined();
+  });
+
+  it('② 받기도 3xx 를 따라가지 않는다(redirect error) — 넘어가면 failed 다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spy = stubFetch((_url, init) => {
+      if (init?.redirect === 'error') throw new TypeError('Failed to fetch');
+      return new Response(segment1v6a.slice(0, 65_536), { status: 206 });
+    });
+
+    await ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+
+    expect(headCacheFor(MEDIA_KEY).get(300)).toEqual({ state: 'failed' });
+    expect(spy.mock.calls.every(([, init]) => init?.redirect === 'error')).toBe(true);
+  });
+
+  it('읽은 머리를 비우고, 들고 있던 캐시의 구독자도 그 비움을 듣는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const { useAuthStore } = await import('@/stores/auth');
+    serve(segment1v6a);
+    await ensureHeads(MEDIA_KEY, rowsOf([300]), [301]);
+    const heads = headCacheFor(MEDIA_KEY);
+    const listener = vi.fn();
+    heads.subscribe(listener);
+
+    useAuthStore.getState().clearTokens();
+
+    expect(heads.get(300)).toBeUndefined();
+    expect(heads.get(301)).toBeUndefined();
+    expect(listener).toHaveBeenCalled();
+  });
+
+  it('바뀌기 전에 시작한 판독은 끝나도 캐시에 넣지 않고, 같은 seq 를 새로 부르면 다시 받는다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const { useAuthStore } = await import('@/stores/auth');
+    const { spy, releaseAll } = heldRange();
+    const before = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    useAuthStore.getState().clearTokens();
+    const after = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(spy).toHaveBeenCalledTimes(2);
+    releaseAll();
+    await Promise.all([before, after]);
+
+    expect(headCacheFor(MEDIA_KEY).get(300)?.state).toBe('ready');
+  });
+
+  it('바뀌기 전에 시작한 판독이 바뀐 뒤 끝나면 캐시는 비어 있다', async () => {
+    const { ensureHeads, headCacheFor } = await load();
+    const { useAuthStore } = await import('@/stores/auth');
+    const { releaseAll } = heldRange();
+    const before = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    useAuthStore.getState().clearTokens();
+    releaseAll();
+    await before;
+
+    expect(headCacheFor(MEDIA_KEY).get(300)).toBeUndefined();
+  });
+});
+
+/** signal 이 멈추면 거절하는(실제 fetch 처럼) 끝나지 않는 답 */
+function neverAnswers(init?: RequestInit): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () =>
+      reject(new DOMException('aborted', 'AbortError')),
+    );
+  });
+}
+
+/** 첫 쪼각을 준 뒤 멈추는 본문 — 끊어도 read 가 풀리지 않는다(시한은 읽는 쪽이 지켜야 한다) */
+function stalledBody(first: Uint8Array) {
+  const cancel = vi.fn();
+  let sent = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (sent) return new Promise<void>(() => undefined);
+        sent = true;
+        controller.enqueue(first);
+        return undefined;
+      },
+      cancel,
+    },
+    { highWaterMark: 0 },
+  );
+  return { body, cancel };
+}
+
+describe('ensureHeads: 받기가 멈추면 시한에서 끊는다(보안 검수 prw2 경화 L-3)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('응답이 오지 않으면 시한에서 끊고 failed 다 — Range 없는 전체 받기로 물러나지 않는다', async () => {
+    vi.useFakeTimers();
+    const { ensureHeads, headCacheFor, HEAD_FETCH_STALL_MS } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spy = stubFetch((_url, init) => neverAnswers(init));
+
+    const done = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+    await vi.advanceTimersByTimeAsync(HEAD_FETCH_STALL_MS);
+    await done;
+
+    expect(headCacheFor(MEDIA_KEY).get(300)).toEqual({ state: 'failed' });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('206 본문이 도중에 멈추면 시한에서 끊고 본문을 닫는다', async () => {
+    vi.useFakeTimers();
+    const { ensureHeads, headCacheFor, HEAD_FETCH_STALL_MS } = await load();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stalled = stalledBody(segment1v6a.slice(0, 1_000));
+    const spy = stubFetch(() => new Response(stalled.body, { status: 206 }));
+
+    const done = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+    await vi.advanceTimersByTimeAsync(HEAD_FETCH_STALL_MS);
+    await done;
+
+    expect(headCacheFor(MEDIA_KEY).get(300)).toEqual({ state: 'failed' });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel).toHaveBeenCalled();
+  });
+
+  it('쪼각이 시한 안에 이어 오면 오래 걸려도 끊지 않는다(멈춤 시한이지 전체 시한이 아니다)', async () => {
+    vi.useFakeTimers();
+    const { ensureHeads, headCacheFor, HEAD_FETCH_STALL_MS } = await load();
+    const step = Math.floor(HEAD_FETCH_STALL_MS * 0.6);
+    let sent = 0;
+    const slow = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          if (sent >= 65_536) {
+            controller.close();
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, step));
+          controller.enqueue(segment1v6a.slice(sent, sent + 16_384));
+          sent += 16_384;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    stubFetch(() => new Response(slow, { status: 206 }));
+
+    const done = ensureHeads(MEDIA_KEY, rowsOf([300]), []);
+    await vi.advanceTimersByTimeAsync(step * 5);
+    await done;
+
+    expect(headCacheFor(MEDIA_KEY).get(300)?.state).toBe('ready');
+  });
+
+  it('③ 조각 판독도 같은 시한에서 끊고 던진다', async () => {
+    vi.useFakeTimers();
+    const { readFragmentVideoDts, HEAD_FETCH_STALL_MS } = await load();
+    stubFetch((_url, init) => neverAnswers(init));
+
+    const read = readFragmentVideoDts({
+      uri: 'https://cdn/seg/1.m4s',
+      mapUri: 'https://cdn/init.mp4',
+    });
+    const caught = read.catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(HEAD_FETCH_STALL_MS);
+
+    expect(await caught).toBeInstanceOf(Error);
   });
 });

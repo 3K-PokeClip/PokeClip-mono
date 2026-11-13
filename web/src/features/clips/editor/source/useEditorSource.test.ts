@@ -69,7 +69,7 @@ function playlist(listUrl: string, seqs: number[], firstPdtMs = PDT0): string {
   return `${lines.join('\n')}\n`;
 }
 
-type Answer = { status: number; body?: unknown } | (() => never);
+type Answer = { status: number; body?: unknown } | ((init?: RequestInit) => never);
 
 /** 경로마다 지금 줄 답 — 시험이 바꿔 가며 국면을 옮긴다 */
 const server: { round: Answer; stream: Answer; lists: Map<string, Answer> } = {
@@ -78,9 +78,9 @@ const server: { round: Answer; stream: Answer; lists: Map<string, Answer> } = {
   lists: new Map(),
 };
 
-function answerOf(answer: Answer | undefined): Response {
+function answerOf(answer: Answer | undefined, init?: RequestInit): Response {
   if (answer === undefined) return new Response(null, { status: 404 });
-  if (typeof answer === 'function') return answer();
+  if (typeof answer === 'function') return answer(init);
   if (typeof answer.body === 'string') return new Response(answer.body, { status: answer.status });
   return jsonResponse(answer.status, answer.body);
 }
@@ -89,7 +89,7 @@ const fetchSpy = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => 
   const url = String(input);
   if (url === ROUND) return answerOf(server.round);
   if (url === STREAM) return answerOf(server.stream);
-  return answerOf(server.lists.get(url));
+  return answerOf(server.lists.get(url), _init);
 });
 
 function listCalls(): string[] {
@@ -209,6 +209,19 @@ describe('useEditorSource: 회차 · 스트림 경로를 폴링하고 원천 주
     expect(access.reportPlaybackForbidden).toHaveBeenCalledWith('key-1');
     expect(listCalls()).toEqual([LIVE_LIST, LIVE_LIST]);
     expect(result.current.list?.playlist.rows).toHaveLength(1);
+  });
+
+  it('쿠키를 싣는 목록 받기는 3xx 를 따라가지 않는다(redirect error) — 넘어가면 받지 못한 것이다', async () => {
+    // 브라우저 fetch 는 redirect 'error' 면 3xx 에서 TypeError 로 거절한다 — 아니면 따라가 넘어간 곳의 목록을 준다
+    server.lists.set(LIVE_LIST, ((init?: RequestInit) => {
+      if (init?.redirect === 'error') throw new TypeError('Failed to fetch');
+      return new Response(playlist(LIVE_LIST, [300]), { status: 200 });
+    }) as unknown as Answer);
+    const { result } = mount();
+    await settle();
+
+    expect(result.current.list).toBeNull();
+    expect(result.current.listFailed).toBe(true);
   });
 
   it('출입증이 만료(410)면 expired 이고 목록을 받지 않는다', async () => {
@@ -387,15 +400,58 @@ describe('useEditorSource: 조각 실패 사건(D3 6–9행)', () => {
     expect(second.result.current.state.kind).toBe('goneOrNone');
   });
 
-  it('다시 받기가 실패하면 들고 있는 목록으로 판정한다', async () => {
+  it('404 뒤 다시 받기가 실패하면 들고 있는 낡은 목록으로 판정하지 않고, 다음에 다시 받기가 되면 판정한다(장부 85 (가))', async () => {
+    const { result } = mount();
+    await settle();
+    // 들고 있는 목록에는 300 이 있지만 서버 목록에서는 하한 아래로 빠졌다
+    server.lists.set(LIVE_LIST, { status: 503 });
+
+    await act(() => result.current.reportSegmentFailure('gone', 300, LIVE_LIST));
+
+    expect(result.current.state).toEqual({ kind: 'ready', mode: 'live', url: LIVE_LIST });
+    expect(result.current.list?.playlist.rows.map((r) => r.seq)).toEqual([300, 301, 302]);
+
+    server.lists.set(LIVE_LIST, { status: 200, body: playlist(LIVE_LIST, [301, 302, 303]) });
+    await act(() => result.current.reportSegmentFailure('gone', 300, LIVE_LIST));
+
+    expect(result.current.state).toEqual({
+      kind: 'outsideDvr',
+      segment: { mode: 'live', listUrl: LIVE_LIST },
+    });
+  });
+
+  it('갱신 뒤 403 도 다시 받기가 실패하면 들고 있는 목록으로 판정하지 않고, 다음에 다시 받기가 되면 판정한다(장부 85 (가) 403 확장)', async () => {
     const { result } = mount();
     await settle();
     server.lists.set(LIVE_LIST, { status: 503 });
+    const roundAsks = callsTo(ROUND);
 
-    await act(() => result.current.reportSegmentFailure('gone', 299, LIVE_LIST));
+    await act(() => result.current.reportSegmentFailure('forbiddenAfterRefresh', 300, LIVE_LIST));
 
-    expect(result.current.state.kind).toBe('outsideDvr');
-    expect(result.current.list?.playlist.rows.map((r) => r.seq)).toEqual([300, 301, 302]);
+    expect(result.current.state).toEqual({ kind: 'ready', mode: 'live', url: LIVE_LIST });
+    expect(callsTo(ROUND)).toBe(roundAsks);
+
+    server.lists.set(LIVE_LIST, { status: 200, body: playlist(LIVE_LIST, [301, 302, 303]) });
+    await act(() => result.current.reportSegmentFailure('forbiddenAfterRefresh', 300, LIVE_LIST));
+
+    expect(result.current.state).toEqual({
+      kind: 'outsideDvr',
+      segment: { mode: 'live', listUrl: LIVE_LIST },
+    });
+  });
+
+  it('vod 원천의 갱신 뒤 403 은 지금처럼 들고 있는 목록으로 판정한다', async () => {
+    server.round = { status: 200, body: rewind('vod', VOD_LIST) };
+    const { result } = mount(ENDED);
+    await settle();
+
+    await act(() => result.current.reportSegmentFailure('forbiddenAfterRefresh', 301, VOD_LIST));
+
+    expect(result.current.state).toEqual({
+      kind: 'access',
+      segment: { mode: 'vod', listUrl: VOD_LIST },
+    });
+    expect(listCalls()).toEqual([VOD_LIST]);
   });
 
   it('끊김(회차 ending) 중 받던 조각의 실패는 덮인 원천에 쌓이고, 같은 회차 재접속 뒤에도 같은 주소면 남고, vod 로 옮기면 풀린다', async () => {
@@ -469,6 +525,36 @@ describe('useEditorSource: 목록 받기 실패 · 늦은 답(r1 cx H1 · H2)', 
     await settle(REWIND_POLL_MS * 3);
 
     expect(callsTo(VOD_LIST)).toBe(1);
+  });
+
+  it('첫 목록 받기가 실패한 뒤 손으로 다시 받아 들면, 자동 다시 받기는 더 돌지 않는다', async () => {
+    server.round = { status: 200, body: rewind('vod', VOD_LIST) };
+    server.lists.set(VOD_LIST, { status: 503 });
+    const { result } = mount(ENDED);
+    await settle();
+    expect(result.current.listFailed).toBe(true);
+    server.lists.set(VOD_LIST, { status: 200, body: playlist(VOD_LIST, [300, 301]) });
+
+    await act(() => result.current.reloadList());
+    await settle(REWIND_POLL_MS * 2);
+
+    expect(result.current.list?.url).toBe(VOD_LIST);
+    expect(callsTo(VOD_LIST)).toBe(2);
+  });
+
+  it('첫 목록 받기가 걸린 사이 원천이 바뀌면, 늦게 실패한 앞 원천은 다시 받지 않는다', async () => {
+    const answer = heldAnswer();
+    server.lists.set(LIVE_LIST, answer.answer);
+    mount();
+    await settle();
+    expect(callsTo(LIVE_LIST)).toBe(1);
+
+    server.round = { status: 200, body: rewind('vod', VOD_LIST) };
+    await settle(REWIND_POLL_MS);
+    answer.release(new Response(null, { status: 503 }));
+    await settle(REWIND_POLL_MS * 3);
+
+    expect(callsTo(LIVE_LIST)).toBe(1);
   });
 
   it('live 다시 받기가 걸린 사이 vod 로 옮기면, 늦게 온 live 답은 vod 목록을 덮지 않고 null 이다', async () => {
@@ -560,6 +646,42 @@ describe('useEditorSource: reloadList(저장 때 목록 한 번 다시 받기)',
 
     expect(got?.rows.map((r) => r.seq)).toEqual([300, 301, 302, 303]);
     expect(result.current.list?.playlist).toBe(got);
+  });
+
+  it('부른 쪽이 signal 로 멈추면 걸린 다시 받기를 끊고 null 이며, 들고 있는 목록은 그대로다', async () => {
+    const { result } = mount();
+    await settle();
+    const answer = heldAnswer();
+    server.lists.set(LIVE_LIST, answer.answer);
+    const stop = new AbortController();
+    let reloaded: Promise<unknown> = Promise.resolve();
+    act(() => {
+      reloaded = result.current.reloadList(stop.signal);
+    });
+    await settle();
+    expect(lastSignalTo(LIVE_LIST)?.aborted).toBe(false);
+
+    stop.abort();
+    await settle();
+
+    expect(lastSignalTo(LIVE_LIST)?.aborted).toBe(true);
+    // 가짜 fetch 는 끊어도 풀리지 않아 늦게 답을 낸다 — 끊긴 요청의 답은 버린다
+    answer.release(new Response(playlist(LIVE_LIST, [300, 301, 302, 303]), { status: 200 }));
+    await settle();
+    await expect(reloaded).resolves.toBeNull();
+    expect(result.current.list?.playlist.rows).toHaveLength(3);
+  });
+
+  it('이미 멈춘 signal 이면 받지 않고 null 이다', async () => {
+    const { result } = mount();
+    await settle();
+    const stop = new AbortController();
+    stop.abort();
+
+    const got = await act(() => result.current.reloadList(stop.signal));
+
+    expect(got).toBeNull();
+    expect(callsTo(LIVE_LIST)).toBe(1);
   });
 
   it('다시 받기가 실패하면 null 이고 들고 있는 목록은 그대로다', async () => {
