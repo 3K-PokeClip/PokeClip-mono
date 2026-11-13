@@ -11,14 +11,20 @@ import { syntheticWindow } from './remuxWindowFixture';
 // (_workspace/00_clarifier_qa_prw2.md 「M3 실패 처분」 (가) · 실측 2026-11-13-prw2-m3 phase_split).
 // mediabunny 는 진짜다. 원천 · 입력 생성자만 감싸 무엇을 넘겼는지 적는다. fetchEditorWindow 갈래는 받기(fetchWindowBytes)를
 // 미리 지은 창을 한 번 넘겨주고 잊는 가짜로 바꾼다 — vi.fn 은 돌려준 값을 기록해 창을 쥐므로 쓰지 않는다.
+// 끊기 · 입력 닫기 갈래는 만든 Input · Conversion 을 적어 두고 상태(disposed · state)를 본다.
 
 const seen = vi.hoisted(() => ({
   /** Input 에 넘긴 원천 — 차례대로 */
   sources: [] as unknown[],
+  /** 만든 Input · Conversion — 차례대로 */
+  inputs: [] as Mediabunny.Input[],
+  conversions: [] as Mediabunny.Conversion[],
   /** CustomSource read 가 넘긴 바이트(스트림이면 그 조각들) */
   reads: [] as Uint8Array[],
   /** 출력 확인(BufferSource) 직전에 부를 것 */
   onBufferSource: null as (() => void) | null,
+  /** CustomSource read 마다 부를 것 */
+  onRead: null as (() => void) | null,
   /** 가짜 fetchWindowBytes 가 한 번 넘겨줄 창 */
   nextWindow: null as unknown,
 }));
@@ -39,12 +45,28 @@ vi.mock('mediabunny', async (importOriginal) => {
     constructor(options: Mediabunny.InputOptions) {
       seen.sources.push(options.source);
       super(options);
+      seen.inputs.push(this);
     }
   }
 
+  // 생성자가 비공개라 상속하지 못한다 — 진짜 init 을 감싸 만든 것만 적는다
+  const Conversion = {
+    init: async (options: Mediabunny.ConversionOptions) => {
+      const conversion = await mb.Conversion.init(options);
+      seen.conversions.push(conversion);
+      return conversion;
+    },
+  };
+
   class CustomSource extends mb.CustomSource {
     constructor(options: Mediabunny.CustomSourceOptions) {
-      super({ ...options, read: (start, end) => record(options.read(start, end)) });
+      super({
+        ...options,
+        read: (start, end) => {
+          seen.onRead?.();
+          return record(options.read(start, end));
+        },
+      });
     }
   }
 
@@ -72,7 +94,7 @@ vi.mock('mediabunny', async (importOriginal) => {
     return forSource;
   }
 
-  return { ...mb, Input, CustomSource, BufferSource };
+  return { ...mb, Input, Conversion, CustomSource, BufferSource };
 });
 
 setFlagsFromString('--expose-gc');
@@ -84,8 +106,11 @@ const totalBytes = (window: WindowBytes) =>
 describe('remuxWindow: 큰 창을 이어 붙이지 않고 다시 싼다', () => {
   beforeEach(() => {
     seen.sources.length = 0;
+    seen.inputs.length = 0;
+    seen.conversions.length = 0;
     seen.reads.length = 0;
     seen.onBufferSource = null;
+    seen.onRead = null;
   });
 
   afterEach(() => {
@@ -149,6 +174,40 @@ describe('remuxWindow: 큰 창을 이어 붙이지 않고 다시 싼다', () => 
 
     expect(aliveAtCheck).toBe(0);
   });
+
+  it('변환이 끝나면 입력(Input)을 닫는다 — 아직 도는 미리 읽기가 놓은 창 바이트를 읽지 않는다', async () => {
+    await remuxWindow(syntheticWindow(8));
+
+    expect(seen.inputs[0]?.disposed).toBe(true);
+  });
+
+  it('변환 중에 signal 을 끊으면 변환을 멈추고 AbortError 로 끝난다 · 입력을 닫는다', async () => {
+    const controller = new AbortController();
+    // 변환이 시작된 뒤(Conversion 이 생긴 뒤) 읽기가 몇 번 지나면 끊는다
+    let readsAfterStart = 0;
+    seen.onRead = () => {
+      if (seen.conversions.length === 0) return;
+      readsAfterStart += 1;
+      if (readsAfterStart === 3) controller.abort();
+    };
+
+    const failure = remuxWindow(syntheticWindow(50), controller.signal);
+
+    await expect(failure).rejects.toMatchObject({ name: 'AbortError' });
+    expect(controller.signal.aborted).toBe(true);
+    expect(seen.conversions[0]?.state).toBe('canceled');
+    expect(seen.inputs[0]?.disposed).toBe(true);
+  });
+
+  it('변환 전에 이미 끊긴 signal 이면 변환을 돌리지 않는다', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(remuxWindow(syntheticWindow(8), controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(seen.conversions.every((conversion) => conversion.state !== 'done')).toBe(true);
+  });
 });
 
 /**
@@ -162,8 +221,10 @@ async function aliveWhenCheckingOutput(run: (window: WindowBytes) => Promise<unk
   );
   let aliveAtCheck: number | null = null;
   seen.onBufferSource = () => {
-    // 이 시험의 감시도 원천 · 읽은 바이트를 쥔다 — 그것부터 놓는다
+    // 이 시험의 감시도 원천 · 입력 · 읽은 바이트를 쥔다 — 그것부터 놓는다
     seen.sources.length = 0;
+    seen.inputs.length = 0;
+    seen.conversions.length = 0;
     seen.reads.length = 0;
     gc();
     aliveAtCheck = refs.filter((ref) => ref.deref() !== undefined).length;

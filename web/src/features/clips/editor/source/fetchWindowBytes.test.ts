@@ -26,9 +26,9 @@ function segment(seq: number, extra: Partial<PlaylistSegment> = {}): PlaylistSeg
   };
 }
 
-/** 주소마다 다른 본문 한 바이트(주소 끝 글자)라 어느 응답이 어느 칸에 갔는지 가린다 */
+/** 본문 = 주소 글자(ASCII) 그대로라 주소마다 다르다 — 어느 응답이 어느 칸에 갔는지 가린다 */
 function bodyOf(url: string): Uint8Array<ArrayBuffer> {
-  return new Uint8Array([url.charCodeAt(url.length - 6)]);
+  return Uint8Array.from(url, (char) => char.charCodeAt(0));
 }
 
 async function load() {
@@ -110,6 +110,15 @@ describe('fetchWindowBytes: 창의 init 과 조각 바이트를 받는다', () =
     }
   });
 
+  it('넘겨주기(redirect)를 따라가지 않는다 — 서명 쿠키를 다른 주소로 싣지 않는다', async () => {
+    const { fetchWindowBytes } = await load();
+    const spy = stubFetch(() => new Response(new Uint8Array(1)));
+
+    await fetchWindowBytes(MEDIA_KEY, [segment(300), segment(301)]);
+
+    expect(spy.mock.calls.map(([, init]) => init?.redirect)).toEqual(['error', 'error', 'error']);
+  });
+
   it('곧 끝나는 출입증은 새로 받은 뒤에 묻는다', async () => {
     const { access, fetchWindowBytes } = await load();
     const order: string[] = [];
@@ -152,6 +161,46 @@ describe('fetchWindowBytes: 창의 init 과 조각 바이트를 받는다', () =
     expect(segCalls).toBe(2);
     expect(vi.mocked(access.reportPlaybackForbidden)).toHaveBeenCalledWith(MEDIA_KEY);
     expect(order.slice(-4)).toEqual(['seg#1', 'report', 'ensure', 'seg#2']);
+  });
+
+  it('init 이 403 이어도 출입증을 다시 받은 뒤 init 을 한 번 더 묻는다', async () => {
+    const { access, fetchWindowBytes } = await load();
+    let mapCalls = 0;
+    stubFetch((url) => {
+      if (url !== MAP) return new Response(bodyOf(url));
+      mapCalls += 1;
+      return mapCalls === 1 ? new Response(null, { status: 403 }) : new Response(bodyOf(url));
+    });
+
+    const got = await fetchWindowBytes(MEDIA_KEY, [segment(300)]);
+
+    expect(got.init).toEqual(bodyOf(MAP));
+    expect(mapCalls).toBe(2);
+    expect(vi.mocked(access.reportPlaybackForbidden)).toHaveBeenCalledWith(MEDIA_KEY);
+  });
+
+  it('다시 묻는 요청은 새로 받은 출입증의 쿠키 자격을 싣는다(same-origin → include)', async () => {
+    const { access, playback, fetchWindowBytes } = await load();
+    const seg = `${BASE}/seg/0000300.m4s`;
+    // 403 뒤 다시 받기가 쿠키를 심는다
+    vi.mocked(access.reportPlaybackForbidden).mockImplementation(() => {
+      vi.mocked(access.ensureMediaAccess).mockImplementation(() => {
+        playback.markPlaybackCookiesIssued();
+        return null;
+      });
+    });
+    let segCalls = 0;
+    const spy = stubFetch((url) => {
+      if (url !== seg) return new Response(bodyOf(url));
+      segCalls += 1;
+      return segCalls === 1 ? new Response(null, { status: 403 }) : new Response(bodyOf(seg));
+    });
+
+    await fetchWindowBytes(MEDIA_KEY, [segment(300)]);
+
+    expect(
+      spy.mock.calls.filter(([url]) => url === seg).map(([, init]) => init?.credentials),
+    ).toEqual(['same-origin', 'include']);
   });
 
   it('출입증을 새로 받고도 403 이면 SegmentForbiddenError(seq) 다', async () => {

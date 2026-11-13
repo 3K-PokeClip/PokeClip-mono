@@ -7,6 +7,10 @@ import type { WindowBytes } from './fetchWindowBytes';
 //
 // 🔴 출력 0초는 창 안 **트랙별 첫 PTS 의 최솟값**이다(소리가 영상보다 앞이면 소리 첫 PTS — 2차 평가 3절 2). 그래서 원점을
 //    「첫 영상 PTS」로 셈하지 않고 변환 뒤 출력에서 첫 영상 패킷 시각을 읽어 Δ 를 정한다(6절 위험 2).
+// 🔴 소리가 영상보다 앞인 창이면 출력 영상 trak 에 빈 편집이 붙는다: elst 첫 항목 = 빈 편집(media_time −1, 길이 = 첫 영상
+//    PTS − 출력 0초) · 둘째 = 영상 전체, 그리고 cslg. M0 픽스처는 빈 편집 4551/57600(0.0790104초) · cslg 3859 · −3859 ·
+//    5760(testdata/README.md). 엔진마다 빈 편집을 다르게 다룬다 — Firefox 160 은 duration 에서 그 길이를 빼고, Safari 는 그
+//    구간 [0, 첫 영상 PTS) 으로 시크하면 앞 그림을 남긴다(실측 2026-11-12-prw2-m1). 화면 규칙은 seekGuard 가 진다.
 // 🔴 mediabunny 1.65.1 부터 Conversion 은 GOP 시각 규칙을 어기는 패킷을 조용히 버린다(Vanilagy/mediabunny#614). 입력 영상
 //    표본 수와 출력 영상 패킷 수가 다르면 RemuxMismatchError 로 끝낸다 — 프레임 표가 출력과 어긋난 창을 내보내지 않는다.
 // trim 은 쓰지 않는다(창 = 조각 경계). 시각은 모두 초이고, 조각 표는 ③ 축(그 조각 tfdt 기준) 값이다.
@@ -15,7 +19,10 @@ import type { WindowBytes } from './fetchWindowBytes';
 //   - 입력을 한 덩어리로 이어 붙이지 않는다. 조각 배열을 가로질러 읽는 원천(CustomSource)에 조각의 subarray 를 넘긴다.
 //     변환기는 패킷 바이트를 원천이 준 바이트의 subarray 로 쥐므로(isobmff-demuxer fetchPacketInFragment · reader
 //     readBytes), 넓게 미리 읽게 해(prefetch 'network') 패킷 대부분이 조각 바이트를 그대로 가리키게 한다.
-//   - 변환이 끝나면 입력 조각을 놓는다(WindowParts.release) — 출력을 확인하고 Blob 을 만드는 동안 입력 조각이 살지 않는다.
+//   - 변환이 끝나면 입력을 닫고(Input.dispose — 아직 도는 미리 읽기를 멈춘다) 입력 조각을 놓는다(WindowParts.release) —
+//     출력을 확인하고 Blob 을 만드는 동안 입력 조각이 살지 않는다.
+//   - 부른 쪽이 signal 을 끊으면 변환을 멈춘다(Conversion.cancel) — 끊긴 카드의 변환이 끝까지 돌며 창 크기만큼의 출력을
+//     편집기 받기와 겹쳐 쥐지 않는다.
 // 다시 싼 바이트는 원천과 무관하게 같다(remuxWindow.bytes.test.ts 가 바꾸기 전 판의 sha 로 단언한다).
 
 export interface RemuxedSegment {
@@ -50,17 +57,21 @@ export class RemuxMismatchError extends Error {
 
 /**
  * 창 바이트를 일반 mp4 로 다시 싼다. init · 조각을 읽지 못하면 변환 전에 던진다. 변환이 끝나면 창 바이트를 더 쥐지
- * 않는다 — 부른 쪽도 쥐고 있지 않으면 출력을 확인하는 동안 거둘 수 있다
+ * 않는다 — 부른 쪽도 쥐고 있지 않으면 출력을 확인하는 동안 거둘 수 있다. signal 을 끊으면 변환을 멈추고 signal.reason
+ * (보통 AbortError)으로 끝난다
  */
-export function remuxWindow(bytes: WindowBytes): Promise<RemuxedWindow> {
+export function remuxWindow(bytes: WindowBytes, signal?: AbortSignal): Promise<RemuxedWindow> {
   // async 로 두지 않는다: async 함수는 기다리는 동안 인자를 끝까지 쥔다(V8). 창 바이트는 놓을 수 있는 그릇에만 둔다
-  return remuxParts(new WindowParts(bytes));
+  return remuxParts(new WindowParts(bytes), signal);
 }
 
-async function remuxParts(parts: WindowParts): Promise<RemuxedWindow> {
+async function remuxParts(
+  parts: WindowParts,
+  signal: AbortSignal | undefined,
+): Promise<RemuxedWindow> {
   const { segments, inputFrames, inputFirstPts } = windowTable(parts.bytes);
   const mb = await import('mediabunny');
-  const output = await convert(mb, parts).finally(() => parts.release());
+  const output = await convert(mb, parts, signal).finally(() => parts.release());
   const packets = await videoPackets(mb, output);
   if (packets.count !== inputFrames) throw new RemuxMismatchError(inputFrames, packets.count);
   return {
@@ -108,14 +119,31 @@ function segmentTable(
   };
 }
 
-/** mediabunny 복사 변환(trim 없음) — moov 를 앞에 둔 일반 mp4 바이트 */
-async function convert(mb: typeof Mediabunny, parts: WindowParts): Promise<ArrayBuffer> {
+/** mediabunny 복사 변환(trim 없음) — moov 를 앞에 둔 일반 mp4 바이트. 끝나면(실패 · 끊김 포함) 입력을 닫는다 */
+async function convert(
+  mb: typeof Mediabunny,
+  parts: WindowParts,
+  signal: AbortSignal | undefined,
+): Promise<ArrayBuffer> {
   const source = new mb.CustomSource({
     getSize: () => parts.size,
     read: (start, end) => parts.read(start, end),
     prefetchProfile: 'network',
   });
   const input = new mb.Input({ source, formats: mb.ALL_FORMATS });
+  // 닫지 않고 창 바이트를 놓으면, 아직 도는 미리 읽기 작업자가 놓은 바이트를 읽다 던진 오류를 받을 곳이 없다
+  try {
+    return await convertInput(mb, input, signal);
+  } finally {
+    input.dispose();
+  }
+}
+
+async function convertInput(
+  mb: typeof Mediabunny,
+  input: Mediabunny.Input,
+  signal: AbortSignal | undefined,
+): Promise<ArrayBuffer> {
   const target = new mb.BufferTarget();
   const output = new mb.Output({
     format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }),
@@ -126,7 +154,17 @@ async function convert(mb: typeof Mediabunny, parts: WindowParts): Promise<Array
     const reasons = conversion.discardedTracks.map((d) => d.reason).join(', ');
     throw new Error(`재다중화를 할 수 없다 — ${reasons}`);
   }
-  await conversion.execute();
+  signal?.throwIfAborted();
+  const cancel = () => void conversion.cancel();
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    await conversion.execute();
+  } catch (e) {
+    // 끊어서 멈춘 변환은 ConversionCanceledError 를 던진다 — 부른 쪽에는 끊은 까닭으로 알린다
+    throw signal?.aborted ? signal.reason : e;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+  }
   if (target.buffer === null) throw new Error('재다중화 출력이 비었다');
   return target.buffer;
 }
@@ -153,25 +191,25 @@ async function videoPackets(
  * 창 바이트(init + 조각)를 이어 붙이지 않고 한 파일처럼 읽게 쥔다. release 뒤에는 바이트를 쥐지 않고, 읽으면 던진다
  */
 class WindowParts {
-  #window: WindowBytes | null;
-  #parts: readonly Uint8Array[] | null;
+  private window: WindowBytes | null;
+  private parts: readonly Uint8Array[] | null;
   readonly size: number;
 
   constructor(window: WindowBytes) {
-    this.#window = window;
-    this.#parts = [window.init, ...window.segments.map((seg) => seg.bytes)];
-    this.size = this.#parts.reduce((sum, part) => sum + part.byteLength, 0);
+    this.window = window;
+    this.parts = [window.init, ...window.segments.map((seg) => seg.bytes)];
+    this.size = this.parts.reduce((sum, part) => sum + part.byteLength, 0);
   }
 
   get bytes(): WindowBytes {
-    if (this.#window === null) throw new Error('창 바이트를 이미 놓았다');
-    return this.#window;
+    if (this.window === null) throw new Error('창 바이트를 이미 놓았다');
+    return this.window;
   }
 
   /** [start, end) — 한 조각 안이면 그 subarray, 조각을 가로지르면 조각별 subarray 를 차례로 내는 스트림 */
   read(start: number, end: number): Uint8Array | ReadableStream<Uint8Array> {
-    if (this.#parts === null) throw new Error('창 바이트를 이미 놓았다');
-    const chunks = sliceParts(this.#parts, start, end);
+    if (this.parts === null) throw new Error('창 바이트를 이미 놓았다');
+    const chunks = sliceParts(this.parts, start, end);
     if (chunks.length === 1) return chunks[0]!;
     return new ReadableStream({
       start(controller) {
@@ -182,8 +220,8 @@ class WindowParts {
   }
 
   release(): void {
-    this.#window = null;
-    this.#parts = null;
+    this.window = null;
+    this.parts = null;
   }
 }
 

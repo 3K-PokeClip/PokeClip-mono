@@ -8,7 +8,8 @@ import type { PlaylistSegment } from './editorPlaylist';
 //
 // CloudFront 서명 쿠키로 받는다: 출입증을 받은 뒤에만 쿠키를 싣는다(mediaCredentials). 요청은 단순 GET 이라 프리플라이트가
 // 없다 — Range · 사용자 정의 머리를 싣지 않는다. CloudFront ExposeHeaders 가 비어 브라우저는 응답 머리를 보여 주지 않으므로
-// 상태 코드와 본문만 읽는다. 403 · 갱신 · 한 번 더는 녹화 창 받기(useEditorVideoPlayback 의 fetchRecordingWindow)와 같은 관례다.
+// 상태 코드와 본문만 읽는다. 403 · 갱신 · 한 번 더는 편집기 목록 받기(useEditorSource 의 fetchListText)와 같은 관례다.
+// 넘겨주기(redirect)는 따라가지 않는다 — 서명 쿠키를 실은 요청이 다른 주소로 가지 않게 하는 심층 방어다(보안 검수 e3 L2).
 // GAP 줄의 주소는 받지 않는다: 그 자리는 객체가 없다(편집기 목록 파서가 런을 GAP 에서 끊는다).
 
 /** 출입증을 새로 받고도 403 이다 — 다시 받을 길이 없다. seq 가 null 이면 init */
@@ -34,7 +35,8 @@ export interface WindowBytes {
 
 /**
  * 창 조각(한 런 · 한 MAP)의 init 과 조각 바이트. 조각은 넘긴 순서 그대로다. GAP 조각 · MAP 이 둘 이상 · 빈 목록이면 묻지
- * 않고 던진다. 한 요청이라도 실패하면 그 오류로 끝난다(SegmentForbiddenError · SegmentGoneError · 그 밖의 상태는 Error)
+ * 않고 던진다. 한 요청이라도 실패하면 그 오류로 끝난다(SegmentForbiddenError · SegmentGoneError · 그 밖의 상태는 Error).
+ * 아직 받는 나머지 요청은 여기서 끊지 않는다 — 부른 쪽이 signal 로 끊는다(fetchEditorWindow)
  */
 export async function fetchWindowBytes(
   mediaKey: string,
@@ -71,7 +73,7 @@ async function fetchBytes(
   seq: number | null,
   signal: AbortSignal | undefined,
 ): Promise<Uint8Array> {
-  const load = () => fetch(url, { signal, credentials: mediaCredentials() });
+  const load = () => fetch(url, { signal, credentials: mediaCredentials(), redirect: 'error' });
   let res = await load();
   // 403 이면 쿠키가 지워졌다(다른 탭 · 쿠키 한도 · 만료): 출입증을 버리고 다시 받아 한 번 더 부른다
   if (res.status === 403) {
