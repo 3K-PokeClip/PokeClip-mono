@@ -27,7 +27,7 @@ import {
   type UploadInfo,
   type UploadRequestSummary,
 } from '@/api/clipEditor';
-import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
+import { elapsedSinceStartMs, startOnAxisMs } from '@/features/broadcast/elapsedSinceStart';
 import { EditorBackLink } from '../EditorBackLink';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
@@ -287,6 +287,21 @@ function sourceLabelOf(
   );
   if (elapsed === null) return day;
   return `${day} · ${card ? '카드' : '구간'} ${formatClock(elapsed)}`;
+}
+
+/**
+ * 이번 방송 시작이 놓인 편집기 초 — 눈금 · 접힌 요약 · 손잡이 표기가 출처 줄과 같은 축(방송 시작부터)으로 적게 뺀다(kty 2026-11-14
+ * (가)). base 가 서버 기준점일 때만 옮긴다: 기준점이 없으면 base 가 이미 방송 시작(또는 vod 첫 PDT)이라 옮길 것이 없다
+ */
+function startOnAxisSecondsOf(
+  base: number,
+  startedAt: string,
+  timelineOriginAt: string | null | undefined,
+): number {
+  const startMs = startOnAxisMs(timelineOriginAt ? base : null, Date.parse(startedAt));
+  // 기준점이 시작보다 늦으면(첫 조각이 늦게 옴) 음수다 — 그대로 두어야 출처 줄(elapsedSinceStartMs)과 같은 경과가 된다. 시작 앞
+  // 0 자르기는 보이는 값에서 한다(secondsSinceStart)
+  return startMs === null ? 0 : startMs / 1000;
 }
 
 function dateLabel(iso: string): string {
@@ -828,6 +843,7 @@ function WiredStudioBody({
     return {
       clipTitle: card ? `점프카드 #${card.id}` : `편집본 #${saved?.id}`,
       sourceLabel: sourceLabelOf(startedAt, broadcast.timelineOriginAt, card, window.startMs),
+      startOnAxisSeconds: startOnAxisSecondsOf(base, startedAt, broadcast.timelineOriginAt),
       durationSeconds,
       minSeconds,
       range: initialRange,

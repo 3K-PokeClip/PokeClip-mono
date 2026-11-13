@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { elapsedSinceStartMs } from './elapsedSinceStart';
+import { elapsedSinceStartMs, startOnAxisMs } from './elapsedSinceStart';
 
 // 방송 안 시각 표기의 0초는 이번 방송 시작이다(POK-562). 카드 · 재생 위치의 ms는 서버 기준점 축이고, 그 기준점은 같은 송출 키로
 // 한 앞 방송들의 길이만큼 시작보다 앞설 수 있다(prod 실측 181시간)
@@ -26,5 +26,21 @@ describe('elapsedSinceStartMs — 이번 방송 시작부터 잰 경과', () => 
     // 읽지 못한 시각(Date.parse 의 NaN)도 모르는 것이다
     expect(elapsedSinceStartMs(42_000, Number.NaN, STARTED_AT)).toBeNull();
     expect(elapsedSinceStartMs(42_000, ORIGIN, Number.NaN)).toBeNull();
+  });
+});
+
+describe('startOnAxisMs — 기준점 축에서 이번 방송 시작의 자리', () => {
+  it('기준점이 시작보다 181시간 앞이면 그 자리는 181시간이다 — 축 값에서 빼면 elapsedSinceStartMs 와 같다', () => {
+    expect(startOnAxisMs(ORIGIN, STARTED_AT)).toBe(HOURS_181);
+    expect(HOURS_181 + 42_000 - startOnAxisMs(ORIGIN, STARTED_AT)!).toBe(
+      elapsedSinceStartMs(HOURS_181 + 42_000, ORIGIN, STARTED_AT),
+    );
+  });
+
+  it('기준점이나 시작을 모르면 null이다', () => {
+    expect(startOnAxisMs(null, STARTED_AT)).toBeNull();
+    expect(startOnAxisMs(ORIGIN, null)).toBeNull();
+    expect(startOnAxisMs(Number.NaN, STARTED_AT)).toBeNull();
+    expect(startOnAxisMs(ORIGIN, Number.NaN)).toBeNull();
   });
 });

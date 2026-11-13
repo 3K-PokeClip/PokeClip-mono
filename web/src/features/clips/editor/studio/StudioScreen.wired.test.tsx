@@ -1073,6 +1073,73 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     });
   });
 
+  // 눈금 · 접힌 요약 · 손잡이 표기도 출처 줄과 같은 축이다(kty 2026-11-14 (가)): 편집기 초는 기준점 축이라 그대로 찍으면 prod 에서
+  // 2분째 카드가 「254:06:11」 이었다. 보이는 0초만 방송 시작으로 옮기고 값(손잡이 값 · 저장 컷)은 그대로다
+  it('기준점이 방송 시작보다 254시간 앞서도 눈금 · 접힌 요약 · 손잡이 표기는 방송 시작부터다 — 값은 그대로다', async () => {
+    const ahead = 914_651_000;
+    server.origin = STARTED_AT - ahead;
+    server.cardWindow = { startMs: ahead + 120_000, endMs: ahead + 132_400 };
+    const user = userEvent.setup();
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
+
+    const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
+    expect(ticks.length).toBeGreaterThan(0);
+    expect(ticks.filter((tick) => !/^[12]:\d\d(\.\d)?$/.test(tick))).toEqual([]);
+    const start = screen.getByRole('slider', { name: '구간 시작점' });
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    expect(start).toHaveAttribute('aria-valuetext', '0:02:00.0 · 구간 12.4초');
+    expect(end).toHaveAttribute('aria-valuetext', '0:02:12.4 · 구간 12.4초');
+    // 손잡이 값은 편집기 축 그대로다 — 표기만 옮긴다
+    expect(start).toHaveAttribute('aria-valuenow', String((ahead + 120_000) / 1000));
+    await user.click(screen.getByRole('button', { name: '타임라인 접기' }));
+    expect(screen.getByText(/선택 구간/).textContent).toContain('2:00 – 2:12');
+
+    await user.click(save);
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 120_000,
+      outAtMs: STARTED_AT + 132_400,
+    });
+  });
+
+  it('기준점을 모르면 눈금 · 손잡이 표기는 편집기 초 그대로다 — 편집기 0초가 이미 방송 시작이다', async () => {
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    expect(screen.getByRole('slider', { name: '구간 시작점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:00.0 · 구간 12.4초',
+    );
+    const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
+    expect(ticks.length).toBeGreaterThan(0);
+    expect(ticks.filter((tick) => !/^[01]:\d\d(\.\d)?$/.test(tick))).toEqual([]);
+  });
+
+  it('기준점이 방송 시작보다 늦어도 눈금 · 접힌 요약 · 손잡이 표기는 출처 줄과 같은 경과다 — 32초 뒤로 옮긴다', async () => {
+    // 첫 조각이 방송 시작보다 32초 늦었다(POK-255) — 편집기 60초는 방송 시작부터 1:32 이다
+    server.origin = STARTED_AT + 32_000;
+    const user = userEvent.setup();
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    // 출처 줄은 카드 시각(창 시작 + 5초 = 편집기 65초)을 적는다 — 같은 축이면 65 + 32 = 1:37 이다
+    expect(screen.getByText(/방송 · 카드 1:37/)).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: '구간 시작점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:32.0 · 구간 12.4초',
+    );
+    expect(screen.getByRole('slider', { name: '구간 끝점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:44.4 · 구간 12.4초',
+    );
+    const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
+    // 창이 구간과 같아 첫 눈금 · 끝 눈금이 두 끝과 같다
+    expect(ticks[0]).toBe('1:32.0');
+    expect(ticks.at(-1)).toBe('1:44.4');
+    await user.click(screen.getByRole('button', { name: '타임라인 접기' }));
+    expect(screen.getByText(/선택 구간/).textContent).toContain('1:32 – 1:44');
+  });
+
   it('기준점을 모르면 출처 줄에 카드 시각을 싣지 않는다 — 방송 시작으로 대신 재지 않는다(POK-562)', async () => {
     await openCard(`stream=${STREAM_ID}&card=5`);
 

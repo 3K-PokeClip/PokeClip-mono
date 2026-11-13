@@ -15,6 +15,7 @@ import {
   rulerLabel,
   rulerTicks,
   secondsFromPointer,
+  secondsSinceStart,
   secondsToFraction,
   secondsToViewOffset,
   zoomedView,
@@ -153,6 +154,17 @@ describe('창 환산', () => {
     expect(rulerLabel(4907.25, 60)).toBe('1:21:47');
     expect(rulerLabel(4907.25, 2)).toBe('1:21:47.2');
     expect(rulerLabel(4907.99, 2)).toBe('1:21:47.9');
+  });
+
+  it('보이는 초는 편집기 초에서 방송 시작의 자리를 뺀 것이다: 기준점이 254시간 앞이면 2분째 카드가 2:00 이다', () => {
+    expect(secondsSinceStart(914_771, 914_651)).toBe(120);
+    expect(rulerLabel(secondsSinceStart(914_771, 914_651), 60)).toBe('2:00');
+    expect(secondsSinceStart(60, 0)).toBe(60);
+  });
+
+  it('방송 시작보다 앞선 편집기 초는 0초로 보인다 — 눈금에 음수 자리가 찍히지 않는다', () => {
+    expect(secondsSinceStart(914_600.5, 914_651)).toBe(0);
+    expect(rulerLabel(secondsSinceStart(914_600.5, 914_651), 2)).toBe('0:00.0');
   });
 
   it('15초 경계를 넘나들어도 같은 눈금의 초 자리가 안 바뀐다: 초 표기와 0.1초 표기가 같은 내림이다(로컬 리뷰 3라운드)', () => {

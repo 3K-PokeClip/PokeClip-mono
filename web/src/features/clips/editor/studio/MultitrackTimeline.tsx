@@ -21,6 +21,7 @@ import {
   rulerLabel,
   rulerTicks,
   secondsFromPointer,
+  secondsSinceStart,
   secondsToFraction,
   secondsToViewOffset,
   type TimelineView,
@@ -284,7 +285,9 @@ export function MultitrackTimeline({
           <span className={styles.timelineSummary}>
             선택 구간{' '}
             <b>
-              {formatUptime(state.range.startSeconds)} – {formatUptime(state.range.endSeconds)}
+              {formatUptime(secondsSinceStart(state.range.startSeconds, state.startOnAxisSeconds))}
+              {' – '}
+              {formatUptime(secondsSinceStart(state.range.endSeconds, state.startOnAxisSeconds))}
             </b>{' '}
             · {state.rangeLengthLabel}
           </span>
@@ -339,7 +342,10 @@ export function MultitrackTimeline({
           >
             {rulerTicks(state.view).map((tick) => (
               <span key={tick}>
-                {rulerLabel(tick, state.view.endSeconds - state.view.startSeconds)}
+                {rulerLabel(
+                  secondsSinceStart(tick, state.startOnAxisSeconds),
+                  state.view.endSeconds - state.view.startSeconds,
+                )}
               </span>
             ))}
           </div>

@@ -292,6 +292,14 @@ export function clampTimelineHeight(px: number, ceiling = MAX_TIMELINE_HEIGHT): 
   return Math.round(Math.max(MIN_TIMELINE_HEIGHT, Math.min(top, px)));
 }
 
+/**
+ * 사람에게 보이는 초 — 편집기 초(기준점 축)에서 방송 시작의 자리를 뺀다(POK-562 · kty 2026-11-14 (가)). 시작보다 앞선 자리는 0초다.
+ * 값(구간 · 끝점 · 저장)은 편집기 초 그대로이고 눈금 · 요약 · 손잡이 표기만 이것을 거친다
+ */
+export function secondsSinceStart(seconds: number, startOnAxisSeconds: number): number {
+  return Math.max(0, seconds - startOnAxisSeconds);
+}
+
 /** 눈금 글자. 창이 이보다 좁으면 0.1초까지 적는다(초만 적으면 같은 초가 되풀이된다) */
 const TENTHS_BELOW_SECONDS = 15;
 

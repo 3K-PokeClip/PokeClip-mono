@@ -93,6 +93,7 @@ import {
   formatRangeGauge,
   formatTimecodeTenths,
   rangeGaugeFraction,
+  secondsSinceStart,
   rangeLengthSeconds,
   clampTimelineHeight,
   zoomedView,
@@ -390,6 +391,11 @@ export interface EditorSource {
    * 편집기는 하이라이트 하나를 다듬는 자리다 — 핸들이 방송 전체를 돌아다니면 다른 장면을 자르게 된다.
    */
   minSeconds?: number;
+  /**
+   * 이번 방송 시작이 놓인 편집기 초 — 눈금 · 접힌 요약 · 손잡이 표기가 이것을 빼서 방송 시작부터 적는다(kty 2026-11-14 (가)).
+   * 편집기 0초가 서버 기준점이면 같은 송출 키로 한 앞 방송들의 길이만큼 크다(ADR-079). 없으면 0(편집기 0초가 곧 방송 시작)
+   */
+  startOnAxisSeconds?: number;
   /** 처음 구간(방송 시작 기준 초) */
   range: ClipRange;
   /** 처음 끝점과 그 셈의 문맥(편집기 0초 · ② 머리 캐시). 실제 영상 원천이 있을 때만 */
@@ -672,6 +678,8 @@ export interface ClipEditorMockState {
 
   // 타임라인 (보는 방식 — 되돌리기 대상 아님)
   sourceDurationSeconds: number;
+  /** 이번 방송 시작이 놓인 편집기 초. 눈금 · 요약은 이것을 빼서 적는다(EditorSource.startOnAxisSeconds) */
+  startOnAxisSeconds: number;
   /** 소스의 가로/세로. 크롭 사각형이 영상 위에 정확히 겹치려면 판이 이 비율이어야 한다 */
   sourceAspect: number;
   view: TimelineView;
@@ -1034,6 +1042,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const view = frozenView ?? liveView;
 
   const length = rangeLengthSeconds(recipe.range);
+  const startOnAxis = source.startOnAxisSeconds ?? 0;
   const titlesLocked = subtitleStatus !== 'ready';
 
   // 레이아웃을 바꾸면 영역 id 가 통째로 달라진다 — 없는 id 를 고른 채로 두면 아무것도 선택되지
@@ -1105,8 +1114,10 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
 
     range: recipe.range,
     rangeLengthSeconds: length,
-    rangeStartLabel: formatTimecodeTenths(recipe.range.startSeconds),
-    rangeEndLabel: formatTimecodeTenths(recipe.range.endSeconds),
+    rangeStartLabel: formatTimecodeTenths(
+      secondsSinceStart(recipe.range.startSeconds, startOnAxis),
+    ),
+    rangeEndLabel: formatTimecodeTenths(secondsSinceStart(recipe.range.endSeconds, startOnAxis)),
     rangeLengthLabel: formatLengthLabel(length),
     rangeGaugeLabel: formatRangeGauge(length),
     rangeGaugeFraction: rangeGaugeFraction(length),
@@ -1390,6 +1401,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 소스 길이의 정본은 목업 소스 하나다 — 구간 핸들 경계·타임라인 창도 같은 값을 본다.
     // 어댑터의 durationSeconds 는 어댑터 자신의 클램프용이라, 실제 소스가 오기 전엔 여기로 안 끌어온다
     sourceDurationSeconds: source.durationSeconds,
+    startOnAxisSeconds: startOnAxis,
     sourceAspect: MOCK_SOURCE.width / MOCK_SOURCE.height,
     view,
     activeTool,
