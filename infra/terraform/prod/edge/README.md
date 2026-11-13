@@ -142,8 +142,9 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
     핀을 확인하고 c0 창에서 머지한 뒤, 그 머지 커밋으로 빌드한 묶음과 같은
     커밋 체크아웃의 plan 으로 판 7 과 c0 를 한 번에 교체합니다. 청소기 보관
     유예 23시간(V1 임시)은 c0 에서 그대로 둡니다 — 상자 녹화(`/playback`)를
-    읽는 웹 경로가 모두 prod 에서 빠진 뒤 별도 걸음으로 되돌립니다(kty
-    2026-11-13)
+    읽는 웹 경로(편집기 = POK-473 · 녹화 보기 · 지난 방송 목록 · 녹화
+    재생기 = POK-547 · 568)가 모두 prod 에서 빠진 뒤 별도 걸음으로
+    되돌립니다(kty 2026-11-13)
     ([media README](../../../../media/README.md) 「M4 ⓒ 에서 M5/M6 로 넘긴
     것」 ·
     [media-swap 런북 「PDT 배포 순서」](../../runbooks/media-swap.md#pdt-배포-순서)).
