@@ -319,6 +319,9 @@ describe('소리 주소 응답의 끝 소리 확보 상태 읽기(readAudioCaptu
     ['seq 문자열', { seq: '3', startAtMs: 1792713614000, durationMs: 4000, url: '<URL>' }],
     ['시작 NaN', { seq: 3, startAtMs: Number.NaN, durationMs: 4000, url: '<URL>' }],
     ['길이 Infinity', { seq: 3, startAtMs: 1792713614000, durationMs: Infinity, url: '<URL>' }],
+    ['seq 소수', { seq: 3.5, startAtMs: 1792713614000, durationMs: 4000, url: '<URL>' }],
+    ['길이 0', { seq: 3, startAtMs: 1792713614000, durationMs: 0, url: '<URL>' }],
+    ['길이 음수', { seq: 3, startAtMs: 1792713614000, durationMs: -1, url: '<URL>' }],
   ])('attached 인데 확보 조각(%s)을 못 읽으면 확보 없음으로 친다', (_label, segment) => {
     const access = { audioCapture: 'attached', audioCaptureSegment: segment as unknown };
 

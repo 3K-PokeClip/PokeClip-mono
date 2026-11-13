@@ -449,8 +449,8 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       if (stopped) return;
       setCards((prev) => {
         let next: Record<number, Snapshot> | null = null;
-        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277). 플레이어용 PDT 도 통로에
-        // 실리는지 모른다(POK-196): 칸 없이 오면 목록이 준 값을 지킨다
+        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277). 플레이어용 PDT 는 통로에도
+        // 실린다(POK-196 — clip 이 장면을 붙인 판을 내보낸다). 칸을 모르는 옛 clip 이라 칸 없이 오면 목록이 준 값을 지킨다
         for (const c of list) {
           if (isStale(prev[c.id], c)) continue;
           const value = fromStream

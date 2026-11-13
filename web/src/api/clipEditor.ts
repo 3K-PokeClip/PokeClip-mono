@@ -50,11 +50,14 @@ export interface JumpCard {
   hidden?: boolean;
   /** 카드 시점 장면 사진(POK-277). 목록 문만 싣는다. 통로(SSE)로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
-  /** 카드 시점의 플레이어용 PDT(POK-196). 장면이 없으면 null, 옛 서버면 빠져 온다. 읽기는 readPlayerAtMs(cardPositions.ts) */
+  /**
+   * 카드 시점의 플레이어용 PDT(POK-196). 서버가 못 정하면(장면 없음 · 장면 행 PDT 빈 칸 · 장면 조회 실패) null, 옛 서버면
+   * 빠져 온다. 읽기는 readPlayerAtMs(cardPositions.ts)
+   */
   playerAtMs?: number | null;
   /**
-   * 창 두 끝의 플레이어용 PDT(POK-196). 카드 장면이 없거나 창 끝 장면 · PDT 가 없으면 null, 옛 서버면 빠져 온다.
-   * 읽기는 readPlayerWindow(cardPositions.ts)
+   * 창 두 끝의 플레이어용 PDT(POK-196). playerAtMs 가 null 이거나 창 끝 하나라도 같은 까닭으로 못 정하면 null, 옛 서버면
+   * 빠져 온다. 읽기는 readPlayerWindow(cardPositions.ts)
    */
   playerWindow?: { startMs: number; endMs: number } | null;
   createdAt: string;
@@ -124,19 +127,6 @@ export function platformLabel(code: string | null | undefined): string | null {
 /** 영상 주소(라이브 LL-HLS·녹화 재생)를 만드는 키. 방송을 가리키는 번호(API 경로·자격)에는 쓰지 않는다 */
 export function mediaStreamId(row: Pick<BroadcastRow, 'streamId' | 'ingestStreamId'>): string {
   return row.ingestStreamId || row.streamId;
-}
-
-/**
- * 카드·조각 ms의 0초가 되는 절대 시각(epoch ms). 서버 기준점이 정본이고(렌더가 자르는 축과 같다), 없으면 녹화 재생 서버의
- * 첫 구간, 그것도 없으면 방송 시작 시각으로 대신한다
- */
-export function timelineBaseMs(
-  row: Pick<BroadcastRow, 'startedAt' | 'timelineOriginAt'>,
-  recordingStartMs: number | null = null,
-): number {
-  if (row.timelineOriginAt) return Date.parse(row.timelineOriginAt);
-  if (recordingStartMs !== null) return recordingStartMs;
-  return Date.parse(row.startedAt!);
 }
 
 export interface SegmentIndex {
@@ -324,17 +314,16 @@ async function findBroadcast(streamId: string): Promise<BroadcastRow | null> {
  * 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. 다른 화면이 이미 읽은 줄이면 네트워크 없이
  * 답한다(끝난 줄 5분 · 그 밖 20초). 같은 방송을 동시에 물으면 목록 걷기는 하나다.
  * @param signal 이 호출만 기다림을 접는다. 걷기 자체는 같이 기다리는 쪽이 있어 끝까지 가고 읽은 줄은 기억된다
- * @param fresh 기억해 둔 줄을 건너뛰고 다시 읽는다: 상태가 바뀌었는지 보는 호출(방송 시계의 주기). 함수면 기억해 둔 줄이 그 조건에
- *   맞을 때만 다시 읽는다(카드 저장: 기준점 없는 줄만)
+ * @param fresh 기억해 둔 줄을 건너뛰고 다시 읽는다: 상태가 바뀌었는지 보는 호출(방송 시계의 주기)
  */
 export function fetchBroadcast(
   streamId: string,
   signal?: AbortSignal,
-  { fresh = false }: { fresh?: boolean | ((remembered: BroadcastRow) => boolean) } = {},
+  { fresh = false }: { fresh?: boolean } = {},
 ): Promise<BroadcastRow | null> {
-  if (fresh !== true) {
+  if (!fresh) {
     const known = rememberedRow(streamId);
-    if (known !== null && (fresh === false || !fresh(known))) return Promise.resolve(known);
+    if (known !== null) return Promise.resolve(known);
   }
   let lookup = rowLookups.get(streamId);
   if (lookup === undefined) {
@@ -866,7 +855,10 @@ export interface SegmentAudioAccess {
   segments: { seq: number; startAtMs: number; durationMs: number; url: string }[];
   /** 끝 소리 확보 상태(POK-196). 옛 서버면 빠져 온다. 읽기는 readAudioCapture(cardPositions.ts) */
   audioCapture?: 'attached' | 'not_ready' | 'skipped';
-  /** 확보 조각(컷 끝 바로 뒤 조각 · segments 에 섞지 않는다). audioCapture 가 attached 일 때만 실린다 */
+  /**
+   * 확보 조각(컷 끝 바로 뒤 조각 · segments 에 섞지 않는다). audioCapture 가 attached 일 때만 실린다. startAtMs 는 확보 판정
+   * 축(ms 내림)이라 segments 의 같은 seq 와 1ms 다를 수 있다 — 자리는 seq 로 찾는다
+   */
   audioCaptureSegment?: SegmentAudioAccess['segments'][number];
 }
 

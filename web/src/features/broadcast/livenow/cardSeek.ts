@@ -31,7 +31,8 @@ export function pendingStartSeconds(
 }
 
 /**
- * 같은 카드의 새 판이 플레이어용 PDT 칸 없이 왔으면(통로 · 마크 답) 앞 판의 값을 지킨다. null 은 장면이 없다는 서버 답이라 받는다
+ * 같은 카드의 새 판이 플레이어용 PDT 칸 없이 왔으면(칸을 모르는 옛 clip 의 통로 · 마크 답) 앞 판의 값을 지킨다. 지금 clip 은
+ * 통로 · 마크 답에도 칸을 싣는다. null 은 서버가 값을 못 정했다는 답(cardPositions.ts 머리 주석의 세 까닭)이라 받는다
  */
 export function keepKnownPlayerAtMs<T extends { playerAtMs?: unknown }>(
   prev: T | undefined,
