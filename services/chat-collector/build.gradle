@@ -46,6 +46,9 @@ dependencies {
     implementation 'org.flywaydb:flyway-database-postgresql'
 
     runtimeOnly 'org.postgresql:postgresql'
+    // 판 2 후보 조회 하나만 서버 준비 문장을 끈다(SegmentLedger.floorByPlaybackPdt — PGStatement.setPrepareThreshold).
+    // 드라이버 판은 위 runtimeOnly 와 같은 BOM 판이다.
+    compileOnly 'org.postgresql:postgresql'
 
     // SOOP 채팅(POK-397 PR4). SOOP은 채팅을 브라우저 JavaScript SDK로만 준다(ADR-105). 화면 없는 Chromium에서 공식 SDK를 돌린다.
     // 브라우저 실행 파일은 이미지에 미리 굽고 실행 중에는 내려받지 않는다(Dockerfile의 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).

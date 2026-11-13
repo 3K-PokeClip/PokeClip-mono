@@ -1,8 +1,10 @@
 package com.pokeclip.chat.collector.sync;
 
+import org.postgresql.PGStatement;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -94,11 +96,12 @@ public class SegmentLedger {
      * 그렇다(시험 4,241 버퍼 — 판 2 행 0 스트림 {@code idx-legacy-only}). 판 2 행이 없는 표에서는 3 버퍼다. 그래서 prod
      * 적용은 판 2 쓰기 스위치 전 조건이다(POK-551 운영 SQL 과 한 재실행). 제품 DDL 은 fc7dd91c 에 있다 — 이 브랜치(develop 5ad61a0c 기준) 코드에는 없다.
      *
-     * <p><b>답이 있고 그 뒤 판 2 행이 많은 시각의 비용은 받아들인 것이다(kty 2026-11-13 중간 t 결정).</b> 본 조회가 seq
-     * 역순으로 그 행들을 지나야 답에 닿는다. 최악은 첫 판 2 PDT 바로 뒤 — 그 스트림 판 2 행 거의 전부다(판 2 30만 행 · 첫
-     * PDT + 1ms · 일반 계획 실측 7,249 버퍼 · 약 82ms. t 를 아는 계획은 8 버퍼. 중간 시각은 3,629 버퍼 · 생산자 리뷰 실측
-     * 5,923 버퍼 · 약 32ms). 이 최악도 그 결정의 범위다 — 호출자는 판별기가 카드당 1회이고 시각은 보통 라이브 머리라 꼬리 몇
-     * 행이다.
+     * <p><b>첫 판 2 PDT 바로 뒤 시각은 이 조회가 서버 준비 문장을 쓰지 않아(kty 2026-11-13 L3 (나) ·
+     * {@link #floorByPlaybackPdt}) 매번 사용자 지정 계획이다</b> — 판 2 30만 행 · 첫 PDT + 1ms 시험 8 버퍼. 일반 계획이었다면
+     * 그 스트림 판 2 행 거의 전부를 읽었다(같은 시험 7,249 버퍼 · 51–141ms(5회)). <b>답이 있고 그 뒤 판 2 행이 많은 중간
+     * 시각의 비용은 받아들인 것이다(kty 2026-11-13 중간 t 결정 그대로)</b> — 본 조회가 seq 역순으로 그 행들을 지나야 답에
+     * 닿는다(시험 3,629 버퍼 · 생산자 리뷰 실측 5,923 버퍼 · 약 32ms). 호출자는 판별기가 카드당 1회이고 시각은 보통 라이브
+     * 머리라 꼬리 몇 행이다.
      *
      * <p>파라미터 순서는 (streamId, t, streamId, t)다.
      */
@@ -142,11 +145,26 @@ public class SegmentLedger {
         return found.stream().findFirst();
     }
 
-    /** @return 판 2 행 가운데 {@code playback_pdt}가 {@code t} 이하인 seq 최대 조각. 그런 조각이 없으면 빈손 */
+    /**
+     * @return 판 2 행 가운데 {@code playback_pdt}가 {@code t} 이하인 seq 최대 조각. 그런 조각이 없으면 빈손
+     *
+     * <p><b>이 조회만 서버 준비 문장을 쓰지 않는다</b>(kty 2026-11-13 L3 (나)). 드라이버는 같은 문장을 다섯 번째 실행부터 이름
+     * 붙은 서버 준비 문장으로 올리고, 그러면 PG 가 t 값을 모르는 일반 계획을 쓸 수 있다 — 첫 판 2 PDT 바로 뒤 시각에서 그
+     * 계획은 그 스트림 판 2 행 거의 전부를 읽는다({@code SegmentLedgerIndexTest} 기록 7,249 버퍼). 문장의 문턱을 0 으로 두면
+     * 늘 이름 없는 문장이라 매번 바인딩 값으로 계획을 세운다(같은 기록 8 버퍼). 연결 · 데이터소스 설정은 건드리지 않는다 —
+     * 다른 조회는 그대로다.
+     */
     public Optional<LedgerSegment> floorByPlaybackPdt(String streamId, Instant t) {
         Timestamp at = Timestamp.from(t);
-        List<LedgerSegment> found = jdbc.query(FLOOR_BY_PLAYBACK_PDT, SegmentLedger::toSegment,
-                streamId, at, streamId, at);
+        List<LedgerSegment> found = jdbc.query(con -> {
+            PreparedStatement statement = con.prepareStatement(FLOOR_BY_PLAYBACK_PDT);
+            statement.unwrap(PGStatement.class).setPrepareThreshold(0);
+            statement.setString(1, streamId);
+            statement.setTimestamp(2, at);
+            statement.setString(3, streamId);
+            statement.setTimestamp(4, at);
+            return statement;
+        }, SegmentLedger::toSegment);
         return found.stream().findFirst();
     }
 

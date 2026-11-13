@@ -158,7 +158,8 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
         long v2TailGeneric = v2FloorGeneric(V2_ONLY, tail, "있음 · 일반 계획");
         // 기록만 — 중간 시각(답이 있고 그 뒤 판 2 행이 15만). 본 조회가 seq 역순으로 그 행들을 지난다 — kty 2026-11-13 중간 t
         // 결정으로 수용(호출자는 카드당 1회 · 시각은 보통 라이브 머리). 생산자 리뷰 실측 30만 행 5,923 버퍼 · 약 32ms 와 견준다.
-        // 최악은 아래 첫 PDT + 1ms(그 스트림 판 2 행 거의 전부 — 2026-11-13 일반 계획 7,249 버퍼 · 약 82ms)이고 같은 수용 범위다.
+        // 아래 첫 PDT + 1ms 는 일반 계획이면 그 스트림 판 2 행 거의 전부(7,249 버퍼 · 51–141ms(5회))다. 앱의 이 조회는 서버 준비
+        // 문장을 쓰지 않아(kty 2026-11-13 L3 (나) · SegmentLedgerPrepareTest) 매번 사용자 지정 계획(8 버퍼)이다.
         v2Floor(V2_ONLY, T0.plusMillis((long) (ROWS / 2) * SEGMENT_MS), "있음 · 중간 시각");
         // 기록만(보안 L3) — 최악의 시각: 첫 판 2 PDT 바로 뒤. 답이 첫 행이라 본 조회가 그 스트림 판 2 행 거의 전부를 지난다.
         v2Floor(V2_ONLY, T0.plusMillis(1), "있음 · 첫 PDT + 1ms");
