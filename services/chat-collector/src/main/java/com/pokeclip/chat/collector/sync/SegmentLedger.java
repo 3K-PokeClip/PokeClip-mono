@@ -79,13 +79,26 @@ public class SegmentLedger {
      * 판 2 PDT도 스트림에서 단조가 아니다(회차 첫 행에서 뒤로 갈 수 있고 장 경계에서 1초 미만 겹친다). 뒤 seq가 t의 실제
      * 방송이고 겹친 시각의 나중 조각이다(경계 표 B8). 벽시각 역행 거르기에 해당하는 검사는 두지 않는다.
      *
-     * <p>생산자의 부분 색인 {@code stream_segments_v2_seq_idx}({@code (stream_id, seq) WHERE timing_version = 2})를 seq 역순으로
-     * 타 꼬리 몇 행에서 끝난다.
+     * <p><b>비용 — 「있나」 를 먼저 묻고 「어느 행」 을 묻는다.</b> 꼬리 시각이면 생산자 부분 색인
+     * {@code stream_segments_v2_seq_idx}({@code (stream_id, seq) WHERE timing_version = 2})를 seq 역순으로 타 꼬리 몇 행에서
+     * 끝난다. 그 스트림의 판 2 행보다 이른 시각이면 seq 역순 훑기는 그 스트림 판 2 행을 끝까지 읽는다(판 2 30만 행에서 7,246
+     * 버퍼 — 보안 L2). 그래서 「그 스트림 판 2 행의 최소 PDT ≤ t」 를 먼저 본다 — 「PDT ≤ t 인 판 2 행이 있다」 와 같은
+     * 뜻이고(판 2 행이 없으면 최솟값이 NULL 이라 거짓), 거짓이면 본 조회를 건너뛴다. 최솟값은 생산자 판 2 PDT 색인
+     * {@code stream_segments_v2_pdt_idx}({@code (stream_id, playback_pdt DESC) WHERE timing_version = 2} — pdt-main
+     * 확정 · 생산자 후속 PR 이 낸다)의 한쪽 끝 한 항목이라, 플래너가 t 를 모르는 일반 계획(같은 문장을 되풀이한 서버 준비 문장)에서도
+     * 꼬리 몇 행이다. {@code EXISTS(… playback_pdt <= ?)} 꼴은 플래너가 첫 행만 찾으면 된다고 보고 표 전체 Seq Scan 을
+     * 골랐다(2026-11-13 실측 12,668 버퍼). 확인은 본 조회와 같은 조건이라 답은 그대로다.
+     *
+     * <p>색인이 없는 DB(생산자 적용 전)에서도 답은 같고 이른 시각만 느리다. prod 적용은 판 2 쓰기 스위치 전 조건이다.
+     *
+     * <p>파라미터 순서는 (streamId, t, streamId, t)다.
      */
     static final String FLOOR_BY_PLAYBACK_PDT = """
             SELECT seq, start_pts_ms, start_wall_utc, playback_pdt, timing_version, duration_ms, is_discontinuity
               FROM public.stream_segments
              WHERE stream_id = ? AND timing_version = 2 AND playback_pdt <= ?
+               AND (SELECT min(e.playback_pdt) FROM public.stream_segments e
+                     WHERE e.stream_id = ? AND e.timing_version = 2) <= ?
              ORDER BY seq DESC
              LIMIT 1
             """;
@@ -122,8 +135,9 @@ public class SegmentLedger {
 
     /** @return 판 2 행 가운데 {@code playback_pdt}가 {@code t} 이하인 seq 최대 조각. 그런 조각이 없으면 빈손 */
     public Optional<LedgerSegment> floorByPlaybackPdt(String streamId, Instant t) {
+        Timestamp at = Timestamp.from(t);
         List<LedgerSegment> found = jdbc.query(FLOOR_BY_PLAYBACK_PDT, SegmentLedger::toSegment,
-                streamId, Timestamp.from(t));
+                streamId, at, streamId, at);
         return found.stream().findFirst();
     }
 
