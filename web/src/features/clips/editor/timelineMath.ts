@@ -321,3 +321,28 @@ export function rulerTicks(view: TimelineView, count = 6): number[] {
     roundMs(view.startSeconds + (span * i) / (count - 1)),
   );
 }
+
+export interface RulerMark {
+  /** 눈금 자리(편집기 초) */
+  seconds: number;
+  /** 눈금 글자. 방송 시작보다 앞선 눈금은 빈 글자다 */
+  label: string;
+}
+
+/**
+ * 눈금 자리와 글자. 자리는 rulerTicks 의 균등 분할 그대로이고 글자는 방송 시작부터 잰다(secondsSinceStart).
+ * 시작보다 앞선 눈금은 글자를 비운다 — 그 자리에 적을 경과가 없어 모두 「0:00」 으로 겹쳐 찍혔다.
+ * 창이 통째로 시작 앞이면 첫 눈금에만 「0:00」 을 적어 눈금자가 비지 않게 한다
+ */
+export function rulerMarks(view: TimelineView, startOnAxisSeconds: number, count = 6): RulerMark[] {
+  const span = view.endSeconds - view.startSeconds;
+  const ticks = rulerTicks(view, count);
+  const allBeforeStart = ticks.every((tick) => tick < startOnAxisSeconds);
+  return ticks.map((tick, i) => {
+    const blank = tick < startOnAxisSeconds && !(allBeforeStart && i === 0);
+    return {
+      seconds: tick,
+      label: blank ? '' : rulerLabel(secondsSinceStart(tick, startOnAxisSeconds), span),
+    };
+  });
+}

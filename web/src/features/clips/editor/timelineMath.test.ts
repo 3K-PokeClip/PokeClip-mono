@@ -13,6 +13,7 @@ import {
   rangeLengthSeconds,
   resolveRangeEdge,
   rulerLabel,
+  rulerMarks,
   rulerTicks,
   secondsFromPointer,
   secondsSinceStart,
@@ -165,6 +166,31 @@ describe('창 환산', () => {
   it('방송 시작보다 앞선 편집기 초는 0초로 보인다 — 눈금에 음수 자리가 찍히지 않는다', () => {
     expect(secondsSinceStart(914_600.5, 914_651)).toBe(0);
     expect(rulerLabel(secondsSinceStart(914_600.5, 914_651), 2)).toBe('0:00.0');
+  });
+
+  it('방송 시작보다 앞선 눈금은 글자를 비운다 — 여러 눈금이 모두 0:00 으로 겹치지 않고 자리는 균등 분할 그대로다', () => {
+    const marks = rulerMarks({ startSeconds: 914_600, endSeconds: 914_675 }, 914_651.37);
+    expect(marks.map((mark) => mark.seconds)).toEqual(
+      rulerTicks({ startSeconds: 914_600, endSeconds: 914_675 }),
+    );
+    expect(marks.map((mark) => mark.label)).toEqual(['', '', '', '', '0:08', '0:23']);
+  });
+
+  it('방송 시작과 같은 자리의 눈금은 0:00 을 적는다 — 비우는 것은 시작보다 앞선 눈금뿐이다', () => {
+    const marks = rulerMarks({ startSeconds: 100, endSeconds: 175 }, 115);
+    expect(marks.map((mark) => mark.label)).toEqual(['', '0:00', '0:15', '0:30', '0:45', '1:00']);
+  });
+
+  it('창이 통째로 방송 시작 앞이면 첫 눈금에만 0:00 을 적는다 — 눈금자가 비지 않는다', () => {
+    const marks = rulerMarks({ startSeconds: 100, endSeconds: 175 }, 914_651.37);
+    expect(marks.map((mark) => mark.label)).toEqual(['0:00', '', '', '', '', '']);
+  });
+
+  it('방송 시작이 편집기 0초면 눈금 글자는 지금과 같다 — 모든 눈금에 적는다', () => {
+    const view = { startSeconds: 4900, endSeconds: 4975 };
+    expect(rulerMarks(view, 0).map((mark) => mark.label)).toEqual(
+      rulerTicks(view).map((tick) => rulerLabel(tick, 75)),
+    );
   });
 
   it('15초 경계를 넘나들어도 같은 눈금의 초 자리가 안 바뀐다: 초 표기와 0.1초 표기가 같은 내림이다(로컬 리뷰 3라운드)', () => {

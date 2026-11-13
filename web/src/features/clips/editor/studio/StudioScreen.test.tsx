@@ -531,6 +531,24 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('button', { name: '타임라인 축소' })).toBeEnabled();
   });
 
+  it('방송 시작이 창 가운데 있으면 그 앞 눈금은 글자 없이 자리만 남는다 — 0:00 이 여러 번 찍히지 않는다', () => {
+    const { playback } = movingPlayback(130, 400);
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        durationSeconds: 400,
+        range: { startSeconds: 100, endSeconds: 160 },
+        startOnAxisSeconds: 130.37,
+      },
+      playback,
+    });
+
+    // 100% 창 = 92.5–167.5초 — 앞 세 눈금이 방송 시작(130.37초) 앞이다
+    const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent);
+    expect(ticks).toEqual(['', '', '', '0:07', '0:22', '0:37']);
+  });
+
   it('키운 채 끄는 동안은 창을 붙잡는다: 재생 위치가 창 밖으로 가도 끄던 자리 밑에서 창이 안 넘어간다(로컬 리뷰 2라운드)', async () => {
     const user = userEvent.setup();
     // 재생 위치를 바깥에서 바꾸는 재생기(실제 재생기처럼 seekTo가 위치를 옮긴다)

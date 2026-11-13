@@ -18,8 +18,7 @@ import {
   MAX_RANGE_SECONDS,
   MAX_RANGE_TEXT,
   MIN_RANGE_SECONDS,
-  rulerLabel,
-  rulerTicks,
+  rulerMarks,
   secondsFromPointer,
   secondsSinceStart,
   secondsToFraction,
@@ -340,13 +339,8 @@ export function MultitrackTimeline({
             onPointerCancel={onScrubPointerUp}
             onLostPointerCapture={onScrubPointerUp}
           >
-            {rulerTicks(state.view).map((tick) => (
-              <span key={tick}>
-                {rulerLabel(
-                  secondsSinceStart(tick, state.startOnAxisSeconds),
-                  state.view.endSeconds - state.view.startSeconds,
-                )}
-              </span>
+            {rulerMarks(state.view, state.startOnAxisSeconds).map((mark) => (
+              <span key={mark.seconds}>{mark.label}</span>
             ))}
           </div>
 
