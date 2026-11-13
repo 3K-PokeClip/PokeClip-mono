@@ -330,7 +330,8 @@ func TestExpiryPreflightDiagnosticsSameWithV2Rows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := newTestPool(t)
 			ovPut(t, pool, stream,
-				ovSession{id: "A", round: "R", vod: "frozen", key: docKey(stream, "A"), first: 0, last: 2},
+				// A 는 래치 전 판 NULL 회차 Q 다 — 판은 회차를 이어 물려받아 한 회차 안에 판이 섞이지 않는다.
+				ovSession{id: "A", round: "Q", vod: "frozen", key: docKey(stream, "A"), first: 0, last: 2},
 				ovSession{id: "B", round: "R", vod: "frozen", key: docKey(stream, "B"), first: 3, last: 5, at: 1},
 				ovSession{id: "U", round: "U", state: "ending", vod: "freezing", at: 2})
 			ovSeg(t, pool, stream, "A", 0, 1, 2)
