@@ -163,11 +163,16 @@ export function followVideo(
     cancelSettle();
     player.stop();
   };
+  // 배속 바꿈: 새 배속으로 바로 걸고, 영상이 새 배속에 자리 잡는 동안 뒤처지는 몫(문턱 안 51–66ms)이 그 구간 내내 남지 않게
+  // 재생 시작처럼 한 번 더 건다(리뷰 M6 2차 cp1). 멈춤 동안은 sync 가 켜지 않고 다시 맞출 것도 무장하지 않는다
+  const rerate = () => {
+    sync();
+    if (flowing() && !stalled) armSettle(clock.mark());
+  };
   const startEvents = ['playing', 'seeked'] as const;
   const haltEvents = ['pause', 'ended', 'waiting', 'seeking'] as const;
   for (const name of startEvents) video.addEventListener(name, start);
-  // 배속 바꿈은 흐르는 시계 위라 다시 걸기만 한다(멈춤 동안은 sync 가 켜지 않는다)
-  video.addEventListener('ratechange', sync);
+  video.addEventListener('ratechange', rerate);
   for (const name of haltEvents) video.addEventListener(name, halt);
 
   // 영상이 버벅이거나(버퍼링) 시계가 서로 조금씩 밀리면 소리가 앞서 간다: 주기적으로 재서 맞춘다
@@ -202,7 +207,7 @@ export function followVideo(
 
   return () => {
     for (const name of startEvents) video.removeEventListener(name, start);
-    video.removeEventListener('ratechange', sync);
+    video.removeEventListener('ratechange', rerate);
     for (const name of haltEvents) video.removeEventListener(name, halt);
     clearInterval(timer);
     cancelSettle();

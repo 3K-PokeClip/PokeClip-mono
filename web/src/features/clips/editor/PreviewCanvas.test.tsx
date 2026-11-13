@@ -50,6 +50,25 @@ describe('PreviewCanvas 트랙별 미리 듣기 안내', () => {
     expect(queryByText(/트랙별 미리 듣기를 못 불러왔어요/)).toBeNull();
   });
 
+  // 리뷰(mem2 cx M): 창을 바꾸면 옛 파형이 남은 채 새 창 소리를 받는다 — 음량을 바꿔 둔 편집본은 그동안 무음이라 안내가 없으면
+  // 고장처럼 보였다(kty 결정 ④ 「잠깐 무음 · 기다림 표시」)
+  it('트랙 소리를 불러오는 중이면 그렇게 알린다', () => {
+    const { getByText } = render(
+      <PreviewCanvas state={state({ trackPreviewStatus: 'loading' })} />,
+    );
+    expect(getByText('트랙 소리를 불러오는 중이에요')).toHaveAttribute('role', 'status');
+  });
+
+  it('다 불렀거나 받을 소리가 없으면 불러오는 중으로 알리지 않는다', () => {
+    for (const status of ['ready', 'idle', 'waiting', 'unavailable', null] as const) {
+      const { queryByText, unmount } = render(
+        <PreviewCanvas state={state({ trackPreviewStatus: status })} />,
+      );
+      expect(queryByText('트랙 소리를 불러오는 중이에요'), String(status)).toBeNull();
+      unmount();
+    }
+  });
+
   it('불러오는 중 · 다 불렀으면 기다림으로 알리지 않는다', () => {
     for (const status of ['loading', 'ready'] as const) {
       const { queryByText, unmount } = render(

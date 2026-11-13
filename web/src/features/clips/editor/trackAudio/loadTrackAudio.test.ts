@@ -465,7 +465,7 @@ describe('loadTrackAudio — 창 Blob 시각 배치', () => {
 
 /**
  * 풀린 소리를 seconds 만큼 줄여 돌려주는 풀기 — 브라우저 decodeAudioData(ADTS)가 머리 표본을 버리는 것을 흉내 낸다. 음수면
- * 기대보다 길다(꼬리 · SBR 두 배 빈도 등)
+ * 기대보다 길다(SBR 은 빈도 · 표본 수가 함께 두 배라 길이가 같아 이 꼴이 아니다)
  */
 function trimmingDecode(seconds: number) {
   return vi.fn(async (adts: Uint8Array) => {
@@ -500,7 +500,7 @@ describe('loadTrackAudio — 풀기가 버린 머리만큼 시작을 뒤로 민�
     expect(tracks[0]![0]!.startSeconds).toBeCloseTo(2 + FRAME_32K, 9);
   });
 
-  it('기대보다 길게 풀리면 시작을 그대로 둔다: 머리를 버린 근거가 없다(꼬리 · SBR)', async () => {
+  it('기대보다 길게 풀리면 시작을 그대로 둔다: 머리를 버린 근거가 없다', async () => {
     useSynthetic({ 1: { videoDts: 0, tracks: [{ ...FOUR_SECONDS_32K, firstPts: 0 }] } });
     const src = { ...source(access(BASE), anchorsOf(2)), decode: trimmingDecode(-4) };
 
@@ -1008,9 +1008,9 @@ describe('loadTrackAudio — 빠진 행 · 확보 상태', () => {
     expect(firstHeard(load.tracks[0]!, 9)).toBeNull();
   });
 
-  it('창 조각 소리를 못 풀면 확보와 무관하게 실패다: 확보를 빼고 다시 해도 못 풀면 던진다', async () => {
+  it('창 조각 소리를 못 풀면 확보와 무관하게 실패다: 확보를 빼고 다시 해도 못 풀면 던지고 확보 탓으로 경고하지 않는다', async () => {
     useSynthetic({ 1: FOUR(), 2: FOUR(), 9: FOUR() });
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const src = {
       ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
       captureAnchor: vi.fn(() => Promise.resolve(8)),
@@ -1018,6 +1018,22 @@ describe('loadTrackAudio — 빠진 행 · 확보 상태', () => {
     src.decode.mockRejectedValue(new DOMException('Unable to decode audio data', 'EncodingError'));
 
     await expect(loadTrackAudio(src, [1, 2])).rejects.toThrow('Unable to decode audio data');
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('확보'))).toEqual([]);
+  });
+
+  it('확보 소리 탓으로 못 풀었을 때만 확보를 비운다고 경고한다', async () => {
+    useSynthetic({ 1: FOUR(), 2: FOUR(), 9: FOUR() });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const src = {
+      ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+      captureAnchor: vi.fn(() => Promise.resolve(8)),
+    };
+    src.decode.mockImplementation(rejectCaptureFrames);
+
+    await loadTrackAudio(src, [1, 2]);
+
+    const capture = warn.mock.calls.filter(([message]) => String(message).includes('확보'));
+    expect(capture).toHaveLength(1);
   });
 });
 
@@ -1108,6 +1124,104 @@ describe('loadTrackAudio — 다시 받기(previous): 행이 같으면 내려받
     expect(again.capture).toBe('none');
     expect(again.tracks).toBe(first.tracks);
     expect(again.reuse.capture).toBeNull();
+  });
+});
+
+describe('loadTrackAudio — 다시 받기(previous): 포기한 조각은 고리 동안 다시 받지 않는다', () => {
+  beforeEach(() => {
+    useSynthetic({ 1: FOUR(), 2: FOUR(), 3: { videoDts: 0, tracks: [] }, 9: FOUR() });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 확보 seq 9 를 attached 로 싣고 확보 닻을 at 으로 답하는 받기 */
+  const capturing = (at: () => Promise<number | 'wait' | null>) => ({
+    ...source(withCapture(accessOf([1, 2]), 'attached', 9), BLOB_ANCHORS),
+    captureAnchor: vi.fn(at),
+  });
+
+  it('확보 조각 받기가 실패했으면 다음 차례는 확보 닻을 묻지도 확보 조각을 받지도 않는다', async () => {
+    const src = capturing(() => Promise.resolve(8));
+    const fetchBytes = src.fetchBytes.getMockImplementation()!;
+    src.fetchBytes.mockImplementation((url: string) =>
+      url.endsWith('seg_9.m4s') ? Promise.reject(new Error('503')) : fetchBytes(url),
+    );
+    const first = await loadTrackAudio(src, [1, 2]);
+    const next = capturing(() => Promise.resolve(8));
+
+    const again = await loadTrackAudio(next, [1, 2], { previous: first });
+
+    expect(again.capture).toBe('none');
+    expect(next.captureAnchor).not.toHaveBeenCalled();
+    expect(next.fetchBytes).not.toHaveBeenCalled();
+    expect(again.tracks).toBe(first.tracks);
+  });
+
+  it('확보를 포기했으면(③ 머리 판독 실패 · GAP) 다음 차례는 확보 닻을 다시 묻지 않는다: ③ init · 조각 앞부분을 다시 읽지 않는다', async () => {
+    const first = await loadTrackAudio(
+      capturing(() => Promise.resolve(null)),
+      [1, 2],
+    );
+    const next = capturing(() => Promise.resolve(8));
+
+    const again = await loadTrackAudio(next, [1, 2], { previous: first });
+
+    expect(again.capture).toBe('none');
+    expect(next.captureAnchor).not.toHaveBeenCalled();
+  });
+
+  it('확보 소리를 못 풀어 뺐으면 다음 차례에 확보 조각을 다시 받지 않는다', async () => {
+    const src = capturing(() => Promise.resolve(8));
+    src.decode.mockImplementation(rejectCaptureFrames);
+    const first = await loadTrackAudio(src, [1, 2]);
+    const next = capturing(() => Promise.resolve(8));
+
+    const again = await loadTrackAudio(next, [1, 2], { previous: first });
+
+    expect(first.capture).toBe('none');
+    expect(again.capture).toBe('none');
+    expect(next.fetchBytes).not.toHaveBeenCalled();
+  });
+
+  it('확보 닻이 아직이면(wait) 포기가 아니다: 다음 차례에 다시 묻는다', async () => {
+    const first = await loadTrackAudio(
+      capturing(() => Promise.resolve('wait')),
+      [1, 2],
+    );
+    const next = capturing(() => Promise.resolve(8));
+
+    const again = await loadTrackAudio(next, [1, 2], { previous: first });
+
+    expect(next.captureAnchor).toHaveBeenCalledWith(9);
+    expect(again.capture).toBe('placed');
+  });
+
+  it('다시 받기에서 새로 온 행을 못 읽으면(판독 실패) 앞 소리를 그대로 두고 그 seq 를 빠진 행으로 남기며, 다음 차례는 다시 받지 않는다', async () => {
+    const first = await loadTrackAudio(source(accessOf([1, 2]), BLOB_ANCHORS), [1, 2, 3]);
+    const src = source(accessOf([1, 2, 3]), BLOB_ANCHORS);
+
+    const again = await loadTrackAudio(src, [1, 2, 3], { previous: first });
+
+    expect(src.fetchBytes.mock.calls.map(([url]) => url)).toEqual(['https://s3/seg_3.m4s']);
+    expect(again.tracks).toBe(first.tracks);
+    expect(again.missingSeqs).toEqual([3]);
+
+    const next = source(accessOf([1, 2, 3]), BLOB_ANCHORS);
+    const third = await loadTrackAudio(next, [1, 2, 3], { previous: again });
+    expect(next.fetchBytes).not.toHaveBeenCalled();
+    expect(third.missingSeqs).toEqual([3]);
+  });
+
+  it('다시 받기에서 새 행 받기 자체가 실패하면(망) 던진다: 다음 차례에 다시 받는다', async () => {
+    const first = await loadTrackAudio(source(accessOf([1, 2]), BLOB_ANCHORS), [1, 2, 3]);
+    const src = source(accessOf([1, 2, 3]), BLOB_ANCHORS);
+    src.fetchBytes.mockRejectedValue(new Error('segment 503'));
+
+    await expect(loadTrackAudio(src, [1, 2, 3], { previous: first })).rejects.toThrow(
+      'segment 503',
+    );
   });
 });
 

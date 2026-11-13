@@ -50,6 +50,11 @@ export interface LoadReuse {
   capture: { seq: number; anchor: number } | null;
   /** 푼 덩어리(트랙 · 첫 seq · 자리 · 프레임 수 →) */
   decoded: ReadonlyMap<string, AudioBuffer>;
+  /**
+   * 포기한 ② seq — 다시 받기에서 받았지만 읽지 못한 창 조각 · 포기한 확보 조각. 이 결과를 previous 로 넘긴 받기는 다시 받지 않는다:
+   * 고리 차례마다 같은 실패를 되풀이해 받았다(30회 상한). 창 조각은 빠진 행으로 남아 고리가 끝내 영상 소리로 물러난다. 없으면 빈 것
+   */
+  givenUp?: ReadonlySet<number>;
 }
 
 /** 창 소리 받기의 결과(설계 prw2 7절 c10b′) */
@@ -282,13 +287,15 @@ const runKey = (k: number, run: Run) =>
 
 /**
  * 창 조각을 받아 판독한다. 받기가 서명 주소 수명(기본 5분)보다 길어지면 뒤에 받는 조각의 주소가 만료된다(느린 망의 3분 구간
- * ≈ 150MB): 그 조각에서 주소를 새로 받아 이어 받는다. 동시에 여럿이 만료돼도 새로 받기는 한 번이다(PR #341 3차)
+ * ≈ 150MB): 그 조각에서 주소를 새로 받아 이어 받는다. 동시에 여럿이 만료돼도 새로 받기는 한 번이다(PR #341 3차).
+ * onUnreadable 이 있으면 받았지만 못 읽은 조각은 던지지 않고 그것에 알린 뒤 결과에서 뺀다(받기 실패는 그대로 던진다)
  */
 async function downloadSegments(
   source: SegmentAudioSource,
   first: SegmentAudioAccess,
   seqs: readonly number[],
   signal: AbortSignal | undefined,
+  onUnreadable?: (seq: number, error: unknown) => void,
 ): Promise<Map<number, SegmentTracks>> {
   let current = first;
   let refreshing: Promise<SegmentAudioAccess> | null = null;
@@ -327,13 +334,25 @@ async function downloadSegments(
   const demuxed = await inParallel(
     seqs,
     async (seq) => {
-      const tracks = demuxAndRelease(await download(seq));
-      if (tracks.audio.length === 0) throw new Error(`segment ${seq} has no readable audio`);
-      return tracks;
+      const bytes = await download(seq);
+      try {
+        const tracks = demuxAndRelease(bytes);
+        if (tracks.audio.length === 0) throw new Error(`segment ${seq} has no readable audio`);
+        return tracks;
+      } catch (error) {
+        if (onUnreadable === undefined) throw error;
+        onUnreadable(seq, error);
+        return null;
+      }
     },
     signal,
   );
-  return new Map(seqs.map((seq, i) => [seq, demuxed[i]!]));
+  return new Map(
+    seqs.flatMap((seq, i) => {
+      const tracks = demuxed[i];
+      return tracks === null || tracks === undefined ? [] : [[seq, tracks] as const];
+    }),
+  );
 }
 
 /** 확보를 정한 결과 — 놓을 확보 조각(seq · Blob 닻 · 판독)이 있으면 placed */
@@ -346,12 +365,14 @@ const NO_CAPTURE: CaptureResolution = { outcome: 'none', placed: null };
 
 /**
  * 끝 소리 확보를 정한다. attached 면 확보 닻을 묻고(앞서 놓은 같은 seq 면 그것을 쓴다) 확보 조각을 받아 판독한다. 확보 조각을
- * 못 받거나 못 풀어도 창 소리는 그대로 두고 확보만 포기한다(경고에는 주소를 싣지 않는다)
+ * 못 받거나 못 풀어도 창 소리는 그대로 두고 확보만 포기한다(경고에는 주소를 싣지 않는다). 포기한 seq 는 givenUp 에 넣고, 이미
+ * 든 seq 는 묻지도 받지도 않는다 — 기다림(wait)은 포기가 아니다
  */
 async function resolveCapture(
   source: SegmentAudioSource,
   state: AudioCaptureState,
   previous: TrackAudioLoad | undefined,
+  givenUp: Set<number>,
 ): Promise<CaptureResolution> {
   if (state.kind === 'notReady') return { outcome: 'waiting', placed: null };
   if (state.kind === 'none') return NO_CAPTURE;
@@ -361,15 +382,19 @@ async function resolveCapture(
   if (known?.seq === seq && knownTracks !== undefined) {
     return { outcome: 'placed', placed: { seq, anchor: known.anchor, tracks: knownTracks } };
   }
-  if (source.captureAnchor === undefined) return NO_CAPTURE;
+  if (source.captureAnchor === undefined || givenUp.has(seq)) return NO_CAPTURE;
   try {
     const anchor = await source.captureAnchor(seq);
     if (anchor === 'wait') return { outcome: 'waiting', placed: null };
-    if (anchor === null) return NO_CAPTURE;
+    if (anchor === null) {
+      givenUp.add(seq);
+      return NO_CAPTURE;
+    }
     const tracks = demuxAndRelease(await source.fetchBytes(url));
     if (tracks.audio.length === 0) throw new Error('no readable audio');
     return { outcome: 'placed', placed: { seq, anchor, tracks } };
   } catch (e) {
+    givenUp.add(seq);
     console.warn(
       `[editor] 끝 소리 확보 조각을 받지 못해 비워 둬요(seq ${seq} · ${(e as Error).name})`,
     );
@@ -380,7 +405,8 @@ async function resolveCapture(
 /**
  * 풀린 소리의 첫 표본이 놓일 Blob 시각. 브라우저 decodeAudioData(ADTS)는 앞 표본을 엔진마다 다르게 버린다(실측 M6 · 2026-11-13
  * — 48kHz 기준 Chrome 0 · Firefox 1024 · WebKit · Safari 2112표본). 머리에서 버려 남은 소리가 모두 그만큼 이르다 — 버린 몫(기대
- * 길이 − 풀린 길이)만큼 뒤로 민다. 기대보다 길게 풀리면(꼬리 · SBR 두 배 빈도) 머리를 버린 근거가 없어 그대로 둔다
+ * 길이 − 풀린 길이)만큼 뒤로 민다. 기대보다 길게 풀리면 머리를 버린 근거가 없어 그대로 둔다. SBR(HE-AAC)은 이 갈래가 아니다:
+ * 빈도와 표본 수가 함께 두 배라 길이가 같다(2048 / 48000 = 1024 / 24000)
  */
 function decodedStart(run: Run, buffer: AudioBuffer): number {
   const dropped = run.frames.length * frameSeconds(run.config) - buffer.duration;
@@ -483,32 +509,46 @@ export async function loadTrackAudio(
   const { precheck, previous, signal } = options;
   const access = await source.fetchAccess();
   if (precheck !== undefined && !precheck(access.segments)) throw new SegmentsNotReadyError();
+  const givenUp = new Set(previous?.reuse.givenUp);
   const inWindow = new Set(seqs);
-  const rows = access.segments
-    .filter((segment) => inWindow.has(segment.seq))
+  const offered = access.segments
+    .filter((segment) => inWindow.has(segment.seq) && !givenUp.has(segment.seq))
     .map((segment) => segment.seq)
     .sort((a, b) => a - b);
-  const found = new Set(rows);
-  const missingSeqs = seqs.filter((seq) => !found.has(seq));
   const state = readAudioCapture(access);
   // 놓을 것이 없으면 닻(영상 창)을 기다리지 않는다
-  if (rows.length === 0) return emptyLoad(missingSeqs, state);
+  if (offered.length === 0) return emptyLoad(seqs, state, givenUp);
 
   const known = previous?.reuse.segments ?? new Map<number, SegmentTracks>();
+  // 처음 받기는 못 읽은 조각 하나로 실패다(PR #341 3차). 다시 받기(고리)는 못 읽은 새 행을 포기해 앞 소리를 지킨다 — 같은
+  // 바이트는 몇 번 받아도 못 읽는다. 받기 자체의 실패(망)는 다음 차례에 다시 받도록 그대로 던진다
+  const onUnreadable =
+    previous === undefined
+      ? undefined
+      : (seq: number, error: unknown) => {
+          givenUp.add(seq);
+          console.warn(
+            `[editor] ② 조각을 읽지 못해 그 자리를 다시 받지 않아요(seq ${seq} · ${(error as Error).name})`,
+          );
+        };
   const fresh = await downloadSegments(
     source,
     access,
-    rows.filter((seq) => !known.has(seq)),
+    offered.filter((seq) => !known.has(seq)),
     signal,
+    onUnreadable,
   );
+  const rows = offered.filter((seq) => known.has(seq) || fresh.has(seq));
+  const found = new Set(rows);
   const windowLoad: WindowLoad = {
     segments: new Map(rows.map((seq) => [seq, known.get(seq) ?? fresh.get(seq)!])),
     anchors: await source.anchors(),
-    missingSeqs,
+    missingSeqs: seqs.filter((seq) => !found.has(seq)),
     previous,
+    givenUp,
     signal,
   };
-  const { outcome, placed } = await resolveCapture(source, state, previous);
+  const { outcome, placed } = await resolveCapture(source, state, previous, givenUp);
   if (placed === null) return arrange(source, windowLoad, null, outcome);
   // 확보 소리는 창 끝 덩어리에 이어 붙어 같이 풀리므로 덩어리 하나만 감싸서는 창 소리를 건지지 못한다: 확보를 넣어 놓기 ·
   // 풀기가 실패하면 확보를 빼고 창 조각만으로 다시 놓아 푼다(창 조각 자체가 못 풀리면 그때 던진다 — c10b′ r1 2번)
@@ -517,10 +557,13 @@ export async function loadTrackAudio(
   } catch (e) {
     // 끊김은 확보 실패가 아니다: 확보를 빼고 다시 풀지 않는다
     if (signal?.aborted) throw e;
+    // 창 조각만으로 풀려야 확보 탓이다 — 그때만 확보를 포기했다고 남긴다(창 조각이 못 풀리면 여기서 던진다)
+    const windowOnly = await arrange(source, windowLoad, null, 'none');
+    givenUp.add(placed.seq);
     console.warn(
       `[editor] 끝 소리 확보 조각을 놓거나 풀지 못해 비워 둬요(seq ${placed.seq} · ${(e as Error).name})`,
     );
-    return arrange(source, windowLoad, null, 'none');
+    return windowOnly;
   }
 }
 
@@ -530,6 +573,8 @@ interface WindowLoad {
   anchors: SegmentAnchors;
   missingSeqs: readonly number[];
   previous: TrackAudioLoad | undefined;
+  /** 이 받기까지 포기한 seq(LoadReuse.givenUp) — 돌려줄 때까지 늘 수 있다 */
+  givenUp: ReadonlySet<number>;
   signal: AbortSignal | undefined;
 }
 
@@ -539,7 +584,7 @@ interface WindowLoad {
  */
 async function arrange(
   source: SegmentAudioSource,
-  { segments: windowSegments, anchors, missingSeqs, previous, signal }: WindowLoad,
+  { segments: windowSegments, anchors, missingSeqs, previous, givenUp, signal }: WindowLoad,
   placed: CaptureResolution['placed'],
   outcome: CaptureOutcome,
 ): Promise<TrackAudioLoad> {
@@ -547,7 +592,7 @@ async function arrange(
   if (placed !== null) segments.set(placed.seq, placed.tracks);
   const capture = placed === null ? null : { seq: placed.seq, anchor: placed.anchor };
   if (previous !== undefined && samePlacement(previous, segments, capture)) {
-    return { ...previous, missingSeqs, capture: outcome };
+    return { ...previous, missingSeqs, capture: outcome, reuse: { ...previous.reuse, givenUp } };
   }
   const runs = placeRuns(
     [...segments].map(([seq, tracks]) => ({ seq, tracks })),
@@ -559,15 +604,19 @@ async function arrange(
     previous?.reuse.decoded ?? new Map(),
     signal,
   );
-  return { tracks, missingSeqs, capture: outcome, reuse: { segments, capture, decoded } };
+  return { tracks, missingSeqs, capture: outcome, reuse: { segments, capture, decoded, givenUp } };
 }
 
-/** 응답에 창 조각 행이 하나도 없다 — 놓을 소리가 없다. 확보는 행이 오면 다시 정한다 */
-function emptyLoad(missingSeqs: readonly number[], state: AudioCaptureState): TrackAudioLoad {
+/** 응답에 (포기하지 않은) 창 조각 행이 하나도 없다 — 놓을 소리가 없다. 확보는 행이 오면 다시 정한다 */
+function emptyLoad(
+  missingSeqs: readonly number[],
+  state: AudioCaptureState,
+  givenUp: ReadonlySet<number>,
+): TrackAudioLoad {
   return {
     tracks: [],
     missingSeqs,
     capture: state.kind === 'none' ? 'none' : 'waiting',
-    reuse: { segments: new Map(), capture: null, decoded: new Map() },
+    reuse: { segments: new Map(), capture: null, decoded: new Map(), givenUp },
   };
 }

@@ -22,6 +22,7 @@ import type { TrackAudioLoad, TrackPiece } from './loadTrackAudio';
 import {
   AUDIO_WAIT_LIMIT,
   AUDIO_WAIT_MS,
+  INNER_STOP_WAIT_MS,
   loadSegmentTracks,
   TRACK_LOAD_TIMEOUT_MS,
   useTrackPreview,
@@ -448,6 +449,37 @@ describe('useTrackPreview', () => {
     await waitFor(() => expect(result.current.status).toBe('unavailable'));
     expect(node.muted).toBe(false);
     expect(result.current.levels).toBeNull();
+  });
+
+  it('② 를 받는 도중에 그 창 영상이 실패하면 받기를 끊고 바로 「못 부름」이다: 다 받을 때(또는 60초 무진척)까지 loading 에 남지 않는다', async () => {
+    const signals: AbortSignal[] = [];
+    vi.mocked(fetch).mockImplementation((_url, init) => {
+      signals.push((init as RequestInit).signal!);
+      return new Promise<Response>(() => {});
+    });
+    const node = video();
+    const { result, rerender } = renderHook(
+      ({ failedKey }: { failedKey: string | null }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window: WINDOW,
+          loaded: null,
+          failedKey,
+          video: node,
+          createContext: () => fakeContext().ctx as never,
+        }),
+      { initialProps: { failedKey: null as string | null } },
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+    await waitFor(() => expect(signals).toHaveLength(1));
+    expect(result.current.status).toBe('loading');
+    expect(node.muted).toBe(true);
+
+    rerender({ failedKey: WINDOW.key });
+
+    await waitFor(() => expect(result.current.status).toBe('unavailable'));
+    expect(signals[0]!.aborted).toBe(true);
+    expect(node.muted).toBe(false);
   });
 
   it('미리 받아 둔 소리로 닻을 기다리다 그 창 영상이 실패해도 「못 부름」이다', async () => {
@@ -1130,6 +1162,31 @@ describe('useTrackPreview — 창이 바뀌면 효과 · 정리 함수도 앞 �
 
     expect(alive).toBe(0);
   });
+
+  it('창을 바꾼 렌더에 새 창 영상 실패(failedKey)가 같이 와도 그 실패가 앞 창 소리를 쥐지 않는다', async () => {
+    const { context, decodedRefs } = watchDecoded();
+    const { result, rerender } = renderHook(
+      ({ window, failedKey }: { window: TrackWindow; failedKey: string | null }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window,
+          loaded: LOADED,
+          failedKey,
+          video: video(),
+          createContext: () => context as never,
+        }),
+      { initialProps: { window: WINDOW, failedKey: null as string | null } },
+    );
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(new Promise(() => undefined));
+    const next = windowOf(-10, [5]);
+    rerender({ window: next, failedKey: next.key });
+    await waitFor(() => expect(result.current.status).toBe('unavailable'));
+    rerender({ window: next, failedKey: next.key });
+
+    expect(await aliveAfterGc(decodedRefs)).toBe(0);
+  });
 });
 
 describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => {
@@ -1470,6 +1527,234 @@ describe('useTrackPreview — ② 기다림 고리 · 끝 소리 확보', () => 
     expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
   });
 
+  it('소리를 못 불러도(첫 받기 실패) 판 NULL 창의 missing 머리는 고리가 다시 읽는다: 저장에 쓰는 머리는 미리 듣기와 따로다', async () => {
+    const win = unversionedWindow();
+    await ensureHeads('mk-nosound', [], [2]);
+    vi.mocked(requestSegmentAudioAccess)
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValue(accessFor([1, 2]));
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-nosound',
+        window: win,
+        loaded: loadedOf(win),
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await advance(50);
+    expect(result.current.status).toBe('unavailable');
+    expect(headCacheFor('mk-nosound').get(2)).toEqual({ state: 'missing' });
+
+    await advance(AUDIO_WAIT_MS + 50);
+
+    expect(headCacheFor('mk-nosound').get(2)?.state).toBe('ready');
+    expect(result.current.status).toBe('unavailable');
+    // 머리가 다 왔으면 멈춘다
+    const asked = vi.mocked(requestSegmentAudioAccess).mock.calls.length;
+    await advance(AUDIO_WAIT_MS * 3);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(asked);
+  });
+
+  it('머리를 아직 하나도 못 읽은 채 첫 소리 주소 요청이 실패해도 머리 고리가 이어진다: 뒤에 missing 이 생기고 서버가 회복하면 머리를 확보한다', async () => {
+    const win = unversionedWindow();
+    vi.mocked(requestSegmentAudioAccess)
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValueOnce(accessFor([1]))
+      .mockResolvedValue(accessFor([1, 2]));
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-cold',
+        window: win,
+        loaded: loadedOf(win),
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await advance(50);
+    expect(result.current.status).toBe('unavailable');
+    expect(headCacheFor('mk-cold').get(1)).toBeUndefined();
+    expect(headCacheFor('mk-cold').get(2)).toBeUndefined();
+
+    // 첫 차례: 행 1 만 와서 1 은 읽고 2 는 missing
+    await advance(AUDIO_WAIT_MS + 50);
+    expect(headCacheFor('mk-cold').get(1)?.state).toBe('ready');
+    expect(headCacheFor('mk-cold').get(2)).toEqual({ state: 'missing' });
+
+    // 다음 차례: 행 2 가 와서 확보한다 · 다 왔으면 멈춘다
+    await advance(AUDIO_WAIT_MS + 50);
+    expect(headCacheFor('mk-cold').get(2)?.state).toBe('ready');
+    const asked = vi.mocked(requestSegmentAudioAccess).mock.calls.length;
+    await advance(AUDIO_WAIT_MS * 3);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(asked);
+  });
+
+  it('소리 문맥을 못 만들고 머리를 아직 못 읽었어도 머리 고리가 읽는다', async () => {
+    const win = unversionedWindow();
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2]));
+    renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-cold-ctx',
+        window: win,
+        loaded: loadedOf(win),
+        video: video(),
+        createContext: () => {
+          throw new Error('no AudioContext');
+        },
+      }),
+    );
+    await advance(AUDIO_WAIT_MS + 50);
+
+    expect(headCacheFor('mk-cold-ctx').get(1)?.state).toBe('ready');
+    expect(headCacheFor('mk-cold-ctx').get(2)?.state).toBe('ready');
+  });
+
+  it('소리를 못 불렀어도 머리가 이미 failed 면 머리 고리는 기다리지 않는다: 다시 묻지도 그만뒀다고 경고하지도 않는다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const win = unversionedWindow();
+    await ensureHeads('mk-failed-ctx', [], [1, 2]);
+    failMissingHeads('mk-failed-ctx', [1, 2]);
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1, 2]));
+    renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-failed-ctx',
+        window: win,
+        loaded: loadedOf(win),
+        video: video(),
+        createContext: () => {
+          throw new Error('no AudioContext');
+        },
+      }),
+    );
+
+    await advance(AUDIO_WAIT_MS * (AUDIO_WAIT_LIMIT + 1));
+
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toEqual([]);
+  });
+
+  it('판 2 창이면 소리를 못 불렀어도 머리 고리는 기다리지 않는다: 판 2 는 머리를 읽지 않는다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-v2-ctx',
+        window: THREE,
+        loaded: loadedOf(THREE),
+        video: video(),
+        createContext: () => {
+          throw new Error('no AudioContext');
+        },
+      }),
+    );
+
+    await advance(AUDIO_WAIT_MS * (AUDIO_WAIT_LIMIT + 1));
+
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toEqual([]);
+  });
+
+  it(`소리 문맥을 못 만들어도 missing 머리는 다시 읽고, 상한 ${AUDIO_WAIT_LIMIT}회면 경고 한 번과 함께 failed 다`, async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const win = unversionedWindow();
+    await ensureHeads('mk-noctx', [], [2]);
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(accessFor([1]));
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        mediaKey: 'mk-noctx',
+        window: win,
+        loaded: loadedOf(win),
+        video: video(),
+        createContext: () => {
+          throw new Error('no AudioContext');
+        },
+      }),
+    );
+    await advance(50);
+    expect(result.current.status).toBe('unavailable');
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+
+    await advance(AUDIO_WAIT_MS * AUDIO_WAIT_LIMIT + 1000);
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(AUDIO_WAIT_LIMIT);
+    expect(headCacheFor('mk-noctx').get(2)).toEqual({ state: 'failed' });
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('그만'))).toHaveLength(1);
+    await advance(AUDIO_WAIT_MS * 5);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(AUDIO_WAIT_LIMIT);
+  });
+
+  it('확보 seq 를 찾으려 목록을 다시 받는 동안 창이 바뀌면 그 다시 받기 요청도 끊는다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(
+      accessFor([1, 2, 3], { audioCapture: 'attached', audioCaptureSegment: CAPTURE_4 }),
+    );
+    const signals: (AbortSignal | undefined)[] = [];
+    const reloadList = vi.fn((signal?: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<EditorPlaylist | null>(() => undefined);
+    });
+    const { rerender } = renderHook(
+      ({ window }: { window: TrackWindow }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window,
+          loaded: loadedOf(THREE),
+          list: playlistOf([1, 2, 3]),
+          reloadList,
+          video: video(),
+          createContext: () => fakeContext().ctx as never,
+        }),
+      { initialProps: { window: THREE } },
+    );
+    await advance(50);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    vi.mocked(requestSegmentAudioAccess).mockReturnValue(new Promise(() => undefined));
+    rerender({ window: windowOf(20, [7]) });
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it('확보 seq 를 찾으려 목록을 다시 받는 동안 창이 바뀌면 받은 목록으로 ③ 머리를 읽지 않는다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue(
+      accessFor([1, 2, 3], { audioCapture: 'attached', audioCaptureSegment: CAPTURE_4 }),
+    );
+    let listed: (list: EditorPlaylist) => void = () => undefined;
+    const reloadList = vi.fn(
+      () =>
+        new Promise<EditorPlaylist | null>((resolve) => {
+          listed = resolve;
+        }),
+    );
+    const { rerender } = renderHook(
+      ({ window }: { window: TrackWindow }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          window,
+          loaded: loadedOf(THREE),
+          list: playlistOf([1, 2, 3]),
+          reloadList,
+          video: video(),
+          createContext: () => fakeContext().ctx as never,
+        }),
+      { initialProps: { window: THREE } },
+    );
+    await advance(50);
+    expect(reloadList).toHaveBeenCalledTimes(1);
+
+    vi.mocked(requestSegmentAudioAccess).mockReturnValue(new Promise(() => undefined));
+    rerender({ window: windowOf(20, [7]) });
+    listed(playlistOf([1, 2, 3, 4]));
+    await advance(50);
+
+    expect(fetchedUrls().filter((url) => url.startsWith('https://cdn/'))).toEqual([]);
+  });
+
   it('창이 바뀌면 앞 창의 고리를 멈춘다', async () => {
     vi.mocked(requestSegmentAudioAccess).mockImplementation(async (_id, fromMs) =>
       fromMs === BASE + 10_000 ? accessFor([1]) : accessFor([7]),
@@ -1660,6 +1945,33 @@ describe('loadSegmentTracks — 끊으면 안쪽이 멈춘 뒤에 끝난다', ()
     finishing.splice(0).forEach((finish) => finish());
     await expect(load).rejects.toThrow('track audio load stopped');
     expect(decode).toHaveBeenCalledTimes(started);
+  });
+
+  it(`풀기가 끝내 안 끝나도 멈춘 뒤 ${INNER_STOP_WAIT_MS}ms 까지만 기다리고 거부한다: loading · 카드 차례를 붙들지 않는다`, async () => {
+    vi.useFakeTimers();
+    try {
+      const decode = vi.fn(() => new Promise<AudioBuffer>(() => undefined));
+      let settled = false;
+      const load = loadSegmentTracks({
+        streamId: 's-1',
+        segs: windowOf(10, [1]).segs,
+        anchors: () => Promise.resolve(new Map([[1, 0]])),
+        decode,
+      }).finally(() => {
+        settled = true;
+      });
+      load.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(decode).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(TRACK_LOAD_TIMEOUT_MS + INNER_STOP_WAIT_MS - 200);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+
+      await expect(load).rejects.toThrow('track audio load stopped');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('카드 미리 받기와 함께 쓰는 받기도 2채널을 채널 평균 1채널로 돌려준다(M3 ⑤ — prefetchCardEditor 기본 받기)', async () => {

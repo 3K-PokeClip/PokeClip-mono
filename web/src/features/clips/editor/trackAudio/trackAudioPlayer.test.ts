@@ -458,16 +458,26 @@ describe('followVideo: 소리를 영상 노드에 맞춰 튼다', () => {
     expect(player.position()).not.toBeNull();
   });
 
-  it('배속만 바꾸면(ratechange) 시계가 이미 흐르니 한 번 더 걸지 않는다 · 멈춘 영상의 timeupdate 로 틀지 않는다', () => {
-    const { player, play, video, startAndSettle, flow } = setup();
+  // 리뷰(M6 2차 cp1): 배속을 바꾼 뒤 한 번만 걸면 영상이 새 배속에 자리 잡는 동안 생긴 51–66ms 어긋남(문턱 안)이 그 구간 내내 남았다
+  it('배속을 바꾸면 새 배속으로 바로 걸고, 영상이 나아간 것을 본 때부터 SETTLE_MS 뒤 한 번 더 건다 · 멈춘 영상의 timeupdate 로 틀지 않는다', () => {
+    const { player, play, video, clock, startAndSettle, flow } = setup();
     startAndSettle(3);
     expect(play).toHaveBeenCalledTimes(2);
 
     Object.assign(video, { playbackRate: 2 });
     video.dispatchEvent(new Event('ratechange'));
     expect(play).toHaveBeenCalledTimes(3);
-    for (let ms = 0; ms < SETTLE_MS * 2; ms += 50) flow(0.05);
+    expect(play.mock.lastCall?.[1]).toBe(2);
+    // 새 배속에 자리 잡는 동안 영상이 0.06초 뒤처진다(문턱 안)
+    clock.at = clock.position() - 0.06;
+    for (let ms = 0; ms < SETTLE_POLL_MS + SETTLE_MS - 50; ms += 50) flow(0.05);
     expect(play).toHaveBeenCalledTimes(3);
+    flow(0.05);
+    expect(play).toHaveBeenCalledTimes(4);
+    expect(play.mock.lastCall?.[0]).toBeCloseTo(clock.at, 6);
+    expect(play.mock.lastCall?.[1]).toBe(2);
+    for (let i = 0; i < 10; i++) flow(0.05);
+    expect(play).toHaveBeenCalledTimes(4);
 
     // 멈춘 뒤 옮긴 자리의 timeupdate 는 소리를 틀지 않는다
     Object.assign(video, { paused: true });
@@ -475,8 +485,67 @@ describe('followVideo: 소리를 영상 노드에 맞춰 튼다', () => {
     video.currentTime = 7;
     video.dispatchEvent(new Event('timeupdate'));
     vi.advanceTimersByTime(1000);
-    expect(play).toHaveBeenCalledTimes(3);
+    expect(play).toHaveBeenCalledTimes(4);
     expect(player.position()).toBeNull();
+  });
+
+  it('멈춘 영상에서 배속을 바꾸면 걸지 않고 한 번 더 걸 것도 무장하지 않는다', () => {
+    const { play, video, flow } = setup();
+    const timers = vi.getTimerCount();
+    Object.assign(video, { playbackRate: 2 });
+    video.dispatchEvent(new Event('ratechange'));
+    expect(vi.getTimerCount()).toBe(timers);
+    flow(0.05);
+    vi.advanceTimersByTime(SETTLE_MS * 2);
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  // 리뷰(M6 2차 cp1): 멈춤으로 세운 뒤 탭을 숨기면 판정을 못 하게 되지만 영상은 여전히 서 있다 — 풀린 것으로 보면 소리만 흘렀다
+  it('멈춤으로 세운 동안에는 서 있는 한 판정을 못 하게 되어도(탭 숨김) 다시 켜지 않고, 멈춤을 거듭 판정하지 않는다', () => {
+    const { player, play, clock, startAndSettle, stand } = setup();
+    startAndSettle(2);
+    stand(0.5);
+    expect(player.position()).toBeNull();
+    expect(clock.restart).toHaveBeenCalledTimes(1);
+    play.mockClear();
+
+    stand(1);
+    expect(clock.restart).toHaveBeenCalledTimes(1);
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    try {
+      stand(1);
+      expect(play).not.toHaveBeenCalled();
+      expect(player.position()).toBeNull();
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it('이미 재생 중인 영상에 붙으면 바로 그 자리부터 걸고, 나아간 것을 보고 SETTLE_MS 뒤 한 번 더 건다', () => {
+    const { ctx } = fakeContext();
+    const player = new TrackAudioPlayer(ctx, TRACKS);
+    const play = vi.spyOn(player, 'play');
+    const video = fakeVideo();
+    Object.assign(video, { paused: false, currentTime: 4 });
+    const clock = fakeClock(video);
+
+    followVideo(player, video, clock);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenLastCalledWith(4, 1);
+
+    for (let ms = 0; ms < SETTLE_POLL_MS + SETTLE_MS; ms += 50) {
+      ctx.currentTime += 0.05;
+      video.currentTime += 0.05;
+      clock.frames += 1;
+      vi.advanceTimersByTime(50);
+    }
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it('멈춘 영상에 붙으면 재생 사건이 올 때까지 걸지 않는다', () => {
+    const { play } = setup();
+    vi.advanceTimersByTime(1000);
+    expect(play).not.toHaveBeenCalled();
   });
 
   it('그만두면 사건을 더 안 듣고 소리를 세우고 시계를 버린다', () => {
@@ -490,5 +559,30 @@ describe('followVideo: 소리를 영상 노드에 맞춰 튼다', () => {
     video.dispatchEvent(new Event('playing'));
     vi.advanceTimersByTime(1000);
     expect(play).not.toHaveBeenCalled();
+  });
+
+  it('그만둔 뒤에는 어느 사건(재생 · 옮김 · 배속 · 멈춤)에도 소리를 걸거나 세우지 않는다: 붙인 듣기를 모두 뗀다', () => {
+    const { player, play, video, stopFollowing } = setup();
+    Object.assign(video, { paused: false });
+    video.dispatchEvent(new Event('playing'));
+    stopFollowing();
+    const stop = vi.spyOn(player, 'stop');
+    play.mockClear();
+
+    for (const name of [
+      'playing',
+      'seeked',
+      'ratechange',
+      'pause',
+      'ended',
+      'waiting',
+      'seeking',
+    ]) {
+      video.dispatchEvent(new Event(name));
+    }
+    vi.advanceTimersByTime(1000);
+
+    expect(play).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
   });
 });

@@ -35,7 +35,8 @@ import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAud
 // 소리를 기다리지 않고 놓는다 — 새 창 소리가 풀릴 때까지 쥐면 두 창 소리가 함께 산다(M3 ④). 놓는다는 것은 이 훅이 쥔 참조를
 // 끊는 것이다: 상태에서 빼고, 오래 사는 함수(받기 · 고리 · 효과 정리 · 영상 노드에 붙은 듣기)는 훅 바깥에서 지어 렌더를 붙들지
 // 않는다. 실제로 거두는 것은 GC 이고, React 는 앞 렌더의 상태를 다음 렌더까지 한 벌 더 쥐므로 창을 바꾼 뒤 한 번 더 그려져야
-// 다 풀린다(창 바꿈은 재생기 · 상태를 바꿔 늘 다시 그린다). 새 창 소리가 오기까지는 음량을 안 바꾼 편집본이면
+// 다 풀린다. 창 바꿈 효과가 상태를 바꿔 그린 렌더는 아직 아니다 — 그다음 렌더(영상이 새 창을 받아 loaded 가 바뀌거나 새 창
+// 소리가 놓일 때)에 풀린다. 새 창 소리가 오기까지는 음량을 안 바꾼 편집본이면
 // 영상 소리, 바꿔 둔 편집본이면 무음이다(뺀 트랙이 섞인 최종 믹스를 내지 않는다 — 아래 영상 소리를 끄는 때).
 //
 // 못 부르면(소리 문맥 없음·주소·받기·풀기 실패) 「unavailable」이고 영상 소리가 그대로 난다: 화면이 그 사실을 알린다.
@@ -82,6 +83,13 @@ const defaultContext = (): DecodingContext => new AudioContext({ sampleRate: PRE
 export const TRACK_LOAD_TIMEOUT_MS = 60_000;
 
 /**
+ * 멈춘 뒤 안쪽(받던 조각 · 풀던 덩어리)이 끝나기를 기다리는 상한. 끝나기를 기다리는 까닭은 loadSegmentTracks 에 있다(옛 · 새 작업
+ * 겹침). 그러나 브라우저 풀기(decodeAudioData)가 끝내 안 끝나면 바깥도 영영 거부하지 못해 편집기는 loading 에, 카드 미리 받기는
+ * 차례를 쥔 채 남았다(mem cp1 cx M — 가짜 풀기로 재현 · 실제 브라우저 정지는 미확인). 그 뒤에 끝나는 덩어리는 버린다
+ */
+export const INNER_STOP_WAIT_MS = 5_000;
+
+/**
  * 이 음량이 영상 소리와 같은가: 재생 서버 영상은 첫 소리 트랙만 남기므로 첫 트랙만 100%이고 나머지를 끈 음량이다.
  * 새로 연 편집본이 이렇다(저장된 트랙 없음 = 첫 트랙만)
  */
@@ -102,7 +110,15 @@ const REASON_LABEL: Record<WaitReason, string> = {
   capture: '끝 소리 확보',
 };
 
-/** 이 창을 다시 물어야 하는 사유. 머리는 판 NULL 조각만 본다(판 2 는 읽지 않는다) */
+/** 판 NULL 창 조각 가운데 머리가 missing 인 것이 있는가(판 2 는 읽지 않는다) */
+function hasMissingHead(
+  segs: readonly Pick<PlaylistSegment, 'seq' | 'timing'>[],
+  heads: HeadCache | null,
+): boolean {
+  return segs.some((seg) => seg.timing === null && heads?.get(seg.seq)?.state === 'missing');
+}
+
+/** 이 창을 다시 물어야 하는 사유 */
 function waitReasons(
   load: TrackAudioLoad,
   segs: readonly Pick<PlaylistSegment, 'seq' | 'timing'>[],
@@ -110,11 +126,75 @@ function waitReasons(
 ): WaitReason[] {
   const reasons: WaitReason[] = [];
   if (load.missingSeqs.length > 0) reasons.push('rows');
-  const headMissing = (seg: Pick<PlaylistSegment, 'seq' | 'timing'>) =>
-    seg.timing === null && heads?.get(seg.seq)?.state === 'missing';
-  if (segs.some(headMissing)) reasons.push('heads');
+  if (hasMissingHead(segs, heads)) reasons.push('heads');
   if (load.capture === 'waiting') reasons.push('capture');
   return reasons;
+}
+
+/** 고리가 상한에 닿아 그만둔다: 경고 한 번을 남기고 끝내 없는 머리는 failed 로 둔다(그 조각 고름은 저장 막음) */
+function giveUpWaiting(
+  win: TrackWindow,
+  mediaKey: string | undefined,
+  reasons: readonly WaitReason[],
+): void {
+  const labels = reasons.map((reason) => REASON_LABEL[reason]).join(' · ');
+  console.warn(`[editor] ② 를 기다리다 그만뒀어요(창 ${win.key} · ${labels})`);
+  if (mediaKey !== undefined)
+    failMissingHeads(
+      mediaKey,
+      win.segs.map((seg) => seg.seq),
+    );
+}
+
+/**
+ * 판 NULL 창 조각 가운데 머리를 아직 못 가진 것이 있는가 — missing 이거나 아직 한 번도 못 읽었다(캐시에 없음). 읽다 실패한 것
+ * (failed)은 기다리지 않는다(보안 검수 c10b′ M-1)
+ */
+function hasPendingHead(
+  segs: readonly Pick<PlaylistSegment, 'seq' | 'timing'>[],
+  heads: HeadCache,
+): boolean {
+  return segs.some((seg) => {
+    if (seg.timing !== null) return false;
+    const state = heads.get(seg.seq)?.state;
+    return state === undefined || state === 'missing';
+  });
+}
+
+/**
+ * 판 NULL 창의 머리만 기다리는 고리. 소리를 못 불렀을 때(소리 문맥 없음 · 첫 받기 실패) ② 기다림 고리 대신 돈다: 머리는
+ * 고름 저장에 쓰여 미리 듣기 성공에 묶이면 안 된다(c10b′ r1 6번 — 묶여 있으면 그 조각 고름을 끝내 저장하지 못했다). 간격 · 상한 ·
+ * 경고 · failed 는 ② 기다림 고리와 같고 failed 는 다시 읽지 않는다. 아직 못 읽은 머리도 기다린다: 첫 소리 주소 요청이 실패하면
+ * (영상 쪽 머리 판독이 그 응답을 나눠 쓰는 때는 그것도 함께) 캐시가 빈 채일 수 있다 — missing 만 보면 고리가 바로 끝나 서버가
+ * 회복해도 머리를 못 얻었다(PR 단계 r1 cx M). 돌려준 함수가 멈춘다
+ */
+function waitWindowHeads(
+  streamId: string,
+  mediaKey: string | undefined,
+  win: TrackWindow,
+): () => void {
+  if (mediaKey === undefined) return () => undefined;
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rounds = 0;
+  const wait = () => {
+    if (abort.signal.aborted || !hasPendingHead(win.segs, headCacheFor(mediaKey))) return;
+    if (rounds >= AUDIO_WAIT_LIMIT) {
+      giveUpWaiting(win, mediaKey, ['heads']);
+      return;
+    }
+    timer = setTimeout(() => {
+      rounds += 1;
+      void ensureWindowHeads(streamId, mediaKey, win.segs, abort.signal, {
+        retryFailed: false,
+      }).then(wait, wait);
+    }, AUDIO_WAIT_MS);
+  };
+  wait();
+  return () => {
+    abort.abort();
+    clearTimeout(timer);
+  };
 }
 
 /**
@@ -208,7 +288,10 @@ export function loadSegmentTracks(options: {
   streamId: string;
   /** 창 조각(seq · PDT · EXTINF) */
   segs: readonly Pick<PlaylistSegment, 'seq' | 'pdtMs' | 'durationMs'>[];
-  /** 그 창의 닻. 받기를 다 마친 뒤 부른다 — 기다리는 동안은 받기 멈춤으로 세지 않는다. 거부하면(영상이 그 창을 못 받음) 던진다 */
+  /**
+   * 그 창의 닻. 받기를 다 마친 뒤 부른다 — 기다리는 동안은 받기 멈춤으로 세지 않는다. 거부하면(영상이 그 창을 못 받음) 던진다.
+   * 받는 도중에 영상이 실패하면 닻을 부르기 전이라 이 길로는 끊기지 않는다: 부르는 쪽이 signal 로 끊는다(useTrackPreview)
+   */
   anchors: () => Promise<SegmentAnchors>;
   decode: (adts: Uint8Array) => Promise<AudioBuffer>;
   signal?: AbortSignal;
@@ -278,9 +361,17 @@ export function loadSegmentTracks(options: {
   return Promise.race([work, stopped])
     .catch(async (error: unknown) => {
       // 받는 중인 다른 조각도 멈춘다: 하나가 실패하면 결과를 버린다(PR #341 claude). 안쪽이 실제로 끝난 뒤에 던진다 — 먼저
-      // 던지면 쥔 쪽(카드 미리 받기의 차례)이 자리를 넘긴 뒤에도 안에서 풀던 덩어리가 이어져 옛 · 새 작업이 겹친다
+      // 던지면 쥔 쪽(카드 미리 받기의 차례)이 자리를 넘긴 뒤에도 안에서 풀던 덩어리가 이어져 옛 · 새 작업이 겹친다. 기다림은
+      // INNER_STOP_WAIT_MS 까지다
       abort.abort();
-      await work.catch(() => undefined);
+      let waitTimer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        work.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          waitTimer = setTimeout(resolve, INNER_STOP_WAIT_MS);
+        }),
+      ]);
+      clearTimeout(waitTimer);
       throw error;
     })
     .finally(() => {
@@ -311,7 +402,7 @@ export function windowLevels(
 /** 확보 seq 의 ③ 을 찾을 목록 — 편집기 원천(useEditorSource)의 지금 목록과 다시 받기 */
 interface TrackListSource {
   list?: EditorPlaylist | null;
-  reloadList?: () => Promise<EditorPlaylist | null>;
+  reloadList?: (signal?: AbortSignal) => Promise<EditorPlaylist | null>;
 }
 
 /** 다시 싼 창 중 소리 닻에 쓰는 것 — 조각 표와 Δ */
@@ -329,9 +420,14 @@ async function windowCaptureAnchor(
   signal: AbortSignal,
 ): Promise<number | 'wait' | null> {
   const { shiftSeconds } = await remuxed;
+  // 멈춘 뒤에는(창 바뀜 · 화면 떠남) 목록을 다시 받거나 ③ 머리를 읽지 않고 포기한다. 받는 중인 목록 다시 받기도 같은 signal
+  // 로 끊긴다(useEditorSource — 끊기면 null) — 끊김과 맞물려 목록이 와도 받은 뒤에 다시 본다(보안 검수 c10b′ L-3)
+  if (signal.aborted) return null;
   let row = captureRowOf(source.list ?? null, segs, seq);
   if (row === 'wait' && source.reloadList !== undefined) {
-    row = captureRowOf(await source.reloadList(), segs, seq);
+    const reloaded = await source.reloadList(signal);
+    if (signal.aborted) return null;
+    row = captureRowOf(reloaded, segs, seq);
   }
   return captureAnchorOf(row, shiftSeconds, (found) => readFragmentVideoDts(found, signal));
 }
@@ -346,6 +442,12 @@ function prefetchedLoad(
   if (first === undefined || last === undefined) return undefined;
   return segmentTracks.get(segmentTrackKey(streamId, first.seq, last.seq));
 }
+
+/**
+ * 영상이 그 창을 받다 실패해 닻 기다림을 거부하는 값. 모듈에서 한 번 짓는다: 닻 효과 안에서 지으면 그 스택이 지은 렌더(창을 바꾼
+ * 렌더면 앞 창 재생기와 그 소리)를 붙들고, 거부 값은 그 창 받기 · 고리가 사는 동안 남아 앞 창 소리가 다음 창까지 살았다(mem2 cp1)
+ */
+const VIDEO_WINDOW_FAILED = new Error('video window failed');
 
 /** 받는 중인 창의 닻 기다림 — 영상이 같은 열쇠의 창을 받으면 풀고, 그 창을 받다 실패하면 실패로 끝낸다 */
 interface PendingAnchors {
@@ -380,8 +482,10 @@ function startWindowAudio(run: WindowAudioRun): () => void {
   const remuxed = new Promise<WindowTiming>((resolve, reject) => {
     anchors.current = { key: win.key, resolve, reject };
   });
-  // 받기가 닻을 묻기 전에 실패로 끝나도(주소 · 받기 실패) 영상 실패가 처리되지 않은 거부로 남지 않게 한다
-  remuxed.catch(() => undefined);
+  // 영상이 그 창을 못 받으면(failedKey) 닻은 오지 않는다: 받는 중이어도 그 자리에서 끊어 「못 부름」으로 끝낸다(runAudioWait
+  // fail) — 닻을 물을 때까지 기다리면 남은 조각을 다 받을 때(또는 멈춤 시한)까지 loading 이고 음량을 바꿔 둔 편집본은 무음이었다.
+  // 받기가 닻을 묻기 전에 실패로 끝나도 영상 실패가 처리되지 않은 거부로 남지 않는다
+  remuxed.catch(() => abort.abort());
   setStatus('loading');
   const { mediaKey } = source.current;
   const load = (previous?: TrackAudioLoad) =>
@@ -403,6 +507,8 @@ function startWindowAudio(run: WindowAudioRun): () => void {
   const release = prefetched !== undefined ? () => undefined : holdEditorWindowFetch();
   const first = prefetched !== undefined ? remuxed.then(() => prefetched) : load();
   first.then(release, release);
+  // 소리를 못 불렀을 때 도는 머리 고리(fail)
+  let stopHeads: () => void = () => undefined;
   const stop = runAudioWait({
     first,
     // 판 NULL 창의 빠진 머리도 같은 차례에 다시 읽는다 — 소리 주소 응답 하나를 나눠 쓴다(windowAudioAccess). 고리가
@@ -420,15 +526,11 @@ function startWindowAudio(run: WindowAudioRun): () => void {
     fail: () => {
       setPlaced(null);
       setStatus('unavailable');
+      // 소리를 못 불러도 판 NULL 머리는 따로 기다린다(저장에 쓴다)
+      stopHeads = waitWindowHeads(streamId, mediaKey, win);
     },
     giveUp: (reasons) => {
-      const labels = reasons.map((reason) => REASON_LABEL[reason]).join(' · ');
-      console.warn(`[editor] ② 를 기다리다 그만뒀어요(창 ${win.key} · ${labels})`);
-      if (mediaKey !== undefined)
-        failMissingHeads(
-          mediaKey,
-          win.segs.map((seg) => seg.seq),
-        );
+      giveUpWaiting(win, mediaKey, reasons);
       // 창 seq 의 ② 행이 끝내 빠졌다: 그 자리가 무음으로 남지 않게 ③ 섞인 소리(영상 소리)로 물러난다
       if (reasons.includes('rows')) {
         setPlayer(null);
@@ -438,6 +540,7 @@ function startWindowAudio(run: WindowAudioRun): () => void {
   });
   return () => {
     stop();
+    stopHeads();
     abort.abort();
     release();
   };
@@ -479,8 +582,8 @@ export function useTrackPreview(options: {
   failedKey?: string | null;
   /** 지금 ③ 목록 — 끝 소리 확보 seq 의 ③ 을 찾는다. 없으면 확보는 목록을 기다린다 */
   list?: EditorPlaylist | null;
-  /** 목록을 한 번 다시 받는다(useEditorSource reloadList) — 확보 seq 의 ③ 이 들고 있는 목록에 없을 때 */
-  reloadList?: () => Promise<EditorPlaylist | null>;
+  /** 목록을 한 번 다시 받는다(useEditorSource reloadList) — 확보 seq 의 ③ 이 들고 있는 목록에 없을 때. signal 이 멈추면 끊긴다 */
+  reloadList?: (signal?: AbortSignal) => Promise<EditorPlaylist | null>;
   video: HTMLVideoElement | null;
   createContext?: () => DecodingContext;
 }): TrackPreview {
@@ -570,7 +673,8 @@ export function useTrackPreview(options: {
         ctx = contextRef.current = createRef.current();
       } catch {
         setStatus('unavailable');
-        return undefined;
+        // 소리는 못 틀어도 판 NULL 머리는 기다린다(저장에 쓴다 — waitWindowHeads)
+        return waitWindowHeads(streamId, sourceRef.current.mediaKey, win);
       }
     }
     return startWindowAudio({
@@ -587,13 +691,14 @@ export function useTrackPreview(options: {
   }, [streamId, windowKey, showLoad]);
 
   // 영상이 받는 창의 닻을 푼다: 받는 중인 창과 열쇠가 같을 때만(앞 창을 받은 영상의 닻으로 놓지 않는다). 영상이 그 창을 받다
-  // 실패하면 닻은 오지 않는다 — 실패로 끝내 「못 부름」으로 영상 소리를 되살리고 받아 둔 판독 결과를 놓는다. 닻을 기다리는
-  // 동안은 받기 멈춤 시한을 세지 않으므로(loadSegmentTracks) 이 길이 없으면 loading 에 머문다
+  // 실패하면 닻은 오지 않는다 — 실패로 끝내 「못 부름」으로 영상 소리를 되살리고 받아 둔 판독 결과를 놓는다. ② 를 받는 중이면
+  // 받기도 그 자리에서 끊는다(startWindowAudio). 닻을 기다리는 동안은 받기 멈춤 시한을 세지 않으므로(loadSegmentTracks) 이 길이
+  // 없으면 loading 에 머문다
   useEffect(() => {
     const pending = anchorsRef.current;
     if (pending === null) return;
     if (failedKey === pending.key) {
-      pending.reject(new Error('video window failed'));
+      pending.reject(VIDEO_WINDOW_FAILED);
       return;
     }
     if (loaded === null || loaded.key !== pending.key) return;
