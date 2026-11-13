@@ -1288,8 +1288,9 @@ SET ROLE media_owner;
 WITH r AS (
     SELECT s.round_id,
            pg_catalog.max(s.round_closed_at) IS NOT NULL AS closed,
-           COALESCE(pg_catalog.max(s.ending_at), pg_catalog.max(s.round_closed_at),
-                    pg_catalog.now()) - pg_catalog.min(s.started_at) AS len
+           CASE WHEN pg_catalog.max(s.round_closed_at) IS NULL THEN pg_catalog.now()
+                ELSE COALESCE(pg_catalog.max(s.ending_at), pg_catalog.max(s.round_closed_at))
+           END - pg_catalog.min(s.started_at) AS len
       FROM stream_sessions s
      WHERE s.round_id IS NOT NULL
      GROUP BY s.round_id
@@ -1325,13 +1326,17 @@ make_read expiry_preflight "${payload}/expiry_preflight.sql" &&
   send_step expiry_preflight
 ```
 
-*   **첫 SELECT — 회차 길이.** 회차마다 첫 `started_at` 부터 마지막
-    `ending_at`(없으면 닫힌 시각, 열린 회차는 지금)까지입니다. `closed` ·
+*   **첫 SELECT — 회차 길이.** 회차마다 첫 `started_at` 부터 셉니다. 닫힌
+    회차는 마지막 `ending_at`(없으면 닫힌 시각)까지, 열린 회차는 앞 회원이
+    끝났어도 지금까지입니다. `closed` ·
     `open` 두 행에 수 · 최대 · p99(일)과 30일 · 59일 이상 회차 수를 냅니다.
     회차 길이에는 상한이 없어, 보존 기간 가까이 이어진 회차는 첫 방송이
     만료될 때 방금 끝난 방송까지 담은 회차 VOD 문서가 통째로 내려갑니다
     (media README 「60일 만료」 의 한계). `ge_59d` 가 0 이 아니면 그 회차가
-    켠 뒤 처음 지우는 대상일 수 있습니다.
+    켠 뒤 처음 지우는 대상일 수 있습니다. 회차가 없는 옛 계승 사슬
+    (`round_id` 없음)의 길이는 이 집계에 들지 않습니다 — 둘째 SELECT 의
+    `settled_range_null` 이 0 이 아니면 그 사슬도 같은 위험이 있으니 kty 가
+    판정합니다.
 *   **둘째 SELECT — 만료 판정의 입력.** `settled_range_null` 은 범위 칸이 빈
     확정 문서(M6 전 확정 — 계승 사슬 규칙으로 고름)입니다.
     `undecided_rounds` · `undecided_chains` 는 지금 미룸을 낳을 수 있는 단위
