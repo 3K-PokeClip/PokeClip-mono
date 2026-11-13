@@ -236,6 +236,10 @@ describe('readVideoTrack: init 에서 영상 트랙 번호와 timescale 을 읽�
     expect(readVideoTrack(segment4s.subarray(0, 200))).toBeNull();
     expect(readVideoTrack(new Uint8Array(0))).toBeNull();
   });
+
+  it('영상 트랙의 track_ID 가 0 이면 null 이다(tfhd 없는 traf 를 트랙 0 으로 보는 판독과 짝지어지지 않게)', () => {
+    expect(readVideoTrack(init(trak(0, 'vide', 90000)))).toBeNull();
+  });
 });
 
 describe('readTrackStart: 조각에서 그 트랙 첫 traf 의 tfdt 와 첫 표본 cto 를 읽는다', () => {
@@ -431,6 +435,53 @@ describe('readTrackSamples: 조각 안 그 트랙의 표본마다 DTS · PTS · 
 
     expect(readTrackSamples(noTfdt, noTfdt, 1)).toBeNull();
     expect(readTrackSamples(shortRun, shortRun, 1)).toBeNull();
+  });
+});
+
+/** bytes 사본에서 at 자리 상자의 크기 칸을 size 로 바꾼다(잘린 · 틀린 크기 칸) */
+function withBoxSize(bytes: Uint8Array, at: number, size: number): Uint8Array {
+  const out = bytes.slice();
+  new DataView(out.buffer).setUint32(at, size);
+  return out;
+}
+
+describe('readTrackSamples · readFirstSampledTraf: 부모를 넘는 크기 칸에서 조용히 멈추지 않는다(codex prw2 E3)', () => {
+  it('traf 안 뒤 trun 의 크기 칸이 traf 를 넘으면 앞 trun 표본만 주지 않고 null 이다', () => {
+    const last = trun(0, 0x100, [{ duration: 30 }]);
+    const whole = moof(
+      traf(tfhd(1), tfdt(0, 0n), trun(0, 0x100, [{ duration: 10 }, { duration: 20 }]), last),
+    );
+    const bytes = withBoxSize(whole, whole.length - last.length, last.length + 4);
+
+    expect(readTrackSamples(whole, whole, 1)).toHaveLength(3);
+    expect(readTrackSamples(bytes, bytes, 1)).toBeNull();
+    expect(readFirstSampledTraf(bytes, bytes, 1)).toBeNull();
+  });
+
+  it('moof 안 뒤 traf 의 크기 칸이 moof 를 넘으면 앞 traf 표본만 주지 않고 null 이다', () => {
+    const last = traf(tfhd(1), tfdt(0, 10n), trun(0, 0x100, [{ duration: 20 }]));
+    const head = moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0x100, [{ duration: 10 }])), last);
+    const whole = concat(head, box('mdat'));
+    const bytes = withBoxSize(whole, head.length - last.length, last.length + 4);
+
+    expect(readTrackSamples(whole, whole, 1)).toHaveLength(2);
+    expect(readTrackSamples(bytes, bytes, 1)).toBeNull();
+  });
+
+  it('traf 끝에 상자 머리가 못 되는 8바이트 미만이 남은 것은 빠진 표본이 없어 그대로 읽는다', () => {
+    const bytes = moof(
+      traf(tfhd(1), tfdt(0, 0n), trun(0, 0x100, [{ duration: 10 }]), new Uint8Array(7)),
+    );
+
+    expect(readTrackSamples(bytes, bytes, 1)).toEqual([{ dts: 0, pts: 0, duration: 10 }]);
+  });
+
+  it('맨 위 상자가 바이트 끝에서 잘린 것(파일 머리만 받은 꼴)은 그대로 앞 moof 를 읽는다', () => {
+    const first = moof(traf(tfhd(1), tfdt(0, 0n), trun(0, 0x100, [{ duration: 10 }])));
+    const second = moof(traf(tfhd(1), tfdt(0, 10n), trun(0, 0x100, [{ duration: 20 }])));
+    const head = concat(first, second).subarray(0, first.length + 12);
+
+    expect(readTrackSamples(head, head, 1)).toEqual([{ dts: 0, pts: 0, duration: 10 }]);
   });
 });
 
@@ -946,6 +997,10 @@ describe('트랙 수 상한: trak 수 · track_ID 중복으로 판독이 부풀�
 
     expect(readTrackHeaders(init(...traks(TRACK_LIMIT)))).toHaveLength(TRACK_LIMIT);
     expect(readTrackHeaders(init(...traks(TRACK_LIMIT + 1)))).toBeNull();
+  });
+
+  it('track_ID 가 0 이면 null 이다(ISO/IEC 14496-12 — 0 은 쓰지 않는 번호 · tfhd 없는 traf 와 짝지어지지 않게)', () => {
+    expect(readTrackHeaders(init(trak(1, 'vide', 90000), trak(0, 'soun', 48000)))).toBeNull();
   });
 
   it('같은 track_ID 의 trak 이 둘이면 null 이다(ISO/IEC 14496-12 — track_ID 는 겹치지 않는다)', () => {

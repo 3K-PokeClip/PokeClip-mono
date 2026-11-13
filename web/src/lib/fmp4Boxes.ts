@@ -57,7 +57,10 @@ export interface VideoTrackInfo {
   timescale: number;
 }
 
-/** init(moov)에서 영상 트랙(hdlr 'vide') 하나. 없거나 모양을 모르면 null */
+/**
+ * init(moov)에서 영상 트랙(hdlr 'vide') 하나. 없거나 모양을 모르거나 · timescale 이 0 이거나 · track_ID 가 0 이면 null
+ * (0 은 쓰지 않는 번호다 — tfhd 없는 traf 를 트랙 0 으로 보는 fragmentHeader 와 짝지어지지 않게, readTrackHeaders 와 같다)
+ */
 export function readVideoTrack(init: Uint8Array): VideoTrackInfo | null {
   const view = viewOf(init);
   try {
@@ -67,7 +70,8 @@ export function readVideoTrack(init: Uint8Array): VideoTrackInfo | null {
       if (trak.type !== 'trak') continue;
       const header = trackHeader(view, trak);
       if (header?.handler !== 'vide') continue;
-      return header.timescale > 0 ? { trackId: header.trackId, timescale: header.timescale } : null;
+      const { trackId, timescale } = header;
+      return trackId > 0 && timescale > 0 ? { trackId, timescale } : null;
     }
     return null;
   } catch {
@@ -185,7 +189,7 @@ export const MAX_TRACK_SAMPLES = 48_000;
 
 /**
  * 그 트랙 traf 마다의 표본 목록을 moof · traf 순서로 하나씩 내준다(받는 쪽이 멈추면 뒤 traf 는 읽지 않는다). 내준 표본이
- * 모두 합쳐 maxSamples 를 넘으면 RangeError
+ * 모두 합쳐 maxSamples 를 넘거나, traf 의 크기 칸이 moof 를 넘으면 RangeError
  */
 function* trafSampleLists(
   initView: DataView,
@@ -198,7 +202,7 @@ function* trafSampleLists(
   let room = maxSamples;
   for (const moof of boxes(view, 0, view.byteLength)) {
     if (moof.type !== 'moof') continue;
-    for (const traf of boxes(view, moof.start, moof.end)) {
+    for (const traf of childBoxes(view, moof)) {
       if (traf.type !== 'traf') continue;
       const header = fragmentHeader(view, traf);
       if (header.trackId !== trackId) continue;
@@ -213,7 +217,7 @@ function* trafSampleLists(
 
 /**
  * traf 안 trun 전부의 표본. 표본이 있는데 tfdt 를 못 읽었으면(base null) 자리를 모르므로 RangeError, 표본이 room 개를
- * 넘으면 객체를 만들기 전에 RangeError
+ * 넘으면 객체를 만들기 전에 RangeError, trun 의 크기 칸이 traf 를 넘으면 RangeError(childBoxes)
  */
 function trafSamples(
   view: DataView,
@@ -224,7 +228,7 @@ function trafSamples(
 ): SampleTiming[] {
   const samples: SampleTiming[] = [];
   let dts = base ?? 0;
-  for (const trun of boxes(view, traf.start, traf.end)) {
+  for (const trun of childBoxes(view, traf)) {
     if (trun.type !== 'trun') continue;
     const { version, flags, count, samplesAt } = trunLayout(view, trun);
     const stride = [0x100, 0x200, 0x400, 0x800].filter((bit) => flags & bit).length * 4;
@@ -303,8 +307,9 @@ export const MAX_TRACKS = 16;
 /**
  * init(moov)의 트랙 머리를 moov 의 트랙 순서대로. ② 녹화 파일처럼 moof 가 같은 바이트에 있어도 moov 만 본다.
  * tkhd · mdhd · hdlr 가 빠진 trak 은 뺀다(readTrackSpans 와 같다). moov 가 없으면 빈 목록, 상자가 칸까지
- * 닿지 않거나 모르는 버전이거나 · track_ID 가 겹치거나(ISO/IEC 14496-12 — 겹치지 않는다) · 트랙이 MAX_TRACKS 를
- * 넘으면 null
+ * 닿지 않거나 모르는 버전이거나 · track_ID 가 0 이거나 겹치거나(ISO/IEC 14496-12 — 0 은 쓰지 않고 겹치지 않는다. 0 을
+ * 받으면 tfhd 없는 traf 를 트랙 0 으로 보는 fragmentHeader 와 짝지어진다 — 보안 검수 prw2 hard3 L-3) · 트랙이
+ * MAX_TRACKS 를 넘으면 null
  */
 export function readTrackHeaders(init: Uint8Array): TrackHeader[] | null {
   const view = viewOf(init);
@@ -316,7 +321,9 @@ export function readTrackHeaders(init: Uint8Array): TrackHeader[] | null {
     for (const trak of boxes(view, moov.start, moov.end)) {
       const header = trak.type === 'trak' ? trackHeader(view, trak) : null;
       if (!header) continue;
-      if (ids.has(header.trackId) || headers.length === MAX_TRACKS) return null;
+      if (header.trackId === 0 || ids.has(header.trackId) || headers.length === MAX_TRACKS) {
+        return null;
+      }
       ids.add(header.trackId);
       headers.push(header);
     }
@@ -374,6 +381,20 @@ function defaultDurations(view: DataView, moov: Box): Map<number, number> {
     durations.set(view.getUint32(trex.start + 4), view.getUint32(trex.start + 12));
   }
   return durations;
+}
+
+/**
+ * 부모 상자 안의 상자를 boxes 처럼 내주되, 크기 칸이 부모를 넘거나 머리보다 작아 부모 끝 전에 멈추면 RangeError. boxes 는
+ * 맨 위에서는 잘림을 정상으로 본다(파일 머리만 받은 바이트). 하지만 부모 안에서 조용히 멈추면 뒤 표본이 빠진 채 판독이
+ * 성공한다(codex prw2 E3 — trun 크기 칸 하나가 틀려 표본 120 중 90 만 냄). 끝에 남은 8바이트 미만은 상자 머리가 못 되어 둔다
+ */
+function* childBoxes(view: DataView, parent: Box): Generator<Box> {
+  let end = parent.start;
+  for (const box of boxes(view, parent.start, parent.end)) {
+    end = box.end;
+    yield box;
+  }
+  if (parent.end - end >= 8) throw new RangeError(`${parent.type} child`);
 }
 
 /** 맨 위 상자 가운데 처음 나오는 그 종류 */

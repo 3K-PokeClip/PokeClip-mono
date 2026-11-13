@@ -102,7 +102,7 @@ interface TrackInfo {
 export interface TrackTiming {
   /**
    * 표본 있는 첫 traf 의 tfdt = 트랙 첫 DTS. 표본 없는 traf 는 건너뛴다
-   * (media `internal/playback/timing.go` 의 readTiming 과 같은 규칙)
+   * (media `internal/playback/timing.go` 의 spanOf 와 같은 규칙)
    */
   firstDts: number;
   /** 표본 있는 첫 traf 표본들의 PTS 최솟값(open GOP 면 첫 표본의 PTS 보다 이르다) */
@@ -215,20 +215,32 @@ const MAX_AUDIO_SAMPLE_FRAMES = 2;
 
 /**
  * 기준 초를 낼 때 영상 표본 하나가 셀 수 있는 길이(초). 정상 영상 프레임 간격은 1/120–1/10초이고, 가변 프레임률(장면이
- * 멈추면 프레임을 드물게 보냄)도 1초 안이면 그대로 센다. 그보다 긴 멈춤은 1초로 깎이지만 늦은 시작 여유가 덮는다
- * (4초 조각에 3초 멈춤이면 영상 2초 + 여유 3초 ≥ 소리 4초)
+ * 멈추면 프레임을 드물게 보냄)도 1초 안이면 그대로 센다. 그보다 긴 멈춤은 1초로 깎이지만 멈춤 여유가 덮는다(4초 조각에
+ * 3초 멈춤이면 영상 2초 + 여유 1초 = 3초 · 배율 1.5 로 4.5초 분량 ≥ 소리 4초 — 견디는 멈춤은 4초 조각 기준 4초 가까이)
  */
 const MAX_VIDEO_SAMPLE_SECONDS = 1;
 
 /**
- * 영상이 소리보다 늦게 시작하는 몫(초) — 기준 초의 영상 쪽 합에 더한다. 녹화기(포크 format_fmp4.go)는 영상 트랙의 첫
- * 키프레임이 오기 전 영상 표본을 버리지만(`if !randomAccess { return nil }`) 소리는 처음부터 적는다. 그래서 녹화가
- * (다시) 시작된 첫 조각은 영상이 키프레임 간격만큼 짧다 — 플러그인은 그 간격을 2초로 강제한다(obs-plugin constants.hpp
- * kForcedKeyintSec · ADR-020). 여유가 없으면 영상 2초 · 소리 4.05초 · 188 프레임인 재시작 첫 조각이 상한 187 에 걸린다.
- * 값 = 키프레임 간격 2초 + 짧은 조각 여유와 같은 1초. 범람 쪽 몫: 소리 자신의 합이 실제 시간이라 범람(길이 0 · 1ms)에는
- * 보탬이 없고, 1,024 간격으로 소리 시각만 넓힌 꼴에는 4초 조각 상한이 328 에서 539(48kHz)로 오른다
+ * 기준 초의 영상 쪽 합에 언제나 더하는 멈춤 여유(초) — 짧은 조각 여유와 같은 1초. 표본 하나가 1초로 깎인 긴 멈춤
+ * (MAX_VIDEO_SAMPLE_SECONDS)과 소리 · 영상 조각 경계의 어긋남을 덮는다
  */
-const VIDEO_LATE_START_SECONDS = 3;
+const VIDEO_PAUSE_SECONDS = 1;
+
+/**
+ * 영상이 소리보다 늦게 시작한 몫의 상한(초) — 그 트랙마다 clamp(영상 첫 DTS − 소리 첫 PTS, 0, 이 값)을 기준 초의 영상 쪽
+ * 합에 더한다. 녹화기(포크 format_fmp4.go)는 영상 트랙의 첫 키프레임이 오기 전 영상 표본을 버리지만
+ * (`if !randomAccess { return nil }`) 소리는 처음부터 적는다. 그래서 녹화가 (다시) 시작된 첫 조각은 영상이 키프레임 간격만큼
+ * 늦게 시작해 짧다 — 플러그인은 그 간격을 2초로 강제한다(obs-plugin constants.hpp kForcedKeyintSec · ADR-020). 여유가
+ * 없으면 영상 2초 · 소리 4.05초 · 188 프레임인 재시작 첫 조각이 상한 187 에 걸린다. 상수 대신 실제 시작 차를 쓰는
+ * 까닭(보안 검수 prw2 hard4 M-A): 상수 3초면 영상이 거의 0초인 조각마다 상한 약 260 을 주어 재시작을 되풀이하는
+ * 공격이 창마다 그만큼 쌓는다. 시작 차가 없으면 몫은 멈춤 여유 1초뿐이라 약 117 이 된다. 한계: 시작 차도 송출 시각
+ * 도장에서 오므로, 방송자가 영상 첫 DTS 를 2초 늦게 꾸미면 줄어드는 몫이 없다(상수 3초와 같다).
+ *
+ * 범람 쪽 몫: 소리 자신의 합이 실제 시간이라 길이 0 범람에는 여유가 보탬이 없다. 1ms 간격 범람(4,200 표본 = 4.2초)에는
+ * 그 합만큼만 보태 4초 조각 상한이 328 에서 342 로, 1,024 간격으로 소리 시각만 넓힌 꼴에는 398(시작 차 0) · 539(시작
+ * 차 2초 · 48kHz)로 오른다. 두 꼴 모두 범람은 여전히 걸린다
+ */
+const MAX_VIDEO_LATE_START_SECONDS = 2;
 
 /** 판독 한 번에 남은 몫: 프레임 수(트랙 합)와 복사할 수 있는 바이트 */
 interface Room {
@@ -263,7 +275,8 @@ function demux(view: DataView, bytes: Uint8Array, headers: readonly TrackHeader[
  * floor(기준 초 × 설정 빈도 / 1,024 × FRAME_MARGIN) + ceil(SHORT_SEGMENT_SECONDS × 설정 빈도 / 1,024) 를 넘으면 그 조각
  * 소리 전체를 판독 실패로 접는다.
  *
- * 기준 초 = min(영상 트랙 표본 길이 합 + VIDEO_LATE_START_SECONDS, 그 소리 트랙 표본 길이 합) — 표본 길이는 하나씩
+ * 기준 초 = min(영상 트랙 표본 길이 합 + VIDEO_PAUSE_SECONDS + 늦은 시작 몫(MAX_VIDEO_LATE_START_SECONDS 까지), 그 소리
+ * 트랙 표본 길이 합) — 표본 길이는 하나씩
  * 잘라(소리 MAX_AUDIO_SAMPLE_FRAMES 프레임 몫 · 영상 MAX_VIDEO_SAMPLE_SECONDS) 더한다. 작은 쪽을 쓰는 까닭: 둘 다 송출 시각 도장에서 오므로, 범람을
  * 통과시키려면 두 트랙을 함께 벌려야 하게 만든다. 큰 쪽이면 한 트랙만 벌려도 되고, 소리 자신만 쓰면 소리 시각을 넓힌 꼴이,
  * 영상만 쓰면 영상 시각을 넓힌 꼴이 그대로 통과한다. 범람 표본은 길이가 0(같은 시각) · 1ms 라 소리 자신의 합도 실제
@@ -288,13 +301,17 @@ function frameLimit(
   const videoSeconds = video
     ? cappedSeconds(bytes, video, video.timescale * MAX_VIDEO_SAMPLE_SECONDS)
     : 0;
-  if (videoSeconds <= 0) throw new RangeError('video span');
-  const videoBase = videoSeconds + VIDEO_LATE_START_SECONDS;
+  if (!video || videoSeconds <= 0) throw new RangeError('video span');
+  const videoStart = timedTrack(bytes, video).timing?.firstDts ?? 0;
   return (header, config) => {
     const rate = SAMPLE_RATES[config.frequencyIndex]!;
     // 프레임 몫을 그 트랙 timescale 눈금으로: 2 × 1,024 × timescale / 설정 빈도(timescale 이 빈도와 같으면 2,048)
     const maxTicks = (MAX_AUDIO_SAMPLE_FRAMES * SAMPLES_PER_FRAME * header.timescale) / rate;
-    const base = Math.min(videoBase, cappedSeconds(bytes, header, maxTicks));
+    const audioSeconds = cappedSeconds(bytes, header, maxTicks);
+    // 표본 없는 소리 트랙은 시작을 몰라 늦은 몫 0 — 그 트랙은 낼 프레임도 없다
+    const audioStart = timedTrack(bytes, header).timing?.firstPts ?? videoStart;
+    const lateStart = Math.min(Math.max(videoStart - audioStart, 0), MAX_VIDEO_LATE_START_SECONDS);
+    const base = Math.min(videoSeconds + VIDEO_PAUSE_SECONDS + lateStart, audioSeconds);
     const slack = Math.ceil((SHORT_SEGMENT_SECONDS * rate) / SAMPLES_PER_FRAME);
     return Math.floor(((base * rate) / SAMPLES_PER_FRAME) * FRAME_MARGIN) + slack;
   };
@@ -316,7 +333,8 @@ function cappedSeconds(bytes: Uint8Array, header: TrackHeader, maxTicks: number)
  * moov 의 소리 trak 을 파일 순서대로(Map 은 넣은 순서를 지킨다), track_ID 로 찾게. 못 읽는 소리 트랙이 있으면 null.
  * 소리 trak 마다 트랙 머리(readTrackHeaders — 트랙 수 상한 · 번호 겹침을 거른 목록)의 짝을 traf 를 읽기 전에 확인한다:
  * mdhd 가 빠진 trak 은 그 목록에 없어 상한에 세지 않으므로, 짝 없이 받으면 trak 수만큼 판독이 부푼다(보안 검수 prw2 c9′
- * M-2). 짝이 없거나 번호가 겹치면 RangeError. 트랙마다 프레임 수 시간 상한은 maxFramesOf(frameLimit)가 준다
+ * M-2). 짝이 없거나 · 짝 머리가 소리(soun)가 아니거나(mdhd 없는 소리 trak 이 영상 트랙 번호를 씀 — 보안 검수 prw2 hard3
+ * L-2) · 번호가 겹치면 RangeError. 트랙마다 프레임 수 시간 상한은 maxFramesOf(frameLimit)가 준다
  */
 function audioTracks(
   view: DataView,
@@ -349,7 +367,7 @@ function audioTracks(
     if (!config) return null;
     const id = view.getUint32(tkhd.start + (view.getUint8(tkhd.start) === 1 ? 20 : 12));
     const header = headerOf.get(id);
-    if (!header || tracks.has(id)) throw new RangeError('trak');
+    if (header?.handler !== 'soun' || tracks.has(id)) throw new RangeError('trak');
     const defaultSize = defaults.get(id) ?? 0;
     const maxFrames = maxFramesOf(header, config);
     tracks.set(id, { header, config, defaultSize, maxFrames, frames: [] });
@@ -359,8 +377,9 @@ function audioTracks(
 
 /**
  * traf 하나의 프레임을 그 트랙에 덧붙이고 남은 몫을 준다(영상 트랙이면 그대로). 프레임 수가 몫(트랙 합)이나 그 트랙의 시간
- * 상한(maxFrames)을 넘으면 프레임을 만들기 전에, 복사 바이트가 몫을 넘으면(trun 이 data_offset 으로 같은 바이트를 거듭
- * 가리킴 — codex prw2 후속 경화 M) RangeError
+ * 상한(maxFrames)을 넘으면 프레임을 만들기 전에, 프레임 자리가 파일 밖이거나(음수 data_offset 이면 slice 가 파일 끝에서
+ * 센다 — 보안 검수 prw2 hard3 L-1) 복사 바이트가 몫을 넘으면(trun 이 data_offset 으로 같은 바이트를 거듭 가리킴 — codex
+ * prw2 후속 경화 M) RangeError
  */
 function readTraf(
   view: DataView,
@@ -399,7 +418,9 @@ function readTraf(
       }
       if (flags & 0x400) at += 4;
       if (flags & 0x800) at += 4;
-      if (size <= 0 || dataOffset + size > bytes.byteLength) throw new RangeError('trun');
+      if (size <= 0 || dataOffset < 0 || dataOffset + size > bytes.byteLength) {
+        throw new RangeError('trun');
+      }
       if (size > bytesLeft) throw new RangeError('trun data_offset');
       bytesLeft -= size;
       // 복사한다: 보기(subarray)면 영상까지 든 조각 버퍼 전체가 디코드가 끝날 때까지 남는다(3분 구간이면 약 170MB)
