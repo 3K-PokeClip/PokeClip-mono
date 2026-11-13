@@ -66,7 +66,7 @@ class ChatWindowQueryTest extends IntegrationTestSupport {
     }
 
     private ChatWindowQuery queryWith(long offsetMs) {
-        return new ChatWindowQuery(jdbc, new SyncProperties(offsetMs, Map.of()));
+        return new ChatWindowQuery(jdbc, new SyncProperties(offsetMs, Map.of(), 0));
     }
 
     /**

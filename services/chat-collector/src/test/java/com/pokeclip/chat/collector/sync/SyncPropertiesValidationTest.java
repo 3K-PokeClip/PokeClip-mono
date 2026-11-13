@@ -61,7 +61,7 @@ class SyncPropertiesValidationTest {
 
     @Test
     void 자릿수를_착각한_기본_보정값을_거부한다() {
-        assertThatThrownBy(() -> new SyncProperties(1_500_000_000L, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(1_500_000_000L, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("pokeclip.sync.default-offset-ms")
                 .hasMessageContaining(String.valueOf(SyncProperties.MAX_ABS_OFFSET_MS));
@@ -75,11 +75,11 @@ class SyncPropertiesValidationTest {
     void 음수도_같은_크기까지_받는다() {
         long limit = SyncProperties.MAX_ABS_OFFSET_MS;
 
-        assertThatCode(() -> new SyncProperties(-limit, Map.of())).doesNotThrowAnyException();
-        assertThatCode(() -> new SyncProperties(limit, Map.of())).doesNotThrowAnyException();
-        assertThatThrownBy(() -> new SyncProperties(-limit - 1, Map.of()))
+        assertThatCode(() -> new SyncProperties(-limit, Map.of(), 0)).doesNotThrowAnyException();
+        assertThatCode(() -> new SyncProperties(limit, Map.of(), 0)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> new SyncProperties(-limit - 1, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SyncProperties(limit + 1, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(limit + 1, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -90,9 +90,9 @@ class SyncPropertiesValidationTest {
      */
     @Test
     void 오버플로로_그물을_빠져나가는_값이_없다() {
-        assertThatThrownBy(() -> new SyncProperties(Long.MIN_VALUE, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(Long.MIN_VALUE, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SyncProperties(Long.MAX_VALUE, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(Long.MAX_VALUE, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -102,7 +102,7 @@ class SyncPropertiesValidationTest {
      */
     @Test
     void 채널별_보정값도_같은_그물에_걸린다() {
-        assertThatThrownBy(() -> new SyncProperties(0, Map.of("streamer-a", 1_500_000_000L)))
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of("streamer-a", 1_500_000_000L), 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("pokeclip.sync.channel-offset-ms.streamer-a");
     }
@@ -117,15 +117,96 @@ class SyncPropertiesValidationTest {
         Map<String, Long> withNull = new HashMap<>();
         withNull.put("streamer-a", null);
 
-        assertThatThrownBy(() -> new SyncProperties(0, withNull))
+        assertThatThrownBy(() -> new SyncProperties(0, withNull, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("pokeclip.sync.channel-offset-ms.streamer-a");
+    }
+
+    /**
+     * 판 2 차감은 다른 보정값과 같은 {@code ±상한}이다(설계 r6 7.1 — {@code requireInRange} 그대로). P1-3 · P2 의 값은 m 평균이라
+     * 0 이상이지만, P3 의 값은 「옛 보정값 − 재측정 판 2 보정값」 이라 음수일 수 있다. 메시지가 어느 속성인지 가리킨다.
+     */
+    @Test
+    void 판_2_차감도_같은_그물에_걸린다() {
+        long limit = SyncProperties.MAX_ABS_OFFSET_MS;
+
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of(), -limit - 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms");
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of(), limit + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms");
+        assertThatCode(() -> new SyncProperties(0, Map.of(), limit)).doesNotThrowAnyException();
+        assertThatCode(() -> new SyncProperties(0, Map.of(), -limit)).doesNotThrowAnyException();
+    }
+
+    /**
+     * 차감 자체의 상한은 합친 값 검사와 따로다 — 기본 1 · 차감 상한+1 이면 판 2 보정값(−600000)은 상한 안이지만 차감이 상한
+     * 밖이라 거절한다(음수 쪽 대칭). 합친 값 검사가 대신 잡지 못하는 갈래라, 메시지가 차감 속성과 그 값을 가리키고 합친 값
+     * 꼴({@code default-offset-ms(…) − …})이 아님까지 본다(변이 교정 ⑩ — 2026-11-13).
+     */
+    @Test
+    void 차감_자체가_상한_밖이면_합친_값이_상한_안이어도_거절한다() {
+        long limit = SyncProperties.MAX_ABS_OFFSET_MS;
+
+        assertThatThrownBy(() -> new SyncProperties(1, Map.of(), limit + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms=" + (limit + 1))
+                .hasMessageNotContaining("default-offset-ms(");
+        assertThatThrownBy(() -> new SyncProperties(-1, Map.of(), -limit - 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms=" + (-limit - 1))
+                .hasMessageNotContaining("default-offset-ms(");
+    }
+
+    /** P3 의 음수 차감 — 옛 3,900 · 차감 −300 이면 판 2 보정값은 4,200 이다. */
+    @Test
+    void 음수_차감은_판_2_보정값을_키운다() {
+        assertThat(new SyncProperties(3900, Map.of(), -300).v2OffsetFor(null)).isEqualTo(4200L);
+    }
+
+    /**
+     * 각 값은 상한 안인데 빼고 나면 넘는 갈래(보안 L1) — 기본값 쪽과 채널 쪽, 차감의 두 부호를 따로 본다. 메시지는 두 값과 결과를
+     * 함께 싣고 「두 값의 조합」 이라고 말한다 — 한 값의 단위 착각이 아니라서 그 안내는 싣지 않는다.
+     */
+    @Test
+    void 판_2_보정값이_상한을_넘으면_거부한다() {
+        long limit = SyncProperties.MAX_ABS_OFFSET_MS;
+
+        assertThatThrownBy(() -> new SyncProperties(-limit, Map.of(), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.default-offset-ms(" + -limit
+                        + ") − pokeclip.sync.v2-lead-correction-ms(1) = " + (-limit - 1))
+                .hasMessageContaining("두 값의 조합")
+                .hasMessageNotContaining("마이크로초");
+        assertThatThrownBy(() -> new SyncProperties(limit, Map.of(), -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("= " + (limit + 1));
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of("streamer-a", -limit), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.channel-offset-ms.streamer-a(" + -limit
+                        + ") − pokeclip.sync.v2-lead-correction-ms(1) = " + (-limit - 1));
+        assertThatCode(() -> new SyncProperties(-limit + 1, Map.of("streamer-a", -limit + 1), 1))
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * 판 2 보정값 = 판 NULL 보정값 − 판 2 차감이다(계약 세그먼트인덱스 6-6-9 「지금 값 − 판 2 행 m 평균」). 채널 덮어쓰기도
+     * 같은 차감을 받는다.
+     */
+    @Test
+    void 판_2_보정값은_판_NULL_보정값에서_차감을_뺀다() {
+        SyncProperties properties = new SyncProperties(3900, Map.of("streamer-a", 5000L), 150);
+
+        assertThat(properties.v2OffsetFor(null)).isEqualTo(3750L);
+        assertThat(properties.v2OffsetFor("streamer-b")).isEqualTo(3750L);
+        assertThat(properties.v2OffsetFor("streamer-a")).isEqualTo(4850L);
     }
 
     /** null 맵을 빈 맵으로 받는 기존 계약은 그대로다 — yml에 절 자체를 안 쓰는 것이 정상이다. */
     @Test
     void 맵이_없으면_빈_맵이다() {
-        assertThat(new SyncProperties(0, null).channelOffsetMs()).isEmpty();
+        assertThat(new SyncProperties(0, null, 0).channelOffsetMs()).isEmpty();
     }
 
     // ---------------------------------------------------------------- 바인딩 경로
@@ -160,6 +241,28 @@ class SyncPropertiesValidationTest {
                 .withPropertyValues("pokeclip.sync.default-offset-ms=-3200",
                         "pokeclip.sync.channel-offset-ms.streamer-a=4500")
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /** 음수 차감도 바인딩을 지난다(P3 차이값) — 0 이상만 받던 그물이면 부팅이 죽는다. */
+    @Test
+    void 음수_판_2_차감은_부팅을_막지_않는다() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(OnlySyncProperties.class)
+                .withPropertyValues("pokeclip.sync.default-offset-ms=3900",
+                        "pokeclip.sync.v2-lead-correction-ms=-300")
+                .run(context -> assertThat(context.getBean(SyncProperties.class).v2OffsetFor(null))
+                        .isEqualTo(4200L));
+    }
+
+    /** 판 2 차감 속성 이름이 바인딩에 닿는다 — 이름이 어긋나면 0 으로 조용히 남는다. */
+    @Test
+    void 판_2_차감은_속성_이름으로_바인딩된다() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(OnlySyncProperties.class)
+                .withPropertyValues("pokeclip.sync.default-offset-ms=3900",
+                        "pokeclip.sync.v2-lead-correction-ms=150")
+                .run(context -> assertThat(context.getBean(SyncProperties.class).v2OffsetFor(null))
+                        .isEqualTo(3750L));
     }
 
     /**
