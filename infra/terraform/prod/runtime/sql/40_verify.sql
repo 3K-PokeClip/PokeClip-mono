@@ -49,9 +49,10 @@
 --                                   stream_sessions_inherits_idx)과 M6-3b 발행 흔적 인덱스
 --                                   (stream_segments_uploaded_session_idx)는 제 표에 그 이름으로 있는지만 본다 — 정의
 --                                   문자열 비교는 PG 판이 바뀌면 깨진다
---   index:<PDT 인덱스>              PDT 부분 인덱스 셋(stream_segments_timing_round_idx · stream_segments_v2_seq_idx ·
---                                   stream_segments_legacy_wall_idx)이 stream_segments 에 그 이름으로 있고 쓸 수 있다
---                                   (indisvalid · indisready). CHECK 넷의 정의 본문은 같은 까닭으로 보지 않는다
+--   index:<PDT 인덱스>              PDT 부분 인덱스 넷(stream_segments_timing_round_idx · stream_segments_v2_seq_idx ·
+--                                   stream_segments_legacy_wall_idx · stream_segments_v2_pdt_idx)이 stream_segments 에
+--                                   그 이름으로 있고 쓸 수 있다(indisvalid · indisready). CHECK 넷의 정의 본문은 같은
+--                                   까닭으로 보지 않는다
 --   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 일반 연결에서 켜진 채('O' · 'A' — 'R' 은
 --                                   replica 에서만 돈다) 제 함수 · 시점(tgtype — 갱신은 AFTER DELETE 문장 단위 ·
 --                                   검사는 BEFORE INSERT 행 단위) · 전이 표 이름(갱신만 deleted_rows)에 묶여 있다 —
@@ -209,9 +210,10 @@ BEGIN
         VALUES ('stream_segments_seq_floor_raise', 'stream_segments_raise_seq_floor', true, 8, 'deleted_rows'),
                ('stream_segments_seq_floor_guard', 'stream_segments_check_seq_floor', false, 7, NULL)
     ),
-    -- PDT 부분 인덱스 셋(index:<인덱스>).
+    -- PDT 부분 인덱스 넷(index:<인덱스>).
     timing_indexes(i) AS (
-        VALUES ('stream_segments_timing_round_idx'), ('stream_segments_v2_seq_idx'), ('stream_segments_legacy_wall_idx')
+        VALUES ('stream_segments_timing_round_idx'), ('stream_segments_v2_seq_idx'), ('stream_segments_legacy_wall_idx'),
+               ('stream_segments_v2_pdt_idx')
     ),
     -- PDT 트리거 둘(trigger:<트리거> · function:<함수> · owner:<함수>). tgtype 비트는 위와 같고 16 = UPDATE 다 — 쓰기자
     -- 거부 7 = BEFORE INSERT 행 단위 · 게이트 27 = BEFORE UPDATE OR DELETE 행 단위.

@@ -1129,7 +1129,8 @@ PDT 판 2 생산자(POK-196 PDT PR)의 DB 몫입니다. 그 PR 의 c1 이 운영
 `stream_segments` 칸 일곱(`timing_version` · 원래 사실 다섯 ·
 `timing_round_id`) · CHECK 넷 · 게이트 표 `stream_timing_gate`(한 행 —
 스위치 `new_round_version` · 래치 `highest_version`) · 트리거 셋 · 부분
-색인 셋을 더했고, 새 SQL 파일은 없습니다. 적용은 「M6 스키마 재실행」 을
+색인 셋을 더했고(뒤에 판 2 PDT 색인 `stream_segments_v2_pdt_idx` 가 더해져
+지금은 넷), 새 SQL 파일은 없습니다. 적용은 「M6 스키마 재실행」 을
 그대로 돕니다. 이 절은 그 재실행의 조건과, 재실행 밖에서 보내는 게이트
 손 SQL 의 예외를 적습니다. 배포 순서 전체는 [Media 교체 런북](media-swap.md)
 「PDT 판 2 롤백 하한 · 판 게이트」 입니다.
