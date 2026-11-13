@@ -65,17 +65,31 @@ class VideoPositionPropertyTest extends IntegrationTestSupport {
 
     @Test
     void SQL_경로와_계약_문언_참조_구현이_같은_답을_낸다() {
+        compare(SEED, 10, "prop-");
+    }
+
+    /**
+     * 판 NULL 행의 절반이 크게 뒤로 튀는 장부 — 옛 후보 역행 신호(둘 다)가 자주 켜지는 갈래에서 같은 대조를 한 번 더 한다(역행
+     * 신호 조회를 색인을 타는 꼴로 고쳐 쓴 뒤의 동치 확인).
+     */
+    @Test
+    void 역행이_잦은_장부에서도_같은_답을_낸다() {
+        compare(SEED + 1, 2, "prop-inv-");
+    }
+
+    /** {@code invertOneIn} — 판 NULL 행 몇에 하나꼴로 파일명 시각을 크게 뒤로 튀게 하나. */
+    private void compare(long seed, int invertOneIn, String prefix) {
         StreamSegmentsFixture.ensureTable(jdbc);
-        Random random = new Random(SEED);
+        Random random = new Random(seed);
         int compared = 0;
         int converted = 0;
         int v2Chosen = 0;
 
         for (int i = 0; i < LEDGERS; i++) {
-            String streamId = "prop-" + i;
+            String streamId = prefix + i;
             streams.add(streamId);
             StreamSegmentsFixture.clear(jdbc, streamId);
-            List<Row> rows = randomLedger(random);
+            List<Row> rows = randomLedger(random, invertOneIn);
             rows.forEach(row -> insert(streamId, row));
             long correction = random.nextInt(301);
             VideoPositionCalculator calculator = new VideoPositionCalculator(ledger, new IngestKeyStore(jdbc),
@@ -114,7 +128,7 @@ class VideoPositionPropertyTest extends IntegrationTestSupport {
      * 뒤로 — 역행), 판 2 행은 PDT를 흔든다(1초 미만 겹침 · 가끔 회차 리셋으로 뒤로). 판 2 행의 파일명 시각은 PDT보다
      * 0–400ms 이르다(파일 머리).
      */
-    private static List<Row> randomLedger(Random random) {
+    private static List<Row> randomLedger(Random random, int invertOneIn) {
         int count = 2 + random.nextInt(9);
         List<Row> rows = new ArrayList<>();
         long seq = 1 + random.nextInt(50);
@@ -128,7 +142,7 @@ class VideoPositionPropertyTest extends IntegrationTestSupport {
             int dur = 3000 + random.nextInt(1501);
             boolean disc = k > 0 && random.nextInt(4) == 0;
             Row row = version == null
-                    ? legacyRow(random, seq, pts, clock, dur, disc)
+                    ? legacyRow(random, invertOneIn, seq, pts, clock, dur, disc)
                     : v2Row(random, seq, pts, clock, dur, disc);
             rows.add(row);
             seq += random.nextInt(6) == 0 ? 2 : 1;
@@ -138,8 +152,11 @@ class VideoPositionPropertyTest extends IntegrationTestSupport {
         return List.copyOf(rows);
     }
 
-    private static Row legacyRow(Random random, long seq, long pts, long clock, int dur, boolean disc) {
-        long wall = random.nextInt(10) == 0 ? clock - 5000 - random.nextInt(10_000) : clock + random.nextInt(600) - 300;
+    private static Row legacyRow(Random random, int invertOneIn, long seq, long pts, long clock, int dur,
+                                 boolean disc) {
+        long wall = random.nextInt(invertOneIn) == 0
+                ? clock - 5000 - random.nextInt(10_000)
+                : clock + random.nextInt(600) - 300;
         Long junkPdt = random.nextBoolean() ? null : clock - 20_000 + random.nextInt(40_000);
         return new Row(seq, pts, wall, junkPdt, null, dur, disc);
     }

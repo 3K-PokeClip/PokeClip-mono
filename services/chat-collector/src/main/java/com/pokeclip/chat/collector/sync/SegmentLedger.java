@@ -47,12 +47,13 @@ public class SegmentLedger {
      * {@code media/internal/index/ddl.go})다. 색인은 생산자 DDL이 만들고 여기는 그 조건을 그대로 쓴다(설계 r7 10절 ·
      * 처분 P-3). 정확성은 색인과 무관하다.
      *
-     * <p><b>{@code earlier_is_future}의 {@code EXISTS}는 표 전체 Seq Scan을 탄다 — 비용이 그 스트림이 아니라 표 전체 행
-     * 수에 비례한다</b>({@code SegmentLedgerIndexTest} 기록: 표 907,200행 · 12,676 버퍼 · 약 35ms, 스트림과 무관하게 표 전체를
-     * 거른다). 옛 floor가 잡히는 모든 호출이 이 값을 치르고, P2 쓰기 스위치 전에는 prod의 모든 행이 판 NULL이라 그 전 기간
-     * 내내 그렇다. 판 조건을 더하기 전 develop 조회도 같은 데이터에서 같은 12,676 버퍼였다. 다시 볼 때는 둘 가운데 하나가
-     * 먼저 닿을 때다 — {@code stream_segments} 행 수가 300만을 넘을 때(이 기록의 약 3배 · 호출당 약 100ms 추정), 또는 영상
-     * 위치 창구 호출이 초당 1회를 넘을 때(지금은 판별기가 카드당 1회). 고쳐 쓸지는 kty 회부다.
+     * <p><b>{@code earlier_is_future}는 「seq 가 floor 보다 앞선 판 NULL 행 가운데 파일명 시각 최대 하나」 를 보고 floor 의
+     * 파일명 시각과 견준다</b> — 「seq 가 앞서는데 파일명 시각이 늦은 행이 있나」 와 같은 뜻이다(앞선 행의 최댓값이 floor 보다
+     * 늦으면 그런 행이 있고, 아니면 없다. 앞선 행이 없으면 거짓). 옛 꼴 {@code EXISTS(y.seq < s.seq AND y.start_wall_utc >
+     * s.start_wall_utc)}는 플래너가 표 전체 Seq Scan으로 풀어 비용이 표 전체 행 수에 비례했다(표 907,200행에서 12,676 버퍼 ·
+     * 약 35ms — {@code SegmentLedgerIndexTest} 기록). 지금 꼴은 판 NULL 부분 색인을 파일명 시각 내림차순으로 타
+     * {@code LIMIT 1}에서 멈추므로, 꼬리 시각이면 꼬리 몇 행이고 꼬리에서 먼 시각이면 그 시각 뒤 그 스트림의 판 NULL 행 수만큼
+     * 읽는다. 뜻이 같은지는 {@code SegmentLedgerInversionEquivalenceTest}(옛 꼴과 4,000번 대조)가 묶는다.
      *
      * <p>파라미터 순서는 (t, streamId, t)다. 첫 {@code ?}가 서브쿼리 안에 있어
      * 텍스트 순서와 인자 순서가 눈에 잘 안 들어온다 — 바꾸면 조용히 틀린 답이 나온다.
@@ -63,9 +64,10 @@ public class SegmentLedger {
                    (SELECT max(x.seq) FROM public.stream_segments x
                      WHERE x.stream_id = s.stream_id AND x.timing_version IS NULL
                        AND x.start_wall_utc <= ?) AS max_candidate_seq,
-                   EXISTS(SELECT 1 FROM public.stream_segments y
-                           WHERE y.stream_id = s.stream_id AND y.timing_version IS NULL
-                             AND y.seq < s.seq AND y.start_wall_utc > s.start_wall_utc) AS earlier_is_future
+                   COALESCE((SELECT y.start_wall_utc FROM public.stream_segments y
+                              WHERE y.stream_id = s.stream_id AND y.timing_version IS NULL AND y.seq < s.seq
+                              ORDER BY y.start_wall_utc DESC
+                              LIMIT 1) > s.start_wall_utc, false) AS earlier_is_future
               FROM public.stream_segments s
              WHERE s.stream_id = ? AND s.timing_version IS NULL AND s.start_wall_utc <= ?
              ORDER BY s.start_wall_utc DESC, s.seq DESC

@@ -27,15 +27,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>색인은 이 카드가 만들지 않는다</b> — 운영 색인은 생산자 DDL({@code media/internal/index/ddl.go})이 깐다(처분 P-3).
  * 그래서 시험이 그 정의를 옮겨 스스로 만든다. 정의가 바뀌면 여기도 바꾼다.
  *
- * <p>판정: 색인 있음에서 판 2 후보 조회는 세 장부 모두, 옛 후보 조회는 판 2 만 있는 장부에서 꼬리 몇 행 수준이다. 대조로 색인
- * 없음에서는 같은 두 자리가 그 판이 아닌 행을 훑어 버퍼가 크다(색인이 실제로 일을 하는지).
+ * <p>판정(설계 r6 7.4 그대로): 색인 있음에서 꼬리 시각의 두 조회가 세 장부 모두 꼬리 몇 행 수준이다(여섯 경우). 대조로
+ * 색인 없음에서는 판 2 후보 · 옛 후보 조회가 그 판이 아닌 행을 끝까지 훑어 버퍼가 크다(색인이 실제로 일을 하는지).
  *
- * <p>옛 floor가 잡히는 두 장부(판 NULL 만 · 롤백)의 옛 후보 조회는 꼬리 몇 행이 아니다 — 역행 신호
- * {@code earlier_is_future}의 {@code EXISTS}를 플래너가 표 전체 Seq Scan으로 푼다. 비용은 그 스트림이 아니라 표 전체 행
- * 수에 비례한다(2026-11-13 실측 · 표 907,200행 · {@code Rows Removed by Filter} 907,200 · 12,676 버퍼 · 약 35ms · 색인 있음 ·
- * 없음 같음). 옛 floor가 잡히는 모든 호출이 치르고 P2 쓰기 스위치 전 prod 기간 내내 그렇다. 판 조건을 더하기 전 develop
- * 조회도 같은 데이터에서 같은 12,676 버퍼였다 — 이 커밋이 만든 비용이 아니라 기록만 한다. 재검토 조건과 EXISTS 처분은
- * {@link SegmentLedger#FLOOR_BY_WALL_CLOCK} 주석과 kty 회부를 따른다.
+ * <p>옛 후보 조회의 역행 신호 {@code earlier_is_future}는 옛 꼴({@code EXISTS(y.seq < s.seq AND y.start_wall_utc >
+ * s.start_wall_utc)})이면 플래너가 표 전체 Seq Scan으로 풀었다(2026-11-13 실측 · 표 907,200행 · 12,676 버퍼 · 약 35ms).
+ * 지금 꼴은 같은 뜻을 「seq 가 앞선 판 NULL 행 가운데 파일명 시각 최대 하나」 로 고쳐 써 판 NULL 부분 색인을 거꾸로 탄다 —
+ * 꼬리 시각이면 꼬리 몇 행이다. 꼬리에서 먼 시각이면 그 시각 뒤 판 NULL 행 수만큼 읽는다(표 전체가 아니라 그 스트림 안).
  *
  * <p>판 2 후보 조회를 첫 판 2 PDT보다 이른 시각으로 부르는 경우(보안 L2)도 기록만 한다 — 판 2 후보가 없어 그 스트림의 판 2
  * 행을 끝까지 훑는다(2026-11-13 실측 · 판 2 30만 행에서 7,246 버퍼 · 약 37ms).
@@ -126,10 +124,12 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
         long v2OnLegacy = v2Floor(LEGACY_ONLY, tail, "있음");
         long v2OnRollback = v2Floor(ROLLBACK, tail, "있음");
         long legacyOnV2 = legacyFloor(V2_ONLY, tail, "있음");
-        legacyFloor(LEGACY_ONLY, tail, "있음");
-        legacyFloor(ROLLBACK, tail, "있음");
+        long legacyOnLegacy = legacyFloor(LEGACY_ONLY, tail, "있음");
+        long legacyOnRollback = legacyFloor(ROLLBACK, tail, "있음");
         // 기록만(보안 L2) — 첫 판 2 PDT 보다 이른 시각이면 판 2 후보가 없어 그 스트림의 판 2 행을 어디까지 훑는지 본다.
         v2Floor(V2_ONLY, T0.minusSeconds(1), "있음 · 첫 PDT − 1초");
+        // 기록만 — 꼬리에서 먼 시각(첫 행 + 1초)의 옛 후보 조회는 그 시각 뒤 판 NULL 행 수만큼 읽는다.
+        legacyFloor(LEGACY_ONLY, T0.plusSeconds(1), "있음 · 첫 행 + 1초");
 
         jdbc.execute("DROP INDEX public.stream_segments_v2_seq_idx");
         jdbc.execute("DROP INDEX public.stream_segments_legacy_wall_idx");
@@ -140,8 +140,8 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
         legacyFloor(LEGACY_ONLY, tail, "없음");
         legacyFloor(ROLLBACK, tail, "없음");
 
-        assertThat(List.of(v2OnV2, v2OnLegacy, v2OnRollback, legacyOnV2))
-                .as("색인 있음 — 판 2 후보 세 장부 · 옛 후보 판 2 만 장부는 꼬리 몇 행")
+        assertThat(List.of(v2OnV2, v2OnLegacy, v2OnRollback, legacyOnV2, legacyOnLegacy, legacyOnRollback))
+                .as("색인 있음 — 판 2 후보 · 옛 후보 세 장부 모두 꼬리 몇 행")
                 .allMatch(buffers -> buffers <= TAIL_BUFFERS);
         assertThat(List.of(v2OnLegacyWithout, legacyOnV2Without))
                 .as("색인 없음 대조 — 다른 판 행을 끝까지 훑는다")
