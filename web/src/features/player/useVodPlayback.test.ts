@@ -916,3 +916,99 @@ describe('버려진 전이 렌더 뒤 복귀', () => {
     expect(onSeekB).not.toHaveBeenCalled();
   }, 10_000);
 });
+
+describe('왼쪽 끝은 첫 내용 조각 — 맨 앞 EXT-X-GAP 을 막대 · Home · 이동 · 범위 밖 자리에 넣지 않는다(POK-573)', () => {
+  /** 맨 앞 GAP 조각(2.8초) 셋 — 첫 내용 조각 = 첫 PDT + 8.4초 */
+  const CONTENT_MS = PDT0 + 8_400;
+
+  /**
+   * 맨 앞 GAP 셋 뒤에 4초 내용 조각 아홉 · 2.4초 조각 하나 — 첫 내용 조각부터 끝까지 38.4초(반올림이 내림이 된다)이고 목록
+   * 전체는 46.8초다
+   */
+  function gappedDetails(): Details {
+    const durationsMs = [2_800, 2_800, 2_800, ...Array.from({ length: 9 }, () => 4_000), 2_400];
+    let atMs = 0;
+    const fragments = durationsMs.map((durationMs, sn) => {
+      const frag = {
+        sn,
+        cc: 0,
+        start: atMs / 1000,
+        duration: durationMs / 1000,
+        programDateTime: PDT0 + atMs,
+        gap: sn < 3,
+        tagList: [],
+      };
+      atMs += durationMs;
+      return frag;
+    });
+    return { fragments, fragmentStart: 0, targetduration: 4, live: false };
+  }
+
+  it('막대 폭은 첫 내용 조각부터 끝까지다 — 받은 목록을 묶음에 담을 때 첫 내용 조각을 버리지 않는다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(gappedDetails()));
+    sit(video, 20);
+    expect(view.result.current.windowSeconds).toBe(38);
+    expect(view.result.current.behindSeconds).toBe(27);
+  });
+
+  it('Home(비율 0)은 첫 내용 조각으로 정확히 간다 — 반올림한 막대 폭을 거치지 않는다', async () => {
+    const { view, video, onSeek } = await renderVod();
+    act(() => lastHls().list(gappedDetails()));
+    sit(video, 20);
+    act(() => view.result.current.seekToFraction(0));
+    expect(video.currentTime).toBeCloseTo(8.4, 9);
+    expect(onSeek).toHaveBeenCalledOnce();
+  });
+
+  it('왼쪽 끝을 넘는 화살표는 첫 내용 조각에 멈춘다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(gappedDetails()));
+    sit(video, 20);
+    act(() => view.result.current.seekBy(60));
+    expect(video.currentTime).toBeCloseTo(8.4, 9);
+  });
+
+  it.each([
+    ['목록 앞(기준점이 첫 PDT 보다 1분 이른 10초 자리)', PDT0 - MIN, 10],
+    ['맨 앞 GAP 안(첫 PDT + 2초 — 첫 내용 조각 6.4초 앞)', PDT0, 2],
+  ])(
+    '받아 둔 자리가 %s 이면 범위 밖으로 보고 첫 내용 조각으로 자른다',
+    async (_where, axisZeroMs, startAtSeconds) => {
+      const vod = vodSource({ axisZeroMs });
+      const { video, onStartApplied } = await renderVod({ vod, startAtSeconds });
+      act(() => lastHls().list(gappedDetails()));
+      expect(video.currentTime).toBeCloseTo(8.4, 9);
+      expect(onStartApplied).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('카드 자리도 첫 내용 조각 1초 넘게 앞이면 범위 밖이다', async () => {
+    const { view, video } = await renderVod();
+    act(() => lastHls().list(gappedDetails()));
+    sit(video, 20);
+    let result: string | undefined;
+    act(() => {
+      result = view.result.current.seekToDate?.(CONTENT_MS - 1_500);
+    });
+    expect(result).toBe('outside');
+    expect(video.currentTime).toBe(20);
+  });
+
+  it('GAP 없는 목록에서는 폭 · Home · 화살표 · 범위 밖 자리 · 끝으로가 첫 조각 기준 그대로다', async () => {
+    const vod = vodSource({ axisZeroMs: PDT0 - MIN });
+    const { view, video } = await renderVod({ vod, startAtSeconds: 10 });
+    act(() => lastHls().list(vodDetails(10, 4)));
+    expect(video.currentTime).toBe(0);
+    sit(video, 20);
+    expect(view.result.current.windowSeconds).toBe(40);
+    act(() => view.result.current.seekToFraction(0));
+    expect(video.currentTime).toBe(0);
+    sit(video, 20);
+    act(() => view.result.current.seekBy(60));
+    expect(video.currentTime).toBe(0);
+    sit(video, 20);
+    act(() => view.result.current.returnToLive());
+    expect(video.currentTime).toBe(39);
+  });
+});

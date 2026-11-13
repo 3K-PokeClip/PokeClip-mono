@@ -352,6 +352,7 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
     const axis = sessionAxis({
       ...at(26),
       kind: 'live',
+      live: true,
       liveEdgeTime: 28,
       axisLowerMs: PDT0 - 600_000,
     });
@@ -365,7 +366,13 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
   });
 
   it('되감기는 끝을 「지금 − 라이브 지연」으로 센다 · 창 끝은 목록 끝(E)이다', () => {
-    const axis = sessionAxis({ ...at(14), kind: 'rewind', liveEdgeTime: null, axisLowerMs: null });
+    const axis = sessionAxis({
+      ...at(14),
+      kind: 'rewind',
+      live: true,
+      liveEdgeTime: null,
+      axisLowerMs: null,
+    });
     expect(axis).toMatchObject({
       atMs: PDT0 + 4_000,
       edgeMs: PDT0 + 20_000,
@@ -376,7 +383,13 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
   });
 
   it('vod 는 문서 범위가 축이다(여유 0)', () => {
-    const axis = sessionAxis({ ...at(14), kind: 'vod', liveEdgeTime: null, axisLowerMs: PDT0 - 1 });
+    const axis = sessionAxis({
+      ...at(14),
+      kind: 'vod',
+      live: false,
+      liveEdgeTime: null,
+      axisLowerMs: PDT0 - 1,
+    });
     expect(axis).toMatchObject({
       view: { lowerMs: PDT0, endMs: PDT0 + 20_000 },
       windowSeconds: 20,
@@ -385,7 +398,68 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
 
   it('라이브 끝을 모르면(목록 전 · seekable 없음) null', () => {
     expect(
-      sessionAxis({ ...at(14), kind: 'live', liveEdgeTime: null, axisLowerMs: null }),
+      sessionAxis({ ...at(14), kind: 'live', live: true, liveEdgeTime: null, axisLowerMs: null }),
     ).toBeNull();
+  });
+
+  describe('시크바 왼쪽 끝(barLowerMs) — 되감기 · 다시보기는 첫 내용 조각 · 라이브는 되감기 범위까지 넓힌다', () => {
+    /** 맨 앞 GAP 둘 · 4초 내용 조각 넷(첫 내용 조각 = PDT0 + 8 000 · 끝 = PDT0 + 24 000) */
+    const gapped = {
+      fragments: withGaps([4, 4, 4, 4, 4, 4], [0, 1]),
+      targetDurationS: 4,
+      currentTime: 14,
+      nowMs: PDT0 + 27_000,
+      lagMs: 3_000,
+      liveEdgeTime: null,
+      /** 낡은 되감기 범위 첫 시각 — 지금 목록 첫 조각보다 10분 이르다 */
+      axisLowerMs: PDT0 - 600_000,
+    };
+
+    it('방송 중 되감기는 낡은 axisLowerMs 를 쓰지 않고 첫 내용 조각이 왼쪽 끝 · 하한은 그 조각 하나 안쪽이다', () => {
+      const axis = sessionAxis({ ...gapped, kind: 'rewind', live: true });
+      expect(axis).toMatchObject({
+        barLowerMs: PDT0 + 8_000,
+        edgeMs: PDT0 + 24_000,
+        view: { lowerMs: PDT0 + 12_000, endMs: PDT0 + 24_000 },
+        windowSeconds: 16,
+      });
+    });
+
+    it('끝난 되감기 목록(ENDLIST)은 왼쪽 끝과 하한이 같은 첫 내용 조각이다', () => {
+      const axis = sessionAxis({ ...gapped, kind: 'rewind', live: false });
+      expect(axis).toMatchObject({
+        barLowerMs: PDT0 + 8_000,
+        view: { lowerMs: PDT0 + 8_000, endMs: PDT0 + 24_000 },
+      });
+    });
+
+    it('vod 도 첫 내용 조각이 왼쪽 끝 · 하한이고 폭은 그 조각부터 문서 끝까지다', () => {
+      const axis = sessionAxis({ ...gapped, kind: 'vod', live: false });
+      expect(axis).toMatchObject({
+        barLowerMs: PDT0 + 8_000,
+        view: { lowerMs: PDT0 + 8_000, endMs: PDT0 + 24_000 },
+        windowSeconds: 16,
+      });
+    });
+
+    it('라이브는 되감기 범위 첫 시각(axisLowerMs)으로 넓힌다 — 하한은 맨 앞 조각 셋 그대로', () => {
+      const axis = sessionAxis({ ...gapped, kind: 'live', live: true, liveEdgeTime: 22 });
+      expect(axis).toMatchObject({
+        barLowerMs: PDT0 - 600_000,
+        view: { lowerMs: PDT0 + 12_000, endMs: PDT0 + 22_000 },
+        windowSeconds: 622,
+      });
+    });
+
+    it('라이브에서 되감기 범위를 모르면 지금 목록 첫 조각이다(GAP 포함)', () => {
+      const axis = sessionAxis({
+        ...gapped,
+        kind: 'live',
+        live: true,
+        liveEdgeTime: 22,
+        axisLowerMs: null,
+      });
+      expect(axis?.barLowerMs).toBe(PDT0);
+    });
   });
 });

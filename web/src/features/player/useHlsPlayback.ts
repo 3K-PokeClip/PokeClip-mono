@@ -315,6 +315,7 @@ export function useHlsPlayback(
     const sync = hlsRef.current?.liveSyncPosition ?? null;
     const axis = sessionAxis({
       kind,
+      live: details.live,
       fragments: fragmentsOf(details),
       targetDurationS: details.targetduration,
       currentTime: video.currentTime,
@@ -379,9 +380,18 @@ export function useHlsPlayback(
     [videoRef, onSeek, readAxis, requestSeek, sessionActive],
   );
 
+  // 맨 왼쪽(Home · 비율 0)은 세션 모드에서 막대 왼쪽 끝을 바로 요청한다 — 그린 뒤 자란 창이면 React 의 창 폭이 낡았고,
+  // 창 폭은 1시간에서 잘려 「끝 − 폭」 이 왼쪽 끝에 닿지 않는다(POK-573)
   const seekToFraction = useCallback(
-    (fraction: number) => seekToBehind(behindFromSeekFraction(fraction, windowSeconds)),
-    [seekToBehind, windowSeconds],
+    (fraction: number) => {
+      if (fraction <= 0 && sessionActive()) {
+        const axis = readAxis();
+        if (axis !== null) requestSeek(axis.barLowerMs);
+        return;
+      }
+      seekToBehind(behindFromSeekFraction(fraction, windowSeconds));
+    },
+    [seekToBehind, windowSeconds, sessionActive, readAxis, requestSeek],
   );
 
   const seekBy = useCallback(
@@ -390,7 +400,10 @@ export function useHlsPlayback(
       if (!video) return;
       if (sessionActive()) {
         const axis = readAxis();
-        if (axis !== null) seekToBehind(axis.behindSeconds + deltaSeconds);
+        if (axis === null) return;
+        // 왼쪽 끝을 넘는 이동은 막대 왼쪽 끝 요청이다(Home 과 같은 자리 — POK-573)
+        if (axis.behindSeconds + deltaSeconds >= axis.windowSeconds) requestSeek(axis.barLowerMs);
+        else seekToBehind(axis.behindSeconds + deltaSeconds);
         return;
       }
       const range = dvrRange(video.seekable);
@@ -400,7 +413,7 @@ export function useHlsPlayback(
           deltaSeconds,
       );
     },
-    [videoRef, seekToBehind, readAxis, sessionActive],
+    [videoRef, seekToBehind, readAxis, requestSeek, sessionActive],
   );
 
   // 실제 시각으로 옮긴다(라이브 카드, POK-326). 그 시각을 품은 조각의 시각 표시로 영상 시각을 셈하고, 시크는 같은 한 길
@@ -416,9 +429,13 @@ export function useHlsPlayback(
         const axis = readAxis();
         const ask = hooksRef.current.onSeekRequest;
         if (axis === null || ask === undefined) return 'unknown';
-        // 되감기가 준비됐으면 그 목록의 첫 시각까지다. 아니면 지금 목록의 첫 조각까지만(시크바 왼쪽 끝과 같은 하한). 창 하한 여유
-        // 안쪽은 세션이 하한으로 옮기고 알린다. 카드 초는 정각 초로 내린 값이라 1초까지는 봐준다(경계의 카드가 실제로는 창 안이다)
-        const lowerMs = Math.min(hooksRef.current.axisLowerMs ?? Infinity, axis.list.firstMs);
+        // 되감기 · 다시보기는 시크바 왼쪽 끝(첫 내용 조각 — POK-573)까지다. 라이브는 되감기가 준비됐으면 그 목록의 첫
+        // 시각까지, 아니면 지금 목록의 첫 조각까지만이다. 창 하한 여유 안쪽은 세션이 하한으로 옮기고 알린다. 카드 초는 정각 초로
+        // 내린 값이라 1초까지는 봐준다(경계의 카드가 실제로는 창 안이다)
+        const lowerMs =
+          sourceRef.current.kind === 'live'
+            ? Math.min(hooksRef.current.axisLowerMs ?? Infinity, axis.list.firstMs)
+            : axis.barLowerMs;
         if (epochMs + CARD_SECOND_SLACK_MS < lowerMs) return 'outside';
         ask(epochMs, axis.view);
         return 'moved';

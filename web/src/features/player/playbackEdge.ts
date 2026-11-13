@@ -205,6 +205,8 @@ export function endStalled(input: {
 
 export interface SessionAxisInput {
   kind: PlaybackSource['kind'];
+  /** 목록이 아직 자란다(hls.js details.live — ENDLIST 가 없다). 방송 중 되감기의 창 하한 여유를 가른다 */
+  live: boolean;
   fragments: readonly DatedFragment[];
   targetDurationS: number;
   /** 재생 위치(영상 초) */
@@ -214,7 +216,7 @@ export interface SessionAxisInput {
   nowMs: number;
   /** 라이브 재생기에서 마지막으로 잰 「지금 − 라이브 끝」 */
   lagMs: number;
-  /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 모르면 로드한 목록 첫 시각 */
+  /** 라이브 재생기의 되감기 범위 첫 시각 — 시크바 왼쪽 끝을 라이브 창 밖까지 넓힌다. 모르면 로드한 목록 첫 시각 */
   axisLowerMs: number | null;
 }
 
@@ -224,6 +226,11 @@ export interface SessionAxis {
   atMs: number | null;
   /** 시크바 오른쪽 끝의 실제 시각 — 라이브 끝(되감기 재생기는 「지금 − 라이브 지연」, vod 는 문서 끝) */
   edgeMs: number;
+  /**
+   * 시크바 왼쪽 끝의 실제 시각 — 맨 왼쪽(Home) · 왼쪽 끝을 넘는 이동이 요청하는 자리이자 카드의 범위 밖 문턱. 되감기 ·
+   * 다시보기는 로드한 목록의 첫 내용 조각, 라이브는 되감기 범위 첫 시각까지 넓힌다(POK-573)
+   */
+  barLowerMs: number;
   /** 세션에 넘기는 시크 범위 — 창 하한과 로드한 목록의 끝 */
   view: SeekView;
   windowSeconds: number;
@@ -251,18 +258,20 @@ export function sessionAxis(input: SessionAxisInput): SessionAxis | null {
     edgeMs = kind === 'rewind' ? input.nowMs - input.lagMs : list.lastEndMs;
   }
   const atMs = programDateAt(fragments, input.currentTime);
-  const lower =
-    kind === 'vod' ? list.firstMs : Math.min(input.axisLowerMs ?? list.firstMs, list.firstMs);
+  const barLowerMs =
+    kind === 'live'
+      ? Math.min(input.axisLowerMs ?? list.firstMs, list.firstMs)
+      : (list.contentFirstMs ?? list.firstMs);
   return {
     list,
     atMs,
     edgeMs,
-    // 축 입력에 방송 중 여부가 아직 없어 방송 중 하한으로 둔다
+    barLowerMs,
     view: {
-      lowerMs: windowLowerMs(list, kind, true),
+      lowerMs: windowLowerMs(list, kind, input.live),
       endMs: kind === 'live' ? edgeMs : list.lastEndMs,
     },
-    windowSeconds: clampSeconds(edgeMs - lower),
+    windowSeconds: clampSeconds(edgeMs - barLowerMs),
     behindSeconds: atMs === null ? 0 : clampSeconds(edgeMs - atMs),
   };
 }

@@ -19,8 +19,9 @@ import type { PlayerSimulation, PlayerSimulationOptions } from './usePlayerSimul
 // 끝난 뒤 들어온 화면(A) · 세션이 past 로 닫힌 화면(B — POK-547)의 다시보기 재생기(POK-546 설계 2-3) — 회차 경로가 답한
 // VOD 목록 하나를 PDT 축으로 튼다.
 // useHlsPlayback 을 세션 모드(onSeekRequest)로 세워 카드의 실제 시각 옮기기가 PDT 와 범위 밖 판정을 쓰게 하고, 그 반환을
-// 펼쳐 세 가지를 덮는다: 시크바(목록 전체 길이 축 — 세션 축의 1시간 상한을 거치지 않는다) · 위치(화면에 붙은 자리를
-// 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른 카드). 다 봤나(ended)는 useHlsPlayback 에 없어 더한다.
+// 펼쳐 세 가지를 덮는다: 시크바(목록 전체 길이 축 — 세션 축의 1시간 상한을 거치지 않는다. 왼쪽 끝은 맨 앞 EXT-X-GAP 을
+// 뺀 첫 내용 조각이다 — POK-573) · 위치(화면에 붙은 자리를 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른
+// 카드). 다 봤나(ended)는 useHlsPlayback 에 없어 더한다.
 // PlayerSimulation 계약 그대로라 GlassPlayer 몸통은 어느 훅인지 모른다.
 
 /** 회차 VOD 목록 하나(회차 경로의 vod ∧ ready 답)와 카드 · 채팅 축 */
@@ -39,7 +40,10 @@ const HAVE_CURRENT_DATA = 2;
 
 /** 재생기가 받은 목록의 범위 — 소스가 바뀔 때까지 지우지 않는다(재생기를 내린 뒤에도 시크바 폭이 남는다) */
 interface VodList {
+  /** 목록 첫 조각(맨 앞 GAP 포함)의 시각 */
   firstMs: number;
+  /** 첫 내용 조각(맨 앞 GAP 을 뺀 첫 조각)의 시각 — 시크바 왼쪽 끝 · Home · 하한(POK-573) */
+  contentFirstMs: number;
   lastEndMs: number;
   /** 마지막 조각의 시작(LoadedList.lastStartMs) — 끝으로 갈 때 틀 자리의 하한 */
   lastStartMs?: number;
@@ -90,8 +94,8 @@ function heldReducer(held: VodHeld, action: VodHeldAction): VodHeld {
     return held;
   }
   if (action.type === 'list') {
-    const { firstMs, lastEndMs, lastStartMs } = action;
-    return { ...held, list: { firstMs, lastEndMs, lastStartMs } };
+    const { firstMs, contentFirstMs, lastEndMs, lastStartMs } = action;
+    return { ...held, list: { firstMs, contentFirstMs, lastEndMs, lastStartMs } };
   }
   if (action.type === 'ended') {
     return held.ended === action.ended ? held : { ...held, ended: action.ended };
@@ -129,14 +133,14 @@ const END_TAIL_MS = 1_000;
 
 /**
  * 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 마지막 조각이 1초보다 짧으면 그 조각의 시작이다(앞 조각으로 물러서지 않는다).
- * 마지막 조각 시작을 모르면 첫 조각을 하한으로 둔다
+ * 마지막 조각 시작을 모르면 첫 내용 조각을 하한으로 둔다
  */
 function tailMs(list: VodList): number {
-  return Math.max(list.lastStartMs ?? list.firstMs, list.lastEndMs - END_TAIL_MS);
+  return Math.max(list.lastStartMs ?? list.contentFirstMs, list.lastEndMs - END_TAIL_MS);
 }
 
 /**
- * 카드 · 받아 둔 자리가 옮길 자리 — 첫 조각부터 꼬리까지로 가둔다(끝은 꼬리로 모은다). 끝 이동과 달리 다 본 뒤에도
+ * 카드 · 받아 둔 자리가 옮길 자리 — 첫 내용 조각부터 꼬리까지로 가둔다(끝은 꼬리로 모은다). 끝 이동과 달리 다 본 뒤에도
  * 옮긴다. 이 주소의 목록을 아직 모르면 재생기 목록 끝까지다
  */
 function cardTargetMs(targetMs: number, view: SeekView, list: VodList | null): number {
@@ -204,12 +208,19 @@ export function useVodPlayback(
   const listRef = useRef<VodList | null>(null);
   const hooks = useMemo<PlaybackHooks>(
     () => ({
-      // 세션 모드: 카드의 실제 시각 옮기기(seekToDate)가 범위 밖 판정을 하고 여기로 넘긴다. VOD 하한은 첫 조각이라 그 앞은 첫
-      // 조각으로 조용히 자르고, 꼬리 뒤는 꼬리다(cardTargetMs)
+      // 세션 모드: 카드의 실제 시각 옮기기(seekToDate)가 범위 밖 판정을 하고 여기로 넘긴다. VOD 하한은 첫 내용 조각이라 그 앞은
+      // 그 조각으로 조용히 자르고, 꼬리 뒤는 꼬리다(cardTargetMs)
       onSeekRequest: (targetMs, view) =>
         seekToMsRef.current(cardTargetMs(targetMs, view, listRef.current)),
-      onListLoaded: ({ url, firstMs, lastEndMs, lastStartMs }) =>
-        dispatchHeld({ type: 'list', url, firstMs, lastEndMs, lastStartMs }),
+      onListLoaded: ({ url, firstMs, contentFirstMs, lastEndMs, lastStartMs }) =>
+        dispatchHeld({
+          type: 'list',
+          url,
+          firstMs,
+          contentFirstMs: contentFirstMs ?? firstMs,
+          lastEndMs,
+          lastStartMs,
+        }),
       // 재생기는 설 때 한 번만 읽는다 — 그 뒤 바뀐 값은 재생기를 다시 세울 때(다시 마운트) 쓰인다
       initialSound,
     }),
@@ -310,19 +321,21 @@ export function useVodPlayback(
       return;
     }
     if (result === 'outside') {
-      startInputs.seekToMs(list.firstMs);
+      startInputs.seekToMs(list.contentFirstMs);
     }
     startInputs.onStartApplied?.();
   }, [list, startAtSeconds]);
 
-  // 시크바 — 목록 첫 조각부터 끝까지(이 표가 정본: 설계 2-3). 막대 값은 재생 위치의 PDT 로 센다(놓은 직후에도 놓은 자리)
-  const windowSeconds = list === null ? 0 : Math.round((list.lastEndMs - list.firstMs) / 1000);
+  // 시크바 — 목록 첫 내용 조각부터 끝까지(이 표가 정본: 설계 2-3 · 맨 앞 GAP 은 막대에 넣지 않는다 — POK-573). 막대 값은
+  // 재생 위치의 PDT 로 센다(놓은 직후에도 놓은 자리)
+  const windowSeconds =
+    list === null ? 0 : Math.round((list.lastEndMs - list.contentFirstMs) / 1000);
   const behindSeconds =
     list === null || axisPdtMs === null
       ? windowSeconds
       : Math.min(windowSeconds, Math.max(0, Math.round((list.lastEndMs - axisPdtMs) / 1000)));
 
-  // 시크바 · 키가 옮길 자리 — 첫 조각부터 꼬리(끝 1초 앞)까지로 가둔다. 다 본 뒤 꼬리로 가면 옮기지 않는다: 옮기면 seeking 이
+  // 시크바 · 키가 옮길 자리 — 첫 내용 조각부터 꼬리(끝 1초 앞)까지로 가둔다. 다 본 뒤 꼬리로 가면 옮기지 않는다: 옮기면 seeking 이
   // 다 봤나를 풀어 「처음부터」 단추가 깜빡이거나 끝 1초를 또 돈다(POK-518)
   const moveWithinList = useCallback(
     (targetMs: number) => {
@@ -330,7 +343,7 @@ export function useVodPlayback(
         return;
       }
       const tail = tailMs(list);
-      const atMs = clampToView(targetMs, { lowerMs: list.firstMs, endMs: tail });
+      const atMs = clampToView(targetMs, { lowerMs: list.contentFirstMs, endMs: tail });
       if (atMs === tail && ended) {
         return;
       }
@@ -343,6 +356,11 @@ export function useVodPlayback(
     (fraction: number) => {
       const nowMs = currentProgramDateMs();
       if (list === null || nowMs === null) {
+        return;
+      }
+      // 맨 왼쪽은 첫 내용 조각 그 자리다 — 반올림한 막대 폭을 거치면 1초 안쪽으로 빗나간다
+      if (fraction <= 0) {
+        moveWithinList(list.contentFirstMs);
         return;
       }
       moveWithinList(list.lastEndMs - behindFromSeekFraction(fraction, windowSeconds) * 1000);
