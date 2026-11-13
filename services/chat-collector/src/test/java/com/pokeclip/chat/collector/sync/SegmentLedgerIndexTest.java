@@ -79,8 +79,9 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
 
     /**
      * 판 2 PDT 색인 — <b>생산자 정의</b>(생산자 PR 510 · develop 머지 커밋 fc7dd91c(2026-11-13) · prod 적용은 판 2 쓰기 스위치
-     * 전 · POK-551 운영 SQL 과 한 재실행 · kty 2026-11-13 L2 (가)). 제품 DDL 은 fc7dd91c 에 있고 이 브랜치(develop 5ad61a0c
-     * 기준) 코드에는 없어 시험이 만든다. 생산자 꼴(이름이 없을 때만 만드는 {@code DO} 블록 — {@code ddl.go} 의 PDT 부분 인덱스 블록)
+     * 전 · POK-551 운영 SQL 과 한 재실행 · kty 2026-11-13 L2 (가)). 제품 DDL 은 {@code media/internal/index/ddl.go}(생산자
+     * PR 510 · develop 머지 fc7dd91c)에 있고, 이 시험은 시험 DB 에 스스로 만든다. 생산자 꼴(이름이 없을 때만 만드는
+     * {@code DO} 블록 — {@code ddl.go} 의 PDT 부분 인덱스 블록)
      * 그대로 옮겼고, 시험 연결의 스키마 경로 때문에 이름 · 표에만 {@code public.} 을 붙였다. 이 카드는 제품 DDL 을 만들지
      * 않는다.
      */
