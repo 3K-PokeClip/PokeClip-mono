@@ -156,9 +156,13 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
         // 한다. 일반 계획에서는 플래너가 이른 시각인지 모르므로, 앞세운 존재 확인이 없으면 seq 역순으로 끝까지 훑을 수 있다.
         long v2EarlyGeneric = v2FloorGeneric(V2_ONLY, T0.minusSeconds(1), "있음 · 일반 계획 · 첫 PDT − 1초");
         long v2TailGeneric = v2FloorGeneric(V2_ONLY, tail, "있음 · 일반 계획");
-        // 기록만 — 중간 시각(답이 있고 그 뒤 판 2 행이 15만). 본 조회가 seq 역순으로 그 행들을 지난다 — kty 2026-11-13 수용
-        // (호출자는 카드당 1회 · 시각은 보통 라이브 머리). 생산자 리뷰 실측 30만 행 5,923 버퍼 · 약 32ms 와 견준다.
+        // 기록만 — 중간 시각(답이 있고 그 뒤 판 2 행이 15만). 본 조회가 seq 역순으로 그 행들을 지난다 — kty 2026-11-13 중간 t
+        // 결정으로 수용(호출자는 카드당 1회 · 시각은 보통 라이브 머리). 생산자 리뷰 실측 30만 행 5,923 버퍼 · 약 32ms 와 견준다.
+        // 최악은 아래 첫 PDT + 1ms(그 스트림 판 2 행 거의 전부 — 2026-11-13 일반 계획 7,249 버퍼 · 약 82ms)이고 같은 수용 범위다.
         v2Floor(V2_ONLY, T0.plusMillis((long) (ROWS / 2) * SEGMENT_MS), "있음 · 중간 시각");
+        // 기록만(보안 L3) — 최악의 시각: 첫 판 2 PDT 바로 뒤. 답이 첫 행이라 본 조회가 그 스트림 판 2 행 거의 전부를 지난다.
+        v2Floor(V2_ONLY, T0.plusMillis(1), "있음 · 첫 PDT + 1ms");
+        v2FloorGeneric(V2_ONLY, T0.plusMillis(1), "있음 · 일반 계획 · 첫 PDT + 1ms");
         // 기록만 — 꼬리에서 먼 시각(첫 행 + 1초)의 옛 후보 조회는 그 시각 뒤 판 NULL 행 수만큼 읽는다.
         legacyFloor(LEGACY_ONLY, T0.plusSeconds(1), "있음 · 첫 행 + 1초");
 
@@ -228,16 +232,24 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
             Object value = args[i] instanceof Timestamp ts ? ts.toInstant().toString() : args[i];
             values.append(i == 0 ? "" : ", ").append('\'').append(value).append('\'');
         }
+        // 연결은 풀로 돌아간다 — 실패해도 일반 계획 강제 · 이 준비 문장이 남지 않게 finally 에서 늘 되돌린다. DEALLOCATE ALL 은
+        // 쓰지 않는다 — 드라이버가 그 연결에 둔 서버 준비 문장까지 지운다.
         String plan = jdbc.execute((ConnectionCallback<String>) con -> {
             try (Statement st = con.createStatement()) {
-                st.execute("SET plan_cache_mode = force_generic_plan");
-                st.execute("PREPARE v2_floor_generic(" + types + ") AS " + sql);
-                try (ResultSet rs = st.executeQuery(
-                        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE v2_floor_generic(" + values + ")")) {
-                    rs.next();
-                    return rs.getString(1);
+                boolean prepared = false;
+                try {
+                    st.execute("SET plan_cache_mode = force_generic_plan");
+                    st.execute("PREPARE v2_floor_generic(" + types + ") AS " + sql);
+                    prepared = true;
+                    try (ResultSet rs = st.executeQuery(
+                            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE v2_floor_generic(" + values + ")")) {
+                        rs.next();
+                        return rs.getString(1);
+                    }
                 } finally {
-                    st.execute("DEALLOCATE v2_floor_generic");
+                    if (prepared) {
+                        st.execute("DEALLOCATE v2_floor_generic");
+                    }
                     st.execute("RESET plan_cache_mode");
                 }
             }
