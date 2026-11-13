@@ -30,19 +30,24 @@ const v2Lag = 700 * time.Millisecond
 func v2PutSeg(t *testing.T, pool *pgxpool.Pool, stream, session string, seqs ...int64) {
 	t.Helper()
 	for _, seq := range seqs {
-		start := expAt(seq)
-		_, err := pool.Exec(context.Background(), `
+		v2PutSegAt(t, pool, stream, session, seq, expAt(seq))
+	}
+}
+
+// v2PutSegAt 은 v2PutSeg 의 한 행을 벽시각 start 로 넣는다.
+func v2PutSegAt(t *testing.T, pool *pgxpool.Pool, stream, session string, seq int64, start time.Time) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
 INSERT INTO stream_segments
     (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state, uploaded_at, bytes,
      session_id, playback_pdt, playback_s3_key, playback_upload_state, playback_uploaded_at,
      timing_version, timing_wall_guess, timing_round_id)
 VALUES ($1, $2, $3, $4, 4000, $5, 'uploaded', $4, 1000, $6, $7, $8, 'uploaded', $4,
         2, $7, (SELECT round_id FROM stream_sessions WHERE session_id = $6))`,
-			stream, seq, seq*4000, start, S3Key(stream, seq, start), session, start.Add(-v2Lag),
-			fmt.Sprintf("dvr/%s/seg/%06d.m4s", stream, seq))
-		if err != nil {
-			t.Fatalf("판 2 조각 픽스처 삽입 실패 %s/%d: %v", stream, seq, err)
-		}
+		stream, seq, seq*4000, start, S3Key(stream, seq, start), session, start.Add(-v2Lag),
+		fmt.Sprintf("dvr/%s/seg/%06d.m4s", stream, seq))
+	if err != nil {
+		t.Fatalf("판 2 조각 픽스처 삽입 실패 %s/%d: %v", stream, seq, err)
 	}
 }
 
@@ -181,6 +186,65 @@ func TestExpiryMixedVersionStreamLeavesOutOfRangeRoundsUntouched(t *testing.T) {
 					t.Errorf("회차 %s 국면 %v → %v", r, ph, got)
 				}
 			}
+		})
+	}
+}
+
+// 구간 경계 — 판 2 행도 판 NULL 행처럼 start_wall_utc 로 [From, Until) 에 갈린다. 조각 여섯을 From · Until 의 1ms 앞 ·
+// 같음 · 1ms 뒤에 두면 판과 무관하게 From · From + 1ms · Until − 1ms 셋만 대상이고 그 셋만 지워진다. 판 2 행의 PDT 칸 둘은
+// v2Lag 만큼 이르므로, 범위를 그 칸으로 재면 From + 1ms 가 빠지고 Until · Until + 1ms 가 든다.
+func TestExpiryV2RowsSplitAtRangeEdgesLikeV1(t *testing.T) {
+	from, until := expAt(10), expAt(20)
+	edges := []time.Time{
+		from.Add(-time.Millisecond), from, from.Add(time.Millisecond),
+		until.Add(-time.Millisecond), until, until.Add(time.Millisecond),
+	}
+	for _, tc := range []struct {
+		name   string
+		v2     bool
+		wantV2 int
+	}{
+		{"v1", false, 0},
+		{"v2", true, 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			ctx := context.Background()
+			stream := "v2exp-edge"
+			ovPut(t, pool, stream, ovSession{id: "S", round: "S"})
+			if tc.v2 {
+				v2Latch(t, pool)
+			}
+			for i, start := range edges {
+				if tc.v2 {
+					v2PutSegAt(t, pool, stream, "S", int64(i), start)
+					continue
+				}
+				expPutSeg(t, pool, expSegRow{stream: stream, seq: int64(i), session: "S", start: start})
+			}
+			if n := v2Rows(t, pool, stream); n != tc.wantV2 {
+				t.Fatalf("판 2 행 %d, want %d", n, tc.wantV2)
+			}
+			q := expRange(stream, &from, until)
+
+			rows, err := ExpiryRows(ctx, pool, q)
+			if err != nil {
+				t.Fatalf("ExpiryRows: %v", err)
+			}
+			var got []int64
+			for _, r := range rows {
+				if r.Skip != "" {
+					t.Errorf("seq %d 건너뜀 사유 %q (ended 세션 행은 대상)", r.Seq, r.Skip)
+				}
+				got = append(got, r.Seq)
+			}
+			if want := []int64{1, 2, 3}; !slices.Equal(got, want) {
+				t.Errorf("대상 행 %v, want %v (From · From + 1ms · Until − 1ms)", got, want)
+			}
+			if out := ovSweep(t, pool, q); out.deferred {
+				t.Fatal("닫힌 회차인데 미뤘다")
+			}
+			ovWantSeqs(t, pool, stream, 0, 4, 5)
 		})
 	}
 }
