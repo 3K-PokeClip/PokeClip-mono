@@ -128,7 +128,7 @@ hlsVariant: lowLatency
 hlsSegmentDuration: 4s
 hlsPartDuration: 500ms
 hlsSegmentCount: 7 # 라이브 창 28초 = 4s × 7(ADR-102) — 1시간 되감기는 사이드카 /dvr URL
-hlsDirectory: /dvr # 세그먼트 디스크 오프로드(메모리 상주 방지)
+hlsDirectory: /dvr # 라이브 창 조각의 디스크 오프로드(메모리 상주 방지) — 되감기 /dvr URL(S3)과 별개
 # 시청자가 0명이어도 송출 시점부터 라이브 목록을 만든다(첫 시청 503 방지 ·
 # 무시청이 hlsMuxerCloseAfter 를 넘기면 muxer 가 닫히는 것 방지 — 이 파일은 그
 # 키를 두지 않아 기본값 60s 다). 이렇게 미리 만든 muxer 에는 hlsMuxerCloseAfter

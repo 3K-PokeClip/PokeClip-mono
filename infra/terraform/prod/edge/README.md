@@ -131,7 +131,9 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
 
 *   **hlsSegmentCount 900 → 7**(ADR-102): `/dvr` 비헤이비어 · 되감기 버킷
     오리진이 생기고, 2번 플레이어가 `/dvr` 로 진입한 뒤에 줄입니다. 템플릿
-    값은 라이브 창 28초 설정 소PR 이 바꿨고, prod 반영은 상자 판 7 입니다.
+    값은 라이브 창 28초 설정 소PR 이 바꿨고, prod 반영은 상자 판 7(그 값을
+    실은 설치 묶음으로 바꾸는 상자 반영 — 상자 MediaMTX 설정의
+    `hlsSegmentCount` 가 7 이 됨)입니다.
     전제(prod 웹이 `/dvr` 전환 판 · `/dvr` 실제 서빙)를 확인하고 머지한 뒤
     곧바로 묶음 빌드 · 판 7 교체를 합니다
     ([media README](../../../../media/README.md) 「M4 ⓒ 에서 M5/M6 로 넘긴
