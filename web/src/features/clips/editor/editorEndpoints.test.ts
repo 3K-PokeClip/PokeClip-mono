@@ -9,7 +9,7 @@ import {
   type EndpointContext,
 } from './editorEndpoints';
 import type { HeadCache, HeadEntry } from './source/fileHeadProbe';
-import type { EndpointRange } from './source/rangeEndpoints';
+import { savable, type EndpointRange } from './source/rangeEndpoints';
 import type { EditorPick } from './source/windowPlacement';
 
 // 편집기 상태의 끝점 · 고름 입력(설계 prw2 3.3 몸짓 표 · 4절 상태 훅 입력 꼴 · 계획 5절 E4b-3). 몸짓 규칙은 하나다 — 창 안 자리면
@@ -126,6 +126,19 @@ describe('editRangeEdge', () => {
     expect(next?.endpoints?.start).toEqual({ kind: 'pick', pick: pickAt(3, 1) });
   });
 
+  it('오른쪽 한계 밖으로 끌면 한계 자리에서 다시 고른다: 잘린 자리도 창 안이면 고름이다', () => {
+    const next = editRangeEdge(
+      'end',
+      { kind: 's', s: 25 },
+      current,
+      { minSeconds: 0, durationSeconds: 19 },
+      ctxOf(),
+      windowPickAtS,
+    );
+
+    expect(next?.endpoints?.end).toEqual({ kind: 'pick', pick: pickAt(5, 3) });
+  });
+
   it('길이가 5초 미만이 되거나 180초를 넘으면 바꾸지 않는다', () => {
     expect(
       editRangeEdge('end', { kind: 's', s: 12 }, current, LIMITS, ctxOf(), windowPickAtS),
@@ -153,6 +166,123 @@ describe('editRangeEdge', () => {
 
     expect(same).toBeNull();
     expect(fromEstimate?.endpoints?.start).toEqual(at10);
+  });
+
+  // 손잡이의 5초–3분 판정은 저장 규칙 ms 로 본다(inceil cx 반례) — 표시 초는 고름의 프레임 시작이라 저장 값(in 올림 ·
+  // out 가운데 내림)과 1ms 미만 · 반 프레임만큼 갈린다. 화면이 받은 범위는 저장도 받는다
+  describe('길이 판정은 저장 규칙 ms 다', () => {
+    const wide = { minSeconds: 0, durationSeconds: 400 };
+    /** 판 2 조각(PDT = BASE + pdtOffsetMs · D3 0)의 프레임 pts 고름 */
+    const v2Pick = (pdtOffsetMs: number, pts: number, dur: number): EditorPick => ({
+      seq: 1 + pdtOffsetMs / 4_000,
+      pts,
+      dur,
+      videoDts: 0,
+      pdtMs: BASE + pdtOffsetMs,
+      durationMs: 4_000,
+      timing: 'v2',
+    });
+    /** 저장 판정용 목록 — 고름이 든 seq 와 그다음 행(목록 마지막 맞춤이 끼지 않게) */
+    const listFor = (pick: EditorPick) => {
+      const rows = [pick.seq, pick.seq + 1].map((seq) => ({
+        seq,
+        uri: `https://cdn.test/dvr/s/seg/${seq}.m4s`,
+        mapUri: 'https://cdn.test/dvr/s/init.mp4',
+        pdtMs: BASE + (seq - 1) * 4_000,
+        durationMs: 4_000,
+        timing: 'v2' as const,
+        gap: false,
+      }));
+      return { runs: [rows], rows };
+    };
+    const exactRange = (startMs: number, endMs: number) => ({
+      range: { startSeconds: startMs / 1000, endSeconds: endMs / 1000 },
+      endpoints: {
+        start: { kind: 'exact', ms: BASE + startMs },
+        end: { kind: 'exact', ms: BASE + endMs },
+      } satisfies EndpointRange,
+    });
+
+    it('끝 exact 6.033 · 시작 고름 1.0333 은 화면 5초여도 저장 4,999ms 라 받지 않는다', () => {
+      const start = v2Pick(0, 31 / 30, 1 / 30);
+
+      const next = editRangeEdge(
+        'start',
+        { kind: 'pick', pick: start },
+        exactRange(0, 6_033),
+        wide,
+        ctxOf(),
+        () => null,
+      );
+
+      expect(next).toBeNull();
+    });
+
+    it('끝 exact 6.034 면 받고 저장도 5,000ms 로 받는다', () => {
+      const start = v2Pick(0, 31 / 30, 1 / 30);
+
+      const next = editRangeEdge(
+        'start',
+        { kind: 'pick', pick: start },
+        exactRange(0, 6_034),
+        wide,
+        ctxOf(),
+        () => null,
+      );
+
+      expect(next?.endpoints?.start).toEqual({ kind: 'pick', pick: start });
+      expect(savable(next!.endpoints!, { ...ctxOf(), list: listFor(start) })).toEqual({
+        ok: true,
+        inMs: BASE + 1_034,
+        outMs: BASE + 6_034,
+      });
+    });
+
+    it('끝 고름이 화면 179.995초여도 저장 out(가운데 내림)이 180,005ms 면 받지 않는다', () => {
+      // 조각 PDT 176초 · 프레임 3.995 · 다음 프레임까지 0.02 → out = 176,000 + floor(4,005)
+      const end = v2Pick(176_000, 3.995, 0.02);
+
+      const next = editRangeEdge(
+        'end',
+        { kind: 'pick', pick: end },
+        exactRange(0, 10_000),
+        wide,
+        ctxOf(),
+        () => null,
+      );
+
+      expect(
+        savable(
+          { start: exactRange(0, 10_000).endpoints.start, end: { kind: 'pick', pick: end } },
+          {
+            ...ctxOf(),
+            list: listFor(end),
+          },
+        ),
+      ).toEqual({ ok: false, reason: 'tooLong' });
+      expect(next).toBeNull();
+    });
+
+    it('끝 고름이 화면 4.99초여도 저장 out 이 5,000ms 면 받는다', () => {
+      // 조각 PDT 4초 · 프레임 0.99 · 다음 프레임까지 0.02 → out = 4,000 + floor(1,000)
+      const end = v2Pick(4_000, 0.99, 0.02);
+
+      const next = editRangeEdge(
+        'end',
+        { kind: 'pick', pick: end },
+        exactRange(0, 10_000),
+        wide,
+        ctxOf(),
+        () => null,
+      );
+
+      expect(next?.range.endSeconds).toBeCloseTo(4.99, 9);
+      expect(savable(next!.endpoints!, { ...ctxOf(), list: listFor(end) })).toEqual({
+        ok: true,
+        inMs: BASE,
+        outMs: BASE + 5_000,
+      });
+    });
   });
 
   it('목업(끝점 없음)은 지금처럼 구간 초만 바꾼다', () => {

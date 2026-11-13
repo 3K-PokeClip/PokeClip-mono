@@ -101,6 +101,19 @@ describe('sceneOffsetMs — 판 NULL 경계마다 죽은 자리 0.2초인 60초 
     expect(Math.round(1000 * (windowA.sAtPick(scene) - windowA.sAtPick(inPick)))).toBe(35_100);
   });
 
+  it('같은 창의 거리도 ms 로 내리되 정수 ms 에 떨어지는 거리는 1ms 내려가지 않는다', () => {
+    // in 100.0 프레임부터 100.0667(66.67ms → 66) · 100.1(100ms) · 100.3(300ms)
+    const start = { kind: 'pick', pick: pickAt(windowA, 100, 100) } as const;
+    const offsetTo = (pts: number) =>
+      sceneOffsetMs(
+        start,
+        { kind: 'pick', pick: pickAt(windowA, 100, pts) },
+        mediaOf(windowA, list),
+      );
+
+    expect([100 + 2 / 30, 100.1, 100.3].map(offsetTo)).toEqual([66, 100, 300]);
+  });
+
   it('in 이 받은 값(exact)이면 그 자리 프레임의 나머지까지 뺀다', () => {
     // S 0.51 = 조각 10 PDT 뒤 0.51초 → ③ 100.51 · 보이는 프레임 100.5 + 나머지 0.01
     const exactIn = { kind: 'exact', ms: BASE + 510 } as const;
@@ -186,6 +199,12 @@ describe('sceneOffsetMs — 판 NULL 경계마다 죽은 자리 0.2초인 60초 
 
   // kty c12′ 결정 1 (가): 창(배치)을 받기 전 · 받지 못했어도 목록이 있으면 목록 경로로 센다
   describe('창이 없으면 목록으로 센다', () => {
+    /** 모든 seq 의 ② 머리가 D2 − Hd = 0.3초 — 원점 o_k = D3_k − 0.3 */
+    const leadHeads: HeadCache = {
+      get: () => ({ state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } }),
+      subscribe: () => () => {},
+    };
+
     it('두 자리가 값이면 F 규칙 · 길이 합이다', () => {
       const s = (pdtOf(13) - BASE) / 1000 + 1.0;
       const exactIn = { kind: 'exact', ms: pdtOf(0) + 500 } as const;
@@ -199,6 +218,28 @@ describe('sceneOffsetMs — 판 NULL 경계마다 죽은 자리 0.2초인 60초 
 
       // 같은 창일 때의 Blob 차와 같다: (4000 − 500) + 조각 11 … 17 의 7 × 4000 + 2000
       expect(sceneOffsetMs(inEnd, scene, mediaOf(null, list))).toBe(33_500);
+    });
+
+    it('판 NULL 고름은 ② 머리로 원점을 옮긴다: D2 − Hd 0.3초면 조각 안 자리가 0.3초 뒤라 4,200', () => {
+      // o = D3 − (D2 − Hd) = D3 − 0.3. in 은 조각 10 PDT 뒤 0.5초(값) · 장면은 조각 11 의 D3 + 0.4 프레임이라 조각 안 0.7초
+      // → (4000 − 500) + 700. 원점을 D3 로 두면 조각 안 0.4초라 3,900 이다
+      const exactIn = { kind: 'exact', ms: pdtOf(0) + 500 } as const;
+      const scene = { kind: 'pick', pick: pickAt(windowA, 100, 104.4) } as const;
+
+      expect(sceneOffsetMs(exactIn, scene, { ...mediaOf(null, list), heads: leadHeads })).toBe(
+        4_200,
+      );
+    });
+
+    it('미디어 거리는 ms 로 내린다 — 정수 ms 에 떨어지는 거리는 부동소수 잡음으로 1ms 내려가지 않는다', () => {
+      // 원점 D3 − 0.3 · in 은 조각 10 PDT(조각 안 0). 장면 100.0667 은 366.67ms(올리면 다음 프레임 자리 367) · 100.1 은
+      // 400ms 인데 1000·(100.1 − 99.7) 은 부동소수로 399.99999999999 다
+      const exactIn = { kind: 'exact', ms: pdtOf(0) } as const;
+      const media = { ...mediaOf(null, list), heads: leadHeads };
+      const sceneAt = (pts: number) => ({ kind: 'pick', pick: pickAt(windowA, 100, pts) }) as const;
+
+      expect(sceneOffsetMs(exactIn, sceneAt(100 + 2 / 30), media)).toBe(366);
+      expect(sceneOffsetMs(exactIn, sceneAt(100.1), media)).toBe(400);
     });
   });
 
@@ -267,9 +308,18 @@ describe('uploadSceneOffsetMs — 업로드 창의 장면(연 구간 시작부�
   });
 });
 
+/**
+ * 업로드 일꾼이 offset 에서 뽑는 프레임 — 결과 영상에서 「pts ≥ t」 인 첫 프레임(SceneExtractor.java:126-128 의 입력 -ss ·
+ * ffmpeg 9.0.2 실측). 결과 영상 0 초는 in 프레임이다
+ */
+function extractedAt(frames: readonly { pts: number }[], inPts: number, offsetMs: number) {
+  return frames.find((frame) => 1000 * (frame.pts - inPts) >= offsetMs - 1e-6) ?? null;
+}
+
 // 편집기에서 고른 썸네일 프레임 → 업로드 창 값(withPickedScene 의 sceneOffsetFromPlayhead) → 업로드 offset 이 같은 프레임을
 // 가리켜야 한다(kty c12′ 결정 2 (나)). 고른 S 는 그 프레임 시작이라 ms 로 반올림하면 3번에 1번(30fps) 프레임 시작 앞에 서서
-// 업로드 창이 pickAtS 로 다시 고를 때 앞 프레임이 나왔다(cc r1 M2 실측 100/300)
+// 업로드 창이 pickAtS 로 다시 고를 때 앞 프레임이 나왔다(cc r1 M2 실측 100/300). 결과 영상 거리도 반올림하면 프레임 시작이
+// .67 꼴인 자리에서 업로드 일꾼이 다음 프레임을 뽑는다 — 내린다(경계 답 2026-11-13 렌더)
 describe('편집기에서 고른 썸네일 프레임 = 업로드 offset 이 가리키는 프레임', () => {
   const list = listOf(16);
   const cutLengthMs = 60_000;
@@ -288,17 +338,16 @@ describe('편집기에서 고른 썸네일 프레임 = 업로드 offset 이 가�
       ...mediaOf(placement, list),
     };
     // in 프레임부터 300장 — 조각 경계 둘을 건넌다
-    const picks = Array.from({ length: 11 }, (_, i) => segment(i, frameTicks).frames)
+    const frames = Array.from({ length: 11 }, (_, i) => segment(i, frameTicks).frames)
       .flat()
-      .filter((frame) => frame.pts >= inPick.pts)
-      .slice(0, 300)
-      .map((frame) => pickAt(placement, 100, frame.pts));
+      .filter((frame) => frame.pts >= inPick.pts);
+    const picks = frames.slice(0, 300).map((frame) => pickAt(placement, 100, frame.pts));
 
     const missed = picks.filter((pick) => {
       const dialogMs = sceneOffsetFromPlayhead(placement.sAtPick(pick), rangeStart, cutLengthMs)!;
       const landed = placement.pickAtS(rangeStart + dialogMs / 1000);
       const offset = uploadSceneOffsetMs(dialogMs, scene).offsetMs;
-      return landed?.pts !== pick.pts || offset !== Math.round(1000 * (pick.pts - inPick.pts));
+      return landed?.pts !== pick.pts || extractedAt(frames, inPick.pts, offset)?.pts !== pick.pts;
     });
 
     expect(picks).toHaveLength(300);

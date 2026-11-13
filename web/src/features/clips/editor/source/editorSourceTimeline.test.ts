@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CUT_MAX_MS } from '@/api/clipEditor';
-import { PAD_SECONDS } from '../useEditorVideoPlayback';
 import { parseEditorPlaylist, type EditorPlaylist } from './editorPlaylist';
 import {
   MAX_WINDOW_SECONDS,
@@ -10,6 +9,7 @@ import {
   segmentsForWindow,
   sourceTimelineOf,
 } from './editorSourceTimeline';
+import { PAD_SECONDS } from './editorWindow';
 
 // 실물은 미디어 서버 목록 발행기 시험이 쓰는 목록이다(media/internal/rewind/testdata). 기대값은 이 코드가 아니라 목록 글의
 // PDT · EXTINF 에서 손으로 옮겼다.
@@ -271,6 +271,38 @@ describe('sourceTimelineOf — 개요 타임라인', () => {
     expect(timeline.endSeconds).toBe(11.8);
   });
 
+  it('GAP 줄이 앞 조각 끝보다 일찍 서면 앞 구간을 GAP 시작에서 자른다 — 겹친 자리는 F 규칙으로 GAP 줄 몫이다', () => {
+    // Arrange — 판 2 · 1 [0, 4) · GAP 2 [3.8, 7.8) · 3 [7.8, 11.8)
+    const list = parsed(
+      [
+        '#EXTM3U',
+        MAP_V2,
+        '#EXT-X-POKECLIP-TIMING:2',
+        '#EXT-X-PROGRAM-DATE-TIME:1970-01-01T00:00:00.000Z',
+        '#EXTINF:4.000,',
+        'https://media.pokeclip.com/dvr/str/seg/000001.m4s',
+        '#EXT-X-GAP',
+        '#EXT-X-PROGRAM-DATE-TIME:1970-01-01T00:00:03.800Z',
+        '#EXTINF:4.000,',
+        'https://media.pokeclip.com/dvr/str/seg/000002.m4s',
+        '#EXT-X-PROGRAM-DATE-TIME:1970-01-01T00:00:07.800Z',
+        '#EXTINF:4.000,',
+        'https://media.pokeclip.com/dvr/str/seg/000003.m4s',
+      ].join('\n'),
+    );
+
+    // Act
+    const timeline = sourceTimelineOf(list, 0);
+
+    // Assert
+    expect(segmentAtMs(list, 3900)?.gap).toBe(true);
+    expect(timeline.pieces).toEqual([
+      { fromSeconds: 0, toSeconds: 3.8 },
+      { fromSeconds: 7.8, toSeconds: 11.8 },
+    ]);
+    expect(seqs(segmentsForWindow(list, 0, { startSeconds: 3.9, endSeconds: 9 }))).toEqual([3]);
+  });
+
   it('조각이 모두 GAP 줄이면 구간이 없고 끝은 0 이다', () => {
     // Arrange
     const list = parsed(
@@ -461,6 +493,18 @@ describe('segmentsForWindow — 미디어가 없는 창', () => {
 
     // Assert
     expect(sourceTimelineOf(list, TD_BASE).pieces[0]!.fromSeconds).toBeCloseTo(410.644, 6);
+    expect(segments).toEqual([]);
+  });
+
+  it('창 끝이 목록 머리 PDT 와 1ms 안이면 ms 축에서 판정해 런 전체를 끌어오지 않는다', () => {
+    // Arrange — 끝 1e-7초는 base + 1e-4ms 라 부동소수로 머리 PDT(base)와 같은 ms 가 된다
+    const list = g6();
+
+    // Act
+    const segments = segmentsForWindow(list, G6_BASE, { startSeconds: -5, endSeconds: 1e-7 });
+
+    // Assert
+    expect(G6_BASE + 1000 * 1e-7).toBe(G6_BASE);
     expect(segments).toEqual([]);
   });
 

@@ -72,6 +72,11 @@ export function rangeLengthSeconds(range: ClipRange): number {
   return roundMs(range.endSeconds - range.startSeconds);
 }
 
+/** 핸들이 갈 자리 — 원본 [0, 길이] 안으로 자르고 ms 로 반올림한다(길이 위반이 아니라서 조용히) */
+export function clampEdgeSeconds(requestedSeconds: number, durationSeconds: number): number {
+  return roundMs(Math.min(durationSeconds, Math.max(0, requestedSeconds)));
+}
+
 /**
  * 구간 핸들 한쪽을 옮긴 결과. 5초~3분을 벗어나면 **클램프가 아니라 거부**다 —
  * 핸들이 3:00에서 더 늘어나지 않고 멈추는 시안 동작이 이 거부에서 나온다.
@@ -86,7 +91,7 @@ export function resolveRangeEdge(
   range: ClipRange,
   durationSeconds: number,
 ): RangeEdgeResult {
-  const requested = roundMs(Math.min(durationSeconds, Math.max(0, requestedSeconds)));
+  const requested = clampEdgeSeconds(requestedSeconds, durationSeconds);
   const next: ClipRange =
     edge === 'start'
       ? { startSeconds: requested, endSeconds: range.endSeconds }

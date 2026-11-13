@@ -155,9 +155,31 @@ describe('nextEditorSourceState — D3 판정 순서', () => {
     expect(
       nextEditorSourceState(LIVE_READY, segment('gone', { listed: true, live: true })).kind,
     ).toBe('goneOrNone');
+  });
+
+  it('끝난 방송(회차 vod 원천)의 404 는 seq 가 빠졌어도 goneOrNone 이다', () => {
+    const vod: EditorSourceState = { kind: 'ready', mode: 'vod', url: ROUND_URL };
+
     expect(
-      nextEditorSourceState(LIVE_READY, segment('gone', { listed: false, live: false })).kind,
+      nextEditorSourceState(
+        vod,
+        segment('gone', { listed: false, live: false, listUrl: ROUND_URL }),
+      ).kind,
     ).toBe('goneOrNone');
+  });
+
+  it('사건의 방송 중 여부가 그 목록 원천의 경로와 어긋나면 낡은 사건이라 버린다', () => {
+    const vod: EditorSourceState = { kind: 'ready', mode: 'vod', url: ROUND_URL };
+
+    expect(nextEditorSourceState(LIVE_READY, segment('gone', { listed: false, live: false }))).toBe(
+      LIVE_READY,
+    );
+    expect(
+      nextEditorSourceState(
+        vod,
+        segment('gone', { listed: false, live: true, listUrl: ROUND_URL }),
+      ),
+    ).toBe(vod);
   });
 });
 
@@ -209,7 +231,7 @@ describe('nextEditorSourceState — 판정 순서는 사건 도착 순서와 무
   const foreign = stream(ok('live', true, STREAM_URL), 'r2');
 
   it('3행 finalizing 은 조각 404 보다 위라 순서를 바꿔도 같고 뒤 vod 준비로 풀린다', () => {
-    const gone = segment('gone', { listed: false, live: false });
+    const gone = segment('gone', { listed: true, live: true });
 
     const covered = roundFinalizing({ kind: 'goneOrNone', segment: LIVE_FAILURE });
 
@@ -220,7 +242,7 @@ describe('nextEditorSourceState — 판정 순서는 사건 도착 순서와 무
   });
 
   it('3행 finalizing 은 조각 403(seq 가 목록에 남음)보다 위라 순서를 바꿔도 finalizing 이다', () => {
-    const forbidden = segment('forbiddenAfterRefresh', { listed: true, live: false });
+    const forbidden = segment('forbiddenAfterRefresh', { listed: true, live: true });
 
     const covered = roundFinalizing({ kind: 'access', segment: LIVE_FAILURE });
 
@@ -322,7 +344,7 @@ describe('nextEditorSourceState — 조각 실패는 그 조각을 받은 목록
   it('지금 원천과 다른 목록의 조각 실패는 버려 상태를 그대로 둔다', () => {
     const roundForbidden = segment('forbiddenAfterRefresh', {
       listed: true,
-      live: true,
+      live: false,
       listUrl: ROUND_URL,
     });
     const otherStream = segment('gone', { listed: false, live: true, listUrl: 'https://x/a.m3u8' });
@@ -379,15 +401,19 @@ const SOURCE_BRANCHES: Record<string, readonly LabeledEvent[]> = {
     ['방송 번호 모름', stream(ok('live', true, STREAM_URL), null)],
     ['방송 없음', stream(ok('live', true, STREAM_URL), '')],
   ],
-  segment: [STREAM_URL, ROUND_URL].flatMap((listUrl) => [
-    [`${listUrl} 404 빠짐`, segment('gone', { listed: false, live: true, listUrl })],
-    [`${listUrl} 404 남음`, segment('gone', { listed: true, live: false, listUrl })],
-    [`${listUrl} 403`, segment('forbiddenAfterRefresh', { listed: true, live: false, listUrl })],
-    [
-      `${listUrl} 403 회차 404`,
-      segment('forbiddenAfterRefresh', { listed: true, live: true, listUrl, roundGone: true }),
-    ],
-  ]),
+  // 방송 중 여부는 그 목록 원천의 경로다(스트림 목록 = 방송 중) — useEditorSource 가 그렇게 싣는다
+  segment: [STREAM_URL, ROUND_URL].flatMap((listUrl) => {
+    const live = listUrl === STREAM_URL;
+    return [
+      [`${listUrl} 404 빠짐`, segment('gone', { listed: false, live, listUrl })],
+      [`${listUrl} 404 남음`, segment('gone', { listed: true, live, listUrl })],
+      [`${listUrl} 403`, segment('forbiddenAfterRefresh', { listed: true, live, listUrl })],
+      [
+        `${listUrl} 403 회차 404`,
+        segment('forbiddenAfterRefresh', { listed: true, live, listUrl, roundGone: true }),
+      ],
+    ];
+  }),
 };
 
 /** 모든 부분 묶음(빈 묶음 포함) */
@@ -456,8 +482,9 @@ describe('nextEditorSourceState — 갈래마다 한 사건씩이면 도착 순�
           ),
         );
         checked += orders.length;
-        if (ends.size > 1)
+        if (ends.size > 1) {
           mismatches.push(`${pick.map(([label]) => label).join(' · ')} → ${[...ends].join(' | ')}`);
+        }
       }
     }
 
@@ -524,6 +551,12 @@ describe('nextEditorSourceState — 3행 finalizing 은 선 원인별로 풀린�
     );
     expect(nextEditorSourceState(covered, staleRound)).toBe(covered);
     expect(nextEditorSourceState(covered, ENDING)).toBe(covered);
+  });
+
+  it('회차 경로가 정하지 않은 답(mode null)은 덮개를 걷지 않는다', () => {
+    const covered = run([ENDING]);
+
+    expect(nextEditorSourceState(covered, round(ok(null, false, null)))).toBe(covered);
   });
 
   it('회차 live 답은 3행이 아닌 상태를 바꾸지 않는다', () => {
@@ -606,6 +639,49 @@ describe('nextEditorSourceState — 회차 경로 시계열을 끼워도 도착 
   );
 });
 
+const FOREIGN_STREAM = stream(ok('live', true, STREAM_URL), 'r2');
+
+// 생길 수 있는 스트림 경로 시계열만 둔다(한 회차 동안 답마다 지금 방송 번호를 함께 묻는다). 뺀 것과 까닭:
+//   R58 뒤 같은 방송  같은 키로 다른 방송이 시작되면 끝난 방송이 다시 지금 방송이 되지 않는다(번호는 회차마다 새로 난다)
+const STREAM_SERIES: readonly LabeledSeries[] = [
+  ['같은 방송 → 같은 방송', [SAME_STREAM, SAME_STREAM]],
+  ['번호 모름 → 같은 방송', [stream(ok('live', true, STREAM_URL), null), SAME_STREAM]],
+  ['같은 방송 → R58', [SAME_STREAM, FOREIGN_STREAM]],
+  ['같은 방송 → 방송 없음', [SAME_STREAM, stream(ok('live', true, STREAM_URL), '')]],
+  ['방송 없음 → 같은 방송(재접속)', [stream(ok('live', true, STREAM_URL), ''), SAME_STREAM]],
+  ['같은 방송 → 잠시 불가', [SAME_STREAM, stream({ kind: 'unavailable' }, 'r1')]],
+];
+
+describe('nextEditorSourceState — 스트림 경로 시계열을 끼워도 도착 순서와 무관하다', () => {
+  it.each<[string, EditorSourceState, readonly (readonly LabeledEvent[])[], number]>([
+    ['방송 중 원천(LIVE_READY)', LIVE_READY, branchesNamed('expired', 'round', 'segment'), 1000],
+    ['아직 답 없음(CHECKING)', CHECKING, branchesNamed('expired', 'round'), 100],
+  ])(
+    '%s 에서 스트림 시계열 하나 · 다른 갈래 한 사건씩의 모든 끼워 넣기가 같은 끝 상태다',
+    (_name, start, others, minOrders) => {
+      const mismatches: string[] = [];
+      let checked = 0;
+
+      for (const [seriesLabel, series] of STREAM_SERIES) {
+        for (const pick of subsetsOf(others).flatMap(eventPicks)) {
+          const orders = interleavings([series, ...pick.map(([, e]) => [e])]).filter(
+            (order) => !isImpossibleOrder(start, order),
+          );
+          const ends = new Set(orders.map((order) => JSON.stringify(run(order, start))));
+          checked += orders.length;
+          if (ends.size > 1) {
+            const labels = [seriesLabel, ...pick.map(([label]) => label)].join(' · ');
+            mismatches.push(`${labels} → ${[...ends].join(' | ')}`);
+          }
+        }
+      }
+
+      expect(checked).toBeGreaterThan(minOrders);
+      expect(mismatches).toEqual([]);
+    },
+  );
+});
+
 describe('editorSourceView — 4 · 5행(방송 중 카드 자리 대 목록)', () => {
   const list = { firstPdtMs: 1000, endMs: 9000 };
 
@@ -613,6 +689,13 @@ describe('editorSourceView — 4 · 5행(방송 중 카드 자리 대 목록)', 
     expect(editorSourceView(LIVE_READY, list, 9500).kind).toBe('uploading');
     expect(editorSourceView(LIVE_READY, list, 500).kind).toBe('outsideDvr');
     expect(editorSourceView(LIVE_READY, list, 5000)).toEqual(LIVE_READY);
+  });
+
+  it('카드 자리가 목록 끝 · 첫 PDT 와 같으면 목록 안이다(끝 뒤 · 첫 PDT 앞만 가른다)', () => {
+    expect(editorSourceView(LIVE_READY, list, 9000)).toEqual(LIVE_READY);
+    expect(editorSourceView(LIVE_READY, list, 9001).kind).toBe('uploading');
+    expect(editorSourceView(LIVE_READY, list, 1000)).toEqual(LIVE_READY);
+    expect(editorSourceView(LIVE_READY, list, 999).kind).toBe('outsideDvr');
   });
 
   it('목록 전 · 카드 없음 · 끝난 방송(vod)이면 그대로다', () => {

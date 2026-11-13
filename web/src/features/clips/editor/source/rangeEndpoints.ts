@@ -2,6 +2,7 @@ import { readPlayerAtMs, readPlayerWindow } from '@/api/cardPositions';
 import { CUT_MAX_MS, CUT_MIN_MS } from '@/api/clipEditor';
 import {
   cutMsOf,
+  pickRoundedMs,
   sInputMs,
   sOfPick,
   type CutContext,
@@ -65,12 +66,33 @@ function endpointMs(
   }
 }
 
-/** 길이(5–180초) 판정 — 길이는 S 축 out − in(계약6 2절 사용자 길이)이다. 몰래 늘리거나 자르지 않는다 */
-function lengthVerdict(inMs: number, outMs: number): SaveVerdict {
+/** 길이를 막는 까닭 */
+export type LengthRefusal = 'tooShort' | 'tooLong';
+
+/** 길이(5–180초) 판정 — 길이는 S 축 out − in(계약6 2절 사용자 길이)이다. 맞으면 null */
+function lengthRefusalOf(inMs: number, outMs: number): LengthRefusal | null {
   const length = outMs - inMs;
-  if (length < CUT_MIN_MS) return { ok: false, reason: 'tooShort' };
-  if (length > CUT_MAX_MS) return { ok: false, reason: 'tooLong' };
-  return { ok: true, inMs, outMs };
+  if (length < CUT_MIN_MS) return 'tooShort';
+  if (length > CUT_MAX_MS) return 'tooLong';
+  return null;
+}
+
+/** 길이 판정과 저장 값. 몰래 늘리거나 자르지 않는다 */
+function lengthVerdict(inMs: number, outMs: number): SaveVerdict {
+  const reason = lengthRefusalOf(inMs, outMs);
+  return reason === null ? { ok: true, inMs, outMs } : { ok: false, reason };
+}
+
+/**
+ * 손잡이의 길이 판정 — 저장과 같은 규칙의 ms 로 본다(고름은 in 올림 · out 가운데 내림 · 값은 그대로). 목록 맞춤(K2 · K1′)은
+ * 목록이 있어야 해 넣지 않는다 — 저장 판정(savable)이 다시 받은 목록으로 한다. 화면의 표시 초는 고름의 프레임 시작이라 이
+ * 값과 1ms 미만 · 반 프레임만큼 갈린다(inceil cx 반례)
+ * @returns 맞으면 null
+ */
+export function rangeLengthRefusal(range: EndpointRange, heads: HeadCache): LengthRefusal | null {
+  const msOf = (endpoint: Endpoint, edge: 'start' | 'end') =>
+    endpoint.kind === 'pick' ? pickRoundedMs(endpoint.pick, edge, heads) : endpoint.ms;
+  return lengthRefusalOf(msOf(range.start, 'start'), msOf(range.end, 'end'));
 }
 
 /** 저장 가능 판정과 저장 값. 끝점은 시작 · 끝 차례로 보고 처음 막힌 까닭을 낸다 */

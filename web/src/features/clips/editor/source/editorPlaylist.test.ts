@@ -317,13 +317,15 @@ describe('parseEditorPlaylist — 판 태그', () => {
       '#EXT-X-GAP',
       ...segment('000005', '2026-11-04T00:00:16.000Z'),
       ...segment('000006', '2026-11-04T00:00:20.000Z'),
+      '#EXT-X-POKECLIP-TIMING:3',
+      ...segment('000007', '2026-11-04T00:00:24.000Z'),
     );
 
     // Act
     const list = parsed(text);
 
-    // Assert
-    expect(list.rows.map((row) => row.timing)).toEqual(['v2', 'v2', null, null, 'v2', 'v2']);
+    // Assert — 모르는 판(3)은 목록을 거부하지 않고 판 NULL 로 읽는다(fragmentTiming.ts 와 같은 규칙)
+    expect(list.rows.map((row) => row.timing)).toEqual(['v2', 'v2', null, null, 'v2', 'v2', null]);
   });
 });
 
@@ -350,6 +352,9 @@ describe('parseEditorPlaylist — 주소와 출처', () => {
     ['다른 스킴', 'http://media.pokeclip.com/dvr/str/seg/000001.m4s'],
     ['다른 포트', 'https://media.pokeclip.com:8443/dvr/str/seg/000001.m4s'],
     ['data 주소', 'data:video/mp4;base64,AAAA'],
+    ['file 주소', 'file:///dvr/str/seg/000001.m4s'],
+    // blob: 은 origin 이 안쪽 주소의 출처라 출처 대조만으로는 통과한다 — 이름을 숫자로 두어 seq 검사로 걸리지 않게 한다
+    ['같은 출처의 blob 주소', 'blob:https://media.pokeclip.com/000001.m4s'],
   ])('조각 URI 가 목록과 다른 출처(%s)면 목록을 거부한다', (_label, uri) => {
     // Arrange
     const text = playlist(
@@ -403,6 +408,15 @@ describe('parseEditorPlaylist — 깨진 목록', () => {
     ['#EXTM3U 로 시작하지 않음', segment('000001', '2026-11-04T00:00:00.000Z').join('\n')],
     ['조각이 하나도 없음', playlist(MAP_A)],
     ['MAP 없는 조각', playlist(...segment('000001', '2026-11-04T00:00:00.000Z'))],
+    [
+      'URI 없는 MAP(앞 MAP 을 잇지 않는다)',
+      playlist(
+        MAP_A,
+        ...segment('000001', '2026-11-04T00:00:00.000Z'),
+        '#EXT-X-MAP:BYTERANGE="720@0"',
+        ...segment('000002', '2026-11-04T00:00:04.000Z'),
+      ),
+    ],
     [
       'PDT 없는 조각',
       playlist(MAP_A, '#EXTINF:4.000,', 'https://media.pokeclip.com/dvr/str/seg/000001.m4s'),

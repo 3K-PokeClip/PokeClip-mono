@@ -1,4 +1,4 @@
-import { originOf } from './cutPosition';
+import { floorMs, originOf } from './cutPosition';
 import type { EditorPlaylist, PlaylistSegment } from './editorPlaylist';
 import { segmentAtMs } from './editorSourceTimeline';
 import type { HeadCache } from './fileHeadProbe';
@@ -12,6 +12,8 @@ import type { EditorPick, WindowPlacement } from './windowPlacement';
 //   창 밖     조각별 길이(EXTINF — 장부 duration_ms) 합. GAP 줄 · 런 사이 틈은 0 · GAP 줄 안 자리는 그 줄의 한 점
 //   창 없음   창 밖과 같이 목록으로 센다(창을 받기 전 · 받지 못함 — kty c12′ 결정 1 (가))
 //   셀 수 없음 목록이 없거나 그 조각이 목록 밖 · 판 NULL 고름의 ② 머리가 없으면 창의 값(편집기 초 차)을 보내고 표시한다
+// 🔴 결과 영상 거리는 ms 로 내린다. 업로드 일꾼은 offset 에서 「pts ≥ t」 인 첫 프레임을 뽑는다(SceneExtractor.java:59 ·
+//    126-128 · 경계 답 2026-11-13 렌더) — 프레임 시작이 .67 꼴인 자리를 올리면 다음 프레임이 나온다.
 // 🔴 조각이 1초 미만 겹치는 이음(K1 · B8)에서 렌더는 겹친 프레임을 앞 조각 몫으로 잘라 낸다. 길이 합은 그 겹침만큼 클 수 있다
 //    — 썸네일의 거친 좌표라 한계로 둔다(경계 답 N9).
 
@@ -121,7 +123,7 @@ function windowDistance(
 }
 
 /**
- * in 끝점부터 썸네일 장면까지 결과 영상 미디어 거리(ms · 반올림). 둘 다 창 안이면 Blob 시각 차, 아니면(창 밖 · 창 없음)
+ * in 끝점부터 썸네일 장면까지 결과 영상 미디어 거리(ms · 내림). 둘 다 창 안이면 Blob 시각 차, 아니면(창 밖 · 창 없음)
  * 목록의 길이 합이다. 셀 수 없으면 null — 어림 끝점 · 목록 없음 · 그 조각이 목록 밖 · 머리 없는 판 NULL 고름
  */
 export function sceneOffsetMs(
@@ -134,12 +136,12 @@ export function sceneOffsetMs(
   if (from === null) return null;
   const to = spotOfChoice(thumb, base);
   const inWindow = placement === null ? null : windowDistance(from, to, placement, base);
-  if (inWindow !== null) return Math.round(inWindow * 1000);
+  if (inWindow !== null) return floorMs(inWindow);
   if (list === null) return null;
   const start = localOf(from, list, heads);
   const end = localOf(to, list, heads);
   const ms = start === null || end === null ? null : lengthBetween(start, end, list.rows);
-  return ms === null ? null : Math.round(ms);
+  return ms === null ? null : floorMs(ms / 1000);
 }
 
 /** 업로드 장면 offset. approximate 면 미디어 거리로 셀 수 없어 창의 값(편집기 초 차)을 그대로 실었다 — 장면이 어긋날 수 있다 */

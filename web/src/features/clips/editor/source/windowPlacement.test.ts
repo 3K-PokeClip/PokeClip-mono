@@ -316,8 +316,9 @@ describe('placeWindow → cutMsOf — 끝은 G 와 다음 프레임 사이 가�
   }
 
   /**
-   * 렌더 끝 프레임 — 새 경로 「PTS − D0 < x_out」(renderJudge). 끝 조각에 남는 프레임이 없으면 렌더는 앞 조각으로 물러나
-   * 그 끝 프레임까지 담는다(RenderTimeline 끝 조각 후퇴 — renderJudge 는 옮기지 않아 여기서 잇는다)
+   * 렌더 끝 프레임 — 새 경로 「PTS − D0 < x_out」(renderJudge). 끝 조각에 남는 프레임이 없으면 결과 끝은 앞 조각의 마지막
+   * 프레임이다. 이 목록의 조각은 앞 조각에 이어져(continuesPrevious) 렌더가 물러나지 않고, 결과 끝 소유(RenderTimeline
+   * ownEnd · 설계 7.4)로 앞 조각을 끝까지 담은 채 빈 끝 조각만 남는다 — renderJudge 는 그 갈래를 옮기지 않아 여기서 잇는다
    */
   function renderEnd(outMs: number): JudgedFrame | null {
     const last = newPathLastFrame(judgeRows, media, outMs, 'VIDEO_START');

@@ -248,11 +248,33 @@ describe('cutMsOf — 반올림은 in 올림 · out 내림이다', () => {
     expect(oldPathLastFrame(seg, k.pdtMs, outMs)).toBe(pick.pts);
   });
 
-  it('정수 ms 에 떨어지는 끝(4.000)은 부동소수 오차로 1ms 앞으로 내려가지 않는다', () => {
-    // 반 프레임(1500 틱) 늦게 선 프레임이라 마지막 프레임 3.983333 과 다음 프레임 사이 가운데가 4.000 이다
-    const pick = pickOf(k, 0, frameTimes(0, 1500, 120), 119);
+  it('정수 ms 에 떨어지는 끝(0.900)은 부동소수 오차로 1ms 앞으로 내려가지 않는다', () => {
+    // 반 프레임(1500 틱) 늦게 선 프레임이라 프레임 0.883333 과 다음 프레임 사이 가운데가 0.900 인데, 1000·(p + dur/2) 는
+    // 부동소수로 899.9999999999999 다
+    const pick = pickOf(k, 0, frameTimes(0, 1500, 120), 26);
 
-    expect(cutMsOf({ kind: 'pick', pick }, 'end', ctxOf(listOf(k, next), heads))).toBe(204_000);
+    expect(1000 * (pick.pts + pick.dur / 2)).toBeLessThan(900);
+    expect(cutMsOf({ kind: 'pick', pick }, 'end', ctxOf(listOf(k, next), heads))).toBe(200_900);
+  });
+
+  it('혼합 틱 소수 ms 의 끝도 내린다 — 999.99931 은 999 이고 1,000 이면 G 쪽으로 다가간다', () => {
+    // ③ D3 0 · ② D2 14/90000 · Hd = Hp 15/96000 → o = D3 − (D2 − Hd) = 1/1440000초(6.9e-4 ms). 가운데 1.000 에서 o 를 빼
+    // 999.99931ms — 여유가 1e-3ms 만 돼도 그 소수를 지워 1,000 으로 올린다
+    const d2 = 14 / TICKS;
+    const hd = 15 / 96_000;
+    const nk = row(15, 950_000, 4000, null);
+    const nFrames = frameTimes(0, 1500, 120);
+    const pick = pickOf(nk, 0, nFrames, 29);
+    const nHeads = headsOf({ 15: ready({ hd, hp: hd, videoDts: d2 }) });
+    const nJudge = new Map([[15, { videoDts: 0, m: d2 - hd, e: 0, frames: nFrames }]]);
+
+    const outMs = cutMsOf({ kind: 'pick', pick }, 'end', ctxOf(listOf(nk), nHeads)) as number;
+
+    expect(pick.pts + pick.dur / 2).toBeCloseTo(1, 9);
+    expect(outMs).toBe(950_999);
+    expect(newPathLastFrame(judgeRows([nk], [false]), nJudge, outMs, 'FILE_HEAD')?.pts).toBe(
+      pick.pts,
+    );
   });
 });
 

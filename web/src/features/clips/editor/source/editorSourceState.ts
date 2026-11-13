@@ -7,17 +7,19 @@ import { RESUME_WAIT_MS } from '@/features/player/sessionShared';
 //   nextEditorSourceState  회차 · 스트림 경로 답과 조각 실패를 쌓는다(1 · 2 · 3 · 6–9행)
 //   editorSourceView       선 원천에서 카드 자리를 목록 범위에 대 본다(4 · 5행 — 목록이 자라면 저절로 풀리는 보기)
 // 위 줄이 아래 줄을 이긴다. 순서 성질 — 갈래(만료 · 회차 경로 · 스트림 경로 · 조각 실패)마다 사건이 하나씩이면 어떤 순서로
-// 와도 끝 상태가 같다. 같은 갈래 안 사건은 시계열이라 나중 것이 이긴다(회차 경로 ending 뒤 vod 준비 · 재접속 live 등) —
-// 다른 갈래 사건을 그 시계열 사이 어디에 끼워도 끝 상태는 같다.
-//   끝 상태   1행(만료)과 회차 경로로 정한 2행(없음)만 뒤 답으로 풀리지 않는다.
-//   회차 몫   R58 로 선 3행 · vod 원천 · vod 원천의 조각 실패는 회차 경로만 바꾼다 — 스트림 경로 답(R58 · 같은 방송)은
-//            건드리지 않는다(5절 1). 방송 중 원천과 그 조각 실패 위에는 R58 이 3행으로 선다.
+// 와도 끝 상태가 같다. 한 갈래의 시계열(회차 경로 ending 뒤 vod 준비 · 재접속 live · 스트림 같은 방송 뒤 R58 등) 사이
+// 어디에 다른 갈래 사건을 끼워도 끝 상태는 같다. 시계열 안에서는 대개 나중 답이 이기지만 R58 로 선 3행은 스트림 답으로
+// 되돌아가지 않는다 — 회차 경로가 정할 때까지 둔다.
+//   끝 상태   1행(만료)과 회차 경로로 정한 2행(없음)은 어떤 답으로도 풀리지 않는다(2행 위에도 1행은 선다).
+//   회차 몫   R58 로 선 3행 · vod 원천 · vod 원천의 조각 실패는 스트림 경로 답(R58 · 같은 방송)이 건드리지 않는다(5절 1) —
+//            회차 경로 답 · 그 원천의 조각 실패 · 1행만 바꾼다. 방송 중 원천과 그 조각 실패 위에는 R58 이 3행으로 선다.
 //   덮개     회차 경로 ending · vod ∧ ¬ready 로 선 3행은 그 아래 상태를 덮어 둔다. 덮인 동안 온 스트림 답 · 조각 실패는
 //            아래 상태에 쌓이고, 같은 회차 재접속으로 회차 경로가 다시 live 를 답하면 덮개를 걷어 아래 상태가 드러난다
 //            (서버 media/internal/session/round_rule.go:105 합류 · media/internal/index/round_playback.go:66 live).
-//   조각 실패 그 조각을 받은 목록 주소를 사건이 싣고 온다. 원천이 서기 전 · R58 3행 · 끝 상태에서는 버리고(회차 덮개
-//            아래에서는 덮인 원천에 쌓는다), 지금 원천과 다른 목록의 실패는 낡은 창의 것이라 버린다. 정한 실패는 그 원천에 붙어, 같은 주소로
-//            원천이 다시 서도(4초 폴링) 풀리지 않고 다른 주소로 서면(방송이 끝나 회차 vod 로 옮김) 풀린다.
+//   조각 실패 그 조각을 받은 목록 주소와 방송 중 여부를 사건이 싣고 온다. 원천이 서기 전 · R58 3행 · 끝 상태에서는
+//            버리고(회차 덮개 아래에서는 덮인 원천에 쌓는다), 지금 원천과 다른 목록의 실패나 방송 중 여부가 그 원천의 경로와
+//            어긋난 사건은 낡은 것이라 버린다. 정한 실패는 그 원천에 붙어, 같은 주소로 원천이 다시 서도(4초 폴링) 풀리지 않고
+//            다른 주소로 서면(방송이 끝나 회차 vod 로 옮김) 풀린다. 같은 원천의 뒤 조각 실패는 나중 것이 이긴다.
 // 카드 표지(CardSceneLabel)는 이 상태와 따로다 — 장면을 못 찾은 카드도 영상 창은 연다.
 
 /** 조각 실패 판정(6–9행)의 근거 — 실패한 조각을 받은 목록(원천)의 경로와 주소. live = 스트림 경로 · vod = 회차 경로 */
@@ -172,8 +174,8 @@ function onStream(
 }
 
 /**
- * 조각 실패(6–9행). 403 은 출입증 갈래, 404 는 목록에서 빠졌는지로 가른다. 그 조각을 받은 목록이 지금 원천이 아니면(원천
- * 전 · R58 3행 · 낡은 창) 버린다. 판정은 그 원천(경로 · 주소)에 붙는다
+ * 조각 실패(6–9행). 403 은 출입증 갈래, 404 는 목록에서 빠졌는지로 가른다. 그 조각을 받은 목록이 지금 원천이 아니거나(원천
+ * 전 · R58 3행 · 낡은 창) 사건의 방송 중 여부가 그 원천의 경로와 어긋나면 버린다. 판정은 그 원천(경로 · 주소)에 붙는다
  */
 function onSegment(
   prev: EditorSourceState,
@@ -181,6 +183,7 @@ function onSegment(
 ): EditorSourceState {
   const segment = sourceOf(prev);
   if (segment === null || segment.listUrl !== event.listUrl) return prev;
+  if (event.live !== (segment.mode === 'live')) return prev;
   if (!event.listed && event.live) return { kind: 'outsideDvr', segment };
   if (event.failure === 'forbiddenAfterRefresh' && !event.roundGone) {
     return { kind: 'access', segment };
@@ -220,8 +223,9 @@ export function editorSourceView(
   list: { firstPdtMs: number; endMs: number } | null,
   wantMs: number | null,
 ): EditorSourceState {
-  if (state.kind !== 'ready' || state.mode !== 'live' || list === null || wantMs === null)
+  if (state.kind !== 'ready' || state.mode !== 'live' || list === null || wantMs === null) {
     return state;
+  }
   if (wantMs > list.endMs) return { kind: 'uploading' };
   if (wantMs < list.firstPdtMs) return { kind: 'outsideDvr' };
   return state;

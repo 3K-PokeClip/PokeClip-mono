@@ -65,11 +65,14 @@ interface ReadRow {
 
 const NO_TAGS: SegmentTags = { discontinuity: false, gap: false, pdtMs: null, durationMs: null };
 
-/** raw 를 목록 주소 기준으로 풀어 같은 출처면 절대 주소, 아니면 null */
+/**
+ * raw 를 목록 주소 기준으로 풀어 같은 출처면 절대 주소, 아니면 null. blob: 은 origin 이 안쪽 주소의 출처라 같은 출처로
+ * 보이므로 스킴도 목록(http · https)과 같아야 한다
+ */
 function sameOriginUrl(raw: string, list: URL): string | null {
   try {
     const url = new URL(raw, list);
-    return url.origin === list.origin ? url.href : null;
+    return url.protocol === list.protocol && url.origin === list.origin ? url.href : null;
   } catch {
     return null;
   }

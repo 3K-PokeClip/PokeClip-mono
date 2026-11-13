@@ -6,12 +6,18 @@ import type { HeadCache } from './source/fileHeadProbe';
 import {
   displayRange,
   endpointOf,
+  rangeLengthRefusal,
   type Endpoint,
   type EndpointRange,
 } from './source/rangeEndpoints';
 import type { ThumbnailChoice } from './source/sceneOffset';
 import type { EditorPick } from './source/windowPlacement';
-import { MIN_RANGE_SECONDS, resolveRangeEdge, type ClipRange } from './timelineMath';
+import {
+  clampEdgeSeconds,
+  MIN_RANGE_SECONDS,
+  resolveRangeEdge,
+  type ClipRange,
+} from './timelineMath';
 
 // 편집기 상태의 끝점 · 고름 입력(POK-473 설계 prw2 3.3 몸짓 표 · 4절 상태 훅 입력 꼴 · 계획 5절 E4b-3). 상태 훅
 // (useClipEditorMockState — 800줄 넘음)은 부르기만 하고 규칙은 여기 둔다.
@@ -94,9 +100,25 @@ function sameEndpoint(a: Endpoint, b: Endpoint): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** 목업 — 구간 초가 곧 값이라 길이(5초–3분)도 구간 초로 resolveRangeEdge 가 본다 */
+function editMockEdge(
+  edge: 'start' | 'end',
+  seconds: number,
+  current: RangeState,
+  limits: EdgeLimits,
+): RangeState | null {
+  const result = resolveRangeEdge(edge, seconds, current.range, limits.durationSeconds);
+  if (result.rejection !== null) return null;
+  const same =
+    result.range.startSeconds === current.range.startSeconds &&
+    result.range.endSeconds === current.range.endSeconds;
+  return same ? null : { range: result.range };
+}
+
 /**
- * 구간 끝 하나를 바꾼다. 길이(5초–3분)는 표시 초로 resolveRangeEdge 가 본다 — 밖이면 바꾸지 않는다(null). 한계(왼쪽 끝 · 오른쪽
- * 끝) 밖으로 끈 입력은 한계 자리에서 다시 고른다(그 자리도 창 안이면 고름). 바뀐 것이 없으면 null
+ * 구간 끝 하나를 바꾼다. 실제 모드의 길이(5초–3분)는 저장과 같은 규칙의 ms 로 본다(rangeLengthRefusal) — 표시 초는 고름의
+ * 프레임 시작이라 저장 값과 갈려, 화면이 받은 범위를 저장이 거절하거나 그 반대가 된다. 밖이면 바꾸지 않는다(null). 한계(왼쪽
+ * 끝 · 오른쪽 끝) 밖으로 끈 입력은 한계 자리에서 다시 고른다(그 자리도 창 안이면 고름). 바뀐 것이 없으면 null
  */
 export function editRangeEdge(
   edge: 'start' | 'end',
@@ -108,25 +130,17 @@ export function editRangeEdge(
 ): RangeState | null {
   const resolved = input.kind === 's' ? inputAtS(input.s, pickAtS) : input;
   const raw = inputSeconds(resolved, ctx);
-  const result = resolveRangeEdge(
-    edge,
-    Math.max(limits.minSeconds, raw),
-    current.range,
-    limits.durationSeconds,
-  );
-  if (result.rejection !== null) return null;
+  const requested = Math.max(limits.minSeconds, raw);
   if (current.endpoints === undefined || ctx === null) {
-    const same =
-      result.range.startSeconds === current.range.startSeconds &&
-      result.range.endSeconds === current.range.endSeconds;
-    return same ? null : { range: result.range };
+    return editMockEdge(edge, requested, current, limits);
   }
   const clamped = raw < Math.max(0, limits.minSeconds) || raw > limits.durationSeconds;
-  const edgeSeconds = edge === 'start' ? result.range.startSeconds : result.range.endSeconds;
+  const edgeSeconds = clampEdgeSeconds(requested, limits.durationSeconds);
   const settled = clamped ? inputAtS(edgeSeconds, pickAtS) : resolved;
   const endpoint = endpointOf(settled, ctx.base);
   if (sameEndpoint(endpoint, current.endpoints[edge])) return null;
   const endpoints = { ...current.endpoints, [edge]: endpoint };
+  if (rangeLengthRefusal(endpoints, ctx.heads) !== null) return null;
   return { range: displayRange(endpoints, ctx.heads, ctx.base), endpoints };
 }
 

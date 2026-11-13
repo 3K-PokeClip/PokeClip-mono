@@ -317,10 +317,10 @@ describe('시험 묶음 D — 다시 열기 · 카드 범위 반례', () => {
     expect(savable(set, ctx)).toEqual({ ok: true, inMs: 101_000, outMs: 112_000 });
   });
 
-  it('런을 건너는 컷(판 NULL seq 3 → 끊김 → seq 4)도 저장하고, 다시 열어 손대지 않고 저장하면 같은 값이다', () => {
+  it('런을 건너는 컷(판 2 seq 3 → 끊김 → seq 4)도 저장하고, 다시 열어 손대지 않고 저장하면 같은 값이다', () => {
     const t0 = 1_726_826_400_000;
-    const seq3 = { ...row(3, t0 + 8_000, null), timing: 'v2' as const };
-    const seq4 = { ...row(4, t0 + 20_300, null), timing: 'v2' as const };
+    const seq3 = row(3, t0 + 8_000, 'v2');
+    const seq4 = row(4, t0 + 20_300, 'v2');
     const list: EditorPlaylist = { runs: [[seq3], [seq4]], rows: [seq3, seq4] };
     const pickIn: EditorPick = {
       seq: 3,
@@ -355,6 +355,41 @@ describe('시험 묶음 D — 다시 열기 · 카드 범위 반례', () => {
     // 다시 연 화면은 저장 값의 표시 초다 — 고른 끝(프레임 시작 23.26초)이 아니라 그 프레임과 다음 프레임 사이 가운데
     // (23.28초)다(kty 결정 (다) 2026-11-13 — 옛 결정 2 「그 프레임 끝」 을 대체)
     expect(displayRange(reopened, ctx.heads, t0)).toEqual({ startSeconds: 10, endSeconds: 23.28 });
+  });
+
+  it('판 NULL 런을 건너는 컷은 양쪽 seq 의 ② 머리로 원점을 옮겨 저장하고, 다시 열어 그대로 저장하면 같은 값이다', () => {
+    // seq 3: ③ D3 30.0 · ② D2 0.2 · Hd 0 → o = 29.8 · seq 4: D3 40.0 · D2 0.3 → o = 39.7(e 0)
+    //   in  = PDT_3 + ceil(1000·(32.0 − 29.8)) = + 2,200 · out = PDT_4 + floor(1000·(42.96 + 0.02 − 39.7)) = + 3,280
+    const t0 = 1_726_826_400_000;
+    const seq3 = row(3, t0 + 8_000, null);
+    const seq4 = row(4, t0 + 20_300, null);
+    const list: EditorPlaylist = { runs: [[seq3], [seq4]], rows: [seq3, seq4] };
+    const heads = headsOf({
+      3: { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.2 } },
+      4: { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } },
+    });
+    const pickOf = (seg: PlaylistSegment, pts: number, videoDts: number): EditorPick => ({
+      seq: seg.seq,
+      pts,
+      dur: 0.04,
+      videoDts,
+      pdtMs: seg.pdtMs,
+      durationMs: 4000,
+      timing: null,
+    });
+    const ctx = { base: t0, heads, list };
+    const picked: EndpointRange = {
+      start: { kind: 'pick', pick: pickOf(seq3, 32.0, 30.0) },
+      end: { kind: 'pick', pick: pickOf(seq4, 42.96, 40.0) },
+    };
+
+    const saved = savable(picked, ctx);
+    if (!saved.ok) throw new Error(`저장이 막혔다: ${saved.reason}`);
+
+    expect(saved).toEqual({ ok: true, inMs: t0 + 10_200, outMs: t0 + 23_580 });
+    expect(savable(recipeEndpoints({ inAtMs: saved.inMs, outAtMs: saved.outMs }), ctx)).toEqual(
+      saved,
+    );
   });
 
   describe('레시피 다시 열기 — 판 NULL 머리 전후(설계 5절 8 · cx 1 반례)', () => {
@@ -393,7 +428,7 @@ describe('시험 묶음 D — 다시 열기 · 카드 범위 반례', () => {
 
     it('고른 프레임으로 저장한 in 을 다시 열면 그 자리에 보이는 프레임이 고른 프레임이다(in 올림 · kty 결정 2 (다))', () => {
       // 소수 ms PTS(30fps 의 1/3 · 2/3 ms)도 in 을 내리면 o + in 이 F 보다 1ms 미만 앞이라 F 앞 프레임이 보였다. 조각 끝
-      // 4.0초를 넘는 꼬리 프레임(i ≥ 111)은 K2 가 조각 끝 앞으로 내려 F 앞이라 뺀다
+      // 4.0초에 닿거나 넘는 꼬리 프레임(i ≥ 111)은 K2 가 조각 끝 앞으로 내려 F 앞이라 뺀다
       const heads = headsOf({ 7: { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } } });
       const placement = placeWindow(remuxed, [seg7], base, heads);
       const ctx = { base, heads, list: { runs: [[seg7]], rows: [seg7] } };
