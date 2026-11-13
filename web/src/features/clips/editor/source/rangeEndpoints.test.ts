@@ -390,8 +390,33 @@ describe('시험 묶음 D — 다시 열기 · 카드 범위 반례', () => {
       expect(seekBefore).toBeCloseTo(1.1, 9);
       expect(seekAfter).toBeCloseTo(0.8, 9);
     });
+
+    it('고른 프레임으로 저장한 in 을 다시 열면 그 자리에 보이는 프레임이 고른 프레임이다(in 올림 · kty 결정 2 (다))', () => {
+      // 소수 ms PTS(30fps 의 1/3 · 2/3 ms)도 in 을 내리면 o + in 이 F 보다 1ms 미만 앞이라 F 앞 프레임이 보였다. 조각 끝
+      // 4.0초를 넘는 꼬리 프레임(i ≥ 111)은 K2 가 조각 끝 앞으로 내려 F 앞이라 뺀다
+      const heads = headsOf({ 7: { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } } });
+      const placement = placeWindow(remuxed, [seg7], base, heads);
+      const ctx = { base, heads, list: { runs: [[seg7]], rows: [seg7] } };
+
+      const shown = frames.slice(0, 111).map(({ pts }) => {
+        const pick = placement.pickAtBlob(pts - remuxed.shiftSeconds);
+        const saved = recipeEndpoints({ inAtMs: savedIn(pick, ctx), outAtMs: 106_000 });
+        const blob = placement.blobAtS(displaySeconds(saved.start, heads, base));
+        return placement.pickAtBlob(blob).pts;
+      });
+
+      expect(shown).toEqual(frames.slice(0, 111).map(({ pts }) => pts));
+    });
   });
 });
+
+/** 고름의 in 저장 값 — 짓지 못하면 시험을 멈춘다 */
+function savedIn(pick: EditorPick, ctx: CutContext): number {
+  const range: EndpointRange = { start: { kind: 'pick', pick }, end: exact(pick.pdtMs + 10_000) };
+  const verdict = savable(range, ctx);
+  if (!verdict.ok) throw new Error(`저장이 막혔다: ${verdict.reason}`);
+  return verdict.inMs;
+}
 
 describe('displayRange', () => {
   it('끝점 둘의 표시 초를 편집기 구간으로 낸다 — 카드 창이면 지금 식과 같은 초다', () => {

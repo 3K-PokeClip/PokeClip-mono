@@ -14,9 +14,10 @@ import type { FileHead, HeadCache, HeadEntry } from './fileHeadProbe';
 import type { EditorPick } from './windowPlacement';
 
 // 시험 묶음 A 의 컷 값 갈래(설계 prw2 3.2 결정 2 · 11절 · 처분 K1′ · K2 · PK1). 기대 T 는 설계 반례의 식에서 손으로 옮겼고,
-// 그 T 가 담는 프레임은 시험 쪽 판정 함수(@/test/renderJudge — clip · 렌더 규칙을 옮긴 것)로 본다. 첫 프레임은 새 경로 ∈
-// {F, F 앞} · 옛 경로 = F, 끝 프레임은 두 경로 모두 F 로 기대한다. 프레임 시각은 실물처럼 90 kHz 틱에서 만든다. out 은 F 와
-// 다음 프레임 사이 가운데다(kty 결정 (다) 2026-11-13) — 기대 out 은 p_F + dur_F/2 에서 옮겼다.
+// 그 T 가 담는 프레임은 시험 쪽 판정 함수(@/test/renderJudge — clip · 렌더 규칙을 옮긴 것)로 본다. 첫 프레임은 새 경로 = F
+// (K2 · e > 0 은 F 앞) · 옛 경로 ∈ {F, F 다음}, 끝 프레임은 두 경로 모두 F 로 기대한다. 프레임 시각은 실물처럼 90 kHz 틱에서
+// 만든다. in 은 올림 · out 은 F 와 다음 프레임 사이 가운데의 내림이다(kty 결정 2 (다) · 결정 (다) 2026-11-13) — 기대 in 은
+// ceil(p_F − o − e), 기대 out 은 floor(p_F + dur_F/2 − o) 에서 옮겼다.
 
 const TICKS = 90_000;
 const FRAME_TICKS = 3000;
@@ -162,7 +163,7 @@ describe('cutMsOf — 판 NULL 고름은 ② 머리 Hd 를 원점으로 셈한�
   });
 });
 
-describe('cutMsOf — 반올림은 in · out 모두 floor 다', () => {
+describe('cutMsOf — 반올림은 in 올림 · out 내림이다', () => {
   // 판 NULL · ② 영상 첫 DTS 0 · 머리 앞섬 m 0 · e 0 · ③ 축 = ② 축
   const k = row(3, 200_000, 4000, null);
   const next = row(4, 204_000, 4000, null);
@@ -172,14 +173,69 @@ describe('cutMsOf — 반올림은 in · out 모두 floor 다', () => {
   const judge = new Map([[3, seg]]);
   const rows = judgeRows([k, next], [false, true]);
 
-  it('in 프레임 PTS 1.033333 은 1,033 으로 내려 새 경로는 F 앞부터 · 옛 경로는 F 부터 담는다', () => {
+  it('in 프레임 PTS 1.033333 은 1,034 로 올려 새 경로는 F 부터 · 옛 경로는 F 다음부터 담는다', () => {
     const pick = pickOf(k, 0, frames, 31);
 
     const inMs = cutMsOf({ kind: 'pick', pick }, 'start', ctxOf(listOf(k, next), heads)) as number;
 
-    expect(inMs).toBe(201_033);
-    expect(newPathFirstFrame(rows, judge, inMs, 'FILE_HEAD')?.pts).toBeCloseTo(frames[30]!, 9);
-    expect(oldPathFirstFrame(seg, k.pdtMs, inMs)).toBe(pick.pts);
+    expect(inMs).toBe(201_034);
+    expect(newPathFirstFrame(rows, judge, inMs, 'FILE_HEAD')?.pts).toBe(pick.pts);
+    // 옛 경로 「in 이후 첫 프레임」 은 F 를 빠뜨린다 — 웹과 clip PR-B2 를 같은 배포 창에 붙여 그 공백을 줄인다(kty 결정 1 (가))
+    expect(oldPathFirstFrame(seg, k.pdtMs, inMs)).toBe(frames[32]);
+  });
+
+  it('정수 ms 에 떨어지는 in(4.2 − 4.0 = 0.200)은 부동소수 오차로 1ms 위로 올라가지 않아 두 경로 모두 F 부터다', () => {
+    // 판 2 · D3 4.0 · 프레임 PTS 4.2 — 1000·(4.2 − 4.0) 은 부동소수로 200.00000000000017 이다
+    const v2 = row(12, 700_000, 4000, 'v2');
+    const v2Frames = frameTimes(360_000, 0, 120);
+    const pick = pickOf(v2, 4.0, v2Frames, 6);
+    const v2Seg: JudgeMedia = { videoDts: 4.0, m: 0, e: 0, frames: v2Frames };
+
+    const inMs = cutMsOf({ kind: 'pick', pick }, 'start', ctxOf(listOf(v2))) as number;
+
+    expect(inMs).toBe(700_200);
+    expect(
+      newPathFirstFrame(judgeRows([v2], [false]), new Map([[12, v2Seg]]), inMs, 'VIDEO_START')?.pts,
+    ).toBe(pick.pts);
+    expect(oldPathFirstFrame(v2Seg, v2.pdtMs, inMs)).toBe(pick.pts);
+  });
+
+  it('한 틱(1/90 ms) 소수도 올린다 — 1000.0111 은 1,001 이고 1,000 이면 새 경로가 F 앞부터다', () => {
+    // 판 2 · D3 0 · 프레임이 한 틱 늦게 선다(PTS 1 + 1/90000초)
+    const v2 = row(13, 800_000, 4000, 'v2');
+    const v2Frames = frameTimes(0, 1, 120);
+    const pick = pickOf(v2, 0, v2Frames, 30);
+    const v2Judge = new Map([[13, { videoDts: 0, m: 0, e: 0, frames: v2Frames }]]);
+    const v2Rows = judgeRows([v2], [false]);
+
+    const inMs = cutMsOf({ kind: 'pick', pick }, 'start', ctxOf(listOf(v2))) as number;
+
+    expect(inMs).toBe(801_001);
+    expect(newPathFirstFrame(v2Rows, v2Judge, inMs, 'VIDEO_START')?.pts).toBe(pick.pts);
+    expect(newPathFirstFrame(v2Rows, v2Judge, inMs - 1, 'VIDEO_START')?.pts).toBe(v2Frames[29]);
+  });
+
+  // 판 NULL 원점 o = D3 − (D2 − Hd) 는 영상 틱(1/90000초)과 소리 틱의 차를 담는다. 그 차의 가장 작은 소수는
+  // 1/lcm(90000, 소리 rate)초 — 96kHz 1/1440 ms · 44.1kHz 1/4410 ms 로 부동소수 잡음보다 훨씬 크다(r1 cx · cc 지적)
+  it.each([
+    { rate: '96kHz', d2Ticks: 1, hd: 1 / 96_000 },
+    { rate: '44.1kHz', d2Ticks: 49, hd: 24 / 44_100 },
+  ])('혼합 틱($rate) 소수 ms 도 올려 새 경로 첫 프레임이 F 다', ({ d2Ticks, hd }) => {
+    // ③ 축 = ② 축 · D2 = D3 = d2Ticks/90000 · Hd = Hp(e 0) · 프레임 PTS = D3 + 1초
+    const d3 = d2Ticks / TICKS;
+    const nk = row(14, 900_000, 4000, null);
+    const nFrames = frameTimes(d2Ticks, 0, 120);
+    const pick = pickOf(nk, d3, nFrames, 30);
+    const nHeads = headsOf({ 14: ready({ hd, hp: hd, videoDts: d3 }) });
+    const nJudge = new Map([[14, { videoDts: d3, m: d3 - hd, e: 0, frames: nFrames }]]);
+
+    const inMs = cutMsOf({ kind: 'pick', pick }, 'start', ctxOf(listOf(nk), nHeads)) as number;
+
+    expect(pick.pts - d3).toBeCloseTo(1, 9);
+    expect(inMs).toBe(901_001);
+    expect(newPathFirstFrame(judgeRows([nk], [false]), nJudge, inMs, 'FILE_HEAD')?.pts).toBe(
+      pick.pts,
+    );
   });
 
   it('out 은 F 와 G 사이 가운데 1.05 를 1,050 으로 내려 두 경로 모두 F 는 남고 G 는 빠진다', () => {
@@ -211,7 +267,7 @@ describe('cutMsOf — 판 NULL in 은 e 를 빼 옛 경로 0점(Hp)과 맞춘다
   const rows = judgeRows([k, next], [false, true]);
   const ctx = ctxOf(listOf(k, next), heads);
 
-  it('in 프레임 1.000 은 PDT + 960 이고 옛 경로 첫 프레임이 F 다', () => {
+  it('in 프레임 1.000 은 PDT + 960 이고 옛 경로 첫 프레임이 F 다(정수 ms 라 올림 · 내림이 같다)', () => {
     const pick = pickOf(k, 0, frames, 28);
 
     const inMs = cutMsOf({ kind: 'pick', pick }, 'start', ctx) as number;
@@ -219,6 +275,19 @@ describe('cutMsOf — 판 NULL in 은 e 를 빼 옛 경로 0점(Hp)과 맞춘다
     expect(pick.pts).toBeCloseTo(1.0, 9);
     expect(inMs).toBe(300_960);
     expect(oldPathFirstFrame(seg, k.pdtMs, inMs)).toBe(pick.pts);
+  });
+
+  it('in 프레임 1.033333 은 1.033333 − 0.04 를 올려 PDT + 994 · 새 경로는 F − e 안 · 옛 경로는 F 다음부터다', () => {
+    const pick = pickOf(k, 0, frames, 29);
+
+    const inMs = cutMsOf({ kind: 'pick', pick }, 'start', ctx) as number;
+
+    expect(pick.pts).toBeCloseTo(1.0 + 1 / 30, 9);
+    expect(inMs).toBe(300_994);
+    const newFirst = newPathFirstFrame(rows, judge, inMs, 'FILE_HEAD')!.pts;
+    expect(newFirst).toBeLessThan(pick.pts);
+    expect(newFirst).toBeGreaterThanOrEqual(pick.pts - 0.04 - FRAME_TICKS / TICKS);
+    expect(oldPathFirstFrame(seg, k.pdtMs, inMs)).toBe(frames[30]);
   });
 
   it('e > 0 이면 새 경로 머리는 F − e − 한 프레임 안에서 더 들고 옛 경로 끝은 F 를 넘어 더 들 수 있으나 누락은 없다', () => {
@@ -249,7 +318,7 @@ describe('cutMsOf — K2: in 이 장부 틈에 떨어지면 조각 끝 앞으로
     [11, { videoDts: 4.0, m: 0, e: 0, frames: frameTimes(360_000, 0, 120) }],
   ]);
 
-  it('이어진 이웃 앞 틈의 108,033 은 107,999 가 되어 렌더 시작이 그 조각 안이다', () => {
+  it('이어진 이웃 앞 틈의 108,034 는 107,999 가 되어 렌더 시작이 그 조각 안이다', () => {
     const next = row(11, 111_000, 4000, 'v2');
 
     const inMs = cutMsOf({ kind: 'pick', pick }, 'start', ctxOf(listOf(k, next))) as number;
@@ -307,6 +376,31 @@ describe('cutMsOf — K2: in 이 장부 틈에 떨어지면 조각 끝 앞으로
     );
     expect(first?.seq).toBe(20);
     expect(first!.pts).toBeLessThanOrEqual(v1Pick.pts);
+  });
+
+  it('올림이 조각 끝(PTS 3.999989 → 108,000)에 닿아도 PDT_k + EXTINF_k − 1 로 내려 렌더가 이웃 조각부터 시작하지 않는다', () => {
+    // 프레임이 359,999 틱에 서는 판 2 조각 — 1000·3.999989 를 올리면 4,000 = EXTINF 라 clip 은 이어진 이웃 seq 11 머리로 푼다
+    const edgeFrames = frameTimes(0, 2999, 120);
+    const edgePick = pickOf(k, 0, edgeFrames, 119);
+    const next = row(11, 108_000, 4000, 'v2');
+    const edgeJudge = new Map<number, JudgeMedia>([
+      [10, { videoDts: 0, m: 0, e: 0, frames: edgeFrames }],
+      [11, { videoDts: 4.0, m: 0, e: 0, frames: frameTimes(360_000, 0, 120) }],
+    ]);
+    const rows = judgeRows([k, next], [false, true]);
+
+    const inMs = cutMsOf(
+      { kind: 'pick', pick: edgePick },
+      'start',
+      ctxOf(listOf(k, next)),
+    ) as number;
+
+    expect(edgePick.pts).toBeCloseTo(359_999 / TICKS, 9);
+    expect(inMs).toBe(107_999);
+    const first = newPathFirstFrame(rows, edgeJudge, inMs, 'VIDEO_START');
+    expect(first?.seq).toBe(10);
+    expect(first!.pts).toBeLessThanOrEqual(edgePick.pts);
+    expect(newPathFirstFrame(rows, edgeJudge, 108_000, 'VIDEO_START')?.seq).toBe(11);
   });
 
   it('판 2 겹침 꼬리(다음 PDT 가 EXTINF 끝보다 이름)는 PDT_{k+1} − 1 로 내리고 out 은 그대로 둔다', () => {
@@ -464,8 +558,12 @@ describe('cutMsOf — 고름 수명(계획 prw2 P-4′ · 처분 PK1)', () => {
     expect(cutMsOf({ kind: 'pick', pick: inPick }, 'start', ctxOf(null))).toBe('listUnavailable');
   });
 
-  it('S 입력(고름 없음)은 목록 · 머리 없이 floor(base + 1000·S) 다', () => {
+  it('S 입력(고름 없음)은 목록 · 머리 없이 floor(base + 1000·S) 다 — in 도 올리지 않는다', () => {
     expect(cutMsOf({ kind: 's', s: 12.3456 }, 'start', ctxOf(null))).toBe(BASE + 12_345);
     expect(cutMsOf({ kind: 's', s: 12.3456 }, 'end', ctxOf(null))).toBe(BASE + 12_345);
+  });
+
+  it('S 입력이 정수 ms 에 떨어지면(1.005 — 1000·S 는 부동소수로 1004.9999999999999) 1ms 앞으로 내려가지 않는다', () => {
+    expect(cutMsOf({ kind: 's', s: 1.005 }, 'start', ctxOf(null))).toBe(BASE + 1005);
   });
 });
