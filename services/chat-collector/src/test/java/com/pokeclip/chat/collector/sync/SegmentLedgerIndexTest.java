@@ -78,7 +78,8 @@ class SegmentLedgerIndexTest extends IntegrationTestSupport {
             + "ON public.stream_segments (stream_id, start_wall_utc DESC) WHERE timing_version IS NULL";
 
     /**
-     * 판 2 PDT 색인 — <b>생산자 정의</b>(pdt-main 확정 · 생산자 후속 PR 이 제품 DDL 로 낸다 · prod 적용은 판 2 쓰기 스위치 전 ·
+     * 판 2 PDT 색인 — <b>생산자 정의</b>(생산자 PR 510 이 제품 DDL 로 낸다(미머지 — 머지 뒤 머지 커밋으로) · prod 적용은 판 2
+     * 쓰기 스위치 전 ·
      * kty 2026-11-13 L2 (가)). 생산자 꼴(이름이 없을 때만 만드는 {@code DO} 블록 — {@code ddl.go} 의 PDT 부분 인덱스 블록)
      * 그대로 옮겼고, 시험 연결의 스키마 경로 때문에 이름 · 표에만 {@code public.} 을 붙였다. 이 카드는 제품 DDL 을 만들지
      * 않는다.

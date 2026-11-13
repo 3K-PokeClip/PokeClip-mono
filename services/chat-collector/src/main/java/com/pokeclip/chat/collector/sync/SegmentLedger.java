@@ -84,8 +84,8 @@ public class SegmentLedger {
      * 끝난다. 그 스트림의 판 2 행보다 이른 시각이면 seq 역순 훑기는 그 스트림 판 2 행을 끝까지 읽는다(판 2 30만 행에서 7,246
      * 버퍼 — 보안 L2). 그래서 「그 스트림 판 2 행의 최소 PDT ≤ t」 를 먼저 본다 — 「PDT ≤ t 인 판 2 행이 있다」 와 같은
      * 뜻이고(판 2 행이 없으면 최솟값이 NULL 이라 거짓), 거짓이면 본 조회를 건너뛴다. 최솟값은 생산자 판 2 PDT 색인
-     * {@code stream_segments_v2_pdt_idx}({@code (stream_id, playback_pdt DESC) WHERE timing_version = 2} — pdt-main
-     * 확정 · 생산자 후속 PR 이 낸다)의 한쪽 끝 한 항목이라, 플래너가 t 를 모르는 일반 계획(같은 문장을 되풀이한 서버 준비 문장)에서도
+     * {@code stream_segments_v2_pdt_idx}({@code (stream_id, playback_pdt DESC) WHERE timing_version = 2} — 생산자 PR 510
+     * (미머지 — 머지 뒤 머지 커밋으로))의 한쪽 끝 한 항목이라, 플래너가 t 를 모르는 일반 계획(같은 문장을 되풀이한 서버 준비 문장)에서도
      * 꼬리 몇 행이다. {@code EXISTS(… playback_pdt <= ?)} 꼴은 플래너가 첫 행만 찾으면 된다고 보고 표 전체 Seq Scan 을
      * 골랐다(2026-11-13 실측 12,668 버퍼). 확인은 본 조회와 같은 조건이라 답은 그대로다.
      *

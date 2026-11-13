@@ -4732,7 +4732,7 @@ ISO-8601(`2026-08-24T12:00:00Z`). 숫자로만 이뤄졌으면 epoch ms로 읽�
 `appliedOffsetMs`는 고른 후보의 보정값이다. **후보가 둘 다 없으면(`not_yet_indexed` · `no_footage`) 옛
 보정값이 실린다** — 판 2 행만 있는 방송의 시작 직후처럼 판 2 보정값이 경계를 정한 경우에도 그렇다.
 판 2 후보 조회는 생산자의 판 2 PDT 색인(`stream_segments_v2_pdt_idx` — `(stream_id, playback_pdt DESC) WHERE
-timing_version = 2` · 생산자 후속 PR)을 전제로 한다. 이 색인은 **판 2 쓰기 스위치 전에 prod 에 깔려야 한다** —
+timing_version = 2` · 생산자 PR 510(미머지 — 머지 뒤 머지 커밋으로))을 전제로 한다. 이 색인은 **판 2 쓰기 스위치 전에 prod 에 깔려야 한다** —
 없어도 답은 같지만 판 2 행이 많은 스트림에서 조회마다 그 행들을 훑는다(판 2 30만 행에서 약 4,500 버퍼).
 
 ```json
