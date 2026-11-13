@@ -61,7 +61,7 @@ class SyncPropertiesValidationTest {
 
     @Test
     void 자릿수를_착각한_기본_보정값을_거부한다() {
-        assertThatThrownBy(() -> new SyncProperties(1_500_000_000L, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(1_500_000_000L, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("pokeclip.sync.default-offset-ms")
                 .hasMessageContaining(String.valueOf(SyncProperties.MAX_ABS_OFFSET_MS));
@@ -75,11 +75,11 @@ class SyncPropertiesValidationTest {
     void 음수도_같은_크기까지_받는다() {
         long limit = SyncProperties.MAX_ABS_OFFSET_MS;
 
-        assertThatCode(() -> new SyncProperties(-limit, Map.of())).doesNotThrowAnyException();
-        assertThatCode(() -> new SyncProperties(limit, Map.of())).doesNotThrowAnyException();
-        assertThatThrownBy(() -> new SyncProperties(-limit - 1, Map.of()))
+        assertThatCode(() -> new SyncProperties(-limit, Map.of(), 0)).doesNotThrowAnyException();
+        assertThatCode(() -> new SyncProperties(limit, Map.of(), 0)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> new SyncProperties(-limit - 1, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SyncProperties(limit + 1, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(limit + 1, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -90,9 +90,9 @@ class SyncPropertiesValidationTest {
      */
     @Test
     void 오버플로로_그물을_빠져나가는_값이_없다() {
-        assertThatThrownBy(() -> new SyncProperties(Long.MIN_VALUE, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(Long.MIN_VALUE, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SyncProperties(Long.MAX_VALUE, Map.of()))
+        assertThatThrownBy(() -> new SyncProperties(Long.MAX_VALUE, Map.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -102,7 +102,7 @@ class SyncPropertiesValidationTest {
      */
     @Test
     void 채널별_보정값도_같은_그물에_걸린다() {
-        assertThatThrownBy(() -> new SyncProperties(0, Map.of("streamer-a", 1_500_000_000L)))
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of("streamer-a", 1_500_000_000L), 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("pokeclip.sync.channel-offset-ms.streamer-a");
     }
@@ -117,15 +117,38 @@ class SyncPropertiesValidationTest {
         Map<String, Long> withNull = new HashMap<>();
         withNull.put("streamer-a", null);
 
-        assertThatThrownBy(() -> new SyncProperties(0, withNull))
+        assertThatThrownBy(() -> new SyncProperties(0, withNull, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("pokeclip.sync.channel-offset-ms.streamer-a");
+    }
+
+    /** 판 2 차감도 같은 그물이다(설계 r6 7.1 — 상한 검사는 {@code requireInRange} 그대로). 메시지가 어느 속성인지 가리킨다. */
+    @Test
+    void 판_2_차감도_같은_그물에_걸린다() {
+        assertThatThrownBy(() -> new SyncProperties(0, Map.of(), 1_500_000_000L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pokeclip.sync.v2-lead-correction-ms");
+        assertThatCode(() -> new SyncProperties(0, Map.of(), -SyncProperties.MAX_ABS_OFFSET_MS))
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * 판 2 보정값 = 판 NULL 보정값 − 판 2 차감이다(계약 세그먼트인덱스 6-6-9 「지금 값 − 판 2 행 m 평균」). 채널 덮어쓰기도
+     * 같은 차감을 받는다.
+     */
+    @Test
+    void 판_2_보정값은_판_NULL_보정값에서_차감을_뺀다() {
+        SyncProperties properties = new SyncProperties(3900, Map.of("streamer-a", 5000L), 150);
+
+        assertThat(properties.v2OffsetFor(null)).isEqualTo(3750L);
+        assertThat(properties.v2OffsetFor("streamer-b")).isEqualTo(3750L);
+        assertThat(properties.v2OffsetFor("streamer-a")).isEqualTo(4850L);
     }
 
     /** null 맵을 빈 맵으로 받는 기존 계약은 그대로다 — yml에 절 자체를 안 쓰는 것이 정상이다. */
     @Test
     void 맵이_없으면_빈_맵이다() {
-        assertThat(new SyncProperties(0, null).channelOffsetMs()).isEmpty();
+        assertThat(new SyncProperties(0, null, 0).channelOffsetMs()).isEmpty();
     }
 
     // ---------------------------------------------------------------- 바인딩 경로
@@ -160,6 +183,17 @@ class SyncPropertiesValidationTest {
                 .withPropertyValues("pokeclip.sync.default-offset-ms=-3200",
                         "pokeclip.sync.channel-offset-ms.streamer-a=4500")
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /** 판 2 차감 속성 이름이 바인딩에 닿는다 — 이름이 어긋나면 0 으로 조용히 남는다. */
+    @Test
+    void 판_2_차감은_속성_이름으로_바인딩된다() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(OnlySyncProperties.class)
+                .withPropertyValues("pokeclip.sync.default-offset-ms=3900",
+                        "pokeclip.sync.v2-lead-correction-ms=150")
+                .run(context -> assertThat(context.getBean(SyncProperties.class).v2OffsetFor(null))
+                        .isEqualTo(3750L));
     }
 
     /**
