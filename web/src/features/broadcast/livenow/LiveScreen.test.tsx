@@ -262,6 +262,7 @@ vi.mock('hls.js', () => {
       MANIFEST_LOAD_ERROR: 'manifestLoadError',
       LEVEL_LOAD_ERROR: 'levelLoadError',
       AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
+      FRAG_LOAD_ERROR: 'fragLoadError',
     };
     private readonly handlers = new Map<string, (event?: string, data?: unknown) => void>();
     /** 이 재생기가 마지막으로 받은 목록(vodMode) */
@@ -286,6 +287,7 @@ vi.mock('hls.js', () => {
       if (hlsFake.manifest && hlsFake.frags) this.handlers.get('hlsFragLoaded')?.();
     }
     startLoad() {}
+    stopLoad() {}
     recoverMediaError() {}
     destroy() {
       this.destroyed = true;
@@ -7002,8 +7004,8 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     const CARD4_S = 2_842;
     const fullVod = () => vodList(MEDIA_ZERO, NOW);
 
-    /** 다시보기 제안이 서면 재생이 멎은 까닭을 stopped 로 칠한다(이 트리에서는 화면으로 일으킬 길이 없는 국면) */
-    function stopOffer(stopped: 'drained' | 'held') {
+    /** 다시보기 제안이 서면 멈춘 그대로 선 제안(held)으로 칠한다 — 막힘 · 마지막 확인을 화면으로 일으키지 않고 */
+    function stopOffer(stopped: 'held') {
       sessionPatch.next = (next) => {
         const { phase } = next.state;
         if (phase.kind !== 'vod-offered' || phase.stopped !== null) return next;
@@ -7054,6 +7056,68 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     async function press() {
       fireEvent.click(screen.getByRole('button', { name: '다시보기 보기' }));
       await settle();
+    }
+
+    /** 되감기 재생기로 보던 자리(영상 초 — 되감기 목록 · 다시보기 모두 영상 0초 = MEDIA_ZERO) */
+    const REWIND_WATCH_S = 2_000;
+
+    /**
+     * 되감기 재생기로 REWIND_WATCH_S 를 보던 중 ENDLIST → 회차 vod 로 선 다시보기 제안(띠 단추). 영상 노드는 그 자리에서 받아
+     * 둔 영상이 0.3초 남은 재생 중 꼴이다(jsdom 에는 미디어 구현이 없어 값을 세운다)
+     */
+    async function rewindOffered() {
+      stubVodPlayer();
+      control.stream = readyLive(DVR_A, MEDIA_ZERO, NOW);
+      const view = await renderLive();
+      await liveListLoaded();
+      fireEvent.click(cardThumb(4));
+      await settle();
+      expect(hlsFake.sources.at(-1)).toBe(DVR_A);
+      await vodListed({ ...vodList(MEDIA_ZERO, NOW), live: true });
+      await playTo(view.container, REWIND_WATCH_S);
+      await advance(1_000);
+      control.round = bRoundVod();
+      await vodListed(vodList(MEDIA_ZERO, NOW));
+      await advance(10_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('SPAN');
+      const video = view.container.querySelector('video')!;
+      const media: Array<[string, unknown]> = [
+        ['paused', false],
+        ['seeking', false],
+        ['error', null],
+        ['buffered', { length: 1, start: () => 0, end: () => REWIND_WATCH_S + 0.3 }],
+      ];
+      for (const [key, value] of media) {
+        Object.defineProperty(video, key, { get: () => value, configurable: true });
+      }
+      return { ...view, video };
+    }
+
+    /** 지금 되감기 재생기가 /dvr 영상 조각 404 를 받았다 — hls.js 가 앱에 올리는 꼴 */
+    async function rewindSegmentGone() {
+      await act(async () => {
+        hlsFake.error?.('hlsError', {
+          type: 'networkError',
+          details: 'fragLoadError',
+          fatal: false,
+          frag: { type: 'main', sn: 7, initSegment: { url: `${DVR_A}/init.mp4` } },
+          response: { url: `${DVR_A}/seg7.mp4`, code: 404 },
+        });
+      });
+      await settle();
+    }
+
+    /** 받기를 멈춘 되감기 재생기가 받은 버퍼를 다 틀고 멎는다 — 이어 틀 데이터 없음 · waiting · 정체 */
+    async function drainedOffer() {
+      const view = await rewindOffered();
+      await rewindSegmentGone();
+      hlsFake.readyState = 2;
+      await act(async () => {
+        view.video.dispatchEvent(new Event('waiting'));
+      });
+      await advance(2_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('P');
+      return view;
     }
 
     /**
@@ -7108,6 +7172,31 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
       expect(videoAt(container)).toBeCloseTo(watchS, 0);
     });
 
+    it('되감기로 제안 중 조각 404 → 세션 재생기 그대로 받은 버퍼를 튼다 → 멎으면 덮개 단추 → 누르면 멎은 자리에서 VOD', async () => {
+      const { container } = await rewindOffered();
+      const sourcesBefore = hlsFake.sources.length;
+
+      await rewindSegmentGone();
+      expect(playerSources.at(-1)?.vod).toBe(false);
+      expect(hlsFake.sources).toHaveLength(sourcesBefore);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('SPAN');
+
+      hlsFake.readyState = 2;
+      await act(async () => {
+        container.querySelector('video')?.dispatchEvent(new Event('waiting'));
+      });
+      await advance(2_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('P');
+      expect(playerSources.at(-1)?.vod).toBe(false);
+
+      hlsFake.readyState = 4;
+      await press();
+      await vodListed(fullVod());
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(hlsFake.sources.at(-1)).toBe(bVodUrl);
+      expect(videoAt(container)).toBeCloseTo(REWIND_WATCH_S, 0);
+    });
+
     const closings: Array<[string, () => Promise<void>, boolean]> = [
       [
         '띠 단추',
@@ -7118,10 +7207,9 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
         true,
       ],
       [
-        '재생이 멎은 제안의 덮개 단추(drained)',
+        '받은 버퍼를 다 틀고 멎은 제안의 덮개 단추(drained)',
         async () => {
-          stopOffer('drained');
-          await offered('P');
+          await drainedOffer();
           await press();
         },
         true,

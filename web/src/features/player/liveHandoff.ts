@@ -253,7 +253,8 @@ export function withHandoffRules(
  * 재생기를 바꾸거나(세대 상승) 안에서 옮긴(seek-within) 전이 뒤 — 위치 시대를
  * 1 올린다. 옮겼으면 옮긴 자리의 위치가 올 때까지 위치 칸을 비우고 그 목표를
  * pendingSeekMs 에 든다(둘이 한 전이에 오면 옮김을 따른다). 재생기만 바꿨으면 앞
- * 소스의 시크 목표를 버린다. 위치 칸을 쓰는 곳은 이것과 seenPosition 둘이다
+ * 소스의 시크 목표를 버린다. 위치 칸을 쓰는 곳은 이것과 seenPosition · seenDrainedAt
+ * 셋이다
  */
 export function withPositionEpoch(prev: PlaybackSessionState, step: Transition): Transition {
   const swapped = step.state.source.generation !== prev.source.generation;
@@ -285,6 +286,19 @@ export function seenPosition(
     pendingSeekMs: null,
     watchedFromMs: watchedFromMs === null ? event.atMs : Math.min(watchedFromMs, event.atMs),
   };
+}
+
+/**
+ * 받기를 멈춘 재생기가 멎은 자리를 확인된 위치로 적는다(POK-547) — 그 자리에 화면이 서
+ * 있다. 끝나지 않은 시크가 있으면 그 목표가 이어 볼 자리라 그대로 두고, 자리를 모르면
+ * 적지 않는다. 멎은 자리는 이미 본 구간이라 세션이 본 가장 이른 자리는 넓히지 않는다
+ */
+export function seenDrainedAt(
+  session: PlaybackSessionState,
+  atPdtMs: number | null,
+): PlaybackSessionState {
+  if (session.pendingSeekMs !== null || atPdtMs === null) return session;
+  return { ...session, lastAtMs: atPdtMs, positionGeneration: session.source.generation };
 }
 
 /**

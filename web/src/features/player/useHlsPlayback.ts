@@ -12,6 +12,7 @@ import {
   rewindWindowSeconds,
   type DatedFragment,
 } from './dvrWindow';
+import { watchDvrDrain } from './dvrDrainWatch';
 import { LIVE_PTS_CORRECTION, datedFragments, type StartOf } from './fragmentTiming';
 import {
   isPlaybackForbidden,
@@ -147,6 +148,20 @@ export interface PlaybackHooks extends PositionHooks {
    * 읽는다 — 풀리는 전이는 세대를 올리므로 그때 정상 기동한다
    */
   startHeld?: boolean;
+  /**
+   * 지금 세션 상태로 셈한 「세우지 않음」(POK-547) — 재생기가 설 때와 hls.js 를 읽은 뒤에 읽는다. 렌더 값(startHeld)은
+   * 다시 그린 뒤에야 바뀌어, 그사이 404 · 리마운트가 끼면 낡은 값을 읽는다. 둘 가운데 하나라도 참이면 세우지 않는다
+   */
+  isStartHeld?: () => boolean;
+  /** 이 재생기가 404 로 받기를 멈췄다 — 가로챈 순간 · 사람이 멈춘 동안이어도 부른다(POK-547). 인자는 이 재생기의 세대 */
+  onDvrLoadStopped?: (generation: number) => void;
+  /**
+   * 받기를 멈춘 되감기 재생기가 받은 버퍼를 다 틀고 멎었다(drained 참) · 다시 나아갔다(거짓 — POK-547). atPdtMs 는 그
+   * 자리를 지금 목록 축으로 본 실제 시각(모르면 null)
+   */
+  onDvrDrain?: (generation: number, drained: boolean, atPdtMs: number | null) => void;
+  /** 지금 세션이 고갈을 보라고 하나 — 받기를 멈춘 순간 지금 세션 상태로 읽는다(POK-547) */
+  watchesDrain?: () => boolean;
 }
 
 export type { LivePosition } from './livePosition';
@@ -515,8 +530,11 @@ export function useHlsPlayback(
     if (!video) return;
     // 세대가 오를 때 다시 서는 재생기 하나의 소스(종류 · 시작 시각). 효과는 종류 · 주소 · 세대에만 걸린다(설계 5.4절)
     const { kind, startAtMs, strictStart, generation } = sourceRef.current;
-    // 세우지 않음은 이 재생기가 설 때 한 번 읽는다(POK-528 U2) — 풀리면 세대가 올라 효과가 다시 돈다
-    const held = hooksRef.current.startHeld === true;
+    // 세우지 않음은 이 재생기가 설 때 읽는다(POK-528 U2) — 풀리면 세대가 올라 효과가 다시 돈다. 렌더 값과 지금 세션
+    // 상태를 함께 본다(POK-547)
+    const heldNow = () =>
+      hooksRef.current.startHeld === true || hooksRef.current.isStartHeld?.() === true;
+    const held = heldNow();
 
     // StrictMode 이중 이펙트·동적 import 경합 방어 — 클린업 후 도착한 인스턴스를 버린다
     let disposed = false;
@@ -559,15 +577,23 @@ export function useHlsPlayback(
     // 계획 4-3). 사람 멈춤 = 멈춰 있고 멈춘 자리 기록이 있다(앱이 건 멈춤은 기록을 남기지 않는다). 붙잡은 값은 받지 못한
     // 조각이다. 재생기 하나의 상태라 세대가 바뀌면 옛 재생기와 함께 버린다
     let goneWhilePaused: DvrSegment | null = null;
+    // 받기 중단은 멈춤과 상관없이 404 순간에 올린다 — 멈춘 동안 리마운트가 끼어도 새 재생기가 낡은 목록을 다시 받지
+    // 않게(POK-547). 404 통지만 사람 멈춤 뒤로 미룬다
     const reportGone = (
       gone: (generation: number, segment: DvrSegment) => void,
       segment: DvrSegment,
     ) => {
+      hooksRef.current.onDvrLoadStopped?.(generation);
       if (video.paused && pausedAtMsRef.current !== null) {
         goneWhilePaused = segment;
         return;
       }
       gone(generation, segment);
+      armDrain();
+    };
+    // 고갈 감시는 받기를 멈춘 순간의 세션 상태로 무장한다(POK-547 — 감시는 아래 리스너 등록 뒤에 선다)
+    const armDrain = () => {
+      if (hooksRef.current.watchesDrain?.() === true) drain.arm();
     };
     let recoveredNetwork = false;
     let recoveredMedia = false;
@@ -602,12 +628,14 @@ export function useHlsPlayback(
       // 멈춘 동안 붙잡은 404 가 있으면 이 목록은 낡았다 — 하한 안팎을 보지 않고 세션에 올려 그때 국면의 404 행으로
       // 잇게 한다(되감기면 다시 받는 중이 아니고 처음 보는 조각일 때 같은 목록 다시 받기 · 다시 받는 중(화면 전)이거나
       // 이미 다시 받은 조각이면 막힘 — 넘길 조각은 애초에 붙잡지 않는다 · 끝남 대기면
-      // 녹화로 정하기 전이면 막힘 · 정한 뒤면 마지막 확인 · 다시보기 제안이면 같은 자리 다시보기). 옛 자리 시크 · 제자리
-      // 다시 받기(startLoad)는 하지 않는다(계획 4-3)
+      // 녹화로 정하기 전이면 막힘 · 정한 뒤면 마지막 확인 · 다시보기 제안이면 받기를 멈춘 채 남은 버퍼를 튼다). 옛 자리
+      // 시크 · 제자리 다시 받기(startLoad)는 하지 않는다(계획 4-3). 고갈 감시는 이때 무장한다 — 멈춘 채 버퍼 밖으로
+      // 옮겼으면 무장이 곧바로 알린다(POK-547)
       if (goneWhilePaused !== null) {
         const segment = goneWhilePaused;
         goneWhilePaused = null;
         hooksRef.current.onDvrSegmentGone?.(generation, segment);
+        armDrain();
         return;
       }
       const axis = sessionActive() ? readAxis() : null;
@@ -709,6 +737,7 @@ export function useHlsPlayback(
     // 시차는 정수 초로 반올림돼 있어 같은 값이면 setState가 리렌더를 건너뛴다
     const paint = () => {
       checkStall();
+      drain.check();
       if (sessionActive()) {
         paintSession();
         return;
@@ -748,6 +777,21 @@ export function useHlsPlayback(
     video.addEventListener('timeupdate', load.notePlayhead);
     video.addEventListener('seeked', load.notePlayhead);
     video.addEventListener('ended', reachEnd);
+    // 받기를 멈춘 되감기 재생기의 고갈 감시(POK-547). 위 리스너보다 뒤에 서야 같은 waiting 사건에서 onWaiting 이 먼저
+    // waiting 을 세운다 — 끝 셈(settleEnd)이 그 값으로 목록 끝 정체를 본다. 무장하기 전에는 아무것도 셈하지 않는다
+    const drain = watchDvrDrain(video, {
+      settleEnd: () => {
+        checkStall();
+        return endSent;
+      },
+      epoch: () => hooksRef.current.positionEpoch?.() ?? 0,
+      onChange: (drained, atTime) =>
+        hooksRef.current.onDvrDrain?.(
+          generation,
+          drained,
+          programDateAt(fragmentsOf(hlsRef.current?.latestLevelDetails), atTime),
+        ),
+    });
     // 일시정지 중엔 timeupdate가 멎지만 라이브 엣지는 계속 흐른다 — 시차 표시용 보조 틱
     const paintTimer = window.setInterval(paint, 1000);
 
@@ -763,8 +807,9 @@ export function useHlsPlayback(
         return;
       }
       if (disposed) return;
-      // 받지도 틀지도 않는다 — hls.js 생성 · 받기 · 자동 재생 · 기본 HLS 의 src 가 모두 이 뒤다
-      if (held) return;
+      // 받지도 틀지도 않는다 — hls.js 생성 · 받기 · 자동 재생 · 기본 HLS 의 src 가 모두 이 뒤다. 기다리는 사이 세션이
+      // 받기 중단을 적었을 수 있어 한 번 더 읽는다(POK-547)
+      if (held || heldNow()) return;
 
       if (HlsCtor.isSupported()) {
         setEngine('hlsjs');
@@ -945,6 +990,7 @@ export function useHlsPlayback(
     return () => {
       disposed = true;
       window.clearInterval(paintTimer);
+      drain.dispose();
       video.removeEventListener('play', onPlay);
       video.removeEventListener('playing', onPlaying);
       video.removeEventListener('pause', onPause);

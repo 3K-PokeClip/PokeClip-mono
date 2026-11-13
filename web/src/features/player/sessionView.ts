@@ -1,5 +1,6 @@
 import {
   RESUME_WAIT_MS,
+  loadStoppedNow,
   type PlaybackSessionState,
   type SessionButton,
   type SessionPhase,
@@ -38,14 +39,24 @@ type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 /**
  * 새로 서는 재생기(세대가 올라 다시 서는 것 · 리마운트 포함)를 세우지 않는가 — 막힌 끝남
  * 대기 · 마지막 확인 중인 끝남 대기(POK-528 U2), 그리고 재생이 멎은 다시보기 제안(POK-547 —
- * 멈춘 화면 위 덮개 단추가 출구다). 되감기는 404 뒤 목록을 다시 받는 중에도 세운다(다시 받기가
+ * 멈춘 화면 위 덮개 단추가 출구다)과 지금 재생기가 받기를 멈춘 다시보기 제안(새 재생기가 낡은
+ * 목록을 다시 받지 않게). 되감기는 404 뒤 목록을 다시 받는 중에도 세운다(다시 받기가
  * 곧 새 재생기다 — 계획 3-6). 화면에 그릴 것이 아니라 재생기 수명 지시다. 국면 데이터에서
  * 뽑으므로 세대가 오를 때마다 같은 값을 다시 읽는다
  */
 export function isPlayerStartHeld(session: PlaybackSessionState): boolean {
   const { phase } = session;
-  if (phase.kind === 'vod-offered') return phase.stopped !== null;
+  if (phase.kind === 'vod-offered') return phase.stopped !== null || loadStoppedNow(session);
   return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
+}
+
+/**
+ * 받기를 멈춘 되감기 재생기가 고갈을 볼 때인가(POK-547) — 되감기 재생기로 아직 트는 다시보기
+ * 제안이다. 칸이 아니라 함수라 재생기는 다시 그리기를 기다리지 않고 지금 상태로 읽는다
+ */
+export function watchesDrain(session: PlaybackSessionState): boolean {
+  const { phase } = session;
+  return phase.kind === 'vod-offered' && phase.stopped === null && session.source.kind === 'rewind';
 }
 
 /**

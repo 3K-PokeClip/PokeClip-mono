@@ -31,7 +31,9 @@ import {
   status,
   vodReady,
 } from './relistTestKit';
+import { withPositionEpoch } from './liveHandoff';
 import { SESSION_NOTICES, type PlaybackSessionState, type SessionEvent } from './rewindSwitch';
+import { offeredRange, openVodHere } from './sessionShared';
 
 // 이어 볼 자리(resumeAtMs)의 보존(POK-528 c7 — 계획 3-1 T4 · T5 · 3-4 · 18절 · Q1). 첫
 // 위치 전 · 시크 중의 폴링 교체 · 끝남 대기 이음 · 같은 자리 다시보기는 되감기 소스면 앞
@@ -83,6 +85,15 @@ function handedAtMs(state: PlaybackSessionState): number | null | undefined {
   return effect?.kind === 'close' && effect.reason === 'past'
     ? effect.handoff.resumeAtMs
     : undefined;
+}
+
+/**
+ * 같은 자리 다시보기 국면 — 제안 중 404 는 이제 국면을 바꾸지 않아 사건으로는 닿지 않는다. 옛 404 행이 하던
+ * 전이(국면 · 소스 교체 · 위치 시대 올림)를 손으로 만든다
+ */
+function openedHere(offered: PlaybackSessionState): PlaybackSessionState {
+  if (offered.phase.kind !== 'vod-offered') throw new Error('다시보기 제안이 아니다');
+  return withPositionEpoch(offered, openVodHere(offered, offeredRange(offered.phase))).state;
 }
 
 /** 라이브 위치를 남긴 채 되감은 뒤 ENDLIST → 회차별 vod 로 다시보기 제안까지 온 세션 */
@@ -202,11 +213,12 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
     expect(handedAtMs(offered.state)).toBe(ASKED);
   });
 
-  it('3 다시보기 제안(되감기 소스 · 첫 위치 전) — 404 · 단추 모두 청한 자리에서 / 대조: live 기원은 lastAtMs', () => {
+  it('3 다시보기 제안(되감기 소스 · 첫 위치 전) — 404 는 국면 그대로 · 단추는 청한 자리에서 / 대조: live 기원은 lastAtMs', () => {
     const offered = offeredFromLive();
     expect(offered.phase.kind).toBe('vod-offered');
-    const byGone = feed(offered, [gone(offered)]).state;
-    expect(byGone.source).toMatchObject({ kind: 'vod', startAtMs: ASKED });
+    expect(feed(offered, [gone(offered)]).state).toBe(offered);
+    const byHand = openedHere(offered);
+    expect(byHand.source).toMatchObject({ kind: 'vod', startAtMs: ASKED });
     expect(handedAtMs(offered)).toBe(ASKED);
     const liveOffered = feed(fresh(), [
       poll(liveReady(A1, T0, NOW)),
@@ -217,7 +229,7 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
     ]).state;
     expect(liveOffered.phase.kind).toBe('vod-offered');
     expect(handedAtMs(liveOffered)).toBe(T0 + 30 * MIN);
-    expectVodRemountAt(byGone, ASKED);
+    expectVodRemountAt(byHand, ASKED);
   });
 
   it('3 뒤 · 끝에 닿은 뒤의 단추는 처음부터(null)를 넘긴다', () => {
@@ -227,8 +239,7 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
   });
 
   it('3 뒤 · 다시보기 안 시크가 끝나기 전 리마운트 → 시크 목표 / 확인된 위치 뒤 → 그 자리(지금 동작)', () => {
-    const offered = offeredFromLive();
-    const opened = feed(offered, [gone(offered)]).state;
+    const opened = openedHere(offeredFromLive());
     const seeking = feed(opened, [seekVod(SOUGHT)]).state;
     expect(seeking.pendingSeekMs).toBe(SOUGHT);
     expectVodRemountAt(seeking, SOUGHT);

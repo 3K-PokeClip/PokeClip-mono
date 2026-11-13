@@ -1024,6 +1024,8 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
       notice: vi.fn(),
       positionEpoch: () => 0,
       isKnownDvrHole: () => false,
+      isStartHeld: () => false,
+      watchesDrain: () => false,
     };
   }
 
@@ -1234,6 +1236,8 @@ describe('GlassPlayer: 다시보기(VOD · POK-546)', () => {
       notice: vi.fn(),
       positionEpoch: () => 0,
       isKnownDvrHole: () => false,
+      isStartHeld: () => false,
+      watchesDrain: () => false,
     };
     await renderVod({ session });
     expect(session.bindPlayer).toHaveBeenCalled();

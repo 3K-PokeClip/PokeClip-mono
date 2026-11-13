@@ -741,24 +741,29 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 다시 틀 때 세
     checkedEvents();
   });
 
-  it('다시보기 제안: 멈춤 → 404 → 새 재생기 0 → 재생 → 같은 자리 다시보기 1(W4)', async () => {
+  it('다시보기 제안: 멈춤 → 404(받기 중단은 그 순간 적음) → 새 재생기 0 → 재생 → 국면 · 소스 그대로 · 받은 버퍼를 튼다(W4)', async () => {
     const { view, rewindHls } = await rewindScreen();
     act(() => current().dispatch({ type: 'endlist' }));
     await settle();
     control.round = () => jsonResponse(200, vodBody());
     await act(async () => vi.advanceTimersByTime(10_000));
     await settle();
-    expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD });
+    expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD, stopped: null });
     userPause(view);
     const created = fake.instances.length;
+    const source = current().state.source;
     segmentGone(rewindHls);
     await settle();
     expect(fake.instances).toHaveLength(created);
-    expect(current().state.source.kind).toBe('rewind');
+    expect(current().state.loadStoppedGeneration).toBe(source.generation);
     await userPlay(view);
-    expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: TARGET });
-    expect(fake.instances).toHaveLength(created + 1);
-    checkedEvents();
+    expect(current().state.source).toBe(source);
+    expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD, stopped: null });
+    expect(fake.instances).toHaveLength(created);
+    expect(checkedEvents().filter((type) => type.startsWith('dvr-'))).toEqual([
+      'dvr-load-stopped',
+      'dvr-segment-gone',
+    ]);
   });
 });
 

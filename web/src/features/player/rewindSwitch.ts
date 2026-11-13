@@ -8,6 +8,7 @@ import {
   openHandoffFields,
   releaseBlock,
   requestProbe,
+  seenDrainedAt,
   seenPosition,
   withHandoffRules,
   withNextDoor,
@@ -25,7 +26,6 @@ import {
   isThisRound,
   liveFromAway,
   offeredRange,
-  openVodHere,
   readyLive,
   replace,
   restartAtMs,
@@ -201,6 +201,12 @@ export interface PlaybackSessionState extends HandoffFields {
    * 들어갈 때만 더하고 세션 안에서는 지우지 않는다 — 같은 url · 같은 조각으로는 두 번 다시 받지 않는다
    */
   dvrHoles: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * 404 로 받기를 멈춘 되감기 재생기의 세대(POK-547). 404 를 가로챈 순간 적는다 — 사람이 멈춘 동안이어도 그렇다.
+   * 국면 · 덮개 · 띠는 이 칸을 읽지 않는다. 읽는 곳은 다시보기 제안의 재생기 보류(isPlayerStartHeld)와 리마운트 행뿐이다.
+   * 세션을 열 때 null. 세대가 바뀌면(새 재생기가 받음) 값이 남아도 지금 세대와 달라 효력이 없다
+   */
+  loadStoppedGeneration: number | null;
   closed: SessionClose | null;
 }
 
@@ -259,6 +265,13 @@ export type SessionEvent =
    * 조각(POK-528)
    */
   | { type: 'dvr-segment-gone'; generation: number; segment: DvrSegment }
+  /** 그 세대 되감기 재생기가 404 로 받기를 멈췄다 — 멈춤과 상관없이 가로챈 순간 올린다(POK-547) */
+  | { type: 'dvr-load-stopped'; generation: number }
+  /**
+   * 받기를 멈춘 되감기 재생기가 받은 버퍼를 다 틀고 멎었다(drained 참) · 다시 나아갔다(거짓 — POK-547). atPdtMs = 멎은
+   * 자리 · 버퍼 밖 시크면 그 목표 · 모르면 null
+   */
+  | { type: 'dvr-drain'; generation: number; drained: boolean; atPdtMs: number | null }
   | { type: 'leave' };
 
 export type SessionEffect =
@@ -319,9 +332,15 @@ export function openSession(init: {
     boundLive: false,
     foreignLive: null,
     dvrHoles: new Map(),
+    loadStoppedGeneration: null,
     closed: null,
     ...openHandoffFields(),
   };
+}
+
+/** 지금 세대의 재생기가 404 로 받기를 멈췄나(POK-547) */
+export function loadStoppedNow(session: PlaybackSessionState): boolean {
+  return session.loadStoppedGeneration === session.source.generation;
 }
 
 /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 최신 폴링이 되감기를 열었을 때만 — 닫혀 있으면 라이브 창만 보인다(계약3 7-2) */
@@ -680,8 +699,10 @@ function onVodOffered(
         ? seekLive(session, event.targetMs, event.view)
         : seekInList(session, event.targetMs, event.view);
     case 'dvr-segment-gone':
-      // W4 — 다시보기가 이미 있으니 같은 자리 다시보기로 곧바로 옮긴다
-      return openVodHere(session, phase);
+      // W4 — 받기만 멈추고 받은 버퍼를 계속 튼다(받기 중단은 dvr-load-stopped 가 적었다). 다시보기로 옮기는 것은 단추다
+      return stateOnly(session);
+    case 'dvr-drain':
+      return offerDrain(session, phase, event);
     case 'live-button':
       if (phase.atEnd) return stateOnly(session);
       // live 기원은 live 표의 LIVE 행 — 라이브 끝으로 시크 · 국면 그대로(종결 정정 live 표 · VOD 제안을 잃지 않는다)
@@ -692,6 +713,25 @@ function onVodOffered(
   }
 }
 
+/**
+ * 받기를 멈춘 재생기의 고갈 · 회복(POK-547) — 고갈이면 덮개 단추로 바꾸고 멎은 자리를 확인된 위치로 적는다(끝나지 않은
+ * 시크가 있으면 그 목표가 이어 볼 자리라 그대로 둔다). 회복이면 띠 단추로 돌린다. 막힘 · 마지막 확인에서 온 제안은 그대로다
+ */
+function offerDrain(
+  session: PlaybackSessionState,
+  phase: OfferedPhase,
+  event: Extract<SessionEvent, { type: 'dvr-drain' }>,
+): Transition {
+  if (phase.stopped === 'held') return stateOnly(session);
+  if (!event.drained) {
+    return phase.stopped === 'drained'
+      ? stateOnly({ ...session, phase: { ...phase, stopped: null } })
+      : stateOnly(session);
+  }
+  const seen = seenDrainedAt(session, event.atPdtMs);
+  return stateOnly({ ...seen, phase: { ...phase, stopped: 'drained' } });
+}
+
 function onVod(session: PlaybackSessionState, event: SessionEvent): Transition {
   return event.type === 'seek'
     ? seekInList(session, event.targetMs, event.view)
@@ -699,6 +739,26 @@ function onVod(session: PlaybackSessionState, event: SessionEvent): Transition {
 }
 
 // ── 아무 국면 ──
+
+/** 지금 세대 되감기 재생기가 낸 사건인가 — 교체를 커밋한 뒤 정리 전인 옛 재생기 · 라이브 재생기의 사건은 버린다 */
+function fromRewindPlayer(session: PlaybackSessionState, generation: number): boolean {
+  return generation === session.source.generation && session.source.kind === 'rewind';
+}
+
+/**
+ * 리마운트 — 같은 소스를 세대만 올려 다시 세운다. 받기를 멈춘 재생기의 다시보기 제안이면 새 재생기도 받지 않는다:
+ * 덮개 단추로 바꾸고(멎은 까닭이 없었으면 고갈로) 받기 중단 기록을 새 세대로 옮긴다(POK-547)
+ */
+function remounted(session: PlaybackSessionState): PlaybackSessionState {
+  const { phase } = session;
+  const generation = session.source.generation + 1;
+  const source = { ...session.source, startAtMs: remountStartAtMs(session), generation };
+  if (phase.kind === 'vod-offered' && loadStoppedNow(session)) {
+    const stopped = phase.stopped ?? 'drained';
+    return { ...session, phase: { ...phase, stopped }, source, loadStoppedGeneration: generation };
+  }
+  return { ...session, phase: remountRelist(phase), source };
+}
 
 function onAnyPhase(
   session: PlaybackSessionState,
@@ -744,18 +804,19 @@ function onAnyPhase(
         return stateOnly(session);
       }
       return null;
+    case 'dvr-load-stopped':
+      // 국면 · 효과는 그대로 두고 그 세대만 적는다 — 국면 표를 거치지 않는다
+      if (!fromRewindPlayer(session, event.generation)) return stateOnly(session);
+      return stateOnly({ ...session, loadStoppedGeneration: event.generation });
+    case 'dvr-drain':
+      if (!fromRewindPlayer(session, event.generation) || session.phase.kind !== 'vod-offered') {
+        return stateOnly(session);
+      }
+      return null;
     case 'remount': {
       const confirming = onHandoffConfirming(session, event, now);
       if (confirming !== null) return confirming;
-      return stateOnly({
-        ...session,
-        phase: remountRelist(session.phase),
-        source: {
-          ...session.source,
-          startAtMs: remountStartAtMs(session),
-          generation: session.source.generation + 1,
-        },
-      });
+      return stateOnly(remounted(session));
     }
     case 'leave':
       return close(session, 'left');

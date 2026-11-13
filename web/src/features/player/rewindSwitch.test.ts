@@ -11,6 +11,8 @@ import {
   type XAnswer,
 } from './rewindSwitch';
 import { pos, resetEventKit, stamped, startRun, streamPoll } from './handoffTestKit';
+import { withPositionEpoch } from './liveHandoff';
+import { offeredRange, openVodHere } from './sessionShared';
 import { sessionView } from './sessionView';
 
 // 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 ·
@@ -577,12 +579,14 @@ describe('vod-offered · vod 국면', () => {
     expect(out.source).toMatchObject({ kind: 'rewind', url: A1, startAtMs: T0 + MIN });
   });
 
-  /** 제안 중 되감기 조각 404 로 옮긴 같은 자리 다시보기(vod 국면 — POK-528 W4) */
+  /**
+   * 같은 자리 다시보기(vod 국면) — 제안 중 404 는 이제 국면을 바꾸지 않아 사건으로는 닿지 않는다. 옛 404 행이 하던
+   * 전이(국면 · 소스 교체 · 위치 시대 올림)를 손으로 만든다
+   */
   function vodByGone(): PlaybackSessionState {
     const s = offered(true);
-    const segment = { type: 'main' as const, sn: 0 };
-    const gone = { type: 'dvr-segment-gone' as const, generation: s.source.generation, segment };
-    return run(s, [[gone]]).state;
+    if (s.phase.kind !== 'vod-offered') throw new Error('다시보기 제안이 아니다');
+    return withPositionEpoch(s, openVodHere(s, offeredRange(s.phase))).state;
   }
 
   it('vod 국면의 시크는 문서 안 · 끝 도달은 국면 그대로다', () => {

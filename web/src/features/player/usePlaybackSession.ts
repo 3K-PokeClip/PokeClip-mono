@@ -18,7 +18,7 @@ import {
 } from './rewindSwitch';
 import { probeLiveWindow } from './liveWindowProbe';
 import { dvrHoleKnown } from './sessionShared';
-import { sessionView, type SessionView } from './sessionView';
+import { isPlayerStartHeld, sessionView, watchesDrain, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
 // 재생 세션의 수명 소유자(설계 5.5절, POK-200 M5). LiveScreen 층 — GlassPlayer 의 key 바깥 — 에
@@ -92,6 +92,13 @@ export interface PlaybackSession {
    * 지금 상태(상태기계에 이미 반영된 값)를 읽는다
    */
   isKnownDvrHole: (generation: number, segment: DvrSegment) => boolean;
+  /**
+   * 새로 서는 재생기를 세우지 않는가(isPlayerStartHeld) — 지금 상태를 읽는다(POK-547). 재생기는 렌더 값(view.startHeld)이
+   * 바뀌기 전에 선 404 · 리마운트에서도 이 값으로 보류를 안다
+   */
+  isStartHeld: () => boolean;
+  /** 받기를 멈춘 되감기 재생기가 고갈을 볼 때인가(sessionView 의 watchesDrain) — 지금 상태를 읽는다(POK-547) */
+  watchesDrain: () => boolean;
 }
 
 /** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
@@ -280,6 +287,14 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       stateRef.current !== null && dvrHoleKnown(stateRef.current, generation, segment),
     [],
   );
+  const isStartHeld = useCallback(
+    () => stateRef.current !== null && isPlayerStartHeld(stateRef.current),
+    [],
+  );
+  const watchesDrainNow = useCallback(
+    () => stateRef.current !== null && watchesDrain(stateRef.current),
+    [],
+  );
 
   const bindPlayer = useCallback(
     (player: SessionPlayer | null) => {
@@ -393,5 +408,16 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [state, now],
   );
   if (state === null || view === null || state.closed !== null) return null;
-  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch, isKnownDvrHole };
+  return {
+    state,
+    view,
+    dispatch,
+    liveButton,
+    bindPlayer,
+    notice,
+    positionEpoch,
+    isKnownDvrHole,
+    isStartHeld,
+    watchesDrain: watchesDrainNow,
+  };
 }

@@ -667,3 +667,285 @@ describe('「세우지 않음」 재생기 기동(POK-528 U2 · 계획 4-2 · 8-
     expect(playCalls()).toBe(0);
   });
 });
+
+/** 고갈 시험의 멎은 자리(영상 초) — 옛 목록 창 하한(12초) 안이라 다시 틀 때 시크를 청하지 않는다 */
+const STALL_S = 20;
+
+/**
+ * 영상 노드의 받아 둔 구간 · 시크 중 여부를 시험이 쥔다(jsdom 에는 미디어 구현이 없다 — error 도 브라우저의 null 이 아니라
+ * undefined 라 null 로 세운다). 기본은 STALL_S 에서 받아 둔 영상이 0.3초 남은 꼴이다
+ */
+function mediaState(video: HTMLVideoElement) {
+  const state = { buffered: [[0, STALL_S + 0.3]] as Array<[number, number]>, seeking: false };
+  Object.defineProperty(video, 'buffered', {
+    get: () => ({
+      length: state.buffered.length,
+      start: (i: number) => state.buffered[i]?.[0] ?? 0,
+      end: (i: number) => state.buffered[i]?.[1] ?? 0,
+    }),
+    configurable: true,
+  });
+  Object.defineProperty(video, 'seeking', { get: () => state.seeking, configurable: true });
+  Object.defineProperty(video, 'error', { get: () => null, configurable: true });
+  video.currentTime = STALL_S;
+  return state;
+}
+
+function fire(video: HTMLVideoElement, type: string) {
+  act(() => {
+    video.dispatchEvent(new Event(type));
+  });
+}
+
+async function advance(ms: number) {
+  await act(async () => vi.advanceTimersByTime(ms));
+}
+
+describe('받기를 멈춘 되감기 재생기의 고갈 감시 배선(POK-547)', () => {
+  beforeEach(() => {
+    stubMediaPlayback();
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    // 화면은 섰지만 이어 틀 데이터가 없다(HAVE_CURRENT_DATA)
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(() => 2);
+  });
+
+  /** 세션 모드 고리 — 고갈 감시를 켜고 받기 중단 · 고갈 · 404 를 센다 */
+  function drainHooks(patch: Pick<PlaybackHooks, 'onEndReached' | 'watchesDrain'> = {}) {
+    return {
+      onSeekRequest: vi.fn(),
+      onDvrSegmentGone: vi.fn(),
+      onDvrLoadStopped: vi.fn(),
+      onDvrDrain: vi.fn(),
+      watchesDrain: vi.fn(() => true),
+      ...patch,
+    };
+  }
+
+  /** 옛 목록을 쥔 되감기 재생기(세대 1)를 STALL_S 에서 재생 중으로 세운다 */
+  async function playingAt(hooks: PlaybackHooks, kind: PlaybackSource['kind'] = 'rewind') {
+    const mounted = await mount(sourceOf(kind, 1), hooks);
+    const media = mediaState(mounted.video);
+    const hls = fake.instances.at(-1) ?? null;
+    if (hls !== null) hls.latestLevelDetails = OLD_LIST;
+    return { ...mounted, media, hls };
+  }
+
+  function resume(video: HTMLVideoElement) {
+    act(() => {
+      void video.play();
+    });
+  }
+
+  it('재생 중 404 → 받기 중단 1 · 무장 → 정체 · waiting 1,000ms 넘게 → 이 세대 · 멎은 자리의 실제 시각으로 고갈 1회', async () => {
+    const hooks = drainHooks();
+    const { video, hls } = await playingAt(hooks);
+
+    raise(hls!, fragError(404));
+    fire(video, 'waiting');
+    expect(hooks.onDvrLoadStopped.mock.calls).toEqual([[1]]);
+    expect(hooks.onDvrSegmentGone).toHaveBeenCalledTimes(1);
+    await advance(900);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+    await advance(1_100);
+    expect(hooks.onDvrDrain.mock.calls).toEqual([[1, true, F + STALL_S * 1_000]]);
+    await advance(5_000);
+    expect(hooks.onDvrDrain).toHaveBeenCalledTimes(1);
+  });
+
+  it('목록 끝 정체가 먼저 서면 끝 도달만 올리고 고갈은 알리지 않는다 — 그리기 틱 밖의 waiting 에서도', async () => {
+    const onEndReached = vi.fn();
+    const hooks = drainHooks({ onEndReached });
+    const { video, media, hls } = await playingAt(hooks);
+    // 목록(40초) 끝 0.5초 앞에서 받아 둔 영상이 0.3초 남았고, 목록은 3 × TD 넘게 자라지 않았다
+    video.currentTime = 39.5;
+    media.buffered = [[0, 39.8]];
+    await advance(13_000);
+    expect(onEndReached).not.toHaveBeenCalled();
+
+    raise(hls!, fragError(404));
+    // waiting 없이 1,500ms 정체 — 그리기 틱의 점검은 waiting 을 못 봐 끝도 고갈도 세우지 않는다
+    await advance(1_500);
+    expect(onEndReached).not.toHaveBeenCalled();
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+    fire(video, 'waiting');
+
+    expect(onEndReached).toHaveBeenCalledTimes(1);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+  });
+
+  it('멈춤 → 404 → 다시 틈 — 받기 중단은 404 순간 1 · 404 통지 · 무장은 다시 틀 때 · 그 뒤 정체로 고갈 1회', async () => {
+    const hooks = drainHooks();
+    const { video, hls } = await playingAt(hooks);
+    userPause(video);
+
+    raise(hls!, fragError(404));
+    expect(hooks.onDvrLoadStopped.mock.calls).toEqual([[1]]);
+    expect(hooks.onDvrSegmentGone).not.toHaveBeenCalled();
+    await advance(3_000);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+    resume(video);
+    expect(hooks.onDvrSegmentGone).toHaveBeenCalledTimes(1);
+    fire(video, 'waiting');
+    await advance(2_000);
+
+    expect(hooks.onDvrDrain.mock.calls).toEqual([[1, true, F + STALL_S * 1_000]]);
+    expect(hooks.onDvrLoadStopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('멈춤 → 404 → 버퍼 밖 시크(닿지 않음) → 다시 틈 — 무장하는 순간 곧바로 그 목표로 고갈', async () => {
+    const hooks = drainHooks();
+    const { video, media, hls } = await playingAt(hooks);
+    userPause(video);
+    raise(hls!, fragError(404));
+    media.seeking = true;
+    video.currentTime = 30;
+    fire(video, 'seeking');
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+
+    resume(video);
+
+    expect(hooks.onDvrDrain.mock.calls).toEqual([[1, true, F + 30_000]]);
+    expect(hooks.onDvrLoadStopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('멈춤 → 404 → 버퍼 안 시크(닿음) → 다시 틈 — 곧바로 알리지 않고 보통 판정 규칙대로 잰다', async () => {
+    const hooks = drainHooks();
+    const { video, media, hls } = await playingAt(hooks);
+    userPause(video);
+    raise(hls!, fragError(404));
+    media.seeking = true;
+    video.currentTime = 5;
+    fire(video, 'seeking');
+    media.seeking = false;
+    fire(video, 'timeupdate');
+    fire(video, 'seeked');
+
+    resume(video);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+    await advance(3_000);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+    video.currentTime = STALL_S;
+    fire(video, 'waiting');
+    await advance(2_000);
+
+    expect(hooks.onDvrDrain.mock.calls).toEqual([[1, true, F + STALL_S * 1_000]]);
+    expect(hooks.onDvrLoadStopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('404 → 무장 → 멈춤 → 다시 틈 — 재던 후보를 버리고 처음부터 잰다 · 404 통지 · 무장은 한 번', async () => {
+    const hooks = drainHooks();
+    const { video, hls } = await playingAt(hooks);
+    raise(hls!, fragError(404));
+    fire(video, 'waiting');
+    await advance(800);
+    userPause(video);
+    resume(video);
+    fire(video, 'waiting');
+
+    await advance(800);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+    await advance(1_200);
+    expect(hooks.onDvrDrain).toHaveBeenCalledTimes(1);
+    expect(hooks.onDvrSegmentGone).toHaveBeenCalledTimes(1);
+    expect(hooks.onDvrLoadStopped).toHaveBeenCalledTimes(1);
+    expect(hooks.watchesDrain).toHaveBeenCalledTimes(1);
+  });
+
+  it('고갈을 보라고 하지 않는 세션의 404 — 받기 중단만 올리고 무장하지 않는다', async () => {
+    const hooks = drainHooks({ watchesDrain: vi.fn(() => false) });
+    const { video, hls } = await playingAt(hooks);
+    raise(hls!, fragError(404));
+    fire(video, 'waiting');
+    await advance(3_000);
+    expect(hooks.onDvrLoadStopped).toHaveBeenCalledTimes(1);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+  });
+
+  it('라이브 재생기의 404 는 가로채지 않아 받기 중단 · 고갈 모두 0', async () => {
+    const hooks = drainHooks();
+    const { video, hls } = await playingAt(hooks, 'live');
+    raise(hls!, fragError(404));
+    fire(video, 'waiting');
+    await advance(3_000);
+    expect(hooks.onDvrLoadStopped).not.toHaveBeenCalled();
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+  });
+
+  it('404 가 없으면 정체가 이어져도 고갈 0', async () => {
+    const hooks = drainHooks();
+    const { video } = await playingAt(hooks);
+    fire(video, 'waiting');
+    await advance(3_000);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+  });
+
+  it('기본 HLS 갈래(Safari)는 404 를 가로채지 않아 무장하지 않는다 — 정체가 이어져도 고갈 0', async () => {
+    vi.spyOn(FakeHls, 'isSupported').mockReturnValue(false);
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    const hooks = drainHooks();
+    const { video, result } = await playingAt(hooks);
+    expect(result.current.engine).toBe('native');
+    fire(video, 'waiting');
+    await advance(3_000);
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+  });
+
+  it('무장 여부는 404 순간의 세션 상태로 정한다 — 재생기가 선 뒤 바뀐 답도 다시 그리기 없이 읽는다', async () => {
+    let watching = false;
+    const hooks = drainHooks({ watchesDrain: vi.fn(() => watching) });
+    const { video, hls } = await playingAt(hooks);
+    watching = true;
+
+    raise(hls!, fragError(404));
+    fire(video, 'waiting');
+    await advance(2_000);
+
+    expect(hooks.onDvrDrain).toHaveBeenCalledTimes(1);
+  });
+
+  it('세대가 바뀌면 옛 재생기의 감시를 정리한다 — 늦은 고갈 통지 0', async () => {
+    const hooks = drainHooks();
+    const { video, hls, swapTo } = await playingAt(hooks);
+    raise(hls!, fragError(404));
+    fire(video, 'waiting');
+    await advance(500);
+
+    await swapTo({ source: sourceOf('rewind', 2, S), hooks });
+    fire(video, 'waiting');
+    await advance(3_000);
+
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+  });
+});
+
+describe('세우지 않음의 지금 상태 읽기 — 효과 첫머리와 hls.js 읽기를 기다린 뒤(POK-547)', () => {
+  beforeEach(() => {
+    stubMediaPlayback();
+    fake.bootList = details(F, 4);
+  });
+
+  it('효과 첫머리에는 거짓이던 보류가 hls.js 를 읽는 사이 참이 되면 hls.js 를 만들지 않는다', async () => {
+    const isStartHeld = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const { video } = await mount(sourceOf('rewind', 5, S), { isStartHeld });
+    expect(isStartHeld).toHaveBeenCalledTimes(2);
+    expect(fake.instances).toHaveLength(0);
+    expect(playCalls()).toBe(0);
+    expect(video.getAttribute('src')).toBeNull();
+  });
+
+  it('기본 HLS 갈래(Safari)도 같다 — video.src 를 세우지 않는다', async () => {
+    vi.spyOn(FakeHls, 'isSupported').mockReturnValue(false);
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    const isStartHeld = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const { video } = await mount(sourceOf('rewind', 5, S), { isStartHeld });
+    expect(video.getAttribute('src')).toBeNull();
+    expect(playCalls()).toBe(0);
+  });
+
+  it('지금 상태의 보류가 처음부터 참이면 렌더 값이 거짓이어도 세우지 않는다 · 늘 거짓이면 지금처럼 선다', async () => {
+    await mount(sourceOf('rewind', 5, S), { startHeld: false, isStartHeld: () => true });
+    expect(fake.instances).toHaveLength(0);
+    await mount(sourceOf('rewind', 6, S), { startHeld: false, isStartHeld: () => false });
+    expect(fake.instances).toHaveLength(1);
+  });
+});

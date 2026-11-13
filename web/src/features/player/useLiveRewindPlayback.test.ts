@@ -63,6 +63,8 @@ function fakeSession(patch: Partial<PlaybackSession> = {}): PlaybackSession {
     notice: () => {},
     positionEpoch: () => 0,
     isKnownDvrHole: () => false,
+    isStartHeld: () => false,
+    watchesDrain: () => false,
     ...patch,
   };
 }
@@ -170,4 +172,38 @@ describe('되감기 조각 404 의 고리 · 명령 묶음(POK-528 c5 · 계획 
     view.rerender({ ...held, view: { ...held.view, startHeld: false } });
     expect(player.hooks?.startHeld).toBe(false);
   });
+});
+
+describe('받기 중단 · 고갈의 고리(POK-547)', () => {
+  it('받기 중단 · 고갈 고리를 그 재생기 세대를 실은 dvr-load-stopped · dvr-drain 사건으로 올린다', () => {
+    const dispatch = vi.fn<(event: SessionEvent) => void>();
+    renderHook(() => useLiveRewindPlayback({ current: null }, fakeSession({ dispatch })));
+
+    player.hooks?.onDvrLoadStopped?.(7);
+    player.hooks?.onDvrDrain?.(7, true, NOW);
+    player.hooks?.onDvrDrain?.(7, false, null);
+
+    const types = new Set(['dvr-load-stopped', 'dvr-drain']);
+    expect(dispatch.mock.calls.filter(([e]) => types.has(e.type))).toEqual([
+      [{ type: 'dvr-load-stopped', generation: 7 }],
+      [{ type: 'dvr-drain', generation: 7, drained: true, atPdtMs: NOW }],
+      [{ type: 'dvr-drain', generation: 7, drained: false, atPdtMs: null }],
+    ]);
+  });
+
+  it.each([true, false])(
+    '재생기의 보류 · 고갈 감시 질의를 세션의 지금 상태 질의에 잇고 답(%s)을 그대로 돌려준다',
+    (answer) => {
+      const isStartHeld = vi.fn(() => answer);
+      const watchesDrain = vi.fn(() => !answer);
+      renderHook(() =>
+        useLiveRewindPlayback({ current: null }, fakeSession({ isStartHeld, watchesDrain })),
+      );
+
+      expect(player.hooks?.isStartHeld?.()).toBe(answer);
+      expect(player.hooks?.watchesDrain?.()).toBe(!answer);
+      expect(isStartHeld).toHaveBeenCalledTimes(1);
+      expect(watchesDrain).toHaveBeenCalledTimes(1);
+    },
+  );
 });

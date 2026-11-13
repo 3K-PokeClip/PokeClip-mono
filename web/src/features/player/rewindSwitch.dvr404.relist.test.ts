@@ -574,13 +574,13 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
       expect(done.phase).toMatchObject({ closeOnEnd: true, finalCheck: true });
     });
 
-    it('다시보기 제안 → 같은 자리 다시보기', () => {
+    it('다시보기 제안 → 국면 그대로(받기만 멈추고 받은 버퍼를 튼다)', () => {
       const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
       const offered = feed(ending, [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
       expect(offered.phase.kind).toBe('vod-offered');
-      const done = feed(offered, [gone(offered, undefined, S)]).state;
-      expect(done.phase).toEqual({ kind: 'vod' });
-      expect(done.source).toMatchObject({ kind: 'vod', startAtMs: P20 + 4_000 });
+      const done = feed(offered, [gone(offered, undefined, S)]);
+      expect(done.state).toBe(offered);
+      expect(done.effects).toEqual([]);
     });
   });
 });

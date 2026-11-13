@@ -42,7 +42,7 @@ export const RELIST_FROM_FLOOR_MS = 0;
 
 // ── 이어 볼 자리(POK-528 계획 3-2) ──
 // 「확인된 위치」 · 「이어 볼 자리」 판정은 여기 셋만 한다. 위치 칸을 쓰는 곳은 liveHandoff 의
-// withPositionEpoch · seenPosition 둘이다.
+// withPositionEpoch · seenPosition · seenDrainedAt 셋이다.
 
 /** 지금 소스에서 확인된 위치 — 이 재생기가 그 자리에 화면을 붙였다. 아니면 null */
 export function confirmedAtMs(session: PlaybackSessionState): number | null {

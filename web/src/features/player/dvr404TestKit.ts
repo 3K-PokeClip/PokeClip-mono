@@ -29,13 +29,22 @@ const FROM_FLOOR_MS = 0;
 const HUMAN_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['seek', 'live-button', 'button']);
 
 /**
+ * 지금 세대 재생기가 404 로 받기를 멈췄나(POK-547 — rewindSwitch 의 loadStoppedNow 사본).
+ * 옛 판 상태에는 기록 칸이 없어 멈추지 않은 것으로 읽는다
+ */
+function loadStoppedBySpec(state: PlaybackSessionState): boolean {
+  return state.loadStoppedGeneration === state.source.generation;
+}
+
+/**
  * 계획 3-6 의 「새로 서는 재생기는 hls.js 를 만들지 않는다」 — 막힌 끝남 대기 ·
- * 마지막 확인 중인 끝남 대기(finalCheck) · 재생이 멎은 다시보기 제안(POK-547). 목록을
- * 다시 받는 되감기는 세운다. 옛 판 제안에는 stopped 칸이 없어 멎지 않은 것으로 읽는다
+ * 마지막 확인 중인 끝남 대기(finalCheck) · 재생이 멎었거나 지금 재생기가 받기를 멈춘
+ * 다시보기 제안(POK-547). 목록을 다시 받는 되감기는 세운다. 옛 판 제안에는 stopped 칸이
+ * 없어 멎지 않은 것으로 읽는다
  */
 function startHeldBySpec(state: PlaybackSessionState): boolean {
   const { phase } = state;
-  if (phase.kind === 'vod-offered') return phase.stopped != null;
+  if (phase.kind === 'vod-offered') return phase.stopped != null || loadStoppedBySpec(state);
   return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
 }
 
@@ -97,6 +106,7 @@ export function assertPhaseInvariants(state: PlaybackSessionState): void {
   if (state.pendingSeekMs !== null && state.pendingSeekMs !== undefined) {
     expect(state.positionGeneration, 'I3 pendingSeekMs ⇒ positionGeneration null').toBeNull();
   }
+  assertLoadStopInvariants(state);
   const { phase } = state;
   if (phase.kind !== 'ending-wait') return;
   const blocked = phase.blocked === true;
@@ -109,6 +119,38 @@ export function assertPhaseInvariants(state: PlaybackSessionState): void {
   if (blocked || finalCheck) {
     expect(state.source.kind, 'blocked ∨ finalCheck ⇒ source.kind rewind').toBe('rewind');
   }
+}
+
+/**
+ * 받기 중단 · 제안이 멎은 까닭의 불변식(POK-547) — 멎은 까닭은 셋 가운데 하나이고, 받기
+ * 중단 기록은 없거나 지금 세대를 넘지 않는다. 옛 판 상태(칸 없음)는 건너뛴다
+ */
+function assertLoadStopInvariants(state: PlaybackSessionState): void {
+  const { phase } = state;
+  if (phase.kind === 'vod-offered' && phase.stopped !== undefined) {
+    expect([null, 'drained', 'held'], 'vod-offered.stopped ∈ 셋').toContain(phase.stopped);
+  }
+  const stoppedAt = state.loadStoppedGeneration ?? null;
+  if (stoppedAt === null) return;
+  expect(stoppedAt, '받기 중단 기록 ≤ 지금 세대').toBeLessThanOrEqual(state.source.generation);
+}
+
+/**
+ * 고갈 통지가 멎은 자리를 확인된 위치로 적는 전이인가(POK-547) — 위치 칸을 쓰므로 T5 의
+ * 보존에서 뺀다. 끝나지 않은 시크가 있거나 자리를 모르거나 막힘 · 마지막 확인에서 온
+ * 제안이면 적지 않으니 T5 를 그대로 받는다
+ */
+function writesDrainedPosition(before: PlaybackSessionState, event: SessionEvent): boolean {
+  const { phase } = before;
+  return (
+    event.type === 'dvr-drain' &&
+    event.drained === true &&
+    event.atPdtMs !== null &&
+    event.generation === before.source.generation &&
+    before.pendingSeekMs === null &&
+    phase.kind === 'vod-offered' &&
+    phase.stopped !== 'held'
+  );
 }
 
 /** 지금 시대(앞 상태의 positionEpoch)에 잰 위치 사건인가 */
@@ -159,7 +201,8 @@ function assertResume(before: PlaybackSessionState, event: SessionEvent, next: T
   }
   const sameGeneration = after.source.generation === before.source.generation;
   const sought = next.effects.some((effect) => effect.kind === 'seek-within');
-  if (sameGeneration && !sought && !isCurrentPosition(before, event)) {
+  const wrotePosition = isCurrentPosition(before, event) || writesDrainedPosition(before, event);
+  if (sameGeneration && !sought && !wrotePosition) {
     expect(resumeBySpec(after), `T5 이어 볼 자리 보존(${event.type})`).toBe(resumeBySpec(before));
   }
 }

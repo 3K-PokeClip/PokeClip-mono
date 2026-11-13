@@ -12,7 +12,6 @@ import {
 import {
   ENDING_WAIT_MS,
   RESUME_WAIT_MS,
-  SESSION_NOTICES,
   openSession,
   pollTargets,
   type DvrSegment,
@@ -262,53 +261,54 @@ describe('끝남 대기의 되감기 조각 404 → 닫기로 정하기 전이�
   });
 });
 
-describe('vod-offered 의 404 → 같은 자리 다시보기(W4)', () => {
-  it('지금 자리가 다시보기 범위 안이면 그 자리에서 · 알림 0', () => {
-    const s = feed(endedByEndlist(), [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
-    expect(s.phase.kind).toBe('vod-offered');
-    const moved = feed(s, [gone(s)]);
-    expect(moved.state.phase).toEqual({ kind: 'vod' });
-    expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: T0 + 20 * MIN });
-    expect(moved.state.source.generation).toBe(s.source.generation + 1);
-    expect(moved.effects).toEqual([]);
-  });
-
-  it('지금 자리가 다시보기 첫 조각보다 앞이면 첫 조각에서 · vodStart 알림', () => {
-    const vodFrom = T0 + 30 * MIN;
-    const s = feed(endedByEndlist(), [{ type: 'round-poll', result: vodReady(vodFrom, NOW) }]);
-    const moved = feed(s.state, [gone(s.state)]);
-    expect(moved.state.source).toMatchObject({ kind: 'vod', startAtMs: vodFrom });
-    expect(moved.effects).toEqual([{ kind: 'notice', text: SESSION_NOTICES.vodStart }]);
-  });
-
-  it('지금 자리가 끝 여유 뒤면 끝 여유 앞에서 · vodStart 알림', () => {
-    const s = feed(endedByEndlist(E - 1_000), [{ type: 'round-poll', result: vodReady(T0, NOW) }]);
-    const moved = feed(s.state, [gone(s.state)]);
-    expect(moved.state.source).toMatchObject({ kind: 'vod', startAtMs: NOW - MARGIN_MS });
-    expect(moved.effects).toEqual([{ kind: 'notice', text: SESSION_NOTICES.vodStart }]);
-  });
-
-  it('자리를 모르면 처음부터 · 알림 0', () => {
-    const s = feed(endedByEndlist(), [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
-    // 손 상태 — 이어 볼 자리(resumeAtMs)가 없는 꼴: 확인된 위치 · 시크 목표 · 시작 요청이 모두 없다
-    // (POK-528 c7 — 옛 차림 lastAtMs 만 비운 것은 확인된 위치가 null 인 도달 불가 꼴이라 시작 요청으로 떨어진다)
-    const unknown = {
-      ...s,
-      lastAtMs: null,
-      positionGeneration: null,
-      source: { ...s.source, startAtMs: null },
-    };
-    const moved = feed(unknown, [gone(unknown)]);
-    expect(moved.state.source).toMatchObject({ kind: 'vod', startAtMs: null });
-    expect(moved.effects).toEqual([]);
-  });
+describe('vod-offered 의 404 — 국면 그대로 · 받기만 멈추고 받은 버퍼를 튼다(W4)', () => {
+  // 옛 판은 자리별로 같은 자리 다시보기의 시작을 갈랐다(범위 안 · 첫 조각 앞 · 끝 여유 뒤 · 모름). 이제 404 는 어느
+  // 자리에서도 국면을 바꾸지 않는다 — 넘김은 「다시보기 보기」 단추다
+  const offers: Array<[string, () => PlaybackSessionState]> = [
+    [
+      '지금 자리가 다시보기 범위 안',
+      () => feed(endedByEndlist(), [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state,
+    ],
+    [
+      '지금 자리가 다시보기 첫 조각보다 앞',
+      () =>
+        feed(endedByEndlist(), [{ type: 'round-poll', result: vodReady(T0 + 30 * MIN, NOW) }])
+          .state,
+    ],
+    [
+      '지금 자리가 끝 여유 뒤',
+      () =>
+        feed(endedByEndlist(E - 1_000), [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state,
+    ],
+    [
+      '자리를 모름',
+      () => {
+        const s = feed(endedByEndlist(), [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
+        // 손 상태 — 이어 볼 자리(resumeAtMs)가 없는 꼴: 확인된 위치 · 시크 목표 · 시작 요청이 모두 없다
+        return {
+          ...s,
+          lastAtMs: null,
+          positionGeneration: null,
+          source: { ...s.source, startAtMs: null },
+        };
+      },
+    ],
+  ];
+  for (const [name, make] of offers) {
+    it(`${name} — 404 는 상태 · 효과를 바꾸지 않는다(같은 자리 다시보기 없음 · 알림 0)`, () => {
+      const s = make();
+      expect(s.phase.kind).toBe('vod-offered');
+      const moved = feed(s, [gone(s)]);
+      expect(moved.state).toBe(s);
+      expect(moved.effects).toEqual([]);
+      expect(moved.state.closed).toBeNull();
+    });
+  }
 });
 
 describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계획 8-1)', () => {
-  // 끝에 닿은 세션(atEnd:true)은 「다시보기 보기」 단추로는 처음부터 연다(openVod). 404 로 옮길
-  // 때는 atEnd 갈래를 쓰지 않고 lastAtMs 를 범위에 가둔 같은 자리로 간다(정본 4-10 (나)-2).
-  // 끝에 닿기 전 차림에서는 두 길이 같은 값을 내 서로를 가르지 못하므로, 이 묶음은 끝에 닿은
-  // 차림만 쓴다. 다시보기 끝을 E 뒤로 둬 가둔 자리가 E 그대로가 되게 한다.
+  // 끝에 닿은 세션(atEnd:true)은 「다시보기 보기」 단추로는 처음부터 넘긴다. 404 는 끝에 닿은
+  // 뒤에도 국면을 바꾸지 않는다 — 끝 덮개 단추가 그대로 출구다. 다시보기 끝을 E 뒤로 둔다.
   const vodPastTail = vodReady(T0, NOW + MIN);
 
   /** 끝에 닿은 끝남 대기에서 회차별 vod 를 받아 든 다시보기 제안(atEnd:true · lastAtMs = E) */
@@ -316,13 +316,12 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
     return feed(endedAtTail(false), [{ type: 'round-poll', result: vodPastTail }]).state;
   }
 
-  it('W4: 끝에 닿은 제안의 404 는 같은 자리(가둔 E)로 · 같은 상태의 「다시보기 보기」 는 처음부터 넘긴다', () => {
+  it('W4: 끝에 닿은 제안의 404 는 국면 그대로 · 같은 상태의 「다시보기 보기」 는 처음부터 넘긴다', () => {
     const s = offeredAtTail();
     expect(s.phase).toMatchObject({ kind: 'vod-offered', atEnd: true });
     expect(s.lastAtMs).toBe(E);
     const moved = feed(s, [gone(s)]);
-    expect(moved.state.phase).toEqual({ kind: 'vod' });
-    expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: E });
+    expect(moved.state).toBe(s);
     expect(moved.effects).toEqual([]);
     const pressed = feed(s, [{ type: 'button', which: 'vod' }]);
     expect(pressed.effects).toEqual([
@@ -338,12 +337,12 @@ describe('같은 자리 전환의 경계 — 끝에 닿은 뒤(W4 · W5 · 계�
     ]);
   });
 
-  it('W4: 끝에 닿은 제안의 404 도 끝 여유 뒤 자리는 끝 여유 앞으로 가두고 알린다', () => {
+  it('W4: 끝에 닿은 제안의 404 는 끝 여유 뒤 자리여도 국면 그대로 · 알림 0', () => {
     const s = feed(endedAtTail(false), [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
     expect(s.phase).toMatchObject({ kind: 'vod-offered', atEnd: true });
     const moved = feed(s, [gone(s)]);
-    expect(moved.state.source).toMatchObject({ kind: 'vod', startAtMs: NOW - MARGIN_MS });
-    expect(moved.effects).toEqual([{ kind: 'notice', text: SESSION_NOTICES.vodStart }]);
+    expect(moved.state).toBe(s);
+    expect(moved.effects).toEqual([]);
   });
 
   /** 막힌 뒤 끝에 닿은 세션 — ENDLIST 뒤 404 로 막히고 멈춘 프레임이 끝 E 였다 */
