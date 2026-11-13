@@ -139,9 +139,11 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
     전 검사(`timing-preflight`)가 함께 실려, 같은 절의 1(운영 SQL) ·
     2(소비자 선배포 확인)와 검사 핀 `image_digests.timing_guard` 가 먼저입니다.
     그래서 전제(prod 웹이 `/dvr` 전환 판 · `/dvr` 실제 서빙)와 1 · 2 · 검사
-    핀, 그리고 청소기 보관 유예 23시간(V1 임시)을 되돌리는 PR 이 develop 에
-    들어갔는지 확인하고 c0 창에서 머지한 뒤, 그 머지 커밋으로 빌드한 묶음과
-    같은 커밋 체크아웃의 plan 으로 판 7 과 c0 를 한 번에 교체합니다
+    핀을 확인하고 c0 창에서 머지한 뒤, 그 머지 커밋으로 빌드한 묶음과 같은
+    커밋 체크아웃의 plan 으로 판 7 과 c0 를 한 번에 교체합니다. 청소기 보관
+    유예 23시간(V1 임시)은 c0 에서 그대로 둡니다 — 상자 녹화(`/playback`)를
+    읽는 웹 경로가 모두 prod 에서 빠진 뒤 별도 걸음으로 되돌립니다(kty
+    2026-11-13)
     ([media README](../../../../media/README.md) 「M4 ⓒ 에서 M5/M6 로 넘긴
     것」 ·
     [media-swap 런북 「PDT 배포 순서」](../../runbooks/media-swap.md#pdt-배포-순서)).
