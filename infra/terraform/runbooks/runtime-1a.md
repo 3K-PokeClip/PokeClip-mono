@@ -1308,6 +1308,9 @@ SELECT CASE WHEN r.closed THEN 'closed' ELSE 'open' END AS rounds,
 SELECT pg_catalog.count(*) FILTER (WHERE s.vod_state IN ('frozen', 'frozen_with_gaps', 'freeze_failed')
                                      AND s.vod_s3_key IS NOT NULL
                                      AND (s.vod_first_seq IS NULL OR s.vod_last_seq IS NULL)) AS settled_range_null,
+       pg_catalog.count(*) FILTER (WHERE s.round_id IS NULL
+                                     AND s.vod_state IN ('frozen', 'frozen_with_gaps', 'freeze_failed')
+                                     AND s.vod_s3_key IS NOT NULL) AS legacy_settled,
        (SELECT pg_catalog.count(*) FROM (
             SELECT 1 FROM stream_sessions o
              WHERE o.round_id IS NOT NULL
@@ -1335,10 +1338,12 @@ make_read expiry_preflight "${payload}/expiry_preflight.sql" &&
     (media README 「60일 만료」 의 한계). `ge_59d` 가 0 이 아니면 그 회차가
     켠 뒤 처음 지우는 대상일 수 있습니다. 회차가 없는 옛 계승 사슬
     (`round_id` 없음)의 길이는 이 집계에 들지 않습니다 — 둘째 SELECT 의
-    `settled_range_null` 이 0 이 아니면 그 사슬도 같은 위험이 있으니 kty 가
+    `legacy_settled` 가 0 이 아니면 그 사슬도 같은 위험이 있으니 kty 가
     판정합니다.
 *   **둘째 SELECT — 만료 판정의 입력.** `settled_range_null` 은 범위 칸이 빈
-    확정 문서(M6 전 확정 — 계승 사슬 규칙으로 고름)입니다.
+    확정 문서(M6 전 확정 — 계승 사슬 규칙으로 고름)입니다. `legacy_settled` 는
+    회차가 없는 세션의 확정 문서 수입니다 — 범위 칸이 찼어도 옛 사슬 문서라
+    첫 SELECT 의 회차 길이에 들지 않습니다.
     `undecided_rounds` · `undecided_chains` 는 지금 미룸을 낳을 수 있는 단위
     (「만료 미룸 질의」 의 미정 단위)이고, 진행 중 방송 수 근처가 보통입니다.
     `legacy_ended_none` 은 VOD 없이 끝난 옛 세션이라, 만료가 문서 없이 조각만
