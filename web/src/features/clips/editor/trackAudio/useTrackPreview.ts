@@ -578,10 +578,11 @@ export function useTrackPreview(options: {
     };
   }, [video, muteVideo]);
 
-  // 소리는 창 Blob 시각에 놓였다 — 영상 노드의 시각을 그대로 따른다. 재생기는 그 창을 받은 영상에서만 산다(창이 바뀌면 버림)
+  // 소리는 창 Blob 시각에 놓였다 — 영상 노드의 시각(그려진 프레임의 미디어 시각)을 그대로 따른다. 재생기는 그 창을 받은 영상에서만
+  // 산다(창이 바뀌면 버림)
   useEffect(() => {
     if (player === null || video === null) return undefined;
-    return followVideo(player, video, () => video.currentTime);
+    return followVideo(player, video);
   }, [player, video]);
 
   const setGains = useCallback(
