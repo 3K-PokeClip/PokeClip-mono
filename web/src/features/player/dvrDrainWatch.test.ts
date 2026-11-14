@@ -361,7 +361,9 @@ describe('watchDvrDrain', () => {
     it('무장 전에는 끝 증거 셈도 부르지 않는다 — 비무장 재생기의 끝 판정 시각을 바꾸지 않는다', () => {
       const { settleEnd, watch, advance, fire } = setup();
 
-      for (const event of CHECK_EVENTS) fire(event);
+      for (const event of CHECK_EVENTS) {
+        fire(event);
+      }
       advance(DRAIN_STALL_SILENT_MS);
       watch.check();
 
@@ -414,6 +416,15 @@ describe('watchDvrDrain', () => {
       seekTo(30, { arrive: false });
 
       expect(onChange.mock.calls).toEqual([[true, 30]]);
+    });
+
+    it('무장 뒤 받아 둔 구간의 끝과 같은 자리로 시크하면 버퍼 밖으로 보고 곧바로 알린다', () => {
+      const { onChange, watch, seekTo } = setup();
+      watch.arm();
+
+      seekTo(10.3, { arrive: false });
+
+      expect(onChange.mock.calls).toEqual([[true, 10.3]]);
     });
 
     it('무장 뒤 버퍼 안 시크는 곧바로 알리지 않는다', () => {
@@ -561,7 +572,9 @@ describe('watchDvrDrain', () => {
 
       watch.dispose();
       advance(DRAIN_STALL_SILENT_MS * 2);
-      for (const event of CHECK_EVENTS) fire(event);
+      for (const event of CHECK_EVENTS) {
+        fire(event);
+      }
       watch.check();
       watch.arm();
       seekTo(30, { arrive: false });

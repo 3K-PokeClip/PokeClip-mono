@@ -19,6 +19,7 @@ const CAN_KEEP_PLAYING = 3;
 /** 점검 계기. stalled 는 계기로만 쓰고 정체의 증거로 치지 않는다(받아 둔 영상을 트는 중에도 온다) */
 const CHECK_EVENTS = ['waiting', 'stalled', 'timeupdate', 'seeked', 'playing', 'canplay'] as const;
 
+/** 받기를 멈춘 재생기 하나의 고갈 감시 — watchDvrDrain 이 돌려준다 */
 export interface DvrDrainWatch {
   /**
    * 무장한다(받기 중단 뒤 한 번). 이 순간 seeking 이고 그 목표가 어느 buffered 구간에도 없으면 곧바로 고갈을 알린다 —
@@ -32,6 +33,7 @@ export interface DvrDrainWatch {
   dispose(): void;
 }
 
+/** watchDvrDrain 에 넘기는 재생 훅 쪽 셈 · 알림 · 시계 */
 export interface DvrDrainWatchOptions {
   /**
    * 판정 직전마다 부른다(무장한 뒤에만). 재생 훅이 ended · 목록 끝 정체를 먼저 셈해 끝을 올리고, 끝이 섰으면 참이다.
@@ -59,10 +61,13 @@ interface DrainedState {
   readonly fromTime: number;
 }
 
-/** 이 자리를 담은 buffered 구간의 끝. 그런 구간이 없으면 null */
+/**
+ * 이 자리를 담은 buffered 구간의 끝. 그런 구간이 없으면 null. 구간의 끝 자리는 담지 않는다 — 거기서부터 틀 영상이 없어,
+ * 끝에 닿는 시크도 받아 둔 영상 밖이다(앞 버퍼는 어느 쪽이든 0 이다)
+ */
 function bufferedEndAt(buffered: TimeRanges, time: number): number | null {
   for (let i = 0; i < buffered.length; i++) {
-    if (buffered.start(i) <= time && time <= buffered.end(i)) return buffered.end(i);
+    if (buffered.start(i) <= time && time < buffered.end(i)) return buffered.end(i);
   }
   return null;
 }
@@ -173,7 +178,9 @@ export function watchDvrDrain(video: HTMLVideoElement, opts: DvrDrainWatchOption
     candidate = null;
   };
 
-  for (const type of CHECK_EVENTS) video.addEventListener(type, onCheckEvent);
+  for (const type of CHECK_EVENTS) {
+    video.addEventListener(type, onCheckEvent);
+  }
   video.addEventListener('seeking', onSeeking);
   video.addEventListener('pause', onPause);
 
@@ -191,7 +198,9 @@ export function watchDvrDrain(video: HTMLVideoElement, opts: DvrDrainWatchOption
     },
     dispose() {
       disposed = true;
-      for (const type of CHECK_EVENTS) video.removeEventListener(type, onCheckEvent);
+      for (const type of CHECK_EVENTS) {
+        video.removeEventListener(type, onCheckEvent);
+      }
       video.removeEventListener('seeking', onSeeking);
       video.removeEventListener('pause', onPause);
     },
