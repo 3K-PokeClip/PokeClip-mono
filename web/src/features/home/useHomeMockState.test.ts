@@ -9,6 +9,8 @@ import { useHomeMockState } from './useHomeMockState';
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const POLL_MS = 10_000;
+/** 홈 한 벌이 회차 답을 기다리는 상한 */
+const ROUND_WAIT_MS = 2_000;
 const CONTROL = 'https://ctl.test';
 const ROUND_URL_RE = /^https:\/\/ctl\.test\/api\/streams\/([^/]+)\/rounds\/([^/]+)\/rewind$/;
 
@@ -50,6 +52,8 @@ interface Server {
   modes?: Record<string, RoundMode>;
   /** 참인 회차는 답하지 않다가 끊기면 진짜 fetch 처럼 AbortError 로 끝난다 */
   hold?: (roundId: string) => boolean;
+  /** 회차마다 이만큼 늦게 답한다(가짜 시계) */
+  answerAfterMs?: number;
 }
 
 /** 홈이 부르는 창구 전부를 흉내 낸다. 물은 회차 · 모든 주소 · 회차 물음의 동시 수를 센다 */
@@ -94,6 +98,11 @@ async function answerRound(
         init?.signal?.addEventListener('abort', () => {
           reject(new DOMException('aborted', 'AbortError'));
         });
+      });
+    }
+    if (s.answerAfterMs !== undefined) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, s.answerAfterMs);
       });
     }
     await Promise.resolve();
@@ -184,15 +193,40 @@ describe('useHomeMockState — 다시 보기 준비 중(회차 경로)', () => {
     expect(badgeOf(result, 'unknown')).toBe('preparing');
   });
 
-  it('답이 시한(8초) 안에 안 오면 끊고 「준비 중」 이다', async () => {
-    const seen = serve({ past: [endedRow('slow', 5 * MINUTE)], hold: () => true });
-    const hook = renderHook(() => useHomeMockState(), { wrapper: withToastProvider });
-    await advance(100);
-    expect(seen.asked).toEqual(['slow']);
+  it('제어면이 답하지 않아도 첫 화면은 상한(2초) 안에 서고, 그때까지 답 못 받은 방송은 「준비 중」 이다', async () => {
+    const hanging = Array.from({ length: 7 }, (_, i) => endedRow(`H-${i}`, (i + 2) * MINUTE));
+    const seen = serve({
+      past: [endedRow('R', MINUTE), ...hanging],
+      modes: { R: 'vod' },
+      hold: (roundId) => roundId !== 'R',
+    });
+    const { result } = renderHook(() => useHomeMockState(), { wrapper: withToastProvider });
 
-    await advance(8_000);
+    await advance(ROUND_WAIT_MS + 500);
 
-    await waitFor(() => expect(badgeOf(hook.result, 'slow')).toBe('preparing'));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.vods).toHaveLength(8);
+    expect(badgeOf(result, 'R')).toBeUndefined();
+    for (const b of hanging) expect(badgeOf(result, b.streamId)).toBe('preparing');
+    // 남은 물음은 끊는다 — 채널 전환 화면이 그 물음을 기다리지 않게
+    expect(seen.running).toBe(0);
+  });
+
+  it('상한이 지나 늦게 온 답은 돌려준 판정을 고치지 않고, 다음 주기에 다시 묻는다', async () => {
+    // answerAfterMs 는 끊겨도 답한다 — 끊김을 무시하는 서버
+    const seen = serve({
+      past: [endedRow('R', MINUTE)],
+      modes: { R: 'vod' },
+      answerAfterMs: 3_000,
+    });
+    const { result } = renderHook(() => useHomeMockState(), { wrapper: withToastProvider });
+    await advance(ROUND_WAIT_MS + 500);
+    expect(badgeOf(result, 'R')).toBe('preparing');
+
+    await advance(1_000);
+    await advance(POLL_MS);
+
+    expect(seen.asked).toEqual(['R', 'R']);
   });
 
   it('다시 묻는 답이 오기 전에는 「준비 중」 을 그대로 둔다', async () => {
@@ -250,14 +284,15 @@ describe('useHomeMockState — 다시 보기 준비 중(회차 경로)', () => {
 
   it('회차 물음은 격자에 보이는 방송만, 동시에 6개까지다', async () => {
     const rows = Array.from({ length: 10 }, (_, i) => endedRow(`S-${i}`, (i + 1) * MINUTE));
-    const seen = serve({ past: rows, hold: () => true });
+    const seen = serve({ past: rows, answerAfterMs: 500 });
     renderHook(() => useHomeMockState(), { wrapper: withToastProvider });
     await advance(100);
     expect(seen.peak).toBe(6);
 
-    await advance(8_000);
-    await advance(100);
+    await advance(500);
+    await advance(500);
 
+    expect(seen.peak).toBe(6);
     expect(new Set(seen.asked).size).toBe(8);
     expect(seen.asked).toEqual(expect.arrayContaining(rows.slice(0, 8).map((b) => b.streamId)));
   });

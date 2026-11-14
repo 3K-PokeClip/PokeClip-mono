@@ -176,6 +176,13 @@ const LIBRARY_POLL_MS = 60_000;
 /** 방송마다 카드를 읽는 동시 수 */
 const CARD_READ_PARALLEL = 6;
 /**
+ * 홈 한 벌이 회차 답(「다시 보기 준비 중」 표지)을 기다리는 상한(POK-568). 묻기 하나의 시한은 8초(REWIND_REQUEST_TIMEOUT_MS)고
+ * 동시 6개(ROW_READ_PARALLEL)라, 격자 8개가 다 한 시간 안이면 제어면이 매달릴 때 두 물결 16초 동안 첫 화면이 비었다. 표지 하나 때문에
+ * 라이브 띠 · 숫자 · 격자를 미루지 않도록 주기(10초)보다 한참 짧게 둔다. 넘으면 남은 묻기를 끊고, 답 못 받은 방송은 답 전과
+ * 같이 「준비 중」 이다 — 다음 주기에 다시 묻는다. 지난 방송 목록은 이 상한 없이 묻기마다 8초 시한만 쓴다
+ */
+const ROUND_WAIT_MS = 2_000;
+/**
  * 라이브 첫 사진을 기다리는 시한. 서버는 조각이 올라온 뒤(약 33초) 1분 순회로 사진을 찍고(일꾼 약 4초), 홈은 10초마다 읽는다.
  * 그래서 방송 시작에서 2분 가까이 걸릴 수 있어 방송 정보 시한(2분)보다 넉넉히 잡는다
  */
@@ -458,7 +465,8 @@ async function loadHome(
 /**
  * 격자에 보이는 방송 중 끝난 지 한 시간 안인 것만 회차 경로를 묻고(POK-568) 판정을 접는다. 무엇을 · 몇 개를 동시에 묻는지와 답을
  * 접는 규칙은 지난 방송 목록과 같다(vodRoundAsk · vodRoundBadge): 다시보기가 섰거나 없다고 굳은 방송은 다시 묻지 않고, 나머지는
- * 홈 주기마다 다시 묻는다. 돌려주는 기억에는 그 방송들만 남는다 — 한 시간이 지난 방송의 판정은 쓰지 않는다
+ * 홈 주기마다 다시 묻는다. 돌려주는 기억에는 그 방송들만 남는다 — 한 시간이 지난 방송의 판정은 쓰지 않는다.
+ * ROUND_WAIT_MS 까지만 기다린다: 그때까지 답 못 받은 방송은 직전 판정(처음이면 답 전)을 그대로 둔다
  */
 async function askJustEndedRounds(
   past: readonly RoundAskRow[],
@@ -478,18 +486,55 @@ async function askJustEndedRounds(
     const url = urls.get(row.streamId);
     return url === undefined ? [] : [{ row, url }];
   });
-  await runLimited(asks, ROW_READ_PARALLEL, async ({ row, url }) => {
-    if (signal.aborted) return;
-    const answer = await askRound(url, controlBase, signal);
-    // 못 받은 답도 접는다(askedAt 을 세운다). 404 유예의 원점은 명부 endedAt 이다
-    roundVods[row.streamId] = foldRowVod(
-      vodOf(row.streamId),
-      answer,
-      Date.now(),
-      isoMs(row.endedAt),
-    );
-  });
+  await waitAtMost(ROUND_WAIT_MS, signal, (cut) =>
+    runLimited(asks, ROW_READ_PARALLEL, async ({ row, url }) => {
+      if (cut.aborted) return;
+      const answer = await askRound(url, controlBase, cut);
+      // 상한이 지나 돌려준 기억은 고치지 않는다
+      if (cut.aborted) return;
+      // 못 받은 답도 접는다(askedAt 을 세운다). 404 유예의 원점은 명부 endedAt 이다
+      roundVods[row.streamId] = foldRowVod(
+        vodOf(row.streamId),
+        answer,
+        Date.now(),
+        isoMs(row.endedAt),
+      );
+    }),
+  );
   return roundVods;
+}
+
+/**
+ * work 를 돌리되 waitMs 까지만 기다린다. 넘으면 work 에 준 신호를 끊고 곧바로 돌아온다 — 끊긴 뒤 work 가 던지는 오류는 버린다.
+ * 그 전에 signal 이 끊기면(홈이 내려감 · 채널 전환) work 에도 전하고, work 가 던지는 오류를 그대로 던진다
+ */
+async function waitAtMost(
+  waitMs: number,
+  signal: AbortSignal,
+  work: (cut: AbortSignal) => Promise<void>,
+): Promise<void> {
+  const cut = new AbortController();
+  const onAbort = () => cut.abort(signal.reason);
+  signal.addEventListener('abort', onAbort);
+  if (signal.aborted) onAbort();
+  let expired = false;
+  let timer: number | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = window.setTimeout(() => {
+      expired = true;
+      cut.abort();
+      resolve();
+    }, waitMs);
+  });
+  const done = work(cut.signal).catch((error: unknown) => {
+    if (!expired) throw error;
+  });
+  try {
+    await Promise.race([done, deadline]);
+  } finally {
+    window.clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 const EMPTY_WEEK: BroadcastWeek = { broadcasts: 0, cards: 0 };
