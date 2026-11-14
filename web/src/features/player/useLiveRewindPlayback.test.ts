@@ -317,6 +317,14 @@ describe('되감기 축의 끝 — 세션 사건 순서 → 고리 recordingEnde
     expect(axisAfter(reconnected(), endlist, otherLive, reconnected())).toEqual(clock);
   });
 
+  it('pendingNext 가 남은 채 X = B 뒤 X 모름 라이브 답 · 정리 중이 이어져도 목록 끝이다', () => {
+    const otherLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_B);
+    const unknownLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_UNKNOWN);
+    expect(axisAfter(reconnected(), endlist, otherLive, unknownLive, notLive, notLive)).toEqual(
+      listEnd,
+    );
+  });
+
   it('pendingNext 가 남은 채 이 회차가 끝났다는 답 뒤 다른 방송이 시작해도 목록 끝이다', () => {
     const streamVod: Step = () => poll(vodReady());
     const otherLive: Step = () =>

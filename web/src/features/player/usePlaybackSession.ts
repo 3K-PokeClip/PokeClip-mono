@@ -109,7 +109,8 @@ export interface PlaybackSession {
   watchesDrain: () => boolean;
   /**
    * 최신 스트림 답이 이 회차를 부정하지 않는 라이브다(StreamFacts — 준비 여부 · url 무관). 정리 중 · 다시보기 · 끝남 · 다른
-   * 방송이면 거짓, 받지 못한 답은 앞 값. 세션을 열 때 참. 되감기 축의 끝을 가르는 근거다(recordingEndedOf). 없으면 참으로 본다
+   * 방송 · 방송 없음(X = '')이면 거짓, 받지 못한 답은 앞 값. 세션을 열 때 참. 되감기 축의 끝을 가르는 근거다
+   * (recordingEndedOf). 없으면 참으로 본다
    */
   streamLive?: boolean;
   /**
@@ -118,7 +119,8 @@ export interface PlaybackSession {
    */
   streamEnded?: boolean;
   /**
-   * 최신 라이브 답이 이 회차를 부정했다(StreamFacts — 다른 방송 · 방송 없음, 붙잡지 않음). 세션을 열 때 거짓. 없으면 거짓
+   * X 를 아는 최신 라이브 답이 이 회차를 부정했다(StreamFacts — 다른 방송 · 방송 없음, X 모름 라이브 답은 앞 값, 붙잡지
+   * 않음). 세션을 열 때 거짓. 없으면 거짓
    */
   roundDenied?: boolean;
 }

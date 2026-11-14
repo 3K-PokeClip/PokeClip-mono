@@ -750,11 +750,25 @@ describe('recordingEndedOf — 끝났다는 확인 · 스트림이 아직 라이
     expect(ended(played)).toBe(true);
   });
 
-  it('다른 방송 B 라이브가 이어지다 X 모름 라이브 답이 오면 부정이 아니라 벽시계다', () => {
+  it('다른 방송 B 라이브 뒤 X 모름 라이브 답은 부정을 지우지 않는다 — 정리 중이 이어져도 그렇다', () => {
     const otherLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_B);
     const unknownLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_UNKNOWN);
-    expect(ended(playWatching(reconnected(), endlist, otherLive))).toBe(true);
-    expect(ended(playWatching(reconnected(), endlist, otherLive, unknownLive))).toBe(false);
+    const played = playWatching(reconnected(), endlist, otherLive, unknownLive);
+    expect(played.state.phase).toMatchObject({ kind: 'rewind', pendingNext: { url: A2 } });
+    expect(ended(played)).toBe(true);
+    const cleanup = play(played.state, [notLive, unavailable, notLive], played.facts);
+    expect(ended(cleanup)).toBe(true);
+  });
+
+  it.each<[string, XAnswer]>([
+    ["방송 없음(X = '')", { kind: 'known', id: '' }],
+    ['다른 방송(X = B)', X_B],
+  ])('%s 부정 뒤 X 모름 답은 앞 값 · 이 회차 답이 오면 벽시계로 돌아온다', (_where, wrong) => {
+    const denied: Step = () => poll(liveReady(A1, T0, NOW), wrong);
+    const unknownLive: Step = () => poll(liveReady(A1, T0, NOW + MIN), X_UNKNOWN);
+    const backA: Step = () => poll(liveReady(A1, T0, NOW + 2 * MIN), X_A);
+    expect(ended(playWatching(denied, unknownLive))).toBe(true);
+    expect(ended(playWatching(denied, unknownLive, backA))).toBe(false);
   });
 
   it('다른 방송 B 의 다시보기 답은 이 회차의 끝으로 치지 않는다', () => {
@@ -811,13 +825,21 @@ describe('streamFactsAfter — 스트림 답을 세션 사실로 접는다', () 
     expect(streamFactsAfter(OPEN_STREAM_FACTS, late, event)).toBe(OPEN_STREAM_FACTS);
   });
 
-  it('최신 라이브 답이 이 회차를 부정하면(다른 방송 · 방송 없음) roundDenied 다 — 붙잡지 않는다', () => {
+  it('X 를 아는 라이브 답이 이 회차를 부정하면(다른 방송 · 방송 없음) roundDenied 다 — 이 회차 답에 풀린다', () => {
     const denied = after(liveReady(A1, T0), X_B);
     expect(denied).toMatchObject({ roundDenied: true, streamEnded: false });
     expect(after(liveReady(A1, T0), { kind: 'known', id: '' }).roundDenied).toBe(true);
     expect(after(liveReady(A1, T0), X_A, denied).roundDenied).toBe(false);
-    expect(after(liveReady(A1, T0), X_UNKNOWN, denied).roundDenied).toBe(false);
     expect(after({ kind: 'unavailable' }, X_A, denied).roundDenied).toBe(true);
+  });
+
+  it('X 모름 라이브 답은 부정 여부를 바꾸지 않는다(앞 값)', () => {
+    const denied = after(liveReady(A1, T0), X_B);
+    expect(after(liveReady(A1, T0), X_UNKNOWN, denied)).toMatchObject({
+      roundDenied: true,
+      streamLive: true,
+    });
+    expect(after(liveReady(A1, T0), X_UNKNOWN, notLiveFacts).roundDenied).toBe(false);
   });
 
   it('받지 못한 답(unavailable · none)은 앞 값을 둔다', () => {
