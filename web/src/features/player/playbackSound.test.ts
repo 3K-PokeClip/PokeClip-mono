@@ -23,7 +23,9 @@ function videoWithPlay(...results: PlayResult[]) {
 }
 
 /** 약속 사슬(첫 거절 → 다시 시도 → 그 결과)이 모두 끝날 때까지 기다린다 */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 describe('readSound', () => {
   it.each([

@@ -146,7 +146,7 @@ describe('여는 조건 · 폴링', () => {
   });
 });
 
-describe('스트림 사실(streamLive · streamEnded) — 세션이 받은 스트림 답을 접는다', () => {
+describe('스트림 사실(streamLive · streamEnded · roundDenied) — 세션이 받은 스트림 답을 접는다', () => {
   function body(mode: 'vod' | 'ended' | 'ending' | 'live') {
     return { ready: false, mode, url: null, firstPdt: null, headPdt: null };
   }
@@ -232,6 +232,33 @@ describe('스트림 사실(streamLive · streamEnded) — 세션이 받은 스�
       false,
     ]);
   });
+
+  it('앞 세션이 받은 다른 방송 부정은 새 세션으로 넘어가지 않는다', async () => {
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 60_000, NOW)) : jsonResponse(503, {});
+    const resolveX = () => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-B' });
+    const view = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options({ resolveX }),
+    });
+    await flush();
+    act(() => view.result.current?.dispatch({ type: 'endlist' }));
+    await nextPoll();
+    expect(view.result.current?.roundDenied).toBe(true);
+
+    view.rerender(
+      options({
+        resolveX,
+        roundId: 'r-B',
+        accessKey: 'r-B|key-2',
+        liveUrl: `${BASE}/live/key-2/index.m3u8`,
+        controlKey: 'key-2',
+      }),
+    );
+    await flush();
+
+    expect(view.result.current?.state.roundId).toBe('r-B');
+    expect(view.result.current?.roundDenied).toBe(false);
+  });
 });
 
 describe('past 닫힘의 넘김(POK-547)', () => {
@@ -310,6 +337,51 @@ describe('past 닫힘의 넘김(POK-547)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onClose.mock.calls[0]?.[0].handoff.sound).toEqual({ muted: false, volume: 30 });
   });
+
+  /** 끝남 대기를 단추 없이 끝내는 길 — 회차 종국(회차별 ended)과 20분 시한 */
+  const closers: Array<[string, (dispatch: (event: SessionEvent) => void) => Promise<void>]> = [
+    [
+      '회차별 ended',
+      async (dispatch) => {
+        act(() => dispatch({ type: 'round-poll', result: ROUND_ENDED }));
+        await flush();
+      },
+    ],
+    [
+      '20분 시한',
+      async () => {
+        await act(async () => vi.advanceTimersByTime(ENDING_WAIT_MS));
+        await flush();
+      },
+    ],
+  ];
+
+  it.each(closers)(
+    '단추 없이 닫혀도(%s) 묶인 재생기의 소리 상태를 넘긴다',
+    async (_name, close) => {
+      const ending = { ready: false, mode: 'ending', url: null, firstPdt: null, headPdt: null };
+      answer = () => jsonResponse(200, ending);
+      const onClose = vi.fn();
+      const { result } = renderHook(() => usePlaybackSession(options({ onClose })));
+      await flush();
+      act(() =>
+        result.current?.bindPlayer({
+          ...fakePlayer(),
+          readSound: () => ({ muted: false, volume: 30 }),
+        }),
+      );
+      act(() => result.current?.dispatch({ type: 'live-closed' }));
+      await flush();
+
+      await close((event) => result.current?.dispatch(event));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onClose.mock.calls[0]?.[0]).toMatchObject({
+        reason: 'past',
+        handoff: { chosen: false, sound: { muted: false, volume: 30 } },
+      });
+    },
+  );
 
   it('past 로 닫힌 뒤 재접속 대기 · 20분 시한이 지나도 효과 0 · onClose 1회 · 물음 0', async () => {
     const { result, onClose } = await offeredScreen();

@@ -134,7 +134,9 @@ async function settlePlays() {
   });
 }
 
-const volumeSlider = () => screen.getByRole('slider', { name: '볼륨' });
+function volumeSlider() {
+  return screen.getByRole('slider', { name: '볼륨' });
+}
 
 describe('다시보기 재생기 — 넘겨받은 소리 상태를 첫 재생 전에 싣는다', () => {
   it('hls.js: 넘겨받은 소리(켬 · 30)가 <video muted> 를 이기고, 첫 play() 는 그 값을 본다 · 화면도 그 값이다', async () => {
@@ -172,6 +174,15 @@ describe('다시보기 재생기 — 넘겨받은 소리 상태를 첫 재생 �
     expect(video.muted).toBe(true);
     expect(video.volume).toBeCloseTo(0.3);
     expect(screen.getByRole('button', { name: '음소거 해제' })).toBeInTheDocument();
+  });
+
+  it('넘겨받은 무음이면 첫 재생이 막혀도(NotAllowedError) 다시 틀지 않는다 · 재생 단추가 남는다', async () => {
+    results = ['NotAllowedError'];
+    await renderPlayer({ vod: VOD, vodSound: { muted: true, volume: 30 } });
+    await manifestParsed();
+
+    expect(seen).toEqual([{ muted: true, volume: expect.closeTo(0.3) }]);
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
   });
 
   it('소리 켠 첫 재생이 막히면(NotAllowedError) 음량은 두고 무음으로 한 번 더 튼다 · 화면도 무음이다', async () => {
