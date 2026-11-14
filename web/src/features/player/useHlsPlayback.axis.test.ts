@@ -147,7 +147,7 @@ afterEach(() => {
 
 describe('Home(비율 0)은 막대 왼쪽 끝을 요청한다 — 창 폭 · 1시간 표시 상한을 거치지 않는다', () => {
   // 맨 앞 GAP 둘 + 4초 내용 조각 900개(3 600초) — 끝 = 첫 내용 조각 + 3 600초
-  const LIST_END_MS = CONTENT_MS + 3_600_000;
+  const listEndMs = CONTENT_MS + 3_600_000;
 
   it.each([
     ['창이 1시간보다 5초 넓다', 3_605_000],
@@ -161,7 +161,7 @@ describe('Home(비율 0)은 막대 왼쪽 끝을 요청한다 — 창 폭 · 1�
       expect(onSeekRequest).toHaveBeenCalledOnce();
       expect(onSeekRequest).toHaveBeenLastCalledWith(CONTENT_MS, {
         lowerMs: CONTENT_MS + 4_000,
-        endMs: LIST_END_MS,
+        endMs: listEndMs,
       });
     },
   );
@@ -214,6 +214,26 @@ describe('상대 이동이 막대 왼쪽 끝을 넘으면 왼쪽 끝을 요청�
     act(() => view.result.current.seekBy(10));
     expect(lastTarget(onSeekRequest)).toBe(CONTENT_MS + 1_800_000 - 818_000);
   });
+
+  it.each([
+    ['Home 뒤 → 는 10초 앞이다', 8, -10, CONTENT_MS + 10_000],
+    ['왼쪽 끝 20초 안쪽에서 ← 5초는 왼쪽 끝이 아니라 5초 뒤다', 28, 5, CONTENT_MS + 15_000],
+    ['끝을 넘는 → 는 끝(지금 − 지연)이다', 3_600, -60, CONTENT_MS + 3_630_000],
+  ])(
+    '창이 1시간보다 30초 넓어도 이동은 재생 위치에서 잰다 — %s',
+    async (_where, atSeconds, deltaSeconds, targetMs) => {
+      // 맨 앞 GAP 둘 + 내용 조각 900개 · 끝(지금 − 지연) = 첫 내용 조각 + 3 630초 — 시차 · 창 폭은 1시간에서 잘린다
+      vi.useFakeTimers({ now: CONTENT_MS + 3_630_000 + LAG_MS });
+      const { view, onSeekRequest } = await mountSession(
+        'rewind',
+        details(902, 2, true),
+        atSeconds,
+      );
+      expect(view.result.current.windowSeconds).toBe(3_600);
+      act(() => view.result.current.seekBy(deltaSeconds));
+      expect(lastTarget(onSeekRequest)).toBe(targetMs);
+    },
+  );
 });
 
 describe('카드의 범위 밖 문턱은 막대 왼쪽 끝이다(카드 초 1초 봐줌)', () => {

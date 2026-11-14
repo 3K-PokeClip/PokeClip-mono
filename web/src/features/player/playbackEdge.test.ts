@@ -38,7 +38,8 @@ import {
   status,
   vodReady,
 } from './relistTestKit';
-import type { PlaybackSource, SessionEvent, XAnswer } from './rewindSwitch';
+import { openSession, type PlaybackSource, type SessionEvent, type XAnswer } from './rewindSwitch';
+import { seekInList } from './sessionShared';
 
 // 창 가장자리 · 시작 위치 · 끝 정체 판정(설계 5.3.1 · 5.4절 — R15 · R23 · R47 의 순수 몫)
 
@@ -259,6 +260,8 @@ describe('되감기 · 다시보기 하한 — 첫 내용 조각 기준 · 방�
       6,
     ],
     ['모두 GAP — 첫 조각 + 1 × TD', withGaps([6, 6, 6, 6], [0, 1, 2, 3]), 6],
+    ['모두 GAP 한 조각이 TD 보다 짧다 — 목록 끝(2초)', withGaps([2], [0]), 6],
+    ['모두 GAP 두 조각 합이 TD 보다 짧다 — 목록 끝(4초)', withGaps([2, 2], [0, 1]), 6],
   ])('맨 앞 GAP 에서 재생기 하한과 창 하한 지키기의 하한이 같다: %s', (_name, frags, td) => {
     const lowerMs = windowLowerMs(loadedList(frags, td)!, 'rewind', true);
     const cut = startCut(frags, PDT0 - 1_000, 'rewind', td, true);
@@ -275,11 +278,19 @@ describe('되감기 · 다시보기 하한 — 첫 내용 조각 기준 · 방�
     expect(cut?.position).toBeCloseTo(move!.to, 9);
     expect((lowerMs - PDT0) / 1000).toBeCloseTo(move!.to, 9);
   });
+
+  it('TD 보다 짧은 모두 GAP 목록에서 목록 끝부터 서는 시작은 하한(목록 끝)으로 잘린 것이 아니다', () => {
+    const frags = withGaps([2, 2], [0, 1]);
+    expect(startCut(frags, PDT0 + 4_000, 'rewind', 6, true)).toEqual({
+      position: 4,
+      floorCut: false,
+    });
+  });
 });
 
 describe('끝난 되감기 목록의 시작 — 한 시간을 넘어도 첫 내용 조각', () => {
   // 맨 앞 GAP 하나 뒤 4초 조각 900 개(합 3606초)
-  const LONG = withGaps([6, ...Array<number>(900).fill(4)], [0]);
+  const LONG = withGaps([6, ...Array.from<number>({ length: 900 }).fill(4)], [0]);
 
   it('ENDLIST 면 startCut · startLoadPosition 이 첫 내용 조각(영상 6초)이다', () => {
     expect(startCut(LONG, PDT0, 'rewind', 6, false)).toEqual({ position: 6, floorCut: true });
@@ -589,6 +600,36 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
       });
       expect(axis?.barLowerMs).toBe(PDT0);
     });
+
+    it.each<[string, number[]]>([
+      ['한 조각(2초)', [2]],
+      ['두 조각(합 4초)', [2, 2]],
+    ])(
+      '방송 중 되감기 목록이 TD 보다 짧은 모두 GAP(%s)이면 하한은 목록 끝이고 Home 시크도 목록 끝을 넘지 않는다',
+      (_name, durations) => {
+        const fragments = withGaps(
+          durations,
+          durations.map((_, i) => i),
+        );
+        const endMs = PDT0 + durations.reduce((sum, seconds) => sum + seconds, 0) * 1000;
+        const axis = sessionAxis({
+          ...gapped,
+          fragments,
+          targetDurationS: 6,
+          currentTime: 0,
+          kind: 'rewind',
+          live: true,
+        })!;
+        expect(axis.view).toEqual({ lowerMs: endMs, endMs });
+        const session = openSession({
+          roundId: 'r-A',
+          accessKey: 'r-A|k',
+          liveUrl: 'https://m/live',
+        });
+        const home = seekInList(session, axis.barLowerMs, axis.view);
+        expect(home.effects[0]).toEqual({ kind: 'seek-within', atMs: endMs });
+      },
+    );
   });
 });
 

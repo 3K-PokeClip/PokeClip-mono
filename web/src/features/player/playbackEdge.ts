@@ -95,14 +95,18 @@ export function edgeMarginMs(
   return list.rewindHeadSpanMs ?? list.headSpanMs;
 }
 
-/** 창 하한(epoch ms) = 기준 조각 시작 + 여유. 기준은 라이브가 첫 조각, 되감기 · 다시보기가 첫 내용 조각이다 */
+/**
+ * 창 하한(epoch ms) = 기준 조각 시작 + 여유, 목록 끝 넘어로는 두지 않는다. 기준은 라이브가 첫 조각, 되감기 · 다시보기가
+ * 첫 내용 조각이다. 끝에 걸리는 것은 방송 중 되감기 목록이 모두 GAP 이고 합이 TD 보다 짧을 때뿐이다(여유가 1 × TD) — 하한을
+ * 끝 뒤에 두면 세션이 하한으로 옮길 때 목록 밖으로 시크한다. startCut · 창 하한 지키기(rewindFloor)도 같은 자리에서 자른다
+ */
 export function windowLowerMs(
   list: LoadedList,
   kind: PlaybackSource['kind'],
   live: boolean,
 ): number {
   const baseMs = kind === 'live' ? list.firstMs : (list.contentFirstMs ?? list.firstMs);
-  return baseMs + edgeMarginMs(list, kind, live);
+  return Math.min(list.lastEndMs, baseMs + edgeMarginMs(list, kind, live));
 }
 
 /** 첫 목록의 시작 — position = startLoad 할 영상 초 · floorCut = 창 하한으로 잘랐다 */
@@ -132,8 +136,9 @@ export function startCut(
   const target = mediaTimeAt(fragments, startAtMs);
   if (target === null) return null;
   const base = kind === 'live' ? first : (liveContent(fragments)[0] ?? first);
-  const lower = base.start + edgeMarginMs(list, kind, live) / 1000;
   const end = last.start + last.duration;
+  // windowLowerMs 와 같은 셈이다 — 목록 끝 넘어로는 두지 않는다
+  const lower = Math.min(end, base.start + edgeMarginMs(list, kind, live) / 1000);
   return { position: Math.min(end, Math.max(lower, target)), floorCut: target < lower };
 }
 

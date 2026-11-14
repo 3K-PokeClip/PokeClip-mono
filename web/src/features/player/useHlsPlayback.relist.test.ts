@@ -14,6 +14,7 @@ interface Fragment {
   start: number;
   duration: number;
   programDateTime: number;
+  gap?: boolean;
 }
 
 interface Details {
@@ -268,5 +269,31 @@ describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)
     });
     expect(onSeekRequest).not.toHaveBeenCalled();
     expect(dated).toBe('unknown');
+  });
+
+  it('⑨ 끝난 목록(live 거짓)은 하한 여유가 없다 — 이어 볼 자리(영상 2초)에서 받고 startFloorCut 거짓', async () => {
+    const ended: Details = { ...details(F), live: false };
+    const { hls, onListLoaded } = await boot(sourceOf(F + 2_000), ended);
+    expect(hls.startLoad.mock.calls).toEqual([[2]]);
+    expect(cutsOf(onListLoaded)).toEqual([false]);
+  });
+
+  it('⑩ 맨 앞 GAP 다시보기가 첫 버퍼 전 치명 망 오류로 한 번 다시 받으면 정해 둔 첫 내용 조각(영상 8초)에서 받는다', async () => {
+    const ended = details(F);
+    const headGap: Details = {
+      ...ended,
+      live: false,
+      fragments: ended.fragments.map((frag, i) => (i < 2 ? { ...frag, gap: true } : frag)),
+    };
+    const { hls } = await boot(sourceOf(null, 'vod'), headGap);
+    expect(hls.startLoad.mock.calls).toEqual([[8]]);
+    act(() =>
+      hls.trigger(FakeHls.Events.ERROR, {
+        type: FakeHls.ErrorTypes.NETWORK_ERROR,
+        details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
+        fatal: true,
+      }),
+    );
+    expect(hls.startLoad.mock.calls).toEqual([[8], [8]]);
   });
 });

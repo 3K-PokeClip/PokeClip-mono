@@ -106,8 +106,8 @@ export interface GlassPlayerProps {
   /** 다시보기가 받아 둔 자리(startAtSeconds)를 적용했다 — 부른 쪽이 받아 둔 자리를 비운다(POK-546) */
   onStartApplied?: () => void;
   /**
-   * 회차 다시보기 재생기의 첫 소리 상태 — 세션이 past 로 닫힐 때 세션 재생기에서 넘겨받은 값(POK-547). 재생기가 설 때 첫 재생
-   * 전에 싣는다. 없으면 기본(무음 · 70)
+   * 회차 다시보기 재생기의 첫 소리 상태 — 세션이 past 로 닫힐 때 세션 재생기에서 넘겨받은 값, 다시 서는 재생기는 부른 쪽이
+   * 기억한 값(onVodSoundChange — POK-547). 재생기가 설 때 첫 재생 전에 싣는다. 없으면 기본(무음 · 70)
    */
   vodSound?: PlayerSound | null;
   /**

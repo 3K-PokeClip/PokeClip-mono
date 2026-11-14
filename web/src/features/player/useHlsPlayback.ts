@@ -169,8 +169,8 @@ export interface PlaybackHooks extends PositionHooks {
   /** 지금 세션이 고갈을 보라고 하나 — 받기를 멈춘 순간 지금 세션 상태로 읽는다(POK-547) */
   watchesDrain?: () => boolean;
   /**
-   * 새 영상 노드의 첫 소리 상태 — 다시보기로 넘길 때 옛 노드에서 읽은 값(POK-547). 재생기가 설 때 한 번 읽는다. 없으면 지금
-   * 기본(무음 · 70)이다
+   * 새 영상 노드의 첫 소리 상태 — 다시보기로 넘길 때 옛 노드에서 읽은 값, 다시 서는 다시보기 재생기는 부른 쪽이 기억한 값
+   * (onSoundChange — POK-547). 재생기가 설 때 한 번 읽는다. 없으면 지금 기본(무음 · 70)이다
    */
   initialSound?: PlayerSound | null;
   /**
@@ -412,9 +412,19 @@ export function useHlsPlayback(
       if (sessionActive()) {
         const axis = readAxis();
         if (axis === null) return;
-        // 왼쪽 끝을 넘는 이동은 막대 왼쪽 끝 요청이다(Home 과 같은 자리 — POK-573)
-        if (axis.behindSeconds + deltaSeconds >= axis.windowSeconds) requestSeek(axis.barLowerMs);
-        else seekToBehind(axis.behindSeconds + deltaSeconds);
+        if (axis.atMs === null) {
+          // 왼쪽 끝을 넘는 이동은 막대 왼쪽 끝 요청이다(Home 과 같은 자리 — POK-573)
+          if (axis.behindSeconds + deltaSeconds >= axis.windowSeconds) {
+            requestSeek(axis.barLowerMs);
+          } else {
+            seekToBehind(axis.behindSeconds + deltaSeconds);
+          }
+          return;
+        }
+        // 재생 위치의 실제 시각에서 잰다 — 시차 · 창 폭은 표시 상한 1시간에서 잘려, 창이 그보다 넓으면 왼쪽 끝 근처의
+        // 이동이 잘린 만큼 어긋난다(POK-573). 막대 왼쪽 끝 · 끝 밖은 그 끝이다
+        const targetMs = Math.min(axis.edgeMs, axis.atMs - deltaSeconds * 1000);
+        requestSeek(Math.max(axis.barLowerMs, targetMs));
         return;
       }
       const range = dvrRange(video.seekable);
@@ -442,12 +452,8 @@ export function useHlsPlayback(
         if (axis === null || ask === undefined) return 'unknown';
         // 되감기 · 다시보기는 시크바 왼쪽 끝(첫 내용 조각 — POK-573)까지다. 라이브는 되감기가 준비됐으면 그 목록의 첫
         // 시각까지, 아니면 지금 목록의 첫 조각까지만이다. 창 하한 여유 안쪽은 세션이 하한으로 옮기고 알린다. 카드 초는 정각 초로
-        // 내린 값이라 1초까지는 봐준다(경계의 카드가 실제로는 창 안이다)
-        const lowerMs =
-          sourceRef.current.kind === 'live'
-            ? Math.min(hooksRef.current.axisLowerMs ?? Infinity, axis.list.firstMs)
-            : axis.barLowerMs;
-        if (epochMs + CARD_SECOND_SLACK_MS < lowerMs) return 'outside';
+        // 내린 값이라 1초까지는 봐준다(경계의 카드가 실제로는 창 안이다). 이 문턱이 곧 시크바 왼쪽 끝(barLowerMs)이다
+        if (epochMs + CARD_SECOND_SLACK_MS < axis.barLowerMs) return 'outside';
         ask(epochMs, axis.view);
         return 'moved';
       }
@@ -977,8 +983,16 @@ export function useHlsPlayback(
           // 최소 복구: 각 1회만 시도, 재발 시 정리하고 영상 위에 알린다
           if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && !recoveredNetwork) {
             recoveredNetwork = true;
+            // 기동 전이면 정해 둔 받기 위치(load)에서 다시 받는다 — 인자 없는 startLoad 는 재생점 0 에서 hls.js 가 자리를
+            // 고르게 해(다시보기면 영상 0초) 맨 앞 GAP 다시보기가 다시 GAP 에서 멎는다. 기동 뒤에는 장부가 비어 지금처럼
+            // hls.js 가 재생점에서 받는다
+            const restartAt = load.current();
             load.rememberPlayhead();
-            hls.startLoad();
+            if (restartAt === null) {
+              hls.startLoad();
+            } else {
+              hls.startLoad(restartAt);
+            }
             return;
           }
           if (data.type === HlsCtor.ErrorTypes.MEDIA_ERROR && !recoveredMedia) {
