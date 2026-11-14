@@ -31,7 +31,7 @@ export function isoMs(iso: string | null): number | null {
 /**
  * 회차 경로를 한 번 묻는다(POK-568). REWIND_REQUEST_TIMEOUT_MS 안에 답이 없으면 끊고 「잠시 불가」다 — 화면 폴링
  * (useRewindStatus)과 같은 시한이다. 쿼리가 끊기면(내려감 · 채널 전환) 요청도 끊고 던진다: react-query 가 그 주기를 버린다.
- * apiFetch 밖 요청이라 직접 알린다: 목록이 이 답을 기다리니 채널 전환 화면도 기다린다
+ * apiFetch 밖 요청이라 직접 알린다: 지난 방송 목록 · 홈 격자가 이 답을 기다리니 채널 전환 화면도 기다린다
  */
 export async function askRound(
   url: string,
@@ -62,7 +62,7 @@ export async function askRound(
 /**
  * 이번 주기에 회차 경로를 물을 방송과 그 경로(POK-568). 물을 수 있는 방송은 ended · 보관 만료 아님 · 표지가 아직 안 굳음
  * (isRowVodSettled) · 경로를 만들 수 있음(제어면 주소 · 키 꼴)이고, 그중 pickRoundAsks 가 고른 것만 묻는다. 제어면 주소가
- * 없으면 비어 표지는 「VOD 준비 중」에 머문다
+ * 없으면 비어 표지는 준비 중에 머문다(목록 「VOD 준비 중」 · 홈 「다시 보기 준비 중」 — 홈은 끝난 지 한 시간 안만 묻고 보인다)
  */
 export function pickRoundUrls(
   all: readonly RoundAskRow[],

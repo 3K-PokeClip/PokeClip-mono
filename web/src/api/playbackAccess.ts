@@ -62,8 +62,8 @@ function obtain(
 }
 
 /**
- * 녹화를 부르기 직전에 받아 둔다(편집기). 받아 둔 것이 쓸 만하거나 받을 필요가 없으면(녹화 재생 서버 주소가 없는 곳 포함) null이라
- * 부른 쪽이 기다리지 않고 바로 요청한다. 실패는 기억하지 않는다
+ * 편집기가 원천 목록 · 창 조각을 부르기 직전에 받아 둔다. 받아 둔 것이 쓸 만하거나 받을 필요가 없으면(출입증을 받지 않는 구성 —
+ * playbackConfigured 거짓 — 포함) null이라 부른 쪽이 기다리지 않고 바로 요청한다. 실패는 기억하지 않는다
  */
 export function ensurePlaybackAccess(
   streamId: string,
@@ -105,7 +105,8 @@ export function ensureMediaAccess(mediaKey: string): Promise<PlaybackAccessResul
 }
 
 /**
- * 영상 요청(/list · /get · 라이브와 다시보기)이 403이면 그 키의 쿠키가 브라우저에 없다(다른 탭 · 쿠키 한도 · 사용자가 지움).
+ * 영상 요청(라이브 · 되감기 · 다시보기 재생기, 편집기의 원천 목록 · 창 조각)이 403이면 그 키의 쿠키가 브라우저에 없다(다른 탭 ·
+ * 쿠키 한도 · 사용자가 지움).
  * 받아 둔 출입증을 버려 다음에 다시 받는다. 받는 중인 것은 버리지 않는다(곧 새 쿠키가 온다). 어느 쪽이든 403을 들었다고
  * 적어 둔다: 라이브 화면은 그 표시를 보고 403에 멎은 재생기를 새로 세운다. 받는 중이라고 안 적으면 새 쿠키가 와도 멎은 채였다
  * (POK-337 로컬 리뷰)
@@ -154,7 +155,7 @@ export async function recoverForbiddenRecording(url: string, mediaKey: string): 
 
 /**
  * 받아 둔 것을 다 비운다: 계정이 바뀌면 앞 계정이 받은 출입증을 다음 계정 몫으로 세지 않는다. 화면 시험은 모듈을 새로 읽지 않아 시험
- * 사이에도 부른다. 쿠키 표시(mediaPlayback의 실음 여부)는 그대로 둔다
+ * 사이에도 부른다. 쿠키 표시(mediaAccess의 실음 여부)는 그대로 둔다
  */
 export function forgetPlaybackAccess(): void {
   cache.clear();
