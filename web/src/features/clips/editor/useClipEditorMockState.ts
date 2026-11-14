@@ -67,6 +67,18 @@ import type { TrackPreview, TrackPreviewStatus } from './trackAudio/useTrackPrev
 import { regionCropsOf, type EditorLook } from './recipeLook';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
 import {
+  editRangeEdge,
+  playheadInput,
+  thumbnailSecondsOf,
+  useHeadsVersion,
+  withDisplayRange,
+  type EndpointContext,
+} from './editorEndpoints';
+import type { EdgeInput } from './source/cutPosition';
+import type { HeadCache } from './source/fileHeadProbe';
+import type { EndpointRange } from './source/rangeEndpoints';
+import type { ThumbnailChoice } from './source/sceneOffset';
+import {
   canRedo as historyCanRedo,
   canUndo as historyCanUndo,
   createHistory,
@@ -81,8 +93,8 @@ import {
   formatRangeGauge,
   formatTimecodeTenths,
   rangeGaugeFraction,
+  secondsSinceStart,
   rangeLengthSeconds,
-  resolveRangeEdge,
   clampTimelineHeight,
   zoomedView,
   lowestUsefulZoom,
@@ -111,6 +123,8 @@ const NO_PLAYBACK: ClockedPlayback = {
   endScrub: noop,
   setRate: noop,
   setBounds: noop,
+  pickAtPlayhead: () => null,
+  pickAtS: () => null,
 };
 
 /**
@@ -227,7 +241,13 @@ export type SubtitleState =
  * 재생 위치·활성 도구·줌은 "보는 방식"이라 여기 없다.
  */
 export interface EditorRecipe {
+  /** 구간(편집기 표시 초 S). 실제 모드면 끝점(endpoints)의 표시 초다 */
   range: ClipRange;
+  /**
+   * 실제 모드의 끝점(설계 prw2 3.5) — 저장 값은 이것이 정한다(savable). 실행취소는 이 값을 통째로 되돌린다. 목업 · 카드 바로
+   * 저장은 없다(구간 초가 곧 값)
+   */
+  endpoints?: EndpointRange;
   layout: EditorLayout;
   /** 분할 상단 지분(%) — 시안 칩 50 / 60 / 70 */
   splitRatio: number;
@@ -371,8 +391,15 @@ export interface EditorSource {
    * 편집기는 하이라이트 하나를 다듬는 자리다 — 핸들이 방송 전체를 돌아다니면 다른 장면을 자르게 된다.
    */
   minSeconds?: number;
+  /**
+   * 이번 방송 시작이 놓인 편집기 초 — 눈금 · 접힌 요약 · 손잡이 표기가 이것을 빼서 방송 시작부터 적는다(kty 2026-11-14 (가)).
+   * 편집기 0초가 서버 기준점이면 같은 송출 키로 한 앞 방송들의 길이만큼 크다(ADR-079). 없으면 0(편집기 0초가 곧 방송 시작)
+   */
+  startOnAxisSeconds?: number;
   /** 처음 구간(방송 시작 기준 초) */
   range: ClipRange;
+  /** 처음 끝점과 그 셈의 문맥(편집기 0초 · ② 머리 캐시). 실제 영상 원천이 있을 때만 */
+  endpoints?: { initial: EndpointRange; base: number; heads: HeadCache };
 }
 
 /** 헤더의 영상 상태 알약(POK-492) — 상태 판정과 다시 올리기는 컨테이너가 서버 응답으로 채운다 */
@@ -387,9 +414,17 @@ export interface EditorClipStatus {
 
 /** 저장·주문을 실제 서버에 잇는 자리 */
 export interface EditorActions {
-  saveDraft?: (recipe: EditorRecipe) => void;
-  /** thumbnailSeconds: 편집기에서 고른 썸네일 장면(소스 축 초). 안 골랐으면 null(POK-389) */
-  requestUpload?: (recipe: EditorRecipe, thumbnailSeconds: number | null) => void;
+  /**
+   * again: 이 동작을 그 순간의 레시피로 처음부터 다시 부른다 — 저장이 막혔을 때 「다시 시도」 가 쓴다. 처음 받은 레시피를 다시
+   * 쓰면 그 사이 고친 화면 · 새 저장을 옛 내용으로 덮는다(E4b-3 r1 HIGH)
+   */
+  saveDraft?: (recipe: EditorRecipe, again: () => void) => void;
+  /** thumbnailSeconds: 편집기에서 고른 썸네일 장면(소스 축 초). 안 골랐으면 null(POK-389). again 은 saveDraft 와 같다 */
+  requestUpload?: (
+    recipe: EditorRecipe,
+    thumbnailSeconds: number | null,
+    again: () => void,
+  ) => void;
   /**
    * 창 코드를 따로 받을 때 그 사이를 기다리는 문: 준비되면 `open`을 부른다. 허브는 `open` 안에서 레시피를 읽는다 — 누른 순간에
    * 읽으면 받는 사이 고친 것이 창에 안 실려 화면과 다른 영상이 나온다. 없으면 바로 연다
@@ -524,7 +559,8 @@ export interface ClipEditorMockState {
   rangeLengthLabel: string;
   rangeGaugeLabel: string;
   rangeGaugeFraction: number;
-  setRangeEdge: (edge: 'start' | 'end', seconds: number) => void;
+  /** 끌기 · 화살표는 S({ kind: 's' })를 넘긴다 — 창 안 자리면 훅이 고름으로 바꾼다(editorEndpoints) */
+  setRangeEdge: (edge: 'start' | 'end', input: EdgeInput) => void;
   /**
    * 드래그 시작·끝 — 그 사이의 변경은 실행취소 한 칸으로 묶이고 타임라인 창이 고정된다.
    * 시작은 토큰을 돌려준다. 끝에 토큰을 주면 **그 제스처가 아직 최신일 때만** 닫는다 — blur 처럼 늦게
@@ -642,6 +678,8 @@ export interface ClipEditorMockState {
 
   // 타임라인 (보는 방식 — 되돌리기 대상 아님)
   sourceDurationSeconds: number;
+  /** 이번 방송 시작이 놓인 편집기 초. 눈금 · 요약은 이것을 빼서 적는다(EditorSource.startOnAxisSeconds) */
+  startOnAxisSeconds: number;
   /** 소스의 가로/세로. 크롭 사각형이 영상 위에 정확히 겹치려면 판이 이 비율이어야 한다 */
   sourceAspect: number;
   view: TimelineView;
@@ -692,18 +730,31 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 실제 모드에서는 목업 콘텐츠(자막·추천·이미지·BGM·효과음)를 비운다
   const subtitles = real ? savedSubtitles : MOCK_SUBTITLES;
 
+  // 끝점 문맥은 소스와 같이 마운트 값이다
+  const [endpointCtx] = useState<EndpointContext | null>(() =>
+    source.endpoints === undefined
+      ? null
+      : { base: source.endpoints.base, heads: source.endpoints.heads },
+  );
   const [history, setHistory] = useState<History<EditorRecipe>>(() => {
     const recipe = initialRecipe(
       source.range,
       options.initialTrackMuted,
       options.initialTrackVolumes,
     );
-    const withLook = { ...recipe, ...options.initialLook };
+    const withLook = { ...recipe, ...options.initialLook, endpoints: source.endpoints?.initial };
     return createHistory(
       initialLayout === undefined ? withLook : { ...withLook, layout: initialLayout },
     );
   });
-  const recipe = history.present;
+  // 구간은 끝점의 표시 초다 — 고름은 ② 머리가 오면 다시 그린다
+  const headsVersion = useHeadsVersion(endpointCtx?.heads ?? null);
+  const recipe = useMemo(
+    () => withDisplayRange(history.present, endpointCtx),
+    // 머리 캐시는 값이 바뀌어도 같은 객체다 — 바뀐 수(headsVersion)로 다시 셈한다
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- headsVersion 은 캐시 바뀜을 알리는 수라 본문이 읽지 않는다
+    [history.present, endpointCtx, headsVersion],
+  );
 
   // 재생은 어댑터가 맡는다. 주입이 없으면 목업 시뮬레이션 — 훅은 늘 호출하고(조건부 호출 금지)
   // 쓸 쪽만 고른다. 안 쓰이는 쪽은 playing=false 라 타이머도 걸지 않는다.
@@ -851,34 +902,29 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     setRate(speed);
   }, [setRate, speed]);
 
+  const { pickAtS, pickAtPlayhead } = playback;
   const setRangeEdge = useCallback(
-    (edge: 'start' | 'end', seconds: number) => {
-      // 왼쪽 끝을 먼저 막는다 — 오른쪽 끝과 길이(5초~3분)는 resolveRangeEdge 가 본다
-      const result = resolveRangeEdge(
+    (edge: 'start' | 'end', input: EdgeInput) => {
+      // 경계 밖이면 값을 그대로 둔다 — 핸들이 거기서 멈추는 것이 곧 안내다(범례가 5초~3:00을 미리 적어 둔다). 원본 끝에 닿아
+      // 같은 값이면 아무 일도 하지 않는다
+      const next = editRangeEdge(
         edge,
-        Math.max(source.minSeconds ?? 0, seconds),
-        recipe.range,
-        source.durationSeconds,
+        input,
+        recipe,
+        { minSeconds: source.minSeconds ?? 0, durationSeconds: source.durationSeconds },
+        endpointCtx,
+        pickAtS,
       );
-      const rejection = result.rejection;
-      // 경계 밖이면 값을 그대로 둔다 — 핸들이 거기서 멈추는 것이 곧 안내다
-      // (범례가 5초~3:00을 미리 적어 둔다)
-      if (rejection !== null) return;
-      // 원본 끝에 닿아 같은 값으로 잘렸으면 아무 일도 하지 않는다 —
-      // resolveRangeEdge는 값이 같아도 새 객체를 주므로 여기서 걸러야 한다
-      if (
-        result.range.startSeconds === recipe.range.startSeconds &&
-        result.range.endSeconds === recipe.range.endSeconds
-      ) {
-        return;
-      }
-      commit((current) => ({ ...current, range: result.range }));
+      if (next === null) return;
+      commit((current) => ({ ...current, ...next }));
     },
-    [commit, recipe.range, source.minSeconds, source.durationSeconds],
+    [commit, recipe, source.minSeconds, source.durationSeconds, endpointCtx, pickAtS],
   );
 
   // 썸네일 장면은 업로드 정보라 편집 기록(실행취소)에 넣지 않는다. 구간이 줄어 밖으로 나가면 고른 것이 없는 셈이다
-  const [pickedThumbnail, setPickedThumbnail] = useState<number | null>(null);
+  const [thumbnailChoice, setThumbnailChoice] = useState<ThumbnailChoice | null>(null);
+  const pickedThumbnail =
+    thumbnailChoice === null ? null : thumbnailSecondsOf(thumbnailChoice, endpointCtx);
   const thumbnailSeconds =
     pickedThumbnail !== null &&
     pickedThumbnail >= recipe.range.startSeconds &&
@@ -887,19 +933,29 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       : null;
   const thumbnailRef = useRef(thumbnailSeconds);
   thumbnailRef.current = thumbnailSeconds;
+  // 「다시 시도」(again)는 누른 때의 동작으로 간다 — 처음 누른 때의 동작(옛 판정 문맥)을 다시 쓰지 않는다
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
   // 구간 판정은 재생 위치를 그대로 봐야 한다: 허브의 값은 재생 중에 낡아 구간 밖에서도 고를 수 있게 된다. 구간을 넘나들 때만 깨어난다
   const canPickThumbnail = usePlaybackValue(
     clock,
     (seconds) => seconds >= recipe.range.startSeconds && seconds < recipe.range.endSeconds,
   );
   // 재생 위치는 누른 순간에 읽는다: 콜백이 위치에 묶이면 전역 키 리스너가 해제·재등록을 반복한다
-  const pickThumbnail = useCallback(() => setPickedThumbnail(clock.getSeconds()), [clock]);
+  // 찍기 · 썸네일 고르기는 재생 위치에 보이는 프레임을 고른다(창 밖 · 목업이면 그 초)
+  const pickThumbnail = useCallback(
+    () => setThumbnailChoice(playheadInput(pickAtPlayhead(), clock.getSeconds())),
+    [clock, pickAtPlayhead],
+  );
 
   const markIn = useCallback(
-    () => setRangeEdge('start', clock.getSeconds()),
-    [clock, setRangeEdge],
+    () => setRangeEdge('start', playheadInput(pickAtPlayhead(), clock.getSeconds())),
+    [clock, pickAtPlayhead, setRangeEdge],
   );
-  const markOut = useCallback(() => setRangeEdge('end', clock.getSeconds()), [clock, setRangeEdge]);
+  const markOut = useCallback(
+    () => setRangeEdge('end', playheadInput(pickAtPlayhead(), clock.getSeconds())),
+    [clock, pickAtPlayhead, setRangeEdge],
+  );
 
   const generateSubtitles = useCallback(() => {
     // 실제 모드는 만들어 줄 백엔드(AI 자막, 2번 몫)가 아직 없다 — 상태를 바꾸지 않고 안내만 한다
@@ -986,6 +1042,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const view = frozenView ?? liveView;
 
   const length = rangeLengthSeconds(recipe.range);
+  const startOnAxis = source.startOnAxisSeconds ?? 0;
   const titlesLocked = subtitleStatus !== 'ready';
 
   // 레이아웃을 바꾸면 영역 id 가 통째로 달라진다 — 없는 id 를 고른 채로 두면 아무것도 선택되지
@@ -994,6 +1051,28 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     () => layoutRegions(recipe.layout, recipe.splitRatio).map((region) => region.id),
     [recipe.layout, recipe.splitRatio],
   );
+
+  // 저장·주문은 컨테이너가 준 실제 동작으로 간다. 없으면 목업 안내다. 다시 시도 콜백으로 자기 자신을 넘긴다
+  const saveDraft = useCallback(() => {
+    const save = actionsRef.current?.saveDraft;
+    if (save) save(presentRef.current, saveDraft);
+    else toast({ tone: 'success', title: '편집본을 저장했어요' });
+  }, [toast]);
+  const requestUpload = useCallback(() => {
+    const current = actionsRef.current;
+    const request = current?.requestUpload;
+    if (request === undefined) {
+      toast({
+        tone: 'info',
+        title: '업로드는 아직 준비 중이에요',
+        description: '지금은 화면만 있는 목업이에요.',
+      });
+      return;
+    }
+    const open = () => request(presentRef.current, thumbnailRef.current, requestUpload);
+    if (current?.whenUploadReady) current.whenUploadReady(open);
+    else open();
+  }, [toast]);
 
   return {
     clipTitle: source.clipTitle,
@@ -1014,25 +1093,8 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
     undo: useCallback(() => setHistory(undoHistory), []),
     redo: useCallback(() => setHistory(redoHistory), []),
-    // 저장·주문은 컨테이너가 준 실제 동작으로 간다. 없으면 목업 안내다
-    saveDraft: useCallback(() => {
-      if (actions?.saveDraft) actions.saveDraft(presentRef.current);
-      else toast({ tone: 'success', title: '편집본을 저장했어요' });
-    }, [actions, toast]),
-    requestUpload: useCallback(() => {
-      const request = actions?.requestUpload;
-      if (request === undefined) {
-        toast({
-          tone: 'info',
-          title: '업로드는 아직 준비 중이에요',
-          description: '지금은 화면만 있는 목업이에요.',
-        });
-        return;
-      }
-      const open = () => request(presentRef.current, thumbnailRef.current);
-      if (actions?.whenUploadReady) actions.whenUploadReady(open);
-      else open();
-    }, [actions, toast]),
+    saveDraft,
+    requestUpload,
 
     playing,
     togglePlay: playback.togglePlay,
@@ -1049,8 +1111,10 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
 
     range: recipe.range,
     rangeLengthSeconds: length,
-    rangeStartLabel: formatTimecodeTenths(recipe.range.startSeconds),
-    rangeEndLabel: formatTimecodeTenths(recipe.range.endSeconds),
+    rangeStartLabel: formatTimecodeTenths(
+      secondsSinceStart(recipe.range.startSeconds, startOnAxis),
+    ),
+    rangeEndLabel: formatTimecodeTenths(secondsSinceStart(recipe.range.endSeconds, startOnAxis)),
     rangeLengthLabel: formatLengthLabel(length),
     rangeGaugeLabel: formatRangeGauge(length),
     rangeGaugeFraction: rangeGaugeFraction(length),
@@ -1334,6 +1398,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 소스 길이의 정본은 목업 소스 하나다 — 구간 핸들 경계·타임라인 창도 같은 값을 본다.
     // 어댑터의 durationSeconds 는 어댑터 자신의 클램프용이라, 실제 소스가 오기 전엔 여기로 안 끌어온다
     sourceDurationSeconds: source.durationSeconds,
+    startOnAxisSeconds: startOnAxis,
     sourceAspect: MOCK_SOURCE.width / MOCK_SOURCE.height,
     view,
     activeTool,

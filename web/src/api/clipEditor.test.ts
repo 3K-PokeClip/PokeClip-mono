@@ -487,23 +487,6 @@ describe('방송 한 줄 기억', () => {
     expect((await fetchBroadcast('x', undefined, { fresh: true }))?.status).toBe('ended');
   });
 
-  it('fresh가 조건이면 기억해 둔 줄이 그 조건에 맞을 때만 다시 읽는다', async () => {
-    const spy = stubFetch((url) =>
-      url.includes('state=live')
-        ? listOf()
-        : listOf(finishedRow('a'), { ...finishedRow('b'), timelineOriginAt: null }),
-    );
-
-    await fetchBroadcast('a');
-    const calls = spy.mock.calls.length;
-    // 기준점이 찬 줄은 기억한 것을 쓴다(목록을 다시 걷지 않는다)
-    await fetchBroadcast('a', undefined, { fresh: (row) => !row.timelineOriginAt });
-    expect(spy).toHaveBeenCalledTimes(calls);
-    // 기준점 없는 줄은 다시 읽는다
-    await fetchBroadcast('b', undefined, { fresh: (row) => !row.timelineOriginAt });
-    expect(spy.mock.calls.length).toBeGreaterThan(calls);
-  });
-
   it('기다리는 쪽이 끊어도 같이 기다리던 다른 쪽은 답을 받는다', async () => {
     stubFetch((url) => (url.includes('state=live') ? listOf(liveRow('x')) : listOf()));
     const abort = new AbortController();

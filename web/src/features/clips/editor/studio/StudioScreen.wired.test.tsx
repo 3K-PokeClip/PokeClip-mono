@@ -8,6 +8,9 @@ import { act, StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient, renderWithProviders } from '@/test/testProviders';
+import { clearEditorMedia, segmentTrackKey, segmentTracks } from '../editorMedia';
+import * as rangeEndpoints from '../source/rangeEndpoints';
+import { remuxWindow } from '../source/remuxWindow';
 import { StudioScreen } from './StudioScreen';
 
 // 실제 모드 편집기(POK-251) — 주소(?stream=&card= · ?recipe=)로 열어 clip에 저장·주문하는 길을 잰다.
@@ -67,6 +70,25 @@ vi.mock('@/api/mediaPlayback', async (importOriginal) => {
   };
 });
 
+// 편집기 영상 원천(POK-473) — ③ 되감기 목록 창. 다시 싸기는 조각 seq 로 표를 짓는 가짜다(조각마다 4초 · 첫 DTS = seq·4초).
+// 제어면 주소(NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL)가 없는 시험에서는 원천이 없어 미리보기 없이 연다(지금까지와 같다)
+const remux = vi.hoisted(() => ({
+  of: (seqs: readonly number[]) => {
+    const segments = seqs.map((seq) => {
+      const dts = seq * 4;
+      const frames = Array.from({ length: 8 }, (_, i) => ({ pts: dts + i * 0.5, dur: 0.5 }));
+      return { seq, videoDts: dts, frames, mediaStart: dts, mediaEnd: dts + 4 };
+    });
+    return { blob: new Blob(['mp4']), shiftSeconds: segments[0]!.videoDts, segments };
+  },
+}));
+vi.mock('../source/remuxWindow', () => ({
+  remuxWindow: vi.fn(async (bytes: { segments: { seq: number }[] }) =>
+    remux.of(bytes.segments.map((seg) => seg.seq)),
+  ),
+}));
+const CONTROL = 'https://media.example';
+
 // 업로드 창 코드 조각의 받기. 못 받는 때와 늦게 오는 때를 시험이 정한다
 const dialogChunk = vi.hoisted(() => ({
   broken: false,
@@ -90,6 +112,8 @@ const server = vi.hoisted(() => ({
   /** 출입증 답(POK-317) */
   playbackAccess: 'grant' as 'grant' | 'fail' | 'expired',
   cardWindow: { startMs: 60_000, endMs: 72_400 },
+  /** 저장된 편집본 31 의 컷(방송 시작부터 ms) */
+  savedCut: { inMs: 120_000, outMs: 150_000 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
   /** 저장된 편집본의 판 — 1이면 옛 모양(crop 하나), 2면 편집기가 지금 저장하는 모양 */
   savedSchema: 2 as 1 | 2,
@@ -123,6 +147,20 @@ const server = vi.hoisted(() => ({
   clipPoll: null as null | ((clipId: number) => Promise<Response>),
   /** 카드 열기 기록(POK-393)의 답 */
   openStatus: 204,
+  /** 회차 경로 답(제어면이 있을 때) — vod 면 목록이 서고, finalizing 이면 회차 정리 중 */
+  round: 'vod' as 'vod' | 'finalizing',
+  /** ③ 목록의 판 — null 이면 판 NULL(태그 없음 · 저장에 ② 머리가 든다), 'v2' 면 판 2 태그를 싣는다 */
+  timing: null as 'v2' | null,
+  /** 카드의 플레이어 장면 칸(playerAtMs). undefined 면 칸 없음 */
+  playerAtMs: undefined as number | null | undefined,
+  /** 카드의 창 두 끝 칸(playerWindow · 목록 PDT 축 epoch ms). undefined 면 칸 없음 */
+  playerWindow: undefined as { startMs: number; endMs: number } | null | undefined,
+  /** ③ 목록 PDT 간격(ms) — EXTINF 4초보다 길면 경계마다 죽은 자리(판 NULL 래칫)가 생긴다 */
+  pdtStepMs: 4_000,
+  /** 이 seq 앞에 DISCONTINUITY 를 넣어 런을 끊는다. null 이면 런 하나 */
+  breakBeforeSeq: null as number | null,
+  /** ③ 목록 첫 PDT 가 방송 시작보다 늦은 만큼(ms) */
+  listLeadMs: 0,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -153,7 +191,40 @@ function recipeSnapshot(id: number, version: number, recipe: unknown) {
   };
 }
 
+/** 영상 목록 — 방송 시작부터 4초 조각 100개(seq 0–99 · 400초). 카드 창(60–72.4초)과 여유를 넉넉히 덮는다 */
+function vodPlaylist(listUrl: string): string {
+  const dir = listUrl.replace(/\/index\.m3u8$/, '');
+  const lines = ['#EXTM3U', '#EXT-X-VERSION:6', `#EXT-X-MAP:URI="${dir}/init/i.mp4"`];
+  if (server.timing === 'v2') lines.push('#EXT-X-POKECLIP-TIMING:2');
+  for (let seq = 0; seq < 100; seq += 1) {
+    if (seq === server.breakBeforeSeq) lines.push('#EXT-X-DISCONTINUITY');
+    const pdt = new Date(STARTED_AT + server.listLeadMs + seq * server.pdtStepMs).toISOString();
+    lines.push(`#EXT-X-PROGRAM-DATE-TIME:${pdt}`);
+    lines.push('#EXTINF:4.000,', `${dir}/seg/${String(seq).padStart(7, '0')}.m4s`);
+  }
+  return `${lines.join('\n')}\n#EXT-X-ENDLIST\n`;
+}
+
+/** 되감기 제어면 · ③ 목록 · 조각 */
+function mediaAnswer(url: string): Response {
+  const round = /\/api\/streams\/([^/]+)\/rounds\/([^/]+)\/rewind$/.exec(url);
+  if (round) {
+    const listUrl = `${CONTROL}/vod/${round[1]}/${round[2]}/index.m3u8`;
+    const ready = server.round === 'vod';
+    return jsonResponse(200, {
+      ready,
+      mode: 'vod',
+      url: ready ? listUrl : null,
+      firstPdt: ready ? new Date(STARTED_AT + server.listLeadMs).toISOString() : null,
+      headPdt: ready ? new Date(STARTED_AT + server.listLeadMs + 400_000).toISOString() : null,
+    });
+  }
+  if (url.endsWith('/index.m3u8')) return new Response(vodPlaylist(url), { status: 200 });
+  return new Response(new Uint8Array([1]), { status: 200 });
+}
+
 function handle(url: string, init?: RequestInit) {
+  if (url.startsWith(CONTROL)) return mediaAnswer(url);
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   const method = init?.method ?? 'GET';
@@ -170,6 +241,8 @@ function handle(url: string, init?: RequestInit) {
           source: 'chat-surge',
           streamTimestampMs: server.cardWindow.startMs + 5_000,
           window: server.cardWindow,
+          ...(server.playerAtMs === undefined ? {} : { playerAtMs: server.playerAtMs }),
+          ...(server.playerWindow === undefined ? {} : { playerWindow: server.playerWindow }),
           score: 80,
           evidence: null,
           eventSeq: 1,
@@ -184,7 +257,10 @@ function handle(url: string, init?: RequestInit) {
       streamId: STREAM_ID,
       creatorId: '9',
       recipeVersion: 2,
-      cut: { inAtMs: STARTED_AT + 120_000, outAtMs: STARTED_AT + 150_000 },
+      cut: {
+        inAtMs: STARTED_AT + server.savedCut.inMs,
+        outAtMs: STARTED_AT + server.savedCut.outMs,
+      },
       status: 'editing',
       broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
       latestClip: server.savedLatestClip,
@@ -194,7 +270,10 @@ function handle(url: string, init?: RequestInit) {
       recipe: {
         schemaVersion: server.savedSchema,
         streamId: STREAM_ID,
-        cut: { inAtMs: STARTED_AT + 120_000, outAtMs: STARTED_AT + 150_000 },
+        cut: {
+          inAtMs: STARTED_AT + server.savedCut.inMs,
+          outAtMs: STARTED_AT + server.savedCut.outMs,
+        },
         outputs: [
           ...(server.savedSquare
             ? [
@@ -259,6 +338,9 @@ function handle(url: string, init?: RequestInit) {
       : server.playbackAccess === 'expired'
         ? jsonResponse(410, { error: 'vod_expired' })
         : jsonResponse(500, { error: 'boom' });
+  // 창 소리 주소(② 머리 판독 행) — 이 시험의 ② 는 아직 없다(머리 missing · 배치는 근사)
+  if (path === `/api/clip/broadcasts/${STREAM_ID}/segments/audio-access` && method === 'POST')
+    return jsonResponse(200, { expiresAt: '2999-01-01T00:00:00Z', segments: [] });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks')
@@ -278,6 +360,13 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 beforeEach(() => {
   track.mockClear();
   server.cardWindow = { startMs: 60_000, endMs: 72_400 };
+  server.savedCut = { inMs: 120_000, outMs: 150_000 };
+  server.timing = null;
+  server.playerAtMs = undefined;
+  server.playerWindow = undefined;
+  server.pdtStepMs = 4_000;
+  server.breakBeforeSeq = null;
+  server.listLeadMs = 0;
   server.savedTracks = [{ trackId: 0, gain: 1 }];
   server.savedSchema = 2;
   server.savedOutput = null;
@@ -295,6 +384,7 @@ beforeEach(() => {
   server.savedLatestClip = null;
   server.clipPoll = null;
   server.openStatus = 204;
+  server.round = 'vod';
   spansAsked.length = 0;
   nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
@@ -310,6 +400,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   playbackOn.value = false;
   recordedSpans.value = null;
@@ -350,6 +441,27 @@ async function openFrom(search: string, client?: QueryClient) {
   return editorReady();
 }
 
+/**
+ * 카드로 연 편집기에서 두 끝을 한 번씩 정한다(같은 자리로 되돌림). 카드 범위는 칸 없는 카드의 지금 식(estimate)이라 저장 값이
+ * 아니다 — 사용자가 끝을 정해야 저장된다(POK-473 E4b-3). 이 시험들은 원천이 없어 창 밖 S 입력이라 그 자리 exact 가 된다
+ */
+async function setCardEnds() {
+  const user = userEvent.setup();
+  const start = screen.getByRole('slider', { name: '구간 시작점' });
+  const end = screen.getByRole('slider', { name: '구간 끝점' });
+  act(() => start.focus());
+  await user.keyboard('{ArrowRight}{ArrowLeft}');
+  act(() => end.focus());
+  await user.keyboard('{ArrowLeft}{ArrowRight}');
+}
+
+/** 카드로 열고 두 끝을 정한다 — 저장 · 영상 만들기를 보는 시험의 문 */
+async function openCard(search: string, client?: QueryClient) {
+  const save = await openFrom(search, client);
+  await setCardEnds();
+  return save;
+}
+
 /** 업로드 창의 공개 탭을 열고 「업로드」. 업로드 단추는 공개 탭에만 있다(POK-381) */
 async function uploadFromPublishTab(user: ReturnType<typeof userEvent.setup>) {
   const dialog = within(screen.getByRole('dialog', { name: '유튜브에 올리기' }));
@@ -386,70 +498,448 @@ async function renderPartsOf(index = 0) {
   };
 }
 
-describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
-  it('녹화는 방송 번호가 아니라 영상 경로의 키로 찾는다 — 방송 번호가 회차 번호면 그 이름의 녹화가 없다', async () => {
+/** 그 제목의 알림을 닫기 단추로 닫고 사라질 때까지 기다린다 */
+async function closeToastOf(title: string) {
+  const card = screen.getByText(title).closest('[data-toast-id]') as HTMLElement;
+  await userEvent.setup().click(within(card).getByRole('button', { name: '닫기' }));
+  await waitFor(() => expect(screen.queryByText(title)).not.toBeInTheDocument());
+}
+
+/** 그 꼴의 주소로 간 요청들 */
+function requestsTo(pattern: RegExp): string[] {
+  return fetchSpy.mock.calls.map(([url]) => String(url)).filter((url) => pattern.test(url));
+}
+
+/** 제어면이 있는 환경 — 원천이 서면 ③ 목록 창을 받는다. 영상 주소(createObjectURL)는 jsdom 에 없어 흉내 낸다 */
+/**
+ * 원천이 있는 편집기를 연다. 끝난 방송은 회차 답 · vod 목록까지 받아야 편집기 0초가 서서 본문이 마운트되므로 기본 기다림(1초)보다
+ * 길게 기다린다(시험 전체를 돌릴 때 기계가 바쁘면 넘었다)
+ */
+async function openWithSource(search: string) {
+  nav.search = search;
+  renderWithProviders(<StudioScreen />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled(), {
+    timeout: 10_000,
+  });
+}
+
+function withMediaControl() {
+  vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', CONTROL);
+  vi.stubGlobal(
+    'URL',
+    Object.assign(URL, { createObjectURL: () => 'blob:window', revokeObjectURL: () => undefined }),
+  );
+}
+
+describe('StudioScreen — 편집기 영상 원천(POK-473 · POK-233)', () => {
+  it('영상 목록은 방송 번호가 아니라 영상 경로의 키로 묻는다 — 방송 번호가 회차 번호면 그 이름의 목록이 없다', async () => {
+    withMediaControl();
     server.ingest = 'key-studio';
-    await openFrom(`?stream=${STREAM_ID}&card=5`);
-    expect(spansAsked).toEqual(['key-studio']);
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    await waitFor(() => expect(requestsTo(/\/index\.m3u8$/)).toHaveLength(1));
+    expect(requestsTo(/\/rewind$/)[0]).toBe(
+      `${CONTROL}/api/streams/key-studio/rounds/${STREAM_ID}/rewind`,
+    );
   });
 
-  it('칸을 모르는 옛 서버면 방송 번호로 찾는다', async () => {
-    await openFrom(`?stream=${STREAM_ID}&card=5`);
-    expect(spansAsked).toEqual([STREAM_ID]);
+  it('칸을 모르는 옛 서버면 방송 번호로 묻는다', async () => {
+    withMediaControl();
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    await waitFor(() => expect(requestsTo(/\/rewind$/)).not.toHaveLength(0));
+    expect(requestsTo(/\/rewind$/)[0]).toBe(
+      `${CONTROL}/api/streams/${STREAM_ID}/rounds/${STREAM_ID}/rewind`,
+    );
   });
 
-  it('녹화를 찾기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 녹화는 쿠키가 없으면 403)', async () => {
-    // 녹화 재생 서버가 있는 곳에서만 받는다. 모듈이 주소를 읽어 두므로 흉내 낸 함수만 주소가 있다고 답하게 한다
+  it('카드로 열면 그 창의 ③ 조각을 받고 녹화 재생 서버(/playback)는 부르지 않는다', async () => {
+    withMediaControl();
+    // 녹화 재생 서버가 있고 녹화도 있는 곳이다 — 옛 편집기는 여기서 /playback/ 으로 창을 받았다
+    playbackOn.value = true;
+    recordedSpans.value = [{ startMs: STARTED_AT, durationSeconds: 3_600 }];
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    // 카드 창 60–72.4초 ± 10초 = 50–82.4초 → 조각 12(48–52초) … 20(80–84초)
+    await waitFor(() => expect(requestsTo(/\.m4s$/)).toHaveLength(9));
+    expect(requestsTo(/\/playback\//)).toEqual([]);
+  });
+
+  it('트랙 미리 듣기가 다시 켜진다: 영상 창 조각이 덮는 범위의 소리 주소를 표지 없이 한 번 묻는다(c9′)', async () => {
+    withMediaControl();
+    // 판 2 창이라 ② 머리는 읽지 않는다 — 소리 주소를 묻는 것은 미리 듣기 하나다
+    server.timing = 'v2';
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        state = 'running';
+        currentTime = 0;
+        destination = {};
+        close = () => Promise.resolve();
+      },
+    );
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    // 창 조각 12(48–52초) … 20(80–84초) → [48초, 84초)
+    await waitFor(() => expect(requestsTo(/\/segments\/audio-access/)).toHaveLength(1));
+    const [asked] = requestsTo(/\/segments\/audio-access/);
+    const query = new URL(asked!, 'http://localhost').searchParams;
+    expect(Object.fromEntries(query)).toEqual({
+      fromMs: String(STARTED_AT + 48_000),
+      toMs: String(STARTED_AT + 84_000),
+    });
+  });
+
+  it('영상 창을 다시 싸다 실패하면 미리 받아 둔 소리도 닻을 더 기다리지 않고 「못 불러옴」을 알린다(c9′)', async () => {
+    withMediaControl();
+    server.timing = 'v2';
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        state = 'running';
+        currentTime = 0;
+        destination = {};
+        close = () => Promise.resolve();
+      },
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // 카드가 미리 받아 둔 창 조각 12–20 의 소리 — 영상 창은 받다 실패해 그 창의 닻이 오지 않는다
+    const buffer = { duration: 1, length: 1, sampleRate: 1, numberOfChannels: 1 } as AudioBuffer;
+    segmentTracks.set(segmentTrackKey(STREAM_ID, 12, 20), {
+      tracks: [[{ startSeconds: 0, buffer }]],
+      missingSeqs: [],
+      capture: 'none',
+      reuse: { segments: new Map(), capture: null, decoded: new Map() },
+    });
+    vi.mocked(remuxWindow).mockRejectedValueOnce(new Error('재다중화 패킷 수가 다르다'));
+    try {
+      await openWithSource(`?stream=${STREAM_ID}&card=5`);
+      expect(
+        await screen.findByText('트랙별 미리 듣기를 못 불러왔어요 · 영상 소리로 들려요'),
+      ).toBeInTheDocument();
+    } finally {
+      clearEditorMedia();
+    }
+  });
+
+  it('목록을 받기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 목록은 쿠키가 없으면 403)', async () => {
+    withMediaControl();
     playbackOn.value = true;
     server.ingest = 'key-studio';
-    await openFrom(`?stream=${STREAM_ID}&card=5`);
-    expect(
-      fetchSpy.mock.calls.filter(
-        ([url, init]) =>
-          url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
-      ),
-    ).toHaveLength(1);
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    await waitFor(() => expect(requestsTo(/\/index\.m3u8$/)).toHaveLength(1));
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url));
+    const access = urls.indexOf(`/api/clip/broadcasts/${STREAM_ID}/playback-access`);
+    expect(access).toBeGreaterThanOrEqual(0);
+    expect(access).toBeLessThan(urls.findIndex((url) => url.endsWith('/index.m3u8')));
   });
 
-  it('보관 기간이 지난 방송이면 그렇다고 알린다: 녹화를 찾지 않는다(POK-335)', async () => {
+  it('보관 기간이 지난 방송이면 미리보기 아래에 그렇다고 알린다: 목록을 받지 않는다(POK-335)', async () => {
+    withMediaControl();
     playbackOn.value = true;
     server.playbackAccess = 'expired';
-    nav.search = `?stream=${STREAM_ID}&card=5`;
-    renderWithProviders(<StudioScreen />);
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
     expect(
-      await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/),
+      await screen.findByText('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요', undefined, {
+        timeout: 10_000,
+      }),
     ).toBeInTheDocument();
-    expect(spansAsked).toEqual([]);
+    expect(requestsTo(/\/index\.m3u8$/)).toEqual([]);
   });
 
-  it('같은 탭에서 다시 열어도 받아 둔 만료로 알리고 녹화를 찾지 않는다(PR #348 codex)', async () => {
+  it('같은 탭에서 다시 열어도 받아 둔 만료로 알리고 목록을 받지 않는다(PR #348 codex)', async () => {
+    withMediaControl();
     playbackOn.value = true;
     server.playbackAccess = 'expired';
     nav.search = `?stream=${STREAM_ID}&card=5`;
     const first = renderWithProviders(<StudioScreen />);
-    await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/);
+    await screen.findByText('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요', undefined, {
+      timeout: 10_000,
+    });
     first.unmount();
 
     renderWithProviders(<StudioScreen />);
     expect(
-      await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/),
+      await screen.findByText('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요', undefined, {
+        timeout: 10_000,
+      }),
     ).toBeInTheDocument();
-    expect(spansAsked).toEqual([]);
+    expect(requestsTo(/\/index\.m3u8$/)).toEqual([]);
   });
 
-  it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
+  it('출입증을 못 받으면 「녹화 없음」으로 접지 않고 목록을 받지 못했다고 알린다(PR #320 codex)', async () => {
+    withMediaControl();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     playbackOn.value = true;
     server.playbackAccess = 'fail';
     nav.search = `?stream=${STREAM_ID}&card=5`;
     renderWithProviders(<StudioScreen />);
-    expect(await screen.findByText(/영상 출입증을 받지 못했어요/)).toBeInTheDocument();
-    expect(spansAsked).toEqual([]);
+    // 끝난 방송은 vod 목록 첫 PDT 가 편집기 0초라, 목록을 받을 때까지 본문 대신 그 까닭이 선다
+    expect(
+      await screen.findByText('영상 목록을 받지 못했어요. 다시 받는 중이에요', undefined, {
+        timeout: 10_000,
+      }),
+    ).toBeInTheDocument();
+    expect(requestsTo(/\/index\.m3u8$/)).toEqual([]);
+  });
+
+  it('편집기 0초(base)가 정해지기 전에는 편집기 본문을 마운트하지 않고 원천 상태만 알린다', async () => {
+    withMediaControl();
+    // 끝난 방송의 vod 가 아직 준비되지 않았다 — base 둘째 원천(vod 첫 PDT)을 기다린다
+    server.round = 'finalizing';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    renderWithProviders(<StudioScreen />);
+
+    expect(
+      await screen.findByText('방송 녹화를 정리하는 중이에요(보통 몇 분)', undefined, {
+        timeout: 10_000,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeDisabled();
+    // 본문이 서지 않았으니 카드 열기 기록도 아직이다
+    expect(openCalls()).toHaveLength(0);
+  });
+});
+
+// 편집기 끝점 · 고름 입력(POK-473 E4b-3 · 처분 K3 · cc L2). 창 안에서 정한 끝점(찍기 · 끌기 · 화살표)은 고른 프레임이라, 판 NULL
+// 창이면 그 조각의 ② 머리를 읽어야 저장된다 — 판독 없이 저장되는 우회가 없다.
+describe('StudioScreen — 창 안 끝점 저장(K3)', () => {
+  /** 원천이 선 편집기에서 창 영상이 들어온 뒤 두 끝을 정한다(창 안 — 고름) */
+  async function openWithPickedEnds() {
+    withMediaControl();
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    await setCardEnds();
+  }
+
+  it('판 NULL 창에서 ② 머리를 못 읽은 끝점은 저장하지 않고 다시 시도 단추를 단다', async () => {
+    const user = userEvent.setup();
+    await openWithPickedEnds();
+
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+
+    expect(await screen.findByText('저장에 필요한 녹화 정보를 받지 못했어요')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '다시 시도' })).toBeInTheDocument();
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+    await waitFor(() => expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled());
+  });
+
+  it('판 2 창이면 고른 프레임으로 컷을 짓는다: 시작은 그 프레임 PTS · 끝은 그 프레임과 다음 프레임 사이 가운데(내림)', async () => {
+    server.timing = 'v2';
+    const user = userEvent.setup();
+    await openWithPickedEnds();
+
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    // 시작 60초 = 조각 15 첫 프레임(PTS 60) · 끝 72.4초 = 조각 18 의 72.0초 프레임(0.5초) → 끝 72.25초(그 프레임과 다음 프레임 사이 가운데)
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 60_000,
+      outAtMs: STARTED_AT + 72_250,
+    });
+  });
+});
+
+// 업로드 장면 offset 은 결과 영상 ms 다(설계 prw2 3.3 · c12′ · 경계 답 N9) — PDT 차가 아니라 in 부터 장면까지 미디어 거리
+describe('StudioScreen — 업로드 장면 offset 은 미디어 거리다(c12′)', () => {
+  it('경계마다 죽은 자리 0.2초인 창에서 하이라이트 장면은 PDT 차가 아니라 미디어 거리로 싣는다', async () => {
+    withMediaControl();
+    // 판 2 창이라 고른 끝점이 ② 머리 없이 저장된다. 조각 PDT 는 4.2초 간격 · 미디어(EXTINF)는 4초
+    server.timing = 'v2';
+    server.pdtStepMs = 4_200;
+    const user = userEvent.setup();
+    await openWithSource(`stream=${STREAM_ID}&card=5`);
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    await setCardEnds();
+
+    const opened = await openUploadDialog(user);
+    await user.click(opened.getByRole('tab', { name: '썸네일' }));
+    // 시작 60초 = 조각 14(PDT 58.8초) 안 1.2초 → 보이는 프레임 PTS 57.0(편집기 59.8초). 하이라이트 65초 = 조각 15(PDT
+    // 63.0초) 안 2.0초 → 프레임 PTS 62.0. 창의 값은 편집기 초 차 5.2초, 결과 영상 안 거리는 62.0 − 57.0 = 5.0초
+    expect(opened.getByRole('button', { name: '하이라이트 0:05.2' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(opened.getByRole('tab', { name: '정보' }));
+    await user.type(opened.getByRole('textbox', { name: /제목/ }), '보스 막타');
+    await uploadFromPublishTab(user);
+
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(1));
+    const { request } = await renderPartsOf();
+    expect(request.upload).toMatchObject({ thumbnail: { source: 'scene', offsetMs: 5_000 } });
+    expect(screen.queryByText('썸네일 장면이 조금 다를 수 있어요')).not.toBeInTheDocument();
+  });
+
+  it('미디어 거리로 셀 수 없으면(원천 목록 없음) 창의 값을 싣고 업로드는 막지 않되 한 번 알린다', async () => {
+    const user = userEvent.setup();
+    // 원천이 없어 두 끝은 창 밖 S 입력 그대로 받은 값(exact)이다 — 목록이 없어 조각 길이를 읽을 수 없다
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    const opened = await openUploadDialog(user);
+    await user.click(opened.getByRole('tab', { name: '썸네일' }));
+    expect(opened.getByRole('button', { name: '하이라이트 0:05.0' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(opened.getByRole('tab', { name: '정보' }));
+    await user.type(opened.getByRole('textbox', { name: /제목/ }), '보스 막타');
+    await uploadFromPublishTab(user);
+
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(1));
+    const { request } = await renderPartsOf();
+    expect(request.upload).toMatchObject({ thumbnail: { source: 'scene', offsetMs: 5_000 } });
+    expect(await screen.findAllByText('썸네일 장면이 조금 다를 수 있어요')).toHaveLength(1);
+  });
+
+  it('그 알림은 요청이 받아들여진 뒤에 뜬다 — 요청이 실패하면 알리지 않고, 다음에 받아들여질 때 한 번 알린다', async () => {
+    server.renderError = { status: 500, body: { error: 'boom' } };
+    const user = userEvent.setup();
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    await orderVideo(user);
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(1));
+    expect(await screen.findByText('영상 만들기 실패')).toBeInTheDocument();
+    expect(screen.queryByText('썸네일 장면이 조금 다를 수 있어요')).not.toBeInTheDocument();
+
+    server.renderError = null;
+    await orderVideo(user);
+    await waitFor(() => expect(requestsTo(/\/renders$/)).toHaveLength(2));
+    const { request } = await renderPartsOf(1);
+    expect(request.upload).toMatchObject({ thumbnail: { source: 'scene' } });
+    expect(await screen.findAllByText('썸네일 장면이 조금 다를 수 있어요')).toHaveLength(1);
+  });
+
+  it('받은 창 밖의 장면은 미리보기에 창 끝 그림을 대신 보이지 않는다 — 그림 없음으로 둔다(c12′ r1 [cx] 강등 M)', async () => {
+    withMediaControl();
+    // 판 2 · 68초(seq 17) 앞에서 런이 끊긴다. 창은 시작이 든 런 하나라 68초까지다. 하이라이트 70초 = 창 밖
+    server.timing = 'v2';
+    server.breakBeforeSeq = 17;
+    server.playerAtMs = STARTED_AT + 70_000;
+    const user = userEvent.setup();
+    await openWithSource(`stream=${STREAM_ID}&card=5`);
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    await setCardEnds();
+
+    const opened = await openUploadDialog(user);
+
+    expect(opened.getByText('장면 그림을 못 불러와요 · 0:10.0')).toBeInTheDocument();
+    expect(opened.queryByText('장면을 불러오는 중이에요')).not.toBeInTheDocument();
+  });
+});
+
+// 「다시 시도」 는 처음 캡처한 레시피 · 편집본 번호로 저장하지 않는다 — 그 순간의 화면으로 저장을 처음부터 다시 부른다(E4b-3 r1
+// [cc·cx] HIGH). 저장된 편집본을 원천과 함께 열어 창 안에서 두 끝을 고르면(판 NULL · ② 머리 없음) 저장이 막힌다. 실행취소로 받은
+// 값(exact)에 돌아오면 저장할 수 있다
+describe('StudioScreen — 저장 「다시 시도」 는 그 순간의 화면이다(E4b-3 r1)', () => {
+  /** 저장된 편집본(#31)을 원천과 함께 열고 창 안에서 두 끝을 골라 저장을 눌러 막힌다 */
+  async function refusedRecipeSave(user: ReturnType<typeof userEvent.setup>) {
+    withMediaControl();
+    await openWithSource('?recipe=31');
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    await setCardEnds();
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    await screen.findByText('저장에 필요한 녹화 정보를 받지 못했어요');
+  }
+
+  /** 실행취소를 끝까지 — 끝점이 받은 값(exact)으로 돌아온다 */
+  async function undoAll(user: ReturnType<typeof userEvent.setup>) {
+    const undo = screen.getByRole('button', { name: '작업 이전으로' });
+    while (!(undo as HTMLButtonElement).disabled) await user.click(undo);
+  }
+
+  it('거절 뒤 고친 화면에서 「다시 시도」 를 누르면 지금 화면으로 저장한다 — 새 편집본을 만들지 않는다', async () => {
+    const user = userEvent.setup();
+    await refusedRecipeSave(user);
+
+    await undoAll(user);
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
+    await user.click(screen.getByRole('button', { name: '다시 시도' }));
+
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    const body = bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]!;
+    expect(body.cut).toEqual({ inAtMs: STARTED_AT + 120_000, outAtMs: STARTED_AT + 150_000 });
+    expect(body.audio).toEqual({ tracks: [{ trackId: 1, gain: 1 }] });
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+  });
+
+  it('거절 뒤 다시 저장해 성공하면 앞의 거절 알림이 닫혀 옛 「다시 시도」 가 남지 않는다', async () => {
+    const user = userEvent.setup();
+    await refusedRecipeSave(user);
+
+    await undoAll(user);
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    expect(screen.queryByText('저장에 필요한 녹화 정보를 받지 못했어요')).toBeNull();
+    expect(screen.queryByRole('button', { name: '다시 시도' })).toBeNull();
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+  });
+
+  it('「영상 만들기」 판정(목록 다시 받기) 중에는 헤더가 잠겨 저장이 겹치지 않는다 — 판정이 끝나면 창이 뜬다', async () => {
+    const user = userEvent.setup();
+    await openCard(`stream=${STREAM_ID}&card=5`);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = rangeEndpoints.saveAfterReload;
+    const judged = vi
+      .spyOn(rangeEndpoints, 'saveAfterReload')
+      .mockImplementation(async (...args) => {
+        await gate;
+        return original(...args);
+      });
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await waitFor(() => expect(judged).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    expect(judged).toHaveBeenCalledTimes(1);
+
+    act(() => release());
+    expect(await screen.findByRole('dialog', { name: '유튜브에 올리기' })).toBeInTheDocument();
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+  });
+
+  it('「영상 만들기」 판정이 거절되면 헤더 잠금이 풀린다 — 저장 · 영상 만들기를 다시 누를 수 있고 「다시 시도」 도 다시 판정한다', async () => {
+    const user = userEvent.setup();
+    withMediaControl();
+    await openWithSource('?recipe=31');
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    // 창 안 두 끝을 고른다(판 NULL · ② 머리 없음) — 판정이 머리 missing 으로 거절된다
+    await setCardEnds();
+    const judged = vi.spyOn(rangeEndpoints, 'saveAfterReload');
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await screen.findByText('저장에 필요한 녹화 정보를 받지 못했어요');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: '영상 만들기' })).toBeEnabled();
+    expect(screen.queryByRole('dialog', { name: '유튜브에 올리기' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '다시 시도' }));
+    await waitFor(() => expect(judged).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: '영상 만들기' })).toBeEnabled());
+    expect(screen.queryByRole('dialog', { name: '유튜브에 올리기' })).not.toBeInTheDocument();
   });
 });
 
 describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
   it('카드에서 열면 그 카드의 열기 기록을 한 번 보낸다', async () => {
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     await waitFor(() => expect(openCalls()).toHaveLength(1));
     expect(String(openCalls()[0]?.[0])).toBe('/api/clip/jump-cards/5/open');
@@ -469,7 +959,7 @@ describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
 
   it('열기 기록이 실패해도 편집기는 열리고 오류를 말하지 않는다', async () => {
     server.openStatus = 503;
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     await waitFor(() => expect(openCalls()).toHaveLength(1));
     expect(screen.getByRole('button', { name: '편집본 저장' })).toBeInTheDocument();
@@ -489,7 +979,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const client = createTestQueryClient();
     const listKey = libraryQueryOptions(null).queryKey;
     client.setQueryData(listKey, []);
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`, client);
+    const save = await openCard(`stream=${STREAM_ID}&card=5`, client);
 
     await user.click(save);
 
@@ -498,7 +988,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
 
   it('저장하면 카드 창을 방송 절대 시각의 컷으로 옮겨 새 편집본을 만든다', async () => {
     const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
 
     await user.click(save);
 
@@ -554,7 +1044,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     // 첫 조각이 방송 시작보다 32초 늦었다(2026-09-17 실측) — 방송 시작으로 대신하면 컷이 32초 앞을 자른다
     server.origin = STARTED_AT + 32_000;
     const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(save);
 
     await waitFor(() =>
@@ -573,7 +1063,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     server.origin = STARTED_AT - ahead;
     server.cardWindow = { startMs: ahead + 60_000, endMs: ahead + 72_400 };
     const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
 
     expect(screen.getByText(/방송 · 카드 1:05 · /)).toBeInTheDocument();
     await user.click(save);
@@ -586,8 +1076,87 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     });
   });
 
+  // 눈금 · 접힌 요약 · 손잡이 표기도 출처 줄과 같은 축이다(kty 2026-11-14 (가)): 편집기 초는 기준점 축이라 그대로 찍으면 prod 에서
+  // 2분째 카드가 「254:06:11」 이었다. 보이는 0초만 방송 시작으로 옮기고 값(손잡이 값 · 저장 컷)은 그대로다
+  it('기준점이 방송 시작보다 254시간 앞서도 눈금 · 접힌 요약 · 손잡이 표기는 방송 시작부터다 — 값은 그대로다', async () => {
+    const ahead = 914_651_000;
+    server.origin = STARTED_AT - ahead;
+    server.cardWindow = { startMs: ahead + 120_000, endMs: ahead + 132_400 };
+    const user = userEvent.setup();
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
+
+    const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
+    expect(ticks.length).toBeGreaterThan(0);
+    expect(ticks.filter((tick) => !/^[12]:\d\d(\.\d)?$/.test(tick))).toEqual([]);
+    const start = screen.getByRole('slider', { name: '구간 시작점' });
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    expect(start).toHaveAttribute('aria-valuetext', '0:02:00.0 · 구간 12.4초');
+    expect(end).toHaveAttribute('aria-valuetext', '0:02:12.4 · 구간 12.4초');
+    // 손잡이 값은 편집기 축 그대로다 — 표기만 옮긴다
+    expect(start).toHaveAttribute('aria-valuenow', String((ahead + 120_000) / 1000));
+    await user.click(screen.getByRole('button', { name: '타임라인 접기' }));
+    expect(screen.getByText(/선택 구간/).textContent).toContain('2:00 – 2:12');
+
+    await user.click(save);
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 120_000,
+      outAtMs: STARTED_AT + 132_400,
+    });
+  });
+
+  it('기준점을 모르면 눈금 · 손잡이 표기는 편집기 초 그대로다 — 편집기 0초가 이미 방송 시작이다', async () => {
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    expect(screen.getByRole('slider', { name: '구간 시작점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:00.0 · 구간 12.4초',
+    );
+    const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
+    expect(ticks.length).toBeGreaterThan(0);
+    expect(ticks.filter((tick) => !/^[01]:\d\d(\.\d)?$/.test(tick))).toEqual([]);
+  });
+
+  it('기준점이 없어 편집기 0초가 vod 첫 PDT 여도 표기는 옮기지 않는다 — 방송 시작과의 차를 빼지 않는다', async () => {
+    withMediaControl();
+    // 끝난 방송의 편집기 0초는 vod 목록 첫 PDT 다(방송 시작보다 32초 늦다). 기준점이 없으니 표기 오프셋은 0 이다
+    server.listLeadMs = 32_000;
+    await openWithSource(`?stream=${STREAM_ID}&card=5`);
+
+    expect(screen.getByRole('slider', { name: '구간 시작점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:00.0 · 구간 12.4초',
+    );
+  });
+
+  it('기준점이 방송 시작보다 늦어도 눈금 · 접힌 요약 · 손잡이 표기는 출처 줄과 같은 경과다 — 32초 뒤로 옮긴다', async () => {
+    // 첫 조각이 방송 시작보다 32초 늦었다(POK-255) — 편집기 60초는 방송 시작부터 1:32 이다
+    server.origin = STARTED_AT + 32_000;
+    const user = userEvent.setup();
+    await openCard(`stream=${STREAM_ID}&card=5`);
+
+    // 출처 줄은 카드 시각(창 시작 + 5초 = 편집기 65초)을 적는다 — 같은 축이면 65 + 32 = 1:37 이다
+    expect(screen.getByText(/방송 · 카드 1:37/)).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: '구간 시작점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:32.0 · 구간 12.4초',
+    );
+    expect(screen.getByRole('slider', { name: '구간 끝점' })).toHaveAttribute(
+      'aria-valuetext',
+      '0:01:44.4 · 구간 12.4초',
+    );
+    const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
+    // 창이 구간과 같아 첫 눈금 · 끝 눈금이 두 끝과 같다
+    expect(ticks[0]).toBe('1:32.0');
+    expect(ticks.at(-1)).toBe('1:44.4');
+    await user.click(screen.getByRole('button', { name: '타임라인 접기' }));
+    expect(screen.getByText(/선택 구간/).textContent).toContain('1:32 – 1:44');
+  });
+
   it('기준점을 모르면 출처 줄에 카드 시각을 싣지 않는다 — 방송 시작으로 대신 재지 않는다(POK-562)', async () => {
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     expect(screen.getByText(/방송 · /)).toBeInTheDocument();
     expect(screen.queryByText(/방송 · 카드 /)).toBeNull();
@@ -595,7 +1164,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
 
   it('방송 트랙을 하나라도 켜면 최종 믹스(0)는 빼고 보낸다 — 같은 소리가 두 번 섞이면 안 된다', async () => {
     const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
 
     await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
     await user.click(save);
@@ -608,8 +1177,53 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     });
   });
 
-  it('5초보다 짧은 카드 창은 5초로 늘려 저장한다 — 저장 문이 5초~3분 밖을 거절한다', async () => {
+  // 5초 언저리 카드(kty 2026-11-12 23:42 (나)): 범위 끝 뒤로 5초까지 끝을 끌어 정할 수 있다 — 끝을 옮겨 주지는 않는다
+  it('5초보다 짧은 카드는 끝을 범위 끝 뒤로 끌어 5초를 만들어 저장한다 — 끈 끝은 사용자가 고른 값이다', async () => {
     server.cardWindow = { startMs: 60_000, endMs: 62_000 };
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    // 1초 걸음은 길이가 5초 밖이라 멈춘다 — 5초 걸음(Shift)으로 67초까지 넘긴 뒤 65초로 당긴다
+    act(() => screen.getByRole('slider', { name: '구간 끝점' }).focus());
+    await user.keyboard('{Shift>}{ArrowRight}{/Shift}{ArrowLeft}{ArrowLeft}');
+    act(() => screen.getByRole('slider', { name: '구간 시작점' }).focus());
+    await user.keyboard('{ArrowLeft}');
+
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 60_000,
+      outAtMs: STARTED_AT + 65_000,
+    });
+  });
+
+  it('5초보다 짧은 카드도 끝을 정하지 않으면 저장하지 않고 범위 끝을 정하라고 알린다', async () => {
+    server.cardWindow = { startMs: 60_000, endMs: 62_000 };
+    const user = userEvent.setup();
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(save);
+
+    expect(await screen.findByText('이 카드는 범위 끝을 직접 정해 주세요')).toBeInTheDocument();
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+    expect(save).toBeEnabled();
+  });
+
+  it('카드 범위(estimate)는 끝을 정하기 전에는 저장하지 않는다(설계 14.0 1번)', async () => {
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(save);
+
+    expect(await screen.findByText('이 카드는 범위 끝을 직접 정해 주세요')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '다시 시도' })).toBeNull();
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+  });
+
+  it('clip 이 창 두 끝(playerWindow)을 주면 끝을 정하지 않아도 그 값 그대로 저장한다(exact · 카드 창과 수 초 달라도)', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_234, endMs: STARTED_AT + 73_901 };
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
 
@@ -618,11 +1232,62 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     await waitFor(() =>
       expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
     );
-    const cut = bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut as {
-      inAtMs: number;
-      outAtMs: number;
-    };
-    expect(cut.outAtMs - cut.inAtMs).toBe(5_000);
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 61_234,
+      outAtMs: STARTED_AT + 73_901,
+    });
+  });
+
+  it('손잡이 한계는 clip 이 준 창 두 끝(playerWindow)이다 — 카드 창(60–72.4초)이 아니다', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_234, endMs: STARTED_AT + 73_901 };
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    const start = screen.getByRole('slider', { name: '구간 시작점' });
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+
+    expect(Number(end.getAttribute('aria-valuemax'))).toBeCloseTo(73.901, 6);
+    act(() => start.focus());
+    await user.keyboard('{ArrowLeft}');
+    expect(Number(start.getAttribute('aria-valuenow'))).toBeCloseTo(61.234, 6);
+  });
+
+  it('짧은 창(5초 + 한 프레임 미만)이면 끝 손잡이 한계를 창 끝 뒤 5초까지 넓힌다 — playerWindow 기준', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_000, endMs: STARTED_AT + 64_000 };
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    expect(
+      Number(screen.getByRole('slider', { name: '구간 끝점' }).getAttribute('aria-valuemax')),
+    ).toBeCloseTo(69, 6);
+  });
+
+  it('하이라이트 장면은 clip 이 준 플레이어용 PDT(playerAtMs)다 — 카드 ms(기준점 축)로 대신 재지 않는다', async () => {
+    server.playerWindow = { startMs: STARTED_AT + 61_000, endMs: STARTED_AT + 73_400 };
+    // 카드 ms 로 재면 65 − 61 = 4.0초 · 플레이어용 PDT 로 재면 67.5 − 61 = 6.5초
+    server.playerAtMs = STARTED_AT + 67_500;
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    const opened = await openUploadDialog(user);
+    await user.click(opened.getByRole('tab', { name: '썸네일' }));
+
+    expect(opened.getByRole('button', { name: '하이라이트 0:06.5' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('clip 이 카드 장면을 못 찾았으면(playerAtMs null) 열 때 한 번 알린다 — 편집기는 그대로 연다', async () => {
+    server.playerAtMs = null;
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    expect(await screen.findAllByText('이 카드의 장면을 아직 찾지 못했어요')).toHaveLength(1);
+  });
+
+  it('장면 칸이 값이면(located) 알리지 않는다', async () => {
+    server.playerAtMs = STARTED_AT + 65_000;
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    expect(screen.queryByText('이 카드의 장면을 아직 찾지 못했어요')).toBeNull();
   });
 
   const renders = () =>
@@ -633,7 +1298,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
 
   it('저장하지 않고 영상 만들기를 누르면 먼저 저장하고 그 판으로 주문한다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     await orderVideo(user);
 
@@ -679,7 +1344,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
   it('저장 뒤 또 고치면 새 판으로 저장하고 주문한다 — 고치지 않았으면 다시 저장하지 않는다', async () => {
     // 저장 뒤 고친 것을 무시하고 옛 판을 렌더하면 화면과 다른 영상이 나온다(PR #200 codex P1)
     const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(save);
     await screen.findByText(/편집본 #31 v1 저장됨/);
 
@@ -698,7 +1363,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
   it('넣기 단추가 계약을 지킨다 — 최종 믹스와 방송 트랙은 하나만, 마지막 트랙은 못 끈다', async () => {
     // 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     const mix = () => screen.getByRole('button', { name: '최종 믹스(트랙 1) 넣기' });
     const track2 = () => screen.getByRole('button', { name: '트랙 2 넣기' });
     const on = (button: HTMLElement) => button.getAttribute('aria-pressed') === 'true';
@@ -721,13 +1386,13 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
 
 describe('StudioScreen: 편집기에서 고른 썸네일 장면(POK-389)', () => {
   it('녹화가 없으면 재생 위치를 몰라 썸네일 단추가 꺼져 있다', async () => {
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     expect(screen.getByRole('button', { name: '이 장면을 썸네일로' })).toBeDisabled();
   });
 
   it('고르지 않았으면 지금처럼 자동으로 연다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     const dialog = within(await screen.findByRole('dialog'));
@@ -741,7 +1406,7 @@ describe('StudioScreen: 트랙 줄 넣기 · 음량(POK-389)', () => {
   it('스트리머가 적은 트랙 이름으로 줄 머리가 서고, 음량 막대는 저장 계약대로 200%까지다', async () => {
     server.myTrackLabels = [null, '마이크', '게임', null, null, null];
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     expect(screen.getByRole('button', { name: '마이크 넣기' })).toBeInTheDocument();
     // 처음엔 최종 믹스만 켜져 있다: 마이크를 켜야 음량 숫자가 선다
@@ -776,6 +1441,27 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
     expect(output?.layers).toHaveLength(1);
     expect(output?.layers[0]?.box).toEqual({ x: 0, y: 0, w: 1, h: 1 });
     expectRectClose(output!.layers[0]!.crop, SAVED_CROP);
+  });
+
+  // 넓힘은 카드로 연 범위에서만이다 — 저장된 편집본을 다시 열면 저장된 구간이 한계다(사용자 확정 2026-09-17)
+  it('5초로 저장된 편집본을 다시 열면 끝 한계를 넓히지 않는다 — 저장 구간이 그대로 한계다', async () => {
+    server.savedCut = { inMs: 60_000, outMs: 65_000 };
+    const user = userEvent.setup();
+    const save = await openFrom('recipe=31');
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+
+    expect(end).toHaveAttribute('aria-valuemax', '65');
+    act(() => end.focus());
+    await user.keyboard('{Shift>}{ArrowRight}{/Shift}');
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 60_000,
+      outAtMs: STARTED_AT + 65_000,
+    });
   });
 
   it('옛 편집본(v1)은 영상 만들기 때 한 번 v2로 다시 저장한다 — 모양이 달라 옛 판으로는 화면과 같은 영상을 못 만든다', async () => {
@@ -835,7 +1521,7 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
       { id: 2, counterpartId: 102, counterpartName: 'B', grantedAt: '2026-09-01T00:00:00Z' },
     ];
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     await user.click(screen.getByRole('tab', { name: '오디오' }));
     expect(screen.queryByText('남의 트랙')).not.toBeInTheDocument();
@@ -850,7 +1536,7 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
       { id: 1, counterpartId: 101, counterpartName: 'A', grantedAt: '2026-09-01T00:00:00Z' },
     ];
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     await user.click(screen.getByRole('tab', { name: '오디오' }));
     expect(await screen.findAllByText('남의 트랙')).not.toHaveLength(0);
@@ -865,7 +1551,7 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
       server.relation = relation;
       setActiveRole.mockClear();
       track.mockClear();
-      await openFrom(`stream=${STREAM_ID}&card=5`);
+      await openCard(`stream=${STREAM_ID}&card=5`);
 
       await waitFor(() => expect(tracked('clip_editor_opened')).toHaveLength(1));
       expect(setActiveRole.mock.calls).toEqual([[role]]);
@@ -914,7 +1600,7 @@ async function saveAndReadOutput(user: ReturnType<typeof userEvent.setup>) {
 describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대로 실린다(POK-252)', () => {
   it('세로: 자르는 틀을 옮긴 자리가 그대로 실린다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('radio', { name: /세로/ }));
     const frame = screen.getByRole('button', { name: /세로 9:16 영역/ });
     frame.focus();
@@ -931,7 +1617,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
 
   it('분할 70:30에 경계선을 끄면 두 칸이 70·30으로 쌓이고 선이 없다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('radio', { name: '70 : 30' }));
     await user.click(screen.getByRole('switch', { name: '경계선 표시' }));
 
@@ -948,7 +1634,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
 
   it('중앙에 단색 흰 바탕이면 원본 비율 칸이 가운데 놓이고 바탕이 흰색이다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('radio', { name: /중앙/ }));
     await user.click(screen.getByRole('radio', { name: '단색' }));
     await user.click(
@@ -967,7 +1653,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
 
   it('중앙의 흐린 바탕은 세기를 싣는다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('radio', { name: /중앙/ }));
     const slider = screen.getByRole('slider', { name: '블러 강도' });
     slider.focus();
@@ -978,7 +1664,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
 
   it('크롭: 작은 화면 자리와 테두리(굵기 3px)가 실린다, 끄면 테두리가 없다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('radio', { name: /크롭/ }));
     await user.click(screen.getByRole('radio', { name: '3px' }));
 
@@ -1125,7 +1811,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
   it('「영상 만들기」는 창만 연다: 확인하면 저장하고, 고른 정보가 multipart request 파트로 실린다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
 
     await openUploadDialog(user);
     expect(renders()).toBe(0);
@@ -1223,7 +1909,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
   it('이미지를 고르면 thumbnail 파트에 그 파일이 실린다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     await openUploadDialog(user);
     await user.type(dialog().getByRole('textbox', { name: /제목/ }), '제목');
     await user.click(dialog().getByRole('tab', { name: '썸네일' }));
@@ -1284,6 +1970,37 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     ).toBeInTheDocument();
   });
 
+  it('다시 물어도 같은 거절(422 source_unrenderable)은 사유 낱말 대신 범위를 다시 정하라고 알린다(POK-196)', async () => {
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+
+    // 닫힌 사유 목록 둘(clip CutDecision.Reason) 다 할 일이 범위 재지정 하나다. 알림은 같은 종류를 갱신해 둘째 회차의
+    // 글자가 첫 회차 것일 수 있어, 회차마다 주문이 실제로 나갔는지 센다
+    for (const [index, reason] of ['outside_recording', 'no_footage'].entries()) {
+      server.renderError = { status: 422, body: { error: 'source_unrenderable', reason } };
+      await orderVideo(user);
+      await waitFor(() => expect(renders()).toBe(index + 1));
+      expect(
+        await screen.findByText(
+          '고른 범위가 녹화된 구간을 벗어났거나 영상이 없는 곳이라 만들 수 없어요. 범위를 다시 정해 주세요',
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/source_unrenderable|outside_recording|no_footage/),
+      ).not.toBeInTheDocument();
+      // 알림을 닫아 다음 회차의 글자가 그 회차 응답에서만 오게 한다(c11 r1 [cc] · cp1 [cx] L 판별력)
+      await closeToastOf('영상 만들기 실패');
+    }
+  });
+
+  it('모르는 422 코드는 지금처럼 상태와 코드를 그대로 보인다', async () => {
+    server.renderError = { status: 422, body: { error: 'brand_new_code' } };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await orderVideo(user);
+    expect(await screen.findByText('422 brand_new_code')).toBeInTheDocument();
+  });
+
   it('칸을 짚은 거절(400 field · 413 · 415)은 창 안 그 칸에 보이고 창이 남는다', async () => {
     server.renderError = { status: 400, body: { error: 'invalid_request', field: 'tags' } };
     const user = userEvent.setup();
@@ -1324,7 +2041,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
   it('창이 떠 있는 동안 ⌘Z·Space는 뒤 편집기를 안 바꾼다: 창 안 라디오는 Space로 골라진다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
     expect(screen.getByRole('button', { name: '트랙 2 넣기' })).toHaveAttribute(
       'aria-pressed',
@@ -1354,7 +2071,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
   it('카드로 연 편집기를 처음 저장하면 주소가 ?recipe= 로 바뀌고, 다시 읽지 않아 실행취소가 남는다', async () => {
     const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    const save = await openCard(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
 
     await user.click(save);
@@ -1494,7 +2211,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
   it('창 코드를 따로 받아도 처음 열 때 포커스가 제목 칸으로 가고, 닫으면 「영상 만들기」로 돌아온다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     const trigger = screen.getByRole('button', { name: '영상 만들기' });
 
     const opened = await openUploadDialog(user);
@@ -1509,7 +2226,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
   it('창 코드를 못 받으면 편집기를 그대로 두고 알린다: 오류 화면으로 넘어가면 고친 것을 잃는다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     dialogChunk.broken = true;
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
@@ -1525,7 +2242,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
   it('창 코드를 받는 사이 다른 편집 대상으로 넘어가면 창을 열지 않는다: 곧 사라질 화면의 창이다', async () => {
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     let arrive: () => void = () => {};
     dialogChunk.arrival = new Promise((resolve) => {
       arrive = resolve;
@@ -1549,15 +2266,21 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
   });
 
   it('재생 중에 창을 열면 그 순간의 재생 위치를 추천에 싣는다: 허브의 값은 재생 중에 낡았다', async () => {
-    recordedSpans.value = [{ startMs: STARTED_AT, durationSeconds: 3_600 }];
+    withMediaControl();
     const user = userEvent.setup();
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    // 판 2 창이라 창 안에서 정한 끝점(고름)이 ② 머리 없이 저장된다
+    server.timing = 'v2';
+    await openWithSource(`stream=${STREAM_ID}&card=5`);
+    await waitFor(() =>
+      expect(document.querySelector('video')?.getAttribute('src')).toBe('blob:window'),
+    );
+    await setCardEnds();
     const video = document.querySelector('video')!;
     Object.defineProperty(video, 'paused', { configurable: true, value: false });
     act(() => {
       video.dispatchEvent(new Event('play'));
-      // 카드 창은 60초부터고 앞 여유 10초를 받는다: 영상 안 13초 = 편집기 63초 = 쇼츠 안 3초
-      video.currentTime = 13;
+      // 카드 창은 60초부터고 앞 여유 10초를 조각 경계(48초)부터 받는다: 영상 안 15초 = 편집기 63초 = 쇼츠 안 3초
+      video.currentTime = 15;
       video.dispatchEvent(new Event('timeupdate'));
     });
 
@@ -1654,7 +2377,7 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
   });
 
   it('주소가 바뀌어 다시 읽는 동안 옛 화면을 두고 헤더 아래 막대 한 줄만 띄운다: 스켈레톤으로 번쩍이지 않는다', async () => {
-    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openCard(`stream=${STREAM_ID}&card=5`);
     expect(screen.getByRole('heading', { name: '점프카드 #5' })).toBeInTheDocument();
 
     const release = holdPath('/api/clip/library/31');

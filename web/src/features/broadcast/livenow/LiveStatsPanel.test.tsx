@@ -156,11 +156,11 @@ describe('LiveStatsPanel: 그래프', () => {
     const { onSeekCard } = panel();
     fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #12 — 채팅 ×3\.2 급증/ }));
     // 시각 표기를 되읽지 않고 카드가 실어 준 옮길 자리(서버 기준점 축)로 간다(POK-562)
-    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60);
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60, undefined);
     const manual = screen.getByRole('button', { name: /^하이라이트 수동 — 수동 마킹/ });
     expect(manual).toHaveTextContent('수동');
     fireEvent.click(manual);
-    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 70 * 60);
+    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 70 * 60, undefined);
   });
 
   it('카드 시각을 모르면(null) 핀 이름에 시각을 싣지 않는다 — 누르면 그래도 옮긴다(POK-562)', () => {
@@ -169,7 +169,21 @@ describe('LiveStatsPanel: 그래프', () => {
       name: '하이라이트 #12 — 채팅 ×3.2 급증 (120건) 시점으로 이동',
     });
     fireEvent.click(pin);
-    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60);
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60, undefined);
+  });
+
+  it('핀을 누르면 카드의 플레이어용 PDT 도 옮길 자리와 함께 넘긴다(POK-196)', () => {
+    const { onSeekCard } = panel({
+      cards: [
+        { ...CARDS[0]!, playerAtMs: 1_794_426_524_000 },
+        { ...CARDS[1]!, playerAtMs: null },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #12 — / }));
+    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 20 * 60, 1_794_426_524_000);
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 수동 — / }));
+    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 70 * 60, null);
   });
 
   it('막대 아래 후원 줄은 없다: 「후원」은 숫자 줄 한 칸뿐이다', () => {
@@ -547,9 +561,21 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     fireEvent.click(within(list).getByRole('button', { name: /^하이라이트 #13 — / }));
     expect(onSeekCard).toHaveBeenCalledTimes(1);
     // 시각 표기가 아니라 옮길 자리(서버 기준점 축)로 간다(POK-562)
-    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 21 * 60);
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 21 * 60, undefined);
     expect(screen.queryByRole('group', { name: '묶인 하이라이트 2개' })).toBeNull();
     expect(group).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('묶음 목록에서 골라도 그 카드의 플레이어용 PDT 를 넘긴다(POK-196)', () => {
+    const { onSeekCard } = panel({
+      cards: near.map((c) => (c.id === 'card-13' ? { ...c, playerAtMs: 1_794_426_587_200 } : c)),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ }));
+    const list = screen.getByRole('group', { name: '묶인 하이라이트 2개' });
+
+    fireEvent.click(within(list).getByRole('button', { name: /^하이라이트 #13 — / }));
+
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 21 * 60, 1_794_426_587_200);
   });
 
   it('Esc · 바깥 누르기 · 묶음 다시 누르기로 목록을 닫는다', () => {

@@ -208,6 +208,21 @@ export function sceneLabel(ms: number): string {
 // ---------- 장면 시각 ----------
 
 /**
+ * 올림 앞에 빼는 여유(ms). 정수 ms 에 떨어지는 값(예: 280ms)이 부동소수 오차(280.000…1)로 1ms 밀려 오르지 않게 한다. 편집기
+ * 창의 비교 여유(windowPlacement BLOB_TOLERANCE_SECONDS = 0.01ms)보다 작아 프레임 시작 앞에 서지 않는다
+ */
+const CEIL_TOLERANCE_MS = 1e-3;
+
+/**
+ * 편집기 초 차 → 장면 ms. 올림이다 — 재생 위치 · 고른 장면은 보이는 프레임의 시작 S 라 반올림하면 3번에 1번(30fps) 프레임
+ * 시작 앞에 서서, 업로드 창이 그 ms 로 다시 고를 때 앞 프레임이 나온다(kty c12′ 결정 2 (나))
+ */
+function sceneMsOf(seconds: number): number {
+  // 0초는 여유를 빼면 ceil(−0.001) = −0 이라 + 0 으로 0 에 둔다
+  return Math.ceil(seconds * 1000 - CEIL_TOLERANCE_MS) + 0;
+}
+
+/**
  * 재생 위치를 완성 영상 첫 장면 기준 ms로 옮긴다. 재생 위치(초)와 구간 시작은 같은 축(시각 기준점 축)이고, 컷은 구간 시작에서
  * 시작한다. 영상 밖이면 영상 안 끝으로 자른다(0 ~ 컷 길이−1). 재생 위치를 모르면(녹화가 없다) null.
  */
@@ -217,7 +232,7 @@ export function sceneOffsetFromPlayhead(
   cutLengthMs: number,
 ): number | null {
   if (playheadSeconds === null) return null;
-  const raw = Math.round((playheadSeconds - rangeStartSeconds) * 1000);
+  const raw = sceneMsOf(playheadSeconds - rangeStartSeconds);
   return Math.min(cutLengthMs - 1, Math.max(0, raw));
 }
 
@@ -233,7 +248,7 @@ export function defaultSceneOffsetMs(
 ): number {
   const middle = Math.floor(cutLengthMs / 2);
   if (playheadSeconds === null) return middle;
-  const raw = Math.round((playheadSeconds - rangeStartSeconds) * 1000);
+  const raw = sceneMsOf(playheadSeconds - rangeStartSeconds);
   return raw >= 0 && raw < cutLengthMs ? raw : middle;
 }
 

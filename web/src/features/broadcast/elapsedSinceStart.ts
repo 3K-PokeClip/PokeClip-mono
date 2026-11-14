@@ -20,3 +20,17 @@ export function elapsedSinceStartMs(
   if (!Number.isFinite(originMs) || !Number.isFinite(startedAtMs)) return null;
   return Math.max(0, originMs + axisMs - startedAtMs);
 }
+
+/**
+ * 기준점 축에서 이번 방송 시작이 놓인 자리(ms). 축 값에서 이것을 빼면 elapsedSinceStartMs 와 같은 경과다 — 눈금처럼 축 값을 많이
+ * 그리는 자리가 한 번 셈해 두고 뺀다.
+ *
+ * @param originMs 그 축의 0초인 절대 시각(epoch ms). 모르면 null
+ * @param startedAtMs 이번 방송 시작(epoch ms). 모르면 null
+ * @returns 기준점이 시작보다 앞선 만큼(ms). 기준점이나 시작을 모르면 null이다
+ */
+export function startOnAxisMs(originMs: number | null, startedAtMs: number | null): number | null {
+  if (originMs === null || startedAtMs === null) return null;
+  if (!Number.isFinite(originMs) || !Number.isFinite(startedAtMs)) return null;
+  return startedAtMs - originMs;
+}

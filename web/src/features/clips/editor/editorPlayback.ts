@@ -1,12 +1,16 @@
 // 편집기 재생의 계약과 구간 경계 판정 (POK-238).
 //
-// 재생은 두 갈래다 — 목업 시뮬레이션(미디어 없음)과 녹화 재생 서버에서 받은 mp4 한 덩어리(useEditorVideoPlayback, POK-251).
+// 재생은 두 갈래다 — 목업 시뮬레이션(미디어 없음)과 ③ 되감기 목록 창을 다시 싼 mp4 한 덩어리(useEditorVideoPlayback, POK-251 ·
+// POK-473).
 // 화면과 상태 허브는 어느 쪽인지 모르고 이 계약만 본다 (usePlayerSimulation ↔ useHlsPlayback 이 라이브에서 하는 것과
 // 같은 구조).
 //
 // 경계 판정을 여기 순수 함수로 둔 이유: 두 갈래가 같은 규칙을 두 번 적으면 언젠가 갈라진다.
 // 게다가 실재생 쪽은 jsdom 에서 영상을 못 틀어 렌더 테스트로 못 잡는다 — 규칙만 떼어내면 표로 검증할 수 있다
 // (timelineMath·playerMath 와 같은 이유).
+
+import type { EditorSourceState } from './source/editorSourceState';
+import type { EditorPick } from './source/windowPlacement';
 
 /** 재생이 갇히는 구간. 화면의 「구간 반복」 스위치가 loop 를 정한다 */
 export interface PlaybackBounds {
@@ -59,7 +63,24 @@ export type PlaybackError =
   /** 출입증을 다시 받아도 녹화가 403이다 */
   | 'access'
   /** 이 구간에 녹화가 없다(녹화 틈 안) */
-  | 'no-recording';
+  | 'no-recording'
+  // 아래는 영상 원천 상태(POK-473 설계 prw2 14.2 D3 (ㄱ)) — 원천이 서기 전 · 섰다가 막힌 까닭
+  /** 아직 원천 답이 없다 */
+  | 'checking'
+  /** 원천은 섰고 목록을 받는 중이다 */
+  | 'list-loading'
+  /** 목록을 받다 실패했다(다시 받기는 이어진다) */
+  | 'list-failed'
+  /** 방송 중 · 구간이 목록 끝 뒤 — 몇 초 뒤 목록이 자란다 */
+  | 'uploading'
+  /** 회차 정리 중이거나 같은 키의 다른 방송이 시작됐다 */
+  | 'finalizing'
+  /** 방송 중 편집 범위(최근 1시간) 밖 */
+  | 'outside-dvr'
+  /** 보관 기간이 지났거나 영상이 없다(둘은 서버 답으로 가를 수 없다) */
+  | 'gone'
+  /** 출입증 만료(410) */
+  | 'expired';
 
 /** 미리보기 아래에 보이는 안내(POK-389). 출입증을 못 받았을 때의 열기 실패 문구와 같은 결로 쓴다 */
 export function playbackErrorMessage(error: PlaybackError): string {
@@ -72,6 +93,57 @@ export function playbackErrorMessage(error: PlaybackError): string {
       return '이 브라우저는 미리보기 영상을 못 틀어요';
     case 'fatal':
       return '미리보기 영상을 불러오지 못했어요. 잠시 뒤 다시 열어 주세요';
+    case 'checking':
+      return '영상을 확인하는 중이에요';
+    case 'list-loading':
+      return '영상 목록을 받는 중이에요';
+    case 'list-failed':
+      return '영상 목록을 받지 못했어요. 다시 받는 중이에요';
+    case 'uploading':
+      return '방금 지난 장면이라 몇 초 뒤에 보여요';
+    case 'finalizing':
+      return '방송 녹화를 정리하는 중이에요(보통 몇 분)';
+    case 'outside-dvr':
+      return '방송 중에는 최근 1시간만 편집할 수 있어요. 끝나면 전체를 편집할 수 있어요';
+    case 'gone':
+      return '보관 기간이 지났거나 영상이 없어요';
+    case 'expired':
+      return '보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요';
+  }
+}
+
+/**
+ * 영상 원천 상태(editorSourceView 결과) → 미리보기 안내. 원천이 섰고 목록도 있으면 null 이다(창 받기 · 재생 오류가 말한다).
+ * unavailable(아직 답이 없을 때의 잠시 불가 · 제어면이 없는 환경)은 알리지 않는다 — 14.2 표에 문구가 없고, 제어면이 없는
+ * 환경은 지금처럼 미리보기 없이 연다
+ * @param hasList 지금 원천의 목록을 들고 있다
+ * @param listFailed 지금 원천의 목록을 받으려다 실패했다
+ */
+export function editorSourceError(
+  view: EditorSourceState,
+  hasList: boolean,
+  listFailed: boolean,
+): PlaybackError | null {
+  switch (view.kind) {
+    case 'ready':
+      if (hasList) return null;
+      return listFailed ? 'list-failed' : 'list-loading';
+    case 'checking':
+      return 'checking';
+    case 'uploading':
+      return 'uploading';
+    case 'finalizing':
+      return 'finalizing';
+    case 'outsideDvr':
+      return 'outside-dvr';
+    case 'goneOrNone':
+      return 'gone';
+    case 'expired':
+      return 'expired';
+    case 'access':
+      return 'access';
+    case 'unavailable':
+      return null;
   }
 }
 
@@ -93,6 +165,10 @@ export interface EditorPlayback {
   setRate: (rate: number) => void;
   /** 구간과 반복 여부를 알린다. 즉시 움직이지 않고 다음 재생 틱이 처리한다 */
   setBounds: (bounds: PlaybackBounds) => void;
+  /** 재생 위치에 보이는 프레임(설계 prw2 3.3 찍기 · 썸네일). 목업이거나 창이 아직 없으면 null — 부르는 쪽이 초로 쓴다 */
+  pickAtPlayhead: () => EditorPick | null;
+  /** 그 초(S)에 보이는 창 안 프레임(끌기 · 화살표). 창 밖 · 목업 · 창 없음이면 null */
+  pickAtS: (seconds: number) => EditorPick | null;
 }
 
 export interface EditorPlaybackOptions {

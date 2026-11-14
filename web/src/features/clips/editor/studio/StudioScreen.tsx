@@ -19,7 +19,6 @@ import {
   requestRender,
   retryUpload,
   mediaStreamId,
-  timelineBaseMs,
   updateRecipe,
   type BroadcastRow,
   type ClipSnapshot,
@@ -28,7 +27,7 @@ import {
   type UploadInfo,
   type UploadRequestSummary,
 } from '@/api/clipEditor';
-import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
+import { elapsedSinceStartMs, startOnAxisMs } from '@/features/broadcast/elapsedSinceStart';
 import { EditorBackLink } from '../EditorBackLink';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
@@ -38,6 +37,7 @@ import { ToolPanel } from './ToolPanel';
 import { ToolRail } from './ToolRail';
 import styles from './StudioScreen.module.css';
 import shared from '../editorShared.module.css';
+import { rangeEdgeLimits } from '../editorEndpoints';
 import { editorIntentForKey, type EditorIntent } from '../editorKeys';
 import {
   useClipEditorMockState,
@@ -54,8 +54,22 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { setActiveRole, toYoutubeCategoryId, track } from '@/lib/analytics';
-import type { RecordingTimeline } from '@/features/player/recordingTimeline';
-import { editorTimelineOf, holdEditorMedia, loadRecording } from '../editorMedia';
+import { holdEditorMedia } from '../editorMedia';
+import { editorSourceError, playbackErrorMessage } from '../editorPlayback';
+import { editorXResolver, streamerIdOf } from '../source/broadcastStreamer';
+import { useEditorSource, type EditorSource as EditorVideoSource } from '../source/useEditorSource';
+import { readPlayerAtMs } from '@/api/cardPositions';
+import { cardSceneLabelOf } from '../source/editorSourceState';
+import { headCacheFor } from '../source/fileHeadProbe';
+import {
+  cardEndpoints,
+  cardHighlightMs,
+  displayRange,
+  recipeEndpoints,
+  type EndpointRange,
+} from '../source/rangeEndpoints';
+import { uploadSceneOffsetMs, type UploadScene } from '../source/sceneOffset';
+import { useSaveCut, type SaveCut } from './useSaveCut';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { useTrackPreview } from '../trackAudio/useTrackPreview';
 import type { FilmstripSource } from './VideoFilmstrip';
@@ -275,6 +289,21 @@ function sourceLabelOf(
   return `${day} · ${card ? '카드' : '구간'} ${formatClock(elapsed)}`;
 }
 
+/**
+ * 이번 방송 시작이 놓인 편집기 초 — 눈금 · 접힌 요약 · 손잡이 표기가 출처 줄과 같은 축(방송 시작부터)으로 적게 뺀다(kty 2026-11-14
+ * (가)). base 가 서버 기준점일 때만 옮긴다: 기준점이 없으면 base 가 이미 방송 시작(또는 vod 첫 PDT)이라 옮길 것이 없다
+ */
+function startOnAxisSecondsOf(
+  base: number,
+  startedAt: string,
+  timelineOriginAt: string | null | undefined,
+): number {
+  const startMs = startOnAxisMs(timelineOriginAt ? base : null, Date.parse(startedAt));
+  // 기준점이 시작보다 늦으면(첫 조각이 늦게 옴) 음수다 — 그대로 두어야 출처 줄(elapsedSinceStartMs)과 같은 경과가 된다. 시작 앞
+  // 0 자르기는 보이는 값에서 한다(secondsSinceStart)
+  return startMs === null ? 0 : startMs / 1000;
+}
+
 function dateLabel(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : `${d.getMonth() + 1}월 ${d.getDate()}일`;
@@ -284,14 +313,17 @@ interface Loaded {
   streamId: string;
   card: JumpCard | null;
   broadcast: BroadcastRow;
-  /** 방송 시작 기준 창(ms) */
-  window: { startMs: number; endMs: number };
+  /**
+   * 연 구간 — 카드 창(편집기 0초 기준 ms) 또는 저장된 컷(절대 ms). 컷을 편집기 초로 옮기는 base 는 원천이 정한 뒤에야 알아
+   * 마운트 쪽(WiredStudioBody)이 바꾼다
+   */
+  span:
+    | { kind: 'window'; startMs: number; endMs: number }
+    | { kind: 'cut'; inAtMs: number; outAtMs: number };
   saved: { id: number; version: number; document: RecipeDocument } | null;
   latestClip: ClipSnapshot | null;
   /** 스트리머가 적어 둔 트랙 이름(POK-240). 못 읽으면 null — 그때는 「트랙 n」으로 보인다 */
   trackLabels: TrackLabels | null;
-  /** 녹화(재생 서버). 있으면 미리보기에 실제 영상이 나오고, 시각의 기준점도 여기다 */
-  recording: RecordingTimeline | null;
   /** 저장된 편집본 지금 판에 남겨 둔 업로드 정보(POK-291). 창을 다시 열 때 채운다 */
   uploadRequest: UploadRequestSummary | null;
 }
@@ -340,6 +372,10 @@ function messageOf(e: unknown): string {
       return '보관 기간(60일)이 지나 이 방송으로는 새 영상을 만들 수 없어요';
     if (e.status === 409 && e.code === 'source_not_ready')
       return '영상 조각이 아직 다 안 올라왔어요 — 잠시 뒤 다시';
+    // 다시 눌러도 같은 거절(POK-196). 사유(reason) 둘(outside_recording · no_footage) 다 다시 물어도 같고 할 일이 범위
+    // 재지정 하나라 문구가 하나다. outside_recording 은 범위 일부만 녹화 밖이어도 난다. 사유 칸은 clipFetch가 싣지 않는다
+    if (e.status === 422 && e.code === 'source_unrenderable')
+      return '고른 범위가 녹화된 구간을 벗어났거나 영상이 없는 곳이라 만들 수 없어요. 범위를 다시 정해 주세요';
     if (e.status === 503 && e.code === 'render_unavailable')
       return '영상 만들기가 잠시 멈춰 있어요 — 잠시 뒤 다시 해 주세요';
     // 유튜브 업로드 정보를 실은 주문의 거절(POK-291)
@@ -384,10 +420,11 @@ function uploadFieldErrorOf(e: unknown): UploadFieldErrors | null {
 }
 
 /**
- * 창의 값 → 렌더 주문의 업로드 정보. 장면 시각은 완성 영상 안으로 자른다. 예약이면 비공개 + 그 시각(유튜브는 비공개 영상에만
+ * 창의 값 → 렌더 주문의 업로드 정보. 장면 시각(sceneOffsetMs — 창의 편집기 초 차를 결과 영상 미디어 거리로 바꾼 값,
+ * sceneOffset.ts)은 완성 영상 안으로 자른다. 예약이면 비공개 + 그 시각(유튜브는 비공개 영상에만
  * 예약을 받는다, POK-381). 창이 보내기 전에 시각을 검사하므로 여기서 날짜가 틀릴 일은 없다
  */
-function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
+function uploadInfoOf(draft: UploadDraft, cutLengthMs: number, sceneOffsetMs: number): UploadInfo {
   const publishAt = draft.scheduled
     ? scheduleInstant(draft.scheduleDate, draft.scheduleTime)
     : null;
@@ -403,7 +440,7 @@ function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
       draft.thumbnailSource === 'scene'
         ? {
             source: 'scene',
-            offsetMs: Math.min(cutLengthMs - 1, Math.max(0, Math.round(draft.sceneOffsetMs))),
+            offsetMs: Math.min(cutLengthMs - 1, Math.max(0, Math.round(sceneOffsetMs))),
           }
         : { source: draft.thumbnailSource },
   };
@@ -438,21 +475,17 @@ async function loadFromCard(streamId: string, cardId: string): Promise<LoadResul
   if (broadcast === null || broadcast.startedAt === null) {
     return { kind: 'error', message: '방송 시작 시각이 없어 구간을 절대 시각으로 못 옮겨요' };
   }
-  const [trackLabels, recording] = await Promise.all([
-    loadTrackLabels(broadcast),
-    loadRecording(broadcast),
-  ]);
+  const trackLabels = await loadTrackLabels(broadcast);
   return {
     kind: 'loaded',
     data: {
       streamId,
       card,
       broadcast,
-      window: card.window,
+      span: { kind: 'window', ...card.window },
       saved: null,
       latestClip: null,
       trackLabels,
-      recording,
       uploadRequest: null,
     },
   };
@@ -473,25 +506,17 @@ async function loadFromRecipe(recipeId: number): Promise<LoadResult> {
       message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
     };
   }
-  // 트랙 이름 읽기는 녹화와 서로 기다릴 이유가 없다: 편집본을 열 때만 둘이 줄을 섰다(카드로 열 때는 이미 함께 간다)
-  const [trackLabels, recording] = await Promise.all([
-    loadTrackLabels(broadcast),
-    loadRecording(broadcast),
-  ]);
-  // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
-  //    저장할 때와 같은 기준이어야 제자리로 온다.
-  const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
+  const trackLabels = await loadTrackLabels(broadcast);
   return {
     kind: 'loaded',
     data: {
       streamId: detail.streamId,
       card: null,
       broadcast,
-      window: { startMs: cut.inAtMs - base, endMs: cut.outAtMs - base },
+      span: { kind: 'cut', inAtMs: cut.inAtMs, outAtMs: cut.outAtMs },
       saved: { id: detail.recipeId, version: detail.recipeVersion, document: detail.recipe },
       latestClip: detail.latestClip,
       trackLabels,
-      recording,
       uploadRequest: detail.uploadRequest ?? null,
     },
   };
@@ -608,7 +633,8 @@ export function StudioScreen() {
 interface SaveState {
   recipeId: number | null;
   version: number | null;
-  busy: 'save' | 'render' | null;
+  /** 보내는 중인 동작. judge 는 「영상 만들기」 앞 컷 판정(목록 다시 받기) — 헤더를 잠그되 영상 상태 알약은 그대로 둔다 */
+  busy: 'save' | 'judge' | 'render' | null;
   clip: ClipSnapshot | null;
   label: string;
   /** 마지막으로 서버에 저장한 본문 — 지금 화면과 다르면 영상 만들기 전에 먼저 저장한다 */
@@ -620,6 +646,8 @@ interface SaveState {
 /** 창이 열려 있는 동안 쥐고 있는 것: 연 순간의 화면(레시피)·완성 영상 길이·처음 값 */
 interface PendingUpload {
   recipe: EditorRecipe;
+  /** 연 순간 끝점으로 판정한 컷(절대 ms) — 주문은 이 컷으로 저장한다 */
+  cut: SaveCut;
   cutLengthMs: number;
   initial: UploadDraft;
   /** 썸네일 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
@@ -629,22 +657,77 @@ interface PendingUpload {
   highlightOffsetMs: number | null;
   /** 장면 그림을 뽑을 재료(편집기가 받아 둔 녹화 조각). 녹화가 없거나 아직 못 받았으면 null */
   frameSource: SceneFrameSource | null;
+  /** 장면 offset 을 결과 영상 미디어 거리로 셀 재료(연 순간의 끝점 · 창 배치 · 목록) */
+  scene: UploadScene;
 }
 
-function WiredStudio({
-  data,
-  reloading,
-  onRecipeCreated,
-}: {
+interface WiredStudioProps {
   data: Loaded;
   /** 주소가 바뀌어 다른 편집 대상을 읽는 중이다 — 다 읽으면 이 화면은 갈아 끼워진다(POK-444) */
   reloading: boolean;
   /** 첫 저장(POST)으로 편집본이 생겼다. 주소를 ?recipe= 로 바꾼다 */
   onRecipeCreated: (recipeId: number) => void;
-}) {
+}
+
+/**
+ * 편집기 영상 원천(③ 되감기 목록 · POK-473)을 폴링하는 얇은 문(계획 prw2 4절 P-3). 편집기 0초(base)가 정해지기 전에는 원천
+ * 확인 표시만 두고, 정해지면 편집기 본문을 그 base 로 마운트한다 — 본문의 훅(영상 · 상태)은 마운트 때 한 번 base 를 받는다.
+ * base 는 세션 동안 바뀌지 않는다(timelineOriginAt → 끝난 방송이면 vod 첫 PDT → startedAt)
+ */
+function WiredStudio(props: WiredStudioProps) {
+  const { broadcast } = props.data;
+  // 채널 번호를 정하는 묻기(관계 · 위임)는 마운트마다 한 번이다
+  const [resolveX] = useState(() =>
+    editorXResolver(streamerIdOf(broadcast), mediaStreamId(broadcast)),
+  );
+  const source = useEditorSource(broadcast, resolveX);
+  if (source.base === null) {
+    const waiting = editorSourceError(source.state, false, source.listFailed) ?? 'checking';
+    return (
+      <>
+        <StudioSkeleton />
+        <p
+          role="status"
+          style={{ position: 'fixed', insetInline: 0, bottom: '1rem', textAlign: 'center' }}
+        >
+          {playbackErrorMessage(waiting)}
+        </p>
+      </>
+    );
+  }
+  return <WiredStudioBody key={source.base} {...props} source={source} base={source.base} />;
+}
+
+/**
+ * 연 범위의 끝점 — 카드는 clip 이 준 창 두 끝(playerWindow · exact) 또는 칸 없는 카드의 지금 식(estimate), 저장된 컷은 받은
+ * 값 그대로(exact · 계획 4절 P-7). 카드 범위는 미리 받기와 같은 함수(cardEndpoints)라 미리 받은 창 열쇠가 같다
+ */
+function endpointsOfSpan(span: Loaded['span'], card: JumpCard | null, base: number): EndpointRange {
+  if (span.kind === 'cut') return recipeEndpoints(span);
+  return cardEndpoints({ window: span, playerWindow: card?.playerWindow }, base);
+}
+
+/** 연 범위의 편집기 0초 기준 창(ms) — 끝점의 처음 표시 구간이다(손잡이 한계 · 출처 줄이 쓴다) */
+function windowOfRange(range: { startSeconds: number; endSeconds: number }): {
+  startMs: number;
+  endMs: number;
+} {
+  return {
+    startMs: Math.round(range.startSeconds * 1000),
+    endMs: Math.round(range.endSeconds * 1000),
+  };
+}
+
+function WiredStudioBody({
+  data,
+  reloading,
+  onRecipeCreated,
+  source: videoSource,
+  base,
+}: WiredStudioProps & { source: EditorVideoSource; base: number }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
+  const { streamId, card, broadcast, saved, latestClip, trackLabels } = data;
   const startedAt = broadcast.startedAt!;
 
   // 사용 통계의 역할 속성(active_role) — 편집기는 독(ChannelScope) 밖이라, 링크로 바로 열면 등록이 없거나 그 브라우저의 옛
@@ -668,47 +751,67 @@ function WiredStudio({
     track('clip_editor_opened', { source: openedFrom });
     if (openedCardId !== null) void openJumpCard(openedCardId);
   }, [openedFrom, openedCardId]);
-  // 시각 기준점 · 녹화 끝 · 녹화 구간(기준점 축). 카드의 미리 받기(POK-499)도 같은 셈으로 같은 주소를 만든다
-  const timeline = useMemo(() => editorTimelineOf(broadcast, recording), [broadcast, recording]);
-  const { base, recordingEndSeconds, pieces: recordingPieces } = timeline;
-
+  // 카드에서 열었는데 clip 이 장면을 못 찾았으면(playerAtMs null) 한 번 알린다 — 영상 창은 막지 않는다(설계 14.2 카드 표지)
+  const sceneLabel = card === null ? null : cardSceneLabelOf(readPlayerAtMs(card));
+  const sceneTold = useRef(false);
+  useEffect(() => {
+    if (sceneLabel !== 'sceneMissing' || sceneTold.current) return;
+    sceneTold.current = true;
+    toast({ tone: 'info', title: '이 카드의 장면을 아직 찾지 못했어요' });
+  }, [sceneLabel, toast]);
+  // 끝점(설계 prw2 3.5) — 저장 값은 이것이 정하고, 처음 구간은 그 표시 초다. ② 머리 캐시는 영상 키마다 하나다
+  const mediaKey = mediaStreamId(broadcast);
+  const heads = useMemo(() => headCacheFor(mediaKey), [mediaKey]);
+  const endpoints = useMemo(() => endpointsOfSpan(data.span, card, base), [data.span, card, base]);
   const initialRange = useMemo(
-    () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
-    [window],
+    () => displayRange(endpoints, heads, base),
+    [endpoints, heads, base],
   );
-  // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
+  const window = useMemo(() => windowOfRange(initialRange), [initialRange]);
+  // 실재생 — 되감기 목록 창(POK-473). 훅은 늘 부르고, 원천 목록이 있을 때만 영상을 붙인다. 목록이 없어도 원천이 막힌 까닭
+  //    (D3)이 있으면 어댑터를 넘겨 미리보기 아래에 알린다
   const video = useEditorVideoPlayback({
-    streamId: mediaStreamId(broadcast),
-    // 재생 서버에는 「기준점 + 초」로 절대 시각을 묻는다 — 구간 초가 기준점 축이다
-    recordingStartMs: base,
-    recordingSeconds: recordingEndSeconds,
-    pieces: recordingPieces,
+    streamId,
+    mediaKey,
+    base,
+    source: videoSource,
     initialRange,
   });
-  // 트랙별 미리 듣기: 영상이 받으려는 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 영상과 함께 받기 시작해, 영상 노드를
-  // 따라 튼다(POK-389). 따라 틀기는 영상이 실제로 받아 튼 창으로 옮긴다
+  const cutFor = useSaveCut({ base, heads, streamId, mediaKey, source: videoSource });
+  const hasSource = videoSource.list !== null;
+  const sourceList = videoSource.list?.playlist ?? null;
+  const showPlayback = hasSource || video.playback.error !== null;
+  // 트랙별 미리 듣기(POK-389): 영상이 받으려는 창과 같은 창 조각의 소리(방송 소리 트랙 전부)를 영상과 함께 받기 시작해, 영상이
+  // 그 창을 받으면 그 창 Blob 시각에 놓고 영상 노드를 따라 튼다. 창이 바뀌면 앞 재생기는 버린다(설계 prw2 3.3 · c9′). ② 가 아직
+  // 없으면(행 · 판 NULL 머리 · 끝 소리 확보) 기다림 고리가 다시 묻는다 — 확보 seq 의 ③ 은 원천 목록에서 찾는다(c10b′)
   const trackPreview = useTrackPreview({
     streamId,
-    baseMs: base,
-    window: recording ? video.targetWindow : null,
-    video: recording ? video.video : null,
-    playingFromSeconds: recording ? (video.window?.startSeconds ?? null) : null,
+    mediaKey,
+    list: sourceList,
+    reloadList: videoSource.reloadList,
+    window: hasSource ? video.target : null,
+    loaded: hasSource ? video.loaded : null,
+    failedKey: hasSource ? video.failedKey : null,
+    video: hasSource ? video.video : null,
   });
 
   // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
+  // 편집기 초 → 그 창의 Blob 시각은 창 배치가 바꾼다(blobAtS — 판 NULL 머리 원점 · 조각 경계)
   const loadedWindow = video.window;
+  const { placement, seekLimits } = video;
   const filmstripSource = useMemo<FilmstripSource | null>(
     () =>
-      recording && video.src !== '' && loadedWindow !== null
+      hasSource && video.src !== '' && loadedWindow !== null && placement !== null
         ? {
             src: video.src,
-            videoSecondsAt: (ms) => ms / 1000 - loadedWindow.startSeconds,
+            videoSecondsAt: (ms) => placement.blobAtS(ms / 1000),
+            seekLimits: seekLimits ?? undefined,
             output: FULL_FRAME_OUTPUT,
             fromSeconds: loadedWindow.startSeconds,
             toSeconds: loadedWindow.endSeconds,
           }
         : null,
-    [recording, video.src, loadedWindow],
+    [hasSource, video.src, loadedWindow, placement, seekLimits],
   );
 
   const [save, setSave] = useState<SaveState>(() => ({
@@ -726,40 +829,48 @@ function WiredStudio({
 
   const source = useMemo<EditorSource>(() => {
     const endedMs = broadcast.endedAt ? Date.parse(broadcast.endedAt) - base : null;
-    // 방송 길이 — 녹화가 있으면 녹화 길이, 끝났으면 실제 길이, 아니면 창 끝에 1분 여유
-    const totalSeconds = Math.max(
-      recording ? recordingEndSeconds : (endedMs ?? window.endMs + 60_000) / 1000,
-      window.endMs / 1000,
-    );
+    // 방송 길이 — 끝났으면 실제 길이, 아니면 창 끝에 1분 여유(구간 한계는 아래에서 창 끝으로 묶는다)
+    const totalSeconds = Math.max((endedMs ?? window.endMs + 60_000) / 1000, window.endMs / 1000);
     // 🔴 구간은 **그 하이라이트 안에서만** 잡는다(사용자 확정 2026-09-17) — 카드가 잡아 준 시작~끝이 곧 양쪽 한계이고,
     //    편집자는 그 안에서 줄이기만 한다. 방송의 다른 장면으로는 핸들이 나가지 않는다.
     //    저장된 편집본을 다시 열 때는 카드가 없어 저장된 구간이 한계가 된다(다시 넓히려면 카드에서 새로 연다).
-    const minSeconds = window.startMs / 1000;
-    const durationSeconds = Math.min(totalSeconds, window.endMs / 1000);
+    //    5초 언저리로 짧은 범위는 카드로 열었을 때만 끝 한계를 넓힌다(rangeEdgeLimits — kty 2026-11-12 (나) 「카드만」)
+    const { minSeconds, durationSeconds } = rangeEdgeLimits(
+      window,
+      totalSeconds,
+      data.span.kind === 'window',
+    );
     return {
       clipTitle: card ? `점프카드 #${card.id}` : `편집본 #${saved?.id}`,
       sourceLabel: sourceLabelOf(startedAt, broadcast.timelineOriginAt, card, window.startMs),
+      startOnAxisSeconds: startOnAxisSecondsOf(base, startedAt, broadcast.timelineOriginAt),
       durationSeconds,
       minSeconds,
-      range: { startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 },
+      range: initialRange,
+      endpoints: { initial: endpoints, base, heads },
     };
   }, [
     broadcast.endedAt,
     broadcast.timelineOriginAt,
     base,
     window,
+    data.span.kind,
     card,
     saved,
     startedAt,
-    recording,
-    recordingEndSeconds,
+    initialRange,
+    endpoints,
+    heads,
   ]);
 
-  /** 화면값 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가 한다 */
+  /**
+   * 화면값 + 끝점으로 판정한 컷 → 저장할 편집본 문서. 계산은 카드에서 바로 저장(saveCardDraft)과 같이 쓰는 recipeDocumentOf가
+   * 한다 — 판정한 컷 ms 를 그대로 싣는다(다시 셈하지 않음)
+   */
   const documentFor = useCallback(
-    (recipe: EditorRecipe): RecipeDocument =>
-      recipeDocumentOf({ streamId, base, recipe, saved: saved?.document ?? null }),
-    [base, saved, streamId],
+    (recipe: EditorRecipe, cut: SaveCut): RecipeDocument =>
+      recipeDocumentOf({ streamId, cut, recipe, saved: saved?.document ?? null }),
+    [saved, streamId],
   );
 
   /** 새로 만들거나 고쳐 저장하고, 저장한 판을 상태에 적는다 */
@@ -782,13 +893,10 @@ function WiredStudio({
     [streamId, card, onRecipeCreated, queryClient],
   );
 
-  const saveDraft = useCallback(
-    (recipe: EditorRecipe) => {
-      const current = saveRef.current;
-      if (current.busy !== null) return;
-      const doc = documentFor(recipe);
-      setSave((s) => ({ ...s, busy: 'save', label: '저장하는 중…' }));
-      persist(current.recipeId, doc)
+  /** 판정한 컷으로 저장하고 결과를 알린다 */
+  const persistDraft = useCallback(
+    (recipe: EditorRecipe, cut: SaveCut, recipeId: number | null) => {
+      persist(recipeId, documentFor(recipe, cut))
         .then((snap) => {
           setSave((s) => ({
             ...s,
@@ -798,7 +906,7 @@ function WiredStudio({
           toast({ tone: 'success', title: `편집본 #${snap.id} 저장됨 (v${snap.recipeVersion})` });
           // 사람이 누른 저장만 센다 — 영상 주문(submitUpload)도 persist를 거치지만 여기로 오지 않는다 (POK-357)
           track('clip_recipe_saved', {
-            first_save: current.recipeId === null,
+            first_save: recipeId === null,
             source: openedFrom,
             layout: recipe.layout,
             caption_position: recipe.captionPosition,
@@ -815,6 +923,24 @@ function WiredStudio({
     [documentFor, persist, toast, openedFrom],
   );
 
+  const saveDraft = useCallback(
+    (recipe: EditorRecipe, again: () => void) => {
+      const current = saveRef.current;
+      if (current.busy !== null) return;
+      setSave((s) => ({ ...s, busy: 'save', label: '저장하는 중…' }));
+      // 끝점 판정(누를 때 목록을 다시 받는다 — PK1)이 막으면 저장 전으로 돌린다. 까닭은 useSaveCut 이 알리고, 「다시 시도」 는
+      // again(그 순간의 레시피로 이 저장을 처음부터)이다
+      const refused = () => setSave((s) => ({ ...s, busy: null, label: current.label }));
+      cutFor(
+        recipe.endpoints,
+        (cut) => persistDraft(recipe, cut, current.recipeId),
+        refused,
+        again,
+      );
+    },
+    [cutFor, persistDraft],
+  );
+
   const [pending, setPending] = useState<PendingUpload | null>(null);
   const [uploadErrors, setUploadErrors] = useState<UploadFieldErrors>({});
   // 다른 편집 대상을 읽는 동안 이 화면은 만질 수 없다(POK-444): 틀던 영상은 멈추고(멈출 단추도 막힌다), 떠 있던 업로드 창은
@@ -827,6 +953,8 @@ function WiredStudio({
   }, [reloading, previewVideo]);
   // 이 화면에서 마지막으로 보낸 창의 값. 다시 열면 그대로 채운다(고른 이미지 파일까지)
   const lastDraft = useRef<UploadDraft | null>(null);
+  // 장면을 미디어 거리로 셀 수 없다는 알림은 편집기에서 한 번만 — 주문마다 끼면 같은 거절 알림이 합쳐지지 않고 쌓인다
+  const sceneApproxTold = useRef(false);
   // 창 코드는 첫 로드에서 뺐다: 화면이 선 뒤에 미리 받아 두어 처음 누를 때 기다리지 않게 한다. 못 받아도 누를 때 다시 묻는다
   useEffect(() => {
     loadUploadDialog().catch(() => undefined);
@@ -853,22 +981,24 @@ function WiredStudio({
   );
   // 재생 위치 저장소. 업로드 창은 재생 중에도 열리므로 허브의 값(멈춤 · 시크 때만 바뀐다)이 아니라 여는 순간의 위치를 읽는다
   const playbackClock = video.playback.clock;
-  // 받아 둔 녹화 조각과 그 시작 초. 창을 여는 순간에 읽는다(장면 그림 재료)
-  const videoRef = useRef({ src: video.src, windowStartSeconds: video.windowStartSeconds });
-  videoRef.current = { src: video.src, windowStartSeconds: video.windowStartSeconds };
+  // 받아 둔 녹화 조각과 그 배치. 창을 여는 순간에 읽는다(장면 그림 재료)
+  const videoRef = useRef({ src: video.src, placement, seekLimits });
+  videoRef.current = { src: video.src, placement, seekLimits };
 
-  /** 「영상 만들기」 = 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
-  const openUploadDialog = useCallback(
-    (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
+  /** 판정한 컷으로 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
+  const openWithCut = useCallback(
+    (recipe: EditorRecipe, thumbnailSeconds: number | null, cut: SaveCut) => {
       const current = saveRef.current;
-      if (current.busy !== null) return;
-      // 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
-      const playheadSeconds = recording ? playbackClock.getSeconds() : null;
-      const cut = documentFor(recipe).cut!;
-      const cutLengthMs = cut.outAtMs - cut.inAtMs;
+      // 판정하는 동안은 헤더가 잠겨(judge) 다른 동작이 시작되지 않는다. 그 사이 다른 편집 대상으로 넘어갔으면 열지 않는다
+      if ((current.busy !== null && current.busy !== 'judge') || reloadingRef.current) return;
+      // 원천 목록이 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다
+      const playheadSeconds = hasSource ? playbackClock.getSeconds() : null;
+      const cutLengthMs = cut.outMs - cut.inMs;
       const rangeStart = recipe.range.startSeconds;
-      // 카드 시각은 기준점 축의 ms, 구간 시작은 같은 축의 초다(POK-255)
-      const highlightRaw = card ? Math.round(card.streamTimestampMs - rangeStart * 1000) : null;
+      // 하이라이트는 목록 PDT 축 ms(clip 의 playerAtMs · 칸 없으면 base + 카드 ms), 구간 시작은 편집기 초다
+      const highlightAt = card ? cardHighlightMs(card, base) : null;
+      const highlightRaw =
+        highlightAt === null ? null : Math.round(highlightAt - base - rangeStart * 1000);
       const highlightOffsetMs =
         highlightRaw !== null && highlightRaw >= 0 && highlightRaw < cutLengthMs
           ? highlightRaw
@@ -878,15 +1008,26 @@ function WiredStudio({
         highlightOffsetMs ?? defaultSceneOffsetMs(playheadSeconds, rangeStart, cutLengthMs);
       // 창이 떠 있는 동안 편집기는 안 바뀌므로 조각·모양을 연 순간 값으로 쥔다
       const loaded = videoRef.current;
+      const shown = loaded.placement;
       const frameSource: SceneFrameSource | null =
-        recording && loaded.src !== ''
+        hasSource && loaded.src !== '' && shown !== null
           ? {
               src: loaded.src,
-              videoSecondsAt: (offsetMs) =>
-                rangeStart + offsetMs / 1000 - loaded.windowStartSeconds,
+              videoSecondsAt: (offsetMs) => shown.blobAtS(rangeStart + offsetMs / 1000),
+              // 받은 창 밖 장면은 그림이 없다 — blobAtS 가 창 끝으로 묶은 그림은 제출되는 장면과 다르다(c12′ r1 [cx] 강등 M)
+              covers: (offsetMs) => shown.pickAtS(rangeStart + offsetMs / 1000) !== null,
+              seekLimits: loaded.seekLimits ?? undefined,
               output: outputFromLook(recipe),
             }
           : null;
+      const sceneMedia: UploadScene = {
+        rangeStartSeconds: rangeStart,
+        start: recipe.endpoints?.start,
+        placement: hasSource ? shown : null,
+        list: sourceList,
+        base,
+        heads,
+      };
       const remembered = lastDraft.current;
       const stored =
         current.uploadRequest !== null && current.uploadRequest.version === current.version
@@ -901,15 +1042,37 @@ function WiredStudio({
       setUploadErrors({});
       setPending({
         recipe,
+        cut,
         cutLengthMs,
         initial: prefilled.draft,
         pickedInEditor: prefilled.picked,
         playheadOffsetMs: sceneOffsetFromPlayhead(playheadSeconds, rangeStart, cutLengthMs),
         highlightOffsetMs,
         frameSource,
+        scene: sceneMedia,
       });
     },
-    [documentFor, card, recording, playbackClock],
+    [card, hasSource, playbackClock, sourceList, base, heads],
+  );
+  /** 「영상 만들기」 = 끝점으로 컷을 판정하고(PK1) 서면 업로드 정보 창을 연다 */
+  const openUploadDialog = useCallback(
+    (recipe: EditorRecipe, thumbnailSeconds: number | null, again: () => void) => {
+      if (saveRef.current.busy !== null) return;
+      // 판정(누를 때 목록을 다시 받는다)이 끝날 때까지 헤더를 잠근다 — 그 사이 누른 저장이 판정 겹침으로 말없이 무시되지
+      // 않게(E4b-3 r1 [cc] L1 · cp1 L)
+      setSave((s) => ({ ...s, busy: 'judge' }));
+      const release = () => setSave((s) => (s.busy === 'judge' ? { ...s, busy: null } : s));
+      cutFor(
+        recipe.endpoints,
+        (cut) => {
+          release();
+          openWithCut(recipe, thumbnailSeconds, cut);
+        },
+        release,
+        again,
+      );
+    },
+    [cutFor, openWithCut],
   );
 
   /**
@@ -923,12 +1086,21 @@ function WiredStudio({
       const current = saveRef.current;
       if (pending === null || current.busy !== null) return;
       lastDraft.current = draft;
-      const doc = documentFor(pending.recipe);
+      const doc = documentFor(pending.recipe, pending.cut);
       const dirty =
         current.recipeId === null ||
         current.savedDoc === null ||
         !sameRecipe(current.savedDoc, doc);
-      const upload = uploadInfoOf(draft, pending.cutLengthMs);
+      // 장면을 미디어 거리로 셀 수 없으면 창의 값을 싣되 업로드는 막지 않고 알린다(kty c12′ 결정 1 (가))
+      const scene =
+        draft.thumbnailSource === 'scene'
+          ? uploadSceneOffsetMs(draft.sceneOffsetMs, pending.scene)
+          : null;
+      const upload = uploadInfoOf(
+        draft,
+        pending.cutLengthMs,
+        scene?.offsetMs ?? draft.sceneOffsetMs,
+      );
       setUploadErrors({});
       setSave((s) => ({
         ...s,
@@ -963,6 +1135,11 @@ function WiredStudio({
             label: `편집본 #${s.recipeId} v${s.version} 저장됨`,
           }));
           setPending(null);
+          // 장면을 미디어 거리로 못 셌다는 알림은 요청이 받아들여진 뒤에 — 저장 · 요청이 실패하면 그 실패 알림만 뜬다(c12 cp1 [cc] L)
+          if (scene?.approximate === true && !sceneApproxTold.current) {
+            sceneApproxTold.current = true;
+            toast({ tone: 'info', title: '썸네일 장면이 조금 다를 수 있어요' });
+          }
           // 서버가 주문을 받은 뒤에 센다 — 거절된 제출은 세지 않아 DB 숫자와 맞는다. 제목·설명·태그는 싣지 않는다 (POK-357)
           track('video_render_requested', {
             privacy_status: upload.privacyStatus,
@@ -1113,7 +1290,7 @@ function WiredStudio({
 
   return (
     <>
-      {recording ? (
+      {hasSource ? (
         // 보이지 않는 영상 노드 하나 — 프레임은 미리보기 칸의 캔버스들이 옮겨 그린다(VideoSurface).
         <video
           ref={video.videoRef}
@@ -1124,18 +1301,19 @@ function WiredStudio({
         />
       ) : null}
       <StudioEditor
-        playback={recording ? video.playback : undefined}
-        previewVideo={recording ? video.video : null}
-        previewBuffering={recording ? video.buffering : false}
+        playback={showPlayback ? video.playback : undefined}
+        previewVideo={hasSource ? video.video : null}
+        previewBuffering={hasSource ? video.buffering : false}
         source={source}
         actions={actions}
         autosaveLabel={save.label}
         uploadLabel="영상 만들기"
-        busyAction={save.busy}
+        // 판정 중에도 「영상 만들기」 가 도는 중으로 보인다(누른 동작이 진행 중이다)
+        busyAction={save.busy === 'judge' ? 'render' : save.busy}
         clipStatus={clipStatus}
         reloading={reloading}
         mixTrackId={trackId(0)}
-        trackPreview={recording ? trackPreview : undefined}
+        trackPreview={hasSource ? trackPreview : undefined}
         filmstripSource={filmstripSource}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}

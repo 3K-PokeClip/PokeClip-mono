@@ -3,12 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withToastProvider } from '@/test/testProviders';
 import type { PlaybackBounds } from './editorPlayback';
 import { createPlaybackClock, type ClockedPlayback } from './playbackClock';
+import type { HeadCache, HeadEntry } from './source/fileHeadProbe';
+import { cardEndpoints, savable } from './source/rangeEndpoints';
+import type { EditorPick } from './source/windowPlacement';
 import { MAX_RANGE_SECONDS } from './timelineMath';
 import {
   useClipEditorMockState,
   type ClipEditorMockState,
   type ClipEditorOptions,
+  type EditorRecipe,
 } from './useClipEditorMockState';
+
+/** 끌기 · 화살표 입력(편집기 초 S) */
+const sIn = (s: number) => ({ kind: 's' as const, s });
 
 function renderEditor(options?: ClipEditorOptions) {
   return renderHook(() => useClipEditorMockState(options), { wrapper: withToastProvider });
@@ -79,7 +86,7 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
     const before = result.current.range;
 
-    act(() => result.current.setRangeEdge('start', before.endSeconds - 181));
+    act(() => result.current.setRangeEdge('start', sIn(before.endSeconds - 181)));
 
     expect(result.current.range).toEqual(before);
     // 되돌릴 거리도 생기지 않는다 — 아무 일도 일어나지 않았다
@@ -90,7 +97,7 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
     const before = result.current.range;
 
-    act(() => result.current.setRangeEdge('end', before.startSeconds + 4));
+    act(() => result.current.setRangeEdge('end', sIn(before.startSeconds + 4)));
 
     expect(result.current.range).toEqual(before);
     expect(result.current.canUndo).toBe(false);
@@ -100,11 +107,14 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
     const before = result.current.range;
 
-    act(() => result.current.setRangeEdge('end', before.startSeconds + 4));
+    act(() => result.current.setRangeEdge('end', sIn(before.startSeconds + 4)));
     expect(result.current.range).toEqual(before);
 
     act(() =>
-      result.current.setRangeEdge('start', result.current.range.endSeconds - MAX_RANGE_SECONDS),
+      result.current.setRangeEdge(
+        'start',
+        sIn(result.current.range.endSeconds - MAX_RANGE_SECONDS),
+      ),
     );
     expect(result.current.rangeLengthSeconds).toBe(MAX_RANGE_SECONDS);
   });
@@ -124,7 +134,7 @@ describe('useClipEditorMockState', () => {
 
     act(() => result.current.setLayout('vert'));
     act(() => result.current.selectTitle('title-2'));
-    act(() => result.current.setRangeEdge('end', originalRange.startSeconds + 30));
+    act(() => result.current.setRangeEdge('end', sIn(originalRange.startSeconds + 30)));
 
     expect(result.current.canUndo).toBe(true);
     act(() => result.current.undo());
@@ -201,7 +211,7 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
     act(() => result.current.pickThumbnail());
     // 시작을 4935로 당기면(쇼츠 5.8초) 고른 4934초는 밖이다
-    act(() => result.current.setRangeEdge('start', 4935));
+    act(() => result.current.setRangeEdge('start', sIn(4935)));
     expect(result.current.range.startSeconds).toBe(4935);
     expect(result.current.thumbnailSeconds).toBeNull();
   });
@@ -213,7 +223,7 @@ describe('useClipEditorMockState', () => {
 
     act(() => result.current.beginGesture());
     for (const seconds of [4950, 4955, 4960, 4965, 4970]) {
-      act(() => result.current.setRangeEdge('end', seconds));
+      act(() => result.current.setRangeEdge('end', sIn(seconds)));
     }
     act(() => result.current.endGesture());
 
@@ -231,7 +241,7 @@ describe('useClipEditorMockState', () => {
 
     act(() => result.current.beginGesture());
     const frozen = result.current.view;
-    act(() => result.current.setRangeEdge('end', 4970));
+    act(() => result.current.setRangeEdge('end', sIn(4970)));
     expect(result.current.view).toEqual(frozen);
 
     // 놓으면 새 구간을 따라 창이 다시 잡힌다
@@ -281,7 +291,7 @@ describe('useClipEditorMockState', () => {
     const frozen = result.current.view;
     act(() => result.current.gestureHandlers.onPointerCancel());
 
-    act(() => result.current.setRangeEdge('end', 4970));
+    act(() => result.current.setRangeEdge('end', sIn(4970)));
     expect(result.current.view).not.toEqual(frozen);
   });
 
@@ -299,9 +309,9 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
 
     // 끝점을 원본 끝까지 보낸 뒤 한 번 더 민다
-    act(() => result.current.setRangeEdge('end', result.current.sourceDurationSeconds));
+    act(() => result.current.setRangeEdge('end', sIn(result.current.sourceDurationSeconds)));
     const afterFirst = result.current.canUndo;
-    act(() => result.current.setRangeEdge('end', result.current.sourceDurationSeconds + 50));
+    act(() => result.current.setRangeEdge('end', sIn(result.current.sourceDurationSeconds + 50)));
     act(() => result.current.undo());
 
     expect(afterFirst).toBe(true);
@@ -388,6 +398,8 @@ function fakePlayback(overrides: Partial<ClockedPlayback> = {}) {
     endScrub: vi.fn(),
     setRate: (rate: number) => calls.rates.push(rate),
     setBounds: (bounds: PlaybackBounds) => calls.bounds.push(bounds),
+    pickAtPlayhead: () => null,
+    pickAtS: () => null,
     ...overrides,
   };
   return { playback, calls };
@@ -420,7 +432,7 @@ describe('useClipEditorMockState — 재생 어댑터 주입', () => {
 
     // 목업 구간(1:22:08~)은 5043초 방송의 좌표라, 길이도 그 소스의 것이어야 핸들이 움직인다
     expect(result.current.sourceDurationSeconds).toBe(5043);
-    act(() => result.current.setRangeEdge('end', 4950));
+    act(() => result.current.setRangeEdge('end', sIn(4950)));
     expect(result.current.range.endSeconds).toBe(4950);
     expect(result.current.view.endSeconds).toBeLessThanOrEqual(5043);
   });
@@ -453,7 +465,7 @@ describe('useClipEditorMockState — 재생 어댑터 주입', () => {
     const { result } = renderEditor({ playback });
     const before = calls.bounds.length;
 
-    act(() => result.current.setRangeEdge('end', result.current.range.endSeconds + 3));
+    act(() => result.current.setRangeEdge('end', sIn(result.current.range.endSeconds + 3)));
 
     expect(calls.bounds.length).toBeGreaterThan(before);
     expect(calls.bounds.at(-1)?.endSeconds).toBe(result.current.range.endSeconds);
@@ -583,6 +595,36 @@ describe('useClipEditorMockState — 재생 위치 구독', () => {
     expect(requestUpload).toHaveBeenCalledOnce();
     expect(requestUpload.mock.calls[0]![0]).toMatchObject({ splitRatio: 70 });
   });
+
+  it('r1 HIGH — 저장의 「다시 시도」(again)는 그 순간의 레시피로 저장을 다시 부른다: 거절 뒤 고친 화면이 실린다', () => {
+    const saveDraft = vi.fn<(recipe: EditorRecipe, again: () => void) => void>();
+    const { result } = renderEditor({ actions: { saveDraft } });
+
+    act(() => result.current.saveDraft());
+    act(() => result.current.setSplitRatio(70));
+    act(() => saveDraft.mock.calls[0]![1]());
+
+    expect(saveDraft).toHaveBeenCalledTimes(2);
+    expect(saveDraft.mock.calls[1]![0]).toMatchObject({ splitRatio: 70 });
+  });
+
+  it('r1 HIGH — 영상 만들기의 「다시 시도」(again)는 창 준비를 다시 거쳐 그 순간의 레시피로 연다', () => {
+    const opens: (() => void)[] = [];
+    const requestUpload =
+      vi.fn<(recipe: EditorRecipe, thumbnailSeconds: number | null, again: () => void) => void>();
+    const { result } = renderEditor({
+      actions: { requestUpload, whenUploadReady: (next) => opens.push(next) },
+    });
+
+    act(() => result.current.requestUpload());
+    act(() => opens[0]!());
+    act(() => result.current.setSplitRatio(70));
+    act(() => requestUpload.mock.calls[0]![2]());
+    act(() => opens[1]!());
+
+    expect(requestUpload).toHaveBeenCalledTimes(2);
+    expect(requestUpload.mock.calls[1]![0]).toMatchObject({ splitRatio: 70 });
+  });
 });
 
 describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
@@ -617,7 +659,7 @@ describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
     const frozen = result.current.view;
 
     act(() => result.current.endGesture(first));
-    act(() => result.current.setRangeEdge('end', 4970));
+    act(() => result.current.setRangeEdge('end', sIn(4970)));
     // 아직 제스처 중이다 — 창이 고정된 채다
     expect(result.current.view).toEqual(frozen);
 
@@ -1072,5 +1114,146 @@ describe('useClipEditorMockState — 크롭 모드 작은 화면 테두리', () 
     const { result } = renderEditor({ initialLayout: 'crop' });
     act(() => result.current.setPipBorder({ on: true, width: 1, color: '#ffffff' }));
     expect(result.current.canUndo).toBe(false);
+  });
+});
+
+// 실제 모드의 끝점 · 고름 입력(계획 prw2 5절 E4b-3 · 설계 3.3 몸짓 표). 몸짓은 창 안이면 고름, 밖이면 S 다. 저장 값은 끝점이
+// 정하고(savable), 실행취소는 끝점을 통째로 되돌린다.
+describe('useClipEditorMockState — 끝점 · 고름 입력', () => {
+  const BASE = 1_726_826_400_000;
+  /** 판 NULL 조각 k(4초 · PDT = BASE + 4k초 · D3 = 10k) 안 offset 초의 고름 */
+  const pickAt = (seq: number, offset: number): EditorPick => ({
+    seq,
+    pts: 10 * seq + offset,
+    dur: 0.5,
+    videoDts: 10 * seq,
+    pdtMs: BASE + seq * 4_000,
+    durationMs: 4_000,
+    timing: null,
+  });
+  /** 받은 창 = 조각 25–40(편집기 100–164초) */
+  const pickAtS = (s: number) =>
+    s < 100 || s >= 164
+      ? null
+      : pickAt(Math.floor(s / 4), Math.floor((s - Math.floor(s / 4) * 4) * 2) / 2);
+  /** 머리 캐시 — 시험이 머리를 넣으면 구독자에게 알린다 */
+  const headCache = () => {
+    const entries = new Map<number, HeadEntry>();
+    const listeners = new Set<() => void>();
+    return {
+      get: (seq: number) => entries.get(seq),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      set: (seq: number, entry: HeadEntry) => {
+        entries.set(seq, entry);
+        listeners.forEach((listener) => listener());
+      },
+    } satisfies HeadCache & { set: unknown };
+  };
+
+  function renderReal(playhead: EditorPick | null = null) {
+    const saved: EditorRecipe[] = [];
+    const { playback } = fakePlayback({
+      clock: createPlaybackClock(130),
+      pickAtS,
+      pickAtPlayhead: () => playhead,
+    });
+    const heads = headCache();
+    const hook = renderEditor({
+      playback,
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        minSeconds: 0,
+        durationSeconds: 400,
+        range: { startSeconds: 110, endSeconds: 150 },
+        endpoints: {
+          initial: cardEndpoints({ window: { startMs: 110_000, endMs: 150_000 } }, BASE),
+          base: BASE,
+          heads,
+        },
+      },
+      actions: { saveDraft: (recipe) => saved.push(recipe) },
+    });
+    const save = () => {
+      act(() => hook.result.current.saveDraft());
+      return saved.at(-1)!;
+    };
+    return { ...hook, heads, save };
+  }
+
+  it('K3 — 창 안 끌기는 고름이라 판 NULL 머리를 읽지 못하면 저장이 막힌다(판독 없이 저장되는 우회가 없다)', () => {
+    const { result, heads, save } = renderReal();
+
+    act(() => result.current.setRangeEdge('end', sIn(140.3)));
+    const recipe = save();
+
+    expect(recipe.endpoints?.end).toEqual({ kind: 'pick', pick: pickAt(35, 0) });
+    expect(recipe.range.endSeconds).toBe(140);
+    const startSet = {
+      ...recipe.endpoints!,
+      start: { kind: 'exact', ms: BASE + 110_000 },
+    } as const;
+    expect(savable(startSet, { base: BASE, heads, list: null })).toEqual({
+      ok: false,
+      reason: 'headMissing',
+    });
+  });
+
+  it('창 밖 끌기는 S 입력이라 그 자리 exact 다(설계가 받아들인 동작)', () => {
+    const { result, save } = renderReal();
+
+    act(() => result.current.setRangeEdge('start', sIn(95.25)));
+
+    expect(save().endpoints?.start).toEqual({ kind: 'exact', ms: BASE + 95_250 });
+  });
+
+  it('찍기는 재생 위치에 보이는 프레임을 고른다', () => {
+    const { result, save } = renderReal(pickAt(30, 1.5));
+
+    act(() => result.current.markIn());
+
+    expect(save().endpoints?.start).toEqual({ kind: 'pick', pick: pickAt(30, 1.5) });
+    expect(result.current.range.startSeconds).toBe(121.5);
+  });
+
+  it('실행취소는 끝점 둘을 통째로 되돌린다 — 다시 하기도 통째다', () => {
+    const { result, save } = renderReal();
+    const opened = save().endpoints;
+    act(() => result.current.setRangeEdge('end', sIn(140.3)));
+    act(() => result.current.setRangeEdge('start', sIn(120.6)));
+    const edited = save().endpoints;
+
+    act(() => result.current.undo());
+    act(() => result.current.undo());
+    const undone = save().endpoints;
+    const undoneRange = result.current.range;
+    act(() => result.current.redo());
+    act(() => result.current.redo());
+
+    expect(undone).toEqual(opened);
+    expect(undoneRange).toEqual({ startSeconds: 110, endSeconds: 150 });
+    expect(save().endpoints).toEqual(edited);
+  });
+
+  it('썸네일 고르기는 재생 위치에 보이는 프레임을 고르고 그 표시 초로 구간 안을 판정한다', () => {
+    const { result } = renderReal(pickAt(32, 0.5));
+
+    act(() => result.current.pickThumbnail());
+
+    expect(result.current.thumbnailSeconds).toBe(128.5);
+  });
+
+  it('② 머리가 오면 고른 끝점의 구간이 머리 원점으로 다시 그려진다(값은 그대로)', () => {
+    const { result, heads, save } = renderReal(pickAt(30, 1.5));
+    act(() => result.current.markIn());
+    const before = save().endpoints;
+
+    act(() => heads.set(30, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.25 } }));
+
+    expect(result.current.range.startSeconds).toBeCloseTo(121.75, 9);
+    expect(save().endpoints).toEqual(before);
   });
 });

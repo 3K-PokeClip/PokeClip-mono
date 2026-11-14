@@ -11,6 +11,9 @@ import type { EditorPlayback } from './editorPlayback';
 // - 그리는 자리: usePlaybackValue. 고른 값이 그대로면 다시 그리지 않는다(시간 표기는 0.1초마다, 구간 판정은 넘나들 때만).
 // - 동작 콜백(썸네일 고르기 · 구간 끝 찍기 · 업로드 창 열기): 구독하지 않고 누른 순간에 getSeconds()로 읽는다.
 // - 어댑터의 currentSeconds: 멈춤 · 시크 · 구간 경계에서만 바뀌는 값이다. 재생 중에는 낡았으므로 판정에 쓰지 않는다.
+//
+// 🔴 여기서 주고받는 초는 모두 편집기 표시 초 S = (③ 목록 PDT 축 ms − base)/1000 이다(설계 prw2 3.2 결정 1). 표시 값일 뿐 저장
+//    값이 아니다 — 화면에서 고른 프레임은 S 가 아니라 고름(pickAtPlayhead · pickAtS)으로 넘기고, 저장 값은 끝점이 정한다.
 
 export interface PlaybackClock {
   /** 지금 위치(초). 재생 중에는 프레임마다 바뀐다 */
@@ -53,6 +56,7 @@ export function usePlaybackValue<T>(clock: PlaybackClock, select: (seconds: numb
 
 /**
  * 재생 어댑터가 허브에 주는 것. `currentSeconds`의 뜻이 좁아진다 — 멈춤 · 시크 · 구간 경계에서만 바뀌고 재생 중 연속 값은 `clock`에 있다.
+ * 초(위치 · 시크 · 끌기 · 구간)는 모두 표시 초 S 다. 실재생 어댑터는 창 배치로 영상 Blob 시각과 바꾼다.
  */
 export interface ClockedPlayback extends EditorPlayback {
   clock: PlaybackClock;

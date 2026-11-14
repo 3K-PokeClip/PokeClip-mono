@@ -3,10 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RecipeOutputV2 } from '@/api/clipEditor';
 import { BLUR_SIGMA_AT_FULL } from './recipeLook';
+import { clampSeekBlob, seekAndLand, type SeekLimits } from './source/seekGuard';
 
 // 업로드 창의 장면 그림(POK-381). 창을 여는 때는 아직 렌더 전이라 완성 영상이 없다: 편집기가 받아 둔 녹화 조각(브라우저 안
 // 파일)에서 뽑는다. 편집기의 보이지 않는 영상 노드는 건드리지 않는다(옮기면 편집기 재생 위치가 움직인다) — 같은 파일로 영상
 // 노드를 하나 더 만들어 차례로 옮겨 가며 그린다.
+//
+// 옮긴 뒤에는 seeked 와 프레임 콜백이 둘 다 와야 그린다(source/seekGuard ③ — WebKit 은 seeked 뒤에도 묵은 그림을 보일 수
+// 있다). 프레임 콜백은 그려지는 영상에만 오므로 노드를 문서에 보이지 않게 붙인다.
 //
 // 그림은 결과 모양(세로 9:16의 바탕 · 층 · 구분선)대로 그린다. 업로드 일꾼은 완성 영상에서 같은 시각을 뽑으므로 거의 같은
 // 그림이 붙는다. 자막·작은 화면의 둥근 모서리·그림자는 그리지 않는다: 고르는 데는 충분하고, 자막은 편집기도 따로 얹는다.
@@ -17,10 +21,19 @@ export interface SceneFrameSource {
   src: string;
   /** 완성 영상 ms → 그 조각 안의 초 */
   videoSecondsAt: (offsetMs: number) => number;
+  /**
+   * 그 시각이 받아 둔 조각 안인가. 밖이면 그 시각은 그림이 없다(옮기지 않는다) — 조각 끝으로 묶은 그림은 다른 장면이다. 없으면
+   * 모두 안이다
+   */
+  covers?: (offsetMs: number) => boolean;
   /** 결과 모양(편집기 화면 그대로) */
   output: RecipeOutputV2;
   /** 뽑는 그림 크기. 없으면 세로 미리보기 크기(타임라인 필름띠는 가로로 작게 뽑는다, POK-389) */
   size?: { width: number; height: number };
+  /**
+   * 그 조각의 Blob 시크 한계(첫 영상 프레임 · 끝 반 프레임 — source/seekGuard ① · ②). 없으면 길이 끝 바로 앞까지만 묶는다
+   */
+  seekLimits?: SeekLimits;
 }
 
 /** 뽑는 그림 크기. 미리보기 칸(264px)을 고밀도 화면에서도 덜 흐리게 */
@@ -37,6 +50,14 @@ const LOAD_TIMEOUT_MS = 10_000;
 const EXTRA_FRAMES_KEPT = 24;
 /** 못 뽑은 시각의 표시(옮기기 실패 · 시간 초과 · 그릴 수 없음). 같은 조각이면 또 실패하므로 다시 뽑지 않는다 */
 const FAILED = '';
+/** 문서에 붙이되 보이지 않게 — 편집기의 영상 노드와 같은 꼴 */
+const HIDDEN_STYLE = {
+  position: 'fixed',
+  width: '1px',
+  height: '1px',
+  opacity: '0',
+  pointerEvents: 'none',
+};
 
 export interface SceneFrames {
   /** 뽑아 둔 그림 주소. 아직이거나 못 뽑았으면 null */
@@ -89,15 +110,21 @@ export function useSceneFrames(
     if (next === undefined) return;
     if (urgentRef.current === next) urgentRef.current = null;
     else if (keepRef.current === next) keepRef.current = null;
-    if (done.current.has(next)) {
+    if (done.current.has(next) || src.covers?.(next) === false) {
       pump();
       return;
     }
     busy.current = true;
-    seekTo(el, src.videoSecondsAt(next))
+    seekAndLand(el, landingOf(src, next, el.duration), SEEK_TIMEOUT_MS)
       .then((ok) => {
-        // 옮기는 사이 재료가 바뀌었으면 옛 노드의 그림이다: 버린다
-        if (video.current !== el) return;
+        // 옮기는 사이 재료가 바뀌었거나 배치가 바뀌어 그 시각의 자리가 달라졌으면 옛 노드 · 옛 자리의 그림이다: 버린다
+        const now = sourceRef.current;
+        if (
+          video.current !== el ||
+          now === null ||
+          landingOf(now, next, el.duration) !== landingOf(src, next, el.duration)
+        )
+          return;
         // 못 뽑은 것도 적는다: 안 적으면 창이 「불러오는 중」에서 멈춘다(PR #301 리뷰)
         remember(next, (ok ? drawFrame(el, src.output, src.size) : null) ?? FAILED);
       })
@@ -115,6 +142,8 @@ export function useSceneFrames(
     el.muted = true;
     el.playsInline = true;
     el.preload = 'auto';
+    Object.assign(el.style, HIDDEN_STYLE);
+    document.body.append(el);
     // 첫 장면 전에 오류가 나거나 안 오면 이 조각은 못 쓴다: 창이 「불러오는 중」 대신 「못 불러와요」를 보이게 적는다
     // (옮기기 실패는 장면마다 적지만, 읽기 실패는 옮기기까지 가지 못한다 — PR #301 2차 리뷰)
     const giveUp = () => {
@@ -144,8 +173,31 @@ export function useSceneFrames(
       setFrames(new Map());
       el.removeAttribute('src');
       el.load();
+      el.remove();
     };
   }, [src, pump]);
+
+  // 같은 조각이어도 배치(시각 변환 · 시크 한계)가 바뀌면 — 판 NULL 머리가 늦게 오면 그 조각의 원점이 바뀐다 — 그 자리가 달라진
+  // 그림은 옛 자리의 것이다. 자리가 달라진 것만 버리고 아래 효과들이 새 배치로 다시 줄에 둔다(노드는 그대로 쓴다). 머리 서명마다
+  // 배치 함수가 새로 오므로 통째로 버리면 바뀌지 않은 조각의 칸까지 깜빡이며 다시 뽑았다(E4b-3 cp1 [cc] M)
+  const placement = source?.videoSecondsAt ?? null;
+  const limits = source?.seekLimits;
+  const placedRef = useRef(source);
+  useEffect(() => {
+    const before = placedRef.current;
+    const after = sourceRef.current;
+    placedRef.current = after;
+    if (before === null || after === null) return;
+    if (before.videoSecondsAt === after.videoSecondsAt && before.seekLimits === after.seekLimits)
+      return;
+    const duration = video.current?.duration ?? Number.NaN;
+    const moved = [...done.current.keys()].filter(
+      (ms) => landingOf(before, ms, duration) !== landingOf(after, ms, duration),
+    );
+    if (moved.length === 0) return;
+    for (const ms of moved) done.current.delete(ms);
+    setFrames(new Map(done.current));
+  }, [placement, limits]);
 
   // 뽑을 것을 줄에 둔다. 이미 뽑았거나 줄에 있으면 다시 넣지 않는다
   const wantedKey = wanted.join(',');
@@ -155,55 +207,48 @@ export function useSceneFrames(
       if (!done.current.has(ms) && !queue.current.includes(ms)) queue.current.push(ms);
     }
     pump();
-  }, [src, wantedKey, pump]);
+  }, [src, wantedKey, pump, placement, limits]);
 
   useEffect(() => {
     if (src === null || urgent === null || done.current.has(urgent)) return;
     urgentRef.current = urgent;
     pump();
-  }, [src, urgent, pump]);
+  }, [src, urgent, pump, placement, limits]);
 
   useEffect(() => {
     if (src === null || keep === null || done.current.has(keep)) return;
     keepRef.current = keep;
     pump();
-  }, [src, keep, pump]);
+  }, [src, keep, pump, placement, limits]);
 
+  const covers = source?.covers;
   const frameOf = useCallback(
     (offsetMs: number) => {
       const url = frames.get(offsetMs);
-      return url === undefined || url === FAILED ? null : url;
+      return url === undefined || url === FAILED || covers?.(offsetMs) === false ? null : url;
     },
-    [frames],
+    [frames, covers],
   );
   const failed = useCallback(
-    (offsetMs: number) => src === null || broken === src || frames.get(offsetMs) === FAILED,
-    [frames, src, broken],
+    (offsetMs: number) =>
+      src === null ||
+      broken === src ||
+      frames.get(offsetMs) === FAILED ||
+      covers?.(offsetMs) === false,
+    [frames, src, broken, covers],
   );
   return useMemo(() => ({ frameOf, failed }), [frameOf, failed]);
 }
 
-/** 영상을 그 초로 옮기고 그 장면을 그릴 수 있게 되면 true. 시간 안에 안 되면 false */
-function seekTo(el: HTMLVideoElement, seconds: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const end = Number.isFinite(el.duration) ? el.duration - 0.01 : seconds;
-    const target = Math.max(0, Math.min(seconds, end));
-    let settled = false;
-    const finish = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      el.removeEventListener('seeked', onSeeked);
-      el.removeEventListener('error', onError);
-      globalThis.clearTimeout(timer);
-      resolve(ok);
-    };
-    const onSeeked = () => finish(true);
-    const onError = () => finish(false);
-    const timer = globalThis.setTimeout(() => finish(false), SEEK_TIMEOUT_MS);
-    el.addEventListener('seeked', onSeeked);
-    el.addEventListener('error', onError);
-    el.currentTime = target;
-  });
+/**
+ * 그 시각(완성 영상 ms)을 뽑으려고 영상을 옮길 조각 안 초 — 배치로 바꾸고 시크 한계로 묶은 값이다. 배치가 바뀌어도 이 값이 같으면
+ * 같은 그림이다
+ */
+function landingOf(src: SceneFrameSource, offsetMs: number, duration: number): number {
+  const seconds = src.videoSecondsAt(offsetMs);
+  return src.seekLimits === undefined
+    ? Math.max(0, Math.min(seconds, Number.isFinite(duration) ? duration - 0.01 : seconds))
+    : clampSeekBlob(seconds, src.seekLimits, duration);
 }
 
 /** 지금 장면을 결과 모양대로 그려 JPEG 주소로. 그릴 수 없으면(캔버스 없음 · 영상 크기 0) null */
