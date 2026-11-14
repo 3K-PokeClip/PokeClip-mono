@@ -1,4 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
+import { Suspense, createElement, startTransition, useLayoutEffect } from 'react';
+import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionClose } from '@/features/player/rewindSwitch';
 import type {
@@ -6,7 +8,7 @@ import type {
   SessionClosed,
   SessionOptions,
 } from '@/features/player/usePlaybackSession';
-import { useLiveSession, type LiveSessionInput } from './useLiveSession';
+import { useLiveSession, type LiveSession, type LiveSessionInput } from './useLiveSession';
 
 // useLiveSession 의 배선(cc c10 L2) — 세션에 넘기는 지금 방송 번호 묻기가 최신 방송|영상 키를 싣고, 그 기억이 렌더를 넘어 산다.
 // 세션 훅 · 라우터 · 방송 조회는 흉내 낸다: 시험은 세션 훅이 받은 resolveX 를 직접 부른다.
@@ -372,11 +374,11 @@ describe('useLiveSession: past 닫힘이 넘긴 자리 · 다시보기 · 받아
 
 describe('useLiveSession: 다시보기 재생기에서 바꾼 소리(POK-547)', () => {
   /** 세션 재생기에서 소리를 켜고 음량 30 으로 보다 닫혔다 */
-  const HANDED = { muted: false, volume: 30 };
+  const handedSound = { muted: false, volume: 30 };
   /** 다시보기 재생기에서 음소거했다(음량은 그대로) */
-  const MUTED = { muted: true, volume: 30 };
+  const mutedSound = { muted: true, volume: 30 };
 
-  function closedWith(sound: typeof HANDED) {
+  function closedWith(sound: typeof handedSound) {
     hoisted.session = { view: { banner: null }, dispatch: vi.fn() } as unknown as PlaybackSession;
     const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
       initialProps: input(),
@@ -395,9 +397,9 @@ describe('useLiveSession: 다시보기 재생기에서 바꾼 소리(POK-547)', 
   }
 
   it('past 로 닫힌 뒤 다시보기 재생기에서 바꾼 소리가 넘긴 소리를 갈음한다', () => {
-    const view = closedWith(HANDED);
-    act(() => view.result.current.rememberVodSound(MUTED));
-    expect(view.result.current.vodSound).toEqual(MUTED);
+    const view = closedWith(handedSound);
+    act(() => view.result.current.rememberVodSound(mutedSound));
+    expect(view.result.current.vodSound).toEqual(mutedSound);
   });
 
   it('끝난 뒤 들어온 화면은 처음에 소리가 없고(기본값), 다시보기 재생기에서 바꾸면 그 값이다', () => {
@@ -405,23 +407,78 @@ describe('useLiveSession: 다시보기 재생기에서 바꾼 소리(POK-547)', 
       initialProps: input({ broadcastStatus: 'ended' }),
     });
     expect(view.result.current.vodSound).toBeNull();
-    act(() => view.result.current.rememberVodSound(HANDED));
-    expect(view.result.current.vodSound).toEqual(HANDED);
+    act(() => view.result.current.rememberVodSound(handedSound));
+    expect(view.result.current.vodSound).toEqual(handedSound);
   });
 
   it('바꾼 소리는 그 방송|영상 키에서만 낸다 — 다른 키의 첫 다시보기는 기본값이다', () => {
     const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
       initialProps: input({ broadcastStatus: 'ended' }),
     });
-    act(() => view.result.current.rememberVodSound(HANDED));
+    act(() => view.result.current.rememberVodSound(handedSound));
     view.rerender(input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1', broadcastStatus: 'ended' }));
     expect(view.result.current.vodSound).toBeNull();
   });
 
   it('넘김 자리를 소모해도 바꾼 소리는 남는다', () => {
-    const view = closedWith(HANDED);
-    act(() => view.result.current.rememberVodSound(MUTED));
+    const view = closedWith(handedSound);
+    act(() => view.result.current.rememberVodSound(mutedSound));
     act(() => view.result.current.consumePastResume());
-    expect(view.result.current.vodSound).toEqual(MUTED);
+    expect(view.result.current.vodSound).toEqual(mutedSound);
+  });
+
+  it('같은 키로 다시 past 로 닫히면 기억한 소리가 아니라 새로 넘긴 소리다', () => {
+    const later = { muted: false, volume: 80 };
+    const view = closedWith(handedSound);
+    act(() => view.result.current.rememberVodSound(mutedSound));
+    act(() => {
+      hoisted.options!.onClose({
+        reason: 'past',
+        accessKey: 'r-A|key-1',
+        endingSinceMs: null,
+        handoff: { resumeAtMs: null, seenVod: null, chosen: false, sound: later },
+      });
+    });
+    view.rerender(input());
+    expect(view.result.current.vodSound).toEqual(later);
+  });
+
+  // 다른 방송|영상 키의 렌더가 전이(startTransition) 중 형제에서 멈추면(Suspense) 그 렌더는 커밋되지 않고, 화면에는 앞 키의
+  // 재생기가 그대로 남는다. 그 재생기에서 바꾼 소리는 화면에 그려진 키의 것이다 — 멈춘 렌더의 키로 남기면 새 키의 첫 다시보기가
+  // 앞 방송의 소리로 선다.
+  it('다른 키의 렌더가 멈춘 동안 남은 재생기에서 바꾼 소리는 화면에 그려진 키로 남는다', async () => {
+    const never = new Promise<never>(() => undefined);
+    let shown: LiveSession | null = null;
+    function Screen({ props }: { props: LiveSessionInput }) {
+      const live = useLiveSession(props);
+      useLayoutEffect(() => {
+        shown = live;
+      });
+      return null;
+    }
+    function Stall({ suspend }: { suspend: boolean }) {
+      if (suspend) throw never;
+      return null;
+    }
+    function stage(props: LiveSessionInput, suspend: boolean) {
+      return createElement(
+        Suspense,
+        { fallback: null },
+        createElement(Screen, { props }),
+        createElement(Stall, { suspend }),
+      );
+    }
+    const keyA = input({ broadcastStatus: 'ended' });
+    const keyB = input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1', broadcastStatus: 'ended' });
+    const root = createRoot(document.createElement('div'));
+    await act(async () => root.render(stage(keyA, false)));
+
+    await act(async () => startTransition(() => root.render(stage(keyB, true))));
+    await act(async () => shown!.rememberVodSound(mutedSound));
+    expect(shown!.vodSound).toEqual(mutedSound);
+
+    await act(async () => root.render(stage(keyB, false)));
+    expect(shown!.vodSound).toBeNull();
+    act(() => root.unmount());
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
@@ -74,7 +74,7 @@ export interface LiveSession {
    * null 이고 재생기는 기본(무음 · 70)으로 선다
    */
   vodSound: PlayerSound | null;
-  /** 다시보기 재생기의 소리 상태가 바뀌었다 — 지금 방송|영상 키로 기억해, 재생기가 다시 설 때(출입증 403 등) 그 값으로 선다 */
+  /** 다시보기 재생기의 소리 상태가 바뀌었다 — 화면에 그려진 방송|영상 키로 기억해, 재생기가 다시 설 때(출입증 403 등) 그 값으로 선다 */
   rememberVodSound: (sound: PlayerSound) => void;
   /** 이어 틀 자리를 소모한다 — 닫힘 기록 · 확인한 다시보기 · 소리는 둔다. 다시보기가 시작을 적용하거나 옮길 때 부른다 */
   consumePastResume: () => void;
@@ -156,8 +156,8 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const pinned = vodStreamIdFromPathname(pathname ?? '') !== null || Boolean(streamParam);
   const streamerId = useChannelStreamerId();
   const { toast, dismiss } = useToast();
-  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 — 같은 키로는 세션을 다시 열지 않는다
-  // (cc H1 ②). 키 비교라 지울 필요가 없다
+  // past 로 닫힌 방송|영상 키와 그 끝남 대기를 연 시각 · 넘긴 자리 · 확인한 다시보기 — 같은 키로는 세션을 다시 열지 않는다.
+  // 키 비교라 지울 필요가 없다
   const [closedPast, setClosedPast] = useState<ClosedPast | null>(null);
   // 다시보기 재생기가 설 때 실을 소리 — past 닫힘이 넘긴 값으로 놓고, 다시보기 재생기에서 바뀌면 덮는다. 이 화면(층)의 상태라
   // 화면을 떠나면 사라진다. 키 비교라 지울 필요가 없다
@@ -262,8 +262,14 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
       setClosedPast((p) => (p === null || p.resumeAtMs === null ? p : { ...p, resumeAtMs: null })),
     [],
   );
+  // 화면에 그려진(커밋된) 방송|영상 키 — 소리 알림은 화면에 남은 재생기에서 온다. 렌더 중에 고치는 accessKeyRef 는 멈춰
+  // 커밋되지 않은 렌더(Suspense)의 키일 수 있어, 그 키로 남기면 그동안 바꾼 소리가 다른 방송|영상 키의 기억이 된다
+  const shownKeyRef = useRef(accessKey);
+  useLayoutEffect(() => {
+    shownKeyRef.current = accessKey;
+  }, [accessKey]);
   const rememberVodSound = useCallback((sound: PlayerSound) => {
-    const key = accessKeyRef.current;
+    const key = shownKeyRef.current;
     if (key === null) return;
     // 같은 값이면 상태를 바꾸지 않는다 — 소리를 실을 때마다 화면을 다시 그리지 않게
     setVodSoundMemo((memo) =>
