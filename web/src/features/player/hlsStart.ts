@@ -87,9 +87,9 @@ export function startConfig<T extends object>(
  * 기동하면 영상 정보가 서지 않는다. 시작 시각이 없으면 첫 내용 조각(맨 앞 GAP 이 없으면 목록 첫 조각이라 지금처럼 0초)이다.
  * 있으면 그 자리(첫 내용 조각 앞이면 첫 내용 조각 — startLoadPosition)를 마지막 내용 조각의 시작으로 자르고, 그 자리가 GAP
  * 조각 안이면 다음 내용 조각의 시작으로 올린다. 마지막 내용 조각의 시작으로 자르는 까닭: 목록 끝에서 받기 시작하면 받을 조각이
- * 없고, 앱이 옮길 자리(끝 1초 앞 — useVodPlayback)보다 뒤에 서면 hls.js 가 첫 버퍼 뒤 그 자리로 끌어간다(stream-controller.ts
- * 1130–1176). 앱이 그 뒤 옮기는 자리는 바꾸지 않는다. 내용 조각이 없거나(모두 GAP), 시작 시각을 영상 자리로 셀 시각 표시가
- * 없으면 null — hls.js 가 고른다
+ * 없다. 끝 근처의 시작 시각이면 앱은 그 뒤 꼬리(끝 1초 앞이고 마지막 조각의 시작보다 앞서지 않는다 — useVodPlayback)로 옮기는데,
+ * 자른 자리는 그 꼬리보다 뒤에 서지 않는다. 앱이 그 뒤 옮기는 자리는 바꾸지 않는다. 내용 조각이 없거나(모두 GAP), 시작 시각을
+ * 영상 자리로 셀 시각 표시가 없으면 null — hls.js 가 고른다
  */
 function vodStartPosition(details: LevelDetails, startAtMs: number | null): number | null {
   const { fragments, targetduration, live } = details;
@@ -127,11 +127,28 @@ function loadFromFirstList(
 }
 
 /**
+ * 다시보기 주소가 다중 화질 목록(상위 목록)이면 목록을 받은 때(MANIFEST_LOADED) 받기를 깨운다. 자동 시작을 끈 재생기는
+ * startLoad 전에는 화질 목록을 받지 않아 첫 LEVEL_LOADED 가 오지 않는다. 주소가 매체 목록이면 그 목록이 이미 화질 하나의
+ * 상세라(levels[0].details — playlist-loader.ts handleTrackOrLevelPlaylist) 곧 LEVEL_LOADED 가 오므로 깨우지 않는다. 이 사건은
+ * level-controller 가 먼저 받아 MANIFEST_PARSED 까지 낸 뒤라 화질이 서 있다. 깨운 자리는 hls.js 가 고르고(-1), 실제 받기
+ * 시작 자리는 첫 LEVEL_LOADED 의 loadFromFirstList 가 다시 정한다 — 그 사이 hls.js 가 기본 시작 조각(영상 0초)을 한 번 청할 수
+ * 있고, 그 받기는 바로 뒤 startLoad 가 멈춘다(stream-controller.ts startLoad 의 stopLoad)
+ */
+function wakeMultivariant(hls: Hls, events: typeof Events): void {
+  let seen = false;
+  hls.on(events.MANIFEST_LOADED, (...[, data]) => {
+    if (seen) return;
+    seen = true;
+    if (!data.levels.some((level) => level.details !== undefined)) hls.startLoad(-1);
+  });
+}
+
+/**
  * 첫 목록에서 받기 위치를 정하는 재생기(startConfig 로 자동 시작을 끈 재생기)에 기동 처리기를 단다(RC-7 · R15 ·
  * POK-200 c13). 라이브는 기동 문지기(armLiveStart)가 첫 LEVEL_UPDATED 에서, 되감기 · 다시보기는 첫 LEVEL_LOADED 에서
- * 그 자리를 한 번만 정한다. 다시보기는 시작 시각이 없어도 정하고(vodStartPosition), 라이브 · 되감기는 시작 시각이 없으면
- * 달지 않는다 — hls.js 가 스스로 시작한다. 되감기 · 다시보기가 받기 시작한 자리는 load 에 적고(모르면 null),
- * strictStart 라이브의 잘린 시작은 onTruncated 로 알린다(armLiveStart)
+ * 그 자리를 한 번만 정한다. 다시보기는 주소가 다중 화질 목록이면 먼저 받기를 깨운다(wakeMultivariant). 다시보기는 시작 시각이
+ * 없어도 정하고(vodStartPosition), 라이브 · 되감기는 시작 시각이 없으면 달지 않는다 — hls.js 가 스스로 시작한다. 되감기 ·
+ * 다시보기가 받기 시작한 자리는 load 에 적고(모르면 null), strictStart 라이브의 잘린 시작은 onTruncated 로 알린다(armLiveStart)
  */
 export function armStart(
   hls: Hls,
@@ -142,6 +159,7 @@ export function armStart(
 ): void {
   const { kind, startAtMs, strictStart } = source;
   if (kind === 'vod') {
+    wakeMultivariant(hls, events);
     loadFromFirstList(hls, events, load, (details) => vodStartPosition(details, startAtMs));
     return;
   }

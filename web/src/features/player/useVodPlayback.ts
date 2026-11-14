@@ -180,7 +180,8 @@ function vodPhase(input: {
  * @param startAtSeconds 받아 둔 자리(기준점 축 초 — 화면의 pendingStart). 목록이 서 있으면 그 커밋에 한 번 옮긴다
  * @param onStartApplied 받아 둔 자리를 적용했다(옮김 · 범위 밖이라 첫 조각으로 자름) — 부른 쪽이 받아 둔 자리를 비운다. 그
  *   시각의 영상 자리를 모르면 부르지 않고 남겨 둔다(다음 목록에서 다시 해 본다)
- * @param initialSound 세션 재생기에서 넘겨받은 소리 상태(POK-547). 재생기가 설 때 첫 재생 전에 싣는다. 없으면 기본(무음 · 70)
+ * @param initialSound 재생기가 설 때 첫 재생 전에 실을 소리 상태(POK-547) — 세션 재생기에서 넘겨받은 값이고, 다시 서는
+ *   재생기(출입증 403 등)에는 부른 쪽이 onSoundChange 로 기억한 값이다. 없으면 기본(무음 · 70)
  * @param onSoundChange 영상 노드의 소리 상태가 바뀌었다(사람의 조작 · 무음 대체 — POK-547). 부른 쪽이 기억해 재생기를 다시
  *   세울 때 initialSound 로 넘긴다
  */
@@ -411,9 +412,10 @@ export function useVodPlayback(
   }, [list, readShownPdtMs, vod.axisZeroMs]);
 
   // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(POK-518). 맨 앞이 GAP 이면 틀기 전에 첫 내용 조각으로
-  // 옮긴다(옮기기가 onSeek 를 부른다 — POK-573): 끝난 뒤의 재생은 브라우저가 영상 0초(GAP)로 옮기고, hls.js 도 끝에 닿을 때
-  // 시작 자리를 0 으로 되돌려(base-stream-controller.ts 488–492) 그 자리에서 다시 받으려 해 화면이 멎는다. 영상 정보가 있는
-  // 상태의 옮기기라 seeking 이 나서 hls.js 가 받기를 그 자리로 다시 연다(같은 파일 405–406 · 470–479)
+  // 옮긴다(옮기기가 onSeek 를 부른다 — POK-573): 끝난 뒤의 재생은 브라우저가 영상 0초(GAP)로 옮기고, 그 seeking 에서 hls.js 가
+  // 받기 위치를 0초로 옮긴다(base-stream-controller.ts 470–479). 0초부터 첫 내용 조각까지의 구멍이 시작 구멍 건너뛰기 한도
+  // 2초(gap-controller.ts MAX_START_GAP_JUMP)보다 길면 건너뛰지 못해 화면이 멎는다. 먼저 옮기면 영상 정보가 있는 상태의
+  // 옮기기라 seeking 이 나서 hls.js 가 받기를 그 자리로 다시 연다(base-stream-controller.ts 405–406 · 470–479)
   const togglePlay = useCallback(() => {
     const restarts = videoRef.current?.ended === true;
     const skipsHeadGap = restarts && list !== null && list.contentFirstMs > list.firstMs;

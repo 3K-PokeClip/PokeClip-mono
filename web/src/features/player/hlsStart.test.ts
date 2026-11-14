@@ -11,6 +11,7 @@ import { startLoadPosition } from './playbackEdge';
 type Handler = (event: string, data: unknown) => void;
 
 const EVENTS = {
+  MANIFEST_LOADED: 'hlsManifestLoaded',
   MANIFEST_PARSED: 'hlsManifestParsed',
   LEVEL_LOADED: 'hlsLevelLoaded',
   LEVEL_UPDATED: 'hlsLevelUpdated',
@@ -43,7 +44,7 @@ class FakeHls {
 const PDT0 = Date.parse('2026-10-25T05:00:00.000Z');
 /** 영상 0초부터 4초 조각 n 개(PDT0 부터) */
 function details(n: number): LevelDetails {
-  const fragments = [...Array(n).keys()].map((i) => ({
+  const fragments = Array.from({ length: n }, (_, i) => ({
     start: i * 4,
     duration: 4,
     programDateTime: PDT0 + i * 4_000,
@@ -90,7 +91,7 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     // 맨 앞 GAP 하나(6초) 뒤 4초 조각 900 개 — 합이 한 시간을 넘는다
     const fragments = [
       { start: 0, duration: 6, programDateTime: PDT0, gap: true },
-      ...[...Array(900).keys()].map((i) => ({
+      ...Array.from({ length: 900 }, (_, i) => ({
         start: 6 + i * 4,
         duration: 4,
         programDateTime: PDT0 + 6_000 + i * 4_000,
@@ -129,7 +130,7 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
   describe('다시보기 — 시작 시각이 없어도 첫 LEVEL_LOADED 에서 받기 위치를 한 번 정한다', () => {
     /** 맨 앞 gaps 개가 GAP(3초)이고 그 뒤 4초 조각 6 개인 끝난 목록 — 첫 내용 조각은 영상 3 × gaps 초 */
     function vodDetails(gaps: number, allGap = false): LevelDetails {
-      const fragments = [...Array(gaps + 6).keys()].map((i) => {
+      const fragments = Array.from({ length: gaps + 6 }, (_, i) => {
         const start = i < gaps ? i * 3 : gaps * 3 + (i - gaps) * 4;
         return {
           start,
@@ -188,13 +189,13 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
       }
     });
 
-    /** 4초 조각 셋 — gapAt 번째만 GAP 인 끝난 목록 */
-    function threeWithGapAt(gapAt: number): LevelDetails {
-      const fragments = [0, 1, 2].map((i) => ({
+    /** 4초 조각 count 개 — gapAt 에 든 번째만 GAP 인 끝난 목록 */
+    function fourSecondsWithGapsAt(count: number, gapAt: readonly number[]): LevelDetails {
+      const fragments = Array.from({ length: count }, (_, i) => ({
         start: i * 4,
         duration: 4,
         programDateTime: PDT0 + i * 4_000,
-        gap: i === gapAt,
+        gap: gapAt.includes(i),
       }));
       return { fragments, targetduration: 4, live: false } as unknown as LevelDetails;
     }
@@ -202,10 +203,19 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     it('시작 시각이 가운데 GAP 조각 안이면 다음 내용 조각의 시작에서 받는다', () => {
       const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: PDT0 + 6_000, strictStart: false });
 
-      hls.trigger(EVENTS.LEVEL_LOADED, { details: threeWithGapAt(1) });
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: fourSecondsWithGapsAt(3, [1]) });
 
       expect(hls.startLoad.mock.calls).toEqual([[8]]);
       expect(onLoadFrom.mock.calls).toEqual([[8]]);
+    });
+
+    it('가운데 GAP 이 이어지면 그 GAP 들을 모두 건너 다음 내용 조각의 시작에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: PDT0 + 6_000, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: fourSecondsWithGapsAt(4, [1, 2]) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[12]]);
+      expect(onLoadFrom.mock.calls).toEqual([[12]]);
     });
 
     it.each<[string, number]>([
@@ -216,7 +226,7 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
       (_name, atMs) => {
         const { hls } = arm({ kind: 'vod', startAtMs: PDT0 + atMs, strictStart: false });
 
-        hls.trigger(EVENTS.LEVEL_LOADED, { details: threeWithGapAt(2) });
+        hls.trigger(EVENTS.LEVEL_LOADED, { details: fourSecondsWithGapsAt(3, [2]) });
 
         expect(hls.startLoad.mock.calls).toEqual([[4]]);
       },
@@ -230,6 +240,30 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
 
       expect(hls.startLoad.mock.calls).toEqual([[9]]);
       expect(hls.count(EVENTS.MANIFEST_PARSED) + hls.count(EVENTS.LEVEL_UPDATED)).toBe(0);
+    });
+
+    it('주소가 매체 목록이면 받기를 깨우지 않는다 — 첫 LEVEL_LOADED 에서 정한 자리에서만 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+      const media = vodDetails(3);
+
+      hls.trigger(EVENTS.MANIFEST_LOADED, { levels: [{ details: media }] });
+      expect(hls.startLoad).not.toHaveBeenCalled();
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: media });
+
+      expect(hls.startLoad.mock.calls).toEqual([[9]]);
+      expect(onLoadFrom.mock.calls).toEqual([[9]]);
+    });
+
+    it('주소가 다중 화질 목록이면 받기를 깨워 화질 목록을 받게 하고, 첫 LEVEL_LOADED 에서 정한 자리에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.MANIFEST_LOADED, { levels: [{}, {}] });
+      expect(hls.startLoad.mock.calls).toEqual([[-1]]);
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+      hls.trigger(EVENTS.MANIFEST_LOADED, { levels: [{}, {}] });
+
+      expect(hls.startLoad.mock.calls).toEqual([[-1], [9]]);
+      expect(onLoadFrom.mock.calls).toEqual([[9]]);
     });
   });
 
