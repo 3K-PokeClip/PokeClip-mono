@@ -95,11 +95,17 @@ const LIVE_SHOW_GAP_MS = LIVE_READ_STEP_MS + 3_000;
 /**
  * 라이브 채팅이 되감은 영상을 따르나. 실시간에서 ← 한 번(SEEK_STEP_SECONDS, 10초) 이상 뒤면 따르고, 재생기의 「실시간」(3초 미만,
  * isAtEdge)으로 돌아오면 최신 채팅이다. 그 사이는 앞 상태 그대로다: 하나의 경계로 가르면 그 언저리에서 시차가 1초씩 흔들릴 때마다
- * 채팅 창이 통째로 바뀌었다 돌아온다. 이보다 덜 밀린 것(스톨, 실시간 끝에서 조금 처진 것)은 최신 채팅 그대로다
+ * 채팅 창이 통째로 바뀌었다 돌아온다. 이보다 덜 밀린 것(스톨, 실시간 끝에서 조금 처진 것)은 최신 채팅 그대로다.
+ * 녹화가 끝난 회차(recordingEnded)면 끝이 녹화 끝이라 끝에 닿아도 따르기를 끄지 않는다: 끄면 명부가 아직 live 인 동안 녹화
+ * 마지막 3초에서 최신 채팅으로 뛰었다
  */
-export function nextLiveFollow(following: boolean, behindSeconds: number): boolean {
+export function nextLiveFollow(
+  following: boolean,
+  behindSeconds: number,
+  recordingEnded = false,
+): boolean {
   if (behindSeconds >= SEEK_STEP_SECONDS) return true;
-  if (isAtEdge(behindSeconds)) return false;
+  if (!recordingEnded && isAtEdge(behindSeconds)) return false;
   return following;
 }
 

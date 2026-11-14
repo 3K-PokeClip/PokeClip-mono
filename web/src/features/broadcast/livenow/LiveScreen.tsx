@@ -44,6 +44,8 @@ import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 import { playbackConfigured } from '@/api/mediaAccess';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
+import type { PlaybackSession } from '@/features/player/usePlaybackSession';
+import { OPEN_STREAM_FACTS, recordingEndedOf } from '@/features/player/playbackEdge';
 import type { VodSource } from '@/features/player/useVodPlayback';
 import { holdEditorMedia } from '@/features/clips/editor/editorMedia';
 import { nextLiveFollow } from './chatReplay';
@@ -258,6 +260,19 @@ export function broadcastDateLabel(ms: number): string {
  */
 const PLAYBACK_ACCESS_CHECK_MS = 60_000;
 
+/**
+ * 세션이 녹화가 끝난 회차를 트나 — 재생기가 되감기 축 끝을 목록 끝으로 재는 근거(recordingEndedOf)와 같은 값이다. 세션이
+ * 없으면 아니다
+ */
+function sessionRecordingEnded(session: PlaybackSession | null): boolean {
+  if (session === null) return false;
+  return recordingEndedOf(session.state, {
+    streamLive: session.streamLive ?? OPEN_STREAM_FACTS.streamLive,
+    streamEnded: session.streamEnded ?? OPEN_STREAM_FACTS.streamEnded,
+    roundDenied: session.roundDenied ?? OPEN_STREAM_FACTS.roundDenied,
+  });
+}
+
 // memo: 대시보드는 경과 표기 때문에 매초 다시 그려진다. 받는 값이 그대로면(대시보드가 붙잡아 둔 mark · 콜백) 플레이어까지 내려가지 않는다
 const LivePlayer = memo(function LivePlayer({
   stream,
@@ -329,8 +344,11 @@ const LivePlayer = memo(function LivePlayer({
   onRecordingLookupStart: () => void;
   /** 회차 다시보기의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
   onPlaybackPosition: (seconds: number) => void;
-  /** 라이브 재생기의 자리(실제 시각·실시간에서 몇 초 뒤)가 바뀌었다. 되감으면 라이브 채팅이 그 시각까지의 줄만 보인다(POK-326) */
-  onLivePosition: (position: LivePosition | null) => void;
+  /**
+   * 라이브 재생기의 자리(실제 시각·실시간에서 몇 초 뒤)가 바뀌었다. 되감으면 라이브 채팅이 그 시각까지의 줄만 보인다(POK-326).
+   * recordingEnded 는 그 자리를 알린 재생기가 녹화가 끝난 회차를 트는가다
+   */
+  onLivePosition: (position: LivePosition | null, recordingEnded: boolean) => void;
   /**
    * 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 지난 방송 채팅이 그 시점(맨 아래)을
    * 따라간다. 라이브 재생기도 부른다(실시간으로 포함)
@@ -376,6 +394,15 @@ const LivePlayer = memo(function LivePlayer({
   });
   const showsPast = live.showsPast;
   const playerStatus: BroadcastStatus = live.closedToPast ? 'ended' : displayStatus;
+  // 재생기 자리와 함께 녹화가 끝난 회차인가를 올린다 — 채팅 따라가기가 녹화 끝에서 꺼지지 않게(nextLiveFollow). 재생기는 커밋
+  // 뒤에 자리를 알려 이 그리기에서 적어 둔 값을 읽는다. 알림 함수의 정체성은 그대로 둔다: 바뀌면 재생기가 자리를 지웠다 다시 알려
+  // 채팅이 그때마다 맨 아래로 끌려간다
+  const recordingEndedRef = useRef(false);
+  recordingEndedRef.current = sessionRecordingEnded(live.session);
+  const handleLivePosition = useCallback(
+    (position: LivePosition | null) => onLivePosition(position, recordingEndedRef.current),
+    [onLivePosition],
+  );
   // 재생기 훅이 이 값의 정체성을 의존성으로 본다: 매 그리기 새 객체면 그때마다 다른 값으로 읽는다
   const simulationOptions = useMemo(
     () => ({ initialUptimeSeconds: uptimeSeconds ?? 0 }),
@@ -412,7 +439,7 @@ const LivePlayer = memo(function LivePlayer({
       : 'pending';
   // 지난 방송 판정으로 그리지 않는 화면의 영상 자리 아랫줄. 끝난 방송으로 그리는데 판정하지 않는 화면은 둘이다: 명부 답 전
   // 지난 방송 주소(곧 판정이 시작된다)와 past 가 아닌 사유로 닫혔거나 열린 채 명부 ended 인 화면(묻지 않는다). 앞의 것만
-  // 「확인하고 있어요」다 — 묻지 않는 화면이 확인 중이라 말하지 않게(cc 부수 3). 제어면 주소가 없으면 물을 곳이 없어 플레이어의
+  // 「확인하고 있어요」다 — 묻지 않는 화면이 확인 중이라 말하지 않게. 제어면 주소가 없으면 물을 곳이 없어 플레이어의
   // 기본 말이다. 명부에서 사라진 방송(offline)도 묻지 않는다
   const liveOrEndedNote =
     playerStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
@@ -592,7 +619,7 @@ const LivePlayer = memo(function LivePlayer({
         vodSound={live.vodSound}
         onVodSoundChange={live.rememberVodSound}
         onPlaybackPosition={onPlaybackPosition}
-        onLivePosition={onLivePosition}
+        onLivePosition={handleLivePosition}
         onSeek={onPlayerSeek}
         embed
         simulationOptions={simulationOptions}
@@ -1022,11 +1049,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const canFollowRef = useRef(false);
   canFollowRef.current = clock.startedAt !== null;
   const handleLivePosition = useCallback(
-    (position: LivePosition | null) => {
+    (position: LivePosition | null, recordingEnded: boolean) => {
       const follow =
         position !== null &&
         canFollowRef.current &&
-        nextLiveFollow(liveFollowRef.current, position.behindSeconds);
+        nextLiveFollow(liveFollowRef.current, position.behindSeconds, recordingEnded);
       if (follow !== liveFollowRef.current) {
         liveFollowRef.current = follow;
         bumpChatJump();
