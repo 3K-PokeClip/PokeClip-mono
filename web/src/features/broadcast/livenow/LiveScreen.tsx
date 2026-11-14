@@ -47,6 +47,8 @@ import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { VodSource } from '@/features/player/useVodPlayback';
 import { holdEditorMedia } from '@/features/clips/editor/editorMedia';
 import { nextLiveFollow } from './chatReplay';
+import { readPlayerAtMs } from '@/api/cardPositions';
+import { cardSeekAtMs, pendingStartSeconds } from './cardSeek';
 import {
   missingWord,
   publishLiveData,
@@ -737,7 +739,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     },
     onCard: mergeCard,
     onExistingCard: (card) => {
-      seekTo(card.streamTimestampMs / 1000);
+      seekTo(card.streamTimestampMs / 1000, readPlayerAtMs(card));
     },
   });
   const markDisabled = markMode === 'unknown' || (markMode === 'past' && !pastMarkable);
@@ -883,6 +885,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
               atMs: card.atMs,
               timestamp: card.timestamp === UNKNOWN_CLOCK ? null : card.timestamp,
               seekSeconds: card.seekSeconds,
+              playerAtMs: card.playerAtMs,
               label: card.source === 'manual' ? '수동' : `#${card.id.replace('card-', '')}`,
               manual: card.source === 'manual',
               reason: card.reason ?? card.title,
@@ -890,7 +893,10 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
           ],
     );
     const key = next
-      .map((c) => `${c.id}|${c.atMs}|${c.timestamp}|${c.seekSeconds}|${c.label}|${c.reason}`)
+      .map(
+        (c) =>
+          `${c.id}|${c.atMs}|${c.timestamp}|${c.seekSeconds}|${c.playerAtMs}|${c.label}|${c.reason}`,
+      )
       .join('\n');
     if (key !== pinCache.current.key) pinCache.current = { key, cards: next };
     return pinCache.current.cards;
@@ -900,6 +906,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 뒤늦게 선 다시보기는 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 다시보기의 시작 위치(startAtSeconds)로
   // 넘긴다(QA 2026-10-11 실기동). 다시보기가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 다시보기가 다시 설 때 오래전 카드로 튄다
   const [pendingStart, setPendingStart] = useState<number | null>(null);
+  // 그 시점의 플레이어용 PDT(POK-196). 끝난 뒤 들어온 화면(A)은 다시보기 축이 선 뒤 이것으로 받아 둔 초를 다시 센다(pendingStartSeconds)
+  const [pendingStartAtMs, setPendingStartAtMs] = useState<number | null>(null);
   // 라이브에서 고른 시점은 남기지 않는다. 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 고른 시점이 아니라 재생기가
   // 알린 자리(되감은 영상의 시각, POK-326)를 따라, 남겨 두면 방송이 끝난 뒤 녹화는 처음부터인데 채팅만 그 카드에 묶이거나
   // 오래전 카드로 튄다(리뷰 2·3라운드).
@@ -925,10 +933,15 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
    * 카드의 실제 시각으로 옮기고, 받아 두지 않는다(다시 선 재생기가 옛 카드로 가지 않게)
    */
   const seekPast = useCallback(
-    (mode: Exclude<PastCardMode, { kind: 'notPast' }>, seconds: number): CardSeekResult => {
+    (
+      mode: Exclude<PastCardMode, { kind: 'notPast' }>,
+      seconds: number,
+      atMs: number | null | undefined,
+    ): CardSeekResult => {
       if (mode.kind === 'waiting') {
         holdChatAt(seconds);
         setPendingStart(seconds);
+        setPendingStartAtMs(atMs ?? null);
         return 'queued';
       }
       if (mode.kind === 'blocked') {
@@ -936,11 +949,10 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
         return 'none';
       }
       setPendingStart(null);
+      setPendingStartAtMs(null);
       const player = playerRef.current;
-      const byTime =
-        cardBase === null
-          ? 'unknown'
-          : (player?.seekToTime?.(cardBase + seconds * 1000) ?? 'unknown');
+      const target = cardSeekAtMs(atMs, cardBase, seconds);
+      const byTime = target === null ? 'unknown' : (player?.seekToTime?.(target) ?? 'unknown');
       if (byTime === 'moved' || byTime === 'outside') return byTime;
       // 시각 축을 읽지 못했다 — 재생기의 정확한 자리로 해 보고, 그것도 못 하면 옮기지 못했다고 알린다
       if (player?.seekToUptime(seconds) ?? false) return 'moved';
@@ -954,17 +966,16 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
    *   'none' 영상이 없다 · 'queued' 곧 설 다시보기에 받아 두었다(끝난 뒤 들어온 화면)
    */
   const seekTo = useCallback(
-    (seconds: number): CardSeekResult => {
-      if (pastCard.kind !== 'notPast') return seekPast(pastCard, seconds);
-      // 라이브는 카드의 실제 시각(기준점 + 카드 초)으로 옮긴다: 재생기가 조각의 시각 표시로 영상 시각을 센다(POK-326). 방송 경과
-      // 시계로 옮기면 숨은 탭에서 그 시계의 타이머가 늦춰져 카드보다 몇 분 늦은 자리(심하면 실시간 끝)로 갔고, 채팅도 그 자리를
+    (seconds: number, atMs: number | null | undefined): CardSeekResult => {
+      if (pastCard.kind !== 'notPast') return seekPast(pastCard, seconds, atMs);
+      // 라이브는 카드의 실제 시각(clip 이 준 플레이어용 PDT, 없으면 기준점 + 카드 초 — POK-196)으로 옮긴다: 재생기가 조각의 시각
+      // 표시로 영상 시각을 센다(POK-326). 방송 경과 시계로 옮기면 숨은 탭에서 그 시계의 타이머가 늦춰져 카드보다 몇 분 늦은
+      // 자리(심하면 실시간 끝)로 갔고, 채팅도 그 자리를
       // 따랐다(리뷰 1라운드). 시각 표시가 없으면 경과 시계로 옮긴다. 범위 밖이면 경과 시계로도 옮기지 않는다: 그 길은 창 맨 앞으로
       // 잘라 옮겨 「옮겼다」고 답한다(POK-498)
       const player = playerRef.current;
-      const byTime =
-        live && cardBase !== null
-          ? (player?.seekToTime?.(cardBase + seconds * 1000) ?? 'unknown')
-          : 'unknown';
+      const target = live ? cardSeekAtMs(atMs, cardBase, seconds) : null;
+      const byTime = target === null ? 'unknown' : (player?.seekToTime?.(target) ?? 'unknown');
       if (byTime === 'outside') return 'outside';
       const moved = byTime === 'moved' || (player?.seekToUptime(seconds) ?? false);
       if (live) return moved ? 'moved' : 'none';
@@ -978,6 +989,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
         if (followsPlayhead) bumpChatJump();
       }
       setPendingStart(moved ? null : seconds);
+      setPendingStartAtMs(moved ? null : (atMs ?? null));
       return moved ? 'moved' : 'none';
     },
     [pastCard, seekPast, live, cardBase, followsPlayhead, bumpChatJump],
@@ -992,10 +1004,14 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   useEffect(() => {
     if (!live) return;
     setPendingStart(null);
+    setPendingStartAtMs(null);
     publishLiveData({ playheadMs: null });
   }, [live]);
   // 다시보기가 시작 자리를 가져갔다(녹화가 섬 · 회차 다시보기가 그 자리로 옮김) — 받아 둔 자리를 비운다
-  const clearPendingStart = useCallback(() => setPendingStart(null), []);
+  const clearPendingStart = useCallback(() => {
+    setPendingStart(null);
+    setPendingStartAtMs(null);
+  }, []);
   // 라이브 되감기(POK-326): 재생기가 실시간에서 10초 이상 뒤면 채팅이 그 자리(영상 시각)까지의 줄만 보이고, 재생기의 「실시간」으로
   // 돌아오면 최신 채팅이다. 그 사이는 앞 상태 그대로다(nextLiveFollow). 따르기 시작하거나 멈추면 채팅 창이 맨 아래를 따라간다:
   // 채팅이 통째로 바뀌어(최신 ↔ 되감은 자리) 위로 올려 읽던 자리가 남으면 엉뚱한 줄이 보인다
@@ -1039,18 +1055,18 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     linkedDoneRef.current = linkedCardId;
     // 재생기 층이 갈래를 올리기 전 첫 커밋의 seekTo(notPast)로 돌 수 있다. 그 길도 받아 둔 자리를 남기고 알리지 않아 waiting 과
     // 결과가 같다(POK-546 계획 4절 E)
-    seekTo(card.seekSeconds);
+    seekTo(card.seekSeconds, card.playerAtMs);
   }, [highlights, hiddenHighlights, linkedCardId, seekTo]);
 
   const handleSeek = useCallback(
-    (seconds: number, from: 'card' | 'stats_pin') => {
+    (seconds: number, atMs: number | null | undefined, from: 'card' | 'stats_pin') => {
       // 사람이 누른 이동만 센다(주소의 카드로 옮기는 것은 위 효과) — 카드 번호·시각은 싣지 않는다 (POK-357)
       track('highlight_card_seeked', { from, mode: live ? 'live' : 'past' });
       linkedDoneRef.current = linkedCardId;
       // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰).
       // 영상 없이 채팅만 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 옮긴 영상의 시각을 따르므로(POK-326) 영상이 못 옮기면
       // 최신 그대로라 옮겼다고 하면 거짓이다(리뷰 2라운드)
-      const result = seekTo(seconds);
+      const result = seekTo(seconds, atMs);
       // 끝난 뒤 들어온 화면은 갈래마다 알린다(POK-546): 받아 두었으면 준비되면 그 시점부터라고, 서지 않으면 그 까닭을
       if (pastCard.kind !== 'notPast') {
         const title = pastCardNotice(pastCard, result, followsPlayhead);
@@ -1075,12 +1091,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   );
   /** 하이라이트 카드 목록에서 누른 이동 */
   const handleCardSeek = useCallback(
-    (seconds: number) => handleSeek(seconds, 'card'),
+    (seconds: number, atMs: number | null | undefined) => handleSeek(seconds, atMs, 'card'),
     [handleSeek],
   );
   /** 실시간 통계의 카드 핀에서 누른 이동 */
   const handlePinSeek = useCallback(
-    (seconds: number) => handleSeek(seconds, 'stats_pin'),
+    (seconds: number, atMs: number | null | undefined) => handleSeek(seconds, atMs, 'stats_pin'),
     [handleSeek],
   );
 
@@ -1109,7 +1125,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
                 chatPanelOpen={chatPanelOpen}
                 onToggleChatPanel={toggleChatPanel}
                 mark={playerMark}
-                startAtSeconds={pendingStart}
+                // A 화면만 받아 둔 플레이어용 PDT 로 센다 — 녹화(B)는 그 축을 읽지 않아 받아 둔 초 그대로다(PK2)
+                startAtSeconds={pendingStartSeconds(
+                  pastCard.kind === 'notPast' ? null : pendingStartAtMs,
+                  pendingStart,
+                  timeBaseMs,
+                )}
                 onStartApplied={clearPendingStart}
                 onPastCardMode={handlePastCardMode}
                 onRecordingLookup={setRecordingLookup}

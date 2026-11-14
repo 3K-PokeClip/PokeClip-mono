@@ -1,327 +1,1114 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useEditorVideoPlayback } from './useEditorVideoPlayback';
+import type { EditorSourceState } from './source/editorSourceState';
+import type { EditorPlaylist, PlaylistSegment } from './source/editorPlaylist';
+import type { HeadEntry } from './source/fileHeadProbe';
+import type { RemuxedWindow } from './source/remuxWindow';
+import type { SourceList } from './source/useEditorSource';
 
-// 편집기 미리보기 창은 녹화 구간 하나 안에 둔다(POK-253). 재생 서버는 틈 안에서 시작하는 요청에 404다(실측).
+// 편집기 미리보기 = ③ 되감기 목록의 창(POK-473 계획 prw2 5절 E4b-2 · 설계 5절 4). 구간 앞뒤 여유를 런 하나 안 조각으로 받아
+// mediabunny 로 다시 싸고(remuxWindow — 여기서는 조각 seq 로 표를 짓는 가짜), 창 배치(placeWindow — 실물)로 Blob 시각 ↔ 편집기
+// 초를 바꾼다. 녹화 재생 서버(/playback)는 부르지 않는다.
+//
+// 가짜 목록 · 표: seq 100 부터 4초 조각, PDT = BASE + (seq − 100)·4초, ③ 영상 첫 DTS = (seq − 100)·4초(판 2 원점 = D3).
+// 그래서 편집기 초 S 와 ③ PTS 가 같고, 창 Blob 시각 t 는 S − (창 첫 조각 시작)이다.
 
-const BASE = Date.parse('2026-09-30T01:50:00Z');
-const PIECES = [
-  { fromSeconds: 0, toSeconds: 14 },
-  { fromSeconds: 24, toSeconds: 38 },
-];
+const remux = vi.hoisted(() => {
+  const first = 100;
+  /** 조각 seq 들의 가짜 재다중화 결과 — 조각마다 0.5초 프레임 여덟 */
+  const of = (seqs: readonly number[]): RemuxedWindow => {
+    const segments = seqs.map((seq) => {
+      const dts = (seq - first) * 4;
+      const frames = Array.from({ length: 8 }, (_, i) => ({ pts: dts + i * 0.5, dur: 0.5 }));
+      return { seq, videoDts: dts, frames, mediaStart: dts, mediaEnd: dts + 4 };
+    });
+    return { blob: new Blob(['mp4']), shiftSeconds: segments[0]!.videoDts, segments };
+  };
+  return { first, of };
+});
+vi.mock('./source/remuxWindow', () => ({
+  remuxWindow: vi.fn(async (bytes: { segments: { seq: number }[] }) =>
+    remux.of(bytes.segments.map((seg) => seg.seq)),
+  ),
+}));
 
-function requestedWindow(fetchSpy: ReturnType<typeof vi.fn>) {
-  const url = new URL(String(fetchSpy.mock.calls[0]![0]), 'http://localhost');
-  const fromSeconds = (Date.parse(url.searchParams.get('start')!) - BASE) / 1000;
-  return { fromSeconds, toSeconds: fromSeconds + Number(url.searchParams.get('duration')) };
+/** 가짜 ② 머리 캐시 — 시험이 값을 넣고 알린다 */
+const heads = vi.hoisted(() => {
+  const scopes = new Map<string, { entries: Map<number, HeadEntry>; listeners: Set<() => void> }>();
+  const scopeOf = (key: string) => {
+    let scope = scopes.get(key);
+    if (scope === undefined) {
+      scope = { entries: new Map(), listeners: new Set() };
+      scopes.set(key, scope);
+    }
+    return scope;
+  };
+  return {
+    cacheFor: (key: string) => {
+      const scope = scopeOf(key);
+      return {
+        get: (seq: number) => scope.entries.get(seq),
+        subscribe: (listener: () => void) => {
+          scope.listeners.add(listener);
+          return () => scope.listeners.delete(listener);
+        },
+      };
+    },
+    set: (key: string, seq: number, entry: HeadEntry) => {
+      const scope = scopeOf(key);
+      scope.entries.set(seq, entry);
+      for (const listener of [...scope.listeners]) listener();
+    },
+    clear: () => scopes.clear(),
+    ensure: vi.fn(async () => undefined),
+  };
+});
+vi.mock('./source/fileHeadProbe', () => ({
+  headCacheFor: (key: string) => heads.cacheFor(key),
+  ensureHeads: heads.ensure,
+}));
+vi.mock('@/api/playbackAccess', () => ({
+  ensureMediaAccess: vi.fn(() => null),
+  reportPlaybackForbidden: vi.fn(),
+}));
+vi.mock('@/api/clipEditor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/clipEditor')>()),
+  requestSegmentAudioAccess: vi.fn(),
+}));
+
+const { requestSegmentAudioAccess } = await import('@/api/clipEditor');
+const { remuxWindow } = await import('./source/remuxWindow');
+const {
+  clearEditorMedia,
+  editorWindowFetching,
+  editorWindowKey,
+  watchEditorWindowFetch,
+  windowBlobs,
+} = await import('./editorMedia');
+const { decideWindow } = await import('./source/editorWindow');
+const { useEditorVideoPlayback } = await import('./useEditorVideoPlayback');
+
+const BASE = Date.parse('2026-11-12T01:00:00.000Z');
+const DIR = 'https://media.example/vod/key-1/round-a';
+const LIST_URL = `${DIR}/index.m3u8`;
+const MEDIA_KEY = 'key-1';
+const READY: EditorSourceState = { kind: 'ready', mode: 'vod', url: LIST_URL };
+const LIVE_READY: EditorSourceState = { kind: 'ready', mode: 'live', url: LIST_URL };
+
+function segment(seq: number, timing: 'v2' | null = 'v2'): PlaylistSegment {
+  return {
+    seq,
+    uri: `${DIR}/seg/${String(seq).padStart(7, '0')}.m4s`,
+    mapUri: `${DIR}/init/i.mp4`,
+    pdtMs: BASE + (seq - remux.first) * 4_000,
+    durationMs: 4_000,
+    timing,
+    gap: false,
+  };
 }
 
-describe('useEditorVideoPlayback — 녹화 구간', () => {
-  let fetchSpy: ReturnType<typeof vi.fn>;
-  beforeEach(() => {
-    fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
-    vi.stubGlobal('fetch', fetchSpy);
-  });
-  afterEach(() => vi.unstubAllGlobals());
+const range = (from: number, to: number) =>
+  Array.from({ length: to - from + 1 }, (_, i) => from + i);
 
-  it('재접속 직후 카드는 앞 여유를 틈까지 늘리지 않는다 — 틈에서 시작하면 미리보기가 통째로 실패했다', () => {
-    renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'gaptest',
-        recordingStartMs: BASE,
-        recordingSeconds: 38,
-        pieces: PIECES,
-        initialRange: { startSeconds: 26, endSeconds: 30 },
-      }),
-    );
-    expect(requestedWindow(fetchSpy)).toEqual({ fromSeconds: 24, toSeconds: 38 });
+/** 런마다 seq 목록 — 런 사이는 GAP · 끊김으로 갈린 자리다 */
+function listOf(
+  runs: number[][],
+  options: { mode?: 'live' | 'vod'; timing?: 'v2' | null } = {},
+): SourceList {
+  const timing = options.timing === undefined ? 'v2' : options.timing;
+  const segs = runs.map((run) => run.map((seq) => segment(seq, timing)));
+  return {
+    mode: options.mode ?? 'vod',
+    url: LIST_URL,
+    playlist: { runs: segs, rows: segs.flat() },
+  };
+}
+
+/** 받은 조각 seq — init(MAP) 은 뺀다 */
+function fetchedSeqs(spy: ReturnType<typeof vi.fn>): number[] {
+  return spy.mock.calls
+    .map(([url]) => /\/seg\/(\d+)\.m4s$/.exec(String(url))?.[1])
+    .filter((seq): seq is string => seq !== undefined)
+    .map(Number);
+}
+
+interface MountOptions {
+  list?: SourceList | null;
+  state?: EditorSourceState;
+  listFailed?: boolean;
+  initialRange?: { startSeconds: number; endSeconds: number };
+  mediaKey?: string;
+}
+
+function mount(options: MountOptions = {}) {
+  const source = {
+    state: options.state ?? READY,
+    list: options.list === undefined ? listOf([range(100, 124)]) : options.list,
+    listFailed: options.listFailed ?? false,
+    reloadList: vi.fn(async (): Promise<EditorPlaylist | null> => null),
+    reportSegmentFailure: vi.fn(async () => undefined),
+  };
+  const initialProps = {
+    streamId: 'round-a',
+    mediaKey: options.mediaKey ?? MEDIA_KEY,
+    base: BASE,
+    source,
+    initialRange: options.initialRange ?? { startSeconds: 20, endSeconds: 30 },
+  };
+  const hook = renderHook((props: typeof initialProps) => useEditorVideoPlayback(props), {
+    initialProps,
+  });
+  /** 원천만 바꿔 다시 그린다(목록이 자람 · 국면이 바뀜) */
+  const update = (next: Partial<typeof source>) => {
+    Object.assign(source, next);
+    hook.rerender({ ...initialProps, source: { ...source } });
+  };
+  return { ...hook, source, update };
+}
+
+function videoNode(extra: Record<string, unknown> = {}) {
+  return Object.assign(new EventTarget(), {
+    currentTime: 0,
+    duration: 32,
+    paused: true,
+    readyState: 0,
+    playbackRate: 1,
+    play: vi.fn(() => Promise.resolve()),
+    pause: vi.fn(),
+    removeAttribute: vi.fn(),
+    load: vi.fn(),
+    ...extra,
+  }) as unknown as HTMLVideoElement & { paused: boolean };
+}
+
+const flush = () =>
+  act(async () => {
+    for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(0);
   });
 
-  it('틈 앞 구간의 카드는 틈 앞에서 끝난다 — 틈을 건너 달라 하지 않는다', () => {
-    renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'gaptest',
-        recordingStartMs: BASE,
-        recordingSeconds: 38,
-        pieces: PIECES,
-        initialRange: { startSeconds: 5, endSeconds: 10 },
-      }),
-    );
-    expect(requestedWindow(fetchSpy)).toEqual({ fromSeconds: 0, toSeconds: 14 });
+let fetchSpy: ReturnType<typeof vi.fn>;
+let made = 0;
+const revoke = vi.fn();
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.clearAllMocks();
+  clearEditorMedia();
+  heads.clear();
+  made = 0;
+  fetchSpy = vi.fn(async () => new Response(new Uint8Array([1]), { status: 200 }));
+  vi.stubGlobal('fetch', fetchSpy);
+  vi.stubGlobal(
+    'URL',
+    Object.assign(URL, { createObjectURL: () => `blob:${++made}`, revokeObjectURL: revoke }),
+  );
+  vi.mocked(requestSegmentAudioAccess).mockResolvedValue({ expiresAt: '', segments: [] });
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe('useEditorVideoPlayback — 되감기 목록 창', () => {
+  it('구간 앞뒤 여유 10초를 덮는 조각을 받고 녹화 재생 서버(/playback)는 부르지 않는다', async () => {
+    const { result } = mount();
+    await flush();
+
+    // 구간 20–30초 ± 10초 = 10–40초 → 조각 102(8–12초) … 109(36–40초)
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+    expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/playback/'))).toEqual([]);
+    expect(result.current.window).toEqual({ startSeconds: 8, endSeconds: 40 });
+    expect(result.current.src).toBe('blob:1');
   });
 
-  it('구간이 통째로 틈 안이면 받지 않고 미리보기 실패로 알린다 — 엉뚱한 녹화를 보이지 않는다(PR #205 codex)', () => {
-    const { result } = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'gaptest',
-        recordingStartMs: BASE,
-        recordingSeconds: 114,
-        pieces: [
-          { fromSeconds: 0, toSeconds: 14 },
-          { fromSeconds: 100, toSeconds: 114 },
-        ],
-        initialRange: { startSeconds: 50, endSeconds: 60 },
-      }),
-    );
+  it('창은 런 하나 안에 둔다: 구간 앞 여유가 끊긴 자리에 걸리면 런 시작부터 받는다', async () => {
+    // 런 100–103(0–16초) · 런 106–124(24–100초). 구간 26–30초의 앞 여유 16–26초는 틈에 걸린다
+    mount({
+      list: listOf([range(100, 103), range(106, 124)]),
+      initialRange: { startSeconds: 26, endSeconds: 30 },
+    });
+    await flush();
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(106, 109));
+  });
+
+  it('구간이 통째로 틈 안이면 받지 않고 「녹화 없음」으로 알린다', async () => {
+    const { result } = mount({
+      list: listOf([range(100, 103), range(125, 128)]),
+      initialRange: { startSeconds: 50, endSeconds: 60 },
+    });
+    await flush();
     expect(fetchSpy).not.toHaveBeenCalled();
-    // 실패 이유가 「녹화 없음」이라 화면이 그대로 알린다(POK-389)
     expect(result.current.playback.error).toBe('no-recording');
   });
 
-  it('구간은 틈 안인데 여유만 다음 녹화에 닿아도 받지 않는다 — 고른 장면이 아닌 영상이다(PR #205 codex)', () => {
-    const { result } = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'gaptest',
-        recordingStartMs: BASE,
-        recordingSeconds: 38,
-        pieces: PIECES,
-        initialRange: { startSeconds: 15, endSeconds: 16 },
-      }),
-    );
-    expect(fetchSpy).not.toHaveBeenCalled();
-    // 실패 이유가 「녹화 없음」이라 화면이 그대로 알린다(POK-389)
-    expect(result.current.playback.error).toBe('no-recording');
+  it('목록이 미끄러져 창 앞이 목록 머리 앞이 되면 지금 목록으로 창을 다시 정해 머리부터 받는다', async () => {
+    const { result, update } = mount();
+    await flush();
+    fetchSpy.mockClear();
+    // 방송 중 1시간 창이 앞을 밀어내 목록 머리가 106(24초)이 됐다. 그 뒤 구간 끝을 창 끝 너머로 늘린다 — 앞 창(8초부터)을
+    // 그대로 늘리면 목록 머리 앞 조각을 달라고 하게 된다
+    update({ list: listOf([range(106, 124)]) });
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 45, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(106, 113));
+    expect(result.current.playback.error).toBeNull();
   });
 
-  it('구간 목록이 없으면 전처럼 앞뒤 10초 여유다', () => {
-    renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'gaptest',
-        recordingStartMs: BASE,
-        recordingSeconds: 100,
-        initialRange: { startSeconds: 30, endSeconds: 40 },
-      }),
+  it('decideWindow — 지금 목록 머리 앞의 구간은 머리부터의 창이 되고, 구간 전체가 머리 앞이면 빈 창이다', () => {
+    const list = listOf([range(106, 124)]);
+    const clamped = decideWindow(
+      { startSeconds: 10, endSeconds: 30 },
+      list,
+      BASE,
+      MEDIA_KEY,
+      false,
     );
-    expect(requestedWindow(fetchSpy)).toEqual({ fromSeconds: 20, toSeconds: 50 });
+    expect(clamped.kind === 'window' && clamped.target.segs.map((s) => s.seq)).toEqual(
+      range(106, 109),
+    );
+    expect(decideWindow({ startSeconds: 2, endSeconds: 12 }, list, BASE, MEDIA_KEY, false)).toEqual(
+      {
+        kind: 'empty',
+      },
+    );
+  });
+});
+
+describe('useEditorVideoPlayback — 방송 중 목록 기다리기', () => {
+  it('목록이 구간 끝 + 여유에 못 미치면 받지 않고 4초마다 목록을 다시 받아, 다 덮이면 받는다', async () => {
+    // 목록 끝 28초 · 구간 끝 30초 + 여유 10초 = 40초
+    const { source, update } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+    });
+    await flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(source.reloadList).toHaveBeenCalledTimes(1);
+    update({ list: listOf([range(100, 110)], { mode: 'live' }) });
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+  });
+
+  it('30초를 기다려도 목록이 자라지 않으면 있는 조각까지만 받는다', async () => {
+    const { source } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+    });
+    for (let i = 0; i < 7; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+    }
+    await flush();
+    expect(source.reloadList).toHaveBeenCalledTimes(7);
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 106));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(source.reloadList).toHaveBeenCalledTimes(7);
+  });
+
+  it('30초를 기다리다 포기한 창도, 뒤에 구간 끝을 창 끝 너머로 늘리면 목록을 다시 받아 자란 목록으로 창을 다시 정한다', async () => {
+    // 목록 끝 28초에서 30초를 기다리다 포기해 8–28초 창을 받았다. 목록은 다시 받아야만 자란다
+    const { result, source, update } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+    });
+    for (let i = 0; i < 7; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+    }
+    await flush();
+    expect(result.current.window).toEqual({ startSeconds: 8, endSeconds: 28 });
+    const grown = listOf([range(100, 115)], { mode: 'live' });
+    source.reloadList.mockImplementation(async () => {
+      update({ list: grown });
+      return grown.playlist;
+    });
+    fetchSpy.mockClear();
+
+    // 구간 끝 35초 + 여유 10초 = 45초 → 조각 102(8–12초) … 111(44–48초)
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 35, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    await flush();
+
+    expect(source.reloadList).toHaveBeenCalledTimes(8);
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 111));
+    expect(result.current.window).toEqual({ startSeconds: 8, endSeconds: 48 });
+  });
+
+  it('기다리며 목록을 다시 받다 실패하면 경고를 남기고 계속 기다린다: 거절을 흘리지 않는다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { source } = mount({
+        state: LIVE_READY,
+        list: listOf([range(100, 106)], { mode: 'live' }),
+      });
+      source.reloadList.mockRejectedValue(new Error('503'));
+      for (let i = 0; i < 2; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4_000);
+        });
+      }
+
+      expect(source.reloadList).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledWith('[editor] 목록을 다시 받지 못했어요:', '503');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('30초를 기다리다 포기한 창은 같은 구간을 다시 줘도(반복 켜고 끄기) 목록 기다리기를 다시 돌리지 않는다', async () => {
+    const { result, source } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+    });
+    for (let i = 0; i < 7; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+    }
+    await flush();
+    expect(source.reloadList).toHaveBeenCalledTimes(7);
+
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: false });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(source.reloadList).toHaveBeenCalledTimes(7);
+  });
+
+  it('끝난 방송(vod) 목록은 기다리지 않는다: 더 올라올 조각이 없다', async () => {
+    const { source } = mount({ list: listOf([range(100, 106)]) });
+    await flush();
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 106));
+    expect(source.reloadList).not.toHaveBeenCalled();
+  });
+});
+
+describe('useEditorVideoPlayback — 원천 상태 문구(D3)', () => {
+  it('목록을 받는 중이면 「받는 중」, 받다 실패하면 「받지 못함」으로 가른다', async () => {
+    const loading = mount({ list: null });
+    expect(loading.result.current.playback.error).toBe('list-loading');
+    const failed = mount({ list: null, listFailed: true });
+    expect(failed.result.current.playback.error).toBe('list-failed');
+    await flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('방송 중 구간 시작이 목록 끝 뒤면 「몇 초 뒤에 보여요」(uploading)다', async () => {
+    const { result } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+      initialRange: { startSeconds: 40, endSeconds: 50 },
+    });
+    await flush();
+    expect(result.current.playback.error).toBe('uploading');
+  });
+
+  it('목록 끝은 마지막 조각 PDT 가 아니라 그 조각의 끝이다: 마지막 조각 안의 카드 자리는 uploading 이 아니다', async () => {
+    // 목록 끝 28초(조각 106 = 24–28초) · 구간 시작 26초
+    const { result } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+      initialRange: { startSeconds: 26, endSeconds: 27 },
+    });
+    await flush();
+    expect(result.current.playback.error).toBeNull();
+  });
+
+  it('uploading 이면 4초마다 목록을 다시 받고, 목록이 구간을 덮도록 자라면 창을 받는다', async () => {
+    // 목록 끝 28초 · 구간 40–50초 — 카드 자리가 목록 끝 뒤다
+    const { result, source, update } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+      initialRange: { startSeconds: 40, endSeconds: 50 },
+    });
+    await flush();
+    expect(result.current.playback.error).toBe('uploading');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(source.reloadList).toHaveBeenCalledTimes(1);
+    // 목록이 64초까지 자랐다 — 구간 40–50초 ± 10초 = 30–60초 → 조각 107(28–32초) … 114(56–60초)
+    update({ list: listOf([range(100, 115)], { mode: 'live' }) });
+    await flush();
+
+    expect(result.current.playback.error).toBeNull();
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(107, 114));
+  });
+
+  it('uploading 이 풀리지 않으면 상한 없이 4초마다 다시 받는다: 60초면 15번', async () => {
+    const { source } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+      initialRange: { startSeconds: 40, endSeconds: 50 },
+    });
+    for (let i = 0; i < 15; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+    }
+    expect(source.reloadList).toHaveBeenCalledTimes(15);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('uploading 다시 받기는 원천이 finalizing 으로 바뀌거나 화면을 떠나면 멈춘다', async () => {
+    const options = {
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+      initialRange: { startSeconds: 40, endSeconds: 50 },
+    };
+    const ending = mount(options);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    ending.update({ state: { kind: 'finalizing', cause: 'stream' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(ending.result.current.playback.error).toBe('finalizing');
+    expect(ending.source.reloadList).toHaveBeenCalledTimes(1);
+
+    const leaving = mount(options);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    leaving.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(leaving.source.reloadList).toHaveBeenCalledTimes(2);
+  });
+
+  it('방송 중 ending 이 되면 받은 창은 그대로 두고 새 창은 받지 않는다', async () => {
+    const { result, update } = mount();
+    await flush();
+    expect(result.current.src).toBe('blob:1');
+    fetchSpy.mockClear();
+
+    update({ state: { kind: 'finalizing', cause: 'round', under: READY } });
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 45, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flush();
+
+    expect(result.current.playback.error).toBe('finalizing');
+    expect(result.current.src).toBe('blob:1');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('useEditorVideoPlayback — 조각 실패', () => {
+  it('조각이 404 면 그 조각과 창의 목록 주소로 원천에 싣고, 아직 받는 나머지 요청을 끊는다', async () => {
+    const pending: AbortSignal[] = [];
+    fetchSpy.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('0000104.m4s')) return new Response(null, { status: 404 });
+      if (url.endsWith('.m4s')) {
+        pending.push(init!.signal!);
+        return new Promise<Response>(() => undefined);
+      }
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    const { result, source } = mount();
+    await flush();
+
+    expect(source.reportSegmentFailure).toHaveBeenCalledWith('gone', 104, LIST_URL);
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.every((signal) => signal.aborted)).toBe(true);
+    expect(result.current.playback.error).not.toBeNull();
+  });
+
+  it('출입증을 다시 받아도 403 이면 「출입증 거절」로 알리고 원천에 싣는다', async () => {
+    fetchSpy.mockImplementation(async (url: string) =>
+      url.endsWith('0000103.m4s')
+        ? new Response(null, { status: 403 })
+        : new Response(new Uint8Array([1]), { status: 200 }),
+    );
+    const { result, source } = mount();
+    await flush();
+    expect(source.reportSegmentFailure).toHaveBeenCalledWith(
+      'forbiddenAfterRefresh',
+      103,
+      LIST_URL,
+    );
+    expect(result.current.playback.error).toBe('access');
+  });
+
+  it('다시 싸기가 패킷 수 어긋남 등으로 실패하면 「불러오지 못함」이다', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(remuxWindow).mockRejectedValueOnce(new Error('재다중화 패킷 수가 다르다'));
+    const { result, source } = mount();
+    await flush();
+    expect(result.current.playback.error).toBe('fatal');
+    expect(source.reportSegmentFailure).not.toHaveBeenCalled();
+  });
+
+  it('받다 실패한 창의 열쇠를 알린다: 트랙 미리 듣기가 그 창 닻 기다림을 실패로 끝낸다', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(remuxWindow).mockRejectedValueOnce(new Error('재다중화 패킷 수가 다르다'));
+    const { result } = mount();
+    await flush();
+    expect(result.current.target).not.toBeNull();
+    expect(result.current.loaded).toBeNull();
+    expect(result.current.failedKey).toBe(result.current.target!.key);
+  });
+
+  it('창을 받으면 실패한 창 열쇠가 없다', async () => {
+    const { result } = mount();
+    await flush();
+    expect(result.current.loaded).not.toBeNull();
+    expect(result.current.failedKey).toBeNull();
+  });
+});
+
+// 방송이 끝나 /dvr 하한이 풀리면(POK-525 — vod 는 엣지 하한 키를 지운 뒤에야 열린다) 하한 아래라 404 였던 조각도 같은
+// 주소로 받힌다. 조각 주소는 live · vod 가 같다(장부 playback_s3_key 고정 — rewind/render.go).
+describe('useEditorVideoPlayback — 원천 전환(live → vod)', () => {
+  /** 하한이 서 있는 동안 seq 104 는 404 다 */
+  function floorAt104() {
+    const floor = { on: true };
+    fetchSpy.mockImplementation(async (url: string) =>
+      floor.on && url.endsWith('0000104.m4s')
+        ? new Response(null, { status: 404 })
+        : new Response(new Uint8Array([1]), { status: 200 }),
+    );
+    return floor;
+  }
+  const mountLive = () =>
+    mount({ state: LIVE_READY, list: listOf([range(100, 124)], { mode: 'live' }) });
+
+  it('live 창이 404 로 실패한 뒤 같은 구간에 vod 목록이 오면 창을 다시 정해 다시 받는다', async () => {
+    const floor = floorAt104();
+    const { result, source, update } = mountLive();
+    await flush();
+    expect(source.reportSegmentFailure).toHaveBeenCalledWith('gone', 104, LIST_URL);
+    expect(result.current.failedKey).not.toBeNull();
+
+    floor.on = false;
+    fetchSpy.mockClear();
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+    expect(result.current.loaded).not.toBeNull();
+    expect(result.current.failedKey).toBeNull();
+    expect(result.current.playback.error).toBeNull();
+  });
+
+  it('같은 원천(live)의 목록만 새로 와서는 실패한 창을 다시 받지 않는다', async () => {
+    floorAt104();
+    const { result, update } = mountLive();
+    await flush();
+    fetchSpy.mockClear();
+
+    update({ list: listOf([range(100, 124)], { mode: 'live' }) });
+    await flush();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.failedKey).not.toBeNull();
+  });
+
+  it('live 에서 받은 창은 vod 로 바뀌어도 열쇠가 같으면 다시 받지 않는다: 같은 seq 는 같은 바이트다', async () => {
+    const { result, update } = mountLive();
+    await flush();
+    const loaded = result.current.loaded;
+    expect(result.current.src).toBe('blob:1');
+    fetchSpy.mockClear();
+
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.src).toBe('blob:1');
+    expect(result.current.loaded).toBe(loaded);
+  });
+
+  it('live 에서 받는 중에 vod 로 바뀌고 그 뒤 404 로 실패하면, 지금 vod 목록으로 다시 받는다', async () => {
+    let fail: () => void = () => undefined;
+    let first = true;
+    fetchSpy.mockImplementation(async (url: string) => {
+      if (first && url.endsWith('0000104.m4s')) {
+        first = false;
+        return new Promise<Response>((resolve) => {
+          fail = () => resolve(new Response(null, { status: 404 }));
+        });
+      }
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    const { result, update } = mountLive();
+    await flush();
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+    fetchSpy.mockClear();
+
+    await act(async () => fail());
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+    expect(result.current.loaded).not.toBeNull();
+    expect(result.current.failedKey).toBeNull();
+  });
+
+  it('live 목록 끝에서 멈춘 창은 vod 목록이 오면 같은 구간이라도 그 목록으로 창을 다시 정한다', async () => {
+    const { update } = mount({
+      state: LIVE_READY,
+      list: listOf([range(100, 106)], { mode: 'live' }),
+    });
+    for (let i = 0; i < 7; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+    }
+    await flush();
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 106));
+    fetchSpy.mockClear();
+
+    update({ state: READY, list: listOf([range(100, 124)]) });
+    await flush();
+
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+  });
+});
+
+describe('useEditorVideoPlayback — ② 머리(판 NULL)', () => {
+  it('판 NULL 창이면 창 범위의 소리 주소를 한 번 묻고, 창 seq 행만 머리 판독에 넘기고 없는 seq 는 missing 으로 넘긴다', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+      expiresAt: '',
+      segments: [
+        { seq: 101, startAtMs: 0, durationMs: 4_000, url: 'https://s3.example/101' },
+        { seq: 102, startAtMs: 0, durationMs: 4_000, url: 'https://s3.example/102' },
+        { seq: 103, startAtMs: 0, durationMs: 4_000, url: 'https://s3.example/103' },
+      ],
+    });
+    mount({ list: listOf([range(100, 124)], { timing: null }) });
+    await flush();
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+    expect(requestSegmentAudioAccess).toHaveBeenCalledWith('round-a', BASE + 8_000, BASE + 40_000);
+    const [key, rows, missing, signal] = heads.ensure.mock.calls[0]! as unknown as [
+      string,
+      { seq: number; url: string }[],
+      number[],
+      AbortSignal,
+    ];
+    expect(key).toBe(MEDIA_KEY);
+    expect(rows).toEqual([
+      { seq: 102, url: 'https://s3.example/102' },
+      { seq: 103, url: 'https://s3.example/103' },
+    ]);
+    expect(missing).toEqual(range(104, 109));
+    expect(signal.aborted).toBe(false);
+  });
+
+  it('판 2 창은 머리를 읽지 않는다', async () => {
+    mount();
+    await flush();
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+    expect(heads.ensure).not.toHaveBeenCalled();
+  });
+
+  it('창이 바뀌거나 화면을 떠나면 머리 판독을 끊는다', async () => {
+    const { unmount } = mount({ list: listOf([range(100, 124)], { timing: null }) });
+    await flush();
+    const signal = (
+      heads.ensure.mock.calls[0] as unknown as [string, unknown, unknown, AbortSignal]
+    )[3];
+    unmount();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('머리가 늦게 오면 배치를 다시 셈하고, 멈춘 영상은 같은 편집기 초의 자리로 옮긴다', async () => {
+    const key = 'key-late';
+    const { result } = mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    const node = videoNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+    act(() => result.current.playback.seekTo(21));
+    // 머리 전: 원점 = ③ 영상 첫 DTS(근사) — 21초 = 조각 105(20초) 안 1초 = Blob 13초
+    expect(node.currentTime).toBeCloseTo(13);
+    expect(result.current.placement!.sAtBlob(13)).toBeCloseTo(21);
+
+    // 조각 105 의 ② 머리: 영상 첫 DTS 0.3 · 가장 이른 트랙 0 → m = 0.3 → 원점이 0.3초 앞으로
+    act(() => heads.set(key, 105, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } }));
+    expect(result.current.placement!.sAtBlob(13)).toBeCloseTo(21.3);
+    expect(node.currentTime).toBeCloseTo(12.7);
+  });
+
+  it('머리 알림 둘이 같은 React 배치로 와도 나중 알림의 배치가 남는다', async () => {
+    const key = 'key-batched';
+    const { result } = mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    await flush();
+
+    act(() => {
+      heads.set(key, 105, { state: 'missing' });
+      heads.set(key, 105, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } });
+    });
+
+    expect(result.current.placement!.sAtBlob(13)).toBeCloseTo(21.3);
+  });
+
+  it('창 조각 머리가 모두 이미 읽혀 있으면(카드가 미리 읽음) 소리 주소를 다시 묻지 않는다', async () => {
+    const key = 'key-read';
+    for (const seq of range(102, 109)) {
+      heads.set(key, seq, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0 } });
+    }
+    mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    await flush();
+
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+    expect(heads.ensure).not.toHaveBeenCalled();
+  });
+
+  it('일부만 읽혀 있으면 소리 주소를 묻고 아직 안 읽은 seq 만 머리 판독에 넘긴다', async () => {
+    const key = 'key-partly';
+    for (const seq of range(102, 105)) {
+      heads.set(key, seq, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0 } });
+    }
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+      expiresAt: '',
+      segments: range(102, 109).map((seq) => ({
+        seq,
+        startAtMs: 0,
+        durationMs: 4_000,
+        url: `https://s3.example/${seq}`,
+      })),
+    });
+    mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    await flush();
+
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(1);
+    const [, rows, missing] = heads.ensure.mock.calls[0]! as unknown as [
+      string,
+      { seq: number }[],
+      number[],
+    ];
+    expect(rows.map((row) => row.seq)).toEqual(range(106, 109));
+    expect(missing).toEqual([]);
+  });
+});
+
+describe('useEditorVideoPlayback — 다른 창의 머리 알림', () => {
+  it('이 창 조각이 아닌 seq 의 머리가 와도(카드 미리 받기) 다시 배치하지 않고 멈춘 영상을 옮기지 않는다', async () => {
+    const key = 'key-other';
+    const { result } = mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    const node = videoNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+    const before = result.current.placement;
+    act(() => {
+      node.currentTime = 5.05;
+    });
+
+    act(() => heads.set(key, 140, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } }));
+
+    expect(result.current.placement).toBe(before);
+    expect(node.currentTime).toBe(5.05);
+  });
+});
+
+describe('useEditorVideoPlayback — 미리 받아 둔 창', () => {
+  it('카드가 미리 받아 둔 창이면 다시 받지 않고 그 창으로 배치한다', async () => {
+    windowBlobs.set(editorWindowKey(MEDIA_KEY, 102, 109), remux.of(range(102, 109)));
+    const { result } = mount();
+    await flush();
+    expect(fetchedSeqs(fetchSpy)).toEqual([]);
+    expect(result.current.src).toBe('blob:1');
+    expect(result.current.placement!.sAtBlob(4)).toBeCloseTo(12);
+  });
+
+  it('끝 조각이 다른 창은 미리 받은 창이 아니다', async () => {
+    windowBlobs.set(editorWindowKey(MEDIA_KEY, 102, 108), remux.of(range(102, 108)));
+    mount();
+    await flush();
+    expect(fetchedSeqs(fetchSpy)).toEqual(range(102, 109));
+  });
+});
+
+// 편집기가 창을 받는 동안은 카드 미리 받기가 쉰다(M3 — 둘이 겹칠 때 메모리가 가장 높았다). 쉬게 하는 표시가 받기 끝 · 실패 ·
+// 화면 떠남에서 꼭 풀려야 카드 미리 받기가 영원히 멈추지 않는다
+describe('useEditorVideoPlayback — 창을 받는 동안 카드 미리 받기 쉬게 하기', () => {
+  it('창을 받는 동안 잡고, 받아 다시 싸면 놓는다', async () => {
+    const release: (() => void)[] = [];
+    fetchSpy.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          release.push(() => resolve(new Response(new Uint8Array([1]), { status: 200 }))),
+        ),
+    );
+    const { result } = mount();
+    await flush();
+    expect(editorWindowFetching()).toBe(true);
+
+    await act(async () => {
+      while (release.length > 0) release.shift()!();
+      for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(0);
+    });
+    await flush();
+
+    expect(result.current.src).toBe('blob:1');
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받다 실패해도 놓는다', async () => {
+    fetchSpy.mockImplementation(async (url: string) =>
+      url.endsWith('.m4s')
+        ? new Response(null, { status: 404 })
+        : new Response(new Uint8Array([1]), { status: 200 }),
+    );
+    const { result } = mount();
+    await flush();
+
+    expect(result.current.playback.error).not.toBeNull();
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받는 중에 화면을 떠나도 놓는다', async () => {
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const { unmount } = mount();
+    await flush();
+    expect(editorWindowFetching()).toBe(true);
+
+    unmount();
+
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받는 중에 창이 바뀌면 앞 창 몫은 놓고 새 창 몫으로 잡는다', async () => {
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const seen: boolean[] = [];
+    const stop = watchEditorWindowFetch((fetching) => seen.push(fetching));
+    const { result, unmount } = mount();
+    await flush();
+
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 60, endSeconds: 70, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flush();
+    expect(editorWindowFetching()).toBe(true);
+    unmount();
+    stop();
+
+    expect(editorWindowFetching()).toBe(false);
+    expect(seen.at(-1)).toBe(false);
+  });
+
+  it('카드가 미리 받아 둔 창이면 받지 않으므로 잡지 않는다', async () => {
+    windowBlobs.set(editorWindowKey(MEDIA_KEY, 102, 109), remux.of(range(102, 109)));
+    const seen: boolean[] = [];
+    const stop = watchEditorWindowFetch((fetching) => seen.push(fetching));
+    mount();
+    await flush();
+    stop();
+
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('useEditorVideoPlayback — 고름', () => {
+  it('재생 위치에 보이는 프레임과 창 안 편집기 초의 프레임을 고른다. 창 밖이면 null 이다', async () => {
+    const { result } = mount();
+    const node = videoNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+    act(() => {
+      node.currentTime = 13.2; // 편집기 21.2초 — 조각 105 의 21.0초 프레임이 보인다
+    });
+
+    expect(result.current.playback.pickAtPlayhead()).toMatchObject({ seq: 105, pts: 21 });
+    expect(result.current.playback.pickAtS(30.7)).toMatchObject({ seq: 107, pts: 30.5 });
+    expect(result.current.playback.pickAtS(50)).toBeNull();
+  });
+
+  it('창을 아직 못 받았으면 고를 프레임이 없다', () => {
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const { result } = mount();
+    expect(result.current.playback.pickAtPlayhead()).toBeNull();
+    expect(result.current.playback.pickAtS(21)).toBeNull();
   });
 });
 
 describe('useEditorVideoPlayback: 받은 창 알리기 (POK-389)', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('창은 영상을 다 받은 뒤에 알린다: 받는 동안 알리면 옛 영상을 새 창 시각으로 읽어 미리 듣기·필름띠가 어긋난다(PR #341 codex)', async () => {
-    let finish: (res: Response) => void = () => undefined;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => new Promise<Response>((resolve) => (finish = resolve))),
-    );
-    vi.stubGlobal(
-      'URL',
-      Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }),
-    );
-    const { result } = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 38,
-        pieces: PIECES,
-        initialRange: { startSeconds: 5, endSeconds: 10 },
-      }),
-    );
+  it('창은 영상을 다 받은 뒤에 알린다: 받는 동안 알리면 옛 영상을 새 창 시각으로 읽어 필름띠가 어긋난다(PR #341 codex)', async () => {
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (finish = resolve));
+    fetchSpy.mockImplementation(async () => {
+      await gate;
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    const { result } = mount();
+    await flush();
     expect(result.current.window).toBeNull();
-    // 받으려는 창은 처음부터 있다: 미리 듣기가 영상과 함께 조각을 받기 시작한다(PR #341 2차)
-    expect(result.current.targetWindow).toEqual({ startSeconds: 0, endSeconds: 14 });
+    // 받으려는 창은 처음부터 있다
+    expect(result.current.targetWindow).toEqual({ startSeconds: 8, endSeconds: 40 });
 
-    finish(new Response('mp4', { status: 200 }));
-    await waitFor(() => expect(result.current.src).toBe('blob:x'));
-    expect(result.current.window).toEqual({ startSeconds: 0, endSeconds: 14 });
+    finish();
+    await flush();
+    expect(result.current.window).toEqual({ startSeconds: 8, endSeconds: 40 });
   });
 });
 
 describe('useEditorVideoPlayback: 창 다시 받기 예약 (POK-389)', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+  it('창 끝까지 끌었다가 곧 안쪽으로 돌리면 같은 창을 다시 받지 않는다(PR #341 codex)', async () => {
+    const { result } = mount();
+    await flush();
+    fetchSpy.mockClear();
 
-  it('창 끝까지 끌었다가 곧 안쪽으로 돌리면 같은 창을 다시 받지 않는다(PR #341 codex)', () => {
-    vi.useFakeTimers();
-    const fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
-    vi.stubGlobal('fetch', fetchSpy);
-    const { result } = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 100,
-        initialRange: { startSeconds: 20, endSeconds: 30 },
-      }),
-    );
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-
-    act(() => {
+    await act(async () => {
       result.current.playback.setBounds({ startSeconds: 20, endSeconds: 39.8, loop: true });
       result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: true });
-      vi.advanceTimersByTime(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
 describe('useEditorVideoPlayback: 옛 영상 주소 지우기 (POK-389)', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
   it('새 창을 받는 동안에는 옛 영상 주소를 지우지 않고, 새 영상이 들어온 뒤에 지운다(PR #341 claude)', async () => {
-    vi.useFakeTimers();
-    const finishers: ((res: Response) => void)[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => new Promise<Response>((resolve) => finishers.push(resolve))),
-    );
-    let made = 0;
-    const revoke = vi.fn();
-    vi.stubGlobal(
-      'URL',
-      Object.assign(URL, { createObjectURL: () => `blob:${++made}`, revokeObjectURL: revoke }),
-    );
-    const { result } = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 100,
-        initialRange: { startSeconds: 20, endSeconds: 30 },
-      }),
-    );
-    await act(async () => {
-      finishers[0]!(new Response('mp4', { status: 200 }));
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    const { result } = mount();
+    await flush();
     expect(result.current.src).toBe('blob:1');
 
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (finish = resolve));
+    fetchSpy.mockImplementation(async () => {
+      await gate;
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
     // 구간을 창 끝 너머로 늘리면 새 창을 받는다. 받는 동안 <video>는 옛 주소를 그대로 쓴다
     await act(async () => {
       result.current.playback.setBounds({ startSeconds: 20, endSeconds: 45, loop: true });
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(finishers).toHaveLength(2);
+    await flush();
     expect(result.current.src).toBe('blob:1');
     expect(revoke).not.toHaveBeenCalledWith('blob:1');
 
-    await act(async () => {
-      finishers[1]!(new Response('mp4', { status: 200 }));
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    finish();
+    await flush();
     expect(result.current.src).toBe('blob:2');
     expect(revoke).toHaveBeenCalledWith('blob:1');
     expect(revoke).not.toHaveBeenCalledWith('blob:2');
   });
+
+  it('화면을 떠나면 받은 영상 주소를 지운다', async () => {
+    const { unmount } = mount();
+    await flush();
+    unmount();
+    expect(revoke).toHaveBeenCalledWith('blob:1');
+  });
 });
 
 describe('useEditorVideoPlayback: 새 창을 받는 동안의 시각 (POK-389)', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
   it('새 창을 받는 동안은 아직 도는 옛 영상의 창으로 시각을 옮기고, 새 영상이 들어오면 새 창으로 옮긴다(PR #341 claude)', async () => {
-    vi.useFakeTimers();
-    const finishers: ((res: Response) => void)[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => new Promise<Response>((resolve) => finishers.push(resolve))),
-    );
-    let made = 0;
-    vi.stubGlobal(
-      'URL',
-      Object.assign(URL, { createObjectURL: () => `blob:${++made}`, revokeObjectURL: () => {} }),
-    );
-    const node = Object.assign(new EventTarget(), {
-      currentTime: 0,
-      paused: true,
-      readyState: 0,
-      playbackRate: 1,
-      pause: () => undefined,
-      removeAttribute: () => undefined,
-      load: () => undefined,
-    }) as unknown as HTMLVideoElement;
-    const { result } = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 100,
-        initialRange: { startSeconds: 20, endSeconds: 30 },
-      }),
-    );
+    const { result } = mount();
+    const node = videoNode();
     act(() => result.current.videoRef(node));
-    // 첫 창: 구간 앞뒤 10초(10~40초)
-    await act(async () => {
-      finishers[0]!(new Response('mp4', { status: 200 }));
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(result.current.window).toEqual({ startSeconds: 10, endSeconds: 40 });
+    await flush();
+    // 첫 창: 8–40초(Blob 0 = 8초)
     act(() => {
-      node.currentTime = 15;
+      node.currentTime = 17;
       node.dispatchEvent(new Event('timeupdate'));
     });
     expect(result.current.playback.currentSeconds).toBe(25);
 
-    // 시작을 창 앞쪽 끝까지 당기면 새 창(0.2~40초)을 받는다. 받는 동안 <video>는 옛 창(10~40초) 영상 그대로다
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (finish = resolve));
+    fetchSpy.mockImplementation(async () => {
+      await gate;
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    // 시작을 창 앞쪽 끝까지 당기면 새 창(0–40초)을 받는다. 받는 동안 <video>는 옛 창 영상 그대로다
     await act(async () => {
-      result.current.playback.setBounds({ startSeconds: 10.2, endSeconds: 30, loop: true });
+      result.current.playback.setBounds({ startSeconds: 8.2, endSeconds: 30, loop: true });
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(finishers).toHaveLength(2);
     act(() => node.dispatchEvent(new Event('timeupdate')));
     expect(result.current.playback.currentSeconds).toBe(25);
     act(() => result.current.playback.seekTo(28));
-    expect(node.currentTime).toBe(18);
+    expect(node.currentTime).toBe(20);
 
     // 새 영상이 들어오면 새 창으로 옮기고, 구간 시작으로 간다
-    await act(async () => {
-      finishers[1]!(new Response('mp4', { status: 200 }));
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    finish();
+    await flush();
     act(() => node.dispatchEvent(new Event('loadedmetadata')));
-    expect(node.currentTime).toBeCloseTo(10);
-    expect(result.current.playback.currentSeconds).toBeCloseTo(10.2);
+    expect(node.currentTime).toBeCloseTo(8.2);
+    expect(result.current.playback.currentSeconds).toBeCloseTo(8.2);
+  });
+});
+
+describe('useEditorVideoPlayback — 창 Blob 시크 규칙(kty M1 처분 (가))', () => {
+  it('② 창 첫 영상 프레임 앞으로는 옮기지 않는다: 빈 편집 구간이면 Safari 가 앞 그림을 남긴다', async () => {
+    const { result } = mount();
+    const node = videoNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+
+    act(() => result.current.playback.seekTo(8)); // 창 첫 조각 시작 = Blob 0초 = 첫 영상 프레임
+
+    expect(node.currentTime).toBeCloseTo(0.001, 9);
+    expect(result.current.seekLimits).toEqual({ firstFrame: 0, halfFrame: 0.25 });
+  });
+
+  it('① 시크 목표는 video.duration − 반 프레임 안이다: Firefox 가 짧게 알린 끝 너머로 가지 않는다', async () => {
+    const { result } = mount();
+    const node = videoNode({ duration: 31.9 });
+    act(() => result.current.videoRef(node));
+    await flush();
+
+    act(() => result.current.playback.seekTo(39.99));
+
+    expect(node.currentTime).toBeCloseTo(31.9 - 0.25, 9);
+  });
+
+  it('머리가 와 다시 배치해 멈춘 영상을 옮길 때도 같은 규칙으로 묶는다', async () => {
+    const key = 'key-m1';
+    const { result } = mount({ list: listOf([range(100, 124)], { timing: null }), mediaKey: key });
+    const node = videoNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+    act(() => result.current.playback.seekTo(8));
+
+    // 조각 102 머리: m = 0.3 → 편집기 8초는 원점 앞 0.3초 자리지만 창 첫 프레임 앞으로는 가지 않는다
+    act(() => heads.set(key, 102, { state: 'ready', head: { hd: 0, hp: 0, videoDts: 0.3 } }));
+
+    expect(node.currentTime).toBeCloseTo(0.001, 9);
   });
 });
 
 describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  /** 구간 20~30초, 창 10~40초를 받아 둔 영상 노드. duration은 받은 영상의 실제 길이(초) */
+  /** 구간 20–30초, 창 8–40초를 받아 둔 영상 노드. duration 은 받은 영상의 실제 길이(초) */
   async function loaded(duration: number) {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.resolve(new Response('mp4', { status: 200 }))),
-    );
-    vi.stubGlobal(
-      'URL',
-      Object.assign(URL, { createObjectURL: () => 'blob:1', revokeObjectURL: () => {} }),
-    );
-    const play = vi.fn(() => Promise.resolve());
-    const node = Object.assign(new EventTarget(), {
-      currentTime: 0,
-      duration,
-      paused: true,
-      readyState: 0,
-      playbackRate: 1,
-      play,
-      pause: vi.fn(),
-      removeAttribute: vi.fn(),
-      load: vi.fn(),
-    }) as unknown as HTMLVideoElement;
-    const hook = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 100,
-        initialRange: { startSeconds: 20, endSeconds: 30 },
-      }),
-    );
+    const hook = mount();
+    const node = videoNode({ duration });
     act(() => hook.result.current.videoRef(node));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(hook.result.current.window).toEqual({ startSeconds: 10, endSeconds: 40 });
-    return { ...hook, node, play };
+    await flush();
+    expect(hook.result.current.window).toEqual({ startSeconds: 8, endSeconds: 40 });
+    return { ...hook, node, play: node.play as ReturnType<typeof vi.fn> };
   }
 
   const tick = (node: HTMLVideoElement, videoSeconds: number) =>
@@ -331,47 +1118,34 @@ describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
     });
 
   it('반복이 켜져 있으면 구간 끝에 닿을 때 구간 시작으로 되감는다', async () => {
-    const { node } = await loaded(30);
-    tick(node, 20.1); // 방송 30.1초 — 구간 끝을 지났다
-    expect(node.currentTime).toBe(10); // 방송 20초 = 창 시작 10초 + 10
+    const { node } = await loaded(32);
+    tick(node, 22.1); // 편집기 30.1초 — 구간 끝을 지났다
+    expect(node.currentTime).toBe(12); // 편집기 20초 = Blob 12초
   });
 
   it('받은 영상이 구간 끝보다 짧으면 영상 끝에서 되감는다: 전에는 영상 끝에서 멈춰 반복이 안 걸렸다', async () => {
-    // 영상은 15초(방송 10~25초)뿐이다 — 구간 끝 30초에 영영 닿지 않는다(녹화 끝·조각 끝에서 잘린 창)
-    const { node } = await loaded(15);
-    tick(node, 14.97); // 방송 24.97초 — 영상 끝 바로 앞
-    expect(node.currentTime).toBe(10);
+    // 영상은 17초(편집기 8–25초)뿐이다 — 구간 끝 30초에 영영 닿지 않는다
+    const { node } = await loaded(17);
+    tick(node, 16.97);
+    expect(node.currentTime).toBe(12);
   });
 
   it('영상 끝(ended)이 먼저 와도 반복이면 구간 시작으로 되감아 이어 튼다', async () => {
-    const { node, play, result } = await loaded(15);
+    const { node, play, result } = await loaded(17);
     act(() => {
-      node.currentTime = 15;
+      node.currentTime = 17;
       node.dispatchEvent(new Event('ended'));
     });
-    expect(node.currentTime).toBe(10);
+    expect(node.currentTime).toBe(12);
     expect(play).toHaveBeenCalledTimes(1);
     expect(result.current.playback.error).toBeNull();
   });
 
-  it('받은 영상이 구간 시작에도 못 닿으면 영상 끝에서 반복하지 않고 멈춘다: 구간 밖을 끝없이 돌지 않는다(PR #454 1차 리뷰)', async () => {
-    // 영상은 8초(방송 10~18초)뿐 — 구간 20~30초가 통째로 영상 밖이다
-    const { node, play, result } = await loaded(8);
+  it('받은 영상이 구간 시작에도 못 닿으면 영상 끝에서 반복하지 않고 멈춘다(PR #454 1차 리뷰)', async () => {
+    const { node, play, result } = await loaded(10);
     act(() => {
       node.dispatchEvent(new Event('play'));
-      node.currentTime = 8;
-      node.dispatchEvent(new Event('ended'));
-    });
-    expect(play).not.toHaveBeenCalled();
-    expect(result.current.playback.playing).toBe(false);
-  });
-
-  it('받은 영상이 구간 시작 바로 뒤(경계 여유 안)에서 끝나도 멈춘다: 그 몇십 ms를 끝없이 되감지 않는다(PR #454 2차 리뷰)', async () => {
-    // 영상은 10.03초(방송 10~20.03초) — 구간 시작 20초를 30ms 넘는다. 경계 틱은 이 구간을 그대로 둬 끝을 못 잡는다
-    const { node, play, result } = await loaded(10.03);
-    act(() => {
-      node.dispatchEvent(new Event('play'));
-      node.currentTime = 10.03;
+      node.currentTime = 10;
       node.dispatchEvent(new Event('ended'));
     });
     expect(play).not.toHaveBeenCalled();
@@ -379,40 +1153,23 @@ describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
   });
 
   it('반복이 꺼져 있으면 영상 끝에서 멈춘다', async () => {
-    const { node, play, result } = await loaded(15);
+    const { node, play, result } = await loaded(17);
     act(() => result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: false }));
     act(() => {
       node.dispatchEvent(new Event('play'));
-      node.currentTime = 15;
+      node.currentTime = 17;
       node.dispatchEvent(new Event('ended'));
     });
     expect(play).not.toHaveBeenCalled();
     expect(result.current.playback.playing).toBe(false);
-    expect(node.currentTime).toBe(15);
+    expect(node.currentTime).toBe(17);
   });
 });
 
 describe('useEditorVideoPlayback: 재생 위치 저장소', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  /** 구간 20~30초, 창 10~40초를 받아 둔 영상 노드. 프레임은 손으로 돌리고 훅이 몇 번 돌았는지 센다 */
   async function opened() {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.resolve(new Response('mp4', { status: 200 }))),
-    );
     const order: string[] = [];
-    vi.stubGlobal(
-      'URL',
-      Object.assign(URL, {
-        createObjectURL: () => 'blob:1',
-        revokeObjectURL: () => order.push('revoke'),
-      }),
-    );
+    revoke.mockImplementation(() => order.push('revoke'));
     let frames: FrameRequestCallback[] = [];
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb));
     vi.stubGlobal('cancelAnimationFrame', () => {
@@ -423,31 +1180,31 @@ describe('useEditorVideoPlayback: 재생 위치 저장소', () => {
       frames = [];
       for (const cb of due) cb(0);
     };
-    const node = Object.assign(new EventTarget(), {
-      currentTime: 0,
-      duration: 30,
-      paused: true,
-      readyState: 0,
-      playbackRate: 1,
-      play: vi.fn(() => Promise.resolve()),
+    const node = videoNode({
       pause: vi.fn(() => order.push('pause')),
       removeAttribute: vi.fn((name: string) => order.push(`remove ${name}`)),
       load: vi.fn(() => order.push('load')),
-    }) as unknown as HTMLVideoElement & { paused: boolean };
+    });
     let renders = 0;
+    const source = {
+      state: READY,
+      list: listOf([range(100, 124)]),
+      listFailed: false,
+      reloadList: vi.fn(async () => null),
+      reportSegmentFailure: vi.fn(async () => undefined),
+    };
     const hook = renderHook(() => {
       renders += 1;
       return useEditorVideoPlayback({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 100,
+        streamId: 'round-a',
+        mediaKey: MEDIA_KEY,
+        base: BASE,
+        source,
         initialRange: { startSeconds: 20, endSeconds: 30 },
       });
     });
     act(() => hook.result.current.videoRef(node));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await flush();
     return { ...hook, node, frame, order, renders: () => renders };
   }
 
@@ -464,7 +1221,7 @@ describe('useEditorVideoPlayback: 재생 위치 저장소', () => {
 
     act(() => {
       for (let i = 1; i <= 30; i += 1) {
-        node.currentTime = 10 + i / 60;
+        node.currentTime = 12 + i / 60;
         frame();
       }
     });
@@ -473,70 +1230,20 @@ describe('useEditorVideoPlayback: 재생 위치 저장소', () => {
     expect(result.current.playback.clock.getSeconds()).toBeCloseTo(20.5);
   });
 
-  it('재생 중 timeupdate도 허브를 깨우지 않는다: 초당 4번이어도 편집기 전체가 다시 돈다', async () => {
-    const { node, result, renders } = await opened();
-    playing(node);
-    const before = renders();
-
-    act(() => {
-      node.currentTime = 12;
-      node.dispatchEvent(new Event('timeupdate'));
-    });
-
-    expect(renders()).toBe(before);
-    expect(result.current.playback.clock.getSeconds()).toBe(22);
-  });
-
   it('구간 경계는 프레임마다 본다: 끝을 넘긴 그 프레임에 되감고 허브에도 올린다', async () => {
     const { node, frame, result } = await opened();
-    // 허브가 구간 시작이 아닌 자리에 서 있어야 되감기가 올라왔는지 가려진다
     act(() => result.current.playback.seekTo(25));
     expect(result.current.playback.currentSeconds).toBe(25);
     playing(node);
 
     act(() => {
-      node.currentTime = 20.01; // 방송 30.01초 — timeupdate를 기다리면 0.25초까지 넘긴다
+      node.currentTime = 22.01; // 편집기 30.01초
       frame();
     });
 
-    expect(node.currentTime).toBe(10);
+    expect(node.currentTime).toBe(12);
     expect(result.current.playback.clock.getSeconds()).toBe(20);
     expect(result.current.playback.currentSeconds).toBe(20);
-  });
-
-  it('반복이 꺼져 있으면 끝을 넘긴 프레임에 멈추고, 멈춘 자리가 허브까지 올라온다', async () => {
-    const { node, frame, result } = await opened();
-    act(() => result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: false }));
-    playing(node);
-
-    act(() => {
-      node.currentTime = 20.01;
-      frame();
-    });
-    expect(node.pause).toHaveBeenCalledOnce();
-
-    act(() => {
-      node.paused = true;
-      node.dispatchEvent(new Event('pause'));
-    });
-    expect(result.current.playback.currentSeconds).toBeCloseTo(30.01);
-  });
-
-  it('멈추면 그 자리가 허브까지 올라온다', async () => {
-    const { node, frame, result } = await opened();
-    playing(node);
-    act(() => {
-      node.currentTime = 15;
-      frame();
-    });
-    expect(result.current.playback.currentSeconds).toBe(20);
-
-    act(() => {
-      node.paused = true;
-      node.dispatchEvent(new Event('pause'));
-    });
-
-    expect(result.current.playback.currentSeconds).toBe(25);
   });
 
   it('끄는 동안은 멈춘 영상의 seeked도 허브를 깨우지 않고, 놓으면 마지막 자리가 올라온다', async () => {
@@ -552,23 +1259,24 @@ describe('useEditorVideoPlayback: 재생 위치 저장소', () => {
     });
 
     expect(renders()).toBe(before);
-    expect(node.currentTime).toBe(16);
+    expect(node.currentTime).toBe(18);
     expect(result.current.playback.clock.getSeconds()).toBe(26);
 
     act(() => result.current.playback.endScrub());
     expect(result.current.playback.currentSeconds).toBe(26);
   });
 
-  it('끌기가 끝난 뒤의 멈춘 영상은 다시 허브까지 올린다', async () => {
-    const { node, result } = await opened();
-    act(() => result.current.playback.scrubTo(22));
-    act(() => result.current.playback.endScrub());
-
+  it('멈추면 그 자리가 허브까지 올라온다', async () => {
+    const { node, frame, result } = await opened();
+    playing(node);
     act(() => {
-      node.currentTime = 15;
-      node.dispatchEvent(new Event('seeked'));
+      node.currentTime = 17;
+      frame();
     });
-
+    act(() => {
+      node.paused = true;
+      node.dispatchEvent(new Event('pause'));
+    });
     expect(result.current.playback.currentSeconds).toBe(25);
   });
 
@@ -583,28 +1291,9 @@ describe('useEditorVideoPlayback: 재생 위치 저장소', () => {
 });
 
 describe('useEditorVideoPlayback: 끊겨 기다릴 때 (POK-439)', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
   it('재생 중 waiting 뒤 400ms가 지나면 알리고 playing에 내린다', () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => new Promise<Response>(() => undefined)),
-    );
-    const { result } = renderHook(() =>
-      useEditorVideoPlayback({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 38,
-        pieces: PIECES,
-        initialRange: { startSeconds: 5, endSeconds: 10 },
-      }),
-    );
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const { result } = mount();
     const node = document.createElement('video');
     Object.defineProperty(node, 'paused', { value: false, configurable: true });
     act(() => result.current.videoRef(node));
@@ -614,12 +1303,10 @@ describe('useEditorVideoPlayback: 끊겨 기다릴 때 (POK-439)', () => {
       vi.advanceTimersByTime(399);
     });
     expect(result.current.buffering).toBe(false);
-
     act(() => {
       vi.advanceTimersByTime(1);
     });
     expect(result.current.buffering).toBe(true);
-
     act(() => {
       node.dispatchEvent(new Event('playing'));
     });
@@ -628,29 +1315,17 @@ describe('useEditorVideoPlayback: 끊겨 기다릴 때 (POK-439)', () => {
 });
 
 describe('useEditorVideoPlayback: 재생 거절 (POK-389)', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  function videoNode(play: () => Promise<void>) {
-    return Object.assign(document.createElement('video'), { play }) as HTMLVideoElement;
+  function rejectingNode(error: DOMException) {
+    return Object.assign(document.createElement('video'), {
+      play: () => Promise.reject(error),
+    }) as HTMLVideoElement;
   }
-  const props = {
-    streamId: 'key-1',
-    recordingStartMs: BASE,
-    recordingSeconds: 38,
-    pieces: PIECES,
-    initialRange: { startSeconds: 5, endSeconds: 10 },
-  };
 
-  it('재생을 누르자마자 멈춰 play()가 AbortError로 거절돼도 오류로 알리지 않는다: 보통 조작이다(로컬 리뷰 4라운드)', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => new Promise<Response>(() => undefined)),
-    );
-    const { result } = renderHook(() => useEditorVideoPlayback(props));
+  it('재생을 누르자마자 멈춰 play()가 AbortError로 거절돼도 오류로 알리지 않는다', async () => {
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const { result } = mount();
     act(() =>
-      result.current.videoRef(
-        videoNode(() => Promise.reject(new DOMException('interrupted', 'AbortError'))),
-      ),
+      result.current.videoRef(rejectingNode(new DOMException('interrupted', 'AbortError'))),
     );
     await act(async () => {
       result.current.playback.togglePlay();
@@ -660,131 +1335,13 @@ describe('useEditorVideoPlayback: 재생 거절 (POK-389)', () => {
   });
 
   it('그 밖의 이유로 재생을 못 하면 「불러오지 못함」으로 알린다', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => new Promise<Response>(() => undefined)),
-    );
-    const { result } = renderHook(() => useEditorVideoPlayback(props));
-    act(() =>
-      result.current.videoRef(
-        videoNode(() => Promise.reject(new DOMException('bad', 'NotSupportedError'))),
-      ),
-    );
+    fetchSpy.mockImplementation(() => new Promise<Response>(() => undefined));
+    const { result } = mount();
+    act(() => result.current.videoRef(rejectingNode(new DOMException('bad', 'NotSupportedError'))));
     await act(async () => {
       result.current.playback.togglePlay();
       await Promise.resolve();
     });
     expect(result.current.playback.error).toBe('fatal');
-  });
-});
-
-describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-  });
-
-  it('출입증을 받기 전에는 쿠키를 안 싣고, 받은 뒤에는 싣는다: CDN 뒤 미리보기는 쿠키가 없으면 403이다', async () => {
-    vi.resetModules();
-    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
-    const fetchSpy = vi.fn((input: RequestInfo | URL, _init?: RequestInit) =>
-      String(input).endsWith('/playback-access')
-        ? Promise.resolve(
-            new Response(JSON.stringify({ expiresAt: '2999-01-01T00:00:00Z' }), { status: 200 }),
-          )
-        : new Promise<Response>(() => undefined),
-    );
-    vi.stubGlobal('fetch', fetchSpy);
-    const { ensurePlaybackAccess } = await import('@/api/playbackAccess');
-    const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
-    const props = {
-      streamId: 'key-1',
-      recordingStartMs: BASE,
-      recordingSeconds: 38,
-      pieces: PIECES,
-      initialRange: { startSeconds: 5, endSeconds: 10 },
-    };
-    const credentialsOfLastClip = () =>
-      fetchSpy.mock.calls.filter(([url]) => !String(url).endsWith('/playback-access')).at(-1)?.[1]
-        ?.credentials;
-
-    renderHook(() => hook(props)).unmount();
-    expect(credentialsOfLastClip()).toBe('same-origin');
-
-    await ensurePlaybackAccess('S-1', 'key-1');
-    renderHook(() => hook(props));
-    // 받아 둔 출입증이 쓸 만하면 기다리지 않고 바로 부른다
-    expect(credentialsOfLastClip()).toBe('include');
-    expect(
-      fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')),
-    ).toHaveLength(1);
-  });
-
-  it('영상 조각이 403이면 쿠키가 지워진 것이라 출입증을 버리고 다시 받아 한 번 더 부른다(PR #332 codex)', async () => {
-    vi.resetModules();
-    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
-    let gets = 0;
-    const fetchSpy = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
-      if (String(input).endsWith('/playback-access'))
-        return Promise.resolve(
-          new Response(JSON.stringify({ expiresAt: '2999-01-01T00:00:00Z' }), { status: 200 }),
-        );
-      gets += 1;
-      return Promise.resolve(
-        new Response(gets === 1 ? null : 'mp4', { status: gets === 1 ? 403 : 200 }),
-      );
-    });
-    vi.stubGlobal('fetch', fetchSpy);
-    vi.stubGlobal(
-      'URL',
-      Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }),
-    );
-    const { ensurePlaybackAccess } = await import('@/api/playbackAccess');
-    const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
-    await ensurePlaybackAccess('S-1', 'key-1');
-
-    const { result } = renderHook(() =>
-      hook({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 38,
-        pieces: PIECES,
-        initialRange: { startSeconds: 5, endSeconds: 10 },
-      }),
-    );
-    await waitFor(() => expect(gets).toBe(2));
-    expect(
-      fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')),
-    ).toHaveLength(2);
-    await waitFor(() => expect(result.current.playback.error).toBeNull());
-  });
-
-  it('출입증을 다시 받아도 403이면 「출입증 거절」로 알린다(POK-389)', async () => {
-    vi.resetModules();
-    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL) =>
-        Promise.resolve(
-          String(input).endsWith('/playback-access')
-            ? new Response(JSON.stringify({ expiresAt: '2999-01-01T00:00:00Z' }), { status: 200 })
-            : new Response(null, { status: 403 }),
-        ),
-      ),
-    );
-    const { ensurePlaybackAccess } = await import('@/api/playbackAccess');
-    const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
-    await ensurePlaybackAccess('S-1', 'key-1');
-
-    const { result } = renderHook(() =>
-      hook({
-        streamId: 'key-1',
-        recordingStartMs: BASE,
-        recordingSeconds: 38,
-        pieces: PIECES,
-        initialRange: { startSeconds: 5, endSeconds: 10 },
-      }),
-    );
-    await waitFor(() => expect(result.current.playback.error).toBe('access'));
   });
 });

@@ -346,7 +346,7 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `PLAYBACK_REQUIRED` | `false` | 켜면 출입증 셋이 다 빈 「꺼짐」도, 켜졌는데 `PLAYBACK_COOKIE_DOMAIN`이 빈 것도 부팅 거부(POK-321 · POK-317, 엣지 T9b 대체). **prod만 `true`** |
 | `EXPIRED_BROADCASTS_TOKEN` | 빈 값 | 1번(Media) 만료 실행기의 전용 출입증(POK-196). **비면 그냥 뜨고 전용 창구만 닫힌다** — 전용 헤더(`X-Expired-Broadcasts-Token`) 만료 목록 요청은 늘 401이고, 공용 `X-Internal-Token` 요청은 그대로다. 🔴 **채우면 조건 넷이 붙는다** — 아래 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`·`native`가 아니거나(비어도 안 된다: 미설정은 플랫폼 감지다), 톰캣 remoteip 헤더 이름 속성(`remote-ip-header`·`protocol-header`)이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패**. 토큰은 `openssl rand -hex 32` |
 | `EXPIRED_BROADCASTS_ALLOWED_CIDRS` | 빈 값 | 전용 출입증을 받는 출발지 IPv4 CIDR 쉼표 목록(Media 프라이빗 서브넷). 토큰이 있을 때만 쓴다. 출발지는 소켓 주소만 보고, 전달 머리글을 단 전용 헤더 요청은 허용 대역 안이어도 403이다 |
-| `FORWARD_HEADERS_STRATEGY` | 빈 값(미설정) | 프록시의 `X-Forwarded-*`를 믿을지. **auth와 같은 이름**이다. 비면 Boot가 클라우드 플랫폼을 감지해 고른다(지금 운영 clip이 이 꼴이다). 만료 창구 토큰을 넣는 환경은 `none`이나 `native`를 같이 넣는다 |
+| `FORWARD_HEADERS_STRATEGY` | 빈 값(미설정) | 프록시의 `X-Forwarded-*`를 믿을지. **auth와 같은 이름**이다. 비면 Boot가 클라우드 플랫폼을 감지해 고른다. 운영 clip은 `prod/platform`이 `native`를 넣는다(POK-551). 만료 창구 토큰을 넣는 환경은 `none`이나 `native`를 같이 넣는다 |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
 부팅은 산다** — 로컬에는 CloudFront가 없다. 꺼진 채로 출입증 문을 부르면 `503 playback_signing_unavailable`이다.
@@ -446,6 +446,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `BROADCAST_INFO_INTERVAL` | `PT1M` | ✅ | 방송 정보 주기. 목록이 429를 주면 그 회차 시작부터 이 값(이어지면 두 배씩, 최대 5분)이 지나기 전 회차를 건너뛴다. 다음 회차가 앞 회차 끝 + 주기에 오므로 첫 429는 건너뛰는 회차가 없고 연속 둘째부터 건너뛴다 |
 | `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` | 빈 값 | ✅ | 🔴 **비밀.** 시청자 수를 얻는 전체 라이브 목록이 **앱 인증**이라 필요하다(채널 하나를 묻는 공식 창구가 없다). auth와 같은 치지직 앱 값이다 |
 | `CHAT_SYNC_OFFSET_MS` | `3900` | — | 채팅 시각에서 빼는 보정값(ms). **2026-08-24 로컬 실측값이다**(표본 20개 중앙값 3,884ms를 반올림). **음수를 허용하고 크기는 ±600000(10분)까지다.** 운영에서는 다시 잰다 — 아래 참고 |
+| `CHAT_SYNC_V2_LEAD_CORRECTION_MS` | `0` | — | 판 2 행(PDT 개정 · `timing_version = 2`)에서 위 보정값에 더 빼는 차감(ms) — **판 2 보정값 = `CHAT_SYNC_OFFSET_MS`(채널별 덮어쓰기 포함) − 이 값**(계약 세그먼트인덱스 6-6-9). 위 값은 파일 머리 축으로 잰 것이고 판 2 행은 영상 시작 축이라 그 사이 m(파일 머리 → 영상 첫 표본)의 평균을 뺀다. 범위는 `CHAT_SYNC_OFFSET_MS`와 같은 ±600000이고 뺀 판 2 보정값(기본 · 채널별)도 ±600000 안이어야 부팅한다. **넣는 순서:** P1-3 채팅 배포 = T-6 실험대 판 2 m 평균 → P2 쓰기 스위치 뒤 = 판 2 행 생산자 신호(`segment_indexed.head_lead_ms`) 평균 → P3 재측정 = `CHAT_SYNC_OFFSET_MS` − 재측정 판 2 보정값(예: 옛 3900 · 재측정 판 2 보정값 3200 → 넣을 값 700). P1-3 · P2 값은 m 평균이라 0 이상이고, P3 값은 두 보정값의 차라 음수일 수 있다. 다음 단계 표본이 모이기 전에는 앞 값을 유지한다(P2 표본 전에는 T-6 값, 없으면 0). 판 2 행은 P2 쓰기 스위치부터 생기므로 그 전에는 어느 위치에도 쓰이지 않는다 |
 
 **🔴 `CHAT_`\*는 「호스트 쪽 이름이 다르다」는 표시다.** 서버가 컨테이너 안에서 읽는 이름은
 표에 적힌 그대로이고, `.env`에서 받는 이름만 `CHAT_BROADCAST_INTAKE_ENABLED`·
@@ -457,7 +458,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 "로컬에서 일부러 안 켬"과 "운영에서 설정을 깜빡함"이 똑같이 보인다. 자격증명은 환경변수에
 없다(SDK 표준 체인).
 
-**`CHAT_SYNC_OFFSET_MS`·`CHAT_REATTACH_*`의 `CHAT_`은 위 표시와 무관하다** — 그쪽은
+**`CHAT_SYNC_OFFSET_MS`·`CHAT_SYNC_V2_LEAD_CORRECTION_MS`·`CHAT_REATTACH_*`의 `CHAT_`은 위 표시와 무관하다** — 그쪽은
 `compose` 칸에 붙어 「`.env`에서 받는 이름만 다르다」는 뜻이고, 이쪽은 **서버가 읽는 이름
 자체**가 그렇다. 그래서 `.env`와 컨테이너 안 이름이 같다.
 
@@ -1665,7 +1666,7 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 | `relation` | `OWNER` 또는 `EDITOR`. `NONE`은 안 나온다(안 나오는 것이 곧 `NONE`이다) |
 | `startedAt` · `endedAt` | 🔴 **`startedAt`은 `null`일 수 있다** — 아래 「알려진 한계」 |
 | `vodExpiresAt` | 기한이 지난 방송도 목록에는 그대로 둔다. 영상은 못 봐도 방송 기록은 남는다 |
-| `timelineOriginAt` | **시각 기준점**(POK-255): 이 방송의 카드·조각 ms(`streamTimestampMs`·`window`·`start_pts_ms`)가 0이 되는 절대 시각. 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 값 = 그 방송 **회차의 첫 귀속 행**(seq 순)의 `COALESCE(playback_pdt, start_wall_utc) − start_pts_ms`(POK-196 · µs는 ms로 **내림** — 계약 6-6-5 `⌊PDT⌋`). 회차 = 머리 세션(방송 번호 = `stream_sessions.session_id`)의 `round_id`가 같은 세션들, `round_id`가 비면 `inherits_session` 계승 사슬이고, 귀속 행 = 그 세션들에 귀속된 장부 행이다(`RoundRows` — 회차 머리 앞 비귀속 행 · 앞 방송 꼬리가 안 섞인다). 회차 안 행이 **판 2 · c0 이후 판 NULL**이면 어느 귀속 행으로 재도 같다(회차 안 `PDT − start_pts`가 상수다 — 아래 🔴. POK-255 때 로컬 실방송 135조각 실측 차이 0ms는 출시 이미지 행의 관찰 한 번이지 보장이 아니다. 벽시계로 재면 9분에 2.1초 흔들림). 🔴 **방송 시작 편지 시각과 다르다**(2026-09-17 실측 32초). **조각이 없거나(회차는 있는데 귀속 행이 아직 없음 포함), 머리 세션 행도 시작 시각도 없는 방송(종료 편지가 먼저 온 자리표시)이거나, 장부를 못 읽으면 `null`**(목록은 그대로 나간다). **머리 세션 행이 없는 옛 방송만** 방송 시간(시작 편지 앞 **2분**부터 종료 편지 뒤 10분까지, `start_wall_utc` 색인으로 거름) 안 **첫 조각**(벽시각 순, 같으면 seq 순)이다. 아래는 **이 옛 방송 갈래 한정**이다: 🔴 장부의 `start_pts_ms`는 방송을 넘어 이어진다 — 그래서 「가장 작은 pts」가 아니라 시작 앞 2분 이후 첫 조각이다(앞 방송 꼬리가 섞이면 그 회차 값이 나온다). 시작 시각이 없으면 아래 경계가 없어 앞 방송 조각이 뽑히므로 재지 않는다. 한계(같은 뿌리): 방송 중 재접속으로 재생 회차가 끊기거나, 같은 키로 재시작 편지가 와 `started_at`이 덮이거나, 끊고 2분 안에 다시 켜면 카드가 수 초 어긋난다(조각마다 바꾸는 것은 별도). 시작 편지와 첫 조각의 관계는 코드로 증명 못 했고 근거는 실측 한 번이다. 이 갈래 값은 µs를 반올림한다(develop 식 그대로 — 회차 갈래만 내림). 🔴 **「기준점 + 카드 ms = 목록 PDT」 는 회차 안 `PDT − start_pts`가 상수인 행(판 2 · c0 이후 판 NULL)에서만 선다** — 출시 이미지가 쓴 판 NULL 행은 아니다(위치는 앞 위치 + 길이, PDT는 래칫 · 파일명 시각을 따라 따로 쌓인다). 그래서 카드 → 플레이어 · 편집기 자리는 이 값이 아니라 카드 줄의 `playerAtMs` · `fileHead`(아래)로 가고, 이 값은 지난 방송 마크의 왕복과 채팅 · 카테고리 커서에 남는다. 한 장의 방송 전부를 회차 고르기 한 번 + 질의 한 번(`unnest` + `LATERAL`, 세션마다 첫 행 — `RoundRowsPlanTest`가 세션 색인 범위를 잰다). 옛 방송이 섞이면 시간창 질의가 하나 더 돈다 |
+| `timelineOriginAt` | **시각 기준점**(POK-255): 이 방송의 카드·조각 ms(`streamTimestampMs`·`window`·`start_pts_ms`)가 0이 되는 절대 시각. 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 값 = 그 방송 **회차의 첫 귀속 행**(seq 순)의 `COALESCE(playback_pdt, start_wall_utc) − start_pts_ms`(POK-196 · µs는 ms로 **내림** — 계약 6-6-5 `⌊PDT⌋`). 회차 = 머리 세션(방송 번호 = `stream_sessions.session_id`)의 `round_id`가 같은 세션들, `round_id`가 비면 `inherits_session` 계승 사슬이고, 귀속 행 = 그 세션들에 귀속된 장부 행이다(`RoundRows` — 회차 머리 앞 비귀속 행 · 앞 방송 꼬리가 안 섞인다). 회차 안 행이 **판 2 · c0 이후 판 NULL**이면 어느 귀속 행으로 재도 같다(회차 안 `PDT − start_pts`가 상수다 — 아래 🔴. POK-255 때 로컬 실방송 135조각 실측 차이 0ms는 출시 이미지 행의 관찰 한 번이지 보장이 아니다. 벽시계로 재면 9분에 2.1초 흔들림). 🔴 **방송 시작 편지 시각과 다르다**(2026-09-17 실측 32초). **조각이 없거나(회차는 있는데 귀속 행이 아직 없음 포함), 머리 세션 행도 시작 시각도 없는 방송(종료 편지가 먼저 온 자리표시)이거나, 장부를 못 읽으면 `null`**(목록은 그대로 나간다). **머리 세션 행이 없는 옛 방송만** 방송 시간(시작 편지 앞 **2분**부터 종료 편지 뒤 10분까지, `start_wall_utc` 색인으로 거름) 안 **첫 조각**(벽시각 순, 같으면 seq 순)이다. 아래는 **이 옛 방송 갈래 한정**이다: 🔴 장부의 `start_pts_ms`는 방송을 넘어 이어진다 — 그래서 「가장 작은 pts」가 아니라 시작 앞 2분 이후 첫 조각이다(앞 방송 꼬리가 섞이면 그 회차 값이 나온다). 시작 시각이 없으면 아래 경계가 없어 앞 방송 조각이 뽑히므로 재지 않는다. 한계(같은 뿌리): 방송 중 재접속으로 재생 회차가 끊기거나, 같은 키로 재시작 편지가 와 `started_at`이 덮이거나, 끊고 2분 안에 다시 켜면 카드가 수 초 어긋난다(조각마다 바꾸는 것은 별도). 시작 편지와 첫 조각의 관계는 코드로 증명 못 했고 근거는 실측 한 번이다. 이 갈래 값은 µs를 반올림한다(develop 식 그대로 — 회차 갈래만 내림). 🔴 **「기준점 + 카드 ms = 목록 PDT」 는 회차 안 `PDT − start_pts`가 상수인 행(판 2 · c0 이후 판 NULL)에서만 선다** — 출시 이미지가 쓴 판 NULL 행은 아니다(위치는 앞 위치 + 길이, PDT는 래칫 · 파일명 시각을 따라 따로 쌓인다). 그래서 카드 → 플레이어 · 편집기 자리는 이 값이 아니라 카드 줄의 `playerAtMs` · `playerWindow`(아래)로 가고, 이 값은 지난 방송 마크의 왕복과 채팅 · 카테고리 커서에 남는다. 한 장의 방송 전부를 회차 고르기 한 번 + 질의 한 번(`unnest` + `LATERAL`, 세션마다 첫 행 — `RoundRowsPlanTest`가 세션 색인 범위를 잰다). 옛 방송이 섞이면 시간창 질의가 하나 더 돈다 |
 | `thumbnailUrl` | 사진 주소(POK-277, 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝났으면 최고 점수 카드 장면(없으면 마지막 라이브 화면). 없으면 `null`. 아래 「썸네일」 절 |
 | `title` · `category` | 방송 제목과 카테고리(POK-259). 수집기가 1분마다 남기는 방송 정보에서 **제목이 있는 마지막 관측**을 고르고, 카테고리는 같은 관측의 값이다(제목을 못 얻은 회차는 건너뛴다. 고르면 보이던 제목이 번호로 돌아간다). **플랫폼 규칙(POK-397)**: 아래 `platforms`에 **실린 플랫폼 중 켜진 것**만 보고(켜짐 = 그 방송의 가장 최근 관측에서 3분 안에 관측됨, 웹의 「관측 3분」과 같은 폭을 마지막 관측에 재서 끝난 방송도 마지막에 켜져 있던 플랫폼), 그중 시청자가 많은 쪽, 같으면 CHZZK → SOOP 순서다. 그 플랫폼에 제목이 없으면 다음 켜진 플랫폼을 본다. 켜진 플랫폼에 제목이 없으면 `null`이다(꺼진 플랫폼 제목과 플랫폼과 무관한 마지막 제목은 안 쓴다: 치지직을 잠깐 켰다 끄고 SOOP으로만 방송하면 꺼진 치지직 제목이 떴다, 웹 PR3b 로컬 리뷰). 옛 수집기(`platforms` 칸 없음)면 지금처럼 플랫폼과 무관한 마지막 제목이다. 카테고리는 고른 제목과 같은 플랫폼 값이다. 한 장을 수집기에 **한 번에** 묻는다(`POST /internal/broadcast-info/latest`, 수집기 절). **관측이 없거나, 수집기 주소가 비었거나, 수집기가 아프면 둘 다 `null`이고 목록은 그대로 나간다.** 화면은 그때 방송 번호를 보인다. 🔴 수집기가 응답 없이 매달리면 목록이 시한(접속 2초 + 읽기 3초)만큼 늦어진다. clip은 수집기 표를 직접 읽지 않는다(위 「서로의 표를 직접 읽지 않는다」) |
 | `platform` | 방송 플랫폼 코드(POK-398). `CHZZK` 또는 `SOOP`, **늘 있다.** **대표 플랫폼(켜진 것 중 시청자가 많은 쪽, 아래 `title`과 같은 규칙)이고 편지 값과 다를 수 있다.** 관측이 없으면 `platforms`의 첫째다(POK-397 재시험: Media가 편지에 플랫폼을 안 실어 편지 값이 늘 `CHZZK`라, SOOP 전용 방송에 치지직 태그가 떴다. 묶음 순서 첫째로 고르면 치지직을 잠깐 켰다 끄고 SOOP으로만 방송할 때 SOOP 제목에 치지직 태그가 붙었다). `broadcasts.platform` 칸과 편지 처리기의 「첫 값」 규칙은 그대로다 |
@@ -1677,19 +1678,29 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
 
 **카드 장면 두 칸(POK-196)** — 목록 · 통로 · 마크 응답(OBS · 웹) · 가리기 · 되살리기 응답이 모두 싣는다.
-🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 소리 주소 표지 갈래(`axis=fileHead`)도 500이다**(아래 소리 주소 절) — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
+🔴 이 칸은 장부의 판 칸(`timing_version`, 1번 생산자 c1 DDL)을 읽는다. 그 칸이 없는 DB에서는 두 칸이 늘 `null`이고, **마크 저장(아래)은 실패하고, 렌더 주문(컷 판정이 회차 행의 판 칸을 읽는다)도 500이며, 소리 주소(아래 소리 주소 절)는 목록만 나가고 끝 소리 확보 칸이 빠지고, 라이브 · 카드 사진 순회도 멈춘다**(두 순회가 회차 행을 판 칸과 함께 읽는다 — 매 순회 예외) — 생산자 DDL 이 clip 보다 먼저 나가야 한다(배포 순서 게이트).
+
+🔴 **PR-B2 배포 순서(POK-196 · PDT 설계 r7 13.1 · 13.4 · 계획 델타 R26): 생산자 DDL → 렌더 · 업로드 일꾼 새 판 → 웹 PR-W2 → clip.** 어기면 이렇다.
+
+| 먼저 나가야 하는 것 | clip 이 먼저 나가면 |
+|---|---|
+| 렌더(썸네일 포함) 새 판 | 옛 렌더가 새 꼴 주문을 `ENVELOPE_VALIDATION` 으로 거절해 모든 렌더가 실패로 끝난다(옛 파서는 `role=segment` · `sourceStartAtMs` 를 필수로 본다). 옛 썸네일 일꾼은 `offsetOrigin` 을 무시한다 |
+| 업로드 일꾼 U-c1 판 | 옛 일꾼이 clip 이 보내는 결과 끝 장면 값에서 100ms 를 또 당겨 결과 끝 장면이 앞당겨진다 |
+| 웹 PR-W2 | 옛 웹 컷의 시작 어긋남(장 잔차 · 래칫)은 지금 prod(main) · PR-B1 도 같은 `COALESCE(playback_pdt, start_wall_utc)` 축이라 이미 있다. PR-B2 가 먼저 나가면 끝을 행마다 따로 풀어 길이가 그 차만큼 흔들리는 것이 더해진다(추론). PR-W2 는 새 칸이 없으면 지금 식으로 떨어져 clip 보다 먼저 나가도 갈림이 없다 |
+
+**롤백 하한**: clip PR-B2 가 prod 에 닿은 순간부터 렌더 · 썸네일은 그 새 판, 업로드 일꾼은 U-c1 판, 웹은 PR-W2 판 아래로 내리지 않는다(내리면 위 표의 일이 생긴다 — 웹 줄은 이미 있던 시작 어긋남에 길이 흔들림이 더해지는 것이다). clip 은 PR-B2 가 prod 에 닿은 순간부터 PR-B2 판 아래로 내리지 않고 전진 수정한다 — 규칙 하나로 단순하게 두고 후퇴 상태를 만들지 않는다(kty 2026-11-13). 생산자 쓰기 스위치(판 2 행이 처음 생김) 전에 PR-B1 로 내리면 기능이 후퇴한다 — `playerWindow` · `audioCapture` · 카드 사진 포기 · 완성 사진 하한 · 업로드 장면 자르기가 사라진다. 옛 clip 은 컷 양끝을 고른 조각이 덮지 못하면(끝점이 장부 틈 안인 경우 포함) 또는 고른 조각 사이 재생 틈이 1초를 넘으면 409 `source_not_ready` 로 주문하지 않는다(끝난 방송이면 안 풀린다 · main · PR-B1 `RenderRequestService` 의 조립기 판정 · `MAX_PLAYBACK_GAP_MS`) — 지금 422 `source_unrenderable` 인 자리가 409 로 바뀐다. 옛 꼴 주문은 첫 조각에서 `-ss` 한 번이라 컷 안에서 PDT 가 뛴 자리 뒤가 밀릴 수 있다(추론). 스위치 뒤에는 옛 clip 이 판 2 소재에 옛 꼴 주문을 내 영상 첫 표본만큼 이른 장면이 나간다.
 
 | 카드 칸 | |
 |---|---|
-| `playerAtMs` | **목록 PDT 축** 절대 시각(epoch ms) — 플레이어 카드 클릭 이동(`seekToDate`)용. 판 2 · 판 NULL 모든 카드 |
-| `fileHead{atMs, startMs, endMs}` | **파일명 시각 축** 절대 시각(epoch ms) — 편집기 `/get` 축의 카드 자리와 기본 범위(`streamTimestampMs` · `window` 두 끝) |
+| `playerAtMs` | **목록 PDT 축** 절대 시각(epoch ms) — 카드 ms(`streamTimestampMs`)의 자리. 플레이어 카드 클릭 이동(`seekToDate`)과 편집기 카드 자리. 판 2 · 판 NULL 모든 카드 |
+| `playerWindow{startMs, endMs}` | **목록 PDT 축** 절대 시각(epoch ms) — `window` 두 끝의 자리. 편집기 기본 범위(편집기 화면도 목록 PDT 축 — kty 2026-11-12). 판 NULL 행은 회차 안 `PDT − start_pts`가 상수가 아니라 `playerAtMs`에 창 ms 차를 더해서는 안 되고 끝마다 그 장면 행에서 푼다 |
 
-- 둘 다 **카드 장면 하나**에서 나온다(`CardPositionReader`): 카드 ms(`start_pts` 재생 위치 축)를 회차 귀속 행 위에서 F(`ledger-timeline` `locate` — 시작 ≤ 값인 행 가운데 seq 최대 · 겹침은 나중 조각)로 풀어 장면 `(조각 k, 거리 x)`를 고르고, `playerAtMs = playback_pdt(k) + x` · `fileHead.* = start_wall_utc(k) + x`(µs는 ms로 내림)다. 썸네일 주문 값(조각 · 거리 · 행 판 원점)도 이 장면에서 낸다 — 같은 조각이라는 것은 **계산된 주문 값**까지다. 🔴 실제 카드 사진 순회는 아직 지금 SQL(`ThumbnailTargets` — 시간창 안 덮는 행 · seq 최소)이고, 순회를 이 장면으로 옮기는 것은 PR-B2(S-c4)다. 그 전까지 틈 · 겹침 · 비귀속 자리 카드의 사진은 두 칸과 다른 조각이거나 아직 사진이 없을 수 있다(틈 · 비귀속 자리는 지금 SQL 에 덮는 행이 없어 사진 주문이 나가지 않을 수 있다. 겹침 예: 귀속 행 A `[0,4000)` · B `[3999,7999)` · 카드 3999 → 장면 B · 사진 A). 이미 찍힌 사진은 PR-B2 뒤 다시 찍지 않는다
+- 둘 다 **카드 장면 하나**에서 나온다(`CardPositionReader`): 카드 ms(`start_pts` 재생 위치 축)를 회차 귀속 행 위에서 F(`ledger-timeline` `locate` — 시작 ≤ 값인 행 가운데 seq 최대 · 겹침은 나중 조각)로 풀어 장면 `(조각 k, 거리 x)`를 고르고, `playerAtMs = playback_pdt(k) + x`(µs는 ms로 내림)다. `playerWindow`의 두 끝도 `window` 두 끝마다 같은 식이다. 카드 사진 순회도 이 장면을 그대로 주문한다(조각 · 거리 · 행 판 원점 — 아래 「썸네일」 절). 🔴 순회가 이 장면으로 옮겨 오기 전(옛 SQL — 시간창 안 덮는 행 · seq 최소)에 이미 찍힌 사진은 다시 찍지 않아, 그 사진만 틈 · 겹침 · 비귀속 자리에서 두 칸과 다른 조각일 수 있다(겹침 예: 귀속 행 A `[0,4000)` · B `[3999,7999)` · 카드 3999 → 장면 B · 옛 사진 A)
 - **틈 안 카드는 뒤 귀속 행 첫 화면**(`(k′, 0)`) — 이어진 틈 · 재접속으로 끊긴 틈 · 비귀속 행 자리(채팅 카드 · 접힌 마크) 모두. 첫 귀속 행 앞은 첫 행 첫 화면
-- **`null`**: 카드 ms의 장면이 없으면(마지막 귀속 행 뒤 = 라이브 머리 · 회차 행 없음) 두 칸 모두. 창 끝 하나라도 장면이 없으면 `fileHead`만(셋을 함께 내는 칸이라 반쪽을 안 싣는다). 고른 행의 `playback_pdt`가 비면 `playerAtMs`만. 웹은 `null`이면 지금 식(기준점 + 카드 ms)으로 떨어진다. 장부를 못 읽거나(판 칸이 아직 없는 DB 등) 장부 값이 장면 계산의 전제를 깨도 카드는 나가고 두 칸만 빈다(WARN `jumpcard.scene_unavailable streamId= reason=<예외 이름>` — 방송 목록 기준점의 `broadcast.timeline_origin_failed`처럼 요청마다 남는다)
-- 창 두 끝은 같은 사상이라 `startMs ≤ endMs`이고, 판 NULL 벽시각 역행으로 끝이 이르면 끝을 시작에 묶는다
+- **`null`**: 카드 ms의 장면이 없으면(마지막 귀속 행 뒤 = 라이브 머리 · 회차 행 없음) 두 칸 모두. 창 끝 하나라도 장면이 없거나 두 끝 장면 행 가운데 하나라도 `playback_pdt`가 비면 `playerWindow`만(두 끝을 함께 내는 칸이라 반쪽을 안 싣는다). 카드 ms 장면 행의 `playback_pdt`가 비면 `playerAtMs`만. 웹은 `null`이면 지금 식(기준점 + 카드 ms)으로 떨어진다. 장부를 못 읽거나(판 칸이 아직 없는 DB 등) 장부 값이 장면 계산의 전제를 깨도 카드는 나가고 두 칸만 빈다(WARN `jumpcard.scene_unavailable streamId= reason=<예외 이름>` — 방송 목록 기준점의 `broadcast.timeline_origin_failed`처럼 요청마다 남는다)
+- 창 두 끝은 같은 사상이라 `startMs ≤ endMs`이고, 판 NULL 시각 역행으로 끝이 이르면 끝을 시작에 묶는다
 - **왕복**: 목록 한 장의 장면 = 방송 행 한 번 + 회차 고르기 한 번 + 회차 행 한 번이고 카드 수와 무관하다(`CardPositionRoundTripTest`가 목록 문 전체의 문장 수를 카드 한 장 · 다섯 장으로 맞댄다). 장부에 `start_pts_ms` 색인이 없어 값마다 floor를 질의하지 않고 회차 행을 한 번 읽어 메모리에서 푼다. 낱장(자동 카드 · 마크 · 가리기)은 카드 저장 트랜잭션 **밖**에서 읽는다 — 마크는 방송 행 잠금을 그 왕복만큼 더 쥐지 않고, 자동 카드는 장부 읽기가 실패해도 저장을 잃지 않는다. 마크 하나는 저장 위치 고르기와 카드 장면이 회차 행을 따로 읽어 회차 읽기가 두 번이다
-- **규모**: 회차 행 읽기는 키 이력이 아니라 **회차 길이**에 비례한다(호출마다 회차 전 행 — 4초 조각 12시간이면 약 1만 행). `RoundRowsScaleTest`가 2만 행 회차(키 이력 2만 행 위)에서 목록 한 장(값 150개)의 장면 · 마크 위치 하나 · 소리 주소 창 하나가 각각 5초 안인지 잰다(비례성은 행 수 · 실행 계획 단언이 잡고, 경과 상한은 공유 CI 러너에서 흔들리지 않게 넉넉히 둔 그물이다)(로컬 실측 2026-11-04: 장면 131ms · 마크 위치 58ms · 소리 창 35ms — 창 밖 회차 행 19,985개를 거르개로 버림)
+- **규모**: 회차 행 읽기는 키 이력이 아니라 **회차 길이**에 비례한다(호출마다 회차 전 행 — 4초 조각 12시간이면 약 1만 행). `RoundRowsScaleTest`가 2만 행 회차(키 이력 2만 행 위)에서 목록 한 장(값 150개)의 장면 · 마크 위치 하나가 각각 5초 안인지 잰다(비례성은 행 수 단언이 잡고, 경과 상한은 공유 CI 러너에서 흔들리지 않게 넉넉히 둔 그물이다)(로컬 실측 2026-11-04: 장면 131ms · 마크 위치 58ms)
 
 **방송 목록은 「그 방송을 처음 안 순서」의 역순이다 — 시작 시각 순이 아니다.** 시작·종료 시각은
 뒤늦게 도착한 알림이 갱신하므로 정렬·이어받기 기준으로 쓰면 중복·누락이 난다.
@@ -2484,7 +2495,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/recipes/{id}/renders` (본문 없음 · JSON `{"upload":…}` · multipart, POK-291) | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 편집본 같은 판이 이미 진행 중이거나, 업로드 정보를 실었는데 이미 완성: 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"cut"\|업로드 칸}` · 404 `broadcast_not_found`/`recipe_not_found` · **409** `{"error":"source_not_ready"}`·`already_uploaded`·`youtube_not_linked` · **413** `payload_too_large` · **415** `unsupported_image` · **422** `{"error":"message_too_large"}` · 401 · 503 `authorization_unavailable`/**`render_unavailable`**/`upload_unavailable`/`thumbnail_store_unavailable` |
+| `POST /api/clip/broadcasts/{streamId}/recipes/{id}/renders` (본문 없음 · JSON `{"upload":…}` · multipart, POK-291) | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 편집본 같은 판이 이미 진행 중이거나, 업로드 정보를 실었는데 이미 완성: 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"cut"\|업로드 칸}` · 404 `broadcast_not_found`/`recipe_not_found` · **409** `{"error":"source_not_ready"}`·`already_uploaded`·`youtube_not_linked` · **413** `payload_too_large` · **415** `unsupported_image` · **422** `{"error":"message_too_large"}` · **422** `{"error":"source_unrenderable","reason":"outside_recording"\|"no_footage"}`(닫힌 목록 — 늘리면 웹 선배포가 먼저) · 401 · 503 `authorization_unavailable`/**`render_unavailable`**/`upload_unavailable`/`thumbnail_store_unavailable` |
 | `GET /api/clip/broadcasts/{streamId}/clips/{clipId}` | Bearer JWT | **200** 봉투 · 404 `broadcast_not_found`/`clip_not_found` · 401 · 503 |
 | `POST /internal/jobs/{jobId}/events` (계약1 4절) | `X-Internal-Token` | **200** 전이 응답 · **400** `{"reason":"INVALID_EVENT"\|"INVALID_RESULT"}` 또는 `{"error":"invalid_request","field":…}` · **404** `{"error":"job_not_found"}` · **409** `{"reason":"SUPERSEDED"\|"TERMINAL"}` · 401 |
 
@@ -2499,9 +2510,11 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개): 보고 받을 주소는 아래 「완성 영상 주소」 문(POK-247)이 준다.
 
 **주문의 순서가 계약이다 — 자격 → 편집본 → 조각 준비 → 선점(표) → 발행(큐).**
-- **조각이 컷을 「연속 uploaded」로 다 덮어야 주문한다.** 하나라도 빠지면 409 `source_not_ready`이고 표에도 큐에도 아무것도
-  안 남는다. 잘라서 주문하지 않는다 — 짧아진 영상이 조용히 나가는 것이 안 나가는 것보다 나쁘다(계약1 `SOURCE_RANGE`의 「클램프 금지」).
-  판정은 POK-117의 조립기 그대로이고 **축만 재생 축**이다(아래).
+- **컷은 회차 귀속 행 위 계획으로 옮겨야 주문한다(POK-196 · `CutPlanner`).** 결과에 드는 조각 · 끝 소리 확보 조각 · 디코더 준비
+  조각이 아직 안 올라왔으면(또는 회차가 아직 그 자리까지 녹화 안 됐으면) 409 `source_not_ready`이고 표에도 큐에도 아무것도 안 남는다.
+  잘라서 주문하지 않는다 — 짧아진 영상이 조용히 나가는 것이 안 나가는 것보다 나쁘다(계약1 `SOURCE_RANGE`의 「클램프 금지」). 다시
+  물어도 같은 거절(회차 첫 행 앞 · 닫힌 회차 끝 뒤 · 컷 안 영상 없음)은 422 `source_unrenderable`이다. 끊긴 이웃 사이 틈은 이어
+  붙인다(틈 초과 거절 없음).
 - **선점은 표가 한다** — `clips`의 부분 UNIQUE(`recipe_id, recipe_version` where 진행 중) + `ON CONFLICT DO NOTHING`.
   더블클릭의 두 번째는 200으로 첫 번째 영상을 돌려주고 큐에는 한 통뿐이다. 끝난(완성·실패) 영상은 자리를 비워 다시 주문할 수
   있다(재요청 = 새 영상 줄, 계약1 「종결 시 선점 해제」).
@@ -2509,21 +2522,32 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
   30초마다 도는 회차가 `published_at`이 빈 줄을 다시 보낸다 — 같은 jobId·같은 본문으로. 큐가 받고 응답만 못 받은 경우 같은
   주문서가 두 통 실릴 수 있는데, 그것은 SQS의 at-least-once와 같은 모양이라 일꾼의 STARTED 판정(아래 토큰)이 거른다.
 
-**🔴 조각은 재생 축(`playback_pdt`, 없으면 `start_wall_utc`)으로 찾는다.** 편집기가 보는 시각이 재생 축이고 레시피의 `cut`도
-그 축이다(계약6 0절). 미리보기 문(POK-117)은 파일 안 위치(`start_pts_ms`)로 찾는다 — **같은 조각 표에 시각 축이 둘**이고
-소비자마다 다른 축을 본다. `playback_pdt`·`session_id`는 계약-세그먼트인덱스 6-1(2026-09-01 승인)의 칸이라 **그 전 DDL로
-만든 표에서는 이 조회가 죽는다**(로컬 DB에는 손으로 더했다).
+**🔴 컷은 목록 PDT 축(`COALESCE(playback_pdt, start_wall_utc)`)으로 풀고 원점은 회차 판이다(kty 2026-11-12).** 편집기가 보는
+시각이 그 축이고 레시피의 `cut`도 그 축이다(계약6 0절). 회차 귀속 행(세션 색인)을 회차 전부 한 번에 읽어 가장자리를 메모리에서
+고르고, 원점은 판 2 → `VIDEO_START` · 판 NULL → `FILE_HEAD`(카드 썸네일과 같은 규칙 `OffsetOrigin.ofTimingVersion`)다 — 한 회차
+안에 판이 섞이면 장부 불변식 위반이라 500이다. 신호 `clip.render.cut_planned axis=pdt origin=…`. 미리보기 문(POK-117)은 파일 안
+위치(`start_pts_ms`)로 찾는다 — **같은 조각 표에 시각 축이 둘**이고 소비자마다 다른 축을 본다.
 
 **🔴 주문서의 `sourceKeys`는 계약1 3절 초안과 다르다 — 조각 파일 목록을 그대로 싣는다.** 초안은 1번이 만들 「중간본 파일」
 (video 1 + audio N)을 전제했는데 그 파일은 아직 없고 렌더 일꾼도 우리 것이 됐다(2026-09-14). 조각 하나가 영상+소리 트랙
 전부를 담은 **완전한 fMP4**라(실측 2026-09-15: 실물 조각 둘 다 `ftyp+moov+moof…`, h264 720p + aac) 일꾼이 이어붙이면 된다.
-트랙 번호 ↔ 소리 스트림 대응은 고정이다(계약9 2026-09-03: 트랙 N = N번째 소리 스트림). `trackManifest` 칸은 실리지만 null로 온다. 주문서 모양:
+트랙 번호 ↔ 소리 스트림 대응은 고정이다(계약9 2026-09-03: 트랙 N = N번째 소리 스트림). `trackManifest` 칸은 실리지만 늘 null 이고(방송 값을 그대로 싣는데 계약9 가 그 값을 폐기했다) 렌더는 읽지 않는다. 주문서 모양
+(새 꼴 — POK-196 · PDT 설계 r7 5.1 · 5.2. 조각은 역할 셋, 좌표는 `plan`, `sourceStartAtMs` 없음. 준비 조각 `audio_prime`에는 두 표지 대신
+`ownerSeq`를 싣고 그 머리 항목 바로 앞에 둔다. 확보 조각 `audio_capture`는 맨 끝. 첫 매체의 `followsLedgerPrevious`는 늘 거짓.
+`out`은 `offsetUs`와 `toSegmentEnd` 가운데 하나만 · 자막이 없어도 `subtitles`는 `[]` — 렌더 계획 검사가 fail-closed다):
 
 ```json
 {"schemaVersion":1,"jobId":"<uuid>","jobType":"RENDER","clipId":"12","correlationId":"12","idempotencyKey":"12:RENDER:1",
  "requestedAt":"…","streamId":"…","recipeVersion":1,"outputPrefix":"s3://{CLIPS_BUCKET}/clips/12",
- "sourceKeys":[{"role":"segment","bucket":"{SEGMENT_BUCKET}","s3Key":"streams/…/seg_000031.m4s","seq":31,"sourceStartAtMs":…,"durationMs":4000},…],
- "trackManifest":{…},"recipe":{계약6 JSON}}
+ "sourceKeys":[{"role":"audio_prime","bucket":"{SEGMENT_BUCKET}","s3Key":"…/seg_000030.m4s","seq":30,"ownerSeq":31,"durationMs":4000},
+               {"role":"segment","bucket":"{SEGMENT_BUCKET}","s3Key":"…/seg_000031.m4s","seq":31,"durationMs":4000,
+                "isDiscontinuity":false,"followsLedgerPrevious":false},…,
+               {"role":"audio_capture","bucket":"{SEGMENT_BUCKET}","s3Key":"…/seg_000043.m4s","seq":43,"durationMs":4000,
+                "isDiscontinuity":false,"followsLedgerPrevious":true}],
+ "trackManifest":null,
+ "plan":{"planVersion":1,"offsetOrigin":"VIDEO_START","in":{"seq":31,"offsetUs":1000000},"out":{"seq":42,"toSegmentEnd":true},
+         "mediaSeqs":[31,…,42],"subtitles":[],"lengthMs":45000},
+ "recipe":{계약6 JSON}}
 ```
 
 **보고(계약1 4절 상태머신)는 `JobEventService` 한 곳에 표로 있다.** 처리 우선순위 — ① 모르는 잡 404 ② 같은 `(jobId,eventId)`는
@@ -2535,7 +2559,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `STARTED` | 주문됨·시작됨 | 200 `{proceed:true, executionToken(새 UUID), attemptOrdinal(+1), isFinalAttempt(≥3)}` — 옛 토큰은 이 순간부터 죽는다, 진행률 0, 영상 `rendering` |
 | `STARTED` | 끝남 | 200 `{proceed:false}` — 일꾼은 메시지를 지운다 |
 | `PROGRESS`·`RETRY_SCHEDULED` | 시작됨 + 토큰 일치 | 200 `{}` — 진행률은 같은 토큰 안에서 단조(뒤로 가는 값 무시) |
-| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 · **그 판의 업로드 의도가 있으면 같은 트랜잭션에서 업로드 줄**(POK-291, 아래 절) |
+| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 · 새 꼴 주문의 맨 위 `placements` · `lengthUs`(렌더 결과 배치표)는 검사(줄마다 정수 칸 다섯 · 결과 길이 180초 · 칸 절댓값 240초 · 줄 수는 그 잡 주문의 `plan.mediaSeqs` 개수까지 · 글 길이는 그 줄 수 × 111 + 38자까지 — `ResultPlacements`)를 지나면 받은 그대로 `clips.placements`(`V224`, POK-196)에 — 못 지나면 배치표만 NULL 로 두고 WARN `clip.render.placements_dropped`(`reason` = `no_plan` · `too_long` · `invalid` · 성공은 막지 않는다 · JSONB 가 못 받는 값이 DB 에 닿지 않게 저장 앞에서 거른다 — 그래서 모르는 칸도 거절하므로 **렌더가 배치표에 칸을 더하면 clip 을 먼저 배포**한다) · **그 판의 업로드 의도가 있으면 같은 트랜잭션에서 업로드 줄**(POK-291, 아래 절) |
 | `TERMINAL_FAILED` | 시작됨 + 토큰 일치 · **주문됨 + 무토큰**(preflight) | 200 — `failed`, `error.code`·`message` 저장 |
 | 토큰 불일치 | 시작됨 | **409 `SUPERSEDED`** — 일꾼은 중단만, 메시지는 안 건드린다 |
 | 아무 보고 | 끝남 | **409 `TERMINAL`** |
@@ -2643,39 +2667,44 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=[&axis=fileHead]` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url","startWallUtcMs"}]}`(표지 갈래는 아래 칸이 더 실린다) · **400** `{"field":"fromMs"\|"toMs"\|"axis"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
+| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url"}],"audioCapture","audioCaptureSegment":{"seq","startAtMs","durationMs","url"}}`(`audioCaptureSegment`는 `audioCapture`가 `attached`일 때만 · 확보 판정이 실패하면 두 칸 모두 없음) · **400** `{"field":"fromMs"\|"toMs"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
 
 - **`fromMs`·`toMs`는 재생 축 UTC epoch ms**(편집본 `cut`과 같은 축)이고 반개 구간이다. `toMs`가 `fromMs` 이하이거나 6분을 넘으면 400이다.
-- **축 표지 `axis=fileHead`(POK-196).** 있으면 두 판 모두 **파일명 시각(`start_wall_utc`) 축**으로 고른다 — 그 방송 회차의 귀속 행
-  (`RoundRows` · 머리 세션 행이 없는 옛 방송은 방송 시간창 행) 가운데 `[fromMs, toMs)`와 겹치는 행이고, 범위 끝 · 조각 시작 · 확정 공백도
-  같은 축이다. 그 축으로 처리했을 때만 뿌리에 **메아리 `"axis":"fileHead"`** 를 싣는다(회차를 못 고르면 메아리 없이 아래 옛 갈래). 웹은
-  메아리가 있을 때만 새 칸을 쓴다(칸 유무가 신호가 아니다). **그 밖의 표지 값은 400(`field: axis`)** 이다 — 무시하고 옛 갈래로
-  물러서지 않는다. 그래서 새 축 값을 더할 때는 **clip 을 웹보다 먼저 배포**한다.
-    - 🔴 **판 칸(`timing_version`, 1번 생산자 c1 DDL)이 없는 DB에서는 표지 갈래가 500이다.** 회차(옛 방송은 시간창)를 고른 뒤 창
-      읽기가 그 칸을 읽고(`StreamSegmentReader`), 장부 실패를 옛 갈래로 물리는 처분이 없다. 표지 없는 옛 갈래는 그 칸을 안 읽어
-      그대로다. 웹 편집기가 표지를 보내기 시작하면 그 DB에서 편집기 소리가 깨진다 — 생산자 DDL 먼저(위 카드 장면 절 배포 순서 게이트).
-    - 조각 칸 더함: `startWallUtcMs`(파일명 시각 ms 내림) · `role`(`segment` · `audio_capture`) · `isDiscontinuity`(장부 칸) ·
-      `followsLedgerPrevious`(응답의 바로 앞 조각이 장부에서 이 조각의 바로 앞 행인가 — 첫 조각 · 아직 안 올라간 행이 빠진 자리 거짓).
-      `startAtMs`는 옛 값(재생 축) 그대로다.
-    - 뿌리 칸 더함: `audioCapture`(`attached` 확보 조각을 실음 · `not_ready` 아직 · `skipped` 없이 진행(창 안 회차 행이 없을 때 포함) — 렌더 주문과 같은
-      `AudioCaptureRule` · 컷 끝 = `toMs` · 「끝남」 = 방송 `ended` 이거나 회차 완결) · `gapEvidence`(`[{"beforeSeq","afterSeq"}]` —
-      창 안 회차 행 이웃 가운데 같은 녹화로 이어지지 않은 쌍. 쌍만 싣는다. 비귀속 행이 낀 자리가 여기 든다).
-    - 겹침은 응답 칸과 같은 **ms 내림 축**으로 본다(벽시각 µs 원값이 아니다 — 원값이면 내림 축에서 창 앞에 끝나는 행이 실린다).
-    - 확보 후보는 회차로 자르지 않는다(계약 6-6-5 「컷 끝 소리 확보는 별도 규칙」). 다음 회차 · 다음 방송으로 넘어가는 것을 막는 것은
-      후보의 `is_discontinuity`다(새 연결의 첫 조각은 참 — 같은 녹화기가 이어 쓴 파일이 아니다). 같은 녹화로 이어진 다음 행은 다른 회차
-      세션이어도 싣는다(`SegmentAudioAxisTest`가 두 경우를 잰다). 남는 위험: 그 불변식이 깨지면(훅 유실 + 1.5초 안 재접속) 같은 물리
-      키의 다음 조각 하나가 확보로 실린다.
-    - 장부 왕복: 회차 고르기 1 · 창 안 회차 행 1(행마다 장부 바로 앞 행은 PK 역순 한 행) · 확보 후보 0–1(거리 조건이 참일 때 · 판 NULL 은 늘) · 회차
-      완결 0–1(확보 후보가 장부에 없고 방송 중일 때만). 회차 행 읽기는 세션 색인(`stream_segments_session_idx`)을 타고 창 밖 회차 행을
-      거르개로 버린다 — 비용이 키 이력이 아니라 그 회차 길이에 비례한다(`WallAxisReadPlanTest` · `RoundRowsScaleTest`). 조각 길이 상한이
-      장부 계약에 없어 벽시계 하한으로 범위를 더 좁히지 않았다.
-- **표지가 없으면 develop 그대로다**(옛 웹 · 열린 옛 편집기 탭): 아래 재생 축 조회 · 응답에서 조각마다 `startWallUtcMs` 하나만 더한다.
-  그 칸을 빼면 develop 응답과 바이트가 같다(`SegmentAudioAxisTest` 기대값 파일). 🔴 표지와 무관하게 축을 바꾸는 판은 내지 않는다 —
-  옛 웹이 파일명 시각 축으로 고른 행을 재생 축에 놓아 덮음 판정이 갈린다.
+- **질의 칸 `axis`는 읽지 않는다**(POK-196 · kty 2026-11-12 K-1). 무엇이 와도 위 응답이고 400이 아니다. PR-B1 판이 받던 표지
+  `axis=fileHead`와 그 갈래 칸(뿌리 `axis` · `gapEvidence`, 조각 `startWallUtcMs` · `role` · `isDiscontinuity` ·
+  `followsLedgerPrevious`)은 거뒀다 — PR-B1 판은 prod 에 나간 적이 없다.
 - **순서: 구간 → 자격 → 만료 → 켜짐 → 조회.** 조각 조회 문과 같다: 410이 자격 앞이면 남남에게 「있었던 방송」이 샌다.
-- **올라간(`uploaded`) 조각만 싣는다.** 덜 올라온 조각은 주소를 줘도 창고에 없다. 빠진 자리는 화면이 소리 없이 둔다.
+- **`segments`는 올라간(`uploaded`) 조각만 싣는다.** 덜 올라온 조각은 주소를 줘도 창고에 없다. 빠진 자리는 화면이 소리 없이 둔다.
+  물리 키의 조각 가운데 창과 겹치는 것이고 회차로 거르지 않는다 — PR-B1 이전과 뜻 · 바이트가 같다(`SegmentAudioCaptureTest`
+  기대값 파일).
 - **`startAtMs`는 재생 축**(`playback_pdt`, 없으면 `start_wall_utc`). 조각 장부는 물리 키로 찾는다(POK-233).
-- **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt axis requested`(`axis` = 실제로 처리한 축 `fileHead` · `legacy`, `requested` = 요청 표지 `fileHead` · `none` — 표지를 보냈는데 옛 갈래로 간 것이 `axis=legacy requested=fileHead`).
+- **끝 소리 확보 `audioCapture`(POK-196 · 설계 r7 9.6).** 컷 끝 바로 뒤 조각의 머리 소리(판 2 에서 최대 약 1초)가 그 조각 파일
+  앞에 들어 있어 함께 받는 판정이다(계약 6-6-8). 값은 셋이다 — `attached`(확보 조각을 `audioCaptureSegment`에 실음) ·
+  `not_ready`(아직 준비 안 됨 — 다시 물으면 바뀔 수 있다) · `skipped`(확보 없이 진행). 확보 조각은 `segments`에 섞지 않는다(kty K-2).
+    - **판정은 같은 창을 렌더 주문 컷으로 받았을 때와 같다**(`CutPlanner.audioCaptureOf` — 렌더 주문과 같은 `AudioCaptureRule` ·
+      6-6-8 8항). 컷 끝 = `toMs`. k(영상 범위의 마지막 조각) · 컷 끝 좌표 · 원점은 **회차 귀속 행 위 F끝**(`locateEnd(toMs)` →
+      `endOf`)에서 얻는다 — `segments` 목록의 마지막이 아니다(목록 마지막은 비귀속 · 아직 안 올라간 행일 수 있다). 판 2 는 거리 조건
+      `x_out > dur(k) − 1초`를 영상 첫 표본 원점(PDT)에서 재고, 판 NULL 은 거리를 보지 않는다. 후보는 k 의 장부 다음 행이고
+      회차 · 방송으로 자르지 않는다 — 다른 회차 · 방송으로 넘어가는 것을 막는 것은 후보의 `is_discontinuity`다. 「끝남」 = 방송
+      `ended` 이거나 회차 완결. 후보가 15분 넘게 `failed`면 없이 진행한다.
+    - **렌더가 확보 판정 전에 멈추는 갈래는 렌더의 답을 옮긴다**: 회차 행 없음 · 끝이 마지막 행 뒤(라이브 머리) → 회차가 열렸으면
+      `not_ready`(렌더 409) · 닫혔으면 `skipped`(렌더 422). 시작이 첫 행 앞 · 창에 영상 조각이 없음 → `skipped`(렌더 422).
+      창 안 회차 행이 아직 → `not_ready`(렌더 409 `media_pending`). 디코더 준비 조각은 보지 않는다.
+    - `audioCaptureSegment.startAtMs`는 판정 축(목록 PDT 를 ms 로 내린 값)이다. `segments[].startAtMs`는 SQL 에서 ms 로 반올림한
+      값이라, 같은 조각이 두 곳에 실리면(겹침 · 비귀속 행 자리) 1ms 다를 수 있다.
+    - **확보 판정이 실패하면 확보 칸만 빠지고 `segments`는 200 으로 나간다**(kty 2026-11-12). 판 칸(`timing_version`, 1번 생산자 c1
+      DDL)이 없는 DB(확보 판정이 회차 행의 판 칸을 읽는다 — 위 카드 장면 절 배포 순서 게이트)나 장부 불변식 위반(회차 안 판 섞임
+      등)이면 `audioCapture` · `audioCaptureSegment`가 없고 WARN `clip.segment_audio_access.capture_unavailable streamId reason`
+      (`reason` = 예외 클래스 이름 · 입력 값은 싣지 않는다)이 남는다. 카드 장면 실패(`jumpcard.scene_unavailable`)와 같은 처분이다 —
+      웹은 확보 없이 목록으로 미리 듣는다.
+    - 장부 왕복: 회차 고르기 1 · 회차 귀속 행 1(렌더 주문과 같은 읽기 — 규모는 `LedgerCutPlannerScaleTest`) · `segments` 목록 1 ·
+      확보 후보 0–1(판 2 는 거리 조건이 참일 때 · 판 NULL 은 늘) · 회차 완결 0–1(물을 때만 — 범위 갈래 · 확보 후보가 장부에 없고
+      방송 중). 방송 행 · 만료 판정은 JPA 질의다.
+    - **회차 완결이 참으로 나오면 다시 판정한다**(POK-196 · kty 결정 R28 (나)). 완결은 회차 행 뒤에 묻기 때문에, 그 사이 생산자가 마지막
+      행을 넣고 회차를 닫았으면 옛 행 목록 + 완결 참이 확보할 수 있는 창을 `skipped`로 접는다. 그래서 완결이 참이면 세션 목록 · 회차 행을
+      다시 읽어 판정한다(그때만 회차 고르기 · 회차 행 하나씩 더 · 확보 후보는 0–1 — 다시 읽은 행으로도 창이 마지막 행 뒤면 묻지 않는다). 닫힌 회차는 더 바뀌지 않는다. 렌더 주문도 같은 까닭으로
+      완결이 참이면 세션 목록을 다시 고른다.
+- **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt audioCapture`.
 - 수명은 `pokeclip.render.segment-audio-url-ttl`(기본 `PT5M`, 0초 초과 7일 이하). 화면은 받자마자 내려받는다.
   조각 창고는 `SEGMENT_BUCKET`이고 주문줄(`RENDER_ENABLED`)과 같이 켜진다: 운영 역할에 조각 창고 `s3:GetObject`가 있어야 주소가 통한다.
 - 🔴 **배포 조건: 조각 창고에 웹 주소를 허락하는 CORS 규칙(GET·HEAD)이 있어야 한다.** 화면이 이 주소를 `fetch`로 받아 푼다.
@@ -2738,6 +2767,11 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 - **벌 고르기**: 영상 파일이 하나면 그것, 여럿이면 `outputId` 필수(무엇을 올릴지 우리가 정하지 않는다). 지금 편집 화면은 편집본마다 한 벌만 만든다.
 - **주문서**: `{"schemaVersion":1,"jobType":"UPLOAD","uploadId","clipId","streamId","channelOwnerUserId","source":{"bucket","s3Key","outputId"},"video":{"title","description","categoryId","privacyStatus","publishAt"?,"tags":[…],"madeForKids"},"thumbnail":null|{"source":"scene","offsetMs"}|{"source":"file","bucket","s3Key","contentType"},"requestedAt"}`.
   `categoryId`·`publishAt`은 POK-381. `publishAt`(UTC ISO-8601)은 예약일 때만 싣고, 그때 `privacyStatus`는 `private`다.
+  `thumbnail.offsetMs`(장면)는 고른 값이 이미 완성 영상 안 ms 라(편집기가 in 부터 결과 영상 안 미디어 거리로 잰다 · 장부 틈은 0) 축을 바꾸지
+  않고, 렌더 배치표의 결과 길이로 `[0, 결과 끝)` 안에 자르기만 해서 싣는다(POK-196 · `UploadAutoStarter`). 저장값(업로드 줄 · 의도)은 고른 값
+  그대로다. 신호 `clip.upload.scene_mapped`(`source=layout` INFO · 결과 길이를 몰라 그대로 보내면 `source=fallback` WARN — 옛 꼴 영상 ·
+  배치표가 깨짐. 렌더 성공 트랜잭션 안이라 던지지 않는다). 🔴 한계: 조각이 1초 미만으로 겹친 이음(렌더 표시 소유)에서는 편집기가 센 조각 길이
+  합과 결과 시각이 겹침만큼 다를 수 있다 — 썸네일은 거친 좌표라 받아들인다.
   옛 문(보관함 「업로드」)은 분류 20·예약 없음으로 싣는다. 다시 시도는 실패한 줄의 분류·예약을 그대로 옮긴다: 예약 시각이 이미 지났으면 유튜브가 올리자마자 공개한다.
   `schemaVersion`은 1 그대로다(POK-291): 새 칸은 선택 칸이고, 판을 올리면 옛 일꾼이 못 읽는다며 지워 줄이 `queued`로 영원히 남는다. 쓰는 자리는 하나다(`UploadPayload`).
   선기록·후발행(outbox)은 렌더와 같다. 줄을 만든 트랜잭션의 **커밋 뒤 훅은 전용 스레드(`upload-publish-N`, 둘)에 발행을 제출만 한다**
@@ -2811,21 +2845,45 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 
 | 자리 | 사진 | 어디서 찍나 |
 |---|---|---|
-| 라이브(`state=live` 목록 `thumbnailUrl`) | 가장 최근에 올라간 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
+| 라이브(`state=live` 목록 `thumbnailUrl`) | 회차 귀속 행 가운데 올라간 seq 최대 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
 | 지난 방송(`state=past` 목록 `thumbnailUrl`) | 가리지 않은 카드 중 **점수가 가장 높은** 카드의 사진(POK-463: 가린 카드는 대표가 아니다), 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
-| 카드(카드 목록 `thumbnailUrl`) | 카드 시각(`stream_timestamp_ms`, 조각 pts 축)이 든 조각의 그 자리 | 조각 창고. 조각이 올라온 뒤에 대상이 된다 |
-| 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드 시점(시각 기준점으로 재생 축에 맞춘다), 없으면 가운데 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
+| 카드(카드 목록 `thumbnailUrl`) | 카드 장면(`CardPositionReader` — 위 「카드 장면 두 칸」): 카드 시각이 든 귀속 조각의 그 자리, 틈 · 비귀속 자리면 뒤 귀속 조각 첫 화면, 겹침이면 나중 조각 | 조각 창고. 장면 조각이 올라온 뒤에 주문이 나간다. 라이브 머리(마지막 귀속 행 뒤)는 장면이 없어 다음 행을 기다린다 |
+| 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드의 장면, 없으면 가운데. 배치표가 있는 영상(새 꼴 · POK-196)은 주문서 계획 in · out 을 카드 축으로 옮긴 구간 안 카드의 카드 장면을 렌더 배치표로 결과 ms 에 놓는다(`ResultPlacements` — 틈 안 카드는 뒤 조각 첫 화면). 배치표가 없는 옛 영상은 레시피 컷 구간 · 시각 기준점으로 맞춘 카드 시점 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
 
-- **순회**: `ThumbnailSweeper`가 `THUMBNAIL_INTERVAL`마다 라이브·카드·영상을 차례로 훑어 주문을 낸다. 카드·영상은 한 번에 50개, 사진이 안
-  오면 5분 뒤 다시, **세 번까지만**(조각이 지워졌으면 영원히 실패한다). 보관 기한이 지난 방송의 카드는 안 본다. 갈래마다 예외를 잡는다.
-- **새 카드는 2초 안에 본다(POK-475)**: 1분 순회만 있으면 카드가 생기고 사진이 붙기까지 1분 넘게 걸렸다(로컬 실측 카드 54: 조각 올림 33초 +
+- **순회**: `ThumbnailSweeper`가 `THUMBNAIL_INTERVAL`마다 라이브·카드·영상을 차례로 훑어 주문을 낸다. 카드·영상은 한 번에 50개(사진 없는 것을
+  번호 큰 순으로), 사진이 안 오면 5분 뒤 다시, **세 번까지만**(조각이 지워졌으면 영원히 실패한다). 보관 기한이 지난 방송의 카드는 안 본다.
+  갈래마다 예외를 잡는다.
+- **카드 내려놓기(POK-196 · kty 2026-11-12)**: 카드 장면은 질의가 아니라 카드 장면 함수가 고르므로, 50장을 뽑은 뒤에야 주문을 못 내는 카드를
+  안다. 그 가운데 **장면이 영구히 안 나오는 카드는 주문 없이 「세 번을 다 쓴」 줄로 적어(`markGivenUp` — 영상 없는 완성 영상과 같은 길) 다시
+  후보에 넣지 않는다.** 내려놓지 않으면 그 카드가 사진 없음으로 남아 매 순회 묶음 자리를 차지하고, 그런 카드가 50장이면 그보다 오래된 카드는
+  첫 사진조차 영영 못 받는다. 내려놓는 경우는 방송이 끝났거나(방송 줄 `ended`) 그 회차가 완결이고(세션 모두 끝 · 회차 닫힘 — 방송 편지가
+  늦어도) 그 위에 다음 둘 가운데 하나일 때뿐이다.
+    1. 장면이 없다 — 카드 위치가 마지막 귀속 행 뒤다(끝난 방송이라 다음 행이 안 온다).
+    1. 그 방송 회차에 행이 하나도 없다(머리 세션 행이 없는 옛 방송은 시간창 안 행).
+
+  그 밖은 다음 순회를 기다린다: 방송 중(라이브 머리 — 다음 행 대기), 끝난 방송이라도 장면 조각이 아직 안 올라감(`pending`이든 `failed`든 —
+  `failed`는 종국이 아니다: 생산자 스위퍼가 `pending` · `failed` 행을 30초마다 다시 집어 올리고(`failed → uploaded` 허용), 로컬 원본은 올라가기
+  전엔 지우지 않는다), 장면 계산이 깨져 격리된 방송(아래 한계). 내려놓은 카드는 사진 줄에 사진 없음 · 시도 3으로 남아 저절로 다시 찍지 않는다 —
+  다시 찍으려면 그 카드의 사진 줄(`thumbnails` `kind='card'`)을 지운다. 순회 줄 `thumbnail.sweep kind=card` · `kind=new_card`의 `givenUp`이 그
+  순회에서 내려놓은 수다.
+- **새 카드는 빠른 순회로 본다(POK-475)**: 1분 순회만 있으면 카드가 생기고 사진이 붙기까지 1분 넘게 걸렸다(로컬 실측 카드 54: 조각 올림 33초 +
   순회 대기 44초 + 일꾼 4초 = 80초). 카드가 새로 생기면(자동 카드 2A · 수동 마킹, **커밋 뒤**) 그 번호가 순회기 안의 「새 카드 명단」에 오르고,
-  2초마다 **명단의 카드만** 1분 순회와 같은 조건으로 본다. 조각이 아직 안 올라왔으면 명단에 남아 다음 2초에 다시 보고, 10분이 지나면 빠져 1분
+  빠른 순회가 **명단의 카드만** 1분 순회와 같은 조건으로 본다. 빠른 순회는 「앞 순회가 끝난 뒤 2초」(`fixedDelay`)마다 돈다 — 2초 주기가
+  아니다. 그래서 순회 한 번이 길면 시작 간격도 길어진다(아래 「카드 순회 한 묶음」 실측 0.8–1.5초면 시작 간격 약 2.8–3.5초). 같은 일정 스레드라
+  1분 순회가 도는 동안은 그것이 끝나기를 기다린다. 조각이 아직 안 올라왔으면 명단에 남아 다음 순회에 다시 보고, 10분이 지나면 빠져 1분
   순회가 맡는다. 두 순회는 같은 「사진 없음 · 요청 5분 안 아님」 조건이라 같은 카드를 겹쳐 내지 않는다(같은 일정 스레드라 동시에도 안 돈다).
-  표 전체를 2초마다 훑지 않는 이유: 카드 질의는 사진 없는 카드를 찾느라 표 끝까지 훑을 수 있다. 새 환경변수 없음.
-- **조각 찾기**: 물리 키(`COALESCE(ingest_stream_id, stream_id)`, POK-233) + 방송 시간(시작 2분 전 ~ 종료 10분 뒤)으로 자른다. 같은 키의 앞
-  방송 조각을 안 찍는다. `upload_state = 'uploaded'`만 쓴다.
-- **주문서**: `{"schemaVersion":1,"kind":"live|card|clip","targetId","capturedAt","source":{"bucket","s3Key","offsetMs"},"output":{"bucket","s3Key"}}`.
+  표 전체를 빠른 순회마다 훑지 않는 이유: 카드 질의는 사진 없는 카드를 찾느라 표 끝까지 훑을 수 있다. 새 환경변수 없음.
+- **조각 찾기**(POK-196): 방송의 **회차 귀속 행**(`RoundRows` — 위 「카드 장면 두 칸」)에서 고른다. 회차 머리 앞 · 회차 사이의 비귀속 행과 같은
+  물리 키의 앞 방송 조각은 안 찍는다. 머리 세션 행이 없는 옛 방송만 물리 키(`COALESCE(ingest_stream_id, stream_id)`, POK-233) + 방송 시간
+  (시작 2분 전부터 종료 10분 뒤까지)으로 자른다. `upload_state = 'uploaded'`만 쓴다. 카드 묶음(50장)이 여러 방송에 걸쳐도 장부 왕복은 회차 고르기
+  한 번 + 회차 행 한 번이다(방송마다 그 방송의 회차). 장면이 없는 카드가 방송 중인 방송에 있으면 회차 완결을 묶음 한 번에 묻고,
+  완결인 방송은 회차를 다시 읽어 판정한 뒤에만 내려놓는다(완결을 회차 행 뒤에 읽어, 그 사이 마지막 행이 들어왔을 수 있다 — 그때만
+  두 번 더). 한 방송의 장부 값이 장면 계산의 전제를 깨면 그 방송 카드만 빠지고 WARN
+  `jumpcard.scene_unavailable`이 남는다.
+- **주문서**: `{"schemaVersion":1,"kind":"live|card|clip","targetId","capturedAt","source":{"bucket","s3Key","offsetMs","offsetOrigin"?},"output":{"bucket","s3Key"}}`.
+  `offsetMs`는 0 이상 정수(ms)다. `offsetOrigin`(카드 · 라이브만, POK-196)은 `offsetMs`를 조각 파일 안 어디서부터 재는가 — 고른 행의 판으로
+  정한다: 판 2 → `VIDEO_START`(영상 첫 표본) · 판 NULL → `FILE_HEAD`(파일 머리). 일꾼은 칸이 없으면 `FILE_HEAD`로 읽는다(`workers/render`
+  `ThumbnailJob`). 완성 영상(`clip`)은 결과 파일 안 자리라 칸을 싣지 않는다.
   사진 키는 clip이 정한다: `thumbnails/{kind}/{targetId}.jpg`(완성 영상 창고). 같은 대상은 늘 같은 키라 라이브 사진은 덮어써지고 쌓이지 않는다.
 - **보고 문**: `POST /internal/thumbnails` `{kind, targetId, capturedAt}`(`X-Internal-Token`). 200 `{"saved":true|false}`(false = 더 늦은
   장면이 이미 있어 안 덮음, 실패 아님) · 400 `invalid_thumbnail_report`(모양: 방송 번호는 `[A-Za-z0-9_-]`, 카드·영상 번호는 숫자). **키를 받지
@@ -2840,7 +2898,27 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 - **새 카드 명단은 메모리다**(POK-475). clip을 다시 띄우면 비고, 그 사이 생긴 카드는 1분 순회가 찍는다(그만큼 늦다). clip이 여러 대면
   각자 **자기가 만든 카드만** 빠르게 보고, 다른 clip이 만든 카드는 1분 순회 몫이다.
 - 라이브 카드는 그 시점 조각이 올라와야 찍는다. 로컬은 조각 올림 흉내가 30초 주기라 그만큼 늦고, 운영은 영상 서버가 조각이 닫히면 올린다.
+- **격리된 방송의 카드는 보관 기한까지 후보에 남을 수 있다**(POK-196). 한 방송의 장부 값이 장면 계산의 전제를 깨면(행 길이 음수 · seq 순서 어긋남
+  같은 장부 불변식 위반 — WARN `jumpcard.scene_unavailable`) 그 방송 카드는 내려놓지 않는다 — 데이터 결함을 포기로 덮지 않으려는 것이다.
+  그래서 장부를 고치기 전까지 그 카드들은 사진 없음으로 매 순회 묶음 자리를 차지한다. 그런 카드가 50장 넘게 쌓이면 그보다 번호가 작은 카드는
+  첫 사진도 못 받는다(새 카드는 번호가 커서 앞에 선다). 보관 기한(`vod_expires_at`)이 지나면 후보에서 빠진다. 같은 WARN 이 순회마다 반복되면
+  그 방송 장부를 본다.
+- **장면 조각이 끝내 안 올라가면 그 카드는 후보 자리를 계속 차지할 수 있다.** 원인은 둘이다 — 창고(S3)가 계속 거절하거나, 생산자 쪽
+  로컬 원본이 없어(ENOENT) 올릴 파일이 없다. 장면 조각이 `pending` · `failed`로 남는 동안(생산자 스위퍼가 계속 다시 집는다) 그 카드는 내려놓지
+  않으므로 격리된 방송과 같은 식으로 묶음 자리를 차지한다 — 끝난 방송의 그런 카드가 50장 넘게 쌓이면 그보다 번호가 작은 카드는 첫 사진을 못
+  받는다(받아들인 한계: clip 은 `failed`의 사유를 볼 수 없어 「로컬 원본 없음」 만 골라 내려놓지 못한다). 사람은 생산자 신호
+  `upload_failed` · `upload_backlog` · `upload_file_missing`(로컬 원본 없음)으로 본다 — `abandoned_local_retained`는 그 가운데 올리기를
+  포기하고 로컬에 남긴 조각만 센다.
+- 끝난 방송의 마지막 귀속 행 뒤 카드는 방송 줄이 `ended`가 되거나 회차가 완결된(세션 모두 끝 · 회차 닫힘) 순간 내려놓는다. 생산자는 그 스트림 파일을 장부에 다 넣은 뒤에야 회차를 끝내므로
+  (회차 닫힘 · 세션 모두 끝 뒤 종료 편지) 끝난 방송에 뒤 행이 더 들어오는 일은 없다. 이 순서가 뒤집히는 길은 무신호 치우개(방송 reaper — prod
+  꺼짐)가 방송을 끝낸 경우뿐이고, 그때 마지막 조각에 든 카드는 행이 장부에 들어오기 전에 내려놓일 수 있다(그 뒤 다시 안 찍는다).
 - 카드 시각과 조각 pts는 방송 중 재접속·재시작으로 어긋날 수 있다(`timelineOriginAt`의 한계와 같은 뿌리).
+- **완성 사진 자리는 그 조각 첫 표시 프레임 아래로 내려가지 않는다**(POK-196 · kty 결정 A18 (가)). 렌더 배치표의 `zeroAtUs`는 그 조각
+  첫 DTS 자리라 첫 화면(PTS)보다 구성 시차(보통 2프레임 약 66.7ms)만큼 앞이다. 판 NULL(`FILE_HEAD`)이면 m(파일 머리 → 영상 첫 표본)도
+  뺀다. 그래서 틈 안 카드의 장면 `(k′, 0)`을 그대로 놓으면 뒤 조각 첫 화면보다 c + m 만큼 앞서 끊기기 직전 앞 조각 화면을 찍었다.
+  `ResultPlacements`는 놓은 자리를 바로 앞 배치 몫의 끝 — 렌더가 뒤 조각 첫 표시 프레임 자리로 낸 값 — 아래로 내리지 않는다. 틈 카드만이
+  아니라 그 조각 장면인 카드 모두에 같은 하한이 걸리고(첫 DTS 와 첫 화면 사이 자리는 어느 카드든 앞 조각 화면이었다), 그 위 자리는 그대로다.
+- **카드 순회 한 묶음은 후보 방송마다 회차 행 전부를 읽는다**(POK-196 — 카드 장면이 메모리 F 라서다). 로컬 실측(방송 50 × 회차 1만 행 · `CardThumbnailBatchScaleTest`)은 한 번에 50만 행 · 0.7–2.6초다(같은 기계에 다른 부하가 몰리면 12–16.6초까지 늘었다). 빠른 순회(새 카드)도 같은 읽기라(실측 0.8–1.5초), 긴 회차 방송이 여럿이면 순회 시작 간격이 2초 쉼에 그만큼 더해진다. 줄이는 일은 이 판 밖이다.
 - 라이브 주문이 일꾼에서 늦게 처리되면 옛 장면이 같은 키를 잠깐 덮을 수 있다. 표의 시각은 되돌지 않고 다음 분에 다시 덮인다.
 
 ### clip — 보관함 목록·상세 (POK-243)
@@ -4640,6 +4718,29 @@ ISO-8601(`2026-08-24T12:00:00Z`). 숫자로만 이뤄졌으면 epoch ms로 읽�
 되지만 **쿼리에서 `+`는 공백으로 디코드되므로 `%2B`로 인코딩해야 한다** — 그대로 치면 400이다.
 `channelId`는 보정값을 고르는 열쇠이고, 없으면 기본 보정값(`CHAT_SYNC_OFFSET_MS`)이 쓰인다.
 
+**장부 행은 판(`timing_version`)에 따라 두 갈래로 읽는다**(POK-196 · 계약 세그먼트인덱스 6-6-9).
+
+| | 판 NULL 행(옛 식) | 판 2 행(PDT 개정) |
+|---|---|---|
+| floor 축 | 파일명 시각 `start_wall_utc` | 영상 첫 표본 벽시각 `playback_pdt` |
+| 보정값 | `CHAT_SYNC_OFFSET_MS`(채널별 덮어쓰기) | 그 값 − `CHAT_SYNC_V2_LEAD_CORRECTION_MS` |
+| 위치 | 조각 안 거리. 이어진 다음 조각이 있으면 조각 길이로 접는다(아래 1,500ms) | 공통 F(`ledger-timeline` — clip 과 같은 소스). 조각 안이면 그 자리, 이어진 이웃 사이 틈(녹화가 이어진 새 장의 건너뜀 포함)이면 **`positionMs`와 `segmentSeq` 모두 다음 조각**(그 시작), 1초 미만 겹친 시각이면 나중 조각, 끊긴 틈이면 `no_footage` |
+| 1,500ms 접힘 | 있다 | **없다** |
+
+두 판의 후보를 각자 보정값으로 찾고, 둘 다 있으면 seq 큰 쪽이다(스트림 범위 · 회차로 자르지 않음). 옛 후보의
+벽시계 역행 신호는 옛 행만으로 세고, 걸리면 옛 후보만 버린다 — 판 2 후보가 있으면 그것으로 간다.
+`appliedOffsetMs`는 고른 후보의 보정값이다. **후보가 둘 다 없으면(`not_yet_indexed` · `no_footage`) 옛
+보정값이 실린다** — 판 2 행만 있는 방송의 시작 직후처럼 판 2 보정값이 경계를 정한 경우에도 그렇다.
+판 2 후보 조회는 생산자의 판 2 PDT 색인(`stream_segments_v2_pdt_idx` — `(stream_id, playback_pdt DESC) WHERE
+timing_version = 2` · 생산자 PR 510 · develop 머지 커밋 fc7dd91c(2026-11-13))을 전제로 한다. 이 색인은 **판 2 쓰기
+스위치 전에 prod 에 깔려야 한다**(POK-551 운영 SQL 과 한 재실행) —
+없어도 답은 같지만, 판 2 행이 표에 생긴 뒤 이 색인이 없으면 조회마다 그 스트림 행을 훑을 수 있다 — 판 2 행이 많은
+스트림(판 2 30만 행에서 약 4,500 버퍼)뿐 아니라 계획에 따라 **판 2 행이 없는 스트림도**(시험 4,241 버퍼). 판 2 행이 없는
+표에서는 3 버퍼다. 첫 판 2 PDT 바로 뒤 시각은 이 조회가 서버 준비 문장을 쓰지 않아(kty 2026-11-13 L3 (나) — 이 조회
+하나만 드라이버 문턱 0) 매번 사용자 지정 계획이다(판 2 30만 행 시험 8 버퍼 — 일반 계획이었다면 7,249 버퍼). 색인이 있어도
+답이 있고 그 뒤 판 2 행이 많은 중간 시각은 그 행들을 지난다(시험 3,629 · 생산자 리뷰 5,923 버퍼) — kty 2026-11-13 중간 t
+결정으로 받아들인 범위 그대로다(호출자는 카드당 1회 · 시각은 보통 라이브 머리).
+
 ```json
 {"streamId":"live-A-001","state":"converted","positionMs":5500,"segmentSeq":2,"appliedOffsetMs":3900}
 ```
@@ -4650,9 +4751,12 @@ ISO-8601(`2026-08-24T12:00:00Z`). 숫자로만 이뤄졌으면 epoch ms로 읽�
 | `not_yet_indexed` | 조각이 아직 장부에 안 들어왔다 | **둘 다 `null`** | **답이 바뀔 수 있다** |
 | `no_footage` | 그 시각의 영상이 **영영 없다** — 첫 조각 이전 · 조각 사이의 진짜 공백 · 벽시계가 역행한 구간 | **둘 다 `null`** | 안 바뀐다 |
 
-**🔴 방송 시작 직후 「보정값만큼」은 `no_footage`다 — 결함이 아니라 정의다.** 기본 보정값이
-양수(3900)이므로 채팅 시각에서 그만큼을 빼면 방송이 시작하고 처음 3.9초 동안의 채팅은 첫
-조각보다 이른 시각이 된다. 그 채팅이 반응한 화면은 **녹화가 시작되기 전**이라 영상에 정말
+**🔴 방송 시작 직후 「보정값만큼」은 `no_footage`다 — 결함이 아니라 정의다.** 옛 행(판 NULL)만 있는
+방송 · 기본 설정이면 기본 보정값이 양수(3900)이므로 채팅 시각에서 그만큼을 빼면 방송이 시작하고 처음
+3.9초 동안의 채팅은 첫 조각의 파일명 시각보다 이른 시각이 된다. 판 2 행으로 시작한 방송은 그 판 2
+보정값(`CHAT_SYNC_OFFSET_MS` − `CHAT_SYNC_V2_LEAD_CORRECTION_MS`)과 첫 판 2 행의 `playback_pdt`로 경계가
+정해진다 — 예: 첫 판 2 PDT T0 · 위치 0 · 판 2 보정값 3750 이면 메시지 T0+3800 은 `converted` · 위치 50 이고,
+T0+3750 보다 이른 메시지가 `no_footage`다. 그 채팅이 반응한 화면은 **녹화가 시작되기 전**이라 영상에 정말
 없다. 즉 **모든 방송이 시작할 때마다** 이 구간이 나가므로 clip·판별기는 그것을 알고 배선한다.
 「위치 0으로 접어 달라」고 고치면 없던 화면을 가리키는 클립이 만들어진다.
 
@@ -4725,7 +4829,9 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 1. **응답의 모든 시각은 표에 찍힌 원본이고, 화면 위치는 `시각 − appliedOffsetMs`다.**
    목록의 `time`도 차트의 `start`도 같은 규칙이다. **창구가 미리 빼서 주지 않는다** —
    한쪽만 빼면 두 창구의 축이 갈려 프론트가 한쪽만 되돌린다. `appliedOffsetMs`는
-   판정과 무관하게 늘 실린다(영상 위치 창구와 같은 값·같은 뜻).
+   판정과 무관하게 늘 실린다. 값은 옛 보정값(`CHAT_SYNC_OFFSET_MS` · 채널별 덮어쓰기)이다 — 영상 위치
+   창구는 판 2 후보를 고르면 판 2 보정값(차감을 뺀 값)을 실으므로, 판 2 행이 생긴 뒤(P2 쓰기 스위치)에는
+   두 창구의 값이 차감만큼 다를 수 있다.
 
    🔴 **예외 하나 — 방송 정보의 `observedAt`은 이 규칙 밖이다.** 그것은 우리가 관측한
    **벽시계**라 보정이 걸리지 않고, 그래서 그 응답에는 `appliedOffsetMs`가 **안 실린다**.

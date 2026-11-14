@@ -365,6 +365,8 @@ conn = [
     " PGUSER=pokeclip_admin PGSSLMODE=verify-full"
     f" PGSSLROOTCERT={box}/rds-ca.pem PGCONNECT_TIMEOUT=10",
 ]
+# 파일마다 따로 커밋한다(psql -1). 8 의 직전 적용 SHA 가 PDT 머지 c81d04cd
+# 앞이면 어느 흐름이든 20 · 30 을 이은 한 파일로 돈다 — 아래 「PDT 재실행 조건」.
 apply = conn + [
     "for f in 00_preflight.sql 10_roles.sql 20_schema.sql 30_grants.sql"
     " 40_verify.sql; do echo \"== ${f}\";"
@@ -874,6 +876,9 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     더하지 않으므로 `names` 는 그대로입니다(전진 SQL PR 이 파일을 더했으면
     그 PR 이 `names` 도 고칩니다) — 이름이 다르면 `git show` 가 실패해
     「멈춤」 이 납니다.
+1.  **PDT 이은 파일(해당할 때)**: 8 의 직전 적용 SHA 가 PDT 머지
+    `c81d04cd` 앞이고 재실행 SHA 가 그것을 품으면, 아래 「PDT 재실행 조건」 의
+    이은 파일 고침을 지금 합니다 — 다음 걸음(잠금 대기 상한) 앞입니다.
 1.  **잠금 대기 상한 넣기**: 적용 페이로드에 `lock_timeout` 을 겁니다.
     아래는 `apply.json` 의 마지막 명령(00 → 40 반복) 바로 앞에 한 줄을
     끼웁니다.
@@ -908,7 +913,8 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     인지가 무변경 확인입니다.
 1.  **7(끔)**: 그대로 합니다 — 잔여 0 까지.
 1.  **기록**: 8 의 항목에 재실행 SHA · `lock_timeout` 값 · sha256 일곱
-    줄 · `apply` 결과를 더합니다. Jira POK-196 코멘트에 통과 시각과 SHA 를
+    줄 · `apply` 결과를 더합니다. 이은 파일을 썼으면 `2030.sql` 의 sha 두
+    값(상자 출력 · 로컬 계산)도 더합니다. Jira POK-196 코멘트에 통과 시각과 SHA 를
     남깁니다. 이 기록이 사이드카 재푸시(위 순서 3)의 선행 조건입니다.
 
 ### M6 읽기 질의
@@ -1123,7 +1129,8 @@ PDT 판 2 생산자(POK-196 PDT PR)의 DB 몫입니다. 그 PR 의 c1 이 운영
 `stream_segments` 칸 일곱(`timing_version` · 원래 사실 다섯 ·
 `timing_round_id`) · CHECK 넷 · 게이트 표 `stream_timing_gate`(한 행 —
 스위치 `new_round_version` · 래치 `highest_version`) · 트리거 셋 · 부분
-색인 셋을 더했고, 새 SQL 파일은 없습니다. 적용은 「M6 스키마 재실행」 을
+색인 셋을 더했고(뒤에 판 2 PDT 색인 `stream_segments_v2_pdt_idx` 가 더해져
+지금은 넷), 새 SQL 파일은 없습니다. 적용은 「M6 스키마 재실행」 을
 그대로 돕니다. 이 절은 그 재실행의 조건과, 재실행 밖에서 보내는 게이트
 손 SQL 의 예외를 적습니다. 배포 순서 전체는 [Media 교체 런북](media-swap.md)
 「PDT 판 2 롤백 하한 · 판 게이트」 입니다.
@@ -1135,11 +1142,91 @@ PDT 판 2 생산자(POK-196 PDT PR)의 DB 몫입니다. 그 PR 의 c1 이 운영
     돕니다 — 칸 추가는 표를 다시 쓰지 않지만 ACCESS EXCLUSIVE 를 잡고
     `psql -1` 이라 파일 끝 커밋까지 남아, 그동안 장부 표의 읽기 질의도
     기다립니다(사이드카 INSERT 는 5초 잠금 대기 뒤 백오프로 유실 없음).
+*   **20 · 30 을 한 트랜잭션으로 돕니다.** 조건은 흐름 이름이 아니라 DB
+    상태입니다 — 8 의 직전 적용 SHA 가 PDT 머지 `c81d04cd` 앞이면, 이 절이든
+    「M6 스키마 재실행」 의 다른 흐름(POK-525 운영 SQL 등)이든 재실행 SHA 가
+    `c81d04cd` 를 품는 첫 적용은 이 꼴로 돕니다. POK-525 운영 SQL 1 의 SHA
+    `e2d258ec` · `2fc2323c` 는 `c81d04cd` 를 품지 않아 `stream_schema.sql` 에
+    `legacy_writer` · `stream_timing_gate` 가 0 건이므로, 지금 순서(Media 교체
+    런북 「POK-525 와의 교체 · 적용 창(K5)」)에서는 이 틈이 생기지 않습니다.
+    PDT 판 `20_schema.sql` 이 처음
+    만드는 쓰기자 거부 트리거(`stream_segments_legacy_writer_guard`)는 정의자
+    함수가 아니라, 넣는 계정 `media_indexer` 의 권한으로 게이트 표
+    `stream_timing_gate` 를 읽습니다. 그 SELECT 권한은 `30_grants.sql` 이
+    줍니다. 5-1 의 반복(파일마다 `psql -X -1`)은 20 을 커밋한 뒤 30 을 따로
+    돌리므로, 그 사이 송출 중인 사이드카의 INSERT 는 42501(권한 없음)로
+    거부됩니다. 42 클래스는 복구 불가 오류라 사이드카가 종료 코드 1 로 끝나고
+    엔진이 거듭 다시 띄웁니다(`media/internal/indexer/insert.go`
+    `classifyInsertError`). 30 이 실패하면 이 틈이 다음 흐름까지 남습니다(소스
+    판독 · 돌려 보지는 않음). 그래서 두 파일을 이은 **한 파일**을 `psql -X -1
+    -v ON_ERROR_STOP=1 -f` 로 돌립니다. 여러 `-f` 대신 한 파일로 잇는 까닭은
+    5-1 의 반복이 파일 하나씩 psql 을 부르는 꼴을 바꾸지 않으려는 것입니다.
+    5-1 의 꼴은 그대로입니다 — 준비(`prepare`)가 원본 파일을 상자에 풀고,
+    적용(`apply`)의 명령 목록이 `conn`(`cd` 뒤 `sha256sum -c` 로 원본 대조)
+    다음 반복에서 psql 을 부릅니다. `make_payload` 뒤, 아래 「재실행 걸음」 의
+    잠금 대기 상한 넣기 **앞에** 적용 페이로드만 고칩니다 — 반복 바로 앞에 두
+    명령(`cat 20_schema.sql 30_grants.sql > 2030.sql` · `sha256sum 2030.sql`)을
+    끼우고, 반복이 20 · 30 대신 `2030.sql` 을 같은 `psql -X -1 -v
+    ON_ERROR_STOP=1 -f` 로 돕니다.
+
+    ```shell
+    jq '.commands |= (.[:-1]
+          + ["cat 20_schema.sql 30_grants.sql > 2030.sql", "sha256sum 2030.sql"]
+          + (.[-1:] | map(sub("20_schema.sql 30_grants.sql"; "2030.sql"))))' \
+      "${payload}/apply.json" >"${payload}/apply.json.new" &&
+      mv "${payload}/apply.json.new" "${payload}/apply.json"
+    jq -r '.commands[-3:][]' "${payload}/apply.json"
+    # cat 20_schema.sql 30_grants.sql > 2030.sql
+    # sha256sum 2030.sql
+    # for f in 00_preflight.sql 10_roles.sql 2030.sql 40_verify.sql; do …
+    ```
+
+    마지막 세 줄이 주석과 다르면 보내지 않고 7 로 갑니다. **sha 대조는 붙이기
+    전 원본 두 파일 기준입니다** — 5-3 의 sha256 일곱 줄 대조와 적용의 `sha256sum
+    -c` 가 그대로 그 일을 하고(이것이 관문), 잇기는 그 대조 뒤에 돕니다. 붙인
+    파일 `2030.sql` 의 sha 는 관문이 아니라 사후 기록입니다 — 상자의 sha 줄은
+    같은 적용 명령 안에서 psql 바로 앞에 나와, 견줄 때는 SQL 이 이미 돈
+    뒤입니다. 적용 출력의 `<sha>  2030.sql` 줄과, 로컬에서 같은 SHA 의 두
+    원본을 이어 계산한 값을 함께 8 의 기록에 남깁니다.
+
+    ```shell
+    # 블롭 둘을 이어서 냅니다 — 상자의 cat 과 같은 바이트입니다.
+    git show "<재실행 SHA>:infra/terraform/prod/runtime/sql/20_schema.sql" \
+      "<재실행 SHA>:infra/terraform/prod/runtime/sql/30_grants.sql" | sha256sum
+    ```
+
+    둘이 다르면 대조를 통과한 두 원본의 잇기가 깨진 것이라 kty 에게
+    알립니다. 이은 파일은 상자의 `sql` 디렉터리에 있어
+    20 의 `\ir stream_schema.sql` 이 그대로 풀립니다. 20 · 30 · `stream_schema.sql` 에는
+    트랜잭션 블록 안에서 못 도는 문장(`CREATE INDEX CONCURRENTLY` · `VACUUM` 등)이
+    없습니다 — 인덱스는 비동시 `CREATE INDEX` 이고, 20 · 30 은 머리 주석대로
+    트랜잭션 문을 쓰지 않습니다(파일 판독). 대가로 20 이 잡은 ACCESS
+    EXCLUSIVE 가 30 의 커밋까지 이어집니다. 30 은 GRANT 열다섯 문장이라 몇 초
+    안쪽으로 보지만 prod 에서 잰 값은 없습니다 — 그만큼 장부 표 질의가 더
+    기다립니다(위 「언제」 의 방송 없는 시간대 그대로).
+*   **`VERIFY OK` 전에는 송출을 열지 않습니다.** 판정은 이은 파일 뒤
+    `40_verify.sql` 의 `VERIFY OK` 입니다(40 은 `media_indexer` 의 게이트
+    SELECT 와 트리거를 봅니다). 이은 파일이 실패하면 20 도 함께 롤백되어 틈이
+    생기지 않습니다 — 「실패 · 시간 초과」 대로 끄고 다음 흐름에서 같은 꼴로
+    다시 돕니다. 20 은 커밋됐는데 `VERIFY OK` 가 없는 DB(이은 파일 없이 돌려
+    30 이 실패했거나, 40 이 실패한 흐름)면 다음 흐름에서 이 절차로 30 까지
+    다시 돌리고, `VERIFY OK` 를 받을 때까지 송출을 열지 않습니다. 20 은 다시
+    돌려도 수렴하므로(위 「M6 스키마 재실행 순서」 의 「다시 돌려도
+    안전합니다」) 함께 돌아도 됩니다.
+    *   수단: 따로 여닫는 조작은 없습니다. 이 흐름은 위 「언제」 의 방송 없는
+        시간대에 돌므로, `VERIFY OK` 를 받기 전에는 그 시간대를 끝난 것으로
+        보지 않습니다.
+    *   어겼을 때: 그 사이 들어온 송출의 출시 사이드카는 INSERT 가 42501 로
+        거부돼 종료 코드 1 로 끝나고 엔진이 거듭 다시 띄웁니다(일회용 PG17 에서
+        20 커밋 · 30 전 상태로 재현 — c0 꼴 INSERT 는 통과). 30 이 커밋되면
+        멈춥니다. 녹화 파일은 상자에 남고, 다시 뜬 사이드카가 기동 스캔에서
+        장부에 없는 파일을 시각 순으로 다시 처리합니다
+        (`media/internal/indexer/scan.go` `scanStream` — 소스 판독).
 *   **기록**: 적용 직전 `stream_segments` 행 수를 기록에 한 줄 남깁니다(위
     「M6 스키마 재실행 순서」 의 새 인덱스 재실행과 같은 규칙).
-*   **출시 이미지는 그대로 돕니다.** 새 칸에 쓰지 않아 NULL 이고, CHECK 는 모두
-    NULL 이라 만족하며, 래치가 NULL 이라 쓰기자 거부(`legacy_writer_refused`)가
-    걸리지 않습니다.
+*   **출시 이미지는 그대로 돕니다(30 이 커밋된 DB 에서).** 새 칸에 쓰지
+    않아 NULL 이고, CHECK 는 모두 NULL 이라 만족하며, 래치가 NULL 이라
+    쓰기자 거부(`legacy_writer_refused`)가 걸리지 않습니다.
 *   **적용 뒤 정의를 고치지 않습니다.** 칸 · CHECK · 색인 DO 블록은 「이름이
     있으면 건너뜀」 이라, 같은 이름으로 정의를 고친 SHA 로 다시 돌려도 옛
     정의가 조용히 남고 `MissingLedgerSchema` 도 통과합니다. 적용 뒤의 정의
@@ -1190,6 +1277,231 @@ PDT 판 2 생산자(POK-196 PDT PR)의 DB 몫입니다. 그 PR 의 c1 이 운영
     열쇠(스트림 하나)와 같은 위협 부류이고 K7 (가)로 받아들였습니다. 사이드카
     로그에 `insert_retry` 가 상자의 모든 스트림에서 함께 늘면 `pg_locks` 에서
     그 열쇠의 쥔 쪽을 찾습니다.
+
+## 60일 만료 스위치 · 미룸 질의(POK-551)
+
+60일 만료(사이드카가 clip 만료 창구를 폴링해 보존 기간이 지난 방송의 장부
+행 · S3 객체를 지우는 것)의 DB 몫입니다. POK-551 이 운영 SQL
+(`stream_schema.sql` · `30_grants.sql` · `40_verify.sql`)에 스위치 표
+`stream_expiry_switch`(한 행 · `enabled` 기본 거짓)와 그 씨앗 행 ·
+`media_indexer` 의 SELECT 를 더했고, 새 SQL 파일은 없습니다. 적용은
+「M6 스키마 재실행」 을 POK-551 머지 SHA 이상으로 그대로 돕니다. 배포 ·
+되돌리기 규칙 전체는 [Media 교체 런북](media-swap.md) 「만료 롤백 하한 ·
+만료 스위치」 입니다.
+
+*   **표가 없어도 막히지 않습니다.** 사이드카는 스위치를 읽지 못하면 끔으로
+    보고 만료만 멈춥니다(ERROR `expiry_switch_read_failed value=1`). 기동
+    필수 목록에 넣지 않아, 재실행 전 DB 에서도 사이드카는 뜹니다.
+*   **적용 뒤 정의를 고치지 않습니다.** 「PDT 재실행 조건」 과 같은 「이름이
+    있으면 건너뜀」 규칙입니다. 재실행은 켜 둔 값을 되돌리지 않습니다 —
+    씨앗 행은 행이 없을 때만 넣습니다.
+
+### 만료 스위치 손 SQL
+
+스위치 행을 바꾸는 것은 마스터의 손 SQL 뿐입니다 — 사이드카(`media_indexer`)는
+SELECT 만 갖습니다. 「PDT 판 게이트 손 SQL」 과 같은 자리 · 같은 꼴입니다:
+실행기를 켠 흐름(4 → 5-1 → 5-2 → 5-3 의 준비만 → 보냄 → 7) · 새 페이로드 ·
+SQL 원문을 kty 에게 보이고 승인 · 뒤이어 `40_verify.sql` · 판정은 상태
+`Success` 와 `VERIFY OK`. 5-1 의 SHA 는 POK-551 머지 SHA 이상이어야 합니다 —
+그 판의 `40_verify.sql` 이 스위치 표 · 씨앗 행을 단언합니다.
+
+| 손 SQL | 언제 | 문장(`SET ROLE media_owner;` 뒤 한 문장) |
+|---|---|---|
+| 켬 | 아래 「켜기 전 조건」 이 모두 선 뒤 · kty 결정 | `UPDATE stream_expiry_switch SET enabled = true, changed_at = now(), changed_by = '<사람>';` |
+| 끔 | 언제든(방송 중 가능) · 하한 아래 롤백의 첫 걸음 | `UPDATE stream_expiry_switch SET enabled = false, changed_at = now(), changed_by = '<사람>';` |
+
+```shell
+cat >"${payload}/expiry_switch.sql" <<'SQL'
+SET ROLE media_owner;
+UPDATE stream_expiry_switch SET enabled = false, changed_at = now(), changed_by = '<사람>';
+SELECT enabled, changed_at, changed_by FROM stream_expiry_switch;
+RESET ROLE;
+SQL
+make_sql_step expiry_switch "${payload}/expiry_switch.sql" &&
+  send_step expiry_switch
+```
+
+*   위 블록은 끔입니다. 켬은 UPDATE 줄을 위 표의 켬 문장으로 바꿉니다.
+    `make_sql_step` 은 「POK-525 SQL 걸음 페이로드」 의 함수입니다(SQL 을
+    `psql -X -1` 한 트랜잭션으로 돌리고 이어서 `40_verify.sql`).
+*   **통과**: 표준 출력에 `UPDATE 1` 과 바꾼 값의 한 행, 그 뒤 `VERIFY OK`.
+    `UPDATE 0` 이면 스위치 행이 없는 것입니다 — 뒤의 `40_verify.sql` 도
+    `seed_row:stream_expiry_switch` 로 실패합니다. 행을 손으로 넣지 말고
+    멈춰 kty 에게 보고합니다(행이 없으면 사이드카는 끔으로 읽습니다).
+*   **반영 시점**: 만료기는 10분 회차의 시작과 방송마다 스위치를 다시
+    읽습니다. 재기동은 필요 없습니다. 끄면 방송 하나 안에 멈추고, 켜면 다음
+    회차(10분 안)에 돕니다. 사이드카 저널에 WARN `expiry_switch value=0|1`
+    한 줄이 나옵니다(Media 교체 런북 「만료 확인 스크립트」 의 `SWITCH` 줄).
+*   **트리거 · 잠금 없음.** 판 게이트와 달리 트리거가 없고 전역 열쇠도
+    잡지 않습니다. 행을 지우거나 표를 비우면 사이드카가 끔으로 읽습니다 —
+    지우는 쪽으로 틀리지 않지만, 하지 않습니다(다시 켤 수 없게 됩니다).
+
+**켜기 전 조건.** 하나라도 아니면 켜지 않습니다.
+
+1.  모든 Media 상자의 사이드카 · 설치 묶음이 만료 하한 이상입니다(Media
+    교체 런북 「만료 하한 판정」).
+1.  만료 주소를 채운 상자에서 Media 교체 런북 「만료 확인 스크립트」 가
+    `EXPIRY STARTED OK` · `SWITCH 0` 입니다(아래 「1단-나 ③」 5).
+1.  만료 주소를 채운 상자마다 Media 교체 런북 「만료 창구 탐침」 이
+    `EXPIRY PROBE OK` 입니다 — 사이드카 망 칸에서 clip 이름이 풀리고, 진짜
+    토큰 없이 보낸 GET 이 401 로 돌아옵니다. 스위치가 꺼진 동안 만료기는 clip 을 부르지
+    않아, 이름 풀이 · SG · 출발지 대역은 켜기 전에는 이 탐침으로만 봅니다.
+1.  회차 VOD 문서 구멍 진단을 한 번 돌려 0행이거나, 나온 행을 kty 가
+    판정했습니다 — 켜기 전에 다른 경로로 지워진 조각을 가리키는 문서를
+    찾습니다([media README](/media/README.md) 「회차 VOD 문서 구멍 진단」).
+1.  아래 「만료 켜기 전 진단」 을 한 번 돌려 두 결과를 kty 가 판정했습니다.
+1.  **켜는 때(kty 2026-11-14):** PDT 스위치 2(판 2 쓰기) 뒤, ㉠ 판 2 행이
+    섞인 PG 만료 시험이 통과하고 ㉡ 판 2 실방송 한두 번이 정상으로 처리된
+    것을 본 뒤에 켭니다(㉡ 의 정상 판정은 kty). 목표는 12월 중순입니다.
+    스위치 2 와 같은 창에서 켜지 않습니다 — 되돌릴 수 없는 두 변화(판 2
+    쓰기 · 만료 삭제)를 떼어 원인을 가르려는 것입니다. ㉠ 은
+    `media/internal/index/expiry_timing_v2_pg_test.go`(판 2 회차 만료 · 판이
+    섞인 스트림의 범위 밖 무변경 · 켜기 전 진단 셋의 같은 판정 · 구간 경계
+    1ms 앞 · 같음 · 뒤에서 판 1 과 같은 쪽으로 갈림)입니다. prod 되감기
+    버킷의 가장 오래된 객체가 2026-11-04(2026-11-14 읽기 확인)라 첫 삭제
+    대상은 2027-01 초로 어림됩니다 — 실제 대상은 clip 이 내주는 만료 방송
+    목록이 정합니다. 그 전에 켜면 만료는 대상 0 으로 돕니다.
+
+켠 뒤 10분 안에 `SWITCH 1` 을 확인하고, 그 뒤 첫 회차가 지나 「만료 확인
+스크립트」 의 `POLL` 줄이 `fail=none` · `stalled=none` 이어야 합니다. 실패
+`status` 가 보이면 `401` 은 토큰 · clip 창구, `403` 은 출발지 대역,
+`transport` · `timeout` 은 SG · 이름 풀이입니다. 세 번 이어 실패하면 ERROR
+`expiry_stalled value=1`(`stalled=1`)이 나옵니다 — 끄고 원인을 봅니다.
+
+### 만료 켜기 전 진단
+
+켜기 전에 장부 전체의 모양을 한 번 읽어, 만료가 기대는 전제를 숫자로
+봅니다. 흐름 · 승인은 「M6 읽기 질의」 그대로입니다. 두 SELECT 모두 집계만
+내고 스트림 · 세션 · 회차 식별자를 내지 않아, 출력을 그대로 기록에 옮깁니다.
+판정 기준값은 두지 않습니다 — 마지막 칸 하나(0 기대)를 빼면 kty 가
+판정합니다.
+
+```shell
+cat >"${payload}/expiry_preflight.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '30s';
+SET LOCAL lock_timeout = '3s';
+SET LOCAL search_path = pg_catalog, public;
+SET ROLE media_owner;
+WITH r AS (
+    SELECT s.round_id,
+           pg_catalog.max(s.round_closed_at) IS NOT NULL AS closed,
+           CASE WHEN pg_catalog.max(s.round_closed_at) IS NULL THEN pg_catalog.now()
+                ELSE COALESCE(pg_catalog.max(s.ending_at), pg_catalog.max(s.round_closed_at))
+           END - pg_catalog.min(s.started_at) AS len
+      FROM stream_sessions s
+     WHERE s.round_id IS NOT NULL
+     GROUP BY s.round_id
+)
+SELECT CASE WHEN r.closed THEN 'closed' ELSE 'open' END AS rounds,
+       pg_catalog.count(*) AS n,
+       pg_catalog.round((pg_catalog.max(pg_catalog.date_part('epoch', r.len)) / 86400)::numeric, 2) AS max_days,
+       pg_catalog.round((pg_catalog.percentile_cont(0.99) WITHIN GROUP
+           (ORDER BY pg_catalog.date_part('epoch', r.len)) / 86400)::numeric, 2) AS p99_days,
+       pg_catalog.count(*) FILTER (WHERE r.len >= interval '30 days') AS ge_30d,
+       pg_catalog.count(*) FILTER (WHERE r.len >= interval '59 days') AS ge_59d
+  FROM r
+ GROUP BY r.closed
+ ORDER BY 1;
+SELECT pg_catalog.count(*) FILTER (WHERE s.vod_state IN ('frozen', 'frozen_with_gaps', 'freeze_failed')
+                                     AND s.vod_s3_key IS NOT NULL
+                                     AND (s.vod_first_seq IS NULL OR s.vod_last_seq IS NULL)) AS settled_range_null,
+       pg_catalog.count(*) FILTER (WHERE s.round_id IS NULL
+                                     AND s.vod_state IN ('frozen', 'frozen_with_gaps', 'freeze_failed')
+                                     AND s.vod_s3_key IS NOT NULL) AS legacy_settled,
+       (SELECT pg_catalog.count(*) FROM (
+            SELECT 1 FROM stream_sessions o
+             WHERE o.round_id IS NOT NULL
+             GROUP BY o.stream_id, o.round_id
+            HAVING pg_catalog.bool_or(o.state IN ('live', 'ending') AND o.vod_state IN ('none', 'freezing'))
+                OR pg_catalog.max(o.round_closed_at) IS NULL) u) AS undecided_rounds,
+       pg_catalog.count(*) FILTER (WHERE s.round_id IS NULL AND s.state IN ('live', 'ending')
+                                     AND s.vod_state IN ('none', 'freezing')) AS undecided_chains,
+       pg_catalog.count(*) FILTER (WHERE s.round_id IS NULL AND s.state = 'ended'
+                                     AND s.vod_state = 'none') AS legacy_ended_none,
+       pg_catalog.count(*) FILTER (WHERE s.state = 'ended' AND s.vod_state = 'freezing') AS ended_freezing
+  FROM stream_sessions s;
+RESET ROLE;
+SQL
+make_read expiry_preflight "${payload}/expiry_preflight.sql" &&
+  send_step expiry_preflight
+```
+
+*   **첫 SELECT — 회차 길이.** 회차마다 첫 `started_at` 부터 셉니다. 닫힌
+    회차는 마지막 `ending_at`(없으면 닫힌 시각)까지, 열린 회차는 앞 회원이
+    끝났어도 지금까지입니다. `closed` ·
+    `open` 두 행에 수 · 최대 · p99(일)과 30일 · 59일 이상 회차 수를 냅니다.
+    회차 길이에는 상한이 없어, 보존 기간 가까이 이어진 회차는 첫 방송이
+    만료될 때 방금 끝난 방송까지 담은 회차 VOD 문서가 통째로 내려갑니다
+    (media README 「60일 만료」 의 한계). `ge_59d` 가 0 이 아니면 그 회차가
+    켠 뒤 처음 지우는 대상일 수 있습니다. 회차가 없는 옛 계승 사슬
+    (`round_id` 없음)의 길이는 이 집계에 들지 않습니다 — 둘째 SELECT 의
+    `legacy_settled` 가 0 이 아니면 그 사슬도 같은 위험이 있으니 kty 가
+    판정합니다.
+*   **둘째 SELECT — 만료 판정의 입력.** `settled_range_null` 은 범위 칸이 빈
+    확정 문서(M6 전 확정 — 계승 사슬 규칙으로 고름)입니다. `legacy_settled` 는
+    회차가 없는 세션의 확정 문서 수입니다 — 범위 칸이 찼어도 옛 사슬 문서라
+    첫 SELECT 의 회차 길이에 들지 않습니다.
+    `undecided_rounds` · `undecided_chains` 는 지금 미룸을 낳을 수 있는 단위
+    (「만료 미룸 질의」 의 미정 단위)이고, 진행 중 방송 수 근처가 보통입니다.
+    `legacy_ended_none` 은 VOD 없이 끝난 옛 세션이라, 만료가 문서 없이 조각만
+    지웁니다.
+*   **`ended_freezing` 은 0 이 기대입니다.** 만료는 `ended` 세션을 확정
+    가능으로 보지 않습니다(`expiry_store.go` 의 `expirySettleableMember`). 0 이
+    아니면 켜지 않고 kty 에게 보고합니다.
+
+### 만료 미룸 질의
+
+WARN `expiry_deferred value=1` 이 같은 방송에 하루 넘게 남을 때 그 스트림의
+미정 단위를 읽는 질의입니다. 미정 단위는 아직 VOD 를 확정할 수 있는 회차
+(회원이 `live` · `ending` ∧ VOD `none` · `freezing` 이거나, 회차가 안 닫힘)와
+`round_id` 없는 옛 사슬의 같은 상태 세션입니다. 만료 판정
+(`media/internal/index/expiry_store.go` 의 `expiryRoundsSettledSQL`)과 같은
+조건이고, 구간 꼭대기(만료 구간의 최대 seq)는 보지 않아 판정보다 넓게
+나옵니다. `min_seq` 는 세션마다 그 세션 조각의 최소 seq 입니다. 회차는 그
+회차 행들의 `min_seq` 가운데 가장 작은 값이, `round_id` 없는 세션은 자기
+`min_seq` 가 구간 꼭대기보다 크면 그 방송을 막지 않습니다. `min_seq` 가 빈
+세션(조각 없음)은 막지 않습니다. 흐름 · 승인 · 가림은 「M6 읽기 질의」
+그대로이고, `<stream_id>` 는 그 줄의 `stream_id` 입니다.
+
+```shell
+cat >"${payload}/expiry_deferred.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '30s';
+SET LOCAL lock_timeout = '3s';
+SET LOCAL search_path = pg_catalog, public;
+SET ROLE media_owner;
+WITH open_round AS (
+    SELECT s.round_id FROM stream_sessions s
+     WHERE s.stream_id = '<stream_id>' AND s.round_id IS NOT NULL
+     GROUP BY s.round_id
+    HAVING pg_catalog.bool_or(s.state IN ('live', 'ending') AND s.vod_state IN ('none', 'freezing'))
+        OR pg_catalog.max(s.round_closed_at) IS NULL
+)
+SELECT s.round_id, s.session_id, s.state, s.vod_state,
+       s.round_closed_at IS NOT NULL AS round_closed, s.started_at, s.ending_at,
+       (SELECT pg_catalog.min(g.seq) FROM stream_segments g
+         WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id) AS min_seq
+  FROM stream_sessions s
+ WHERE s.stream_id = '<stream_id>'
+   AND (s.round_id IN (SELECT round_id FROM open_round)
+        OR (s.round_id IS NULL AND s.state IN ('live', 'ending')
+            AND s.vod_state IN ('none', 'freezing')))
+ ORDER BY s.started_at, s.session_id;
+RESET ROLE;
+SQL
+make_read expiry_deferred "${payload}/expiry_deferred.sql" &&
+  send_step expiry_deferred
+```
+
+*   기록에는 행 수와 `state` · `vod_state` · `round_closed` 의 짝만
+    옮깁니다. `stream_id` · 세션 · 회차 식별자는 볼트 raw · Jira 에 옮기지
+    않습니다(「M6 읽기 질의」 의 하한 질의와 같은 까닭).
+*   행이 나오면 처분은 kty 회부입니다(멈춤 자리). 고착을 푸는 손 SQL 은
+    이 런북에 없습니다 — 회차 · 사슬 상태를 손으로 바꾸면 VOD 동결 ·
+    판정식과 어긋납니다. 미루는 동안은 아무것도 지우지 않아 안전한 쪽입니다
+    (대가는 보존 기간을 넘겨 남는 것). 짝 신호 · 원인은 Media 교체 런북
+    「만료 영구 미룸」 입니다.
 
 ## POK-525 운영 SQL 2 · 읽기 질의
 
@@ -3110,6 +3422,216 @@ auth 롤링 동안 옛 태스크 · 새 태스크가 섞여, 어느 토큰이든
 *   **prod/media apply 뒤**: 정책을 되돌리면 응답기가 다음 기동에서 그릇을
     못 읽어 기동이 막힙니다(fail-closed). 되돌리기는 응답기 렌더 → media
     정책 → runtime 출력 한 방향으로만 합니다.
+
+## 1단-나 ③ — 만료 창구 전용 토큰(POK-551)
+
+Media 사이드카의 60일 만료 실행기가 clip 을 부를 때 쓰는 전용 토큰(그릇
+`pokeclip/prod/expired-broadcasts-token`)을 만들고, 값을 넣고, clip · Media 에
+잇는 절차입니다. 머리의 실행 규칙(kty 로컬 터미널 · 쓰기마다 직전 승인 ·
+출력을 세션에 붙이지 않음)이 그대로 걸립니다. AccessDenied 가 나오면 그
+자리에서 멈추고 kty 에게 보고합니다.
+
+*   **전용 토큰**: clip 의 `GET /internal/broadcasts/expired` 하나만 여는
+    토큰입니다. 헤더 `X-Expired-Broadcasts-Token` 으로 싣고, 출발지가 Media
+    프라이빗 서브넷 대역(`EXPIRED_BROADCASTS_ALLOWED_CIDRS`)이어야 합니다.
+    clip 은 `EXPIRED_BROADCASTS_TOKEN` 으로, Media 는 시작 스크립트가 런타임
+    출력 `clip_expiry_token_secret_arn` 의 그릇을 읽어 사이드카 파일로 받습니다.
+    한계: 그 대역은 `media_az` 의 프라이빗 서브넷 전체라 같은 AZ 의 ECS
+    태스크도 출발지 검사를 지납니다 — 그 자리는 토큰 하나가 막습니다.
+*   **그릇마다 값을 따로 만듭니다.** resolve 전용 토큰(「1단-나 ②」)의 값을
+    다시 쓰지 않고, `INTERNAL_API_TOKEN` 과도 달라야 합니다 — 같으면 clip 이
+    부팅을 거부합니다. 한 값이 새면 그 창구 하나만 열리게 하려는 분리입니다.
+
+### 1단-나 ③ 순서 한눈에
+
+| 걸음 | 하는 일 | 승인 지점 |
+|---|---|---|
+| 1 | 직전 점검 → runtime plan · apply → 2-3 다시 | ⑤ 보고 · plan 승인 |
+| 2 | 전용 토큰 값 넣기 | 값 입력 |
+| 3 | platform plan · apply · clip 기동 확인 | plan 승인 |
+| 4 | prod/media plan · apply(읽기 권한 · SG 짝) | plan 승인 |
+| 5 | 만료 주소 켜기 · 확인(설정 반영 교체) | 교체 규칙 |
+| 6 | 만료 스위치 켬 — kty 결정, 이 순서 밖(PDT 스위치 2 뒤 · 「만료 스위치 손 SQL」 의 「켜기 전 조건」 6) | send-command |
+
+세 경고가 이 순서에 걸립니다.
+
+*   **runtime apply(1) 전에는 prod/media plan 이 새 출력
+    `clip_expiry_token_secret_arn` 이 없어 실패합니다.** `clip_internal_url`
+    이 빈 값이어도, 긴급 apply 여도 같습니다. POK-551 머지 뒤의 prod/media
+    plan 은 1 뒤에만 돕니다([prod/media](/infra/terraform/prod/media/README.md)).
+*   **runtime apply(1) 뒤 값 넣기(2) 전에는 platform apply 를 하지
+    않습니다.** 어느 PR 의 platform apply 든 같습니다 — platform 은 런타임
+    출력을 읽으므로 1 뒤의 plan 은 clip 태스크 정의에 값 없는 그릇을
+    넣습니다. 그 태스크가 뜨는지는 미확인입니다.
+*   **운영 SQL 재실행(「M6 스키마 재실행」 — 스위치 표)은 1 뒤, 5 의
+    `SWITCH 0` 판정 전에 합니다.** 재실행은 「재실행 걸음」 4 의 실행기 켬
+    plan 이 실행기 자원만이기를 단언하는데, 1 전에 돌면 새 그릇이 같은 plan
+    에 잡혀 거기서 멈춥니다. 어느 흐름의 실행기 켬이든 같습니다(PDT 판
+    게이트 손 SQL · M6 읽기 질의 등) — 머지 뒤 1 을 바로 하고, 그 사이 다른
+    SQL 흐름은 1 뒤로 미룹니다. 5 전에 표가 없으면 `SWITCH read_failed` 가
+    나옵니다.
+
+### 1단-나 ③ 1. runtime plan · apply
+
+직전 점검은 「1단-나 ② 직전 점검 규칙」 그대로입니다. POK-551 은
+`runtime-1a` 묶음을 바꾸지 않습니다 — ① 은 종료 0 이 기대값이고,
+CHANGED(3)면 다른 PR 의 묶음 변경이니 ⑤ 보고와 함께 묻고 답을 들은 뒤에만
+`--accept` 합니다. ② · ③ 의 멈춤 조건은 「1단-나 ② 1」 과 같습니다.
+
+2 의 plan · 확인 · apply · 적용 확인 꼴로 합니다. 기대 변화는 아래뿐입니다
+— 그 밖의 변화가 있으면 apply 하지 않습니다.
+
+*   `Plan: 1 to add, 0 to change, 0 to destroy`.
+*   추가: 그릇 하나(`module.secret_shells` 의
+    `pokeclip/prod/expired-broadcasts-token`).
+*   출력: `app_secret_arns.clip` 에 `EXPIRED_BROADCASTS_TOKEN` ·
+    `app_env.clip` 에 `EXPIRED_BROADCASTS_ALLOWED_CIDRS` · `media_secret_arns`
+    원소 하나 더(resolve 전용 그릇은 그대로) · 새 출력
+    `clip_expiry_token_secret_arn`.
+
+apply 뒤 2-3 판정을 「1단-나 ② 2」 처럼 다시 합니다. `principal-check.sh
+runtime-1a` 의 증거 `targets.tsv` 에서 새 그릇이 `secrets` 태그 행으로
+대상에 들어왔는지 봅니다.
+
+### 1단-나 ③ 2. 전용 토큰 값 넣기
+
+**platform apply(3) 전 필수**입니다. 「1단-나 ② 4」 와 같은 꼴이고 종류만
+다릅니다. 값은 이 그릇을 위해 새로 만듭니다.
+
+```shell
+cd "$(git rev-parse --show-toplevel)"
+# 하위 셸 — 추적 · allexport 끔과 umask 가 밖으로 새지 않고, 값 파일은
+# put-secret 이 실패하거나 중간에 멈춰도 지워진다.
+(
+  set +o xtrace +o allexport
+  umask 077
+  value_file="$(mktemp)" || exit 1
+  trap 'rm -f "${value_file}"' EXIT
+  openssl rand -hex 32 >"${value_file}" || exit 1
+  bash infra/terraform/scripts/put-secret-from-file.sh \
+    expired-broadcasts-token "${value_file}"
+)
+printf 'put-secret 종료 %s\n' "$?"
+```
+
+*   통과 = `SECRET PUT OK pokeclip/prod/expired-broadcasts-token <VersionId>`.
+    종료 코드별 처리는 [엣지 비밀 런북](edge-secrets.md) 「비밀 입력
+    스크립트」 표입니다. 종료 2(모르는 종류)면 POK-551 판이 아닌
+    체크아웃이니 멈춥니다. 종료 4(DENIED)는 다시 시도하지 않고 멈춥니다.
+*   화면 · 세션에 값을 내지 않습니다.
+
+### 1단-나 ③ 3. platform
+
+O7d 직전 점검 → plan → 아래 변화를 확인 → **plan 승인** → apply.
+
+*   clip 태스크 정의: secrets 에 `EXPIRED_BROADCASTS_TOKEN`, environment 에
+    `EXPIRED_BROADCASTS_ALLOWED_CIDRS` 와 `FORWARD_HEADERS_STRATEGY =
+    "native"`(platform 이 넣는 값 — 처음 apply 하는 판이면 함께 보임).
+*   clip 실행 역할 읽기 정책에 새 그릇 하나 · 공개 웹 ACL 데이터 보호
+    헤더에 `x-expired-broadcasts-token`(처음 apply 하는 판이면 함께 보임).
+*   plan 이 `EXPIRED_BROADCASTS_ALLOWED_CIDRS` · `FORWARD_HEADERS_STRATEGY`
+    전제 조건으로 멈추면 apply 하지 않고 멈춥니다 — 런타임 출력 · services.tf
+    가 어긋난 것입니다.
+
+apply 뒤 clip 옛 태스크가 새 태스크로 모두 바뀐 다음, clip 부팅 로그에 부팅
+거부 문구(`pokeclip.internal-api.expired-broadcasts.` 로 시작하는 줄 ·
+`server.forward-headers-strategy` · `server.tomcat.remoteip`)가 없고 health
+가 통과해야 다음입니다.
+
+### 1단-나 ③ 4. prod/media plan · apply
+
+O7e 직전 점검(멈춤 자리 묶음 포함) → plan → 아래 변화만 있는지 확인 →
+**plan 승인** → apply. tfvars 의 `clip_internal_url` 은 아직 빈 값입니다.
+
+*   바뀜: `module.media_host.aws_iam_role_policy.media` — `SecretsRead` 의
+    Resource 에 `expired-broadcasts-token` 그릇이 더해짐(다른 그릇은 그대로).
+*   더함(POK-551 머지 뒤 첫 prod/media apply 만):
+    `module.media_host.aws_vpc_security_group_egress_rule.media["clip_expiry"]`
+    · `module.media_host.aws_vpc_security_group_ingress_rule.clip_from_media`
+    — Media ↔ clip 짝이고 주소와 상관없이 늘 있습니다.
+*   떠 있는 상자의 user_data 는 `ignore_changes` 라 바뀌지 않습니다.
+
+### 1단-나 ③ 5. 만료 주소 켜기
+
+tfvars 에 `clip_internal_url = "http://clip.pokeclip.internal:8081"`(포트는
+platform 출력 `service_ports.clip` 과 같아야 plan 이 통과)을 넣고
+[Media 교체 런북](media-swap.md) 「설정 반영 교체」(또는 공개 전이면
+「제자리 전환」)로 상자에 넣습니다. 새 상자의 사이드카 · 설치 묶음은 같은
+런북 「만료 롤백 하한 · 만료 스위치」 의 하한 이상이어야 합니다.
+
+기동 판정 뒤 같은 런북 「만료 확인 스크립트」 를 `started` 로 돌립니다.
+
+*   통과 = `EXPIRY STARTED OK` · `SWITCH 0`(스위치는 아직 끔). 이어서 같은
+    런북 「만료 창구 탐침」 을 돌려 `EXPIRY PROBE OK` 를 봅니다(「켜기 전
+    조건」 3).
+*   **토큰을 받지 못하면 시작 판정 줄에는 아무것도 나오지 않습니다.**
+    시작 스크립트는 받기 실패를 줄 없이 넘기고 상자는 정상으로 뜹니다.
+    판별 신호는 사이드카 저널의 ERROR `expiry_disabled reason=token_file`
+    하나이고, 스크립트는 `EXPIRY disabled_token_file` 로 냅니다. 그러면
+    4(읽기 권한) · 2(값) 를 다시 보고, 고친 뒤 상자를 다시 기동해야 토큰을
+    받습니다.
+*   그 밖의 `EXPIRY disabled_<사유>` 의 뜻은 media README 「60일 만료」
+    입니다(`privilege` · `privilege_check` 는 운영 SQL 권한, `no_url` 은 주소가
+    렌더되지 않은 판).
+*   `SECRET COUNT box` 대조도 이 토큰을 셉니다 — 0 이 아니거나
+    `SECRET COUNT FAIL clip-expiry` 면 멈춥니다([media-host
+    README](/infra/media-host/README.md) 「운영 확인 스크립트」).
+
+스위치를 켜는 것(6)은 「만료 스위치 손 SQL」 의 「켜기 전 조건」 이 선 뒤
+kty 가 정합니다.
+
+### 1단-나 ③ 기록
+
+볼트 raw(비밀 값 훑기 뒤 · 계정 ID · ARN 은 가림)에 걸음마다 명령 · 판정 ·
+시각과 put-secret 의 `VersionId`, 「만료 확인 스크립트」 출력을 남기고, POK-551
+에 코멘트합니다.
+
+### 1단-나 ③ 되돌리기
+
+**값 교체(토큰이 샜을 때 · 창구는 그대로).**
+
+1.  2 와 같은 꼴로 다른 값을 넣습니다 — 새 버전이 되고 옛 값은
+    `AWSPREVIOUS` 로 남습니다(**kty 승인**).
+1.  clip 을 강제 재배포합니다(「1단-나 ② 8」 의 `update-service` 꼴 ·
+    **kty 승인**). ECS 는 새 배포 · 새 태스크라야 새 값을 받습니다. 옛
+    태스크가 모두 바뀔 때까지가 걸음입니다.
+1.  Media 는 사이드카 기동 때 한 번 읽으므로, 상자를 다시 기동하기 전까지
+    옛 값을 씁니다. 스위치가 켜져 있으면 그동안 만료 폴링은
+    `expiry_poll status=401` 로 실패합니다. 다만 401 이어도 재시도 집합에
+    남은 방송은 회차마다 폴링보다 먼저 처리되어 지워질 수 있습니다(다음
+    처음부터 훑기 — 최대 하루 — 까지). 그 방송도 보존 기간이 지난 정상 판정
+    대상입니다. 삭제를 바로 멈추려면 1 전에 스위치를 끕니다(「만료 스위치
+    손 SQL」 의 끔) — 끈 동안은 폴링도 하지 않아 그 줄도 나지 않습니다.
+    다시 기동은 방송 없는 시간대에 「설정 반영 교체」 로 하고, 그 뒤 다시
+    켜는 것은 「켜기 전 조건」 그대로 kty 가 정합니다.
+
+**값 넣기 전에 멈출 때(runtime apply(1) 뒤 · 2 전).** 그대로 두면 위
+「1단-나 ③ 순서 한눈에」 의 두 번째 경고가 풀리지 않습니다 — 어느 PR 의
+platform apply 든 값 없는 그릇을 clip 태스크 정의에 넣습니다. 이어 가지
+않으면 아래 「창구 닫기」 1 의 커밋으로 runtime plan · apply 까지만 합니다.
+platform 은 그 이름을 아직 받은 적이 없어 platform apply 가 따로 필요 없고,
+Media 는 주소가 비어 있어 스위치를 끌 것도 없습니다. 그릇은 남겨 둬도 되고,
+지우려면 「창구 닫기」 2 의 순서입니다(prod/media 를 아직 apply 하지 않았으면
+Media 쪽 걸음은 없습니다).
+
+**창구 닫기(코드 되돌림).** platform 에는 창구를 따로 끄는 손잡이가
+없습니다 — clip 창구는 런타임이 `EXPIRED_BROADCASTS_TOKEN` 을 주지 않을 때만
+닫힙니다. 먼저 스위치를 끕니다(「만료 스위치 손 SQL」). 그 뒤 runtime 코드
+되돌림 → runtime apply → platform apply 순서이고, 그릇을 지우는 것은 맨
+뒤입니다 — 「1단-나 ② 되돌리기」 의 두 단계와 같은 까닭(그릇을 먼저 지우면
+clip 태스크 정의가 지워질 그릇을 가리킨 채 남습니다).
+
+1.  `app_secret_arns.clip` 의 `EXPIRED_BROADCASTS_TOKEN` 과 `app_env.clip` 의
+    `EXPIRED_BROADCASTS_ALLOWED_CIDRS` 를 빼는 커밋(그릇 · `media_secret_arns`
+    · `clip_expiry_token_secret_arn` 은 그대로) → runtime plan · apply →
+    platform plan · apply → clip 옛 태스크 교체 완료. 스위치를 끈 동안은
+    Media 의 만료 폴링 줄이 없고, 다시 켜면 `expiry_poll status=401` 이
+    됩니다(세 번 이어지면 `expiry_stalled value=1`).
+1.  그릇까지 지우려면 Media 쪽을 먼저 걷습니다 — 만료 주소를 비운 상자로
+    바꾸고(Media 교체 런북 「만료 롤백 하한 · 만료 스위치」), prod/media 가
+    `clip_expiry_token_secret_arn` 을 읽지 않는 판이 된 뒤에 그릇을 지우는
+    커밋 → runtime plan · apply 입니다. 그 출력이 먼저 사라지면 prod/media
+    plan 이 그 이름으로 멈춥니다.
 
 ## POK-306 runtime apply — 채팅 원본 버킷 · chat-collector 값
 

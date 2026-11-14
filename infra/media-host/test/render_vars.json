@@ -1,5 +1,6 @@
 {
   "broadcast_topic_arn": "",
+  "clip_internal_url": "",
   "control_upstream": "",
   "detached_log_driver": "journald",
   "edge_bounds_kvs_arn": "",

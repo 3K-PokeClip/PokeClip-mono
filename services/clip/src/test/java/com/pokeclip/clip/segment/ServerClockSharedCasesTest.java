@@ -75,7 +75,7 @@ class ServerClockSharedCasesTest {
             long seq = r.path("seq").asLong();
             long start = r.path("startAtMs").asLong();
             rows.add(new Row(seq, start + PTS_SHIFT * seq, r.path("durationMs").asInt(), start, start, v2 ? 2 : null,
-                    true));
+                    true, null));
         }
         long t = c.path("t").asLong();
 

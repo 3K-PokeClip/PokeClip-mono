@@ -118,6 +118,8 @@ s3:GetBucketOwnershipControls	ap-northeast-2	*
 # 계약9 — SNS FIFO 주제 · 구독 · SQS FIFO 큐 · 큐 정책 · redrive(D3 ~ D5)
 sns:CreateTopic	ap-northeast-2	*
 sns:GetTopicAttributes	ap-northeast-2	*
+# 경보 주제(us-east-1 — POK-525 prod/edge)의 정책 읽기(2-3 래퍼).
+sns:GetTopicAttributes	us-east-1	*
 sns:SetTopicAttributes	ap-northeast-2	*
 sns:TagResource	ap-northeast-2	*
 sns:ListTagsForResource	ap-northeast-2	*

@@ -7,6 +7,8 @@ import { initialRecipe } from './useClipEditorMockState';
 
 const BASE = Date.parse('2026-11-04T01:00:00Z');
 const RANGE = { startSeconds: 40, endSeconds: 100 };
+/** 저장 판정(savable)이 낸 컷 — 목록 PDT 축 ms */
+const CUT = { inMs: BASE + 40_000, outMs: BASE + 100_000 };
 
 function docFor(
   muted: Record<string, boolean> = {},
@@ -15,22 +17,22 @@ function docFor(
 ) {
   return recipeDocumentOf({
     streamId: 'S-1',
-    base: BASE,
+    cut: CUT,
     recipe: initialRecipe(RANGE, muted, volumes),
     saved,
   });
 }
 
 describe('recipeDocumentOf', () => {
-  it('구간은 기준점 + 방송 시작 기준 초, 5초~3분 밖이면 맞춘다', () => {
+  it('컷은 저장 판정(savable)이 낸 ms 그대로다 — 다시 셈하거나 5초 · 3분으로 맞추지 않는다', () => {
     expect(docFor().cut).toEqual({ inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 });
-    const short = recipeDocumentOf({
+    const odd = recipeDocumentOf({
       streamId: 'S-1',
-      base: BASE,
+      cut: { inMs: BASE + 10_123, outMs: BASE + 11_456 },
       recipe: initialRecipe({ startSeconds: 10, endSeconds: 11 }),
       saved: null,
     });
-    expect(short.cut).toEqual({ inAtMs: BASE + 10_000, outAtMs: BASE + 15_000 });
+    expect(odd.cut).toEqual({ inAtMs: BASE + 10_123, outAtMs: BASE + 11_456 });
   });
 
   it('처음 값은 최종 믹스(트랙 0) 하나 · 1배다', () => {

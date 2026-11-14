@@ -73,6 +73,8 @@ readonly PRINCIPAL_DIR="${DATA_DIR}/principal_sim"
 # 인증서의 두 리전에서 태그 해석 · 인증서 읽기를 부른다.
 # iam:SimulatePrincipalPolicy 는 도구 자신의 호출이라 넣지 않는다(거부되면
 # 종료 2 로 드러남).
+# SNS 주제 정책 읽기는 행의 리전이라 서울(계약9 주제)과 us-east-1(경보 주제 —
+# POK-525 prod/edge) 둘이다.
 PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
   'iam:GetUser us-east-1' 'iam:ListRoles us-east-1'
   'iam:ListAttachedRolePolicies us-east-1'
@@ -83,6 +85,7 @@ PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
   'secretsmanager:GetResourcePolicy ap-northeast-2'
   'ecr:GetRepositoryPolicy ap-northeast-2'
   'sns:GetTopicAttributes ap-northeast-2'
+  'sns:GetTopicAttributes us-east-1'
   'sqs:GetQueueAttributes ap-northeast-2'
   'acm:DescribeCertificate ap-northeast-2'
   'acm:DescribeCertificate us-east-1')
@@ -206,7 +209,8 @@ readonly LATE_TARGETS
 # 의 ARN 끝(ID)은 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와 같은 방식 —
 # 근거는 prod_targets.tsv 의 platform 덩어리 주석). 끝 덩어리
 # (platform-listener-rule 부터)는 POK-479 가 더한 보안 리뷰 M 다섯과
-# CloudFront 함수 로그 그룹 셋이다. ECS 서비스 로그 그룹은 platform 다섯
+# CloudFront 함수 로그 그룹 셋이다. 맨 끝 둘은 /dvr 하한 함수(POK-525)의
+# 함수 행 · 로그 그룹 행이다. ECS 서비스 로그 그룹은 platform 다섯
 # (chat 둘은 POK-306)과 workers 둘(render · upload — 첫 단계 workers ·
 # POK-408)이다. 런타임 2단 상태 객체(prod/runtime-2 — 첫 단계 O7f)와 일꾼
 # 배치 상태 객체(prod/workers — 첫 단계 workers)도 여기서 본다.
@@ -288,6 +292,12 @@ FOLLOWUP_TARGETS=(
 'logs:DeleteLogGroup'
   'cf-function-log-group-apex-request O7f arn:arn:aws:logs:us-east-1:'\
 '${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-apex-request '\
+'logs:DeleteLogGroup'
+  'cf-function-dvr-floor O7f arn:arn:aws:cloudfront::${ACCOUNT}:'\
+'function/pokeclip-prod-dvr-floor '\
+'cloudfront:UpdateFunction,cloudfront:PublishFunction'
+  'cf-function-log-group-dvr-floor O7f arn:arn:aws:logs:us-east-1:'\
+'${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-dvr-floor '\
 'logs:DeleteLogGroup')
 readonly FOLLOWUP_TARGETS
 # prod ACM 검증 레코드(prod/certs 의 aws_route53_record.validation — POK-484)
@@ -328,8 +338,10 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 의 그 덩어리 주석). O7a 의 스물셋은
 # network 의 인터페이스 엔드포인트 · 엔드포인트 SG 를 만들고 되돌릴 때
 # provider 가 부르는 동작과, 확인 · 되돌리기 절차가 부르는 동작이다. 그 뒤의
-# 둘은 엔드포인트 생성의 Route 53 종속 동작(두 리전), 맨 끝 하나는 확인
-# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석).
+# 둘은 엔드포인트 생성의 Route 53 종속 동작(두 리전), 그 뒤 하나는 확인
+# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석). 맨 끝 O7f 의
+# 셋은 /dvr 하한 함수(POK-525)의 provider 재조회 · 코드 갱신과 판정 B′ 의
+# test-function 이다(근거는 O7f 묶음 파일의 그 덩어리 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -397,8 +409,59 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7a\tssm:GetCommandInvocation\tap-northeast-2\t*'
   $'O7a\troute53:AssociateVPCWithHostedZone\tus-east-1\t*'
   $'O7a\troute53:AssociateVPCWithHostedZone\tap-northeast-2\t*'
-  $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*')
+  $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*'
+  $'O7f\tcloudfront:GetFunction\tus-east-1\t*'
+  $'O7f\tcloudfront:UpdateFunction\tus-east-1\t*'
+  $'O7f\tcloudfront:TestFunction\tus-east-1\t*')
 readonly STAGE_FOLLOWUP_ROWS
+# /dvr 하한 경보(POK-525 계획 Ⓓ-3 — prod/edge dvr_floor_alarms.tf)의 대상
+# 행. 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작」 이다. 경보 셋 ·
+# 알림 주제는 이름이 고정이라 구체 ARN 이고, 지표 필터는 log-group 자원
+# 동작이라(list_logs.html PutMetricFilter · DeleteMetricFilter) dvr-floor
+# 함수 로그 그룹 ARN 으로 묻는다. dev 주체가 이 동작을 가지면 K5 경보를
+# 지우거나 끄거나 덮어써 조용하게 만든다.
+# shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+readonly ALARM_ARN='arn:arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:'
+readonly ALARM_ACTIONS='cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,'\
+'cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState'
+# shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+ALARM_TARGETS=(
+  'edge-metric-filter-dvr-floor O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
+'log-group:/aws/cloudfront/function/pokeclip-prod-dvr-floor '\
+'logs:PutMetricFilter,logs:DeleteMetricFilter'
+  'edge-alarm-topic O7f arn:arn:aws:sns:us-east-1:${ACCOUNT}:'\
+'pokeclip-prod-edge-alarms sns:Publish,sns:Subscribe,sns:SetTopicAttributes,'\
+'sns:DeleteTopic')
+# 경보 셋 — 자원 키 꼬리 = 경보 이름 꼬리(pokeclip-prod-dvr-floor-<꼬리>).
+for alarm_tail in value-invalid kvs-error execution-errors; do
+  alarm_entry="edge-alarm-dvr-floor-${alarm_tail} O7f ${ALARM_ARN}"
+  alarm_entry+="pokeclip-prod-dvr-floor-${alarm_tail} ${ALARM_ACTIONS}"
+  ALARM_TARGETS+=("${alarm_entry}")
+done
+unset alarm_tail alarm_entry
+readonly ALARM_TARGETS
+# 그 경보를 만들고 판정 K 가 부르는 O7f 묶음 행(근거는 O7f 묶음 파일의 그
+# 덩어리 주석).
+ALARM_STAGE_ROWS=(
+  $'sns:CreateTopic\tus-east-1\t*'
+  $'sns:GetTopicAttributes\tus-east-1\t*'
+  $'sns:SetTopicAttributes\tus-east-1\t*'
+  $'sns:DeleteTopic\tus-east-1\t*'
+  $'sns:TagResource\tus-east-1\t*'
+  $'sns:UntagResource\tus-east-1\t*'
+  $'sns:ListTagsForResource\tus-east-1\t*'
+  $'logs:PutMetricFilter\tus-east-1\t*'
+  $'logs:DescribeMetricFilters\tus-east-1\t*'
+  $'logs:DeleteMetricFilter\tus-east-1\t*'
+  $'logs:TestMetricFilter\tus-east-1\t*'
+  $'cloudwatch:PutMetricAlarm\tus-east-1\t*'
+  $'cloudwatch:DescribeAlarms\tus-east-1\t*'
+  $'cloudwatch:DeleteAlarms\tus-east-1\t*'
+  $'cloudwatch:SetAlarmState\tus-east-1\t*'
+  $'cloudwatch:TagResource\tus-east-1\t*'
+  $'cloudwatch:UntagResource\tus-east-1\t*'
+  $'cloudwatch:ListTagsForResource\tus-east-1\t*')
+readonly ALARM_STAGE_ROWS
 
 #######################################
 # 데이터 파일의 행(주석 · 빈 줄 뺌)을 낸다.
@@ -991,6 +1054,8 @@ expect_stage_order_matches_wrapper() {
 # list_elbv2.html 의 loadbalancer/app/ · listener/app 꼴(POK-480 — 태그
 # 해석 필터 조각과 다르다, method_problem), wafv2 의 loadbalancer/app/ 은
 # DisassociateWebACL 의 ALB 유형(list_wafv2.html · 대조 2026-10-25).
+# cloudwatch 의 alarm 은 /dvr 하한 경보(POK-525 — list_cloudwatch.html ·
+# 대조 2026-11-11)다.
 # Arguments:
 #   서비스 접두.
 # Outputs:
@@ -1013,6 +1078,7 @@ service_types() {
     rds) printf ' db pg subgrp \n' ;;
     logs) printf ' log-group delivery-source delivery-destination \n' ;;
     sns) printf ' topic \n' ;;
+    cloudwatch) printf ' alarm \n' ;;
     sqs) printf ' queue \n' ;;
     ssm) printf ' instance \n' ;;
     elasticloadbalancing)
@@ -1225,7 +1291,8 @@ expect_target_rows_consistent() {
 # us-east-1, providers.tf)면 us-east-1, 그 밖(runtime-1a · O7d)은 서울이다.
 # ARN 에서 가져오지 않는다 — ARN 과 리전 칸을 함께 바꾼 변이를 놓치므로.
 # 그 밖 서비스는 서울이다(prod 의 리전 자원은 edge 의 us-east-1 자원 말고
-# 모두 서울).
+# 모두 서울). SNS 주제(runtime-1a 계약9 주제는 서울 · O7f 경보 주제는
+# us-east-1)와 CloudWatch 경보(O7f — POK-525)도 로그 · WAF 와 같이 가른다.
 # Arguments:
 #   서비스 접두, 첫 단계, 자원 키.
 # Outputs:
@@ -1244,7 +1311,7 @@ expected_target_region() {
         *) ;;
       esac
       ;;
-    logs | wafv2)
+    logs | wafv2 | sns | cloudwatch)
       if [[ "${stage}" == O7f ]]; then
         printf 'us-east-1\n'
       else
@@ -2133,6 +2200,77 @@ expect_runtime_bundle_creates_edge_bounds_kvs() {
   testlib::ok "runtime-kvs → runtime-1a 묶음에 하한 KVS 그릇 동작 넷"
 }
 
+#######################################
+# 데이터 단언(POK-525 Ⓓ-3): /dvr 하한 경보 대상 행(ALARM_TARGETS)이 그 첫
+# 단계 · 해석 방법으로 있고 반드시 묻는 동작을 담으며, O7f 묶음에 경보를
+# 만드는 · 판정 K 의 행(ALARM_STAGE_ROWS)이 동작 · 리전 · 자원 패턴 그대로
+# 있다.
+# Globals:
+#   ALARM_TARGETS, ALARM_STAGE_ROWS, STAGE_DIR
+#######################################
+expect_alarm_targets() {
+  local problem rows entry
+  problem="$(pinned_target_problem "${ALARM_TARGETS[@]}")"
+  if [[ -n "${problem}" ]]; then
+    testlib::fail "alarm-targets: ${problem}"
+    return
+  fi
+  rows="$(data_rows "${STAGE_DIR}/O7f.tsv")"
+  for entry in "${ALARM_STAGE_ROWS[@]}"; do
+    if ! has_line "${rows}" "${entry}"; then
+      testlib::fail "alarm-targets: O7f 묶음에 행이 없음 — ${entry//$'\t'/ }"
+      return
+    fi
+  done
+  testlib::ok "alarm-targets → 경보 대상 ${#ALARM_TARGETS[@]}행 · O7f 묶음" \
+    "행 ${#ALARM_STAGE_ROWS[@]}개가 그대로"
+}
+
+#######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7e · O7f 에 돌려(주체 넷이
+# 풀리는 가짜 aws), 경보 대상 행이 O7f 부터 동작마다 시뮬레이터 요청에
+# 실리고 O7e 에는 실리지 않는지 본다(로그 그룹 행의 「:log-stream:」 꼴은
+# expect_log_group_forms_asked 가 본다).
+# Globals:
+#   ALARM_TARGETS, FAKE_USER, run_status, run_out
+#######################################
+expect_alarm_rows_asked() {
+  local case_dir stage dir entry key want problem
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "alarm-asked: 시험 준비 실패"
+    return
+  }
+  principal_reads_table >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  for stage in O7e O7f; do
+    testlib::run "${case_dir}" "principal-${stage}" env \
+      FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+      FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" "${stage}"
+    dir="$(compgen -G \
+      "${case_dir}/home/.pokeclip-precheck/principal-${stage}-*")"
+    if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+      testlib::fail "alarm-asked: ${stage} 실행이 종료 ${run_status} —" \
+        "$(cat -- "${run_out}.stderr")"
+      return
+    fi
+    want=1
+    [[ "${stage}" == O7e ]] && want=0
+    for entry in "${ALARM_TARGETS[@]}"; do
+      read -r key _ <<<"${entry}"
+      # 지표 필터 행은 함수 로그 그룹 행(O7f)과 ARN 이 같아 「O7e 0」 을 볼 수
+      # 없다 — 두 행 모두 첫 단계 O7f 다.
+      [[ "${want}" -eq 0 && "${key}" == edge-metric-filter-* ]] && continue
+      problem="$(runtime_row_problem "${dir}" "${key}" "${want}")"
+      if [[ -n "${problem}" ]]; then
+        testlib::fail "alarm-asked: ${stage} — ${problem}"
+        return
+      fi
+    done
+  done
+  testlib::ok "alarm-asked → 경보 대상 행이 O7f 부터 동작마다 시뮬레이터" \
+    "요청에 실림(O7e 0)"
+}
+
 main() {
   testlib::init data_files_test
   expect_bundle_set
@@ -2153,6 +2291,8 @@ main() {
   expect_runtime_bundle_puts_secret_value
   expect_runtime_bundle_puts_bucket_cors
   expect_runtime_bundle_creates_edge_bounds_kvs
+  expect_alarm_targets
+  expect_alarm_rows_asked
   expect_late_targets
   expect_followup_targets
   expect_acm_validation_targets

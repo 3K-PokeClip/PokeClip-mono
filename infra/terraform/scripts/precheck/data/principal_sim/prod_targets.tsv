@@ -135,7 +135,8 @@ jobs-upload-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-pr
 # 읽기(GetKey · ListKeys)는 묻지 않는다 — cf-kvs-data 가 읽기를 묻는 것은 그
 # 값이 CDN 비밀이라서다. 태그 동작(TagResource · UntagResource)도 cf-kvs 와
 # 달리 묻지 않는다 — 이 덩어리 머리 규칙대로 구체 ARN 행이라 태그를 바꿔도
-# 대상에서 빠지지 않는다.
+# 대상에서 빠지지 않는다. O7f 부터 edge 함수(dvr-floor)가 이 그릇을
+# 연결한다 — 첫 단계 runtime-1a 라 O7f 판정에도 이 두 행이 돈다.
 edge-bounds-kvs	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000e1	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore	none	-
 edge-bounds-kvs-data	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000e1	key-value-store	us-east-1	cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
 
@@ -310,6 +311,7 @@ cf-distribution	O7f	tag:cloudfront:distribution	distribution	us-east-1	cloudfron
 cf-function-live-auth	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-live-auth	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-deny-default	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-deny-default	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-apex-request	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-apex-request	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
+cf-function-dvr-floor	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-dvr-floor	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-kvs	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000c1	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-kvs-data	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000c1	key-value-store	us-east-1	cloudfront-keyvaluestore:GetKey,cloudfront-keyvaluestore:ListKeys,cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
 
@@ -317,9 +319,10 @@ cf-kvs-data	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000
 # 로그 전달 · apex 객체 · 함수 로그 그룹(POK-479). WAF 는 REGIONAL WAF 행과
 # 같은 방식이다(표본 ID · 같은 동작 · ARN 의 범위 조각은 global · 태그로
 # 풀지 않는 까닭도 같다). 로그 그룹(WAF 차단 로그 · media 배포 표준 로그 ·
-# 함수 로그 셋)은 이름이 고정이라 구체 ARN 이다. 함수 로그 그룹 이름은
-# prod/edge function_logs.tf 의 /aws/cloudfront/function/<함수 이름>(함수
-# 이름은 위 함수 행)이고 us-east-1 이다. apex 버킷은 이름 끝이 생성 때 정해져
+# 함수 로그 넷 — dvr-floor 는 POK-525)은 이름이 고정이라 구체 ARN 이다.
+# 함수 로그 그룹 이름은 prod/edge function_logs.tf 의
+# /aws/cloudfront/function/<함수 이름>(함수 이름은 위 함수 행)이고
+# us-east-1 이다. apex 버킷은 이름 끝이 생성 때 정해져
 # (bucket_prefix — modules/cdn_static_site) 태그로 푼다 — 같은 태그의 다른
 # prod 버킷(상태 · rewind · clips · 프로필 사진 · 채팅 원본)도 함께 풀려
 # 같은 동작을 묻는다. 첫 단계(O7f) 직전에는 apex 버킷이 아직 없어 이미 있는 prod 버킷만
@@ -346,6 +349,25 @@ edge-media-delivery-destination	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:delive
 cf-function-log-group-live-auth	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-live-auth	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 cf-function-log-group-deny-default	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-deny-default	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 cf-function-log-group-apex-request	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-apex-request	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+cf-function-log-group-dvr-floor	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-dvr-floor	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+
+# prod/edge 의 /dvr 하한 경보(POK-525 계획 Ⓓ-3 — dvr_floor_alarms.tf). 경보
+# 셋 · 알림 주제는 이름이 고정이라 구체 ARN 이고 us-east-1 이다. 경보 행은
+# 경보를 바꾸기 · 지우기 · 알림 끄기 · 상태 덮어쓰기와 태그를 묻는다 — dev
+# 주체가 이것을 가지면 K5 경보가 조용해진다. 지표 필터는 자원 유형이 따로
+# 없고 log-group 자원 동작이라(PutMetricFilter · DeleteMetricFilter) dvr-floor
+# 함수 로그 그룹 ARN 으로 따로 묻는다(위 함수 로그 그룹 행과 같은 ARN — 행을
+# 나눠 그 행은 그대로 둔다). 주제 행은 발행 · 구독 · 정책 바꾸기 · 지우기를
+# 묻고, 정책은 직접 읽는다(sns — 계정 루트 읽기 하나 · 경보 셋의 CloudWatch
+# 발행, broadcast-topic 과 같은 길). 첫 단계(O7f) 직전에는 주제가 아직 없어
+# 「자원 없음」 을 정책 없이 판정한다(런북 2-3 한계 A13). 동작 × 유형 짝은
+# 서비스 승인 참조 list_cloudwatch.html(alarm) · list_logs.html(log-group) ·
+# list_sns.html(topic) 대조 2026-11-11.
+edge-alarm-dvr-floor-value-invalid	O7f	arn:arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:pokeclip-prod-dvr-floor-value-invalid	alarm	us-east-1	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+edge-alarm-dvr-floor-kvs-error	O7f	arn:arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:pokeclip-prod-dvr-floor-kvs-error	alarm	us-east-1	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+edge-alarm-dvr-floor-execution-errors	O7f	arn:arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:pokeclip-prod-dvr-floor-execution-errors	alarm	us-east-1	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+edge-metric-filter-dvr-floor	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-dvr-floor	log-group	us-east-1	logs:PutMetricFilter,logs:DeleteMetricFilter	none	-
+edge-alarm-topic	O7f	arn:arn:aws:sns:us-east-1:${ACCOUNT}:pokeclip-prod-edge-alarms	topic	us-east-1	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	sns	-
 
 # prod/records — 공유 공개 존(nonprod/dns-legacy 가 소유)의 prod 레코드
 # 이름 여섯(prod/records 의 enabled_records). 존 ARN 은 dev 레코드와 같아

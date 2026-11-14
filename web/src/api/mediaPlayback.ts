@@ -2,8 +2,10 @@
 
 import { trackApiActivity } from './client';
 
-// 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 편집기 미리보기(라이브 화면 카드의 미리 받기 useCardEditorReady 포함)가
-// 쓴다. 라이브 화면의 재생 · 지난 방송 목록은 부르지 않는다(POK-547 · POK-568 — 회차 경로를 묻는다).
+// 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996). 아래 list · get 을 부르는 화면은 이제 없다: 라이브 화면의 재생 · 지난
+// 방송 목록은 회차 경로를 묻고(POK-547 · POK-568), 편집기 미리보기 · 카드 미리 받기는 POK-473 부터 ③ 되감기 목록 창을 받으며,
+// 카드 바로 저장도 clip 의 창 두 끝(playerWindow)을 쓴다. 출입증 쿠키를 실을지(mediaCredentials)와 주소 유무(playbackConfigured)는
+// 여전히 여기서 읽는다.
 //   GET {base}/playback/<키>/list?path=<키>                                       녹화된 구간들(시작 시각·길이)
 //   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4&path=<키>   그 구간의 영상 한 덩어리
 // 🔴 주소는 출입증 쿠키 경로(/playback/<키>) 아래다(POK-317). 재생 서버가 읽는 path 쿼리는 웹이 경로의 키와 같은 값으로 하나 싣는다

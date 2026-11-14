@@ -35,6 +35,9 @@
 #   - 기동 전 검사 서비스(timing-preflight — profiles 로만): 갈래 a – d 를
 #     프로필을 켜고 따로 풀어 본다. 사례 57 은 test/lib/render_timing_cases.sh 에
 #     있다.
+#   - 사이드카 60일 만료 창구 env · 토큰 디렉터리 bind: 빈 주소는 갈래 a – d,
+#     주소를 채운 갈래 x1 · x2(옛 · 응답기 모드 — 사례 10 · 26 도 함께 본다)와
+#     사례 58 · 59 는 test/lib/render_clip_expiry_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -77,6 +80,8 @@ source "${TEST_DIR}/lib/render_sidecar_env_cases.sh"
 source "${TEST_DIR}/lib/render_edge_bounds_cases.sh"
 # shellcheck source=lib/render_timing_cases.sh
 source "${TEST_DIR}/lib/render_timing_cases.sh"
+# shellcheck source=lib/render_clip_expiry_cases.sh
+source "${TEST_DIR}/lib/render_clip_expiry_cases.sh"
 # shellcheck source=../bin/lib/render_files.sh
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
@@ -96,7 +101,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=57
+readonly CASE_COUNT=59
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -129,7 +134,7 @@ def db_env:
    POSTGRES_SSLROOTCERT: "/etc/pokeclip/rds-ca/global-bundle.pem",
    TZ: "UTC", AWS_REGION: "ap-northeast-2",
    AWS_EC2_METADATA_V1_DISABLED: "true"};
-'"${AUTH_JQ_DEFS}"
+'"${AUTH_JQ_DEFS}${CLIP_JQ_DEFS}"
 
 scratch=""
 setup_reason=""
@@ -537,26 +542,37 @@ check_case_9() {
 }
 
 check_case_10() {
-  require_setup || return 1
-  expect_all '.services | map_values(.environment // {})
-    | with_entries(select(.key == "sidecar" or .key == "janitor"))' '
-    {sidecar: (db_env + {POSTGRES_USER: "media_indexer",
-       ENSURE_SCHEMA: "false", SEGMENT_ROOT: "/recordings",
-       HOOK_SPOOL_PATH: "/hooks/events.jsonl",
-       MTX_API_URL: "http://127.0.0.1:9997",
-       MTX_API_USER: "pokeclip-sidecar",
-       MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
-       S3_BUCKET: .rewind_bucket_name,
-       REWIND_PUBLIC_BASE_URL: .rewind_public_base_url,
-       REWIND_EDGE_BOUNDS_KVS_ARN: .edge_bounds_kvs_arn,
-       CONTROL_LISTEN: "127.0.0.1:8086",
-       PLAYBACK_ROUND_KEYS: (.playback_round_keys | tostring)}
-       + (if .ingest_auth_image != "" then sc_resolve_env else {} end))}
-    + (if .janitor_enabled
-       then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
-         JANITOR_ENABLED: "true", JANITOR_GRACE: "23h",
-         SEGMENT_ROOT: "/recordings"})}
-       else {} end)' '사이드카 · janitor env'
+  local ok=0 v
+  clip_cases::require || return 1
+  for v in ${COMPOSE_VARIANTS} ${CLIP_EXPIRY_VARIANTS}; do
+    expect_config "${v}" '.services | map_values(.environment // {})
+      | with_entries(select(.key == "sidecar" or .key == "janitor"))' '
+      {sidecar: (db_env + {POSTGRES_USER: "media_indexer",
+         ENSURE_SCHEMA: "false", SEGMENT_ROOT: "/recordings",
+         HOOK_SPOOL_PATH: "/hooks/events.jsonl",
+         MTX_API_URL: "http://127.0.0.1:9997",
+         MTX_API_USER: "pokeclip-sidecar",
+         MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
+         S3_BUCKET: .rewind_bucket_name,
+         REWIND_PUBLIC_BASE_URL: .rewind_public_base_url,
+         REWIND_EDGE_BOUNDS_KVS_ARN: .edge_bounds_kvs_arn,
+         CONTROL_LISTEN: "127.0.0.1:8086",
+         PLAYBACK_ROUND_KEYS: (.playback_round_keys | tostring)}
+         + (if .ingest_auth_image != "" then sc_resolve_env else {} end)
+         + (if .ingest_auth_image != ""
+              and (.lifecycle_publish_streams | length) > 0
+            then {BROADCAST_TOPIC_ARN: .broadcast_topic_arn,
+              LIFECYCLE_PUBLISH_STREAMS:
+                (.lifecycle_publish_streams | join(","))}
+            else {} end)
+         + (if .clip_internal_url != "" then sc_clip_env else {} end))}
+      + (if .janitor_enabled
+         then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
+           JANITOR_ENABLED: "true", JANITOR_GRACE: "23h",
+           SEGMENT_ROOT: "/recordings"})}
+         else {} end)' '사이드카 · janitor env' || ok=1
+  done
+  return "${ok}"
 }
 
 check_case_11() {
@@ -708,13 +724,15 @@ check_case_16() {
 # 다른 항목을 한 줄씩 낸다. 역할 서비스 셋이 양쪽에 다 없어도 한 줄 낸다.
 # 입력: $p = 렌더한 템플릿, $t = 시험 compose(둘 다 선언 그대로의 구성 JSON),
 # $logging = logging(드라이버 · 옵션)도 비교할지(true · false).
-# 응답기 모드 사이드카의 4C 토큰 사본 bind 는 렌더 쪽에서 뺀다 — 시험 compose 의
-# 사이드카는 4C 를 부르지 않는다(그 bind 는 사례 7 · 26 · 42 가 본다).
+# 응답기 모드 사이드카의 4C 토큰 사본 bind 와 만료 토큰 디렉터리 bind 는 렌더
+# 쪽에서 뺀다 — 시험 compose 의 사이드카는 4C 도 clip 도 부르지 않는다(4C bind 는
+# 사례 7 · 26 · 42, 만료 bind 는 사례 26 · 58 이 본다).
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly DRIFT_PROGRAM='
 def without_sidecar_resolve: if .services.sidecar == null then . else
   .services.sidecar.volumes |= map(select(.target
-    != "/run/secrets/stream_key_resolve_token")) end;
+    | . != "/run/secrets/stream_key_resolve_token"
+      and . != "/run/secrets/clip-expiry")) end;
 def facts: .services | map_values({
   restart: (.restart // null),
   network_mode: (.network_mode // null),
@@ -788,23 +806,29 @@ $(harness::log_tail "${scratch}/unit.json.err")"
 # 모드는 사이드카 4C 토큰 사본 포함 · M9 user_data 가 렌더하는 nginx 설정)은
 # 원본이 없으면 만들지 않는다(create_host_path: false). 원본이 없을 때(정지가
 # 렌더를 지운 뒤 남은 컨테이너가 다시 뜰 때 등) 엔진이 그 자리에 디렉터리를
-# 만들면 다음 렌더가 영영 막힌다.
+# 만들면 다음 렌더가 영영 막힌다. 예외는 주소가 찰 때의 만료 토큰 디렉터리
+# bind 하나다 — 디렉터리 bind 라 엔진이 만든 것도 같은 종류다(갈래 x1 · x2).
 #######################################
 check_case_26() {
-  require_setup || return 1
-  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
-  expect_all '[.services | to_entries[] | .key as $s | (.value.volumes // [])[]
-      | select(.type == "bind")
-      | "\($s) \(.target) \(.bind.create_host_path != false)"] | sort' '
-    ["mediamtx /mediamtx.yml false",
-     "nginx /etc/nginx/nginx.conf false",
-     "sidecar /run/secrets/mtx_api_pass false"]
-    + (if .ingest_auth_image != ""
-       then [ia_binds[] | "ingest-auth \(split(" ")[1]) false"]
-         + ["sidecar /run/secrets/stream_key_resolve_token false"]
-       else [] end)
-    | sort' \
-    '렌더 파일 bind 의 원본 자동 생성'
+  local ok=0 v
+  clip_cases::require || return 1
+  for v in ${COMPOSE_VARIANTS} ${CLIP_EXPIRY_VARIANTS}; do
+    # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+    expect_config "${v}" '[.services | to_entries[] | .key as $s
+        | (.value.volumes // [])[] | select(.type == "bind")
+        | "\($s) \(.target) \(.bind.create_host_path != false)"] | sort' '
+      ["mediamtx /mediamtx.yml false",
+       "nginx /etc/nginx/nginx.conf false",
+       "sidecar /run/secrets/mtx_api_pass false"]
+      + (if .ingest_auth_image != ""
+         then [ia_binds[] | "ingest-auth \(split(" ")[1]) false"]
+           + ["sidecar /run/secrets/stream_key_resolve_token false"]
+         else [] end)
+      + (if .clip_internal_url != "" then [sc_clip_bind] else [] end)
+      | sort' \
+      '렌더 파일 bind 의 원본 자동 생성' || ok=1
+  done
+  return "${ok}"
 }
 
 check_case_27() {
@@ -929,6 +953,7 @@ main() {
     publish_cases::prepare || true
     sidecar_cases::prepare || true
     edge_bounds_cases::prepare || true
+    clip_cases::prepare || true
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
@@ -1047,6 +1072,11 @@ main() {
   harness::run_case 57 \
     '기동 전 검사 서비스 — 프로필로만 · 검사 핀 · 기본 망 · 볼륨 0 · 사이드카 DB env' \
     timing_cases::check_57
+  harness::run_case 58 \
+    '만료 창구 — 주소가 차면 두 모드 모두 사이드카에만 env 둘 · 디렉터리 bind' \
+    clip_cases::check_58
+  harness::run_case 59 '만료 창구 — 빈 주소면 렌더 0 글자 · 템플릿 주석 비렌더' \
+    clip_cases::check_59
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

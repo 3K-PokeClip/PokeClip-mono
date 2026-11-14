@@ -57,6 +57,8 @@ export interface TimelineCard {
   timestamp: string | null;
   /** 누르면 카드를 누른 것과 같이 옮길 자리(초, 서버 기준점 축 — LiveHighlight.seekSeconds) */
   seekSeconds: number;
+  /** 카드 시점의 플레이어용 PDT(epoch ms — LiveHighlight.playerAtMs). 있으면 옮길 자리보다 먼저다(POK-196) */
+  playerAtMs?: number | null;
   /** 핀 글자 — 자동 카드는 카드 제목의 번호(#12), 수동 카드는 「수동」(제목에 번호가 없다) */
   label: string;
   manual: boolean;
@@ -173,7 +175,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
   live: boolean;
   /** 끝난 방송: 실시간이 아니라 그 방송의 통계다(QA 2026-10-11) */
   ended: boolean;
-  onSeekCard: (seconds: number) => void;
+  onSeekCard: (seconds: number, atMs: number | null | undefined) => void;
 }) {
   const heading = ended ? '방송 통계' : '실시간 통계';
   const u = usePcUnit();
@@ -313,7 +315,7 @@ function Timeline({
   nowEdge: boolean;
   live: boolean;
   clipId: string;
-  onSeekCard: (seconds: number) => void;
+  onSeekCard: (seconds: number, atMs: number | null | undefined) => void;
 }) {
   // 무거운 계산(칸 묶기·핀 묶기·선 보간·막대 모양·눈금)은 그래프 값이나 폭이 바뀔 때만 한다. 마우스·스크롤마다 다시 그리는 것은
   // 십자선·툴팁·스크롤 위치뿐이다 — 전에는 이동 이벤트마다 12시간 그래프 전체를 다시 계산했다(PR #316 리뷰 2라운드)
@@ -672,7 +674,7 @@ function Timeline({
                   onPointerMove={(e) => onPinPointerMove(e, [first.card])}
                   onClick={() => {
                     if (drag.current?.moved) return;
-                    onSeekCard(first.card.seekSeconds);
+                    onSeekCard(first.card.seekSeconds, first.card.playerAtMs);
                   }}
                   aria-label={pinLabel(first.card)}
                 >
@@ -870,7 +872,7 @@ function Timeline({
                   type="button"
                   className={styles.pinListItem}
                   onClick={() => {
-                    onSeekCard(card.seekSeconds);
+                    onSeekCard(card.seekSeconds, card.playerAtMs);
                     closePinList(true);
                   }}
                   aria-label={pinLabel(card)}

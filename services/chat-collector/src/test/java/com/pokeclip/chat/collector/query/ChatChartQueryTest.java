@@ -52,7 +52,7 @@ class ChatChartQueryTest extends IntegrationTestSupport {
     }
 
     private ChatChartQuery queryWith(long offsetMs) {
-        return new ChatChartQuery(jdbc, new SyncProperties(offsetMs, Map.of()));
+        return new ChatChartQuery(jdbc, new SyncProperties(offsetMs, Map.of(), 0));
     }
 
     /**

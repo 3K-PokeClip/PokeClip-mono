@@ -39,10 +39,10 @@ prod Media 상자[^box]를 띄우는 루트입니다(설계 3-1 의 ⑨). 자원
 | 루트 | 출력 |
 |---|---|
 | network | `vpc_id` · `media_private_subnet_id` · `s3_prefix_list_id` |
-| platform | `target_group_arns` · `internal_alb_sg_id` · `nlb_sg_id` · `media_proxy_ports` · `media_health_path` · `service_sg_ids`(`auth`) · `service_ports`(`auth`) |
+| platform | `target_group_arns` · `internal_alb_sg_id` · `nlb_sg_id` · `media_proxy_ports` · `media_health_path` · `service_sg_ids`(`auth` · `clip`) · `service_ports`(`auth` · `clip`) |
 | secrets | `cdn_secret_arn` · `test_stream_key_secret_arn` |
 | registry | `repo_urls`(아래 「이미지」) |
-| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn` · `broadcast_topic_arn` · `edge_bounds_kvs_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
+| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn` · `clip_expiry_token_secret_arn` · `broadcast_topic_arn` · `edge_bounds_kvs_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
 
 출력 하나라도 없으면 plan 이 그 이름으로 실패합니다. 런타임 1단 출력은 O7e
 선행 확인 ② 입니다. platform 의 `service_ports` 는 Media ↔ auth 짝(kty 결정
@@ -52,7 +52,11 @@ platform 을 다시 apply 한 뒤에 plan 이 통과합니다. 런타임 1단의
 그릇을 만든 뒤에 plan 이 통과합니다. PR Ⓒ 머지 뒤 그 apply 전에는 이 루트의
 어떤 plan 이든(긴급 apply 포함) 그 출력 이름으로 멈춥니다. 순서는
 [교체 런북](/infra/terraform/runbooks/media-swap.md) 「POK-525 교체 선행」
-입니다.
+입니다. 런타임 1단의 `clip_expiry_token_secret_arn`(POK-551 — 60일 만료 창구
+토큰 그릇)도 같습니다. POK-551 머지 뒤 prod/runtime 을 다시 apply 하기 전에는
+`clip_internal_url` 이 빈 값이어도 이 루트의 plan 이 그 출력 이름으로 멈춥니다
+— 순서는 [런타임 1단 런북](/infra/terraform/runbooks/runtime-1a.md)
+「1단-나 ③」 입니다.
 
 ## 이미지
 
@@ -125,6 +129,12 @@ tfvars 에 둡니다.
     루트를 apply 할 때 공유 역할 정책에 문 하나가 더해집니다. user_data 로만
     들어가 바꿔도 떠 있는 상자는 그대로이고, 켜기 · 끄기는 설정 반영 교체
     입니다(POK-525 교체 걸음 4.1 에서 켬).
+*   `clip_internal_url`(60일 만료 창구 clip 주소)은 기본 빈 값(만료 끔 ·
+    롤백 스위치)입니다. 포트는 platform 출력 `service_ports.clip` 과 같아야
+    plan 이 통과합니다. 토큰 그릇은 런타임 1단 출력
+    `clip_expiry_token_secret_arn` 에서만 오고 tfvars 칸이 없습니다. Media ↔
+    clip SG 짝은 주소와 상관없이 늘 있습니다. user_data 로만 들어가 바꿔도 떠
+    있는 상자는 그대로이고, 켜기 · 끄기는 설정 반영 교체입니다.
 
 적용은 O7e 의 1(kty 승인)입니다. 백엔드는 `backend.hcl.example` 을
 `backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를

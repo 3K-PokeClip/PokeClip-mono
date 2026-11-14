@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { prefetchCardEditor } from '@/features/clips/editor/prefetchCardEditor';
 import { saveCardDraft } from '@/features/clips/editor/saveCardDraft';
-import { CardDraftNotReadyError } from '@/features/clips/editor/cardDraftErrors';
+import { CardNeedsEditorError } from '@/features/clips/editor/cardDraftErrors';
 import type { RecipeSnapshot } from '@/api/clipEditor';
 import { useAuthStore } from '@/stores/auth';
 import { forgetCardSaves } from './cardSave';
@@ -291,7 +291,27 @@ describe('HighlightCard: 카드 시각과 옮길 자리(POK-562)', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: '1:07:50 시점으로 이동' }));
-    expect(onSeek).toHaveBeenCalledWith(seekSeconds);
+    expect(onSeek).toHaveBeenCalledWith(seekSeconds, undefined);
+  });
+
+  it.each([
+    ['clip 이 실어 준 플레이어용 PDT', 1_794_426_524_000],
+    ['장면이 없다는 null', null],
+  ])('사진을 누르면 카드의 %s 도 옮길 자리와 함께 넘긴다(POK-196)', (_label, playerAtMs) => {
+    vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
+    const onSeek = vi.fn();
+    renderWithProviders(
+      <HighlightCard
+        highlight={{ ...HIGHLIGHT, playerAtMs }}
+        stream={STREAM}
+        visuals={{}}
+        onSeek={onSeek}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '1:07:50 시점으로 이동' }));
+
+    expect(onSeek).toHaveBeenCalledWith(HIGHLIGHT.seekSeconds, playerAtMs);
   });
 
   it('시각을 모르면(「--:--:--」) 단추 이름은 제목이고 저장 알림에도 시각을 싣지 않는다', async () => {
@@ -364,16 +384,27 @@ describe('HighlightCard: 보관함 저장', () => {
     expect(document.activeElement).toHaveAccessibleName('보관함에 저장됨 · 보관함 열기');
   });
 
-  it('방송 시작 직후라 아직 못 저장하면 실패가 아니라 「녹화가 올라온 뒤 다시」로 알린다', async () => {
+  it('clip 이 창 두 끝을 주지 않은 카드면 실패가 아니라 「편집기에서 열기」 로 안내하고, 단추는 편집기 주소로 간다', async () => {
     vi.mocked(prefetchCardEditor).mockResolvedValue('ready');
-    vi.mocked(saveCardDraft).mockRejectedValue(new CardDraftNotReadyError());
+    vi.mocked(saveCardDraft).mockRejectedValue(new CardNeedsEditorError());
     renderCard();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '보관함에 저장' }));
     });
-    expect(await screen.findByText('녹화가 올라온 뒤 다시 저장해 주세요')).toBeInTheDocument();
+
+    expect(
+      await screen.findByText('이 카드는 편집기에서 범위를 정해 저장해 주세요'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('보관함에 저장하지 못했어요')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '보관함에 저장' })).toBeInTheDocument();
+    // 저장 전(idle)으로 돌아가 다시 누를 수 있다
+    expect(screen.getByRole('button', { name: '보관함에 저장' })).not.toHaveAttribute(
+      'aria-disabled',
+    );
+    // 「편집」 단추와 같은 편집기 주소(방송 번호 · 카드 번호)다
+    const editorHref = (await screen.findByRole('link', { name: '편집' })).getAttribute('href');
+    fireEvent.click(screen.getByRole('button', { name: '편집기에서 열기' }));
+    expect(editorHref).toMatch(/^\/clips\/editor\?stream=.*&card=23$/);
+    expect(routerPush).toHaveBeenCalledWith(editorHref);
   });
 
   it('편집 준비 중이어도 저장된다: 저장은 영상을 받지 않는다', async () => {

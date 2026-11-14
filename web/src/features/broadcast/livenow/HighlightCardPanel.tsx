@@ -63,8 +63,8 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   detectionLocked?: boolean;
   /** 끝난 방송: 감지는 방송 중에 끝났다. 「자동 감지 중」이라고 하면 지금 감지하는 것처럼 읽힌다(QA 2026-10-11) */
   ended?: boolean;
-  /** 카드로 옮긴다(초, 서버 기준점 축 — LiveHighlight.seekSeconds) */
-  onSeek: (seconds: number) => void;
+  /** 카드로 옮긴다(초, 서버 기준점 축 — LiveHighlight.seekSeconds · 플레이어용 PDT — LiveHighlight.playerAtMs) */
+  onSeek: (seconds: number, atMs: number | null | undefined) => void;
   /** 가리기·되살리기 답(바뀐 카드 한 장)을 목록에 넣는다(useLiveMockState.mergeCard) */
   onCardChange?: (card: LiveCardSnapshot) => void;
 }) {

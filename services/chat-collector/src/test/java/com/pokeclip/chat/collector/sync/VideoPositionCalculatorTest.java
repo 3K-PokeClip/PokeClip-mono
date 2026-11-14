@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 전체에서만 터진다.
  *
  * <p><b>계산기를 빈으로 안 받고 직접 만든다.</b> 보정값을 시험마다 갈아야 하고(T3),
- * {@code new SyncProperties(0, Map.of())}가 「보정 없음」을 눈에 보이게 한다. 빈 배선 자체는
+ * {@code new SyncProperties(0, Map.of(), 0)}가 「보정 없음」을 눈에 보이게 한다. 빈 배선 자체는
  * 컨텍스트가 뜨는 것으로 이미 지켜진다.
  *
  * <p><b>예외가 맨 아래 「실물 기본 보정값」 절 둘이다.</b> 이 컨텍스트는 보정값을 안 덮어써서
@@ -73,7 +73,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
                                 SyncProperties wiredProperties, VideoPositionCalculator wiredCalculator) {
         this.jdbc = jdbc;
         this.ledger = ledger;
-        this.calculator = new VideoPositionCalculator(ledger, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of()));
+        this.calculator = new VideoPositionCalculator(ledger, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of(), 0));
         this.wiredProperties = wiredProperties;
         this.wiredCalculator = wiredCalculator;
     }
@@ -83,7 +83,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
      * {@link #calculator}(보정 0)라 뺄셈이 항등이고, 그래서 보정 경로를 하나도 안 잰다.
      */
     private VideoPositionCalculator 보정이(long defaultOffsetMs, Map<String, Long> perChannel) {
-        return new VideoPositionCalculator(ledger, new IngestKeyStore(jdbc), new SyncProperties(defaultOffsetMs, perChannel));
+        return new VideoPositionCalculator(ledger, new IngestKeyStore(jdbc), new SyncProperties(defaultOffsetMs, perChannel, 0));
     }
 
     @BeforeEach
@@ -412,7 +412,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
             }
         };
 
-        VideoPosition located = new VideoPositionCalculator(racing, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of()))
+        VideoPosition located = new VideoPositionCalculator(racing, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of(), 0))
                 .locate(RACE, "calc-channel", T0.plusMillis(1000));
 
         assertThat(located.state())
@@ -443,7 +443,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
                 return super.hasAnySegment(streamId);
             }
         };
-        VideoPositionCalculator calculator = new VideoPositionCalculator(counting, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of()));
+        VideoPositionCalculator calculator = new VideoPositionCalculator(counting, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of(), 0));
 
         assertThat(calculator.locate(NORMAL, "calc-channel", T0.plusMillis(1500)).state())
                 .isEqualTo(VideoPosition.State.CONVERTED);

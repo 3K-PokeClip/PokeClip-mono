@@ -58,6 +58,9 @@ type tableGrant struct {
 // PDT 게이트(stream_timing_gate)는 SELECT 하나다(POK-196 · 설계 r7 9.3). 회차 개시 · 기동 검사가 읽고, 쓰기자 거부 트리거가
 // 부른 쪽 권한으로 읽는다. UPDATE 는 주지 않는다 — 스위치 · 래치는 손 SQL 로만 바꾸고, 잠금은 행 잠금(FOR SHARE 는 UPDATE
 // 권한을 요구한다)이 아니라 advisory 열쇠라 PUBLIC 기본으로 충분하다.
+//
+// 만료 끄기 스위치(stream_expiry_switch)도 SELECT 하나다(POK-551). 만료기가 회차 시작 · 장 받기 전 · 방송마다 읽고(index.
+// ReadExpirySwitch), 켜고 끄는 것은 마스터 손 SQL 이다 — 사이드카가 스위치를 켜지 못한다.
 var mediaIndexerGrants = []tableGrant{
 	{table: "stream_segments", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 	{table: "stream_sessions", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
@@ -67,6 +70,7 @@ var mediaIndexerGrants = []tableGrant{
 	{table: "broadcast_lifecycle_outbox", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 	{table: "stream_edge_bounds", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 	{table: "stream_timing_gate", privileges: []string{"SELECT"}},
+	{table: "stream_expiry_switch", privileges: []string{"SELECT"}},
 }
 
 // MediaIndexerGrantSQL 은 role 에게 media_indexer 권한을 주는 GRANT 문장들이다(끝 ; 없음).

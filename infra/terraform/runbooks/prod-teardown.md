@@ -352,10 +352,13 @@ plan_summary "${edge}" "${work}/edge.plan" | tee "${evidence}/04-edge-plan.txt"
 grep -vc '^delete ' "${evidence}/04-edge-plan.txt"   # 0
 ```
 
-요지에는 배포 둘(apex · media) · 함수 셋 · KVS · 키 그룹 · VPC origin ·
-OAC 둘 · 캐시 · 원본 요청 · 응답 헤더 정책 · CLOUDFRONT WAF · 로그 그룹
-둘(`pokeclip-prod-media-access` · `aws-waf-logs-pokeclip-prod-cloudfront` —
-us-east-1) · 표준 로그 전달 자원 · apex 버킷과 그 설정 · 내부 ALB SG 의
+요지에는 배포 둘(apex · media) · 함수 넷(dvr-floor 포함) · KVS · 키 그룹 ·
+VPC origin · OAC 둘 · 캐시 · 원본 요청 · 응답 헤더 정책 · CLOUDFRONT WAF ·
+로그 그룹 여섯(`pokeclip-prod-media-access` ·
+`aws-waf-logs-pokeclip-prod-cloudfront` · 함수 로그 그룹 넷
+`/aws/cloudfront/function/<함수 이름>` — us-east-1) · /dvr 하한 경보
+자원(경보 셋 · 지표 필터 둘 · 알림 주제와 그 정책 — us-east-1) · 표준 로그
+전달 자원 · apex 버킷과 그 설정 · 내부 ALB SG 의
 인그레스 규칙(← VPC origin 서비스 SG) · 원격 출력 확인 자원이 나옵니다.
 
 *   KVS 를 지우면 그 안의 CDN 비밀 키(`cdn-secret`)도 함께 사라집니다.

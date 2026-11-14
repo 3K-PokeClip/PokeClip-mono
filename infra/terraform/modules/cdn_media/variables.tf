@@ -132,3 +132,25 @@ variable "cors_allow_headers" {
     error_message = "cors_allow_headers 는 헤더 이름(영숫자 · -)만이어야 한다(와일드카드 금지)."
   }
 }
+
+variable "edge_bounds_kvs_arn" {
+  description = "/dvr 하한 KVS ARN(런타임 1단 출력 edge_bounds_kvs_arn). dvr-floor 함수가 연결하는 KVS 하나다 — 스위치와 무관하게 늘 연결한다."
+  type        = string
+  nullable    = false
+
+  # modules/media_host 의 같은 이름 변수와 같은 꼴이다 — 전역 KVS 하나(리전
+  # 빔 · 12자리 계정 · 소문자 UUID). 와일드카드 · 다른 자원을 막는다. 빈 값 ·
+  # null 도 막는다 — 함수는 모듈을 읽을 때 cf.kvs() 를 불러, 연결 없이
+  # 게시되면 붙는 순간 /dvr 전체가 503 이다(fail-open 이 아니다).
+  validation {
+    condition     = can(regex("^arn:aws(-[a-z]+)*:cloudfront::[0-9]{12}:key-value-store/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.edge_bounds_kvs_arn))
+    error_message = "edge_bounds_kvs_arn 은 CloudFront KVS ARN(arn:<파티션>:cloudfront::<12자리 계정>:key-value-store/<소문자 UUID>)이어야 한다."
+  }
+}
+
+variable "dvr_floor_enabled" {
+  description = "/dvr 하한 스위치(POK-525). 참이면 /dvr/* 비헤이비어에 dvr-floor 를 viewer-request 로 붙이고, 거짓이면 함수 없이 둔다. 함수 자원은 스위치와 무관하게 게시된다."
+  type        = bool
+  default     = false
+  nullable    = false
+}

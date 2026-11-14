@@ -164,6 +164,8 @@ const playerStatuses = vi.hoisted(() => [] as (string | undefined)[]);
 const playerBroadcastIds = vi.hoisted(() => [] as (string | undefined)[]);
 // 플레이어가 받은 회차 다시보기 소스(POK-546) — 받았는지만 적는다
 const playerSources = vi.hoisted(() => [] as { vod: boolean }[]);
+// 플레이어가 받은 받아 둔 자리(startAtSeconds): 다시보기 축이 서기 전에는 넘기지 않는지 잰다(POK-196 c13)
+const playerStartAts = vi.hoisted(() => [] as (number | null)[]);
 // 이 약속이 있는 동안 플레이어가 멈춘다(Suspense) — 재생기 층이 내려간 동안을 잰다(POK-546 K2 (ii))
 const playerSuspend = vi.hoisted(() => ({ promise: null as Promise<void> | null }));
 vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
@@ -176,6 +178,7 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
       playerStatuses.push(props.broadcastStatus);
       playerBroadcastIds.push(props.broadcastId);
       playerSources.push({ vod: Boolean(props.vod) });
+      playerStartAts.push(props.startAtSeconds ?? null);
       return createElement(actual.GlassPlayer, props);
     },
   };
@@ -341,6 +344,8 @@ interface Card {
   evidence: Record<string, unknown> | null;
   eventSeq: number;
   createdAt: string;
+  /** 카드 시점의 플레이어용 PDT(POK-196). 장면이 없으면 null, 옛 clip 이면 칸이 없다 */
+  playerAtMs?: number | null;
 }
 
 function card(id: number, over: Partial<Card>): Card {
@@ -1184,6 +1189,7 @@ beforeEach(() => {
   playheadLog.length = 0;
   pastCardLog.length = 0;
   playerSources.length = 0;
+  playerStartAts.length = 0;
   playerSuspend.promise = null;
   chatModes.length = 0;
   chatTexts.length = 0;
@@ -6512,6 +6518,55 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
       expect(within(chatPanel()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
     });
   });
+
+  describe('카드 · 핀 이동은 clip 이 준 플레이어용 PDT 로 간다(POK-196 c13)', () => {
+    /** 서버 기준점이 방송 시작보다 181시간 앞선다 — 다른 시험 카드가 그래프 밖으로 빠져 20번 핀이 혼자 선다 */
+    const AHEAD_MS = 181 * 3_600_000;
+    /** 20번 카드 — 방송 4,950초(지금 93초 전). 지금 식 자리는 영상 3,507초다 */
+    const OLD_WAY_SECONDS = (STARTED_AT + 4_950_000 - MEDIA_ZERO) / 1000;
+    /** clip 이 실어 준 플레이어용 PDT — 영상 3,000.4초 자리(목록 PDT 축). 지금 식 자리와 다르다 */
+    const PLAYER_AT_MS = MEDIA_ZERO + 3_000_400;
+    const pdtCard = (playerAtMs: number | null | undefined) =>
+      card(20, {
+        streamTimestampMs: AHEAD_MS + 4_950_000,
+        eventSeq: 200,
+        ...(playerAtMs === undefined ? {} : { playerAtMs }),
+      });
+
+    it('카드 단추를 누르면 플레이어용 PDT 자리로 옮긴다', async () => {
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [pdtCard(PLAYER_AT_MS)];
+      const { container } = await openLive();
+      fireEvent.click(cardThumb(20));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(3_000.4, 3);
+    });
+
+    it('통계 핀을 눌러도 플레이어용 PDT 자리로 옮긴다', async () => {
+      graphWidth();
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [pdtCard(PLAYER_AT_MS)];
+      const { container } = await openLive();
+      fireEvent.click(screen.getByText('#20', { selector: 'button' }));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(3_000.4, 3);
+    });
+
+    it.each([
+      ['장면이 없어 null 로 온 카드', null],
+      ['칸이 없는 옛 clip 카드', undefined],
+    ])('%s 는 지금 식(기준점 + 카드 초)으로 옮긴다', async (_label, playerAtMs) => {
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [pdtCard(playerAtMs)];
+      const { container } = await openLive();
+      fireEvent.click(cardThumb(20));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(OLD_WAY_SECONDS, 3);
+    });
+  });
 });
 
 describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
@@ -6806,6 +6861,46 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     ).toBeNull();
     expect(mediaCalls.spans).toEqual([]);
     expect(playbackFetches()).toBe(0);
+  });
+
+  // 끝남 대기가 닫힌 화면(B)의 회차 다시보기도 목록 PDT 축이라 카드에 실린 플레이어용 PDT 로 옮긴다(POK-196 · POK-547)
+  describe('B 닫힌 화면의 회차 다시보기도 카드를 플레이어용 PDT 로 옮긴다(POK-196)', () => {
+    /** 1번 카드(60초)에 카드 초와 동떨어진 플레이어용 PDT(영상 1,234초 자리)를 싣는다 */
+    const PLAYER_AT_MS = MEDIA_ZERO + 1_234_000;
+
+    it('다시보기가 선 뒤 누르면 플레이어용 PDT 자리(1,234초)로 옮긴다', async () => {
+      stubVodPlayer();
+      server.extraCards = [card(11, { streamTimestampMs: 60_000, playerAtMs: PLAYER_AT_MS })];
+      const { container } = await closeToPastAtEnd(bRoundVod());
+      await vodListed(vodList(MEDIA_ZERO, NOW));
+      expect(lastPastCard()?.kind).toBe('playable');
+
+      fireEvent.click(cardThumb(11));
+      await settle();
+
+      expect(container.querySelector('video')?.currentTime).toBeCloseTo(1_234, 3);
+    });
+
+    it('다시보기를 확인하는 동안 받아 둔 카드도 서면 플레이어용 PDT 자리부터다 · 축이 서기 전에는 넘기지 않는다', async () => {
+      stubVodPlayer();
+      server.extraCards = [card(11, { streamTimestampMs: 60_000, playerAtMs: PLAYER_AT_MS })];
+      const { container } = await endingAtEnd();
+      control.round = null;
+      await advance(290_000);
+      server.liveEnded = true;
+      await advance(80_000);
+      expect(lastPastCard()?.kind).toBe('waiting');
+
+      fireEvent.click(cardThumb(11));
+      await settle();
+      expect(playerStartAts.at(-1)).toBeNull();
+
+      control.round = bRoundVod();
+      await nextRoundPoll();
+      await vodListed(vodList(MEDIA_ZERO, NOW));
+
+      expect(container.querySelector('video')?.currentTime).toBeCloseTo(1_234, 3);
+    });
   });
 
   it('T4-4 닫힌 화면(명부 live)에서 다시보기가 없으면 카드는 「다시보기가 없어요」 다 — 녹화 길의 알림이 아니다', async () => {
@@ -8327,6 +8422,107 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       await nextRoundPoll();
       await vodListed();
       expect(videoAt(container)).toBe(CARD4_S);
+    });
+  });
+
+  describe('카드 · 마크 이동은 clip 이 준 플레이어용 PDT 로 간다(POK-196 c13)', () => {
+    /** 20번 카드 — 방송 2,000초. 지금 식 자리는 다시보기 축 2,000초다 */
+    const CARD_S = 2_000;
+    /** clip 이 실어 준 플레이어용 PDT — 방송 시작 2,003.2초(판 NULL 꼴로 지금 식과 3.2초 다르다) */
+    const PLAYER_AT_MS = VOD_STARTED + 2_003_200;
+    const pdtCard = () =>
+      card(20, { streamTimestampMs: CARD_S * 1000, eventSeq: 200, playerAtMs: PLAYER_AT_MS });
+
+    it('playable — 카드를 누르면 그 시각으로 바로 옮긴다', async () => {
+      server.extraCards = [pdtCard()];
+      const { container } = await openPastVod();
+      expect(lastPastCard()?.kind).toBe('playable');
+
+      fireEvent.click(cardThumb(20));
+      await settle();
+
+      expect(videoAt(container)).toBeCloseTo(2_003.2, 3);
+    });
+
+    it('waiting — 서버 기준점이 없고 첫 PDT 가 방송 시작보다 1.37초 늦어도 다시보기가 서면 그 시각이다 · 축이 서기 전에는 넘기지 않는다', async () => {
+      // 받아 두는 동안 기준점(cardBase)은 방송 시작이고, 다시보기 축 0초는 첫 PDT 다 — 둘이 다르다
+      const first = VOD_STARTED + 1_370;
+      server.extraCards = [pdtCard()];
+      const { container } = await openPastVod({
+        origin: null,
+        round: roundNotReady(null),
+        listed: false,
+      });
+      expect(lastPastCard()?.kind).toBe('waiting');
+
+      fireEvent.click(cardThumb(20));
+      await settle();
+      expect(screen.getByText(WAITING_NOTICE)).toBeInTheDocument();
+      expect(playerStartAts.at(-1)).toBeNull();
+
+      control.round = roundVod(first);
+      await nextRoundPoll();
+      await vodListed(vodList(first));
+
+      expect(videoAt(container)).toBeCloseTo((PLAYER_AT_MS - first) / 1000, 3);
+    });
+
+    it('주소의 카드(?card=)로 들어와도 그 시각에서 시작한다', async () => {
+      server.extraCards = [pdtCard()];
+      nav.search = '?card=20';
+      const { container } = await openPastVod();
+
+      expect(videoAt(container)).toBeCloseTo(2_003.2, 3);
+    });
+
+    it('명부 답 전(notPast)에 받아 둔 카드도 끝난 뒤 들어온 화면으로 밝혀지면 그 시각에서 시작한다(PK2)', async () => {
+      stubVodPlayer();
+      server.vodOrigin = VOD_STARTED;
+      server.extraCards = [pdtCard()];
+      control.round = roundVod();
+      let release: () => void = () => undefined;
+      server.listGate = new Promise((resolve) => {
+        release = resolve;
+      });
+      nav.search = `?stream=${VOD_ID}`;
+      window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
+      const { container } = renderWithProviders(
+        <StrictMode>
+          <LiveScreen />
+        </StrictMode>,
+      );
+      await settle();
+      expect(lastPastCard()?.kind).toBe('notPast');
+
+      fireEvent.click(cardThumb(20));
+      await act(async () => {
+        release();
+      });
+      await settle();
+      await vodListed();
+
+      expect(videoAt(container)).toBeCloseTo(2_003.2, 3);
+    });
+
+    it('마크 답이 가까운 앞 카드(200)면 그 카드의 플레이어용 PDT 로 옮긴다', async () => {
+      const { container } = await openPastVod();
+      await playTo(container, 610);
+      server.markReply = {
+        status: 200,
+        body: {
+          ...card(7, { source: 'hotkey', score: null, evidence: null, eventSeq: 70 }),
+          streamId: VOD_ID,
+          streamTimestampMs: 600_000,
+          window: { startMs: 560_000, endMs: 620_000 },
+          playerAtMs: VOD_STARTED + 603_200,
+        },
+      };
+
+      fireEvent.click(screen.getByRole('button', { name: '이 시점 카드 추가' }));
+      await settle();
+
+      expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+      expect(videoAt(container)).toBeCloseTo(603.2, 3);
     });
   });
 });

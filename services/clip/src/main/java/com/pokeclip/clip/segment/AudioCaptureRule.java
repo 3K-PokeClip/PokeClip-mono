@@ -15,8 +15,9 @@ import java.util.function.Supplier;
  *
  * <p>순서가 계약이다 — 거리 조건 → 다음 행 유무 → 이어짐 → 가용성. 거리 조건이 거짓이면 다음 행을 묻지도 않는다.
  * <ul>
- *   <li>판 2: 거리 조건 {@code out 오프셋 > dur(k) − H}(H = 1000ms — 같은 녹화기 둘째 이후 조각의 머리 앞섬 상한). 편집기 출처
- *       좌표는 파일 머리 기준이라 그만큼(m) 보수적이다.</li>
+ *   <li>판 2: 거리 조건 {@code out 오프셋 > dur(k) − H}(H = 1000ms — 같은 녹화기 둘째 이후 조각의 머리 앞섬 상한). 렌더 주문의
+ *       판 2 컷 좌표는 영상 첫 표본 기준({@code VIDEO_START} — kty 2026-11-12 D1)이라 계약 그대로다. 소리 주소 API 도 같은 좌표로
+ *       부른다({@link CutPlanner#audioCaptureOf}).</li>
  *   <li>판 NULL: 거리 조건을 보지 않는다 — 다음 행이 녹화 이어짐이면 늘 싣는다.</li>
  *   <li>다음 행이 {@code failed}: 종국이 아니라 스위퍼가 회수한다. 그 행 파일명 시각에서 {@link #CAPTURE_FAILED_GRACE} 넘게
  *       지나도록 {@code failed} 면 확보 없이 진행한다 — 두 판 모두(영구 409 를 없앰).</li>
@@ -55,7 +56,7 @@ public final class AudioCaptureRule {
 
     /**
      * @param last 결과에 드는 마지막 회차 행 k
-     * @param out 컷 끝 경계(k 위 · 파일 머리 기준)
+     * @param out 컷 끝 경계(k 위 · 판 원점 기준 — 판 2 영상 첫 표본 · 판 NULL 파일 머리)
      * @param next k 의 다음 seq 행(회차로 자르지 않음). 거리 조건이 참일 때만 부른다
      * @param endedOrComplete k 의 회차가 끝났나 — clip 방송 {@code ended} 이거나 회차 완결 술어 참(6-6-8 5항). 다음 행이 장부에 없을
      *        때만 묻는다(회차 완결은 장부 왕복이다)

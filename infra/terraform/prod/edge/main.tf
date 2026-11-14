@@ -55,10 +55,11 @@ module "waf" {
   managed_rule_groups = local.cloudfront_waf.managed_rule_groups
   rate_limit          = local.cloudfront_waf.rate_limit
 
-  # Authorization · media 시청자의 서명 쿠키 · 내부 토큰 헤더 둘(auth
+  # Authorization · media 시청자의 서명 쿠키 · 내부 토큰 헤더 셋(auth
   # /internal/** 공용 X-Internal-Token · 계약4 resolve 전용
-  # X-Stream-Key-Resolve-Token — 정상 경로로는 엣지에 오지 않지만 잘못 실려 와도
-  # 남지 않게 미리 둔다)은 웹 ACL 데이터 보호로 요청 샘플 · 로그 모두에서
+  # X-Stream-Key-Resolve-Token · clip 만료 창구 전용 X-Expired-Broadcasts-Token
+  # — POK-551. 정상 경로로는 엣지에 오지 않지만 잘못 실려 와도 남지 않게 미리
+  # 둔다)은 웹 ACL 데이터 보호로 요청 샘플 · 로그 모두에서
   # 가린다(POK-459 · POK-479). 질의 인자는 가리지 않는다 — 자격 증명이 실리는
   # ?code=(OAuth 콜백) · ?token=(프로필 사진)은 app 호스트라 엣지가 아니라 공개
   # ALB 로 간다(prod/records · platform 의 protected_query_args).
@@ -75,6 +76,7 @@ module "waf" {
     "cookie",
     "x-internal-token",
     "x-stream-key-resolve-token",
+    "x-expired-broadcasts-token",
   ]
 
   # 차단된 요청만 남긴다(결정 161). redacted_headers 는 데이터 보호와 겹쳐 두는
@@ -110,6 +112,16 @@ module "media" {
   internal_alb_dns_name              = local.platform.internal_alb_dns_name
   rewind_bucket_regional_domain_name = local.runtime.rewind_bucket_regional_domain_name
   log_destination                    = local.media_log_destination
+  dvr_floor_enabled                  = var.dvr_floor_enabled
+
+  # /dvr 하한 KVS(POK-525)는 prod/runtime 을 POK-525 판으로 apply 해야 출력에
+  # 생긴다. 출력이 없으면 속성 오류가 아니라 remote_contract 의 계약 문구로
+  # 멈추게 null 로 두고, 모듈은 그 검사를 기다린다 — 기다리지 않으면 모듈
+  # 변수 검증이 null 로 먼저 멈춘다(terraform 1.16.4 실측). 모듈에 data 가
+  # 없어 기다림이 plan 의 읽기를 apply 로 미루지 않는다.
+  edge_bounds_kvs_arn = try(local.runtime.edge_bounds_kvs_arn, null)
+
+  depends_on = [terraform_data.remote_contract]
 }
 
 # 표준 로그 v2 대상(us-east-1). 이름은 cdn_media 의 log_destination 검증에

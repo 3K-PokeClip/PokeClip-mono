@@ -53,6 +53,7 @@ class RoundRowsPlanTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM public.stream_segments WHERE stream_id = ?", KEY);
         // 시험 시드 표에는 PK 뿐이다 — 여기서 만든 색인이 남으면 뒤 시험의 실행 계획이 달라진다.
         jdbc.execute("DROP INDEX IF EXISTS public.stream_segments_session_idx");
+        jdbc.execute("DROP INDEX IF EXISTS public.stream_segments_wall_idx");
     }
 
     @Test
@@ -81,6 +82,56 @@ class RoundRowsPlanTest extends IntegrationTestSupport {
         assertThat(text).as(text).doesNotContain("Seq Scan on stream_segments");
         // 세션 목록을 거르개로 붙이면 이력 행 수만큼 버린다(PK 를 처음부터 훑은 모양)
         assertThat(text).as(text).doesNotContain("Rows Removed by Join Filter");
+    }
+
+    /**
+     * 썸네일 순회 한 묶음의 회차 행(POK-196) — 방송 여럿의 회차를 한 문장으로 읽어도 회차 세션마다 세션 색인 범위다. 시간창
+     * 몫(옛 방송)은 비워 회차 몫 계획만 본다.
+     */
+    @Test
+    void 여러_회차_행은_세션마다_세션_색인_범위로_읽는다() {
+        벽시각_색인();
+        String text = plan(RoundRows.BATCH_ROWS, RoundRowsPlanTest::bindMembers);
+
+        assertThat(text).as(text).contains("stream_segments_session_idx").contains("Index Cond");
+        assertThat(text).as(text).doesNotContain("Seq Scan on stream_segments");
+        assertThat(text).as(text).doesNotContain("Rows Removed by Join Filter");
+        assertThat(text).as(text).doesNotContain("Rows Removed by Filter: 2");
+    }
+
+    /** 라이브 사진의 회차 최신 행(POK-196) — 세션마다 세션 색인을 거꾸로 짚어 첫 올라간 행에서 멈춘다. */
+    @Test
+    void 회차_최신_행은_세션마다_세션_색인을_거꾸로_짚는다() {
+        벽시각_색인();
+        String text = plan(RoundRows.LATEST_UPLOADED, RoundRowsPlanTest::bindMembers);
+
+        assertThat(text).as(text).contains("Index Scan Backward using stream_segments_session_idx")
+                .contains("Index Cond");
+        assertThat(text).as(text).doesNotContain("Seq Scan on stream_segments");
+        assertThat(text).as(text).doesNotContain("Rows Removed by Join Filter");
+        assertThat(text).as(text).doesNotContain("Rows Removed by Filter: 2");
+    }
+
+    /**
+     * 시간창 몫은 실행되지 않아도 계획에 나온다 — 운영 장부의 벽시각 색인(media {@code ddl.go}
+     * {@code stream_segments_wall_idx})을 같은 모양으로 만들어 그 몫도 색인 계획인지 본다.
+     */
+    private void 벽시각_색인() {
+        jdbc.execute("CREATE INDEX IF NOT EXISTS stream_segments_wall_idx "
+                + "ON public.stream_segments (stream_id, start_wall_utc DESC)");
+        jdbc.execute("ANALYZE public.stream_segments");
+    }
+
+    /** 회차 몫 = 방송 하나(세션 now-1 · now-2) · 시간창 몫 = 빈 배열. */
+    private static void bindMembers(java.sql.PreparedStatement ps) throws java.sql.SQLException {
+        var con = ps.getConnection();
+        ps.setArray(1, con.createArrayOf("text", new String[] {"S-now", "S-now"}));
+        ps.setArray(2, con.createArrayOf("text", new String[] {KEY, KEY}));
+        ps.setArray(3, con.createArrayOf("text", new String[] {"now-1", "now-2"}));
+        ps.setArray(4, con.createArrayOf("text", new String[0]));
+        ps.setArray(5, con.createArrayOf("text", new String[0]));
+        ps.setArray(6, con.createArrayOf("timestamptz", new Timestamp[0]));
+        ps.setArray(7, con.createArrayOf("timestamptz", new Timestamp[0]));
     }
 
     private interface Binder {

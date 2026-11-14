@@ -54,4 +54,18 @@ describe('runLimited', () => {
     expect(started).toEqual([1, 2]);
     expect(finished).toEqual([2]);
   });
+
+  it('던진 뒤에도 돌고 있던 항목이 끝난 다음에 던진다: 끝났다고 알린 뒤에 일이 남아 돌지 않는다', async () => {
+    const finished: number[] = [];
+
+    await expect(
+      runLimited([1, 2], 2, async (item) => {
+        if (item === 1) throw new Error('boom');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        finished.push(item);
+      }),
+    ).rejects.toThrow('boom');
+
+    expect(finished).toEqual([2]);
+  });
 });

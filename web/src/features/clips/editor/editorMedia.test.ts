@@ -4,15 +4,32 @@ import {
   EDITOR_MEDIA_BYTES_LIMIT,
   EDITOR_MEDIA_LINGER_MS,
   clearEditorMedia,
+  editorWindowFetching,
+  editorWindowKey,
   holdEditorMedia,
+  holdEditorWindowFetch,
   segmentTracks,
+  trackAudioLoadBytes,
   trackPiecesBytes,
+  watchEditorWindowFetch,
   windowBlobs,
 } from './editorMedia';
+import type { SegmentTracks } from './trackAudio/fmp4Audio';
+import type { TrackAudioLoad, TrackPiece } from './trackAudio/loadTrackAudio';
 
 // 맡긴 미디어는 창 하나가 수십 MB다: 쓰는 화면이 모두 내려가면 비워야 탭을 닫을 때까지 남지 않는다
 
-const BLOB = new Blob(['mp4']);
+/** 다시 싼 창 — 크기는 mp4 Blob 으로 잰다 */
+const windowOf = (blob: Blob) => ({ blob, shiftSeconds: 0, segments: [] });
+const BLOB = windowOf(new Blob(['mp4']));
+
+/** 맡기는 소리(TrackAudioLoad) — 다시 받기 재료 없이 */
+const loadOf = (tracks: TrackPiece[][]): TrackAudioLoad => ({
+  tracks,
+  missingSeqs: [],
+  capture: 'none',
+  reuse: { segments: new Map(), capture: null, decoded: new Map() },
+});
 
 describe('holdEditorMedia', () => {
   beforeEach(() => {
@@ -78,7 +95,7 @@ describe('holdEditorMedia', () => {
 });
 
 describe('바이트 예산', () => {
-  const blobOf = (bytes: number) => new Blob([new Uint8Array(bytes)]);
+  const blobOf = (bytes: number) => windowOf(new Blob([new Uint8Array(bytes)]));
   const MB = 1024 * 1024;
 
   beforeEach(() => {
@@ -144,12 +161,90 @@ describe('바이트 예산', () => {
 
     const release = holdEditorMedia();
     const big = { length: 20 * MB, numberOfChannels: 1 } as unknown as AudioBuffer; // 80MB
-    segmentTracks.set('a', [[{ startSeconds: 0, buffer: big }]]);
-    segmentTracks.set('b', [[{ startSeconds: 0, buffer: big }]]);
-    segmentTracks.set('c', [[{ startSeconds: 0, buffer: big }]]);
+    segmentTracks.set('a', loadOf([[{ startSeconds: 0, buffer: big }]]));
+    segmentTracks.set('b', loadOf([[{ startSeconds: 0, buffer: big }]]));
+    segmentTracks.set('c', loadOf([[{ startSeconds: 0, buffer: big }]]));
 
     expect(segmentTracks.get('a')).toBeUndefined();
     expect(segmentTracks.get('b')).toBeDefined();
     release();
+  });
+});
+
+describe('trackAudioLoadBytes', () => {
+  it('맡긴 소리는 푼 소리에 다시 받기 재료(판독한 조각의 프레임 바이트)까지 잰다: 기다림 고리가 다시 쓰려고 든다', () => {
+    const buffer = { length: 1_000, numberOfChannels: 2 } as unknown as AudioBuffer; // 8,000
+    const frames = (count: number, size: number) =>
+      Array.from({ length: count }, () => new Uint8Array(size));
+    const segment = (size: number) =>
+      ({
+        video: null,
+        audio: [
+          { frames: frames(3, size), config: {}, timescale: 48000, timing: null },
+          { frames: frames(2, size), config: {}, timescale: 48000, timing: null },
+        ],
+      }) as unknown as SegmentTracks;
+    const load: TrackAudioLoad = {
+      ...loadOf([[{ startSeconds: 0, buffer }]]),
+      reuse: {
+        segments: new Map([
+          [1, segment(100)],
+          [2, segment(10)],
+        ]),
+        capture: null,
+        decoded: new Map([['0:1:0:5', buffer]]),
+      },
+    };
+
+    // 푼 소리 8,000 + 프레임 (3 + 2)·100 + (3 + 2)·10 — 푼 덩어리 표(decoded)는 tracks 와 같은 소리라 두 번 세지 않는다
+    expect(trackAudioLoadBytes(load)).toBe(8_000 + 500 + 50);
+  });
+});
+
+describe('editorWindowKey', () => {
+  it('영상 키와 창 첫 · 끝 조각 seq 가 모두 같아야 같은 창이다', () => {
+    expect(editorWindowKey('key-1', 102, 109)).toBe(editorWindowKey('key-1', 102, 109));
+    expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-1', 102, 110));
+    expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-1', 101, 109));
+    expect(editorWindowKey('key-1', 102, 109)).not.toBe(editorWindowKey('key-2', 102, 109));
+  });
+});
+
+// 편집기가 창(영상 · 소리)을 받는 동안 카드 미리 받기를 쉬게 하는 표시(M3 — 둘이 겹칠 때 메모리가 가장 높았다)
+describe('holdEditorWindowFetch', () => {
+  it('잡은 쪽이 모두 놓을 때까지 받는 중이다', () => {
+    const first = holdEditorWindowFetch();
+    const second = holdEditorWindowFetch();
+    expect(editorWindowFetching()).toBe(true);
+
+    first();
+    expect(editorWindowFetching()).toBe(true);
+    second();
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('같은 놓기를 두 번 불러도 한 번만 놓는다: 남이 잡은 것까지 풀지 않는다', () => {
+    const mine = holdEditorWindowFetch();
+    const other = holdEditorWindowFetch();
+
+    mine();
+    mine();
+    expect(editorWindowFetching()).toBe(true);
+    other();
+    expect(editorWindowFetching()).toBe(false);
+  });
+
+  it('받는 중 ↔ 아님이 바뀔 때만 알린다', () => {
+    const seen: boolean[] = [];
+    const stop = watchEditorWindowFetch((fetching) => seen.push(fetching));
+
+    const first = holdEditorWindowFetch();
+    const second = holdEditorWindowFetch();
+    first();
+    second();
+    stop();
+    holdEditorWindowFetch()();
+
+    expect(seen).toEqual([true, false]);
   });
 });

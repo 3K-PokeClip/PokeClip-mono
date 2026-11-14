@@ -1,14 +1,17 @@
 package com.pokeclip.chat.collector.sync;
 
 /**
- * floor 한 행 + <b>같은 왕복에서</b> 얻은 시계 역행 신호 둘.
+ * 옛 후보(판 NULL 행) floor 한 행 + <b>같은 왕복에서</b> 얻은 시계 역행 신호 둘.
+ *
+ * <p><b>판 NULL 행 전용이다.</b> floor도 두 신호의 후보 집합도 판 NULL 행만이다(계약 세그먼트인덱스 6-6-9 · cc AC-M1).
+ * 판 2 후보에는 이 신호가 없다 — PDT 역행 · 겹침은 seq 최대 고르기가 푼다. 신호가 참이면 옛 후보만 버린다.
  *
  * <p>신호를 따로 물으면 왕복이 늘고, 그 사이 장부에 조각이 들어오면 floor와 신호가
  * 다른 시점을 보게 된다. 스칼라 서브쿼리 둘을 floor 조회에 얹어 왕복 추가는 0회다.
  *
- * @param segment         {@code start_wall_utc <= t}인 조각 중 (벽시계 DESC, seq DESC) 첫 행
+ * @param segment         {@code start_wall_utc <= t}인 판 NULL 조각 중 (벽시계 DESC, seq DESC) 첫 행
  * @param maxCandidateSeq 같은 후보 집합에서 가장 큰 seq. floor와 다르면 <b>뒤 조각이 과거로 튀었다</b>
- * @param earlierIsFuture floor보다 seq가 작은데 벽시계는 floor보다 늦은 조각이 있는가.
+ * @param earlierIsFuture floor보다 seq가 작은데 벽시계는 floor보다 늦은 판 NULL 조각이 있는가.
  *                        참이면 <b>앞 조각이 미래에 있다</b>
  */
 public record LedgerFloor(LedgerSegment segment, long maxCandidateSeq, boolean earlierIsFuture) {
