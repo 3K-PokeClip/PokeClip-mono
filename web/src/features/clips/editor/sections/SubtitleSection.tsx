@@ -1,5 +1,5 @@
 import { Captions, ChevronDown, Lock, Pencil } from 'lucide-react';
-import { Badge, Button } from '@/ui';
+import { Badge, Button, PRIVATE_TEXT_CLASS } from '@/ui';
 import { Segmented } from '../Segmented';
 import styles from './sections.module.css';
 import { TitleSection } from './TitleSection';
@@ -112,7 +112,9 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
                   onClick={() => state.selectSubtitle(item.id)}
                 >
                   <span className={styles.subtitleTime}>{item.timecode}</span>
-                  <span className={styles.subtitleText}>{item.text}</span>
+                  <span className={`${styles.subtitleText} ${PRIVATE_TEXT_CLASS}`}>
+                    {item.text}
+                  </span>
                   {current ? (
                     <Pencil size={12} aria-hidden className={styles.subtitleEditIcon} />
                   ) : null}

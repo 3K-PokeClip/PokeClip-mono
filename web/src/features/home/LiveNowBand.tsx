@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Radio } from 'lucide-react';
-import { Skeleton, Tag } from '@/ui';
+import { PRIVATE_TEXT_CLASS, Skeleton, Tag } from '@/ui';
 import { LIVE_REFRESH_MS } from '@/features/thumbnail/thumbnailUrl';
 import styles from './HomeScreen.module.css';
 import { LiveUptime } from './LiveUptime';
@@ -73,7 +73,7 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
             </span>
           </div>
           {live.title !== null ? (
-            <div className={styles.liveTitle}>{live.title}</div>
+            <div className={`${styles.liveTitle} ${PRIVATE_TEXT_CLASS}`}>{live.title}</div>
           ) : waiting ? (
             <div className={styles.liveTitleBars} data-testid="live-title-pending">
               <Skeleton width="88%" height={16} />

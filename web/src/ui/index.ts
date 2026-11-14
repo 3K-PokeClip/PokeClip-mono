@@ -17,3 +17,4 @@ export * from './primitives';
 
 // ===== Components =====
 export * from './components';
+export { PRIVATE_TEXT_CLASS } from './privateText';

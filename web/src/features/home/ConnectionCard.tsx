@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Check } from 'lucide-react';
-import { Button, Card, LinkButton } from '@/ui';
+import { Button, Card, LinkButton, PRIVATE_TEXT_CLASS } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import type { HomeLinks } from './useHomeMockState';
@@ -20,6 +20,8 @@ interface Row {
   key: string;
   name: string;
   detail: string;
+  /** 설명에 채널 이름·닉네임이 들어 있다 — 세션 녹화에서 설명을 가린다(POK-572) */
+  masked?: boolean;
   state: RowState;
   /** ready일 때 오른쪽에 무채색으로 적는 말 */
   readyLabel?: string;
@@ -37,7 +39,14 @@ function rowsOf(links: HomeLinks): Row[] {
     const label = (channelName: string | undefined) =>
       [via, channelName].filter(Boolean).join(' · ') || '연결됨';
     if (link === null) return { key, name, detail: '확인 중…', state: 'unknown' };
-    if (link.linked) return { key, name, detail: label(link.channelName), state: 'ok' };
+    if (link.linked)
+      return {
+        key,
+        name,
+        detail: label(link.channelName),
+        masked: !!link.channelName,
+        state: 'ok',
+      };
     // 끊긴 연동은 이름이 남아 온다 — 「연결 안 됨」과 갈라 다시 연결을 권한다
     if (link.status === 'BROKEN') {
       // 「연결됨」 기본값을 쓰지 않는다 — 이름이 없으면 「연결됨 · 다시 연결이 필요해요」가 되어 앞뒤가 어긋난다(리뷰 #299 3차)
@@ -46,6 +55,7 @@ function rowsOf(links: HomeLinks): Row[] {
         key,
         name,
         detail: who ? `${who} · 다시 연결이 필요해요` : '다시 연결이 필요해요',
+        masked: !!link.channelName,
         state: 'off',
         action: { label: '다시 연결', href: '/settings/channels' },
       };
@@ -107,6 +117,7 @@ function broadcastChannel(
       key,
       name,
       detail: ['SOOP', soop.nickname].filter(Boolean).join(' · '),
+      masked: !!soop.nickname,
       state: 'ok',
     };
   if (chzzk?.linked) return channel(key, name, chzzk, '치지직');
@@ -146,7 +157,13 @@ export function ConnectionCard({
           <li key={r.key} className={styles.asideRow} data-tour-id={ROW_TOUR_TARGET[r.key]}>
             <div className={styles.connBody}>
               <div className={styles.connName}>{r.name}</div>
-              <div className={styles.connDetail}>{r.detail}</div>
+              <div
+                className={
+                  r.masked ? `${styles.connDetail} ${PRIVATE_TEXT_CLASS}` : styles.connDetail
+                }
+              >
+                {r.detail}
+              </div>
             </div>
             {r.state === 'ok' ? (
               <span className={styles.connOk}>

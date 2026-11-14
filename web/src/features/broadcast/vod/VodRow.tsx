@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   IconButton,
+  PRIVATE_TEXT_CLASS,
   Popover,
   Radio,
   RadioGroup,
@@ -128,14 +129,15 @@ export function VodRow({
         */}
         {openable ? (
           <Link href={`/broadcast/vod/${item.streamId}`} className={styles.rowLink}>
-            {title}
+            {/* 제목이 없으면 방송 번호(옛 방송은 스트림 키와 같다)라 둘 다 가린다 */}
+            <span className={PRIVATE_TEXT_CLASS}>{title}</span>
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </Link>
         ) : (
           // 열 VOD가 없다(준비 중이거나 이미 지워졌다) — aria-disabled 링크로 포커스를
           // 받게 하느니 링크를 안 만든다
           <span className={styles.rowTitle}>
-            {title}
+            <span className={PRIVATE_TEXT_CLASS}>{title}</span>
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </span>
         )}
@@ -185,7 +187,7 @@ export function VodRow({
             <Popover.Content className={styles.pickPanel} aria-label="풀 버전 다운로드">
               <p className={styles.pickTitle}>풀 버전 다운로드</p>
               <p className={styles.pickSub}>
-                {title}
+                <span className={PRIVATE_TEXT_CLASS}>{title}</span>
                 {duration ? ` · ${duration}` : null}
               </p>
               <RadioGroup
@@ -247,7 +249,10 @@ export function VodRow({
           <button type="button" className={styles.donePill} onClick={onResetDownload}>
             <Check size={12} aria-hidden="true" />
             받기 완료
-            <VisuallyHidden> · {title} · 다시 받기</VisuallyHidden>
+            <VisuallyHidden>
+              {' · '}
+              <span className={PRIVATE_TEXT_CLASS}>{title}</span> · 다시 받기
+            </VisuallyHidden>
           </button>
         ) : null}
 

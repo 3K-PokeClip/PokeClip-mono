@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
+import { byTextContent } from '@/test/byTextContent';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from './ChannelScope';
@@ -66,7 +67,7 @@ describe('OwnerOnly', () => {
     expect(screen.getByRole('heading', { name: '플러그인' })).toBeInTheDocument();
     expect(screen.getByText('채널 주인만 볼 수 있는 화면이에요')).toBeInTheDocument();
     expect(
-      await screen.findByText('지금은 별하 채널에서 편집자로 일하는 중이에요'),
+      await screen.findByText(byTextContent('지금은 별하 채널에서 편집자로 일하는 중이에요')),
     ).toBeInTheDocument();
     // 한 번이라도 마운트하면 그 사이 내 키·연동을 읽는다: 그렸다 지우는 구현을 여기서 막는다(감사 3회차 지적 3)
     expect(mounts).toBe(0);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { subscribeApiActivity } from '@/api/client';
-import { Avatar, VisuallyHidden } from '@/ui';
+import { Avatar, PRIVATE_TEXT_CLASS, VisuallyHidden } from '@/ui';
 import { useSwitchCurtain, type SwitchCurtain } from './switchCurtain';
 import styles from './ChannelSwitchCurtain.module.css';
 
@@ -45,7 +45,8 @@ export function ChannelSwitchCurtain() {
     <>
       {curtain && <Cover key={curtain.key} curtain={curtain} onLeave={announce} />}
       <VisuallyHidden role="status" aria-live="polite" aria-atomic="true">
-        {announced}
+        {/* 「{이름} 채널로 전환했어요」 — 화면엔 안 보여도 DOM에 있어 녹화에 담긴다 */}
+        <span className={PRIVATE_TEXT_CLASS}>{announced}</span>
       </VisuallyHidden>
     </>
   );
@@ -148,7 +149,9 @@ function Cover({
       tabIndex={-1}
     >
       <Avatar size="xl" src={curtain.photo ?? undefined} name={curtain.name} />
-      <div className={styles.title}>{curtain.name} 채널로 전환 중</div>
+      <div className={styles.title}>
+        <span className={PRIVATE_TEXT_CLASS}>{curtain.name}</span> 채널로 전환 중
+      </div>
       <div className={styles.sub}>{editor ? '편집자로 들어가요' : '스트리머로 돌아가요'}</div>
       <div
         className={styles.track}

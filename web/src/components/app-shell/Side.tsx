@@ -20,7 +20,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { Avatar, IconButton } from '@/ui';
+import { Avatar, IconButton, PRIVATE_TEXT_CLASS } from '@/ui';
 import { ChannelSwitcher, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
 import { NotificationBell } from '@/features/notifications/NotificationBell';
 import { useSidebarStore } from '@/stores/sidebar';
@@ -227,7 +227,9 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
             />
             {/* 요금제(Pro)는 뺐다: 구독 API가 없다. 역할은 칩 대신 회색 작은 글씨로 */}
             <span className={styles.userText}>
-              <span className={styles.userName}>{channel.name ? `${channel.name} 채널` : ''}</span>
+              <span className={`${styles.userName} ${PRIVATE_TEXT_CLASS}`}>
+                {channel.name ? `${channel.name} 채널` : ''}
+              </span>
               <span className={styles.userRole}>{channel.role}</span>
             </span>
             {/* 눌러서 채널을 바꾼다는 표시(시안 1u의 위아래 화살표). 접힌 레일에선 라벨과 함께 접는다 */}

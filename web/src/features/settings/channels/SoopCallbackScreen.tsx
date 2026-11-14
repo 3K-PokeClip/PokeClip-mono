@@ -85,6 +85,7 @@ export function SoopCallbackScreen() {
           tone: 'success',
           title: 'SOOP 방송국을 연동했어요',
           description: `${linked.nickname} 방송국에서 하이라이트를 감지해요`,
+          maskDescription: true,
         });
         back();
       })

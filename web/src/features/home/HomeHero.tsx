@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { Check } from 'lucide-react';
-import { Button, LinkButton, Skeleton } from '@/ui';
+import { Button, LinkButton, PRIVATE_TEXT_CLASS, Skeleton } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import { track } from '@/lib/analytics';
 import styles from './HomeScreen.module.css';
@@ -127,9 +127,7 @@ export function SetupHome({
     <div>
       <section className={styles.hero} aria-label="지금 할 일" data-tour-id={TOUR_TARGET.homeHero}>
         <div>
-          <div className={styles.heroHello}>
-            {userName ? `${userName}님, 반가워요` : '반가워요'}
-          </div>
+          <Hello userName={userName} rest="반가워요" />
           <h1 className={styles.heroTitle}>
             {waiting
               ? '이제 방송만 켜면 돼요'
@@ -157,7 +155,12 @@ export function SetupHome({
                   </span>
                   <span className={styles.trackTitle}>
                     {step.title}
-                    {step.done ? <span className={styles.trackNote}>{step.doneNote}</span> : null}
+                    {/* 채널 연결 단계의 메모는 「{치지직 채널 이름} 연결됨」이다 */}
+                    {step.done ? (
+                      <span className={`${styles.trackNote} ${PRIVATE_TEXT_CLASS}`}>
+                        {step.doneNote}
+                      </span>
+                    ) : null}
                     {step.unknown ? <span className={styles.trackNote}>확인 중…</span> : null}
                   </span>
                   {state === 'current' ? (
@@ -275,13 +278,29 @@ function StatList({ stats, past = false }: { stats: WeekStats; past?: boolean })
   );
 }
 
+/**
+ * 「{이름}님, …」 인사 — 이름만 세션 녹화에서 가린다(POK-572). 이름이 없으면 이메일을 대신 쓰므로(useHomeMockState) 그것도
+ * 같이 가려진다. 이름이 없으면 뒷말만
+ */
+function Hello({ userName, rest }: { userName: string | null; rest: string }) {
+  return (
+    <div className={styles.heroHello}>
+      {userName ? (
+        <>
+          <span className={PRIVATE_TEXT_CLASS}>{userName}</span>님, {rest}
+        </>
+      ) : (
+        rest
+      )}
+    </div>
+  );
+}
+
 export function WeekHero({ userName, week }: { userName: string | null; week: WeekStats }) {
   return (
     <section className={styles.hero} aria-label="이번 주" data-tour-id={TOUR_TARGET.homeHero}>
       <div>
-        <div className={styles.heroHello}>
-          {userName ? `${userName}님, 이번 주 기록이에요` : '이번 주 기록이에요'}
-        </div>
+        <Hello userName={userName} rest="이번 주 기록이에요" />
         <h1 className={styles.heroTitle}>
           방송 {week.broadcasts}번에서 카드 {week.cards}장을 찾았어요
         </h1>
@@ -309,11 +328,7 @@ export function QuietWeekHero({
   return (
     <section className={styles.hero} aria-label="이번 주" data-tour-id={TOUR_TARGET.homeHero}>
       <div>
-        <div className={styles.heroHello}>
-          {userName
-            ? `${userName}님, 이번 주는 아직 방송 전이에요`
-            : '이번 주는 아직 방송 전이에요'}
-        </div>
+        <Hello userName={userName} rest="이번 주는 아직 방송 전이에요" />
         <h1 className={styles.heroTitle}>
           {ago === undefined
             ? '이번 주 첫 방송을 기다리고 있어요'

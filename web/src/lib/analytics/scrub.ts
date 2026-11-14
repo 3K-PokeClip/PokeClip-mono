@@ -1,4 +1,5 @@
 import type { CaptureResult, Properties } from 'posthog-js';
+import { PRIVATE_TEXT_CLASS } from '@/ui/privateText';
 
 // 분석 도구(PostHog)로 나가는 이벤트에서 주소에 실린 비밀값을 지운다 (POK-356).
 // - 쿼리와 해시는 통째로 뗀다. OAuth 콜백의 code·state, 화면의 ?stream=·?card=·?recipe= 가 다 여기 실린다.
@@ -161,8 +162,78 @@ export function scrubEvent(event: CaptureResult | null): CaptureResult | null {
   return event;
 }
 
+// 가림 칸 = PRIVATE_TEXT_CLASS(@/ui, SDK 기본 maskTextClass와 같은 'ph-mask')를 단 요소 (POK-572). 녹화는 단추·메뉴·안내문
+// 글자를 그대로 담고, 사람을 가리키거나 사람이 쓴 글자(채널·회원 이름, 이메일, 방송·클립·업로드 제목, 알림 내용, 편집기에 넣은
+// 글자 등)가 나오는 칸에만 이 클래스를 단다. 화면은 @/ui에서 가져다 쓴다 — 분석 모듈을 통째로 목 하는 테스트가 상수 하나 때문에
+// 깨지지 않게. 규칙은 web/docs/ANALYTICS.md 「세션 녹화」
+
+/** 가림 표시가 없어도 가리는 글자 — 이메일 꼴. 표시를 빠뜨린 칸의 마지막 그물이다 */
+const EMAIL_RE = /[^\s@]+@[^\s@]+\.[^\s@]+/g;
+
+function stars(text: string): string {
+  return text.replace(/\S/g, '*');
+}
+
+function inMaskedArea(element: Element | null | undefined): boolean {
+  if (!element) return true; // 어느 요소의 글자인지 모르면 가린다
+  // <title>(문서 제목·SVG 툴팁)은 화면에 안 보이고 방송·채널 이름이 실리기 쉬워 늘 가린다
+  if (element.tagName.toUpperCase() === 'TITLE') return true;
+  return element.closest(`.${PRIVATE_TEXT_CLASS}`) !== null;
+}
+
+/**
+ * 녹화 속 글자를 요소마다 가린다 — `session_recording.maskTextFn` (POK-572). `maskTextSelector: '*'`와 함께 써서 모든 글자가
+ * 이 함수를 거친다. 가림 칸(PRIVATE_TEXT_CLASS) 안이거나 어느 요소인지 모르면 전부, 그 밖에서는 이메일 꼴만 `*`로 바꾼다.
+ * rrweb이 화면을 읽는 도중에 부르므로 던지지 않는다 — 판단이 실패하면 가린다.
+ */
+export function maskReplayText(text: string, element?: Element | null): string {
+  try {
+    return inMaskedArea(element) ? stars(text) : text.replace(EMAIL_RE, stars);
+  } catch {
+    return stars(text);
+  }
+}
+
+/**
+ * 녹화에서 통째로 빼는 요소(크기만 남는다) — 영상·캔버스·iframe과, 우리 그림(`public/brand/`) 밖의 이미지.
+ * 썸네일·프로필 사진은 바깥 주소(서명 토큰)·`data:`라 빠지고, 포키 그림만 남는다. `next/image`는 src를
+ * `/_next/image?url=%2Fbrand%2F…`로 바꾸므로 두 꼴을 다 둔다. 허용 목록이라 src가 비었거나 다른 이미지는 빠진다.
+ * 파일 입력도 뺀다 — posthog-js `maskAllInputs`는 `file` 입력을 가리지 않아 고른 파일 이름(`C:\fakepath\…`)이 입력
+ * 이벤트로 남는다. 우리 파일 입력은 다 숨은 입력이라 화면에서 잃는 것이 없다
+ */
+export const REPLAY_BLOCK_SELECTOR =
+  'img:not([src^="/brand/"]):not([src^="/_next/image?url=%2Fbrand%2F"]), picture, video, canvas, iframe, input[type="file"]';
+
+/** 우리 그림 주소(경로+쿼리) — 녹화에서 빼지 않는 이미지(REPLAY_BLOCK_SELECTOR)와 같은 두 꼴 */
+const BRAND_ASSET_RE = /^\/(?:brand\/|_next\/image\?url=%2Fbrand%2F)/;
+
+function isBrandAssetUrl(url: string): boolean {
+  if (url.startsWith('/')) return BRAND_ASSET_RE.test(url);
+  try {
+    const parsed = new URL(url);
+    return isOwnHost(parsed.hostname) && BRAND_ASSET_RE.test(parsed.pathname + parsed.search);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * src·srcset이 모두 우리 그림이면 참 — 그 쿼리(`?url=%2Fbrand%2F…&w=…`)에는 비밀값이 없고, 떼면 next/image 주소가 깨져
+ * 녹화에 빈 그림이 남는다(POK-572 실측: `srcset`이 `/_next/image` 하나로 뭉개졌다). srcset은 「주소 너비, …」 목록이다
+ */
+function isBrandAsset(value: string): boolean {
+  const urls = value
+    .split(',')
+    .map((candidate) => candidate.trim().split(/\s+/)[0] ?? '')
+    .filter((url) => url !== '');
+  return urls.length > 0 && urls.every(isBrandAssetUrl);
+}
+
 const URL_ATTRIBUTES = new Set(['href', 'src', 'srcset', 'poster', 'action', 'formaction']);
-/** 사람이 읽는 글을 담는 속성 — 글자 가리기(maskTextSelector)는 속성을 건드리지 않는다. 채널 이름·회원 이름이 여기 실린다 */
+/**
+ * 사람이 읽는 글을 담는 속성 — 글자 가리기(maskTextFn)는 속성을 건드리지 않는다. 채널 이름·회원 이름이 여기 실린다.
+ * 녹화 화면에 보이지 않는 속성이라 늘 가린다
+ */
 const TEXT_ATTRIBUTES = new Set([
   'aria-label',
   'aria-description',
@@ -170,16 +241,18 @@ const TEXT_ATTRIBUTES = new Set([
   'aria-placeholder',
   'title',
   'alt',
-  'placeholder',
   'value',
 ]);
 
 /**
  * 녹화 속 요소 속성을 가린다 — `session_recording.maskAttributeFn`.
  * 링크·이미지 주소는 쿼리와 방송 번호를 떼고(?stream=·?card=, /broadcast/vod/<번호>), 글 속성은 글자 수만 남긴다.
+ * 빈 입력 칸에 보이는 placeholder는 글자와 같은 규칙(maskReplayText)을 따른다 — 「검색어 입력」 같은 안내가 보여야 한다.
  */
-export function scrubAttribute(name: string, value: string): string {
+export function scrubAttribute(name: string, value: string, element?: Element | null): string {
+  if ((name === 'src' || name === 'srcset') && isBrandAsset(value)) return value;
   if (URL_ATTRIBUTES.has(name)) return scrubUrl(value);
   if (TEXT_ATTRIBUTES.has(name)) return '*'.repeat(value.length);
+  if (name === 'placeholder') return maskReplayText(value, element);
   return value;
 }

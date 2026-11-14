@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import clsx from 'clsx';
 import { ChevronRight, Clapperboard, Sparkles, VideoOff } from 'lucide-react';
-import { Badge } from '@/ui';
+import { Badge, PRIVATE_TEXT_CLASS } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import { Thumb } from './Thumb';
@@ -91,7 +91,12 @@ function VodCardBody({ vod }: { vod: HomeVod }) {
         {vod.duration ? <span className={styles.durationPill}>{vod.duration}</span> : null}
       </Thumb>
       <div className={styles.vodText}>
-        <div className={clsx(styles.vodTitle, vod.title === null && styles.vodUntitled)}>
+        <div
+          className={clsx(
+            styles.vodTitle,
+            vod.title === null ? styles.vodUntitled : PRIVATE_TEXT_CLASS,
+          )}
+        >
           {vod.title ?? '제목 없는 방송'}
         </div>
         <div className={styles.vodMeta}>{vod.when}</div>

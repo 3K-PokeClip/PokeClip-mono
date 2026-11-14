@@ -7,6 +7,7 @@ import { CropResult } from './CropResult';
 import { VideoSurface } from './VideoSurface';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
+import { PRIVATE_TEXT_CLASS } from '@/ui';
 
 // 시안 1d-a 가운데 (2026-09-08 갱신분).
 //
@@ -54,7 +55,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
       ))}
       {subtitleText !== null ? (
         <span
-          className={styles.burnedSubtitle}
+          className={`${styles.burnedSubtitle} ${PRIVATE_TEXT_CLASS}`}
           data-position={state.captionPosition}
           // 「경계」는 분할 지분 자리다 — 50:50 이 아니면 한가운데가 아니다
           style={{ ['--pc-edge' as string]: `${state.splitRatio}%` }}
