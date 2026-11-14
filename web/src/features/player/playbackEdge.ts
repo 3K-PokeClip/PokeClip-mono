@@ -1,6 +1,13 @@
 import { mediaTimeAt, programDateAt, type DatedFragment } from './dvrWindow';
 import { REWIND_UI_MAX_SECONDS } from './playerMath';
-import type { PlaybackSource, SeekView } from './rewindSwitch';
+import { nextStreamAsk } from './liveHandoff';
+import type {
+  PlaybackSessionState,
+  PlaybackSource,
+  SeekView,
+  StreamPollEvent,
+} from './rewindSwitch';
+import { deniesRound } from './sessionShared';
 
 // 재생기가 로드한 목록의 가장자리 판정(설계 5.3.1 · 5.4절, POK-200 M5). 순수 함수라 jsdom 없이 시험한다.
 // hls.js synchronizeToLiveEdge 는 ENDLIST 없는 목록이 갱신될 때마다 돌아, 재생점이 창 밖이면 목록 끝으로 옮긴다. 그래서 창
@@ -207,6 +214,12 @@ export interface SessionAxisInput {
   kind: PlaybackSource['kind'];
   /** 목록이 아직 자란다(hls.js details.live — ENDLIST 가 없다). 방송 중 되감기의 창 하한 여유를 가른다 */
   live: boolean;
+  /**
+   * 방송이 끝났다는 근거가 있다(recordingEndedOf). 되감기의 끝을 벽시계가 아니라 로드한 목록 끝으로 잰다. 없으면 거짓(방송
+   * 중)이다. ENDLIST(live)로 가르지 않는다 — 방송 중 재접속을 기다리는 앞 목록에도 ENDLIST 가 붙고, 404 로 막힌 목록은
+   * ENDLIST 없이 멈춘다
+   */
+  recordingEnded?: boolean;
   fragments: readonly DatedFragment[];
   targetDurationS: number;
   /** 재생 위치(영상 초) */
@@ -224,7 +237,10 @@ export interface SessionAxis {
   list: LoadedList;
   /** 재생 위치의 실제 시각. 시각 표시가 없으면 null */
   atMs: number | null;
-  /** 시크바 오른쪽 끝의 실제 시각 — 라이브 끝(되감기 재생기는 「지금 − 라이브 지연」, vod 는 문서 끝) */
+  /**
+   * 시크바 오른쪽 끝의 실제 시각 — 라이브 끝(방송 중 되감기는 「지금 − 라이브 지연」, 방송이 끝난 쪽 국면의 되감기와 vod 는
+   * 목록 끝)
+   */
   edgeMs: number;
   /**
    * 시크바 왼쪽 끝의 실제 시각 — 맨 왼쪽(Home) · 왼쪽 끝을 넘는 이동이 요청하는 자리이자 카드의 범위 밖 문턱. 되감기 ·
@@ -235,6 +251,79 @@ export interface SessionAxis {
   view: SeekView;
   windowSeconds: number;
   behindSeconds: number;
+}
+
+/**
+ * 세션이 받은 스트림 답에서 접은 사실(usePlaybackSession 이 든다). 상태기계는 되감기 국면에서 라이브가 아닌 답을 버리므로
+ * 따로 든다. streamLive = 최신 답이 이 회차를 부정하지 않는 라이브다(준비 여부 · url 무관 — 발행 전 재접속 · X 모름 포함) ·
+ * streamEnded = 이 회차가 다시보기 · 끝남으로 답한 적이 있다(세션 동안 붙잡는다 — 다른 방송의 라이브 답으로 풀리지 않는다) ·
+ * roundDenied = 최신 라이브 답이 X 를 실제로 알고 이 회차를 부정했다(다른 방송 · 방송 없음). 붙잡지 않는다 — 방송 목록이 잠시
+ * 비거나 X 가 잘못 알려질 수 있어, 이 회차를 부정하지 않는 라이브 답(X 모름 포함)이 오면 풀린다
+ */
+export interface StreamFacts {
+  streamLive: boolean;
+  streamEnded: boolean;
+  roundDenied: boolean;
+}
+
+/** 세션을 연 직후 — 방송 중에 연 세션이라 첫 답 전에는 이어짐으로 본다 */
+export const OPEN_STREAM_FACTS: StreamFacts = {
+  streamLive: true,
+  streamEnded: false,
+  roundDenied: false,
+};
+
+/**
+ * 스트림 답 하나를 접은 다음 사실. 상태기계가 버리는 답은 접지 않는다(같은 객체) — 이미 반영한 물음 순번 이하인 늦은 답
+ * (nextStreamAsk 가 null) · 받지 못한 답(unavailable · none). session 은 이 답을 먹이기 직전의 상태다. x 는 그 답과 함께
+ * 물은 지금 방송 번호다 — 다른 방송 · 방송 없음이면 라이브가 아니고 이 회차가 끝났다는 확인이다. 다른 방송이면 그
+ * 다시보기 · 끝남은 이 회차의 것이 아니다. X 모름은 부정이 아니다
+ */
+export function streamFactsAfter(
+  prev: StreamFacts,
+  session: PlaybackSessionState,
+  event: StreamPollEvent,
+): StreamFacts {
+  const { result, x } = event;
+  if (nextStreamAsk(session, event) === null || result.kind !== 'ok') return prev;
+  const { mode } = result.status;
+  const denied = deniesRound(session, x);
+  const otherRound = x?.kind === 'known' && x.id !== '' && x.id !== session.roundId;
+  const thisRoundEnded = (mode === 'vod' || mode === 'ended') && !otherRound;
+  return {
+    streamLive: mode === 'live' && !denied,
+    streamEnded: prev.streamEnded || thisRoundEnded,
+    // 라이브 답만 부정 여부를 정한다 — 정리 중 · 다시보기 · 끝남 답은 앞 값을 둔다
+    roundDenied: mode === 'live' ? denied : prev.roundDenied,
+  };
+}
+
+/**
+ * 방송이 끝났다는 근거가 있는가 — 되감기 축의 끝을 로드한 목록 끝으로 재고 끝 문구를 「녹화 끝」 으로 하는 기준이다. 국면이
+ * 아니라 근거로 가른다(끝남 대기는 방송 중 재접속에도 들고, 되감기는 방송이 끝나도 pendingNext 가 남으면 그대로다).
+ * 1. 라이브 국면은 늘 아니다 — 라이브 축 · 문구를 그대로 둔다
+ * 2. 끝났다는 확인이면 그렇다 — streamEnded(이 회차 다시보기 · 끝남) · roundDenied(최신 라이브 답이 이 회차를 부정) · 회차
+ *    다시보기 제안 · 회차 종국(닫기로 정함). 다른 방송 보기 제안은 따로 보지 않는다 — 그 제안을 낳은 다른 방송 X 의 답이 이미
+ *    roundDenied 를 세운다
+ * 3. 확인이 없는 되감기는 방송 중이다(pendingNext · 다시 받기 포함) — 아니다
+ * 4. 끝남 대기는 최신 스트림 답이 라이브가 아니면 그렇다(!streamLive). 정상 종료는 ENDLIST 뒤 다음 답(정리 중)에서 바뀐다.
+ *    그 답 전 · X 모름 · 발행 전(ready:false) 라이브 답이면 벽시계다. 받지 못한 답은 앞 값을 둔다(정리 중 뒤면 목록 끝).
+ *    재접속 틈은 가르지 못한다: 앞 세션이 끝나고 재접속 라이브 답이 오기 전까지 서버는 정상 종료와 똑같이 정리 중이라고
+ *    답하므로, 그동안은 목록 끝 · 「녹화 끝」 이고 재접속 라이브 답이 오면 벽시계로 돌아간다. 정리 중을 벽시계로 두면 정상
+ *    종료에서 시차가 녹화 길이보다 커지는 결함이 되살아난다. 틈 동안에는 목록 끝 너머에 볼 내용이 없고, 그 틈은 재접속 창
+ *    (300초) 안이다
+ */
+export function recordingEndedOf(session: PlaybackSessionState, facts: StreamFacts): boolean {
+  const { phase } = session;
+  if (phase.kind === 'live') return false;
+  const confirmed =
+    facts.streamEnded ||
+    facts.roundDenied ||
+    phase.kind === 'vod-offered' ||
+    (phase.kind === 'ending-wait' && phase.closeOnEnd);
+  if (confirmed) return true;
+  if (phase.kind !== 'ending-wait') return false;
+  return !facts.streamLive;
 }
 
 function clampSeconds(ms: number): number {
@@ -255,7 +344,9 @@ export function sessionAxis(input: SessionAxisInput): SessionAxis | null {
     if (edge === null) return null;
     edgeMs = edge;
   } else {
-    edgeMs = kind === 'rewind' ? input.nowMs - input.lagMs : list.lastEndMs;
+    // 방송이 끝난 되감기는 목록이 더 자라지 않는다 — 벽시계로 세면 시차가 재생해도 줄지 않고 녹화 길이보다 커진다
+    const clock = kind === 'rewind' && input.recordingEnded !== true;
+    edgeMs = clock ? input.nowMs - input.lagMs : list.lastEndMs;
   }
   const atMs = programDateAt(fragments, input.currentTime);
   const barLowerMs =

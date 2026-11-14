@@ -1037,6 +1037,44 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     );
   }
 
+  describe('방송이 끝난 쪽 국면의 끝 문구 — 알약 · 시크바 낭독', () => {
+    /** streamLive = 최신 스트림 답이 아직 라이브인가(정상 종료면 정리 중이라 거짓) */
+    function sessionIn(
+      phase: PlaybackSession['state']['phase'],
+      streamLive = true,
+    ): PlaybackSession {
+      const base = fakeSession();
+      const state = { ...base.state, phase };
+      return { ...base, state, view: sessionView(state, Date.now()), streamLive };
+    }
+    const ending = {
+      kind: 'ending-wait',
+      origin: 'rewind',
+      atEnd: true,
+      closeOnEnd: false,
+    } as const;
+
+    it('정상 종료(끝남 대기 · 스트림이 정리 중)에서 끝에 닿으면 알약 · 시크바가 「녹화 끝」 이다', () => {
+      renderWith({ session: sessionIn(ending, false) });
+      expect(screen.getByRole('button', { name: '실시간으로 이동' })).toHaveTextContent('녹화 끝');
+      expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+        'aria-valuetext',
+        '녹화 끝',
+      );
+    });
+
+    it('방송 중 되감기는 끝에서 「실시간」 그대로다', () => {
+      renderWith({ session: sessionIn({ kind: 'rewind', pendingNext: null }) });
+      const pill = screen.getByRole('button', { name: '실시간으로 이동' });
+      expect(pill).toHaveTextContent('실시간');
+      expect(pill).not.toHaveTextContent('녹화 끝');
+      expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+        'aria-valuetext',
+        '실시간',
+      );
+    });
+  });
+
   it('고르는 순서는 세션이 먼저다 — src 가 있어도 세션 재생기가 서고 재생기를 세션에 묶는다', () => {
     const session = fakeSession({ cover: 'checking' });
     renderWith({

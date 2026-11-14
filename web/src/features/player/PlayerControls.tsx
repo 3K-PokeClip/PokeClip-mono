@@ -18,7 +18,7 @@ import clsx from 'clsx';
 import styles from './GlassPlayer.module.css';
 import { PlayerControlHint } from './PlayerControlHint';
 import { PLAYER_KEY_LABELS } from './playerKeys';
-import { LIVE_EDGE_WORDS, formatBehind, volumeLevel } from './playerMath';
+import { LIVE_EDGE_WORDS, edgeWords, formatBehind, volumeLevel } from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import { ReplayTimeButton } from './ReplayTimeButton';
 import type { PlayerSimulation } from './usePlayerSimulation';
@@ -160,8 +160,9 @@ export function PlayerControls({
                 data-at-edge={sim.atEdge || undefined}
                 aria-hidden
               />
+              {/* 방송이 끝났다는 근거가 있으면(소스와 상관없이) 끝은 실시간이 아니라 녹화 끝이다. 단추가 하는 일(실시간으로)은 그대로다 */}
               {sim.atEdge
-                ? LIVE_EDGE_WORDS.atEdge
+                ? edgeWords(sim.recordingEnded === true).atEdge
                 : `${formatBehind(sim.behindSeconds)} · ${LIVE_EDGE_WORDS.goTo}`}
             </button>
           </PlayerControlHint>

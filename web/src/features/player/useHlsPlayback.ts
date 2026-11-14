@@ -135,6 +135,11 @@ export interface PlaybackHooks extends PositionHooks {
   /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 라이브 재생기의 시크바가 라이브 창 밖까지 넓어진다 */
   axisLowerMs?: number | null;
   /**
+   * 방송이 끝났다는 근거가 있다(recordingEndedOf). 되감기 축의 끝을 로드한 목록 끝으로 재고, 재생기가 그대로 내놓아 끝
+   * 문구가 「녹화 끝」 이 된다(소스가 라이브여도 — 라이브 축은 이 값을 읽지 않는다). 없으면 거짓(방송 중)
+   */
+  recordingEnded?: boolean;
+  /**
    * 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다(POK-528). 인자는 그 404 를 낸 재생기의 세대(세션이
    * 옛 재생기의 늦은 404 를 버린다)와 받지 못한 조각이다. 없으면 가로채지 않는다(지금 동작)
    */
@@ -328,6 +333,7 @@ export function useHlsPlayback(
       nowMs: Date.now(),
       lagMs: lagMsRef.current,
       axisLowerMs: hooksRef.current.axisLowerMs ?? null,
+      recordingEnded: hooksRef.current.recordingEnded === true,
     });
     if (axis !== null && kind === 'live') lagMsRef.current = Math.max(0, Date.now() - axis.edgeMs);
     return axis;
@@ -1093,6 +1099,7 @@ export function useHlsPlayback(
     // 화질은 표시용: 렌디션이 하나라 고를 것이 없어 메뉴를 안 보인다(POK-253)
     settingsMenu: false,
     replay: false,
+    recordingEnded: hooks.recordingEnded === true,
     playbackError: stopped !== null && stopped.src === src ? STOPPED_NOTES[stopped.why] : null,
     setQuality,
     // 표시 전용: lowLatencyMode는 Hls 생성자 전용 옵션이라 실반영엔 인스턴스 재생성이

@@ -638,6 +638,7 @@ function GlassPlayerBody({
             onReturnToLive={sim.returnToLive}
             onSeekingChange={setSeeking}
             replay={sim.replay}
+            recordingEnded={sim.recordingEnded}
           />
         )}
         <PlayerControls

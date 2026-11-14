@@ -14,9 +14,11 @@ import {
   type SessionClose,
   type SessionEffect,
   type SessionEvent,
+  type StreamPollEvent,
   type XAnswer,
 } from './rewindSwitch';
 import { probeLiveWindow } from './liveWindowProbe';
+import { OPEN_STREAM_FACTS, streamFactsAfter, type StreamFacts } from './playbackEdge';
 import type { PlayerSound } from './playbackSound';
 import { dvrHoleKnown } from './sessionShared';
 import { isPlayerStartHeld, sessionView, watchesDrain, type SessionView } from './sessionView';
@@ -105,6 +107,20 @@ export interface PlaybackSession {
   isStartHeld: () => boolean;
   /** 받기를 멈춘 되감기 재생기가 고갈을 볼 때인가(sessionView 의 watchesDrain) — 지금 상태를 읽는다(POK-547) */
   watchesDrain: () => boolean;
+  /**
+   * 최신 스트림 답이 이 회차를 부정하지 않는 라이브다(StreamFacts — 준비 여부 · url 무관). 정리 중 · 다시보기 · 끝남 · 다른
+   * 방송이면 거짓, 받지 못한 답은 앞 값. 세션을 열 때 참. 되감기 축의 끝을 가르는 근거다(recordingEndedOf). 없으면 참으로 본다
+   */
+  streamLive?: boolean;
+  /**
+   * 이 회차가 다시보기 · 끝남으로 답한 적이 있다(StreamFacts — 세션 동안 붙잡는다). 정리 중(ending)은 재접속 틈에도 나와
+   * 끝으로 치지 않는다. 세션을 열 때 거짓. 없으면 거짓
+   */
+  streamEnded?: boolean;
+  /**
+   * 최신 라이브 답이 이 회차를 부정했다(StreamFacts — 다른 방송 · 방송 없음, 붙잡지 않음). 세션을 열 때 거짓. 없으면 거짓
+   */
+  roundDenied?: boolean;
 }
 
 /** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
@@ -148,6 +164,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
    * 때의 순번을 들고 가서, 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
    */
   const sessionIdRef = useRef(0);
+  const [streamFacts, setStreamFacts] = useState<StreamFacts>(OPEN_STREAM_FACTS);
   /** 스트림 폴링 응답의 물음 순번 — 응답마다 1씩 오른다(세션 표가 늦은 응답을 버리는 기준) */
   const streamAskRef = useRef(0);
   const commit = useCallback((next: PlaybackSessionState | null) => {
@@ -172,6 +189,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     leftForRef.current = null;
     boundOnceRef.current = playerRef.current !== null;
     sessionIdRef.current += 1;
+    setStreamFacts(OPEN_STREAM_FACTS);
     commit(openSession({ roundId, accessKey, liveUrl }));
   }, [startable, roundId, accessKey, liveUrl, commit, state?.closed]);
 
@@ -331,13 +349,19 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       // 받은 즉시 찍는다 — 지금 방송 번호를 기다리는 동안 흐른 시간이 응답의 신선도에 들지 않게
       streamAskRef.current += 1;
       const ask = { seq: streamAskRef.current, receivedAtMs: Date.now() };
+      // 스트림 사실은 상태기계에 먹이는 같은 사건으로, 먹이기 직전 상태에서 접는다 — 늦은 답 버림도 같다(streamFactsAfter)
+      const feed = (event: StreamPollEvent) => {
+        const before = stateRef.current;
+        if (before !== null) setStreamFacts((prev) => streamFactsAfter(prev, before, event));
+        dispatch(event);
+      };
       if (!needsX(current)) {
-        dispatch({ type: 'stream-poll', result, ask });
+        feed({ type: 'stream-poll', result, ask });
         return;
       }
       const id = sessionIdRef.current;
       void optionsRef.current.resolveX(false).then((x) => {
-        if (id === sessionIdRef.current) dispatch({ type: 'stream-poll', result, x, ask });
+        if (id === sessionIdRef.current) feed({ type: 'stream-poll', result, x, ask });
       });
     },
     [dispatch],
@@ -427,5 +451,6 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     isKnownDvrHole,
     isStartHeld,
     watchesDrain: watchesDrainNow,
+    ...streamFacts,
   };
 }

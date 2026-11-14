@@ -314,3 +314,74 @@ describe('멈췄다 다시 틀 때의 하한 — 끝난 목록은 첫 내용 조
     expect(onSeekRequest).toHaveBeenCalledTimes(requests);
   });
 });
+
+describe('되감기 축의 끝 — 고리 recordingEnded 를 주입하면 로드한 목록 끝에서 잰다(세션 판정은 recordingEndedOf 시험)', () => {
+  // 맨 앞 GAP 둘 + 내용 조각 450개(1 800초) — 목록 끝 = 첫 내용 조각 + 1 800초. 벽시계는 그보다 40초 뒤다
+  const listEndMs = CONTENT_MS + 1_800_000;
+  const ended = { recordingEnded: true };
+
+  /** 재생 위치 seconds 로 옮기고 벽시계를 nowMs 로 둔 뒤 한 번 그린다 */
+  function repaint(seconds: number, nowMs: number) {
+    vi.setSystemTime(nowMs);
+    act(() => {
+      video.el!.currentTime = seconds;
+      video.el!.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('recordingEnded 가 실리면 재생이 10초 흐를 때 시차가 10초 줄고 창 폭은 녹화 길이에 머문다', async () => {
+    vi.useFakeTimers({ now: listEndMs + 40_000 });
+    const { view } = await mountSession('rewind', details(452, 2, false), 100, ended);
+    // 재생 위치 100초 = PDT0 + 100 000 → 목록 끝까지 1 708초
+    expect(view.result.current.behindSeconds).toBe(1_708);
+    expect(view.result.current.windowSeconds).toBe(1_800);
+    repaint(110, listEndMs + 50_000);
+    expect(view.result.current.behindSeconds).toBe(1_698);
+    expect(view.result.current.windowSeconds).toBe(1_800);
+  });
+
+  it('recordingEnded 가 실리면 끝에 닿은 뒤 5분이 흘러도 시차 · 창 폭이 커지지 않는다', async () => {
+    vi.useFakeTimers({ now: listEndMs + 40_000 });
+    const { view } = await mountSession('rewind', details(452, 2, false), 1_808, ended);
+    expect(view.result.current.behindSeconds).toBe(0);
+    repaint(1_808, listEndMs + 340_000);
+    expect(view.result.current.behindSeconds).toBe(0);
+    expect(view.result.current.windowSeconds).toBe(1_800);
+  });
+
+  it('recordingEnded 가 실리면 목록이 아직 live(ENDLIST 전)여도 목록 끝에서 잰다', async () => {
+    vi.useFakeTimers({ now: listEndMs + 40_000 });
+    const { view } = await mountSession('rewind', details(452, 2, true), 100, ended);
+    expect(view.result.current.behindSeconds).toBe(1_708);
+    expect(view.result.current.windowSeconds).toBe(1_800);
+  });
+
+  it('recordingEnded 가 없으면 목록에 ENDLIST 가 붙어도 「지금 − 라이브 지연」에서 잰다', async () => {
+    vi.useFakeTimers({ now: listEndMs + 40_000 });
+    const { view } = await mountSession('rewind', details(452, 2, false), 100);
+    // 끝 = 지금 − 지연 3초 = 목록 끝 + 37초
+    expect(view.result.current.behindSeconds).toBe(1_745);
+    expect(view.result.current.windowSeconds).toBe(1_837);
+  });
+
+  it('recordingEnded 가 실리면 막대 오른쪽 끝(비율 1) 목표는 목록 끝이다', async () => {
+    vi.useFakeTimers({ now: listEndMs + 40_000 });
+    const { view, onSeekRequest } = await mountSession(
+      'rewind',
+      details(452, 2, false),
+      100,
+      ended,
+    );
+    act(() => view.result.current.seekToFraction(1));
+    expect(lastTarget(onSeekRequest)).toBe(listEndMs);
+  });
+
+  it('재생기가 끝 문구를 가르게 recordingEnded 를 그대로 내놓는다', async () => {
+    vi.useFakeTimers({ now: listEndMs + 40_000 });
+    const sealed = await mountSession('rewind', details(452, 2, false), 100, ended);
+    expect(sealed.view.result.current.recordingEnded).toBe(true);
+    sealed.view.unmount();
+    const growing = await mountSession('rewind', details(452, 2, true), 100);
+    expect(growing.view.result.current.recordingEnded).toBe(false);
+  });
+});

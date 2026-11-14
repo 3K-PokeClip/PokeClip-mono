@@ -146,6 +146,94 @@ describe('여는 조건 · 폴링', () => {
   });
 });
 
+describe('스트림 사실(streamLive · streamEnded) — 세션이 받은 스트림 답을 접는다', () => {
+  function body(mode: 'vod' | 'ended' | 'ending' | 'live') {
+    return { ready: false, mode, url: null, firstPdt: null, headPdt: null };
+  }
+  /** 다음 정기 물음까지 흘려 그 답을 받는다 */
+  async function nextPoll() {
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    await flush();
+  }
+
+  it('라이브 · 발행 전 라이브는 라이브 · 정리 중은 아님 · 다시보기 뒤에는 끝남을 붙잡는다', async () => {
+    let stream: unknown = readyBody(A1, NOW - 60_000, NOW);
+    answer = (url) => (url === STREAM ? jsonResponse(200, stream) : jsonResponse(404, {}));
+    const { result } = renderHook(() => usePlaybackSession(options()));
+    await flush();
+    const facts = () => [result.current?.streamLive, result.current?.streamEnded];
+    expect(facts()).toEqual([true, false]);
+    for (const [mode, expected] of [
+      ['ending', [false, false]],
+      ['live', [true, false]],
+      ['vod', [false, true]],
+      ['live', [true, true]],
+    ] as const) {
+      stream = body(mode);
+      await nextPoll();
+      expect(facts()).toEqual(expected);
+    }
+  });
+
+  it('지금 방송 번호를 묻는 국면(끝남 대기)은 그 X 로 접는다 — 다른 방송의 라이브 답은 라이브가 아니다', async () => {
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 60_000, NOW)) : jsonResponse(404, {});
+    const { result } = renderHook(() =>
+      usePlaybackSession(
+        options({ resolveX: () => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-B' }) }),
+      ),
+    );
+    await flush();
+    expect(result.current?.streamLive).toBe(true);
+    act(() => result.current?.dispatch({ type: 'endlist' }));
+    expect(result.current?.state.phase.kind).toBe('ending-wait');
+    await nextPoll();
+    expect(result.current?.streamLive).toBe(false);
+  });
+
+  it('잠시 못 받은 답(5xx)은 앞 값을 그대로 둔다', async () => {
+    let status = 200;
+    answer = (url) =>
+      url === STREAM
+        ? jsonResponse(status, status === 200 ? body('ending') : {})
+        : jsonResponse(404, {});
+    const { result } = renderHook(() => usePlaybackSession(options()));
+    await flush();
+    expect(result.current?.streamLive).toBe(false);
+    status = 503;
+    await nextPoll();
+    expect(result.current?.streamLive).toBe(false);
+  });
+
+  it('세션을 새로 열면 라이브 · 끝나지 않음으로 돌아간다', async () => {
+    answer = (url) => (url === STREAM ? jsonResponse(200, body('vod')) : jsonResponse(503, {}));
+    const view = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options(),
+    });
+    await flush();
+    expect([view.result.current?.streamLive, view.result.current?.streamEnded]).toEqual([
+      false,
+      true,
+    ]);
+    view.rerender(
+      options({
+        roundId: 'r-B',
+        accessKey: 'r-B|key-2',
+        liveUrl: `${BASE}/live/key-2/index.m3u8`,
+        controlKey: 'key-2',
+      }),
+    );
+    await flush();
+    expect(view.result.current?.state.roundId).toBe('r-B');
+    expect([view.result.current?.streamLive, view.result.current?.streamEnded]).toEqual([
+      true,
+      false,
+    ]);
+  });
+});
+
 describe('past 닫힘의 넘김(POK-547)', () => {
   const VOD = `${BASE}/vod/key-1/r-A/index.m3u8`;
   const VOD_FIRST = NOW - 3_600_000;

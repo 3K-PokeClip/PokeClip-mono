@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import { readSound } from './playbackSound';
+import { OPEN_STREAM_FACTS, recordingEndedOf } from './playbackEdge';
 import { rewindAxisLowerMs } from './rewindSwitch';
 import type { PlaybackSession } from './usePlaybackSession';
 import { useHlsPlayback, type LivePosition, type PlaybackHooks } from './useHlsPlayback';
@@ -37,6 +38,12 @@ export function useLiveRewindPlayback(
   } = session;
   // 되감기 노출은 최신 폴링의 ready 로만 — 재료(entry)가 남아도 ready:false 면 시크바를 넓히지 않는다(계약3 7-2)
   const axisLowerMs = rewindAxisLowerMs(state);
+  // 되감기 축의 끝 · 끝 문구는 방송이 끝났다는 근거로 가른다 — 국면 · 목록의 ENDLIST 는 방송 중 재접속에서도 끝남 쪽이 된다
+  const recordingEnded = recordingEndedOf(state, {
+    streamLive: session.streamLive ?? OPEN_STREAM_FACTS.streamLive,
+    streamEnded: session.streamEnded ?? OPEN_STREAM_FACTS.streamEnded,
+    roundDenied: session.roundDenied ?? OPEN_STREAM_FACTS.roundDenied,
+  });
   const hooks = useMemo<PlaybackHooks>(
     () => ({
       onEndlist: () => dispatch({ type: 'endlist' }),
@@ -60,6 +67,7 @@ export function useLiveRewindPlayback(
       onNotice: notice,
       positionEpoch,
       axisLowerMs,
+      recordingEnded,
       // 끝에 닿아 덮개가 선 동안 재생 단추를 막는다(끝난 목록이 처음부터 돌지 않게)
       holdPlay: view.cover !== null,
       // 막힌 동안 새로 서는 재생기는 받지도 틀지도 않는다(POK-528 U2). 덮개가 이미 preparing 인 끝남 대기(끝에 닿아 재접속
@@ -76,6 +84,7 @@ export function useLiveRewindPlayback(
       isStartHeld,
       watchesDrain,
       axisLowerMs,
+      recordingEnded,
       view.cover,
       view.startHeld,
     ],

@@ -50,6 +50,11 @@ export interface PlayerSimulation {
    * (ADR-081 8). 시크바 문구와 End 키, 버튼 자리의 시간 표기가 이 값으로 갈린다(QA 2026-10-11, POK-518)
    */
   replay: boolean;
+  /**
+   * 세션 재생기가 방송이 끝났다는 근거를 받았다(recordingEndedOf — 소스가 되감기든 라이브든). 오른쪽 끝이 녹화 끝이라 알약 ·
+   * 시크바 낭독의 끝 문구만 「녹화 끝」 이 된다. replay 와 달리 End 키 · 버튼 자리 · 시크바 이름은 그대로다. 없으면 거짓
+   */
+  recordingEnded?: boolean;
   /** 녹화를 끝까지 봤다(POK-518). 재생 단추가 「처음부터」가 된다. 끝이 없는 라이브 · 목업엔 없다 */
   ended?: boolean;
   /**

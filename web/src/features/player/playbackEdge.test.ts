@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { DatedFragment } from './dvrWindow';
 import {
+  OPEN_STREAM_FACTS,
   endStalled,
   liveStartFloorMs,
+  recordingEndedOf,
+  streamFactsAfter,
   sessionAxis,
   loadedList,
   startIsTruncated,
@@ -12,7 +15,30 @@ import {
   type LoadedList,
 } from './playbackEdge';
 import { guardRewindFloor, type RewindFloorInput } from './rewindFloor';
-import type { PlaybackSource } from './rewindSwitch';
+import type { RewindStatusResult } from '@/api/rewindStatus';
+import { resetEventKit } from './handoffTestKit';
+import { play, playWatching, type Played, type Step } from './recordingEndTestKit';
+import {
+  A1,
+  A2,
+  END_REACHED,
+  ENDLIST,
+  MIN,
+  NOW,
+  P20,
+  T0,
+  X_A,
+  X_B,
+  X_UNKNOWN,
+  fresh,
+  gone,
+  liveReady,
+  poll,
+  rewindAt,
+  status,
+  vodReady,
+} from './relistTestKit';
+import type { PlaybackSource, SessionEvent, XAnswer } from './rewindSwitch';
 
 // 창 가장자리 · 시작 위치 · 끝 정체 판정(설계 5.3.1 · 5.4절 — R15 · R23 · R47 의 순수 몫)
 
@@ -382,6 +408,108 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
     });
   });
 
+  describe('되감기의 오른쪽 끝 — 방송 중은 「지금 − 라이브 지연」 · 방송이 끝난 쪽 국면은 로드한 목록 끝', () => {
+    /** 목록 끝(PDT0 + 20 000)보다 40초 뒤의 벽시계 — 방송이 끝나고 끝남 대기가 흐르는 동안 */
+    const lateMs = PDT0 + 60_000;
+    const rewindAt = (
+      mediaSeconds: number,
+      nowMs: number,
+      flags: { live: boolean; recordingEnded?: boolean },
+    ) =>
+      sessionAxis({
+        ...at(mediaSeconds),
+        nowMs,
+        kind: 'rewind',
+        ...flags,
+        liveEdgeTime: null,
+        axisLowerMs: null,
+      });
+    /** 끝남 대기의 정상 흐름 — 목록에 ENDLIST 가 붙었다 */
+    const sealed = { live: false, recordingEnded: true };
+
+    it('끝남 대기는 벽시계가 흘러도 끝이 목록 끝이다', () => {
+      expect(rewindAt(14, lateMs, sealed)).toMatchObject({
+        atMs: PDT0 + 4_000,
+        edgeMs: PDT0 + 20_000,
+        view: { lowerMs: PDT0, endMs: PDT0 + 20_000 },
+        windowSeconds: 20,
+        behindSeconds: 16,
+      });
+    });
+
+    it('끝남 대기에서 재생이 앞으로 가면 시차가 그만큼 줄고 창 폭은 녹화 길이에 머문다', () => {
+      const before = rewindAt(14, lateMs, sealed);
+      const after = rewindAt(18, lateMs + 4_000, sealed);
+      expect([before?.behindSeconds, after?.behindSeconds]).toEqual([16, 12]);
+      expect([before?.windowSeconds, after?.windowSeconds]).toEqual([20, 20]);
+    });
+
+    it.each([10, 14, 22, 29.5])(
+      '끝남 대기의 시차는 녹화 길이를 넘지 않는다 — 재생 위치 %d초',
+      (mediaSeconds) => {
+        const axis = rewindAt(mediaSeconds, lateMs, sealed);
+        expect(axis?.windowSeconds).toBe(20);
+        expect(axis?.behindSeconds).toBeLessThanOrEqual(20);
+      },
+    );
+
+    it('끝에 닿은 뒤 벽시계가 몇 분 흘러도 시차 · 창 폭이 커지지 않는다', () => {
+      const atEnd = rewindAt(30, lateMs, sealed);
+      const later = rewindAt(30, lateMs + 300_000, sealed);
+      expect([atEnd?.behindSeconds, later?.behindSeconds]).toEqual([0, 0]);
+      expect([atEnd?.windowSeconds, later?.windowSeconds]).toEqual([20, 20]);
+    });
+
+    it('ENDLIST 전에 404 로 막힌 끝남 대기(목록은 아직 live)도 끝이 목록 끝이다', () => {
+      expect(rewindAt(14, lateMs, { live: true, recordingEnded: true })).toMatchObject({
+        edgeMs: PDT0 + 20_000,
+        windowSeconds: 20,
+        behindSeconds: 16,
+      });
+    });
+
+    it('방송 중 재접속을 기다리는 되감기는 앞 목록에 ENDLIST 가 붙어도 끝이 「지금 − 라이브 지연」이다', () => {
+      expect(rewindAt(14, lateMs, { live: false, recordingEnded: false })).toMatchObject({
+        edgeMs: PDT0 + 57_000,
+        windowSeconds: 57,
+        behindSeconds: 53,
+      });
+    });
+
+    it('방송 중 목록은 끝이 지금도 「지금 − 라이브 지연」이다 — 목록 끝보다 뒤여도', () => {
+      expect(rewindAt(14, lateMs, { live: true })).toMatchObject({
+        edgeMs: PDT0 + 57_000,
+        view: { lowerMs: PDT0 + 4_000, endMs: PDT0 + 20_000 },
+        windowSeconds: 57,
+        behindSeconds: 53,
+      });
+    });
+  });
+
+  it('라이브는 방송이 끝난 쪽 국면이어도 라이브 끝 시각이 끝이다', () => {
+    const axis = sessionAxis({
+      ...at(26),
+      nowMs: PDT0 + 60_000,
+      kind: 'live',
+      live: true,
+      recordingEnded: true,
+      liveEdgeTime: 28,
+      axisLowerMs: null,
+    });
+    expect(axis).toMatchObject({ edgeMs: PDT0 + 18_000, behindSeconds: 2 });
+  });
+
+  it('vod 는 벽시계와 무관하게 문서 끝이 끝이다', () => {
+    const axis = sessionAxis({
+      ...at(14),
+      nowMs: PDT0 + 60_000,
+      kind: 'vod',
+      live: false,
+      liveEdgeTime: null,
+      axisLowerMs: null,
+    });
+    expect(axis).toMatchObject({ edgeMs: PDT0 + 20_000, windowSeconds: 20, behindSeconds: 16 });
+  });
   it('vod 는 문서 범위가 축이다(여유 0)', () => {
     const axis = sessionAxis({
       ...at(14),
@@ -461,5 +589,247 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
       });
       expect(axis?.barLowerMs).toBe(PDT0);
     });
+  });
+});
+
+describe('recordingEndedOf — 끝났다는 확인 · 스트림이 아직 라이브인가(실제 세션 사건 순서)', () => {
+  beforeEach(resetEventKit);
+
+  const endlist: Step = () => ENDLIST;
+  /** 보던 자리 P20 을 덮지 않는 같은 회차 새 url A2 의 답(재접속) */
+  const reconnected =
+    (x: XAnswer = X_A): Step =>
+    () =>
+      poll(liveReady(A2, T0 + 50 * MIN), x);
+  const notLive: Step = () => poll(status({ mode: 'ending' }));
+  const streamVod =
+    (x: XAnswer = X_A): Step =>
+    () =>
+      poll(vodReady(), x);
+  const unavailable: Step = () => poll({ kind: 'unavailable' });
+  const segmentGone: Step = (state) => gone(state);
+  const ended = (played: Played) => recordingEndedOf(played.state, played.facts);
+
+  it('방송 중 되감기는 아니다', () => {
+    expect(ended(playWatching())).toBe(false);
+  });
+
+  it('세션을 열고 첫 스트림 답 전에 ENDLIST 가 와도 아니다', () => {
+    expect(ended(play(rewindAt(P20), [endlist]))).toBe(false);
+  });
+
+  it('정상 종료 — ENDLIST 뒤 다음 답이 정리 중(ending)이면 한 폴링 안에 그렇다', () => {
+    expect(ended(playWatching(endlist))).toBe(false);
+    expect(ended(playWatching(endlist, notLive))).toBe(true);
+  });
+
+  it('정상 종료 — 그 뒤 회차 다시보기가 제안돼도 그렇다', () => {
+    const played = playWatching(endlist, notLive, () => ({
+      type: 'round-poll',
+      result: vodReady(),
+    }));
+    expect(played.state.phase.kind).toBe('vod-offered');
+    expect(ended(played)).toBe(true);
+  });
+
+  it.each<[string, XAnswer]>([
+    ['X = 이 회차', X_A],
+    ['X 모름', X_UNKNOWN],
+  ])('재접속 — ENDLIST 뒤 새 라이브 답(%s)이면 아니다', (_x, x) => {
+    const played = playWatching(endlist, reconnected(x));
+    expect(played.state.phase.kind).toBe('ending-wait');
+    expect(ended(played)).toBe(false);
+  });
+
+  it('재접속 — 라이브 보기 제안 뒤 X 모름 답이 와도 깜박이지 않는다', () => {
+    expect(ended(playWatching(endlist, reconnected(), reconnected(X_UNKNOWN)))).toBe(false);
+  });
+
+  it('재접속 — ENDLIST 뒤 새 세션이 발행 전(live · ready:false)이어도 아니다', () => {
+    const notReady: Step = () => poll(status({ mode: 'live', ready: false }));
+    expect(ended(playWatching(endlist, notReady))).toBe(false);
+  });
+
+  it('재접속 — 새 라이브 답 뒤 ENDLIST 가 와도 아니다(pendingNext)', () => {
+    const played = playWatching(reconnected(), endlist);
+    expect(played.state.phase).toMatchObject({ kind: 'rewind', pendingNext: { url: A2 } });
+    expect(ended(played)).toBe(false);
+  });
+
+  it('재접속 — pendingNext 가 끝 도달로 사라진 끝남 대기에서 답을 못 받아도 아니다', () => {
+    const beyond: Step = () => poll(liveReady(A2, NOW + 30_000, NOW + 2 * MIN));
+    const played = playWatching(beyond, endlist, () => END_REACHED, unavailable);
+    expect(played.state.phase).toMatchObject({ kind: 'ending-wait', atEnd: true });
+    expect(ended(played)).toBe(false);
+  });
+
+  it('404 막힘 뒤 다음 답이 정리 중이면 그렇다', () => {
+    const played = playWatching(segmentGone, segmentGone, notLive);
+    expect(played.state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
+    expect(ended(played)).toBe(true);
+  });
+
+  it.each<[string, XAnswer]>([
+    ['X = 이 회차', X_A],
+    ['X 모름', X_UNKNOWN],
+  ])('404 막힘이어도 스트림이 아직 라이브라고(%s) 하면 아니다', (_x, x) => {
+    const stillLive: Step = () => poll(liveReady(A1, T0, NOW + MIN), x);
+    const played = playWatching(segmentGone, segmentGone, stillLive);
+    expect(played.state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
+    expect(ended(played)).toBe(false);
+  });
+
+  it('pendingNext 가 남은 되감기도 스트림이 이 회차 다시보기라고 하면 그렇다', () => {
+    const played = playWatching(reconnected(), endlist, streamVod());
+    expect(played.state.phase).toMatchObject({ kind: 'rewind', pendingNext: { url: A2 } });
+    expect(ended(played)).toBe(true);
+  });
+
+  it('이 회차가 끝났다는 답은 붙잡는다 — 그 뒤 다른 방송 B 의 라이브 답에도 그렇다', () => {
+    const otherLive: Step = () =>
+      poll(liveReady('https://media.pokeclip.com/dvr/key-1/b1/index.m3u8', NOW, NOW + MIN), X_B);
+    const played = playWatching(reconnected(), endlist, notLive, streamVod(), otherLive);
+    expect(played.state.phase.kind).toBe('rewind');
+    expect(ended(played)).toBe(true);
+  });
+
+  it('이 회차 끝남 답 없이 다른 방송 B 의 라이브 답만 이어져도 그렇다 — 붙잡아 풀리지 않는다', () => {
+    const otherLive: Step = () =>
+      poll(liveReady('https://media.pokeclip.com/dvr/key-1/b1/index.m3u8', NOW, NOW + MIN), X_B);
+    const played = playWatching(reconnected(), endlist, otherLive);
+    expect(played.state.phase).toMatchObject({ kind: 'rewind', pendingNext: { url: A2 } });
+    expect(ended(played)).toBe(true);
+    expect(ended(play(played.state, [otherLive, otherLive], played.facts))).toBe(true);
+  });
+
+  it.each<[string, RewindStatusResult, RewindStatusResult, boolean]>([
+    [
+      '정리 중(900) 먼저 · 라이브(899) 늦게 → 늦은 라이브를 버려 그렇다',
+      status({ mode: 'ending' }),
+      liveReady(A2, T0 + 50 * MIN),
+      true,
+    ],
+    [
+      '라이브(900) 먼저 · 정리 중(899) 늦게 → 늦은 정리 중을 버려 아니다',
+      liveReady(A2, T0 + 50 * MIN),
+      status({ mode: 'ending' }),
+      false,
+    ],
+  ])('늦은 답 — %s', (_where, first, late, expected) => {
+    const asked =
+      (seq: number, result: RewindStatusResult): Step =>
+      () => ({
+        type: 'stream-poll',
+        result,
+        x: X_A,
+        ask: { seq, receivedAtMs: NOW },
+      });
+    const played = playWatching(endlist, asked(900, first), asked(899, late));
+    expect(played.state.phase.kind).toBe('ending-wait');
+    expect(ended(played)).toBe(expected);
+  });
+
+  it.each<[string, XAnswer]>([
+    ["방송 없음(X = '') 한 번", { kind: 'known', id: '' }],
+    ['다른 방송(X = B) 오답 한 번', X_B],
+  ])('%s 뒤 X = 이 회차 답 → 새 송출 A2 로 바꾸면 벽시계로 돌아온다', (_where, wrong) => {
+    const denied: Step = () => poll(liveReady(A1, T0, NOW), wrong);
+    const backA: Step = () => poll(liveReady(A1, T0, NOW + MIN), X_A);
+    const toA2: Step = () => poll(liveReady(A2, T0, NOW + 2 * MIN), X_A);
+    expect(ended(playWatching(denied))).toBe(true);
+    expect(ended(playWatching(denied, backA))).toBe(false);
+    const switched = playWatching(denied, backA, toA2);
+    expect(switched.state.source.url).toBe(A2);
+    expect(ended(switched)).toBe(false);
+  });
+
+  it('다른 방송 B 라이브 뒤 라이브가 아닌 답(정리 중)은 부정을 지우지 않는다', () => {
+    const otherLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_B);
+    const played = playWatching(reconnected(), endlist, otherLive, notLive);
+    expect(played.state.phase.kind).toBe('rewind');
+    expect(ended(played)).toBe(true);
+  });
+
+  it('다른 방송 B 라이브가 이어지다 X 모름 라이브 답이 오면 부정이 아니라 벽시계다', () => {
+    const otherLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_B);
+    const unknownLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_UNKNOWN);
+    expect(ended(playWatching(reconnected(), endlist, otherLive))).toBe(true);
+    expect(ended(playWatching(reconnected(), endlist, otherLive, unknownLive))).toBe(false);
+  });
+
+  it('다른 방송 B 의 다시보기 답은 이 회차의 끝으로 치지 않는다', () => {
+    expect(ended(playWatching(reconnected(), endlist, streamVod(X_B)))).toBe(false);
+  });
+
+  it('회차가 끝났다는 답(닫기로 정함)은 그렇다', () => {
+    const roundEnded: Step = () => ({ type: 'round-poll', result: status({ mode: 'ended' }) });
+    const played = playWatching(endlist, roundEnded);
+    expect(played.state.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
+    expect(ended(played)).toBe(true);
+  });
+
+  it('라이브 국면은 끝났다는 답이 있어도 아니다 — 라이브 축 · 문구는 그대로다', () => {
+    expect(
+      recordingEndedOf(fresh(), { streamEnded: true, streamLive: false, roundDenied: true }),
+    ).toBe(false);
+  });
+});
+
+describe('streamFactsAfter — 스트림 답을 세션 사실로 접는다', () => {
+  const session = fresh();
+  const after = (result: RewindStatusResult, x?: XAnswer, prev = OPEN_STREAM_FACTS) =>
+    streamFactsAfter(prev, session, {
+      type: 'stream-poll',
+      result,
+      x,
+      ask: { seq: session.streamAsk + 1, receivedAtMs: NOW },
+    });
+  const notLiveFacts = { streamEnded: false, streamLive: false, roundDenied: false };
+
+  it('세션을 연 직후는 라이브로 본다 — 방송 중에 연 세션이다', () => {
+    expect(OPEN_STREAM_FACTS).toEqual({ streamEnded: false, streamLive: true, roundDenied: false });
+  });
+
+  it.each<[string, RewindStatusResult, XAnswer | undefined, boolean]>([
+    ['준비된 라이브 · X 모름', liveReady(A1, T0), X_UNKNOWN, true],
+    ['발행 전 라이브(ready:false) · X 없음', status({ mode: 'live' }), undefined, true],
+    ['라이브 · 다른 방송 X', liveReady(A1, T0), X_B, false],
+    ['라이브 · 방송 없음 X', liveReady(A1, T0), { kind: 'known', id: '' }, false],
+    ['정리 중', status({ mode: 'ending' }), X_A, false],
+  ])('%s → 라이브 %s', (_where, result, x, live) => {
+    expect(after(result, x, notLiveFacts).streamLive).toBe(live);
+  });
+
+  it('상태기계가 버리는 늦은 답(이미 반영한 순번 이하)은 접지 않는다', () => {
+    const late = { ...session, streamAsk: 900 };
+    const event: SessionEvent = {
+      type: 'stream-poll',
+      result: status({ mode: 'ending' }),
+      x: X_A,
+      ask: { seq: 900, receivedAtMs: NOW },
+    };
+    expect(streamFactsAfter(OPEN_STREAM_FACTS, late, event)).toBe(OPEN_STREAM_FACTS);
+  });
+
+  it('최신 라이브 답이 이 회차를 부정하면(다른 방송 · 방송 없음) roundDenied 다 — 붙잡지 않는다', () => {
+    const denied = after(liveReady(A1, T0), X_B);
+    expect(denied).toMatchObject({ roundDenied: true, streamEnded: false });
+    expect(after(liveReady(A1, T0), { kind: 'known', id: '' }).roundDenied).toBe(true);
+    expect(after(liveReady(A1, T0), X_A, denied).roundDenied).toBe(false);
+    expect(after(liveReady(A1, T0), X_UNKNOWN, denied).roundDenied).toBe(false);
+    expect(after({ kind: 'unavailable' }, X_A, denied).roundDenied).toBe(true);
+  });
+
+  it('받지 못한 답(unavailable · none)은 앞 값을 둔다', () => {
+    expect(after({ kind: 'unavailable' }, X_A, notLiveFacts)).toBe(notLiveFacts);
+    expect(after({ kind: 'none' }, X_A)).toBe(OPEN_STREAM_FACTS);
+  });
+
+  it('이 회차(또는 모름 · 방송 없음)의 다시보기 · 끝남은 붙잡고 다른 방송의 것은 붙잡지 않는다', () => {
+    expect(after(vodReady(), X_A).streamEnded).toBe(true);
+    expect(after(status({ mode: 'ended' }), { kind: 'known', id: '' }).streamEnded).toBe(true);
+    expect(after(vodReady(), X_B).streamEnded).toBe(false);
+    const latched = after(vodReady(), X_UNKNOWN);
+    expect(after(liveReady(A1, T0), X_A, latched).streamEnded).toBe(true);
   });
 });

@@ -1,7 +1,26 @@
 import { renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetEventKit } from './handoffTestKit';
 import type { LivePosition } from './livePosition';
-import { openSession, type DvrSegment, type SessionEvent } from './rewindSwitch';
+import { sessionAxis } from './playbackEdge';
+import { playWatching, type Step } from './recordingEndTestKit';
+import {
+  A1,
+  A2,
+  ENDLIST,
+  MIN,
+  NOW as LIST_NOW,
+  T0,
+  X_A,
+  X_B,
+  X_UNKNOWN,
+  gone,
+  liveReady,
+  poll,
+  status,
+  vodReady,
+} from './relistTestKit';
+import { openSession, type DvrSegment, type SessionEvent, type XAnswer } from './rewindSwitch';
 import { sessionView } from './sessionView';
 import type { PlaybackHooks } from './useHlsPlayback';
 import type { PlaybackSession, SessionPlayer } from './usePlaybackSession';
@@ -222,4 +241,87 @@ describe('받기 중단 · 고갈의 고리(POK-547)', () => {
       expect(watchesDrain).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+describe('되감기 축의 끝 — 세션 사건 순서 → 고리 recordingEnded → 축', () => {
+  beforeEach(resetEventKit);
+
+  /** 4초 조각 다섯(T0 부터 20초) — 축을 셀 로드한 목록 */
+  const frags = [0, 1, 2, 3, 4].map((i) => ({
+    start: i * 4,
+    duration: 4,
+    programDateTime: T0 + i * 4_000,
+  }));
+  /** 목록 끝(T0 + 20 000)보다 40초 뒤 벽시계 · 지연 3초 */
+  const lateMs = T0 + 60_000;
+
+  /**
+   * 방송 중 A1 을 P20 에서 되감는 세션(첫 사건은 A1 이 아직 라이브라는 스트림 답)에 사건을 차례로 먹이고, 그 상태 · 스트림
+   * 사실로 훅을 그려 고리에 실린 값으로 재생 위치 14초(T0 + 14 000)의 시차 · 창 폭을 센다
+   */
+  function axisAfter(...steps: Step[]) {
+    const { state, facts } = playWatching(...steps);
+    const session = { ...fakeSession(), state, view: sessionView(state, LIST_NOW), ...facts };
+    renderHook(() => useLiveRewindPlayback({ current: null }, session));
+    const recordingEnded = player.hooks?.recordingEnded;
+    const axis = sessionAxis({
+      kind: 'rewind',
+      live: false,
+      recordingEnded,
+      fragments: frags,
+      targetDurationS: 4,
+      currentTime: 14,
+      liveEdgeTime: null,
+      nowMs: lateMs,
+      lagMs: 3_000,
+      axisLowerMs: null,
+    });
+    return { recordingEnded, behind: axis?.behindSeconds, window: axis?.windowSeconds };
+  }
+  const endlist: Step = () => ENDLIST;
+  const reconnected =
+    (x: XAnswer = X_A): Step =>
+    () =>
+      poll(liveReady(A2, T0 + 50 * MIN), x);
+  const notLive: Step = () => poll(status({ mode: 'ending' }));
+  const segmentGone: Step = (state) => gone(state);
+  /** 벽시계 축 — 끝 = 지금 − 지연 */
+  const clock = { recordingEnded: false, behind: 43, window: 57 };
+  /** 목록 끝 축 */
+  const listEnd = { recordingEnded: true, behind: 6, window: 20 };
+
+  it('ENDLIST → 같은 회차 새 라이브 답(재접속 · X 모름 포함)은 벽시계다', () => {
+    expect(axisAfter(endlist, reconnected())).toEqual(clock);
+    expect(axisAfter(endlist, reconnected(X_UNKNOWN))).toEqual(clock);
+  });
+
+  it('새 라이브 답 → ENDLIST(pendingNext)는 벽시계다', () => {
+    expect(axisAfter(reconnected(), endlist)).toEqual(clock);
+  });
+
+  it('정상 종료 ENDLIST → 정리 중 → 회차 다시보기는 목록 끝이다', () => {
+    const roundVod: Step = () => ({ type: 'round-poll', result: vodReady() });
+    expect(axisAfter(endlist, notLive)).toEqual(listEnd);
+    expect(axisAfter(endlist, notLive, roundVod)).toEqual(listEnd);
+  });
+
+  it('404 막힘 + 정리 중은 목록 끝 · 404 막힘인데 스트림이 아직 라이브(X 모름)면 벽시계다', () => {
+    const stillLive: Step = () => poll(liveReady(A1, T0, LIST_NOW + MIN), X_UNKNOWN);
+    expect(axisAfter(segmentGone, segmentGone, notLive)).toEqual(listEnd);
+    expect(axisAfter(segmentGone, segmentGone, stillLive)).toEqual(clock);
+  });
+
+  it('pendingNext 가 남은 채 이 회차를 부정하는 라이브 답(X = B)만 와도 목록 끝 · 이 회차 답이 오면 벽시계다', () => {
+    const otherLive: Step = () => poll(liveReady(A2, T0 + 50 * MIN), X_B);
+    expect(axisAfter(reconnected(), endlist, otherLive)).toEqual(listEnd);
+    expect(axisAfter(reconnected(), endlist, otherLive, reconnected())).toEqual(clock);
+  });
+
+  it('pendingNext 가 남은 채 이 회차가 끝났다는 답 뒤 다른 방송이 시작해도 목록 끝이다', () => {
+    const streamVod: Step = () => poll(vodReady());
+    const otherLive: Step = () =>
+      poll(liveReady('https://media.pokeclip.com/dvr/key-1/b1/index.m3u8', LIST_NOW), X_B);
+    expect(axisAfter(reconnected(), endlist, streamVod)).toEqual(listEnd);
+    expect(axisAfter(reconnected(), endlist, streamVod, otherLive)).toEqual(listEnd);
+  });
 });
