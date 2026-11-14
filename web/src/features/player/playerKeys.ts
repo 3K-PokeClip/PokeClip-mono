@@ -23,8 +23,8 @@ export type SeekKeyEvent = {
 };
 
 /**
- * 오른쪽 끝으로 가는 의도(End). 다시보기(replay)의 끝은 시크바 오른쪽 끝이다: 라이브 복귀로 보내면 재생 세션의 다시보기가 무시해
- * 키가 죽는다(POK-518).
+ * 오른쪽 끝으로 가는 의도(End). 회차 다시보기(replay — 지난 방송 재생기)에는 라이브 끝이 없다: 끝은 시크바 오른쪽 끝(녹화
+ * 끝)이라 라이브 복귀가 아니라 그 자리로 보낸다(POK-518).
  */
 export function edgeIntent(replay = false): SeekIntent {
   return replay ? { kind: 'toFraction', fraction: 1 } : { kind: 'live' };

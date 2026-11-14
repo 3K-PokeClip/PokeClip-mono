@@ -260,12 +260,17 @@ describe('고갈 통지 — 받기를 멈춘 재생기가 멎으면 덮개 단�
     }
   });
 
-  it('옛 세대 재생기의 통지 · 제안 밖 국면의 통지는 상태를 바꾸지 않는다', () => {
+  it('옛 세대 재생기 · 라이브 재생기의 통지 · 제안 밖 국면의 통지는 상태를 바꾸지 않는다', () => {
     const s = stoppedOffer();
     const ending = rewindEnding();
+    // 라이브 재생기로 보던 제안 — 세대는 맞아도 고갈 통지는 받기를 멈춘 되감기 재생기만 낸다
+    const live = liveOffered();
+    expect(live.source.kind).toBe('live');
+    expect(live.phase.kind).toBe('vod-offered');
     const events: Array<[PlaybackSessionState, SessionEvent]> = [
       [s, drain(s, true, DRAINED_AT, s.source.generation - 1)],
       [ending, drain(ending, true)],
+      [live, drain(live, true)],
     ];
 
     for (const [state, event] of events) {

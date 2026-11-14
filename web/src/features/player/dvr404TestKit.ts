@@ -138,7 +138,8 @@ function assertLoadStopInvariants(state: PlaybackSessionState): void {
 /**
  * 고갈 통지가 멎은 자리를 확인된 위치로 적는 전이인가(POK-547) — 위치 칸을 쓰므로 T5 의
  * 보존에서 뺀다. 끝나지 않은 시크가 있거나 자리를 모르거나 막힘 · 마지막 확인에서 온
- * 제안이면 적지 않으니 T5 를 그대로 받는다
+ * 제안이면 적지 않으니 T5 를 그대로 받는다. 라이브 재생기로 보던 제안도 적지 않는다 — 고갈
+ * 통지는 지금 세대의 되감기 재생기만 낸다
  */
 function writesDrainedPosition(before: PlaybackSessionState, event: SessionEvent): boolean {
   const { phase } = before;
@@ -147,6 +148,7 @@ function writesDrainedPosition(before: PlaybackSessionState, event: SessionEvent
     event.drained === true &&
     event.atPdtMs !== null &&
     event.generation === before.source.generation &&
+    before.source.kind === 'rewind' &&
     before.pendingSeekMs === null &&
     phase.kind === 'vod-offered' &&
     phase.stopped !== 'held'

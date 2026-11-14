@@ -208,7 +208,7 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
     expect(handedAtMs(atEnd)).toBeNull();
   });
 
-  it('[새 함수 — 음성 대조 제외 · 변이 M7z2 로 교정] 목록 하한(0)에서 선 relist → 막힘 → vod 제안의 단추는 처음부터 · 알림 0(손 상태 — J2)', () => {
+  it('[새 함수 — 음성 대조 제외 · 변이로 교정] 목록 하한(0)에서 선 relist → 막힘 → vod 제안의 단추는 처음부터 · 알림 0(손으로 만든 상태)', () => {
     const base = rewindFromLive();
     const floor = { ...base, source: { ...base.source, startAtMs: 0 } };
     const blocked = feed(floor, [gone(floor), gone(floor, floor.source.generation + 1)]).state;

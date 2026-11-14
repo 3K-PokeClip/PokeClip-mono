@@ -487,7 +487,7 @@ describe('끝남 대기 종국 → 세션을 닫고 지난 방송 판정으로(P
     });
   }
 
-  it('T1-5 본 구간과 안 겹치는 vod 답은 끝남 대기를 풀지 않고(R46) 20분 시한에 past 로 닫는다(cc 1)', () => {
+  it('T1-5 본 구간과 안 겹치는 vod 답은 끝남 대기를 풀지 않고(R46) 20분 시한에 past 로 닫는다', () => {
     const start = endingFromLiveClosed();
     const otherRound = status({
       ready: true,
