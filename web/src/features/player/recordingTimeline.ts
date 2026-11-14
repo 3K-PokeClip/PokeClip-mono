@@ -1,11 +1,16 @@
-import type { RecordingSpan } from '@/api/mediaPlayback';
-
 // 녹화 구간 여럿을 한 시간축에 놓는다(POK-253). 송출이 끊기거나 녹화기가 다시 서면 한 방송의 녹화가 구간 여럿이 된다.
 // 🔴 재생 서버는 틈을 건너 주지 않는다(2026-09-30 로컬 실측): 틈을 건너는 요청은 틈 앞에서 끝나고(40초를 달라 했는데
 // 15.9초), 틈 안에서 시작하는 요청은 404다. 그래서 한 번에 한 구간만 달라 하고, 끝나면 다음 구간으로 넘어간다.
 //
 // 시간축은 첫 구간 시작부터 마지막 구간 끝까지의 벽시계 초다 — 틈도 축에 남긴다. 카드 시점이 녹화 첫 조각 기준이라
 // 틈을 접으면 틈 뒤 카드가 전부 틈 길이만큼 어긋난다.
+
+/** 녹화 구간 하나 — recordingTimeline 의 입력 */
+export interface RecordingSpan {
+  /** 녹화 시작(UTC epoch ms) */
+  startMs: number;
+  durationSeconds: number;
+}
 
 export interface RecordingPiece {
   /** 첫 구간 시작 기준 초 */

@@ -2,7 +2,7 @@
 
 import { onSessionAdvance } from '@/stores/auth';
 import { requestPlaybackAccess, type PlaybackAccessResult } from './clipEditor';
-import { mediaCredentials, onPlaybackForbidden, playbackConfigured } from './mediaPlayback';
+import { mediaCredentials, playbackConfigured } from './mediaAccess';
 
 // 영상 출입증(POK-122 · POK-317)을 받아 두는 한 곳. 라이브 화면 · 편집기 · 다시보기가 모두 여기서 받는다.
 // 받는 길이 둘이면(라이브 화면이 따로 받으면) 쿠키 셈과 403 처리가 한쪽만 보게 되어 고친 자리 옆에 구멍이 났다(PR #332 codex
@@ -118,7 +118,6 @@ export function reportPlaybackForbidden(mediaKey: string): void {
       cache.delete(streamId);
     }
 }
-onPlaybackForbidden(reportPlaybackForbidden);
 onSessionAdvance(forgetPlaybackAccess);
 
 /** 그 방송의 출입증을 403으로 버린 적이 있나(한 번 읽으면 지운다). 라이브 화면이 다시 받은 뒤 재생기를 새로 세울지 정한다 */

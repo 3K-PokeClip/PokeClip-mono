@@ -79,15 +79,11 @@ vi.mock('@/features/player/mediaSource', async (importOriginal) => {
     },
   };
 });
-vi.mock('@/api/mediaPlayback', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
+vi.mock('@/api/mediaAccess', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/mediaAccess')>();
   return {
     ...actual,
     playbackConfigured: () => mediaCalls.configured,
-    lookupRecordingSpans: (streamId: string) => {
-      mediaCalls.spans.push(streamId);
-      return mediaCalls.answer ?? Promise.resolve(null);
-    },
   };
 });
 

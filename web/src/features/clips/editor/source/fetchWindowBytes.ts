@@ -1,7 +1,7 @@
 'use client';
 
 import { ensureMediaAccess, reportPlaybackForbidden } from '@/api/playbackAccess';
-import { mediaCredentials } from '@/api/mediaPlayback';
+import { mediaCredentials } from '@/api/mediaAccess';
 import type { PlaylistSegment } from './editorPlaylist';
 
 // 편집기 창의 ③ 재포장본(init + 조각) 바이트를 받는다(설계 4절 · 6절 위험 9).

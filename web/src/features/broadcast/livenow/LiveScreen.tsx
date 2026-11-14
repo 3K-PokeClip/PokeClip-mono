@@ -42,7 +42,7 @@ import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
-import { playbackConfigured } from '@/api/mediaPlayback';
+import { playbackConfigured } from '@/api/mediaAccess';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { VodSource } from '@/features/player/useVodPlayback';
 import { holdEditorMedia } from '@/features/clips/editor/editorMedia';
@@ -906,7 +906,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 뒤늦게 선 다시보기는 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 다시보기의 시작 위치(startAtSeconds)로
   // 넘긴다(QA 2026-10-11 실기동). 다시보기가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 다시보기가 다시 설 때 오래전 카드로 튄다
   const [pendingStart, setPendingStart] = useState<number | null>(null);
-  // 그 시점의 플레이어용 PDT(POK-196). 끝난 뒤 들어온 화면(A)은 다시보기 축이 선 뒤 이것으로 받아 둔 초를 다시 센다(pendingStartSeconds)
+  // 그 시점의 플레이어용 PDT(POK-196). 지난 방송 판정 화면(끝난 뒤 들어온 A · 끝남 대기가 닫힌 B)은 다시보기 축이 선 뒤 이것으로 받아 둔
+  // 초를 다시 센다(pendingStartSeconds)
   const [pendingStartAtMs, setPendingStartAtMs] = useState<number | null>(null);
   // 라이브에서 고른 시점은 남기지 않는다. 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 고른 시점이 아니라 재생기가
   // 알린 자리(되감은 영상의 시각, POK-326)를 따라, 남겨 두면 방송이 끝난 뒤 녹화는 처음부터인데 채팅만 그 카드에 묶이거나

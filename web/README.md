@@ -162,8 +162,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   - 편집기는 ③ 되감기 목록을 받기 직전에 `ensurePlaybackAccess(방송 번호, 영상 키)`로 받는다(POK-473). 만료 5분 전까지 다시
     쓰고(영상 키가 바뀌면 다시 받는다), 창 조각은 `ensureMediaAccess(영상 키)`로 갱신한다. 출입증을 못 받으면 「녹화 없음」으로
     접지 않고 「영상 목록을 받지 못했어요」로 알리며 다시 받는다.
-  - **어느 영상 요청이든 403이면 쿠키가 지워진 것으로 보고 그 키의 출입증을 버린다**(`reportPlaybackForbidden`): 녹화 목록은 응답
-    코드로, 편집기 미리보기(③ 목록 · 창 조각)는 버린 뒤 다시 받아 한 번 더 부른다(또 403 이면 그 조각을 원천 상태에 싣는다).
+  - **어느 영상 요청이든 403이면 쿠키가 지워진 것으로 보고 그 키의 출입증을 버린다**(`reportPlaybackForbidden`): 편집기
+    미리보기(③ 목록 · 창 조각)는 버린 뒤 다시 받아 한 번 더 부른다(또 403 이면 그 조각을 원천 상태에 싣는다).
     회차 다시보기(끝난 뒤 들어온 화면 · 끝남 대기가 닫힌 화면)는 hls.js라 아래 라이브 hls.js와 같이 버리고 멈추며, 라이브
     화면처럼 1분 안에 다시 받고 재생기를 새로 세운다(POK-546). 라이브
     hls.js는 치명 오류의 응답 코드가 403이면 한 번 더
@@ -174,28 +174,18 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
     다시보기를 불러오지 못함), 틀던 영상이 멎은 자리는 영상 위 한 줄 덮개(`playbackError`)가 알린다(라이브 403 · 라이브 복구
     포기 · 다시보기 재생 멎음). 편집기는 미리보기 아래 한 줄이 원천 상태(목록 받는 중 · 정리 중 · 최근 1시간 밖 ·
     없음 · 만료 — POK-473 D3)와 재생 오류를 알린다.
-  - 쿠키는 **출입증이 실제로 발급된 뒤에만** 싣는다(`mediaCredentials()`: 녹화 목록·미리보기 fetch는 `credentials`, 라이브
+  - 쿠키는 **출입증이 실제로 발급된 뒤에만** 싣는다(`mediaCredentials()`: 편집기 미리보기 fetch는 `credentials`, 라이브
     hls.js는 `xhrSetup`의 `withCredentials` — 회차 다시보기도 hls.js라 같다, POK-546). 로컬·dev 영상 서버(MediaMTX)는
     `Access-Control-Allow-Origin: *`로만 답해 쿠키를 실으면 브라우저가 응답을 버리기 때문이다(2026-10-23 실측).
     🔴 **로컬은 clip 출입증 설정 셋(`CLOUDFRONT_KEY_PAIR_ID` · `CLOUDFRONT_PRIVATE_KEY_PEM` · `MEDIA_BASE_URL`)을 비워 두는 것이
-    기본이다.** 채우면 출입증이 실제로 나와 쿠키를 싣는데, 라이브(`:8888`)는 다른 출처라 막힌다(녹화는 `/media` 같은 출처 전달이라 된다).
+    기본이다.** 채우면 출입증이 실제로 나와 쿠키를 싣는데, 라이브(`:8888`)는 다른 출처라 막힌다.
     출입증 흐름을 로컬에서 시험할 때만 켠다.
   - 503 `playback_signing_unavailable`(서명 재료 없음, 또는 그 방송의 영상 키가 정책에 못 들어감)을 받은 **방송은** 더 묻지 않는다.
     자격 확인이 안 되는 503(`authorization_unavailable`)은 실패라 다시 묻는다.
     보관 기간(60일)이 지난 방송은 출입증 문이 410 `vod_expired`라 「만료」로 받아 그 방송은 더 묻지 않고, 지난 방송 화면 · 편집기가
     「보관 기간(60일)이 지나 … 볼 수 없어요」로 알린다. 렌더 주문의 410도 편집기가 같은 뜻으로 알린다(POK-335).
-  - 🔴 **녹화 주소는 쿠키 경로 아래다**: `{base}/playback/{키}/list?path={키}` ·
-    `/playback/{키}/get?start&duration&format&path={키}`. 웹이 재생 서버의
-    `path` 쿼리를 경로의 키와 같은 값으로 하나 싣는다(POK-200). 쿠키 정책은
-    쿼리를 못 막으므로(`/playback/{내키}/list?path={남의키}`도 맞는다) 막는 것은
-    Media 상자 nginx 대조다. `path`가 하나이고 경로의 키와 같을 때만 통과하고
-    그 밖은 403 이다(`infra/media-host/nginx/nginx.conf.tmpl` · 시험은
-    `infra/media-host/test/proxy_contract.sh` 사례 4 · 5). CloudFront 와 ALB 는
-    쿼리를 그대로 넘긴다. 로컬은 `app/media/playback/[key]/[op]/route.ts`가
-    **들어온 `path`를 버리고 경로의 키로 다시 채운다**(이중 방어 ·
-    `MEDIA_PLAYBACK_ORIGIN`이 있을 때만, 없으면 404).
 - 🔴 **영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 (POK-233).** 1번이 편지의 방송 번호를 방송마다 새 회차 번호로
-  바꾸면 라이브·녹화 경로(스트림키)와 갈린다. clip이 방송 줄에 `ingestStreamId`를 실어 주고, 라이브 LL-HLS·녹화 목록·다시보기·
+  바꾸면 라이브·녹화 경로(스트림키)와 갈린다. clip이 방송 줄에 `ingestStreamId`를 실어 주고, 라이브 LL-HLS·다시보기·
   편집기 미리보기는 `mediaStreamId(row)`(= `ingestStreamId`, 없거나 비면 방송 번호)를 쓴다. **API 경로·출입증·채팅·카드는 방송
   번호 그대로다.** 주소의 `?stream=`도 방송 번호라 영상 경로로 바로 쓰지 않는다(`useMediaSource`는 넘겨받은 키만 본다).
   편집기 미리보기 창은 ③ 되감기 목록(PDT 축)의 한 런(끊김 없이 이어진 조각 줄) 안에서
@@ -636,8 +626,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | 구글 OAuth 클라이언트 ID | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                                                                                                  |
 | `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소           | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/))                                                                             |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                                                                                              |
-| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 (비워도 됨)    | 출입증 요청 가르기(`playbackConfigured()`) · 지난 방송 채팅 기다림. `/playback`은 안 부름(편집기 영상은 CONTROL). 로컬은 `http://localhost:3000/media`      |
-| `MEDIA_PLAYBACK_ORIGIN`               | `http://localhost:9996`  | 로컬 전용 재생 서버. `/media/playback` 라우트가 넘긴다(비면 404). prod · dev는 비운다                                                                       |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 비워도 됨                | 출입증 요청 가르기(`playbackConfigured()`) · 지난 방송 채팅 기다림. 주소로 쓰지 않고 비었는지만 본다. 값은 출입증 쿠키 경로 기준(「prod 영상 주소 값」)     |
 | `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | 비움                     | 되감기 제어면 — `{값}/api/streams/{id}/rewind` 와 회차별 경로를 붙인다(끝 `/` 없음, POK-200). 끝난 뒤 들어온 화면의 회차 다시보기도 이 값으로 선다(POK-546) |
 | `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                     | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)                                                                                    |
 | `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                     | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md`                                                                             |
@@ -681,17 +670,19 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 | `CLIP_API_URL`                        | **빌드 실패**          | clip 서버 내부 주소 (rewrites 대상) |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | **빌드 실패**          | 백엔드 `GOOGLE_CLIENT_ID`와 같은 값 |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | **빌드 실패**          | LL-HLS 베이스                       |
-| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | **빌드 실패**          | 녹화 재생 서버                      |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | **빌드 실패**          | 출입증 요청 스위치                  |
 | `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | **빌드 실패**          | 되감기 제어면                       |
 | `NEXT_PUBLIC_POSTHOG_KEY` · `_HOST`   | 사용 통계 꺼짐         | 아래 「prod 사용 통계 값」          |
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
 | `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
 
 `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL`은 prod 이미지에 필수로 둔다(로컬 개발은 위 환경변수 표대로 비워도 된다).
-웹은 이제 이 주소의 `/playback` list · get 을 부르지 않는다: 편집기 영상 원천은 `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`의
-회차 경로 · ③ 되감기 목록이다. 그래도 이 값이 비면 `playbackConfigured()`가 거짓이라 편집기가 출입증을 받지 않고, 서명 쿠키
-없이 ③ 목록 · 창 조각을 물어 CDN 뒤(prod)에서 403 이 된다. 필수를 풀지는 녹화 재생 서버 코드(`mediaPlayback.ts`)를
-정리할 때 정한다(POK-547).
+웹은 이 값을 주소로 쓰지 않는다(녹화 재생 서버 `/playback` 을 부르던 코드는
+POK-547 에서 지웠다): 편집기 영상 원천은 `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`의
+회차 경로 · ③ 되감기 목록이다. 그래도 이 값이 비면 `playbackConfigured()`
+(`src/api/mediaAccess.ts`)가 거짓이라 편집기가 출입증을 받지 않고, 서명 쿠키
+없이 ③ 목록 · 창 조각을 물어 CDN 뒤(prod)에서 403 이 된다. 이름과 필수 검사는
+인프라 빌드 인자와 묶여 있어 그대로 둔다.
 
 `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`은 되감기 제어면 주소다(POK-200). 웹이
 `{값}/api/streams/{id}/rewind`와 회차별 경로 `{값}/api/streams/{id}/rounds/{방송 번호}/rewind`를
@@ -701,22 +692,23 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 POK-546). 지난 방송 목록과 홈 격자도 회차를 묻지 않아 끝난 방송이 「VOD 준비 중」 · 「다시 보기 준비 중」에
 머문다(POK-568). prod 이미지가 되감기 없이 나가지 않게 필수로 둔다.
 
-**prod 영상 주소 값.** 셋 다 영상 도메인 `media.pokeclip.com`의 CloudFront 비헤이비어로
+**prod 영상 주소 값.** 셋 다 영상 도메인 `media.pokeclip.com` 값이다. 라이브 ·
+제어면은 그 도메인의 CloudFront 비헤이비어로
 간다([`cdn_media`](../infra/terraform/modules/cdn_media/main.tf) · 별칭은
 [`prod/edge`](../infra/terraform/prod/edge/main.tf) 의 `module "media"`).
 
 | 빌드 인자                             | prod 값                           | 출처                                                                  |
 | ------------------------------------- | --------------------------------- | --------------------------------------------------------------------- |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | `https://media.pokeclip.com/live` | `/live/*.m3u8` · `/live/*` 비헤이비어(웹이 `/{키}/index.m3u8`를 붙임) |
-| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | `https://media.pokeclip.com`      | `/playback/*` 비헤이비어(웹이 `/playback/{키}/…`를 붙임)              |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | `https://media.pokeclip.com`      | 주소로 쓰지 않음 — 출입증 쿠키 경로(clip `MEDIA_BASE_URL`)와 같은 값  |
 | `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | `https://media.pokeclip.com`      | `/api/streams/*/rewind` 비헤이비어(웹이 경로를 붙임)                  |
 
 🔴 **이 값은 clip 의 `MEDIA_BASE_URL`과 묶여 있다.** clip 의 값은
 `https://media.pokeclip.com`이다
 ([`prod/platform` README](../infra/terraform/prod/platform/README.md) 의 clip
 `MEDIA_BASE_URL` 행). 출입증 쿠키 정책의 범위는 그 값으로 만든다. 그래서 라이브
-값은 그 값 뒤에 `/live`, 재생 값은 그 값과 같아야 한다. 아니면 쿠키 범위가 안 맞아 영상
-요청이 전부 403 이다.
+값은 그 값 뒤에 `/live`여야 한다. 아니면 쿠키 범위가 안 맞아 영상 요청이 전부 403 이다.
+재생 값은 주소로 쓰지 않지만 같은 기준(그 값과 같음)으로 둔다.
 
 선택 인자는 비어도 빌드가 멈추지 않으므로, 이름을 잘못 적으면 그 기능이 조용히 꺼진 채 빌드된다.
 

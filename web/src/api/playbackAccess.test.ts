@@ -18,7 +18,7 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
       ...(await import('@/api/clipEditor')),
       ...(await import('@/api/playbackAccess')),
     };
-    const media = await import('@/api/mediaPlayback');
+    const media = await import('@/api/mediaAccess');
     const posts = () =>
       spy.mock.calls
         .filter(([url]) => String(url).endsWith('/playback-access'))
@@ -113,28 +113,6 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     const { api, posts } = await load(granted('2026-10-23T01:00:00Z'), '');
     expect(api.ensurePlaybackAccess('s1', 'k1')).toBeNull();
     expect(posts()).toHaveLength(0);
-  });
-
-  it('녹화 목록이 403이면 받아 둔 출입증을 버리고 다음에 다시 받는다: 다른 탭이나 쿠키 한도로 브라우저가 쿠키를 지웠다(PR #332 codex)', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
-    const { api, media, posts } = await load(granted('2026-10-23T01:00:00Z'));
-    await api.ensurePlaybackAccess('S-1', 'k-1');
-    expect(api.ensurePlaybackAccess('S-1', 'k-1')).toBeNull();
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((url: string) =>
-        Promise.resolve(
-          String(url).includes('/playback/')
-            ? jsonResponse(403, {})
-            : jsonResponse(200, { expiresAt: '2026-10-23T01:00:00Z' }),
-        ),
-      ),
-    );
-    expect(await media.lookupRecordingSpans('k-1')).toBeNull();
-    expect(api.ensurePlaybackAccess('S-1', 'k-1')).not.toBeNull();
-    expect(posts()).toHaveLength(1);
   });
 
   it('영상 키로 부르면 그 키로 받아 둔 방송의 출입증을 다시 쓰거나 새로 받는다: 모르는 키면 묻지 않는다', async () => {

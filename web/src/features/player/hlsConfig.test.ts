@@ -64,7 +64,7 @@ describe('라이브 조각 요청의 쿠키 싣기 (POK-317)', () => {
   it('출입증이 발급된 뒤에만 withCredentials를 켠다: 로컬 영상 서버는 Allow-Origin * 라 켜면 조각을 못 받는다', async () => {
     vi.resetModules();
     const { HLS_BASE_CONFIG: config } = await import('./hlsConfig');
-    const media = await import('@/api/mediaPlayback');
+    const media = await import('@/api/mediaAccess');
     const xhr = () => {
       const x = { withCredentials: false } as XMLHttpRequest;
       config.xhrSetup(x);

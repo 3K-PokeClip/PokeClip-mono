@@ -56,17 +56,11 @@ const playbackOn = vi.hoisted(() => ({ value: false }));
 const recordedSpans = vi.hoisted(() => ({
   value: null as null | { startMs: number; durationSeconds: number }[],
 }));
-vi.mock('@/api/mediaPlayback', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
+vi.mock('@/api/mediaAccess', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/mediaAccess')>();
   return {
     ...actual,
     playbackConfigured: () => playbackOn.value,
-    fetchRecordingSpans: (streamId: string) => {
-      spansAsked.push(streamId);
-      return recordedSpans.value !== null
-        ? Promise.resolve(recordedSpans.value)
-        : actual.fetchRecordingSpans(streamId);
-    },
   };
 });
 

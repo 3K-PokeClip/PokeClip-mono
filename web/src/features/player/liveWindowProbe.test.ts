@@ -288,7 +288,7 @@ describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
   it('credentials 는 hls.js 와 같은 mediaCredentials() 를 따른다 — 출입증 전 · 뒤', async () => {
     // 출입증 표시는 모듈 상태다 — 새로 읽은 모듈에서만 켜서 이 파일의 다른 시험에 남기지 않는다
     vi.resetModules();
-    const playback = await import('@/api/mediaPlayback');
+    const playback = await import('@/api/mediaAccess');
     const fresh = await import('./liveWindowProbe');
     const freshProbe = () => fresh.probeLiveWindow(LIVE_URL, new AbortController().signal);
     const spy = stubLive(mediaPlaylist());
