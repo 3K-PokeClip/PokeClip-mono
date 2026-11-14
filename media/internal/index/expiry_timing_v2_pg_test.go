@@ -6,8 +6,8 @@ package index
 // playback_pdt · 위치 · 길이만 섞기로 바꾼다(timing_v2_store.go settleV2). 그래서 판만 다른 두 장부가 같은 결과를 내야 한다.
 //
 // 판 2 행의 timing_wall_guess · playback_pdt 는 start_wall_utc 보다 v2Lag 만큼 이르게 심는다 — 만료가 범위를 그 칸으로
-// 재면 구간 첫 조각이 빠지고 뒤 방송 첫 조각이 들어 결과가 갈린다. 판 2 래치가 선 뒤에는 옛 쓰기자의 행(timing_wall_guess NULL)을 넣을 수 없으므로(쓰기자
-// 거부 트리거) 섞인 장부는 판 NULL 행 → 래치 → 판 2 행 순서로 심는다. PG_DSN 이 없으면 skip(REQUIRE_PG=1 이면 실패).
+// 재면 구간 첫 조각이 빠지고 뒤 방송 첫 조각이 들어 결과가 갈린다. 판 2 래치가 선 뒤에는 옛 쓰기자의 행
+// (timing_wall_guess NULL)을 넣을 수 없으므로(쓰기자 거부 트리거) 섞인 장부는 판 NULL 행 → 래치 → 판 2 행 순서로 심는다. PG_DSN 이 없으면 skip(REQUIRE_PG=1 이면 실패).
 
 import (
 	"context"
@@ -314,8 +314,10 @@ func v2Diagnostics(t *testing.T, pool *pgxpool.Pool, stream string) map[string]s
 }
 
 // 켜기 전 진단은 판 2 행이 있어도 같은 판정을 낸다. 닫힌 회차 Q(A) · R(B — B 문서 범위의 seq 4 를 지운 구멍)과
-// 확정 전 회차 U(ending · freezing — 미정 단위)를 판 NULL 로만 심은 장부와, A 만 판 NULL 로 심고 래치 뒤 B · U 를 판 2 로 심은 장부가
-// 문서 구멍 · 런북 「만료 켜기 전 진단」 · 「만료 미룸 질의」 에서 같은 결과를 낸다.
+// 확정 전 회차 U(ending · freezing — 미정 단위)를 판 NULL 로만 심은 장부와, A 만 판 NULL 로 심고 래치 뒤
+// B · U 를 판 2 로 심은 장부가 문서 구멍 · 런북 「만료 켜기 전 진단」 · 「만료 미룸 질의」 에서 같은 결과를 낸다.
+// 판 2 행에 민감한 것은 조각 표를 읽는 문서 구멍 · 미룸 질의 둘이다. 「만료 켜기 전 진단」 은 세션 표만 읽어
+// 지금은 구조상 같을 수밖에 없고, 나중에 조각 표를 읽게 될 때를 지키는 회귀 고정이다.
 func TestExpiryPreflightDiagnosticsSameWithV2Rows(t *testing.T) {
 	const stream = "v2exp-diag"
 	got := map[string]map[string]string{}
