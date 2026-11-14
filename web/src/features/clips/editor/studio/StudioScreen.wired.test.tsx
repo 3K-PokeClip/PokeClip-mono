@@ -974,6 +974,16 @@ describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
 });
 
 describe('StudioScreen — 카드로 연 실제 편집기', () => {
+  it('없는 카드면 오류 문구에 방송 번호를 싣지 않는다: 옛 방송 번호는 스트림 키이고 이 문구는 녹화 가림 칸 밖이다(POK-572)', async () => {
+    nav.search = `stream=${STREAM_ID}&card=999`;
+    renderWithProviders(<StudioScreen />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '이 방송에서 하이라이트 카드를 찾지 못했어요',
+    );
+    expect(document.body).not.toHaveTextContent(STREAM_ID);
+  });
+
   it('저장하면 받아 둔 보관함 목록을 버린다: 돌아갔을 때 방금 만든 편집본이 없는 옛 목록이 먼저 보이면 안 된다', async () => {
     const user = userEvent.setup();
     const client = createTestQueryClient();

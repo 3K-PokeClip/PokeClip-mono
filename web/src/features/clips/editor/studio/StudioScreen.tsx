@@ -470,8 +470,12 @@ async function loadFromCard(streamId: string, cardId: string): Promise<LoadResul
     fetchJumpCard(streamId, cardId),
     fetchBroadcast(streamId),
   ]);
+  // 방송 번호를 싣지 않는다: 옛 방송 번호는 스트림 키이고, 이 문구는 녹화 가림 칸 밖이라 세션 녹화에 그대로 남는다(POK-572)
   if (card === null)
-    return { kind: 'error', message: `카드 ${cardId}를 방송 ${streamId}에서 찾지 못했어요` };
+    return {
+      kind: 'error',
+      message: '이 방송에서 하이라이트 카드를 찾지 못했어요. 지워졌거나 주소가 맞지 않아요',
+    };
   if (broadcast === null || broadcast.startedAt === null) {
     return { kind: 'error', message: '방송 시작 시각이 없어 구간을 절대 시각으로 못 옮겨요' };
   }
