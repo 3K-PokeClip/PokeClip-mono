@@ -62,11 +62,76 @@ export function armLiveStart(
 export type StartSource = Pick<PlaybackSource, 'kind' | 'startAtMs' | 'strictStart'>;
 
 /**
- * 시작 시각이 있는 재생기에 기동 처리기를 단다(RC-7 · R15 · POK-200 c13). 라이브는
- * 기동 문지기(armLiveStart)가 첫 LEVEL_UPDATED 에서, 되감기는 첫 LEVEL_LOADED 에서
- * 그 자리를 한 번만 정한다. 시작 시각이 없으면 달지 않는다 — hls.js 가 스스로 시작한다.
- * 재생기는 autoStartLoad:false 로 서 있어야 한다. 되감기가 받기 시작한 자리는 load 에
- * 적고(모르면 null), strictStart 라이브의 잘린 시작은 onTruncated 로 알린다(armLiveStart)
+ * 첫 목록에서 앱이 받기 위치를 정하는 재생기인가 — 시작 시각이 있는 재생기와 다시보기 재생기다. 다시보기는 시작 시각이
+ * 없어도 정한다: hls.js 의 VOD 기본 시작은 영상 0초라(base-stream-controller.ts 2042–2047) 그 자리가 맨 앞 GAP 이면
+ * 조각을 하나도 받지 않아 영상 정보가 서지 않고 검은 화면에 멎는다(POK-573 · Chromium · WebKit 실측). 영상 정보 전의
+ * currentTime 대입은 seeking 을 내지 않아 받기 위치를 옮기지 못한다(같은 파일 466–479 · 2050–2061)
+ */
+function placesStart(source: Pick<StartSource, 'kind' | 'startAtMs'>): boolean {
+  return source.kind === 'vod' || source.startAtMs !== null;
+}
+
+/**
+ * 재생기 설정에 기동 방식을 싣는다. 첫 목록에서 받기 위치를 정하는 재생기(armStart)는 자동 시작을 끄고, 나머지는 바탕
+ * 그대로다(hls.js 가 스스로 시작한다)
+ */
+export function startConfig<T extends object>(
+  base: T,
+  source: Pick<StartSource, 'kind' | 'startAtMs'>,
+): T | (T & { autoStartLoad: false }) {
+  return placesStart(source) ? { ...base, autoStartLoad: false } : base;
+}
+
+/**
+ * 다시보기 재생기의 받기 시작 자리(영상 초) — 늘 내용 조각의 자리다. hls.js 는 GAP 조각을 받지 않아(망 요청 없음) 그 자리에서
+ * 기동하면 영상 정보가 서지 않는다. 시작 시각이 없으면 첫 내용 조각(맨 앞 GAP 이 없으면 목록 첫 조각이라 지금처럼 0초)이다.
+ * 있으면 그 자리(첫 내용 조각 앞이면 첫 내용 조각 — startLoadPosition)를 마지막 내용 조각의 시작으로 자르고, 그 자리가 GAP
+ * 조각 안이면 다음 내용 조각의 시작으로 올린다. 마지막 내용 조각의 시작으로 자르는 까닭: 목록 끝에서 받기 시작하면 받을 조각이
+ * 없고, 앱이 옮길 자리(끝 1초 앞 — useVodPlayback)보다 뒤에 서면 hls.js 가 첫 버퍼 뒤 그 자리로 끌어간다(stream-controller.ts
+ * 1130–1176). 앱이 그 뒤 옮기는 자리는 바꾸지 않는다. 내용 조각이 없거나(모두 GAP), 시작 시각을 영상 자리로 셀 시각 표시가
+ * 없으면 null — hls.js 가 고른다
+ */
+function vodStartPosition(details: LevelDetails, startAtMs: number | null): number | null {
+  const { fragments, targetduration, live } = details;
+  const content = fragments.filter((frag) => !frag.gap);
+  const firstContent = content[0];
+  const lastContent = content[content.length - 1];
+  if (firstContent === undefined || lastContent === undefined) return null;
+  if (startAtMs === null) return firstContent.start;
+  const position = startLoadPosition(fragments, startAtMs, 'vod', targetduration, live);
+  if (position === null) return null;
+  const at = Math.min(lastContent.start, position);
+  const inGap = fragments.find(
+    (frag) => frag.gap && frag.start <= at && at < frag.start + frag.duration,
+  );
+  if (inGap === undefined) return at;
+  // 뒤에 내용 조각이 없으면 앞의 내용 조각이다 — 마지막 내용 조각의 시작으로 잘라 두어 실제로는 늘 뒤에 있다
+  return content.find((frag) => frag.start > inGap.start)?.start ?? lastContent.start;
+}
+
+/** 첫 LEVEL_LOADED 에서 한 번만 place(details) 자리를 받기 위치로 적고 거기서 받는다(모르면 hls.js 가 고르는 -1) */
+function loadFromFirstList(
+  hls: Hls,
+  events: typeof Events,
+  load: Pick<LoadFrom, 'set'>,
+  place: (details: LevelDetails) => number | null,
+): void {
+  let placed = false;
+  hls.on(events.LEVEL_LOADED, (...[, data]) => {
+    if (placed) return;
+    placed = true;
+    const position = place(data.details);
+    load.set(position);
+    hls.startLoad(position ?? -1);
+  });
+}
+
+/**
+ * 첫 목록에서 받기 위치를 정하는 재생기(startConfig 로 자동 시작을 끈 재생기)에 기동 처리기를 단다(RC-7 · R15 ·
+ * POK-200 c13). 라이브는 기동 문지기(armLiveStart)가 첫 LEVEL_UPDATED 에서, 되감기 · 다시보기는 첫 LEVEL_LOADED 에서
+ * 그 자리를 한 번만 정한다. 다시보기는 시작 시각이 없어도 정하고(vodStartPosition), 라이브 · 되감기는 시작 시각이 없으면
+ * 달지 않는다 — hls.js 가 스스로 시작한다. 되감기 · 다시보기가 받기 시작한 자리는 load 에 적고(모르면 null),
+ * strictStart 라이브의 잘린 시작은 onTruncated 로 알린다(armLiveStart)
  */
 export function armStart(
   hls: Hls,
@@ -76,21 +141,19 @@ export function armStart(
   onTruncated: () => void,
 ): void {
   const { kind, startAtMs, strictStart } = source;
+  if (kind === 'vod') {
+    loadFromFirstList(hls, events, load, (details) => vodStartPosition(details, startAtMs));
+    return;
+  }
   if (startAtMs === null) return;
   if (kind === 'live') {
     const decide = (details: LevelDetails) => decideLiveStart(details, startAtMs, strictStart);
     armLiveStart(hls, events, decide, onTruncated);
     return;
   }
-  let placed = false;
-  hls.on(events.LEVEL_LOADED, (...[, data]) => {
-    if (placed) return;
-    placed = true;
-    const { fragments, targetduration, live } = data.details;
-    const position = startLoadPosition(fragments, startAtMs, kind, targetduration, live);
-    load.set(position);
-    hls.startLoad(position ?? -1);
-  });
+  loadFromFirstList(hls, events, load, ({ fragments, targetduration, live }) =>
+    startLoadPosition(fragments, startAtMs, kind, targetduration, live),
+  );
 }
 
 /** 재생점을 읽을 미디어 — 시험은 currentTime 하나만 준다 */

@@ -218,10 +218,26 @@ describe('재생기 소스와 세대(5.4절)', () => {
     expect(lastHls().startLoads).toEqual([0]);
   });
 
-  it('startAtMs 가 없으면 자동 시작이다(지금 동작)', async () => {
+  it('startAtMs 가 없으면 라이브 · 되감기는 자동 시작이다(지금 동작)', async () => {
     mount(src());
     await settle();
     expect(lastHls().config.autoStartLoad).toBeUndefined();
+    mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }));
+    await settle();
+    expect(lastHls().config.autoStartLoad).toBeUndefined();
+    act(() => lastHls().trigger('hlsLevelLoaded', { details: details(frags(10)) }));
+    expect(lastHls().startLoads).toEqual([]);
+  });
+
+  it('다시보기는 startAtMs 가 없어도 자동 시작을 끄고 첫 LEVEL_LOADED 에서 첫 내용 조각을 한 번 받는다', async () => {
+    mount(src({ kind: 'vod', url: 'https://m/vod/k/r/index.m3u8' }));
+    await settle();
+    const hls = lastHls();
+    expect(hls.config.autoStartLoad).toBe(false);
+    const gapped = frags(6).map((frag, i) => ({ ...frag, gap: i < 2 }));
+    act(() => hls.trigger('hlsLevelLoaded', { details: details(gapped, false) }));
+    act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(6), false) }));
+    expect(hls.startLoads).toEqual([8]);
   });
 });
 

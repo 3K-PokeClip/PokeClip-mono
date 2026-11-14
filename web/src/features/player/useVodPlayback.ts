@@ -230,9 +230,13 @@ export function useVodPlayback(
     }),
     [initialSound, onSoundChange],
   );
+  // 받아 둔 자리는 재생기가 설 때 hls.js 의 받기 시작 자리로도 준다(없으면 재생기가 첫 내용 조각을 고른다 — POK-573). 영상
+  // 정보가 서기 전의 옮기기(아래 layout 효과)는 받기 위치를 바꾸지 못해서다. 그 뒤 바뀐 값은 재생기가 읽지 않는다 — 늦게 온
+  // 자리는 이미 받기 시작한 뒤라 아래 효과의 옮기기가 맡는다
+  const startAtMs = startAtSeconds === null ? null : vod.axisZeroMs + startAtSeconds * 1000;
   const sim = useHlsPlayback(
     videoRef,
-    { kind: 'vod', url: vod.url, startAtMs: null, generation: 0, strictStart: false },
+    { kind: 'vod', url: vod.url, startAtMs, generation: 0, strictStart: false },
     options,
     onSeek,
     mediaKey,
@@ -406,14 +410,21 @@ export function useVodPlayback(
     return shownNow === null ? null : (shownNow - vod.axisZeroMs) / 1000;
   }, [list, readShownPdtMs, vod.axisZeroMs]);
 
-  // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(POK-518)
+  // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(POK-518). 맨 앞이 GAP 이면 틀기 전에 첫 내용 조각으로
+  // 옮긴다(옮기기가 onSeek 를 부른다 — POK-573): 끝난 뒤의 재생은 브라우저가 영상 0초(GAP)로 옮기고, hls.js 도 끝에 닿을 때
+  // 시작 자리를 0 으로 되돌려(base-stream-controller.ts 488–492) 그 자리에서 다시 받으려 해 화면이 멎는다. 영상 정보가 있는
+  // 상태의 옮기기라 seeking 이 나서 hls.js 가 받기를 그 자리로 다시 연다(같은 파일 405–406 · 470–479)
   const togglePlay = useCallback(() => {
     const restarts = videoRef.current?.ended === true;
+    const skipsHeadGap = restarts && list !== null && list.contentFirstMs > list.firstMs;
+    if (skipsHeadGap) {
+      seekToMs(list.contentFirstMs);
+    }
     toggleHlsPlay();
-    if (restarts) {
+    if (restarts && !skipsHeadGap) {
       onSeek?.();
     }
-  }, [videoRef, toggleHlsPlay, onSeek]);
+  }, [videoRef, list, seekToMs, toggleHlsPlay, onSeek]);
 
   return {
     ...sim,

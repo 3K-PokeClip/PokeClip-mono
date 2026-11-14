@@ -22,7 +22,7 @@ import {
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
 import { consumeDvrSegmentGone, isFirstListFailure, isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
-import { armStart, createSwapPause, trackLoadFrom } from './hlsStart';
+import { armStart, createSwapPause, startConfig, trackLoadFrom } from './hlsStart';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import {
   endStalled,
@@ -857,8 +857,9 @@ export function useHlsPlayback(
         setEngine('hlsjs');
         const base = kind === 'live' ? HLS_LIVE_CONFIG : HLS_REWIND_CONFIG;
         // 시작 시각이 있으면 자동 시작을 끄고 첫 목록에서 그 자리를 한 번만 정한다(RC-7 · R15). 라이브는 기동 문지기가
-        // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
-        const hls = new HlsCtor(startAtMs === null ? base : { ...base, autoStartLoad: false });
+        // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13). 다시보기는 시작 시각이 없어도 정한다 — 맨 앞
+        // GAP 을 건너 첫 내용 조각에서 받는다(POK-573 · startConfig)
+        const hls = new HlsCtor(startConfig(base, { kind, startAtMs }));
         hlsRef.current = hls;
         // 라이브는 구성 시차 스위치를 켰을 때만 단다(5.4절)
         videoStarts =

@@ -126,6 +126,113 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     expect(onLoadFrom).not.toHaveBeenCalled();
   });
 
+  describe('다시보기 — 시작 시각이 없어도 첫 LEVEL_LOADED 에서 받기 위치를 한 번 정한다', () => {
+    /** 맨 앞 gaps 개가 GAP(3초)이고 그 뒤 4초 조각 6 개인 끝난 목록 — 첫 내용 조각은 영상 3 × gaps 초 */
+    function vodDetails(gaps: number, allGap = false): LevelDetails {
+      const fragments = [...Array(gaps + 6).keys()].map((i) => {
+        const start = i < gaps ? i * 3 : gaps * 3 + (i - gaps) * 4;
+        return {
+          start,
+          duration: i < gaps ? 3 : 4,
+          programDateTime: PDT0 + start * 1000,
+          gap: allGap || i < gaps,
+        };
+      });
+      return { fragments, targetduration: 4, live: false } as unknown as LevelDetails;
+    }
+
+    it('시작 시각이 없고 맨 앞이 GAP 이면 첫 내용 조각에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[9]]);
+      expect(onLoadFrom.mock.calls).toEqual([[9]]);
+    });
+
+    it('시작 시각이 없고 맨 앞 GAP 이 없으면 목록 첫 조각(영상 0초)에서 받는다 — 지금과 같은 자리', () => {
+      const { hls } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(0) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[0]]);
+    });
+
+    it('시작 시각이 있으면 그 자리에서 받는다 — 맨 앞 GAP 안이면 첫 내용 조각으로 올린다', () => {
+      const at = arm({ kind: 'vod', startAtMs: PDT0 + 20_000, strictStart: false });
+      const early = arm({ kind: 'vod', startAtMs: PDT0 + 1_000, strictStart: false });
+
+      at.hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+      early.hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+
+      expect(at.hls.startLoad.mock.calls).toEqual([[20]]);
+      expect(early.hls.startLoad.mock.calls).toEqual([[9]]);
+    });
+
+    it('목록 끝 뒤의 시작 시각은 마지막 조각의 시작에서 받는다 — 받을 조각이 남는다', () => {
+      const { hls } = arm({ kind: 'vod', startAtMs: PDT0 + 60 * 60_000, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[29]]);
+    });
+
+    it('모두 GAP 이면 시작 시각이 있든 없든 받기 위치는 null · hls.js 가 고르는 -1 로 받는다', () => {
+      for (const startAtMs of [null, PDT0 + 20_000]) {
+        const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs, strictStart: false });
+
+        hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(0, true) });
+
+        expect(hls.startLoad.mock.calls).toEqual([[-1]]);
+        expect(onLoadFrom.mock.calls).toEqual([[null]]);
+      }
+    });
+
+    /** 4초 조각 셋 — gapAt 번째만 GAP 인 끝난 목록 */
+    function threeWithGapAt(gapAt: number): LevelDetails {
+      const fragments = [0, 1, 2].map((i) => ({
+        start: i * 4,
+        duration: 4,
+        programDateTime: PDT0 + i * 4_000,
+        gap: i === gapAt,
+      }));
+      return { fragments, targetduration: 4, live: false } as unknown as LevelDetails;
+    }
+
+    it('시작 시각이 가운데 GAP 조각 안이면 다음 내용 조각의 시작에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: PDT0 + 6_000, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: threeWithGapAt(1) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[8]]);
+      expect(onLoadFrom.mock.calls).toEqual([[8]]);
+    });
+
+    it.each<[string, number]>([
+      ['마지막 GAP 조각 안', 10_000],
+      ['목록 끝 뒤', 60_000],
+    ])(
+      '마지막 조각이 GAP 이면 시작 시각이 %s 여도 마지막 내용 조각의 시작에서 받는다',
+      (_name, atMs) => {
+        const { hls } = arm({ kind: 'vod', startAtMs: PDT0 + atMs, strictStart: false });
+
+        hls.trigger(EVENTS.LEVEL_LOADED, { details: threeWithGapAt(2) });
+
+        expect(hls.startLoad.mock.calls).toEqual([[4]]);
+      },
+    );
+
+    it('한 번만 정한다 — 그 뒤 목록에서는 startLoad 하지 않고, 라이브 기동 문지기도 달지 않는다', () => {
+      const { hls } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(0) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[9]]);
+      expect(hls.count(EVENTS.MANIFEST_PARSED) + hls.count(EVENTS.LEVEL_UPDATED)).toBe(0);
+    });
+  });
+
   it('strictStart 라이브의 시작이 잘리면 받기를 멈추고 다음 마이크로태스크에 알린다', async () => {
     const { hls, onTruncated } = arm({ kind: 'live', startAtMs: PDT0, strictStart: true });
 

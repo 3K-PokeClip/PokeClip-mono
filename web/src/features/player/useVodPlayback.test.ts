@@ -6,7 +6,8 @@ import { useVodPlayback, type VodSource } from './useVodPlayback';
 
 // 다시보기 재생기(POK-546 설계 2-3) — 회차 VOD 목록 하나를 PDT 축으로 튼다. hls.js 는 사건 처리기 · 목록만 흉내 내고
 // (ENDLIST · 조각 여럿 · ms PDT), 영상 노드의 재생 위치 · readyState 는 시험이 정한 뒤 timeupdate · seeking 을 쏜다.
-// 재생기는 첫 LEVEL_UPDATED 를 시험이 쏠 때까지 목록이 없다(첫 목록 지연).
+// 재생기는 첫 LEVEL_UPDATED 를 시험이 쏠 때까지 목록이 없다(첫 목록 지연). 흉내 hls.js 는 받기 시작(startLoad)의 자리만
+// 적는다 — 그 자리에서 조각을 받는지는 진짜 hls.js 층(vodStart.hlsjs.test.ts)이 본다.
 
 interface Frag {
   sn: number;
@@ -35,7 +36,11 @@ vi.mock('./videoStarts', () => ({
 
 class FakeHls {
   static isSupported = () => true;
-  static Events = { LEVEL_UPDATED: 'hlsLevelUpdated', ERROR: 'hlsError' };
+  static Events = {
+    LEVEL_LOADED: 'hlsLevelLoaded',
+    LEVEL_UPDATED: 'hlsLevelUpdated',
+    ERROR: 'hlsError',
+  };
   static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
   // hls.js 1.7.3 의 값 그대로(errors.ts)
   static ErrorDetails = {
@@ -49,7 +54,9 @@ class FakeHls {
   readonly handlers = new Map<string, ((event: string, data: unknown) => void)[]>();
   latestLevelDetails: Details | null = null;
   liveSyncPosition: number | null = null;
-  constructor() {
+  /** startLoad 에 준 자리 — 인자 없이 부르면 undefined */
+  readonly startLoads: (number | undefined)[] = [];
+  constructor(readonly config: { autoStartLoad?: boolean } = {}) {
     fake.instances.push(this);
   }
   on(event: string, handler: (event: string, data: unknown) => void) {
@@ -60,14 +67,20 @@ class FakeHls {
       h(event, data);
     }
   }
-  /** 목록 갱신 — 처리기보다 먼저 latestLevelDetails 를 채운다(hls.js 의 순서) */
+  /**
+   * 목록 받음 — 처리기보다 먼저 latestLevelDetails 를 채운다. hls.js 의 순서대로 stream-controller 의 LEVEL_LOADED
+   * 처리기 안에서 나는 LEVEL_UPDATED 를 먼저, 앱이 단 LEVEL_LOADED 처리기를 그 뒤에 부른다
+   */
   list(details: Details) {
     this.latestLevelDetails = details;
     this.trigger(FakeHls.Events.LEVEL_UPDATED, { details });
+    this.trigger(FakeHls.Events.LEVEL_LOADED, { details });
   }
   attachMedia() {}
   loadSource() {}
-  startLoad() {}
+  startLoad(position?: number) {
+    this.startLoads.push(position);
+  }
   stopLoad() {}
   recoverMediaError() {}
   destroy() {}
@@ -1010,5 +1023,143 @@ describe('왼쪽 끝은 첫 내용 조각 — 맨 앞 EXT-X-GAP 을 막대 · Ho
     sit(video, 20);
     act(() => view.result.current.returnToLive());
     expect(video.currentTime).toBe(39);
+  });
+
+  // 처음부터 — 영상 정보가 서기 전(HAVE_NOTHING)의 currentTime 대입은 seeking 을 내지 않아 hls.js 의 받기 위치를 옮기지
+  // 못한다. 그래서 받기 시작 자리를 재생기가 hls.js 에 직접 준다. 맨 앞이 GAP 인데 0초에서 받기 시작하면 조각을 하나도 받지
+  // 않고 검은 화면에 멎었다(Chromium · WebKit 실측)
+  describe('처음부터 — 다시보기 재생기는 hls.js 의 받기 시작 자리를 첫 목록에서 정한다', () => {
+    it('시작 자리가 없으면 첫 내용 조각에서 받기 시작하고, 앱은 옮기지 않는다(onSeek 도 부르지 않는다)', async () => {
+      const { video, onSeek } = await renderVod();
+      expect(lastHls().config.autoStartLoad).toBe(false);
+      act(() => lastHls().list(gappedDetails()));
+      expect(lastHls().startLoads).toEqual([8.4]);
+      expect(video.currentTime).toBe(0);
+      expect(onSeek).not.toHaveBeenCalled();
+    });
+
+    it('그 뒤 같은 주소의 목록이 다시 와도 받기를 다시 시작하지 않는다', async () => {
+      const { video } = await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      sit(video, 20);
+      act(() => lastHls().list(gappedDetails()));
+      expect(lastHls().startLoads).toEqual([8.4]);
+      expect(video.currentTime).toBe(20);
+    });
+
+    it('시작 자리가 있으면 그 자리에서 받기 시작하고, 앱도 그 자리로 옮겨 적용을 알린다', async () => {
+      const { video, onStartApplied } = await renderVod({ startAtSeconds: 30 });
+      act(() => lastHls().list(gappedDetails()));
+      expect(lastHls().startLoads).toHaveLength(1);
+      expect(lastHls().startLoads[0]).toBeCloseTo(30, 9);
+      expect(video.currentTime).toBeCloseTo(30, 9);
+      expect(onStartApplied).toHaveBeenCalledOnce();
+    });
+
+    it('시작 자리가 첫 목록 뒤에 들어오면 받기는 첫 내용 조각 그대로이고, 지금의 옮기기로 그 자리에 간다', async () => {
+      const { view, video, onStartApplied } = await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      act(() => view.rerender({ vod: vodSource(), startAtSeconds: 20 }));
+      expect(lastHls().startLoads).toEqual([8.4]);
+      expect(video.currentTime).toBeCloseTo(20, 9);
+      expect(onStartApplied).toHaveBeenCalledOnce();
+    });
+
+    it('맨 앞 GAP 이 없는 목록은 목록 첫 조각(영상 0초)에서 받기 시작한다 — 앱은 옮기지 않는다', async () => {
+      const { video, onSeek } = await renderVod();
+      act(() => lastHls().list(vodDetails(10, 4)));
+      expect(lastHls().startLoads).toEqual([0]);
+      expect(video.currentTime).toBe(0);
+      expect(onSeek).not.toHaveBeenCalled();
+    });
+
+    it('다시 선 재생기(403 뒤 다시 마운트)도 같은 규칙이다 — 자리가 없으면 처음부터, 있으면 그 자리', async () => {
+      const first = await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      sit(first.video, 20);
+      first.view.unmount();
+
+      await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      expect(lastHls().startLoads).toEqual([8.4]);
+
+      await renderVod({ startAtSeconds: 30 });
+      act(() => lastHls().list(gappedDetails()));
+      expect(lastHls().startLoads[0]).toBeCloseTo(30, 9);
+    });
+
+    /** 재생(play)을 부른 순간의 재생 위치들 — 옮긴 뒤에 트는지 본다 */
+    function playedAt(): number[] {
+      const at: number[] = [];
+      vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (
+        this: HTMLMediaElement,
+      ) {
+        at.push(this.currentTime);
+        return Promise.resolve();
+      });
+      return at;
+    }
+
+    // 다 본 뒤 재생하면 브라우저는 영상 0초(맨 앞 GAP)로 간다. hls.js 도 끝에 닿으면 시작 자리를 0 으로 되돌려 그 자리에서
+    // 다시 받으려 해 검은 화면에 멎었다(Chromium · WebKit 실측)
+    it('맨 앞 GAP 이 있는 목록을 다 본 뒤 재생하면 첫 내용 조각으로 옮긴 다음 튼다 — 사람이 옮긴 것으로 한 번 알린다', async () => {
+      const { view, video, onSeek } = await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      sit(video, 46.8, 4, 'ended');
+      const at = playedAt();
+      vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
+      vi.spyOn(HTMLMediaElement.prototype, 'ended', 'get').mockReturnValue(true);
+      act(() => view.result.current.togglePlay());
+      expect(at).toEqual([8.4]);
+      expect(onSeek).toHaveBeenCalledOnce();
+    });
+
+    it('맨 앞 GAP 이 없는 목록을 다 본 뒤 재생하면 옮기지 않고 튼다(브라우저가 처음으로 간다 — 지금 동작)', async () => {
+      const { view, video, onSeek } = await renderVod();
+      act(() => lastHls().list(vodDetails(10, 4)));
+      sit(video, 40, 4, 'ended');
+      const at = playedAt();
+      vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
+      vi.spyOn(HTMLMediaElement.prototype, 'ended', 'get').mockReturnValue(true);
+      act(() => view.result.current.togglePlay());
+      expect(at).toEqual([40]);
+      expect(onSeek).toHaveBeenCalledOnce();
+    });
+
+    it('다 본 뒤 Home(비율 0)과 한참 뒤로 가기는 이미 첫 내용 조각으로 간다 — GAP 이 아니다', async () => {
+      const { view, video } = await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      sit(video, 46.8, 4, 'ended');
+      act(() => view.result.current.seekToFraction(0));
+      expect(video.currentTime).toBeCloseTo(8.4, 9);
+      sit(video, 46.8, 4, 'ended');
+      act(() => view.result.current.seekBy(600));
+      expect(video.currentTime).toBeCloseTo(8.4, 9);
+    });
+
+    it('다 보기 전에 멈췄다 다시 틀면 맨 앞 GAP 이 있어도 옮기지 않는다', async () => {
+      const { view, video, onSeek } = await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      sit(video, 20);
+      const at = playedAt();
+      vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
+      act(() => view.result.current.togglePlay());
+      expect(at).toEqual([20]);
+      expect(onSeek).not.toHaveBeenCalled();
+    });
+
+    it('A → B(목록 전) → A 로 돌아와 새로 선 A 재생기도 첫 목록에서 첫 내용 조각을 받는다', async () => {
+      const { view } = await renderVod();
+      act(() => lastHls().list(gappedDetails()));
+      for (const url of [`${VOD_URL}?b`, VOD_URL]) {
+        act(() => view.rerender({ vod: vodSource({ url }), startAtSeconds: null }));
+        await act(async () => {
+          await vi.dynamicImportSettled();
+        });
+      }
+      act(() => lastHls().list(gappedDetails()));
+      expect(fake.instances).toHaveLength(3);
+      expect(lastHls().startLoads).toEqual([8.4]);
+    });
   });
 });
