@@ -62,13 +62,11 @@ describe('UploadInfoDialog', () => {
   it('장면을 뽑는 중이면 미리보기 자리를 스켈레톤으로 채우고 문장은 그대로 둔다(POK-444)', async () => {
     // 조각을 다 읽기 전의 영상 노드: 첫 장면(loadeddata)이 아직 안 왔다
     const create = document.createElement.bind(document);
-    const spy = vi
-      .spyOn(document, 'createElement')
-      .mockImplementation(((tag: string) =>
-        tag === 'video'
-          ? // 문서에 붙는 노드라(프레임 콜백) 요소 하나로 흉내 낸다
-            Object.assign(create('div'), { removeAttribute() {}, load() {} })
-          : create(tag)) as typeof document.createElement);
+    const spy = vi.spyOn(document, 'createElement').mockImplementation(((tag: string) =>
+      tag === 'video'
+        ? // 문서에 붙는 노드라(프레임 콜백) 요소 하나로 흉내 낸다
+          Object.assign(create('div'), { removeAttribute() {}, load() {} })
+        : create(tag)) as typeof document.createElement);
     try {
       const user = userEvent.setup();
       const { dialog } = renderDialog({
