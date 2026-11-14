@@ -402,4 +402,16 @@ describe('REPLAY_BLOCK_SELECTOR — 녹화에서 빼는 요소 (POK-572)', () =>
       expect(document.createElement(tag).matches(REPLAY_BLOCK_SELECTOR)).toBe(true);
     }
   });
+
+  it('파일 입력은 뺀다 — maskAllInputs가 file 입력을 가리지 않아 고른 파일 이름이 녹화에 남는다(PR #516 리뷰)', () => {
+    function input(type: string): HTMLInputElement {
+      const element = document.createElement('input');
+      element.setAttribute('type', type);
+      return element;
+    }
+    expect(input('file').matches(REPLAY_BLOCK_SELECTOR)).toBe(true);
+    // 다른 입력은 빼지 않는다 — 값은 maskAllInputs가 가리고 칸 모양은 남긴다
+    expect(input('text').matches(REPLAY_BLOCK_SELECTOR)).toBe(false);
+    expect(input('checkbox').matches(REPLAY_BLOCK_SELECTOR)).toBe(false);
+  });
 });

@@ -197,10 +197,12 @@ export function maskReplayText(text: string, element?: Element | null): string {
 /**
  * 녹화에서 통째로 빼는 요소(크기만 남는다) — 영상·캔버스·iframe과, 우리 그림(`public/brand/`) 밖의 이미지.
  * 썸네일·프로필 사진은 바깥 주소(서명 토큰)·`data:`라 빠지고, 포키 그림만 남는다. `next/image`는 src를
- * `/_next/image?url=%2Fbrand%2F…`로 바꾸므로 두 꼴을 다 둔다. 허용 목록이라 src가 비었거나 다른 이미지는 빠진다
+ * `/_next/image?url=%2Fbrand%2F…`로 바꾸므로 두 꼴을 다 둔다. 허용 목록이라 src가 비었거나 다른 이미지는 빠진다.
+ * 파일 입력도 뺀다 — posthog-js `maskAllInputs`는 `file` 입력을 가리지 않아 고른 파일 이름(`C:\fakepath\…`)이 입력
+ * 이벤트로 남는다. 우리 파일 입력은 다 숨은 입력이라 화면에서 잃는 것이 없다
  */
 export const REPLAY_BLOCK_SELECTOR =
-  'img:not([src^="/brand/"]):not([src^="/_next/image?url=%2Fbrand%2F"]), picture, video, canvas, iframe';
+  'img:not([src^="/brand/"]):not([src^="/_next/image?url=%2Fbrand%2F"]), picture, video, canvas, iframe, input[type="file"]';
 
 /** 우리 그림 주소(경로+쿼리) — 녹화에서 빼지 않는 이미지(REPLAY_BLOCK_SELECTOR)와 같은 두 꼴 */
 const BRAND_ASSET_RE = /^\/(?:brand\/|_next\/image\?url=%2Fbrand%2F)/;
