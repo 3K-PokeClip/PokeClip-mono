@@ -107,6 +107,11 @@ export interface HomeVod {
   /** 보관이 끝난 방송은 열 것이 없어 null(지난 방송 목록과 같다, POK-254) */
   href: string | null;
   badge?: VodBadge;
+  /**
+   * 끝난 지 한 시간 안(지난 방송 목록의 「방금 종료」와 같은 한도). 마지막 구간 카드가 늦게 뜨는 때라 격자가 카드 0장을 「없다」고
+   * 단정하지 않는다. 「다시 보기 준비 중」 표지와는 따로다 — 다시보기가 일찍 서서 표지가 떨어져도 카드는 아직 올 수 있다(POK-568)
+   */
+  justEnded: boolean;
   duration?: string;
   /** 가장 크게 터진 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
@@ -402,10 +407,11 @@ async function loadHome(
     // 기한이 지나면 카드·채팅이 함께 지워지고, 지난 방송 목록도 행 상태와 상관없이 D-day를 단다
     const dday = ddayFor(b.vodExpiresAt, new Date(now));
     const expired = dday.kind === 'expired';
+    const justEnded = isJustEnded(b.endedAt, new Date(now));
     if (expired) badge = { kind: 'expired' };
     else if (
       b.status === 'ended' &&
-      isJustEnded(b.endedAt, new Date(now)) &&
+      justEnded &&
       (roundVods[b.streamId]?.badge ?? 'preparing') === 'preparing'
     )
       badge = { kind: 'preparing' };
@@ -424,6 +430,7 @@ async function loadHome(
       clips: null,
       href: expired ? null : `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
       badge,
+      justEnded,
       duration,
       thumbnailUrl: b.thumbnailUrl ?? null,
     };

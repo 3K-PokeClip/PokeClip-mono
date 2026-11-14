@@ -44,6 +44,8 @@ interface Server {
   youtube?: unknown;
   streamKey?: unknown;
   me?: unknown;
+  /** 회차 id(= streamId) → 회차 경로 답 본문. 정하지 않은 회차는 「아직 모름」(404) */
+  rounds?: Record<string, unknown>;
 }
 
 function ok(body: unknown): Response {
@@ -54,6 +56,13 @@ function ok(body: unknown): Response {
 }
 
 function route(url: string, s: Server): Response {
+  const round = url.match(/\/rounds\/([^/]+)\/rewind$/);
+  if (round) {
+    const answer = s.rounds?.[decodeURIComponent(round[1]!)];
+    return answer === undefined
+      ? new Response(JSON.stringify({ error: 'unknown' }), { status: 404 })
+      : ok(answer);
+  }
   if (url.startsWith('/api/clip/library')) {
     return s.library === 'fail'
       ? new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 })
@@ -175,6 +184,7 @@ describe('HomeScreen', () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -1162,6 +1172,45 @@ describe('HomeScreen', () => {
     expect(within(tile('gone')).queryByText('장면 사진 없음')).toBeNull();
     expect(tile('gone').querySelector('a')).toBeNull();
     expect(tile('fresh').querySelector('a')).not.toBeNull();
+  });
+
+  it('지난 방송 격자: 다시보기가 일찍 서도 끝난 지 한 시간 안이면 카드 0장을 「없다」고 단정하지 않는다', async () => {
+    const control = 'https://ctl.test';
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', control);
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const HOUR = 3_600_000;
+    const row = (streamId: string, endedAt: string) => ({
+      streamId,
+      status: 'ended',
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt: null,
+      title: streamId,
+    });
+    const vodReady = {
+      ready: true,
+      mode: 'vod',
+      url: `${control}/vod/x/index.m3u8`,
+      firstPdt: '2026-11-14T02:00:00.000Z',
+      headPdt: '2026-11-14T02:52:31.000Z',
+    };
+    serve({
+      past: [row('fresh', at(-5 * 60_000)), row('stale', at(-2 * HOUR))],
+      rounds: { fresh: vodReady },
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송' });
+    const tile = (title: string) => within(grid).getByText(title).closest('li')!;
+    // 한 시간이 지난 방송은 그대로 단정한다(보관함을 읽은 뒤)
+    expect(await within(tile('stale')).findByText('찾은 장면 없음')).toBeInTheDocument();
+    expect(within(tile('stale')).getByText('장면 사진 없음')).toBeInTheDocument();
+    // 다시보기가 섰다는 답이라 「다시 보기 준비 중」 표지는 없다 — 그래도 마지막 구간 카드는 늦게 올 수 있다
+    expect(within(tile('fresh')).queryByText('다시 보기 준비 중')).toBeNull();
+    expect(within(tile('fresh')).queryByText('찾은 장면 없음')).toBeNull();
+    expect(within(tile('fresh')).queryByText('장면 사진 없음')).toBeNull();
+    expect(within(tile('fresh')).getByText('썸네일 준비 중')).toBeInTheDocument();
   });
 
   it('지난 방송 격자: 보관 기한은 3일 이하일 때만 「D-n 삭제」로 말한다', async () => {

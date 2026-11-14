@@ -47,11 +47,12 @@ export function VodGrid({ vods }: { vods: HomeVod[] }) {
 }
 
 /**
- * 카드 수가 다 찼는가. 방금 끝난 방송(「다시 보기 준비 중」)은 마지막 구간 카드가 늦게 뜬다 — 홈도 그 방송의 카드는 매 주기 다시
- * 읽는다(useHomeMockState `fresh`). 사진도 그 카드 장면에서 나오니, 그동안은 0이어도 「없다」고 단정하지 않는다
+ * 카드 수가 다 찼는가. 끝난 지 한 시간 안인 방송은 마지막 구간 카드가 늦게 뜬다 — 홈도 그 방송의 카드는 매 주기 다시
+ * 읽는다(useHomeMockState `fresh`). 사진도 그 카드 장면에서 나오니, 그동안은 0이어도 「없다」고 단정하지 않는다.
+ * 「다시 보기 준비 중」 표지로 가르지 않는다: 다시보기가 일찍 서면 한 시간 안에도 표지가 떨어진다(POK-568)
  */
 function cardsSettled(vod: HomeVod): boolean {
-  return vod.badge?.kind !== 'preparing';
+  return !vod.justEnded;
 }
 
 function VodCardBody({ vod }: { vod: HomeVod }) {

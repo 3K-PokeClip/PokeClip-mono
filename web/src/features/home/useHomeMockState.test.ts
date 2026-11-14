@@ -145,6 +145,26 @@ describe('useHomeMockState — 다시 보기 준비 중(회차 경로)', () => {
     expect(result.current.vods.find((v) => v.id === 'N')?.href).toBe('/broadcast/vod/N');
   });
 
+  it('「방금 끝남」 은 회차 답과 따로 끝난 지 한 시간 안인지만 본다: 다시보기가 섰거나 없다는 답이어도 참이다', async () => {
+    serve({
+      past: [
+        endedRow('R', 5 * MINUTE),
+        endedRow('N', 5 * MINUTE),
+        endedRow('P', 5 * MINUTE),
+        endedRow('old', HOUR + MINUTE),
+      ],
+      modes: { R: 'vod', N: 'ended', P: 'ending' },
+    });
+    const { result } = await renderHome();
+    const justEndedOf = (id: string) => result.current.vods.find((v) => v.id === id)?.justEnded;
+
+    expect(badgeOf(result, 'R')).toBeUndefined();
+    expect(justEndedOf('R')).toBe(true);
+    expect(justEndedOf('N')).toBe(true);
+    expect(justEndedOf('P')).toBe(true);
+    expect(justEndedOf('old')).toBe(false);
+  });
+
   it('다시보기가 서도 곧 지워질 방송의 「D-n 삭제」 는 그대로 단다', async () => {
     const vodExpiresAt = new Date(Date.now() + 2 * 24 * HOUR - MINUTE).toISOString();
     serve({ past: [endedRow('R', 5 * MINUTE, { vodExpiresAt })], modes: { R: 'vod' } });
