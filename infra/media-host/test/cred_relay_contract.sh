@@ -23,8 +23,9 @@
 # bin/lib/render_files.sh · bin/lib/cred_relay.sh 를 source 해
 # install_cred_tokens 를 돈다. 시작 스크립트 전역 가운데 say ·
 # generate_credential 은 시험 쪽 짧은 대역이고(검사 대상 아님), 중계 그룹은
-# 사이드카 이미지의 USER 에서 읽는다(시작 스크립트의 sidecar_owner 기본값과
-# 같은 자리 — 이미지 USER 가 바뀌면 이 시험이 드러낸다). RUNTIME_DIR 0711 은
+# 사이드카 이미지의 USER 에서 읽는다. 운영은 시작 스크립트의 sidecar_owner
+# 기본값으로 두고 중계는 이미지 USER 로 돌므로, 둘이 같은지 먼저 단언한다(다르면
+# 모든 사례 FAIL — 이미지 USER 나 그 기본값 한쪽만 바뀐 회귀). RUNTIME_DIR 0711 은
 # prepare_runtime_dir 의 대역이다. 볼륨은 tmpfs 가 아니다 — local 드라이버의
 # tmpfs 볼륨은 쓰는 컨테이너가 끝나면 내려가 내용이 사라진다(2026-11-16 실측).
 #
@@ -37,16 +38,20 @@
 # 실측 — 그래서 듣기까지 보려고 전용 망을 쓴다).
 #
 # 이미지: 사이드카 이미지는 이 트리의 media/ 에서 매번 로컬 빌드한다(캐시를
-# 쓴다 — 지금 코드의 중계를 시험한다). 빌드한 이미지(RELAY_IMAGE)는 다음
-# 실행이 다시 쓰도록 남긴다 — 지우려면 docker image rm 으로 지운다. 도우미
-# 이미지는 로컬에 없으면 받는다.
+# 쓴다 — 지금 코드의 중계를 시험한다). 빌드한 이미지(RELAY_IMAGE — 두 라벨)는
+# 끝날 때 지우고 잔여 셈에 넣는다. 남기려면 PCBENCH_KEEP_IMAGE=1 로 돌린다(그
+# 이미지는 남김으로 따로 적고 잔여로 세지 않는다). 도우미 이미지는 로컬에
+# 없으면 받고 남긴다(공용 기반 이미지).
 #
 # 실험 식별: 라벨 com.pokeclip.bench=pcbench-pok574 와
 # com.pokeclip.bench.part=c9-contract(컨테이너 · 망 · 볼륨 — 정리 · 잔여 셈은
 # 두 라벨을 다 가진 것만 겨눈다) · 이름 앞머리 pcbench-pok574-c9. 호스트 포트
 # 게시 0. 이름이 고정이라 한 번에 하나만 돈다 — 시작할 때 잠금 디렉터리
 # (/tmp/pcbench-pok574-c9.lock — 안에 PID)를 잡지 못하거나, 정리 범위에 앞 실행
-# 잔여가 있으면 아무것도 건드리지 않고 멈춘다. 사례마다 끝에 그 사례의
+# 잔여가 있으면 아무것도 건드리지 않고 멈춘다(잡은 잠금은 지운다 — 잔여 확인
+# 도중 신호를 받아도). 라벨 없는 같은 이름의 볼륨 · 망이 이미 있으면 그 사례는
+# 만들지도 붙이지도 않고 FAIL 이다(엔진은 같은 이름의 볼륨을 오류 없이 다시
+# 내주므로 root 도우미가 남의 볼륨을 바꾸게 된다). 사례마다 끝에 그 사례의
 # 컨테이너 · 망 · 볼륨을 지우고 잔여 0 을 확인한다(남으면 그 사례 FAIL). 끝날
 # 때와 중단 신호에 남은 것을 지우고 다시 센다 — 남거나 셀 수 없으면 종료 1.
 # 토큰은 매번 새 무작위 값이고 볼륨과 함께 지워진다. 출력에 싣지 않는다.
@@ -76,9 +81,16 @@ readonly PART_LABEL='com.pokeclip.bench.part=c9-contract'
 readonly NAME_PREFIX='pcbench-pok574-c9'
 readonly LOCK_DIR='/tmp/pcbench-pok574-c9.lock'
 readonly RELAY_IMAGE='pcbench-pok574/sidecar:c9'
+# 끝날 때 RELAY_IMAGE 를 남길지 — 1 이면 남긴다(다음 실행의 빌드를 빠르게).
+readonly KEEP_IMAGE="${PCBENCH_KEEP_IMAGE:-0}"
 readonly HELPER_IMAGE='amazonlinux:2023'
 # 제품 lib(MEDIA_HOST_DIR 기준)와 도우미 · 중계 안의 경로.
 readonly LIB_REL='bin/lib'
+# 시작 스크립트(MEDIA_HOST_DIR 기준) — 중계 토큰 소유 기본값(sidecar_owner)의
+# 자리.
+readonly START_SCRIPT_REL='bin/start-media.sh'
+# 그 한 줄에서 「uid:gid」 를 뽑는 sed 식(sed -E).
+readonly START_OWNER_SED='s/^[[:space:]]*sidecar_owner="\$\{SIDECAR_UID:-([0-9]+)\}:\$\{SIDECAR_GID:-([0-9]+)\}"$/\1:\2/p'
 readonly HELPER_LIB='/media-host/lib'
 readonly HELPER_RUNTIME='/rt'
 readonly RELAY_RUNTIME='/run/pokeclip-media'
@@ -101,7 +113,11 @@ readonly LOG_TOKEN_FILE='"msg":"cred_relay_failed","reason":"token_file"'
 
 scratch=""
 setup_reason=""
-lock_held=0
+# 잠금 디렉터리를 이 실행이 만들었는지(끝날 때 지운다) · 앞 실행 잔여 0 을
+# 확인해 정리 범위를 지워도 되는지 — 둘을 따로 둔다(잠금을 잡은 뒤 잔여를 세는
+# 도중 신호를 받으면 잠금만 지운다).
+lock_owned=0
+cleanup_allowed=0
 relay_owner=""
 callers_csv=""
 relay_addr=""
@@ -171,27 +187,69 @@ remove_residue() {
 }
 
 #######################################
-# 정리(EXIT 트랩 — INT · TERM 도 exit 로 여기 온다). 잠금을 잡은 실행만 지운다.
-# 잔여가 남거나 셀 수 없으면 종료 코드가 0 이었어도 1 로 끝낸다.
+# 정리 범위의 이미지(두 라벨을 다 가진 것)의 ID 를 낸다.
+# Outputs:
+#   ID 한 줄씩.
+#######################################
+list_images() {
+  bench_docker image ls -q --no-trunc --filter "label=${BENCH_LABEL}" \
+    --filter "label=${PART_LABEL}"
+}
+
+#######################################
+# 정리 범위의 이미지를 지운다(KEEP_IMAGE=1 이면 남긴다). 지우기 실패는 뒤의
+# 잔여 셈이 드러낸다.
+#######################################
+remove_images() {
+  local ids
+  [[ "${KEEP_IMAGE}" != 1 ]] || return 0
+  ids="$(list_images)" || ids=""
+  if [[ -n "${ids}" ]]; then
+    # shellcheck disable=SC2086 # id 목록을 낱말로 나눈다.
+    bench_docker image rm ${ids} >/dev/null 2>&1 || true
+  fi
+}
+
+#######################################
+# 끝 정리 — 정리 범위와 이미지를 지우고 다시 센다(KEEP_IMAGE=1 이면 이미지는
+# 남김으로 따로 적는다). 남거나 셀 수 없으면 1.
+# Returns:
+#   0 잔여 0 / 1 남음 · 셀 수 없음.
+#######################################
+final_cleanup() {
+  local left images
+  remove_residue
+  remove_images
+  if ! left="$(count_residue)" \
+    || ! images="$(harness::count_output_lines list_images)"; then
+    printf '정리: c9 계약 범위 잔여 확인 불가(docker 조회 실패)\n' >&2
+    return 1
+  fi
+  if [[ "${KEEP_IMAGE}" == 1 ]]; then
+    printf '정리: c9 계약 범위 잔여 %s(이미지 %s 남김 — PCBENCH_KEEP_IMAGE=1)\n' \
+      "${left}" "${images}" >&2
+    (( left == 0 ))
+    return
+  fi
+  printf '정리: c9 계약 범위 잔여 %s(이미지 %s 포함)\n' \
+    "$((left + images))" "${images}" >&2
+  (( left + images == 0 ))
+}
+
+#######################################
+# 정리(EXIT 트랩 — INT · TERM 도 exit 로 여기 온다). 앞 실행 잔여 0 을 확인한
+# 실행만 정리 범위를 지우고, 잠금을 만든 실행은 잠금을 지운다. 잔여가 남거나
+# 셀 수 없으면 종료 코드가 0 이었어도 1 로 끝낸다.
 # Globals:
-#   scratch, lock_held
+#   scratch, lock_owned, cleanup_allowed
 #######################################
 cleanup() {
-  local status=$? left
+  local status=$?
   harness::end_last_group
-  if (( lock_held )); then
-    remove_residue
-    if left="$(count_residue)"; then
-      printf '정리: c9 계약 범위 잔여 %s\n' "${left}" >&2
-      if (( left != 0 && status == 0 )); then
-        status=1
-      fi
-    else
-      printf '정리: c9 계약 범위 잔여 확인 불가(docker 조회 실패)\n' >&2
-      if (( status == 0 )); then
-        status=1
-      fi
-    fi
+  if (( cleanup_allowed )) && ! final_cleanup && (( status == 0 )); then
+    status=1
+  fi
+  if (( lock_owned )); then
     rm -rf -- "${LOCK_DIR}"
   fi
   if [[ -n "${scratch}" ]]; then
@@ -201,10 +259,10 @@ cleanup() {
 }
 
 #######################################
-# 잠금을 잡고 앞 실행 잔여가 없는지 본다. 못 잡거나 잔여가 있으면 아무것도
-# 건드리지 않고 멈춘다(남의 실행일 수 있다).
+# 잠금을 잡고 앞 실행 잔여가 없는지 본다. 못 잡으면 아무것도 건드리지 않고
+# 멈춘다(남의 실행일 수 있다). 잔여가 있으면 잡은 잠금만 지우고 멈춘다.
 # Globals:
-#   lock_held
+#   lock_owned, cleanup_allowed
 #######################################
 acquire_lock() {
   local left
@@ -213,14 +271,14 @@ acquire_lock() {
       "${LOCK_DIR}" >&2
     exit 1
   fi
+  lock_owned=1
   printf '%s\n' "$$" >"${LOCK_DIR}/pid"
   if ! left="$(count_residue)" || (( left != 0 )); then
-    rm -rf -- "${LOCK_DIR}"
     printf '멈춤: c9 계약 범위에 앞 실행 잔여가 있거나 셀 수 없다(%s)\n' \
       "${left:-조회 실패}" >&2
     exit 1
   fi
-  lock_held=1
+  cleanup_allowed=1
 }
 
 #######################################
@@ -262,7 +320,7 @@ build_relay_image() {
   fi
   if ! harness::run_bounded "${HARNESS_DOCKER_TIMEOUT}" "${log}" \
     docker buildx build --load --label "${BENCH_LABEL}" \
-    -t "${RELAY_IMAGE}" "${MEDIA_DIR}"; then
+    --label "${PART_LABEL}" -t "${RELAY_IMAGE}" "${MEDIA_DIR}"; then
     add_setup_reason "사이드카 이미지 빌드 실패: $(harness::log_tail "${log}")"
     return 1
   fi
@@ -270,6 +328,30 @@ build_relay_image() {
     "${RELAY_IMAGE}")" || relay_owner=""
   if [[ ! "${relay_owner}" =~ ^[0-9]+:[0-9]+$ ]]; then
     add_setup_reason "이미지 USER 가 숫자 uid:gid 가 아님: ${relay_owner}"
+    return 1
+  fi
+}
+
+#######################################
+# 이미지 USER(relay_owner)가 시작 스크립트의 중계 토큰 소유 기본값
+# (sidecar_owner="${SIDECAR_UID:-<uid>}:${SIDECAR_GID:-<gid>}" 한 줄)과 같은지
+# 본다. 운영은 그 기본값으로 토큰을 두고 중계는 이미지 USER 로 돈다.
+# Globals:
+#   relay_owner
+#######################################
+check_start_owner() {
+  local start_owner
+  [[ -n "${relay_owner}" ]] || return 1
+  start_owner="$(sed -n -E "${START_OWNER_SED}" \
+    "${MEDIA_HOST_DIR}/${START_SCRIPT_REL}")" || start_owner=""
+  if [[ ! "${start_owner}" =~ ^[0-9]+:[0-9]+$ ]]; then
+    add_setup_reason "${START_SCRIPT_REL} 의 sidecar_owner 기본값 한 줄을 읽지 \
+못함"
+    return 1
+  fi
+  if [[ "${relay_owner}" != "${start_owner}" ]]; then
+    add_setup_reason "이미지 USER ${relay_owner} ≠ 시작 스크립트 기본 소유 \
+${start_owner}(운영 중계가 토큰을 못 연다)"
     return 1
   fi
 }
@@ -344,12 +426,20 @@ write_helper_script() {
 }
 
 #######################################
-# 사례 하나의 자원(볼륨 · 망)을 만들고 도우미로 토큰 묶음을 둔다.
+# 사례 하나의 자원(볼륨 · 망)을 만들고 도우미로 토큰 묶음을 둔다. 같은 이름의
+# 볼륨 · 망이 이미 있으면(정리 범위 밖 — 이 사례는 아직 만들지 않았다) 만들지
+# 않고 실패한다.
 # Arguments:
 #   양성 | 음성, 자원 이름, 도우미 로그.
 #######################################
 prepare_case() {
   local kind="$1" name="$2" log="$3" lib="${MEDIA_HOST_DIR}/${LIB_REL}"
+  if bench_docker volume inspect "${name}" >/dev/null 2>&1 \
+    || bench_docker network inspect "${name}" >/dev/null 2>&1; then
+    harness::add_reason "같은 이름의 볼륨 · 망 ${name} 이 이미 있다 — 건드리지 \
+않고 멈춤"
+    return 1
+  fi
   if ! bench_docker volume create --label "${BENCH_LABEL}" \
     --label "${PART_LABEL}" "${name}" >/dev/null 2>&1; then
     harness::add_reason '볼륨 만들기 실패'
@@ -550,6 +640,7 @@ main() {
   acquire_lock
   load_lib_facts || true
   build_relay_image || true
+  check_start_owner || true
   write_helper_script
   for (( rep = 1; rep <= REPEATS; rep++ )); do
     harness::run_case $((rep * 2 - 1)) \

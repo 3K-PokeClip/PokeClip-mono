@@ -6,7 +6,8 @@
 # 파일 없이 프로젝트 라벨로 컨테이너를 지우는 폴백, down · 폴백이 끝나지 않는
 # 동안 신호를 받아도 렌더(비밀)를 지우고 끝나는지, 끝나지 않는 폴백에 상한이
 # 있는지. 대리 창구 토큰 디렉터리 셋의 정리(사례 89 · 90 — 토큰 넷 · 그 임시
-# 파일 삭제 · 남으면 CLEANUP FAIL · 링크 디렉터리는 따라가지 않음)도 여기 있다.
+# 파일 삭제 · 남으면 CLEANUP FAIL · 링크 디렉터리는 따라가지 않음, 92 — 지우는
+# 이름이 시작 스크립트 lib 의 호출자 목록과 같음)도 여기 있다.
 # start_test.sh 가 source 한다.
 # start_fixture.sh · harness.sh 와 start_test.sh 의 seed_runtime 을 쓴다.
 #
@@ -321,4 +322,44 @@ ${fixture_status}): $(harness::log_tail "${fixture_dir}/out")"
     fi
   done
   return "${ok}"
+}
+
+#######################################
+# 사례 92 — 정지가 지우는 창구 토큰 이름이 시작 스크립트 lib(cred_relay.sh)의
+# 호출자 목록 · 디렉터리 이름과 같다. lib 의 CRED_CALLERS 마다 소비자
+# 토큰(cred-<호출자>/token)과 중계 사본(cred-relay/<호출자>)을 두면 정지가 모두
+# 지운다 — lib 에 호출자를 더하고 정지 쪽 목록을 빠뜨린 회귀(새 호출자 토큰이
+# 재부팅까지 tmpfs 에 남음)를 잡는다.
+# Globals:
+#   fixture_dir, fixture_status, MEDIA_HOST_DIR
+#######################################
+stop::case_cred_callers_match() {
+  local facts prefix relay token rest caller rel callers=()
+  # shellcheck disable=SC2016 # $1 · ${…} 는 하위 셸이 펼친다.
+  facts="$(bash -c 'source "$1" && printf "%s %s %s %s" \
+    "${CRED_CONSUMER_DIR_PREFIX}" "${CRED_RELAY_DIR_NAME}" \
+    "${CRED_TOKEN_NAME}" "${CRED_CALLERS[*]}"' _ \
+    "${MEDIA_HOST_DIR}/bin/lib/cred_relay.sh")" || facts=""
+  read -r prefix relay token rest <<<"${facts}"
+  read -r -a callers <<<"${rest}"
+  if (( ${#callers[@]} == 0 )); then
+    harness::add_reason 'lib/cred_relay.sh 의 이름 · 호출자를 읽지 못함'
+    return 1
+  fi
+  fixture::new_case
+  fixture::base_env
+  for caller in "${callers[@]}"; do
+    for rel in "${prefix}${caller}/${token}" "${relay}/${caller}"; do
+      mkdir -p -- "${fixture_dir}/runtime/${rel%/*}"
+      printf 'pcbench-cred-token' >"${fixture_dir}/runtime/${rel}"
+      chmod 0400 "${fixture_dir}/runtime/${rel}"
+    done
+  done
+  fixture::run stop-media.sh -- --cleanup-only || return 1
+  if (( fixture_status != 0 )) || [[ "$(fixture::runtime_files)" != 0 ]]; then
+    harness::add_reason "호출자 「${callers[*]}」 토큰 정지 뒤 종료 \
+${fixture_status} · RUNTIME_DIR 파일 $(fixture::runtime_files)개(기대 0 · 0): \
+$(harness::log_tail "${fixture_dir}/out")"
+    return 1
+  fi
 }

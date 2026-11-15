@@ -56,7 +56,8 @@
 # <호출자>(indexer · janitor)에 둔 중계 토큰(16진 64자 · 끝 줄바꿈 없음 — 소비자
 # 사본과 같은 값)이 둘 다 있으면 켬으로 보고, 두 토큰과 「지금」 역할 자격의
 # 비밀 키 · 세션 토큰(호스트 aws CLI 의 configure export-credentials —
-# 중계가 IMDS 에서 받는 것과 같은 역할 자격. 값은 표준 출력으로만 받는다)을
+# 중계가 IMDS 에서 받는 것과 같은 역할 자격. 원천은 인스턴스 역할로 고정하고
+# 값은 표준 출력으로만 받는다)을
 # 더 대조한다. 둘 다 없으면(끔 상자 · 정지 뒤) 더하지 않고 자격도 받지 않는다.
 # 하나만 있거나 꼴 밖이면(일반 파일 아님 · 파일이나 디렉터리가 링크) 실패다.
 # 한계: 대조는 실행 시점의 자격 한 벌뿐이다 — 그 전에 교대된 자격이 로그에
@@ -152,6 +153,17 @@ readonly CRED_RELAY_TOKEN_BYTES=64
 readonly ROLE_SECRET_NAME='AWS_SECRET_ACCESS_KEY'
 readonly ROLE_SESSION_NAME='AWS_SESSION_TOKEN'
 readonly ROLE_CRED_PATTERN='^[A-Za-z0-9/+=]{40,}$'
+# 역할 자격의 원천을 인스턴스 역할(IMDS — 중계가 받는 곳) 아닌 곳으로 바꾸는
+# 환경 변수 — AWS CLI 기본 자격 체인의 앞 단계(환경 자격 · 프로필 · 컨테이너
+# 자격 · 웹 ID)와 IMDS 주소. export-credentials 호출 하나에서만 지우고 설정 ·
+# 자격 파일은 /dev/null 로 둔다(비밀 읽기는 그대로 — 어느 자격으로 읽어도 값이
+# 같다). IMDS 끔(AWS_EC2_METADATA_DISABLED)은 남긴다 — 자격을 못 받아 role-cred
+# 로 드러난다.
+readonly ROLE_CRED_SOURCE_ENV=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE
+  AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+  AWS_WEB_IDENTITY_TOKEN_FILE AWS_EC2_METADATA_SERVICE_ENDPOINT
+  AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE)
 # slog JSON 처리기가 문자열에서 이스케이프하는 것 중 4C 꼴 안에 들 수 있는 것과
 # 그 꼴(Go log/slog json_handler.go appendEscapedJSONString — 「\」 를 맨
 # 앞에 둔다: 뒤에서 넣는 역슬래시를 다시 바꾸지 않게). 같은 자리끼리 짝이다.
@@ -467,7 +479,9 @@ read_relay_token() {
 #######################################
 # 지금 역할 자격의 비밀 키 · 세션 토큰을 대조 값(main 의 지역 배열 values)에
 # 더한다. aws configure export-credentials(env-no-export — 「이름=값」 줄)의
-# 표준 출력으로만 받는다(argv · 환경 · 파일에 값을 올리지 않는다). 값의 NUL 은
+# 표준 출력으로만 받는다(argv · 환경 · 파일에 값을 올리지 않는다). 원천은
+# 인스턴스 역할로 고정한다(ROLE_CRED_SOURCE_ENV 를 지우고 설정 · 자격 파일은
+# /dev/null — 이름과 경로만 argv 에 오른다). 값의 NUL 은
 # 다른 제어 문자로 바꿔 꼴 검사에 걸리게 한다(ops::read_secret 과 같다). 두
 # 이름의 줄이 각각 정확히 하나이고 값이 꼴 안이어야 한다.
 # Globals:
@@ -478,10 +492,15 @@ read_relay_token() {
 #   0 더함 / 1 못 받음 · 꼴 밖.
 #######################################
 add_role_cred_values() {
-  local rest line role_secret="" role_session="" secrets=0 sessions=0
-  rest="$({ ops::bounded "$1" aws configure export-credentials \
-    --format env-no-export </dev/null 2>/dev/null && printf x; } \
-    | LC_ALL=C tr '\000' '\001')" || return 1
+  local rest line role_secret="" role_session="" secrets=0 sessions=0 name
+  local pin=()
+  for name in "${ROLE_CRED_SOURCE_ENV[@]}"; do
+    pin+=(-u "${name}")
+  done
+  pin+=(AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null)
+  rest="$({ ops::bounded "$1" env "${pin[@]}" aws configure \
+    export-credentials --format env-no-export </dev/null 2>/dev/null \
+    && printf x; } | LC_ALL=C tr '\000' '\001')" || return 1
   [[ "${rest}" == *x ]] || return 1
   rest="${rest%x}"
   while [[ -n "${rest}" ]]; do

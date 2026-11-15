@@ -9,8 +9,8 @@
 # 토큰의 JSON 이스케이프 꼴 · 새 지역 변수 이름의 상속 export · 사이드카(4C
 # 토큰 사본을 받는 둘째 호출자) 태그 저널의 4C 토큰 · box 의 60일 만료 창구
 # 토큰(두 모드 — 사례 31 – 34 는 lib/secret_count_clip_expiry_cases.sh) · box
-# 의 IMDS 대리 창구 중계 토큰 둘과 지금 역할 자격 · 중계 태그 저널(사례 35 –
-# 40 은 lib/secret_count_cred_relay_cases.sh).
+# 의 IMDS 대리 창구 중계 토큰 둘과 지금 역할 자격 · 그 원천 고정 · 중계 태그
+# 저널(사례 35 – 41 은 lib/secret_count_cred_relay_cases.sh).
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker · aws ·
 # journalctl 과 grep 감시 래퍼(argv · 환경을 기록한 뒤 진짜 grep 실행)만 둔다.
@@ -42,7 +42,7 @@ source "${TEST_DIR}/lib/secret_count_clip_expiry_cases.sh"
 source "${TEST_DIR}/lib/secret_count_cred_relay_cases.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
-readonly CASE_COUNT=40
+readonly CASE_COUNT=41
 # 사이드카 API 사용자 이름(compose MTX_API_USER) — Basic 값의 앞부분.
 readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly COMMAND_ID='0123abcd-4567-89ef-0123-456789abcdef'
@@ -1075,6 +1075,8 @@ main() {
     cr_cases::case_role_malformed
   harness::run_case 40 'ssm 은 중계 토큰 · 역할 자격을 읽지 않음' \
     cr_cases::case_ssm_ignores
+  harness::run_case 41 'box 켬 역할 자격 원천 = IMDS(부모 자격 · 프로필 변수 0)' \
+    cr_cases::case_role_source_pinned
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

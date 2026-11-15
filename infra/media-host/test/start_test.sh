@@ -16,6 +16,8 @@
 # 모드 꼴 · 두 번째 묶음의 빈 목록 — 사례 77 – 86 은
 # lib/start_cred_relay_cases.sh, 켬 상자 기동 전 검사 87 · 88 은
 # lib/start_timing_cases.sh, 창구 토큰 정지 정리 89 · 90 은
+# lib/stop_guard_cases.sh, 토큰 묶음 rename 중간 실패 91 은
+# lib/start_cred_relay_cases.sh, 정지 이름 · lib 호출자 대조 92 는
 # lib/stop_guard_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
@@ -80,7 +82,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=90
+readonly CASE_COUNT=92
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -102,12 +104,16 @@ up_argv() {
 # 템플릿에서 restart: "no" 인 서비스 이름을 정렬해 낸다. restart 가 없는
 # 서비스가 있으면 「MISSING <이름>」 줄을 낸다. profiles 로만 뜨는 서비스(기동 전
 # 검사 timing-preflight — up 이 띄우지 않고 run --rm 으로 한 번 돈다)는 출력
-# 연결 대상이 아니라 뺀다.
+# 연결 대상이 아니라 뺀다. 렌더되지 않는 템플릿 주석(「${/*」 · 「${~/*」 로
+# 시작해 「*/」 로 시작하는 줄까지)은 건너뛴다 — 0열에서 시작해도 services
+# 구역의 끝이 아니다(「%{」 지시어 줄도 마찬가지).
 # Arguments:
 #   compose 템플릿.
 #######################################
 template_no_restart_services() {
   awk '
+    /^\$\{~?\/\*/ { incomment = ($0 !~ /\*\//); next }
+    incomment { if ($0 ~ /^\*\//) incomment = 0; next }
     /^services:/ { insvc = 1; next }
     /^[^ #%]/ { insvc = 0 }
     insvc && /^  [a-z][a-z0-9-]*:[ ]*$/ {
@@ -961,6 +967,10 @@ main() {
     stop::case_cred_cleanup
   harness::run_case 90 'stop — 창구 디렉터리 링크 → CLEANUP FAIL · 대상 보존' \
     stop::case_cred_link
+  harness::run_case 91 '토큰 묶음 rename 중간 · 끝 실패 → 막음 · 창구 파일 0' \
+    cred_relay::case_rename_failure
+  harness::run_case 92 'stop — 지우는 창구 토큰 이름 = lib 호출자 목록' \
+    stop::case_cred_callers_match
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

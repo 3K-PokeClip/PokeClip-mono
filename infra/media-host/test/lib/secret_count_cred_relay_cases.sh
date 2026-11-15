@@ -4,7 +4,7 @@
 # secret_count_test.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
-# secret_count_test 의 IMDS 대리 창구 사례(35 – 40). 창구 켬 상자에서 시작
+# secret_count_test 의 IMDS 대리 창구 사례(35 – 41). 창구 켬 상자에서 시작
 # 스크립트는 RUNTIME_DIR/cred-relay/<호출자>(indexer · janitor)에 중계 토큰(16진
 # 64자 · 끝 줄바꿈 없음)을 둔다. box 는 그 둘이 있으면 켬으로 보고 두 토큰과
 # 「지금」 역할 자격(호스트 aws CLI 의 configure export-credentials — 비밀 키 ·
@@ -31,6 +31,13 @@ CR_ROLE_SESSION="$(printf 'pcbenchFakeSessionToken0123/+%.0s' 1 2 3 4 5 6 7 \
 readonly CR_ROLE_SESSION
 readonly CR_EXPIRATION='2026-11-15T12:00:00+00:00'
 readonly CR_TAG='pokeclip-media-cred-relay'
+# 역할 자격의 원천을 IMDS 아닌 곳으로 바꾸는 환경 변수(AWS CLI 기본 자격 체인의
+# 앞 단계 · IMDS 주소) — export-credentials 의 환경에는 없어야 한다.
+readonly CR_SOURCE_ENV=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE
+  AWS_CONTAINER_CREDENTIALS_FULL_URI
+  AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_WEB_IDENTITY_TOKEN_FILE
+  AWS_EC2_METADATA_SERVICE_ENDPOINT AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE)
 
 # 중계 토큰 디렉터리 경로를 낸다.
 cr_cases::relay_dir() {
@@ -192,6 +199,7 @@ cr_cases::write_relay_variant() {
   file="${dir}/janitor"
   case "$1" in
     partial) rm -f -- "${file}" ;;
+    partial-indexer) rm -f -- "${dir}/indexer" ;;
     newline) printf '%s\n' "${CR_JANITOR_TOKEN}" >"${file}" ;;
     short) printf '%s' "${CR_JANITOR_TOKEN:1}" >"${file}" ;;
     non-hex) printf 'g%s' "${CR_JANITOR_TOKEN:1}" >"${file}" ;;
@@ -214,13 +222,13 @@ cr_cases::write_relay_variant() {
   esac
 }
 
-# 사례 38 — box: 중계 토큰이 하나만 있거나 시작 스크립트가 쓰는 꼴(소문자 16진
-# 64자 · 끝 줄바꿈 없음 · 일반 파일 · 링크 아님) 밖이면 cred-relay 로 실패한다
-# (종료 1). 역할 자격은 받으러 가지 않는다.
+# 사례 38 — box: 중계 토큰이 하나만 있거나(janitor 만 없음 · indexer 만 없음)
+# 시작 스크립트가 쓰는 꼴(소문자 16진 64자 · 끝 줄바꿈 없음 · 일반 파일 · 링크
+# 아님) 밖이면 cred-relay 로 실패한다(종료 1). 역할 자격은 받으러 가지 않는다.
 cr_cases::case_relay_malformed() {
   local ok=0 variant
-  for variant in partial newline short non-hex upper too-large empty \
-    file-dir file-symlink dir-symlink; do
+  for variant in partial partial-indexer newline short non-hex upper \
+    too-large empty file-dir file-symlink dir-symlink; do
     cr_cases::setup_on
     cr_cases::write_relay_variant "${variant}" || return 1
     run_count box || return 1
@@ -256,6 +264,10 @@ cr_cases::write_role_variant() {
       cr_cases::role_creds "${CR_ROLE_SECRET}" "${CR_ROLE_SESSION}"
       printf 'AWS_SECRET_ACCESS_KEY=%s\n' "${CR_ROLE_SECRET}" >>"${file}"
       ;;
+    two-sessions)
+      cr_cases::role_creds "${CR_ROLE_SECRET}" "${CR_ROLE_SESSION}"
+      printf 'AWS_SESSION_TOKEN=%s\n' "${CR_ROLE_SESSION}" >>"${file}"
+      ;;
     empty-secret) cr_cases::role_creds '' "${CR_ROLE_SESSION}" ;;
     short-secret)
       cr_cases::role_creds "${CR_ROLE_SECRET:1}" "${CR_ROLE_SESSION}"
@@ -272,8 +284,8 @@ cr_cases::write_role_variant() {
 # 로 실패한다(종료 1). 받은 값은 출력 · 기록에 0.
 cr_cases::case_role_malformed() {
   local ok=0 variant
-  for variant in denied empty no-secret no-session two-secrets empty-secret \
-    short-secret bad-session; do
+  for variant in denied empty no-secret no-session two-secrets two-sessions \
+    empty-secret short-secret bad-session; do
     cr_cases::setup_on
     cr_cases::write_role_variant "${variant}" || return 1
     run_count box || return 1
@@ -297,5 +309,62 @@ cr_cases::case_ssm_ignores() {
   run_count ssm "${COMMAND_ID}" || return 1
   ops_fixture::expect_line 'SECRET COUNT ssm 1' 0 || ok=1
   cr_cases::expect_export_calls 0 || ok=1
+  return "${ok}"
+}
+
+#######################################
+# 마지막 실행의 aws 기록 가운데 첫 argv 가 정한 하위 명령인 첫 기록의 환경 파일을
+# 낸다(없으면 빈 값).
+# Arguments:
+#   하위 명령(configure · secretsmanager).
+#######################################
+cr_cases::aws_env_file() {
+  local f
+  while IFS= read -r f; do
+    if [[ "$(head -n 1 -- "${f}")" == "$1" ]]; then
+      printf '%s\n' "${f%.argv}.env"
+      return 0
+    fi
+  done < <(ops_fixture::calls aws)
+}
+
+# 사례 41 — box 켬: 역할 자격은 인스턴스 역할(IMDS)에서만 받는다. 부모 환경의
+# 자격 · 프로필 · 컨테이너 자격 · 웹 ID · IMDS 주소 변수(CR_SOURCE_ENV)는
+# export-credentials 의 환경에 없고, 설정 · 자격 파일은 /dev/null 이다. 고정은
+# 그 호출 하나만이다 — 비밀 읽기(secretsmanager)는 부모 환경 그대로다.
+cr_cases::case_role_source_pinned() {
+  local ok=0 name env_file parent=()
+  cr_cases::setup_on
+  for name in "${CR_SOURCE_ENV[@]}"; do
+    parent+=("${name}=pcbench-parent")
+  done
+  parent+=("AWS_CONFIG_FILE=${ops_dir}/home/config"
+    "AWS_SHARED_CREDENTIALS_FILE=${ops_dir}/home/credentials")
+  ops_fixture::run "${SCRIPT}" "${parent[@]}" -- box || return 1
+  ops_fixture::expect_line 'SECRET COUNT box 0' 0 || ok=1
+  cr_cases::expect_export_calls 1 || ok=1
+  env_file="$(cr_cases::aws_env_file configure)"
+  if [[ ! -f "${env_file}" ]]; then
+    harness::add_reason 'export-credentials 환경 기록 없음'
+    return 1
+  fi
+  for name in "${CR_SOURCE_ENV[@]}"; do
+    if grep -q -- "^${name}=" "${env_file}"; then
+      harness::add_reason "export-credentials 환경에 ${name} 이 남음"
+      ok=1
+    fi
+  done
+  for name in AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE; do
+    if ! grep -q -x -F -- "${name}=/dev/null" "${env_file}"; then
+      harness::add_reason "export-credentials 환경의 ${name} 이 /dev/null 아님"
+      ok=1
+    fi
+  done
+  env_file="$(cr_cases::aws_env_file secretsmanager)"
+  if [[ ! -f "${env_file}" ]] || ! grep -q -x -F -- \
+    'AWS_PROFILE=pcbench-parent' "${env_file}"; then
+    harness::add_reason '비밀 읽기(secretsmanager)의 부모 환경이 바뀜'
+    ok=1
+  fi
   return "${ok}"
 }

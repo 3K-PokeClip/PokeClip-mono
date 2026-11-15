@@ -4,10 +4,11 @@
 # start_ingest_auth_cases.sh · start_ingest_input_cases.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
-# start_test 의 대리 창구 사례(77 – 86 — 계획 c5 의 CR1 – CR10). compose
-# 렌더본에 cred-relay 서비스 키 줄(`  cred-relay:`)이 한 줄 있으면 켬이다. 켬이면
-# 시작 스크립트가 렌더 묶음 뒤에 창구 토큰 묶음(소비자 둘 · 중계 사본 둘)을 두고,
-# 가짜 링크 pokeclip-cred0 에 169.254.170.2/32 를 붙인 뒤 compose 를 올린다.
+# start_test 의 대리 창구 사례(77 – 86 — 계획 c5 의 CR1 – CR10, 91 — 토큰 묶음
+# rename 중간 실패). compose 렌더본에 cred-relay 서비스 키 줄(`  cred-relay:`)이
+# 한 줄 있으면 켬이다. 켬이면 시작 스크립트가 렌더 묶음 뒤에 창구 토큰
+# 묶음(소비자 둘 · 중계 사본 둘)을 두고, 가짜 링크 pokeclip-cred0 에
+# 169.254.170.2/32 를 붙인 뒤 compose 를 올린다.
 # 렌더본은 켬 렌더를 흉내 낸 짧은 고정물이다(compose 템플릿은 이 사례들의 대상이
 # 아니다).
 #
@@ -26,6 +27,9 @@ readonly CRED_ADDRESS_LINE='MEDIA START FAIL cred-relay address'
 readonly CRED_LIST_LINE='MEDIA START FAIL render cred-relay-list'
 readonly CRED_DIR_LINE='MEDIA START FAIL render cred-relay-dir'
 readonly CRED_TOKEN_PATTERN='^[0-9a-f]{64}$'
+# 가짜 od 통과 모드의 호출 수 — 한 기동의 생성(API 비밀번호 · 창구 토큰 둘)을
+# 모두 진짜 od 로 넘기면서 환경을 기록한다.
+readonly CRED_OD_PASS_ALL=99
 # 창구 파일 넷 — RUNTIME_DIR 아래 경로와 소유(uid:gid) 쌍.
 readonly CRED_FILES=(
   'cred-indexer/token 10001:10001'
@@ -592,20 +596,50 @@ cred_relay::case_rerun() {
 #######################################
 # 사례 86(CR10) — 토큰 값이 제 파일(소비자 · 중계 사본) 밖 어디에도 없다 —
 # 가짜 명령 argv · 환경 기록 · 스크립트 출력 포함. 토큰을 담는 변수
-# 이름(cred_token)이 부모 환경에서 export 된 채 들어와도 같다.
+# 이름(cred_token)이 부모 환경에서 export 된 채 들어와도 같다. 생성(od)은 가짜
+# od 의 통과 모드로 돌려 그 환경도 기록한다 — 둘째 생성의 자식 환경에 첫 토큰이
+# 실리는지(상속 export 를 지우지 않은 회귀)를 본다.
 #######################################
 cred_relay::case_no_leak() {
   local ok=0 inherit run
   for inherit in '' 'cred_token=inherited'; do
     fixture::new_case
     run="${fixture_dir}/runtime"
-    cred_relay::run ${inherit:+"${inherit}"} || return 1
+    ln -s -- "${TEST_DIR}/start_fakebin/od" "${fixture_dir}/bin/od"
+    cred_relay::run "PCBENCH_FAKE_OD_PASS_CALLS=${CRED_OD_PASS_ALL}" \
+      ${inherit:+"${inherit}"} || return 1
     cred_relay::expect_started "상속 「${inherit}」" || ok=1
     cred_relay::read_tokens || { ok=1; continue; }
     auth_mode::check_only_in "${cred_indexer}" 'indexer 토큰' \
       "${run}/cred-indexer/token" "${run}/cred-relay/indexer" || ok=1
     auth_mode::check_only_in "${cred_janitor}" 'janitor 토큰' \
       "${run}/cred-janitor/token" "${run}/cred-relay/janitor" || ok=1
+  done
+  return "${ok}"
+}
+
+#######################################
+# 사례 91 — 토큰 묶음의 rename 이 중간(넷 가운데 셋째 — janitor 소비자 파일)이나
+# 끝(넷째 — janitor 중계 사본)에서 실패하면 cred-relay-rename 으로 막고, 앞서
+# 옮긴 토큰과 남은 임시 파일을 지운다(창구 파일 0 · up 0).
+#######################################
+cred_relay::case_rename_failure() {
+  local ok=0 target
+  for target in cred-janitor/token cred-relay/janitor; do
+    fixture::new_case
+    ln -s -- "${TEST_DIR}/start_fakebin/fsfail" "${fixture_dir}/bin/mv"
+    cred_relay::run "PCBENCH_FAKE_FS_FAIL_GLOB=*/runtime/${target}" \
+      || return 1
+    if ! fixture::expect_blocked 'MEDIA START FAIL render cred-relay-rename'
+    then
+      harness::add_reason "${target} rename 실패"
+      ok=1
+    fi
+    if [[ "$(cred_relay::cred_files)" != 0 ]]; then
+      harness::add_reason "${target} rename 실패: 창구 파일 \
+$(cred_relay::cred_files)개 남음(기대 0)"
+      ok=1
+    fi
   done
   return "${ok}"
 }
