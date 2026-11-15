@@ -90,10 +90,14 @@ $(harness::log_tail "${prof}.err")"
       ok=1
     fi
     # DB env 는 사이드카와 같은 값이다(사이드카 env 가운데 POSTGRES_* · TZ ·
-    # AWS_* 만 — 나머지 사이드카 env 는 검사가 쓰지 않는다).
+    # AWS_* 만 — 나머지 사이드카 env 는 검사가 쓰지 않는다). 켬 키(갈래 e)
+    # 사이드카의 대리 창구 env 셋은 뺀다 — 켬 상자는 검사 서비스를 돌리지 않아
+    # 검사에는 그 셋이 없다.
     # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
     sidecar_env="$(jq -cS '.services.sidecar.environment | with_entries(
-        select(.key | test("^(POSTGRES_|AWS_|TZ$)")))' "${prof}")"
+        select(.key | test("^(POSTGRES_|AWS_|TZ$)"))
+        | select(.key | test("^AWS_(CONTAINER_|EC2_METADATA_DISABLED$)")
+          | not))' "${prof}")"
     if [[ "$(jq -cS --arg s "${TIMING_SERVICE}" '.services[$s].environment' \
       "${prof}")" != "${sidecar_env}" ]]; then
       harness::add_reason "갈래 ${v}: ${TIMING_SERVICE} env 가 사이드카 DB env 와 다름"
