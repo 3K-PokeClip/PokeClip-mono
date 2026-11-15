@@ -35,6 +35,9 @@
 #     state/ssm.race.<IID> 가 있으면 경합을 흉내 낸다 — 상태만 묻는 조회는
 #     Success 지만, 출력 필드가 든 조회는 오래된 진행 중 응답(「InProgress<탭>In
 #     Progress」 · 빈 출력)을 받는다.
+#   configure export-credentials --format env-no-export
+#       state/role.creds 내용 그대로(실제 CLI 처럼 「이름=값」 줄 — 끝
+#       줄바꿈은 파일에 든 대로). 파일이 없으면 종료 254(자격 없음 흉내).
 #
 # 시험이 주는 값: PCBENCH_FAKE_LIB · PCBENCH_FAKE_LOG_DIR · PCBENCH_FAKE_STATE_DIR.
 
@@ -155,6 +158,9 @@ main() {
     && "${tail}" == '--query CommandInvocations[].InstanceId --output text' ]]
   then
     answer "${STATE}/ssm.list" 0
+  elif (( $# == 4 )) && [[ "${head} $4" \
+    == 'configure export-credentials --format env-no-export' ]]; then
+    answer "${STATE}/role.creds" 0
   elif (( $# == 10 )) \
     && [[ "${head}" == 'ssm get-command-invocation --command-id' \
     && "$5" == --instance-id && "$7" == --query \
