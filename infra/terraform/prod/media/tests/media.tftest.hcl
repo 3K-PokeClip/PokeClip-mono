@@ -570,6 +570,40 @@ run "passes_edge_bounds_kvs_arn_from_runtime_state" {
   }
 }
 
+# --- 대리 창구 스위치(POK-574) ---
+
+# tfvars 의 키별 cred_relay 가 모듈 입력(instances = var.instances)까지 그대로
+# 간다. 루트 변수 꼴에 속성이 없으면 켬 키도 끔(홉 2)으로 뜬다. 루트 시험은 모듈
+# 안 상자를 주소로 볼 수 없어 변환된 루트 값을 본다 — 홉은 modules/media_host
+# 시험이 맡는다.
+run "passes_cred_relay_per_key" {
+  command = plan
+
+  variables {
+    instances = {
+      a = { config_version = "1" }
+      b = { config_version = "2", cred_relay = true }
+    }
+  }
+
+  assert {
+    condition     = var.instances["b"].cred_relay == true && var.instances["a"].cred_relay == false
+    error_message = "instances 의 cred_relay 가 키별로 b 켬 · a 끔(기본)이 아니다."
+  }
+
+  # 루트가 키별 스위치를 모듈의 compose 렌더까지 넘긴다 — 모듈 출력
+  # rendered_user_data 로 보면 켬 키(b)의 compose 에만 중계 서비스가 있다.
+  assert {
+    condition = [
+      for key in ["a", "b"] : strcontains(one([
+        for file in yamldecode(module.media_host.rendered_user_data[key]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), "\n  cred-relay:\n")
+    ] == [false, true]
+    error_message = "모듈 렌더의 compose 중계 서비스가 b(켬)에만 있지 않다 — 루트가 cred_relay 를 모듈 렌더까지 넘기지 않는다."
+  }
+}
+
 # --- 출력(설계 3-2) ---
 
 # id 는 계산 속성이다. apply 로 돌려 mock 이 자원마다 다른 값을 만들게 한다.

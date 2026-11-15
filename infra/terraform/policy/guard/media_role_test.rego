@@ -201,9 +201,30 @@ test_r10_module_source_outside_allowlist if {
 test_r10_module_media_host_accepted if {
 	files := [tf(media_root_path, {"module": {"media_host": [{
 		"source": "../../modules/media_host",
+		"instances": "${var.instances}",
 		"rds_resource_id": "${var.rds_resource_id}",
 	}]}})]
 	count(role_hits(files)) == 0
+}
+
+# 루트가 media_host 에 넘기는 instances 는 var.instances 그대로다(POK-574) — 키별
+# cred_relay 스위치를 루트에서 가공(merge 로 덮기)하면 tfvars 와 다른 홉으로
+# 뜬다. 없음 · 다른 변수 · 지역값도 위반이다. source 가 다른 module 은 module
+# 규칙 하나만 알린다(위 시험).
+module_instances_violations := [
+	null,
+	"${{ for k, v in var.instances : k => merge(v, { cred_relay = true }) }}",
+	"${{ for k, v in var.instances : k => merge(v, { cred_relay = false }) }}",
+	"${var.boxes}",
+	"${local.instances}",
+]
+
+test_r10_module_instances_not_var_instances if {
+	every instances in module_instances_violations {
+		body := {"source": "../../modules/media_host", "instances": instances}
+		file := tf(media_root_path, {"module": {"media_host": [object.filter(body, [k | some k, v in body; v != null])]}})
+		one_hit([file], "instances 는 var.instances")
+	}
 }
 
 # 공급자는 hashicorp/aws 하나 — 다른 공급자(awscc 등)를 들이는 길을 막는다.
@@ -540,10 +561,17 @@ test_r10_denylist_rules_other_dir_ignored if {
 }
 
 # 5-3 교체 모델: 떠 있는 상자의 AMI · user_data 는 바꾸지 않는다.
-# IMDSv2 강제(http_tokens 리터럴 "required") — 상자 시험의 기본 블록.
-imds_v2 := [{"http_tokens": "required"}]
+# IMDSv2 강제(http_tokens 리터럴 "required") · 키별 대리 창구 스위치 홉 식 ·
+# IPv6 끔 리터럴(POK-574) — 상자 시험의 기본 블록.
+imds_hop_switch := "${each.value.cred_relay ? 1 : 2}"
+
+imds_v2 := [{"http_tokens": "required", "http_put_response_hop_limit": imds_hop_switch, "http_protocol_ipv6": "disabled"}]
+
+# 상자의 for_each — 홉 스위치 식이 읽는 each.value 의 출처(POK-574).
+instances_for_each := "${var.instances}"
 
 instance_file(ignore) := resource_file("modules/media_host/main.tf", "aws_instance", {
+	"for_each": instances_for_each,
 	"ami": "${data.aws_ssm_parameter.ami.insecure_value}",
 	"metadata_options": imds_v2,
 	"lifecycle": [{"ignore_changes": ignore}],
@@ -560,7 +588,7 @@ test_r10_instance_missing_ignore_changes if {
 }
 
 test_r10_instance_other_dir_ignored if {
-	file := resource_file(media_root_path, "aws_instance", {"ami": "ami-x", "metadata_options": imds_v2})
+	file := resource_file(media_root_path, "aws_instance", {"for_each": instances_for_each, "ami": "ami-x", "metadata_options": imds_v2})
 	count(role_hits([file])) == 0
 }
 
@@ -613,6 +641,7 @@ test_r10_role_other_dir_ignored if {
 # — 리터럴 이름 · 변수는 이미 있는 특권 프로필을 상자에 붙일 수 있다. 두 경로
 # 모두 본다.
 profile_instance_file(path, profile) := resource_file(path, "aws_instance", {
+	"for_each": instances_for_each,
 	"ami": "${data.aws_ssm_parameter.ami.insecure_value}",
 	"iam_instance_profile": profile,
 	"metadata_options": imds_v2,
@@ -704,6 +733,7 @@ launch_template_bodies := [
 
 # 다른 R10 검사에 걸리지 않는 상자 본문(media_host 의 ignore_changes 포함).
 instance_base_body := {
+	"for_each": instances_for_each,
 	"ami": "${data.aws_ssm_parameter.ami.insecure_value}",
 	"metadata_options": imds_v2,
 	"lifecycle": [{"ignore_changes": ["${ami}", "${user_data_base64}"]}],
@@ -741,14 +771,23 @@ test_r10_instance_key_name_other_dir_ignored if {
 
 # 상자는 metadata_options 블록 하나에 http_tokens = "required"(리터럴)를 명시한다 —
 # IMDSv1 은 SSRF 로 역할 자격을 내준다. 블록 · 속성이 없거나(기본값은 AMI ·
-# 계정 설정에 따라 optional), 식이거나, dynamic 이면 위반이다.
+# 계정 설정에 따라 optional), 식이거나, dynamic 이면 위반이다. 블록마다 홉 식 ·
+# IPv6 리터럴을 넣어 위반 원인을 http_tokens 하나로 둔다.
+imds_hop_ipv6 := {"http_put_response_hop_limit": imds_hop_switch, "http_protocol_ipv6": "disabled"}
+
 imds_violation_bodies := [
 	{"metadata_options": []},
-	{"metadata_options": [{}]},
-	{"metadata_options": [{"http_tokens": "optional"}]},
-	{"metadata_options": [{"http_tokens": "${var.http_tokens}"}]},
-	{"metadata_options": [{"http_tokens": "required"}, {"http_tokens": "optional"}]},
-	{"metadata_options": [{"http_tokens": "required"}], "dynamic": {"metadata_options": [{"for_each": "${var.x}", "content": [{}]}]}},
+	{"metadata_options": [imds_hop_ipv6]},
+	{"metadata_options": [object.union(imds_hop_ipv6, {"http_tokens": "optional"})]},
+	{"metadata_options": [object.union(imds_hop_ipv6, {"http_tokens": "${var.http_tokens}"})]},
+	{"metadata_options": [
+		object.union(imds_hop_ipv6, {"http_tokens": "required"}),
+		object.union(imds_hop_ipv6, {"http_tokens": "optional"}),
+	]},
+	{
+		"metadata_options": imds_v2,
+		"dynamic": {"metadata_options": [{"for_each": "${var.x}", "content": [{}]}]},
+	},
 ]
 
 test_r10_instance_imds_not_required if {
@@ -760,9 +799,79 @@ test_r10_instance_imds_not_required if {
 	}
 }
 
+# 홉은 리터럴 1 이거나 키별 스위치 식 정확히 하나다(POK-574 — 켬 키는 1 이라
+# 컨테이너가 IMDS 토큰을 못 받는다). IPv6 엔드포인트는 리터럴 "disabled" — 홉 ·
+# 망 칸 실측은 IPv4 엔드포인트만 했다.
 test_r10_instance_imds_required_accepted if {
-	body := object.union(instance_base_body, {"metadata_options": [{"http_endpoint": "enabled", "http_tokens": "required", "http_put_response_hop_limit": 2}]})
-	count(role_hits([resource_file("modules/media_host/main.tf", "aws_instance", body)])) == 0
+	every hop in [1, imds_hop_switch] {
+		block := {"http_endpoint": "enabled", "http_tokens": "required", "http_put_response_hop_limit": hop, "http_protocol_ipv6": "disabled"}
+		body := object.union(instance_base_body, {"metadata_options": [block]})
+		count(role_hits([resource_file("modules/media_host/main.tf", "aws_instance", body)])) == 0
+	}
+}
+
+# 홉 없음(기본 1 이지만 명시 필수) · 2(옛 값 — 모든 컨테이너가 자격을 얻음) · 3 ·
+# 문자열 "1" · 변수 · 뒤집힌 식 · 다른 키 식 · 공백이 다른 식(정확 일치)은 위반이다.
+imds_hop_violations := [
+	null,
+	2,
+	3,
+	"1",
+	"${var.hop_limit}",
+	"${each.value.cred_relay ? 2 : 1}",
+	"${each.value.relay ? 1 : 2}",
+	"${each.value.cred_relay?1:2}",
+]
+
+test_r10_instance_imds_hop_not_switch if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		every hop in imds_hop_violations {
+			block := object.union(imds_v2[0], {"http_put_response_hop_limit": hop})
+			body := object.union(instance_base_body, {"metadata_options": [object.filter(block, [k | some k, v in block; v != null])]})
+			one_hit([resource_file(path, "aws_instance", body)], "http_put_response_hop_limit")
+		}
+	}
+}
+
+# dynamic 꼴은 값을 대조할 수 없다 — http_tokens 규칙이 블록 구조째 막는다.
+test_r10_instance_imds_hop_dynamic if {
+	body := object.union(instance_base_body, {"dynamic": {"metadata_options": [{
+		"for_each": "${var.x}",
+		"content": [{"http_put_response_hop_limit": 2}],
+	}]}})
+	one_hit([resource_file("modules/media_host/main.tf", "aws_instance", body)], "dynamic")
+}
+
+# 상자의 for_each 는 var.instances 그대로다(POK-574) — 홉 스위치 식 · user_data
+# 가 읽는 each.value.cred_relay 의 출처. 가공 식(merge 로 스위치 덮기 — 탐침 A) ·
+# 다른 변수 · 지역값 · 없음(count 상자 포함)은 tfvars 와 다른 홉으로 뜨게 한다.
+# 두 경로 모두 본다.
+instance_for_each_violations := [
+	null,
+	"${{ for k, v in var.instances : k => merge(v, { cred_relay = false }) }}",
+	"${{ for k, v in var.instances : k => merge(v, { cred_relay = true }) }}",
+	"${var.boxes}",
+	"${local.instances}",
+]
+
+test_r10_instance_for_each_not_var_instances if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		every for_each in instance_for_each_violations {
+			body := object.union(instance_base_body, {"for_each": for_each})
+			file := resource_file(path, "aws_instance", object.filter(body, [k | some k, v in body; v != null]))
+			one_hit([file], "for_each 는 var.instances")
+		}
+	}
+}
+
+test_r10_instance_imds_ipv6_not_disabled if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		every ipv6 in [null, "enabled", "${var.ipv6}"] {
+			block := object.union(imds_v2[0], {"http_protocol_ipv6": ipv6})
+			body := object.union(instance_base_body, {"metadata_options": [object.filter(block, [k | some k, v in block; v != null])]})
+			one_hit([resource_file(path, "aws_instance", body)], "http_protocol_ipv6")
+		}
+	}
 }
 
 test_r10_instance_imds_other_dir_ignored if {

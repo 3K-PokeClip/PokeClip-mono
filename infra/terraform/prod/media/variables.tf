@@ -35,9 +35,10 @@ variable "state_keys" {
 }
 
 variable "instances" {
-  description = "상자 키 → 구성 판(설계 5-3). 새 구성은 config_version 을 올린 새 키로만 넣는다(runbooks/media-swap.md)."
+  description = "상자 키 → 구성 판(설계 5-3)과 대리 창구 스위치. 새 구성은 config_version 을 올린 새 키로만 넣는다(runbooks/media-swap.md). cred_relay = true 키는 IMDS 홉 1 · 값 없음 = 끔(홉 2). 떠 있는 키의 스위치는 제자리에서 바꾸지 않는다(POK-574)."
   type = map(object({
     config_version = string
+    cred_relay     = optional(bool, false)
   }))
 }
 

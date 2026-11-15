@@ -760,6 +760,17 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
   옮기지 않는다).
 - **`AWS_EC2_METADATA_V1_DISABLED=true`** 를 준다 — 토큰 없는 옛 메타데이터
   요청(IMDSv1)으로 내려가는 길을 막는다.
+- **IMDS 대리 창구 켬 상자(POK-574)는 자격 원천이 IMDS 가 아니라 창구다.**
+  compose 가 사이드카 · janitor 에 env 셋을 더 넣는다 —
+  `AWS_CONTAINER_CREDENTIALS_FULL_URI=http://169.254.170.2:9911/v1/credentials`
+  · `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=/run/secrets/aws-cred/token` ·
+  `AWS_EC2_METADATA_DISABLED=true`. SDK 기본 사슬은 이 꼴이면 IMDS 공급자를
+  만들지 않고 창구(아래 「cred-relay 명령 · 환경 변수」)에 묻는다. **자격 갱신
+  주기는 중계가 보내는 Expiration(최대 60분)이 정한다** — SDK 는 그 5분 전에
+  다시 묻는다. 이 약 55분은 응답 한 벌의 캐시 주기일 뿐, 역할 세션을 취소한
+  뒤 복구의 상한이 아니다(`infra/media-host/README.md` 「보안 경계」 침해
+  대응). 켬 상자의 `credentials_ok` 는 `provider=CredentialsEndpointProvider`
+  다(끔 상자는 `EC2RoleProvider`).
 - **`credential_process`(외부 명령에서 자격 증명을 받는 SDK 설정)를 쓴다면
   그 명령은 stderr 에 비밀을 쓰지 않아야 한다.** SDK 는 그 명령의 stderr 를
   컨테이너 stderr 에 그대로 잇는다. pgconf 의 오류 정제(원인 오류의 타입
@@ -1430,9 +1441,12 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
   (`GREATEST`)에만 있고 트리거가 없다.
     *   **DB 자격이 새면** 표 단위 UPDATE · DELETE 로 원장 하한을 낮추거나
         행을 지울 수 있다.
-    *   **상자를 침해해 인스턴스 역할 자격(IMDS)을 얻으면** KVS
-        `UpdateKeys` 로 하한 키를 낮추거나 지우거나 높일 수 있다(이 동작
-        하나가 쓰기 · 지우기를 다 한다).
+    *   **상자를 침해해 인스턴스 역할 자격을 얻으면** KVS `UpdateKeys` 로
+        하한 키를 낮추거나 지우거나 높일 수 있다(이 동작 하나가 쓰기 ·
+        지우기를 다 한다). 역할에 `GetKey` 는 없다(POK-574 — 읽어 보고 고치는
+        길은 없지만 덮어쓰기는 된다). 역할 자격을 얻는 길은 끔 상자면 상자
+        위 모든 컨테이너(IMDS 홉 2), IMDS 대리 창구 켬 상자면 사이드카 ·
+        janitor · 중계 · 호스트다.
     *   **원장을 고친 것도 KVS 로 번진다.** 열린 회차의 행이 지워지거나
         낮아지면 다음 올림(5분)이 그 Writer 가 기억한 후보로 행을 다시 쓰고
         그 값을 KVS 에 쓴다. 그 후보가 KVS 의 지금 값보다 작으면 KVS 하한이
@@ -3775,6 +3789,32 @@ janitor 가 같은 이미지라 둘 다 쓴다.
     1.  `PRIVATE KEY` 블록이 없는지 확인한다(`grep -c 'PRIVATE KEY'` = 0).
 - Dockerfile 에 `POSTGRES_SSLROOTCERT` 기본값(`ENV`)은 두지 않는다 — 로컬
   compose 의 password · `prefer` 경로에 끼어들지 않게 배포 정의가 준다.
+
+### cred-relay 명령 · 환경 변수 (POK-574)
+
+`cmd/cred-relay` 는 Media 상자의 IMDS 대리 창구 중계다. 사이드카 이미지에
+함께 들고(`/usr/local/bin/cred-relay`), prod 창구 켬 상자의 compose 가
+entrypoint 로 고른다. 상자 위 동작 · 신호 · 운영 판정은
+[`infra/media-host/README.md`](/infra/media-host/README.md) 「IMDS 대리
+창구」 가, 결정은
+[ADR-0008](/docs/decisions/2026-11-15-media-imds-credential-relay.md) 이
+정본이다. 핵심은 `internal/credrelay`(토큰 · IMDS 원천 · 응답 캐시 · HTTP
+계약 · 서버 상한)이고 media-ci 커버리지 게이트 대상이다. 토큰을 두는 쪽은
+`infra/media-host/bin/lib/cred_relay.sh` 다.
+
+| 하위 명령 | 하는 일 | 종료 코드 |
+|---|---|---|
+| (없음) · `serve` | `CRED_RELAY_LISTEN` 에서 듣고, 창구 토큰이 맞는 호출자에게만 인스턴스 역할 자격을 준다 | 종료 신호(TERM · INT)면 0 · 기동 거부(설정 · 토큰 파일 · 듣기)와 서버가 스스로 멈춤은 1 |
+| `healthcheck` | 같은 주소의 `/healthz` 가 2xx 인지 본다(compose healthcheck) | 0 · 1 |
+| `isolation-check` | 이 망 칸에서 IMDS 토큰을 못 받고 창구가 토큰 없는 요청을 401 로 거부하는지 보고 한 줄 `CRED ISOLATION imds_token=<blocked\|reachable\|error> relay=<401\|상태 코드\|error>` 를 낸다. 주소는 운영 상수(169.254.169.254 · 169.254.170.2:9911)다 | 격리됨 0 · 격리 안 됨 1 · 판정 못 함 2 |
+
+사용법 오류(모르는 하위 명령 · 남는 인자)는 2 다.
+
+| 변수 | 범위 · 뜻 |
+|---|---|
+| `CRED_RELAY_LISTEN` | 듣는 `IP:포트`(이름 풀이 없음 · 포트 0 아님). IPv4 링크 로컬(169.254.0.0/16)만 받는다 — 그 밖이면 `cred_relay_failed reason=config`. 중계는 호스트 망이라 모든 주소 · 사설 주소로 들으면 창구가 상자 밖에도 열린다. prod 는 `169.254.170.2:9911` |
+| `CRED_RELAY_CALLER_DIR` | 호출자 이름마다 토큰 파일 하나가 든 디렉터리(정리된 절대 경로). `os.Root` 로 열고 링크 이름은 받지 않는다 — 열지 못하거나 두 호출자의 토큰이 같으면 `reason=token_file` |
+| `CRED_RELAY_CALLERS` | 호출자 이름 목록(쉼표). prod 는 `indexer,janitor` |
 
 ### janitor 환경 변수
 

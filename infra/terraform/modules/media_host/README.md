@@ -5,9 +5,12 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
 대상 등록 · 응답기 거부 목록 SSM 파라미터를 만듭니다.
 
 *   **상자:** AL2023 arm64 AMI(SSM 공개 파라미터)를 Media AZ 프라이빗
-    서브넷에 둡니다. 공인 IP 가 없고, IMDSv2 필수에 hop limit 2 입니다 —
-    컨테이너(사이드카 IAM DB 토큰 · S3 업로드)가 인스턴스 역할 자격을 얻어야
-    하기 때문입니다.
+    서브넷에 둡니다. 공인 IP 가 없고, IMDSv2 필수에 IPv6 엔드포인트는
+    끕니다. hop limit 은 키마다 `cred_relay` 로 정합니다(POK-574). 끔(값
+    없음)은 2 입니다 — 컨테이너(사이드카 IAM DB 토큰 · S3 업로드)가 IMDS 로
+    직접 역할 자격을 얻습니다. 켬은 1 입니다 — 컨테이너는 IMDS 토큰을 받지
+    못하고, 사이드카 · janitor 만 호스트 망의 대리 창구(cred-relay)로 자격을
+    받습니다.
 *   **교체 모델(5-3):** 상자 키마다 `config_version` 을 둡니다. 이미 떠 있는
     키의 user_data · AMI 는 바꾸지 않고(`ignore_changes`), 새 구성은 새 키로
     띄운 뒤 `ingest_active_key` · `http_active_key` 를 옮깁니다. 대상 그룹
@@ -54,7 +57,9 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
         `launch_template` 금지(`dynamic` 포함 — 템플릿의 프로필로 비켜 간다).
     *   상자 접속 · 자격: `key_name`(SSH 키 쌍) 금지 · `metadata_options` 에
         `http_tokens = "required"` 리터럴 명시 필수(IMDSv2 — 없음 · 식 ·
-        `dynamic` 위반).
+        `dynamic` 위반). 같은 블록의 `http_put_response_hop_limit` 은 리터럴
+        `1` 또는 정확히 `each.value.cred_relay ? 1 : 2`(2 · 변수 · 다른 식
+        위반), `http_protocol_ipv6` 는 리터럴 `"disabled"` 필수.
     *   명령 블록: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` ·
         `file`) · `connection` 금지(`dynamic` 포함).
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
@@ -95,9 +100,13 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     (`/var/log/cloud-init-output.log`)에 남습니다.
 *   압축 user_data 크기(시험값 기준 · 2026-11-12 실측): 기본 14,673 바이트 ·
     가장 큰 렌더(응답기 · janitor · 제어면 상류 · 발행 목록 둘 · 새 꼴 쓰기 ·
-    하한 Writer · 만료 창구 모두 켬) 15,819 바이트입니다. 주석을 고칠 때마다
-    수십 바이트씩 바뀌므로 정확한 값은 16 KiB 게이트 시험이 매번 다시 잽니다.
-*   **한계 — 16 KiB 여유가 작습니다.** 가장 큰 렌더의 여유는 565 바이트입니다.
+    하한 Writer · 만료 창구 모두 켬) 15,819 바이트입니다. POK-574 뒤 가장 큰
+    렌더는 여기에 대리 창구 켬을 더한 것이고 16,095 바이트입니다(2026-11-16
+    시험값). 주석을 고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은 16 KiB
+    게이트 시험(`largest_user_data_under_16_kib` — 켬 키로 잼)이 매번 다시
+    잽니다.
+*   **한계 — 16 KiB 여유가 작습니다.** 가장 큰 렌더의 여유는 289 바이트입니다
+    (POK-574 전 565).
     POK-551 전(acebb9a1)에 이미 16,302 바이트(여유 82)였고, 만료 창구를 더하려고
     compose 템플릿 머리의 「계약9 발행 게이트」 설명을 렌더에 남지 않는 템플릿
     주석으로 옮겼습니다(kty 결정 B). compose 템플릿에 줄을 더할 때는 새 설명을
@@ -143,6 +152,8 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 *   `proxy_ports`(live · playback · control · health)는 1024 이상이고 서로
     다르며, 응답기 포트(8080 · 8081)와 MediaMTX 루프백 포트(8888 · 9996 ·
     9997)가 아닙니다. 같은 망 칸[^netns]에서 겹치면 nginx 가 뜨지 않습니다.
+    대리 창구 포트 9911 도 아닙니다 — 공개 포트가 같으면 Docker DNAT 이 중계
+    요청을 MediaMTX 로 보냅니다(POK-574).
 *   이미지 참조는 모두 `<저장소>@sha256:<64자>` 이고 이 계정 ECR 레지스트리
     호스트(`media.env` 의 `ECR_REGISTRY_HOST`)로 시작해야 합니다. 응답기
     (`ingest_auth_image`)만 빈 값을 받습니다 — 비면 렌더하지 않습니다(M15).
@@ -189,7 +200,8 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     받습니다 — `arn:<파티션>:cloudfront::<12자리 계정>:key-value-store/<소문자
     UUID>`(와일드카드 · 다른 자원 · 뒤 경로 거부). 인스턴스 역할
     `EdgeBoundsKvs`(`cloudfront-keyvaluestore:` DescribeKeyValueStore ·
-    UpdateKeys · GetKey · 그 KVS 하나 — ListKeys · PutKey · DeleteKey 없음)는
+    UpdateKeys · 그 KVS 하나 — GetKey · ListKeys · PutKey · DeleteKey 없음.
+    GetKey 는 상자에서 부르는 곳이 없어 POK-574 가 뺐습니다)는
     Writer 스위치와 무관하게 늘 있습니다. 동작 이름은 서비스 승인 참조 대조
     (2026-11-04)이고, 실제 허용 · 거부는 ISB 실측 몫입니다(POK-525 계획 12절
     (2)).
@@ -197,6 +209,16 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     /dvr 하한 Writer 스위치입니다. 켜면 사이드카 `REWIND_EDGE_BOUNDS_KVS_ARN`
     에 위 ARN 을, 끄면 빈 값을 렌더합니다(빈 값 = Writer 꺼짐 · 두 모드
     공통). compose 에 들어가 첫 부팅에만 쓰이므로 바꾸는 것은 상자 교체입니다.
+*   `instances` 원소의 `cred_relay`(bool · 기본 `false` — 값 없음은 끔)는 그
+    상자의 IMDS 대리 창구 스위치입니다(POK-574 ·
+    [ADR-0008](/docs/decisions/2026-11-15-media-imds-credential-relay.md)).
+    켜면 그 상자의 IMDS 홉 상한이 1 이 되고, compose 렌더본에 중계 서비스
+    `cred-relay` 와 사이드카 · janitor 의 창구 env · 토큰 디렉터리 bind 가
+    들어갑니다(키마다 렌더 — nginx 렌더 · `template_vars` 는 공통). 끄면 렌더
+    바이트 · 홉 2 가 이 변수가 없던 때와 같습니다. IMDS 설정은 `ignore_changes`
+    밖이라 떠 있는 상자에 곧바로 반영됩니다 — 그래서 떠 있는 키의 값은 바꾸지
+    않고 새 키로 교체합니다(교체 런북 「대리 창구 하한 · 켬 상자」). 켬 상자는
+    사이드카 · 설치 묶음이 POK-574 이상이어야 합니다.
 *   응답기 거부 목록 파라미터 이름은 `/pokeclip/prod/media/ingest-auth-deny-tokens`
     로 확정입니다(M15 계획 · ingest-auth `CONTRACT.md` K5 · `media.env` 의
     `INGEST_AUTH_DENYLIST_PARAM`). 값은 운영자가 고치고 Terraform 은 첫 줄만

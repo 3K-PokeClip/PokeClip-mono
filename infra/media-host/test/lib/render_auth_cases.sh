@@ -253,14 +253,14 @@ auth_cases::check_36() {
   local ok=0 deny_file log_dir v got want
   auth_cases::require || return 1
   # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
-  expect_all '[.services | to_entries[] | .key as $s | .value as $c
-      | ([($c.volumes // [])[] | select(.type == "bind" and .read_only == true)
-          | .target]) as $ro
-      | ($c.environment // {}) | to_entries[]
+  # 읽기 전용 bind 대상이거나 원본을 만들지 않는 읽기 전용 디렉터리 bind 바로
+  # 아래 이름이면 된다(render_test 의 RO_PATH_JQ_DEFS — 창구 토큰 디렉터리).
+  expect_all "${RO_PATH_JQ_DEFS}"'[.services | to_entries[] | .key as $s
+      | .value as $c | ($c.environment // {}) | to_entries[]
       | select(.key | endswith("_FILE"))
-      | select(.value as $f | $ro | index($f) == null)
+      | select(.value | ro_bind_path($c) | not)
       | "\($s).\(.key)=\(.value)"]' '[]' \
-    '_FILE env 값 ⊄ 그 서비스 읽기 전용 bind 대상' || ok=1
+    '_FILE env 값 ⊄ 그 서비스 읽기 전용 bind 안 파일' || ok=1
   if ! deny_file="$(auth_cases::go_const denyListFile)" \
     || ! log_dir="$(auth_cases::go_const connLogDirectory)"; then
     harness::add_reason 'media/cmd/ingest-auth/main.go 고정 자리를 읽지 못함'

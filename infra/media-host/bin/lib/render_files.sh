@@ -9,11 +9,14 @@
 #     (select_mode_blocks). 템플릿은 렌더하지 않은 저장소 파일 그대로 상자에
 #     깔린다(M9 설치 묶음) — 두 모드의 블록을 모두 품고, 모드는 compose 하나가
 #     정한다. 시험(render_test · secret_count_test · 계약 시험)도 이 두 함수를
-#     source 해 같은 길로 고른다.
+#     source 해 같은 길로 고른다. 서비스 키 줄 세기(service_line_counts)는
+#     IMDS 대리 창구 켬 · 끔 판정(lib/cred_relay.sh)도 같이 쓴다.
 #   - 파일 두기: 이번 기동에 둘 파일 목록(최종 경로 · 소유 · 실패 단계 이름
 #     앞머리 · 내용)을 모아, 모두 같은 디렉터리의 임시 파일(0400 · 지정 소유)에
 #     쓰고 대상을 모두 점검한 뒤 차례로 rename 한다. rename 이 하나라도 실패하면
-#     이번에 옮긴 파일을 지운다(짝이 어긋난 설정을 남기지 않는다).
+#     이번에 옮긴 파일을 지운다(짝이 어긋난 설정을 남기지 않는다). 묶음
+#     하나를 둔 뒤에는 목록 넷을 모두 비운다(reset_file_list) — 다음 묶음(창구
+#     토큰)이 앞 묶음의 경로 · 소유 · 단계를 이어받지 않게.
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). 상자(AL2023 · bash 5)와 kty
 # 로컬(macOS · bash 3.2) 양쪽에서 돈다.
@@ -39,18 +42,37 @@ readonly MODE_MARK='@mode'
 #   0 / 1 꼴 밖.
 #######################################
 compose_mode() {
-  local counts='0 0'
-  if [[ -f "$1" && -r "$1" ]]; then
-    counts="$(awk -v line="${INGEST_AUTH_SERVICE_LINE}" '
-      $0 == line { exact++ }
-      index($0, line) == 1 { loose++ }
-      END { print exact + 0, loose + 0 }' "$1")" || return 1
-  fi
+  local counts
+  counts="$(service_line_counts "$1" "${INGEST_AUTH_SERVICE_LINE}")" \
+    || return 1
   case "${counts}" in
     '0 0') printf 'legacy' ;;
     '1 1') printf 'ingest-auth' ;;
     *) return 1 ;;
   esac
+}
+
+#######################################
+# compose 렌더본에서 서비스 키 줄을 센다 — 한 줄 전체가 그 줄인 수(정확)와 그
+# 글자로 시작하는 줄 수(느슨 — 뒤 공백 · 같은 줄 값도 센다). 읽을 수 없는
+# 파일은 「0 0」 이다. 모드 판정(compose_mode · 창구 cred_relay_mode)이 같이
+# 쓴다.
+# Arguments:
+#   compose 파일, 서비스 키 줄.
+# Outputs:
+#   「정확 느슨」 수 한 줄.
+# Returns:
+#   0 / 1 awk 실패.
+#######################################
+service_line_counts() {
+  if [[ ! -f "$1" || ! -r "$1" ]]; then
+    printf '0 0'
+    return 0
+  fi
+  awk -v line="$2" '
+    $0 == line { exact++ }
+    index($0, line) == 1 { loose++ }
+    END { printf "%d %d", exact + 0, loose + 0 }' "$1"
 }
 
 #######################################
@@ -107,6 +129,19 @@ add_file() {
   file_owners+=("$2")
   file_steps+=("$3")
   file_bodies+=("$4")
+}
+
+#######################################
+# 둘 파일 목록 넷을 모두 비운다. 묶음 하나(렌더 · 창구 토큰)를 둔 뒤 다음 묶음이
+# 앞 묶음의 경로 · 소유 · 단계를 이어받지 않게 한다.
+# Globals:
+#   file_paths, file_owners, file_steps, file_bodies
+#######################################
+reset_file_list() {
+  file_paths=()
+  file_owners=()
+  file_steps=()
+  file_bodies=()
 }
 
 #######################################

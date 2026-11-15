@@ -30,9 +30,10 @@ variable "subnet_id" {
 }
 
 variable "instances" {
-  description = "상자 키 → 구성 판(설계 5-3 교체 모델). 새 구성은 config_version 을 올린 새 키로만 들어간다 — 이미 떠 있는 키의 user_data · AMI 는 바꾸지 않는다."
+  description = "상자 키 → 구성 판(설계 5-3 교체 모델)과 대리 창구 스위치. 새 구성은 config_version 을 올린 새 키로만 들어간다 — 이미 떠 있는 키의 user_data · AMI 는 바꾸지 않는다. cred_relay 켬 키는 IMDS 홉 1(컨테이너는 호스트 대리 창구로만 자격을 받음), 값 없음 = 끔(홉 2 — 지금과 같음). 떠 있는 키의 스위치는 제자리에서 바꾸지 않고 새 키로 넣는다(POK-574)."
   type = map(object({
     config_version = string
+    cred_relay     = optional(bool, false)
   }))
 
   validation {
@@ -159,7 +160,7 @@ variable "srt_port" {
 }
 
 variable "proxy_ports" {
-  description = "nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081)와 MediaMTX 루프백(8888 · 9996 · 9997) 밖."
+  description = "nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081) · MediaMTX 루프백(8888 · 9996 · 9997) · 대리 창구(9911) 밖."
   type = object({
     live     = number
     playback = number
@@ -170,9 +171,9 @@ variable "proxy_ports" {
   validation {
     condition = alltrue([
       for port in values(var.proxy_ports) :
-      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8888, 9996, 9997], port)
+      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8888, 9911, 9996, 9997], port)
     ])
-    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8888 · 9996 · 9997 이 아니어야 한다."
+    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8888 · 9911 · 9996 · 9997 이 아니어야 한다."
   }
 
   validation {

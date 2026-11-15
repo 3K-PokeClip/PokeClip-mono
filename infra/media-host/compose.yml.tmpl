@@ -60,6 +60,13 @@ ${/*
                        토큰 디렉터리 bind 를 렌더하지 않고, 렌더본의 구성은 이
                        변수가 없던 때와 같다. 이 설명은 user_data 16 KiB 여유
                        때문에 렌더에 남지 않는 템플릿 주석에 둔다.
+  cred_relay           bool. 상자 키별 IMDS 대리 창구 스위치(POK-574 — Terraform
+                       instances 의 키별 값 · 시험값 render_vars.json 은 false).
+                       참이면 중계 서비스 cred-relay 를 렌더하고, 사이드카 ·
+                       janitor 에 창구 env 셋 · 토큰 디렉터리 bind · 중계 의존을
+                       더한다. 거짓이면 렌더본은 이 변수가 없던 때와 바이트까지
+                       같다 — 이 기능의 설명은 모두 렌더에 남지 않는 템플릿
+                       주석이다(user_data 16 KiB 여유).
 */ ""~}
 #
 # 지키는 것:
@@ -68,6 +75,19 @@ ${/*
 #     MediaMTX 의 루프백 포트(8888 LL-HLS · 9996 재생 서버 · 9997 관리 API)는
 #     밖으로 열지 않고 127.0.0.1 로만 닿는다. 공개 포트는 mediamtx 서비스에서만
 #     연다.
+${/*
+   - 대리 창구 켬 상자(cred_relay). 컨테이너는 IMDS 에 닿지 않는다(상자의 IMDS
+     홉 1 — 모듈 main.tf). 역할 자격은 호스트 망의 중계(cred-relay — 사이드카
+     이미지의 다른 명령)가 창구 토큰을 가진 사이드카 · janitor 에게만 준다.
+     중계는 「망 칸 하나」 의 두 번째 예외다(첫째는 compose 기본 망의 기동 전
+     검사). 주소 169.254.170.2:9911 은 시작 스크립트가 더미 링크에 붙이고
+     (bin/lib/cred_relay.sh), 포트는 모듈의 proxy_ports 금지 목록에 있다 — 호스트
+     망에서 같은 포트의 Docker 공개 포트 DNAT 가 중계를 가로채지 않게. 토큰
+     디렉터리는 사이드카 · janitor 와 중계에만 붙는다(소비자는 자기 것 하나,
+     중계는 호출자 사본 디렉터리). 공유 볼륨(recordings · hooks · dvr)은 중계에
+     붙지 않는다. 망 칸 이웃(MediaMTX · nginx · 응답기)은 중계에 닿아도 토큰이
+     없어 401 이다.
+*/ ""~}
 #   - 재기동 단위. mediamtx · nginx 는 엔진이 다시 띄우지 않는다
 #     (restart: "no") — 시작 스크립트가 이 둘의 출력에만 붙고
 #     (--attach) 하나가 끝나면 compose 전체가 내려가며, systemd 유닛이 전체를
@@ -209,7 +229,18 @@ services:
   sidecar:
     image: ${sidecar_image}
     network_mode: "service:mediamtx"
+${/*
+  켬 상자의 소비자는 중계가 뜬 뒤 뜬다(자격 첫 요청이 연결 거부로 시작하지
+  않게). 중계를 다시 띄워도 소비자는 다시 띄우지 않는다(restart 없음 — 자격은
+  다음 요청에서 다시 받는다).
+*/ ""}%{ if cred_relay ~}
+    depends_on:
+      <<: *mediamtx-dependency
+      cred-relay:
+        condition: service_started
+%{ else ~}
     depends_on: *mediamtx-dependency
+%{ endif ~}
     restart: on-failure
     security_opt:
       - no-new-privileges:true
@@ -240,6 +271,16 @@ services:
       AWS_REGION: ap-northeast-2
       # 토큰 없는 옛 메타데이터 요청(IMDSv1)으로 내려가는 길을 막는다.
       AWS_EC2_METADATA_V1_DISABLED: "true"
+${/*
+  대리 창구 소비자 env 셋(셋이 한 벌 — render_test 사례 61). SDK 의 컨테이너
+  자격 경로로 중계에 묻고, 토큰은 값이 아니라 파일 경로로 준다(시작 스크립트가
+  아래 디렉터리 bind 안에 실행 계정 소유 0400 · 끝 개행 없이 둔다). IMDS 로
+  내려가는 길은 끈다 — 켬 상자의 컨테이너는 어차피 홉 1 로 닿지 못한다.
+*/ ""}%{ if cred_relay ~}
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: http://169.254.170.2:9911/v1/credentials
+      AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE: /run/secrets/aws-cred/token
+      AWS_EC2_METADATA_DISABLED: "true"
+%{ endif ~}
       S3_BUCKET: ${rewind_bucket_name}
       # 목록 줄 = 이 앞머리 + "/" + S3 키(dvr/…) — 영상 CDN 의 /dvr/* 가 버킷이다.
       REWIND_PUBLIC_BASE_URL: "${rewind_public_base_url}"
@@ -314,6 +355,17 @@ ${/*
         bind:
           create_host_path: true
 %{ endif ~}
+${/*
+  창구 토큰은 디렉터리로 받는다(소비자 디렉터리는 root 0711 — 파일 경로로만
+  연다). 원본이 없으면 만들지 않는다 — 시작 스크립트가 켬 상자에서 늘 만든다.
+*/ ""}%{ if cred_relay ~}
+      - type: bind
+        source: /run/pokeclip-media/cred-indexer
+        target: /run/secrets/aws-cred
+        read_only: true
+        bind:
+          create_host_path: false
+%{ endif ~}
 %{ if detached_log_driver == "json-file" ~}
     logging: *attached-logging
 %{ else ~}
@@ -335,6 +387,12 @@ ${/*
   # verify-full). 망 칸은 mediamtx 가 아니라 compose 기본 망이다 — mediamtx 를
   # 띄우기 전에 돈다(IMDS 홉 상한 2 · RDS 보안 그룹은 상자 ENI 출발이라 같은
   # 길로 닿는다). 장부에 쓰지 않고 파일도 쓰지 않는다.
+${~/*
+  대리 창구 켬 상자에서는 이 검사를 돌리지 않는다 — 시작 스크립트가 판 2 라벨
+  없는 사이드카를 즉시 막는다(MEDIA START BLOCKED: cred-relay needs sidecar
+  timing v2). 그래서 위 렌더 주석의 「IMDS 홉 상한 2」 는 끔 상자에서 참이고,
+  이 서비스는 켬 · 끔 모두 그대로 렌더한다(창구 env 셋 없음).
+*/ ""}
   timing-preflight:
     image: ${timing_guard_image}
     entrypoint: ["/usr/local/bin/segment-indexer", "timing-gate-check"]
@@ -471,7 +529,14 @@ ${/*
     # 모든 삭제가 권한 오류다.
     user: "10002:10002"
     network_mode: "service:mediamtx"
+%{ if cred_relay ~}
+    depends_on:
+      <<: *mediamtx-dependency
+      cred-relay:
+        condition: service_started
+%{ else ~}
     depends_on: *mediamtx-dependency
+%{ endif ~}
     restart: on-failure
     # 녹화를 지우는 쓰기 권한을 가진 만큼 그 밖에는 아무것도 못 쓰게 한다.
     # janitor 는 recordings 밖에 쓰지 않는다(로컬 compose 와 같은 설정).
@@ -504,8 +569,21 @@ ${/*
       # 토큰 없는 옛 메타데이터 요청(IMDSv1)으로 내려가는 길을 막는다.
       AWS_EC2_METADATA_V1_DISABLED: "true"
       SEGMENT_ROOT: /recordings
+%{ if cred_relay ~}
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: http://169.254.170.2:9911/v1/credentials
+      AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE: /run/secrets/aws-cred/token
+      AWS_EC2_METADATA_DISABLED: "true"
+%{ endif ~}
     volumes:
       - recordings:/recordings
+%{ if cred_relay ~}
+      - type: bind
+        source: /run/pokeclip-media/cred-janitor
+        target: /run/secrets/aws-cred
+        read_only: true
+        bind:
+          create_host_path: false
+%{ endif ~}
 %{ if detached_log_driver == "json-file" ~}
     logging: *attached-logging
 %{ else ~}
@@ -513,6 +591,54 @@ ${/*
       driver: journald
       options:
         tag: pokeclip-media-janitor
+%{ endif ~}
+%{ endif ~}
+${/*
+  IMDS 대리 창구 중계 — 호스트 망에서 169.254.170.2:9911 로 듣고, 창구 토큰이
+  맞는 요청(사이드카 indexer · janitor)에만 상자 역할 자격을 준다. 이미지는
+  사이드카 이미지이고 entrypoint 로 중계 명령을 고른다. 실행 계정은 이미지
+  USER(user: 없음) — 중계 디렉터리는 root:<그 그룹> 0750 이다. cap 은 하나도
+  되살리지 않는다(9911 은 비특권 포트). 호출자 목록은 janitor 를 꺼도 그대로다
+  (시작 스크립트가 janitor 토큰도 두고, 받는 소비자가 없을 뿐이다). 의존이
+  없다 — 소비자가 중계에 기댄다. 엔진이 다시 띄우는 것은 비정상 종료뿐이다
+  (restart: on-failure — docker stop · kill 뒤에는 다시 띄우지 않는다).
+*/ ""}%{ if cred_relay ~}
+
+  cred-relay:
+    image: ${sidecar_image}
+    entrypoint: ["/usr/local/bin/cred-relay"]
+    network_mode: host
+    restart: on-failure
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
+    environment:
+      CRED_RELAY_LISTEN: 169.254.170.2:9911
+      CRED_RELAY_CALLER_DIR: /run/secrets/cred-relay
+      CRED_RELAY_CALLERS: indexer,janitor
+    volumes:
+      - type: bind
+        source: /run/pokeclip-media/cred-relay
+        target: /run/secrets/cred-relay
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/cred-relay", "healthcheck"]
+      interval: 30s
+      retries: 3
+      start_period: 10s
+%{ if detached_log_driver == "json-file" ~}
+    logging: *attached-logging
+%{ else ~}
+    logging:
+      driver: journald
+      options:
+        tag: pokeclip-media-cred-relay
 %{ endif ~}
 %{ endif ~}
 

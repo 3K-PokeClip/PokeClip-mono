@@ -137,6 +137,24 @@ run "rejects_mediamtx_loopback_ports" {
   expect_failures = [var.proxy_ports]
 }
 
+# 대리 창구(cred-relay)가 호스트 망 169.254.170.2:9911 에 묶인다. 공개 포트가
+# 같으면 Docker DNAT(nat PREROUTING dst-type LOCAL)이 중계 요청을 MediaMTX 로
+# 보낸다(POK-574 P3).
+run "rejects_cred_relay_port" {
+  command = plan
+
+  variables {
+    proxy_ports = {
+      live     = 9911
+      playback = 18082
+      control  = 18083
+      health   = 18084
+    }
+  }
+
+  expect_failures = [var.proxy_ports]
+}
+
 run "rejects_privileged_ports" {
   command = plan
 

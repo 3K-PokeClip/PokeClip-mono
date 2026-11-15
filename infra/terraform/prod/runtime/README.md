@@ -263,10 +263,15 @@ Jira POK-304 코멘트와 같은 목록). 1 · 2 · 7 은 1단-나 ①(POK-428)�
     태스크 · 새 태스크가 섞여 어느 토큰이든 일부 요청이 401 입니다(거부 창 —
     진행 중인 송출은 무사). 순서와 완료 조건은
     [runtime-1a 런북](../../runbooks/runtime-1a.md) 「1단-나 ②」 절입니다.
-*   Media 상자는 IMDS 홉 제한이 2(`modules/media_host/main.tf` 의
-    `http_put_response_hop_limit`)라 상자의 컨테이너도 인스턴스 역할 자격을
-    받습니다. 그래서 전용 토큰을 읽을 수 있는 것은 응답기만이 아니라 상자
-    위의 모든 것입니다. media_host 범위라 고치지 않았습니다.
+*   전용 토큰을 읽을 수 있는 것은 Media 상자의 IMDS 대리 창구(POK-574 —
+    `prod/media` `instances` 의 키별 `cred_relay`)에 따라 다릅니다.
+    *   **끔 상자(값 없음):** IMDS 홉 제한이 2(`modules/media_host/main.tf` 의
+        `http_put_response_hop_limit`)라 상자의 컨테이너도 인스턴스 역할
+        자격을 받습니다. 응답기만이 아니라 상자 위의 모든 것입니다.
+    *   **켬 상자:** 홉 제한이 1 이라 컨테이너는 IMDS 에 닿지 못합니다. 역할
+        자격(그래서 전용 토큰 읽기)은 호스트 · 중계(`cred-relay`)와 창구
+        토큰을 받은 사이드카 · janitor 뿐입니다. 응답기는 시작 스크립트가
+        둔 자기 토큰 파일만 읽습니다(media-host README 「IMDS 대리 창구」).
 
 ## See also
 

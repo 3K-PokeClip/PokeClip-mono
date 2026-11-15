@@ -129,16 +129,15 @@ data "aws_iam_policy_document" "media" {
   }
 
   # 사이드카 /dvr 하한 Writer(POK-525) — 판 읽기 · If-Match 묶음 쓰기(올림 ·
-  # 해제 표지) · 키 하나 읽기. 그릇은 런타임 1단 몫이다(CONTRACT-runtime).
-  # ListKeys · PutKey · DeleteKey 는 Writer 가 쓰지 않아 주지 않는다. 동작
-  # 이름은 서비스 승인 참조(cloudfront-keyvaluestore · 2026-11-04 대조)이고 실제
-  # 허용 · 거부는 ISB 실측 몫이다. Writer 스위치가 꺼져도 둔다 — BroadcastPublish
-  # 와 같은 까닭.
+  # 해제 표지). 그릇은 런타임 1단 몫이다(CONTRACT-runtime). GetKey 는 상자에서
+  # 부르는 곳이 없어 뺐고(POK-574), ListKeys · PutKey · DeleteKey 는 Writer 가
+  # 쓰지 않아 주지 않는다. 동작 이름은 서비스 승인 참조
+  # (cloudfront-keyvaluestore · 2026-11-04 대조)이고 실제 허용 · 거부는 ISB
+  # 실측 몫이다. Writer 스위치가 꺼져도 둔다 — BroadcastPublish 와 같은 까닭.
   statement {
     sid = "EdgeBoundsKvs"
     actions = [
       "cloudfront-keyvaluestore:DescribeKeyValueStore",
-      "cloudfront-keyvaluestore:GetKey",
       "cloudfront-keyvaluestore:UpdateKeys",
     ]
     resources = [var.edge_bounds_kvs_arn]

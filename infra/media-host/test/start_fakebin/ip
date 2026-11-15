@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# start_test 전용 가짜 ip — 받은 argv 와 불린 순간의 상태(그때까지 쌓인 가짜
+# docker 기록 수)를 기록한다. 링크 · 주소는 만들지 않는다(시험은 root 가
+# 아니다 — 단언은 기록으로 한다). 다룰 줄 아는 꼴은 대리 창구 주소 걸음이 쓰는
+# 넷(`link show` · `link add` · `addr replace` · `link set`)뿐이다.
+#
+# 시험이 주는 값:
+#   PCBENCH_FAKE_LOG_DIR    (필수) ip.<n>.argv · ip.<n>.state(docker=<수>)를
+#                           쓴다.
+#   PCBENCH_FAKE_IP_LINK    present 면 `link show` 가 0(링크 있음), 그 밖이면
+#                           1(링크 없음 — iproute2 의 「Device does not
+#                           exist」 꼴).
+#   PCBENCH_FAKE_IP_FAIL    link-add · addr-replace · link-set 가운데 하나면 그
+#                           호출만 종료 2(실패 주입).
+#
+# 모르는 호출 꼴이면 종료 2.
+
+set -euo pipefail
+
+#######################################
+# argv 와 불린 순간의 docker 기록 수를 기록한다.
+# Globals:
+#   PCBENCH_FAKE_LOG_DIR
+# Arguments:
+#   받은 argv.
+#######################################
+record_call() {
+  local dir="${PCBENCH_FAKE_LOG_DIR:?가짜 ip: PCBENCH_FAKE_LOG_DIR 없음}" n=1
+  local f docker=0
+  while [[ -e "${dir}/ip.${n}.argv" ]]; do
+    n=$((n + 1))
+  done
+  printf '%s\n' "$@" >"${dir}/ip.${n}.argv"
+  for f in "${dir}"/docker.*.argv; do
+    [[ -f "${f}" ]] && docker=$((docker + 1))
+  done
+  printf 'docker=%d\n' "${docker}" >"${dir}/ip.${n}.state"
+}
+
+main() {
+  local op="${1:-} ${2:-}"
+  record_call "$@"
+  case "${op}" in
+    'link show')
+      if [[ "${PCBENCH_FAKE_IP_LINK:-}" != present ]]; then
+        printf 'Device "%s" does not exist.\n' "${!#}" >&2
+        exit 1
+      fi
+      ;;
+    'link add' | 'addr replace' | 'link set')
+      if [[ "${PCBENCH_FAKE_IP_FAIL:-}" == "${op/ /-}" ]]; then
+        printf '가짜 ip: %s 실패(시험)\n' "${op}" >&2
+        exit 2
+      fi
+      ;;
+    *)
+      printf '가짜 ip: 모르는 호출\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
