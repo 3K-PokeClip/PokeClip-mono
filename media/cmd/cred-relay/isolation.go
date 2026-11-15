@@ -13,9 +13,9 @@ import (
 
 // isolation-check 의 IMDS 판정이다(설계 2.5 · 8절 — 판정 줄 CRED ISOLATION imds_token=… relay=…).
 const (
-	verdictBlocked   = "blocked"   // 토큰 PUT 의 토큰이 기다림 상한 안에 오지 않았다(홉 1 로 응답이 버려짐)
+	verdictBlocked   = "blocked"   // 토큰 PUT 의 답(머리)이 기다림 상한 안에 오지 않았다(홉 1 로 응답이 버려짐)
 	verdictReachable = "reachable" // 토큰을 받았다 — 이 칸은 IMDS 에 닿는다
-	verdictError     = "error"     // 판정 못 함(연결 거부 · 토큰이 아닌 답 등) — relay 쪽은 답이 없음
+	verdictError     = "error"     // 판정 못 함(연결 거부 · 토큰이 아닌 답 · 200 뒤 본문 실패 등) — relay 쪽은 답이 없음
 )
 
 // relayDenied 는 창구가 토큰 없는 요청에 내야 하는 상태다.
@@ -61,8 +61,9 @@ func checkIsolation(ctx context.Context, s site, stdout io.Writer) int {
 }
 
 // probeIMDSToken 은 endpoint 에 IMDSv2 토큰 PUT 을 보내 wait 안에 토큰(200 · 빈 본문 아님)이 오면 reachable,
-// 오지 않으면(연결 · 머리 · 200 의 본문 어디서든 상한 초과) blocked, 그 밖(연결 거부 · 다른 상태 · 빈 본문)은
-// error 다. 상태는 본문보다 먼저 본다 — 200 이 아닌 머리를 받았으면 본문이 늦어도 막힌 것이 아니다.
+// 머리가 오지 않으면(연결 · 머리에서 상한 초과) blocked, 그 밖(연결 거부 · 다른 상태 · 빈 본문 · 200 뒤 본문
+// 실패)은 error 다. 상태는 본문보다 먼저 본다 — 머리를 받았으면 홉이 응답을 버리지 않은 것이라, 본문이 늦거나
+// 끊겨도 막힌 것이 아니다.
 func probeIMDSToken(ctx context.Context, endpoint string, wait time.Duration) string {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -81,7 +82,7 @@ func probeIMDSToken(ctx context.Context, endpoint string, wait time.Duration) st
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProbeBody))
 	if err != nil {
-		return timedOutOr(ctx)
+		return verdictError
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		return verdictError

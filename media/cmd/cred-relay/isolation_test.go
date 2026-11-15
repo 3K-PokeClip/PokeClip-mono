@@ -145,17 +145,25 @@ func TestIsolationCheck(t *testing.T) {
 
 // IMDS 가 토큰이 아닌 답(403 · 빈 200)을 내면 판정 못 함(error)이다 — 칸이 막혔다고도 뚫렸다고도 하지 않는다.
 // 403 머리 뒤 본문이 기다림 상한을 넘겨도 같다(c3 cx) — 이미 받은 상태로 판정하고, 본문 지연을 차단으로 읽지
-// 않는다.
+// 않는다. 200 머리 뒤 본문이 멈춰도 같다(종결 r1) — 머리가 왔으니 홉이 응답을 버리지 않았다.
 func TestIsolationCheckNonTokenAnswerIsError(t *testing.T) {
 	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	t.Cleanup(empty.Close)
-	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		w.(http.Flusher).Flush()
-		<-r.Context().Done() // 본문을 끝내지 않는다 — 묻는 쪽이 끊을 때까지
-	}))
-	t.Cleanup(stalled.Close)
-	for name, endpoint := range map[string]string{"403": statusIMDS(t, http.StatusForbidden), "빈_200": empty.URL, "403_본문_지연": stalled.URL} {
+	stalledAfter := func(status int) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done() // 본문을 끝내지 않는다 — 묻는 쪽이 끊을 때까지
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	for name, endpoint := range map[string]string{
+		"403":       statusIMDS(t, http.StatusForbidden),
+		"빈_200":     empty.URL,
+		"403_본문_지연": stalledAfter(http.StatusForbidden),
+		"200_본문_지연": stalledAfter(http.StatusOK),
+	} {
 		t.Run(name, func(t *testing.T) {
 			s := site{imdsEndpoint: endpoint, relayURL: relayAnswering(t, http.StatusUnauthorized), isolationWait: 300 * time.Millisecond}
 			var stdout, stderr lockedBuffer
