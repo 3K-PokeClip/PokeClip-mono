@@ -3,6 +3,7 @@ package credrelay
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -89,6 +90,29 @@ func TestServesLastValidWhileSourceFails(t *testing.T) {
 	got2 := r.logs.events(t, "cred_source_degraded")
 	if len(got2) != 2 || got2[1]["value"] != float64(0) || got2[1]["reason"] != "recovered" {
 		t.Errorf("cred_source_degraded = %v, want 두 번째 줄 value=0 reason=recovered", got2)
+	}
+}
+
+// 저하 게이지의 set · clear 는 같은 등급이다 — WARN 이상만 받는 로그에서도 회복 줄이 걸러지지 않는다.
+func TestDegradedGaugeClearSurvivesWarnLevel(t *testing.T) {
+	clock := newManualClock()
+	fake := newFakeIMDS(t, clock.start.Add(6*time.Hour))
+	logs := &logBuf{}
+	warnOnly := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	h := NewHandler(fake.source(clock.now), loadTestTokens(t), clock.now, warnOnly)
+	r := &relay{clock: clock, imds: fake, logs: logs, h: h}
+
+	mustServe(t, r.get(canaryIndexerToken), "첫 요청")
+	r.imds.update(func(f *fakeIMDS) { f.credsStatus = http.StatusInternalServerError })
+	r.clock.advance(periodicReread)
+	mustServe(t, r.get(canaryIndexerToken), "원천 실패 중")
+	r.imds.update(func(f *fakeIMDS) { f.credsStatus = 0 })
+	r.clock.advance(minSourceInterval)
+	mustServe(t, r.get(canaryIndexerToken), "회복 뒤")
+
+	got := logs.events(t, "cred_source_degraded")
+	if len(got) != 2 || got[0]["value"] != float64(1) || got[1]["value"] != float64(0) {
+		t.Errorf("WARN 이상 로그의 cred_source_degraded = %v, want value=1 · value=0 두 줄", got)
 	}
 }
 

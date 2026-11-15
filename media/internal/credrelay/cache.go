@@ -92,11 +92,12 @@ func (c *credCache) fetch(ctx context.Context, t time.Time) bool {
 	if err != nil {
 		c.log.Error("cred_source_failed", "err_type", sourceErrorKind(err))
 	}
+	// set · clear 는 같은 등급이다 — clear 만 낮으면 WARN 이상만 모을 때 회복이 걸러진다.
 	switch {
 	case nowDegraded && !wasDegraded:
 		c.log.Warn("cred_source_degraded", "value", 1)
 	case !nowDegraded && wasDegraded:
-		c.log.Info("cred_source_degraded", "value", 0, "reason", "recovered")
+		c.log.Warn("cred_source_degraded", "value", 0, "reason", "recovered")
 	}
 	return err == nil
 }

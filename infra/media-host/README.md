@@ -618,7 +618,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `MEDIA START BLOCKED: generated credential unavailable` | 응답기 모드 — Basic 비밀번호 · 잠금 둘 생성 실패 |
 | | `MEDIA START BLOCKED: cred-relay mode mismatch` | compose 렌더본의 중계 서비스 키 줄로 창구 켬 · 끔을 정할 수 없음(`  cred-relay:` 2 이상 · 같은 키를 뒤 공백 · 같은 줄 값으로 쓴 줄) |
 | | `MEDIA START BLOCKED: cred-relay token unavailable` | 창구 켬 — 창구 토큰 생성 실패 |
-| | `MEDIA START BLOCKED: cred-relay needs sidecar timing v2 label=<라벨\|none\|invalid>` | 창구 켬 — 사이드카 이미지 라벨 `com.pokeclip.timing.readable` 에 판 2 가 없음(라벨 없는 c0 아래 이미지 · 받기 실패에 로컬에도 없음은 `none`, 꼴 밖은 `invalid`, 판 2 없는 꼴 맞는 라벨은 그 글자). 켬 상자는 기동 전 검사(`timing-preflight`)를 돌리지 않는다. **판 2 는 있지만 창구 하한 아래인 사이드카는 이 줄 없이 지나가고**, 중계 진입점이 없어 중계 컨테이너가 진입점 실행 실패(종료 127)로 서지 않고, nginx · 사이드카 · janitor 도 서지 않은 채 유닛이 inactive 로 끝난다(MediaMTX 컨테이너만 남는다 — POK-574 실측 M2(2026-11-16)). 기동 판정(유닛 active)에서 먼저 드러난다 — 규칙은 교체 런북 「대리 창구 하한」 |
+| | `MEDIA START BLOCKED: cred-relay needs sidecar timing v2 label=<라벨\|none\|invalid>` | 창구 켬 — 사이드카 이미지 라벨 `com.pokeclip.timing.readable` 에 판 2 가 없음(라벨 없는 c0 아래 이미지 · 받기 실패에 로컬에도 없음은 `none`, 꼴 밖은 `invalid`, 판 2 없는 꼴 맞는 라벨은 그 글자). 켬 상자는 기동 전 검사(`timing-preflight`)를 돌리지 않는다. **판 2 는 있지만 창구 하한 아래인 사이드카는 이 줄 없이 지나가고**, 중계 진입점이 없어 중계 컨테이너가 진입점 실행 실패(종료 127)로 서지 않는다. 실측(POK-574 M2(2026-11-16) — 유닛을 먼저 멈추고 시작 스크립트를 유닛 밖에서 단독 실행): 시작 스크립트(그 안의 compose up) 종료 1 · MediaMTX 만 서고 nginx · 사이드카 · janitor · 중계는 서지 않음. 유닛 정의(`Restart=always` · `RestartSec=20` · `ExecStopPost` 정리)로는 시작 실패 → 정리 → 20초 뒤 재시도를 되풀이하며 방송을 받지 못한다 — 유닛 안 재시도 순환 자체는 실측하지 않았다. 유닛이 계속 재시작 중인지(`systemctl show -P ActiveState` · `NRestarts`)와 서비스 상태로 드러나고, 기동 판정에서 먼저 드러난다 — 규칙은 교체 런북 「대리 창구 하한」 |
 | | `MEDIA START FAIL cred-relay address` | 창구 켬 — 더미 링크 `pokeclip-cred0` 만들기 · 주소 붙이기 · 올리기 실패 |
 | | `MEDIA START FAIL render <단계>` | 렌더 실패 — `runtime-dir` · `template` · `template-mode`(MediaMTX 템플릿의 모드 블록 표지 꼴이 깨짐 · 한 모드 블록 없음) · `template-token`(고른 모드 블록의 토큰 집합이 그 모드 꼴이 아님) · `owner` · 파일마다 `<앞머리>tmpfile` · `write` · `chown` · `target` · `rename`. 앞머리는 `mediamtx.yml` 이 없음, 사이드카 비밀번호가 `api-pass-`, 응답기 모드 파일이 `ingest-auth-basic-pass-` · `ingest-auth-api-pass-` · `ingest-auth-resolve-token-` · 사이드카 4C 토큰 사본 `resolve-token-` 다. 응답기 모드 디렉터리 단계는 `ingest-auth-dir` · `ingest-auth-state-dir` · `deny-dir`(거부 목록 디렉터리 · 남은 임시 파일 정리 · 임시 파일), 거부 목록 파일 설치 단계는 `deny-install` 이다. 만료 창구 토큰(두 모드 · ARN 이 찰 때)은 `clip-expiry-dir`(디렉터리 링크 · 맞추기 · 앞 토큰 지우기 실패)과 `clip-expiry-tmpfile` · `write` · `chown` · `target` · `rename` 이다 — 토큰 받기 실패는 줄 없이 기동을 계속한다. IMDS 대리 창구 토큰(창구 켬)은 `cred-relay-list`(들어갈 때 파일 목록이 비지 않음) · `cred-relay-dir`(창구 디렉터리가 링크 · 맞추기 실패) · `owner` · `cred-relay-tmpfile` · `write` · `chown` · `target` · `rename` 이다 |
 | | `MEDIA START FAIL usage` | 인자를 줬음 |
@@ -1206,9 +1206,20 @@ exit 1
             토큰, 루프백 송출기는 시험 키(송출기 argv — CDN 비밀은 송출기 밖
             curl 표준 입력에만 있다). 새 상자도 같은 값을 Secrets Manager 에서
             다시 읽으므로 ② 만으로는 값이 바뀌지 않는다.
+        *   ③ 대상 — 응답기 모드에서 MediaMTX · 응답기가 침해됐으면 계정별
+            송출 키(SRT passphrase · 시험 키 포함)도 대상이다. 응답기는
+            허용한 계정의 passphrase 를 MediaMTX 에 돌려준다(위 「모드별
+            동작」). MediaMTX 렌더본의 `authHTTPAddress` 에는 응답기 Basic
+            비밀번호가 평문이라, Basic 을 쥐면 공개 토큰(streamid)만으로 어느
+            계정의 passphrase 든 응답기에서 받는다(CONTRACT D2 · K1). 응답기는
+            4C 토큰으로 auth 에 직접 묻는다. nginx 는 Basic 을 읽을 길이 없어
+            401 이다(D2). 송출 키는 auth 가 저장한 값이라 ② 로 바뀌지 않는다.
         *   기동마다 새로 만드는 비밀(관리 API 비밀번호 · 응답기 Basic
-            비밀번호 · SRT 잠금 둘)은 ② 교체로 바뀌어 ③ 대상이 아니다.
-        *   ③ 의 방법과 ② 와의 순서는 (나) ④ · ⑤ 와 같이 미결이다(아래
+            비밀번호 · SRT 잠금 둘)은 ② 교체로 바뀌어 ③ 대상이 아니다. 다만
+            Basic 자체는 ② 로 바뀌지만, Basic 으로 이미 받아 간 송출 키는
+            바뀌지 않는다(위 줄).
+        *   ③ 의 방법과 ② 와의 순서는 (나) ④ · ⑤ 와 같이 미결이다. 송출 키의
+            재발급 방법 · 주체(auth — 3번) · 스트리머 통지도 같다(아래
             「후속」 의 보안 런북 행).
         *   판별 신호는 중계 저널의 `cred_denied` 급증과 낯선
             출발지(`remote`)의 `cred_served` 다. 출발지는 망 칸 밖 요청만
@@ -1225,6 +1236,10 @@ exit 1
             자격을 잃어 세션 · 명령이 끊기므로 격리의 마지막이다. IMDS 를 꺼도
             중계는 멈추기 전까지 마지막 유효분(옛 자격)을 계속 주므로 중계
             정지가 먼저다. IMDS 끄기의 반영 시간은 재지 않았다.
+        *   다만 그 사이 MediaMTX 나 nginx 가 끝나면 유닛(`Restart=always`)이
+            시작 스크립트로 중계 · 새 토큰을 다시 만든다(`up
+            --force-recreate`). 중계 정지와 IMDS 끄기를 붙여서 하고, 사이에
+            `docker ps` 로 중계가 다시 떴는지 확인한다.
         *   ③ 이 늦는 만큼 샌 자격을 쓸 수 있는 창이 늘어난다. 그래서 ① 증거
             수집은 짧게 끊고 ③ 으로 간다 — ② 의 IMDS 끄기와 ③ 뒤에는 같은
             역할을 쓰는 SSM 에이전트도 자격을 잃어 SSM 증거가 끊길 수 있다.
@@ -1232,7 +1247,10 @@ exit 1
         *   ③ 역할 세션 취소 — 그 시각 전에 발급된 자격을 거부하는 인라인
             정책(`aws:TokenIssueTime` 조건 · IAM 「Revoke active sessions」).
         *   ④ 역할이 읽을 수 있는 비밀 교체 — CDN 비밀 · 4C 토큰 · 만료 창구
-            토큰 · 시험 키.
+            토큰 · 시험 키. 응답기 모드에서 사이드카 · 호스트, 또는 끔 상자의
+            MediaMTX · 응답기가 침해됐으면 계정별 송출 키도 대상이다((가) ③
+            과 같은 경로 — 사이드카는 관리 API 설정 조회로 Basic 을 읽는다,
+            CONTRACT K1). 재발급은 (가) ③ 과 같이 미결이다.
         *   ⑤ 새 키 상자로 교체(교체 런북).
     *   **공통 — 새어 나간 키는 우리가 보낸 Expiration 과 무관하게 STS 실제
         만료까지 유효하다**(IAM 문서: "that party has access for the duration
@@ -1348,7 +1366,7 @@ exit 1
 | `cred_served` | INFO | `caller` · `expires_in_s`(보낸 Expiration 까지 — 3600 이하) · `source_expires_in_s`(실제 남은 수명) · `from=cache\|imds` · (`imds` 면) `refresh=initial\|window\|periodic` · `remote` |
 | `cred_denied` | WARN | `reason=missing\|mismatch` · `remote` · `count` — 401. 10초에 한 줄이고 `count` 는 앞 줄 뒤 억제된 거부 수 + 이번 하나다 — 거부 수는 줄 수가 아니라 `count` 의 합으로 센다. **한계:** 마지막 줄 뒤 10초 안의 거부는 다음 거부가 와서 줄이 나기 전까지 저널에 없다(꼬리). `remote` · `reason` 은 그 줄을 낸 요청 하나의 것이라 억제된 거부의 출발지 · 까닭은 남지 않는다 |
 | `cred_source_failed` | ERROR | `err_type` — IMDS 원천 실패의 종류(`role_list` · `role_count` · `role_creds` · `decode` · `code` · `field` · `expiry` · `deadline` · `other`) |
-| `cred_source_degraded` | WARN `value=1` · INFO `value=0 reason=recovered` | 마지막 유효분을 주는 중 · 회복 |
+| `cred_source_degraded` | WARN(`value=1` · `value=0 reason=recovered` 둘 다 — 회복 줄이 WARN 거름에 걸러지지 않게) | 마지막 유효분을 주는 중 · 회복 |
 | `cred_unavailable` | ERROR | `caller` · `remote` — 503. **기동 직후의 이 줄은 첫 원천 호출과 겹친 요청일 수 있다** — 원천 호출은 요청이 몰고 가서, 첫 호출이 도는 동안 온 요청은 원천을 다시 부르지 않고 503 을 받는다(SDK 가 재시도한다) |
 
 소비자 쪽: 사이드카 `credentials_ok` 의 `provider` 가
@@ -1684,7 +1702,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | I1-1 | 반영됨(POK-311). `compose.yml.tmpl` 사이드카 · janitor env 에 RDS CA 번들 경로(`POSTGRES_SSLROOTCERT` — 이미지 안 `/etc/pokeclip/rds-ca/global-bundle.pem`)와 `AWS_EC2_METADATA_V1_DISABLED: "true"` 를 넣고 `render_test.sh` 사례 10 이 단언한다. DB 연결 성공 고정 줄은 `db_connected`(media/README 「DB 연결 성공 줄」). 창구 켬 상자는 두 서비스에 창구 env 셋(`AWS_EC2_METADATA_DISABLED: "true"` 포함)을 더한다(POK-574 — 위 「IMDS 대리 창구」) |
 | 범위 밖(제안) | `media/cmd/janitor` 의 compose 계약 시험을 이 템플릿까지 넓힌다 — `media/Dockerfile.mtxhook` 의 USER 가 바뀌어도 infra-ci(경로 필터 `infra/media-host/**`)는 돌지 않아, `render_test.sh` 사례 9 의 대조가 다음 infra 변경 때에야 돈다. `infra/terraform/prod/registry` 의 「janitor 저장소는 janitor 코드가 생길 때 더한다」 문장은 사이드카 이미지를 쓰는 지금 결정과 어긋나 정리한다 — **처리(M9 — 문장만):** `prod/registry` README · 변수 주석을 고쳤다. compose 계약 시험 확대는 남음 |
 | I1-6 | 제어면 서버가 생기면 `control_upstream` 을 채운다. control 헬스는 nginx 경로라, 사이드카가 다시 뜨는 동안에도 healthy 로 보이고 제어면은 502 를 낸다 |
-| kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 · 기존 연결 차단 — **처리(POK-574) — 일부:** 순서(증거 먼저 → 격리 → 정지 — 정지는 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다)와 격리 수단을 위 「보안 경계」 침해 대응 (가) 토큰 없는 컨테이너 · (나) 소비자 · 중계 · 호스트 · 끔 상자로 나눠 채웠다(창구 켬 상자는 중계 `docker stop` → IMDS `--http-endpoint disabled`). 증거 보존 방식 · 저널 영속 · 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서((가) ③ · (나) ④ · ⑤) · 세션 취소 전 증거 수집의 시간 상한((나) ①) 은 미결로 남는다 |
+| kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 · 기존 연결 차단 — **처리(POK-574) — 일부:** 순서(증거 먼저 → 격리 → 정지 — 정지는 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다)와 격리 수단을 위 「보안 경계」 침해 대응 (가) 토큰 없는 컨테이너 · (나) 소비자 · 중계 · 호스트 · 끔 상자로 나눠 채웠다(창구 켬 상자는 중계 `docker stop` → IMDS `--http-endpoint disabled`). 증거 보존 방식 · 저널 영속 · 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서((가) ③ · (나) ④ · ⑤) · 계정별 송출 키(SRT passphrase · 시험 키)의 재발급 방법 · 주체(auth — 3번) · 스트리머 통지 · 세션 취소 전 증거 수집의 시간 상한((나) ①) 은 미결로 남는다 |
 | 포크 mediamtx 트랙 | 다음 포크 태그에서 설정 조회 응답의 `hlsCDNSecret` 을 가리고(redact), 응답에 비밀이 새지 않는지 회귀 시험을 둔다(위 「받아들인 위험」). ADR 로 남길지는 kty |
 | M15 | 반영됨(POK-301). 응답기 자리를 응답기 모드로 채웠다(위 「송출 인증 두 모드」). `--passphrase` 루프백은 「응답기 런북」 에 있다. 응답기의 kick 자격은 사이드카와 같은 사용자 · 같은 비밀번호 파일 내용(응답기 쪽 파일 따로)으로 정했다 — 전용 사용자를 두지 않는다. `api` 는 `authHTTPExclude` 에 넣지 않는다. Basic 비밀번호 · 잠금 둘은 시작 스크립트의 토큰 계약을 모드별로 넓혀 렌더한다. 응답기가 다시 뜨는 동안의 거부 창은 계약 시험 C13 에 기록한다 |
 | M15 | 반영됨(POK-301). `render_test.sh` 사례 11 은 비밀 계열 env 이름 금지를 유지하고, `_FILE` 로 끝나며 값이 읽기 전용 bind 대상과 같은 env 만 예외로 둔다. `authHTTPExclude` 는 `playback` 하나다(read 를 빼면 Bearer 없는 LL-HLS 가 열려, read 는 응답기가 판정한다). SRT 경로 잠금 · `overridePublisher: no` 는 응답기 모드에만 있다. 포트 127.0.0.1:8080 · 헬스 8081. dev-media 응답기와 다른 점(전용 제어망 대신 같은 망 칸 · 비밀 env 대신 `_FILE`)은 CONTRACT 2절 D1 · D4 |

@@ -31,8 +31,8 @@ import (
 const (
 	imdsEndpoint        = "http://169.254.169.254"
 	relayCredentialsURL = "http://169.254.170.2:9911" + credrelay.CredentialsPath
-	// isolationWait 는 isolation-check 가 IMDS 토큰 PUT · 창구의 답을 각각 기다리는 상한이다(설계 2.5 — 2초 안에
-	// 토큰이 안 오면 막힘).
+	// isolationWait 는 isolation-check 가 IMDS 토큰 PUT · 창구의 답을 각각 기다리는 상한이다(설계 2.5). 토큰
+	// PUT 은 이 안에 머리가 안 오면 막힘(blocked)이고, 머리를 받은 뒤 본문이 늦거나 끊기면 error 다.
 	isolationWait = 2 * time.Second
 )
 
