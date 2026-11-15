@@ -299,7 +299,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
   );
 }
 
-/** 재생 세션으로 튼다 — 라이브 · 되감기 · 끝남 대기 · 다시보기를 한 재생기 자리에서 갈아 끼운다(POK-200 M5) */
+/** 재생 세션으로 튼다 — 라이브 · 되감기 · 끝남 대기 · 다시보기 제안(POK-200 M5). 다시보기는 세션을 닫고 지난 방송 재생기가 튼다(POK-547) */
 function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { session } = props;
