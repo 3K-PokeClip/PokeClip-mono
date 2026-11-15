@@ -395,10 +395,14 @@ const LivePlayer = memo(function LivePlayer({
   const showsPast = live.showsPast;
   const playerStatus: BroadcastStatus = live.closedToPast ? 'ended' : displayStatus;
   // 재생기 자리와 함께 녹화가 끝난 회차인가를 올린다 — 채팅 따라가기가 녹화 끝에서 꺼지지 않게(nextLiveFollow). 재생기는 커밋
-  // 뒤에 자리를 알려 이 그리기에서 적어 둔 값을 읽는다. 알림 함수의 정체성은 그대로 둔다: 바뀌면 재생기가 자리를 지웠다 다시 알려
-  // 채팅이 그때마다 맨 아래로 끌려간다
+  // 뒤(효과)에 자리를 알려 이 커밋에서 적어 둔 값을 읽는다. 알림 함수의 정체성은 그대로 둔다: 바뀌면 재생기가 자리를 지웠다 다시 알려
+  // 채팅이 그때마다 맨 아래로 끌려간다. 커밋된 그리기의 값만 적는다 — 그리기 중에 적으면 버려진 그리기(전이 중단)의 값이 남아
+  // 다음 커밋 전에 온 자리 알림이 그것을 읽는다. layout 효과라 재생기의 알림(효과)보다 먼저 선다
+  const recordingEnded = sessionRecordingEnded(live.session);
   const recordingEndedRef = useRef(false);
-  recordingEndedRef.current = sessionRecordingEnded(live.session);
+  useLayoutEffect(() => {
+    recordingEndedRef.current = recordingEnded;
+  }, [recordingEnded]);
   const handleLivePosition = useCallback(
     (position: LivePosition | null) => onLivePosition(position, recordingEndedRef.current),
     [onLivePosition],
@@ -1046,8 +1050,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 시작 시각을 모르는 방송은 채팅이 따르지 못한다(읽을 하한이 없다, 채팅 훅과 같은 조건): 판정도 켜지 않는다. 켜면 채팅은 그대로인데
   // 판정이 바뀔 때마다 위로 올려 읽던 자리를 맨 아래로 끌어 내렸다(리뷰 1라운드)
   const liveFollowRef = useRef(false);
+  // 커밋된 그리기의 값만 적는다(위 recordingEndedRef 와 같은 까닭)
+  const canFollow = clock.startedAt !== null;
   const canFollowRef = useRef(false);
-  canFollowRef.current = clock.startedAt !== null;
+  useLayoutEffect(() => {
+    canFollowRef.current = canFollow;
+  }, [canFollow]);
   const handleLivePosition = useCallback(
     (position: LivePosition | null, recordingEnded: boolean) => {
       const follow =
