@@ -32,6 +32,15 @@ describe('boundaryAction', () => {
     expect(boundaryAction(100, RANGE)).toEqual({ kind: 'continue' });
   });
 
+  it('시작보다 1µs 안쪽 앞은 시작으로 본다: 브라우저가 µs 아래를 버린 시크 자리를 다시 옮기지 않는다(POK-584)', () => {
+    // Chrome 은 멈춘 영상에 넣은 시각의 µs 아래를 버린다 — 옮긴 자리를 편집기 초로 되바꾸면 시작보다 조금 앞이다
+    expect(boundaryAction(100 - 0.9e-6, RANGE)).toEqual({ kind: 'continue' });
+    // 여유는 그만큼만 — 한 프레임에 가까운 차이는 여전히 시작으로 데려온다
+    expect(boundaryAction(100 - 0.01, RANGE)).toEqual({ kind: 'seek', toSeconds: 100 });
+    // 여유는 시작에만 — 끝 바로 앞은 아직 구간 안이다
+    expect(boundaryAction(112.4 - 0.0005, RANGE)).toEqual({ kind: 'continue' });
+  });
+
   it('끝점에 닿으면 반복은 되감고 아니면 멈춘다', () => {
     // 끝은 열린 경계다 — 정확히 끝이면 이미 구간 밖이다
     expect(boundaryAction(112.4, RANGE)).toEqual({ kind: 'seek', toSeconds: 100 });

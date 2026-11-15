@@ -23,14 +23,24 @@ export type BoundaryAction =
   { kind: 'continue' } | { kind: 'seek'; toSeconds: number } | { kind: 'stop'; atSeconds: number };
 
 /**
+ * 구간 시작보다 이만큼 안쪽 앞은 시작으로 본다(초, POK-584). 브라우저는 영상에 넣은 시각을 제 시간 단위로 깎는다 — Chrome 은
+ * µs 아래를 버린다. 그래서 시작으로 옮긴 자리를 편집기 초로 되바꾸면 시작보다 1µs 안쪽 앞일 수 있고, 그대로 「시작 앞」 으로
+ * 보면 같은 자리로 끝없이 다시 옮긴다. 1ms 는 그런 깎임을 넉넉히 덮고(µs 의 천 배), 60fps 한 프레임(약 17ms)보다 훨씬 작다
+ */
+const LOOP_START_TOLERANCE_SECONDS = 0.001;
+
+/**
  * 지금 위치가 구간을 벗어났는지, 벗어났으면 무엇을 해야 하는지.
  *
  * 구간 **앞**도 본다 — 끝만 보면 「구간 반복」을 켜 둔 채로 클립 밖을 재생하게 된다.
  * 반복이 꺼져 있으면 앞쪽은 그냥 둔다: 사용자가 일부러 앞으로 시킹해 앞뒤 맥락을 보는 중일 수 있다.
+ * 시작보다 1ms(LOOP_START_TOLERANCE_SECONDS) 안쪽 앞은 시작으로 본다 — 브라우저가 깎은 착지 자리를 다시 옮기지 않는다.
  */
 export function boundaryAction(currentSeconds: number, bounds: PlaybackBounds): BoundaryAction {
   const { startSeconds, endSeconds, loop } = bounds;
-  if (loop && currentSeconds < startSeconds) return { kind: 'seek', toSeconds: startSeconds };
+  if (loop && currentSeconds < startSeconds - LOOP_START_TOLERANCE_SECONDS) {
+    return { kind: 'seek', toSeconds: startSeconds };
+  }
   if (currentSeconds >= endSeconds) {
     return loop
       ? { kind: 'seek', toSeconds: startSeconds }

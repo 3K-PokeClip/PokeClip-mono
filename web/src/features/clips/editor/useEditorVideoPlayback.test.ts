@@ -15,16 +15,18 @@ import type { SourceList } from './source/useEditorSource';
 
 const remux = vi.hoisted(() => {
   const first = 100;
+  /** 조각마다 ③ 첫 DTS 가 밀리는 초. 0 이 기본이고, 되풀이 시크 시험(POK-584)만 90kHz 틱 하나로 켠다 */
+  const drift = { seconds: 0 };
   /** 조각 seq 들의 가짜 재다중화 결과 — 조각마다 0.5초 프레임 여덟 */
   const of = (seqs: readonly number[]): RemuxedWindow => {
     const segments = seqs.map((seq) => {
-      const dts = (seq - first) * 4;
+      const dts = (seq - first) * (4 + drift.seconds);
       const frames = Array.from({ length: 8 }, (_, i) => ({ pts: dts + i * 0.5, dur: 0.5 }));
       return { seq, videoDts: dts, frames, mediaStart: dts, mediaEnd: dts + 4 };
     });
     return { blob: new Blob(['mp4']), shiftSeconds: segments[0]!.videoDts, segments };
   };
-  return { first, of };
+  return { first, drift, of };
 });
 vi.mock('./source/remuxWindow', () => ({
   remuxWindow: vi.fn(async (bytes: { segments: { seq: number }[] }) =>
@@ -1163,6 +1165,60 @@ describe('useEditorVideoPlayback: 구간 반복 (POK-490)', () => {
     expect(play).not.toHaveBeenCalled();
     expect(result.current.playback.playing).toBe(false);
     expect(node.currentTime).toBe(17);
+  });
+});
+
+describe('useEditorVideoPlayback: 멈춘 영상의 첫 시크 (POK-584)', () => {
+  /** 넣다 만 시크를 끝없이 세지 않게 막는 상한 — 되풀이면 여기까지 간다 */
+  const seekCap = 50;
+
+  beforeEach(() => {
+    // 조각 원점이 90kHz 틱으로 밀려 구간 시작의 Blob 시각에 µs 아래 자릿수가 생긴다(prod 영상과 같은 꼴)
+    remux.drift.seconds = 1 / 90_000;
+  });
+  afterEach(() => {
+    remux.drift.seconds = 0;
+  });
+
+  /** Chrome 처럼 멈춘 영상에 넣은 시각의 µs 아래를 버리고, 조금 뒤 timeupdate · seeked 를 내는 노드 */
+  function chromeLikeNode() {
+    let time = 0;
+    let sets = 0;
+    const node = videoNode();
+    Object.defineProperty(node, 'currentTime', {
+      configurable: true,
+      get: () => time,
+      set: (seconds: number) => {
+        sets += 1;
+        time = Math.floor(seconds * 1e6) / 1e6;
+        if (sets >= seekCap) return;
+        setTimeout(() => {
+          node.dispatchEvent(new Event('timeupdate'));
+          node.dispatchEvent(new Event('seeked'));
+        }, 20);
+      },
+    });
+    return { node, sets: () => sets };
+  }
+
+  it('µs 아래를 버리는 노드에서 메타데이터 뒤 구간 시작으로 한 번 옮기고 되풀이하지 않는다', async () => {
+    // 전에는 옮긴 자리가 시작보다 1µs 안쪽 앞이라 「반복이면 시작으로」 가 같은 자리를 끝없이 다시 넣어 화면이 검게 남았다
+    const { result } = mount();
+    const { node, sets } = chromeLikeNode();
+    act(() => result.current.videoRef(node));
+    await flush();
+    expect(result.current.window).toEqual({ startSeconds: 8, endSeconds: 40 });
+
+    (node as unknown as { readyState: number }).readyState = 1;
+    act(() => {
+      node.dispatchEvent(new Event('loadedmetadata'));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(sets()).toBe(1);
+    expect(result.current.playback.currentSeconds).toBeCloseTo(20, 5);
   });
 });
 
