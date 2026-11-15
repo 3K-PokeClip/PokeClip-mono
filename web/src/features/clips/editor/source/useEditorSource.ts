@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { mediaStreamId, type BroadcastRow } from '@/api/clipEditor';
-import { mediaCredentials } from '@/api/mediaPlayback';
+import { mediaCredentials } from '@/api/mediaAccess';
 import {
   ensureMediaAccess,
   ensurePlaybackAccess,

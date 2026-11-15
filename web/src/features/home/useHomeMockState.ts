@@ -12,6 +12,19 @@ import { infoWaitOver } from '@/features/broadcast/infoWait';
 import { onAirLabel, primaryInfo, type PlatformLatest } from '@/features/broadcast/platformView';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
+  askRound,
+  isoMs,
+  pickRoundUrls,
+  ROW_READ_PARALLEL,
+  type RoundAskRow,
+} from '@/features/broadcast/vod/vodRoundAsk';
+import {
+  FRESH_ROW_VOD,
+  foldRowVod,
+  type RowVodMemory,
+} from '@/features/broadcast/vod/vodRoundBadge';
+import { mediaControlBaseUrl } from '@/features/player/mediaSource';
+import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
   libraryQueryOptions,
@@ -94,6 +107,11 @@ export interface HomeVod {
   /** 보관이 끝난 방송은 열 것이 없어 null(지난 방송 목록과 같다, POK-254) */
   href: string | null;
   badge?: VodBadge;
+  /**
+   * 끝난 지 한 시간 안(지난 방송 목록의 「방금 종료」와 같은 한도). 마지막 구간 카드가 늦게 뜨는 때라 격자가 카드 0장을 「없다」고
+   * 단정하지 않는다. 「다시 보기 준비 중」 표지와는 따로다 — 다시보기가 일찍 서서 표지가 떨어져도 카드는 아직 올 수 있다(POK-568)
+   */
+  justEnded: boolean;
   duration?: string;
   /** 가장 크게 터진 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
@@ -157,6 +175,13 @@ const PAST_LIST_MS = 60_000;
 const LIBRARY_POLL_MS = 60_000;
 /** 방송마다 카드를 읽는 동시 수 */
 const CARD_READ_PARALLEL = 6;
+/**
+ * 홈 한 벌이 회차 답(「다시 보기 준비 중」 표지)을 기다리는 상한(POK-568). 묻기 하나의 시한은 8초(REWIND_REQUEST_TIMEOUT_MS)고
+ * 동시 6개(ROW_READ_PARALLEL)라, 격자 8개가 다 한 시간 안이면 제어면이 매달릴 때 두 물결 16초 동안 첫 화면이 비었다. 표지 하나 때문에
+ * 라이브 띠 · 숫자 · 격자를 미루지 않도록 주기(10초)보다 한참 짧게 둔다. 넘으면 남은 묻기를 끊고, 답 못 받은 방송은 답 전과
+ * 같이 「준비 중」 이다 — 다음 주기에 다시 묻는다. 지난 방송 목록은 이 상한 없이 묻기마다 8초 시한만 쓴다
+ */
+const ROUND_WAIT_MS = 2_000;
 /**
  * 라이브 첫 사진을 기다리는 시한. 서버는 조각이 올라온 뒤(약 33초) 1분 순회로 사진을 찍고(일꾼 약 4초), 홈은 10초마다 읽는다.
  * 그래서 방송 시작에서 2분 가까이 걸릴 수 있어 방송 정보 시한(2분)보다 넉넉히 잡는다
@@ -257,6 +282,8 @@ interface HomeMemory {
   liveIds: string[];
   /** 방송별 카드 수와 잰 시각 */
   cardCounts: Record<string, { count: number; at: number }>;
+  /** 격자의 방금 끝난 방송마다 회차 경로로 정한 다시보기 판정(지난 방송 목록과 같은 꼴). 한 시간이 지나면 빠진다 */
+  roundVods: Record<string, RowVodMemory>;
 }
 
 type HomeData = Loaded & { memory: HomeMemory };
@@ -306,7 +333,7 @@ async function loadHome(
     ...pastAll.filter((b) => inRange(b.startedAt, lastWeekStart, Infinity)).map((b) => b.streamId),
   ]);
   const cardCounts: HomeMemory['cardCounts'] = {};
-  await runLimited([...counted], CARD_READ_PARALLEL, async (streamId) => {
+  const readCards = runLimited([...counted], CARD_READ_PARALLEL, async (streamId) => {
     if (signal.aborted) return;
     const known = previous?.cardCounts[streamId];
     if (known && !fresh.has(streamId) && now - known.at < CARD_CACHE_MS) {
@@ -322,6 +349,10 @@ async function loadHome(
     // 빈 값을 기억하면 5분 동안 카드 수가 실제보다 적게 보인다(리뷰 #299 2차)
     else if (known) cardCounts[streamId] = known;
   });
+  const [, roundVods] = await Promise.all([
+    readCards,
+    askJustEndedRounds(past, previous, now, signal),
+  ]);
   const cardCountOf = (streamId: string) => cardCounts[streamId]?.count ?? 0;
 
   // 주는 방송 시작 시각으로 가른다 — 일요일 밤에 켜 월요일까지 간 방송은 지난주 방송이다.
@@ -374,14 +405,22 @@ async function loadHome(
 
   const vods: HomeVod[] = past.map((b) => {
     let badge: VodBadge | undefined;
-    // 지난 방송 목록과 같은 규칙: 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안만이다(POK-254). 그 뒤에는 녹화가 없어도
-    // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다. D-n은 지난 방송 목록이 붉게 다는 경계(3일) 안에서만 단다 —
+    // 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안(POK-254 — 지난 방송 목록의 「방금 종료」와 같은 한도)이면서 회차 경로가 아직
+    // 다시보기를 세우지 않았을 때만이다(POK-568 — 목록과 같은 판정). 준비 중 · 아직 답 없음 · 물을 수 없음(실패 · 제어면 없음)이면
+    // 단다. 다시보기가 없다는 답이면 달지 않는다: 홈은 다시보기가 없어도 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다.
+    // 한 시간이 지난 방송은 묻지 않고 달지 않는다.
+    // D-n은 지난 방송 목록이 붉게 다는 경계(3일) 안에서만 단다 —
     // 그보다 먼 기한은 홈이 말하지 않고 「60일 보관」 한 줄과 지난 방송 목록이 맡는다. 녹화 없이 `ended`에 머문 방송도 단다 —
     // 기한이 지나면 카드·채팅이 함께 지워지고, 지난 방송 목록도 행 상태와 상관없이 D-day를 단다
     const dday = ddayFor(b.vodExpiresAt, new Date(now));
     const expired = dday.kind === 'expired';
+    const justEnded = isJustEnded(b.endedAt, new Date(now));
     if (expired) badge = { kind: 'expired' };
-    else if (b.status === 'ended' && isJustEnded(b.endedAt, new Date(now)))
+    else if (
+      b.status === 'ended' &&
+      justEnded &&
+      (roundVods[b.streamId]?.badge ?? 'preparing') === 'preparing'
+    )
       badge = { kind: 'preparing' };
     else if (dday.kind === 'active' && dday.urgent) badge = { kind: 'dday', label: dday.label };
     const duration =
@@ -398,6 +437,7 @@ async function loadHome(
       clips: null,
       href: expired ? null : `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
       badge,
+      justEnded,
       duration,
       thumbnailUrl: b.thumbnailUrl ?? null,
     };
@@ -418,8 +458,83 @@ async function loadHome(
     lastBroadcast: latestStart
       ? { date: dateLabel(latestStart), ago: daysAgoLabel(latestStart, new Date(now)) }
       : null,
-    memory: { pastAll, pastReadAt, liveIds: [...liveIds], cardCounts },
+    memory: { pastAll, pastReadAt, liveIds: [...liveIds], cardCounts, roundVods },
   };
+}
+
+/**
+ * 격자에 보이는 방송 중 끝난 지 한 시간 안인 것만 회차 경로를 묻고(POK-568) 판정을 접는다. 무엇을 · 몇 개를 동시에 묻는지와 답을
+ * 접는 규칙은 지난 방송 목록과 같다(vodRoundAsk · vodRoundBadge): 다시보기가 섰거나 없다고 굳은 방송은 다시 묻지 않고, 나머지는
+ * 홈 주기마다 다시 묻는다. 돌려주는 기억에는 그 방송들만 남는다 — 한 시간이 지난 방송의 판정은 쓰지 않는다.
+ * ROUND_WAIT_MS 까지만 기다린다: 그때까지 답 못 받은 방송은 직전 판정(처음이면 답 전)을 그대로 둔다
+ */
+async function askJustEndedRounds(
+  past: readonly RoundAskRow[],
+  previous: HomeMemory | undefined,
+  now: number,
+  signal: AbortSignal,
+): Promise<Record<string, RowVodMemory>> {
+  const justEnded = past.filter((b) => isJustEnded(b.endedAt, new Date(now)));
+  const vodOf = (streamId: string) => previous?.roundVods[streamId] ?? FRESH_ROW_VOD;
+  const roundVods: Record<string, RowVodMemory> = Object.fromEntries(
+    justEnded.map((b) => [b.streamId, vodOf(b.streamId)]),
+  );
+  const controlBase = mediaControlBaseUrl();
+  if (controlBase === null) return roundVods;
+  const urls = pickRoundUrls(justEnded, vodOf, controlBase, new Date(now));
+  const asks = justEnded.flatMap((row) => {
+    const url = urls.get(row.streamId);
+    return url === undefined ? [] : [{ row, url }];
+  });
+  await waitAtMost(ROUND_WAIT_MS, signal, (cut) =>
+    runLimited(asks, ROW_READ_PARALLEL, async ({ row, url }) => {
+      if (cut.aborted) return;
+      const answer = await askRound(url, controlBase, cut);
+      // 상한이 지나 돌려준 기억은 고치지 않는다
+      if (cut.aborted) return;
+      // 못 받은 답도 접는다(askedAt 을 세운다). 404 유예의 원점은 명부 endedAt 이다
+      roundVods[row.streamId] = foldRowVod(
+        vodOf(row.streamId),
+        answer,
+        Date.now(),
+        isoMs(row.endedAt),
+      );
+    }),
+  );
+  return roundVods;
+}
+
+/**
+ * work 를 돌리되 waitMs 까지만 기다린다. 넘으면 work 에 준 신호를 끊고 곧바로 돌아온다 — 끊긴 뒤 work 가 던지는 오류는 버린다.
+ * 그 전에 signal 이 끊기면(홈이 내려감 · 채널 전환) work 에도 전하고, work 가 던지는 오류를 그대로 던진다
+ */
+async function waitAtMost(
+  waitMs: number,
+  signal: AbortSignal,
+  work: (cut: AbortSignal) => Promise<void>,
+): Promise<void> {
+  const cut = new AbortController();
+  const onAbort = () => cut.abort(signal.reason);
+  signal.addEventListener('abort', onAbort);
+  if (signal.aborted) onAbort();
+  let expired = false;
+  let timer: number | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = window.setTimeout(() => {
+      expired = true;
+      cut.abort();
+      resolve();
+    }, waitMs);
+  });
+  const done = work(cut.signal).catch((error: unknown) => {
+    if (!expired) throw error;
+  });
+  try {
+    await Promise.race([done, deadline]);
+  } finally {
+    window.clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 const EMPTY_WEEK: BroadcastWeek = { broadcasts: 0, cards: 0 };

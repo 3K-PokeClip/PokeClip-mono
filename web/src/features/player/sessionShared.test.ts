@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { restartBySpec, resumeBySpec } from './dvr404TestKit';
-import { openSession, type PlaybackSessionState, type PlaybackSource } from './rewindSwitch';
+import { openSession, type PlaybackSessionState, type SessionSource } from './rewindSwitch';
 import { RELIST_FROM_FLOOR_MS, confirmedAtMs, restartAtMs, resumeAtMs } from './sessionShared';
 
 // 이어 볼 자리 판정 하나(POK-528 c7 — 계획 3-2 · 8-0 의 resumeAtMs 표). 되감기 소스는
 // 확인된 위치 → 끝나지 않은 시크 → 이 소스의 시작 요청(「목록 하한에서」 는 모름)이고,
-// 다시보기 소스도 같다(c7 리뷰 V7-1 — 첫 위치 전 리마운트). 라이브 소스는 lastAtMs 다.
+// 라이브 소스는 lastAtMs 다.
 // 감싸개(dvr404TestKit)의 사본과 같은 값인지도 함께 본다.
 
 const L = 1_000_000;
@@ -22,9 +22,9 @@ function startOf(position: Position): number | null {
 }
 
 /** 소스 종류 kind · 위치 상태 position 의 손 상태 — 위치 칸만 다르다 */
-function stateOf(kind: PlaybackSource['kind'], position: Position): PlaybackSessionState {
+function stateOf(kind: SessionSource['kind'], position: Position): PlaybackSessionState {
   const base = openSession({ roundId: 'r-A', accessKey: 'r-A|k', liveUrl: 'https://m/live' });
-  const source: PlaybackSource = {
+  const source: SessionSource = {
     kind,
     url: 'https://m/a',
     startAtMs: startOf(position),
@@ -42,17 +42,12 @@ function stateOf(kind: PlaybackSource['kind'], position: Position): PlaybackSess
 }
 
 describe('resumeAtMs — 이어 볼 자리(계획 3-2)', () => {
-  it.each<[PlaybackSource['kind'], Position, number | null]>([
+  it.each<[SessionSource['kind'], Position, number | null]>([
     ['rewind', 'confirmed', L],
     ['rewind', 'seeking', Q],
     ['rewind', 'requested', S0],
     ['rewind', 'floor', null],
     ['rewind', 'none', null],
-    ['vod', 'confirmed', L],
-    ['vod', 'seeking', Q],
-    ['vod', 'requested', S0],
-    ['vod', 'floor', null],
-    ['vod', 'none', null],
     ['live', 'confirmed', L],
     ['live', 'requested', L],
     ['live', 'none', null],
@@ -72,6 +67,6 @@ describe('resumeAtMs — 이어 볼 자리(계획 3-2)', () => {
   it('confirmedAtMs — 지금 소스 세대가 낸 위치만', () => {
     expect(confirmedAtMs(stateOf('rewind', 'confirmed'))).toBe(L);
     expect(confirmedAtMs(stateOf('rewind', 'requested'))).toBeNull();
-    expect(confirmedAtMs(stateOf('vod', 'seeking'))).toBeNull();
+    expect(confirmedAtMs(stateOf('rewind', 'seeking'))).toBeNull();
   });
 });

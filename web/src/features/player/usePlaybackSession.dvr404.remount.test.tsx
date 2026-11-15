@@ -32,7 +32,8 @@ vi.mock('./rewindSwitch', async (importOriginal) => {
 // ③ 사람이 멈춘 동안의 404(c9 · 계획 4-3 · 8-5): 재생기가 받기만 멈추고 세션에 올리지 않는다.
 //    다시 틀 때 올려 세션이 국면 행대로 잇는다 — rewind 는 다시 받는 중이 아니면 같은 목록 다시
 //    받기(이어 볼 자리 · 세션 시크 목표) · 다시 받는 중(화면 전)이면 막힘 · 끝남 대기는 녹화로
-//    정하기 전이면 막힘 · 정한 뒤면 마지막 확인 · 다시보기 제안은 같은 자리 다시보기.
+//    정하기 전이면 막힘 · 정한 뒤면 마지막 확인 · 다시보기 제안은 받기만 멈추고 받은 버퍼를 계속
+//    튼다(국면 · 소스 그대로 — 다시보기로 옮기는 것은 단추다).
 
 const fake = vi.hoisted(() => ({
   instances: [] as FakeHls[],
@@ -293,7 +294,6 @@ async function rewindScreen(watched = true) {
       firstMs: OLD_F,
       lastEndMs: NOW - 2_000,
       targetDurationS: 4,
-      headSpanMs: 12_000,
     }),
   );
   if (watched) {
@@ -314,7 +314,30 @@ async function rewindScreen(watched = true) {
     view.rerender(<Screen options={opts} playerShown />);
     await settle();
   };
-  return { view, rewindHls, remount, onNotice };
+  return { view, rewindHls, remount, onNotice, onClose: vi.mocked(opts.onClose) };
+}
+
+/**
+ * 멈춘 그대로 선 다시보기 제안(POK-547) — 덮개 단추 · 새 재생기 보류 · hls.js 생성 · 재생 0. 단추를 누르면 past 로 닫아
+ * 넘긴다(넘김은 지난 방송 재생기가 한다 — 이 화면은 닫힌 뒤 세션을 다시 여는 것을 막지 않아 닫힌 뒤는 보지 않는다)
+ */
+async function expectHeldOfferThenPress(
+  created: number,
+  played: number,
+  onClose: ReturnType<typeof vi.fn>,
+) {
+  expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD, stopped: 'held' });
+  expect(current().view).toMatchObject({ cover: 'vod-ready', startHeld: true });
+  expect(fake.instances).toHaveLength(created);
+  expect(playCalls()).toBe(played);
+  checkedEvents();
+  act(() => current().dispatch({ type: 'button', which: 'vod' }));
+  await settle();
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onClose.mock.calls[0]?.[0]).toMatchObject({
+    reason: 'past',
+    handoff: { seenVod: { url: VOD }, chosen: true },
+  });
 }
 
 /** 감싼 transition 의 모든 호출에 감싸개 불변식을 단언하고 사건 꼴을 돌려준다(계획 8-0) */
@@ -377,8 +400,8 @@ afterEach(() => {
 });
 
 describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는 hls.js 를 만들지 않는다(U2 · 계획 8-3c)', () => {
-  it('막힘 기원: 404 → 다시 받기 → 화면 전 404 → 막힘 · 멈춤 → 리마운트 → 생성 0 · 재생 0 → 다시보기가 나오면 생성 1 · 재생 1', async () => {
-    const { rewindHls, remount } = await rewindScreen();
+  it('막힘 기원: 404 → 다시 받기 → 화면 전 404 → 막힘 · 멈춤 → 리마운트 → 생성 0 · 재생 0 → 다시보기가 나와도 멈춘 그대로 덮개 단추 · 누르면 past', async () => {
+    const { rewindHls, remount, onClose } = await rewindScreen();
     segmentGone(rewindHls);
     expect(rewindHls.stopLoad).toHaveBeenCalledTimes(1);
     await settle();
@@ -404,19 +427,15 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     control.round = () => jsonResponse(200, vodBody());
     await act(async () => vi.advanceTimersByTime(10_000));
     await settle();
-    expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD });
-    expect(fake.instances).toHaveLength(created + 1);
-    expect(lastHls().loadSource).toHaveBeenCalledTimes(1);
-    expect(playCalls()).toBe(played + 1);
-    checkedEvents();
+    await expectHeldOfferThenPress(created, played, onClose);
   });
 
-  it('마지막 확인 기원: 녹화로 정한 끝남 대기 → 404 → 리마운트 → 생성 0 → 회차별 답이 다시보기면 생성 1 · 재생 1', async () => {
-    const { rewindHls, remount } = await rewindScreen();
+  it('마지막 확인 기원: 녹화로 정한 끝남 대기 → 404 → 리마운트 → 생성 0 → 회차별 답이 다시보기면 멈춘 그대로 덮개 단추 · 누르면 past', async () => {
+    const { rewindHls, remount, onClose } = await rewindScreen();
     control.round = () => jsonResponse(200, statusBody({ mode: 'ended' }));
     act(() => current().dispatch({ type: 'endlist' }));
     await settle();
-    expect(current().state.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+    expect(current().state.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
     const finalAnswer = heldReply();
     control.round = finalAnswer.reply;
     segmentGone(rewindHls);
@@ -430,10 +449,7 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     expect(playCalls()).toBe(played);
     finalAnswer.release(vodBody());
     await settle();
-    expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD });
-    expect(fake.instances).toHaveLength(created + 1);
-    expect(playCalls()).toBe(played + 1);
-    checkedEvents();
+    await expectHeldOfferThenPress(created, played, onClose);
   });
 
   it('다시 받기 기원: 404 → 첫 목록 전 리마운트 → 세우지 않음 아님 · 새 재생기 생성 · 재생 1 · 새 목록 판정 알림 1', async () => {
@@ -478,8 +494,8 @@ describe('리마운트 기동 — 「세우지 않음」 동안 새 재생기는
     const recovered = lastHls();
     expect(recovered).not.toBe(relistHls);
     expect(current().state.source).toMatchObject({ url: A1, startAtMs: TARGET });
-    // 새 목록 첫 조각 NEW_F 는 청한 자리 뒤 — 창 하한(영상 12초)에서 받는다
-    expect(recovered.startLoad.mock.calls).toEqual([[12]]);
+    // 새 목록 첫 조각 NEW_F 는 청한 자리 뒤 — 창 하한(영상 4초)에서 받는다
+    expect(recovered.startLoad.mock.calls).toEqual([[4]]);
     expect(oldestNotices(onNotice)).toBe(1);
     checkedEvents();
   });
@@ -725,24 +741,29 @@ describe('사람이 멈춘 동안의 되감기 조각 404 — 다시 틀 때 세
     checkedEvents();
   });
 
-  it('다시보기 제안: 멈춤 → 404 → 새 재생기 0 → 재생 → 같은 자리 다시보기 1(W4)', async () => {
+  it('다시보기 제안: 멈춤 → 404(받기 중단은 그 순간 적음) → 새 재생기 0 → 재생 → 국면 · 소스 그대로 · 받은 버퍼를 튼다(W4)', async () => {
     const { view, rewindHls } = await rewindScreen();
     act(() => current().dispatch({ type: 'endlist' }));
     await settle();
     control.round = () => jsonResponse(200, vodBody());
     await act(async () => vi.advanceTimersByTime(10_000));
     await settle();
-    expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD });
+    expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD, stopped: null });
     userPause(view);
     const created = fake.instances.length;
+    const source = current().state.source;
     segmentGone(rewindHls);
     await settle();
     expect(fake.instances).toHaveLength(created);
-    expect(current().state.source.kind).toBe('rewind');
+    expect(current().state.loadStoppedGeneration).toBe(source.generation);
     await userPlay(view);
-    expect(current().state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: TARGET });
-    expect(fake.instances).toHaveLength(created + 1);
-    checkedEvents();
+    expect(current().state.source).toBe(source);
+    expect(current().state.phase).toMatchObject({ kind: 'vod-offered', url: VOD, stopped: null });
+    expect(fake.instances).toHaveLength(created);
+    expect(checkedEvents().filter((type) => type.startsWith('dvr-'))).toEqual([
+      'dvr-load-stopped',
+      'dvr-segment-gone',
+    ]);
   });
 });
 

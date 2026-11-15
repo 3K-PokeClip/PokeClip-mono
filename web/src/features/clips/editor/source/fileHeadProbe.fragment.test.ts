@@ -41,7 +41,7 @@ function serve(bytes: Uint8Array) {
 
 async function load() {
   vi.resetModules();
-  const playback = await import('@/api/mediaPlayback');
+  const playback = await import('@/api/mediaAccess');
   const probe = await import('./fileHeadProbe');
   return { playback, ...probe };
 }

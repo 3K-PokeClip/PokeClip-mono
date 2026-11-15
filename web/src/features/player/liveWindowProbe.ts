@@ -1,4 +1,4 @@
-import { mediaCredentials } from '@/api/mediaPlayback';
+import { mediaCredentials } from '@/api/mediaAccess';
 import type { DatedFragment } from './dvrWindow';
 import { liveStartFloorMs } from './playbackEdge';
 

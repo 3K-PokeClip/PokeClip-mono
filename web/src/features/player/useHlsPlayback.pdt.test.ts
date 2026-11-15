@@ -239,6 +239,8 @@ describe('판 2 목록의 시각 환산 — 영상 축 조각', () => {
       lastStartMs: PDT0 + 7_500,
       targetDurationS: 4,
       headSpanMs: 12_000,
+      contentFirstMs: PDT0,
+      rewindHeadSpanMs: 4_000,
     });
   });
 
@@ -348,23 +350,25 @@ describe('판 2 목록의 끝 · 창 하한 판정도 영상 축 조각으로 �
 
   it('멈춘 채 창 하한으로 옮긴 자리의 시각을 영상 축 조각으로 세어 재개 판정에 쓴다', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    setVideoStarts(0.1, 4.1, 8.1, 12.1, 16.1);
+    setVideoStarts(0.1, 4.1, 8.1, 12.1, 16.1, 20.1);
     const onSeekRequest = vi.fn();
     await mount('rewind', { onSeekRequest });
-    // 기동이 끝난 재생기가 1초 자리(PDT0 + 0.9초 — 창 하한 PDT0 + 12초 앞)에서 멈춘다
+    // 기동이 끝난 재생기가 1초 자리(PDT0 + 0.9초)에서 멈춘다
     lastHls().hasEnoughToStart = true;
     video.el!.currentTime = 1;
     vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
     act(() => video.el!.dispatchEvent(new Event('pause')));
-    // 목록이 자라 1초 자리가 옮김 문턱(첫 조각 + 1 TD) 안이다 — hls.js 조각으로 센 창 하한 12.9초로 옮긴다
-    act(() =>
-      lastHls().trigger('hlsLevelUpdated', { details: versionTwoDetails([0, 1, 2, 3, 4]) }),
-    );
-    expect(video.el!.currentTime).toBeCloseTo(12.9, 9);
-    // 옮긴 자리는 영상 축으로 PDT0 + 12.3초라 창 하한 뒤다 — 다시 틀어도 세션에 넘기지 않는다. hls.js 조각으로
-    // 재면 PDT0 + 11.5초(하한 앞)라 옛 자리처럼 넘긴다
+    // 창이 한 조각 밀려 1초 자리가 첫 조각(4.3초) 앞이다 — hls.js 조각으로 센 창 하한 8.6초로 옮긴다
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: versionTwoDetails([1, 2, 3, 4]) }));
+    expect(video.el!.currentTime).toBeCloseTo(8.6, 9);
+    // 멈춘 채 창이 한 조각 더 밀린다 — 재생점(8.6초)은 새 첫 조각과 같아 옮기지 않고, 하한은 PDT0 + 11.5초다
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: versionTwoDetails([2, 3, 4, 5]) }));
+    expect(video.el!.currentTime).toBeCloseTo(8.6, 9);
+    // 재개 판정은 옮긴 자리를 영상 축으로 센 시각(PDT0 + 8초)으로 한다 — hls.js 조각으로 재면 PDT0 + 7.5초다
     act(() => video.el!.dispatchEvent(new Event('play')));
-    expect(onSeekRequest).not.toHaveBeenCalled();
+    expect(onSeekRequest).toHaveBeenCalledTimes(1);
+    expect(onSeekRequest.mock.calls[0]?.[0]).toBe(PDT0 + 8_000);
+    expect(onSeekRequest.mock.calls[0]?.[1]).toMatchObject({ lowerMs: PDT0 + 11_500 });
   });
 });
 
@@ -375,9 +379,9 @@ describe('세션 모드(onSeekRequest)의 시각 축도 영상 축 조각으로 
     act(() => {
       view.result.current.seekToDate?.(PDT0 + 5_000);
     });
-    // hls.js 가 덮은 길이(4.3초)면 하한 PDT0 + 12.9초 · 끝 PDT0 + 11.8초다
+    // hls.js 가 덮은 길이(4.3초)면 하한 PDT0 + 4.3초 · 끝 PDT0 + 11.8초다
     expect(onSeekRequest).toHaveBeenLastCalledWith(PDT0 + 5_000, {
-      lowerMs: PDT0 + 12_000,
+      lowerMs: PDT0 + 4_000,
       endMs: PDT0 + 11_500,
     });
   });

@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import { readSound } from './playbackSound';
+import { OPEN_STREAM_FACTS, recordingEndedOf } from './playbackEdge';
 import { rewindAxisLowerMs } from './rewindSwitch';
 import type { PlaybackSession } from './usePlaybackSession';
 import { useHlsPlayback, type LivePosition, type PlaybackHooks } from './useHlsPlayback';
@@ -22,10 +24,26 @@ export function useLiveRewindPlayback(
   afterForbidden = false,
   broadcastId?: string,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
-  const { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch, isKnownDvrHole } =
-    session;
+  const {
+    state,
+    view,
+    dispatch,
+    liveButton,
+    bindPlayer,
+    notice,
+    positionEpoch,
+    isKnownDvrHole,
+    isStartHeld,
+    watchesDrain,
+  } = session;
   // 되감기 노출은 최신 폴링의 ready 로만 — 재료(entry)가 남아도 ready:false 면 시크바를 넓히지 않는다(계약3 7-2)
   const axisLowerMs = rewindAxisLowerMs(state);
+  // 되감기 축의 끝 · 끝 문구는 방송이 끝났다는 근거로 가른다 — 국면 · 목록의 ENDLIST 는 방송 중 재접속에서도 끝남 쪽이 된다
+  const recordingEnded = recordingEndedOf(state, {
+    streamLive: session.streamLive ?? OPEN_STREAM_FACTS.streamLive,
+    streamEnded: session.streamEnded ?? OPEN_STREAM_FACTS.streamEnded,
+    roundDenied: session.roundDenied ?? OPEN_STREAM_FACTS.roundDenied,
+  });
   const hooks = useMemo<PlaybackHooks>(
     () => ({
       onEndlist: () => dispatch({ type: 'endlist' }),
@@ -37,12 +55,19 @@ export function useLiveRewindPlayback(
       onDvrSegmentGone: (generation, segment) =>
         dispatch({ type: 'dvr-segment-gone', generation, segment }),
       isKnownDvrHole,
+      // 받기 중단 · 고갈은 그 재생기의 세대를 싣고 올린다 — 세션이 옛 재생기의 늦은 통지를 버린다(POK-547)
+      onDvrLoadStopped: (generation) => dispatch({ type: 'dvr-load-stopped', generation }),
+      onDvrDrain: (generation, drained, atPdtMs) =>
+        dispatch({ type: 'dvr-drain', generation, drained, atPdtMs }),
+      watchesDrain,
+      isStartHeld,
       onPlaying: () => dispatch({ type: 'playing' }),
       onSeekRequest: (targetMs, view) => dispatch({ type: 'seek', targetMs, view }),
       onLiveButton: liveButton,
       onNotice: notice,
       positionEpoch,
       axisLowerMs,
+      recordingEnded,
       // 끝에 닿아 덮개가 선 동안 재생 단추를 막는다(끝난 목록이 처음부터 돌지 않게)
       holdPlay: view.cover !== null,
       // 막힌 동안 새로 서는 재생기는 받지도 틀지도 않는다(POK-528 U2). 덮개가 이미 preparing 인 끝남 대기(끝에 닿아 재접속
@@ -56,7 +81,10 @@ export function useLiveRewindPlayback(
       notice,
       positionEpoch,
       isKnownDvrHole,
+      isStartHeld,
+      watchesDrain,
       axisLowerMs,
+      recordingEnded,
       view.cover,
       view.startHeld,
     ],
@@ -82,9 +110,11 @@ export function useLiveRewindPlayback(
       keepPausedOnSwap: () => simRef.current.keepPausedOnSwap(),
       holdFrame: () => simRef.current.holdFrame(),
       dropPauseMark: () => simRef.current.dropPauseMark(),
+      // 부르는 순간의 영상 노드를 읽는다 — past 로 닫는 동기 경로라 아직 이 재생기의 노드다
+      readSound: () => readSound(videoRef.current),
     });
     return () => bindPlayer(null);
-  }, [bindPlayer]);
+  }, [bindPlayer, videoRef]);
 
   // 마지막으로 본 자리(P) — 리마운트 잇기 · 계승 판정 · 이음 지점의 재료
   // 재생 여부 · 연속 길이도 싣는다 — 같은 자리여도 일시정지만 하면 사건이 한 번 난다(POK-200 c13)
@@ -100,6 +130,5 @@ export function useLiveRewindPlayback(
     }
   }, [atMs, playing, runMs, epoch, dispatch]);
 
-  // 다시보기(VOD)는 끝난 방송이라 오른쪽 끝이 「실시간」이 아니라 녹화 끝이다(시크바 문구 · LIVE 숨김)
-  return { ...sim, replay: state.source.kind === 'vod' };
+  return sim;
 }

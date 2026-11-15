@@ -1,5 +1,5 @@
 import { READ_TIMEOUT_MS } from '@/api/client';
-import { mediaCredentials } from '@/api/mediaPlayback';
+import { mediaCredentials } from '@/api/mediaAccess';
 import {
   MAX_TRACK_SAMPLES,
   readFirstSampledTraf,

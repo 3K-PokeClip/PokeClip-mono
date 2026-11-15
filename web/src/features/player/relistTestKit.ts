@@ -16,14 +16,13 @@ import {
 // 재방문 계수기를 새로 건다. 제품 모듈은 옛 판에도 있는 것만 읽는다 — 제품 파일을 되돌린
 // 트리(음성 대조)에서도 이 파일이 로드되게.
 //
-// 시각은 epoch ms 다. 되감기 목록 A1 의 첫 조각 T0 · 끝 NOW · 맨 앞 조각 셋의 길이 12초
-// (창 하한 여유) · 응답은 R 에 받는다. 방송 A(회차 r-A)를 보던 세션이 기준이다.
+// 시각은 epoch ms 다. 되감기 목록 A1 의 첫 조각 T0 · 끝 NOW · 응답은 R 에 받는다. 방송
+// A(회차 r-A)를 보던 세션이 기준이다.
 
 export const MIN = 60_000;
 export const T0 = Date.parse('2026-10-25T05:00:00.000Z');
 export const NOW = T0 + 60 * MIN;
 export const R = NOW + 1_000;
-export const MARGIN_MS = 12_000;
 /** 보던 자리 — 목록 끝에서 멀어 넘김 띠 밖이다 */
 export const P20 = T0 + 20 * MIN;
 /** 라이브에서 본 자리(라이브 끝 근처) */
@@ -76,7 +75,6 @@ export function loaded(url: string, cut?: boolean, firstMs = T0, lastEndMs = NOW
     firstMs,
     lastEndMs,
     targetDurationS: 4,
-    headSpanMs: MARGIN_MS,
   };
   return cut === undefined ? list : { ...list, startFloorCut: cut };
 }

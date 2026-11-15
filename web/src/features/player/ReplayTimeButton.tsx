@@ -7,7 +7,7 @@ import { formatUptime } from './playerMath';
 
 /**
  * 지난 방송의 시간 표기(POK-518) — 「지금 / 전체」이고, 누르면 앞 칸이 끝까지 남은 시간으로 바뀐다. 다시 누르면 돌아온다.
- * 녹화 처음부터 잰다: windowSeconds는 녹화 처음부터 끝까지의 길이, behindSeconds는 끝까지 남은 시간이다.
+ * 다시보기 목록의 첫 내용 조각부터 잰다: windowSeconds는 그 조각부터 목록 끝까지의 길이, behindSeconds는 끝까지 남은 시간이다.
  * 이름이 보이는 글자를 덮으므로 시간은 설명으로 낭독한다. 이름에 넣으면 포커스가 있는 동안 1초마다 다시 읽는다.
  */
 export function ReplayTimeButton({

@@ -49,24 +49,13 @@ vi.mock('@/lib/analytics', async (importOriginal) => ({
 const tracked = (name: string) =>
   track.mock.calls.filter(([n]) => n === name).map(([, props]) => props as Record<string, unknown>);
 
-// 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
-const spansAsked = vi.hoisted(() => [] as string[]);
+// 출입증을 받는 구성인지(playbackConfigured)를 시험마다 정한다 — 나머지는 실제 구현 그대로다
 const playbackOn = vi.hoisted(() => ({ value: false }));
-/** 녹화 목록의 답. null이면 실제 구현(재생 서버 주소가 없어 빈 목록)이다 */
-const recordedSpans = vi.hoisted(() => ({
-  value: null as null | { startMs: number; durationSeconds: number }[],
-}));
-vi.mock('@/api/mediaPlayback', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
+vi.mock('@/api/mediaAccess', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/mediaAccess')>();
   return {
     ...actual,
     playbackConfigured: () => playbackOn.value,
-    fetchRecordingSpans: (streamId: string) => {
-      spansAsked.push(streamId);
-      return recordedSpans.value !== null
-        ? Promise.resolve(recordedSpans.value)
-        : actual.fetchRecordingSpans(streamId);
-    },
   };
 });
 
@@ -385,7 +374,6 @@ beforeEach(() => {
   server.clipPoll = null;
   server.openStatus = 204;
   server.round = 'vod';
-  spansAsked.length = 0;
   nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
   // jsdom의 주소는 시험 사이에 남는다: 처음 자리로 돌리고, 바꾸면 모의 useSearchParams가 따라가게 한다
@@ -403,7 +391,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   playbackOn.value = false;
-  recordedSpans.value = null;
   dialogChunk.broken = false;
   dialogChunk.arrival = null;
   // 출입증 기억(만료 · 필요 없음)이 다음 시험으로 새지 않게
@@ -553,9 +540,8 @@ describe('StudioScreen — 편집기 영상 원천(POK-473 · POK-233)', () => {
 
   it('카드로 열면 그 창의 ③ 조각을 받고 녹화 재생 서버(/playback)는 부르지 않는다', async () => {
     withMediaControl();
-    // 녹화 재생 서버가 있고 녹화도 있는 곳이다 — 옛 편집기는 여기서 /playback/ 으로 창을 받았다
+    // 출입증을 받는 구성이다 — 옛 편집기는 여기서 /playback/ 으로 창을 받았다
     playbackOn.value = true;
-    recordedSpans.value = [{ startMs: STARTED_AT, durationSeconds: 3_600 }];
     await openWithSource(`?stream=${STREAM_ID}&card=5`);
     // 카드 창 60–72.4초 ± 10초 = 50–82.4초 → 조각 12(48–52초) … 20(80–84초)
     await waitFor(() => expect(requestsTo(/\.m4s$/)).toHaveLength(9));

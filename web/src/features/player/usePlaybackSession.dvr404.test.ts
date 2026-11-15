@@ -249,7 +249,6 @@ function playerSteps(
     firstMs: FIRST_F,
     lastEndMs: NOW,
     targetDurationS: 4,
-    headSpanMs: 12_000,
     startFloorCut: true,
   };
   const painted: SessionEvent = {
@@ -429,6 +428,7 @@ describe('재생기 명령 배선 — hold-frame · drop-pause-mark(POK-528 c5 �
       keepPausedOnSwap: vi.fn(),
       holdFrame: vi.fn(),
       dropPauseMark: vi.fn(),
+      readSound: () => null,
     };
   }
 

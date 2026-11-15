@@ -33,7 +33,7 @@ function bodyOf(url: string): Uint8Array<ArrayBuffer> {
 
 async function load() {
   vi.resetModules();
-  const playback = await import('@/api/mediaPlayback');
+  const playback = await import('@/api/mediaAccess');
   const access = await import('@/api/playbackAccess');
   const windowBytes = await import('./fetchWindowBytes');
   return { playback, access, ...windowBytes };

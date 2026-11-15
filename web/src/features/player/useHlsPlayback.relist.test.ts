@@ -14,6 +14,7 @@ interface Fragment {
   start: number;
   duration: number;
   programDateTime: number;
+  gap?: boolean;
 }
 
 interface Details {
@@ -91,7 +92,7 @@ class FakeHls {
   attachMedia() {}
 }
 
-/** 새 목록의 첫 조각 F — 창 하한은 F + 맨 앞 4초 조각 셋(영상 12초) */
+/** 새 목록의 첫 조각 F — 방송 중 창 하한은 F + 첫 4초 조각 하나(영상 4초) */
 const F = Date.parse('2026-10-25T05:00:00.000Z');
 const URL = 'https://m/dvr/k/a1/index.m3u8';
 
@@ -174,9 +175,9 @@ afterEach(() => {
 });
 
 describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)', () => {
-  it('① 이어 볼 자리가 하한 앞이면 하한(영상 12초)에서 받고 startFloorCut 참 · 재생기 알림 0', async () => {
-    const { hls, onListLoaded, onNotice } = await boot(sourceOf(F + 4_000), details(F));
-    expect(hls.startLoad.mock.calls).toEqual([[12]]);
+  it('① 이어 볼 자리가 하한 앞이면 하한(영상 4초)에서 받고 startFloorCut 참 · 재생기 알림 0', async () => {
+    const { hls, onListLoaded, onNotice } = await boot(sourceOf(F + 2_000), details(F));
+    expect(hls.startLoad.mock.calls).toEqual([[4]]);
     expect(onListLoaded.mock.calls).toEqual([
       [
         {
@@ -186,6 +187,8 @@ describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)
           lastStartMs: F + 36_000,
           targetDurationS: 4,
           headSpanMs: 12_000,
+          contentFirstMs: F,
+          rewindHeadSpanMs: 4_000,
           startFloorCut: true,
         },
       ],
@@ -201,11 +204,11 @@ describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)
 
   it('③ 목록 하한에서(0) 서면 하한에서 받고 startFloorCut 참', async () => {
     const { hls, onListLoaded } = await boot(sourceOf(0), details(F));
-    expect(hls.startLoad.mock.calls).toEqual([[12]]);
+    expect(hls.startLoad.mock.calls).toEqual([[4]]);
     expect(cutsOf(onListLoaded)).toEqual([true]);
   });
 
-  it('④ 틈 목록 — 받는 자리와 startFloorCut 이 startCut 표와 같다(영상 12초 · 참)', async () => {
+  it('④ 틈 목록 — 받는 자리와 startFloorCut 이 startCut 표와 같다(틈 뒤 영상 8초 · 하한 위라 거짓)', async () => {
     const gap = placed([
       [0, 0],
       [4, 4_000],
@@ -214,8 +217,8 @@ describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)
       [16, 28_000],
     ]);
     const { hls, onListLoaded } = await boot(sourceOf(F + 16_000), gap);
-    expect(hls.startLoad.mock.calls).toEqual([[12]]);
-    expect(cutsOf(onListLoaded)).toEqual([true]);
+    expect(hls.startLoad.mock.calls).toEqual([[8]]);
+    expect(cutsOf(onListLoaded)).toEqual([false]);
   });
 
   it('⑤ 겹침 목록 — 받는 자리와 startFloorCut 이 startCut 표와 같다(영상 13.8초 · 거짓)', async () => {
@@ -234,13 +237,13 @@ describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)
 
   it('⑥ 실물 순서(LEVEL_LOADED 처리 안의 LEVEL_UPDATED 가 기동 처리기보다 먼저)여도 startFloorCut 이 실린다', async () => {
     fake.updateInsideLoaded = true;
-    const { hls, onListLoaded } = await boot(sourceOf(F + 4_000), details(F));
-    expect(hls.startLoad.mock.calls).toEqual([[12]]);
+    const { hls, onListLoaded } = await boot(sourceOf(F + 2_000), details(F));
+    expect(hls.startLoad.mock.calls).toEqual([[4]]);
     expect(cutsOf(onListLoaded)).toEqual([true]);
   });
 
   it('⑦ 둘째 목록부터는 칸 없음 · 시작 요청 없는 되감기 · live · vod 재생기도 칸 없음', async () => {
-    const first = await boot(sourceOf(F + 4_000), details(F));
+    const first = await boot(sourceOf(F + 2_000), details(F));
     act(() => first.hls.trigger(FakeHls.Events.LEVEL_UPDATED, { details: details(F + 4_000) }));
     expect(cutsOf(first.onListLoaded)).toEqual([true, 'none']);
     for (const source of [
@@ -266,5 +269,31 @@ describe('다시 받은 재생기의 시작과 하한 잘림 보고(계획 8-3a)
     });
     expect(onSeekRequest).not.toHaveBeenCalled();
     expect(dated).toBe('unknown');
+  });
+
+  it('⑨ 끝난 목록(live 거짓)은 하한 여유가 없다 — 이어 볼 자리(영상 2초)에서 받고 startFloorCut 거짓', async () => {
+    const ended: Details = { ...details(F), live: false };
+    const { hls, onListLoaded } = await boot(sourceOf(F + 2_000), ended);
+    expect(hls.startLoad.mock.calls).toEqual([[2]]);
+    expect(cutsOf(onListLoaded)).toEqual([false]);
+  });
+
+  it('⑩ 맨 앞 GAP 다시보기가 첫 버퍼 전 치명 망 오류로 한 번 다시 받으면 정해 둔 첫 내용 조각(영상 8초)에서 받는다', async () => {
+    const ended = details(F);
+    const headGap: Details = {
+      ...ended,
+      live: false,
+      fragments: ended.fragments.map((frag, i) => (i < 2 ? { ...frag, gap: true } : frag)),
+    };
+    const { hls } = await boot(sourceOf(null, 'vod'), headGap);
+    expect(hls.startLoad.mock.calls).toEqual([[8]]);
+    act(() =>
+      hls.trigger(FakeHls.Events.ERROR, {
+        type: FakeHls.ErrorTypes.NETWORK_ERROR,
+        details: FakeHls.ErrorDetails.FRAG_LOAD_ERROR,
+        fatal: true,
+      }),
+    );
+    expect(hls.startLoad.mock.calls).toEqual([[8], [8]]);
   });
 });

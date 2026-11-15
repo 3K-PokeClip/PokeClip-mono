@@ -10,15 +10,18 @@ import {
   type RefObject,
 } from 'react';
 import type { VodPhase } from './pastVod';
+import type { PlayerSound } from './playbackSound';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import type { SeekView } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 import type { PlayerSimulation, PlayerSimulationOptions } from './usePlayerSimulation';
 
-// 끝난 뒤 들어온 화면(A)의 다시보기 재생기(POK-546 설계 2-3) — 회차 경로가 답한 VOD 목록 하나를 PDT 축으로 튼다.
+// 끝난 뒤 들어온 화면(A) · 세션이 past 로 닫힌 화면(B — POK-547)의 다시보기 재생기(POK-546 설계 2-3) — 회차 경로가 답한
+// VOD 목록 하나를 PDT 축으로 튼다.
 // useHlsPlayback 을 세션 모드(onSeekRequest)로 세워 카드의 실제 시각 옮기기가 PDT 와 범위 밖 판정을 쓰게 하고, 그 반환을
-// 펼쳐 세 가지를 덮는다: 시크바(목록 전체 길이 축 — 세션 축의 1시간 상한을 거치지 않는다) · 위치(화면에 붙은 자리를
-// 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른 카드). 다 봤나(ended)는 useHlsPlayback 에 없어 더한다.
+// 펼쳐 세 가지를 덮는다: 시크바(목록 전체 길이 축 — 세션 축의 1시간 상한을 거치지 않는다. 왼쪽 끝은 맨 앞 EXT-X-GAP 을
+// 뺀 첫 내용 조각이다 — POK-573) · 위치(화면에 붙은 자리를 모르면 끝까지 null) · 받아 둔 자리(재생기가 서기 전에 누른
+// 카드). 다 봤나(ended)는 useHlsPlayback 에 없어 더한다.
 // PlayerSimulation 계약 그대로라 GlassPlayer 몸통은 어느 훅인지 모른다.
 
 /** 회차 VOD 목록 하나(회차 경로의 vod ∧ ready 답)와 카드 · 채팅 축 */
@@ -37,7 +40,10 @@ const HAVE_CURRENT_DATA = 2;
 
 /** 재생기가 받은 목록의 범위 — 소스가 바뀔 때까지 지우지 않는다(재생기를 내린 뒤에도 시크바 폭이 남는다) */
 interface VodList {
+  /** 목록 첫 조각(맨 앞 GAP 포함)의 시각 */
   firstMs: number;
+  /** 첫 내용 조각(맨 앞 GAP 을 뺀 첫 조각)의 시각 — 시크바 왼쪽 끝 · Home · 하한(POK-573) */
+  contentFirstMs: number;
   lastEndMs: number;
   /** 마지막 조각의 시작(LoadedList.lastStartMs) — 끝으로 갈 때 틀 자리의 하한 */
   lastStartMs?: number;
@@ -88,8 +94,8 @@ function heldReducer(held: VodHeld, action: VodHeldAction): VodHeld {
     return held;
   }
   if (action.type === 'list') {
-    const { firstMs, lastEndMs, lastStartMs } = action;
-    return { ...held, list: { firstMs, lastEndMs, lastStartMs } };
+    const { firstMs, contentFirstMs, lastEndMs, lastStartMs } = action;
+    return { ...held, list: { firstMs, contentFirstMs, lastEndMs, lastStartMs } };
   }
   if (action.type === 'ended') {
     return held.ended === action.ended ? held : { ...held, ended: action.ended };
@@ -117,8 +123,8 @@ function clampToView(targetMs: number, view: SeekView): number {
 }
 
 /**
- * 끝으로 갈 때 목록 끝에서 물러설 거리 — 녹화 다시보기의 꼬리(useRecordedPlayback tailStart)와 같은 1초. 멈춤 회피가
- * 아니다: 받지 않은 마지막 조각 안으로 옮기면 앞 버퍼 끝에 멎는 일은 Playwright WebKit 26.4 에서 재현됐고 1초를 물러서도
+ * 끝으로 갈 때 목록 끝에서 물러설 거리 1초 — 결정-POK546 결정 5(kty (가) · 11-07) 그대로다. 멈춤 회피가 아니며 근거는
+ * 실측 범위다: 받지 않은 마지막 조각 안으로 옮기면 앞 버퍼 끝에 멎는 일은 Playwright WebKit 26.4 에서 재현됐고 1초를 물러서도
  * 남았으며, macOS Safari 27.0.1 의 앱 밖 최소 재현(hls.js 네 판과 기본 HLS 0/42 · 앱 판 1.7.3 은 0/6)과 Playwright
  * 1.65.0 의 WebKit 27.2 의 같은 재현(hls.js 네 판 · 조건 a 0/42)에서는 재현되지 않았다(iOS 는 재지 않았다). 마지막 1초를
  * 틀어 끝에 닿는다
@@ -126,16 +132,16 @@ function clampToView(targetMs: number, view: SeekView): number {
 const END_TAIL_MS = 1_000;
 
 /**
- * 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 마지막 조각이 1초보다 짧으면 그 조각의 시작이다(앞 조각으로 물러서지 않는다 —
- * 녹화 다시보기 tailStart 의 하한과 같다). 마지막 조각 시작을 모르면 첫 조각을 하한으로 둔다
+ * 끝으로 갈 때 틀 자리 — 목록 끝 1초 앞. 마지막 조각이 1초보다 짧으면 그 조각의 시작이다(앞 조각으로 물러서지 않는다).
+ * 마지막 조각 시작을 모르면 첫 내용 조각을 하한으로 둔다
  */
 function tailMs(list: VodList): number {
-  return Math.max(list.lastStartMs ?? list.firstMs, list.lastEndMs - END_TAIL_MS);
+  return Math.max(list.lastStartMs ?? list.contentFirstMs, list.lastEndMs - END_TAIL_MS);
 }
 
 /**
- * 카드 · 받아 둔 자리가 옮길 자리 — 첫 조각부터 꼬리까지로 가둔다(녹화 다시보기 forwardTarget 처럼 끝은 꼬리로 모은다). 끝
- * 이동과 달리 다 본 뒤에도 옮긴다(녹화 다시보기의 카드와 같다). 이 주소의 목록을 아직 모르면 재생기 목록 끝까지다
+ * 카드 · 받아 둔 자리가 옮길 자리 — 첫 내용 조각부터 꼬리까지로 가둔다(끝은 꼬리로 모은다). 끝 이동과 달리 다 본 뒤에도
+ * 옮긴다. 이 주소의 목록을 아직 모르면 재생기 목록 끝까지다
  */
 function cardTargetMs(targetMs: number, view: SeekView, list: VodList | null): number {
   const endMs = list === null ? view.endMs : tailMs(list);
@@ -174,6 +180,10 @@ function vodPhase(input: {
  * @param startAtSeconds 받아 둔 자리(기준점 축 초 — 화면의 pendingStart). 목록이 서 있으면 그 커밋에 한 번 옮긴다
  * @param onStartApplied 받아 둔 자리를 적용했다(옮김 · 범위 밖이라 첫 조각으로 자름) — 부른 쪽이 받아 둔 자리를 비운다. 그
  *   시각의 영상 자리를 모르면 부르지 않고 남겨 둔다(다음 목록에서 다시 해 본다)
+ * @param initialSound 재생기가 설 때 첫 재생 전에 실을 소리 상태(POK-547) — 세션 재생기에서 넘겨받은 값이고, 다시 서는
+ *   재생기(출입증 403 등)에는 부른 쪽이 onSoundChange 로 기억한 값이다. 없으면 기본(무음 · 70)
+ * @param onSoundChange 영상 노드의 소리 상태가 바뀌었다(사람의 조작 · 무음 대체 — POK-547). 부른 쪽이 기억해 재생기를 다시
+ *   세울 때 initialSound 로 넘긴다
  */
 export function useVodPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
@@ -185,6 +195,8 @@ export function useVodPlayback(
   broadcastId?: string,
   startAtSeconds: number | null = null,
   onStartApplied?: () => void,
+  initialSound: PlayerSound | null = null,
+  onSoundChange?: (sound: PlayerSound) => void,
 ): PlayerSimulation & { positionSeconds: number | null; phase: VodPhase } {
   // useState 가 아니라 useReducer 다(usePastVod 와 같은 까닭). useState 의 갱신은 마지막으로 렌더한 상태로 결과를 미리 셈해
   // 같으면 렌더를 건너뛰는데, 그 상태가 버려진 렌더의 것이면 지금 주소의 목록 · 자리를 「다른 주소」로 셈해 버린다
@@ -200,18 +212,32 @@ export function useVodPlayback(
   const listRef = useRef<VodList | null>(null);
   const hooks = useMemo<PlaybackHooks>(
     () => ({
-      // 세션 모드: 카드의 실제 시각 옮기기(seekToDate)가 범위 밖 판정을 하고 여기로 넘긴다. VOD 하한은 첫 조각이라 그 앞은 첫
-      // 조각으로 조용히 자르고, 꼬리 뒤는 꼬리다(cardTargetMs)
+      // 세션 모드: 카드의 실제 시각 옮기기(seekToDate)가 범위 밖 판정을 하고 여기로 넘긴다. VOD 하한은 첫 내용 조각이라 그 앞은
+      // 그 조각으로 조용히 자르고, 꼬리 뒤는 꼬리다(cardTargetMs)
       onSeekRequest: (targetMs, view) =>
         seekToMsRef.current(cardTargetMs(targetMs, view, listRef.current)),
-      onListLoaded: ({ url, firstMs, lastEndMs, lastStartMs }) =>
-        dispatchHeld({ type: 'list', url, firstMs, lastEndMs, lastStartMs }),
+      onListLoaded: ({ url, firstMs, contentFirstMs, lastEndMs, lastStartMs }) =>
+        dispatchHeld({
+          type: 'list',
+          url,
+          firstMs,
+          contentFirstMs: contentFirstMs ?? firstMs,
+          lastEndMs,
+          lastStartMs,
+        }),
+      // 재생기는 설 때 한 번만 읽는다 — 그 뒤 바뀐 값은 재생기를 다시 세울 때(다시 마운트) 쓰인다
+      initialSound,
+      onSoundChange,
     }),
-    [],
+    [initialSound, onSoundChange],
   );
+  // 받아 둔 자리는 재생기가 설 때 hls.js 의 받기 시작 자리로도 준다(없으면 재생기가 첫 내용 조각을 고른다 — POK-573). 영상
+  // 정보가 서기 전의 옮기기(아래 layout 효과)는 받기 위치를 바꾸지 못해서다. 그 뒤 바뀐 값은 재생기가 읽지 않는다 — 늦게 온
+  // 자리는 이미 받기 시작한 뒤라 아래 효과의 옮기기가 맡는다
+  const startAtMs = startAtSeconds === null ? null : vod.axisZeroMs + startAtSeconds * 1000;
   const sim = useHlsPlayback(
     videoRef,
-    { kind: 'vod', url: vod.url, startAtMs: null, generation: 0, strictStart: false },
+    { kind: 'vod', url: vod.url, startAtMs, generation: 0, strictStart: false },
     options,
     onSeek,
     mediaKey,
@@ -267,7 +293,7 @@ export function useVodPlayback(
     };
   }, [videoRef, url, currentProgramDateMs, readShownPdtMs]);
 
-  // 다 봤나 — 재생 단추가 「처음부터」가 된다(녹화 다시보기와 같은 뜻, POK-518). useHlsPlayback 의 끝 도달(onEndReached)은
+  // 다 봤나 — 재생 단추가 「처음부터」가 된다(POK-518). useHlsPlayback 의 끝 도달(onEndReached)은
   // 목록 끝 정체까지 세는 세션 알림이라 쓰지 않고, 브라우저의 ended 만 따른다
   useEffect(() => {
     const video = videoRef.current;
@@ -304,27 +330,29 @@ export function useVodPlayback(
       return;
     }
     if (result === 'outside') {
-      startInputs.seekToMs(list.firstMs);
+      startInputs.seekToMs(list.contentFirstMs);
     }
     startInputs.onStartApplied?.();
   }, [list, startAtSeconds]);
 
-  // 시크바 — 목록 첫 조각부터 끝까지(이 표가 정본: 설계 2-3). 막대 값은 재생 위치의 PDT 로 센다(놓은 직후에도 놓은 자리)
-  const windowSeconds = list === null ? 0 : Math.round((list.lastEndMs - list.firstMs) / 1000);
+  // 시크바 — 목록 첫 내용 조각부터 끝까지(이 표가 정본: 설계 2-3 · 맨 앞 GAP 은 막대에 넣지 않는다 — POK-573). 막대 값은
+  // 재생 위치의 PDT 로 센다(놓은 직후에도 놓은 자리)
+  const windowSeconds =
+    list === null ? 0 : Math.round((list.lastEndMs - list.contentFirstMs) / 1000);
   const behindSeconds =
     list === null || axisPdtMs === null
       ? windowSeconds
       : Math.min(windowSeconds, Math.max(0, Math.round((list.lastEndMs - axisPdtMs) / 1000)));
 
-  // 시크바 · 키가 옮길 자리 — 첫 조각부터 꼬리(끝 1초 앞)까지로 가둔다. 다 본 뒤 꼬리로 가면 옮기지 않는다: 옮기면 seeking 이
-  // 다 봤나를 풀어 「처음부터」 단추가 깜빡이거나 끝 1초를 또 돈다(녹화 다시보기 jumpTo 와 같은 뜻 — POK-518)
+  // 시크바 · 키가 옮길 자리 — 첫 내용 조각부터 꼬리(끝 1초 앞)까지로 가둔다. 다 본 뒤 꼬리로 가면 옮기지 않는다: 옮기면 seeking 이
+  // 다 봤나를 풀어 「처음부터」 단추가 깜빡이거나 끝 1초를 또 돈다(POK-518)
   const moveWithinList = useCallback(
     (targetMs: number) => {
       if (list === null) {
         return;
       }
       const tail = tailMs(list);
-      const atMs = clampToView(targetMs, { lowerMs: list.firstMs, endMs: tail });
+      const atMs = clampToView(targetMs, { lowerMs: list.contentFirstMs, endMs: tail });
       if (atMs === tail && ended) {
         return;
       }
@@ -337,6 +365,11 @@ export function useVodPlayback(
     (fraction: number) => {
       const nowMs = currentProgramDateMs();
       if (list === null || nowMs === null) {
+        return;
+      }
+      // 맨 왼쪽은 첫 내용 조각 그 자리다 — 반올림한 막대 폭을 거치면 1초 안쪽으로 빗나간다
+      if (fraction <= 0) {
+        moveWithinList(list.contentFirstMs);
         return;
       }
       moveWithinList(list.lastEndMs - behindFromSeekFraction(fraction, windowSeconds) * 1000);
@@ -378,14 +411,22 @@ export function useVodPlayback(
     return shownNow === null ? null : (shownNow - vod.axisZeroMs) / 1000;
   }, [list, readShownPdtMs, vod.axisZeroMs]);
 
-  // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(녹화 다시보기와 같은 뜻)
+  // 다 본 뒤 재생은 처음부터 다시 도는 것이라 사람이 옮긴 것으로 친다(POK-518). 맨 앞이 GAP 이면 틀기 전에 첫 내용 조각으로
+  // 옮긴다(옮기기가 onSeek 를 부른다 — POK-573): 끝난 뒤의 재생은 브라우저가 영상 0초(GAP)로 옮기고, 그 seeking 에서 hls.js 가
+  // 받기 위치를 0초로 옮긴다(base-stream-controller.ts 470–479). 0초부터 첫 내용 조각까지의 구멍이 시작 구멍 건너뛰기 한도
+  // 2초(gap-controller.ts MAX_START_GAP_JUMP)보다 길면 건너뛰지 못해 화면이 멎는다. 먼저 옮기면 영상 정보가 있는 상태의
+  // 옮기기라 seeking 이 나서 hls.js 가 받기를 그 자리로 다시 연다(base-stream-controller.ts 405–406 · 470–479)
   const togglePlay = useCallback(() => {
     const restarts = videoRef.current?.ended === true;
+    const skipsHeadGap = restarts && list !== null && list.contentFirstMs > list.firstMs;
+    if (skipsHeadGap) {
+      seekToMs(list.contentFirstMs);
+    }
     toggleHlsPlay();
-    if (restarts) {
+    if (restarts && !skipsHeadGap) {
       onSeek?.();
     }
-  }, [videoRef, toggleHlsPlay, onSeek]);
+  }, [videoRef, list, seekToMs, toggleHlsPlay, onSeek]);
 
   return {
     ...sim,
