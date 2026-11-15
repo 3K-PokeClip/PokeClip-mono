@@ -420,6 +420,20 @@ describe('useLiveSession: 다시보기 재생기에서 바꾼 소리(POK-547)', 
     expect(view.result.current.vodSound).toBeNull();
   });
 
+  // 화면은 방송|영상 키가 바뀌어도 같은 재생기 컴포넌트를 남긴다(key 속성 없음) — 키가 바뀐 뒤 그 재생기에서 바꾼 소리는
+  // 처음 키가 아니라 지금 그려진 키의 기억이다
+  it('방송|영상 키가 바뀐 같은 화면에서 바꾼 소리는 새 키의 소리다 — 앞 키로 돌아가면 기본값이다', () => {
+    const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
+      initialProps: input({ broadcastStatus: 'ended' }),
+    });
+    view.rerender(input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1', broadcastStatus: 'ended' }));
+    act(() => view.result.current.rememberVodSound(mutedSound));
+    expect(view.result.current.vodSound).toEqual(mutedSound);
+
+    view.rerender(input({ broadcastStatus: 'ended' }));
+    expect(view.result.current.vodSound).toBeNull();
+  });
+
   it('넘김 자리를 소모해도 바꾼 소리는 남는다', () => {
     const view = closedWith(handedSound);
     act(() => view.result.current.rememberVodSound(mutedSound));

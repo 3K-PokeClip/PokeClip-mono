@@ -917,6 +917,25 @@ describe('받기를 멈춘 되감기 재생기의 고갈 감시 배선(POK-547)'
 
     expect(hooks.onDvrDrain).not.toHaveBeenCalled();
   });
+
+  // 세대가 바뀌어도 영상 노드는 그대로다 — 옛 감시가 사건 듣기를 멈추지 않았으면 그 노드의 사건마다 판정을 이어 간다
+  it('세대가 바뀐 뒤 같은 영상 노드가 멎은 채 판정 계기 사건을 내도 옛 재생기의 고갈은 알리지 않는다', async () => {
+    const hooks = drainHooks();
+    const { video, hls, swapTo } = await playingAt(hooks);
+    raise(hls!, fragError(404));
+    fire(video, 'waiting');
+    await advance(500);
+
+    await swapTo({ source: sourceOf('rewind', 2, S), hooks });
+    video.currentTime = STALL_S;
+    fire(video, 'waiting');
+    await advance(1_500);
+    fire(video, 'timeupdate');
+    await advance(1_500);
+    fire(video, 'timeupdate');
+
+    expect(hooks.onDvrDrain).not.toHaveBeenCalled();
+  });
 });
 
 describe('세우지 않음의 지금 상태 읽기 — 효과 첫머리와 hls.js 읽기를 기다린 뒤(POK-547)', () => {
