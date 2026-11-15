@@ -510,11 +510,11 @@ run "instance_role_policy_statements" {
 
       BroadcastPublish = toset(["sns:Publish"])
 
-      # 판 읽기 · If-Match 묶음 쓰기 · 키 하나 읽기. ListKeys · PutKey ·
-      # DeleteKey 는 Writer 가 쓰지 않아 주지 않는다.
+      # 판 읽기 · If-Match 묶음 쓰기. GetKey 는 상자에서 부르는 곳이 없어
+      # 뺐고(POK-574), ListKeys · PutKey · DeleteKey 는 Writer 가 쓰지 않아
+      # 주지 않는다.
       EdgeBoundsKvs = toset([
         "cloudfront-keyvaluestore:DescribeKeyValueStore",
-        "cloudfront-keyvaluestore:GetKey",
         "cloudfront-keyvaluestore:UpdateKeys",
       ])
     }
