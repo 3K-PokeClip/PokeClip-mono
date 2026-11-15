@@ -159,7 +159,8 @@ run "sets_root_volume_throughput" {
   }
 }
 
-# 설계 3-3-1 · 계획 G22: 컨테이너가 인스턴스 역할 자격을 얻도록 hop limit 2.
+# cred_relay 끔(기본)인 키는 지금과 같다 — 컨테이너가 인스턴스 역할 자격을
+# 얻도록 hop limit 2(설계 3-3-1 · 계획 G22). IPv6 엔드포인트는 끔 고정(POK-574).
 run "requires_imdsv2_with_hop_limit_two" {
   command = plan
 
@@ -167,9 +168,45 @@ run "requires_imdsv2_with_hop_limit_two" {
     condition = (
       aws_instance.this["a"].metadata_options[0].http_endpoint == "enabled" &&
       aws_instance.this["a"].metadata_options[0].http_tokens == "required" &&
-      aws_instance.this["a"].metadata_options[0].http_put_response_hop_limit == 2
+      aws_instance.this["a"].metadata_options[0].http_put_response_hop_limit == 2 &&
+      aws_instance.this["a"].metadata_options[0].http_protocol_ipv6 == "disabled"
     )
-    error_message = "IMDS 가 v2 필수 · hop limit 2 가 아니다."
+    error_message = "IMDS 가 v2 필수 · hop limit 2 · IPv6 끔이 아니다."
+  }
+}
+
+# POK-574: 스위치는 키마다다. 켬 키(b)만 hop limit 1 이라 컨테이너가 IMDS 토큰을
+# 받지 못하고, 끔 키(a)는 2 그대로다(스위치가 A 에 걸리면 기록이 멈춘다 — P12).
+run "cred_relay_key_gets_hop_limit_one" {
+  command = plan
+
+  variables {
+    instances = {
+      a = { config_version = "1" }
+      b = { config_version = "2", cred_relay = true }
+    }
+  }
+
+  assert {
+    condition     = aws_instance.this["a"].metadata_options[0].http_put_response_hop_limit == 2
+    error_message = "a(끔)의 IMDS 홉이 2 가 아니다."
+  }
+
+  assert {
+    condition     = aws_instance.this["b"].metadata_options[0].http_put_response_hop_limit == 1
+    error_message = "b(켬)의 IMDS 홉이 1 이 아니다."
+  }
+
+  # 키를 for 식으로 돌리면 실패 진단이 표지 붙은 상자 전체를 찍다가
+  # terraform 1.16.4 가 멈춘다 — 키마다 주소를 그대로 쓴다.
+  assert {
+    condition = (
+      aws_instance.this["a"].metadata_options[0].http_tokens == "required" &&
+      aws_instance.this["a"].metadata_options[0].http_protocol_ipv6 == "disabled" &&
+      aws_instance.this["b"].metadata_options[0].http_tokens == "required" &&
+      aws_instance.this["b"].metadata_options[0].http_protocol_ipv6 == "disabled"
+    )
+    error_message = "a · b 가 IMDSv2 필수 · IPv6 끔이 아니다."
   }
 }
 

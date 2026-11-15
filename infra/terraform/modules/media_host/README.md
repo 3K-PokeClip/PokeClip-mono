@@ -5,9 +5,12 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
 대상 등록 · 응답기 거부 목록 SSM 파라미터를 만듭니다.
 
 *   **상자:** AL2023 arm64 AMI(SSM 공개 파라미터)를 Media AZ 프라이빗
-    서브넷에 둡니다. 공인 IP 가 없고, IMDSv2 필수에 hop limit 2 입니다 —
-    컨테이너(사이드카 IAM DB 토큰 · S3 업로드)가 인스턴스 역할 자격을 얻어야
-    하기 때문입니다.
+    서브넷에 둡니다. 공인 IP 가 없고, IMDSv2 필수에 IPv6 엔드포인트는
+    끕니다. hop limit 은 키마다 `cred_relay` 로 정합니다(POK-574). 끔(값
+    없음)은 2 입니다 — 컨테이너(사이드카 IAM DB 토큰 · S3 업로드)가 IMDS 로
+    직접 역할 자격을 얻습니다. 켬은 1 입니다 — 컨테이너는 IMDS 토큰을 받지
+    못하고, 사이드카 · janitor 만 호스트 망의 대리 창구(cred-relay)로 자격을
+    받습니다.
 *   **교체 모델(5-3):** 상자 키마다 `config_version` 을 둡니다. 이미 떠 있는
     키의 user_data · AMI 는 바꾸지 않고(`ignore_changes`), 새 구성은 새 키로
     띄운 뒤 `ingest_active_key` · `http_active_key` 를 옮깁니다. 대상 그룹
@@ -54,7 +57,9 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
         `launch_template` 금지(`dynamic` 포함 — 템플릿의 프로필로 비켜 간다).
     *   상자 접속 · 자격: `key_name`(SSH 키 쌍) 금지 · `metadata_options` 에
         `http_tokens = "required"` 리터럴 명시 필수(IMDSv2 — 없음 · 식 ·
-        `dynamic` 위반).
+        `dynamic` 위반). 같은 블록의 `http_put_response_hop_limit` 은 리터럴
+        `1` 또는 정확히 `each.value.cred_relay ? 1 : 2`(2 · 변수 · 다른 식
+        위반), `http_protocol_ipv6` 는 리터럴 `"disabled"` 필수.
     *   명령 블록: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` ·
         `file`) · `connection` 금지(`dynamic` 포함).
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
@@ -143,6 +148,8 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 *   `proxy_ports`(live · playback · control · health)는 1024 이상이고 서로
     다르며, 응답기 포트(8080 · 8081)와 MediaMTX 루프백 포트(8888 · 9996 ·
     9997)가 아닙니다. 같은 망 칸[^netns]에서 겹치면 nginx 가 뜨지 않습니다.
+    대리 창구 포트 9911 도 아닙니다 — 공개 포트가 같으면 Docker DNAT 이 중계
+    요청을 MediaMTX 로 보냅니다(POK-574).
 *   이미지 참조는 모두 `<저장소>@sha256:<64자>` 이고 이 계정 ECR 레지스트리
     호스트(`media.env` 의 `ECR_REGISTRY_HOST`)로 시작해야 합니다. 응답기
     (`ingest_auth_image`)만 빈 값을 받습니다 — 비면 렌더하지 않습니다(M15).

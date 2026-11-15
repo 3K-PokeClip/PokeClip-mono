@@ -2,6 +2,8 @@
 
 # 상자 키 → 구성 판. 처음은 한 대(a)다. 교체 · 설정 반영은 새 키(b)에 올린
 # config_version 을 더한 뒤 runbooks/media-swap.md 를 따른다.
+# 대리 창구(POK-574)는 키마다 켠다 — 예: b = { config_version = "2", cred_relay = true }.
+# 값이 없으면 끔(IMDS 홉 2 — 지금과 같음)이고, 떠 있는 키의 값은 바꾸지 않는다.
 instances = {
   a = { config_version = "1" }
 }

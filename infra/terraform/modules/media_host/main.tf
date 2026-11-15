@@ -62,12 +62,16 @@ resource "aws_instance" "this" {
   user_data_base64            = base64gzip(local.rendered_user_data[each.key])
   user_data_replace_on_change = false
 
-  # 컨테이너(사이드카 IAM DB 토큰 · S3 업로드)가 인스턴스 역할 자격을 얻도록
-  # hop limit 2(설계 3-3-1 · 계획 G22).
+  # hop limit 은 키별 대리 창구 스위치다(POK-574). 켬 키는 1 — 컨테이너는 IMDS
+  # 토큰을 받지 못하고, 사이드카 · janitor 는 호스트 망의 cred-relay 로만 역할
+  # 자격을 받는다. 끔 키는 2 — 컨테이너가 IMDS 로 직접 자격을 얻는 지금 꼴(설계
+  # 3-3-1 · 계획 G22, 원 근거 문서는 미발견). IPv6 엔드포인트는 홉 · 망 칸
+  # 실측 밖이라 끈다. guard R10 이 이 식 · 리터럴을 정확히 대조한다.
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
-    http_put_response_hop_limit = 2
+    http_put_response_hop_limit = each.value.cred_relay ? 1 : 2
+    http_protocol_ipv6          = "disabled"
   }
 
   root_block_device {

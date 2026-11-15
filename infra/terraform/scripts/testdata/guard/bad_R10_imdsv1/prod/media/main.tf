@@ -5,6 +5,8 @@ resource "aws_instance" "this" {
   instance_type = "c8gn.large"
 
   metadata_options {
-    http_tokens = "optional"
+    http_tokens                 = "optional"
+    http_put_response_hop_limit = each.value.cred_relay ? 1 : 2
+    http_protocol_ipv6          = "disabled"
   }
 }

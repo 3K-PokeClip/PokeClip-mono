@@ -44,6 +44,9 @@
 #    launch_template 을 쓰지 않는다(dynamic 포함 — 템플릿의 프로필로 비켜 간다).
 # ⑧-1 상자는 key_name(SSH 키 쌍)을 쓰지 않고, metadata_options 블록 하나에
 #    http_tokens = "required" 리터럴을 명시한다(IMDSv2 — 없음 · 식 · dynamic 위반).
+#    그 블록의 http_put_response_hop_limit 은 리터럴 1 또는 키별 스위치 식
+#    ${each.value.cred_relay ? 1 : 2} 정확히, http_protocol_ipv6 은 리터럴
+#    "disabled" 다(POK-574 대리 창구 — 켬 키 컨테이너의 IMDS 차단).
 # ⑨ statement actions 에 iam · sts 동작은 없다(서비스째 — 아래 규칙 주석).
 # ⑩ 자원 본문에 provisioner · connection 은 없다(dynamic 포함).
 #
@@ -535,16 +538,21 @@ deny contains msg if {
 	msg := sprintf("R10 %s: %s 의 key_name — 상자 접속은 SSM 세션으로만(SSH 키 쌍 금지)", [decl.path, label(decl)])
 }
 
+# 상자의 metadata_options 블록 — 정적 블록 하나이고 dynamic 꼴이 없을 때만
+# 정해진다. 구조 위반(없음 · 둘 이상 · dynamic)은 아래 http_tokens 규칙이 잡는다.
+single_metadata_options(body) := blocks[0] if {
+	blocks := object.get(body, "metadata_options", [])
+	is_array(blocks)
+	count(blocks) == 1
+	not "metadata_options" in object.keys(object.get(body, "dynamic", {}))
+}
+
 # 상자는 IMDSv2 만 연다 — metadata_options 블록 하나에 http_tokens = "required"
 # 리터럴을 명시한다. 없으면 기본값이 AMI · 계정 설정을 따라 optional(IMDSv1)일
 # 수 있고, IMDSv1 은 SSRF 로 역할 자격을 내준다. dynamic 꼴은 대조할 수 없어
 # 위반이다.
 imds_v2_required(body) if {
-	blocks := object.get(body, "metadata_options", [])
-	is_array(blocks)
-	count(blocks) == 1
-	object.get(blocks[0], "http_tokens", null) == "required"
-	not "metadata_options" in object.keys(object.get(body, "dynamic", {}))
+	object.get(single_metadata_options(body), "http_tokens", null) == "required"
 }
 
 deny contains msg if {
@@ -552,6 +560,38 @@ deny contains msg if {
 	not imds_v2_required(decl.body)
 	msg := sprintf(
 		"R10 %s: %s 의 metadata_options 에 http_tokens = \"required\" 리터럴 명시 필요(IMDSv1 금지 · dynamic 금지)",
+		[decl.path, label(decl)],
+	)
+}
+
+# 홉 상한은 보안 통제다(POK-574) — 대리 창구 켬 키는 1 이라 컨테이너가 IMDS
+# 토큰을 못 받고, 끔 키만 2 다. 그래서 리터럴 1 이거나 키별 스위치 식 정확히
+# 하나만 받는다. 모듈 전역 상수 · 변수 · 다른 식이면 끔 키(A)까지 함께 바뀐다.
+# 식은 conftest hcl2 가 원문 그대로 주는 문자열이라 공백까지 정확히 대조한다.
+imds_hop_switch_expr := "${each.value.cred_relay ? 1 : 2}"
+
+imds_hop_allowed(block) if block.http_put_response_hop_limit == 1
+
+imds_hop_allowed(block) if block.http_put_response_hop_limit == imds_hop_switch_expr
+
+deny contains msg if {
+	some decl in media_instances
+	block := single_metadata_options(decl.body)
+	not imds_hop_allowed(block)
+	msg := sprintf(
+		"R10 %s: %s 의 metadata_options 에 http_put_response_hop_limit = 1 또는 %s 명시 필요(2 · 변수 · 다른 식 금지 — 켬 키 컨테이너의 IMDS 차단)",
+		[decl.path, label(decl), imds_hop_switch_expr],
+	)
+}
+
+# IPv6 엔드포인트(fd00:ec2::254)는 끈다 — 홉 상한 · 망 칸 실측은 IPv4
+# 엔드포인트만 했다. 켜야 하면 그때 새 결정으로 이 규칙부터 고친다.
+deny contains msg if {
+	some decl in media_instances
+	block := single_metadata_options(decl.body)
+	object.get(block, "http_protocol_ipv6", null) != "disabled"
+	msg := sprintf(
+		"R10 %s: %s 의 metadata_options 에 http_protocol_ipv6 = \"disabled\" 리터럴 명시 필요(IPv6 IMDS 엔드포인트 금지)",
 		[decl.path, label(decl)],
 	)
 }
