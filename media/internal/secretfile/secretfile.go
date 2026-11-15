@@ -1,5 +1,5 @@
-// Package secretfile 은 비밀 값 한 줄이 든 파일(*_FILE 입력)을 읽는다. 사이드카(segment-indexer)와
-// 응답기(ingest-auth)가 같은 검사 규칙을 쓰게 하려고 둘이 함께 부른다.
+// Package secretfile 은 비밀 값 한 줄이 든 파일(*_FILE 입력)을 읽는다. 사이드카(segment-indexer) ·
+// 응답기(ingest-auth) · IMDS 대리 창구(cred-relay — ReadIn)가 같은 검사 규칙을 쓰게 하려고 셋이 함께 부른다.
 package secretfile
 
 import (
@@ -21,6 +21,11 @@ const maxBytes = 4096
 // 거부다. 이 갈래를 이름으로 두는 이유: 디렉터리 · 쓰는 쪽 없는 FIFO 는 이 검사가 없어도 읽기 에러나
 // 빈 내용 거부가 대신 걸려, 「거부됐다」 만으로는 검사가 살아 있는지 가려지지 않는다.
 var ErrNotRegularFile = errors.New("일반 파일이어야 한다 — 디렉터리 · FIFO · 장치는 받지 않는다")
+
+// ErrLinkName 은 ReadIn 의 이름이 링크이거나, 연 파일이 지금 그 이름이 가리키는 것과 다르다는 거부다(POK-574).
+// 루트 안의 다른 이름을 가리키는 링크는 os.Root 가 따라가 열어 버리므로, 같은 루트에 든 다른 호출자의 비밀을
+// 읽지 않게 이름 자체를 대조해 거부한다.
+var ErrLinkName = errors.New("링크이거나 여는 사이 바뀐 이름이다 — 루트 안 일반 파일 이름만 받는다")
 
 // Options 는 Read 의 선택지다.
 type Options struct {
@@ -59,11 +64,18 @@ func Read(envName, path string, opts Options) (string, error) {
 
 // ReadIn 은 root 안의 name 에서 비밀 값 한 줄을 읽는다(POK-574). 대리 창구가 토큰 디렉터리를 os.Root 로
 // 열고 호출자 이름마다 부른다 — 이름이 루트 밖으로 나가면(`..` · 루트 밖을 가리키는 링크 · 절대 경로)
-// os.Root 가 열기에서 거부한다. 루트 안을 가리키는 링크는 따라간다(os.Root 의 규칙). 링크 이름 자체를
-// 거부하려면 부르는 쪽이 먼저 root.Lstat 으로 가른다.
+// os.Root 가 열기에서 거부한다. 링크 이름은 루트 안을 가리켜도 거부한다(ErrLinkName) — 한 루트에 든 다른
+// 호출자의 비밀을 그 이름으로 읽지 않게 하려는 것이다.
 //
-// 연 뒤의 검사와 에러 규칙은 Read 와 같다. opts.ShowPath 가 참일 때 싣는 경로는 루트 이름(os.OpenRoot 에
-// 넘긴 값)과 name 을 이은 것이다.
+// 링크 거부는 열기 전 Lstat 이 아니라 연 뒤의 대조다. os.Root.OpenFile 은 부르는 쪽의 O_NOFOLLOW 를 마지막
+// 요소에 걸지 않고 링크를 루트 안에서 따라가므로(Go 1.27 os/root_unix.go), 먼저 Lstat 으로 가르면 Lstat 과
+// 열기 사이에 이름이 링크로 바뀌는 창이 남는다. 그래서 연 파일(fstat)과 지금 이름이 가리키는 것(Lstat)이
+// 같은 파일인지 os.SameFile 로 본다. 링크 이름이면 Lstat 은 링크 자신이라 다르고, 여는 사이 바뀌었어도
+// 다르다. 하드 링크는 가르지 않는다 — 이름 자리에 하드 링크를 만들려면 그 디렉터리의 쓰기 권한이 있어야 하고,
+// 그 권한이면 비밀 파일 자체를 바꿀 수 있다(대리 창구의 토큰 디렉터리는 root 소유 · 실행 계정 쓰기 없음).
+//
+// 연 뒤의 검사와 에러 규칙은 Read 와 같다(링크 거부도 연 뒤의 갈래다). opts.ShowPath 가 참일 때 싣는 경로는
+// 루트 이름(os.OpenRoot 에 넘긴 값)과 name 을 이은 것이다.
 func ReadIn(root *os.Root, envName, name string, opts Options) (string, error) {
 	// 비차단으로 여는 이유는 Read 와 같다(쓰는 쪽 없는 FIFO 에서 멈추지 않게).
 	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
@@ -71,7 +83,28 @@ func ReadIn(root *os.Root, envName, name string, opts Options) (string, error) {
 		return "", openFailed(envName, err)
 	}
 	defer f.Close()
-	return readOpened(f, envName, filepath.Join(root.Name(), name), opts)
+	path := filepath.Join(root.Name(), name)
+	if err := sameAsName(root, f, name); err != nil {
+		return "", fmt.Errorf("%s: %w", errorHead(envName, path, opts), opts.cause(err))
+	}
+	return readOpened(f, envName, path, opts)
+}
+
+// sameAsName 은 열린 f 가 지금 root 안 name 이 가리키는 파일 그 자체인지 본다(링크 아님 · 여는 사이 바뀌지
+// 않음). 아니면 ErrLinkName 이다.
+func sameAsName(root *os.Root, f *os.File, name string) error {
+	opened, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	named, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(opened, named) {
+		return ErrLinkName
+	}
+	return nil
 }
 
 // openFailed 는 열기 실패의 에러다. 경로는 싣지 않고 원인만 싣는다 — 비밀번호를 경로 자리에 잘못 넣으면
@@ -83,12 +116,7 @@ func openFailed(envName string, err error) error {
 // readOpened 는 열린 f 에 Read 의 규칙(일반 파일 · other 비트 · group 쓰기 · 4096 바이트 · 한 줄)을 걸고
 // 비밀번호 한 줄을 돌려준다. path 는 opts.ShowPath 가 참일 때 에러 머리에 싣는 경로다.
 func readOpened(f *os.File, envName, path string, opts Options) (string, error) {
-	// where 는 열린 뒤 갈래의 에러 머리다. ShowPath 가 참이면 「이름(경로)」 — 사이드카의 기존 문구와
-	// 바이트 단위로 같다.
-	where := envName
-	if opts.ShowPath {
-		where = envName + "(" + path + ")"
-	}
+	where := errorHead(envName, path, opts)
 	info, err := f.Stat()
 	if err != nil {
 		return "", fmt.Errorf("%s의 상태를 읽지 못했다: %w", where, opts.cause(err))
@@ -116,6 +144,15 @@ func readOpened(f *os.File, envName, path string, opts Options) (string, error) 
 		return "", fmt.Errorf("%s: %w", where, err)
 	}
 	return pass, nil
+}
+
+// errorHead 는 열린 뒤 갈래의 에러 머리다. ShowPath 가 참이면 「이름(경로)」 — 사이드카의 기존 문구와 바이트 단위로
+// 같다.
+func errorHead(envName, path string, opts Options) string {
+	if opts.ShowPath {
+		return envName + "(" + path + ")"
+	}
+	return envName
 }
 
 // cause 는 열린 뒤 갈래의 시스템 에러를 에러 문구에 실을 꼴로 돌려준다. ShowPath 가 거짓이면 경로를

@@ -29,6 +29,9 @@ func openTestRoot(t *testing.T, dir string) *os.Root {
 // ReadIn 은 Read 와 같은 검사(일반 파일 · other 비트 · group 쓰기 · 4096 바이트 · 한 줄)를 루트 안 이름에
 // 건다. 루트 밖으로 나가는 이름(`..` · 루트 밖을 가리키는 링크)은 os.Root 가 거부한다. 탈출 두 사례는 루트
 // 밖에 받아들일 만한 비밀번호 파일을 실제로 둔다 — 경로를 이어 붙여 여는 구현이면 그 파일을 읽어 받아들인다.
+// 루트 안 다른 이름을 가리키는 링크도 거부한다(ErrLinkName) — 대상(ok)은 받아들일 만한 파일이라, 연 파일과
+// 이름을 대조하지 않는 구현이면 받아들인다. 여는 사이 이름이 링크로 바뀌는 경합의 결과 상태도 이 사례와 같다
+// (연 파일 ≠ 이름이 가리키는 것).
 func TestReadInAppliesReadChecksInsideRoot(t *testing.T) {
 	parent := t.TempDir()
 	writeSecret(t, parent, "outside", "pw\n", 0o400)
@@ -43,6 +46,9 @@ func TestReadInAppliesReadChecksInsideRoot(t *testing.T) {
 		t.Fatalf("링크 생성 실패: %v", err)
 	}
 	writeSecret(t, dir, "ok", "pw\n", 0o400)
+	if err := os.Symlink("ok", filepath.Join(dir, "alias")); err != nil {
+		t.Fatalf("링크 생성 실패: %v", err)
+	}
 	writeSecret(t, dir, "group-read", "pw\n", 0o440)
 	writeSecret(t, dir, "other", "pw\n", 0o604)
 	writeSecret(t, dir, "group-write", "pw\n", 0o620)
@@ -66,6 +72,7 @@ func TestReadInAppliesReadChecksInsideRoot(t *testing.T) {
 		{name: "missing", file: "missing", desc: "없는 이름", wantErr: true, wantIs: fs.ErrNotExist},
 		{name: "dotdot_escape", file: filepath.Join("..", "outside"), desc: "루트 밖 .. 이름", wantErr: true},
 		{name: "link_escape", file: "escape", desc: "루트 밖을 가리키는 링크", wantErr: true},
+		{name: "link_inside", file: "alias", desc: "루트 안 다른 이름을 가리키는 링크", wantErr: true, wantIs: ErrLinkName},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := ReadIn(root, secretEnv, c.file, Options{ShowPath: true})
