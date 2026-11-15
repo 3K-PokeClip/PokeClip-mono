@@ -73,9 +73,9 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   capture_heatmaps: false,
   capture_exceptions: false,
   capture_performance: false,
-  // 세션 녹화 (POK-358·572) — 화면을 다시 그릴 수 있을 만큼만 담고 사람·비밀값은 담지 않는다. 처리방침 2절은 아직 글자를 전부
-  // 가리던 때의 문장이라 운영 배포 전에 고쳐야 한다(docs/ANALYTICS.md 「세션 녹화」 🔴). 랜딩은 녹화하지 않는다. 로그인·OAuth
-  // 콜백·탈퇴 화면은 콘솔의 URL 차단 목록에서 뺀다
+  // 세션 녹화 (POK-358·572) — 화면을 다시 그릴 수 있을 만큼만 담고 사람·비밀값은 담지 않는다. 가림 규칙을 바꾸면 처리방침
+  // 2절과 그 검사(landing/scripts/check-legal.mjs)를 함께 고친다(docs/ANALYTICS.md 「세션 녹화」). 랜딩은 녹화하지 않는다.
+  // 로그인·OAuth 콜백·탈퇴 화면은 콘솔의 URL 차단 목록에서 뺀다
   disable_session_recording: !REPLAY,
   // 녹화에 브라우저 콘솔 로그를 담지 않는다. 정하지 않으면 원격 설정을 따르는데, 새 프로젝트는 콘솔 로그 녹화가
   // 켜져 있다(2026-10-17 원격 설정 확인) — 로그에 주소·응답이 찍힐 수 있다
