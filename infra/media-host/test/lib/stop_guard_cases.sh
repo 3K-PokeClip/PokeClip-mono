@@ -5,7 +5,9 @@
 # start_test 의 정지 스크립트 방어 사례(37 – 40) — down 이 실패하면 compose
 # 파일 없이 프로젝트 라벨로 컨테이너를 지우는 폴백, down · 폴백이 끝나지 않는
 # 동안 신호를 받아도 렌더(비밀)를 지우고 끝나는지, 끝나지 않는 폴백에 상한이
-# 있는지. start_test.sh 가 source 한다.
+# 있는지. 대리 창구 토큰 디렉터리 셋의 정리(사례 89 · 90 — 토큰 넷 · 그 임시
+# 파일 삭제 · 남으면 CLEANUP FAIL · 링크 디렉터리는 따라가지 않음)도 여기 있다.
+# start_test.sh 가 source 한다.
 # start_fixture.sh · harness.sh 와 start_test.sh 의 seed_runtime 을 쓴다.
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다.
@@ -16,6 +18,9 @@ readonly STOP_DOWN_HOLD=30
 readonly STOP_SIGNAL_TIMEOUT=10
 # 정지 스크립트의 폴백 docker 호출 한 번의 상한(초 — 스크립트의 값과 같다).
 readonly STOP_FALLBACK_LIMIT=10
+# 대리 창구 토큰 — RUNTIME_DIR 아래 디렉터리와 그 안의 파일 이름.
+readonly STOP_CRED_FILES=(cred-indexer/token cred-janitor/token
+  cred-relay/indexer cred-relay/janitor)
 
 #######################################
 # 첫 줄이 정한 하위 명령(ps · rm)인 가짜 docker 기록의 argv 를 한 줄씩 낸다
@@ -215,5 +220,105 @@ stop::case_fallback_bounded() {
     ok=1
   fi
   stop::expect_result 3 'MEDIA STOP fallback FAIL' || ok=1
+  return "${ok}"
+}
+
+#######################################
+# 정지 사례 준비 — 창구 디렉터리 셋에 토큰 넷과 끊긴 렌더의 임시 파일 꼴 잔여를
+# 둔다.
+# Globals:
+#   fixture_dir
+#######################################
+stop::seed_cred() {
+  local rel dir
+  for rel in "${STOP_CRED_FILES[@]}"; do
+    dir="${fixture_dir}/runtime/${rel%/*}"
+    mkdir -p -- "${dir}"
+    printf 'pcbench-cred-token' >"${dir}/${rel##*/}"
+    printf 'partial' >"${dir}/.${rel##*/}.AbC123"
+    chmod 0400 "${dir}/${rel##*/}"
+  done
+}
+
+#######################################
+# 사례 89 — 정지: 창구 토큰 넷과 그 임시 파일을 지우고 디렉터리는 남긴다. 토큰이
+# 남으면(지울 수 없는 디렉터리) 그 디렉터리를 CLEANUP FAIL 로 적는다.
+# Globals:
+#   fixture_dir, fixture_status
+#######################################
+stop::case_cred_cleanup() {
+  local ok=0 rel dir status=0
+  fixture::new_case
+  fixture::base_env
+  stop::seed_cred
+  fixture::run stop-media.sh -- --cleanup-only || return 1
+  if (( fixture_status != 0 )) || [[ "$(fixture::runtime_files)" != 0 ]]; then
+    harness::add_reason "정지 뒤 종료 ${fixture_status} · RUNTIME_DIR 파일 \
+$(fixture::runtime_files)개(기대 0 · 0): $(harness::log_tail \
+"${fixture_dir}/out")"
+    ok=1
+  fi
+  for rel in "${STOP_CRED_FILES[@]}"; do
+    if [[ ! -d "${fixture_dir}/runtime/${rel%/*}" ]]; then
+      harness::add_reason "창구 디렉터리 ${rel%/*} 가 사라짐"
+      ok=1
+    fi
+  done
+  if [[ "$(id -u)" == 0 ]]; then
+    harness::add_reason 'root 로 돌아 쓰기 불가 디렉터리를 흉내 낼 수 없음(판정 불가)'
+    return 1
+  fi
+  fixture::new_case
+  fixture::base_env
+  stop::seed_cred
+  dir="${fixture_dir}/runtime/cred-relay"
+  chmod 0500 "${dir}"
+  fixture::run stop-media.sh -- --cleanup-only || status=1
+  chmod 0700 "${dir}"
+  (( status == 0 )) || return 1
+  if (( fixture_status == 0 )) || ! grep -q -F -x -- \
+    "MEDIA STOP CLEANUP FAIL ${dir}" "${fixture_dir}/out"; then
+    harness::add_reason "중계 토큰이 남았는데 CLEANUP FAIL 이 아님(종료 \
+${fixture_status}): $(harness::log_tail "${fixture_dir}/out")"
+    ok=1
+  fi
+  if [[ -e "${fixture_dir}/runtime/cred-indexer/token" ]]; then
+    harness::add_reason '중계 쪽 실패 때문에 소비자 토큰을 지우지 않음'
+    ok=1
+  fi
+  return "${ok}"
+}
+
+#######################################
+# 사례 90 — 정지: 창구 디렉터리가 링크면 따라가 지우지 않고 CLEANUP FAIL 로
+# 적는다. 링크 대상의 파일은 그대로다.
+# Globals:
+#   fixture_dir, fixture_status
+#######################################
+stop::case_cred_link() {
+  local ok=0 name dir elsewhere
+  for name in cred-indexer cred-janitor cred-relay; do
+    fixture::new_case
+    fixture::base_env
+    elsewhere="${fixture_dir}/elsewhere"
+    mkdir -p -- "${elsewhere}" "${fixture_dir}/runtime"
+    printf 'keep' >"${elsewhere}/token"
+    printf 'keep' >"${elsewhere}/indexer"
+    printf 'keep' >"${elsewhere}/janitor"
+    dir="${fixture_dir}/runtime/${name}"
+    ln -s -- "${elsewhere}" "${dir}"
+    fixture::run stop-media.sh -- --cleanup-only || return 1
+    if (( fixture_status == 0 )) || ! grep -q -F -x -- \
+      "MEDIA STOP CLEANUP FAIL ${dir}" "${fixture_dir}/out"; then
+      harness::add_reason "${name} 링크인데 CLEANUP FAIL 이 아님(종료 \
+${fixture_status}): $(harness::log_tail "${fixture_dir}/out")"
+      ok=1
+    fi
+    if [[ "$(find "${elsewhere}" -type f | awk 'END { print NR }')" != 3 ]]
+    then
+      harness::add_reason "${name} 링크: 링크 대상의 파일이 지워짐"
+      ok=1
+    fi
+  done
   return "${ok}"
 }

@@ -5,14 +5,16 @@
 # chown · aws)이 남긴 기록을 읽는다.
 #
 # 사례 디렉터리:
-#   bin/            PATH 의 맨 앞 — start_fakebin 의 docker · chown 과 fakebin 의
-#                   aws · docker-credential-ecr-login 을 가리키는 링크.
+#   bin/            PATH 의 맨 앞 — start_fakebin 의 docker · chown · ip 와
+#                   fakebin 의 aws · docker-credential-ecr-login 을 가리키는
+#                   링크.
 #
 # PATH 의 뒤쪽은 호스트 디렉터리(/usr/bin · /bin)가 아니라 그 안의 명령에서 가짜가
 # 맡는 이름(FIXTURE_FAKE_NAMES)을 뺀 링크 모음(fixture::make_sysbin)이다. 호스트에
 # 실물 docker · aws · 자격 도우미가 깔려 있어도(GitHub ubuntu 러너는 자격 도우미가
 # /usr/bin 에 있다) 가짜를 뺀 사례의 「없음」 이 실물로 가려지지 않는다.
-#   log/            가짜 명령 기록(<명령>.<n>.argv · <명령>.<n>.env).
+#   log/            가짜 명령 기록(<명령>.<n>.argv · <명령>.<n>.env — ip 는
+#                   .env 대신 .state).
 #   docker-config/  config.json(credHelpers 에 시험 레지스트리 호스트).
 #   sidecar.env     상자 스위치 파일(PLAYBACK_ROUND_KEYS=false — compose 파일
 #                   옆 자리).
@@ -41,7 +43,7 @@ readonly FIXTURE_API_PASS_TOKEN='@@MTX_API_PASS@@'
 readonly FIXTURE_PREREQ_ORDER="compose-version ecr-credential-helper \
 docker-config"
 # 가짜가 맡는 명령 이름 — 호스트 명령 링크 모음에 넣지 않는다.
-readonly FIXTURE_FAKE_NAMES='docker chown aws docker-credential-ecr-login'
+readonly FIXTURE_FAKE_NAMES='docker chown ip aws docker-credential-ecr-login'
 
 fixture_root=""
 fixture_sysbin=""
@@ -90,6 +92,7 @@ fixture::new_case() {
     "${fixture_dir}/docker-config" "${fixture_dir}/home"
   ln -s -- "${TEST_DIR}/start_fakebin/docker" "${fixture_dir}/bin/docker"
   ln -s -- "${TEST_DIR}/start_fakebin/chown" "${fixture_dir}/bin/chown"
+  ln -s -- "${TEST_DIR}/start_fakebin/ip" "${fixture_dir}/bin/ip"
   ln -s -- "${TEST_DIR}/fakebin/aws" "${fixture_dir}/bin/aws"
   if (( with_helper )); then
     ln -s -- "${TEST_DIR}/fakebin/docker-credential-ecr-login" \

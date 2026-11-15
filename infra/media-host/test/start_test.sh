@@ -12,7 +12,11 @@
 # lib/start_sidecar_env_cases.sh)과 기동 전 검사(사이드카 라벨 · timing-preflight
 # — 사례 65 – 69 는 lib/start_timing_cases.sh)와 60일 만료 창구 토큰(받기 성공 ·
 # 실패 · 링크 · 정지 · 상속 export · 응답기 모드 — 사례 70 – 76 은
-# lib/start_clip_expiry_cases.sh).
+# lib/start_clip_expiry_cases.sh)과 대리 창구 켬 상자(토큰 묶음 · 주소 걸음 ·
+# 모드 꼴 · 두 번째 묶음의 빈 목록 — 사례 77 – 86 은
+# lib/start_cred_relay_cases.sh, 켬 상자 기동 전 검사 87 · 88 은
+# lib/start_timing_cases.sh, 창구 토큰 정지 정리 89 · 90 은
+# lib/stop_guard_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -58,6 +62,8 @@ source "${TEST_DIR}/lib/start_sidecar_env_cases.sh"
 source "${TEST_DIR}/lib/start_timing_cases.sh"
 # shellcheck source=lib/start_clip_expiry_cases.sh
 source "${TEST_DIR}/lib/start_clip_expiry_cases.sh"
+# shellcheck source=lib/start_cred_relay_cases.sh
+source "${TEST_DIR}/lib/start_cred_relay_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -74,7 +80,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=76
+readonly CASE_COUNT=90
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -927,6 +933,34 @@ main() {
     clip_expiry::case_inherited_export
   harness::run_case 76 '만료 토큰 — 응답기 모드에서도 사이드카 0400' \
     clip_expiry::case_responder_mode
+  harness::run_case 77 '창구 켬 — 주소 셋 up 앞 · 토큰 넷 · 디렉터리 소유 · 권한' \
+    cred_relay::case_default
+  harness::run_case 78 '창구 끔 — ip 0 · 창구 디렉터리 0 · up argv 그대로' \
+    cred_relay::case_off
+  harness::run_case 79 'cred-relay 줄 꼴 밖(둘 · 뒤 공백 · 같은 줄 값) → 막음' \
+    cred_relay::case_mode_mismatch
+  harness::run_case 80 '응답기 모드 + 켬 — 파일 열의 경로 · 소유 · 내용' \
+    cred_relay::case_responder_mode
+  harness::run_case 81 '토큰 묶음 — 목록이 남아 있으면 cred-relay-list' \
+    cred_relay::case_list_not_empty
+  harness::run_case 82 '창구 디렉터리 링크 → cred-relay-dir · 대상 보존' \
+    cred_relay::case_dir_link
+  harness::run_case 83 '주소 걸음 실패 → cred-relay address · up 0' \
+    cred_relay::case_address_failure
+  harness::run_case 84 '창구 토큰 생성 실패 → 막음 · 창구 파일 0' \
+    cred_relay::case_token_unavailable
+  harness::run_case 85 '두 번째 기동(링크 있음) — 주소만 다시 · 새 토큰' \
+    cred_relay::case_rerun
+  harness::run_case 86 '창구 토큰 — 제 파일 밖 노출 0 · 상속 export' \
+    cred_relay::case_no_leak
+  harness::run_case 87 '켬 상자 판 2 없음(none · invalid · null) → 즉시 막음' \
+    timing::case_cred_relay_blocked
+  harness::run_case 88 '켬 상자 판 2 있음 → 검사 서비스 없이 up' \
+    timing::case_cred_relay_v2
+  harness::run_case 89 'stop — 창구 토큰 · 임시 파일 삭제 · 남으면 CLEANUP FAIL' \
+    stop::case_cred_cleanup
+  harness::run_case 90 'stop — 창구 디렉터리 링크 → CLEANUP FAIL · 대상 보존' \
+    stop::case_cred_link
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
