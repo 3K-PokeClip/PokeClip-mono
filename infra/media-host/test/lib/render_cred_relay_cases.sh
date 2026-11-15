@@ -44,6 +44,8 @@ readonly CRED_COMMENT_MARK='대리 창구'
 #   cred_env        — 소비자 env 셋(SDK 컨테이너 자격 경로 · IMDS 끔).
 #   cred_bind($c)   — 소비자 토큰 디렉터리 bind 「원본 대상 ro」.
 #   cred_relay_bind · cred_relay_env — 중계의 bind 와 env 정확 집합.
+#   cred_norm_path  — 절대 경로를 글자로 정규화(빈 토막 · `.` 지움, `..` 은 한
+#                     토막 위로). 링크는 풀지 않는다.
 # render_test 의 JQ_DEFS 가 읽는다. jq 프로그램이라 $ 는 jq 변수다.
 # shellcheck disable=SC2016,SC2034
 readonly CRED_JQ_DEFS='
@@ -63,6 +65,10 @@ def cred_relay_env:
   {CRED_RELAY_LISTEN: "169.254.170.2:9911",
    CRED_RELAY_CALLER_DIR: "/run/secrets/cred-relay",
    CRED_RELAY_CALLERS: "indexer,janitor"};
+def cred_norm_path:
+  reduce (split("/")[] | select(. != "" and . != ".")) as $p ([];
+    if $p == ".." then .[:-1] else . + [$p] end)
+  | "/" + join("/");
 '
 
 cred_setup_reason=""
@@ -209,7 +215,10 @@ cred_cases::check_61() {
 # bind 대상 안의 토큰 이름이며, 중계의 호출자 목록 · 디렉터리 env 는 시작
 # 스크립트의 호출자 차례 · 중계 bind 대상과 같다. 어느 갈래에서도 RUNTIME_DIR
 # 이나 그 조상을 bind 원본으로 쓰는 서비스가 없다(토큰 디렉터리를 통째로 보는
-# 길 — 설계 정정 E12).
+# 길 — 설계 정정 E12). 조상 대조는 원본을 글자로 정규화한 뒤 한다(`//` · `.` ·
+# `..`). 링크로 같은 곳을 가리키는 원본(`/var/run` 등)과 이름 있는 볼륨의
+# driver_opts.device bind 는 글자 대조로 못 잡는다 — 그 길은 사례 7(서비스별
+# 볼륨 정확 목록)이 받친다.
 #######################################
 cred_cases::check_62() {
   local ok=0 v callers caller service want=""
@@ -256,7 +265,7 @@ cred_cases::check_62() {
     cred_cases::expect_none "${v}" '
       $c.services | to_entries[] | .key as $s
       | (.value.volumes // [])[] | select(.type == "bind")
-      | (.source | rtrimstr("/") | if . == "" then "/" else . end) as $src
+      | (.source | cred_norm_path) as $src
       | select($src == "/" or $src == $run
           or ($run | startswith("\($src)/")))
       | "RUNTIME_DIR 조상 bind: \($s) \(.source)"' \
@@ -267,7 +276,9 @@ cred_cases::check_62() {
 
 #######################################
 # 사례 63(RC4) — 소비자(사이드카 · janitor)는 중계에 depends_on
-# (service_started)이고, 소비자가 아닌 서비스는 중계에 기대지 않는다.
+# (service_started)이고, 소비자가 아닌 서비스는 중계에 기대지 않는다. 그 의존에
+# restart 는 없거나 false 다 — 중계를 다시 띄워도 소비자는 다시 띄우지 않는다
+# (compose 템플릿 주석의 계약 · 자격은 다음 요청에서 다시 받는다).
 #######################################
 cred_cases::check_63() {
   local ok=0 v
@@ -283,7 +294,11 @@ cred_cases::check_63() {
           | select(.value.depends_on["cred-relay"] != null) | .key]) as $any
       | (($consumers - $deps)[] | "depends_on cred-relay 없음: \(.)"),
         (($any - $consumers)[]
-         | "소비자 아닌 서비스의 depends_on cred-relay: \(.)")' || ok=1
+         | "소비자 아닌 서비스의 depends_on cred-relay: \(.)"),
+        ($consumers[] as $s
+         | $c.services[$s].depends_on["cred-relay"].restart // false
+         | select(. != false)
+         | "중계 재기동이 소비자로 번짐(depends_on restart \(.)): \($s)")' || ok=1
   done
   return "${ok}"
 }

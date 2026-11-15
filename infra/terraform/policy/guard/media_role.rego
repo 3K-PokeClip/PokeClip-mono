@@ -28,7 +28,8 @@
 #    인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 · 정책 문서뿐이라 정책
 #    조회 · 고객 관리 정책 · awscc · CloudFormation 스택이 걸린다), 최상위 블록은
 #    Terraform 설정 종류만(ephemeral · action · check 등 금지), module 은 prod/media
-#    의 ../../modules/media_host 하나, 공급자는 hashicorp/aws 하나.
+#    의 ../../modules/media_host 하나(그 블록의 instances = var.instances 정확히),
+#    공급자는 hashicorp/aws 하나.
 # ⑤ 관리형 정책 연결은 주소 managed 하나 · for_each = local.managed_policy_arns ·
 #    policy_arn = each.value 이고, 그 지역값은 키 · 값 모두 SSM Core 하나다.
 # ⑥ IAM 자원 · 정책 문서 · statement 는 허용 속성만 쓴다(유형마다 정한 키 +
@@ -46,7 +47,8 @@
 #    http_tokens = "required" 리터럴을 명시한다(IMDSv2 — 없음 · 식 · dynamic 위반).
 #    그 블록의 http_put_response_hop_limit 은 리터럴 1 또는 키별 스위치 식
 #    ${each.value.cred_relay ? 1 : 2} 정확히, http_protocol_ipv6 은 리터럴
-#    "disabled" 다(POK-574 대리 창구 — 켬 키 컨테이너의 IMDS 차단).
+#    "disabled" 다(POK-574 대리 창구 — 켬 키 컨테이너의 IMDS 차단). 스위치
+#    식이 읽는 each.value 의 출처는 상자의 for_each = var.instances 정확히다.
 # ⑨ statement actions 에 iam · sts 동작은 없다(서비스째 — 아래 규칙 주석).
 # ⑩ 자원 본문에 provisioner · connection 은 없다(dynamic 포함).
 #
@@ -338,6 +340,25 @@ deny contains msg if {
 	msg := sprintf("R10 %s: module %q — 대상 경로의 module 은 prod/media 의 ../../modules/media_host 만", [file.path, name])
 }
 
+# 상자 for_each 와 같은 출처 고정(아래 홉 스위치 절). 루트가 media_host 에
+# 넘기는 instances 를 가공(merge 로 cred_relay 덮기 등)하면 tfvars 와 다른 홉으로
+# 뜬다. source 가 다른 module 은 위 규칙 하나만 알린다.
+instances_reference := "${var.instances}"
+
+deny contains msg if {
+	some file in input
+	some dir, sources in allowed_module_sources
+	in_dir(file.path, dir)
+	some name, bodies in file.contents.module
+	some body in bodies
+	object.get(body, "source", null) in sources
+	object.get(body, "instances", null) != instances_reference
+	msg := sprintf(
+		"R10 %s: module %q 의 instances 는 var.instances 만(키별 cred_relay 스위치를 루트에서 가공하지 않는다)",
+		[file.path, name],
+	)
+}
+
 # 공급자는 hashicorp/aws 하나 — provider 블록 이름 · required_providers 항목 모두.
 deny contains msg if {
 	some file in input
@@ -581,6 +602,18 @@ deny contains msg if {
 	msg := sprintf(
 		"R10 %s: %s 의 metadata_options 에 http_put_response_hop_limit = 1 또는 %s 명시 필요(2 · 변수 · 다른 식 금지 — 켬 키 컨테이너의 IMDS 차단)",
 		[decl.path, label(decl), imds_hop_switch_expr],
+	)
+}
+
+# 스위치 식이 읽는 each.value 의 출처를 묶는다 — for_each 를 가공(merge 로
+# cred_relay 덮기 등)하면 tfvars 와 다른 홉 · user_data 로 뜬다. 다른 변수 · 지역값 ·
+# 없음(count 상자)도 같다. 식은 conftest hcl2 문자열로 정확히 대조한다.
+deny contains msg if {
+	some decl in media_instances
+	object.get(decl.body, "for_each", null) != instances_reference
+	msg := sprintf(
+		"R10 %s: %s 의 for_each 는 var.instances 만(홉 스위치 each.value.cred_relay 의 출처)",
+		[decl.path, label(decl)],
 	)
 }
 
