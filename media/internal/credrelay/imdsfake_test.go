@@ -55,6 +55,7 @@ type fakeIMDS struct {
 	credsStatus int           // 0 이 아니면 역할 자격 요청에 이 상태만 낸다
 	tokenStatus int           // 0 이 아니면 토큰 PUT 에 이 상태만 내고, 토큰 없는 요청(IMDSv1)에도 답한다
 	bodyDelay   time.Duration // 머리는 바로, 본문은 이만큼 늦게(토큰 PUT · 역할 GET 둘 다 — 계획 E11)
+	headerDelay time.Duration // 모든 요청에 머리를 이만큼 늦게
 }
 
 // newFakeIMDS 는 역할 하나 · 카나리아 자격 · 만료 expires 를 내는 서버를 띄운다.
@@ -82,8 +83,16 @@ func (f *fakeIMDS) source(now func() time.Time) aws.CredentialsProvider {
 
 func (f *fakeIMDS) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
-	roles, creds, credsStatus, tokenStatus, delay := f.roles, f.creds, f.credsStatus, f.tokenStatus, f.bodyDelay
+	roles, creds, credsStatus, tokenStatus, delay, headerDelay := f.roles, f.creds, f.credsStatus, f.tokenStatus, f.bodyDelay, f.headerDelay
 	f.mu.Unlock()
+
+	if headerDelay > 0 {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(headerDelay):
+		}
+	}
 
 	if r.Method == http.MethodPut && r.URL.Path == imdsTokenPath {
 		if tokenStatus != 0 {

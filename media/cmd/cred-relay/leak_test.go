@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"testing"
@@ -9,20 +8,21 @@ import (
 
 // 조립 경로(run → serve → credrelay → http.Server)의 stdout · stderr 에 비밀이 없다(c2 보안 검수의 c3 몫 · P10).
 // 원천 실패(IMDS 오류 본문 · 경로가 카나리아) · 성공 · 거부 둘 · 404 · 405 · 서버 자신의 에러(Accept 실패 원문이
-// 카나리아)를 모두 지난다. IMDS 실패는 캐시가 없는 첫 기동에서만 원천까지 가므로 기동을 둘로 나눈다.
+// 카나리아)를 모두 지난다. IMDS 실패는 캐시가 없는 첫 기동에서만 원천까지 가므로 기동을 둘로 나눈다. serve 는
+// 자식 프로세스로 띄워 프로세스의 stdout · stderr 를 본다(c3 cx) — 기본 log · os.Stderr 로 새는 쓰기도 잡는다.
 func TestNoSecretOnAssemblyPath(t *testing.T) {
 	var stdout, stderr lockedBuffer
 	imds := newFakeIMDS(t)
 
 	imds.setFailing(true)
-	serveOnce(t, imds.srv.URL, &stdout, &stderr, func(addr string) {
+	serveProcess(t, imds.srv.URL, &stdout, &stderr, func(addr string) {
 		if code, _ := getCreds(t, addr, canaryIndexerToken); code != http.StatusServiceUnavailable {
 			t.Errorf("원천 실패 = %d, want 503", code)
 		}
 	})
 
 	imds.setFailing(false)
-	serveOnce(t, imds.srv.URL, &stdout, &stderr, func(addr string) {
+	serveProcess(t, imds.srv.URL, &stdout, &stderr, func(addr string) {
 		if code, _ := getCreds(t, addr, canaryJanitorToken); code != http.StatusOK {
 			t.Errorf("토큰 맞음 = %d, want 200", code)
 		}
@@ -52,22 +52,7 @@ func TestNoSecretOnAssemblyPath(t *testing.T) {
 	assertNoCanary(t, "stdout", logs)
 	assertNoCanary(t, "stderr", stderr.String())
 	if stderr.String() != "" {
-		t.Errorf("stderr 에 %d바이트를 썼다 — 서버 에러가 기본 log 로 샜다", len(stderr.String()))
-	}
-}
-
-// serveOnce 는 첫 Accept 가 카나리아를 실은 일시 오류인 리스너로 serve 를 띄워 do 를 부르고 멈춘다.
-func serveOnce(t *testing.T, imdsURL string, stdout, stderr *lockedBuffer, do func(addr string)) {
-	t.Helper()
-	ln := &flakyListener{Listener: localListener(t)}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := startServe(t, ctx, testSite(ln, imdsURL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), stdout, stderr)
-	addr := ln.Addr().String()
-	waitHealthy(t, addr)
-	do(addr)
-	cancel()
-	if code := waitExit(t, done); code != 0 {
-		t.Errorf("serve 종료 = %d, want 0", code)
+		t.Errorf("프로세스 stderr 에 %d바이트를 썼다 — 서버 에러가 기본 log 로 샜다", len(stderr.String()))
 	}
 }
 

@@ -3,16 +3,19 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/credrelay"
 )
 
 // serve 를 고루틴으로 돌리고 끝난 종료 코드를 받는 채널을 돌려준다.
-func startServe(t *testing.T, ctx context.Context, s site, env map[string]string, stdout, stderr *lockedBuffer) <-chan int {
+func startServe(ctx context.Context, t *testing.T, s site, env map[string]string, stdout, stderr *lockedBuffer) <-chan int {
 	t.Helper()
 	done := make(chan int, 1)
 	go func() { done <- run(ctx, s, nil, getenvFrom(env), stdout, stderr) }()
@@ -31,7 +34,8 @@ func waitExit(t *testing.T, done <-chan int) int {
 }
 
 // 설정이 꼴 밖이면 리스너를 열지 않고 cred_relay_failed reason=config 로 종료 1 이다. 줄에는 변수 이름만 싣는다.
-// 듣는 주소는 IPv4 링크 로컬(169.254.0.0/16)만 받는다 — 모든 주소 · 루프백 · 사설 주소 · IPv6 는 거부다.
+// 듣는 주소는 IPv4 링크 로컬(169.254.0.0/16)만 받는다 — 모든 주소 · 루프백 · 사설 주소 · IPv6(IPv4 를 사상한
+// 꼴 포함) · zone 붙은 주소는 거부다.
 func TestServeRejectsConfig(t *testing.T) {
 	dir := defaultCallerDir(t)
 	for _, tc := range []struct {
@@ -47,6 +51,8 @@ func TestServeRejectsConfig(t *testing.T) {
 		{name: "listen_루프백", mutate: func(e map[string]string) { e[envListen] = "127.0.0.1:9911" }, wantEnv: envListen},
 		{name: "listen_사설_주소", mutate: func(e map[string]string) { e[envListen] = "10.0.1.5:9911" }, wantEnv: envListen},
 		{name: "listen_v6_링크_로컬", mutate: func(e map[string]string) { e[envListen] = "[fe80::1]:9911" }, wantEnv: envListen},
+		{name: "listen_v4_사상_v6", mutate: func(e map[string]string) { e[envListen] = "[::ffff:169.254.170.2]:9911" }, wantEnv: envListen},
+		{name: "listen_zone_붙은_v4", mutate: func(e map[string]string) { e[envListen] = "169.254.170.2%lo:9911" }, wantEnv: envListen},
 		{name: "dir_없음", mutate: func(e map[string]string) { delete(e, envCallerDir) }, wantEnv: envCallerDir},
 		{name: "dir_상대_경로", mutate: func(e map[string]string) { e[envCallerDir] = "run/secrets/cred-relay" }, wantEnv: envCallerDir},
 		{name: "dir_정리_안_됨", mutate: func(e map[string]string) { e[envCallerDir] = "/run/secrets/../cred-relay" }, wantEnv: envCallerDir},
@@ -138,7 +144,7 @@ func TestServeAnswersAndStopsOnTERM(t *testing.T) {
 	imds := newFakeIMDS(t)
 	ln := localListener(t)
 	var stdout, stderr lockedBuffer
-	done := startServe(t, context.Background(), testSite(ln, imds.srv.URL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), &stdout, &stderr)
+	done := startServe(context.Background(), t, testSite(ln, imds.srv.URL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), &stdout, &stderr)
 	addr := ln.Addr().String()
 	waitHealthy(t, addr)
 
@@ -177,12 +183,119 @@ func TestServeAnswersAndStopsOnTERM(t *testing.T) {
 	}
 }
 
+// 처리 중인 요청은 SIGTERM 뒤에도 끝까지 답한다(종료 유예 — c3 cx). 원천(IMDS 역할 자격)이 늦는 사이 TERM 이
+// 오면 그 요청이 200 을 받고, 중계는 graceful=true 로 종료 0 이다. 유예 없이 바로 닫으면 그 요청이 끊긴다.
+func TestServeFinishesInFlightRequestOnTERM(t *testing.T) {
+	imds := newFakeIMDS(t)
+	asked := imds.slowCreds(500 * time.Millisecond)
+	ln := localListener(t)
+	var stdout, stderr lockedBuffer
+	done := startServe(context.Background(), t, testSite(ln, imds.srv.URL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), &stdout, &stderr)
+	addr := ln.Addr().String()
+	waitHealthy(t, addr)
+
+	status := make(chan int, 1)
+	go func() { status <- credsStatus(addr, canaryIndexerToken) }()
+	select {
+	case <-asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("자격 요청이 5초 안에 원천에 닿지 않았다")
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-status:
+		if code != http.StatusOK {
+			t.Errorf("TERM 때 처리 중이던 요청 = %d, want 200 (-1 은 연결이 끊김)", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("처리 중이던 요청이 5초 안에 끝나지 않았다")
+	}
+	if code := waitExit(t, done); code != 0 {
+		t.Errorf("SIGTERM 뒤 종료 = %d, want 0", code)
+	}
+	if stopped := events(t, stdout.String(), "cred_relay_stopped"); len(stopped) != 1 || stopped[0]["graceful"] != true {
+		t.Errorf("cred_relay_stopped = %v, want 한 줄 graceful=true", stopped)
+	}
+}
+
+// 종료 유예(ShutdownGrace)를 넘겨도 끝나지 않는 요청은 유예 뒤에 끊고, graceful=false 로 종료 0 이다.
+func TestServeUntilDoneClosesAfterGrace(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	stuck := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		entered <- struct{}{}
+		<-release // 요청 ctx 도 보지 않는다 — 유예 안에 스스로 끝나지 않는 처리기
+	})
+	var stdout lockedBuffer
+	logger := newLogger(&stdout)
+	ln := localListener(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	exited := make(chan int, 1)
+	go func() { exited <- serveUntilDone(ctx, newServer(ln.Addr().String(), stuck, logger), ln, logger) }()
+
+	reqErr := make(chan error, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
+		if err == nil {
+			var resp *http.Response
+			if resp, err = http.DefaultClient.Do(req); err == nil {
+				_ = resp.Body.Close()
+			}
+		}
+		reqErr <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("요청이 5초 안에 처리기에 닿지 않았다")
+	}
+	start := time.Now()
+	cancel()
+	if code := waitExit(t, exited); code != 0 {
+		t.Errorf("유예 초과 뒤 종료 = %d, want 0", code)
+	}
+	if took := time.Since(start); took < credrelay.ShutdownGrace {
+		t.Errorf("%v 만에 끝났다, want 유예 %v 이상 기다림", took, credrelay.ShutdownGrace)
+	}
+	select {
+	case err := <-reqErr:
+		if err == nil {
+			t.Error("유예를 넘긴 요청이 끊기지 않고 답을 받았다")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("유예를 넘긴 요청이 종료 뒤 2초 안에 끊기지 않았다")
+	}
+	if stopped := events(t, stdout.String(), "cred_relay_stopped"); len(stopped) != 1 || stopped[0]["graceful"] != false {
+		t.Errorf("cred_relay_stopped = %v, want 한 줄 graceful=false", stopped)
+	}
+}
+
+// credsStatus 는 token 으로 자격을 묻고 상태 코드를 돌려준다. 답을 받지 못하면 -1 이다(고루틴에서 부른다).
+func credsStatus(addr, token string) int {
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/v1/credentials", nil)
+	if err != nil {
+		return -1
+	}
+	req.Header.Set("Authorization", token)
+	resp, err := testClient.Do(req)
+	if err != nil {
+		return -1
+	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return -1
+	}
+	return resp.StatusCode
+}
+
 // 부르는 쪽 ctx 가 끝나도 같은 정상 종료다.
 func TestServeStopsOnContextCancel(t *testing.T) {
 	ln := localListener(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var stdout, stderr lockedBuffer
-	done := startServe(t, ctx, testSite(ln, newFakeIMDS(t).srv.URL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), &stdout, &stderr)
+	done := startServe(ctx, t, testSite(ln, newFakeIMDS(t).srv.URL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), &stdout, &stderr)
 	waitHealthy(t, ln.Addr().String())
 	cancel()
 	if code := waitExit(t, done); code != 0 {
@@ -197,7 +310,7 @@ func TestServeStopsOnContextCancel(t *testing.T) {
 func TestServeFailsWhenListenerDies(t *testing.T) {
 	ln := localListener(t)
 	var stdout, stderr lockedBuffer
-	done := startServe(t, context.Background(), testSite(ln, newFakeIMDS(t).srv.URL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), &stdout, &stderr)
+	done := startServe(context.Background(), t, testSite(ln, newFakeIMDS(t).srv.URL), relayEnv("169.254.170.2:9911", defaultCallerDir(t)), &stdout, &stderr)
 	waitHealthy(t, ln.Addr().String())
 	_ = ln.Close()
 	if code := waitExit(t, done); code != 1 {

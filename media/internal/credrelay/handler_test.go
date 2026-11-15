@@ -1,10 +1,12 @@
 package credrelay
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,7 +60,7 @@ func TestServedHeaders(t *testing.T) {
 	}
 }
 
-// 원천이 처음부터 실패하면 503 고정 본문이다.
+// 원천이 처음부터 실패하면 503 고정 본문이고, 저하 줄은 내지 않는다.
 func TestUnavailableWithoutLastValid(t *testing.T) {
 	r := newRelay(t, 6*time.Hour)
 	r.imds.update(func(f *fakeIMDS) { f.credsStatus = http.StatusNotFound })
@@ -71,6 +73,10 @@ func TestUnavailableWithoutLastValid(t *testing.T) {
 	}
 	if got := r.logs.events(t, "cred_unavailable"); len(got) != 1 || got[0]["caller"] != "indexer" {
 		t.Errorf("cred_unavailable = %v, want caller=indexer 한 줄", got)
+	}
+	// 저하(마지막 유효분으로 버팀)는 L 이 있을 때만이다 — 줄 것이 없는 실패는 저하가 아니다.
+	if got := r.logs.events(t, "cred_source_degraded"); len(got) != 0 {
+		t.Errorf("L 없는 원천 실패에 cred_source_degraded = %v, want 없음", got)
 	}
 }
 
@@ -113,11 +119,11 @@ func TestDeniedLogIsRateLimited(t *testing.T) {
 	}
 }
 
-// 서버 상한(머리 1초 · 쓰기 3초 · 머리 8 KiB)과 keep-alive 끔(응답이 연결을 닫음).
+// 서버 상한(머리 1초 · 요청 3초 · 쓰기 3초 · 머리 8 KiB)과 keep-alive 끔(응답이 연결을 닫음).
 func TestNewServerLimits(t *testing.T) {
 	srv := NewServer("127.0.0.1:0", http.NotFoundHandler())
-	if srv.ReadHeaderTimeout != readHeaderTimeout || srv.WriteTimeout != writeTimeout || srv.MaxHeaderBytes != maxHeaderBytes {
-		t.Errorf("NewServer 상한 = (%v, %v, %d), want (%v, %v, %d)", srv.ReadHeaderTimeout, srv.WriteTimeout, srv.MaxHeaderBytes, readHeaderTimeout, writeTimeout, maxHeaderBytes)
+	if srv.ReadHeaderTimeout != readHeaderTimeout || srv.ReadTimeout != readTimeout || srv.WriteTimeout != writeTimeout || srv.MaxHeaderBytes != maxHeaderBytes {
+		t.Errorf("NewServer 상한 = (%v, %v, %v, %d), want (%v, %v, %v, %d)", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.MaxHeaderBytes, readHeaderTimeout, readTimeout, writeTimeout, maxHeaderBytes)
 	}
 	base := startServer(t, NewServer("", newRelay(t, 6*time.Hour).h))
 	resp, err := http.Get(base + HealthPath)
@@ -127,6 +133,29 @@ func TestNewServerLimits(t *testing.T) {
 	resp.Body.Close()
 	if !resp.Close {
 		t.Error("응답이 연결을 닫지 않는다 — keep-alive 를 꺼야 한다")
+	}
+}
+
+// 본문을 선언하고 보내지 않는 연결은 읽기 상한 안에 닫힌다(c2 보안 M). 처리기가 204 를 다 쓴 뒤에도 서버는
+// 읽지 않은 본문을 마저 읽으려 기다리는데, 읽기 상한이 없으면 인증 없는 이웃이 연결 수만큼 고루틴 · fd 를
+// 끝없이 붙들 수 있다. 쓰기 상한 · keep-alive 끔으로는 닫히지 않는다.
+func TestNewServerClosesConnWithUnsentBody(t *testing.T) {
+	base := startServer(t, NewServer("", newRelay(t, 6*time.Hour).h))
+	conn, err := net.Dial("tcp", strings.TrimPrefix(base, "http://"))
+	if err != nil {
+		t.Fatalf("연결 실패: %v", err)
+	}
+	defer conn.Close()
+
+	start := time.Now()
+	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: relay\r\nContent-Length: 200000\r\n\r\n", HealthPath); err != nil {
+		t.Fatalf("요청 머리 쓰기 실패: %v", err)
+	}
+	if err := conn.SetReadDeadline(start.Add(readTimeout + 2*time.Second)); err != nil {
+		t.Fatalf("읽기 마감 설정 실패: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, conn); err != nil {
+		t.Fatalf("본문을 보내지 않는 연결이 %v 안에 닫히지 않았다: %v", time.Since(start).Round(time.Millisecond), err)
 	}
 }
 

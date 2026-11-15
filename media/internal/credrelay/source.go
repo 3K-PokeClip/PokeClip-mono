@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"path"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 )
 
@@ -59,10 +61,23 @@ func sourceErrorKind(err error) string {
 }
 
 // NewIMDSClient 는 원천이 쓰는 IMDS 클라이언트다. 토큰 PUT 이 실패하면 IMDSv1(토큰 없는 요청)로 내려가지
-// 않는다(EnableFallback 끔 — 그다음 호출이 토큰을 다시 받는다). endpoint 가 비면 SDK 기본 주소이고, 시험은 이
-// 주소만 바꾼다. 시간 제한은 SDK 기본값을 두고, 원천 호출 전체 상한은 부르는 쪽이 context 로 준다.
+// 않는다(EnableFallback 끔 — 그다음 호출이 토큰을 다시 받는다). 프록시 환경 변수를 타지 않는다 — 타면 IMDS
+// 토큰과 역할 자격이 평문 HTTP 로 프록시를 지난다. endpoint 가 비면 SDK 기본 주소이고, 시험은 이 주소만
+// 바꾼다. 시간 제한은 SDK 기본값을 두고, 원천 호출 전체 상한은 부르는 쪽이 context 로 준다.
 func NewIMDSClient(endpoint string) *imds.Client {
-	return imds.New(imds.Options{Endpoint: endpoint, EnableFallback: aws.FalseTernary})
+	return imds.New(imdsOptions(endpoint))
+}
+
+// imdsOptions 는 NewIMDSClient 의 선택지다. HTTPClient 는 SDK 의 BuildableClient 에서 Proxy 만 nil 로 바꾼
+// 것이다 — BuildableClient 여야 imds 가 그 위에 기본 시간 제한(dial 250ms · 응답 머리 500ms)을 얹는다.
+func imdsOptions(endpoint string) imds.Options {
+	return imds.Options{
+		Endpoint:       endpoint,
+		EnableFallback: aws.FalseTernary,
+		HTTPClient: awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
+			tr.Proxy = nil
+		}),
+	}
 }
 
 // imdsRoleSource 는 IMDS 의 인스턴스 역할 자격을 직접 읽는 원천이다.

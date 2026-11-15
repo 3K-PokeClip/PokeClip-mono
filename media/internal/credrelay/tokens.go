@@ -31,8 +31,8 @@ type Tokens struct {
 
 // LoadTokens 는 dir 안의 호출자 이름 파일마다 토큰 한 줄을 읽는다. dir 은 os.Root 로 열고 이름마다
 // secretfile.ReadIn 으로 읽는다 — 루트 밖으로 나가는 이름 · 링크 이름은 거부하고, 파일에는 secretfile 의 규칙
-// (일반 파일 · other 비트 · group 쓰기 · 4096 바이트 · 한 줄)을 건다. 하나라도 받을 수 없으면 ErrTokenFile,
-// 호출자 목록이 꼴 밖이면(파일을 보기 전에) ErrCallers 다. 에러에는 토큰 내용을 싣지 않는다.
+// (일반 파일 · other 비트 · group 쓰기 · 4096 바이트 · 한 줄)을 건다. 하나라도 받을 수 없거나 두 호출자의 토큰이
+// 같으면 ErrTokenFile, 호출자 목록이 꼴 밖이면(파일을 보기 전에) ErrCallers 다. 에러에는 토큰 내용을 싣지 않는다.
 func LoadTokens(dir string, callers []string) (Tokens, error) {
 	if err := checkCallers(callers); err != nil {
 		return Tokens{}, err
@@ -50,6 +50,12 @@ func LoadTokens(dir string, callers []string) (Tokens, error) {
 			return Tokens{}, fmt.Errorf("%w: 호출자 %s: %w", ErrTokenFile, name, err)
 		}
 		tok.sums[i] = sha256.Sum256([]byte(v))
+		// 같은 토큰이면 Match 가 호출자를 가르지 못한다. 기동 때 한 번 견주는 것이라 상수 시간일 까닭이 없다.
+		for j := range i {
+			if tok.sums[j] == tok.sums[i] {
+				return Tokens{}, fmt.Errorf("%w: 호출자 %s 와 %s 의 토큰이 같다", ErrTokenFile, callers[j], name)
+			}
+		}
 	}
 	return tok, nil
 }

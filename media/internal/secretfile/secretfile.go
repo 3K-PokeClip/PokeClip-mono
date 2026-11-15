@@ -64,8 +64,9 @@ func Read(envName, path string, opts Options) (string, error) {
 
 // ReadIn 은 root 안의 name 에서 비밀 값 한 줄을 읽는다(POK-574). 대리 창구가 토큰 디렉터리를 os.Root 로
 // 열고 호출자 이름마다 부른다 — 이름이 루트 밖으로 나가면(`..` · 루트 밖을 가리키는 링크 · 절대 경로)
-// os.Root 가 열기에서 거부한다. 링크 이름은 루트 안을 가리켜도 거부한다(ErrLinkName) — 한 루트에 든 다른
-// 호출자의 비밀을 그 이름으로 읽지 않게 하려는 것이다.
+// os.Root 가 열기에서 거부한다. name 의 마지막 요소가 링크면 루트 안을 가리켜도 거부한다(ErrLinkName) — 한
+// 루트에 든 다른 호출자의 비밀을 그 이름으로 읽지 않게 하려는 것이다. 중간 요소의 루트 안 링크는 따라간다
+// (대리 창구의 호출자 이름은 경로 요소 하나라 중간 요소가 없다).
 //
 // 링크 거부는 열기 전 Lstat 이 아니라 연 뒤의 대조다. os.Root.OpenFile 은 부르는 쪽의 O_NOFOLLOW 를 마지막
 // 요소에 걸지 않고 링크를 루트 안에서 따라가므로(Go 1.27 os/root_unix.go), 먼저 Lstat 으로 가르면 Lstat 과

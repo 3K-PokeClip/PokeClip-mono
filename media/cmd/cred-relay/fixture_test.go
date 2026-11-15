@@ -42,12 +42,15 @@ func assertNoCanary(t *testing.T, where, text string) {
 }
 
 // fakeIMDS 는 IMDSv2 꼴(토큰 PUT · 역할 목록 · 역할 자격)을 내는 서버다. failing 이면 역할 자격 요청에 500 과
-// 카나리아 본문을 낸다.
+// 카나리아 본문을 낸다. credsDelay 가 있으면 역할 자격 요청이 온 것을 credsAsked 에 알리고 본문을 그만큼 늦게
+// 보낸다.
 type fakeIMDS struct {
 	srv *httptest.Server
 
-	mu      sync.Mutex
-	failing bool
+	mu         sync.Mutex
+	failing    bool
+	credsDelay time.Duration
+	credsAsked chan struct{}
 }
 
 func newFakeIMDS(t *testing.T) *fakeIMDS {
@@ -64,9 +67,17 @@ func (f *fakeIMDS) setFailing(v bool) {
 	f.failing = v
 }
 
+// slowCreds 는 역할 자격 답을 d 만큼 늦추고, 역할 자격 요청이 오면 알리는 채널을 돌려준다.
+func (f *fakeIMDS) slowCreds(d time.Duration) <-chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.credsDelay, f.credsAsked = d, make(chan struct{}, 1)
+	return f.credsAsked
+}
+
 func (f *fakeIMDS) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
-	failing := f.failing
+	failing, delay, asked := f.failing, f.credsDelay, f.credsAsked
 	f.mu.Unlock()
 	const rolesPath = "/latest/meta-data/iam/security-credentials/"
 	switch {
@@ -81,6 +92,16 @@ func (f *fakeIMDS) serve(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == rolesPath+"media-role" && failing:
 		http.Error(w, "internal "+canaryIMDSBody, http.StatusInternalServerError)
 	case r.URL.Path == rolesPath+"media-role":
+		if delay > 0 {
+			// 머리는 바로 보내고 본문만 늦춘다 — 머리를 늦추면 IMDS 클라이언트의 응답 머리 상한(500ms)에 걸린다.
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			select {
+			case asked <- struct{}{}:
+			default:
+			}
+			time.Sleep(delay)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"Code":            "Success",
 			"AccessKeyId":     canaryAccessKey,

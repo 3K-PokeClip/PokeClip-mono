@@ -43,8 +43,14 @@ func checkHealth(ctx context.Context, getenv func(string) string, stderr io.Writ
 	return exitOK
 }
 
-// directClient 는 프록시를 타지 않는 클라이언트다 — 영값 Transport 는 Proxy 가 nil 이라 환경 변수의 프록시를
-// 읽지 않는다. 링크 로컬 주소(창구 · IMDS)를 프록시로 돌리면 판정이 엉뚱한 곳을 본다.
+// directClient 는 프록시를 타지 않고 리다이렉트를 따라가지 않는 클라이언트다 — 영값 Transport 는 Proxy 가
+// nil 이라 환경 변수의 프록시를 읽지 않는다. 링크 로컬 주소(창구 · IMDS)를 프록시로 돌리거나 3xx 를 따라가면
+// 판정이 처음 대상이 아닌 엉뚱한 곳의 답을 본다. 3xx 는 그대로 돌아와 그 상태로 판정된다.
 func directClient() *http.Client {
-	return &http.Client{Transport: &http.Transport{}}
+	return &http.Client{
+		Transport: &http.Transport{},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }

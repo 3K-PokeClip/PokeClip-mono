@@ -2,7 +2,9 @@ package credrelay
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -157,7 +159,7 @@ func TestMinSourceIntervalHoldsOnSuccess(t *testing.T) {
 }
 
 // 만료가 없는 원천 자격은 L 로 받지 않는다(원천 실패 · 종류 expiry) — 소비자가 영원히 캐시하게 두지 않는다.
-// 남은 수명이 1분 이하인 L 도 주지 않는다(503).
+// 남은 수명이 1분 이하인 L 도 주지 않는다(503) — 응답 시각에 정확히 1분 남은 경계에서 본다.
 func TestRejectsNonExpiringAndNearlyExpired(t *testing.T) {
 	clock := newManualClock()
 	creds := aws.Credentials{AccessKeyID: canaryAccessKey, SecretAccessKey: canarySecretKey, SessionToken: canarySessionToken}
@@ -173,14 +175,53 @@ func TestRejectsNonExpiringAndNearlyExpired(t *testing.T) {
 		t.Errorf("cred_source_failed = %v, want err_type=%s 한 줄", got, kindExpiry)
 	}
 
-	creds.CanExpire, creds.Expires = true, clock.now().Add(serveFloor)
+	creds.CanExpire, creds.Expires = true, clock.now().Add(minSourceInterval+serveFloor)
 	clock.advance(minSourceInterval)
 	if rec := r.get(canaryIndexerToken); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("남은 수명 1분 자격: 상태 %d, want 503", rec.Code)
+		t.Errorf("남은 수명 정확히 1분 자격: 상태 %d, want 503", rec.Code)
 	}
 	if got := logs.events(t, "cred_unavailable"); len(got) != 2 {
 		t.Errorf("cred_unavailable %d줄, want 2", len(got))
 	}
+}
+
+// 실제 만료까지 정확히 15분 남으면 다시 읽는다(창은 15분 이하 — 설계 2.5). 원천 만료가 시작 + 20분이라 5분
+// 시점이 경계다. 마지막 성공 뒤 5분이라 30분 재조회와 겹치지 않는다.
+func TestRefreshWindowIncludesBoundary(t *testing.T) {
+	r := newRelay(t, refreshWindow+5*time.Minute)
+	mustServe(t, r.get(canaryIndexerToken), "첫 요청")
+	r.clock.moveTo(5 * time.Minute)
+	mustServe(t, r.get(canaryIndexerToken), "남은 수명 정확히 15분")
+
+	assertCallOffsets(t, r, []time.Duration{0, 5 * time.Minute})
+	if served := r.logs.events(t, "cred_served"); len(served) != 2 || served[1]["refresh"] != "window" {
+		t.Errorf("cred_served = %v, want 두 번째 줄 refresh=window", served)
+	}
+}
+
+// 소비자가 요청을 먼저 끊어도 원천 호출은 그 취소를 물려받지 않는다(설계 2.5 — 원천 호출의 성패는 IMDS 의
+// 것이다). 이미 끊긴 요청으로 물어도 원천은 살아 있는 ctx(상한 sourceDeadline)를 받고 자격을 캐시에 남긴다.
+func TestSourceCallIgnoresConsumerCancel(t *testing.T) {
+	clock := newManualClock()
+	creds := aws.Credentials{AccessKeyID: canaryAccessKey, SecretAccessKey: canarySecretKey, SessionToken: canarySessionToken, CanExpire: true, Expires: clock.now().Add(6 * time.Hour)}
+	src := aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+		if err := ctx.Err(); err != nil {
+			return aws.Credentials{}, err
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			return aws.Credentials{}, errors.New("원천 호출에 상한이 없다")
+		}
+		return creds, nil
+	})
+	h := NewHandler(src, loadTestTokens(t), clock.now, newTestLogger(&logBuf{}))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, CredentialsPath, nil)
+	req.Header.Set("Authorization", canaryIndexerToken)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	mustServe(t, rec, "끊긴 요청")
 }
 
 // assertCallOffsets 는 원천 호출 시각이 시계 시작에서 want 만큼 떨어진 시각들과 같은지 본다.

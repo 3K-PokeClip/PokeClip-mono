@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 )
 
 // 원천은 IMDS 가 준 실제 만료를 그대로 돌려준다(ec2rolecreds 처럼 1시간으로 자르지 않는다 — 설계 2.5 ⓒ).
@@ -74,5 +76,34 @@ func TestSourceErrorKindDeadline(t *testing.T) {
 	}
 	if got := sourceErrorKind(errors.New("x")); got != kindOther {
 		t.Errorf("sourceErrorKind(모르는 오류) = %q, want %q", got, kindOther)
+	}
+}
+
+// IMDS 클라이언트는 프록시 환경 변수(HTTP_PROXY 등)를 타지 않는다(c3 보안 M) — 타면 IMDSv2 토큰과 역할 자격이
+// 평문 HTTP 로 프록시를 지난다. Go 는 루프백 주소에 프록시를 쓰지 않고 환경 변수도 프로세스에서 한 번만 읽어
+// httptest 로는 드러나지 않으므로 전송 설정을 직접 본다(keyresolve · expiry 의 같은 시험과 같은 꼴). SDK 의
+// BuildableClient 여야 imds 가 기본 시간 제한(dial 250ms · 응답 머리 500ms)을 그 위에 얹는다.
+func TestIMDSClientUsesDirectTransport(t *testing.T) {
+	bc, ok := imdsOptions("").HTTPClient.(*awshttp.BuildableClient)
+	if !ok {
+		t.Fatalf("IMDS 클라이언트 HTTPClient = %T, want *awshttp.BuildableClient — nil 이면 프록시 환경 변수를 타는 SDK 기본 전송이다", imdsOptions("").HTTPClient)
+	}
+	if bc.GetTransport().Proxy != nil {
+		t.Error("IMDS 클라이언트 전송에 Proxy 함수가 있다, want nil(직접 연결)")
+	}
+}
+
+// 프록시를 끈 뒤에도 imds 의 응답 머리 상한(500ms — 설계 2.5 「클라이언트 기본값은 둔다」)이 산다. 가짜 IMDS 가
+// 머리를 1초씩 늦게 보내면 상한 안에서 끝나지 않아 원천 실패다 — 상한이 없는 클라이언트면 머리 셋을 다 받아
+// (3초 · 부르는 쪽 상한 5초 안) 자격을 낸다.
+func TestIMDSClientKeepsHeaderTimeout(t *testing.T) {
+	clock := newManualClock()
+	fake := newFakeIMDS(t, clock.start.Add(6*time.Hour))
+	fake.update(func(f *fakeIMDS) { f.headerDelay = time.Second })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	if _, err := fake.source(clock.now).Retrieve(ctx); err == nil {
+		t.Error("머리가 1초씩 늦은 IMDS 에서 자격을 받았다 — 응답 머리 상한(500ms)이 빠졌다")
 	}
 }

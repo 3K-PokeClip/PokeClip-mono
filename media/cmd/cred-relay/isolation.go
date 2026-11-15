@@ -61,7 +61,8 @@ func checkIsolation(ctx context.Context, s site, stdout io.Writer) int {
 }
 
 // probeIMDSToken 은 endpoint 에 IMDSv2 토큰 PUT 을 보내 wait 안에 토큰(200 · 빈 본문 아님)이 오면 reachable,
-// 오지 않으면(연결 · 머리 · 본문 어디서든 상한 초과) blocked, 그 밖(연결 거부 · 다른 상태 · 빈 본문)은 error 다.
+// 오지 않으면(연결 · 머리 · 200 의 본문 어디서든 상한 초과) blocked, 그 밖(연결 거부 · 다른 상태 · 빈 본문)은
+// error 다. 상태는 본문보다 먼저 본다 — 200 이 아닌 머리를 받았으면 본문이 늦어도 막힌 것이 아니다.
 func probeIMDSToken(ctx context.Context, endpoint string, wait time.Duration) string {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -75,11 +76,14 @@ func probeIMDSToken(ctx context.Context, endpoint string, wait time.Duration) st
 		return timedOutOr(ctx)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return verdictError
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProbeBody))
 	if err != nil {
 		return timedOutOr(ctx)
 	}
-	if resp.StatusCode != http.StatusOK || len(bytes.TrimSpace(body)) == 0 {
+	if len(bytes.TrimSpace(body)) == 0 {
 		return verdictError
 	}
 	return verdictReachable

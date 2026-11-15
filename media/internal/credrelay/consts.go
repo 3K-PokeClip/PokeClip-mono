@@ -4,7 +4,8 @@ import "time"
 
 // 이름 붙인 상수 전부(설계 2.5 · 계획 E14). 상수 사이의 관계는 consts_test.go 가 단언한다 — consumerRefreshCap
 // 는 소비자 SDK 캐시 창(5분)의 6배 이상, periodicReread < consumerRefreshCap, serveFloor < refreshWindow,
-// sourceDeadline < writeTimeout, sourceDeadline < minSourceInterval, writeTimeout ≤ ShutdownGrace.
+// sourceDeadline < writeTimeout, sourceDeadline < minSourceInterval, writeTimeout ≤ ShutdownGrace,
+// readHeaderTimeout < readTimeout, sourceDeadline < readTimeout, readTimeout ≤ ShutdownGrace.
 const (
 	// consumerRefreshCap 은 소비자가 다시 물을 시각의 상한이다. 응답 Expiration 은 응답할 때마다
 	// min(실제 만료, 응답 시각 + 이 값)이다 — 철회 · 교대 뒤 소비자가 옛 키에 묶이는 응답 한 벌의 길이를 묶는다.
@@ -25,6 +26,11 @@ const (
 
 	// readHeaderTimeout 은 요청 머리를 다 받기까지의 상한이다(인증 앞이라 누구든 연결을 잡을 수 있다).
 	readHeaderTimeout = 1 * time.Second
+	// readTimeout 은 요청 하나(머리 + 본문)를 다 받기까지의 상한이다. 처리기가 답을 다 쓴 뒤에도 서버는 읽지 않은
+	// 본문을 마저 읽으려 기다리므로, 이 상한이 없으면 본문을 선언하고 보내지 않는 미인증 연결이 끝없이 붙든다.
+	// 원천 호출 상한보다 길게 둔다 — 읽기 마감은 처리기 도중에도 요청 ctx 를 끊는다. 종료 유예 이하로 둬 그런
+	// 연결이 정상 종료를 유예 밖으로 끌지 않게 한다.
+	readTimeout = 3 * time.Second
 	// writeTimeout 은 머리를 읽은 뒤 응답을 다 쓰기까지의 상한이다.
 	writeTimeout = 3 * time.Second
 	// maxHeaderBytes 는 요청 머리 크기의 상한이다(SDK 의 머리는 수백 바이트).

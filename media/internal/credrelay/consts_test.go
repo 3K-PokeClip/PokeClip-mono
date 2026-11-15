@@ -20,6 +20,9 @@ func TestConstantRelations(t *testing.T) {
 		{"sourceDeadline < writeTimeout (원천이 늦어도 503 · 200 을 끝까지 쓴다)", sourceDeadline < writeTimeout},
 		{"sourceDeadline < minSourceInterval (원천 호출이 겹치지 않는다)", sourceDeadline < minSourceInterval},
 		{"writeTimeout <= ShutdownGrace (처리 중 요청을 끝까지 기다린다)", writeTimeout <= ShutdownGrace},
+		{"readHeaderTimeout < readTimeout (머리는 요청 전체의 일부다)", readHeaderTimeout < readTimeout},
+		{"sourceDeadline < readTimeout (읽기 마감이 원천 호출 중인 요청 ctx 를 끊지 않는다)", sourceDeadline < readTimeout},
+		{"readTimeout <= ShutdownGrace (본문을 보내지 않는 연결이 정상 종료를 유예 밖으로 끌지 않는다)", readTimeout <= ShutdownGrace},
 	} {
 		if !c.ok {
 			t.Errorf("상수 관계 깨짐: %s", c.relation)

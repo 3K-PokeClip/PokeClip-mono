@@ -37,7 +37,9 @@ func TestTokensMatchExactTokenOnly(t *testing.T) {
 }
 
 // 토큰 파일이 하나라도 받을 수 없으면 기동 거부다(이유 token_file). 루트 밖 링크 · 루트 안 다른 이름 링크는 받을
-// 만한 파일을 가리키게 둔다 — 이어 붙인 경로로 열거나 이름 대조를 빼면 받아들인다(P23).
+// 만한 파일을 가리키게 둔다 — 이어 붙인 경로로 열거나 이름 대조를 빼면 받아들인다(P23). 두 호출자의 토큰이
+// 같아도 거부다(c2 보안 L) — 받아들이면 그 토큰의 요청을 어느 호출자로 볼지 갈리지 않아 caller 로그가 틀리고
+// 한쪽만 끊을 수 없다.
 func TestLoadTokensRejectsBadTokenFiles(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -54,6 +56,7 @@ func TestLoadTokensRejectsBadTokenFiles(t *testing.T) {
 		{name: "link_inside", setup: func(t *testing.T, dir string) {
 			symlink(t, "janitor", filepath.Join(dir, "indexer"))
 		}, wantIs: secretfile.ErrLinkName},
+		{name: "same_token", setup: func(t *testing.T, dir string) { writeToken(t, dir, "indexer", canaryJanitorToken) }},
 		{name: "link_outside", setup: func(t *testing.T, dir string) {
 			writeToken(t, filepath.Dir(dir), "outside", canaryIndexerToken)
 			symlink(t, filepath.Join("..", "outside"), filepath.Join(dir, "indexer"))

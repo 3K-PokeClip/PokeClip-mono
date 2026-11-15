@@ -31,7 +31,7 @@ func openTestRoot(t *testing.T, dir string) *os.Root {
 // 밖에 받아들일 만한 비밀번호 파일을 실제로 둔다 — 경로를 이어 붙여 여는 구현이면 그 파일을 읽어 받아들인다.
 // 루트 안 다른 이름을 가리키는 링크도 거부한다(ErrLinkName) — 대상(ok)은 받아들일 만한 파일이라, 연 파일과
 // 이름을 대조하지 않는 구현이면 받아들인다. 여는 사이 이름이 링크로 바뀌는 경합의 결과 상태도 이 사례와 같다
-// (연 파일 ≠ 이름이 가리키는 것).
+// (연 파일 ≠ 이름이 가리키는 것). 링크 대조는 마지막 요소만이다 — 중간 요소가 루트 안 링크면 따라가 받는다.
 func TestReadInAppliesReadChecksInsideRoot(t *testing.T) {
 	parent := t.TempDir()
 	writeSecret(t, parent, "outside", "pw\n", 0o400)
@@ -47,6 +47,10 @@ func TestReadInAppliesReadChecksInsideRoot(t *testing.T) {
 	}
 	writeSecret(t, dir, "ok", "pw\n", 0o400)
 	if err := os.Symlink("ok", filepath.Join(dir, "alias")); err != nil {
+		t.Fatalf("링크 생성 실패: %v", err)
+	}
+	writeSecret(t, filepath.Join(dir, "sub"), "inner", "pw\n", 0o400)
+	if err := os.Symlink("sub", filepath.Join(dir, "via")); err != nil {
 		t.Fatalf("링크 생성 실패: %v", err)
 	}
 	writeSecret(t, dir, "group-read", "pw\n", 0o440)
@@ -73,6 +77,7 @@ func TestReadInAppliesReadChecksInsideRoot(t *testing.T) {
 		{name: "dotdot_escape", file: filepath.Join("..", "outside"), desc: "루트 밖 .. 이름", wantErr: true},
 		{name: "link_escape", file: "escape", desc: "루트 밖을 가리키는 링크", wantErr: true},
 		{name: "link_inside", file: "alias", desc: "루트 안 다른 이름을 가리키는 링크", wantErr: true, wantIs: ErrLinkName},
+		{name: "link_in_middle", file: filepath.Join("via", "inner"), desc: "중간 요소가 루트 안 링크", want: "pw"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := ReadIn(root, secretEnv, c.file, Options{ShowPath: true})
@@ -119,11 +124,13 @@ func TestReadInRejectsFIFOWithoutBlocking(t *testing.T) {
 	}
 }
 
-// 경로를 싣는 규칙은 Read 와 같다. 열기 실패는 ShowPath 와 무관하게 경로를 싣지 않고 원인만 싣는다. 열린 뒤의
-// 거부는 ShowPath 가 참일 때만 루트 경로와 이름을 싣는다. 루트 디렉터리 이름에 카나리아를 넣어 본다. 실패
-// 문구에는 원문 대신 「카나리아 발견」 만 적는다.
+// 경로를 싣는 규칙은 Read 와 같다. 열기 실패는 ShowPath 와 무관하게 경로를 싣지 않고 원인만 싣는다 — 열기
+// 실패 사례는 없는 파일 이름에 카나리아를 넣는다(os.Root 의 열기 에러는 루트 이름이 아니라 그 이름을 싣는다).
+// 열린 뒤의 거부는 ShowPath 가 참일 때만 루트 경로와 이름을 싣는다 — 루트 디렉터리 이름의 카나리아로 본다.
+// 실패 문구에는 원문 대신 「카나리아 발견」 만 적는다.
 func TestReadInPathDisclosureFollowsShowPath(t *testing.T) {
 	const canary = "rootcanary3w"
+	const missing = "namecanary7k-missing"
 	dir := filepath.Join(t.TempDir(), canary)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatalf("시험 폴더 생성 실패: %v", err)
@@ -136,8 +143,8 @@ func TestReadInPathDisclosureFollowsShowPath(t *testing.T) {
 		showPath   bool
 		wantPath   bool
 	}{
-		{name: "open_fail_shown", file: "missing", showPath: true},
-		{name: "open_fail_hidden", file: "missing"},
+		{name: "open_fail_shown", file: missing, showPath: true},
+		{name: "open_fail_hidden", file: missing},
 		{name: "opened_shown", file: "other", showPath: true, wantPath: true},
 		{name: "opened_hidden", file: "other"},
 	} {
@@ -148,6 +155,9 @@ func TestReadInPathDisclosureFollowsShowPath(t *testing.T) {
 			}
 			if got := strings.Contains(err.Error(), canary); got != c.wantPath {
 				t.Errorf("ReadIn(%q, ShowPath %v): 에러에 경로 카나리아 발견 = %v, want %v", c.file, c.showPath, got, c.wantPath)
+			}
+			if strings.Contains(err.Error(), missing) {
+				t.Errorf("ReadIn(%q, ShowPath %v): 열기 실패 에러에 이름 카나리아 발견", c.file, c.showPath)
 			}
 			if c.wantPath && !strings.Contains(err.Error(), filepath.Join(dir, c.file)) {
 				t.Errorf("ReadIn(%q, ShowPath 참): 에러에 루트 경로와 이름을 이은 경로가 없다", c.file)

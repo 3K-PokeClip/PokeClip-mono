@@ -74,8 +74,9 @@ func refusedURL(t *testing.T) string {
 	return "http://" + addr
 }
 
-// relayAnswering 은 중계 꼴 서버다. Authorization 이 없으면 401, 있으면 200 과 카나리아 자격이다 — isolation-check
-// 가 토큰 없이 묻는지(200 이면 묻지 않은 것)와 200 본문을 출력에 싣지 않는지를 함께 본다.
+// relayAnswering 은 중계 꼴 서버다. status 가 401 이면 제대로 막힌 창구다 — Authorization 이 없으면 401, 있으면
+// 200 과 카나리아 자격이라, isolation-check 가 무엇이든 실어 물으면 relay=200 으로 드러난다. 그 밖 status 는
+// 머리와 무관하게 그 상태와 카나리아 자격이다(뚫린 창구). 어느 쪽이든 200 본문을 출력에 싣지 않는지도 본다.
 func relayAnswering(t *testing.T, status int) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,11 +84,15 @@ func relayAnswering(t *testing.T, status int) string {
 			http.NotFound(w, r)
 			return
 		}
-		if r.Header.Get("Authorization") == "" && status == http.StatusUnauthorized {
+		answer := status
+		if status == http.StatusUnauthorized && r.Header.Get("Authorization") != "" {
+			answer = http.StatusOK
+		}
+		if answer == http.StatusUnauthorized {
 			http.Error(w, `{"code":"Unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		w.WriteHeader(status)
+		w.WriteHeader(answer)
 		_ = json.NewEncoder(w).Encode(map[string]string{"AccessKeyId": canaryAccessKey, "SecretAccessKey": canarySecretKey, "Token": canarySessionToken})
 	}))
 	t.Cleanup(srv.Close)
@@ -139,10 +144,18 @@ func TestIsolationCheck(t *testing.T) {
 }
 
 // IMDS 가 토큰이 아닌 답(403 · 빈 200)을 내면 판정 못 함(error)이다 — 칸이 막혔다고도 뚫렸다고도 하지 않는다.
+// 403 머리 뒤 본문이 기다림 상한을 넘겨도 같다(c3 cx) — 이미 받은 상태로 판정하고, 본문 지연을 차단으로 읽지
+// 않는다.
 func TestIsolationCheckNonTokenAnswerIsError(t *testing.T) {
 	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	t.Cleanup(empty.Close)
-	for name, endpoint := range map[string]string{"403": statusIMDS(t, http.StatusForbidden), "빈_200": empty.URL} {
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // 본문을 끝내지 않는다 — 묻는 쪽이 끊을 때까지
+	}))
+	t.Cleanup(stalled.Close)
+	for name, endpoint := range map[string]string{"403": statusIMDS(t, http.StatusForbidden), "빈_200": empty.URL, "403_본문_지연": stalled.URL} {
 		t.Run(name, func(t *testing.T) {
 			s := site{imdsEndpoint: endpoint, relayURL: relayAnswering(t, http.StatusUnauthorized), isolationWait: 300 * time.Millisecond}
 			var stdout, stderr lockedBuffer
@@ -152,6 +165,59 @@ func TestIsolationCheckNonTokenAnswerIsError(t *testing.T) {
 			}
 			if code != 2 {
 				t.Errorf("종료 = %d, want 2", code)
+			}
+			assertNoCanary(t, "stdout", stdout.String())
+		})
+	}
+}
+
+// 리다이렉트는 따라가지 않고 처음 대상의 답으로 판정한다(c3 cx · 보안). IMDS 토큰 PUT 이 307 로 토큰을 내는 곳을
+// 가리켜도 토큰이 아닌 답(error)이고, 창구 자리의 302 는 401 이 아니므로 「격리 안 됨」 이다 — 따라가면 각각
+// reachable · 따라간 곳의 401(거짓 「격리됨」)로 보인다.
+func TestIsolationCheckDoesNotFollowRedirects(t *testing.T) {
+	redirecting := func(from, to string, status int, final http.HandlerFunc) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == from {
+				http.Redirect(w, r, to, status)
+				return
+			}
+			final(w, r)
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	token := func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(canaryIMDSToken)) }
+	denied := func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"code":"Unauthorized"}`, http.StatusUnauthorized)
+	}
+	for _, tc := range []struct {
+		name, imds, relay, want string
+		code                    int
+	}{
+		{
+			name:  "imds_307",
+			imds:  redirecting("/latest/api/token", "/token-elsewhere", http.StatusTemporaryRedirect, token),
+			relay: relayAnswering(t, http.StatusUnauthorized),
+			want:  "CRED ISOLATION imds_token=error relay=401\n",
+			code:  2,
+		},
+		{
+			name:  "relay_302",
+			imds:  silentIMDS(t),
+			relay: redirecting("/v1/credentials", "/denied-elsewhere", http.StatusFound, denied) + "/v1/credentials",
+			want:  "CRED ISOLATION imds_token=blocked relay=302\n",
+			code:  1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := site{imdsEndpoint: tc.imds, relayURL: tc.relay, isolationWait: 300 * time.Millisecond}
+			var stdout, stderr lockedBuffer
+			code := run(t.Context(), s, []string{"isolation-check"}, getenvFrom(nil), &stdout, &stderr)
+			if stdout.String() != tc.want {
+				t.Errorf("출력 = %q, want %q", stdout.String(), tc.want)
+			}
+			if code != tc.code {
+				t.Errorf("종료 = %d, want %d", code, tc.code)
 			}
 			assertNoCanary(t, "stdout", stdout.String())
 		})
