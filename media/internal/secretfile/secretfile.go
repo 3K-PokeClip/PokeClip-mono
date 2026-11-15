@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -50,10 +51,38 @@ func Read(envName, path string, opts Options) (string, error) {
 	// 으로 가르면 창이 없다. 일반 파일에서 O_NONBLOCK 은 읽기에 영향이 없다.
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", fmt.Errorf("%s 의 파일을 열지 못했다(경로는 싣지 않는다): %w", envName, withoutPath(err))
+		return "", openFailed(envName, err)
 	}
 	defer f.Close()
+	return readOpened(f, envName, path, opts)
+}
 
+// ReadIn 은 root 안의 name 에서 비밀 값 한 줄을 읽는다(POK-574). 대리 창구가 토큰 디렉터리를 os.Root 로
+// 열고 호출자 이름마다 부른다 — 이름이 루트 밖으로 나가면(`..` · 루트 밖을 가리키는 링크 · 절대 경로)
+// os.Root 가 열기에서 거부한다. 루트 안을 가리키는 링크는 따라간다(os.Root 의 규칙). 링크 이름 자체를
+// 거부하려면 부르는 쪽이 먼저 root.Lstat 으로 가른다.
+//
+// 연 뒤의 검사와 에러 규칙은 Read 와 같다. opts.ShowPath 가 참일 때 싣는 경로는 루트 이름(os.OpenRoot 에
+// 넘긴 값)과 name 을 이은 것이다.
+func ReadIn(root *os.Root, envName, name string, opts Options) (string, error) {
+	// 비차단으로 여는 이유는 Read 와 같다(쓰는 쪽 없는 FIFO 에서 멈추지 않게).
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", openFailed(envName, err)
+	}
+	defer f.Close()
+	return readOpened(f, envName, filepath.Join(root.Name(), name), opts)
+}
+
+// openFailed 는 열기 실패의 에러다. 경로는 싣지 않고 원인만 싣는다 — 비밀번호를 경로 자리에 잘못 넣으면
+// 그 값이 곧 경로다(Read 의 설명).
+func openFailed(envName string, err error) error {
+	return fmt.Errorf("%s 의 파일을 열지 못했다(경로는 싣지 않는다): %w", envName, withoutPath(err))
+}
+
+// readOpened 는 열린 f 에 Read 의 규칙(일반 파일 · other 비트 · group 쓰기 · 4096 바이트 · 한 줄)을 걸고
+// 비밀번호 한 줄을 돌려준다. path 는 opts.ShowPath 가 참일 때 에러 머리에 싣는 경로다.
+func readOpened(f *os.File, envName, path string, opts Options) (string, error) {
 	// where 는 열린 뒤 갈래의 에러 머리다. ShowPath 가 참이면 「이름(경로)」 — 사이드카의 기존 문구와
 	// 바이트 단위로 같다.
 	where := envName
