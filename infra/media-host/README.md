@@ -772,12 +772,14 @@ root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)�
 *   **창구 켬 상자면 중계 토큰 둘과 지금 역할 자격을 더 센다** — 시작 스크립트가
     둔 `/run/pokeclip-media/cred-relay/indexer` · `janitor`(16진 64자 · 끝
     줄바꿈 없음)와, 호스트 aws CLI 의 `configure export-credentials` 가 표준
-    출력으로 주는 지금 역할 자격의 비밀 키 · 세션 토큰이다(중계가 IMDS 에서 받는
-    것과 같은 자격). 중계 토큰이 둘 다 없으면(끔 상자 · 정지 뒤) 더하지 않고
-    자격도 받지 않는다. 토큰이 하나만 있거나 꼴 밖이면 `SECRET COUNT FAIL
-    cred-relay`, 자격을 못 받거나(상자 aws CLI 가 `configure
-    export-credentials` 를 모르는 판 포함) 꼴 밖이면 `SECRET COUNT FAIL
-    role-cred` 다.
+    출력으로 주는 지금 역할 자격의 비밀 키 · 세션 토큰이다. 그 호출 하나만
+    원천을 인스턴스 역할(IMDS)로 고정한다 — 자격 · 프로필 · 컨테이너 자격 ·
+    웹 ID · IMDS 주소 환경 변수를 지우고 설정 · 자격 파일을 `/dev/null` 로
+    둔다. 그래서 중계가 IMDS 에서 받는 것과 같은 자격이다. 중계 토큰이 둘 다
+    없으면(끔 상자 · 정지 뒤) 더하지 않고 자격도 받지 않는다. 토큰이 하나만
+    있거나 꼴 밖이면 `SECRET COUNT FAIL cred-relay`, 자격을 못 받거나(상자 aws
+    CLI 가 `configure export-credentials` 를 모르는 판 포함) 꼴 밖이면 `SECRET
+    COUNT FAIL role-cred` 다.
     *   **한계 — 지금 자격 한 벌:** 실행 시점의 자격 한 벌만 대조한다. 그 전에
         교대된 자격이 로그에 남았는지는 못 센다 — 그 몫은 중계 코드의 누설
         시험이다.
@@ -1194,9 +1196,9 @@ exit 1
     런북 행).
     *   **(가) 토큰 없는 컨테이너가 침해됨 — 창구 켬 상자의 MediaMTX · nginx ·
         응답기 · 루프백 송출기:** 역할 자격으로 가는 길이 없다(IMDS 토큰 PUT 이
-        막힘 · 창구는 401 · 토큰 마운트 없음 · cap 없음 — 아래 「IMDS 대리
-        창구」). 망 칸 루프백 자원(관리 API · 재생 서버)의 위험은 위 항목
-        그대로다. 조치는 ① 증거 → ② 새 키 상자로 교체다. 판별 신호는 중계
+        막힘 · 창구는 401 · 토큰 마운트 없음 · cap 은 nginx 가 되살리는 CHOWN ·
+        SETGID · SETUID 뿐 — 아래 「IMDS 대리 창구」). 망 칸 루프백 자원(관리
+        API · 재생 서버)의 위험은 위 항목 그대로다. 조치는 ① 증거 → ② 새 키 상자로 교체다. 판별 신호는 중계
         저널의 `cred_denied` 급증과 낯선 출발지(`remote`)의 `cred_served` 다.
     *   **(나) 소비자(사이드카 · janitor) · 중계 · 호스트가 침해됨, 또는 끔
         상자의 어느 컨테이너든 침해됨:** 역할 자격이 샌 것으로 본다.
@@ -1231,7 +1233,7 @@ exit 1
 
 창구 켬 상자에서 상자 역할 자격이 흐르는 길이다. 결정은
 [ADR-0008](/docs/decisions/2026-11-15-media-imds-credential-relay.md) 이고, 켜고
-끄는 법 · 하한 · 새 상자 확인은 [교체 런북](../terraform/runbooks/media-swap.md)
+끄는 법 · 하한 · 새 상자 확인은 [교체 런북](/infra/terraform/runbooks/media-swap.md)
 「대리 창구 하한 · 켬 상자」 다.
 
 *   **무엇을 막나:** IMDS[^imds] 는 상자 역할 자격을 내주는 링크 로컬
@@ -1278,7 +1280,7 @@ exit 1
     ```
 
 *   **중계 env** 는 `CRED_RELAY_LISTEN` · `CRED_RELAY_CALLER_DIR` ·
-    `CRED_RELAY_CALLERS` 다([media/README.md](../../media/README.md)
+    `CRED_RELAY_CALLERS` 다([media/README.md](/media/README.md)
     「cred-relay 명령 · 환경 변수」).
 
 ### 대리 창구 HTTP 계약
@@ -1322,7 +1324,7 @@ exit 1
 | 줄(`"msg"`) | 등급 | 필드 · 뜻 |
 |---|---|---|
 | `cred_relay_started` | INFO | `addr` · `callers` — 듣기 시작 |
-| `cred_relay_failed` | ERROR | 기동 거부(종료 1). `reason=config`(`env=<변수 이름>` — 듣는 주소가 IPv4 링크 로컬(169.254.0.0/16)이 아니어도 이것) · `token_file`(`env=CRED_RELAY_CALLER_DIR` — 토큰 디렉터리 · 파일을 못 받음) · `listen`(`addr=<주소>` — 리스너를 못 열었거나 서버가 스스로 멈춤) |
+| `cred_relay_failed` | ERROR | 기동 거부(종료 1). `reason=config`(`env=<변수 이름>` — 듣는 주소가 IPv4 링크 로컬(169.254.0.0/16)이 아니어도 이것) · `token_file`(`env=CRED_RELAY_CALLER_DIR` — 토큰 디렉터리 · 파일을 못 받음 · 두 호출자의 토큰이 같음) · `listen`(`addr=<주소>` — 리스너를 못 열었거나 서버가 스스로 멈춤) |
 | `cred_relay_server_error` | ERROR | `kind=panic\|accept\|other` — HTTP 서버 자신의 에러(원문 대신 종류만) |
 | `cred_relay_stopped` | INFO | `graceful=true\|false` — 종료 신호로 멈춤(종료 0). `false` 는 유예 3초를 넘겨 남은 연결을 끊은 것 |
 | `cred_served` | INFO | `caller` · `expires_in_s`(보낸 Expiration 까지 — 3600 이하) · `source_expires_in_s`(실제 남은 수명) · `from=cache\|imds` · (`imds` 면) `refresh=initial\|window\|periodic` · `remote` |
@@ -1381,6 +1383,11 @@ relay=<401|상태 코드|error>` 는 이웃 칸 확인 명령(`cred-relay isolat
     토큰 디렉터리가 소비자 · 중계에만 붙는다는 것이다. janitor 는 MediaMTX 와
     같은 uid(10002)라 격리 근거는 uid 가 아니라 마운트다(`render_test.sh` 가
     bind 쌍을 단언한다).
+*   **중계가 장악되면 호스트 망에 닿는다** — 호스트 loopback 서비스와 호스트
+    netns 의 abstract UNIX 소켓이다. 장악한 쪽은 이미 역할 자격 전체를 얻어
+    더 잃는 것은 작고, 비root uid · cap 없음 · `no-new-privileges` 라
+    root 가 필요한 탈출 길은 막힌다. 켬 상자의 리스너 · 소켓 목록은 재지
+    않았다.
 *   **정지 뒤에도 주소가 남는다.** 그 사이 다른 호스트 프로세스가 같은 주소 ·
     포트로 들으면 소비자 요청(토큰 포함)을 받는다. 호스트 망에서 도는 컨테이너는
     중계뿐이고 호스트 프로세스는 root 신뢰 범위다.
@@ -1485,7 +1492,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | `test/sidecar_round_keys_ops_test.sh` | 사례 R1–R17 · R20–R25 · R30–R32. 스위치 스크립트(R1–R15 · R30–R32 — 가짜 docker · compose · journalctl · flock: 판정 줄 · 종료 코드 · 원자 교체 · 실행 중 사이드카와 그 컨테이너가 만들 때 읽은 값 · 복원 묶음 · 동시 실행 잠금 · 대조 뒤 실행 중 재확인) · 교체 런북의 상자 판정 스크립트 둘(R16 · R17) · 런타임 런북 「POK-525 읽기 질의」 의 자리 채움 함수 `fill_read`(R20 정상 채움 · R21–R25 거절 — 시각 자리 꼴 밖 · 시험 스트림 자리 꼴 밖 · 개행 · 제어 문자 · 모르는 자리 · 남은 자리) | 어디서나 |
 | `test/echo/main_test.go` | 에코 도구의 Go 단위 시험(사이드카 흉내의 기동 신호 줄) | 에코 이미지 빌드 단계(`test/echo/Dockerfile` — `go test` 가 실패하면 빌드 실패). CI 는 media-host-systemd 잡의 `unit_restart_test` 준비가 빌드한다 |
 | `test/ingest_auth_contract.sh` | 송출 인증 계약 — C0(실물 MediaMTX 의 `authInternalUsers: []` 수용) · 층 L(옛 모드) · 층 A(가짜 응답기) · 층 B(실물 응답기 + 가짜 4C, 실물 cut 포함) | 로컬만(CI 상설 아님 — 무겁고, infra-ci 경로 필터가 응답기 변경에 돌지 않는다). 프로젝트 `pcbench-m15-ingest-auth` · 라벨 `com.pokeclip.bench=m15-ingest-auth` · 호스트 게시 0. 운영 스크립트 사례(C13 · C15 · C18)는 보조 컨테이너(`test/ops_runner` — 판 고정 이미지) 안에서 돌고 거부 목록은 named volume 이다 — 맥 호스트가 rename 한 파일을 virtiofs 로 읽으면 첫 읽기가 잘려 C18 이 흔들렸다(M15 c12). OrbStack · 기본 소켓(`/var/run/docker.sock`) 엔진 전용이다 — 보조 컨테이너에 붙이는 소켓이 바깥 docker CLI 와 같은 엔진이라고 확인하지 않으므로 `DOCKER_HOST` · 원격 · rootless 엔진에서는 돌리지 않는다 |
-| `test/cred_relay_contract.sh` | IMDS 대리 창구 토큰 디렉터리 실소유 계약(POK-574) — 실제 `bin/lib/cred_relay.sh` 가 root 로 둔 중계 디렉터리(`root:<중계 그룹> 0750`)를 실물 중계(이 트리 `media/` 로 빌드한 사이드카 이미지 · 이미지 USER · cap 없음)가 열어 듣기 시작하는지(양성), 디렉터리를 `root:root 0711` 로 바꾸면 `cred_relay_failed reason=token_file` 인지(음성 — 교정) | 로컬만(CI 상설 아님 — 이름이 `*_test.sh` 가 아니라 infra-ci 배정 밖). 라벨 `com.pokeclip.bench=pcbench-pok574` · `com.pokeclip.bench.part=c9-contract` · 호스트 게시 0 · 한 번에 하나(잠금). **한계:** CI 는 실소유를 보지 않는다 — CI 몫은 `start_test.sh` 의 chown argv · 모드 단언과 `media/internal/credrelay` 의 EACCES 시험이다. 볼륨은 tmpfs 가 아니고, 중계는 볼륨을 통째로 붙여 운영(중계 디렉터리만 bind)보다 엄격하다. 빌드한 시험 이미지는 남긴다(다음 실행이 다시 씀) |
+| `test/cred_relay_contract.sh` | IMDS 대리 창구 토큰 디렉터리 실소유 계약(POK-574) — 실제 `bin/lib/cred_relay.sh` 가 root 로 둔 중계 디렉터리(`root:<중계 그룹> 0750`)를 실물 중계(이 트리 `media/` 로 빌드한 사이드카 이미지 · 이미지 USER · cap 없음)가 열어 듣기 시작하는지(양성), 디렉터리를 `root:root 0711` 로 바꾸면 `cred_relay_failed reason=token_file` 인지(음성 — 교정) | 로컬만(CI 상설 아님 — 이름이 `*_test.sh` 가 아니라 infra-ci 배정 밖). 라벨 `com.pokeclip.bench=pcbench-pok574` · `com.pokeclip.bench.part=c9-contract` · 호스트 게시 0 · 한 번에 하나(잠금). **한계:** CI 는 실소유를 보지 않는다 — CI 몫은 `start_test.sh` 의 chown argv · 모드 단언과 `media/internal/credrelay` 의 EACCES 시험이다. 볼륨은 tmpfs 가 아니고, 중계는 볼륨을 통째로 붙여 운영(중계 디렉터리만 bind)보다 엄격하다. 빌드한 시험 이미지는 끝에 지우고 잔여로 센다(남기려면 `PCBENCH_KEEP_IMAGE=1`). 같은 이름의 볼륨 · 망이 이미 있으면 건드리지 않고 그 사례를 FAIL 로 낸다 |
 | `test/harness_selftest.sh` · `query_guard_selftest.sh` | 시험 부품 자체 | 어디서나 |
 
 *   시험 · 실측의 compose 프로젝트 이름은 `pcbench-edge-proxy`, 라벨은

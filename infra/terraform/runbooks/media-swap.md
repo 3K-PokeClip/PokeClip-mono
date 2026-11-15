@@ -3075,7 +3075,7 @@ POK-574 를 되돌린(revert) 커밋 뒤의 빌드도 머지 커밋을 조상으
 
 | # | 무엇 | 통과 |
 |---|---|---|
-| ① | IMDS 설정 — 떠 있는 모든 키(아래 읽기 — 승인 불요) | 키마다 `<키> <홉> required disabled enabled` 이고, 홉은 그 키의 tfvars `cred_relay` 값대로입니다 — 켬 1 · 끔(값 없음 포함) 2. A 가 끔이면 `<A> 2`, A 도 켬이면(켬 상자끼리 교체 · 켬 상자의 사이드카 · 묶음 교체) `<A> 1` 입니다 |
+| ① | IMDS 설정 — 떠 있는 모든 키(아래 읽기 — 승인 불요) | 키마다 `<키> <홉> required disabled enabled` 이고, 홉은 그 키의 tfvars `cred_relay` 값대로입니다 — 켬 1 · 끔(값 없음 포함) 2. A 가 끔이면 `<A> 2`, A 도 켬이면(켬 상자끼리 교체 · 켬 상자의 사이드카 · 묶음 교체) `<A> 1` 입니다. `IMDS READ FAIL` 줄 0 |
 | ② | 주소 · 중계 헬스(`CRED_ADDR` · `CRED_HEALTH`) | `1` · `healthy` |
 | ③ | MediaMTX 망 칸에서 격리 확인(`cred-isolation.sh`) | `CRED ISOLATION imds_token=blocked relay=401` · `CRED_ISOLATION_EXIT 0` · `CRED_LEFTOVER 0` |
 | ④ | 소비자의 자격 원천이 창구(`CRED_ENDPOINT`) · DB 연결 | `CRED_ENDPOINT` 1 이상 · 기동 판정의 `SIDECAR_DB` · `JANITOR_DB` 1 이상(auth=iam · tls=true) |
@@ -3087,14 +3087,22 @@ POK-574 를 되돌린(revert) 커밋 뒤의 빌드도 머지 커밋을 조상으
 않습니다. 줄마다 tfvars 의 그 키 `cred_relay` 와 대조합니다.
 
 ```shell
-for k in $(media_ids | jq -r 'keys[]'); do
-  id="$(media_ids | jq -er --arg k "$k" '.[$k]')" || break
-  printf '%s ' "$k"
-  aws ec2 describe-instances --instance-ids "$id" --query \
+keys="$(media_ids | jq -er 'keys[]')" || echo 'IMDS READ FAIL keys'
+for k in $(printf '%s\n' "${keys}"); do
+  id="$(media_ids | jq -er --arg k "$k" '.[$k]')" \
+    || { echo "${k} IMDS READ FAIL id"; continue; }
+  opts="$(aws ec2 describe-instances --instance-ids "$id" --query \
     'Reservations[0].Instances[0].MetadataOptions.[HttpPutResponseHopLimit,HttpTokens,HttpProtocolIpv6,HttpEndpoint]' \
-    --output text
+    --output text 2>/dev/null)" \
+    || { echo "${k} IMDS READ FAIL describe"; continue; }
+  echo "${k} ${opts}"
 done
 ```
+
+*   읽기에 실패한 키는 건너뛰지 않고 `<키> IMDS READ FAIL <단계>` 줄을
+    냅니다(키 목록 자체를 못 읽으면 `IMDS READ FAIL keys`). 이 줄이 있으면
+    ① 은 통과가 아닙니다. aws 의 오류 출력은 인스턴스 ID 를 담을 수 있어
+    버립니다 — 까닭은 같은 명령을 키 하나로 손으로 다시 돌려 봅니다.
 
 ③ 격리 확인 — MediaMTX 망 칸에 중계 이미지(지금 중계 컨테이너의 이미지)의
 `isolation-check` 를 비root · cap 없음 · 읽기 전용 루트로 한 번 띄웁니다.
@@ -3150,7 +3158,8 @@ short-unix`)로 읽어 ⑥ 의 「30분 안」 을 잽니다.
     `date +%s`) 이후의 줄을 셉니다. 그사이 유닛이 다시 떠도 앞 기동의
     `ExpiredToken` · 저하 · 실패 줄이 창에 남습니다. 업로드 · 첫 자격 ·
     자격 원천은 방송 · 요청 유무와 기동 시각에 달려 기록만 합니다(판정은
-    ② 와 운영 판정 다섯).
+    ② 와 운영 판정 다섯). 시작값은 10자리 이상인 유닉스 초만 받습니다 —
+    ③ 횟수와 자리를 바꿔 넣으면 `CRED CHECK FAIL usage` 입니다.
 
 ```shell
 cat > "${work}/cred-check.sh" <<'SH'
@@ -3179,7 +3188,9 @@ case "${mode}:$#" in
       || fail since
     ;;
   watch:4)
-    number "$3" || fail usage
+    # 시작값은 유닉스 초 10자리 이상이다 — ③ 횟수와 자리를 바꿔 넣으면
+    # 저널 전체를 읽고 거부 상한이 사실상 꺼지므로 막는다.
+    number "$3" && [ "$3" -ge 1000000000 ] 2>/dev/null || fail usage
     checks="$4"
     since="@$3"
     ;;
@@ -3239,10 +3250,9 @@ case ",$2," in
       '"caller":"janitor"')" 1
     ;;
 esac
-# 기록만 한다(판정 아님).
 # 거부 수 — 거부 줄은 10초에 한 줄이고 그사이 억제된 거부는 다음 줄의 count
 # 에 실린다. 그래서 줄 수가 아니라 줄마다 count 를 더한다(count 가 없는 줄은
-# 1 로 센다). ③ 하나가 거부 하나를 낸다.
+# 1 로 센다). ③ 하나가 거부 하나를 낸다. 줄 수는 기록만 하고 판정은 합이다.
 at_most() { echo "$1 $2"; [ "$2" -le "$3" ] 2>/dev/null || bad="${bad} $1"; }
 echo "CRED_DENIED_LINES $(count "${relay_log}" '"msg":"cred_denied"')"
 at_most CRED_DENIED "$(printf '%s\n' "${relay_log}" | awk '
@@ -3250,8 +3260,10 @@ at_most CRED_DENIED "$(printf '%s\n' "${relay_log}" | awk '
     c = $0
     if (sub(/.*"count":/, "", c)) n += c + 0; else n++ }
   END { print n + 0 }')" "${checks}"
+# 기록만 한다(판정 아님).
 echo "CRED_UNAVAILABLE $(count "${relay_log}" '"msg":"cred_unavailable"')"
-echo "CRED_SERVER_ERROR $(count "${relay_log}" '"msg":"cred_relay_server_error"')"
+echo "CRED_SERVER_ERROR $(count "${relay_log}" \
+  '"msg":"cred_relay_server_error"')"
 if [ -z "${bad}" ]; then echo "CRED CHECK OK"; exit 0; fi
 echo "CRED CHECK NOT OK${bad}"
 exit 1
@@ -3307,21 +3319,24 @@ media_ssm b "${work}/secret-box.sh"
 cat > "${work}/cred-kill.sh" <<'SH'
 fail() { echo "CRED KILL FAIL $1"; exit 2; }
 relay="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media \
-  --filter label=com.docker.compose.service=cred-relay --filter status=running)" \
-  || fail docker
+  --filter label=com.docker.compose.service=cred-relay \
+  --filter status=running)" || fail docker
 [ "$(printf '%s\n' "${relay}" | grep -c .)" -eq 1 ] || fail cred-relay
-before="$(docker inspect --format '{{.RestartCount}}' "${relay}")" || fail inspect
+before="$(docker inspect --format '{{.RestartCount}}' "${relay}")" \
+  || fail inspect
 pid="$(docker inspect --format '{{.State.Pid}}' "${relay}")" || fail inspect
 [ "${pid}" -gt 1 ] 2>/dev/null || fail pid
 from="$(date +%s)"
 kill -KILL "${pid}" || fail kill
-waited=0 after="${before}"
+# up 은 30번 폴링 안에 다시 뜬 것을 봤는지다 — 마지막(30번째) 폴링에서
+# 봐도 waited 가 30 이라, 대기 초가 아니라 이 값으로 가른다.
+waited=0 after="${before}" up=no
 while [ "${waited}" -lt 30 ]; do
   sleep 1; waited=$((waited + 1))
   state="$(docker inspect --format '{{.RestartCount}} {{.State.Running}}' \
     "${relay}")" || continue
   after="${state%% *}"
-  [ "${state}" = "$((before + 1)) true" ] && break
+  if [ "${state}" = "$((before + 1)) true" ]; then up=yes; break; fi
 done
 log="$(journalctl -q -t pokeclip-media-cred-relay --since "@${from}" -o cat \
   --no-pager)" || fail journal
@@ -3330,8 +3345,7 @@ started="$(printf '%s\n' "${log}" | awk \
 echo "CRED_RESTARTS ${before} ${after}"
 echo "CRED_WAITED ${waited}"
 echo "CRED_STARTED ${started}"
-if [ "${after}" -eq $((before + 1)) ] && [ "${waited}" -lt 30 ] \
-  && [ "${started}" -ge 1 ]; then
+if [ "${up}" = yes ] && [ "${started}" -ge 1 ]; then
   echo "CRED KILL OK"; exit 0
 fi
 echo "CRED KILL NOT OK"
@@ -3343,7 +3357,9 @@ media_ssm b "${work}/cred-kill.sh"
 *   통과는 `RestartCount` 가 하나 늘고 30초 안에 다시 뜬 것 · 새
     `cred_relay_started` 1 이상입니다. 다음 `cred_served` 는 소비자가 다시 물을
     때(최대 약 55분 뒤) 생깁니다 — 그 뒤 `cred-check.sh swap` 을 다시
-    돌립니다(③ 횟수는 그 기동 뒤 ③ 을 돈 횟수).
+    돌립니다. ③ 횟수는 유닛 기동 뒤(중계 재기동 아님) ③ 을 돈 모든
+    횟수입니다 — `swap` 의 창은 유닛이 active 가 된 시각부터라, 중계
+    재기동으로 다시 시작되지 않습니다.
 *   `CRED KILL NOT OK` 이거나 중계가 `docker kill` · `docker stop` 으로 멈춰
     있으면 `docker start <중계 컨테이너>` 로 복구하고(승인),
     `cred_relay_started` 와 다음 `cred_served` 를 봅니다. 그래도 안 되면 유닛
@@ -3357,6 +3373,14 @@ media_ssm b "${work}/cred-kill.sh"
     않습니다** — `metadata_options` 차분은 위 「plan 범위」 에서 멈춥니다.
 *   창구 하한 아래 사이드카로 되돌리는 교체도 끔 키로 합니다(위 「대리 창구
     하한 칸별 규칙」).
+*   **설치 묶음(`image_digests.bundle`)을 창구 하한 아래로 내리는 새 상자
+    교체는 `prod/media` 를 apply 하는 커밋(모듈)도 POK-574 전 판일 때만
+    됩니다** — 그 뒤 판의 모듈로 띄우면 키와 상관없이 부트스트랩이
+    `bin/lib/cred_relay.sh` 가 없어 멈춥니다(위 칸별 규칙의 설치 묶음 행).
+    모듈을 전 판으로 되돌리기 전에 켬 키를 모두 회수합니다(같은 표의
+    user_data 행). 모듈을 그대로 둘 때는 끔 상자의 「제자리 전환」 으로
+    내립니다 — 켬 상자는 묶음을 하한 아래로 제자리 전환하지 않습니다. 같은
+    꼴의 만료 절차가 「하한 아래로 되돌리기(K-g)」 입니다.
 *   침해가 의심되면 교체가 아니라 media-host README 「보안 경계」 의 침해 대응
     (증거 먼저 → 격리 → 정지)을 따릅니다.
 

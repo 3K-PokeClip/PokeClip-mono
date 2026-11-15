@@ -3795,9 +3795,9 @@ janitor 가 같은 이미지라 둘 다 쓴다.
 `cmd/cred-relay` 는 Media 상자의 IMDS 대리 창구 중계다. 사이드카 이미지에
 함께 들고(`/usr/local/bin/cred-relay`), prod 창구 켬 상자의 compose 가
 entrypoint 로 고른다. 상자 위 동작 · 신호 · 운영 판정은
-[`infra/media-host/README.md`](../infra/media-host/README.md) 「IMDS 대리
+[`infra/media-host/README.md`](/infra/media-host/README.md) 「IMDS 대리
 창구」 가, 결정은
-[ADR-0008](../docs/decisions/2026-11-15-media-imds-credential-relay.md) 이
+[ADR-0008](/docs/decisions/2026-11-15-media-imds-credential-relay.md) 이
 정본이다. 핵심은 `internal/credrelay`(토큰 · IMDS 원천 · 응답 캐시 · HTTP
 계약 · 서버 상한)이고 media-ci 커버리지 게이트 대상이다. 토큰을 두는 쪽은
 `infra/media-host/bin/lib/cred_relay.sh` 다.
@@ -3813,7 +3813,7 @@ entrypoint 로 고른다. 상자 위 동작 · 신호 · 운영 판정은
 | 변수 | 범위 · 뜻 |
 |---|---|
 | `CRED_RELAY_LISTEN` | 듣는 `IP:포트`(이름 풀이 없음 · 포트 0 아님). IPv4 링크 로컬(169.254.0.0/16)만 받는다 — 그 밖이면 `cred_relay_failed reason=config`. 중계는 호스트 망이라 모든 주소 · 사설 주소로 들으면 창구가 상자 밖에도 열린다. prod 는 `169.254.170.2:9911` |
-| `CRED_RELAY_CALLER_DIR` | 호출자 이름마다 토큰 파일 하나가 든 디렉터리(정리된 절대 경로). `os.Root` 로 열고 링크 이름은 받지 않는다 — 열지 못하면 `reason=token_file` |
+| `CRED_RELAY_CALLER_DIR` | 호출자 이름마다 토큰 파일 하나가 든 디렉터리(정리된 절대 경로). `os.Root` 로 열고 링크 이름은 받지 않는다 — 열지 못하거나 두 호출자의 토큰이 같으면 `reason=token_file` |
 | `CRED_RELAY_CALLERS` | 호출자 이름 목록(쉼표). prod 는 `indexer,janitor` |
 
 ### janitor 환경 변수
