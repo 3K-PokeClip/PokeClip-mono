@@ -618,7 +618,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `MEDIA START BLOCKED: generated credential unavailable` | 응답기 모드 — Basic 비밀번호 · 잠금 둘 생성 실패 |
 | | `MEDIA START BLOCKED: cred-relay mode mismatch` | compose 렌더본의 중계 서비스 키 줄로 창구 켬 · 끔을 정할 수 없음(`  cred-relay:` 2 이상 · 같은 키를 뒤 공백 · 같은 줄 값으로 쓴 줄) |
 | | `MEDIA START BLOCKED: cred-relay token unavailable` | 창구 켬 — 창구 토큰 생성 실패 |
-| | `MEDIA START BLOCKED: cred-relay needs sidecar timing v2 label=<라벨\|none\|invalid>` | 창구 켬 — 사이드카 이미지 라벨 `com.pokeclip.timing.readable` 에 판 2 가 없음(라벨 없는 c0 아래 이미지 · 받기 실패에 로컬에도 없음은 `none`, 꼴 밖은 `invalid`, 판 2 없는 꼴 맞는 라벨은 그 글자). 켬 상자는 기동 전 검사(`timing-preflight`)를 돌리지 않는다. **판 2 는 있지만 창구 하한 아래인 사이드카는 이 줄 없이 지나가고**, 중계 진입점이 없어 중계 컨테이너가 진입점 실행 실패(종료 127)로 서지 않는다. 실측(POK-574 M2(2026-11-16) — 유닛을 먼저 멈추고 시작 스크립트를 유닛 밖에서 단독 실행): 시작 스크립트(그 안의 compose up) 종료 1 · MediaMTX 만 서고 nginx · 사이드카 · janitor · 중계는 서지 않음. 유닛 정의(`Restart=always` · `RestartSec=20` · `ExecStopPost` 정리)로는 시작 실패 → 정리 → 20초 뒤 재시도를 되풀이하며 방송을 받지 못한다 — 유닛 안 재시도 순환 자체는 실측하지 않았다. 유닛이 계속 재시작 중인지(`systemctl show -P ActiveState` · `NRestarts`)와 서비스 상태로 드러나고, 기동 판정에서 먼저 드러난다 — 규칙은 교체 런북 「대리 창구 하한」 |
+| | `MEDIA START BLOCKED: cred-relay needs sidecar timing v2 label=<라벨\|none\|invalid>` | 창구 켬 — 사이드카 이미지 라벨 `com.pokeclip.timing.readable` 에 판 2 가 없음(라벨 없는 c0 아래 이미지 · 받기 실패에 로컬에도 없음은 `none`, 꼴 밖은 `invalid`, 판 2 없는 꼴 맞는 라벨은 그 글자). 켬 상자는 기동 전 검사(`timing-preflight`)를 돌리지 않는다. **판 2 는 있지만 창구 하한 아래인 사이드카는 이 줄 없이 지나가고**, 중계 진입점이 없어 중계 컨테이너가 진입점 실행 실패(종료 127)로 서지 않는다. 실측(POK-574 M2(2026-11-16) — 유닛을 먼저 멈추고 축약 시작 스크립트(실제와 같은 창구 준비 · 같은 compose up — 선행 점검 · CDN 비밀 · MediaMTX 렌더는 뺌)를 유닛 밖에서 단독 실행): 그 스크립트(그 안의 compose up) 종료 1 · MediaMTX 만 서고 nginx · 사이드카 · janitor · 중계는 서지 않음. 유닛 정의(`Restart=always` · `RestartSec=20` · `ExecStopPost` 정리)로는 시작 실패 → 정리 → 20초 뒤 재시도를 되풀이하며 방송을 받지 못한다 — 유닛 안 재시도 순환 자체는 실측하지 않았다. 유닛이 계속 재시작 중인지(`systemctl show -P ActiveState` · `NRestarts`)와 서비스 상태로 드러나고, 기동 판정에서 먼저 드러난다 — 규칙은 교체 런북 「대리 창구 하한」 |
 | | `MEDIA START FAIL cred-relay address` | 창구 켬 — 더미 링크 `pokeclip-cred0` 만들기 · 주소 붙이기 · 올리기 실패 |
 | | `MEDIA START FAIL render <단계>` | 렌더 실패 — `runtime-dir` · `template` · `template-mode`(MediaMTX 템플릿의 모드 블록 표지 꼴이 깨짐 · 한 모드 블록 없음) · `template-token`(고른 모드 블록의 토큰 집합이 그 모드 꼴이 아님) · `owner` · 파일마다 `<앞머리>tmpfile` · `write` · `chown` · `target` · `rename`. 앞머리는 `mediamtx.yml` 이 없음, 사이드카 비밀번호가 `api-pass-`, 응답기 모드 파일이 `ingest-auth-basic-pass-` · `ingest-auth-api-pass-` · `ingest-auth-resolve-token-` · 사이드카 4C 토큰 사본 `resolve-token-` 다. 응답기 모드 디렉터리 단계는 `ingest-auth-dir` · `ingest-auth-state-dir` · `deny-dir`(거부 목록 디렉터리 · 남은 임시 파일 정리 · 임시 파일), 거부 목록 파일 설치 단계는 `deny-install` 이다. 만료 창구 토큰(두 모드 · ARN 이 찰 때)은 `clip-expiry-dir`(디렉터리 링크 · 맞추기 · 앞 토큰 지우기 실패)과 `clip-expiry-tmpfile` · `write` · `chown` · `target` · `rename` 이다 — 토큰 받기 실패는 줄 없이 기동을 계속한다. IMDS 대리 창구 토큰(창구 켬)은 `cred-relay-list`(들어갈 때 파일 목록이 비지 않음) · `cred-relay-dir`(창구 디렉터리가 링크 · 맞추기 실패) · `owner` · `cred-relay-tmpfile` · `write` · `chown` · `target` · `rename` 이다 |
 | | `MEDIA START FAIL usage` | 인자를 줬음 |
@@ -1247,10 +1247,15 @@ exit 1
         *   ③ 역할 세션 취소 — 그 시각 전에 발급된 자격을 거부하는 인라인
             정책(`aws:TokenIssueTime` 조건 · IAM 「Revoke active sessions」).
         *   ④ 역할이 읽을 수 있는 비밀 교체 — CDN 비밀 · 4C 토큰 · 만료 창구
-            토큰 · 시험 키. 응답기 모드에서 사이드카 · 호스트, 또는 끔 상자의
-            MediaMTX · 응답기가 침해됐으면 계정별 송출 키도 대상이다((가) ③
-            과 같은 경로 — 사이드카는 관리 API 설정 조회로 Basic 을 읽는다,
-            CONTRACT K1). 재발급은 (가) ③ 과 같이 미결이다.
+            토큰 · 시험 키. (나) 의 모든 경우 계정별 송출 키(SRT passphrase ·
+            시험 키 포함)도 대상이다 — 모드와 상관없이 역할로 4C 토큰을 읽어
+            상자에서 auth resolve 에 직접 물으면 공개 토큰(streamid)만으로
+            passphrase 를 받는다(역할의 비밀 읽기 · Media SG → auth 짝 · auth
+            가 받는 출발지 = Media 프라이빗 서브넷 · 응답기의 거부 목록 · 예산
+            · IP 한도를 거치지 않는다). 사이드카는 이에 더해 응답기 모드에서
+            4C 토큰 사본을 bind 로 갖고(위 파일 표), 관리 API 설정 조회로
+            Basic 도 읽는다(CONTRACT K1). 재발급은 (가) ③ 과 같이
+            미결이다.
         *   ⑤ 새 키 상자로 교체(교체 런북).
     *   **공통 — 새어 나간 키는 우리가 보낸 Expiration 과 무관하게 STS 실제
         만료까지 유효하다**(IAM 문서: "that party has access for the duration
