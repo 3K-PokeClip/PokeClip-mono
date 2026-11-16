@@ -126,7 +126,8 @@ after_last_input() {
 
 #######################################
 # 송출기 ffmpeg 인자의 소리 · 출력 옵션을 본다 — 소리 입력(lavfi sine) · aac
-# 64k · 영상 스레드 2, 그리고 -t · -c:a · -b:a · -threads 가 마지막 입력 뒤.
+# 64k · 영상 스레드 2 · -re 는 첫 입력 앞 한 번, 그리고 -t · -c:a · -b:a ·
+# -threads 가 마지막 입력 뒤.
 # Arguments:
 #   argv 파일, 이미지 줄 번호.
 #######################################
@@ -134,6 +135,12 @@ expect_sender_audio_output() {
   local ok=0 pair opt
   if ! has_run "$1" -f lavfi -i 'sine=frequency=440:sample_rate=48000'; then
     harness::add_reason '소리 입력 「-f lavfi -i sine=…」 이 없음'
+    ok=1
+  fi
+  # -re 는 첫 입력(testsrc) 앞에 한 번만 — 없으면 송출이 실시간이 아니다.
+  if ! has_run "$1" -re -f lavfi -i 'testsrc=size=320x240:rate=30' \
+    || [[ "$(grep -c -x -F -- -re "$1")" != 1 ]]; then
+    harness::add_reason '-re 가 첫 입력 앞 한 번이 아님'
     ok=1
   fi
   for pair in '-c:a aac' '-b:a 64k' '-threads 2'; do

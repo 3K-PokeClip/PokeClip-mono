@@ -599,7 +599,7 @@ SH
     media_ssm <상자 키> "${work}/paths-list-all.sh" > "${pre}"
     tail -n 1 "${pre}"                                # SSM Success
     grep -x 'PATHS LIST [0-9]*' "${pre}"              # 개수 n
-    grep -c -v -e '^PATHS ' -e '^SSM ' "${pre}"       # n 과 같아야 함
+    grep -c -v -e '^PATHS ' -e '^SSM ' -e '^$' "${pre}"  # n 과 같아야 함
     grep -c -x -F <시험 ingestStreamId> "${pre}"      # 0
     ```
 
@@ -607,7 +607,8 @@ SH
         n · 시험 ID 줄 0 입니다. 넷 가운데 하나라도 아니면 통과가 아닙니다.
     *   **실패한 조회는 「0」 처럼 읽힙니다.** `PATHS FAIL <단계>` ·
         `PATHS LIST INCOMPLETE` 면 목록이 비어 마지막 두 줄이 0 을 냅니다.
-        끝 줄과 개수 줄을 먼저 봅니다. 출력이 SSM 표준 출력 한도(24,000
+        끝 줄과 개수 줄을 먼저 봅니다. `media_ssm` 은 표준 출력 뒤에 빈 줄을
+        하나 더 붙이므로(AWS CLI text 출력) 줄 수는 빈 줄을 빼고 셉니다. 출력이 SSM 표준 출력 한도(24,000
         바이트)에 닿으면 뒤가 잘려 개수 줄이 없습니다. 다시 받아도 통과하지
         않으면 루프백을 보내지 않고 kty 에게 보고합니다.
     *   유닛을 멈춘 상자는 MediaMTX 가 없어 송출이 있을 수 없습니다. 그
