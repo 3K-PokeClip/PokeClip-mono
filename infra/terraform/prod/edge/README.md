@@ -143,9 +143,10 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
     핀을 확인하고 c0 창에서 머지한 뒤, 그 머지 커밋으로 빌드한 묶음과 같은
     커밋 체크아웃의 plan 으로 판 7 과 c0 를 한 번에 교체합니다. c0 상자의
     청소기 보관 유예는 기본 8분입니다 — compose 템플릿에서 23시간(V1 임시)을
-    뺀 PR 522 가 develop 에 있어, 같은 체크아웃의 `user_data` 렌더본이 8분을
-    싣습니다. prod 웹이 상자 녹화(`/playback`)를 읽지 않음을 실측으로 확인해
-    c0 에서 8분을 받습니다(kty 2026-11-16)
+    뺀 PR 522 가 develop 에 있어, 같은 체크아웃의 `user_data` 렌더본에
+    `JANITOR_GRACE` 가 없고 janitor 기본값 8분이 걸립니다. prod 웹이 상자
+    녹화(`/playback`)를 읽지 않음을 실측으로 확인해 c0 에서 8분을
+    받습니다(kty 2026-11-16)
     ([media README](../../../../media/README.md) 「M4 ⓒ 에서 M5/M6 로 넘긴
     것」 ·
     [media-swap 런북 「PDT 배포 순서」](../../runbooks/media-swap.md#pdt-배포-순서)).
