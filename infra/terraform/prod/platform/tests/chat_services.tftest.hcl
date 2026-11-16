@@ -286,10 +286,10 @@ run "rejects_chat_image_tag" {
 
 # collector 는 방송 편지(BROADCAST_INTAKE_ENABLED)로 세션을 연다. 기능 스위치
 # 기본값 = 재부착 · 중계 · 방송 정보 · SOOP(지켜보기 · 채팅) 켬, 떼기 꺼짐(kty
-# 2026-10-26 — 떼기는 clip 치우개와 함께 O7e 뒤 운영자 결정). 채팅 원본
-# 보관 창고 이름 S3_BUCKET 은 런타임 app_env 가 준다. CHZZK_ENABLED(옛 한 채널
-# 경로 — intake 와 같이 켜면 부팅 거부) · CHAT_SYNC_OFFSET_MS(기본 3900)는
-# 넣지 않는다.
+# 2026-10-26 — 떼기는 clip 치우개(기본 켬 — kty 2026-11-16 · POK-588) 다음
+# 차례로 운영자가 켠다). 채팅 원본 보관 창고 이름 S3_BUCKET 은 런타임
+# app_env 가 준다. CHZZK_ENABLED(옛 한 채널 경로 — intake 와 같이 켜면 부팅
+# 거부) · CHAT_SYNC_OFFSET_MS(기본 3900)는 넣지 않는다.
 run "chat_collector_env_and_secrets" {
   command = plan
 

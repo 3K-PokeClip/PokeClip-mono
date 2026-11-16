@@ -171,7 +171,8 @@ auth: `FORWARD_HEADERS_STRATEGY` · `STREAM_KEY_SECRET_STORE_TYPE` ·
 clip: `FORWARD_HEADERS_STRATEGY`(`native` — POK-551) ·
 `CLOUDFRONT_KEY_PAIR_ID` · `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` ·
 `AUTH_BASE_URL` · `CORS_ALLOWED_ORIGINS` · `COLLECTOR_BASE_URL` ·
-`PLAYBACK_REQUIRED` · `POSTGRES_USER` · `POSTGRES_AUTH` ·
+`PLAYBACK_REQUIRED` · `BROADCAST_REAPER_ENABLED`(platform 변수
+`clip_broadcast_reaper_enabled`) · `POSTGRES_USER` · `POSTGRES_AUTH` ·
 `POSTGRES_SSLROOTCERT`(IAM 일 때), 비밀 `CLOUDFRONT_PRIVATE_KEY_PEM`.
 chat-collector: `BROADCAST_INTAKE_ENABLED`(`true`) · `AUTH_BASE_URL` ·
 `CLIP_BASE_URL` · 기능 스위치 여섯(`CHAT_REATTACH_ENABLED` ·
@@ -223,8 +224,9 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 `services/db-support`, `web/Dockerfile` 입니다. 「yml 기본값」 은 자리
 표시자(`${이름:기본값}`)의 기본값이고, 「없음」 은 기본값이 없어 env 가
 없으면 자리 표시자 글자가 그대로 값이 된다는 뜻입니다. platform 이 넣는
-이름은 위 「platform 이 정하는 env」 이고, 여기에는 헷갈리기 쉬운 셋
-(`POSTGRES_AUTH` 줄 · 신뢰 대역 · clip 수집기 주소)만 다시 적습니다.
+이름은 위 「platform 이 정하는 env」 이고, 여기에는 헷갈리기 쉬운 넷
+(`POSTGRES_AUTH` 줄 · 신뢰 대역 · clip 수집기 주소 · 치우개 스위치)만 다시
+적습니다.
 
 | 서비스 | 이름 | 넣는 쪽 | yml 기본값 | 비고 |
 |---|---|---|---|---|
@@ -247,7 +249,8 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 | clip | `EXPIRED_BROADCASTS_ALLOWED_CIDRS` | `app_env` | 빈 값 | 만료 창구(`GET /internal/broadcasts/expired` — 계약-세그먼트인덱스 6-2)의 허용 대역. 아래 토큰이 있으면 필수 — 비면 부팅 거부, platform plan 도 멈춘다. prod 값 = auth 의 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 와 같은 Media 프라이빗 서브넷 CIDR |
 | clip | `EXPIRED_BROADCASTS_TOKEN` | `app_secret_arns` | 빈 값 | 비면 만료 창구가 닫힌다(전용 헤더 요청은 늘 401 · clip 은 뜬다). prod 는 런타임이 준다(POK-551 — Media 사이드카와 같은 그릇). 있으면 `INTERNAL_API_TOKEN` 과 다른 값이어야 하고, `FORWARD_HEADERS_STRATEGY` 가 `none` 또는 `native` 여야 부팅이 산다(clip yml 기본값은 빈 값 = 플랫폼 감지 — prod 는 platform 이 `native` 를 넣는다) |
 | clip | `BROADCAST_INTAKE_ENABLED` · `BROADCAST_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수. 큐는 `broadcast_queue_arn` 과 같은 것 |
-| clip | `BROADCAST_REAPER_ENABLED` · `_INTERVAL` · `_GRACE` | `app_env`(선택) | `false` · `PT1M` · `PT30M` | 켜는 것은 운영자 결정. 켰는데 `stream_segments` 표가 없으면 부팅 거부 |
+| clip | `BROADCAST_REAPER_ENABLED` | platform | `false` | 값 = platform 변수 `clip_broadcast_reaper_enabled`(기본 `true` — kty 2026-11-16 · POK-588). 켰는데 `stream_segments` 표가 없으면 부팅 거부. 끄기 = 그 변수 `false` 로 platform apply |
+| clip | `BROADCAST_REAPER_INTERVAL` · `BROADCAST_REAPER_GRACE` | 넣지 않음 | `PT1M` · `PT30M` | yml 기본값 그대로(kty 2026-11-16) |
 | clip | `RENDER_ENABLED` · `RENDER_QUEUE_URL` · `RENDER_DLQ_URL` · `CLIPS_BUCKET` · `SEGMENT_BUCKET` | `app_env` | `false` · 빈 값 | 켜면 넷 필수. 큐 · 버킷은 「작업 역할 대상」 의 같은 이름 ARN 과 짝. 스위치 셋은 런타임 변수 `clip_job_features`(기본 셋 다 `"true"`)이고, 큐 주소 · 창고 이름은 스위치와 무관하게 늘 준다 — 한쪽이 꺼진 배포의 탈퇴 정리가 두 창고 이름으로 지운다 |
 | clip | `UPLOAD_ENABLED` · `UPLOAD_QUEUE_URL` · `UPLOAD_DLQ_URL` | `app_env` | `false` · 빈 값 | 켜면 둘 필수. `RENDER_ENABLED` 와 둘 다 `"false"` 인 값은 런타임 plan 이 거부한다 — clip 의 창고 지우기가 render 또는 upload 가 켜져야 생겨, 둘 다 끄면 탈퇴 정리가 rewind 녹화 조각을 지우지 않은 채 완료된다 |
 | clip | `THUMBNAIL_ENABLED` · `THUMBNAIL_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수 |

@@ -167,8 +167,9 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | `soop_chat` | `SOOP_CHAT_ENABLED` | `true` | SOOP 채팅 받기(Chromium 탭) |
 | `detach` | `CHAT_DETACH_ENABLED` | `false` | clip 명부에 없는 방송의 세션 반납 |
 
-*   기본값은 kty 결정(2026-10-26)입니다. 떼기는 clip 치우개
-    (`BROADCAST_REAPER_*`)와 짝이라 O7e 뒤 운영자가 함께 정합니다.
+*   기본값은 kty 결정(2026-10-26)입니다. 떼기는 clip 치우개(기본 켬 — kty
+    2026-11-16 · POK-588, 아래 「clip 치우개 스위치」) 다음 차례로 운영자가
+    켭니다.
 *   부팅 거부 조합은 plan 이 막습니다 — `detach` 는 `reattach` 와,
     `soop_chat` 은 `soop_watch` 와 함께만 켭니다. 재부착이 요구하는 방송
     편지 받기(`BROADCAST_INTAKE_ENABLED`)는 이 루트가 늘 켭니다.
@@ -216,6 +217,7 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | clip | `AUTH_BASE_URL` | `http://auth.pokeclip.internal:8082`(clip → auth 자격 판정) |
 | clip | `COLLECTOR_BASE_URL` | auth 와 같은 값(비어도 부팅은 되지만 채팅 문 셋이 503) |
 | clip | `PLAYBACK_REQUIRED` | `true`(서명 값 셋 중 하나라도 빠지면 부팅 거부 — POK-321) |
+| clip | `BROADCAST_REAPER_ENABLED` | `clip_broadcast_reaper_enabled`(기본 `true` — 아래 「clip 치우개 스위치」) |
 | clip | `CLOUDFRONT_PRIVATE_KEY_PEM`(비밀) | secrets `signing_key_secret_arn` |
 | chat-collector | `BROADCAST_INTAKE_ENABLED` | `true`(방송 편지로 세션을 연다 — 운영의 시작 경로) |
 | chat-collector | `AUTH_BASE_URL` · `CLIP_BASE_URL` | clip 과 같은 auth 주소 · auth 와 같은 clip 주소 |
@@ -232,6 +234,27 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 
 비밀은 ARN 만 받습니다. 실행 역할의 비밀 읽기 권한은 그 ARN 집합으로
 한정됩니다(`ecs_service` 모듈).
+
+### clip 치우개 스위치
+
+clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을 닫습니다.
+1분마다 돌며, 마지막 신호(Media 장부 `stream_segments` 의 마지막 조각 시각과
+방송 시작 시각 가운데 늦은 쪽) 뒤로 30분 동안 조용한 방송을 ended 로
+굳힙니다. 종료 편지가 제때 오면 아무것도 닫지 않습니다.
+
+*   기본 켬입니다(kty 2026-11-16 결정 · POK-588). 서버 기본은 꺼짐이라 이
+    루트가 `clip_broadcast_reaper_enabled` 로 env 를 넣습니다. 유예 · 주기는
+    서버 기본값이라 넣지 않습니다.
+*   끄기: `terraform.tfvars` 에 `clip_broadcast_reaper_enabled = false` →
+    plan(clip 태스크 정의 env 한 줄이 바뀌는지 확인) → apply(clip 재배포).
+*   이미 닫힌 방송은 끄거나 다시 켜도 ended 로 남습니다. 진짜 종료 편지가
+    뒤늦게 오면 `ended_at` 만 편지 값으로 고쳐집니다.
+*   한계: Media 상자나 장부 기록기가 30분 넘게 멈추면 살아 있는 방송도
+    닫습니다. 상자 교체 · 제자리 전환 전 끄기는
+    [Media 교체 런북](/infra/terraform/runbooks/media-swap.md) 「치우개
+    단서」 를 따릅니다.
+*   chat-collector 의 떼기(`CHAT_DETACH_ENABLED`)는 이 스위치 다음 차례입니다
+    (위 「chat 기능 스위치」).
 
 ## 작업 역할
 
@@ -305,6 +328,7 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | `services` | next 3000 `/api/ping` 512/1024 · 60초, auth 8082 · clip 8081 `/actuator/health` 1024/2048 · 180초 | 포트 · 헬스 경로 · CPU · 메모리(MiB) · 기동 유예(Flyway). 공개 ALB 대상 그룹 · 규칙의 원천이라 키는 이 셋뿐 |
 | `chat_services` | chat-collector 8083 · 1024/2048, chat-detector 8084 · 512/1024 | 포트 · CPU · 메모리(MiB). 키는 이 둘뿐. 포트는 앱 `application.yml` 의 `server.port` 맨값이라 8083 · 8084 고정(다른 값은 plan 이 막음) — 바꾸려면 앱부터 고친다 |
 | `chat_collector_features` | 위 「chat 기능 스위치」 | chat-collector 기능 스위치 여섯 |
+| `clip_broadcast_reaper_enabled` | `true` | clip 치우개(`BROADCAST_REAPER_ENABLED` — 위 「clip 치우개 스위치」). 유예 30분 · 주기 1분은 앱 기본값 |
 | `app_db_auth` | `iam` | `password` 면 `rds-db:connect` · `POSTGRES_AUTH` 없음 |
 | `postgres_sslrootcert` | `/etc/pokeclip/rds-ca/global-bundle.pem` | 서버 이미지의 RDS CA 번들 경로(POK-407 코멘트 10715 · 커밋 2975805e) — iam 에서만 넣음 |
 | `cors_allowed_origins` | `https://app.pokeclip.com` | auth · clip 부팅 필수 값(실사용 없음) |

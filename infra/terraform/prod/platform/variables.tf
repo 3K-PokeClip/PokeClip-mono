@@ -125,8 +125,8 @@ variable "chat_services" {
 # 받기(BROADCAST_INTAKE_ENABLED)는 운영의 시작 경로라 이 루트가 늘 켜므로
 # 스위치가 아니다 — 재부착이 받기를 요구하는 부팅 규칙(ReattachConfiguration)은
 # 그래서 늘 맞는다. 기본값(kty 2026-10-26): 재부착 · 중계 · 방송 정보 · SOOP
-# 지켜보기 · SOOP 채팅은 켬, 떼기는 꺼 둔다 — 떼기는 clip 치우개
-# (BROADCAST_REAPER_*)와 함께 O7e 뒤 운영자가 정한다.
+# 지켜보기 · SOOP 채팅은 켬, 떼기는 꺼 둔다 — 떼기는 clip 치우개(기본 켬 —
+# kty 2026-11-16 · POK-588) 다음 차례로 운영자가 켠다.
 variable "chat_collector_features" {
   description = "chat-collector 기능 스위치 — reattach(CHAT_REATTACH_ENABLED) · relay(CHAT_RELAY_ENABLED) · liveinfo(BROADCAST_INFO_ENABLED) · detach(CHAT_DETACH_ENABLED) · soop_watch(SOOP_WATCH_ENABLED) · soop_chat(SOOP_CHAT_ENABLED)."
   type = object({

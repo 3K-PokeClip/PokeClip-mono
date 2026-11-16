@@ -56,6 +56,14 @@ README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)�
 뒤 같은 절 3(팀 IP 밖 익명 송출 거부)을 확인합니다. 옛 모드는 익명 송출이라
 인바운드가 열린 채면 누구나 송출 · 탈취 · DVR 리셋을 할 수 있습니다.
 
+**치우개 단서(모든 갈래):** clip 치우개(clip `BROADCAST_REAPER_ENABLED` —
+[prod/platform](/infra/terraform/prod/platform/README.md) 「clip 치우개
+스위치」)가 켜져 있고 이 교체에서 30분 넘는 정지 · 공백이 예상되면, 걸음에
+들어가기 전에 platform tfvars `clip_broadcast_reaper_enabled = false` 로
+platform apply(clip 재배포)를 합니다. 교체가 끝나 장부(`stream_segments`)에
+조각이 다시 쌓이는 것을 확인한 뒤 `true` 로 되돌려 apply 합니다. 켜진 채
+30분을 넘기면 그 사이 방송 중인 방송이 닫히고 되돌아오지 않습니다.
+
 ## 준비
 
 ### 작업 디렉터리와 상태
