@@ -245,6 +245,15 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
 *   기본 켬입니다(kty 2026-11-16 결정 · POK-588). 서버 기본은 꺼짐이라 이
     루트가 `clip_broadcast_reaper_enabled` 로 env 를 넣습니다. 유예 · 주기는
     서버 기본값이라 넣지 않습니다.
+*   처음 켜기 — 경보 · 구독이 선 뒤에 켭니다(kty 2026-11-17):
+    1.  `terraform.tfvars` 에 `clip_broadcast_reaper_enabled = false` 를 둔
+        채 첫 platform apply 를 합니다. 경보 자원 넷이 생기고 치우개는 꺼진
+        채입니다(plan 은 아래 「plan 대조」 의 예외).
+    1.  아래 「clip 치우개 경보」 의 구독을 등록 · 확인합니다.
+        `aws sns list-subscriptions-by-topic` 의 `SubscriptionArn` 이
+        `PendingConfirmation` 이 아니어야 다음으로 갑니다.
+    1.  `true` 로 바꿔 아래 「끄기 · 다시 켜기」 순서로 켭니다. 이 plan 은
+        env 한 줄(`"false" -> "true"`)뿐이어야 합니다.
 *   끄기 · 다시 켜기: `terraform.tfvars` 의 `clip_broadcast_reaper_enabled`
     를 `false`(켤 때 `true`)로 바꾸고 plan 대조(아래) → apply 전 기준
     읽기(아래 「clip 치우개 반영 확인」 첫 블록) → apply(kty 승인) → 읽기 셋
@@ -260,8 +269,15 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
     다른 env 항목의 바뀜(`->`) · 더함(`+`) · 뺌(`-`)이 보이거나 다른 자원이
     바뀌면 apply 하지 않고 멈춥니다. 블록 밖에서 `arn` · `revision` 같은
     식별자가 `(known after apply)` 로, 서비스의 `task_definition` 이 새
-    리비전으로 바뀌는 줄은 교체에 따라오는 것입니다. 아래 「clip 치우개
-    경보」 를 처음 만드는 apply 는 예외입니다(경보 자원 넷이 함께 생김).
+    리비전으로 바뀌는 줄은 교체에 따라오는 것입니다. 예외는 「처음 켜기」
+    1 의 plan 하나입니다 — 네 주소 `aws_sns_topic.platform_alarms` ·
+    `aws_sns_topic_policy.platform_alarms` ·
+    `aws_cloudwatch_log_metric_filter.clip_reaper_ended` ·
+    `aws_cloudwatch_metric_alarm.clip_reaper_ended` 의 생성(create)과 출력
+    `platform_alarm_topic_arn` 이 더해지고, 태스크 정의의 차이는 env 항목
+    `BROADCAST_REAPER_ENABLED = "false"` 의 더함(`+`) 하나입니다(그 전
+    판에는 이 env 가 없어 서버 기본 꺼짐이었음 — 동작은 같음). 그 밖이
+    보이면 멈춥니다.
 *   이미 닫힌 방송은 끄거나 다시 켜도 상태가 ended 그대로입니다. 진짜 종료
     편지가 뒤늦게 오면 종료 시각(`ended_at`)과 VOD 만료 시각(종료 + 60일)을
     편지 시각으로 바로잡습니다(`Broadcast.applyEnded`).
@@ -385,11 +401,15 @@ POK-588). 한 줄이 방송 하나를 닫은 것입니다. 꼴은 prod/edge 「�
     따릅니다.
 
 이메일 구독은 저장소 밖에서 kty 가 한 번 답니다(공개 저장소에 주소를 두지
-않음). platform apply 뒤 이 루트에서 주제 ARN 을 읽어 구독하고, 받은 확인
-메일의 링크를 누릅니다. 누르기 전에는 알림이 가지 않습니다
-(`aws sns list-subscriptions-by-topic` 의 `SubscriptionArn` 이
-`PendingConfirmation`). 구독은 Terraform 상태 밖이라 주제가 다시 만들어지면
-다시 합니다.
+않음). 위 「처음 켜기」 1 의 apply 뒤(치우개를 켜기 전) 이 루트에서 주제
+ARN 을 읽어 구독하고, 받은 확인 메일로 구독을 확인합니다. 확인 전에는
+알림이 가지 않습니다(`aws sns list-subscriptions-by-topic` 의
+`SubscriptionArn` 이 `PendingConfirmation`). 확인은 메일의 링크를 누르기보다
+링크의 `Token=` 값으로 `aws sns confirm-subscription --region ap-northeast-2
+--topic-arn … --token <토큰> --authenticate-on-unsubscribe true` 를 돌리는
+편이 낫습니다 — 구독 해지에 인증을 요구해, 메일을 받은 누구나 해지 링크로
+끊지 못하게 합니다. 구독은 Terraform 상태 밖이라 주제가 다시 만들어지면 다시
+합니다.
 
 ```shell
 aws sns subscribe --region ap-northeast-2 \

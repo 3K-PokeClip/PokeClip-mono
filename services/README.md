@@ -3058,12 +3058,18 @@ POK-393에서 집기·숨기기를 없애면서 「열어 봤다」를 **편집�
 *   **prod 마스터**: 표 주인이 `app_clip` 이고 마스터에게는 표 권한이 없어,
     경로만 바꾸면 `42501` 이다. 런북
     [runtime-1a.md](../infra/terraform/runbooks/runtime-1a.md) 「1단-다
-    되돌리기 — O7d 뒤(clip 먼저 0개)」 의 셈 SQL 꼴로 감싼다. 경로를 바꾸고
-    `GRANT app_clip TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;` 와
-    `SET ROLE app_clip;` 뒤에 블록을 돌린 다음, `RESET ROLE;` 과
-    `REVOKE app_clip FROM CURRENT_USER;` 로 멤버십을 거둔다. 보내는 길(실행기 ·
-    페이로드 · send-command 승인)도 그 자리를 따른다. 한 트랜잭션
-    (`psql -X -1 -v ON_ERROR_STOP=1`)으로 돌려 중간에 실패하면 부여도 롤백된다.
+    되돌리기 — O7d 뒤(clip 먼저 0개)」 의 미종결 주문 셈 블록을 틀로 쓰고,
+    그 블록의 셈 SELECT 자리에 아래 블록을 넣는다. 틀의 순서는 앞 멤버십
+    조회 → 부여 → 읽기 전용 저장점(`SAVEPOINT ro;` ·
+    `SET TRANSACTION READ ONLY;`) → `SET ROLE app_clip;` → 경로 바꾸기 →
+    블록 → `ROLLBACK TO SAVEPOINT ro;` → `RESET ROLE;` → 회수 → 뒤 멤버십
+    조회이고, 멤버십 비교는 `OPERATOR(pg_catalog.=)` 로 한정한다. 앱이 자기
+    스키마에 심은 덫을 읽기 전용 안에 가두는 까닭은 그 자리 설명에 있다 —
+    틀 원문은 그 한 곳에만 둔다. 아래 두 SQL 은 쓰기가 없는 읽기라 그 틀에
+    그대로 들어간다. 보내는 길(실행기 · 페이로드 · send-command 승인)도 그
+    자리를 따른다. 한 트랜잭션(`psql -X -1 -v ON_ERROR_STOP=1`)으로 돌려
+    중간에 실패하면 부여도 롤백되고, 회수 뒤 멤버십이 부여 전과 다르면
+    실패로 보고 멈춘다.
 
 **① 클립 안 나온 카드 비율**: 기간(`:from` 이상 `:to` 미만)에 편집기로 연 자동 카드 중 렌더 주문(`clips`)이 하나도 없는 비율.
 편집본만 저장하고 영상을 안 만든 카드도 「안 나왔다」로 센다.
