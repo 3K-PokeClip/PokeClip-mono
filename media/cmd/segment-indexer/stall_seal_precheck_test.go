@@ -49,9 +49,10 @@ func aheadLedger() index.RewindLedger {
 	return l
 }
 
-// 확인 뒤 봉인 전에 다른 상자가 행을 넣어도 봉인 순간의 장부를 본다. 4.5초까지 장부 끝은 3(진짜 끝처럼
-// 보임)이고 그 뒤 4 – 6 이 들어온다(push 없음). 5.5초 봉인 작업이 장부 끝 6 을 읽어 봉인하지 않고, 루프가 캐시에 알려 적재
-// 뒤 GAP · 5 · 6 발행으로 이어진다. 봉인보다 먼저 확인한 결과를 썼다면 5.5초에 봉인했다(ending · PublishedSeq 3).
+// 4.5초 틱 뒤 5.5초 봉인 작업 전에 다른 상자가 행을 넣으면 봉인 작업이 그때의 장부를 본다. 4.5초까지 장부
+// 끝은 3(진짜 끝처럼 보임)이고 그 뒤 4 – 6 이 들어온다(push 없음). 5.5초 봉인 작업이 장부 끝 6 을 읽어
+// 봉인하지 않고, 루프가 캐시에 알려 적재 뒤 GAP · 5 · 6 발행으로 이어진다. 봉인보다 먼저 확인한 결과를
+// 썼다면 5.5초에 봉인했다(ending · PublishedSeq 3).
 func TestStallSealChecksLedgerAtSealTime(t *testing.T) {
 	f, sc, ends := newSealLoop(t)
 	sc.ledger, sc.hasLedger = 3, true
