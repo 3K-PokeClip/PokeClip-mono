@@ -8,9 +8,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
@@ -289,6 +294,251 @@ func TestEndlistKeepsPublishedBytes(t *testing.T) {
 		t.Errorf("봉인 PUT 조건 = %+v, want IfMatch(직전 판 %s)", last.cond, prev.ETag)
 	}
 	wantFrozen(t, l, store, "S", soloKey)
+}
+
+// L2′ 전용 봉인(POK-591) — 장부 마지막 seq(9)가 캐시 뷰 다음 seq 이상이면 봉인하지 않고 retry ledger_ahead ·
+// LedgerLast 9 로 돌아온다. 그때 fence 는 되돌리고 예약 · 저장소 호출이 없다(PUT 수 · 동결 열이 그대로). 뷰 다음 seq 가 장부 끝 너머(10)면
+// Endlist 와 같은 봉인이다. DB 를 못 쓰면 retry 이고 봉인하지 않는다.
+func TestEndlistIfCaughtUpSealsOnlyWhenLedgerIsCaughtUp(t *testing.T) {
+	t.Run("장부_앞섬", func(t *testing.T) {
+		l, store, _ := newFreezeLoop(t, 9, 5)
+		puts, before := len(store.putCalls()), readDVR(t, l, "S")
+
+		out := l.pub.EndlistIfCaughtUp(t.Context(), fxStream, "S", 6)
+
+		wantOutcome(t, out, AxisDVR, ResultRetry, true)
+		if out.Reason != ReasonLedgerAhead || out.LedgerLast != 9 {
+			t.Errorf("사유 %q · 장부 끝 %d, want %q · 9", out.Reason, out.LedgerLast, ReasonLedgerAhead)
+		}
+		if n := len(store.putCalls()); n != puts {
+			t.Errorf("PUT = %d번 늘었다, want 0", n-puts)
+		}
+		if after := readDVR(t, l, "S"); after.state != before.state || after.freezingAt != nil {
+			t.Errorf("동결 상태 %q · 시작 %v, want %q 그대로 · 예약 없음", after.state, after.freezingAt, before.state)
+		}
+	})
+	t.Run("따라잡음", func(t *testing.T) {
+		l, store, _ := newFreezeLoop(t, 9, 5)
+
+		wantOutcome(t, l.pub.EndlistIfCaughtUp(t.Context(), fxStream, "S", 10), AxisDVR, ResultFrozen, false)
+
+		wantFrozen(t, l, store, "S", soloKey)
+	})
+	t.Run("DB_를_못_씀", func(t *testing.T) {
+		// 확인은 fence 획득 뒤라 취소된 ctx 는 fence 걸음에서 멈춘다(retry fence) — 장부 읽기 실패(ledger_failed)는
+		// TestEndlistIfCaughtUpCheckTimesOut 이 본다. 어느 쪽이든 봉인하지 않는다.
+		l, store, _ := newFreezeLoop(t, 9, 5)
+		puts := len(store.putCalls())
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		out := l.pub.EndlistIfCaughtUp(ctx, fxStream, "S", 10)
+
+		wantOutcome(t, out, AxisDVR, ResultRetry, true)
+		if out.Reason != freezeFence || len(store.putCalls()) != puts {
+			t.Errorf("사유 %q · PUT %d번 늘었다, want %q · 0", out.Reason, len(store.putCalls())-puts, freezeFence)
+		}
+	})
+}
+
+// 확인은 fence 를 잡은 뒤다(POK-591) — fence 획득이 회차 행 잠금을 기다리는 동안 다른 상자가 장부에 행(10)을
+// 넣으면, 잠금이 풀린 뒤의 확인이 그 행을 본다. 봉인하지 않고 ledger_ahead · LedgerLast 10 이며 PUT 은 늘지 않는다. 확인이 fence
+// 앞이면 기다리기 전의 장부(끝 9)를 보고 봉인한다.
+func TestEndlistIfCaughtUpChecksAfterFenceWait(t *testing.T) {
+	l, store, _ := newFreezeLoop(t, 9, 5)
+	puts := len(store.putCalls())
+	lock, err := l.pub.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("잠금 트랜잭션 시작 실패: %v", err)
+	}
+	defer lock.Rollback(context.Background())
+	if _, err := lock.Exec(t.Context(), `SELECT 1 FROM stream_sessions WHERE session_id = 'S' FOR NO KEY UPDATE`); err != nil {
+		t.Fatalf("회차 행 잠금 실패: %v", err)
+	}
+	done := make(chan FreezeOutcome, 1)
+	go func() { done <- l.pub.EndlistIfCaughtUp(context.Background(), fxStream, "S", 10) }()
+
+	waitLockWait(t, l.pub.pool) // fence 획득(UPDATE)이 잠금에서 기다린다 — 장부 INSERT 의 FK 확인(KEY SHARE)은 막지 않는다
+	next := l.fx.rows[len(l.fx.rows)-1]
+	next.Seq, next.PlaybackPDT = next.Seq+1, next.PlaybackPDT.Add(4*time.Second)
+	next.PlaybackS3Key = ""
+	insertLedgerRow(t, l.pub.pool, next, "pending")
+	if err := lock.Commit(t.Context()); err != nil {
+		t.Fatalf("잠금 풀기 실패: %v", err)
+	}
+
+	var out FreezeOutcome
+	select {
+	case out = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("봉인 작업이 5초 안에 돌아오지 않았다")
+	}
+	wantOutcome(t, out, AxisDVR, ResultRetry, true)
+	if out.Reason != ReasonLedgerAhead || out.LedgerLast != 10 || len(store.putCalls()) != puts {
+		t.Errorf("사유 %q · 장부 끝 %d · PUT %d번 늘었다, want %q · 10 · 0", out.Reason, out.LedgerLast,
+			len(store.putCalls())-puts, ReasonLedgerAhead)
+	}
+}
+
+// 확인 조회의 시한은 0.5초다(POK-591) — 장부 읽기가 막히면(표 잠금) 0.5초에 끊고 ledger_failed 로 돌아온다. 그 틱은 봉인하지
+// 않고 다음 틱이 다시 낸다. 시한이 문장 시한(10초)이면 잠금이 풀릴 때까지 기다린다.
+func TestEndlistIfCaughtUpCheckTimesOut(t *testing.T) {
+	l, store, _ := newFreezeLoop(t, 9, 5)
+	puts := len(store.putCalls())
+	lock, err := l.pub.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("잠금 트랜잭션 시작 실패: %v", err)
+	}
+	defer lock.Rollback(context.Background())
+	if _, err := lock.Exec(t.Context(), `LOCK TABLE stream_segments IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("장부 표 잠금 실패: %v", err)
+	}
+	done := make(chan FreezeOutcome, 1)
+	start := time.Now()
+	go func() { done <- l.pub.EndlistIfCaughtUp(context.Background(), fxStream, "S", 10) }()
+
+	var out FreezeOutcome
+	select {
+	case out = <-done:
+	case <-time.After(1500 * time.Millisecond):
+		lock.Rollback(context.Background())
+		<-done
+		t.Fatal("확인이 1.5초 안에 끊기지 않았다 — 시한이 0.5초가 아니다")
+	}
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Errorf("결과까지 %v, want 1초 안(시한 0.5초)", elapsed)
+	}
+	wantOutcome(t, out, AxisDVR, ResultRetry, true)
+	if out.Reason != ReasonLedgerFailed || len(store.putCalls()) != puts {
+		t.Errorf("사유 %q · PUT %d번 늘었다, want %q · 0", out.Reason, len(store.putCalls())-puts, ReasonLedgerFailed)
+	}
+}
+
+// 확인 시한이 지나면 서버의 조회도 끊긴다 — 지역 statement_timeout 은 두지 않는다. pgx 는 ctx 시한으로 문장이 끊기면 연결을
+// 닫기 전에 서버에 CancelRequest 를 보내고(pgconn asyncClose), 서버가 막힌 장부 조회를 끊으며 그 트랜잭션이 잡은 회차 행 fence
+// 잠금도 풀린다(다음 틱의 fence 획득이 막히지 않는다). 장부 표를 잠근 채 봉인 작업이 ledger_failed 로 돌아온 뒤 2초 안에 다른
+// 연결이 회차 행을 NOWAIT 로 잠글 수 있는지 본다 — pgx 가 취소를 보내지 않게 바뀌면 이 시험이 잡는다.
+func TestEndlistIfCaughtUpCheckTimesOutOnServer(t *testing.T) {
+	l, _, _ := newFreezeLoop(t, 9, 5)
+	lock, err := l.pub.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("잠금 트랜잭션 시작 실패: %v", err)
+	}
+	defer lock.Rollback(context.Background())
+	if _, err := lock.Exec(t.Context(), `LOCK TABLE stream_segments IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("장부 표 잠금 실패: %v", err)
+	}
+
+	if out := l.pub.EndlistIfCaughtUp(context.Background(), fxStream, "S", 10); out.Reason != ReasonLedgerFailed {
+		t.Fatalf("사유 = %q, want %q", out.Reason, ReasonLedgerFailed)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		probe, err := l.pub.pool.Begin(t.Context())
+		if err != nil {
+			t.Fatalf("탐침 트랜잭션 시작 실패: %v", err)
+		}
+		_, err = probe.Exec(t.Context(), `SELECT 1 FROM stream_sessions WHERE session_id = 'S' FOR UPDATE NOWAIT`)
+		probe.Rollback(context.Background())
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("2초가 지나도 회차 행 잠금이 풀리지 않았다(서버가 확인 조회를 끊지 않음): %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// stallConn 은 ROLLBACK 을 보내는 순간부터 쓰기를 멈추는 연결이다(통신이 멎은 연결의 대역) — 멈춘 쓰기는 연결 시한(pgx 가 ctx
+// 시한 · 취소에 맞춰 SetDeadline 으로 건다)이 지나거나 release 가 닫힐 때 돌아온다.
+type stallConn struct {
+	net.Conn
+	release <-chan struct{}
+
+	mu       sync.Mutex
+	stalled  bool
+	deadline time.Time
+}
+
+func (c *stallConn) Write(b []byte) (int, error) {
+	c.mu.Lock()
+	if bytes.Contains(bytes.ToLower(b), []byte("rollback")) {
+		c.stalled = true
+	}
+	stalled := c.stalled
+	c.mu.Unlock()
+	for stalled {
+		select {
+		case <-c.release:
+			stalled = false
+			continue
+		case <-time.After(5 * time.Millisecond):
+		}
+		c.mu.Lock()
+		d := c.deadline
+		c.mu.Unlock()
+		if !d.IsZero() && !time.Now().Before(d) {
+			return 0, os.ErrDeadlineExceeded
+		}
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *stallConn) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *stallConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadline = t
+	c.mu.Unlock()
+	return c.Conn.SetWriteDeadline(t)
+}
+
+// 장부 앞섬의 되돌림에도 시한이 있다(POK-591) — 확인이 장부 앞섬을 보고 트랜잭션을 되돌릴 때 연결 통신이 멎으면
+// (ROLLBACK 쓰기가 막힘) 되돌림은 문장 시한(stmtCtx — gapTx 와 같은 꼴)에 끊긴다. 결과가 돌아와야 그 스트림 차선이 풀리고 종료의
+// Lanes.Wait 도 끝난다. 시한 없는 되돌림은 연결이 풀릴 때까지 돌아오지 않는다.
+func TestEndlistIfCaughtUpRollbackIsBounded(t *testing.T) {
+	l, _, _ := newFreezeLoop(t, 9, 5)
+	release := make(chan struct{})
+	defer close(release)
+	cfg := l.pub.pool.Config()
+	dialer := &net.Dialer{}
+	cfg.ConnConfig.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &stallConn{Conn: conn, release: release}, nil
+	}
+	stalling, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("멎는 연결 풀 생성 실패: %v", err)
+	}
+	t.Cleanup(stalling.Close)
+	l.pub.pool = stalling
+	l.pub.opt.statementTimeout = 300 * time.Millisecond
+
+	done := make(chan FreezeOutcome, 1)
+	start := time.Now()
+	go func() { done <- l.pub.EndlistIfCaughtUp(context.Background(), fxStream, "S", 6) }()
+
+	select {
+	case out := <-done:
+		if out.Reason != ReasonLedgerAhead {
+			t.Errorf("사유 = %q, want %q", out.Reason, ReasonLedgerAhead)
+		}
+		if elapsed := time.Since(start); elapsed >= 2*time.Second {
+			t.Errorf("결과까지 %v, want 문장 시한(0.3초) 근처", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("되돌림이 3초 안에 돌아오지 않았다 — 시한이 없다")
+	}
 }
 
 // 발행본이 없으면 봉인할 본문이 없다 — PUT 없이 빈 동결이다.

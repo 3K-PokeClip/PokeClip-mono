@@ -196,6 +196,231 @@ func TestDriftAuditSkipsLoadingStream(t *testing.T) {
 	}
 }
 
+// H+1 행이 장부에는 있는데 뷰에 없으면 불일치다(2026-11-16 prod 교착). 뷰가 머리 5 에서 끝나는데(행 0..5
+// 모두 settled) DB 에는 6 이 있다 — 다른 쓰기자가 넣어 push 가 오지 않았다. 6 의 ③ 이 영구 실패면 DB 의 6 은 settled 가
+// 아니어서 옛 대조(「H+1 이 settled 인가」)는 일치로 봤고, 사다리는 뷰에 없는 6 에 GAP 을 세우지 못해 교착이었다. 지금은
+// 두 감시 연속이면 요구 ③ 을 등재하고, 첫 불일치부터 캐시는 뷰가 장부보다 뒤처졌음을 안다(Behind). 결과가 닿기 전에 6 의
+// push 가 닿았으면(뷰 끝이 H+1 이상) 일치다 — 입력과 결과 사이의 경합.
+func TestDriftAuditCatchesRowMissingFromView(t *testing.T) {
+	s := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6}
+	headIsEnd := ledgerOf(0, ledgerRun("S", 0, 5, at(0)), s)
+	t.Run("두_감시_연속", func(t *testing.T) {
+		c := &cache.Cache{}
+		load(t, c, stream, headIsEnd)
+
+		c.AuditDrift([]index.WatchDrift{dbRow(stream, 6, 0, false)})
+		if !c.Behind(stream) {
+			t.Error("첫 불일치 뒤 Behind = 거짓, want 참")
+		}
+		if got := c.DemandedLoads(); len(got) != 0 {
+			t.Fatalf("첫 불일치에 요구 = %+v, want 없음(두 번째에 요구)", got)
+		}
+		c.AuditDrift([]index.WatchDrift{dbRow(stream, 6, 0, false)})
+		if got := c.DemandedLoads(); len(got) != 1 || got[0].StreamID != stream || got[0].Hint != nil {
+			t.Errorf("요구 = %+v, want %s · 힌트 없음 한 건(요구 ③)", got, stream)
+		}
+	})
+	t.Run("결과_전에_push_가_닿음", func(t *testing.T) {
+		c := &cache.Cache{}
+		load(t, c, stream, headIsEnd)
+		c.ApplyInsert(stream, 6, seedOf("S", 6, at(24*time.Second), 4000))
+
+		c.AuditDrift([]index.WatchDrift{dbRow(stream, 6, 0, false)})
+		c.AuditDrift([]index.WatchDrift{dbRow(stream, 6, 0, false)})
+		if got := c.DemandedLoads(); len(got) != 0 || c.Behind(stream) {
+			t.Errorf("요구 = %+v · Behind = %v, want 없음 · 거짓", got, c.Behind(stream))
+		}
+	})
+}
+
+// withLast 는 감시 결과 d 에 장부의 그 스트림 마지막 seq last 를 실은 값이다.
+func withLast(d index.WatchDrift, last int64) index.WatchDrift {
+	d.LastSeq, d.HasLast = last, true
+	return d
+}
+
+// 장부 마지막 seq 가 뷰 끝 너머면 불일치다. 뷰에 회차 S(ending)의 행 0..4 가 있고 4 는 ③ 영구 실패다 — S 는 live 가 아니라
+// 사다리가 꺼져 머리가 3 에서 나아가지 않는다. 다른 프로세스가 새 회차 T(live)의 5 · 6 을 넣었고 뒤 push 는 없다. H+1(4)은 뷰
+// 안의 미settled 행이라 H+1 대조만으로는 영원히 일치다. 마지막 seq 6 이 뷰 끝 4 너머라 두 감시 연속이면 요구 ③ 이고, 첫
+// 불일치부터 Behind 다. 결과가 닿기 전에 5 · 6 push 가 닿았으면(뷰 끝이 마지막 seq 이상) 일치다.
+func TestDriftAuditCatchesLedgerBeyondView(t *testing.T) {
+	ending := index.RewindSession{SessionID: "S", State: "ending", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6}
+	stuck := ledgerOf(0, append(ledgerRun("S", 0, 3, at(0)), pendingRun("S", 4, 4, at(16*time.Second))...), ending)
+	result := withLast(dbRow(stream, 4, 0, false), 6)
+	t.Run("두_감시_연속", func(t *testing.T) {
+		c := &cache.Cache{}
+		load(t, c, stream, stuck)
+		if p := c.DriftProbes(); len(p) != 1 || p[0].NextSeq != 4 {
+			t.Fatalf("DriftProbes() = %+v, want seq 4(H+1 이 뷰 안)", p)
+		}
+
+		c.AuditDrift([]index.WatchDrift{result})
+		if !c.Behind(stream) {
+			t.Error("첫 불일치 뒤 Behind = 거짓, want 참")
+		}
+		if got := c.DemandedLoads(); len(got) != 0 {
+			t.Fatalf("첫 불일치에 요구 = %+v, want 없음", got)
+		}
+		c.AuditDrift([]index.WatchDrift{result})
+		if got := c.DemandedLoads(); len(got) != 1 || got[0].StreamID != stream || got[0].Hint != nil {
+			t.Errorf("요구 = %+v, want %s · 힌트 없음 한 건(요구 ③)", got, stream)
+		}
+	})
+	t.Run("결과_전에_push_가_닿음", func(t *testing.T) {
+		c := &cache.Cache{}
+		load(t, c, stream, stuck)
+		pushRun(c, "T", 5, 6, at(20*time.Second))
+
+		c.AuditDrift([]index.WatchDrift{result})
+		c.AuditDrift([]index.WatchDrift{result})
+		if got := c.DemandedLoads(); len(got) != 0 || c.Behind(stream) {
+			t.Errorf("요구 = %+v · Behind = %v, want 없음 · 거짓", got, c.Behind(stream))
+		}
+	})
+}
+
+// 빈자리 백오프(장부 마지막 seq 대조의 되풀이 방어). 장부에 seq 빈자리(4)가 있으면 적재가 빈자리에서 멈춰
+// 뷰가 장부 끝에 닿지 못한다 — 적재 직후부터 Behind 다. 드리프트 적재가 뒤처짐을 풀지 못할 때마다 다음 요구까지의 연속 불일치
+// 문턱이 두 배가 되고(2 → 4 → 8 … 64 감시에서 멈춤 — 30초 감시로 32분), 그동안 빈 seq 뒤 push 도 적재를 바로 요구하지 않는다.
+// 뒤처짐을 푼 드리프트 적재가 문턱을 2 로 되돌린다. seq 는 커서 꼬리 + 1 로 매겨 쓸 때 빈자리를 만들지 않는다 — 이것은
+// 읽기 결함 · 운영 사고에서 적재가 감시마다 되풀이되지 않게 막는 장치다.
+func TestDriftLoadBacksOffOnLedgerHole(t *testing.T) {
+	s := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6}
+	holey := ledgerOf(0, append(ledgerRun("S", 0, 3, at(0)), ledgerRun("S", 5, 6, at(20*time.Second))...), s)
+	result := withLast(index.WatchDrift{StreamID: stream, NextSeq: 4, HasCutoff: true}, 6)
+	c := &cache.Cache{}
+	load(t, c, stream, holey)
+	if !c.Behind(stream) {
+		t.Fatal("빈자리에서 멈춘 적재 뒤 Behind = 거짓, want 참")
+	}
+	// auditsToDemand 는 요구가 설 때까지 감시를 먹이고 그 수를 돌려준다(100번이면 멈춘다).
+	auditsToDemand := func() int {
+		for n := 1; n <= 100; n++ {
+			c.AuditDrift([]index.WatchDrift{result})
+			if d := c.DemandedLoads(); len(d) > 0 {
+				return n
+			}
+		}
+		return 0
+	}
+	repair := func(l index.RewindLedger) {
+		t.Helper()
+		if applied, drift := c.CompleteLoad(stream, c.BeginLoad(stream, nil), l); !applied || !drift {
+			t.Fatalf("CompleteLoad = (%v, %v), want (참, 참)", applied, drift)
+		}
+	}
+
+	var got []int
+	for range 7 {
+		got = append(got, auditsToDemand())
+		repair(holey)
+	}
+	if want := []int{2, 4, 8, 16, 32, 64, 64}; !reflect.DeepEqual(got, want) {
+		t.Errorf("요구까지 감시 수 = %v, want %v", got, want)
+	}
+	c.ApplyInsert(stream, 7, seedOf("S", 7, at(28*time.Second), 4000))
+	if d := c.DemandedLoads(); len(d) != 0 {
+		t.Errorf("백오프 중 빈 seq 뒤 push 의 요구 = %+v, want 없음(감시 문턱을 기다린다)", d)
+	}
+
+	auditsToDemand()
+	repair(ledgerOf(0, ledgerRun("S", 0, 7, at(0)), s)) // 빈자리가 채워졌다
+	if c.Behind(stream) {
+		t.Fatal("빈자리가 채워진 적재 뒤 Behind = 참, want 거짓")
+	}
+	c.ApplyInsert(stream, 9, seedOf("S", 9, at(36*time.Second), 4000))
+	if d := c.DemandedLoads(); len(d) != 1 {
+		t.Errorf("백오프가 풀린 뒤 빈 seq 뒤 push 의 요구 = %+v, want 한 건", d)
+	}
+}
+
+// 백오프는 같은 빈자리의 무진전에만 걸린다. 빈자리 장부에서 드리프트 적재가 한 번 뒤처짐을 못 풀어 백오프가
+// 선 뒤, 그 빈자리가 풀리면 — push 가 뷰를 장부 끝까지 잇거나 · 감시가 일치를 보거나 · 일반 적재가 뒤처짐을 풀면 — 백오프는
+// 사라진다. 그 뒤 새로 놓친 행(7 — 다른 쓰기자 몫)은 백오프 없이 잡힌다: 뒤 push 가 오면 그 push 가 바로 적재를 요구하고,
+// push 가 없으면 감시 두 번 연속에 요구한다. 옛 코드는 뒤처짐을 푼 드리프트 적재만 백오프를 풀어, 다음 7125 꼴 교착의 복구를
+// 64 감시(약 32분)까지 미뤘다.
+func TestDriftBackoffClearsOnceTheHoleIsGone(t *testing.T) {
+	s := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6}
+	holey := ledgerOf(0, append(ledgerRun("S", 0, 3, at(0)), ledgerRun("S", 5, 6, at(20*time.Second))...), s)
+	full := ledgerOf(0, ledgerRun("S", 0, 6, at(0)), s)
+	row := func(seq int64) index.InsertCommit {
+		return seedOf("S", seq, at(time.Duration(seq)*4*time.Second), 4000)
+	}
+	// backedOff 는 빈자리에서 멈춘 드리프트 적재 한 번으로 백오프가 선 캐시다(다음 요구 문턱 4 감시).
+	backedOff := func(t *testing.T) *cache.Cache {
+		t.Helper()
+		c := &cache.Cache{}
+		load(t, c, stream, holey)
+		hole := withLast(index.WatchDrift{StreamID: stream, NextSeq: 4, HasCutoff: true}, 6)
+		c.AuditDrift([]index.WatchDrift{hole})
+		c.AuditDrift([]index.WatchDrift{hole})
+		if d := c.DemandedLoads(); len(d) != 1 {
+			t.Fatalf("준비: 요구 = %+v, want 한 건", d)
+		}
+		if applied, drift := c.CompleteLoad(stream, c.BeginLoad(stream, nil), holey); !applied || !drift {
+			t.Fatalf("준비: CompleteLoad = (%v, %v), want (참, 참)", applied, drift)
+		}
+		c.ApplyInsert(stream, 7, row(7))
+		if d := c.DemandedLoads(); len(d) != 0 {
+			t.Fatalf("준비: 백오프 중 push 요구 = %+v, want 없음", d)
+		}
+		return c
+	}
+	recoveries := []struct {
+		name    string
+		recover func(c *cache.Cache)
+	}{
+		{"push_가_빈자리를_이음", func(c *cache.Cache) {
+			for seq := int64(4); seq <= 7; seq++ {
+				c.ApplyInsert(stream, seq, row(seq))
+			}
+		}},
+		{"감시가_일치를_봄", func(c *cache.Cache) {
+			for seq := int64(4); seq <= 7; seq++ {
+				c.ApplyInsert(stream, seq, row(seq))
+			}
+			c.AuditDrift([]index.WatchDrift{withLast(dbRow(stream, 4, 0, false), 7)}) // H+1 = 4 는 뷰 안 · 장부 끝 7 = 뷰 끝
+		}},
+		{"일반_적재", func(c *cache.Cache) {
+			c.DemandLoad(stream, nil) // 요구 ② 같은 드리프트가 아닌 요구
+			c.DemandedLoads()
+			if applied, drift := c.CompleteLoad(stream, c.BeginLoad(stream, nil), full); !applied || drift {
+				t.Fatalf("CompleteLoad = (%v, %v), want (참, 거짓)", applied, drift)
+			}
+		}},
+	}
+	for _, rc := range recoveries {
+		t.Run(rc.name+"/뒤_push_가_옴", func(t *testing.T) {
+			c := backedOff(t)
+			rc.recover(c)
+			if c.Behind(stream) {
+				t.Fatal("복구 뒤 Behind = 참, want 거짓")
+			}
+
+			next := seqsOf(c.Snapshot(stream).RowsFrom(0))
+			c.ApplyInsert(stream, next[len(next)-1]+2, row(next[len(next)-1]+2)) // 그 사이 한 행은 다른 쓰기자 몫
+
+			if d := c.DemandedLoads(); len(d) != 1 {
+				t.Errorf("새로 놓친 행 뒤 push 의 요구 = %+v, want 한 건(백오프 없음)", d)
+			}
+		})
+		t.Run(rc.name+"/push_없음", func(t *testing.T) {
+			c := backedOff(t)
+			rc.recover(c)
+			rows := seqsOf(c.Snapshot(stream).RowsFrom(0))
+			end := rows[len(rows)-1]
+			missed := withLast(index.WatchDrift{StreamID: stream, NextSeq: end + 1, HasCutoff: true}, end+1)
+
+			c.AuditDrift([]index.WatchDrift{missed})
+			c.AuditDrift([]index.WatchDrift{missed})
+
+			if d := c.DemandedLoads(); len(d) != 1 {
+				t.Errorf("감시 두 번 뒤 요구 = %+v, want 한 건(백오프 없음)", d)
+			}
+		})
+	}
+}
+
 // 드리프트 까닭(장부 421 P-5 — 캐시 쪽 · 체크리스트 A-6 3 「수리」) — 대조가 등재한 요구 ③ 의 까닭(드리프트)은 그
 // 스트림의 적재 상태로 옮겨 가고, CompleteLoad 가 그 토큰의 결과로 뷰를 갈아 끼우면 「드리프트로 연 적재였다」를
 // 돌려준다. 까닭은 요구가 합쳐져도(힌트가 있는 요구) 남고, 토큰이 달라 버린 결과에서는 돌려주지 않고 다시 연
@@ -295,5 +520,70 @@ func TestWatchReconcileIsMonotone(t *testing.T) {
 	}
 	if s, _ := c.Session("busy", "L"); s.InitUploaded {
 		t.Error("적재 중 스트림을 화해했다")
+	}
+}
+
+// 봉인 전 확인의 캐시 쪽(POK-591). 루프는 봉인을 낼 때 뷰의 다음 seq(ViewNext)를 떠 봉인
+// 작업에 넘기고, 작업이 읽은 장부 마지막 seq 를 ObserveLedgerLast 로 알린다. 마지막 seq 가 뷰 끝 너머면 뒤처짐을 적고(Behind)
+// 드리프트 까닭 적재를 요구한다(빈 seq 뒤 push 와 같은 길 — 백오프 중이면 요구하지 않는다). 뷰 끝 안이면 아무것도 바꾸지 않는다.
+// 뷰가 없거나 적재 중이면 ViewNext 는 거짓이고 ObserveLedgerLast 는 할 일이 없다.
+func TestObserveLedgerLastDemandsLoadWhenAhead(t *testing.T) {
+	s := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6}
+	c := &cache.Cache{}
+	load(t, c, stream, ledgerOf(0, ledgerRun("S", 0, 3, at(0)), s))
+	if next, ok := c.ViewNext(stream); !ok || next != 4 {
+		t.Fatalf("ViewNext = (%d, %v), want (4, 참)", next, ok)
+	}
+	if _, ok := c.ViewNext("nobody"); ok {
+		t.Error("모르는 스트림의 ViewNext 가 참")
+	}
+
+	c.ObserveLedgerLast(stream, 3)
+	if d := c.DemandedLoads(); len(d) != 0 || c.Behind(stream) {
+		t.Fatalf("장부 끝 = 뷰 끝인데 요구 %+v · Behind %v, want 없음 · 거짓", d, c.Behind(stream))
+	}
+	c.ObserveLedgerLast(stream, 6)
+	if !c.Behind(stream) {
+		t.Error("장부 끝이 뷰 끝 너머인데 Behind = 거짓")
+	}
+	d := c.DemandedLoads()
+	if len(d) != 1 || d[0].StreamID != stream {
+		t.Fatalf("요구 = %+v, want %s 한 건", d, stream)
+	}
+	full := ledgerOf(0, ledgerRun("S", 0, 6, at(0)), s)
+	if applied, drift := c.CompleteLoad(stream, c.BeginLoad(stream, nil), full); !applied || !drift {
+		t.Errorf("CompleteLoad = (%v, %v), want (참, 참) — 드리프트 까닭", applied, drift)
+	}
+	c.BeginLoad(stream, nil)
+	if _, ok := c.ViewNext(stream); ok {
+		t.Error("적재 중 ViewNext 가 참")
+	}
+	c.ObserveLedgerLast(stream, 9) // 적재 중 — 할 일이 없다
+	if d := c.DemandedLoads(); len(d) != 0 {
+		t.Errorf("적재 중 알림의 요구 = %+v, want 없음", d)
+	}
+}
+
+// 봉인 전 확인 알림도 빈자리 백오프를 따른다(POK-591) — 드리프트 적재가 같은 빈자리에서 멈춰 백오프가 선 동안은
+// 장부 끝이 뷰 끝 너머여도 적재를 바로 요구하지 않는다(뒤처짐 표지만 남는다). 빈 seq 뒤 push 와 같은 문이다.
+func TestObserveLedgerLastHonoursHoleBackoff(t *testing.T) {
+	s := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6}
+	holey := ledgerOf(0, append(ledgerRun("S", 0, 3, at(0)), ledgerRun("S", 5, 6, at(20*time.Second))...), s)
+	c := &cache.Cache{}
+	load(t, c, stream, holey)
+	hole := withLast(index.WatchDrift{StreamID: stream, NextSeq: 4, HasCutoff: true}, 6)
+	c.AuditDrift([]index.WatchDrift{hole})
+	c.AuditDrift([]index.WatchDrift{hole})
+	if d := c.DemandedLoads(); len(d) != 1 {
+		t.Fatalf("준비: 요구 = %+v, want 한 건", d)
+	}
+	if applied, drift := c.CompleteLoad(stream, c.BeginLoad(stream, nil), holey); !applied || !drift {
+		t.Fatalf("준비: CompleteLoad = (%v, %v), want (참, 참)", applied, drift)
+	}
+
+	c.ObserveLedgerLast(stream, 7)
+
+	if d := c.DemandedLoads(); len(d) != 0 || !c.Behind(stream) {
+		t.Errorf("백오프 중 알림 = 요구 %+v · Behind %v, want 없음 · 참", d, c.Behind(stream))
 	}
 }

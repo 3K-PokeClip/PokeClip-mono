@@ -110,8 +110,8 @@ type laneWork struct {
 	renew func(ctx context.Context, st publish.State, sessionID string) publish.Outcome
 	load  func(ctx context.Context, in publish.LoadInput) publish.LoadOutcome
 	watch func(ctx context.Context, probes []index.WatchProbe) publish.WatchOutcome
-	// seal 은 L2′ 의 봉인이다(운영은 Publisher.Endlist — stall_seal.go).
-	seal func(ctx context.Context, streamID, sessionID string) publish.FreezeOutcome
+	// seal 은 L2′ 의 봉인이다(운영은 Publisher.EndlistIfCaughtUp — 장부 끝이 viewNext 앞일 때만 봉인 · stall_seal.go).
+	seal func(ctx context.Context, streamID, sessionID string, viewNext int64) publish.FreezeOutcome
 	// audit 은 동결 감사다(운영은 프로세스에 하나인 FrozenAuditor 의 Audit — 문서당 복구 1회를 그 감사기가 기억한다). nil 이면
 	// 감사를 내지 않는다.
 	audit func(ctx context.Context) publish.AuditOutcome
@@ -406,6 +406,7 @@ func (r *rewindLoop) evaluateLadders(ctx context.Context, now time.Time) map[str
 		rec.ladder, step = r.pub.EvaluateLadder(ctx, rec.ladder, publish.LadderInput{
 			StreamID: s, Snapshot: snap, Window: w, Owner: owner.RewindSession, Publish: rec.pub,
 			UnstoodGapSeq: rec.unstoodGap, PublishedAt: rec.publishedAt, OwnedSince: rec.ownedSince, Now: now,
+			ViewBehind: r.cache.Behind(s),
 		})
 		if step.Expedite && r.expedite != nil {
 			r.expedite(s, step.Seq)

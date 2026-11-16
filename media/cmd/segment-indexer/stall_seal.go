@@ -4,8 +4,13 @@ package main
 // kty 2026-10-27 결정 (나) 「봉인과 함께 세션을 ending 으로」). 스위치(REWIND_STALL_SEAL)는 기본 끔이고(kty K5), 꺼져 있으면
 // 조립이 발행자의 봉인 문턱을 0 으로 두고 종료 손잡이(rewindLoop.endStallSeal)를 끼우지 않는다.
 //
-//	봉인  사다리가 Seal 을 내면(publish.LadderStep) 그 스트림 차선이 비었을 때 봉인(Publisher.Endlist)을 낸다 — 저장소를
-//	      부르므로 차선이다(설계 3.3). 서지 않았으면 retry 는 다음 holdTick 의 사다리가 다시 내고, failed 는 30초 쉰다
+//	봉인  사다리가 Seal 을 내면(publish.LadderStep) 그 스트림 차선이 비었을 때 봉인(Publisher.EndlistIfCaughtUp)을 낸다 —
+//	      저장소를 부르므로 차선이다(설계 3.3). 봉인 작업은 fence 를 잡은 뒤 같은 트랜잭션에서 장부 마지막 seq 를 읽어(시한
+//	      0.5초), 캐시 뷰 다음 seq 이상이면 되돌리고 봉인 없이 retry ledger_ahead 로 돌아온다 — 루프가 그 값을 캐시에 알린다
+//	      (뒤처짐 표지 · 적재 요구). 머리 다음 행이 뷰에 없는 정체(no_row)면 다음 틱부터 사다리 까닭이 view_behind 라 봉인에서
+//	      빠진다. 머리 다음 행이 뷰에 있는 부적격 정체(incomplete 등)면 까닭이 그대로라 적재가 따라잡을 때까지 봉인 작업이 틱마다
+//	      다시 나가고 그때마다 ledger_ahead 로 돌아온다. 못 읽으면 retry ledger_failed 다(POK-591).
+//	      서지 않았으면 retry 는 다음 holdTick 의 사다리가 다시 내고, failed 는 30초 쉰다
 //	끝냄  봉인이 서면 다음 holdTick 의 L3 걸음 뒤에서 EndLive 처럼 동기로 index.EndStallSeal 을 부른다 — 그 회차가 아직 live
 //	      일 때만 끝낸다(회차 술어). 끝낸 뒤 · 실패 처치는 오프라인 전이 · L3 와 같다(live_end.go). 동결은 봉인이 이미 했다(dvr frozen — 정산이
 //	      phase 1 을 건너뛴다 · M4 r17 4.5.3). 재접속 창 안의 다음 조각은 새 회차를 열어 계승 · 합류한다(registry
@@ -31,11 +36,21 @@ type stallSeal struct {
 	sealed string
 	// retryAt 은 failed 봉인 뒤 다시 봉인할 시각이다(영값 = 바로).
 	retryAt time.Time
+	// noted 는 장부 확인 결과(ledger_ahead · ledger_failed)의 WARN 을 마지막으로 남긴 (회차, 사유, 장부 끝)이다 — 같으면 다시
+	// 남기지 않는다. 다른 봉인 결과가 오면 비운다.
+	noted ledgerNote
 }
 
-// sealResult 는 봉인 작업 한 번의 결과다.
+// ledgerNote 는 장부 확인 WARN 한 줄의 열쇠다.
+type ledgerNote struct {
+	session, reason string
+	last            int64
+}
+
+// sealResult 는 봉인 작업 한 번의 결과다 — viewNext 는 그 작업에 넘긴 캐시 뷰 다음 seq 다(ledger_ahead 신호의 속성).
 type sealResult struct {
 	sessionID string
+	viewNext  int64
 	out       publish.FreezeOutcome
 }
 
@@ -47,9 +62,13 @@ func (r *rewindLoop) startSeal(ctx context.Context, s, session string, now time.
 	if r.endStallSeal == nil || rec.running != nil || rec.stallSeal.sealed == session || now.Before(rec.stallSeal.retryAt) {
 		return
 	}
+	next, viewed := r.cache.ViewNext(s)
+	if !viewed {
+		return // 사다리가 돌았다면 뷰가 있다 — 견줄 뷰 끝이 없으면 봉인하지 않는다
+	}
 	seal := r.work.seal
 	if !r.lanes.Start(ctx, s, func(ctx context.Context) publish.Result {
-		return publish.Result{Kind: publish.KindSeal, Value: sealResult{sessionID: session, out: seal(ctx, s, session)}}
+		return publish.Result{Kind: publish.KindSeal, Value: sealResult{sessionID: session, viewNext: next, out: seal(ctx, s, session, next)}}
 	}) {
 		return
 	}
@@ -63,6 +82,12 @@ func (r *rewindLoop) sealDone(ctx context.Context, res publish.Result, now time.
 	rec := r.stream(s)
 	rec.running = nil
 	out, _ := res.Value.(sealResult)
+	if reason := out.out.Reason; reason == publish.ReasonLedgerAhead || reason == publish.ReasonLedgerFailed {
+		r.ledgerChecked(s, rec, out)
+		r.resume(ctx, s, false, now)
+		return
+	}
+	rec.stallSeal.noted = ledgerNote{}
 	switch outcomeOf(out.out) {
 	case finalize.OutcomeDone:
 		rec.stallSeal = stallSeal{sealed: out.sessionID}
@@ -76,6 +101,26 @@ func (r *rewindLoop) sealDone(ctx context.Context, res publish.Result, now time.
 			"reason", out.out.Reason, "err", out.out.Err)
 	}
 	r.resume(ctx, s, false, now)
+}
+
+// ledgerChecked 는 봉인 작업의 장부 확인이 봉인을 막은 결과다(retry — 다음 holdTick 의 사다리가 다시 낸다).
+//
+//	ledger_ahead   캐시가 장부보다 뒤처졌다 — cache.ObserveLedgerLast 로 알린다. no_row 정체면 다음 틱부터 사다리 까닭이
+//	               view_behind 라 봉인에서 빠지고, 부적격 정체(incomplete 등)면 적재가 따라잡을 때까지 틱마다 다시 이리 온다
+//	ledger_failed  장부를 못 읽었다(DB 오류 · 확인 시한) — 확인 없이 봉인하지 않는다. 봉인 retry 는 쉬지 않는다
+//
+// WARN 은 같은 (회차, 사유, 장부 끝)에 한 줄이다 — DB 장애 동안 틱마다 같은 줄이 쌓이지 않는다.
+func (r *rewindLoop) ledgerChecked(s string, rec *rewindStream, out sealResult) {
+	if out.out.Reason == publish.ReasonLedgerAhead {
+		r.cache.ObserveLedgerLast(s, out.out.LedgerLast)
+	}
+	note := ledgerNote{session: out.sessionID, reason: out.out.Reason, last: out.out.LedgerLast}
+	if rec.stallSeal.noted == note {
+		return
+	}
+	rec.stallSeal.noted = note
+	r.log.Warn("stall_seal", "stream_id", s, "session_id", out.sessionID, "result", out.out.Result,
+		"reason", out.out.Reason, "ledger_last", out.out.LedgerLast, "view_next", out.viewNext, "err", out.out.Err)
 }
 
 // endStallSeals 는 holdTick 의 L2′ 걸음이다 — 봉인이 선 스트림마다 그 회차를 끝낸다. 손잡이가 없으면(스위치 끔) · 루프가 쉬는

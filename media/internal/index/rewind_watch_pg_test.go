@@ -82,12 +82,14 @@ func TestRewindWatchReadsThreeKindsInOneStatement(t *testing.T) {
 }
 
 // drift 재료(B #14 · J39) — 입력 스트림마다 DB 컷오프와 그 H+1 행의 settled 재료(회차 · PDT · ③ 키 · 길이 · ③ 상태 ·
-// GAP 원장 소속)를 싣는다. 행이 없으면 행 없음, 컷오프가 없으면 컷오프 없음이다. 판정(settled 인가)은 싣지 않는다.
+// GAP 원장 소속)를 싣는다. 행이 없으면 행 없음, 컷오프가 없으면 컷오프 없음이다. 판정(settled 인가)은 싣지 않는다. 그
+// 스트림 장부의 마지막 seq 도 싣는다(캐시 뷰 끝 너머 행의 재료) — H+1 과 무관하고, 장부에 행이 없는
+// 스트림(rwZ)이면 마지막 seq 없음이다.
 func TestRewindWatchCarriesDriftMaterial(t *testing.T) {
 	pool := newTestPool(t)
 	now := time.Now()
 	watchFixture(t, pool, now)
-	probes := []WatchProbe{{"rwA", 10}, {"rwA", 11}, {"rwA", 12}, {"rwA", 13}, {"rwB", 0}}
+	probes := []WatchProbe{{"rwA", 10}, {"rwA", 11}, {"rwA", 12}, {"rwA", 13}, {"rwB", 0}, {"rwZ", 0}}
 
 	got, err := LoadRewindWatch(context.Background(), pool, probes, 10*time.Minute)
 
@@ -104,12 +106,14 @@ func TestRewindWatchCarriesDriftMaterial(t *testing.T) {
 	gap := row(12, ago(52*time.Second), "A1")
 	gap.IsGap = true
 	want := []WatchDrift{
-		{StreamID: "rwA", NextSeq: 10, CutoffSeq: 10, HasCutoff: true, Next: uploaded, HasNext: true},
-		{StreamID: "rwA", NextSeq: 11, CutoffSeq: 10, HasCutoff: true, Next: row(11, ago(56*time.Second), "A1"), HasNext: true},
-		{StreamID: "rwA", NextSeq: 12, CutoffSeq: 10, HasCutoff: true, Next: gap, HasNext: true},
-		{StreamID: "rwA", NextSeq: 13, CutoffSeq: 10, HasCutoff: true},
+		{StreamID: "rwA", NextSeq: 10, CutoffSeq: 10, HasCutoff: true, Next: uploaded, HasNext: true, LastSeq: 12, HasLast: true},
+		{StreamID: "rwA", NextSeq: 11, CutoffSeq: 10, HasCutoff: true, Next: row(11, ago(56*time.Second), "A1"), HasNext: true,
+			LastSeq: 12, HasLast: true},
+		{StreamID: "rwA", NextSeq: 12, CutoffSeq: 10, HasCutoff: true, Next: gap, HasNext: true, LastSeq: 12, HasLast: true},
+		{StreamID: "rwA", NextSeq: 13, CutoffSeq: 10, HasCutoff: true, LastSeq: 12, HasLast: true},
 		{StreamID: "rwB", NextSeq: 0, Next: RewindRow{Seq: 0, SessionID: "B1", DurationMS: 4000,
-			PlaybackPDT: ago(time.Minute), PlaybackS3Key: "dvr/rwB/seg/000000.m4s"}, HasNext: true},
+			PlaybackPDT: ago(time.Minute), PlaybackS3Key: "dvr/rwB/seg/000000.m4s"}, HasNext: true, HasLast: true},
+		{StreamID: "rwZ", NextSeq: 0},
 	}
 	if !reflect.DeepEqual(got.Drift, want) {
 		t.Errorf("drift =\n%+v\nwant\n%+v", got.Drift, want)
@@ -254,6 +258,42 @@ func TestRewindWatchReportsQueryFailure(t *testing.T) {
 
 	if _, err := LoadRewindWatch(ctx, pool, nil, 10*time.Minute); err == nil {
 		t.Fatal("취소된 ctx 로 읽었는데 오류가 없다")
+	}
+}
+
+// 봉인 전 장부 끝 확인(POK-591) — 그 스트림 장부의 마지막 seq 다(컷오프 아래 행도 센다). 행이 없으면
+// 없음이다. 문장은 이름 const 하나(rewindLedgerLastSQL)를 글자 그대로 보내고 바인드는 스트림 하나뿐이다. 못 읽으면 오류다.
+func TestLoadLedgerLastReadsStreamLastSeq(t *testing.T) {
+	base := newTestPool(t)
+	watchFixture(t, base, time.Now())
+	var sent []string
+	var args [][]any
+	pool := hookedPool(t, base, traceArgs(func(sql string, a []any) {
+		sent, args = append(sent, sql), append(args, a)
+	}))
+
+	for _, tt := range []struct {
+		stream string
+		last   int64
+		has    bool
+	}{
+		{"rwA", 12, true},
+		{"rwB", 0, true},
+		{"rwZ", 0, false},
+	} {
+		last, has, err := LoadLedgerLast(context.Background(), pool, tt.stream)
+		if err != nil || last != tt.last || has != tt.has {
+			t.Errorf("LoadLedgerLast(%s) = (%d, %v, %v), want (%d, %v, nil)", tt.stream, last, has, err, tt.last, tt.has)
+		}
+	}
+	if len(sent) != 3 || sent[0] != rewindLedgerLastSQL || len(args[0]) != 1 {
+		t.Errorf("보낸 문장 %d개(바인드 %v), want rewindLedgerLastSQL · 바인드 하나", len(sent), args)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := LoadLedgerLast(ctx, base, "rwA"); err == nil {
+		t.Error("취소된 ctx 로 읽었는데 오류가 없다")
 	}
 }
 
