@@ -54,7 +54,11 @@ export function VodRow({
   onResetDownload: () => void;
 }) {
   const view = rowViewFor(item, download, now, visual?.vodMissing === true);
-  const title = visual?.title ?? '제목 없는 방송';
+  const ownTitle = visual?.title ?? null;
+  const title = ownTitle ?? '제목 없는 방송';
+  // 방송 주인이 쓴 제목만 세션 녹화(PostHog)가 `*`로 가리게 감싼다. 제목이 없을 때의 대체 문구는
+  // 화면이 채운 고정 글이라 가리지 않고, 홈 타일처럼 흐리게 해 주인이 쓴 제목과 구분한다
+  const titleClass = ownTitle === null ? styles.rowUntitled : PRIVATE_TEXT_CLASS;
   const duration = durationLabel(visual?.durationSec ?? null);
   const date = dateLabel(item);
   const dday = ddayFor(item.vodExpiresAt, now);
@@ -129,15 +133,14 @@ export function VodRow({
         */}
         {openable ? (
           <Link href={`/broadcast/vod/${item.streamId}`} className={styles.rowLink}>
-            {/* 방송 주인이 쓴 제목이라 세션 녹화(PostHog)가 이 안의 글자를 `*`로 가리게 감싼다 */}
-            <span className={PRIVATE_TEXT_CLASS}>{title}</span>
+            <span className={titleClass}>{title}</span>
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </Link>
         ) : (
           // 열 VOD가 없다(준비 중이거나 이미 지워졌다) — aria-disabled 링크로 포커스를
           // 받게 하느니 링크를 안 만든다
           <span className={styles.rowTitle}>
-            <span className={PRIVATE_TEXT_CLASS}>{title}</span>
+            <span className={titleClass}>{title}</span>
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </span>
         )}
