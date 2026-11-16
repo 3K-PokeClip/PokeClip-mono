@@ -94,6 +94,9 @@ type LadderState struct {
 	// alarmed 는 L4 경보를 남긴 정체의 기준 시각(stallAge 의 기점)이다 — 같은 정체에는 한 줄만 남긴다. 발행이
 	// 성공하면 기점이 바뀌어 다시 무장한다(판단 J30 — A1 1회 가드와 같은 형).
 	alarmed time.Time
+	// alarmedWarn 은 alarmed 의 줄이 WARN(no_row)이었는가다 — 같은 정체에서 뒤처짐이 드러나면(view_behind) ERROR 를 한 줄 더
+	// 남기고 거짓이 된다(승격 — 정체당 한 번).
+	alarmedWarn bool
 	// warned 는 ending WARN 을 남긴 회차다 — 회차마다 한 번이다(리스크 C3).
 	warned string
 }
@@ -171,6 +174,8 @@ func evaluateLadder(opt Options, st LadderState, in LadderInput) (LadderState, L
 // L2 가 설 수 없으면(blocked — 머리 다음 행 없음 · 부적격 · 컷오프 아래 · 직전 GAP 틱이 서지 않음) 참이다. holding(적격인데
 // holdAge 가 GAP_HOLD 전)은 L2 가 곧 서므로 기다린다. view_behind(머리 다음 행이 장부에는 있다)도 기다린다 — 캐시가 적재로 그
 // 행을 싣는 중이라, 봉인하면 복구가 서기 전에 회차가 끝난다(stall-7125 R1 리뷰 cc D-M2). 복구가 서지 않으면 L4 ERROR 가 남는다.
+// 끝내 안 풀리는 뒤처짐(적재가 멈추는 장부 빈자리)에서는 봉인 없이 그 ERROR 만 남아 회차가 스스로 닫히지 않을 수 있다 —
+// 운영자가 보는 자리는 media/README.md 신호표 아래 view_behind 메모다(보안 LOW-2 — 동작은 그대로 둔다).
 // fence 유효는 봉인 경로(Endlist E0)가 본다.
 func sealDue(opt Options, in LadderInput, blocked string) bool {
 	if opt.StallSealAfter <= 0 || blocked == "" || blocked == l2Holding || blocked == l2ViewBehind {
@@ -217,20 +222,27 @@ func gapIneligible(r boundary.Row, found bool, cutoff int64) string {
 // 몫이다(판단 J29). 까닭이 no_row(머리 다음 행이 캐시 뷰에 없다 — 유입이 멈춘 방송 종료 구간의 모양)면 등급만 WARN 이다(kty
 // 결정 ④ A — 방송 종료 구간의 L4 는 WARN 이다(2026-09-28). 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다.
 // 문턱 · 1회 가드 · 속성은 그대로). 그 행이 장부에는 있는 view_behind 는 방송 종료 구간이 아니라 ERROR 다(stall-7125 R2).
+// no_row WARN 을 남긴 정체에서 뒤처짐이 드러나면(view_behind) ERROR 를 한 줄 더 남긴다 — 감시 단독 경로는 뒤처짐을 첫 감시에야
+// 알기 때문이다(승격 · 정체당 한 번 · PR 단계 r1 codex M). 다른 ERROR 까닭으로는 오르지 않는다 — 유입이 잠시 멈췄다가 다음 행이
+// 와서 holding 이 된 평범한 모양에 거짓 ERROR 가 서지 않게(c2 리뷰 cc D-M1).
 func alarm(opt Options, st LadderState, in LadderInput, blocked string) (LadderState, *ladderSignal) {
 	since, ok := stallSince(in)
-	if !ok || st.alarmed.Equal(since) {
+	if !ok {
+		return st, nil
+	}
+	escalate := st.alarmed.Equal(since) && st.alarmedWarn && blocked == l2ViewBehind
+	if st.alarmed.Equal(since) && !escalate {
 		return st, nil
 	}
 	stall := in.Now.Sub(since)
 	if stall < opt.RefreshObligation-opt.EdgeDelay {
 		return st, nil
 	}
-	st.alarmed = since
 	level := slog.LevelError
 	if blocked == l2NoRow {
 		level = slog.LevelWarn
 	}
+	st.alarmed, st.alarmedWarn = since, level == slog.LevelWarn
 	return st, &ladderSignal{level: level, attrs: []any{"stream", in.StreamID, "session", in.Owner.SessionID,
 		"seconds", stall.Seconds(), "gap", blocked, "last_abort", in.Publish.lastAbort.reason}}
 }

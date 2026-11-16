@@ -282,7 +282,7 @@ func TestDriftAuditCatchesLedgerBeyondView(t *testing.T) {
 // 빈자리 백오프(stall-7125 R1 리뷰 — 장부 마지막 seq 대조의 되풀이 방어). 장부에 seq 빈자리(4)가 있으면 적재가 빈자리에서 멈춰
 // 뷰가 장부 끝에 닿지 못한다 — 적재 직후부터 Behind 다. 드리프트 적재가 뒤처짐을 풀지 못할 때마다 다음 요구까지의 연속 불일치
 // 문턱이 두 배가 되고(2 → 4 → 8 … 64 감시에서 멈춤 — 30초 감시로 32분), 그동안 빈 seq 뒤 push 도 적재를 바로 요구하지 않는다.
-// 뒤처짐을 푼 드리프트 적재가 문턱을 2 로 되돌린다. 설계상 빈자리는 없다(seq = 커서 꼬리 + 1 · 행을 지우는 코드 없음) — 이것은
+// 뒤처짐을 푼 드리프트 적재가 문턱을 2 로 되돌린다. seq 는 커서 꼬리 + 1 로 매겨 쓸 때 빈자리를 만들지 않는다 — 이것은
 // 읽기 결함 · 운영 사고에서 적재가 감시마다 되풀이되지 않게 막는 장치다.
 func TestDriftLoadBacksOffOnLedgerHole(t *testing.T) {
 	s := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6}

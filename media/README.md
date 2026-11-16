@@ -2698,7 +2698,7 @@ docker compose up -d --build segment-indexer
 | `rewind_fence_release_failed` | 종료 때 fence 반납 실패 — 종료 한 번. 후임 writer 는 lease 가 끝난 뒤 이어 쓴다 | ERROR | err · note |
 | `rewind_publish_aborted` | 틱의 중단 · 포기 — 사유 19가지(`reason`). 같은 사유 · stage 가 이어지면 한 줄이다 | 틱만 포기하는 13 사유는 WARN. 발행이 서는 6 사유(`meta_invalid` · `meta_out_of_range` · `s4_after_publish` · `validate` · `disc_seq_decrease` · `head_failed`)는 ERROR | stream · session · reason(· stage · check · err). **`reason=gap_tx_failed` 줄에는 seq 가 없다** — GAP 트랜잭션 실패를 추적할 출처는 GAP 원장의 `recorded` 행이다 |
 | `rewind_gap_published_total` | GAP 원장에 GAP 이 새로 섬 — 트랜잭션 커밋 뒤 한 줄 | WARN | stream · session · seq · reason(`upload_stall`). **`session` 은 그 틱의 소유 회차다** — 원장 행의 회차(계승 접두면 직전 회차)와 다를 수 있고, 두 기록을 잇는 키는 (stream, seq) 다 |
-| `rewind_publish_stall_seconds` | L4 — 발행 이력이 있는 live 소유 회차의 정체가 7.5초에 닿았는데 L2 가 서지 못함(정체 한 번에 한 줄). C3 — 소유 회차가 live 가 아니게 되어 발행을 멈춤(회차마다 한 번) | L4 는 ERROR, 다만 `gap=no_row` 면 WARN(kty 결정 ④ A). `gap=view_behind`(머리 다음 행이 캐시에 없는데 장부에는 있음)는 ERROR. C3 는 WARN | L4: stream · session · seconds · gap(`no_row` · `view_behind` · `incomplete` · `before_cutoff` · `holding` · `unstood`) · last_abort / C3: stream · session · state · seconds |
+| `rewind_publish_stall_seconds` | L4 — 발행 이력이 있는 live 소유 회차의 정체가 7.5초에 닿았는데 L2 가 서지 못함(정체 한 번에 한 줄). C3 — 소유 회차가 live 가 아니게 되어 발행을 멈춤(회차마다 한 번) | L4 는 ERROR, 다만 `gap=no_row` 면 WARN(kty 결정 ④ A). `gap=view_behind`(머리 다음 행이 캐시에 없는데 장부에는 있음)는 ERROR — 같은 정체에서 `no_row` WARN 을 먼저 남겼어도 뒤처짐이 드러나면 ERROR `view_behind` 한 줄을 더 남긴다(정체당 한 번 · 다른 까닭으로는 오르지 않음). C3 는 WARN | L4: stream · session · seconds · gap(`no_row` · `view_behind` · `incomplete` · `before_cutoff` · `holding` · `unstood`) · last_abort / C3: stream · session · state · seconds |
 | `cache_drift_repaired` | 드리프트 까닭 적재가 적용됨(`kind=head` — 30초 감시의 연속 불일치 두 번, 또는 빈 seq 뒤 INSERT push. 드리프트 적재가 장부 빈자리에서 멈춰 뒤처짐을 못 풀면 그 빈자리에 한해 문턱이 두 배씩 64 감시(약 32분)까지 늘고 그동안 push 는 적재를 바로 요구하지 않는다. 뷰가 장부를 따라잡으면(어느 적재든 · 감시 일치) 문턱은 두 번으로 돌아간다) · 잃은 init 결과를 감시가 되살림(`kind=init_uploaded`) | WARN | head: stream · cutoff · floor / init_uploaded: stream · session · revoked |
 | `rewind_cutoff_absent` | 30초 감시 (c) — 최근 10분 안에 조각이 있는데 컷오프가 없는 스트림. 전이만 남긴다 | 들어올 때 WARN(value 1) · 연속 40번째 감시에 ERROR(value 1) · 사라질 때 WARN(value 0 — 들어올 때와 같은 등급이라 `LOG_LEVEL=warn` 으로 걸러도 해소가 보인다) | stream · ticks · last_wall · value |
 | `rewind_ledger_load_degraded` | 적재 실패(`load_failed`) · 행 상한 도달(`row_cap`) · 다시 뽑은 P 의 행이 P 의 자기기술과 다름(`prev_mismatch`) | ERROR | load_failed: stream · err / row_cap: stream · floor · rows / prev_mismatch: stream · hint · mismatch |
@@ -2714,6 +2714,23 @@ docker compose up -d --build segment-indexer
     push · 30초 감시) 캐시가 장부보다 뒤처진 것이라 `gap=view_behind` ERROR 다 —
     다른 상자가 같은 스트림의 seq 를 먼저 쓴 2026-11-16 교착의 모양이다. ERROR 는
     그 밖에 다음 행이 있는데 정착하지 못할 때 선다.
+*   **`gap=view_behind` ERROR 뒤 발행이 이어지지 않고 `cache_drift_repaired` 가
+    되풀이되면 캐시가 장부를 끝내 못 따라잡는 것이다.** ERROR 는 정체마다 한
+    줄이다. 장부에 seq 빈자리가 있으면 적재가 그 자리에서 멈춘다(행 상한 10,000 은
+    최신 행을 남기므로 그것만으로는 뒤처지지 않는다). `cache_drift_repaired` 가
+    빈자리 백오프 간격(최대 64 감시 · 약 32분)으로 이어지고
+    `rewind_ledger_load_degraded` 가 함께 날 수 있다. 이 상태에서는 봉인
+    (L2′)이 서지 않는다 — view_behind 는 복구 대기로 보고 봉인하지 않으므로 회차가
+    스스로 닫히지 않을 수 있다. 장부 빈자리와 다른 쓰기자를 먼저 확인한다.
+*   **알려진 한계 — 두 상자가 같은 스트림을 쓰면 push 뒤 적재가 되풀이된다.**
+    같은 키로 두 상자가 쓰는 이중 기동에서는 다른 상자가 seq 를 먼저 쓸 때마다
+    빈 seq 뒤 push 가 적재(많아야 10,000행)를 요구한다. 적재마다
+    `cache_drift_repaired` 한 줄이 남는다. 이 되풀이는 코드로 막지 않고 운영
+    규칙으로 막는다 — 같은 키가 방송 중일 때 루프백 헬스 송출을 하지 않는다(R3).
+*   **알려진 한계 — 정상 복구 직전에도 `view_behind` ERROR 가 한 줄 날 수 있다.**
+    빈 seq 뒤 push 가 적재를 요구한 holdTick 에서 사다리가 적재 발사보다 먼저
+    돈다. 그래서 정체가 이미 7.5초를 넘었으면 곧 풀릴 뒤처짐에도 그 줄이 선다.
+    곧이어 `cache_drift_repaired` 가 나고 발행이 이어지면 복구된 것이다.
 *   **재기동 ② 뒤의 경보**는 뒤 회차가 계승 회차인가로 갈린다 — 아래 한계 표.
 
 #### ⓒ 실측 기록
@@ -2768,7 +2785,7 @@ docker compose up -d --build segment-indexer
 | 6 | 설계 4.7절 · F-33 | 슬레이트 조각을 GAP 으로 싣는다 | 슬레이트는 녹화되지 않는다(ADR-050). 목록은 경계 표시 · 시각 점프만 남기고 라이브 전환은 제어면(M5) 몫이다 — M4 코드 0 | kty 확정(2026-09-04) · 설계 4.7절 갱신 후보 |
 | 7 | 설계 9절 G8 | P · F · E 세 프로토콜 | M4 = G8-P 완결 · F/E 는 M6 | 계상 분할 |
 | 8 | 설계 4.0절 · ADR-057 정규화 산식 | 원점만 정의 | 트랙별 timescale · 위상 보존 · 재접속 연속 산식을 명시했다(위 ⓐ 절 「시간 도장」) | 구체화 |
-| 9 | 설계 4.6.3절 · 4.6.5절 사다리 | L1 · L2 · L4 는 세션 상태와 무관하게 서고, 1단계는 L4 경보만 남긴다 | live 소유 회차에서만 돈다. live 가 아니게 되면 회차마다 WARN 한 번(C3). L4 의 「L2 가 서지 못함」은 루프가 싣는 사실(`LadderInput.UnstoodGapSeq`)로 받는다. `gap=no_row` 면 L4 를 WARN 으로 낮춘다 | 이탈 기록(M6 전 ENDLIST · 동결 부재) · 편차(kty 결정 ④ A — 방송 종료 구간 L4 등급) |
+| 9 | 설계 4.6.3절 · 4.6.5절 사다리 | L1 · L2 · L4 는 세션 상태와 무관하게 서고, 1단계는 L4 경보만 남긴다 | live 소유 회차에서만 돈다. live 가 아니게 되면 회차마다 WARN 한 번(C3). L4 의 「L2 가 서지 못함」은 루프가 싣는 사실(`LadderInput.UnstoodGapSeq`)로 받는다. `gap=no_row` 면 L4 를 WARN 으로 낮춘다 — 그 행이 장부에는 있다는 것을 캐시가 알면 `gap=view_behind` 로 갈라 ERROR 그대로다(④ A 의 적용 범위를 방송 종료 구간으로 좁힘 · stall-7125 R2) | 이탈 기록(M6 전 ENDLIST · 동결 부재) · 편차(kty 결정 ④ A — 방송 종료 구간 L4 등급) |
 | 10 | 설계 4.6.3절 L3 · 4.5.3절 phase 2 만료 | 연속 GAP 셋 이상 → ending · 정산 창 만료 = 포기 등재 | M6(종결 축) | 이연 |
 | 11 | M3 계획 · `upload.go` 주석 | `Result` 에 축 필드 = 영값 함정으로 기각 | 축 필드는 넣지 않고 ③ · init 통지는 `upload.Dirty` 가 맡는다. 주석의 「영값 = AxisArchive」 근거 문장은 사실과 달라(영값 = unknown) 한 줄 고쳤다 | 주석 사실 정정 |
 | 12 | 설계 5.3절 인용 | init 규격을 bis-16 으로 인용 | bis-22 로 갱신할 후보다(인용 네 문장은 그대로 남아 있다) | 인용 갱신 후보 |
