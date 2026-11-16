@@ -4225,31 +4225,58 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   그 틀은 읽기 전용이라 UPDATE 가 `25006` 으로 실패하고, 읽기 전용 줄을 빼고
   돌리면 저장점 되돌림이 UPDATE 를 조용히 지우는 데다 `app_auth` 가 심은
   덫(트리거 등)이 마스터 권한 · 읽기 쓰기로 돈다. prod 에서는 마스터가 아니라
-  그 걸음만을 위해 마스터가 만든 일회용 로그인으로 위 블록을 돌린다:
-  `CREATE ROLE <일회용 이름> LOGIN PASSWORD … VALID UNTIL …` ·
-  `GRANT app_auth TO <일회용 이름> WITH INHERIT TRUE, SET FALSE` · 그 DB 의
-  CONNECT. `rds_iam` 은 주지 않는다(주면 비밀번호 로그인이 막힌다). 덫이
-  `RESET ROLE` 해도 일회용 로그인(앱 권한 이하)으로만 돌아가 마스터로 오르지
-  않는다. 앱 계정 자신으로 로그인하는 길은 운영자가 앱 비밀을 쥐고 감사에서
-  앱과 사람이 갈리지 않아 쓰지 않는다.
+  그 걸음만을 위해 마스터가 만든 일회용 로그인으로 위 블록을 돌린다는 것이
+  방향이다. 덫이 `RESET ROLE` 해도 일회용 로그인으로만 돌아가 마스터로 오르지
+  않는다 — 덫이 바꿀 수 있는 역할은 일회용 로그인이 SET 할 수 있는 역할뿐이고,
+  `app_auth` 멤버십은 `SET FALSE` 라 그쪽으로도 못 바꾼다. 앱 계정 자신으로
+  로그인하는 길은 운영자가 앱 비밀을 쥐고 감사에서 앱과 사람이 갈리지 않아
+  쓰지 않는다.
 
-  실행 꼴(어느 실행기로 어떻게 보내는지)은 런북에 아직 없다 — 꼴 미정이고,
-  실행 전에 kty 승인을 받는다. 꼴을 정할 때 지킬 기준은 셋이다. ① 실행 전
-  `log_statement` 를 확인해 CREATE ROLE 문의 비밀번호가 로그에 평문으로 남지
-  않게 한다(`ddl` 이면 남는다 — 로컬 PG 17 확인). ② 비밀번호를 명령 인자 ·
-  출력 · send-command 페이로드 평문 · 기록에 남기지 않는다. ③ 접속은
-  `sslmode=verify-full` 이다.
+  다만 `app_auth` 는 `rds_iam` 멤버라(런타임 `10_roles.sql`), 일회용 로그인에
+  `GRANT app_auth TO <일회용 이름> WITH INHERIT TRUE, SET FALSE` 를 주면
+  `rds_iam` 을 간접으로 받는다. AWS 는 간접 부여로도 IAM 인증이
+  켜지고(「nested memberships or indirect grants」 —
+  [IAM DB 계정](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.DBAccounts.html)),
+  `rds_iam` 이 붙은 사용자는 IAM 인증이 비밀번호보다 우선한다고 쓴다
+  ([IAM DB 인증](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)
+  한계 절). pg_hba 의 `+역할` 매칭도 INHERIT · SET 과 무관하게 간접 멤버까지
+  세므로 `SET FALSE` 로 피하지 못한다. 그래서 「비밀번호 + `app_auth` 멤버십」
+  꼴은 RDS 에서 성립하지 않을 가능성이 높다. 남는 길은 셋이고, 모두 RDS 실측
+  전이며 실행 꼴은 실행 전에 kty 승인을 받는다. (i) 일회용 로그인을 IAM
+  토큰으로 들인다 — `rds-db:connect` 를 `dbuser:<리소스 ID>/<일회용 이름>`
+  한정으로 그 걸음 동안만 준다. (ii) 멤버십 대신 대상 표 권한을 직접 GRANT
+  한다 — 표에 RLS 가 있으면 일부 행이 빠질 위험이 있다. (iii) 간접 `rds_iam`
+  에서도 비밀번호 로그인이 되는지 RDS 에서 먼저 확인한다. 로컬 실측(`rds_iam`
+  없는 PG)은 이 제약을 덮지 못한다.
 
-  끝나면 그 로그인의 세션을 `pg_terminate_backend` 로 끊고 `DROP OWNED BY` ·
-  `DROP ROLE` 로 지운다. `VALID UNTIL` 은 비밀번호만 만료시켜 역할이 남으므로
-  DROP 은 빠뜨리지 않는다. 소유 객체 등으로 `2BP01` 이 나 지워지지 않으면
-  `ALTER ROLE <일회용 이름> NOLOGIN` 으로 물러서고 기록한다. 쓰기가 끝난 뒤
-  별도 세션에서 결과를 다시 확인한다(앱 트리거가 결과를 바꿀 수 있다).
-  마스터가 ADMIN 만 가진 일회용 역할에 세션 끊기 · `DROP OWNED BY` 를 할 수
-  있는지는 재조사(N-2) 확인 대기다. 로컬 PG 17 비superuser 마스터 대역에서는
-  ADMIN 만으로 둘 다 `42501` 이었고, 마스터가 자기에게 그 역할을
-  `WITH INHERIT TRUE, SET FALSE` 로 준 뒤에는 둘 다 됐다(2026-11-17 — RDS 는
-  미확인).
+  비밀번호를 쓰는 꼴이면 지킬 것: ① 평문이 서버 로그 · 통계에 남지 않게
+  한다. `log_statement` 는 `none` 이어야 하고(`ddl` · `mod` · `all` 은 모두
+  남긴다), `none` 이어도 CREATE ROLE 이 실패하면 기본
+  `log_min_error_statement = error` 가 문장 원문을 남긴다(로컬 PG 17 에서 둘 다
+  찍힘 확인). `log_min_duration_statement` · 켜진 `pg_stat_statements`(유틸리티
+  문장 저장) · pgAudit 의 가림 범위도 확인한다. 더 나은 꼴은 미리 만든 SCRAM
+  검증자(`PASSWORD 'SCRAM-SHA-256$…'`)나 psql `\password` 로, 평문이 서버로
+  가지 않는다(PG 17 문서 「CREATE ROLE」 의 주의). ② 비밀번호를 명령 인자 ·
+  출력 · send-command 페이로드 평문 · 기록에 남기지 않는다. 어느 꼴이든 ③
+  접속은 `sslmode=verify-full` 이다.
+
+  순서: 쓰기 → 별도 세션에서 결과 재확인(앱 트리거가 결과를 바꿀 수 있다) →
+  곧바로 `ALTER ROLE <일회용 이름> NOLOGIN` → 정리. 덫은 일회용 로그인으로
+  `ALTER ROLE CURRENT_USER PASSWORD …` 를 해 둘 수 있어(로컬 PG 17 에서 바뀜
+  확인) NOLOGIN 을 늦추지 않는다. 정리는 `REVOKE app_auth FROM <일회용 이름>`
+  → `DROP ROLE` 이다. `VALID UNTIL` 은 비밀번호만 만료시켜 역할이 남으므로
+  DROP 은 빠뜨리지 않는다. 일회용에 CONNECT 를 직접 주지 않으면(로컬 PG 17
+  에서는 `app_auth` 의 CONNECT 를 상속해 접속됐다) ADMIN 만 가진 마스터 대역이
+  자기 부여 없이 이 둘로 끝냈다 — 열린 세션이 있어도 DROP ROLE 은 됐다
+  (2026-11-17 · RDS 미확인). 세션 끊기(`pg_terminate_backend`) ·
+  `DROP OWNED BY` 가 `42501` 이거나(ADMIN 만이면 로컬에서 둘 다 그랬다 —
+  RDS 는 N-2 확인 대기) `DROP ROLE` 이 `2BP01` 이면(덫이 남긴 소유 객체 ·
+  직접 준 권한의 의존 등), NOLOGIN 그대로 두고 기록해 kty 에게 회부한다.
+  마스터가 자기에게 일회용 역할을 INHERIT 로 주고 정리하는 갈래는 로컬에서만
+  된 것이라 쓰지 않는다 — RDS 에서는 그동안 마스터가 일회용 → `app_auth` →
+  `rds_iam` 의 간접 멤버가 되어 마스터 비밀번호 로그인까지 IAM 우선이 될 수
+  있고, 정리가 실패해 그 멤버십이 남으면 마스터가 잠긴 채 끝날 수 있다(실측
+  전).
 
   다시 열린 줄은 새 발송기가 `platform=SOOP`으로 보낸다. 새 auth가 이미 바르게 보낸 줄도 함께 열려 한 번 더 가지만, 수집기 명부가 같은 탈퇴 시각으로 접어 결과는 같다. 같은 아이디의 치지직 데이터가 잘못 지워졌다면 되돌릴 길은 없다(백업 없음).
 
