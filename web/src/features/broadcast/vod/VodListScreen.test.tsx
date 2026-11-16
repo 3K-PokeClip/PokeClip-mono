@@ -746,7 +746,7 @@ describe('VodListScreen — 서버 목록', () => {
     });
     const first = renderWithProviders(<VodListScreen />);
     expect(await screen.findByText(/다시보기가 없어요/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /old-stream/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /제목 없는 방송/ })).toBeInTheDocument();
     first.unmount();
 
     // 제어면이 오류로 답하면 묻지 못한 것이다: 「다시보기가 없어요」라고 단정하지 않는다(리뷰 1라운드)
@@ -765,7 +765,7 @@ describe('VodListScreen — 서버 목록', () => {
     expect(await screen.findByText(/· VOD 준비 중$/)).toBeInTheDocument();
     expect(screen.queryByText(/방금 종료/)).toBeNull();
     expect(screen.queryByText(/다시보기가 없어요/)).toBeNull();
-    expect(screen.queryByRole('link', { name: /old-stream/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /제목 없는 방송/ })).toBeNull();
     expect(spy.mock.calls.filter(([url]) => String(url).includes('/rewind'))).toHaveLength(0);
     vi.unstubAllEnvs();
   });
@@ -800,7 +800,7 @@ describe('VodListScreen — 서버 목록', () => {
 
     expect(screen.getByText(/다시보기가 없어요 · 카드와 채팅은 볼 수 있어요/)).toBeInTheDocument();
     expect(screen.queryByText(/방금 종료/)).toBeNull();
-    expect(screen.getByRole('link', { name: /just-ended/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /제목 없는 방송/ })).toBeInTheDocument();
     vi.unstubAllEnvs();
   });
 
@@ -835,14 +835,14 @@ describe('VodListScreen — 서버 목록', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
-    expect(screen.queryByRole('link', { name: /rec-stream/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /제목 없는 방송/ })).toBeNull();
     expect(screen.getByText('방금 종료 · VOD 준비 중 · 준비되면 알려드릴게요')).toBeInTheDocument();
 
     ready = true;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
-    expect(screen.getByRole('link', { name: /rec-stream/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /제목 없는 방송/ })).toBeInTheDocument();
     // 「다시보기가 없어요」도 열리므로 다시 보기 가능(받기 단추)으로 가른다
     expect(screen.getByRole('button', { name: /^풀 버전 다운로드/ })).toBeInTheDocument();
     vi.unstubAllEnvs();

@@ -112,9 +112,12 @@ export interface BroadcastRow {
   channelNames?: { CHZZK: string | null; SOOP: string | null } | null;
 }
 
-/** 방송을 사람에게 보일 이름(POK-259). 방송 제목이 있으면 그것, 없으면 방송 번호 */
-export function broadcastTitle(row: Pick<BroadcastRow, 'streamId' | 'title'>): string {
-  return row.title?.trim() || row.streamId;
+/**
+ * 방송을 사람에게 보일 이름(POK-259). 방송 제목이 있으면 앞뒤 공백을 깎은 그것, 없거나 비면 null이다 — 화면이 「제목 없는
+ * 방송」으로 적는다. 세션 ID 로 물러서지 않는다: 그 값은 주소용 식별자라 제목 자리에 보일 것이 아니다
+ */
+export function broadcastTitle(row: Pick<BroadcastRow, 'title'>): string | null {
+  return row.title?.trim() || null;
 }
 
 /** 플랫폼 코드를 화면 이름으로(POK-398). 모르는 코드면 null이다: 치지직이라고 지어내지 않고 태그를 숨긴다 */

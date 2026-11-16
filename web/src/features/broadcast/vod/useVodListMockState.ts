@@ -66,7 +66,8 @@ export interface VodBroadcast {
  * B5(VOD 확정)가 생기면 이 타입은 통째로 사라지고 계약 필드로 대체된다.
  */
 export interface VodRowVisual {
-  title: string;
+  /** 방송 제목. 없으면 null — 행이 「제목 없는 방송」으로 적는다(세션 ID 는 보이지 않는다) */
+  title: string | null;
   /** 준비 중이라 아직 모르면 null */
   durationSec: number | null;
   cardCount: number;
@@ -282,7 +283,7 @@ async function loadVodList(
         ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
         : null;
     visuals[b.streamId] = {
-      title: titles.get(b.streamId) ?? b.streamId,
+      title: titles.get(b.streamId) ?? null,
       durationSec: dur,
       cardCount: cache.get(b.streamId)?.cardCount ?? 0,
       vodMissing: b.status === 'ended' && vodOf(b.streamId).badge === 'none',
