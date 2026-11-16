@@ -1,10 +1,5 @@
 import { TRACK_COUNT } from '@/api/audioTracks';
-import {
-  CUT_MAX_MS,
-  CUT_MIN_MS,
-  type RecipeDocument,
-  type RecipeDocumentV2,
-} from '@/api/clipEditor';
+import type { RecipeDocument, RecipeDocumentV2 } from '@/api/clipEditor';
 import { outputsFor, subtitlesFor } from './recipeLook';
 import type { EditorRecipe } from './useClipEditorMockState';
 
@@ -15,25 +10,22 @@ import type { EditorRecipe } from './useClipEditorMockState';
 export const editorTrackId = (index: number) => `track-${index}`;
 
 /**
- * @param base 편집기 시간축 0초의 절대 ms(editorTimelineOf) — 구간(방송 시작 기준 초)을 계약6 컷(절대 ms)으로 옮긴다
+ * @param cut 저장 판정(savable · cardDraftVerdict)이 낸 컷(목록 PDT 축 ms). 다시 셈하지 않는다 — 받은 값 그대로라 다시 열고
+ *   손대지 않고 저장하면 같은 값이다. 길이(5초~3분)는 판정이 이미 막았다
  * @param saved 다시 여는 편집본의 저장 문서. 편집기가 그리지 않는 출력 · 자막 줄을 잇는다. 새 편집본이면 null
  */
 export function recipeDocumentOf({
   streamId,
-  base,
+  cut: { inMs, outMs },
   recipe,
   saved,
 }: {
   streamId: string;
-  base: number;
+  cut: { inMs: number; outMs: number };
   recipe: EditorRecipe;
   saved: RecipeDocument | null;
 }): RecipeDocumentV2 {
-  // 5초~3분 밖이면 저장 문이 거절하므로 여기서 맞춘다
-  const inAtMs = base + Math.round(recipe.range.startSeconds * 1000);
-  const rawLength = Math.round((recipe.range.endSeconds - recipe.range.startSeconds) * 1000);
-  const length = Math.min(CUT_MAX_MS, Math.max(CUT_MIN_MS, rawLength));
-  const cut = { inAtMs, outAtMs: inAtMs + length };
+  const cut = { inAtMs: inMs, outAtMs: outMs };
   // 켜 둔 트랙만 믹스된다(계약6). 0(최종 믹스)과 1~5는 같이 못 넣는다 — 소스 트랙을 하나라도 켰으면 0을 뺀다.
   let selected = Array.from({ length: TRACK_COUNT }, (_, i) => i)
     .filter((i) => !(recipe.trackMuted[editorTrackId(i)] ?? i !== 0))

@@ -2,7 +2,7 @@
 
 import { useId } from 'react';
 import { LEGAL_URLS, SUPPORT_EMAIL } from '@/features/legal/legalInfo';
-import { Button, Dialog } from '@/ui';
+import { Button, Dialog, PRIVATE_TEXT_CLASS } from '@/ui';
 import type { WITHDRAW_FACTS } from './useAccountMockState';
 import styles from './AccountSettingsScreen.module.css';
 
@@ -61,7 +61,9 @@ export function WithdrawDialog({
       <Dialog.Content className={styles.withdrawDialog} aria-describedby={bodyId}>
         <div className={styles.dialogHead}>
           <div className={styles.dialogEyebrow}>회원 탈퇴</div>
-          <Dialog.Title className={styles.dialogTitle}>{name}님, 정말 탈퇴하시나요?</Dialog.Title>
+          <Dialog.Title className={styles.dialogTitle}>
+            <span className={PRIVATE_TEXT_CLASS}>{name}</span>님, 정말 탈퇴하시나요?
+          </Dialog.Title>
           <p className={styles.dialogLead}>회원 탈퇴 전 아래 사항을 숙지해 주세요.</p>
           <div className={styles.dialogDivider} />
         </div>

@@ -12,8 +12,10 @@
 locals {
   media_host_dir = "${path.module}/../../../media-host"
 
-  # compose · nginx 템플릿 변수(키 집합 = infra/media-host/test/render_vars.json).
+  # compose · nginx 공통 템플릿 변수(키 집합 + 키별 cred_relay =
+  # infra/media-host/test/render_vars.json).
   template_vars = {
+    clip_internal_url      = var.clip_internal_url
     control_upstream       = var.control_upstream
     detached_log_driver    = "journald"
     ingest_auth_image      = var.ingest_auth_image
@@ -44,8 +46,10 @@ locals {
     edge_bounds_kvs_arn = var.edge_bounds_writer_enabled ? var.edge_bounds_kvs_arn : ""
   }
 
-  compose_yml = templatefile("${local.media_host_dir}/compose.yml.tmpl", local.template_vars)
-  nginx_conf  = templatefile("${local.media_host_dir}/nginx/nginx.conf.tmpl", local.template_vars)
+  # compose 는 키별로 렌더한다(아래 rendered_user_data) — 대리 창구 스위치
+  # cred_relay 가 키별 값이다. 끔 키의 렌더는 이 스위치가 없던 때와 바이트까지
+  # 같다(템플릿 머리 주석).
+  nginx_conf = templatefile("${local.media_host_dir}/nginx/nginx.conf.tmpl", local.template_vars)
 
   bootstrap = templatefile("${path.module}/templates/bootstrap.sh.tftpl", {
     bundle_image                  = var.bundle_image
@@ -55,7 +59,7 @@ locals {
     ecr_credential_helper_version = var.ecr_credential_helper_version
   })
 
-  # 상자 키마다 다른 것은 구성 판뿐이다.
+  # 상자 키마다 다른 것은 구성 판과 대리 창구 스위치(compose)뿐이다.
   rendered_user_data = {
     for key, instance in var.instances : key => join("", [
       "#cloud-config\n",
@@ -66,8 +70,10 @@ locals {
               path        = "/etc/pokeclip-media/media.env"
               permissions = "0644"
               content = templatefile("${path.module}/templates/media.env.tftpl", {
-                bundle_image                        = var.bundle_image
-                cdn_secret_arn                      = var.cdn_secret_arn
+                bundle_image   = var.bundle_image
+                cdn_secret_arn = var.cdn_secret_arn
+                # 만료를 끈(주소 빔) 상자는 토큰을 받지 않는다.
+                clip_expiry_token_secret_arn        = var.clip_internal_url == "" ? "" : var.clip_expiry_token_secret_arn
                 compose_version                     = var.compose_version
                 config_version                      = instance.config_version
                 denylist_parameter_name             = aws_ssm_parameter.denylist.name
@@ -78,7 +84,11 @@ locals {
                 test_stream_key_secret_arn          = var.test_stream_key_secret_arn
               })
             },
-            { path = "/etc/pokeclip-media/compose.yml", permissions = "0644", content = local.compose_yml },
+            {
+              path        = "/etc/pokeclip-media/compose.yml"
+              permissions = "0644"
+              content     = templatefile("${local.media_host_dir}/compose.yml.tmpl", merge(local.template_vars, { cred_relay = instance.cred_relay }))
+            },
             { path = "/etc/pokeclip-media/nginx.conf", permissions = "0644", content = local.nginx_conf },
             {
               path        = "/etc/pokeclip-media/ingest-auth.env"

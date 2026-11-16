@@ -79,6 +79,7 @@ func TestStartExpiryOffWhenClipURLEmpty(t *testing.T) {
 func TestStartExpiryDeliversMarkerToPlaybackInbox(t *testing.T) {
 	admin := newWireTestPool(t)
 	role := pgtest.NewMediaIndexerRole(t, admin)
+	setExpirySwitch(t, admin, true)
 	assemblyCredentialsEnv(t)
 	s3 := newFakeS3(t, http.StatusOK)
 	clip := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

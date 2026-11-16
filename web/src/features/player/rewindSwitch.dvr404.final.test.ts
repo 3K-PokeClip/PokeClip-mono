@@ -16,20 +16,19 @@ import {
 import { isPlayerStartHeld, sessionView } from './sessionView';
 
 // 종국 뒤 되감기 조각 404 시험(POK-528 c4 — 계획 3-2 · 3-4 · 3-6 · 8-1 W6 · E76 ·
-// 「종국 → 404」 순서 넷 · U2 의 finalCheck 몫). 녹화로 정한 끝남 대기(recordOnEnd)는
-// 끝까지 본 뒤 녹화로 가려고 두 폴링을 끈다. 그 자리에서 404 가 오면 끝에 영영 닿지
-// 못하므로(E76) 회차별 조회를 한 번 더 해 다시보기 또는 녹화로 넘긴다. 사건은 모두
+// 「종국 → 404」 순서 넷 · U2 의 finalCheck 몫). 닫기로 정한 끝남 대기(closeOnEnd)는
+// 끝까지 본 뒤 닫으려고 두 폴링을 끈다. 그 자리에서 404 가 오면 끝에 영영 닿지
+// 못하므로(E76) 회차별 조회를 한 번 더 해 다시보기로 옮기거나 닫는다(past — POK-547). 사건은 모두
 // 감싸개 step 을 거친다(전이마다 불변식 단언 — 계획 8-0). 옛 판 표는 이 404 를 무시하므로
 // 음성 대조 트리에서는 단언으로 FAIL 한다.
 //
-// 시각은 epoch ms 다. 되감기 목록 A1 의 첫 조각 T0 · 끝 NOW · 여유 12초 · 끝남 대기는
+// 시각은 epoch ms 다. 되감기 목록 A1 의 첫 조각 T0 · 끝 NOW · 끝남 대기는
 // R 에 들었다(endingSince = R). 방송 A(회차 r-A)를 P20 에서 보던 세션이 기준이다.
 
 const MIN = 60_000;
 const T0 = Date.parse('2026-10-25T05:00:00.000Z');
 const NOW = T0 + 60 * MIN;
 const R = NOW + 1_000;
-const MARGIN_MS = 12_000;
 const P20 = T0 + 20 * MIN;
 const LIVE_URL = 'https://media.pokeclip.com/live/key-1/index.m3u8';
 const A1 = 'https://media.pokeclip.com/dvr/key-1/a1/index.m3u8';
@@ -66,7 +65,6 @@ function loaded(url: string, firstMs: number, lastEndMs: number): SessionEvent {
     firstMs,
     lastEndMs,
     targetDurationS: 4,
-    headSpanMs: MARGIN_MS,
   };
 }
 
@@ -121,32 +119,32 @@ function liveReady(): RewindStatusResult {
   return status({ ready: true, mode: 'live', url: A1, firstPdtMs: T0, headPdtMs: NOW });
 }
 
-// 녹화로 정한 끝남 대기 — 종국 셋(20분 시한 · 회차별 ended · 재접속 대기 뒤 회차별 404)
+// 닫기로 정한 끝남 대기 — 종국 셋(20분 시한 · 회차별 ended · 재접속 대기 뒤 회차별 404)
 
-/** 20분 시한으로 녹화로 정한 끝남 대기 */
+/** 20분 시한으로 닫기로 정한 끝남 대기 */
 function byDeadline(): PlaybackSessionState {
   return feed(endedByEndlist(), [TICK], AFTER_DEADLINE).state;
 }
 
-/** 회차별 ended 로 녹화로 정한 끝남 대기 */
+/** 회차별 ended 로 닫기로 정한 끝남 대기 */
 function byEnded(): PlaybackSessionState {
   return feed(endedByEndlist(), [roundPoll(ENDED)]).state;
 }
 
-/** 재접속 대기(360초) 뒤 회차별 404 로 녹화로 정한 끝남 대기 */
+/** 재접속 대기(360초) 뒤 회차별 404 로 닫기로 정한 끝남 대기 */
 function byNone(): PlaybackSessionState {
   return feed(endedByEndlist(), [roundPoll(NONE)], R + RESUME_WAIT_MS).state;
 }
 
-/** 녹화로 정한 끝남 대기에서 404 를 받아 마지막 확인에 든 세션 */
-function finalOf(recorded: PlaybackSessionState, now = AFTER_DEADLINE): PlaybackSessionState {
-  return feed(recorded, [gone(recorded)], now).state;
+/** 닫기로 정한 끝남 대기에서 404 를 받아 마지막 확인에 든 세션 */
+function finalOf(decided: PlaybackSessionState, now = AFTER_DEADLINE): PlaybackSessionState {
+  return feed(decided, [gone(decided)], now).state;
 }
 
-describe('녹화로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 · E76)', () => {
-  it('녹화로 정한 끝남 대기는 두 폴링을 끈다 — 404 가 없으면 끝 도달을 기다린다(지금 동작)', () => {
+describe('닫기로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 · E76)', () => {
+  it('닫기로 정한 끝남 대기는 두 폴링을 끈다 — 404 가 없으면 끝 도달을 기다린다(지금 동작)', () => {
     const s = byDeadline();
-    expect(s.phase).toMatchObject({ recordOnEnd: true, atEnd: false });
+    expect(s.phase).toMatchObject({ closeOnEnd: true, atEnd: false });
     expect(pollTargets(s)).toEqual({ stream: false, round: false });
     expect(sessionView(s, AFTER_DEADLINE).cover).toBeNull();
   });
@@ -158,7 +156,7 @@ describe('녹화로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 
       kind: 'ending-wait',
       origin: 'rewind',
       atEnd: false,
-      recordOnEnd: true,
+      closeOnEnd: true,
       finalCheck: true,
     });
     expect(checked.effects).toEqual([HOLD]);
@@ -170,10 +168,10 @@ describe('녹화로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 
     expect(pollTargets(finalOf(byDeadline()))).toEqual({ stream: false, round: true });
   });
 
-  it('마지막 확인은 덮개 「다시보기 준비 중」 · 녹화 단추(계획 3-6 — 13절 통지 대상 편차)', () => {
+  it('마지막 확인은 덮개 「다시보기 준비 중」 · 제안이 없으면 단추 없음(계획 3-6 · POK-547)', () => {
     const view = sessionView(finalOf(byDeadline()), AFTER_DEADLINE);
     expect(view.cover).toBe('preparing');
-    expect(view.actions).toEqual(['record']);
+    expect(view.actions).toEqual([]);
     expect(view.startHeld).toBe(true);
   });
 
@@ -191,47 +189,55 @@ describe('녹화로 정한 끝남 대기의 404 → 마지막 확인(계획 3-2 
 });
 
 describe('W6 「종국 → 404」 순서 넷(계획 8-1)', () => {
-  it('1. 20분 시한 → 404 → 회차별 vod · 겹침 통과 → 같은 자리 다시보기(시한 직후 VOD)', () => {
+  it('1. 20분 시한 → 404 → 회차별 vod · 겹침 통과 → 멈춘 그대로 다시보기 제안(덮개 단추 · 마지막 확인 끝)', () => {
     const s = finalOf(byDeadline());
     const moved = feed(s, [roundPoll(vodReady(T0, NOW))], AFTER_DEADLINE);
-    expect(moved.state.phase).toEqual({ kind: 'vod' });
-    expect(moved.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: P20 });
-    expect(moved.state.source.generation).toBe(s.source.generation + 1);
+    expect(moved.state.phase).toEqual({
+      kind: 'vod-offered',
+      url: VOD,
+      firstPdtMs: T0,
+      headPdtMs: NOW,
+      atEnd: false,
+      stopped: 'held',
+    });
+    expect(moved.state.source).toBe(s.source);
     expect(moved.state.closed).toBeNull();
     expect(moved.effects).toEqual([]);
-    expect(sessionView(moved.state, AFTER_DEADLINE).cover).toBeNull();
+    expect(sessionView(moved.state, AFTER_DEADLINE).cover).toBe('vod-ready');
+    const pressed = feed(moved.state, [{ type: 'button', which: 'vod' }], AFTER_DEADLINE);
+    expect(pressed.effects).toMatchObject([{ kind: 'close', handoff: { resumeAtMs: P20 } }]);
   });
 
-  it('2. 회차별 ended → 404 → 회차별 ended → 녹화', () => {
+  it('2. 회차별 ended → 404 → 회차별 ended → past 로 닫는다', () => {
     const s = finalOf(byEnded(), R);
     const done = feed(s, [roundPoll(ENDED)]);
-    expect(done.state.closed).toBe('recorded');
+    expect(done.state.closed).toBe('past');
     expect(kinds(done.effects)).toEqual(['close']);
   });
 
-  it('3. 재접속 대기(360초) 뒤 회차별 404 → 404 → 회차별 404 → 녹화', () => {
+  it('3. 재접속 대기(360초) 뒤 회차별 404 → 404 → 회차별 404 → past 로 닫는다', () => {
     const at = R + RESUME_WAIT_MS;
     const s = finalOf(byNone(), at);
     const done = feed(s, [roundPoll(NONE)], at);
-    expect(done.state.closed).toBe('recorded');
+    expect(done.state.closed).toBe('past');
   });
 
-  it('4. 20분 시한 → 404 → 잠시 불가(요청 시한 8초 꼴) → 녹화 — 그 뒤 vod 가 와도 두 번째 확인 없음', () => {
+  it('4. 20분 시한 → 404 → 잠시 불가(요청 시한 8초 꼴) → past 로 닫는다 — 그 뒤 vod 가 와도 두 번째 확인 없음', () => {
     const s = finalOf(byDeadline());
     const done = feed(s, [roundPoll(UNAVAILABLE)], AFTER_DEADLINE);
-    expect(done.state.closed).toBe('recorded');
+    expect(done.state.closed).toBe('past');
     const after = feed(done.state, [roundPoll(vodReady(T0, NOW))], AFTER_DEADLINE + 1_000);
     expect(after.state).toBe(done.state);
     expect(after.effects).toEqual([]);
   });
 
-  it('4 덧붙임. 회차별 vod 가 본 구간과 겹치지 않으면 녹화', () => {
+  it('4 덧붙임. 회차별 vod 가 본 구간과 겹치지 않으면 past 로 닫는다(T1-3)', () => {
     const s = finalOf(byDeadline());
     const far = vodReady(NOW + 10 * MIN, NOW + 20 * MIN);
-    expect(feed(s, [roundPoll(far)], AFTER_DEADLINE).state.closed).toBe('recorded');
+    expect(feed(s, [roundPoll(far)], AFTER_DEADLINE).state.closed).toBe('past');
   });
 
-  it('비 vod 답은 모두 녹화 — ending · live · 국면 모름 · url 없는 vod', () => {
+  it('비 vod 답은 모두 past 로 닫는다 — ending · live · 국면 모름 · url 없는 vod(T1-3)', () => {
     const answers = [
       status({ mode: 'ending' }),
       status({ ready: true, mode: 'live', url: A1, firstPdtMs: T0, headPdtMs: NOW }),
@@ -240,7 +246,7 @@ describe('W6 「종국 → 404」 순서 넷(계획 8-1)', () => {
     ];
     for (const answer of answers) {
       const s = finalOf(byDeadline());
-      expect(feed(s, [roundPoll(answer)], AFTER_DEADLINE).state.closed).toBe('recorded');
+      expect(feed(s, [roundPoll(answer)], AFTER_DEADLINE).state.closed).toBe('past');
     }
   });
 });
@@ -271,11 +277,9 @@ describe('마지막 확인 중 다른 사건(계획 3-4 finalCheck 열)', () => 
     expect(sessionView(remounted.state, AFTER_DEADLINE).startHeld).toBe(true);
   });
 
-  it('끝 도달 · 녹화 단추 → 녹화 · LIVE(끝에 닿기 전) → 라이브(세대 + 1)', () => {
+  it('끝 도달 → past 로 닫는다 · LIVE(끝에 닿기 전) → 라이브(세대 + 1)', () => {
     const s = finalOf(byDeadline());
-    expect(feed(s, [{ type: 'end-reached' }], AFTER_DEADLINE).state.closed).toBe('recorded');
-    const record: SessionEvent = { type: 'button', which: 'record' };
-    expect(feed(s, [record], AFTER_DEADLINE).state.closed).toBe('recorded');
+    expect(feed(s, [{ type: 'end-reached' }], AFTER_DEADLINE).state.closed).toBe('past');
     const live = feed(s, [{ type: 'live-button', x: X_A, attempt: 0 }], AFTER_DEADLINE);
     expect(live.state.phase).toEqual({ kind: 'live' });
     expect(live.state.source.generation).toBe(s.source.generation + 1);
@@ -283,16 +287,16 @@ describe('마지막 확인 중 다른 사건(계획 3-4 finalCheck 열)', () => 
 });
 
 describe('「새 재생기를 세우지 않음」 — isPlayerStartHeld 의 finalCheck 몫(U2)', () => {
-  it('sessionView.startHeld 는 녹화로 정한 끝남 대기에서 마지막 확인일 때만 참이다', () => {
-    const recorded = byDeadline();
-    expect(sessionView(recorded, AFTER_DEADLINE).startHeld).toBe(false);
-    expect(sessionView(finalOf(recorded), AFTER_DEADLINE).startHeld).toBe(true);
+  it('sessionView.startHeld 는 닫기로 정한 끝남 대기에서 마지막 확인일 때만 참이다', () => {
+    const decided = byDeadline();
+    expect(sessionView(decided, AFTER_DEADLINE).startHeld).toBe(false);
+    expect(sessionView(finalOf(decided), AFTER_DEADLINE).startHeld).toBe(true);
   });
 
   it('[새 함수 — 음성 대조 제외 · 변이 M2l-2 로 교정] 국면별 표', () => {
-    const recorded = byDeadline();
-    expect(isPlayerStartHeld(recorded)).toBe(false);
-    expect(isPlayerStartHeld(finalOf(recorded))).toBe(true);
+    const decided = byDeadline();
+    expect(isPlayerStartHeld(decided)).toBe(false);
+    expect(isPlayerStartHeld(finalOf(decided))).toBe(true);
     expect(isPlayerStartHeld(finalOf(byEnded(), R))).toBe(true);
   });
 });

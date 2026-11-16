@@ -102,7 +102,6 @@ const list: SessionEvent = {
   firstMs: NOW - 3_600_000,
   lastEndMs: E,
   targetDurationS: 4,
-  headSpanMs: 12_000,
 };
 
 /** 다음 폴링 한 번(문을 세운다) 뒤 라이브 창 탐침을 나간 횟수 */

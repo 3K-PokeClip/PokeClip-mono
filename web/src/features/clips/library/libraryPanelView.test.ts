@@ -197,6 +197,25 @@ describe('stepViewForClip — 진행 카드는 서버 영상의 지금 판에만
     expect(failedStep.detail).not.toMatch(/영상 만들기」를 다시/);
   });
 
+  it('범위를 못 덮은 렌더 실패(SOURCE_RANGE)는 보관함에서 못 고치는 범위 대신 「이어서 편집」 으로 안내한다', () => {
+    const failed = (code: string) =>
+      stepViewForClip(
+        toLibraryClip(
+          entry('failed', video({ status: 'failed', error: { code, message: null } })),
+          '9',
+        ),
+        NOW,
+      )!;
+    expect(failed('SOURCE_RANGE').view.steps[1]!.state).toBe('danger');
+    expect(failed('SOURCE_RANGE').detail).toBe(
+      '고른 범위에 녹화가 비거나 끊긴 곳이 있어 만들 수 없어요. 「이어서 편집」에서 범위를 다시 정해 주세요.',
+    );
+    // 다른 코드는 편집기 작은 창과 같은 말이다
+    expect(failed('SOURCE_MISSING').detail).toBe(
+      '영상을 만들지 못했어요(SOURCE_MISSING). 다시 만들어 주세요.',
+    );
+  });
+
   it('올라갔으면 세 단계가 다 끝나고 올린 시각이 붙는다', () => {
     const step = stepViewForClip(
       toLibraryClip(

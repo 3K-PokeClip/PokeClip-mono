@@ -1226,6 +1226,19 @@ describe('nextLiveFollow: 라이브 채팅이 되감은 영상을 따르나(POK-
     expect(nextLiveFollow(true, 2)).toBe(false);
     expect(nextLiveFollow(false, 5)).toBe(false);
   });
+
+  it('녹화가 끝난 회차면 끝 3초 안에 들어도 따르던 채팅은 따르기를 끄지 않는다 — 따르지 않던 채팅은 그대로다', () => {
+    expect(nextLiveFollow(true, 2, true)).toBe(true);
+    expect(nextLiveFollow(true, 0, true)).toBe(true);
+    expect(nextLiveFollow(false, 0, true)).toBe(false);
+    expect(nextLiveFollow(false, SEEK_STEP_SECONDS, true)).toBe(true);
+  });
+
+  it('녹화가 끝나지 않은 회차면 지금처럼 끝 3초 안에서 따르기를 끈다', () => {
+    expect(nextLiveFollow(true, 2, false)).toBe(false);
+    expect(nextLiveFollow(true, 0, false)).toBe(false);
+    expect(nextLiveFollow(true, 3, false)).toBe(true);
+  });
 });
 
 describe('liveSettledUpTo: 라이브 채팅이 표에 다 들어온 자리(POK-326)', () => {

@@ -16,7 +16,16 @@ import { Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
 import { useSessionMutation } from '@/lib/useSessionMutation';
-import { Avatar, Button, LoadingRegion, Popover, Skeleton, Slot, useToast } from '@/ui';
+import {
+  Avatar,
+  Button,
+  LoadingRegion,
+  PRIVATE_TEXT_CLASS,
+  Popover,
+  Skeleton,
+  Slot,
+  useToast,
+} from '@/ui';
 import { ApiError } from '@/api/client';
 import {
   acceptInvitation,
@@ -316,7 +325,7 @@ function SwitcherPanel({
           />
         )}
         <div className={styles.foot}>
-          <span className={styles.email}>{me.email}</span>
+          <span className={clsx(styles.email, PRIVATE_TEXT_CLASS)}>{me.email}</span>
           <Link href="/settings/account" className={styles.footLink} onClick={onClose}>
             계정 설정
           </Link>
@@ -389,7 +398,7 @@ function ChannelRow({
       {/* 채널 주인의 프로필 사진. 사진이 없으면 이름 글자 아바타 */}
       <Avatar size="sm" src={photo ?? undefined} name={name} className={styles.rowAvatar} />
       <span className={styles.rowText}>
-        <span className={styles.rowName}>{name} 채널</span>
+        <span className={clsx(styles.rowName, PRIVATE_TEXT_CLASS)}>{name} 채널</span>
         <span className={styles.rowMeta}>{role}</span>
       </span>
       {current && !leaving && <Check aria-hidden className={styles.rowCheck} />}
@@ -540,7 +549,9 @@ function Invitations({
         const accepting = accept.isPending && accept.variables === inv.id;
         return (
           <div key={inv.id} className={styles.invite}>
-            <div className={styles.inviteName}>{inv.streamerName} 채널의 편집자 초대</div>
+            <div className={clsx(styles.inviteName, PRIVATE_TEXT_CLASS)}>
+              {inv.streamerName} 채널의 편집자 초대
+            </div>
             <div className={styles.inviteMeta}>{expiresLabel(inv.expiresAt)}</div>
             <div className={styles.inviteActions}>
               {/* 폭은 라벨 그대로 둔다: 스피너가 라벨 옆에 붙어 버튼이 넓어지면 「거절」이 밀린다(.busyButton) */}
@@ -638,7 +649,11 @@ function LeaveConfirm({
     mutationFn: () => revokeDelegation(channel.id),
     onSuccess: () => {
       track('editor_delegation_ended', { initiator: 'editor' });
-      toast({ tone: 'success', title: `${channel.streamerName} 채널에서 나왔어요` });
+      toast({
+        tone: 'success',
+        title: `${channel.streamerName} 채널에서 나왔어요`,
+        maskTitle: true,
+      });
       onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
     },
     onError: (e: unknown) => {
@@ -747,7 +762,8 @@ function PanelConfirm({
         aria-describedby={textId}
         className={styles.confirmCard}
       >
-        <div id={titleId} className={styles.confirmTitle}>
+        {/* 제목에 채널(스트리머) 이름이 들어간다 — 거절·나가기 확인 둘 다 */}
+        <div id={titleId} className={clsx(styles.confirmTitle, PRIVATE_TEXT_CLASS)}>
           {title}
         </div>
         <div id={textId} className={styles.confirmText}>

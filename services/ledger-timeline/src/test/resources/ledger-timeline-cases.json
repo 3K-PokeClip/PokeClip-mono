@@ -182,6 +182,45 @@
       "expect": {"place": "media", "seq": 1, "offsetMs": 4000, "offsetOrigin": "VIDEO_START"}
     },
     {
+      "id": "F-pdt-overlap-K1c-999ms-start",
+      "kind": "F",
+      "note": "K1-c 999ms 부분 겹침(경계 표 B8 · kty 2026-11-13 결정) — 겹침 시작은 두 축 모두 나중 조각. 채팅 수집기 VideoPositionV2Test 와 같은 숫자",
+      "op": "locate",
+      "axis": "pdt",
+      "rows": [
+        {"seq": 1, "startAtMs": 0, "durationMs": 4000, "continuesPrevious": false, "timingVersion": 2},
+        {"seq": 2, "startAtMs": 3001, "durationMs": 4000, "continuesPrevious": true, "timingVersion": 2}
+      ],
+      "t": 3001,
+      "expect": {"place": "media", "seq": 2, "offsetMs": 0, "offsetOrigin": "VIDEO_START"}
+    },
+    {
+      "id": "F-pdt-overlap-K1c-999ms-in",
+      "kind": "F",
+      "note": "K1-c 999ms 부분 겹침(경계 표 B8 · kty 2026-11-13 결정) — 겹침 안은 두 축 모두 나중 조각. 채팅 수집기 VideoPositionV2Test 와 같은 숫자",
+      "op": "locate",
+      "axis": "pdt",
+      "rows": [
+        {"seq": 1, "startAtMs": 0, "durationMs": 4000, "continuesPrevious": false, "timingVersion": 2},
+        {"seq": 2, "startAtMs": 3001, "durationMs": 4000, "continuesPrevious": true, "timingVersion": 2}
+      ],
+      "t": 3500,
+      "expect": {"place": "media", "seq": 2, "offsetMs": 499, "offsetOrigin": "VIDEO_START"}
+    },
+    {
+      "id": "F-pdt-overlap-K1c-999ms-end",
+      "kind": "F",
+      "note": "K1-c 999ms 부분 겹침(경계 표 B8 · kty 2026-11-13 결정) — 겹침 끝(마지막 ms)은 두 축 모두 나중 조각. 채팅 수집기 VideoPositionV2Test 와 같은 숫자",
+      "op": "locate",
+      "axis": "pdt",
+      "rows": [
+        {"seq": 1, "startAtMs": 0, "durationMs": 4000, "continuesPrevious": false, "timingVersion": 2},
+        {"seq": 2, "startAtMs": 3001, "durationMs": 4000, "continuesPrevious": true, "timingVersion": 2}
+      ],
+      "t": 3999,
+      "expect": {"place": "media", "seq": 2, "offsetMs": 998, "offsetOrigin": "VIDEO_START"}
+    },
+    {
       "id": "F-pdt-chapter-skip-B7",
       "kind": "F",
       "note": "경계 표 B7 — 장 안 건너뜀(같은 녹화 · PDT 1200ms 건너뜀)은 뒤 조각 시작(F 3항)",
@@ -258,6 +297,45 @@
       ],
       "t": 3700,
       "expect": {"place": "media", "seq": 2, "offsetMs": 100, "offsetOrigin": "VIDEO_START"}
+    },
+    {
+      "id": "F-startPts-overlap-K1c-999ms-start",
+      "kind": "F",
+      "note": "K1-c 999ms 부분 겹침(경계 표 B8 · kty 2026-11-13 결정) — 겹침 시작은 두 축 모두 나중 조각. 채팅 수집기 VideoPositionV2Test 와 같은 숫자",
+      "op": "locate",
+      "axis": "startPts",
+      "rows": [
+        {"seq": 1, "startAtMs": 0, "durationMs": 4000, "continuesPrevious": false, "timingVersion": 2},
+        {"seq": 2, "startAtMs": 3001, "durationMs": 4000, "continuesPrevious": true, "timingVersion": 2}
+      ],
+      "t": 3001,
+      "expect": {"place": "media", "seq": 2, "offsetMs": 0, "offsetOrigin": "VIDEO_START"}
+    },
+    {
+      "id": "F-startPts-overlap-K1c-999ms-in",
+      "kind": "F",
+      "note": "K1-c 999ms 부분 겹침(경계 표 B8 · kty 2026-11-13 결정) — 겹침 안은 두 축 모두 나중 조각. 채팅 수집기 VideoPositionV2Test 와 같은 숫자",
+      "op": "locate",
+      "axis": "startPts",
+      "rows": [
+        {"seq": 1, "startAtMs": 0, "durationMs": 4000, "continuesPrevious": false, "timingVersion": 2},
+        {"seq": 2, "startAtMs": 3001, "durationMs": 4000, "continuesPrevious": true, "timingVersion": 2}
+      ],
+      "t": 3500,
+      "expect": {"place": "media", "seq": 2, "offsetMs": 499, "offsetOrigin": "VIDEO_START"}
+    },
+    {
+      "id": "F-startPts-overlap-K1c-999ms-end",
+      "kind": "F",
+      "note": "K1-c 999ms 부분 겹침(경계 표 B8 · kty 2026-11-13 결정) — 겹침 끝(마지막 ms)은 두 축 모두 나중 조각. 채팅 수집기 VideoPositionV2Test 와 같은 숫자",
+      "op": "locate",
+      "axis": "startPts",
+      "rows": [
+        {"seq": 1, "startAtMs": 0, "durationMs": 4000, "continuesPrevious": false, "timingVersion": 2},
+        {"seq": 2, "startAtMs": 3001, "durationMs": 4000, "continuesPrevious": true, "timingVersion": 2}
+      ],
+      "t": 3999,
+      "expect": {"place": "media", "seq": 2, "offsetMs": 998, "offsetOrigin": "VIDEO_START"}
     },
     {
       "id": "F-startPts-unattributed-gap",

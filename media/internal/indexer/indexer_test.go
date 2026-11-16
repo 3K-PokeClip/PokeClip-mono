@@ -88,6 +88,12 @@ func TestCase03DuplicatePathIsCheckedBeforeLateSegment(t *testing.T) {
 }
 
 // 케이스4 — 진짜 늦은 세그먼트는 INSERT 하지 않고 ERROR 를 남긴다(D12).
+//
+// 귀속 하한 거부(session_floor_rejected)가 탈퇴 정리가 없는 한 운영 경로에서 도달하지 않는 근거이기도 하다(POK-567 — kty
+// 2026-11-13 「고치지 않음」). 세션 started_at 은 그 세션 첫 행의 벽시각이고 하한은 started_at − FloorSlack(기본 1초)이다. 그보다
+// 이른 조각은 꼬리 벽시각보다도 이르므로 H3 가 Insert 앞에서 버린다 — 세션 판정(Decide)은 Insert 안에서만 돈다. late 는
+// first(세션을 연 꼬리)보다 4초 이르러 하한 밖이다. 예외: 방송 중 탈퇴 정리가 조각을 전량 지우면 다음 재스캔이 꼬리 없는 커서를
+// 적재해 H3 를 건너뛴다(cur.Tail == nil) — media README 「PDT 알려진 한계」 가 받아들인 갈래이고 이 시험은 덮지 않는다.
 func TestCase04TrulyLateSegmentIsSkippedWithError(t *testing.T) {
 	f := newFixture(t, 4000)
 	first := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
@@ -102,6 +108,9 @@ func TestCase04TrulyLateSegmentIsSkippedWithError(t *testing.T) {
 	}
 	if n := len(f.store.records("s1")); n != 1 {
 		t.Fatalf("행 수 = %d, want 1 — 늦은 세그먼트를 INSERT 했다", n)
+	}
+	if f.store.insertCalls != 1 {
+		t.Fatalf("Insert 호출 = %d, want 1(first 만) — 늦은 조각이 세션 판정까지 갔다", f.store.insertCalls)
 	}
 }
 

@@ -159,7 +159,7 @@ class SegmentLedgerTest extends IntegrationTestSupport {
      * 어느 행이 올지가 PostgreSQL 마음이다.
      *
      * <p><b>같은 벽시계는 역행이 아니다</b> — 신호 둘이 켜지지 않는 것까지 같이 본다.
-     * {@code >}를 {@code >=}로 느슨하게 쓴 EXISTS면 여기서 오탐이 난다.
+     * {@code earlier_is_future}의 비교 {@code >}를 {@code >=}로 느슨하게 쓰면 여기서 오탐이 난다.
      */
     @Test
     void 같은_벽시계_시각이면_seq_큰_쪽이다() {

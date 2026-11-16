@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { RewindMode, RewindStatusResult } from '@/api/rewindStatus';
 import {
+  foldPastVodAnswer,
   nextPastVodState,
   pastCardMode,
   pastVodNeedsPoll,
   type PastBlockReason,
   type PastCardMode,
   type PastVodClock,
+  type PastVodHold,
   type PastVodState,
   type VodPhase,
 } from './pastVod';
@@ -249,6 +251,69 @@ describe('nextPastVodState — T1-3 404 는 원점에서 360초 안이면 아직
   });
 });
 
+describe('foldPastVodAnswer — T6-3 404 유예 원점의 우선순위(originMs > 첫 404 > 지금)', () => {
+  /** 직전 묶음 — 상태와 첫 404 시각 */
+  const hold = (state: PastVodState, firstUnknownMs: number | null): PastVodHold => ({
+    state,
+    firstUnknownMs,
+  });
+
+  it('originMs 가 첫 404 보다 이긴다 — 원점이 유예 밖이면 첫 404 가 유예 안이어도 none', () => {
+    const prev = hold(ANSWERED, NOW - 100_000);
+    const next = foldPastVodAnswer(prev, NOT_FOUND, NOW, NOW - 400_000);
+    expect(next.state).toEqual(NONE);
+  });
+
+  it('originMs 가 첫 404 보다 이긴다 — 원점이 유예 안이면 첫 404 가 유예 밖이어도 아직 checking', () => {
+    const prev = hold(ANSWERED, NOW - 400_000);
+    const next = foldPastVodAnswer(prev, NOT_FOUND, NOW, NOW - 100_000);
+    expect(next.state).toEqual(ANSWERED);
+  });
+
+  it('originMs 가 없으면 첫 404 시각이 원점이다', () => {
+    expect(foldPastVodAnswer(hold(ANSWERED, NOW - 400_000), NOT_FOUND, NOW, null).state).toEqual(
+      NONE,
+    );
+    expect(foldPastVodAnswer(hold(ANSWERED, NOW - 100_000), NOT_FOUND, NOW, null).state).toEqual(
+      ANSWERED,
+    );
+  });
+
+  it('둘 다 없으면 지금이 원점이다 — 첫 404 는 checking(답 받음)이고 그 시각을 첫 404 로 적는다', () => {
+    const next = foldPastVodAnswer(hold(NOT_ANSWERED, null), NOT_FOUND, NOW, null);
+    expect(next).toEqual(hold(ANSWERED, NOW));
+  });
+
+  it('첫 404 시각은 처음 받은 그대로다 — 다음 404 도 · originMs 가 있어도 덮지 않는다', () => {
+    const first = foldPastVodAnswer(hold(NOT_ANSWERED, null), NOT_FOUND, NOW, NOW - 100_000);
+    expect(first.firstUnknownMs).toBe(NOW);
+    const second = foldPastVodAnswer(first, NOT_FOUND, NOW + 10_000, null);
+    expect(second.firstUnknownMs).toBe(NOW);
+  });
+
+  it.each<[string, RewindStatusResult]>([
+    ['503 류', TRY_LATER],
+    ['200 mode null', ok(null, false)],
+    ['200 ending', ok('ending', false)],
+  ])('404 가 아닌 답(%s)은 첫 404 시각을 적지 않는다', (_label, result) => {
+    expect(foldPastVodAnswer(hold(NOT_ANSWERED, null), result, NOW, null).firstUnknownMs).toBe(
+      null,
+    );
+  });
+
+  it('상태는 nextPastVodState 그대로다 — ready 는 내려가지 않는다', () => {
+    const next = foldPastVodAnswer(hold(READY, null), ok('ended', false), NOW, NOW - 400_000);
+    expect(next.state).toEqual(READY);
+  });
+
+  it('직전 묶음을 바꾸지 않고 새 묶음을 낸다', () => {
+    const prev = hold(NOT_ANSWERED, null);
+    const next = foldPastVodAnswer(prev, NOT_FOUND, NOW, null);
+    expect(prev).toEqual(hold(NOT_ANSWERED, null));
+    expect(next).not.toBe(prev);
+  });
+});
+
 describe('pastVodNeedsPoll — T1-5 다시 물을 상태', () => {
   it.each<[StateName, boolean]>([
     ['checking(답 없음)', true],
@@ -267,7 +332,7 @@ describe('pastCardMode — T1-4 판정표 10줄(위에서부터 처음 맞는 �
   type Input = Parameters<typeof pastCardMode>[0];
   /** 8줄(playable)에 닿는 입력 — 사례마다 한두 칸만 바꾼다 */
   const PLAYABLE_INPUT: Input = {
-    enteredAfterEnd: true,
+    showsPast: true,
     expired: false,
     vod: READY,
     access: 'ready',
@@ -278,8 +343,8 @@ describe('pastCardMode — T1-4 판정표 10줄(위에서부터 처음 맞는 �
 
   it.each<[string, Input, PastCardMode]>([
     [
-      '1 끝나기 전에 들어온 화면(라이브 · B)',
-      inputWith({ enteredAfterEnd: false }),
+      '1 지난 방송 판정으로 그리지 않는 화면(라이브 · 열린 세션 · go-live · left 로 닫힘)',
+      inputWith({ showsPast: false }),
       { kind: 'notPast' },
     ],
     ['2 보관 만료', inputWith({ expired: true }), blocked('expired')],
@@ -302,9 +367,9 @@ describe('pastCardMode — T1-4 판정표 10줄(위에서부터 처음 맞는 �
   });
 
   describe('경계 — 위 줄이 아래 줄을 이긴다', () => {
-    it('끝나기 전에 들어온 화면이면 만료 · 상태 · 국면과 무관하게 notPast', () => {
+    it('지난 방송 판정으로 그리지 않는 화면이면 만료 · 상태 · 국면과 무관하게 notPast', () => {
       const input = inputWith({
-        enteredAfterEnd: false,
+        showsPast: false,
         expired: true,
         vod: NONE,
         phase: 'failed',

@@ -86,6 +86,8 @@ variables {
   rds_sg_id          = "sg-0rds0000000000000"
   auth_sg_id         = "sg-0auth000000000000"
   auth_port          = 18086
+  clip_sg_id         = "sg-0clip000000000000"
+  clip_port          = 18087
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -171,6 +173,10 @@ override_resource {
 }
 
 override_resource {
+  target = aws_vpc_security_group_ingress_rule.clip_from_media
+}
+
+override_resource {
   target = aws_vpc_security_group_egress_rule.load_balancer
 }
 
@@ -188,17 +194,17 @@ run "edge_bounds_statement_in_policy_json_writer_off" {
   assert {
     condition = (
       one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Effect == "Allow" &&
-      toset(flatten([one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Action])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:GetKey", "cloudfront-keyvaluestore:UpdateKeys"]) &&
+      toset(flatten([one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Action])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:UpdateKeys"]) &&
       flatten([one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Resource]) == [var.edge_bounds_kvs_arn]
     )
-    error_message = "EdgeBoundsKvs 가 Allow · 동작 셋(Describe · GetKey · UpdateKeys) · Resource = 입력 KVS ARN 하나가 아니다."
+    error_message = "EdgeBoundsKvs 가 Allow · 동작 둘(Describe · UpdateKeys) · Resource = 입력 KVS ARN 하나가 아니다."
   }
 
-  # 정책 전체의 KVS 값 동작이 그 셋뿐이다 — ListKeys · PutKey · DeleteKey ·
-  # 와일드카드가 다른 문으로 새지 않는다.
+  # 정책 전체의 KVS 값 동작이 그 둘뿐이다 — GetKey(POK-574) · ListKeys ·
+  # PutKey · DeleteKey · 와일드카드가 다른 문으로 새지 않는다.
   assert {
-    condition     = toset(flatten([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : [for action in flatten([statement.Action]) : action if startswith(action, "cloudfront-keyvaluestore:")]])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:GetKey", "cloudfront-keyvaluestore:UpdateKeys"])
-    error_message = "정책 JSON 의 cloudfront-keyvaluestore 동작이 셋(Describe · GetKey · UpdateKeys)이 아니다."
+    condition     = toset(flatten([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : [for action in flatten([statement.Action]) : action if startswith(action, "cloudfront-keyvaluestore:")]])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:UpdateKeys"])
+    error_message = "정책 JSON 의 cloudfront-keyvaluestore 동작이 둘(Describe · UpdateKeys)이 아니다."
   }
 
   assert {
@@ -229,15 +235,15 @@ run "edge_bounds_statement_in_policy_json_writer_on" {
   assert {
     condition = (
       one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Effect == "Allow" &&
-      toset(flatten([one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Action])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:GetKey", "cloudfront-keyvaluestore:UpdateKeys"]) &&
+      toset(flatten([one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Action])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:UpdateKeys"]) &&
       flatten([one([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : statement if statement.Sid == "EdgeBoundsKvs"]).Resource]) == [var.edge_bounds_kvs_arn]
     )
-    error_message = "EdgeBoundsKvs 가 Allow · 동작 셋(Describe · GetKey · UpdateKeys) · Resource = 입력 KVS ARN 하나가 아니다."
+    error_message = "EdgeBoundsKvs 가 Allow · 동작 둘(Describe · UpdateKeys) · Resource = 입력 KVS ARN 하나가 아니다."
   }
 
   assert {
-    condition     = toset(flatten([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : [for action in flatten([statement.Action]) : action if startswith(action, "cloudfront-keyvaluestore:")]])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:GetKey", "cloudfront-keyvaluestore:UpdateKeys"])
-    error_message = "정책 JSON 의 cloudfront-keyvaluestore 동작이 셋(Describe · GetKey · UpdateKeys)이 아니다."
+    condition     = toset(flatten([for statement in jsondecode(aws_iam_role_policy.media.policy).Statement : [for action in flatten([statement.Action]) : action if startswith(action, "cloudfront-keyvaluestore:")]])) == toset(["cloudfront-keyvaluestore:DescribeKeyValueStore", "cloudfront-keyvaluestore:UpdateKeys"])
+    error_message = "정책 JSON 의 cloudfront-keyvaluestore 동작이 둘(Describe · UpdateKeys)이 아니다."
   }
 
   assert {

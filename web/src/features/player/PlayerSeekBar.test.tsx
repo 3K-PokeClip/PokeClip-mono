@@ -61,6 +61,30 @@ describe('PlayerSeekBar 다시보기(POK-518)', () => {
   });
 });
 
+describe('PlayerSeekBar 방송이 끝난 되감기(recordingEnded)의 끝 문구', () => {
+  it('끝에서는 「실시간」 이 아니라 「녹화 끝」 이다', () => {
+    const { slider } = renderSeekBar({ recordingEnded: true });
+    expect(slider).toHaveAttribute('aria-valuetext', '녹화 끝');
+  });
+
+  it('끝에서 떨어지면 「녹화 끝에서 −MM:SS」 다', () => {
+    const { slider } = renderSeekBar({ behindSeconds: 60, recordingEnded: true });
+    expect(slider).toHaveAttribute('aria-valuetext', '녹화 끝에서 -01:00');
+  });
+
+  it('이름 · End 키는 그대로 라이브 탐색 · 실시간으로다', () => {
+    const { slider, props } = renderSeekBar({ behindSeconds: 60, recordingEnded: true });
+    fireEvent.keyDown(slider, { key: 'End' });
+    expect(props.onReturnToLive).toHaveBeenCalledTimes(1);
+    expect(props.onSeekToFraction).not.toHaveBeenCalled();
+  });
+
+  it('방송 중(recordingEnded 없음)은 끝에서 「실시간」 그대로다', () => {
+    const { slider } = renderSeekBar();
+    expect(slider).toHaveAttribute('aria-valuetext', '실시간');
+  });
+});
+
 describe('PlayerSeekBar 드래그', () => {
   it('드래그 중엔 시킹하지 않고 놓을 때 한 번만 시킹한다', () => {
     const { slider, props } = renderSeekBar();

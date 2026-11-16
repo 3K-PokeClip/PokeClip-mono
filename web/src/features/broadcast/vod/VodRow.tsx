@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   IconButton,
+  PRIVATE_TEXT_CLASS,
   Popover,
   Radio,
   RadioGroup,
@@ -52,7 +53,7 @@ export function VodRow({
   onCancelDownload: () => void;
   onResetDownload: () => void;
 }) {
-  const view = rowViewFor(item, download, now, visual?.recordingMissing === true);
+  const view = rowViewFor(item, download, now, visual?.vodMissing === true);
   const title = visual?.title ?? '제목 없는 방송';
   const duration = durationLabel(visual?.durationSec ?? null);
   const date = dateLabel(item);
@@ -72,7 +73,7 @@ export function VodRow({
       : `${date ?? '방송일 미상'} · VOD 준비 중`
     : [
         date ?? '방송일 미상',
-        view.kind === 'noRecording' ? '녹화 영상이 없어요 · 카드와 채팅은 볼 수 있어요' : null,
+        view.kind === 'noVod' ? '다시보기가 없어요 · 카드와 채팅은 볼 수 있어요' : null,
         // 만료 임박 행만 무엇을 잃는지 적는다 — 평소엔 오른쪽 카드 수 태그로 충분하다
         urgent && visual?.unsavedCardCount
           ? `저장하지 않은 카드 ${visual.unsavedCardCount}개가 함께 삭제됩니다`
@@ -128,14 +129,15 @@ export function VodRow({
         */}
         {openable ? (
           <Link href={`/broadcast/vod/${item.streamId}`} className={styles.rowLink}>
-            {title}
+            {/* 제목이 없으면 방송 번호(옛 방송은 스트림 키와 같다)라 둘 다 가린다 */}
+            <span className={PRIVATE_TEXT_CLASS}>{title}</span>
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </Link>
         ) : (
           // 열 VOD가 없다(준비 중이거나 이미 지워졌다) — aria-disabled 링크로 포커스를
           // 받게 하느니 링크를 안 만든다
           <span className={styles.rowTitle}>
-            {title}
+            <span className={PRIVATE_TEXT_CLASS}>{title}</span>
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </span>
         )}
@@ -185,7 +187,7 @@ export function VodRow({
             <Popover.Content className={styles.pickPanel} aria-label="풀 버전 다운로드">
               <p className={styles.pickTitle}>풀 버전 다운로드</p>
               <p className={styles.pickSub}>
-                {title}
+                <span className={PRIVATE_TEXT_CLASS}>{title}</span>
                 {duration ? ` · ${duration}` : null}
               </p>
               <RadioGroup
@@ -247,7 +249,10 @@ export function VodRow({
           <button type="button" className={styles.donePill} onClick={onResetDownload}>
             <Check size={12} aria-hidden="true" />
             받기 완료
-            <VisuallyHidden> · {title} · 다시 받기</VisuallyHidden>
+            <VisuallyHidden>
+              {' · '}
+              <span className={PRIVATE_TEXT_CLASS}>{title}</span> · 다시 받기
+            </VisuallyHidden>
           </button>
         ) : null}
 

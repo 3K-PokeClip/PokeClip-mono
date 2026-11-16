@@ -72,6 +72,11 @@ export function rangeLengthSeconds(range: ClipRange): number {
   return roundMs(range.endSeconds - range.startSeconds);
 }
 
+/** 핸들이 갈 자리 — 원본 [0, 길이] 안으로 자르고 ms 로 반올림한다(길이 위반이 아니라서 조용히) */
+export function clampEdgeSeconds(requestedSeconds: number, durationSeconds: number): number {
+  return roundMs(Math.min(durationSeconds, Math.max(0, requestedSeconds)));
+}
+
 /**
  * 구간 핸들 한쪽을 옮긴 결과. 5초~3분을 벗어나면 **클램프가 아니라 거부**다 —
  * 핸들이 3:00에서 더 늘어나지 않고 멈추는 시안 동작이 이 거부에서 나온다.
@@ -86,7 +91,7 @@ export function resolveRangeEdge(
   range: ClipRange,
   durationSeconds: number,
 ): RangeEdgeResult {
-  const requested = roundMs(Math.min(durationSeconds, Math.max(0, requestedSeconds)));
+  const requested = clampEdgeSeconds(requestedSeconds, durationSeconds);
   const next: ClipRange =
     edge === 'start'
       ? { startSeconds: requested, endSeconds: range.endSeconds }
@@ -287,6 +292,14 @@ export function clampTimelineHeight(px: number, ceiling = MAX_TIMELINE_HEIGHT): 
   return Math.round(Math.max(MIN_TIMELINE_HEIGHT, Math.min(top, px)));
 }
 
+/**
+ * 사람에게 보이는 초 — 편집기 초(기준점 축)에서 방송 시작의 자리를 뺀다(POK-562 · kty 2026-11-14 (가)). 시작보다 앞선 자리는 0초다.
+ * 값(구간 · 끝점 · 저장)은 편집기 초 그대로이고 눈금 · 요약 · 손잡이 표기만 이것을 거친다
+ */
+export function secondsSinceStart(seconds: number, startOnAxisSeconds: number): number {
+  return Math.max(0, seconds - startOnAxisSeconds);
+}
+
 /** 눈금 글자. 창이 이보다 좁으면 0.1초까지 적는다(초만 적으면 같은 초가 되풀이된다) */
 const TENTHS_BELOW_SECONDS = 15;
 
@@ -307,4 +320,31 @@ export function rulerTicks(view: TimelineView, count = 6): number[] {
   return Array.from({ length: count }, (_, i) =>
     roundMs(view.startSeconds + (span * i) / (count - 1)),
   );
+}
+
+export interface RulerMark {
+  /** 눈금 자리(편집기 초) */
+  seconds: number;
+  /** 눈금 글자. 방송 시작보다 앞선 눈금은 빈 글자다 */
+  label: string;
+}
+
+/**
+ * 눈금 자리와 글자. 자리는 rulerTicks 의 균등 분할 그대로이고 글자는 방송 시작부터 잰다(secondsSinceStart).
+ * 시작보다 앞선 눈금은 글자를 비운다 — 그 자리에 적을 경과가 없어 모두 「0:00」 으로 겹쳐 찍혔다.
+ * 창이 통째로 시작 앞이면 첫 눈금에만 「0:00」 을 적어 눈금자가 비지 않게 한다
+ */
+export function rulerMarks(view: TimelineView, startOnAxisSeconds: number, count = 6): RulerMark[] {
+  const span = view.endSeconds - view.startSeconds;
+  const ticks = rulerTicks(view, count);
+  // 눈금 자리는 ms 로 반올림돼 있다 — 시작도 ms 로 맞춰야 시작과 1ms 안의 눈금이 앞선 눈금으로 비지 않는다
+  const start = roundMs(startOnAxisSeconds);
+  const allBeforeStart = ticks.every((tick) => tick < start);
+  return ticks.map((tick, i) => {
+    const blank = tick < start && !(allBeforeStart && i === 0);
+    return {
+      seconds: tick,
+      label: blank ? '' : rulerLabel(secondsSinceStart(tick, startOnAxisSeconds), span),
+    };
+  });
 }

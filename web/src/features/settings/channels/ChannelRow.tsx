@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import { useId, type ReactNode } from 'react';
 import styles from './ChannelSettingsScreen.module.css';
+import { PRIVATE_TEXT_CLASS } from '@/ui';
 
 // 디자인 1k 채널 행 카드의 표현 껍데기. 치지직·SOOP·유튜브 세 곳이 같은 규격을 쓴다.
 // @/ui로 올리지 않는다 — 이 화면 전용 레이아웃이지 DS 프리미티브가 아니다.
@@ -37,7 +38,8 @@ export function ChannelRow({
           </span>
           {badge}
         </div>
-        <div className={styles.rowMeta}>{meta}</div>
+        {/* 보조설명에 연동한 채널 이름·닉네임이 들어간다 — 상태는 배지가 녹화에 남는다 */}
+        <div className={clsx(styles.rowMeta, PRIVATE_TEXT_CLASS)}>{meta}</div>
       </div>
       {action !== null && <div className={styles.rowActions}>{action}</div>}
     </div>

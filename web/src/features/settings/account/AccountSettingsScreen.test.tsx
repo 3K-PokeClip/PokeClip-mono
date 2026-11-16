@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Me } from '@/api/auth';
 import { AccountSettingsScreen } from '@/features/settings/account/AccountSettingsScreen';
 import { useAuthStore } from '@/stores/auth';
+import { byTextContent } from '@/test/byTextContent';
 import { jsonResponse, stubFetch, type FetchHandler } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
@@ -621,7 +622,10 @@ describe('AccountSettingsScreen — 탈퇴', () => {
     await user.click(screen.getByRole('button', { name: '탈퇴하기' }));
     const dialog = within(screen.getByRole('dialog'));
 
-    expect(dialog.getByText('게임하는너구리님, 정말 탈퇴하시나요?')).toBeInTheDocument();
+    // 이름만 녹화 가림 칸으로 감싸 문장이 나뉜다(POK-572)
+    expect(
+      dialog.getByText(byTextContent('게임하는너구리님, 정말 탈퇴하시나요?')),
+    ).toBeInTheDocument();
 
     // 지워지는 것 — 복구할 수 없음이 문장에 있다
     expect(

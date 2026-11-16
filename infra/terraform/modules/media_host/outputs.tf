@@ -4,7 +4,7 @@ output "instance_ids" {
 }
 
 output "media_sg_id" {
-  description = "Media SG id — 다른 루트가 Media 를 상대로 규칙을 걸 때 쓴다. Media ↔ auth · RDS 짝은 이 모듈이 만든다(kty 결정 2026-10-25 (나))."
+  description = "Media SG id — 다른 루트가 Media 를 상대로 규칙을 걸 때 쓴다. Media ↔ auth · clip · RDS 짝은 이 모듈이 만든다(kty 결정 2026-10-25 (나))."
   value       = aws_security_group.media.id
 }
 
@@ -23,6 +23,20 @@ output "auth_resolve_rules" {
     ingress = {
       auth_sg_id = aws_vpc_security_group_ingress_rule.auth_from_media.security_group_id
       port       = aws_vpc_security_group_ingress_rule.auth_from_media.from_port
+    }
+  }
+}
+
+output "clip_expiry_rules" {
+  description = "시험용 — Media → clip 이그레스 · clip 인그레스 ← Media 의 clip SG id · 포트. 루트는 다시 내보내지 않는다."
+  value = {
+    egress = {
+      clip_sg_id = aws_vpc_security_group_egress_rule.media["clip_expiry"].referenced_security_group_id
+      port       = aws_vpc_security_group_egress_rule.media["clip_expiry"].from_port
+    }
+    ingress = {
+      clip_sg_id = aws_vpc_security_group_ingress_rule.clip_from_media.security_group_id
+      port       = aws_vpc_security_group_ingress_rule.clip_from_media.from_port
     }
   }
 }

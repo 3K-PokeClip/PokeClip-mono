@@ -11,6 +11,11 @@
 # 를 run --rm --no-deps 로 한 번 돌려 0 일 때만 up 하고, 그 밖(3 거부 · 4 검사 못
 # 함 · 검사 명령 없는 이미지의 다른 코드)은 BLOCKED 줄을 남기고 up 하지 않는다.
 #
+# 대리 창구 켬 렌더본(cred-relay 서비스 키 줄 있음)이면 검사 서비스를 돌리지
+# 않는다 — 켬 상자는 IMDS 홉 1 이라 검사 서비스가 DB 에 닿지 못한다. 라벨에
+# 판 2 가 없으면 곧바로 「MEDIA START BLOCKED: cred-relay needs sidecar timing
+# v2 label=<라벨|none|invalid>」 로 막는다(사례 87 · 88).
+#
 # 가짜 docker 의 답은 PCBENCH_FAKE_TIMING_LABEL(라벨 — 기본 null,2) ·
 # PCBENCH_FAKE_PULL_STATUS · PCBENCH_FAKE_INSPECT_STATUS ·
 # PCBENCH_FAKE_RUN_STATUS 로 정한다.
@@ -23,6 +28,8 @@ readonly TIMING_SIDECAR_IMAGE='registry.pcbench-edge-proxy.invalid/'\
 readonly TIMING_BLOCKED_PREFIX='MEDIA START BLOCKED: sidecar cannot read'\
 ' ledger timing v2'
 readonly TIMING_LABEL_KEY='com.pokeclip.timing.readable'
+readonly TIMING_CRED_BLOCKED_PREFIX='MEDIA START BLOCKED: cred-relay needs'\
+' sidecar timing v2'
 
 #######################################
 # 사례 디렉터리에 사이드카 서비스 하나뿐인 compose 렌더본을 둔다(옛 모드 — 응답기
@@ -260,6 +267,72 @@ timing::case_order_static() {
     /^  exec docker compose / { print "up" }' "${script}" | paste -s -d ' ' -)"
   if [[ "${order}" != 'render timing up' ]]; then
     harness::add_reason "main 의 걸음 순서 「${order}」(기대 「render timing up」)"
+    return 1
+  fi
+}
+
+#######################################
+# 사례 디렉터리에 대리 창구 켬 렌더본(사이드카 · cred-relay 서비스)을 둔다.
+# Globals:
+#   fixture_dir
+#######################################
+timing::write_cred_compose() {
+  {
+    printf 'services:\n  sidecar:\n    image: %s\n' "${TIMING_SIDECAR_IMAGE}"
+    printf '  cred-relay:\n    image: %s\n' "${TIMING_SIDECAR_IMAGE}"
+  } >"${fixture_dir}/compose.yml"
+}
+
+#######################################
+# 켬 렌더본으로 기동 전 검사를 한 번 돌린다.
+# Arguments:
+#   가짜 명령 설정(NAME=값 …).
+#######################################
+timing::run_cred() {
+  fixture::new_case
+  timing::write_cred_compose
+  fixture::base_env
+  fixture::run start-media.sh "$@"
+}
+
+#######################################
+# 사례 87 — 켬 상자에서 라벨에 판 2 가 없으면(라벨 없음 · 받기와 로컬 읽기
+# 실패 · 꼴 밖 · null) 검사 서비스를 돌리지 않고 막는다(run 0 · up 0).
+#######################################
+timing::case_cred_relay_blocked() {
+  local ok=0 row label shown
+  for row in 'empty none' 'unreadable none' 'abc,2 invalid' 'null null'; do
+    label="${row% *}"
+    shown="${row#* }"
+    case "${label}" in
+      empty) timing::run_cred 'PCBENCH_FAKE_TIMING_LABEL=' || return 1 ;;
+      unreadable)
+        timing::run_cred PCBENCH_FAKE_PULL_STATUS=1 \
+          PCBENCH_FAKE_INSPECT_STATUS=1 || return 1
+        ;;
+      *) timing::run_cred "PCBENCH_FAKE_TIMING_LABEL=${label}" || return 1 ;;
+    esac
+    fixture::expect_blocked "${TIMING_CRED_BLOCKED_PREFIX} label=${shown}" \
+      || ok=1
+    if [[ -n "$(timing::calls run)" ]]; then
+      harness::add_reason "${label}: 켬인데 검사 서비스를 돌림"
+      ok=1
+    fi
+    fixture::common_checks || ok=1
+  done
+  return "${ok}"
+}
+
+#######################################
+# 사례 88 — 켬 상자라도 라벨에 판 2 가 있으면(null,2) 검사 서비스 없이 up 한다.
+#######################################
+timing::case_cred_relay_v2() {
+  timing::run_cred 'PCBENCH_FAKE_TIMING_LABEL=null,2' || return 1
+  if [[ -n "$(timing::calls run)" || "$(fixture::count_calls up)" != 1 \
+    || "${fixture_status}" != 0 ]]; then
+    harness::add_reason "켬 · null,2: run 「$(timing::calls run)」 · up \
+$(fixture::count_calls up)회 · 종료 ${fixture_status}: $(harness::log_tail \
+"${fixture_dir}/out")"
     return 1
   fi
 }

@@ -50,10 +50,11 @@ export function useFilmstripFrames(
     [view.startSeconds, view.endSeconds, source?.fromSeconds, source?.toSeconds],
   );
   const wanted = useMemo(() => times.filter((t): t is number => t !== null), [times]);
+  // 조각 · 시작이 같아도 배치(시각 변환 · 시크 한계)가 바뀌면 — 판 NULL 머리가 늦게 오면 원점이 바뀐다 — 새 재료다
   const frameSource = useMemo(
     () => (source === null ? null : { ...source, size: TILE_SIZE }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [source?.src, source?.fromSeconds],
+    [source?.src, source?.fromSeconds, source?.videoSecondsAt, source?.seekLimits],
   );
   const frames = useSceneFrames(frameSource, wanted, null, keepMs);
   return { times, frames };

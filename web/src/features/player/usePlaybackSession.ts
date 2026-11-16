@@ -9,15 +9,19 @@ import {
   pollTargets,
   transition,
   type DvrSegment,
+  type PastHandoff,
   type PlaybackSessionState,
   type SessionClose,
   type SessionEffect,
   type SessionEvent,
+  type StreamPollEvent,
   type XAnswer,
 } from './rewindSwitch';
 import { probeLiveWindow } from './liveWindowProbe';
+import { OPEN_STREAM_FACTS, streamFactsAfter, type StreamFacts } from './playbackEdge';
+import type { PlayerSound } from './playbackSound';
 import { dvrHoleKnown } from './sessionShared';
-import { sessionView, type SessionView } from './sessionView';
+import { isPlayerStartHeld, sessionView, watchesDrain, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
 // 재생 세션의 수명 소유자(설계 5.5절, POK-200 M5). LiveScreen 층 — GlassPlayer 의 key 바깥 — 에
@@ -38,20 +42,27 @@ export interface SessionPlayer {
   holdFrame: () => void;
   /** 재생기가 들고 있는 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(POK-528 목록 다시 받기) */
   dropPauseMark: () => void;
+  /** 지금 영상 노드의 소리 상태 — past 로 닫을 때 읽어 다시보기 재생기에 넘긴다(POK-547). 노드가 없으면 null */
+  readSound: () => PlayerSound | null;
 }
 
 export interface SessionClosed {
   reason: SessionClose;
   /** 「새 방송 보기」의 방송 번호 */
   goTo?: string;
-  /** 녹화 조회의 끝 시각 대체 — 이 세션 재생기가 로드한 목록의 조각 끝 최대(R42) */
-  observedEndMs: number | null;
+  /** 끝남 대기를 연 시각(세션 endingSince) — past 로 닫힌 화면의 404 유예 원점 폴백. 모르면 null */
+  endingSinceMs: number | null;
   accessKey: string;
+  /**
+   * past 닫힘이 지난 방송 판정에 넘기는 것(POK-547) — 상태기계가 정한 자리 · 다시보기에 닫는 순간 재생기의 소리 상태를
+   * 더한다(재생기가 묶이지 않았으면 null). past 가 아니면 null
+   */
+  handoff: (PastHandoff & { sound: PlayerSound | null }) | null;
 }
 
 export interface SessionOptions {
   /**
-   * 여는 조건(명부 live ∧ 출입증 준비 ∧ recorded 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는
+   * 여는 조건(명부 live ∧ 출입증 준비 ∧ past 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는
    * 조건이 아니다
    */
   canOpen: boolean;
@@ -89,6 +100,29 @@ export interface PlaybackSession {
    * 지금 상태(상태기계에 이미 반영된 값)를 읽는다
    */
   isKnownDvrHole: (generation: number, segment: DvrSegment) => boolean;
+  /**
+   * 새로 서는 재생기를 세우지 않는가(isPlayerStartHeld) — 지금 상태를 읽는다(POK-547). 재생기는 렌더 값(view.startHeld)이
+   * 바뀌기 전에 선 404 · 리마운트에서도 이 값으로 보류를 안다
+   */
+  isStartHeld: () => boolean;
+  /** 받기를 멈춘 되감기 재생기가 고갈을 볼 때인가(sessionView 의 watchesDrain) — 지금 상태를 읽는다(POK-547) */
+  watchesDrain: () => boolean;
+  /**
+   * 최신 스트림 답이 이 회차를 부정하지 않는 라이브다(StreamFacts — 준비 여부 · url 무관). 정리 중 · 다시보기 · 끝남 · 다른
+   * 방송 · 방송 없음(X = '')이면 거짓, 받지 못한 답은 앞 값. 세션을 열 때 참. 되감기 축의 끝을 가르는 근거다
+   * (recordingEndedOf). 없으면 참으로 본다
+   */
+  streamLive?: boolean;
+  /**
+   * 이 회차가 다시보기 · 끝남으로 답한 적이 있다(StreamFacts — 세션 동안 붙잡는다). 정리 중(ending)은 재접속 틈에도 나와
+   * 끝으로 치지 않는다. 세션을 열 때 거짓. 없으면 거짓
+   */
+  streamEnded?: boolean;
+  /**
+   * X 를 아는 최신 라이브 답이 이 회차를 부정했다(StreamFacts — 다른 방송 · 방송 없음, X 모름 라이브 답은 앞 값, 붙잡지
+   * 않음). 세션을 열 때 거짓. 없으면 거짓
+   */
+  roundDenied?: boolean;
 }
 
 /** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
@@ -98,8 +132,8 @@ function needsX(s: PlaybackSessionState): boolean {
 }
 
 /**
- * 마지막 확인 중인가 — 회차별 조회는 처음 물음의 답 또는 시한(8초)이 끝낸다: 본 구간과 겹치는 다시보기 답이면 같은 자리
- * 다시보기, 그 밖 답이면 곧바로 녹화, 시한까지 답이 없으면 녹화다(POK-528 W6 · 정본 r7 1151)
+ * 마지막 확인 중인가 — 회차별 조회는 처음 물음의 답 또는 시한(8초)이 끝낸다: 본 구간과 겹치는 다시보기 답이면 멈춘 그대로
+ * 다시보기를 제안하고, 그 밖 답이면 곧바로 닫고(past), 시한까지 답이 없어도 닫는다(POK-528 W6 · 정본 r7 1151 · POK-547)
  */
 function inFinalCheck(s: PlaybackSessionState | null): boolean {
   return s !== null && s.phase.kind === 'ending-wait' && s.phase.finalCheck === true;
@@ -132,6 +166,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
    * 때의 순번을 들고 가서, 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
    */
   const sessionIdRef = useRef(0);
+  const [streamFacts, setStreamFacts] = useState<StreamFacts>(OPEN_STREAM_FACTS);
   /** 스트림 폴링 응답의 물음 순번 — 응답마다 1씩 오른다(세션 표가 늦은 응답을 버리는 기준) */
   const streamAskRef = useRef(0);
   const commit = useCallback((next: PlaybackSessionState | null) => {
@@ -156,6 +191,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     leftForRef.current = null;
     boundOnceRef.current = playerRef.current !== null;
     sessionIdRef.current += 1;
+    setStreamFacts(OPEN_STREAM_FACTS);
     commit(openSession({ roundId, accessKey, liveUrl }));
   }, [startable, roundId, accessKey, liveUrl, commit, state?.closed]);
 
@@ -220,15 +256,20 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
           );
           break;
         }
-        case 'close':
+        case 'close': {
           if (effect.reason === 'left') leftForRef.current = session.accessKey;
+          const past = effect.reason === 'past';
           optionsRef.current.onClose({
             reason: effect.reason,
-            goTo: effect.goTo,
-            observedEndMs: session.observedEndMs,
+            goTo: past ? undefined : effect.goTo,
+            endingSinceMs: session.endingSince,
             accessKey: session.accessKey,
+            handoff: past
+              ? { ...effect.handoff, sound: playerRef.current?.readSound() ?? null }
+              : null,
           });
           break;
+        }
       }
     }
   }, []);
@@ -274,6 +315,14 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       stateRef.current !== null && dvrHoleKnown(stateRef.current, generation, segment),
     [],
   );
+  const isStartHeld = useCallback(
+    () => stateRef.current !== null && isPlayerStartHeld(stateRef.current),
+    [],
+  );
+  const watchesDrainNow = useCallback(
+    () => stateRef.current !== null && watchesDrain(stateRef.current),
+    [],
+  );
 
   const bindPlayer = useCallback(
     (player: SessionPlayer | null) => {
@@ -302,13 +351,19 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       // 받은 즉시 찍는다 — 지금 방송 번호를 기다리는 동안 흐른 시간이 응답의 신선도에 들지 않게
       streamAskRef.current += 1;
       const ask = { seq: streamAskRef.current, receivedAtMs: Date.now() };
+      // 스트림 사실은 상태기계에 먹이는 같은 사건으로, 먹이기 직전 상태에서 접는다 — 늦은 답 버림도 같다(streamFactsAfter)
+      const feed = (event: StreamPollEvent) => {
+        const before = stateRef.current;
+        if (before !== null) setStreamFacts((prev) => streamFactsAfter(prev, before, event));
+        dispatch(event);
+      };
       if (!needsX(current)) {
-        dispatch({ type: 'stream-poll', result, ask });
+        feed({ type: 'stream-poll', result, ask });
         return;
       }
       const id = sessionIdRef.current;
       void optionsRef.current.resolveX(false).then((x) => {
-        if (id === sessionIdRef.current) dispatch({ type: 'stream-poll', result, x, ask });
+        if (id === sessionIdRef.current) feed({ type: 'stream-poll', result, x, ask });
       });
     },
     [dispatch],
@@ -387,5 +442,17 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [state, now],
   );
   if (state === null || view === null || state.closed !== null) return null;
-  return { state, view, dispatch, liveButton, bindPlayer, notice, positionEpoch, isKnownDvrHole };
+  return {
+    state,
+    view,
+    dispatch,
+    liveButton,
+    bindPlayer,
+    notice,
+    positionEpoch,
+    isKnownDvrHole,
+    isStartHeld,
+    watchesDrain: watchesDrainNow,
+    ...streamFacts,
+  };
 }

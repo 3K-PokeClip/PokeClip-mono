@@ -3,7 +3,7 @@
 import { useId, useState } from 'react';
 import Link from 'next/link';
 import { ArrowUpRight, Tv } from 'lucide-react';
-import { Skeleton } from '@/ui';
+import { PRIVATE_TEXT_CLASS, Skeleton } from '@/ui';
 import { broadcastLengthLabel, instantText, sceneLabel, sourceLinkOf } from './libraryView';
 import type { LibraryClip } from './useLibraryMockState';
 import { useClipSource } from './useClipSource';
@@ -68,7 +68,9 @@ export function ClipSourceCard({
           {pending ? (
             <Skeleton height={14} width="80%" />
           ) : (
-            <p className={styles.sourceTitle}>{source?.title ?? clip.sourceLabel}</p>
+            <p className={`${styles.sourceTitle} ${PRIVATE_TEXT_CLASS}`}>
+              {source?.title ?? clip.sourceLabel}
+            </p>
           )}
           {pending ? (
             <Skeleton height={12} width="55%" />

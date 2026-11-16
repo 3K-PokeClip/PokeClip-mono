@@ -16,14 +16,12 @@ import {
 } from './liveHandoff';
 import { onEnding } from './endingWait';
 import type { LiveProbeResult } from './liveWindowProbe';
-import { EDGE_MARGIN_SEGMENTS } from './playbackEdge';
 import {
   SESSION_NOTICES,
   close,
   dvrHoleKnown,
   isThisRound,
   liveFromAway,
-  openVodHere,
   readyLive,
   replace,
   restartAtMs,
@@ -31,25 +29,22 @@ import {
   seekInList,
   seekLive,
   stateOnly,
-  vodStartAt,
   within,
   withDvrHole,
   withUrl,
   type RewindRange,
 } from './sessionShared';
+import { onVodOffered } from './vodOffered';
 
 export { ENDING_WAIT_MS, RESUME_WAIT_MS, SESSION_NOTICES } from './sessionShared';
 
-// 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 사이의 전환을 정하는 순수 함수다.
+// 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 제안 사이의 전환을 정하는 순수 함수다.
 // 사건 하나를 받아 다음 상태와 효과(재조회 · 안에서 시크 · 알림 · 닫기)를 돌려준다. 시각은 모두 실제 시각(epoch ms)이다.
 //
 // 읽는 규칙: 한 국면 안에서 위에서부터 처음 맞는 행 하나만 돈다. 어느 행에도 맞지 않는 (국면, 사건)은 무시다(국면 · 소스 그대로).
 // 원칙 둘 — W3: 제어면 응답은 재생 중인 소스를 끊는 신호가 아니다. W4: 끝남 대기는 재생기 증거(ENDLIST · 끝 도달 · 라이브
 // 닫힘)로만 들어간다. 🔴 ENDLIST 는 「이 목록에 조각이 더 붙지 않는다」이지 재생 완료가 아니다(RFC 8216 4.3.3.4) — atEnd 를
 // 참으로 만드는 것은 끝 도달 사건뿐이다.
-
-/** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — 4초 조각 기준(설계 5.3.1절) */
-const DEFAULT_EDGE_MARGIN_MS = EDGE_MARGIN_SEGMENTS * 4_000;
 
 export interface PlaybackSource {
   kind: 'live' | 'rewind' | 'vod';
@@ -62,6 +57,9 @@ export interface PlaybackSource {
    */
   strictStart: boolean;
 }
+
+/** 재생 세션이 세우는 소스 — 라이브 · 되감기뿐이다. 다시보기는 세션을 닫고 다시보기 재생기가 튼다(POK-547) */
+export type SessionSource = PlaybackSource & { kind: 'live' | 'rewind' };
 
 /** 스트림 폴링 응답 하나의 물음 순번과 수신 시각 — 받은 즉시 훅이 찍는다(늦은 응답 버림의 정본) */
 export interface StreamAsk {
@@ -99,24 +97,52 @@ export type SessionPhase =
    */
   | { kind: 'rewind'; pendingNext: RewindRange | null; relist?: RelistState }
   /**
-   * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 · recordOnEnd = 회차 종국 또는 20분 시한이 섰다 ·
+   * 끝남 대기. origin = 들어온 국면 · atEnd = 실제 재생이 끝에 닿았다 ·
+   * closeOnEnd = 회차 종국 또는 20분 시한이 섰다 — 끝에 닿으면 세션을 닫는다 ·
    * blocked = 되감기 조각 404 로 이 목록을 끝까지 재생할 수 없다(POK-528 — 회차별 조회의 겹치는 vod · 종국 · 20분과 사람
-   * 단추로만 풀린다) · finalCheck = 녹화로 정한 뒤 404 를 받아 회차별 조회를 마지막으로 한 번 하는 중(POK-528 W6 — 답이 본
-   * 구간과 겹치는 유효한 vod 면 같은 자리 다시보기, 그 밖이면 녹화). 둘 다 없으면 거짓이다
+   * 단추(라이브 보기 · 새 방송 보기 — 제안됐을 때)로만 풀린다. 겹치는 vod 는 멈춘 그대로 다시보기 제안으로 옮긴다) ·
+   * finalCheck = 닫기로 정한 뒤 404 를 받아 회차별 조회를 마지막으로 한 번 하는 중(POK-528 W6 — 답이 본 구간과 겹치는
+   * 유효한 vod 면 멈춘 그대로 다시보기 제안, 그 밖이면 닫는다). 둘 다 없으면 거짓이다
    */
   | {
       kind: 'ending-wait';
       origin: 'live' | 'rewind';
       atEnd: boolean;
-      recordOnEnd: boolean;
+      closeOnEnd: boolean;
       blocked?: boolean;
       finalCheck?: boolean;
     }
-  | { kind: 'vod-offered'; url: string; firstPdtMs: number; headPdtMs: number; atEnd: boolean }
-  | { kind: 'vod' };
+  /** 다시보기 제안 — 「다시보기 보기」 단추로만 넘긴다(자동 교체 안 함 · POK-547). stopped = 재생이 멎은 까닭 */
+  | {
+      kind: 'vod-offered';
+      url: string;
+      firstPdtMs: number;
+      headPdtMs: number;
+      atEnd: boolean;
+      stopped: OfferStopped;
+    };
 
-/** 세션을 닫는 사유. recorded = 녹화 재생 길로 · go-live = 「라이브 보기」 · left = 화면 이탈 · 다른 방송 선택 */
-export type SessionClose = 'recorded' | 'go-live' | 'left';
+/**
+ * 다시보기 제안 중 재생이 멎은 까닭. drained = 받기를 멈춘 뒤 받은 버퍼를 다 틀었다 · held = 막힘 · 마지막
+ * 확인에서 넘어와 멈춘 그대로다(시크도 받지 않는다). null 이면 아직 튼다. 멎었으면 단추를 덮개에 둔다
+ */
+export type OfferStopped = null | 'drained' | 'held';
+
+/** past 닫힘이 지난 방송 판정에 넘기는 것(POK-547) */
+export interface PastHandoff {
+  /** 이어 볼 자리(PDT epoch ms). 끝에 닿았거나 모르면 null — 처음부터 */
+  resumeAtMs: number | null;
+  /** 본 구간과 겹친다고 확인한 회차 다시보기(ready:true). 확인하지 못했으면 null */
+  seenVod: RewindRange | null;
+  /** 사람이 「다시보기 보기」 를 눌러 닫았다 — 단추 전에 받아 둔 카드는 버린다 */
+  chosen: boolean;
+}
+
+/**
+ * 세션을 닫는 사유. past = 「다시보기 보기」 를 눌렀거나 끝남 대기가 종국(회차 ended · 재접속 대기 뒤 404 · 20분 시한 ·
+ * 마지막 확인 비 vod)에 닿아 지난 방송 판정으로 넘김(POK-547) · go-live = 「라이브 보기」 · left = 화면 이탈 · 다른 방송 선택
+ */
+export type SessionClose = 'past' | 'go-live' | 'left';
 
 /** 지금 방송 번호 X 를 물은 답. id 가 빈 문자열이면 「방송 중인 것이 없다」 */
 export type XAnswer = { kind: 'known'; id: string } | { kind: 'unknown' };
@@ -127,12 +153,12 @@ export type Offer = { kind: 'go-live' } | { kind: 'new-broadcast'; goTo: string 
 export interface PlaybackSessionState extends HandoffFields {
   /** 열 때의 방송 번호(= 계약9 streamId = 회차 ID) — 회차별 경로의 키 */
   roundId: string;
-  /** 방송|영상 키 — recorded 닫힘 기록의 키 */
+  /** 방송|영상 키 — past 닫힘 기록의 키 */
   accessKey: string;
   /** 라이브 목록 주소 — LIVE 로 돌아갈 때의 소스 */
   liveUrl: string;
   phase: SessionPhase;
-  source: PlaybackSource;
+  source: SessionSource;
   /**
    * 마지막으로 본 자리(P) — 이어 볼 자리 · 계승 판정 · 이음 지점의 재료. 소스를 바꿔도 그대로라 첫 위치
    * 전에는 앞 소스의 자리다 — 지금 소스의 것인지는 positionGeneration 으로 가른다(sessionShared 의 confirmedAtMs)
@@ -140,7 +166,7 @@ export interface PlaybackSessionState extends HandoffFields {
   lastAtMs: number | null;
   /** 세션이 본 가장 이른 자리 — VOD 일치 대조 */
   watchedFromMs: number | null;
-  /** 녹화 조회의 끝 시각 대체. 이 세션 재생기가 로드한 목록의 조각 끝 최대 · 지금 소스 · 이어짐 url 의 폴링 headPdt */
+  /** 본 구간 끝 — 다시보기 일치 대조(seenRoundVod). 이 세션 재생기가 로드한 목록의 조각 끝 최대 · 지금 소스 · 이어짐 url 의 폴링 headPdt */
   observedEndMs: number | null;
   /** 이 세션 회차의 되감기 url — ① 로드한 소스 ② 이어짐으로 받은 url ③ live 국면의 스트림 경로 url. 이어짐 판정에서 거른다 */
   roundRewindUrls: ReadonlySet<string>;
@@ -156,8 +182,6 @@ export interface PlaybackSessionState extends HandoffFields {
    * 허용 · 시크바 넓힘 같은 되감기 노출은 이 값으로만 한다 — 「ready:false 동안 되감기 UI 를 노출하지 않는다」(계약3 7-2)
    */
   rewindOpen: boolean;
-  /** 창 하한 여유(목록 맨 앞 조각 셋의 길이) */
-  edgeMarginMs: number;
   /** 끝남 대기의 버튼 규칙 결과 */
   offer: Offer | null;
   /** LIVE 를 눌러 X 를 다시 묻는 중(「확인 중」) */
@@ -166,17 +190,21 @@ export interface PlaybackSessionState extends HandoffFields {
   boundLive: boolean;
   /** 세션에 묶인 live 에서 본 다른 방송 번호 — 띠를 두고 세션 데이터 반영을 멈춘다(R58) */
   foreignLive: string | null;
-  /** 명부 ended 를 받았다 — 덮개의 「녹화 보기」를 기본 강조로 둔다 */
-  rosterEnded: boolean;
   /**
    * 목록 안 구멍(POK-528 후속) — 되감기 url 마다 그 목록을 다시 받게 한 조각의 키(dvrSegmentKey). 다시 받기에
    * 들어갈 때만 더하고 세션 안에서는 지우지 않는다 — 같은 url · 같은 조각으로는 두 번 다시 받지 않는다
    */
   dvrHoles: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * 404 로 받기를 멈춘 되감기 재생기의 세대(POK-547). 404 를 가로챈 순간 적는다 — 사람이 멈춘 동안이어도 그렇다.
+   * 국면 · 덮개 · 띠는 이 칸을 읽지 않는다. 읽는 곳은 다시보기 제안의 재생기 보류(isPlayerStartHeld)와 리마운트 행뿐이다.
+   * 세션을 열 때 null. 세대가 바뀌면(새 재생기가 받음) 값이 남아도 지금 세대와 달라 효력이 없다
+   */
+  loadStoppedGeneration: number | null;
   closed: SessionClose | null;
 }
 
-export type SessionButton = 'record' | 'vod' | 'go-live' | 'new-broadcast';
+export type SessionButton = 'vod' | 'go-live' | 'new-broadcast';
 
 /** 재생기가 로드한 목록의 시크 범위. lowerMs 는 창 하한(첫 조각 + 여유 — vod 는 여유 0), endMs 는 끝(라이브는 라이브 끝) */
 export interface SeekView {
@@ -208,8 +236,6 @@ export type SessionEvent =
       firstMs: number;
       lastEndMs: number;
       targetDurationS: number;
-      /** 맨 앞 조각 셋의 길이 합(ms) — 창 하한 여유(LoadedList.headSpanMs) */
-      headSpanMs: number;
       /**
        * 되감기 재생기의 첫 목록에서 시작을 창 하한으로 잘랐다(playbackEdge.startCut — POK-528). 첫 목록이
        * 아니거나 시작 요청이 없거나 시각 표시가 없으면 칸이 없다
@@ -231,6 +257,13 @@ export type SessionEvent =
    * 조각(POK-528)
    */
   | { type: 'dvr-segment-gone'; generation: number; segment: DvrSegment }
+  /** 그 세대 되감기 재생기가 404 로 받기를 멈췄다 — 멈춤과 상관없이 가로챈 순간 올린다(POK-547) */
+  | { type: 'dvr-load-stopped'; generation: number }
+  /**
+   * 받기를 멈춘 되감기 재생기가 받은 버퍼를 다 틀고 멎었다(drained 참) · 다시 나아갔다(거짓 — POK-547). atPdtMs = 멎은
+   * 자리 · 버퍼 밖 시크면 그 목표 · 모르면 null
+   */
+  | { type: 'dvr-drain'; generation: number; drained: boolean; atPdtMs: number | null }
   | { type: 'leave' };
 
 export type SessionEffect =
@@ -243,8 +276,9 @@ export type SessionEffect =
   | { kind: 'withdraw-notice'; text: string }
   /** LIVE 의 X 를 2초 뒤 다시 묻는다 */
   | { kind: 'recheck-x'; attempt: number }
+  | { kind: 'close'; reason: 'past'; handoff: PastHandoff }
   /** goTo = 「새 방송 보기」의 방송 번호 */
-  | { kind: 'close'; reason: SessionClose; goTo?: string }
+  | { kind: 'close'; reason: 'go-live' | 'left'; goTo?: string }
   /**
    * 라이브 목록 url 의 창 하한을 잰다(liveWindowProbe) — 결과는 같은 seq 의
    * live-probe 사건으로 돌아온다
@@ -284,16 +318,20 @@ export function openSession(init: {
     endingSince: null,
     entry: null,
     rewindOpen: false,
-    edgeMarginMs: DEFAULT_EDGE_MARGIN_MS,
     offer: null,
     liveChecking: false,
     boundLive: false,
     foreignLive: null,
-    rosterEnded: false,
     dvrHoles: new Map(),
+    loadStoppedGeneration: null,
     closed: null,
     ...openHandoffFields(),
   };
+}
+
+/** 지금 세대의 재생기가 404 로 받기를 멈췄나(POK-547) */
+export function loadStoppedNow(session: PlaybackSessionState): boolean {
+  return session.loadStoppedGeneration === session.source.generation;
 }
 
 /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 최신 폴링이 되감기를 열었을 때만 — 닫혀 있으면 라이브 창만 보인다(계약3 7-2) */
@@ -309,8 +347,8 @@ export function pollTargets(session: PlaybackSessionState): { stream: boolean; r
     case 'rewind':
       return { stream: true, round: false };
     case 'ending-wait':
-      // 녹화로 정했으면 끝 도달만 기다린다 — 마지막 확인 중이면 회차별 조회 하나만 켠다(POK-528 W6)
-      if (!session.phase.recordOnEnd) return { stream: true, round: true };
+      // 닫기로 정했으면 끝 도달만 기다린다 — 마지막 확인 중이면 회차별 조회 하나만 켠다(POK-528 W6)
+      if (!session.phase.closeOnEnd) return { stream: true, round: true };
       return { stream: false, round: session.phase.finalCheck === true };
     default:
       return { stream: false, round: false };
@@ -329,7 +367,7 @@ function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number)
   return {
     state: {
       ...session,
-      phase: { kind: 'ending-wait', origin, atEnd, recordOnEnd: false },
+      phase: { kind: 'ending-wait', origin, atEnd, closeOnEnd: false },
       endingSince: session.endingSince ?? now,
       offer: null,
     },
@@ -347,7 +385,7 @@ function enterBlocked(session: PlaybackSessionState, atEnd: boolean, now: number
     kind: 'ending-wait',
     origin: 'rewind',
     atEnd,
-    recordOnEnd: false,
+    closeOnEnd: false,
     blocked: true,
   };
   return {
@@ -606,94 +644,38 @@ function remountRelist(phase: SessionPhase): SessionPhase {
 
 /**
  * 리마운트의 시작 — 되감기는 이어 볼 자리에서 다시 선다(첫 위치 전의 lastAtMs 는 앞 소스 자리이거나
- * 비었다 — POK-528 R3 · 모르면 목록 하한에서). 다시보기도 이어 볼 자리다 — 첫 위치 전이면 청한 자리 ·
- * 시크 목표, 모르면 처음부터(null — c7 리뷰 V7-1). 라이브는 라이브 끝(지금 동작)
+ * 비었다 — POK-528 R3 · 모르면 목록 하한에서). 라이브는 라이브 끝(지금 동작)
  */
 function remountStartAtMs(session: PlaybackSessionState): number | null {
   switch (session.source.kind) {
     case 'rewind':
       return restartAtMs(session);
-    case 'vod':
-      return resumeAtMs(session);
     case 'live':
       return null;
   }
 }
 
-type OfferedPhase = Extract<SessionPhase, { kind: 'vod-offered' }>;
+// ── 아무 국면 ──
 
-function onVodOffered(
-  session: PlaybackSessionState,
-  phase: OfferedPhase,
-  event: SessionEvent,
-  origin: 'live' | 'rewind',
-): Transition {
-  switch (event.type) {
-    case 'button':
-      if (event.which === 'record') return close(session, 'recorded');
-      return event.which === 'vod' ? openVod(session, phase) : stateOnly(session);
-    case 'end-reached':
-      return phase.atEnd
-        ? stateOnly(session)
-        : stateOnly({ ...session, phase: { ...phase, atEnd: true } });
-    case 'seek':
-      if (phase.atEnd) {
-        if (origin === 'live') return stateOnly(session);
-        const moved = seekInList(session, event.targetMs, event.view);
-        return {
-          state: { ...moved.state, phase: { ...phase, atEnd: false } },
-          effects: moved.effects,
-        };
-      }
-      return origin === 'live'
-        ? seekLive(session, event.targetMs, event.view)
-        : seekInList(session, event.targetMs, event.view);
-    case 'dvr-segment-gone':
-      // W4 — 다시보기가 이미 있으니 같은 자리 다시보기로 곧바로 옮긴다
-      return openVodHere(session, phase);
-    case 'live-button':
-      if (phase.atEnd) return stateOnly(session);
-      // live 기원은 live 표의 LIVE 행 — 라이브 끝으로 시크 · 국면 그대로(종결 정정 live 표 · VOD 제안을 잃지 않는다)
-      if (origin === 'live') return { state: session, effects: [{ kind: 'seek-live-edge' }] };
-      return liveFromAway(session, event.x, event.attempt);
-    default:
-      return stateOnly(session);
-  }
+/** 지금 세대 되감기 재생기가 낸 사건인가 — 교체를 커밋한 뒤 정리 전인 옛 재생기 · 라이브 재생기의 사건은 버린다 */
+function fromRewindPlayer(session: PlaybackSessionState, generation: number): boolean {
+  return generation === session.source.generation && session.source.kind === 'rewind';
 }
 
 /**
- * 「다시보기 보기」 — 끝에 닿았거나 자리를 모르면 처음부터, 아니면 이어 볼 자리에서(하한이 이긴다 —
- * 짧은 VOD 는 첫 조각 · R47)
+ * 리마운트 — 같은 소스를 세대만 올려 다시 세운다. 받기를 멈춘 재생기의 다시보기 제안이면 새 재생기도 받지 않는다:
+ * 덮개 단추로 바꾸고(멎은 까닭이 없었으면 고갈로) 받기 중단 기록을 새 세대로 옮긴다(POK-547)
  */
-function openVod(session: PlaybackSessionState, phase: OfferedPhase): Transition {
-  const atMs = resumeAtMs(session);
-  if (phase.atEnd || atMs === null) {
-    return stateOnly({
-      ...session,
-      phase: { kind: 'vod' },
-      source: replace(session, 'vod', phase.url, null),
-    });
+function remounted(session: PlaybackSessionState): PlaybackSessionState {
+  const { phase } = session;
+  const generation = session.source.generation + 1;
+  const source = { ...session.source, startAtMs: remountStartAtMs(session), generation };
+  if (phase.kind === 'vod-offered' && loadStoppedNow(session)) {
+    const stopped = phase.stopped ?? 'drained';
+    return { ...session, phase: { ...phase, stopped }, source, loadStoppedGeneration: generation };
   }
-  const start = vodStartAt(session, atMs, phase);
-  const effects: SessionEffect[] =
-    start === atMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
-  return {
-    state: {
-      ...session,
-      phase: { kind: 'vod' },
-      source: replace(session, 'vod', phase.url, start),
-    },
-    effects,
-  };
+  return { ...session, phase: remountRelist(phase), source };
 }
-
-function onVod(session: PlaybackSessionState, event: SessionEvent): Transition {
-  return event.type === 'seek'
-    ? seekInList(session, event.targetMs, event.view)
-    : stateOnly(session);
-}
-
-// ── 아무 국면 ──
 
 function onAnyPhase(
   session: PlaybackSessionState,
@@ -715,7 +697,6 @@ function onAnyPhase(
           : maxOrSelf(session.observedEndMs, event.lastEndMs),
         list: own ? loadedList(session, event) : session.list,
         handoffBlock: releaseBlock(session, event.url, event.lastEndMs),
-        edgeMarginMs: event.headSpanMs > 0 ? event.headSpanMs : session.edgeMarginMs,
       };
       return relistNotice(seen, event) ?? stateOnly(seen);
     }
@@ -739,18 +720,19 @@ function onAnyPhase(
         return stateOnly(session);
       }
       return null;
+    case 'dvr-load-stopped':
+      // 국면 · 효과는 그대로 두고 그 세대만 적는다 — 국면 표를 거치지 않는다
+      if (!fromRewindPlayer(session, event.generation)) return stateOnly(session);
+      return stateOnly({ ...session, loadStoppedGeneration: event.generation });
+    case 'dvr-drain':
+      if (!fromRewindPlayer(session, event.generation) || session.phase.kind !== 'vod-offered') {
+        return stateOnly(session);
+      }
+      return null;
     case 'remount': {
       const confirming = onHandoffConfirming(session, event, now);
       if (confirming !== null) return confirming;
-      return stateOnly({
-        ...session,
-        phase: remountRelist(session.phase),
-        source: {
-          ...session.source,
-          startAtMs: remountStartAtMs(session),
-          generation: session.source.generation + 1,
-        },
-      });
+      return stateOnly(remounted(session));
     }
     case 'leave':
       return close(session, 'left');
@@ -792,7 +774,5 @@ function phaseTransition(
         event,
         session.source.kind === 'live' ? 'live' : 'rewind',
       );
-    case 'vod':
-      return onVod(session, event);
   }
 }

@@ -118,6 +118,15 @@ describe('장면 시각: 완성 영상 첫 장면 기준 ms', () => {
   const start = 60;
   const cut = 12_400;
 
+  it('ms 는 올림이다 — 보이는 프레임 시작 S 를 반올림하면 그 앞 프레임에 선다(kty c12′ 결정 2 (나))', () => {
+    // 30fps 한 프레임 뒤 = 33.33…ms. 반올림하면 33ms 로 프레임 시작 앞이다
+    expect(sceneOffsetFromPlayhead(start + 1 / 30, start, cut)).toBe(34);
+    expect(defaultSceneOffsetMs(start + 1 / 30, start, cut)).toBe(34);
+    // 정수 ms 에 떨어지는 값은 부동소수 오차로 1ms 밀려 오르지 않는다
+    expect(sceneOffsetFromPlayhead(start + 0.04 * 7, start, cut)).toBe(280);
+    expect(defaultSceneOffsetMs(start + 0.04 * 7, start, cut)).toBe(280);
+  });
+
   it('재생 위치가 구간 안이면 그 상대 시각이다', () => {
     expect(sceneOffsetFromPlayhead(63.25, start, cut)).toBe(3_250);
     expect(defaultSceneOffsetMs(63.25, start, cut)).toBe(3_250);

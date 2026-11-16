@@ -35,9 +35,10 @@ variable "state_keys" {
 }
 
 variable "instances" {
-  description = "상자 키 → 구성 판(설계 5-3). 새 구성은 config_version 을 올린 새 키로만 넣는다(runbooks/media-swap.md)."
+  description = "상자 키 → 구성 판(설계 5-3)과 대리 창구 스위치. 새 구성은 config_version 을 올린 새 키로만 넣는다(runbooks/media-swap.md). cred_relay = true 키는 IMDS 홉 1 · 값 없음 = 끔(홉 2). 떠 있는 키의 스위치는 제자리에서 바꾸지 않는다(POK-574)."
   type = map(object({
     config_version = string
+    cred_relay     = optional(bool, false)
   }))
 }
 
@@ -129,6 +130,13 @@ variable "edge_bounds_writer_enabled" {
   description = "/dvr 하한 Writer 스위치 — 참이면 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 에 런타임 1단 출력 edge_bounds_kvs_arn 을 채운다(거짓이면 빈 값 = Writer 꺼짐). KVS ARN 은 런타임 출력에서만 오므로 칸이 없다. user_data 로만 들어가 바꾸는 것은 설정 반영 교체다(떠 있는 상자는 그대로). 인스턴스 역할의 EdgeBoundsKvs 문은 스위치와 무관하게 늘 있다."
   type        = bool
   default     = false
+  nullable    = false
+}
+
+variable "clip_internal_url" {
+  description = "60일 만료 창구 clip 주소 http(s)://<호스트>[:<포트>](예: http://clip.pokeclip.internal:8081 — 포트는 platform 의 clip 포트와 같아야 plan 이 통과한다). 기본 빈 값 = 만료 끔(롤백 스위치) — 사이드카에 만료 설정을 렌더하지 않고 상자가 토큰을 받지 않는다. 토큰 그릇은 런타임 1단 출력에서만 오므로 칸이 없다. user_data 로만 들어가 바꾸는 것은 설정 반영 교체다(떠 있는 상자는 그대로)."
+  type        = string
+  default     = ""
   nullable    = false
 }
 

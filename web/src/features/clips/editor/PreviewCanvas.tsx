@@ -7,6 +7,7 @@ import { CropResult } from './CropResult';
 import { VideoSurface } from './VideoSurface';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
+import { PRIVATE_TEXT_CLASS } from '@/ui';
 
 // 시안 1d-a 가운데 (2026-09-08 갱신분).
 //
@@ -54,7 +55,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
       ))}
       {subtitleText !== null ? (
         <span
-          className={styles.burnedSubtitle}
+          className={`${styles.burnedSubtitle} ${PRIVATE_TEXT_CLASS}`}
           data-position={state.captionPosition}
           // 「경계」는 분할 지분 자리다 — 50:50 이 아니면 한가운데가 아니다
           style={{ ['--pc-edge' as string]: `${state.splitRatio}%` }}
@@ -110,6 +111,17 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
           {state.previewError !== null ? (
             <span className={styles.stageNote} role="status">
               {state.previewError}
+            </span>
+          ) : null}
+          {/* 창을 바꾸면 옛 파형이 남은 채 새 창 소리를 받는다: 음량을 바꿔 둔 편집본은 그동안 무음이라 알린다(kty 결정 ④) */}
+          {state.trackPreviewStatus === 'loading' ? (
+            <span className={styles.stageNote} role="status">
+              트랙 소리를 불러오는 중이에요
+            </span>
+          ) : null}
+          {state.trackPreviewStatus === 'waiting' ? (
+            <span className={styles.stageNote} role="status">
+              트랙 소리를 기다리는 중이에요
             </span>
           ) : null}
           {state.trackPreviewStatus === 'unavailable' ? (

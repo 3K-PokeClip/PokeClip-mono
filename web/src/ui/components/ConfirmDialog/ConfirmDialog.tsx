@@ -1,4 +1,6 @@
+import clsx from 'clsx';
 import { useId } from '../../primitives/hooks/useId';
+import { PRIVATE_TEXT_CLASS } from '../../privateText';
 import { Button } from '../Button/Button';
 import { Dialog } from '../Dialog/Dialog';
 import styles from './ConfirmDialog.module.css';
@@ -19,6 +21,8 @@ export interface ConfirmDialogProps {
   busy: boolean;
   /** 「~할까요?」 형 질문. */
   title: string;
+  /** 제목에 사람 이름이 들어가면 켠다 — 세션 녹화에서 제목을 가린다(POK-572, PRIVATE_TEXT_CLASS) */
+  maskTitle?: boolean;
   /** 무엇이 멈추고 무엇이 남는지 — 사용자가 판단할 재료. 번호 목록으로 그린다. */
   consequences: readonly string[];
   /** 목록 아래 각주. 예: 「해제 후에도 언제든 다시 연동할 수 있어요.」 */
@@ -34,6 +38,7 @@ export function ConfirmDialog({
   open,
   busy,
   title,
+  maskTitle = false,
   consequences,
   footnote,
   cancelLabel = '취소',
@@ -56,7 +61,9 @@ export function ConfirmDialog({
           Dialog.Content의 aria-describedby는 rest가 뒤에 퍼져 여기서 덮인다. */}
       <Dialog.Content className={styles.dialog} aria-describedby={consequencesId}>
         <div className={styles.head}>
-          <Dialog.Title className={styles.title}>{title}</Dialog.Title>
+          <Dialog.Title className={clsx(styles.title, maskTitle && PRIVATE_TEXT_CLASS)}>
+            {title}
+          </Dialog.Title>
           <div className={styles.divider} />
         </div>
         <div className={styles.body}>

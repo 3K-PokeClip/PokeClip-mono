@@ -74,6 +74,22 @@ func countingClip(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	return srv, &n
 }
 
+// setExpirySwitch 는 만료 스위치(stream_expiry_switch 한 행 · 씨앗은 끔)를 마스터 손 SQL 과 같은 문장으로 켜거나 끈다.
+// newWireTestPool 의 비우기가 스위치 표를 건드리지 않으므로, 시험이 끝나면 끔으로 되돌려 켠 값이 다음 시험으로 새지 않게 한다.
+func setExpirySwitch(t *testing.T, admin *pgxpool.Pool, on bool) {
+	t.Helper()
+	const update = "UPDATE stream_expiry_switch SET enabled = $1, changed_at = now(), changed_by = 'test'"
+	tag, err := admin.Exec(context.Background(), update, on)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("스위치 %t: 행 %d · %v (씨앗 행 하나 기대)", on, tag.RowsAffected(), err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(context.Background(), update, false); err != nil {
+			t.Errorf("스위치를 끔으로 되돌리지 못했다: %v", err)
+		}
+	})
+}
+
 // D50 — 운영 권한이 아직 없는(옛 권한) 계정으로 기동하면 만료를 켜지 않는다: ERROR 한 줄 · 창구 요청 0.
 func TestStartExpiryDisabledWithoutPrivileges(t *testing.T) {
 	admin := newWireTestPool(t)
@@ -96,11 +112,12 @@ func TestStartExpiryDisabledWithoutPrivileges(t *testing.T) {
 	}
 }
 
-// 켜짐 · 멈춤 — 권한 · 주소 · 버킷 · 발행 몫이 다 있으면 고루틴이 첫 회차를 돌고, stop 은 Run 이 돌아온 뒤에 돌아온다
-// (풀 Close 보다 먼저 불리는 defer — D24). 토큰은 파일에서 읽는다(secretfile 규칙).
+// 켜짐 · 멈춤 — 권한 · 주소 · 버킷 · 발행 몫 · DB 스위치가 다 있으면 고루틴이 첫 회차를 돌고, stop 은 Run 이 돌아온 뒤에
+// 돌아온다(풀 Close 보다 먼저 불리는 defer — D24). 토큰은 파일에서 읽는다(secretfile 규칙).
 func TestStartExpiryRunsAndStops(t *testing.T) {
 	admin := newWireTestPool(t)
 	role := pgtest.NewMediaIndexerRole(t, admin)
+	setExpirySwitch(t, admin, true)
 	assemblyCredentialsEnv(t)
 	s3 := newFakeS3(t, http.StatusOK)
 	clip, requests := countingClip(t)
@@ -128,6 +145,34 @@ func TestStartExpiryRunsAndStops(t *testing.T) {
 	}
 	if len(logLines(t, buf, "expiry_started")) != 1 || strings.Contains(buf.String(), "tok-canary-7f3a") {
 		t.Fatalf("기동 줄이 없거나 토큰이 찍혔다: %s", buf.String())
+	}
+}
+
+// 기본 끔(POK-551 ④) — 다른 조건이 다 있어도 DB 스위치가 꺼져 있으면 루프는 뜨지만 첫 회차가 WARN expiry_switch
+// value=0 한 줄만 내고 창구를 부르지 않는다. 배포만으로는 아무것도 지우지 않는다는 약속의 조립 층 몫이다.
+func TestStartExpiryIdlesWhileSwitchOff(t *testing.T) {
+	admin := newWireTestPool(t)
+	role := pgtest.NewMediaIndexerRole(t, admin)
+	setExpirySwitch(t, admin, false)
+	assemblyCredentialsEnv(t)
+	s3 := newFakeS3(t, http.StatusOK)
+	clip, requests := countingClip(t)
+	cfg := assemblyCfg(t, s3.srv.URL)
+	cfg.Expiry.ClipURL = clip.URL
+	logs, log := newLockedLogger()
+
+	stop := startExpiry(t.Context(), cfg, role.Pool, true, func(string) {}, log)
+	deadline := time.Now().Add(10 * time.Second)
+	for logs.count(t, "expiry_switch", "") == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	stop()
+	lines := logLines(t, &logs.buf, "expiry_switch")
+	if len(lines) != 1 || lines[0]["level"] != "WARN" || lines[0]["value"] != float64(0) {
+		t.Fatalf("expiry_switch %v (WARN value=0 한 줄 기대) · 전체 %s", lines, logs.buf.String())
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("스위치가 꺼졌는데 창구를 %d번 불렀다", requests.Load())
 	}
 }
 

@@ -19,6 +19,10 @@
 #   - a: render_vars.json 그대로(응답기 이미지 빔 · janitor 끔 · journald).
 #   - b: 응답기만 채움. c: janitor 만 켬.
 #   - d: 둘 다 채우고 · 켜고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
+#   - e: 응답기 · janitor · IMDS 대리 창구(cred_relay) 모두 켬 · 제어면 상류 채움
+#     (nginx 갈래 e 와 같은 변수 파일 — compose 템플릿은 control_upstream 을
+#     쓰지 않는다). 창구 사례(60 – 67)와 갈래 r1(켬 · janitor 끔)은
+#     test/lib/render_cred_relay_cases.sh 에 있다.
 #   - nginx: control_upstream 빔(a) · 채움(e).
 #   - mediamtx: compose 갈래 a 가 고른 옛 모드(a) · b 가 고른 응답기 모드(b).
 #   - ingest-auth.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(응답기 갈래의
@@ -35,6 +39,9 @@
 #   - 기동 전 검사 서비스(timing-preflight — profiles 로만): 갈래 a – d 를
 #     프로필을 켜고 따로 풀어 본다. 사례 57 은 test/lib/render_timing_cases.sh 에
 #     있다.
+#   - 사이드카 60일 만료 창구 env · 토큰 디렉터리 bind: 빈 주소는 갈래 a – d,
+#     주소를 채운 갈래 x1 · x2(옛 · 응답기 모드 — 사례 10 · 26 도 함께 본다)와
+#     사례 58 · 59 는 test/lib/render_clip_expiry_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -77,8 +84,14 @@ source "${TEST_DIR}/lib/render_sidecar_env_cases.sh"
 source "${TEST_DIR}/lib/render_edge_bounds_cases.sh"
 # shellcheck source=lib/render_timing_cases.sh
 source "${TEST_DIR}/lib/render_timing_cases.sh"
+# shellcheck source=lib/render_clip_expiry_cases.sh
+source "${TEST_DIR}/lib/render_clip_expiry_cases.sh"
+# shellcheck source=lib/render_cred_relay_cases.sh
+source "${TEST_DIR}/lib/render_cred_relay_cases.sh"
 # shellcheck source=../bin/lib/render_files.sh
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
+# shellcheck source=../bin/lib/cred_relay.sh
+source "${MEDIA_HOST_DIR}/bin/lib/cred_relay.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
@@ -92,19 +105,21 @@ readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly APP_ORIGIN='https://app.pokeclip.com'
 readonly CONTRACT_COMPOSE="${TEST_DIR}/compose.contract.yml"
 readonly UNIT_COMPOSE="${TEST_DIR}/compose.unit.yml"
-readonly COMPOSE_VARIANTS='a b c d'
+readonly COMPOSE_VARIANTS='a b c d e'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=57
+readonly CASE_COUNT=67
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
 readonly JANITOR_ENTRYPOINT='/usr/local/bin/janitor'
+readonly CRED_RELAY_ENTRYPOINT='/usr/local/bin/cred-relay'
 
 # 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
 #   services — 렌더에 있어야 할 서비스(응답기는 이미지 변수가 차 있을 때만,
-#              janitor 는 janitor_enabled 가 참일 때만).
+#              janitor 는 janitor_enabled 가 참일 때만, 중계는 cred_relay 가
+#              참일 때만).
 #   attached — compose 출력이 연결되는 서비스(시작 스크립트의 --attach 집합.
 #              start_test 가 같은 집합을 시작 스크립트 쪽에서 단언한다).
 #   nginx_cap_add — cap_drop: [ALL] 뒤 nginx 에만 되살리는 cap. 공식 이미지는
@@ -118,6 +133,7 @@ def services:
   ["mediamtx", "nginx", "sidecar"]
   + (if .ingest_auth_image != "" then ["ingest-auth"] else [] end)
   + (if .janitor_enabled then ["janitor"] else [] end)
+  + (if .cred_relay then ["cred-relay"] else [] end)
   | sort;
 def attached: ["mediamtx", "nginx"];
 def nginx_cap_add: ["CHOWN", "SETGID", "SETUID"];
@@ -129,7 +145,22 @@ def db_env:
    POSTGRES_SSLROOTCERT: "/etc/pokeclip/rds-ca/global-bundle.pem",
    TZ: "UTC", AWS_REGION: "ap-northeast-2",
    AWS_EC2_METADATA_V1_DISABLED: "true"};
-'"${AUTH_JQ_DEFS}"
+'"${AUTH_JQ_DEFS}${CLIP_JQ_DEFS}${CRED_JQ_DEFS}"
+
+# 읽기 전용 bind 안의 파일 경로 판정(사례 11 · 36 의 실제값 필터가 앞에 붙인다).
+# 입력은 경로 값, 인자는 그 서비스 구성이다. 경로가 읽기 전용 bind 대상이거나,
+# 원본을 만들지 않는(create_host_path: false) 읽기 전용 bind 대상 바로 아래
+# 이름이면 참이다 — 창구 토큰처럼 디렉터리로 받는 비밀 파일(시작 스크립트가
+# 디렉터리를 만든다).
+# shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+readonly RO_PATH_JQ_DEFS='
+def ro_bind_path($svc):
+  . as $p
+  | [($svc.volumes // [])[] | select(.type == "bind" and .read_only == true)]
+  | (map(.target) | index($p) != null)
+    or (map(select(.bind.create_host_path == false) | .target)
+      | index($p | sub("/[^/]*$"; "")) != null);
+'
 
 scratch=""
 setup_reason=""
@@ -187,7 +218,8 @@ write_variant_vars() {
     && jq "${defs} fill_janitor" "${base}" >"$(vars_file c)" \
     && jq "${defs} fill_auth | fill_janitor
       | .detached_log_driver = \"json-file\"" "${base}" >"$(vars_file d)" \
-    && jq --arg u "${SAMPLE_CONTROL_UPSTREAM}" '.control_upstream = $u' \
+    && jq --arg u "${SAMPLE_CONTROL_UPSTREAM}" "${defs} fill_auth | fill_janitor
+      | .control_upstream = \$u | .cred_relay = true" \
       "${base}" >"$(vars_file e)"
 }
 
@@ -232,7 +264,7 @@ $(harness::log_tail "$(mtx_json "${v}").err")"
 }
 
 #######################################
-# 갈래마다 렌더한다(compose a ~ d · nginx a · e) · mediamtx 는 고른다(a · b).
+# 갈래마다 렌더한다(compose a – e · nginx a · e) · mediamtx 는 고른다(a · b).
 # 템플릿이 없으면 그 이름을 한 번만 원인에 남긴다. 하나라도 실패하면 1.
 #######################################
 render_all() {
@@ -411,8 +443,9 @@ check_case_3() {
     {mediamtx: .mediamtx_image, nginx: .nginx_image, sidecar: .sidecar_image}
     + (if .ingest_auth_image != ""
        then {"ingest-auth": .ingest_auth_image} else {} end)
-    + (if .janitor_enabled then {janitor: .sidecar_image} else {} end)' \
-    '이미지(janitor = 사이드카 이미지)'
+    + (if .janitor_enabled then {janitor: .sidecar_image} else {} end)
+    + (if .cred_relay then {"cred-relay": .sidecar_image} else {} end)' \
+    '이미지(janitor · 중계 = 사이드카 이미지)'
 }
 
 check_case_4() {
@@ -434,9 +467,10 @@ check_case_5() {
         | if . == null then null else {condition, restart} end)})' '
     services | map({(.): (if . == "mediamtx"
       then {network_mode: null, mediamtx_dep: null}
+      elif . == "cred-relay" then {network_mode: "host", mediamtx_dep: null}
       else {network_mode: "service:mediamtx",
             mediamtx_dep: {condition: "service_started", restart: true}}
-      end)}) | add' '망 칸 · depends_on'
+      end)}) | add' '망 칸(중계만 호스트 망) · depends_on'
 }
 
 check_case_6() {
@@ -466,10 +500,14 @@ check_case_7() {
      nginx: ["/etc/pokeclip-media/nginx.conf /etc/nginx/nginx.conf ro"],
      sidecar: (["recordings /recordings ro", "hooks /hooks ro",
                "/run/pokeclip-media/mtx_api_pass /run/secrets/mtx_api_pass ro"]
-       + (if .ingest_auth_image != "" then [sc_resolve_bind] else [] end))}
+       + (if .ingest_auth_image != "" then [sc_resolve_bind] else [] end)
+       + (if .cred_relay then [cred_bind("indexer")] else [] end))}
     + (if .ingest_auth_image != "" then {"ingest-auth": ia_binds} else {} end)
     + (if .janitor_enabled
-       then {janitor: ["recordings /recordings rw"]} else {} end)
+       then {janitor: (["recordings /recordings rw"]
+         + (if .cred_relay then [cred_bind("janitor")] else [] end))}
+       else {} end)
+    + (if .cred_relay then {"cred-relay": [cred_relay_bind]} else {} end)
     | map_values(sort)' '볼륨 · 읽기 전용' || ok=1
   expect_all '[.services[] | (.volumes // [])[]
     | select(.volume.nocopy == true)] | length' '0' 'volume.nocopy' || ok=1
@@ -537,26 +575,39 @@ check_case_9() {
 }
 
 check_case_10() {
-  require_setup || return 1
-  expect_all '.services | map_values(.environment // {})
-    | with_entries(select(.key == "sidecar" or .key == "janitor"))' '
-    {sidecar: (db_env + {POSTGRES_USER: "media_indexer",
-       ENSURE_SCHEMA: "false", SEGMENT_ROOT: "/recordings",
-       HOOK_SPOOL_PATH: "/hooks/events.jsonl",
-       MTX_API_URL: "http://127.0.0.1:9997",
-       MTX_API_USER: "pokeclip-sidecar",
-       MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
-       S3_BUCKET: .rewind_bucket_name,
-       REWIND_PUBLIC_BASE_URL: .rewind_public_base_url,
-       REWIND_EDGE_BOUNDS_KVS_ARN: .edge_bounds_kvs_arn,
-       CONTROL_LISTEN: "127.0.0.1:8086",
-       PLAYBACK_ROUND_KEYS: (.playback_round_keys | tostring)}
-       + (if .ingest_auth_image != "" then sc_resolve_env else {} end))}
-    + (if .janitor_enabled
-       then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
-         JANITOR_ENABLED: "true", JANITOR_GRACE: "23h",
-         SEGMENT_ROOT: "/recordings"})}
-       else {} end)' '사이드카 · janitor env'
+  local ok=0 v
+  clip_cases::require || return 1
+  for v in ${COMPOSE_VARIANTS} ${CLIP_EXPIRY_VARIANTS}; do
+    expect_config "${v}" '.services | map_values(.environment // {})
+      | with_entries(select(.key == "sidecar" or .key == "janitor"))' '
+      {sidecar: (db_env + {POSTGRES_USER: "media_indexer",
+         ENSURE_SCHEMA: "false", SEGMENT_ROOT: "/recordings",
+         HOOK_SPOOL_PATH: "/hooks/events.jsonl",
+         MTX_API_URL: "http://127.0.0.1:9997",
+         MTX_API_USER: "pokeclip-sidecar",
+         MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
+         S3_BUCKET: .rewind_bucket_name,
+         REWIND_PUBLIC_BASE_URL: .rewind_public_base_url,
+         REWIND_EDGE_BOUNDS_KVS_ARN: .edge_bounds_kvs_arn,
+         CONTROL_LISTEN: "127.0.0.1:8086",
+         PLAYBACK_ROUND_KEYS: (.playback_round_keys | tostring)}
+         + (if .ingest_auth_image != "" then sc_resolve_env else {} end)
+         + (if .ingest_auth_image != ""
+              and (.lifecycle_publish_streams | length) > 0
+            then {BROADCAST_TOPIC_ARN: .broadcast_topic_arn,
+              LIFECYCLE_PUBLISH_STREAMS:
+                (.lifecycle_publish_streams | join(","))}
+            else {} end)
+         + (if .clip_internal_url != "" then sc_clip_env else {} end)
+         + (if .cred_relay then cred_env else {} end))}
+      + (if .janitor_enabled
+         then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
+           JANITOR_ENABLED: "true",
+           SEGMENT_ROOT: "/recordings"}
+           + (if .cred_relay then cred_env else {} end))}
+         else {} end)' '사이드카 · janitor env' || ok=1
+  done
+  return "${ok}"
 }
 
 check_case_11() {
@@ -564,15 +615,13 @@ check_case_11() {
   require_setup || return 1
   # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
   # 이름 패턴의 PASS 는 PASSWORD 와 *_PASS 를 함께 덮는다. 예외는 `_FILE` 로
-  # 끝나고 값이 그 서비스의 읽기 전용 bind 대상인 env 뿐이다(값이 아니라 파일
-  # 경로다).
-  expect_all '[.services | to_entries[] | .key as $s | .value as $c
-    | ([($c.volumes // [])[] | select(.type == "bind" and .read_only == true)
-        | .target]) as $ro
-    | ($c.environment // {}) | to_entries[]
+  # 끝나고 값이 그 서비스의 읽기 전용 bind 안 파일 경로인 env 뿐이다(값이 아니라
+  # 파일 경로다 — RO_PATH_JQ_DEFS).
+  expect_all "${RO_PATH_JQ_DEFS}"'[.services | to_entries[] | .key as $s
+    | .value as $c | ($c.environment // {}) | to_entries[]
     | select(.key | test("CDN|TOKEN|PASS|SECRET"; "i"))
     | select(((.key | endswith("_FILE"))
-        and (.value as $v | $ro | index($v) != null)) | not)
+        and (.value | ro_bind_path($c))) | not)
     | "\($s).\(.key)"]' '[]' '비밀 계열 env 이름(읽기 전용 bind 파일 경로 제외)' \
     || ok=1
   for v in ${COMPOSE_VARIANTS}; do
@@ -708,13 +757,15 @@ check_case_16() {
 # 다른 항목을 한 줄씩 낸다. 역할 서비스 셋이 양쪽에 다 없어도 한 줄 낸다.
 # 입력: $p = 렌더한 템플릿, $t = 시험 compose(둘 다 선언 그대로의 구성 JSON),
 # $logging = logging(드라이버 · 옵션)도 비교할지(true · false).
-# 응답기 모드 사이드카의 4C 토큰 사본 bind 는 렌더 쪽에서 뺀다 — 시험 compose 의
-# 사이드카는 4C 를 부르지 않는다(그 bind 는 사례 7 · 26 · 42 가 본다).
+# 응답기 모드 사이드카의 4C 토큰 사본 bind 와 만료 토큰 디렉터리 bind 는 렌더
+# 쪽에서 뺀다 — 시험 compose 의 사이드카는 4C 도 clip 도 부르지 않는다(4C bind 는
+# 사례 7 · 26 · 42, 만료 bind 는 사례 26 · 58 이 본다).
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly DRIFT_PROGRAM='
 def without_sidecar_resolve: if .services.sidecar == null then . else
   .services.sidecar.volumes |= map(select(.target
-    != "/run/secrets/stream_key_resolve_token")) end;
+    | . != "/run/secrets/stream_key_resolve_token"
+      and . != "/run/secrets/clip-expiry")) end;
 def facts: .services | map_values({
   restart: (.restart // null),
   network_mode: (.network_mode // null),
@@ -788,23 +839,35 @@ $(harness::log_tail "${scratch}/unit.json.err")"
 # 모드는 사이드카 4C 토큰 사본 포함 · M9 user_data 가 렌더하는 nginx 설정)은
 # 원본이 없으면 만들지 않는다(create_host_path: false). 원본이 없을 때(정지가
 # 렌더를 지운 뒤 남은 컨테이너가 다시 뜰 때 등) 엔진이 그 자리에 디렉터리를
-# 만들면 다음 렌더가 영영 막힌다.
+# 만들면 다음 렌더가 영영 막힌다. 예외는 주소가 찰 때의 만료 토큰 디렉터리
+# bind 하나다 — 디렉터리 bind 라 엔진이 만든 것도 같은 종류다(갈래 x1 · x2).
 #######################################
 check_case_26() {
-  require_setup || return 1
-  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
-  expect_all '[.services | to_entries[] | .key as $s | (.value.volumes // [])[]
-      | select(.type == "bind")
-      | "\($s) \(.target) \(.bind.create_host_path != false)"] | sort' '
-    ["mediamtx /mediamtx.yml false",
-     "nginx /etc/nginx/nginx.conf false",
-     "sidecar /run/secrets/mtx_api_pass false"]
-    + (if .ingest_auth_image != ""
-       then [ia_binds[] | "ingest-auth \(split(" ")[1]) false"]
-         + ["sidecar /run/secrets/stream_key_resolve_token false"]
-       else [] end)
-    | sort' \
-    '렌더 파일 bind 의 원본 자동 생성'
+  local ok=0 v
+  clip_cases::require || return 1
+  for v in ${COMPOSE_VARIANTS} ${CLIP_EXPIRY_VARIANTS}; do
+    # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+    expect_config "${v}" '[.services | to_entries[] | .key as $s
+        | (.value.volumes // [])[] | select(.type == "bind")
+        | "\($s) \(.target) \(.bind.create_host_path != false)"] | sort' '
+      ["mediamtx /mediamtx.yml false",
+       "nginx /etc/nginx/nginx.conf false",
+       "sidecar /run/secrets/mtx_api_pass false"]
+      + (if .ingest_auth_image != ""
+         then [ia_binds[] | "ingest-auth \(split(" ")[1]) false"]
+           + ["sidecar /run/secrets/stream_key_resolve_token false"]
+         else [] end)
+      + (if .clip_internal_url != "" then [sc_clip_bind] else [] end)
+      + (if .cred_relay
+         then ["sidecar /run/secrets/aws-cred false",
+               "cred-relay /run/secrets/cred-relay false"]
+           + (if .janitor_enabled
+              then ["janitor /run/secrets/aws-cred false"] else [] end)
+         else [] end)
+      | sort' \
+      '렌더 파일 bind 의 원본 자동 생성' || ok=1
+  done
+  return "${ok}"
 }
 
 check_case_27() {
@@ -815,8 +878,10 @@ check_case_27() {
     services | map({(.): (if . == "janitor"
       then {entrypoint: [$entry], read_only: true}
       elif . == "ingest-auth" then {entrypoint: null, read_only: true}
+      elif . == "cred-relay" then {entrypoint: [$relay], read_only: true}
       else {entrypoint: null, read_only: null} end)}) | add' \
-    'entrypoint · 읽기 전용 루트' --arg entry "${JANITOR_ENTRYPOINT}"
+    'entrypoint · 읽기 전용 루트' --arg entry "${JANITOR_ENTRYPOINT}" \
+    --arg relay "${CRED_RELAY_ENTRYPOINT}"
 }
 
 #######################################
@@ -929,6 +994,8 @@ main() {
     publish_cases::prepare || true
     sidecar_cases::prepare || true
     edge_bounds_cases::prepare || true
+    clip_cases::prepare || true
+    cred_cases::prepare || true
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
@@ -1047,6 +1114,29 @@ main() {
   harness::run_case 57 \
     '기동 전 검사 서비스 — 프로필로만 · 검사 핀 · 기본 망 · 볼륨 0 · 사이드카 DB env' \
     timing_cases::check_57
+  harness::run_case 58 \
+    '만료 창구 — 주소가 차면 두 모드 모두 사이드카에만 env 둘 · 디렉터리 bind' \
+    clip_cases::check_58
+  harness::run_case 59 '만료 창구 — 빈 주소면 렌더 0 글자 · 템플릿 주석 비렌더' \
+    clip_cases::check_59
+  harness::run_case 60 '대리 창구 — 중계 서비스 꼴 정확값(호스트 망 · restart · 권한)' \
+    cred_cases::check_60
+  harness::run_case 61 \
+    '대리 창구 — 소비자 env 셋 완전 · 소비자 밖 0 · janitor user = 토큰 소유' \
+    cred_cases::check_61
+  harness::run_case 62 \
+    '대리 창구 — cred-* bind 쌍 · 토큰 경로 · 호출자 짝 · RUNTIME_DIR 조상 bind 0' \
+    cred_cases::check_62
+  harness::run_case 63 '대리 창구 — 소비자만 중계에 depends_on(service_started)' \
+    cred_cases::check_63
+  harness::run_case 64 '대리 창구 — 끔 렌더 창구 글자 0 · 템플릿 주석 비렌더' \
+    cred_cases::check_64
+  harness::run_case 65 '망 칸 서비스 cap_add ⊆ nginx 셋' cred_cases::check_65
+  harness::run_case 66 \
+    '대리 창구 — 주소 세 곳 일치(렌더 · 시작 스크립트 · proxy_ports 금지 목록)' \
+    cred_cases::check_66
+  harness::run_case 67 '대리 창구 켬 · janitor 끔 — 호출자 목록 그대로 · 소비자 하나' \
+    cred_cases::check_67
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

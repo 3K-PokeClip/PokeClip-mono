@@ -5,7 +5,11 @@
 # 순서:
 #   1. 선행 점검 세 항목(compose 판 · ECR 자격 도우미 · DOCKER_CONFIG 의
 #      credHelpers)을 매번 같은 순서로 모두 보고 결과 줄을 낸다. 하나라도
-#      실패하면 「MEDIA PREREQ FAIL <항목>」 을 남기고 끝낸다.
+#      실패하면 「MEDIA PREREQ FAIL <항목>」 을 남기고 끝낸다. 그다음 compose
+#      렌더본(MEDIA_COMPOSE_FILE)의 중계 서비스 키 줄(`  cred-relay:`) 수로 IMDS
+#      대리 창구 켬 · 끔을 정한다(lib/cred_relay.sh — 0 끔 · 1 켬). 2 이상이거나
+#      같은 키를 다른 꼴로 쓴 줄이 있으면 「MEDIA START BLOCKED: cred-relay mode
+#      mismatch」. 비밀을 읽기 전에 본다.
 #   2. compose 파일 옆 sidecar.env(상자 스위치 파일 — 사이드카의 새 꼴 쓰기
 #      스위치)가 링크 아닌 일반 파일이고 내용이 정확히 PLAYBACK_ROUND_KEYS=true
 #      또는 =false 한 줄인지 본다(두 모드 공통 — 없으면 compose 의 required
@@ -76,8 +80,24 @@
 #      그대로 두고, rename 하나가 실패하면 이번에 옮긴 파일을 지워 짝이 어긋난
 #      설정을 남기지 않는다. 치환은 bash 내장 문자열 연산으로만 해서 값이 외부
 #      명령의 argv 에 오르지 않는다.
+#      그 뒤 60일 만료 창구 토큰을 따로 둔다(두 모드 공통 ·
+#      CLIP_EXPIRY_TOKEN_SECRET_ARN 이 찰 때만 — lib/clip_expiry.sh).
+#      RUNTIME_DIR/clip-expiry 를 root 0711 로 맞추고 앞 기동의 토큰과 그
+#      임시 파일을 먼저 지운 뒤, 토큰을 4C 토큰과 같은 꼴로 읽어 임시 파일 +
+#      rename 으로 token(사이드카 실행 계정 소유 0400)에 둔다. 받기 실패 · 쓸 수
+#      없는 값이면 판정 줄 없이 파일 없이 계속한다 — 사이드카가 만료만 끄고
+#      (expiry_disabled reason=token_file) 그 줄이 판별 신호다. 디렉터리가
+#      링크이거나 맞추지 · 지우지 못하면 「MEDIA START FAIL render
+#      clip-expiry-dir」, 파일을 두지 못하면 「… clip-expiry-<단계>」 다.
+#      창구 켬이면 그 뒤 창구 토큰 묶음(호출자 indexer · janitor 마다 새 토큰
+#      하나를 소비자 디렉터리와 중계 디렉터리에 같은 값으로)을 두고 더미 링크
+#      pokeclip-cred0 에 169.254.170.2/32 를 붙인다(lib/cred_relay.sh — 판정
+#      줄도 거기 적었다). 끔이면 이 걸음이 없다.
 #   9. 기동 전 검사(POK-196 PDT 설계 r7 9.4 — 판 2 를 못 읽는 사이드카로 내린
-#      상자를 막는다). compose 렌더본의 sidecar 서비스 image 를 받아(docker pull)
+#      상자를 막는다). 창구 켬 상자는 아래 검사 서비스를 돌리지 않는다(IMDS 홉
+#      1 이라 검사 서비스가 DB 에 닿지 못한다) — 판 2 가 없으면 곧바로 「MEDIA
+#      START BLOCKED: cred-relay needs sidecar timing v2 label=<라벨|none|
+#      invalid>」 로 막는다. compose 렌더본의 sidecar 서비스 image 를 받아(docker pull)
 #      라벨 com.pokeclip.timing.readable 을 읽는다. 받기가 실패하면 다이제스트로
 #      고정한 참조에 한해 로컬 이미지의 라벨을 읽는다. 라벨이 꼴에 맞고 판 2 가
 #      있으면 DB 를 보지 않고 지나간다 — c0 이후 사이드카의 기동은 이미지를
@@ -128,6 +148,9 @@
 #                                   이름.
 #   INGEST_AUTH_DENY_DIR            기본 /var/lib/pokeclip-media/ingest-auth/deny
 #                                   (절대 경로 — 응답기 모드만).
+#   CLIP_EXPIRY_TOKEN_SECRET_ARN    비면 만료 토큰을 두지 않는다. 60일 만료
+#                                   창구 토큰 비밀 ARN(clip 주소가 찰 때만
+#                                   모듈이 채운다).
 #
 # 출력: 판정 줄(MEDIA PREREQ OK|FAIL · MEDIA START BLOCKED · MEDIA START FAIL)만
 # 낸다 — 예외는 순서 9 의 검사 서비스가 내는 판정 줄(JSON)이다. 비밀 값은
@@ -149,13 +172,18 @@ source "${BIN_DIR}/lib/docker_config.sh"
 source "${BIN_DIR}/lib/deny_tokens.sh"
 # shellcheck source=lib/render_files.sh
 source "${BIN_DIR}/lib/render_files.sh"
+# shellcheck source=lib/clip_expiry.sh
+source "${BIN_DIR}/lib/clip_expiry.sh"
+# shellcheck source=lib/cred_relay.sh
+source "${BIN_DIR}/lib/cred_relay.sh"
 # 비밀이 든 메모리가 core 파일로 남지 않게 한다.
 ulimit -c 0
 # 비밀 · 렌더 내용을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면, bash
 # 의 local 이 그 export 속성을 이어받아 자식(chown 등) 환경에 값이 실린다. 쓰기
 # 전에 그 이름들을 환경에서 지운다.
 unset -v secret rendered value content head tail api_pass basic_pass \
-  publish_lock read_lock file_bodies template_body resolve_token
+  publish_lock read_lock file_bodies template_body resolve_token expiry_token \
+  cred_token
 
 readonly SECRET_TOKEN='@@HLS_CDN_SECRET@@'
 # CDN 비밀이 가질 수 있는 글자 — MediaMTX 평문 자격 글자(hlsCDNSecret 검사)와
@@ -206,6 +234,8 @@ readonly TIMING_PREFLIGHT_SERVICE='timing-preflight'
 readonly TIMING_READABLE_ENV='SIDECAR_TIMING_READABLE'
 readonly TIMING_BLOCKED='MEDIA START BLOCKED: sidecar cannot read ledger'\
 ' timing v2'
+readonly CRED_RELAY_TIMING_BLOCKED='MEDIA START BLOCKED: cred-relay needs'\
+' sidecar timing v2'
 # compose 렌더본의 사이드카 서비스 키 줄과 그 image 줄 머리(compose.yml.tmpl
 # 꼴), 받는 이미지 참조의 꼴(argv 에 오르는 글자를 좁힌다).
 readonly SIDECAR_SERVICE_LINE='  sidecar:'
@@ -513,10 +543,11 @@ prepare_state_dir() {
 }
 
 #######################################
-# 목록의 파일을 둔다(소유 꼴 → 디렉터리 → install). 목록의 내용은 끝에 비운다.
+# 목록의 파일을 둔다(소유 꼴 → 디렉터리 → install). 목록 넷은 끝에 모두 비운다 —
+# 뒤의 창구 토큰 묶음이 이 묶음의 경로 · 소유 · 단계를 이어받지 않게.
 # 실패 줄은 여기서 낸다.
 # Globals:
-#   file_bodies, render_step
+#   file_paths, file_owners, file_steps, file_bodies, render_step
 # Arguments:
 #   RUNTIME_DIR, 응답기 파일 디렉터리(응답기 모드만).
 # Returns:
@@ -528,7 +559,7 @@ place_files() {
     && { (( $# < 2 )) || { prepare_ingest_auth_dir "$2" \
       && prepare_state_dir "$2/${STATE_DIR_NAME}"; }; } \
     && install_files || status=1
-  file_bodies=()
+  reset_file_list
   if (( status != 0 )); then
     say "MEDIA START FAIL render ${render_step}"
     return 1
@@ -585,19 +616,20 @@ check_env_line() {
 }
 
 #######################################
-# 4C 토큰을 읽는다(read_cdn_secret 과 같은 방식 — 끝 줄바꿈 하나만 떼고 NUL 은
-# 제어 문자로 바꾼다). 응답기가 값을 HTTP 머리글에 싣고(headerSafe) 파일을
-# 4096바이트까지 받으므로(secretfile) 빈 값 · None · 제어 문자(C1 포함) · 앞뒤
-# 공백 · 값 + 줄바꿈이 상한 초과면 실패다.
-# Globals:
-#   STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN
+# 머리글 토큰(4C 토큰 · 만료 창구 토큰)을 읽는다(read_cdn_secret 과 같은 방식
+# — 끝 줄바꿈 하나만 떼고 NUL 은 제어 문자로 바꾼다). 응답기 · 사이드카가 값을
+# HTTP 머리글에 싣고(headerSafe) 파일을 4096바이트까지 받으므로(secretfile) 빈
+# 값 · None · 제어 문자(C1 포함) · 앞뒤 공백 · 값 + 줄바꿈이 상한 초과면
+# 실패다.
+# Arguments:
+#   비밀 ARN(빈 값이면 실패).
 # Outputs:
 #   값(성공했을 때만).
 # Returns:
 #   0 / 1 조회 실패 · 쓸 수 없는 값.
 #######################################
-read_resolve_token() {
-  local arn="${STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN:-}" value LC_ALL=C
+read_token_secret() {
+  local arn="$1" value LC_ALL=C
   local c1=$'\xc2['$'\x80''-'$'\x9f'']'
   [[ -n "${arn}" ]] || return 1
   value="$({ aws secretsmanager get-secret-value --secret-id "${arn}" \
@@ -681,7 +713,8 @@ render_ingest_auth() {
     say 'MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable'
     return 1
   fi
-  if ! resolve_token="$(read_resolve_token)"; then
+  if ! resolve_token="$(read_token_secret \
+    "${STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN:-}")"; then
     say 'MEDIA START BLOCKED: ingest-auth resolve token unavailable'
     return 1
   fi
@@ -819,12 +852,14 @@ timing_label_of() {
 
 #######################################
 # 기동 전 검사(머리 주석 순서 9). 사이드카 라벨에 판 2 가 있으면 지나가고, 없으면
-# 검사 서비스를 한 번 돌려 0 일 때만 지나간다. 막힘 줄은 여기서 낸다.
+# 검사 서비스를 한 번 돌려 0 일 때만 지나간다. 창구 켬 상자는 검사 서비스를
+# 돌리지 않고 곧바로 막는다(켬 상자는 IMDS 홉 1 이라 검사 서비스가 DB 에 닿지
+# 못한다). 막힘 줄은 여기서 낸다.
 # Globals:
 #   TIMING_LABEL_PATTERN, TIMING_PREFLIGHT_SERVICE, TIMING_READABLE_ENV,
-#   TIMING_BLOCKED
+#   TIMING_BLOCKED, CRED_RELAY_TIMING_BLOCKED
 # Arguments:
-#   compose 프로젝트, compose 파일.
+#   compose 프로젝트, compose 파일, 창구(on | off).
 # Returns:
 #   0 통과 / 1 막힘.
 #######################################
@@ -845,6 +880,10 @@ check_timing_preflight() {
   elif [[ -n "${label}" ]]; then
     shown=invalid
   fi
+  if [[ "$3" == on ]]; then
+    say "${CRED_RELAY_TIMING_BLOCKED} label=${shown}"
+    return 1
+  fi
   docker compose --ansi never -p "$1" -f "$2" run --rm --no-deps -T \
     -e "${TIMING_READABLE_ENV}=${readable}" "${TIMING_PREFLIGHT_SERVICE}" \
     || status=$?
@@ -857,7 +896,8 @@ check_timing_preflight() {
 main() {
   local project="${MEDIA_COMPOSE_PROJECT:-pokeclip-media}"
   local compose_file="${MEDIA_COMPOSE_FILE:-/etc/pokeclip-media/compose.yml}"
-  local attach=() service
+  local runtime_dir="${RUNTIME_DIR:-/run/pokeclip-media}"
+  local attach=() service cred_mode
   if (( $# != 0 )); then
     say 'MEDIA START FAIL usage'
     exit 2
@@ -875,10 +915,21 @@ main() {
   if ! run_prereqs; then
     exit 1
   fi
+  if ! cred_mode="$(cred_relay_mode "${compose_file}")"; then
+    say 'MEDIA START BLOCKED: cred-relay mode mismatch'
+    exit 1
+  fi
   if ! prepare_config "${compose_file}"; then
     exit 1
   fi
-  if ! check_timing_preflight "${project}" "${compose_file}"; then
+  if ! install_clip_expiry_token "${runtime_dir}"; then
+    exit 1
+  fi
+  if [[ "${cred_mode}" == on ]] && ! prepare_cred_relay "${runtime_dir}"; then
+    exit 1
+  fi
+  if ! check_timing_preflight "${project}" "${compose_file}" "${cred_mode}"
+  then
     exit 1
   fi
   for service in "${ATTACHED_SERVICES[@]}"; do

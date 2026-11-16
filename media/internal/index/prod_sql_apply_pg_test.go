@@ -1016,6 +1016,28 @@ func TestProdSQLVerifyCatchesLedgerSchemaDrift(t *testing.T) {
 			tamper: "REVOKE INSERT ON broadcast_lifecycle_outbox FROM media_indexer",
 			want:   []string{"privilege:media_indexer:broadcast_lifecycle_outbox:INSERT"},
 		},
+		{
+			// POK-551 — 스위치 표가 없으면 만료는 꺼져 있지만, 켤 수도 없다.
+			name:   "expiry switch table dropped",
+			tamper: "DROP TABLE stream_expiry_switch",
+			want:   []string{"owner:stream_expiry_switch"},
+		},
+		{
+			name:   "expiry switch seed row deleted",
+			tamper: "DELETE FROM stream_expiry_switch",
+			want:   []string{"seed_row:stream_expiry_switch"},
+		},
+		{
+			name:   "expiry switch read revoked",
+			tamper: "REVOKE SELECT ON stream_expiry_switch FROM media_indexer",
+			want:   []string{"privilege:media_indexer:stream_expiry_switch:SELECT"},
+		},
+		{
+			// 사이드카가 스위치를 켜지 못한다 — 켜고 끄는 것은 마스터 손 SQL 이다.
+			name:   "expiry switch write granted",
+			tamper: "GRANT UPDATE ON stream_expiry_switch TO media_indexer",
+			want:   []string{"privilege:media_indexer:stream_expiry_switch:UPDATE"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

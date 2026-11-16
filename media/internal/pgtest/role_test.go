@@ -62,7 +62,8 @@ func TestMediaIndexerGrantsMatchREADME(t *testing.T) {
 // 어느 표에도 없다(ENSURE_SCHEMA=false). stream_edge_bounds 넷은 /dvr 하한 원장 몫이다 — ADR-0006 둘째 개정
 // (docs/decisions/2026-11-04-media-indexer-edge-bounds-grants.md · POK-525 설계 3-3)이 더했다. stream_timing_gate 는
 // ADR-0006 개정 뒤에 생긴 1번 소유 표로, PDT 설계 r7 9.3 이 SELECT 하나로 정했다(스위치 · 래치를 사이드카가 바꾸지
-// 못하게 — POK-196).
+// 못하게 — POK-196). stream_expiry_switch 도 같은 꼴의 1번 소유 한 행 표로, SELECT 하나다(POK-551 — 만료 끄기 스위치를
+// 사이드카가 켜지 못하게).
 var mediaIndexerAllowance = map[string][]string{
 	"stream_segments":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"stream_sessions":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
@@ -72,6 +73,7 @@ var mediaIndexerAllowance = map[string][]string{
 	"broadcast_lifecycle_outbox": {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"stream_edge_bounds":         {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"stream_timing_gate":         {"SELECT"},
+	"stream_expiry_switch":       {"SELECT"},
 }
 
 // 권한은 ADR-0006 개정이 표마다 허용한 상한 안에서만 준다 — 목록에 상한 밖 권한(하한 표 쓰기 · TRUNCATE 등)이나

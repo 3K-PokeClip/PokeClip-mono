@@ -22,6 +22,7 @@ import {
   useLiveData,
 } from '@/features/broadcast/livenow/liveDataStore';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
+import type { SessionEvent, Transition } from '@/features/player/rewindSwitch';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -59,12 +60,6 @@ vi.mock('next/navigation', () => ({
 // 영상 주소를 만든 키를 잰다(POK-233) — 실제 구현을 그대로 부르고 받은 키만 적는다
 const mediaCalls = vi.hoisted(() => ({
   keys: [] as (string | null | undefined)[],
-  spans: [] as string[],
-  /**
-   * 녹화 목록의 답. 답이 null이면 묻지 못한 것이다. 정하지 않으면 묻지 못함(null)으로 답한다: 재생 서버 주소가 빈 dev·운영과
-   * 같다. 실제 구현은 부르지 않는다: 그 주소는 셸 환경값으로 정해져 셸에 주소가 있으면 시험이 갈렸다(리뷰 7라운드)
-   */
-  answer: null as Promise<{ startMs: number; durationSeconds: number }[] | null> | null,
   /** 재생 서버 주소가 정해졌나. 시험 환경은 비어 있다 */
   configured: false,
 }));
@@ -78,28 +73,11 @@ vi.mock('@/features/player/mediaSource', async (importOriginal) => {
     },
   };
 });
-vi.mock('@/api/mediaPlayback', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
+vi.mock('@/api/mediaAccess', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/mediaAccess')>();
   return {
     ...actual,
     playbackConfigured: () => mediaCalls.configured,
-    lookupRecordingSpans: (streamId: string) => {
-      mediaCalls.spans.push(streamId);
-      return mediaCalls.answer ?? Promise.resolve(null);
-    },
-  };
-});
-
-// 녹화 줄기를 고른 끝 시각(POK-200 M5 · R42): 세션이 녹화로 닫힐 때 고정한 끝 시각이 같은 키 다음 방송 녹화를 거르는지 잰다
-const timelineUntil = vi.hoisted(() => [] as (number | null)[]);
-vi.mock('@/features/player/recordingTimeline', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/features/player/recordingTimeline')>();
-  return {
-    ...actual,
-    recordingTimeline: (...args: Parameters<typeof actual.recordingTimeline>) => {
-      timelineUntil.push(args[2]);
-      return actual.recordingTimeline(...args);
-    },
   };
 });
 
@@ -174,8 +152,10 @@ vi.mock('@/features/broadcast/livenow/ChatPanel', async (importOriginal) => {
 const playerStatuses = vi.hoisted(() => [] as (string | undefined)[]);
 // 플레이어가 받은 방송 번호 — 사용 통계 「방송마다 한 번」의 기억 키(PR #382 2차 리뷰)
 const playerBroadcastIds = vi.hoisted(() => [] as (string | undefined)[]);
-// 플레이어가 받은 다시보기 소스 둘(POK-546): 회차 다시보기(vod)와 녹화(recorded)를 같이 받으면 몸통이 녹화 축으로 위치를 센다
-const playerSources = vi.hoisted(() => [] as { vod: boolean; recorded: boolean }[]);
+// 플레이어가 받은 회차 다시보기 소스(POK-546) — 받았는지만 적는다
+const playerSources = vi.hoisted(() => [] as { vod: boolean }[]);
+// 플레이어가 받은 받아 둔 자리(startAtSeconds): 다시보기 축이 서기 전에는 넘기지 않는지 잰다(POK-196 c13)
+const playerStartAts = vi.hoisted(() => [] as (number | null)[]);
 // 이 약속이 있는 동안 플레이어가 멈춘다(Suspense) — 재생기 층이 내려간 동안을 잰다(POK-546 K2 (ii))
 const playerSuspend = vi.hoisted(() => ({ promise: null as Promise<void> | null }));
 vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
@@ -187,8 +167,25 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
       if (playerSuspend.promise !== null) throw playerSuspend.promise;
       playerStatuses.push(props.broadcastStatus);
       playerBroadcastIds.push(props.broadcastId);
-      playerSources.push({ vod: Boolean(props.vod), recorded: Boolean(props.recorded) });
+      playerSources.push({ vod: Boolean(props.vod) });
+      playerStartAts.push(props.startAtSeconds ?? null);
       return createElement(actual.GlassPlayer, props);
+    },
+  };
+});
+
+// 재생 세션의 전이를 시험이 고쳐 칠한다(POK-547) — 이 화면 흉내로는 일으키기 어려운 국면(재생이 멎은 다시보기 제안 · 막힘 ·
+// 마지막 확인)을 세운다. 정하지 않으면 원본 그대로다
+const sessionPatch = vi.hoisted(() => ({
+  next: null as ((next: Transition, event: SessionEvent) => Transition) | null,
+}));
+vi.mock('@/features/player/rewindSwitch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/player/rewindSwitch')>();
+  return {
+    ...actual,
+    transition: (...args: Parameters<typeof actual.transition>) => {
+      const next = actual.transition(...args);
+      return sessionPatch.next?.(next, args[1]) ?? next;
     },
   };
 });
@@ -234,6 +231,8 @@ const hlsFake = vi.hoisted(() => ({
   vodMode: false,
   /** 재생기가 읽기 시작한 목록 주소들(loadSource) */
   sources: [] as string[],
+  /** 켜면 재생기의 목록(latestLevelDetails)이 잠시 비었다 — 받은 목록은 있는데 시각 축을 못 읽는 동안(vodMode) */
+  detailsGone: false,
 }));
 /** 재생기가 서는 라이브 끝(영상 초): 영상 끝(지금)에서 2초 뒤다 */
 function liveSyncSeconds(): number {
@@ -256,6 +255,7 @@ vi.mock('hls.js', () => {
       MANIFEST_LOAD_ERROR: 'manifestLoadError',
       LEVEL_LOAD_ERROR: 'levelLoadError',
       AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
+      FRAG_LOAD_ERROR: 'fragLoadError',
     };
     private readonly handlers = new Map<string, (event?: string, data?: unknown) => void>();
     /** 이 재생기가 마지막으로 받은 목록(vodMode) */
@@ -280,6 +280,7 @@ vi.mock('hls.js', () => {
       if (hlsFake.manifest && hlsFake.frags) this.handlers.get('hlsFragLoaded')?.();
     }
     startLoad() {}
+    stopLoad() {}
     recoverMediaError() {}
     destroy() {
       this.destroyed = true;
@@ -288,7 +289,7 @@ vi.mock('hls.js', () => {
       return hlsFake.sync ?? liveSyncSeconds();
     }
     get latestLevelDetails() {
-      if (hlsFake.vodMode) return this.destroyed ? null : this.levelDetails;
+      if (hlsFake.vodMode) return this.destroyed || hlsFake.detailsGone ? null : this.levelDetails;
       if (hlsFake.sliding) {
         const last = Math.floor((Date.now() - MEDIA_ZERO) / 4_000) * 4;
         const fragments = [];
@@ -333,6 +334,8 @@ interface Card {
   evidence: Record<string, unknown> | null;
   eventSeq: number;
   createdAt: string;
+  /** 카드 시점의 플레이어용 PDT(POK-196). 장면이 없으면 null, 옛 clip 이면 칸이 없다 */
+  playerAtMs?: number | null;
 }
 
 function card(id: number, over: Partial<Card>): Card {
@@ -1165,6 +1168,8 @@ beforeEach(() => {
   hlsFake.frags = true;
   hlsFake.levelUpdated = null;
   hlsFake.vodMode = false;
+  hlsFake.detailsGone = false;
+  sessionPatch.next = null;
   hlsFake.sources = [];
   control.stream = null;
   control.round = null;
@@ -1174,8 +1179,8 @@ beforeEach(() => {
   playheadLog.length = 0;
   pastCardLog.length = 0;
   playerSources.length = 0;
+  playerStartAts.length = 0;
   playerSuspend.promise = null;
-  timelineUntil.length = 0;
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
@@ -1183,8 +1188,6 @@ beforeEach(() => {
   // 앞 시험이 단언에서 멈춰도 지난 방송 주소가 다음 시험으로 새지 않는다
   window.history.pushState({}, '', '/');
   mediaCalls.keys = [];
-  mediaCalls.spans = [];
-  mediaCalls.answer = null;
   mediaCalls.configured = false;
   server.markBodies = [];
   server.markReply = null;
@@ -1387,7 +1390,7 @@ function stubVodPlayer() {
 /**
  * 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부 ended)으로 지난 방송을 연다(POK-546). 회차 경로가 round 로 답하고(null 이면
  * 404), listed 면 다시보기 재생기가 첫 목록까지 받는다. 서버 기준점은 기본으로 방송 시작(= 목록 첫 조각)이라 영상 초 = 기준점
- * 축 초다. 녹화 재생 서버도 있고 녹화도 있다 — 녹화 길로 새면 녹화 조회가 잡힌다. configured 를 끄면 재생 서버 주소가 빈
+ * 축 초다. 녹화 재생 서버 주소도 있다 — 녹화 길로 새면 /playback 요청이 잡힌다. configured 를 끄면 재생 서버 주소가 빈
  * 구성(로컬 등)이다. strict 면 개발 서버처럼 StrictMode 로 그린다
  */
 async function openPastVod({
@@ -1407,7 +1410,6 @@ async function openPastVod({
   server.vodChat = true;
   server.vodOrigin = origin;
   mediaCalls.configured = configured;
-  mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
   control.round = round;
   window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
   const result = strict
@@ -1735,6 +1737,29 @@ describe('LiveScreen — 영상 출입증', () => {
     await settle();
     expect(accessCalls()).toBe(before + 1);
     expect(hlsFake.loads).toBe(2);
+  });
+
+  it('라이브 재생기에서 바꾼 소리는 출입증 403 으로 다시 서면 지금처럼 무음 · 70 으로 돌아간다', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    const { container } = await renderLive();
+    fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+    fireEvent.change(screen.getByRole('slider', { name: '볼륨' }), { target: { value: '30' } });
+    const before = container.querySelector('video')!;
+    expect(before.muted).toBe(false);
+
+    reportPlaybackForbidden(STREAM_ID);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+
+    expect(hlsFake.loads).toBe(2);
+    const remounted = container.querySelector('video')!;
+    expect(remounted).not.toBe(before);
+    expect(remounted.muted).toBe(true);
+    expect(remounted.volume).toBeCloseTo(0.7);
   });
 
   it('열기 전 출입증을 못 받으면 영상 자리에 그렇게 알리고, 다시 받으면 연다: 「아직 연결되지 않았어요」는 틀린 말이었다(POK-337)', async () => {
@@ -2160,7 +2185,7 @@ describe('LiveScreen — 영상 출입증', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
-    expect(mediaCalls.spans).toEqual([]);
+    expect(playbackFetches()).toBe(0);
     const before = accessCalls();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3 * 60_000);
@@ -4108,7 +4133,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
 
   /**
    * 회차 다시보기가 있는 지난 방송을 연다(POK-546 — 끝난 뒤 들어온 화면은 녹화 대신 회차 다시보기다). 다시보기는 처음(0초)부터
-   * 서서 첫 timeupdate 를 낸다. spans 는 목록의 PDT 구간이다. 재생 서버 주소도 있다: 녹화 길로 새면 녹화 조회가 잡힌다
+   * 서서 첫 timeupdate 를 낸다. spans 는 목록의 PDT 구간이다. 재생 서버 주소도 있다: 녹화 길로 새면 /playback 요청이 잡힌다
    */
   async function openWithVod(
     spans: { startMs: number; durationSeconds: number }[] = [
@@ -5332,20 +5357,20 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(screen.getByText('다시보기가 없어요')).toBeInTheDocument();
   });
 
-  it('재생 서버가 없는 환경에서는 녹화가 없다고 단정하지 않는다: 영상 서버에 아직 연결되지 않았다', async () => {
-    // dev·운영은 녹화 재생 서버 주소가 비어 있다. 묻지도 않고 끝난 방송마다 「녹화 영상을 찾지 못했어요」라고 했다(리뷰 6라운드).
-    // 녹화 답을 붙들어 두어도 「확인하고 있어요」라 하지 않는다: 물을 곳이 없다
-    mediaCalls.answer = new Promise(() => undefined);
+  it('제어면 주소가 없는 환경에서는 다시보기가 없다고 단정하지 않는다: 영상 서버에 아직 연결되지 않았다(T4-6)', async () => {
+    // 물을 곳이 없는데 끝난 방송마다 「찾지 못했어요」라고 했다(리뷰 6라운드). 명부 답 전 지난 방송 주소도 같다 — 묻지 않는
+    // 화면은 「확인하고 있어요」라 하지 않는다(POK-547 — 녹화 재생 서버 주소가 있어도 녹화를 묻지 않는다)
+    mediaCalls.configured = true;
+    server.listGate = new Promise(() => undefined);
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
     expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
-    expect(screen.queryByText(/녹화 영상을/)).toBeNull();
+    expect(screen.queryByText(/녹화 영상을|확인하고 있어요/)).toBeNull();
   });
 
   it('제어면 주소가 없는 환경에서는 회차 경로도 녹화도 묻지 않는다: 물을 곳이 없다', async () => {
     // 끝난 뒤 들어온 화면은 녹화 대신 회차 경로를 묻는다(POK-546). 제어면 주소가 없으면 그 경로를 만들 수 없다
-    mediaCalls.answer = Promise.resolve(null);
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     await act(async () => {
@@ -5353,23 +5378,36 @@ describe('LiveScreen — 지난 방송 상세', () => {
     });
 
     expect(control.calls).toEqual([]);
-    expect(mediaCalls.spans).toEqual([]);
+    expect(playbackFetches()).toBe(0);
   });
 
-  it('지난 방송 주소는 명부 답 전에도 녹화를 확인하고 있다고 쓴다: 라이브 화면에는 녹화 말이 없다', async () => {
+  it('지난 방송 주소는 명부 답 전에도 다시보기를 확인하고 있다고 쓴다(T4-6 — 제어면 주소가 있을 때)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'http://control.test');
     mediaCalls.configured = true;
     server.listGate = new Promise(() => undefined);
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByText('녹화 영상을 확인하고 있어요')).toBeInTheDocument();
+    expect(screen.getByText('다시보기를 확인하고 있어요')).toBeInTheDocument();
+    expect(screen.queryByText(/녹화 영상을/)).toBeNull();
   });
 
-  it('라이브 화면의 영상 자리에는 녹화를 찾는다는 말이 없다', async () => {
+  it('명부에서 사라진 지난 방송(꺼짐)은 묻지 않으니 「확인하고 있어요」 라 하지 않는다', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'http://control.test');
+    mediaCalls.configured = true;
+    window.history.pushState({}, '', '/broadcast/vod/nope');
+    await renderLive();
+
+    expect(screen.getByText('지난 방송 영상')).toBeInTheDocument();
+    expect(screen.queryByText(/확인하고 있어요|녹화 영상을/)).toBeNull();
+  });
+
+  it('라이브 화면의 영상 자리에는 녹화를 찾는다는 말도 다시보기를 확인한다는 말도 없다', async () => {
     mediaCalls.configured = true;
     await renderLive();
 
     expect(screen.queryByText(/녹화 영상을/)).toBeNull();
+    expect(screen.queryByText('다시보기를 확인하고 있어요')).toBeNull();
   });
 
   it('다시보기가 없다고 확인된 지난 방송에서 카드를 누르면 「다시보기가 없어요」다: 플레이어와 같은 판정이다', async () => {
@@ -6465,6 +6503,55 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
       expect(within(chatPanel()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
     });
   });
+
+  describe('카드 · 핀 이동은 clip 이 준 플레이어용 PDT 로 간다(POK-196 c13)', () => {
+    /** 서버 기준점이 방송 시작보다 181시간 앞선다 — 다른 시험 카드가 그래프 밖으로 빠져 20번 핀이 혼자 선다 */
+    const AHEAD_MS = 181 * 3_600_000;
+    /** 20번 카드 — 방송 4,950초(지금 93초 전). 지금 식 자리는 영상 3,507초다 */
+    const OLD_WAY_SECONDS = (STARTED_AT + 4_950_000 - MEDIA_ZERO) / 1000;
+    /** clip 이 실어 준 플레이어용 PDT — 영상 3,000.4초 자리(목록 PDT 축). 지금 식 자리와 다르다 */
+    const PLAYER_AT_MS = MEDIA_ZERO + 3_000_400;
+    const pdtCard = (playerAtMs: number | null | undefined) =>
+      card(20, {
+        streamTimestampMs: AHEAD_MS + 4_950_000,
+        eventSeq: 200,
+        ...(playerAtMs === undefined ? {} : { playerAtMs }),
+      });
+
+    it('카드 단추를 누르면 플레이어용 PDT 자리로 옮긴다', async () => {
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [pdtCard(PLAYER_AT_MS)];
+      const { container } = await openLive();
+      fireEvent.click(cardThumb(20));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(3_000.4, 3);
+    });
+
+    it('통계 핀을 눌러도 플레이어용 PDT 자리로 옮긴다', async () => {
+      graphWidth();
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [pdtCard(PLAYER_AT_MS)];
+      const { container } = await openLive();
+      fireEvent.click(screen.getByText('#20', { selector: 'button' }));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(3_000.4, 3);
+    });
+
+    it.each([
+      ['장면이 없어 null 로 온 카드', null],
+      ['칸이 없는 옛 clip 카드', undefined],
+    ])('%s 는 지금 식(기준점 + 카드 초)으로 옮긴다', async (_label, playerAtMs) => {
+      server.liveOriginMs = STARTED_AT - AHEAD_MS;
+      server.extraCards = [pdtCard(playerAtMs)];
+      const { container } = await openLive();
+      fireEvent.click(cardThumb(20));
+      await tick(container);
+
+      expect(container.querySelector('video')!.currentTime).toBeCloseTo(OLD_WAY_SECONDS, 3);
+    });
+  });
 });
 
 describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
@@ -6557,51 +6644,55 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     await settle();
     expect(container.querySelector('video')).not.toBeNull();
     expect(screen.queryByRole('heading', { name: '지금은 방송 중이 아니에요' })).toBeNull();
-    expect(mediaCalls.spans).toEqual([]);
+    expect(playbackFetches()).toBe(0);
   });
 
-  it('명부 live 인 채 「녹화 보기」 — 녹화를 한 번 묻고 끝 시각은 이 세션이 본 목록 끝이다 · 같은 키 다른 회차의 폴링 끝은 섞이지 않는다(R42)', async () => {
-    mediaCalls.configured = true;
-    mediaCalls.answer = Promise.resolve([
-      { startMs: MEDIA_ZERO, durationSeconds: 3_600 },
-      // 같은 키로 이어 켠 다음 방송 녹화 — 끝 시각이 있어야 거른다
-      { startMs: NOW + 60_000, durationSeconds: 1_800 },
-    ]);
-    await renderLive();
-    await liveListLoaded();
-    await liveClosed();
-    expect(screen.getByText('방송이 이어지는지 확인하고 있어요')).toBeInTheDocument();
-    // 끝남 대기 동안 같은 키의 다른 회차 B 가 30분 뒤까지의 범위를 열 번 준다
-    control.stream = readyLive(DVR_B, NOW + 60_000, NOW + 30 * 60_000);
-    for (let i = 0; i < 10; i += 1) {
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
-      });
-    }
-    await settle();
-    const loadsBefore = hlsFake.loads;
-    fireEvent.click(screen.getByRole('button', { name: '녹화 보기' }));
-    await settle();
-    expect(mediaCalls.spans).toHaveLength(1);
-    expect(timelineUntil.at(-1)).toBe(NOW);
-    // 닫힌 라이브로 다시 붙지 않는다 · 세션이 다시 열리지 않는다
+  /** 회차별 경로의 다시보기 답(B — 이 회차의 /vod 목록 · 라이브 영상 0초부터 지금까지) */
+  const bVodUrl = `http://control.test/vod/${STREAM_ID}/${STREAM_ID}/index.m3u8`;
+  function bRoundVod() {
+    return {
+      ready: true,
+      mode: 'vod',
+      url: bVodUrl,
+      firstPdt: new Date(MEDIA_ZERO).toISOString(),
+      headPdt: new Date(NOW).toISOString(),
+    };
+  }
+
+  async function advance(ms: number) {
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(ms);
     });
     await settle();
-    expect(hlsFake.loads).toBe(loadsBefore);
-    expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
-  });
+  }
 
-  /** 라이브 세션이 끝남 대기 뒤 「녹화 보기」로 녹화로 닫힌다(B — 세션을 연 화면). 명부는 아직 live 다 */
-  async function closeToRecording(spans: { startMs: number; durationSeconds: number }[]) {
+  /** 라이브 목록이 끝 표시(ENDLIST)를 실었다 — 아직 보는 끝남 대기(atEnd:false)에 든다 */
+  async function liveEndlisted() {
+    const start = liveEndSeconds() - LIVE_WINDOW_SECONDS;
+    await act(async () => {
+      hlsFake.levelUpdated?.('hlsLevelUpdated', {
+        details: {
+          fragments: [
+            { start, duration: LIVE_WINDOW_SECONDS, programDateTime: MEDIA_ZERO + start * 1000 },
+          ],
+          targetduration: 4,
+          live: false,
+        },
+      });
+    });
+    await settle();
+  }
+
+  /**
+   * 라이브 세션(B — 세션을 연 화면)이 끝남 대기(끝에 닿음)에 든다. 명부는 아직 live 다. 녹화 재생 서버 주소도 있다 — 녹화 길로
+   * 새면 /playback 요청이 잡힌다
+   */
+  async function endingAtEnd() {
     mediaCalls.configured = true;
-    mediaCalls.answer = Promise.resolve(spans);
     const view = await renderLive();
     await liveListLoaded();
     await liveClosed();
-    fireEvent.click(screen.getByRole('button', { name: '녹화 보기' }));
-    await settle();
+    expect(screen.getByText('방송이 이어지는지 확인하고 있어요')).toBeInTheDocument();
     return view;
   }
 
@@ -6629,29 +6720,183 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     expect(hlsFake.loads).toBe(loadsBefore);
   });
 
-  it('B — 세션이 녹화로 닫힌 화면에서 카드를 누르면 녹화가 그 자리로 옮긴다(지금 녹화 길)', async () => {
-    const { container } = await closeToRecording([{ startMs: MEDIA_ZERO, durationSeconds: 3_600 }]);
-    expect(container.querySelector('video')?.getAttribute('src') ?? '').toContain('/playback/');
+  /** 끝남 대기가 회차별 답(round)으로 닫힌다 — 끝에 닿은 시청자의 종국(POK-547). 명부는 아직 live 다 */
+  async function closeToPast(round: Record<string, unknown> | null = roundNotReady('ended')) {
+    const view = await endingAtEnd();
+    control.round = round;
+    await advance(10_000);
+    return view;
+  }
 
-    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
-    fireEvent.click(cardThumb(1));
-    await settle();
+  /**
+   * 아직 보는 시청자가 회차별 ended 로 「끝에서 닫기」 를 정한 뒤 끝에 닿아 닫힌다(T1-2 화면 몫). 닫히기 전에 회차 답을 next
+   * 로 바꾼다 — 닫힌 뒤 지난 방송 판정의 첫 물음이 그 답을 받는다
+   */
+  async function closeToPastAtEnd(next: Record<string, unknown> | null) {
+    mediaCalls.configured = true;
+    const view = await renderLive();
+    await liveListLoaded();
+    await liveEndlisted();
+    control.round = roundNotReady('ended');
+    await advance(10_000);
+    // 끝에서 닫기로 정했다 — 덮개 없이 끝까지 본다
+    expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+    control.round = next;
+    await liveClosed();
+    return view;
+  }
 
-    expect(screen.queryByText(/영상은 아직 없어요|녹화 영상이 없어요|다시보기/)).toBeNull();
+  /** 지난 방송 판정으로 넘어간 화면의 공통 관측 — 덮개가 내리고 녹화를 묻지 않으며 닫힌 라이브로 다시 붙지 않는다 */
+  async function expectClosedToPast(loadsBefore: number) {
+    expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+    expect(screen.queryByRole('button', { name: '녹화 보기' })).toBeNull();
+    await advance(20_000);
+    expect(playbackFetches()).toBe(0);
+    expect(hlsFake.loads).toBe(loadsBefore);
+    expect(playerStatuses.at(-1)).toBe('ended');
+  }
+
+  describe('T4-1 끝남 대기 종국 → 세션을 닫고 지난 방송 판정으로 — /playback 0 · 라이브 재부착 0(POK-547)', () => {
+    const finals: Array<[string, Record<string, unknown> | null, number, string]> = [
+      ['회차별 ended', roundNotReady('ended'), 10_000, '다시보기가 없어요'],
+      ['재접속 대기(360초) 뒤 회차별 404', null, 370_000, '다시보기가 없어요'],
+      [
+        '20분 시한',
+        roundNotReady('ending'),
+        20 * 60_000,
+        '다시보기를 준비하고 있어요. 준비되면 여기서 틀어요',
+      ],
+    ];
+
+    it.each(finals)('%s → 닫고 지난 방송 판정의 안내를 띄운다', async (_, round, waitMs, note) => {
+      await endingAtEnd();
+      control.round = round;
+      const loadsBefore = hlsFake.loads;
+      await advance(waitMs);
+      expect(screen.getByText('지난 방송 영상')).toBeInTheDocument();
+      expect(screen.getByText(note)).toBeInTheDocument();
+      await expectClosedToPast(loadsBefore);
+    });
+
+    it('아직 보는 시청자는 끝에서 닫기로 정한 동안 덮개 · 녹화 길이 없고 끝에 닿으면 닫는다(T1-2)', async () => {
+      await closeToPastAtEnd(roundNotReady('ended'));
+      const loadsBefore = hlsFake.loads;
+      expect(screen.getByText('다시보기가 없어요')).toBeInTheDocument();
+      await expectClosedToPast(loadsBefore);
+    });
   });
 
-  it('B — 세션이 녹화로 닫혔는데 녹화가 없으면 카드는 「녹화 영상이 없어요」다(지금 녹화 길의 알림)', async () => {
-    await closeToRecording([]);
+  it('명부 live 인 채 같은 키 다른 회차의 폴링이 열 번 와도 섞이지 않고 · 재접속 대기 뒤 404 로 닫는다 — 원점은 끝남 대기를 연 때(R42 · T4-2)', async () => {
+    await endingAtEnd();
+    const t0 = Date.now();
+    // 끝남 대기 동안 같은 키의 다른 회차 B 가 30분 뒤까지의 범위를 열 번 준다 · 회차별 경로는 404(모르는 회차)다
+    control.stream = readyLive(DVR_B, NOW + 60_000, NOW + 30 * 60_000);
+    control.round = null;
+    for (let i = 0; i < 10; i += 1) await advance(10_000);
+    // 100초 — 재접속 대기(360초) 안이라 아직 닫지 않는다
+    expect(screen.getByText('방송이 이어지는지 확인하고 있어요')).toBeInTheDocument();
+    const loadsBefore = hlsFake.loads;
+    await advance(t0 + 360_000 - Date.now() + 10_000);
+    // 명부 endedAt 이 없어 원점은 끝남 대기를 연 때(t0)다 — 360초를 한 번 더 기다리지 않고 첫 답에서 곧바로 없음이다
+    expect(screen.getByText('다시보기가 없어요')).toBeInTheDocument();
+    expect(screen.queryByText('다시보기를 확인하고 있어요')).toBeNull();
+    await expectClosedToPast(loadsBefore);
+    // 세션이 다시 열리지 않는다
+    expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+  });
+
+  it('T4-2 명부가 끝남 대기 중 ended 로 답했으면 원점은 명부 endedAt 이다 — 끝남 대기를 연 때가 아니다', async () => {
+    await endingAtEnd();
+    control.round = null;
+    // 재접속 대기 끝 무렵 명부가 ended 로 답한다(endedAt = 그 답의 시각)
+    await advance(290_000);
+    server.liveEnded = true;
+    await advance(80_000);
+    // 세션은 재접속 대기 뒤 404 로 닫혔다. endedAt 에서는 아직 360초가 안 지나 확인 중이다
+    expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+    expect(screen.getByText('다시보기를 확인하고 있어요')).toBeInTheDocument();
+    expect(playbackFetches()).toBe(0);
+  });
+
+  it('T4-3 닫힌 뒤 다시보기를 준비하는 동안 묻기를 이어 가다 서면 그 자리에서 VOD 재생기로 튼다 · 카드는 그 재생기로 간다', async () => {
+    stubVodPlayer();
+    const { container } = await closeToPastAtEnd(roundNotReady('ending'));
+    expect(
+      screen.getByText('다시보기를 준비하고 있어요. 준비되면 여기서 틀어요'),
+    ).toBeInTheDocument();
+    expect(lastPastCard()?.kind).toBe('blocked');
+
+    control.round = bRoundVod();
+    await nextRoundPoll();
+    await vodListed(vodList(MEDIA_ZERO, NOW));
+    expect(playerSources.at(-1)?.vod).toBe(true);
+    expect(hlsFake.sources.at(-1)).toBe(bVodUrl);
+    expect(screen.queryByText(/다시보기를 준비하고 있어요/)).toBeNull();
+    expect(lastPastCard()?.kind).toBe('playable');
+
+    // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562) — 1번 카드는 다시보기 축 60초다
+    fireEvent.click(cardThumb(1));
+    await settle();
+    expect(container.querySelector('video')?.currentTime).toBeCloseTo(60, 0);
+    expect(
+      screen.queryByText(/영상은 아직 없어요|녹화 영상이 없어요|그 시점으로 옮기지 못했어요/),
+    ).toBeNull();
+    expect(playbackFetches()).toBe(0);
+  });
+
+  // 끝남 대기가 닫힌 화면(B)의 회차 다시보기도 목록 PDT 축이라 카드에 실린 플레이어용 PDT 로 옮긴다(POK-196 · POK-547)
+  describe('B 닫힌 화면의 회차 다시보기도 카드를 플레이어용 PDT 로 옮긴다(POK-196)', () => {
+    /** 1번 카드(60초)에 카드 초와 동떨어진 플레이어용 PDT(영상 1,234초 자리)를 싣는다 */
+    const PLAYER_AT_MS = MEDIA_ZERO + 1_234_000;
+
+    it('다시보기가 선 뒤 누르면 플레이어용 PDT 자리(1,234초)로 옮긴다', async () => {
+      stubVodPlayer();
+      server.extraCards = [card(11, { streamTimestampMs: 60_000, playerAtMs: PLAYER_AT_MS })];
+      const { container } = await closeToPastAtEnd(bRoundVod());
+      await vodListed(vodList(MEDIA_ZERO, NOW));
+      expect(lastPastCard()?.kind).toBe('playable');
+
+      fireEvent.click(cardThumb(11));
+      await settle();
+
+      expect(container.querySelector('video')?.currentTime).toBeCloseTo(1_234, 3);
+    });
+
+    it('다시보기를 확인하는 동안 받아 둔 카드도 서면 플레이어용 PDT 자리부터다 · 축이 서기 전에는 넘기지 않는다', async () => {
+      stubVodPlayer();
+      server.extraCards = [card(11, { streamTimestampMs: 60_000, playerAtMs: PLAYER_AT_MS })];
+      const { container } = await endingAtEnd();
+      control.round = null;
+      await advance(290_000);
+      server.liveEnded = true;
+      await advance(80_000);
+      expect(lastPastCard()?.kind).toBe('waiting');
+
+      fireEvent.click(cardThumb(11));
+      await settle();
+      expect(playerStartAts.at(-1)).toBeNull();
+
+      control.round = bRoundVod();
+      await nextRoundPoll();
+      await vodListed(vodList(MEDIA_ZERO, NOW));
+
+      expect(container.querySelector('video')?.currentTime).toBeCloseTo(1_234, 3);
+    });
+  });
+
+  it('T4-4 닫힌 화면(명부 live)에서 다시보기가 없으면 카드는 「다시보기가 없어요」 다 — 녹화 길의 알림이 아니다', async () => {
+    await closeToPast();
+    expect(screen.getAllByText(/^다시보기가 없어요/)).toHaveLength(1);
 
     // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
     fireEvent.click(cardThumb(4));
     await settle();
 
-    expect(screen.getByText('녹화 영상이 없어요')).toBeInTheDocument();
-    expect(screen.queryByText(/다시보기/)).toBeNull();
+    expect(screen.getAllByText(/^다시보기가 없어요/)).toHaveLength(2);
+    expect(screen.queryByText(/녹화 영상이 없어요|영상은 아직 없어요/)).toBeNull();
   });
 
-  it('새 동작 — 라이브 · 세션이 열린 채 ended · 녹화로 닫힌 화면 모두 재생기 층이 정한 카드 갈래는 notPast 다', async () => {
+  it('새 동작 — 라이브 · 세션이 열린 채 ended 화면의 카드 갈래는 notPast 다', async () => {
     await renderLive();
     await liveListLoaded();
     expect(lastPastCard()).toEqual({ phase: null, kind: 'notPast', reason: null });
@@ -6664,22 +6909,94 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     expect(lastPastCard()).toEqual({ phase: null, kind: 'notPast', reason: null });
   });
 
-  it('새 동작 — 녹화로 닫힌 화면(B)의 카드 갈래도 notPast 다', async () => {
-    await closeToRecording([{ startMs: MEDIA_ZERO, durationSeconds: 3_600 }]);
+  // 의도 반대(POK-547): 녹화로 닫힌 화면은 notPast 였다. past 로 닫힌 화면은 지난 방송 판정을 쓴다
+  it('새 동작 — past 로 닫힌 화면(B)의 카드 갈래는 지난 방송 판정이다(다시보기 없음 = blocked none)', async () => {
+    await closeToPast();
 
-    expect(lastPastCard()).toEqual({ phase: null, kind: 'notPast', reason: null });
+    expect(lastPastCard()).toEqual({ phase: null, kind: 'blocked', reason: 'none' });
   });
 
-  it('녹화로 닫힌 화면(B)에서 영상 키가 바뀌고 명부가 live 면 기준점 칸을 비운다(K3 — 옛 녹화의 기준점이 남지 않는다)', async () => {
-    await closeToRecording([{ startMs: MEDIA_ZERO, durationSeconds: 3_600 }]);
-    expect(timeBaseLog.at(-1)).not.toBeNull();
+  it('past 로 닫혀 다시보기를 튼 화면(B)에서 영상 키가 바뀌고 명부가 live 면 기준점 칸을 비운다 — 옛 다시보기의 기준점이 남지 않는다', async () => {
+    stubVodPlayer();
+    await closeToPastAtEnd(bRoundVod());
+    await vodListed(vodList(MEDIA_ZERO, NOW));
+    expect(timeBaseLog.at(-1)).toBe(MEDIA_ZERO);
 
     server.ingest = 'key-late';
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(31_000);
-    });
-    await settle();
+    await advance(31_000);
     expect(timeBaseLog.at(-1)).toBeNull();
+  });
+
+  it('T4-5 명부 ended 인 B 가 끝에 닿아 past 로 닫혀 다시보기를 확인하는 동안 채팅 기다림을 닫힌 때부터 다시 센다 — 마지막 메시지를 먼저 보이지 않는다', async () => {
+    mediaCalls.configured = true;
+    await renderLive();
+    await liveListLoaded();
+    await liveEndlisted();
+    control.round = roundNotReady('ended');
+    await advance(10_000);
+    server.liveEnded = true;
+    await advance(61_000);
+    expect(chatModes.at(-1)).toBe('ended');
+    // 회차 답이 아직 없다(mode null) — 닫힌 뒤 지난 방송 판정은 확인 중이다
+    control.round = roundNotReady(null);
+
+    await liveClosed();
+
+    expect(screen.getByText('다시보기를 확인하고 있어요')).toBeInTheDocument();
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+    await advance(9_999);
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+    await advance(1);
+    expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
+  });
+
+  it('T4-7 닫힌 뒤 명부가 live → ended 로 바뀌어도 판정을 처음부터 다시 하지 않고 재생기를 다시 붙이지 않는다 · 채팅은 지난 방송이다', async () => {
+    await closeToPast();
+    expect(chatModes.at(-1)).toBe('live');
+    const roundAsks = () => control.calls.filter((p) => p.includes('/rounds/')).length;
+    const asksBefore = roundAsks();
+    const loadsBefore = hlsFake.loads;
+
+    server.liveEnded = true;
+    await advance(61_000);
+    expect(chatModes.at(-1)).toBe('ended');
+    expect(screen.getByText('다시보기가 없어요')).toBeInTheDocument();
+    expect(screen.queryByText('다시보기를 확인하고 있어요')).toBeNull();
+    expect(roundAsks()).toBe(asksBefore);
+    expect(hlsFake.loads).toBe(loadsBefore);
+    expect(playbackFetches()).toBe(0);
+  });
+
+  it('T4-8 끝남 대기 덮개는 제안이 없으면 단추가 없고 · 같은 회차의 새 url 이 오면 「라이브 보기」 를 둔다', async () => {
+    await endingAtEnd();
+    expect(screen.queryByRole('button', { name: '녹화 보기' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '라이브 보기' })).toBeNull();
+
+    control.stream = readyLive(DVR_B, NOW + 60_000, NOW + 120_000);
+    await advance(10_000);
+    expect(screen.getByRole('button', { name: '라이브 보기' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '녹화 보기' })).toBeNull();
+  });
+
+  it('T4-6 past 가 아닌 사유(left)로 닫힌 뒤 명부 ended 인 화면(묻지 않는 끝난 방송)은 「확인하고 있어요」 라 하지 않는다', async () => {
+    // 고정 화면의 「새 방송 보기」 는 세션을 left 로 닫고 같은 방송|영상 키로 다시 열지 않는다(R56)
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    await endingAtEnd();
+    server.liveStream2 = true;
+    control.stream = readyLive(DVR_B, NOW + 60_000, NOW + 120_000);
+    await advance(10_000);
+    fireEvent.click(screen.getByRole('button', { name: '새 방송 보기' }));
+    await settle();
+    expect(routerPush).toHaveBeenCalledWith('/broadcast/livenow?stream=live-2');
+    server.liveStream2 = false;
+    server.liveEnded = true;
+    await advance(61_000);
+
+    expect(screen.getByText('지난 방송 영상')).toBeInTheDocument();
+    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    expect(screen.queryByText(/확인하고 있어요/)).toBeNull();
+    expect(playbackFetches()).toBe(0);
   });
 
   it('끝남 대기 중 같은 방송이 이어지면(이어짐 증거) 사람 조작 없이 라이브를 다시 세운다(R21 · R53)', async () => {
@@ -6772,6 +7089,592 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     expect(hlsFake.loads).toBeGreaterThan(loadsBefore);
     expect(screen.queryByText(OUT_OF_RANGE)).toBeNull();
   });
+
+  // 「다시보기 보기」 넘김(POK-547) — 단추를 누르면 세션을 past 로 닫고, 같은 화면의 지난 방송 재생기(VOD)가 세션이 확인한
+  // 다시보기를 묻지 않고 곧바로 세워 끝에 닿았으면 처음부터 · 아니면 보던 자리부터 튼다. 명부는 정산 중이라 live 다(그래야 닫힌 뒤
+  // 세션을 다시 여는 결함이 드러난다)
+  describe('다시보기 보기 → 지난 방송 재생기(POK-547)', () => {
+    const roundAsks = () => control.calls.filter((p) => p.includes('/rounds/')).length;
+    const streamAsks = () =>
+      control.calls.filter((p) => p === `/api/streams/${STREAM_ID}/rewind`).length;
+    const videoAt = (container: HTMLElement) => container.querySelector('video')?.currentTime;
+    /** 2번 카드(다시보기 축 120초) · 4번 카드(2 842초) */
+    const CARD2_S = 120;
+    const CARD4_S = 2_842;
+    const fullVod = () => vodList(MEDIA_ZERO, NOW);
+
+    /** 다시보기 제안이 서면 멈춘 그대로 선 제안(held)으로 칠한다 — 막힘 · 마지막 확인을 화면으로 일으키지 않고 */
+    function stopOffer(stopped: 'held') {
+      sessionPatch.next = (next) => {
+        const { phase } = next.state;
+        if (phase.kind !== 'vod-offered' || phase.stopped !== null) return next;
+        return { ...next, state: { ...next.state, phase: { ...phase, stopped } } };
+      };
+    }
+
+    /** 끝남 대기를 막힌 끝남 대기로 칠한다 — 시한에 닫히면 단추 없이 멈춘 자리를 넘긴다 */
+    function blockEnding() {
+      sessionPatch.next = (next) => {
+        const { phase } = next.state;
+        if (phase.kind !== 'ending-wait' || phase.blocked === true || phase.closeOnEnd) return next;
+        return { ...next, state: { ...next.state, phase: { ...phase, blocked: true } } };
+      };
+    }
+
+    /** 끝에서 닫기로 정한 끝남 대기를 마지막 확인으로 칠한다 — 다음 회차 답 하나로 끝난다 */
+    function finalCheckOnDecide() {
+      sessionPatch.next = (next) => {
+        const { phase } = next.state;
+        if (phase.kind !== 'ending-wait' || !phase.closeOnEnd || phase.finalCheck) return next;
+        return { ...next, state: { ...next.state, phase: { ...phase, finalCheck: true } } };
+      };
+    }
+
+    /** 라이브 세션(B)을 세우고 라이브 끝 10초 앞을 본다. 보던 자리(영상 초 — 영상 0초 = MEDIA_ZERO)를 돌려준다 */
+    async function watching() {
+      stubVodPlayer();
+      const view = await renderLive();
+      await liveListLoaded();
+      const watchS = Math.round(liveEndSeconds() - 10);
+      await playTo(view.container, watchS);
+      await advance(1_000);
+      return { ...view, watchS };
+    }
+
+    /** 보던 중 ENDLIST → 회차 vod 로 다시보기 제안. tag = 띠(SPAN) · 덮개(P) */
+    async function offered(tag: 'SPAN' | 'P' = 'SPAN') {
+      const view = await watching();
+      control.round = bRoundVod();
+      await liveEndlisted();
+      await advance(10_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe(tag);
+      expect(screen.getByRole('button', { name: '다시보기 보기' })).toBeInTheDocument();
+      return view;
+    }
+
+    async function press() {
+      fireEvent.click(screen.getByRole('button', { name: '다시보기 보기' }));
+      await settle();
+    }
+
+    /** 되감기 재생기로 보던 자리(영상 초 — 되감기 목록 · 다시보기 모두 영상 0초 = MEDIA_ZERO) */
+    const REWIND_WATCH_S = 2_000;
+
+    /**
+     * 되감기 재생기로 REWIND_WATCH_S 를 보던 중 ENDLIST → 회차 vod 로 선 다시보기 제안(띠 단추). 영상 노드는 그 자리에서 받아
+     * 둔 영상이 0.3초 남은 재생 중 꼴이다(jsdom 에는 미디어 구현이 없어 값을 세운다)
+     */
+    async function rewindOffered() {
+      stubVodPlayer();
+      control.stream = readyLive(DVR_A, MEDIA_ZERO, NOW);
+      const view = await renderLive();
+      await liveListLoaded();
+      fireEvent.click(cardThumb(4));
+      await settle();
+      expect(hlsFake.sources.at(-1)).toBe(DVR_A);
+      await vodListed({ ...vodList(MEDIA_ZERO, NOW), live: true });
+      await playTo(view.container, REWIND_WATCH_S);
+      await advance(1_000);
+      control.round = bRoundVod();
+      await vodListed(vodList(MEDIA_ZERO, NOW));
+      await advance(10_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('SPAN');
+      const video = view.container.querySelector('video')!;
+      const media: Array<[string, unknown]> = [
+        ['paused', false],
+        ['seeking', false],
+        ['error', null],
+        ['buffered', { length: 1, start: () => 0, end: () => REWIND_WATCH_S + 0.3 }],
+      ];
+      for (const [key, value] of media) {
+        Object.defineProperty(video, key, { get: () => value, configurable: true });
+      }
+      return { ...view, video };
+    }
+
+    /** 지금 되감기 재생기가 /dvr 영상 조각 404 를 받았다 — hls.js 가 앱에 올리는 꼴 */
+    async function rewindSegmentGone() {
+      await act(async () => {
+        hlsFake.error?.('hlsError', {
+          type: 'networkError',
+          details: 'fragLoadError',
+          fatal: false,
+          frag: { type: 'main', sn: 7, initSegment: { url: `${DVR_A}/init.mp4` } },
+          response: { url: `${DVR_A}/seg7.mp4`, code: 404 },
+        });
+      });
+      await settle();
+    }
+
+    /** 되감기 재생기가 마지막 위치(REWIND_WATCH_S)를 알린 뒤 더 나아가 멎은 자리(영상 초) */
+    const DRAINED_S = REWIND_WATCH_S + 30;
+
+    /**
+     * 받기를 멈춘 되감기 재생기가 받은 버퍼를 다 틀고 멎는다 — 이어 틀 데이터 없음 · waiting · 정체. 멎은 자리(DRAINED_S)는 마지막
+     * 위치와 다르다: 재생 위치에 그림이 없어(readyState 1) 위치를 더 알리지 않는 채 재생 시각만 나아가 있다
+     */
+    async function drainedOffer() {
+      const view = await rewindOffered();
+      hlsFake.readyState = 1;
+      let atSeconds = DRAINED_S;
+      Object.defineProperty(view.video, 'currentTime', {
+        get: () => atSeconds,
+        set: (seconds: number) => {
+          atSeconds = seconds;
+        },
+        configurable: true,
+      });
+      Object.defineProperty(view.video, 'buffered', {
+        get: () => ({ length: 1, start: () => 0, end: () => DRAINED_S + 0.3 }),
+        configurable: true,
+      });
+      await rewindSegmentGone();
+      await act(async () => {
+        view.video.dispatchEvent(new Event('waiting'));
+      });
+      await advance(2_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('P');
+      return view;
+    }
+
+    /**
+     * 명부 ended 인 채 열린 세션의 재생기가 다시 서고(출입증 403 회복) 첫 목록 전에 카드를 누른다 — 재생기가 옮기지 못해 그
+     * 시점을 받아 둔다. 출입증을 받는 곳이어야 한다(server.playback = 'grant' 를 그리기 전에)
+     */
+    async function staleCard(id: number) {
+      server.liveEnded = true;
+      await advance(61_000);
+      reportPlaybackForbidden(STREAM_ID);
+      await advance(60_000);
+      fireEvent.click(cardThumb(id));
+      await settle();
+    }
+
+    it('띠 단추 → 세션 재생기를 내리고 VOD 재생기를 곧바로 세워(다시 묻지 않음) 보던 자리에서 튼다', async () => {
+      const { container, watchS } = await offered();
+      const asksBefore = roundAsks();
+      const sourcesBefore = hlsFake.sources.length;
+
+      await press();
+
+      expect(screen.queryByText('다시보기를 확인하고 있어요')).toBeNull();
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(hlsFake.sources.slice(sourcesBefore)).toEqual([bVodUrl]);
+      expect(roundAsks()).toBe(asksBefore);
+      await vodListed(fullVod());
+      expect(videoAt(container)).toBeCloseTo(watchS, 0);
+      await advance(20_000);
+      expect(roundAsks()).toBe(asksBefore);
+    });
+
+    it('띠 단추 → 세션 재생기에서 바꾼 소리(켬 · 음량 30)를 새로 선 VOD 재생기가 이어받는다', async () => {
+      const { container } = await offered();
+      const sessionVideo = container.querySelector('video')!;
+      act(() => {
+        sessionVideo.muted = false;
+        sessionVideo.volume = 0.3;
+      });
+
+      await press();
+      await vodListed(fullVod());
+
+      const vodVideo = container.querySelector('video')!;
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(vodVideo).not.toBe(sessionVideo);
+      expect(vodVideo.muted).toBe(false);
+      expect(vodVideo.volume).toBeCloseTo(0.3);
+      expect(screen.getByRole('slider', { name: '볼륨' })).toHaveValue('30');
+    });
+
+    it('끝 덮개 단추 → 보던 자리가 있어도 처음부터 튼다(시작 자리를 옮기지 않는다)', async () => {
+      const { container } = await watching();
+      control.round = bRoundVod();
+      await liveClosed();
+      await advance(10_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('P');
+
+      await press();
+      await vodListed(fullVod());
+
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(videoAt(container)).toBe(0);
+    });
+
+    it('서버 기준점이 다시보기 첫 조각과 달라도 넘긴 자리(PDT)에서 튼다', async () => {
+      server.liveOriginMs = STARTED_AT;
+      const { container, watchS } = await offered();
+      await press();
+      await vodListed(fullVod());
+      expect(videoAt(container)).toBeCloseTo(watchS, 0);
+    });
+
+    it('되감기로 제안 중 조각 404 → 세션 재생기 그대로 받은 버퍼를 튼다 → 멎으면 덮개 단추 → 누르면 멎은 자리에서 VOD', async () => {
+      const { container } = await rewindOffered();
+      const sourcesBefore = hlsFake.sources.length;
+
+      await rewindSegmentGone();
+      expect(playerSources.at(-1)?.vod).toBe(false);
+      expect(hlsFake.sources).toHaveLength(sourcesBefore);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('SPAN');
+
+      hlsFake.readyState = 2;
+      await act(async () => {
+        container.querySelector('video')?.dispatchEvent(new Event('waiting'));
+      });
+      await advance(2_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('P');
+      expect(playerSources.at(-1)?.vod).toBe(false);
+
+      hlsFake.readyState = 4;
+      await press();
+      await vodListed(fullVod());
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(hlsFake.sources.at(-1)).toBe(bVodUrl);
+      expect(videoAt(container)).toBeCloseTo(REWIND_WATCH_S, 0);
+    });
+
+    it('녹화가 끝난 회차를 되감아 보다 녹화 끝 3초 안에 들어도 채팅은 그 자리를 따른다 — 명부가 live 여도 최신 채팅으로 바꾸지 않는다', async () => {
+      const { container } = await rewindOffered();
+      const chat = () => screen.getByRole('complementary', { name: '실시간 채팅' });
+      expect(within(chat()).getByText(/시점까지 보는 중/)).toBeInTheDocument();
+
+      await playTo(container, (NOW - MEDIA_ZERO) / 1000 - 1);
+      await advance(1_000);
+
+      expect(within(chat()).getByText(/시점까지 보는 중/)).toBeInTheDocument();
+      expect(within(chat()).queryByText(/^최신 메시지 따라가는 중/)).toBeNull();
+    });
+
+    it('받은 버퍼를 다 틀고 멎은 제안의 덮개 단추 → 마지막으로 알린 위치가 아니라 멎은 자리에서 VOD', async () => {
+      const { container } = await drainedOffer();
+
+      hlsFake.readyState = 4;
+      await press();
+      await vodListed(fullVod());
+
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(videoAt(container)).toBeCloseTo(DRAINED_S, 0);
+    });
+
+    const closings: Array<[string, () => Promise<void>, boolean]> = [
+      [
+        '띠 단추',
+        async () => {
+          await offered();
+          await press();
+        },
+        true,
+      ],
+      [
+        '받은 버퍼를 다 틀고 멎은 제안의 덮개 단추(drained)',
+        async () => {
+          await drainedOffer();
+          await press();
+        },
+        true,
+      ],
+      [
+        '멈춘 그대로 선 제안의 덮개 단추(held)',
+        async () => {
+          stopOffer('held');
+          await offered('P');
+          await press();
+        },
+        true,
+      ],
+      [
+        '마지막 확인의 비 vod 답',
+        async () => {
+          finalCheckOnDecide();
+          await watching();
+          control.round = roundNotReady('ended');
+          await liveEndlisted();
+          await advance(10_000);
+        },
+        false,
+      ],
+      [
+        '회차별 ended',
+        async () => {
+          await closeToPast(roundNotReady('ended'));
+        },
+        false,
+      ],
+      [
+        '20분 시한',
+        async () => {
+          await endingAtEnd();
+          control.round = roundNotReady('ending');
+          await advance(20 * 60_000);
+        },
+        false,
+      ],
+      [
+        '끝에서 닫기로 정한 뒤 끝 도달',
+        async () => {
+          await closeToPastAtEnd(roundNotReady('ended'));
+        },
+        false,
+      ],
+    ];
+
+    it.each(closings)(
+      '%s → 같은 그리기에서 지난 방송 판정 · 라이브 주소를 다시 붙이지 않고 세션을 다시 열지 않는다',
+      async (_, close, vod) => {
+        const sourcesBefore = hlsFake.sources.length;
+        await close();
+        expect(playerStatuses.at(-1)).toBe('ended');
+        expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+        const streamsAfter = streamAsks();
+        const sourcesAfter = hlsFake.sources.length;
+        await advance(20_000);
+        expect(streamAsks()).toBe(streamsAfter);
+        expect(hlsFake.sources).toHaveLength(sourcesAfter);
+        if (vod) {
+          expect(playerSources.at(-1)?.vod).toBe(true);
+          expect(hlsFake.sources.at(-1)).toBe(bVodUrl);
+        } else {
+          expect(hlsFake.sources.slice(sourcesBefore)).not.toContain(bVodUrl);
+        }
+      },
+    );
+
+    it('넘긴 자리를 적용한 뒤 출입증 403 으로 다시 서면 처음부터다 — 넘긴 자리를 다시 쓰지 않고 소리는 넘긴 값이다', async () => {
+      server.playback = 'grant';
+      const { container, watchS } = await offered();
+      const sessionVideo = container.querySelector('video')!;
+      act(() => {
+        sessionVideo.muted = false;
+        sessionVideo.volume = 0.3;
+      });
+      await press();
+      await vodListed(fullVod());
+      expect(videoAt(container)).toBeCloseTo(watchS, 0);
+      const sourcesBefore = hlsFake.sources.length;
+
+      reportPlaybackForbidden(STREAM_ID);
+      await advance(60_000);
+      await vodListed(fullVod());
+
+      expect(hlsFake.sources.length).toBeGreaterThan(sourcesBefore);
+      expect(videoAt(container)).toBe(0);
+      const remounted = container.querySelector('video')!;
+      expect(remounted.muted).toBe(false);
+      expect(remounted.volume).toBeCloseTo(0.3);
+    });
+
+    /** 넘긴 자리 뒤 조각 하나의 시각 표시(PDT)가 빠진 다시보기 목록 — 재생기가 넘긴 자리를 영상 시각으로 바꾸지 못한다 */
+    function vodMissingPdtAfterHandoff() {
+      const list = fullVod();
+      const missing = list.fragments.length - 2;
+      return {
+        ...list,
+        fragments: list.fragments.map((frag, i) =>
+          i === missing ? { ...frag, programDateTime: null } : frag,
+        ),
+      };
+    }
+
+    it('넘긴 자리로 옮기지 못한 채 시작을 적용했어도 그 자리는 비운다 — 출입증 403 으로 다시 서면 처음부터다', async () => {
+      server.playback = 'grant';
+      const { container } = await offered();
+      await press();
+      await vodListed(vodMissingPdtAfterHandoff());
+      const sourcesBefore = hlsFake.sources.length;
+
+      reportPlaybackForbidden(STREAM_ID);
+      await advance(60_000);
+      await vodListed(fullVod());
+
+      expect(hlsFake.sources.length).toBeGreaterThan(sourcesBefore);
+      expect(videoAt(container)).toBe(0);
+    });
+
+    /** 세션 재생기에서 소리를 켜고 음량 30 으로 보다가 띠 단추로 넘겼다 — VOD 재생기가 첫 목록까지 받는다 */
+    async function handedLoud30() {
+      server.playback = 'grant';
+      const view = await offered();
+      const sessionVideo = view.container.querySelector('video')!;
+      act(() => {
+        sessionVideo.muted = false;
+        sessionVideo.volume = 0.3;
+      });
+      await press();
+      await vodListed(fullVod());
+      return view;
+    }
+
+    /** 출입증 403 으로 VOD 재생기가 다시 선다(첫 목록까지) — 다시 선 영상 노드를 돌려준다 */
+    async function remountByForbidden(container: HTMLElement) {
+      const before = container.querySelector('video');
+      reportPlaybackForbidden(STREAM_ID);
+      await advance(60_000);
+      await vodListed(fullVod());
+      const remounted = container.querySelector('video')!;
+      expect(remounted).not.toBe(before);
+      return remounted;
+    }
+
+    it('넘긴 뒤 다시보기에서 음소거하면 출입증 403 으로 다시 서도 음소거다', async () => {
+      const { container } = await handedLoud30();
+      fireEvent.click(screen.getByRole('button', { name: '음소거' }));
+      expect(container.querySelector('video')!.muted).toBe(true);
+
+      const remounted = await remountByForbidden(container);
+
+      expect(remounted.muted).toBe(true);
+      expect(remounted.volume).toBeCloseTo(0.3);
+      expect(screen.getByRole('button', { name: '음소거 해제' })).toBeInTheDocument();
+    });
+
+    it('넘긴 뒤 다시보기에서 음량을 30 에서 50 으로 올리면 출입증 403 으로 다시 서도 50 이다', async () => {
+      const { container } = await handedLoud30();
+      fireEvent.change(screen.getByRole('slider', { name: '볼륨' }), { target: { value: '50' } });
+
+      const remounted = await remountByForbidden(container);
+
+      expect(remounted.muted).toBe(false);
+      expect(remounted.volume).toBeCloseTo(0.5);
+      expect(screen.getByRole('slider', { name: '볼륨' })).toHaveValue('50');
+    });
+
+    it('명부 ended 인 채 멈춘 그대로 선 제안(held)에서 누른 카드 Y 는 단추가 이긴다 — 멈춘 자리에서 튼다', async () => {
+      stopOffer('held');
+      const view = await watching();
+      server.liveEnded = true;
+      await advance(61_000);
+      control.round = bRoundVod();
+      await liveEndlisted();
+      await advance(10_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('P');
+      fireEvent.click(cardThumb(2));
+      await settle();
+      // 멈춘 재생기는 카드를 옮겼다고 답한다(세션이 시크를 받지 않는다) — 못 옮겼다는 알림이 없고 받아 두지도 않는다
+      expect(screen.queryByText(/영상은 아직 없어요|그 시점으로 옮기지 못했어요/)).toBeNull();
+
+      await press();
+      await vodListed(fullVod());
+
+      expect(videoAt(view.container)).toBeCloseTo(view.watchS, 0);
+    });
+
+    it('단추 없이 닫힌 화면(막힌 채 20분)은 세션 중 받아 둔 카드 Y 가 넘긴 자리를 이긴다', async () => {
+      server.playback = 'grant';
+      const { container } = await watching();
+      await staleCard(2);
+      blockEnding();
+      control.round = roundNotReady('ending');
+      await liveEndlisted();
+      await advance(20 * 60_000 + 10_000);
+      expect(
+        screen.getByText('다시보기를 준비하고 있어요. 준비되면 여기서 틀어요'),
+      ).toBeInTheDocument();
+
+      control.round = bRoundVod();
+      await nextRoundPoll();
+      await vodListed(fullVod());
+
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(videoAt(container)).toBeCloseTo(CARD2_S, 0);
+    });
+
+    it('단추 없이 닫힌 화면(막힌 채 20분)에서 플레이어용 PDT 를 실은 받아 둔 카드 Y 도 넘긴 자리를 이긴다 — 그 PDT 자리에서 튼다', async () => {
+      // 1번 카드(60초)에 카드 초와 동떨어진 플레이어용 PDT(영상 1,234초 자리)를 싣는다
+      server.extraCards = [
+        card(11, { streamTimestampMs: 60_000, playerAtMs: MEDIA_ZERO + 1_234_000 }),
+      ];
+      server.playback = 'grant';
+      const { container } = await watching();
+      await staleCard(11);
+      blockEnding();
+      control.round = roundNotReady('ending');
+      await liveEndlisted();
+      await advance(20 * 60_000 + 10_000);
+      expect(
+        screen.getByText('다시보기를 준비하고 있어요. 준비되면 여기서 틀어요'),
+      ).toBeInTheDocument();
+
+      control.round = bRoundVod();
+      await nextRoundPoll();
+      await vodListed(fullVod());
+
+      expect(playerSources.at(-1)?.vod).toBe(true);
+      expect(videoAt(container)).toBeCloseTo(1_234, 0);
+    });
+
+    it('세션 중 받아 둔 낡은 카드 + 끝 덮개 단추 → 처음부터 — 낡은 카드로 가지 않는다', async () => {
+      server.playback = 'grant';
+      const { container } = await watching();
+      await staleCard(2);
+      control.round = bRoundVod();
+      await liveClosed();
+      await advance(10_000);
+      expect(screen.getByText('다시보기 준비됨').tagName).toBe('P');
+
+      await press();
+      await vodListed(fullVod());
+
+      expect(videoAt(container)).toBe(0);
+    });
+
+    it('세션 중 받아 둔 낡은 카드 + 띠 단추 → 보던 자리 — 낡은 카드로 가지 않는다', async () => {
+      server.playback = 'grant';
+      const { container } = await watching();
+      await staleCard(2);
+      await liveListLoaded();
+      const watchS = Math.round(liveEndSeconds() - 10);
+      await playTo(container, watchS);
+      await advance(1_000);
+      control.round = bRoundVod();
+      await liveEndlisted();
+      await advance(10_000);
+
+      await press();
+      // 재생기가 다시 서는 동안 2분이 흘러 보던 자리가 NOW 뒤다 — 다시보기 목록도 지금까지다
+      await vodListed(vodList(MEDIA_ZERO, Date.now()));
+
+      expect(videoAt(container)).toBeCloseTo(watchS, 0);
+    });
+
+    it('단추 뒤 첫 목록 전에 누른 카드 Z 는 넘긴 자리를 이긴다', async () => {
+      const { container } = await offered();
+      await press();
+      fireEvent.click(cardThumb(4));
+      await settle();
+      await vodListed(fullVod());
+      expect(videoAt(container)).toBeCloseTo(CARD4_S, 0);
+    });
+
+    it('넘긴 자리를 적용한 뒤 카드 Z 로 옮기면 목록이 다시 와도 Z 에 남는다', async () => {
+      const { container, watchS } = await offered();
+      await press();
+      await vodListed(fullVod());
+      expect(videoAt(container)).toBeCloseTo(watchS, 0);
+      fireEvent.click(cardThumb(4));
+      await settle();
+      expect(videoAt(container)).toBeCloseTo(CARD4_S, 0);
+
+      await vodListed(vodList(MEDIA_ZERO, NOW + 4_000));
+
+      expect(videoAt(container)).toBeCloseTo(CARD4_S, 0);
+    });
+
+    it('시각 축을 잠시 못 읽어 넘긴 자리를 못 적용한 동안 카드 Z 로 옮기면 넘긴 자리를 버린다 — 목록이 다시 와도 Z', async () => {
+      const { container } = await offered();
+      await press();
+      hlsFake.detailsGone = true;
+      await vodListed(fullVod());
+      expect(videoAt(container)).toBe(0);
+      hlsFake.detailsGone = false;
+      fireEvent.click(cardThumb(4));
+      await settle();
+      expect(videoAt(container)).toBeCloseTo(CARD4_S, 0);
+
+      await vodListed(vodList(MEDIA_ZERO, NOW + 4_000));
+
+      expect(videoAt(container)).toBeCloseTo(CARD4_S, 0);
+    });
+  });
 });
 
 // 끝난 뒤 들어온 화면(A — 세션을 연 적 없이 명부가 ended 인 화면)의 회차 다시보기(POK-546). 회차 경로 답이 vod ∧ ready 일 때만
@@ -6807,7 +7710,6 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
         const { container } = await openPastVod({ round, listed: round?.ready === true });
 
         expect(control.calls).toContain(`/api/streams/${VOD_ID}/rounds/${VOD_ID}/rewind`);
-        expect(mediaCalls.spans).toEqual([]);
         expect(playbackFetches()).toBe(0);
         expect(videoOf(container)?.getAttribute('src') ?? '').not.toContain('/playback/');
         expect(hlsFake.sources).toEqual(round !== null && round.ready ? [VOD_LIST_URL] : []);
@@ -6815,13 +7717,12 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
     );
 
     /**
-     * 세션을 연 적 없는 끝난 방송을 라이브 주소(?stream=)로 연다. 재생 서버도 있고 녹화도 있다 — 녹화 길로 새면 녹화 조회가
+     * 세션을 연 적 없는 끝난 방송을 라이브 주소(?stream=)로 연다. 재생 서버 주소도 있다 — 녹화 길로 새면 /playback 요청이
      * 잡힌다. 대시보드 A 는 라이브를 보다 끝난 화면인데, 시험이 제어면 주소를 방송이 끝난 뒤에야 넣는 인공 구성이다: 방송 중에
      * 제어면 주소가 있으면 재생 세션을 열어 세션을 연 화면(B)이 된다
      */
     async function openEndedByStream(entry: 'stream' | 'dashboard') {
       mediaCalls.configured = true;
-      mediaCalls.answer = Promise.resolve([{ startMs: STARTED_AT, durationSeconds: 5_100 }]);
       nav.search = `?stream=${STREAM_ID}`;
       window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
       if (entry === 'stream') {
@@ -6858,7 +7759,6 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       // 끝난 뒤 들어온 화면(A)이다 — 세션을 연 화면(B) · 라이브는 지금 길(notPast)이다
       expect(lastPastCard()?.kind).not.toBe('notPast');
       expect(control.calls).toContain(`/api/streams/${STREAM_ID}/rounds/${STREAM_ID}/rewind`);
-      expect(mediaCalls.spans).toEqual([]);
       expect(playbackFetches()).toBe(0);
       expect(videoOf(container)?.getAttribute('src') ?? '').not.toContain('/playback/');
       expect(hlsFake.sources).toEqual(round !== null && round.ready ? [VOD_LIST_URL] : []);
@@ -6869,7 +7769,6 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'http://control.test');
       hlsFake.vodMode = true;
       mediaCalls.configured = true;
-      mediaCalls.answer = Promise.resolve([{ startMs: STARTED_AT, durationSeconds: 5_100 }]);
       server.liveEnded = true;
       control.round = roundVod(STARTED_AT, NOW);
       nav.search = `?stream=${STREAM_ID}`;
@@ -6879,7 +7778,7 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
 
       expect(control.calls).toContain(`/api/streams/${STREAM_ID}/rounds/${STREAM_ID}/rewind`);
       expect(hlsFake.sources).toContain(VOD_LIST_URL);
-      expect(mediaCalls.spans).toEqual([]);
+      expect(playbackFetches()).toBe(0);
     });
   });
 
@@ -6962,7 +7861,7 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       });
       await settle();
       expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
-      expect(mediaCalls.spans).toEqual([]);
+      expect(playbackFetches()).toBe(0);
     });
 
     // 보관 기간이 지난 방송(410)은 설계 3절 표대로 채팅이 지금 그대로다: 재생 서버 주소가 없는 구성(로컬 등)이면 곧바로 방송
@@ -6985,7 +7884,7 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
         });
         await settle();
         expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
-        expect(mediaCalls.spans).toEqual([]);
+        expect(playbackFetches()).toBe(0);
       },
     );
 
@@ -7021,7 +7920,7 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
 
       expect(screen.getByText(/^0:00:08 시점까지 보는 중/)).toBeInTheDocument();
       expect(screen.getByText('5초 채팅')).toBeInTheDocument();
-      expect(mediaCalls.spans).toEqual([]);
+      expect(playbackFetches()).toBe(0);
     });
 
     // 재생 서버 주소가 없는 구성(로컬 등)에서도 기다림은 재생 서버 주소가 아니라 끝난 뒤 들어온 화면의 다시보기 상태로
@@ -7032,7 +7931,7 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
 
       await playTo(container, 8.4);
       expect(screen.getByText(/^0:00:08 시점까지 보는 중/)).toBeInTheDocument();
-      expect(mediaCalls.spans).toEqual([]);
+      expect(playbackFetches()).toBe(0);
     });
   });
 
@@ -7139,7 +8038,7 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       server.playbackTtlMs = 5 * 60_000 + 30_000;
       await openPastVod();
       expect(timeBaseLog.at(-1)).toBe(VOD_STARTED);
-      expect(mediaCalls.spans).toEqual([]);
+      expect(playbackFetches()).toBe(0);
 
       server.playback = 'expired';
       await act(async () => {
@@ -7174,7 +8073,6 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       stubMediaElement();
       server.vodChat = true;
       mediaCalls.configured = true;
-      mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
       if (entry === 'vod') {
         window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
         await renderLive();
@@ -7192,7 +8090,7 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
       expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
       expect(control.calls).toEqual([]);
-      expect(mediaCalls.spans).toEqual([]);
+      expect(playbackFetches()).toBe(0);
       // 기준점이 없어 카드 시각을 숨기므로 제목으로 고른다(POK-562)
       fireEvent.click(cardThumb(4));
       await settle();
@@ -7222,6 +8120,73 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
       await vodListed();
       expect(hlsFake.sources).toEqual([VOD_LIST_URL, VOD_LIST_URL]);
       expect(videoAt(container)).toBe(0);
+    });
+  });
+
+  describe('다시보기 재생기의 소리 — 처음엔 기본값 · 바꾼 뒤 다시 서면 그 값(POK-547)', () => {
+    /** 출입증 403 으로 다시보기 재생기가 다시 선다 — 다시 선 영상 노드를 돌려준다 */
+    async function remountByForbidden(container: HTMLElement) {
+      const before = videoOf(container);
+      reportPlaybackForbidden(VOD_ID);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await settle();
+      await vodListed();
+      const remounted = videoOf(container)!;
+      expect(remounted).not.toBe(before);
+      return remounted;
+    }
+
+    it('처음 선 다시보기는 무음 · 70 이고, 화면을 떠났다 다시 들어오면 바꾼 소리를 잊고 무음 · 70 이다', async () => {
+      const first = await openPastVod();
+      const video = videoOf(first.container)!;
+      expect(video.muted).toBe(true);
+      expect(video.volume).toBeCloseTo(0.7);
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+      expect(video.muted).toBe(false);
+
+      first.unmount();
+      const again = await renderLive();
+      await vodListed();
+
+      const fresh = videoOf(again.container)!;
+      expect(fresh.muted).toBe(true);
+      expect(fresh.volume).toBeCloseTo(0.7);
+    });
+
+    it('소리를 켠 뒤 출입증 403 으로 다시 서면 켠 그대로 선다', async () => {
+      server.playback = 'grant';
+      const { container } = await openPastVod();
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+
+      const remounted = await remountByForbidden(container);
+
+      expect(remounted.muted).toBe(false);
+      expect(remounted.volume).toBeCloseTo(0.7);
+      expect(screen.getByRole('button', { name: '음소거' })).toBeInTheDocument();
+    });
+
+    it('소리를 켠 뒤 다시 선 재생기의 첫 재생을 브라우저가 막으면 무음으로 한 번 더 튼다', async () => {
+      server.playback = 'grant';
+      const { container } = await openPastVod();
+      fireEvent.click(screen.getByRole('button', { name: '음소거 해제' }));
+      vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const mutedAtPlay: boolean[] = [];
+      vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (
+        this: HTMLMediaElement,
+      ) {
+        mutedAtPlay.push(this.muted);
+        return mutedAtPlay.length === 1
+          ? Promise.reject(new DOMException('play() 거절', 'NotAllowedError'))
+          : Promise.resolve();
+      });
+
+      const remounted = await remountByForbidden(container);
+
+      expect(mutedAtPlay).toEqual([false, true]);
+      expect(remounted.muted).toBe(true);
+      expect(remounted.volume).toBeCloseTo(0.7);
     });
   });
 
@@ -7528,13 +8493,104 @@ describe('LiveScreen: 끝난 뒤 들어온 화면의 회차 다시보기(POK-546
     });
   });
 
-  describe('L1 · L5 다시보기 소스와 카드 추가 축', () => {
-    it('끝난 뒤 들어온 화면은 회차 다시보기만 넘기고 녹화를 같이 넘기지 않는다', async () => {
-      await openPastVod();
+  describe('카드 · 마크 이동은 clip 이 준 플레이어용 PDT 로 간다(POK-196 c13)', () => {
+    /** 20번 카드 — 방송 2,000초. 지금 식 자리는 다시보기 축 2,000초다 */
+    const CARD_S = 2_000;
+    /** clip 이 실어 준 플레이어용 PDT — 방송 시작 2,003.2초(판 NULL 꼴로 지금 식과 3.2초 다르다) */
+    const PLAYER_AT_MS = VOD_STARTED + 2_003_200;
+    const pdtCard = () =>
+      card(20, { streamTimestampMs: CARD_S * 1000, eventSeq: 200, playerAtMs: PLAYER_AT_MS });
 
-      const withVod = playerSources.filter((p) => p.vod);
-      expect(withVod.length).toBeGreaterThan(0);
-      expect(withVod.every((p) => !p.recorded)).toBe(true);
+    it('playable — 카드를 누르면 그 시각으로 바로 옮긴다', async () => {
+      server.extraCards = [pdtCard()];
+      const { container } = await openPastVod();
+      expect(lastPastCard()?.kind).toBe('playable');
+
+      fireEvent.click(cardThumb(20));
+      await settle();
+
+      expect(videoAt(container)).toBeCloseTo(2_003.2, 3);
+    });
+
+    it('waiting — 서버 기준점이 없고 첫 PDT 가 방송 시작보다 1.37초 늦어도 다시보기가 서면 그 시각이다 · 축이 서기 전에는 넘기지 않는다', async () => {
+      // 받아 두는 동안 기준점(cardBase)은 방송 시작이고, 다시보기 축 0초는 첫 PDT 다 — 둘이 다르다
+      const first = VOD_STARTED + 1_370;
+      server.extraCards = [pdtCard()];
+      const { container } = await openPastVod({
+        origin: null,
+        round: roundNotReady(null),
+        listed: false,
+      });
+      expect(lastPastCard()?.kind).toBe('waiting');
+
+      fireEvent.click(cardThumb(20));
+      await settle();
+      expect(screen.getByText(WAITING_NOTICE)).toBeInTheDocument();
+      expect(playerStartAts.at(-1)).toBeNull();
+
+      control.round = roundVod(first);
+      await nextRoundPoll();
+      await vodListed(vodList(first));
+
+      expect(videoAt(container)).toBeCloseTo((PLAYER_AT_MS - first) / 1000, 3);
+    });
+
+    it('주소의 카드(?card=)로 들어와도 그 시각에서 시작한다', async () => {
+      server.extraCards = [pdtCard()];
+      nav.search = '?card=20';
+      const { container } = await openPastVod();
+
+      expect(videoAt(container)).toBeCloseTo(2_003.2, 3);
+    });
+
+    it('명부 답 전(notPast)에 받아 둔 카드도 끝난 뒤 들어온 화면으로 밝혀지면 그 시각에서 시작한다(PK2)', async () => {
+      stubVodPlayer();
+      server.vodOrigin = VOD_STARTED;
+      server.extraCards = [pdtCard()];
+      control.round = roundVod();
+      let release: () => void = () => undefined;
+      server.listGate = new Promise((resolve) => {
+        release = resolve;
+      });
+      nav.search = `?stream=${VOD_ID}`;
+      window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
+      const { container } = renderWithProviders(
+        <StrictMode>
+          <LiveScreen />
+        </StrictMode>,
+      );
+      await settle();
+      expect(lastPastCard()?.kind).toBe('notPast');
+
+      fireEvent.click(cardThumb(20));
+      await act(async () => {
+        release();
+      });
+      await settle();
+      await vodListed();
+
+      expect(videoAt(container)).toBeCloseTo(2_003.2, 3);
+    });
+
+    it('마크 답이 가까운 앞 카드(200)면 그 카드의 플레이어용 PDT 로 옮긴다', async () => {
+      const { container } = await openPastVod();
+      await playTo(container, 610);
+      server.markReply = {
+        status: 200,
+        body: {
+          ...card(7, { source: 'hotkey', score: null, evidence: null, eventSeq: 70 }),
+          streamId: VOD_ID,
+          streamTimestampMs: 600_000,
+          window: { startMs: 560_000, endMs: 620_000 },
+          playerAtMs: VOD_STARTED + 603_200,
+        },
+      };
+
+      fireEvent.click(screen.getByRole('button', { name: '이 시점 카드 추가' }));
+      await settle();
+
+      expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+      expect(videoAt(container)).toBeCloseTo(603.2, 3);
     });
   });
 });

@@ -1,164 +1,103 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRecipe, fetchBroadcast, type BroadcastRow, type JumpCard } from '@/api/clipEditor';
-import { lookupRecordingSpans } from '@/api/mediaPlayback';
-import { ensurePlaybackAccess } from '@/api/playbackAccess';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { CUT_MAX_MS, CUT_MIN_MS, createRecipe, type JumpCard } from '@/api/clipEditor';
+import { CardNeedsEditorError } from './cardDraftErrors';
 import { cardFromList } from './prefetchCardEditor';
 import { outputsFor } from './recipeLook';
-import { CardDraftNotReadyError, cardDraftDocument, saveCardDraft } from './saveCardDraft';
+import { cardDraftDocument, saveCardDraft } from './saveCardDraft';
 import { initialRecipe } from './useClipEditorMockState';
 
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/clipEditor')>()),
   createRecipe: vi.fn(),
-  fetchBroadcast: vi.fn(),
-}));
-vi.mock('@/api/mediaPlayback', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/api/mediaPlayback')>()),
-  lookupRecordingSpans: vi.fn(),
-}));
-vi.mock('@/api/playbackAccess', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/api/playbackAccess')>()),
-  ensurePlaybackAccess: vi.fn(),
-  isPlaybackExpired: vi.fn(() => false),
 }));
 vi.mock('./prefetchCardEditor', () => ({ cardFromList: vi.fn() }));
 
-const BASE = Date.parse('2026-11-04T01:00:00Z');
+// 카드 바로 저장(POK-473 E7 · 설계 prw2 3.4) — 편집기를 열지 않으니 고름 · 머리가 없다. clip 이 준 창 두 끝(playerWindow)만
+// 저장 값이고, 칸이 없거나 null 이면 「편집기에서 열기」(CardNeedsEditorError)로 대신한다. 녹화 재생 서버(/playback)는 부르지 않는다.
+
+const PDT = Date.parse('2026-11-04T01:00:00Z');
 
 describe('cardDraftDocument: 카드에서 바로 저장하는 편집본', () => {
-  it('편집기를 카드에서 처음 연 것과 같다: 카드 구간 · 처음 모양 · 첫 소리 트랙', () => {
-    const doc = cardDraftDocument('S-1', BASE, { startMs: 40_000, endMs: 100_000 });
+  it('편집기를 카드에서 처음 연 것과 같다: 받은 컷 · 처음 모양 · 첫 소리 트랙', () => {
+    const doc = cardDraftDocument('S-1', { inMs: PDT + 40_000, outMs: PDT + 100_000 });
     expect(doc).toEqual({
       schemaVersion: 2,
       streamId: 'S-1',
-      cut: { inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 },
+      cut: { inAtMs: PDT + 40_000, outAtMs: PDT + 100_000 },
       outputs: outputsFor(initialRecipe({ startSeconds: 40, endSeconds: 100 }), null),
       audio: { tracks: [{ trackId: 0, gain: 1 }] },
     });
     // 자막은 편집기가 만들지 않는다: 칸을 뺀다(계약6 생략 = 자막 없음)
     expect('subtitles' in doc).toBe(false);
   });
-
-  it('5초보다 짧으면 뒤를 늘리고 3분보다 길면 뒤를 자른다 — 저장 문이 그 밖을 거절한다', () => {
-    expect(cardDraftDocument('S-1', BASE, { startMs: 0, endMs: 2_000 }).cut).toEqual({
-      inAtMs: BASE,
-      outAtMs: BASE + 5_000,
-    });
-    expect(cardDraftDocument('S-1', BASE, { startMs: 0, endMs: 600_000 }).cut).toEqual({
-      inAtMs: BASE,
-      outAtMs: BASE + 180_000,
-    });
-  });
 });
 
 describe('saveCardDraft', () => {
-  const card = { id: 23, window: { startMs: 40_000, endMs: 100_000 } } as unknown as JumpCard;
-  /** 서버 기준점이 있는 방송(지금 서버) — 기준점 = BASE */
-  const broadcast = {
-    streamId: 'S-1',
-    startedAt: '2026-11-04T00:59:30Z',
-    endedAt: null,
-    timelineOriginAt: '2026-11-04T01:00:00Z',
-  } as BroadcastRow;
-  /** 서버 기준점이 없는 방송(조각이 아직 없거나 옛 서버) */
-  const noOrigin = { ...broadcast, timelineOriginAt: null } as BroadcastRow;
-  const ended = { ...noOrigin, endedAt: '2026-11-04T02:00:00Z' } as BroadcastRow;
-  const startedAtMs = Date.parse('2026-11-04T00:59:30Z');
+  /** 판 NULL 카드 — clip 의 창 두 끝은 카드 창(기준점 + window)과 수 초 다르다(래칫) */
+  const PLAYER_WINDOW = { startMs: PDT + 43_217, endMs: PDT + 103_901 };
+  const cardWith = (playerWindow: unknown) =>
+    ({
+      id: 23,
+      window: { startMs: 40_000, endMs: 100_000 },
+      ...(playerWindow === undefined ? {} : { playerWindow }),
+    }) as unknown as JumpCard;
   const savedCut = () => vi.mocked(createRecipe).mock.calls[0]![1].cut;
+  let fetchSpy: MockInstance<typeof fetch>;
 
   beforeEach(() => {
     vi.mocked(createRecipe)
       .mockReset()
       .mockResolvedValue({ id: 31 } as never);
-    vi.mocked(lookupRecordingSpans).mockReset();
-    vi.mocked(cardFromList).mockResolvedValue(card);
-    vi.mocked(fetchBroadcast).mockResolvedValue(broadcast);
-    // 출입증이 필요 없는 재생 서버(로컬) — 녹화 목록은 lookupRecordingSpans 목이 답한다
-    vi.mocked(ensurePlaybackAccess).mockReset().mockReturnValue(null);
+    vi.mocked(cardFromList).mockResolvedValue(cardWith(PLAYER_WINDOW));
+    fetchSpy = vi.spyOn(globalThis, 'fetch');
   });
 
-  it('카드 번호를 출처로 실어 편집본을 만든다(서버 기준점이 있으면 녹화가 없어도 그 기준점)', async () => {
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it('clip 이 준 창 두 끝(playerWindow) 그대로 카드 번호를 출처로 실어 편집본을 만든다', async () => {
     await expect(saveCardDraft('S-1', '23')).resolves.toEqual({ id: 31 });
+
     const [streamId, , sourceCardId] = vi.mocked(createRecipe).mock.calls[0]!;
     expect(streamId).toBe('S-1');
     expect(sourceCardId).toBe('23');
-    expect(savedCut()).toEqual({ inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 });
+    expect(savedCut()).toEqual({ inAtMs: PDT + 43_217, outAtMs: PDT + 103_901 });
   });
 
-  it('기준점 없는 방송 줄만 새로 읽고, 기준점이 찬 줄은 기억해 둔 것을 쓴다', async () => {
+  it('녹화 재생 서버(/playback)를 부르지 않는다 — 기준점 · 녹화 목록을 묻지 않는다', async () => {
     await saveCardDraft('S-1', '23');
-    const [streamId, , options] = vi.mocked(fetchBroadcast).mock.lastCall!;
-    expect(streamId).toBe('S-1');
-    const fresh = options?.fresh as (row: BroadcastRow) => boolean;
-    // 기준점 없는 줄을 20초 동안 다시 쓰는 사이 녹화가 생기면 녹화 시작이 기준점이 되어 서버 기준점과 어긋난다
-    expect(fresh(noOrigin)).toBe(true);
-    // 기준점이 찬 줄은 더 바뀌지 않는다 — 끝난 옛 방송을 다시 읽으려 지난 방송 목록을 여러 쪽 넘기지 않는다
-    expect(fresh(broadcast)).toBe(false);
+
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.includes('/playback'))).toEqual([]);
   });
 
-  it('서버 기준점이 있으면 녹화를 묻지 않는다 — 녹화 읽기 실패(출입증 등)가 저장을 막지 않게', async () => {
-    vi.mocked(ensurePlaybackAccess).mockReturnValue(Promise.resolve({ kind: 'failed' }));
-    await expect(saveCardDraft('S-1', '23')).resolves.toEqual({ id: 31 });
-    expect(ensurePlaybackAccess).not.toHaveBeenCalled();
-    expect(lookupRecordingSpans).not.toHaveBeenCalled();
-    expect(savedCut()).toEqual({ inAtMs: BASE + 40_000, outAtMs: BASE + 100_000 });
+  it.each([
+    ['null(장면 없음)', null],
+    ['칸 없음(옛 clip)', undefined],
+  ])(
+    'playerWindow %s — 편집기에서 범위를 정하라고 던지고 카드 창으로 대신 저장하지 않는다',
+    async (_label, playerWindow) => {
+      vi.mocked(cardFromList).mockResolvedValue(cardWith(playerWindow));
+
+      await expect(saveCardDraft('S-1', '23')).rejects.toBeInstanceOf(CardNeedsEditorError);
+      expect(createRecipe).not.toHaveBeenCalled();
+    },
+  );
+
+  it('창 길이가 5–180초 밖이면 몰래 늘리거나 자르지 않고 편집기에서 정하라고 던진다', async () => {
+    for (const length of [CUT_MIN_MS - 1, CUT_MAX_MS + 1]) {
+      vi.mocked(cardFromList).mockResolvedValue(cardWith({ startMs: PDT, endMs: PDT + length }));
+      await expect(saveCardDraft('S-1', '23')).rejects.toBeInstanceOf(CardNeedsEditorError);
+    }
+    expect(createRecipe).not.toHaveBeenCalled();
   });
 
-  it('카드가 없거나 시작 안 한 방송이면 저장하지 않고 던진다', async () => {
+  it('카드가 없으면 저장하지 않고 던진다', async () => {
     vi.mocked(cardFromList).mockResolvedValueOnce(null);
-    await expect(saveCardDraft('S-1', '99')).rejects.toThrow();
-    vi.mocked(fetchBroadcast).mockResolvedValueOnce({ ...broadcast, startedAt: null });
-    await expect(saveCardDraft('S-1', '23')).rejects.toThrow();
+
+    await expect(saveCardDraft('S-1', '99')).rejects.toThrow('card 99 not found');
     expect(createRecipe).not.toHaveBeenCalled();
-  });
-
-  it('서버 기준점이 없는 끝난 방송에서 영상 출입증을 못 받으면 저장하지 않는다', async () => {
-    vi.mocked(fetchBroadcast).mockResolvedValue(ended);
-    vi.mocked(ensurePlaybackAccess).mockReturnValue(Promise.resolve({ kind: 'failed' }));
-    await expect(saveCardDraft('S-1', '23')).rejects.toThrow('출입증');
-    expect(lookupRecordingSpans).not.toHaveBeenCalled();
-    expect(createRecipe).not.toHaveBeenCalled();
-  });
-
-  it('방송 중 서버 기준점도 녹화도 없으면(조각 0개) 기다리게 한다 — 방송 시작으로 물러난 구간을 저장하지 않는다', async () => {
-    vi.mocked(fetchBroadcast).mockResolvedValue(noOrigin);
-    await expect(saveCardDraft('S-1', '23')).rejects.toBeInstanceOf(CardDraftNotReadyError);
-    expect(createRecipe).not.toHaveBeenCalled();
-  });
-
-  it('방송 중 서버 기준점이 없으면 녹화가 있어도 기다리게 한다 — 서버 기준점(pdt − pts)은 녹화 시작과 다를 수 있다', async () => {
-    vi.mocked(fetchBroadcast).mockResolvedValue(noOrigin);
-    vi.mocked(lookupRecordingSpans).mockResolvedValue([
-      { startMs: BASE + 5_000, durationSeconds: 600 },
-    ]);
-    await expect(saveCardDraft('S-1', '23')).rejects.toBeInstanceOf(CardDraftNotReadyError);
-    expect(lookupRecordingSpans).not.toHaveBeenCalled();
-    expect(createRecipe).not.toHaveBeenCalled();
-  });
-
-  it('끝난 방송에서 녹화 목록 묻기가 실패하면(편집기는 「녹화 없음」으로 접는다) 저장하지 않는다', async () => {
-    vi.mocked(fetchBroadcast).mockResolvedValue(ended);
-    vi.mocked(lookupRecordingSpans).mockResolvedValue(null);
-    await expect(saveCardDraft('S-1', '23')).rejects.toThrow('recording lookup failed');
-    expect(createRecipe).not.toHaveBeenCalled();
-  });
-
-  it('끝난 방송에 녹화가 정말 없으면 방송 시작이 기준점이다(편집기도 그렇게 연다)', async () => {
-    vi.mocked(fetchBroadcast).mockResolvedValue(ended);
-    vi.mocked(lookupRecordingSpans).mockResolvedValue([]);
-    await saveCardDraft('S-1', '23');
-    expect(savedCut()).toEqual({ inAtMs: startedAtMs + 40_000, outAtMs: startedAtMs + 100_000 });
-    // 녹화 목록은 한 번만 묻는다: 「없음」을 다시 확인하려 같은 목록을 또 묻지 않는다(실패면 두 배 기다렸다)
-    expect(lookupRecordingSpans).toHaveBeenCalledTimes(1);
-  });
-
-  it('끝난 방송에 녹화가 있으면 방금 물은 목록의 녹화 시작이 기준점이다', async () => {
-    vi.mocked(fetchBroadcast).mockResolvedValue(ended);
-    vi.mocked(lookupRecordingSpans).mockResolvedValue([
-      { startMs: BASE + 5_000, durationSeconds: 600 },
-    ]);
-    await saveCardDraft('S-1', '23');
-    expect(savedCut()).toEqual({ inAtMs: BASE + 45_000, outAtMs: BASE + 105_000 });
   });
 
   it('저장을 시작한 세션이 바뀌었으면 서버에 보내지 않는다 — 다른 계정 이름으로 편집본이 생기지 않게', async () => {

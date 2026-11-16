@@ -526,6 +526,7 @@ run "public_services_unchanged_by_chat" {
         COLLECTOR_BASE_URL       = "http://chat-collector.pokeclip.internal:8083"
         CORS_ALLOWED_ORIGINS     = "https://app.pokeclip.com"
         DB_HOST                  = "db.example.invalid"
+        FORWARD_HEADERS_STRATEGY = "native"
         MEDIA_BASE_URL           = "https://media.pokeclip.com"
         PLAYBACK_COOKIE_DOMAIN   = ".pokeclip.com"
         PLAYBACK_REQUIRED        = "true"

@@ -1,7 +1,8 @@
 # prod Media 상자(설계 3-1 의 ⑨ · 3-3-1 · 5-3 · 5-5). Graviton EC2 · Media SG 와
-# 짝 규칙(RDS ← Media · auth ← Media · 로드밸런서 → Media) · 인스턴스 역할 ·
-# 대상 등록은 modules/media_host 가 만든다. 이 루트는 앞 루트 출력과 이미지
-# 참조를 잇는다. auth 짝은 kty 결정 2026-10-25 (나)로 이 루트 몫이다.
+# 짝 규칙(RDS ← Media · auth ← Media · clip ← Media · 로드밸런서 → Media) ·
+# 인스턴스 역할 · 대상 등록은 modules/media_host 가 만든다. 이 루트는 앞 루트
+# 출력과 이미지 참조를 잇는다. auth 짝은 kty 결정 2026-10-25 (나)로 이 루트
+# 몫이고, clip 짝(60일 만료 창구 — POK-551)도 같은 꼴이다.
 #
 # 교체(활성 키 이동 · 설정 반영 · force)는 runbooks/media-swap.md 를 따른다.
 
@@ -47,6 +48,13 @@ module "media_host" {
   # 응답기의 4C resolve 길 — 정본은 platform(auth 서비스 SG · 포트).
   auth_sg_id = local.platform.service_sg_ids.auth
   auth_port  = local.platform.service_ports.auth
+
+  # 사이드카의 60일 만료 창구 길 — SG · 포트의 정본은 platform(clip 서비스),
+  # 토큰 그릇은 런타임 1단 출력(tfvars 칸 없음), 주소는 이 루트 입력(빈 값 끔).
+  clip_sg_id                   = local.platform.service_sg_ids.clip
+  clip_port                    = local.platform.service_ports.clip
+  clip_internal_url            = var.clip_internal_url
+  clip_expiry_token_secret_arn = local.runtime.clip_expiry_token_secret_arn
 
   # 정본은 platform(대상 그룹 포트 · 헬스와 같은 값).
   proxy_ports       = local.platform.media_proxy_ports

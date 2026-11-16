@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
-import { Popover, Skeleton, Slider } from '@/ui';
+import { PRIVATE_TEXT_CLASS, Popover, Skeleton, Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
 import { TrackWaveform } from './TrackWaveform';
 import type { ClipEditorMockState, EditorTrack } from '../useClipEditorMockState';
@@ -103,7 +103,8 @@ function VolumeValue({ track, controls }: { track: EditorTrack; controls: Volume
       <Popover.Content>
         <div className={styles.volumePopover}>
           <span className={styles.volumePopoverHead}>
-            {track.label}
+            {/* 오디오 트랙 이름은 설정에서 사용자가 지은 이름이다 */}
+            <span className={PRIVATE_TEXT_CLASS}>{track.label}</span>
             <b>{value}%</b>
           </span>
           <Slider
@@ -169,7 +170,9 @@ export function TimelineTrackRow({
         >
           {track.muted ? <VolumeX size={14} aria-hidden /> : <Volume2 size={14} aria-hidden />}
         </button>
-        <span data-row-label>{track.label}</span>
+        <span data-row-label className={PRIVATE_TEXT_CLASS}>
+          {track.label}
+        </span>
         {track.muted ? null : <VolumeValue track={track} controls={volumeControls} />}
       </span>
 

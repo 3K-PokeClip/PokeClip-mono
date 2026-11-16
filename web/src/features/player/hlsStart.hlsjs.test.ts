@@ -58,7 +58,8 @@ const startAt =
   (epochMs: number) =>
   (details: LevelDetails): LiveStart => ({
     kind: 'load',
-    position: startLoadPosition(details.fragments, epochMs, 'live', details.targetduration) ?? -1,
+    position:
+      startLoadPosition(details.fragments, epochMs, 'live', details.targetduration, true) ?? -1,
   });
 const truncate = (): LiveStart => ({ kind: 'truncated' });
 const noop = () => {};

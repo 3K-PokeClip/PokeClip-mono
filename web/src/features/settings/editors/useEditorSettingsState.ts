@@ -122,6 +122,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
         tone: 'success',
         destructive: true,
         title: `${target.name} 님을 편집자에서 내보냈어요`,
+        maskTitle: true,
       });
     },
     onError: (e) => {

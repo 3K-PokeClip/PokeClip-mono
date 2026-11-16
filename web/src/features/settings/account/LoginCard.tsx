@@ -1,4 +1,4 @@
-import { Badge } from '@/ui';
+import { Badge, PRIVATE_TEXT_CLASS } from '@/ui';
 import { GoogleMark } from './GoogleMark';
 import styles from './AccountSettingsScreen.module.css';
 
@@ -19,7 +19,7 @@ export function LoginCard({ email }: { email: string }) {
         </span>
         <div className={styles.loginBody}>
           <div className={styles.loginName}>Google로 로그인</div>
-          <div className={styles.loginEmail}>{email}</div>
+          <div className={`${styles.loginEmail} ${PRIVATE_TEXT_CLASS}`}>{email}</div>
         </div>
         <Badge tone="success" variant="soft" size="sm">
           연결됨

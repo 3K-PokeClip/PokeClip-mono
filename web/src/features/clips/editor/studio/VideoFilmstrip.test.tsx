@@ -105,4 +105,15 @@ describe('VideoFilmstrip', () => {
     expect(container.querySelectorAll('[data-filmstrip-tile]')).toHaveLength(0);
     expect(vi.mocked(useSceneFrames).mock.calls.at(-1)![0]).toBeNull();
   });
+
+  it('E4b-3 r1 — 조각 · 시작이 같아도 배치(시각 변환)가 바뀌면 새 변환을 그림 훅에 넘긴다(머리 도착)', () => {
+    const { rerender } = render(<Strip source={SOURCE} />);
+    const placed = { ...SOURCE, videoSecondsAt: (ms: number) => ms / 1000 - 89.7 };
+
+    rerender(<Strip source={placed} />);
+
+    expect(vi.mocked(useSceneFrames).mock.calls.at(-1)![0]?.videoSecondsAt).toBe(
+      placed.videoSecondsAt,
+    );
+  });
 });

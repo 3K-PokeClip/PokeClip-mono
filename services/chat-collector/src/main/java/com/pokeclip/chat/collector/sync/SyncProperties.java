@@ -36,9 +36,12 @@ import java.util.Map;
  * (그 채널의 위치가 덜 정확할 뿐, 아래 자릿수 착각처럼 {@code no_footage}로 가지 않는다)
  * Environment를 직접 훑는 대가를 치르지 않았고, 대신 {@code SyncPropertiesValidationTest}가
  * 그 동작을 못박아 둔다.
+ *
+ * <p><b>{@code v2LeadCorrectionMs}는 판 2 행(PDT 개정 · {@code timing_version = 2})에서 뺄 차감이다</b>
+ * ({@link #v2OffsetFor}). 값을 넣는 순서와 출처는 {@code application.yml}의 그 줄에 있다.
  */
 @ConfigurationProperties(prefix = "pokeclip.sync")
-public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffsetMs) {
+public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffsetMs, long v2LeadCorrectionMs) {
 
     /**
      * 받아 주는 보정값의 크기 상한(부호는 안 본다 — 음수 허용이 이 카드의 결정이다).
@@ -74,6 +77,7 @@ public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffs
 
     public SyncProperties {
         requireInRange(defaultOffsetMs, "pokeclip.sync.default-offset-ms");
+        requireInRange(v2LeadCorrectionMs, "pokeclip.sync.v2-lead-correction-ms");
         if (channelOffsetMs == null) {
             channelOffsetMs = Map.of();
         } else {
@@ -81,6 +85,23 @@ public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffs
             // 던져 원인이 설정의 어느 줄인지가 안 드러난다.
             channelOffsetMs.forEach(SyncProperties::requireChannelOffset);
             channelOffsetMs = Map.copyOf(channelOffsetMs);
+        }
+        // 실제로 쓰이는 판 2 보정값도 같은 상한 안이어야 한다 — 각 값이 상한 안이어도 빼면 상한의 두 배까지 간다(보안 L1).
+        requireV2InRange("pokeclip.sync.default-offset-ms", defaultOffsetMs, v2LeadCorrectionMs);
+        channelOffsetMs.forEach((channelId, offsetMs) -> requireV2InRange(
+                "pokeclip.sync.channel-offset-ms." + channelId, offsetMs, v2LeadCorrectionMs));
+    }
+
+    /**
+     * 판 2 보정값(보정값 − 판 2 차감)의 상한. 각 값은 이미 상한 안이라 넘었다면 <b>두 값의 조합</b> 탓이다 — 한 값의 단위
+     * 착각 안내는 싣지 않고, 두 값과 결과를 함께 싣는다.
+     */
+    private static void requireV2InRange(String property, long offsetMs, long correctionMs) {
+        long v2OffsetMs = offsetMs - correctionMs;
+        if (v2OffsetMs > MAX_ABS_OFFSET_MS || v2OffsetMs < -MAX_ABS_OFFSET_MS) {
+            throw new IllegalArgumentException(property + "(" + offsetMs + ") − pokeclip.sync.v2-lead-correction-ms("
+                    + correctionMs + ") = " + v2OffsetMs + "이(가) 판 2 보정값 크기 상한 " + MAX_ABS_OFFSET_MS
+                    + "ms를 넘는다. 두 값의 조합이 넘은 것이다 — 둘 가운데 하나를 고친다.");
         }
     }
 
@@ -112,5 +133,14 @@ public record SyncProperties(long defaultOffsetMs, Map<String, Long> channelOffs
             return defaultOffsetMs;
         }
         return channelOffsetMs.getOrDefault(channelId, defaultOffsetMs);
+    }
+
+    /**
+     * 판 2 행의 보정값 = 판 NULL 보정값 − {@code v2LeadCorrectionMs}(계약 세그먼트인덱스 6-6-9 · 설계 r6 7.1). 판 NULL 보정값은
+     * 파일 머리 축으로 잰 값이고 판 2 행의 floor 는 영상 시작 축이라, 그 차(파일 머리 → 영상 첫 표본 m 의 평균)를 뺀다. 채널
+     * 덮어쓰기도 같은 차감을 받는다.
+     */
+    public long v2OffsetFor(String channelId) {
+        return offsetFor(channelId) - v2LeadCorrectionMs;
     }
 }

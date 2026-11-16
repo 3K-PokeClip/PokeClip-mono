@@ -1,5 +1,6 @@
 // Package kvsstore 는 edgebounds.Store 의 운영 구현이다 — CloudFront KeyValueStore 데이터 평면(cloudfrontkeyvaluestore)
-// 의 DescribeKeyValueStore · UpdateKeys(If-Match) · GetKey 를 부른다(POK-525 설계 3-3 · 계획 Ⓒ-5).
+// 의 DescribeKeyValueStore · UpdateKeys(If-Match) · GetKey 를 부른다(POK-525 설계 3-3 · 계획 Ⓒ-5). 상자 역할에는 GetKey
+// 권한이 없다(POK-574) — GetKey(Fetch)는 시험 · 다른 자격의 탐침 전용이다.
 //
 // SDK 를 쓰므로 계약 패키지 edgebounds 와 나눠 둔다(K9) — edgebounds 의 의존 목록에 SDK 가 들지 않는다. 클라이언트
 // 생성(자격 · 지역)은 기동 조립이 한다. 요청은 SDK 가 SigV4A(전역 지역 집합 *)로 서명하고, 끝점은 ARN 의 계정 번호로
@@ -81,7 +82,8 @@ func (s *Store) Update(ctx context.Context, ifMatch string, puts []edgebounds.En
 }
 
 // Fetch 는 key 의 값이다(GetKey). 키가 없으면(ResourceNotFoundException) found=false 다 — KVS 자체가 없을 때도 같은
-// 오류라 둘을 가르지 않는다. 탐침 · 실측의 되읽기 전용이고 KVS 존재는 Describe 가 본다.
+// 오류라 둘을 가르지 않는다. KVS 존재는 Describe 가 본다. 상자 역할에는 GetKey 권한이 없다(POK-574) — 시험 · 다른
+// 자격의 탐침 전용이다.
 func (s *Store) Fetch(ctx context.Context, key string) (string, bool, error) {
 	out, err := s.client.GetKey(ctx, &cloudfrontkeyvaluestore.GetKeyInput{KvsARN: aws.String(s.arn), Key: aws.String(key)})
 	var missing *types.ResourceNotFoundException

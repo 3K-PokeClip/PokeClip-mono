@@ -14,7 +14,6 @@ import {
   P20,
   R,
   T0,
-  VOD,
   X_A,
   X_B,
   X_UNKNOWN,
@@ -34,7 +33,7 @@ import {
 import { SESSION_NOTICES, type PlaybackSessionState, type SessionEvent } from './rewindSwitch';
 
 // 이어 볼 자리(resumeAtMs)의 보존(POK-528 c7 — 계획 3-1 T4 · T5 · 3-4 · 18절 · Q1). 첫
-// 위치 전 · 시크 중의 폴링 교체 · 끝남 대기 이음 · 같은 자리 다시보기는 되감기 소스면 앞
+// 위치 전 · 시크 중의 폴링 교체 · 끝남 대기 이음 · 다시보기 단추는 되감기 소스면 앞
 // 재생기의 마지막 자리(lastAtMs)가 아니라 시청자가 청한 자리를 쓰고(라이브 소스는 lastAtMs
 // 그대로), 이미 본 되감기 url 로는 다시 잇지 않는다. 옛 판 표는 lastAtMs 를 읽으므로 음성
 // 대조 트리에서는 단언으로 FAIL 한다.
@@ -60,19 +59,14 @@ function seekRewind(): SessionEvent {
   return { type: 'seek', targetMs: SOUGHT, view: { lowerMs: T0 + 12_000, endMs: NOW } };
 }
 
-/** 다시보기 목록 안 시크 — 다시보기는 하한 여유가 없다 */
-function seekVod(targetMs: number): SessionEvent {
-  return { type: 'seek', targetMs, view: { lowerMs: T0, endMs: NOW } };
-}
+const PRESS_VOD: SessionEvent = { type: 'button', which: 'vod' };
 
-/**
- * 다시보기 재생기를 다시 세운다 — 시작은 이어 볼 자리(확인된 위치 · 시크 목표 · 청한 자리)이고, 첫
- * 위치 전이면 앞 되감기 소스의 lastAtMs(라이브 위치 LIVE_AT)가 아니다(c7 리뷰 V7-1). 세대는 하나 오른다
- */
-function expectVodRemountAt(vod: PlaybackSessionState, startAtMs: number | null): void {
-  const again = feed(vod, [REMOUNT]).state;
-  expect(again.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs });
-  expect(again.source.generation).toBe(vod.source.generation + 1);
+/** 「다시보기 보기」 가 지난 방송 판정에 넘긴 이어 볼 자리(POK-547) */
+function handedAtMs(state: PlaybackSessionState): number | null | undefined {
+  const [effect] = feed(state, [PRESS_VOD]).effects;
+  return effect?.kind === 'close' && effect.reason === 'past'
+    ? effect.handoff.resumeAtMs
+    : undefined;
 }
 
 /** 라이브 위치를 남긴 채 되감은 뒤 ENDLIST → 회차별 vod 로 다시보기 제안까지 온 세션 */
@@ -181,24 +175,22 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
     expect(kept.source).toBe(ended.source);
   });
 
-  it('2 다시 받기 → 화면 전 404 → 막힘 → 회차별 vod → 청한 자리에서 다시보기 · 알림 0', () => {
+  it('2 다시 받기 → 화면 전 404 → 막힘 → 회차별 vod → 멈춘 그대로 제안 · 단추는 청한 자리를 넘긴다 · 알림 0', () => {
     const s = rewindFromLive();
     const blocked = feed(s, [gone(s), gone(s, s.source.generation + 1)]).state;
     expect(blocked.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
-    const vod = feed(blocked, [{ type: 'round-poll', result: vodReady() }]);
-    expect(vod.state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: ASKED });
-    expect(notices(vod.effects)).toEqual([]);
-    expect(vod.state.lastAtMs).toBe(LIVE_AT);
-    expectVodRemountAt(vod.state, ASKED);
+    const offered = feed(blocked, [{ type: 'round-poll', result: vodReady() }]);
+    expect(offered.state.phase).toMatchObject({ kind: 'vod-offered', stopped: 'held' });
+    expect(notices(offered.effects)).toEqual([]);
+    expect(offered.state.lastAtMs).toBe(LIVE_AT);
+    expect(handedAtMs(offered.state)).toBe(ASKED);
   });
 
-  it('3 다시보기 제안(되감기 소스 · 첫 위치 전) — 404 · 단추 모두 청한 자리에서 / 대조: live 기원은 lastAtMs', () => {
+  it('3 다시보기 제안(되감기 소스 · 첫 위치 전) — 404 는 국면 그대로 · 단추는 청한 자리에서 / 대조: live 기원은 lastAtMs', () => {
     const offered = offeredFromLive();
     expect(offered.phase.kind).toBe('vod-offered');
-    const byGone = feed(offered, [gone(offered)]).state;
-    expect(byGone.source).toMatchObject({ kind: 'vod', startAtMs: ASKED });
-    const byButton = feed(offered, [{ type: 'button', which: 'vod' }]).state;
-    expect(byButton.source).toMatchObject({ kind: 'vod', startAtMs: ASKED });
+    expect(feed(offered, [gone(offered)]).state).toBe(offered);
+    expect(handedAtMs(offered)).toBe(ASKED);
     const liveOffered = feed(fresh(), [
       poll(liveReady(A1, T0, NOW)),
       loaded(LIVE_URL),
@@ -207,37 +199,23 @@ describe('국면 밖 — 되감기 소스가 남은 국면도 이어 볼 자리�
       { type: 'round-poll', result: vodReady() },
     ]).state;
     expect(liveOffered.phase.kind).toBe('vod-offered');
-    const liveVod = feed(liveOffered, [{ type: 'button', which: 'vod' }]).state;
-    expect(liveVod.source).toMatchObject({ kind: 'vod', startAtMs: T0 + 30 * MIN });
-    expectVodRemountAt(byGone, ASKED);
-    expectVodRemountAt(byButton, ASKED);
+    expect(handedAtMs(liveOffered)).toBe(T0 + 30 * MIN);
   });
 
-  it('3 뒤 · 끝에 닿은 뒤의 단추 vod 는 처음부터(null) — 첫 위치 전 리마운트도 처음부터', () => {
-    const atEnd = feed(offeredFromLive(), [END_REACHED, { type: 'button', which: 'vod' }]).state;
-    expect(atEnd.source).toMatchObject({ kind: 'vod', startAtMs: null });
+  it('3 뒤 · 끝에 닿은 뒤의 단추는 처음부터(null)를 넘긴다', () => {
+    const atEnd = feed(offeredFromLive(), [END_REACHED]).state;
     expect(atEnd.lastAtMs).toBe(LIVE_AT);
-    expectVodRemountAt(atEnd, null);
+    expect(handedAtMs(atEnd)).toBeNull();
   });
 
-  it('3 뒤 · 다시보기 안 시크가 끝나기 전 리마운트 → 시크 목표 / 확인된 위치 뒤 → 그 자리(지금 동작)', () => {
-    const opened = feed(offeredFromLive(), [{ type: 'button', which: 'vod' }]).state;
-    const seeking = feed(opened, [seekVod(SOUGHT)]).state;
-    expect(seeking.pendingSeekMs).toBe(SOUGHT);
-    expectVodRemountAt(seeking, SOUGHT);
-    const watched = feed(opened, [loaded(VOD), pos(ASKED + 30_000)]).state;
-    expectVodRemountAt(watched, ASKED + 30_000);
-    const settled = feed(seeking, [loaded(VOD), pos(SOUGHT + 4_000)]).state;
-    expectVodRemountAt(settled, SOUGHT + 4_000);
-  });
-
-  it('[새 함수 — 음성 대조 제외 · 변이 M7z2 로 교정] 목록 하한(0)에서 선 relist → 막힘 → vod 는 처음부터 · 알림 0(손 상태 — J2)', () => {
+  it('[새 함수 — 음성 대조 제외 · 변이로 교정] 목록 하한(0)에서 선 relist → 막힘 → vod 제안의 단추는 처음부터 · 알림 0(손으로 만든 상태)', () => {
     const base = rewindFromLive();
     const floor = { ...base, source: { ...base.source, startAtMs: 0 } };
     const blocked = feed(floor, [gone(floor), gone(floor, floor.source.generation + 1)]).state;
-    const vod = feed(blocked, [{ type: 'round-poll', result: vodReady() }]);
-    expect(vod.state.source).toMatchObject({ kind: 'vod', startAtMs: null });
-    expect(notices(vod.effects)).toEqual([]);
+    const offered = feed(blocked, [{ type: 'round-poll', result: vodReady() }]);
+    expect(offered.state.phase).toMatchObject({ kind: 'vod-offered', stopped: 'held' });
+    expect(notices(offered.effects)).toEqual([]);
+    expect(handedAtMs(offered.state)).toBeNull();
   });
 });
 
@@ -259,8 +237,8 @@ describe('relist · S — 다시 받는 중의 시크 목표가 시작 요청을
     expect(remounted.phase).toEqual(relistPhase('list'));
     const blocked = feed(s, [gone(s)]).state;
     expect(blocked.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
-    const vod = feed(blocked, [{ type: 'round-poll', result: vodReady() }]).state;
-    expect(vod.source).toMatchObject({ kind: 'vod', startAtMs: SOUGHT });
+    const offered = feed(blocked, [{ type: 'round-poll', result: vodReady() }]).state;
+    expect(handedAtMs(offered)).toBe(SOUGHT);
   });
 });
 

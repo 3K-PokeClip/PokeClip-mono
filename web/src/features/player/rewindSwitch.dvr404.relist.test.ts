@@ -176,7 +176,7 @@ describe('되풀이 상한 — 화면 전 404 는 막힘(계획 3-2 셋째 행)'
         kind: 'ending-wait',
         origin: 'rewind',
         atEnd: false,
-        recordOnEnd: false,
+        closeOnEnd: false,
         blocked: true,
       });
       expect(done.effects).toEqual([REFRESH_A1, HOLD]);
@@ -296,7 +296,7 @@ describe('다시 받은 목록의 ENDLIST(계획 3-3 (3))', () => {
       kind: 'ending-wait',
       origin: 'rewind',
       atEnd: false,
-      recordOnEnd: false,
+      closeOnEnd: false,
     });
     const done = feed(ended, [gone(ended)]);
     expect(done.state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
@@ -399,7 +399,7 @@ describe('「세우지 않음」 — 다시 받는 되감기는 세운다(계획
     const rewind = rewindAt(P20);
     const ended = feed(rewind, [ENDLIST]).state;
     const decided = feed(ended, [{ type: 'round-poll', result: status({ mode: 'ended' }) }]).state;
-    expect(decided.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+    expect(decided.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
     expect(isPlayerStartHeld(fresh())).toBe(false);
     expect(isPlayerStartHeld(rewind)).toBe(false);
     expect(isPlayerStartHeld(relisted(rewind))).toBe(false);
@@ -420,7 +420,7 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
     kind: 'ending-wait',
     origin: 'rewind',
     atEnd: false,
-    recordOnEnd: false,
+    closeOnEnd: false,
     blocked: true,
   } as const;
 
@@ -532,10 +532,9 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
     expect(known(list)).toBe(true);
     expect(known(paint)).toBe(true);
     expect(known(settled)).toBe(true);
-    // 거짓 — 세대 다름 · url 다름 · 소스 다시보기 · 라이브 · 기록 없음 · 끝남 대기 · 다시보기 제안
+    // 거짓 — 세대 다름 · url 다름 · 라이브 · 기록 없음 · 끝남 대기 · 다시보기 제안
     expect(known(settled, S, settled.source.generation - 1)).toBe(false);
     expect(known({ ...settled, source: { ...settled.source, url: A2 } })).toBe(false);
-    expect(known({ ...settled, source: { ...settled.source, kind: 'vod' } })).toBe(false);
     expect(known({ ...settled, source: { ...settled.source, kind: 'live' } })).toBe(false);
     expect(known(settled, { type: 'main', sn: 99 })).toBe(false);
     expect(known(settled, { type: 'audio', sn: 41 })).toBe(false);
@@ -557,30 +556,30 @@ describe('목록 안 구멍 — 같은 조각(후속)', () => {
       expect(done.effects).toEqual([REFRESH_A1, HOLD]);
     });
 
-    it('끝남 대기(녹화로 정하기 전) → 막힘', () => {
+    it('끝남 대기(닫기로 정하기 전) → 막힘', () => {
       const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
       const done = feed(ending, [gone(ending, undefined, S)]);
       expect(done.state.phase).toMatchObject({ kind: 'ending-wait', blocked: true });
       expect(done.effects).toEqual([HOLD]);
     });
 
-    it('끝남 대기(녹화로 정한 뒤) → 마지막 확인', () => {
+    it('끝남 대기(닫기로 정한 뒤) → 마지막 확인', () => {
       const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
       const decided = feed(ending, [
         { type: 'round-poll', result: status({ mode: 'ended' }) },
       ]).state;
-      expect(decided.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
+      expect(decided.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
       const done = feed(decided, [gone(decided, undefined, S)]).state;
-      expect(done.phase).toMatchObject({ recordOnEnd: true, finalCheck: true });
+      expect(done.phase).toMatchObject({ closeOnEnd: true, finalCheck: true });
     });
 
-    it('다시보기 제안 → 같은 자리 다시보기', () => {
+    it('다시보기 제안 → 국면 그대로(받기만 멈추고 받은 버퍼를 튼다)', () => {
       const ending = feed(relistedOver(rewindAt(P20), S), [ENDLIST]).state;
       const offered = feed(ending, [{ type: 'round-poll', result: vodReady(T0, NOW) }]).state;
       expect(offered.phase.kind).toBe('vod-offered');
-      const done = feed(offered, [gone(offered, undefined, S)]).state;
-      expect(done.phase).toEqual({ kind: 'vod' });
-      expect(done.source).toMatchObject({ kind: 'vod', startAtMs: P20 + 4_000 });
+      const done = feed(offered, [gone(offered, undefined, S)]);
+      expect(done.state).toBe(offered);
+      expect(done.effects).toEqual([]);
     });
   });
 });

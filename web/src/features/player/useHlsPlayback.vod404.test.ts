@@ -4,10 +4,8 @@ import type * as playbackAccessModule from '@/api/playbackAccess';
 import { reportPlaybackForbidden } from '@/api/playbackAccess';
 import type * as hlsErrorsModule from './hlsErrors';
 import { consumeDvrSegmentGone } from './hlsErrors';
-import { recordingTimeline } from './recordingTimeline';
 import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
-import { useRecordedPlayback } from './useRecordedPlayback';
 
 // 다시보기(VOD) 조각 404 의 앱 층(POK-528 c6 · W8 (ㄱ) · 계획 8-4 훅 층). kty 결정(2026-11-03)대로 지금 동작을 고정한다:
 // hls.js 가 기본 재시도(비치명 6번 — 실물 층은 hlsVodRetry.hlsjs.test.ts)를 다 쓰고 치명으로 올리면 앱이 한 번 다시
@@ -16,10 +14,6 @@ import { useRecordedPlayback } from './useRecordedPlayback';
 // 않으므로 곧바로 끊김을 알린다(POK-528 c8 — c6 X1 에서 고정한 「알림 없이 멈춤」 을 kty 의견 「걍 새로고침하면
 // 되는거아닌가」 대로 바꿈). 되감기 조각 404 가로채기(c5)는 kind 'rewind' 에서만 돈다 — 고리를 달아 둔 vod 재생기라도 가로채기
 // 판정(consumeDvrSegmentGone) 자체를 부르지 않는다.
-//
-// K6 — 녹화 재생(지난 방송 상세 · useRecordedPlayback)은 W8 대상이 아니다. hls.js 재생기가 아니라 녹화 재생 서버의 mp4
-// 줄기를 video.src 로 붙인다(useRecordedPlayback.ts 147-165 — recordingClipUrl · `video.src = src`). 그래서 hls.js 조각
-// 재시도도, 세션 고리(onDvrSegmentGone)도, 재생기 kind 도 없다. 아래 마지막 시험이 그 사실(hls.js 생성 0)을 단언한다.
 //
 // hls.js 흉내는 useHlsPlayback.dvr404.test.ts 꼴이다(처음부터 off() 를 둔다). 다만 latestLevelDetails 는 목록 사건
 // (LEVEL_LOADED · LEVEL_UPDATED)에서만 갈아 끼운다 — ERROR 자료의 details(문자열)로 덮지 않는다(c5 검수 이연 M).
@@ -403,20 +397,4 @@ describe('다시보기 · 되감기 첫 목록 치명 → 곧바로 끊김(POK-5
       expect(hls.destroy).not.toHaveBeenCalled();
     },
   );
-});
-
-describe('K6 — 녹화 재생(useRecordedPlayback)은 W8 대상이 아니다', () => {
-  it('hls.js 재생기를 세우지 않고 녹화 재생 서버의 mp4 줄기를 video.src 로 붙인다', async () => {
-    const startMs = Date.parse('2026-11-03T01:00:00Z');
-    const timeline = recordingTimeline([{ startMs, durationSeconds: 60 }], null, null);
-    if (timeline === null) throw new Error('녹화 줄기표가 서지 않았다');
-    const video = document.createElement('video');
-    renderHook(() => useRecordedPlayback({ current: video }, { streamId: 'k6', ...timeline }));
-    // hls.js 는 동적 import 로 읽힌다(useHlsPlayback) — 읽기가 끝난 뒤에 센다
-    await act(async () => {
-      await vi.dynamicImportSettled();
-    });
-    expect(spy.instances).toHaveLength(0);
-    expect(new URL(video.src).searchParams.get('format')).toBe('mp4');
-  });
 });

@@ -3,7 +3,16 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Play, Trash2, X } from 'lucide-react';
-import { Badge, Button, IconButton, LinkButton, Spinner, VisuallyHidden, useToast } from '@/ui';
+import {
+  Badge,
+  Button,
+  IconButton,
+  LinkButton,
+  PRIVATE_TEXT_CLASS,
+  Spinner,
+  VisuallyHidden,
+  useToast,
+} from '@/ui';
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
 import { ClipProgressCard } from './ClipProgressCard';
 import { ClipSourceCard } from './ClipSourceCard';
@@ -241,7 +250,7 @@ export function ClipDetailPanel({
         </dd>
         <dt>만든 사람</dt>
         <dd>
-          {clip.owner.name}
+          <span className={PRIVATE_TEXT_CLASS}>{clip.owner.name}</span>
           {created ? <span className={styles.metaDim}> · {created}</span> : null}
         </dd>
         <dt>마지막 편집</dt>
@@ -504,11 +513,12 @@ function PreviousUploadRow({ upload }: { upload: PreviousUpload }) {
       <dd>
         {upload.href ? (
           <a href={upload.href} target="_blank" rel="noopener noreferrer">
-            {upload.text}
+            {/* 「{업로드 제목} · 상태」 */}
+            <span className={PRIVATE_TEXT_CLASS}>{upload.text}</span>
             <VisuallyHidden> (새 창)</VisuallyHidden>
           </a>
         ) : (
-          upload.text
+          <span className={PRIVATE_TEXT_CLASS}>{upload.text}</span>
         )}
       </dd>
     </>

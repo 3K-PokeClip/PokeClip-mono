@@ -7,7 +7,10 @@
 # 모드의 대조 넷(Basic 비밀번호 · 그 Basic 머리 값 · 4C 토큰 · 잠금 둘)과 표지
 # 일부만 있음 · 꼴 밖의 실패 · 실제 템플릿 잠금 줄 · Basic 사용자 대조 · 4C
 # 토큰의 JSON 이스케이프 꼴 · 새 지역 변수 이름의 상속 export · 사이드카(4C
-# 토큰 사본을 받는 둘째 호출자) 태그 저널의 4C 토큰.
+# 토큰 사본을 받는 둘째 호출자) 태그 저널의 4C 토큰 · box 의 60일 만료 창구
+# 토큰(두 모드 — 사례 31 – 34 는 lib/secret_count_clip_expiry_cases.sh) · box
+# 의 IMDS 대리 창구 중계 토큰 둘과 지금 역할 자격 · 그 원천 고정 · 중계 태그
+# 저널(사례 35 – 41 은 lib/secret_count_cred_relay_cases.sh).
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker · aws ·
 # journalctl 과 grep 감시 래퍼(argv · 환경을 기록한 뒤 진짜 grep 실행)만 둔다.
@@ -33,9 +36,13 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/ops_fixture.sh"
 # shellcheck source=../bin/lib/render_files.sh
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
+# shellcheck source=lib/secret_count_clip_expiry_cases.sh
+source "${TEST_DIR}/lib/secret_count_clip_expiry_cases.sh"
+# shellcheck source=lib/secret_count_cred_relay_cases.sh
+source "${TEST_DIR}/lib/secret_count_cred_relay_cases.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
-readonly CASE_COUNT=30
+readonly CASE_COUNT=41
 # 사이드카 API 사용자 이름(compose MTX_API_USER) — Basic 값의 앞부분.
 readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly COMMAND_ID='0123abcd-4567-89ef-0123-456789abcdef'
@@ -821,7 +828,7 @@ write_ia_variant() {
 # 사례 24 — box 응답기 모드: 입력이 시작 스크립트가 쓰는 꼴 밖이면(Basic
 # 파일 16진 64자 한 줄 아님 · 링크, 4C 파일 빔 · 끝 줄바꿈 없음 · 두 줄 · 제어
 # 문자 · None · 앞 공백 · 뒤 공백 · C1 제어 문자(U+0085) · 4096바이트 초과 ·
-# 디렉터리 — 시작 스크립트 read_resolve_token 이 거부하는 것과 같다, 잠금 줄
+# 디렉터리 — 시작 스크립트 read_token_secret 이 거부하는 것과 같다, 잠금 줄
 # 큰따옴표 · 두 번 · 63자, 렌더본 링크) ingest-auth 로 실패한다(종료 1). 4C
 # 파일은 꼭 4096바이트까지 받는다.
 case_ia_malformed() {
@@ -1049,6 +1056,27 @@ main() {
     case_ia_inherited_export
   harness::run_case 30 'box 사이드카 태그 저널의 4C 토큰(원문 · JSON 꼴)도 셈' \
     case_ia_sidecar_resolve_token
+  harness::run_case 31 'box 만료 토큰(원문 · JSON 꼴)도 셈 · 두 모드 · 상속 export 0' \
+    clip_cases::case_count
+  harness::run_case 32 'box 만료 토큰 파일 없음 → 지금처럼' \
+    clip_cases::case_absent
+  harness::run_case 33 'box 만료 토큰 꼴 밖 → clip-expiry' \
+    clip_cases::case_malformed
+  harness::run_case 34 'ssm 은 만료 토큰 파일을 읽지 않음' \
+    clip_cases::case_ssm_ignores
+  harness::run_case 35 'box 켬 중계 토큰 · 역할 자격 셈 · 상속 export 0' \
+    cr_cases::case_count
+  harness::run_case 36 'box 켬 심지 않음 → 0' cr_cases::case_zero
+  harness::run_case 37 'box 끔(중계 토큰 없음) → 지금처럼 · 자격 안 받음' \
+    cr_cases::case_off
+  harness::run_case 38 'box 중계 토큰 일부만 · 꼴 밖 → cred-relay' \
+    cr_cases::case_relay_malformed
+  harness::run_case 39 'box 켬 역할 자격 못 받음 · 꼴 밖 → role-cred' \
+    cr_cases::case_role_malformed
+  harness::run_case 40 'ssm 은 중계 토큰 · 역할 자격을 읽지 않음' \
+    cr_cases::case_ssm_ignores
+  harness::run_case 41 'box 켬 역할 자격 원천 = IMDS(부모 자격 · 프로필 변수 0)' \
+    cr_cases::case_role_source_pinned
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

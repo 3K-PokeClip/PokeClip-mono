@@ -11,6 +11,9 @@ dependencyManagement {
 dependencies {
     // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
     implementation project(':db-support')
+    // 채팅 시각 → 영상 위치의 판 2 갈래가 장부 시각 → 매체 자리 변환 F를 clip과 같은 소스로 쓴다(POK-196 · 계약
+    // 세그먼트인덱스 6-6-6 · 6-6-9).
+    implementation project(':ledger-timeline')
 
 
     // 채팅 원본 1분 파일을 S3에 올린다(POK-116). s3가 runtime으로 끌어오는 HTTP 클라이언트는
@@ -43,6 +46,9 @@ dependencies {
     implementation 'org.flywaydb:flyway-database-postgresql'
 
     runtimeOnly 'org.postgresql:postgresql'
+    // 판 2 후보 조회 하나만 서버 준비 문장을 끈다(SegmentLedger.floorByPlaybackPdt — PGStatement.setPrepareThreshold).
+    // 드라이버 판은 위 runtimeOnly 와 같은 BOM 판이다.
+    compileOnly 'org.postgresql:postgresql'
 
     // SOOP 채팅(POK-397 PR4). SOOP은 채팅을 브라우저 JavaScript SDK로만 준다(ADR-105). 화면 없는 Chromium에서 공식 SDK를 돌린다.
     // 브라우저 실행 파일은 이미지에 미리 굽고 실행 중에는 내려받지 않는다(Dockerfile의 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).

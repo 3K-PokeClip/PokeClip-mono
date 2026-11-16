@@ -9,10 +9,15 @@ import {
   platformLabel,
   type BroadcastRow,
   type BroadcastTimeline,
+  type ClipSnapshot,
   type LibraryEntry,
   type UploadSnapshot,
 } from '@/api/clipEditor';
-import { clipStatusView, type ClipStatusView } from '@/features/clips/editor/studio/clipProgress';
+import {
+  clipStatusView,
+  SOURCE_RANGE_REASON,
+  type ClipStatusView,
+} from '@/features/clips/editor/studio/clipProgress';
 import {
   instantLabel,
   PRIVACY_CHANGE_NOTE,
@@ -464,8 +469,20 @@ export function stepViewForClip(clip: LibraryClip, now: Date): LibraryStepView |
   if (entry === undefined || latest == null || entry.status === 'editing') return null;
   const view = clipStatusView(latest, now);
   const detail =
-    uploadFailureText(clip) ?? (entry.status === 'checking' ? noteText('checking') : view.detail);
+    uploadFailureText(clip) ??
+    (entry.status === 'checking'
+      ? noteText('checking')
+      : (renderFailureText(latest) ?? view.detail));
   return { view, detail, versionLabel: `편집본 v${latest.recipeVersion}` };
+}
+
+/**
+ * 범위를 못 덮은 렌더 실패(SOURCE_RANGE)의 보관함 안내. 편집기 말 「범위를 다시 정해 주세요」 는 여기서 할 수 없는 일이다 —
+ * 범위를 고치는 곳은 「이어서 편집」 으로 여는 편집기다. 다른 실패는 편집기와 같은 말이라 null
+ */
+function renderFailureText(latest: ClipSnapshot): string | null {
+  if (latest.status !== 'failed' || latest.error?.code !== 'SOURCE_RANGE') return null;
+  return `${SOURCE_RANGE_REASON} 「${EDIT_CONTINUE.label}」에서 범위를 다시 정해 주세요.`;
 }
 
 // ---------- 원본 방송 카드 (POK-511) ----------

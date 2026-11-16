@@ -30,7 +30,7 @@ import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import { useLiveField } from './liveDataStore';
 import { useCardEditorReady } from './useCardEditorReady';
 import { useCardSave, type CardSaveState } from './cardSave';
-import { CardDraftNotReadyError } from '@/features/clips/editor/cardDraftErrors';
+import { CardNeedsEditorError } from '@/features/clips/editor/cardDraftErrors';
 
 // 하이라이트 카드(시안 B2-1, 2026-11-04) — 사진이 카드의 몸통이다. 왼쪽 위 점수(수동은 「수동」), 오른쪽 위 「저장」 알약,
 // 아래 그늘에 방송 시각 · 길이(왼쪽)와 경과(오른쪽). 사진 밑은 「편집」과 가리기만. 감지 사유 · 상태 배지 · 원클릭 업로드는 뺐다.
@@ -89,8 +89,8 @@ export const HighlightCard = memo(function HighlightCard({
   highlight: LiveHighlight;
   stream: LiveStream;
   visuals: Record<string, CardVisual>;
-  /** 카드로 옮긴다(초, 서버 기준점 축 — LiveHighlight.seekSeconds) */
-  onSeek: (seconds: number) => void;
+  /** 카드로 옮긴다(초, 서버 기준점 축 — LiveHighlight.seekSeconds · 플레이어용 PDT — LiveHighlight.playerAtMs) */
+  onSeek: (seconds: number, atMs: number | null | undefined) => void;
   /** 가리기·되살리기 답을 목록에 넣는다. 통로가 끊겼거나 끝난 방송이면 다음 목록 읽기(1분)까지 기다리지 않게 */
   onCardChange?: (card: LiveCardSnapshot) => void;
 }) {
@@ -114,7 +114,7 @@ export const HighlightCard = memo(function HighlightCard({
     view.showActions &&
     !highlight.hidden &&
     (editor.state === 'loading' || editor.state === 'pending');
-  // 보관함 저장 — 편집기를 열지 않고 카드 구간 그대로 편집본을 만든다. 영상을 안 받으므로 편집 준비 중에도 된다
+  // 보관함 저장 — 편집기를 열지 않고 clip 이 준 카드 구간 그대로 편집본을 만든다. 영상을 안 받으므로 편집 준비 중에도 된다
   const cardSave = useCardSave(streamId, cardId);
   const canSave = view.showActions && !highlight.hidden;
   const save = () => {
@@ -132,9 +132,13 @@ export const HighlightCard = memo(function HighlightCard({
       },
       (error: unknown) =>
         toast(
-          // 방송 시작 직후라 시각 기준점을 아직 모른다 — 실패가 아니라 기다릴 일이다
-          error instanceof CardDraftNotReadyError
-            ? { tone: 'info', title: '녹화가 올라온 뒤 다시 저장해 주세요' }
+          // clip 이 창 두 끝을 주지 않은 카드다 — 실패가 아니라 편집기에서 범위를 정할 일이다(POK-473 E7)
+          error instanceof CardNeedsEditorError
+            ? {
+                tone: 'info',
+                title: '이 카드는 편집기에서 범위를 정해 저장해 주세요',
+                action: { label: '편집기에서 열기', onClick: () => router.push(editorHref) },
+              }
             : { tone: 'error', title: '보관함에 저장하지 못했어요' },
         ),
     );
@@ -165,7 +169,7 @@ export const HighlightCard = memo(function HighlightCard({
         <button
           type="button"
           className={styles.cardThumb}
-          onClick={() => onSeek(highlight.seekSeconds)}
+          onClick={() => onSeek(highlight.seekSeconds, highlight.playerAtMs)}
           aria-label={`${clock ?? highlight.title} 시점으로 이동`}
         >
           <ThumbnailImage

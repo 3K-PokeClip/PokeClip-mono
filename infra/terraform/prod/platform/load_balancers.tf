@@ -140,10 +140,11 @@ module "waf" {
   rate_limit          = var.waf_rate_limit
 
   # 자격 증명이 실리는 헤더 · 질의 인자는 웹 ACL 데이터 보호로 요청 샘플 ·
-  # 로그 모두에서 가린다(POK-459 · POK-479). 내부 토큰 헤더 둘(auth
+  # 로그 모두에서 가린다(POK-459 · POK-479). 내부 토큰 헤더 셋(auth
   # /internal/** 공용 X-Internal-Token · 계약4 resolve 전용
-  # X-Stream-Key-Resolve-Token)은 정상 경로로는 공개 ALB 에 오지 않지만 잘못
-  # 실려 와도 남지 않게 미리 둔다. 질의 인자는 OAuth 콜백의 ?code=(web 콜백
+  # X-Stream-Key-Resolve-Token · clip 만료 창구 전용 X-Expired-Broadcasts-Token
+  # — POK-551)은 정상 경로로는 공개 ALB 에 오지 않지만 잘못 실려 와도 남지
+  # 않게 미리 둔다. 질의 인자는 OAuth 콜백의 ?code=(web 콜백
   # 화면들) · 프로필 사진 주소의 ?token=(auth PhotoUrls)이다.
   #
   # referer 도 가린다(kty 2026-10-25). web 은 Referrer-Policy 를 전역
@@ -168,6 +169,7 @@ module "waf" {
     "referer",
     "x-internal-token",
     "x-stream-key-resolve-token",
+    "x-expired-broadcasts-token",
   ]
   protected_query_args = ["code", "token"]
 

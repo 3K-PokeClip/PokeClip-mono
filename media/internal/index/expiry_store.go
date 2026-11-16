@@ -13,9 +13,9 @@ import (
 
 // 60일 만료(POK-196 M6-4)의 장부 쪽 — clip 만료 창구가 준 한 방송의 구간을 장부에서 찾고 지운다.
 //
-// 한 방송의 처리 순서는 만료 루프(internal/expiry)가 정한다: 0 조회 제외 영속(MarkExpired) → 1 무효 컷오프
-// 검사(ExpiryCutoffValid · e1) → 2 대상 행(ExpiryRows) → 3 세션 단위 문서(ExpiryDocuments) → 4 조각 객체 →
-// 5 행(DeleteExpired). 이 파일은 장부 문장만 갖고 S3 와 HTTP 는 모른다. 키는 장부 저장값 그대로 돌려준다 —
+// 한 방송의 처리 순서는 만료 루프(internal/expiry)가 정한다: 미룸 판정(ExpiryRoundsSettled) → 0 조회 제외
+// 영속(MarkExpired) → 1 무효 컷오프 검사(ExpiryCutoffValid · e1) → 2 대상 행(ExpiryRows) → 3 세션 단위
+// 문서(ExpiryDocuments) → 4 조각 객체 → 5 행(DeleteExpired). 이 파일은 장부 문장만 갖고 S3 와 HTTP 는 모른다. 키는 장부 저장값 그대로 돌려준다 —
 // 응답 값으로 키를 만들지 않는다(D28).
 
 // ExpiryDeleteBatch 는 DeleteExpired 한 트랜잭션이 받는 seq 수의 상한이다(설계 7절 단계 5 — 500행 단위).
@@ -32,10 +32,11 @@ const (
 	ExpiryUntilSlack = 24 * time.Hour
 )
 
-// ExpiryCeiling 은 now 기준으로 지울 수 있는 가장 늦은 상한이다(now − 보존 기간 + 여유). 만료 루프는 이보다 늦은
-// segmentsUntil 을 받지 않는다(fail-closed · 보안 H1 — clip 응답 한 줄이 보존 기간 안 조각을 비가역으로 지우지
-// 않게). 0단계 문장이 DB 시계로 거는 같은 상한은 expired_at 표시만 막는다 — 뒤 단계(대상 · 문서 조회 · 객체 · 행
-// 삭제)는 expired_at 을 보지 않으므로, 비가역 삭제를 막는 것은 이 Go 쪽 응답 거부 하나다.
+// ExpiryCeiling 은 now 기준으로 지울 수 있는 가장 늦은 상한이다(now − 보존 기간 + 여유 = now − 59일). 만료 루프는
+// 이보다 늦은 segmentsUntil 을 받지 않는다(fail-closed · 보안 H1 — clip 응답 한 줄이 59일 안 조각을 비가역으로 지우지
+// 않게). 0단계 문장의 ended 갈래가 DB 시계로 거는 같은 상한은 그 갈래의 expired_at 표시만 막는다 — 문서 주인 갈래
+// (vod_owner)와 뒤 단계(대상 · 문서 조회 · 객체 · 행 삭제)는 나이를 보지 않으므로, 비가역 삭제를 막는 것은 이 Go 쪽
+// 응답 거부 하나다. now 는 사이드카 호스트 시계라 시계가 앞으로 뛴 만큼 일찍 지운다.
 func ExpiryCeiling(now time.Time) time.Time { return now.Add(-ExpiryRetention + ExpiryUntilSlack) }
 
 // ErrCutoffInvalid 는 그 스트림의 컷오프가 장부에 없는 행을 가리킨다는 뜻이다(e1 — fail-closed). 그 스트림은
@@ -77,21 +78,122 @@ func (q ExpiryQuery) args() []any {
 const expiryRangeFilter = `t.stream_id = $1 AND t.start_wall_utc < $3::timestamptz
    AND ($2::timestamptz IS NULL OR t.start_wall_utc >= $2::timestamptz)`
 
-// markExpiredSQL 은 0단계다 — 범위에 닿은 ended 세션에 expired_at 을 쓴다(이미 있으면 그대로). 이후 상태 읽기는 그
-// 회차를 Unknown 으로 본다(계약 5-2 2단계 조회 제외). $4 는 보존 기간 − 여유(초)다 — 상한을 LEAST($3, now() − $4)
-// 로 다시 건다(ExpiryCeiling 과 같은 값 · 만료 루프의 거부와 이중 방어 — 보안 H1). ended 가 아닌 세션은 발행
-// 중이라 표시하지 않는다.
+// expiryVODSettled 는 세션 s 가 VOD 문서를 확정했는가다(종국 ∧ 키 — freeze_failed 도 종국 · kty D2). state 는 보지
+// 않는다 — 문서를 확정했지만 아직 ending(phase 4 전)인 주인도 여기 든다. 0단계 표시와 3단계 선택이 이 조각 하나를 쓴다.
+const expiryVODSettled = `s.vod_state IN ('frozen', 'frozen_with_gaps', 'freeze_failed') AND s.vod_s3_key IS NOT NULL`
+
+// expirySettleableMember 는 세션 s 가 앞으로 VOD 를 확정할 수 있는가다. 정산 스캔 · 빠른 길은 ending 만 받고
+// (ending.go listEndingSessionsSQL · loadEndingSessionSQL), ended 로 바꾸는 문장은 사슬 전원이 VOD 종국일 때의 phase 4
+// 하나다(chain_close.go markEndedSQL). 그래서 ended ∧ none(옛 판이 쓴 행)은 확정될 길이 없어 넣지 않는다 — 넣으면 그
+// 스트림의 만료가 영구히 미뤄진다. ended ∧ freezing 도 같은 까닭으로 뺀다(chain_close.go:161-163 · ending.go) — ended 는
+// VOD 종국 뒤에만 되므로 그 행은 정상 경로에서 생기지 않고, 생겨도 확정될 길이 없다. 미룸 판정(expiryRoundsSettledSQL)만
+// 쓴다.
+const expirySettleableMember = `s.state IN ('live', 'ending') AND s.vod_state IN ('none', 'freezing')`
+
+// expiryChainCTE 는 WITH RECURSIVE 의 사슬 세 표다 — touched(범위에 닿은 세션) · edge(계승 간선) · chain(touched 에서
+// 간선을 앞(자식 → 부모) · 뒤(부모 → 자식)로 따라간 세션). 간선은 chainEdgeSQL 한 벌이다(사슬 닫힘 · 후속 판정과 같은
+// 규칙) — 늦은 회차 분리가 만든 회차를 가로지르는 간선은 잇지 않는다. 재귀 항은 간선 표를 한 번 읽고 어느 끝이 사슬
+// 안이든 반대 끝을 더한다. UNION 이 중복을 지우므로 끝난다.
+const expiryChainCTE = `touched AS (
+    SELECT DISTINCT t.session_id FROM stream_segments t
+     WHERE ` + expiryRangeFilter + ` AND t.session_id IS NOT NULL
+), edge(child, parent) AS (
+    SELECT c.session_id, p.session_id
+      FROM stream_sessions c JOIN stream_sessions p ON ` + chainEdgeSQL + `
+     WHERE c.stream_id = $1
+), chain(session_id) AS (
+    SELECT session_id FROM touched
+    UNION
+    SELECT CASE WHEN e.child = k.session_id THEN e.parent ELSE e.child END
+      FROM chain k JOIN edge e ON k.session_id IN (e.child, e.parent)
+)`
+
+// expiryVODOwnersCTE 는 vod_owner(지울 VOD 문서의 주인 세션과 키)다 — expiryChainCTE 뒤에 붙인다. 확정 문서 가운데
+//
+//	(가) 범위 칸이 있으면: 범위 안 조각(expiryRangeFilter 만 — 세션 NULL 행 포함 · 나이 상한 없음)이 문서 범위
+//	     [vod_first_seq, vod_last_seq] 안에 있다. 문서는 세션 NULL 행도 GAP 줄로 싣는다.
+//	(나) 범위 칸이 NULL 이면(M6 전 확정): 주인이 사슬 안이다(지금까지의 규칙 그대로).
+//
+// 행 집합은 행 단계(expiryRowsSQL)가 늘어놓는 집합과 같고, 실제 삭제 집합(session_open 제외)을 포함한다 — 0단계의 나이
+// 상한($4)을 여기 걸면 선택이 삭제보다 좁아져 지운 행을 가리키는 문서가 남는다. 비가역 삭제를 막는 보존 기간 방어는
+// Go 쪽 상한 거부(ExpiryCeiling) 하나다. 회차 문서는 마지막 사슬 회원 전원이 같은 키 · 범위를 들므로 회원마다 한 행이다.
+const expiryVODOwnersCTE = `vod_owner(session_id, key) AS (
+    SELECT s.session_id, s.vod_s3_key FROM stream_sessions s
+     WHERE s.stream_id = $1 AND ` + expiryVODSettled + `
+       AND (EXISTS (SELECT 1 FROM stream_segments t
+                     WHERE ` + expiryRangeFilter + ` AND t.seq BETWEEN s.vod_first_seq AND s.vod_last_seq)
+            OR ((s.vod_first_seq IS NULL OR s.vod_last_seq IS NULL)
+                AND s.session_id IN (SELECT session_id FROM chain)))
+)`
+
+// markExpiredSQL 은 0단계다 — 두 갈래 세션에 expired_at 을 쓴다(이미 있으면 그대로). 이후 상태 읽기는 그 회차를
+// Unknown 으로 본다(계약 5-2 2단계 조회 제외).
+//
+//	범위에 닿은 ended 세션: $4 는 보존 기간 − 여유(초)다 — 상한을 LEAST($3, now() − $4) 로 다시 건다(ExpiryCeiling 과
+//	  같은 값 · 만료 루프의 거부와 이중 방어 — 보안 H1). ended 가 아닌 세션은 발행 중이라 이 갈래로 표시하지 않는다.
+//	지울 VOD 문서의 주인(vod_owner — 3단계 선택과 같은 행 집합 · state 무관): 문서를 지우므로 그 회차를 조회에서 뺀다.
+//	  expired_at 을 읽는 곳은 상태 판정 · 구멍 진단 · 이 파일뿐이라 ending 주인에 써도 상태기계에 다른 효과가 없다.
 const markExpiredSQL = `
+WITH RECURSIVE ` + expiryChainCTE + `, ` + expiryVODOwnersCTE + `
 UPDATE stream_sessions s SET expired_at = pg_catalog.now()
- WHERE s.stream_id = $1 AND s.expired_at IS NULL AND s.state = 'ended'
-   AND s.session_id IN (SELECT t.session_id FROM stream_segments t
-                         WHERE ` + expiryRangeFilter + ` AND t.session_id IS NOT NULL
-                           AND t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $4::double precision))`
+ WHERE s.stream_id = $1 AND s.expired_at IS NULL
+   AND ((s.state = 'ended'
+         AND s.session_id IN (SELECT t.session_id FROM stream_segments t
+                               WHERE ` + expiryRangeFilter + ` AND t.session_id IS NOT NULL
+                                 AND t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $4::double precision)))
+        OR s.session_id IN (SELECT session_id FROM vod_owner))`
 
 // expiryMinAge 는 markExpiredSQL $4 다 — 지울 수 있는 조각의 최소 나이(ExpiryCeiling 과 같은 원천).
 const expiryMinAge = ExpiryRetention - ExpiryUntilSlack
 
-// MarkExpired 는 범위에 닿은 세션의 expired_at 을 한 트랜잭션(한 문장)으로 쓰고 새로 쓴 세션 수를 돌려준다.
+// expiryRoundsSettledSQL ($1 · $2 · $3 범위) 은 미룸 판정이다 — 구간을 앞으로 범위에 담을 수 있는 미정 단위가 그
+// 스트림에 없으면 참이다. 구간 행은 expiryRangeFilter 만으로 고른 행(세션 NULL 행 포함 · 나이 상한 없음 — 선택과 같은
+// 행 집합)이고 구간 꼭대기 = 그 최대 seq 다. 구간이 비면 지울 것이 없어 참이다. 미정 단위는 둘이다.
+//
+//	(a) 회차(round_id): 확정 가능 회원이 있거나 회차가 안 닫혔고(회원 round_closed_at 최댓값 NULL — 판정식
+//	    playbackVerdictSQL 과 같은 뜻), 회원 조각 하나라도 seq ≤ 구간 꼭대기인 것.
+//	(b) 사슬(round_id 없는 옛 세션): 확정 가능 회원이고 자기 조각 하나라도 seq ≤ 구간 꼭대기인 것. 사슬 닫힘 · 확정은
+//	    사슬 전원을 함께 옮기고 계승은 vod none 꼬리만 받으므로, 확정이 생길 수 있는 사슬은 머리까지 모두 확정 가능
+//	    회원이다 — 자기 행만 봐도 사슬의 최소 seq 를 본 것과 같아 재귀가 필요 없다.
+//
+// 문서 시작은 max(회원 조각 최소 seq, 컷오프)이고 앞으로 생길 조각은 seq 가 더 크다. 그래서 최소 seq 가 꼭대기보다 큰
+// 단위는 앞으로도 구간을 품을 수 없다. 이 조건은 필요조건이라 컷오프 때문에 실제로는 품지 않는 단위도 걸릴 수 있는데,
+// 그때는 미루는 쪽(보존 기간을 넘겨 남기는 쪽)으로만 틀린다.
+const expiryRoundsSettledSQL = `
+WITH span AS (
+    SELECT pg_catalog.max(t.seq) AS top FROM stream_segments t WHERE ` + expiryRangeFilter + `
+), open_round AS (
+    SELECT s.round_id FROM stream_sessions s
+     WHERE s.stream_id = $1 AND s.round_id IS NOT NULL
+     GROUP BY s.round_id
+    HAVING pg_catalog.bool_or(` + expirySettleableMember + `) OR pg_catalog.max(s.round_closed_at) IS NULL
+)
+SELECT span.top IS NULL
+    OR NOT EXISTS (SELECT 1 FROM stream_sessions s JOIN stream_segments g
+                                 ON g.stream_id = s.stream_id AND g.session_id = s.session_id
+                    WHERE s.stream_id = $1 AND g.seq <= span.top
+                      AND (s.round_id IN (SELECT round_id FROM open_round)
+                           OR (s.round_id IS NULL AND ` + expirySettleableMember + `)))
+  FROM span`
+
+// ExpiryRoundsSettled 는 0단계보다 앞의 미룸 판정이다. 거짓이면 그 방송은 이번에 표시도 삭제도 하지 않는다 — 판정
+// 단위는 회차(round_id) 또는 사슬(round_id 없는 옛 세션)이다. 참이 된 뒤에는 표시 · 선택 · 삭제 사이에 잠금이 필요 없다.
+// 근거는 둘이다. ① 닫힘은 단조다 — 종국에서 freezing 으로 돌아가는 문장이 없고 닫힌 사슬은 계승되지 않는다. ② 구간
+// 행 집합이 판정 뒤 늘지 않는다 — 색인기는 꼬리보다 늦은 벽시각의 조각만 넣고(indexer H3 · seq 순서 = 벽시각 순서
+// G8) 구간 상한은 같은 호스트 시계로 now − 59일 이하라(ExpiryCeiling), 판정 뒤 녹화된 조각이 구간에 들려면 59일을
+// 넘는 시계 역행이 있어야 한다. ① 만으로는 행 집합이 고정되지 않는다(c1 cx 교차 검증).
+func ExpiryRoundsSettled(ctx context.Context, pool *pgxpool.Pool, q ExpiryQuery) (bool, error) {
+	if err := q.validate(); err != nil {
+		return false, err
+	}
+	var ok bool
+	if err := pool.QueryRow(ctx, expiryRoundsSettledSQL, q.args()...).Scan(&ok); err != nil {
+		return false, fmt.Errorf("만료 미룸 판정 조회 실패 stream_id=%q: %w", q.StreamID, err)
+	}
+	return ok, nil
+}
+
+// MarkExpired 는 0단계 두 갈래 세션의 expired_at 을 한 트랜잭션(한 문장)으로 쓰고 새로 쓴 세션 수를 돌려준다.
 // 부른 쪽은 커밋 뒤 PlaybackChanged(스트림)를 부른다 — 뒤 단계가 실패해도 조회 제외는 남는다(D16).
 func MarkExpired(ctx context.Context, pool *pgxpool.Pool, q ExpiryQuery) (int64, error) {
 	if err := q.validate(); err != nil {
@@ -192,7 +294,7 @@ type ExpiryDocKind int
 
 const (
 	ExpiryDocDVR  ExpiryDocKind = iota + 1 // 범위에 닿은 ended 세션의 dvr 문서
-	ExpiryDocVOD                           // 그 세션들 사슬(앞 · 뒤 계승)의 vod 문서
+	ExpiryDocVOD                           // 범위와 겹치는 확정 vod 문서(범위 칸 NULL 이면 사슬 — vod_owner)
 	ExpiryDocInit                          // 조각 전부가 범위 안인 ended 세션의 init(K3)
 )
 
@@ -203,34 +305,17 @@ type ExpiryDocument struct {
 	Key       string
 }
 
-// expiryDocumentsSQL ($1 · $2 · $3 범위) — 문서를 종류 · 세션 순으로 고른다.
-//
-// 사슬은 범위에 닿은 세션에서 계승 간선을 앞(자식 → 부모) · 뒤(부모 → 자식)로 따라간다. 간선은 chainEdgeSQL 한
-// 벌이다(사슬 닫힘 · 후속 판정과 같은 규칙) — 늦은 회차 분리가 만든 회차를 가로지르는 간선은 잇지 않는다. 재귀 항은
-// 간선 표(edge)를 한 번 읽고 어느 끝이 사슬 안이든 반대 끝을 더한다. UNION 이 중복을 지우므로 끝난다. 문서는 ended
-// 세션 것만 고른다 — 열린 세션의 문서는 발행 중이다.
+// expiryDocumentsSQL ($1 · $2 · $3 범위) — 문서를 종류 · 세션 순으로 고른다. dvr · init 은 범위에 닿은 ended 세션
+// 것만 고른다 — 열린 세션의 문서는 발행 중이다. vod 는 vod_owner(0단계가 표시한 주인과 같은 행 집합)다 — 확정 문서는
+// 더 바뀌지 않으므로 주인이 아직 ending 이어도 고른다.
 const expiryDocumentsSQL = `
-WITH RECURSIVE touched AS (
-    SELECT DISTINCT t.session_id FROM stream_segments t
-     WHERE ` + expiryRangeFilter + ` AND t.session_id IS NOT NULL
-), edge(child, parent) AS (
-    SELECT c.session_id, p.session_id
-      FROM stream_sessions c JOIN stream_sessions p ON ` + chainEdgeSQL + `
-     WHERE c.stream_id = $1
-), chain(session_id) AS (
-    SELECT session_id FROM touched
-    UNION
-    SELECT CASE WHEN e.child = k.session_id THEN e.parent ELSE e.child END
-      FROM chain k JOIN edge e ON k.session_id IN (e.child, e.parent)
-)
+WITH RECURSIVE ` + expiryChainCTE + `, ` + expiryVODOwnersCTE + `
 SELECT d.kind, d.session_id, d.key FROM (
     SELECT 1 AS kind, s.session_id, s.dvr_s3_key AS key
       FROM stream_sessions s JOIN touched USING (session_id)
      WHERE s.state = 'ended' AND s.dvr_s3_key IS NOT NULL
     UNION ALL
-    SELECT 2, s.session_id, s.vod_s3_key
-      FROM stream_sessions s JOIN chain USING (session_id)
-     WHERE s.state = 'ended' AND s.vod_s3_key IS NOT NULL
+    SELECT 2, o.session_id, o.key FROM vod_owner o
     UNION ALL
     SELECT 3, s.session_id, s.init_s3_key
       FROM stream_sessions s JOIN touched USING (session_id)

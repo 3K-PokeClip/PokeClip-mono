@@ -335,24 +335,99 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
-| `CLIP_INTERNAL_URL` | (빈값 = 만료 끔) | clip 내부 주소 `http(s)://host[:port]`. 경로 · 끝 `/` · 질의 · 조각 · 자격증명이 있으면 기동 거부. **빈 값이 롤백 스위치다** — 비우고 사이드카만 재기동한다(`CONTROL_LISTEN` 과 같은 꼴). 주소가 비어도 아래 토큰 값의 규칙은 본다 |
+| `CLIP_INTERNAL_URL` | (빈값 = 만료 끔) | clip 내부 주소 `http(s)://host[:port]`. 경로 · 끝 `/` · 질의 · 조각 · 자격증명이 있으면 기동 거부. **빈 값이 롤백 스위치다** — compose 를 손으로 띄운 곳은 비우고 사이드카만 재기동한다(`CONTROL_LISTEN` 과 같은 꼴). prod 는 user_data 렌더라 tfvars `clip_internal_url` 을 비우고 상자를 교체한다(아래 「prod 공급 경로」). 재기동 없이 지우기만 멈추려면 아래 끄기 스위치를 끈다. 주소가 비어도 아래 토큰 값의 규칙은 본다 |
 | `CLIP_EXPIRY_TOKEN` | (빈값) | 만료 창구 토큰 값. 로그 · 오류 문구에 나오지 않는다. `CLIP_EXPIRY_TOKEN_FILE` 과 함께 넣으면 기동 거부. 둘 다 없이 켜면 clip 이 401 로 답하고, 연속 실패가 `expiry_stalled` 게이지(ERROR)로 드러난다 |
 | `CLIP_EXPIRY_TOKEN_FILE` | (빈값) | 토큰 한 줄이 든 파일의 **컨테이너 안 절대 경로**(prod 는 파일로만 공급한다). 상대 경로는 기동 거부. 파일 규칙은 `MTX_API_PASS_FILE` 과 같다(위 「관측 자격 파일 규칙」). 다만 읽기 실패는 기동 실패가 아니라 **만료만 끈다**(`expiry_disabled reason=token_file`). 기동 때 한 번 읽으므로 교체 = 재기동이다 |
 
 *   **한계 — CDN 캐시본:** 만료는 장부 행과 S3 객체만 지우고 CloudFront 캐시를
     무효화하지 않는다. 서명 쿠키가 살아 있는 시청자에게는 지운 조각 · 목록의
     엣지 캐시본이 캐시 TTL 동안 더 보일 수 있다.
-*   **한계 — 방송 가운데만 만료(POK-551):** 만료 구간은 clip 이 준 방송의
-    벽시계 구간으로 정하고 장부의 사슬 · 회차 경계를 보지 않는다(계약-세그먼트
-    인덱스 6-2). 그래서 방송 가운데만
-    만료되면 남은 VOD 문서(회차 문서 · 지금의 사슬 문서 둘 다)가 지운 조각을
-    가리킨 채 `mode:vod` 로 나갈 수 있다. 만료를 prod 에 연결하기 전에
-    POK-551 로 막는다 — 만료를 prod 에 연결하는 변경은 POK-551 보다 먼저
-    들어가면 안 된다. 지금 prod 에는 `CLIP_INTERNAL_URL` 을 넣는 공급 경로가
-    없다(`infra/media-host/bin/start-media.sh` 가 상자 스위치 파일
-    `sidecar.env` 에 `PLAYBACK_ROUND_KEYS` 한 줄만 받는다). prod 공급 경로와
-    끄기 스위치도 POK-551 몫이다. 그런 문서를 찾는 법은 아래 「회차 VOD 문서
-    구멍 진단」 이다.
+*   **방송 가운데만 만료 — 해소(POK-551):** 만료 구간은 clip 이 준 방송의
+    벽시계 구간이고 장부의 사슬 · 회차 경계를 보지 않는다(계약-세그먼트
+    인덱스 6-2). 그래서 VOD 문서는 범위 겹침으로 고른다. 구간 행(세션 NULL
+    행 포함)이 확정 문서 범위(`vod_first_seq` – `vod_last_seq`) 안에 있으면
+    그 문서를 지우고 주인 세션에 `expired_at` 을 쓴다. 주인은 VOD 확정
+    상태(종국 ∧ 키)로 고르므로 아직 `ending` 인 주인도 든다. 범위 칸이 빈
+    옛 문서는 지금처럼 계승 사슬로 고른다.
+    *   **효과:** 회차 일부가 만료되면 그 회차 VOD 문서 전체를 회수한다.
+        같은 회차 안의 만료되지 않은 방송 VOD 도 함께 내려간다. 세션 NULL
+        행만 만료돼도 그 행을 품은 문서를 회수한다 — 문서가 그 행을 GAP
+        줄로 싣기 때문이다.
+    *   **한계 — 회차 길이 상한 없음:** 회차가 얼마나 길게 이어지는지에
+        상한이 없다. 회차가 보존 기간 가까이 이어지면 첫 방송이 만료될 때
+        방금 끝난 방송까지 담은 회차 VOD 문서가 통째로 내려간다. 그 방송은
+        미뤄 둔 채 회차가 닫히기를 기다리다 닫히자마자 지워지므로, 직후
+        phase 4 가 쓴 `ended_at` 으로 열린 동결 감사 창이 지운 문서를 보고 ERROR
+        `session_freeze_audit` `axis=vod` `reason=missing` 을 낸다. 지울 것을
+        지운 짝 신호다 — 감사는 404 문서를 다시 만들지 않는다.
+    *   **미룸:** 구간을 앞으로 품을 수 있는 회차 · 사슬이 아직 확정될 수
+        있으면 그 방송은 표시도 삭제도 하지 않고 다음 회차에 다시 본다.
+        확정될 수 있다는 것은 회원이 `live` · `ending` 이면서 VOD 가
+        `none` · `freezing` 이거나, 회차가 아직 안 닫힌 것이다. 미뤄질 때와
+        처리될 때 WARN `expiry_deferred`(`value=1` · `value=0`) 가 방송마다
+        한 줄씩 나온다. 미뤄 둔 방송을 clip 이 지우면(탈퇴 정리) 그 방송은
+        다시 오지 않는다. 그래서 처음부터 훑기를 끝까지 마쳤는데 받지 못한
+        미룸 방송은 `value=0 reason=gone` 으로 내린다. 지금 방송 중인 회차는
+        조각이 구간보다 뒤라 걸리지 않는다.
+    *   **한계 — `reason=gone` 은 마지막 장을 믿는다:** 내림은 처음부터
+        훑기의 마지막 장(`hasMore=false`)을 믿는다. clip 이 잘린 장을 주면
+        아직 미뤄진 방송의 경보가 다음 처음부터 훑기까지 최대 하루 가려진다.
+        삭제에는 영향이 없다 — 내림은 게이지만 바꾸고, 그 방송이 다시 오면
+        미룸 판정을 처음부터 다시 한다.
+    *   **영구 미룸 두 경로:** ① 회차가 끝내 닫히지 않는다(`round_closed_at`
+        NULL 고착 — `session_vod_round_wait_long wait=round_open` 과 짝).
+        ② 사슬이 닫히지 않아 `ending` ∧ `vod_state='none'` 에 머문다. 대기
+        사슬이면 `wait=front_pending` 과 짝이고, 그 밖의 고착은 그 경보가
+        잡지 못한다. 미룸 판정은 그 스트림(물리 키) 전체를 본다 — 미정
+        단위의 최소 seq 이상으로 꼭대기가 오는 구간은 모두 걸린다. 그래서
+        한 단위가 고착되면 그 스트림의 **이후 방송 만료가 전부** 멈춘다.
+        `expiry_deferred value=1` 이 하루 넘게 남으면 그 스트림의 미정
+        회차 · 사슬을 [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
+        「만료 미룸 질의」 로 읽는다. 처분은 kty 회부다 — 고착을 푸는 손
+        SQL 은 두지 않는다(회차 · 사슬 상태를 손으로 바꾸면 VOD 동결 ·
+        판정식과 어긋난다).
+    *   **한계 — 오래된 벽시각 행:** seq 는 새로 받았는데 벽시각이 오래된
+        행(귀속 하한 거부 행 · 시계 역행)이 구간에 들면 구간 꼭대기가
+        올라간다. 그러면 지금 회차가 미뤄지거나, 그 행을 품은 최근 회차
+        문서가 회수된다. 그 행은 구간 규칙상 지워지므로 회수는 맞는
+        처분이다. prod 9일 동안 하한 거부는 0건이다(2026-11-12 측정).
+        이 한계는 판정 전에 이미 장부에 있는 행의 일이다. 판정 뒤에
+        들어오는 행은 구간에 들지 않는다 — 색인기는 꼬리보다 늦은
+        벽시각의 조각만 넣고(H3 · seq 순서 = 벽시각 순서 G8), 구간 상한은
+        같은 호스트 시계로 now − 59일 이하다.
+
+    prod 공급 경로(POK-551): 주소는 `prod/media` tfvars 의
+    `clip_internal_url`(기본 빈 값 = 끔)이고, 차면 compose 렌더본에
+    `CLIP_INTERNAL_URL` · `CLIP_EXPIRY_TOKEN_FILE` 이 들어간다. 토큰 그릇은
+    런타임 출력 `clip_expiry_token_secret_arn` → `media.env` 의
+    `CLIP_EXPIRY_TOKEN_SECRET_ARN` 으로 오고, 시작 스크립트가 받아 사이드카
+    파일로 둔다. user_data 로만 들어가 바꾸는 것은 상자 교체다. 절차는
+    [prod 런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
+    「1단-나 ③」 이다(코드: `infra/media-host/compose.yml.tmpl` 의 만료 블록 ·
+    `infra/media-host/bin/lib/clip_expiry.sh` ·
+    `infra/terraform/modules/media_host/user_data.tf`).
+*   **끄기 스위치 — DB 한 행(POK-551):** 위 조건으로 켜진 만료도 장부 표
+    `stream_expiry_switch` 의 `enabled` 가 참일 때만 지운다. 씨앗 행은
+    끔이라 배포만으로는 아무것도 지우지 않는다. 만료기는 회차 시작 · 장을
+    받기 전 · 방송마다 이 행을 다시 읽는다. 그래서 켜고 끄는 데 재기동이
+    필요 없고, 끄면 방송 하나 안에 멈춘다. 방송 사이에서 멈춘 회차는 표시를
+    넘기지 않고, 꺼낸 재시도 방송은 집합에 되돌린다. 끔인 동안은 clip
+    창구도 부르지 않는다.
+    *   **읽지 못하면 끔:** 행 없음 · 표 없음 · 권한 없음 · 시간 초과는
+        모두 끔이다. 표가 없는 DB(이 표 전의 운영 SQL)에서도 사이드카는
+        뜨고 만료만 꺼진다 — 기동 필수 목록에 넣지 않았다.
+    *   **신호:** 값이 바뀔 때(기동 뒤 첫 읽기 포함) WARN
+        `expiry_switch value=0|1` 한 줄이 나온다. 읽기가 실패하기 시작할 때와
+        다시 될 때 ERROR `expiry_switch_read_failed`(`value=1` · `value=0`)
+        가 한 줄씩 나온다.
+    *   **한계 — 끈 동안 게이지가 멈춘다:** 끔인 동안은 창구도 장부도 보지
+        않으므로 `expiry_stalled` · `cutoff_invalid axis=expiry` ·
+        `expiry_deferred` 는 끄기 직전 값에 머문다. 끈 동안의 `value=1` 은
+        지금 상태가 아니다 — 다시 켠 뒤 첫 회차들이 맞춘다.
+    *   **바꾸는 쪽:** 사이드카(`media_indexer`)는 SELECT 만 갖는다. 켜고
+        끄는 것은 마스터가 `SET ROLE media_owner` 로 하는 손 SQL 이다.
+        절차는 [prod 런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
+        「만료 스위치 손 SQL」 이다.
 *   **첫 적용 때 쓰기 정지:** M6 운영 SQL(`stream_schema.sql` ·
     `20_schema.sql`)의 인덱스는 `CREATE INDEX` 이고 `CONCURRENTLY` 가 아니다.
     처음 적용하거나 인덱스가 빠진 DB 에서는 인덱스를 만드는 동안 그 표의 쓰기가
@@ -685,6 +760,17 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
   옮기지 않는다).
 - **`AWS_EC2_METADATA_V1_DISABLED=true`** 를 준다 — 토큰 없는 옛 메타데이터
   요청(IMDSv1)으로 내려가는 길을 막는다.
+- **IMDS 대리 창구 켬 상자(POK-574)는 자격 원천이 IMDS 가 아니라 창구다.**
+  compose 가 사이드카 · janitor 에 env 셋을 더 넣는다 —
+  `AWS_CONTAINER_CREDENTIALS_FULL_URI=http://169.254.170.2:9911/v1/credentials`
+  · `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE=/run/secrets/aws-cred/token` ·
+  `AWS_EC2_METADATA_DISABLED=true`. SDK 기본 사슬은 이 꼴이면 IMDS 공급자를
+  만들지 않고 창구(아래 「cred-relay 명령 · 환경 변수」)에 묻는다. **자격 갱신
+  주기는 중계가 보내는 Expiration(최대 60분)이 정한다** — SDK 는 그 5분 전에
+  다시 묻는다. 이 약 55분은 응답 한 벌의 캐시 주기일 뿐, 역할 세션을 취소한
+  뒤 복구의 상한이 아니다(`infra/media-host/README.md` 「보안 경계」 침해
+  대응). 켬 상자의 `credentials_ok` 는 `provider=CredentialsEndpointProvider`
+  다(끔 상자는 `EC2RoleProvider`).
 - **`credential_process`(외부 명령에서 자격 증명을 받는 SDK 설정)를 쓴다면
   그 명령은 stderr 에 비밀을 쓰지 않아야 한다.** SDK 는 그 명령의 stderr 를
   컨테이너 stderr 에 그대로 잇는다. pgconf 의 오류 정제(원인 오류의 타입
@@ -1120,15 +1206,15 @@ IP 속도 제한(WAF 후속)이다.
 | 교체 겹침 고아 문서 | 이미지 교체가 겹칠 때 옛 writer 가 먼저 확정하면 지금 동작(마지막 사슬의 사슬 문서)이고, 새 writer 가 먼저면 회차 문서다. `vod_conflict` 는 없고, 확정되지 못한 쪽 문서 객체가 많아야 하나 남는다 | 없다 — 버킷 LIST 를 쓰지 않아 감사가 보지 않는다 |
 | 큰 회차의 장부 적재 시한 | 회차 장부 읽기(첫 적재 · 꼬리 잠금 아래 재독)는 10초(`index.TxnDeadline`) 안에 끝나야 한다. 넘으면 일시 오류라 물러서지 않고 재시도하고, 3회면 마지막 사슬 VOD 가 실패로 확정된다(회차 경로는 `ended` — 다시보기 없음). 실측은 1,730조각 동결 전체 48–107ms 뿐이고 적재 상한(약 6만 행) 근처는 재지 않았다 | `session_freeze_retry`(`reason=ledger_failed` 등) 세 줄 뒤 `session_freeze_failed` |
 | 회차 번호 없는 옛 세션이 머리인 마지막 사슬 | 회차 기능(M6) 전 세션(`round_id` 없음)이 마지막 사슬의 머리이고 그 회차에 앞 사슬이 있으면, 그 세션 조각은 회차 범위에 들지 않는데 그 세션 VOD 도 회차 문서를 가리킨다. 지금 개시 규칙(`session/round_rule.go` — 회차 없는 세션을 이으면 새 회차를 연다 · 계승은 직전 세션만)에서는 그런 사슬에 앞 사슬이 생기지 않아 도달하지 않는다 | 개시 규칙을 바꾸는 변경이 이 줄을 다시 본다 |
-| 방송 가운데만 만료 | 위 「60일 만료」 의 한계 줄이다. 만료가 prod 에 연결돼 있지 않아 지금 prod 영향은 0이다 | 아래 「회차 VOD 문서 구멍 진단」 |
+| 방송 가운데만 만료 — 해소(POK-551) | 만료는 구간과 범위가 겹치는 확정 VOD 문서를 회수하고, 확정 전 회차 · 사슬이 구간을 품을 수 있으면 미룬다(위 「60일 만료」). 남은 한계는 영구 미룸 두 경로 · 오래된 벽시각 행 · 회차 길이 상한 없음이다 | `expiry_deferred` · 아래 「회차 VOD 문서 구멍 진단」 |
 
 ### 회차 VOD 문서 구멍 진단
 
 지운 조각을 가리키는 `ended` VOD 문서를 찾는 읽기 전용 질의가
 `internal/index/vod_holes.go` 의 상수 `VODDocumentHolesSQL` 하나다. 제품 코드는
 부르지 않는다. PG 시험(`vod_holes_pg_test.go`)이 원본을 그대로 돌리고, 이
-README 는 본문을 베끼지 않는다. 돌리는 때는 만료를 prod 에 연결하기 전 —
-POK-551 착수 때 한 번이다.
+README 는 본문을 베끼지 않는다. 돌리는 때는 만료를 prod 에서 켜기 전에
+한 번이다 — 그 전에 다른 경로로 지워진 조각을 가리키는 문서를 찾는다.
 
 *   열은 `stream_id` · `session_id` · `vod_s3_key` · `vod_first_seq` ·
     `vod_last_seq` · `missing`(문서 범위 안에서 빠진 행 수)이다.
@@ -1244,6 +1330,7 @@ GRANT SELECT ON stream_seq_floors TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON stream_edge_bounds TO media_indexer;
 GRANT SELECT ON stream_timing_gate TO media_indexer;
+GRANT SELECT ON stream_expiry_switch TO media_indexer;
 ```
 
 - **DELETE 는 M6 만료 · outbox 몫과 하한 원장(`stream_edge_bounds`) 몫
@@ -1354,9 +1441,12 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
   (`GREATEST`)에만 있고 트리거가 없다.
     *   **DB 자격이 새면** 표 단위 UPDATE · DELETE 로 원장 하한을 낮추거나
         행을 지울 수 있다.
-    *   **상자를 침해해 인스턴스 역할 자격(IMDS)을 얻으면** KVS
-        `UpdateKeys` 로 하한 키를 낮추거나 지우거나 높일 수 있다(이 동작
-        하나가 쓰기 · 지우기를 다 한다).
+    *   **상자를 침해해 인스턴스 역할 자격을 얻으면** KVS `UpdateKeys` 로
+        하한 키를 낮추거나 지우거나 높일 수 있다(이 동작 하나가 쓰기 ·
+        지우기를 다 한다). 역할에 `GetKey` 는 없다(POK-574 — 읽어 보고 고치는
+        길은 없지만 덮어쓰기는 된다). 역할 자격을 얻는 길은 끔 상자면 상자
+        위 모든 컨테이너(IMDS 홉 2), IMDS 대리 창구 켬 상자면 사이드카 ·
+        janitor · 중계 · 호스트다.
     *   **원장을 고친 것도 KVS 로 번진다.** 열린 회차의 행이 지워지거나
         낮아지면 다음 올림(5분)이 그 Writer 가 기억한 후보로 행을 다시 쓰고
         그 값을 KVS 에 쓴다. 그 후보가 KVS 의 지금 값보다 작으면 KVS 하한이
@@ -3076,8 +3166,8 @@ k 에서 한 줄을 내고 비운다(`internal/indexer/unattributed_run.go`). �
 | **판독 일시 실패 동안 그 스트림이 멈춘다.** 실패한 조각과 그 뒤 조각을 커밋하지 않고 다음 재스캔을 기다린다 | 한 번에 최대 약 5분 45초(재스캔 5분 + 수집 예산 45초) 그 스트림의 되감기 목록 · ③ 업로드가 늘지 않는다. 다른 스트림은 무관하다 | 순서 보존의 대가 — 다음 재스캔에서도 실패하면 칸 NULL 로 커밋한다 |
 | **기동 전 검사는 시작 스크립트를 지나는 기동만 본다.** 엔진 재기동(`restart: on-failure`) · 스위치를 올리는 순간 이미 돌던 출시 컨테이너는 보지 않는다 | 이미 돌던 출시 컨테이너는 스위치 2 선행 조건(모든 상자 라벨 2)이 막고, 어겨도 쓰기자 거부가 첫 INSERT 에서 끝낸다 — 그 사이 감사 · 정산이 판 2 행을 옛 식으로 읽을 수 있다 | 런북 「PDT 판 2 롤백 하한 · 판 게이트」 남는 한계 |
 | **스위치 2 때 살아남은 출시 컨테이너가 판 2 회차 VOD 를 판 태그 없이 동결할 수 있다(위 행의 「감사 · 정산이 판 2 행을 옛 식으로」 의 실물).** 쓰기자 거부는 INSERT 에서만 걸린다 — 스위치 순간 송출이 없던 상자의 출시 컨테이너는 INSERT 를 하지 않아 23514 에 걸리지 않고 계속 돈다 | 다른 상자(c0)가 연 판 2 회차의 사슬은 먼저 닿은 프로세스가 닫는다 — 그 출시 프로세스가 닫으면 VOD 를 판 태그(`#EXT-X-POKECLIP-TIMING:2`) 없이 동결할 수 있다(P13 연습 6 · 로컬 실험대 2026-11-12 — 같은 회차 DVR 은 태그 1 · VOD 는 0). 장부 `vod_sha256` 이 출시판 렌더와 같아 동결 감사가 늘 통과시킨다 — VOD 감사는 sha · ETag 대조뿐이고 다시 쓰는 갈래는 DVR 만이다(`rewind/publish/audit.go`). VOD 확정은 `freezing` 행에만 한 번 쓴다(`rewind/publish/vod.go` `vodConfirmSQL`) | 한계(기록) — 복구 길 없음, 막는 것뿐이다. 막는 것은 스위치 2 선행 조건(모든 상자 사이드카 라벨 2 — media-swap 런북 「스위치 2 선행 조건(5)」)뿐이다 |
-| **판 NULL 귀속 PDT 가 귀속 하한 거부 행 길이만큼 앞선다(c0 — 판 NULL 회차).** 판 NULL 귀속 식은 `max(A + U, f)` 다 — A = 기저 세션의 마지막 귀속 행 PDT + 길이 · U = 그 행 뒤 이 행 앞 비귀속 행 길이 합 · f = 이 행의 파일 이름 벽시각(`index/placement.go` `legacyPDT` · `index/store.go` `basePDTSQL`). 방송 중 귀속 하한 거부 행(WARN `session_floor_rejected` — 세션 시작보다 `FloorSlack`(1초) 넘게 이른 벽시각의 조각, 비귀속으로 쓴다)도 U 에 든다 | 다음 귀속 행 PDT 가 그 행 길이만큼 벽시각보다 앞서고, 뒤 행이 누적항으로 이어 받아 방송 끝까지 남는다(f 가 U 보다 긴 틈으로 다시 앞설 때까지) — 장부 PDT 를 벽시각으로 읽는 클립 · 채팅 시각이 그만큼 어긋난다. 그 행이 계승 개시 행이면 새 세션의 `first_pdt` 에도 같은 차가 든다. 대신 그 사슬의 VOD 동결은 S7(GAP 행 PDT = 앞 행 PDT + 길이 뒤의 단조 검사)을 지난다 — U 를 빼면 하한 거부가 낀 사슬의 VOD 가 S7 로 실패해, 그 대가로 앞섬을 받아들였다(kty 2026-11-12 (나)). 관측: INFO `legacy_unattributed_sum`(`u_ms` — U 가 생긴 귀속 행에만) · WARN `session_floor_rejected`. prod 9일 · 색인 조각 4,616 에서 하한 거부 0 건(2026-11-12 측정) | 한계(기록) — 판 2 회차는 섞기가 PDT 를 정해 이 식을 쓰지 않는다(그 대신 아래 행) |
-| **판 2 회차에 귀속 하한 거부 행이 끼면 VOD 동결이 S7 로 실패한다(판 2 전용 — 스위치 2 전에는 생기지 않는다).** 판 2 의 하한 거부 행은 판 2 · 세션 NULL · PDT = 짐작 벽시각이라 앞 귀속 행보다 앞선다. 재현 경로(2026-11-12 시험): `index/finalize.go`(사슬 seq 범위의 세션 NULL 행도 읽음) → `rewind/publish/vod.go` `fillGap`(PDT 가 있으면 그대로 · 판 2 그대로) → `rewind/validate.go` `checkPDTV2` B8 조건 1(시작이 앞선다) 위반 — 다음 행이 이어 가는 갈래 · 영상 머리 겹침 갈래 둘 다. 판 NULL 은 같은 꼴에서 통과한다 | 그 사슬의 VOD 축이 `failed`(`validate`) — VOD 가 나오지 않는다. 라이브 목록 · 장부는 무관 | 결함 — 후속 PR 로 고친다(Jira POK-567). 고친 판이 prod 에 배포되기 전에는 스위치 2 를 올리지 않는다(media-swap 런북 「스위치 2 선행 조건(5)」) |
+| **판 NULL 귀속 PDT 가 귀속 하한 거부 행 길이만큼 앞선다(c0 — 판 NULL 회차).** 판 NULL 귀속 식은 `max(A + U, f)` 다 — A = 기저 세션의 마지막 귀속 행 PDT + 길이 · U = 그 행 뒤 이 행 앞 비귀속 행 길이 합 · f = 이 행의 파일 이름 벽시각(`index/placement.go` `legacyPDT` · `index/store.go` `basePDTSQL`). 방송 중 귀속 하한 거부 행(WARN `session_floor_rejected` — 세션 시작보다 `FloorSlack`(1초) 넘게 이른 벽시각의 조각, 비귀속으로 쓴다)도 U 에 든다 | 다음 귀속 행 PDT 가 그 행 길이만큼 벽시각보다 앞서고, 뒤 행이 누적항으로 이어 받아 방송 끝까지 남는다(f 가 U 보다 긴 틈으로 다시 앞설 때까지) — 장부 PDT 를 벽시각으로 읽는 클립 · 채팅 시각이 그만큼 어긋난다. 그 행이 계승 개시 행이면 새 세션의 `first_pdt` 에도 같은 차가 든다. 대신 그 사슬의 VOD 동결은 S7(GAP 행 PDT = 앞 행 PDT + 길이 뒤의 단조 검사)을 지난다 — U 를 빼면 하한 거부가 낀 사슬의 VOD 가 S7 로 실패해, 그 대가로 앞섬을 받아들였다(kty 2026-11-12 (나)). 관측: INFO `legacy_unattributed_sum`(`u_ms` — U 가 생긴 귀속 행에만) · WARN `session_floor_rejected`. prod 9일 · 색인 조각 4,616 에서 하한 거부 0 건(2026-11-12 측정) | 한계(기록) — 탈퇴 정리가 없는 한 운영 경로에서는 도달하지 않는다(아래 행과 같은 H3 근거 · 같은 탈퇴 정리 예외). 판 2 회차는 섞기가 PDT 를 정해 이 식을 쓰지 않는다(그 대신 아래 행) |
+| **판 2 회차에 귀속 하한 거부 행이 끼면 VOD 동결이 S7 로 실패한다 — 탈퇴 정리가 없는 한 운영 경로에서는 도달하지 않는다(판 2 전용 — 스위치 2 전에는 생기지 않는다).** 판 2 의 하한 거부 행은 판 2 · 세션 NULL · PDT = 짐작 벽시각이라 앞 귀속 행보다 앞선다. 재현 경로(2026-11-12 시험): `index/finalize.go`(사슬 seq 범위의 세션 NULL 행도 읽음) → `rewind/publish/vod.go` `fillGap`(PDT 가 있으면 그대로 · 판 2 그대로) → `rewind/validate.go` `checkPDTV2` B8 조건 1(시작이 앞선다) 위반 — 다음 행이 이어 가는 갈래 · 영상 머리 겹침 갈래 둘 다. 판 NULL 은 같은 꼴에서 통과한다. 재현은 시험이 장부 쓰기(`store.Insert`)를 직접 불렀다 — 운영에서 그것을 부르는 곳은 인덱서 하나(`indexer/insert.go` `insertWithRetry`)이고, 그 앞의 H3(늦은 조각 검사 — `indexer/indexer.go` `lateOrDuplicate`)가 꼬리 벽시각보다 늦지 않은 조각을 버린다(`late_segment_skipped`). 세션 `started_at` 은 그 세션 첫 행의 벽시각(`session/registry.go` `openDecision`)이라 꼬리 ≥ `started_at` 이고, H3 를 지난 조각은 하한(`started_at` − `FloorSlack`)에 걸리지 않는다. 예외 — 방송 중 스트리머 탈퇴 정리(`app_clip` 이 그 스트림 조각을 전량 DELETE · live 세션 행은 남김)가 지나면, 다음 재스캔(5분)이 커서를 DB 에서 다시 읽어 꼬리가 비고(`index/store.go` `LoadCursor`) H3 를 통째로 건너뛴다(`indexer.go` `lateOrDuplicate` 의 `cur.Tail == nil`) — 디스크에 남은 하한 밖 파일이 하한 거부에 닿는다. 재기동 없이 재스캔만으로 열린다 | (도달하면) 그 사슬의 VOD 축이 `failed`(`validate`) — VOD 가 나오지 않는다. 라이브 목록 · 장부는 무관 | 한계(기록) — 고치지 않는다(kty 2026-11-13 · Jira POK-567). 근거 시험 `indexer/indexer_test.go` `TestCase04TrulyLateSegmentIsSkippedWithError`(늦은 조각 → `late_segment_skipped` · Insert 0). 감시 신호 WARN `session_floor_rejected` — 찍히면 그 seq 의 장부 행이 실제로 있는지 보고 다시 연다(쓰기자 경합이면 신호만 찍히고 행은 롤백될 수 있다). 전제(장부 쓰기 호출자 하나 · 세션 개시와 첫 행이 한 트랜잭션 · 만료는 `ended` 세션 행 · 세션 없는 행만 지우고 방송 중 세션 행은 안 지움 · 장부 마지막 행이 곧 커서 꼬리)가 바뀌어도 다시 연다. 알려진 예외 하나 — 방송 중 스트리머 탈퇴 정리(조각 전량 DELETE) → 재스캔에서 꼬리 비움 → H3 건너뜀. 영향은 탈퇴한 스트리머의 VOD 뿐이고 그 데이터는 정리 중이라 받아들인다. 스위치 2 선행 조건은 이 신호 0 건 확인이다(media-swap 런북 「스위치 2 선행 조건(5)」) |
 
 ## 테스트
 
@@ -3700,6 +3790,32 @@ janitor 가 같은 이미지라 둘 다 쓴다.
     1.  `PRIVATE KEY` 블록이 없는지 확인한다(`grep -c 'PRIVATE KEY'` = 0).
 - Dockerfile 에 `POSTGRES_SSLROOTCERT` 기본값(`ENV`)은 두지 않는다 — 로컬
   compose 의 password · `prefer` 경로에 끼어들지 않게 배포 정의가 준다.
+
+### cred-relay 명령 · 환경 변수 (POK-574)
+
+`cmd/cred-relay` 는 Media 상자의 IMDS 대리 창구 중계다. 사이드카 이미지에
+함께 들고(`/usr/local/bin/cred-relay`), prod 창구 켬 상자의 compose 가
+entrypoint 로 고른다. 상자 위 동작 · 신호 · 운영 판정은
+[`infra/media-host/README.md`](/infra/media-host/README.md) 「IMDS 대리
+창구」 가, 결정은
+[ADR-0008](/docs/decisions/2026-11-15-media-imds-credential-relay.md) 이
+정본이다. 핵심은 `internal/credrelay`(토큰 · IMDS 원천 · 응답 캐시 · HTTP
+계약 · 서버 상한)이고 media-ci 커버리지 게이트 대상이다. 토큰을 두는 쪽은
+`infra/media-host/bin/lib/cred_relay.sh` 다.
+
+| 하위 명령 | 하는 일 | 종료 코드 |
+|---|---|---|
+| (없음) · `serve` | `CRED_RELAY_LISTEN` 에서 듣고, 창구 토큰이 맞는 호출자에게만 인스턴스 역할 자격을 준다 | 종료 신호(TERM · INT)면 0 · 기동 거부(설정 · 토큰 파일 · 듣기)와 서버가 스스로 멈춤은 1 |
+| `healthcheck` | 같은 주소의 `/healthz` 가 2xx 인지 본다(compose healthcheck) | 0 · 1 |
+| `isolation-check` | 이 망 칸에서 IMDS 토큰을 못 받고 창구가 토큰 없는 요청을 401 로 거부하는지 보고 한 줄 `CRED ISOLATION imds_token=<blocked\|reachable\|error> relay=<401\|상태 코드\|error>` 를 낸다. 주소는 운영 상수(169.254.169.254 · 169.254.170.2:9911)다 | 격리됨 0 · 격리 안 됨 1 · 판정 못 함 2 |
+
+사용법 오류(모르는 하위 명령 · 남는 인자)는 2 다.
+
+| 변수 | 범위 · 뜻 |
+|---|---|
+| `CRED_RELAY_LISTEN` | 듣는 `IP:포트`(이름 풀이 없음 · 포트 0 아님). IPv4 링크 로컬(169.254.0.0/16)만 받는다 — 그 밖이면 `cred_relay_failed reason=config`. 중계는 호스트 망이라 모든 주소 · 사설 주소로 들으면 창구가 상자 밖에도 열린다. prod 는 `169.254.170.2:9911` |
+| `CRED_RELAY_CALLER_DIR` | 호출자 이름마다 토큰 파일 하나가 든 디렉터리(정리된 절대 경로). `os.Root` 로 열고 링크 이름은 받지 않는다 — 열지 못하거나 두 호출자의 토큰이 같으면 `reason=token_file` |
+| `CRED_RELAY_CALLERS` | 호출자 이름 목록(쉼표). prod 는 `indexer,janitor` |
 
 ### janitor 환경 변수
 

@@ -269,6 +269,7 @@ export function useGoToNotification() {
         toast({
           tone: 'warning',
           title: `${n.channel.name} 채널의 편집 권한이 없어요`,
+          maskTitle: true,
           description: '초대가 취소됐거나 편집자에서 빠졌어요',
           dedupeKey: `notification-gone-${n.channel.id}`,
         });
@@ -408,6 +409,9 @@ export function useArrivalToasts(state: NotificationsState) {
         tone: TOAST_TONE[view.tone],
         title: view.title,
         description: view.detail,
+        // 알림 창과 같은 글이다 — 채널·편집자 이름과 방송·클립 제목이 들어간다
+        maskTitle: true,
+        maskDescription: true,
         dedupeKey: `notification-${n.id}`,
         ...(sticky ? { duration: 0 } : {}),
         action: view.goLabel

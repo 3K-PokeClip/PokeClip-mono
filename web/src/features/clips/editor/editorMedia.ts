@@ -1,77 +1,9 @@
-import { ensurePlaybackAccess, isPlaybackExpired } from '@/api/playbackAccess';
-import { fetchRecordingSpans, lookupRecordingSpans } from '@/api/mediaPlayback';
-import { mediaStreamId, timelineBaseMs, type BroadcastRow } from '@/api/clipEditor';
 import { onSessionAdvance } from '@/stores/auth';
-import {
-  rebaseTimeline,
-  recordingTimeline,
-  type RecordingPiece,
-  type RecordingTimeline,
-} from '@/features/player/recordingTimeline';
-import type { TrackPiece } from './trackAudio/loadTrackAudio';
+import type { RemuxedWindow } from './source/remuxWindow';
+import type { TrackAudioLoad, TrackPiece } from './trackAudio/loadTrackAudio';
 
-// 편집기가 여는 방송의 녹화와 미리 받아 둔 미디어(POK-499). 하이라이트 카드가 편집기에 들어가기 전에 영상 창 · 소리 조각을
-// 받아 여기 맡기고, 편집기는 같은 주소면 다시 받지 않고 꺼내 쓴다. 두 쪽이 같은 주소를 만들어야 해서 녹화 읽기와 시간축
-// 셈도 여기 하나로 둔다.
-
-/**
- * 이 방송의 녹화 — 방송 시간과 겹치는 구간들(시계 차이 1분까지)을 한 시간축에 놓는다(첫 구간 시작 ~ 마지막 구간 끝, 틈 포함).
- * 재생 서버의 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 오고, 재접속하면 한 방송의 녹화도 여러 구간이 된다(로컬 리뷰
- * 2라운드). 구간 목록은 미리보기 창이 틈에 걸리지 않게 쓴다(POK-253). 재생 서버가 없거나 녹화가 없으면 null
- *
- * @param strict 녹화 목록을 못 물었으면(재생 서버 실패 · 시한) 「녹화 없음」으로 접지 않고 던진다. 카드 저장은 없음과 실패를 갈라야
- *   기준점을 고른다(편집기 · 미리 받기는 미리보기 없이 연다)
- */
-export async function loadRecording(
-  broadcast: BroadcastRow,
-  { strict = false }: { strict?: boolean } = {},
-): Promise<RecordingTimeline | null> {
-  // CDN 뒤 녹화 목록·미리보기는 출입증 쿠키가 있어야 열린다(POK-317). 미리보기 창은 이 키로 갱신한다(ensureMediaAccess)
-  const access = await ensurePlaybackAccess(broadcast.streamId, mediaStreamId(broadcast));
-  // 못 받았는데 녹화를 물으면 CDN 403이 「녹화 없음」으로 접혀 미리보기 없이 열리고 다시 묻지 않는다(PR #320 codex)
-  if (access?.kind === 'failed')
-    throw new Error('영상 출입증을 받지 못했어요. 잠시 뒤 다시 열어 주세요');
-  if (access?.kind === 'expired' || isPlaybackExpired(broadcast.streamId))
-    throw new Error('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요');
-  // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
-  const streamKey = mediaStreamId(broadcast);
-  const spans = strict
-    ? await lookupRecordingSpans(streamKey)
-    : await fetchRecordingSpans(streamKey);
-  if (spans === null) throw new Error('recording lookup failed');
-  return recordingTimeline(
-    spans,
-    Date.parse(broadcast.startedAt!),
-    broadcast.endedAt ? Date.parse(broadcast.endedAt) : null,
-  );
-}
-
-export interface EditorTimeline {
-  /** 편집기 시간축 0초의 절대 ms(시각 기준점) */
-  base: number;
-  /** 녹화 끝(기준점 축의 초). 녹화가 없으면 0 */
-  recordingEndSeconds: number;
-  /** 녹화 구간들(기준점 축의 초). 녹화가 없으면 undefined */
-  pieces: RecordingPiece[] | undefined;
-}
-
-export function editorTimelineOf(
-  broadcast: BroadcastRow,
-  recording: RecordingTimeline | null,
-): EditorTimeline {
-  // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다.
-  //    방송 시작 편지 시각과 수십 초 갈리고, 조각 장부의 위치 값은 방송을 넘어 이어지므로 녹화 시작과도 갈릴 수 있다
-  const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
-  return {
-    base,
-    // 녹화 끝을 기준점 축의 초로 — 녹화 길이는 녹화 시작부터 잰 값이라 그대로 쓰면 두 시작의 차만큼 끝이 어긋난다
-    recordingEndSeconds: recording
-      ? (recording.startMs + recording.durationSeconds * 1000 - base) / 1000
-      : 0,
-    // 녹화 구간들도 기준점 축으로 옮긴다 — 녹화 축과 기준점 축은 두 시작의 차만큼 갈린다
-    pieces: recording === null ? undefined : rebaseTimeline(recording, base).pieces,
-  };
-}
+// 편집기가 미리 받아 둔 미디어(POK-499). 하이라이트 카드가 편집기에 들어가기 전에 영상 창 · 소리 조각을 받아 여기 맡기고,
+// 편집기는 같은 열쇠면 다시 받지 않고 꺼내 쓴다. 두 쪽이 같은 열쇠를 만들어야 해서 열쇠 셈도 여기 하나로 둔다.
 
 /**
  * 맡겨 두는 개수. 창 하나가 영상 수십 MB · 풀어 둔 소리 수십 MB라 화면에 보이는 카드 몇 장 몫만 둔다. 넘치면 가장 오래 안 쓴
@@ -118,6 +50,17 @@ export function trackPiecesBytes(tracks: TrackPiece[][]): number {
   return total;
 }
 
+/**
+ * 맡긴 소리(TrackAudioLoad)의 크기: 푼 소리에 다시 받기 재료 — 판독한 조각의 프레임 바이트 — 를 더한다(② 기다림 고리가
+ * 빠진 조각만 받아 다시 묶으려고 든다 · 설계 prw2 7절 c10b′). 푼 덩어리 표(reuse.decoded)는 tracks 와 같은 소리라 더하지 않는다
+ */
+export function trackAudioLoadBytes(load: TrackAudioLoad): number {
+  let frames = 0;
+  for (const segment of load.reuse.segments.values())
+    for (const track of segment.audio) for (const frame of track.frames) frames += frame.byteLength;
+  return trackPiecesBytes(load.tracks) + frames;
+}
+
 function recentlyUsed<T>(sizeOf: (value: T) => number) {
   const entries = new Map<string, { value: T; bytes: number }>();
   let totalBytes = 0;
@@ -156,14 +99,61 @@ function recentlyUsed<T>(sizeOf: (value: T) => number) {
   };
 }
 
-/** 받아 둔 영상 창(녹화 재생 서버 주소 → mp4) */
-export const windowBlobs = recentlyUsed<Blob>((blob) => blob.size);
-/** 받아 풀어 둔 소리 조각(segmentTrackKey → 트랙별 덩어리) */
-export const segmentTracks = recentlyUsed<TrackPiece[][]>(trackPiecesBytes);
+/** 받아 둔 영상 창(editorWindowKey → 다시 싼 창 — mp4 와 조각 표) */
+export const windowBlobs = recentlyUsed<RemuxedWindow>((remuxed) => remuxed.blob.size);
 
-/** 소리 조각의 열쇠: 방송 번호와 받은 창의 절대 ms. 편집기의 트랙 미리 듣기가 묻는 값과 같다 */
-export const segmentTrackKey = (streamId: string, fromMs: number, toMs: number) =>
-  `${streamId}:${fromMs}:${toMs}`;
+/**
+ * 영상 창의 열쇠: 영상 키와 창 첫 · 끝 조각 seq(설계 prw2 5절 4). 같은 seq 의 조각 바이트는 바뀌지 않으므로 같은 범위면 같은
+ * 창이다. 편집기와 카드의 미리 받기가 같은 셈으로 낸다
+ */
+export const editorWindowKey = (mediaKey: string, firstSeq: number, lastSeq: number) =>
+  `${mediaKey}:${firstSeq}-${lastSeq}`;
+/**
+ * 받아 풀어 둔 소리 조각(segmentTrackKey → 받기 결과 — 트랙별 덩어리는 그 창 Blob 시각에 놓았다). 빠진 행 · 확보 기다림도 함께
+ * 들어 편집기가 꺼내 쓰면 ② 기다림 고리를 이어 돈다
+ */
+export const segmentTracks = recentlyUsed<TrackAudioLoad>(trackAudioLoadBytes);
+
+/**
+ * 소리 조각의 열쇠: 방송 번호와 창 첫 · 끝 조각 seq(설계 prw2 5절 4). 소리는 그 창을 다시 싼 Blob 시각에 놓으므로 영상 창과
+ * 같은 범위로 가른다 — 같은 seq 범위면 같은 다시 싸기 · 같은 자리다. 편집기의 트랙 미리 듣기가 묻는 값과 같다
+ */
+export const segmentTrackKey = (streamId: string, firstSeq: number, lastSeq: number) =>
+  `${streamId}:${firstSeq}-${lastSeq}`;
+
+let windowFetches = 0;
+const windowFetchWatchers = new Set<(fetching: boolean) => void>();
+
+function announceWindowFetch() {
+  const fetching = windowFetches > 0;
+  for (const watcher of windowFetchWatchers) watcher(fetching);
+}
+
+/**
+ * 편집기가 창(영상 · 소리)을 받는 동안 잡는다. 그동안 카드 미리 받기는 쉰다(prefetchCardEditor): 편집기 창 받기와 카드 미리
+ * 받기가 겹칠 때 메모리가 가장 높았다(M3 · 2026-11-13). 돌려준 함수가 놓는다 — 두 번 불러도 한 번만 놓는다(받기 끝 · 효과 정리
+ * 양쪽에서 부른다)
+ */
+export function holdEditorWindowFetch(): () => void {
+  windowFetches += 1;
+  if (windowFetches === 1) announceWindowFetch();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    windowFetches -= 1;
+    if (windowFetches === 0) announceWindowFetch();
+  };
+}
+
+/** 편집기가 창을 받는 중인가 */
+export const editorWindowFetching = () => windowFetches > 0;
+
+/** 편집기가 창을 받는 중 ↔ 아님이 바뀔 때 부른다. 돌려준 함수가 그만 듣는다 */
+export function watchEditorWindowFetch(watcher: (fetching: boolean) => void): () => void {
+  windowFetchWatchers.add(watcher);
+  return () => windowFetchWatchers.delete(watcher);
+}
 
 /** 맡긴 것을 다 비운다. 계정이 바뀌어도 비운다: 앞 계정의 녹화가 메모리에 남지 않게(시험 사이에도 부른다) */
 export function clearEditorMedia() {

@@ -28,6 +28,12 @@ public final class StreamSegmentsFixture {
      *
      * <p>{@code local_path}는 nullable이고 PostgreSQL 기본이 NULLS DISTINCT라, 아래
      * {@link #insert}가 그 칸을 비워 둔 채 한 방송에 여러 조각을 넣어도 UNIQUE에 안 걸린다.
+     *
+     * <p><b>끝의 두 칸({@code playback_pdt} · {@code timing_version})은 저쪽에서 뒤에 더한 칸이다</b>
+     * ({@code ddl.go}의 6-1 (a) 블록 · PDT 판 2 칸 블록 — 둘 다 {@code ALTER TABLE ... ADD COLUMN}).
+     * 채팅 판별이 읽는 칸만 옮겼다(계약 세그먼트인덱스 6-6-9). 나머지 {@code timing_*} 칸 · CHECK · 트리거는
+     * 생산자 기록이라 이 카드가 읽지 않는다(6-6-10 I33). 부분 색인은 여기서 만들지 않는다 — 색인이 필요한
+     * 시험({@code SegmentLedgerIndexTest})이 스스로 만든다.
      */
     private static final String DDL = """
             CREATE TABLE IF NOT EXISTS public.stream_segments (
@@ -42,6 +48,8 @@ public final class StreamSegmentsFixture {
                 uploaded_at      timestamptz,
                 bytes            bigint,
                 is_discontinuity boolean     NOT NULL DEFAULT false,
+                playback_pdt     timestamptz,
+                timing_version   smallint,
                 PRIMARY KEY (stream_id, seq)
             );
 
@@ -51,8 +59,9 @@ public final class StreamSegmentsFixture {
 
     private static final String INSERT = """
             INSERT INTO public.stream_segments
-                   (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, is_discontinuity)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                   (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, is_discontinuity,
+                    playback_pdt, timing_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     private StreamSegmentsFixture() {
@@ -85,7 +94,23 @@ public final class StreamSegmentsFixture {
      */
     public static void insert(JdbcTemplate jdbc, String streamId, long seq, long startPtsMs,
                               Instant startWallUtc, int durationMs, boolean discontinuity) {
+        insert(jdbc, streamId, seq, startPtsMs, startWallUtc, null, null, durationMs, discontinuity);
+    }
+
+    /**
+     * 판 2 조각 한 개. 판 2 행은 {@code playback_pdt}가 늘 있다(생산자 CHECK {@code stream_segments_timing_v2_chk}).
+     * 파일명 시각({@code start_wall_utc})은 파일 머리라 PDT보다 앞설 수 있다 — 그 차가 판 2 보정의 이유다.
+     */
+    public static void insertV2(JdbcTemplate jdbc, String streamId, long seq, long startPtsMs,
+                                Instant startWallUtc, Instant playbackPdt, int durationMs, boolean discontinuity) {
+        insert(jdbc, streamId, seq, startPtsMs, startWallUtc, playbackPdt, 2, durationMs, discontinuity);
+    }
+
+    /** 칸을 모두 주는 꼴. 판 NULL 행에 {@code playback_pdt}를 채워 「옛 행의 PDT는 안 읽는다」 를 잴 때 쓴다. */
+    public static void insert(JdbcTemplate jdbc, String streamId, long seq, long startPtsMs, Instant startWallUtc,
+                              Instant playbackPdt, Integer timingVersion, int durationMs, boolean discontinuity) {
         jdbc.update(INSERT, streamId, seq, startPtsMs, Timestamp.from(startWallUtc),
-                durationMs, "test/seg_" + seq, discontinuity);
+                durationMs, "test/seg_" + seq, discontinuity,
+                playbackPdt == null ? null : Timestamp.from(playbackPdt), timingVersion);
     }
 }

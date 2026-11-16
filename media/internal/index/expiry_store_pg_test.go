@@ -55,12 +55,17 @@ func expPutSession(t *testing.T, pool *pgxpool.Pool, s expSessionRow) {
 	if state == "ended" {
 		endedAt = expBase.Add(time.Hour)
 	}
+	// 문서 키는 확정 문장만 쓴다 — 키가 있으면 확정(frozen)이다(범위 칸은 NULL — M6 전 확정 꼴).
+	vodState := "none"
+	if s.vodKey != "" {
+		vodState = "frozen"
+	}
 	_, err := pool.Exec(context.Background(), `
 INSERT INTO stream_sessions (session_id, stream_id, started_at, state, ended_at, inherits_session, round_id,
-                             dvr_s3_key, vod_s3_key, init_s3_key)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                             dvr_s3_key, vod_s3_key, init_s3_key, vod_state)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		s.id, s.stream, expBase.Add(time.Duration(s.at)*time.Minute), state, endedAt, expNullable(s.inherits), expNullable(s.round),
-		expNullable(s.dvrKey), expNullable(s.vodKey), expNullable(s.initKey))
+		expNullable(s.dvrKey), expNullable(s.vodKey), expNullable(s.initKey), vodState)
 	if err != nil {
 		t.Fatalf("세션 픽스처 삽입 실패 %s: %v", s.id, err)
 	}
@@ -612,6 +617,9 @@ VALUES ('rl-ev', 'rl-a', 'started', 0, now(), $1)`, stream); err != nil {
 
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	q := expRange(stream, nil, expAt(1))
+	if _, err := ExpiryRoundsSettled(ctx, role.Pool, q); err != nil {
+		t.Fatalf("ExpiryRoundsSettled: %v", err)
+	}
 	if _, err := MarkExpired(ctx, role.Pool, q); err != nil {
 		t.Fatalf("MarkExpired: %v", err)
 	}
@@ -641,7 +649,7 @@ VALUES ('rl-ev', 'rl-a', 'started', 0, now(), $1)`, stream); err != nil {
 		"expiryDeleteSQL": expiryDeleteSQL, "expiryEmptiedSessionsSQL": expiryEmptiedSessionsSQL,
 		"expiryDeleteGapsSQL": expiryDeleteGapsSQL, "expiryAdvanceCutoffSQL": expiryAdvanceCutoffSQL,
 		"expiryUnlinkSuccessorsSQL": expiryUnlinkSuccessorsSQL, "expiryDeleteSessionsSQL": expiryDeleteSessionsSQL,
-		"expiryDeleteOutboxSQL": expiryDeleteOutboxSQL,
+		"expiryDeleteOutboxSQL": expiryDeleteOutboxSQL, "expiryRoundsSettledSQL": expiryRoundsSettledSQL,
 	})
 	role.RequireNoneDenied(t)
 }

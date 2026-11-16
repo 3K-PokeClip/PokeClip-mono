@@ -325,6 +325,19 @@ run "cors_allows_app_origin_only" {
   }
 }
 
+# clip 도 ALB 뒤다. 미설정이면 Boot 가 ECS 를 감지해(CloudPlatform.AWS_ECS)
+# 이미 native 와 같게 돈다 — 명시는 그 동작을 굳히고, 만료 창구 전용 토큰이
+# 있을 때의 부팅 조건(none 또는 native — clip ExpiredBroadcastSecurityConfig)을
+# 채운다(POK-551 · kty D3 native). 신뢰 대역은 Boot 기본값 그대로다.
+run "clip_trusts_forwarded_headers_natively" {
+  command = plan
+
+  assert {
+    condition     = local.service_env.clip["FORWARD_HEADERS_STRATEGY"] == "native"
+    error_message = "clip FORWARD_HEADERS_STRATEGY 가 native 가 아니다."
+  }
+}
+
 run "auth_trusts_forwarded_headers_natively" {
   command = plan
 

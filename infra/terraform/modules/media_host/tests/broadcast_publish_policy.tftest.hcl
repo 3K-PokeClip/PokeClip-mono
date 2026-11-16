@@ -84,6 +84,8 @@ variables {
   rds_sg_id          = "sg-0rds0000000000000"
   auth_sg_id         = "sg-0auth000000000000"
   auth_port          = 18086
+  clip_sg_id         = "sg-0clip000000000000"
+  clip_port          = 18087
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -166,6 +168,10 @@ override_resource {
 
 override_resource {
   target = aws_vpc_security_group_ingress_rule.auth_from_media
+}
+
+override_resource {
+  target = aws_vpc_security_group_ingress_rule.clip_from_media
 }
 
 override_resource {

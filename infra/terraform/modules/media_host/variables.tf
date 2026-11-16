@@ -30,9 +30,10 @@ variable "subnet_id" {
 }
 
 variable "instances" {
-  description = "상자 키 → 구성 판(설계 5-3 교체 모델). 새 구성은 config_version 을 올린 새 키로만 들어간다 — 이미 떠 있는 키의 user_data · AMI 는 바꾸지 않는다."
+  description = "상자 키 → 구성 판(설계 5-3 교체 모델)과 대리 창구 스위치. 새 구성은 config_version 을 올린 새 키로만 들어간다 — 이미 떠 있는 키의 user_data · AMI 는 바꾸지 않는다. cred_relay 켬 키는 IMDS 홉 1(컨테이너는 호스트 대리 창구로만 자격을 받음), 값 없음 = 끔(홉 2 — 지금과 같음). 떠 있는 키의 스위치는 제자리에서 바꾸지 않고 새 키로 넣는다(POK-574)."
   type = map(object({
     config_version = string
+    cred_relay     = optional(bool, false)
   }))
 
   validation {
@@ -159,7 +160,7 @@ variable "srt_port" {
 }
 
 variable "proxy_ports" {
-  description = "nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081)와 MediaMTX 루프백(8888 · 9996 · 9997) 밖."
+  description = "nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081) · MediaMTX 루프백(8888 · 9996 · 9997) · 대리 창구(9911) 밖."
   type = object({
     live     = number
     playback = number
@@ -170,9 +171,9 @@ variable "proxy_ports" {
   validation {
     condition = alltrue([
       for port in values(var.proxy_ports) :
-      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8888, 9996, 9997], port)
+      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8888, 9911, 9996, 9997], port)
     ])
-    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8888 · 9996 · 9997 이 아니어야 한다."
+    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8888 · 9911 · 9996 · 9997 이 아니어야 한다."
   }
 
   validation {
@@ -545,4 +546,53 @@ variable "edge_bounds_writer_enabled" {
   type        = bool
   default     = false
   nullable    = false
+}
+
+variable "clip_sg_id" {
+  description = "clip 서비스 SG id(platform 출력 service_sg_ids.clip) — Media 이그레스와 clip 인그레스 ← Media(60일 만료 창구)의 한 쌍. 만료 주소와 상관없이 늘 만든다."
+  type        = string
+}
+
+variable "clip_port" {
+  description = "clip 서비스 포트(platform 출력 service_ports.clip) — 위 한 쌍의 TCP 포트."
+  type        = number
+}
+
+variable "clip_internal_url" {
+  description = "60일 만료 창구 clip 주소 http(s)://<호스트>[:<포트>](사이드카 CLIP_INTERNAL_URL — 예: http://clip.pokeclip.internal:<clip 포트>). 빈 값이 끔이다 — 사이드카 env 둘 · 토큰 디렉터리 bind 를 렌더하지 않고 media.env 의 토큰 비밀 ARN 도 비운다. 사이드카는 기동 때만 읽고 user_data 는 첫 부팅에만 쓰므로 바꾸는 것은 상자 교체다."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  # http · https 의 scheme://host[:port] 하나. 문자 집합으로 사용자 정보 · 경로 ·
+  # 끝 / · 질의 · 조각 · 공백이 모두 막힌다. 여기서 통과한 값을 사이드카가 기동
+  # 거부하지 않게 하는 것이 목적이라, 사이드카 media/internal/config/expiry.go 의
+  # validateClipURL 이 받는 꼴의 부분 집합이다(IPv6 · 대문자 scheme · 밑줄 든
+  # 호스트는 여기서만 거부).
+  validation {
+    condition     = var.clip_internal_url == "" || can(regex("^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$", var.clip_internal_url))
+    error_message = "clip_internal_url 은 빈 값이거나 http(s)://<호스트>[:<포트>] 여야 한다(사용자 정보 · 경로 · 끝 / · 질의 · 조각 금지)."
+  }
+
+  # 포트(없으면 scheme 기본 포트)는 clip_port 와 같아야 한다 — Media → clip SG
+  # 짝이 그 포트만 연다. 꼴이 틀린 값은 첫 검증이 막으므로 꼴이 맞을 때만 본다.
+  validation {
+    condition = alltrue([
+      for m in regexall("^(https?)://[A-Za-z0-9.-]+(?::([0-9]{1,5}))?$", var.clip_internal_url) :
+      (m[1] != null ? tonumber(m[1]) : (m[0] == "https" ? 443 : 80)) == var.clip_port
+    ])
+    error_message = "clip_internal_url(루트 tfvars)의 포트가 clip_port(platform 출력 service_ports.clip)와 달라 Media → clip SG 짝에 막힌다 — 두 값을 맞춘다."
+  }
+}
+
+variable "clip_expiry_token_secret_arn" {
+  description = "60일 만료 창구 토큰 비밀 ARN(런타임 1단 출력 clip_expiry_token_secret_arn — 값 아님) — media.env 의 CLIP_EXPIRY_TOKEN_SECRET_ARN. clip_internal_url 이 빈 값이면 media.env 에는 빈 값으로 간다. 읽기 권한은 media_secret_arns 가 준다."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.clip_expiry_token_secret_arn == "" || can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]+:secret:[A-Za-z0-9/_+=.@-]+$", var.clip_expiry_token_secret_arn))
+    error_message = "clip_expiry_token_secret_arn 은 빈 값이거나 Secrets Manager 비밀 ARN 이어야 한다(와일드카드 금지)."
+  }
 }

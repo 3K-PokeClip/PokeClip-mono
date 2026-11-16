@@ -472,6 +472,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                     tone: 'info',
                     title: '이미 올리고 있는 업로드가 있어요',
                     description: `같은 영상이 「${snap.title}」 제목으로 먼저 올리고 있어요.`,
+                    maskDescription: true,
                   },
             );
           })

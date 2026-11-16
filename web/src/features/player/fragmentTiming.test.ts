@@ -282,6 +282,8 @@ describe('datedFragments — 겹침(B8) 목록', () => {
       lastStartMs: PDT0 + 7_500,
       targetDurationS: 4,
       headSpanMs: 12_000,
+      contentFirstMs: PDT0,
+      rewindHeadSpanMs: 4_000,
     });
   });
 });

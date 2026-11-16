@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { Avatar, Button } from '@/ui';
+import { Avatar, Button, PRIVATE_TEXT_CLASS } from '@/ui';
 import type { EditorDelegation } from '@/api/editors';
 import { joinedLabel } from './editorDates';
 import styles from './EditorSettingsScreen.module.css';
@@ -24,7 +24,7 @@ export function EditorRow({
     <div className={styles.row} role="group" aria-labelledby={nameId}>
       <Avatar size="md" src={editor.profileImageUrl ?? undefined} name={editor.name} />
       <div className={styles.rowBody}>
-        <div className={styles.rowName} id={nameId}>
+        <div className={`${styles.rowName} ${PRIVATE_TEXT_CLASS}`} id={nameId}>
           {editor.name}
         </div>
         <div className={styles.rowMeta}>{joinedLabel(editor.grantedAt)}</div>

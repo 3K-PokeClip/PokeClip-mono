@@ -3,7 +3,7 @@ package index
 // PDT 판 2 장부 객체 시험(POK-196 c1 — 설계 r7 2.3 · 2.4 · 9.2 단계 2 · 9.3 · 9.4).
 //
 // SQL 문장만 쓴다 — 제품 Go API 는 EnsureSchema · MissingLedgerSchema 둘뿐이다. 칸 일곱 · CHECK 넷 · 불변 트리거 ·
-// 쓰기자 거부 트리거 · 게이트 표와 그 트리거 · 부분 인덱스 셋 · 기동 확인 항목 · media_indexer 권한을 잰다. 래치를
+// 쓰기자 거부 트리거 · 게이트 표와 그 트리거 · 부분 인덱스 넷 · 기동 확인 항목 · media_indexer 권한을 잰다. 래치를
 // 세우는 사례가 있으므로 resetTables 가 게이트를 다시 비운다(남으면 같은 DB 의 다른 시험 INSERT 가 23514 로 걸린다).
 
 import (
@@ -508,7 +508,8 @@ SELECT kind || ':' || name || ':' || oid::text FROM (
     UNION ALL
     SELECT 'relation', c.relname::text, c.oid FROM pg_class c
      WHERE c.relname::text = ANY (ARRAY['stream_timing_gate', 'stream_segments_v2_seq_idx',
-                                        'stream_segments_legacy_wall_idx', 'stream_segments_timing_round_idx'])
+                                        'stream_segments_legacy_wall_idx', 'stream_segments_timing_round_idx',
+                                        'stream_segments_v2_pdt_idx'])
     UNION ALL
     SELECT 'constraint', c.conname::text, c.oid FROM pg_constraint c
      WHERE c.conrelid = 'stream_segments'::regclass::oid AND c.conname::text LIKE 'stream\_segments\_timing\_%'
@@ -517,8 +518,8 @@ SELECT kind || ':' || name || ':' || oid::text FROM (
      WHERE t.tgname::text = ANY (ARRAY['stream_segments_legacy_writer_guard', 'stream_timing_gate_guard_tg'])
 ) o ORDER BY 1`
 
-// timingSchemaObjectCount 는 위 그림의 객체 수다 — 칸 일곱 · 표 하나 · 인덱스 셋 · CHECK 넷 · 트리거 둘.
-const timingSchemaObjectCount = 17
+// timingSchemaObjectCount 는 위 그림의 객체 수다 — 칸 일곱 · 표 하나 · 인덱스 넷 · CHECK 넷 · 트리거 둘.
+const timingSchemaObjectCount = 18
 
 // dropTimingSchemaSQL 은 c1 앞 판(develop) 스키마로 되돌린다.
 const dropTimingSchemaSQL = `
@@ -663,18 +664,26 @@ func TestProdSQLVerifyCatchesTimingSchemaDrift(t *testing.T) {
 		tamper string
 		want   []string
 	}{
-		// 판 칸을 지우면 그 칸을 술어로 쓰는 floor 인덱스 둘과 판 2 CHECK 도 함께 지워진다(w 칸도 그 CHECK 를 함께 지운다).
+		// 판 칸을 지우면 그 칸을 술어로 쓰는 인덱스 셋(floor 둘 · 판 2 PDT)과 판 2 CHECK 도 함께 지워진다(w 칸도 그 CHECK 를
+		// 함께 지운다).
 		{"version column dropped", "ALTER TABLE stream_segments DROP COLUMN timing_version",
 			[]string{"check:stream_segments_timing_v2_chk", "index:stream_segments_legacy_wall_idx",
-				"index:stream_segments_v2_seq_idx", "ledger_column:stream_segments.timing_version"}},
+				"index:stream_segments_v2_pdt_idx", "index:stream_segments_v2_seq_idx",
+				"ledger_column:stream_segments.timing_version"}},
 		{"wall column dropped", "ALTER TABLE stream_segments DROP COLUMN timing_wall_guess",
 			[]string{"check:stream_segments_timing_v2_chk", "ledger_column:stream_segments.timing_wall_guess"}},
+		// PDT 칸을 지우면 그 칸을 열로 쓰는 판 2 PDT 인덱스와 그 칸을 술어로 쓰는 판 2 CHECK 도 함께 지워진다. playback_pdt
+		// 는 40 의 ledger_column 목록(M6 · PDT 칸)에 없어, 40 은 이 둘로 잡는다.
+		{"playback pdt column dropped", "ALTER TABLE stream_segments DROP COLUMN playback_pdt",
+			[]string{"check:stream_segments_timing_v2_chk", "index:stream_segments_v2_pdt_idx"}},
 		{"round index dropped", "DROP INDEX stream_segments_timing_round_idx",
 			[]string{"index:stream_segments_timing_round_idx"}},
 		{"v2 floor index dropped", "DROP INDEX stream_segments_v2_seq_idx",
 			[]string{"index:stream_segments_v2_seq_idx"}},
 		{"legacy floor index dropped", "DROP INDEX stream_segments_legacy_wall_idx",
 			[]string{"index:stream_segments_legacy_wall_idx"}},
+		{"v2 pdt index dropped", "DROP INDEX stream_segments_v2_pdt_idx",
+			[]string{"index:stream_segments_v2_pdt_idx"}},
 		{"writer guard dropped", "DROP TRIGGER stream_segments_legacy_writer_guard ON stream_segments",
 			[]string{"trigger:stream_segments_legacy_writer_guard"}},
 		{"writer guard disabled", "ALTER TABLE stream_segments DISABLE TRIGGER stream_segments_legacy_writer_guard",

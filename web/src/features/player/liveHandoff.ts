@@ -253,7 +253,8 @@ export function withHandoffRules(
  * 재생기를 바꾸거나(세대 상승) 안에서 옮긴(seek-within) 전이 뒤 — 위치 시대를
  * 1 올린다. 옮겼으면 옮긴 자리의 위치가 올 때까지 위치 칸을 비우고 그 목표를
  * pendingSeekMs 에 든다(둘이 한 전이에 오면 옮김을 따른다). 재생기만 바꿨으면 앞
- * 소스의 시크 목표를 버린다. 위치 칸을 쓰는 곳은 이것과 seenPosition 둘이다
+ * 소스의 시크 목표를 버린다. 위치 칸을 쓰는 곳은 이것과 seenPosition · seenDrainedAt
+ * 셋이다
  */
 export function withPositionEpoch(prev: PlaybackSessionState, step: Transition): Transition {
   const swapped = step.state.source.generation !== prev.source.generation;
@@ -288,6 +289,19 @@ export function seenPosition(
 }
 
 /**
+ * 받기를 멈춘 재생기가 멎은 자리를 확인된 위치로 적는다(POK-547) — 그 자리에 화면이 서
+ * 있다. 끝나지 않은 시크가 있으면 그 목표가 이어 볼 자리라 그대로 두고, 자리를 모르면
+ * 적지 않는다. 멎은 자리는 이미 본 구간이라 세션이 본 가장 이른 자리는 넓히지 않는다
+ */
+export function seenDrainedAt(
+  session: PlaybackSessionState,
+  atPdtMs: number | null,
+): PlaybackSessionState {
+  if (session.pendingSeekMs !== null || atPdtMs === null) return session;
+  return { ...session, lastAtMs: atPdtMs, positionGeneration: session.source.generation };
+}
+
+/**
  * 띠 안인가 — 지금 소스가 낸 마지막 위치가 지금 목록 끝 E 앞 1 × TD_되감기
  * 안이다. 새 소스가 첫 위치를 내기 전의 lastAtMs 는 앞 소스의 자리라 보지 않는다
  */
@@ -318,7 +332,7 @@ function canHandOffFromRewind(session: PlaybackSessionState, now: number): boole
 }
 
 /**
- * E1 의 넘김 조건 — 되감기로 끝에 닿은 끝남 대기(녹화로 가기로 정하기 전 · 막히기
+ * E1 의 넘김 조건 — 되감기로 끝에 닿은 끝남 대기(닫기로 정하기 전 · 막히기
  * 전 — POK-528 U1) ∧ 공통 몫. 이번 응답 대신 문을 본다
  */
 function canHandOffFromEnding(session: PlaybackSessionState, now: number): boolean {
@@ -326,7 +340,7 @@ function canHandOffFromEnding(session: PlaybackSessionState, now: number): boole
   if (phase.kind !== 'ending-wait' || session.source.kind !== 'rewind') {
     return false;
   }
-  if (phase.origin !== 'rewind' || !phase.atEnd || phase.recordOnEnd || phase.blocked) {
+  if (phase.origin !== 'rewind' || !phase.atEnd || phase.closeOnEnd || phase.blocked) {
     return false;
   }
   return tailOpen(session, now);
@@ -487,7 +501,7 @@ function revertEndedHandoff(
   return {
     state: {
       ...state,
-      phase: { kind: 'ending-wait', origin, atEnd: false, recordOnEnd: false },
+      phase: { kind: 'ending-wait', origin, atEnd: false, closeOnEnd: false },
       endingSince: session.endingSince ?? now,
       offer: null,
     },

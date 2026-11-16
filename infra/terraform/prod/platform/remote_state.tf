@@ -167,6 +167,35 @@ resource "terraform_data" "runtime_contract" {
       error_message = "런타임 출력이 auth 에 STREAM_KEY_RESOLVE_TOKEN 을 주는데(app_secret_arns · app_env 어느 쪽이든) STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 둘 다에 없거나 app_env 값이 비었다 — auth 가 부팅을 거부한다."
     }
 
+    # clip 의 만료 창구 전용 토큰도 같은 꼴이다(POK-551 · clip
+    # ExpiredBroadcastSecurityConfig 의 DedicatedWindow.requireSafeToOpen). 판정
+    # 규칙은 위 auth 검사와 같다.
+    precondition {
+      condition = (
+        !(
+          contains(keys(local.service_secrets.clip), "EXPIRED_BROADCASTS_TOKEN") ||
+          trimspace(lookup(local.service_env.clip, "EXPIRED_BROADCASTS_TOKEN", "")) != ""
+        ) ||
+        contains(keys(local.service_secrets.clip), "EXPIRED_BROADCASTS_ALLOWED_CIDRS") ||
+        trimspace(lookup(local.service_env.clip, "EXPIRED_BROADCASTS_ALLOWED_CIDRS", "")) != ""
+      )
+      error_message = "런타임 출력이 clip 에 EXPIRED_BROADCASTS_TOKEN 을 주는데(app_secret_arns · app_env 어느 쪽이든) EXPIRED_BROADCASTS_ALLOWED_CIDRS 가 둘 다에 없거나 app_env 값이 비었다 — clip 이 부팅을 거부한다."
+    }
+
+    # 같은 부팅 검사가 전략도 본다 — 토큰이 있으면 FORWARD_HEADERS_STRATEGY 가
+    # none 이나 native 여야 한다(비우면 플랫폼 감지라 거부). 값은 이 루트의
+    # services.tf 가 넣는다 — 그 줄을 빼거나 바꾸면 여기서 멈춘다.
+    precondition {
+      condition = (
+        !(
+          contains(keys(local.service_secrets.clip), "EXPIRED_BROADCASTS_TOKEN") ||
+          trimspace(lookup(local.service_env.clip, "EXPIRED_BROADCASTS_TOKEN", "")) != ""
+        ) ||
+        contains(["none", "native"], lookup(local.service_env.clip, "FORWARD_HEADERS_STRATEGY", ""))
+      )
+      error_message = "런타임 출력이 clip 에 EXPIRED_BROADCASTS_TOKEN 을 주는데 clip 의 FORWARD_HEADERS_STRATEGY 가 none · native 가 아니다 — clip 이 부팅을 거부한다(services.tf 의 clip env 확인)."
+    }
+
     # 런타임 app_env 는 평문 태스크 env 로 들어가 태스크 정의를 읽는 누구에게나
     # 보인다 — 비밀은 app_secret_arns 로 와야 한다(장부 16). 아래 셋으로 본다.
     #

@@ -150,7 +150,7 @@ describe('initAnalytics — 키가 없으면 꺼진다(POK-356)', () => {
     },
   );
 
-  it('녹화 설정은 켜든 끄든 늘 가리기를 싣는다 — 글자·입력 전부, 이미지·영상 차단, 헤더·본문 미기록', async () => {
+  it('녹화 설정은 켜든 끄든 늘 가리기를 싣는다 — 입력 전부, 글자는 가림 칸만, 이미지·영상 차단, 헤더·본문 미기록', async () => {
     const { client } = await load('phc_test', 'https://us.i.posthog.com', 'on');
     client.initAnalytics();
     await client.whenAnalyticsLoaded();
@@ -164,6 +164,12 @@ describe('initAnalytics — 키가 없으면 꺼진다(POK-356)', () => {
       streamNetworkBody: false,
     });
     expect(config.session_recording.blockSelector).toContain('video');
+    // 선택자 `*`로 모든 글자가 함수를 거친다 — 가림 칸 밖 단추 글자는 보이고 안은 가려진다 (POK-572)
+    const button = document.createElement('button');
+    const masked = document.createElement('span');
+    masked.className = 'ph-mask';
+    expect(config.session_recording.maskTextFn('클립 만들기', button)).toBe('클립 만들기');
+    expect(config.session_recording.maskTextFn('너구리', masked)).toBe('***');
     // 콘솔 로그는 원격 설정(새 프로젝트는 켜짐)을 따르지 않고 늘 끈다
     expect(config.enable_recording_console_log).toBe(false);
     expect(config.session_recording.maskAttributeFn('href', '/x?stream=S-1')).toBe('/x');

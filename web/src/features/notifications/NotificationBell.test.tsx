@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { useSwitchCurtain } from '@/features/channel/switchCurtain';
+import { byTextContent } from '@/test/byTextContent';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { NotificationBell } from './NotificationBell';
@@ -983,7 +984,9 @@ describe('NotificationBell', () => {
 
     await user.click(within(panel).getByRole('button', { name: '거절' }));
     expect(
-      within(panel).getByText('거절하면 라면왕 채널이 다시 초대해야 참여할 수 있어요'),
+      within(panel).getByText(
+        byTextContent('거절하면 라면왕 채널이 다시 초대해야 참여할 수 있어요'),
+      ),
     ).toBeInTheDocument();
     await user.click(within(panel).getByRole('button', { name: '취소' }));
     expect(posts(spy)).toEqual([]);
@@ -1140,7 +1143,9 @@ describe('NotificationBell', () => {
       expect(within(panel).getByRole('button', { name: '거절하기' })).toBeEnabled(),
     );
     expect(
-      within(panel).getByText('거절하면 라면왕 채널이 다시 초대해야 참여할 수 있어요'),
+      within(panel).getByText(
+        byTextContent('거절하면 라면왕 채널이 다시 초대해야 참여할 수 있어요'),
+      ),
     ).toBeInTheDocument();
   });
 
