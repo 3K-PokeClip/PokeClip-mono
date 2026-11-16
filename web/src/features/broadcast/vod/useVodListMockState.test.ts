@@ -147,12 +147,17 @@ describe('useVodListMockState — 방송마다 카드 수', () => {
     expect(api.cardReads).toBe(counted);
   });
 
-  it('행 제목은 치지직 제목이고, 제목이 없거나 비거나 공백뿐인 방송은 제목을 비워 둔다: 세션 ID 로 채우지 않는다', async () => {
-    api.extra = [
+  /** 제목이 빈 문자열 · 공백뿐 · null 로 오는 방송 세 줄. 시험마다 새 배열을 준다 */
+  function blankTitleRows() {
+    return [
       { ...untitledRow('S-empty'), title: '' },
       { ...untitledRow('S-blank'), title: '   ' },
       { ...untitledRow('S-null'), title: null },
     ];
+  }
+
+  it('행 제목은 치지직 제목이고, 제목이 없거나 비거나 공백뿐인 방송은 제목을 비워 둔다: 세션 ID 로 채우지 않는다', async () => {
+    api.extra = blankTitleRows();
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
 
     await waitFor(() => expect(result.current.visuals['S-mine']?.title).toBe('새벽 랭크'));
@@ -162,12 +167,9 @@ describe('useVodListMockState — 방송마다 카드 수', () => {
     }
   });
 
+  // 화면 시험이지만 여기 둔다: 이 파일의 clipEditor 모듈 모의(fetchAllBroadcasts 바꿔 끼움)를 써야 한다
   it('목록 화면은 제목 없는 방송을 「제목 없는 방송」으로 적고 세션 ID 를 보이지 않는다', async () => {
-    api.extra = [
-      { ...untitledRow('S-empty'), title: '' },
-      { ...untitledRow('S-blank'), title: '   ' },
-      { ...untitledRow('S-null'), title: null },
-    ];
+    api.extra = blankTitleRows();
     renderWithProviders(createElement(VodListScreen));
 
     expect(await screen.findByText('새벽 랭크')).toBeInTheDocument();

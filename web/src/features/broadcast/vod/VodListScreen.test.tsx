@@ -324,31 +324,40 @@ describe('VodListScreen — 보관 만료', () => {
 describe('VodListScreen — 제목 없는 방송', () => {
   // 홈 타일과 같은 말: 「제목 없는 방송」은 방송 주인이 쓴 글이 아니라 화면이 채운 고정 문구라
   // 흐리게 보여 제목과 구분하고, 녹화에서도 가리지 않는다. 주인이 쓴 제목만 가린다.
-  const at = (iso: string) => ({
-    status: 'vod_ready' as const,
-    relation: 'OWNER' as const,
-    startedAt: iso,
-    endedAt: iso,
-  });
+  // CSS 모듈 색인 타입은 noUncheckedIndexedAccess 라 undefined 가 섞인다. 두 이름은
+  // VodListScreen.module.css 에 있고 시험도 CSS 를 처리하므로(css: true) 비지 않는다
+  const rowUntitledClass = styles.rowUntitled!;
+  const rowPreparingClass = styles.rowPreparing!;
+
+  /** 다시보기가 준비된(vod_ready) 내 방송(OWNER) 줄의 상태 · 시각 칸. 시작 · 끝은 같은 시각이다 */
+  function readyOwnerFieldsAt(iso: string) {
+    return {
+      status: 'vod_ready' as const,
+      relation: 'OWNER' as const,
+      startedAt: iso,
+      endedAt: iso,
+    };
+  }
+
   const broadcasts = [
     {
       streamId: 'untitled-open',
-      ...at('2026-08-20T23:00:00+09:00'),
+      ...readyOwnerFieldsAt('2026-08-20T23:00:00+09:00'),
       vodExpiresAt: '2026-10-19T23:00:00+09:00',
     },
     {
       streamId: 'untitled-gone',
-      ...at('2026-05-01T23:00:00+09:00'),
+      ...readyOwnerFieldsAt('2026-05-01T23:00:00+09:00'),
       vodExpiresAt: '2026-06-30T23:00:00+09:00',
     },
     {
       streamId: 'titled-open',
-      ...at('2026-08-19T23:00:00+09:00'),
+      ...readyOwnerFieldsAt('2026-08-19T23:00:00+09:00'),
       vodExpiresAt: '2026-10-18T23:00:00+09:00',
     },
     {
       streamId: 'titled-gone',
-      ...at('2026-05-02T23:00:00+09:00'),
+      ...readyOwnerFieldsAt('2026-05-02T23:00:00+09:00'),
       vodExpiresAt: '2026-07-01T23:00:00+09:00',
     },
   ];
@@ -373,7 +382,7 @@ describe('VodListScreen — 제목 없는 방송', () => {
       const row = rowOf(streamId);
       const title = within(row).getByText('제목 없는 방송');
 
-      expect(title).toHaveClass(styles.rowUntitled!);
+      expect(title).toHaveClass(rowUntitledClass);
       expect(title).not.toHaveClass(PRIVATE_TEXT_CLASS);
     },
   );
@@ -386,7 +395,7 @@ describe('VodListScreen — 제목 없는 방송', () => {
     const title = within(row).getByText(text);
 
     expect(title).toHaveClass(PRIVATE_TEXT_CLASS);
-    expect(title).not.toHaveClass(styles.rowUntitled!);
+    expect(title).not.toHaveClass(rowUntitledClass);
   });
 
   // 위 두 묶음이 링크가 있는 행 · 없는 행을 둘 다 재는지 받침을 확인한다 — 보관 만료 행은 링크가 없다
@@ -409,7 +418,7 @@ describe('VodListScreen — 제목 없는 방송', () => {
         broadcasts={[
           {
             streamId: 'untitled-preparing',
-            ...at('2026-08-20T23:00:00+09:00'),
+            ...readyOwnerFieldsAt('2026-08-20T23:00:00+09:00'),
             status: 'ended',
             vodExpiresAt: '2026-10-19T23:00:00+09:00',
           },
@@ -420,8 +429,8 @@ describe('VodListScreen — 제목 없는 방송', () => {
     );
     const row = rowAt(0);
 
-    expect(row).toHaveClass(styles.rowPreparing!);
-    expect(within(row).getByText('제목 없는 방송')).toHaveClass(styles.rowUntitled!);
+    expect(row).toHaveClass(rowPreparingClass);
+    expect(within(row).getByText('제목 없는 방송')).toHaveClass(rowUntitledClass);
   });
 });
 
