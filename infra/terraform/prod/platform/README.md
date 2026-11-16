@@ -247,10 +247,19 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
     서버 기본값이라 넣지 않습니다.
 *   끄기 · 다시 켜기: `terraform.tfvars` 의 `clip_broadcast_reaper_enabled`
     를 `false`(켤 때 `true`)로 바꾸고 plan → apply(kty 승인) → 아래 「clip
-    치우개 반영 확인」 순서로 합니다. plan 기대 목록은
-    `module.clip.aws_ecs_task_definition.this` 교체와
-    `module.clip.aws_ecs_service.this` 갱신 둘뿐입니다. 그 밖이 있으면
-    apply 하지 않고 멈춥니다.
+    치우개 반영 확인」 순서로 합니다. 끈 사유가 상자 · 장부 기록기
+    정지였으면, 다시 켜기는 런북 「치우개 단서」 4 의 장부 확인을 통과한
+    뒤에 합니다.
+*   plan 대조: 바뀌는 자원은 `module.clip.aws_ecs_task_definition.this`
+    교체와 `module.clip.aws_ecs_service.this` 갱신 둘뿐이어야 하고, 태스크
+    정의의 차이는 `BROADCAST_REAPER_ENABLED` 값 하나뿐이어야 합니다. plan 은
+    `container_definitions` 를 `jsonencode(` 꼴의 구조 차이로 보여 줍니다. 그
+    블록 안에서 바뀐 줄은 `name = "BROADCAST_REAPER_ENABLED"` 항목의
+    `~ value = "true" -> "false"`(켤 때는 반대) 하나여야 합니다. `image` 나
+    다른 env 항목의 바뀜(`->`) · 더함(`+`) · 뺌(`-`)이 보이거나 다른 자원이
+    바뀌면 apply 하지 않고 멈춥니다. 블록 밖에서 `arn` · `revision` 같은
+    식별자가 `(known after apply)` 로, 서비스의 `task_definition` 이 새
+    리비전으로 바뀌는 줄은 교체에 따라오는 것입니다.
 *   이미 닫힌 방송은 끄거나 다시 켜도 상태가 ended 그대로입니다. 진짜 종료
     편지가 뒤늦게 오면 종료 시각(`ended_at`)과 VOD 만료 시각(종료 + 60일)을
     편지 시각으로 바로잡습니다(`Broadcast.applyEnded`).
@@ -266,8 +275,23 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
 
 apply 성공은 반영이 아닙니다. 이 루트는 배포가 끝나기를 기다리지 않아
 (`modules/ecs_service` 의 `aws_ecs_service` 에 `wait_for_steady_state` 없음)
-apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. 읽기 둘을 모두 통과해야 바뀐
-것으로 봅니다(kty 로컬 터미널 · 읽기).
+apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. apply 전에 기준을 하나
+적어 두고, apply 뒤 읽기 셋을 모두 통과해야 바뀐 것으로 봅니다(kty 로컬
+터미널 · 읽기).
+
+apply 전에 지금 배포의 이미지 다이제스트를 적어 둡니다(아래 3 의 기준).
+작업 정의 ARN 과 이미지 주소는 계정 ID 가 들어 있어 변수에만 담고, 출력은
+다이제스트만 냅니다.
+
+```shell
+td="$(aws ecs describe-services --region ap-northeast-2 \
+  --cluster pokeclip-prod --services pokeclip-prod-clip \
+  --query 'services[0].deployments[0].taskDefinition' --output text)"
+aws ecs describe-task-definition --region ap-northeast-2 \
+  --task-definition "${td}" \
+  --query 'taskDefinition.containerDefinitions[].image' --output text \
+  | sed -n 's/^.*@\(sha256:[0-9a-f]\{64\}\)$/\1/p'
+```
 
 1.  배포가 하나로 모였는지 봅니다. 기대 `1 PRIMARY COMPLETED <n> <n>`(배포
     하나 · 완료 · 실행 수 = 원하는 수 — 옛 태스크가 남지 않음)입니다.
@@ -280,8 +304,7 @@ apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. 읽기 둘을 �
     ```
 
 1.  1 을 통과한 뒤 그 배포의 작업 정의 env 를 봅니다. 기대는 끌 때 `false`,
-    켤 때 `true` 입니다. 작업 정의 ARN 은 계정 ID 가 들어 있어 변수에만
-    담고 출력하지 않습니다.
+    켤 때 `true` 입니다.
 
     ```shell
     td="$(aws ecs describe-services --region ap-northeast-2 \
@@ -291,6 +314,16 @@ apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. 읽기 둘을 �
       --task-definition "${td}" \
       --query "taskDefinition.containerDefinitions[].environment[] | [?name=='BROADCAST_REAPER_ENABLED'].value" \
       --output text
+    ```
+
+1.  같은 `td` 의 이미지 다이제스트가 apply 전에 적은 값과 같은지 봅니다.
+    다르면 스위치 밖의 변경이 함께 나간 것이므로 kty 에게 알립니다.
+
+    ```shell
+    aws ecs describe-task-definition --region ap-northeast-2 \
+      --task-definition "${td}" \
+      --query 'taskDefinition.containerDefinitions[].image' --output text \
+      | sed -n 's/^.*@\(sha256:[0-9a-f]\{64\}\)$/\1/p'
     ```
 
 1 이 아직 `COMPLETED` 가 아니면 몇 분 뒤 다시 읽습니다. `FAILED` 이거나
@@ -303,6 +336,11 @@ apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. 읽기 둘을 �
 *   감지: clip 로그에 `broadcast.reaper.ended streamId=<회차> …` 줄이
     찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그 방송의 조각이
     계속 쌓이거나, 방송자가 송출 중이라고 합니다.
+*   로그의 `streamId` 는 회차(장부 `stream_sessions.round_id`)이고, 장부
+    조각의 `stream_id` 는 송출 물리 키입니다. 런북 「치우개 단서」 4 의 장부
+    질의(`ledger-tail.sql`)가 live 세션마다 `round_id` 와 마지막 조각
+    시각(`last_wall`)을 내므로, 그 회차의 행이 있고 `last_wall` 이 닫힌 시각
+    뒤면 오판입니다.
 *   되돌리는 코드 경로가 없습니다. 같은 회차로 송출이 이어지는 한 clip 은 그
     방송을 끝까지 ended 로 봅니다. OBS 단축키 마킹이 막히고, 새로 연
     대시보드에서 라이브 재생이 서지 않는 등입니다.

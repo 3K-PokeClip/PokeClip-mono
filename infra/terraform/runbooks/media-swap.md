@@ -66,26 +66,32 @@ README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)�
 1.  걸음에 들어가기 전에 끕니다. platform tfvars 를
     `clip_broadcast_reaper_enabled = false` 로 바꾸고 plan → apply(승인)
     합니다. plan 기대 목록은 `module.clip.aws_ecs_task_definition.this` 교체와
-    `module.clip.aws_ecs_service.this` 갱신 둘뿐입니다. 그 밖이 있으면
-    apply 하지 않고 멈춥니다.
+    `module.clip.aws_ecs_service.this` 갱신 둘뿐이고, 태스크 정의의 차이는
+    `BROADCAST_REAPER_ENABLED` 값 하나뿐이어야 합니다. 이미지 · 다른 env
+    차이가 보이거나 다른 자원이 바뀌면 apply 하지 않고 멈춥니다(plan
+    출력에서 보는 법은 platform README 「clip 치우개 스위치」 의 plan 대조).
 1.  apply 성공만으로는 들어가지 않습니다. platform README 「clip 치우개 반영
-    확인」 의 읽기 둘이 `1 PRIMARY COMPLETED <n> <n>` 과 `false` 를 낸
-    **뒤에** 교체 걸음에 들어갑니다. 새 태스크가 끝내 뜨지 않으면(`FAILED` ·
-    배포가 하나로 모이지 않음) 꺼지지 않은 상태로 보고 교체에 들어가지
-    않습니다 — kty 회부입니다.
+    확인」 의 읽기 셋이 `1 PRIMARY COMPLETED <n> <n>` · `false` · apply 전과
+    같은 이미지 다이제스트를 낸 **뒤에** 교체 걸음에 들어갑니다. 새 태스크가
+    끝내 뜨지 않으면(`FAILED` · 배포가 하나로 모이지 않음) 꺼지지 않은
+    상태로 보고 교체에 들어가지 않습니다 — kty 회부입니다.
 1.  걸음 도중 공백이 길어질 것 같으면(부분 실패 · force 포함) 그 자리에서
     끕니다. 남은 여유는 30분 − 이미 지난 공백 − 재배포 몇 분입니다.
 1.  다시 켜기: 그 갈래의 끝 확인(예: 「정상 교체」 7 의 일관성)이 끝난 뒤
     장부에 새 조각이 들어오는지 봅니다. 보는 수단은 런타임 1단-가 런북 「M6
     읽기 질의」 의 흐름(실행기 흐름 · `make_read` · 질의 원문을 kty 에게
     보이고 승인)입니다. 질의는 live 세션마다 장부의 마지막 조각 시각을
-    냅니다. 모든 행의 `last_wall` 이 교체를 마친 시각보다 뒤면 통과입니다.
+    냅니다(회차 `round_id` 와 함께 — 오판 감지에도 씁니다). 모든 행의
+    `last_wall` 이 교체를 마친 시각보다 뒤면 통과입니다. 통과하지
+    못하면(`last_wall` 이 교체 전이거나 비어 있음) 되켜지 않고, 몇 분 뒤 다시
+    읽습니다. 계속 통과하지 못하면 kty 회부입니다.
 
     ```shell
     cat >"${payload}/ledger-tail.sql" <<'SQL'
     SET TRANSACTION READ ONLY;
     SET ROLE media_owner;
-    SELECT l.stream_id, g.start_wall_utc AS last_wall, pg_catalog.now() AS read_at
+    SELECT l.stream_id, l.round_id, g.start_wall_utc AS last_wall,
+           pg_catalog.now() AS read_at
       FROM stream_sessions l
       LEFT JOIN LATERAL (SELECT s.start_wall_utc FROM stream_segments s
                           WHERE s.stream_id = l.stream_id
@@ -98,8 +104,9 @@ README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)�
     방송이 없는 시간대라 행이 없으면 끝 확인만으로 되켜고, 첫 방송 시작 뒤
     30분 안에 같은 질의로 그 방송의 조각이 쌓이는지 확인합니다(장부가
     망가졌으면 그때 치우개가 그 방송을 닫습니다).
-1.  되켤 때도 `true` 로 plan → apply(승인) 하고, 같은 읽기 둘이
-    `1 PRIMARY COMPLETED <n> <n>` 과 `true` 를 내는지 봅니다.
+1.  되켤 때도 `true` 로 plan → apply(승인) 하고, 같은 읽기 셋이
+    `1 PRIMARY COMPLETED <n> <n>` · `true` · apply 전과 같은 이미지
+    다이제스트를 내는지 봅니다.
 1.  꺼 둔 시각 · 되켠 시각을 실행 기록에 남깁니다. 무기한 꺼 둔 채로 두지
     않습니다 — 꺼져 있는 동안 종료 편지를 놓친 방송은 live 로 남습니다.
 1.  교체 뒤 clip 로그에 `broadcast.reaper.ended` 줄이 찍혔는데 그 방송의
