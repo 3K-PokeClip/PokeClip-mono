@@ -400,6 +400,29 @@ describe('VodListScreen — 제목 없는 방송', () => {
 
     expect(links).toHaveLength(linked ? 1 : 0);
   });
+
+  // 준비 중 행은 행 전체가 흐려(.rowPreparing) CSS가 그 안의 흐린 색을 되돌린다. jsdom은 계산 색을
+  // 못 재니 그 선택자(.rowPreparing .rowUntitled)가 닿는 구조만 확인한다
+  it('준비 중이면서 제목이 없는 행은 흐린 행 안에 고정 문구를 둔다', () => {
+    renderWithProviders(
+      <VodListScreen
+        broadcasts={[
+          {
+            streamId: 'untitled-preparing',
+            ...at('2026-08-20T23:00:00+09:00'),
+            status: 'ended',
+            vodExpiresAt: '2026-10-19T23:00:00+09:00',
+          },
+        ]}
+        visuals={{ 'untitled-preparing': { title: null, durationSec: 3600, cardCount: 1 } }}
+        now={VOD_LIST_FIXTURE.now}
+      />,
+    );
+    const row = rowAt(0);
+
+    expect(row).toHaveClass(styles.rowPreparing!);
+    expect(within(row).getByText('제목 없는 방송')).toHaveClass(styles.rowUntitled!);
+  });
 });
 
 describe('VodListScreen — 빈 상태', () => {
