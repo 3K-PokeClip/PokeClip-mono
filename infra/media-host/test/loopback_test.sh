@@ -84,9 +84,77 @@ has_pair() {
 }
 
 #######################################
+# argv 파일에서 토큰들이 그 순서대로 연속한 줄로 있는지 본다.
+# Arguments:
+#   argv 파일, 토큰 ….
+#######################################
+has_run() {
+  awk 'BEGIN {
+      n = ARGC - 2
+      for (i = 1; i <= n; i++) {
+        want[i] = ARGV[i + 1]
+        delete ARGV[i + 1]
+      }
+    }
+    { line[NR] = $0 }
+    END {
+      for (s = 1; s + n - 1 <= NR; s++) {
+        i = 1
+        while (i <= n && line[s + i - 1] == want[i]) i++
+        if (i > n) exit 0
+      }
+      exit 1
+    }' "$1" "${@:2}"
+}
+
+#######################################
+# 이미지 줄 뒤(ffmpeg 인자)에서 옵션이 있고, 나올 때마다 마지막 입력의 값
+# (마지막 -i 다음 줄)보다 뒤인지 — 출력 옵션인지 본다.
+# Arguments:
+#   argv 파일, 이미지 줄 번호, 옵션.
+#######################################
+after_last_input() {
+  awk -v from="$2" -v o="$3" 'NR <= from { next }
+    $0 == "-i" { last_in = NR + 1 }
+    $0 == o { at[++n] = NR }
+    END {
+      if (n == 0) exit 1
+      for (i = 1; i <= n; i++) if (at[i] <= last_in) exit 1
+      exit 0
+    }' "$1"
+}
+
+#######################################
+# 송출기 ffmpeg 인자의 소리 · 출력 옵션을 본다 — 소리 입력(lavfi sine) · aac
+# 64k · 영상 스레드 2, 그리고 -t · -c:a · -b:a · -threads 가 마지막 입력 뒤.
+# Arguments:
+#   argv 파일, 이미지 줄 번호.
+#######################################
+expect_sender_audio_output() {
+  local ok=0 pair opt
+  if ! has_run "$1" -f lavfi -i 'sine=frequency=440:sample_rate=48000'; then
+    harness::add_reason '소리 입력 「-f lavfi -i sine=…」 이 없음'
+    ok=1
+  fi
+  for pair in '-c:a aac' '-b:a 64k' '-threads 2'; do
+    if ! has_pair "$1" "${pair%% *}" "${pair#* }"; then
+      harness::add_reason "「${pair}」 가 없음"
+      ok=1
+    fi
+  done
+  for opt in -t -c:a -b:a -threads; do
+    if ! after_last_input "$1" "$2" "${opt}"; then
+      harness::add_reason "${opt} 가 마지막 입력 뒤(출력 옵션)에 없음"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+#######################################
 # 송출기 호출이 하나이고 그 argv 가 정한 꼴인지 본다 — 고유 이름 · 같은 값의
 # 라벨 · mediamtx 망 칸 · 권한 축소 옵션 전부 · 금지 옵션 0 · 고정 이미지 ·
-# ffmpeg 조용히 · srt 루프백 주소 · GOP.
+# ffmpeg 조용히 · srt 루프백 주소 · GOP · 소리 · 출력 옵션(위 도우미).
 # Arguments:
 #   기대 SRT URL.
 #######################################
@@ -147,6 +215,7 @@ expect_sender_argv() {
     harness::add_reason 'GOP -g 60 이 없음'
     ok=1
   fi
+  expect_sender_audio_output "${f}" "${image_line}" || ok=1
   return "${ok}"
 }
 

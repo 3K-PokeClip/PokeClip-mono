@@ -23,7 +23,12 @@
 #      도우미 설정)을 채워 넘긴다.
 #   3. 송출기를 고유 이름 · 라벨로 `docker run --rm --pull never --network
 #      container:<mediamtx>` 로 띄워 MediaMTX 망 칸의 srt://127.0.0.1:8890 으로
-#      시험 신호(GOP 2초 -g 60)를 보낸다. 권한은 줄인다 — 모든 cap 버림 ·
+#      시험 신호를 보낸다 — 영상(GOP 2초 -g 60)과 소리(440Hz sine → AAC 64k)
+#      두 트랙이다. 사이드카 ③ playback 업로드가 영상 1 + 소리 1 을 요구해
+#      영상만 보내면 그 업로드가 실패한다. 영상 인코더 스레드는 2 로 고정한다 —
+#      소리 인코더가 붙으면 코어가 많은 호스트(10 코어 실측)에서 x264 스레드가
+#      아래 pids 상한(64)을 넘어 인코더 열기가 실패한다(상한 256 이면 통과).
+#      권한은 줄인다 — 모든 cap 버림 ·
 #      no-new-privileges · 읽기 전용 루트(+ /tmp tmpfs) · pids · 메모리 상한 ·
 #      비root(65534) · 진입점은 ffmpeg 바로(이미지 래퍼의 계정 조정을 건너뜀).
 #      환경 변수 · 볼륨 · 포트는 넘기지 않는다. ffmpeg 은 -hide_banner -loglevel
@@ -191,8 +196,10 @@ start_sender() {
   docker run --name "${sender_name}" --label "${SENDER_LABEL}=${sender_name}" \
     --network "container:$1" "${SENDER_OPTIONS[@]}" "${LOOPBACK_SENDER_IMAGE}" \
     -hide_banner -loglevel quiet -re -f lavfi \
-    -i 'testsrc=size=320x240:rate=30' -t "$2" -c:v libx264 -pix_fmt yuv420p \
-    -g 60 -f mpegts "$3" </dev/null >/dev/null 2>&1 &
+    -i 'testsrc=size=320x240:rate=30' \
+    -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t "$2" \
+    -c:v libx264 -threads 2 -pix_fmt yuv420p -g 60 -c:a aac -b:a 64k \
+    -f mpegts "$3" </dev/null >/dev/null 2>&1 &
   sender_pid=$!
 }
 

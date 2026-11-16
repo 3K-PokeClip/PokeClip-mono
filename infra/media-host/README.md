@@ -721,6 +721,16 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 *   송출기는 `linuxserver/ffmpeg` 다이제스트 고정 미러를 `docker run --rm
     --network container:<mediamtx>` 로 띄운다. 모든 cap 을 버리고, 읽기 전용
     루트 · 비root(65534)로 돈다.
+*   시험 신호는 영상(testsrc · GOP 2초)과 소리(440Hz sine → AAC 64k) 두
+    트랙이다. 사이드카 ③ playback 업로드가 영상 1 + 소리 1 을 요구해, 영상만
+    보내면 그 업로드가 실패한다. 영상 인코더 스레드는 2 로 고정한다 — 10 코어
+    호스트 실측(2026-11-17)에서 소리를 더하면 pids 상한 64 에서 x264 열기가
+    실패했고, 상한 256 이나 스레드 2 면 통과했다.
+*   **보내기 전 규칙:** 그 시험 키가 서비스가 도는 어느 상자에서도 송출 중이
+    아니고, 그 키 방송이 끝난 지 6분이 지났을 때만 보낸다. 방송 중에는 같은
+    키로 시험 송출을 하지 않는다. 절차는
+    [교체 런북](/infra/terraform/runbooks/media-swap.md) 「정상 교체 3」 의
+    「루프백 전 확인」 이다.
 
 **비밀 건수(`secret-count.sh`):** 대조 값은 CDN 비밀이고, 시험 키 passphrase
 는 `--passphrase` 를 줄 때만 센다(기본은 세지 않는다). 값은 Secrets Manager 에서
