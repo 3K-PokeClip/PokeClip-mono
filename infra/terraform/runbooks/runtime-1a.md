@@ -2387,9 +2387,25 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         롤백됩니다(로컬 PG 17 비superuser 마스터 대역으로 확인 —
         2026-10-25 · 경로만 바꾸면 42501, 그대로면 42P01).
 
+        `app_clip` 은 자기 스키마의 주인이라 그 스키마에 덫(호출자 권한
+        함수 · 뷰 · 연산자 · RLS 정책 안에 숨긴 `RESET ROLE`)을 심을 수 있고,
+        덫은 `SET ROLE app_clip` 아래 SELECT 중에 마스터 권한으로 돕니다.
+        그래서 SET ROLE 앞에 읽기 전용 저장점(`SAVEPOINT ro;` ·
+        `SET TRANSACTION READ ONLY;`)을 열고 SELECT 뒤
+        `ROLLBACK TO SAVEPOINT ro;` 로 닫습니다 — 덫이 마스터로 바뀌어도
+        쓰기는 25006 으로 거부되고, 함수 안에서는 저장점을 풀 수 없습니다.
+        앞뒤 멤버십 조회는 회수 뒤 행이 부여 전과 같은지 보는 기준입니다(로컬
+        PG 17 비superuser 마스터 대역으로 덫 · 거부 · 회수를 확인 —
+        2026-11-16).
+
         ```sql
+        SELECT grantor::regrole, admin_option, inherit_option, set_option
+          FROM pg_catalog.pg_auth_members
+         WHERE roleid = 'app_clip'::regrole AND member = CURRENT_USER::text::regrole;  -- 부여 전 기준
         SET search_path TO app_clip;
         GRANT app_clip TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+        SAVEPOINT ro;
+        SET TRANSACTION READ ONLY;
         SET ROLE app_clip;
         SELECT 'render_jobs', pg_catalog.count(*) FROM render_jobs
           WHERE status IN ('queued', 'started')
@@ -2399,8 +2415,12 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         UNION ALL
         SELECT 'purged_streamers', pg_catalog.count(*) FROM purged_streamers
           WHERE completed_at IS NULL;
+        ROLLBACK TO SAVEPOINT ro;
         RESET ROLE;
         REVOKE app_clip FROM CURRENT_USER;
+        SELECT grantor::regrole, admin_option, inherit_option, set_option
+          FROM pg_catalog.pg_auth_members
+         WHERE roleid = 'app_clip'::regrole AND member = CURRENT_USER::text::regrole;  -- 회수 뒤 = 부여 전과 같아야 함
         ```
 
         상태 값은 clip 마이그레이션(`V207` · `V209` · `V212`)의 CHECK
