@@ -251,7 +251,8 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
         채입니다(plan 은 아래 「plan 대조」 의 예외).
     1.  아래 「clip 치우개 경보」 의 구독을 등록 · 확인합니다.
         `aws sns list-subscriptions-by-topic` 의 `SubscriptionArn` 이
-        `PendingConfirmation` 이 아니어야 다음으로 갑니다.
+        `PendingConfirmation` 이 아니고, 그 구독의
+        `ConfirmationWasAuthenticated` 가 `true` 여야 다음으로 갑니다.
     1.  `true` 로 바꿔 아래 「끄기 · 다시 켜기」 순서로 켭니다. 이 plan 은
         env 한 줄(`"false" -> "true"`)뿐이어야 합니다.
 *   끄기 · 다시 켜기: `terraform.tfvars` 의 `clip_broadcast_reaper_enabled`
@@ -408,13 +409,22 @@ ARN 을 읽어 구독하고, 받은 확인 메일로 구독을 확인합니다. 
 링크의 `Token=` 값으로 `aws sns confirm-subscription --region ap-northeast-2
 --topic-arn … --token <토큰> --authenticate-on-unsubscribe true` 를 돌리는
 편이 낫습니다 — 구독 해지에 인증을 요구해, 메일을 받은 누구나 해지 링크로
-끊지 못하게 합니다. 구독은 Terraform 상태 밖이라 주제가 다시 만들어지면 다시
+끊지 못하게 합니다. 확인 뒤 그 구독의 `ConfirmationWasAuthenticated` 가
+`true` 인지 봅니다. `false` 면 메일 스캐너 등이 링크를 먼저 열어 인증 없이
+확인된 것이니, 그 구독을 `aws sns unsubscribe` 로 해지하고 다시 구독해 위
+명령으로 확인합니다. 구독은 Terraform 상태 밖이라 주제가 다시 만들어지면 다시
 합니다.
 
 ```shell
 aws sns subscribe --region ap-northeast-2 \
   --topic-arn "$(terraform output -raw platform_alarm_topic_arn)" \
   --protocol email --notification-endpoint '<받을 주소>'
+```
+
+```shell
+aws sns get-subscription-attributes --region ap-northeast-2 \
+  --subscription-arn '<list-subscriptions-by-topic 의 SubscriptionArn>' \
+  --query 'Attributes.ConfirmationWasAuthenticated' --output text
 ```
 
 ## 작업 역할
