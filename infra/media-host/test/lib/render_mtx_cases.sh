@@ -34,8 +34,9 @@ readonly AUTH_HTTP_ADDRESS="http://pokeclip-mediamtx:${BASIC_PASS_TOKEN}@\
 # 그대로다). 비교 대상(갈래 a)은 이제 렌더가 아니라 모드 블록 고르기의 결과다 —
 # 골든은 develop 판 그대로라 다시 만들지 않는다. CI checkout 은 이력이 얕아
 # 시험이 git 으로 옛 판을 읽지 않는다(만든 명령은 M15 c2a 실험 기록 · 병합 때
-# 다시 렌더한 명령은 merge-develop 기록). 2026-11 에 hlsAlwaysRemux(true) 한
-# 키만 손으로 더했다 — 나머지 키는 develop 판 그대로다.
+# 다시 렌더한 명령은 merge-develop 기록). 2026-11 에 손으로 고친 키는 둘이다 —
+# hlsAlwaysRemux(true 를 더함) · hlsSegmentCount(900 → 7, ADR-102 라이브 창
+# 28초). 나머지 키는 develop 판 그대로다.
 readonly MTX_LEGACY_GOLDEN_REL='golden/mediamtx.legacy.json'
 # 템플릿 원본의 표지 줄 집계(「수 줄」 정렬 · 쉼표로 이음) — 응답기 블록 둘(인증
 # 절 · pathDefaults 절) · 옛 블록 하나(인증 절).
@@ -162,7 +163,7 @@ mtx_cases::check_23() {
         recordPath, runOnOnline, runOnOffline, runOnRecordSegmentComplete})}' '
     {paths: ["all_others"], hlsVariant: "lowLatency",
      hlsSegmentDuration: "4s", hlsPartDuration: "500ms",
-     hlsSegmentCount: 900, hlsDirectory: "/dvr", hlsAlwaysRemux: true,
+     hlsSegmentCount: 7, hlsDirectory: "/dvr", hlsAlwaysRemux: true,
      defaults: {record: true, recordFormat: "fmp4",
        recordSegmentDuration: "4s",
        recordPath: "/recordings/%path/%Y-%m-%d_%H-%M-%S-%f",
