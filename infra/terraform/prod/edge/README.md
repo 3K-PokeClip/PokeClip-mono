@@ -147,9 +147,9 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
     `JANITOR_GRACE` 가 없고 janitor 기본값 8분이 걸립니다. prod 웹이 상자
     녹화(`/playback`)를 읽지 않음을 실측으로 확인해 c0 에서 8분을
     받습니다(kty 2026-11-16)
-    ([media README](../../../../media/README.md) 「M4 ⓒ 에서 M5/M6 로 넘긴
+    ([media README](/media/README.md) 「M4 ⓒ 에서 M5/M6 로 넘긴
     것」 ·
-    [media-swap 런북 「PDT 배포 순서」](../../runbooks/media-swap.md#pdt-배포-순서)).
+    [media-swap 런북 「PDT 배포 순서」](/infra/terraform/runbooks/media-swap.md#pdt-배포-순서)).
 
 ## /dvr 하한(POK-525)
 
