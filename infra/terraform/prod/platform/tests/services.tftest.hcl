@@ -445,8 +445,9 @@ run "clip_reaper_on_by_default" {
     error_message = "clip_broadcast_reaper_enabled 기본값에서 clip BROADCAST_REAPER_ENABLED 가 true 가 아니다."
   }
 
-  # 유예 · 주기는 서버 기본(30분 · 1분)이라 넣지 않는다. 기본 흉내에 두 이름이
-  # 없어 늘 참인 문서적 단언이다 — 이 run 은 변이를 잡지 못한다.
+  # 유예 · 주기는 서버 기본(30분 · 1분)이라 넣지 않는다. 기본 흉내의 runtime
+  # app_env 에는 두 이름이 없어 그쪽에서 들어오는 경우는 이 run 이 보지 않는다
+  # — platform 블록이 INTERVAL · GRACE 를 넣는 경우를 잡는다.
   assert {
     condition = (
       !contains(keys(local.service_env.clip), "BROADCAST_REAPER_INTERVAL") &&

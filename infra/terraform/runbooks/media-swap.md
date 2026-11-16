@@ -77,19 +77,36 @@ README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)�
     끕니다. 남은 여유는 30분 − 이미 지난 공백 − 재배포 몇 분입니다.
 1.  다시 켜기: 그 갈래의 끝 확인(예: 「정상 교체」 7 의 일관성)이 끝난 뒤
     장부에 새 조각이 들어오는지 봅니다. 보는 수단은 런타임 1단-가 런북 「M6
-    읽기 질의」 의 흐름(실행기 흐름 · 읽기 전용 첫 줄 · SQL 원문을 kty 에게
-    보이고 승인)으로 `stream_segments` 의 최신 조각 시각을 읽어, 교체 뒤
-    시각인지 확인하는 것입니다. 방송이 없는 시간대라 볼 조각이
-    없으면 끝 확인만으로 되켜고, 첫 방송 때 장부에 조각이 쌓이는지 같은
-    흐름으로 확인합니다.
+    읽기 질의」 의 흐름(실행기 흐름 · `make_read` · 질의 원문을 kty 에게
+    보이고 승인)입니다. 질의는 live 세션마다 장부의 마지막 조각 시각을
+    냅니다. 모든 행의 `last_wall` 이 교체를 마친 시각보다 뒤면 통과입니다.
+
+    ```shell
+    cat >"${payload}/ledger-tail.sql" <<'SQL'
+    SET TRANSACTION READ ONLY;
+    SET ROLE media_owner;
+    SELECT l.stream_id, g.start_wall_utc AS last_wall, pg_catalog.now() AS read_at
+      FROM stream_sessions l
+      LEFT JOIN LATERAL (SELECT s.start_wall_utc FROM stream_segments s
+                          WHERE s.stream_id = l.stream_id
+                          ORDER BY s.seq DESC LIMIT 1) g ON true
+     WHERE l.state = 'live';
+    RESET ROLE;
+    SQL
+    ```
+
+    방송이 없는 시간대라 행이 없으면 끝 확인만으로 되켜고, 첫 방송 시작 뒤
+    30분 안에 같은 질의로 그 방송의 조각이 쌓이는지 확인합니다(장부가
+    망가졌으면 그때 치우개가 그 방송을 닫습니다).
 1.  되켤 때도 `true` 로 plan → apply(승인) 하고, 같은 읽기 둘이
     `1 PRIMARY COMPLETED <n> <n>` 과 `true` 를 내는지 봅니다.
 1.  꺼 둔 시각 · 되켠 시각을 실행 기록에 남깁니다. 무기한 꺼 둔 채로 두지
     않습니다 — 꺼져 있는 동안 종료 편지를 놓친 방송은 live 로 남습니다.
 1.  교체 뒤 clip 로그에 `broadcast.reaper.ended` 줄이 찍혔는데 그 방송의
-    송출이 이어지면 오판입니다. 감지 · 복구(방송자에게 OBS 송출을 정상
-    종료한 뒤 다시 켜거나 5분 넘게 쉬었다 켜라고 안내)는 platform README
-    「clip 치우개 오판 감지 · 복구」 를 따릅니다.
+    송출이 이어지면 오판입니다. 감지 · 복구(방송자에게 OBS 플러그인에서
+    송출을 정상 종료하고 10초쯤 뒤에 다시 켜거나, 5분 넘게 쉬었다 켜라고
+    안내 — 회차 규칙은 그 절)는 platform README 「clip 치우개 오판 감지 ·
+    복구」 를 따릅니다.
 
 ## 준비
 
