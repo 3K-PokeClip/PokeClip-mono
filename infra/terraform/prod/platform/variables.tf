@@ -161,8 +161,8 @@ variable "chat_collector_features" {
 # application.yml pokeclip.broadcast.reaper.enabled), prod 기본 켬은 kty
 # 2026-11-16 결정이다(POK-588). 유예 30분 · 주기 1분은 서버 기본값 그대로라
 # env 를 넣지 않는다. 끄기 = false 로 platform apply(clip 재배포) — apply
-# 성공이 반영은 아니라 README 「clip 치우개 반영 확인」 까지 본다. 이미 닫힌
-# 방송은 되돌아가지 않는다.
+# 성공이 반영은 아니라 README 「clip 치우개 반영 확인」 을 apply 전 기준
+# 읽기부터 따른다. 이미 닫힌 방송은 되돌아가지 않는다.
 variable "clip_broadcast_reaper_enabled" {
   description = "clip 치우개 스위치(BROADCAST_REAPER_ENABLED) — 끄면 clip 이 종료 편지를 놓친 live 방송을 닫지 않는다."
   type        = bool

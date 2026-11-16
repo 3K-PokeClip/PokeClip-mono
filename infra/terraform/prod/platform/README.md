@@ -246,8 +246,9 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
     루트가 `clip_broadcast_reaper_enabled` 로 env 를 넣습니다. 유예 · 주기는
     서버 기본값이라 넣지 않습니다.
 *   끄기 · 다시 켜기: `terraform.tfvars` 의 `clip_broadcast_reaper_enabled`
-    를 `false`(켤 때 `true`)로 바꾸고 plan → apply(kty 승인) → 아래 「clip
-    치우개 반영 확인」 순서로 합니다. 끈 사유가 상자 · 장부 기록기
+    를 `false`(켤 때 `true`)로 바꾸고 plan 대조(아래) → apply 전 기준
+    읽기(아래 「clip 치우개 반영 확인」 첫 블록) → apply(kty 승인) → 읽기 셋
+    순서로 합니다. 끈 사유가 상자 · 장부 기록기
     정지였으면, 다시 켜기는 런북 「치우개 단서」 4 의 장부 확인을 통과한
     뒤에 합니다.
 *   plan 대조: 바뀌는 자원은 `module.clip.aws_ecs_task_definition.this`
@@ -279,7 +280,9 @@ apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. apply 전에 �
 적어 두고, apply 뒤 읽기 셋을 모두 통과해야 바뀐 것으로 봅니다(kty 로컬
 터미널 · 읽기).
 
-apply 전에 지금 배포의 이미지 다이제스트를 적어 둡니다(아래 3 의 기준).
+이 블록은 apply 전에 읽습니다 — apply 뒤에 읽으면 기준이 새 리비전이 되어
+아래 3 의 비교가 무의미해집니다. 지금 배포의 이미지 다이제스트를 적어
+둡니다(아래 3 의 기준).
 작업 정의 ARN 과 이미지 주소는 계정 ID 가 들어 있어 변수에만 담고, 출력은
 다이제스트만 냅니다.
 

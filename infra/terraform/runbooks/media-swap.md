@@ -64,8 +64,10 @@ README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)�
 교체에서 30분 넘는 정지 · 공백이 예상되면 아래대로 합니다.
 
 1.  걸음에 들어가기 전에 끕니다. platform tfvars 를
-    `clip_broadcast_reaper_enabled = false` 로 바꾸고 plan → apply(승인)
-    합니다. plan 기대 목록은 `module.clip.aws_ecs_task_definition.this` 교체와
+    `clip_broadcast_reaper_enabled = false` 로 바꾸고 plan 대조 → apply 전
+    기준 읽기(platform README 「clip 치우개 반영 확인」 첫 블록) →
+    apply(승인) 순서로 합니다. plan 기대 목록은
+    `module.clip.aws_ecs_task_definition.this` 교체와
     `module.clip.aws_ecs_service.this` 갱신 둘뿐이고, 태스크 정의의 차이는
     `BROADCAST_REAPER_ENABLED` 값 하나뿐이어야 합니다. 이미지 · 다른 env
     차이가 보이거나 다른 자원이 바뀌면 apply 하지 않고 멈춥니다(plan
@@ -104,7 +106,8 @@ README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)�
     방송이 없는 시간대라 행이 없으면 끝 확인만으로 되켜고, 첫 방송 시작 뒤
     30분 안에 같은 질의로 그 방송의 조각이 쌓이는지 확인합니다(장부가
     망가졌으면 그때 치우개가 그 방송을 닫습니다).
-1.  되켤 때도 `true` 로 plan → apply(승인) 하고, 같은 읽기 셋이
+1.  되켤 때도 `true` 로 plan 대조 → apply 전 기준 읽기 → apply(승인)
+    순서로 하고, 같은 읽기 셋이
     `1 PRIMARY COMPLETED <n> <n>` · `true` · apply 전과 같은 이미지
     다이제스트를 내는지 봅니다.
 1.  꺼 둔 시각 · 되켠 시각을 실행 기록에 남깁니다. 무기한 꺼 둔 채로 두지
