@@ -1,9 +1,16 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
+import { act, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { subscribeApiActivity } from '@/api/client';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { createTestQueryClient, makeQueryWrapper, withToastProvider } from '@/test/testProviders';
+import {
+  createTestQueryClient,
+  makeQueryWrapper,
+  renderWithProviders,
+  withToastProvider,
+} from '@/test/testProviders';
 import { useVodListMockState, vodListQueryOptions } from './useVodListMockState';
+import { VodListScreen } from './VodListScreen';
 import { FRESH_ROW_VOD } from './vodRoundBadge';
 
 // 지난 방송 목록 훅 — 방송마다 카드 수와 다시보기 표지(POK-568: 회차 경로를 물어 끝난 뒤 들어온 화면과 같은 규칙으로 정한다).
@@ -91,6 +98,18 @@ describe('useVodListMockState — 내려갈 때', () => {
   });
 });
 
+/** 제목 칸 없이 오는 끝난 방송 줄. 시험이 title 을 덧붙인다 */
+function untitledRow(streamId: string) {
+  return {
+    streamId,
+    status: 'ended',
+    relation: 'OWNER',
+    startedAt: new Date(MINE_START - 48 * HOUR).toISOString(),
+    endedAt: new Date(MINE_START - 47 * HOUR).toISOString(),
+    vodExpiresAt: null,
+  };
+}
+
 describe('useVodListMockState — 방송마다 카드 수', () => {
   const rowsBeyond = (count: number) =>
     Array.from({ length: count }, (_, i) => ({
@@ -128,10 +147,32 @@ describe('useVodListMockState — 방송마다 카드 수', () => {
     expect(api.cardReads).toBe(counted);
   });
 
-  it('행 제목은 치지직 제목이고, 제목이 없는 방송은 번호다(POK-259)', async () => {
+  it('행 제목은 치지직 제목이고, 제목이 없거나 비거나 공백뿐인 방송은 제목을 비워 둔다: 세션 ID 로 채우지 않는다', async () => {
+    api.extra = [
+      { ...untitledRow('S-empty'), title: '' },
+      { ...untitledRow('S-blank'), title: '   ' },
+      { ...untitledRow('S-null'), title: null },
+    ];
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
+
     await waitFor(() => expect(result.current.visuals['S-mine']?.title).toBe('새벽 랭크'));
-    expect(result.current.visuals['S-other']?.title).toBe('S-other');
+    // S-other 는 제목 칸이 아예 빠져 온다
+    for (const id of ['S-other', 'S-empty', 'S-blank', 'S-null']) {
+      expect(result.current.visuals[id]?.title).toBeNull();
+    }
+  });
+
+  it('목록 화면은 제목 없는 방송을 「제목 없는 방송」으로 적고 세션 ID 를 보이지 않는다', async () => {
+    api.extra = [
+      { ...untitledRow('S-empty'), title: '' },
+      { ...untitledRow('S-blank'), title: '   ' },
+      { ...untitledRow('S-null'), title: null },
+    ];
+    renderWithProviders(createElement(VodListScreen));
+
+    expect(await screen.findByText('새벽 랭크')).toBeInTheDocument();
+    expect(screen.getAllByText('제목 없는 방송')).toHaveLength(4);
+    expect(screen.queryByText(/S-(other|empty|blank|null)/)).toBeNull();
   });
 });
 

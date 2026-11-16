@@ -129,7 +129,7 @@ export function VodRow({
         */}
         {openable ? (
           <Link href={`/broadcast/vod/${item.streamId}`} className={styles.rowLink}>
-            {/* 제목이 없으면 방송 번호(옛 방송은 스트림 키와 같다)라 둘 다 가린다 */}
+            {/* 방송 주인이 쓴 제목이라 세션 녹화(PostHog)가 이 안의 글자를 `*`로 가리게 감싼다 */}
             <span className={PRIVATE_TEXT_CLASS}>{title}</span>
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </Link>

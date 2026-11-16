@@ -101,11 +101,12 @@ export interface LibraryClip {
   thumbnailUrl?: string | null;
 }
 
+/** 출처 한 줄 — 「11월 5일 방송」. 날짜를 못 읽으면 「제목 없는 방송」이다: 세션 ID 를 대신 보이지 않는다 */
 function sourceLabelOf(entry: LibraryEntry): string {
   const at = entry.broadcast.startedAt ?? entry.createdAt;
   const d = new Date(at);
   return Number.isNaN(d.getTime())
-    ? `방송 ${entry.streamId}`
+    ? '제목 없는 방송'
     : `${d.getMonth() + 1}월 ${d.getDate()}일 ${entry.broadcast.status === 'live' ? '라이브' : '방송'}`;
 }
 

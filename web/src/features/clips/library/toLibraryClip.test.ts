@@ -145,6 +145,21 @@ describe('toLibraryClip', () => {
     ).toBe('제목');
   });
 
+  it('출처는 방송 날짜로 적고, 날짜를 못 읽으면 세션 ID 대신 「제목 없는 방송」이다', () => {
+    const streamId = 'S-20261116-1200-key-1';
+    expect(toLibraryClip(entry('editing', { streamId }), '9').sourceLabel).toBe('9월 20일 방송');
+
+    const undated = entry('editing', {
+      streamId,
+      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+      createdAt: 'not-a-date',
+    });
+    const label = toLibraryClip(undated, '9').sourceLabel;
+
+    expect(label).toBe('제목 없는 방송');
+    expect(label).not.toContain(streamId);
+  });
+
   it('만든 사람이 나면 「나」, 아니면 회원 번호다', () => {
     expect(toLibraryClip(entry('editing'), '9').owner).toEqual({ name: '나', me: true });
     expect(toLibraryClip(entry('editing'), '1').owner).toEqual({ name: '편집자 9', me: false });

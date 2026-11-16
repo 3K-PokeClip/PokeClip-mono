@@ -280,11 +280,20 @@ describe('카드 가리기 · 되살리기 (POK-463)', () => {
 });
 
 describe('broadcastTitle — 방송을 보일 이름(POK-259)', () => {
-  it('치지직 제목이 있으면 앞뒤 공백을 깎아 쓰고, 없거나 비면 방송 번호다', () => {
-    expect(broadcastTitle({ streamId: 'S-1', title: '  롤 랭크 ' })).toBe('롤 랭크');
-    expect(broadcastTitle({ streamId: 'S-1', title: '   ' })).toBe('S-1');
-    expect(broadcastTitle({ streamId: 'S-1', title: null })).toBe('S-1');
-    expect(broadcastTitle({ streamId: 'S-1' })).toBe('S-1');
+  it('치지직 제목이 있으면 앞뒤 공백을 깎아 쓴다', () => {
+    expect(broadcastTitle({ title: '  롤 랭크 ' })).toBe('롤 랭크');
+  });
+
+  it('제목이 없거나 비거나 공백뿐이면 null 이다: 세션 ID 를 제목 자리에 쓰지 않는다', () => {
+    // 서버 줄에는 세션 ID 가 같이 온다. 그 줄을 그대로 넘겨도 세션 ID 로 물러서지 않아야 한다
+    const rows = [
+      { streamId: 'S-20261116-1200-key-1', title: null },
+      { streamId: 'S-20261116-1200-key-1', title: '' },
+      { streamId: 'S-20261116-1200-key-1', title: '   ' },
+      { streamId: 'S-20261116-1200-key-1' },
+    ];
+
+    expect(rows.map((row) => broadcastTitle(row))).toEqual([null, null, null, null]);
   });
 });
 
