@@ -245,16 +245,71 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
 *   기본 켬입니다(kty 2026-11-16 결정 · POK-588). 서버 기본은 꺼짐이라 이
     루트가 `clip_broadcast_reaper_enabled` 로 env 를 넣습니다. 유예 · 주기는
     서버 기본값이라 넣지 않습니다.
-*   끄기: `terraform.tfvars` 에 `clip_broadcast_reaper_enabled = false` →
-    plan(clip 태스크 정의 env 한 줄이 바뀌는지 확인) → apply(clip 재배포).
-*   이미 닫힌 방송은 끄거나 다시 켜도 ended 로 남습니다. 진짜 종료 편지가
-    뒤늦게 오면 `ended_at` 만 편지 값으로 고쳐집니다.
+*   끄기 · 다시 켜기: `terraform.tfvars` 의 `clip_broadcast_reaper_enabled`
+    를 `false`(켤 때 `true`)로 바꾸고 plan → apply(kty 승인) → 아래 「clip
+    치우개 반영 확인」 순서로 합니다. plan 기대 목록은
+    `module.clip.aws_ecs_task_definition.this` 교체와
+    `module.clip.aws_ecs_service.this` 갱신 둘뿐입니다. 그 밖이 있으면
+    apply 하지 않고 멈춥니다.
+*   이미 닫힌 방송은 끄거나 다시 켜도 상태가 ended 그대로입니다. 진짜 종료
+    편지가 뒤늦게 오면 종료 시각(`ended_at`)과 VOD 만료 시각(종료 + 60일)을
+    편지 시각으로 바로잡습니다(`Broadcast.applyEnded`).
 *   한계: Media 상자나 장부 기록기가 30분 넘게 멈추면 살아 있는 방송도
     닫습니다. 상자 교체 · 제자리 전환 전 끄기는
     [Media 교체 런북](/infra/terraform/runbooks/media-swap.md) 「치우개
-    단서」 를 따릅니다.
+    단서」 를 따릅니다. 잘못 닫혔을 때는 아래 「clip 치우개 오판 감지 ·
+    복구」 를 봅니다.
 *   chat-collector 의 떼기(`CHAT_DETACH_ENABLED`)는 이 스위치 다음 차례입니다
     (위 「chat 기능 스위치」).
+
+#### clip 치우개 반영 확인
+
+apply 성공은 반영이 아닙니다. 이 루트는 배포가 끝나기를 기다리지 않아
+(`modules/ecs_service` 의 `aws_ecs_service` 에 `wait_for_steady_state` 없음)
+apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. 읽기 둘을 모두 통과해야 바뀐
+것으로 봅니다(kty 로컬 터미널 · 읽기).
+
+1.  배포가 하나로 모였는지 봅니다. 기대 `1 PRIMARY COMPLETED <n> <n>`(배포
+    하나 · 완료 · 실행 수 = 원하는 수 — 옛 태스크가 남지 않음)입니다.
+
+    ```shell
+    aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services pokeclip-prod-clip \
+      --query 'services[0].[length(deployments),deployments[0].status,deployments[0].rolloutState,deployments[0].runningCount,desiredCount]' \
+      --output text
+    ```
+
+1.  1 을 통과한 뒤 그 배포의 작업 정의 env 를 봅니다. 기대는 끌 때 `false`,
+    켤 때 `true` 입니다. 작업 정의 ARN 은 계정 ID 가 들어 있어 변수에만
+    담고 출력하지 않습니다.
+
+    ```shell
+    td="$(aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services pokeclip-prod-clip \
+      --query 'services[0].deployments[0].taskDefinition' --output text)"
+    aws ecs describe-task-definition --region ap-northeast-2 \
+      --task-definition "${td}" \
+      --query "taskDefinition.containerDefinitions[].environment[] | [?name=='BROADCAST_REAPER_ENABLED'].value" \
+      --output text
+    ```
+
+1 이 아직 `COMPLETED` 가 아니면 몇 분 뒤 다시 읽습니다. `FAILED` 이거나
+배포가 끝내 하나로 모이지 않으면(새 태스크가 뜨지 않음) 바뀌지 않은 상태로
+봅니다. 끄던 중이면 「꺼지지 않음」 이므로 30분 넘는 정지 · 교체에 들어가지
+않고 kty 에게 알립니다.
+
+#### clip 치우개 오판 감지 · 복구
+
+*   감지: clip 로그에 `broadcast.reaper.ended streamId=<회차> …` 줄이
+    찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그 방송의 조각이
+    계속 쌓이거나, 방송자가 송출 중이라고 합니다.
+*   되돌리는 코드 경로가 없습니다. 같은 회차로 송출이 이어지는 한 clip 은 그
+    방송을 끝까지 ended 로 봅니다. OBS 단축키 마킹이 막히고, 새로 연
+    대시보드에서 라이브 재생이 서지 않는 등입니다.
+*   복구: 방송자에게 OBS 송출을 정상 종료한 뒤 다시 켜거나, 5분 넘게 쉬었다
+    켜라고 안내합니다. 그러면 Media 가 새 회차를 열어 clip 에 새 방송
+    줄(live)이 생깁니다. 끊고 5분 안에 다시 켜면 같은 회차에 붙어 여전히
+    ended 입니다.
 
 ## 작업 역할
 

@@ -58,11 +58,38 @@ README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)�
 
 **치우개 단서(모든 갈래):** clip 치우개(clip `BROADCAST_REAPER_ENABLED` —
 [prod/platform](/infra/terraform/prod/platform/README.md) 「clip 치우개
-스위치」)가 켜져 있고 이 교체에서 30분 넘는 정지 · 공백이 예상되면, 걸음에
-들어가기 전에 platform tfvars `clip_broadcast_reaper_enabled = false` 로
-platform apply(clip 재배포)를 합니다. 교체가 끝나 장부(`stream_segments`)에
-조각이 다시 쌓이는 것을 확인한 뒤 `true` 로 되돌려 apply 합니다. 켜진 채
-30분을 넘기면 그 사이 방송 중인 방송이 닫히고 되돌아오지 않습니다.
+스위치」)는 마지막 조각 뒤로 30분 조용한 live 방송을 닫습니다. 켜진 채
+30분을 넘기면 그 사이 방송 중인 방송이 닫히고 되돌아오지 않습니다. 치우개가
+켜져 있고(platform 변수 `clip_broadcast_reaper_enabled` 기본 `true`) 이
+교체에서 30분 넘는 정지 · 공백이 예상되면 아래대로 합니다.
+
+1.  걸음에 들어가기 전에 끕니다. platform tfvars 를
+    `clip_broadcast_reaper_enabled = false` 로 바꾸고 plan → apply(승인)
+    합니다. plan 기대 목록은 `module.clip.aws_ecs_task_definition.this` 교체와
+    `module.clip.aws_ecs_service.this` 갱신 둘뿐입니다. 그 밖이 있으면
+    apply 하지 않고 멈춥니다.
+1.  apply 성공만으로는 들어가지 않습니다. platform README 「clip 치우개 반영
+    확인」 의 읽기 둘이 `1 PRIMARY COMPLETED <n> <n>` 과 `false` 를 낸
+    **뒤에** 교체 걸음에 들어갑니다. 새 태스크가 끝내 뜨지 않으면(`FAILED` ·
+    배포가 하나로 모이지 않음) 꺼지지 않은 상태로 보고 교체에 들어가지
+    않습니다 — kty 회부입니다.
+1.  걸음 도중 공백이 길어질 것 같으면(부분 실패 · force 포함) 그 자리에서
+    끕니다. 남은 여유는 30분 − 이미 지난 공백 − 재배포 몇 분입니다.
+1.  다시 켜기: 그 갈래의 끝 확인(예: 「정상 교체」 7 의 일관성)이 끝난 뒤
+    장부에 새 조각이 들어오는지 봅니다. 보는 수단은 런타임 1단-가 런북 「M6
+    읽기 질의」 의 흐름(실행기 흐름 · 읽기 전용 첫 줄 · SQL 원문을 kty 에게
+    보이고 승인)으로 `stream_segments` 의 최신 조각 시각을 읽어, 교체 뒤
+    시각인지 확인하는 것입니다. 방송이 없는 시간대라 볼 조각이
+    없으면 끝 확인만으로 되켜고, 첫 방송 때 장부에 조각이 쌓이는지 같은
+    흐름으로 확인합니다.
+1.  되켤 때도 `true` 로 plan → apply(승인) 하고, 같은 읽기 둘이
+    `1 PRIMARY COMPLETED <n> <n>` 과 `true` 를 내는지 봅니다.
+1.  꺼 둔 시각 · 되켠 시각을 실행 기록에 남깁니다. 무기한 꺼 둔 채로 두지
+    않습니다 — 꺼져 있는 동안 종료 편지를 놓친 방송은 live 로 남습니다.
+1.  교체 뒤 clip 로그에 `broadcast.reaper.ended` 줄이 찍혔는데 그 방송의
+    송출이 이어지면 오판입니다. 감지 · 복구(방송자에게 OBS 송출을 정상
+    종료한 뒤 다시 켜거나 5분 넘게 쉬었다 켜라고 안내)는 platform README
+    「clip 치우개 오판 감지 · 복구」 를 따릅니다.
 
 ## 준비
 
@@ -2343,6 +2370,10 @@ B 는 「정상 교체」 2 · 3 으로 미리 띄워 둡니다. force 파일은
 로컬 디렉터리(`${HOME}/.pokeclip-media-force/`, 0700)에 두고 복구가 끝날
 때까지 지우지 않습니다.
 
+**치우개:** 위 「언제 쓰나」 의 치우개 단서를 따릅니다. 방송 중 교체라
+공백이 길어지면 살아 있는 방송이 바로 닫히므로, 걸음 도중에도 남은 여유를
+봅니다.
+
 **옛 모드 B 갈래:** B 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를
 따르고, 순서는 아래 1(목록 저장) → README 「되돌리기 순서」 1(인바운드
 축소 · 확인) → 아래 2 입니다. README 3 은 4 뒤에 확인합니다. A 가 응답기
@@ -2434,6 +2465,9 @@ bash infra/media-host/ops/force-diff.sh \
     길이).
 
 ## 부분 실패 복구
+
+복구가 길어져 공백이 30분에 가까워질 것 같으면 위 「언제 쓰나」 의 치우개
+단서대로 그 자리에서 치우개를 끕니다.
 
 ingest · http 전환(정상 교체 5 · 6, force 2 · 4)의 apply 가 중간에 실패하면:
 
