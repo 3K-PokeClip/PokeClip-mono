@@ -4234,46 +4234,57 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 
   다만 `app_auth` 는 `rds_iam` 멤버라(런타임 `10_roles.sql`), 일회용 로그인에
   `GRANT app_auth TO <일회용 이름> WITH INHERIT TRUE, SET FALSE` 를 주면
-  `rds_iam` 을 간접으로 받는다. AWS 는 간접 부여로도 IAM 인증이
+  일회용이 `rds_iam` 을 상속하게 된다. AWS 는 간접 부여로도 IAM 인증이
   켜지고(「nested memberships or indirect grants」 —
   [IAM DB 계정](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.DBAccounts.html)),
   `rds_iam` 이 붙은 사용자는 IAM 인증이 비밀번호보다 우선한다고 쓴다
   ([IAM DB 인증](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)
-  한계 절). pg_hba 의 `+역할` 매칭도 INHERIT · SET 과 무관하게 간접 멤버까지
-  세므로 `SET FALSE` 로 피하지 못한다. 그래서 「비밀번호 + `app_auth` 멤버십」
-  꼴은 RDS 에서 성립하지 않을 가능성이 높다(로컬에서도 일회용의
-  `pg_has_role(…, 'rds_iam', 'MEMBER')` · `'USAGE'` 가 참으로 나온다). 남는
-  길은 셋이다. 하나를 고르는 것은 kty 회부이고, 모두 RDS 실측 전이다.
+  한계 절). 그래서 「비밀번호 + `app_auth` 멤버십」 꼴은 RDS 에서 성립하지
+  않을 가능성이 높다. 로컬에는 `rds_iam` 대역 역할만 있고 RDS 의 IAM 인증
+  기제가 없어, 로컬 실측은 이 제약을 확인하지도 덮지도 못한다. 남는 길은
+  셋이다. 하나를 고르는 것은 kty 회부이고, 모두 RDS 실측 전이다.
+
   (i) 일회용 로그인을 IAM 토큰으로 들인다 — `rds-db:connect` 를
   `dbuser:<리소스 ID>/<일회용 이름>` 하나짜리로 그 걸음 동안만 준다. 이
-  갈래면 `VALID UNTIL` 은 뜻이 없고 비밀번호 기준도 해당 없다. (ii) 멤버십
-  대신 권한을 직접 준다 — 마스터는 스키마 주인이라 스키마 USAGE 를 직접 주고,
-  표 하나의 SELECT · UPDATE 는 마스터가 `SET ROLE app_auth` 로 GRANT 한다
-  (GRANT 는 앱 코드를 돌리지 않는다 — 런북 runtime-1a 의 판별 서버 권한 손
-  줄과 같은 꼴). `rds_iam` 상속이 없고 최소 권한이지만, 표에 RLS 가 있으면
+  갈래면 `VALID UNTIL` · SCRAM 은 해당 없고, 아래 토큰 취급 기준 ② 는
+  해당한다. (ii) 멤버십 대신 권한을 직접 준다 — DB CONNECT 와 스키마 USAGE
+  는 마스터가 직접 준다(마스터가 스키마 주인). 표 하나의 SELECT · UPDATE 는
+  마스터에게 `app_auth` 의 SET 이 없으므로(`10_roles.sql` — 자기 부여는
+  `media_owner` 뿐) 런북 runtime-1a 의 판별 서버 권한 손 줄 꼴로 `psql -X -1`
+  한 트랜잭션에서 준다: `GRANT app_auth TO CURRENT_USER WITH SET TRUE,
+  INHERIT FALSE` → `SET ROLE app_auth` → 한정 이름으로 GRANT →
+  `RESET ROLE` → `REVOKE app_auth FROM CURRENT_USER`(GRANT 는 앱 코드를
+  돌리지 않는다). `rds_iam` 상속이 없고 최소 권한이지만, 표에 RLS 가 있으면
   일부 행이 빠질 위험이 있다. (iii) 간접 `rds_iam` 에서도 비밀번호 로그인이
-  되는지 RDS 에서 먼저 확인한다. 로컬 실측(`rds_iam` 없는 PG)은 이 제약을
-  덮지 못한다.
+  되는지 RDS 에서 먼저 확인한다.
 
-  비밀번호를 쓰는 꼴이면 지킬 것: ① `PASSWORD` 에는 클라이언트에서 만든 SCRAM
-  검증자 문자열(`'SCRAM-SHA-256$…'`)을 넣는다 — 이미 암호화된 문자열은
-  그대로 저장되어(PG 17 문서 「CREATE ROLE」) 서버 로그 · 통계 · psql 기록 ·
-  페이로드 어디에도 평문이 없다. 평문을 넣으면 `log_statement` 가 `none` 이
+  비밀번호를 쓰는 꼴이면 지킬 것: ① 비밀번호는 무작위 고엔트로피로 두고,
+  역할은 비밀번호 없이 만든 뒤 psql `\password <일회용 이름>` 으로 넣는다 —
+  프롬프트로 받아 클라이언트가 SCRAM 검증자를 만들어 보내므로 서버 로그 ·
+  통계 · psql 기록 · 페이로드 어디에도 평문이 없다(이미 암호화된 문자열은
+  그대로 저장 — PG 17 문서 「CREATE ROLE」). 검증자 문자열을 `PASSWORD` 에
+  손으로 넣을 때 형식이 틀린 `'SCRAM-SHA-256$…'` 는 평문으로 보고 해시해
+  저장한다(로컬 실측). RDS 마스터는 `pg_authid` 를 못 읽어 저장 꼴을 볼 수
+  없으니 확인은 로그인 시험으로 한다. 평문을 넣으면 `log_statement` 가 `none` 이
   아닐 때 로그에 남고, `none` 이어도 실패한 CREATE ROLE 은 기본
   `log_min_error_statement = error` 로, 성공한 CREATE ROLE 은
   `pg_stat_statements` 가 올라 있으면 그 통계에 평문으로 남는다(로컬 PG 17
   실측). prod 의 `shared_preload_libraries` 에 그것이 있는지는 미확인이라
   `SHOW shared_preload_libraries` 로 보고, prod 로그는 CloudWatch 로 나가 30일
-  남는다(runtime `rds.tf`). ② 비밀번호를 명령 인자 · 출력 · send-command
-  페이로드 평문 · 기록에 남기지 않는다. 어느 꼴이든 ③ 접속은
-  `sslmode=verify-full` 이다. 일회용에는 CONNECT 를 직접 주지 않는다 —
-  `app_auth` 의 CONNECT 를 상속해 접속되고(`10_roles.sql` · 로컬 실측), 직접
-  주면 그 권한 의존 때문에 DROP ROLE 이 `2BP01` 로 막힌다. `VALID UNTIL` 은
-  그 걸음 길이에 여유를 더한 분 단위로 짧게 둔다.
+  남는다(runtime `rds.tf`). 어느 꼴이든 ② 비밀번호 · IAM 토큰을 명령 인자 ·
+  출력 · send-command 페이로드 평문 · 기록에 남기지 않고, ③ 접속은
+  `sslmode=verify-full` 이다. 멤버십 꼴이면 일회용에 CONNECT 를 직접 주지
+  않는다 — `app_auth` 의 CONNECT 를 상속해 접속되고(`10_roles.sql` · 로컬
+  실측), 직접 주면 그 권한 의존 때문에 DROP ROLE 이 `2BP01` 로 막힌다(위
+  (ii) 는 직접 준다). `VALID UNTIL` 은 그 걸음 길이에 여유를 더한 분 단위로
+  짧게 둔다.
 
-  순서: 쓰기 → 곧바로 `ALTER ROLE <일회용 이름> NOLOGIN` → 세션 끊기
-  (`pg_terminate_backend`) → `REVOKE app_auth FROM <일회용 이름>` → (남긴
-  객체가 없으면) `DROP ROLE`. 덫은 일회용 로그인으로
+  순서: 쓰기 → 곧바로 `ALTER ROLE <일회용 이름> NOLOGIN`(쓰기가 실패해도
+  먼저 NOLOGIN) → 세션 끊기(`pg_terminate_backend`) → 권한 거두기 → (남긴
+  객체가 없으면) `DROP ROLE`. 권한 거두기는 멤버십 꼴이면
+  `REVOKE app_auth FROM <일회용 이름>` 이고, (ii) 면 위와 같은 한 트랜잭션
+  꼴로 `SET ROLE app_auth` 아래 표 권한을 REVOKE 한 뒤 스키마 USAGE ·
+  CONNECT 를 REVOKE 한다. 덫은 일회용 로그인으로
   `ALTER ROLE CURRENT_USER PASSWORD …` 를 해 둘 수 있어(로컬 PG 17 에서 바뀜
   확인) 끊기와 DROP 사이에 다시 들어올 수 있으므로 NOLOGIN 이 맨 앞이다.
   `VALID UNTIL` 은 비밀번호만 만료시켜 역할이 남으므로 DROP 은 빠뜨리지
@@ -4281,20 +4292,27 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   REVOKE · DROP ROLE 을 했고(직접 CONNECT 없고 남긴 객체가 없을 때 · 열린
   세션이 있어도 DROP 은 됨), 세션 끊기는 `pg_signal_backend` 를 주자 자기 부여
   없이 됐다 — RDS 마스터는 `rds_superuser` 를 거쳐 그것을 가진다(RDS 에서는
-  모두 미확인). `DROP OWNED BY` 는 ADMIN 만으로 `42501` 이었고, 덫이 스키마
-  `app_auth` 안에 남긴 표는 스키마 주인인 마스터가 `DROP TABLE` 로 치운다.
-  결과 재확인은 쓰기 뒤 별도 세션에서 한다(앱 트리거가 결과를 바꿀 수 있다)
-  — 마스터가 런북 읽기 전용 틀(`app_clip` 을 `app_auth` 로)로 하거나, 일회용으로
-  한다면 NOLOGIN 전에 끝낸다.
+  모두 미확인). `DROP OWNED BY` 는 ADMIN 만으로 `42501` 이었다. `DROP ROLE`
+  이 `2BP01` 이면 그 오류 DETAIL 에 나온 소유물만 한정 이름으로 지운다 —
+  스키마 `app_auth` 안에 덫이 남긴 표 · 함수는 스키마 주인인 마스터가
+  `DROP TABLE` · `DROP FUNCTION` 으로 지울 수 있지만, 마스터는 진짜 표도 지울
+  수 있으니 DETAIL 밖은 손대지 않는다. 대형 객체는 마스터가 지우지 못해 아래
+  실패 경로로 간다. 보안 검수가 로컬에서 잰 「`REVOKE app_auth` 뒤 마스터
+  자기 INHERIT 부여 → `DROP OWNED BY` → 그 부여 회수 → `DROP ROLE` 을 한
+  트랜잭션으로」 도 됐다는 사실만 적고, 고르는 것은 kty 회부다. 결과 재확인은
+  쓰기 뒤 별도 세션에서 마스터가 런북 읽기 전용 틀(`app_clip` 을
+  `app_auth` 로) 하나로 한다(앱 트리거가 결과를 바꿀 수 있다).
 
-  어느 걸음이든 `42501` · `2BP01` 로 막히면 NOLOGIN 을 그대로 두고, 반드시
-  `REVOKE app_auth FROM <일회용 이름>` 을 하고(자기 부여를 했다면
-  `REVOKE <일회용 이름> FROM <마스터>` 도) 기록해 kty 에게 회부한다. 마스터가
-  자기에게 일회용 역할을 INHERIT 로 주는 갈래는 쓰지 않는 것이 기본이다 —
-  그동안 마스터가 `app_auth` 권한을 물려받아(로컬 실측: 마스터의 `app_auth`
-  표 UPDATE 가 `42501` 에서 성공으로 바뀜) 앞의 「덫이 마스터로 도는」 경로가
-  되살아나고, RDS 에서는 마스터가 `rds_iam` 의 간접 멤버가 되어 마스터
-  비밀번호 로그인까지 IAM 우선으로 잠길 수 있다. 쓴다면 끝에 반드시 회수한다.
+  어느 걸음이든 `42501` · `2BP01` 로 막히면 NOLOGIN 을 그대로 두고 권한을
+  반드시 거둔 뒤(멤버십 꼴이면 `REVOKE app_auth FROM <일회용 이름>`, 자기
+  부여를 했다면 `REVOKE <일회용 이름> FROM <마스터>` 도 · (ii) 면 표 권한 ·
+  USAGE · CONNECT) 기록해 kty 에게 회부한다. 마스터가 자기에게 일회용 역할을
+  INHERIT 로 주는 갈래는 쓰지 않는 것이 기본이다 — 일회용이 `app_auth`
+  멤버인 동안 그러면 마스터가 `app_auth` 권한을 물려받아(로컬 실측: 마스터의
+  `app_auth` 표 UPDATE 가 `42501` 에서 성공으로 바뀜) 앞의 「덫이 마스터로
+  도는」 경로가 되살아나고, RDS 에서는 마스터가 `rds_iam` 을 상속하게 되어
+  마스터 비밀번호 로그인까지 IAM 우선으로 잠길 수 있다. 쓴다면 끝에 반드시
+  회수한다.
 
   다시 열린 줄은 새 발송기가 `platform=SOOP`으로 보낸다. 새 auth가 이미 바르게 보낸 줄도 함께 열려 한 번 더 가지만, 수집기 명부가 같은 탈퇴 시각으로 접어 결과는 같다. 같은 아이디의 치지직 데이터가 잘못 지워졌다면 되돌릴 길은 없다(백업 없음).
 

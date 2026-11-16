@@ -356,7 +356,10 @@ aws ecs describe-task-definition --region ap-northeast-2 \
 *   감지 첫 단계 — 그 줄이 진짜 치우개 종료인지 둘을 먼저 봅니다. ① 그
     `broadcast.reaper.ended` 줄의 로거가 `StaleBroadcastReaper` 인가(사용자
     입력이 다른 경고 줄에 되비쳐 지표 필터에 걸릴 수 있음) ② clip DB 에서 그
-    방송(`streamId`)이 실제로 `ended` 인가. 둘 다 맞을 때만 아래로 갑니다.
+    방송(`streamId`)이 실제로 `ended` 인가. ② 의 읽기는 런북 runtime-1a 의
+    `app_clip` 읽기 전용 저장점 틀(「1단-다 되돌리기 — O7d 뒤」 의 미종결 주문
+    블록)로 하고, 마스터가 틀 없이 `SET ROLE` 로 읽지 않습니다. 둘 다 맞을
+    때만 아래로 갑니다.
 *   감지: 그 줄이 찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그
     방송의 조각이 계속 쌓이거나, 방송자가 송출 중이라고 합니다.
 *   로그의 `streamId` 는 회차(장부 `stream_sessions.round_id`)이고, 장부
@@ -399,10 +402,12 @@ POK-588). 한 줄이 방송 하나를 닫은 것입니다. 꼴은 prod/edge 「�
 *   알림 주제 `pokeclip-prod-platform-alarms` 의 정책은 SNS 기본 정책 대신
     명시 정책입니다 — 계정 루트에는 읽기 하나이고, 이 자원 정책이 여는
     발행은 이 경보가 보내는 CloudWatch(`aws:SourceArn` ·
-    `aws:SourceAccount`)뿐입니다. 같은 계정 주체의 신원 권한(발행 · 구독
-    해지 · 주제 삭제)은 이 정책이 막지 않고, 직전 점검 principal_sim 의
+    `aws:SourceAccount`)뿐입니다. 같은 계정 주체의 신원 권한(발행 · 주제
+    삭제)은 이 정책이 막지 않고, 직전 점검 principal_sim 의
     `platform-alarm-topic` 행이 봅니다.
-*   알려진 한계: 자원 단위가 없는 동작은 그 대상 행들이 묻지 않습니다 —
+*   알려진 한계: 그 대상 행들은 다음 동작 · 자원 유형을 묻지 않습니다(서비스
+    권한 참조상 자원 유형은 SNS 구독 동작이 topic · PutLogEvents 가
+    log-stream · PutMetricData 가 dataset) —
     `cloudwatch:PutMetricData`(같은 지표에 음수를 넣어 5분 합을 상쇄) ·
     `sns:Unsubscribe` · `sns:SetSubscriptionAttributes` ·
     `logs:PutLogEvents`(거짓 줄). 또 clip 로그 드라이버(`awslogs`)가 비차단
