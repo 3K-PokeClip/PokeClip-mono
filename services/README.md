@@ -4256,11 +4256,13 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 
   1.  **실행 직전 확인(마스터 · 카탈로그만).** `SHOW createrole_self_grant`
       가 비어 있어야 한다 — 비어 있지 않으면 일회용을 만들 때 마스터가 그
-      역할의 SET · INHERIT 를 자동으로 받으므로 멈춘다. 이어서 대상 표의
-      비내부 트리거 · 규칙 · RLS 정책 수와 RLS 켜짐을 본다. `pg_catalog` 만
-      읽으니 마스터가 `SET ROLE` 없이 한정 이름으로 직접 읽는다. 기대값은 셋
-      다 `0` · `f` 이고, 아니면 멈추고 kty 에게 회부한다(트리거 · 규칙이
-      있으면 일회용으로도 덫이 돌고, RLS 가 있으면 일부 행이 안 바뀐다).
+      역할의 SET · INHERIT 를 자동으로 받으므로 멈춘다. 이어서 대상 표에서
+      앱 함수가 일회용 신분으로 돌 수 있는 자리를 둘로 나눠 본다. 둘 다
+      `pg_catalog` 만 읽으니 마스터가 `SET ROLE` 없이 한정 이름으로 직접
+      읽는다. 첫째는 비내부 트리거 · 규칙 · RLS 정책 수와 RLS 켜짐이다.
+      기대값은 셋 다 `0` · `f` 이고, 아니면 멈추고 kty 에게 회부한다(트리거 ·
+      규칙이 있으면 일회용으로도 덫이 돌고, RLS 가 있으면 일부 행이 안
+      바뀐다).
 
       ```sql
       SELECT
@@ -4275,7 +4277,43 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
           WHERE oid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS rls;
       ```
 
-  1.  **부여(마스터 · `psql -X -1` 한 트랜잭션).** DB CONNECT · 스키마
+      둘째는 CHECK 식 · 색인 식 · 부분 색인 술어다 — 쓰기 때 일회용 신분으로
+      돈다. 이 표에는 마이그레이션(auth `V114` · `V118`)이 만든 CHECK 셋과 식
+      색인 · 부분 색인 하나씩이 이미 있어 기대값이 0 이 아니다. 개수로는 덫을
+      못 가린다 — 개수를 그대로 둔 채 정의만 앱 함수 · 연산자를 부르게 바꿀
+      수 있다. 그래서 정의 목록을 아래 기대 다섯 줄(마스터 기본 `search_path`
+      기준)과 글자 그대로 대조한다. 줄이 늘거나 정의가 하나라도 다르면(특히
+      `pg_catalog` 밖 함수 · 연산자 이름이 보이면) 멈추고 kty 에게 회부한다.
+      기대 줄은 로컬 PG 17 에 V114 · V118 을 적용해 뽑았고, 색인 식에 앱 함수를
+      부르는 덫 색인을 더하면 그 함수 이름이 든 여섯째 줄이 나왔다(RDS
+      미확인 · 이 표를 바꾸는 마이그레이션이 생기면 기대 줄도 함께 고친다).
+
+      ```sql
+      SELECT 'check' AS kind, conname::pg_catalog.text AS name,
+             pg_catalog.pg_get_constraintdef(oid) AS def
+        FROM pg_catalog.pg_constraint
+       WHERE conrelid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass
+         AND contype OPERATOR(pg_catalog.=) 'c'
+      UNION ALL
+      SELECT 'index', indexrelid::pg_catalog.regclass::pg_catalog.text,
+             pg_catalog.pg_get_indexdef(indexrelid)
+        FROM pg_catalog.pg_index
+       WHERE indrelid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass
+         AND (indexprs IS NOT NULL OR indpred IS NOT NULL)
+       ORDER BY 1, 2;
+      ```
+
+      ```text
+      check | ck_withdrawal_purge_channel            | CHECK ((((target)::text = 'COLLECTOR'::text) = (channel_id IS NOT NULL)))
+      check | ck_withdrawal_purge_platform           | CHECK ((((target)::text = 'COLLECTOR'::text) OR (platform IS NULL)))
+      check | ck_withdrawal_purge_target             | CHECK (((target)::text = ANY ((ARRAY['CLIP'::character varying, 'COLLECTOR'::character varying])::text[])))
+      index | app_auth.idx_withdrawal_purge_jobs_due | CREATE INDEX idx_withdrawal_purge_jobs_due ON app_auth.withdrawal_purge_jobs USING btree (next_attempt_at) WHERE (done_at IS NULL)
+      index | app_auth.uq_withdrawal_purge_jobs      | CREATE UNIQUE INDEX uq_withdrawal_purge_jobs ON app_auth.withdrawal_purge_jobs USING btree (user_id, target, COALESCE(platform, ''::character varying), COALESCE(channel_id, ''::character varying))
+      ```
+
+  1.  **부여(마스터 · `psql -X -1 -v ON_ERROR_STOP=1 -f <파일>`).** 아래
+      블록을 파일로 두고 그 파일 하나를 한 트랜잭션으로 돌린다(`-1` 은 `-f`
+      파일 실행을 묶는다 — 대화형으로 붙여 넣지 않는다). DB CONNECT · 스키마
       USAGE 는 마스터가 직접 준다(마스터가 DB · 스키마 주인). 표 권한은
       마스터에게 `app_auth` 의 SET 이 없으므로(`10_roles.sql` — 자기 부여는
       `media_owner` 뿐) 자기 부여 → `SET ROLE app_auth` → 한정 이름 GRANT(표를
@@ -4330,10 +4368,10 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 
   1.  **정리(마스터).** 쓰기 → 곧바로 `ALTER ROLE <일회용 이름> NOLOGIN`(쓰기가
       실패해도 먼저) → 세션 끊기(`pg_terminate_backend` — prod 마스터는
-      `pg_signal_backend` 를 가짐, 아래 prod 실측) → 부여와 같은 한 트랜잭션
-      꼴로 권한 회수(표 · USAGE · CONNECT, 끝에 같은 `DO` 단언) →
-      `DROP ROLE`. 일회용은 아무것도 소유하지 않아야 한다 — 덫이 대형 객체를
-      만들어 두면 `DROP ROLE` 이 `2BP01` 이 되어 아래 실패 경로로 간다.
+      `pg_signal_backend` 를 가짐, 아래 prod 실측) → 권한 회수 → 이어서 따로
+      `DROP ROLE`. 회수(표 · USAGE · CONNECT, 끝에 같은 `DO` 단언)는 아래 첫
+      블록을 파일로 두고 `psql -X -1 -v ON_ERROR_STOP=1 -f <파일>` 로 한
+      트랜잭션에 돌린다(대화형 붙여 넣기 금지).
 
       ```sql
       GRANT app_auth TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
@@ -4343,11 +4381,37 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
       REVOKE app_auth FROM CURRENT_USER;
       REVOKE USAGE ON SCHEMA app_auth FROM <일회용 이름>;
       REVOKE CONNECT ON DATABASE <DB 이름> FROM <일회용 이름>;
-      -- 부여와 같은 DO $assert$ … $assert$;
+      DO $assert$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members
+                    WHERE roleid OPERATOR(pg_catalog.=) 'app_auth'::pg_catalog.regrole
+                      AND member OPERATOR(pg_catalog.=) CURRENT_USER::pg_catalog.text::pg_catalog.regrole
+                      AND (set_option OR inherit_option)) THEN
+          RAISE EXCEPTION 'master still holds app_auth with SET or INHERIT';
+        END IF;
+      END
+      $assert$;
+      ```
+
+      `DROP ROLE` 은 회수가 커밋된 뒤 같은 꼴의 별도 파일로 따로 돌린다 —
+      회수와 같은 트랜잭션에 두지 않아, 지우기가 실패해도 회수는 남는다.
+
+      ```sql
       DROP ROLE <일회용 이름>;
       ```
 
-  1.  **결과 확인(마스터 · 별도 세션).** 마스터가 런북 미종결 주문 블록과
+      일회용은 아무것도 소유하지 않아야 한다 — 덫이 대형 객체를 만들어 두면
+      `DROP ROLE` 이 `2BP01` 로 실패한다. 그러면 NOLOGIN 과 회수를 그대로
+      두고, 오류의 DETAIL 에 나온 소유물을 기록해 kty 에게 회부한다. 로컬 PG 17
+      리허설에서 일회용 소유 대형 객체를 심고 이 꼴로 돌리자 회수가 rc 0 ·
+      `DROP ROLE` 이 rc 3(`2BP01` · DETAIL 에 대형 객체)이었고 표 권한 ·
+      USAGE · CONNECT 는 모두 거둬진 채였다. 회수와 `DROP ROLE` 을 한 `-1`
+      파일에 두면 `ON_ERROR_STOP` 이 없을 때 rc 0, 있을 때 rc 3 이었고 두 경우
+      모두 롤백돼 세 권한이 그대로 남았다(RDS 미확인).
+
+  1.  **결과 확인(마스터 · 별도 세션 · `psql -X -1 -v ON_ERROR_STOP=1 -f
+      <파일>`).** 아래 블록도 파일 하나를 한 트랜잭션으로 돌리고(대화형 붙여
+      넣기 금지 · `written_at` 은 `-v` 로 넘긴다), 런북 미종결 주문 블록과
       같은 읽기 전용 저장점 꼴로 `app_auth` 의 표를 읽어, 쓰기 시작 시각
       `written_at`(UTC) 뒤 다시 열린 줄 수를 본다(앱 트리거가 결과를 바꿀 수
       있다 — 발송기가 그 사이 다시 보내 닫으면 수가 줄 수 있다). 이 결과
@@ -4369,7 +4433,16 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
       ROLLBACK TO SAVEPOINT ro;
       RESET ROLE;
       REVOKE app_auth FROM CURRENT_USER;
-      -- 부여와 같은 DO $assert$ … $assert$;
+      DO $assert$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members
+                    WHERE roleid OPERATOR(pg_catalog.=) 'app_auth'::pg_catalog.regrole
+                      AND member OPERATOR(pg_catalog.=) CURRENT_USER::pg_catalog.text::pg_catalog.regrole
+                      AND (set_option OR inherit_option)) THEN
+          RAISE EXCEPTION 'master still holds app_auth with SET or INHERIT';
+        END IF;
+      END
+      $assert$;
       ```
 
   어느 걸음이든 `42501` · `2BP01` 로 막히면 NOLOGIN 을 그대로 두고 권한(표 ·
