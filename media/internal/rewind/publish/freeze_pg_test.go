@@ -343,7 +343,7 @@ func TestEndlistIfCaughtUpSealsOnlyWhenLedgerIsCaughtUp(t *testing.T) {
 
 // 확인은 fence 를 잡은 뒤다(POK-591) — fence 획득이 회차 행 잠금을 기다리는 동안 다른 상자가 장부에 행(10)을
 // 넣으면, 잠금이 풀린 뒤의 확인이 그 행을 본다. 봉인하지 않고 ledger_ahead · LedgerLast 10 이며 PUT 은 늘지 않는다. 확인이 fence
-// 앞이던 판은 기다리기 전의 장부(끝 9)를 보고 봉인했다.
+// 앞이면 기다리기 전의 장부(끝 9)를 보고 봉인한다.
 func TestEndlistIfCaughtUpChecksAfterFenceWait(t *testing.T) {
 	l, store, _ := newFreezeLoop(t, 9, 5)
 	puts := len(store.putCalls())
@@ -358,7 +358,7 @@ func TestEndlistIfCaughtUpChecksAfterFenceWait(t *testing.T) {
 	done := make(chan FreezeOutcome, 1)
 	go func() { done <- l.pub.EndlistIfCaughtUp(context.Background(), fxStream, "S", 10) }()
 
-	time.Sleep(300 * time.Millisecond) // fence 획득(UPDATE)이 잠금에서 기다린다 — 장부 INSERT 의 FK 확인(KEY SHARE)은 막지 않는다
+	waitLockWait(t, l.pub.pool) // fence 획득(UPDATE)이 잠금에서 기다린다 — 장부 INSERT 의 FK 확인(KEY SHARE)은 막지 않는다
 	next := l.fx.rows[len(l.fx.rows)-1]
 	next.Seq, next.PlaybackPDT = next.Seq+1, next.PlaybackPDT.Add(4*time.Second)
 	next.PlaybackS3Key = ""
@@ -381,7 +381,8 @@ func TestEndlistIfCaughtUpChecksAfterFenceWait(t *testing.T) {
 }
 
 // 확인 조회의 시한은 0.5초다(POK-591) — 장부 읽기가 막히면(표 잠금) 0.5초에 끊고 ledger_failed 로 돌아온다.
-// 그 틱은 봉인하지 않고 다음 틱이 다시 낸다. 독립 10초 시한이던 판은 잠금이 풀릴 때까지 기다렸다.
+// 그 틱은 봉인하지 않고 다음 틱이 다시 낸다. 시한이 문장 시한(10초)이면 잠금이 풀릴 때까지
+// 기다린다.
 func TestEndlistIfCaughtUpCheckTimesOut(t *testing.T) {
 	l, store, _ := newFreezeLoop(t, 9, 5)
 	puts := len(store.putCalls())
@@ -414,10 +415,10 @@ func TestEndlistIfCaughtUpCheckTimesOut(t *testing.T) {
 	}
 }
 
-// 확인 시한은 서버에서도 끊는다 — 클라이언트 시한(0.5초)만이면 pgx 는 연결을 닫을 뿐 서버에 취소를 보내지 않아, 서버는 막힌
-// 장부 조회를 끝까지 기다리며 그 트랜잭션이 잡은 회차 행 fence 잠금을 쥔다(다음 틱의 fence 획득이 막힌다). 확인 조회 앞에 지역
-// statement_timeout 을 두면 서버가 0.5초에 그 조회를 끊고, 끊긴 연결의 백엔드가 끝나며 잠금이 풀린다. 장부 표를 잠근 채 봉인
-// 작업이 ledger_failed 로 돌아온 뒤 2초 안에 다른 연결이 회차 행을 NOWAIT 로 잠글 수 있는지 본다.
+// 확인 시한이 지나면 서버의 조회도 끊긴다 — 지역 statement_timeout 은 두지 않는다. pgx 는 ctx 시한으로 문장이 끊기면 연결을
+// 닫기 전에 서버에 CancelRequest 를 보내고(pgconn asyncClose), 서버가 막힌 장부 조회를 끊으며 그 트랜잭션이 잡은 회차 행 fence
+// 잠금도 풀린다(다음 틱의 fence 획득이 막히지 않는다). 장부 표를 잠근 채 봉인 작업이 ledger_failed 로 돌아온 뒤 2초 안에 다른
+// 연결이 회차 행을 NOWAIT 로 잠글 수 있는지 본다 — pgx 가 취소를 보내지 않게 바뀌면 이 시험이 잡는다.
 func TestEndlistIfCaughtUpCheckTimesOutOnServer(t *testing.T) {
 	l, _, _ := newFreezeLoop(t, 9, 5)
 	lock, err := l.pub.pool.Begin(t.Context())
@@ -502,7 +503,7 @@ func (c *stallConn) SetWriteDeadline(t time.Time) error {
 
 // 장부 앞섬의 되돌림에도 시한이 있다(POK-591) — 확인이 장부 앞섬을 보고 트랜잭션을 되돌릴 때 연결 통신이 멎으면
 // (ROLLBACK 쓰기가 막힘) 되돌림은 문장 시한(stmtCtx — gapTx 와 같은 꼴)에 끊긴다. 결과가 돌아와야 그 스트림 차선이 풀리고 종료의
-// Lanes.Wait 도 끝난다. 시한 없는 되돌림이던 판은 연결이 풀릴 때까지 돌아오지 않았다.
+// Lanes.Wait 도 끝난다. 시한 없는 되돌림은 연결이 풀릴 때까지 돌아오지 않는다.
 func TestEndlistIfCaughtUpRollbackIsBounded(t *testing.T) {
 	l, _, _ := newFreezeLoop(t, 9, 5)
 	release := make(chan struct{})

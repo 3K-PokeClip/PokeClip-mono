@@ -20,7 +20,7 @@ import (
 )
 
 // sealCalls 는 봉인 작업(Publisher.EndlistIfCaughtUp)의 가짜다 — 차선 고루틴에서 돈다(락). 부른 (스트림, 회차)와 뷰 다음 seq 를
-// 적는다. 장부 끝(ledger · hasLedger)이 뷰 다음 seq 이상이면 봉인 없이 retry ledger_ahead 다(운영의 fence 앞 확인). 아니면
+// 적는다. 장부 끝(ledger · hasLedger)이 뷰 다음 seq 이상이면 봉인 없이 retry ledger_ahead 다(운영은 fence 를 잡은 뒤 같은 트랜잭션에서 확인). 아니면
 // outs 를 앞에서부터 하나씩 돌려준다(다 쓰면 frozen).
 type sealCalls struct {
 	mu        sync.Mutex

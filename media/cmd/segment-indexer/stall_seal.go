@@ -6,8 +6,10 @@ package main
 //
 //	봉인  사다리가 Seal 을 내면(publish.LadderStep) 그 스트림 차선이 비었을 때 봉인(Publisher.EndlistIfCaughtUp)을 낸다 —
 //	      저장소를 부르므로 차선이다(설계 3.3). 봉인 작업은 fence 를 잡은 뒤 같은 트랜잭션에서 장부 마지막 seq 를 읽어(시한
-//	      0.5초), 캐시 뷰 다음 seq 이상이면 되돌리고 봉인 없이 retry ledger_ahead 로 돌아온다 — 루프가 그 값을 캐시에 알려
-//	      (뒤처짐 표지 · 적재 요구) 다음 틱부터 사다리 까닭이 view_behind 가 된다. 못 읽으면 retry ledger_failed 다(POK-591).
+//	      0.5초), 캐시 뷰 다음 seq 이상이면 되돌리고 봉인 없이 retry ledger_ahead 로 돌아온다 — 루프가 그 값을 캐시에 알린다
+//	      (뒤처짐 표지 · 적재 요구). 머리 다음 행이 뷰에 없는 정체(no_row)면 다음 틱부터 사다리 까닭이 view_behind 라 봉인에서
+//	      빠진다. 머리 다음 행이 뷰에 있는 부적격 정체(incomplete 등)면 까닭이 그대로라 적재가 따라잡을 때까지 봉인 작업이 틱마다
+//	      다시 나가고 그때마다 ledger_ahead 로 돌아온다. 못 읽으면 retry ledger_failed 다(POK-591).
 //	      서지 않았으면 retry 는 다음 holdTick 의 사다리가 다시 내고, failed 는 30초 쉰다
 //	끝냄  봉인이 서면 다음 holdTick 의 L3 걸음 뒤에서 EndLive 처럼 동기로 index.EndStallSeal 을 부른다 — 그 회차가 아직 live
 //	      일 때만 끝낸다(회차 술어). 끝낸 뒤 · 실패 처치는 오프라인 전이 · L3 와 같다(live_end.go). 동결은 봉인이 이미 했다(dvr frozen — 정산이
@@ -103,8 +105,8 @@ func (r *rewindLoop) sealDone(ctx context.Context, res publish.Result, now time.
 
 // ledgerChecked 는 봉인 작업의 장부 확인이 봉인을 막은 결과다(retry — 다음 holdTick 의 사다리가 다시 낸다).
 //
-//	ledger_ahead   캐시가 장부보다 뒤처졌다 — cache.ObserveLedgerLast 로 알리면 다음 틱부터 사다리 까닭이 view_behind 라
-//	               봉인에서 빠진다
+//	ledger_ahead   캐시가 장부보다 뒤처졌다 — cache.ObserveLedgerLast 로 알린다. no_row 정체면 다음 틱부터 사다리 까닭이
+//	               view_behind 라 봉인에서 빠지고, 부적격 정체(incomplete 등)면 적재가 따라잡을 때까지 틱마다 다시 이리 온다
 //	ledger_failed  장부를 못 읽었다(DB 오류 · 확인 시한) — 확인 없이 봉인하지 않는다. 봉인 retry 는 쉬지 않는다
 //
 // WARN 은 같은 (회차, 사유, 장부 끝)에 한 줄이다 — DB 장애 동안 틱마다 같은 줄이 쌓이지 않는다.

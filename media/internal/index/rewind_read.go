@@ -361,7 +361,7 @@ type WatchDrift struct {
 	Next    RewindRow
 	HasNext bool
 	// LastSeq 는 장부의 그 스트림 마지막 seq(max(seq))다 — 컷오프 아래 행도 센다. HasLast 가 거짓이면 그 스트림에 행이
-	// 없다. 캐시 뷰 끝 너머의 행을 H+1 한 행과 무관하게 알린다(stall-7125 R1 (b)).
+	// 없다. 캐시 뷰 끝 너머의 행을 H+1 한 행과 무관하게 알린다(stall-7125).
 	LastSeq int64
 	HasLast bool
 }
@@ -451,7 +451,7 @@ SELECT 'absent', stream_id, NULL, NULL, NULL, NULL,
   FROM absent
  ORDER BY kind, stream_id, session_id, next_seq`
 
-// rewindLedgerLastSQL 은 봉인 전 장부 끝 확인이다(POK-591 PR r1 — 정체 마감 L2′ 가 봉인하기 직전에 그 스트림 장부의 마지막
+// rewindLedgerLastSQL 은 봉인 전 장부 끝 확인이다(POK-591 — 정체 마감 L2′ 가 봉인하기 직전에 그 스트림 장부의 마지막
 // seq 를 본다). 감시 문장의 drift CTE 가 싣는 마지막 seq 하위 질의와 같은 꼴이다 — PK (stream_id, seq) 역순 첫 항목 한 번이고
 // 컷오프 아래 행도 센다. 행이 없으면 NULL 한 행이다.
 const rewindLedgerLastSQL = `SELECT pg_catalog.max(seq) FROM stream_segments WHERE stream_id = $1`

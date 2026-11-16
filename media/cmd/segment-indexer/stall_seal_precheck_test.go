@@ -51,7 +51,7 @@ func aheadLedger() index.RewindLedger {
 
 // 확인 뒤 봉인 전에 다른 상자가 행을 넣어도 봉인 순간의 장부를 본다. 4.5초까지 장부 끝은 3(진짜 끝처럼
 // 보임)이고 그 뒤 4 – 6 이 들어온다(push 없음). 5.5초 봉인 작업이 장부 끝 6 을 읽어 봉인하지 않고, 루프가 캐시에 알려 적재
-// 뒤 GAP · 5 · 6 발행으로 이어진다. 10절 판은 4.5초의 통과 결과를 썼으므로 5.5초에 봉인했다(ending · PublishedSeq 3).
+// 뒤 GAP · 5 · 6 발행으로 이어진다. 봉인보다 먼저 확인한 결과를 썼다면 5.5초에 봉인했다(ending · PublishedSeq 3).
 func TestStallSealChecksLedgerAtSealTime(t *testing.T) {
 	f, sc, ends := newSealLoop(t)
 	sc.ledger, sc.hasLedger = 3, true
@@ -85,7 +85,7 @@ func TestStallSealChecksLedgerAtSealTime(t *testing.T) {
 	}
 }
 
-// 진짜 끝(장부에도 뷰 끝 다음 행이 없음)은 옛 판과 같은 틱(5.5초)에 봉인하고 다음 틱에 끝낸다 — 앞당긴 확인 단계가 없고, 봉인
+// 진짜 끝(장부에도 뷰 끝 다음 행이 없음)은 이 PR 전과 같은 틱(5.5초)에 봉인하고 다음 틱에 끝낸다 — 앞당긴 확인 단계가 없고, 봉인
 // 전 틱(4.5초)에는 아무 작업도 내지 않는다.
 func TestStallSealSealsTrueEndOnTime(t *testing.T) {
 	f, sc, ends := newSealLoop(t)
@@ -107,8 +107,8 @@ func TestStallSealSealsTrueEndOnTime(t *testing.T) {
 }
 
 // 봉인 전 틱에 차선이 lazy fence 갱신으로 바빠도 봉인 틱은 그대로다. 갱신(마지막 갱신 뒤 3.5초)이 3.5초에
-// 나가 4.5초 틱까지 차선을 쥐어도(느린 DB) 따로 예약할 확인이 없으므로, 5.5초에 봉인 작업이 나가고 6.5초에 끝낸다. 10절 판은
-// 4.5초 확인을 못 내 5.5초에 확인 · 6.5초에 봉인이었다(6.5 + PUT 2 + 엣지 1.5 = 10초).
+// 나가 4.5초 틱까지 차선을 쥐어도(느린 DB) 따로 예약할 확인이 없으므로, 5.5초에 봉인 작업이 나가고 6.5초에 끝낸다. 확인을 봉인
+// 앞의 따로 된 차선 작업으로 두면 4.5초 확인을 못 내 5.5초에 확인 · 6.5초에 봉인이 된다(6.5 + PUT 2 + 엣지 1.5 = 10초).
 func TestStallSealOnTimeWhenRenewHeldLaneBefore(t *testing.T) {
 	f, sc, ends := newSealLoop(t)
 	sc.ledger, sc.hasLedger = 3, true
@@ -136,7 +136,8 @@ func TestStallSealOnTimeWhenRenewHeldLaneBefore(t *testing.T) {
 
 // 봉인 문턱 앞의 GAP 재시도를 밀어내지 않는다. 4 의 첫 GAP 틱(24초)이 서지 않고(unstood) 정체가 4.5 – 5.5초
 // 구간인 다음 틱(25초)에 GAP 을 다시 내면 그 틱이 차선을 받아 GAP 이 선다 — 봉인 전 마지막 재시도가 사라지지 않고 5 · 6
-// 발행이 이어지며 회차는 live 다. 10절 판은 같은 틱의 확인 작업이 차선을 먼저 잡아 GAP 요청이 후보 없는 평시 틱으로 바뀌었다.
+// 발행이 이어지며 회차는 live 다. 확인을 따로 된 차선 작업으로
+// 두면 같은 틱의 그 작업이 차선을 먼저 잡아 GAP 요청이 후보 없는 평시 틱으로 바뀐다.
 func TestStallSealKeepsGapRetryBeforeSeal(t *testing.T) {
 	f, sc, ends := newSealLoop(t)
 	sc.ledger, sc.hasLedger = 6, true
@@ -163,8 +164,9 @@ func TestStallSealKeepsGapRetryBeforeSeal(t *testing.T) {
 	}
 }
 
-// 장부를 못 읽은 봉인(ledger_failed — DB 장애 · 확인 시한)은 그 틱만 봉인하지 않고 다음 틱에 다시 낸다(POK-591). 갱신 의무 안에 닫는 것이 L2′ 의 목적이라 쉬지 않는다. 다만 WARN 은 같은 (회차, 사유, 장부 끝)에 한 줄이다 —
-// 틱마다 같은 줄이 쌓이지 않는다. DB 가 돌아오면 그 틱에 봉인하고 다음 틱에 끝낸다.
+// 장부를 못 읽은 봉인(ledger_failed — DB 장애 · 확인 시한)은 그 틱만 봉인하지 않고 다음 틱에 다시 낸다(POK-591). 갱신 의무
+// 안에 닫는 것이 L2′ 의 목적이라 쉬지 않는다. 다만 WARN 은 같은 (회차, 사유, 장부 끝)에 한 줄이다 — 틱마다 같은 줄이 쌓이지
+// 않는다. DB 가 돌아오면 그 틱에 봉인하고 다음 틱에 끝낸다.
 func TestStallSealLedgerFailedRetriesEachTickWarnsOnce(t *testing.T) {
 	f, sc, ends := newSealLoop(t)
 	failed := publish.FreezeOutcome{Axis: publish.AxisDVR, Result: publish.ResultRetry, Retry: true,
