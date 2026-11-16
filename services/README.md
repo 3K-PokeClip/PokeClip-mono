@@ -4219,8 +4219,9 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
      AND done_at OPERATOR(pg_catalog.<=) :'deploy_finished_at'::pg_catalog.timestamptz;
   ```
 
-  두 시각은 psql 변수로 넣고 값에 `+00` 을 붙인 UTC 로 쓴다(예:
-  `2026-11-17 01:00:00+00`). 위 블록은 dev(compose 의 소유자 계정)에서도
+  두 시각은 psql 변수로 넣고 값에 `+00` 을 붙인 UTC 로 쓴다. 값에 공백이
+  있으니 `-v "deploy_started_at=2026-11-17 01:00:00+00"` 처럼 감싸 넘긴다
+  (`deploy_finished_at` 도 같은 꼴). 위 블록은 dev(compose 의 소유자 계정)에서도
   그대로 돈다 — 표 이름을 스키마로 한정하고 비교 연산자를 `pg_catalog` 로
   한정해, 경로 줄이 없고 `app_auth` 스키마에 심은 연산자를 타지 않는다(로컬
   PG 17 에서 `app_auth.=(varchar, varchar)` 덫이 옛 꼴에서는 불리고 이
@@ -4256,15 +4257,24 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 
   1.  **실행 직전 확인(마스터 · 카탈로그만).** `SHOW createrole_self_grant`
       가 비어 있어야 한다 — 비어 있지 않으면 일회용을 만들 때 마스터가 그
-      역할의 SET · INHERIT 를 자동으로 받으므로 멈춘다. 이어서 대상 표에서
-      앱 함수가 일회용 신분으로 돌 수 있는 자리를 둘로 나눠 본다. 둘 다
-      `pg_catalog` 만 읽으니 마스터가 `SET ROLE` 없이 한정 이름으로 직접
-      읽는다. 첫째는 비내부 트리거 · 규칙 · RLS 정책 수와 RLS 켜짐이다.
-      기대값은 셋 다 `0` · `f` 이고, 아니면 멈추고 kty 에게 회부한다(트리거 ·
+      역할의 SET · INHERIT 를 자동으로 받으므로 멈춘다. 이어서 대상 표에
+      걸린 표 수준 자리(트리거 · 규칙 · 정책 · RLS · 상속 자식 · CHECK · 색인
+      식 · 부분 색인)를 본다. 아래 두 질의를 파일 하나에 두고 `psql -X -q -At
+      -F '|' -v ON_ERROR_STOP=1 -f <파일>` 로 돌려, 출력을 아래 기대 줄과
+      글자 그대로 대조한다. 둘 다 `pg_catalog` 만 읽으니 마스터가 `SET ROLE`
+      없이 한정 이름으로 직접 읽는다. 파일 첫 줄에서 경로를 `pg_catalog` 로
+      고정한다 — 정의 문자열은 세션 경로에 따라 이름 한정이 달라지고(로컬
+      PG 17 에서 경로에 `app_auth` 가 들면 색인 이름의 `app_auth.` 가
+      빠졌다), 역할 · DB 설정이 마스터 기본 경로를 바꿨을 수도 있다. 첫째
+      질의는 비내부 트리거 · 규칙 · RLS 정책 · 상속 자식 수와 RLS 켜짐이다.
+      기대값은 `0|0|0|0|f` 이고, 아니면 멈추고 kty 에게 회부한다(트리거 ·
       규칙이 있으면 일회용으로도 덫이 돌고, RLS 가 있으면 일부 행이 안
-      바뀐다).
+      바뀌며, 상속 자식이 있으면 UPDATE 가 자식 행과 자식의 트리거까지
+      닿는다 — 로컬 PG 17 에서 덫 자식 표를 하나 만들면 넷째 값이 `1` 이
+      됐다).
 
       ```sql
+      SET search_path TO pg_catalog;
       SELECT
         (SELECT pg_catalog.count(*) FROM pg_catalog.pg_trigger
           WHERE tgrelid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass
@@ -4273,6 +4283,8 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
           WHERE ev_class OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS rules,
         (SELECT pg_catalog.count(*) FROM pg_catalog.pg_policy
           WHERE polrelid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS policies,
+        (SELECT pg_catalog.count(*) FROM pg_catalog.pg_inherits
+          WHERE inhparent OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS children,
         (SELECT relrowsecurity FROM pg_catalog.pg_class
           WHERE oid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS rls;
       ```
@@ -4281,11 +4293,12 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
       돈다. 이 표에는 마이그레이션(auth `V114` · `V118`)이 만든 CHECK 셋과 식
       색인 · 부분 색인 하나씩이 이미 있어 기대값이 0 이 아니다. 개수로는 덫을
       못 가린다 — 개수를 그대로 둔 채 정의만 앱 함수 · 연산자를 부르게 바꿀
-      수 있다. 그래서 정의 목록을 아래 기대 다섯 줄(마스터 기본 `search_path`
-      기준)과 글자 그대로 대조한다. 줄이 늘거나 정의가 하나라도 다르면(특히
-      `pg_catalog` 밖 함수 · 연산자 이름이 보이면) 멈추고 kty 에게 회부한다.
-      기대 줄은 로컬 PG 17 에 V114 · V118 을 적용해 뽑았고, 색인 식에 앱 함수를
-      부르는 덫 색인을 더하면 그 함수 이름이 든 여섯째 줄이 나왔다(RDS
+      수 있다. 그래서 둘째 질의의 정의 목록을 기대 다섯 줄과 글자 그대로
+      대조한다. 줄이 늘거나 정의가 하나라도 다르면(특히 `pg_catalog` 밖
+      함수 · 연산자 이름이 보이면) 멈추고 kty 에게 회부한다. 아래 기대 줄은
+      파일 출력 전체다(첫 줄 = 첫째 질의 · 나머지 다섯 = 정의 목록). 로컬
+      PG 17 에 V114 · V118 을 재생하고 위 꼴로 다시 뽑았고, 색인 식에 앱 함수를
+      부르는 덫 색인을 더하면 그 함수 이름이 든 줄이 하나 더 나왔다(RDS
       미확인 · 이 표를 바꾸는 마이그레이션이 생기면 기대 줄도 함께 고친다).
 
       ```sql
@@ -4304,12 +4317,20 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
       ```
 
       ```text
-      check | ck_withdrawal_purge_channel            | CHECK ((((target)::text = 'COLLECTOR'::text) = (channel_id IS NOT NULL)))
-      check | ck_withdrawal_purge_platform           | CHECK ((((target)::text = 'COLLECTOR'::text) OR (platform IS NULL)))
-      check | ck_withdrawal_purge_target             | CHECK (((target)::text = ANY ((ARRAY['CLIP'::character varying, 'COLLECTOR'::character varying])::text[])))
-      index | app_auth.idx_withdrawal_purge_jobs_due | CREATE INDEX idx_withdrawal_purge_jobs_due ON app_auth.withdrawal_purge_jobs USING btree (next_attempt_at) WHERE (done_at IS NULL)
-      index | app_auth.uq_withdrawal_purge_jobs      | CREATE UNIQUE INDEX uq_withdrawal_purge_jobs ON app_auth.withdrawal_purge_jobs USING btree (user_id, target, COALESCE(platform, ''::character varying), COALESCE(channel_id, ''::character varying))
+      0|0|0|0|f
+      check|ck_withdrawal_purge_channel|CHECK ((((target)::text = 'COLLECTOR'::text) = (channel_id IS NOT NULL)))
+      check|ck_withdrawal_purge_platform|CHECK ((((target)::text = 'COLLECTOR'::text) OR (platform IS NULL)))
+      check|ck_withdrawal_purge_target|CHECK (((target)::text = ANY ((ARRAY['CLIP'::character varying, 'COLLECTOR'::character varying])::text[])))
+      index|app_auth.idx_withdrawal_purge_jobs_due|CREATE INDEX idx_withdrawal_purge_jobs_due ON app_auth.withdrawal_purge_jobs USING btree (next_attempt_at) WHERE (done_at IS NULL)
+      index|app_auth.uq_withdrawal_purge_jobs|CREATE UNIQUE INDEX uq_withdrawal_purge_jobs ON app_auth.withdrawal_purge_jobs USING btree (user_id, target, COALESCE(platform, ''::character varying), COALESCE(channel_id, ''::character varying))
       ```
+
+      이 확인은 표 수준 자리만 본다. 열 형식이 도메인이면 그 도메인의 CHECK,
+      저장 생성 열의 식은 보지 않는다. 그 자리의 덫도 일회용 권한(이 표의
+      SELECT · UPDATE)에 갇혀 권한이 오르지 않고, 남는 해는 대형 객체로
+      `DROP ROLE` 을 막는 것과 덫의 동작이 운영자가 만든 일회용 이름으로 감사
+      기록에 남는 것이다(앞의 것은 아래 정리 걸음이 받는다). 또 이 확인은 시점
+      검사라, 1걸음 뒤 2 · 3걸음 사이에 앱이 덫을 더하면 잡지 못한다.
 
   1.  **부여(마스터 · `psql -X -1 -v ON_ERROR_STOP=1 -f <파일>`).** 아래
       블록을 파일로 두고 그 파일 하나를 한 트랜잭션으로 돌린다(`-1` 은 `-f`
@@ -4402,19 +4423,20 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 
       일회용은 아무것도 소유하지 않아야 한다 — 덫이 대형 객체를 만들어 두면
       `DROP ROLE` 이 `2BP01` 로 실패한다. 그러면 NOLOGIN 과 회수를 그대로
-      두고, 오류의 DETAIL 에 나온 소유물을 기록해 kty 에게 회부한다. 로컬 PG 17
-      리허설에서 일회용 소유 대형 객체를 심고 이 꼴로 돌리자 회수가 rc 0 ·
-      `DROP ROLE` 이 rc 3(`2BP01` · DETAIL 에 대형 객체)이었고 표 권한 ·
+      두고, 오류의 DETAIL 전체(소유물 · 권한 줄)를 기록해 kty 에게 회부한다.
+      로컬 PG 17 리허설에서 일회용 소유 대형 객체를 심고 이 꼴로 돌리자
+      회수가 rc 0 · `DROP ROLE` 이 rc 3(`2BP01` · DETAIL 에 대형 객체)이었고 표 권한 ·
       USAGE · CONNECT 는 모두 거둬진 채였다. 회수와 `DROP ROLE` 을 한 `-1`
       파일에 두면 `ON_ERROR_STOP` 이 없을 때 rc 0, 있을 때 rc 3 이었고 두 경우
       모두 롤백돼 세 권한이 그대로 남았다(RDS 미확인).
 
   1.  **결과 확인(마스터 · 별도 세션 · `psql -X -1 -v ON_ERROR_STOP=1 -f
       <파일>`).** 아래 블록도 파일 하나를 한 트랜잭션으로 돌리고(대화형 붙여
-      넣기 금지 · `written_at` 은 `-v` 로 넘긴다), 런북 미종결 주문 블록과
-      같은 읽기 전용 저장점 꼴로 `app_auth` 의 표를 읽어, 쓰기 시작 시각
-      `written_at`(UTC) 뒤 다시 열린 줄 수를 본다(앱 트리거가 결과를 바꿀 수
-      있다 — 발송기가 그 사이 다시 보내 닫으면 수가 줄 수 있다). 이 결과
+      넣기 금지 · `written_at` 은 값에 공백이 있어
+      `-v "written_at=2026-11-17 01:00:00+00"` 처럼 감싸 넘긴다), 런북 미종결
+      주문 블록과 같은 읽기 전용 저장점 꼴로 `app_auth` 의 표를 읽어, 쓰기
+      시작 시각 `written_at`(UTC) 뒤 다시 열린 줄 수를 본다(앱 트리거가
+      결과를 바꿀 수 있다 — 발송기가 그 사이 다시 보내 닫으면 수가 줄 수 있다). 이 결과
       확인 읽기는 POK-593 에서 일회용 SELECT 계정으로 옮기고, 그 전까지 덫이
       마스터 권한을 되찾을 때 남는 부작용(다른 세션 끊기 · NOTICE · advisory
       잠금 · 계획 단계 IMMUTABLE 색인 식)은 알려진 한계다.
