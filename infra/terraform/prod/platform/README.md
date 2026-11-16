@@ -260,7 +260,8 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
     다른 env 항목의 바뀜(`->`) · 더함(`+`) · 뺌(`-`)이 보이거나 다른 자원이
     바뀌면 apply 하지 않고 멈춥니다. 블록 밖에서 `arn` · `revision` 같은
     식별자가 `(known after apply)` 로, 서비스의 `task_definition` 이 새
-    리비전으로 바뀌는 줄은 교체에 따라오는 것입니다.
+    리비전으로 바뀌는 줄은 교체에 따라오는 것입니다. 아래 「clip 치우개
+    경보」 를 처음 만드는 apply 는 예외입니다(경보 자원 넷이 함께 생김).
 *   이미 닫힌 방송은 끄거나 다시 켜도 상태가 ended 그대로입니다. 진짜 종료
     편지가 뒤늦게 오면 종료 시각(`ended_at`)과 VOD 만료 시각(종료 + 60일)을
     편지 시각으로 바로잡습니다(`Broadcast.applyEnded`).
@@ -356,6 +357,45 @@ aws ecs describe-task-definition --region ap-northeast-2 \
     끊었으면 세션이 송출 끊김 판정으로 먼저 끝나고, 마지막 조각 끝에서 재접속
     창 300초가 지난 뒤 시작한 조각부터 새 회차입니다(`registry.go` 의
     `joinable`). 그보다 일찍 다시 켜면 같은 회차에 붙어 여전히 ended 입니다.
+
+#### clip 치우개 경보
+
+치우개가 방송을 닫을 때마다 clip 로그에 남는 `broadcast.reaper.ended
+streamId=` 줄을 지표 필터로 세어 경보를 울립니다(`reaper_alarms.tf` ·
+POK-588). 한 줄이 방송 하나를 닫은 것입니다. 꼴은 prod/edge 「경보
+(POK-525)」 를 따랐습니다.
+
+| 경보 | 지표 | 뜻 |
+|---|---|---|
+| `pokeclip-prod-clip-reaper-ended` | `PokeClip/Platform` · `ClipReaperEnded`(clip 로그 그룹의 지표 필터 `"broadcast.reaper.ended streamId="`) | 치우개가 종료 편지를 놓친 live 방송을 닫음 |
+
+*   문턱: 5분(300초) 합이 1 이상이면 `ALARM` 이고, 데이터가 없으면 정상으로
+    봅니다(/dvr 하한 경보와 같음).
+*   경보는 치우개 스위치와 상관없이 늘 있습니다. 꺼져 있으면 그 줄이 없어
+    울리지 않습니다. 필터는 만든 뒤의 로그만 셉니다.
+*   패턴은 `streamId=` 까지 넣어 `broadcast.reaper.ended_listener_failed`
+    줄은 세지 않습니다. 같은 글자가 `StaleBroadcastReaper.java` 의 로그
+    문자열에 있는지 시험이 봅니다. clip 로그는 평문(Spring Boot 기본 콘솔
+    형식)이라 JSON 필터가 아니라 따옴표 구절입니다.
+*   알림 주제 `pokeclip-prod-platform-alarms` 의 정책은 SNS 기본 정책 대신
+    명시 정책입니다 — 계정 루트에는 읽기 하나, 발행은 이 경보가 보내는
+    CloudWatch(`aws:SourceArn` · `aws:SourceAccount`)뿐입니다.
+*   울리면: 그 시각 clip 로그의 `broadcast.reaper.ended` 줄에서
+    `streamId`(회차)를 보고 위 「clip 치우개 오판 감지 · 복구」 를
+    따릅니다.
+
+이메일 구독은 저장소 밖에서 kty 가 한 번 답니다(공개 저장소에 주소를 두지
+않음). platform apply 뒤 이 루트에서 주제 ARN 을 읽어 구독하고, 받은 확인
+메일의 링크를 누릅니다. 누르기 전에는 알림이 가지 않습니다
+(`aws sns list-subscriptions-by-topic` 의 `SubscriptionArn` 이
+`PendingConfirmation`). 구독은 Terraform 상태 밖이라 주제가 다시 만들어지면
+다시 합니다.
+
+```shell
+aws sns subscribe --region ap-northeast-2 \
+  --topic-arn "$(terraform output -raw platform_alarm_topic_arn)" \
+  --protocol email --notification-endpoint '<받을 주소>'
+```
 
 ## 작업 역할
 
@@ -482,3 +522,4 @@ plan 요지를 kty 가 보고 승인합니다.
 | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-408) · media(`service_sg_ids.auth` · `.clip` — Media ↔ auth · Media ↔ clip 만료 창구, POK-551). chat 두 서비스의 SG 는 이 루트 안에서만 써서 내보내지 않음 |
 | `service_ports`(auth · clip · next — `services` 의 포트) | media — Media ↔ auth 규칙의 포트(kty 결정 2026-10-25 (나)) · Media ↔ clip 규칙의 포트와 `clip_internal_url` 포트 교차 검증(POK-551) |
 | `clip_execution_role_arn` | 런타임 2단 |
+| `platform_alarm_topic_arn` | 소비 루트 없음 — kty 의 이메일 구독 명령(위 「clip 치우개 경보」) |

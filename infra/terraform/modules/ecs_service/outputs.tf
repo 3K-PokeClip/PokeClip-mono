@@ -3,6 +3,11 @@ output "service_name" {
   value       = aws_ecs_service.this.name
 }
 
+output "log_group_name" {
+  description = "서비스 로그 그룹 이름(awslogs 드라이버가 쓰는 그룹) — 호출자가 지표 필터 · 경보에 쓴다."
+  value       = aws_cloudwatch_log_group.this.name
+}
+
 output "task_role_arn" {
   description = "작업 역할 ARN."
   value       = aws_iam_role.task.arn

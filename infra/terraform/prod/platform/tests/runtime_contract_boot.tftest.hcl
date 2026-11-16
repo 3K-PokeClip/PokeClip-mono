@@ -30,6 +30,12 @@ mock_provider "aws" {
   }
 
   # apply 로 도는 run 에서 provider 가 ARN 꼴을 검사하는 참조에 쓸 값.
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-platform-alarms"
+    }
+  }
+
   mock_resource "aws_lb" {
     defaults = {
       arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/example/0123456789abcdef"
