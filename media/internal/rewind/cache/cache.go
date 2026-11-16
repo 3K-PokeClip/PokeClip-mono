@@ -89,7 +89,17 @@ type stream struct {
 	noCutoff bool
 	// load 는 진행 중인 적재다. nil 이면 적재 중이 아니다.
 	load *load
+	// driftBackoff 는 같은 빈자리(holeAt)에서 뒤처짐을 풀지 못한 드리프트 적재가 몇 번 이어졌는가다(많아야 driftBackoffMax) —
+	// 드리프트 요구의 연속 불일치 문턱이 2 << backoff() 다. 뷰를 갈아 끼워도 남는다. 뒤처짐이 풀리면(어느 적재든 · 감시가
+	// 일치를 봄) 0 이고, 뷰 끝이 holeAt 을 떠나면(push 가 빈자리를 이음) 효력이 없다(backoff).
+	driftBackoff int
+	// holeAt 은 백오프를 세운 빈자리 — 그 드리프트 적재 뒤 뷰의 다음 seq 다.
+	holeAt int64
 }
+
+// driftBackoffMax 는 driftBackoff 의 상한이다 — 문턱이 64 감시(30초 감시로 32분)에서 멈춘다. 장부 빈자리처럼 적재로 풀리지
+// 않는 뒤처짐에서 적재가 감시마다 되풀이되지 않게 늦추되, 빈자리가 채워지면 늦어도 그만큼 뒤에는 따라잡는다.
+const driftBackoffMax = 5
 
 // load 는 진행 중인 적재 하나다.
 type load struct {
@@ -114,11 +124,16 @@ type view struct {
 	rows []boundary.Row
 	// sessions 는 회차 축이다(session_id → 회차).
 	sessions map[string]Session
-	// mismatched 는 직전 감시의 드리프트 대조가 불일치였는가다 — 가드 단위는 스트림이다(장부 421 P-4). 적재가 뷰를
+	// misses 는 드리프트 대조가 연속으로 불일치한 감시 수다 — 가드 단위는 스트림이다(장부 421 P-4). 적재가 뷰를
 	// 갈아 끼우면 새로 센다.
-	mismatched bool
-	// driftDue 는 드리프트 대조가 이 뷰의 적재를 요구했다는 표지다 — 다음 BeginLoad 가 적재로 옮긴다(장부 421 P-5).
+	misses int
+	// driftDue 는 드리프트 대조가 이 뷰의 적재를 요구했다는 표지다 — 다음 BeginLoad 가 적재로 옮긴다(장부 421 P-5). 빈 seq
+	// 뒤 push 가 연 요구도 같다(ApplyInsert — 뷰 머리가 장부보다 뒤처진 드리프트다).
 	driftDue bool
+	// ledgerNext 는 캐시가 아는 장부 쪽 다음 seq 의 하한이다 — 이 seq 앞의 행이 장부에 있다(빈 seq 뒤 push · 드리프트 대조의
+	// H+1 행과 장부 마지막 seq · 빈자리에서 멈춘 적재가 알린다 · 0 = 모른다). 뷰 끝이 여기 못 미치면 뷰가 장부보다
+	// 뒤처졌다(Behind). 적재가 뷰를 갈아 끼우면 새로 센다.
+	ledgerNext int64
 }
 
 // Session 은 캐시가 드는 회차 한 행이다 — 장부의 여덟 열과 회차 최소 seq(index.RewindSession). 회차 최소 seq 는
@@ -160,7 +175,9 @@ func (c *Cache) BeginLoad(streamID string, hint *int64) LoadToken {
 // 없을 때만 표식이 남는다).
 //
 // drift 는 적용한 적재가 드리프트 대조가 연 적재였는가다 — 발행 층의 로그 래퍼가 그때
-// cache_drift_repaired(kind=head)를 남긴다(장부 421 P-5 — 감지가 아니라 적용이 교정이다).
+// cache_drift_repaired(kind=head)를 남긴다(장부 421 P-5 — 감지가 아니라 적용이 교정이다). 적재가 뷰를 장부 끝까지 실었으면
+// 까닭과 상관없이 백오프를 풀고, 드리프트 적재가 빈자리에서 멈췄으면 그 빈자리의 다음 드리프트 요구를 늦춘다(retuneBackoff)
+// — 재생보다 먼저 정해, 재생되는 빈 seq 뒤 push 도 그 백오프를 따른다.
 func (c *Cache) CompleteLoad(streamID string, token LoadToken, l index.RewindLedger) (applied, drift bool) {
 	st := c.lookup(streamID)
 	if st == nil || st.load == nil || st.load.token != token {
@@ -169,6 +186,7 @@ func (c *Cache) CompleteLoad(streamID string, token LoadToken, l index.RewindLed
 	ld := st.load
 	st.load = nil
 	st.reload(l)
+	st.retuneBackoff(ld.drift)
 	for _, p := range ld.log {
 		p()
 	}
@@ -177,7 +195,8 @@ func (c *Cache) CompleteLoad(streamID string, token LoadToken, l index.RewindLed
 
 // reload 는 적재분 l 로 뷰를 통째로 갈아 끼운다 — 부르는 곳은 CompleteLoad 하나다(계획 4.5 A3 결정 2 — 뷰를
 // 바꾸는 입구의 열거를 컴파일이 보증한다). 행은 하한부터 1씩 이어진 데까지만 싣는다. 장부는 seq 를 비우지
-// 않으므로 끊긴 입력은 읽기 결함이고, 끊긴 뒤를 실으면 경계가 빈자리를 모르고 넘어간다.
+// 않으므로 끊긴 입력은 읽기 결함이고, 끊긴 뒤를 실으면 경계가 빈자리를 모르고 넘어간다. 빈자리 뒤에 행이 있었으면
+// 뷰가 장부보다 뒤처졌음을 적는다(Behind).
 func (st *stream) reload(l index.RewindLedger) {
 	if !l.HasCutoff {
 		st.v, st.noCutoff = nil, true
@@ -185,6 +204,9 @@ func (st *stream) reload(l index.RewindLedger) {
 	}
 	v := &view{cutoff: l.CutoffSeq, floor: max(l.FloorSeq, l.CutoffSeq), sessions: map[string]Session{}}
 	for _, r := range l.Rows {
+		if r.Seq > v.nextSeq() {
+			v.sawLedger(l.Rows[len(l.Rows)-1].Seq)
+		}
 		if r.Seq != v.nextSeq() {
 			break
 		}
@@ -195,6 +217,31 @@ func (st *stream) reload(l index.RewindLedger) {
 		v.sessions[s.SessionID] = Session{RewindSession: s}
 	}
 	st.v, st.noCutoff = v, false
+}
+
+// retuneBackoff 는 적재를 적용한 뒤 백오프를 정한다(drift 는 드리프트 적재인가). 뷰가 장부를 따라잡았으면 까닭과 상관없이
+// 0 이다. 드리프트 적재가 뒤처짐을 못 풀었으면 같은 빈자리에서는 한 단 올리고(상한 driftBackoffMax) 새 빈자리면 1 에서 센다.
+// 드리프트가 아닌 적재가 못 풀었으면 그대로 둔다.
+func (st *stream) retuneBackoff(drift bool) {
+	v := st.v
+	switch {
+	case v == nil || v.ledgerNext <= v.nextSeq():
+		st.driftBackoff = 0
+	case !drift:
+	case v.nextSeq() == st.holeAt:
+		st.driftBackoff = min(st.driftBackoff+1, driftBackoffMax)
+	default:
+		st.holeAt, st.driftBackoff = v.nextSeq(), 1
+	}
+}
+
+// backoff 는 지금 효력이 있는 백오프 단이다 — 뷰 끝이 백오프를 세운 빈자리에 그대로 있을 때만 driftBackoff 이고, 아니면
+// 0 이다(그 빈자리는 이미 풀렸다 — cp1 리뷰 codex H1).
+func (st *stream) backoff() int {
+	if st.v == nil || st.v.nextSeq() != st.holeAt {
+		return 0
+	}
+	return st.driftBackoff
 }
 
 // Loading 은 streamID 가 적재 중인가다 — 적재 중에는 읽기가 「모른다」를 돌려준다(Snapshot 컷오프 없음 ·
@@ -244,10 +291,14 @@ func (c *Cache) DemandedLoads() []LoadDemand {
 // 들어온다. 그 밖의 push 는 할 일이 없다(뷰가 생기면 적재가 그 행을 싣는다). 뷰가 있는 스트림의 주조 표시는
 // 뜻이 없다 — 컷오프는 적재가 준다.
 //
-// 이 행이 뷰의 다음 seq 가 아니면 아무것도 바꾸지 않는다 — 캐시가 장부 행을 놓쳤다(단일 쓰기자 전제가
-// 깨져 다른 쓰기자가 그 seq 를 먼저 쓴 국면 — 인덱서의 seq 충돌 재적재). 놓친 뒤로는 뷰가 거기서 멈추고,
-// 머리가 장부보다 뒤처지므로 정합성 감시(설계 4.1 (a) 캐시 드리프트)가 적재로 되돌린다. 빈자리를
-// 두고 이어 붙이면 경계가 빈자리를 모르고 넘어가 목록 안 seq 가 끊긴다.
+// 이 행이 뷰의 다음 seq 보다 뒤면 뷰에 싣지 않고 적재를 요구한다 — 캐시가 그 사이 장부 행을 놓쳤다(단일
+// 쓰기자 전제가 깨져 다른 쓰기자가 그 seq 를 먼저 쓴 국면 — 인덱서의 seq 충돌 재적재). 빈자리를 두고 이어
+// 붙이면 경계가 빈자리를 모르고 넘어가 목록 안 seq 가 끊긴다. 요구의 까닭은 드리프트이고(적용되면
+// cache_drift_repaired(kind=head)), 적재가 뷰를 갈아 끼울 때까지 캐시는 뷰가 장부보다 뒤처졌음을 안다(Behind).
+// 정합성 감시를 기다리면 안 된다 — 놓친 행의 ③ 이 영구 실패면 감시의 H+1 settled 대조가 일치로 보고, 사다리는
+// 뷰에 없는 행에 GAP 을 세우지 못해 회차 끝까지 교착이다(stall-7125 R1 — 2026-11-16 prod). 다음 seq 보다 앞인
+// 행(이미 실린 seq)은 아무것도 바꾸지 않는다. 뷰 끝이 아직 드리프트 적재가 못 넘은 그 빈자리에 있으면(backoff — 장부
+// 빈자리) 바로 요구하지 않고 감시의 늦춘 문턱을 기다린다 — push 마다 적재가 되풀이되지 않게.
 func (c *Cache) ApplyInsert(streamID string, seq int64, res index.InsertCommit) {
 	p := func() { c.ApplyInsert(streamID, seq, res) }
 	if c == nil || c.logged(streamID, p) {
@@ -259,6 +310,14 @@ func (c *Cache) ApplyInsert(streamID string, seq int64, res index.InsertCommit) 
 		return
 	}
 	v := st.v
+	if seq > v.nextSeq() {
+		v.sawLedger(seq)
+		if st.backoff() == 0 {
+			v.driftDue = true
+			c.demand(streamID, nil)
+		}
+		return
+	}
 	if seq != v.nextSeq() {
 		return
 	}
@@ -456,29 +515,44 @@ func (c *Cache) DriftProbes() []index.WatchProbe {
 }
 
 // AuditDrift 는 (a) 드리프트 대조다(설계 4.1 (a) · 계획 부기 43 · 판단 J39) — 감시 결과의 drift 행마다 그 스트림의
-// 뷰와 견준다. 불일치는 DB 컷오프 ≠ 캐시 컷오프(DB 에 없음 포함) 또는 DB 의 H+1 행이 settled 다(판정은
-// boundary.Settled 한 곳). 캐시가 settled 로 아는 행은 DB 에서도 settled 라(push 는 커밋 뒤에만 · settled 단조 —
-// A3 Q2) 캐시 머리가 뒤처졌는지는 H+1 한 행이 가른다. 결과가 닿은 시점의 캐시 머리가 그 H+1 이상이면 머리 쪽은
-// 일치다 — 입력을 뜬 뒤 push 가 닿은 경합을 불일치로 세지 않는다(〔r53b — Q-2〕).
+// 뷰와 견준다. 불일치는 셋 가운데 하나다(settled 판정은 boundary.Settled 한 곳).
 //
-// 가드 단위는 스트림이다(장부 421 P-4) — 같은 스트림이 연속 두 감시에서 불일치면 요구 ③ 을 등재하고(까닭 드리프트
-// · 로그 0 — P-5) 후보 seq 가 달라도 그렇다. 일치하면 연속이 풀린다. 감시가 실패한 틱에는 루프가 이 메서드를 부르지
-// 않아 세지도 풀지도 않는다. 적재 중 · 뷰가 없는 스트림은 건너뛴다(A3 결정 5).
+//	컷오프      DB 컷오프 ≠ 캐시 컷오프(DB 에 없음 포함)
+//	장부 끝     장부의 그 스트림 마지막 seq 가 뷰 끝 너머다
+//	H+1        DB 의 H+1 행이 settled 거나 뷰에 없다
+//
+// 캐시가 settled 로 아는 행은 DB 에서도 settled 라(push 는 커밋 뒤에만 · settled 단조 — A3 Q2) 머리 앞쪽은 H+1 한 행이
+// 가른다. 그러나 뷰가 놓친 행은 settled 대조로 잡히지 않는다 — 그 행이 ③ 영구 실패면 영원히 settled 가 아니고 GAP 은 캐시
+// 행이 있어야 선다. H+1 이 뷰 안의 미settled 행이면(그 회차가 ending 이라 사다리가 꺼졌다) 그 뒤에 다른 프로세스가 넣은 새
+// 회차도 H+1 대조로는 영영 보이지 않는다. 그래서 장부 끝을 따로 견준다(stall-7125 R1 — 2026-11-16 prod · 리뷰 codex H1).
+// 장부 끝 · H+1 이 알린 행은 뷰가 장부보다 뒤처졌다는 표지로 남는다(Behind). 결과가 닿은 시점의 뷰가 그 행들을 실었거나
+// 캐시 머리가 H+1 이상이면 일치다 — 입력을 뜬 뒤 push 가 닿은 경합을 불일치로 세지 않는다(〔r53b — Q-2〕).
+//
+// 가드 단위는 스트림이다(장부 421 P-4) — 같은 스트림이 연속 2 << backoff() 감시(평시 두 번)에서 불일치면 요구 ③ 을
+// 등재하고(까닭 드리프트 · 로그 0 — P-5) 후보 seq 가 달라도 그렇다. 일치하면 연속과 백오프가 풀린다. 감시가 실패한 틱에는 루프가 이
+// 메서드를 부르지 않아 세지도 풀지도 않는다. 적재 중 · 뷰가 없는 스트림은 건너뛴다(A3 결정 5).
 func (c *Cache) AuditDrift(rows []index.WatchDrift) {
 	for _, r := range rows {
 		v := c.readable(r.StreamID)
 		if v == nil {
 			continue
 		}
+		if r.HasNext {
+			v.sawLedger(r.NextSeq)
+		}
+		if r.HasLast {
+			v.sawLedger(r.LastSeq)
+		}
+		st := c.lookup(r.StreamID)
 		if !v.drifted(r) {
-			v.mismatched = false
+			v.misses, st.driftBackoff = 0, 0
 			continue
 		}
-		if v.mismatched {
+		v.misses++
+		if v.misses >= 2<<st.backoff() {
 			v.driftDue = true
 			c.demand(r.StreamID, nil)
 		}
-		v.mismatched = true
 	}
 }
 
@@ -487,10 +561,26 @@ func (v *view) drifted(r index.WatchDrift) bool {
 	if !r.HasCutoff || r.CutoffSeq != v.cutoff {
 		return true
 	}
-	if v.head() >= r.NextSeq {
+	if r.HasLast && r.LastSeq >= v.nextSeq() {
+		return true
+	}
+	if v.head() >= r.NextSeq || !r.HasNext {
 		return false
 	}
-	return r.HasNext && boundary.Settled(boundary.Row(r.Next), r.CutoffSeq)
+	return r.NextSeq >= v.nextSeq() || boundary.Settled(boundary.Row(r.Next), r.CutoffSeq)
+}
+
+// sawLedger 는 장부에 seq 행이 있다는 사실을 든다(ledgerNext).
+func (v *view) sawLedger(seq int64) {
+	v.ledgerNext = max(v.ledgerNext, seq+1)
+}
+
+// Behind 는 streamID 의 뷰가 장부보다 뒤처졌다는 것을 캐시가 아는가다 — 뷰 끝 다음 행이 장부에 있다(빈 seq 뒤 push ·
+// 드리프트 대조 · 빈자리에서 멈춘 적재가 알렸다). 사다리가 머리 다음 행이 뷰에 없는 정체를 방송 종료 구간(no_row)과 가르는 재료다(stall-7125
+// R2). 거짓은 「뒤처지지 않았다」가 아니라 「뒤처졌다는 사실을 모른다」다. 뷰가 없거나 적재 중이면 거짓이다.
+func (c *Cache) Behind(streamID string) bool {
+	v := c.readable(streamID)
+	return v != nil && v.ledgerNext > v.nextSeq()
 }
 
 // head 는 캐시 머리 H 다 — 뷰 첫 행부터 settled 로 이어진 마지막 seq 다(boundary.Compute 의 HeadSeq — 스캔을 뷰

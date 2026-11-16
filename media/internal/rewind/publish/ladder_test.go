@@ -316,6 +316,46 @@ func TestLadderAlarmLevelFollowsBlockedReason(t *testing.T) {
 	}
 }
 
+// L4 의 뷰 뒤처짐(stall-7125 R2 — 2026-11-16 prod 교착) — 머리 다음 행이 캐시 뷰에 없는데 캐시가 그 행이 장부에 있음을
+// 알면(LadderInput.ViewBehind — cache.Behind) 방송 종료 구간이 아니라 캐시가 장부보다 뒤처진 것이다. 까닭은 view_behind 이고
+// ERROR 다 — 옛 사다리는 이것을 no_row WARN 한 줄로 낮춰 36분 정체가 무음에 가까웠다. 뒤처짐을 모르면 no_row WARN 그대로다
+// (kty 결정 ④ A). 문턱 · 정체 한 번에 한 줄 · L1 · L2 없음은 no_row 와 같다.
+func TestLadderAlarmSplitsViewBehindFromNoRow(t *testing.T) {
+	tests := []struct {
+		name   string
+		behind bool
+		gap    string
+		level  slog.Level
+	}{
+		{"방송_종료_구간", false, "no_row", slog.LevelWarn},
+		{"뷰가_장부보다_뒤처짐", true, "view_behind", slog.LevelError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := &logRecorder{}
+			pub := newLadderPublisher(logs)
+			snap := stalledRows()
+			snap.rows = snap.rows[:6] // 머리 5 · 다음 행 6 이 뷰에 없다
+			published := ladderBase.Add(time.Minute)
+			in := ladderInput(snap, published)
+			in.PublishedAt, in.ViewBehind = published, tt.behind
+			var st LadderState
+			var step LadderStep
+
+			for _, d := range []time.Duration{7499 * time.Millisecond, 7500 * time.Millisecond, 9 * time.Second} {
+				in.Now = published.Add(d)
+				st, step = pub.EvaluateLadder(t.Context(), st, in)
+			}
+
+			wantStep(t, step, 6, false, false)
+			recs := logs.records(stallLog)
+			if len(recs) != 1 || recs[0].level != tt.level || recs[0].attrs["gap"] != tt.gap {
+				t.Errorf("%s %+v, want %v 한 줄(gap=%s)", stallLog, recs, tt.level, tt.gap)
+			}
+		})
+	}
+}
+
 // L4 의 귀속 판정(판단 J30) — 회차는 있는데 PDT 나 길이가 빠진 행(적격 ②)은 holdAge 도 잴 수 없어 L1 · L2 가 없고,
 // 서지 못한 까닭은 incomplete 다(기다리면 서는 holding 이 아니다).
 func TestLadderAlarmNamesIncompleteRow(t *testing.T) {

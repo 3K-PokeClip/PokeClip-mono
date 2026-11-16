@@ -360,6 +360,10 @@ type WatchDrift struct {
 	// 렌더하지 않는다). HasNext 가 거짓이면 그 행이 없다.
 	Next    RewindRow
 	HasNext bool
+	// LastSeq 는 장부의 그 스트림 마지막 seq(max(seq))다 — 컷오프 아래 행도 센다. HasLast 가 거짓이면 그 스트림에 행이
+	// 없다. 캐시 뷰 끝 너머의 행을 H+1 한 행과 무관하게 알린다(stall-7125 R1 (b)).
+	LastSeq int64
+	HasLast bool
 }
 
 // WatchAbsent 는 감시 결과의 컷오프 부재 한 행이다(설계 4.1 (c)) — 컷오프가 없고 마지막 조각이 SEED_ALARM_AFTER 안인
@@ -391,7 +395,8 @@ type InitRepair struct {
 // H+1(자리로 짝짓는 배열) · $3 = SEED_ALARM_AFTER.
 //
 //	live    state = 'live' 회차의 열 다섯(A2 결정 11 SQL 그대로)
-//	drift   입력 스트림마다 DB 컷오프와 H+1 행의 settled 재료(적재 행 문장과 같은 열) — 판정하지 않는다
+//	drift   입력 스트림마다 DB 컷오프와 H+1 행의 settled 재료(적재 행 문장과 같은 열) — 판정하지 않는다. 그 스트림
+//	        장부의 마지막 seq 도 싣는다(PK 역순 첫 항목 — 스트림마다 색인 한 번)
 //	ids     장부의 스트림 ID 전부 — 색인에서 「지금보다 큰 첫 스트림 ID」만 골라 건너뛰며 뽑는다(재귀 — 문장 머리의
 //	        WITH RECURSIVE 는 이 CTE 때문이다). 마지막 스트림 뒤의 NULL 한 행에서 멈춘다
 //	absent  컷오프 없는 스트림 가운데 마지막 조각이 $3 안인 것 — 설계 4.1 (c) 문장과 뜻이 같다. 스트림은 ids 에서 받고
@@ -412,7 +417,8 @@ WITH RECURSIVE live AS (
     SELECT p.stream_id, p.next_seq, c.cutoff_seq,
            s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
            (s.playback_upload_state = 'uploaded') AS pb_uploaded,
-           (g.seq IS NOT NULL)                    AS is_gap
+           (g.seq IS NOT NULL)                    AS is_gap,
+           (SELECT pg_catalog.max(x.seq) FROM stream_segments x WHERE x.stream_id = p.stream_id) AS last_seq
       FROM ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::bigint[])) AS p(stream_id, next_seq)
       LEFT JOIN stream_cutoffs c ON c.stream_id = p.stream_id
       LEFT JOIN stream_segments s ON s.stream_id = p.stream_id AND s.seq = p.next_seq
@@ -433,15 +439,15 @@ WITH RECURSIVE live AS (
 SELECT 'live' AS kind, stream_id, session_id, init_uploaded, inherit_absent, has_cutoff,
        NULL::bigint AS next_seq, NULL::bigint AS cutoff_seq, NULL::bigint AS seq, NULL::text AS row_session,
        NULL::int AS duration_ms, NULL::timestamptz AS playback_pdt, NULL::text AS playback_s3_key,
-       NULL::boolean AS pb_uploaded, NULL::boolean AS is_gap, NULL::timestamptz AS last_wall
+       NULL::boolean AS pb_uploaded, NULL::boolean AS is_gap, NULL::timestamptz AS last_wall, NULL::bigint AS last_seq
   FROM live
 UNION ALL
 SELECT 'drift', stream_id, NULL, NULL, NULL, NULL,
-       next_seq, cutoff_seq, seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded, is_gap, NULL
+       next_seq, cutoff_seq, seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded, is_gap, NULL, last_seq
   FROM drift
 UNION ALL
 SELECT 'absent', stream_id, NULL, NULL, NULL, NULL,
-       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, last_wall
+       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, last_wall, NULL
   FROM absent
  ORDER BY kind, stream_id, session_id, next_seq`
 
@@ -480,12 +486,12 @@ func scanWatchRow(rows pgx.Rows, w *RewindWatch) error {
 		session, rowSession, key    *string
 		initUploaded, inheritAbsent *bool
 		hasCutoff, uploaded, gap    *bool
-		nextSeq, cutoff, seq        *int64
+		nextSeq, cutoff, seq, last  *int64
 		duration                    *int32
 		pdt, lastWall               *time.Time
 	)
 	if err := rows.Scan(&kind, &stream, &session, &initUploaded, &inheritAbsent, &hasCutoff,
-		&nextSeq, &cutoff, &seq, &rowSession, &duration, &pdt, &key, &uploaded, &gap, &lastWall); err != nil {
+		&nextSeq, &cutoff, &seq, &rowSession, &duration, &pdt, &key, &uploaded, &gap, &lastWall, &last); err != nil {
 		return fmt.Errorf("되감기 30초 감시 스캔 실패: %w", err)
 	}
 	switch kind {
@@ -493,9 +499,12 @@ func scanWatchRow(rows pgx.Rows, w *RewindWatch) error {
 		w.Live = append(w.Live, WatchLive{StreamID: stream, SessionID: deref(session),
 			InitUploaded: *initUploaded, InheritAbsent: *inheritAbsent, HasCutoff: *hasCutoff})
 	case "drift":
-		d := WatchDrift{StreamID: stream, NextSeq: *nextSeq, HasCutoff: cutoff != nil, HasNext: seq != nil}
+		d := WatchDrift{StreamID: stream, NextSeq: *nextSeq, HasCutoff: cutoff != nil, HasNext: seq != nil, HasLast: last != nil}
 		if d.HasCutoff {
 			d.CutoffSeq = *cutoff
+		}
+		if d.HasLast {
+			d.LastSeq = *last
 		}
 		if d.HasNext {
 			d.Next = RewindRow{Seq: *seq, SessionID: deref(rowSession), DurationMS: *duration, PlaybackPDT: derefTime(pdt),

@@ -406,6 +406,7 @@ func (r *rewindLoop) evaluateLadders(ctx context.Context, now time.Time) map[str
 		rec.ladder, step = r.pub.EvaluateLadder(ctx, rec.ladder, publish.LadderInput{
 			StreamID: s, Snapshot: snap, Window: w, Owner: owner.RewindSession, Publish: rec.pub,
 			UnstoodGapSeq: rec.unstoodGap, PublishedAt: rec.publishedAt, OwnedSince: rec.ownedSince, Now: now,
+			ViewBehind: r.cache.Behind(s),
 		})
 		if step.Expedite && r.expedite != nil {
 			r.expedite(s, step.Seq)

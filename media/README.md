@@ -2698,8 +2698,8 @@ docker compose up -d --build segment-indexer
 | `rewind_fence_release_failed` | 종료 때 fence 반납 실패 — 종료 한 번. 후임 writer 는 lease 가 끝난 뒤 이어 쓴다 | ERROR | err · note |
 | `rewind_publish_aborted` | 틱의 중단 · 포기 — 사유 19가지(`reason`). 같은 사유 · stage 가 이어지면 한 줄이다 | 틱만 포기하는 13 사유는 WARN. 발행이 서는 6 사유(`meta_invalid` · `meta_out_of_range` · `s4_after_publish` · `validate` · `disc_seq_decrease` · `head_failed`)는 ERROR | stream · session · reason(· stage · check · err). **`reason=gap_tx_failed` 줄에는 seq 가 없다** — GAP 트랜잭션 실패를 추적할 출처는 GAP 원장의 `recorded` 행이다 |
 | `rewind_gap_published_total` | GAP 원장에 GAP 이 새로 섬 — 트랜잭션 커밋 뒤 한 줄 | WARN | stream · session · seq · reason(`upload_stall`). **`session` 은 그 틱의 소유 회차다** — 원장 행의 회차(계승 접두면 직전 회차)와 다를 수 있고, 두 기록을 잇는 키는 (stream, seq) 다 |
-| `rewind_publish_stall_seconds` | L4 — 발행 이력이 있는 live 소유 회차의 정체가 7.5초에 닿았는데 L2 가 서지 못함(정체 한 번에 한 줄). C3 — 소유 회차가 live 가 아니게 되어 발행을 멈춤(회차마다 한 번) | L4 는 ERROR, 다만 `gap=no_row` 면 WARN(kty 결정 ④ A). C3 는 WARN | L4: stream · session · seconds · gap(`no_row` · `incomplete` · `before_cutoff` · `holding` · `unstood`) · last_abort / C3: stream · session · state · seconds |
-| `cache_drift_repaired` | 드리프트 까닭 적재가 적용됨(`kind=head`) · 잃은 init 결과를 감시가 되살림(`kind=init_uploaded`) | WARN | head: stream · cutoff · floor / init_uploaded: stream · session · revoked |
+| `rewind_publish_stall_seconds` | L4 — 발행 이력이 있는 live 소유 회차의 정체가 7.5초에 닿았는데 L2 가 서지 못함(정체 한 번에 한 줄). C3 — 소유 회차가 live 가 아니게 되어 발행을 멈춤(회차마다 한 번) | L4 는 ERROR, 다만 `gap=no_row` 면 WARN(kty 결정 ④ A). `gap=view_behind`(머리 다음 행이 캐시에 없는데 장부에는 있음)는 ERROR. C3 는 WARN | L4: stream · session · seconds · gap(`no_row` · `view_behind` · `incomplete` · `before_cutoff` · `holding` · `unstood`) · last_abort / C3: stream · session · state · seconds |
+| `cache_drift_repaired` | 드리프트 까닭 적재가 적용됨(`kind=head` — 30초 감시의 연속 불일치 두 번, 또는 빈 seq 뒤 INSERT push. 드리프트 적재가 장부 빈자리에서 멈춰 뒤처짐을 못 풀면 그 빈자리에 한해 문턱이 두 배씩 64 감시(약 32분)까지 늘고 그동안 push 는 적재를 바로 요구하지 않는다. 뷰가 장부를 따라잡으면(어느 적재든 · 감시 일치) 문턱은 두 번으로 돌아간다) · 잃은 init 결과를 감시가 되살림(`kind=init_uploaded`) | WARN | head: stream · cutoff · floor / init_uploaded: stream · session · revoked |
 | `rewind_cutoff_absent` | 30초 감시 (c) — 최근 10분 안에 조각이 있는데 컷오프가 없는 스트림. 전이만 남긴다 | 들어올 때 WARN(value 1) · 연속 40번째 감시에 ERROR(value 1) · 사라질 때 WARN(value 0 — 들어올 때와 같은 등급이라 `LOG_LEVEL=warn` 으로 걸러도 해소가 보인다) | stream · ticks · last_wall · value |
 | `rewind_ledger_load_degraded` | 적재 실패(`load_failed`) · 행 상한 도달(`row_cap`) · 다시 뽑은 P 의 행이 P 의 자기기술과 다름(`prev_mismatch`) | ERROR | load_failed: stream · err / row_cap: stream · floor · rows / prev_mismatch: stream · hint · mismatch |
 | `rewind_job_failed` | 차선 작업이 중단 · 포기 표 밖의 실패로 끝남 — 발행 작업은 같은 스트림의 이어지는 같은 오류에 한 줄, 감시 작업은 감시마다 한 줄, 동결 감사는 대상 조회가 실패한 감사마다 한 줄 | ERROR | publish: job · stream · session · err / watch: job · first(부팅 첫 감시인가) · err / audit: job · err |
@@ -2708,9 +2708,12 @@ docker compose up -d --build segment-indexer
 
 *   **종료 전이 성공은 로그 줄이 없다.** 장부 `stream_sessions` 의
     `state='ending'` · `end_reason='offline'` 으로 확인한다.
-*   **`gap=no_row` 는 까닭을 가리지 않는다.** 머리 다음 행이 캐시에 없으면 방송
-    종료 구간 · 슬레이트 구간(녹화가 멈춘 끊김 — F-33 ⑴) · 녹화가 멈춘 이상이 모두
-    WARN 이다. ERROR 는 다음 행이 있는데 정착하지 못할 때만 선다.
+*   **`gap=no_row` 는 유입이 멈춘 까닭을 가리지 않는다.** 머리 다음 행이 캐시에
+    없으면 방송 종료 구간 · 슬레이트 구간(녹화가 멈춘 끊김 — F-33 ⑴) · 녹화가 멈춘
+    이상이 모두 WARN 이다. 다만 그 행이 장부에는 있다는 것을 캐시가 알면(빈 seq 뒤
+    push · 30초 감시) 캐시가 장부보다 뒤처진 것이라 `gap=view_behind` ERROR 다 —
+    다른 상자가 같은 스트림의 seq 를 먼저 쓴 2026-11-16 교착의 모양이다. ERROR 는
+    그 밖에 다음 행이 있는데 정착하지 못할 때 선다.
 *   **재기동 ② 뒤의 경보**는 뒤 회차가 계승 회차인가로 갈린다 — 아래 한계 표.
 
 #### ⓒ 실측 기록
