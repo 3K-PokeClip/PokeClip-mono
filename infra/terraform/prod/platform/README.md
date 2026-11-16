@@ -358,8 +358,11 @@ aws ecs describe-task-definition --region ap-northeast-2 \
     입력이 다른 경고 줄에 되비쳐 지표 필터에 걸릴 수 있음) ② clip DB 에서 그
     방송(`streamId`)이 실제로 `ended` 인가. ② 의 읽기는 런북 runtime-1a 의
     `app_clip` 읽기 전용 저장점 틀(「1단-다 되돌리기 — O7d 뒤」 의 미종결 주문
-    블록)로 하고, 마스터가 틀 없이 `SET ROLE` 로 읽지 않습니다. 둘 다 맞을
-    때만 아래로 갑니다.
+    블록)로 하고, 마스터가 틀 없이 `SET ROLE` 로 읽지 않습니다. 로그의
+    `streamId` 는 자유 문자열(clip `V201` 의 `VARCHAR(128)`)이라 SQL 에
+    그대로 붙이지 않습니다 — 허용 문자 · 길이를 먼저 검사하거나, psql 변수로
+    넘겨 `:'sid'` 로 인용합니다(`-v sid=…` 를 쓰면 셸 인용도 주의). 둘 다
+    맞을 때만 아래로 갑니다.
 *   감지: 그 줄이 찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그
     방송의 조각이 계속 쌓이거나, 방송자가 송출 중이라고 합니다.
 *   로그의 `streamId` 는 회차(장부 `stream_sessions.round_id`)이고, 장부
