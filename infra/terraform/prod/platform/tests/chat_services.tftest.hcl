@@ -522,6 +522,8 @@ run "public_services_unchanged_by_chat" {
         AUTH_BASE_URL            = "http://auth.pokeclip.internal:8082"
         BROADCAST_INTAKE_ENABLED = "true"
         BROADCAST_QUEUE_URL      = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-broadcast-clip"
+        # POK-588 — chat 과 무관(clip 치우개 기본 켬).
+        BROADCAST_REAPER_ENABLED = "true"
         CLOUDFRONT_KEY_PAIR_ID   = "K0EXAMPLEKEYID"
         COLLECTOR_BASE_URL       = "http://chat-collector.pokeclip.internal:8083"
         CORS_ALLOWED_ORIGINS     = "https://app.pokeclip.com"
