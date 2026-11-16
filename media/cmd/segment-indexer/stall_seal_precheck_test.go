@@ -42,7 +42,7 @@ func (f *publishLoop) sealTicks(from, to time.Duration) {
 	}
 }
 
-// aheadLedger 는 cx 재현 꼴의 장부다 — 다른 상자가 4(③ 영구 실패)와 그 뒤 5 · 6(③ 확정)을 넣었다.
+// aheadLedger 는 뷰보다 앞선 장부 꼴이다 — 다른 상자가 4(③ 영구 실패)와 그 뒤 5 · 6(③ 확정)을 넣었다.
 func aheadLedger() index.RewindLedger {
 	l := liveLedger("s1", "S", 6, 3)
 	l.Rows[5].PlaybackUploaded, l.Rows[6].PlaybackUploaded = true, true
@@ -134,10 +134,10 @@ func TestStallSealOnTimeWhenRenewHeldLaneBefore(t *testing.T) {
 	}
 }
 
-// 봉인 문턱 앞의 GAP 재시도를 밀어내지 않는다. 4 의 첫 GAP 틱(24초)이 서지 않고(unstood) 정체가 4.5 – 5.5초
-// 구간인 다음 틱(25초)에 GAP 을 다시 내면 그 틱이 차선을 받아 GAP 이 선다 — 봉인 전 마지막 재시도가 사라지지 않고 5 · 6
-// 발행이 이어지며 회차는 live 다. 확인을 따로 된 차선 작업으로
-// 두면 같은 틱의 그 작업이 차선을 먼저 잡아 GAP 요청이 후보 없는 평시 틱으로 바뀐다.
+// 봉인 문턱 앞의 GAP 재시도를 밀어내지 않는다. 4 의 첫 GAP 틱(24초)이 서지 않고(unstood) 정체가 4.5 – 5.5초 구간인
+// 다음 틱(25초)에 GAP 을 다시 내면 그 틱이 차선을 받아 GAP 이 선다 — 봉인 전 마지막 재시도가 사라지지 않고 5 · 6
+// 발행이 이어지며 회차는 live 다. 확인을 따로 된 차선 작업으로 두면 같은 틱의 그 작업이 차선을 먼저 잡아 GAP 요청이
+// 후보 없는 평시 틱으로 바뀐다.
 func TestStallSealKeepsGapRetryBeforeSeal(t *testing.T) {
 	f, sc, ends := newSealLoop(t)
 	sc.ledger, sc.hasLedger = 6, true

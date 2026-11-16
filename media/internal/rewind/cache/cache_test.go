@@ -269,7 +269,7 @@ func TestApplyInsertStopsAtAMissedSeq(t *testing.T) {
 	}
 }
 
-// 놓친 seq 뒤 push 는 적재를 요구한다(stall-7125 — 2026-11-16 prod 교착). 다른 상자가 seq 42 를 먼저 썼고 그 행의 ③
+// 놓친 seq 뒤 push 는 적재를 요구한다(2026-11-16 prod 교착). 다른 상자가 seq 42 를 먼저 썼고 그 행의 ③
 // 이 영구 실패면 42 는 settled 가 되지 않는다. 옛 캐시는 43 · 44 push 를 버리기만 해 뷰가 41 에서 멈췄고, 사다리는 42 를 뷰에서
 // 못 찾아 GAP 을 세우지 못했으며(no_row), 드리프트 대조는 DB 의 42 가 미settled 라 일치로 봤다 — 회차 끝까지 교착이었다.
 // 지금은 빈 seq 뒤 push 가 그 스트림 적재를 요구하고(드리프트 까닭 — 적용되면 cache_drift_repaired(kind=head)), 그동안

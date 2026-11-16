@@ -87,9 +87,9 @@ func TestDefaultOptionsDActAndSealOff(t *testing.T) {
 	}
 }
 
-// 뷰 뒤처짐에는 봉인하지 않는다(stall-7125) — 머리 다음 행이 뷰에 없는데 장부에는 있으면(view_behind) 캐시가
-// 적재로 그 행을 싣는 중이다. 봉인하면 복구가 서기 전에 회차가 stall_seal 로 끝난다. 뒤처짐을 모르는 no_row 는 그대로 봉인한다.
-// 복구가 서지 않으면 L4 ERROR(view_behind)가 남는다(TestLadderAlarmSplitsViewBehindFromNoRow).
+// 뷰 뒤처짐에는 봉인하지 않는다 — 머리 다음 행이 뷰에 없는데 장부에는 있으면(view_behind) 캐시가 적재로 그 행을 싣는 중이다.
+// 봉인하면 복구가 서기 전에 회차가 stall_seal 로 끝난다. 뒤처짐을 모르는 no_row 는 그대로 봉인한다. 복구가 서지 않으면 L4
+// ERROR(view_behind)가 남는다(TestLadderAlarmSplitsViewBehindFromNoRow).
 func TestLadderNoSealWhileViewBehind(t *testing.T) {
 	for _, tt := range []struct {
 		name   string

@@ -361,7 +361,7 @@ type WatchDrift struct {
 	Next    RewindRow
 	HasNext bool
 	// LastSeq 는 장부의 그 스트림 마지막 seq(max(seq))다 — 컷오프 아래 행도 센다. HasLast 가 거짓이면 그 스트림에 행이
-	// 없다. 캐시 뷰 끝 너머의 행을 H+1 한 행과 무관하게 알린다(stall-7125).
+	// 없다. 캐시 뷰 끝 너머의 행을 H+1 한 행과 무관하게 알린다.
 	LastSeq int64
 	HasLast bool
 }

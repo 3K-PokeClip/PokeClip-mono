@@ -380,9 +380,8 @@ func TestEndlistIfCaughtUpChecksAfterFenceWait(t *testing.T) {
 	}
 }
 
-// 확인 조회의 시한은 0.5초다(POK-591) — 장부 읽기가 막히면(표 잠금) 0.5초에 끊고 ledger_failed 로 돌아온다.
-// 그 틱은 봉인하지 않고 다음 틱이 다시 낸다. 시한이 문장 시한(10초)이면 잠금이 풀릴 때까지
-// 기다린다.
+// 확인 조회의 시한은 0.5초다(POK-591) — 장부 읽기가 막히면(표 잠금) 0.5초에 끊고 ledger_failed 로 돌아온다. 그 틱은 봉인하지
+// 않고 다음 틱이 다시 낸다. 시한이 문장 시한(10초)이면 잠금이 풀릴 때까지 기다린다.
 func TestEndlistIfCaughtUpCheckTimesOut(t *testing.T) {
 	l, store, _ := newFreezeLoop(t, 9, 5)
 	puts := len(store.putCalls())

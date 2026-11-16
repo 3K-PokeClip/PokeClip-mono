@@ -74,7 +74,7 @@ type LadderInput struct {
 	// 칸이 있어야 하고(Outcome 에는 없다), 빼면 그 갈래가 되풀이되는 동안 L2 결정이 L4 를 누른다.
 	UnstoodGapSeq *int64
 	// ViewBehind 는 캐시 뷰가 장부보다 뒤처졌다는 것을 캐시가 아는가다(cache.Behind — 뷰 끝 다음 행이 장부에 있다). 머리 다음
-	// 행이 뷰에 없을 때 그 까닭을 방송 종료 구간(no_row · WARN)과 캐시 뒤처짐(view_behind · ERROR)으로 가른다(stall-7125).
+	// 행이 뷰에 없을 때 그 까닭을 방송 종료 구간(no_row · WARN)과 캐시 뒤처짐(view_behind · ERROR)으로 가른다.
 	ViewBehind bool
 	// PublishedAt 은 이 프로세스가 그 회차의 발행 성공(Outcome.Published)을 마지막으로 받은 시각이고(없으면 영값)
 	// OwnedSince 는 그 회차를 처음 소유 회차로 본 시각이다. stallAge 는 둘 가운데 늦은 쪽부터 잰다(판단 J29 —
@@ -173,8 +173,8 @@ func evaluateLadder(opt Options, st LadderState, in LadderInput) (LadderState, L
 // sealDue 는 L2′ 다(M4 r17 4.6.3) — 스위치가 켜졌고(StallSealAfter > 0) 발행 이력이 있는 회차의 stallAge 가 문턱에 닿았는데
 // L2 가 설 수 없으면(blocked — 머리 다음 행 없음 · 부적격 · 컷오프 아래 · 직전 GAP 틱이 서지 않음) 참이다. holding(적격인데
 // holdAge 가 GAP_HOLD 전)은 L2 가 곧 서므로 기다린다. view_behind(머리 다음 행이 장부에는 있다)도 기다린다 — 캐시가 적재로 그
-// 행을 싣는 중이라, 봉인하면 복구가 서기 전에 회차가 끝난다(stall-7125). 복구가 서지 않으면 L4 ERROR 가 남는다.
-// 끝내 안 풀리는 뒤처짐(적재가 멈추는 장부 빈자리)에서는 봉인 없이 그 ERROR 만 남아 회차가 스스로 닫히지 않을 수 있다 —
+// 행을 싣는 중이라, 봉인하면 복구가 서기 전에 회차가 끝난다. 복구가 서지 않으면 L4 ERROR 가 남는다. 끝내 안 풀리는
+// 뒤처짐(적재가 멈추는 장부 빈자리)에서는 봉인 없이 그 ERROR 만 남아 회차가 스스로 닫히지 않을 수 있다 —
 // 운영자가 보는 자리는 media/README.md 신호표 아래 view_behind 메모다.
 // fence 유효는 봉인 경로(Endlist E0)가 본다.
 func sealDue(opt Options, in LadderInput, blocked string) bool {
@@ -216,15 +216,14 @@ func gapIneligible(r boundary.Row, found bool, cutoff int64) string {
 	return ""
 }
 
-// alarm 은 L4 다 — 발행 이력이 있는 live 소유 회차의 stallAge 가 갱신 의무 − T_edge 에 닿았는데 L2 가 서지 못하면
-// ERROR 신호 하나를 돌려준다(설계 4.6.3 「ERROR + 귀속 판정 기록」). 속성은 정체 초 · L2 가 서지 못한 까닭(blocked —
-// 빈 값이 아니다) · 직전 틱의 중단 사유(없으면 빈 값)다. 첫 발행 전에는 없다 — 방송 시작 지연은 다른 신호
-// 몫이다(판단 J29). 까닭이 no_row(머리 다음 행이 캐시 뷰에 없다 — 유입이 멈춘 방송 종료 구간의 모양)면 등급만 WARN 이다(kty
-// 결정 ④ A — 방송 종료 구간의 L4 는 WARN 이다(2026-09-28). 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다.
-// 문턱 · 1회 가드 · 속성은 그대로). 그 행이 장부에는 있는 view_behind 는 방송 종료 구간이 아니라 ERROR 다(stall-7125).
-// no_row WARN 을 남긴 정체에서 뒤처짐이 드러나면(view_behind) ERROR 를 한 줄 더 남긴다 — 감시 단독 경로는 뒤처짐을 첫 감시에야
-// 알기 때문이다(승격 · 정체당 한 번). 다른 ERROR 까닭으로는 오르지 않는다 — 유입이 잠시 멈췄다가 다음 행이
-// 와서 holding 이 된 평범한 모양에 거짓 ERROR 가 서지 않게.
+// alarm 은 L4 다 — 발행 이력이 있는 live 소유 회차의 stallAge 가 갱신 의무 − T_edge 에 닿았는데 L2 가 서지 못하면 ERROR 신호
+// 하나를 돌려준다(설계 4.6.3 「ERROR + 귀속 판정 기록」). 속성은 정체 초 · L2 가 서지 못한 까닭(blocked — 빈 값이 아니다) ·
+// 직전 틱의 중단 사유(없으면 빈 값)다. 첫 발행 전에는 없다 — 방송 시작 지연은 다른 신호 몫이다(판단 J29). 까닭이 no_row(머리
+// 다음 행이 캐시 뷰에 없다 — 유입이 멈춘 방송 종료 구간의 모양)면 등급만 WARN 이다(kty 결정 ④ A — 방송 종료 구간의 L4 는
+// WARN 이다(2026-09-28). 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다. 문턱 · 1회 가드 · 속성은 그대로). 그 행이
+// 장부에는 있는 view_behind 는 방송 종료 구간이 아니라 ERROR 다. no_row WARN 을 남긴 정체에서 뒤처짐이 드러나면(view_behind)
+// ERROR 를 한 줄 더 남긴다 — 감시 단독 경로는 뒤처짐을 첫 감시에야 알기 때문이다(승격 · 정체당 한 번). 다른 ERROR 까닭으로는
+// 오르지 않는다 — 유입이 잠시 멈췄다가 다음 행이 와서 holding 이 된 평범한 모양에 거짓 ERROR 가 서지 않게.
 func alarm(opt Options, st LadderState, in LadderInput, blocked string) (LadderState, *ladderSignal) {
 	since, ok := stallSince(in)
 	if !ok {

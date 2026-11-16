@@ -208,11 +208,11 @@ func (f *publishLoop) pushRow(s, sid string, seq int64) {
 		DurationMS: r.DurationMS})
 }
 
-// 놓친 push 의 회복(stall-7125 회귀 — 2026-11-16 prod 교착) — 다른 상자가 seq 4 를 장부에 먼저 넣어 이 프로세스의
-// 캐시에는 그 push 가 없고, 4 의 ③ 은 영구 실패다. 옛 캐시는 5 · 6 push 를 버려 뷰가 3 에서 멈췄고 사다리는 4 를 못 찾아(no_row)
-// GAP 을 세우지 못해 회차 끝까지 발행이 멈췄다. 지금은 빈 seq 뒤 push 가 적재를 요구해 뷰가 4 를 싣고(cache_drift_repaired),
-// 4 가 GAP_HOLD 를 넘으면 L2 가 GAP 틱을 내며, 그 뒤 5 · 6 · 7 발행이 이어진다. 정체 경보는 없다 — 다만 이것은 시험 시계가
-// 1초 다음 25초로 건너뛰어 그 사이 holding 대기 구간의 평가를 하지 않은 결과다(운영에서는 그 구간에 L4 ERROR holding 이 설 수 있다).
+// 놓친 push 의 회복(2026-11-16 prod 교착 회귀) — 다른 상자가 seq 4 를 장부에 먼저 넣어 이 프로세스의 캐시에는 그 push 가 없고,
+// 4 의 ③ 은 영구 실패다. 옛 캐시는 5 · 6 push 를 버려 뷰가 3 에서 멈췄고 사다리는 4 를 못 찾아(no_row) GAP 을 세우지 못해 회차
+// 끝까지 발행이 멈췄다. 지금은 빈 seq 뒤 push 가 적재를 요구해 뷰가 4 를 싣고(cache_drift_repaired), 4 가 GAP_HOLD 를 넘으면
+// L2 가 GAP 틱을 내며, 그 뒤 5 · 6 · 7 발행이 이어진다. 정체 경보는 없다 — 다만 이것은 시험 시계가 1초 다음 25초로 건너뛰어 그
+// 사이 holding 대기 구간의 평가를 하지 않은 결과다(운영에서는 그 구간에 L4 ERROR holding 이 설 수 있다).
 func TestLadderGapsRowWhosePushTheCacheMissed(t *testing.T) {
 	f := newPublishLoop(t)
 	f.put("s1", liveLedger("s1", "S", 3, 3))
@@ -260,11 +260,11 @@ func TestLadderGapsRowWhosePushTheCacheMissed(t *testing.T) {
 	}
 }
 
-// 감시 단독 회복(stall-7125) — push 가 하나도 오지 않는 경로다. 뷰에는 회차 S 의 0..4 가 있고 4 는 ③
-// 영구 실패인데 S 가 ending 이 되어 사다리가 꺼졌다(머리 3 고정 · 감시 H+1 = 4 는 뷰 안). 다른 프로세스가 새 회차 T(live)의 5 · 6
-// 을 넣었다. 감시 결과가 실은 장부 마지막 seq(6)가 뷰 끝(4) 너머라 두 감시 연속 뒤 적재가 나가고, 뷰가 T 를 싣고 소유 회차가 T 가
-// 된다. 그 뒤 4 가 GAP_HOLD 를 넘으면 L2 가 GAP 틱을 내고 T 의 5 · 6 발행이 이어진다. H+1 대조(settled ·
-// 뷰에 없음)만으로는 이 모양에서 적재가 한 번도 나가지 않는다 — H+1 = 4 가 뷰 안에 있기 때문이다.
+// 감시 단독 회복 — push 가 하나도 오지 않는 경로다. 뷰에는 회차 S 의 0..4 가 있고 4 는 ③ 영구 실패인데 S 가 ending 이 되어
+// 사다리가 꺼졌다(머리 3 고정 · 감시 H+1 = 4 는 뷰 안). 다른 프로세스가 새 회차 T(live)의 5 · 6 을 넣었다. 감시 결과가 실은
+// 장부 마지막 seq(6)가 뷰 끝(4) 너머라 두 감시 연속 뒤 적재가 나가고, 뷰가 T 를 싣고 소유 회차가 T 가 된다. 그 뒤 4 가
+// GAP_HOLD 를 넘으면 L2 가 GAP 틱을 내고 T 의 5 · 6 발행이 이어진다. H+1 대조(settled · 뷰에 없음)만으로는 이 모양에서 적재가
+// 한 번도 나가지 않는다 — H+1 = 4 가 뷰 안에 있기 때문이다.
 func TestWatchAloneRecoversNewSessionBeyondStuckRow(t *testing.T) {
 	f := newPublishLoop(t)
 	f.watchEveryHold()
@@ -318,7 +318,7 @@ func TestWatchAloneRecoversNewSessionBeyondStuckRow(t *testing.T) {
 	}
 }
 
-// 뷰 뒤처짐 경보의 배선(stall-7125) — 놓친 push 뒤 적재가 나가기 전 평가에서 정체가 7.5초에 닿았으면 사다리 입력에 뒤처짐이
+// 뷰 뒤처짐 경보의 배선 — 놓친 push 뒤 적재가 나가기 전 평가에서 정체가 7.5초에 닿았으면 사다리 입력에 뒤처짐이
 // 실려(cache.Behind) L4 가 ERROR gap=view_behind 로 선다 — 방송 종료 구간의 no_row WARN 이 아니다.
 func TestLadderAlarmsViewBehindAfterMissedPush(t *testing.T) {
 	f := newPublishLoop(t)

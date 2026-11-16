@@ -83,7 +83,7 @@ func TestRewindWatchReadsThreeKindsInOneStatement(t *testing.T) {
 
 // drift 재료(B #14 · J39) — 입력 스트림마다 DB 컷오프와 그 H+1 행의 settled 재료(회차 · PDT · ③ 키 · 길이 · ③ 상태 ·
 // GAP 원장 소속)를 싣는다. 행이 없으면 행 없음, 컷오프가 없으면 컷오프 없음이다. 판정(settled 인가)은 싣지 않는다. 그
-// 스트림 장부의 마지막 seq 도 싣는다(stall-7125 — 캐시 뷰 끝 너머 행의 재료) — H+1 과 무관하고, 장부에 행이 없는
+// 스트림 장부의 마지막 seq 도 싣는다(캐시 뷰 끝 너머 행의 재료) — H+1 과 무관하고, 장부에 행이 없는
 // 스트림(rwZ)이면 마지막 seq 없음이다.
 func TestRewindWatchCarriesDriftMaterial(t *testing.T) {
 	pool := newTestPool(t)

@@ -1,8 +1,8 @@
 package cache
 
-// 드리프트 대조와 뒤처짐 — 30초 감시의 (a) 드리프트 대조(설계 4.1 (a)) · 캐시 뷰가 장부보다 뒤처졌다는 표지(Behind) · 놓친 행을
-// 되찾는 적재 요구의 백오프(stall-7125). 캐시 상태의 정의와 적재 · push 의 입구는 cache.go 다. 이 파일은 cache.go 에서 옮겨 온
-// 것이다(동작 무변경).
+// 드리프트 대조와 뒤처짐 — 30초 감시의 (a) 드리프트 대조(설계 4.1 (a)) · 캐시 뷰가 장부보다 뒤처졌다는 표지(Behind)와 봉인 전
+// 장부 끝 확인이 쓰는 입구(ViewNext · ObserveLedgerLast) · 놓친 행을 되찾는 적재 요구의 백오프. 캐시 상태의 정의와 적재 ·
+// push 의 입구는 cache.go 다.
 
 import (
 	"slices"
@@ -68,7 +68,7 @@ func (c *Cache) DriftProbes() []index.WatchProbe {
 // 캐시가 settled 로 아는 행은 DB 에서도 settled 라(push 는 커밋 뒤에만 · settled 단조 — A3 Q2) 머리 앞쪽은 H+1 한 행이
 // 가른다. 그러나 뷰가 놓친 행은 settled 대조로 잡히지 않는다 — 그 행이 ③ 영구 실패면 영원히 settled 가 아니고 GAP 은 캐시
 // 행이 있어야 선다. H+1 이 뷰 안의 미settled 행이면(그 회차가 ending 이라 사다리가 꺼졌다) 그 뒤에 다른 프로세스가 넣은 새
-// 회차도 H+1 대조로는 영영 보이지 않는다. 그래서 장부 끝을 따로 견준다(stall-7125 — 2026-11-16 prod).
+// 회차도 H+1 대조로는 영영 보이지 않는다. 그래서 장부 끝을 따로 견준다(2026-11-16 prod 교착).
 // 장부 끝 · H+1 이 알린 행은 뷰가 장부보다 뒤처졌다는 표지로 남는다(Behind). 결과가 닿은 시점의 뷰가 그 행들을 실었거나
 // 캐시 머리가 H+1 이상이면 일치다 — 입력을 뜬 뒤 push 가 닿은 경합을 불일치로 세지 않는다(〔r53b — Q-2〕).
 //
@@ -144,9 +144,9 @@ func (c *Cache) ObserveLedgerLast(streamID string, last int64) {
 	}
 }
 
-// Behind 는 streamID 의 뷰가 장부보다 뒤처졌다는 것을 캐시가 아는가다 — 뷰 끝 다음 행이 장부에 있다(빈 seq 뒤 push ·
-// 드리프트 대조 · 빈자리에서 멈춘 적재가 알렸다). 사다리가 머리 다음 행이 뷰에 없는 정체를 방송 종료 구간(no_row)과 가르는 재료다(stall-7125
-// R2). 거짓은 「뒤처지지 않았다」가 아니라 「뒤처졌다는 사실을 모른다」다. 뷰가 없거나 적재 중이면 거짓이다.
+// Behind 는 streamID 의 뷰가 장부보다 뒤처졌다는 것을 캐시가 아는가다 — 뷰 끝 다음 행이 장부에 있다(빈 seq 뒤 push · 드리프트
+// 대조 · 빈자리에서 멈춘 적재가 알렸다). 사다리가 머리 다음 행이 뷰에 없는 정체를 방송 종료 구간(no_row)과 가르는 재료다.
+// 거짓은 「뒤처지지 않았다」가 아니라 「뒤처졌다는 사실을 모른다」다. 뷰가 없거나 적재 중이면 거짓이다.
 func (c *Cache) Behind(streamID string) bool {
 	v := c.readable(streamID)
 	return v != nil && v.ledgerNext > v.nextSeq()
