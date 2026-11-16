@@ -108,6 +108,9 @@ locals {
         # 부팅한다(ExpiredBroadcastSecurityConfig — POK-551). 신뢰 대역은 Boot
         # 기본값(사설망 · 루프백) 그대로다.
         FORWARD_HEADERS_STRATEGY = "native"
+        # 놓친 종료 편지 치우기 — 유예 · 주기는 서버 기본값(variables.tf 의
+        # clip_broadcast_reaper_enabled 주석).
+        BROADCAST_REAPER_ENABLED = tostring(var.clip_broadcast_reaper_enabled)
       },
     )
     # CHZZK_CLIENT_ID · SOOP_CLIENT_ID(방송 정보 · SOOP 채팅)와 채팅 원본 보관

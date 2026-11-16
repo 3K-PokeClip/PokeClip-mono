@@ -125,8 +125,8 @@ variable "chat_services" {
 # 받기(BROADCAST_INTAKE_ENABLED)는 운영의 시작 경로라 이 루트가 늘 켜므로
 # 스위치가 아니다 — 재부착이 받기를 요구하는 부팅 규칙(ReattachConfiguration)은
 # 그래서 늘 맞는다. 기본값(kty 2026-10-26): 재부착 · 중계 · 방송 정보 · SOOP
-# 지켜보기 · SOOP 채팅은 켬, 떼기는 꺼 둔다 — 떼기는 clip 치우개
-# (BROADCAST_REAPER_*)와 함께 O7e 뒤 운영자가 정한다.
+# 지켜보기 · SOOP 채팅은 켬, 떼기는 꺼 둔다 — 떼기는 clip 치우개(기본 켬 —
+# kty 2026-11-16 · POK-588) 다음 차례로 운영자가 켠다.
 variable "chat_collector_features" {
   description = "chat-collector 기능 스위치 — reattach(CHAT_REATTACH_ENABLED) · relay(CHAT_RELAY_ENABLED) · liveinfo(BROADCAST_INFO_ENABLED) · detach(CHAT_DETACH_ENABLED) · soop_watch(SOOP_WATCH_ENABLED) · soop_chat(SOOP_CHAT_ENABLED)."
   type = object({
@@ -155,6 +155,18 @@ variable "chat_collector_features" {
     condition     = !var.chat_collector_features.soop_chat || var.chat_collector_features.soop_watch
     error_message = "chat_collector_features.soop_chat 은 soop_watch 와 함께만 켠다 — 붙을 방송을 지켜보기가 골라, 혼자 켜면 chat-collector 가 부팅을 거부한다."
   }
+}
+
+# clip 치우개(StaleBroadcastReaper) 스위치. 서버 기본은 꺼짐이고(clip
+# application.yml pokeclip.broadcast.reaper.enabled), prod 기본 켬은 kty
+# 2026-11-16 결정이다(POK-588). 유예 30분 · 주기 1분은 서버 기본값 그대로라
+# env 를 넣지 않는다. 끄기 = false 로 platform apply(clip 재배포) — apply
+# 성공이 반영은 아니라 README 「clip 치우개 반영 확인」 을 apply 전 기준
+# 읽기부터 따른다. 이미 닫힌 방송은 되돌아가지 않는다.
+variable "clip_broadcast_reaper_enabled" {
+  description = "clip 치우개 스위치(BROADCAST_REAPER_ENABLED) — 끄면 clip 이 종료 편지를 놓친 live 방송을 닫지 않는다."
+  type        = bool
+  default     = true
 }
 
 variable "image_digests" {

@@ -22,6 +22,12 @@ mock_provider "aws" {
   }
 
   # apply 로 도는 run 에서 provider 가 ARN 꼴을 검사하는 참조에 쓸 값.
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-platform-alarms"
+    }
+  }
+
   mock_resource "aws_lb" {
     defaults = {
       arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/example/0123456789abcdef"
@@ -286,10 +292,10 @@ run "rejects_chat_image_tag" {
 
 # collector 는 방송 편지(BROADCAST_INTAKE_ENABLED)로 세션을 연다. 기능 스위치
 # 기본값 = 재부착 · 중계 · 방송 정보 · SOOP(지켜보기 · 채팅) 켬, 떼기 꺼짐(kty
-# 2026-10-26 — 떼기는 clip 치우개와 함께 O7e 뒤 운영자 결정). 채팅 원본
-# 보관 창고 이름 S3_BUCKET 은 런타임 app_env 가 준다. CHZZK_ENABLED(옛 한 채널
-# 경로 — intake 와 같이 켜면 부팅 거부) · CHAT_SYNC_OFFSET_MS(기본 3900)는
-# 넣지 않는다.
+# 2026-10-26 — 떼기는 clip 치우개(기본 켬 — kty 2026-11-16 · POK-588) 다음
+# 차례로 운영자가 켠다). 채팅 원본 보관 창고 이름 S3_BUCKET 은 런타임
+# app_env 가 준다. CHZZK_ENABLED(옛 한 채널 경로 — intake 와 같이 켜면 부팅
+# 거부) · CHAT_SYNC_OFFSET_MS(기본 3900)는 넣지 않는다.
 run "chat_collector_env_and_secrets" {
   command = plan
 
@@ -522,6 +528,8 @@ run "public_services_unchanged_by_chat" {
         AUTH_BASE_URL            = "http://auth.pokeclip.internal:8082"
         BROADCAST_INTAKE_ENABLED = "true"
         BROADCAST_QUEUE_URL      = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-broadcast-clip"
+        # POK-588 — chat 과 무관(clip 치우개 기본 켬).
+        BROADCAST_REAPER_ENABLED = "true"
         CLOUDFRONT_KEY_PAIR_ID   = "K0EXAMPLEKEYID"
         COLLECTOR_BASE_URL       = "http://chat-collector.pokeclip.internal:8083"
         CORS_ALLOWED_ORIGINS     = "https://app.pokeclip.com"

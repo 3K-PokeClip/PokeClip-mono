@@ -277,6 +277,25 @@ ecs-log-group-auth	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:poke
 ecs-log-group-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-clip	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 ecs-log-group-chat-collector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-collector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 ecs-log-group-chat-detector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-detector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+
+# prod/platform 의 clip 치우개 종료 경보(POK-588 — reaper_alarms.tf). edge 의
+# /dvr 하한 경보 덩어리와 같은 꼴이고 리전만 서울이다. 경보 · 알림 주제는
+# 이름이 고정이라 구체 ARN 이다. 경보 행은 바꾸기 · 지우기 · 알림 끄기 · 상태
+# 덮어쓰기와 태그를 묻는다 — dev 주체가 이것을 가지면 치우개 오판 경보가
+# 조용해진다. 지표 필터는 log-group 자원 동작이라 clip 서비스 로그 그룹 ARN
+# 으로 따로 묻는다(위 ecs-log-group-clip 행과 같은 ARN — 행을 나눠 그 행은
+# 그대로 둔다). 주제 행은 발행 · 구독 · 정책 바꾸기 · 지우기를 묻고 정책은
+# 직접 읽는다(sns). 이 경보를 처음 만드는 platform apply 직전에는 주제가
+# 아직 없어 「자원 없음」 을 정책 없이 판정한다. 동작 × 유형 짝은 edge 덩어리의
+# 대조(2026-11-11)를 따른다. 알려진 한계: 이 대상 행들은 다음 동작 · 자원
+# 유형을 묻지 않는다(서비스 권한 참조상 자원 유형은 SNS 구독 동작이 topic ·
+# PutLogEvents 가 log-stream · PutMetricData 가 dataset) —
+# cloudwatch:PutMetricData(같은 지표에 음수를 넣어 5분 합을 상쇄) ·
+# sns:Unsubscribe · sns:SetSubscriptionAttributes · logs:PutLogEvents(로그
+# 그룹에 거짓 줄). 행 추가는 이번 범위 밖이다.
+platform-alarm-clip-reaper-ended	O7d	arn:arn:aws:cloudwatch:ap-northeast-2:${ACCOUNT}:alarm:pokeclip-prod-clip-reaper-ended	alarm	ap-northeast-2	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+platform-metric-filter-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-clip	log-group	ap-northeast-2	logs:PutMetricFilter,logs:DeleteMetricFilter	none	-
+platform-alarm-topic	O7d	arn:arn:aws:sns:ap-northeast-2:${ACCOUNT}:pokeclip-prod-platform-alarms	topic	ap-northeast-2	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	sns	-
 # prod/workers(POK-408)의 일꾼 로그 그룹 둘 — 첫 단계 workers. 그 루트의
 # 나머지 자원은 행을 더하지 않는다: ECS 서비스 · 작업 정의는 태그 해석 행
 # (ecs-service · ecs-task-definition), 일꾼 역할 넘기기 · 권한 변경은 prod

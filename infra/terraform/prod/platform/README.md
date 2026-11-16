@@ -167,8 +167,9 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | `soop_chat` | `SOOP_CHAT_ENABLED` | `true` | SOOP 채팅 받기(Chromium 탭) |
 | `detach` | `CHAT_DETACH_ENABLED` | `false` | clip 명부에 없는 방송의 세션 반납 |
 
-*   기본값은 kty 결정(2026-10-26)입니다. 떼기는 clip 치우개
-    (`BROADCAST_REAPER_*`)와 짝이라 O7e 뒤 운영자가 함께 정합니다.
+*   기본값은 kty 결정(2026-10-26)입니다. 떼기는 clip 치우개(기본 켬 — kty
+    2026-11-16 · POK-588, 아래 「clip 치우개 스위치」) 다음 차례로 운영자가
+    켭니다.
 *   부팅 거부 조합은 plan 이 막습니다 — `detach` 는 `reattach` 와,
     `soop_chat` 은 `soop_watch` 와 함께만 켭니다. 재부착이 요구하는 방송
     편지 받기(`BROADCAST_INTAKE_ENABLED`)는 이 루트가 늘 켭니다.
@@ -216,6 +217,7 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | clip | `AUTH_BASE_URL` | `http://auth.pokeclip.internal:8082`(clip → auth 자격 판정) |
 | clip | `COLLECTOR_BASE_URL` | auth 와 같은 값(비어도 부팅은 되지만 채팅 문 셋이 503) |
 | clip | `PLAYBACK_REQUIRED` | `true`(서명 값 셋 중 하나라도 빠지면 부팅 거부 — POK-321) |
+| clip | `BROADCAST_REAPER_ENABLED` | `clip_broadcast_reaper_enabled`(기본 `true` — 아래 「clip 치우개 스위치」) |
 | clip | `CLOUDFRONT_PRIVATE_KEY_PEM`(비밀) | secrets `signing_key_secret_arn` |
 | chat-collector | `BROADCAST_INTAKE_ENABLED` | `true`(방송 편지로 세션을 연다 — 운영의 시작 경로) |
 | chat-collector | `AUTH_BASE_URL` · `CLIP_BASE_URL` | clip 과 같은 auth 주소 · auth 와 같은 clip 주소 |
@@ -232,6 +234,238 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 
 비밀은 ARN 만 받습니다. 실행 역할의 비밀 읽기 권한은 그 ARN 집합으로
 한정됩니다(`ecs_service` 모듈).
+
+### clip 치우개 스위치
+
+clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을 닫습니다.
+1분마다 돌며, 마지막 신호(Media 장부 `stream_segments` 의 마지막 조각 시각과
+방송 시작 시각 가운데 늦은 쪽) 뒤로 30분 동안 조용한 방송을 ended 로
+굳힙니다. 종료 편지가 제때 오면 아무것도 닫지 않습니다.
+
+*   기본 켬입니다(kty 2026-11-16 결정 · POK-588). 서버 기본은 꺼짐이라 이
+    루트가 `clip_broadcast_reaper_enabled` 로 env 를 넣습니다. 유예 · 주기는
+    서버 기본값이라 넣지 않습니다.
+*   처음 켜기 — 경보 · 구독이 선 뒤에 켭니다(kty 2026-11-17):
+    1.  `terraform.tfvars` 에 `clip_broadcast_reaper_enabled = false` 를 둔
+        채 첫 platform apply 를 합니다. 경보 자원 넷이 생기고 치우개는 꺼진
+        채입니다(plan 은 아래 「plan 대조」 의 예외).
+    1.  아래 「clip 치우개 경보」 의 구독을 등록하고, 메일의 확인 링크를
+        누르지 않고 `confirm-subscription` 으로 확인합니다. 그 절의 확인
+        읽기가 대기 0 · 확인 1 과 `true` 를 내야 다음으로 갑니다.
+    1.  `true` 로 바꿔 아래 「끄기 · 다시 켜기」 순서로 켭니다. 이 plan 은
+        env 한 줄(`"false" -> "true"`)뿐이어야 합니다.
+*   끄기 · 다시 켜기: `terraform.tfvars` 의 `clip_broadcast_reaper_enabled`
+    를 `false`(켤 때 `true`)로 바꾸고 plan 대조(아래) → apply 전 기준
+    읽기(아래 「clip 치우개 반영 확인」 첫 블록) → apply(kty 승인) → 읽기 셋
+    순서로 합니다. 끈 사유가 상자 · 장부 기록기
+    정지였으면, 다시 켜기는 런북 「치우개 단서」 4 의 장부 확인을 통과한
+    뒤에 합니다.
+*   plan 대조: 바뀌는 자원은 `module.clip.aws_ecs_task_definition.this`
+    교체와 `module.clip.aws_ecs_service.this` 갱신 둘뿐이어야 하고, 태스크
+    정의의 차이는 `BROADCAST_REAPER_ENABLED` 값 하나뿐이어야 합니다. plan 은
+    `container_definitions` 를 `jsonencode(` 꼴의 구조 차이로 보여 줍니다. 그
+    블록 안에서 바뀐 줄은 `name = "BROADCAST_REAPER_ENABLED"` 항목의
+    `~ value = "true" -> "false"`(켤 때는 반대) 하나여야 합니다. `image` 나
+    다른 env 항목의 바뀜(`->`) · 더함(`+`) · 뺌(`-`)이 보이거나 다른 자원이
+    바뀌면 apply 하지 않고 멈춥니다. 블록 밖에서 `arn` · `revision` 같은
+    식별자가 `(known after apply)` 로, 서비스의 `task_definition` 이 새
+    리비전으로 바뀌는 줄은 교체에 따라오는 것입니다. 예외는 「처음 켜기」
+    1 의 plan 하나입니다 — 네 주소 `aws_sns_topic.platform_alarms` ·
+    `aws_sns_topic_policy.platform_alarms` ·
+    `aws_cloudwatch_log_metric_filter.clip_reaper_ended` ·
+    `aws_cloudwatch_metric_alarm.clip_reaper_ended` 의 생성(create)과 출력
+    `platform_alarm_topic_arn` 이 더해지고, 태스크 정의의 차이는 env 항목
+    `BROADCAST_REAPER_ENABLED = "false"` 의 더함(`+`) 하나입니다(그 전
+    판에는 이 env 가 없어 서버 기본 꺼짐이었음 — 동작은 같음). 그 밖이
+    보이면 멈춥니다.
+*   이미 닫힌 방송은 끄거나 다시 켜도 상태가 ended 그대로입니다. 진짜 종료
+    편지가 뒤늦게 오면 종료 시각(`ended_at`)과 VOD 만료 시각(종료 + 60일)을
+    편지 시각으로 바로잡습니다(`Broadcast.applyEnded`).
+*   한계: Media 상자나 장부 기록기가 30분 넘게 멈추면 살아 있는 방송도
+    닫습니다. 상자 교체 · 제자리 전환 전 끄기는
+    [Media 교체 런북](/infra/terraform/runbooks/media-swap.md) 「치우개
+    단서」 를 따릅니다. 잘못 닫혔을 때는 아래 「clip 치우개 오판 감지 ·
+    복구」 를 봅니다.
+*   chat-collector 의 떼기(`CHAT_DETACH_ENABLED`)는 이 스위치 다음 차례입니다
+    (위 「chat 기능 스위치」).
+
+#### clip 치우개 반영 확인
+
+apply 성공은 반영이 아닙니다. 이 루트는 배포가 끝나기를 기다리지 않아
+(`modules/ecs_service` 의 `aws_ecs_service` 에 `wait_for_steady_state` 없음)
+apply 뒤에도 옛 값의 태스크가 남을 수 있습니다. apply 전에 기준을 하나
+적어 두고, apply 뒤 읽기 셋을 모두 통과해야 바뀐 것으로 봅니다(kty 로컬
+터미널 · 읽기).
+
+이 블록은 apply 전에 읽습니다 — apply 뒤에 읽으면 기준이 새 리비전이 되어
+아래 3 의 비교가 무의미해집니다. 지금 배포의 이미지 다이제스트를 적어
+둡니다(아래 3 의 기준).
+작업 정의 ARN 과 이미지 주소는 계정 ID 가 들어 있어 변수에만 담고, 출력은
+다이제스트만 냅니다.
+
+```shell
+td="$(aws ecs describe-services --region ap-northeast-2 \
+  --cluster pokeclip-prod --services pokeclip-prod-clip \
+  --query 'services[0].deployments[0].taskDefinition' --output text)"
+aws ecs describe-task-definition --region ap-northeast-2 \
+  --task-definition "${td}" \
+  --query 'taskDefinition.containerDefinitions[].image' --output text \
+  | sed -n 's/^.*@\(sha256:[0-9a-f]\{64\}\)$/\1/p'
+```
+
+1.  배포가 하나로 모였는지 봅니다. 기대 `1 PRIMARY COMPLETED <n> <n>`(배포
+    하나 · 완료 · 실행 수 = 원하는 수 — 옛 태스크가 남지 않음)입니다.
+
+    ```shell
+    aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services pokeclip-prod-clip \
+      --query 'services[0].[length(deployments),deployments[0].status,deployments[0].rolloutState,deployments[0].runningCount,desiredCount]' \
+      --output text
+    ```
+
+1.  1 을 통과한 뒤 그 배포의 작업 정의 env 를 봅니다. 기대는 끌 때 `false`,
+    켤 때 `true` 입니다.
+
+    ```shell
+    td="$(aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services pokeclip-prod-clip \
+      --query 'services[0].deployments[0].taskDefinition' --output text)"
+    aws ecs describe-task-definition --region ap-northeast-2 \
+      --task-definition "${td}" \
+      --query "taskDefinition.containerDefinitions[].environment[] | [?name=='BROADCAST_REAPER_ENABLED'].value" \
+      --output text
+    ```
+
+1.  같은 `td` 의 이미지 다이제스트가 apply 전에 적은 값과 같은지 봅니다.
+    다르면 스위치 밖의 변경이 함께 나간 것이므로 kty 에게 알립니다.
+
+    ```shell
+    aws ecs describe-task-definition --region ap-northeast-2 \
+      --task-definition "${td}" \
+      --query 'taskDefinition.containerDefinitions[].image' --output text \
+      | sed -n 's/^.*@\(sha256:[0-9a-f]\{64\}\)$/\1/p'
+    ```
+
+1 이 아직 `COMPLETED` 가 아니면 몇 분 뒤 다시 읽습니다. `FAILED` 이거나
+배포가 끝내 하나로 모이지 않으면(새 태스크가 뜨지 않음) 바뀌지 않은 상태로
+봅니다. 끄던 중이면 「꺼지지 않음」 이므로 30분 넘는 정지 · 교체에 들어가지
+않고 kty 에게 알립니다.
+
+#### clip 치우개 오판 감지 · 복구
+
+*   감지 첫 단계 — 그 줄이 진짜 치우개 종료인지 둘을 먼저 봅니다. ① 그
+    `broadcast.reaper.ended` 줄의 로거가 `StaleBroadcastReaper` 인가(사용자
+    입력이 다른 경고 줄에 되비쳐 지표 필터에 걸릴 수 있음) ② clip DB 에서 그
+    방송(`streamId`)이 실제로 `ended` 인가. ② 는 ① 이 맞을 때만 봅니다.
+    ② 의 읽기는 런북 runtime-1a 의 `app_clip` 읽기 전용 저장점 틀(「1단-다
+    되돌리기 — O7d 뒤」 의 미종결 주문 블록)로 하고, 마스터가 틀 없이
+    `SET ROLE` 로 읽지 않습니다. 로그의 `streamId` 는 DB 칸으로는 자유
+    문자열(clip `V201` 의 `VARCHAR(128)`)이라 SQL 에 그대로 붙이지 않습니다.
+    값은 Media 가 만드는 회차 꼴 `S-YYYYMMDD-HHMMSS-<물리 키>-<seq>`
+    (`media/internal/session/registry.go` 의 `sessionID`)이고, 물리 키는
+    `[A-Za-z0-9_-]{1,64}` 입니다(`media/internal/recording/name.go` 의
+    `streamIDRe`). 그래서
+    `^S-[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]{1,64}-[0-9]+$` 와 128자 이하를 통과한
+    값만, 런북 `make_read` 처럼 SQL 원문을 base64 로 페이로드에 실어 `-f` 로
+    돌리는 파일 안의 `\set sid '…'` 한 줄로 넣고 질의에서 `:'sid'` 로
+    인용합니다(이 틀은 첫 줄이 `GRANT` 라 `make_read` 함수 자체는 쓰지
+    않습니다) — 셸 줄 · `-v` 에는 값을 두지 않습니다. 이 앱 표 읽기는 POK-593 에서 일회용 SELECT
+    계정으로 옮기고, 그 전까지 덫이 마스터 권한을 되찾을 때 남는 부작용(다른
+    세션 끊기 · NOTICE · advisory 잠금 · 계획 단계 IMMUTABLE 색인 식)은 알려진
+    한계입니다. 둘 다 맞을 때만 아래로 갑니다.
+*   감지: 그 줄이 찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그
+    방송의 조각이 계속 쌓이거나, 방송자가 송출 중이라고 합니다.
+*   로그의 `streamId` 는 회차(장부 `stream_sessions.round_id`)이고, 장부
+    조각의 `stream_id` 는 송출 물리 키입니다. 런북 「치우개 단서」 4 의 장부
+    질의(`ledger-tail.sql`)가 live 세션마다 `round_id` 와 마지막 조각
+    시각(`last_wall`)을 내므로, 그 회차의 행이 있고 `last_wall` 이 닫힌 시각
+    뒤면 오판입니다.
+*   되돌리는 코드 경로가 없습니다. 같은 회차로 송출이 이어지는 한 clip 은 그
+    방송을 끝까지 ended 로 봅니다. OBS 단축키 마킹이 막히고, 새로 연
+    대시보드에서 라이브 재생이 서지 않는 등입니다.
+*   복구: 방송자에게 OBS 플러그인에서 송출을 정상 종료하고 10초쯤 뒤에 다시
+    켜거나, 5분 넘게 쉬었다 켜라고 안내합니다. 그러면 Media 가 새 회차를
+    열어 clip 에 새 방송 줄(live)이 생깁니다.
+*   회차 규칙(Media 사이드카): 플러그인의 정상 종료는 의도적 종료 표식을
+    남기고, 표식 + 8초 이후에 시작한 조각부터 새 회차입니다(`round_rule.go`
+    의 `pastStopMark` · `session_wire.go` 의 `intentStopSlack`). 표식 없이
+    끊었으면 세션이 송출 끊김 판정으로 먼저 끝나고, 마지막 조각 끝에서 재접속
+    창 300초가 지난 뒤 시작한 조각부터 새 회차입니다(`registry.go` 의
+    `joinable`). 그보다 일찍 다시 켜면 같은 회차에 붙어 여전히 ended 입니다.
+
+#### clip 치우개 경보
+
+치우개가 방송을 닫을 때마다 clip 로그에 남는 `broadcast.reaper.ended
+streamId=` 줄을 지표 필터로 세어 경보를 울립니다(`reaper_alarms.tf` ·
+POK-588). 한 줄이 방송 하나를 닫은 것입니다. 꼴은 prod/edge 「경보
+(POK-525)」 를 따랐습니다.
+
+| 경보 | 지표 | 뜻 |
+|---|---|---|
+| `pokeclip-prod-clip-reaper-ended` | `PokeClip/Platform` · `ClipReaperEnded`(clip 로그 그룹의 지표 필터 `"broadcast.reaper.ended streamId="`) | 치우개가 종료 편지를 놓친 live 방송을 닫음 |
+
+*   문턱: 5분(300초) 합이 1 이상이면 `ALARM` 이고, 데이터가 없으면 정상으로
+    봅니다(/dvr 하한 경보와 같음).
+*   경보는 치우개 스위치와 상관없이 늘 있습니다. 꺼져 있으면 그 줄이 없어
+    울리지 않습니다. 필터는 만든 뒤의 로그만 셉니다.
+*   패턴은 `streamId=` 까지 넣어 `broadcast.reaper.ended_listener_failed`
+    줄은 세지 않습니다. 같은 글자가 `StaleBroadcastReaper.java` 의 로그
+    문자열에 있는지 시험이 봅니다. clip 로그는 평문(Spring Boot 기본 콘솔
+    형식)이라 JSON 필터가 아니라 따옴표 구절입니다.
+*   알림 주제 `pokeclip-prod-platform-alarms` 의 정책은 SNS 기본 정책 대신
+    명시 정책입니다 — 계정 루트에는 읽기 하나이고, 이 자원 정책이 여는
+    발행은 이 경보가 보내는 CloudWatch(`aws:SourceArn` ·
+    `aws:SourceAccount`)뿐입니다. 같은 계정 주체의 신원 권한(발행 · 주제
+    삭제)은 이 정책이 막지 않고, 직전 점검 principal_sim 의
+    `platform-alarm-topic` 행이 봅니다.
+*   알려진 한계: 그 대상 행들은 다음 동작 · 자원 유형을 묻지 않습니다(서비스
+    권한 참조상 자원 유형은 SNS 구독 동작이 topic · PutLogEvents 가
+    log-stream · PutMetricData 가 dataset) —
+    `cloudwatch:PutMetricData`(같은 지표에 음수를 넣어 5분 합을 상쇄) ·
+    `sns:Unsubscribe` · `sns:SetSubscriptionAttributes` ·
+    `logs:PutLogEvents`(거짓 줄). 또 clip 로그 드라이버(`awslogs`)가 비차단
+    모드면 로그가 몰릴 때 줄이 버려져, 경보 수는 완전한 수가 아닐 수
+    있습니다(이 루트는 모드를 적지 않아 ECS 기본을 따름).
+*   울리면: 그 시각 clip 로그의 `broadcast.reaper.ended` 줄에서
+    `streamId`(회차)를 보고, 위 「clip 치우개 오판 감지 · 복구」 의 감지 첫
+    단계(로거 · DB 상태)부터 따릅니다.
+
+이메일 구독은 저장소 밖에서 kty 가 한 번 답니다(공개 저장소에 주소를 두지
+않음). 위 「처음 켜기」 1 의 apply 뒤(치우개를 켜기 전) 이 루트에서 주제
+ARN 을 읽어 구독하고, 받은 확인 메일의 `Token=` 값으로 구독을 확인합니다.
+확인 전에는 알림이 가지 않습니다(`aws sns list-subscriptions-by-topic` 의
+`SubscriptionArn` 이 `PendingConfirmation`). 메일의 확인 링크는 누르지
+않습니다 — 링크의 `Token=` 값만 옮겨 `aws sns confirm-subscription --region
+ap-northeast-2 --topic-arn … --token <토큰> --authenticate-on-unsubscribe true`
+로 확인합니다(출력은 계정 ID 가 든 ARN 이라 `>/dev/null` 로 버림). 그래야
+구독 해지에 인증이 걸려, 메일을 받은 누구나 해지 링크로 끊지 못합니다. 확인
+뒤 아래 확인 읽기로 대기 · 확인 수와 그 구독의 `ConfirmationWasAuthenticated`
+를 봅니다 — 주제 · 구독 ARN 은 계정 ID 가 들어 셸 변수에만 담고, 메일 주소와
+함께 출력하지 않습니다. 기대는 대기 0 · 확인 1(탭으로 갈린 두 수)과 `true` 입니다.
+`false` 면 메일 스캐너 등이 링크를 먼저 열어 인증 없이 확인된 것이니, 그
+구독을 `aws sns unsubscribe` 로 해지하고 다시 구독해 위 명령으로 확인합니다.
+구독은 Terraform 상태 밖이라 주제가 다시 만들어지면 다시 합니다.
+
+```shell
+aws sns subscribe --region ap-northeast-2 \
+  --topic-arn "$(terraform output -raw platform_alarm_topic_arn)" \
+  --protocol email --notification-endpoint '<받을 주소>'
+```
+
+```shell
+topic="$(terraform output -raw platform_alarm_topic_arn)"
+aws sns list-subscriptions-by-topic --region ap-northeast-2 \
+  --topic-arn "${topic}" \
+  --query "[length(Subscriptions[?SubscriptionArn == 'PendingConfirmation']), length(Subscriptions[?SubscriptionArn != 'PendingConfirmation'])]" \
+  --output text
+sub="$(aws sns list-subscriptions-by-topic --region ap-northeast-2 \
+  --topic-arn "${topic}" \
+  --query "Subscriptions[?Protocol == 'email' && SubscriptionArn != 'PendingConfirmation'].SubscriptionArn | [0]" \
+  --output text)"
+aws sns get-subscription-attributes --region ap-northeast-2 \
+  --subscription-arn "${sub}" \
+  --query 'Attributes.ConfirmationWasAuthenticated' --output text
+```
 
 ## 작업 역할
 
@@ -305,6 +539,7 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | `services` | next 3000 `/api/ping` 512/1024 · 60초, auth 8082 · clip 8081 `/actuator/health` 1024/2048 · 180초 | 포트 · 헬스 경로 · CPU · 메모리(MiB) · 기동 유예(Flyway). 공개 ALB 대상 그룹 · 규칙의 원천이라 키는 이 셋뿐 |
 | `chat_services` | chat-collector 8083 · 1024/2048, chat-detector 8084 · 512/1024 | 포트 · CPU · 메모리(MiB). 키는 이 둘뿐. 포트는 앱 `application.yml` 의 `server.port` 맨값이라 8083 · 8084 고정(다른 값은 plan 이 막음) — 바꾸려면 앱부터 고친다 |
 | `chat_collector_features` | 위 「chat 기능 스위치」 | chat-collector 기능 스위치 여섯 |
+| `clip_broadcast_reaper_enabled` | `true` | clip 치우개(`BROADCAST_REAPER_ENABLED` — 위 「clip 치우개 스위치」). 유예 30분 · 주기 1분은 앱 기본값 |
 | `app_db_auth` | `iam` | `password` 면 `rds-db:connect` · `POSTGRES_AUTH` 없음 |
 | `postgres_sslrootcert` | `/etc/pokeclip/rds-ca/global-bundle.pem` | 서버 이미지의 RDS CA 번들 경로(POK-407 코멘트 10715 · 커밋 2975805e) — iam 에서만 넣음 |
 | `cors_allowed_origins` | `https://app.pokeclip.com` | auth · clip 부팅 필수 값(실사용 없음) |
@@ -357,3 +592,4 @@ plan 요지를 kty 가 보고 승인합니다.
 | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-408) · media(`service_sg_ids.auth` · `.clip` — Media ↔ auth · Media ↔ clip 만료 창구, POK-551). chat 두 서비스의 SG 는 이 루트 안에서만 써서 내보내지 않음 |
 | `service_ports`(auth · clip · next — `services` 의 포트) | media — Media ↔ auth 규칙의 포트(kty 결정 2026-10-25 (나)) · Media ↔ clip 규칙의 포트와 `clip_internal_url` 포트 교차 검증(POK-551) |
 | `clip_execution_role_arn` | 런타임 2단 |
+| `platform_alarm_topic_arn` | 소비 루트 없음 — kty 의 이메일 구독 명령(위 「clip 치우개 경보」) |

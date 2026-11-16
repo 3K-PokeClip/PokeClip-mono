@@ -83,7 +83,7 @@ run "lists_env_names_per_service" {
       "CLIPS_BUCKET", "SEGMENT_BUCKET",
       "EXPIRED_BROADCASTS_ALLOWED_CIDRS",
     ])
-    error_message = "clip 의 env 이름 집합이 DB 셋 · 계약9 둘 · 일 스위치 셋 · 일 큐 주소 다섯 · 창고 이름 둘 · EXPIRED_BROADCASTS_ALLOWED_CIDRS 와 다르다(BROADCAST_REAPER_ENABLED 없음 — K6)."
+    error_message = "clip 의 env 이름 집합이 DB 셋 · 계약9 둘 · 일 스위치 셋 · 일 큐 주소 다섯 · 창고 이름 둘 · EXPIRED_BROADCASTS_ALLOWED_CIDRS 와 다르다(BROADCAST_REAPER_ENABLED 는 runtime 이 아니라 platform 이 넣는다 — POK-588)."
   }
 
   assert {

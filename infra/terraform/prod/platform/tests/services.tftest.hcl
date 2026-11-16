@@ -22,6 +22,12 @@ mock_provider "aws" {
   }
 
   # apply 로 도는 run 에서 provider 가 ARN 꼴을 검사하는 참조에 쓸 값.
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-platform-alarms"
+    }
+  }
+
   mock_resource "aws_lb" {
     defaults = {
       arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/example/0123456789abcdef"
@@ -432,6 +438,73 @@ run "rejects_public_ingest_without_approval" {
   }
 
   expect_failures = [var.ingest_allowed_cidrs]
+}
+
+# --- clip 치우개 스위치(POK-588) ---
+
+# 서버 기본은 꺼짐이고 prod 기본 켬은 이 루트가 정한다(kty 2026-11-16).
+run "clip_reaper_on_by_default" {
+  command = plan
+
+  assert {
+    condition     = local.service_env.clip["BROADCAST_REAPER_ENABLED"] == "true"
+    error_message = "clip_broadcast_reaper_enabled 기본값에서 clip BROADCAST_REAPER_ENABLED 가 true 가 아니다."
+  }
+
+  # 유예 · 주기는 서버 기본(30분 · 1분)이라 넣지 않는다. 기본 흉내의 runtime
+  # app_env 에는 두 이름이 없어 그쪽에서 들어오는 경우는 이 run 이 보지 않는다
+  # — platform 블록이 INTERVAL · GRACE 를 넣는 경우를 잡는다.
+  assert {
+    condition = (
+      !contains(keys(local.service_env.clip), "BROADCAST_REAPER_INTERVAL") &&
+      !contains(keys(local.service_env.clip), "BROADCAST_REAPER_GRACE")
+    )
+    error_message = "clip env 에 BROADCAST_REAPER_INTERVAL · BROADCAST_REAPER_GRACE 가 있다 — 서버 기본값을 쓴다."
+  }
+}
+
+run "clip_reaper_off_maps_to_false" {
+  command = plan
+
+  variables {
+    clip_broadcast_reaper_enabled = false
+  }
+
+  assert {
+    condition     = local.service_env.clip["BROADCAST_REAPER_ENABLED"] == "false"
+    error_message = "clip_broadcast_reaper_enabled = false 인데 clip BROADCAST_REAPER_ENABLED 가 false 가 아니다."
+  }
+}
+
+# 런타임 app_env 가 같은 이름을 다른 값으로 줘도 platform 값이 이긴다.
+run "platform_reaper_env_wins_over_runtime_app_env" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env = {
+          auth             = {}
+          clip             = { BROADCAST_REAPER_ENABLED = "false" }
+          "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" }
+        }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.clip["BROADCAST_REAPER_ENABLED"] == "true"
+    error_message = "런타임 app_env 의 BROADCAST_REAPER_ENABLED 가 platform 값을 덮었다."
+  }
 }
 
 # --- 앱 DB IAM 인증(POK-407) ---
@@ -1582,6 +1655,8 @@ run "rejects_token_only_userinfo_in_app_env_value" {
 
 # 계약(CONTRACT-runtime.md 「앱이 읽는 env 이름」)의 app_env 이름 전부를
 # 실제 값 꼴로 준다 — 이름 · 값 검사 어느 것도 오탐하지 않는다.
+# BROADCAST_REAPER_* 는 없다 — ENABLED 는 platform 이 넣고 INTERVAL · GRACE 는
+# 넣지 않는 이름이라 더는 app_env 이름이 아니다(POK-588).
 run "allows_every_contract_app_env_name_with_real_value_shapes" {
   command = plan
 
@@ -1616,9 +1691,6 @@ run "allows_every_contract_app_env_name_with_real_value_shapes" {
             POSTGRES_DB               = "pokeclip"
             BROADCAST_INTAKE_ENABLED  = "true"
             BROADCAST_QUEUE_URL       = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-broadcast"
-            BROADCAST_REAPER_ENABLED  = "false"
-            BROADCAST_REAPER_INTERVAL = "PT1M"
-            BROADCAST_REAPER_GRACE    = "PT30M"
             RENDER_ENABLED            = "true"
             RENDER_QUEUE_URL          = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-render.fifo"
             RENDER_DLQ_URL            = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-render-dlq.fifo"

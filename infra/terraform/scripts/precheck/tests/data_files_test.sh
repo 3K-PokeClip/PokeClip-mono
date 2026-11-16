@@ -462,6 +462,42 @@ ALARM_STAGE_ROWS=(
   $'cloudwatch:UntagResource\tus-east-1\t*'
   $'cloudwatch:ListTagsForResource\tus-east-1\t*')
 readonly ALARM_STAGE_ROWS
+# clip 치우개 종료 경보(POK-588 — prod/platform reaper_alarms.tf)의 대상 행.
+# 꼴은 ALARM_TARGETS 와 같고 첫 단계가 O7d · 리전이 서울이다. 지표 필터는
+# clip 서비스 로그 그룹 ARN 으로 묻는다.
+# shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+PLATFORM_ALARM_TARGETS=(
+  'platform-metric-filter-clip O7d arn:arn:aws:logs:ap-northeast-2:'\
+'${ACCOUNT}:log-group:pokeclip-prod-clip '\
+'logs:PutMetricFilter,logs:DeleteMetricFilter'
+  'platform-alarm-topic O7d arn:arn:aws:sns:ap-northeast-2:${ACCOUNT}:'\
+'pokeclip-prod-platform-alarms sns:Publish,sns:Subscribe,'\
+'sns:SetTopicAttributes,sns:DeleteTopic'
+  'platform-alarm-clip-reaper-ended O7d arn:arn:aws:cloudwatch:'\
+'ap-northeast-2:${ACCOUNT}:alarm:pokeclip-prod-clip-reaper-ended '\
+'cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,'\
+'cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState')
+readonly PLATFORM_ALARM_TARGETS
+# 그 경보를 만드는 O7d 묶음 행(근거는 O7d 묶음 파일의 그 덩어리 주석). 주제
+# 정책 읽기(sns:GetTopicAttributes 서울)는 2-3 읽기 행이 이미 있다.
+PLATFORM_ALARM_STAGE_ROWS=(
+  $'sns:CreateTopic\tap-northeast-2\t*'
+  $'sns:GetTopicAttributes\tap-northeast-2\t*'
+  $'sns:SetTopicAttributes\tap-northeast-2\t*'
+  $'sns:DeleteTopic\tap-northeast-2\t*'
+  $'sns:TagResource\tap-northeast-2\t*'
+  $'sns:UntagResource\tap-northeast-2\t*'
+  $'sns:ListTagsForResource\tap-northeast-2\t*'
+  $'logs:PutMetricFilter\tap-northeast-2\t*'
+  $'logs:DescribeMetricFilters\tap-northeast-2\t*'
+  $'logs:DeleteMetricFilter\tap-northeast-2\t*'
+  $'cloudwatch:PutMetricAlarm\tap-northeast-2\t*'
+  $'cloudwatch:DescribeAlarms\tap-northeast-2\t*'
+  $'cloudwatch:DeleteAlarms\tap-northeast-2\t*'
+  $'cloudwatch:TagResource\tap-northeast-2\t*'
+  $'cloudwatch:UntagResource\tap-northeast-2\t*'
+  $'cloudwatch:ListTagsForResource\tap-northeast-2\t*')
+readonly PLATFORM_ALARM_STAGE_ROWS
 
 #######################################
 # 데이터 파일의 행(주석 · 빈 줄 뺌)을 낸다.
@@ -2271,6 +2307,34 @@ expect_alarm_rows_asked() {
     "요청에 실림(O7e 0)"
 }
 
+#######################################
+# 데이터 단언(POK-588): clip 치우개 종료 경보 대상 행(PLATFORM_ALARM_TARGETS)
+# 이 첫 단계 O7d · 해석 방법으로 있고 반드시 묻는 동작을 담으며, O7d 묶음에
+# 경보를 만드는 행(PLATFORM_ALARM_STAGE_ROWS)이 동작 · 리전 · 자원 패턴
+# 그대로 있다.
+# Globals:
+#   PLATFORM_ALARM_TARGETS, PLATFORM_ALARM_STAGE_ROWS, STAGE_DIR
+#######################################
+expect_platform_alarm_targets() {
+  local problem rows entry
+  problem="$(pinned_target_problem "${PLATFORM_ALARM_TARGETS[@]}")"
+  if [[ -n "${problem}" ]]; then
+    testlib::fail "platform-alarm-targets: ${problem}"
+    return
+  fi
+  rows="$(data_rows "${STAGE_DIR}/O7d.tsv")"
+  for entry in "${PLATFORM_ALARM_STAGE_ROWS[@]}"; do
+    if ! has_line "${rows}" "${entry}"; then
+      testlib::fail "platform-alarm-targets: O7d 묶음에 행이 없음 —" \
+        "${entry//$'\t'/ }"
+      return
+    fi
+  done
+  testlib::ok "platform-alarm-targets → 치우개 경보 대상" \
+    "${#PLATFORM_ALARM_TARGETS[@]}행 · O7d 묶음 행" \
+    "${#PLATFORM_ALARM_STAGE_ROWS[@]}개가 그대로"
+}
+
 main() {
   testlib::init data_files_test
   expect_bundle_set
@@ -2293,6 +2357,7 @@ main() {
   expect_runtime_bundle_creates_edge_bounds_kvs
   expect_alarm_targets
   expect_alarm_rows_asked
+  expect_platform_alarm_targets
   expect_late_targets
   expect_followup_targets
   expect_acm_validation_targets
