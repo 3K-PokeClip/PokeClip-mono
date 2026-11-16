@@ -32,7 +32,7 @@ import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
 // VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 끝난 방송은 줄마다 되감기 제어면의 회차 경로(계약3 7-2절)를 물어 「다시 보기
 // 가능」 · 「다시보기가 없어요」를 정한다(POK-568 — 끝난 뒤 들어온 화면과 같은 판정, vodRoundBadge).
-// 방송 제목도 명부에 칸이 없어 아직 방송 번호로 보인다.
+// 방송 제목도 명부에 칸이 없어 null 로 두고, 행이 「제목 없는 방송」으로 적는다(세션 ID 는 보이지 않는다).
 //
 // ⚠ VodBroadcast는 계약 미러다 — services/clip `BroadcastListResponse.Item`과 칸 이름·값이
 // 같다. 실연동 때 화면을 안 고치려면 이 모양을 지켜야 한다. 계약에 없는 표기값은 아래
