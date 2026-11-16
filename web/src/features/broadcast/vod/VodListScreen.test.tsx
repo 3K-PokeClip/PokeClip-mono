@@ -7,7 +7,9 @@ import { READ_TIMEOUT_MS } from '@/api/client';
 import { byTextContent } from '@/test/byTextContent';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders, withToastProvider } from '@/test/testProviders';
+import { PRIVATE_TEXT_CLASS } from '@/ui';
 import { VodListScreen } from './VodListScreen';
+import styles from './VodListScreen.module.css';
 import { useVodListMockState } from './useVodListMockState';
 import { VOD_LIST_FIXTURE } from './vodListFixture';
 
@@ -316,6 +318,87 @@ describe('VodListScreen — 보관 만료', () => {
     renderWithProviders(<VodListScreen broadcasts={expired} visuals={visuals} />);
 
     expect(within(rowAt(0)).getByText(/길이 4:00:00/)).toBeInTheDocument();
+  });
+});
+
+describe('VodListScreen — 제목 없는 방송', () => {
+  // 홈 타일과 같은 말: 「제목 없는 방송」은 방송 주인이 쓴 글이 아니라 화면이 채운 고정 문구라
+  // 흐리게 보여 제목과 구분하고, 녹화에서도 가리지 않는다. 주인이 쓴 제목만 가린다.
+  const at = (iso: string) => ({
+    status: 'vod_ready' as const,
+    relation: 'OWNER' as const,
+    startedAt: iso,
+    endedAt: iso,
+  });
+  const broadcasts = [
+    {
+      streamId: 'untitled-open',
+      ...at('2026-08-20T23:00:00+09:00'),
+      vodExpiresAt: '2026-10-19T23:00:00+09:00',
+    },
+    {
+      streamId: 'untitled-gone',
+      ...at('2026-05-01T23:00:00+09:00'),
+      vodExpiresAt: '2026-06-30T23:00:00+09:00',
+    },
+    {
+      streamId: 'titled-open',
+      ...at('2026-08-19T23:00:00+09:00'),
+      vodExpiresAt: '2026-10-18T23:00:00+09:00',
+    },
+    {
+      streamId: 'titled-gone',
+      ...at('2026-05-02T23:00:00+09:00'),
+      vodExpiresAt: '2026-07-01T23:00:00+09:00',
+    },
+  ];
+  const visuals = {
+    'untitled-open': { title: null, durationSec: 3600, cardCount: 1 },
+    'untitled-gone': { title: null, durationSec: 3600, cardCount: 1 },
+    'titled-open': { title: '새벽 랭크', durationSec: 3600, cardCount: 1 },
+    'titled-gone': { title: '지워진 방송', durationSec: 3600, cardCount: 1 },
+  };
+
+  function rowOf(streamId: string) {
+    renderWithProviders(
+      <VodListScreen broadcasts={broadcasts} visuals={visuals} now={VOD_LIST_FIXTURE.now} />,
+    );
+    const index = broadcasts.findIndex((b) => b.streamId === streamId);
+    return rowAt(index);
+  }
+
+  it.each(['untitled-open', 'untitled-gone'])(
+    '제목이 없으면 고정 문구를 흐리게 쓰고 가리지 않는다 (%s)',
+    (streamId) => {
+      const row = rowOf(streamId);
+      const title = within(row).getByText('제목 없는 방송');
+
+      expect(title).toHaveClass(styles.rowUntitled!);
+      expect(title).not.toHaveClass(PRIVATE_TEXT_CLASS);
+    },
+  );
+
+  it.each([
+    ['titled-open', '새벽 랭크'],
+    ['titled-gone', '지워진 방송'],
+  ])('제목이 있으면 흐리지 않고 녹화에서 가린다 (%s)', (streamId, text) => {
+    const row = rowOf(streamId);
+    const title = within(row).getByText(text);
+
+    expect(title).toHaveClass(PRIVATE_TEXT_CLASS);
+    expect(title).not.toHaveClass(styles.rowUntitled!);
+  });
+
+  // 위 두 묶음이 링크가 있는 행 · 없는 행을 둘 다 재는지 받침을 확인한다 — 보관 만료 행은 링크가 없다
+  it.each([
+    ['untitled-open', true],
+    ['untitled-gone', false],
+    ['titled-open', true],
+    ['titled-gone', false],
+  ])('받침: %s 행의 링크 여부는 %s 다', (streamId, linked) => {
+    const links = within(rowOf(streamId)).queryAllByRole('link');
+
+    expect(links).toHaveLength(linked ? 1 : 0);
   });
 });
 
