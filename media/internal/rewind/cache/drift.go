@@ -119,6 +119,31 @@ func (v *view) sawLedger(seq int64) {
 	v.ledgerNext = max(v.ledgerNext, seq+1)
 }
 
+// ViewNext 는 streamID 의 뷰에 이어 붙일 다음 seq 다 — 루프가 봉인을 낼 때 떠서 봉인 전 장부 끝 확인에 넘긴다(장부 마지막 seq 가
+// 이 값 이상이면 뷰가 장부보다 뒤처졌다). 뷰가 없거나 적재 중이면 거짓이다(POK-591).
+func (c *Cache) ViewNext(streamID string) (int64, bool) {
+	v := c.readable(streamID)
+	if v == nil {
+		return 0, false
+	}
+	return v.nextSeq(), true
+}
+
+// ObserveLedgerLast 는 봉인 전 확인이 읽은 장부 마지막 seq 를 반영한다 — 뷰 끝 너머면 뒤처짐을 적고(Behind) 드리프트 까닭 적재를
+// 요구한다(빈 seq 뒤 push 와 같은 길 — 같은 빈자리에서 백오프 중이면 요구하지 않는다). 뷰 끝 안이면 아무것도 바꾸지 않는다.
+// 뷰가 없거나 적재 중이면 할 일이 없다(적재가 장부 끝까지 싣는다).
+func (c *Cache) ObserveLedgerLast(streamID string, last int64) {
+	v := c.readable(streamID)
+	if v == nil || last < v.nextSeq() {
+		return
+	}
+	v.sawLedger(last)
+	if c.lookup(streamID).backoff() == 0 {
+		v.driftDue = true
+		c.demand(streamID, nil)
+	}
+}
+
 // Behind 는 streamID 의 뷰가 장부보다 뒤처졌다는 것을 캐시가 아는가다 — 뷰 끝 다음 행이 장부에 있다(빈 seq 뒤 push ·
 // 드리프트 대조 · 빈자리에서 멈춘 적재가 알렸다). 사다리가 머리 다음 행이 뷰에 없는 정체를 방송 종료 구간(no_row)과 가르는 재료다(stall-7125
 // R2). 거짓은 「뒤처지지 않았다」가 아니라 「뒤처졌다는 사실을 모른다」다. 뷰가 없거나 적재 중이면 거짓이다.

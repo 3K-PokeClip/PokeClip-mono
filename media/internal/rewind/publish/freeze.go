@@ -54,6 +54,8 @@ type FreezeOutcome struct {
 	Retry  bool
 	Reason string
 	Err    error
+	// LedgerLast 는 사유가 ReasonLedgerAhead 일 때 장부의 그 스트림 마지막 seq 다(EndlistIfCaughtUp — 그 밖에는 0).
+	LedgerLast int64
 
 	// 아래는 VOD 만이다(POK-549 설계 r4 2.2).
 
@@ -235,7 +237,12 @@ func (f *freezeJob) discontinuitySequence(l index.RewindLedger, pl rewind.Playli
 // 두지 않는다). 발행본이 없으면 봉인할 것이 없어 빈 동결이다. 이미 닫힌 판이면 준비의 R3 승격이
 // 확정해 다시 쓰지 않는다(E2). 본문만 닫히고 메타가 열린 판이면 같은 본문에 닫힘 메타를 맞춘다.
 func (p *Publisher) Endlist(ctx context.Context, streamID, sessionID string) FreezeOutcome {
-	f, out, ok := p.beginFreeze(ctx, streamID, sessionID)
+	return p.endlist(ctx, streamID, sessionID, p.fenceStep(sessionID))
+}
+
+// endlist 는 Endlist · EndlistIfCaughtUp 의 몸체다 — acquire 는 준비의 fence 획득 걸음이다(beginFreezeWith).
+func (p *Publisher) endlist(ctx context.Context, streamID, sessionID string, acquire fenceStepFunc) FreezeOutcome {
+	f, out, ok := p.beginFreezeWith(ctx, streamID, sessionID, acquire)
 	if !ok {
 		return out
 	}
@@ -267,6 +274,74 @@ func (p *Publisher) Endlist(ctx context.Context, streamID, sessionID string) Fre
 	return f.putAndConfirm(ctx, sealed, desc)
 }
 
+// ReasonLedgerAhead 는 EndlistIfCaughtUp 이 봉인하지 않은 까닭이다 — 장부의 그 스트림 마지막 seq 가 캐시 뷰 다음 seq 이상이다
+// (다른 상자가 넣은 행의 push 를 캐시가 못 받았다). retry 다. ReasonLedgerFailed 는 장부를 못 읽었다는 사유다(봉인 전 확인의
+// DB 오류 · 시한, 동결의 장부 적재 실패 — 같은 값). retry 다.
+const (
+	ReasonLedgerAhead  = "ledger_ahead"
+	ReasonLedgerFailed = freezeLedger
+)
+
+// ledgerCheckTimeout 은 봉인 전 장부 끝 읽기의 시한이다 — 넘기면 그 틱은 봉인하지 않는다(ReasonLedgerFailed). 봉인의 최악은
+// D_act 5.5 + 이 시한 0.5 + T_pub 2.0 + T_edge 1.5 = 9.5초로, 갱신 의무 9초의 모델을 이 시한만큼 넘는다. D_act 에 여유가 없어
+// 문턱 · PUT 예산을 그대로 두고 최악 9.5초를 받아들였다(kty 결정 · POK-591). 평소에는 수 ms 를 더할 뿐이다.
+const ledgerCheckTimeout = 500 * time.Millisecond
+
+// EndlistIfCaughtUp 는 정체 마감(L2′) 전용 봉인이다 — Endlist 와 같되, fence 획득을 트랜잭션 하나에서 하고 그 뒤 같은
+// 트랜잭션에서 그 스트림 장부의 마지막 seq 를 읽는다(시한 ledgerCheckTimeout). 그 값이 viewNext 이상이면 트랜잭션을 되돌려
+// fence 도 잡지 않은 채 예약 · 저장소 호출 없이 retry(ReasonLedgerAhead · LedgerLast)로 돌아온다. 못 읽으면(오류 · 시한) 되돌리고
+// retry(ReasonLedgerFailed)다 — 확인 없이 봉인하지 않는다. viewNext 는 루프가 봉인을 낼 때 뜬 캐시 뷰의 다음 seq 다
+// (cache.ViewNext). 캐시가 뒤처진 줄 모른 채 봉인 문턱(5.5초)이 감시(30초)보다 먼저 와도 회차를 닫지 않으려는 것이다(POK-591).
+//
+// 확인을 fence 획득 뒤에 두는 까닭: fence 획득이 회차 행 잠금 · 풀을 기다리는 동안 장부가 나아갈 수 있다. 남는 창은 확인부터
+// ENDLIST 저장 확정까지(화해 · 예약 · Get · PUT — 대략 1–2초)다. 다른 상자의 인덱서는 fence 와 무관하게 INSERT 하므로 이 창은
+// 0 으로 만들 수 없다. Endlist 의 다른 호출자(동결 2단 · 좌초 회수 · FreezeDVR)는 이 확인이 없다 — 문장 · 바이트가 그대로다.
+func (p *Publisher) EndlistIfCaughtUp(ctx context.Context, streamID, sessionID string, viewNext int64) FreezeOutcome {
+	return p.endlist(ctx, streamID, sessionID, func(ctx context.Context) (FreezeOutcome, bool) {
+		return p.acquireCaughtUp(ctx, streamID, sessionID, viewNext)
+	})
+}
+
+// acquireCaughtUp 은 EndlistIfCaughtUp 의 fence 획득이다 — 트랜잭션 안에서 fence 를 잡고(fenceAcquireSQL 그대로) 장부 끝을 견준
+// 뒤, 통과하면 커밋하고 아니면 되돌린다.
+func (p *Publisher) acquireCaughtUp(ctx context.Context, streamID, sessionID string, viewNext int64) (FreezeOutcome, bool) {
+	sctx, cancel := p.stmtCtx(ctx)
+	defer cancel()
+	tx, err := p.pool.Begin(sctx)
+	if err != nil {
+		return dvrRetry(freezeFence, fmt.Errorf("publish: fence 트랜잭션 시작 session=%q: %w", sessionID, err)), false
+	}
+	defer func() {
+		// 되돌림에도 문장 시한을 건다(gapTx 와 같은 꼴) — 연결 통신이 멎어도 결과가 돌아와야 그 스트림 차선과 종료의 Lanes.Wait 가
+		// 풀린다. 부모 취소와는 떼어 둔다 — 취소된 뒤에도 되돌림은 보내야 한다. 커밋 뒤에는 무동작이다.
+		rctx, rcancel := p.stmtCtx(context.WithoutCancel(ctx))
+		defer rcancel()
+		_ = tx.Rollback(rctx)
+	}()
+	tag, err := tx.Exec(sctx, fenceAcquireSQL, sessionID, p.opt.Writer, p.opt.Lease)
+	switch {
+	case err != nil:
+		return dvrRetry(freezeFence, fmt.Errorf("publish: fence 획득 session=%q: %w", sessionID, err)), false
+	case tag.RowsAffected() != 1:
+		return dvrRetry(freezeFence, nil), false
+	}
+	lctx, lcancel := context.WithTimeout(sctx, ledgerCheckTimeout)
+	last, ok, err := index.LoadLedgerLast(lctx, tx, streamID)
+	lcancel()
+	switch {
+	case err != nil:
+		return dvrRetry(ReasonLedgerFailed, err), false
+	case ok && last >= viewNext:
+		out := dvrRetry(ReasonLedgerAhead, nil)
+		out.LedgerLast = last
+		return out, false
+	}
+	if err := tx.Commit(sctx); err != nil {
+		return dvrRetry(freezeDB, fmt.Errorf("publish: fence 트랜잭션 커밋 session=%q: %w", sessionID, err)), false
+	}
+	return FreezeOutcome{}, true
+}
+
 // freezeJob 은 동결 · 봉인 한 번의 문맥이다 — 준비(beginFreeze)가 채운다.
 type freezeJob struct {
 	p       *Publisher
@@ -282,13 +357,31 @@ type freezeJob struct {
 // beginFreeze 는 동결 · 봉인의 준비다 — fence 획득 → Head(R1 · R2) → DB 화해(R3 · R4) → terminal 예약(F0 · E0). 거짓이면
 // 돌려받은 결과로 끝낸다. 이미 닫힌 회차면 그 상태의 결과다(frozen 은 멱등 성공 · freeze_failed 는 실패).
 func (p *Publisher) beginFreeze(ctx context.Context, streamID, sessionID string) (*freezeJob, FreezeOutcome, bool) {
+	return p.beginFreezeWith(ctx, streamID, sessionID, p.fenceStep(sessionID))
+}
+
+// fenceStepFunc 는 준비의 fence 획득 걸음이다 — 얻었으면 참, 못 얻었으면 그 결과와 거짓이다.
+type fenceStepFunc func(context.Context) (FreezeOutcome, bool)
+
+// fenceStep 은 준비의 기본 fence 획득 걸음이다 — 풀에 fenceAcquireSQL 한 문장(acquire)이고, 못 얻으면 retry(fence)다.
+func (p *Publisher) fenceStep(sessionID string) fenceStepFunc {
+	return func(ctx context.Context) (FreezeOutcome, bool) {
+		if ok, err := p.acquire(ctx, sessionID); err != nil || !ok {
+			return dvrRetry(freezeFence, err), false
+		}
+		return FreezeOutcome{}, true
+	}
+}
+
+// beginFreezeWith 는 beginFreeze 에서 fence 획득 걸음만 acquire 로 바꾼 것이다(EndlistIfCaughtUp 의 확인 붙은 획득).
+func (p *Publisher) beginFreezeWith(ctx context.Context, streamID, sessionID string, acquire fenceStepFunc) (*freezeJob, FreezeOutcome, bool) {
 	key, err := manifestKey(streamID, sessionID)
 	if err != nil {
 		return nil, dvrFailed(freezeRender, err), false
 	}
 	f := &freezeJob{p: p, stream: streamID, session: sessionID, key: key}
-	if ok, err := p.acquire(ctx, sessionID); err != nil || !ok {
-		return nil, dvrRetry(freezeFence, err), false
+	if out, ok := acquire(ctx); !ok {
+		return nil, out, false
 	}
 	if out, ok := f.reconcile(ctx); !ok {
 		return nil, out, false

@@ -110,8 +110,8 @@ type laneWork struct {
 	renew func(ctx context.Context, st publish.State, sessionID string) publish.Outcome
 	load  func(ctx context.Context, in publish.LoadInput) publish.LoadOutcome
 	watch func(ctx context.Context, probes []index.WatchProbe) publish.WatchOutcome
-	// seal 은 L2′ 의 봉인이다(운영은 Publisher.Endlist — stall_seal.go).
-	seal func(ctx context.Context, streamID, sessionID string) publish.FreezeOutcome
+	// seal 은 L2′ 의 봉인이다(운영은 Publisher.EndlistIfCaughtUp — 장부 끝이 viewNext 앞일 때만 봉인 · stall_seal.go).
+	seal func(ctx context.Context, streamID, sessionID string, viewNext int64) publish.FreezeOutcome
 	// audit 은 동결 감사다(운영은 프로세스에 하나인 FrozenAuditor 의 Audit — 문서당 복구 1회를 그 감사기가 기억한다). nil 이면
 	// 감사를 내지 않는다.
 	audit func(ctx context.Context) publish.AuditOutcome

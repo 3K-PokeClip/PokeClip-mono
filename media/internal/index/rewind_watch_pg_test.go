@@ -261,6 +261,42 @@ func TestRewindWatchReportsQueryFailure(t *testing.T) {
 	}
 }
 
+// 봉인 전 장부 끝 확인(POK-591) — 그 스트림 장부의 마지막 seq 다(컷오프 아래 행도 센다). 행이 없으면
+// 없음이다. 문장은 이름 const 하나(rewindLedgerLastSQL)를 글자 그대로 보내고 바인드는 스트림 하나뿐이다. 못 읽으면 오류다.
+func TestLoadLedgerLastReadsStreamLastSeq(t *testing.T) {
+	base := newTestPool(t)
+	watchFixture(t, base, time.Now())
+	var sent []string
+	var args [][]any
+	pool := hookedPool(t, base, traceArgs(func(sql string, a []any) {
+		sent, args = append(sent, sql), append(args, a)
+	}))
+
+	for _, tt := range []struct {
+		stream string
+		last   int64
+		has    bool
+	}{
+		{"rwA", 12, true},
+		{"rwB", 0, true},
+		{"rwZ", 0, false},
+	} {
+		last, has, err := LoadLedgerLast(context.Background(), pool, tt.stream)
+		if err != nil || last != tt.last || has != tt.has {
+			t.Errorf("LoadLedgerLast(%s) = (%d, %v, %v), want (%d, %v, nil)", tt.stream, last, has, err, tt.last, tt.has)
+		}
+	}
+	if len(sent) != 3 || sent[0] != rewindLedgerLastSQL || len(args[0]) != 1 {
+		t.Errorf("보낸 문장 %d개(바인드 %v), want rewindLedgerLastSQL · 바인드 하나", len(sent), args)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := LoadLedgerLast(ctx, base, "rwA"); err == nil {
+		t.Error("취소된 ctx 로 읽었는데 오류가 없다")
+	}
+}
+
 // absentIDs 는 absent 행의 스트림이다.
 func absentIDs(rows []WatchAbsent) []string {
 	var out []string

@@ -451,6 +451,30 @@ SELECT 'absent', stream_id, NULL, NULL, NULL, NULL,
   FROM absent
  ORDER BY kind, stream_id, session_id, next_seq`
 
+// rewindLedgerLastSQL 은 봉인 전 장부 끝 확인이다(POK-591 PR r1 — 정체 마감 L2′ 가 봉인하기 직전에 그 스트림 장부의 마지막
+// seq 를 본다). 감시 문장의 drift CTE 가 싣는 마지막 seq 하위 질의와 같은 꼴이다 — PK (stream_id, seq) 역순 첫 항목 한 번이고
+// 컷오프 아래 행도 센다. 행이 없으면 NULL 한 행이다.
+const rewindLedgerLastSQL = `SELECT pg_catalog.max(seq) FROM stream_segments WHERE stream_id = $1`
+
+// RowQuerier 는 문장 하나를 보내 한 행을 받는 쪽이다 — 풀(*pgxpool.Pool)과 트랜잭션(pgx.Tx)이 둘 다 맞는다.
+type RowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// LoadLedgerLast 는 streamID 장부의 마지막 seq 다(rewindLedgerLastSQL — 문장 하나). 행이 없으면 ok 거짓이다. q 는 풀이거나
+// 트랜잭션이다(publish.EndlistIfCaughtUp 은 fence 획득과 같은 트랜잭션에서 부른다). 시한은 부르는 쪽 ctx 가 정한다. 못 읽으면
+// 오류다.
+func LoadLedgerLast(ctx context.Context, q RowQuerier, streamID string) (last int64, ok bool, err error) {
+	var v *int64
+	if err := q.QueryRow(ctx, rewindLedgerLastSQL, streamID).Scan(&v); err != nil {
+		return 0, false, fmt.Errorf("장부 마지막 seq 조회 실패 stream_id=%q: %w", streamID, err)
+	}
+	if v == nil {
+		return 0, false, nil
+	}
+	return *v, true, nil
+}
+
 // LoadRewindWatch 는 30초 감시 한 문장을 읽는다(rewindWatchSQL — 풀 단일 문장 · 트랜잭션 없음). probes 는 드리프트
 // 대조 입력이고 seedAlarmAfter 는 (c) 의 창이다. 문장 시한은 TxnDeadline 이다(작업 안에서 — Lanes.Start 의 ctx 는 루프
 // 수명이다). 읽기에 실패하면 오류다 — 그 틱의 (a) · (c) · 화해를 건너뛰는 것은 부르는 쪽 몫이다(판단 J46).
