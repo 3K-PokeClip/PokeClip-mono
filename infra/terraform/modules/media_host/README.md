@@ -149,7 +149,7 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     「janitor_enabled」) 업로드 지연과 8분 분량만 남습니다. 렌더본이
     23시간(V1 임시)인 옛 상자면 녹화가 디스크를 정합니다. 값은 그대로 두고,
     판정은 녹화 증가율로 합니다
-    ([media-swap](../../runbooks/media-swap.md) 「동시 방송 부하」 행).
+    ([media-swap](/infra/terraform/runbooks/media-swap.md) 「동시 방송 부하」 행).
     처리량 변수는 125 부터 750 MiB/s 까지 받습니다 — gp3 는 IOPS 당
     0.25 MiB/s 까지이고 이 모듈은 IOPS 를 기본 3,000 으로 둡니다.
 *   유형은 입력 단계에서 계열 이름(세대 숫자 뒤 `g`)으로 한 번 거르고, plan
