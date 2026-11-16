@@ -356,13 +356,23 @@ aws ecs describe-task-definition --region ap-northeast-2 \
 *   감지 첫 단계 — 그 줄이 진짜 치우개 종료인지 둘을 먼저 봅니다. ① 그
     `broadcast.reaper.ended` 줄의 로거가 `StaleBroadcastReaper` 인가(사용자
     입력이 다른 경고 줄에 되비쳐 지표 필터에 걸릴 수 있음) ② clip DB 에서 그
-    방송(`streamId`)이 실제로 `ended` 인가. ② 의 읽기는 런북 runtime-1a 의
-    `app_clip` 읽기 전용 저장점 틀(「1단-다 되돌리기 — O7d 뒤」 의 미종결 주문
-    블록)로 하고, 마스터가 틀 없이 `SET ROLE` 로 읽지 않습니다. 로그의
-    `streamId` 는 자유 문자열(clip `V201` 의 `VARCHAR(128)`)이라 SQL 에
-    그대로 붙이지 않습니다 — 허용 문자 · 길이를 먼저 검사하거나, psql 변수로
-    넘겨 `:'sid'` 로 인용합니다(`-v sid=…` 를 쓰면 셸 인용도 주의). 둘 다
-    맞을 때만 아래로 갑니다.
+    방송(`streamId`)이 실제로 `ended` 인가. ② 는 ① 이 맞을 때만 봅니다.
+    ② 의 읽기는 런북 runtime-1a 의 `app_clip` 읽기 전용 저장점 틀(「1단-다
+    되돌리기 — O7d 뒤」 의 미종결 주문 블록)로 하고, 마스터가 틀 없이
+    `SET ROLE` 로 읽지 않습니다. 로그의 `streamId` 는 DB 칸으로는 자유
+    문자열(clip `V201` 의 `VARCHAR(128)`)이라 SQL 에 그대로 붙이지 않습니다.
+    값은 Media 가 만드는 회차 꼴 `S-YYYYMMDD-HHMMSS-<물리 키>-<seq>`
+    (`media/internal/session/registry.go` 의 `sessionID`)이고, 물리 키는
+    `[A-Za-z0-9_-]{1,64}` 입니다(`media/internal/recording/name.go` 의
+    `streamIDRe`). 그래서
+    `^S-[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]{1,64}-[0-9]+$` 와 128자 이하를 통과한
+    값만, 런북 `make_read` 처럼 SQL 원문을 base64 로 페이로드에 실어 `-f` 로
+    돌리는 파일 안의 `\set sid '…'` 한 줄로 넣고 질의에서 `:'sid'` 로
+    인용합니다(이 틀은 첫 줄이 `GRANT` 라 `make_read` 함수 자체는 쓰지
+    않습니다) — 셸 줄 · `-v` 에는 값을 두지 않습니다. 이 앱 표 읽기는 POK-593 에서 일회용 SELECT
+    계정으로 옮기고, 그 전까지 덫이 마스터 권한을 되찾을 때 남는 부작용(다른
+    세션 끊기 · NOTICE · advisory 잠금 · 계획 단계 IMMUTABLE 색인 식)은 알려진
+    한계입니다. 둘 다 맞을 때만 아래로 갑니다.
 *   감지: 그 줄이 찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그
     방송의 조각이 계속 쌓이거나, 방송자가 송출 중이라고 합니다.
 *   로그의 `streamId` 는 회차(장부 `stream_sessions.round_id`)이고, 장부

@@ -2395,19 +2395,19 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         `SET TRANSACTION READ ONLY;`) 안에서 하고 SELECT 뒤
         `ROLLBACK TO SAVEPOINT ro;` 로 닫습니다 — 덫이 마스터로 바뀌어도
         쓰기는 25006 으로 거부되고, 함수 안에서는 저장점을 풀 수 없으며,
-        경로도 함께 되돌아옵니다. 앞뒤 멤버십 조회는 비교를
-        `OPERATOR(pg_catalog.=)` 로 한정해 앱이 심은 연산자를 타지 않습니다.
-        저장점 안에서도 막지 못하는 부작용(다른 세션 끊기 · NOTICE 로 값
-        흘리기 · 세션 advisory 잠금)은 남습니다 — 잠금은 psql 이 끝나 세션이
-        닫히면 풀립니다. 회수 뒤 행이 부여 전과 다르면 실패로 보고 멈추고
-        kty 에게 회부합니다(로컬 PG 17 비superuser 마스터 대역으로 RLS ·
-        연산자 덫 · 거부 · 회수를 확인 — 2026-11-16 · 11-17).
+        경로도 함께 되돌아옵니다. 회수 뒤 끝의 `DO` 단언은 마스터의
+        `app_clip` 멤버십 행에 SET · INHERIT 가 남았으면 오류를 내 트랜잭션
+        전체(부여 포함)를 되돌립니다 — 기대 상태는 마스터가 역할을 만들 때 받은
+        ADMIN 전용 행뿐입니다. 단언의 비교는 `OPERATOR(pg_catalog.=)` 로 한정해
+        앱이 심은 연산자를 타지 않습니다. 저장점 안에서도 막지 못하는
+        부작용(다른 세션 끊기 · NOTICE 로 값 흘리기 · 세션 advisory 잠금 · 계획
+        단계에 도는 IMMUTABLE 색인 식)은 남습니다 — 잠금은 psql 이 끝나 세션이
+        닫히면 풀립니다. 이 앱 표 읽기는 POK-593 에서 일회용 SELECT 계정으로
+        옮기고, 그 전까지 이 부작용은 알려진 한계입니다(로컬 PG 17 비superuser
+        마스터 대역으로 RLS · 연산자 덫 · 거부 · 회수 · 단언을 확인 —
+        2026-11-16 · 11-17).
 
         ```sql
-        SELECT grantor::regrole, admin_option, inherit_option, set_option
-          FROM pg_catalog.pg_auth_members
-         WHERE roleid OPERATOR(pg_catalog.=) 'app_clip'::regrole
-           AND member OPERATOR(pg_catalog.=) CURRENT_USER::text::regrole;  -- 부여 전 기준
         GRANT app_clip TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
         SAVEPOINT ro;
         SET TRANSACTION READ ONLY;
@@ -2424,10 +2424,16 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         ROLLBACK TO SAVEPOINT ro;
         RESET ROLE;
         REVOKE app_clip FROM CURRENT_USER;
-        SELECT grantor::regrole, admin_option, inherit_option, set_option
-          FROM pg_catalog.pg_auth_members
-         WHERE roleid OPERATOR(pg_catalog.=) 'app_clip'::regrole
-           AND member OPERATOR(pg_catalog.=) CURRENT_USER::text::regrole;  -- 회수 뒤 = 부여 전과 같아야 함
+        DO $assert$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members
+                      WHERE roleid OPERATOR(pg_catalog.=) 'app_clip'::pg_catalog.regrole
+                        AND member OPERATOR(pg_catalog.=) CURRENT_USER::pg_catalog.text::pg_catalog.regrole
+                        AND (set_option OR inherit_option)) THEN
+            RAISE EXCEPTION 'master still holds app_clip with SET or INHERIT';
+          END IF;
+        END
+        $assert$;
         ```
 
         상태 값은 clip 마이그레이션(`V207` · `V209` · `V212`)의 CHECK
