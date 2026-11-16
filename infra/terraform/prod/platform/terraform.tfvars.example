@@ -43,7 +43,8 @@ ingest_allowed_cidrs = ["<TEAM_IP_CIDR>"]
 # ingest_public_approved = false
 
 # clip 치우개(BROADCAST_REAPER_ENABLED)는 기본 켬이다(README 「clip 치우개
-# 스위치」). 끌 때만 아래 줄을 켠다 — Media 상자를 30분 넘게 멈출 때 등.
+# 스위치」). 끌 때 아래 줄을 켠다 — README 「처음 켜기」 1 의 apply(경보부터
+# 만들기)와 Media 상자를 30분 넘게 멈출 때 등.
 # clip_broadcast_reaper_enabled = false
 
 # DB 접속은 IAM 인증(app_db_auth = iam)이 기본이다. O7d 전에 POK-407(IAM DB

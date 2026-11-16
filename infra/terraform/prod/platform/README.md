@@ -250,10 +250,8 @@ clip 치우개(`StaleBroadcastReaper`)는 종료 편지를 놓친 live 방송을
         채 첫 platform apply 를 합니다. 경보 자원 넷이 생기고 치우개는 꺼진
         채입니다(plan 은 아래 「plan 대조」 의 예외).
     1.  아래 「clip 치우개 경보」 의 구독을 등록하고, 메일의 확인 링크를
-        누르지 않고 `confirm-subscription` 으로 확인합니다.
-        `aws sns list-subscriptions-by-topic` 의 `SubscriptionArn` 이
-        `PendingConfirmation` 이 아니고, 그 구독의
-        `ConfirmationWasAuthenticated` 가 `true` 여야 다음으로 갑니다.
+        누르지 않고 `confirm-subscription` 으로 확인합니다. 그 절의 확인
+        읽기가 대기 0 · 확인 1 과 `true` 를 내야 다음으로 갑니다.
     1.  `true` 로 바꿔 아래 「끄기 · 다시 켜기」 순서로 켭니다. 이 plan 은
         env 한 줄(`"false" -> "true"`)뿐이어야 합니다.
 *   끄기 · 다시 켜기: `terraform.tfvars` 의 `clip_broadcast_reaper_enabled`
@@ -355,9 +353,12 @@ aws ecs describe-task-definition --region ap-northeast-2 \
 
 #### clip 치우개 오판 감지 · 복구
 
-*   감지: clip 로그에 `broadcast.reaper.ended streamId=<회차> …` 줄이
-    찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그 방송의 조각이
-    계속 쌓이거나, 방송자가 송출 중이라고 합니다.
+*   감지 첫 단계 — 그 줄이 진짜 치우개 종료인지 둘을 먼저 봅니다. ① 그
+    `broadcast.reaper.ended` 줄의 로거가 `StaleBroadcastReaper` 인가(사용자
+    입력이 다른 경고 줄에 되비쳐 지표 필터에 걸릴 수 있음) ② clip DB 에서 그
+    방송(`streamId`)이 실제로 `ended` 인가. 둘 다 맞을 때만 아래로 갑니다.
+*   감지: 그 줄이 찍혔는데 그 방송의 송출이 이어지면 오판입니다 — 장부에 그
+    방송의 조각이 계속 쌓이거나, 방송자가 송출 중이라고 합니다.
 *   로그의 `streamId` 는 회차(장부 `stream_sessions.round_id`)이고, 장부
     조각의 `stream_id` 는 송출 물리 키입니다. 런북 「치우개 단서」 4 의 장부
     질의(`ledger-tail.sql`)가 live 세션마다 `round_id` 와 마지막 조각
@@ -396,11 +397,20 @@ POK-588). 한 줄이 방송 하나를 닫은 것입니다. 꼴은 prod/edge 「�
     문자열에 있는지 시험이 봅니다. clip 로그는 평문(Spring Boot 기본 콘솔
     형식)이라 JSON 필터가 아니라 따옴표 구절입니다.
 *   알림 주제 `pokeclip-prod-platform-alarms` 의 정책은 SNS 기본 정책 대신
-    명시 정책입니다 — 계정 루트에는 읽기 하나, 발행은 이 경보가 보내는
-    CloudWatch(`aws:SourceArn` · `aws:SourceAccount`)뿐입니다.
+    명시 정책입니다 — 계정 루트에는 읽기 하나이고, 이 자원 정책이 여는
+    발행은 이 경보가 보내는 CloudWatch(`aws:SourceArn` ·
+    `aws:SourceAccount`)뿐입니다. 같은 계정 주체의 신원 권한(발행 · 구독
+    해지 · 주제 삭제)은 이 정책이 막지 않고, 직전 점검 principal_sim 의
+    `platform-alarm-topic` 행이 봅니다.
+*   알려진 한계: 자원 단위가 없는 동작은 그 대상 행들이 묻지 않습니다 —
+    `cloudwatch:PutMetricData`(같은 지표에 음수를 넣어 5분 합을 상쇄) ·
+    `sns:Unsubscribe` · `sns:SetSubscriptionAttributes` ·
+    `logs:PutLogEvents`(거짓 줄). 또 clip 로그 드라이버(`awslogs`)가 비차단
+    모드면 로그가 몰릴 때 줄이 버려져, 경보 수는 완전한 수가 아닐 수
+    있습니다(이 루트는 모드를 적지 않아 ECS 기본을 따름).
 *   울리면: 그 시각 clip 로그의 `broadcast.reaper.ended` 줄에서
-    `streamId`(회차)를 보고 위 「clip 치우개 오판 감지 · 복구」 를
-    따릅니다.
+    `streamId`(회차)를 보고, 위 「clip 치우개 오판 감지 · 복구」 의 감지 첫
+    단계(로거 · DB 상태)부터 따릅니다.
 
 이메일 구독은 저장소 밖에서 kty 가 한 번 답니다(공개 저장소에 주소를 두지
 않음). 위 「처음 켜기」 1 의 apply 뒤(치우개를 켜기 전) 이 루트에서 주제
@@ -409,12 +419,14 @@ ARN 을 읽어 구독하고, 받은 확인 메일의 `Token=` 값으로 구독�
 `SubscriptionArn` 이 `PendingConfirmation`). 메일의 확인 링크는 누르지
 않습니다 — 링크의 `Token=` 값만 옮겨 `aws sns confirm-subscription --region
 ap-northeast-2 --topic-arn … --token <토큰> --authenticate-on-unsubscribe true`
-로 확인합니다. 그래야 구독 해지에 인증이 걸려, 메일을 받은 누구나 해지
-링크로 끊지 못합니다. 확인 뒤 그 구독의 `ConfirmationWasAuthenticated` 가
-`true` 인지 봅니다. `false` 면 메일 스캐너 등이 링크를 먼저 열어 인증 없이
-확인된 것이니, 그 구독을 `aws sns unsubscribe` 로 해지하고 다시 구독해 위
-명령으로 확인합니다. 구독은 Terraform 상태 밖이라 주제가 다시 만들어지면 다시
-합니다.
+로 확인합니다(출력은 계정 ID 가 든 ARN 이라 `>/dev/null` 로 버림). 그래야
+구독 해지에 인증이 걸려, 메일을 받은 누구나 해지 링크로 끊지 못합니다. 확인
+뒤 아래 확인 읽기로 대기 · 확인 수와 그 구독의 `ConfirmationWasAuthenticated`
+를 봅니다 — 주제 · 구독 ARN 은 계정 ID 가 들어 셸 변수에만 담고, 메일 주소와
+함께 출력하지 않습니다. 기대는 대기 0 · 확인 1(탭으로 갈린 두 수)과 `true` 입니다.
+`false` 면 메일 스캐너 등이 링크를 먼저 열어 인증 없이 확인된 것이니, 그
+구독을 `aws sns unsubscribe` 로 해지하고 다시 구독해 위 명령으로 확인합니다.
+구독은 Terraform 상태 밖이라 주제가 다시 만들어지면 다시 합니다.
 
 ```shell
 aws sns subscribe --region ap-northeast-2 \
@@ -423,8 +435,17 @@ aws sns subscribe --region ap-northeast-2 \
 ```
 
 ```shell
+topic="$(terraform output -raw platform_alarm_topic_arn)"
+aws sns list-subscriptions-by-topic --region ap-northeast-2 \
+  --topic-arn "${topic}" \
+  --query "[length(Subscriptions[?SubscriptionArn == 'PendingConfirmation']), length(Subscriptions[?SubscriptionArn != 'PendingConfirmation'])]" \
+  --output text
+sub="$(aws sns list-subscriptions-by-topic --region ap-northeast-2 \
+  --topic-arn "${topic}" \
+  --query "Subscriptions[?Protocol == 'email' && SubscriptionArn != 'PendingConfirmation'].SubscriptionArn | [0]" \
+  --output text)"
 aws sns get-subscription-attributes --region ap-northeast-2 \
-  --subscription-arn '<list-subscriptions-by-topic 의 SubscriptionArn>' \
+  --subscription-arn "${sub}" \
   --query 'Attributes.ConfirmationWasAuthenticated' --output text
 ```
 

@@ -34,8 +34,11 @@ resource "aws_sns_topic" "platform_alarms" {
 # 둔다 — prod/edge dvr_floor_alarms.tf 의 주제 정책과 같은 까닭이다(리스 계정에
 # dev 와 prod 주체가 같이 있어, 기본 정책은 같은 계정 dev 주체에도 발행 ·
 # 구독 · 삭제를 연다). 계정 루트에는 읽기 하나만 열고, 관리 · 구독은 신원
-# 정책(kty IAM 사용자)이 정한다. 발행은 이 루트의 경보가 보내는 CloudWatch
-# 뿐이다 — 경보 ARN(aws:SourceArn) · 계정(aws:SourceAccount)으로 좁힌다.
+# 정책(kty IAM 사용자)이 정한다. 이 자원 정책이 여는 발행은 이 루트의 경보가
+# 보내는 CloudWatch 뿐이다 — 경보 ARN(aws:SourceArn) · 계정
+# (aws:SourceAccount)으로 좁힌다. 같은 계정 주체가 신원 권한으로 하는 발행 ·
+# 구독 해지 · 주제 삭제는 이 정책이 막지 않고, 직전 점검(principal_sim 의
+# platform-alarm-topic 행)이 본다.
 resource "aws_sns_topic_policy" "platform_alarms" {
   arn = aws_sns_topic.platform_alarms.arn
   policy = jsonencode({

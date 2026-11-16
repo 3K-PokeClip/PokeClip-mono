@@ -287,7 +287,10 @@ ecs-log-group-chat-detector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-g
 # 그대로 둔다). 주제 행은 발행 · 구독 · 정책 바꾸기 · 지우기를 묻고 정책은
 # 직접 읽는다(sns). 이 경보를 처음 만드는 platform apply 직전에는 주제가
 # 아직 없어 「자원 없음」 을 정책 없이 판정한다. 동작 × 유형 짝은 edge 덩어리의
-# 대조(2026-11-11)를 따른다.
+# 대조(2026-11-11)를 따른다. 알려진 한계: 자원 단위가 없는 동작은 이 대상
+# 행들이 묻지 않는다 — cloudwatch:PutMetricData(같은 지표에 음수를 넣어 5분
+# 합을 상쇄) · sns:Unsubscribe · sns:SetSubscriptionAttributes(구독 행이
+# 없음) · logs:PutLogEvents(로그 그룹에 거짓 줄).
 platform-alarm-clip-reaper-ended	O7d	arn:arn:aws:cloudwatch:ap-northeast-2:${ACCOUNT}:alarm:pokeclip-prod-clip-reaper-ended	alarm	ap-northeast-2	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
 platform-metric-filter-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-clip	log-group	ap-northeast-2	logs:PutMetricFilter,logs:DeleteMetricFilter	none	-
 platform-alarm-topic	O7d	arn:arn:aws:sns:ap-northeast-2:${ACCOUNT}:pokeclip-prod-platform-alarms	topic	ap-northeast-2	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	sns	-
