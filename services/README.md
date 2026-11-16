@@ -4215,16 +4215,18 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
      SET done_at = NULL, next_attempt_at = pg_catalog.now()
    WHERE target OPERATOR(pg_catalog.=) 'COLLECTOR'
      AND platform OPERATOR(pg_catalog.=) 'SOOP'
-     AND done_at OPERATOR(pg_catalog.>=) :deploy_started_at
-     AND done_at OPERATOR(pg_catalog.<=) :deploy_finished_at;
+     AND done_at OPERATOR(pg_catalog.>=) :'deploy_started_at'::pg_catalog.timestamptz
+     AND done_at OPERATOR(pg_catalog.<=) :'deploy_finished_at'::pg_catalog.timestamptz;
   ```
 
-  위 블록은 dev(compose 의 소유자 계정)에서도 그대로 돈다 — 표 이름을
-  스키마로 한정하고 비교 연산자를 `pg_catalog` 로 한정해, 경로 줄이 없고
-  `app_auth` 스키마에 심은 연산자를 타지 않는다(로컬 PG 17 에서
-  `app_auth.=(varchar, varchar)` 덫이 옛 꼴에서는 불리고 이 꼴에서는 불리지
-  않음 확인). prod 마스터는 표 권한이 없어 `42501` 이다. 이 **쓰기** 걸음에는
-  런북 [runtime-1a.md](../infra/terraform/runbooks/runtime-1a.md) 「1단-다
+  두 시각은 psql 변수로 넣고 값에 `+00` 을 붙인 UTC 로 쓴다(예:
+  `2026-11-17 01:00:00+00`). 위 블록은 dev(compose 의 소유자 계정)에서도
+  그대로 돈다 — 표 이름을 스키마로 한정하고 비교 연산자를 `pg_catalog` 로
+  한정해, 경로 줄이 없고 `app_auth` 스키마에 심은 연산자를 타지 않는다(로컬
+  PG 17 에서 `app_auth.=(varchar, varchar)` 덫이 옛 꼴에서는 불리고 이
+  꼴에서는 불리지 않음 확인). prod 마스터는 표 권한이 없어 `42501` 이다. 이
+  **쓰기** 걸음에는 런북
+  [runtime-1a.md](../infra/terraform/runbooks/runtime-1a.md) 「1단-다
   되돌리기 — O7d 뒤(clip 먼저 0개)」 의 셈 SQL 틀을 쓰지 않는다. 그 틀은
   읽기 전용이라 UPDATE 가 `25006` 으로 실패하고, 읽기 전용 줄을 빼고 돌리면
   저장점 되돌림이 UPDATE 를 조용히 지우는 데다 `app_auth` 가 심은
@@ -4249,49 +4251,150 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   막힐 이유가 없다. 이 문서는 그 두 꼴의 걸음(IAM 권한 회수 · 시험 역할
   정리)을 정하지 않는다.
 
-  권한 부여 · 회수는 마스터가 `psql -X -1` 한 트랜잭션으로 한다. 실행 전
-  `SHOW createrole_self_grant` 가 비어 있는지 본다 — 비어 있지 않으면 일회용을
-  만들 때 마스터가 그 역할의 SET · INHERIT 를 자동으로 받으므로 멈춘다. DB
-  CONNECT · 스키마 USAGE 는 마스터가 직접 주고 거둔다(마스터가 DB · 스키마
-  주인). 표 권한은 마스터에게 `app_auth` 의 SET 이 없으므로(`10_roles.sql` —
-  자기 부여는 `media_owner` 뿐) `GRANT app_auth TO CURRENT_USER WITH SET TRUE,
-  INHERIT FALSE` → `SET ROLE app_auth` → 한정 이름 GRANT · REVOKE(표를 읽지
-  않음) → `RESET ROLE` → `REVOKE app_auth FROM CURRENT_USER` 를 반드시 같은
-  `psql -X -1` 한 트랜잭션 안에서 한다. 마스터에게 커밋되는 GRANT 는 없고,
-  REVOKE 는 생략할 수 없다 — `SET TRUE` · `INHERIT FALSE` 자기 부여도
-  커밋되면 RDS 가 마스터 비밀번호 로그인을 IAM 우선으로 잠글 수 있다
-  (`insolvia-ai/insolvia` PR 568 의 Aurora PostgreSQL 보고 — 그 사슬로 마스터
-  비밀번호가 막힘). 그래서 회수 뒤 트랜잭션 끝에 아래 `DO` 단언을 둔다 — 마스터의
-  `app_auth` 멤버십 행에 SET · INHERIT 가 남았으면 오류를 내 트랜잭션
-  전체(부여 포함)를 되돌린다. 기대 상태는 마스터가 역할을 만들 때 받은 ADMIN
-  전용 행뿐이다. 로컬 PG 17 리허설에서 REVOKE 를 빼면 단언이 오류를 내고 모두
-  롤백돼 자기 부여 행이 0 이었다(RDS 미확인). GRANT · REVOKE 는 표를 건드리지
-  않아 덫이 끼지 않고, 그 사이 표를 읽지 않는다.
+  걸음은 다섯이다. 실행 꼴(누가 · 어디서)은 실행 전 kty 승인을 받고, 그 전에
+  RDS 시험 대조군 T1(`rds_iam` 과 무관한 계정의 비밀번호 접속)을 확인한다.
 
-  ```sql
-  DO $assert$
-  BEGIN
-    IF EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members
-                WHERE roleid OPERATOR(pg_catalog.=) 'app_auth'::pg_catalog.regrole
-                  AND member OPERATOR(pg_catalog.=) CURRENT_USER::pg_catalog.text::pg_catalog.regrole
-                  AND (set_option OR inherit_option)) THEN
-      RAISE EXCEPTION 'master still holds app_auth with SET or INHERIT';
-    END IF;
-  END
-  $assert$;
-  ```
+  1.  **실행 직전 확인(마스터 · 카탈로그만).** `SHOW createrole_self_grant`
+      가 비어 있어야 한다 — 비어 있지 않으면 일회용을 만들 때 마스터가 그
+      역할의 SET · INHERIT 를 자동으로 받으므로 멈춘다. 이어서 대상 표의
+      비내부 트리거 · 규칙 · RLS 정책 수와 RLS 켜짐을 본다. `pg_catalog` 만
+      읽으니 마스터가 `SET ROLE` 없이 한정 이름으로 직접 읽는다. 기대값은 셋
+      다 `0` · `f` 이고, 아니면 멈추고 kty 에게 회부한다(트리거 · 규칙이
+      있으면 일회용으로도 덫이 돌고, RLS 가 있으면 일부 행이 안 바뀐다).
+
+      ```sql
+      SELECT
+        (SELECT pg_catalog.count(*) FROM pg_catalog.pg_trigger
+          WHERE tgrelid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass
+            AND NOT tgisinternal) AS triggers,
+        (SELECT pg_catalog.count(*) FROM pg_catalog.pg_rewrite
+          WHERE ev_class OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS rules,
+        (SELECT pg_catalog.count(*) FROM pg_catalog.pg_policy
+          WHERE polrelid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS policies,
+        (SELECT relrowsecurity FROM pg_catalog.pg_class
+          WHERE oid OPERATOR(pg_catalog.=) 'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass) AS rls;
+      ```
+
+  1.  **부여(마스터 · `psql -X -1` 한 트랜잭션).** DB CONNECT · 스키마
+      USAGE 는 마스터가 직접 준다(마스터가 DB · 스키마 주인). 표 권한은
+      마스터에게 `app_auth` 의 SET 이 없으므로(`10_roles.sql` — 자기 부여는
+      `media_owner` 뿐) 자기 부여 → `SET ROLE app_auth` → 한정 이름 GRANT(표를
+      읽지 않음) → `RESET ROLE` → 자기 부여 회수를 반드시 같은 트랜잭션
+      안에서 한다. 마스터에게 커밋되는 GRANT 는 없고, 회수는 생략할 수 없다
+      — `SET TRUE` · `INHERIT FALSE` 자기 부여도 커밋되면 RDS 가 마스터
+      비밀번호 로그인을 IAM 우선으로 잠글 수 있다(`insolvia-ai/insolvia` PR
+      568 의 Aurora PostgreSQL 보고 — 그 사슬로 마스터 비밀번호가 막힘). 그래서
+      끝의 `DO` 단언이 마스터의 `app_auth` 멤버십 행에 SET · INHERIT 가
+      남았으면 오류를 내 트랜잭션 전체(부여 포함)를 되돌린다. 기대 상태는
+      마스터가 역할을 만들 때 받은 ADMIN 전용 행뿐이다. 이 단언은 이 걸음이
+      다룬 `app_auth` 만 본다 — 다른 앱 역할의 상태는 그 역할을 다룬 걸음이
+      단언한다. 로컬 PG 17 리허설에서 회수를 빼면 단언이 오류를 내고 모두
+      롤백돼 자기 부여 행이 0 이었다(RDS 미확인).
+
+      ```sql
+      CREATE ROLE <일회용 이름> LOGIN PASSWORD '<SCRAM 검증 문자열>'
+        VALID UNTIL '<지금부터 1시간 뒤 시각>+00' CONNECTION LIMIT 1;
+      GRANT CONNECT ON DATABASE <DB 이름> TO <일회용 이름>;
+      GRANT USAGE ON SCHEMA app_auth TO <일회용 이름>;
+      GRANT app_auth TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+      SET ROLE app_auth;
+      GRANT SELECT, UPDATE ON app_auth.withdrawal_purge_jobs TO <일회용 이름>;
+      RESET ROLE;
+      REVOKE app_auth FROM CURRENT_USER;
+      DO $assert$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members
+                    WHERE roleid OPERATOR(pg_catalog.=) 'app_auth'::pg_catalog.regrole
+                      AND member OPERATOR(pg_catalog.=) CURRENT_USER::pg_catalog.text::pg_catalog.regrole
+                      AND (set_option OR inherit_option)) THEN
+          RAISE EXCEPTION 'master still holds app_auth with SET or INHERIT';
+        END IF;
+      END
+      $assert$;
+      ```
+
+  1.  **쓰기(일회용 · 같은 세션).** 일회용은 위 UPDATE 바로 앞에 같은
+      술어로 대상 행 수를 세고, UPDATE 의 바뀐 줄 수(`UPDATE <n>`)가 그 수와
+      같은지 대조한다. 일회용 접속은 `require_auth=scram-sha-256`(libpq 16
+      이상 — 실행기 판은 미확인이고, 옛 판이면 접속 옵션 오류로 멈춘다) ·
+      `sslmode=verify-full` 로 한다.
+
+      ```sql
+      SELECT pg_catalog.count(*) AS target_rows
+        FROM app_auth.withdrawal_purge_jobs
+       WHERE target OPERATOR(pg_catalog.=) 'COLLECTOR'
+         AND platform OPERATOR(pg_catalog.=) 'SOOP'
+         AND done_at OPERATOR(pg_catalog.>=) :'deploy_started_at'::pg_catalog.timestamptz
+         AND done_at OPERATOR(pg_catalog.<=) :'deploy_finished_at'::pg_catalog.timestamptz;
+      ```
+
+  1.  **정리(마스터).** 쓰기 → 곧바로 `ALTER ROLE <일회용 이름> NOLOGIN`(쓰기가
+      실패해도 먼저) → 세션 끊기(`pg_terminate_backend` — prod 마스터는
+      `pg_signal_backend` 를 가짐, 아래 prod 실측) → 부여와 같은 한 트랜잭션
+      꼴로 권한 회수(표 · USAGE · CONNECT, 끝에 같은 `DO` 단언) →
+      `DROP ROLE`. 일회용은 아무것도 소유하지 않아야 한다 — 덫이 대형 객체를
+      만들어 두면 `DROP ROLE` 이 `2BP01` 이 되어 아래 실패 경로로 간다.
+
+      ```sql
+      GRANT app_auth TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+      SET ROLE app_auth;
+      REVOKE SELECT, UPDATE ON app_auth.withdrawal_purge_jobs FROM <일회용 이름>;
+      RESET ROLE;
+      REVOKE app_auth FROM CURRENT_USER;
+      REVOKE USAGE ON SCHEMA app_auth FROM <일회용 이름>;
+      REVOKE CONNECT ON DATABASE <DB 이름> FROM <일회용 이름>;
+      -- 부여와 같은 DO $assert$ … $assert$;
+      DROP ROLE <일회용 이름>;
+      ```
+
+  1.  **결과 확인(마스터 · 별도 세션).** 마스터가 런북 미종결 주문 블록과
+      같은 읽기 전용 저장점 꼴로 `app_auth` 의 표를 읽어, 쓰기 시작 시각
+      `written_at`(UTC) 뒤 다시 열린 줄 수를 본다(앱 트리거가 결과를 바꿀 수
+      있다 — 발송기가 그 사이 다시 보내 닫으면 수가 줄 수 있다). 이 결과
+      확인 읽기는 POK-593 에서 일회용 SELECT 계정으로 옮기고, 그 전까지 덫이
+      마스터 권한을 되찾을 때 남는 부작용(다른 세션 끊기 · NOTICE · advisory
+      잠금 · 계획 단계 IMMUTABLE 색인 식)은 알려진 한계다.
+
+      ```sql
+      GRANT app_auth TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+      SAVEPOINT ro;
+      SET TRANSACTION READ ONLY;
+      SET ROLE app_auth;
+      SELECT pg_catalog.count(*) AS reopened
+        FROM app_auth.withdrawal_purge_jobs
+       WHERE target OPERATOR(pg_catalog.=) 'COLLECTOR'
+         AND platform OPERATOR(pg_catalog.=) 'SOOP'
+         AND done_at IS NULL
+         AND next_attempt_at OPERATOR(pg_catalog.>=) :'written_at'::pg_catalog.timestamptz;
+      ROLLBACK TO SAVEPOINT ro;
+      RESET ROLE;
+      REVOKE app_auth FROM CURRENT_USER;
+      -- 부여와 같은 DO $assert$ … $assert$;
+      ```
+
+  어느 걸음이든 `42501` · `2BP01` 로 막히면 NOLOGIN 을 그대로 두고 권한(표 ·
+  USAGE · CONNECT)을 반드시 거둔 뒤 기록해 kty 에게 회부한다. 마스터에게
+  일회용 역할을 부여하는 자기 부여 갈래는 쓰지 않는다(기본) — (나-3) 에서는
+  일회용이 `app_auth` 멤버가 아니라 `rds_iam` 사슬은 생기지 않지만, 마스터가
+  일회용의 권한과 덫의 영향 범위를 함께 갖게 되므로 쓴다면 kty 회부다. 로컬
+  PG 17 리허설에서 표 권한만으로 위 UPDATE 가 끝까지 됐고(SOOP 줄 하나 · 이
+  표에는 트리거가 없고 — auth `V114` · `V118` — FK 열 `user_id` 는 바뀌지 않아
+  검사되지 않으며 시퀀스와 무관), 일회용의 `rds_iam` · `app_auth` 멤버십은
+  거짓이었으며, 권한 회수 뒤 ADMIN 만 가진 마스터 대역이 `DROP ROLE` 까지
+  끝냈다(RDS 미확인).
 
   비밀번호는 실행기 상자 안에서 무작위 고엔트로피로 만들고, 서버에는 언제나
   그 상자에서 만든 SCRAM 검증 문자열(`'SCRAM-SHA-256$…'`)로 넣는다 — 이미
   암호화된 문자열은 그대로 저장되어(PG 17 문서 「CREATE ROLE」) 로그 · 통계 ·
   기록 어디에도 평문이 없다. 평문을 서버로 보내면 `log_statement` 가 `none`
-  이 아닐 때, `log_min_duration_statement` 가 0 일 때(PG 17 문서
-  「runtime-config-logging」), 실패한 CREATE ROLE 이면 기본
-  `log_min_error_statement = error` 로, `pg_stat_statements` 가 올라 있으면
-  성공해도 그 통계에 남는다(로컬 PG 17 실측). prod 실측(2026-11-17 · kty 승인
-  시험)은 PG 17.9 · `log_statement = none` · `log_min_duration_statement = -1`
-  · `password_encryption = scram-sha-256` 이고 `shared_preload_libraries` 에
-  `pg_stat_statements` 가 있다. prod 로그는 CloudWatch 로 나가 30일 남는다
+  이 아닐 때, `log_min_duration_statement` 가 0 이상이고 그 문장이 그 시간을
+  넘을 때(PG 17 문서 「runtime-config-logging」), 실패한 CREATE ROLE 이면
+  기본 `log_min_error_statement = error` 로, `pg_stat_statements` 가 올라
+  있으면 성공해도 그 통계에 남는다(로컬 PG 17 실측). prod 실측(2026-11-17 ·
+  kty 승인 시험)은 PG 17.9 · `log_statement = none` ·
+  `log_min_duration_statement = -1` · `password_encryption = scram-sha-256`
+  이고 `shared_preload_libraries` 에 `pg_stat_statements` 가 있으며, 마스터는
+  `pg_signal_backend` 를 가진다. prod 로그는 CloudWatch 로 나가 30일 남는다
   (runtime `rds.tf`). 검증 문자열을 만드는 도구는 비밀번호를 명령 인자가 아니라
   표준 입력이나 환경으로 받고, 검증 문자열만 출력해야 한다(도구 자체는 실행
   꼴과 함께 정한다). 형식이 틀린 문자열은 평문으로 보고 해시해 저장하니(로컬
@@ -4302,42 +4405,9 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   비밀번호를 담은 셸 변수는 명령 앞 할당(`<변수>=… psql …`)으로 그 psql
   하나에만 넘기고(export 금지), 끝나면 unset 하며, send-command 본문 · 출력 ·
   파일 · 기록에 남기지 않는다. 일회용의 접속도 `PGPASSWORD` 를 같은 명령 앞
-  할당으로만 주고 `sslmode=verify-full` 로 한다. 실패 뒤 다시 할 때는 새
-  비밀번호를 만든다. Performance Insights 의 SQL 표본에 문장이 남는지는
-  미확인이다. 역할은 `VALID UNTIL '<지금부터 1시간 뒤 시각>+00'`(UTC 를
-  밝힌 문자열 상수)과 `CONNECTION LIMIT 1` 로 만든다 — 쓰기 세션 하나면 되고,
-  그 세션이 열린 동안 다른 접속을 막는다.
-
-  순서: 일회용은 아무것도 소유하지 않아야 한다 — 덫이 대형 객체를 만들어
-  두면 `DROP ROLE` 이 `2BP01` 이 되어 아래 실패 경로로 간다. 실행 직전 마스터가
-  런북 읽기 전용 틀(`app_clip` 을 `app_auth` 로)로 셋을 본다: 대상 행 수,
-  대상 표의 비내부 트리거(`pg_catalog.pg_trigger` 의 `NOT tgisinternal`) 수와
-  규칙(`pg_catalog.pg_rewrite`) 수, RLS(`relrowsecurity` 와
-  `pg_catalog.pg_policy` 정책 수). RLS 는
-  `'app_auth.withdrawal_purge_jobs'::pg_catalog.regclass` 와
-  `OPERATOR(pg_catalog.=)` 로 한정해 읽고, 둘 다 0 이어야 한다(표 권한 꼴의
-  전제 — 정책이 있으면 일부 행이 안 바뀐다). 쓰기 → 곧바로
-  `ALTER ROLE <일회용 이름> NOLOGIN`(쓰기가 실패해도 먼저) → 세션 끊기
-  (`pg_terminate_backend` — prod 마스터는 `pg_signal_backend` 를 가짐, 위 prod
-  실측) → 위 한 트랜잭션 꼴로 권한 회수(표 · USAGE · CONNECT, 끝에 같은 `DO`
-  단언) → `DROP ROLE`. 로컬 PG 17 리허설에서 표 권한만으로 위 UPDATE 가 끝까지
-  됐고(SOOP 줄 하나 · 이 표에는 트리거가 없고 — auth `V114` · `V118` — FK 열
-  `user_id` 는 바뀌지 않아 검사되지 않으며 시퀀스와 무관), 일회용의
-  `rds_iam` · `app_auth` 멤버십은 거짓이었으며, 권한 회수 뒤 ADMIN 만 가진
-  마스터 대역이 `DROP ROLE` 까지 끝냈다(RDS 미확인). 끝난 뒤 마스터가 같은
-  읽기 전용 틀로 별도 세션에서 결과를 확인하고, 바뀐 줄 수가 실행 직전에 센
-  대상 행 수와 같은지 대조한다(앱 트리거가 결과를 바꿀 수 있다). 이 결과 확인
-  읽기는 POK-593 에서 일회용 SELECT 계정으로 옮기고, 그 전까지 덫이 마스터
-  권한을 되찾을 때 남는 부작용(다른 세션 끊기 · NOTICE · advisory 잠금 · 계획
-  단계 IMMUTABLE 색인 식)은 알려진 한계다.
-
-  어느 걸음이든 `42501` · `2BP01` 로 막히면 NOLOGIN 을 그대로 두고 권한(표 ·
-  USAGE · CONNECT)을 반드시 거둔 뒤 기록해 kty 에게 회부한다. 마스터에게
-  일회용 역할을 부여하는 자기 부여 갈래는 쓰지 않는다(기본) — (나-3) 에서는
-  일회용이 `app_auth` 멤버가 아니라 `rds_iam` 사슬은 생기지 않지만, 마스터가
-  일회용의 권한과 덫의 영향 범위를 함께 갖게 되므로 쓴다면 kty 회부다. 실행
-  전에 RDS 시험 대조군 T1(`rds_iam` 과 무관한 계정의 비밀번호 접속)을 확인하고,
-  실행 꼴(누가 · 어디서)은 여전히 실행 전 kty 승인을 받는다.
+  할당으로만 준다. 실패 뒤 다시 할 때는 새 비밀번호를 만든다. Performance
+  Insights 의 SQL 표본에 문장이 남는지는 미확인이다. `CONNECTION LIMIT 1` 은
+  쓰기 세션 하나면 되고 그 세션이 열린 동안 다른 접속을 막기 때문이다.
 
   다시 열린 줄은 새 발송기가 `platform=SOOP`으로 보낸다. 새 auth가 이미 바르게 보낸 줄도 함께 열려 한 번 더 가지만, 수집기 명부가 같은 탈퇴 시각으로 접어 결과는 같다. 같은 아이디의 치지직 데이터가 잘못 지워졌다면 되돌릴 길은 없다(백업 없음).
 
