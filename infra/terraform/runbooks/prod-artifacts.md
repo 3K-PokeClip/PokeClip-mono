@@ -521,6 +521,14 @@ arm64 로 확인한 빌드와 같을 때만 통과하고(태그 칸 `<태그> (�
 밖에 적습니다. 변수 이름에 zsh 특수 변수(`status` 는 `$?` 의 읽기 전용 별칭 ·
 `path` · `argv` 등)를 쓰지 않습니다.
 
+아래 2 · 3단계 블록은
+`bash infra/terraform/scripts/test/prod_artifacts_runbook_test.sh` 가 런북
+글자 그대로 뽑아 가짜 gh 로 bash · 대화형 zsh 에서 봅니다 — 끝나지 않은 실행
+있음 · 없음 · 1000 상한 멈춤과 음성 대조(`status` 이름 · 줄 끝 `#` 주석).
+시험은 블록을 그 안의 기준 줄(2단계
+`| while read -r run_id; do gh run cancel` · 3단계 `left=$((left + count))`)로
+찾으므로, 블록을 고치면(특히 기준 줄) 그 시험도 함께 맞춥니다.
+
 1.  두 워크플로를 먼저 끕니다(새 실행이 생기지 않게).
 
     ```shell
