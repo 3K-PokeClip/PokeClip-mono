@@ -49,6 +49,68 @@ jobs:
         with:
           persist-credentials: false
 
+      # 올리는 것은 landing/README.md 「배포에는 … 만 올립니다」 목록뿐이다 —
+      # HTML · CSS · JS · assets/ 와 루트의 robots.txt · sitemap.xml · llms.txt ·
+      # favicon.ico · icon.svg · apple-touch-icon.png. LANDING_EXCLUDES 의 셋은
+      # 추적돼도 올리지 않는다. 그 밖의 추적 파일 · 심볼릭 링크(모드 120000) ·
+      # 추적되지 않은 파일이 하나라도 있으면 경로를 찍고 실패한다. 제외 목록은
+      # 거부 목록이라 이 검사가 없으면 새 비공개 파일이 공개 버킷에 올라간다.
+      # 두 잡의 이 단계는 글자까지 같아야 한다.
+      - name: 올릴 파일이 허용 목록 안인지 본다
+        id: allowlist
+        run: |
+          read -r -a excludes <<<"${LANDING_EXCLUDES}"
+          tracked="${RUNNER_TEMP}/landing-tracked"
+          git ls-files -s -z -- landing >"${tracked}"
+          bad=0
+          count=0
+          while IFS= read -r -d '' record; do
+            count=$((count + 1))
+            mode="${record%% *}"
+            path="${record#*$'\t'}"
+            rel="${path#landing/}"
+            if [[ "${mode}" == '120000' ]]; then
+              echo "::error::심볼릭 링크는 올리지 않는다: ${path}"
+              bad=1
+              continue
+            fi
+            excluded=0
+            for pattern in "${excludes[@]}"; do
+              # 글롭으로 맞춘다(aws s3 sync --exclude 와 같은 꼴).
+              # shellcheck disable=SC2053
+              if [[ "${rel}" == ${pattern} ]]; then
+                excluded=1
+              fi
+            done
+            if ((excluded)); then
+              continue
+            fi
+            case "${rel}" in
+              *.html | *.css | *.js | assets/*) ;;
+              robots.txt | sitemap.xml | llms.txt | favicon.ico) ;;
+              icon.svg | apple-touch-icon.png) ;;
+              *)
+                echo "::error::허용 목록 밖 파일: ${path}"
+                bad=1
+                ;;
+            esac
+          done <"${tracked}"
+          untracked="$(git status --porcelain --ignored \
+            --untracked-files=all -- landing)"
+          if [[ -n "${untracked}" ]]; then
+            echo '::error::커밋과 다른 파일이 있다(올리지 않는다):'
+            echo "${untracked}"
+            bad=1
+          fi
+          if ((count == 0)); then
+            echo '::error::landing/ 의 추적 파일이 없다'
+            bad=1
+          fi
+          echo "추적 파일 ${count} 개 검사"
+          if ((bad)); then
+            exit 1
+          fi
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.node-version
@@ -81,7 +143,7 @@ jobs:
           raw="${RUNNER_TEMP}/dryrun.txt"
           plan="${RUNNER_TEMP}/plan.txt"
           aws s3 sync landing/ "s3://${APEX_BUCKET}" "${exclude_args[@]}" \
-            --dryrun --no-progress | tee "${raw}"
+            --dryrun --no-progress --no-follow-symlinks | tee "${raw}"
           # 버킷 접두를 벗긴 「동작 상대키」 줄만 남겨 정렬한다.
           sed -nE 's#^\(dryrun\) ([a-z]+): .+ to s3://[^/]+/(.+)$#\1 \2#p' \
             "${raw}" | LC_ALL=C sort >"${plan}"
@@ -119,6 +181,62 @@ jobs:
         with:
           persist-credentials: false
 
+      # dry-run 잡의 같은 이름 단계와 글자까지 같다(이 잡의 체크아웃을 다시 본다).
+      - name: 올릴 파일이 허용 목록 안인지 본다
+        id: allowlist
+        run: |
+          read -r -a excludes <<<"${LANDING_EXCLUDES}"
+          tracked="${RUNNER_TEMP}/landing-tracked"
+          git ls-files -s -z -- landing >"${tracked}"
+          bad=0
+          count=0
+          while IFS= read -r -d '' record; do
+            count=$((count + 1))
+            mode="${record%% *}"
+            path="${record#*$'\t'}"
+            rel="${path#landing/}"
+            if [[ "${mode}" == '120000' ]]; then
+              echo "::error::심볼릭 링크는 올리지 않는다: ${path}"
+              bad=1
+              continue
+            fi
+            excluded=0
+            for pattern in "${excludes[@]}"; do
+              # 글롭으로 맞춘다(aws s3 sync --exclude 와 같은 꼴).
+              # shellcheck disable=SC2053
+              if [[ "${rel}" == ${pattern} ]]; then
+                excluded=1
+              fi
+            done
+            if ((excluded)); then
+              continue
+            fi
+            case "${rel}" in
+              *.html | *.css | *.js | assets/*) ;;
+              robots.txt | sitemap.xml | llms.txt | favicon.ico) ;;
+              icon.svg | apple-touch-icon.png) ;;
+              *)
+                echo "::error::허용 목록 밖 파일: ${path}"
+                bad=1
+                ;;
+            esac
+          done <"${tracked}"
+          untracked="$(git status --porcelain --ignored \
+            --untracked-files=all -- landing)"
+          if [[ -n "${untracked}" ]]; then
+            echo '::error::커밋과 다른 파일이 있다(올리지 않는다):'
+            echo "${untracked}"
+            bad=1
+          fi
+          if ((count == 0)); then
+            echo '::error::landing/ 의 추적 파일이 없다'
+            bad=1
+          fi
+          echo "추적 파일 ${count} 개 검사"
+          if ((bad)); then
+            exit 1
+          fi
+
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_APEX_UPLOAD_ROLE_ARN }}
@@ -140,7 +258,7 @@ jobs:
           raw="${RUNNER_TEMP}/dryrun.txt"
           plan="${RUNNER_TEMP}/plan.txt"
           aws s3 sync landing/ "s3://${APEX_BUCKET}" "${exclude_args[@]}" \
-            --dryrun --no-progress | tee "${raw}"
+            --dryrun --no-progress --no-follow-symlinks | tee "${raw}"
           # 버킷 접두를 벗긴 「동작 상대키」 줄만 남겨 정렬한다.
           sed -nE 's#^\(dryrun\) ([a-z]+): .+ to s3://[^/]+/(.+)$#\1 \2#p' \
             "${raw}" | LC_ALL=C sort >"${plan}"
@@ -176,7 +294,7 @@ jobs:
             exclude_args+=(--exclude "${pattern}")
           done
           aws s3 sync landing/ "s3://${APEX_BUCKET}" "${exclude_args[@]}" \
-            --no-progress
+            --no-progress --no-follow-symlinks
           invalidation_id="$(aws cloudfront create-invalidation \
             --distribution-id "${APEX_DISTRIBUTION_ID}" --paths '/*' \
             --query 'Invalidation.Id' --output text)"

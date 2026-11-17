@@ -431,6 +431,32 @@ environment `prod-deploy` 는 배포 브랜치 main 하나 · 필수 승인자 k
 만들고 다시 읽어 확인한 뒤 역할을 apply 합니다 — 없는 environment 를 잡이
 가리키면 보호 규칙 없이 자동으로 생깁니다.
 
+다시 읽을 때 아래 필드가 모두 맞아야 합니다. 하나라도 다르면 역할을 apply
+하지 않습니다.
+
+*   `deployment_branch_policy.custom_branch_policies` 가 `true` 이고
+    `protected_branches` 가 `false`.
+*   배포 규칙 목록(`deployment-branch-policies`)이 `total_count` 1 —
+    `name` `main` · `type` `branch` 하나.
+*   `can_admins_bypass` 가 `false`. 이 필드는 공개 API 설명(OpenAPI)에는
+    없지만 응답에는 있습니다(2026-11-17 `dev-deploy` 조회로 확인).
+*   `protection_rules` 의 `required_reviewers` 규칙이 있고, 그 `reviewers` 가
+    kty(`User` · `xodbs1021`) 하나 · `prevent_self_review` 가 `false`.
+
+확인은 읽기(GET)만 합니다. 저장소 뿌리에서 돌리면 `{owner}` · `{repo}` 를
+gh 가 채웁니다.
+
+```shell
+env_path='repos/{owner}/{repo}/environments/prod-deploy'
+gh api "${env_path}" --jq '{
+  policy: .deployment_branch_policy,
+  admins: .can_admins_bypass,
+  rules: [.protection_rules[] | {type, prevent_self_review,
+    reviewers: [.reviewers[]? | {type, login: .reviewer.login}]}]}'
+gh api "${env_path}/deployment-branch-policies" \
+  --jq '{total_count, branch_policies: [.branch_policies[] | {name, type}]}'
+```
+
 비밀 넷과 변수를 environment 에 넣습니다. 값은 출력에서 파이프로만 넘기고
 화면 · 세션에 내지 않습니다.
 
